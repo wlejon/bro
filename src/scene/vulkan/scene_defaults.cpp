@@ -38,12 +38,20 @@ bool SceneDefaults::setup(SceneVkDevice& device, SceneVkAllocator& allocator) {
     VkDevice dev = device.device();
     constexpr VkShaderStageFlags kVsFs = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
 
+    sampler = makeSampler(dev, 0.0f);
+    cubeSampler = makeSampler(dev, 16.0f);
+    if (!sampler || !cubeSampler) {
+        LOG_ERROR("SceneDefaults: Failed creating the default samplers");
+        return false;
+    }
+
     cameraLayout = SceneVkDescriptorLayoutBuilder::createCameraLayout(dev);
-    lightingLayout = SceneVkDescriptorLayoutBuilder::createLightingLayout(dev, device.shadowCompareSampler());
+    lightingLayout = SceneVkDescriptorLayoutBuilder::createLightingLayout(dev, device.shadowCompareSampler(), cubeSampler);
     materialLayout = SceneVkDescriptorLayoutBuilder::createMaterialLayout(dev);
 
     SceneVkDescriptorLayoutBuilder bone;
     bone.addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT);
+    bone.addBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT);
     boneLayout = bone.build(dev);
 
     SceneVkDescriptorLayoutBuilder custom;
@@ -70,13 +78,6 @@ bool SceneDefaults::setup(SceneVkDevice& device, SceneVkAllocator& allocator) {
                                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, cube, 1, VK_SAMPLE_COUNT_1_BIT,
                                VK_IMAGE_ASPECT_COLOR_BIT, 6, VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT)) {
         LOG_ERROR("SceneDefaults: Failed creating the fallback cube map");
-        return false;
-    }
-
-    sampler = makeSampler(dev, 0.0f);
-    cubeSampler = makeSampler(dev, 16.0f);
-    if (!sampler || !cubeSampler) {
-        LOG_ERROR("SceneDefaults: Failed creating the default samplers");
         return false;
     }
 

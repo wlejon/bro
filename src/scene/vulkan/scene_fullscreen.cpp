@@ -42,25 +42,30 @@ VkPipeline pipeline(VkDevice dev, VkPipelineLayout layout, VkShaderModule vs, Vk
 
 void draw(SceneVkDevice& device, VkCommandBuffer cmd, const SceneVkImage& target, VkPipeline pipeline,
           VkPipelineLayout layout, VkDescriptorSet set, const void* push, uint32_t pushBytes) {
+    draw(device, cmd, target.view, target.width, target.height, pipeline, layout, set, push, pushBytes);
+}
+
+void draw(SceneVkDevice& device, VkCommandBuffer cmd, VkImageView target, uint32_t width, uint32_t height,
+          VkPipeline pipeline, VkPipelineLayout layout, VkDescriptorSet set, const void* push, uint32_t pushBytes) {
     VkRenderingAttachmentInfo att{};
     att.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-    att.imageView = target.view;
+    att.imageView = target;
     att.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     att.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     VkRenderingInfo info{};
     info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-    info.renderArea = {{0, 0}, {target.width, target.height}};
+    info.renderArea = {{0, 0}, {width, height}};
     info.layerCount = 1;
     info.colorAttachmentCount = 1;
     info.pColorAttachments = &att;
     device.cmdBeginRendering(cmd, &info);
-    const VkViewport vp{0.0f, 0.0f, static_cast<float>(target.width), static_cast<float>(target.height), 0.0f, 1.0f};
-    const VkRect2D scissor{{0, 0}, {target.width, target.height}};
+    const VkViewport vp{0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height), 0.0f, 1.0f};
+    const VkRect2D scissor{{0, 0}, {width, height}};
     vkCmdSetViewport(cmd, 0, 1, &vp);
     vkCmdSetScissor(cmd, 0, 1, &scissor);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &set, 0, nullptr);
+    if (set) vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &set, 0, nullptr);
     if (push && pushBytes) vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, pushBytes, push);
     vkCmdDraw(cmd, 3, 1, 0, 0);
     device.cmdEndRendering(cmd);

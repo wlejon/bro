@@ -74,8 +74,14 @@ bool PassShadow::setup(SceneGpu& gpu) {
         SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowInstancedVert);
     vs_[static_cast<int>(MeshKind::Skinned)] =
         SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowSkinnedVert);
+    vs_[static_cast<int>(MeshKind::Tube)] =
+        SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowTubeVert);
     fs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowFrag);
-    return vs_[0] && vs_[1] && vs_[2] && fs_;
+    // Scatter leaves cast no shadow, so that kind has no caster stage.
+    for (MeshKind k : {MeshKind::Static, MeshKind::Instanced, MeshKind::Skinned, MeshKind::Tube}) {
+        if (!vs_[static_cast<int>(k)]) return false;
+    }
+    return fs_ != VK_NULL_HANDLE;
 }
 
 void PassShadow::cleanup(SceneGpu& gpu) {
@@ -181,8 +187,8 @@ void PassShadow::drawCaster(SceneFrame& frame, const bromath::Mat4& lightViewPro
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
     if (draw.kind != MeshKind::Instanced)
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 1, &frame.cameraSet, 0, nullptr);
-    if (draw.kind == MeshKind::Skinned)
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 3, 1, &draw.boneSet, 0, nullptr);
+    if (draw.vertexSet)
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 3, 1, &draw.vertexSet, 0, nullptr);
     if (customBound)
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 4, 1, &draw.customSet, 0, nullptr);
 
@@ -195,11 +201,7 @@ void PassShadow::drawCaster(SceneFrame& frame, const bromath::Mat4& lightViewPro
     push.params[0] = draw.push.extra[2];
     vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(push), &push);
 
-    const VkBuffer buffers[2] = {draw.vertices, draw.kind == MeshKind::Instanced ? draw.instances : draw.skin};
-    const VkDeviceSize offsets[2] = {0, draw.kind == MeshKind::Instanced ? draw.instanceOffset : 0};
-    vkCmdBindVertexBuffers(cmd, 0, draw.kind == MeshKind::Static ? 1 : 2, buffers, offsets);
-    vkCmdBindIndexBuffer(cmd, draw.indices, 0, VK_INDEX_TYPE_UINT32);
-    vkCmdDrawIndexed(cmd, draw.indexCount, draw.instanceCount, 0, 0, 0);
+    SceneMeshDrawer::bindGeometryAndDraw(cmd, draw);
 }
 
 void PassShadow::record(SceneFrame& frame) {

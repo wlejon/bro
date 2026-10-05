@@ -10,23 +10,34 @@ file(MAKE_DIRECTORY "${VK_GEN_DIR}")
 set(VK_GENERATED_HEADERS "")
 # The GLSL the shaders #include (expanded by bro_spirv_embed at build time and
 # by SceneVkShaderCompiler at run time).
-set(VK_SHADER_INCLUDES scene_camera.glsl scene_lighting.glsl scene_mesh_push.glsl scene_shadow_push.glsl)
+set(VK_SHADER_INCLUDES scene_camera.glsl scene_lighting.glsl scene_atmosphere.glsl scene_mesh_push.glsl
+    scene_shadow_push.glsl scene_procedural.glsl sky_common.glsl ibl_common.glsl)
 list(TRANSFORM VK_SHADER_INCLUDES PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/"
      OUTPUT_VARIABLE VK_SHADER_INCLUDE_PATHS)
 foreach(_shader
         mesh.vert
         mesh_instanced.vert
         mesh_skinned.vert
+        mesh_scatter.vert
+        mesh_tube.vert
         mesh.frag
         shadow.vert
         shadow_instanced.vert
         shadow_skinned.vert
+        shadow_tube.vert
         shadow.frag
-        skybox.vert
-        environment.frag
+        sky.vert
+        sky_atmosphere.frag
+        skybox.frag
+        starfield.frag
+        env_convert.frag
+        irradiance.frag
+        prefilter.frag
+        brdf_lut.frag
         postfx.vert
         tonemap.frag
-        bloom.frag
+        bloom_bright.frag
+        tilt_composite.frag
         fxaa.frag
         billboard.vert
         billboard.frag
@@ -35,7 +46,6 @@ foreach(_shader
         decal.vert
         decal.frag
         blur.frag
-        color_lut.frag
         ssao.frag
         ssr.frag
         dof.frag
@@ -82,6 +92,7 @@ embed_vk_shader(shadow.vert           kVkShadowVertSrc)
 embed_vk_shader(shadow_skinned.vert   kVkShadowSkinnedVertSrc)
 embed_vk_shader(scene_camera.glsl     kVkSceneCameraSrc)
 embed_vk_shader(scene_lighting.glsl   kVkSceneLightingSrc)
+embed_vk_shader(scene_atmosphere.glsl kVkSceneAtmosphereSrc)
 embed_vk_shader(scene_mesh_push.glsl  kVkSceneMeshPushSrc)
 embed_vk_shader(scene_shadow_push.glsl kVkSceneShadowPushSrc)
 embed_vk_shader(clipmap_common.glsl       kClipmapCommonSrc)
@@ -141,6 +152,7 @@ add_library(bro_scene STATIC
     vulkan/scene_frame_graph.cpp
     vulkan/scene_fullscreen.cpp
     vulkan/scene_lighting.cpp
+    vulkan/scene_environment.cpp
     vulkan/pass_shadow.cpp
     vulkan/pass_reflection_probe.cpp
     vulkan/pass_environment.cpp
@@ -155,7 +167,6 @@ add_library(bro_scene STATIC
     vulkan/pass_gaussian_splat.cpp
     vulkan/pass_dof.cpp
     vulkan/pass_postfx.cpp
-    vulkan/pass_color_lut.cpp
     vulkan/scene_vk_bridge.cpp
     ${VK_GENERATED_HEADERS}
 )

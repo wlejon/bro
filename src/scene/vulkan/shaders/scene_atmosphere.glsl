@@ -1,0 +1,217 @@
+// Analytic atmospheric scattering, shared by the sky pass and by the aerial
+// perspective applied to scene geometry (sceneAir in scene_lighting.glsl), so
+// a ridge on the horizon fades into exactly the sky behind it.
+//
+// Single scattering integrated along the view ray in spherical geometry, so it
+// stays valid from a metre above the ground to orbit, plus an isotropic
+// multiple-scattering fill. The parameters live in the lighting block
+// (SceneLightingUniforms::atm*, filled from SceneRenderer::atmosphere()), under
+// the names below. Included by scene_lighting.glsl after the block.
+
+#define uAtmSunDir       (lighting.atmSunDir.xyz)
+#define uAtmSunColor     (lighting.atmSunColor.rgb)
+#define uAtmPlanetRadius (lighting.atmSunColor.a)
+#define uAtmThickness    (lighting.atmBetaR.a)
+#define uAtmBetaR        (lighting.atmBetaR.rgb)
+#define uAtmBetaM        (lighting.atmParams.x)
+#define uAtmMieG         (lighting.atmParams.y)
+#define uAtmScaleHeightR (lighting.atmParams.z)
+#define uAtmScaleHeightM (lighting.atmParams.w)
+#define uAtmSeaLevel     (lighting.atmParams2.x)
+#define uAtmSpherical    (lighting.atmParams2.y)
+#define uAtmMultiScatter (lighting.atmParams2.z)
+#define uAtmCenter       (lighting.atmCenter.xyz)
+
+// Mie absorbs as well as scatters; the usual approximation is that extinction
+// is a little larger than scattering. Rayleigh does not absorb.
+const float ATM_MIE_EXTINCTION = 1.1;
+
+// View position relative to the planet centre.
+//
+// The horizontal components are deliberately DROPPED: the planet is placed
+// directly beneath the viewer rather than beneath the world origin. The
+// sphere is here to give the air a horizon and a thickness that falls off with
+// height — but the surface it has to agree with is a FLAT height field whose
+// up is world +Y everywhere. Anchoring the sphere at the origin instead tilts
+// the atmosphere's local vertical by atan(d / R) once the viewer is d metres
+// away from it, which draws a second, sloping horizon across the sky that
+// pulls further from the terrain's the further you travel — about 1.4 degrees
+// at 150 km out, and unbounded beyond that.
+//
+// Everything downstream is a function of |ro| and of the ray direction, so
+// this costs nothing and keeps sky, aerial perspective and the CPU irradiance
+// integrator (scene/atmosphere_irradiance.h) on one definition of "up".
+//
+// None of that reasoning survives contact with an actual globe. When the scene
+// IS a planet, its surface curves and its up is radial, so dropping the
+// horizontals puts the air on the wrong side of the world the moment the camera
+// moves off the axis. uAtmSpherical picks the other definition: the true offset
+// from the planet's centre. Blended rather than branched — both terms are two
+// instructions and the choice is uniform across the draw.
+vec3 atmOrigin(vec3 worldPos) {
+    vec3 flatRo = vec3(0.0, worldPos.y - uAtmSeaLevel + uAtmPlanetRadius, 0.0);
+    return mix(flatRo, worldPos - uAtmCenter, uAtmSpherical);
+}
+
+// Distance to where a ray leaves a sphere of radius R centred at the origin.
+// Returns -1 when the ray never reaches it. `ro` is relative to the centre.
+float atmExitDistance(vec3 ro, vec3 rd, float R) {
+    float b = dot(ro, rd);
+    float c = dot(ro, ro) - R * R;
+    float d = b * b - c;
+    if (d < 0.0) return -1.0;
+    return -b + sqrt(d);
+}
+
+// Distance at which a ray ENTERS a sphere: 0 when it starts inside, the near
+// intersection when it starts outside, -1 when it never gets there.
+//
+// This is what makes the model usable from orbit. The integral used to start at
+// the camera, which is right whenever the camera is in the air and useless when
+// it is not: from 9,000 km up, a fixed step count spreads its samples over
+// thousands of kilometres of vacuum and lands perhaps one inside the 100 km
+// that actually scatters. The atmosphere either vanished or flickered as the
+// samples slid through it. Starting the march at the shell puts every step
+// where the air is, and costs one quadratic when the camera is already inside.
+float atmEntryDistance(vec3 ro, vec3 rd, float R) {
+    float c = dot(ro, ro) - R * R;
+    if (c <= 0.0) return 0.0;           // already inside
+    float b = dot(ro, rd);
+    if (b > 0.0) return -1.0;           // outside, pointing away
+    float d = b * b - c;
+    if (d < 0.0) return -1.0;           // outside, missing
+    return -b - sqrt(d);
+}
+
+// Distance to where a ray first hits a sphere, or -1 if it misses or the hit
+// is behind. Used to find the ground, which is what gives the planet an edge.
+float atmHitDistance(vec3 ro, vec3 rd, float R) {
+    float b = dot(ro, rd);
+    float c = dot(ro, ro) - R * R;
+    float d = b * b - c;
+    if (d < 0.0) return -1.0;
+    float t = -b - sqrt(d);
+    return t >= 0.0 ? t : -1.0;
+}
+
+// Rayleigh and Mie phase functions. Rayleigh is nearly isotropic and is what
+// makes the sky blue away from the sun; Mie is sharply forward-scattering and
+// is what puts the white glare around it and the haze along the horizon.
+float atmPhaseR(float mu) {
+    return 3.0 / (16.0 * 3.14159265) * (1.0 + mu * mu);
+}
+
+float atmPhaseM(float mu, float g) {
+    float g2 = g * g;
+    float d  = 1.0 + g2 - 2.0 * g * mu;
+    return 3.0 / (8.0 * 3.14159265) * ((1.0 - g2) * (1.0 + mu * mu))
+         / ((2.0 + g2) * pow(max(d, 1e-4), 1.5));
+}
+
+// Integrated density along a ray, for both species at once: x = Rayleigh,
+// y = Mie. Marched rather than solved because the closed form (a Chapman
+// function) is only worth its complexity when this runs per pixel per step,
+// and here it runs a handful of times.
+vec2 atmOpticalDepth(vec3 ro, vec3 rd, float tMax, const int steps) {
+    float dt = tMax / float(steps);
+    vec2  sum = vec2(0.0);
+    for (int i = 0; i < steps; ++i) {
+        float h = length(ro + rd * (dt * (float(i) + 0.5))) - uAtmPlanetRadius;
+        h = max(h, 0.0);
+        sum += exp(-h / vec2(uAtmScaleHeightR, uAtmScaleHeightM));
+    }
+    return sum * dt;
+}
+
+vec3 atmExtinction(vec2 od) {
+    return exp(-(uAtmBetaR * od.x + uAtmBetaM * ATM_MIE_EXTINCTION * od.y));
+}
+
+// In-scattered radiance along [0, tMax] of the ray, plus the transmittance
+// over that same segment.
+//
+// `ro` is the view position relative to the PLANET CENTRE. Passing tMax the
+// distance to a surface gives aerial perspective; passing the distance out of
+// the atmosphere gives the sky. One function, so a ridge at the horizon and the
+// sky just above it cannot drift apart.
+vec3 atmScatter(vec3 ro, vec3 rd, float tMax, const int steps,
+                const int sunSteps, out vec3 transmittance) {
+    float atmR = uAtmPlanetRadius + uAtmThickness;
+
+    // Skip the vacuum in front of the atmosphere rather than sampling it.
+    float t0 = atmEntryDistance(ro, rd, atmR);
+    if (t0 < 0.0 || t0 >= tMax) {
+        transmittance = vec3(1.0);
+        return vec3(0.0);
+    }
+
+    float dt = (tMax - t0) / float(steps);
+    float mu = dot(rd, uAtmSunDir);
+    float pr = atmPhaseR(mu);
+    float pm = atmPhaseM(mu, uAtmMieG);
+
+    vec2 odView = vec2(0.0);          // accumulated along the view ray
+    vec3 sumR = vec3(0.0);
+    float sumM = 0.0;
+    vec3 sumMS = vec3(0.0);           // isotropic, for the multiple-scatter fill
+
+    for (int i = 0; i < steps; ++i) {
+        vec3  p = ro + rd * (t0 + dt * (float(i) + 0.5));
+        float h = max(length(p) - uAtmPlanetRadius, 0.0);
+        vec2  density = exp(-h / vec2(uAtmScaleHeightR, uAtmScaleHeightM)) * dt;
+        odView += density;
+
+        // Light reaching this sample from the sun. Points in the planet's
+        // shadow contribute nothing, which is what makes the terminator and
+        // the reddening at low sun happen on their own rather than being
+        // faked with a colour ramp.
+        vec3 sunTrans = vec3(0.0);
+        if (atmHitDistance(p, uAtmSunDir, uAtmPlanetRadius) < 0.0) {
+            float ts = atmExitDistance(p, uAtmSunDir, atmR);
+            if (ts > 0.0) {
+                vec2 odSun = atmOpticalDepth(p, uAtmSunDir, ts, sunSteps);
+                sunTrans = atmExtinction(odSun + odView);
+            }
+        }
+        sumR += sunTrans * density.x;
+        sumM += dot(sunTrans, vec3(0.3333)) * density.y;
+        // Beta-weighted, phase-free: what feeds the isotropic re-radiation.
+        sumMS += sunTrans * (uAtmBetaR * density.x + uAtmBetaM * density.y);
+    }
+
+    transmittance = atmExtinction(odView);
+    vec3 single = uAtmSunColor * (uAtmBetaR * sumR * pr + uAtmBetaM * sumM * pm);
+
+    // Cheap multiple scattering. Single scatter alone leaves the daytime sky
+    // too dark and too saturated from inside the atmosphere — the light that
+    // has bounced twice or more is missing — and the usual fix, cranking the
+    // sun's irradiance, over-brightens the aerial perspective over ground in
+    // equal measure, washing distant terrain milky. This term restores the sky
+    // without that cost: it re-radiates the in-scattered field ISOTROPICALLY
+    // (phase 1/4pi, so it fills the whole dome rather than lobing toward the
+    // sun) and it is already view-extinction weighted through sunTrans, so a
+    // short ground ray accumulates almost none of it while a full sky column
+    // accumulates a lot. sunColor can then sit at a physical value: ground
+    // stays crisp, sky stays blue.
+    const float ATM_ISO = 1.0 / (4.0 * 3.14159265);
+    vec3 multi = uAtmSunColor * uAtmMultiScatter * ATM_ISO * sumMS;
+    return single + multi;
+}
+
+// Sky radiance for a view ray that leaves the atmosphere (or hits the ground).
+// `worldPos` is a world-space position; the planet is centred below the origin
+// so that world Y == uAtmSeaLevel sits on the surface.
+vec3 atmSky(vec3 worldPos, vec3 rd, const int steps, const int sunSteps) {
+    vec3 ro = atmOrigin(worldPos);
+    float atmR = uAtmPlanetRadius + uAtmThickness;
+
+    float tMax = atmExitDistance(ro, rd, atmR);
+    if (tMax <= 0.0) return vec3(0.0);          // outside, looking away
+
+    // Stop at the ground so downward rays do not integrate through the planet.
+    float tGround = atmHitDistance(ro, rd, uAtmPlanetRadius);
+    if (tGround > 0.0) tMax = min(tMax, tGround);
+
+    vec3 tr;
+    return atmScatter(ro, rd, tMax, steps, sunSteps, tr);
+}

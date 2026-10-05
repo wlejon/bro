@@ -18,11 +18,8 @@ enum class BuiltinSceneShader {
     ShadowInstancedVert,
     ShadowSkinnedVert,
     ShadowFrag,
-    SkyboxVert,
-    EnvironmentFrag,
     PostFxVert,
     TonemapFrag,
-    BloomFrag,
     FxaaFrag,
     BillboardVert,
     BillboardFrag,
@@ -31,13 +28,25 @@ enum class BuiltinSceneShader {
     DecalVert,
     DecalFrag,
     BlurFrag,
-    ColorLutFrag,
     SsaoFrag,
     SsrFrag,
     DofFrag,
     ApplyAoFrag,
     GaussianSplatVert,
-    GaussianSplatFrag
+    GaussianSplatFrag,
+    SkyVert,
+    SkyAtmosphereFrag,
+    SkyboxFrag,
+    StarfieldFrag,
+    EnvConvertFrag,
+    IrradianceFrag,
+    PrefilterFrag,
+    BrdfLutFrag,
+    BloomBrightFrag,
+    TiltCompositeFrag,
+    MeshScatterVert,
+    MeshTubeVert,
+    ShadowTubeVert
 };
 
 /// The scene's shader modules: the built-in shaders (compiled at build time)
@@ -50,7 +59,7 @@ public:
 
     /// Compile a Vulkan GLSL source string into SPIR-V words. `#include
     /// "name"` lines pull in the shared scene GLSL (scene_camera.glsl,
-    /// scene_lighting.glsl, scene_mesh_push.glsl, scene_shadow_push.glsl).
+    /// scene_lighting.glsl and its scene_atmosphere.glsl, scene_mesh_push.glsl, scene_shadow_push.glsl).
     /// Returns an empty vector (and the diagnostics in *errOut) on failure.
     static std::vector<uint32_t> compileGlsl(const std::string& glslSource,
                                              VkShaderStageFlagBits stage,

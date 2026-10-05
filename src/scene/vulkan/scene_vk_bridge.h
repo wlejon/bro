@@ -8,6 +8,7 @@
 
 #include "render/layer_image.h"
 #include "scene/vulkan/scene_defaults.h"
+#include "scene/vulkan/scene_environment.h"
 #include "scene/vulkan/scene_frame.h"
 #include "scene/vulkan/scene_frame_graph.h"
 #include "scene/vulkan/scene_gpu_resources.h"
@@ -32,7 +33,6 @@ class SceneRenderer;
 
 namespace bro::scene::vk {
 
-class PassColorLut;
 
 class SceneVkBridge {
 public:
@@ -72,9 +72,9 @@ private:
     SceneTargets targets_;
     SceneGpuResources resources_;
     SceneMeshDrawer meshes_;
+    SceneEnvironment environment_;
     SceneGpu gpu_;
     SceneFrameGraph graph_;
-    PassColorLut* colorLut_ = nullptr;   // owned by graph_
     bool ready_ = false;
 
     // CPU readback of targets_.ldr (see readTonemapPixelsRGBA).

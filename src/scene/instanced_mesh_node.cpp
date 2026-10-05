@@ -164,6 +164,7 @@ void InstancedMeshNode::clearEmissiveTexture() { emissiveTex_.clear(); }
 // setStaticBatch). O(total verts); only runs when batchDirty_ && renderingBatched.
 void InstancedMeshNode::rebuildStaticBatch() const {
     batchDirty_ = false;
+    batchGeneration_ = nextResourceGeneration();
     batchMesh_.clear();
     if (mesh_.empty() || instanceCount_ == 0) return;
 

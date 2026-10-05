@@ -4,8 +4,9 @@
 // (directional cascades, spot cones, point-light cube faces; scene/
 // shadow_plan.h) gets its casters drawn depth-only into its rect of
 // SceneTargets::shadowAtlas. Cached tiles keep the depth an earlier frame
-// drew. Static, instanced and skinned casters, with the colour pass's wind
-// sway and custom vertex chunks so the silhouette matches what is drawn.
+// drew. Static, instanced (batched too), skinned and branch-tube casters
+// (scatter leaves cast none), with the colour pass's wind sway and custom
+// vertex chunks so the silhouette matches what is drawn.
 // Casters are tested against each tile's light volume, never the camera's:
 // an off-screen caster still shadows what is on screen.
 
@@ -44,9 +45,9 @@ private:
 
     SceneVkDevice* device_ = nullptr;
     VkPipelineLayout layout_ = VK_NULL_HANDLE;
-    VkShaderModule vs_[3] = {};
+    VkShaderModule vs_[kMeshKindCount] = {};
     VkShaderModule fs_ = VK_NULL_HANDLE;
-    VkPipeline builtin_[3][2] = {};   // [kind][two-sided]
+    VkPipeline builtin_[kMeshKindCount][2] = {};   // [kind][two-sided]
     // Custom-vertex casters by (chunk key, kind, sidedness); VK_NULL_HANDLE
     // remembers a failed compile, so it is reported once and the caster
     // falls back to its undisplaced silhouette.

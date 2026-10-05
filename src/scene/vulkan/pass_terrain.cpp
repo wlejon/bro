@@ -258,9 +258,9 @@ void main() {
 
     vec3 indirect = sceneAmbient(s);
     vec3 color = sceneDirectLight(s) + indirect + emissive;
-    float fog = fogFactorFor(s.camDist, vWorldPos.y);
-    color = mix(color, camera.fogColor.rgb, fog);
-    indirect *= 1.0 - fog;
+    SceneAir air = sceneAir(vWorldPos, s.camDist);
+    color = color * air.transmittance + air.inscatter;
+    indirect *= air.transmittance;
 
     if ((flags & MESH_SHADE_MAP) != 0u && lighting.shadeOrigin.w > 0.5) {
         float shade = cellShade(vWorldPos, normalize(vNormal));

@@ -4,7 +4,6 @@
 #include "scene/scene_graph.h"
 #include "scene/scene_renderer.h"
 #include "scene/vulkan/pass_billboard.h"
-#include "scene/vulkan/pass_color_lut.h"
 #include "scene/vulkan/pass_decal.h"
 #include "scene/vulkan/pass_dof.h"
 #include "scene/vulkan/pass_environment.h"
@@ -29,12 +28,12 @@ SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
     : device_(context),
       allocator_(device_),
       resources_(allocator_),
-      gpu_{device_, allocator_, defaults_, targets_, resources_, meshes_} {
+      gpu_{device_, allocator_, defaults_, targets_, resources_, meshes_, environment_} {
     // The frame, in order. A pass draws into the HDR scope or brings its own
     // targets; the graph does every shared transition (scene_frame_graph.h).
     graph_.add(std::make_unique<PassShadow>());
-    graph_.add(std::make_unique<PassReflectionProbe>());
     graph_.add(std::make_unique<PassFrameUniforms>());
+    graph_.add(std::make_unique<PassReflectionProbe>());
     graph_.add(std::make_unique<PassEnvironment>());
     graph_.add(std::make_unique<PassOpaque>());
     graph_.add(std::make_unique<PassTerrain>());
@@ -48,10 +47,11 @@ SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
     graph_.add(std::make_unique<PassParticles>());
     graph_.add(std::make_unique<PassBillboard>());
     graph_.add(std::make_unique<PassGaussianSplat>());
-    graph_.add(std::make_unique<PassGizmo>());
     graph_.add(std::make_unique<PassDoF>());
     graph_.add(std::make_unique<PassPostFx>());
-    colorLut_ = &static_cast<PassColorLut&>(graph_.add(std::make_unique<PassColorLut>()));
+    graph_.add(std::make_unique<PassOverlay>());
+    graph_.add(std::make_unique<PassTiltShift>());
+    graph_.add(std::make_unique<PassFxaa>());
 }
 
 SceneVkBridge::~SceneVkBridge() {
@@ -59,6 +59,7 @@ SceneVkBridge::~SceneVkBridge() {
     allocator_.destroyBuffer(readbackBuffer_);
     graph_.cleanup(gpu_);
     meshes_.cleanup(gpu_);
+    environment_.cleanup(device_, allocator_);
     resources_.cleanup();
     targets_.cleanup(allocator_);
     defaults_.cleanup(device_, allocator_);
@@ -71,7 +72,7 @@ bool SceneVkBridge::init() {
         return false;
     }
     if (!defaults_.setup(device_, allocator_) || !targets_.setup(device_, allocator_) || !meshes_.setup(gpu_) ||
-        !graph_.setup(gpu_)) {
+        !environment_.setup(device_, allocator_, defaults_) || !graph_.setup(gpu_)) {
         LOG_ERROR("SceneVkBridge: Failed setting up the scene renderer");
         return false;
     }
@@ -102,11 +103,13 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
         !targets_.ensureShadowAtlas(allocator_, static_cast<uint32_t>(renderer.shadowPlan().atlasSize))) {
         renderer.invalidateShadowCache();
     }
-    frame.lighting = sceneLighting(renderer);
+    environment_.update(gpu_, cmd, renderer);
+    frame.lighting = sceneLighting(renderer, environment_);
     writeCameraSet(frame);
     frame.ssao = renderer.ssaoEnabled() && targets_.ensureIndirect(allocator_);
     frame.dof = renderer.depthOfFieldEnabled();
-    frame.lut = renderer.hasColorLUT() && renderer.colorLUTAmount() > 0.0f && colorLut_->ensureLut(gpu_, renderer);
+    frame.tilt = renderer.tiltShiftEnabled();
+    frame.fxaa = renderer.fxaaEnabled();
     buildDrawLists(frame);
 
     graph_.run(frame);

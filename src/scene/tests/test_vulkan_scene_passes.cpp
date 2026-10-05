@@ -93,7 +93,7 @@ int main() {
         const auto& meshVs = SceneVkShaderCompiler::getBuiltinSpirv(BuiltinSceneShader::MeshVert);
         const auto& meshFs = SceneVkShaderCompiler::getBuiltinSpirv(BuiltinSceneShader::MeshFrag);
         const auto& shadowVs = SceneVkShaderCompiler::getBuiltinSpirv(BuiltinSceneShader::ShadowVert);
-        const auto& envFs = SceneVkShaderCompiler::getBuiltinSpirv(BuiltinSceneShader::EnvironmentFrag);
+        const auto& envFs = SceneVkShaderCompiler::getBuiltinSpirv(BuiltinSceneShader::SkyAtmosphereFrag);
         const auto& tonemapFs = SceneVkShaderCompiler::getBuiltinSpirv(BuiltinSceneShader::TonemapFrag);
 
         assert(!meshVs.empty() && meshVs[0] == 0x07230203);

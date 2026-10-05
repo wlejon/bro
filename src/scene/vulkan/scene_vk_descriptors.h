@@ -58,6 +58,14 @@ struct alignas(16) SceneLightingUniforms {
     alignas(16) float probeParams[4];   // x = intensity, y = blendDist, z = maxLOD, w = pad
     alignas(16) float shadeOrigin[4];   // xyz = origin, w = hasShadeMap (1 or 0)
     alignas(16) float shadeParams[4];   // x = cellSize, y = hex, z = width, w = height
+    alignas(16) float iblParams[4];     // x = enabled, y = intensity, z = rotation (rad), w = prefilter max LOD
+    // The atmosphere (shaders/scene_atmosphere.glsl); atmSunDir.w = enabled.
+    alignas(16) float atmSunDir[4];     // xyz = unit vector towards the sun
+    alignas(16) float atmSunColor[4];   // rgb = solar irradiance, a = planet radius
+    alignas(16) float atmBetaR[4];      // rgb = Rayleigh scattering per metre, a = thickness
+    alignas(16) float atmParams[4];     // x = Mie scattering, y = Mie g, z = Rayleigh / w = Mie scale height
+    alignas(16) float atmParams2[4];    // x = sea level, y = spherical, z = multi-scatter, w = sun angular radius
+    alignas(16) float atmCenter[4];     // xyz = planet centre, w = sun disk intensity
 };
 static_assert(sizeof(SceneLightUniform) == 80 && sizeof(SceneShadowTileUniform) == 112);
 
@@ -78,8 +86,10 @@ public:
 
     /// Set 1 of every lit pipeline: lighting UBO, shadow atlas (with
     /// `shadowCompareSampler` immutable — SceneVkDevice::shadowCompareSampler),
-    /// reflection probe cubemap, tile shade map.
-    static VkDescriptorSetLayout createLightingLayout(VkDevice device, VkSampler shadowCompareSampler);
+    /// reflection probe cubemap, tile shade map, then the environment's
+    /// irradiance and prefiltered cubes, the BRDF LUT and the sky cube.
+    static VkDescriptorSetLayout createLightingLayout(VkDevice device, VkSampler shadowCompareSampler,
+                                                      VkSampler linearSampler);
 
 private:
     std::vector<VkDescriptorSetLayoutBinding> bindings_;

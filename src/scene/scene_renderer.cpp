@@ -12,6 +12,7 @@
 #include "broimage/decode.h"
 
 #include <cmath>
+#include <cstring>
 #include <vector>
 
 namespace bro::scene {
@@ -223,22 +224,71 @@ void SceneRenderer::clearColorLUT() {
 
 // --- Environment ------------------------------------------------------------
 
+namespace {
+
+// IEEE half from a float, round to nearest even; overflow saturates to
+// infinity and NaN stays NaN (the bake sanitises both).
+uint16_t toHalf(float f) {
+    uint32_t x;
+    std::memcpy(&x, &f, sizeof(x));
+    const uint32_t sign = (x >> 16) & 0x8000u;
+    const uint32_t absx = x & 0x7FFFFFFFu;
+    if (absx >= 0x7F800000u) return static_cast<uint16_t>(sign | 0x7C00u | (absx > 0x7F800000u ? 0x200u : 0u));
+    if (absx >= 0x477FF000u) return static_cast<uint16_t>(sign | 0x7C00u);   // rounds past 65504
+    if (absx < 0x38800000u) {                                                 // subnormal or zero
+        if (absx < 0x33000000u) return static_cast<uint16_t>(sign);
+        const uint32_t mant = (absx & 0x7FFFFFu) | 0x800000u;
+        const uint32_t shift = 126u - (absx >> 23);
+        uint32_t h = mant >> shift;
+        const uint32_t rem = mant & ((1u << shift) - 1u);
+        const uint32_t half = 1u << (shift - 1u);
+        if (rem > half || (rem == half && (h & 1u))) ++h;
+        return static_cast<uint16_t>(sign | h);
+    }
+    uint32_t h = ((absx - 0x38000000u) >> 13);
+    const uint32_t rem = absx & 0x1FFFu;
+    if (rem > 0x1000u || (rem == 0x1000u && (h & 1u))) ++h;
+    return static_cast<uint16_t>(sign | h);
+}
+
+}  // namespace
+
 bool SceneRenderer::loadEnvironment(const std::string& hdrPath) {
     if (hdrPath.empty()) {
         clearEnvironment();
         return true;
     }
-    static bool warned = false;
-    if (!warned) {
-        warned = true;
-        LOG_WARN("scene: image-based lighting is not implemented on the Vulkan renderer yet; '%s' is ignored",
-                 hdrPath.c_str());
+    // Top-down float RGBA: row 0 is the +Y pole, which the bake's equirect
+    // lookup (v = 0.5 - theta / pi) expects.
+    broimage::ImageF32 hdr;
+    std::string err;
+    if (!broimage::decode_file_f32(hdrPath, hdr, &err) || hdr.width <= 0 || hdr.height <= 0) {
+        LOG_ERROR("loadEnvironment: decoding '%s' failed: %s", hdrPath.c_str(), err.c_str());
+        return false;
     }
-    return false;
+    const size_t texels = static_cast<size_t>(hdr.width) * static_cast<size_t>(hdr.height);
+    const int ch = hdr.channels;
+    std::vector<uint16_t> half(texels * 4);
+    for (size_t i = 0; i < texels; ++i) {
+        const float* p = &hdr.pixels[i * ch];
+        half[i * 4 + 0] = toHalf(p[0]);
+        half[i * 4 + 1] = toHalf(ch > 1 ? p[1] : p[0]);
+        half[i * 4 + 2] = toHalf(ch > 2 ? p[2] : p[0]);
+        half[i * 4 + 3] = 0x3C00u;   // 1.0
+    }
+    envPixels_ = std::move(half);
+    envWidth_ = hdr.width;
+    envHeight_ = hdr.height;
+    envPath_ = hdrPath;
+    envGeneration_ = nextResourceGeneration();
+    return true;
 }
 
 void SceneRenderer::clearEnvironment() {
     envPath_.clear();
+    envPixels_.clear();
+    envWidth_ = envHeight_ = 0;
+    envGeneration_ = nextResourceGeneration();
 }
 
 void SceneRenderer::updateSunIrradiance(const std::vector<LightNode*>& lights) {

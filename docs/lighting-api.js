@@ -106,17 +106,20 @@
  */
 
 /**
+ * The miniature look: outside a horizontal band of the frame a blurred copy
+ * is mixed in (over a 0.1 feather). Any field turns it on.
  * @typedef {Object} TiltShiftConfig
- * @property {number} [blur]
- * @property {number} [focus]
- * @property {number} [range]
+ * @property {number} [blur]  Blur strength (default 1).
+ * @property {number} [focus]  Band centre, 0 = bottom of the frame, 1 = top (default 0.5).
+ * @property {number} [range]  Band half-height in the same units (default 0.2).
  */
 
 /**
+ * Glow around HDR highlights, added before tonemapping. Any field turns it on.
  * @typedef {Object} BloomConfig
- * @property {number} [threshold]
- * @property {number} [intensity]
- * @property {number} [radius]
+ * @property {number} [threshold]  Luminance where the glow starts (default 1), with a soft knee one threshold wide: full strength at twice it.
+ * @property {number} [intensity]  How much of the glow is added (default 1).
+ * @property {number} [radius]  The blur's reach (default 1).
  */
 
 /**

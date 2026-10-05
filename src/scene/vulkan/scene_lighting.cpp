@@ -8,6 +8,7 @@
 #include "scene/scene_graph.h"
 #include "scene/scene_renderer.h"
 #include "scene/vulkan/scene_defaults.h"
+#include "scene/vulkan/scene_environment.h"
 #include "scene/vulkan/scene_frame.h"
 #include "scene/vulkan/scene_gpu_resources.h"
 #include "scene/vulkan/scene_targets.h"
@@ -46,7 +47,7 @@ void setLight(SceneLightUniform& out, const LightNode& l) {
 
 }  // namespace
 
-SceneLightingUniforms sceneLighting(const SceneRenderer& renderer) {
+SceneLightingUniforms sceneLighting(const SceneRenderer& renderer, const SceneEnvironment& environment) {
     SceneLightingUniforms light{};
     const ShadowPlan& plan = renderer.shadowPlan();
     const std::vector<LightNode*>& lights = renderer.frameLights();
@@ -114,6 +115,7 @@ SceneLightingUniforms sceneLighting(const SceneRenderer& renderer) {
         out.depth[1] = tile.zFar;
         out.depth[2] = tile.ortho ? 1.0f : 0.0f;
     }
+    environment.fillLighting(light, renderer);
     return light;
 }
 
@@ -134,8 +136,11 @@ VkDescriptorSet writeLightingSet(SceneGpu& gpu, const SceneLightingUniforms& uni
     SceneVkDescriptorWriter writer;
     writer.writeBuffer(0, ubo.buffer, ubo.range, ubo.offset);
     writer.writeImage(1, gpu.targets.shadowAtlas.view, VK_NULL_HANDLE);   // immutable compare sampler
-    writer.writeImage(2, probeView ? probeView : d.cube.view, d.cubeSampler);
-    writer.writeImage(3, shadeMap ? shadeMap->view : d.white.view, shadeMap ? shadeMap->sampler : d.sampler);
+    writer.writeImage(2, probeView ? probeView : d.cube.view, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                      VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
+    writer.writeImage(3, shadeMap ? shadeMap->view : d.white.view, VK_NULL_HANDLE,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
+    gpu.environment.writeBindings(writer, d);
     writer.updateSet(gpu.device.device(), set);
     return set;
 }
@@ -144,29 +149,29 @@ void PassFrameUniforms::declare(const SceneFrame& frame, PassIO& io) const {
     io.sample(frame.gpu.targets.shadowAtlas);
 }
 
+void setProbe(SceneLightingUniforms& light, const ReflectionProbeNode& probe, uint32_t mipLevels) {
+    const auto& pw = probe.worldMatrix();
+    const bromath::Mat4 invPw = bromath::minverse(pw);
+    std::memcpy(light.probeWorldToLocal, invPw.data, sizeof(light.probeWorldToLocal));
+    std::memcpy(light.probeLocalToWorld, pw.data, sizeof(light.probeLocalToWorld));
+    light.probePos[0] = pw.at(0, 3);
+    light.probePos[1] = pw.at(1, 3);
+    light.probePos[2] = pw.at(2, 3);
+    light.probePos[3] = 1.0f;
+    auto axisLength = [&](int c) {
+        return std::sqrt(pw.at(0, c) * pw.at(0, c) + pw.at(1, c) * pw.at(1, c) + pw.at(2, c) * pw.at(2, c));
+    };
+    light.probeBoxSize[0] = axisLength(0);
+    light.probeBoxSize[1] = axisLength(1);
+    light.probeBoxSize[2] = axisLength(2);
+    light.probeBoxSize[3] = probe.boxProjection() ? 1.0f : 0.0f;
+    light.probeParams[0] = probe.intensity();
+    light.probeParams[1] = probe.interior();
+    light.probeParams[2] = static_cast<float>(mipLevels - 1);
+}
+
 void PassFrameUniforms::record(SceneFrame& frame) {
     SceneLightingUniforms& light = frame.lighting;
-
-    if (const ReflectionProbeNode* probe = frame.probe.node) {
-        const auto& pw = probe->worldMatrix();
-        const bromath::Mat4 invPw = bromath::minverse(pw);
-        std::memcpy(light.probeWorldToLocal, invPw.data, sizeof(light.probeWorldToLocal));
-        std::memcpy(light.probeLocalToWorld, pw.data, sizeof(light.probeLocalToWorld));
-        light.probePos[0] = pw.at(0, 3);
-        light.probePos[1] = pw.at(1, 3);
-        light.probePos[2] = pw.at(2, 3);
-        light.probePos[3] = 1.0f;
-        auto axisLength = [&](int c) {
-            return std::sqrt(pw.at(0, c) * pw.at(0, c) + pw.at(1, c) * pw.at(1, c) + pw.at(2, c) * pw.at(2, c));
-        };
-        light.probeBoxSize[0] = axisLength(0);
-        light.probeBoxSize[1] = axisLength(1);
-        light.probeBoxSize[2] = axisLength(2);
-        light.probeBoxSize[3] = probe->boxProjection() ? 1.0f : 0.0f;
-        light.probeParams[0] = probe->intensity();
-        light.probeParams[1] = probe->interior();
-        light.probeParams[2] = static_cast<float>(frame.probe.mipLevels - 1);
-    }
 
     // The first visible node with a shade map provides it for the scene.
     ShadeMapBinding binding{};
@@ -196,7 +201,8 @@ void PassFrameUniforms::record(SceneFrame& frame) {
         light.shadeParams[3] = static_cast<float>(binding.height);
     }
 
-    frame.lightingSet = writeLightingSet(frame.gpu, light, frame.probe.view, shade);
+    frame.shadeMap = shade;
+    frame.lightingSet = writeLightingSet(frame.gpu, light, VK_NULL_HANDLE, shade);
 }
 
 }  // namespace bro::scene::vk

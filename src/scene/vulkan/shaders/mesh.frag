@@ -1,7 +1,8 @@
 #version 450
 // Every scene mesh: the material inputs (base colour, vertex colour, maps,
 // the instance tint and atlas cell), then the shared lighting
-// (scene_lighting.glsl), fog and the tile shade map. Unlit meshes skip the
+// (scene_lighting.glsl), the air (aerial perspective or fog) and the tile
+// shade map. Unlit meshes skip the
 // lighting. Built twice: as is, and with SCENE_INDIRECT_OUTPUT for the opaque
 // pass while SSAO is on.
 
@@ -79,13 +80,13 @@ void main() {
 
     vec3 emissive = push.emissive.rgb * push.emissive.a;
     vec3 geomN = normalize(inNormal);
-    float fog = fogFactorFor(camDist, inWorldPos.y);
+    SceneAir air = sceneAir(inWorldPos, camDist);
 
     if ((flags & MESH_UNLIT) != 0u) {
-        vec3 color = mix(baseColor + emissive, camera.fogColor.rgb, fog);
+        vec3 color = (baseColor + emissive) * air.transmittance + air.inscatter;
         if ((flags & MESH_SHADE_MAP) != 0u && lighting.shadeOrigin.w > 0.5) color *= cellShade(inWorldPos, geomN);
         // Unlit surfaces reflect nothing in the SSR mask phase.
-        outColor = vec4(color, (flags & MESH_REFLECTANCE) != 0u ? 0.0 : mix(alpha, 0.0, fog));
+        outColor = vec4(color, (flags & MESH_REFLECTANCE) != 0u ? 0.0 : mix(alpha, 0.0, air.fade));
 #ifdef SCENE_INDIRECT_OUTPUT
         outIndirect = vec4(0.0);
 #endif
@@ -138,9 +139,9 @@ void main() {
         alpha = dot(F0, vec3(0.2126, 0.7152, 0.0722)) * (1.0 - s.roughness) * (1.0 - s.roughness);
     }
 
-    color = mix(color, camera.fogColor.rgb, fog);
-    indirect *= 1.0 - fog;
-    alpha = mix(alpha, 0.0, fog);
+    color = color * air.transmittance + air.inscatter;
+    indirect *= air.transmittance;
+    alpha = mix(alpha, 0.0, air.fade);
 
     if ((flags & MESH_SHADE_MAP) != 0u && lighting.shadeOrigin.w > 0.5) {
         float shade = cellShade(inWorldPos, geomN);

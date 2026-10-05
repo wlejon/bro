@@ -2,7 +2,7 @@
 
 namespace bro::scene {
 
-// Parameters for the analytic atmosphere (src/scene/shaders/atmosphere.glsl).
+// Parameters for the analytic atmosphere (scene/vulkan/shaders/scene_atmosphere.glsl).
 //
 // Defaults are Earth: Rayleigh and Mie coefficients from the standard fits at
 // 680/550/440 nm, an 8 km Rayleigh scale height and 1.2 km for haze. They are
@@ -55,14 +55,14 @@ struct AtmosphereParams {
     // Strength of the isotropic multiple-scattering fill (0 = single scatter
     // only, the historical behaviour). Lets sunColor drop to a physical value
     // — which keeps aerial perspective over ground crisp — while the sky stays
-    // bright and blue from inside the atmosphere. See atmosphere.glsl.
+    // bright and blue from inside the atmosphere. See scene_atmosphere.glsl.
     float multiScatter = 0.0f;
 
     float sunAngularRadius = 0.00465f;   // radians; the real sun
     float sunDiskIntensity = 25.0f;
 };
 
-// Parameters for the additive starfield (src/scene/shaders/starfield.frag).
+// Parameters for the additive starfield (scene/vulkan/shaders/starfield.frag).
 // Drawn over whichever sky is active, so the same field reads as invisible in a
 // bright day sky and as stars against the near-black sky above the atmosphere.
 struct StarfieldParams {

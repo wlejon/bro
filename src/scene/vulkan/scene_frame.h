@@ -4,7 +4,7 @@
 //
 // SceneGpu is the renderer's long-lived GPU state: the frame core, the
 // shared layouts and fallbacks, the frame targets, the per-node resource
-// cache and the mesh drawer. SceneFrame is one render: the command buffer,
+// cache, the mesh drawer and the environment (IBL maps and the sky). SceneFrame is one render: the command buffer,
 // the graph and its settings, the camera view, what is drawn, the lighting
 // and the counters the passes add to.
 
@@ -20,7 +20,6 @@
 
 namespace bro::scene {
 class SceneGraph;
-class ReflectionProbeNode;
 }
 
 namespace bro::scene::vk {
@@ -31,6 +30,8 @@ class SceneDefaults;
 class SceneTargets;
 class SceneGpuResources;
 class SceneMeshDrawer;
+class SceneEnvironment;
+struct SceneVkImage;
 
 struct SceneGpu {
     SceneVkDevice& device;
@@ -39,6 +40,7 @@ struct SceneGpu {
     SceneTargets& targets;
     SceneGpuResources& resources;
     SceneMeshDrawer& meshes;
+    SceneEnvironment& environment;
 };
 
 struct SceneFrame {
@@ -59,20 +61,24 @@ struct SceneFrame {
     // Effects that change the pass structure, decided once per frame.
     bool ssao = false;   // opaque scope carries the indirect attachment; AO applies
     bool dof = false;
-    bool lut = false;
+    bool tilt = false;   // tilt-shift after the overlay
+    bool fxaa = false;   // FXAA last
 
-    /// Sun, lights, ambient and shadow projection (scene_lighting.h). The
-    /// probe and shade-map fields are filled by the frame-uniforms pass.
+    /// The LDR image holding the frame so far: written by the tonemap, drawn
+    /// over by the overlay, replaced by tilt-shift and FXAA. Whichever post
+    /// pass runs last writes targets.ldr.
+    SceneVkImage* ldrResult = nullptr;
+
+    /// Sun, lights, ambient, shadow projection, environment and atmosphere
+    /// (scene_lighting.h); the shade-map fields are filled by the
+    /// frame-uniforms pass. No probe: each probe's lighting set adds its own.
     SceneLightingUniforms lighting{};
+    /// The tile shade map the lighting sets bind (frame-uniforms pass), or null.
+    const SceneVkImage* shadeMap = nullptr;
 
-    /// The reflection probe the lit passes sample (set by the probe pass).
-    struct Probe {
-        const ReflectionProbeNode* node = nullptr;
-        VkImageView view = VK_NULL_HANDLE;
-        uint32_t mipLevels = 1;
-    } probe;
-
-    /// This frame's camera and lighting sets (written by the frame-uniforms pass).
+    /// This frame's camera and lighting sets (written by the frame-uniforms
+    /// pass). A draw inside a reflection probe's box carries that probe's
+    /// lighting set instead (MeshDraw::lightingSet).
     VkDescriptorSet cameraSet = VK_NULL_HANDLE;
     VkDescriptorSet lightingSet = VK_NULL_HANDLE;
 

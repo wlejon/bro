@@ -328,6 +328,12 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  */
 
 /**
+ * A local reflection probe: captures the sky and opaque meshes around its
+ * position, lit and shadowed, into a GGX-prefiltered cube that replaces the
+ * global environment's specular for meshes inside its box (`size`).
+ * `updateMode` 'once' (default) captures on the first visible frame,
+ * 'manual' on `capture()`; `boxProjection` (default true) parallax-corrects
+ * against the box.
  * @typedef {Object} ReflectionProbeNodeOptions
  * @property {Array<number>} [size]
  * @property {number} [resolution]
@@ -821,6 +827,61 @@ class SceneNode {
    * @param {number} count
    */
   setInstanceCount(count) {}
+
+  /**
+   * InstancedMesh: GPU foliage scatter. The node's mesh (a leaf card: +Z tip,
+   * +Y card normal, +X side) is drawn once per leaf, each leaf placed along
+   * its branch segment in the vertex shader — up bias, tilt / roll / scale
+   * jitter as bromesh's placeLeavesOnBranches, from a hash of the leaf index,
+   * so placement is deterministic. Replaces the instance rows. Leaves cast no
+   * shadow. The object `world.emitScatterSegments()` (flora-api.js) returns.
+   *
+   * @example
+   *   const leaves = scene.createInstancedMesh({ mesh: Mesh.plane(0.08, 0.15), color: '#3a7', doubleSided: true });
+   *   leaves.setScatterSegments({
+   *     segments: new Float32Array([0, 0, 0, 0.05,  0, 2, 0, 40]),   // from.xyz, radius, dir.xyz, leaf count
+   *     instSeg: new Float32Array(40),                               // each leaf's segment index
+   *     seed: 1, upBias: 0.5, boundsMin: [-1, -0.5, -1], boundsMax: [1, 2.5, 1],
+   *   });
+   * @param {{segments: Float32Array, instSeg: Float32Array, seed?: number, upBias?: number,
+   *   tiltJitter?: number, rollJitter?: number, baseScale?: number, scaleJitter?: number,
+   *   scaleByRadius?: number, maxRadius?: number, densityFalloff?: number,
+   *   boundsMin?: Array<number>, boundsMax?: Array<number>}} opts
+   */
+  setScatterSegments(opts) {}
+
+  /**
+   * InstancedMesh: GPU branch tubes. Each segment (8 floats: from.xyz,
+   * radiusFrom, to.xyz, radiusTo) draws a tapered `sides`-sided tube wall
+   * with no end caps, built in the vertex shader — no mesh, no instance rows.
+   * Lit with the node's material; casts and receives shadows. The object
+   * `world.emitBranchTubes()` (flora-api.js) returns.
+   *
+   * @param {{segments: Float32Array, sides?: number, radiusScale?: number,
+   *   boundsMin?: Array<number>, boundsMax?: Array<number>}} opts
+   */
+  setTubeSegments(opts) {}
+
+  /** InstancedMesh: true after setScatterSegments. @readonly @type {boolean} */
+  isScatter;
+
+  /** InstancedMesh: true after setTubeSegments. @readonly @type {boolean} */
+  isTube;
+
+  /**
+   *  ReflectionProbe: where probe boxes overlap, a mesh takes the probe with
+   *  the highest priority whose box holds its bounds centre, ties going to
+   *  the smaller box. Default 0; undefined on other nodes.
+   * @type {number}
+   */
+  priority;
+
+  /**
+   *  ReflectionProbe: the margin (world units) over which the probe fades to
+   *  the global environment near its box faces; undefined on other nodes.
+   * @type {number}
+   */
+  interior;
 
   /**
    * @param {string} html

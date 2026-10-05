@@ -26,7 +26,9 @@ SceneRenderer::CustomShaderTarget shaderTarget(MeshKind kind) {
     switch (kind) {
     case MeshKind::Instanced: return SceneRenderer::CustomShaderTarget::Instanced;
     case MeshKind::Skinned: return SceneRenderer::CustomShaderTarget::Skinned;
-    case MeshKind::Static: break;
+    case MeshKind::Static:
+    case MeshKind::Scatter:
+    case MeshKind::Tube: break;
     }
     return SceneRenderer::CustomShaderTarget::Static;
 }
@@ -35,6 +37,11 @@ SceneRenderer::CustomShaderTarget shaderTarget(MeshKind kind) {
 
 void SceneMeshDrawer::vertexInput(MeshKind kind, std::vector<VkVertexInputBindingDescription>& bindings,
                                   std::vector<VkVertexInputAttributeDescription>& attributes) {
+    if (kind == MeshKind::Tube) {
+        bindings.clear();
+        attributes.clear();
+        return;
+    }
     bindings = {{0, SceneGpuResources::kVertexStride, VK_VERTEX_INPUT_RATE_VERTEX}};
     attributes = {
         {0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0},       // position
@@ -82,9 +89,13 @@ bool SceneMeshDrawer::setup(SceneGpu& gpu) {
         SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshInstancedVert);
     vs_[static_cast<int>(MeshKind::Skinned)] =
         SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshSkinnedVert);
+    vs_[static_cast<int>(MeshKind::Scatter)] =
+        SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshScatterVert);
+    vs_[static_cast<int>(MeshKind::Tube)] =
+        SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshTubeVert);
     fs_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshFrag);
     fsIndirect_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshIndirectFrag);
-    if (!vs_[0] || !vs_[1] || !vs_[2] || !fs_ || !fsIndirect_) {
+    if (std::find(std::begin(vs_), std::end(vs_), VK_NULL_HANDLE) != std::end(vs_) || !fs_ || !fsIndirect_) {
         LOG_ERROR("SceneMeshDrawer: Failed creating the mesh shader modules");
         return false;
     }
@@ -113,11 +124,15 @@ namespace raster {
 constexpr uint32_t kTranslucent = 1;
 constexpr uint32_t kTwoSided = 2;
 constexpr uint32_t kLines = 4;
+constexpr uint32_t kMirrored = 8;
+constexpr uint32_t kNoDepth = 16;
+constexpr uint32_t kCount = 32;
 }
 
 uint32_t SceneMeshDrawer::rasterVariant(const MeshDraw& draw) {
     return (draw.translucent ? raster::kTranslucent : 0u) | (draw.twoSided ? raster::kTwoSided : 0u) |
-           (draw.lines ? raster::kLines : 0u);
+           (draw.lines ? raster::kLines : 0u) | (draw.mirrored ? raster::kMirrored : 0u) |
+           (draw.noDepthTest ? raster::kNoDepth : 0u);
 }
 
 VkPipeline SceneMeshDrawer::buildPipeline(VkShaderModule vs, VkShaderModule fs, MeshKind kind, uint32_t rasterBits,
@@ -137,12 +152,18 @@ VkPipeline SceneMeshDrawer::buildPipeline(VkShaderModule vs, VkShaderModule fs, 
      .setVertexInput(bindings, attributes)
      .setInputTopology(lines ? VK_PRIMITIVE_TOPOLOGY_LINE_LIST : VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
      .setPolygonMode(VK_POLYGON_MODE_FILL)
-     .setCullMode(cullBack ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE, VK_FRONT_FACE_COUNTER_CLOCKWISE)
+     .setCullMode(cullBack ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE,
+                  (rasterBits & raster::kMirrored) ? VK_FRONT_FACE_CLOCKWISE : VK_FRONT_FACE_COUNTER_CLOCKWISE)
      .setTarget(target)
      .setDepthBias(true)
      .setDynamicStates(dynamic);
     if (rasterBits & raster::kTranslucent) {
-        b.enableAlphaBlending(1).enableDepthTest(false);
+        b.enableAlphaBlending(1);
+        if (rasterBits & raster::kNoDepth) {
+            b.disableDepthTest();
+        } else {
+            b.enableDepthTest(false);
+        }
     } else {
         // Every attachment is written: the indirect-light one, when the
         // target has it, by the indirect variant of the fragment stage.
@@ -153,7 +174,7 @@ VkPipeline SceneMeshDrawer::buildPipeline(VkShaderModule vs, VkShaderModule fs, 
 
 VkPipeline SceneMeshDrawer::builtinPipeline(const MeshDraw& draw, const TargetFormat& target) {
     const uint32_t rasterBits = rasterVariant(draw);
-    const uint32_t variant = static_cast<uint32_t>(draw.kind) * 8 + rasterBits;
+    const uint32_t variant = static_cast<uint32_t>(draw.kind) * raster::kCount + rasterBits;
     return builtin_.get(variant, target, [&] {
         VkShaderModule fs = target.colorCount > 1 ? fsIndirect_ : fs_;
         return buildPipeline(vs_[static_cast<int>(draw.kind)], fs, draw.kind, rasterBits, target);
@@ -224,6 +245,28 @@ VkDescriptorSet SceneMeshDrawer::boneSet(SceneFrame& frame, const std::vector<fl
     VkDescriptorSet set = frame.gpu.device.frameSet(defaults_->boneLayout);
     SceneVkDescriptorWriter writer;
     writer.writeBuffer(0, ubo.buffer, ubo.range, ubo.offset);
+    writer.updateSet(device_, set);
+    return set;
+}
+
+VkDescriptorSet SceneMeshDrawer::segmentSet(SceneFrame& frame, const float (&header)[12],
+                                            const std::vector<float>& records,
+                                            const std::vector<float>* leafSegments) {
+    const size_t leafFloats = leafSegments ? (leafSegments->size() + 3) / 4 * 4 : 0;
+    const size_t bytes = (12 + records.size() + leafFloats) * sizeof(float);
+    const render::UploadSlice slice = frame.gpu.device.frameUpload(bytes);
+    if (!slice) return VK_NULL_HANDLE;
+    auto* dst = static_cast<float*>(slice.mapped);
+    std::memcpy(dst, header, sizeof(header));
+    std::memcpy(dst + 12, records.data(), records.size() * sizeof(float));
+    if (leafSegments) {
+        float* leaves = dst + 12 + records.size();
+        std::memcpy(leaves, leafSegments->data(), leafSegments->size() * sizeof(float));
+        std::fill(leaves + leafSegments->size(), leaves + leafFloats, 0.0f);
+    }
+    VkDescriptorSet set = frame.gpu.device.frameSet(defaults_->boneLayout);
+    SceneVkDescriptorWriter writer;
+    writer.writeBuffer(1, slice.buffer, bytes, slice.offset, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
     writer.updateSet(device_, set);
     return set;
 }
@@ -363,7 +406,7 @@ bool SceneMeshDrawer::prepare(SceneFrame& frame, MeshNode& node, MeshDraw& out) 
 
     if (skinned) {
         out.skin = frame.gpu.resources.skinAttributes(*skinned, data.vertexCount());
-        out.boneSet = boneSet(frame, skinned->skinPalette());
+        out.vertexSet = boneSet(frame, skinned->skinPalette());
         if (!out.skin) return false;
     }
 
@@ -399,17 +442,80 @@ bool SceneMeshDrawer::prepare(SceneFrame& frame, MeshNode& node, MeshDraw& out) 
     return true;
 }
 
+bool SceneMeshDrawer::prepareProcedural(SceneFrame& frame, InstancedMeshNode& node, MeshDraw& out) {
+    float header[12] = {};
+    if (node.isScatter()) {
+        const size_t leaves = node.scatterInstanceCount();
+        if (node.mesh().empty() || node.scatterSegCount() == 0 || leaves == 0) return false;
+        const GpuMesh* gm = frame.gpu.resources.mesh(node.id(), 0, node.geometryGeneration(), node.mesh());
+        if (!gm) return false;
+        const InstancedMeshNode::ScatterParams& p = node.scatterParams();
+        std::memcpy(&header[0], &p.seed, sizeof(float));
+        header[1] = p.upBias;
+        header[2] = p.tiltJitter;
+        header[3] = p.rollJitter;
+        header[4] = p.baseScale;
+        header[5] = p.scaleJitter;
+        header[6] = p.scaleByRadius;
+        header[7] = p.refRadius;
+        header[8] = p.densityFalloff;
+        header[9] = static_cast<float>(node.scatterSegments().size() / 4);   // first leaf-index record
+        out.vertexSet = segmentSet(frame, header, node.scatterSegments(), &node.scatterInstanceSegments());
+        out.kind = MeshKind::Scatter;
+        out.vertices = gm->vertices.buffer;
+        out.indices = gm->indices.buffer;
+        out.indexCount = gm->indexCount;
+        out.instanceCount = static_cast<uint32_t>(leaves);
+    } else {
+        if (node.tubeSegCount() == 0) return false;
+        header[0] = static_cast<float>(node.tubeSides());
+        header[1] = node.tubeRadiusScale();
+        out.vertexSet = segmentSet(frame, header, node.tubeSegments(), nullptr);
+        out.kind = MeshKind::Tube;
+        out.indexCount = static_cast<uint32_t>(node.tubeVertexCount());
+    }
+    if (!out.vertexSet) return false;
+    out.nodeId = node.id();
+    fillMaterial(node, out);
+    if (out.kind == MeshKind::Scatter) out.castsShadow = false;   // leaves never cast, as on GL
+    out.twoSided = node.doubleSided();
+    out.push.extra[3] = static_cast<float>(std::clamp(node.atlasCols(), 1, 255)) +
+                        256.0f * static_cast<float>(std::clamp(node.atlasRows(), 1, 255));
+
+    uint32_t flags = mesh_flags::vertexColor(out.kind == MeshKind::Scatter && node.vertexColorTintEnabled() ? 1 : 0);
+    if (frame.renderer.ssrEnabled()) flags |= mesh_flags::kReflectance;
+    if (node.shadeMap()) flags |= mesh_flags::kShadeMap;
+    if (node.receivesShadow()) flags |= mesh_flags::kReceivesShadow;
+    if (out.twoSided) flags |= mesh_flags::kTwoSided;
+    if (out.kind == MeshKind::Scatter && node.mesh().hasTangents()) flags |= mesh_flags::kHasTangents;
+    if (node.effectiveUnlit()) flags |= mesh_flags::kUnlit;
+    out.materialSet = materialSet(frame, *defaults_, materialImages(frame.gpu.resources, node), flags);
+    out.push.pbrParams[3] = static_cast<float>(flags);
+    return true;
+}
+
 bool SceneMeshDrawer::prepare(SceneFrame& frame, InstancedMeshNode& node, MeshDraw& out) {
+    // Scatter and tube draws build their own geometry (and ignore a custom
+    // shader, as the GL renderer did).
+    if (node.isScatter() || node.isTube()) return prepareProcedural(frame, node, out);
+
     const size_t count = node.instanceCount();
     if (node.mesh().empty() || count == 0) return false;
-    const GpuMesh* gm = frame.gpu.resources.mesh(node.id(), 0, node.geometryGeneration(), node.mesh());
+    // A static batch draws its merged mesh as one identity instance, white:
+    // each instance's tint and atlas cell are baked into it.
+    const bool batched = node.renderingBatched();
+    const bromesh::MeshData& geometry = batched ? node.staticBatchMesh() : node.mesh();
+    const uint64_t generation = batched ? node.staticBatchGeneration() : node.geometryGeneration();
+    const GpuMesh* gm = frame.gpu.resources.mesh(node.id(), 0, generation, geometry);
     if (!gm) return false;
 
     // This render's instance rows, read straight from the frame's upload memory.
-    const size_t bytes = count * 16 * sizeof(float);
+    static constexpr float kIdentityRow[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 1, 1, 1};
+    const size_t rowCount = batched ? 1 : count;
+    const size_t bytes = rowCount * 16 * sizeof(float);
     const render::UploadSlice rows = frame.gpu.device.frameUpload(bytes);
     if (!rows) return false;
-    std::memcpy(rows.mapped, node.instanceData().data(), bytes);
+    std::memcpy(rows.mapped, batched ? kIdentityRow : node.instanceData().data(), bytes);
 
     out.kind = MeshKind::Instanced;
     out.nodeId = node.id();
@@ -418,7 +524,7 @@ bool SceneMeshDrawer::prepare(SceneFrame& frame, InstancedMeshNode& node, MeshDr
     out.indexCount = gm->indexCount;
     out.instances = rows.buffer;
     out.instanceOffset = rows.offset;
-    out.instanceCount = static_cast<uint32_t>(count);
+    out.instanceCount = static_cast<uint32_t>(rowCount);
     fillMaterial(node, out);
     out.twoSided = node.doubleSided();
     out.push.extra[3] = static_cast<float>(std::clamp(node.effectiveAtlasCols(), 1, 255)) +
@@ -429,7 +535,7 @@ bool SceneMeshDrawer::prepare(SceneFrame& frame, InstancedMeshNode& node, MeshDr
     if (node.shadeMap()) flags |= mesh_flags::kShadeMap;
     if (node.receivesShadow()) flags |= mesh_flags::kReceivesShadow;
     if (out.twoSided) flags |= mesh_flags::kTwoSided;
-    if (node.mesh().hasTangents()) flags |= mesh_flags::kHasTangents;
+    if (geometry.hasTangents()) flags |= mesh_flags::kHasTangents;
     if (const CustomShaderState* cs = node.customShader()) {
         out.custom = cs;
         if (CustomProgram* prog = program(*cs, out.kind)) out.customSet = customSet(frame, node.id(), *cs, *prog, nullptr);
@@ -455,11 +561,11 @@ void SceneMeshDrawer::record(VkCommandBuffer cmd, const TargetFormat& target, Vk
     if (!pipeline) return;
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-    const VkDescriptorSet sets[3] = {cameraSet, lightingSet,
+    const VkDescriptorSet sets[3] = {cameraSet, draw.lightingSet ? draw.lightingSet : lightingSet,
                                      draw.materialSet ? draw.materialSet : defaults_->defaultMaterialSet};
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 3, sets, 0, nullptr);
-    if (draw.kind == MeshKind::Skinned)
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 3, 1, &draw.boneSet, 0, nullptr);
+    if (draw.vertexSet)
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 3, 1, &draw.vertexSet, 0, nullptr);
     if (custom)
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 4, 1, &draw.customSet, 0, nullptr);
     vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
@@ -470,9 +576,18 @@ void SceneMeshDrawer::record(VkCommandBuffer cmd, const TargetFormat& target, Vk
     vkCmdSetDepthBias(cmd, toward * draw.depthBiasUnits, 0.0f, toward * draw.depthBiasFactor);
     if (draw.lines && wideLines_) vkCmdSetLineWidth(cmd, draw.lineWidth);
 
+    bindGeometryAndDraw(cmd, draw);
+}
+
+void SceneMeshDrawer::bindGeometryAndDraw(VkCommandBuffer cmd, const MeshDraw& draw) {
+    if (draw.kind == MeshKind::Tube) {
+        vkCmdDraw(cmd, draw.indexCount, 1, 0, 0);
+        return;
+    }
+    const bool second = draw.kind == MeshKind::Instanced || draw.kind == MeshKind::Skinned;
     const VkBuffer buffers[2] = {draw.vertices, draw.kind == MeshKind::Instanced ? draw.instances : draw.skin};
     const VkDeviceSize offsets[2] = {0, draw.kind == MeshKind::Instanced ? draw.instanceOffset : 0};
-    vkCmdBindVertexBuffers(cmd, 0, draw.kind == MeshKind::Static ? 1 : 2, buffers, offsets);
+    vkCmdBindVertexBuffers(cmd, 0, second ? 2 : 1, buffers, offsets);
     vkCmdBindIndexBuffer(cmd, draw.indices, 0, VK_INDEX_TYPE_UINT32);
     vkCmdDrawIndexed(cmd, draw.indexCount, draw.instanceCount, 0, 0, 0);
 }

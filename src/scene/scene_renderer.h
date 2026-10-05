@@ -149,6 +149,12 @@ public:
         tiltContrast_    = contrast;
     }
     bool tiltShiftEnabled() const { return tiltEnabled_; }
+    float tiltShiftFocusCenter() const { return tiltFocusCenter_; }
+    float tiltShiftFocusWidth() const { return tiltFocusWidth_; }
+    float tiltShiftFeather() const { return tiltFeather_; }
+    float tiltShiftStrength() const { return tiltStrength_; }
+    float tiltShiftSaturation() const { return tiltSaturation_; }
+    float tiltShiftContrast() const { return tiltContrast_; }
 
     void setBloom(bool enabled, float threshold, float intensity, float strength) {
         bloomEnabled_   = enabled;
@@ -324,13 +330,25 @@ public:
 
     // --- Environment ---
 
-    /// Image-based lighting from an equirect HDR. Not implemented on the
-    /// Vulkan renderer yet: logs that once and returns false, and the scene
-    /// keeps its flat ambient. An empty path clears (and returns true).
+    /// Image-based lighting from an equirect HDR (any format broimage
+    /// decodes as float). The panorama is decoded here and kept as RGBA half
+    /// floats until the GPU side takes it (takeEnvironmentPixels), which
+    /// bakes the radiance cube, its irradiance and its GGX prefilter on the
+    /// next frame (scene/vulkan/scene_environment.h). The lit shaders then
+    /// use them for their ambient and the sky shows the cube when the
+    /// atmosphere is off. False (and the previous environment kept) when the
+    /// file does not decode; an empty path clears and returns true.
     bool loadEnvironment(const std::string& hdrPath);
     void clearEnvironment();
-    bool hasEnvironment() const { return false; }
+    bool hasEnvironment() const { return !envPath_.empty(); }
     const std::string& environmentPath() const { return envPath_; }
+    /// Moves whenever the environment is loaded or cleared.
+    uint64_t environmentGeneration() const { return envGeneration_; }
+    int environmentWidth() const { return envWidth_; }
+    int environmentHeight() const { return envHeight_; }
+    /// The decoded panorama (RGBA16F, top row first), handed over once:
+    /// empty after the first call per load.
+    std::vector<uint16_t> takeEnvironmentPixels() { return std::move(envPixels_); }
 
     void setAtmosphere(const AtmosphereParams& a) {
         atmosphere_ = a;
@@ -568,6 +586,10 @@ private:
 
     // --- Environment state ---
     std::string envPath_;
+    std::vector<uint16_t> envPixels_;
+    int envWidth_ = 0;
+    int envHeight_ = 0;
+    uint64_t envGeneration_ = 0;
     float  envIntensity_ = 1.0f;
     float  envRotation_ = 0.0f;
     AtmosphereParams atmosphere_;

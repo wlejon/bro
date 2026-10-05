@@ -12,21 +12,22 @@ namespace bro::scene {
 /// node's world position (the box center).
 ///
 /// Capturing renders the scene 6 times (cube faces, 90° FOV) from the origin
-/// into an HDR cubemap with a mip chain (the GL renderer GGX-prefiltered the
-/// chain; the Vulkan probe pass box-filters it for now). There is deliberately
+/// into an HDR cubemap, lit and shadowed like the frame, then GGX-prefilters
+/// it into a roughness mip chain. There is deliberately
 /// NO per-frame auto mode — a capture costs 6 restricted scene renders plus a
 /// prefilter, so probes update 'once' (on the first frame the probe is
 /// visible) or 'manual' (only when requestCapture() / JS capture() asks).
 ///
 /// Application is per-draw: a mesh whose bounds center lies inside the box
-/// samples this probe's prefiltered chain instead of the global IBL specular,
+/// samples this probe's prefiltered chain instead of the global IBL specular
+/// (where boxes overlap, the highest priority wins, then the smaller box),
 /// parallax-corrected against the box when boxProjection is on, fading back
 /// to the global environment over the `interior` margin near the box faces.
 /// Specular only — diffuse ambient stays global (irradiance or flat ambient),
 /// which is also Godot's ReflectionProbe default. The node holds settings and
 /// capture state only; the cubemaps belong to the renderer's probe pass
-/// (vulkan/pass_reflection_probe.*), keyed by node id. Captures draw opaque
-/// geometry + skybox only (no SSR/probes/post).
+/// (vulkan/pass_reflection_probe.*), keyed by node id. Captures draw the sky
+/// and opaque meshes only (no terrain, translucency, SSR, probes or post).
 class ReflectionProbeNode : public SceneNode {
 public:
     explicit ReflectionProbeNode(const std::string& name = "");

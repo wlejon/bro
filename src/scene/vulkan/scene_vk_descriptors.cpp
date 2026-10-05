@@ -57,14 +57,18 @@ VkDescriptorSetLayout SceneVkDescriptorLayoutBuilder::createMaterialLayout(VkDev
 }
 
 VkDescriptorSetLayout SceneVkDescriptorLayoutBuilder::createLightingLayout(VkDevice device,
-                                                                         VkSampler shadowCompareSampler) {
-    assert(shadowCompareSampler != VK_NULL_HANDLE);
+                                                                         VkSampler shadowCompareSampler,
+                                                                         VkSampler linearSampler) {
+    assert(shadowCompareSampler != VK_NULL_HANDLE && linearSampler != VK_NULL_HANDLE);
     SceneVkDescriptorLayoutBuilder builder;
     builder.addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
     builder.addBinding(1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT,
                        shadowCompareSampler);
-    builder.addBinding(2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
-    builder.addBinding(3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
+    // Bare images sharing binding 8's sampler: two sampler descriptors for the
+    // whole set, so material + custom + lighting stay within 16 per stage.
+    for (uint32_t binding = 2; binding <= 7; ++binding)
+        builder.addBinding(binding, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
+    builder.addBinding(8, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, linearSampler);
     return builder.build(device);
 }
 

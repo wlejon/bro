@@ -5,6 +5,7 @@
 
 #include "scene_camera.glsl.src.h"
 #include "scene_lighting.glsl.src.h"
+#include "scene_atmosphere.glsl.src.h"
 #include "scene_mesh_push.glsl.src.h"
 #include "scene_shadow_push.glsl.src.h"
 
@@ -20,6 +21,7 @@ const char* includedSource(const std::string& name) {
     static const struct { const char* name; const char* source; } kIncludes[] = {
         {"scene_camera.glsl", kVkSceneCameraSrc},
         {"scene_lighting.glsl", kVkSceneLightingSrc},
+        {"scene_atmosphere.glsl", kVkSceneAtmosphereSrc},
         {"scene_mesh_push.glsl", kVkSceneMeshPushSrc},
         {"scene_shadow_push.glsl", kVkSceneShadowPushSrc},
     };
@@ -80,20 +82,11 @@ static const uint32_t kSpvShadowSkinnedVert[] =
 static const uint32_t kSpvShadowFrag[] =
 #include "shadow.frag.spv.h"
 ;
-static const uint32_t kSpvSkyboxVert[] =
-#include "skybox.vert.spv.h"
-;
-static const uint32_t kSpvEnvironmentFrag[] =
-#include "environment.frag.spv.h"
-;
 static const uint32_t kSpvPostFxVert[] =
 #include "postfx.vert.spv.h"
 ;
 static const uint32_t kSpvTonemapFrag[] =
 #include "tonemap.frag.spv.h"
-;
-static const uint32_t kSpvBloomFrag[] =
-#include "bloom.frag.spv.h"
 ;
 static const uint32_t kSpvFxaaFrag[] =
 #include "fxaa.frag.spv.h"
@@ -119,9 +112,6 @@ static const uint32_t kSpvDecalFrag[] =
 static const uint32_t kSpvBlurFrag[] =
 #include "blur.frag.spv.h"
 ;
-static const uint32_t kSpvColorLutFrag[] =
-#include "color_lut.frag.spv.h"
-;
 static const uint32_t kSpvSsaoFrag[] =
 #include "ssao.frag.spv.h"
 ;
@@ -139,6 +129,45 @@ static const uint32_t kSpvGaussianSplatVert[] =
 ;
 static const uint32_t kSpvGaussianSplatFrag[] =
 #include "gaussian_splat.frag.spv.h"
+;
+static const uint32_t kSpvSkyVert[] =
+#include "sky.vert.spv.h"
+;
+static const uint32_t kSpvSkyAtmosphereFrag[] =
+#include "sky_atmosphere.frag.spv.h"
+;
+static const uint32_t kSpvSkyboxFrag[] =
+#include "skybox.frag.spv.h"
+;
+static const uint32_t kSpvStarfieldFrag[] =
+#include "starfield.frag.spv.h"
+;
+static const uint32_t kSpvEnvConvertFrag[] =
+#include "env_convert.frag.spv.h"
+;
+static const uint32_t kSpvIrradianceFrag[] =
+#include "irradiance.frag.spv.h"
+;
+static const uint32_t kSpvPrefilterFrag[] =
+#include "prefilter.frag.spv.h"
+;
+static const uint32_t kSpvBrdfLutFrag[] =
+#include "brdf_lut.frag.spv.h"
+;
+static const uint32_t kSpvBloomBrightFrag[] =
+#include "bloom_bright.frag.spv.h"
+;
+static const uint32_t kSpvTiltCompositeFrag[] =
+#include "tilt_composite.frag.spv.h"
+;
+static const uint32_t kSpvMeshScatterVert[] =
+#include "mesh_scatter.vert.spv.h"
+;
+static const uint32_t kSpvMeshTubeVert[] =
+#include "mesh_tube.vert.spv.h"
+;
+static const uint32_t kSpvShadowTubeVert[] =
+#include "shadow_tube.vert.spv.h"
 ;
 
 template<size_t N>
@@ -184,11 +213,8 @@ const std::vector<uint32_t>& SceneVkShaderCompiler::getBuiltinSpirv(BuiltinScene
     static const std::vector<uint32_t> s_shadowInstVert = arrayToVector(kSpvShadowInstancedVert);
     static const std::vector<uint32_t> s_shadowSkinnedVert = arrayToVector(kSpvShadowSkinnedVert);
     static const std::vector<uint32_t> s_shadowFrag = arrayToVector(kSpvShadowFrag);
-    static const std::vector<uint32_t> s_skyboxVert = arrayToVector(kSpvSkyboxVert);
-    static const std::vector<uint32_t> s_envFrag = arrayToVector(kSpvEnvironmentFrag);
     static const std::vector<uint32_t> s_postFxVert = arrayToVector(kSpvPostFxVert);
     static const std::vector<uint32_t> s_tonemapFrag = arrayToVector(kSpvTonemapFrag);
-    static const std::vector<uint32_t> s_bloomFrag = arrayToVector(kSpvBloomFrag);
     static const std::vector<uint32_t> s_fxaaFrag = arrayToVector(kSpvFxaaFrag);
     static const std::vector<uint32_t> s_billboardVert = arrayToVector(kSpvBillboardVert);
     static const std::vector<uint32_t> s_billboardFrag = arrayToVector(kSpvBillboardFrag);
@@ -197,13 +223,25 @@ const std::vector<uint32_t>& SceneVkShaderCompiler::getBuiltinSpirv(BuiltinScene
     static const std::vector<uint32_t> s_decalVert = arrayToVector(kSpvDecalVert);
     static const std::vector<uint32_t> s_decalFrag = arrayToVector(kSpvDecalFrag);
     static const std::vector<uint32_t> s_blurFrag = arrayToVector(kSpvBlurFrag);
-    static const std::vector<uint32_t> s_colorLutFrag = arrayToVector(kSpvColorLutFrag);
     static const std::vector<uint32_t> s_ssaoFrag = arrayToVector(kSpvSsaoFrag);
     static const std::vector<uint32_t> s_ssrFrag = arrayToVector(kSpvSsrFrag);
     static const std::vector<uint32_t> s_dofFrag = arrayToVector(kSpvDofFrag);
     static const std::vector<uint32_t> s_applyAoFrag = arrayToVector(kSpvApplyAoFrag);
     static const std::vector<uint32_t> s_gaussianSplatVert = arrayToVector(kSpvGaussianSplatVert);
     static const std::vector<uint32_t> s_gaussianSplatFrag = arrayToVector(kSpvGaussianSplatFrag);
+    static const std::vector<uint32_t> s_skyVert = arrayToVector(kSpvSkyVert);
+    static const std::vector<uint32_t> s_skyAtmosphereFrag = arrayToVector(kSpvSkyAtmosphereFrag);
+    static const std::vector<uint32_t> s_skyboxFrag = arrayToVector(kSpvSkyboxFrag);
+    static const std::vector<uint32_t> s_starfieldFrag = arrayToVector(kSpvStarfieldFrag);
+    static const std::vector<uint32_t> s_envConvertFrag = arrayToVector(kSpvEnvConvertFrag);
+    static const std::vector<uint32_t> s_irradianceFrag = arrayToVector(kSpvIrradianceFrag);
+    static const std::vector<uint32_t> s_prefilterFrag = arrayToVector(kSpvPrefilterFrag);
+    static const std::vector<uint32_t> s_brdfLutFrag = arrayToVector(kSpvBrdfLutFrag);
+    static const std::vector<uint32_t> s_bloomBrightFrag = arrayToVector(kSpvBloomBrightFrag);
+    static const std::vector<uint32_t> s_tiltCompositeFrag = arrayToVector(kSpvTiltCompositeFrag);
+    static const std::vector<uint32_t> s_meshScatterVert = arrayToVector(kSpvMeshScatterVert);
+    static const std::vector<uint32_t> s_meshTubeVert = arrayToVector(kSpvMeshTubeVert);
+    static const std::vector<uint32_t> s_shadowTubeVert = arrayToVector(kSpvShadowTubeVert);
     static const std::vector<uint32_t> s_empty;
 
     switch (shader) {
@@ -216,11 +254,8 @@ const std::vector<uint32_t>& SceneVkShaderCompiler::getBuiltinSpirv(BuiltinScene
         case BuiltinSceneShader::ShadowInstancedVert: return s_shadowInstVert;
         case BuiltinSceneShader::ShadowSkinnedVert: return s_shadowSkinnedVert;
         case BuiltinSceneShader::ShadowFrag:        return s_shadowFrag;
-        case BuiltinSceneShader::SkyboxVert:        return s_skyboxVert;
-        case BuiltinSceneShader::EnvironmentFrag:   return s_envFrag;
         case BuiltinSceneShader::PostFxVert:        return s_postFxVert;
         case BuiltinSceneShader::TonemapFrag:       return s_tonemapFrag;
-        case BuiltinSceneShader::BloomFrag:         return s_bloomFrag;
         case BuiltinSceneShader::FxaaFrag:          return s_fxaaFrag;
         case BuiltinSceneShader::BillboardVert:     return s_billboardVert;
         case BuiltinSceneShader::BillboardFrag:     return s_billboardFrag;
@@ -229,13 +264,25 @@ const std::vector<uint32_t>& SceneVkShaderCompiler::getBuiltinSpirv(BuiltinScene
         case BuiltinSceneShader::DecalVert:         return s_decalVert;
         case BuiltinSceneShader::DecalFrag:         return s_decalFrag;
         case BuiltinSceneShader::BlurFrag:          return s_blurFrag;
-        case BuiltinSceneShader::ColorLutFrag:      return s_colorLutFrag;
         case BuiltinSceneShader::SsaoFrag:          return s_ssaoFrag;
         case BuiltinSceneShader::SsrFrag:           return s_ssrFrag;
         case BuiltinSceneShader::DofFrag:           return s_dofFrag;
         case BuiltinSceneShader::ApplyAoFrag:       return s_applyAoFrag;
         case BuiltinSceneShader::GaussianSplatVert: return s_gaussianSplatVert;
         case BuiltinSceneShader::GaussianSplatFrag: return s_gaussianSplatFrag;
+        case BuiltinSceneShader::SkyVert: return s_skyVert;
+        case BuiltinSceneShader::SkyAtmosphereFrag: return s_skyAtmosphereFrag;
+        case BuiltinSceneShader::SkyboxFrag: return s_skyboxFrag;
+        case BuiltinSceneShader::StarfieldFrag: return s_starfieldFrag;
+        case BuiltinSceneShader::EnvConvertFrag: return s_envConvertFrag;
+        case BuiltinSceneShader::IrradianceFrag: return s_irradianceFrag;
+        case BuiltinSceneShader::PrefilterFrag: return s_prefilterFrag;
+        case BuiltinSceneShader::BrdfLutFrag: return s_brdfLutFrag;
+        case BuiltinSceneShader::BloomBrightFrag: return s_bloomBrightFrag;
+        case BuiltinSceneShader::TiltCompositeFrag: return s_tiltCompositeFrag;
+        case BuiltinSceneShader::MeshScatterVert: return s_meshScatterVert;
+        case BuiltinSceneShader::MeshTubeVert: return s_meshTubeVert;
+        case BuiltinSceneShader::ShadowTubeVert: return s_shadowTubeVert;
         default: return s_empty;
     }
 }

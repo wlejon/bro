@@ -1,7 +1,8 @@
 // Set 1 of every lit scene pipeline and the shading every lit surface shares:
-// Cook-Torrance PBR over the frame's lights, the shadow atlas, the flat
-// ambient with the bound reflection probe's specular, fog and the tile shade
-// map. Mirrors SceneLightingUniforms (scene_vk_descriptors.h); filled by
+// Cook-Torrance PBR over the frame's lights, the shadow atlas, the ambient
+// (split-sum image-based lighting from the environment, else the flat
+// ambient) with the bound reflection probe's specular, the air between the
+// eye and the surface (aerial perspective or fog) and the tile shade map. Mirrors SceneLightingUniforms (scene_vk_descriptors.h); filled by
 // scene_lighting.cpp from SceneRenderer's light list and shadow plan.
 // Needs scene_camera.glsl included first.
 //
@@ -50,11 +51,44 @@ layout(set = 1, binding = 0) uniform LightingUBO {
     vec4 probeParams;   // x = intensity, y = blend distance, z = max LOD
     vec4 shadeOrigin;   // xyz = origin, w = has shade map
     vec4 shadeParams;   // x = cell size, y = hex, z = width, w = height
+    vec4 iblParams;     // x = enabled, y = intensity, z = rotation, w = prefilter max LOD
+    vec4 atmSunDir;     // xyz = towards the sun, w = atmosphere enabled
+    vec4 atmSunColor;   // rgb = solar irradiance, a = planet radius
+    vec4 atmBetaR;      // rgb = Rayleigh scattering, a = thickness
+    vec4 atmParams;     // x = Mie scattering, y = Mie g, z/w = Rayleigh/Mie scale height
+    vec4 atmParams2;    // x = sea level, y = spherical, z = multi-scatter, w = sun angular radius
+    vec4 atmCenter;     // xyz = planet centre, w = sun disk intensity
 } lighting;
 
 layout(set = 1, binding = 1) uniform sampler2DShadow shadowAtlas;
-layout(set = 1, binding = 2) uniform samplerCube texReflectionProbe;
-layout(set = 1, binding = 3) uniform sampler2D texShadeMap;
+// Bindings 2-7 are bare images read through the one shared sampler at
+// binding 8 (linear, mipmapped, clamped): a fragment stage also sees the
+// material's 5 and a custom shader's 8 samplers, and Apple GPUs allow 16.
+layout(set = 1, binding = 8) uniform sampler lightingSampler;
+layout(set = 1, binding = 2) uniform textureCube texReflectionProbeImage;
+layout(set = 1, binding = 3) uniform texture2D texShadeMapImage;
+// The environment (scene/vulkan/scene_environment.h): the cosine-convolved
+// irradiance, the GGX-prefiltered radiance (roughness down the mips), the
+// split-sum BRDF LUT (NdotV, roughness) -> (F0 scale, bias), and the
+// radiance cube the sky draws.
+layout(set = 1, binding = 4) uniform textureCube texIrradianceImage;
+layout(set = 1, binding = 5) uniform textureCube texPrefilterImage;
+layout(set = 1, binding = 6) uniform texture2D texBrdfLutImage;
+layout(set = 1, binding = 7) uniform textureCube texEnvironmentImage;
+#define texReflectionProbe samplerCube(texReflectionProbeImage, lightingSampler)
+#define texShadeMap sampler2D(texShadeMapImage, lightingSampler)
+#define texIrradiance samplerCube(texIrradianceImage, lightingSampler)
+#define texPrefilter samplerCube(texPrefilterImage, lightingSampler)
+#define texBrdfLut sampler2D(texBrdfLutImage, lightingSampler)
+#define texEnvironment samplerCube(texEnvironmentImage, lightingSampler)
+
+#include "scene_atmosphere.glsl"
+
+// `d` turned about +Y by `a` radians: the environment's rotation.
+vec3 rotateY(vec3 d, float a) {
+    float c = cos(a), s = sin(a);
+    return vec3(c * d.x + s * d.z, d.y, -s * d.x + c * d.z);
+}
 
 float distributionGGX(float NdotH, float roughness) {
     float a = roughness * roughness;
@@ -262,18 +296,34 @@ vec3 probeRadiance(vec3 pos, vec3 R, float rough, out float w) {
     return textureLod(texReflectionProbe, dir, rough * lighting.probeParams.z).rgb;
 }
 
-// Ambient (indirect) light on `s`: the flat ambient on the diffuse part plus
-// the reflection probe's specular where one is bound.
+// Ambient (indirect) light on `s`, Karis' split sum: with an environment the
+// irradiance on the diffuse part and the prefiltered radiance times the BRDF
+// LUT on the specular, both turned by the environment's rotation; without
+// one the flat ambient on the diffuse part. A bound reflection probe replaces
+// the global specular by its weight at the surface (probes are specular-only).
 vec3 sceneAmbient(SceneSurface s) {
-    vec3 ambient = lighting.ambientColor.rgb * s.baseColor * (1.0 - s.metallic);
+    float NdotV = max(dot(s.normal, s.view), 1e-4);
+    vec3 F0 = mix(vec3(0.04), s.baseColor, s.metallic);
+    vec3 F = fresnelSchlickRoughness(NdotV, F0, s.roughness);
+    vec3 R = reflect(-s.view, s.normal);
+    vec2 brdf = texture(texBrdfLut, vec2(NdotV, s.roughness)).rg;
+
+    float probeW = 0.0;
+    vec3 probeSpec = vec3(0.0);
     if (lighting.probePos.w > 0.5) {
-        float w = 0.0;
-        vec3 F0 = mix(vec3(0.04), s.baseColor, s.metallic);
-        vec3 F = fresnelSchlickRoughness(max(dot(s.normal, s.view), 1e-4), F0, s.roughness);
-        vec3 raw = probeRadiance(s.position, reflect(-s.view, s.normal), s.roughness, w);
-        ambient += raw * F * lighting.probeParams.x * w;
+        vec3 raw = probeRadiance(s.position, R, s.roughness, probeW);
+        probeSpec = raw * (F * brdf.x + brdf.y) * lighting.probeParams.x;
     }
-    return ambient;
+    if (lighting.iblParams.x > 0.5) {
+        float rotation = lighting.iblParams.z;
+        float intensity = lighting.iblParams.y;
+        vec3 kD = (1.0 - F) * (1.0 - s.metallic);
+        vec3 irradiance = texture(texIrradiance, rotateY(s.normal, rotation)).rgb;
+        vec3 prefiltered = textureLod(texPrefilter, rotateY(R, rotation), s.roughness * lighting.iblParams.w).rgb;
+        vec3 specular = prefiltered * (F * brdf.x + brdf.y);
+        return kD * irradiance * s.baseColor * intensity + mix(specular * intensity, probeSpec, probeW);
+    }
+    return lighting.ambientColor.rgb * s.baseColor * (1.0 - s.metallic) + probeSpec * probeW;
 }
 
 // Fog in [0,1] for a fragment `camDist` from the eye at height `worldY`:
@@ -295,6 +345,47 @@ float fogFactorFor(float camDist, float worldY) {
         return f * f;
     }
     return 0.0;
+}
+
+// The air between the eye and a surface at `pos`, `camDist` away, as what
+// survives of the surface's colour and what the air adds: the atmosphere's
+// transmittance and in-scatter (aerial perspective, integrated with the sky's
+// own model, so distant ground fades into the sky behind it) when it is on,
+// else the fog. Aerial perspective supersedes fog; both model the same air.
+// `fade` is how far the surface's alpha fades out (fog only).
+struct SceneAir {
+    vec3 transmittance;
+    vec3 inscatter;
+    float fade;
+};
+
+// Aerial-perspective march: steps grow with the ray (one per 3 km) up to the
+// sky pass's count, so a far ridge resolves like the sky just above it.
+const int ATM_AERIAL_MIN_STEPS = 4;
+const int ATM_AERIAL_MAX_STEPS = 24;
+const int ATM_AERIAL_SUN_STEPS = 4;
+const float ATM_AERIAL_STEP_LENGTH = 3000.0;
+
+SceneAir sceneAir(vec3 pos, float camDist) {
+    SceneAir air;
+    air.transmittance = vec3(1.0);
+    air.inscatter = vec3(0.0);
+    air.fade = 0.0;
+    if (lighting.atmSunDir.w > 0.5) {
+        vec3 ray = pos - camera.eyePos.xyz;
+        float dist = length(ray);
+        if (dist <= 0.0) return air;
+        int steps = int(clamp(dist / ATM_AERIAL_STEP_LENGTH, float(ATM_AERIAL_MIN_STEPS),
+                              float(ATM_AERIAL_MAX_STEPS)));
+        air.inscatter = atmScatter(atmOrigin(camera.eyePos.xyz), ray / dist, dist, steps, ATM_AERIAL_SUN_STEPS,
+                                   air.transmittance);
+        return air;
+    }
+    float fog = fogFactorFor(camDist, pos.y);
+    air.transmittance = vec3(1.0 - fog);
+    air.inscatter = camera.fogColor.rgb * fog;
+    air.fade = fog;
+    return air;
 }
 
 // The tile shade map's value under `pos` (see scene/shade_map.h): square

@@ -31,5 +31,11 @@ VkPipeline pipeline(VkDevice dev, VkPipelineLayout layout, VkShaderModule vs, Vk
 void draw(SceneVkDevice& device, VkCommandBuffer cmd, const SceneVkImage& target, VkPipeline pipeline,
           VkPipelineLayout layout, VkDescriptorSet set, const void* push = nullptr, uint32_t pushBytes = 0);
 
+/// The same into a `width` x `height` view of an image (a cube face, a mip);
+/// a null `set` binds nothing.
+void draw(SceneVkDevice& device, VkCommandBuffer cmd, VkImageView target, uint32_t width, uint32_t height,
+          VkPipeline pipeline, VkPipelineLayout layout, VkDescriptorSet set, const void* push = nullptr,
+          uint32_t pushBytes = 0);
+
 }  // namespace fullscreen
 }  // namespace bro::scene::vk

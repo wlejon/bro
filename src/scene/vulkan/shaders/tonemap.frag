@@ -1,22 +1,28 @@
 #version 450
+// HDR to LDR: the blurred bloom added in HDR, exposure, the operator (linear
+// clamp, Reinhard, ACES), gamma, then the 3D colour-grading LUT, which is
+// authored in display space. Each optional step is skipped when off, so the
+// frame stays bit-exact without it.
 
 layout(location = 0) in vec2 inUV;
 layout(location = 0) out vec4 outColor;
 
 layout(set = 0, binding = 0) uniform sampler2D texHdr;
 layout(set = 0, binding = 1) uniform sampler2D texBloom;
+layout(set = 0, binding = 2) uniform sampler3D texLut;
 
-layout(push_constant) uniform PostFxPushConstants {
+layout(push_constant) uniform TonemapPush {
     float exposure;
-    float gamma;
-    float bloomIntensity;
-    int   tonemapMode; // 0 = Linear, 1 = Reinhard, 2 = ACES
-    int   enableFxaa;
-    float texelSizeX;
-    float texelSizeY;
-    float padding;
+    float gamma;            // applied when > 0 and not 1
+    float bloomIntensity;   // 0 = bloom off
+    int tonemapMode;        // 0 = linear, 1 = Reinhard, 2 = ACES
+    float lutAmount;        // 0 = LUT off, 1 = fully graded
+    float lutScale;         // (size - 1) / size: [0, 1] onto texel centres
+    float lutOffset;        // 0.5 / size
+    float pad;
 } push;
 
+// ACES approximation by Krzysztof Narkowicz.
 vec3 aces(vec3 x) {
     const float a = 2.51;
     const float b = 0.03;
@@ -27,30 +33,17 @@ vec3 aces(vec3 x) {
 }
 
 void main() {
-    vec4 hdrColor = texture(texHdr, inUV);
-    vec3 col = hdrColor.rgb;
-
-    // Add bloom if intensity > 0
-    if (push.bloomIntensity > 0.0) {
-        vec3 bloom = texture(texBloom, inUV).rgb;
-        col += bloom * push.bloomIntensity;
+    vec4 src = texture(texHdr, inUV);
+    vec3 c = src.rgb;
+    if (push.bloomIntensity > 0.0) c += texture(texBloom, inUV).rgb * push.bloomIntensity;
+    c *= push.exposure;
+    if (push.tonemapMode == 2)      c = aces(c);
+    else if (push.tonemapMode == 1) c = c / (c + vec3(1.0));
+    else                            c = clamp(c, 0.0, 1.0);
+    if (push.gamma > 0.0 && push.gamma != 1.0) c = pow(c, vec3(1.0 / push.gamma));
+    if (push.lutAmount > 0.0) {
+        vec3 graded = texture(texLut, c * push.lutScale + push.lutOffset).rgb;
+        c = mix(c, graded, push.lutAmount);
     }
-
-    // Exposure adjustment
-    col *= push.exposure;
-
-    // Tonemap operator
-    if (push.tonemapMode == 1) {
-        col = col / (col + vec3(1.0));
-    } else if (push.tonemapMode == 2) {
-        col = aces(col);
-    } else {
-        col = clamp(col, 0.0, 1.0);
-    }
-
-    // Gamma correction
-    float g = push.gamma > 0.0 ? push.gamma : 2.2;
-    col = pow(col, vec3(1.0 / g));
-
-    outColor = vec4(col, hdrColor.a);
+    outColor = vec4(c, src.a);
 }

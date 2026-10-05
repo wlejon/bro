@@ -5,7 +5,7 @@
 // A flat ambient constant is what makes lit snow blow out to white: the surface
 // is told to reflect a uniform white sky no matter where the sun is or how much
 // air is above it. The sky pass already knows the real answer, so this integrates
-// the SAME model (src/scene/shaders/atmosphere.glsl) over the upper hemisphere
+// the SAME model (scene/vulkan/shaders/scene_atmosphere.glsl) over the upper hemisphere
 // and hands the result to the mesh shaders as a plain vec3.
 //
 // On the CPU and once per frame rather than per pixel, because sky irradiance

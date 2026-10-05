@@ -178,6 +178,14 @@ public:
     }
     /// Atlas grid the current draw samples: 1x1 when batched (the cell is baked
     /// into the merged UVs so the shader must NOT remap), else the authored grid.
+    /// The merged geometry a batched draw renders (renderingBatched()),
+    /// rebaked here when an instance, the mesh or the atlas changed since.
+    const bromesh::MeshData& staticBatchMesh() const {
+        if (batchDirty_) rebuildStaticBatch();
+        return batchMesh_;
+    }
+    /// Changes whenever staticBatchMesh() is rebaked (GPU cache key).
+    uint64_t staticBatchGeneration() const { return batchGeneration_; }
     int effectiveAtlasCols() const { return renderingBatched() ? 1 : atlasCols_; }
     int effectiveAtlasRows() const { return renderingBatched() ? 1 : atlasRows_; }
     /// Whether the draw applies per-vertex colour as albedo: a batched draw
@@ -187,11 +195,8 @@ public:
     }
 
     // --- GPU foliage scatter mode ---
-    // The Vulkan renderer does not draw scatter nodes yet; it says so once in
-    // the log rather than pretending. The state is kept so culling, picking
-    // and a future pass see what the app set.
     // Expand `segCount` branch segments into leaves entirely in the vertex
-    // shader (shaders/foliage_scatter.vert), so the tens-of-thousands-of-leaves
+    // shader (vulkan/shaders/mesh_scatter.vert), so the tens-of-thousands-of-leaves
     // scatter never touches the CPU and no per-leaf instance buffer is built or
     // uploaded — only the compact per-segment buffer is. The draw issues
     // `segCount * maxPerSeg` instances; slots past a segment's leaf count clip
@@ -221,17 +226,16 @@ public:
     const std::vector<float>& scatterInstanceSegments() const { return scatterInstSeg_; }
 
     // --- GPU procedural branch-tube mode ---
-    // Not drawn by the Vulkan renderer yet (logged once, like scatter mode).
     // Synthesise tapered tube (stem) geometry entirely in the vertex shader
-    // (shaders/branch_tube.vert) from a compact per-segment texture buffer, so
+    // (vulkan/shaders/mesh_tube.vert) from a compact per-segment storage buffer, so
     // a growing skeleton re-uploads only the segment records — never a re-baked
     // multi-MB merged mesh. `segData` is segCount*8 floats, 2 RGBA32F texels per
     // segment: [from.xyz, radiusFrom] then [to.xyz, radiusTo]. Each segment
     // draws `sides` quads (a capless tube wall); the draw issues
     // segCount*sides*6 vertices with NO vertex or instance attributes (the VS
-    // reads gl_VertexID + the segment TBO). Mutually exclusive with mesh
-    // instances and with scatter mode. Casts/receives shadows via a depth
-    // variant of the same VS.
+    // reads the vertex index + the segment records). Mutually exclusive with
+    // mesh instances and with scatter mode. Casts shadows through
+    // shadow_tube.vert and receives them like any lit mesh.
     void setTubeSegments(const float* segData, size_t segCount, int sides,
                          float radiusScale,
                          const float boundsMin[3], const float boundsMax[3]);
@@ -334,9 +338,7 @@ public:
 
 private:
     // Rebake batchMesh_ from mesh_ + instanceData_ (static-batch path). Clears
-    // batchDirty_. The Vulkan renderer does not draw the batch yet (it draws
-    // every node instanced), so nothing calls this until static batching is
-    // ported.
+    // batchDirty_ and bumps batchGeneration_.
     void rebuildStaticBatch() const;
     void instancesChanged();
 
@@ -358,6 +360,7 @@ private:
     bool staticBatch_ = false;
     mutable bool batchDirty_ = true;
     mutable bromesh::MeshData batchMesh_;
+    mutable uint64_t batchGeneration_ = 0;
 
     // Node-space union of instance-transformed mesh bounds, rebuilt lazily by
     // computeWorldInstanceBounds when the mesh or instances change. Cached
