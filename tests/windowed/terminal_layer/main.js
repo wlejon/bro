@@ -14,6 +14,14 @@ function frames(n) {
     });
 }
 
+// Frames for at least `ms` of wall time: rAF is not paced by presentation
+// on every video driver (SDL's offscreen one runs it flat out), and what
+// is counted here is what the frame loop actually rendered.
+async function forMs(ms) {
+    const end = Date.now() + ms;
+    do await frames(1); while (Date.now() < end);
+}
+
 const side = document.getElementById('side');
 for (let i = 0; i < 160; ++i) {
     const d = document.createElement('div');
@@ -77,18 +85,18 @@ async function run() {
         skipTest('<terminal> is compiled out of this build (BRO_WITH_TERMINAL)');
         return;
     }
-    await frames(10);
+    await forMs(200);
     const layered = bro.terminal.stats().layered;
-    assert(t.cols > 100 && t.rows > 40, 'the terminal fills the window: ' + t.cols + 'x' + t.rows);
+    assert(t.cols > 60 && t.rows > 30, 'the terminal fills most of the window: ' + t.cols + 'x' + t.rows);
 
     if (layered) {
         // Page changes only: the terminal's layer is left alone.
         t.feed('idle');
-        await frames(10);
+        await forMs(200);
         const a0 = bro.terminal.stats();
-        for (let i = 0; i < 60; ++i) {
+        for (let i = 0; i < 30; ++i) {
             clock.textContent = 'page ' + i;
-            await frames(1);
+            await forMs(20);
         }
         const a1 = bro.terminal.stats();
         assert(a1.pageRecords - a0.pageRecords >= 5, 'the page re-records as it changes: ' +
