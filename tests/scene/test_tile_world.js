@@ -9,7 +9,7 @@ flush();
 
 const scene = canvas.getContext("scene");
 if (!scene) {
-    console.log("no scene context (no GPU); skipping tile_world test");
+    missingGpuContext('scene');
 } else {
     assert(typeof scene.createTileWorld === "function", "createTileWorld is a function");
 

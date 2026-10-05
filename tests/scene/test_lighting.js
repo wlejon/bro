@@ -37,7 +37,7 @@ flush();
 
 const scene = canvas.getContext('scene');
 if (!scene) {
-    console.log('scene context not available (no GPU) — skipping lighting test');
+    missingGpuContext('scene');
 } else {
     scene.setCamera({ fov: 60, near: 0.1, far: 100, position: [2, 2, 2], target: [0, 0, 0] });
 
@@ -217,7 +217,7 @@ function freshScene(size) {
 
 const vis = freshScene(128);
 if (!vis.scene) {
-    console.log('scene context not available (no GPU) — skipping visual lighting assertions');
+    missingGpuContext('scene');
 } else {
     const scn = vis.scene;
 

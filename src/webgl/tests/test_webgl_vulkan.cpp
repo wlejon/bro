@@ -1,7 +1,17 @@
+// bro_vulkan_webgl_test: the WebGL2 Vulkan backend — canvas, buffers,
+// shader translation and linking, draws read back.
+//
+// assert() is the check here, so it must survive a Release build: NDEBUG is
+// undefined before any header can pull in <cassert>. Run under
+// BRO_VK_VALIDATION=1 (tests/run_tests.sh does) and any validation error
+// fails the run too.
+#undef NDEBUG
+
 #include "webgl/vulkan/webgl_vk_canvas.h"
 #include "webgl/vulkan/webgl_vk_context.h"
 #include "webgl/webgl2_context.h"
 #include "render/vulkan_context.h"
+#include "render/vulkan_debug.h"
 #include "render/vulkan_presenter.h"
 #include "util/log.h"
 
@@ -15,7 +25,7 @@ using namespace bro::webgl;
 using namespace bro::webgl::vk;
 
 int main() {
-    std::cout << "=== Running Vulkan Chunk 4: WebGL2 & Bronze Host Strategy Tests ===" << std::endl;
+    std::cout << "=== bro_vulkan_webgl_test: WebGL2 on Vulkan ===" << std::endl;
 
     // Initialize Headless VulkanContext
     render::VulkanContextConfig cfg;
@@ -96,7 +106,7 @@ int main() {
     }
 
     // -------------------------------------------------------------------------
-    // Test 3: Shader Compilation & Program Linking via glslc
+    // Test 3: Shader Compilation & Program Linking
     // -------------------------------------------------------------------------
     std::cout << "[Test 3] WebGLVkShaderCompiler & Program Linking... " << std::flush;
     WebGLShader vertShader{};
@@ -342,6 +352,10 @@ int main() {
         std::cout << "PASSED" << std::endl;
     }
 
-    std::cout << "=== All Vulkan Chunk 4 WebGL2 & Bronze Host Tests Passed Successfully! ===" << std::endl;
+    if (const uint32_t errors = render::vulkanValidationErrorCount()) {
+        std::cerr << "FAILED: " << errors << " Vulkan validation error(s)" << std::endl;
+        return 1;
+    }
+    std::cout << "=== bro_vulkan_webgl_test: all checks passed ===" << std::endl;
     return 0;
 }

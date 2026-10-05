@@ -1,7 +1,7 @@
 // Test bro.flora wind, density, and batch/placement APIs.
 
 if (bro.flora && bro.flora.available === false) {
-    console.log('skip: bro.flora not compiled in');
+    skipTest('bro.flora not compiled in');
 } else {
     runFloraWindDensityBatchTest();
 }

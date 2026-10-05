@@ -16,9 +16,9 @@ flush();
 
 const scene = canvas.getContext('scene');
 if (!scene) {
-    console.log('no scene; skipping gaussian splat test');
+    missingGpuContext('scene');
 } else if (typeof scene.createGaussianSplat !== 'function') {
-    console.log('no createGaussianSplat; skipping');
+    assert(false, 'scene.createGaussianSplat is missing');
 } else {
     scene.setCamera({
         fov: 60, near: 0.1, far: 100,

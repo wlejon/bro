@@ -7,7 +7,7 @@
 // it; it swaps the native global for a stand-in and checks the route.
 
 if (typeof AudioContext === 'undefined') {
-    console.log('skip: audio not compiled in');
+    skipTest('audio not compiled in');
 } else {
     assert(typeof navigator.mediaDevices === 'object' && navigator.mediaDevices !== null,
            'navigator.mediaDevices exists');

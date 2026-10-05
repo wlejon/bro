@@ -27,7 +27,7 @@ flush();
 
 const scene = canvas.getContext('scene');
 if (!scene) {
-    console.log('scene context not available (no GPU)');
+    missingGpuContext('scene');
 } else {
     scene.setCamera({
         fov: 60, near: 0.1, far: 200,

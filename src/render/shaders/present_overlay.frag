@@ -1,0 +1,10 @@
+#version 450
+
+// Samples one compositor layer; blending onto the target is pipeline state.
+layout(location = 0) in vec2 vUV;
+layout(location = 0) out vec4 outColor;
+layout(set = 0, binding = 0) uniform sampler2D uOverlay;
+
+void main() {
+    outColor = texture(uOverlay, vUV);
+}

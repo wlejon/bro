@@ -2,7 +2,7 @@
 
 const grid = bro.ai.game.grid;
 if (!grid || grid.available === false) {
-    console.log('test_grid: gameai-nn not built (app profile), skipping');
+    skipTest('test_grid: gameai-nn not built (app profile)');
 } else {
 
 // --- ObsWindow ---

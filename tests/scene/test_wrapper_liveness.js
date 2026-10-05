@@ -14,7 +14,7 @@ flush();
 
 const scene = canvas.getContext('scene');
 if (!scene) {
-    console.log('scene context not available (no GPU)');
+    missingGpuContext('scene');
 } else {
     // =====================================================================
     // Node destroyed through a DIFFERENT wrapper of the same node

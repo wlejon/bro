@@ -74,6 +74,17 @@ few tens of MB.
 why: `compiled D:/app/index.html in 212 ms (code cache hit)`. Deleting the
 directory is always safe.
 
+## The GPU pipeline cache beside it
+
+`<user cache dir>/pipeline-cache/` holds the other half of a warm launch: the
+Vulkan driver's compiled pipelines (scene passes, WebGL programs, the
+presenter), one file per GPU and driver, named by the cache UUID the driver
+reports. It is checked against that device's header before use, written back at
+shutdown when it grew (temporary file + rename), and dropped rather than
+written past 128 MB. `BRO_PIPELINE_CACHE=0` keeps it in memory only,
+`BRO_PIPELINE_CACHE_DIR=<dir>` moves it; deleting it is always safe.
+`src/render/vulkan_pipeline_cache.{h,cpp}`.
+
 ## Where the pieces live
 
 - bronze `src/eval/code_cache.{h,cpp}` — key, entry format, validation, trim.

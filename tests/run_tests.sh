@@ -18,6 +18,18 @@
 # leaves out the ones it names; their per-check timeout is
 # BRO_TEST_SH_TIMEOUT (default 120 s — a first run compiles its module).
 #
+# A JS test that cannot test its subject in this environment says so with
+# skipTest(reason) (weights absent, feature compiled out) or, when
+# getContext('webgl2' / 'scene') returned null, missingGpuContext(kind) — which
+# SKIPs only on a run with no GPU (BRO_TEST_ALLOW_RASTER) and FAILS otherwise.
+# bro-headless then exits 77 and the test is reported SKIP, never PASS.
+#
+# Also runs bro's C++ test binaries (the `native` group: the Vulkan core,
+# scene, scene-pass and WebGL tests, tile, media clock/backend, video encode),
+# found beside bro-headless — whichever this build produced (BRO_BUILD_TESTS
+# and the feature flags decide which exist). Each runs under the same
+# validation settings. BRO_TEST_NATIVE=0 leaves them out.
+#
 # Runs on the GPU path (headless's default) so the
 # tests exercise the same renderer, WebGL, and layer compositing that ship —
 # CPU-only raster is a different code path and would leave those untested. A
@@ -61,7 +73,8 @@ if (( BASH_VERSINFO[0] < 4 )); then
     exit 1
 fi
 
-# Bump file descriptor limit so long test runs don't exhaust Xvfb / Mesa DRM client fds (default 1024).
+# Bump the file descriptor limit so long test runs don't exhaust the Vulkan
+# driver's DRM client fds (default 1024).
 ulimit -n 65536 2>/dev/null || ulimit -n 4096 2>/dev/null || true
 
 # On Linux without a display, use dummy SDL video driver for native headless Vulkan offscreen rendering.
@@ -99,6 +112,8 @@ if [[ -n "${BRO_HEADLESS:-}" ]]; then
         echo "ERROR: BRO_HEADLESS=$BRO is not an executable"
         exit 1
     fi
+    # Absolute, so it survives the check scripts that cd before running it.
+    BRO="$(cd "$(dirname "$BRO")" && pwd)/$(basename "$BRO")"
 else
     CANDIDATES=(
         "$PROJECT_DIR/build/Debug/bro-headless.exe"
@@ -275,15 +290,39 @@ else
 fi
 
 # --- Vulkan validation --------------------------------------------------------
+# Homebrew's validation layer manifest names its dylib bare, for dyld to find
+# on its search path, which does not include Homebrew's lib/ — the layer is
+# then listed but fails to load. DYLD_* cannot fix that here: SIP strips it
+# from anything run through /usr/bin/perl (the timeout fallback). Instead hand
+# the loader a copy of the manifest whose library_path is absolute.
+if [[ "$(uname -s)" == "Darwin" && -z "${VK_LAYER_PATH:-}" ]] && command -v brew >/dev/null 2>&1; then
+    BREW_PREFIX="$(brew --prefix)"
+    VK_VAL_MANIFEST="$BREW_PREFIX/share/vulkan/explicit_layer.d/VkLayer_khronos_validation.json"
+    VK_VAL_DYLIB="$BREW_PREFIX/lib/libVkLayer_khronos_validation.dylib"
+    if [[ -f "$VK_VAL_MANIFEST" && -f "$VK_VAL_DYLIB" ]]; then
+        VK_LAYER_DIR="$(mktemp -d -t bro-vk-layers)"
+        sed "s|\"library_path\": *\"[^\"]*\"|\"library_path\": \"$VK_VAL_DYLIB\"|" \
+            "$VK_VAL_MANIFEST" > "$VK_LAYER_DIR/VkLayer_khronos_validation.json"
+        export VK_LAYER_PATH="$VK_LAYER_DIR"
+        trap 'rm -rf "$VK_LAYER_DIR"' EXIT
+    fi
+fi
 BRO_TEST_VK_VALIDATION="${BRO_TEST_VK_VALIDATION:-auto}"
 if [[ "$BRO_TEST_VK_VALIDATION" != "0" && -n "$VK_DEVICE" ]]; then
     VK_VAL_PROBE=$(BRO_VK_VALIDATION=1 "$BRO" "$TEST_APP" -e "0" 2>&1)
-    if [[ "$VK_VAL_PROBE" == *"Validation layers requested, but not available"* ]]; then
+    if [[ "$VK_VAL_PROBE" == *"Validation layers requested, but not available"* ||
+          "$VK_VAL_PROBE" != *"Vulkan: Initialized successfully"* ]]; then
         if [[ "$BRO_TEST_VK_VALIDATION" == "1" ]]; then
-            echo "ERROR: BRO_TEST_VK_VALIDATION=1 but the Vulkan validation layer is not installed."
+            echo "ERROR: BRO_TEST_VK_VALIDATION=1 but the Vulkan validation layer is not usable:"
+            echo "$VK_VAL_PROBE" | grep -iE "validation|layer|vkCreateInstance" | head -5 | sed 's/^/       /'
             exit 1
         fi
-        echo "  Vulkan validation: layer not installed — validation off"
+        if [[ "$VK_VAL_PROBE" == *"Validation layers requested, but not available"* ]]; then
+            echo "  Vulkan validation: layer not installed — validation off"
+        else
+            echo "  Vulkan validation: layer installed but would not load — validation off"
+            echo "$VK_VAL_PROBE" | grep -iE "layer|vkCreateInstance" | head -3 | cut -c1-200 | sed 's/^/       /'
+        fi
     else
         export BRO_VK_VALIDATION=1
         export BRO_VK_VALIDATION_KNOWN="$(to_win_path "$SCRIPT_DIR/vk_validation_known.txt")"
@@ -299,6 +338,15 @@ if [[ -n "${FILTER:-}" && ( "$FILTER" == *".js" || "$FILTER" == *"test_"* ) ]]; 
     BRO_TEST_JS=1
 fi
 
+# bro's C++ test binaries, built beside bro-headless (src/*/CMakeLists.txt,
+# BRO_BUILD_TESTS). Listed by name so a renamed or dropped one is noticed here.
+NATIVE_TESTS=(bro_vulkan_test bro_vulkan_scene_test bro_vulkan_scene_passes_test
+              bro_vulkan_webgl_test bro_tile_test bro_mediaclocktest
+              bro_mediabackendtest bro_videoencodetest)
+BRO_DIR="$(dirname "$BRO")"
+EXE_SUFFIX=""
+[[ "$BRO" == *.exe ]] && EXE_SUFFIX=".exe"
+
 # Collect test files: the JS tests, plus the bronze_host checks — enumerated
 # from that folder's manifest (run_checks.sh --list) as `bronze:<name>`
 # entries, in manifest order, so each name is one test here. They skip
@@ -309,6 +357,11 @@ mapfile -t TEST_FILES < <(
     fi
     if [[ "${BRO_TEST_BRONZE:-1}" != "0" && -f "$SCRIPT_DIR/bronze_host/run_checks.sh" ]]; then
         bash "$SCRIPT_DIR/bronze_host/run_checks.sh" --list | sed 's/^/bronze:/'
+    fi
+    if [[ "${BRO_TEST_NATIVE:-1}" != "0" ]]; then
+        for N in "${NATIVE_TESTS[@]}"; do
+            [[ -f "$BRO_DIR/$N$EXE_SUFFIX" ]] && echo "native:$N"
+        done
     fi)
 
 if [[ ${#TEST_FILES[@]} -eq 0 ]]; then
@@ -343,6 +396,41 @@ run_one_test() {
                 echo "  FAIL  $REL  (TIMEOUT after ${SH_TIMEOUT}s)"
                 return 2 ;;
             *)  return 1 ;;
+        esac
+    fi
+
+    # A C++ test binary (`native:<name>`): exit 0 passes, 77 skips, anything
+    # else fails. Under BRO_TEST_ALLOW_RASTER there is no Vulkan device for
+    # the GPU ones to use, so those are skipped rather than failed.
+    if [[ "$1" == native:* ]]; then
+        local NAME="${1#native:}" BIN
+        BIN="$BRO_DIR/$NAME$EXE_SUFFIX"
+        if [[ "${BRO_TEST_ALLOW_RASTER:-0}" == "1" && "$NAME" == bro_vulkan_* ]]; then
+            echo "  SKIP  $REL  (no GPU: BRO_TEST_ALLOW_RASTER=1)"
+            return 3
+        fi
+        # In a scratch directory: some write their output to the cwd
+        # (bro_videoencodetest's encode_test.webm), which must not be the repo.
+        local NATIVE_CWD
+        NATIVE_CWD=$(mktemp -d "${TMPDIR:-/tmp}/bro_native.XXXXXX")
+        if [[ -n "$TIMEOUT_BIN" ]]; then
+            OUTPUT=$(cd "$NATIVE_CWD" && "$TIMEOUT_BIN" -k 10 "$TEST_TIMEOUT" "$BIN" 2>&1)
+        else
+            OUTPUT=$(cd "$NATIVE_CWD" && "$BIN" 2>&1)
+        fi
+        STATUS=$?
+        rm -rf "$NATIVE_CWD"
+        case $STATUS in
+            0)  echo "  PASS  $REL"; return 0 ;;
+            77) echo "  SKIP  $REL"; return 3 ;;
+            124|137)
+                echo "  FAIL  $REL  (TIMEOUT after ${TEST_TIMEOUT}s)"
+                echo "$OUTPUT" | tail -20 | sed 's/^/        /'
+                return 2 ;;
+            *)
+                echo "  FAIL  $REL  (exit $STATUS)"
+                echo "$OUTPUT" | tail -40 | sed 's/^/        /'
+                return 1 ;;
         esac
     fi
 
@@ -400,6 +488,12 @@ run_one_test() {
     if [[ $STATUS -eq 0 ]]; then
         echo "  PASS  $REL"
         return 0
+    elif [[ $STATUS -eq 77 ]]; then
+        # skipTest() / missingGpuContext() on a run without the capability.
+        local WHY
+        WHY=$(echo "$OUTPUT" | sed -n 's/.*SKIP: //p' | head -1)
+        echo "  SKIP  $REL  (${WHY:-skipped})"
+        return 3
     elif [[ -n "$TIMEOUT_BIN" && ($STATUS -eq 124 || $STATUS -eq 137) ]]; then
         # 124 = timeout sent TERM, 137 = timeout escalated to KILL
         echo "  FAIL  $REL  (TIMEOUT after ${TEST_TIMEOUT}s)"
@@ -420,6 +514,8 @@ FILTERED_RELS=()
 for TEST_FILE in "${TEST_FILES[@]}"; do
     if [[ "$TEST_FILE" == bronze:* ]]; then
         REL="bronze_host/${TEST_FILE#bronze:}"
+    elif [[ "$TEST_FILE" == native:* ]]; then
+        REL="native/${TEST_FILE#native:}"
     else
         REL="${TEST_FILE#$SCRIPT_DIR/}"
     fi
@@ -508,7 +604,7 @@ if [[ $JOBS -le 1 || ${#GROUPS_ORDERED[@]} -le 1 ]]; then
 else
     # ---- Parallel path: one job per group, serial within a group -----------
     TMPDIR_TESTS=$(mktemp -d "${TMPDIR:-/tmp}/bro_tests.XXXXXX")
-    cleanup() { rm -rf "$TMPDIR_TESTS"; }
+    cleanup() { rm -rf "$TMPDIR_TESTS" ${VK_LAYER_DIR:+"$VK_LAYER_DIR"}; }
     trap cleanup EXIT
 
     # Groups that share mutable cross-process state (.bro_settings.json next

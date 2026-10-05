@@ -86,7 +86,7 @@ function dragAlongX(cssScale) {
 
 const plain = dragAlongX(1);
 if (!plain) {
-    console.log('scene context not available (no GPU)');
+    missingGpuContext('scene');
 } else {
     assert(plain.grabbed, 'the +X handle was grabbed in an unscaled view');
     assert(plain.x > 0.1, 'the unscaled drag moved the target, dx=' + plain.x);
@@ -220,8 +220,8 @@ if (!plain) {
     // handle reuses these coordinates instead of hunting for its own: the
     // scene is deterministic, so a second sweep would only rediscover them.
     // That matters because each injected move drives a full frame, and the
-    // hunts used to cost ~46k of the test's 64k moves — fine on a GPU, two
-    // minutes of llvmpipe in CI.
+    // hunts used to cost ~46k of the test's 64k moves — fine on a GPU, minutes
+    // on a software rasterizer in CI.
     //
     // `key` splits one handle into several buckets when a caller needs more
     // than one grab point on it (the rings want a left and a right sample).

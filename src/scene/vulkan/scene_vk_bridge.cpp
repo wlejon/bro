@@ -191,10 +191,18 @@ void SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer) {
     uint32_t height = static_cast<uint32_t>(renderer.targetHeight());
     if (width == 0 || height == 0) return;
 
+    // The highest count at or below the request that the device can render
+    // colour and depth at: Apple GPUs (MoltenVK) stop at 4, and an unsupported
+    // count fails pipeline creation outright.
+    const VkPhysicalDeviceLimits& limits = device_.context().deviceProperties().limits;
+    const VkSampleCountFlags supported = limits.framebufferColorSampleCounts & limits.framebufferDepthSampleCounts;
     VkSampleCountFlagBits sampleCount = VK_SAMPLE_COUNT_1_BIT;
-    if (renderer.msaaSamples() >= 8) sampleCount = VK_SAMPLE_COUNT_8_BIT;
-    else if (renderer.msaaSamples() >= 4) sampleCount = VK_SAMPLE_COUNT_4_BIT;
-    else if (renderer.msaaSamples() >= 2) sampleCount = VK_SAMPLE_COUNT_2_BIT;
+    for (VkSampleCountFlagBits c : {VK_SAMPLE_COUNT_8_BIT, VK_SAMPLE_COUNT_4_BIT, VK_SAMPLE_COUNT_2_BIT}) {
+        if (renderer.msaaSamples() >= static_cast<int>(c) && (supported & c)) {
+            sampleCount = c;
+            break;
+        }
+    }
 
     if (!ensureTargets(width, height, sampleCount)) return;
 

@@ -9,9 +9,9 @@ flush();
 
 const scene = canvas.getContext('scene');
 if (!scene) {
-    console.log('no scene; skipping tileworld test');
+    missingGpuContext('scene');
 } else if (typeof scene.createTileWorld !== 'function') {
-    console.log('no createTileWorld; skipping');
+    assert(false, 'scene.createTileWorld is missing');
 } else {
     // ---- palette-mode world ------------------------------------------------
     const world = scene.createTileWorld({

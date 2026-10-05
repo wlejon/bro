@@ -9,7 +9,7 @@ flush();
 
 const scene = canvas.getContext("scene");
 if (!scene) {
-    console.log("no scene context (no GPU); skipping clipmap test");
+    missingGpuContext('scene');
 } else {
     assert(typeof scene.createClipmapTerrain === "function", "createClipmapTerrain is a function");
 

@@ -10,7 +10,7 @@ flush();
 
 const scene = canvas.getContext('scene');
 if (!scene) {
-    console.log('no scene; skipping node identity test');
+    missingGpuContext('scene');
 } else {
     const box = scene.createMesh({ mesh: 'box', name: 'box' });
     box.tag = 'mine';

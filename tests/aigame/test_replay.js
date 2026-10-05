@@ -2,7 +2,7 @@
 
 const G = bro.ai.game;
 if (!G.learn || G.learn.available === false) {
-    console.log('test_replay: gameai-nn not built (app profile), skipping');
+    skipTest('test_replay: gameai-nn not built (app profile)');
 } else {
 
 // --- learn.createReplayBuffer ---

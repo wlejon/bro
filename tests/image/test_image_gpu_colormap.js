@@ -7,7 +7,7 @@ const cv = document.createElement('canvas');
 cv.width = 64; cv.height = 64;
 const gl = cv.getContext('webgl2');
 if (!gl) {
-    console.log('no webgl2; skipping');
+    missingGpuContext('webgl2');
 } else {
     const lut = new Uint8Array(256 * 4);
     for (let i = 0; i < 256; i++) { lut[i * 4] = lut[i * 4 + 1] = lut[i * 4 + 2] = i; lut[i * 4 + 3] = 255; }

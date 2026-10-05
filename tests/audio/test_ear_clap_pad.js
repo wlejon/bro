@@ -58,11 +58,11 @@ function sameBits(a, b) {
 }
 
 if (typeof bro.ear.loadClap !== 'function') {
-    console.log('SKIP: bro.ear.loadClap is absent (built without BRO_WITH_SOUNDML)');
+    skipTest('bro.ear.loadClap is absent (built without BRO_WITH_SOUNDML)');
 } else if (!fs.existsSync(CLAP_DIR + '/model.safetensors')) {
-    console.log('SKIP: CLAP weights not found at ' + CLAP_DIR);
+    skipTest('CLAP weights not found at ' + CLAP_DIR);
 } else if (!bro.gpu.available) {
-    console.log('SKIP: no GPU backend (' + bro.gpu.backend + ')');
+    skipTest('no GPU backend (' + bro.gpu.backend + ')');
 } else {
     const clap = bro.ear.loadClap(CLAP_DIR);
     assert(clap.windowSeconds === 10 && clap.sampleRate === sr, 'CLAP window is 10 s at 48 kHz');

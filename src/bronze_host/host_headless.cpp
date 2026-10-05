@@ -28,6 +28,7 @@ namespace {
 // Atomic: a worker thread's uncancelled unhandled rejection fails the run too
 // (host_worker.cpp), and it reports from its own thread.
 static std::atomic<bool> s_hasTestFailure{false};
+static std::atomic<bool> s_testSkipped{false};
 static std::vector<std::string> s_scriptArgs;
 
 static Value makeScriptArgsValue() {
@@ -52,6 +53,10 @@ void clearTestFailure() {
 
 void setTestFailure(bool failed) {
     s_hasTestFailure = failed;
+}
+
+bool wasTestSkipped() {
+    return s_testSkipped;
 }
 
 void setScriptArgs(const std::vector<std::string>& args) {
@@ -150,6 +155,40 @@ void installHeadlessGlobals(engine::Engine& engine) {
             }
             return ev::fromBool(true);
         }, 2, "assert"));
+
+    // 5b. skipTest(reason): this environment cannot test the script's subject
+    // (a model's weights are absent, a feature is compiled out). The run exits
+    // 77 — reported SKIP, never PASS — unless something also failed. The
+    // script keeps running, so it should do nothing more after the call.
+    regBoth("skipTest", ev::makeFunction(
+        [](Value, std::span<const Value> a) -> Value {
+            std::string reason = a.empty() ? "no reason given" : ev::toUtf8(a[0]);
+            LOG_INFO("SKIP: %s", reason.c_str());
+            s_testSkipped = true;
+            return ev::undefined();
+        }, 1, "skipTest"));
+
+    // 5c. missingGpuContext(kind): getContext(kind) returned null. Only a run
+    // with no GPU device (--no-gpu, or a Vulkan device that would not come up
+    // under BRO_TEST_ALLOW_RASTER) or a build without the feature is allowed
+    // that: it SKIPs. On a GPU run a null 'webgl2' / 'scene' context is a bug
+    // and FAILS the run, instead of passing it untested.
+    regBoth("missingGpuContext", ev::makeFunction(
+        [&engine](Value, std::span<const Value> a) -> Value {
+            std::string kind = a.empty() ? "gpu" : ev::toUtf8(a[0]);
+            const bool compiledOut = kind == "scene" && !BRO_WITH_3D;
+            if (engine.vulkanContext() == nullptr || compiledOut) {
+                LOG_INFO("SKIP: no '%s' context (%s)", kind.c_str(),
+                         compiledOut ? "3D compiled out" : "no GPU device");
+                s_testSkipped = true;
+            } else {
+                LOG_ERROR("ASSERTION FAILED: getContext('%s') returned null on a GPU run",
+                          kind.c_str());
+                setTestFailure(true);
+                engine.setTestFailure(true);
+            }
+            return ev::undefined();
+        }, 1, "missingGpuContext"));
 
     // 6. resize(int w, int h)
     regBoth("resize", ev::makeFunction(

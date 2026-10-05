@@ -87,12 +87,12 @@ flush();
 const jsScene = jsCanvas.getContext('scene');
 
 if (!jsScene) {
-    // Same skip the other scene tests take: no GL context, so getContext('scene')
-    // is null by design and createSceneContext must agree.
+    // Without a GPU getContext('scene') is null by design, and
+    // createSceneContext must agree; on a GPU run a null context fails.
     const probe = __host.createCanvas('probe-nogpu', SIZE, SIZE);
     assert(__host.sceneContext(probe) === null,
         'with no GPU the C++ path returns null too, exactly as getContext does');
-    console.log('scene context not available (no GPU) — skipping host scene context test');
+    missingGpuContext('scene');
 } else {
 
     const countAfterJs = __host.sceneContextCount();

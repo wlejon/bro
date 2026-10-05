@@ -4,7 +4,7 @@ const G = bro.ai.game;
 const nn = G.nn;
 const L = G.learn;
 if (!L || L.available === false) {
-    console.log('test_learn: gameai-nn not built (app profile), skipping');
+    skipTest('test_learn: gameai-nn not built (app profile)');
 } else {
 
 function makeWorldHero() {

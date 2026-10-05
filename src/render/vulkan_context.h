@@ -2,6 +2,7 @@
 
 #include "render/vulkan_frames.h"
 #include "render/vulkan_memory_pool.h"
+#include "render/vulkan_pipeline_cache.h"
 #include "render/vulkan_queue.h"
 #include <vulkan/vulkan.h>
 #include <cstdint>
@@ -77,6 +78,10 @@ public:
 
     VulkanQueue& queue() { return queue_; }
     VulkanFrames& frames() { return frames_; }
+    /// The device's pipeline cache, persisted across runs; pass it to every
+    /// vkCreate*Pipelines.
+    VkPipelineCache pipelineCache() const { return pipelineCache_.handle(); }
+    const VulkanPipelineCache& persistentPipelineCache() const { return pipelineCache_; }
 
     VkCommandPool commandPool() const { return commandPool_; }
 
@@ -192,6 +197,7 @@ private:
     // upload chunks back into the pool).
     mutable VulkanQueue queue_;  // thread-safe; const helpers submit through it
     VulkanFrames frames_;
+    VulkanPipelineCache pipelineCache_;
 };
 
 } // namespace bro::render

@@ -1,26 +1,10 @@
 #include "webgl/vulkan/webgl_vk_shaders.h"
+#include "render/glsl_compiler.h"
 #include "util/log.h"
 
-#include "util/subprocess.h"
-
-#include <sstream>
-#include <regex>
-#include <cstring>
-#include <mutex>
-
-#if BRO_HAS_SHADERC
-#include <shaderc/shaderc.hpp>
-#endif
+#include <algorithm>
 
 namespace bro::webgl::vk {
-
-namespace {
-
-std::mutex s_compilerMutex;
-
-} // namespace
-
-std::unordered_map<std::string, std::vector<uint32_t>> WebGLVkShaderCompiler::s_spirvCache;
 
 TranslatedShader WebGLVkShaderCompiler::translateToVulkanGLSL(const std::string& glslSource, GLenum shaderType) {
     ParsedShader parsed = WebGLVkShaderParser::parse(glslSource, shaderType);
@@ -69,64 +53,16 @@ std::vector<uint32_t> WebGLVkShaderCompiler::compileToSpirv(const std::string& s
                                                             VkShaderStageFlagBits stage,
                                                             std::string* outLog)
 {
-    std::lock_guard<std::mutex> lock(s_compilerMutex);
-
-    std::string stageStr = (stage == VK_SHADER_STAGE_VERTEX_BIT) ? "vertex" : "fragment";
-    std::string cacheKey = stageStr + "|" + source;
-
-    auto it = s_spirvCache.find(cacheKey);
-    if (it != s_spirvCache.end()) {
-        return it->second;
+    const bool vertex = stage == VK_SHADER_STAGE_VERTEX_BIT;
+    std::string log;
+    std::vector<uint32_t> spirv = render::compileGlslToSpirv(
+        source, vertex ? render::ShaderStage::Vertex : render::ShaderStage::Fragment, &log);
+    if (spirv.empty()) {
+        LOG_ERROR("WebGLVkShaderCompiler: Compilation failed for %s shader:\n%s\nErrors:\n%s",
+                  vertex ? "vertex" : "fragment", source.c_str(), log.c_str());
     }
-
-#if BRO_HAS_SHADERC
-    shaderc::Compiler compiler;
-    if (compiler.IsValid()) {
-        shaderc::CompileOptions options;
-        options.SetTargetEnvironment(shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_0);
-        shaderc_shader_kind kind = (stage == VK_SHADER_STAGE_VERTEX_BIT) ? shaderc_vertex_shader : shaderc_fragment_shader;
-        auto result = compiler.CompileGlslToSpv(source.c_str(), source.size(), kind, "webgl_shader", "main", options);
-        if (result.GetCompilationStatus() == shaderc_compilation_status_success) {
-            std::vector<uint32_t> spirv(result.cbegin(), result.cend());
-            if (!spirv.empty() && spirv[0] == 0x07230203) {
-                s_spirvCache[cacheKey] = spirv;
-                return spirv;
-            }
-        } else {
-            std::string errStr = result.GetErrorMessage();
-            if (outLog) *outLog = errStr;
-            LOG_ERROR("WebGLVkShaderCompiler: Compilation failed for %s shader:\n%s\nErrors:\n%s",
-                      stageStr.c_str(), source.c_str(), errStr.c_str());
-            return {};
-        }
-    }
-#endif
-
-    if (!util::hasExecutableOnPath("glslc")) {
-        std::string errStr = "glslc not found on system PATH";
-        if (outLog) *outLog = errStr;
-        LOG_ERROR("WebGLVkShaderCompiler: %s", errStr.c_str());
-        return {};
-    }
-
-    std::vector<std::string> args = { "glslc", "-fshader-stage=" + stageStr, "-", "-o", "-" };
-    auto res = util::runSubprocess(args, source);
-    if (res.success && res.stdOut.size() >= 4 && (res.stdOut.size() % 4 == 0)) {
-        size_t wordCount = res.stdOut.size() / 4;
-        std::vector<uint32_t> spirv(wordCount);
-        std::memcpy(spirv.data(), res.stdOut.data(), res.stdOut.size());
-        if (spirv[0] == 0x07230203) {
-            s_spirvCache[cacheKey] = spirv;
-            return spirv;
-        }
-    }
-
-    if (outLog) {
-        *outLog = res.stdErr;
-    }
-    LOG_ERROR("WebGLVkShaderCompiler: Compilation failed for %s shader:\n%s\nErrors:\n%s",
-              stageStr.c_str(), source.c_str(), res.stdErr.c_str());
-    return {};
+    if (outLog) *outLog = std::move(log);
+    return spirv;
 }
 
 VkShaderModule WebGLVkShaderCompiler::createShaderModule(VkDevice device, const std::vector<uint32_t>& spirv) {

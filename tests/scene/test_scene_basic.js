@@ -9,8 +9,7 @@ flush();
 
 const scene = canvas.getContext('scene');
 if (!scene) {
-    // No GPU available — skip silently
-    console.log('scene context not available (no GPU)');
+    missingGpuContext('scene');
 } else {
     // =====================================================================
     // Camera

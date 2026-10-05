@@ -43,6 +43,8 @@ These functions are available in addition to all standard DOM APIs:
 | `wallSleep(ms)` | Block for N milliseconds of *real* wall-clock time without advancing virtual time. Gives real threads (network, child process, mic) time to produce work; pair it with `advanceTime()` to deliver that work into JS (see "Waiting in scripts" below). |
 | `flush()` | Force layout recalculation (called automatically after `advanceTime`) |
 | `assert(condition, message?)` | Throw if condition is falsy. Failed assertions produce a nonzero exit code. |
+| `skipTest(reason)` | This environment cannot test the script's subject (weights absent, feature compiled out): the run exits 77, which `tests/run_tests.sh` reports as SKIP — never as a pass. Something that also failed still fails the run. The script keeps running, so do nothing further after it. |
+| `missingGpuContext(kind)` | Call when `getContext('webgl2')` / `getContext('scene')` returned null. On a run with no GPU device (`--no-gpu`) or with the feature compiled out it skips like `skipTest`; on a GPU run a null context is a bug, and it fails the run. |
 | `writeFile(path, data)` | Write `data` to `path` and return the byte count. A string is written as UTF-8; an `ArrayBuffer` or TypedArray is written verbatim (a view writes only its own range, not the whole buffer). Missing parent directories are created, like `screenshot()`. Throws on anything else object-shaped, and on an open/write failure, naming the path. Headless-only, so a bake/export tool can drop an asset next to its test; a shipped app gets no filesystem write from this. |
 
 ### Screenshots
@@ -379,7 +381,7 @@ screenshot('after.png');
 bro-headless ../broworkshop/demos/example test.js
 ```
 
-Exit code is 0 on success, 1 if any assertion fails or an uncaught exception occurs.
+Exit code is 0 on success, 1 if any assertion fails or an uncaught exception occurs, and 77 if the script called `skipTest()` (or `missingGpuContext()` without a GPU) and nothing failed.
 
 ### Await in scripts
 
@@ -476,7 +478,7 @@ Headless mode shares the same `Engine` class as windowed mode, configured via `E
 - Uses headless Vulkan 1.3 Core with Dynamic Rendering (`VK_KHR_dynamic_rendering`) directly via `VulkanContext` and `VulkanPresenter` without requiring an X11 server, window, or Xvfb on Linux
 - Uses `SkiaRenderer`: same Skia rasterization backend as windowed mode
 - WebGL2 support: Three.js, raw WebGL, and other GL frameworks work via native Vulkan translation (`WebGLVkContext`, `WebGLVkCanvas`)
-- 3D scene graph runs Vulkan render passes with build-time and runtime SPIR-V shader compilation via `glslc`
+- 3D scene graph runs Vulkan render passes; its shaders are compiled to SPIR-V by the in-process glslang (built-in ones at build time, custom shaders and WebGL programs at run time), and pipelines persist in the on-disk pipeline cache
 - Screenshots replicate the windowed compositing pass: scene layers rendered to offscreen Vulkan render targets, UI overlay composited on top with zero-copy texture presentation, then read back directly via Vulkan transfer buffers
 - Text metrics use Skia with platform-native fonts (DirectWrite on Windows, FreeType/fontconfig on Linux), pixel-identical to windowed rendering
 

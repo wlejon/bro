@@ -56,16 +56,11 @@ ctx.fillRect(0, 0, 50, 50);
 flush();
 
 const canvasPath = path.join(tmpDir, 'bro_test_canvas_' + Date.now() + '.png');
-try {
-    screenshotCanvas(canvasPath, '#c');
-    if (fs.existsSync(canvasPath)) {
-        const cstat = fs.statSync(canvasPath);
-        assert(cstat.size > 50, 'canvas screenshot size > 50');
-        fs.unlinkSync(canvasPath);
-    }
-} catch (e) {
-    // screenshotCanvas may not be available in all modes; not fatal
-    console.log('screenshotCanvas not available:', e.message);
+screenshotCanvas(canvasPath, '#c');
+assert(fs.existsSync(canvasPath), 'screenshotCanvas wrote ' + canvasPath);
+if (fs.existsSync(canvasPath)) {
+    assert(fs.statSync(canvasPath).size > 50, 'canvas screenshot size > 50');
+    fs.unlinkSync(canvasPath);
 }
 
 // =========================================================================

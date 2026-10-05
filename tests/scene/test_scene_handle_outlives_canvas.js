@@ -34,7 +34,7 @@ function tick(n) { for (let i = 0; i < n; ++i) { advanceTime(16); flush(); } }
 const probe = makeCanvas('probe');
 const probeScene = probe.cv.getContext('scene');
 if (!probeScene) {
-    console.log('scene context not available (no GPU)');
+    missingGpuContext('scene');
 } else {
     probe.holder.remove();
     flush();

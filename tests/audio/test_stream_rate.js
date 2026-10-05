@@ -11,7 +11,7 @@ const RATE = ctx.sampleRate;
 // Real device: the mixer has to actually consume the ring for played frames
 // to move. Run this with `bro-headless --audio`.
 if (!ctx.sampleRate) {
-    console.log('SKIP: no audio context');
+    skipTest('no audio context');
 } else {
     const consumed = (rate) => {
         const s = ctx.createStream(1, RATE * 4);

@@ -15,7 +15,7 @@ flush();
 
 const scene = canvas.getContext('scene');
 if (!scene) {
-    console.log('no scene; skipping ssao test');
+    missingGpuContext('scene');
 } else {
     scene.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
     scene.setCamera({
@@ -82,10 +82,10 @@ if (!scene) {
 
     // ...while open floor near the camera (bottom rows, far from the wall)
     // is affected far less than the crease. Relative rather than absolute:
-    // software GL (llvmpipe, as CI runs under Xvfb) produces a stronger AO
-    // whose half-res depth sampling bleeds some occlusion onto the near floor
-    // (~15/255), so an absolute "< 10" bound is renderer-dependent. The real
-    // invariant is that occlusion concentrates in the crease, not open floor.
+    // the half-res depth sampling bleeds some occlusion onto the near floor
+    // by an amount that differs between drivers (~15/255 on some), so an
+    // absolute "< 10" bound is renderer-dependent. The real invariant is that
+    // occlusion concentrates in the crease, not open floor.
     const openOff = avg(offImg, 100, 192, 2);
     const openOn  = avg(onImg, 100, 192, 2);
     const creaseDrop = creaseOff - creaseOn;

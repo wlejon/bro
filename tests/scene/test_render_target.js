@@ -62,7 +62,7 @@ function dropScene(s) {
 
 const probe = freshScene(64);
 if (!probe.scene) {
-    console.log('scene context not available (no GPU) — skipping render target test');
+    missingGpuContext('scene');
 } else {
     dropScene(probe);
     const SIZE = 128;

@@ -34,6 +34,10 @@ env:
   # this pins the vcpkg tool + scripts to the same commit (the runner's
   # preinstalled vcpkg drifts with every image update).
   VCPKG_COMMIT: 0b88aacde46a853151730fbe7d0b7ee45f4b6864
+  # The Windows jobs configure against the LunarG Vulkan SDK (headers +
+  # vulkan-1.lib); scripts/ci/install-vulkan-sdk-windows.sh checks the hash.
+  VULKAN_SDK_VERSION: 1.4.363.0
+  VULKAN_SDK_SHA256: 94a82d378f7a5e3e54c9db7d2fb7016af136e14ac0a18dbf0f2f67a36352d141
   # Persist the sccache object cache in the GitHub Actions cache across runs.
   # Without this sccache silently falls back to per-runner LOCAL DISK, which is
   # wiped between runs — 0% hits, every object recompiled (measured 0/1220).
@@ -47,7 +51,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # test: run tests/run_tests.sh after the build.
+          # test: run tests/run_tests.sh after the build. Not on Windows: the
+          # runner has no GPU and no Vulkan driver, so it builds only.
           # bronze_compiler: also build the bronze CLI (the JS compiler, brass
           # backend), not only the host layer bro links. Nothing in the
           # default target needs it; the tests/bronze_host checks do, so it
@@ -82,15 +87,17 @@ jobs:
         if: matrix.test
         run: ln -s "$PWD/third_party/bronze" "$PWD/../bronze"
 
-      # SDL3 builds from third_party/SDL. Linux gets Vulkan dev libraries,
-      # glslc, Lavapipe software Vulkan (mesa-vulkan-drivers), and libshaderc-dev
-      # for in-process GLSL compilation. Headless tests run directly on Vulkan/Lavapipe.
+      # SDL3 builds from third_party/SDL. Linux gets the Vulkan headers and
+      # loader, Lavapipe (mesa-vulkan-drivers: the software Vulkan device the
+      # headless tests run on, no Xvfb) and the Khronos validation layer, which
+      # run_tests.sh turns on wherever it is installed. Shaders need nothing
+      # here: glslang is built from source in-process (cmake/glslang.cmake).
       - name: Linux build dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            ninja-build nasm libvulkan-dev glslc mesa-vulkan-drivers libshaderc-dev libgl1-mesa-dri \
+            ninja-build nasm libvulkan-dev mesa-vulkan-drivers vulkan-validationlayers \
             libx11-dev libxext-dev libxrandr-dev libxcursor-dev \
             libxi-dev libxfixes-dev libxss-dev libxtst-dev libwayland-dev libxkbcommon-dev \
             libasound2-dev libpulse-dev libudev-dev \
@@ -98,10 +105,11 @@ jobs:
 
       # bash: tests/run_tests.sh needs bash 4+ and macOS ships 3.2 as
       # /bin/bash. coreutils: GNU `gtimeout` for the per-test cap (the runner
-      # has a Perl fallback, this is just the canonical one).
-      - name: Ninja and tools (macOS)
+      # has a Perl fallback, this is just the canonical one). Vulkan on macOS
+      # is MoltenVK behind the Khronos loader, both from Homebrew.
+      - name: Ninja, tools and Vulkan (macOS)
         if: runner.os == 'macOS'
-        run: brew install ninja nasm bash coreutils
+        run: brew install ninja nasm bash coreutils molten-vk vulkan-loader vulkan-headers vulkan-validationlayers
 
       # Put cl.exe on PATH so Windows can use the Ninja generator below — the
       # default Visual Studio generator ignores CMAKE_*_COMPILER_LAUNCHER, so
@@ -111,6 +119,11 @@ jobs:
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
+
+      - name: Vulkan SDK (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: scripts/ci/install-vulkan-sdk-windows.sh
 
       - name: sccache
         uses: mozilla-actions/sccache-action@v0.0.11
@@ -215,19 +228,31 @@ jobs:
         shell: bash
         run: ./tests/run_tests.sh
 
-      # macOS runners have a window server, so the hidden SDL window gets a GL
-      # context with no Xvfb -- but the arm64 runner VM has no GPU, and that
-      # context is Apple's Software Renderer (the engine logs GL_RENDERER on
-      # "Created window"). On it the 3D scene group alone took ~37 of this
-      # step's ~50 minutes, so run_tests.sh detects the renderer and runs only
-      # a scene smoke subset there, printing SKIP and the reason for the rest;
-      # the Linux job runs the full group on llvmpipe. Run under Homebrew's
-      # bash explicitly: `shell: bash` may resolve to /bin/bash 3.2.
-      - name: Test (headless, GPU path)
+      # macOS renders through MoltenVK, which needs a Metal device. The arm64
+      # runner is a VM, and whether it exposes one (Apple's paravirtual GPU)
+      # is a property of the runner image, not of bro — so probe instead of
+      # assuming. With a Vulkan device the full suite runs exactly as on
+      # Linux. Without one there is nothing GPU-shaped to test: the step says
+      # so as a warning annotation and in the job summary, and runs no tests,
+      # rather than reporting a green suite that never touched the renderer
+      # (the CPU-raster fallback is not the shipped path, and the suite is not
+      # written to pass on it). Run under Homebrew's bash explicitly: `shell:
+      # bash` may resolve to /bin/bash 3.2.
+      - name: Test (headless Vulkan / MoltenVK)
         if: matrix.test && runner.os == 'macOS'
         shell: bash
         run: |
-          "$(brew --prefix)/bin/bash" ./tests/run_tests.sh
+          PROBE="$(./build/bro-headless tests/test_app -e 0 2>&1 || true)"
+          if grep -q "Vulkan: Initialized successfully" <<<"$PROBE"; then
+            grep "Vulkan: Initialized successfully" <<<"$PROBE"
+            "$(brew --prefix)/bin/bash" ./tests/run_tests.sh
+          else
+            grep -iE "vulkan|metal|moltenvk" <<<"$PROBE" | head -20 || true
+            MSG="No Vulkan device on this runner (MoltenVK found no Metal device): the macOS test suite was NOT run."
+            echo "::warning title=macOS tests not run::$MSG"
+            echo "### macOS: tests not run" >> "$GITHUB_STEP_SUMMARY"
+            echo "$MSG" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   # The onramp. `cmake -B build -DBRO_PROFILE=minimal` is what BUILDING.md tells
   # someone to run when they have just cloned and do not have vcpkg, so it is the
@@ -269,28 +294,33 @@ jobs:
         with:
           submodules: recursive
 
-      # Minimal profile Linux build dependencies: Vulkan dev, glslc, Lavapipe,
-      # libshaderc-dev, windowing, fonts and audio.
+      # Minimal profile Linux build dependencies: Vulkan headers + loader,
+      # Lavapipe for the smoke run, windowing, fonts and audio.
       - name: Linux build dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            ninja-build nasm libvulkan-dev glslc mesa-vulkan-drivers libshaderc-dev libgl1-mesa-dri \
+            ninja-build nasm libvulkan-dev mesa-vulkan-drivers \
             libx11-dev libxext-dev libxrandr-dev libxcursor-dev \
             libxi-dev libxfixes-dev libxss-dev libxtst-dev libwayland-dev libxkbcommon-dev \
             libasound2-dev libpulse-dev libudev-dev \
             libfreetype-dev libfontconfig1-dev libpng-dev libjpeg-dev libwebp-dev
 
-      - name: Ninja and tools (macOS)
+      - name: Ninja, tools and Vulkan (macOS)
         if: runner.os == 'macOS'
-        run: brew install ninja nasm
+        run: brew install ninja nasm molten-vk vulkan-loader vulkan-headers
 
       - name: MSVC dev environment (Windows)
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
+
+      - name: Vulkan SDK (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: scripts/ci/install-vulkan-sdk-windows.sh
 
       - name: sccache
         uses: mozilla-actions/sccache-action@v0.0.11

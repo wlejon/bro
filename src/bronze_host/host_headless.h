@@ -23,4 +23,9 @@ bool hasTestFailure();
 void clearTestFailure();
 void setTestFailure(bool failed = true);
 
+/// Set by the script's skipTest(reason) / missingGpuContext(kind): the run
+/// could not test its subject in this environment. A run that skipped and did
+/// not also fail exits 77 (the automake SKIP convention run_tests.sh reads).
+bool wasTestSkipped();
+
 } // namespace bro::bronze_host

@@ -125,9 +125,21 @@ commit; if configure can't resolve it, `git -C <vcpkg> pull` and retry. To
 bump dependency versions, update the baseline in `vcpkg.json` **and** the
 matching `VCPKG_COMMIT` in `.github/workflows/{ci,nightly}.yml`.
 
+Every platform needs **Vulkan 1.3** (headers and loader) to build and a Vulkan
+1.3 device with dynamic rendering and timeline semaphores to render (`--no-gpu`
+runs the CPU raster path without one). Shaders need no tool: bro compiles GLSL
+to SPIR-V with **glslang**, built from source and linked in-process
+(`cmake/glslang.cmake` downloads a pinned release at configure, like Skia;
+`-DFETCHCONTENT_SOURCE_DIR_GLSLANG=<checkout>` builds offline). The compiled
+pipelines persist in `<user cache dir>/pipeline-cache/` beside the code cache
+(`BRO_PIPELINE_CACHE=0` turns that off).
+
 **Windows:**
 - **MSVC** (Visual Studio 2022+). MinGW is not supported
 - **CMake** 3.24+
+- **Vulkan SDK** (LunarG, 1.3+) for the headers and `vulkan-1.lib`; its
+  installer sets `VULKAN_SDK`, which CMake finds. The `vulkan-1.dll` loader
+  ships with every GPU driver.
 - **vcpkg**, only for the `app`/`full` profiles (networking + video). Set
   `VCPKG_ROOT`, or pass `-DCMAKE_TOOLCHAIN_FILE=…`, or install it at a
   common location (`../vcpkg`, `%HOME%/vcpkg`) where CMake auto-detects it.
@@ -141,14 +153,24 @@ matching `VCPKG_COMMIT` in `.github/workflows/{ci,nightly}.yml`.
 - **vcpkg**, only for `app`/`full` (networking + video). The video dep
   (libvpx) assembles with **`nasm`**, so `sudo apt-get install nasm` (vcpkg
   auto-acquires it on Windows/macOS, but refuses to on Linux).
-- **Vulkan 1.3 Core & SPIR-V shader compiler**: `glslc` and the Vulkan SDK / loader headers (`sudo apt-get install glslc libvulkan-dev`, Arch: `shaderc vulkan-headers vulkan-icd-loader`). Vulkan 1.3 powers the graphics presentation stack (`VulkanContext`, `VulkanPresenter`, 3D scenes, WebGL2) and the on-device compute backend.
+- **Vulkan 1.3** headers and loader: `sudo apt-get install libvulkan-dev`
+  (Arch: `vulkan-headers vulkan-icd-loader`), plus a driver — your GPU's
+  (Mesa RADV/ANV, NVIDIA) or `mesa-vulkan-drivers` for Lavapipe, the software
+  device headless runs on without a GPU. `vulkan-validationlayers` is
+  optional; `tests/run_tests.sh` turns validation on wherever it is installed.
 
 **macOS (12+, arm64 or x86_64):**
 - **Xcode Command Line Tools** (`xcode-select --install`), Apple clang 17+
-- `brew install cmake ninja bash pkg-config`
+- `brew install cmake ninja bash pkg-config molten-vk vulkan-loader vulkan-headers`
   - **CMake** 3.24+ and **Ninja** for building
   - **bash 4+** for `tests/run_tests.sh` (system bash 3.2 lacks `mapfile`)
   - **pkg-config** is used by vcpkg's abseil port while building GameNetworkingSockets
+  - **MoltenVK** + the **Khronos Vulkan loader**: Vulkan on macOS is MoltenVK
+    over Metal (bro enables `VK_KHR_portability_enumeration` /
+    `portability_subset`). The LunarG macOS SDK works too. A packaged bro
+    carries its own loader and MoltenVK (`scripts/package-release.sh`), so
+    users install nothing. `brew install vulkan-validationlayers` for
+    validation in tests.
 - **vcpkg**, only for `app`/`full`.
 
 On Apple Silicon machines provisioned via Migration Assistant from an Intel Mac,

@@ -20,7 +20,8 @@ struct TranslatedShader {
     uint32_t defaultUniformSize = 0;
 };
 
-/// Translates WebGL GLSL to Vulkan GLSL and compiles via glslc to SPIR-V.
+/// Translates WebGL GLSL to Vulkan GLSL and compiles it to SPIR-V with the
+/// engine's in-process compiler (render/glsl_compiler.h).
 class WebGLVkShaderCompiler {
 public:
     WebGLVkShaderCompiler() = default;
@@ -33,7 +34,8 @@ public:
     static ProgramLinkResult linkShaders(const std::string& vsSource, const std::string& fsSource,
                                          const std::unordered_map<std::string, GLuint>& boundAttribs);
 
-    /// Compile Vulkan GLSL source string to SPIR-V using glslc.
+    /// Compile a Vulkan GLSL source string to SPIR-V; empty on failure, with
+    /// the diagnostics in *outLog.
     static std::vector<uint32_t> compileToSpirv(const std::string& source,
                                                 VkShaderStageFlagBits stage,
                                                 std::string* outLog = nullptr);
@@ -43,9 +45,6 @@ public:
 
     /// Destroy a previously created VkShaderModule.
     static void destroyShaderModule(VkDevice device, VkShaderModule module);
-
-private:
-    static std::unordered_map<std::string, std::vector<uint32_t>> s_spirvCache;
 };
 
 } // namespace bro::webgl::vk

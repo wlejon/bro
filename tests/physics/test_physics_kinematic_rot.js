@@ -2,7 +2,7 @@
 // moves AND rotates a kinematic body; the 5-argument form keeps the rotation.
 
 if (!Physics || Physics.available === false) {
-    console.log('physics unavailable; skipping');
+    skipTest('physics unavailable');
 } else {
     assert(Physics.available === true, 'Physics.available is true when compiled in');
     const id = Physics.createBody({

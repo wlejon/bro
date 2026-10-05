@@ -19,7 +19,7 @@ bool PassMesh::init(SceneVkDevice& device, SceneVkAllocator& allocator, const Co
     config_ = config;
     VkDevice dev = device.device();
 
-    if (!createDescriptorLayouts(dev)) {
+    if (!createDescriptorLayouts(dev, device.shadowCompareSampler())) {
         LOG_ERROR("PassMesh: Failed to create descriptor layouts");
         return false;
     }
@@ -109,7 +109,7 @@ void PassMesh::cleanup(SceneVkDevice& device, SceneVkAllocator& allocator) {
     }
 }
 
-bool PassMesh::createDescriptorLayouts(VkDevice device) {
+bool PassMesh::createDescriptorLayouts(VkDevice device, VkSampler shadowCompareSampler) {
     // Set 0: Camera Layout
     SceneVkDescriptorLayoutBuilder camBuilder;
     camBuilder.addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1,
@@ -118,12 +118,7 @@ bool PassMesh::createDescriptorLayouts(VkDevice device) {
     if (!cameraLayout_) return false;
 
     // Set 1: Lighting Layout (UBO + Shadow Cascade Array + Reflection Probe Cubemap + Tile Shade Map)
-    SceneVkDescriptorLayoutBuilder lightBuilder;
-    lightBuilder.addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
-    lightBuilder.addBinding(1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
-    lightBuilder.addBinding(2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
-    lightBuilder.addBinding(3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
-    lightingLayout_ = lightBuilder.build(device);
+    lightingLayout_ = SceneVkDescriptorLayoutBuilder::createLightingLayout(device, shadowCompareSampler);
     if (!lightingLayout_) return false;
 
     // Set 2: Material Layout (4 textures)

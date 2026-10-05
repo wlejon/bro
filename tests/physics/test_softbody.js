@@ -329,7 +329,7 @@ document.body.appendChild(canvas);
 flush();
 const scene = canvas.getContext('scene');
 if (!scene) {
-    console.log('scene context not available — skipping soft-body scene sync test');
+    missingGpuContext('scene');
 } else {
     scene.setCamera({ fov: 45, near: 0.1, far: 100,
                       position: [0, 2.5, 2.5], target: [0, 1.2, 0] });

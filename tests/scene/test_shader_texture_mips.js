@@ -80,7 +80,7 @@ function probe(scene, node, N, tx, ty, lod) {
 
 const boot = makeScene(64);
 if (!boot.scene) {
-    console.log('scene context not available (no GPU) — skipping shader texture test');
+    missingGpuContext('scene');
 } else {
     dropScene(boot);
     const SIZE = 128;

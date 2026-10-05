@@ -48,7 +48,7 @@
         c.setAttribute('height', '48');
         assert(gl.drawingBufferHeight === 48, 'setAttribute("height") resizes the drawing buffer too, got ' + gl.drawingBufferHeight);
     } else {
-        console.log('webgl2 unavailable; skipping the WebGL sizing checks');
+        missingGpuContext('webgl2');
     }
 }
 

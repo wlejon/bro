@@ -6,7 +6,7 @@
 
 // bro.flora is compile-gated (BRO_WITH_FLORA); the stub sets available:false.
 if (bro.flora && bro.flora.available === false) {
-    console.log('skip: bro.flora not compiled in (BRO_WITH_FLORA off)');
+    skipTest('bro.flora not compiled in (BRO_WITH_FLORA off)');
 } else {
     runFloraSmoke();
 }

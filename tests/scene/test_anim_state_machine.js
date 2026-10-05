@@ -31,7 +31,7 @@ flush();
 
 const scene = canvas.getContext('scene');
 if (!scene) {
-    console.log('scene context not available (no GPU) — skipping state machine test');
+    missingGpuContext('scene');
 } else {
     // ------------------------------------------------------------------
     // Minimal 2-bone rig + clips

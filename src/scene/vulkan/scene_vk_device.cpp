@@ -21,6 +21,24 @@ bool SceneVkDevice::init() {
         LOG_ERROR("SceneVkDevice: VulkanContext is not valid");
         return false;
     }
+    VkSamplerCreateInfo samplerInfo{};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+    samplerInfo.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
+    samplerInfo.compareEnable = VK_TRUE;
+    samplerInfo.compareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+    samplerInfo.minLod = 0.0f;
+    samplerInfo.maxLod = 1.0f;
+    if (vkCreateSampler(context_.device(), &samplerInfo, nullptr, &shadowCompareSampler_) != VK_SUCCESS) {
+        LOG_ERROR("SceneVkDevice: Failed to create the shadow comparison sampler");
+        shadowCompareSampler_ = VK_NULL_HANDLE;
+        return false;
+    }
     frameEndHook_ = context_.frames().addFrameEndHook([this] { flushUploads(); });
     initialized_ = true;
     return true;
@@ -31,6 +49,14 @@ void SceneVkDevice::shutdown() {
     flushUploads();
     context_.frames().removeFrameEndHook(frameEndHook_);
     frameEndHook_ = 0;
+    // Layouts that bake the sampler in are destroyed by now; sets still in
+    // flight may reference it, so it goes once the GPU is done.
+    if (shadowCompareSampler_ != VK_NULL_HANDLE) {
+        context_.frames().defer([dev = context_.device(), s = shadowCompareSampler_] {
+            vkDestroySampler(dev, s, nullptr);
+        });
+        shadowCompareSampler_ = VK_NULL_HANDLE;
+    }
     initialized_ = false;
 }
 

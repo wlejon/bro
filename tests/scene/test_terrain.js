@@ -9,9 +9,9 @@ flush();
 
 const scene = canvas.getContext('scene');
 if (!scene) {
-    console.log('no scene; skipping terrain test');
+    missingGpuContext('scene');
 } else if (typeof scene.createTerrain !== 'function') {
-    console.log('no createTerrain; skipping');
+    assert(false, 'scene.createTerrain is missing');
 } else {
     const terrain = scene.createTerrain({
         chunkSize: [16, 16, 16],

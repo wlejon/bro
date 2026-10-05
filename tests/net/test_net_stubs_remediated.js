@@ -5,7 +5,7 @@
 // 4. bro.net.setPeerSimulatedLoss: sets fake packet loss and lag configs without error
 
 if (!bro.net || bro.net.available === false) {
-    console.log('net unavailable; skipping');
+    skipTest('net unavailable');
 } else {
     assert(typeof bro.net._sendUnframed === 'function', 'bro.net._sendUnframed is exposed');
     assert(typeof bro.net.getPeerAddress === 'function', 'bro.net.getPeerAddress is a function');

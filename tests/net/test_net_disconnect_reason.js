@@ -8,7 +8,7 @@
 // inside the range.
 
 if (!bro.net || bro.net.available === false) {
-    console.log('net unavailable; skipping');
+    skipTest('net unavailable');
 } else {
     assert(bro.net.available === true, 'bro.net.available is true when compiled in');
 

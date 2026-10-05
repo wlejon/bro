@@ -10,7 +10,7 @@
 const nn = bro.ai.game.nn;
 
 if (!nn || nn.available === false || !bro.tensor || bro.tensor.available === false) {
-    console.log('test_nn_gpu: nn / tensor tower not built, skipping');
+    skipTest('test_nn_gpu: nn / tensor tower not built');
 } else {
     bro.tensor.init();   // before reading backend, or a pre-init probe answers "cpu"
     if (!bro.gpu.available || bro.tensor.backend === 'cpu') {

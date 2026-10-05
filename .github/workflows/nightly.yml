@@ -38,6 +38,10 @@ env:
   # this pins the vcpkg tool + scripts to the same commit (the runner's
   # preinstalled vcpkg drifts with every image update).
   VCPKG_COMMIT: 0b88aacde46a853151730fbe7d0b7ee45f4b6864
+  # The Windows build configures against the LunarG Vulkan SDK (headers +
+  # vulkan-1.lib); scripts/ci/install-vulkan-sdk-windows.sh checks the hash.
+  VULKAN_SDK_VERSION: 1.4.363.0
+  VULKAN_SDK_SHA256: 94a82d378f7a5e3e54c9db7d2fb7016af136e14ac0a18dbf0f2f67a36352d141
   # Persist the sccache object cache in the GitHub Actions cache across runs.
   # Without this sccache silently falls back to per-runner LOCAL DISK, which is
   # wiped between runs — so every night recompiled from scratch (0 hits, all
@@ -83,23 +87,26 @@ jobs:
           submodules: recursive
           fetch-depth: 0        # tags needed for package-release.sh's version fallback
 
-      # SDL3 is built from third_party/SDL. Linux gets Vulkan dev libraries,
-      # glslc, Lavapipe software Vulkan (mesa-vulkan-drivers), and libshaderc-dev
-      # for in-process GLSL compilation. Headless operations run on Vulkan/Lavapipe directly.
+      # SDL3 is built from third_party/SDL. Linux gets the Vulkan headers and
+      # loader and Lavapipe (mesa-vulkan-drivers), the software Vulkan device
+      # the smoke tests run on. Shaders need nothing here: glslang is built
+      # from source in-process (cmake/glslang.cmake).
       - name: Linux build dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            ninja-build nasm libvulkan-dev glslc mesa-vulkan-drivers libshaderc-dev libgl1-mesa-dri \
+            ninja-build nasm libvulkan-dev mesa-vulkan-drivers \
             libx11-dev libxext-dev libxrandr-dev libxcursor-dev \
             libxi-dev libxfixes-dev libxss-dev libxtst-dev libwayland-dev libxkbcommon-dev \
             libasound2-dev libpulse-dev libudev-dev \
             libfreetype-dev libfontconfig1-dev libpng-dev libjpeg-dev libwebp-dev
 
-      - name: Ninja (macOS)
+      # MoltenVK + the Khronos loader: linked at build time, and bundled into
+      # the package by package-release.sh (macOS has no system Vulkan).
+      - name: Ninja and Vulkan (macOS)
         if: runner.os == 'macOS'
-        run: brew install ninja
+        run: brew install ninja molten-vk vulkan-loader vulkan-headers
 
       - name: Install CUDA Toolkit
         if: matrix.cuda
@@ -128,6 +135,11 @@ jobs:
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
+
+      - name: Vulkan SDK (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: scripts/ci/install-vulkan-sdk-windows.sh
 
       - name: sccache
         uses: mozilla-actions/sccache-action@v0.0.11
@@ -264,9 +276,10 @@ jobs:
           # the compiled-in set.
           APP=system/skeletons/blank
           PROBE="if(!bro.gpu||!bro.gpu.backend)throw new Error('bro.gpu backend missing');if(!(bro.gpu.compiledBackends||[]).includes('$EXPECT'))throw new Error('GPU backend $EXPECT NOT compiled in; compiledBackends='+JSON.stringify(bro.gpu.compiledBackends));console.log('backend='+bro.gpu.backend+' available='+bro.gpu.available+' compiledBackends='+JSON.stringify(bro.gpu.compiledBackends))"
-          # Headless renderer runs with Vulkan directly (or Lavapipe software Vulkan
-          # on Linux headless runners).
-          "$BH" "$APP" -e "$PROBE"
+          # This probes the ML tower, not the renderer, so it runs on the CPU
+          # raster path (--no-gpu): the Windows runner has no Vulkan driver and
+          # the macOS one may expose no Metal device for MoltenVK.
+          "$BH" --no-gpu "$APP" -e "$PROBE"
 
       - name: Package
         shell: bash
@@ -308,16 +321,47 @@ jobs:
           # comes off the shipped bro-headless, then the shipped compiler
           # builds against it.
           cd "$PKG"
-          ./bro-headless smokeapp --print-host-globals 2>/dev/null > bronze/web_host.globals
+          # The compiler/host ABI is what this checks, so the CPU raster path
+          # (--no-gpu) serves on every runner, GPU or not.
+          ./bro-headless --no-gpu smokeapp --print-host-globals 2>/dev/null > bronze/web_host.globals
           grep -qx document bronze/web_host.globals
           ./bronze/bronze$EXE build smokeapp/main.js -o "smokeapp/app$MOD" \
             --emit-shared --host-globals bronze/web_host.globals
           [ -f "smokeapp/app$MOD" ]
-          OUT="$(./bro-headless smokeapp -e 'advanceTime(64)' || true)"
+          OUT="$(./bro-headless --no-gpu smokeapp -e 'advanceTime(64)' || true)"
           echo "$OUT"
           echo "$OUT" | grep -q 'APP ok=4096'
           # Leave nothing behind: the zip is cut from this directory.
           rm -rf "$PKG/smokeapp"
+
+      # The macOS package carries its own Vulkan loader and MoltenVK (no macOS
+      # has either). Check, from the packaged tree, that the shipped
+      # bro-headless loads the bundled loader rather than Homebrew's and that
+      # the loader picks up the bundled MoltenVK manifest; then, if this
+      # runner has a Metal device, that a Vulkan device actually comes up.
+      # Homebrew's copies are moved out of the way first so nothing can fall
+      # back to them.
+      - name: Smoke test (packaged Vulkan runtime, macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          d=$(ls -d dist/bro-${VERSION}-* | head -1)
+          cd "$d"
+          grep -q '@executable_path/libvulkan.1.dylib' <<<"$(otool -L bro-headless)"
+          [ -f vulkan/icd.d/MoltenVK_icd.json ] && [ -f vulkan/icd.d/libMoltenVK.dylib ]
+          BREW_ICD="$(brew --prefix)/etc/vulkan/icd.d"
+          [ -d "$BREW_ICD" ] && sudo mv "$BREW_ICD" "$BREW_ICD.off"
+          mkdir -p probeapp && echo '<!doctype html><html><body></body></html>' > probeapp/index.html
+          OUT="$(VK_LOADER_DEBUG=driver ./bro-headless probeapp -e 0 2>&1 || true)"
+          rm -rf probeapp
+          [ -d "$BREW_ICD.off" ] && sudo mv "$BREW_ICD.off" "$BREW_ICD"
+          grep -iE "MoltenVK|Vulkan:" <<<"$OUT" | head -20 || true
+          grep -q "vulkan/icd.d/MoltenVK_icd.json" <<<"$OUT"
+          if grep -q "Vulkan: Initialized successfully" <<<"$OUT"; then
+            echo "bundled MoltenVK brought up a Vulkan device"
+          else
+            echo "::warning title=macOS Vulkan device::the bundled loader found the bundled MoltenVK, but this runner exposes no Metal device, so device bring-up was not verified"
+          fi
 
       # --- Windows code signing ---------------------------------------------
       # Signs the packaged tree before it is zipped, so what users download is

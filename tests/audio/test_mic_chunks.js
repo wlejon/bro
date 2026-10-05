@@ -13,7 +13,7 @@ function approx(a, b, tol, msg) {
 
 // bro.mic is compile-gated; the stub sets available:false.
 if (bro.mic && bro.mic.available === false) {
-    console.log('skip: bro.mic not compiled in');
+    skipTest('bro.mic not compiled in');
 } else {
     runMicChunks();
 }

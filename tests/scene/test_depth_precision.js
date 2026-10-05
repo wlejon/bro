@@ -17,21 +17,18 @@ canvas.setAttribute('height', '200');
 document.body.appendChild(canvas);
 flush();
 
-// BRO_DISABLE_REVERSED_Z forces the conventional fallback so that path stays
-// testable on hardware that does support clip control. Under it this test is
-// measuring a capability that has been deliberately switched off, so skip
-// rather than report a failure. A machine that genuinely lacks
-// ARB_clip_control still fails here, which is the honest signal — it cannot
-// render correctly at these ranges.
+// BRO_DISABLE_REVERSED_Z forces the conventional depth fallback so that path
+// stays testable. Under it this test would measure a capability that has been
+// deliberately switched off, so it reports SKIP rather than a failure.
 const forcedOff = typeof process !== 'undefined' && process.env &&
                   process.env.BRO_DISABLE_REVERSED_Z &&
                   process.env.BRO_DISABLE_REVERSED_Z !== '0';
 
 const scene = canvas.getContext('scene');
 if (!scene) {
-    console.log('no scene; skipping depth precision test');
+    missingGpuContext('scene');
 } else if (forcedOff) {
-    console.log('reversed-Z forced off; skipping depth precision test');
+    skipTest('BRO_DISABLE_REVERSED_Z forces the conventional depth path');
 } else {
     scene.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
     scene.setCamera({

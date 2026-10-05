@@ -12,11 +12,11 @@ const fs = require('node:fs');
 const DIR = process.env.BRO_DIFFUSION_SD15 || (process.cwd() + '/../brodiffusion/weights/sd15');
 
 if (bro.diffusion.available === false) {
-    console.log('SKIP: bro.diffusion is the unavailable stub');
+    skipTest('bro.diffusion is the unavailable stub');
 } else if (!fs.existsSync(DIR + '/model_index.json')) {
-    console.log('SKIP: SD1.5 weights not found at ' + DIR);
+    skipTest('SD1.5 weights not found at ' + DIR);
 } else if (!bro.gpu.available) {
-    console.log('SKIP: no GPU backend (' + bro.gpu.backend + ')');
+    skipTest('no GPU backend (' + bro.gpu.backend + ')');
 } else {
     // Frames only: advanceTime runs the engine's frame pumps, and wallSleep
     // gives the generate's worker thread real time to run.

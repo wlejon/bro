@@ -20,7 +20,7 @@ flush();
 
 const scene = canvas.getContext('scene');
 if (!scene) {
-    console.log('scene context not available (no GPU) — skipping tween test');
+    missingGpuContext('scene');
 } else {
     // ------------------------------------------------------------------
     // Linear position tween: exactly half-way at half-duration

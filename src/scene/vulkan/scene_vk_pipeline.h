@@ -84,8 +84,9 @@ public:
     /// Specify dynamic states (defaults to VIEWPORT and SCISSOR).
     SceneVkPipelineBuilder& setDynamicStates(const std::vector<VkDynamicState>& states);
 
-    /// Build and return the graphics pipeline.
-    VkPipeline build(VkDevice device, VkPipelineLayout layout, VkPipelineCache cache = VK_NULL_HANDLE);
+    /// Build and return the graphics pipeline, through the device's persisted
+    /// pipeline cache (render::VulkanPipelineCache).
+    VkPipeline build(VkDevice device, VkPipelineLayout layout);
 
 private:
     std::vector<VkPipelineShaderStageCreateInfo> shaderStages_;
@@ -102,22 +103,6 @@ private:
     std::vector<VkFormat> colorAttachmentFormats_;
     VkFormat depthAttachmentFormat_ = VK_FORMAT_UNDEFINED;
     VkFormat stencilAttachmentFormat_ = VK_FORMAT_UNDEFINED;
-};
-
-/// Wrapper around a VkPipelineCache for caching graphics pipelines.
-class SceneVkPipelineCache {
-public:
-    SceneVkPipelineCache() = default;
-    ~SceneVkPipelineCache();
-
-    bool init(VkDevice device, const void* initialData = nullptr, size_t initialSize = 0);
-    void destroy();
-
-    VkPipelineCache handle() const { return cache_; }
-
-private:
-    VkDevice device_ = VK_NULL_HANDLE;
-    VkPipelineCache cache_ = VK_NULL_HANDLE;
 };
 
 } // namespace bro::scene::vk

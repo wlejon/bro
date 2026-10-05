@@ -10,7 +10,7 @@ flush();
 
 const gl = canvas.getContext('webgl2');
 if (!gl) {
-    console.log('no webgl2; skipping');
+    missingGpuContext('webgl2');
 } else {
     const vsSrc = '#version 300 es\nin vec2 aPos;\nvoid main(){ gl_Position = vec4(aPos, 0.0, 1.0); }';
     const fsSrc = '#version 300 es\nprecision highp float;\nuniform vec4 uC;\nout vec4 frag;\n' +

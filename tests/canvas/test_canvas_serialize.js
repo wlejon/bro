@@ -76,6 +76,8 @@ if (gl) {
     flush();
     var after = wc.toDataURL();
     assert(after !== wpng, 'GL state survives the readback — the next clear still takes effect');
+} else {
+    missingGpuContext('webgl2');
 }
 
 // --- toBlob ----------------------------------------------------------------

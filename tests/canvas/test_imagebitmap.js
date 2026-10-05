@@ -187,7 +187,7 @@ document.body.appendChild(glCanvas);
 flush();
 const gl = glCanvas.getContext('webgl2');
 if (!gl) {
-    console.log('no webgl2; skipping texImage2D(ImageBitmap) check');
+    missingGpuContext('webgl2');
 } else {
     const tex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, tex);

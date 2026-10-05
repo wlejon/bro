@@ -51,7 +51,7 @@ function dropScene(s) {
 
 const probe = freshScene(64);
 if (!probe.scene) {
-    console.log('scene context not available (no GPU) — skipping camera node test');
+    missingGpuContext('scene');
 } else {
     dropScene(probe);
 

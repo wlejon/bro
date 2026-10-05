@@ -11,9 +11,36 @@
 #include <set>
 #include <vector>
 
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#include <sys/stat.h>
+#endif
+
 namespace bro::render {
 
 namespace {
+
+#ifdef __APPLE__
+// A packaged bro carries its own Vulkan loader and MoltenVK
+// (scripts/package-release.sh): vulkan/icd.d/MoltenVK_icd.json beside the
+// executable. Unless the environment already names the drivers, add that one
+// to the loader's search — added rather than substituted, so a machine with the
+// Vulkan SDK or Homebrew's MoltenVK keeps its own as well. Set before the first
+// instance-level call, which is when the loader scans for drivers.
+void addBundledMoltenVK() {
+    if (std::getenv("VK_DRIVER_FILES") || std::getenv("VK_ICD_FILENAMES") ||
+        std::getenv("VK_ADD_DRIVER_FILES"))
+        return;
+    char exe[4096];
+    uint32_t size = sizeof(exe);
+    if (_NSGetExecutablePath(exe, &size) != 0) return;
+    std::string dir(exe);
+    dir.erase(dir.find_last_of('/') + 1);
+    const std::string icd = dir + "vulkan/icd.d/MoltenVK_icd.json";
+    struct stat st{};
+    if (stat(icd.c_str(), &st) == 0) setenv("VK_ADD_DRIVER_FILES", icd.c_str(), 0);
+}
+#endif
 
 const std::vector<const char*> kRequiredDeviceExtensions = {
     VK_KHR_SWAPCHAIN_EXTENSION_NAME
@@ -126,6 +153,7 @@ bool VulkanContext::init(SDL_Window* presentTarget) {
         cleanup();
         return false;
     }
+    pipelineCache_.init(device_, deviceProperties_);
 
     LOG_INFO("Vulkan: Initialized successfully on device: %s (Driver %u.%u.%u), API %u.%u%s",
              deviceProperties_.deviceName,
@@ -140,6 +168,7 @@ bool VulkanContext::init(SDL_Window* presentTarget) {
 void VulkanContext::cleanup() {
     if (device_ != VK_NULL_HANDLE) {
         vkDeviceWaitIdle(device_);
+        pipelineCache_.shutdown();
         frames_.shutdown();
         queue_.shutdown();
         memoryPool_.cleanup(device_);
@@ -167,6 +196,9 @@ void VulkanContext::cleanup() {
 }
 
 bool VulkanContext::createInstance() {
+#ifdef __APPLE__
+    addBundledMoltenVK();
+#endif
     std::vector<const char*> validationLayers;
     if (config_.enableValidation) {
         validationLayers = getAvailableValidationLayers();

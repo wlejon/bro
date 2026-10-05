@@ -10,8 +10,7 @@ flush();
 
 const gl = canvas.getContext('webgl2');
 if (!gl) {
-    // No GPU — skip
-    console.log('no webgl2; skipping');
+    missingGpuContext('webgl2');
 } else {
     // =====================================================================
     // Context info

@@ -1,7 +1,7 @@
 // Weights-gated test for bro.lm.loadLaya: the Laya decision model behind its
 // request scheduler, driven the way an app drives it.
 //
-// Skips (passes with a message) when bro.lm is the stub, the checkpoint is
+// Skips (skipTest, reported SKIP) when bro.lm is the stub, the checkpoint is
 // absent (LAYA_MODEL_DIR, else the ../laya sibling of the bro checkout) or
 // there is no GPU backend. Covers: a blocking predict, many predictAsync
 // calls in flight sharing forwards, priority, the promise rejection paths,
@@ -43,11 +43,11 @@ function ticket(i, body) {
 }
 
 if (bro.lm.available === false) {
-    console.log('SKIP: bro.lm is the unavailable stub');
+    skipTest('bro.lm is the unavailable stub');
 } else if (!fs.existsSync(DIR + '/model.safetensors')) {
-    console.log('SKIP: Laya checkpoint not found at ' + DIR);
+    skipTest('Laya checkpoint not found at ' + DIR);
 } else if (!bro.gpu.available) {
-    console.log('SKIP: no GPU backend (' + bro.gpu.backend + ')');
+    skipTest('no GPU backend (' + bro.gpu.backend + ')');
 } else {
     assert(typeof bro.lm.loadLayaAsync === 'function', 'bro.lm.loadLayaAsync exists');
 

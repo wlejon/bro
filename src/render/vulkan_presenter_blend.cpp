@@ -3,14 +3,26 @@
 // as a premultiplied-alpha textured triangle under dynamic rendering.
 
 #include "render/vulkan_presenter.h"
-#include "render/vulkan_presenter_shaders.h"
 #include "render/pixel_convert.h"
 #include "render/vulkan_util.h"
 #include "util/log.h"
 
 #include <algorithm>
+#include <cstdint>
 
 namespace bro::render {
+
+namespace {
+
+// Built from src/render/shaders/ by bro_spirv_embed.
+const uint32_t kPresentQuadVertSpv[] =
+#include "present_quad.vert.spv.h"
+;
+const uint32_t kPresentOverlayFragSpv[] =
+#include "present_overlay.frag.spv.h"
+;
+
+} // namespace
 
 bool VulkanPresenter::initBlendResources() {
     VkDevice device = context_.device();
@@ -73,8 +85,8 @@ VkPipeline VulkanPresenter::blendPipeline(VkFormat targetFormat) {
 
     VkDevice device = context_.device();
     VkShaderModule modules[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
-    const uint32_t* code[2] = {kQuadVertSpv, kOverlayFragSpv};
-    const size_t size[2] = {sizeof(kQuadVertSpv), sizeof(kOverlayFragSpv)};
+    const uint32_t* code[2] = {kPresentQuadVertSpv, kPresentOverlayFragSpv};
+    const size_t size[2] = {sizeof(kPresentQuadVertSpv), sizeof(kPresentOverlayFragSpv)};
     for (int i = 0; i < 2; ++i) {
         VkShaderModuleCreateInfo info{};
         info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
@@ -154,7 +166,7 @@ VkPipeline VulkanPresenter::blendPipeline(VkFormat targetFormat) {
     info.layout = blendPipelineLayout_;
 
     VkPipeline pipeline = VK_NULL_HANDLE;
-    VkResult res = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &info, nullptr, &pipeline);
+    VkResult res = vkCreateGraphicsPipelines(device, context_.pipelineCache(), 1, &info, nullptr, &pipeline);
     vkDestroyShaderModule(device, modules[0], nullptr);
     vkDestroyShaderModule(device, modules[1], nullptr);
     if (res != VK_SUCCESS) {

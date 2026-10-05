@@ -6,21 +6,28 @@
 namespace bro::scene::vk {
 
 void SceneVkDescriptorLayoutBuilder::addBinding(uint32_t binding, VkDescriptorType type,
-                                               uint32_t count, VkShaderStageFlags stageFlags) {
+                                               uint32_t count, VkShaderStageFlags stageFlags,
+                                               VkSampler immutableSampler) {
+    assert(immutableSampler == VK_NULL_HANDLE || count == 1);
     VkDescriptorSetLayoutBinding b{};
     b.binding = binding;
     b.descriptorType = type;
     b.descriptorCount = count;
     b.stageFlags = stageFlags;
-    b.pImmutableSamplers = nullptr;
+    b.pImmutableSamplers = nullptr;  // resolved in build(), once immutableSamplers_ stops growing
     bindings_.push_back(b);
+    immutableSamplers_.push_back(immutableSampler);
 }
 
 void SceneVkDescriptorLayoutBuilder::clear() {
     bindings_.clear();
+    immutableSamplers_.clear();
 }
 
 VkDescriptorSetLayout SceneVkDescriptorLayoutBuilder::build(VkDevice device) {
+    for (size_t i = 0; i < bindings_.size(); ++i)
+        bindings_[i].pImmutableSamplers =
+            immutableSamplers_[i] != VK_NULL_HANDLE ? &immutableSamplers_[i] : nullptr;
     VkDescriptorSetLayoutCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     info.bindingCount = static_cast<uint32_t>(bindings_.size());
@@ -41,20 +48,23 @@ VkDescriptorSetLayout SceneVkDescriptorLayoutBuilder::createCameraLayout(VkDevic
     return builder.build(device);
 }
 
-VkDescriptorSetLayout SceneVkDescriptorLayoutBuilder::createLightingLayout(VkDevice device) {
-    SceneVkDescriptorLayoutBuilder builder;
-    builder.addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
-    builder.addBinding(1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
-    builder.addBinding(2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
-    builder.addBinding(3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
-    return builder.build(device);
-}
-
 VkDescriptorSetLayout SceneVkDescriptorLayoutBuilder::createMaterialLayout(VkDevice device, uint32_t samplerCount) {
     SceneVkDescriptorLayoutBuilder builder;
     for (uint32_t i = 0; i < samplerCount; ++i) {
         builder.addBinding(i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
     }
+    return builder.build(device);
+}
+
+VkDescriptorSetLayout SceneVkDescriptorLayoutBuilder::createLightingLayout(VkDevice device,
+                                                                         VkSampler shadowCompareSampler) {
+    assert(shadowCompareSampler != VK_NULL_HANDLE);
+    SceneVkDescriptorLayoutBuilder builder;
+    builder.addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
+    builder.addBinding(1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT,
+                       shadowCompareSampler);
+    builder.addBinding(2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
+    builder.addBinding(3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
     return builder.build(device);
 }
 

@@ -22,7 +22,7 @@ flush();
 
 const gl = canvas.getContext('webgl2');
 if (!gl) {
-    console.log('no webgl2; skipping');
+    missingGpuContext('webgl2');
 } else {
 
 // A shader that paints solid red at z = 0 (NDC), i.e. window depth 0.5.

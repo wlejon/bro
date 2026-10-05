@@ -2,8 +2,8 @@
 //
 // The loaders used to call to(device) before load(), which a module refuses
 // on CUDA ("dinov2::Backbone: to() called before load()"), so everything
-// but loadBirefnet worked only with { device: 'cpu' }. Skips (passes with a
-// message) without a GPU backend or without the checkpoints
+// but loadBirefnet worked only with { device: 'cpu' }. Skips (skipTest,
+// reported SKIP) without a GPU backend or without the checkpoints
 // (VISION_WEIGHTS_DIR, else ../brovisionml/weights).
 
 const fs = require('node:fs');
@@ -11,11 +11,11 @@ const fs = require('node:fs');
 const DIR = process.env.VISION_WEIGHTS_DIR || '../brovisionml/weights';
 
 if (!bro.vision || bro.vision.available === false) {
-    console.log('bro.vision is the stub; skipping');
+    skipTest('bro.vision is the stub');
 } else if (!bro.gpu || !bro.gpu.available) {
-    console.log('no GPU backend; skipping');
+    skipTest('no GPU backend');
 } else if (!fs.existsSync(DIR + '/Depth-Anything-V2-Small/model.safetensors')) {
-    console.log('no vision weights at ' + DIR + '; skipping');
+    skipTest('no vision weights at ' + DIR);
 } else {
     const loaders = [
         ['loadDepth', 'Depth-Anything-V2-Small'],

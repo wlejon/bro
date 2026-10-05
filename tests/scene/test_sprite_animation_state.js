@@ -10,7 +10,7 @@ flush();
 
 const scene = canvas.getContext('scene');
 if (!scene) {
-    console.log('no scene; skipping sprite animation state test');
+    missingGpuContext('scene');
 } else {
     const s = scene.createSprite({
         sheet: { frameWidth: 16, frameHeight: 16, columns: 4, rows: 1 },

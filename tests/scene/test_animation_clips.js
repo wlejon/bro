@@ -22,7 +22,7 @@ flush();
 
 const scene = canvas.getContext('scene');
 if (!scene) {
-    console.log('scene context not available (no GPU) — skipping clip test');
+    missingGpuContext('scene');
 } else {
     // ------------------------------------------------------------------
     // Linear interpolation: exact values via seek(), playback via time

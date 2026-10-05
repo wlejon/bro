@@ -1,4 +1,5 @@
 #include "scene/vulkan/scene_vk_pipeline.h"
+#include "render/vulkan_pipeline_cache.h"
 #include "util/log.h"
 
 #include <cassert>
@@ -217,7 +218,7 @@ SceneVkPipelineBuilder& SceneVkPipelineBuilder::setDynamicStates(const std::vect
     return *this;
 }
 
-VkPipeline SceneVkPipelineBuilder::build(VkDevice device, VkPipelineLayout layout, VkPipelineCache cache) {
+VkPipeline SceneVkPipelineBuilder::build(VkDevice device, VkPipelineLayout layout) {
     VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
     vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     vertexInputInfo.vertexBindingDescriptionCount = static_cast<uint32_t>(vertexBindings_.size());
@@ -271,36 +272,14 @@ VkPipeline SceneVkPipelineBuilder::build(VkDevice device, VkPipelineLayout layou
     pipelineInfo.pNext = &renderingInfo;
 
     VkPipeline pipeline = VK_NULL_HANDLE;
-    VkResult res = vkCreateGraphicsPipelines(device, cache, 1, &pipelineInfo, nullptr, &pipeline);
+    VkResult res = vkCreateGraphicsPipelines(device, render::VulkanPipelineCache::forDevice(device), 1,
+                                             &pipelineInfo, nullptr, &pipeline);
     if (res != VK_SUCCESS) {
         LOG_ERROR("SceneVkPipelineBuilder: Failed to create graphics pipeline: %d", res);
         return VK_NULL_HANDLE;
     }
 
     return pipeline;
-}
-
-SceneVkPipelineCache::~SceneVkPipelineCache() {
-    destroy();
-}
-
-bool SceneVkPipelineCache::init(VkDevice device, const void* initialData, size_t initialSize) {
-    destroy();
-    device_ = device;
-
-    VkPipelineCacheCreateInfo createInfo{};
-    createInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
-    createInfo.initialDataSize = initialSize;
-    createInfo.pInitialData = initialData;
-
-    return vkCreatePipelineCache(device_, &createInfo, nullptr, &cache_) == VK_SUCCESS;
-}
-
-void SceneVkPipelineCache::destroy() {
-    if (device_ != VK_NULL_HANDLE && cache_ != VK_NULL_HANDLE) {
-        vkDestroyPipelineCache(device_, cache_, nullptr);
-        cache_ = VK_NULL_HANDLE;
-    }
 }
 
 } // namespace bro::scene::vk

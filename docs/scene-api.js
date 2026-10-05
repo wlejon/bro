@@ -672,6 +672,9 @@ class SceneGraph {
   setRenderScale(scale) {}
 
   /**
+   * Multisample the scene's colour and depth. 0 or 1 is off. The frame uses
+   * the highest count at or below `samples` that the GPU supports (Apple GPUs
+   * stop at 4); `msaa` reads back the request.
    * @param {number} samples
    */
   setMSAA(samples) {}

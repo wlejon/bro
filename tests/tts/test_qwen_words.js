@@ -40,13 +40,13 @@ function upsample2(samples) {
 }
 
 if (bro.tts.available === false || bro.stt.available === false) {
-    console.log('SKIP: bro.tts / bro.stt are the unavailable stubs');
+    skipTest('bro.tts / bro.stt are the unavailable stubs');
 } else if (!fs.existsSync(QWEN_DIR + '/model.safetensors')) {
-    console.log('SKIP: Qwen3-TTS weights not found at ' + QWEN_DIR);
+    skipTest('Qwen3-TTS weights not found at ' + QWEN_DIR);
 } else if (!fs.existsSync(PARAKEET_DIR + '/model.safetensors')) {
-    console.log('SKIP: Parakeet weights not found at ' + PARAKEET_DIR);
+    skipTest('Parakeet weights not found at ' + PARAKEET_DIR);
 } else if (!bro.gpu.available) {
-    console.log('SKIP: no GPU backend (' + bro.gpu.backend + ')');
+    skipTest('no GPU backend (' + bro.gpu.backend + ')');
 } else {
     const q1 = bro.tts.loadQwen(QWEN_DIR);
     const speaker = q1.speakers()[0];

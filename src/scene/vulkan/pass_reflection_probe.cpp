@@ -56,12 +56,7 @@ bool PassReflectionProbe::init(SceneVkDevice& device, SceneVkAllocator& allocato
                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
     faceCameraLayout_ = camBuilder.build(dev);
 
-    SceneVkDescriptorLayoutBuilder lightBuilder;
-    lightBuilder.addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
-    lightBuilder.addBinding(1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
-    lightBuilder.addBinding(2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
-    lightBuilder.addBinding(3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
-    faceLightingLayout_ = lightBuilder.build(dev);
+    faceLightingLayout_ = SceneVkDescriptorLayoutBuilder::createLightingLayout(dev, device.shadowCompareSampler());
 
     return true;
 }
@@ -220,7 +215,7 @@ void PassReflectionProbe::renderFace(VkCommandBuffer cmd, ReflectionProbeNode* p
     VkDescriptorSet lightingSet = device.frameSet(faceLightingLayout_);
     SceneVkDescriptorWriter lightWriter;
     lightWriter.writeBuffer(0, lightInfo.buffer, lightInfo.range, lightInfo.offset);
-    lightWriter.writeImage(1, bridge.shadowTarget_.arrayView(), bridge.shadowTarget_.shadowSampler());
+    lightWriter.writeImage(1, bridge.shadowTarget_.arrayView(), VK_NULL_HANDLE);  // immutable compare sampler
     lightWriter.writeImage(2, dummyCubemap_.view, cubemapSampler_);
     lightWriter.writeImage(3, bridge.dummyShadeMap_.view, bridge.dummyShadeMap_.sampler);
     lightWriter.updateSet(device.device(), lightingSet);

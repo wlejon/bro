@@ -15,7 +15,7 @@ flush();
 
 const scene = canvas.getContext('scene');
 if (!scene) {
-    console.log('no scene; skipping translucent order test');
+    missingGpuContext('scene');
 } else {
     // Linear tonemap so channel dominance survives to the LDR readback.
     scene.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });

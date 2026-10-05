@@ -69,7 +69,7 @@ const emissive = `
 document.body.setAttribute('style', 'margin:0; background:#000');
 const probe = freshScene(32, 32);
 if (!probe.scene) {
-    console.log('scene context not available (no GPU) — skipping frame race test');
+    missingGpuContext('scene');
 } else {
     dropScene(probe);
 

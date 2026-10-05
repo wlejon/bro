@@ -11,7 +11,7 @@ flush();
 
 const gl = canvas.getContext('webgl2');
 if (!gl) {
-    console.log('no webgl2; skipping');
+    missingGpuContext('webgl2');
 } else {
     function eqArr(a, b, msg) {
         assert(a.length === b.length, msg + ' length');

@@ -67,9 +67,17 @@ public:
     VkPhysicalDevice physicalDevice() const { return context_.physicalDevice(); }
     bool isInitialized() const { return initialized_; }
 
+    /// The shadow-map comparison sampler (hardware PCF, LESS_OR_EQUAL, white
+    /// border), for the lighting layout's immutable shadow binding. A
+    /// comparison sampler cannot be written into a descriptor where
+    /// mutableComparisonSamplers is false (MoltenVK's portability subset), so
+    /// it lives in the set layout instead, which every device accepts.
+    VkSampler shadowCompareSampler() const { return shadowCompareSampler_; }
+
 private:
     render::VulkanContext& context_;
     bool initialized_ = false;
+    VkSampler shadowCompareSampler_ = VK_NULL_HANDLE;
     VkCommandBuffer uploadCmd_ = VK_NULL_HANDLE;
     uint64_t lastFrameTicket_ = 0;
     render::VulkanFrames::HookId frameEndHook_ = 0;

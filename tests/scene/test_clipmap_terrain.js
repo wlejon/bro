@@ -61,7 +61,7 @@ function makeLayer(w, h, originX, originZ, mpc, fn) {
 }
 
 if (!scene) {
-    console.log('no scene context (no GPU) — skipping clipmap terrain test');
+    missingGpuContext('scene');
 } else {
     scene.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
 
@@ -896,7 +896,7 @@ if (!scene) {
         // that measures a partial weight in one configuration can be past the
         // end of the ramp in another. That is not hypothetical: alt 8000 sat
         // mid-band until c8184413 narrowed the band, and alt 4000 measured a
-        // partial 3.36 on both a hardware driver and llvmpipe here while
+        // partial 3.36 on both a hardware driver and a software one here while
         // reading an exact 0 on CI. Chasing the number is the wrong move; the
         // section's claim does not depend on it.
         //

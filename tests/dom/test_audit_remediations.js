@@ -68,6 +68,8 @@ assert(typeof globalThis.Animation === 'function', 'globalThis.Animation exists'
         // Valid dimensions should succeed without error
         gl.invalidateSubFramebuffer(gl.FRAMEBUFFER, [gl.COLOR_ATTACHMENT0], 0, 0, 10, 10);
         assert(gl.getError() === gl.NO_ERROR, 'valid sub-framebuffer invalidation succeeds');
+    } else {
+        missingGpuContext('webgl2');
     }
 }
 
@@ -120,6 +122,8 @@ assert(typeof globalThis.Animation === 'function', 'globalThis.Animation exists'
                 assert(ok === true, 'world.load restores grid via loadGrid');
             }
         }
+    } else {
+        missingGpuContext('scene');
     }
     document.body.removeChild(canvas);
 }

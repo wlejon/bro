@@ -158,7 +158,7 @@ bool SceneVkCustomShader::validateCustomShader(SceneRenderer::CustomShaderTarget
         } else {
             vsSrc = spliceChunk(kVkMeshVertSrc, pre, "CUSTOM_VERTEX");
         }
-        auto spirv = SceneVkShaderCompiler::compileGlsl(vsSrc, VK_SHADER_STAGE_VERTEX_BIT, "main", {}, &errOut);
+        auto spirv = SceneVkShaderCompiler::compileGlsl(vsSrc, VK_SHADER_STAGE_VERTEX_BIT, &errOut);
         if (spirv.empty()) {
             return false;
         }
@@ -167,7 +167,7 @@ bool SceneVkCustomShader::validateCustomShader(SceneRenderer::CustomShaderTarget
         std::vector<std::string> samplers;
         std::string pre = preprocessUserGlsl(fragmentChunk, 4, samplers);
         std::string fsSrc = spliceChunk(kVkMeshFragSrc, pre, "CUSTOM_FRAGMENT");
-        auto spirv = SceneVkShaderCompiler::compileGlsl(fsSrc, VK_SHADER_STAGE_FRAGMENT_BIT, "main", {}, &errOut);
+        auto spirv = SceneVkShaderCompiler::compileGlsl(fsSrc, VK_SHADER_STAGE_FRAGMENT_BIT, &errOut);
         if (spirv.empty()) {
             return false;
         }
@@ -204,7 +204,7 @@ bool SceneVkCustomShader::compileCustomShaderModules(VkDevice device,
         }
     }
 
-    auto vsSpirv = SceneVkShaderCompiler::compileGlsl(vsSrc, VK_SHADER_STAGE_VERTEX_BIT, "main", {}, &errOut);
+    auto vsSpirv = SceneVkShaderCompiler::compileGlsl(vsSrc, VK_SHADER_STAGE_VERTEX_BIT, &errOut);
     if (vsSpirv.empty()) {
         return false;
     }
@@ -218,7 +218,7 @@ bool SceneVkCustomShader::compileCustomShaderModules(VkDevice device,
         fsSrc = kVkMeshFragSrc;
     }
 
-    auto fsSpirv = SceneVkShaderCompiler::compileGlsl(fsSrc, VK_SHADER_STAGE_FRAGMENT_BIT, "main", {}, &errOut);
+    auto fsSpirv = SceneVkShaderCompiler::compileGlsl(fsSrc, VK_SHADER_STAGE_FRAGMENT_BIT, &errOut);
     if (fsSpirv.empty()) {
         return false;
     }
@@ -244,7 +244,7 @@ bool SceneVkCustomShader::compileCustomShadowShaderModule(VkDevice device,
     std::string preVs = preprocessUserGlsl(vertexChunk, 4, samplers);
     std::string vsSrc = spliceChunk(isSkinned ? kVkShadowSkinnedVertSrc : kVkShadowVertSrc,
                                     preVs, "CUSTOM_VERTEX");
-    auto spirv = SceneVkShaderCompiler::compileGlsl(vsSrc, VK_SHADER_STAGE_VERTEX_BIT, "main", {}, &errOut);
+    auto spirv = SceneVkShaderCompiler::compileGlsl(vsSrc, VK_SHADER_STAGE_VERTEX_BIT, &errOut);
     if (spirv.empty()) {
         return false;
     }

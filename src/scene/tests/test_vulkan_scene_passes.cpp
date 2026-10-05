@@ -1,3 +1,12 @@
+// bro_vulkan_scene_passes_test: the built-in SPIR-V shaders, run-time GLSL
+// compilation, and the scene's render passes initialised and drawn.
+//
+// assert() is the check here, so it must survive a Release build: NDEBUG is
+// undefined before any header can pull in <cassert>. Run under
+// BRO_VK_VALIDATION=1 (tests/run_tests.sh does) and any validation error
+// fails the run too.
+#undef NDEBUG
+
 #include "scene/vulkan/scene_vk_device.h"
 #include "scene/vulkan/scene_vk_allocator.h"
 #include "scene/vulkan/scene_vk_pipeline.h"
@@ -10,6 +19,7 @@
 #include "scene/vulkan/pass_postfx.h"
 #include "scene/vulkan/pass_reflection_probe.h"
 #include "render/vulkan_context.h"
+#include "render/vulkan_debug.h"
 #include "util/log.h"
 
 #include <cassert>
@@ -74,7 +84,7 @@ static void makeReversedZPerspective(float fovYRad, float aspect, float zNear, f
 }
 
 int main() {
-    std::cout << "=== Running Vulkan Chunk 3: 3D Scene Passes & SPIR-V Pipeline Tests ===" << std::endl;
+    std::cout << "=== bro_vulkan_scene_passes_test: scene passes and shaders ===" << std::endl;
 
     render::VulkanContextConfig cfg;
     cfg.headless = true;
@@ -98,7 +108,7 @@ int main() {
     // -------------------------------------------------------------------------
     // Test 1: SceneVkShaderCompiler & SPIR-V Pipeline
     // -------------------------------------------------------------------------
-    std::cout << "[Test 1] SceneVkShaderCompiler (SPIR-V Bytecode & glslc Pipeline)... " << std::flush;
+    std::cout << "[Test 1] SceneVkShaderCompiler (built-in SPIR-V & run-time GLSL)... " << std::flush;
     {
         // 1. Verify built-in shader bytecode
         const auto& meshVs = SceneVkShaderCompiler::getBuiltinSpirv(BuiltinSceneShader::MeshVert);
@@ -113,8 +123,8 @@ int main() {
         assert(!envFs.empty() && envFs[0] == 0x07230203);
         assert(!tonemapFs.empty() && tonemapFs[0] == 0x07230203);
 
-        // 2. Test runtime GLSL compilation via glslc
-        if (SceneVkShaderCompiler::hasGlslc()) {
+        // 2. Runtime GLSL compilation (in-process glslang)
+        {
             std::string testGlsl =
                 "#version 450\n"
                 "layout(location = 0) in vec3 pos;\n"
@@ -324,7 +334,7 @@ int main() {
     VkDescriptorSet lightSet = device.frameSet(passMesh.lightingLayout());
     SceneVkDescriptorWriter lightWriter;
     lightWriter.writeBuffer(0, lightUbo.buffer, lightUbo.range, lightUbo.offset);
-    lightWriter.writeImage(1, shadowTarget.arrayView(), shadowTarget.shadowSampler());
+    lightWriter.writeImage(1, shadowTarget.arrayView(), VK_NULL_HANDLE);  // immutable compare sampler
     lightWriter.writeImage(2, passProbe.dummyCubemapView(), passProbe.activeCubemapSampler());
     lightWriter.writeImage(3, passMesh.dummyBlackView(), passMesh.defaultSampler());
     lightWriter.updateSet(device.device(), lightSet);
@@ -525,6 +535,10 @@ int main() {
 
     device.shutdown();
 
-    std::cout << "=== All Vulkan Chunk 3 Scene Pass Tests Passed Successfully! ===" << std::endl;
+    if (const uint32_t errors = render::vulkanValidationErrorCount()) {
+        std::cerr << "FAILED: " << errors << " Vulkan validation error(s)" << std::endl;
+        return 1;
+    }
+    std::cout << "=== bro_vulkan_scene_passes_test: all checks passed ===" << std::endl;
     return 0;
 }

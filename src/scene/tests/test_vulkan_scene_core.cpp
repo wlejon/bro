@@ -1,9 +1,19 @@
+// bro_vulkan_scene_test: the scene's Vulkan building blocks — device, allocator,
+// pipeline builder, descriptors, render targets — drawing and reading back.
+//
+// assert() is the check here, so it must survive a Release build: NDEBUG is
+// undefined before any header can pull in <cassert>. Run under
+// BRO_VK_VALIDATION=1 (tests/run_tests.sh does) and any validation error
+// fails the run too.
+#undef NDEBUG
+
 #include "scene/vulkan/scene_vk_device.h"
 #include "scene/vulkan/scene_vk_allocator.h"
 #include "scene/vulkan/scene_vk_pipeline.h"
 #include "scene/vulkan/scene_vk_descriptors.h"
 #include "scene/vulkan/scene_vk_target.h"
 #include "render/vulkan_context.h"
+#include "render/vulkan_debug.h"
 #include "util/log.h"
 
 #include <cassert>
@@ -124,7 +134,7 @@ struct TestVertex {
 };
 
 int main() {
-    std::cout << "=== Running Vulkan Chunk 2: Scene Core Architecture Tests ===" << std::endl;
+    std::cout << "=== bro_vulkan_scene_test: scene Vulkan core ===" << std::endl;
 
     // Initialize Headless VulkanContext
     render::VulkanContextConfig cfg;
@@ -414,7 +424,7 @@ int main() {
     std::cout << "PASSED (Triangle & background pixels verified)" << std::endl;
 
     // 6. Test SceneVkShadowCascadeTarget
-    std::cout << "[Test 6] SceneVkShadowCascadeTarget (Layered Array & Comparison Sampler)... " << std::flush;
+    std::cout << "[Test 6] SceneVkShadowCascadeTarget (Layered Array; comparison sampler on the device)... " << std::flush;
     SceneVkShadowCascadeTarget shadowTarget;
     bool shadowOk = shadowTarget.init(allocator, 256, 4, VK_FORMAT_D32_SFLOAT);
     assert(shadowOk);
@@ -422,7 +432,7 @@ int main() {
     assert(shadowTarget.cascadeCount() == 4);
     assert(shadowTarget.resolution() == 256);
     assert(shadowTarget.arrayView() != VK_NULL_HANDLE);
-    assert(shadowTarget.shadowSampler() != VK_NULL_HANDLE);
+    assert(device.shadowCompareSampler() != VK_NULL_HANDLE);
 
     // Test cascade rendering recording
     VkCommandBuffer shadowCmd = device.beginFrame();
@@ -451,6 +461,10 @@ int main() {
     allocator.destroyBuffer(indexBuffer);
     device.shutdown();
 
-    std::cout << "=== All Vulkan Chunk 2 Scene Core Tests Passed Successfully! ===" << std::endl;
+    if (const uint32_t errors = render::vulkanValidationErrorCount()) {
+        std::cerr << "FAILED: " << errors << " Vulkan validation error(s)" << std::endl;
+        return 1;
+    }
+    std::cout << "=== bro_vulkan_scene_test: all checks passed ===" << std::endl;
     return 0;
 }

@@ -77,7 +77,7 @@ const emitFrag = (r, g, b) => `
 
 const probe = makeScene(64);
 if (!probe.scene) {
-    console.log('scene context not available (no GPU) — skipping custom shader variants test');
+    missingGpuContext('scene');
 } else {
     dropScene(probe);
 

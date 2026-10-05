@@ -2,52 +2,50 @@ set(EMBED_SCRIPT "${bro_SOURCE_DIR}/cmake/embed_js.cmake")
 
 
 ## ── Vulkan SPIR-V shader compilation ──────────────────────────────────────────
-find_program(GLSLC_EXECUTABLE glslc REQUIRED)
-
+# The built-in scene shaders, compiled at build time by the same in-process
+# glslang the engine uses at run time (bro_spirv_header, cmake/glslang.cmake).
 set(VK_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated_vk")
 file(MAKE_DIRECTORY "${VK_GEN_DIR}")
 
-function(compile_vk_shader_header SHADER_FILE STAGE)
-    set(INPUT "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/${SHADER_FILE}")
-    set(OUTPUT "${VK_GEN_DIR}/${SHADER_FILE}.spv.h")
-    add_custom_command(
-        OUTPUT "${OUTPUT}"
-        COMMAND ${GLSLC_EXECUTABLE} -fshader-stage=${STAGE} -mfmt=c "${INPUT}" -o "${OUTPUT}"
-        DEPENDS "${INPUT}"
-        COMMENT "Compiling SPIR-V vulkan/shaders/${SHADER_FILE} -> ${SHADER_FILE}.spv.h"
+set(VK_GENERATED_HEADERS "")
+foreach(_shader
+        mesh.vert
+        mesh_instanced.vert
+        mesh_skinned.vert
+        mesh.frag
+        shadow.vert
+        shadow_instanced.vert
+        shadow_skinned.vert
+        shadow.frag
+        skybox.vert
+        environment.frag
+        postfx.vert
+        tonemap.frag
+        bloom.frag
+        fxaa.frag
+        billboard.vert
+        billboard.frag
+        particles.vert
+        particles.frag
+        decal.vert
+        decal.frag
+        blur.frag
+        color_lut.frag
+        ssao.frag
+        ssr.frag
+        dof.frag
+        apply_ao.frag
+        gaussian_splat.vert
+        gaussian_splat.frag
     )
-    list(APPEND VK_GENERATED_HEADERS "${OUTPUT}")
-    set(VK_GENERATED_HEADERS "${VK_GENERATED_HEADERS}" PARENT_SCOPE)
-endfunction()
-
-compile_vk_shader_header(mesh.vert vertex)
-compile_vk_shader_header(mesh_instanced.vert vertex)
-compile_vk_shader_header(mesh_skinned.vert vertex)
-compile_vk_shader_header(mesh.frag fragment)
-compile_vk_shader_header(shadow.vert vertex)
-compile_vk_shader_header(shadow_instanced.vert vertex)
-compile_vk_shader_header(shadow_skinned.vert vertex)
-compile_vk_shader_header(shadow.frag fragment)
-compile_vk_shader_header(skybox.vert vertex)
-compile_vk_shader_header(environment.frag fragment)
-compile_vk_shader_header(postfx.vert vertex)
-compile_vk_shader_header(tonemap.frag fragment)
-compile_vk_shader_header(bloom.frag fragment)
-compile_vk_shader_header(fxaa.frag fragment)
-compile_vk_shader_header(billboard.vert vertex)
-compile_vk_shader_header(billboard.frag fragment)
-compile_vk_shader_header(particles.vert vertex)
-compile_vk_shader_header(particles.frag fragment)
-compile_vk_shader_header(decal.vert vertex)
-compile_vk_shader_header(decal.frag fragment)
-compile_vk_shader_header(blur.frag fragment)
-compile_vk_shader_header(color_lut.frag fragment)
-compile_vk_shader_header(ssao.frag fragment)
-compile_vk_shader_header(ssr.frag fragment)
-compile_vk_shader_header(dof.frag fragment)
-compile_vk_shader_header(apply_ao.frag fragment)
-compile_vk_shader_header(gaussian_splat.vert vertex)
-compile_vk_shader_header(gaussian_splat.frag fragment)
+    if(_shader MATCHES "\\.vert$")
+        set(_stage vert)
+    else()
+        set(_stage frag)
+    endif()
+    bro_spirv_header(VK_GENERATED_HEADERS "${VK_GEN_DIR}"
+                     "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/${_shader}" ${_stage})
+endforeach()
 
 function(embed_vk_shader SHADER_FILE VAR_NAME)
     set(INPUT  "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/${SHADER_FILE}")
@@ -158,9 +156,6 @@ target_include_directories(bro_scene PRIVATE ${VK_GEN_DIR})
 # on (see the _bro_require chain in the top-level CMakeLists), so bro_physics +
 # brogameagent are always present here.
 target_link_libraries(bro_scene PUBLIC bro_canvas bro_physics bro_util broimage::broimage bromesh FastNoise brogameagent bro_dom bro_render bro_layout bro_tile Vulkan::Vulkan)
-if(BRO_HAS_SHADERC)
-    target_link_libraries(bro_scene PUBLIC ${BRO_SHADERC_TARGET})
-endif()
 target_compile_features(bro_scene PUBLIC cxx_std_20)
 bro_apply_feature_defs(bro_scene)
 

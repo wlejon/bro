@@ -56,7 +56,7 @@ assert(typeof bro === 'object', 'bro global exists');
 assert(bro.vision !== undefined && bro.vision !== null, 'bro.vision namespace exists');
 
 if (bro.vision.available === false || typeof __host.visionProbe !== 'function') {
-    console.log('bro.vision is compiled out; nothing to rasterize');
+    skipTest('bro.vision is compiled out; nothing to rasterize');
 } else {
     assert(typeof ImageBitmap === 'function', 'ImageBitmap constructor is reachable');
     const probe = __host.visionProbe;

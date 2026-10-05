@@ -252,7 +252,7 @@ VkPipeline WebGLVkPipelineCache::createPipeline(const PipelineKey& key, VkPipeli
     pipelineInfo.subpass = 0;
 
     VkPipeline pipeline = VK_NULL_HANDLE;
-    if (vkCreateGraphicsPipelines(dev, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline) != VK_SUCCESS) {
+    if (vkCreateGraphicsPipelines(dev, context_.pipelineCache(), 1, &pipelineInfo, nullptr, &pipeline) != VK_SUCCESS) {
         LOG_ERROR("WebGLVkPipelineCache: Failed to create graphics pipeline");
         return VK_NULL_HANDLE;
     }

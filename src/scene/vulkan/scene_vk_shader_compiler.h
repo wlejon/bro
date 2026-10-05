@@ -4,7 +4,6 @@
 #include <cstdint>
 #include <string>
 #include <vector>
-#include <unordered_map>
 
 namespace bro::scene::vk {
 
@@ -40,21 +39,19 @@ enum class BuiltinSceneShader {
     GaussianSplatFrag
 };
 
-/// SPIR-V shader compilation manager supporting both runtime glslc compilation
-/// with caching and access to build-time compiled built-in scene shaders.
+/// The scene's shader modules: the built-in shaders (compiled at build time)
+/// and run-time GLSL (clipmap terrain, custom shaders) through the engine's
+/// one in-process compiler, render/glsl_compiler.h.
 class SceneVkShaderCompiler {
 public:
     SceneVkShaderCompiler() = default;
     ~SceneVkShaderCompiler() = default;
 
-    /// Compile a GLSL source string into SPIR-V words using glslc.
-    /// Returns an empty vector if compilation fails.
-    static std::vector<uint32_t> compileGlsl(
-        const std::string& glslSource,
-        VkShaderStageFlagBits stage,
-        const std::string& entryPoint = "main",
-        const std::vector<std::string>& defines = {},
-        std::string* errOut = nullptr);
+    /// Compile a Vulkan GLSL source string into SPIR-V words. Returns an
+    /// empty vector (and the compiler's diagnostics in *errOut) on failure.
+    static std::vector<uint32_t> compileGlsl(const std::string& glslSource,
+                                             VkShaderStageFlagBits stage,
+                                             std::string* errOut = nullptr);
 
     /// Retrieve the precompiled SPIR-V bytecode for a built-in shader.
     static const std::vector<uint32_t>& getBuiltinSpirv(BuiltinSceneShader shader);
@@ -68,12 +65,6 @@ public:
 
     /// Destroy a previously created VkShaderModule.
     static void destroyModule(VkDevice device, VkShaderModule module);
-
-    /// Check if glslc is available on the system.
-    static bool hasGlslc();
-
-private:
-    static std::unordered_map<std::string, std::vector<uint32_t>> s_compileCache;
 };
 
 } // namespace bro::scene::vk

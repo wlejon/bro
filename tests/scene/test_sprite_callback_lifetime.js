@@ -12,7 +12,7 @@ flush();
 
 const scene = canvas.getContext('scene');
 if (!scene) {
-    console.log('scene context not available (no GPU)');
+    missingGpuContext('scene');
 } else {
     const mkSprite = () => scene.createSprite({
         sheet: { frameWidth: 8, frameHeight: 8, columns: 2, rows: 1 },

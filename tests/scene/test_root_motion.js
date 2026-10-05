@@ -33,7 +33,7 @@ flush();
 
 const scene = canvas.getContext('scene');
 if (!scene) {
-    console.log('scene context not available (no GPU) — skipping root motion test');
+    missingGpuContext('scene');
 } else {
     const positions = new Float32Array([-0.2, 0, 0,  0.2, 0, 0,
                                         -0.2, 2, 0,  0.2, 2, 0]);

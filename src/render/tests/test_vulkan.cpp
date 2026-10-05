@@ -1,8 +1,10 @@
 // bro_vulkan_test: the shared GPU frame/submission core (VulkanQueue,
-// VulkanFrames), the presenter's offscreen composite + readback, and — where a
-// display is available — the swapchain following its window. Run with
+// VulkanFrames), the presenter's offscreen composite + readback, the in-process
+// GLSL compiler, the persisted pipeline cache, and — where a display is
+// available — the swapchain following its window. Run with
 // BRO_VK_VALIDATION=1 to also fail on any validation error.
 
+#include "render/glsl_compiler.h"
 #include "render/vulkan_context.h"
 #include "render/vulkan_debug.h"
 #include "render/vulkan_presenter.h"
@@ -20,7 +22,9 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <iostream>
+#include <string>
 #include <vector>
 
 using namespace bro;
@@ -205,6 +209,25 @@ void testPresenterOffscreen(render::VulkanContext& ctx) {
 
 // A real window: the swapchain follows its size, minimizing presents nothing,
 // and the vsync preference switches the present mode.
+void testGlslCompiler() {
+    std::cout << "[glsl] in-process GLSL -> SPIR-V, diagnostics on failure" << std::endl;
+    const char* good =
+        "#version 450\n"
+        "layout(location = 0) out vec4 outColor;\n"
+        "void main() { outColor = vec4(1.0, 0.0, 0.0, 1.0); }\n";
+    std::string log;
+    auto spirv = render::compileGlslToSpirv(good, render::ShaderStage::Fragment, &log);
+    CHECK(spirv.size() > 5 && spirv[0] == 0x07230203u);
+    // Memoised: the same source answers the same words.
+    CHECK(render::compileGlslToSpirv(good, render::ShaderStage::Fragment) == spirv);
+
+    log.clear();
+    auto bad = render::compileGlslToSpirv("#version 450\nvoid main() { undeclared = 1; }\n",
+                                          render::ShaderStage::Fragment, &log);
+    CHECK(bad.empty());
+    CHECK(log.find("undeclared") != std::string::npos);
+}
+
 void testSwapchain() {
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         std::cout << "[swapchain] SKIPPED (no video: " << SDL_GetError() << ")" << std::endl;
@@ -263,6 +286,20 @@ void testSwapchain() {
 } // namespace
 
 int main() {
+    // The pipeline cache goes to a directory of this run's own, so the first
+    // context starts cold and the second must find what the first wrote.
+    namespace fs = std::filesystem;
+    const fs::path cacheDir = fs::temp_directory_path() / "bro_vulkan_test_pipeline_cache";
+    std::error_code ec;
+    fs::remove_all(cacheDir, ec);
+#ifdef _WIN32
+    _putenv_s("BRO_PIPELINE_CACHE_DIR", cacheDir.string().c_str());
+#else
+    setenv("BRO_PIPELINE_CACHE_DIR", cacheDir.string().c_str(), 1);
+#endif
+
+    testGlslCompiler();
+    std::string cacheFile;
     {
         render::VulkanContextConfig cfg;
         cfg.headless = true;
@@ -272,9 +309,22 @@ int main() {
             return 1;
         }
         std::cout << "Device: " << ctx.deviceProperties().deviceName << std::endl;
+        CHECK(ctx.persistentPipelineCache().loadedBytes() == 0);
+        cacheFile = ctx.persistentPipelineCache().path();
         testQueueAndFrames(ctx);
-        testPresenterOffscreen(ctx);
+        testPresenterOffscreen(ctx);  // builds the presenter's blend pipeline
     }
+    {
+        std::cout << "[pipeline cache] written at teardown, seeded on the next init" << std::endl;
+        CHECK(!cacheFile.empty() && fs::exists(cacheFile));
+        render::VulkanContextConfig cfg;
+        cfg.headless = true;
+        render::VulkanContext ctx(cfg);
+        CHECK(ctx.init());
+        CHECK(ctx.persistentPipelineCache().path() == cacheFile);
+        CHECK(ctx.persistentPipelineCache().loadedBytes() > 0);
+    }
+    fs::remove_all(cacheDir, ec);
     testSwapchain();
     SDL_Quit();
 

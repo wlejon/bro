@@ -70,6 +70,8 @@ if (typeof Physics === 'object' && Physics.available !== false) {
         flush();
         advanceTime(16);
         flush();
+    } else {
+        missingGpuContext('scene');
     }
 }
 

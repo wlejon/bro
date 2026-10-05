@@ -12,7 +12,7 @@ const cp = require('child_process');
 const isWin = process.platform === 'win32';
 
 if (!isWin && process.platform !== 'linux') {
-    console.log('child lifetime: no parent-death hook on ' + process.platform + '; skipping');
+    skipTest('child lifetime: no parent-death hook on ' + process.platform);
 } else {
     assert(typeof process.execPath === 'string' && process.execPath !== 'bro',
            'process.execPath names the executable: ' + process.execPath);

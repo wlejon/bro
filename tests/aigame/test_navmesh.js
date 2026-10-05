@@ -11,7 +11,7 @@ const G = bro.ai.game;
 if (G.navMeshAvailable !== true) {
     // Soft-disabled build — recastnavigation wasn't installed, so the
     // binding stubs the navmesh surface out. Nothing to test.
-    console.log('test_navmesh: navmesh not compiled in, skipping');
+    skipTest('test_navmesh: navmesh not compiled in');
 } else {
     runNavMeshTests();
 }

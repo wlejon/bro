@@ -16,7 +16,25 @@ else()
     target_compile_definitions(bro_bidi PRIVATE BRO_WITH_ICU_BIDI=0)
 endif()
 
-# --- Render library (OpenGL and Vulkan backends) ---
+# --- GLSL -> SPIR-V ---
+#
+# The in-process glslang wrapper (glsl_compiler.h) on its own, so the build
+# tool that compiles bro's built-in shaders links nothing but glslang.
+add_library(bro_glsl STATIC glsl_compiler.cpp)
+target_include_directories(bro_glsl PUBLIC ${bro_SOURCE_DIR}/src)
+target_link_libraries(bro_glsl PRIVATE glslang::glslang glslang::glslang-default-resource-limits)
+target_compile_features(bro_glsl PUBLIC cxx_std_20)
+
+add_executable(bro_spirv_embed tools/spirv_embed.cpp)
+target_link_libraries(bro_spirv_embed PRIVATE bro_glsl)
+
+set(RENDER_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated_spv")
+file(MAKE_DIRECTORY "${RENDER_GEN_DIR}")
+set(RENDER_SPV_HEADERS "")
+bro_spirv_header(RENDER_SPV_HEADERS "${RENDER_GEN_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/present_quad.vert" vert)
+bro_spirv_header(RENDER_SPV_HEADERS "${RENDER_GEN_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/present_overlay.frag" frag)
+
+# --- Render library (Vulkan) ---
 find_package(Vulkan REQUIRED)
 
 add_library(bro_render STATIC
@@ -28,6 +46,7 @@ add_library(bro_render STATIC
     vulkan_debug.cpp
     vulkan_frames.cpp
     vulkan_memory_pool.cpp
+    vulkan_pipeline_cache.cpp
     vulkan_queue.cpp
     vulkan_swapchain.cpp
     vulkan_presenter.cpp
@@ -43,9 +62,11 @@ add_library(bro_render STATIC
     recording_renderer.cpp
     command_replayer.cpp
     image_cache.cpp
+    ${RENDER_SPV_HEADERS}
 )
 target_include_directories(bro_render PUBLIC ${bro_SOURCE_DIR}/src)
-target_link_libraries(bro_render PUBLIC bro_platform skia bro_svg bro_util bro_bidi broimage::broimage Vulkan::Vulkan)
+target_include_directories(bro_render PRIVATE ${RENDER_GEN_DIR})
+target_link_libraries(bro_render PUBLIC bro_platform skia bro_svg bro_util bro_bidi bro_glsl broimage::broimage Vulkan::Vulkan)
 
 # WebP decoding. Its own small library rather than a part of bro_render,
 # because bro has two independent image entry points that must agree — the

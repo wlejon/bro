@@ -12,7 +12,7 @@ flush();
 
 const gl = canvas.getContext('webgl2');
 if (!gl) {
-    console.log('no webgl2; skipping');
+    missingGpuContext('webgl2');
 } else {
     function makeProgram(vsSrc, fsSrc) {
         const vs = gl.createShader(gl.VERTEX_SHADER);

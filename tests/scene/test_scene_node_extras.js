@@ -10,7 +10,7 @@ flush();
 
 const scene = canvas.getContext('scene');
 if (!scene) {
-    console.log('scene context not available (no GPU); skipping');
+    missingGpuContext('scene');
 } else {
     const near = (a, b, eps) => Math.abs(a - b) < (eps || 1e-3);
 

@@ -45,18 +45,26 @@ struct alignas(16) SceneLightingUniforms {
 /// Utility for constructing VkDescriptorSetLayouts with arbitrary bindings.
 class SceneVkDescriptorLayoutBuilder {
 public:
-    void addBinding(uint32_t binding, VkDescriptorType type, uint32_t count, VkShaderStageFlags stageFlags);
+    /// `immutableSampler` (count 1 only) bakes the sampler into the layout;
+    /// writes to that binding then supply only the image view.
+    void addBinding(uint32_t binding, VkDescriptorType type, uint32_t count, VkShaderStageFlags stageFlags,
+                    VkSampler immutableSampler = VK_NULL_HANDLE);
     void clear();
 
     VkDescriptorSetLayout build(VkDevice device);
 
     // Standard preset layout builders for the 3D scene engine
     static VkDescriptorSetLayout createCameraLayout(VkDevice device);
-    static VkDescriptorSetLayout createLightingLayout(VkDevice device);
     static VkDescriptorSetLayout createMaterialLayout(VkDevice device, uint32_t samplerCount = 4);
+
+    /// Set 1 of every lit pipeline: lighting UBO, shadow cascade array (with
+    /// `shadowCompareSampler` immutable — SceneVkDevice::shadowCompareSampler),
+    /// reflection probe cubemap, tile shade map.
+    static VkDescriptorSetLayout createLightingLayout(VkDevice device, VkSampler shadowCompareSampler);
 
 private:
     std::vector<VkDescriptorSetLayoutBinding> bindings_;
+    std::vector<VkSampler> immutableSamplers_;  // parallel to bindings_
 };
 
 /// Helper for recording and dispatching VkWriteDescriptorSet updates.

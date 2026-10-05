@@ -4,7 +4,7 @@
 // came back head-down and side-on. Structure only, no image grading: a
 // subject red on top, green bottom-left and blue bottom-right must come back
 // with red above the other two and green to the left (-x) of blue, as the
-// image shows it to a camera on +Z. Skips (passes with a message) without a
+// image shows it to a camera on +Z. Skips (skipTest, reported SKIP) without a
 // GPU or the checkpoints (TRIPOSPLAT_WEIGHTS_ROOT, else the ../brovisionml
 // and ../brodiffusion sibling weights).
 //
@@ -21,11 +21,11 @@ const W = {
 };
 
 if (!bro.triposplat || bro.triposplat.available === false) {
-    console.log('bro.triposplat is the stub; skipping');
+    skipTest('bro.triposplat is the stub');
 } else if (!bro.gpu || !bro.gpu.available) {
-    console.log('no GPU backend; skipping');
+    skipTest('no GPU backend');
 } else if (!Object.values(W).every((p) => fs.existsSync(p))) {
-    console.log('triposplat weights not found under ' + ROOT + '; skipping');
+    skipTest('triposplat weights not found under ' + ROOT);
 } else {
     // A 512x512 block on a transparent background.
     const S = 512, data = new Uint8Array(S * S * 4);

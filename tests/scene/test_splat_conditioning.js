@@ -15,8 +15,10 @@ document.body.appendChild(canvas);
 flush();
 
 const scene = canvas.getContext('scene');
-if (!scene || typeof scene.createGaussianSplat !== 'function') {
-    console.log('no scene / createGaussianSplat; skipping splat conditioning test');
+if (!scene) {
+    missingGpuContext('scene');
+} else if (typeof scene.createGaussianSplat !== 'function') {
+    assert(false, 'scene.createGaussianSplat is missing');
 } else {
     scene.setCamera({
         fov: 60, near: 0.1, far: 100,

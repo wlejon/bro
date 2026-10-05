@@ -28,7 +28,7 @@ const eulerToQuat = (rx, ry, rz) => {
 
 const scene = canvas.getContext('scene');
 if (!scene) {
-    console.log('scene context not available (no GPU)');
+    missingGpuContext('scene');
 } else {
     // --- yaw past 90 deg then back ------------------------------------
     const n = scene.createMesh({ mesh: 'box' });

@@ -13,7 +13,7 @@ flush();
 
 const gl = canvas.getContext('webgl2');
 if (!gl) {
-    console.log('no webgl2; skipping');
+    missingGpuContext('webgl2');
 } else {
     (async function() {
     function makeProgram(vsSrc, fsSrc) {

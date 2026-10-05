@@ -73,6 +73,8 @@ try {
                'texImage2D(<img> with a relative src) produced a complete texture ' +
                '(incomplete means the upload never happened)');
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    } else {
+        missingGpuContext('webgl2');
     }
 
     // A src that really is missing must still fail, rather than silently

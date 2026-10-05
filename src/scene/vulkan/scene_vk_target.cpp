@@ -363,27 +363,6 @@ bool SceneVkShadowCascadeTarget::init(SceneVkAllocator& allocator, uint32_t reso
         }
     }
 
-    // 4. Comparison shadow sampler with hardware PCF
-    VkSamplerCreateInfo samplerInfo{};
-    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    samplerInfo.magFilter = VK_FILTER_LINEAR;
-    samplerInfo.minFilter = VK_FILTER_LINEAR;
-    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
-    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
-    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
-    samplerInfo.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
-    samplerInfo.compareEnable = VK_TRUE;
-    samplerInfo.compareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
-    samplerInfo.minLod = 0.0f;
-    samplerInfo.maxLod = 1.0f;
-
-    if (vkCreateSampler(dev, &samplerInfo, nullptr, &shadowSampler_) != VK_SUCCESS) {
-        LOG_ERROR("SceneVkShadowCascadeTarget: Failed to create shadow comparison sampler");
-        cleanup(allocator);
-        return false;
-    }
-
     shadowImage_.format = format_;
     shadowImage_.width = resolution_;
     shadowImage_.height = resolution_;
@@ -394,15 +373,13 @@ bool SceneVkShadowCascadeTarget::init(SceneVkAllocator& allocator, uint32_t reso
 
 void SceneVkShadowCascadeTarget::cleanup(SceneVkAllocator& allocator) {
     VkDevice dev = allocator.device().device();
-    if (shadowSampler_ != VK_NULL_HANDLE || !cascadeViews_.empty()) {
-        allocator.device().defer([dev, sampler = shadowSampler_, views = cascadeViews_] {
-            if (sampler != VK_NULL_HANDLE) vkDestroySampler(dev, sampler, nullptr);
+    if (!cascadeViews_.empty()) {
+        allocator.device().defer([dev, views = cascadeViews_] {
             for (VkImageView view : views) {
                 if (view != VK_NULL_HANDLE) vkDestroyImageView(dev, view, nullptr);
             }
         });
     }
-    shadowSampler_ = VK_NULL_HANDLE;
     cascadeViews_.clear();
 
     if (shadowImage_.isValid()) {

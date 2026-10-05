@@ -126,7 +126,7 @@ public:
                                     bool translucent);
 
 private:
-    bool createDescriptorLayouts(VkDevice device);
+    bool createDescriptorLayouts(VkDevice device, VkSampler shadowCompareSampler);
     bool createPipelines(VkDevice device, const Config& config);
     void destroyPipelines(VkDevice device);
     bool createDefaultTextures(SceneVkDevice& device, SceneVkAllocator& allocator);

@@ -13,7 +13,7 @@ flush();
 
 const scene = canvas.getContext('scene');
 if (!scene) {
-    console.log('no scene; skipping html node click-through test');
+    missingGpuContext('scene');
 } else {
     scene.setCamera({ fov: 60, near: 0.1, far: 100, position: [0, 0, 5], target: [0, 0, 0], up: [0, 1, 0] });
     let downs = 0;

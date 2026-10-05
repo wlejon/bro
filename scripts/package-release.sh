@@ -160,6 +160,58 @@ if [[ "$PLATFORM" != "win" ]]; then
     done
 fi
 
+# --- Vulkan runtime (macOS) -------------------------------------------------
+# Linux and Windows get the Vulkan loader with the GPU driver. macOS has
+# neither a loader nor a Vulkan driver, so the package carries both: the loader
+# bro was linked against (libvulkan.1.dylib, beside the executables) and
+# MoltenVK as its driver (vulkan/icd.d/, the manifest naming the dylib beside
+# it). VulkanContext adds that manifest to the loader's search
+# (VK_ADD_DRIVER_FILES) unless the environment names drivers itself. The
+# executables' reference to the build machine's loader is rewritten to the
+# copy beside them and re-signed (arm64 refuses to run a binary whose ad-hoc
+# signature install_name_tool invalidated). MoltenVK comes from
+# $MOLTENVK_DYLIB, else the Vulkan SDK ($VULKAN_SDK), else Homebrew.
+if [[ "$PLATFORM" == "macos" ]]; then
+    VK_REF="$(otool -L "$OUT_DIR/bro" | awk '/libvulkan[.0-9]*dylib/ {print $1; exit}')"
+    if [[ -z "$VK_REF" ]]; then
+        echo "error: $OUT_DIR/bro is not linked against a Vulkan loader" >&2
+        exit 1
+    fi
+    MVK="${MOLTENVK_DYLIB:-}"
+    for cand in "${VULKAN_SDK:-/nonexistent}/lib/libMoltenVK.dylib" \
+                "$(brew --prefix molten-vk 2>/dev/null || echo /nonexistent)/lib/libMoltenVK.dylib"; do
+        [[ -z "$MVK" && -f "$cand" ]] && MVK="$cand"
+    done
+    if [[ -z "$MVK" || ! -f "$MVK" ]]; then
+        echo "error: libMoltenVK.dylib not found (brew install molten-vk, or set MOLTENVK_DYLIB)" >&2
+        exit 1
+    fi
+    cp -L "$VK_REF" "$OUT_DIR/libvulkan.1.dylib"
+    chmod u+w "$OUT_DIR/libvulkan.1.dylib"
+    install_name_tool -id "@executable_path/libvulkan.1.dylib" "$OUT_DIR/libvulkan.1.dylib" 2>/dev/null
+    codesign --force --sign - "$OUT_DIR/libvulkan.1.dylib"
+    mkdir -p "$OUT_DIR/vulkan/icd.d"
+    cp -L "$MVK" "$OUT_DIR/vulkan/icd.d/libMoltenVK.dylib"
+    chmod u+w "$OUT_DIR/vulkan/icd.d/libMoltenVK.dylib"
+    install_name_tool -id "@loader_path/libMoltenVK.dylib" "$OUT_DIR/vulkan/icd.d/libMoltenVK.dylib" 2>/dev/null
+    codesign --force --sign - "$OUT_DIR/vulkan/icd.d/libMoltenVK.dylib"
+    cat > "$OUT_DIR/vulkan/icd.d/MoltenVK_icd.json" <<ICD
+{
+    "file_format_version": "1.0.0",
+    "ICD": {
+        "library_path": "./libMoltenVK.dylib",
+        "api_version": "1.3.0",
+        "is_portability_driver": true
+    }
+}
+ICD
+    for t in bro bro-headless bro-server; do
+        [[ -f "$OUT_DIR/$t" ]] || continue
+        install_name_tool -change "$VK_REF" "@executable_path/libvulkan.1.dylib" "$OUT_DIR/$t" 2>/dev/null
+        codesign --force --sign - "$OUT_DIR/$t"
+    done
+fi
+
 # --- README + LICENSE -----------------------------------------------------
 # Double-clicking bro with no app argument falls through to the built-in
 # project manager at system/projects/, so no root bro.json is needed.
@@ -342,7 +394,7 @@ if [[ "$PLATFORM" == "macos" ]]; then
         [[ $keep -eq 1 ]] && continue
         mv "$item" "$APP/Contents/MacOS/"
     done
-    # bronze's shared runtime is the one library that has to exist on BOTH
+    # bronze's shared runtime is a library that has to exist on BOTH
     # sides of the bundle wall: bro loads it from inside Contents/MacOS, and
     # bro-headless — which deliberately stays outside so it can be run from a
     # terminal — resolves it via @loader_path, i.e. beside itself. The move
@@ -350,6 +402,10 @@ if [[ "$PLATFORM" == "macos" ]]; then
     if [[ -f "$APP/Contents/MacOS/libbronze_runtime_shared.dylib" ]]; then
         cp -a "$APP/Contents/MacOS/libbronze_runtime_shared.dylib" "$OUT_DIR/"
     fi
+    # The Vulkan loader and MoltenVK likewise: bro-headless and bro-server
+    # resolve both beside themselves.
+    cp -a "$APP/Contents/MacOS/libvulkan.1.dylib" "$OUT_DIR/"
+    cp -a "$APP/Contents/MacOS/vulkan" "$OUT_DIR/"
     cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

@@ -20,7 +20,7 @@ public:
     static std::vector<std::pair<std::string, uint32_t>> parseUniformOffsets(const std::string& chunk,
                                                                             uint32_t& outTotalSize);
 
-    /// Validate GLSL syntax and hooks by attempting compilation through glslc.
+    /// Validate GLSL syntax and hooks by compiling it.
     static bool validateCustomShader(SceneRenderer::CustomShaderTarget target,
                                      const std::string& vertexChunk,
                                      const std::string& fragmentChunk,

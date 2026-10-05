@@ -268,7 +268,7 @@ void SceneVkBridge::writeFrameSets(const SceneCameraUniforms& cam, const SceneLi
     lightingSet_ = device_.frameSet(passMesh_.lightingLayout());
     SceneVkDescriptorWriter lightWriter;
     lightWriter.writeBuffer(0, lightInfo.buffer, lightInfo.range, lightInfo.offset);
-    lightWriter.writeImage(1, shadowTarget_.arrayView(), shadowTarget_.shadowSampler());
+    lightWriter.writeImage(1, shadowTarget_.arrayView(), VK_NULL_HANDLE);  // immutable compare sampler
     lightWriter.writeImage(2, passReflectionProbe_.hasActiveProbe() ? passReflectionProbe_.activeCubemapView()
                                                                     : passReflectionProbe_.dummyCubemapView(),
                            passReflectionProbe_.activeCubemapSampler());

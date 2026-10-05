@@ -54,11 +54,11 @@ function sameBits(a, b) {
 assert(bro.ear && typeof bro.ear.measure === 'function', 'bro.ear.measure is installed');
 
 if (typeof bro.ear.loadClap !== 'function') {
-    console.log('SKIP: bro.ear.loadClap is absent (built without BRO_WITH_SOUNDML)');
+    skipTest('bro.ear.loadClap is absent (built without BRO_WITH_SOUNDML)');
 } else if (!fs.existsSync(CLAP_DIR + '/model.safetensors')) {
-    console.log('SKIP: CLAP weights not found at ' + CLAP_DIR);
+    skipTest('CLAP weights not found at ' + CLAP_DIR);
 } else if (!bro.gpu.available) {
-    console.log('SKIP: no GPU backend (' + bro.gpu.backend + ')');
+    skipTest('no GPU backend (' + bro.gpu.backend + ')');
 } else {
     assert(typeof bro.ear.compare === 'function' && typeof bro.ear.spectrogram === 'function',
            'loadClap sits beside compare / spectrogram on one bro.ear');

@@ -8,7 +8,7 @@
 // The scene context is compile-gated (BRO_WITH_3D); the minimal profile
 // leaves bro.scene as the unavailable stub and getContext('scene') null.
 if (bro.scene && bro.scene.available === false) {
-    console.log('skip: scene context not compiled in (BRO_WITH_3D off)');
+    skipTest('scene context not compiled in (BRO_WITH_3D off)');
 } else {
     runSceneAudioEmitter();
 }

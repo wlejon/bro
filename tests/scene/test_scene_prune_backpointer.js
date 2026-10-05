@@ -20,7 +20,7 @@ flush();
 
 const scene = canvas.getContext('scene');
 if (!scene) {
-    console.log('scene context not available (no GPU)');
+    missingGpuContext('scene');
 } else {
     scene.createMesh({ mesh: 'box', color: 'red' });
     flush();

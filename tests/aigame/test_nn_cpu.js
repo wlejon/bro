@@ -2,7 +2,7 @@
 
 const nn = bro.ai.game.nn;
 if (!nn || nn.available === false) {
-    console.log('test_nn_cpu: gameai-nn not built (app profile), skipping');
+    skipTest('test_nn_cpu: gameai-nn not built (app profile)');
 } else {
 
 function allFinite(arr, name) {

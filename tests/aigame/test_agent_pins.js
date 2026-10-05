@@ -10,7 +10,7 @@
 
 const G = bro.ai.game;
 if (G.navMeshAvailable !== true) {
-    console.log('test_agent_pins: navmesh not compiled in, skipping');
+    skipTest('test_agent_pins: navmesh not compiled in');
 } else {
     const canvas = document.createElement('canvas');
     canvas.setAttribute('width', '128');

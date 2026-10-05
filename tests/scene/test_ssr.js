@@ -22,7 +22,7 @@ flush();
 
 const scene = canvas.getContext('scene');
 if (!scene) {
-    console.log('no scene; skipping ssr test');
+    missingGpuContext('scene');
 } else {
     scene.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
     scene.setCamera({

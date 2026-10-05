@@ -18,7 +18,7 @@ flush();
 const scene = cv.getContext('scene');
 
 if (!scene) {
-    console.log('no scene context (no GPU); skipping scene buffer bounds test');
+    missingGpuContext('scene');
 } else {
     scene.setCamera({ fov: 60, near: 0.1, far: 100, position: [0, 0, 4], target: [0, 0, 0] });
     const box = scene.createMesh({ mesh: 'box', color: '#ffffff' });

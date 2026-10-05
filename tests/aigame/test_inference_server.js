@@ -4,7 +4,7 @@
 const G = bro.ai.game;
 const nn = G.nn;
 if (!nn || nn.available === false) {
-    console.log('test_inference_server: gameai-nn not built (app profile), skipping');
+    skipTest('test_inference_server: gameai-nn not built (app profile)');
 } else {
 
 const inDim = 4, numActions = 2;

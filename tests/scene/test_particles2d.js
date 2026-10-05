@@ -11,7 +11,7 @@ flush();
 
 const scene = canvas.getContext('scene');
 if (!scene) {
-    console.log('no scene; skipping 2D particles test');
+    missingGpuContext('scene');
 } else {
     // Burst at creation, then every particle expires after its lifetime.
     const p = scene.createParticles({

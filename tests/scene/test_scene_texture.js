@@ -69,7 +69,7 @@ function fillQuad(sc, color, z = 0) {
 
 const probe = freshScene(64);
 if (!probe.scene) {
-    console.log('scene context not available (no GPU) — skipping scene texture test');
+    missingGpuContext('scene');
 } else {
     dropScene(probe);
     const SIZE = 128;

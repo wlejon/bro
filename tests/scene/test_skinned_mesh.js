@@ -59,7 +59,7 @@ flush();
 
 const scene = canvas.getContext('scene');
 if (!scene) {
-    console.log('scene context not available (no GPU) — skipping skinned mesh test');
+    missingGpuContext('scene');
 } else {
     // Camera on the +Z axis at strip height: world (x,y,0) projects to
     // sx = 128 + x*k, sy = 128 - (y-1)*k with k = 128 / (8 * tan(fov/2)).
@@ -83,11 +83,10 @@ if (!scene) {
         color: [1, 1, 1], intensity: 1.5,
     });
 
-    // Ground plane (shadow receiver). Subdivided: Apple's Software Renderer
-    // (the only GL a GitHub macOS runner has) silently drops a triangle this
-    // large at this distance, so a two-triangle ground never drew there and
-    // both patches read 0 -- no shadow to compare. Same surface, same pixels
-    // on any GL that draws the big pair.
+    // Ground plane (shadow receiver). Subdivided so no single triangle spans
+    // the whole receiver: some rasterizers have dropped a triangle this large
+    // at this distance, leaving no shadow to compare. Same surface, same
+    // pixels wherever the big pair draws.
     scene.createMesh({ mesh: 'plane', halfW: 5, halfD: 5, subdivX: 8, subdivZ: 8,
                        color: 'white', castsShadow: false, y: 0 });
 

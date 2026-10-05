@@ -53,7 +53,7 @@ flush();
 
 const scene = canvas.getContext('scene');
 if (!scene) {
-    console.log('scene context not available (no GPU) — skipping skeletal animation test');
+    missingGpuContext('scene');
 } else {
     const FOV = 40, EYE = [0, 1, 8];
     scene.setCamera({ fov: FOV, near: 0.1, far: 100, position: EYE, target: [0, 1, 0] });

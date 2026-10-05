@@ -171,6 +171,8 @@ if (typeof bro !== 'undefined' && bro.gpu !== undefined) {
         assert(img && img.width === 240 && img.height === 180,
                'scene target is 2x the canvas box at 2x, got ' + (img && img.width) + 'x' + (img && img.height));
         assert(img.data.length === img.width * img.height * 4, 'scene readback size matches its dims');
+    } else {
+        missingGpuContext('scene');
     }
 }
 

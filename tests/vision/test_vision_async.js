@@ -83,7 +83,7 @@ assert(typeof bro === 'object', 'bro global exists');
 assert(bro.vision !== undefined && bro.vision !== null, 'bro.vision namespace exists');
 
 if (bro.vision.available === false || typeof __host.visionProbe !== 'function') {
-    console.log('bro.vision is compiled out; no job machine to drive');
+    skipTest('bro.vision is compiled out; no job machine to drive');
 } else {
     const probe = __host.visionProbe;
     const W = 10, H = 8;

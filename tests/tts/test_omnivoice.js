@@ -1,6 +1,6 @@
 // Weights-gated end-to-end test for bro.tts.loadOmniVoice.
 //
-// Skips (passes with a message) when the OmniVoice weights or a GPU backend
+// Skips (skipTest, reported SKIP) when the OmniVoice weights or a GPU backend
 // are absent: the weights live in the brosoundml sibling
 // (BRO_WEIGHTS env or ../brosoundml/weights), and OmniVoice's LM runs on the
 // GPU only (the CPU is opt-in and not exercised here). Whisper (same weights
@@ -75,14 +75,14 @@ function whisperText(samples, sr) {
 }
 
 if (bro.tts.available === false) {
-    console.log('SKIP: bro.tts is the unavailable stub');
+    skipTest('bro.tts is the unavailable stub');
 } else if (!fs.existsSync(OMNI_DIR + '/config.json') ||
            !fs.existsSync(OMNI_DIR + '/model.safetensors')) {
     console.log('SKIP: OmniVoice weights not found at ' + OMNI_DIR);
 } else if (!fs.existsSync(WHISPER_DIR + '/model.safetensors')) {
-    console.log('SKIP: Whisper weights not found at ' + WHISPER_DIR);
+    skipTest('Whisper weights not found at ' + WHISPER_DIR);
 } else if (!bro.gpu.available) {
-    console.log('SKIP: no GPU backend (' + bro.gpu.backend + '); OmniVoice runs on the GPU only');
+    skipTest('no GPU backend (' + bro.gpu.backend + '); OmniVoice runs on the GPU only');
 } else {
     // ── Load ─────────────────────────────────────────────────────────────────
     let t0 = Date.now();

@@ -79,6 +79,8 @@ private:
 };
 
 /// Multi-cascade directional shadow map target using a layered 2D depth array image.
+/// It is sampled through SceneVkDevice::shadowCompareSampler, which the lighting
+/// layout holds as an immutable sampler.
 class SceneVkShadowCascadeTarget {
 public:
     SceneVkShadowCascadeTarget() = default;
@@ -109,7 +111,6 @@ public:
         return (cascadeIndex < cascadeViews_.size()) ? cascadeViews_[cascadeIndex] : VK_NULL_HANDLE;
     }
     VkImageView arrayView() const { return shadowImage_.view; }
-    VkSampler shadowSampler() const { return shadowSampler_; }
     uint32_t resolution() const { return resolution_; }
     uint32_t cascadeCount() const { return cascadeCount_; }
     VkFormat format() const { return format_; }
@@ -118,7 +119,6 @@ public:
 private:
     SceneVkImage shadowImage_;
     std::vector<VkImageView> cascadeViews_;
-    VkSampler shadowSampler_ = VK_NULL_HANDLE;
     uint32_t resolution_ = 0;
     uint32_t cascadeCount_ = 0;
     VkFormat format_ = VK_FORMAT_D32_SFLOAT;

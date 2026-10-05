@@ -22,7 +22,7 @@ const c1 = makeCanvas();
 flush();
 const scene = c1.getContext('scene');
 if (!scene) {
-    console.log('scene context not available (no GPU)');
+    missingGpuContext('scene');
 } else {
     const before = __host.sceneUploadStats();
     const tex = { data: new Uint8Array(8 * 8 * 4).fill(200), width: 8, height: 8 };

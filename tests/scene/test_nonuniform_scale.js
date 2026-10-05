@@ -13,7 +13,7 @@ flush();
 
 const scene = canvas.getContext('scene');
 if (!scene) {
-    console.log('scene context not available (no GPU) — skipping');
+    missingGpuContext('scene');
 } else {
     // Linear tonemap so pixel comparisons are monotonic in shading.
     scene.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });

@@ -365,6 +365,9 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
         }
 
         delete engine;
+
+        // A skipped run that did not also fail is neither a pass nor a fail.
+        if (exitCode == 0 && bro::bronze_host::wasTestSkipped()) exitCode = 77;
     } catch (const std::exception& e) {
         LOG_ERROR("Fatal: %s", e.what());
         exitCode = 1;
