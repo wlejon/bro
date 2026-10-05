@@ -3,18 +3,27 @@
 #
 # Prerequisites (Debian/Ubuntu):
 #   sudo apt install build-essential clang python3 ninja-build \
-#                    libfreetype-dev libfontconfig-dev libgl-dev
+#                    libfreetype-dev libfontconfig-dev
+#
+# Ganesh is built for Vulkan only (bro has no GL). The Vulkan headers come from
+# Skia's own third_party tree, so no Vulkan SDK is needed to build the lib.
 #
 # Usage:
 #   cd third_party/skia
 #   ./build_skia_linux.sh          # builds Release
 #   ./build_skia_linux.sh Debug    # builds Debug
 #   ./build_skia_linux.sh all      # builds both
+#
+# SKIA_SRC=/path/to/checkout builds from a full Skia checkout elsewhere —
+# third_party/skia/src normally holds the trimmed source bundle, which is not
+# a buildable tree. Either way the checkout is pinned to SKIA_COMMIT, the
+# chrome/m147 commit the source bundle was cut from.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SKIA_SRC="$SCRIPT_DIR/src"
+SKIA_SRC="${SKIA_SRC:-$SCRIPT_DIR/src}"
+SKIA_COMMIT="abbe599fb3c0ef2fa82bfadbb0ddcd321f22faf0"   # chrome/m147
 CONFIG="${1:-Release}"
 
 build_config() {
@@ -42,7 +51,8 @@ build_config() {
         skia_use_fontconfig=true
         skia_use_system_freetype2=true
         skia_use_system_harfbuzz=false
-        skia_use_gl=true
+        skia_use_gl=false
+        skia_use_vulkan=true
         skia_enable_ganesh=true
         skia_enable_pdf=false
         skia_enable_svg=true
@@ -89,7 +99,7 @@ if [ ! -f "$SKIA_SRC/BUILD.gn" ]; then
         git init -q
         git remote add origin https://skia.googlesource.com/skia.git 2>/dev/null || true
     fi
-    git fetch --depth 1 origin main
+    git fetch --depth 1 origin "$SKIA_COMMIT"
     git checkout -f FETCH_HEAD
     cd - >/dev/null
 fi
@@ -98,8 +108,14 @@ fi
 # googlesource.com, which rate-limits aggressively. Force HTTP/1.1 + big
 # post buffer, patch the script to serialize fetches, and retry with
 # exponential backoff on transient transport errors.
-echo "=== Syncing Skia dependencies ==="
 cd "$SKIA_SRC"
+if [ "$(git rev-parse HEAD)" != "$SKIA_COMMIT" ]; then
+    echo "error: $SKIA_SRC is at $(git rev-parse HEAD), expected $SKIA_COMMIT (chrome/m147)."
+    echo "  The library must match the headers in the source bundle; check out $SKIA_COMMIT."
+    exit 1
+fi
+
+echo "=== Syncing Skia dependencies ==="
 git config --global http.version HTTP/1.1
 git config --global http.postBuffer 524288000
 

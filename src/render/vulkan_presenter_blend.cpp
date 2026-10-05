@@ -205,10 +205,10 @@ VulkanPresenter::Image* VulkanPresenter::slotTexture(TextureRing& ring, size_t i
     return &tex;
 }
 
-bool VulkanPresenter::describeTexture(const Image& tex, VkSampler sampler, BlendDraw& out) {
+bool VulkanPresenter::describeTexture(VkImageView view, VkSampler sampler, BlendDraw& out) {
     out.set = context_.frames().allocDescriptorSet(blendSetLayout_);
     if (out.set == VK_NULL_HANDLE) return false;
-    VkDescriptorImageInfo imageInfo{sampler, tex.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkDescriptorImageInfo imageInfo{sampler, view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     VkWriteDescriptorSet write{};
     write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     write.dstSet = out.set;
@@ -241,7 +241,7 @@ bool VulkanPresenter::uploadLayerTexture(VkCommandBuffer cmd, const PresentPixel
     const VkFormat format = layer.bgra ? VK_FORMAT_B8G8R8A8_UNORM : VK_FORMAT_R8G8B8A8_UNORM;
     Image* tex = slotTexture(aboveTex_, index, layer.width, layer.height, format);
     UploadSlice staging = context_.frames().allocUpload(static_cast<VkDeviceSize>(layer.width) * layer.height * 4);
-    if (!tex || !staging || !describeTexture(*tex, blendSampler_, out)) return false;
+    if (!tex || !staging || !describeTexture(tex->view, blendSampler_, out)) return false;
     out.dst = {0.0f, 0.0f, static_cast<float>(layer.width), static_cast<float>(layer.height), 0.0f, 1.0f};
     out.scissor = clampToTarget(0, 0, layer.width, layer.height, target.width, target.height);
 
@@ -260,15 +260,13 @@ bool VulkanPresenter::uploadLayerTexture(VkCommandBuffer cmd, const PresentPixel
     return true;
 }
 
-// A GPU image blitted into this slot's texture, so it can be sampled whatever
-// its own usage flags and format, and drawn into its destination rectangle.
-bool VulkanPresenter::copyImageTexture(VkCommandBuffer cmd, const PresentImage& image, size_t index,
-                                       const Target& target, BlendDraw& out) {
-    Image* tex = slotTexture(imageTex_, index, image.width, image.height, VK_FORMAT_R8G8B8A8_UNORM);
-    const bool scaled = image.dstW != static_cast<float>(image.width) ||
-                        image.dstH != static_cast<float>(image.height);
-    if (!tex || !describeTexture(*tex, scaled ? blendSamplerLinear_ : blendSampler_, out)) return false;
-    out.dst = {image.dstX, image.dstY, image.dstW, image.dstH, 0.0f, 1.0f};
+namespace {
+
+// Where `image` lands on the target: its destination rectangle, and the
+// scissor that cuts it to its clip and the target.
+void placeImage(const PresentImage& image, uint32_t targetW, uint32_t targetH, VkViewport& dst,
+                VkRect2D& scissor) {
+    dst = {image.dstX, image.dstY, image.dstW, image.dstH, 0.0f, 1.0f};
     int64_t x0 = static_cast<int64_t>(std::floor(image.dstX));
     int64_t y0 = static_cast<int64_t>(std::floor(image.dstY));
     int64_t x1 = static_cast<int64_t>(std::ceil(image.dstX + image.dstW));
@@ -279,7 +277,30 @@ bool VulkanPresenter::copyImageTexture(VkCommandBuffer cmd, const PresentImage& 
         x1 = std::min<int64_t>(x1, int64_t{image.clip.offset.x} + image.clip.extent.width);
         y1 = std::min<int64_t>(y1, int64_t{image.clip.offset.y} + image.clip.extent.height);
     }
-    out.scissor = clampToTarget(x0, y0, x1, y1, target.width, target.height);
+    scissor = clampToTarget(x0, y0, x1, y1, targetW, targetH);
+}
+
+bool isScaled(const PresentImage& image) {
+    return image.dstW != static_cast<float>(image.width) || image.dstH != static_cast<float>(image.height);
+}
+
+} // namespace
+
+// A sampleable image (PresentImage::view) drawn straight from its own view.
+bool VulkanPresenter::describeInPlace(const PresentImage& image, const Target& target, BlendDraw& out) {
+    if (!describeTexture(image.view, isScaled(image) ? blendSamplerLinear_ : blendSampler_, out)) return false;
+    placeImage(image, target.width, target.height, out.dst, out.scissor);
+    return true;
+}
+
+// A GPU image blitted into this slot's texture, so it can be sampled whatever
+// its own usage flags and format, and drawn into its destination rectangle.
+bool VulkanPresenter::copyImageTexture(VkCommandBuffer cmd, const PresentImage& image, size_t index,
+                                       const Target& target, BlendDraw& out) {
+    Image* tex = slotTexture(imageTex_, index, image.width, image.height, VK_FORMAT_R8G8B8A8_UNORM);
+    if (!tex || !describeTexture(tex->view, isScaled(image) ? blendSamplerLinear_ : blendSampler_, out))
+        return false;
+    placeImage(image, target.width, target.height, out.dst, out.scissor);
 
     const bool toSrc = image.layout != VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     if (toSrc)

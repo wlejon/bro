@@ -9,6 +9,8 @@
 #include <include/core/SkData.h>
 #include <include/core/SkImage.h>
 #include <include/core/SkImageInfo.h>
+#include <include/core/SkPixmap.h>
+#include <include/core/SkSurface.h>
 #include <include/core/SkBlendMode.h>
 #include <include/core/SkPathBuilder.h>
 #include <include/core/SkRRect.h>
@@ -16,12 +18,50 @@
 #include <cmath>
 #include <cstring>
 #include <algorithm>
+#include <vector>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
 
 namespace bro::canvas {
+
+namespace {
+
+// ImageData is unpremultiplied and the surface premultiplied. The GPU converts
+// in a shader with its own rounding (128 at alpha 128 comes back 127), so a
+// GPU surface moves premultiplied bytes and the conversion runs on the CPU,
+// the same SkConvertPixels the raster surface uses: put/get round trips are
+// byte-identical either way.
+
+// Reads `info` (unpremul) at (x, y) into dst. Pixels off the surface are left
+// as dst had them.
+bool readUnpremul(SkSurface* surface, const SkImageInfo& info, void* dst,
+                  size_t rowBytes, int x, int y) {
+    if (!surface->recordingContext())
+        return surface->readPixels(info, dst, rowBytes, x, y);
+    SkImageInfo premul = info.makeAlphaType(kPremul_SkAlphaType);
+    std::vector<uint8_t> tmp(premul.computeByteSize(rowBytes));
+    SkPixmap(info, dst, rowBytes).readPixels(premul, tmp.data(), rowBytes);
+    if (!surface->readPixels(premul, tmp.data(), rowBytes, x, y)) return false;
+    return SkPixmap(premul, tmp.data(), rowBytes).readPixels(info, dst, rowBytes);
+}
+
+// The image putImageData writes: premultiplied up front when the surface it
+// lands on is a GPU one.
+sk_sp<SkImage> putImageSource(const uint8_t* data, int w, int h, bool gpuSurface) {
+    auto info = SkImageInfo::Make(w, h, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
+    const size_t rowBytes = static_cast<size_t>(w) * 4;
+    if (!gpuSurface)
+        return SkImages::RasterFromData(info, SkData::MakeWithCopy(data, rowBytes * h), rowBytes);
+    SkImageInfo premul = info.makeAlphaType(kPremul_SkAlphaType);
+    sk_sp<SkData> out = SkData::MakeUninitialized(rowBytes * h);
+    if (!SkPixmap(info, data, rowBytes).readPixels(premul, out->writable_data(), rowBytes))
+        return nullptr;
+    return SkImages::RasterFromData(premul, std::move(out), rowBytes);
+}
+
+} // namespace
 
 // ---------------------------------------------------------------------------
 // Construction / destruction
@@ -92,15 +132,16 @@ int CanvasScene::queryLayoutHeight() const {
 void CanvasScene::ensureSurface(int w, int h) {
     if (surface_ && surfWidth_ == w && surfHeight_ == h) return;
 
-    bool isResize = (surface_ != nullptr);
+    auto lock = lockGpu();
+    bool isResize = (surface_.surface != nullptr);
     snapshotValid_ = false;
     snapshotImageValid_ = false;
     snapshotImage_.reset();
 
     surfWidth_ = w;
     surfHeight_ = h;
-    auto info = SkImageInfo::MakeN32Premul(w, h);
-    surface_ = SkSurfaces::Raster(info);
+    if (render::SkiaGpu* g = gpu()) surface_ = g->makeSurface(w, h);
+    else surface_ = render::LayerSurface(SkSurfaces::Raster(SkImageInfo::MakeN32Premul(w, h)), nullptr);
 
     // Clear to transparent (canvas default)
     if (surface_) {
@@ -108,8 +149,9 @@ void CanvasScene::ensureSurface(int w, int h) {
         // the SkCanvas's base, so that kReset can drop a clip() made outside
         // any save() by restoring to the base and opening the level again —
         // SkCanvas has no other way to take a clip back.
-        surface_->getCanvas()->save();
-        surface_->getCanvas()->clear(SK_ColorTRANSPARENT);
+        unfinished_ = surface_.isGpu();
+        surface_.surface->getCanvas()->save();
+        surface_.surface->getCanvas()->clear(SK_ColorTRANSPARENT);
         dirty_ = true;
     snapshotValid_ = false;
     snapshotImageValid_ = false;
@@ -120,7 +162,7 @@ SkCanvas* CanvasScene::skCanvas() {
     int w = queryLayoutWidth();
     int h = queryLayoutHeight();
     ensureSurface(w, h);
-    return surface_ ? surface_->getCanvas() : nullptr;
+    return surface_ ? surface_.surface->getCanvas() : nullptr;
 }
 
 // ---------------------------------------------------------------------------
@@ -449,10 +491,12 @@ std::vector<uint8_t> CanvasScene::getImageData(int x, int y, int w, int h) {
     if (w <= 0 || h <= 0) return {};
     std::vector<uint8_t> pixels(static_cast<size_t>(w) * h * 4, 0);
 
+    auto lock = lockGpu();
     flushCommands();
     if (!surface_) return pixels;
     auto info = SkImageInfo::Make(w, h, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
-    surface_->readPixels(info, pixels.data(), w * 4, x, y);
+    readUnpremul(surface_.surface.get(), info, pixels.data(), w * 4, x, y);
+    unfinished_ = surface_.isGpu();  // the readback moved the image out of its sampled layout
     return pixels;
 }
 
@@ -478,14 +522,16 @@ sk_sp<SkImage> CanvasScene::snapshotImage() {
     if (w <= 0 || h <= 0) return nullptr;
 
     // A copy of the pixels, so the image stays what the canvas showed when it
-    // was taken. An undrawn canvas gets its (transparent) surface made to
-    // read from.
+    // was taken (and is a CPU image any thread may drop). An undrawn canvas
+    // gets its (transparent) surface made to read from.
+    auto lock = lockGpu();
     flushCommands();
     if (!surface_) skCanvas();
     if (!surface_) return nullptr;
     auto info = SkImageInfo::Make(w, h, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
     snapshot_.assign(static_cast<size_t>(w) * h * 4, 0);
-    if (!surface_->readPixels(info, snapshot_.data(), w * 4, 0, 0)) {
+    unfinished_ = surface_.isGpu();
+    if (!readUnpremul(surface_.surface.get(), info, snapshot_.data(), w * 4, 0, 0)) {
         snapshot_.clear();
         snapshotValid_ = false;
         snapshotImageValid_ = false;
@@ -508,6 +554,7 @@ const uint8_t* CanvasScene::snapshotPixels(int w, int h) {
     // A canvas nothing has drawn to yet has no surface
     // (flushCommands creates it only for a command); its bitmap is still
     // transparent black of its size, so make the surface to read that from.
+    auto lock = lockGpu();
     flushCommands();
     if (!surface_) skCanvas();
     if (!surface_ || w <= 0 || h <= 0) {
@@ -516,7 +563,8 @@ const uint8_t* CanvasScene::snapshotPixels(int w, int h) {
     }
     auto info = SkImageInfo::Make(w, h, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
     snapshot_.assign(static_cast<size_t>(w) * h * 4, 0);
-    if (!surface_->readPixels(info, snapshot_.data(), w * 4, 0, 0)) {
+    unfinished_ = surface_.isGpu();
+    if (!readUnpremul(surface_.surface.get(), info, snapshot_.data(), w * 4, 0, 0)) {
         snapshot_.clear();
         snapshotValid_ = false;
         return nullptr;
@@ -550,9 +598,7 @@ void CanvasScene::putImageData(const uint8_t* data, int w, int h, int dx, int dy
     dirtyWidth = static_cast<int>(rw);
     dirtyHeight = static_cast<int>(rh);
 
-    auto info = SkImageInfo::Make(w, h, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
-    sk_sp<SkData> skData = SkData::MakeWithCopy(data, static_cast<size_t>(w) * h * 4);
-    auto img = SkImages::RasterFromData(info, skData, w * 4);
+    auto img = putImageSource(data, w, h, gpu() != nullptr);
     if (!img) return;
 
     // putImageData ignores transforms and compositing — write directly

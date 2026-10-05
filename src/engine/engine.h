@@ -96,6 +96,7 @@ public:
     void setDeviceScaleFactor(float scale);
 
     render::VulkanContext* vulkanContext() const { return vulkanContext_.get(); }
+    render::SkiaGpu* skiaGpu() const { return skiaGpu_.get(); }
     render::VulkanPresenter* vulkanPresenter() const { return vulkanPresenter_.get(); }
 
     std::string effectiveColorScheme() const;
@@ -667,6 +668,10 @@ private:
     std::unique_ptr<render::VulkanContext> vulkanContext_;
     std::unique_ptr<render::VulkanSwapchain> vulkanSwapchain_;
     std::unique_ptr<render::VulkanPresenter> vulkanPresenter_;
+    // Skia's GPU context (null: Skia draws on the CPU). Shared by the raster
+    // thread's renderer, renderer_, and every 2D canvas.
+    std::unique_ptr<render::SkiaGpu> skiaGpu_;
+    render::SkiaGpu* createSkiaGpu();
     std::unique_ptr<dom::Document> document_;
     TransitionManager transitionManager_;
     AnimationManager animationManager_;
@@ -968,14 +973,17 @@ private:
     bool testFailure_ = false;
 
     // The frame's composite, bottom to top: CPU layers composite into
-    // frameSegments_[0] until a GPU layer (a 3D scene, a WebGL canvas) is
-    // reached. Its image joins frameImages_, placed where the layer sits,
-    // and the layers after it composite into the next segment, which the
-    // presenter blends over that image — and so on. frameSegmentUsed_ marks
-    // the segments something was drawn into.
+    // frameSegments_[0] until a GPU layer (a 3D scene, a WebGL canvas, a
+    // Skia GPU surface) is reached. Its image joins frameImages_, placed
+    // where the layer sits, and the layers after it composite into the next
+    // segment, which the presenter blends over that image — and so on.
+    // frameSegmentUsed_ marks the segments something was drawn into.
+    // frameSkiaImages_ keeps the Skia images in frameImages_ alive until the
+    // frame is submitted.
     std::vector<sk_sp<SkSurface>> frameSegments_;
     std::vector<bool> frameSegmentUsed_;
     std::vector<render::PresentImage> frameImages_;
+    std::vector<render::SkiaImageRef> frameSkiaImages_;
     int frameCompositeW_ = 0, frameCompositeH_ = 0;
     SkCanvas* frameSegmentCanvas();  // the segment being composited into
 };

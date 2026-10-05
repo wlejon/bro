@@ -28,7 +28,10 @@ struct IframeDoc {
     dom::Element* hoveredElement = nullptr; // sub-doc :hover target (non-owning)
     int boxW = 0, boxH = 0;           // last content-box size laid out
     render::CommandBuffer cmdBuffer;
-    render::SkiaRenderer::LayerSurface surface;  // raster thread only
+    // Drawn by the raster thread: `surface` this replay, `spare` the last
+    // one's (a GPU image the compositor may still be sampling), swapped after.
+    render::LayerSurface surface;
+    render::LayerSurface spare;
     int surfW = 0, surfH = 0;
     PublishedFrame published;                  // what the compositor draws
 };

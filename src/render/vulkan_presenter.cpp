@@ -168,7 +168,8 @@ bool VulkanPresenter::ensureReadbackBuffer(VkDeviceSize size) {
 }
 
 bool VulkanPresenter::present(const PresentFrame& frame) {
-    if (!frame.below && !frame.hasImages()) return false;
+    // An empty frame is just the clear color, given a size to clear.
+    if (!frame.below && !frame.hasImages() && !swapchain_ && (frame.width == 0 || frame.height == 0)) return false;
     return swapchain_ ? presentToSwapchain(frame) : presentOffscreen(frame);
 }
 
@@ -189,11 +190,30 @@ bool VulkanPresenter::recordFrame(VkCommandBuffer cmd, const PresentFrame& frame
     cmdImageBarrier(cmd, toDst);
     targetLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
 
+    // Images sampled in place were last written by their producer's earlier
+    // submission (a Skia flush leaves them SHADER_READ_ONLY); make those
+    // writes visible to the copies and draws below.
+    for (const PresentImage& image : frame.images) {
+        if (!image || image.view == VK_NULL_HANDLE) continue;
+        ImageBarrier acquire;
+        acquire.image = image.image;
+        acquire.oldLayout = acquire.newLayout = image.layout;
+        acquire.srcStages = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+        acquire.srcAccess = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+        acquire.dstStages = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT;
+        acquire.dstAccess = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT;
+        cmdImageBarrier(cmd, acquire);
+    }
+
     // The base is the layer below, or else the first image copied straight
-    // in when it lands 1:1 at the top-left uncut.
+    // in when it lands 1:1 at the top-left uncut — a copy only equals
+    // blending it when what it would blend over is transparent.
     const PresentImage* first = frame.images.empty() ? nullptr : &frame.images.front();
-    const bool imageIsBase = !frame.below && first && *first && !first->clipped && first->dstX == 0.0f &&
-                             first->dstY == 0.0f && first->dstW == static_cast<float>(first->width) &&
+    const bool clearIsTransparent = frame.clearColor[0] == 0.0f && frame.clearColor[1] == 0.0f &&
+                                    frame.clearColor[2] == 0.0f && frame.clearColor[3] == 0.0f;
+    const bool imageIsBase = !frame.below && clearIsTransparent && first && *first && !first->clipped &&
+                             first->dstX == 0.0f && first->dstY == 0.0f &&
+                             first->dstW == static_cast<float>(first->width) &&
                              first->dstH == static_cast<float>(first->height);
     const uint32_t baseW = frame.below ? frame.below.width : imageIsBase ? first->width : 0;
     const uint32_t baseH = frame.below ? frame.below.height : imageIsBase ? first->height : 0;
@@ -241,7 +261,10 @@ bool VulkanPresenter::recordFrame(VkCommandBuffer cmd, const PresentFrame& frame
     for (size_t i = 0; i < frame.images.size(); ++i) {
         const PresentImage& image = frame.images[i];
         if (image && !(i == 0 && imageIsBase)) {
-            if (!copyImageTexture(cmd, image, i, target, draws.emplace_back())) return false;
+            BlendDraw& draw = draws.emplace_back();
+            const bool described = image.view != VK_NULL_HANDLE ? describeInPlace(image, target, draw)
+                                                                 : copyImageTexture(cmd, image, i, target, draw);
+            if (!described) return false;
         }
         if (image.above) {
             if (!uploadLayerTexture(cmd, image.above, i, target, draws.emplace_back())) return false;
@@ -306,7 +329,10 @@ bool VulkanPresenter::presentOffscreen(const PresentFrame& frame) {
         w = std::max(w, image.above.width);
         h = std::max(h, image.above.height);
     }
-    if (w == 0 || h == 0) {
+    if (frame.width > 0 && frame.height > 0) {
+        w = frame.width;
+        h = frame.height;
+    } else if (w == 0 || h == 0) {
         for (const PresentImage& image : frame.images) {
             if (!image) continue;
             w = std::max(w, static_cast<uint32_t>(std::ceil(std::max(0.0f, image.dstX + image.dstW))));

@@ -1,5 +1,5 @@
-// CanvasScene's raster side: command replay onto the SkSurface, and the
-// per-frame rasterize the compositor calls. The recording API that fills the
+// CanvasScene's raster side: command replay onto the SkSurface (GPU or CPU),
+// and the per-frame rasterize the compositor calls. The recording API that fills the
 // command buffer lives in canvas_scene.cpp and canvas_scene_state.cpp.
 
 #include "canvas/canvas_scene.h"
@@ -211,7 +211,9 @@ void CanvasScene::replayCommands(SkCanvas* c, std::vector<CanvasCmd>& cmds) {
 void CanvasScene::flushStagedCommands() {
     if (stagedCommands_.empty()) return;
 
-    if (tryStreamingPutImageDataFastPath(surface_.get(), stagedCommands_)) {
+    auto lock = lockGpu();
+    unfinished_ = surface_.isGpu();
+    if (tryStreamingPutImageDataFastPath(surface_.surface.get(), stagedCommands_)) {
         stagedCommands_.clear();
         return;
     }
@@ -230,7 +232,9 @@ void CanvasScene::flushStagedCommands() {
 void CanvasScene::flushCommands() {
     if (commands_.empty()) return;
 
-    if (tryStreamingPutImageDataFastPath(surface_.get(), commands_)) {
+    auto lock = lockGpu();
+    unfinished_ = surface_.isGpu();
+    if (tryStreamingPutImageDataFastPath(surface_.surface.get(), commands_)) {
         commands_.clear();
         return;
     }
@@ -282,6 +286,16 @@ void CanvasScene::rasterize() {
 
     flushCommands();
     dirty_ = false;
+
+    // On the GPU, leave what was drawn (or read back) ready for the
+    // compositor to sample.
+    if (unfinished_) {
+        if (render::SkiaGpu* g = gpu()) {
+            auto lock = g->lock();
+            g->finish(surface_.surface.get());
+        }
+        unfinished_ = false;
+    }
 }
 
 } // namespace bro::canvas

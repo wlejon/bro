@@ -222,9 +222,26 @@ cd third_party/skia
 ./build_skia_mac.sh              # macOS:  Release only  (CoreText backend; or: Debug | all)
 ```
 
-On Windows, build Skia with `gn`/`ninja` (`cd third_party/skia/src && python3
-tools/git-sync-deps`, then `bin/gn gen` + `ninja`) and place `skia.lib` in
-`third_party/skia/lib/{Debug,Release}/`.
+On Windows, build Skia with `gn`/`ninja` from a full Skia checkout at the
+pinned commit (`abbe599fb3c0ef2fa82bfadbb0ddcd321f22faf0`, the `chrome/m147`
+commit the source bundle was cut from; `python3 tools/git-sync-deps`, then
+`bin/gn gen` + `ninja skia`) and place `skia.lib` in
+`third_party/skia/lib/{Debug,Release}/`. Ganesh must be the Vulkan backend
+(bro has no GL), with the same feature set as the Linux script:
+
+```
+is_official_build=true is_debug=false
+skia_use_vulkan=true skia_use_gl=false skia_use_direct3d=false skia_enable_ganesh=true
+skia_enable_svg=true skia_use_expat=true skia_enable_pdf=false
+skia_use_dng_sdk=false skia_use_piex=false skia_use_wuffs=true
+skia_use_libwebp_encode=false skia_use_libwebp_decode=true
+extra_cflags_cc=["/GR"]
+```
+
+Both build scripts build the Vulkan backend too (`skia_use_vulkan=true`,
+`skia_use_gl=false`; on macOS it runs on MoltenVK). `SKIA_SRC=/path/to/checkout`
+points them at a full checkout, since `third_party/skia/src` holds the trimmed
+source bundle, which is not buildable.
 
 Whichever route you take, the Skia **source** tree must carry the shaping
 modules: `modules/skshaper`, `modules/skunicode`, and the bundled HarfBuzz and

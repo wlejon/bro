@@ -41,13 +41,13 @@ namespace bro::engine {
 SubDocRef Engine::iframeSubDoc(IframeDoc& d) {
     return SubDocRef{d.canvasScenes, d.document,
                      d.hoveredElement, d.boxW, d.boxH, d.cmdBuffer,
-                     d.surface, d.surfW, d.surfH, d.published};
+                     d.surface, d.spare, d.surfW, d.surfH, d.published};
 }
 
 SubDocRef Engine::windowHostSubDoc(WindowHost& h) {
     return SubDocRef{h.canvasScenes, h.document,
                      h.hoveredElement, h.boxW, h.boxH, h.cmdBuffer,
-                     h.surface, h.surfW, h.surfH, h.published};
+                     h.surface, h.spare, h.surfW, h.surfH, h.published};
 }
 
 SubDocSource loadSubDocSource(const std::string& basePath, const std::string& srcAttr,
@@ -171,6 +171,9 @@ static void replayBufferWithInlineCanvas(render::SkiaRenderer* renderer,
         [&](void* scenePtr, float x, float y, float w, float h) {
             auto* scene = static_cast<canvas::CanvasScene*>(scenePtr);
             if (!scene || w <= 0 || h <= 0) return;
+            // The canvas's own surface is drawn and snapshotted directly.
+            render::SkiaGpu::Lock lock =
+                renderer->skiaGpu() ? renderer->skiaGpu()->lock() : render::SkiaGpu::Lock();
             scene->flushStaged();
             auto* src = scene->surface();
             if (!src) return;
@@ -192,18 +195,25 @@ void replaySubDoc(SubDocRef d, render::SkiaRenderer* renderer) {
     DeviceScale ds;
     ds.render = renderer->deviceScale();
     int bw = ds.toDevice(std::max(1, d.boxW)), bh = ds.toDevice(std::max(1, d.boxH));
-    if (!d.surface.surface || d.surfW != bw || d.surfH != bh) {
-        if (d.surface.surface) renderer->releaseLayerSurface(d.surface);
-        d.surface = renderer->createLayerSurface(bw, bh);
+    if (d.surfW != bw || d.surfH != bh) {
+        d.spare.reset();
         d.surfW = bw; d.surfH = bh;
     }
-    if (!d.surface.surface) { d.published.clear(); return; }
+    renderer->fitLayerSurface(d.surface, bw, bh);
+    if (!d.surface) { d.published.clear(); return; }
     auto prev = renderer->switchSurface(d.surface.surface);
-    if (auto* c = renderer->getCanvas()) c->clear(SK_ColorTRANSPARENT);
     replayBufferWithInlineCanvas(renderer, d.cmdBuffer);
-    // The compositor reads this snapshot, never the surface itself.
-    d.published.publish(d.surface.surface->makeImageSnapshot());
     renderer->switchSurface(prev);
+    // The compositor reads what is published, never the surface being drawn:
+    // a CPU snapshot, or the GPU image once the frame's work is submitted.
+    if (d.surface.isGpu()) {
+        renderer->afterSubmit([&published = d.published, image = d.surface.image]() mutable {
+            published.publish(std::move(image));
+        });
+        std::swap(d.surface, d.spare);
+    } else {
+        d.published.publish(d.surface.surface->makeImageSnapshot());
+    }
 }
 
 std::vector<uint8_t> captureSubDoc(SubDocRef d, render::SkiaRenderer* skia,
@@ -213,7 +223,7 @@ std::vector<uint8_t> captureSubDoc(SubDocRef d, render::SkiaRenderer* skia,
     if (d.cmdBuffer.commandCount() == 0) return {};
     int w = std::max(1, d.boxW), h = std::max(1, d.boxH);
 
-    render::SkiaRenderer::LayerSurface surf = skia->createLayerSurface(w, h);
+    render::LayerSurface surf = skia->createLayerSurface(w, h);
     if (!surf.surface) return {};
     // capture() hands back CSS-px pixels whatever the display scale.
     const float prevScale = skia->deviceScale();
@@ -222,15 +232,16 @@ std::vector<uint8_t> captureSubDoc(SubDocRef d, render::SkiaRenderer* skia,
     if (auto* c = skia->getCanvas()) c->clear(SK_ColorTRANSPARENT);
 
     replayBufferWithInlineCanvas(skia, d.cmdBuffer);
+    // Switching away applies (on the GPU, also finishes) what was drawn.
+    skia->switchSurface(prev);
+    skia->setDeviceScale(prevScale);
 
     std::vector<uint8_t> pixels(static_cast<size_t>(w) * h * 4);
     SkImageInfo info = SkImageInfo::Make(w, h, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
-    if (surf.surface && !surf.surface->readPixels(info, pixels.data(), w * 4, 0, 0)) {
-        pixels.clear();
+    {
+        render::SkiaGpu::Lock lock = skia->skiaGpu() ? skia->skiaGpu()->lock() : render::SkiaGpu::Lock();
+        if (!surf.surface->readPixels(info, pixels.data(), w * 4, 0, 0)) pixels.clear();
     }
-
-    skia->switchSurface(prev);
-    skia->setDeviceScale(prevScale);
     skia->releaseLayerSurface(surf);
 
     if (pixels.empty()) return {};

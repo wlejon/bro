@@ -25,6 +25,7 @@
 #include <include/core/SkImageFilter.h>
 #include <include/core/SkMaskFilter.h>
 #include <include/core/SkBlurTypes.h>
+#include <include/private/chromium/GrDeferredDisplayListRecorder.h>
 #ifdef _WIN32
 #include <include/ports/SkTypeface_win.h>
 #elif defined(__APPLE__)
@@ -52,6 +53,14 @@ SkiaRenderer::~SkiaRenderer() {
     // Shaped runs hold SkFonts derived from fonts_ — drop them first.
     shaper_.clear();
     fonts_.clear();
+    // GPU objects go under the context lock.
+    if (gpu_) {
+        evictGpuImages(/*all=*/true);
+        SkiaGpu::Lock lock = gpu_->lock();
+        recorder_.reset();
+        touched_.clear();
+        afterSubmit_.clear();
+    }
     surface_.reset();
 }
 
@@ -640,6 +649,7 @@ void SkiaRenderer::drawImage(const void* data, size_t len, float x, float y, flo
     // Decoding happens once per image id; subsequent frames reuse the SkImage.
     sk_sp<SkImage> image = imageCache_.resolve(imageId, data, len);
     if (!image) return;
+    if (recorder_ && imageId != 0) image = gpuImage(imageId, image);
     canvas_->drawImageRect(image, SkRect::MakeXYWH(x, y, w, h), SkSamplingOptions());
 }
 

@@ -72,9 +72,6 @@
 #include <thread>
 #include <unordered_map>
 
-#include <include/gpu/ganesh/gl/GrGLInterface.h>
-#include <include/gpu/ganesh/gl/GrGLDirectContext.h>
-
 namespace bro::engine {
 
 using bromath::cfromColor8;

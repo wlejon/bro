@@ -108,20 +108,16 @@ Engine::~Engine() {
     brotensor::shutdown();
 #endif
 
-    if (auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get())) {
-        for (auto& ps : screenshotHtmlPool_) skia->releaseLayerSurface(ps);
-        screenshotHtmlPool_.clear();
-        for (auto& ps : screenshotSystemPool_) skia->releaseLayerSurface(ps);
-        screenshotSystemPool_.clear();
-
-        for (auto& d : iframeDocs_) {
-            if (!d) continue;
-            skia->releaseLayerSurface(d->surface);
-            d->surfW = d->surfH = 0;
-            d->published.clear();
-        }
-        drainIframeSurfaceFrees(skia);
+    screenshotHtmlPool_.clear();
+    screenshotSystemPool_.clear();
+    for (auto& d : iframeDocs_) {
+        if (!d) continue;
+        d->surface.reset();
+        d->spare.reset();
+        d->surfW = d->surfH = 0;
+        d->published.clear();
     }
+    drainIframeSurfaceFrees(dynamic_cast<render::SkiaRenderer*>(renderer_.get()));
 
     menuBar_.releaseHandlers();
 
@@ -147,16 +143,9 @@ Engine::~Engine() {
 
     stopBackgroundServices();
 
-    {
-        auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get());
-        for (int i = 0; i < 2; ++i) {
-            if (skia) {
-                for (auto& ps : htmlSurfacePool_[i]) skia->releaseLayerSurface(ps);
-                for (auto& ps : systemSurfacePool_[i]) skia->releaseLayerSurface(ps);
-            }
-            htmlSurfacePool_[i].clear();
-            systemSurfacePool_[i].clear();
-        }
+    for (int i = 0; i < 2; ++i) {
+        htmlSurfacePool_[i].clear();
+        systemSurfacePool_[i].clear();
     }
     drawTraversal_.reset();
 
@@ -177,6 +166,12 @@ Engine::~Engine() {
 
     unloadAppModules();
     bro::bronze_host::hostCollectGarbage();
+
+    // Skia's context goes once nothing draws with it or holds one of its
+    // surface images (the layer lists in the frame presenter do), and before
+    // the device it lives on.
+    framePresenter_.reset();
+    skiaGpu_.reset();
 
     // The Vulkan device goes last: scene graphs, WebGL contexts and anything
     // a final GC finalized above release their Vulkan objects into it. Then

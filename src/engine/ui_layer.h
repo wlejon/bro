@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "render/command_buffer.h"
+#include "render/skia_gpu.h"
 
 #include <include/core/SkSurface.h>
 #include <vulkan/vulkan.h>
@@ -14,8 +15,9 @@ namespace bro::engine {
 /// when it scans the layout tree and breaks at canvas/WebGL/scene-graph
 /// boundaries. Consumed by the main thread when it composites.
 ///
-/// HTML layers point at a GPU-backed Skia surface allocated from one of the
-/// raster thread's pools. Canvas layers name a CanvasScene by its never-
+/// HTML layers point at a Skia surface allocated from one of the raster
+/// thread's pools: its GPU image (`image`) when Skia draws on the GPU, else
+/// the CPU surface itself. Canvas layers name a CanvasScene by its never-
 /// recycled sceneId; the main thread resolves the id through the engine's
 /// scene registry at composite/signal time, so a layer recorded before the
 /// scene was destroyed resolves to null instead of dangling (no scrub pass
@@ -28,9 +30,8 @@ struct UILayer {
     // resolved through an engine registry at composite time so a layer that
     // outlives its scene/sub-document draws nothing rather than dangling.
     uint64_t canvasSceneId = 0;
-    sk_sp<SkSurface> surface;
-    VkImage vkImage = VK_NULL_HANDLE;
-    VkImageLayout vkImageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    sk_sp<SkSurface> surface;   // HTML, CPU
+    render::SkiaImageRef image;  // HTML, GPU
     float cx = 0, cy = 0, cw = 0, ch = 0;
     // Overflow/scroll clip for Canvas layers, in top-left pixel space. The
     // canvas quad is composited outside the Skia clip stack, so the compositor

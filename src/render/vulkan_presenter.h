@@ -21,12 +21,17 @@ struct PresentPixels {
     explicit operator bool() const { return pixels && width > 0 && height > 0; }
 };
 
-/// A GPU image of a PresentFrame (a 3D scene's output, a WebGL canvas),
-/// drawn into `dst` in target pixels — scaled when the sizes differ — and
-/// cut to `clip`; then `above`, the CPU layer of everything composited after
-/// it, at the target's top-left.
+/// A GPU image of a PresentFrame (a 3D scene's output, a WebGL canvas, a
+/// Skia layer), drawn into `dst` in target pixels — scaled when the sizes
+/// differ — and cut to `clip`; then `above`, the CPU layer of everything
+/// composited after it, at the target's top-left.
+///
+/// An image with a `view` (sampled usage, 8-bit RGBA/BGRA, in
+/// SHADER_READ_ONLY_OPTIMAL) is sampled in place; any other is first copied
+/// into a texture of the presenter's.
 struct PresentImage {
     VkImage image = VK_NULL_HANDLE;
+    VkImageView view = VK_NULL_HANDLE;
     VkImageLayout layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;  // restored afterwards
     uint32_t width = 0;
     uint32_t height = 0;
@@ -60,6 +65,9 @@ struct PresentFrame {
     std::vector<PresentImage> images;
 
     float clearColor[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+    /// Offscreen: the target size. 0 = what the layers cover.
+    uint32_t width = 0;
+    uint32_t height = 0;
 
     bool hasImages() const { return !images.empty(); }
 };
@@ -169,7 +177,8 @@ private:
                             BlendDraw& out);
     bool copyImageTexture(VkCommandBuffer cmd, const PresentImage& image, size_t index, const Target& target,
                           BlendDraw& out);
-    bool describeTexture(const Image& tex, VkSampler sampler, BlendDraw& out);
+    bool describeTexture(VkImageView view, VkSampler sampler, BlendDraw& out);
+    bool describeInPlace(const PresentImage& image, const Target& target, BlendDraw& out);
     void recordBlendDraws(VkCommandBuffer cmd, const Target& target, const std::vector<BlendDraw>& draws);
 
     VulkanContext& context_;

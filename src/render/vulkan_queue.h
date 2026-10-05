@@ -54,6 +54,12 @@ public:
     /// command buffers were then not executed and no semaphore will signal).
     uint64_t submit(const QueueSubmit& batch);
 
+    /// Submit batches recorded by code that drives the queue itself (Skia's
+    /// Vulkan backend calls vkQueueSubmit through here): the same lock, and
+    /// the queue's timeline signal appended to the last batch so the work
+    /// gets a ticket like any other. Returns the vkQueueSubmit result.
+    VkResult submitForeign(uint32_t count, const VkSubmitInfo* batches, VkFence fence);
+
     /// Present on the present queue (serialised with submissions).
     VkResult present(const VkPresentInfoKHR& info);
 

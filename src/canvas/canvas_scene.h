@@ -4,6 +4,7 @@
 #include "render/font_fallback.h"
 #include "render/renderer.h"
 #include "render/shaped_run.h"
+#include "render/skia_gpu.h"
 
 #include <atomic>
 #include <functional>
@@ -115,10 +116,13 @@ struct CanvasTextMetrics {
     float ideographicBaseline = 0.0f;
 };
 
-/// Per-canvas Skia-backed renderer.  Each CanvasScene owns an SkSurface.
+/// Per-canvas Skia-backed renderer.  Each CanvasScene owns an SkSurface:
+/// a GPU one on its renderer's SkiaGpu when it has one, else CPU raster.
 /// Draw operations are recorded into a command buffer during JS execution and
 /// replayed onto the SkCanvas during rasterize(), keeping Skia rendering cost
-/// out of the JS phase.  The engine composites the surface's pixels.
+/// out of the JS phase.  The engine composites the surface — its GPU image in
+/// place, or its pixels. Every method that reaches a GPU surface takes the
+/// SkiaGpu lock itself.
 class CanvasScene {
 public:
     explicit CanvasScene(render::Renderer* renderer);
@@ -159,7 +163,10 @@ public:
     render::Renderer* renderer() const { return renderer_; }
     int width() const { return queryLayoutWidth(); }
     int height() const { return queryLayoutHeight(); }
-    SkSurface* surface() const { return surface_.get(); }
+    SkSurface* surface() const { return surface_.surface.get(); }
+    /// The GPU surface's image, ready to sample after rasterize() (null for
+    /// a CPU surface).
+    render::SkiaImageRef gpuImage() const { return surface_.image; }
 
     /// Set the canvas's intrinsic bitmap size (HTML canvas.width/height).
     /// When non-zero, takes precedence over layout-derived size — the surface
@@ -506,9 +513,17 @@ private:
     bool detached_ = false;
     bool everAttached_ = false;
 
-    // Skia surface (raster, RGBA premul)
-    sk_sp<SkSurface> surface_;
+    // Skia surface (RGBA premul): GPU on the renderer's SkiaGpu, else raster.
+    // On the GPU, unfinished_ marks a surface drawn (or read) since the last
+    // finish, which rasterize() leaves ready to sample again.
+    render::LayerSurface surface_;
     int surfWidth_ = 0, surfHeight_ = 0;
+    bool unfinished_ = false;
+    render::SkiaGpu* gpu() const { return renderer_ ? renderer_->skiaGpu() : nullptr; }
+    render::SkiaGpu::Lock lockGpu() const {
+        render::SkiaGpu* g = gpu();
+        return g ? g->lock() : render::SkiaGpu::Lock();
+    }
 
     // Snapshot cache for drawImage(<canvas>) sources — see snapshotPixels()
     // and snapshotImage(). Invalidated whenever a new draw command lands,

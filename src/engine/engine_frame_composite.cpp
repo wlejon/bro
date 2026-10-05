@@ -1,7 +1,9 @@
-// Frame composition: the CPU composite of a frame's UI layers around the GPU
-// layers (3D scenes, WebGL canvases) the presenter draws in place, and its
-// presentation — windowed through the VulkanPresenter (or the software window
-// surface without Vulkan), headless as pixels for a capture.
+// Frame composition: a frame's layers as one PresentFrame — GPU images (3D
+// scenes, WebGL canvases, and with Skia on the GPU every HTML, canvas and
+// iframe layer) the presenter draws in place, and the CPU composite of any
+// CPU-drawn layers between them — and its presentation: windowed through the
+// VulkanPresenter (or the software window surface without Vulkan), headless
+// as pixels for a capture.
 
 #include "engine/engine.h"
 #include "engine/frame_presenter.h"
@@ -65,8 +67,11 @@ void Engine::beginGpuFrame() {
     if (vulkanContext_) vulkanContext_->frames().beginFrame();
 }
 
-// Size and clear this frame's composite; forget last frame's GPU layers.
+// Size this frame's composite; forget last frame's layers. The CPU segments
+// are made and cleared only once a CPU layer is drawn into them: a frame of
+// GPU layers alone (Skia on the GPU) has none.
 void Engine::beginFrameComposite() {
+    if (skiaGpu_) skiaGpu_->collect();
     int fbW = deviceScale_.drawableW > 0 ? deviceScale_.drawableW : viewportWidth_;
     int fbH = deviceScale_.drawableH > 0 ? deviceScale_.drawableH : viewportHeight_;
     if (frameCompositeW_ != fbW || frameCompositeH_ != fbH) {
@@ -74,11 +79,9 @@ void Engine::beginFrameComposite() {
         frameCompositeW_ = fbW;
         frameCompositeH_ = fbH;
     }
-    if (frameSegments_.empty())
-        frameSegments_.push_back(SkSurfaces::Raster(SkImageInfo::MakeN32Premul(fbW, fbH)));
-    if (frameSegments_[0]) frameSegments_[0]->getCanvas()->clear(SK_ColorTRANSPARENT);
-    frameSegmentUsed_.assign(1, true);
+    frameSegmentUsed_.clear();
     frameImages_.clear();
+    frameSkiaImages_.clear();
 }
 
 // The segment the next CPU layer composites into: the one above the last GPU
@@ -98,7 +101,7 @@ SkCanvas* Engine::frameSegmentCanvas() {
 }
 
 void Engine::compositeLayers(const std::vector<UILayer>& layers, int offsetY) {
-    if (layers.empty() || frameSegments_.empty() || !frameSegments_[0]) return;
+    if (layers.empty() || frameCompositeW_ <= 0 || frameCompositeH_ <= 0) return;
 
     const int fbW = frameCompositeW_, fbH = frameCompositeH_;
     LayerPlacement at;
@@ -108,8 +111,8 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, int offsetY) {
 
     // A GPU layer's image goes to the presenter, placed and clipped where the
     // layer sits; the CPU layers after it composite into the next segment.
-    auto addImage = [&](VkImage image, VkImageLayout layout, uint32_t w, uint32_t h, const UILayer& l) {
-        const SkRect dst = at.dst(l);
+    auto place = [&](VkImage image, VkImageLayout layout, uint32_t w, uint32_t h, const SkRect& dst,
+                     const UILayer& l) -> render::PresentImage& {
         render::PresentImage& out = frameImages_.emplace_back();
         out.image = image;
         out.layout = layout;
@@ -126,20 +129,40 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, int offsetY) {
             out.clip = {{r.left(), r.top()},
                         {static_cast<uint32_t>(std::max(0, r.width())), static_cast<uint32_t>(std::max(0, r.height()))}};
         }
+        return out;
+    };
+    auto addImage = [&](VkImage image, VkImageLayout layout, uint32_t w, uint32_t h, const UILayer& l) {
+        place(image, layout, w, h, at.dst(l), l);
+    };
+    // A Skia GPU image, sampled where it is; kept alive until the frame has
+    // been submitted.
+    auto addSkiaImage = [&](const render::SkiaImageRef& image, const SkRect& dst, const UILayer& l) {
+        place(image->image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, image->width, image->height, dst, l).view =
+            image->view;
+        frameSkiaImages_.push_back(image);
     };
 
     for (const auto& layer : layers) {
         if (layer.type == UILayer::HTML) {
-            if (layer.surface) {
+            // Content space, 1:1 in device px, below the inset.
+            if (layer.image) {
+                const SkRect dst = SkRect::MakeXYWH(0.0f, at.oy * at.sy, static_cast<float>(layer.image->width),
+                                                    static_cast<float>(layer.image->height));
+                UILayer unclipped;
+                addSkiaImage(layer.image, dst, unclipped);
+            } else if (layer.surface) {
                 if (auto img = layer.surface->makeImageSnapshot())
                     if (SkCanvas* canvas = frameSegmentCanvas()) canvas->drawImage(img, 0.0f, at.oy * at.sy);
             }
         } else if (layer.type == UILayer::Iframe) {
-            if (auto* d = iframeDocById(layer.canvasSceneId))
-                if (SkCanvas* canvas = frameSegmentCanvas()) at.draw(canvas, d->published.get(), layer);
+            if (auto* d = iframeDocById(layer.canvasSceneId)) {
+                if (render::SkiaImageRef image = d->published.gpu()) addSkiaImage(image, at.dst(layer), layer);
+                else if (SkCanvas* canvas = frameSegmentCanvas()) at.draw(canvas, d->published.get(), layer);
+            }
         } else if (layer.type == UILayer::Canvas) {
             if (auto* cs = canvasSceneById(layer.canvasSceneId)) {
-                if (cs->surface())
+                if (render::SkiaImageRef image = cs->gpuImage()) addSkiaImage(image, at.dst(layer), layer);
+                else if (cs->surface())
                     if (SkCanvas* canvas = frameSegmentCanvas())
                         at.draw(canvas, cs->surface()->makeImageSnapshot(), layer);
             }
@@ -179,18 +202,22 @@ static render::PresentPixels layerOf(SkSurface* surface) {
 }
 
 // The frame as a PresentFrame: the first segment below, then each GPU image
-// with the segment composited after it above.
+// with the segment composited after it above, over transparency, at the
+// composite's size.
 render::PresentFrame Engine::describeCompositedFrame() {
     render::PresentFrame frame;
-    if (!frameSegments_.empty()) frame.below = layerOf(frameSegments_[0].get());
+    auto segmentUsed = [&](size_t i) {
+        return i < frameSegmentUsed_.size() && frameSegmentUsed_[i] && i < frameSegments_.size();
+    };
+    if (segmentUsed(0)) frame.below = layerOf(frameSegments_[0].get());
     frame.images = std::move(frameImages_);
-    for (size_t i = 0; i < frame.images.size(); ++i) {
-        const size_t segment = i + 1;
-        if (segment < frameSegmentUsed_.size() && frameSegmentUsed_[segment])
-            frame.images[i].above = layerOf(frameSegments_[segment].get());
-    }
+    for (size_t i = 0; i < frame.images.size(); ++i)
+        if (segmentUsed(i + 1)) frame.images[i].above = layerOf(frameSegments_[i + 1].get());
+    std::fill(std::begin(frame.clearColor), std::end(frame.clearColor), 0.0f);
+    frame.width = static_cast<uint32_t>(std::max(0, frameCompositeW_));
+    frame.height = static_cast<uint32_t>(std::max(0, frameCompositeH_));
     frameImages_.clear();
-    frameSegmentUsed_.assign(1, true);
+    frameSegmentUsed_.clear();
     return frame;
 }
 
@@ -198,6 +225,7 @@ void Engine::presentCurrentFrame() {
     const render::PresentFrame frame = describeCompositedFrame();
     if (vulkanPresenter_ && !vulkanPresenter_->isHeadless()) {
         if (!vulkanPresenter_->present(frame)) LOG_ERROR("Engine: presenting the frame failed");
+        frameSkiaImages_.clear();  // submitted
     } else if (window_ && window_->backend() == platform::GraphicsBackend::Software && frame.below) {
         // No GPU, so no GPU layer: the CPU composite is the frame.
         const render::PresentPixels& p = frame.below;
@@ -210,12 +238,15 @@ void Engine::presentCurrentFrame() {
 // CPU composite is read straight from it; one with GPU layers is composited by
 // the presenter and read back, in one submission and one wait.
 std::vector<uint8_t> Engine::readCompositedFrame() {
+    const bool cpuOnly = frameImages_.empty();
+    if (cpuOnly) frameSegmentCanvas();  // a frame nothing was drawn into is transparent
     const render::PresentFrame frame = describeCompositedFrame();
-    if (frame.hasImages() && vulkanPresenter_ && vulkanPresenter_->isHeadless()) {
+    if (!cpuOnly && vulkanPresenter_ && vulkanPresenter_->isHeadless()) {
         std::vector<uint8_t> pixels;
         uint32_t w = 0, h = 0;
-        if (vulkanPresenter_->present(frame) && vulkanPresenter_->readbackPixels(pixels, w, h))
-            return pixels;
+        const bool ok = vulkanPresenter_->present(frame) && vulkanPresenter_->readbackPixels(pixels, w, h);
+        frameSkiaImages_.clear();
+        if (ok) return pixels;
         LOG_ERROR("Engine: GPU frame composite/readback failed");
         return {};
     }

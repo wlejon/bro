@@ -203,7 +203,9 @@ Engine::Engine(const EngineConfig& config)
             LOG_INFO("Engine: Headless Vulkan initialized successfully");
         }
         if (vulkanPresenter_) {
-            renderer_ = std::make_unique<render::SkiaRenderer>();
+            auto skia = std::make_unique<render::SkiaRenderer>();
+            skia->setGpu(createSkiaGpu());
+            renderer_ = std::move(skia);
         } else {
             renderer_ = std::make_unique<render::RasterRenderer>();
         }
@@ -265,6 +267,8 @@ Engine::Engine(const EngineConfig& config)
 #if BRO_WITH_3D
                 scene::SceneRenderer::setDefaultVulkanContext(vulkanContext_.get());
 #endif
+                if (auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get()))
+                    skia->setGpu(createSkiaGpu());
             }
         } catch (const std::exception& e) {
             throw;
@@ -921,4 +925,23 @@ void Engine::loadCustomFonts() {
         }
     }
 }
+} // namespace bro::engine
+
+namespace bro::engine {
+
+// Skia's GPU context on the engine's device. Null — Skia then draws on the
+// CPU and the presenter uploads its pixels — without Vulkan, when Skia cannot
+// run on the device, or with BRO_SKIA_GPU=0 (for comparing the two).
+render::SkiaGpu* Engine::createSkiaGpu() {
+    if (!vulkanContext_) return nullptr;
+    if (const char* v = std::getenv("BRO_SKIA_GPU"); v && std::string_view(v) == "0") {
+        LOG_INFO("Engine: BRO_SKIA_GPU=0, Skia draws on the CPU");
+        return nullptr;
+    }
+    auto gpu = std::make_unique<render::SkiaGpu>(*vulkanContext_);
+    if (!gpu->init()) return nullptr;
+    skiaGpu_ = std::move(gpu);
+    return skiaGpu_.get();
+}
+
 } // namespace bro::engine

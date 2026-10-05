@@ -138,6 +138,7 @@ void Engine::processPendingWindowHosts() {
         // the surface into the owning context's free list, then the window.
         teardownWindowHostDoc(*h);
         queueIframeSurfaceFree(std::move(h->surface));
+        queueIframeSurfaceFree(std::move(h->spare));
         h->surfW = h->surfH = 0;
         h->published.clear();
         h->presenter.reset();  // the swapchain's surface must go before its window
@@ -224,6 +225,7 @@ void Engine::processPendingWindowHosts() {
             if (windowHosts_[i]->id == id) {
                 teardownWindowHostDoc(*windowHosts_[i]);
                 queueIframeSurfaceFree(std::move(windowHosts_[i]->surface));
+                queueIframeSurfaceFree(std::move(windowHosts_[i]->spare));
                 windowHosts_.erase(windowHosts_.begin() + static_cast<ptrdiff_t>(i));
                 bro::bronze_host::windowHostNotifyClosed(id);
                 break;
@@ -257,8 +259,8 @@ void Engine::createWindowHostPresenter(WindowHost& h) {
 }
 
 // Present each host's last published frame over its clear color. Runs on the
-// main thread after the frame's raster handshake; the published snapshot is
-// the only thing it reads of the raster thread's work.
+// main thread after the frame's raster handshake; the published frame is the
+// only thing it reads of the raster thread's work.
 void Engine::compositeWindowHosts() {
     if (!window_ || displayMode_ != DisplayMode::Windowed) return;
     if (!anyPresentableWindowHosts()) return;
@@ -269,6 +271,19 @@ void Engine::compositeWindowHosts() {
         int pw = 0, ph = 0;
         h->window->getSizeInPixels(pw, ph);
         if (pw <= 0 || ph <= 0) continue;
+
+        // A GPU frame is sampled in place over the clear color — in device
+        // px at the host's render scale, like the drawable: 1:1.
+        if (render::SkiaImageRef image = h->published.gpu(); image && h->presenter) {
+            render::PresentFrame frame;
+            render::PresentImage& layer = frame.images.emplace_back(render::PresentImage::at1to1(
+                image->image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, image->width, image->height));
+            layer.view = image->view;
+            std::copy(std::begin(h->clearColor), std::end(h->clearColor), std::begin(frame.clearColor));
+            h->presenter->present(frame);
+            h->presentSurface.reset();
+            continue;
+        }
         if (!h->presentSurface || h->presentSurface->width() != pw || h->presentSurface->height() != ph)
             h->presentSurface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(pw, ph));
         if (!h->presentSurface) continue;
@@ -296,6 +311,7 @@ void Engine::destroyAllWindowHosts() {
         uint64_t id = h->id;
         teardownWindowHostDoc(*h);
         queueIframeSurfaceFree(std::move(h->surface));
+        queueIframeSurfaceFree(std::move(h->spare));
         h->surfW = h->surfH = 0;
         h->published.clear();
         bro::bronze_host::windowHostNotifyClosed(id);

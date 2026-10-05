@@ -290,6 +290,7 @@ bool VulkanContext::createInstance() {
 
     VkResult res = vkCreateInstance(&createInfo, nullptr, &instance_);
     if (res != VK_SUCCESS) LOG_ERROR("Vulkan: vkCreateInstance failed (%d)", res);
+    instanceExtensions_.assign(extensions.begin(), extensions.end());
     return res == VK_SUCCESS;
 }
 
@@ -574,6 +575,7 @@ bool VulkanContext::createLogicalDevice() {
         LOG_ERROR("Vulkan: vkCreateDevice failed (%d)", res);
         return false;
     }
+    deviceExtensions_.assign(enabledExtensions.begin(), enabledExtensions.end());
 
     vkGetDeviceQueue(device_, queueIndices_.graphicsFamily, 0, &graphicsQueue_);
     vkGetDeviceQueue(device_, queueIndices_.presentFamily, 0, &presentQueue_);

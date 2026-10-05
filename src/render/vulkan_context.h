@@ -82,6 +82,10 @@ public:
     bool largePoints() const { return deviceFeatures_.largePoints == VK_TRUE; }
     /// The core features the device was created with.
     const VkPhysicalDeviceFeatures& features() const { return deviceFeatures_; }
+    /// The instance and device extensions that were enabled (for libraries
+    /// that share the device and must know what it offers, like Skia).
+    const std::vector<std::string>& enabledInstanceExtensions() const { return instanceExtensions_; }
+    const std::vector<std::string>& enabledDeviceExtensions() const { return deviceExtensions_; }
     /// Instance-rate vertex divisors other than 1 (VK_EXT_vertex_attribute_divisor).
     bool vertexAttributeDivisor() const { return vertexAttributeDivisor_; }
     /// Primitive restart in list topologies (VK_EXT_primitive_topology_list_restart).
@@ -208,6 +212,8 @@ private:
     VkPhysicalDeviceProperties deviceProperties_{};
     VkPhysicalDeviceMemoryProperties memoryProperties_{};
     VkPhysicalDeviceFeatures deviceFeatures_{};
+    std::vector<std::string> instanceExtensions_;
+    std::vector<std::string> deviceExtensions_;
 
     uint32_t apiVersion_ = 0;
     bool synchronization2_ = false;

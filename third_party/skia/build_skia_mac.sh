@@ -5,6 +5,10 @@
 #   - Xcode Command Line Tools (clang, make, python3)
 #   - ninja (brew install ninja)
 #
+# Ganesh is built for Vulkan only (bro has no GL); on macOS it runs on MoltenVK.
+# The Vulkan headers come from Skia's own third_party tree, so no Vulkan SDK
+# is needed to build the lib.
+#
 # On first run, this script clones Skia (~1 GB) into third_party/skia/src/
 # and runs `python3 tools/git-sync-deps`, which downloads several hundred MB
 # of additional build dependencies (including an Emscripten SDK). Expect the
@@ -16,11 +20,17 @@
 #   ./build_skia_mac.sh          # builds Release
 #   ./build_skia_mac.sh Debug    # builds Debug
 #   ./build_skia_mac.sh all      # builds both
+#
+# SKIA_SRC=/path/to/checkout builds from a full Skia checkout elsewhere —
+# third_party/skia/src normally holds the trimmed source bundle, which is not
+# a buildable tree. Either way the checkout is pinned to SKIA_COMMIT, the
+# chrome/m147 commit the source bundle was cut from.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SKIA_SRC="$SCRIPT_DIR/src"
+SKIA_SRC="${SKIA_SRC:-$SCRIPT_DIR/src}"
+SKIA_COMMIT="abbe599fb3c0ef2fa82bfadbb0ddcd321f22faf0"   # chrome/m147
 CONFIG="${1:-Release}"
 
 # Derive target arch from *hardware*, not from the process arch. `uname -m`
@@ -74,7 +84,8 @@ build_config() {
         is_debug=$is_debug
         target_cpu=\"$TARGET_CPU\"
         skia_use_metal=false
-        skia_use_gl=true
+        skia_use_gl=false
+        skia_use_vulkan=true
         skia_enable_ganesh=true
         skia_enable_svg=true
         skia_use_expat=true
@@ -119,13 +130,26 @@ build_config() {
     echo "=== Installed libskia.a to $dest ==="
 }
 
-if [ ! -d "$SKIA_SRC" ]; then
-    echo "=== Cloning Skia source ==="
-    git clone https://skia.googlesource.com/skia.git "$SKIA_SRC"
+if [ ! -f "$SKIA_SRC/BUILD.gn" ]; then
+    echo "=== Fetching Skia source ($SKIA_COMMIT) ==="
+    mkdir -p "$SKIA_SRC"
+    cd "$SKIA_SRC"
+    if [ ! -d .git ]; then
+        git init -q
+        git remote add origin https://skia.googlesource.com/skia.git 2>/dev/null || true
+    fi
+    git fetch --depth 1 origin "$SKIA_COMMIT"
+    git checkout -f FETCH_HEAD
+fi
+
+cd "$SKIA_SRC"
+if [ "$(git rev-parse HEAD)" != "$SKIA_COMMIT" ]; then
+    echo "error: $SKIA_SRC is at $(git rev-parse HEAD), expected $SKIA_COMMIT (chrome/m147)."
+    echo "  The library must match the headers in the source bundle; check out $SKIA_COMMIT."
+    exit 1
 fi
 
 echo "=== Syncing Skia dependencies ==="
-cd "$SKIA_SRC"
 python3 tools/git-sync-deps
 
 if [ "$CONFIG" = "all" ]; then

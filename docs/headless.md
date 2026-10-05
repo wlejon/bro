@@ -476,7 +476,7 @@ Headless mode shares the same `Engine` class as windowed mode, configured via `E
 ### GPU mode (default)
 
 - Uses headless Vulkan 1.3 Core with Dynamic Rendering (`VK_KHR_dynamic_rendering`) directly via `VulkanContext` and `VulkanPresenter` without requiring an X11 server, window, or Xvfb on Linux
-- Uses `SkiaRenderer`: same Skia rasterization backend as windowed mode
+- Uses `SkiaRenderer`: same Skia rasterization backend as windowed mode. Skia draws on the GPU (Ganesh on Vulkan, `SkiaGpu`, sharing the engine's device and queue): UI layers, iframes and 2D canvases are GPU images the presenter samples in place, read back only for a capture or `getImageData`. `BRO_SKIA_GPU=0` keeps Skia on the CPU (raster layers uploaded to the composite) for comparing the two; anti-aliased edges can differ by a few levels, flat colours and `getImageData`/`putImageData` round trips match exactly
 - WebGL2 support: Three.js, raw WebGL, and other GL frameworks work via native Vulkan translation (`WebGLVkContext`, `WebGLVkCanvas`)
 - 3D scene graph runs Vulkan render passes; its shaders are compiled to SPIR-V by the in-process glslang (built-in ones at build time, custom shaders and WebGL programs at run time), and pipelines persist in the on-disk pipeline cache
 - Screenshots replicate the windowed compositing pass: scene layers rendered to offscreen Vulkan render targets, UI overlay composited on top with zero-copy texture presentation, then read back directly via Vulkan transfer buffers

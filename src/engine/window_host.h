@@ -81,7 +81,10 @@ struct WindowHost {
     // raster thread at replay, ordered by the frame handshake like boxW/boxH.
     float renderScale = 1.0f;
     render::CommandBuffer cmdBuffer;
-    render::SkiaRenderer::LayerSurface surface;  // raster thread only
+    // Drawn by the raster thread: `surface` this replay, `spare` the last
+    // one's (a GPU image the compositor may still be sampling), swapped after.
+    render::LayerSurface surface;
+    render::LayerSurface spare;
     int surfW = 0, surfH = 0;
     PublishedFrame published;                  // what compositeWindowHosts presents
 

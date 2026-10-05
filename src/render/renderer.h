@@ -20,6 +20,7 @@ class SkTextBlob;
 namespace bro::render {
 
 class TextShapingEngine;
+class SkiaGpu;
 class ShapedRun;
 
 // Color is bromath::Color — linear-float RGBA in [0,1]. Per-namespace alias
@@ -416,6 +417,9 @@ public:
     // Screenshot support — access the underlying Skia surface/canvas.
     virtual SkCanvas* getCanvas() const { return nullptr; }
     virtual SkSurface* surface() const { return nullptr; }
+    /// The GPU Skia context this renderer draws with, if it draws on the GPU.
+    /// Canvases created against the renderer draw on it too.
+    virtual SkiaGpu* skiaGpu() const { return nullptr; }
     virtual bool saveScreenshot(const std::string& path) { return false; }
 
     /// Capture the surface as RGBA pixels (w x h x 4). Returns empty on failure.

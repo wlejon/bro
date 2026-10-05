@@ -72,6 +72,7 @@ void Engine::syncIframes() {
             // (and with it the surface) is destroyed on this thread — see
             // queueIframeSurfaceFree. Erasing it here would leak the FBO.
             queueIframeSurfaceFree(std::move((*it)->surface));
+            queueIframeSurfaceFree(std::move((*it)->spare));
             teardownIframeDoc(it->get());
             it = iframeDocs_.erase(it);
         }
@@ -252,16 +253,19 @@ void Engine::processPendingIframeReloads() {
         // Hand it to the rebuilt sub-doc; replayIframeLayers resizes it if the
         // box changed, and keeping its published frame means the preview shows the old frame
         // until the new one paints instead of flashing blank.
-        render::SkiaRenderer::LayerSurface salvaged;
+        render::LayerSurface salvaged, salvagedSpare;
         int salvagedW = 0, salvagedH = 0;
         sk_sp<SkImage> salvagedFrame;
+        render::SkiaImageRef salvagedGpuFrame;
         bool haveSalvage = false;
         for (auto it = iframeDocs_.begin(); it != iframeDocs_.end(); ++it) {
             if ((*it)->element == el) {
                 salvaged = std::move((*it)->surface);
+                salvagedSpare = std::move((*it)->spare);
                 salvagedW = (*it)->surfW;
                 salvagedH = (*it)->surfH;
                 salvagedFrame = (*it)->published.get();
+                salvagedGpuFrame = (*it)->published.gpu();
                 haveSalvage = true;
                 teardownIframeDoc(it->get());
                 iframeDocs_.erase(it);
@@ -281,11 +285,14 @@ void Engine::processPendingIframeReloads() {
         // would leak the FBO and release Ganesh off-thread.
         if (IframeDoc* nd = src.empty() ? nullptr : iframeDocForElement(el)) {
             nd->surface = std::move(salvaged);
+            nd->spare = std::move(salvagedSpare);
             nd->surfW = salvagedW;
             nd->surfH = salvagedH;
-            nd->published.publish(std::move(salvagedFrame));
+            if (salvagedGpuFrame) nd->published.publish(std::move(salvagedGpuFrame));
+            else nd->published.publish(std::move(salvagedFrame));
         } else {
             queueIframeSurfaceFree(std::move(salvaged));
+            queueIframeSurfaceFree(std::move(salvagedSpare));
         }
     }
 }
@@ -293,7 +300,7 @@ void Engine::processPendingIframeReloads() {
 // Main thread, raster-idle only. See the header for why an iframe surface is
 // released on the raster thread. Secondary-window hosts route their surfaces
 // through the same queue.
-void Engine::queueIframeSurfaceFree(render::SkiaRenderer::LayerSurface&& surf) {
+void Engine::queueIframeSurfaceFree(render::LayerSurface&& surf) {
     if (!surf.surface) return;
     iframeSurfaceFrees_.push_back(std::move(surf));
 }

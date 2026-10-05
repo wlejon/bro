@@ -8,7 +8,7 @@
 # run third_party/skia/build_skia_{linux,mac}.sh, or populate
 # third_party/skia/lib/{Debug,Release}/ and third_party/skia/src/ by hand:
 #   cd third_party/skia/src && python3 tools/git-sync-deps
-#   bin/gn gen out/Release --args='...'  (see CLAUDE.md)
+#   bin/gn gen out/Release --args='...'  (Vulkan Ganesh, no GL: see BUILDING.md)
 #   ninja -C out/Release skia
 
 if(WIN32)

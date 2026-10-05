@@ -157,6 +157,19 @@ void Engine::recordAppLayers(render::CommandBuffer& outBuffer,
     drawTraversal_->setPromotedElements(nullptr);
 }
 
+namespace {
+
+// The UILayer for an HTML layer surface: its GPU image, or the CPU surface.
+UILayer htmlLayerOf(const render::LayerSurface& s) {
+    UILayer layer;
+    layer.type = UILayer::HTML;
+    if (s.isGpu()) layer.image = s.image;
+    else layer.surface = s.surface;
+    return layer;
+}
+
+} // namespace
+
 void Engine::replayAppLayers(render::SkiaRenderer* renderer,
                              const render::CommandBuffer& buffer,
                              std::vector<render::SkiaRenderer::LayerSurface>& pool,
@@ -170,7 +183,6 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
     // insets) — app layer surfaces are content-sized. The pool compare below
     // must use these dims so a menu show/hide (contentH change) reallocates.
     if (poolW != surfW || poolH != surfH) {
-        for (auto& ps : pool) renderer->releaseLayerSurface(ps);
         pool.clear();
         poolW = surfW;
         poolH = surfH;
@@ -194,10 +206,7 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
             }
             renderer->switchSurface(pool[htmlLayerIdx].surface);
 
-            UILayer htmlLayer;
-            htmlLayer.type = UILayer::HTML;
-            htmlLayer.surface = pool[prevIdx].surface;
-            outLayers.push_back(std::move(htmlLayer));
+            outLayers.push_back(htmlLayerOf(pool[prevIdx]));
 
             UILayer quadLayer;
             if (kind == render::Cmd_LayerBreak::IframeDoc) {
@@ -222,10 +231,7 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
 
     // Capture the trailing HTML layer.
     renderer->switchSurface(origSurface);
-    UILayer lastHtml;
-    lastHtml.type = UILayer::HTML;
-    lastHtml.surface = pool[htmlLayerIdx].surface;
-    outLayers.push_back(std::move(lastHtml));
+    outLayers.push_back(htmlLayerOf(pool[htmlLayerIdx]));
 
     // Compositor-promoted layer: replay the promoted subtrees into one extra
     // pool surface and append it as the topmost HTML layer, filling the holes
@@ -247,10 +253,7 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
         promotedReplayer.replay(*promotedBuffer);
         renderer->switchSurface(origSurface);
 
-        UILayer promotedLayer;
-        promotedLayer.type = UILayer::HTML;
-        promotedLayer.surface = pool[promotedIdx].surface;
-        outLayers.push_back(std::move(promotedLayer));
+        outLayers.push_back(htmlLayerOf(pool[promotedIdx]));
     }
 }
 
@@ -294,7 +297,6 @@ void Engine::replaySystemPanelLayers(render::SkiaRenderer* renderer,
     if (buffer.commandCount() == 0) return;
 
     if (poolW != vpW || poolH != vpH) {
-        for (auto& ps : pool) renderer->releaseLayerSurface(ps);
         pool.clear();
         poolW = vpW;
         poolH = vpH;
@@ -317,10 +319,7 @@ void Engine::replaySystemPanelLayers(render::SkiaRenderer* renderer,
             float, float, float, float, float, float, float, float) {
             if (kind != render::Cmd_LayerBreak::HtmlSurface) return;
             // Capture current panel into a UILayer, advance to next surface.
-            UILayer panelLayer;
-            panelLayer.type = UILayer::HTML;
-            panelLayer.surface = pool[panelIdx].surface;
-            outLayers.push_back(std::move(panelLayer));
+            outLayers.push_back(htmlLayerOf(pool[panelIdx]));
 
             panelIdx++;
             ensurePoolAt(panelIdx);
@@ -331,6 +330,9 @@ void Engine::replaySystemPanelLayers(render::SkiaRenderer* renderer,
         [&](void* scenePtr, float x, float y, float w, float h) {
             auto* scene = static_cast<canvas::CanvasScene*>(scenePtr);
             if (!scene || w <= 0 || h <= 0) return;
+            // The canvas's own surface is drawn and snapshotted directly.
+            render::SkiaGpu::Lock lock =
+                renderer->skiaGpu() ? renderer->skiaGpu()->lock() : render::SkiaGpu::Lock();
             scene->flushStaged();
             auto* src = scene->surface();
             if (!src) return;
@@ -346,10 +348,7 @@ void Engine::replaySystemPanelLayers(render::SkiaRenderer* renderer,
     replayer.replay(buffer);
 
     // Capture the final panel.
-    UILayer panelLayer;
-    panelLayer.type = UILayer::HTML;
-    panelLayer.surface = pool[panelIdx].surface;
-    outLayers.push_back(std::move(panelLayer));
+    outLayers.push_back(htmlLayerOf(pool[panelIdx]));
 
     renderer->switchSurface(origSurface);
 }

@@ -172,7 +172,10 @@ void Engine::performAppReload() {
     webglEntries_.clear();
 
     for (auto& d : iframeDocs_)
-        if (d) queueIframeSurfaceFree(std::move(d->surface));
+        if (d) {
+            queueIframeSurfaceFree(std::move(d->surface));
+            queueIframeSurfaceFree(std::move(d->spare));
+        }
     destroyAllIframes();
     pendingIframeReloads_.clear();
     iframeLoadFailed_.clear();

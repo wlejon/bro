@@ -136,17 +136,22 @@ void Engine::layoutThreadFunc() {
 }
 
 // ---------------------------------------------------------------------------
-// Raster thread — owns the GPU surface pool + Skia/Ganesh context. Replays
-// command buffers recorded by the main thread; never reads the DOM. Produces
-// GPU textures and signals the main thread via FramePresenter.
+// Raster thread — owns the layer surface pools and replays into them the
+// command buffers the main thread recorded; never reads the DOM. With a
+// SkiaGpu the surfaces are GPU images the main thread composites in place.
+// Signals the main thread via FramePresenter.
 // ---------------------------------------------------------------------------
 
 void Engine::rasterThreadFunc() {
     rasterReady_.store(true, std::memory_order_release);
     rasterReady_.notify_one();
 
-    // Per-thread Skia renderer.
+    // Per-thread Skia renderer, on the shared GPU context when there is one.
+    // It records each layer without the context lock (the main thread's
+    // canvases use the context meanwhile) and locks only to apply it.
     auto rasterRenderer = std::make_unique<render::SkiaRenderer>();
+    render::SkiaGpu* gpu = skiaGpu_.get();
+    rasterRenderer->setGpu(gpu);
     for (auto& font : loadedFonts_) {
         rasterRenderer->registerCustomFont(font.family, font.data.data(),
                                            font.data.size(), font.weight, font.italic);
@@ -170,6 +175,7 @@ void Engine::rasterThreadFunc() {
         backBuf.appLayers.clear();
         backBuf.systemLayers.clear();
 
+        if (gpu) gpu->collect();
         rasterRenderer->beginFrame(snap.vpWidth, snap.vpHeight);
 
         // App layer surfaces are content-sized (viewport minus engine
@@ -193,7 +199,6 @@ void Engine::rasterThreadFunc() {
                         contentW, contentH,
                         backBuf.appLayers,
                         &backBuf.promotedCommands);
-
         replaySystemPanelLayers(rasterRenderer.get(), backBuf.systemCommands,
                                 systemSurfacePool_[back], systemSurfacePoolW_[back],
                                 systemSurfacePoolH_[back],
@@ -206,45 +211,36 @@ void Engine::rasterThreadFunc() {
         replayIframeLayers(rasterRenderer.get());
 
         // And each secondary window's document into its window-sized surface →
-        // WindowHost::published, which the main thread composites onto that
-        // window's drawable after the frame's fence. One texture per host, so
-        // the single fence below covers them exactly as it covers app layers.
+        // WindowHost::published, which the main thread presents on that
+        // host's window.
         replayWindowHostLayers(rasterRenderer.get());
 
+        // Finishes the GPU surfaces drawn above — ready to sample, submitted
+        // — before the main thread can composite them.
         rasterRenderer->setDeviceScale(1.0f);
         rasterRenderer->endFrame();
 
         framePresenter_->publishResult();
     }
 
-    // Cleanup — both double-buffered pool copies.
+    // Cleanup — both double-buffered pool copies, and the sub-document
+    // surfaces this thread drew. Reading iframeDocs_ / windowHosts_ here is
+    // race-free: the main thread is blocked in rasterThread_.join().
     for (int i = 0; i < 2; ++i) {
-        for (auto& ps : htmlSurfacePool_[i])   rasterRenderer->releaseLayerSurface(ps);
         htmlSurfacePool_[i].clear();
-        for (auto& ps : systemSurfacePool_[i]) rasterRenderer->releaseLayerSurface(ps);
         systemSurfacePool_[i].clear();
     }
-    // Iframe sub-document surfaces live on this context too (replayIframeLayers
-    // created them), so this is the LAST point they can be released: ~Engine()
-    // destroys the IframeDocs on the main thread, after this thread has joined
-    // and rasterGLContext_ is gone — dropping the sk_sp and the FBO with no
-    // context to free them against. Reading iframeDocs_ here is race-free: the
-    // main thread is blocked in rasterThread_.join() (the same reason the pools
-    // above are safe to touch).
     for (auto& d : iframeDocs_) {
         if (!d) continue;
-        rasterRenderer->releaseLayerSurface(d->surface);
+        d->surface.reset();
+        d->spare.reset();
         d->surfW = d->surfH = 0;
         d->published.clear();
     }
-    // Secondary-window host surfaces live on this context for the same reason
-    // and must go out the same door: shutdown() destroys the hosts on the main
-    // thread only AFTER joining this one, by which point rasterGLContext_ is
-    // gone. Same race-free argument as the pools above (main is blocked in
-    // rasterThread_.join()).
     for (auto& h : windowHosts_) {
         if (!h) continue;
-        rasterRenderer->releaseLayerSurface(h->surface);
+        h->surface.reset();
+        h->spare.reset();
         h->surfW = h->surfH = 0;
         h->published.clear();
     }

@@ -110,6 +110,42 @@ uint64_t VulkanQueue::submit(const QueueSubmit& batch) {
     return ticket;
 }
 
+VkResult VulkanQueue::submitForeign(uint32_t count, const VkSubmitInfo* batches, VkFence fence) {
+    // The foreign batches wait and signal binary semaphores only, so the
+    // timeline values cover just the signal list: 0 for each binary semaphore
+    // (ignored), the ticket for ours.
+    VkSubmitInfo last{};
+    last.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    if (count > 0) last = batches[count - 1];
+    std::vector<VkSemaphore> signalSems(last.pSignalSemaphores, last.pSignalSemaphores + last.signalSemaphoreCount);
+    signalSems.push_back(timeline_);
+    std::vector<uint64_t> signalValues(signalSems.size(), 0);
+
+    std::lock_guard<std::mutex> lock(submitMutex_);
+    const uint64_t ticket = lastTicket_ + 1;
+    signalValues.back() = ticket;
+
+    VkTimelineSemaphoreSubmitInfo timelineInfo{};
+    timelineInfo.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO;
+    timelineInfo.pNext = last.pNext;
+    timelineInfo.signalSemaphoreValueCount = static_cast<uint32_t>(signalValues.size());
+    timelineInfo.pSignalSemaphoreValues = signalValues.data();
+    last.pNext = &timelineInfo;
+    last.signalSemaphoreCount = static_cast<uint32_t>(signalSems.size());
+    last.pSignalSemaphores = signalSems.data();
+
+    std::vector<VkSubmitInfo> all(batches, batches + (count > 0 ? count - 1 : 0));
+    all.push_back(last);
+    VkResult res = vkQueueSubmit(queue_, static_cast<uint32_t>(all.size()), all.data(), fence);
+    if (res != VK_SUCCESS) {
+        LOG_ERROR("VulkanQueue: foreign vkQueueSubmit failed (%d)", res);
+        return res;
+    }
+    lastTicket_ = ticket;
+    presentedSince_ = false;
+    return res;
+}
+
 VkResult VulkanQueue::present(const VkPresentInfoKHR& info) {
     std::lock_guard<std::mutex> lock(submitMutex_);
     presentedSince_ = true;

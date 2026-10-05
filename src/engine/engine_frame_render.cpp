@@ -183,6 +183,13 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
         }
     }
 
+    // Bring each composited canvas up to date: replay what its script drew
+    // since the last frame (on the GPU, leaving its image ready to sample).
+    for (const auto& layer : layers.appLayers) {
+        if (layer.type != UILayer::Canvas) continue;
+        if (auto* cs = canvasSceneById(layer.canvasSceneId)) cs->rasterize();
+    }
+
     beginFrameComposite();
     compositeLayers(layers.appLayers, layers.appInsetTop);
 

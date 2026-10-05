@@ -17,14 +17,23 @@
 #include "render/font_fallback.h"
 #include "render/image_cache.h"
 #include "render/shaped_run.h"
+#include "render/skia_gpu.h"
+
+#include <functional>
+
+class GrDeferredDisplayListRecorder;
 
 namespace bro::render {
 
 // ---------------------------------------------------------------------------
-// SkiaRenderer -- Skia raster UI + Vulkan display
+// SkiaRenderer -- the UI (HTML/CSS) through Skia
 //
-// The UI (HTML/CSS) is rendered to a CPU-side Skia surface with transparency
-// and composited over GPU-rendered scene content via VulkanPresenter.
+// With a SkiaGpu (setGpu) its layer surfaces are GPU surfaces whose images
+// VulkanPresenter composites in place; without one, CPU raster surfaces whose
+// pixels it uploads. Drawing on a GPU surface is recorded into a deferred
+// display list without the SkiaGpu lock — the raster thread replays a page
+// while the main thread's canvases use the context — and only drawing that
+// list into the surface, when drawing moves off it, takes the lock (briefly).
 // ---------------------------------------------------------------------------
 
 class SkiaRenderer final : public Renderer {
@@ -117,13 +126,24 @@ public:
                            float cx, float cy, float angleDeg,
                            std::span<const ColorStop> stops) override;
 
-    // beginFrame/endFrame manage the Skia raster surface for UI rendering.
+    /// Draw on the GPU through `gpu` from now on (null: the CPU). Before the
+    /// first layer surface is made.
+    void setGpu(SkiaGpu* gpu) { gpu_ = gpu; }
+    SkiaGpu* skiaGpu() const override { return gpu_; }
+
+    // beginFrame/endFrame bracket a frame of layer replays. endFrame finishes
+    // the GPU surfaces drawn since beginFrame (their images ready to sample,
+    // the work submitted), then runs the afterSubmit() callbacks.
     void beginFrame(int width, int height) override;
     void endFrame() override;
 
+    /// Run `fn` once this frame's GPU work is submitted (at endFrame) — for
+    /// handing an image to another thread only once it is ready to sample.
+    void afterSubmit(std::function<void()> fn);
+
     /// Switch the active drawing surface mid-frame (for compositing layers).
-    /// Returns the previous surface. The new surface is cleared to transparent.
-    /// Call between beginFrame() and endFrame().
+    /// Returns the previous surface, with everything drawn on it applied (and,
+    /// outside a frame, finished). The new surface is cleared to transparent.
     sk_sp<SkSurface> switchSurface(sk_sp<SkSurface> newSurface);
 
     /// Device pixels per recorded (CSS) unit for the surfaces entered from
@@ -134,11 +154,9 @@ public:
     void setDeviceScale(float scale) { deviceScale_ = scale > 0.0f ? scale : 1.0f; }
     float deviceScale() const { return deviceScale_; }
 
-    /// A compositing layer's raster surface (HTML layers, system panels,
-    /// iframe documents), drawn through switchSurface().
-    struct LayerSurface {
-        sk_sp<SkSurface> surface;
-    };
+    /// A compositing layer's surface (HTML layers, system panels, iframe
+    /// documents), drawn through switchSurface(): GPU with a SkiaGpu.
+    using LayerSurface = render::LayerSurface;
 
     /// A surface of the given size.
     LayerSurface createLayerSurface(int width, int height);
@@ -147,8 +165,8 @@ public:
     /// switchSurface() clears it for the next frame.
     void fitLayerSurface(LayerSurface& surf, int width, int height);
 
-    /// Release the surface's pixels.
-    void releaseLayerSurface(LayerSurface& surf);
+    /// Release the surface (any thread).
+    void releaseLayerSurface(LayerSurface& surf) { surf.reset(); }
 
     SkCanvas* getCanvas() const override { return canvas_; }
     SkSurface* surface() const override { return surface_.get(); }
@@ -161,6 +179,29 @@ private:
     sk_sp<SkSurface> surface_;
     SkCanvas* canvas_ = nullptr;
     float deviceScale_ = 1.0f;
+
+    SkiaGpu* gpu_ = nullptr;
+    // GPU surfaces drawn this frame, finished at endFrame (refs held so a
+    // surface released mid-frame is still finished, then dropped under lock).
+    std::vector<sk_sp<SkSurface>> touched_;
+    bool inFrame_ = false;  // between beginFrame and endFrame
+    // Records what is drawn on the current GPU surface (canvas_ is its canvas).
+    std::unique_ptr<GrDeferredDisplayListRecorder> recorder_;
+    // Draw the recorded list into surface_ (under the lock).
+    void endRecording();
+    // A cached decoded image as a texture, made once, so a recorded list
+    // samples it rather than uploading it every time it is drawn. Dropped
+    // (under the lock) with the decoded image's cache entry.
+    struct GpuImage {
+        sk_sp<SkImage> source;
+        sk_sp<SkImage> texture;
+        uint64_t lastFrame = 0;
+    };
+    std::unordered_map<uint64_t, GpuImage> gpuImages_;
+    uint64_t imageFrame_ = 0;
+    sk_sp<SkImage> gpuImage(uint64_t id, const sk_sp<SkImage>& source);
+    void evictGpuImages(bool all);
+    std::vector<std::function<void()>> afterSubmit_;
     // Clear the current canvas and set it up for a frame: base matrix at the
     // device scale, then the base save().
     void enterCanvas();

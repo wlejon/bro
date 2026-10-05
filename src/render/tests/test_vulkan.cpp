@@ -1,10 +1,12 @@
 // bro_vulkan_test: the shared GPU frame/submission core (VulkanQueue,
-// VulkanFrames), the presenter's offscreen composite + readback, the in-process
+// VulkanFrames), the presenter's offscreen composite + readback, Skia's
+// Ganesh-Vulkan context on the shared device (SkiaGpu), the in-process
 // GLSL compiler, the persisted pipeline cache, and — where a display is
 // available — the swapchain following its window. Run with
 // BRO_VK_VALIDATION=1 to also fail on any validation error.
 
 #include "render/glsl_compiler.h"
+#include "render/skia_gpu.h"
 #include "render/vulkan_context.h"
 #include "render/vulkan_debug.h"
 #include "render/vulkan_presenter.h"
@@ -14,6 +16,7 @@
 
 #include <include/core/SkCanvas.h>
 #include <include/core/SkColor.h>
+#include <include/core/SkImageInfo.h>
 #include <include/core/SkPaint.h>
 #include <include/core/SkRect.h>
 #include <include/core/SkSurface.h>
@@ -25,6 +28,7 @@
 #include <filesystem>
 #include <iostream>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace bro;
@@ -313,6 +317,115 @@ void testSwapchain() {
     ctx.queue().waitIdle();
 }
 
+void testSkiaGpu(render::VulkanContext& ctx) {
+    std::cout << "[skia gpu] Ganesh on the shared device, images sampled in place" << std::endl;
+    render::SkiaGpu gpu(ctx);
+    CHECK(gpu.init());
+    if (!gpu.context()) return;
+    render::VulkanQueue& queue = ctx.queue();
+
+    // Skia's own submission goes through VulkanQueue and takes a ticket.
+    const uint64_t before = queue.lastSubmittedTicket();
+    render::LayerSurface surf = gpu.makeSurface(64, 64);
+    CHECK(surf.isGpu() && surf.image->view != VK_NULL_HANDLE);
+    if (!surf.isGpu()) return;
+    CHECK(queue.lastSubmittedTicket() > before);
+    {
+        auto lock = gpu.lock();
+        SkCanvas* c = surf.surface->getCanvas();
+        c->clear(SK_ColorRED);
+        SkPaint blue;
+        blue.setColor(SK_ColorBLUE);
+        c->drawRect(SkRect::MakeXYWH(32, 0, 32, 64), blue);
+        SkPaint halfGreen;  // premultiplied (0, 128, 0, 128) once drawn with kSrc
+        halfGreen.setColor(SkColorSetARGB(128, 0, 255, 0));
+        halfGreen.setBlendMode(SkBlendMode::kSrc);
+        c->drawRect(SkRect::MakeXYWH(0, 48, 16, 16), halfGreen);
+    }
+    const uint64_t drawn = queue.lastSubmittedTicket();
+    gpu.finish(surf.surface.get());
+    CHECK(queue.lastSubmittedTicket() > drawn);
+
+    // The presenter samples the image where Skia left it: no copy, no readback.
+    render::VulkanPresenter presenter(ctx);
+    CHECK(presenter.init());
+    ctx.frames().beginFrame();
+    render::PresentFrame frame;
+    render::PresentImage& img = frame.images.emplace_back(render::PresentImage::at1to1(
+        surf.image->image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 64, 64));
+    img.view = surf.image->view;
+    frame.clearColor[0] = 1.0f; frame.clearColor[1] = 1.0f; frame.clearColor[2] = 1.0f; frame.clearColor[3] = 1.0f;
+    CHECK(presenter.present(frame));
+    std::vector<uint8_t> out;
+    uint32_t w = 0, h = 0;
+    CHECK(presenter.readbackPixels(out, w, h));
+    CHECK(w == 64 && h == 64);
+    if (w == 64 && h == 64) {
+        const uint8_t* red = px(out, w, 8, 8);
+        CHECK(red[0] == 255 && red[1] == 0 && red[2] == 0 && red[3] == 255);
+        const uint8_t* blue = px(out, w, 48, 8);
+        CHECK(blue[0] == 0 && blue[1] == 0 && blue[2] == 255 && blue[3] == 255);
+        const uint8_t* green = px(out, w, 8, 56);  // half green over the white clear
+        CHECK(near(green[0], 127) && green[1] == 255 && near(green[2], 127) && green[3] == 255);
+    }
+
+    // A readback through Skia (getImageData, capture) sees the same pixels,
+    // and the surface draws again after the presenter sampled it.
+    {
+        auto lock = gpu.lock();
+        std::vector<uint8_t> pixels(64 * 64 * 4);
+        SkImageInfo info = SkImageInfo::Make(64, 64, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
+        CHECK(surf.surface->readPixels(info, pixels.data(), 64 * 4, 0, 0));
+        const uint8_t* blue = px(pixels, 64, 48, 8);
+        CHECK(blue[0] == 0 && blue[1] == 0 && blue[2] == 255 && blue[3] == 255);
+        const uint8_t* green = px(pixels, 64, 8, 56);
+        CHECK(green[0] == 0 && near(green[1], 128) && green[2] == 0 && near(green[3], 128));
+        surf.surface->getCanvas()->clear(SK_ColorGREEN);
+    }
+    gpu.finish(surf.surface.get());
+    ctx.frames().beginFrame();
+    CHECK(presenter.present(frame));
+    CHECK(presenter.readbackPixels(out, w, h));
+    if (w == 64 && h == 64) {
+        const uint8_t* green = px(out, w, 48, 8);
+        CHECK(green[0] == 0 && green[1] == 255 && green[2] == 0);
+    }
+
+    // Two threads draw on the one context, each under the lock, each into its
+    // own surface (the raster thread's layers and a main-thread canvas).
+    render::LayerSurface other;
+    std::thread worker([&] {
+        other = gpu.makeSurface(32, 32);
+        for (int i = 0; i < 50 && other; ++i) {
+            auto lock = gpu.lock();
+            other.surface->getCanvas()->clear(SkColorSetARGB(255, 0, 0, static_cast<U8CPU>(i * 5)));
+            gpu.finish(other.surface.get());
+        }
+    });
+    for (int i = 0; i < 50; ++i) {
+        auto lock = gpu.lock();
+        surf.surface->getCanvas()->clear(SkColorSetARGB(255, static_cast<U8CPU>(i * 5), 0, 0));
+        gpu.finish(surf.surface.get());
+    }
+    worker.join();
+    CHECK(other.isGpu());
+    if (other.isGpu()) {
+        auto lock = gpu.lock();
+        uint8_t a[4] = {}, b[4] = {};
+        SkImageInfo one = SkImageInfo::Make(1, 1, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
+        CHECK(surf.surface->readPixels(one, a, 4, 10, 10));
+        CHECK(other.surface->readPixels(one, b, 4, 10, 10));
+        CHECK(a[0] == 245 && a[2] == 0 && b[0] == 0 && b[2] == 245);
+    }
+
+    // Dropped surfaces are destroyed once the GPU is done with them.
+    surf.reset();
+    other.reset();
+    frame.images.clear();
+    queue.waitIdle();
+    gpu.collect();
+}
+
 } // namespace
 
 int main() {
@@ -343,6 +456,7 @@ int main() {
         cacheFile = ctx.persistentPipelineCache().path();
         testQueueAndFrames(ctx);
         testPresenterOffscreen(ctx);  // builds the presenter's blend pipeline
+        testSkiaGpu(ctx);
     }
     {
         std::cout << "[pipeline cache] written at teardown, seeded on the next init" << std::endl;
