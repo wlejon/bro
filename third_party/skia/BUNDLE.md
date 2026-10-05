@@ -59,7 +59,7 @@ trim set and guarantees the parts that already build keep building.
 ```bash
 cd "$(mktemp -d)"
 curl -sL -o old.tar.gz \
-  https://github.com/wlejon/bro/releases/download/skia-prebuilt-m147/skia-src-m147.tar.gz
+  https://github.com/wlejon/bro/releases/download/skia-prebuilt-m147-vk/skia-src-m147.tar.gz
 
 mkdir staging && tar xzf old.tar.gz -C staging
 
@@ -126,14 +126,16 @@ Overwriting the asset in place is fine — bro's CI is the only consumer, and it
 builds from this repo, so it re-pins in the same commit.
 
 ```bash
-gh release upload skia-prebuilt-m147 skia-src-m147.tar.gz --repo wlejon/bro --clobber
+gh release upload skia-prebuilt-m147-vk skia-src-m147.tar.gz --repo wlejon/bro --clobber
 ```
 
 Then update `third_party/skia/skia.cmake` **in the same commit as the upload** —
 the checksum is verified on download, so a published asset and an un-updated pin
 break every fresh configure until they agree:
 
-- `BRO_SKIA_RELEASE_TAG` default — only if you cut a new tag.
+- `BRO_SKIA_RELEASE_TAG` — only if you cut a new tag. When a platform lib's pin
+  changes, move its old SHA-256 into `_skia_retired_lib_shas` so existing
+  checkouts refetch.
 - the asset filename in the `_bro_skia_download` call — only if you renamed it.
 - the SHA-256 literal — **always**, from the `sha256sum` above.
 - the `~9 MB` in the progress message, if the size moved materially.

@@ -30,8 +30,11 @@ set(_skia_debug   "${CMAKE_CURRENT_LIST_DIR}/lib/Debug/${_skia_ext}")
 # instructions below. Windows Debug and Intel (x86_64) macOS are not hosted.
 # BSD-3-Clause permits redistribution. Set -DBRO_FETCH_SKIA=OFF to disable.
 option(BRO_FETCH_SKIA "Download prebuilt Skia (headers + lib) when absent" ON)
-set(BRO_SKIA_RELEASE_TAG "skia-prebuilt-m147"
-    CACHE STRING "GitHub release (wlejon/bro) holding the prebuilt Skia binaries")
+# GitHub release (wlejon/bro) holding the prebuilt Skia binaries. A plain
+# variable, not a cache entry: it moves with the SHA-256 pins below, so an
+# existing build dir must not keep fetching from an older tag.
+unset(BRO_SKIA_RELEASE_TAG CACHE)
+set(BRO_SKIA_RELEASE_TAG "skia-prebuilt-m147-vk")
 set(_skia_base "https://github.com/wlejon/bro/releases/download/${BRO_SKIA_RELEASE_TAG}")
 
 # Download _url -> _dest, verifying SHA-256 _sha. Sets ${_okvar} in the caller.
@@ -73,19 +76,33 @@ if(BRO_FETCH_SKIA)
     endif()
 
     # (2) Platform Release library.
+    # A lib that hashes to a retired pin was fetched from an older release
+    # (e.g. the GL-only skia-prebuilt-m147 libs) and can't link against
+    # today's sources, so it is replaced. Hand-built libs are left alone.
+    # When bumping a pin, move the outgoing SHA-256 into this list.
+    set(_skia_retired_lib_shas
+        "adb014b9eb366266d205b293258d9a9628f73b9ea7156da2053e65e3f3363f55"  # m147 GL, linux-x64
+        "42fc7231974cc0011f09e343cadb31935be5019669125ee261fea7fbe947481d"  # m147 GL, macos-arm64
+        "e4e561366ac923218406c9f9a027ed23401b44f7c40b041a9fab5fddb4e46823") # m147 GL, windows-x64
+    if(EXISTS "${_skia_release}")
+        file(SHA256 "${_skia_release}" _skia_have)
+        if(_skia_have IN_LIST _skia_retired_lib_shas)
+            message(STATUS "Skia: lib/Release is from a retired prebuilt release; replacing it")
+            file(REMOVE "${_skia_release}")
+        endif()
+    endif()
     if(NOT EXISTS "${_skia_release}" AND NOT EXISTS "${_skia_debug}")
         set(_skia_lib_asset "")
-        if(WIN32)
-            set(_skia_lib_asset "skia-windows-x64-Release.lib")
-            set(_skia_lib_sha "e4e561366ac923218406c9f9a027ed23401b44f7c40b041a9fab5fddb4e46823")
-        elseif(APPLE AND CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
+        # Windows x64 is not hosted for the Vulkan build yet; build it per
+        # BUILDING.md and place it in lib/Release/.
+        if(APPLE AND CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
             # Only Apple Silicon (arm64) is hosted; Intel Macs fall through to
             # build_skia_mac.sh rather than fetch an unlinkable arm64 lib.
             set(_skia_lib_asset "skia-macos-arm64-Release.a")
-            set(_skia_lib_sha "42fc7231974cc0011f09e343cadb31935be5019669125ee261fea7fbe947481d")
+            set(_skia_lib_sha "71de6e2f321f93107e624e3c78ab4a9d57916606570e216c6a2809583f055319")
         elseif(UNIX AND NOT APPLE)
             set(_skia_lib_asset "skia-linux-x64-Release.a")
-            set(_skia_lib_sha "adb014b9eb366266d205b293258d9a9628f73b9ea7156da2053e65e3f3363f55")
+            set(_skia_lib_sha "368df54e60ffc0c76fe8808169d13a526bd0597ab04e20e549c2e390f615b5a1")
         endif()
         if(_skia_lib_asset)
             message(STATUS "Skia: fetching prebuilt ${_skia_lib_asset}...")
