@@ -250,6 +250,44 @@ else()
     add_subdirectory(broaudio EXCLUDE_FROM_ALL)
 endif()
 
+# --- brosearch + bropty (the <terminal> element) ---
+# bropty is the VT emulator and PTY/ConPTY layer behind <terminal>; brosearch
+# is its regex scrollback search. Both prefer the standalone repo at
+# ../<name> and fall back to the submodule at third_party/<name>. brosearch is
+# added first, so bropty's own `if(NOT TARGET brosearch)` lookup (which
+# resolves against the top-level project, not against bro's third_party/)
+# finds the target bro already chose. Neither one's tests are built here:
+# bro's own terminal tests (src/terminal) cover the integration, and the
+# pty_child helper they drive is compiled from bropty's source by bro.
+if(BRO_WITH_TERMINAL)
+    set(BROSEARCH_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(BROSEARCH_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+    set(BROPTY_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(BROPTY_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+    if(NOT TARGET brosearch)
+        bro_default_sibling_dir(brosearch _brosearch_default)
+        set(BROSEARCH_DIR "${_brosearch_default}" CACHE PATH "Path to standalone brosearch repo")
+        if(EXISTS "${BROSEARCH_DIR}/CMakeLists.txt")
+            message(STATUS "brosearch: using standalone repo at ${BROSEARCH_DIR}")
+            add_subdirectory("${BROSEARCH_DIR}" "${CMAKE_BINARY_DIR}/brosearch" EXCLUDE_FROM_ALL)
+        else()
+            message(STATUS "brosearch: using submodule at third_party/brosearch")
+            add_subdirectory(brosearch EXCLUDE_FROM_ALL)
+        endif()
+    endif()
+    if(NOT TARGET bropty)
+        bro_default_sibling_dir(bropty _bropty_default)
+        set(BROPTY_DIR "${_bropty_default}" CACHE PATH "Path to standalone bropty repo")
+        if(EXISTS "${BROPTY_DIR}/CMakeLists.txt")
+            message(STATUS "bropty: using standalone repo at ${BROPTY_DIR}")
+            add_subdirectory("${BROPTY_DIR}" "${CMAKE_BINARY_DIR}/bropty" EXCLUDE_FROM_ALL)
+        else()
+            message(STATUS "bropty: using submodule at third_party/bropty")
+            add_subdirectory(bropty EXCLUDE_FROM_ALL)
+        endif()
+    endif()
+endif()
+
 # --- bromesh (mesh generation + manipulation library) ---
 # Prefer the standalone repo at ../bromesh for local development.
 # Falls back to the git submodule at third_party/bromesh.

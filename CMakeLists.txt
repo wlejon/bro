@@ -211,6 +211,10 @@ set(BRO_WITH_BRONZE ON CACHE BOOL "bronze runtime (mandatory)" FORCE)
 option(BRO_WITH_NET      "Game networking (GameNetworkingSockets / vcpkg)"   ${_d_svc})
 option(BRO_WITH_VIDEO    "Video + GIF encode/decode (libvpx/webm / vcpkg)"   ${_d_svc})
 option(BRO_WITH_STEAM    "Steam integration (runtime-loaded redistributable)" ${_d_svc})
+# The native <terminal> element: bropty (VT emulation + PTY/ConPTY) and its
+# brosearch dependency, both vcpkg-free siblings. On in app and full; minimal
+# leaves it out (a compiled-out build gets the `available: false` stub).
+option(BRO_WITH_TERMINAL "Native <terminal> element (bropty + brosearch)"    ${_d_render})
 # Tier 2 — the AI tower (brotensor is the base).
 option(BRO_WITH_TENSOR       "brotensor tensor ops (ML backbone)"            ${_d_ai})
 option(BRO_WITH_TENSOR_CUDA  "brotensor CUDA backend (needs CUDA toolkit)"   OFF)
@@ -344,7 +348,7 @@ set(BROVISIONML_ENABLE_API  ON CACHE BOOL "Build Bronze JavaScript API for brovi
 # bro_bronze_host). Uses the #if BRO_WITH_X convention.
 set(BRO_FEATURE_FLAGS
     3D PHYSICS AUDIO GAMEAI FLORA
-    NET VIDEO STEAM
+    NET VIDEO STEAM TERMINAL
     TENSOR TENSOR_CUDA TENSOR_METAL TENSOR_VULKAN LM DIFFUSION VISION SOUNDML TRIPOSPLAT GAMEAI_NN
     BRONZE)
 function(bro_apply_feature_defs target)
