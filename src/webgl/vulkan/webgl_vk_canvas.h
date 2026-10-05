@@ -71,7 +71,6 @@ public:
 private:
     bool createColorAttachment(uint32_t width, uint32_t height);
     bool createDepthAttachment(uint32_t width, uint32_t height);
-    VkFormat findSupportedDepthFormat();
 
     render::VulkanContext& context_;
     uint32_t width_ = 0;

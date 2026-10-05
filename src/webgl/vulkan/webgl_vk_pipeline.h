@@ -39,10 +39,13 @@ struct PipelineKey {
     VkColorComponentFlags colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                                           VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
 
+    // The pass's attachments: format i is fragment output i's (UNDEFINED for
+    // a NONE draw buffer); depth and stencil are UNDEFINED when absent.
     uint32_t colorAttachmentCount = 1;
     VkFormat colorAttachmentFormats[8]{VK_FORMAT_R8G8B8A8_UNORM};
-    VkFormat colorAttachmentFormat = VK_FORMAT_R8G8B8A8_UNORM;
     VkFormat depthAttachmentFormat = VK_FORMAT_UNDEFINED;
+    VkFormat stencilAttachmentFormat = VK_FORMAT_UNDEFINED;
+    VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
 
     uint32_t attributeCount = 0;
     VkVertexInputAttributeDescription attributes[16]{};

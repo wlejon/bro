@@ -14,14 +14,6 @@
 
 namespace bro::webgl::vk {
 
-/// Descriptor bindings every translated program uses: samplers from 0, uniform
-/// blocks from kFirstUniformBlockBinding, and the default-block (non-block)
-/// uniforms as one std140 uniform buffer at kDefaultUniformBinding.
-constexpr uint32_t kMaxSamplerBindings = 8;
-constexpr uint32_t kFirstUniformBlockBinding = 8;
-constexpr uint32_t kMaxUniformBlockBindings = 8;
-constexpr uint32_t kDefaultUniformBinding = 16;
-
 /// Where GL's window y runs on the bound render target. The canvas is drawn
 /// top-down for presentation (a negative viewport maps GL's bottom-up NDC onto
 /// it), so its window y counts down from the bottom row; a framebuffer object's
@@ -61,7 +53,9 @@ struct VkTextureResource {
     VkDeviceSize offset = 0;
     uint64_t allocId = 0;
     VkImageView view = VK_NULL_HANDLE;
-    VkImageView attachmentView = VK_NULL_HANDLE;  // mip 0 / layer 0, for framebuffer use
+    // Single-level, single-layer views a framebuffer renders through, keyed
+    // by (level << 16 | layer); made on first use.
+    std::vector<std::pair<uint32_t, VkImageView>> attachmentViews;
     VkSampler sampler = VK_NULL_HANDLE;
     uint32_t width = 0;
     uint32_t height = 0;
@@ -69,6 +63,7 @@ struct VkTextureResource {
     VkImageLayout currentLayout = VK_IMAGE_LAYOUT_UNDEFINED;  // of every mip and layer
     uint32_t mipLevels = 1;
     uint32_t arrayLayers = 1;
+    VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;  // > 1 only for multisampled renderbuffers
 
     GLenum minFilter = GL_NEAREST_MIPMAP_LINEAR;
     GLenum magFilter = GL_LINEAR;
@@ -98,14 +93,6 @@ struct VkSamplerResource {
     bool samplerDirty = true;
 };
 
-/// Attribute metadata tracked in a linked program.
-struct VkAttribInfo {
-    std::string name;
-    GLenum type = GL_FLOAT_VEC4;
-    GLint size = 1;
-    GLint location = -1;
-};
-
 /// Vertex attribute specification within a Vertex Array Object (VAO).
 struct VkVertexAttribute {
     bool enabled = false;
@@ -125,77 +112,123 @@ struct VkVAOResource {
     GLuint elementArrayBufferId = 0;
 };
 
-/// WebGL Shader compiled to SPIR-V.
+/// A shader object: its source and the result of the last compileShader.
+/// Compiling only checks the source (with glslang, for the info log); the
+/// SPIR-V is produced when a program links, from both stages together.
 struct VkShaderResource {
     GLenum type = 0; // GL_VERTEX_SHADER or GL_FRAGMENT_SHADER
     std::string source;
-    std::string translatedSource;
-    std::vector<uint32_t> spirv;
-    VkShaderModule module = VK_NULL_HANDLE;
     bool compileStatus = false;
     std::string infoLog;
 
     uint32_t attachCount = 0;
     bool deleteStatus = false;
-
-    bool isValid() const { return module != VK_NULL_HANDLE; }
 };
 
-/// Uniform metadata tracked in a linked program.
-struct VkUniformInfo {
+/// An active vertex attribute, as getActiveAttrib reports it.
+struct VkAttribInfo {
     std::string name;
+    GLenum type = GL_FLOAT_VEC4;
+    GLint size = 1;
     GLint location = -1;
-    GLenum type = GL_FLOAT;
-    uint32_t offset = 0; // byte offset in push constants / uniform block
-    uint32_t size = 0;   // byte size
-    GLint count = 1;     // array count
-    GLint blockIndex = -1; // -1 if default/push_constant, >=0 if UBO member
-    GLint matrixStride = 0;
-    GLint arrayStride = 0;
-    GLboolean isRowMajor = GL_FALSE;
 };
 
-/// Uniform block metadata tracked in a linked program.
+/// One vertex input location a linked program reads (a matrix attribute
+/// takes one per column), with the shader's component type.
+struct VkVertexInput {
+    uint32_t location = 0;
+    enum class Kind : uint8_t { Float, Int, Uint } kind = Kind::Float;
+};
+
+/// An active uniform, as getActiveUniform / getActiveUniforms report it: a
+/// default-block value, a sampler, or a member of a uniform block.
+struct VkUniformInfo {
+    std::string name;       // GL name; an array's ends in "[0]"
+    GLenum type = GL_FLOAT;
+    GLint size = 1;         // array length, 1 when not an array
+    GLint blockIndex = -1;  // GL uniform block, -1 for the default block
+    // Layout in its block (std140). Default-block values are laid out the
+    // same way in the program's own uniform buffer, though GL reports -1 for
+    // their offset and strides.
+    uint32_t offset = 0;
+    uint32_t arrayStride = 0;
+    uint32_t matrixStride = 0;
+    bool rowMajor = false;
+    GLint location = -1;    // first GL location (default block and samplers)
+    int32_t sampler = -1;   // index into ProgramInterface::samplers
+};
+
+/// A sampler uniform's descriptor binding (an array of samplers is one
+/// binding of `count` descriptors) and the texture unit each element reads.
+struct VkSamplerBinding {
+    uint32_t binding = 0;
+    uint32_t count = 1;
+    GLenum type = GL_SAMPLER_2D;
+    uint32_t firstUnit = 0;  // index of element 0 in VkProgramResource::samplerUnits
+    VkShaderStageFlags stages = 0;  // the stages that sample it
+};
+
+/// An active uniform block. An array of blocks is one block per element in
+/// GL, each its own descriptor of one binding in Vulkan.
 struct VkUniformBlockInfo {
     std::string name;
-    GLuint index = 0;
-    GLuint binding = 0;
-    GLuint descriptorBinding = 8;
     uint32_t dataSize = 0;
     std::vector<GLuint> activeUniformIndices;
     bool referencedByVertex = false;
     bool referencedByFragment = false;
+    uint32_t descriptorBinding = 0;
+    uint32_t arrayElement = 0;
 };
 
-/// WebGL Program linking vertex and fragment shaders.
+/// A GL uniform location: which uniform, and which element of it.
+struct VkUniformLocation {
+    uint32_t uniform = 0;
+    uint32_t element = 0;
+};
+
+/// What linking learns about a program from glslang's reflection.
+struct ProgramInterface {
+    std::vector<VkAttribInfo> attribs;
+    std::vector<VkVertexInput> vertexInputs;
+    std::unordered_map<std::string, GLint> fragDataLocations;
+    std::vector<VkUniformInfo> uniforms;
+    std::vector<VkUniformLocation> locations;  // indexed by GL location
+    std::vector<VkUniformBlockInfo> uniformBlocks;
+    std::vector<VkSamplerBinding> samplers;
+    uint32_t samplerUnitCount = 0;
+    uint32_t vertexSamplerUnits = 0;    // of samplerUnitCount, those each stage uses:
+    uint32_t fragmentSamplerUnits = 0;  // a sampler both use counts in both
+    int32_t defaultBlockBinding = -1;  // -1: no default-block values
+    uint32_t defaultBlockSize = 0;
+};
+
+/// A program object. A successful link replaces the executable — modules,
+/// layouts, interface — and resets uniform values and block bindings.
 struct VkProgramResource {
     GLuint vertShaderId = 0;
     GLuint fragShaderId = 0;
-    VkShaderModule vertModule = VK_NULL_HANDLE;
-    VkShaderModule fragModule = VK_NULL_HANDLE;
     bool linkStatus = false;
     bool deleteStatus = false;
     std::string infoLog;
+    std::unordered_map<std::string, GLuint> boundAttribLocations;  // bindAttribLocation
 
-    std::vector<VkUniformInfo> uniforms;
-    std::unordered_map<std::string, GLint> uniformLocations;
-    std::vector<uint8_t> uniformBytes;
+    VkShaderModule vertModule = VK_NULL_HANDLE;
+    VkShaderModule fragModule = VK_NULL_HANDLE;
+    // One set: the program's samplers, uniform blocks and default-block
+    // buffer at the bindings glslang mapped them to.
+    VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
+    VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
 
-    std::vector<VkAttribInfo> activeAttribs;
-    std::unordered_map<std::string, GLint> attribLocations;
-    std::unordered_map<std::string, GLuint> boundAttribLocations;
-    std::unordered_map<std::string, GLint> fragDataLocations;
-    std::vector<VkUniformBlockInfo> uniformBlocks;
-    std::unordered_map<std::string, GLuint> uniformBlockIndices;
-    std::unordered_map<GLuint, GLuint> uniformBlockBindings;
-    std::unordered_map<GLint, uint32_t> samplerLocToBinding;
-    std::unordered_map<uint32_t, uint32_t> samplerBindings; // descriptor binding -> texture unit
-    std::unordered_map<uint32_t, GLenum> samplerTypes; // descriptor binding -> GL_SAMPLER_2D, GL_SAMPLER_CUBE, etc.
+    ProgramInterface iface;
+    std::vector<uint8_t> uniformBytes;     // the default block, std140
+    std::vector<uint32_t> samplerUnits;    // texture unit per sampler element
+    std::vector<GLuint> blockBindings;     // GL binding point per uniform block
 
-    // What the last draw bound, reused by the next draw in the same frame when
-    // nothing changed (webgl_vk_context_draw.cpp). Descriptor sets and the
-    // uniform slice come from the frame's arenas, so they never outlive it.
-    uint64_t drawFrameSerial = 0;
+    // What the last draw bound, reused by the next draw in the same stream
+    // segment when nothing changed (webgl_vk_context_draw.cpp). Descriptor
+    // sets and the uniform slice come from the segment, so they never
+    // outlive it.
+    uint64_t drawSegmentSerial = 0;
     std::vector<uint8_t> drawUniformBytes;
     VkDescriptorBufferInfo drawUniforms{};
     std::vector<uint64_t> drawBindingKey;
@@ -204,24 +237,32 @@ struct VkProgramResource {
     bool isValid() const { return linkStatus; }
 };
 
-/// Framebuffer object.
-struct VkFramebufferResource {
-    std::array<GLuint, 8> colorAttachments{};
-    GLuint colorAttachmentTex = 0;
-    GLuint depthAttachmentTex = 0;
-    std::vector<GLenum> drawBuffers{0x8CE0 /* GL_COLOR_ATTACHMENT0 */};
-    GLenum readBuffer = 0x8CE0;
-    bool isComplete = true;
+/// What a framebuffer attachment point holds: a texture image (one level of
+/// one layer or cube face) or a renderbuffer.
+struct VkFboAttachment {
+    enum class Kind : uint8_t { None, Texture, Renderbuffer };
+    Kind kind = Kind::None;
+    GLuint id = 0;
+    uint32_t level = 0;
+    uint32_t layer = 0;
+    bool operator==(const VkFboAttachment&) const = default;
 };
 
-/// Renderbuffer object.
+/// Framebuffer object. drawBuffers[i] is COLOR_ATTACHMENTi or NONE: what
+/// fragment output i writes, as GL ES 3 defines it.
+struct VkFramebufferResource {
+    std::array<VkFboAttachment, 8> color{};
+    VkFboAttachment depth;
+    VkFboAttachment stencil;
+    std::array<GLenum, 8> drawBuffers{0x8CE0 /* GL_COLOR_ATTACHMENT0 */};
+    GLenum readBuffer = 0x8CE0;
+};
+
+/// Renderbuffer object: its own image (multisampled when asked), never
+/// sampled, kept in attachment layout between uses.
 struct VkRenderbufferResource {
-    GLuint textureId = 0;
+    VkTextureResource storage;
     GLenum internalformat = 0;
-    GLsizei width = 0;
-    GLsizei height = 0;
-    GLsizei samples = 0;
-    bool isValid() const { return textureId != 0; }
 };
 
 // ---------------------------------------------------------------------------

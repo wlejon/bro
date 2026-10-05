@@ -113,7 +113,8 @@ public:
     // during traversal. The compositor uses this to split HTML rendering
     // into separate layers around canvas/WebGL elements.
     // For Canvas2D: scene is non-null, directTexture is 0.
-    // For WebGL: scene is null, directTexture is the FBO color texture.
+    // For WebGL and Scene3D: scene is null, directTexture is the element's
+    // node id (the compositor finds the context or scene by it).
     // (clipX..clipH) is the active overflow/scroll clip at the break point, in
     // the same untransformed pixel space as (x..h). clipW < 0 ⇒ unclipped. The
     // canvas/WebGL layer is composited as a separate quad that bypasses the

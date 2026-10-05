@@ -44,22 +44,17 @@ public:
         teardownCallbacks_.push_back(std::move(cb));
     }
 
-    /// Resize the canvas FBO.
+    /// Resize the canvas.
     void resize(int width, int height);
 
-    /// Get the color texture of the canvas FBO (for compositing).
-    GLuint colorTexture() const { return colorTex_; }
     int canvasWidth() const { return width_; }
     int canvasHeight() const { return height_; }
 
     VkImage vkColorImage() const;
     VkImageLayout vkColorLayout() const;
 
-    /// Bind the canvas FBO as the render target.
-    /// Call before issuing WebGL draw commands in the frame loop.
-    void bindCanvasFBO();
-
-    /// Unbind the canvas FBO (restore default framebuffer).
+    /// Submit the context's recorded work: the engine is about to composite
+    /// or read the canvas.
     void unbindCanvasFBO();
 
     /// Read the canvas's colour buffer back as tightly packed, top-down RGBA
@@ -423,7 +418,16 @@ public:
                               WebGLTexture tex, GLint level);
     void framebufferRenderbuffer(GLenum target, GLenum attachment,
                                  GLenum renderbuffertarget, WebGLRenderbuffer rbo);
+    void framebufferTextureLayer(GLenum target, GLenum attachment, WebGLTexture tex, GLint level, GLint layer);
     GLenum checkFramebufferStatus(GLenum target);
+    /// getFramebufferAttachmentParameter: false (GL error set) when invalid.
+    /// FRAMEBUFFER_ATTACHMENT_OBJECT_NAME answers through objectType
+    /// (TEXTURE / RENDERBUFFER) and objectName, or isNull; others via value.
+    bool getFramebufferAttachmentParameter(GLenum target, GLenum attachment, GLenum pname, GLint& value,
+                                           GLenum& objectType, GLuint& objectName, bool& isNull);
+    GLint getRenderbufferParameter(GLenum target, GLenum pname);
+    /// getInternalformatParameter(RENDERBUFFER, format, SAMPLES).
+    std::vector<GLint> supportedSampleCounts(GLenum internalformat);
     void readPixels(GLint x, GLint y, GLsizei width, GLsizei height,
                     GLenum format, GLenum type, void* pixels);
     /// WebGL-level readPixels destination validation: returns false (and
@@ -445,10 +449,6 @@ public:
     void renderbufferStorageMultisample(GLenum target, GLsizei samples,
                                         GLenum internalformat,
                                         GLsizei width, GLsizei height);
-    /// Clear a just-allocated depth/stencil renderbuffer to the values WebGL
-    /// §4.1 promises a page will read there (depth 1.0, stencil 0) — plain GL
-    /// leaves them undefined. Called from both storage entry points.
-    void initializeRenderbuffer(GLenum internalformat);
 
     // --- Draw calls ---
     void drawArrays(GLenum mode, GLint first, GLsizei count);
@@ -461,6 +461,7 @@ public:
 
     // --- Queries (getParameter, getExtension) ---
     GLint getParameterInt(GLenum pname);
+    int64_t getParameterInt64(GLenum pname);
     GLfloat getParameterFloat(GLenum pname);
     GLboolean getParameterBool(GLenum pname);
     void getParameterInt2(GLenum pname, GLint* out);
@@ -474,9 +475,9 @@ public:
     bool getExtension(const std::string& name);
 
     WebGLProgram currentProgram() const { return {sProgram_}; }
-    WebGLFramebuffer currentDrawFramebuffer() const { return {sFBO_}; }
-    WebGLFramebuffer currentReadFramebuffer() const { return {sFBO_}; }
-    WebGLRenderbuffer currentRenderbuffer() const { return {0}; }
+    WebGLFramebuffer currentDrawFramebuffer() const;
+    WebGLFramebuffer currentReadFramebuffer() const;
+    WebGLRenderbuffer currentRenderbuffer() const;
     WebGLVertexArrayObject currentVertexArray() const { return {sVAO_}; }
     WebGLTexture boundTexture(GLenum target) const;
     WebGLSampler boundSampler(GLuint unit) const;
@@ -501,19 +502,13 @@ public:
     void hint(GLenum /*target*/, GLenum /*mode*/) {}
 
 private:
-    void createCanvasFBO();
-    void destroyCanvasFBO();
 
     int width_;
     int height_;
 
-    // Canvas FBO (the WebGL "default framebuffer")
-    GLuint canvasFBO_ = 0;
     /// Which context's shadow state is live in the shared GL context.
     static WebGL2RenderingContext* current_;
 
-    GLuint colorTex_ = 0;
-    GLuint depthStencilRBO_ = 0;
 
     // Object tracking
     std::unordered_set<GLuint> validBuffers_;
@@ -522,9 +517,6 @@ private:
     std::unordered_set<GLuint> validShaders_;
     std::unordered_set<GLuint> validFramebuffers_;
     std::unordered_set<GLuint> validRenderbuffers_;
-    // Scratch FBO used to clear a freshly allocated depth/stencil renderbuffer
-    // to the default values WebGL guarantees. See initializeRenderbuffer().
-    GLuint initFbo_ = 0;
     std::unordered_set<GLuint> validVAOs_;
     std::unordered_set<GLuint> validSamplers_;
     std::unordered_set<GLuint> createdQueries_;
@@ -582,7 +574,6 @@ private:
     GLenum sActiveTex_ = GL_TEXTURE0;
     GLuint sTex2D_[32] = {};      // per texture unit
     GLuint sSampler_[32] = {};    // per texture unit (sampler objects)
-    GLuint sFBO_ = 0;             // stores the raw GL id (canvasFBO_ for null)
     GLint sBlendSrcRGB_ = GL_ONE, sBlendDstRGB_ = GL_ZERO;
     GLint sBlendSrcA_ = GL_ONE, sBlendDstA_ = GL_ZERO;
     GLenum sBlendEqRGB_ = GL_FUNC_ADD, sBlendEqA_ = GL_FUNC_ADD;

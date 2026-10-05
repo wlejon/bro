@@ -1,5 +1,4 @@
 #include "webgl/webgl2_context.h"
-#include "webgl/glsl_translator.h"
 #include "webgl/vulkan/webgl_vk_context.h"
 #include "util/log.h"
 
@@ -20,13 +19,11 @@ WebGLFramebuffer WebGL2RenderingContext::createFramebuffer() {
 
 void WebGL2RenderingContext::deleteFramebuffer(WebGLFramebuffer fbo) {
     validFramebuffers_.erase(fbo.id);
-    if (sFBO_ == fbo.id) sFBO_ = 0;
     if (vkCtx_) vkCtx_->deleteFramebuffer(fbo);
 }
 
 void WebGL2RenderingContext::bindFramebuffer(GLenum target, WebGLFramebuffer fbo) {
     if (fbo.id != 0) validFramebuffers_.insert(fbo.id);
-    sFBO_ = fbo.id;
     if (vkCtx_) vkCtx_->bindFramebuffer(target, fbo);
 }
 
@@ -40,9 +37,41 @@ void WebGL2RenderingContext::framebufferRenderbuffer(GLenum target, GLenum attac
     if (vkCtx_) vkCtx_->framebufferRenderbuffer(target, attachment, renderbuffertarget, rbo);
 }
 
+void WebGL2RenderingContext::framebufferTextureLayer(GLenum target, GLenum attachment, WebGLTexture tex,
+                                                     GLint level, GLint layer) {
+    if (vkCtx_) vkCtx_->framebufferTextureLayer(target, attachment, tex, level, layer);
+}
+
+WebGLFramebuffer WebGL2RenderingContext::currentDrawFramebuffer() const {
+    return {vkCtx_ ? vkCtx_->drawFramebufferBinding() : 0};
+}
+WebGLFramebuffer WebGL2RenderingContext::currentReadFramebuffer() const {
+    return {vkCtx_ ? vkCtx_->readFramebufferBinding() : 0};
+}
+WebGLRenderbuffer WebGL2RenderingContext::currentRenderbuffer() const {
+    return {vkCtx_ ? vkCtx_->renderbufferBinding() : 0};
+}
+
+bool WebGL2RenderingContext::getFramebufferAttachmentParameter(GLenum target, GLenum attachment, GLenum pname,
+                                                               GLint& value, GLenum& objectType, GLuint& objectName,
+                                                               bool& isNull) {
+    vk::WebGLVkContext::AttachmentParameter out;
+    if (!vkCtx_ || !vkCtx_->getFramebufferAttachmentParameter(target, attachment, pname, out)) return false;
+    value = out.value;
+    objectType = out.objectType;
+    objectName = out.objectName;
+    isNull = out.isNull;
+    return true;
+}
+GLint WebGL2RenderingContext::getRenderbufferParameter(GLenum target, GLenum pname) {
+    return vkCtx_ ? vkCtx_->getRenderbufferParameter(target, pname) : 0;
+}
+std::vector<GLint> WebGL2RenderingContext::supportedSampleCounts(GLenum internalformat) {
+    return vkCtx_ ? vkCtx_->supportedSampleCounts(internalformat) : std::vector<GLint>{};
+}
+
 GLenum WebGL2RenderingContext::checkFramebufferStatus(GLenum target) {
-    if (vkCtx_) return vkCtx_->checkFramebufferStatus(target);
-    return 0x8CD5; // GL_FRAMEBUFFER_COMPLETE
+    return vkCtx_ ? vkCtx_->checkFramebufferStatus(target) : GL_FRAMEBUFFER_UNSUPPORTED;
 }
 
 void WebGL2RenderingContext::readPixels(GLint x, GLint y, GLsizei width, GLsizei height,

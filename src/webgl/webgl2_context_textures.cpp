@@ -1,5 +1,4 @@
 #include "webgl/webgl2_context.h"
-#include "webgl/glsl_translator.h"
 #include "webgl/vulkan/webgl_vk_context.h"
 #include "util/log.h"
 

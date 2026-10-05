@@ -1,4 +1,5 @@
 #include "webgl/vulkan/webgl_vk_canvas.h"
+#include "webgl/vulkan/webgl_vk_formats.h"
 #include "render/vulkan_util.h"
 #include "util/log.h"
 
@@ -14,24 +15,6 @@ WebGLVkCanvas::WebGLVkCanvas(render::VulkanContext& context)
 
 WebGLVkCanvas::~WebGLVkCanvas() {
     cleanup();
-}
-
-VkFormat WebGLVkCanvas::findSupportedDepthFormat() {
-    VkFormat candidates[] = {
-        VK_FORMAT_D32_SFLOAT_S8_UINT,
-        VK_FORMAT_D24_UNORM_S8_UINT,
-        VK_FORMAT_D32_SFLOAT,
-        VK_FORMAT_D16_UNORM
-    };
-
-    for (VkFormat format : candidates) {
-        VkFormatProperties props;
-        vkGetPhysicalDeviceFormatProperties(context_.physicalDevice(), format, &props);
-        if (props.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) {
-            return format;
-        }
-    }
-    return VK_FORMAT_D32_SFLOAT;
 }
 
 bool WebGLVkCanvas::init(uint32_t width, uint32_t height) {
@@ -156,10 +139,12 @@ bool WebGLVkCanvas::createColorAttachment(uint32_t width, uint32_t height) {
 
 bool WebGLVkCanvas::createDepthAttachment(uint32_t width, uint32_t height) {
     VkDevice dev = context_.device();
-    depthFormat_ = findSupportedDepthFormat();
+    // GL's default framebuffer is DEPTH24_STENCIL8; the same Vulkan format as
+    // a renderbuffer of that format, so depth blits between them work.
+    depthFormat_ = depthStencilFormat(context_.physicalDevice(), GL_DEPTH24_STENCIL8);
 
     VkImageUsageFlags usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
-                              VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+                              VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 
     if (!context_.createImage(width, height, depthFormat_,
                               VK_IMAGE_TILING_OPTIMAL, usage,
@@ -169,10 +154,7 @@ bool WebGLVkCanvas::createDepthAttachment(uint32_t width, uint32_t height) {
         return false;
     }
 
-    VkImageAspectFlags aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
-    if (depthFormat_ == VK_FORMAT_D32_SFLOAT_S8_UINT || depthFormat_ == VK_FORMAT_D24_UNORM_S8_UINT) {
-        aspectMask |= VK_IMAGE_ASPECT_STENCIL_BIT;
-    }
+    const VkImageAspectFlags aspectMask = render::imageAspectFor(depthFormat_);
 
     VkImageViewCreateInfo viewInfo{};
     viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;

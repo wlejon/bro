@@ -31,7 +31,9 @@ bool PipelineKey::operator==(const PipelineKey& o) const {
     for (uint32_t i = 0; i < colorAttachmentCount; ++i) {
         if (colorAttachmentFormats[i] != o.colorAttachmentFormats[i]) return false;
     }
-    if (depthAttachmentFormat != o.depthAttachmentFormat) return false;
+    if (depthAttachmentFormat != o.depthAttachmentFormat || stencilAttachmentFormat != o.stencilAttachmentFormat ||
+        samples != o.samples)
+        return false;
     if (attributeCount != o.attributeCount || bindingCount != o.bindingCount) return false;
 
     for (uint32_t i = 0; i < attributeCount; ++i) {
@@ -80,6 +82,9 @@ size_t PipelineKeyHasher::operator()(const PipelineKey& k) const {
     for (uint32_t i = 0; i < k.colorAttachmentCount; ++i) {
         hashCombine(seed, std::hash<uint32_t>()(static_cast<uint32_t>(k.colorAttachmentFormats[i])));
     }
+    hashCombine(seed, std::hash<uint32_t>()(static_cast<uint32_t>(k.depthAttachmentFormat)));
+    hashCombine(seed, std::hash<uint32_t>()(static_cast<uint32_t>(k.stencilAttachmentFormat)));
+    hashCombine(seed, std::hash<uint32_t>()(static_cast<uint32_t>(k.samples)));
     hashCombine(seed, std::hash<uint32_t>()(k.attributeCount));
     hashCombine(seed, std::hash<uint32_t>()(k.bindingCount));
     for (uint32_t i = 0; i < k.attributeCount; ++i) {
@@ -180,7 +185,7 @@ VkPipeline WebGLVkPipelineCache::createPipeline(const PipelineKey& key, VkPipeli
     VkPipelineMultisampleStateCreateInfo multisampling{};
     multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
     multisampling.sampleShadingEnable = VK_FALSE;
-    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    multisampling.rasterizationSamples = key.samples;
 
     VkPipelineDepthStencilStateCreateInfo depthStencil{};
     depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
@@ -202,10 +207,17 @@ VkPipeline WebGLVkPipelineCache::createPipeline(const PipelineKey& key, VkPipeli
     colorBlendAttachment.dstAlphaBlendFactor = key.dstAlphaBlendFactor;
     colorBlendAttachment.alphaBlendOp = key.alphaBlendOp;
 
-    uint32_t attCount = std::max(1u, std::min(8u, key.colorAttachmentCount));
+    const uint32_t attCount = std::min(8u, key.colorAttachmentCount);
     VkPipelineColorBlendAttachmentState colorBlendAttachments[8]{};
     for (uint32_t i = 0; i < attCount; ++i) {
         colorBlendAttachments[i] = colorBlendAttachment;
+        // GL does not blend into integer (or otherwise unblendable) buffers.
+        if (key.blendEnable && key.colorAttachmentFormats[i] != VK_FORMAT_UNDEFINED) {
+            VkFormatProperties props;
+            vkGetPhysicalDeviceFormatProperties(context_.physicalDevice(), key.colorAttachmentFormats[i], &props);
+            if (!(props.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT))
+                colorBlendAttachments[i].blendEnable = VK_FALSE;
+        }
     }
 
     VkPipelineColorBlendStateCreateInfo colorBlending{};
@@ -229,10 +241,7 @@ VkPipeline WebGLVkPipelineCache::createPipeline(const PipelineKey& key, VkPipeli
     renderingCreateInfo.colorAttachmentCount = attCount;
     renderingCreateInfo.pColorAttachmentFormats = key.colorAttachmentFormats;
     renderingCreateInfo.depthAttachmentFormat = key.depthAttachmentFormat;
-    if (key.depthAttachmentFormat == VK_FORMAT_D32_SFLOAT_S8_UINT ||
-        key.depthAttachmentFormat == VK_FORMAT_D24_UNORM_S8_UINT) {
-        renderingCreateInfo.stencilAttachmentFormat = key.depthAttachmentFormat;
-    }
+    renderingCreateInfo.stencilAttachmentFormat = key.stencilAttachmentFormat;
 
     VkGraphicsPipelineCreateInfo pipelineInfo{};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;

@@ -1,81 +1,16 @@
+// Generic vertex attribute values and uniform setters. A program's
+// default-block values live in its std140 uniform buffer image
+// (VkProgramResource::uniformBytes), uploaded at the next draw that finds it
+// changed; sampler uniforms are the texture unit each sampler element reads.
+
 #include "webgl/vulkan/webgl_vk_context.h"
+#include "webgl/vulkan/webgl_vk_glsl.h"
 #include "util/log.h"
+
 #include <algorithm>
 #include <cstring>
 
 namespace bro::webgl::vk {
-
-GLint WebGLVkContext::getAttribLocation(WebGLProgram p, const std::string& name) {
-    auto it = programs_.find(p.id);
-    if (it == programs_.end()) return -1;
-    auto aIt = it->second.attribLocations.find(name);
-    return (aIt != it->second.attribLocations.end()) ? aIt->second : -1;
-}
-
-void WebGLVkContext::bindAttribLocation(WebGLProgram p, GLuint index, const std::string& name) {
-    auto it = programs_.find(p.id);
-    if (it != programs_.end()) {
-        it->second.boundAttribLocations[name] = index;
-    }
-}
-
-GLint WebGLVkContext::getFragDataLocation(WebGLProgram p, const std::string& name) {
-    auto it = programs_.find(p.id);
-    if (it == programs_.end()) return -1;
-    auto fit = it->second.fragDataLocations.find(name);
-    if (fit != it->second.fragDataLocations.end()) return fit->second;
-    return (name == "gl_FragColor") ? 0 : -1;
-}
-
-WebGLUniformLocation WebGLVkContext::getUniformLocation(WebGLProgram p, const std::string& name) {
-    auto it = programs_.find(p.id);
-    if (it == programs_.end()) return {-1, 0};
-    auto uIt = it->second.uniformLocations.find(name);
-    if (uIt != it->second.uniformLocations.end()) {
-        return WebGLUniformLocation{uIt->second, p.id};
-    }
-    // Try array element "[0]"
-    auto aIt = it->second.uniformLocations.find(name + "[0]");
-    if (aIt != it->second.uniformLocations.end()) {
-        return WebGLUniformLocation{aIt->second, p.id};
-    }
-    return WebGLUniformLocation{-1, p.id};
-}
-
-GLuint WebGLVkContext::getUniformBlockIndex(WebGLProgram p, const std::string& name) {
-    auto it = programs_.find(p.id);
-    if (it == programs_.end()) return GL_INVALID_INDEX;
-    auto bit = it->second.uniformBlockIndices.find(name);
-    return (bit != it->second.uniformBlockIndices.end()) ? bit->second : GL_INVALID_INDEX;
-}
-
-void WebGLVkContext::uniformBlockBinding(WebGLProgram p, GLuint blockIndex, GLuint bindingPoint) {
-    auto it = programs_.find(p.id);
-    if (it != programs_.end()) {
-        if (blockIndex < it->second.uniformBlocks.size()) {
-            it->second.uniformBlocks[blockIndex].binding = bindingPoint;
-        }
-        it->second.uniformBlockBindings[blockIndex] = bindingPoint;
-    }
-}
-
-WebGLActiveInfo WebGLVkContext::getActiveAttrib(WebGLProgram p, GLuint index) {
-    auto it = programs_.find(p.id);
-    if (it != programs_.end() && index < it->second.activeAttribs.size()) {
-        const auto& a = it->second.activeAttribs[index];
-        return {a.name, static_cast<GLenum>(a.type), a.size};
-    }
-    return {"", 0, 0};
-}
-
-WebGLActiveInfo WebGLVkContext::getActiveUniform(WebGLProgram p, GLuint index) {
-    auto it = programs_.find(p.id);
-    if (it != programs_.end() && index < it->second.uniforms.size()) {
-        const auto& u = it->second.uniforms[index];
-        return {u.name, static_cast<GLenum>(u.type), u.count};
-    }
-    return {"", 0, 0};
-}
 
 // ---------------------------------------------------------------------------
 // Vertex Attributes
@@ -139,16 +74,114 @@ void WebGLVkContext::vertexAttribI4uiv(GLuint index, const GLuint* v) {
 // Uniforms
 // ---------------------------------------------------------------------------
 
-namespace {
-
-const VkUniformInfo* findUniform(const VkProgramResource& prog, GLint loc) {
-    for (const auto& u : prog.uniforms) {
-        if (u.location == loc) return &u;
+// The uniform a setter's location names in the current program, with the
+// GL errors for a location of another program, a missing program, or a
+// count for something that is not an array. Null (location -1 included,
+// which GL ignores silently) means nothing to write.
+VkUniformInfo* WebGLVkContext::uniformTarget(WebGLUniformLocation loc, GLsizei count, VkProgramResource*& prog,
+                                             uint32_t& element) {
+    if (loc.location < 0) return nullptr;
+    auto it = programs_.find(currentProgramId_);
+    if (it == programs_.end() || !it->second.linkStatus || loc.program != currentProgramId_) {
+        setSyntheticError(GL_INVALID_OPERATION);
+        return nullptr;
     }
-    return nullptr;
+    if (count < 0) {
+        setSyntheticError(GL_INVALID_VALUE);
+        return nullptr;
+    }
+    prog = &it->second;
+    if (static_cast<size_t>(loc.location) >= prog->iface.locations.size()) {
+        setSyntheticError(GL_INVALID_OPERATION);
+        return nullptr;
+    }
+    const VkUniformLocation& slot = prog->iface.locations[static_cast<size_t>(loc.location)];
+    VkUniformInfo& u = prog->iface.uniforms[slot.uniform];
+    if (count > 1 && u.size == 1) {
+        setSyntheticError(GL_INVALID_OPERATION);
+        return nullptr;
+    }
+    element = slot.element;
+    return &u;
 }
 
-} // namespace
+void WebGLVkContext::setUniformValues(WebGLUniformLocation loc, GLsizei count, UniformKind kind,
+                                      uint32_t components, const void* data) {
+    VkProgramResource* prog = nullptr;
+    uint32_t element = 0;
+    VkUniformInfo* u = uniformTarget(loc, count, prog, element);
+    if (!u || !data || count == 0) return;
+    const glsl::TypeInfo t = glsl::typeInfo(u->type);
+    const uint32_t n = std::min(static_cast<uint32_t>(count), static_cast<uint32_t>(u->size) - element);
+
+    if (t.kind == glsl::TypeInfo::Kind::Sampler) {
+        if (kind != UniformKind::Int || components != 1) {
+            setSyntheticError(GL_INVALID_OPERATION);
+            return;
+        }
+        const auto* units = static_cast<const GLint*>(data);
+        const GLint maxUnits = getParameterInt(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS);
+        for (uint32_t i = 0; i < n; ++i) {
+            if (units[i] < 0 || units[i] >= maxUnits) {
+                setSyntheticError(GL_INVALID_VALUE);
+                return;
+            }
+        }
+        const VkSamplerBinding& s = prog->iface.samplers[static_cast<size_t>(u->sampler)];
+        for (uint32_t i = 0; i < n; ++i) prog->samplerUnits[s.firstUnit + element + i] = static_cast<uint32_t>(units[i]);
+        return;
+    }
+
+    const bool kindMatches = t.kind == glsl::TypeInfo::Kind::Bool ||
+                             (kind == UniformKind::Float && t.kind == glsl::TypeInfo::Kind::Float) ||
+                             (kind == UniformKind::Int && t.kind == glsl::TypeInfo::Kind::Int) ||
+                             (kind == UniformKind::Uint && t.kind == glsl::TypeInfo::Kind::Uint);
+    if (t.isMatrix() || !kindMatches || t.rows != components) {
+        setSyntheticError(GL_INVALID_OPERATION);
+        return;
+    }
+    const bool isBool = t.kind == glsl::TypeInfo::Kind::Bool;
+    const auto* words = static_cast<const uint32_t*>(data);
+    for (uint32_t i = 0; i < n; ++i) {
+        uint8_t* dst = prog->uniformBytes.data() + u->offset + (element + i) * u->arrayStride;
+        for (uint32_t c = 0; c < components; ++c) {
+            uint32_t word = words[i * components + c];
+            // GL's bool is true for any non-zero value; the shader reads 0 / 1.
+            if (isBool) {
+                float f = 0.0f;
+                std::memcpy(&f, &word, 4);
+                word = (kind == UniformKind::Float ? f != 0.0f : word != 0) ? 1u : 0u;
+            }
+            std::memcpy(dst + c * 4, &word, 4);
+        }
+    }
+}
+
+void WebGLVkContext::setUniformMatrices(WebGLUniformLocation loc, GLsizei count, uint32_t columns, uint32_t rows,
+                                        GLboolean transpose, const GLfloat* value) {
+    VkProgramResource* prog = nullptr;
+    uint32_t element = 0;
+    VkUniformInfo* u = uniformTarget(loc, count, prog, element);
+    if (!u || !value || count == 0) return;
+    const glsl::TypeInfo t = glsl::typeInfo(u->type);
+    if (!t.isMatrix() || t.columns != columns || t.rows != rows) {
+        setSyntheticError(GL_INVALID_OPERATION);
+        return;
+    }
+    const uint32_t n = std::min(static_cast<uint32_t>(count), static_cast<uint32_t>(u->size) - element);
+    const uint32_t perMatrix = columns * rows;
+    for (uint32_t i = 0; i < n; ++i) {
+        const GLfloat* src = value + i * perMatrix;
+        uint8_t* dst = prog->uniformBytes.data() + u->offset + (element + i) * u->arrayStride;
+        // std140, column-major: each column a 16-byte-aligned vector.
+        for (uint32_t c = 0; c < columns; ++c) {
+            for (uint32_t r = 0; r < rows; ++r) {
+                const GLfloat v = transpose ? src[r * columns + c] : src[c * rows + r];
+                std::memcpy(dst + c * u->matrixStride + r * 4, &v, 4);
+            }
+        }
+    }
+}
 
 void WebGLVkContext::uniform1f(WebGLUniformLocation loc, GLfloat v0) { uniform1fv(loc, 1, &v0); }
 void WebGLVkContext::uniform2f(WebGLUniformLocation loc, GLfloat v0, GLfloat v1) {
@@ -160,7 +193,6 @@ void WebGLVkContext::uniform3f(WebGLUniformLocation loc, GLfloat v0, GLfloat v1,
 void WebGLVkContext::uniform4f(WebGLUniformLocation loc, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3) {
     GLfloat v[4] = {v0, v1, v2, v3}; uniform4fv(loc, 1, v);
 }
-
 void WebGLVkContext::uniform1i(WebGLUniformLocation loc, GLint v0) { uniform1iv(loc, 1, &v0); }
 void WebGLVkContext::uniform2i(WebGLUniformLocation loc, GLint v0, GLint v1) {
     GLint v[2] = {v0, v1}; uniform2iv(loc, 1, v);
@@ -171,7 +203,6 @@ void WebGLVkContext::uniform3i(WebGLUniformLocation loc, GLint v0, GLint v1, GLi
 void WebGLVkContext::uniform4i(WebGLUniformLocation loc, GLint v0, GLint v1, GLint v2, GLint v3) {
     GLint v[4] = {v0, v1, v2, v3}; uniform4iv(loc, 1, v);
 }
-
 void WebGLVkContext::uniform1ui(WebGLUniformLocation loc, GLuint v0) { uniform1uiv(loc, 1, &v0); }
 void WebGLVkContext::uniform2ui(WebGLUniformLocation loc, GLuint v0, GLuint v1) {
     GLuint v[2] = {v0, v1}; uniform2uiv(loc, 1, v);
@@ -183,285 +214,69 @@ void WebGLVkContext::uniform4ui(WebGLUniformLocation loc, GLuint v0, GLuint v1, 
     GLuint v[4] = {v0, v1, v2, v3}; uniform4uiv(loc, 1, v);
 }
 
-template <typename T>
-static void copyUniformArray(std::vector<uint8_t>& dstBytes, const VkUniformInfo& u, GLsizei count, const T* src, size_t elemCount) {
-    if (u.arrayStride > 0) {
-        GLsizei n = std::min(count, static_cast<GLsizei>(u.count));
-        for (GLsizei i = 0; i < n; ++i) {
-            size_t offset = u.offset + i * u.arrayStride;
-            if (offset + elemCount * sizeof(T) <= dstBytes.size()) {
-                std::memcpy(dstBytes.data() + offset, src + i * elemCount, elemCount * sizeof(T));
-            }
-        }
-    } else {
-        size_t bytes = std::min(static_cast<size_t>(count) * elemCount * sizeof(T), static_cast<size_t>(u.size));
-        if (u.offset + bytes <= dstBytes.size()) {
-            std::memcpy(dstBytes.data() + u.offset, src, bytes);
-        }
-    }
+void WebGLVkContext::uniform1fv(WebGLUniformLocation l, GLsizei n, const GLfloat* v) {
+    setUniformValues(l, n, UniformKind::Float, 1, v);
+}
+void WebGLVkContext::uniform2fv(WebGLUniformLocation l, GLsizei n, const GLfloat* v) {
+    setUniformValues(l, n, UniformKind::Float, 2, v);
+}
+void WebGLVkContext::uniform3fv(WebGLUniformLocation l, GLsizei n, const GLfloat* v) {
+    setUniformValues(l, n, UniformKind::Float, 3, v);
+}
+void WebGLVkContext::uniform4fv(WebGLUniformLocation l, GLsizei n, const GLfloat* v) {
+    setUniformValues(l, n, UniformKind::Float, 4, v);
+}
+void WebGLVkContext::uniform1iv(WebGLUniformLocation l, GLsizei n, const GLint* v) {
+    setUniformValues(l, n, UniformKind::Int, 1, v);
+}
+void WebGLVkContext::uniform2iv(WebGLUniformLocation l, GLsizei n, const GLint* v) {
+    setUniformValues(l, n, UniformKind::Int, 2, v);
+}
+void WebGLVkContext::uniform3iv(WebGLUniformLocation l, GLsizei n, const GLint* v) {
+    setUniformValues(l, n, UniformKind::Int, 3, v);
+}
+void WebGLVkContext::uniform4iv(WebGLUniformLocation l, GLsizei n, const GLint* v) {
+    setUniformValues(l, n, UniformKind::Int, 4, v);
+}
+void WebGLVkContext::uniform1uiv(WebGLUniformLocation l, GLsizei n, const GLuint* v) {
+    setUniformValues(l, n, UniformKind::Uint, 1, v);
+}
+void WebGLVkContext::uniform2uiv(WebGLUniformLocation l, GLsizei n, const GLuint* v) {
+    setUniformValues(l, n, UniformKind::Uint, 2, v);
+}
+void WebGLVkContext::uniform3uiv(WebGLUniformLocation l, GLsizei n, const GLuint* v) {
+    setUniformValues(l, n, UniformKind::Uint, 3, v);
+}
+void WebGLVkContext::uniform4uiv(WebGLUniformLocation l, GLsizei n, const GLuint* v) {
+    setUniformValues(l, n, UniformKind::Uint, 4, v);
 }
 
-void WebGLVkContext::uniform1fv(WebGLUniformLocation loc, GLsizei count, const GLfloat* v) {
-    if (loc.location < 0 || !v || count <= 0) return;
-    auto it = programs_.find(currentProgramId_);
-    if (it == programs_.end()) return;
-    if (const auto* u = findUniform(it->second, loc.location)) {
-        copyUniformArray(it->second.uniformBytes, *u, count, v, 1);
-    }
+void WebGLVkContext::uniformMatrix2fv(WebGLUniformLocation l, GLsizei n, GLboolean t, const GLfloat* v) {
+    setUniformMatrices(l, n, 2, 2, t, v);
 }
-
-void WebGLVkContext::uniform2fv(WebGLUniformLocation loc, GLsizei count, const GLfloat* v) {
-    if (loc.location < 0 || !v || count <= 0) return;
-    auto it = programs_.find(currentProgramId_);
-    if (it == programs_.end()) return;
-    if (const auto* u = findUniform(it->second, loc.location)) {
-        copyUniformArray(it->second.uniformBytes, *u, count, v, 2);
-    }
+void WebGLVkContext::uniformMatrix3fv(WebGLUniformLocation l, GLsizei n, GLboolean t, const GLfloat* v) {
+    setUniformMatrices(l, n, 3, 3, t, v);
 }
-
-void WebGLVkContext::uniform3fv(WebGLUniformLocation loc, GLsizei count, const GLfloat* v) {
-    if (loc.location < 0 || !v || count <= 0) return;
-    auto it = programs_.find(currentProgramId_);
-    if (it == programs_.end()) return;
-    if (const auto* u = findUniform(it->second, loc.location)) {
-        copyUniformArray(it->second.uniformBytes, *u, count, v, 3);
-    }
+void WebGLVkContext::uniformMatrix4fv(WebGLUniformLocation l, GLsizei n, GLboolean t, const GLfloat* v) {
+    setUniformMatrices(l, n, 4, 4, t, v);
 }
-
-void WebGLVkContext::uniform4fv(WebGLUniformLocation loc, GLsizei count, const GLfloat* v) {
-    if (loc.location < 0 || !v || count <= 0) return;
-    auto it = programs_.find(currentProgramId_);
-    if (it == programs_.end()) return;
-    if (const auto* u = findUniform(it->second, loc.location)) {
-        copyUniformArray(it->second.uniformBytes, *u, count, v, 4);
-    }
+void WebGLVkContext::uniformMatrix2x3fv(WebGLUniformLocation l, GLsizei n, GLboolean t, const GLfloat* v) {
+    setUniformMatrices(l, n, 2, 3, t, v);
 }
-
-void WebGLVkContext::uniform1iv(WebGLUniformLocation loc, GLsizei count, const GLint* v) {
-    if (loc.location < 0 || !v || count <= 0) return;
-    auto it = programs_.find(currentProgramId_);
-    if (it == programs_.end()) return;
-    auto sIt = it->second.samplerLocToBinding.find(loc.location);
-    if (sIt != it->second.samplerLocToBinding.end()) {
-        it->second.samplerBindings[sIt->second] = static_cast<uint32_t>(std::max(0, v[0]));
-        return;
-    }
-    if (const auto* u = findUniform(it->second, loc.location)) {
-        copyUniformArray(it->second.uniformBytes, *u, count, v, 1);
-    }
+void WebGLVkContext::uniformMatrix3x2fv(WebGLUniformLocation l, GLsizei n, GLboolean t, const GLfloat* v) {
+    setUniformMatrices(l, n, 3, 2, t, v);
 }
-
-void WebGLVkContext::uniform2iv(WebGLUniformLocation loc, GLsizei count, const GLint* v) {
-    if (loc.location < 0 || !v || count <= 0) return;
-    auto it = programs_.find(currentProgramId_);
-    if (it == programs_.end()) return;
-    if (const auto* u = findUniform(it->second, loc.location)) {
-        copyUniformArray(it->second.uniformBytes, *u, count, v, 2);
-    }
+void WebGLVkContext::uniformMatrix2x4fv(WebGLUniformLocation l, GLsizei n, GLboolean t, const GLfloat* v) {
+    setUniformMatrices(l, n, 2, 4, t, v);
 }
-
-void WebGLVkContext::uniform3iv(WebGLUniformLocation loc, GLsizei count, const GLint* v) {
-    if (loc.location < 0 || !v || count <= 0) return;
-    auto it = programs_.find(currentProgramId_);
-    if (it == programs_.end()) return;
-    if (const auto* u = findUniform(it->second, loc.location)) {
-        copyUniformArray(it->second.uniformBytes, *u, count, v, 3);
-    }
+void WebGLVkContext::uniformMatrix4x2fv(WebGLUniformLocation l, GLsizei n, GLboolean t, const GLfloat* v) {
+    setUniformMatrices(l, n, 4, 2, t, v);
 }
-
-void WebGLVkContext::uniform4iv(WebGLUniformLocation loc, GLsizei count, const GLint* v) {
-    if (loc.location < 0 || !v || count <= 0) return;
-    auto it = programs_.find(currentProgramId_);
-    if (it == programs_.end()) return;
-    if (const auto* u = findUniform(it->second, loc.location)) {
-        copyUniformArray(it->second.uniformBytes, *u, count, v, 4);
-    }
+void WebGLVkContext::uniformMatrix3x4fv(WebGLUniformLocation l, GLsizei n, GLboolean t, const GLfloat* v) {
+    setUniformMatrices(l, n, 3, 4, t, v);
 }
-
-void WebGLVkContext::uniform1uiv(WebGLUniformLocation loc, GLsizei count, const GLuint* v) {
-    if (loc.location < 0 || !v || count <= 0) return;
-    auto it = programs_.find(currentProgramId_);
-    if (it == programs_.end()) return;
-    if (const auto* u = findUniform(it->second, loc.location)) {
-        copyUniformArray(it->second.uniformBytes, *u, count, v, 1);
-    }
-}
-
-void WebGLVkContext::uniform2uiv(WebGLUniformLocation loc, GLsizei count, const GLuint* v) {
-    if (loc.location < 0 || !v || count <= 0) return;
-    auto it = programs_.find(currentProgramId_);
-    if (it == programs_.end()) return;
-    if (const auto* u = findUniform(it->second, loc.location)) {
-        copyUniformArray(it->second.uniformBytes, *u, count, v, 2);
-    }
-}
-
-void WebGLVkContext::uniform3uiv(WebGLUniformLocation loc, GLsizei count, const GLuint* v) {
-    if (loc.location < 0 || !v || count <= 0) return;
-    auto it = programs_.find(currentProgramId_);
-    if (it == programs_.end()) return;
-    if (const auto* u = findUniform(it->second, loc.location)) {
-        copyUniformArray(it->second.uniformBytes, *u, count, v, 3);
-    }
-}
-
-void WebGLVkContext::uniform4uiv(WebGLUniformLocation loc, GLsizei count, const GLuint* v) {
-    if (loc.location < 0 || !v || count <= 0) return;
-    auto it = programs_.find(currentProgramId_);
-    if (it == programs_.end()) return;
-    if (const auto* u = findUniform(it->second, loc.location)) {
-        copyUniformArray(it->second.uniformBytes, *u, count, v, 4);
-    }
-}
-
-void WebGLVkContext::uniformMatrix2fv(WebGLUniformLocation loc, GLsizei count, GLboolean /*transpose*/, const GLfloat* value) {
-    if (loc.location < 0 || !value || count <= 0) return;
-    auto it = programs_.find(currentProgramId_);
-    if (it == programs_.end()) return;
-    if (const auto* u = findUniform(it->second, loc.location)) {
-        for (GLsizei c = 0; c < count; ++c) {
-            size_t base = u->offset + c * 32;
-            if (base + 24 <= it->second.uniformBytes.size()) {
-                const float* src = value + c * 4;
-                std::memcpy(it->second.uniformBytes.data() + base + 0, src + 0, 8);
-                std::memcpy(it->second.uniformBytes.data() + base + 16, src + 2, 8);
-            }
-        }
-    }
-}
-
-void WebGLVkContext::uniformMatrix3fv(WebGLUniformLocation loc, GLsizei count, GLboolean /*transpose*/, const GLfloat* value) {
-    if (loc.location < 0 || !value || count <= 0) return;
-    auto it = programs_.find(currentProgramId_);
-    if (it == programs_.end()) return;
-    if (const auto* u = findUniform(it->second, loc.location)) {
-        for (GLsizei c = 0; c < count; ++c) {
-            size_t base = u->offset + c * 48;
-            if (base + 44 <= it->second.uniformBytes.size()) {
-                const float* src = value + c * 9;
-                std::memcpy(it->second.uniformBytes.data() + base + 0, src + 0, 12);
-                std::memcpy(it->second.uniformBytes.data() + base + 16, src + 3, 12);
-                std::memcpy(it->second.uniformBytes.data() + base + 32, src + 6, 12);
-            }
-        }
-    }
-}
-
-void WebGLVkContext::uniformMatrix4fv(WebGLUniformLocation loc, GLsizei count, GLboolean /*transpose*/, const GLfloat* value) {
-    if (loc.location < 0 || !value || count <= 0) return;
-    auto it = programs_.find(currentProgramId_);
-    if (it == programs_.end()) return;
-    if (const auto* u = findUniform(it->second, loc.location)) {
-        size_t bytes = std::min(static_cast<size_t>(count) * 64, static_cast<size_t>(u->size));
-        if (u->offset + bytes <= it->second.uniformBytes.size()) {
-            std::memcpy(it->second.uniformBytes.data() + u->offset, value, bytes);
-        }
-    }
-}
-
-void WebGLVkContext::uniformMatrix2x3fv(WebGLUniformLocation loc, GLsizei count, GLboolean /*transpose*/, const GLfloat* value) {
-    if (loc.location < 0 || !value || count <= 0) return;
-    auto it = programs_.find(currentProgramId_);
-    if (it == programs_.end()) return;
-    if (const auto* u = findUniform(it->second, loc.location)) {
-        for (GLsizei c = 0; c < count; ++c) {
-            size_t base = u->offset + c * 32;
-            if (base + 28 <= it->second.uniformBytes.size()) {
-                const float* src = value + c * 6;
-                std::memcpy(it->second.uniformBytes.data() + base + 0, src + 0, 12);
-                std::memcpy(it->second.uniformBytes.data() + base + 16, src + 3, 12);
-            }
-        }
-    }
-}
-
-void WebGLVkContext::uniformMatrix3x2fv(WebGLUniformLocation loc, GLsizei count, GLboolean /*transpose*/, const GLfloat* value) {
-    if (loc.location < 0 || !value || count <= 0) return;
-    auto it = programs_.find(currentProgramId_);
-    if (it == programs_.end()) return;
-    if (const auto* u = findUniform(it->second, loc.location)) {
-        for (GLsizei c = 0; c < count; ++c) {
-            size_t base = u->offset + c * 48;
-            if (base + 40 <= it->second.uniformBytes.size()) {
-                const float* src = value + c * 6;
-                std::memcpy(it->second.uniformBytes.data() + base + 0, src + 0, 8);
-                std::memcpy(it->second.uniformBytes.data() + base + 16, src + 2, 8);
-                std::memcpy(it->second.uniformBytes.data() + base + 32, src + 4, 8);
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Program Introspection & Uniform Blocks
-// ---------------------------------------------------------------------------
-
-std::vector<GLuint> WebGLVkContext::getUniformIndices(WebGLProgram p, const std::vector<std::string>& names) {
-    std::vector<GLuint> res(names.size(), GL_INVALID_INDEX);
-    auto it = programs_.find(p.id);
-    if (it == programs_.end()) return res;
-
-    for (size_t i = 0; i < names.size(); ++i) {
-        const std::string& name = names[i];
-        for (size_t u = 0; u < it->second.uniforms.size(); ++u) {
-            const auto& uInfo = it->second.uniforms[u];
-            if (uInfo.name == name || uInfo.name == (name + "[0]")) {
-                res[i] = static_cast<GLuint>(u);
-                break;
-            }
-        }
-    }
-    return res;
-}
-
-std::vector<GLint> WebGLVkContext::getActiveUniforms(WebGLProgram p, const std::vector<GLuint>& indices, GLenum pname) {
-    std::vector<GLint> res(indices.size(), 0);
-    auto it = programs_.find(p.id);
-    if (it == programs_.end()) return res;
-
-    for (size_t i = 0; i < indices.size(); ++i) {
-        GLuint idx = indices[i];
-        if (idx >= it->second.uniforms.size()) continue;
-        const auto& u = it->second.uniforms[idx];
-        switch (pname) {
-            case GL_UNIFORM_TYPE: res[i] = u.type; break;
-            case GL_UNIFORM_SIZE: res[i] = u.count; break;
-            case GL_UNIFORM_BLOCK_INDEX: res[i] = u.blockIndex; break;
-            case GL_UNIFORM_OFFSET: res[i] = u.offset; break;
-            case GL_UNIFORM_ARRAY_STRIDE: res[i] = u.arrayStride; break;
-            case GL_UNIFORM_MATRIX_STRIDE: res[i] = u.matrixStride; break;
-            case GL_UNIFORM_IS_ROW_MAJOR: res[i] = u.isRowMajor ? 1 : 0; break;
-            default: break;
-        }
-    }
-    return res;
-}
-
-GLint WebGLVkContext::getActiveUniformBlockParameteri(WebGLProgram p, GLuint blockIndex, GLenum pname) {
-    auto it = programs_.find(p.id);
-    if (it == programs_.end() || blockIndex >= it->second.uniformBlocks.size()) return 0;
-    const auto& b = it->second.uniformBlocks[blockIndex];
-    switch (pname) {
-        case 0x8A3F /* GL_UNIFORM_BLOCK_BINDING */: return b.binding;
-        case GL_UNIFORM_BLOCK_DATA_SIZE: return b.dataSize;
-        case GL_UNIFORM_BLOCK_ACTIVE_UNIFORMS: return static_cast<GLint>(b.activeUniformIndices.size());
-        case GL_UNIFORM_BLOCK_REFERENCED_BY_VERTEX_SHADER: return b.referencedByVertex ? 1 : 0;
-        case GL_UNIFORM_BLOCK_REFERENCED_BY_FRAGMENT_SHADER: return b.referencedByFragment ? 1 : 0;
-        default: return 0;
-    }
-}
-
-std::vector<GLint> WebGLVkContext::getActiveUniformBlockIndices(WebGLProgram p, GLuint blockIndex) {
-    auto it = programs_.find(p.id);
-    if (it == programs_.end() || blockIndex >= it->second.uniformBlocks.size()) return {};
-    const auto& b = it->second.uniformBlocks[blockIndex];
-    return std::vector<GLint>(b.activeUniformIndices.begin(), b.activeUniformIndices.end());
-}
-
-std::string WebGLVkContext::getActiveUniformBlockName(WebGLProgram p, GLuint blockIndex) {
-    auto it = programs_.find(p.id);
-    if (it == programs_.end() || blockIndex >= it->second.uniformBlocks.size()) return "";
-    return it->second.uniformBlocks[blockIndex].name;
+void WebGLVkContext::uniformMatrix4x3fv(WebGLUniformLocation l, GLsizei n, GLboolean t, const GLfloat* v) {
+    setUniformMatrices(l, n, 4, 3, t, v);
 }
 
 } // namespace bro::webgl::vk

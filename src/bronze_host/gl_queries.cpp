@@ -235,6 +235,16 @@ void installGlQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
             case 0x0B72:  // GL_DEPTH_WRITEMASK
                 return ev::fromBool(gl->getParameterBool(pname) != GL_FALSE);
 
+            // 64-bit limits (GLint64 in GL).
+            case 0x8A30:  // GL_MAX_UNIFORM_BLOCK_SIZE
+            case 0x8A31:  // GL_MAX_COMBINED_VERTEX_UNIFORM_COMPONENTS
+            case 0x8A33:  // GL_MAX_COMBINED_FRAGMENT_UNIFORM_COMPONENTS
+            case 0x8D6B:  // GL_MAX_ELEMENT_INDEX
+            case 0x9111:  // GL_MAX_SERVER_WAIT_TIMEOUT
+                return ev::fromDouble(static_cast<double>(gl->getParameterInt64(pname)));
+            case 0x84FD:  // GL_MAX_TEXTURE_LOD_BIAS
+                return ev::fromDouble(gl->getParameterFloat(pname));
+
             // Default: integer parameter (all the MAX_* limits included).
             default:
                 return ev::fromDouble(gl->getParameterInt(pname));
@@ -312,11 +322,15 @@ void installGlQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         });
     });
 
-    b.def("getShaderPrecisionFormat", 2, [](Value, std::span<const Value>) {
+    // Every precision is highp: shaders compile with precision qualifiers
+    // dropped (32-bit floats and ints throughout).
+    b.def("getShaderPrecisionFormat", 2, [](Value, std::span<const Value> a) {
+        const GLenum type = u32At(a, 1);
+        const bool integer = type >= 0x8DF3 && type <= 0x8DF5;  // LOW_INT .. HIGH_INT
         ObjectBuilder o;
-        o.set("rangeMin", ev::fromDouble(127));
-        o.set("rangeMax", ev::fromDouble(127));
-        o.set("precision", ev::fromDouble(23));
+        o.set("rangeMin", ev::fromDouble(integer ? 31 : 127));
+        o.set("rangeMax", ev::fromDouble(integer ? 30 : 127));
+        o.set("precision", ev::fromDouble(integer ? 0 : 23));
         return o.get();
     });
 
@@ -432,11 +446,16 @@ void installGlQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         GLenum target = u32At(a, 0);
         GLenum internalformat = u32At(a, 1);
         GLenum pname = u32At(a, 2);
-        if (pname == 0x80A9 /* SAMPLES */) {
-            int32_t samples[] = { 4, 2, 1 };
-            return makeNumberList(samples, 3);
+        if (target != 0x8D41 /* RENDERBUFFER */) {
+            live(c)->setSyntheticError(0x0500 /* GL_INVALID_ENUM */);
+            return ev::null();
         }
-        return ev::fromDouble(0);
+        if (pname == 0x80A9 /* SAMPLES */) {
+            const std::vector<GLint> samples = live(c)->supportedSampleCounts(internalformat);
+            return makeNumberList(samples.data(), samples.size());
+        }
+        live(c)->setSyntheticError(0x0500 /* GL_INVALID_ENUM */);
+        return ev::null();
     });
 
     // --- WebGL2 parameter queries ---
@@ -455,12 +474,22 @@ void installGlQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         }
     });
 
-    b.def("getFramebufferAttachmentParameter", 3, [](Value, std::span<const Value>) {
-        return ev::null();
+    b.def("getFramebufferAttachmentParameter", 3, [c](Value, std::span<const Value> a) {
+        GLint value = 0;
+        GLenum objectType = 0;
+        GLuint objectName = 0;
+        bool isNull = false;
+        if (!live(c)->getFramebufferAttachmentParameter(u32At(a, 0), u32At(a, 1), u32At(a, 2), value, objectType,
+                                                        objectName, isNull) ||
+            isNull)
+            return ev::null();
+        if (objectType == 0x1702 /* TEXTURE */) return wrapGlObj(GlCell::Texture, objectName);
+        if (objectType == 0x8D41 /* RENDERBUFFER */) return wrapGlObj(GlCell::Renderbuffer, objectName);
+        return ev::fromDouble(value);
     });
 
-    b.def("getRenderbufferParameter", 2, [](Value, std::span<const Value>) {
-        return ev::fromDouble(0);
+    b.def("getRenderbufferParameter", 2, [c](Value, std::span<const Value> a) {
+        return ev::fromDouble(live(c)->getRenderbufferParameter(u32At(a, 0), u32At(a, 1)));
     });
 
     b.def("getBufferParameter", 2, [](Value, std::span<const Value>) {

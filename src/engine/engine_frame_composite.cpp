@@ -152,13 +152,11 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, uint32_t /*targ
         } else if (layer.type == UILayer::WebGL) {
             webgl::WebGL2RenderingContext* wctx = nullptr;
             for (auto& entry : webglEntries_) {
-                if (entry.context && (layer.canvasSceneId == 0 ||
-                                      (entry.element && entry.element->nodeId() == layer.canvasSceneId))) {
+                if (entry.context && entry.element && entry.element->nodeId() == layer.texture) {
                     wctx = entry.context.get();
                     break;
                 }
             }
-            if (!wctx && !webglEntries_.empty()) wctx = webglEntries_[0].context.get();
             if (!wctx) continue;
             // The canvas's recorded work must be submitted before the
             // presenter's submission samples it (queue order does the rest).

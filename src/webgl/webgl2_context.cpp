@@ -1,5 +1,4 @@
 #include "webgl/webgl2_context.h"
-#include "webgl/glsl_translator.h"
 #include "webgl/vulkan/webgl_vk_context.h"
 #include "util/log.h"
 
@@ -38,9 +37,6 @@ WebGL2RenderingContext::~WebGL2RenderingContext() {
     vkCtx_.reset();
 }
 
-void WebGL2RenderingContext::createCanvasFBO() {}
-void WebGL2RenderingContext::destroyCanvasFBO() {}
-
 VkImage WebGL2RenderingContext::vkColorImage() const {
     return vkCtx_ ? vkCtx_->canvas().colorImage() : VK_NULL_HANDLE;
 }
@@ -61,10 +57,6 @@ void WebGL2RenderingContext::resize(int width, int height) {
 void WebGL2RenderingContext::makeCurrent() {
     if (current_ == this) return;
     current_ = this;
-}
-
-void WebGL2RenderingContext::bindCanvasFBO() {
-    if (vkCtx_) vkCtx_->bindCanvasFBO();
 }
 
 void WebGL2RenderingContext::unbindCanvasFBO() {
@@ -369,7 +361,12 @@ void WebGL2RenderingContext::transformFeedbackVaryings(WebGLProgram /*program*/,
                                                        GLenum /*bufferMode*/) {}
 WebGLActiveInfo WebGL2RenderingContext::getTransformFeedbackVarying(WebGLProgram /*program*/, GLuint /*index*/) { return {}; }
 GLboolean WebGL2RenderingContext::isTransformFeedback(WebGLTransformFeedback /*tf*/) { return GL_FALSE; }
-int64_t WebGL2RenderingContext::getIndexedParameterInt64(GLenum /*pname*/, GLuint /*index*/) { return 0; }
+int64_t WebGL2RenderingContext::getIndexedParameterInt64(GLenum pname, GLuint index) {
+    // Transform feedback buffer ranges are not tracked (transform feedback is unsupported).
+    if (vkCtx_ && (pname == 0x8A29 /* UNIFORM_BUFFER_START */ || pname == 0x8A2A /* UNIFORM_BUFFER_SIZE */))
+        return vkCtx_->getIndexedBufferParameter(pname, index);
+    return 0;
+}
 
 void WebGL2RenderingContext::texImage3D(GLenum target, GLint level, GLint internalformat,
                                         GLsizei width, GLsizei height, GLsizei depth, GLint border,
@@ -385,12 +382,12 @@ void WebGL2RenderingContext::texSubImage3D(GLenum target, GLint level,
 }
 
 bool WebGL2RenderingContext::validateReadPixels(GLsizei width, GLsizei height,
-                                                GLenum /*format*/, GLenum /*type*/, size_t dstLen) {
-    if (width <= 0 || height <= 0) {
-        setSyntheticError(GL_INVALID_VALUE);
-        return false;
-    }
-    size_t bytes = static_cast<size_t>(width) * height * 4;
+                                                GLenum format, GLenum type, size_t dstLen) {
+    if (!vkCtx_) return false;
+    // Sized by the read buffer's format/type and PACK_ALIGNMENT; 0 is an
+    // empty rectangle or an invalid read (the error is already set).
+    const size_t bytes = vkCtx_->readPixelsByteCount(width, height, format, type);
+    if (bytes == 0) return false;
     if (dstLen < bytes) {
         setSyntheticError(GL_INVALID_OPERATION);
         return false;
@@ -423,6 +420,10 @@ GLboolean WebGL2RenderingContext::isVertexArray(WebGLVertexArrayObject vao) {
 GLint WebGL2RenderingContext::getParameterInt(GLenum pname) {
     if (vkCtx_) return vkCtx_->getParameterInt(pname);
     return 0;
+}
+
+int64_t WebGL2RenderingContext::getParameterInt64(GLenum pname) {
+    return vkCtx_ ? vkCtx_->getParameterInt64(pname) : 0;
 }
 
 GLfloat WebGL2RenderingContext::getParameterFloat(GLenum pname) {
@@ -479,16 +480,20 @@ std::string WebGL2RenderingContext::getParameterString(GLenum pname) {
 }
 
 std::vector<std::string> WebGL2RenderingContext::getSupportedExtensions() {
-    return {
+    std::vector<std::string> exts = {
         "EXT_color_buffer_float",
-        "EXT_float_blend",
-        "OES_texture_float_linear",
-        "EXT_texture_filter_anisotropic",
         "EXT_texture_compression_rgtc",
         "EXT_texture_compression_bptc",
         "WEBGL_compressed_texture_s3tc",
         "BRO_buffer_map",
     };
+    // What 32-bit float formats can do is the device's to say.
+    if (vkCtx_ && vkCtx_->formatSupports(VK_FORMAT_R32G32B32A32_SFLOAT, VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT))
+        exts.emplace_back("EXT_float_blend");
+    if (vkCtx_ && vkCtx_->formatSupports(VK_FORMAT_R32G32B32A32_SFLOAT,
+                                         VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT))
+        exts.emplace_back("OES_texture_float_linear");
+    return exts;
 }
 
 bool WebGL2RenderingContext::getExtension(const std::string& name) {

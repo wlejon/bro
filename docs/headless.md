@@ -484,79 +484,128 @@ Headless mode shares the same `Engine` class as windowed mode, configured via `E
 
 ### WebGL2 support matrix
 
-The `webgl2` context (src/webgl/) maps WebGL2 onto
-a native Vulkan backend (`WebGLVkContext`). Behavioral tests live in `tests/webgl/`.
+The `webgl2` context maps WebGL 2 onto Vulkan (`WebGLVkContext`,
+src/webgl/vulkan/). Behavioral tests live in `tests/webgl/`; each claim
+below is exercised there with pixel readback. This is the state of the
+backend, not of the WebGL 2 spec: what is missing is listed as missing.
 
-**Implemented:** context state + `getParameter`/`getError` (including
-WebGL-only pixel-store pnames and synthetic errors); buffers with all
-`bufferData`/`bufferSubData`/`getBufferSubData` signatures (element-unit
-`srcOffset`/`length`), `copyBufferSubData`, all WebGL2 binding points and
-`bindBufferBase`/`bindBufferRange`; VAOs, `vertexAttribIPointer`,
-`vertexAttribDivisor` + instanced draws, `drawRangeElements`, all three index
-types; shaders/programs with info logs, active attrib/uniform metadata,
-uniform blocks (UBO), `getFragDataLocation`, and every uniform setter shape
-(scalars, typed arrays, plain JS arrays, square + non-square matrices);
-textures 2D / 3D / 2D-array / cube map, sized internal formats,
-`texStorage2D/3D`, mipmaps, `UNPACK_ALIGNMENT`, `UNPACK_FLIP_Y_WEBGL`,
-`UNPACK_PREMULTIPLY_ALPHA_WEBGL`; framebuffers/renderbuffers including
-multisample + `blitFramebuffer` resolve, MRT via `drawBuffers` +
-`readBuffer`, `readPixels` (with destination-size validation), float
-color buffers (`EXT_color_buffer_float`); sampler objects (full API,
-sampler state overrides texture state, auto-unbind on delete); sync objects
-(`fenceSync`/`clientWaitSync`/`waitSync`/`getSyncParameter`, `clientWaitSync`
-timeouts are capped at `MAX_CLIENT_WAIT_TIMEOUT_WEBGL` = 1 s and larger values
-raise `INVALID_OPERATION` instead of blocking the JS thread); query objects
-(`ANY_SAMPLES_PASSED`, `TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN`;
-`QUERY_RESULT_AVAILABLE` never sync-stalls, and
-`ANY_SAMPLES_PASSED_CONSERVATIVE` is answered with the exact
-`ANY_SAMPLES_PASSED` query on drivers without GL 4.3 / ARB_ES3_compatibility,
-an exact answer is a valid conservative one); transform feedback (varyings +
-relink, begin/end/pause/resume, TF objects, `TRANSFORM_FEEDBACK_BUFFER`
-indexed binds, `TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN` queries, TF *objects*
-and pause/resume need the driver's ARB_transform_feedback2, universal on
-desktop; `createTransformFeedback` returns null without it);
-`getIndexedParameter` for the `TRANSFORM_FEEDBACK_BUFFER` / `UNIFORM_BUFFER`
-binding/start/size rows (the `*_BINDING` rows return the actual `WebGLBuffer`
-objects); pixel buffer objects (`readPixels` into a `PIXEL_PACK_BUFFER` at an
-offset with PBO-size bounds checking, `texImage2D`/`texSubImage2D` from a
-`PIXEL_UNPACK_BUFFER` offset, and the WebGL2 client-memory-vs-PBO
-`INVALID_OPERATION` rules, including FLIP_Y/PREMULTIPLY being
-client-memory-only); `copyTexImage2D`/`copyTexSubImage2D`;
-`compressedTexImage2D`/`compressedTexSubImage2D` with block-size and
-alignment validation, `getParameter(COMPRESSED_TEXTURE_FORMATS)`, and the
-compressed extensions gated on real driver support
-(`WEBGL_compressed_texture_s3tc`[`_srgb`], `EXT_texture_compression_rgtc`,
-`EXT_texture_compression_bptc`: extension objects carry their format
-constants). ETC2/ASTC are unavailable: desktop GL 3.3 core cannot express
-them, and they are never claimed; unsigned-int uniform setters (`uniform*ui`,
-`uniform*uiv`: typed arrays and plain JS arrays) and constant integer vertex
-attributes (`vertexAttribI4i/ui/iv/uiv`); uniform/block introspection
-(`getUniformIndices` with `INVALID_INDEX` for unknown names,
-`getActiveUniforms` for TYPE/SIZE/BLOCK_INDEX/OFFSET/ARRAY_STRIDE/
-MATRIX_STRIDE/IS_ROW_MAJOR, `getActiveUniformBlockParameter` incl. the
-active-uniform-indices array and boolean referenced-by rows,
-`getActiveUniformBlockName`); the full `is*` predicate family (`isBuffer`/
-`isTexture`/`isFramebuffer`/`isRenderbuffer`/`isProgram`/`isShader`/
-`isVertexArray`/`isSampler`/`isQuery`/`isSync`/`isTransformFeedback`) with
-WebGL lifecycle semantics, false before first bind for gen-style objects,
-false after delete, immune to GL id reuse via the context's valid-object
-sets.
+**Command stream.** Every GPU operation (draws, clears, uploads, copies,
+blits, layout changes) is recorded in API order into one command stream per
+context and submitted at frame end, or earlier once the stream has used its
+upload / descriptor budget (32 MB, 4096 sets), so a long burst of uploads in
+one turn neither runs out of memory nor stalls. Drawing from top-level
+script, timers or across frames reaches the composited frame; the app's
+framebuffer binding persists across frames. Only readbacks (`readPixels`,
+`getBufferSubData`, a screenshot) and client waits block, on the context's
+own work. Several WebGL canvases composite independently.
 
-**Not implemented (absent API families):**
-compressed 3D/array uploads (`compressedTexImage3D`), the
-`compressedTex*`-from-PBO offset overloads, `framebufferTextureLayer`,
-`invalidateFramebuffer`/`invalidateSubFramebuffer`, constant float vertex
-attributes (`vertexAttrib[1-4]f*`), and the introspection getters
-`getUniform`, `getVertexAttrib`, `getTexParameter`, `getBufferParameter`,
-`getRenderbufferParameter`, `getFramebufferAttachmentParameter`,
-`getInternalformatParameter`, `validateProgram`.
+**Shaders.** GLSL ES 3.00 and 1.00 are compiled in process by glslang to
+SPIR-V, and the program interface comes from glslang's reflection, not from
+parsing source text: attributes (placed by `layout(location)`, then
+`bindAttribLocation`, then automatically; aliasing fails the link),
+uniforms of every type including structs, arrays of structs, square,
+non-square and transposed matrices, sampler arrays, `std140` uniform blocks
+(including block arrays) and fragment outputs. ES 1.00 `attribute` /
+`varying` / `gl_FragColor` / `gl_FragData` / `texture2D` work, and the
+`OES_standard_derivatives`, `EXT_shader_texture_lod`, `EXT_frag_depth` and
+`EXT_draw_buffers` directives are accepted. `gl_FragCoord` and
+`gl_PointCoord` follow GL's window convention. A link fails when the program
+needs more uniform vectors, samplers or uniform blocks than `getParameter`
+reports; a sampler is visible only to the stages that read it, so the vertex
+and fragment stages each have their own sampler budget (16 + 16 = 32
+combined even on MoltenVK, whose per-stage limit is 16). Every precision is highp, and `getShaderPrecisionFormat` says so.
 
-**Known deviations:** `texStorage2D` is emulated with mutable storage
-(`texImage2D` per level) so three.js's placeholder-then-allocate flow works,
-immutability is not enforced and `TEXTURE_IMMUTABLE_FORMAT` reports as
-mutable; `getParameter` object-binding queries (`CURRENT_PROGRAM`,
-`ARRAY_BUFFER_BINDING`, `TEXTURE_BINDING_2D`, ...) return `null` rather than
-the wrapper objects; `getShaderPrecisionFormat` returns fixed highp values.
+**Limits.** `getParameter` answers implementation limits from the Vulkan
+device: texture, cube, 3D, array-layer, renderbuffer and viewport sizes,
+`MAX_SAMPLES`, draw buffers / color attachments, vertex attributes, uniform
+vectors and components, varyings, texture units, uniform-buffer bindings,
+blocks, block size and offset alignment, `MAX_ELEMENT_INDEX`, texel offsets,
+LOD bias, subpixel bits, the point-size range (1 without the device's
+`largePoints`) and a line-width range of exactly 1. `RED_BITS` ...
+`STENCIL_BITS`, `SAMPLES` / `SAMPLE_BUFFERS`, `DRAW_BUFFERi`, `READ_BUFFER`
+and `IMPLEMENTATION_COLOR_READ_FORMAT/TYPE` describe the bound framebuffers.
+`EXT_float_blend` and `OES_texture_float_linear` are offered only when the
+device supports them.
+
+**Framebuffers.** Color (up to `MAX_COLOR_ATTACHMENTS`), depth, stencil
+and `DEPTH_STENCIL` attachments, from texture levels, cube faces,
+array / 3D layers (`framebufferTextureLayer`) and renderbuffers; separate
+`DRAW_FRAMEBUFFER` / `READ_FRAMEBUFFER` bindings; completeness with
+`INCOMPLETE_MISSING_ATTACHMENT`, `INCOMPLETE_ATTACHMENT`,
+`INCOMPLETE_MULTISAMPLE` and `UNSUPPORTED` (depth and stencil attached from
+different images), and `INVALID_FRAMEBUFFER_OPERATION` for draws, clears,
+reads and blits on an incomplete one; `drawBuffers` / `readBuffer` with the
+ES 3.0 rules (`BACK` / `NONE` on the canvas, `COLOR_ATTACHMENTi` / `NONE` on
+an FBO); `getFramebufferAttachmentParameter` and `getRenderbufferParameter`.
+Sampling a texture attached to the draw framebuffer is `INVALID_OPERATION`.
+The canvas has a `DEPTH24_STENCIL8` buffer. Renderbuffers take the
+color-renderable and depth/stencil formats, multisampled at the counts the
+device has (`getInternalformatParameter(RENDERBUFFER, fmt, SAMPLES)`;
+integer formats are never multisampled), and start cleared (color 0,
+depth 1, stencil 0).
+
+**Clears, blits, reads.** `clear` and `clearBuffer{fv,iv,uiv,fi}`, typed per
+buffer (`clear` of an integer buffer is `INVALID_OPERATION`), cut to the
+scissor box. `blitFramebuffer` copies color, depth and stencil between the
+canvas and FBOs in either direction, scaled (`NEAREST` / `LINEAR`), mirrored,
+clipped to both framebuffers and the scissor box, and resolves
+multisampled color and depth/stencil (sample zero) into single-sample
+targets, with the ES 3.0 validation. `readPixels` reads the read buffer of the
+canvas or an FBO as RGBA/`UNSIGNED_BYTE` (normalized buffers), RGBA/`FLOAT`
+(float buffers) or `RGBA_INTEGER`/`INT` or `UNSIGNED_INT` (integer buffers),
+honours `PACK_ALIGNMENT`, leaves pixels outside the framebuffer untouched,
+and can target a `PIXEL_PACK_BUFFER`.
+
+**Also implemented:** buffers with every `bufferData` / `bufferSubData` /
+`getBufferSubData` signature, `copyBufferSubData`, `bindBufferBase` /
+`bindBufferRange` (offset-alignment checked; a draw whose block range is
+missing or too small is `INVALID_OPERATION`) and `getIndexedParameter`;
+VAOs, integer attributes, constant attributes (`vertexAttrib*`,
+`vertexAttribI4*`), instancing and all three index types; sampler objects;
+textures 2D, cube, 2D array and 3D (see below for formats), mipmaps,
+`UNPACK_ALIGNMENT`, `UNPACK_FLIP_Y_WEBGL`, `UNPACK_PREMULTIPLY_ALPHA_WEBGL`;
+pixel buffer objects for `readPixels` and `texImage2D` / `texSubImage2D`;
+uniform and block introspection (`getActiveUniform(s)`,
+`getUniformIndices`, `getActiveUniformBlockParameter` / `Name`); sync
+objects (`fenceSync` / `clientWaitSync` / `getSyncParameter`, waits capped at
+`MAX_CLIENT_WAIT_TIMEOUT_WEBGL` = 1 s); the `is*` predicates.
+
+**Partial:**
+- Texture storage formats are R8, RG8, RGBA8, R/RG/RGBA 16F and 32F and the
+  depth formats. Unsized `RGB`, integer, sRGB and packed formats are stored
+  as RGBA8 (three-byte RGB data uploads wrongly); `TEXTURE_3D` is stored as
+  2D-array layers; depth textures take no data uploads; `texStorage*` is
+  mutable storage (`TEXTURE_IMMUTABLE_FORMAT` reads false); `copyTexImage2D`
+  / `copyTexSubImage2D` go through a CPU readback.
+- Compressed textures (`WEBGL_compressed_texture_s3tc`, RGTC, BPTC) are
+  decompressed to RGBA8 on the CPU.
+- `clear` with a partial `colorMask` or stencil write mask writes all
+  channels / all stencil bits (a fully disabled mask is respected).
+- Pipeline state recorded but not applied: `polygonOffset`, `blendColor`
+  (`CONSTANT_*` blend factors see zero), `depthRange`, `sampleCoverage`,
+  `SAMPLE_ALPHA_TO_COVERAGE`, `RASTERIZER_DISCARD`, `DITHER`; `lineWidth`
+  is always 1.
+- `PACK_ROW_LENGTH` / `PACK_SKIP_*` and the `UNPACK_ROW_LENGTH` /
+  `UNPACK_SKIP_*` / `UNPACK_IMAGE_HEIGHT` pixel-store parameters are ignored.
+- Query objects are answered without GPU queries: `ANY_SAMPLES_PASSED`
+  reports true unless the scissor box is empty.
+- `waitSync` returns at once (all work is on one queue, so it is already
+  ordered); `MAX_SERVER_WAIT_TIMEOUT` is 0.
+
+**Not implemented:** transform feedback (`createTransformFeedback` returns
+null; the `MAX_TRANSFORM_FEEDBACK_*` limits are 0); context loss
+(`isContextLost()` is always false); `EXT_texture_filter_anisotropic`; an
+antialiased canvas (`antialias` is reported false; render into a
+multisampled renderbuffer and blit instead); `getUniform`,
+`getVertexAttrib`, `getTexParameter`, `getBufferParameter`,
+`validateProgram`; `compressedTexImage3D` and the compressed-from-PBO
+overloads; `invalidateFramebuffer` / `invalidateSubFramebuffer` are accepted
+as the hints they are and do nothing.
+
+**Binding layer:** object-returning queries (`getParameter(CURRENT_PROGRAM)`,
+`FRAMEBUFFER_BINDING`, `getFramebufferAttachmentParameter(...OBJECT_NAME)`,
+...) return a new wrapper of the right object each call, so compare with the
+`is*` predicates or by use, not with `===`.
 
 #### `BRO_buffer_map` — direct access to buffer storage
 

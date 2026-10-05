@@ -20,6 +20,10 @@ function close(px, r, g, b, tol, what) {
     assert(ok, `${what}: expected ~(${r},${g},${b}), got (${px.r},${px.g},${px.b},${px.a})`);
 }
 
+if (bro.scene && bro.scene.available === false) {
+    skipTest('scene context not compiled in (BRO_WITH_3D off)');
+}
+
 // ── A full-viewport scene between two UI layers ─────────────────────────────
 const canvas = document.createElement('canvas');
 canvas.style.cssText = 'position:fixed;left:0;top:0;width:100vw;height:100vh;background:#203040';

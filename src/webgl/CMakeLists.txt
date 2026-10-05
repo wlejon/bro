@@ -5,23 +5,32 @@ add_library(bro_webgl STATIC
     webgl2_context_shaders.cpp
     webgl2_context_textures.cpp
     webgl2_context_render.cpp
-    glsl_translator.cpp
     vulkan/webgl_vk_canvas.cpp
-    vulkan/webgl_vk_shaders_parser.cpp
-    vulkan/webgl_vk_shaders.cpp
+    vulkan/webgl_vk_glsl.cpp
+    vulkan/webgl_vk_spirv.cpp
     vulkan/webgl_vk_pipeline.cpp
     vulkan/webgl_vk_context.cpp
     vulkan/webgl_vk_context_buffers.cpp
     vulkan/webgl_vk_context_program.cpp
+    vulkan/webgl_vk_context_introspection.cpp
+    vulkan/webgl_vk_context_placeholders.cpp
     vulkan/webgl_vk_context_uniforms.cpp
     vulkan/webgl_vk_context_textures.cpp
     vulkan/webgl_vk_context_samplers.cpp
-    vulkan/webgl_vk_context_fbo.cpp
+    vulkan/webgl_vk_context_framebuffers.cpp
+    vulkan/webgl_vk_context_blit.cpp
+    vulkan/webgl_vk_context_clear.cpp
+    vulkan/webgl_vk_context_readback.cpp
+    vulkan/webgl_vk_context_parameters.cpp
+    vulkan/webgl_vk_formats.cpp
     vulkan/webgl_vk_context_commands.cpp
     vulkan/webgl_vk_context_draw.cpp
+    vulkan/webgl_vk_stream.cpp
 )
 target_include_directories(bro_webgl PUBLIC ${bro_SOURCE_DIR}/src)
 target_link_libraries(bro_webgl PUBLIC bro_render bro_util Vulkan::Vulkan)
+# Linking a WebGL program uses glslang's C++ API for its reflection.
+target_link_libraries(bro_webgl PRIVATE bro_glsl glslang::glslang glslang::glslang-default-resource-limits)
 
 if(BRO_BUILD_TESTS)
     add_executable(bro_vulkan_webgl_test tests/test_webgl_vulkan.cpp)

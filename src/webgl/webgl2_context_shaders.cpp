@@ -1,5 +1,4 @@
 #include "webgl/webgl2_context.h"
-#include "webgl/glsl_translator.h"
 #include "webgl/vulkan/webgl_vk_context.h"
 #include "util/log.h"
 
@@ -334,16 +333,16 @@ void WebGL2RenderingContext::uniformMatrix3x2fv(WebGLUniformLocation loc, GLsize
     if (vkCtx_) vkCtx_->uniformMatrix3x2fv(loc, count, transpose, v);
 }
 void WebGL2RenderingContext::uniformMatrix2x4fv(WebGLUniformLocation loc, GLsizei count, GLboolean transpose, const GLfloat* v) {
-    if (vkCtx_) vkCtx_->uniformMatrix2fv(loc, count, transpose, v);
+    if (vkCtx_) vkCtx_->uniformMatrix2x4fv(loc, count, transpose, v);
 }
 void WebGL2RenderingContext::uniformMatrix4x2fv(WebGLUniformLocation loc, GLsizei count, GLboolean transpose, const GLfloat* v) {
-    if (vkCtx_) vkCtx_->uniformMatrix2fv(loc, count, transpose, v);
+    if (vkCtx_) vkCtx_->uniformMatrix4x2fv(loc, count, transpose, v);
 }
 void WebGL2RenderingContext::uniformMatrix3x4fv(WebGLUniformLocation loc, GLsizei count, GLboolean transpose, const GLfloat* v) {
-    if (vkCtx_) vkCtx_->uniformMatrix3fv(loc, count, transpose, v);
+    if (vkCtx_) vkCtx_->uniformMatrix3x4fv(loc, count, transpose, v);
 }
 void WebGL2RenderingContext::uniformMatrix4x3fv(WebGLUniformLocation loc, GLsizei count, GLboolean transpose, const GLfloat* v) {
-    if (vkCtx_) vkCtx_->uniformMatrix3fv(loc, count, transpose, v);
+    if (vkCtx_) vkCtx_->uniformMatrix4x3fv(loc, count, transpose, v);
 }
 
 } // namespace bro::webgl

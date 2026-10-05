@@ -22,6 +22,8 @@ void WebGLVkContext::deleteBuffer(WebGLBuffer buf) {
     if (boundPixelPackBuffer_ == buf.id) boundPixelPackBuffer_ = 0;
     if (boundPixelUnpackBuffer_ == buf.id) boundPixelUnpackBuffer_ = 0;
     if (boundUniformBuffer_ == buf.id) boundUniformBuffer_ = 0;
+    for (IndexedBuffer& b : boundUniformBuffers_)
+        if (b.buffer == buf.id) b = IndexedBuffer{};
     if (boundCopyReadBuffer_ == buf.id) boundCopyReadBuffer_ = 0;
     if (boundCopyWriteBuffer_ == buf.id) boundCopyWriteBuffer_ = 0;
     if (boundTransformFeedbackBuffer_ == buf.id) boundTransformFeedbackBuffer_ = 0;
@@ -86,18 +88,50 @@ void WebGLVkContext::bindBuffer(GLenum target, WebGLBuffer buf) {
 }
 
 void WebGLVkContext::bindBufferBase(GLenum target, GLuint index, WebGLBuffer buf) {
-    if (target == GL_UNIFORM_BUFFER) {
-        if (index < boundUniformBuffers_.size()) {
-            boundUniformBuffers_[index] = buf.id;
-        }
-        boundUniformBuffer_ = buf.id;
-    } else {
+    if (target != GL_UNIFORM_BUFFER) {
         bindBuffer(target, buf);
+        return;
     }
+    if (index >= boundUniformBuffers_.size()) {
+        setSyntheticError(GL_INVALID_VALUE);
+        return;
+    }
+    boundUniformBuffers_[index] = {buf.id, 0, 0};
+    boundUniformBuffer_ = buf.id;
 }
 
-void WebGLVkContext::bindBufferRange(GLenum target, GLuint index, WebGLBuffer buf, GLintptr /*offset*/, GLsizeiptr /*size*/) {
-    bindBufferBase(target, index, buf);
+// The range is checked against the buffer when a draw uses it (it may be
+// bound before the buffer has storage, or the storage may change).
+void WebGLVkContext::bindBufferRange(GLenum target, GLuint index, WebGLBuffer buf, GLintptr offset,
+                                     GLsizeiptr size) {
+    if (target != GL_UNIFORM_BUFFER) {
+        bindBuffer(target, buf);
+        return;
+    }
+    if (index >= boundUniformBuffers_.size() || offset < 0 || (buf.id != 0 && size <= 0)) {
+        setSyntheticError(GL_INVALID_VALUE);
+        return;
+    }
+    const auto alignment =
+        static_cast<GLintptr>(context_.deviceProperties().limits.minUniformBufferOffsetAlignment);
+    if (alignment > 0 && offset % alignment != 0) {
+        setSyntheticError(GL_INVALID_VALUE);
+        return;
+    }
+    boundUniformBuffers_[index] = {buf.id, buf.id != 0 ? offset : 0, buf.id != 0 ? size : 0};
+    boundUniformBuffer_ = buf.id;
+}
+
+int64_t WebGLVkContext::getIndexedBufferParameter(GLenum pname, GLuint index) {
+    if (index >= boundUniformBuffers_.size()) {
+        setSyntheticError(GL_INVALID_VALUE);
+        return 0;
+    }
+    const IndexedBuffer& b = boundUniformBuffers_[index];
+    if (pname == GL_UNIFORM_BUFFER_START) return b.offset;
+    if (pname == GL_UNIFORM_BUFFER_SIZE) return b.size;
+    setSyntheticError(GL_INVALID_ENUM);
+    return 0;
 }
 
 void WebGLVkContext::bufferData(GLenum target, GLsizeiptr size, const void* data, GLenum /*usage*/) {
@@ -322,24 +356,6 @@ void WebGLVkContext::texSubImage2DFromPBO(GLenum target, GLint level, GLint xoff
     }
     const void* ptr = pbo.shadowData.data() + offset;
     texSubImage2D(target, level, xoffset, yoffset, width, height, format, type, ptr);
-}
-
-void WebGLVkContext::readPixelsToPBO(GLint x, GLint y, GLsizei width, GLsizei height,
-                                     GLenum format, GLenum type, GLintptr offset)
-{
-    if (boundPixelPackBuffer_ == 0) {
-        setSyntheticError(GL_INVALID_OPERATION);
-        return;
-    }
-    VkBufferResource& pbo = buffers_[boundPixelPackBuffer_];
-    size_t byteCount = static_cast<size_t>(width) * height * 4;
-    if (offset < 0 || offset + byteCount > pbo.shadowData.size()) {
-        setSyntheticError(GL_INVALID_OPERATION);
-        return;
-    }
-
-    readPixels(x, y, width, height, format, type, pbo.shadowData.data() + offset);
-    uploadToBuffer(pbo, static_cast<VkDeviceSize>(offset), pbo.shadowData.data() + offset, byteCount);
 }
 
 } // namespace bro::webgl::vk

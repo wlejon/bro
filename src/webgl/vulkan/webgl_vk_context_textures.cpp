@@ -1,4 +1,5 @@
 #include "webgl/vulkan/webgl_vk_context.h"
+#include "webgl/vulkan/webgl_vk_formats.h"
 #include "render/vulkan_util.h"
 #include "util/log.h"
 
@@ -87,11 +88,25 @@ WebGLTexture WebGLVkContext::createTexture() {
 }
 
 void WebGLVkContext::deleteTexture(WebGLTexture tex) {
-    auto it = textures_.find(tex.id);
-    if (it != textures_.end()) {
-        releaseTexture(it->second);
-        textures_.erase(it);
+    auto it = tex.id != 0 ? textures_.find(tex.id) : textures_.end();
+    if (it == textures_.end()) return;
+    // Detached from the bound framebuffers (GL leaves other framebuffers
+    // naming it, now incomplete); the open pass may render into it.
+    for (GLuint fboId : {drawFboId_, readFboId_}) {
+        auto fIt = fboId != 0 ? framebuffers_.find(fboId) : framebuffers_.end();
+        if (fIt == framebuffers_.end()) continue;
+        auto detach = [&](VkFboAttachment& att) {
+            if (att.kind != VkFboAttachment::Kind::Texture || att.id != tex.id) return;
+            framebufferChanged(fboId);
+            att = {};
+        };
+        for (VkFboAttachment& c : fIt->second.color) detach(c);
+        detach(fIt->second.depth);
+        detach(fIt->second.stencil);
     }
+    endRendering();
+    releaseTexture(it->second);
+    textures_.erase(it);
 }
 
 void WebGLVkContext::bindTexture(GLenum target, WebGLTexture tex) {
@@ -206,6 +221,7 @@ void WebGLVkContext::uploadTexture(VkTextureResource& tex, uint32_t level, uint3
                                    const void* pixels, bool unpack) {
     if (!tex.isValid() || !pixels || width == 0 || height == 0 || layerCount == 0) return;
     if (isDepthFormat(tex.format)) return;  // depth data uploads are not supported
+    flushIfOverBudget();
     const VkDeviceSize layerBytes = static_cast<VkDeviceSize>(width) * height * bpp;
     render::UploadSlice staging = stage(nullptr, layerBytes * layerCount, std::max<VkDeviceSize>(bpp, 4));
     if (!staging) return;
@@ -245,7 +261,19 @@ void WebGLVkContext::texImage2D(GLenum target, GLint level, GLint internalformat
     if (texId == 0 || width <= 0 || height <= 0 || level < 0) return;
 
     VkTextureResource& tex = textures_[texId];
-    const TexFormat fmt = chooseFormat(internalformat, format, type);
+    TexFormat fmt = chooseFormat(internalformat, format, type);
+    if (isDepthFormat(fmt.format)) {
+        // Depth textures share the device's depth formats with renderbuffers
+        // and the canvas (webgl_vk_formats.h), so depth blits between them work.
+        GLenum sized = static_cast<GLenum>(internalformat);
+        if (sized == GL_DEPTH_COMPONENT)
+            sized = type == GL_FLOAT ? GL_DEPTH_COMPONENT32F
+                    : type == GL_UNSIGNED_SHORT ? GL_DEPTH_COMPONENT16 : GL_DEPTH_COMPONENT24;
+        else if (sized == GL_DEPTH_STENCIL)
+            sized = type == 0x8DAD /* FLOAT_32_UNSIGNED_INT_24_8_REV */ ? GL_DEPTH32F_STENCIL8 : GL_DEPTH24_STENCIL8;
+        const VkFormat depth = depthStencilFormat(context_.physicalDevice(), sized);
+        if (depth != VK_FORMAT_UNDEFINED) fmt.format = depth;
+    }
     const uint32_t w = static_cast<uint32_t>(width);
     const uint32_t h = static_cast<uint32_t>(height);
 

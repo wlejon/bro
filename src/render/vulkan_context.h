@@ -78,6 +78,8 @@ public:
     /// Line widths other than 1 (enabled whenever the device has them;
     /// MoltenVK does not).
     bool wideLines() const { return deviceFeatures_.wideLines == VK_TRUE; }
+    /// Point sizes other than 1 (enabled whenever the device has them).
+    bool largePoints() const { return deviceFeatures_.largePoints == VK_TRUE; }
 
     VulkanQueue& queue() { return queue_; }
     VulkanFrames& frames() { return frames_; }
@@ -117,7 +119,8 @@ public:
                      VkImage& image, VkDeviceMemory& memory,
                      VkDeviceSize& outOffset, uint64_t& outAllocId,
                      uint32_t mipLevels = 1, uint32_t arrayLayers = 1,
-                     VkImageCreateFlags flags = 0);
+                     VkImageCreateFlags flags = 0,
+                     VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT);
 
     void destroyImage(VkImage image, uint64_t allocId);
 

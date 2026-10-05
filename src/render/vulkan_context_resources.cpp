@@ -119,7 +119,7 @@ bool VulkanContext::createImage(uint32_t width, uint32_t height, VkFormat format
                                 VkImage& image, VkDeviceMemory& memory,
                                 VkDeviceSize& outOffset, uint64_t& outAllocId,
                                 uint32_t mipLevels, uint32_t arrayLayers,
-                                VkImageCreateFlags flags) {
+                                VkImageCreateFlags flags, VkSampleCountFlagBits samples) {
     if (width == 0 || height == 0 || arrayLayers == 0) return false;
 
     VkImageCreateInfo imageInfo{};
@@ -135,7 +135,7 @@ bool VulkanContext::createImage(uint32_t width, uint32_t height, VkFormat format
     imageInfo.tiling = tiling;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     imageInfo.usage = usage;
-    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.samples = samples;
     imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
     if (vkCreateImage(device_, &imageInfo, nullptr, &image) != VK_SUCCESS) {

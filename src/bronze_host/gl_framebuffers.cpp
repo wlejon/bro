@@ -34,6 +34,11 @@ void installGlFramebuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
                                       {idOf(argAt(a, 3), GlCell::Texture)}, i32At(a, 4));
         return ev::undefined();
     });
+    b.def("framebufferTextureLayer", 5, [c](Value, std::span<const Value> a) {
+        live(c)->framebufferTextureLayer(u32At(a, 0), u32At(a, 1), {idOf(argAt(a, 2), GlCell::Texture)},
+                                         i32At(a, 3), i32At(a, 4));
+        return ev::undefined();
+    });
     b.def("framebufferRenderbuffer", 4, [c](Value, std::span<const Value> a) {
         live(c)->framebufferRenderbuffer(u32At(a, 0), u32At(a, 1), u32At(a, 2),
                                          {idOf(argAt(a, 3), GlCell::Renderbuffer)});

@@ -4,8 +4,8 @@
 #include "webgl/webgl_objects.h"
 #include "webgl/vulkan/webgl_vk_types.h"
 #include "webgl/vulkan/webgl_vk_canvas.h"
-#include "webgl/vulkan/webgl_vk_shaders.h"
 #include "webgl/vulkan/webgl_vk_pipeline.h"
+#include "webgl/vulkan/webgl_vk_stream.h"
 
 #include <vulkan/vulkan.h>
 #include "webgl/webgl_types.h"
@@ -81,6 +81,10 @@ public:
     GLint getPixelStorei(GLenum pname) const;
 
     GLint getParameterInt(GLenum pname);
+    int64_t getParameterInt64(GLenum pname);  // the 64-bit limits (MAX_ELEMENT_INDEX, ...)
+    /// True when the device has every one of `features` for `format`
+    /// (optimal tiling): the extensions it can honestly expose.
+    bool formatSupports(VkFormat format, VkFormatFeatureFlags features) const;
     GLfloat getParameterFloat(GLenum pname);
     GLboolean getParameterBool(GLenum pname);
     void getParameterInt2(GLenum pname, GLint* out);
@@ -95,6 +99,8 @@ public:
     void bindBuffer(GLenum target, WebGLBuffer buf);
     void bindBufferBase(GLenum target, GLuint index, WebGLBuffer buf);
     void bindBufferRange(GLenum target, GLuint index, WebGLBuffer buf, GLintptr offset, GLsizeiptr size);
+    /// UNIFORM_BUFFER_START / UNIFORM_BUFFER_SIZE of an indexed binding.
+    int64_t getIndexedBufferParameter(GLenum pname, GLuint index);
     void bufferData(GLenum target, GLsizeiptr size, const void* data, GLenum usage);
     void bufferSubData(GLenum target, GLintptr offset, GLsizeiptr size, const void* data);
     void getBufferSubData(GLenum target, GLintptr srcByteOffset, void* dstData, GLsizeiptr length);
@@ -174,6 +180,10 @@ public:
     void uniformMatrix4fv(WebGLUniformLocation loc, GLsizei count, GLboolean transpose, const GLfloat* value);
     void uniformMatrix2x3fv(WebGLUniformLocation loc, GLsizei count, GLboolean transpose, const GLfloat* value);
     void uniformMatrix3x2fv(WebGLUniformLocation loc, GLsizei count, GLboolean transpose, const GLfloat* value);
+    void uniformMatrix2x4fv(WebGLUniformLocation loc, GLsizei count, GLboolean transpose, const GLfloat* value);
+    void uniformMatrix4x2fv(WebGLUniformLocation loc, GLsizei count, GLboolean transpose, const GLfloat* value);
+    void uniformMatrix3x4fv(WebGLUniformLocation loc, GLsizei count, GLboolean transpose, const GLfloat* value);
+    void uniformMatrix4x3fv(WebGLUniformLocation loc, GLsizei count, GLboolean transpose, const GLfloat* value);
 
     // --- Vertex Arrays (VAO) ---
     WebGLVertexArrayObject createVertexArray();
@@ -251,12 +261,36 @@ public:
                               WebGLTexture tex, GLint level);
     void framebufferRenderbuffer(GLenum target, GLenum attachment, GLenum renderbuffertarget,
                                  WebGLRenderbuffer rbo);
+    void framebufferTextureLayer(GLenum target, GLenum attachment, WebGLTexture tex, GLint level, GLint layer);
     GLenum checkFramebufferStatus(GLenum target);
     void drawBuffers(GLsizei n, const GLenum* bufs);
     void readBuffer(GLenum src);
     void blitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
                          GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
                          GLbitfield mask, GLenum filter);
+
+    GLuint drawFramebufferBinding() const { return drawFboId_; }
+    GLuint readFramebufferBinding() const { return readFboId_; }
+    GLuint renderbufferBinding() const { return currentRenderbufferId_; }
+    GLenum drawBufferState(GLuint i) const;   // getParameter(DRAW_BUFFERi)
+    GLenum readBufferState() const;           // getParameter(READ_BUFFER)
+
+    /// getFramebufferAttachmentParameter: `objectType`/`objectName` are set
+    /// for FRAMEBUFFER_ATTACHMENT_OBJECT_NAME (the caller wraps the object),
+    /// `value` for everything else. False (with the GL error) when invalid;
+    /// `isNull` when WebGL answers null.
+    struct AttachmentParameter {
+        GLint value = 0;
+        GLenum objectType = GL_NONE;
+        GLuint objectName = 0;
+        bool isNull = false;
+    };
+    bool getFramebufferAttachmentParameter(GLenum target, GLenum attachment, GLenum pname,
+                                           AttachmentParameter& out);
+    GLint getRenderbufferParameter(GLenum target, GLenum pname);
+    /// The sample counts renderbufferStorageMultisample accepts for
+    /// `internalformat`, highest first (getInternalformatParameter(SAMPLES)).
+    std::vector<GLint> supportedSampleCounts(GLenum internalformat);
 
     WebGLRenderbuffer createRenderbuffer();
     void deleteRenderbuffer(WebGLRenderbuffer rbo);
@@ -268,6 +302,10 @@ public:
     // --- Readback ---
     void readPixels(GLint x, GLint y, GLsizei width, GLsizei height,
                     GLenum format, GLenum type, void* pixels);
+    /// Bytes readPixels writes for a width x height rectangle of
+    /// format/type under PACK_ALIGNMENT, or 0 when the combination is not
+    /// one WebGL2 lets this read buffer be read as (with the GL error set).
+    size_t readPixelsByteCount(GLsizei width, GLsizei height, GLenum format, GLenum type);
 
     /// Submit everything recorded so far. Never waits.
     void flush();
@@ -281,7 +319,9 @@ public:
     /// Wait up to `timeoutNs` for `ticket`; true once it has completed.
     bool waitFence(uint64_t ticket, uint64_t timeoutNs);
 
-    void bindCanvasFBO();
+    /// Submit the recorded work (the engine is about to composite or read the
+    /// canvas). The app's framebuffer binding is untouched: it persists
+    /// across frames, as GL's does.
     void unbindCanvasFBO();
 
 private:
@@ -290,18 +330,21 @@ private:
 
     // Command stream (webgl_vk_context_commands.cpp). All GPU work — draws,
     // clears, uploads, copies, blits, layout changes — is recorded in API order
-    // into one command buffer from the frame ring, so ordering between, say, a
+    // into the stream's open command buffer, so ordering between, say, a
     // bufferSubData and the draws around it is the command stream's. A flush
     // submits it without waiting; only readbacks and client waits block, on
     // this context's own ticket. Open work is submitted at frame end at the
-    // latest (a VulkanFrames frame-end hook).
+    // latest (a VulkanFrames frame-end hook), and earlier whenever the stream's
+    // segment has used its memory budget (flushIfOverBudget, called where no
+    // upload slice or descriptor set of the open segment is still held).
     VkCommandBuffer commands();
     VkCommandBuffer transferCommands();  // commands() outside dynamic rendering
     void beginRendering();
     void endRendering();
     void flushCommands();
+    void flushIfOverBudget();
     bool waitForCommands();
-    /// Copy `size` bytes into this frame's upload ring.
+    /// Copy `size` bytes into the open segment's upload memory.
     render::UploadSlice stage(const void* data, VkDeviceSize size, VkDeviceSize alignment = 16);
     /// Record a copy of `data` into `res` at `offset`, ordered after earlier
     /// GPU use of the buffer and before later use.
@@ -325,6 +368,61 @@ private:
     };
     Readback readback_;
 
+    // Framebuffers (webgl_vk_context_framebuffers.cpp, _blit.cpp, _clear.cpp,
+    // _readback.cpp). A Surface is one image a framebuffer reads or writes:
+    // a texture level/layer, a renderbuffer, or the canvas's color or depth
+    // image. Textures stay sampleable between passes (a pass moves its
+    // attachments to attachment layout and back); renderbuffers and the
+    // canvas stay wherever they were last used.
+    struct Surface {
+        enum class Source : uint8_t { None, Texture, Renderbuffer, CanvasColor, CanvasDepth };
+        Source source = Source::None;
+        VkTextureResource* tex = nullptr;   // Texture / Renderbuffer storage
+        VkImage image = VK_NULL_HANDLE;
+        VkImageView view = VK_NULL_HANDLE;  // the attached level + layer, every aspect
+        VkFormat format = VK_FORMAT_UNDEFINED;
+        uint32_t width = 0, height = 0;     // of the attached level
+        uint32_t level = 0, layer = 0;
+        VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
+        explicit operator bool() const { return source != Source::None; }
+        // The canvas is stored top-down; framebuffer objects in GL row order.
+        bool topDown() const { return source == Source::CanvasColor || source == Source::CanvasDepth; }
+        VkImageAspectFlags aspects() const;
+    };
+    // What a pass over the draw framebuffer renders into: color[i] is what
+    // fragment output i writes (DRAW_BUFFERi), empty for NONE.
+    struct RenderTarget {
+        std::array<Surface, 8> color{};
+        uint32_t colorCount = 0;
+        Surface depth;    // the depth attachment, when it has a depth aspect
+        Surface stencil;  // the stencil attachment, when it has a stencil aspect
+        VkExtent2D extent{};
+        VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
+        bool topDown = false;
+    };
+    static constexpr GLenum kColorAttachment0 = 0x8CE0;
+    VkFramebufferResource* framebufferForTarget(GLenum target, GLuint& id);
+    GLenum framebufferStatus(GLuint id);
+    Surface attachmentSurface(const VkFboAttachment& att);
+    Surface canvasSurface(bool depth);
+    VkImageView attachmentView(VkTextureResource& tex, uint32_t level, uint32_t layer);
+    /// The draw framebuffer as a render target; false (with
+    /// INVALID_FRAMEBUFFER_OPERATION) when it is incomplete.
+    bool drawTarget(RenderTarget& out);
+    /// The read framebuffer's color read buffer (empty for NONE); false (with
+    /// INVALID_FRAMEBUFFER_OPERATION) when it is incomplete.
+    bool readColorSurface(Surface& out);
+    void transitionSurface(VkCommandBuffer cmd, const Surface& s, VkImageLayout layout);
+    VkImageLayout surfaceLayout(const Surface& s) const;
+    void setAttachment(GLenum target, GLenum attachment, const VkFboAttachment& att);
+    /// End the open pass when framebuffer `id` is what it renders into.
+    void framebufferChanged(GLuint id);
+    /// A single-sample image a resolve lands in, destroyed once the GPU is done.
+    bool scratchImage(VkFormat format, uint32_t width, uint32_t height, VkTextureResource& out);
+    void releaseScratch(VkTextureResource& tex);
+    void clearAttachments(const VkClearAttachment* atts, uint32_t count);
+    RenderTarget pass_;   // the open pass's target (while inRenderPass_)
+
     // Texture storage and uploads (webgl_vk_context_textures.cpp)
     bool allocateTexture(VkTextureResource& tex, uint32_t width, uint32_t height, VkFormat format,
                          uint32_t bpp, uint32_t mipLevels, uint32_t layers, bool cube);
@@ -332,38 +430,54 @@ private:
                        int32_t x, int32_t y, uint32_t width, uint32_t height, uint32_t bpp,
                        const void* pixels, bool unpack);
 
+    // Programs (webgl_vk_context_program.cpp, _introspection.cpp, _uniforms.cpp)
+    const VkProgramResource* linkedProgram(WebGLProgram p) const;
+    bool buildProgramLayouts(VkProgramResource& prog);
+    void releaseProgramExecutable(VkProgramResource& prog);
+    void destroyProgram(GLuint id);
+    enum class UniformKind { Float, Int, Uint };
+    VkUniformInfo* uniformTarget(WebGLUniformLocation loc, GLsizei count, VkProgramResource*& prog,
+                                 uint32_t& element);
+    void setUniformValues(WebGLUniformLocation loc, GLsizei count, UniformKind kind, uint32_t components,
+                          const void* data);
+    void setUniformMatrices(WebGLUniformLocation loc, GLsizei count, uint32_t columns, uint32_t rows,
+                            GLboolean transpose, const GLfloat* value);
+
     // Drawing (webgl_vk_context_draw.cpp)
     bool prepareDraw(GLenum mode, VkProgramResource& prog);
     int32_t scissorTop(VkExtent2D extent) const;
     void buildPipelineKey(GLenum mode, const VkProgramResource& prog, PipelineKey& key,
                           VkExtent2D& extent);
     bool bindProgramResources(VkCommandBuffer cmd, VkProgramResource& prog);
+    GLuint textureForSampler(GLenum type, uint32_t unit) const;
+    bool uniformBlockRange(const VkProgramResource& prog, size_t block, VkDescriptorBufferInfo& out);
     void bindVertexInputs(const VkProgramResource& prog, PipelineKey& key,
                           std::vector<VkBuffer>& vbos, std::vector<VkDeviceSize>& offsets);
     VkProgramResource* drawProgram(const char* what);
 
     render::VulkanContext& context_;
+    WebGLVkStream stream_;
     WebGLVkCanvas canvas_;
     WebGLVkPipelineCache pipelineCache_;
 
-    VkCommandBuffer currentCmd_ = VK_NULL_HANDLE;
     bool inRenderPass_ = false;
-    uint64_t lastTicket_ = 0;
     render::VulkanFrames::HookId frameEndHook_ = 0;
 
-    // One set layout for every program: samplers at 0..7, uniform blocks at
-    // 8..15, the default-block uniforms at 16. Sets come from the frame's
-    // descriptor arena, a fresh one per draw whose bindings changed.
-    VkDescriptorSetLayout descriptorSetLayout_ = VK_NULL_HANDLE;
-    VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
-
-    // Dummy fallback 1x1 texture for unbound sampler slots
-    VkImage dummyImage_ = VK_NULL_HANDLE;
-    VkDeviceMemory dummyMemory_ = VK_NULL_HANDLE;
-    VkImageView dummyView_ = VK_NULL_HANDLE;
-    VkSampler dummySampler_ = VK_NULL_HANDLE;
-    VkBuffer dummyUniformBuffer_ = VK_NULL_HANDLE;
-    VkDeviceMemory dummyUniformMemory_ = VK_NULL_HANDLE;
+    // Sampled in place of a missing or incomplete texture, which GL reads as
+    // (0, 0, 0, 1): one per component kind (float, int, uint), each with a
+    // 2D, 2D-array, cube and 3D view.
+    struct Placeholder {
+        VkImage layered = VK_NULL_HANDLE;  // six layers, cube compatible
+        VkDeviceMemory layeredMemory = VK_NULL_HANDLE;
+        VkImage volume = VK_NULL_HANDLE;
+        VkDeviceMemory volumeMemory = VK_NULL_HANDLE;
+        std::array<VkImageView, 4> views{};  // 2D, 2D array, cube, 3D
+    };
+    std::array<Placeholder, 3> placeholders_{};
+    VkSampler placeholderSampler_ = VK_NULL_HANDLE;
+    void createPlaceholders();
+    void destroyPlaceholders();
+    VkImageView placeholderView(GLenum samplerType) const;
 
     void updateTextureSampler(VkTextureResource& tex);
 
@@ -426,9 +540,12 @@ private:
     GLuint nextRenderbufferId_ = 1;
     GLuint nextSamplerId_ = 1;
 
-    GLuint readFboId_ = 0;
-    GLuint drawFboId_ = 0;
+    GLuint readFboId_ = 0;   // READ_FRAMEBUFFER binding (0 = the canvas)
+    GLuint drawFboId_ = 0;   // DRAW_FRAMEBUFFER binding
     GLuint currentRenderbufferId_ = 0;
+    // The canvas's DRAW_BUFFER0 / READ_BUFFER: BACK or NONE.
+    GLenum canvasDrawBuffer_ = GL_BACK;
+    GLenum canvasReadBuffer_ = GL_BACK;
 
     GLuint boundArrayBuffer_ = 0;
     GLuint boundElementArrayBuffer_ = 0;
@@ -440,7 +557,6 @@ private:
     GLuint boundTransformFeedbackBuffer_ = 0;
     GLuint currentProgramId_ = 0;
     GLuint currentVaoId_ = 0;
-    GLuint currentFboId_ = 0;
 
     bool unpackFlipY_ = false;
     bool unpackPremultiplyAlpha_ = false;
@@ -460,7 +576,14 @@ private:
     uint64_t genericAttribSerial_ = 0;
     void genericAttribsChanged() { genericAttribSerial_ = 0; }
 
-    std::array<GLuint, 32> boundUniformBuffers_{};
+    // Indexed UNIFORM_BUFFER bindings; size 0 is bindBufferBase's whole buffer.
+    struct IndexedBuffer {
+        GLuint buffer = 0;
+        GLintptr offset = 0;
+        GLsizeiptr size = 0;
+    };
+    static constexpr uint32_t kMaxUniformBufferBindings = 36;
+    std::array<IndexedBuffer, kMaxUniformBufferBindings> boundUniformBuffers_{};
 
     GLuint activeTextureUnit_ = 0;
     std::array<GLuint, 32> boundTextures2D_{};

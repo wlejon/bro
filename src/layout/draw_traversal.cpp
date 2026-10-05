@@ -5,7 +5,6 @@
 #include "layout/el_svg.h"
 #include "layout/el_video.h"
 #include "canvas/canvas_scene.h"
-#include "webgl/webgl2_context.h"
 #include "render/draw_command.h"
 #include "css/transform.h"
 #include "css/color.h"
@@ -1389,9 +1388,9 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
         return;
     }
     if (elem->webglContext() && visible) {
-        auto* webglCtx = static_cast<webgl::WebGL2RenderingContext*>(elem->webglContext());
+        // The WebGL layer (the compositor resolves the canvas by element id).
         if (layerBreakCb_) {
-            layerBreakCb_(render::Cmd_LayerBreak::WebGL, nullptr, webglCtx->colorTexture(), x, y, w, h,
+            layerBreakCb_(render::Cmd_LayerBreak::WebGL, nullptr, elem->nodeId(), x, y, w, h,
                           lbCX, lbCY, lbCW, lbCH);
         }
         if (needsClip) { renderer_->restore(); popClipRect(); }

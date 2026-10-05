@@ -236,7 +236,6 @@ void Engine::advanceTime(double ms) {
 
         syncWebGLCanvasSizes();
         webgl::WebGL2RenderingContext::invalidateCurrent();
-        if (activeWebGL) activeWebGL->bindCanvasFBO();
 
         if (!timePaused_) fireFrameCallbacks(scaledStep);
 
@@ -327,7 +326,6 @@ std::vector<uint8_t> Engine::renderUnifiedToPixels() {
     if (!webglEntries_.empty()) activeWebGL = webglEntries_[0].context.get();
     syncWebGLCanvasSizes();
     webgl::WebGL2RenderingContext::invalidateCurrent();
-    if (activeWebGL) activeWebGL->bindCanvasFBO();
 
     webgl::WebGL2RenderingContext::endAppGL();
 
@@ -405,7 +403,6 @@ bool Engine::screenshot(const std::string& path) {
         if (!webglEntries_.empty()) activeWebGL = webglEntries_[0].context.get();
         syncWebGLCanvasSizes();
         webgl::WebGL2RenderingContext::invalidateCurrent();
-        if (activeWebGL) activeWebGL->bindCanvasFBO();
         if (!timePaused_) fireFrameCallbacks(0.0);
         webgl::WebGL2RenderingContext::endAppGL();
     }
@@ -467,7 +464,6 @@ std::vector<uint8_t> Engine::capturePixels() {
         if (!webglEntries_.empty()) activeWebGL = webglEntries_[0].context.get();
         syncWebGLCanvasSizes();
         webgl::WebGL2RenderingContext::invalidateCurrent();
-        if (activeWebGL) activeWebGL->bindCanvasFBO();
         if (!timePaused_) fireFrameCallbacks(0.0);
         webgl::WebGL2RenderingContext::endAppGL();
     }

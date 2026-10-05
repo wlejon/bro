@@ -35,7 +35,19 @@ void appendLog(std::string* log, const char* what, const char* text) {
     if (text && *text) log->append(text);
 }
 
+// With s_mutex held.
+bool initializeOnce() {
+    if (!s_initialized) s_initialized = glslang_initialize_process() != 0;
+    return s_initialized;
+}
+
 } // namespace
+
+std::unique_lock<std::mutex> acquireGlslang() {
+    std::unique_lock<std::mutex> lock(s_mutex);
+    if (!initializeOnce()) return {};
+    return lock;
+}
 
 std::vector<uint32_t> compileGlslToSpirv(std::string_view source, ShaderStage stage,
                                          std::string* log) {
@@ -48,12 +60,9 @@ std::vector<uint32_t> compileGlslToSpirv(std::string_view source, ShaderStage st
     key.append(source);
     if (auto it = s_memo.find(key); it != s_memo.end()) return it->second;
 
-    if (!s_initialized) {
-        if (!glslang_initialize_process()) {
-            appendLog(log, "glslang: process initialisation failed", nullptr);
-            return {};
-        }
-        s_initialized = true;
+    if (!initializeOnce()) {
+        appendLog(log, "glslang: process initialisation failed", nullptr);
+        return {};
     }
 
     const std::string code(source);  // glslang wants a NUL-terminated string

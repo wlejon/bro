@@ -377,7 +377,6 @@ void Engine::run() {
 
         syncWebGLCanvasSizes();
         webgl::WebGL2RenderingContext::invalidateCurrent();
-        if (!webglEntries_.empty()) webglEntries_[0].context->bindCanvasFBO();
 
         if (!timePaused_) fireFrameCallbacks(scaledFrameDtMs);
 
