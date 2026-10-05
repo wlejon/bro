@@ -4,6 +4,7 @@
 #include "bronze_host/host_template.h"
 #include "bronze_host/host_iframe.h"
 #include "bronze_host/host_element_video.h"
+#include "bronze_host/host_element_terminal.h"
 #include "bronze_host/host_builder.h"
 #include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_node.h"
@@ -61,6 +62,7 @@ HostClass g_htmlVideoElementClass;
 HostClass g_htmlAudioElementClass;
 HostClass g_audioClass;
 HostClass g_htmlDetailsElementClass;
+HostClass g_htmlTerminalElementClass;
 
 // `new Option(text, value, defaultSelected, selected)`, the legacy factory:
 // an <option> holding `text`, with `value` when one is given. Selectedness
@@ -317,6 +319,7 @@ void installHtmlInterfaces() {
         {g_htmlDetailsElementClass, "HTMLDetailsElement", decorateDetailsProto},
         {g_htmlTemplateElementClass, "HTMLTemplateElement", decorateTemplateProto},
         {g_htmlDialogElementClass, "HTMLDialogElement", decorateDialogProto},
+        {g_htmlTerminalElementClass, "HTMLTerminalElement", decorateTerminalProto},
         {g_htmlHtmlElementClass, "HTMLHtmlElement"},
         {g_htmlBodyElementClass, "HTMLBodyElement"},
     };
@@ -416,6 +419,7 @@ Value htmlInterfaceProto(const std::string& tagName) {
     if (tag == "details") return g_htmlDetailsElementClass.prototype();
     if (tag == "template") return g_htmlTemplateElementClass.prototype();
     if (tag == "dialog") return g_htmlDialogElementClass.prototype();
+    if (tag == "terminal") return g_htmlTerminalElementClass.prototype();
     if (tag == "html") return g_htmlHtmlElementClass.prototype();
     if (tag == "body") return g_htmlBodyElementClass.prototype();
     if (tag == "video") return g_htmlVideoElementClass.prototype();

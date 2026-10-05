@@ -241,6 +241,15 @@ void installBroRoots(engine::Engine& engine) {
 #if !BRO_WITH_NET
     setUnavailable("net", "BRO_WITH_NET");
 #endif
+    // bro.terminal: the <terminal> element's namespace (host_element_terminal.cpp).
+#if BRO_WITH_TERMINAL
+    {
+        ev::Persistent terminal(makeBroTerminalValue());
+        ev::setProperty(bro->get(), "terminal", terminal.get());
+    }
+#else
+    setUnavailable("terminal", "BRO_WITH_TERMINAL");
+#endif
 #if !BRO_WITH_FLORA
     setUnavailable("flora", "BRO_WITH_FLORA");
 #endif

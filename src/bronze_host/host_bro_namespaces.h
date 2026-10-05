@@ -32,6 +32,11 @@ void drainSteamEvents();
 void cleanupSteamBindings();
 
 
+// bro.terminal (host_element_terminal.cpp): { available, defaultShell } for
+// the <terminal> element. Compiled out, host_bro_root.cpp puts the
+// unavailable stub there instead.
+Value makeBroTerminalValue();
+
 // Stubs for unavailable / compiled-out subsystems (host_bro_root.cpp)
 Value makeUnavailableNamespace(const std::string& name, const std::string& flag);
 

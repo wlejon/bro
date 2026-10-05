@@ -14,6 +14,7 @@
 #include "dom/node.h"
 #include "dom/shadow_root.h"
 #include "layout/el_video.h"
+#include "layout/el_terminal.h"
 
 #include <algorithm>
 #include <chrono>
@@ -253,12 +254,17 @@ dom::Node* topOf(dom::Node* n) {
 }
 
 // Something outside JavaScript still needs this tree: a MutationObserver
-// watching or reporting a node of it, or a <video>/<audio> that is playing.
+// watching or reporting a node of it, a <video>/<audio> that is playing, or
+// a <terminal> whose child is running.
 bool heldNatively(dom::Node* n, HostNodeState* st) {
     if (st && hostObserversHold(st)) return true;
     if (auto* el = dynamic_cast<dom::Element*>(n)) {
         if (layout::ElVideo* v = el->videoControl()) {
             if (v->isPlaying()) return true;
+        }
+        // A <terminal> whose child still runs: its `exit` event is still due.
+        if (layout::ElTerminal* t = el->terminalControl()) {
+            if (t->running()) return true;
         }
     }
     return false;
