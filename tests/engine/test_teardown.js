@@ -52,13 +52,18 @@ glCanvas.setAttribute('width', '64');
 glCanvas.setAttribute('height', '64');
 document.body.appendChild(glCanvas);
 const gl = glCanvas.getContext('webgl2');
-assert(gl, 'webgl2 context');
-gl.clearColor(0, 0, 0, 1);
-gl.clear(gl.COLOR_BUFFER_BIT);
-// A live GL buffer, so teardown has something to reclaim.
-const buf = gl.createBuffer();
-gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 1]), gl.STATIC_DRAW);
+// Without a GPU there is no WebGL to tear down (the run reports SKIP for
+// it), but the rest of the fixture still goes through teardown.
+if (!gl) {
+    missingGpuContext('webgl2');
+} else {
+    gl.clearColor(0, 0, 0, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    // A live GL buffer, so teardown has something to reclaim.
+    const buf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 1]), gl.STATIC_DRAW);
+}
 
 // --- screenshot: the only path that fills the screenshot GPU surface pool ---
 const shot = path.join(os.tmpdir(), 'bro_test_teardown_' + Date.now() + '.png');

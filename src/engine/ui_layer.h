@@ -1,9 +1,11 @@
 #pragma once
 
 #include <cstdint>
+#include <variant>
 #include <vector>
 
 #include "render/command_buffer.h"
+#include "render/layer_source.h"
 #include "render/skia_gpu.h"
 
 #include <include/core/SkSurface.h>
@@ -11,32 +13,32 @@
 
 namespace bro::engine {
 
-/// One entry in the per-frame composite list. Built by the raster thread
-/// when it scans the layout tree and breaks at canvas/WebGL/scene-graph
-/// boundaries. Consumed by the main thread when it composites.
-///
-/// HTML layers point at a Skia surface allocated from one of the raster
-/// thread's pools: its GPU image (`image`) when Skia draws on the GPU, else
-/// the CPU surface itself. Canvas layers name a CanvasScene by its never-
-/// recycled sceneId; the main thread resolves the id through the engine's
-/// scene registry at composite/signal time, so a layer recorded before the
-/// scene was destroyed resolves to null instead of dangling (no scrub pass
-/// over stale layer buffers needed).
+/// An HTML layer: a Skia surface from one of the raster thread's pools — its
+/// GPU image (`image`) when Skia draws on the GPU, else the CPU surface. The
+/// layer covers the whole pass (content space for the app document).
+struct HtmlLayer {
+    sk_sp<SkSurface> surface;    // CPU
+    render::SkiaImageRef image;  // GPU
+};
+
+/// One entry in the per-frame composite list, built by the raster thread as
+/// it replays a pass and breaks the HTML around separately composited
+/// content; consumed by the main thread when it composites. A non-HTML
+/// layer names its content by handle (render::LayerSource), resolved through
+/// the engine's registries at composite time, so a layer that outlives what
+/// it names draws nothing rather than dangling.
 struct UILayer {
-    enum Type { HTML, Canvas, Iframe, Scene3D, WebGL };
-    Type type = HTML;
-    uint32_t elementId = 0;  // the WebGL or Scene3D element's node id
-    // CanvasScene id when type==Canvas; IframeDoc id when type==Iframe. Both are
-    // resolved through an engine registry at composite time so a layer that
-    // outlives its scene/sub-document draws nothing rather than dangling.
-    uint64_t canvasSceneId = 0;
-    sk_sp<SkSurface> surface;   // HTML, CPU
-    render::SkiaImageRef image;  // HTML, GPU
-    float cx = 0, cy = 0, cw = 0, ch = 0;
-    // Overflow/scroll clip for Canvas layers, in top-left pixel space. The
-    // canvas quad is composited outside the Skia clip stack, so the compositor
-    // scissors to this rect. clipW < 0 ⇒ unclipped.
-    float clipX = 0, clipY = 0, clipW = -1, clipH = -1;
+    using Content = std::variant<HtmlLayer, render::CanvasLayerSource, render::WebGLLayerSource,
+                                 render::SceneLayerSource, render::IframeLayerSource>;
+    Content content;
+    render::LayerQuad quad;  // non-HTML layers
+
+    static UILayer of(const render::LayerSource& source, const render::LayerQuad& quad) {
+        UILayer layer;
+        layer.content = std::visit([](const auto& s) { return Content{s}; }, source);
+        layer.quad = quad;
+        return layer;
+    }
 };
 
 /// Double-buffered slot. The main thread *writes* the command buffers (record

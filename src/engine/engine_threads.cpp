@@ -207,7 +207,7 @@ void Engine::rasterThreadFunc() {
 
         // Replay each iframe sub-document into its box-sized surface (raster
         // thread) → IframeDoc::published, which the compositor draws for the
-        // UILayer::Iframe quads recorded during the app pass.
+        // iframe layers recorded during the app pass.
         replayIframeLayers(rasterRenderer.get());
 
         // And each secondary window's document into its window-sized surface →

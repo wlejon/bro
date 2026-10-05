@@ -15,7 +15,10 @@ document.body.appendChild(canvas);
 flush();
 
 const scene = canvas.getContext('scene');
-assert(scene !== null, 'scene context');
+if (!scene) missingGpuContext('scene');
+else runWithScene();
+
+function runWithScene() {
 
 // =========================================================================
 // Terrain mode — node Y follows the voxel terrain surface
@@ -157,3 +160,4 @@ assert(scene !== null, 'scene context');
 }
 
 console.log('test_agent_groundfollow: OK');
+}

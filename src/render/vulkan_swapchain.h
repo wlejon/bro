@@ -74,6 +74,8 @@ public:
     VkSwapchainKHR swapchain() const { return swapchain_; }
     VkExtent2D extent() const { return extent_; }
     VkFormat imageFormat() const { return imageFormat_; }
+    /// Whether the images can be copied from (TRANSFER_SRC).
+    bool readable() const { return readable_; }
     uint32_t imageCount() const { return static_cast<uint32_t>(images_.size()); }
     VkPresentModeKHR presentMode() const { return presentMode_; }
 
@@ -107,6 +109,7 @@ private:
     VkSurfaceKHR surface_ = VK_NULL_HANDLE;
     VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;
     VkFormat imageFormat_ = VK_FORMAT_UNDEFINED;
+    bool readable_ = false;
     VkPresentModeKHR presentMode_ = VK_PRESENT_MODE_FIFO_KHR;
     VkExtent2D extent_{};
 

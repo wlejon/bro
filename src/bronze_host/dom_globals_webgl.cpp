@@ -2,7 +2,8 @@
 // Minted as a proper HostClass with attached static constants and prototype branding.
 
 #include "bronze_host/webgl_internal.h"
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_class.h"
+#include "bronze_host/host_web_globals.h"
 #include "bronze_host/host_html_interfaces.h"
 
 namespace bro::bronze_host {

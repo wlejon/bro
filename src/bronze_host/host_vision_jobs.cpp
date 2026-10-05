@@ -23,7 +23,7 @@
 #include "bronze_host/host_vision.h"
 
 #include "bronze_host/host_globals_internal.h"
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_runtime.h"
 #include "bronze_host/host_builder.h"  // ObjectBuilder
 #include "engine/engine.h"
 

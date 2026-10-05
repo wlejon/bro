@@ -2,6 +2,7 @@
 
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/host_globals_internal.h"
+#include "bronze_host/host_brokit.h"
 
 #include "embed/embed.h"
 

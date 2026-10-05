@@ -1,6 +1,6 @@
 #pragma once
 
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_class.h"
 #include "bronze_host/host_builder.h"
 #include "dom/event.h"
 

@@ -10,7 +10,10 @@ wc.width = 256;
 wc.height = 256;
 document.body.appendChild(wc);
 var gl = wc.getContext('webgl2');
-assert(gl !== null, 'webgl2 context created');
+if (!gl) missingGpuContext('webgl2');
+else runWithWebGL();
+
+function runWithWebGL() {
 
 // A small 2D canvas to use as the texture source — deliberately a different
 // size from the WebGL canvas, so a leaked viewport is unmistakable.
@@ -82,3 +85,4 @@ assert(far[2] > 200 && far[0] < 40,
 assert(gl.getError() === gl.NO_ERROR, 'no GL errors across the canvas-texture path');
 
 console.log('PASS: canvas-as-texture leaves GL state intact');
+}

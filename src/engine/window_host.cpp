@@ -254,6 +254,7 @@ void Engine::createWindowHostPresenter(WindowHost& h) {
                   static_cast<unsigned long long>(h.id));
         return;
     }
+    presenter->setCapturePresents(capturePresentsRequested());
     h.swapchain = std::move(swapchain);
     h.presenter = std::move(presenter);
 }

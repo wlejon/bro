@@ -410,13 +410,12 @@ void RecordingRenderer::endFrame() {
     buffer_->append(Cmd_EndFrame{});
 }
 
-void RecordingRenderer::recordLayerBreak(int kind, uint64_t canvasSceneId,
-                                         unsigned int elementId,
-                                         float x, float y, float w, float h,
-                                         float clipX, float clipY,
-                                         float clipW, float clipH) {
-    buffer_->append(Cmd_LayerBreak{kind, canvasSceneId, elementId, x, y, w, h,
-                                   clipX, clipY, clipW, clipH});
+void RecordingRenderer::recordLayerBreak(const LayerSource& source, const LayerQuad& quad) {
+    buffer_->append(Cmd_LayerBreak{source, quad});
+}
+
+void RecordingRenderer::recordSurfaceBreak() {
+    buffer_->append(Cmd_SurfaceBreak{});
 }
 
 void RecordingRenderer::recordBlitCanvasInline(void* canvasScene,

@@ -1,6 +1,6 @@
 #include "bronze_host/host_template.h"
 #include "bronze_host/host_builder.h"
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_node.h"
 #include "dom/document.h"
 #include "dom/element.h"
 

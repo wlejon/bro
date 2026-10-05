@@ -1,6 +1,7 @@
 #include "bronze_host/host_touch.h"
 #include "bronze_host/host_builder.h"
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_class.h"
+#include "bronze_host/host_element.h"
 #include "dom/element.h"
 
 namespace bro::bronze_host {

@@ -1,7 +1,7 @@
 // ECMA-402 (Intl) runtime support for Bronze host.
 #include "bronze_host/host_intl.h"
 #include "bronze_host/bronze_host.h"
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_values.h"
 #include "bronze_host/host_builder.h"
 #include "engine/engine.h"
 

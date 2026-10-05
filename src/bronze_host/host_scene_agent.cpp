@@ -1,6 +1,7 @@
 #if BRO_WITH_3D
 
 #include "bronze_host/native_scene_internal.h"
+#include "bronze_host/host_class.h"
 #include "host_ai_internal.h"
 #include "scene/scene_graph.h"
 #include "scene/scene_node.h"

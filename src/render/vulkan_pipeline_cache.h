@@ -54,4 +54,9 @@ private:
     size_t loadedSize_ = 0;
 };
 
+/// Write `size` bytes to `path` through a per-process temp file renamed over
+/// it, creating the directory: concurrent writers and a crash mid-write never
+/// leave a torn file. False when it could not be written.
+bool writeCacheFile(const std::string& path, const void* data, size_t size);
+
 } // namespace bro::render

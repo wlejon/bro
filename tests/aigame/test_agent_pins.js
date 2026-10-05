@@ -11,14 +11,14 @@
 const G = bro.ai.game;
 if (G.navMeshAvailable !== true) {
     skipTest('test_agent_pins: navmesh not compiled in');
-} else {
+} else pins: {
     const canvas = document.createElement('canvas');
     canvas.setAttribute('width', '128');
     canvas.setAttribute('height', '128');
     document.body.appendChild(canvas);
     flush();
     const scene = canvas.getContext('scene');
-    assert(scene !== null, 'scene context');
+    if (!scene) { missingGpuContext('scene'); break pins; }
 
     // Flat 40x40 ground quad.
     const verts = new Float32Array([

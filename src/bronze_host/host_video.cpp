@@ -36,7 +36,10 @@
 // meant, while an output is a file the app is choosing to write and the app
 // directory is usually the last place it wants it.
 
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_class.h"
+#include "bronze_host/host_runtime.h"
+#include "bronze_host/host_element.h"
+#include "bronze_host/host_web_globals.h"
 #include "bronze_host/host_builder.h"  // ObjectBuilder, argAt
 
 #if BRO_WITH_VIDEO
@@ -67,10 +70,10 @@ namespace {
 
 // Neither holds an ev::Persistent, which is what makes the destructors below
 // legal: a handle finalizer runs mid-collection and may not call the embed API,
-// and ~Persistent is the embed API (host_internal.h). Everything here is plain
+// and ~Persistent is the embed API (host_runtime.h). Everything here is plain
 // host memory plus a unique_ptr into src/video.
 struct HostVideoEncoder {
-    uint32_t tag = kHostVideoEncoderTag;  // must be first — see host_internal.h
+    uint32_t tag = kHostVideoEncoderTag;  // must be first — see host_class.h
     std::unique_ptr<video::WebmEncoder> enc;
     int width = 0;
     int height = 0;
@@ -79,7 +82,7 @@ struct HostVideoEncoder {
 };
 
 struct HostGifEncoder {
-    uint32_t tag = kHostGifEncoderTag;  // must be first — see host_internal.h
+    uint32_t tag = kHostGifEncoderTag;  // must be first — see host_class.h
     std::unique_ptr<video::GifEncoder> enc;
     int width = 0;
     int height = 0;
@@ -112,7 +115,7 @@ HostGifEncoder* gifEncoderOf(Value v) {
 // config rides in a Persistent for the whole constructor and each read goes
 // through its current address. A raw Value copy of the config would be stale
 // from the second property onwards, which is the failure the GC rule at the top
-// of host_internal.h exists to prevent, and it would present as a config whose
+// of host_runtime.h exists to prevent, and it would present as a config whose
 // later fields are all defaults.
 struct ConfigReader {
     ev::Persistent cfg;

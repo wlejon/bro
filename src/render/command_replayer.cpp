@@ -219,11 +219,7 @@ void CommandReplayer::replay(const CommandBuffer& buffer) {
                 dst_->endFrame();
 
             } else if constexpr (std::is_same_v<T, Cmd_LayerBreak>) {
-                if (onLayerBreak_) {
-                    onLayerBreak_(c.kind, c.canvasSceneId, c.elementId,
-                                  c.x, c.y, c.w, c.h,
-                                  c.clipX, c.clipY, c.clipW, c.clipH);
-                }
+                if (onLayerBreak_) onLayerBreak_(c.source, c.quad);
                 // The handler just switched dst_ to a brand-new surface
                 // (identity matrix, no clip). Any Save/transform/clip from
                 // before the break that hasn't been Restore'd yet — e.g. an
@@ -231,6 +227,10 @@ void CommandReplayer::replay(const CommandBuffer& buffer) {
                 // contains this canvas — needs to be re-established, or HTML
                 // content painted after the break renders at its untransformed
                 // layout position instead of following the ancestor transform.
+                replayOpenStackOnto(dst_);
+            } else if constexpr (std::is_same_v<T, Cmd_SurfaceBreak>) {
+                if (onSurfaceBreak_) onSurfaceBreak_();
+                // A fresh surface, as after a layer break.
                 replayOpenStackOnto(dst_);
             } else if constexpr (std::is_same_v<T, Cmd_BlitCanvasInline>) {
                 if (onBlitCanvasInline_) {

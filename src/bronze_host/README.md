@@ -23,7 +23,8 @@ Enabled by default (`BRO_WITH_BRONZE=ON`).
 | `host_element.cpp` | the element surface an app *builds*: the identity registry, `style`, `classList`, geometry, form controls, computed style, the element-only tree views |
 | `host_node.cpp` | the nodes that are not elements — text, comments, fragments — and the tree surface every node shares (`childNodes`, the mutators, `cloneNode`) |
 | `host_platform.cpp` | `btoa`/`atob`, `queueMicrotask`, `screen`, `alert`/`confirm`/`prompt`, and the DOM interface names libraries sniff for |
-| `host_internal.h` | the non-GL shared surface: error funnel, clock, task queue, handle tags |
+| `host_runtime.h`, `host_class.h` | the non-GL shared runtime: the GC rule, error funnel, clock, task queue and timers; `HostClass` and the handle tags |
+| `host_events.h`, `host_node.h`, `host_element.h`, `host_image.h`, `host_document.h`, `host_proxy.h`, `host_values.h`, `host_window_message.h`, `host_brokit.h`, `host_js_modules.h`, `host_web_globals.h`, `host_bro_namespaces.h` | the rest of the non-GL shared surface, one header per topic, each naming the files that define it; a file includes the ones it uses |
 | `host_events.cpp` | `on<type>` + `addEventListener` for the objects that fire events |
 | `host_dom_events.cpp` | canvas / document / window listeners, wired to the **engine's** dispatch |
 | `host_event_spec.cpp`, `js/events.js` | the descriptor `dispatchEvent` takes and the engine event built from it; the UI event classes (`MouseEvent`, `KeyboardEvent`, ...) over brokit's `Event` |
@@ -791,7 +792,7 @@ attributes. What was missing was only the REACH, and the general pair
 finds the constructor on the same builtin ladder a compiled free read walks,
 and `construct` builds the proxy with host functions as its traps.
 
-`makeHostProxy` (`host_internal.h`) is that shape written once, and FOUR live
+`makeHostProxy` (`host_proxy.h`) is that shape written once, and FOUR live
 views are built on it. `el.style` and `getComputedStyle` reach all 363
 properties plus custom `--*` ones, rather than the curated ~110-name list that
 an accessor pair per property per element forced; `el.dataset` exists;

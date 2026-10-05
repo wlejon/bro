@@ -2,6 +2,7 @@
 
 #include "bronze_host/native_scene_internal.h"
 #include "bronze_host/host_natives.h"
+#include "bronze_host/host_runtime.h"
 #include "natives/gizmo/native_gizmo_decl.h"
 #include "engine/engine.h"
 #include "engine/gizmo.h"

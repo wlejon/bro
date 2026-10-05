@@ -26,9 +26,10 @@ struct PresentPixels {
 /// differ — and cut to `clip`; then `above`, the CPU layer of everything
 /// composited after it, at the target's top-left.
 ///
-/// An image with a `view` (sampled usage, 8-bit RGBA/BGRA, in
-/// SHADER_READ_ONLY_OPTIMAL) is sampled in place; any other is first copied
-/// into a texture of the presenter's.
+/// An image with a `view` (sampled usage) is sampled in place — moved to
+/// SHADER_READ_ONLY_OPTIMAL for the frame when `layout` is another, and back
+/// after; any other (8-bit RGBA/BGRA) is first copied into a texture of the
+/// presenter's.
 struct PresentImage {
     VkImage image = VK_NULL_HANDLE;
     VkImageView view = VK_NULL_HANDLE;
@@ -114,9 +115,15 @@ public:
     /// (empty for any other kind of surface).
     static PresentPixels surfaceLayer(SkSurface* surface);
 
-    /// Offscreen: wait for the last present and return its pixels (RGBA8,
-    /// tightly packed). False if nothing has been presented since the last
-    /// readback-invalidating resize, or in windowed mode.
+    /// Windowed: also copy each presented swapchain image into the readback
+    /// buffer, in the frame's own submission, so readbackPixels() returns
+    /// what was put on screen (where the surface lets swapchain images be
+    /// read). Test harnesses only: it costs a copy per frame.
+    void setCapturePresents(bool capture) { capturePresents_ = capture; }
+
+    /// Wait for the last present's readback and return its pixels (RGBA8,
+    /// tightly packed). Offscreen every present is read back; windowed only
+    /// those captured (setCapturePresents). False if there is none.
     bool readbackPixels(std::vector<uint8_t>& outPixels, uint32_t& outWidth, uint32_t& outHeight);
 
     bool isHeadless() const { return swapchain_ == nullptr; }
@@ -161,10 +168,13 @@ private:
     bool presentOffscreen(const PresentFrame& frame);
     bool recordFrame(VkCommandBuffer cmd, const PresentFrame& frame, const Target& target,
                      VkPipelineStageFlags acquireStages, VkImageLayout& targetLayout);
+    bool recordLayers(VkCommandBuffer cmd, const PresentFrame& frame, const Target& target,
+                      VkImageLayout& targetLayout);
     bool ensureImage(Image& img, uint32_t width, uint32_t height, VkFormat format, VkImageUsageFlags usage);
     void retireImage(Image& img);
     void destroyImageNow(Image& img);
     bool ensureReadbackBuffer(VkDeviceSize size);
+    bool recordReadback(VkCommandBuffer cmd, const Target& target, VkImageLayout& layout);
     void cleanup();
 
     // vulkan_presenter_blend.cpp
@@ -187,7 +197,7 @@ private:
     uint32_t width_ = 0;
     uint32_t height_ = 0;
 
-    // Offscreen target and its readback.
+    // Offscreen target, and the readback of the last (captured) present.
     Image offscreen_;
     VkBuffer readbackBuffer_ = VK_NULL_HANDLE;
     VkDeviceMemory readbackMemory_ = VK_NULL_HANDLE;
@@ -196,6 +206,10 @@ private:
     void* readbackMapped_ = nullptr;
     VkDeviceSize readbackSize_ = 0;
     uint64_t readbackTicket_ = 0;  // 0 = nothing presented to read back
+    uint32_t readbackW_ = 0;
+    uint32_t readbackH_ = 0;
+    bool readbackBgra_ = false;     // the read-back target's byte order
+    bool capturePresents_ = false;
 
     // Blended layers: per frame slot, the CPU layers' textures and the GPU
     // images' copies, by their place in the frame.

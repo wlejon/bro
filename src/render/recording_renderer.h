@@ -133,13 +133,12 @@ public:
     void beginFrame(int width, int height) override;
     void endFrame() override;
 
-    // Layer break — emitted by DrawTraversal's layer-break callback when it
-    // crosses a canvas/WebGL boundary. Not on the Renderer interface; the
-    // engine wires the callback to call this directly.
-    void recordLayerBreak(int kind, uint64_t canvasSceneId, unsigned int elementId,
-                          float x, float y, float w, float h,
-                          float clipX = 0, float clipY = 0,
-                          float clipW = -1, float clipH = -1);
+    // Layer break — emitted by DrawTraversal's layer-break callback where it
+    // reaches separately composited content. Not on the Renderer interface;
+    // the engine wires the callback to call this directly.
+    void recordLayerBreak(const LayerSource& source, const LayerQuad& quad);
+    // A boundary between HTML surfaces with no layer between them.
+    void recordSurfaceBreak();
 
     // Inline canvas blit — system panels composite their canvas scene onto
     // the current surface instead of breaking into a separate layer.

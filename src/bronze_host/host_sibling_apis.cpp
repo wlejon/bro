@@ -32,7 +32,7 @@
 // by its bare name. bromesh registers its own; the tensor lift is kept for
 // symmetry and is a no-op while tensor.js leaves GpuTensor under bro.tensor.
 
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_js_modules.h"
 #include "bronze_host/host_natives.h"
 #include "engine/engine.h"
 

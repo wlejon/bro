@@ -13,7 +13,7 @@
 // vector, the menu tree and the inspector's node trees as JSON the engine
 // side already knows how to emit.
 
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_runtime.h"
 #include "bronze_host/host_natives.h"
 #include "bronze_host/host_telemetry.h"
 #include "engine/engine.h"

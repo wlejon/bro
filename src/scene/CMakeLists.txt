@@ -119,6 +119,8 @@ add_library(bro_scene STATIC
     mesh_node.cpp
     skinned_mesh_node.cpp
     animation_player.cpp
+    animation_player_state_machine.cpp
+    animation_player_root_motion.cpp
     tween.cpp
     clip_player.cpp
     instanced_mesh_node.cpp
@@ -130,6 +132,8 @@ add_library(bro_scene STATIC
     decal_node.cpp
     reflection_probe_node.cpp
     terrain_manager.cpp
+    terrain_manager_mesh.cpp
+    terrain_manager_raycast.cpp
     clipmap_terrain.cpp
     clipmap_terrain_elevation.cpp
     tile_world.cpp

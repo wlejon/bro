@@ -26,7 +26,8 @@
 
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/host_builder.h"
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_runtime.h"
+#include "bronze_host/host_web_globals.h"
 
 #include "engine/engine.h"
 #include "engine/engine_config.h"

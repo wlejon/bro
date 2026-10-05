@@ -7,6 +7,7 @@
 
 #include "engine/engine.h"
 #include "engine/frame_presenter.h"
+#include "engine/window_host.h"
 
 #include "canvas/canvas_scene.h"
 #include "dom/element.h"
@@ -31,6 +32,9 @@
 #include <include/core/SkSurface.h>
 
 #include <cmath>
+#include <cstdlib>
+#include <cstring>
+#include <variant>
 
 namespace bro::engine {
 
@@ -40,24 +44,31 @@ namespace {
 struct LayerPlacement {
     float sx = 1.0f, sy = 1.0f, oy = 0.0f;
 
-    SkRect dst(const UILayer& l) const {
-        return SkRect::MakeXYWH(l.cx * sx, (l.cy + oy) * sy, l.cw * sx, l.ch * sy);
+    SkRect dst(const render::LayerQuad& q) const {
+        return SkRect::MakeXYWH(q.x * sx, (q.y + oy) * sy, q.w * sx, q.h * sy);
     }
     // The layer's clip, when it has one.
-    bool clip(const UILayer& l, SkRect& out) const {
-        if (l.clipW < 0.0f || l.clipH < 0.0f) return false;
-        out = SkRect::MakeXYWH(l.clipX * sx, (l.clipY + oy) * sy, l.clipW * sx, l.clipH * sy);
+    bool clip(const render::LayerQuad& q, SkRect& out) const {
+        if (!q.clipped()) return false;
+        out = SkRect::MakeXYWH(q.clipX * sx, (q.clipY + oy) * sy, q.clipW * sx, q.clipH * sy);
         return true;
     }
-    void draw(SkCanvas* canvas, const sk_sp<SkImage>& img, const UILayer& l) const {
+    void draw(SkCanvas* canvas, const sk_sp<SkImage>& img, const render::LayerQuad& q) const {
         if (!img) return;
         canvas->save();
         SkRect c;
-        if (clip(l, c)) canvas->clipRect(c, SkClipOp::kIntersect, true);
-        canvas->drawImageRect(img, dst(l), SkSamplingOptions(SkFilterMode::kLinear));
+        if (clip(q, c)) canvas->clipRect(c, SkClipOp::kIntersect, true);
+        canvas->drawImageRect(img, dst(q), SkSamplingOptions(SkFilterMode::kLinear));
         canvas->restore();
     }
 };
+
+template <class... Fs>
+struct Overloaded : Fs... {
+    using Fs::operator()...;
+};
+template <class... Fs>
+Overloaded(Fs...) -> Overloaded<Fs...>;
 
 } // namespace
 
@@ -112,7 +123,7 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, int offsetY) {
     // A GPU layer's image goes to the presenter, placed and clipped where the
     // layer sits; the CPU layers after it composite into the next segment.
     auto place = [&](VkImage image, VkImageLayout layout, uint32_t w, uint32_t h, const SkRect& dst,
-                     const UILayer& l) -> render::PresentImage& {
+                     const render::LayerQuad* quad) -> render::PresentImage& {
         render::PresentImage& out = frameImages_.emplace_back();
         out.image = image;
         out.layout = layout;
@@ -123,7 +134,7 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, int offsetY) {
         out.dstW = dst.width();
         out.dstH = dst.height();
         SkRect clip;
-        if (at.clip(l, clip)) {
+        if (quad && at.clip(*quad, clip)) {
             const SkIRect r = clip.roundOut();
             out.clipped = true;
             out.clip = {{r.left(), r.top()},
@@ -131,69 +142,72 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, int offsetY) {
         }
         return out;
     };
-    auto addImage = [&](VkImage image, VkImageLayout layout, uint32_t w, uint32_t h, const UILayer& l) {
-        place(image, layout, w, h, at.dst(l), l);
+    // A 3D scene's or WebGL canvas's image, sampled where it is. One never
+    // drawn into (UNDEFINED) has nothing to show.
+    auto placeLayerImage = [&](const render::LayerImage& img, const render::LayerQuad& q) {
+        if (!img || img.layout == VK_IMAGE_LAYOUT_UNDEFINED) return;
+        place(img.image, img.layout, img.width, img.height, at.dst(q), &q).view = img.view;
     };
     // A Skia GPU image, sampled where it is; kept alive until the frame has
     // been submitted.
-    auto addSkiaImage = [&](const render::SkiaImageRef& image, const SkRect& dst, const UILayer& l) {
-        place(image->image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, image->width, image->height, dst, l).view =
+    auto placeSkiaImage = [&](const render::SkiaImageRef& image, const SkRect& dst, const render::LayerQuad* quad) {
+        place(image->image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, image->width, image->height, dst, quad).view =
             image->view;
         frameSkiaImages_.push_back(image);
     };
 
     for (const auto& layer : layers) {
-        if (layer.type == UILayer::HTML) {
-            // Content space, 1:1 in device px, below the inset.
-            if (layer.image) {
-                const SkRect dst = SkRect::MakeXYWH(0.0f, at.oy * at.sy, static_cast<float>(layer.image->width),
-                                                    static_cast<float>(layer.image->height));
-                UILayer unclipped;
-                addSkiaImage(layer.image, dst, unclipped);
-            } else if (layer.surface) {
-                if (auto img = layer.surface->makeImageSnapshot())
-                    if (SkCanvas* canvas = frameSegmentCanvas()) canvas->drawImage(img, 0.0f, at.oy * at.sy);
-            }
-        } else if (layer.type == UILayer::Iframe) {
-            if (auto* d = iframeDocById(layer.canvasSceneId)) {
-                if (render::SkiaImageRef image = d->published.gpu()) addSkiaImage(image, at.dst(layer), layer);
-                else if (SkCanvas* canvas = frameSegmentCanvas()) at.draw(canvas, d->published.get(), layer);
-            }
-        } else if (layer.type == UILayer::Canvas) {
-            if (auto* cs = canvasSceneById(layer.canvasSceneId)) {
-                if (render::SkiaImageRef image = cs->gpuImage()) addSkiaImage(image, at.dst(layer), layer);
+        const render::LayerQuad& quad = layer.quad;
+        std::visit(Overloaded{
+            [&](const HtmlLayer& html) {
+                // Content space, 1:1 in device px, below the inset.
+                if (html.image) {
+                    placeSkiaImage(html.image,
+                                   SkRect::MakeXYWH(0.0f, at.oy * at.sy, static_cast<float>(html.image->width),
+                                                    static_cast<float>(html.image->height)),
+                                   nullptr);
+                } else if (html.surface) {
+                    if (auto img = html.surface->makeImageSnapshot())
+                        if (SkCanvas* canvas = frameSegmentCanvas()) canvas->drawImage(img, 0.0f, at.oy * at.sy);
+                }
+            },
+            [&](const render::IframeLayerSource& src) {
+                IframeDoc* d = iframeDocById(src.docId);
+                if (!d) return;
+                if (render::SkiaImageRef image = d->published.gpu()) placeSkiaImage(image, at.dst(quad), &quad);
+                else if (SkCanvas* canvas = frameSegmentCanvas()) at.draw(canvas, d->published.get(), quad);
+            },
+            [&](const render::CanvasLayerSource& src) {
+                canvas::CanvasScene* cs = canvasSceneById(src.sceneId);
+                if (!cs) return;
+                if (render::SkiaImageRef image = cs->gpuImage()) placeSkiaImage(image, at.dst(quad), &quad);
                 else if (cs->surface())
                     if (SkCanvas* canvas = frameSegmentCanvas())
-                        at.draw(canvas, cs->surface()->makeImageSnapshot(), layer);
-            }
-        } else if (layer.type == UILayer::Scene3D) {
+                        at.draw(canvas, cs->surface()->makeImageSnapshot(), quad);
+            },
+            [&](const render::SceneLayerSource& src) {
 #if BRO_WITH_3D
-            scene::SceneGraph* graph = nullptr;
-            for (auto& sg : sceneGraphs_) {
-                if (sg.graph && (layer.elementId == 0 || sg.elementId == layer.elementId)) {
-                    graph = sg.graph.get();
-                    break;
+                for (auto& sg : sceneGraphs_) {
+                    if (!sg.graph || sg.elementId != src.elementId) continue;
+                    if (sg.graph->renderer().hasMeshContent())
+                        placeLayerImage(sg.graph->renderer().outputImage(), quad);
+                    return;
                 }
-            }
-            if (!graph || !graph->renderer().hasMeshContent()) continue;
-            const render::LayerImage out = graph->renderer().outputImage();
-            if (out) addImage(out.image, out.layout, out.width, out.height, layer);
+#else
+                (void)src;
 #endif
-        } else if (layer.type == UILayer::WebGL) {
-            webgl::WebGL2RenderingContext* wctx = nullptr;
-            for (auto& entry : webglEntries_) {
-                if (entry.context && entry.element && entry.element->nodeId() == layer.elementId) {
-                    wctx = entry.context.get();
-                    break;
+            },
+            [&](const render::WebGLLayerSource& src) {
+                for (auto& entry : webglEntries_) {
+                    if (!entry.context || !entry.element || entry.element->nodeId() != src.elementId) continue;
+                    // The canvas's recorded work must be submitted before the
+                    // presenter's submission samples it (queue order does the rest).
+                    entry.context->flush();
+                    placeLayerImage(entry.context->drawingBuffer(), quad);
+                    return;
                 }
-            }
-            if (!wctx || wctx->colorImage() == VK_NULL_HANDLE) continue;
-            // The canvas's recorded work must be submitted before the
-            // presenter's submission samples it (queue order does the rest).
-            wctx->flush();
-            addImage(wctx->colorImage(), wctx->colorLayout(), static_cast<uint32_t>(wctx->canvasWidth()),
-                     static_cast<uint32_t>(wctx->canvasHeight()), layer);
-        }
+            },
+        }, layer.content);
     }
 }
 
@@ -253,6 +267,28 @@ std::vector<uint8_t> Engine::readCompositedFrame() {
     SkPixmap pm;
     if (frameSegments_.empty() || !frameSegments_[0] || !frameSegments_[0]->peekPixels(&pm)) return {};
     return render::pixmapToRgba(pm);
+}
+
+bool Engine::capturePresentsRequested() {
+    const char* v = std::getenv("BRO_CAPTURE_PRESENTS");
+    return v && std::strcmp(v, "1") == 0;
+}
+
+std::vector<uint8_t> Engine::presentedPixels(uint64_t hostId, int& outW, int& outH) {
+    outW = outH = 0;
+    render::VulkanPresenter* presenter = nullptr;
+    if (hostId == 0) {
+        presenter = vulkanPresenter_.get();
+    } else if (WindowHost* h = windowHostById(hostId)) {
+        presenter = h->presenter.get();
+    }
+    if (!presenter || presenter->isHeadless()) return {};
+    std::vector<uint8_t> pixels;
+    uint32_t w = 0, h = 0;
+    if (!presenter->readbackPixels(pixels, w, h)) return {};
+    outW = static_cast<int>(w);
+    outH = static_cast<int>(h);
+    return pixels;
 }
 
 } // namespace bro::engine

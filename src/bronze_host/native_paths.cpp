@@ -2,7 +2,7 @@
 // bro.resolvePath (docs/paths-api.js documents them as bro.paths.*; the live
 // names are the bare ones on `bro`, and js/bro_core.js mounts them there).
 
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_runtime.h"
 #include "bronze_host/host_natives.h"
 #include "engine/engine.h"
 #include "natives/paths/native_paths_decl.h"

@@ -21,17 +21,15 @@ namespace bro::render {
 // internally, so no replayer-side font cache is needed.
 class CommandReplayer {
 public:
-    using LayerBreakHandler = std::function<void(int kind, uint64_t canvasSceneId,
-                                                  unsigned int elementId,
-                                                  float x, float y, float w, float h,
-                                                  float clipX, float clipY,
-                                                  float clipW, float clipH)>;
+    using LayerBreakHandler = std::function<void(const LayerSource& source, const LayerQuad& quad)>;
+    using SurfaceBreakHandler = std::function<void()>;
     using BlitCanvasInlineHandler = std::function<void(void* canvasScene,
                                                         float x, float y, float w, float h)>;
 
     explicit CommandReplayer(Renderer* dst);
 
     void setLayerBreakHandler(LayerBreakHandler h) { onLayerBreak_ = std::move(h); }
+    void setSurfaceBreakHandler(SurfaceBreakHandler h) { onSurfaceBreak_ = std::move(h); }
     void setBlitCanvasInlineHandler(BlitCanvasInlineHandler h) {
         onBlitCanvasInline_ = std::move(h);
     }
@@ -73,6 +71,7 @@ private:
 
     Renderer*               dst_;
     LayerBreakHandler       onLayerBreak_;
+    SurfaceBreakHandler     onSurfaceBreak_;
     BlitCanvasInlineHandler onBlitCanvasInline_;
 };
 

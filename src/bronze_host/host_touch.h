@@ -1,7 +1,7 @@
 #pragma once
 #include "embed/embed.h"
 #include "dom/event.h"
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_class.h"
 #include <vector>
 
 namespace bro::bronze_host {

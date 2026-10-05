@@ -8,7 +8,7 @@
 // the object's shape is byte-for-byte reproducible run to run.
 
 #include "bronze_host/webgl_internal.h"
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_class.h"
 
 #include <string>
 #include <unordered_map>

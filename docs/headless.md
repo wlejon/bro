@@ -18,11 +18,11 @@ Scripts and `-e` expressions are compiled in-process by bronze and run against t
 
 | Flag | Description |
 |------|-------------|
-| `--no-gpu` | Disable GPU rendering. Uses CPU-only Skia rasterizer (no WebGL, no scene layer compositing). For CI environments without a GPU. |
+| `--no-gpu` | Disable GPU rendering: Skia draws the same layers on the CPU and the frame composites on the CPU (iframes, system panels and the device scale included), with no WebGL and no 3D scene. For CI environments without a GPU. |
 | `--audio` | Open the real SDL audio device and mic. Off by default: headless runs the DSP graph with no device attached, so a test never claims the machine's sound hardware. |
 | `--width N` | Viewport width in pixels (default: 1920) |
 | `--height N` | Viewport height in pixels (default: 1080) |
-| `--device-scale-factor S` | Render as a HiDPI display with `S` device px per CSS px (default 1): `devicePixelRatio`, `@media (resolution)` and every captured frame follow, layout and input stay in CSS px. Same as calling `setDeviceScaleFactor(S)` first. Needs the GPU path; `--no-gpu` reports the ratio but rasterizes 1:1. |
+| `--device-scale-factor S` | Render as a HiDPI display with `S` device px per CSS px (default 1): `devicePixelRatio`, `@media (resolution)` and every captured frame follow, layout and input stay in CSS px. Same as calling `setDeviceScaleFactor(S)` first. `--no-gpu` renders at the scale too. |
 | `--splash` | Show the startup splash. Off by default in headless: its canvas animation leaks into early screenshots; opt in only to exercise the splash lifecycle. |
 | `--no-splash` | Explicitly disable the splash (the default). |
 | `--print-host-globals` | Install the host globals exactly as a run would, print bronze's host-global registry to stdout one name per line, and exit: the `--host-globals` manifest for `bronze build` of an app that will run on this binary. |
@@ -408,6 +408,8 @@ bash tests/run_tests.sh events   # filter by substring
 
 Each test is a self-contained JS file that manipulates the DOM and uses `assert()` to verify behavior. The runner discovers all `tests/*/test_*.js` files, runs each against the minimal `tests/test_app/` HTML page, and reports pass/fail with a summary.
 
+What a headless run never touches — the windowed frame loop, the raster thread, swapchains and the presenters of real windows (the main one and `bro.window.open()` ones) — is covered by the **windowed self-tests**: each `tests/windowed/<app>/` is an app the runner opens with the windowed `bro` on SDL's offscreen video driver (a Vulkan surface via `VK_EXT_headless_surface`, no display needed), with `BRO_CAPTURE_PRESENTS=1` so every presented swapchain image is also read back. The app checks pixels with `presentedFrame([windowHandle])` (an ImageData of what the main window, or that secondary window, last presented; `null` without the capture) and `assert()`, then `window.close()`; a failed assert exits 1, `skipTest()` 77, as in headless. bro logs to `bro.log` in its working directory, which the runner reads back.
+
 ### Test categories
 
 `tests/` holds 40+ directories, one per subsystem (`webgl/`, `scene/`, `physics/`,
@@ -725,12 +727,12 @@ undefined; this layer passes calls through and does not police it.
 ### CPU mode (`--no-gpu`)
 
 - No window, no SDL video subsystem, no Vulkan device
-- Uses `RasterRenderer`: CPU-only Skia with real platform-native fonts
+- Uses `SkiaRenderer` with Skia on the CPU: the same record → replay → composite pipeline as the GPU path, with CPU layer surfaces composited on the CPU, so iframes, system panels and a device scale above 1 render as they do on the GPU
 - Canvas 2D rendered via software command replay
 - No WebGL support (apps fall back gracefully)
 - No 3D scene: `canvas.getContext('scene')` returns `null`, so branch on it (`const s = canvas.getContext('scene'); if (!s) { /* 2D fallback */ }`). The 3D renderer is Vulkan end to end and requires a GPU device. Note that `bro.gpu.available` reports the ML/compute backend (Vulkan/CUDA/Metal).
 - The same applies when a headless boot *tries* for GPU and fails: if SDL can't open a video device the engine logs `falling back to CPU raster rendering` and behaves exactly as `--no-gpu` from then on
-- Screenshots captured directly from the Skia raster surface
+- Screenshots read straight from the CPU composite
 - Input simulation (click, mouseDown, etc.) works fully, hit testing, event dispatch, focus management all function without a GPU
 
 ### Virtual time

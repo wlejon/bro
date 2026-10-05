@@ -13,7 +13,8 @@
 // Every heap value is held in a Persistent across the next call: each lookup,
 // Object.create and defineProperty below may allocate (embed.h).
 
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_class.h"
+#include "bronze_host/host_js_modules.h"
 
 namespace bro::bronze_host {
 

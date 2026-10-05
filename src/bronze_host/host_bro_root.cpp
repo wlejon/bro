@@ -19,7 +19,10 @@
 // hook the settings callback rides on, then js/bro_core.js, which fills the
 // public objects from the natives.
 
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_proxy.h"
+#include "bronze_host/host_js_modules.h"
+#include "bronze_host/host_bro_namespaces.h"
+#include "bronze_host/host_media.h"
 #include "bronze_host/host_builder.h"
 #include "bronze_host/host_natives.h"
 #include "bronze_host/host_window_open.h"
@@ -169,7 +172,7 @@ Value makeUnavailableNamespace(const std::string& name, const std::string& flag)
 
 void installBroRoots(engine::Engine& engine) {
     // Heap-allocated and never freed, like every root this layer keeps for
-    // the life of the process (host_internal.h, HostClass).
+    // the life of the process (host_class.h, HostClass).
     auto* bro = new ev::Persistent(makeRoot({"time", "server", "window", "settings", "mesh", "net", "rigging", "gizmo",
                                              "scene", "terrain", "clipmap", "tile_world", "lighting", "animation", "lm",
                                              "rave", "motion", "mic", "sense", "gesture", "wake", "kws", "listen",

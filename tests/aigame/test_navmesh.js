@@ -267,14 +267,14 @@ function runNavMeshTests() {
     // =========================================================================
     // Agent routing — navigateTo across the ramp; RVO composition
     // =========================================================================
-    {
+    routingSection: {
         const canvas = document.createElement('canvas');
         canvas.setAttribute('width', '128');
         canvas.setAttribute('height', '128');
         document.body.appendChild(canvas);
         flush();
         const scene = canvas.getContext('scene');
-        assert(scene !== null, 'scene context');
+        if (!scene) { missingGpuContext('scene'); break routingSection; }
 
         const world = G.createWorld();
         world.setAvoidance(true);
@@ -373,7 +373,7 @@ function runNavMeshTests() {
     // =========================================================================
     // Off-mesh links — bake, path markers, one-way, save/load, agent traversal
     // =========================================================================
-    {
+    linkSection: {
         // Two floors with a 2 m gap the agent cannot walk across.
         const verts = [], idx = [];
         pushQuad(verts, idx, [-10, -4, -1, 4], 0);   // west floor
@@ -452,6 +452,7 @@ function runNavMeshTests() {
         document.body.appendChild(canvasL);
         flush();
         const sceneL = canvasL.getContext('scene');
+        if (!sceneL) { missingGpuContext('scene'); break linkSection; }
         const worldL = G.createWorld();
         worldL.setAvoidance(true);
         sceneL.attachAIWorld(worldL, { stepHz: 60 });
@@ -482,13 +483,14 @@ function runNavMeshTests() {
     // =========================================================================
     // fromTerrain — height-sampled voxel terrain surface
     // =========================================================================
-    {
+    terrainSection: {
         const canvas2 = document.createElement('canvas');
         canvas2.setAttribute('width', '64');
         canvas2.setAttribute('height', '64');
         document.body.appendChild(canvas2);
         flush();
         const scene2 = canvas2.getContext('scene');
+        if (!scene2) { missingGpuContext('scene'); break terrainSection; }
 
         const terrain = scene2.createTerrain({
             chunkSize: [16, 16, 16],

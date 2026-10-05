@@ -148,6 +148,8 @@ SkiaGpu::~SkiaGpu() {
         // release procs of the images it still referenced. A surface somebody
         // still holds stays a valid (abandoned) object.
         context_->flushAndSubmit(GrSyncCpu::kYes);
+        context_->storeVkPipelineCacheData();
+        if (persistentCache_) persistentCache_->save();
         context_->releaseResourcesAndAbandonContext();
         context_.reset();
     }
@@ -196,7 +198,13 @@ bool SkiaGpu::init() {
         return false;
     }
 
+    // Ganesh's shaders and pipeline cache persist beside the device's own.
+    std::string cachePath = vulkan_.persistentPipelineCache().path();
+    if (cachePath.size() > 4 && cachePath.ends_with(".bin")) cachePath.insert(cachePath.size() - 4, ".skia");
+    persistentCache_ = std::make_unique<SkiaPersistentCache>(cachePath);
+
     GrContextOptions options;
+    options.fPersistentCache = persistentCache_.get();
     context_ = GrDirectContexts::MakeVulkan(backend, options);
     if (!context_) {
         LOG_ERROR("SkiaGpu: Skia could not create a Vulkan context on this device; drawing on the CPU");

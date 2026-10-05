@@ -151,11 +151,13 @@ void recordSubDoc(SubDocRef d, render::RecordingRenderer* rec,
         if (scene) scene->stageCommandsForRaster();
     }
     rec->setBuffer(&d.cmdBuffer);
-    traversal->setLayerBreakCallback(
-        [rec](int /*kind*/, canvas::CanvasScene* scene, unsigned int, float x, float y,
-              float w, float h, float, float, float, float) {
-            if (scene) rec->recordBlitCanvasInline(scene, x, y, w, h);
-        });
+    // A sub-document is one surface: its canvases draw inline. (WebGL, 3D
+    // scenes and nested iframes are not hosted in sub-documents.)
+    traversal->setLayerBreakCallback([rec](const layout::DrawTraversal::LayerBreak& lb) {
+        if (!std::holds_alternative<render::CanvasLayerSource>(lb.source)) return;
+        if (void* scene = lb.element->canvasScene())
+            rec->recordBlitCanvasInline(scene, lb.quad.x, lb.quad.y, lb.quad.w, lb.quad.h);
+    });
     traversal->setBasePath(d.document->basePath());
     traversal->draw(d.document->documentElement(), 0, 0,
                     static_cast<float>(d.boxW), static_cast<float>(d.boxH),

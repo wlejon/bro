@@ -34,7 +34,8 @@
 // trap does. `methods` is held in a Persistent inside that pack because it is
 // a heap value the collector may move.
 
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_values.h"
+#include "bronze_host/host_proxy.h"
 #include "bronze_host/host_builder.h"  // ObjectBuilder, argAt
 
 #include <memory>

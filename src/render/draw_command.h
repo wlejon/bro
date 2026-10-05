@@ -1,5 +1,6 @@
 #pragma once
 
+#include "render/layer_source.h"
 #include "render/renderer.h"
 
 #include <cstdint>
@@ -8,11 +9,11 @@
 namespace bro::render {
 
 // One draw command in a CommandBuffer. There is exactly one struct per
-// `Renderer` virtual method (plus LayerBreak, which is not on Renderer but is
-// emitted by DrawTraversal's layer-break callback when it crosses a
-// canvas/WebGL boundary). All payloads are POD; variable-length data (strings,
-// color stops, polygon points, filter chains, image bytes) is referenced by
-// (offset, len) into the buffer's side arena.
+// `Renderer` virtual method (plus the layer/surface breaks and the inline
+// canvas blit, which are not on Renderer: the engine records them where a
+// document reaches separately composited content). All payloads are POD;
+// variable-length data (strings, color stops, polygon points, filter chains,
+// image bytes) is referenced by (offset, len) into the buffer's side arena.
 
 struct Cmd_Clear              { bromath::Color color; };
 struct Cmd_FillRect           { float x, y, w, h; bromath::Color color; };
@@ -91,36 +92,25 @@ struct Cmd_FillConicGradient  { float x, y, w, h, cx, cy, angleDeg;            u
 struct Cmd_BeginFrame { int width, height; };
 struct Cmd_EndFrame   {};
 
-// Emitted by DrawTraversal's layer-break callback. The replayer flushes the
-// current Skia surface into a UILayer, pushes a Canvas/WebGL UILayer, and
-// allocates a fresh Skia surface for subsequent HTML commands.
-// `canvasSceneId` names the scene (CanvasScene::sceneId()) instead of
-// pointing at it: replay copies the id into the UILayer and the compositor
-// resolves it through the engine's scene registry at use time, so a layer
-// that outlives the scene resolves to null instead of dangling.
+// Emitted by DrawTraversal's layer-break callback where it reaches content
+// composited as its own layer (a canvas, WebGL, a 3D scene, an iframe). The
+// replayer's handler ends the current HTML surface, records the layer, and
+// starts a fresh surface for the HTML painted after it. `source` names what
+// the layer shows by handle (see layer_source.h), never by pointer.
 struct Cmd_LayerBreak {
-    enum LayerKind {
-        Canvas2D,        // flush surface + push HTML layer + push Canvas2D layer + new surface
-        WebGL,           // flush surface + push HTML layer + push WebGL layer + new surface
-        HtmlSurface,     // flush surface + push HTML layer + new surface (panel boundary)
-        IframeDoc,       // flush surface + push HTML layer + push iframe-document layer + new surface
-        Scene3D,         // flush surface + push HTML layer + push 3D Scene layer + new surface
-    };
-    int kind;                    // LayerKind
-    uint64_t canvasSceneId;      // CanvasScene::sceneId() when kind==Canvas2D; IframeDoc id when kind==IframeDoc; else 0
-    unsigned int elementId;      // the element's node id when kind==WebGL or Scene3D
-    float x, y, w, h;            // ignored for HtmlSurface
-    // Active overflow/scroll clip at the layer-break point, in the same
-    // untransformed pixel space as x/y/w/h. The canvas/WebGL layer is a
-    // separate composited quad that bypasses the Skia clip stack, so the
-    // compositor re-applies this as a clip. clipW < 0 ⇒ unclipped.
-    float clipX = 0, clipY = 0, clipW = -1, clipH = -1;
+    LayerSource source;
+    LayerQuad quad;
 };
+
+// A boundary between HTML surfaces with no layer in between (one system panel
+// ending, the next beginning): the handler ends the current surface and
+// starts a fresh one.
+struct Cmd_SurfaceBreak {};
 
 // System-panel canvas: composite the canvas scene's snapshot onto the current
 // surface (no layer split). Replayer: scene->flushStaged(), snapshot, drawImage.
-// Keeps a raw pointer (unlike Cmd_LayerBreak) because replay dereferences the
-// scene on the raster thread; safety comes from deferred destruction — scenes
+// Keeps a raw pointer (unlike Cmd_LayerBreak's handle) because replay
+// dereferences the scene on the raster thread; safety comes from deferred destruction — scenes
 // are only freed at frame top with the raster worker idle, and a detached
 // scene is skipped at record time so it never enters a fresh buffer.
 struct Cmd_BlitCanvasInline {
@@ -170,6 +160,7 @@ using DrawCommand = std::variant<
     Cmd_BeginFrame,
     Cmd_EndFrame,
     Cmd_LayerBreak,
+    Cmd_SurfaceBreak,
     Cmd_BlitCanvasInline
 >;
 

@@ -307,8 +307,11 @@ std::string Engine::eval(const std::string& code) {
     return "";
 }
 
-std::vector<uint8_t> Engine::renderUnifiedToPixels() {
-    if (!document_ || !vulkanPresenter_) return {};
+// The composited frame in device px (RGBA8): the same layer pipeline a
+// windowed frame takes — record, replay into layer surfaces (Skia on the GPU,
+// or on the CPU without one), composite — rendered on demand.
+std::vector<uint8_t> Engine::capturePixels() {
+    if (!document_) return {};
     auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get());
     if (!skia) return {};
 
@@ -378,113 +381,9 @@ std::vector<uint8_t> Engine::renderUnifiedToPixels() {
 bool Engine::screenshot(const std::string& path) {
     if (!document_) return false;
     if (!ensureParentDir(path)) return false;
-
-    if (vulkanPresenter_ && dynamic_cast<render::SkiaRenderer*>(renderer_.get())) {
-        auto pixels = renderUnifiedToPixels();
-        if (pixels.empty()) return false;
-        return broimage::encode_png_file(path, pixels.data(), deviceScale_.drawableW,
-                                         deviceScale_.drawableH, 4);
-    }
-
-    syncWebGLCanvasSizes();
-    if (!timePaused_) fireFrameCallbacks(0.0);
-
-    renderer_->beginFrame(viewportWidth_, viewportHeight_);
-    renderer_->clear({0, 0, 0, 255});
-
-    renderer_->save();
-    renderer_->translate(0.0f, static_cast<float>(contentTop()));
-
-    drawTraversal_->setLayerBreakCallback(
-        [&](int /*kind*/, canvas::CanvasScene* scene, unsigned int /*tex*/,
-            float x, float y, float w, float h,
-            float /*clipX*/, float /*clipY*/, float /*clipW*/, float /*clipH*/) {
-            if (!scene || w <= 0 || h <= 0) return;
-            scene->flushStaged();
-            auto* src = scene->surface();
-            if (!src) return;
-            auto img = src->makeImageSnapshot();
-            if (!img) return;
-            auto* c = renderer_->getCanvas();
-            if (!c) return;
-            SkRect dst = SkRect::MakeXYWH(x, y, w, h);
-            c->drawImageRect(img, dst, SkSamplingOptions(SkFilterMode::kLinear));
-            scene->clearDirty();
-        });
-
-    drawTraversal_->draw(document_->documentElement(),
-                         0, -scrollY_,
-                         contentWidth(), contentHeight(), /*viewportTop=*/0);
-    drawTraversal_->setLayerBreakCallback(nullptr);
-
-    updateSelectionSnapshot();
-    drawSelectionHighlight(renderer_.get(), -scrollY_);
-
-    renderer_->restore();
-
-    if (isSystemVisible()) {
-        tickSystemPanels(virtualTime_);
-        stageSystemPanelCanvases();
-        layoutSystemPanels(*textMetrics_);
-        drawSystemPanels(renderer_.get(), *drawTraversal_);
-    }
-
-    renderer_->endFrame();
-
-    return renderer_->saveScreenshot(path);
-}
-
-std::vector<uint8_t> Engine::capturePixels() {
-    if (!document_) return {};
-
-    if (vulkanPresenter_ && dynamic_cast<render::SkiaRenderer*>(renderer_.get())) {
-        return renderUnifiedToPixels();
-    }
-
-    syncWebGLCanvasSizes();
-    if (!timePaused_) fireFrameCallbacks(0.0);
-
-    renderer_->beginFrame(viewportWidth_, viewportHeight_);
-    renderer_->clear({0, 0, 0, 255});
-
-    renderer_->save();
-    renderer_->translate(0.0f, static_cast<float>(contentTop()));
-
-    drawTraversal_->setLayerBreakCallback(
-        [&](int /*kind*/, canvas::CanvasScene* scene, unsigned int /*tex*/,
-            float x, float y, float w, float h,
-            float /*clipX*/, float /*clipY*/, float /*clipW*/, float /*clipH*/) {
-            if (!scene || w <= 0 || h <= 0) return;
-            scene->flushStaged();
-            auto* src = scene->surface();
-            if (!src) return;
-            auto img = src->makeImageSnapshot();
-            if (!img) return;
-            auto* c = renderer_->getCanvas();
-            if (!c) return;
-            SkRect dst = SkRect::MakeXYWH(x, y, w, h);
-            c->drawImageRect(img, dst, SkSamplingOptions(SkFilterMode::kLinear));
-            scene->clearDirty();
-        });
-
-    drawTraversal_->draw(document_->documentElement(),
-                         0, -scrollY_,
-                         contentWidth(), contentHeight(), /*viewportTop=*/0);
-    drawTraversal_->setLayerBreakCallback(nullptr);
-
-    overlayMgr_.drawIfContext(OverlayContext::App, renderer_.get());
-
-    renderer_->restore();
-
-    if (isSystemVisible()) {
-        tickSystemPanels(virtualTime_);
-        stageSystemPanelCanvases();
-        layoutSystemPanels(*textMetrics_);
-        drawSystemPanels(renderer_.get(), *drawTraversal_);
-    }
-
-    renderer_->endFrame();
-    return renderer_->capturePixels();
+    auto pixels = capturePixels();
+    if (pixels.empty()) return false;
+    return broimage::encode_png_file(path, pixels.data(), deviceScale_.drawableW, deviceScale_.drawableH, 4);
 }
 
 bool Engine::screenshot(const std::string& path, int cx, int cy, int cw, int ch) {

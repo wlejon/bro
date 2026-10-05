@@ -25,7 +25,7 @@ document.body.appendChild(canvas);
 flush();
 
 const scene = canvas.getContext('scene');
-assert(scene !== null, 'scene context');
+if (!scene) { missingGpuContext('scene'); return; }
 
 // Listener at origin looking down -Z (broaudio default), bound to the camera.
 scene.setCamera({ position: [0, 0, 0], target: [0, 0, -1] });

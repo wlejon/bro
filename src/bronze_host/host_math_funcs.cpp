@@ -1,6 +1,7 @@
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/host_builder.h"
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_values.h"
+#include "bronze_host/host_bro_namespaces.h"
 
 #include <bromath/aabb.h>
 #include <bromath/angle.h>

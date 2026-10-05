@@ -22,7 +22,8 @@
 // A promise nothing handled is the other report, `unhandledrejection`, raised
 // from bronze's rejection hook (host_rejection_events.cpp).
 
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_runtime.h"
+#include "bronze_host/host_events.h"
 #include "util/log.h"
 
 namespace bro::bronze_host {

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "render/layer_source.h"
 #include "render/renderer.h"
 #include <cstdint>
 #include <functional>
@@ -109,33 +110,22 @@ public:
     // Set base path for resolving relative image URLs
     void setBasePath(const std::string& path) { basePath_ = path; }
 
-    // Layer break callback: invoked when a canvas or WebGL element is encountered
-    // during traversal. The compositor uses this to split HTML rendering
-    // into separate layers around canvas/WebGL elements.
-    // For Canvas2D: scene is non-null, elementId is 0.
-    // For WebGL and Scene3D: scene is null, elementId is the element's
-    // node id (the compositor finds the context or scene by it).
-    // (clipX..clipH) is the active overflow/scroll clip at the break point, in
-    // the same untransformed pixel space as (x..h). clipW < 0 ⇒ unclipped. The
-    // canvas/WebGL layer is composited as a separate quad that bypasses the
-    // Skia clip stack, so the compositor re-applies this clip.
-    using LayerBreakCallback = std::function<void(int kind,
-                                                   canvas::CanvasScene* scene,
-                                                   unsigned int elementId,
-                                                   float x, float y, float w, float h,
-                                                   float clipX, float clipY,
-                                                   float clipW, float clipH)>;
+    // A layer break: the traversal reached an element whose content is
+    // composited as its own layer (a 2D canvas, WebGL, a 3D scene, an iframe
+    // sub-document) rather than painted through the renderer. The callback
+    // splits the HTML around it so the layers interleave in document order.
+    // `quad` is the element's content box projected through its ancestor
+    // transforms (axis-aligned), in the pass's surface space, with the
+    // overflow/scroll clip active there. `element` is the element itself,
+    // for callers that draw the content inline instead (system panels,
+    // sub-documents).
+    struct LayerBreak {
+        dom::Element* element = nullptr;
+        render::LayerSource source;
+        render::LayerQuad quad;
+    };
+    using LayerBreakCallback = std::function<void(const LayerBreak&)>;
     void setLayerBreakCallback(LayerBreakCallback cb) { layerBreakCb_ = std::move(cb); }
-
-    // Emitted when the traversal reaches an <iframe> hosting a sub-document.
-    // `iframeDoc` is the engine's opaque IframeDoc* (Element::iframeDoc()); the
-    // engine records a break carrying its id and composites the sub-document's
-    // rendered texture at (x,y,w,h), re-applying (clipX..clipH) as a clip.
-    using IframeLayerBreakCallback = std::function<void(void* iframeDoc,
-                                                        float x, float y, float w, float h,
-                                                        float clipX, float clipY,
-                                                        float clipW, float clipH)>;
-    void setIframeLayerBreakCallback(IframeLayerBreakCallback cb) { iframeLayerBreakCb_ = std::move(cb); }
 
     // Viewport. `top` is the Y position in the output surface where the
     // content area begins — used for the html/body background paint rect.
@@ -271,7 +261,6 @@ private:
 
     std::unordered_map<std::string, CachedImage> imageCache_;
     LayerBreakCallback layerBreakCb_;
-    IframeLayerBreakCallback iframeLayerBreakCb_;
 
     // Running stack of axis-aligned overflow/scroll clip rects (each already
     // intersected with the one below it, so the top is the effective clip).

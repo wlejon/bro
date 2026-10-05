@@ -24,7 +24,11 @@
 // gl_textures.cpp keep asking one question.
 
 #include "bronze_host/host_builder.h"  // ObjectBuilder, argAt
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_class.h"
+#include "bronze_host/host_runtime.h"
+#include "bronze_host/host_image.h"
+#include "bronze_host/host_node.h"
+#include "bronze_host/host_element.h"
 #include "bronze_host/host_html_interfaces.h"
 #include "bronze_host/host_node_sweep.h"
 

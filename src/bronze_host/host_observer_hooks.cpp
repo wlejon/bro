@@ -40,7 +40,10 @@
 // against a runtime whose statics may already be gone — the same convention
 // the timer table and the host classes follow.
 
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_runtime.h"
+#include "bronze_host/host_values.h"
+#include "bronze_host/host_node.h"
+#include "bronze_host/host_js_modules.h"
 #include "bronze_host/host_builder.h"  // ObjectBuilder, argAt, boolAt
 #include "bronze_host/host_node_sweep.h"
 

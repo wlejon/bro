@@ -5,7 +5,9 @@
 // other roots, so a compiled read and a dynamic one find the same object.
 
 #include "bronze_host/host_builder.h"
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_runtime.h"
+#include "bronze_host/host_values.h"
+#include "bronze_host/host_web_globals.h"
 #include "engine/engine.h"
 #include "platform/clipboard.h"
 

@@ -19,7 +19,11 @@
 
 #include "bronze_host/host_template.h"
 #include "bronze_host/host_builder.h"
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_runtime.h"
+#include "bronze_host/host_events.h"
+#include "bronze_host/host_values.h"
+#include "bronze_host/host_node.h"
+#include "bronze_host/host_element.h"
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/event.h"

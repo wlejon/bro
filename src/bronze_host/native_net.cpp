@@ -1,6 +1,6 @@
 // native_net.cpp — C entry points behind bro.net over GameNetworkingSockets (net::NetService).
 
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_runtime.h"
 #include "bronze_host/host_natives.h"
 #include "bronze_host/host_rooted.h"
 #include "engine/engine.h"
@@ -17,6 +17,7 @@
 #include "abi/bronze_abi.h"
 
 #include "bronze_host/host_worker_msg.h"
+#include "bronze_host/host_numeric.h"
 #include "runtime/typed_array.h"
 
 #include <algorithm>

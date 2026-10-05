@@ -7,7 +7,9 @@
 // page is handed a real filesystem path (docs/paths-api.js, docs/file-api.js).
 
 #include "bronze_host/host_builder.h"
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_runtime.h"
+#include "bronze_host/host_values.h"
+#include "bronze_host/host_brokit.h"
 
 #include <chrono>
 #include <cctype>

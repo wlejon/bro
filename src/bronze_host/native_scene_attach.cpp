@@ -9,6 +9,8 @@
 #include "bronze_host/host_natives.h"
 #include "bronze_host/host_realm_scope.h"
 #include "bronze_host/host_rooted.h"
+#include "bronze_host/host_element.h"
+#include "bronze_host/host_runtime.h"
 #include "engine/engine.h"
 #include "dom/document.h"
 #include "dom/element.h"

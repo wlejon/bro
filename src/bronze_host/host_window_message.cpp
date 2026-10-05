@@ -29,7 +29,11 @@
 
 #include "bronze_host/host_window_open.h"
 #include "bronze_host/host_globals_internal.h"
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_runtime.h"
+#include "bronze_host/host_window_message.h"
+#include "bronze_host/host_events.h"
+#include "bronze_host/host_values.h"
+#include "bronze_host/host_document.h"
 #include "engine/engine.h"
 #include "engine/window_host.h"
 

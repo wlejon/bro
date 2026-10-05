@@ -7,7 +7,7 @@
 // COMPRESSED_TEXTURE_FORMATS, ...), and sequence<GLboolean> ones a real Array.
 
 #include "bronze_host/webgl_internal.h"
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_values.h"
 
 #include <cstring>
 #include <string>

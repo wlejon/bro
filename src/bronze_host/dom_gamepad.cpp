@@ -2,10 +2,12 @@
 
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/host_builder.h"
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_class.h"
+#include "bronze_host/host_runtime.h"
+#include "bronze_host/host_values.h"
+#include "bronze_host/host_web_globals.h"
 
 #include "bronze_host/host_builder.h"
-#include "bronze_host/host_internal.h"
 #include "engine/engine.h"
 #include "engine/gamepad.h"
 #include <string>

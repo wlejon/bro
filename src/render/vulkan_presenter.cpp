@@ -178,6 +178,11 @@ bool VulkanPresenter::present(const PresentFrame& frame) {
 // on from — also when recording fails part-way. `acquireStages` are the stages
 // a prior user of the target (the swapchain acquire, the last readback) is
 // ordered against.
+//
+// Images sampled in place were last written by their producer's earlier
+// submission; they are made readable here (moved to SHADER_READ_ONLY when
+// their producer left them in another layout) and handed back in the layout
+// they came in, whatever happens in between.
 bool VulkanPresenter::recordFrame(VkCommandBuffer cmd, const PresentFrame& frame, const Target& target,
                                   VkPipelineStageFlags acquireStages, VkImageLayout& targetLayout) {
     ImageBarrier toDst;
@@ -190,21 +195,40 @@ bool VulkanPresenter::recordFrame(VkCommandBuffer cmd, const PresentFrame& frame
     cmdImageBarrier(cmd, toDst);
     targetLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
 
-    // Images sampled in place were last written by their producer's earlier
-    // submission (a Skia flush leaves them SHADER_READ_ONLY); make those
-    // writes visible to the copies and draws below.
     for (const PresentImage& image : frame.images) {
         if (!image || image.view == VK_NULL_HANDLE) continue;
         ImageBarrier acquire;
         acquire.image = image.image;
-        acquire.oldLayout = acquire.newLayout = image.layout;
+        acquire.oldLayout = image.layout;
+        acquire.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         acquire.srcStages = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-        acquire.srcAccess = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+        acquire.srcAccess = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT |
+                            VK_ACCESS_SHADER_WRITE_BIT;
         acquire.dstStages = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT;
         acquire.dstAccess = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT;
         cmdImageBarrier(cmd, acquire);
     }
 
+    const bool recorded = recordLayers(cmd, frame, target, targetLayout);
+
+    for (const PresentImage& image : frame.images) {
+        if (!image || image.view == VK_NULL_HANDLE || image.layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+            continue;
+        ImageBarrier release;
+        release.image = image.image;
+        release.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        release.newLayout = image.layout;
+        release.srcStages = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT;
+        release.dstStages = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+        release.dstAccess = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+        cmdImageBarrier(cmd, release);
+    }
+    return recorded;
+}
+
+// The layers of recordFrame, onto the target in TRANSFER_DST.
+bool VulkanPresenter::recordLayers(VkCommandBuffer cmd, const PresentFrame& frame, const Target& target,
+                                   VkImageLayout& targetLayout) {
     // The base is the layer below, or else the first image copied straight
     // in when it lands 1:1 at the top-left uncut — a copy only equals
     // blending it when what it would blend over is transparent.
@@ -237,10 +261,12 @@ bool VulkanPresenter::recordFrame(VkCommandBuffer cmd, const PresentFrame& frame
     if (imageIsBase) {
         const uint32_t w = std::min(first->width, target.width);
         const uint32_t h = std::min(first->height, target.height);
-        const bool toSrc = first->layout != VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        // Where recordFrame left it: readable in place, or as it came.
+        const VkImageLayout layout =
+            first->view != VK_NULL_HANDLE ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : first->layout;
+        const bool toSrc = layout != VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
         if (toSrc)
-            cmdTransitionImage(cmd, first->image, colorRange(), first->layout,
-                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+            cmdTransitionImage(cmd, first->image, colorRange(), layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
         VkImageBlit blit{};
         blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         blit.srcOffsets[1] = {static_cast<int32_t>(w), static_cast<int32_t>(h), 1};
@@ -249,8 +275,7 @@ bool VulkanPresenter::recordFrame(VkCommandBuffer cmd, const PresentFrame& frame
         vkCmdBlitImage(cmd, first->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                        target.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_NEAREST);
         if (toSrc)
-            cmdTransitionImage(cmd, first->image, colorRange(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                               first->layout);
+            cmdTransitionImage(cmd, first->image, colorRange(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, layout);
     }
 
     // Blended layers, in order: each image (but a base one), then the CPU
@@ -303,6 +328,7 @@ bool VulkanPresenter::presentToSwapchain(const PresentFrame& frame) {
     if (cmd == VK_NULL_HANDLE) return false;
     VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
     const bool recorded = recordFrame(cmd, frame, target, kAcquireStages, layout);
+    const bool capture = recorded && capturePresents_ && swapchain_->readable() && recordReadback(cmd, target, layout);
 
     // Whatever the recording left the image in, it ends ready to present: a
     // failed recording is still submitted, to consume the acquire semaphore.
@@ -312,6 +338,7 @@ bool VulkanPresenter::presentToSwapchain(const PresentFrame& frame) {
         cmd, {{swapchain_->acquireSemaphore(), kAcquireStages, 0}},
         {{swapchain_->presentSemaphore(imageIndex), 0}});
     if (ticket == 0) return false;
+    if (capture) readbackTicket_ = ticket;
     const SwapchainResult presented = swapchain_->present(imageIndex, ticket);
     return recorded && presented != SwapchainResult::Error;
 }
@@ -344,8 +371,6 @@ bool VulkanPresenter::presentOffscreen(const PresentFrame& frame) {
                                          VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     readbackTicket_ = 0;
     if (!ensureImage(offscreen_, w, h, VK_FORMAT_R8G8B8A8_UNORM, kUsage)) return false;
-    const VkDeviceSize bytes = static_cast<VkDeviceSize>(w) * h * 4;
-    if (!ensureReadbackBuffer(bytes)) return false;
     width_ = w;
     height_ = h;
     const Target target{offscreen_.image, offscreen_.view, offscreen_.format, w, h};
@@ -354,13 +379,26 @@ bool VulkanPresenter::presentOffscreen(const PresentFrame& frame) {
     if (cmd == VK_NULL_HANDLE) return false;
     // The previous present's readback copy read this image (TRANSFER).
     VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
-    const bool recorded = recordFrame(cmd, frame, target, VK_PIPELINE_STAGE_TRANSFER_BIT, layout);
+    const bool recorded = recordFrame(cmd, frame, target, VK_PIPELINE_STAGE_TRANSFER_BIT, layout) &&
+                          recordReadback(cmd, target, layout);
+
+    const uint64_t ticket = frames.submit(cmd);
+    if (ticket == 0 || !recorded) return false;
+    readbackTicket_ = ticket;
+    return true;
+}
+
+// Copy the recorded frame into the readback buffer, in the same command
+// buffer; `layout` (the target's, as recording left it) becomes TRANSFER_SRC.
+bool VulkanPresenter::recordReadback(VkCommandBuffer cmd, const Target& target, VkImageLayout& layout) {
+    const VkDeviceSize bytes = static_cast<VkDeviceSize>(target.width) * target.height * 4;
+    if (!ensureReadbackBuffer(bytes)) return false;
     cmdTransitionImage(cmd, target.image, colorRange(), layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
 
     VkBufferImageCopy region{};
-    region.bufferOffset = 0;
     region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    region.imageExtent = {w, h, 1};
+    region.imageExtent = {target.width, target.height, 1};
     vkCmdCopyImageToBuffer(cmd, target.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readbackBuffer_, 1, &region);
 
     VkBufferMemoryBarrier toHost{};
@@ -373,21 +411,20 @@ bool VulkanPresenter::presentOffscreen(const PresentFrame& frame) {
     toHost.size = bytes;
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0,
                          0, nullptr, 1, &toHost, 0, nullptr);
-
-    const uint64_t ticket = frames.submit(cmd);
-    if (ticket == 0 || !recorded) return false;
-    readbackTicket_ = ticket;
+    readbackW_ = target.width;
+    readbackH_ = target.height;
+    readbackBgra_ = isBgraFormat(target.format);
     return true;
 }
 
 bool VulkanPresenter::readbackPixels(std::vector<uint8_t>& outPixels, uint32_t& outWidth, uint32_t& outHeight) {
-    if (swapchain_ || readbackTicket_ == 0 || !readbackMapped_) return false;
+    if (readbackTicket_ == 0 || !readbackMapped_) return false;
     if (!context_.queue().wait(readbackTicket_)) return false;
-    const size_t bytes = static_cast<size_t>(width_) * height_ * 4;
-    outPixels.resize(bytes);
-    std::memcpy(outPixels.data(), readbackMapped_, bytes);
-    outWidth = width_;
-    outHeight = height_;
+    const size_t rowBytes = static_cast<size_t>(readbackW_) * 4;
+    outPixels.resize(rowBytes * readbackH_);
+    copyPixels32(outPixels.data(), rowBytes, readbackMapped_, rowBytes, readbackW_, readbackH_, readbackBgra_);
+    outWidth = readbackW_;
+    outHeight = readbackH_;
     return true;
 }
 

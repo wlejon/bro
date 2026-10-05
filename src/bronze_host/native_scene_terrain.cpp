@@ -2,6 +2,7 @@
 
 #include "bronze_host/native_scene_internal.h"
 #include "bronze_host/host_natives.h"
+#include "bronze_host/host_values.h"
 #include "natives/terrain/native_terrain_decl.h"
 #include "scene/terrain_manager.h"
 #include <cmath>

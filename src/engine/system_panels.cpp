@@ -553,30 +553,27 @@ void Engine::drawSystemPanelDoc(render::Renderer* renderer,
     if (!renderer || !doc.document) return;
 
     auto* recorder = dynamic_cast<render::RecordingRenderer*>(renderer);
-    traversal.setLayerBreakCallback(
-        [renderer, recorder](int /*kind*/,
-                                       canvas::CanvasScene* scene,
-                                       unsigned int /*tex*/,
-                                       float x, float y, float w, float h,
-                                       float /*clipX*/, float /*clipY*/,
-                                       float /*clipW*/, float /*clipH*/) {
-            if (!scene || !renderer) return;
-            if (w <= 0 || h <= 0) return;
-            if (recorder) {
-                recorder->recordBlitCanvasInline(scene, x, y, w, h);
-                return;
-            }
-            scene->flushStaged();
-            auto* src = scene->surface();
-            if (!src) return;
-            auto img = src->makeImageSnapshot();
-            if (!img) return;
-            auto* c = renderer->getCanvas();
-            if (!c) return;
-            SkRect dst = SkRect::MakeXYWH(x, y, w, h);
-            c->drawImageRect(img, dst, SkSamplingOptions(SkFilterMode::kLinear));
-            scene->clearDirty();
-        });
+    // Panels are one surface each: their canvases draw inline.
+    traversal.setLayerBreakCallback([renderer, recorder](const layout::DrawTraversal::LayerBreak& lb) {
+        if (!renderer || !std::holds_alternative<render::CanvasLayerSource>(lb.source)) return;
+        auto* scene = static_cast<canvas::CanvasScene*>(lb.element->canvasScene());
+        const float x = lb.quad.x, y = lb.quad.y, w = lb.quad.w, h = lb.quad.h;
+        if (!scene || w <= 0 || h <= 0) return;
+        if (recorder) {
+            recorder->recordBlitCanvasInline(scene, x, y, w, h);
+            return;
+        }
+        scene->flushStaged();
+        auto* src = scene->surface();
+        if (!src) return;
+        auto img = src->makeImageSnapshot();
+        if (!img) return;
+        auto* c = renderer->getCanvas();
+        if (!c) return;
+        SkRect dst = SkRect::MakeXYWH(x, y, w, h);
+        c->drawImageRect(img, dst, SkSamplingOptions(SkFilterMode::kLinear));
+        scene->clearDirty();
+    });
 
     traversal.setBasePath(doc.document->basePath());
     traversal.draw(doc.document->documentElement(), 0, 0,

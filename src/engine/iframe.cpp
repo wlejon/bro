@@ -175,7 +175,7 @@ void Engine::createIframeDoc(dom::Element* el, const std::string& srcAttr) {
 
     // Register before finishSubDocLoad so element hooks resolve.
     iframeDocs_.push_back(std::move(doc));
-    el->setIframeDoc(dp);
+    el->setIframeDoc(dp, dp->id);
 
     runSubDocScripts(ref, source, this, /*isChild=*/true);
 
@@ -342,7 +342,7 @@ bool Engine::tickIframes(double nowMs) {
 // main renderer, headless).
 void Engine::teardownIframeDoc(IframeDoc* doc) {
     if (!doc) return;
-    if (doc->element) doc->element->setIframeDoc(nullptr);
+    if (doc->element) doc->element->setIframeDoc(nullptr, 0);
     teardownSubDoc(iframeSubDoc(*doc));
 }
 

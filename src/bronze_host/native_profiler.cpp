@@ -5,7 +5,7 @@
 // what a profile can see: the main thread as the realm is built, each Worker's
 // thread for its lifetime (ProfilerThreadScope).
 
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_class.h"
 #include "bronze_host/host_natives.h"
 #include "embed/embed_profiler.h"
 #include "natives/profiler/native_profiler_decl.h"

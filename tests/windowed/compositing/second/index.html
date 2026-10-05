@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html>
+<head><style>
+  html, body { margin: 0; width: 100%; height: 100%; background: #aa4422; }
+  canvas { position: absolute; left: 10px; top: 10px; width: 30px; height: 30px; }
+</style></head>
+<body>
+  <canvas id="c" width="30" height="30"></canvas>
+  <script>
+    const ctx = document.getElementById('c').getContext('2d');
+    ctx.fillStyle = '#00ff00';
+    ctx.fillRect(0, 0, 30, 30);
+  </script>
+</body>
+</html>

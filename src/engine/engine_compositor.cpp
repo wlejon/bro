@@ -73,26 +73,11 @@ void Engine::recordAppLayers(render::CommandBuffer& outBuffer,
     outBuffer.clear();
     recordingRenderer_->setBuffer(&outBuffer);
 
-    // Layer-break callback emits Cmd_LayerBreak. The replayer's handler does
-    // the actual layer surface management.
-    drawTraversal_->setLayerBreakCallback(
-        [this](int kind, canvas::CanvasScene* scene, unsigned int elementId,
-               float x, float y, float w, float h,
-               float clipX, float clipY, float clipW, float clipH) {
-            recordingRenderer_->recordLayerBreak(
-                kind, scene ? scene->sceneId() : 0, elementId, x, y, w, h,
-                clipX, clipY, clipW, clipH);
-        });
-    // <iframe> sub-documents: record a break carrying the IframeDoc id. Its
-    // texture is produced by replayIframeLayers and resolved at composite time.
-    drawTraversal_->setIframeLayerBreakCallback(
-        [this](void* idoc, float x, float y, float w, float h,
-               float clipX, float clipY, float clipW, float clipH) {
-            auto* d = static_cast<IframeDoc*>(idoc);
-            recordingRenderer_->recordLayerBreak(
-                render::Cmd_LayerBreak::IframeDoc, d ? d->id : 0, 0, x, y, w, h,
-                clipX, clipY, clipW, clipH);
-        });
+    // A layer break records Cmd_LayerBreak; the replayer's handler splits
+    // the HTML surfaces around it.
+    drawTraversal_->setLayerBreakCallback([this](const layout::DrawTraversal::LayerBreak& lb) {
+        recordingRenderer_->recordLayerBreak(lb.source, lb.quad);
+    });
 
     // Everything below records in *content space*: the app layer surfaces are
     // content-sized (contentW × contentH) and origin-based; the engine-reserved
@@ -149,7 +134,6 @@ void Engine::recordAppLayers(render::CommandBuffer& outBuffer,
     }
 
     drawTraversal_->setLayerBreakCallback(nullptr);
-    drawTraversal_->setIframeLayerBreakCallback(nullptr);
     recordingRenderer_->setBuffer(nullptr);
     // Restore default paint mode so subsequent recorders (system panels, the
     // next full pass) aren't affected.
@@ -161,10 +145,11 @@ namespace {
 
 // The UILayer for an HTML layer surface: its GPU image, or the CPU surface.
 UILayer htmlLayerOf(const render::LayerSurface& s) {
+    HtmlLayer html;
+    if (s.isGpu()) html.image = s.image;
+    else html.surface = s.surface;
     UILayer layer;
-    layer.type = UILayer::HTML;
-    if (s.isGpu()) layer.image = s.image;
-    else layer.surface = s.surface;
+    layer.content = std::move(html);
     return layer;
 }
 
@@ -195,37 +180,17 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
     auto origSurface = renderer->switchSurface(pool[0].surface);
 
     render::CommandReplayer replayer(renderer);
-    replayer.setLayerBreakHandler(
-        [&](int kind, uint64_t sceneId, unsigned int elementId,
-            float x, float y, float w, float h,
-            float clipX, float clipY, float clipW, float clipH) {
-            int prevIdx = htmlLayerIdx;
-            htmlLayerIdx++;
-            while (htmlLayerIdx >= static_cast<int>(pool.size())) {
-                pool.push_back(renderer->createLayerSurface(surfW, surfH));
-            }
-            renderer->switchSurface(pool[htmlLayerIdx].surface);
+    replayer.setLayerBreakHandler([&](const render::LayerSource& source, const render::LayerQuad& quad) {
+        int prevIdx = htmlLayerIdx;
+        htmlLayerIdx++;
+        while (htmlLayerIdx >= static_cast<int>(pool.size())) {
+            pool.push_back(renderer->createLayerSurface(surfW, surfH));
+        }
+        renderer->switchSurface(pool[htmlLayerIdx].surface);
 
-            outLayers.push_back(htmlLayerOf(pool[prevIdx]));
-
-            UILayer quadLayer;
-            if (kind == render::Cmd_LayerBreak::IframeDoc) {
-                quadLayer.type = UILayer::Iframe;
-            } else if (kind == render::Cmd_LayerBreak::Scene3D) {
-                quadLayer.type = UILayer::Scene3D;
-            } else if (kind == render::Cmd_LayerBreak::WebGL) {
-                quadLayer.type = UILayer::WebGL;
-            } else {
-                quadLayer.type = UILayer::Canvas;
-            }
-            quadLayer.canvasSceneId = sceneId;    // CanvasScene id or IframeDoc id
-            quadLayer.elementId = elementId;      // the WebGL/Scene3D element (0 otherwise)
-            quadLayer.cx = x; quadLayer.cy = y;
-            quadLayer.cw = w; quadLayer.ch = h;
-            quadLayer.clipX = clipX; quadLayer.clipY = clipY;
-            quadLayer.clipW = clipW; quadLayer.clipH = clipH;
-            outLayers.push_back(std::move(quadLayer));
-        });
+        outLayers.push_back(htmlLayerOf(pool[prevIdx]));
+        outLayers.push_back(UILayer::of(source, quad));
+    });
 
     replayer.replay(buffer);
 
@@ -247,9 +212,7 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
         // A canvas/WebGL element inside a promoted subtree would emit a break;
         // capability-1 promoted layers are plain CSS subtrees, so swallow any
         // break (no-op) rather than risk a null-handler call. Refined later.
-        promotedReplayer.setLayerBreakHandler(
-            [](int, uint64_t, unsigned int, float, float, float, float,
-               float, float, float, float) {});
+        promotedReplayer.setLayerBreakHandler([](const render::LayerSource&, const render::LayerQuad&) {});
         promotedReplayer.replay(*promotedBuffer);
         renderer->switchSurface(origSurface);
 
@@ -272,12 +235,9 @@ void Engine::recordSystemPanelLayers(render::CommandBuffer& outBuffer,
     for (auto& sdoc : systemDocs_) {
         if (!isSystemDocVisible(sdoc) || !sdoc.document) continue;
 
-        // Between panels, emit an HtmlSurface boundary so the replayer
-        // captures the current panel into a UILayer and starts a new surface.
-        if (!first) {
-            recordingRenderer_->recordLayerBreak(
-                render::Cmd_LayerBreak::HtmlSurface, 0, 0, 0, 0, 0, 0);
-        }
+        // Between panels, a surface break: the replayer captures the current
+        // panel into a UILayer and starts a new surface.
+        if (!first) recordingRenderer_->recordSurfaceBreak();
         first = false;
 
         drawSystemPanelDoc(recordingRenderer_.get(), *drawTraversal_, sdoc, vpW, vpH);
@@ -314,18 +274,15 @@ void Engine::replaySystemPanelLayers(render::SkiaRenderer* renderer,
     auto origSurface = renderer->switchSurface(pool[panelIdx].surface);
 
     render::CommandReplayer replayer(renderer);
-    replayer.setLayerBreakHandler(
-        [&](int kind, uint64_t /*sceneId*/, unsigned int /*tex*/,
-            float, float, float, float, float, float, float, float) {
-            if (kind != render::Cmd_LayerBreak::HtmlSurface) return;
-            // Capture current panel into a UILayer, advance to next surface.
-            outLayers.push_back(htmlLayerOf(pool[panelIdx]));
+    replayer.setSurfaceBreakHandler([&]() {
+        // Capture current panel into a UILayer, advance to next surface.
+        outLayers.push_back(htmlLayerOf(pool[panelIdx]));
 
-            panelIdx++;
-            ensurePoolAt(panelIdx);
-            renderer->fitLayerSurface(pool[panelIdx], vpW, vpH);
-            renderer->switchSurface(pool[panelIdx].surface);
-        });
+        panelIdx++;
+        ensurePoolAt(panelIdx);
+        renderer->fitLayerSurface(pool[panelIdx], vpW, vpH);
+        renderer->switchSurface(pool[panelIdx].surface);
+    });
     replayer.setBlitCanvasInlineHandler(
         [&](void* scenePtr, float x, float y, float w, float h) {
             auto* scene = static_cast<canvas::CanvasScene*>(scenePtr);

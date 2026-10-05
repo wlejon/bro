@@ -1,7 +1,8 @@
 #include "bronze_host/host_headless.h"
 #include "bronze_host/host_headless_internal.h"
 #include "bronze_host/bronze_host.h"
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_brokit.h"
+#include "bronze_host/host_js_modules.h"
 #include "bronze_host/host_storage.h"
 #include "bronze_host/host_natives.h"  // pollNet
 #include "bronze_host/host_builder.h"

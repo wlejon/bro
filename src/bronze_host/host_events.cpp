@@ -15,7 +15,9 @@
 // Array, because the embed API builds plain objects and has no array
 // constructor. Nothing JS-visible reads it, so the shape is private.
 
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_runtime.h"
+#include "bronze_host/host_events.h"
+#include "bronze_host/host_numeric.h"
 
 #include <string>
 #include <utility>

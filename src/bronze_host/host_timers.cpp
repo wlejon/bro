@@ -18,7 +18,8 @@
 // a host that dropped a timer the app never cleared would be a silent
 // behaviour change, not a leak fix. The warning below is the diagnostic.
 
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_runtime.h"
+#include "bronze_host/host_document.h"
 #include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_realm_scope.h"
 #include "bronze_host/host_builder.h"  // argAt / numAt / i32At

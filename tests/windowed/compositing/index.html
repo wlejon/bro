@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head><style>
+  html, body { margin: 0; width: 100%; height: 100%; background: #203040; overflow: hidden; }
+  .abs { position: absolute; }
+</style></head>
+<body>
+  <!-- Each layer kind the windowed compositor handles, at a fixed place
+       main.js samples on the presented swapchain image. -->
+  <div class="abs" style="left:0; top:0; width:40px; height:40px; background:#00ff00"></div>
+  <canvas id="c2d" class="abs" style="left:60px; top:10px; width:40px; height:40px" width="40" height="40"></canvas>
+  <!-- WebGL cut to its overflow:hidden parent, then half-covered by HTML. -->
+  <div class="abs" style="left:120px; top:10px; width:40px; height:40px; overflow:hidden">
+    <canvas id="gl" style="width:80px; height:80px" width="80" height="80"></canvas>
+  </div>
+  <div class="abs" style="left:120px; top:10px; width:20px; height:20px; background:rgba(255,255,255,0.5)"></div>
+  <canvas id="scene" class="abs" style="left:200px; top:10px; width:60px; height:60px"></canvas>
+  <iframe class="abs" src="child" style="left:10px; top:120px; width:100px; height:60px; border:0"></iframe>
+  <!-- A 2D canvas under a scaling ancestor: its quad follows the transform. -->
+  <div class="abs" style="left:200px; top:120px; transform:scale(2); transform-origin:0 0">
+    <canvas id="scaled" style="display:block; width:20px; height:20px" width="20" height="20"></canvas>
+  </div>
+  <script src="main.js"></script>
+</body>
+</html>

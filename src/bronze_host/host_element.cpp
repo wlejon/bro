@@ -5,7 +5,14 @@
 
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/host_builder.h"
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_class.h"
+#include "bronze_host/host_runtime.h"
+#include "bronze_host/host_events.h"
+#include "bronze_host/host_values.h"
+#include "bronze_host/host_image.h"
+#include "bronze_host/host_node.h"
+#include "bronze_host/host_element.h"
+#include "bronze_host/host_document.h"
 #include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_html_interfaces.h"
 #include "bronze_host/host_node_sweep.h"
@@ -76,7 +83,7 @@ Value makeHostRectValue(double x, double y, double w, double h) {
     return r.get();
 }
 
-// See host_internal.h: `ev::isObject(null)` is false, so this is the only
+// See host_values.h: `ev::isObject(null)` is false, so this is the only
 // thing standing between a nullable DOMString setter and the word "null".
 std::string hostNullableString(Value v) {
     if (ev::isUndefined(v) || ev::isNull(v)) return std::string();
@@ -192,7 +199,7 @@ Value hostArrayOf(size_t count, const std::function<Value(size_t)>& make) {
     // storage.
     //
     // One call per element rather than one call with `count` arguments: a
-    // pre-built argument vector would be exactly the bug host_internal.h's GC
+    // pre-built argument vector would be exactly the bug host_runtime.h's GC
     // rule warns about, since every Value in it past the first allocation is
     // stale. `make(i)` runs with the array rooted and its result is pushed
     // immediately.

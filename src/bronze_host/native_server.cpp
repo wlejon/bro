@@ -7,7 +7,7 @@
 // (host_worker.cpp) — the launcher hosts a game's server.js in a Worker and
 // that script calls bro.server.stop() to end itself.
 
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_runtime.h"
 #include "bronze_host/host_natives.h"
 #include "engine/engine.h"
 #include "natives/server/native_server_decl.h"

@@ -26,7 +26,15 @@
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/webgl_internal.h"
 #include "bronze_host/host_canvas2d.h"
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_runtime.h"
+#include "bronze_host/host_image.h"
+#include "bronze_host/host_element.h"
+#include "bronze_host/host_document.h"
+#include "bronze_host/host_brokit.h"
+#include "bronze_host/host_js_modules.h"
+#include "bronze_host/host_web_globals.h"
+#include "bronze_host/host_bro_namespaces.h"
+#include "bronze_host/host_touch.h"
 #include "bronze_host/eval.h"
 
 #if BRO_WITH_AUDIO

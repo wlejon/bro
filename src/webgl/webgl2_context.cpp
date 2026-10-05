@@ -20,12 +20,17 @@ void WebGL2RenderingContext::resize(int width, int height) {
     if (backend_) backend_->resize(width, height);
 }
 
-VkImage WebGL2RenderingContext::colorImage() const {
-    return backend_ ? backend_->canvas().colorImage() : VK_NULL_HANDLE;
-}
-
-VkImageLayout WebGL2RenderingContext::colorLayout() const {
-    return backend_ ? backend_->canvas().colorLayout() : VK_IMAGE_LAYOUT_UNDEFINED;
+render::LayerImage WebGL2RenderingContext::drawingBuffer() const {
+    render::LayerImage out;
+    if (!backend_) return out;
+    const vk::WebGLVkCanvas& canvas = backend_->canvas();
+    out.image = canvas.colorImage();
+    out.view = canvas.colorView();
+    out.layout = canvas.colorLayout();
+    out.format = canvas.colorFormat();
+    out.width = canvas.width();
+    out.height = canvas.height();
+    return out;
 }
 
 void WebGL2RenderingContext::flush() {

@@ -260,10 +260,10 @@ bool Engine::updateDeviceScale() {
         deviceScale_.render = window_->getPixelDensity();
         deviceScale_.ratio = window_->getDevicePixelRatio();
     } else {
-        // Headless follows the configured factor. The CPU fallback (no GL or Vulkan)
-        // rasterizes 1:1 but still reports the configured ratio.
+        // Headless follows the configured factor, on the GPU and on the CPU
+        // (--no-gpu) alike: both draw through the same layer pipeline.
         deviceScale_.ratio = deviceScale_.configured;
-        deviceScale_.render = (vulkanPresenter_ || vulkanContext_) ? deviceScale_.configured : 1.0f;
+        deviceScale_.render = deviceScale_.configured;
     }
     int pw = 0, ph = 0;
     if (displayMode_ == DisplayMode::Windowed && window_)

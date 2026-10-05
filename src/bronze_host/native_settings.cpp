@@ -22,7 +22,7 @@
 // observer — the engine's own hook, which fires after it has applied the
 // change (installSettingsObserver, below, says why it is posted).
 
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_runtime.h"
 #include "bronze_host/host_natives.h"
 #include "engine/engine.h"
 #include "engine/settings.h"
@@ -310,7 +310,7 @@ void onChange(uint64_t fnBits) {
 // is inside the compiled program's own call to setNumber/setString/setBool.
 // The listener is not run there: it is posted to the host task queue and
 // delivered at the top of the next frame seam, the same place an image's
-// load event is delivered (host_internal.h, postHostTask), so compiled code
+// load event is delivered (host_runtime.h, postHostTask), so compiled code
 // re-enters only at a point the host owns.
 void installSettingsObserver(engine::Engine& engine) {
     engine.setSettingsObserver([](const std::string& category, const std::string& key) {

@@ -1,6 +1,8 @@
 #pragma once
 
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_class.h"
+
+namespace bro::engine { class Engine; }
 
 namespace bro::bronze_host {
 

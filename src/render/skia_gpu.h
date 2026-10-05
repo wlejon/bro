@@ -24,6 +24,7 @@
 // in-flight work, a compositor's layer list — and is destroyed once the queue
 // has finished every submission made before the last reference went.
 
+#include "render/skia_persistent_cache.h"
 #include "render/vulkan_context.h"
 
 #include <include/core/SkRefCnt.h>
@@ -146,6 +147,7 @@ private:
     void retire(VkImage image, VkImageView view, uint64_t allocId);
 
     VulkanContext& vulkan_;
+    std::unique_ptr<SkiaPersistentCache> persistentCache_;  // outlives context_
     sk_sp<GrDirectContext> context_;
 
     std::recursive_mutex mutex_;

@@ -2,7 +2,10 @@
 
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/host_builder.h"
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_values.h"
+#include "bronze_host/host_node.h"
+#include "bronze_host/host_element.h"
+#include "bronze_host/host_brokit.h"
 #include "bronze_host/host_anchor_download.h"
 
 #include "dom/document.h"

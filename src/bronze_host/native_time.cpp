@@ -2,7 +2,7 @@
 // the engine's one scaled clock, its scale and its pause flag. The public
 // accessors are js/bro_core.js's; each reads or writes exactly one of these.
 
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_runtime.h"
 #include "bronze_host/host_natives.h"
 #include "engine/engine.h"
 #include "natives/time/native_time_decl.h"

@@ -1,6 +1,7 @@
 // native_scene_lights.cpp — Skinned mesh animation, instanced mesh, HTML, particle, and FX methods on SceneNode.
 
 #include "bronze_host/native_scene_internal.h"
+#include "bronze_host/host_values.h"
 #include "natives/scene/native_scene_decl.h"
 #include "scene/animation_player.h"
 #include "scene/instanced_mesh_node.h"

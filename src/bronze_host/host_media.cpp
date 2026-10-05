@@ -1,5 +1,7 @@
 #include "bronze_host/host_media.h"
 #include "bronze_host/host_builder.h"
+#include "bronze_host/host_values.h"
+#include "bronze_host/host_bro_namespaces.h"
 #include "util/asset_path.h"
 
 #if BRO_WITH_VIDEO

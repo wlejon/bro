@@ -6,7 +6,7 @@
 // PhysicsNode.syncToPhysics. Hand-registered beside the generated scene
 // natives (registerSceneExtraNatives, chained from registerSceneNatives), the
 // same way registerPhysicsNatives adds setMotionType; js/scene_extras.js is
-// the wrapper over them, entered right after js/scene.js.
+// the wrapper over them, entered after js/scene.js and js/scene_graph.js.
 //
 // Every accessor answers for the node types it applies to and is a no-op /
 // undefined elsewhere, which is what the old per-type `.prop` bindings did
@@ -15,6 +15,7 @@
 
 #include "bronze_host/native_scene_internal.h"
 #include "bronze_host/host_natives.h"
+#include "bronze_host/host_values.h"
 
 #include <bromesh/mesh_data.h>
 #include <bromesh/manipulation/normals.h>

@@ -67,7 +67,7 @@
 // mid-collection and may only count, so the delete happens at the next sweep,
 // on a plain host stack.
 
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_node.h"
 
 #include <cstddef>
 #include <cstdint>

@@ -4,7 +4,7 @@
 // Registered in deterministic array order.
 
 #include "bronze_host/webgl_internal.h"
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_class.h"
 
 namespace bro::bronze_host {
 

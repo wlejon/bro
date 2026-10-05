@@ -178,6 +178,11 @@ public:
     uint64_t focusedWindowHostId() const { return focusedHostId_; }
     const std::string& resolvedCursor(uint64_t hostId) const;
     std::vector<uint8_t> captureWindowHost(uint64_t id, int& outW, int& outH);
+    /// What was last put on screen (RGBA8, device px): the main window's
+    /// frame for `hostId` 0, else that secondary window's. Windowed with
+    /// BRO_CAPTURE_PRESENTS=1 only (every present is then also read back, for
+    /// a test harness); empty otherwise.
+    std::vector<uint8_t> presentedPixels(uint64_t hostId, int& outW, int& outH);
 
     const std::vector<GamepadState>& gamepads() const { return gamepads_; }
 
@@ -347,10 +352,6 @@ public:
     std::vector<uint8_t> capturePixels();
     double gpuFrameMs();
 
-private:
-    std::vector<uint8_t> renderUnifiedToPixels();
-
-public:
     dom::Element* querySelector(const std::string& selector) const;
     dom::Element* overlayQuerySelector(const std::string& panelName,
                                        const std::string& selector) const;
@@ -561,6 +562,9 @@ private:
     void presentCurrentFrame();
     std::vector<uint8_t> readCompositedFrame();
     render::PresentFrame describeCompositedFrame();
+    // BRO_CAPTURE_PRESENTS=1: windowed presenters also read back each frame
+    // they present (presentedPixels).
+    static bool capturePresentsRequested();
     FramePresenter::Snapshot buildRasterSnapshot() const;
     void renderAndPresentFrame(double frameStart, double now, double wallFrameDtMs,
                                bool layoutSignaled, bool baseWasDirty);

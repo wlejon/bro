@@ -214,14 +214,14 @@ function runObstacleTests() {
     // Agent repath — engine auto-pump: obstacle dropped mid-route makes the
     // walking agent detour, with NO manual mesh.update() calls
     // =========================================================================
-    {
+    detourSection: {
         const canvas = document.createElement('canvas');
         canvas.setAttribute('width', '128');
         canvas.setAttribute('height', '128');
         document.body.appendChild(canvas);
         flush();
         const scene = canvas.getContext('scene');
-        assert(scene !== null, 'scene context');
+        if (!scene) { missingGpuContext('scene'); break detourSection; }
 
         const mesh = bakeFloor(-12, -6, 12, 6);
         const world = G.createWorld();

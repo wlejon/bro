@@ -37,7 +37,7 @@
 // 3-argument handle. That is the honest degrade for a value built before its
 // install ran — no methods, but no fatal either.
 
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_class.h"
 #include "bronze_host/host_builder.h"  // ObjectBuilder
 #include "util/log.h"
 

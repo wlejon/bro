@@ -10,7 +10,11 @@
 
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/host_builder.h"
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_runtime.h"
+#include "bronze_host/host_window_message.h"
+#include "bronze_host/host_events.h"
+#include "bronze_host/host_element.h"
+#include "bronze_host/host_web_globals.h"
 #include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_matchmedia.h"
 #include "bronze_host/host_selection.h"

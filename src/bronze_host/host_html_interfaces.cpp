@@ -6,6 +6,8 @@
 #include "bronze_host/host_element_video.h"
 #include "bronze_host/host_builder.h"
 #include "bronze_host/host_globals_internal.h"
+#include "bronze_host/host_node.h"
+#include "bronze_host/host_runtime.h"
 #include "engine/engine.h"
 #include "dom/document.h"
 

@@ -3,7 +3,7 @@
 // Shared between the Animation bindings (host_web_animations.cpp) and the
 // timeline / KeyframeEffect bindings (host_web_animations_effect.cpp).
 
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_class.h"
 
 #include <cstdint>
 #include <string>

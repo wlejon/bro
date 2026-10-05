@@ -30,6 +30,11 @@
 # and the feature flags decide which exist). Each runs under the same
 # validation settings. BRO_TEST_NATIVE=0 leaves them out.
 #
+# And the windowed self-tests (the `windowed` group): each tests/windowed/<app>/
+# is run by the windowed `bro` in a real window on SDL's offscreen video driver,
+# checking what its swapchain presented (see run_one_test). They need `bro`
+# beside bro-headless; BRO_TEST_WINDOWED=0 leaves them out.
+#
 # Runs on the GPU path (headless's default) so the
 # tests exercise the same renderer, WebGL, and layer compositing that ship —
 # CPU-only raster is a different code path and would leave those untested. A
@@ -362,6 +367,11 @@ mapfile -t TEST_FILES < <(
         for N in "${NATIVE_TESTS[@]}"; do
             [[ -f "$BRO_DIR/$N$EXE_SUFFIX" ]] && echo "native:$N"
         done
+    fi
+    if [[ "${BRO_TEST_WINDOWED:-1}" != "0" && -f "$BRO_DIR/bro$EXE_SUFFIX" ]]; then
+        for D in "$SCRIPT_DIR"/windowed/*/; do
+            [[ -f "$D/index.html" ]] && echo "windowed:$(basename "$D")"
+        done
     fi)
 
 if [[ ${#TEST_FILES[@]} -eq 0 ]]; then
@@ -430,6 +440,53 @@ run_one_test() {
             *)
                 echo "  FAIL  $REL  (exit $STATUS)"
                 echo "$OUTPUT" | tail -40 | sed 's/^/        /'
+                return 1 ;;
+        esac
+    fi
+
+    # A windowed self-test (`windowed:<app>`, tests/windowed/<app>/): the
+    # windowed `bro` itself runs the app in a real window — SDL's offscreen
+    # video driver, whose Vulkan surface (VK_EXT_headless_surface) needs no
+    # display — so the frame loop, raster thread, swapchains and presenters a
+    # headless run never touches are what it exercises. BRO_CAPTURE_PRESENTS=1
+    # reads every presented frame back for its presentedFrame() checks. It
+    # reports like a JS test: assert() fails it (exit 1), skipTest() 77.
+    if [[ "$1" == windowed:* ]]; then
+        local NAME="${1#windowed:}" BIN="$BRO_DIR/bro$EXE_SUFFIX"
+        if [[ "${BRO_TEST_ALLOW_RASTER:-0}" == "1" ]]; then
+            echo "  SKIP  $REL  (no GPU: BRO_TEST_ALLOW_RASTER=1)"
+            return 3
+        fi
+        local APP RUN_CWD
+        APP="$(to_win_path "$SCRIPT_DIR/windowed/$NAME")"
+        # bro writes its log to bro.log in the cwd: a scratch one, read back.
+        RUN_CWD=$(mktemp -d "${TMPDIR:-/tmp}/bro_windowed.XXXXXX")
+        if [[ -n "$TIMEOUT_BIN" ]]; then
+            (cd "$RUN_CWD" && SDL_VIDEODRIVER=offscreen SDL_AUDIODRIVER=dummy BRO_CAPTURE_PRESENTS=1 \
+                "$TIMEOUT_BIN" -k 10 "$TEST_TIMEOUT" "$BIN" --no-splash "$APP" >/dev/null 2>&1)
+        else
+            (cd "$RUN_CWD" && SDL_VIDEODRIVER=offscreen SDL_AUDIODRIVER=dummy BRO_CAPTURE_PRESENTS=1 \
+                "$BIN" --no-splash "$APP" >/dev/null 2>&1)
+        fi
+        STATUS=$?
+        OUTPUT=$(cat "$RUN_CWD"/bro*.log 2>/dev/null)
+        rm -rf "$RUN_CWD"
+        if [[ "$OUTPUT" =~ Vulkan\ validation:\ ([0-9]+)\ error ]]; then
+            echo "  FAIL  $REL  (${BASH_REMATCH[1]} Vulkan validation error(s))"
+            echo "$OUTPUT" | grep -A2 "\[Vulkan .* ERROR\]" | head -24 | sed 's/^/        /'
+            return 1
+        fi
+        case $STATUS in
+            0)  echo "  PASS  $REL"; return 0 ;;
+            77) echo "  SKIP  $REL  ($(echo "$OUTPUT" | sed -n 's/.*SKIP: //p' | head -1))"; return 3 ;;
+            124|137)
+                echo "  FAIL  $REL  (TIMEOUT after ${TEST_TIMEOUT}s)"
+                echo "$OUTPUT" | tail -20 | sed 's/^/        /'
+                return 2 ;;
+            *)
+                echo "  FAIL  $REL  (exit $STATUS)"
+                echo "$OUTPUT" | grep -E "ASSERTION FAILED|ERROR|Fatal" | head -20 | sed 's/^/        /'
+                echo "$OUTPUT" | tail -15 | sed 's/^/        /'
                 return 1 ;;
         esac
     fi
@@ -516,6 +573,8 @@ for TEST_FILE in "${TEST_FILES[@]}"; do
         REL="bronze_host/${TEST_FILE#bronze:}"
     elif [[ "$TEST_FILE" == native:* ]]; then
         REL="native/${TEST_FILE#native:}"
+    elif [[ "$TEST_FILE" == windowed:* ]]; then
+        REL="windowed/${TEST_FILE#windowed:}"
     else
         REL="${TEST_FILE#$SCRIPT_DIR/}"
     fi

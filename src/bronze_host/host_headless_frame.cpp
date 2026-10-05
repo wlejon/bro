@@ -1,7 +1,7 @@
 #include "bronze_host/host_headless_internal.h"
-#include "bronze_host/host_internal.h"
 #include "bronze_host/host_anchor_download.h"
 #include "bronze_host/host_builder.h"
+#include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_telemetry.h"
 #include "bronze_host/host_node_sweep.h"
 #include "engine/engine.h"
@@ -345,6 +345,26 @@ void installHeadlessFrame(engine::Engine& engine) {
             obj.set(ev::setProperty(obj.get(), "a", ev::fromDouble(pixels[offset + 3])));
             return obj.get();
         }, 2, "getFramePixel"));
+
+    // presentedFrame([windowHandle]) -> ImageData | null
+    //
+    // What a windowed bro last put on screen: the main window's swapchain
+    // image, or a bro.window.open() window's. Device px, RGBA8. Only under
+    // BRO_CAPTURE_PRESENTS=1, where every present is also read back — the
+    // windowed self-tests (tests/windowed) check the real presentation path
+    // with it; null anywhere else (headless has no swapchain).
+    ev::registerGlobal("presentedFrame", ev::makeFunction(
+        [&engine](Value, std::span<const Value> a) -> Value {
+            uint64_t hostId = 0;
+            if (!a.empty() && ev::isObject(a[0])) {
+                const Value id = ev::getProperty(a[0], "id");
+                if (ev::isNumber(id)) hostId = static_cast<uint64_t>(ev::toDouble(id));
+            }
+            int w = 0, h = 0;
+            auto pixels = engine.presentedPixels(hostId, w, h);
+            if (pixels.empty()) return ev::null();
+            return makeImageDataValue(w, h, pixels.data());
+        }, 1, "presentedFrame"));
 
     // screenshot(path [, selector])
     ev::registerGlobal("screenshot", ev::makeFunction(

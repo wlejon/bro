@@ -5,6 +5,8 @@
 #include "util/log.h"
 
 #include "bronze_host/app_module.h"
+#include "bronze_host/host_headless.h"
+#include "render/vulkan_debug.h"
 #include <optional>
 
 #include "broaudio/log.h"
@@ -229,6 +231,7 @@ int main(int argc, char* argv[]) {
     // JS and spawned children can locate themselves without guessing from cwd.
     bro::engine::publishLaunchEnv(config);
 
+    int exitCode = 0;
     try {
         bro::engine::Engine engine(config);
         // The compiled top level runs here: after the Engine (the host globals
@@ -238,10 +241,20 @@ int main(int argc, char* argv[]) {
             bro::bronze_host::runAppModule(engine, *appModule);
         }
         engine.run();
+        // An app that tests itself in a real window (tests/windowed) reports
+        // the way a headless test does: a failed assert() exits 1, a
+        // skipTest() 77.
+        if (engine.hasTestFailure() || bro::bronze_host::hasTestFailure()) exitCode = 1;
+        else if (bro::bronze_host::wasTestSkipped()) exitCode = 77;
     } catch (const std::exception& e) {
         LOG_ERROR("Fatal: %s", e.what());
         return 1;
     }
-
-    return 0;
+    // A Vulkan validation error (BRO_VK_VALIDATION=1) fails the run, the
+    // device teardown included.
+    if (const uint32_t errors = bro::render::vulkanValidationErrorCount()) {
+        fprintf(stderr, "Vulkan validation: %u error(s)\n", errors);
+        exitCode = 1;
+    }
+    return exitCode;
 }

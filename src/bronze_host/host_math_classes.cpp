@@ -1,6 +1,8 @@
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/host_builder.h"
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_class.h"
+#include "bronze_host/host_values.h"
+#include "bronze_host/host_bro_namespaces.h"
 
 #include <bromath/spatial_hash.h>
 #include <bromath/rng.h>

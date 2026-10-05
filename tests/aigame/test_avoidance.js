@@ -223,14 +223,14 @@ function dist(a, b) { return Math.hypot(a.x - b.x, a.z - b.z); }
 // =========================================================================
 // Scene-attached agents: think() + moveTo flow around each other
 // =========================================================================
-{
+agentsSection: {
     const canvas = document.createElement('canvas');
     canvas.setAttribute('width', '128');
     canvas.setAttribute('height', '128');
     document.body.appendChild(canvas);
     flush();
     const scene = canvas.getContext('scene');
-    assert(scene !== null, 'scene context');
+    if (!scene) { missingGpuContext('scene'); break agentsSection; }
 
     const world = G.createWorld();
     world.setAvoidance(true);

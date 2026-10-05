@@ -17,7 +17,8 @@
 // depending on which it got.
 
 #include "bronze_host/webgl_internal.h"
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_image.h"
+#include "bronze_host/host_element.h"
 #include "bronze_host/host_globals_internal.h"
 
 #include "canvas/canvas_scene.h"

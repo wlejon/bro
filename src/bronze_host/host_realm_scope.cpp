@@ -16,9 +16,10 @@
 
 #include "bronze_host/host_realm_scope.h"
 #include "bronze_host/bronze_host.h"
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_runtime.h"
 #include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_iframe.h"
+#include "bronze_host/host_numeric.h"
 #include "engine/engine.h"
 
 #include <string>

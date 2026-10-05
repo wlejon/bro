@@ -3,7 +3,9 @@
 #include "bronze_host/host_selection.h"
 #include "bronze_host/host_range.h"
 #include "bronze_host/host_builder.h"
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_class.h"
+#include "bronze_host/host_values.h"
+#include "bronze_host/host_node.h"
 
 #include "dom/selection.h"
 #include "dom/range.h"

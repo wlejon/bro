@@ -18,7 +18,10 @@ flush();
 
 const cv = document.getElementById('cv');
 const gl = cv.getContext('webgl2');
-assert(gl, 'webgl2 available');
+if (!gl) missingGpuContext('webgl2');
+else runWithWebGL();
+
+function runWithWebGL() {
 
 // Build a noise field that's exactly 0..1 with a diagonal ramp.
 const src = new Float32Array(W * H);
@@ -109,3 +112,4 @@ try {
 assert(threw, 'colormap: regenerate:false without cache throws');
 
 root.innerHTML = '';
+}

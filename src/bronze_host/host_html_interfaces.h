@@ -1,6 +1,7 @@
 #pragma once
 
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_class.h"
+#include "bronze_host/host_element.h"
 #include <string>
 
 namespace bro::bronze_host {

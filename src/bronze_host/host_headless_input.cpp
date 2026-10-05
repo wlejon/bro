@@ -1,6 +1,5 @@
 #include "bronze_host/host_headless_internal.h"
 #include "bronze_host/host_builder.h"
-#include "bronze_host/host_internal.h"
 #include "engine/engine.h"
 #include "engine/gamepad.h"
 #include "engine/window_host.h"

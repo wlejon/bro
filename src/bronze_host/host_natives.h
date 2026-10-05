@@ -74,6 +74,7 @@
 #include "runtime/value.h"
 
 namespace bro::engine { class Engine; }
+namespace bro::physics { class PhysicsWorld; }
 
 namespace bro::bronze_host {
 
@@ -110,6 +111,9 @@ inline bool registerRiggingNatives(std::string*) { return true; }
 // nothing to register and js/physics.js is not entered.
 #if BRO_WITH_PHYSICS
 bool registerPhysicsNatives(std::string* error);
+// The PhysicsWorld behind a `Physics` value, else the engine's own
+// (native_physics_core.cpp).
+physics::PhysicsWorld* unwrapPhysicsWorld(bronze::Value v);
 #else
 inline bool registerPhysicsNatives(std::string*) { return true; }
 #endif

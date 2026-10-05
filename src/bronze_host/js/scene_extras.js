@@ -7,8 +7,9 @@
 // PhysicsNode.syncToPhysics, plus the setter-method spellings (setAlphaCutoff,
 // setDoubleSided) apps used before the accessors existed.
 //
-// Entered right after js/scene.js (installSceneModule, host_js_modules.cpp),
-// which is what put SceneNode on globalThis; it also teaches createMesh /
+// Entered after js/scene.js, which is what put SceneNode on globalThis, and
+// js/scene_graph.js (installSceneModule, host_js_modules.cpp), which is what
+// defined the factories it wraps: it also teaches createMesh /
 // createInstancedMesh / createShape / createSprite the option keys these
 // accessors answer for (emissiveColor, alphaCutoff, doubleSided, billboard,
 // nearClipDist, atlas, scatter, tube, ...), so an option and a later

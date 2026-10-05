@@ -13,7 +13,8 @@
 // at all): then `bro.gpu` is not registered, like every other compiled-out
 // namespace, rather than answering a canned "cpu".
 
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_values.h"
+#include "bronze_host/host_bro_namespaces.h"
 #include "bronze_host/host_builder.h"
 
 #if BRO_WITH_TENSOR

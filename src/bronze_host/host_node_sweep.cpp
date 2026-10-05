@@ -7,6 +7,7 @@
 #include "bronze_host/host_builder.h"
 #include "bronze_host/host_gc.h"
 #include "bronze_host/host_globals_internal.h"
+#include "bronze_host/host_brokit.h"
 
 #include "dom/document.h"
 #include "dom/element.h"

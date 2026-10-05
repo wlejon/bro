@@ -2,6 +2,8 @@
 
 #include "webgl/webgl_types.h"
 
+#include "render/layer_image.h"
+
 #include <vulkan/vulkan.h>
 
 #include <cstdint>
@@ -41,9 +43,9 @@ public:
     int canvasHeight() const { return height_; }
 
     // --- The drawing buffer, for the compositor and toDataURL ---
-    /// The canvas image and its current layout; null while lost.
-    VkImage colorImage() const;
-    VkImageLayout colorLayout() const;
+    /// The canvas image (its view, current layout and size), for the
+    /// compositor to sample in place; empty while lost.
+    render::LayerImage drawingBuffer() const;
     /// Submit the recorded work: the engine is about to sample the canvas.
     void flush();
     /// The canvas as tightly packed, top-down RGBA (canvasWidth() x

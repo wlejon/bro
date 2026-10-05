@@ -16,7 +16,7 @@
 #include <vector>
 
 namespace bro::bronze_host {
-// element.focus()'s steps (declared in host_internal.h, which is too heavy to
+// element.focus()'s steps (declared in host_events.h, which is too heavy to
 // pull into the engine layer for one function).
 void hostFocusElement(dom::Element* el);
 }  // namespace bro::bronze_host

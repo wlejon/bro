@@ -13,7 +13,7 @@
 // it. It is a number to compare with itself across a run, not with
 // heapCommitted.
 
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_runtime.h"
 #include "bronze_host/host_builder.h"
 #include "embed/embed.h"
 

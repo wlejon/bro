@@ -2,7 +2,6 @@
 
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/host_builder.h"
-#include "bronze_host/host_internal.h"
 #include "scene/scene_graph.h"
 #include "scene/scene_node.h"
 #include "scene/mesh_node.h"

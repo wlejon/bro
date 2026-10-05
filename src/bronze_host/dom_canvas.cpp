@@ -2,7 +2,10 @@
 #include "bronze_host/webgl_internal.h"
 #include "bronze_host/host_canvas2d.h"
 #include "bronze_host/host_globals_internal.h"
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_class.h"
+#include "bronze_host/host_runtime.h"
+#include "bronze_host/host_values.h"
+#include "bronze_host/host_element.h"
 #include "bronze_host/host_window_open.h"
 
 #include "engine/engine.h"

@@ -8,7 +8,10 @@ flush();
 
 const cv = document.getElementById('cv');
 const gl = cv.getContext('webgl2');
-assert(gl, 'webgl2 available');
+if (!gl) missingGpuContext('webgl2');
+else runWithWebGL();
+
+function runWithWebGL() {
 
 const lut = bro.image.gradient([[0, 0, 0, 0], [1, 255, 255, 255]], 256);
 const pxBuf = new Uint8Array(W * H * 4);
@@ -152,3 +155,4 @@ try {
 assert(regenThrew, 'fbm2D: regenerate:false without cache throws');
 
 document.getElementById('root').innerHTML = '';
+}

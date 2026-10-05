@@ -7,7 +7,9 @@
 // installs; docs/video-api.js is the contract.
 
 #include "bronze_host/host_element_video.h"
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_runtime.h"
+#include "bronze_host/host_values.h"
+#include "bronze_host/host_node.h"
 #include "bronze_host/host_builder.h"
 
 #include "dom/element.h"

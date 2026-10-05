@@ -30,7 +30,8 @@
 
 #include "bronze_host/host_rejection_events.h"
 #include "bronze_host/host_headless.h"
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_runtime.h"
+#include "bronze_host/host_events.h"
 #include "engine/engine.h"
 #include "util/log.h"
 

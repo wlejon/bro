@@ -457,9 +457,15 @@ public:
 
     // Iframe sub-document (opaque pointer — set by engine, read by the draw
     // traversal and input routing). Points at the engine's IframeDoc hosting
-    // this <iframe>'s isolated sub-document. Null for a plain element.
-    void setIframeDoc(void* d) { iframeDoc_ = d; }
+    // this <iframe>'s isolated sub-document. Null for a plain element. `id` is
+    // the IframeDoc's never-recycled id, the handle its composited layer is
+    // recorded under.
+    void setIframeDoc(void* d, uint64_t id) {
+        iframeDoc_ = d;
+        iframeDocId_ = d ? id : 0;
+    }
     void* iframeDoc() const { return iframeDoc_; }
+    uint64_t iframeDocId() const { return iframeDocId_; }
 
     // Whether the scene graph's last render produced a 3D layer to composite
     // here (set after each scene render, read by the draw traversal). The
@@ -611,6 +617,7 @@ private:
     void* webglContext_ = nullptr;
     void* sceneGraph_ = nullptr;
     void* iframeDoc_ = nullptr;
+    uint64_t iframeDocId_ = 0;
     void* jsWrapper_ = nullptr;
     bool sceneLayerReady_ = false;
 };

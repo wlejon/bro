@@ -1,6 +1,6 @@
 #pragma once
 
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_class.h"
 #include <memory>
 #include <vector>
 

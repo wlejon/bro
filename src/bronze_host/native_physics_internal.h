@@ -2,7 +2,8 @@
 
 // Shared internal declarations and helpers for the bronze host physics module.
 
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_runtime.h"
+#include "bronze_host/host_values.h"
 #include "bronze_host/host_natives.h"
 #include "bronze_host/host_rooted.h"
 #include "natives/physics/native_physics_decl.h"

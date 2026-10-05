@@ -20,15 +20,15 @@ function close(px, r, g, b, tol, what) {
     assert(ok, `${what}: expected ~(${r},${g},${b}), got (${px.r},${px.g},${px.b},${px.a})`);
 }
 
-if (bro.scene && bro.scene.available === false) {
-    skipTest('scene context not compiled in (BRO_WITH_3D off)');
-}
-
 // ── A full-viewport scene between two UI layers ─────────────────────────────
 const canvas = document.createElement('canvas');
 canvas.style.cssText = 'position:fixed;left:0;top:0;width:100vw;height:100vh;background:#203040';
 document.body.appendChild(canvas);
 const scn = canvas.getContext('scene');
+if (!scn) missingGpuContext('scene');
+else runWithScene();
+
+function runWithScene() {
 scn.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
 scn.createLight({ type: 'directional', direction: [0, 0, -1], color: [1, 1, 1], intensity: 2 });
 scn.createMesh({ mesh: 'box', color: 'red', x: 0, y: 0, z: 0 });
@@ -82,3 +82,4 @@ advanceTime(50);
 close(getPixel(W - 5, H - 5), 0, 0, 255, 2, 'WebGL clear color as the frame layer');
 close(getPixel(W >> 1, H >> 1), 255, 255, 0, 2, 'opaque UI above WebGL');
 close(getPixel(10, 10), 0, 128, 128, 3, 'half-transparent UI blended over WebGL');
+}

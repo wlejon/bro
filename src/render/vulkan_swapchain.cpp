@@ -230,6 +230,10 @@ bool VulkanSwapchain::recreate() {
     createInfo.imageExtent = extent;
     createInfo.imageArrayLayers = 1;
     createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    // Readable where the surface allows it, so a presented frame can be
+    // captured (VulkanPresenter::setCapturePresents).
+    if (caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT)
+        createInfo.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 
     const auto& indices = context_.queueFamilies();
     uint32_t queueFamilyIndices[] = {
@@ -261,6 +265,7 @@ bool VulkanSwapchain::recreate() {
 
     swapchain_ = newSwapchain;
     imageFormat_ = surfaceFormat.format;
+    readable_ = (createInfo.imageUsage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0;
     presentMode_ = presentMode;
     extent_ = extent;
     vsync_ = wantVsync_;

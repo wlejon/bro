@@ -124,27 +124,32 @@ void VulkanPipelineCache::shutdown() {
     if (!path_.empty() && vkGetPipelineCacheData(device_, cache_, &size, nullptr) == VK_SUCCESS &&
         size > loadedSize_ && size <= kMaxPersistedBytes) {
         std::vector<char> data(size);
-        if (vkGetPipelineCacheData(device_, cache_, &size, data.data()) == VK_SUCCESS) {
-            namespace fs = std::filesystem;
-            std::error_code ec;
-            fs::create_directories(fs::path(path_).parent_path(), ec);
-            const std::string tmp = path_ + ".tmp." + std::to_string(BRO_GETPID());
-            bool written = false;
-            {
-                std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
-                out.write(data.data(), static_cast<std::streamsize>(size));
-                written = static_cast<bool>(out);
-            }
-            if (written) fs::rename(tmp, path_, ec);
-            if (!written || ec) {
-                fs::remove(tmp, ec);
-                LOG_WARN("Vulkan: could not write the pipeline cache to %s", path_.c_str());
-            }
-        }
+        if (vkGetPipelineCacheData(device_, cache_, &size, data.data()) == VK_SUCCESS &&
+            !writeCacheFile(path_, data.data(), size))
+            LOG_WARN("Vulkan: could not write the pipeline cache to %s", path_.c_str());
     }
 
     vkDestroyPipelineCache(device_, cache_, nullptr);
     cache_ = VK_NULL_HANDLE;
+}
+
+bool writeCacheFile(const std::string& path, const void* data, size_t size) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::create_directories(fs::path(path).parent_path(), ec);
+    const std::string tmp = path + ".tmp." + std::to_string(BRO_GETPID());
+    bool written = false;
+    {
+        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+        out.write(static_cast<const char*>(data), static_cast<std::streamsize>(size));
+        written = static_cast<bool>(out);
+    }
+    if (written) fs::rename(tmp, path, ec);
+    if (!written || ec) {
+        fs::remove(tmp, ec);
+        return false;
+    }
+    return true;
 }
 
 VkPipelineCache VulkanPipelineCache::forDevice(VkDevice device) {

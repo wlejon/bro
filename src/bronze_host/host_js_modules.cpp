@@ -21,7 +21,7 @@
 // them any more, because the shells were what called brosoundml's one
 // installer nine times.
 
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_js_modules.h"
 #include "embed/embed.h"
 
 extern "C" void bro_observers_main();
@@ -38,6 +38,7 @@ extern "C" void bro_lighting_main();
 extern "C" void bro_gizmo_main();
 extern "C" void bro_animation_main();
 extern "C" void bro_scene_main();
+extern "C" void bro_scene_graph_main();
 extern "C" void bro_scene_extras_main();
 extern "C" void bro_motion_main();
 extern "C" void bro_server_main();
@@ -168,9 +169,14 @@ void installSceneModule() {
     bronze::embed::runEntry(bro_scene_main);
     adoptGlobalProperty("SceneNode");
     adoptGlobalProperty("SceneGraph");
-    // js/scene_extras.js reads SceneNode / SceneGraph off globalThis, which
-    // scene.js has just put there, and adds the per-type accessors and the
-    // instanced-mesh operations over native_scene_extras.cpp.
+    // js/scene_graph.js reads SceneGraph off globalThis, which scene.js has
+    // just put there, and installs its members: the node factories, the
+    // environment and post-processing setters, raycast, capture.
+    bronze::embed::runEntry(bro_scene_graph_main);
+    // js/scene_extras.js reads SceneNode / SceneGraph off globalThis the same
+    // way, adds the per-type accessors and the instanced-mesh operations over
+    // native_scene_extras.cpp, and wraps the create* factories scene_graph.js
+    // has just installed — so it runs last.
     bronze::embed::runEntry(bro_scene_extras_main);
 }
 

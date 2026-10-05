@@ -3,7 +3,7 @@
 // element and window dispatch paths in host_dom_events.cpp.
 #pragma once
 
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_class.h"
 
 #include <functional>
 #include <string>

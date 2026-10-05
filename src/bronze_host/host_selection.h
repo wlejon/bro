@@ -1,7 +1,7 @@
 #pragma once
 
 #include "bronze_host/bronze_host.h"
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_class.h"
 
 namespace bro::dom {
 class Selection;

@@ -37,7 +37,10 @@ canvas.setAttribute('height', '64');
 document.body.appendChild(canvas);
 flush();
 const scene = canvas.getContext('scene');
-assert(scene !== null, 'scene context');
+if (!scene) missingGpuContext('scene');
+else runWithScene();
+
+function runWithScene() {
 
 const world = G.createWorld();
 scene.attachAIWorld(world, { stepHz: 60 });
@@ -132,3 +135,4 @@ advanceTime(1000 / 60);
 assert(threw, 'useCapability with an unregistered name throws a TypeError');
 
 console.log('test_capabilities: OK');
+}

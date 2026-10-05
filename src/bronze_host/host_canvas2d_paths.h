@@ -1,6 +1,5 @@
 #pragma once
 
-#include "bronze_host/host_internal.h"
 #include "bronze_host/host_builder.h"
 #include "dom/element.h"
 #include <include/core/SkRRect.h>

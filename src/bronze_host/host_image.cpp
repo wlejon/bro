@@ -37,7 +37,9 @@
 // drawImage or texImage2D source as a bitmap one, which is what the paint path
 // already makes it for markup.
 
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_runtime.h"
+#include "bronze_host/host_image.h"
+#include "bronze_host/host_node.h"
 #include "bronze_host/host_builder.h"  // ObjectBuilder, argAt
 
 #include "dom/document.h"

@@ -3,7 +3,7 @@
 // position and size limits as scalar pairs, and the display list.
 
 #include "bronze_host/bronze_host.h"
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_runtime.h"
 #include "bronze_host/host_natives.h"
 #include "engine/engine.h"
 #include "natives/window/native_window_decl.h"

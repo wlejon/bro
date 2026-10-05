@@ -6,6 +6,7 @@
 #include "bronze_host/host_node_sweep.h"
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/host_builder.h"
+#include "bronze_host/host_element.h"
 
 #include "dom/document.h"
 #include "dom/element.h"

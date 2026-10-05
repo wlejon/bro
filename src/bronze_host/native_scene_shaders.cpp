@@ -1,5 +1,6 @@
 #include "bronze_host/native_scene_internal.h"
 #include "bronze_host/host_natives.h"
+#include "bronze_host/host_values.h"
 #include <bromesh/mesh_data.h>
 #include <bromesh/manipulation/normals.h>
 #include <bromesh/api.h>

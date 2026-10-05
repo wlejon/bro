@@ -1,12 +1,13 @@
 #pragma once
 
-#include "bronze_host/host_internal.h"
+#include "bronze_host/host_document.h"
 #include <include/core/SkImage.h>
 #include <span>
 #include <string>
 #include <vector>
 
 namespace bro::engine { class Engine; }
+namespace bro::dom { class Element; class Node; }
 
 namespace bro::bronze_host {
 

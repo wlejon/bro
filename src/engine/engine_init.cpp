@@ -202,13 +202,11 @@ Engine::Engine(const EngineConfig& config)
 #endif
             LOG_INFO("Engine: Headless Vulkan initialized successfully");
         }
-        if (vulkanPresenter_) {
-            auto skia = std::make_unique<render::SkiaRenderer>();
-            skia->setGpu(createSkiaGpu());
-            renderer_ = std::move(skia);
-        } else {
-            renderer_ = std::make_unique<render::RasterRenderer>();
-        }
+        // Without the GPU, Skia draws the same layers on the CPU and the
+        // frame composites on the CPU: one pipeline either way.
+        auto skia = std::make_unique<render::SkiaRenderer>();
+        if (vulkanPresenter_) skia->setGpu(createSkiaGpu());
+        renderer_ = std::move(skia);
     } else if (displayMode_ == DisplayMode::Windowed) {
         try {
             const auto backend = config.graphics.useGPU ? platform::GraphicsBackend::Vulkan
@@ -264,6 +262,7 @@ Engine::Engine(const EngineConfig& config)
                 if (!vulkanPresenter_->init()) {
                     throw std::runtime_error("Windowed Vulkan presenter initialization failed");
                 }
+                vulkanPresenter_->setCapturePresents(capturePresentsRequested());
 #if BRO_WITH_3D
                 scene::SceneRenderer::setDefaultVulkanContext(vulkanContext_.get());
 #endif
