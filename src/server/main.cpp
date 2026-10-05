@@ -3,6 +3,7 @@
 #include "bronze_host/app_module.h"
 #include "bronze_host/eval.h"
 #include "bronze_host/host_headless.h"
+#include "util/exe_dir.h"
 #include "util/interrupt.h"
 #include "util/log.h"
 
@@ -82,7 +83,7 @@ int main(int argc, char* argv[]) {
 
     try {
         bro::engine::EngineConfig config;
-        config.settingsPath = bro::engine::executableDir() + "/.bro_settings.json";
+        config.settingsPath = bro::util::defaultSettingsPath();
         config.displayMode = bro::engine::DisplayMode::Server;
 
         if (!bro::engine::resolveLaunchTarget(target, config)) {
@@ -91,7 +92,7 @@ int main(int argc, char* argv[]) {
             if (std::filesystem::is_regular_file(target, ec) && target.size() >= 3 &&
                 target.rfind(".js") == target.size() - 3) {
                 scriptPath = target;
-                config.appDir = bro::engine::executableDir();
+                config.appDir = bro::util::executableDir();
             } else {
                 fprintf(stderr, "Error: no app found at '%s'\n", target.c_str());
                 return 1;

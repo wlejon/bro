@@ -74,6 +74,66 @@ if (!gl) {
     }
     assert(same, 'PBO readback matches direct readPixels byte-for-byte');
 
+    // A sub-rectangle with PACK_ROW_LENGTH / SKIP_* at an offset, straddling
+    // the framebuffer edge, from a frame that differs top to bottom: rows land
+    // in GL order (bottom first) and texels outside the framebuffer keep the
+    // buffer's bytes — against the client-memory path, byte for byte.
+    gl.enable(gl.SCISSOR_TEST);
+    gl.scissor(0, 40, 64, 24);
+    gl.clearColor(0, 1, 0, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.disable(gl.SCISSOR_TEST);
+    gl.pixelStorei(gl.PACK_ROW_LENGTH, 24);
+    gl.pixelStorei(gl.PACK_SKIP_ROWS, 2);
+    gl.pixelStorei(gl.PACK_SKIP_PIXELS, 1);
+    const subBytes = 24 * 4 * 40;
+    const refSub = new Uint8Array(subBytes).fill(9);
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+    gl.readPixels(48, 30, 20, 36, gl.RGBA, gl.UNSIGNED_BYTE, refSub);
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pack);
+    gl.bufferData(gl.PIXEL_PACK_BUFFER, new Uint8Array(16 + subBytes).fill(9), gl.STREAM_READ);
+    gl.readPixels(48, 30, 20, 36, gl.RGBA, gl.UNSIGNED_BYTE, 16);
+    assert(gl.getError() === gl.NO_ERROR, 'sub-rectangle readPixels into PBO');
+    const gotSub = new Uint8Array(subBytes);
+    gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 16, gotSub);
+    let firstDiff = -1;
+    for (let i = 0; i < subBytes && firstDiff < 0; i++) if (gotSub[i] !== refSub[i]) firstDiff = i;
+    assert(firstDiff < 0, 'PBO sub-rectangle matches client readPixels (first diff at ' + firstDiff + ')');
+    gl.pixelStorei(gl.PACK_ROW_LENGTH, 0);
+    gl.pixelStorei(gl.PACK_SKIP_ROWS, 0);
+    gl.pixelStorei(gl.PACK_SKIP_PIXELS, 0);
+
+    // A float framebuffer read as RGBA/FLOAT, and the PBO then used as a
+    // vertex source without a CPU round trip in between.
+    if (gl.getExtension('EXT_color_buffer_float')) {
+        const ftex = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, ftex);
+        gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA32F, 4, 4);
+        const ffb = gl.createFramebuffer();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, ffb);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, ftex, 0);
+        gl.clearBufferfv(gl.COLOR, 0, [0.25, -2.5, 1e6, 0.125]);
+        gl.bufferData(gl.PIXEL_PACK_BUFFER, 4 * 4 * 16, gl.STREAM_READ);
+        gl.readPixels(0, 0, 4, 4, gl.RGBA, gl.FLOAT, 0);
+        assert(gl.getError() === gl.NO_ERROR, 'float readPixels into PBO');
+        const f = new Float32Array(4 * 4 * 4);
+        gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, f);
+        assert(f[0] === 0.25 && f[1] === -2.5 && f[2] === 1e6 && f[63] === 0.125,
+               'float PBO texels exact: ' + Array.from(f.slice(0, 4)).join(','));
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.deleteFramebuffer(ffb);
+        gl.deleteTexture(ftex);
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.clearColor(1, 0, 0, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.enable(gl.SCISSOR_TEST);
+    gl.scissor(32, 0, 32, 64);
+    gl.clearColor(0, 0, 1, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.disable(gl.SCISSOR_TEST);
+    gl.bufferData(gl.PIXEL_PACK_BUFFER, 64 * 64 * 4, gl.STREAM_READ);
+
     // Client-memory readPixels while a PACK PBO is bound is INVALID_OPERATION
     // and must not touch the destination array.
     const untouched = new Uint8Array(4).fill(7);

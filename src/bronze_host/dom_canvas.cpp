@@ -52,7 +52,7 @@ struct CanvasState {
 // and the width/height attributes. The bitmap of a 2D canvas follows the
 // intrinsic size (a zero is a real, empty bitmap there); a WebGL drawing
 // buffer keeps its size on a zero, as the old binding guarded, because a 0x0
-// FBO is a GL error every following draw repeats.
+// drawing buffer is an error every following draw repeats.
 void resizeBacking(CanvasState* cs, int w, int h, bool widthChanged) {
     if (!cs || !cs->el) return;
     // A bitmaprenderer canvas displays the ImageBitmap it was handed at that

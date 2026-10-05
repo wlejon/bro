@@ -173,7 +173,7 @@ public:
 
     // --- World anchor + billboard (Shape/Sprite/Html) ---
     // When hasWorldAnchor is true, the node renders as a camera-facing billboard
-    // in the mesh FBO (depth-tested against 3D geometry) instead of the 2D canvas.
+    // in the 3D scene (depth-tested against 3D geometry) instead of the 2D canvas.
     enum class BillboardMode : uint8_t { Full, YLock };
 
     bool hasWorldAnchor() const { return hasWorldAnchor_; }

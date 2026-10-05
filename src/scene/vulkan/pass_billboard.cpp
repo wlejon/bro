@@ -156,9 +156,11 @@ bool PassBillboard::prepareNode(SceneFrame& frame, SceneNode& node, Push& push, 
         const float len = bromath::vlen(flat);
         if (len > 1e-5f) right = flat * (1.0f / len);
     }
-    push.anchor[0] = anchor.x;
-    push.anchor[1] = anchor.y;
-    push.anchor[2] = anchor.z;
+    // Camera-relative, like every scene position the GPU sees.
+    const bromath::Vec3 rel = frame.view.relative(anchor);
+    push.anchor[0] = rel.x;
+    push.anchor[1] = rel.y;
+    push.anchor[2] = rel.z;
     push.right[0] = right.x;
     push.right[1] = right.y;
     push.right[2] = right.z;
@@ -174,9 +176,10 @@ void PassBillboard::prepareLightIcon(const SceneFrame& frame, const LightNode& l
     const auto& m = light.worldMatrix();
     const bromath::Vec3 right = frame.view.right();
     const bromath::Vec3 up = frame.view.up();
-    push.anchor[0] = m.at(0, 3);
-    push.anchor[1] = m.at(1, 3);
-    push.anchor[2] = m.at(2, 3);
+    const bromath::Vec3 rel = frame.view.relative(bromath::Vec3{m.at(0, 3), m.at(1, 3), m.at(2, 3)});
+    push.anchor[0] = rel.x;
+    push.anchor[1] = rel.y;
+    push.anchor[2] = rel.z;
     push.right[0] = right.x;
     push.right[1] = right.y;
     push.right[2] = right.z;

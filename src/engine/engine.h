@@ -970,8 +970,6 @@ private:
     static constexpr double kGCIntervalMs = 1000.0;
     double lastGCMs_ = 0.0;
 
-    unsigned int gpuTimerQuery_ = 0;
-    bool gpuTimerPending_ = false;
     double lastGpuFrameMs_ = -1.0;
 
     bool testFailure_ = false;

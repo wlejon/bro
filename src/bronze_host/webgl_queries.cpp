@@ -172,7 +172,7 @@ void installWebGLQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
             case 0x0B73:  // GL_DEPTH_CLEAR_VALUE
             case 0x0B21:  // GL_LINE_WIDTH
             case 0x80AA:  // GL_SAMPLE_COVERAGE_VALUE
-            case 0x8066:  // GL_POLYGON_OFFSET_FACTOR
+            case 0x8038:  // GL_POLYGON_OFFSET_FACTOR
             case 0x2A00:  // GL_POLYGON_OFFSET_UNITS
             case 0x84FF:  // MAX_TEXTURE_MAX_ANISOTROPY_EXT
                 return ev::fromDouble(gl->getParameterFloat(pname));

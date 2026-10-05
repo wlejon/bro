@@ -131,6 +131,21 @@ if (!probe.scene) {
         assert(glow > 60 && glowMasked < glow * 0.2,
             `a black emissive map masks the glow (${glowMasked.toFixed(1)} vs ${glow.toFixed(1)})`);
 
+        // Unlit is the base colour as authored: an emissive term adds nothing.
+        const unlitShot = (opts) => {
+            const n = scn.createMesh(Object.assign(quad(), opts));
+            const c = patchColor(scn.captureFrame(), C, C, 3);
+            n.destroy();
+            return c;
+        };
+        const unlit = unlitShot({ color: [0.5, 0.2, 0.2], unlit: true });
+        const unlitGlow = unlitShot({ color: [0.5, 0.2, 0.2], unlit: true, emissive: 2, emissiveColor: [0, 1, 0] });
+        assert(unlit[0] > 100 && unlit[1] < 70,
+            `an unlit mesh draws its base colour (rgb ${unlit.map((v) => v.toFixed(0))})`);
+        assert(Math.abs(unlitGlow[0] - unlit[0]) < 3 && Math.abs(unlitGlow[1] - unlit[1]) < 3,
+            `emissive does not add to an unlit mesh (rgb ${unlitGlow.map((v) => v.toFixed(0))} vs ` +
+            `${unlit.map((v) => v.toFixed(0))})`);
+
         // Occlusion darkens only the ambient (the AO map's R channel).
         scn.setAmbient([0.6, 0.6, 0.6]);
         const ambient = shot({ color: [0.3, 0.3, 0.3], roughness: 1 });

@@ -46,6 +46,15 @@ struct IndexRange {
     bool restart = false;
 };
 
+// Every way a WebGL draw or copy can read a buffer: the barrier around a
+// transfer write into one (an upload, a readPixels into a pack buffer).
+inline constexpr VkPipelineStageFlags kBufferReadStages =
+    VK_PIPELINE_STAGE_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
+    VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT;
+inline constexpr VkAccessFlags kBufferReadAccess =
+    VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_INDEX_READ_BIT | VK_ACCESS_UNIFORM_READ_BIT |
+    VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;  // transform feedback stores
+
 struct VkBufferResource {
     VkBuffer buffer = VK_NULL_HANDLE;
     VkDeviceMemory memory = VK_NULL_HANDLE;
@@ -61,7 +70,10 @@ struct VkBufferResource {
     std::array<IndexRange, 4> indexRanges{};
     uint32_t nextIndexRange = 0;
     bool isMapped = false;
-    void* mappedPtr = nullptr;
+    void* mappedPtr = nullptr;    // into shadowData; the mapping is [mappedOffset, +mappedLength)
+    VkDeviceSize mappedOffset = 0;
+    VkDeviceSize mappedLength = 0;
+    GLbitfield mappedAccess = 0;
     bool everBound = false;  // isBuffer: true once bound
 
     bool isValid() const { return buffer != VK_NULL_HANDLE; }

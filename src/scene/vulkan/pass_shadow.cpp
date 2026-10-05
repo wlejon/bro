@@ -251,7 +251,9 @@ void PassShadow::record(SceneFrame& frame) {
             vkCmdClearAttachments(cmd, 1, &clear, 1, &clearRect);
         }
 
-        const bromath::Mat4 lightViewProj = toVulkanClip(tile.viewProj);
+        // The draws are relative to the frame's eye, the tile to the plan's
+        // (the same eye unless a caller re-planned in between).
+        const bromath::Mat4 lightViewProj = toVulkanClip(rebased(tile.relViewProj, frame.view.eye - plan.origin));
         for (const MeshDraw& draw : frame.lists.meshes) {
             if (!draw.castsShadow) continue;
             if (culling && draw.hasBounds && !bromath::fintersects(tile.frustum, draw.bounds)) {

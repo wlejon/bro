@@ -70,6 +70,13 @@ void PassDecal::cleanup(SceneGpu& gpu) {
     materialLayout_ = VK_NULL_HANDLE;
 }
 
+bool PassDecal::active(const SceneFrame& frame) const {
+    for (const SceneNode* node : frame.lists.nodes) {
+        if (node->type() == SceneNode::Type::Decal) return true;
+    }
+    return false;
+}
+
 void PassDecal::declare(const SceneFrame& frame, PassIO& io) const {
     io.sample(frame.gpu.targets.depthSnapshot);
     io.hdr();
@@ -131,8 +138,10 @@ void PassDecal::record(SceneFrame& frame) {
     for (DecalNode* decal : decals) {
         Push push{};
         const bromath::Mat4& world = decal->worldMatrix();
-        std::memcpy(push.model, world.data, sizeof(push.model));
-        const bromath::Mat4 inv = bromath::minverse(world);
+        // Camera-relative, as the depth it reconstructs positions from.
+        const bromath::Mat4 model = frame.view.relative(world);
+        std::memcpy(push.model, model.data, sizeof(push.model));
+        const bromath::Mat4 inv = bromath::minverse(model);
         std::memcpy(push.invModel, inv.data, sizeof(push.invModel));
         std::memcpy(push.modulate, decal->modulate(), sizeof(push.modulate));
         const bromath::Vec3 up = bromath::vnorm(bromath::Vec3{world.at(0, 1), world.at(1, 1), world.at(2, 1)});
@@ -150,6 +159,7 @@ void PassDecal::record(SceneFrame& frame) {
             frame.gpu.resources.texture(decal->id(), TextureSlot::DecalEmission, decal->emissionTexture());
         push.flags[0] = albedo ? 1 : 0;
         push.flags[1] = emission ? 1 : 0;
+        push.flags[2] = frame.gpu.targets.msaa() ? 1 : 0;
 
         VkDescriptorSet set = device_->frameSet(materialLayout_);
         SceneVkDescriptorWriter writer;

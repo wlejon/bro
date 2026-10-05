@@ -9,7 +9,7 @@
 // attaches `load` and `error` listeners, sets `crossOrigin`, assigns `src`, and
 // removes its listeners from inside them. WebGLTextures then reads `image.width`
 // and `image.height` and hands the element straight to the DOM-source
-// texImage2D/texSubImage2D overloads (gl_textures.cpp). That list is the whole
+// texImage2D/texSubImage2D overloads (webgl_textures.cpp). That list is the whole
 // contract; everything else an HTMLImageElement has on the web is deliberately
 // absent, because a stub for it would fail somewhere further from here.
 //
@@ -74,7 +74,7 @@ namespace bro::bronze_host {
 
 // The decoded image behind a value, or nullptr. There is one shape to find it
 // in — an <img> element, whose pixels hang off its node registry entry — and
-// `new Image()` produces that same shape, so gl_textures.cpp asks this one
+// `new Image()` produces that same shape, so webgl_textures.cpp asks this one
 // question and never has to know which spelling built the image.
 const HostImage* hostImageOf(Value v) {
     HostNodeState* st = hostNodeStateOfValue(v);

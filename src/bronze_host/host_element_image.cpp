@@ -21,7 +21,7 @@
 //
 // The decoded pixels live in the node's registry entry (HostNodeState), which
 // is what lets `hostImageOf` answer for an img element and lets
-// gl_textures.cpp keep asking one question.
+// webgl_textures.cpp keep asking one question.
 
 #include "bronze_host/host_builder.h"  // ObjectBuilder, argAt
 #include "bronze_host/host_class.h"

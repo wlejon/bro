@@ -147,8 +147,9 @@ void PassGaussianSplat::drawNode(SceneFrame& frame, VkPipeline pipeline, Gaussia
     if (upload) allocator_->stageAndUploadBuffer(inst.buffer.buffer, data.data(), bytes);
 
     Uniforms u{};
-    std::memcpy(u.model, model.data, sizeof(u.model));
-    std::memcpy(u.view, view.view.data, sizeof(u.view));
+    // Camera-relative: the eye comes off the model, so the view is rotation only.
+    std::memcpy(u.model, view.relative(model).data, sizeof(u.model));
+    std::memcpy(u.view, view.relView.data, sizeof(u.view));
     std::memcpy(u.proj, view.proj.data, sizeof(u.proj));
     u.focal[0] = 0.5f * static_cast<float>(view.width) * std::fabs(view.proj.data[0]);
     // Signed: Vulkan's clip y points down (proj[5] < 0), so the footprint's

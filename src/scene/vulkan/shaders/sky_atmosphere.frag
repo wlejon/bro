@@ -13,7 +13,7 @@ const int SKY_SUN_STEPS = 6;
 void main() {
     outIndirect = vec4(0.0);
     vec3 rd = normalize(inWorldDir);
-    vec3 eye = camera.eyePos.xyz;
+    vec3 eye = camera.eyeWorld.xyz;
     vec3 col = atmSky(eye, rd, SKY_STEPS, SKY_SUN_STEPS);
 
     float mu = dot(rd, uAtmSunDir);

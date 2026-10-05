@@ -420,7 +420,20 @@ bool Engine::screenshot(const std::string& path, int cx, int cy, int cw, int ch)
     return broimage::encode_png_file(path, cropped.data(), cw, ch, 4);
 }
 
+// Sum of the scene graphs' last renders, each from its own timestamp pair;
+// reading one waits for that render's ticket. Without a newer render, the
+// previous answer stands.
 double Engine::gpuFrameMs() {
+#if BRO_WITH_3D
+    double sum = 0.0;
+    bool timed = false;
+    for (auto& sg : sceneGraphs_) {
+        if (!sg.graph) continue;
+        const double ms = sg.graph->renderer().takeGpuMs();
+        if (ms >= 0.0) { sum += ms; timed = true; }
+    }
+    if (timed) lastGpuFrameMs_ = sum;
+#endif
     return lastGpuFrameMs_;
 }
 

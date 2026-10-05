@@ -16,9 +16,7 @@ struct FrameStats {
     double phaseLayoutMs = 0.0;
     double phaseRasterMs = 0.0;
     double phaseGpuMs = 0.0;
-    double phaseGlStateMs = 0.0;
     double phaseDrawMs = 0.0;
-    double phaseUploadMs = 0.0;
 
     // The window being accumulated.
     double statsAccumMs = 0.0;
@@ -30,9 +28,7 @@ struct FrameStats {
     double accumLayoutMs = 0.0;
     double accumRasterMs = 0.0;
     double accumGpuMs = 0.0;
-    double accumGlStateMs = 0.0;
     double accumDrawMs = 0.0;
-    double accumUploadMs = 0.0;
 
     // Counts one frame of `frameMs` wall time. Returns true when that frame
     // closed a window and the means were refreshed.
@@ -50,11 +46,8 @@ struct FrameStats {
         phaseLayoutMs  = accumLayoutMs  / n;
         phaseRasterMs  = accumRasterMs  / n;
         phaseGpuMs     = accumGpuMs     / n;
-        phaseGlStateMs = accumGlStateMs / n;
         phaseDrawMs    = accumDrawMs    / n;
-        phaseUploadMs  = accumUploadMs  / n;
-        accumJsMs = accumLayoutMs = accumRasterMs = accumGpuMs = accumGlStateMs = 0.0;
-        accumDrawMs = accumUploadMs = 0.0;
+        accumJsMs = accumLayoutMs = accumRasterMs = accumGpuMs = accumDrawMs = 0.0;
         statsAccumMs = 0.0;
         statsFrameCount = 0;
         statsMinFrameMs = 999.0;

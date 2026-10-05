@@ -1,6 +1,7 @@
 #include "engine/engine.h"
 #include "engine/config_loader.h"
 #include "engine/launcher.h"
+#include "util/exe_dir.h"
 #include "util/interrupt.h"
 #include "util/log.h"
 
@@ -32,9 +33,6 @@
 #include <cstdio>
 #include <fcntl.h>
 #include <sys/file.h>
-#endif
-#ifdef __APPLE__
-#include <mach-o/dyld.h>
 #endif
 
 // bro.exe is /SUBSYSTEM:WINDOWS, so stdout/stderr go nowhere by default. Send
@@ -198,8 +196,9 @@ int main(int argc, char* argv[]) {
         else posArgs.push_back(argv[i]);
     }
 
-    // Settings persist next to the executable.
-    config.settingsPath = bro::engine::executableDir() + "/.bro_settings.json";
+    // Settings persist next to the executable (or, in a macOS bundle, in the
+    // user data dir).
+    config.settingsPath = bro::util::defaultSettingsPath();
 
     // Resolve launch target → projectRoot + appDir. The target may be an app
     // directory, a project directory, or a bro.json of either kind; with no

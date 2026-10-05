@@ -170,6 +170,7 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
     // Reset per-frame shadow state. Default every light to "no shadow".
     ShadowPlan& plan = shadowPlan_;
     plan.tileCount = 0;
+    plan.origin = graph_.cameraEye_;
     plan.pcfTaps = shadowPCFTaps_;
     plan.atlasSize = std::max(1, std::min(shadowAtlasSize_, shadowAtlasLimit_));
     if (plan.atlasSize != shadowPlannedAtlas_) {
@@ -278,15 +279,21 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
     const float tileUV = 1.0f / (float)gridDim;
     const int   tilePx = plan.atlasSize / gridDim;
 
+    // Every tile is fit in camera-relative space (positions less the eye,
+    // plan.origin) so its relViewProj — what the GPU draws and samples with —
+    // never rounds a large world coordinate; lightProjView is the absolute
+    // twin, for caster culling and the tile cache.
     // texelConst / texelPerDist: world size of one shadow texel at the
     // receiver — a constant for an ortho tile, per metre of light distance
     // for a perspective one. zNear/zFar/ortho describe the tile's depth
     // mapping so the FS can express a world-unit bias in [0,1] depth.
-    auto bakeTile = [&](int slot, const Mat4& lightProjView, LightNode* L,
+    const Vec3 eye = plan.origin;
+    auto bakeTile = [&](int slot, const Mat4& relProjView, const Mat4& lightProjView, LightNode* L,
                         float texelConst, float texelPerDist,
                         float zNear, float zFar, bool ortho) {
         ShadowTilePlan& t = plan.tiles[slot];
         t.viewProj = lightProjView;
+        t.relViewProj = relProjView;
         t.frustum = makeFrustum(lightProjView);
         const int gx = slot % gridDim;
         const int gy = slot / gridDim;
@@ -376,12 +383,23 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
                 Vec3 p{(c & 1) ? casterBounds.max.x : casterBounds.min.x,
                        (c & 2) ? casterBounds.max.y : casterBounds.min.y,
                        (c & 4) ? casterBounds.max.z : casterBounds.min.z};
-                float t = bromath::vdot(p, d);
+                float t = bromath::vdot(p - eye, d);
                 castMinD = std::min(castMinD, t);
                 castMaxD = std::max(castMaxD, t);
             }
 
-            // Per-cascade fit: the world-space corners of the camera
+            // The light basis's own coordinates of the eye, in double: the
+            // texel snap below runs in the fixed basis (absolute), the fit
+            // relative to the eye.
+            const double eyeLS[2] = {
+                (double)lightRot.at(0, 0) * eye.x + (double)lightRot.at(0, 1) * eye.y + (double)lightRot.at(0, 2) * eye.z,
+                (double)lightRot.at(1, 0) * eye.x + (double)lightRot.at(1, 1) * eye.y + (double)lightRot.at(1, 2) * eye.z,
+            };
+            const bromath::AABB3 receiversRel = bromath::aisEmpty(receiverBounds)
+                ? receiverBounds
+                : bromath::AABB3{receiverBounds.min - eye, receiverBounds.max - eye};
+
+            // Per-cascade fit: the camera-relative corners of the camera
             // sub-volume [splitFar[c], splitFar[c+1]] — a frustum slice for
             // a perspective camera, a box for an orthographic one — CLIPPED
             // to the receiver bounds (the exact convex intersection), then
@@ -407,7 +425,7 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
                         cx = 0.5f * (graph_.cameraOrthoR_ + graph_.cameraOrthoL_);
                         cy = 0.5f * (graph_.cameraOrthoT_ + graph_.cameraOrthoB_);
                     }
-                    Vec3 cz = graph_.cameraEye_ + fBasis * z;
+                    Vec3 cz = fBasis * z;
                     for (int j = 0; j < 4; ++j) {
                         float xs = (j & 1) ? 1.0f : -1.0f;
                         float ys = (j & 2) ? 1.0f : -1.0f;
@@ -418,8 +436,8 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
 
                 Vec3 pts[64];
                 int np = 0;
-                if (!bromath::aisEmpty(receiverBounds))
-                    np = clipFrustumToBox(corners, receiverBounds, pts);
+                if (!bromath::aisEmpty(receiversRel))
+                    np = clipFrustumToBox(corners, receiversRel, pts);
                 if (np == 0) {
                     // Nothing that receives shadow in this slice (or no
                     // bounds at all): fall back to the raw slice.
@@ -440,11 +458,16 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
                 // frame. It now steps (~9%) rarely instead.
                 radius = std::exp2(std::ceil(std::log2(radius) * 8.0f) / 8.0f);
 
-                // Snap the window to the texel grid in the fixed light basis.
+                // Snap the window to the texel grid in the fixed light basis
+                // (absolute light-space coordinates, in double), then take
+                // the snapped centre back relative to the eye.
                 const float texelSize = (2.0f * radius) / (float)tilePx;
                 Vec3 cLS = bromath::mtransformPoint(lightRot, center);
-                cLS.x = std::floor(cLS.x / texelSize) * texelSize;
-                cLS.y = std::floor(cLS.y / texelSize) * texelSize;
+                for (int a = 0; a < 2; ++a) {
+                    const double abs = (double)(a == 0 ? cLS.x : cLS.y) + eyeLS[a];
+                    const double snapped = std::floor(abs / texelSize) * texelSize;
+                    (a == 0 ? cLS.x : cLS.y) = (float)(snapped - eyeLS[a]);
+                }
 
                 // Depth along d (light view looks down -z, so depth = -z).
                 // Cover the sphere, then stretch over every caster.
@@ -457,8 +480,9 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
                 Mat4 proj = makeOrthoZeroToOne(cLS.x - radius, cLS.x + radius,
                                                cLS.y - radius, cLS.y + radius,
                                                nearD, farD);
-                Mat4 projView = bromath::mmul(proj, lightRot);
-                bakeTile(firstSlot + c, projView, L, texelSize, 0.0f,
+                Mat4 relProjView = bromath::mmul(proj, lightRot);
+                Mat4 projView = bromath::mmul(relProjView, bromath::mtranslate(-eye));
+                bakeTile(firstSlot + c, relProjView, projView, L, texelSize, 0.0f,
                          nearD, farD, true);
                 plan.tileCount++;
             }
@@ -474,8 +498,8 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
             d.x /= dlen; d.y /= dlen; d.z /= dlen;
 
             const Mat4& M = L->worldMatrix();
-            Vec3 eye{M.at(0,3), M.at(1,3), M.at(2,3)};
-            Vec3 target{eye.x + d.x, eye.y + d.y, eye.z + d.z};
+            Vec3 pos{M.at(0,3), M.at(1,3), M.at(2,3)};
+            Vec3 target{pos.x + d.x, pos.y + d.y, pos.z + d.z};
             Vec3 up = (std::abs(d.y) > 0.99f) ? Vec3{0,0,1} : Vec3{0,1,0};
 
             float far  = std::max(L->range(), 0.5f);
@@ -484,10 +508,12 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
             // Cap aperture below 180 deg so the perspective matrix stays sane.
             if (fov > 3.10f) fov = 3.10f;
 
-            Mat4 view = bromath::mlookAt(eye, target, up);
+            Mat4 view = bromath::mlookAt(pos, target, up);
+            const Vec3 rel = pos - eye;
+            Mat4 relView = bromath::mlookAt(rel, rel + d, up);
             Mat4 proj = makePerspectiveZeroToOne(fov, 1.0f, near, far);
             Mat4 projView = bromath::mmul(proj, view);
-            bakeTile(plan.tileCount, projView, L,
+            bakeTile(plan.tileCount, bromath::mmul(proj, relView), projView, L,
                      0.0f, 2.0f * std::tan(fov * 0.5f) / (float)tilePx,
                      near, far, false);
             plan.lightSlot[i] = plan.tileCount;
@@ -501,7 +527,8 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
             if (plan.tileCount + 6 > kMaxShadowTiles) continue;
 
             const Mat4& M = L->worldMatrix();
-            Vec3 eye{M.at(0,3), M.at(1,3), M.at(2,3)};
+            Vec3 pos{M.at(0,3), M.at(1,3), M.at(2,3)};
+            const Vec3 rel = pos - eye;
             float far  = std::max(L->range(), 0.5f);
             float near = std::max(0.05f, far * 0.005f);
             // PI/2 + small fudge so the 6 frusta have a smidge of overlap
@@ -526,13 +553,11 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
             plan.lightSlot[i] = firstSlot;
             plan.lightSlotCount[i] = 6;
             for (int f = 0; f < 6; ++f) {
-                Vec3 target{eye.x + forward[f].x,
-                            eye.y + forward[f].y,
-                            eye.z + forward[f].z};
-                Mat4 view = bromath::mlookAt(eye, target, upVec[f]);
+                Mat4 view = bromath::mlookAt(pos, pos + forward[f], upVec[f]);
+                Mat4 relView = bromath::mlookAt(rel, rel + forward[f], upVec[f]);
                 Mat4 projView = bromath::mmul(proj, view);
                 // 90 deg face: a texel spans 2*tan(45deg)/tilePx per metre.
-                bakeTile(firstSlot + f, projView, L,
+                bakeTile(firstSlot + f, bromath::mmul(proj, relView), projView, L,
                          0.0f, 2.0f / (float)tilePx, near, far, false);
                 plan.tileCount++;
             }

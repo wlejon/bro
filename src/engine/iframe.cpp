@@ -70,7 +70,7 @@ void Engine::syncIframes() {
         if (!present) {
             // Hand the GPU surface to its owning context before the IframeDoc
             // (and with it the surface) is destroyed on this thread — see
-            // queueIframeSurfaceFree. Erasing it here would leak the FBO.
+            // queueIframeSurfaceFree. Erasing it here would free it off its thread.
             queueIframeSurfaceFree(std::move((*it)->surface));
             queueIframeSurfaceFree(std::move((*it)->spare));
             teardownIframeDoc(it->get());
@@ -282,7 +282,7 @@ void Engine::processPendingIframeReloads() {
         // Hand the surface to the rebuilt sub-doc — or, if there is no rebuilt
         // sub-doc (empty src, or createIframeDoc bailed on a missing/broken
         // app), give it back to the raster thread to destroy. Dropping it here
-        // would leak the FBO and release Ganesh off-thread.
+        // would release a Skia GPU surface off its thread.
         if (IframeDoc* nd = src.empty() ? nullptr : iframeDocForElement(el)) {
             nd->surface = std::move(salvaged);
             nd->spare = std::move(salvagedSpare);
@@ -333,7 +333,7 @@ bool Engine::tickIframes(double nowMs) {
 // timers → document. canvasScenes (a member, declared before `document`)
 // destruct when the owning IframeDoc unique_ptr is finally erased.
 //
-// Deliberately does NOT touch doc->surface: it belongs to whichever GL context
+// Deliberately does NOT touch doc->surface: it belongs to whichever thread
 // replayed the sub-doc, which is not necessarily this thread's (see
 // queueIframeSurfaceFree). Both callers already account for it —
 // processPendingIframeReloads moves the surface out first, and destroyAllIframes

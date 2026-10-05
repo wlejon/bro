@@ -30,9 +30,9 @@ const char* kLayerB[ClipmapTerrain::kMaxLayers] =
 // Every height layer is one slice of ONE sampler2DArray, and every surface
 // layer one slice of another — two sampler units for the whole stack. It used
 // to be a sampler2D per layer per kind, twelve units on top of the mesh
-// pipeline's own, and a fragment stage is allowed as few as 16 active
-// samplers: macOS's GL 4.1 core reports exactly 16, so the program failed to
-// link there ("fragment shader uses 23 samplers") and the terrain never drew.
+// pipeline's own, and a fragment stage is allowed as few as 16 samplers
+// (Vulkan's minimum maxPerStageDescriptorSamplers): 23 did not fit, and the
+// terrain never drew.
 // Slice i is layer i; the per-layer uniforms below carry each layer's own
 // extent within its slice. Layout and padding: buildHeightSlice().
 const char* kHeightTex  = "u_heights";

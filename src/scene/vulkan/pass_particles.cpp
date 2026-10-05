@@ -92,6 +92,14 @@ VkPipeline PassParticles::pipeline(const TargetFormat& target, bool additive) {
     });
 }
 
+bool PassParticles::active(const SceneFrame& frame) const {
+    for (const SceneNode* node : frame.lists.nodes) {
+        if (node->type() == SceneNode::Type::Particles3D && static_cast<const Particles3DNode*>(node)->liveCount() > 0)
+            return true;
+    }
+    return false;
+}
+
 void PassParticles::declare(const SceneFrame& frame, PassIO& io) const {
     io.sample(frame.gpu.targets.depthSnapshot);
     io.hdr();
@@ -128,7 +136,10 @@ void PassParticles::record(SceneFrame& frame) {
         if (!pipe) continue;
 
         Push push{};
-        const bromath::Mat4& model = p->space() == Particles3DNode::SimSpace::Local ? p->worldMatrix() : kIdentity;
+        // World-space particles sit under an identity model; either way the
+        // eye comes off it (camera-relative rendering).
+        const bromath::Mat4 model =
+            frame.view.relative(p->space() == Particles3DNode::SimSpace::Local ? p->worldMatrix() : kIdentity);
         std::memcpy(push.model, model.data, sizeof(push.model));
         push.camRight[0] = camRight.x;
         push.camRight[1] = camRight.y;

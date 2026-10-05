@@ -23,8 +23,8 @@ Enabled by default (`BRO_WITH_BRONZE=ON`).
 | `host_element.cpp` | the element surface an app *builds*: the identity registry, `style`, `classList`, geometry, form controls, computed style, the element-only tree views |
 | `host_node.cpp` | the nodes that are not elements — text, comments, fragments — and the tree surface every node shares (`childNodes`, the mutators, `cloneNode`) |
 | `host_platform.cpp` | `btoa`/`atob`, `queueMicrotask`, `screen`, `alert`/`confirm`/`prompt`, and the DOM interface names libraries sniff for |
-| `host_runtime.h`, `host_class.h` | the non-GL shared runtime: the GC rule, error funnel, clock, task queue and timers; `HostClass` and the handle tags |
-| `host_events.h`, `host_node.h`, `host_element.h`, `host_image.h`, `host_document.h`, `host_proxy.h`, `host_values.h`, `host_window_message.h`, `host_brokit.h`, `host_js_modules.h`, `host_web_globals.h`, `host_bro_namespaces.h` | the rest of the non-GL shared surface, one header per topic, each naming the files that define it; a file includes the ones it uses |
+| `host_runtime.h`, `host_class.h` | the non-WebGL shared runtime: the GC rule, error funnel, clock, task queue and timers; `HostClass` and the handle tags |
+| `host_events.h`, `host_node.h`, `host_element.h`, `host_image.h`, `host_document.h`, `host_proxy.h`, `host_values.h`, `host_window_message.h`, `host_brokit.h`, `host_js_modules.h`, `host_web_globals.h`, `host_bro_namespaces.h` | the rest of the non-WebGL shared surface, one header per topic, each naming the files that define it; a file includes the ones it uses |
 | `host_events.cpp` | `on<type>` + `addEventListener` for the objects that fire events |
 | `host_dom_events.cpp` | canvas / document / window listeners, wired to the **engine's** dispatch |
 | `host_event_spec.cpp`, `js/events.js` | the descriptor `dispatchEvent` takes and the engine event built from it; the UI event classes (`MouseEvent`, `KeyboardEvent`, ...) over brokit's `Event` |
@@ -130,7 +130,7 @@ because the event path is built from Elements.
 **Engine objects are shared. Event data is copied. Heap values never cross.**
 
 Engine objects are shared: the same `dom::Element`, the same document, the same
-clock, the same GL context. What crosses the host boundary is a copy:
+clock, the same WebGL context. What crosses the host boundary is a copy:
 
 - A listener is handed a fresh bronze object holding **copies** of the fields
   its event kind carries — type, coordinates, key, button, deltas, modifiers —

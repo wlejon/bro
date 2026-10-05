@@ -22,21 +22,20 @@ constexpr uint32_t kCustomSet = 4;
 // The engine's varyings take locations 0..6 (mesh.vert / mesh.frag).
 constexpr uint32_t kFirstVaryingLocation = 7;
 
-// The GL-era names a chunk may use, onto the Vulkan shaders' own. GL drew
-// camera-relative (vWorldPos and uModel had the eye subtracted); the Vulkan
-// shaders work in world space, so those two are rebased on the eye.
+// The GL-era names a chunk may use, onto the Vulkan shaders' own. Both draw
+// camera-relative (scene_view.h), so vWorldPos and uModel carry the eye
+// subtracted exactly as they did on GL.
 constexpr const char* kFragmentAliases =
     "#define uBaseColorTex texAlbedo\n"
-    "#define vWorldPos (inWorldPos - camera.eyePos.xyz)\n"
+    "#define vWorldPos inWorldPos\n"
     "#define vNormal inNormal\n"
     "#define vUV inUV\n"
     "#define vColor inColor\n"
-    "#define vCamDist length(inWorldPos - camera.eyePos.xyz)\n"
+    "#define vCamDist length(inWorldPos)\n"
     "#define vTangentW inTangent\n"
     "#define vBitangentW inBitangent\n";
 constexpr const char* kVertexAliases =
-    "mat4 broCameraRelativeModel() { mat4 m = sceneModel(); m[3].xyz -= camera.eyePos.xyz; return m; }\n"
-    "#define uModel broCameraRelativeModel()\n"
+    "#define uModel sceneModel()\n"
     "#define aPos inPos\n"
     "#define aNormal inNormal\n"
     "#define aUV inUV\n"

@@ -128,6 +128,10 @@ void SceneRenderer::collectLights(std::vector<LightNode*>& out) const {
     }
 }
 
+double SceneRenderer::takeGpuMs() {
+    return vkBridge_ ? vkBridge_->takeGpuMs() : -1.0;
+}
+
 void SceneRenderer::render3D() {
     if (!defaultVulkanContext_) {
         static bool warned = false;

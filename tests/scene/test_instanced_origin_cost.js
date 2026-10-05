@@ -55,8 +55,8 @@ if (!scene) {
         return a;
     }
 
-    // Mean GPU ms per frame. perf.gpuFrameMs() is a GL_TIME_ELAPSED query
-    // around the scene render and blocks on the result, so each sample is an
+    // Mean GPU ms per frame. perf.gpuFrameMs() reads the timestamp queries
+    // around the scene render and waits for that render, so each sample is an
     // isolated frame rather than a pipelined average.
     function gpuMs(n = 12) {
         for (let i = 0; i < 6; i++) flush();
@@ -106,9 +106,10 @@ if (!scene) {
            `(${straddlePix.covered}/${straddlePix.sum} vs ` +
            `${liftedPix.covered}/${liftedPix.sum})`);
 
-    // Timing only means something where the query works. gpuFrameMs returns
-    // -1 until a real measurement lands.
-    if (liftedMs > 0) {
+    // Timing only means something where the queue writes timestamps; every
+    // device bro targets does, and gpuFrameMs stays -1 only without one.
+    assert(liftedMs > 0, `perf.gpuFrameMs() measures the scene render (${liftedMs})`);
+    {
         // Generous: the bug was 165x here. 5x plus a 1 ms floor absorbs
         // machine variance, scheduler noise and a slow GPU without letting a
         // recurrence through.

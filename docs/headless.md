@@ -28,7 +28,7 @@ Scripts and `-e` expressions are compiled in-process by bronze and run against t
 | `--print-host-globals` | Install the host globals exactly as a run would, print bronze's host-global registry to stdout one name per line, and exit: the `--host-globals` manifest for `bronze build` of an app that will run on this binary. |
 | `--print-native-manifest <path>` | The other half of the same contract: write the native registry — the `__bro_native.*` entry points and signatures behind `bro.time`, `bro.settings`, `bro.window` and the panels' `__bro.*` — as the JSON `--native-manifest` for the same compile, and exit. Combines with `--print-host-globals` in one run; `tests/bronze_host/lib.sh` asks for both that way. |
 
-By default, headless uses headless offscreen Vulkan rendering directly on the GPU without requiring Xvfb on Linux, running the same rendering pipeline as windowed mode, including GPU-accelerated Skia, WebGL2, and 3D scene layers.
+By default, headless renders offscreen on a Vulkan device (no window, no X server) through the same pipeline as windowed mode: Skia on the GPU, WebGL2 and 3D scene layers, composited by the same presenter.
 
 ## Headless globals
 
@@ -55,7 +55,7 @@ These functions are available in addition to all standard DOM APIs:
 | `screenshot(path, selector)` | Render the current frame and crop to the element's bounding box before saving. Bounding box uses viewport-relative coords (matches `getBoundingClientRect`); at a device scale above 1 the crop, like the whole frame, is in device px. Transparent canvas pixels flatten to opaque black; for alpha-preserving canvas exports use `screenshotCanvas`. |
 | `screenshotCanvas(path, selector)` | Snapshot a `<canvas>` element's underlying Skia surface directly to PNG, preserving alpha. Selector must point to a 2D canvas (not WebGL or scene). |
 | `getPixel(x, y)` | Return `{r, g, b, a}` for the pixel at **document** coordinates, the same space `getBoundingClientRect()` reports in, so a probe can be compared against a measured rect with no inset arithmetic. Renders the full composited frame (HTML, Canvas, WebGL, scene) and reads back the pixel. Engine chrome (menu bar, docked inspector) insets the document within the frame; `getPixel` folds that in for you. Out-of-document coordinates return all zeroes. |
-| `getPixels(x, y, w, h)` | A `w`×`h` block of `getPixel` probes from **one** composite, as `{width, height, data}` with `data` a `Uint8ClampedArray` of RGBA (ImageData-shaped). Same document coordinates and sampling as `getPixel`; texels outside the document are zeroes. Use it for any scan: each `getPixel` call composites and reads back the whole window, so a loop of a few thousand probes costs a few thousand frames (seconds on a GPU, minutes on software GL). |
+| `getPixels(x, y, w, h)` | A `w`×`h` block of `getPixel` probes from **one** composite, as `{width, height, data}` with `data` a `Uint8ClampedArray` of RGBA (ImageData-shaped). Same document coordinates and sampling as `getPixel`; texels outside the document are zeroes. Use it for any scan: each `getPixel` call composites and reads back the whole window, so a loop of a few thousand probes costs a few thousand frames (seconds on a GPU, minutes on a software device such as Lavapipe). |
 | `getFramePixel(x, y)` | Same readback in **frame** coordinates: the whole composited window including engine chrome. Only needed when asserting something about the chrome itself (e.g. that the menu bar occupies the top strip); app content is easier to probe with `getPixel`. |
 
 ### Input simulation
@@ -113,7 +113,7 @@ gamepad/`"action"` stream on the main window (see
 | `setPickedFiles(paths)` | What the next `<input type=file>` click picks (a path string or an array of them). There is no native picker with no user present, so queue the choice and click the input as a user would; the click consumes it, and a click with nothing queued is a cancelled pick. See docs/file-api.js. |
 | `lastDownload()` | Absolute path of the file the most recent `<a download>` click saved, or `null` if none has. Lets a test assert on an app's export without knowing the user's Downloads folder. See docs/file-api.js. |
 | `setDialogAnswer(accept)` | What `alert`/`confirm`/`prompt` do with no user to ask. Headless never blocks on them: the message is logged and the call returns at once, accepting by default (`confirm` → `true`, `prompt` → its default value). Pass `false` to take the cancel branch instead (`confirm` → `false`, `prompt` → `null`) until set back. See docs/dialogs-api.js. |
-| `resize(w, h)` | Resize the virtual viewport. Each side is clamped to [1, 16384], the largest surface one GL texture can back. |
+| `resize(w, h)` | Resize the virtual viewport. Each side is clamped to [1, 16384], the largest image a Vulkan device must support. |
 | `setDeviceScaleFactor(s)` | Simulate a display with `s` device px per CSS px (a Retina Mac is 2), the way a windowed engine follows its window's backing scale. `devicePixelRatio` and `@media (resolution)` change, `resize` and matchMedia `change` fire, and the layer surfaces, the 3D scene and every captured frame render at `s`× (a `screenshot()` is `s`× the viewport). Layout, `getBoundingClientRect`, `click()` and `getPixel()` stay in CSS px. |
 | `gamepadConnect([id])` | Connect a virtual gamepad; returns its slot index. Fires `gamepadconnected` on window, appears in `navigator.getGamepads()`. |
 | `gamepadDisconnect(index)` | Disconnect a virtual gamepad. Fires `gamepaddisconnected`. |
@@ -271,7 +271,7 @@ DOM update actually pays for, and the two a screenshot can't show you.
 | `perf.now()` | Real wall-clock milliseconds. **Use this, not `performance.now()`**: in headless that one rides virtual time (see below), so it is frozen between `advanceTime()` calls and reports 0ms for work that took a second. (Windowed and server runs interpolate it from wall time instead, so an app profiling its own render frame there gets a real number; headless stays frozen on purpose, so a test measuring across N virtual milliseconds gets exactly N back.) |
 | `perf.reset()` | Zero the counters. |
 | `perf.stats()` | The counters since the last reset (CPU style/layout only). |
-| `perf.gpuFrameMs()` | **Real GPU milliseconds** for the last `flush()`'s 3D scene render, from a native `GL_TIME_ELAPSED` query wrapped around the scene draw. Blocking: it reads `GL_QUERY_RESULT`, which forces that frame's GPU work to finish, so each call returns an isolated per-frame GPU cost. This is the number to trust for 3D/render perf — wall-clock around `flush()` returns *before* the GPU runs the draws and so measures nothing. Returns `-1` for a 2D-only page, under `--no-gpu`, or before the first scene flush. |
+| `perf.gpuFrameMs()` | **Real GPU milliseconds** for the last `flush()`'s 3D scene render, from Vulkan timestamp queries written at the start and end of each scene's render (summed over the page's scenes). Blocking: it waits for that render's submission, so each call returns an isolated per-frame GPU cost. This is the number to trust for 3D/render perf — wall-clock around `flush()` returns *before* the GPU runs the draws and so measures nothing. Returns `-1` for a 2D-only page, under `--no-gpu`, or before the first scene flush. |
 
 Measuring GPU frame cost — drive the camera directly (suppress the app's rAF so it can't clobber it), `flush()`, and read `perf.gpuFrameMs()` each frame; each read serializes on that frame's query, so summing gives a clean average:
 
@@ -477,11 +477,11 @@ Headless mode shares the same `Engine` class as windowed mode, configured via `E
 
 ### GPU mode (default)
 
-- Uses headless Vulkan 1.3 Core with Dynamic Rendering (`VK_KHR_dynamic_rendering`) directly via `VulkanContext` and `VulkanPresenter` without requiring an X11 server, window, or Xvfb on Linux
+- A Vulkan 1.3 device (`VulkanContext`) and `VulkanPresenter` with no surface: no window and no X server
 - Uses `SkiaRenderer`: same Skia rasterization backend as windowed mode. Skia draws on the GPU (Ganesh on Vulkan, `SkiaGpu`, sharing the engine's device and queue): UI layers, iframes and 2D canvases are GPU images the presenter samples in place, read back only for a capture or `getImageData`. `BRO_SKIA_GPU=0` keeps Skia on the CPU (raster layers uploaded to the composite) for comparing the two; anti-aliased edges can differ by a few levels, flat colours and `getImageData`/`putImageData` round trips match exactly
-- WebGL2 support: Three.js, raw WebGL, and other GL frameworks work via native Vulkan translation (`WebGLVkContext`, `WebGLVkCanvas`)
+- WebGL2 runs on Vulkan (`WebGLVkContext`), so Three.js, PixiJS and raw WebGL code run unchanged; the support matrix below lists exactly what is implemented
 - 3D scene graph runs Vulkan render passes; its shaders are compiled to SPIR-V by the in-process glslang (built-in ones at build time, custom shaders and WebGL programs at run time), and pipelines persist in the on-disk pipeline cache
-- Screenshots replicate the windowed compositing pass: scene layers rendered to offscreen Vulkan render targets, UI overlay composited on top with zero-copy texture presentation, then read back directly via Vulkan transfer buffers
+- Screenshots are the windowed composite: the presenter samples every layer image in place into an offscreen target, which is copied to a host buffer and read back
 - Text metrics use Skia with platform-native fonts (DirectWrite on Windows, FreeType/fontconfig on Linux), pixel-identical to windowed rendering
 
 ### WebGL2 support matrix
@@ -541,7 +541,7 @@ reads and blits on an incomplete one; `drawBuffers` / `readBuffer` with the
 ES 3.0 rules (`BACK` / `NONE` on the canvas, `COLOR_ATTACHMENTi` / `NONE` on
 an FBO); `getFramebufferAttachmentParameter` and `getRenderbufferParameter`.
 Sampling a texture attached to the draw framebuffer is `INVALID_OPERATION`.
-The canvas has a `DEPTH24_STENCIL8` buffer. Renderbuffers take the
+The canvas has a depth/stencil buffer: `D24_UNORM_S8_UINT` where the device has it, else `D32_SFLOAT_S8_UINT` (AMD; `DEPTH_BITS` then reports 32). Renderbuffers take the
 color-renderable and depth/stencil formats, multisampled at the counts the
 device has (`getInternalformatParameter(RENDERBUFFER, fmt, SAMPLES)`;
 integer formats are never multisampled), and start cleared (color 0,
@@ -557,7 +557,11 @@ targets, with the ES 3.0 validation. `readPixels` reads the read buffer of the
 canvas or an FBO as RGBA/`UNSIGNED_BYTE` (normalized buffers), RGBA/`FLOAT`
 (float buffers) or `RGBA_INTEGER`/`INT` or `UNSIGNED_INT` (integer buffers),
 honours `PACK_ALIGNMENT`, leaves pixels outside the framebuffer untouched,
-and can target a `PIXEL_PACK_BUFFER`.
+and can target a `PIXEL_PACK_BUFFER`. Into a pack buffer, a read of the
+buffer's own bytes (RGBA8 as RGBA/`UNSIGNED_BYTE`, RGBA32F as RGBA/`FLOAT`,
+...) is a GPU copy nothing waits for until the buffer is read on the CPU
+(`getBufferSubData`, a mapping); one that converts formats reads back and
+packs on the CPU.
 
 **Textures.** 2D, cube, 2D array and real 3D images in every ES 3.0
 sized and unsized format (normalized, `SNORM`, integer, sRGB, packed,
@@ -663,7 +667,12 @@ objects, and `getExtension` answers the same object on every call. Array
 results are the typed arrays the IDL names.
 
 **Not implemented:** an antialiased canvas (`antialias` is reported false;
-render into a multisampled renderbuffer and blit instead).
+render into a multisampled renderbuffer and blit instead). The other context
+attributes are not honoured either (as before the Vulkan port):
+`getContextAttributes()` reports fixed values, an `alpha: false` canvas
+still composites its alpha, and `preserveDrawingBuffer: false` preserves.
+`toDataURL` on a WebGL canvas encodes premultiplied bytes, and a WebGL canvas
+is not a `texImage2D` source (`INVALID_VALUE`).
 
 #### `BRO_buffer_map` — direct access to buffer storage
 
@@ -671,29 +680,14 @@ Not a WebGL extension. WebGL cannot expose `glMapBufferRange`, because doing so
 means handing a web page a raw pointer into driver memory; bro is not a browser
 and can.
 
-**It is not faster than `bufferSubData`.** Measured per update, RTX 4090:
+**It is not faster than `bufferSubData`.** A mapping is a view of bro's CPU
+copy of the buffer, and unmapping it uploads the mapped range through the
+same path `bufferSubData` takes (a staging copy recorded into the context's
+command stream), so both move the bytes the same number of times.
 
-| payload | `bufferSubData` | `mapBufferRange` |
-|---|---|---|
-| 64 KB | 0.008 ms | 0.008 ms |
-| 1 MB | 0.130 ms | 0.113 ms |
-| 4 MB | 0.495 ms | 0.496 ms |
-
-The intuition that mapping removes a copy does not apply here: bro's
-`bufferSubData` already hands the caller's `TypedArray` pointer straight to GL,
-so both paths move the bytes exactly once. And if JS *generates* the data
-element by element rather than already holding it, the fill loop costs ~60 ns
-per float against ~0.1 ns per byte of transport — the copy is nowhere near the
-bottleneck, so removing it changes nothing (measured 0.93x–1.02x).
-
-What mapping actually buys is two things `bufferSubData` cannot express:
-
-- **Read-modify-write of a sub-range** with no JS-side mirror of the buffer.
-  Changing a few values in a large buffer otherwise means either keeping a full
-  shadow copy in JS or reading back first.
-- **`MAP_UNSYNCHRONIZED_BIT` streaming**, where the app takes responsibility for
-  not overwriting in-flight data (ring-buffer style) instead of letting the
-  driver serialize.
+What mapping buys is **read-modify-write of a sub-range** with no JS-side
+mirror of the buffer: changing a few values in a large buffer otherwise
+means keeping a full shadow copy in JS, or reading back first.
 
 ```js
 const M = gl.getExtension('BRO_buffer_map');   // null if unavailable
@@ -709,29 +703,34 @@ gl.unmapBuffer(gl.ARRAY_BUFFER);               // `ab` is detached here
 
 - `mapBufferRange(target, offset, length, access)` → an `ArrayBuffer` aliasing
   the mapped range, or `null` with a GL error set. `access` takes the
-  `MAP_*_BIT` values off the extension object.
-- `unmapBuffer(target)` → `false` if the mapping was lost and its contents must
-  be resubmitted (GL's documented `glUnmapBuffer` failure), otherwise `true`.
-- `flushMappedBufferRange(target, offset, length)` for `MAP_FLUSH_EXPLICIT_BIT`.
+  `MAP_*_BIT` values off the extension object; `READ` with `INVALIDATE_*` or
+  `UNSYNCHRONIZED` is `INVALID_OPERATION`, as in ES 3.0. A buffer the GPU
+  wrote (transform feedback, `readPixels` into a pack buffer) is read back
+  first, so a `READ` mapping sees it.
+- `unmapBuffer(target)` → `true`; a `WRITE` mapping uploads its range (one
+  with `MAP_FLUSH_EXPLICIT_BIT` uploads only what was flushed).
+- `flushMappedBufferRange(target, offset, length)` for `MAP_FLUSH_EXPLICIT_BIT`
+  mappings; `offset` is relative to the mapped range.
 
-**The returned `ArrayBuffer` is detached by `unmapBuffer`** — it aliases memory
-the driver reclaims, so it cannot be allowed to outlive the mapping. Keep any
-typed-array views inside the map/unmap pair. Mappings are tracked per buffer
-object, so rebinding the target mid-mapping is harmless, and `deleteBuffer`
-drops the mapping with the buffer.
+**The returned `ArrayBuffer` is detached when the mapping ends** —
+`unmapBuffer`, `bufferData` on the buffer (which unmaps it, as in ES 3.0),
+`deleteBuffer` or context loss — so keep typed-array views inside the
+map/unmap pair. Mappings are tracked per buffer object, so rebinding the
+target mid-mapping is harmless.
 
-GL 3.3 has no persistent mapping, so a mapping spans a single update rather
-than a frame. As in raw GL, drawing from a buffer while it is mapped is
-undefined; this layer passes calls through and does not police it.
+A mapping spans a single update, not a frame. `MAP_UNSYNCHRONIZED_BIT` is
+accepted and changes nothing: the upload is ordered after every draw already
+recorded, so it can never race one. Drawing from a buffer while it is mapped
+draws its contents as of the last upload.
 
 ### CPU mode (`--no-gpu`)
 
-- No window, no SDL video subsystem, no Vulkan device
+- No Vulkan device; the hidden window that carries `bro.window` state is a plain (non-Vulkan) SDL one
 - Uses `SkiaRenderer` with Skia on the CPU: the same record → replay → composite pipeline as the GPU path, with CPU layer surfaces composited on the CPU, so iframes, system panels and a device scale above 1 render as they do on the GPU
 - Canvas 2D rendered via software command replay
 - No WebGL support (apps fall back gracefully)
 - No 3D scene: `canvas.getContext('scene')` returns `null`, so branch on it (`const s = canvas.getContext('scene'); if (!s) { /* 2D fallback */ }`). The 3D renderer is Vulkan end to end and requires a GPU device. Note that `bro.gpu.available` reports the ML/compute backend (Vulkan/CUDA/Metal).
-- The same applies when a headless boot *tries* for GPU and fails: if SDL can't open a video device the engine logs `falling back to CPU raster rendering` and behaves exactly as `--no-gpu` from then on
+- Nothing falls back to it silently: a headless boot that asks for the GPU and finds no usable Vulkan device fails (`Fatal: Headless Vulkan initialization failed`) rather than quietly testing the CPU path; pass `--no-gpu` to choose it
 - Screenshots read straight from the CPU composite
 - Input simulation (click, mouseDown, etc.) works fully, hit testing, event dispatch, focus management all function without a GPU
 
@@ -741,7 +740,7 @@ Time does not advance automatically in headless mode. Use `advanceTime(ms)` to a
 
 - Advances in 16ms steps (matching ~60fps frame cadence)
 - Ticks `setTimeout` / `setInterval` callbacks
-- Fires `requestAnimationFrame` callbacks (with WebGL canvas FBO bound when applicable)
+- Fires `requestAnimationFrame` callbacks
 - Runs pending JS microtasks (promises)
 - Pumps fetch requests (brokit HTTP)
 - Ticks worker threads

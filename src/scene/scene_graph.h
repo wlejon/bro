@@ -180,7 +180,7 @@ public:
     bool keepAlive() const { return keepAlive_; }
     void setKeepAlive(bool k) { keepAlive_ = k; }
 
-    /// Set canvas dimensions (needed for FBO sizing).
+    /// Set canvas dimensions (the 3D render targets follow them).
     void setCanvasSize(int w, int h);
     int canvasWidth() const { return canvasWidth_; }
     int canvasHeight() const { return canvasHeight_; }
@@ -194,13 +194,13 @@ public:
     void tickAnimations(float dtSec);
 
     /// Update world matrices for any dirty nodes, then render all visible nodes.
-    /// 3D MeshNodes are rendered into an FBO via GL. 2D nodes render via CanvasScene.
+    /// 3D nodes render through SceneRenderer's Vulkan passes; 2D nodes via CanvasScene.
     void render();
 
     /// Returns true if any MeshNodes were rendered this frame.
     bool hasMeshContent() const { return renderer_.hasMeshContent(); }
 
-    /// Read RGBA8 pixels from the post-tonemap LDR FBO. Used by offscreen
+    /// Read RGBA8 pixels from the post-tonemap LDR target. Used by offscreen
     /// capture (artstation defineScene): renders 3D content with alpha=0 in
     /// uncovered regions, so the readback is suitable for compositing into a
     /// 2D canvas cell via putImageData. Pixels are returned in top-down row
@@ -229,7 +229,7 @@ public:
     void setLayerCallback(LayerCallback cb) { layerCb_ = std::move(cb); }
 
     /// Gizmo overlay provider. Invoked during render() after the mesh +
-    /// billboard passes, while the mesh FBO is still bound. Returns a list
+    /// billboard passes, into the scene's own target. Returns a list
     /// of externally-owned MeshNodes (not part of this graph's node table)
     /// to draw as screen-overlay gizmo handles. Drawn with depth-test
     /// disabled so handles always win the depth test — matches DCC tool
@@ -367,7 +367,7 @@ public:
     void setStarfield(const StarfieldParams& s) { renderer_.setStarfield(s); }
     const StarfieldParams& starfield() const { return renderer_.starfield(); }
 
-    /// Tone mapping mode applied when composing the HDR mesh FBO to the
+    /// Tone mapping mode applied when composing the HDR scene target to the
     /// caller-facing LDR texture. ACES matches modern filmic defaults;
     /// Reinhard is a cheaper fallback; Linear is raw clamp to 0-1.
     using ToneMap = SceneRenderer::ToneMap;
@@ -489,7 +489,7 @@ public:
 
     /// Editor affordance: when true, every LightNode renders a small
     /// kind-specific marker billboard at its world position (visible in
-    /// the 3D FBO, depth-tested against geometry). Also makes lights
+    /// the 3D scene, depth-tested against geometry). Also makes lights
     /// pickable via `raycast()`: hits return the LightNode as `hit.node`.
     void setShowLightIcons(bool on) { renderer_.setShowLightIcons(on); }
     bool showLightIcons() const { return renderer_.showLightIcons(); }
@@ -508,7 +508,7 @@ public:
     // --- Render-target quality ---
 
     /// Internal render-resolution scale (clamped 0.25-2.0, default 1.0).
-    /// Multiplies the 3D render-target sizes (HDR mesh FBO + tonemap +
+    /// Multiplies the 3D render-target sizes (HDR scene target + tonemap +
     /// bloom + tilt-shift chains); the compositor samples the result at the
     /// CSS element box, so layout, picking and camera aspect are unaffected.
     /// <1 trades sharpness for fill-rate, >1 supersamples.
@@ -517,7 +517,7 @@ public:
     void  setDeviceScale(float s) { renderer_.setDeviceScale(s); }
 
     /// MSAA sample count for the HDR 3D passes (0/1 = off; clamped to the
-    /// driver's GL_MAX_SAMPLES at allocation). Multisampled color + depth
+    /// device's supported sample counts at allocation). Multisampled color + depth
     /// resolve into the single-sampled targets before tonemap, so the post
     /// stack, unlit overlay and soft particles are unaffected.
     void setMSAA(int samples) { renderer_.setMSAA(samples); }
@@ -529,8 +529,7 @@ public:
     /// cubemap that backs both skybox rendering and IBL precompute
     /// (irradiance + prefilter, added in later passes). Returns true on
     /// success; on failure the previous environment is kept. Pass an empty
-    /// path to clear. Must be called on the GL thread (JS bindings already
-    /// satisfy this).
+    /// path to clear. Main thread only (JS bindings already satisfy this).
     bool loadEnvironment(const std::string& hdrPath) {
         return renderer_.loadEnvironment(hdrPath);
     }
@@ -555,8 +554,8 @@ public:
     /// pipeline flavour (static / skinned / instanced) — skinned nodes
     /// compile Static AND Skinned since a not-ready skin degrades to the
     /// static path. True when linked (or already cached); false with the
-    /// full driver log in errOut. Must be called on the GL thread (JS
-    /// bindings already satisfy this). `key` is CustomShaderState's cache
+    /// full compiler log in errOut. Main thread only (JS bindings already
+    /// satisfy this). `key` is CustomShaderState's cache
     /// key: vertex + '\x1f' + fragment. Non-empty vertex chunks also
     /// pre-compile the matching shadow variant (failure there only warns —
     /// the caster falls back to the undisplaced default silhouette).
@@ -576,8 +575,8 @@ public:
     float cameraY() const { return cameraY_; }
     float cameraZoom() const { return cameraZoom_; }
 
-    /// Iterate all HtmlNodes and run dirty layout/paint/GL upload. Runs on
-    /// the main/GL thread before scene render so the detached Documents stay
+    /// Iterate all HtmlNodes and run dirty layout/paint/upload. Runs on
+    /// the main thread before scene render so the detached Documents stay
     /// serialized with JS mutations.
     void materializeHtmlNodes(render::SkiaRenderer* renderer);
 
@@ -657,8 +656,8 @@ private:
     float cameraOrthoB_ = -1.0f, cameraOrthoT_ = 1.0f;
     // When the caller didn't pin an explicit aspect (e.g. omitted `aspect`
     // in scene.setCamera), the projection matrix must stay in lock-step with
-    // canvas/FBO dimensions — otherwise resizing the window squishes content
-    // because the FBO grows while the projection stays baked at the old
+    // canvas dimensions — otherwise resizing the window squishes content
+    // because the targets grow while the projection stays baked at the old
     // aspect. setCanvasSize() rebuilds the projection when this is true.
     bool  cameraAspectFollowsCanvas_ = false;
 
@@ -670,7 +669,7 @@ private:
     float cameraX_ = 0, cameraY_ = 0;
     float cameraZoom_ = 1.0f;
 
-    // Canvas size for FBO
+    // Canvas size (the 3D targets follow it)
     int canvasWidth_ = 0, canvasHeight_ = 0;
 
     LayerCallback layerCb_;

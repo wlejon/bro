@@ -6,19 +6,20 @@
 
 namespace bro::scene::vk {
 
-/// The camera block (set 0), std140 — shaders/scene_camera.glsl.
+/// The camera block (set 0), std140 — shaders/scene_camera.glsl. The
+/// matrices are camera-relative (scene_view.h): view takes (world - eye).
 struct alignas(16) SceneCameraUniforms {
     alignas(16) float view[16];
     alignas(16) float proj[16];
     alignas(16) float viewProj[16];
     alignas(16) float invView[16];
     alignas(16) float invProj[16];
-    alignas(16) float eyePos[4];     // xyz = position
+    alignas(16) float eyeWorld[4];   // xyz = the eye's absolute world position
     alignas(16) float viewport[4];   // x = width, y = height, z = near, w = far
     alignas(16) float fogParams[4];  // x = start, y = end, z = density, w = start distance
     alignas(16) float fogColor[4];   // rgb = color, a = heightFalloff
     alignas(16) float wind[4];       // xyz = direction, w = strength
-    alignas(16) float windParams[4]; // x = time (s), y = frequency
+    alignas(16) float windParams[4]; // x = time (s), y = frequency, z = the eye's phase offset
 };
 
 /// The light and shadow-tile capacity of the lighting block (SceneRenderer's
@@ -28,7 +29,7 @@ constexpr int kSceneMaxShadowTiles = 16;
 
 /// One light — SceneLight in shaders/scene_lighting.glsl.
 struct alignas(16) SceneLightUniform {
-    alignas(16) float position[4];      // xyz = world position, w = type (0 dir, 1 point, 2 spot)
+    alignas(16) float position[4];      // xyz = camera-relative position, w = type (0 dir, 1 point, 2 spot)
     alignas(16) float direction[4];     // xyz = unit direction (light -> scene), w = range
     alignas(16) float color[4];         // rgb = color, a = intensity
     alignas(16) float shadow[4];        // x = cos(inner), y = cos(outer), z = first tile (-1), w = tile count
@@ -37,7 +38,7 @@ struct alignas(16) SceneLightUniform {
 
 /// One shadow atlas tile — ShadowTile in shaders/scene_lighting.glsl.
 struct alignas(16) SceneShadowTileUniform {
-    alignas(16) float matrix[16];       // world -> (tile uv, [0,1] depth)
+    alignas(16) float matrix[16];       // camera-relative position -> (tile uv, [0,1] depth)
     alignas(16) float rect[4];          // atlas uv origin.xy, size.zw
     alignas(16) float bias[4];          // const depth bias, normal offset, texel world const, per metre
     alignas(16) float depth[4];         // near, far, ortho
@@ -51,6 +52,7 @@ struct alignas(16) SceneLightingUniforms {
     alignas(16) float params[4];        // light count, PCF taps, 1/atlas size, shadow tile count
     SceneLightUniform lights[kSceneMaxLights];
     SceneShadowTileUniform shadows[kSceneMaxShadowTiles];
+    // The probe and shade map, like every position here, camera-relative.
     alignas(16) float probeWorldToLocal[16];
     alignas(16) float probeLocalToWorld[16];
     alignas(16) float probePos[4];      // xyz = pos, w = enabled (1 or 0)

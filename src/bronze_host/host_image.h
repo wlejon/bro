@@ -38,7 +38,7 @@ Value makeImageValue();
 // cell), NOT heap bytes — so unlike embed::typedArrayInfo's pointer this one
 // survives a bronze allocation and stays valid until the value is collected.
 // That is what lets the texture upload path read width/height through embed
-// calls and only then hand the pixels to GL.
+// calls and only then hand the pixels to the WebGL context.
 struct HostImage {
     uint32_t tag = kHostImageTag;  // must be first — see the tag note in host_class.h
     std::string src;

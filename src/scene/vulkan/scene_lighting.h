@@ -15,6 +15,8 @@
 #include "scene/vulkan/scene_pass.h"
 #include "scene/vulkan/scene_vk_descriptors.h"
 
+#include <bromath/vec.h>
+
 namespace bro::scene {
 class ReflectionProbeNode;
 class SceneRenderer;
@@ -27,8 +29,10 @@ class SceneEnvironment;
 
 /// The lights, ambient and shadow tiles of `renderer`'s current frame
 /// (SceneRenderer::frameLights / shadowPlan), with `environment`'s IBL and
-/// the atmosphere.
-SceneLightingUniforms sceneLighting(const SceneRenderer& renderer, const SceneEnvironment& environment);
+/// the atmosphere, for a view whose eye is `eye`: every position is relative
+/// to it (camera-relative rendering, scene_view.h).
+SceneLightingUniforms sceneLighting(const SceneRenderer& renderer, const SceneEnvironment& environment,
+                                    const bromath::Vec3& eye);
 
 /// The frame's camera set (frame.cameraSet), from frame.view.
 void writeCameraSet(SceneFrame& frame);
@@ -49,6 +53,11 @@ struct ProbeLighting {
 /// (either may be null): the frame's own when both are, else one written
 /// once per (probe, shade map) pair per frame.
 VkDescriptorSet lightingSetFor(SceneFrame& frame, const ProbeLighting* probe, const ShadeMapBinding* shade);
+
+/// `base` with `shade`'s map (origin relative to `eye`), for a view other
+/// than the frame's own (a reflection-probe face).
+VkDescriptorSet shadedLightingSet(SceneGpu& gpu, const SceneLightingUniforms& base, const ShadeMapBinding& shade,
+                                  const bromath::Vec3& eye);
 
 class PassFrameUniforms final : public ScenePass {
 public:

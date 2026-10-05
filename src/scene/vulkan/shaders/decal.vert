@@ -8,7 +8,7 @@ layout(set = 0, binding = 0) uniform CameraUBO {
     mat4 viewProj;
     mat4 invView;
     mat4 invProj;
-    vec4 eyePos;
+    vec4 eyeWorld;
     vec4 viewport;
     vec4 fogParams;
     vec4 fogColor;
@@ -20,7 +20,7 @@ layout(push_constant) uniform DecalPush {
     vec4 modulate;
     vec4 decalUp;      // xyz = up, w = emissionStrength
     vec4 fades;        // x: upperFade, y: lowerFade, z: normalFade, w: unused
-    ivec4 flags;       // x: hasAlbedo, y: hasEmission
+    ivec4 flags;       // x: hasAlbedo, y: hasEmission, z: multisampled depth
 } push;
 
 void main() {

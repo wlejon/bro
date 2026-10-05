@@ -114,6 +114,8 @@ if (!gl) {
     expectError(gl.INVALID_VALUE, 'getVertexAttrib of index 16');
     assert(gl.getVertexAttrib(2, gl.BUFFER_SIZE) === null, 'an unknown pname');
     expectError(gl.INVALID_ENUM, 'getVertexAttrib of an unknown pname');
+    gl.getParameter(0x1234);
+    expectError(gl.INVALID_ENUM, 'getParameter of an unknown pname');
     gl.getVertexAttribOffset(2, gl.VERTEX_ATTRIB_ARRAY_SIZE);
     expectError(gl.INVALID_ENUM, 'getVertexAttribOffset of a pname other than POINTER');
 

@@ -86,7 +86,7 @@ let modes = bro.settings.getDisplayModes();
 | `graphics.width` | int | 1920 | Window width in pixels |
 | `graphics.height` | int | 1080 | Window height in pixels |
 | `graphics.fullscreen` | bool | false | Fullscreen mode |
-| `graphics.vsync` | bool | true | Vertical sync (adaptive preferred, standard fallback) |
+| `graphics.vsync` | bool | true | Vertical sync (FIFO_RELAXED where the surface has it, else FIFO; off is MAILBOX or IMMEDIATE) |
 | `graphics.resizable` | bool | true | Whether the window can be resized |
 | `graphics.maxFrameIntervalMs` | number | 8.0 | Layout/raster throttle in ms (0 = uncapped) |
 | `graphics.maxFps` | number | 0 | Present-rate cap independent of vsync (0 = uncapped). Also settable via the `maxFps` manifest key. The window is always clamped to 30 fps while it lacks input focus, regardless of this value. |
@@ -292,7 +292,7 @@ Settings changed via `bro.settings.set()` take effect immediately:
 | Setting | Runtime effect |
 |---------|---------------|
 | `graphics.fullscreen` | Toggles fullscreen via SDL |
-| `graphics.vsync` | Changes swap interval |
+| `graphics.vsync` | Recreates the swapchain with the new present mode |
 | `graphics.width/height` | Resizes window (windowed mode only) |
 | `graphics.resizable` | Toggles window resizability |
 | `graphics.maxFrameIntervalMs` | Changes render throttle |

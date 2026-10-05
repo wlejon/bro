@@ -42,7 +42,7 @@ class SceneDefaults;
 /// Per-draw push constants of every mesh pipeline (and the terrain's) —
 /// shaders/scene_mesh_push.glsl. Exactly the 128 bytes every device offers.
 struct alignas(16) MeshPushConstants {
-    float model[16];
+    float model[16];      // the node's world matrix less the frame's eye (scene_view.h)
     float baseColor[4];
     float emissive[4];    // rgb tint, a = intensity
     float pbrParams[4];   // metallic, roughness, alphaCutoff, flags
@@ -74,6 +74,14 @@ enum class MeshKind : uint8_t { Static, Instanced, Skinned, Scatter, Tube };
 constexpr int kMeshKindCount = 5;
 
 struct MeshDraw {
+    /// Move the draw to positions relative to an eye `offset` from the one it
+    /// was prepared for (push.model is camera-relative).
+    void rebase(const bromath::Vec3& offset) {
+        push.model[12] += offset.x;
+        push.model[13] += offset.y;
+        push.model[14] += offset.z;
+    }
+
     MeshKind kind = MeshKind::Static;
     uint32_t nodeId = 0;
     const CustomShaderState* custom = nullptr;   // null: built-in shading
@@ -149,7 +157,7 @@ private:
     };
 
     template <typename Node>
-    static void fillMaterial(const Node& node, MeshDraw& out);
+    static void fillMaterial(const SceneFrame& frame, const Node& node, MeshDraw& out);
     /// kShadeMap when the node's shade map resolves this frame (into out.shade).
     template <typename Node>
     static uint32_t resolveShade(const Node& node, MeshDraw& out);

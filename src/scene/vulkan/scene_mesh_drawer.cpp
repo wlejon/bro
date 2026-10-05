@@ -314,10 +314,10 @@ VkDescriptorSet SceneMeshDrawer::customSet(SceneFrame& frame, uint32_t nodeId, c
 }
 
 template <typename Node>
-void SceneMeshDrawer::fillMaterial(const Node& node, MeshDraw& out) {
+void SceneMeshDrawer::fillMaterial(const SceneFrame& frame, const Node& node, MeshDraw& out) {
     const float* color = node.color();
     const float* emissiveColor = node.emissiveColor();
-    std::memcpy(out.push.model, node.worldMatrix().data, sizeof(out.push.model));
+    std::memcpy(out.push.model, frame.view.relative(node.worldMatrix()).data, sizeof(out.push.model));
     std::memcpy(out.push.baseColor, color, sizeof(out.push.baseColor));
     out.push.emissive[0] = emissiveColor[0];
     out.push.emissive[1] = emissiveColor[1];
@@ -413,7 +413,7 @@ bool SceneMeshDrawer::prepare(SceneFrame& frame, MeshNode& node, MeshDraw& out) 
     out.vertices = gm->vertices.buffer;
     out.indices = gm->indices.buffer;
     out.indexCount = gm->indexCount;
-    fillMaterial(node, out);
+    fillMaterial(frame, node, out);
     out.push.extra[1] = node.subsurface();
     out.push.extra[2] = node.windMask();
     out.twoSided = node.twoSided();
@@ -496,7 +496,7 @@ bool SceneMeshDrawer::prepareProcedural(SceneFrame& frame, InstancedMeshNode& no
     }
     if (!out.vertexSet) return false;
     out.nodeId = node.id();
-    fillMaterial(node, out);
+    fillMaterial(frame, node, out);
     if (out.kind == MeshKind::Scatter) out.castsShadow = false;   // leaves never cast, as on GL
     out.twoSided = node.doubleSided();
     out.push.extra[3] = static_cast<float>(std::clamp(node.atlasCols(), 1, 255)) +
@@ -546,7 +546,7 @@ bool SceneMeshDrawer::prepare(SceneFrame& frame, InstancedMeshNode& node, MeshDr
     out.instances = rows.buffer;
     out.instanceOffset = rows.offset;
     out.instanceCount = static_cast<uint32_t>(rowCount);
-    fillMaterial(node, out);
+    fillMaterial(frame, node, out);
     out.twoSided = node.doubleSided();
     out.push.extra[3] = static_cast<float>(std::clamp(node.effectiveAtlasCols(), 1, 255)) +
                         256.0f * static_cast<float>(std::clamp(node.effectiveAtlasRows(), 1, 255));

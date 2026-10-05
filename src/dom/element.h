@@ -448,7 +448,7 @@ public:
     void* webglContext() const { return webglContext_; }
 
     // Scene graph (opaque pointer — set by engine, read by draw traversal for
-    // 3D FBO compositing). Non-null means the element HAS a live scene graph,
+    // 3D layer compositing). Non-null means the element HAS a live scene graph,
     // not merely that it once did: every engine path that reclaims a graph
     // clears this (Engine::pruneDetachedSceneGraphs / clearSceneGraphs), the
     // same contract canvasScene_ above keeps.

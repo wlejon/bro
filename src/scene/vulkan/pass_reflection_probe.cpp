@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <map>
 #include <vector>
 
 namespace bro::scene::vk {
@@ -177,6 +178,12 @@ void PassReflectionProbe::renderFace(SceneFrame& frame, const ReflectionProbeNod
     SceneVkDescriptorWriter camWriter;
     camWriter.writeBuffer(0, camInfo.buffer, camInfo.range, camInfo.offset);
     camWriter.updateSet(gpu.device.device(), cameraSet);
+    // The face draws relative to the probe: its own lighting, and every draw
+    // (prepared relative to the frame's eye) re-based onto it.
+    const SceneLightingUniforms lighting = sceneLighting(frame.renderer, gpu.environment, eye);
+    const VkDescriptorSet lightingSet = writeLightingSet(gpu, lighting, VK_NULL_HANDLE, nullptr);
+    const bromath::Vec3 rebase = frame.view.eye - eye;
+    std::map<const uint8_t*, VkDescriptorSet> shadedSets;
 
     VkRenderingAttachmentInfo color{};
     color.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
@@ -208,7 +215,7 @@ void PassReflectionProbe::renderFace(SceneFrame& frame, const ReflectionProbeNod
     TargetFormat target = TargetFormat::colorOnly(kCubeFormat);
     target.depth = SceneTargets::kDepthFormat;
     if (gpu.environment.skyVisible(frame.renderer, true)) {
-        gpu.environment.drawSky(gpu, cmd, target, cameraSet, frame.lightingSet, frame.renderer);
+        gpu.environment.drawSky(gpu, cmd, target, cameraSet, lightingSet, frame.renderer);
     }
 
     const bool cull = frame.renderer.frustumCullingEnabled();
@@ -217,10 +224,17 @@ void PassReflectionProbe::renderFace(SceneFrame& frame, const ReflectionProbeNod
         if (cull && draw.hasBounds && !bromath::fintersects(view.frustum, draw.bounds)) continue;
         MeshDraw faceDraw = draw;
         faceDraw.mirrored = true;
+        faceDraw.rebase(rebase);
+        const auto flags = static_cast<uint32_t>(draw.push.pbrParams[3]);
         // The capture is raw radiance: alpha is coverage, not the SSR mask.
-        faceDraw.push.pbrParams[3] = static_cast<float>(static_cast<uint32_t>(draw.push.pbrParams[3]) &
-                                                        ~mesh_flags::kReflectance);
-        gpu.meshes.record(cmd, target, cameraSet, frame.lightingSet, faceDraw);
+        faceDraw.push.pbrParams[3] = static_cast<float>(flags & ~mesh_flags::kReflectance);
+        faceDraw.lightingSet = VK_NULL_HANDLE;
+        if (flags & mesh_flags::kShadeMap) {
+            auto [it, fresh] = shadedSets.try_emplace(draw.shade.pixels, VK_NULL_HANDLE);
+            if (fresh) it->second = shadedLightingSet(gpu, lighting, draw.shade, eye);
+            faceDraw.lightingSet = it->second;
+        }
+        gpu.meshes.record(cmd, target, cameraSet, lightingSet, faceDraw);
     }
     gpu.device.cmdEndRendering(cmd);
 }

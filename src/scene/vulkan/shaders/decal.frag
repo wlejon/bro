@@ -16,7 +16,7 @@ layout(push_constant) uniform DecalPush {
     vec4 modulate;
     vec4 decalUp;      // xyz = up, w = emissionStrength
     vec4 fades;        // x: upperFade, y: lowerFade, z: normalFade, w: unused
-    ivec4 flags;       // x: hasAlbedo, y: hasEmission
+    ivec4 flags;       // x: hasAlbedo, y: hasEmission, z: multisampled depth
 } push;
 
 layout(location = 0) out vec4 fragColor;
@@ -27,8 +27,9 @@ void main() {
 
     // Vulkan NDC: y = -1 is the top row, as screenUV.y = 0 is.
     vec4 ndc = vec4(screenUV * 2.0 - 1.0, d, 1.0);
-    vec4 pw = camera.invView * (camera.invProj * ndc);
-    vec3 worldPos = pw.xyz / pw.w;
+    vec4 viewPos = camera.invProj * ndc;
+    viewPos /= viewPos.w;
+    vec3 worldPos = (camera.invView * viewPos).xyz;   // camera-relative
 
     // Surface normal from screen-space derivatives, taken before any discard
     // so every 2x2 quad still has all four lanes. With Vulkan's y-down window,
@@ -38,8 +39,25 @@ void main() {
     // Cleared (sky) depth: nothing to project onto.
     if (REVERSED_Z ? d <= 0.0 : d >= 1.0) discard;
 
+    // How far the reconstructed point can sit off the real surface. Under
+    // MSAA the snapshot holds the NEAREST of the pixel's samples (the depth
+    // resolve, scene_vk_depth.h), the depth at that sample's position rather
+    // than at the pixel centre this reconstructs along: the point lands up to
+    // ~0.7 px (in world units at its depth) off the surface, toward the eye.
+    // A surface lying on a face of the box — a wall flush with its side —
+    // would then fall just outside and lose the decal outright, so the test
+    // allows that much. Single-sampled depth is the centre's own and needs
+    // room only for rounding.
+    float pixelWorld = 2.0 / (abs(camera.proj[1][1]) * camera.viewport.y);
+    if (camera.proj[2][3] != 0.0) pixelWorld *= -viewPos.z;   // perspective: grows with depth
+    float slack = pixelWorld * (push.flags.z != 0 ? 0.75 : 1e-3);
+    mat3 toLocal = mat3(push.invModel);
+    vec3 localPerWorld = vec3(length(vec3(toLocal[0][0], toLocal[1][0], toLocal[2][0])),
+                              length(vec3(toLocal[0][1], toLocal[1][1], toLocal[2][1])),
+                              length(vec3(toLocal[0][2], toLocal[1][2], toLocal[2][2])));
     vec3 local = (push.invModel * vec4(worldPos, 1.0)).xyz;
-    if (any(greaterThan(abs(local), vec3(0.5)))) discard;
+    if (any(greaterThan(abs(local), vec3(0.5) + slack * localPerWorld))) discard;
+    local = clamp(local, vec3(-0.5), vec3(0.5));
 
     // Projection UV: looking down -Y, U maps +X and V maps +Z
     vec2 uv = local.xz + 0.5;

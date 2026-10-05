@@ -240,6 +240,10 @@ void WebGLVkContext::bufferData(GLenum target, GLsizeiptr size, const void* data
     }
 
     VkBufferResource& res = buffers_[bufId];
+    // Re-specifying a mapped buffer unmaps it (ES 3.0 2.10.3); its contents
+    // are replaced, so nothing is written back.
+    res.isMapped = false;
+    res.mappedPtr = nullptr;
     const VkDeviceSize newSize = static_cast<VkDeviceSize>(size);
     // Re-specifying at the same size keeps the VkBuffer: the new contents are
     // a copy ordered after the draws that read the old ones. A new size gets a
@@ -248,8 +252,10 @@ void WebGLVkContext::bufferData(GLenum target, GLsizeiptr size, const void* data
 
     res.size = newSize;
     res.usage = usage;
-    res.shadowData.assign(static_cast<size_t>(size), 0);
-    if (data && size > 0) std::memcpy(res.shadowData.data(), data, static_cast<size_t>(size));
+    // Built aside and swapped in: `data` may alias the old contents.
+    std::vector<uint8_t> contents(static_cast<size_t>(size), 0);
+    if (data && size > 0) std::memcpy(contents.data(), data, static_cast<size_t>(size));
+    res.shadowData.swap(contents);
     ++res.version;
     if (size == 0) return;
 
@@ -356,8 +362,11 @@ void* WebGLVkContext::mapBufferRange(GLenum target, GLintptr offset, GLsizeiptr 
         setSyntheticError(GL_INVALID_VALUE);
         return nullptr;
     }
-    if (((access & (GL_MAP_INVALIDATE_RANGE_BIT | GL_MAP_FLUSH_EXPLICIT_BIT)) != 0) &&
-        !(access & GL_MAP_WRITE_BIT)) {
+    constexpr GLbitfield notWithRead = GL_MAP_INVALIDATE_RANGE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT |
+                                       GL_MAP_UNSYNCHRONIZED_BIT;
+    if (((access & (GL_MAP_INVALIDATE_RANGE_BIT | GL_MAP_FLUSH_EXPLICIT_BIT)) != 0 &&
+         !(access & GL_MAP_WRITE_BIT)) ||
+        ((access & GL_MAP_READ_BIT) && (access & notWithRead) != 0)) {
         setSyntheticError(GL_INVALID_OPERATION);
         return nullptr;
     }
@@ -375,9 +384,15 @@ void* WebGLVkContext::mapBufferRange(GLenum target, GLintptr offset, GLsizeiptr 
         return nullptr;
     }
 
+    // The mapping is bro's CPU copy of the buffer; unmapping (or an explicit
+    // flush) uploads what was written. UNSYNCHRONIZED needs nothing more: the
+    // upload is ordered after the draws already recorded, never racing them.
     syncShadow(res);
     res.isMapped = true;
     res.mappedPtr = res.shadowData.data() + offset;
+    res.mappedOffset = static_cast<VkDeviceSize>(offset);
+    res.mappedLength = static_cast<VkDeviceSize>(length);
+    res.mappedAccess = access;
     return res.mappedPtr;
 }
 
@@ -393,7 +408,10 @@ bool WebGLVkContext::unmapBuffer(GLenum target) {
         return false;
     }
 
-    uploadToBuffer(res, 0, res.shadowData.data(), res.size);
+    // Only the mapped range, and only when the mapping wrote without explicit
+    // flushes (those uploaded as they came).
+    if ((res.mappedAccess & GL_MAP_WRITE_BIT) && !(res.mappedAccess & GL_MAP_FLUSH_EXPLICIT_BIT))
+        uploadToBuffer(res, res.mappedOffset, res.shadowData.data() + res.mappedOffset, res.mappedLength);
 
     res.isMapped = false;
     res.mappedPtr = nullptr;
@@ -402,18 +420,20 @@ bool WebGLVkContext::unmapBuffer(GLenum target) {
 
 void WebGLVkContext::flushMappedBufferRange(GLenum target, GLintptr offset, GLsizeiptr length) {
     GLuint bufId = getBoundBufferId(target);
-    if (bufId == 0 || !buffers_[bufId].isMapped) {
+    if (bufId == 0 || !buffers_[bufId].isMapped ||
+        !(buffers_[bufId].mappedAccess & GL_MAP_FLUSH_EXPLICIT_BIT)) {
         setSyntheticError(GL_INVALID_OPERATION);
         return;
     }
     VkBufferResource& res = buffers_[bufId];
-    if (offset < 0 || length < 0 || offset + length > static_cast<GLintptr>(res.size)) {
+    // `offset` is relative to the mapped range (ES 3.0 2.10.3).
+    if (offset < 0 || length < 0 || offset + length > static_cast<GLintptr>(res.mappedLength)) {
         setSyntheticError(GL_INVALID_VALUE);
         return;
     }
     if (length > 0) {
-        uploadToBuffer(res, static_cast<VkDeviceSize>(offset), res.shadowData.data() + offset,
-                       static_cast<VkDeviceSize>(length));
+        const VkDeviceSize at = res.mappedOffset + static_cast<VkDeviceSize>(offset);
+        uploadToBuffer(res, at, res.shadowData.data() + at, static_cast<VkDeviceSize>(length));
     }
 }
 

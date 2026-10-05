@@ -157,8 +157,8 @@ is checked for it is what stays true of any rotation matrix, inside a tolerance
 than any miscompilation or wrong host value. A pinned float that came out of an
 accumulation would be a record of what the build printed, not of what is true.
 
-The GL query in the app prints a boolean for the same reason from the other
-direction: `MAX_TEXTURE_SIZE` is the driver's number, so what is pinned is that
+The WebGL query in the app prints a boolean for the same reason from the other
+direction: `MAX_TEXTURE_SIZE` is the device's number, so what is pinned is that
 the context answered at all.
 
 

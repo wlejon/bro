@@ -10,7 +10,7 @@
 
 // Every height layer is a slice of ONE texture array: slice 0 the finest, slice
 // 5 the coarsest. One sampler unit for the whole stack — a fragment stage may
-// hold as few as 16 active samplers (macOS's GL 4.1 core reports exactly that)
+// hold as few as 16 samplers (Vulkan's minimum maxPerStageDescriptorSamplers)
 // and the mesh pipeline has spent most of them before this chunk declares
 // anything; six sampler2Ds per kind did not fit.
 //

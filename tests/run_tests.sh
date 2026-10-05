@@ -50,7 +50,7 @@
 # off (faster runs); =1 insists on it (the run stops if the layer is missing).
 #
 # Parallelism: tests run serially (1 job at a time) by default to prevent OOM
-# on memory-constrained systems where multiple headless instances with Skia/GL/Audio
+# on memory-constrained systems where multiple headless instances with Skia/Vulkan/Audio
 # saturate RAM. Control with BRO_TEST_JOBS (default: 1). Pass BRO_TEST_PARALLEL=1
 # or BRO_TEST_JOBS=auto (min(#groups, nproc/4)) to opt in to parallel group execution.
 #

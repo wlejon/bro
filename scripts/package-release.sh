@@ -208,6 +208,12 @@ ICD
     for t in bro bro-headless bro-server; do
         [[ -f "$OUT_DIR/$t" ]] || continue
         install_name_tool -change "$VK_REF" "@executable_path/libvulkan.1.dylib" "$OUT_DIR/$t" 2>/dev/null
+        # Drop the build tree's absolute rpaths: a shipped binary resolves
+        # its dylibs beside itself (@loader_path) or, in Bro.app, in Frameworks.
+        otool -l "$OUT_DIR/$t" | awk '/cmd LC_RPATH/ {r=1} r && $1=="path" {print $2; r=0}' |
+            grep '^/' | while read -r rp; do
+                install_name_tool -delete_rpath "$rp" "$OUT_DIR/$t"
+            done
         codesign --force --sign - "$OUT_DIR/$t"
     done
 fi
@@ -374,38 +380,37 @@ BZEOF
 fi
 
 # --- macOS .app bundle ----------------------------------------------------
-# Finder launches a Mach-O binary in Terminal; wrap everything in a bundle so
-# double-click opens the app with no terminal window. Binary + apps + system
-# all live under Contents/MacOS so main.cpp's chdir(exeDir()) picks them up.
+# Finder launches a Mach-O binary in Terminal; wrap the GUI binary in a bundle
+# so double-click opens the app with no terminal window. The layout is the one
+# code signing seals: code in Contents/MacOS, libraries in Contents/Frameworks,
+# data in Contents/Resources. bro finds system/ and the MoltenVK manifest
+# through util::resourceDir() (Contents/Resources) and keeps its settings in the
+# user data dir, so nothing writes into the signed bundle. The CLI tools
+# (bro-headless, bro-server, bronze/) stay beside Bro.app with their own flat
+# copies of the libraries and data, so a terminal user never reaches inside.
 if [[ "$PLATFORM" == "macos" ]]; then
     APP="$OUT_DIR/Bro.app"
     rm -rf "$APP"
-    mkdir -p "$APP/Contents/MacOS"
-    # Move the GUI binary and its runtime data into the bundle. Keep the CLI
-    # tools (bro-headless, bro-server, and bronze/ when it is here) alongside
-    # Bro.app so users can invoke them from a terminal without reaching into
-    # the bundle.
-    CLI_KEEP=(bro-headless bro-server bronze README.txt LICENSE)
-    for item in "$OUT_DIR"/*; do
-        name="$(basename "$item")"
-        [[ "$name" == "Bro.app" ]] && continue
-        keep=0
-        for k in "${CLI_KEEP[@]}"; do [[ "$name" == "$k" ]] && keep=1 && break; done
-        [[ $keep -eq 1 ]] && continue
-        mv "$item" "$APP/Contents/MacOS/"
+    mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Frameworks" "$APP/Contents/Resources"
+    mv "$OUT_DIR/bro" "$APP/Contents/MacOS/"
+    mv "$OUT_DIR/system" "$APP/Contents/Resources/"
+    # The CLI tools' working directory resolves system/ beside them too.
+    cp -a "$APP/Contents/Resources/system" "$OUT_DIR/"
+    shopt -s nullglob
+    for lib in "$OUT_DIR"/*.dylib; do
+        cp -a "$lib" "$APP/Contents/Frameworks/"
     done
-    # bronze's shared runtime is a library that has to exist on BOTH
-    # sides of the bundle wall: bro loads it from inside Contents/MacOS, and
-    # bro-headless — which deliberately stays outside so it can be run from a
-    # terminal — resolves it via @loader_path, i.e. beside itself. The move
-    # above put it in the bundle, so put a copy back.
-    if [[ -f "$APP/Contents/MacOS/libbronze_runtime_shared.dylib" ]]; then
-        cp -a "$APP/Contents/MacOS/libbronze_runtime_shared.dylib" "$OUT_DIR/"
-    fi
-    # The Vulkan loader and MoltenVK likewise: bro-headless and bro-server
-    # resolve both beside themselves.
-    cp -a "$APP/Contents/MacOS/libvulkan.1.dylib" "$OUT_DIR/"
-    cp -a "$APP/Contents/MacOS/vulkan" "$OUT_DIR/"
+    shopt -u nullglob
+    cp -a "$OUT_DIR/vulkan/icd.d/libMoltenVK.dylib" "$APP/Contents/Frameworks/"
+    mkdir -p "$APP/Contents/Resources/vulkan/icd.d"
+    # The loader resolves a relative library_path against the manifest's own
+    # directory: Resources/vulkan/icd.d -> Contents/Frameworks.
+    sed 's#"./libMoltenVK.dylib"#"../../../Frameworks/libMoltenVK.dylib"#' \
+        "$OUT_DIR/vulkan/icd.d/MoltenVK_icd.json" > "$APP/Contents/Resources/vulkan/icd.d/MoltenVK_icd.json"
+    BIN="$APP/Contents/MacOS/bro"
+    install_name_tool -change "@executable_path/libvulkan.1.dylib" \
+        "@executable_path/../Frameworks/libvulkan.1.dylib" "$BIN"
+    install_name_tool -add_rpath "@executable_path/../Frameworks" "$BIN"
     cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -425,6 +430,14 @@ if [[ "$PLATFORM" == "macos" ]]; then
 </dict>
 </plist>
 PLIST
+    # Ad-hoc signature over the whole bundle (libraries first, then the
+    # executable and the resource seal); --verify --strict is the check
+    # Developer ID signing and notarization apply on top.
+    for lib in "$APP/Contents/Frameworks"/*.dylib; do
+        codesign --force --sign - "$lib"
+    done
+    codesign --force --sign - "$APP"
+    codesign --verify --strict --deep "$APP"
 fi
 
 # --- Archive --------------------------------------------------------------

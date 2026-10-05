@@ -451,6 +451,11 @@ private:
     /// readPixels into memory known to hold the result.
     void readPixelsInto(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type,
                         void* pixels);
+    /// readPixels into a pack buffer as a GPU copy, when format/type are the
+    /// read buffer's own bytes and the layout is one a buffer-image copy can
+    /// express. False (nothing recorded) otherwise.
+    bool readPixelsCopyToBuffer(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format,
+                                GLenum type, VkBufferResource& pbo, GLintptr offset);
     std::unordered_map<GLuint, uint64_t> syncs_;  // sync object -> the queue ticket it signals with
 
     void initVulkanResources();

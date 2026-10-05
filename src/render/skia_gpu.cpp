@@ -87,9 +87,13 @@ PFN_vkVoidFunction skiaGetProc(const char* name, VkInstance instance, VkDevice d
 }
 
 constexpr VkFormat kSurfaceFormat = VK_FORMAT_R8G8B8A8_UNORM;
+// No INPUT_ATTACHMENT: with it Ganesh reads the destination of an advanced
+// blend (multiply, screen, ...) as an input attachment in GENERAL layout, and
+// its barrier out of GENERAL names HOST_WRITE under ALL_COMMANDS, which
+// validation rejects (VUID-vkCmdPipelineBarrier-pImageMemoryBarriers-02819).
+// Without it Ganesh copies the destination, as it did on GL.
 constexpr VkImageUsageFlags kSurfaceUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
-                                            VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-                                            VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
+                                            VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 
 // Skia's reference to an image, dropped when Skia's own use of it is over.
 void releaseSkiaRef(void* ctx) {

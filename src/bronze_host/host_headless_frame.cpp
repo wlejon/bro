@@ -274,7 +274,7 @@ void installHeadlessFrame(engine::Engine& engine) {
     // reads back the whole frame per call, which is what a single probe
     // wants and what a scan does not: a test sampling a band of a few
     // thousand pixels paid a few thousand full-window composites (24 s on an
-    // M2, minutes on a CI VM's software GL). Same space and sampling as
+    // M2, minutes on a CI VM's software device). Same space and sampling as
     // getPixel: document CSS px, each texel the device pixel at its centre,
     // and texels outside the document read as zeroes.
     ev::registerGlobal("getPixels", ev::makeFunction(

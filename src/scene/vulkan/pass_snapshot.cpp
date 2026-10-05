@@ -1,5 +1,6 @@
 #include "scene/vulkan/pass_snapshot.h"
 
+#include "scene/particles3d_node.h"
 #include "scene/scene_renderer.h"
 #include "scene/vulkan/scene_frame.h"
 #include "scene/vulkan/scene_targets.h"
@@ -18,6 +19,18 @@ void copyWhole(VkCommandBuffer cmd, const SceneVkImage& src, const SceneVkImage&
 }
 
 }  // namespace
+
+bool PassDepthSnapshot::active(const SceneFrame& frame) const {
+    if (frame.ssao || frame.ssr || frame.dof) return true;
+    for (const SceneNode* node : frame.lists.nodes) {
+        if (node->type() == SceneNode::Type::Decal) return true;
+        if (node->type() == SceneNode::Type::Particles3D) {
+            const auto* p = static_cast<const Particles3DNode*>(node);
+            if (p->softness() > 0.0f && p->liveCount() > 0) return true;
+        }
+    }
+    return false;
+}
 
 void PassDepthSnapshot::declare(const SceneFrame& frame, PassIO& io) const {
     io.transferSrc(frame.gpu.targets.depth);

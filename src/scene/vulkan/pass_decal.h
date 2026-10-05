@@ -20,6 +20,7 @@ class PassDecal final : public ScenePass {
 public:
     const char* name() const override { return "decals"; }
     bool setup(SceneGpu& gpu) override;
+    bool active(const SceneFrame& frame) const override;
     void declare(const SceneFrame& frame, PassIO& io) const override;
     void record(SceneFrame& frame) override;
     void cleanup(SceneGpu& gpu) override;
@@ -32,7 +33,7 @@ private:
         float modulate[4];   // rgb tint, a = opacity
         float decalUp[4];    // xyz unit up, w = emission strength
         float fades[4];      // upper, lower, normal
-        int32_t flags[4];    // has albedo, has emission
+        int32_t flags[4];    // has albedo, has emission, multisampled depth
     };
 
     SceneVkDevice* device_ = nullptr;

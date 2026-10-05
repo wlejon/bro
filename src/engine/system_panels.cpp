@@ -41,6 +41,7 @@
 #include <include/core/SkSamplingOptions.h>
 #include <include/core/SkSurface.h>
 
+#include "util/exe_dir.h"
 #include "util/log.h"
 #include "util/time.h"
 
@@ -62,13 +63,15 @@ void Engine::initSystemPanels() {
     std::string appSystemDir = manifest_.basePath + "/system";
     loadSystemPanels(appSystemDir);
 
-    // Load global system panels, skipping any already provided by the app
+    // Load global system panels, skipping any already provided by the app:
+    // the project's /system mount, else ./system (a source checkout), else the
+    // one shipped with bro (beside the executable, or in a macOS bundle's
+    // Contents/Resources).
     std::string globalSystemDir = assetMounts_.resolve("/system");
-    if (!globalSystemDir.empty()) {
-        loadSystemPanels(globalSystemDir);
-    } else {
-        loadSystemPanels("system");
-    }
+    std::error_code ec;
+    if (globalSystemDir.empty())
+        globalSystemDir = fs::is_directory("system", ec) ? "system" : util::resourceDir() + "/system";
+    loadSystemPanels(globalSystemDir);
 
     // Move the splash panel to the end so it renders on top of everything
     // (menu bar included) and receives hit-tests first during startup.

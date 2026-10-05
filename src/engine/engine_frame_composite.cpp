@@ -96,7 +96,9 @@ void Engine::beginFrameComposite() {
 }
 
 // The segment the next CPU layer composites into: the one above the last GPU
-// image, cleared the first time it is drawn into this frame.
+// image, cleared the first time it is drawn into this frame. The bottom one is
+// the frame's base and starts opaque black, so every frame (and every capture)
+// is opaque; the ones above GPU images start transparent.
 SkCanvas* Engine::frameSegmentCanvas() {
     const size_t index = frameImages_.size();
     while (frameSegments_.size() <= index)
@@ -105,7 +107,7 @@ SkCanvas* Engine::frameSegmentCanvas() {
     SkSurface* surface = frameSegments_[index].get();
     if (!surface) return nullptr;
     if (!frameSegmentUsed_[index]) {
-        surface->getCanvas()->clear(SK_ColorTRANSPARENT);
+        surface->getCanvas()->clear(index == 0 ? SK_ColorBLACK : SK_ColorTRANSPARENT);
         frameSegmentUsed_[index] = true;
     }
     return surface->getCanvas();
@@ -227,7 +229,8 @@ render::PresentFrame Engine::describeCompositedFrame() {
     frame.images = std::move(frameImages_);
     for (size_t i = 0; i < frame.images.size(); ++i)
         if (segmentUsed(i + 1)) frame.images[i].above = layerOf(frameSegments_[i + 1].get());
-    std::fill(std::begin(frame.clearColor), std::end(frame.clearColor), 0.0f);
+    frame.clearColor[0] = frame.clearColor[1] = frame.clearColor[2] = 0.0f;
+    frame.clearColor[3] = 1.0f;   // opaque black under everything
     frame.width = static_cast<uint32_t>(std::max(0, frameCompositeW_));
     frame.height = static_cast<uint32_t>(std::max(0, frameCompositeH_));
     frameImages_.clear();
@@ -253,7 +256,7 @@ void Engine::presentCurrentFrame() {
 // the presenter and read back, in one submission and one wait.
 std::vector<uint8_t> Engine::readCompositedFrame() {
     const bool cpuOnly = frameImages_.empty();
-    if (cpuOnly) frameSegmentCanvas();  // a frame nothing was drawn into is transparent
+    if (cpuOnly) frameSegmentCanvas();  // a frame nothing was drawn into is black
     const render::PresentFrame frame = describeCompositedFrame();
     if (!cpuOnly && vulkanPresenter_ && vulkanPresenter_->isHeadless()) {
         std::vector<uint8_t> pixels;

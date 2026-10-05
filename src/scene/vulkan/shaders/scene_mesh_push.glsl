@@ -1,7 +1,7 @@
 // The per-draw push constants of every mesh pipeline (MeshPushConstants,
 // scene_mesh_drawer.h) and the flag bits of pbrParams.w.
 layout(push_constant) uniform MeshPushConstants {
-    mat4 model;
+    mat4 model;      // the node's world matrix, camera-relative (eye subtracted)
     vec4 baseColor;
     vec4 emissive;   // rgb tint, a intensity
     vec4 pbrParams;  // x metallic, y roughness, z alpha cutoff, w flags
@@ -10,8 +10,9 @@ layout(push_constant) uniform MeshPushConstants {
 
 #define uWindMask (push.extra.z)   // the GL name custom chunks use
 
-// The draw's model matrix (the node's world matrix; an instanced draw's
-// instances are relative to it). Custom chunks reach it as uModel.
+// The draw's camera-relative model matrix (the node's world matrix less the
+// eye; an instanced draw's instances are relative to it). Custom chunks reach
+// it as uModel.
 mat4 sceneModel() { return push.model; }
 
 const uint MESH_ALBEDO_MAP          = 1u;

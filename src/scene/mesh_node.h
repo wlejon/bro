@@ -50,8 +50,8 @@ public:
     void setDrawMode(DrawMode m);
     DrawMode drawMode() const { return drawMode_; }
 
-    /// Line width in pixels, forwarded to glLineWidth() before the draw.
-    /// Most core-profile drivers clamp to 1; values >1 are not guaranteed.
+    /// Line width in pixels for line-mode draws. Honoured where the device
+    /// has wideLines (clamped to its range); 1 elsewhere, MoltenVK included.
     /// Ignored when drawMode == Triangles.
     void setLineWidth(float w) { lineWidth_ = (w > 0.0f) ? w : 1.0f; }
     float lineWidth() const { return lineWidth_; }
@@ -217,7 +217,7 @@ public:
     float emissive() const { return emissive_; }
 
     /// Unlit mode: skip lighting (no light loop, no ambient, no PBR BRDF).
-    /// Output is baseColor + emissiveColor*emissive (fog/nearClip still apply).
+    /// Output is the base colour as is, no emissive (fog/nearClip still apply).
     /// Used for overlay meshes that shouldn't receive scene lighting — e.g.
     /// editor gizmo handles — so their appearance is independent of the
     /// lighting rig the app has set up.
@@ -306,7 +306,7 @@ public:
     // --- Shade map ---
     // A per-cell scalar sampled after lighting (see shade_map.h). Set by a
     // TileWorld on the nodes it owns; the provider resolves the texture and
-    // the grid mapping per draw. Sampled on texture unit 12.
+    // the grid mapping per draw (the lighting set's shade-map binding).
     void setShadeMap(ShadeMapProvider p) { shadeMap_ = std::move(p); }
     void clearShadeMap() { shadeMap_ = nullptr; }
     const ShadeMapProvider* shadeMap() const {

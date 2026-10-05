@@ -22,11 +22,11 @@ namespace bro::scene::vk {
 
 namespace {
 
-void setLight(SceneLightUniform& out, const LightNode& l) {
+void setLight(SceneLightUniform& out, const LightNode& l, const bromath::Vec3& eye) {
     const auto& m = l.worldMatrix();
-    out.position[0] = m.at(0, 3);
-    out.position[1] = m.at(1, 3);
-    out.position[2] = m.at(2, 3);
+    out.position[0] = m.at(0, 3) - eye.x;
+    out.position[1] = m.at(1, 3) - eye.y;
+    out.position[2] = m.at(2, 3) - eye.z;
     out.position[3] = static_cast<float>(l.kind());
     bromath::Vec3 d = l.direction();
     const float len = std::sqrt(bromath::vdot(d, d));
@@ -47,7 +47,8 @@ void setLight(SceneLightUniform& out, const LightNode& l) {
 
 }  // namespace
 
-SceneLightingUniforms sceneLighting(const SceneRenderer& renderer, const SceneEnvironment& environment) {
+SceneLightingUniforms sceneLighting(const SceneRenderer& renderer, const SceneEnvironment& environment,
+                                    const bromath::Vec3& eye) {
     SceneLightingUniforms light{};
     const ShadowPlan& plan = renderer.shadowPlan();
     const std::vector<LightNode*>& lights = renderer.frameLights();
@@ -58,7 +59,7 @@ SceneLightingUniforms sceneLighting(const SceneRenderer& renderer, const SceneEn
     const LightNode* sun = nullptr;
     for (int i = 0; i < count; ++i) {
         const LightNode& l = *lights[i];
-        setLight(light.lights[i], l);
+        setLight(light.lights[i], l, eye);
         if (i < ShadowPlan::kMaxLights && plan.lightSlot[i] >= 0 && plan.lightSlotCount[i] > 0) {
             light.lights[i].shadow[2] = static_cast<float>(plan.lightSlot[i]);
             light.lights[i].shadow[3] = static_cast<float>(plan.lightSlotCount[i]);
@@ -96,6 +97,8 @@ SceneLightingUniforms sceneLighting(const SceneRenderer& renderer, const SceneEn
 
     // Clip -> (tile uv, depth): x,y from [-1,1] to [0,1]; the clip y flip of
     // toVulkanClip matches the flip the shadow pass rendered the tile with.
+    // The tiles were fit relative to the plan's eye; positions here are
+    // relative to `eye`.
     bromath::Mat4 toUv = bromath::midentity();
     toUv.at(0, 0) = 0.5f;
     toUv.at(1, 1) = 0.5f;
@@ -104,7 +107,7 @@ SceneLightingUniforms sceneLighting(const SceneRenderer& renderer, const SceneEn
     for (int t = 0; t < tiles; ++t) {
         const ShadowTilePlan& tile = plan.tiles[t];
         SceneShadowTileUniform& out = light.shadows[t];
-        const bromath::Mat4 m = bromath::mmul(toUv, toVulkanClip(tile.viewProj));
+        const bromath::Mat4 m = bromath::mmul(toUv, toVulkanClip(rebased(tile.relViewProj, eye - plan.origin)));
         std::memcpy(out.matrix, m.data, sizeof(out.matrix));
         std::memcpy(out.rect, tile.rect, sizeof(out.rect));
         out.bias[0] = tile.bias;
@@ -151,8 +154,9 @@ void PassFrameUniforms::declare(const SceneFrame& frame, PassIO& io) const {
 
 namespace {
 
-void setProbe(SceneLightingUniforms& light, const ReflectionProbeNode& probe, uint32_t mipLevels) {
-    const auto& pw = probe.worldMatrix();
+void setProbe(SceneLightingUniforms& light, const ReflectionProbeNode& probe, uint32_t mipLevels,
+              const bromath::Vec3& eye) {
+    const bromath::Mat4 pw = eyeRelative(probe.worldMatrix(), eye);
     const bromath::Mat4 invPw = bromath::minverse(pw);
     std::memcpy(light.probeWorldToLocal, invPw.data, sizeof(light.probeWorldToLocal));
     std::memcpy(light.probeLocalToWorld, pw.data, sizeof(light.probeLocalToWorld));
@@ -172,10 +176,10 @@ void setProbe(SceneLightingUniforms& light, const ReflectionProbeNode& probe, ui
     light.probeParams[2] = static_cast<float>(mipLevels - 1);
 }
 
-void setShade(SceneLightingUniforms& light, const ShadeMapBinding& binding) {
-    light.shadeOrigin[0] = binding.origin.x;
-    light.shadeOrigin[1] = binding.origin.y;
-    light.shadeOrigin[2] = binding.origin.z;
+void setShade(SceneLightingUniforms& light, const ShadeMapBinding& binding, const bromath::Vec3& eye) {
+    light.shadeOrigin[0] = binding.origin.x - eye.x;
+    light.shadeOrigin[1] = binding.origin.y - eye.y;
+    light.shadeOrigin[2] = binding.origin.z - eye.z;
     light.shadeOrigin[3] = 1.0f;
     light.shadeParams[0] = binding.cellSize;
     light.shadeParams[1] = binding.hex ? 1.0f : 0.0f;
@@ -191,12 +195,20 @@ VkDescriptorSet lightingSetFor(SceneFrame& frame, const ProbeLighting* probe, co
     if (auto it = frame.lightingSets.find(key); it != frame.lightingSets.end()) return it->second;
 
     SceneLightingUniforms light = frame.lighting;
-    if (probe) setProbe(light, *probe->node, probe->mipLevels);
+    if (probe) setProbe(light, *probe->node, probe->mipLevels, frame.view.eye);
     const SceneVkImage* shadeImage = shade ? frame.gpu.resources.shadeMap(*shade) : nullptr;
-    if (shadeImage) setShade(light, *shade);
+    if (shadeImage) setShade(light, *shade, frame.view.eye);
     VkDescriptorSet set = writeLightingSet(frame.gpu, light, probe ? probe->view : VK_NULL_HANDLE, shadeImage);
     frame.lightingSets.emplace(key, set);
     return set;
+}
+
+VkDescriptorSet shadedLightingSet(SceneGpu& gpu, const SceneLightingUniforms& base, const ShadeMapBinding& shade,
+                                  const bromath::Vec3& eye) {
+    SceneLightingUniforms light = base;
+    const SceneVkImage* shadeImage = gpu.resources.shadeMap(shade);
+    if (shadeImage) setShade(light, shade, eye);
+    return writeLightingSet(gpu, light, VK_NULL_HANDLE, shadeImage);
 }
 
 void PassFrameUniforms::record(SceneFrame& frame) {

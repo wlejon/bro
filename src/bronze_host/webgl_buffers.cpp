@@ -69,6 +69,8 @@ void installWebGLBuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
     b.def("bufferData", 3, [c](Value, std::span<const Value> a) {
         GLenum target = u32At(a, 0);
         GLenum usage = u32At(a, 2);
+        // bufferData unmaps a mapped buffer, so its ArrayBuffer ends here.
+        if (auto* gl = live(c)) detachMapping(c, gl->boundBuffer(target));
         const uint8_t* data = nullptr;
         size_t len = 0, elemSize = 1;
         if (bufferBytes(argAt(a, 1), &data, &len, &elemSize)) {

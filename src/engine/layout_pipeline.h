@@ -8,8 +8,8 @@ namespace bro::dom { class Element; }
 namespace bro::engine {
 
 /// Coordinates the main thread with the layout worker. Same shape as
-/// FramePresenter (signal a snapshot, wait for a result), but with no GL
-/// fence — layout is pure CPU work that mutates DOM-side layout boxes.
+/// FramePresenter (signal a snapshot, wait for a result), but with no GPU
+/// work — layout is pure CPU work that mutates DOM-side layout boxes.
 ///
 ///     Idle ──signalLayout()──▶ Requested
 ///     Requested ──waitForRequest()──▶ (worker proceeds) ──markBusy()──▶ Busy

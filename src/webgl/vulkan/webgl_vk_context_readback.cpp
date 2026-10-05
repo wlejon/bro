@@ -1,7 +1,8 @@
 // readPixels: the read framebuffer's read buffer, copied region-only into
 // readback memory, then converted to the format/type WebGL 2 lets that
 // buffer be read as, laid out by the PACK_* state. Pixels outside the
-// framebuffer leave the destination untouched.
+// framebuffer leave the destination untouched. Into a pack buffer, a read of
+// the buffer's own bytes is a GPU copy nothing waits for.
 
 #include "webgl/vulkan/webgl_vk_context.h"
 #include "webgl/vulkan/webgl_vk_formats.h"
@@ -11,6 +12,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <vector>
 
 namespace bro::webgl::vk {
 
@@ -41,6 +43,32 @@ bool fixedReadFormat(VkFormat format, GLenum glFormat, GLenum type) {
     const FormatBits bits = formatBits(format);
     const bool normalized = bits.red == 8 || format == VK_FORMAT_A2B10G10R10_UNORM_PACK32;
     return glFormat == GL_RGBA && type == (normalized ? GL_UNSIGNED_BYTE : GL_FLOAT);
+}
+
+// Whether (format, type) is exactly the bytes `storage` holds, so a pack is a copy.
+bool packIsIdentity(VkFormat storage, bool alphaOne, GLenum format, GLenum type) {
+    if (alphaOne) return false;
+    switch (storage) {
+    case VK_FORMAT_R8G8B8A8_UNORM:
+    case VK_FORMAT_R8G8B8A8_SRGB:        return format == GL_RGBA && type == GL_UNSIGNED_BYTE;
+    case VK_FORMAT_R8G8_UNORM:           return format == GL_RG && type == GL_UNSIGNED_BYTE;
+    case VK_FORMAT_R8_UNORM:             return format == GL_RED && type == GL_UNSIGNED_BYTE;
+    case VK_FORMAT_R16G16B16A16_SFLOAT:  return format == GL_RGBA && type == GL_HALF_FLOAT;
+    case VK_FORMAT_R16G16_SFLOAT:        return format == GL_RG && type == GL_HALF_FLOAT;
+    case VK_FORMAT_R16_SFLOAT:           return format == GL_RED && type == GL_HALF_FLOAT;
+    case VK_FORMAT_R32G32B32A32_SFLOAT:  return format == GL_RGBA && type == GL_FLOAT;
+    case VK_FORMAT_R32G32_SFLOAT:        return format == GL_RG && type == GL_FLOAT;
+    case VK_FORMAT_R32_SFLOAT:           return format == GL_RED && type == GL_FLOAT;
+    case VK_FORMAT_R32G32B32A32_UINT:    return format == GL_RGBA_INTEGER && type == GL_UNSIGNED_INT;
+    case VK_FORMAT_R32G32_UINT:          return format == GL_RG_INTEGER && type == GL_UNSIGNED_INT;
+    case VK_FORMAT_R32_UINT:             return format == GL_RED_INTEGER && type == GL_UNSIGNED_INT;
+    case VK_FORMAT_R32G32B32A32_SINT:    return format == GL_RGBA_INTEGER && type == GL_INT;
+    case VK_FORMAT_R32G32_SINT:          return format == GL_RG_INTEGER && type == GL_INT;
+    case VK_FORMAT_R32_SINT:             return format == GL_RED_INTEGER && type == GL_INT;
+    case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
+        return format == GL_RGBA && type == GL_UNSIGNED_INT_2_10_10_10_REV;
+    default: return false;
+    }
 }
 
 } // namespace
@@ -150,9 +178,74 @@ void WebGLVkContext::readPixelsToPBO(GLint x, GLint y, GLsizei width, GLsizei he
         setSyntheticError(GL_INVALID_OPERATION);
         return;
     }
+    if (readPixelsCopyToBuffer(x, y, width, height, format, type, pbo, offset)) return;
+    // A conversion: read back, pack on the CPU, upload.
     syncShadow(pbo);
     readPixelsInto(x, y, width, height, format, type, pbo.shadowData.data() + offset);
     uploadToBuffer(pbo, static_cast<VkDeviceSize>(offset), pbo.shadowData.data() + offset, byteCount);
+}
+
+bool WebGLVkContext::readPixelsCopyToBuffer(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format,
+                                            GLenum type, VkBufferResource& pbo, GLintptr offset) {
+    Surface src;
+    readColorSurface(src);
+    if (!src || src.samples > VK_SAMPLE_COUNT_1_BIT || !pbo.isValid() || !packIsIdentity(src.format, src.alphaOne, format, type))
+        return false;
+    const uint32_t texel = colorTexelSize(src.format);
+    const PackLayout layout = packLayout(pack_, format, type, static_cast<uint32_t>(width));
+    // Rows a whole number of texels apart, every row start 4-byte aligned:
+    // what VkBufferImageCopy can express.
+    if (texel == 0 || layout.rowStride % texel != 0 || layout.rowStride % 4 != 0) return false;
+
+    const int32_t x0 = std::max(x, 0), y0 = std::max(y, 0);
+    const int32_t x1 = static_cast<int32_t>(std::min<int64_t>(int64_t{x} + width, src.width));
+    const int32_t y1 = static_cast<int32_t>(std::min<int64_t>(int64_t{y} + height, src.height));
+    if (x1 <= x0 || y1 <= y0) return true;   // nothing inside the framebuffer: nothing written
+    const uint32_t w = static_cast<uint32_t>(x1 - x0), h = static_cast<uint32_t>(y1 - y0);
+    const VkDeviceSize base = static_cast<VkDeviceSize>(offset) + layout.offset +
+                              static_cast<VkDeviceSize>(y0 - y) * layout.rowStride +
+                              static_cast<VkDeviceSize>(x0 - x) * layout.pixelSize;
+    if (base % 4 != 0 || base % texel != 0) return false;
+    const VkDeviceSize span = static_cast<VkDeviceSize>(h - 1) * layout.rowStride + VkDeviceSize{w} * texel;
+
+    // GL row y0 + r lands at base + r * rowStride. A top-down image (the
+    // canvas) has those rows in reverse, so it copies a row per region.
+    std::vector<VkBufferImageCopy> regions;
+    VkBufferImageCopy region{};
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, src.level, src.layer, 1};
+    region.bufferRowLength = static_cast<uint32_t>(layout.rowStride / texel);
+    if (src.topDown()) {
+        regions.reserve(h);
+        for (uint32_t r = 0; r < h; ++r) {
+            region.bufferOffset = base + VkDeviceSize{r} * layout.rowStride;
+            region.imageOffset = {x0, static_cast<int32_t>(src.height) - y0 - 1 - static_cast<int32_t>(r), src.z};
+            region.imageExtent = {w, 1, 1};
+            regions.push_back(region);
+        }
+    } else {
+        region.bufferOffset = base;
+        region.imageOffset = {x0, y0, src.z};
+        region.imageExtent = {w, h, 1};
+        regions.push_back(region);
+    }
+
+    VkCommandBuffer cmd = transferCommands();
+    const VkImageLayout restore = surfaceLayout(src);
+    render::cmdBufferBarrier(cmd, pbo.buffer, base, span,
+                             kBufferReadStages, VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+    transitionSurface(cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    vkCmdCopyImageToBuffer(cmd, src.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, pbo.buffer,
+                           static_cast<uint32_t>(regions.size()), regions.data());
+    transitionSurface(cmd, src, src.source == Surface::Source::Texture ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                                                                       : restore);
+    render::cmdBufferBarrier(cmd, pbo.buffer, base, span, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_ACCESS_TRANSFER_WRITE_BIT, kBufferReadStages, kBufferReadAccess);
+    // The GPU copy is now newer than bro's CPU one; whoever reads the CPU
+    // copy (getBufferSubData, a mapping) brings it up to date first.
+    pbo.deviceNewer = true;
+    ++pbo.version;
+    return true;
 }
 
 } // namespace bro::webgl::vk

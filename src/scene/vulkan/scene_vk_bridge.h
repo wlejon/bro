@@ -12,6 +12,7 @@
 #include "scene/vulkan/scene_frame.h"
 #include "scene/vulkan/scene_frame_graph.h"
 #include "scene/vulkan/scene_gpu_resources.h"
+#include "scene/vulkan/scene_gpu_timer.h"
 #include "scene/vulkan/scene_mesh_drawer.h"
 #include "scene/vulkan/scene_targets.h"
 #include "scene/vulkan/scene_vk_allocator.h"
@@ -61,6 +62,9 @@ public:
     /// the render itself once a caller has asked in the previous frame, so a
     /// compositor reading every frame pays no extra submission.
     std::vector<uint8_t> readTonemapPixelsRGBA(int& outW, int& outH);
+    /// GPU milliseconds of the last render, waiting on its ticket; -1 when
+    /// nothing was rendered (or timed) since the previous call.
+    double takeGpuMs() { return timer_.takeMs(); }
 
 private:
     bool ensureReadbackBuffer();
@@ -75,6 +79,7 @@ private:
     SceneEnvironment environment_;
     SceneGpu gpu_;
     SceneFrameGraph graph_;
+    SceneGpuTimer timer_;
     bool ready_ = false;
 
     // CPU readback of targets_.ldr (see readTonemapPixelsRGBA).

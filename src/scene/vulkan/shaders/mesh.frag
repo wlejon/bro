@@ -3,7 +3,8 @@
 // the instance tint and atlas cell), then the shared lighting
 // (scene_lighting.glsl), the air (aerial perspective or fog) and the tile
 // shade map. Unlit meshes skip the
-// lighting. Built twice: as is, and with SCENE_INDIRECT_OUTPUT for the opaque
+// lighting. inWorldPos is camera-relative (scene_camera.glsl): the eye is the
+// origin. Built twice: as is, and with SCENE_INDIRECT_OUTPUT for the opaque
 // pass while SSAO is on.
 
 layout(location = 0) in vec3 inWorldPos;
@@ -53,7 +54,7 @@ vec2 albedoUV() {
 
 void main() {
     uint flags = meshFlags();
-    float camDist = length(inWorldPos - camera.eyePos.xyz);
+    float camDist = length(inWorldPos);
     if (push.extra.x > 0.0 && camDist < push.extra.x) discard;
 
     // Base colour: the texture composes with the colour and the vertex tint
@@ -82,8 +83,10 @@ void main() {
     vec3 geomN = normalize(inNormal);
     SceneAir air = sceneAir(inWorldPos, camDist);
 
+    // Unlit is the authored base colour as is: no lights and no emissive
+    // (GL's unlit branch), only the air in front of it.
     if ((flags & MESH_UNLIT) != 0u) {
-        vec3 color = (baseColor + emissive) * air.transmittance + air.inscatter;
+        vec3 color = baseColor * air.transmittance + air.inscatter;
         if ((flags & MESH_SHADE_MAP) != 0u && lighting.shadeOrigin.w > 0.5) color *= cellShade(inWorldPos, geomN);
         // Unlit surfaces reflect nothing in the SSR mask phase.
         outColor = vec4(color, (flags & MESH_REFLECTANCE) != 0u ? 0.0 : mix(alpha, 0.0, air.fade));
@@ -118,7 +121,7 @@ void main() {
     SceneSurface s;
     s.position = inWorldPos;
     s.normal = N;
-    s.view = normalize(camera.eyePos.xyz - inWorldPos);
+    s.view = normalize(-inWorldPos);
     s.camDist = camDist;
     s.baseColor = baseColor;
     s.metallic = clamp(metallic, 0.0, 1.0);

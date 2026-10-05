@@ -189,6 +189,7 @@ GLint WebGLVkContext::getParameterInt(GLenum pname) {
     }
     if (pname >= GL_DRAW_BUFFER0 && pname < GL_DRAW_BUFFER0 + 8)
         return static_cast<GLint>(drawBufferState(pname - GL_DRAW_BUFFER0));
+    setSyntheticError(GL_INVALID_ENUM);   // not a parameter WebGL 2 has
     return 0;
 }
 

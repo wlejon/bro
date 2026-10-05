@@ -15,7 +15,7 @@ namespace bro::scene {
 /// World-space 3D particle emitter node. CPU-simulated in onTick() (a
 /// fixed-size pool, no per-particle allocation after setMaxParticles) and
 /// rendered as camera-facing instanced billboard quads in one draw call per
-/// system, into the HDR scene FBO — depth-tested against geometry, not
+/// system, into the HDR scene target — depth-tested against geometry, not
 /// depth-writing, before tonemap so additive systems bloom.
 ///
 /// Simulation space: World keeps particles where they were spawned (a moving
@@ -46,7 +46,7 @@ public:
     void setMaxParticles(int n);
     int  maxParticles() const { return static_cast<int>(particles_.size()); }
 
-    /// Optional texture path (decoded lazily, uploaded on the GL thread at
+    /// Optional texture path (decoded lazily, uploaded by the renderer at
     /// first draw). When unset, particles render as soft round points.
     void setTexturePath(const std::string& path);
     const std::string& texturePath() const { return texPath_; }

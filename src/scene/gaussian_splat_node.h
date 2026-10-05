@@ -17,9 +17,9 @@ namespace bro::scene {
 ///
 /// Transparency is order-dependent, so splats are depth-sorted back-to-front
 /// on the CPU each time the camera moves enough, and view-dependent color is
-/// evaluated from the spherical-harmonic coefficients on the same pass. The
-/// node owns its own GL program (a distinct pipeline from the mesh/instanced
-/// shaders); SceneGraph drives it in a dedicated splat pass with depth-test on,
+/// evaluated from the spherical-harmonic coefficients on the same pass. It
+/// draws with its own pipeline (distinct from the mesh/instanced ones) in a
+/// dedicated splat pass (pass_gaussian_splat) with depth-test on,
 /// depth-write off, and premultiplied-over blending.
 class GaussianSplatNode : public SceneNode {
 public:
@@ -46,14 +46,6 @@ public:
     /// with the sigmas.
     float maxSigma() const { return maxSigma_; }
 
-    /// Draw the cloud. Matrices are column-major 4x4 (bromath layout). `eye` is
-    /// the world-space camera position; `vpW`/`vpH` the target viewport size in
-    /// pixels (the mesh FBO). The node's worldMatrix() is applied in the splat
-    /// pipeline (rigid transforms + uniform scale only). Called by SceneGraph
-    /// during the splat pass with the splat GL state already set. Returns false
-    /// if nothing was drawn.
-    bool draw(const float* view16, const float* proj16,
-              const float eye[3], int vpW, int vpH);
 
     const std::vector<float>& instanceData() const { return instanceData_; }
     bool needsResort(const float* view16, const float eye[3],

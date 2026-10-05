@@ -53,7 +53,7 @@ document.body.appendChild(canvas);
 // --- The renderer ---------------------------------------------------------
 // Passing the canvas rather than letting the renderer create one is what keeps
 // the element the engine composites and the element three.js draws into the
-// same object. `antialias` is off: the host canvas FBO has no multisample path,
+// same object. `antialias` is off: the WebGL canvas has no multisample path,
 // and asking for one the context cannot give would be a silent downgrade. It is
 // also what makes the pixel checks below meaningful — a resolve would blend the
 // cube's edge into the clear color, and an interior pixel is only reliably

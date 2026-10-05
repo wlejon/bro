@@ -173,7 +173,9 @@ Engine::Engine(const EngineConfig& config)
             window_ = std::make_unique<platform::Window>("Bro",
                 static_cast<uint32_t>(gfx.width),
                 static_cast<uint32_t>(gfx.height), /*hidden=*/true,
-                gfx.resizable, gfx.vsync, config.graphics.borderless);
+                gfx.resizable, gfx.vsync, config.graphics.borderless,
+                config.graphics.useGPU ? platform::GraphicsBackend::Vulkan
+                                       : platform::GraphicsBackend::Software);
 
             const auto& wcfg = config.graphics;
             if (wcfg.alwaysOnTop) window_->setAlwaysOnTop(true);
@@ -644,13 +646,11 @@ canvas::CanvasScene* Engine::createCanvasContext(dom::Element* canvas) {
     // A canvas in a sub-document (secondary window, <iframe>, system panel)
     // is parked in THAT document's list, unbound: those documents composite
     // by blitting the scene inline from their own draw path, which hands the
-    // scene the GrContext it should raster on at blit time (sub_document.cpp
+    // scene the Skia context it should raster on at blit time (sub_document.cpp
     // replayBufferWithInlineCanvas, system_panels.cpp drawSystemPanelDoc).
-    // That is the registration the QuickJS-era sub-doc factories did.
     dom::Document* doc = canvas->document();
     if (doc) {
         auto parkInSubDoc = [&](std::vector<std::unique_ptr<canvas::CanvasScene>>& list) {
-            canvasScene->init();
             canvasSceneRegistry_[canvasScene->sceneId()] = csPtr;
             list.push_back(std::move(canvasScene));
         };
@@ -675,14 +675,10 @@ canvas::CanvasScene* Engine::createCanvasContext(dom::Element* canvas) {
     }
 
     // The main document: the one path that registers a scene the compositor
-    // rasterizes — init(gl_), the registry, and the raster binding (the shared
-    // canvas-raster worker windowed, the renderer's GrContext headless). Doing
-    // it by hand here with init(nullptr) + push_back left every 2D canvas whose
-    // getContext ran after boot unbound in windowed mode — only run()'s
-    // one-time sweep binds scenes that already exist when the worker starts —
-    // so it painted nothing; headless was unaffected, which is why tests did
-    // not see it. The scene-context factory below and the QuickJS-era
-    // getContext factory both go through addCanvasScene; so does this one.
+    // rasterizes — the registry and the raster binding. Registering by hand
+    // here left every 2D canvas whose getContext ran after boot unbound in
+    // windowed mode, so it painted nothing; the scene-context factory below
+    // goes through addCanvasScene too.
     addCanvasScene(std::move(canvasScene));
     return csPtr;
 }

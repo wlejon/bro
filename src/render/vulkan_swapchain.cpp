@@ -170,8 +170,15 @@ VkPresentModeKHR VulkanSwapchain::chooseSwapPresentMode(const std::vector<VkPres
         for (const auto& mode : availablePresentModes) {
             if (mode == VK_PRESENT_MODE_IMMEDIATE_KHR) return mode;
         }
+        return VK_PRESENT_MODE_FIFO_KHR;
     }
-    return VK_PRESENT_MODE_FIFO_KHR; // guaranteed by Vulkan specification
+    // Vsync is adaptive where the surface offers it: a frame that misses the
+    // interval presents at once (and may tear) rather than waiting a whole
+    // extra one. FIFO, the strict form, is the one every surface has.
+    for (const auto& mode : availablePresentModes) {
+        if (mode == VK_PRESENT_MODE_FIFO_RELAXED_KHR) return mode;
+    }
+    return VK_PRESENT_MODE_FIFO_KHR;
 }
 
 VkExtent2D VulkanSwapchain::chooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities, uint32_t width, uint32_t height) {

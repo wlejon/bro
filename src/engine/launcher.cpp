@@ -1,6 +1,7 @@
 #include "engine/launcher.h"
 
 #include "engine/config_loader.h"
+#include "util/exe_dir.h"
 
 #include <cstdlib>
 #include <fstream>
@@ -11,9 +12,6 @@
 #else
 #include <climits>
 #include <unistd.h>
-#endif
-#ifdef __APPLE__
-#include <mach-o/dyld.h>
 #endif
 
 namespace bro::engine {
@@ -69,26 +67,6 @@ void applyManifest(const std::string& manifestPath, const std::string& dir,
 
 } // namespace
 
-std::string executableDir() {
-    std::string path;
-#ifdef _WIN32
-    char buf[MAX_PATH];
-    DWORD n = GetModuleFileNameA(nullptr, buf, MAX_PATH);
-    if (n > 0) path.assign(buf, n);
-#elif defined(__APPLE__)
-    char buf[PATH_MAX];
-    uint32_t size = sizeof(buf);
-    if (_NSGetExecutablePath(buf, &size) == 0) path = buf;
-#else
-    char buf[PATH_MAX];
-    ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
-    if (len > 0) { buf[len] = '\0'; path = buf; }
-#endif
-    auto slash = path.find_last_of("/\\");
-    if (slash != std::string::npos) return path.substr(0, slash);
-    return ".";
-}
-
 std::string absolutePath(const std::string& path) {
     if (path.empty()) return path;
 #ifdef _WIN32
@@ -131,9 +109,10 @@ bool resolveLaunchTarget(const std::string& target, EngineConfig& config) {
             }
         }
     } else {
-        // No argument: probe next to the executable, which is how a packaged
-        // app and the bundled project manager both launch.
-        std::string dir = executableDir();
+        // No argument: probe the shipped data directory — beside the
+        // executable, or a macOS bundle's Contents/Resources — which is how a
+        // packaged app and the bundled project manager both launch.
+        std::string dir = util::resourceDir();
 #ifndef _WIN32
         if (!dir.empty() && dir != ".") { if (chdir(dir.c_str()) != 0) { /* keep cwd */ } }
 #endif
@@ -189,7 +168,7 @@ void publishLaunchEnv(EngineConfig& config) {
         config.projectRoot = absolutePath(config.projectRoot);
 
     // Apps like the launcher locate sibling executables through this.
-    setEnvVar("BRO_EXE_DIR", executableDir());
+    setEnvVar("BRO_EXE_DIR", util::executableDir());
     setEnvVar("BRO_APP_DIR", config.appDir);
     setEnvVar("BRO_PROJECT_ROOT", config.projectRoot);
 }

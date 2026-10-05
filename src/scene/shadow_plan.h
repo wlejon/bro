@@ -9,6 +9,7 @@
 
 #include <bromath/frustum.h>
 #include <bromath/mat.h>
+#include <bromath/vec.h>
 
 namespace bro::scene {
 
@@ -16,9 +17,15 @@ class LightNode;
 
 struct ShadowTilePlan {
     /// World -> light clip, in bromath's convention (y up, [0,1] depth,
-    /// never reversed — scene/depth_policy.h).
+    /// never reversed — scene/depth_policy.h): caster culling and the tile
+    /// cache's key.
     bromath::Mat4 viewProj;
     bromath::Frustum frustum;    // culling planes of viewProj
+    /// The same mapping for positions relative to ShadowPlan::origin, what
+    /// the GPU draws and samples with (camera-relative rendering,
+    /// vulkan/scene_view.h). Built from the relative positions directly, so
+    /// it keeps its precision however far the scene is from the origin.
+    bromath::Mat4 relViewProj;
     float rect[4] = {};          // atlas uv: origin.xy, size.zw
     float bias = 0.0f;           // the light's constant depth bias
     float normalBias = 0.0f;     // the light's normal offset, world units
@@ -37,6 +44,7 @@ struct ShadowPlan {
     static constexpr int kMaxLights = 32;
 
     int tileCount = 0;
+    bromath::Vec3 origin{0.0f, 0.0f, 0.0f};   // the camera eye relViewProj is relative to
     int atlasSize = 0;           // side of the square depth atlas, in texels
     int pcfTaps = 3;             // receiver PCF grid side: 1, 3 or 5
     ShadowTilePlan tiles[kMaxTiles];

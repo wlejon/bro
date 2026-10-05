@@ -16,6 +16,7 @@ class PassParticles final : public ScenePass {
 public:
     const char* name() const override { return "particles"; }
     bool setup(SceneGpu& gpu) override;
+    bool active(const SceneFrame& frame) const override;
     void declare(const SceneFrame& frame, PassIO& io) const override;
     void record(SceneFrame& frame) override;
     void cleanup(SceneGpu& gpu) override;

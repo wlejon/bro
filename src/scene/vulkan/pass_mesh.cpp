@@ -129,7 +129,7 @@ void PassOverlay::record(SceneFrame& frame) {
         draw.indexCount = gm->indexCount;
         draw.translucent = true;
         draw.noDepthTest = true;   // handles stay on top
-        std::memcpy(draw.push.model, gizmo->worldMatrix().data, sizeof(draw.push.model));
+        std::memcpy(draw.push.model, frame.view.relative(gizmo->worldMatrix()).data, sizeof(draw.push.model));
         std::memcpy(draw.push.baseColor, gizmo->color(), sizeof(draw.push.baseColor));
         std::memcpy(draw.push.emissive, gizmo->emissiveColor(), 3 * sizeof(float));
         draw.push.emissive[3] = gizmo->emissive();

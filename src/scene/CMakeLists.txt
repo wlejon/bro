@@ -150,6 +150,7 @@ add_library(bro_scene STATIC
     vulkan/scene_view.cpp
     vulkan/scene_defaults.cpp
     vulkan/scene_targets.cpp
+    vulkan/scene_gpu_timer.cpp
     vulkan/scene_gpu_resources.cpp
     vulkan/scene_mesh_drawer.cpp
     vulkan/scene_draw_list.cpp

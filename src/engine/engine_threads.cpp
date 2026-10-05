@@ -22,7 +22,7 @@ namespace bro::engine {
 // ---------------------------------------------------------------------------
 // Layout thread — owns style resolution + layout computation. Reads DOM tree
 // (read-only after JS phase), writes computedStyle_ + layoutBox_ on each
-// element. No GL needed — uses CPU-only RasterRenderer for text measurement.
+// element. No GPU needed — uses CPU-only RasterRenderer for text measurement.
 // ---------------------------------------------------------------------------
 
 void Engine::layoutThreadFunc() {

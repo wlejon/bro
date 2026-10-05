@@ -27,7 +27,8 @@ SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
     : device_(context),
       allocator_(device_),
       resources_(allocator_),
-      gpu_{device_, allocator_, defaults_, targets_, resources_, meshes_, environment_} {
+      gpu_{device_, allocator_, defaults_, targets_, resources_, meshes_, environment_},
+      timer_(context) {
     // The frame, in order. A pass draws into the HDR scope or brings its own
     // targets; the graph does every shared transition (scene_frame_graph.h).
     graph_.add(std::make_unique<PassShadow>());
@@ -76,6 +77,7 @@ bool SceneVkBridge::init() {
         LOG_ERROR("SceneVkBridge: Failed setting up the scene renderer");
         return false;
     }
+    timer_.init();   // a queue without timestamps leaves gpuMs() at -1
     ready_ = true;
     return true;
 }
@@ -96,6 +98,7 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
     readSinceRender_ = false;
 
     VkCommandBuffer cmd = device_.beginFrame();
+    timer_.begin(cmd);
     SceneFrame frame(cmd, gpu_, graph, renderer);
     frame.stats = stats;
     frame.view = SceneView::fromCamera(graph, width, height);
@@ -104,7 +107,7 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
         renderer.invalidateShadowCache();
     }
     environment_.update(gpu_, cmd, renderer);
-    frame.lighting = sceneLighting(renderer, environment_);
+    frame.lighting = sceneLighting(renderer, environment_, frame.view.eye);
     writeCameraSet(frame);
     frame.ssao = renderer.ssaoEnabled() && targets_.ensureIndirect(allocator_);
     frame.ssr = renderer.ssrEnabled() && renderer.ssrIntensity() > 0.0f;
@@ -122,9 +125,13 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
     } else {
         SceneFrameGraph::transition(cmd, targets_.ldr, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     }
-    if (device_.submitFrame(cmd) && readbackInline && readbackBuffer_.isValid()) {
-        readbackRecordedSerial_ = renderSerial_;
-        readbackTicket_ = device_.lastFrameTicket();
+    timer_.end(cmd);
+    if (device_.submitFrame(cmd)) {
+        timer_.submitted(device_.lastFrameTicket());
+        if (readbackInline && readbackBuffer_.isValid()) {
+            readbackRecordedSerial_ = renderSerial_;
+            readbackTicket_ = device_.lastFrameTicket();
+        }
     }
     stats = frame.stats;
     return frame.drewContent;

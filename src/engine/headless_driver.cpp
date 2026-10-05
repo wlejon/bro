@@ -10,6 +10,7 @@
 
 using bro::engine::parseConfig;
 using bro::engine::findAncestorProjectRoot;
+#include "util/exe_dir.h"
 #include "util/interrupt.h"
 #include "util/log.h"
 
@@ -35,31 +36,8 @@ using bro::engine::findAncestorProjectRoot;
 #include <unistd.h>
 #include <climits>
 #endif
-#ifdef __APPLE__
-#include <mach-o/dyld.h>
-#endif
 
 namespace {
-
-static std::string exeDir() {
-    std::string path;
-#ifdef _WIN32
-    char buf[260];
-    DWORD len = GetModuleFileNameA(nullptr, buf, 260);
-    if (len > 0 && len < 260) path = std::string(buf, len);
-#elif defined(__APPLE__)
-    char buf[1024];
-    uint32_t size = sizeof(buf);
-    if (_NSGetExecutablePath(buf, &size) == 0) path = buf;
-#else
-    char buf[4096];
-    ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
-    if (len > 0) { buf[len] = '\0'; path = buf; }
-#endif
-    auto slash = path.find_last_of("/\\");
-    if (slash != std::string::npos) return path.substr(0, slash);
-    return ".";
-}
 
 static std::string absolutize(const std::string& path) {
     if (path.empty()) return path;
@@ -204,8 +182,8 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
 
     try {
         bro::engine::EngineConfig config;
-        std::string settingsDir = exeDir();
-        config.settingsPath = settingsDir + "/.bro_settings.json";
+        std::string settingsDir = bro::util::executableDir();
+        config.settingsPath = bro::util::defaultSettingsPath();
 
 #ifdef _WIN32
         _putenv_s("BRO_EXE_DIR", settingsDir.c_str());
@@ -267,7 +245,7 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
 
         config.appDir = absolutize(config.appDir);
         if (!config.projectRoot.empty()) config.projectRoot = absolutize(config.projectRoot);
-        std::string exeDirPath = exeDir();
+        std::string exeDirPath = bro::util::executableDir();
 #ifdef _WIN32
         _putenv_s("BRO_APP_DIR", config.appDir.c_str());
         _putenv_s("BRO_PROJECT_ROOT", config.projectRoot.c_str());

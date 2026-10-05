@@ -193,6 +193,48 @@ if (!gl) {
     gl.deleteBuffer(reborn);
 
     // =====================================================================
+    // READ with INVALIDATE_BUFFER / UNSYNCHRONIZED is INVALID_OPERATION
+    // =====================================================================
+    for (const bit of [M.MAP_INVALIDATE_BUFFER_BIT, M.MAP_UNSYNCHRONIZED_BIT]) {
+        drainError();
+        assert(gl.mapBufferRange(gl.ARRAY_BUFFER, 0, 16, M.MAP_READ_BIT | bit) === null,
+               'READ with bit ' + bit + ' rejected');
+        assert(gl.getError() === gl.INVALID_OPERATION, 'READ with bit ' + bit + ' is INVALID_OPERATION');
+    }
+
+    // =====================================================================
+    // flushMappedBufferRange's offset is relative to the mapped range
+    // =====================================================================
+    drainError();
+    {
+        const rel = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, rel);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(8), gl.DYNAMIC_DRAW);
+        const m = gl.mapBufferRange(gl.ARRAY_BUFFER, 16, 16, M.MAP_WRITE_BIT | M.MAP_FLUSH_EXPLICIT_BIT);
+        new Float32Array(m).set([5, 6, 7, 8]);
+        gl.flushMappedBufferRange(gl.ARRAY_BUFFER, 0, 16);
+        assert(gl.getError() === gl.NO_ERROR, 'flush of the whole mapped range');
+        gl.flushMappedBufferRange(gl.ARRAY_BUFFER, 4, 16);
+        assert(gl.getError() === gl.INVALID_VALUE, 'flush past the mapped range is INVALID_VALUE');
+        gl.unmapBuffer(gl.ARRAY_BUFFER);
+        const got = new Float32Array(8);
+        gl.getBufferSubData(gl.ARRAY_BUFFER, 0, got);
+        assert(got.join() === '0,0,0,0,5,6,7,8', 'flushed bytes landed at the mapping: ' + got.join());
+
+        // bufferData on a mapped buffer unmaps it: the old ArrayBuffer is
+        // detached and the buffer can be mapped again.
+        const old = gl.mapBufferRange(gl.ARRAY_BUFFER, 0, 16, M.MAP_WRITE_BIT);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([1, 2, 3, 4]), gl.DYNAMIC_DRAW);
+        assert(old.byteLength === 0, 'bufferData detached the mapping (' + old.byteLength + ')');
+        const again = gl.mapBufferRange(gl.ARRAY_BUFFER, 0, 16, M.MAP_READ_BIT);
+        assert(again !== null && gl.getError() === gl.NO_ERROR, 'buffer maps again after bufferData');
+        assert(new Float32Array(again).join() === '1,2,3,4', 'mapping sees the new contents');
+        gl.unmapBuffer(gl.ARRAY_BUFFER);
+        gl.deleteBuffer(rel);
+        gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    }
+
+    // =====================================================================
     // A buffer filled through a mapping actually draws
     // =====================================================================
     const vs = gl.createShader(gl.VERTEX_SHADER);

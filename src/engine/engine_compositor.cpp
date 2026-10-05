@@ -42,7 +42,6 @@ namespace bro::engine {
 
 void Engine::addCanvasScene(std::unique_ptr<canvas::CanvasScene> scene) {
     if (!scene) return;
-    scene->init();
     canvasSceneRegistry_[scene->sceneId()] = scene.get();
     canvasScenes_.push_back(std::move(scene));
 }

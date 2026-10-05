@@ -18,10 +18,6 @@ namespace bro::engine {
 /// What stays in each main() is only what genuinely differs: windowed run
 /// loop vs headless script driver vs server tick loop.
 
-/// Absolute path of the directory containing the running executable.
-/// Falls back to "." if the platform query fails.
-std::string executableDir();
-
 /// Turn a possibly-relative path into an absolute one. Returns the input
 /// unchanged when it cannot be resolved (e.g. it does not exist yet).
 std::string absolutePath(const std::string& path);
@@ -29,8 +25,8 @@ std::string absolutePath(const std::string& path);
 /// Resolve the positional launch argument into `config.appDir` and
 /// `config.projectRoot`, parsing whichever bro.json applies.
 ///
-/// `target` may be empty, in which case the executable's own directory is
-/// probed for a bro.json, an index.html, or the bundled project manager —
+/// `target` may be empty, in which case util::resourceDir() (the executable's
+/// own directory, or a macOS bundle's Contents/Resources) is probed for a bro.json, an index.html, or the bundled project manager —
 /// the behaviour of running `bro` with no arguments.
 ///
 /// Returns false when no app could be located, which the caller should treat

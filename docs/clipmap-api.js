@@ -25,8 +25,8 @@
  *
  * Both stacks are TEXTURE ARRAYS — two sampler units for the whole terrain,
  * however many layers it holds, which is what keeps it inside a fragment
- * stage's 16-sampler floor (macOS's GL 4.1 core; six sampler2Ds per stack did
- * not link there). They replaced the per-layer `sampler2D u_h0..u_h5` and
+ * stage's 16-sampler floor (Vulkan's minimum maxPerStageDescriptorSamplers;
+ * six sampler2Ds per stack would not fit beside the mesh pipeline's own). They replaced the per-layer `sampler2D u_h0..u_h5` and
  * `u_surface, u_surface1..u_surface5`, which no longer exist; the per-layer
  * `u_l<i>a/b`, `u_surf*A/B`, `u_layerCount`, `u_surfaceCount` and
  * `u_surfPresent` are unchanged.

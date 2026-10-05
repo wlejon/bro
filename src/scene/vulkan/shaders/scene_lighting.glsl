@@ -4,7 +4,9 @@
 // ambient) with the bound reflection probe's specular, the air between the
 // eye and the surface (aerial perspective or fog) and the tile shade map. Mirrors SceneLightingUniforms (scene_vk_descriptors.h); filled by
 // scene_lighting.cpp from SceneRenderer's light list and shadow plan.
-// Needs scene_camera.glsl included first.
+// Needs scene_camera.glsl included first. Positions are camera-relative, as
+// in every scene shader: the lights, shadow matrices, probe and shade-map
+// origin arrive with the eye subtracted (scene_lighting.cpp).
 //
 //   D = GGX (Trowbridge-Reitz), F = Schlick, G = Smith (Schlick-GGX).
 // Light types: 0 = directional, 1 = point, 2 = spot. Range uses the
@@ -17,15 +19,15 @@ const float PI = 3.14159265359;
 #define SCENE_MAX_SHADOW_TILES 16
 
 struct SceneLight {
-    vec4 position;      // xyz world position, w type
+    vec4 position;      // xyz camera-relative position, w type
     vec4 direction;     // xyz unit direction (light -> scene), w range (0 = unbounded)
     vec4 color;         // rgb linear, a intensity
     vec4 shadow;        // x cos(inner), y cos(outer), z first atlas tile (-1 = none), w tile count
     vec4 cascadeSplit;  // far view distance of each cascade (directional CSM)
 };
 
-// One atlas tile. `matrix` takes a world position straight to (tile uv, [0,1]
-// depth); `rect` places the tile in the atlas. Biases are in world units and
+// One atlas tile. `matrix` takes a camera-relative position straight to
+// (tile uv, [0,1] depth); `rect` places the tile in the atlas. Biases are in world units and
 // shadow texels: bias.x a constant depth bias, bias.y the normal offset,
 // bias.zw the world size of one texel (constant for ortho tiles, per metre of
 // light distance for perspective ones); depth = (near, far, ortho) of the
@@ -206,7 +208,7 @@ float lightShadow(int i, vec3 pos, float camDist, float lightDist, vec3 N, float
 
 // A lit surface, as every lit shader hands it to sceneDirectLight/sceneAmbient.
 struct SceneSurface {
-    vec3 position;     // world
+    vec3 position;     // camera-relative
     vec3 normal;       // unit shading normal
     vec3 view;         // unit, surface -> eye
     float camDist;
@@ -326,7 +328,7 @@ vec3 sceneAmbient(SceneSurface s) {
     return lighting.ambientColor.rgb * s.baseColor * (1.0 - s.metallic) + probeSpec * probeW;
 }
 
-// Fog in [0,1] for a fragment `camDist` from the eye at height `worldY`:
+// Fog in [0,1] for a fragment `camDist` from the eye at world height `worldY`:
 // exponential-squared height fog when the density is set, else the linear
 // start/end ramp, else none.
 float fogFactorFor(float camDist, float worldY) {
@@ -347,7 +349,7 @@ float fogFactorFor(float camDist, float worldY) {
     return 0.0;
 }
 
-// The air between the eye and a surface at `pos`, `camDist` away, as what
+// The air between the eye and a surface at camera-relative `pos`, `camDist` away, as what
 // survives of the surface's colour and what the air adds: the atmosphere's
 // transmittance and in-scatter (aerial perspective, integrated with the sky's
 // own model, so distant ground fades into the sky behind it) when it is on,
@@ -372,16 +374,15 @@ SceneAir sceneAir(vec3 pos, float camDist) {
     air.inscatter = vec3(0.0);
     air.fade = 0.0;
     if (lighting.atmSunDir.w > 0.5) {
-        vec3 ray = pos - camera.eyePos.xyz;
-        float dist = length(ray);
+        float dist = length(pos);
         if (dist <= 0.0) return air;
         int steps = int(clamp(dist / ATM_AERIAL_STEP_LENGTH, float(ATM_AERIAL_MIN_STEPS),
                               float(ATM_AERIAL_MAX_STEPS)));
-        air.inscatter = atmScatter(atmOrigin(camera.eyePos.xyz), ray / dist, dist, steps, ATM_AERIAL_SUN_STEPS,
+        air.inscatter = atmScatter(atmOrigin(camera.eyeWorld.xyz), pos / dist, dist, steps, ATM_AERIAL_SUN_STEPS,
                                    air.transmittance);
         return air;
     }
-    float fog = fogFactorFor(camDist, pos.y);
+    float fog = fogFactorFor(camDist, pos.y + camera.eyeWorld.y);
     air.transmittance = vec3(1.0 - fog);
     air.inscatter = camera.fogColor.rgb * fog;
     air.fade = fog;

@@ -156,8 +156,6 @@ public:
     using LiveCheckCallback = bool(*)(void* doc, void* node);
     void setLiveCheck(LiveCheckCallback cb, void* doc) { liveCb_ = cb; liveUd_ = doc; }
 
-    void init() {}
-
     void cleanup();
 
     render::Renderer* renderer() const { return renderer_; }
@@ -351,7 +349,7 @@ public:
     const uint8_t* snapshotPixels(int w, int h);
 
     /// Cached SkImage snapshot of the surface — the canvas-source fast path
-    /// for drawImage(<canvas>). Stays alive (and Ganesh sees a single texture
+    /// for drawImage(<canvas>). Stays alive (and Skia sees a single image
     /// across many blits) until any new draw command lands, the surface
     /// resizes, or reset() runs. Returns null when there's no surface yet.
     sk_sp<SkImage> snapshotImage();

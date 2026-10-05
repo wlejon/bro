@@ -273,8 +273,8 @@ Value hostElementValue(dom::Element* el) {
     HostNodeState* st = stateFor(el);
     Value existing = st->jsObj.get();
     if (!ev::isUndefined(existing)) return existing;
-    // A canvas is more than an element — it owns a drawing buffer and a GL
-    // context — so dom_globals.cpp builds that one, on top of this same core.
+    // A canvas is more than an element — it owns a drawing buffer and a
+    // rendering context — so dom_globals.cpp builds that one, on top of this same core.
     Value v = isCanvasTag(el->tagName()) ? makeCanvasElementValue(el)
                                          : makePlainElementValue(el);
     // makeCanvas/makePlain allocate, and allocation can grow the registry, so

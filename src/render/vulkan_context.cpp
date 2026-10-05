@@ -1,5 +1,6 @@
 #include "render/vulkan_context.h"
 #include "render/vulkan_debug.h"
+#include "util/exe_dir.h"
 #include "util/log.h"
 
 #include <SDL3/SDL.h>
@@ -13,7 +14,6 @@
 #include <vector>
 
 #ifdef __APPLE__
-#include <mach-o/dyld.h>
 #include <sys/stat.h>
 #endif
 
@@ -23,24 +23,24 @@ namespace {
 
 #ifdef __APPLE__
 // A packaged bro carries its own Vulkan loader and MoltenVK
-// (scripts/package-release.sh): vulkan/icd.d/MoltenVK_icd.json beside the
-// executable. Unless the environment already names the drivers, add that one
-// to the loader's search — added rather than substituted, so a machine with the
-// Vulkan SDK or Homebrew's MoltenVK keeps its own as well. Set before the first
-// instance-level call, which is when the loader scans for drivers.
-void addBundledMoltenVK() {
+// (scripts/package-release.sh): vulkan/icd.d/MoltenVK_icd.json in the shipped
+// data directory (beside bro-headless, or in Bro.app's Contents/Resources).
+// Unless the environment already names the drivers, that one is the only
+// driver the loader uses: a second MoltenVK (the Vulkan SDK's or Homebrew's)
+// loaded into the same process duplicates its Objective-C classes, which the
+// runtime warns may crash. It must be set before anything in the process makes
+// an instance-level call — the loader scans for drivers on every one, and a
+// MoltenVK it loads stays loaded — so it runs when this file is loaded, before
+// main().
+void useBundledMoltenVK() {
     if (std::getenv("VK_DRIVER_FILES") || std::getenv("VK_ICD_FILENAMES") ||
         std::getenv("VK_ADD_DRIVER_FILES"))
         return;
-    char exe[4096];
-    uint32_t size = sizeof(exe);
-    if (_NSGetExecutablePath(exe, &size) != 0) return;
-    std::string dir(exe);
-    dir.erase(dir.find_last_of('/') + 1);
-    const std::string icd = dir + "vulkan/icd.d/MoltenVK_icd.json";
+    const std::string icd = util::resourceDir() + "/vulkan/icd.d/MoltenVK_icd.json";
     struct stat st{};
-    if (stat(icd.c_str(), &st) == 0) setenv("VK_ADD_DRIVER_FILES", icd.c_str(), 0);
+    if (stat(icd.c_str(), &st) == 0) setenv("VK_DRIVER_FILES", icd.c_str(), 0);
 }
+[[maybe_unused]] const bool kBundledMoltenVK = (useBundledMoltenVK(), true);
 #endif
 
 const std::vector<const char*> kRequiredDeviceExtensions = {
@@ -197,9 +197,6 @@ void VulkanContext::cleanup() {
 }
 
 bool VulkanContext::createInstance() {
-#ifdef __APPLE__
-    addBundledMoltenVK();
-#endif
     std::vector<const char*> validationLayers;
     if (config_.enableValidation) {
         validationLayers = getAvailableValidationLayers();

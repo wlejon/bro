@@ -345,7 +345,7 @@ private:
     // The shade-map provider every node of this world carries (shade_map.h):
     // uploads the R8 texture when the map changed since the last draw and
     // fills the binding. False until a shade has ever been set, so a world
-    // that never shades draws exactly as before. GL thread (draw time).
+    // that never shades draws exactly as before. Called at draw time.
     bool shadeBinding(ShadeMapBinding& out);
     void attachShadeMap(MeshNode* node);
     void attachShadeMap(InstancedMeshNode* node);

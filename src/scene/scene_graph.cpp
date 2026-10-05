@@ -571,11 +571,11 @@ void SceneGraph::render() {
 
     // --- 2D canvas pass ---------------------------------------------------
     // Render non-world-anchored Shape/Sprite/Particles into the 2D overlay
-    // layer. World-anchored ones already rendered into the FBO above.
+    // layer. World-anchored ones already rendered in the 3D passes above.
     //
     // The set of types here is a WHITELIST on purpose. It used to be a
     // blacklist ("anything that is not a Mesh or an Html node"), and that let
-    // every 3D node type whose onRender() issues GL through — most damagingly
+    // every 3D node type whose onRender() draws through — most damagingly
     // InstancedMeshNode, whose onRender() is the instanced draw itself. Every
     // instanced node was therefore drawn a SECOND time here, outside the 3D
     // pass: no mesh program bound, no uVP/uCameraEye, the tonemap pass's

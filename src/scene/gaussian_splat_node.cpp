@@ -167,9 +167,4 @@ void GaussianSplatNode::resort(const float* view16, const float eye[3],
     sorted_ = true;
 }
 
-bool GaussianSplatNode::draw(const float*, const float*,
-                             const float*, int, int) {
-    return false;
-}
-
 } // namespace bro::scene

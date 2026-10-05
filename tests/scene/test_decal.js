@@ -371,5 +371,40 @@ if (!probe.scene) {
         dropScene(s);
     }
 
+    // =====================================================================
+    // Section: a surface flush with a face of the decal box keeps the decal
+    // under every MSAA level. MSAA depth resolves to the nearest sample, a
+    // hair in front of the surface at the pixel centre; without allowing for
+    // that the wall reconstructs just outside the box and the decal vanished
+    // at MSAA 4 while it showed at 1.
+    // =====================================================================
+    {
+        const s = freshScene(S);
+        const scn = s.scene;
+        scn.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+        scn.setAmbient({ color: [0.5, 0.5, 0.5] });
+        scn.setCamera({ fov: 60, near: 0.1, far: 100, position: [0, 2, 4], target: [0, 0.5, 0] });
+        scn.createMesh({ mesh: 'plane', halfW: 5, halfD: 5, color: [0.5, 0.5, 0.5] });
+        // A 1 m cube on the floor; the decal box shares its front and side faces.
+        scn.createMesh({ mesh: Mesh.box(0.5, 0.5, 0.5), color: [0.6, 0.6, 0.6], y: 0.5 });
+        const wall = projectToScreen(scn, S, [0, 0.5, 0.5]);
+        const results = [];
+        for (const msaa of [1, 2, 4, 8]) {
+            scn.setMSAA(msaa);
+            const before = patchChannelAvg(scn.captureFrame(), wall[0], wall[1], 2, 2);
+            const red = patchChannelAvg(scn.captureFrame(), wall[0], wall[1], 2, 0);
+            const decal = scn.createDecal({ modulate: [0, 0, 1, 1], size: [1, 2, 1], y: 0 });
+            const img = scn.captureFrame();
+            const blue = patchChannelAvg(img, wall[0], wall[1], 2, 2);
+            const redAfter = patchChannelAvg(img, wall[0], wall[1], 2, 0);
+            decal.destroy();
+            results.push(`msaa ${msaa}: b ${before.toFixed(0)}->${blue.toFixed(0)} r ${red.toFixed(0)}->${redAfter.toFixed(0)}`);
+            assert(redAfter < red * 0.6 && blue >= before - 2,
+                `a wall flush with the decal box keeps the decal at MSAA ${msaa} (${results[results.length - 1]})`);
+        }
+        console.log('decal flush with a wall: ' + results.join('; '));
+        dropScene(s);
+    }
+
     console.log('decal tests passed');
 }
