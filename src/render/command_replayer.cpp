@@ -73,7 +73,7 @@ void CommandReplayer::replay(const CommandBuffer& buffer) {
                 }
                 std::string_view text = buffer.stringAt(c.textOffset, c.textLen);
                 std::string_view family = buffer.stringAt(c.familyOffset, c.familyLen);
-                FontRef font{family, c.fontSize, c.fontWeight, c.fontItalic};
+                FontRef font{family, c.fontSize, c.fontWeight, c.fontItalic, c.fontLigatures};
                 if (c.letterSpacing != 0.0f || c.blur != 0.0f ||
                     c.wordSpacing != 0.0f) {
                     dst_->drawTextEx(text, c.x, c.y, font, c.color,

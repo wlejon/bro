@@ -311,13 +311,18 @@ public:
     /// drop it; never store it across another shape().
     /// Returns nullptr only for empty input.
     ///
-    /// `disableLigatures` turns off the `liga`/`clig` features. Callers set it
-    /// when letter-spacing is in play: CSS letter-spacing inserts space
-    /// *between characters*, which a ligature has fused into one indivisible
-    /// glyph, so browsers suppress ligatures whenever letter-spacing is
-    /// non-zero. It is a shaping input (it changes which glyphs come out) and
-    /// so it belongs in the cache key — the spacing *amount* does not, and is
-    /// applied to the positioned output instead.
+    /// `ligatures` selects the ligature features. NoCommon turns off
+    /// `liga`/`clig`: callers ask for it when letter-spacing is in play (CSS
+    /// letter-spacing inserts space *between characters*, which a ligature
+    /// has fused into one indivisible glyph, so browsers suppress ligatures
+    /// whenever letter-spacing is non-zero). None also turns off the
+    /// contextual alternates and discretionary/historical ligatures (`calt`,
+    /// `dlig`, `hlig`) coding fonts build their ligatures from: one glyph per
+    /// character, what a terminal grid needs (FontRef::ligatures = false). It
+    /// is a shaping input (it changes which glyphs come out) and so it belongs
+    /// in the cache key — the spacing *amount* does not, and is applied to the
+    /// positioned output instead.
+    enum class Ligatures : uint8_t { Normal, NoCommon, None };
     const ShapedRun* shape(std::string_view utf8,
                            const SkFont& primary,
                            std::string_view family,
@@ -325,7 +330,12 @@ public:
                            SkFontMgr* fontMgr,
                            FontFallbackCache& fallback,
                            TextDirection direction = TextDirection::LTR,
-                           bool disableLigatures = false);
+                           Ligatures ligatures = Ligatures::Normal);
+    /// The mode a draw asks for: letter-spacing turns common ligatures off,
+    /// a font that wants none turns them all off.
+    static Ligatures ligaturesFor(bool letterSpacing, bool fontLigatures) {
+        return !fontLigatures ? Ligatures::None : letterSpacing ? Ligatures::NoCommon : Ligatures::Normal;
+    }
 
     /// Drop everything. Renderers call this when a custom font is registered,
     /// since the same descriptor can resolve to a different face across that.
@@ -343,14 +353,14 @@ private:
         int           weight;
         bool          italic;
         TextDirection direction;
-        bool          noLigatures;   // the only feature toggle callers have
+        Ligatures     ligatures;     // the only feature toggle callers have
         // Script is derived from the text itself and language is the process
         // locale, so neither adds information to this key today. Note what is
         // NOT here: letter-spacing and word-spacing. Spacing does not change
         // which glyphs the shaper produces, so it must not multiply the cache.
         bool operator==(const Key& o) const {
             return size == o.size && weight == o.weight && italic == o.italic &&
-                   direction == o.direction && noLigatures == o.noLigatures &&
+                   direction == o.direction && ligatures == o.ligatures &&
                    text == o.text && family == o.family;
         }
     };

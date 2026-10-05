@@ -586,7 +586,7 @@ std::size_t TextShapingEngine::KeyHash::operator()(const Key& k) const noexcept 
     mix(static_cast<std::size_t>(k.weight));
     mix(static_cast<std::size_t>(k.italic));
     mix(static_cast<std::size_t>(k.direction));
-    mix(static_cast<std::size_t>(k.noLigatures));
+    mix(static_cast<std::size_t>(k.ligatures));
     return h;
 }
 
@@ -623,7 +623,7 @@ const ShapedRun* TextShapingEngine::shape(std::string_view utf8,
                                           SkFontMgr* fontMgr,
                                           FontFallbackCache& fallback,
                                           TextDirection direction,
-                                          bool disableLigatures) {
+                                          Ligatures ligatures) {
     if (utf8.empty()) return nullptr;
 
     std::string scratch;
@@ -631,7 +631,7 @@ const ShapedRun* TextShapingEngine::shape(std::string_view utf8,
 
     Key key{std::string(utf8), std::string(family), primary.getSize(),
             style.weight(), style.slant() != SkFontStyle::kUpright_Slant,
-            direction, disableLigatures};
+            direction, ligatures};
     if (auto it = cache_.find(key); it != cache_.end()) {
         ++hits_;
         return it->second.get();
@@ -664,12 +664,19 @@ const ShapedRun* TextShapingEngine::shape(std::string_view utf8,
         // several characters into one glyph with no seam to put space in.
         // Browsers resolve that by turning ligatures off, which also keeps the
         // drawn extent equal to the layout box (which counts characters).
-        SkShaper::Feature features[2];
+        // A terminal's grid (Ligatures::None) also turns off what coding
+        // fonts build their ligatures from: contextual alternates and the
+        // discretionary / historical sets.
+        SkShaper::Feature features[5];
         std::size_t featureCount = 0;
-        if (disableLigatures) {
-            features[0] = {SkSetFourByteTag('l','i','g','a'), 0, 0, utf8.size()};
-            features[1] = {SkSetFourByteTag('c','l','i','g'), 0, 0, utf8.size()};
-            featureCount = 2;
+        if (ligatures != Ligatures::Normal) {
+            features[featureCount++] = {SkSetFourByteTag('l','i','g','a'), 0, 0, utf8.size()};
+            features[featureCount++] = {SkSetFourByteTag('c','l','i','g'), 0, 0, utf8.size()};
+        }
+        if (ligatures == Ligatures::None) {
+            features[featureCount++] = {SkSetFourByteTag('c','a','l','t'), 0, 0, utf8.size()};
+            features[featureCount++] = {SkSetFourByteTag('d','l','i','g'), 0, 0, utf8.size()};
+            features[featureCount++] = {SkSetFourByteTag('h','l','i','g'), 0, 0, utf8.size()};
         }
         if (fontRuns && language && scriptRuns && bidiRuns) {
             ShapedRunHandler handler(b);

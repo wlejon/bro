@@ -41,6 +41,7 @@ struct Cmd_DrawText {
     float fontSize;
     int   fontWeight;
     bool  fontItalic;
+    bool  fontLigatures;              // FontRef::ligatures
     float letterSpacing;              // 0 -> plain drawText path
     float wordSpacing;                // extra advance per space char; 0 if none
     float blur;                       // text-shadow halo; 0 if none

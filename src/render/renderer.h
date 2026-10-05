@@ -94,6 +94,9 @@ struct FontRef {
     float            size = 14.0f;
     int              weight = 400;   // CSS numeric (400 = normal, 700 = bold)
     bool             italic = false;
+    // Ligature features (liga, clig, calt, ...). False draws one glyph per
+    // character, as `font-variant-ligatures: none` does (the terminal grid).
+    bool             ligatures = true;
 };
 
 // CSS filter primitive — a single function in a `filter:` chain. The list is

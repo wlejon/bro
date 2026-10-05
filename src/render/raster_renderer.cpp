@@ -219,7 +219,7 @@ const ShapedRun* RasterRenderer::shapeText(std::string_view text, FontRef font,
     if (!fe) return nullptr;
     return shaper_.shape(text, *fe->font, font.family, fe->style,
                          ensureFontMgr(), fallbackCache_,
-                         direction, disableLigatures);
+                         direction, TextShapingEngine::ligaturesFor(disableLigatures, font.ligatures));
 }
 
 void RasterRenderer::drawText(std::string_view text, float x, float y, FontRef font, Color c,
