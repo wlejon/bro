@@ -298,6 +298,36 @@ if (!probe.scene) {
     }
 
     // ------------------------------------------------------------------
+    // Soft particles under an orthographic camera: a quad just in front of a
+    // wall fades, one far in front of it does not.
+    // ------------------------------------------------------------------
+    {
+        const brightnessAt = (wallZ, softness) => {
+            const s = freshScene(SIZE);
+            s.scene.setCamera({ mode: 'orthographic', size: 4, near: 0.1, far: 50,
+                                eye: [0, 0, 10], target: [0, 0, 0] });
+            s.scene.setAmbient({ color: [0, 0, 0] });
+            s.scene.createMesh({ mesh: Mesh.box(10, 10, 0.1), z: wallZ, color: [0, 0, 0, 1], roughness: 1 });
+            s.scene.createParticles3D({
+                seed: 3, rate: 0, burst: 1, maxParticles: 1, lifetime: 10,
+                velocity: { speed: 0 }, size: { start: 2, end: 2 }, blend: 'additive',
+                color: { start: '#ffffff', end: '#ffffff' }, softness,
+            });
+            advanceTime(16);
+            const t = Math.floor(SIZE / 2);
+            const b = regionBrightness(s.scene.captureFrame(), t - 4, t - 4, t + 4, t + 4);
+            document.body.removeChild(s.canvas);
+            return b;
+        };
+        const hard = brightnessAt(-0.1, 0);
+        const near = brightnessAt(-0.1, 2);
+        const far = brightnessAt(-5, 2);
+        assert(hard > 100, `the hard particle draws over the wall (${hard})`);
+        assert(near < hard * 0.2, `ortho: a soft particle 0.1 from the wall fades (${near} vs ${hard})`);
+        assert(far > hard * 0.9, `ortho: a soft particle 5 from the wall stays (${far} vs ${hard})`);
+    }
+
+    // ------------------------------------------------------------------
     // Determinism: same seed + same dt steps => identical pixels
     // ------------------------------------------------------------------
     {

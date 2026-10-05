@@ -157,18 +157,12 @@ void bro_scene_SceneGraph_setSSAO(void* self, bool opts_radius_given, double opt
     g->setSSAO(enabled, radius, inten, bias);
 }
 
-void bro_scene_SceneGraph_setSSR(void* self, bool opts_maxDistance_given, double opts_maxDistance,
-                                bool opts_thickness_given, double opts_thickness,
-                                bool opts_stepCount_given, int32_t opts_stepCount,
-                                bool opts_roughnessCutoff_given, double opts_roughnessCutoff) {
+void bro_scene_SceneGraph_setSSR(void* self, bool enabled, double maxDistance, int32_t steps, double thickness,
+                                double intensity, double edgeFade) {
     auto* g = graphOf(self);
     if (!g) return;
-    bool enabled = opts_maxDistance_given || opts_thickness_given || opts_stepCount_given || opts_roughnessCutoff_given;
-    float maxDist = opts_maxDistance_given ? static_cast<float>(opts_maxDistance) : 30.0f;
-    int steps = opts_stepCount_given ? opts_stepCount : 48;
-    float thick = opts_thickness_given ? static_cast<float>(opts_thickness) : 0.3f;
-    float edgeFade = opts_roughnessCutoff_given ? static_cast<float>(opts_roughnessCutoff) : 0.05f;
-    g->setSSR(enabled, maxDist, steps, thick, 1.0f, edgeFade);
+    g->setSSR(enabled, static_cast<float>(maxDistance), steps, static_cast<float>(thickness),
+              static_cast<float>(intensity), static_cast<float>(edgeFade));
 }
 
 void bro_scene_SceneGraph_setDepthOfField(void* self, bool opts_focusDistance_given, double opts_focusDistance,
@@ -211,23 +205,25 @@ void bro_scene_SceneGraph_setMSAA(void* self, int32_t samples) {
     if (g) g->setMSAA(samples);
 }
 
-void bro_scene_SceneGraph_setEnvironment(void* self, bool opts_panorama_given, const char* opts_panorama,
+bool bro_scene_SceneGraph_setEnvironment(void* self, bool opts_panorama_given, const char* opts_panorama,
                                         bool /*opts_cubeMap_given*/, const char* /*opts_cubeMap*/,
                                         const double* /*opts_color*/, uint32_t /*opts_color_len*/,
                                         bool opts_intensity_given, double opts_intensity,
                                         bool opts_rotation_given, double opts_rotation,
                                         bool /*opts_background_given*/, bool /*opts_background*/) {
     auto* g = graphOf(self);
-    if (!g) return;
+    if (!g) return false;
+    bool loaded = true;
     if (opts_panorama_given) {
         if (opts_panorama && opts_panorama[0] != '\0') {
-            g->loadEnvironment(bro::util::resolveAssetPath(opts_panorama));
+            loaded = g->loadEnvironment(bro::util::resolveAssetPath(opts_panorama));
         } else {
             g->clearEnvironment();
         }
     }
     if (opts_intensity_given) g->setEnvironmentIntensity(static_cast<float>(opts_intensity));
     if (opts_rotation_given) g->setEnvironmentRotation(static_cast<float>(opts_rotation));
+    return loaded;
 }
 
 void bro_scene_SceneGraph_setFrustumCulling(void* self, bool enabled) {

@@ -579,8 +579,8 @@ void bro_scene_SceneGraph_setSSAO(void* self, bool opts_radius_given, double opt
 
 // bro.scene.SceneGraph.prototype.setSSR
 //   registered at __bro_native.scene.SceneGraph_setSSR
-//   opts_maxDistance_given, opts_thickness_given, opts_stepCount_given, opts_roughnessCutoff_given: false when the value was not passed (no declared default)
-void bro_scene_SceneGraph_setSSR(void* self, bool opts_maxDistance_given, double opts_maxDistance, bool opts_thickness_given, double opts_thickness, bool opts_stepCount_given, int32_t opts_stepCount, bool opts_roughnessCutoff_given, double opts_roughnessCutoff);
+//   the JS wrapper fills every default; enabled false turns SSR off and ignores the rest
+void bro_scene_SceneGraph_setSSR(void* self, bool enabled, double maxDistance, int32_t steps, double thickness, double intensity, double edgeFade);
 
 // bro.scene.SceneGraph.prototype.setDepthOfField
 //   registered at __bro_native.scene.SceneGraph_setDepthOfField
@@ -606,7 +606,8 @@ void bro_scene_SceneGraph_setMSAA(void* self, int32_t samples);
 // bro.scene.SceneGraph.prototype.setEnvironment
 //   registered at __bro_native.scene.SceneGraph_setEnvironment
 //   opts_panorama_given, opts_cubeMap_given, opts_intensity_given, opts_blur_given, opts_background_given: false when the value was not passed (no declared default)
-void bro_scene_SceneGraph_setEnvironment(void* self, bool opts_panorama_given, const char* opts_panorama, bool opts_cubeMap_given, const char* opts_cubeMap, const double* opts_color, uint32_t opts_color_len, bool opts_intensity_given, double opts_intensity, bool opts_blur_given, double opts_blur, bool opts_background_given, bool opts_background);
+//   returns false when a given panorama does not load (the previous environment stays)
+bool bro_scene_SceneGraph_setEnvironment(void* self, bool opts_panorama_given, const char* opts_panorama, bool opts_cubeMap_given, const char* opts_cubeMap, const double* opts_color, uint32_t opts_color_len, bool opts_intensity_given, double opts_intensity, bool opts_blur_given, double opts_blur, bool opts_background_given, bool opts_background);
 
 // bro.scene.SceneGraph.prototype.setFrustumCulling
 //   registered at __bro_native.scene.SceneGraph_setFrustumCulling

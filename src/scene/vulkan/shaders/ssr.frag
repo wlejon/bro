@@ -27,11 +27,11 @@ vec3 viewPos(vec2 uv, float d) {
 void main() {
     vec4 src = texture(uColorTex, inUV);
     float d0 = texture(uDepthTex, inUV).r;
-    if (isSky(d0)) discard;
-
     vec3 P = viewPos(inUV, d0);
+    // Face normal from position derivatives, taken before the discard so the
+    // 2x2 quads stay coherent; turned to face the viewer.
     vec3 N = normalize(cross(dFdx(P), dFdy(P)));
-    if (N.z < 0.0) N = -N;
+    if (isSky(d0)) discard;
 
     float mask = src.a;
     float intensity = ubo.uParams2.x;
@@ -46,6 +46,7 @@ void main() {
 
     if (mask * intensity > 0.002) {
         vec3 I = (isPerspective == 1) ? normalize(P) : vec3(0.0, 0.0, -1.0);
+        if (dot(N, I) > 0.0) N = -N;
         vec3 R = reflect(I, N);
         float facingFade = 1.0 - smoothstep(0.35, 0.9, dot(R, -I));
 

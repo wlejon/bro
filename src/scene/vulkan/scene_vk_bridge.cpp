@@ -16,7 +16,6 @@
 #include "scene/vulkan/pass_snapshot.h"
 #include "scene/vulkan/pass_ssao.h"
 #include "scene/vulkan/pass_ssr.h"
-#include "scene/vulkan/pass_terrain.h"
 #include "scene/vulkan/scene_draw_list.h"
 #include "scene/vulkan/scene_frame.h"
 #include "scene/vulkan/scene_lighting.h"
@@ -36,17 +35,18 @@ SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
     graph_.add(std::make_unique<PassReflectionProbe>());
     graph_.add(std::make_unique<PassEnvironment>());
     graph_.add(std::make_unique<PassOpaque>());
-    graph_.add(std::make_unique<PassTerrain>());
     graph_.add(std::make_unique<PassDepthSnapshot>());
     auto& ssao = static_cast<PassSSAO&>(graph_.add(std::make_unique<PassSSAO>()));
     graph_.add(std::make_unique<PassAoApply>(ssao));
+    // Decals land on the opaque result and so in the reflections; SSR runs
+    // before anything blended, which draws over both.
+    graph_.add(std::make_unique<PassDecal>());
     graph_.add(std::make_unique<PassColorSnapshot>());
     graph_.add(std::make_unique<PassSSR>());
-    graph_.add(std::make_unique<PassDecal>());
     graph_.add(std::make_unique<PassTranslucent>());
+    graph_.add(std::make_unique<PassGaussianSplat>());
     graph_.add(std::make_unique<PassParticles>());
     graph_.add(std::make_unique<PassBillboard>());
-    graph_.add(std::make_unique<PassGaussianSplat>());
     graph_.add(std::make_unique<PassDoF>());
     graph_.add(std::make_unique<PassPostFx>());
     graph_.add(std::make_unique<PassOverlay>());
@@ -107,6 +107,7 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
     frame.lighting = sceneLighting(renderer, environment_);
     writeCameraSet(frame);
     frame.ssao = renderer.ssaoEnabled() && targets_.ensureIndirect(allocator_);
+    frame.ssr = renderer.ssrEnabled() && renderer.ssrIntensity() > 0.0f;
     frame.dof = renderer.depthOfFieldEnabled();
     frame.tilt = renderer.tiltShiftEnabled();
     frame.fxaa = renderer.fxaaEnabled();

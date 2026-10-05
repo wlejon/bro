@@ -485,7 +485,13 @@ class SceneNode {
    * before lighting (`normal` is world space and renormalised after). At
    * least one is required. User uniforms and samplers are declared in the
    * chunk and must be named `u_*`; `uniforms` gives their initial values
-   * (a number or an array of up to 4 numbers). Throws TypeError on bad
+   * (a number or an array of up to 4 numbers). A uniform declared in both
+   * chunks is one value, a line may declare several, and a node takes at
+   * most 8 `sampler2D`s (a ninth fails to compile). Chunks may read the
+   * engine's `vUV`, `vWorldPos` (camera-relative), `vCamDist` and the
+   * vertex inputs (`aTangent` among them), and pass their own varyings
+   * (`out` in the vertex chunk, `in` in the fragment chunk); the shadow
+   * pass runs the vertex chunk too. Throws TypeError on bad
    * options and Error with the GLSL log when the program fails to compile.
    * Needs GPU rendering.
    *

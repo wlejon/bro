@@ -349,24 +349,12 @@ public:
     // Single-channel float (R32F) textures a user fragment/vertex chunk can
     // sample, e.g. a terrain heightfield raymarched by a sky-dome shader.
     //
-    // Texture units: the mesh uber-shader already owns units 0..9 (baseColor
-    // 0, shadow atlas 1, IBL irradiance/prefilter/BRDF 2/3/4, normal 5, MR 6,
-    // AO 7, emissive 8, reflection probe 9). User samplers therefore start at
-    // unit 10, and a node may bind whatever is left above that.
-    //
-    // The limit is QUERIED, not assumed. It used to be a constexpr 16 — GL
-    // 3.3's guaranteed minimum — which left exactly 6 user slots on every
-    // machine regardless of what the machine had. That is a real budget on
-    // hardware from 2010 and pure invention on anything since: desktop drivers
-    // in practice report 32 to 192. A terrain wanting four height layers, a
-    // control-channel layer and a water layer hits 6 exactly, and the next
-    // feature that needs a sampler is then blocked by a number the hardware
-    // never imposed.
-    //
-    // The floor is unchanged at 16 slots.
-    static constexpr int kUserTextureUnitBase = 10;
-    static int userTextureUnitLimit();
-    static int maxUserTextures();
+    // A node binds at most kMaxUserTextures of them: the custom-shader
+    // descriptor set's sampler bindings (scene/vulkan/scene_vk_custom_shader.h),
+    // sized so the mesh pipeline stays inside the 16 samplers per stage
+    // Apple GPUs allow alongside the material and lighting sets.
+    static constexpr int kMaxUserTextures = 8;
+    static int maxUserTextures() { return kMaxUserTextures; }
 
     /// One user sampler slot. `data` is the slot's full CPU image (kept so
     /// the renderer can always rebuild its GPU copy); `generation` moves on
@@ -485,17 +473,6 @@ public:
     /// the renderer re-uploads vertex/index buffers when it does.
     uint64_t geometryGeneration() const { return geometryGeneration_; }
 
-    /// The clipmap-terrain role: set by ClipmapTerrain on the ring mesh it
-    /// owns, which the renderer then draws through the terrain pipeline (its
-    /// custom shader is the clipmap source, not a user chunk). The two flags
-    /// select the cubic reconstruction variants compiled into that pipeline.
-    struct ClipmapRole {
-        bool cubicHeight = false;
-        bool cubicSurface = false;
-    };
-    void setClipmapRole(const ClipmapRole& role) { clipmapRole_ = role; hasClipmapRole_ = true; }
-    const ClipmapRole* clipmapRole() const { return hasClipmapRole_ ? &clipmapRole_ : nullptr; }
-
 private:
     // Recompute bounds_ from the base mesh + every LOD level (union), so
     // culling stays valid across level switches.
@@ -567,8 +544,6 @@ private:
     std::vector<UserTexture> userTextures_;
     float cullMargin_ = 0.0f;
     ShadeMapProvider shadeMap_;
-    ClipmapRole clipmapRole_;
-    bool hasClipmapRole_ = false;
 };
 
 } // namespace bro::scene

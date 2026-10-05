@@ -7,6 +7,7 @@
 #include "scene/skinned_mesh_node.h"
 #include "scene/vulkan/scene_vk_bridge.h"
 #include "scene/vulkan/scene_vk_custom_shader.h"
+#include "render/vulkan_context.h"
 #include "util/log.h"
 
 #include "broimage/decode.h"
@@ -226,15 +227,19 @@ void SceneRenderer::clearColorLUT() {
 
 namespace {
 
-// IEEE half from a float, round to nearest even; overflow saturates to
-// infinity and NaN stays NaN (the bake sanitises both).
+// IEEE half from a float, round to nearest even. A finite value past the
+// half range clamps to the largest half (65504), as GL's float upload did: an
+// HDR sun brighter than that must stay the brightest texel, not become an
+// infinity the bake sanitises to black, which darkens every mip it averages
+// into and with them the whole diffuse and rough-specular environment
+// lighting. Infinity and NaN stay what they are (the bake sanitises both).
 uint16_t toHalf(float f) {
     uint32_t x;
     std::memcpy(&x, &f, sizeof(x));
     const uint32_t sign = (x >> 16) & 0x8000u;
     const uint32_t absx = x & 0x7FFFFFFFu;
     if (absx >= 0x7F800000u) return static_cast<uint16_t>(sign | 0x7C00u | (absx > 0x7F800000u ? 0x200u : 0u));
-    if (absx >= 0x477FF000u) return static_cast<uint16_t>(sign | 0x7C00u);   // rounds past 65504
+    if (absx >= 0x477FF000u) return static_cast<uint16_t>(sign | 0x7BFFu);   // rounds past 65504
     if (absx < 0x38800000u) {                                                 // subnormal or zero
         if (absx < 0x33000000u) return static_cast<uint16_t>(sign);
         const uint32_t mant = (absx & 0x7FFFFFu) | 0x800000u;
@@ -265,6 +270,16 @@ bool SceneRenderer::loadEnvironment(const std::string& hdrPath) {
     if (!broimage::decode_file_f32(hdrPath, hdr, &err) || hdr.width <= 0 || hdr.height <= 0) {
         LOG_ERROR("loadEnvironment: decoding '%s' failed: %s", hdrPath.c_str(), err.c_str());
         return false;
+    }
+    // The bake runs on the next frame; a panorama the device cannot hold as
+    // one image is refused now, so the answer here is the bake's.
+    if (defaultVulkanContext_) {
+        const uint32_t maxDim = defaultVulkanContext_->deviceProperties().limits.maxImageDimension2D;
+        if (static_cast<uint32_t>(hdr.width) > maxDim || static_cast<uint32_t>(hdr.height) > maxDim) {
+            LOG_ERROR("loadEnvironment: '%s' is %dx%d, past the device's %u texel limit", hdrPath.c_str(),
+                      hdr.width, hdr.height, maxDim);
+            return false;
+        }
     }
     const size_t texels = static_cast<size_t>(hdr.width) * static_cast<size_t>(hdr.height);
     const int ch = hdr.channels;

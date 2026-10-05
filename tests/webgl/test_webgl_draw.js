@@ -246,6 +246,92 @@ if (!gl) {
     gl.polygonOffset(0, 0);
     assert(gl.getError() === gl.NO_ERROR, 'no error after polygonOffset');
 
+    // =====================================================================
+    // Window space is GL's: gl_FragCoord.y counts from the bottom row of the
+    // bound framebuffer, and dFdy differentiates along window y (up), on the
+    // canvas and on an FBO of another height.
+    // =====================================================================
+    {
+        const wsProg = makeProgram(
+            '#version 300 es\nin vec2 aPos;\nout vec2 vUp;\n' +
+            'void main(){ vUp = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }',
+            '#version 300 es\nprecision highp float;\nin vec2 vUp;\nuniform float uHalf;\nout vec4 frag;\n' +
+            'void main(){\n' +
+            '    frag = vec4(gl_FragCoord.y < uHalf ? 1.0 : 0.0, dFdy(vUp.y) > 0.0 ? 1.0 : 0.0, 0.0, 1.0);\n' +
+            '}');
+        gl.useProgram(wsProg);
+        const uHalf = gl.getUniformLocation(wsProg, 'uHalf');
+        const check = (h, where) => {
+            gl.viewport(0, 0, 64, h);
+            gl.uniform1f(uHalf, h / 2);
+            gl.bindVertexArray(vao);
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+            assertPx(px(5, 1), 255, 255, 0, where + ': the bottom row has a low gl_FragCoord.y and dFdy > 0 up');
+            assertPx(px(5, h - 2), 0, 255, 0, where + ': the top row has a high gl_FragCoord.y');
+        };
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        check(64, 'canvas');
+
+        const tex = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 64, 16, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+        const fbo = gl.createFramebuffer();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+        check(16, '64x16 FBO');
+
+        // The FBO keeps GL's row order: a scissored clear of the bottom rows
+        // lands at the bottom, a counter-clockwise quad survives back-face
+        // culling, and sampling it back onto the canvas keeps bottom at bottom.
+        gl.clearColor(0, 0, 1, 1);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        gl.enable(gl.SCISSOR_TEST);
+        gl.scissor(0, 0, 64, 4);
+        gl.clearColor(1, 0, 0, 1);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        gl.disable(gl.SCISSOR_TEST);
+        assertPx(px(5, 1), 255, 0, 0, 'FBO: a scissored clear of rows 0-3 lands on the bottom');
+        assertPx(px(5, 14), 0, 0, 255, 'FBO: the rows above the scissor box keep the first clear');
+
+        gl.enable(gl.CULL_FACE);
+        gl.cullFace(gl.BACK);
+        gl.useProgram(prog);
+        drawQuad(0, 1, 0, 1);
+        gl.disable(gl.CULL_FACE);
+        assertPx(px(5, 8), 0, 255, 0, 'FBO: a counter-clockwise quad is front-facing');
+
+        gl.clearColor(0, 0, 1, 1);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        gl.enable(gl.SCISSOR_TEST);
+        gl.scissor(0, 0, 64, 8);
+        gl.clearColor(1, 0, 0, 1);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        gl.disable(gl.SCISSOR_TEST);
+        const sampleProg = makeProgram(
+            '#version 300 es\nin vec2 aPos;\nout vec2 vUv;\n' +
+            'void main(){ vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }',
+            '#version 300 es\nprecision highp float;\nin vec2 vUv;\nuniform sampler2D uTex;\nout vec4 frag;\n' +
+            'void main(){ frag = texture(uTex, vUv); }');
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.viewport(0, 0, 64, 64);
+        gl.useProgram(sampleProg);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        gl.bindVertexArray(vao);
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        assertPx(px(5, 5), 255, 0, 0, 'render-to-texture: the FBO\'s bottom half samples back at the bottom');
+        assertPx(px(5, 58), 0, 0, 255, 'render-to-texture: the FBO\'s top half samples back at the top');
+        gl.deleteProgram(sampleProg);
+        gl.clearColor(0, 0, 0, 0);
+
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.viewport(0, 0, 64, 64);
+        gl.deleteFramebuffer(fbo);
+        gl.deleteTexture(tex);
+        gl.deleteProgram(wsProg);
+        gl.useProgram(prog);
+    }
+
     // Cleanup
     gl.deleteBuffer(quadBuf);
     gl.deleteBuffer(pointBuf);

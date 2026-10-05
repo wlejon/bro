@@ -224,6 +224,23 @@ if (!scene) {
         `control ground patch unchanged (${controlBefore.toFixed(1)} -> ${controlAfter.toFixed(1)})`);
 
     // ------------------------------------------------------------------
+    // A skin that no longer covers the mesh (the geometry changed under it:
+    // one vertex more than the weights) is not ready; the node draws its
+    // bind pose through the static path, like the static mesh, whatever
+    // pose its palette holds.
+    // ------------------------------------------------------------------
+    const grown = (a, extra) => { const b = new Float32Array(a.length + extra.length); b.set(a); b.set(extra, a.length); return b; };
+    node.updateMesh({ positions: grown(positions, [0, 0, 0]), normals: grown(normals, [0, 0, 1]), indices });
+    assert(node.skinReady === false, 'weights short of the mesh: skinReady false');
+    const imgUnready = scene.captureFrame();
+    const nUnready = diffCount(imgStatic, imgUnready, 12);
+    assert(nUnready < imgStatic.width * imgStatic.height * 0.01,
+        `an unready skin draws the bind pose (diff pixels ${nUnready})`);
+    node.updateMesh({ positions, normals, indices });
+    assert(node.skinReady === true, 'the original geometry makes the skin ready again');
+
+
+    // ------------------------------------------------------------------
     // Error paths + introspection on non-skinned nodes
     // ------------------------------------------------------------------
     let threw = false;

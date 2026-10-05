@@ -22,6 +22,19 @@ constexpr uint32_t kFirstUniformBlockBinding = 8;
 constexpr uint32_t kMaxUniformBlockBindings = 8;
 constexpr uint32_t kDefaultUniformBinding = 16;
 
+/// Where GL's window y runs on the bound render target. The canvas is drawn
+/// top-down for presentation (a negative viewport maps GL's bottom-up NDC onto
+/// it), so its window y counts down from the bottom row; a framebuffer object's
+/// texture keeps GL's own order (row 0 is window y 0, as texImage2D and
+/// readPixels have it), so it is drawn unflipped. The fragment stage gets the
+/// mapping as a push constant and rebuilds GL's gl_FragCoord.y
+/// (yOffset + yScale * y), dFdy (yScale * dFdy) and gl_PointCoord from
+/// Vulkan's.
+struct FragmentPush {
+    float yOffset = 0.0f;
+    float yScale = 1.0f;
+};
+
 /// Buffer object: a device-local VkBuffer usable for every GL binding target
 /// (WebGL lets one buffer be rebound to any target but ELEMENT_ARRAY), written
 /// only by copies recorded in the context's command stream, plus the

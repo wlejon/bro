@@ -46,7 +46,7 @@ void PassSSR::cleanup(SceneGpu& gpu) {
 }
 
 bool PassSSR::active(const SceneFrame& frame) const {
-    return frame.renderer.ssrEnabled() && frame.renderer.ssrIntensity() > 0.0f;
+    return frame.ssr;
 }
 
 void PassSSR::declare(const SceneFrame& frame, PassIO& io) const {
@@ -83,7 +83,7 @@ void PassSSR::record(SceneFrame& frame) {
     VkDescriptorSet set = device_->frameSet(setLayout_);
     SceneVkDescriptorWriter writer;
     writer.writeImage(0, t.ssrSnapshot.view, frame.gpu.defaults.sampler);
-    writer.writeImage(1, t.depthSnapshot.view, frame.gpu.defaults.sampler);
+    writer.writeImage(1, t.depthSnapshot.view, t.depthSnapshot.sampler);   // nearest: depths never blend
     writer.writeBuffer(2, ubo.buffer, ubo.range, ubo.offset);
     writer.updateSet(device_->device(), set);
 

@@ -115,9 +115,9 @@ void PassReflectionProbe::declare(const SceneFrame& frame, PassIO& io) const {
 }
 
 void PassReflectionProbe::record(SceneFrame& frame) {
-    for (auto& [id, owned] : frame.graph.nodes()) {
-        if (!owned->renderVisible() || owned->type() != SceneNode::Type::ReflectionProbe) continue;
-        auto* node = static_cast<ReflectionProbeNode*>(owned.get());
+    for (SceneNode* shown : frame.lists.nodes) {
+        if (shown->type() != SceneNode::Type::ReflectionProbe) continue;
+        auto* node = static_cast<ReflectionProbeNode*>(shown);
         if (!node->captureRequested()) continue;
         Probe* probe = ensure(frame.gpu, *node);
         if (probe && capture(frame, *node, *probe)) {
@@ -217,7 +217,6 @@ void PassReflectionProbe::renderFace(SceneFrame& frame, const ReflectionProbeNod
         if (cull && draw.hasBounds && !bromath::fintersects(view.frustum, draw.bounds)) continue;
         MeshDraw faceDraw = draw;
         faceDraw.mirrored = true;
-        faceDraw.lightingSet = VK_NULL_HANDLE;
         // The capture is raw radiance: alpha is coverage, not the SSR mask.
         faceDraw.push.pbrParams[3] = static_cast<float>(static_cast<uint32_t>(draw.push.pbrParams[3]) &
                                                         ~mesh_flags::kReflectance);
@@ -228,15 +227,14 @@ void PassReflectionProbe::renderFace(SceneFrame& frame, const ReflectionProbeNod
 
 void PassReflectionProbe::assign(SceneFrame& frame) {
     struct Volume {
-        const ReflectionProbeNode* node;
+        ProbeLighting lighting;
         bromath::Mat4 worldToLocal;
         float volume;
-        VkDescriptorSet set;
     };
     std::vector<Volume> volumes;
-    for (auto& [id, owned] : frame.graph.nodes()) {
-        if (!owned->renderVisible() || owned->type() != SceneNode::Type::ReflectionProbe) continue;
-        auto* node = static_cast<ReflectionProbeNode*>(owned.get());
+    for (SceneNode* shown : frame.lists.nodes) {
+        if (shown->type() != SceneNode::Type::ReflectionProbe) continue;
+        auto* node = static_cast<ReflectionProbeNode*>(shown);
         auto it = probes_.find(node->id());
         if (!node->hasData() || it == probes_.end() || !it->second.captured) continue;
         const bromath::Mat4& w = node->worldMatrix();
@@ -244,32 +242,33 @@ void PassReflectionProbe::assign(SceneFrame& frame) {
         for (int c = 0; c < 3; ++c) {
             volume *= std::sqrt(w.at(0, c) * w.at(0, c) + w.at(1, c) * w.at(1, c) + w.at(2, c) * w.at(2, c));
         }
-        volumes.push_back({node, bromath::minverse(w), volume, VK_NULL_HANDLE});
+        volumes.push_back({{node, it->second.specular.view, it->second.specular.mipLevels}, bromath::minverse(w),
+                           volume});
     }
     if (volumes.empty()) return;
     // Highest priority first; ties to the smallest (most local) box.
     std::stable_sort(volumes.begin(), volumes.end(), [](const Volume& a, const Volume& b) {
-        if (a.node->priority() != b.node->priority()) return a.node->priority() > b.node->priority();
+        if (a.lighting.node->priority() != b.lighting.node->priority())
+            return a.lighting.node->priority() > b.lighting.node->priority();
         return a.volume < b.volume;
     });
 
-    for (MeshDraw& draw : frame.lists.meshes) {
-        for (Volume& v : volumes) {
+    // The first box holding `center`, or null.
+    auto probeAt = [&](const bromath::Vec3& c) -> const ProbeLighting* {
+        for (const Volume& v : volumes) {
             const bromath::Mat4& m = v.worldToLocal;
-            const bromath::Vec3& c = draw.center;
             const float lx = m.at(0, 0) * c.x + m.at(0, 1) * c.y + m.at(0, 2) * c.z + m.at(0, 3);
             const float ly = m.at(1, 0) * c.x + m.at(1, 1) * c.y + m.at(1, 2) * c.z + m.at(1, 3);
             const float lz = m.at(2, 0) * c.x + m.at(2, 1) * c.y + m.at(2, 2) * c.z + m.at(2, 3);
-            if (std::fabs(lx) > 0.5f || std::fabs(ly) > 0.5f || std::fabs(lz) > 0.5f) continue;
-            if (!v.set) {
-                const Probe& probe = probes_.at(v.node->id());
-                SceneLightingUniforms light = frame.lighting;
-                setProbe(light, *v.node, probe.specular.mipLevels);
-                v.set = writeLightingSet(frame.gpu, light, probe.specular.view, frame.shadeMap);
-            }
-            draw.lightingSet = v.set;
-            break;
+            if (std::fabs(lx) <= 0.5f && std::fabs(ly) <= 0.5f && std::fabs(lz) <= 0.5f) return &v.lighting;
         }
+        return nullptr;
+    };
+    for (MeshDraw& draw : frame.lists.meshes) {
+        const ProbeLighting* probe = probeAt(draw.center);
+        if (!probe) continue;
+        const bool shaded = static_cast<uint32_t>(draw.push.pbrParams[3]) & mesh_flags::kShadeMap;
+        draw.lightingSet = lightingSetFor(frame, probe, shaded ? &draw.shade : nullptr);
     }
 }
 

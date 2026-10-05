@@ -59,6 +59,7 @@ private:
     SceneVkImage ao_[2];   // half-res ping-pong
     VkSampler clampSampler_ = VK_NULL_HANDLE;
     float kernel_[16 * 4] = {};
+    uint8_t noisePixels_[16 * 4] = {};   // the 4x4 rotation noise, RGBA8
 };
 
 class PassAoApply final : public ScenePass {

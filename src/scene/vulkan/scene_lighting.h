@@ -8,9 +8,9 @@
 // ambient, the shadow plan's atlas tiles, the environment's image-based
 // lighting and the atmosphere. writeCameraSet() writes the
 // camera set then too, since the shadow pass draws with it. PassFrameUniforms
-// adds what only exists once the frame is under way (the tile shade map) and
-// writes this frame's lighting set; the reflection-probe pass writes one more
-// per probe.
+// writes this frame's lighting set and gives every draw sampling a tile shade
+// map a set carrying it; the reflection-probe pass gives each draw inside a
+// probe's box one carrying the probe (and the draw's shade map).
 
 #include "scene/vulkan/scene_pass.h"
 #include "scene/vulkan/scene_vk_descriptors.h"
@@ -18,6 +18,7 @@
 namespace bro::scene {
 class ReflectionProbeNode;
 class SceneRenderer;
+struct ShadeMapBinding;
 }
 
 namespace bro::scene::vk {
@@ -37,9 +38,17 @@ void writeCameraSet(SceneFrame& frame);
 VkDescriptorSet writeLightingSet(SceneGpu& gpu, const SceneLightingUniforms& uniforms, VkImageView probeView,
                                  const SceneVkImage* shadeMap);
 
-/// `probe`'s box, intensity and blend margin in `uniforms`, sampling a
-/// prefiltered cube of `mipLevels` mips.
-void setProbe(SceneLightingUniforms& uniforms, const ReflectionProbeNode& probe, uint32_t mipLevels);
+/// A captured reflection probe, as a lighting set samples it.
+struct ProbeLighting {
+    const ReflectionProbeNode* node = nullptr;
+    VkImageView view = VK_NULL_HANDLE;   // the prefiltered cube
+    uint32_t mipLevels = 0;
+};
+
+/// The lighting set of a draw lit through `probe` and shaded by `shade`
+/// (either may be null): the frame's own when both are, else one written
+/// once per (probe, shade map) pair per frame.
+VkDescriptorSet lightingSetFor(SceneFrame& frame, const ProbeLighting* probe, const ShadeMapBinding* shade);
 
 class PassFrameUniforms final : public ScenePass {
 public:

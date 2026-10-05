@@ -730,15 +730,15 @@
     });
     fn(SceneGraph.prototype, "setSSR", function setSSR(opts) {
         if (!opts || opts.enabled === false) {
-            __bro_native.scene.SceneGraph_setSSR(this, false, 0, false, 0, false, 0, false, 0);
+            __bro_native.scene.SceneGraph_setSSR(this, false, 30, 48, 0.3, 1, 0.1);
             return;
         }
-        const d_opts = opts;
-        const maxDist = d_opts.maxDistance !== undefined ? d_opts.maxDistance : 30;
-        const step = d_opts.stepCount !== undefined ? d_opts.stepCount : 48;
-        const thick = d_opts.thickness !== undefined ? d_opts.thickness : 0.3;
-        const rough = d_opts.roughnessCutoff !== undefined ? d_opts.roughnessCutoff : 0.05;
-        __bro_native.scene.SceneGraph_setSSR(this, true, maxDist, true, thick, true, step, true, rough);
+        const steps = opts.steps !== undefined ? opts.steps : (opts.stepCount !== undefined ? opts.stepCount : 48);
+        __bro_native.scene.SceneGraph_setSSR(this, true,
+            opts.maxDistance !== undefined ? opts.maxDistance : 30, steps,
+            opts.thickness !== undefined ? opts.thickness : 0.3,
+            opts.intensity !== undefined ? opts.intensity : 1,
+            opts.edgeFade !== undefined ? opts.edgeFade : 0.1);
     });
     fn(SceneGraph.prototype, "setDepthOfField", function setDepthOfField(opts) {
         const d_opts = opts === undefined ? {} : opts;
@@ -772,14 +772,13 @@
         const d_opts = opts;
         const pano = d_opts.panorama !== undefined ? d_opts.panorama : d_opts.hdr;
         const rot = d_opts.rotation;
-        __bro_native.scene.SceneGraph_setEnvironment(this,
+        return __bro_native.scene.SceneGraph_setEnvironment(this,
             pano !== undefined, pano === undefined ? '' : pano,
             d_opts.cubeMap !== undefined, d_opts.cubeMap === undefined ? '' : d_opts.cubeMap,
             d_opts.color === undefined ? EMPTY_F64 : toF64(d_opts.color),
             d_opts.intensity !== undefined, d_opts.intensity === undefined ? 0 : d_opts.intensity,
             rot !== undefined, rot === undefined ? 0 : rot,
             d_opts.background !== undefined, d_opts.background === undefined ? false : d_opts.background);
-        return true;
     });
     fn(SceneGraph.prototype, "setFrustumCulling", function setFrustumCulling(e) { if (e === undefined) throw new TypeError("bro.scene.SceneGraph.prototype.setFrustumCulling: enabled is required"); __bro_native.scene.SceneGraph_setFrustumCulling(this, e); });
     fn(SceneGraph.prototype, "cullStats", function cullStats() {

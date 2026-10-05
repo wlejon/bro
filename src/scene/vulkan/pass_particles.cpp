@@ -106,9 +106,9 @@ void PassParticles::record(SceneFrame& frame) {
     const SceneVkImage& depth = frame.gpu.targets.depthSnapshot;
     VkCommandBuffer cmd = frame.cmd;
 
-    for (auto& [id, owned] : frame.graph.nodes()) {
-        if (!owned->renderVisible() || owned->type() != SceneNode::Type::Particles3D) continue;
-        auto* p = static_cast<Particles3DNode*>(owned.get());
+    for (SceneNode* node : frame.lists.nodes) {
+        if (node->type() != SceneNode::Type::Particles3D) continue;
+        auto* p = static_cast<Particles3DNode*>(node);
         if (p->liveCount() <= 0) continue;
         if (frame.renderer.cameraCulled(p)) {
             frame.stats.particlesCulled++;
@@ -141,7 +141,7 @@ void PassParticles::record(SceneFrame& frame) {
         push.params[3] = p->softness();
 
         const SceneVkImage* tex = nullptr;
-        if (p->ensureTextureLoaded()) tex = frame.gpu.resources.texture(p->id(), TextureSlot::Image, p->texture());
+        if (p->ensureTextureLoaded()) tex = frame.gpu.resources.texture(p->id(), TextureSlot::Particle, p->texture());
         push.params[2] = tex ? 1.0f : 0.0f;
 
         VkDescriptorSet set = device_->frameSet(materialLayout_);

@@ -149,6 +149,8 @@ void PassFrameUniforms::declare(const SceneFrame& frame, PassIO& io) const {
     io.sample(frame.gpu.targets.shadowAtlas);
 }
 
+namespace {
+
 void setProbe(SceneLightingUniforms& light, const ReflectionProbeNode& probe, uint32_t mipLevels) {
     const auto& pw = probe.worldMatrix();
     const bromath::Mat4 invPw = bromath::minverse(pw);
@@ -170,39 +172,45 @@ void setProbe(SceneLightingUniforms& light, const ReflectionProbeNode& probe, ui
     light.probeParams[2] = static_cast<float>(mipLevels - 1);
 }
 
+void setShade(SceneLightingUniforms& light, const ShadeMapBinding& binding) {
+    light.shadeOrigin[0] = binding.origin.x;
+    light.shadeOrigin[1] = binding.origin.y;
+    light.shadeOrigin[2] = binding.origin.z;
+    light.shadeOrigin[3] = 1.0f;
+    light.shadeParams[0] = binding.cellSize;
+    light.shadeParams[1] = binding.hex ? 1.0f : 0.0f;
+    light.shadeParams[2] = static_cast<float>(binding.width);
+    light.shadeParams[3] = static_cast<float>(binding.height);
+}
+
+}  // namespace
+
+VkDescriptorSet lightingSetFor(SceneFrame& frame, const ProbeLighting* probe, const ShadeMapBinding* shade) {
+    if (!probe && !shade) return frame.lightingSet;
+    const auto key = std::make_pair(probe ? probe->node->id() : 0u, shade ? shade->pixels : nullptr);
+    if (auto it = frame.lightingSets.find(key); it != frame.lightingSets.end()) return it->second;
+
+    SceneLightingUniforms light = frame.lighting;
+    if (probe) setProbe(light, *probe->node, probe->mipLevels);
+    const SceneVkImage* shadeImage = shade ? frame.gpu.resources.shadeMap(*shade) : nullptr;
+    if (shadeImage) setShade(light, *shade);
+    VkDescriptorSet set = writeLightingSet(frame.gpu, light, probe ? probe->view : VK_NULL_HANDLE, shadeImage);
+    frame.lightingSets.emplace(key, set);
+    return set;
+}
+
 void PassFrameUniforms::record(SceneFrame& frame) {
-    SceneLightingUniforms& light = frame.lighting;
+    frame.lightingSet = writeLightingSet(frame.gpu, frame.lighting, VK_NULL_HANDLE, nullptr);
 
-    // The first visible node with a shade map provides it for the scene.
-    ShadeMapBinding binding{};
-    bool hasShade = false;
-    for (const auto& [id, node] : frame.graph.nodes()) {
-        if (!node->renderVisible()) continue;
-        const ShadeMapProvider* provider = nullptr;
-        if (node->type() == SceneNode::Type::Mesh) {
-            provider = static_cast<MeshNode*>(node.get())->shadeMap();
-        } else if (node->type() == SceneNode::Type::InstancedMesh) {
-            provider = static_cast<InstancedMeshNode*>(node.get())->shadeMap();
-        }
-        if (provider && (*provider)(binding) && binding.pixels && binding.width > 0 && binding.height > 0) {
-            hasShade = true;
-            break;
-        }
+    // Every TileWorld hands its nodes one map: each draw sampling one gets a
+    // set carrying it (shared by the draws of that map).
+    std::vector<const uint8_t*> live;
+    for (MeshDraw& draw : frame.lists.meshes) {
+        if (!(static_cast<uint32_t>(draw.push.pbrParams[3]) & mesh_flags::kShadeMap)) continue;
+        draw.lightingSet = lightingSetFor(frame, nullptr, &draw.shade);
+        if (std::find(live.begin(), live.end(), draw.shade.pixels) == live.end()) live.push_back(draw.shade.pixels);
     }
-    const SceneVkImage* shade = hasShade ? frame.gpu.resources.shadeMap(binding) : nullptr;
-    if (shade) {
-        light.shadeOrigin[0] = binding.origin.x;
-        light.shadeOrigin[1] = binding.origin.y;
-        light.shadeOrigin[2] = binding.origin.z;
-        light.shadeOrigin[3] = 1.0f;
-        light.shadeParams[0] = binding.cellSize;
-        light.shadeParams[1] = binding.hex ? 1.0f : 0.0f;
-        light.shadeParams[2] = static_cast<float>(binding.width);
-        light.shadeParams[3] = static_cast<float>(binding.height);
-    }
-
-    frame.shadeMap = shade;
-    frame.lightingSet = writeLightingSet(frame.gpu, light, VK_NULL_HANDLE, shade);
+    frame.gpu.resources.retainShadeMaps(live);
 }
 
 }  // namespace bro::scene::vk

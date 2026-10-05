@@ -77,9 +77,9 @@ void PassDecal::declare(const SceneFrame& frame, PassIO& io) const {
 
 void PassDecal::record(SceneFrame& frame) {
     std::vector<DecalNode*> decals;
-    for (auto& [id, owned] : frame.graph.nodes()) {
-        if (!owned->renderVisible() || owned->type() != SceneNode::Type::Decal) continue;
-        auto* decal = static_cast<DecalNode*>(owned.get());
+    for (SceneNode* node : frame.lists.nodes) {
+        if (node->type() != SceneNode::Type::Decal) continue;
+        auto* decal = static_cast<DecalNode*>(node);
         if (frame.renderer.cameraCulled(decal)) {
             frame.stats.decalsCulled++;
         } else {

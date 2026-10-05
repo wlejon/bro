@@ -14,7 +14,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <random>
 
 namespace bro::scene::vk {
 
@@ -24,35 +23,49 @@ constexpr VkFormat kAoFormat = VK_FORMAT_R8_UNORM;
 
 // --- PassSSAO -----------------------------------------------------------------
 
+namespace {
+
+// The GL renderer's deterministic LCG, so the kernel and noise (and with them
+// the AO) are the same across runs, machines and backends. [0, 1).
+struct Lcg {
+    uint32_t seed = 0x9e3779b9u;
+    float operator()() {
+        seed = seed * 1664525u + 1013904223u;
+        return static_cast<float>(seed >> 8) * (1.0f / 16777216.0f);
+    }
+};
+
+}  // namespace
+
+// Hemisphere kernel: unit vectors with z >= 0 (tangent space, +z along the
+// surface normal), each at a random length pulled toward the origin
+// (lerp(0.1, 1, t^2)) so samples cluster near the fragment. Then the 4x4
+// tiling rotation noise: a random xy per texel in [0, 1], which the shader
+// expands to [-1, 1]. One sequence feeds both, as in GL.
 void PassSSAO::generateKernel() {
-    std::mt19937 gen(1337);
-    std::uniform_real_distribution<float> dis(0.0f, 1.0f);
+    Lcg frand;
     for (int i = 0; i < 16; ++i) {
-        float x = dis(gen) * 2.0f - 1.0f;
-        float y = dis(gen) * 2.0f - 1.0f;
-        float z = dis(gen);   // hemisphere
+        float x = frand() * 2.0f - 1.0f;
+        float y = frand() * 2.0f - 1.0f;
+        float z = frand();
         float len = std::sqrt(x * x + y * y + z * z);
         if (len < 1e-4f) { x = 0; y = 0; z = 1; len = 1; }
-        float scale = static_cast<float>(i) / 16.0f;
-        scale = 0.1f + scale * scale * 0.9f;   // denser toward the origin
+        const float t = static_cast<float>(i) / 16.0f;
+        const float scale = (0.1f + 0.9f * t * t) * frand();
         kernel_[i * 4 + 0] = (x / len) * scale;
         kernel_[i * 4 + 1] = (y / len) * scale;
         kernel_[i * 4 + 2] = (z / len) * scale;
         kernel_[i * 4 + 3] = 0.0f;
     }
+    for (int i = 0; i < 16; ++i) {
+        noisePixels_[i * 4 + 0] = static_cast<uint8_t>(frand() * 255.0f);
+        noisePixels_[i * 4 + 1] = static_cast<uint8_t>(frand() * 255.0f);
+        noisePixels_[i * 4 + 2] = 0;
+        noisePixels_[i * 4 + 3] = 255;
+    }
 }
 
 bool PassSSAO::createNoise(SceneGpu& gpu) {
-    std::mt19937 gen(42);
-    std::uniform_real_distribution<float> dis(0.0f, 1.0f);
-    uint8_t pixels[16 * 4];
-    for (int i = 0; i < 16; ++i) {
-        const float angle = dis(gen) * 6.2831853f;
-        pixels[i * 4 + 0] = static_cast<uint8_t>((std::cos(angle) * 0.5f + 0.5f) * 255.0f);
-        pixels[i * 4 + 1] = static_cast<uint8_t>((std::sin(angle) * 0.5f + 0.5f) * 255.0f);
-        pixels[i * 4 + 2] = 0;
-        pixels[i * 4 + 3] = 255;
-    }
     TextureDesc desc{};
     desc.width = 4;
     desc.height = 4;
@@ -60,7 +73,7 @@ bool PassSSAO::createNoise(SceneGpu& gpu) {
     desc.minFilter = VK_FILTER_NEAREST;
     desc.generateMipmaps = false;
     desc.enableAnisotropy = false;
-    return gpu.allocator.createTexture2D(pixels, desc, noise_);
+    return gpu.allocator.createTexture2D(noisePixels_, desc, noise_);
 }
 
 bool PassSSAO::setup(SceneGpu& gpu) {
@@ -161,7 +174,7 @@ void PassSSAO::record(SceneFrame& frame) {
     // Estimate into ao_[0], blur across into ao_[1] and down back into ao_[0].
     VkDescriptorSet ssaoSet = device_->frameSet(ssaoSetLayout_);
     SceneVkDescriptorWriter writer;
-    writer.writeImage(0, frame.gpu.targets.depthSnapshot.view, clampSampler_);
+    writer.writeImage(0, frame.gpu.targets.depthSnapshot.view, frame.gpu.targets.depthSnapshot.sampler);
     writer.writeImage(1, noise_.view, noise_.sampler);
     writer.writeBuffer(2, ubo.buffer, ubo.range, ubo.offset);
     writer.updateSet(device_->device(), ssaoSet);

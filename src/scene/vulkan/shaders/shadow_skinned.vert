@@ -4,6 +4,10 @@ layout(location = 0) in vec3 inPos;
 layout(location = 1) in vec3 inNormal;
 layout(location = 2) in vec2 inUV;
 layout(location = 3) in vec4 inColor;
+#ifdef CUSTOM_CASTER
+// A custom vertex chunk may read the tangent (aTangent), as in the colour pass.
+layout(location = 4) in vec4 inTangent;
+#endif
 layout(location = 5) in uvec4 inJoints;
 layout(location = 6) in vec4 inWeights;
 

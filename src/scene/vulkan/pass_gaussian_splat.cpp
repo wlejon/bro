@@ -72,9 +72,8 @@ void PassGaussianSplat::declare(const SceneFrame&, PassIO& io) const {
 
 void PassGaussianSplat::record(SceneFrame& frame) {
     VkPipeline pipeline = VK_NULL_HANDLE;
-    for (auto& [id, owned] : frame.graph.nodes()) {
-        SceneNode* node = owned.get();
-        if (!node->renderVisible() || node->type() != SceneNode::Type::GaussianSplat) continue;
+    for (SceneNode* node : frame.lists.nodes) {
+        if (node->type() != SceneNode::Type::GaussianSplat) continue;
         if (frame.renderer.cameraCulled(node)) {
             frame.stats.splatCulled++;
             continue;
@@ -152,7 +151,10 @@ void PassGaussianSplat::drawNode(SceneFrame& frame, VkPipeline pipeline, Gaussia
     std::memcpy(u.view, view.view.data, sizeof(u.view));
     std::memcpy(u.proj, view.proj.data, sizeof(u.proj));
     u.focal[0] = 0.5f * static_cast<float>(view.width) * std::fabs(view.proj.data[0]);
-    u.focal[1] = 0.5f * static_cast<float>(view.height) * std::fabs(view.proj.data[5]);
+    // Signed: Vulkan's clip y points down (proj[5] < 0), so the footprint's
+    // pixel offsets, projected through the same focal lengths, must too, or
+    // every tilted splat draws mirrored about its row.
+    u.focal[1] = 0.5f * static_cast<float>(view.height) * view.proj.data[5];
     u.viewport[0] = static_cast<float>(view.width);
     u.viewport[1] = static_cast<float>(view.height);
     const VkDescriptorBufferInfo ubo = device_->frameUniform(&u, sizeof(u));

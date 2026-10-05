@@ -334,6 +334,7 @@ private:
 
     // Drawing (webgl_vk_context_draw.cpp)
     bool prepareDraw(GLenum mode, VkProgramResource& prog);
+    int32_t scissorTop(VkExtent2D extent) const;
     void buildPipelineKey(GLenum mode, const VkProgramResource& prog, PipelineKey& key,
                           VkExtent2D& extent);
     bool bindProgramResources(VkCommandBuffer cmd, VkProgramResource& prog);

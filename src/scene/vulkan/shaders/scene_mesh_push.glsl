@@ -10,6 +10,10 @@ layout(push_constant) uniform MeshPushConstants {
 
 #define uWindMask (push.extra.z)   // the GL name custom chunks use
 
+// The draw's model matrix (the node's world matrix; an instanced draw's
+// instances are relative to it). Custom chunks reach it as uModel.
+mat4 sceneModel() { return push.model; }
+
 const uint MESH_ALBEDO_MAP          = 1u;
 const uint MESH_NORMAL_MAP          = 2u;
 const uint MESH_METALLIC_ROUGHNESS  = 4u;

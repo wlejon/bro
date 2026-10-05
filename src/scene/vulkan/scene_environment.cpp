@@ -138,6 +138,9 @@ void SceneEnvironment::update(SceneGpu& gpu, VkCommandBuffer cmd, SceneRenderer&
         LOG_ERROR("SceneEnvironment: baking '%s' failed; the scene keeps its flat ambient",
                   renderer.environmentPath().c_str());
         release(gpu.allocator);
+        // Nothing is loaded after all: hasEnvironment() says so from here on.
+        renderer.clearEnvironment();
+        generation_ = renderer.environmentGeneration();
     }
 }
 
@@ -346,15 +349,16 @@ void SceneEnvironment::drawSky(SceneGpu& gpu, VkCommandBuffer cmd, const TargetF
              .setTarget(target)
              .disableDepthTest();
             if (variant == kSkyStars) {
-                // Added onto the sky's colour; alpha and the indirect
-                // attachment untouched.
+                // Added onto the sky's colour; the indirect attachment
+                // untouched. The stars are sky, so the frame is covered
+                // (alpha 1) with or without a background under them.
                 VkPipelineColorBlendAttachmentState add{};
                 add.blendEnable = VK_TRUE;
                 add.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
                 add.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
                 add.colorBlendOp = VK_BLEND_OP_ADD;
-                add.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
-                add.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+                add.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+                add.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
                 add.alphaBlendOp = VK_BLEND_OP_ADD;
                 add.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                                      VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;

@@ -112,6 +112,27 @@ if (!scene) {
     world.destroy();
     settle();
 
+    // ---- two worlds, each with its own map ---------------------------------------
+    // Side by side, 4 cells wide each: the left world shades its top rows, the
+    // right world its bottom rows. Each draw samples its own world's map at its
+    // own origin, never a map shared across the scene.
+    const pal = new Float32Array([0, 0, 0, 0, 0.7, 0.7, 0.7, 1]);
+    const left = scene.createTileWorld({ width: 4, height: 8, cellSize: 1.0, heightStep: 0.5, chunkSize: 4, palette: pal });
+    const right = scene.createTileWorld({ width: 4, height: 8, cellSize: 1.0, heightStep: 0.5, chunkSize: 4,
+                                          palette: pal, origin: [4, 0, 0] });
+    for (const w of [left, right]) { w.fillTile(0, 0, 3, 7, 1); w.rebuild(); }
+    left.fillShade(0, 0, 3, 3, 0);
+    right.fillShade(0, 4, 3, 7, 0);
+    lookDownAt(4, 4);
+    settle();
+    assert(lum(px(...cellPx(1, 1))) <= 1, 'the left world shades its top rows');
+    assert(lum(px(...cellPx(1, 6))) > 30, 'the left world leaves its bottom rows lit');
+    assert(lum(px(...cellPx(6, 1))) > 30, 'the right world leaves its top rows lit');
+    assert(lum(px(...cellPx(6, 6))) <= 1, 'the right world shades its bottom rows');
+    left.destroy();
+    right.destroy();
+    settle();
+
     // ---- hex world: the lookup follows the hex cell, not a square ---------------
     const hex = scene.createTileWorld({
         width: 6, height: 6, topology: 'hex', cellSize: 1.0, heightStep: 0.5, chunkSize: 6,

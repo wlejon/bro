@@ -99,6 +99,29 @@ const GpuMesh* SceneGpuResources::mesh(uint32_t id, uint32_t slot, uint64_t gene
     return &entry;
 }
 
+// How a slot's image is stored and sampled (see TextureSlot).
+static TextureDesc textureDesc(TextureSlot slot) {
+    TextureDesc desc{};
+    switch (slot) {
+    case TextureSlot::Sprite:
+        desc.minFilter = desc.magFilter = VK_FILTER_NEAREST;
+        [[fallthrough]];
+    case TextureSlot::Html:
+    case TextureSlot::Particle:
+        desc.generateMipmaps = false;
+        desc.enableAnisotropy = false;
+        [[fallthrough]];
+    case TextureSlot::DecalAlbedo:
+    case TextureSlot::DecalEmission:
+        desc.addressModeU = desc.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        break;
+    default:
+        break;
+    }
+    if (slot == TextureSlot::Particle) desc.format = VK_FORMAT_R8G8B8A8_SRGB;
+    return desc;
+}
+
 const SceneVkImage* SceneGpuResources::texture(uint32_t id, TextureSlot slot, const NodeTexture& tex) {
     const uint64_t k = key(id, static_cast<uint32_t>(slot));
     if (tex.empty()) {
@@ -120,11 +143,9 @@ const SceneVkImage* SceneGpuResources::texture(uint32_t id, TextureSlot slot, co
         allocator_.uploadImage(entry.image, tex.rgba.data(), bytes, {}, entry.image.mipLevels > 1);
     } else {
         allocator_.destroyImage(entry.image);
-        TextureDesc desc{};
+        TextureDesc desc = textureDesc(slot);
         desc.width = static_cast<uint32_t>(tex.width);
         desc.height = static_cast<uint32_t>(tex.height);
-        desc.format = VK_FORMAT_R8G8B8A8_UNORM;
-        desc.generateMipmaps = true;
         if (!allocator_.createTexture2D(tex.rgba.data(), desc, entry.image)) {
             LOG_ERROR("SceneGpuResources: Failed uploading a %dx%d texture of node %u", tex.width, tex.height, id);
             textures_.erase(k);
@@ -284,12 +305,13 @@ void SceneGpuResources::pruneUserTextures(uint32_t id, const std::vector<MeshNod
 
 const SceneVkImage* SceneGpuResources::shadeMap(const ShadeMapBinding& binding) {
     if (!binding.pixels || binding.width <= 0 || binding.height <= 0) return nullptr;
-    if (shadeMap_.image.isValid() && shadeMap_.generation == binding.generation &&
-        shadeMap_.image.width == static_cast<uint32_t>(binding.width) &&
-        shadeMap_.image.height == static_cast<uint32_t>(binding.height)) {
-        return &shadeMap_.image;
+    Texture& map = shadeMaps_[binding.pixels];
+    if (map.image.isValid() && map.generation == binding.generation &&
+        map.image.width == static_cast<uint32_t>(binding.width) &&
+        map.image.height == static_cast<uint32_t>(binding.height)) {
+        return &map.image;
     }
-    allocator_.destroyImage(shadeMap_.image);
+    allocator_.destroyImage(map.image);
     TextureDesc desc{};
     desc.width = static_cast<uint32_t>(binding.width);
     desc.height = static_cast<uint32_t>(binding.height);
@@ -299,12 +321,24 @@ const SceneVkImage* SceneGpuResources::shadeMap(const ShadeMapBinding& binding) 
     desc.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     desc.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     desc.generateMipmaps = false;
-    if (!allocator_.createTexture2D(binding.pixels, desc, shadeMap_.image)) {
+    if (!allocator_.createTexture2D(binding.pixels, desc, map.image)) {
         LOG_ERROR("SceneGpuResources: Failed uploading the %dx%d shade map", binding.width, binding.height);
+        shadeMaps_.erase(binding.pixels);
         return nullptr;
     }
-    shadeMap_.generation = binding.generation;
-    return &shadeMap_.image;
+    map.generation = binding.generation;
+    return &map.image;
+}
+
+void SceneGpuResources::retainShadeMaps(const std::vector<const uint8_t*>& live) {
+    for (auto it = shadeMaps_.begin(); it != shadeMaps_.end();) {
+        if (std::find(live.begin(), live.end(), it->first) != live.end()) {
+            ++it;
+        } else {
+            allocator_.destroyImage(it->second.image);
+            it = shadeMaps_.erase(it);
+        }
+    }
 }
 
 void SceneGpuResources::releaseNodes(std::span<const uint32_t> ids) {
@@ -339,7 +373,8 @@ void SceneGpuResources::cleanup() {
         for (auto& [name, t] : slots) allocator_.destroyImage(t.image);
     }
     userTextures_.clear();
-    allocator_.destroyImage(shadeMap_.image);
+    for (auto& [pixels, t] : shadeMaps_) allocator_.destroyImage(t.image);
+    shadeMaps_.clear();
 }
 
 }  // namespace bro::scene::vk

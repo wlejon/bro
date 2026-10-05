@@ -5,6 +5,7 @@
 // with light icons on, a marker per light. Premultiplied over the HDR scope,
 // depth-tested against the scene, after the particles.
 
+#include "scene/vulkan/scene_gpu_resources.h"
 #include "scene/vulkan/scene_pass.h"
 #include "scene/vulkan/scene_vk_target_format.h"
 
@@ -47,7 +48,7 @@ private:
     /// it draws nothing.
     bool prepareNode(SceneFrame& frame, SceneNode& node, Push& push, VkDescriptorSet& material);
     void prepareLightIcon(const SceneFrame& frame, const LightNode& light, Push& push);
-    VkDescriptorSet textureSet(SceneFrame& frame, const NodeTexture& tex, uint32_t nodeId);
+    VkDescriptorSet textureSet(SceneFrame& frame, const NodeTexture& tex, uint32_t nodeId, TextureSlot slot);
 
     SceneVkDevice* device_ = nullptr;
     VkPipelineLayout layout_ = VK_NULL_HANDLE;

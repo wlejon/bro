@@ -4,7 +4,9 @@
 //     nothing, and a red lamp in the room turns the reflection red (an unlit
 //     capture would show the walls' white base colour either way);
 //   - overlapping probes: a mesh takes the highest-priority probe whose box
-//     holds it, ties going to the smaller box.
+//     holds it, ties going to the smaller box;
+//   - terrain is captured: a clipmap floor under a lone sphere shows in the
+//     sphere's lower half once the probe captures it.
 // The mirror sphere is metallic with no IBL environment and no ambient, so
 // without a probe it is black and any colour it shows comes from a probe.
 
@@ -112,6 +114,40 @@ if (!probe.scene) {
         const aWins = center(sc.captureFrame());
         assert(isRed(aWins), `raising the other probe's priority takes it back ${fmt(aWins)}`);
         assert(a.priority === 2 && b.priority === 1, 'priority reads back');
+        dropScene(s);
+    }
+
+    // =====================================================================
+    // Terrain in the capture: a lit clipmap floor and nothing else.
+    // =====================================================================
+    {
+        const s = freshScene(SIZE);
+        const sc = s.scene;
+        sc.createLight({ type: 'directional', direction: [0, -1, 0], intensity: 3 });
+        sc.createMesh({ mesh: Mesh.sphere(1), x: 0.8, y: 0, z: 0, color: [1, 1, 1, 1], metallic: 1, roughness: 0.05 });
+        const lower = (img) => {
+            const c = { r: 0, g: 0, b: 0 };
+            let n = 0;
+            for (let y = 84; y < 90; y++) {
+                for (let x = 60; x < 68; x++) {
+                    const i = (y * img.width + x) * 4;
+                    c.r += img.data[i]; c.g += img.data[i + 1]; c.b += img.data[i + 2]; n++;
+                }
+            }
+            return { r: c.r / n, g: c.g / n, b: c.b / n };
+        };
+        const p = sc.createReflectionProbe({ size: 10, resolution: 64, updateMode: 'manual' });
+        p.capture();
+        const bare = lower(sc.captureFrame());
+
+        const cm = sc.createClipmapTerrain({ levels: 4, resolution: 16, cellSize: 1, seaLevel: -2, detailRelief: 0 });
+        cm.setHeightLayer(0, { data: new Float32Array(16 * 16), width: 16, height: 16,
+                               originX: -64, originZ: -64, metresPerCell: 8 });
+        p.capture();
+        const floor = lower(sc.captureFrame());
+        const sum = (c) => c.r + c.g + c.b;
+        assert(sum(bare) < 30, `no terrain: the sphere's lower half reflects nothing ${fmt(bare)}`);
+        assert(sum(floor) > sum(bare) + 60, `the probe captures the clipmap floor: ${fmt(bare)} -> ${fmt(floor)}`);
         dropScene(s);
     }
 

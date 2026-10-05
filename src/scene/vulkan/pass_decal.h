@@ -4,7 +4,8 @@
 // a camera inside the box still sees it) and every covered pixel whose
 // opaque surface lies inside the box takes the decal's albedo and emission,
 // reconstructed from the depth snapshot. Drawn in the HDR scope after the
-// opaque surfaces and SSR, before translucents, in renderPriority order.
+// opaque surfaces and before SSR (so reflections show decals; the scene's
+// alpha, SSR's mask, is kept), in renderPriority order.
 
 #include "scene/vulkan/scene_pass.h"
 #include "scene/vulkan/scene_vk_target_format.h"

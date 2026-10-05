@@ -1,7 +1,7 @@
 #pragma once
 
 // Screen-space reflections on the opaque surfaces, drawn full-screen into the
-// HDR scope (at the scene's sample count) before decals and translucents.
+// HDR scope (at the scene's sample count) after decals, before anything blended.
 // Ray-marches the depth snapshot along the reflected view ray and mixes the
 // hit's colour from the colour snapshot over the surface by its reflectance
 // (the alpha mesh.frag writes when SSR is on); sky pixels are left alone.

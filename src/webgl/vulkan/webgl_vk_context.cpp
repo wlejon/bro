@@ -56,6 +56,9 @@ void WebGLVkContext::initVulkanResources() {
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     pipelineLayoutInfo.setLayoutCount = 1;
     pipelineLayoutInfo.pSetLayouts = &descriptorSetLayout_;
+    const VkPushConstantRange fragmentPush{VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(FragmentPush)};
+    pipelineLayoutInfo.pushConstantRangeCount = 1;
+    pipelineLayoutInfo.pPushConstantRanges = &fragmentPush;
     if (vkCreatePipelineLayout(dev, &pipelineLayoutInfo, nullptr, &pipelineLayout_) != VK_SUCCESS) {
         LOG_ERROR("WebGLVkContext: Failed to create pipeline layout");
     }

@@ -157,7 +157,6 @@ add_library(bro_scene STATIC
     vulkan/pass_reflection_probe.cpp
     vulkan/pass_environment.cpp
     vulkan/pass_mesh.cpp
-    vulkan/pass_terrain.cpp
     vulkan/pass_snapshot.cpp
     vulkan/pass_ssao.cpp
     vulkan/pass_ssr.cpp

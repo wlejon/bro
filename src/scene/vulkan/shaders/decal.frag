@@ -25,18 +25,18 @@ void main() {
     vec2 screenUV = gl_FragCoord.xy / camera.viewport.xy;
     float d = texture(uSceneDepth, screenUV).r;
 
-    // Cleared (sky) depth: nothing to project onto.
-    if (REVERSED_Z ? d <= 0.0 : d >= 1.0) discard;
-
-    // In Vulkan, screenUV.y = 0 is top, 1 is bottom.
-    // Vulkan NDC: x in [-1, 1], y in [-1, 1] (y=-1 is top, y=+1 is bottom).
+    // Vulkan NDC: y = -1 is the top row, as screenUV.y = 0 is.
     vec4 ndc = vec4(screenUV * 2.0 - 1.0, d, 1.0);
     vec4 pw = camera.invView * (camera.invProj * ndc);
     vec3 worldPos = pw.xyz / pw.w;
 
-    // Surface normal from screen-space derivatives:
-    // With Vulkan Y-down, cross(dFdy, dFdx) points out of the surface (towards viewer)
+    // Surface normal from screen-space derivatives, taken before any discard
+    // so every 2x2 quad still has all four lanes. With Vulkan's y-down window,
+    // cross(dFdy, dFdx) points out of the surface (towards the viewer).
     vec3 nrm = normalize(cross(dFdy(worldPos), dFdx(worldPos)));
+
+    // Cleared (sky) depth: nothing to project onto.
+    if (REVERSED_Z ? d <= 0.0 : d >= 1.0) discard;
 
     vec3 local = (push.invModel * vec4(worldPos, 1.0)).xyz;
     if (any(greaterThan(abs(local), vec3(0.5)))) discard;

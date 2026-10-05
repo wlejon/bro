@@ -10,15 +10,6 @@
 
 namespace bro::scene {
 
-int MeshNode::userTextureUnitLimit() {
-    return 32;
-}
-
-int MeshNode::maxUserTextures() {
-    const int n = userTextureUnitLimit() - kUserTextureUnitBase;
-    return n > 0 ? n : 0;
-}
-
 MeshNode::MeshNode(const std::string& name) : SceneNode(name) {}
 
 MeshNode::~MeshNode() = default;

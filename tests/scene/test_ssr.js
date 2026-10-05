@@ -98,6 +98,40 @@ if (!scene) {
     assert(maxDelta === 0,
         `SSR off is pixel-identical to never-enabled (maxDelta=${maxDelta})`);
 
+    // --- Section 3b: intensity 0 is SSR off, alpha included -----------------
+    // The opaque pass writes the reflectance mask into alpha only while the
+    // SSR pass will consume it; a zero intensity must not leave it behind.
+    scene.setSSR({ enabled: true, intensity: 0 });
+    const zeroImg = scene.captureFrame();
+    let zeroDelta = 0;
+    for (let i = 0; i < offImg.data.length; i++) {
+        zeroDelta = Math.max(zeroDelta, Math.abs(offImg.data[i] - zeroImg.data[i]));
+    }
+    assert(zeroDelta === 0, `SSR at intensity 0 is pixel-identical to off, alpha too (maxDelta=${zeroDelta})`);
+
+    // --- Section 3c: decals are in the reflected image -------------------------
+    // A decal over the whole cube paints it black (no light reaches the
+    // decal's albedo). Decals land on the opaque result before SSR snapshots
+    // it, so the reflection goes dark with the cube.
+    // Summed rather than peak: the bare reflection saturates.
+    const totalIncrease = (offImg, onImg) => {
+        let sum = 0;
+        for (let i = (offImg.height >> 1) * offImg.width * 4; i < offImg.data.length; i += 4) {
+            sum += Math.max(0, onImg.data[i] - offImg.data[i]);
+        }
+        return sum;
+    };
+    scene.setSSR({ enabled: true });
+    const bare = totalIncrease(offImg, scene.captureFrame());
+    const decal = scene.createDecal({ modulate: [0, 0, 0, 1], size: [3, 3, 3], y: 2.0 });
+    const decalOff = (scene.setSSR({ enabled: false }), scene.captureFrame());
+    scene.setSSR({ enabled: true });
+    const painted = totalIncrease(decalOff, scene.captureFrame());
+    assert(painted < bare * 0.35,
+        `the reflection shows the decal over the cube (reflected red ${painted} vs ${bare} without it)`);
+    decal.destroy();
+    scene.setSSR({ enabled: false });
+
     // --- Section 4: orthographic camera -----------------------------------
     // Same scene through an ortho camera: the incident ray is the constant
     // view direction and depth reconstruction runs through the full inverse

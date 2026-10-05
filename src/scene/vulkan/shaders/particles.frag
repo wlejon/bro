@@ -30,9 +30,12 @@ layout(push_constant) uniform ParticlePush {
 
 layout(location = 0) out vec4 fragColor;
 
+// Window depth -> eye distance in world units. An orthographic projection
+// (proj[3][3] = 1) maps depth linearly, reversed like the perspective one.
 float linearizeDepth(float d) {
     float n = camera.viewport.z;
     float f = camera.viewport.w;
+    if (camera.proj[3][3] > 0.5) return n + (REVERSED_Z ? 1.0 - d : d) * (f - n);
     if (REVERSED_Z) return n * f / max(d * (f - n) + n, 1e-7);   // d = 1 at near, 0 at far
     return n * f / max(f - d * (f - n), 1e-7);                    // d = 0 at near, 1 at far
 }

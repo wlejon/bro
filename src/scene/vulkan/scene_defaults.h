@@ -22,7 +22,7 @@ public:
     // cube, shade map and IBL as bare images under one shared sampler; set 2: material (albedo, normal, metallic-roughness,
     // emissive, occlusion); set 3: per-draw vertex data, the bone palette UBO
     // (binding 0) or a procedural draw's segment records (binding 1, storage);
-    // set 4: custom shader UBO + 8 samplers.
+    // set 4: custom shader UBO + MeshNode::kMaxUserTextures samplers.
     VkDescriptorSetLayout cameraLayout = VK_NULL_HANDLE;
     VkDescriptorSetLayout lightingLayout = VK_NULL_HANDLE;
     VkDescriptorSetLayout materialLayout = VK_NULL_HANDLE;
@@ -36,6 +36,7 @@ public:
     SceneVkImage flatNormal;// (0.5,0.5,1,1): tangent-space +Z
     SceneVkImage black;     // (0,0,0,1)
     SceneVkImage cube;      // black cube map
+    SceneVkImage zeroArray; // one-layer 2D array of zeros (an unset sampler2DArray)
     VkSampler sampler = VK_NULL_HANDLE;      // linear, clamp to edge
     VkSampler cubeSampler = VK_NULL_HANDLE;  // linear mips, clamp to edge
 

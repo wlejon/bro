@@ -116,9 +116,40 @@ if (!probe.scene) {
         const sum = (c) => c[0] + c[1] + c[2];
         assert(sum(f2) > sum(f1) * 1.5, `intensity scales the lighting: ${fmt(f1)} -> ${fmt(f2)}`);
 
+        // A panorama wider than any device's image limit is refused up
+        // front (the bake would fail on the next frame), keeping the
+        // current environment.
+        const widePath = path.join(tmpDir, 'too_wide.hdr');
+        writeHdr(widePath, 65537, 2, () => [1, 1, 1]);
+        assert(sc.setEnvironment({ panorama: widePath }) === false, 'an over-limit panorama is refused');
+        assert(sc.setEnvironment({ panorama: path.join(tmpDir, 'missing.hdr') }) === false,
+               'a panorama that does not load reports false');
+        const kept = face(sc.captureFrame());
+        assert(rgbDiff(kept, f2) < 6, `the refused panorama keeps the environment: ${fmt(f2)} -> ${fmt(kept)}`);
+
         sc.setEnvironment(null);
         const cleared = sc.captureFrame();
         assert(sky(cleared)[3] < 5, `clearing the environment clears the sky ${fmt(sky(cleared))}`);
+        dropScene(s);
+    }
+
+    // =====================================================================
+    // A sun past the half-float range (65504) still lights: the panorama is
+    // black but for an equator band at 1e5, which must clamp to the brightest
+    // half, not overflow to an infinity the bake drops as black.
+    // =====================================================================
+    {
+        const sunPath = path.join(tmpDir, 'sun.hdr');
+        writeHdr(sunPath, 32, 16, (x, y) => (y === 7 || y === 8 ? [1e5, 1e5, 1e5] : [0, 0, 0]));
+        const s = freshScene(SIZE);
+        const sc = s.scene;
+        sc.setCamera({ fov: 60, near: 0.1, far: 100, position: [0, 0, 5], target: [0, 0, 0] });
+        sc.createLight({ type: 'directional', intensity: 0 });
+        sc.setAmbient({ color: [0, 0, 0] });
+        sc.createMesh({ mesh: Mesh.box(1.5, 1.5, 0.2), color: [1, 1, 1, 1], roughness: 1, metallic: 0 });
+        assert(sc.setEnvironment({ panorama: sunPath, intensity: 1e-4 }) === true, 'the sun panorama loads');
+        const f = boxRGBA(sc.captureFrame(), 56, 56, 72, 72);
+        assert(f[0] > 40 && f[1] > 40 && f[2] > 40, `an over-range sun lights the box ${fmt(f)}`);
         dropScene(s);
     }
 
@@ -156,6 +187,9 @@ if (!probe.scene) {
             return n;
         };
         assert(stars(dark) === 0, 'no starfield: no stars');
+        let open = 0;
+        for (let i = 3; i < img.data.length; i += 4) if (img.data[i] < 250) open++;
+        assert(open === 0, `the starfield alone covers the frame: ${open} pixels not opaque`);
         const n = stars(img);
         assert(n > 5 && n < SIZE * SIZE / 4, `the starfield draws scattered stars: ${n} bright pixels`);
         dropScene(s);

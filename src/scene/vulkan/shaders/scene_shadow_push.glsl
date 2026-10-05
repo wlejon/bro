@@ -12,3 +12,4 @@ layout(push_constant) uniform ShadowPushConstants {
 mat4 casterModel() {
     return transpose(mat4(push.modelRows[0], push.modelRows[1], push.modelRows[2], vec4(0.0, 0.0, 0.0, 1.0)));
 }
+mat4 sceneModel() { return casterModel(); }

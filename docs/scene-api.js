@@ -680,7 +680,12 @@ class SceneGraph {
   setMSAA(samples) {}
 
   /**
+   * Image-based lighting and sky from an HDR panorama (`panorama` or `hdr`),
+   * plus its `intensity` and `rotation`; null clears it. The panorama is
+   * decoded now and baked on the next frame.
    * @param {EnvironmentConfig} [opts]
+   * @returns {boolean} false when the panorama does not decode or is larger
+   *   than the GPU's image limit (the previous environment stays)
    */
   setEnvironment(opts) {}
 

@@ -208,6 +208,21 @@ if (!scene) {
     assert(patchMaxAlpha(imgScaled, 86, 64, 3) === 0,
         'nothing left at the unscaled position (86,64)');
     scaled.destroy();
+
+    // Orientation: a splat stretched along local X and turned 45 degrees
+    // about Z lies along the world (1,1) diagonal, so on screen it runs from
+    // lower left to upper right (image rows count down from the top).
+    const diag = oneSplat(0, 0, 0);
+    diag.scales = new Float32Array([0.6, 0.04, 0.04]);
+    diag.rotations = new Float32Array([0, 0, Math.sin(Math.PI / 8), Math.cos(Math.PI / 8)]);
+    const tilted = scene.createGaussianSplat({ cloud: diag });
+    const imgTilted = scene.captureFrame();
+    const alphaAt = (x, y) => imgTilted.data[(y * imgTilted.width + x) * 4 + 3];
+    const along = Math.min(alphaAt(72, 56), alphaAt(56, 72));
+    const across = Math.max(alphaAt(56, 56), alphaAt(72, 72));
+    assert(along > 100 && across < along / 4,
+        `a splat along world (1,1) runs up-right on screen (along ${along}, across ${across})`);
+    tilted.destroy();
     flush();
 }
 

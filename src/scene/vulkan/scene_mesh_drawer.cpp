@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstring>
 
 namespace bro::scene::vk {
@@ -189,21 +190,16 @@ SceneMeshDrawer::CustomProgram* SceneMeshDrawer::program(const CustomShaderState
     if (it != custom_.end()) return it->second->failed ? nullptr : it->second.get();
 
     auto prog = std::make_unique<CustomProgram>();
-    prog->vertexChunk = cs.vertexChunk;
-    prog->fragmentChunk = cs.fragmentChunk;
     std::string err;
-    if (!SceneVkCustomShader::compileCustomShaderModules(device_, shaderTarget(kind), cs.vertexChunk,
-                                                         cs.fragmentChunk, prog->vs, prog->fs, false,
-                                                         prog->samplerNames, err)) {
+    if (!prog->iface.parse(cs.vertexChunk, cs.fragmentChunk, err) ||
+        !SceneVkCustomShader::compileCustomShaderModules(device_, shaderTarget(kind), prog->iface, prog->vs,
+                                                         prog->fs, false, err)) {
         // Logged once; the node draws with the built-in shading from now on.
         LOG_ERROR("SceneMeshDrawer: Failed compiling a custom shader: %s", err.c_str());
         prog->failed = true;
         custom_.emplace(std::move(key), std::move(prog));
         return nullptr;
     }
-    uint32_t size = 0;
-    prog->uniformOffsets = SceneVkCustomShader::parseUniformOffsets(cs.vertexChunk + "\n" + cs.fragmentChunk, size);
-    prog->uboSize = (std::max<uint32_t>(size, 16) + 15) & ~15u;
     return custom_.emplace(std::move(key), std::move(prog)).first->second.get();
 }
 
@@ -216,13 +212,11 @@ VkPipeline SceneMeshDrawer::customPipeline(CustomProgram& prog, const MeshDraw& 
             if (prog.indirectFailed) return VK_NULL_HANDLE;
             if (prog.fsIndirect == VK_NULL_HANDLE) {
                 VkShaderModule vs = VK_NULL_HANDLE;
-                std::vector<std::string> names;
                 std::string err;
                 // The chunks compiled once already, so this is the indirect
                 // splice failing: the node keeps the built-in shading there.
-                if (!SceneVkCustomShader::compileCustomShaderModules(device_, shaderTarget(kind), prog.vertexChunk,
-                                                                     prog.fragmentChunk, vs, prog.fsIndirect, true,
-                                                                     names, err)) {
+                if (!SceneVkCustomShader::compileCustomShaderModules(device_, shaderTarget(kind), prog.iface, vs,
+                                                                     prog.fsIndirect, true, err)) {
                     LOG_ERROR("SceneMeshDrawer: Failed compiling the indirect custom variant: %s", err.c_str());
                     prog.indirectFailed = true;
                     return VK_NULL_HANDLE;
@@ -274,12 +268,20 @@ VkDescriptorSet SceneMeshDrawer::segmentSet(SceneFrame& frame, const float (&hea
 VkDescriptorSet SceneMeshDrawer::customSet(SceneFrame& frame, uint32_t nodeId, const CustomShaderState& cs,
                                            const CustomProgram& prog,
                                            std::vector<MeshNode::UserTexture>* textures) {
-    std::vector<uint8_t> ubo(prog.uboSize, 0);
-    for (const auto& [name, offset] : prog.uniformOffsets) {
+    std::vector<uint8_t> ubo(prog.iface.uboSize(), 0);
+    for (const CustomShaderInterface::Uniform& slot : prog.iface.uniforms()) {
         for (const auto& u : cs.uniforms) {
-            if (u.name != name) continue;
-            const uint32_t bytes = static_cast<uint32_t>(std::clamp(u.comps, 1, 4) * sizeof(float));
-            if (offset + bytes <= prog.uboSize) std::memcpy(ubo.data() + offset, u.v, bytes);
+            if (u.name != slot.name) continue;
+            const int comps = std::clamp(u.comps, 1, 4);
+            if (slot.offset + comps * 4 > ubo.size()) break;
+            for (int c = 0; c < comps; ++c) {
+                if (slot.integer) {
+                    const int32_t v = static_cast<int32_t>(std::lround(u.v[c]));
+                    std::memcpy(ubo.data() + slot.offset + c * 4, &v, 4);
+                } else {
+                    std::memcpy(ubo.data() + slot.offset + c * 4, &u.v[c], 4);
+                }
+            }
             break;
         }
     }
@@ -289,12 +291,14 @@ VkDescriptorSet SceneMeshDrawer::customSet(SceneFrame& frame, uint32_t nodeId, c
     VkDescriptorSet set = frame.gpu.device.frameSet(defaults_->customLayout);
     SceneVkDescriptorWriter writer;
     writer.writeBuffer(0, uboInfo.buffer, uboInfo.range, uboInfo.offset);
-    for (uint32_t i = 1; i <= 8; ++i) {
-        VkImageView view = defaults_->white.view;
+    const auto& samplers = prog.iface.samplers();
+    for (uint32_t i = 1; i <= CustomShaderInterface::kMaxSamplers; ++i) {
+        const bool array = i - 1 < samplers.size() && samplers[i - 1].array;
+        VkImageView view = array ? defaults_->zeroArray.view : defaults_->white.view;
         VkSampler sampler = defaults_->sampler;
-        if (textures && i - 1 < prog.samplerNames.size()) {
+        if (textures && i - 1 < samplers.size()) {
             for (auto& t : *textures) {
-                if (t.name != prog.samplerNames[i - 1]) continue;
+                if (t.name != samplers[i - 1].name || (t.layers > 0) != array) continue;
                 if (const SceneVkImage* img = res.userTexture(nodeId, t)) {
                     view = img->view;
                     sampler = img->sampler;
@@ -329,6 +333,18 @@ void SceneMeshDrawer::fillMaterial(const Node& node, MeshDraw& out) {
     out.castsShadow = node.castsShadow() && !node.effectiveUnlit();
     out.depthBiasFactor = node.depthBiasFactor();
     out.depthBiasUnits = node.depthBiasUnits();
+}
+
+template <typename Node>
+uint32_t SceneMeshDrawer::resolveShade(const Node& node, MeshDraw& out) {
+    const ShadeMapProvider* provider = node.shadeMap();
+    ShadeMapBinding binding{};
+    if (!provider || !*provider || !(*provider)(binding) || !binding.pixels || binding.width <= 0 ||
+        binding.height <= 0) {
+        return 0;
+    }
+    out.shade = binding;
+    return mesh_flags::kShadeMap;
 }
 
 namespace {
@@ -388,7 +404,10 @@ bool SceneMeshDrawer::prepare(SceneFrame& frame, MeshNode& node, MeshDraw& out) 
     const GpuMesh* gm = frame.gpu.resources.mesh(node.id(), slot, node.geometryGeneration(), data);
     if (!gm) return false;
 
+    // A skinned node whose skin is not set up yet (no bones, or weights that
+    // do not cover the mesh) draws its bind pose through the static path.
     SkinnedMeshNode* skinned = node.asSkinnedMesh();
+    if (skinned && !skinned->skinReady()) skinned = nullptr;
     out.kind = skinned ? MeshKind::Skinned : MeshKind::Static;
     out.nodeId = node.id();
     out.vertices = gm->vertices.buffer;
@@ -411,8 +430,9 @@ bool SceneMeshDrawer::prepare(SceneFrame& frame, MeshNode& node, MeshDraw& out) 
     }
 
     uint32_t flags = mesh_flags::vertexColor(node.vertexColorMode());
-    if (frame.renderer.ssrEnabled()) flags |= mesh_flags::kReflectance;
-    if (node.shadeMap()) flags |= mesh_flags::kShadeMap;
+    // Only opaque draws write the SSR mask: translucents blend over it after SSR.
+    if (frame.ssr && !out.translucent) flags |= mesh_flags::kReflectance;
+    flags |= resolveShade(node, out);
     if (node.receivesShadow()) flags |= mesh_flags::kReceivesShadow;
     if (out.twoSided) flags |= mesh_flags::kTwoSided;
     if (data.hasTangents()) flags |= mesh_flags::kHasTangents;
@@ -483,8 +503,9 @@ bool SceneMeshDrawer::prepareProcedural(SceneFrame& frame, InstancedMeshNode& no
                         256.0f * static_cast<float>(std::clamp(node.atlasRows(), 1, 255));
 
     uint32_t flags = mesh_flags::vertexColor(out.kind == MeshKind::Scatter && node.vertexColorTintEnabled() ? 1 : 0);
-    if (frame.renderer.ssrEnabled()) flags |= mesh_flags::kReflectance;
-    if (node.shadeMap()) flags |= mesh_flags::kShadeMap;
+    // Only opaque draws write the SSR mask: translucents blend over it after SSR.
+    if (frame.ssr && !out.translucent) flags |= mesh_flags::kReflectance;
+    flags |= resolveShade(node, out);
     if (node.receivesShadow()) flags |= mesh_flags::kReceivesShadow;
     if (out.twoSided) flags |= mesh_flags::kTwoSided;
     if (out.kind == MeshKind::Scatter && node.mesh().hasTangents()) flags |= mesh_flags::kHasTangents;
@@ -531,8 +552,9 @@ bool SceneMeshDrawer::prepare(SceneFrame& frame, InstancedMeshNode& node, MeshDr
                         256.0f * static_cast<float>(std::clamp(node.effectiveAtlasRows(), 1, 255));
 
     uint32_t flags = mesh_flags::vertexColor(node.useVertexColorForDraw() ? 1 : 0);
-    if (frame.renderer.ssrEnabled()) flags |= mesh_flags::kReflectance;
-    if (node.shadeMap()) flags |= mesh_flags::kShadeMap;
+    // Only opaque draws write the SSR mask: translucents blend over it after SSR.
+    if (frame.ssr && !out.translucent) flags |= mesh_flags::kReflectance;
+    flags |= resolveShade(node, out);
     if (node.receivesShadow()) flags |= mesh_flags::kReceivesShadow;
     if (out.twoSided) flags |= mesh_flags::kTwoSided;
     if (geometry.hasTangents()) flags |= mesh_flags::kHasTangents;

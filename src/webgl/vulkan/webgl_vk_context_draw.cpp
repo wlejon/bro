@@ -20,6 +20,13 @@ uint64_t handleBits(const void* h) { return static_cast<uint64_t>(reinterpret_ca
 
 } // namespace
 
+// The first target row of GL's bottom-up scissor box: counted down from the
+// top on the top-down canvas, as is on a framebuffer object.
+int32_t WebGLVkContext::scissorTop(VkExtent2D extent) const {
+    if (currentFboId_ != 0) return scissor_.offset.y;
+    return static_cast<int32_t>(extent.height) - (scissor_.offset.y + static_cast<int32_t>(scissor_.extent.height));
+}
+
 void WebGLVkContext::clear(GLbitfield mask) {
     beginRendering();
     if (!inRenderPass_) return;
@@ -63,14 +70,12 @@ void WebGLVkContext::clear(GLbitfield mask) {
     }
     if (clearCount == 0) return;
 
-    // GL's scissor box is bottom-up; the render target is top-down.
     int32_t x0 = 0, y0 = 0;
     int32_t x1 = static_cast<int32_t>(extent.width), y1 = static_cast<int32_t>(extent.height);
     if (scissorTest_) {
         x0 = std::max(x0, scissor_.offset.x);
         x1 = std::min(x1, scissor_.offset.x + static_cast<int32_t>(scissor_.extent.width));
-        const int32_t top = static_cast<int32_t>(extent.height) -
-                            (scissor_.offset.y + static_cast<int32_t>(scissor_.extent.height));
+        const int32_t top = scissorTop(extent);
         y0 = std::max(y0, top);
         y1 = std::min(y1, top + static_cast<int32_t>(scissor_.extent.height));
     }
@@ -109,6 +114,11 @@ void WebGLVkContext::buildPipelineKey(GLenum mode, const VkProgramResource& prog
     key.cullFaceEnable = cullFaceEnabled_ ? VK_TRUE : VK_FALSE;
     key.cullMode = glCullModeToVk(cullFaceMode_);
     key.frontFace = glFrontFaceToVk(frontFaceMode_);
+    // Drawn unflipped, a framebuffer object sees GL's geometry mirrored in
+    // Vulkan's y-down window space, so its winding reads the other way.
+    if (currentFboId_ != 0)
+        key.frontFace = key.frontFace == VK_FRONT_FACE_CLOCKWISE ? VK_FRONT_FACE_COUNTER_CLOCKWISE
+                                                                 : VK_FRONT_FACE_CLOCKWISE;
 
     key.depthTestEnable = depthTestEnabled_ ? VK_TRUE : VK_FALSE;
     key.depthWriteEnable = depthMask_ ? VK_TRUE : VK_FALSE;
@@ -350,13 +360,17 @@ bool WebGLVkContext::prepareDraw(GLenum mode, VkProgramResource& prog) {
         return false;
     }
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    // The canvas is drawn top-down (a negative viewport height maps GL's
+    // bottom-up NDC onto it); a framebuffer object in GL's own row order.
+    const bool flipped = currentFboId_ == 0;
+    const FragmentPush push = flipped ? FragmentPush{static_cast<float>(extent.height), -1.0f} : FragmentPush{};
+    vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
 
-    // Negative viewport height maps GL's bottom-up NDC onto the top-down target.
     VkViewport vp{};
     vp.x = viewport_.x;
-    vp.y = static_cast<float>(extent.height) - viewport_.y;
+    vp.y = flipped ? static_cast<float>(extent.height) - viewport_.y : viewport_.y;
     vp.width = viewport_.width;
-    vp.height = -viewport_.height;
+    vp.height = flipped ? -viewport_.height : viewport_.height;
     vp.minDepth = 0.0f;
     vp.maxDepth = 1.0f;
     vkCmdSetViewport(cmd, 0, 1, &vp);
@@ -364,8 +378,7 @@ bool WebGLVkContext::prepareDraw(GLenum mode, VkProgramResource& prog) {
     VkRect2D sc{};
     if (scissorTest_) {
         int32_t x0 = std::max(0, scissor_.offset.x);
-        int32_t top = static_cast<int32_t>(extent.height) -
-                      (scissor_.offset.y + static_cast<int32_t>(scissor_.extent.height));
+        int32_t top = scissorTop(extent);
         int32_t y0 = std::max(0, top);
         int32_t x1 = std::min(static_cast<int32_t>(extent.width),
                               scissor_.offset.x + static_cast<int32_t>(scissor_.extent.width));

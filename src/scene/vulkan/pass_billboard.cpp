@@ -51,8 +51,9 @@ void PassBillboard::declare(const SceneFrame&, PassIO& io) const {
     io.hdr();
 }
 
-VkDescriptorSet PassBillboard::textureSet(SceneFrame& frame, const NodeTexture& tex, uint32_t nodeId) {
-    const SceneVkImage* img = frame.gpu.resources.texture(nodeId, TextureSlot::Image, tex);
+VkDescriptorSet PassBillboard::textureSet(SceneFrame& frame, const NodeTexture& tex, uint32_t nodeId,
+                                          TextureSlot slot) {
+    const SceneVkImage* img = frame.gpu.resources.texture(nodeId, slot, tex);
     if (!img) return VK_NULL_HANDLE;
     const SceneDefaults& d = frame.gpu.defaults;
     VkDescriptorSet set = device_->frameSet(d.materialLayout);
@@ -122,7 +123,7 @@ bool PassBillboard::prepareNode(SceneFrame& frame, SceneNode& node, Push& push, 
         push.color[3] = s.opacity();
         s.ensureImageLoaded();
         s.currentUvRect(push.uvMin[0], push.uvMin[1], push.uvMax[0], push.uvMax[1]);
-        material = s.hasImage() ? textureSet(frame, s.image(), s.id()) : VK_NULL_HANDLE;
+        material = s.hasImage() ? textureSet(frame, s.image(), s.id(), TextureSlot::Sprite) : VK_NULL_HANDLE;
         if (!s.hasImage()) push.color[3] = 0.0f;
     } else if (node.type() == SceneNode::Type::Html) {
         auto& h = static_cast<HtmlNode&>(node);
@@ -130,7 +131,7 @@ bool PassBillboard::prepareNode(SceneFrame& frame, SceneNode& node, Push& push, 
         push.shapeMode = 2;
         halfW = 0.5f * (h.layoutWidth() / ppu) * scale.x;
         halfH = 0.5f * (h.layoutHeight() / ppu) * scale.y;
-        material = textureSet(frame, h.texture(), h.id());
+        material = textureSet(frame, h.texture(), h.id(), TextureSlot::Html);
         push.color[3] = h.texture().empty() ? 0.0f : 1.0f;
     } else {
         return false;
@@ -213,12 +214,9 @@ void PassBillboard::prepareLightIcon(const SceneFrame& frame, const LightNode& l
 
 void PassBillboard::record(SceneFrame& frame) {
     std::vector<SceneNode*> anchored;
-    auto walk = [&](auto& self, SceneNode* n) -> void {
-        if (!n || !n->renderVisible()) return;
+    for (SceneNode* n : frame.lists.nodes) {
         if (n->hasWorldAnchor()) anchored.push_back(n);
-        for (SceneNode* child : n->children()) self(self, child);
-    };
-    walk(walk, frame.graph.root());
+    }
     const bool icons = frame.renderer.showLightIcons();
     if (anchored.empty() && !icons) return;
 
@@ -263,10 +261,10 @@ void PassBillboard::record(SceneFrame& frame) {
         if (prepareNode(frame, *node, push, material)) draw(push, material);
     }
     if (!icons) return;
-    for (auto& [id, owned] : frame.graph.nodes()) {
-        if (!owned->renderVisible() || owned->type() != SceneNode::Type::Light) continue;
+    for (SceneNode* node : frame.lists.nodes) {
+        if (node->type() != SceneNode::Type::Light) continue;
         Push push{};
-        prepareLightIcon(frame, static_cast<const LightNode&>(*owned), push);
+        prepareLightIcon(frame, static_cast<const LightNode&>(*node), push);
         draw(push, VK_NULL_HANDLE);
     }
 }

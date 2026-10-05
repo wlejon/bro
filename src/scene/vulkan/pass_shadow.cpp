@@ -31,8 +31,9 @@ void shadowVertexInput(MeshKind kind, bool custom, std::vector<VkVertexInputBind
     SceneMeshDrawer::vertexInput(kind, bindings, attributes);
     std::vector<VkVertexInputAttributeDescription> used;
     for (const auto& a : attributes) {
-        // Tangents (location 4) never reach a caster.
-        const bool keep = custom ? a.location != 4
+        // A custom chunk sees every attribute the colour pass has; the
+        // built-in casters read position, wind colour and skin only.
+        const bool keep = custom ? true
                         : kind == MeshKind::Instanced ? (a.location == 0 || (a.location >= 8 && a.location <= 10))
                                                       : (a.location <= 3 || a.location == 5 || a.location == 6);
         if (keep) used.push_back(a);
@@ -147,8 +148,10 @@ VkPipeline PassShadow::customPipeline(const CustomShaderState& cs, MeshKind kind
     VkPipeline pipeline = VK_NULL_HANDLE;
     VkShaderModule vs = VK_NULL_HANDLE;
     std::string err;
-    if (SceneVkCustomShader::compileCustomShadowShaderModule(device_->device(), kind == MeshKind::Skinned,
-                                                             cs.vertexChunk, vs, err)) {
+    CustomShaderInterface iface;
+    if (iface.parse(cs.vertexChunk, cs.fragmentChunk, err) &&
+        SceneVkCustomShader::compileCustomShadowShaderModule(device_->device(), kind == MeshKind::Skinned, iface,
+                                                             vs, err)) {
         pipeline = buildPipeline(vs, kind, true, twoSided);
         SceneVkShaderModule::destroy(device_->device(), vs);
     }

@@ -25,6 +25,23 @@ void placeDraw(const SceneFrame& frame, SceneNode* node, MeshDraw& draw) {
     draw.viewDepth = bromath::vdot(draw.center - frame.view.eye, frame.view.forward());
 }
 
+// A node type that puts something in the frame (the layer composites while
+// one is shown, even when the camera culls all of it, so the sky stays).
+bool drawsContent(const SceneFrame& frame, const SceneNode& node) {
+    switch (node.type()) {
+    case SceneNode::Type::Mesh:
+    case SceneNode::Type::InstancedMesh:
+    case SceneNode::Type::GaussianSplat:
+    case SceneNode::Type::Particles3D:
+    case SceneNode::Type::Decal:
+        return true;
+    case SceneNode::Type::Light:
+        return frame.renderer.showLightIcons() || node.hasWorldAnchor();
+    default:
+        return node.hasWorldAnchor();
+    }
+}
+
 }  // namespace
 
 void buildDrawLists(SceneFrame& frame) {
@@ -32,9 +49,16 @@ void buildDrawLists(SceneFrame& frame) {
     SceneMeshDrawer& drawer = frame.gpu.meshes;
     CullStats& stats = frame.stats;
 
-    for (auto& [id, owned] : frame.graph.nodes()) {
-        SceneNode* node = owned.get();
-        if (!node->renderVisible()) continue;
+    // A hidden node hides its subtree; a node off the root is not drawn.
+    auto walk = [&](auto& self, SceneNode* n) -> void {
+        if (!n || !n->renderVisible()) return;
+        lists.nodes.push_back(n);
+        for (SceneNode* child : n->children()) self(self, child);
+    };
+    walk(walk, frame.graph.root());
+
+    for (SceneNode* node : lists.nodes) {
+        if (drawsContent(frame, *node)) frame.drewContent = true;
 
         const bool culled = frame.renderer.cameraCulled(node);
         bool overlay = false;
@@ -45,11 +69,6 @@ void buildDrawLists(SceneFrame& frame) {
                 stats.meshCulled++;
             } else {
                 stats.meshDrawn++;
-                frame.drewContent = true;
-            }
-            if (mesh->clipmapRole() && mesh->hasCustomShader()) {
-                if (!culled && !mesh->currentMesh().empty()) lists.terrains.push_back(mesh);
-                continue;
             }
             if (!drawer.prepare(frame, *mesh, draw)) continue;
             overlay = mesh->effectiveUnlit();
@@ -59,7 +78,6 @@ void buildDrawLists(SceneFrame& frame) {
                 stats.instancedCulled++;
             } else {
                 stats.instancedDrawn++;
-                frame.drewContent = true;
             }
             if (!drawer.prepare(frame, *inst, draw)) continue;
         } else {
@@ -76,11 +94,6 @@ void buildDrawLists(SceneFrame& frame) {
 
     std::stable_sort(lists.translucent.begin(), lists.translucent.end(), [&](uint32_t a, uint32_t b) {
         return lists.meshes[a].viewDepth > lists.meshes[b].viewDepth;
-    });
-    // The overlay writes no depth, so its draws layer in creation order (the
-    // GL renderer's tree walk), not the node map's.
-    std::sort(lists.overlay.begin(), lists.overlay.end(), [&](uint32_t a, uint32_t b) {
-        return lists.meshes[a].nodeId < lists.meshes[b].nodeId;
     });
 }
 

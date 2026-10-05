@@ -120,7 +120,7 @@ void PassDoF::record(SceneFrame& frame) {
     SceneVkDescriptorWriter writer;
     writer.writeImage(0, t.hdr.view, sampler_);
     writer.writeImage(1, blur_[0].view, sampler_);
-    writer.writeImage(2, t.depthSnapshot.view, sampler_);
+    writer.writeImage(2, t.depthSnapshot.view, t.depthSnapshot.sampler);
     writer.updateSet(device_->device(), set);
     const float push[5] = {frame.renderer.depthOfFieldFocusDistance(), frame.renderer.depthOfFieldFocusRange(),
                            frame.view.nearZ, frame.view.farZ, frame.view.perspective ? 1.0f : 0.0f};

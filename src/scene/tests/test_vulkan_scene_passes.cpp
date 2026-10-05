@@ -7,6 +7,7 @@
 // fails the run too.
 #undef NDEBUG
 
+#include "scene/particles3d_node.h"
 #include "scene/scene_graph.h"
 #include "scene/scene_renderer.h"
 #include "scene/vulkan/scene_vk_device.h"
@@ -15,10 +16,14 @@
 #include "render/vulkan_debug.h"
 #include "util/log.h"
 
+#include <broimage/encode.h>
 #include <bromesh/primitives/primitives.h>
 
 #include <cassert>
+#include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <filesystem>
 #include <iostream>
 #include <vector>
 
@@ -174,6 +179,50 @@ int main() {
         graph.destroyNode(cube);
         px = renderAndRead(graph);
         assert(at(px, 1, 1).a == 255);   // the sky still covers the frame
+        std::cout << "PASSED" << std::endl;
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 4: a particle texture is sRGB: a mid-grey texel samples as its
+    // linear value, the same light as a white texture tinted by that value.
+    // -------------------------------------------------------------------------
+    std::cout << "[Test 4] Scene renderer: particle textures decode sRGB... " << std::flush;
+    {
+        const auto dir = std::filesystem::temp_directory_path();
+        const auto writeFlat = [&](const char* name, uint8_t v) {
+            const std::vector<uint8_t> rgba(16 * 16 * 4, v);
+            std::vector<uint8_t> px = rgba;
+            for (size_t i = 3; i < px.size(); i += 4) px[i] = 255;
+            const std::string path = (dir / name).string();
+            assert(broimage::encode_png_file(path, px.data(), 16, 16, 4));
+            return path;
+        };
+        const std::string grey = writeFlat("bro_scene_particle_grey.png", 128);
+        const std::string white = writeFlat("bro_scene_particle_white.png", 255);
+        const float linearGrey = std::pow((128.0f / 255.0f + 0.055f) / 1.055f, 2.4f);
+
+        const auto centreOf = [&](const std::string& texture, float tint) {
+            scene::SceneGraph graph;
+            graph.setCanvasSize(kSize, kSize);
+            graph.setCamera(1.0f, 1.0f, 0.1f, 100.0f, {0.0f, 0.0f, 4.0f}, {0.0f, 0.0f, 0.0f});
+            graph.setToneMap(scene::SceneRenderer::ToneMap::Linear, 1.0f, 1.0f);
+            scene::Particles3DNode* p = graph.createParticles3D("p");
+            graph.root()->addChild(p);
+            p->setTexturePath(texture);
+            p->setSpeed(0.0f, 0.0f);
+            p->setLifetime(10.0f, 10.0f);
+            p->setSize(3.0f, 3.0f);
+            p->setColors({tint, tint, tint, 1.0f}, {tint, tint, tint, 1.0f});
+            p->burst(1);
+            return at(renderAndRead(graph), kSize / 2, kSize / 2);
+        };
+        const Pixel g = centreOf(grey, 1.0f);
+        const Pixel w = centreOf(white, linearGrey);
+        assert(g.a == 255 && w.a == 255);
+        assert(std::abs(int(g.r) - int(w.r)) <= 3);
+        assert(g.r < 80);   // stored UNORM, the grey would come out near 128
+        std::remove(grey.c_str());
+        std::remove(white.c_str());
         std::cout << "PASSED" << std::endl;
     }
 

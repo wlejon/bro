@@ -17,6 +17,8 @@
 #include <vulkan/vulkan.h>
 
 #include <cstdint>
+#include <map>
+#include <utility>
 
 namespace bro::scene {
 class SceneGraph;
@@ -60,6 +62,7 @@ struct SceneFrame {
 
     // Effects that change the pass structure, decided once per frame.
     bool ssao = false;   // opaque scope carries the indirect attachment; AO applies
+    bool ssr = false;    // opaque draws write the reflectance mask; SSR consumes it
     bool dof = false;
     bool tilt = false;   // tilt-shift after the overlay
     bool fxaa = false;   // FXAA last
@@ -70,11 +73,12 @@ struct SceneFrame {
     SceneVkImage* ldrResult = nullptr;
 
     /// Sun, lights, ambient, shadow projection, environment and atmosphere
-    /// (scene_lighting.h); the shade-map fields are filled by the
-    /// frame-uniforms pass. No probe: each probe's lighting set adds its own.
+    /// (scene_lighting.h). No probe and no shade map: a draw's own lighting
+    /// set adds those.
     SceneLightingUniforms lighting{};
-    /// The tile shade map the lighting sets bind (frame-uniforms pass), or null.
-    const SceneVkImage* shadeMap = nullptr;
+    /// The lighting sets written this frame per (probe node id, shade map
+    /// pixels), beyond the frame's own (lightingSetFor).
+    std::map<std::pair<uint32_t, const uint8_t*>, VkDescriptorSet> lightingSets;
 
     /// This frame's camera and lighting sets (written by the frame-uniforms
     /// pass). A draw inside a reflection probe's box carries that probe's

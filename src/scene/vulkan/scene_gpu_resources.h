@@ -30,13 +30,22 @@ class SkinnedMeshNode;
 namespace bro::scene::vk {
 
 /// Which image of a node a texture copy holds. Unique per node; node types
-/// never share a slot they would both use.
+/// never share a slot they would both use. The slot also picks how the image
+/// is stored and sampled:
+///   - material maps: mipmapped, repeating;
+///   - Sprite: nearest, no mips, clamped (pixel-exact sheets);
+///   - Html: linear, no mips, clamped (a panel drawn at its own resolution);
+///   - Particle: sRGB storage, so the sampler returns linear texels for the
+///     linear HDR pass, linear, no mips, clamped;
+///   - decal maps: mipmapped, clamped (the projection box is the image).
 enum class TextureSlot : uint32_t {
     BaseColor,
     Normal,
     MetallicRoughness,
     Emissive,
-    Image,          // sprite sheet, HTML panel, particle texture
+    Sprite,
+    Html,
+    Particle,
     DecalAlbedo,
     DecalEmission,
     Occlusion,
@@ -73,8 +82,11 @@ public:
     /// Drop the copies of node `id`'s sampler slots that `live` no longer has.
     void pruneUserTextures(uint32_t id, const std::vector<MeshNode::UserTexture>& live);
 
-    /// The tile shade map (one per scene).
+    /// The GPU copy of a tile shade map, keyed by its CPU map (every node a
+    /// TileWorld draws shares one), re-uploaded when its generation moves.
     const SceneVkImage* shadeMap(const ShadeMapBinding& binding);
+    /// Drop the copies of shade maps not in `live` (this frame's).
+    void retainShadeMaps(const std::vector<const uint8_t*>& live);
 
     /// Drop every copy held for these nodes.
     void releaseNodes(std::span<const uint32_t> ids);
@@ -108,7 +120,7 @@ private:
     std::map<uint64_t, Texture> textures_;
     std::unordered_map<uint32_t, Skin> skins_;
     std::unordered_map<uint32_t, std::unordered_map<std::string, UserTexture>> userTextures_;
-    Texture shadeMap_;
+    std::unordered_map<const uint8_t*, Texture> shadeMaps_;
 };
 
 }  // namespace bro::scene::vk

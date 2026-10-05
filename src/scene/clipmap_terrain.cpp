@@ -75,9 +75,6 @@ ClipmapTerrain::ClipmapTerrain(SceneGraph& graph, const ClipmapConfig& cfg)
     buildGeometry();
 
     node_->setCustomShader(shaderSource("vertex"), shaderSource("fragment"));
-    // The renderer draws this mesh through its terrain pipeline (by role,
-    // never by name), with the cubic variants these sources were built with.
-    node_->setClipmapRole({cfg_.cubicHeight, cfg_.cubicSurface});
     node_->setColor(0.40f, 0.44f, 0.36f, 1.0f);
     node_->setMetallic(0.0f);
     node_->setRoughness(0.95f);
@@ -87,20 +84,6 @@ ClipmapTerrain::ClipmapTerrain(SceneGraph& graph, const ClipmapConfig& cfg)
     // objects standing on it.
     node_->setCastsShadow(false);
     node_->setReceivesShadow(true);
-
-    // The clipmap owns two sampler slots — the height array and the surface
-    // array — on top of the mesh pipeline's fixed units. The combined budget
-    // is queried from the driver, never assumed.
-    {
-        const int need = 2;
-        const int have = MeshNode::maxUserTextures();
-        if (have > 0 && have < need) {
-            LOG_WARN("clipmap: driver reports %d user sampler slots, the "
-                     "clipmap needs %d (%d combined units) — layers past the "
-                     "budget will not bind",
-                     have, need, MeshNode::kUserTextureUnitBase + need);
-        }
-    }
 
     // Both arrays are bound from the start as one 1x1 zero slice. An unbound
     // sampler unit is undefined behaviour to read, and the shader evaluates

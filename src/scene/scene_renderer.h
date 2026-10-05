@@ -186,7 +186,7 @@ public:
     float ssaoBias() const { return ssaoBias_; }
 
     /// Screen-space reflections on opaque surfaces. Runs right after the
-    /// opaque passes and SSAO (before decals and translucents): a
+    /// opaque passes, SSAO and decals (before translucents): a
     /// full-screen pass ray-marches the resolved opaque depth along the
     /// reflected view ray (`steps` linear steps over `maxDistance` world
     /// units + binary refine, `thickness` view-space acceptance) and blends
@@ -337,7 +337,9 @@ public:
     /// next frame (scene/vulkan/scene_environment.h). The lit shaders then
     /// use them for their ambient and the sky shows the cube when the
     /// atmosphere is off. False (and the previous environment kept) when the
-    /// file does not decode; an empty path clears and returns true.
+    /// file does not decode or is larger than the device's image limit; an
+    /// empty path clears and returns true. A bake that still fails (out of
+    /// device memory) clears the environment, so hasEnvironment() turns false.
     bool loadEnvironment(const std::string& hdrPath);
     void clearEnvironment();
     bool hasEnvironment() const { return !envPath_.empty(); }

@@ -1,5 +1,7 @@
 #include "scene/vulkan/scene_defaults.h"
 
+#include "scene/mesh_node.h"
+
 #include "util/log.h"
 
 namespace bro::scene::vk {
@@ -56,7 +58,7 @@ bool SceneDefaults::setup(SceneVkDevice& device, SceneVkAllocator& allocator) {
 
     SceneVkDescriptorLayoutBuilder custom;
     custom.addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, kVsFs);
-    for (uint32_t i = 1; i <= 8; ++i)
+    for (uint32_t i = 1; i <= static_cast<uint32_t>(MeshNode::kMaxUserTextures); ++i)
         custom.addBinding(i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, kVsFs);
     customLayout = custom.build(dev);
 
@@ -78,6 +80,12 @@ bool SceneDefaults::setup(SceneVkDevice& device, SceneVkAllocator& allocator) {
                                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, cube, 1, VK_SAMPLE_COUNT_1_BIT,
                                VK_IMAGE_ASPECT_COLOR_BIT, 6, VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT)) {
         LOG_ERROR("SceneDefaults: Failed creating the fallback cube map");
+        return false;
+    }
+    if (!allocator.createImage(1, 1, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, zeroArray, 1, VK_SAMPLE_COUNT_1_BIT,
+                               VK_IMAGE_ASPECT_COLOR_BIT, 1, 0, VK_IMAGE_VIEW_TYPE_2D_ARRAY)) {
+        LOG_ERROR("SceneDefaults: Failed creating the fallback 2D array");
         return false;
     }
 
@@ -102,6 +110,7 @@ void SceneDefaults::cleanup(SceneVkDevice& device, SceneVkAllocator& allocator) 
     allocator.destroyImage(flatNormal);
     allocator.destroyImage(black);
     allocator.destroyImage(cube);
+    allocator.destroyImage(zeroArray);
     for (VkSampler* s : {&sampler, &cubeSampler}) {
         if (*s != VK_NULL_HANDLE) vkDestroySampler(dev, *s, nullptr);
         *s = VK_NULL_HANDLE;

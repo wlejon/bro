@@ -13,8 +13,10 @@
 // first use, so a new target format or sample count never rebuilds anything.
 
 #include "scene/mesh_node.h"
+#include "scene/shade_map.h"
 
 #include <bromath/aabb.h>
+#include "scene/vulkan/scene_vk_custom_shader.h"
 #include "scene/vulkan/scene_vk_pipeline.h"
 #include "scene/vulkan/scene_vk_target_format.h"
 
@@ -102,8 +104,11 @@ struct MeshDraw {
     bool hasBounds = false;      // world bounds, for the shadow tiles' and probe faces' culling
     bromath::AABB3 bounds;
     bromath::Vec3 center{0.0f, 0.0f, 0.0f};   // bounds centre (else the origin): probe selection
-    /// The lighting set of the reflection probe this draw samples, null for
-    /// the frame's own (PassReflectionProbe assigns it).
+    /// The tile shade map the draw samples (kShadeMap set), resolved from
+    /// its node's provider this frame.
+    ShadeMapBinding shade;
+    /// The draw's own lighting set — its shade map and/or reflection probe
+    /// (lightingSetFor) — null for the frame's.
     VkDescriptorSet lightingSet = VK_NULL_HANDLE;
 };
 
@@ -136,19 +141,18 @@ private:
     struct CustomProgram {
         bool failed = false;
         bool indirectFailed = false;
-        std::string vertexChunk;
-        std::string fragmentChunk;
+        CustomShaderInterface iface;
         VkShaderModule vs = VK_NULL_HANDLE;
         VkShaderModule fs = VK_NULL_HANDLE;
         VkShaderModule fsIndirect = VK_NULL_HANDLE;   // compiled on first use
-        std::vector<std::string> samplerNames;
-        std::vector<std::pair<std::string, uint32_t>> uniformOffsets;
-        uint32_t uboSize = 16;
         PipelineVariants pipelines;
     };
 
     template <typename Node>
     static void fillMaterial(const Node& node, MeshDraw& out);
+    /// kShadeMap when the node's shade map resolves this frame (into out.shade).
+    template <typename Node>
+    static uint32_t resolveShade(const Node& node, MeshDraw& out);
     CustomProgram* program(const CustomShaderState& cs, MeshKind kind);
     VkDescriptorSet customSet(SceneFrame& frame, uint32_t nodeId, const CustomShaderState& cs,
                               const CustomProgram& prog, std::vector<MeshNode::UserTexture>* textures);

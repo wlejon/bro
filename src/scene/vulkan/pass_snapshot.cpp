@@ -29,7 +29,7 @@ void PassDepthSnapshot::record(SceneFrame& frame) {
 }
 
 bool PassColorSnapshot::active(const SceneFrame& frame) const {
-    return frame.renderer.ssrEnabled();
+    return frame.ssr;
 }
 
 void PassColorSnapshot::declare(const SceneFrame& frame, PassIO& io) const {

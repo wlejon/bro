@@ -1,12 +1,11 @@
 #include "scene/vulkan/scene_vk_custom_shader.h"
 #include "scene/vulkan/scene_vk_shader_compiler.h"
 #include "scene/vulkan/scene_vk_pipeline.h"
-#include "util/log.h"
 
-#include <sstream>
-#include <regex>
 #include <algorithm>
 #include <cstring>
+#include <regex>
+#include <sstream>
 
 #include "mesh.vert.src.h"
 #include "mesh.frag.src.h"
@@ -19,14 +18,39 @@ namespace bro::scene::vk {
 
 namespace {
 
-std::string spliceChunk(const char* baseSrc, const std::string& chunk, const char* defineName) {
-    std::string s(baseSrc ? baseSrc : "");
+constexpr uint32_t kCustomSet = 4;
+// The engine's varyings take locations 0..6 (mesh.vert / mesh.frag).
+constexpr uint32_t kFirstVaryingLocation = 7;
+
+// The GL-era names a chunk may use, onto the Vulkan shaders' own. GL drew
+// camera-relative (vWorldPos and uModel had the eye subtracted); the Vulkan
+// shaders work in world space, so those two are rebased on the eye.
+constexpr const char* kFragmentAliases =
+    "#define uBaseColorTex texAlbedo\n"
+    "#define vWorldPos (inWorldPos - camera.eyePos.xyz)\n"
+    "#define vNormal inNormal\n"
+    "#define vUV inUV\n"
+    "#define vColor inColor\n"
+    "#define vCamDist length(inWorldPos - camera.eyePos.xyz)\n"
+    "#define vTangentW inTangent\n"
+    "#define vBitangentW inBitangent\n";
+constexpr const char* kVertexAliases =
+    "mat4 broCameraRelativeModel() { mat4 m = sceneModel(); m[3].xyz -= camera.eyePos.xyz; return m; }\n"
+    "#define uModel broCameraRelativeModel()\n"
+    "#define aPos inPos\n"
+    "#define aNormal inNormal\n"
+    "#define aUV inUV\n"
+    "#define aColor inColor\n"
+    "#define aTangent inTangent\n";
+
+// The marker line the chunk replaces, with `define` set for the hook.
+std::string splice(const char* base, const std::string& chunk, const char* define) {
+    std::string s(base ? base : "");
     if (chunk.empty()) return s;
     const char* marker = "//__USER_CHUNK__";
-    size_t pos = s.find(marker);
+    const size_t pos = s.find(marker);
     if (pos != std::string::npos) {
-        std::string inject = std::string("\n#define ") + defineName + " 1\n" + chunk + "\n";
-        s.replace(pos, std::strlen(marker), inject);
+        s.replace(pos, std::strlen(marker), std::string("\n#define ") + define + " 1\n" + chunk + "\n");
     }
     return s;
 }
@@ -40,205 +64,222 @@ std::string defineAfterVersion(std::string src, const char* name) {
     return src;
 }
 
-} // namespace
-
-std::string SceneVkCustomShader::preprocessUserGlsl(const std::string& chunk,
-                                                    uint32_t setIndex,
-                                                    std::vector<std::string>& outSamplerNames) {
-    if (chunk.empty()) return "";
-
-    std::istringstream stream(chunk);
-    std::string line;
-    std::string uniformMembers;
-    std::string samplerDecls;
-    std::string body;
-
-    static const std::regex uniformRegex(R"(^\s*uniform\s+([A-Za-z0-9_]+)\s+([A-Za-z0-9_]+)\s*;)");
-    static const std::regex uniformArrayRegex(R"(^\s*uniform\s+([A-Za-z0-9_]+)\s+([A-Za-z0-9_]+)\s*\[\s*([0-9]+)\s*\]\s*;)");
-
-    while (std::getline(stream, line)) {
-        std::smatch match;
-        if (std::regex_search(line, match, uniformRegex)) {
-            std::string type = match[1].str();
-            std::string name = match[2].str();
-            if (type.rfind("sampler", 0) == 0) {
-                auto it = std::find(outSamplerNames.begin(), outSamplerNames.end(), name);
-                uint32_t binding = 1;
-                if (it != outSamplerNames.end()) {
-                    binding = static_cast<uint32_t>(1 + std::distance(outSamplerNames.begin(), it));
-                } else {
-                    outSamplerNames.push_back(name);
-                    binding = static_cast<uint32_t>(outSamplerNames.size());
-                }
-                samplerDecls += "layout(set = " + std::to_string(setIndex) + ", binding = " +
-                                std::to_string(binding) + ") uniform " + type + " " + name + ";\n";
-            } else {
-                uniformMembers += "    " + type + " " + name + ";\n";
-            }
-        } else if (std::regex_search(line, match, uniformArrayRegex)) {
-            std::string type = match[1].str();
-            std::string name = match[2].str();
-            std::string count = match[3].str();
-            if (type.rfind("sampler", 0) == 0) {
-                auto it = std::find(outSamplerNames.begin(), outSamplerNames.end(), name);
-                uint32_t binding = 1;
-                if (it != outSamplerNames.end()) {
-                    binding = static_cast<uint32_t>(1 + std::distance(outSamplerNames.begin(), it));
-                } else {
-                    outSamplerNames.push_back(name);
-                    binding = static_cast<uint32_t>(outSamplerNames.size());
-                }
-                samplerDecls += "layout(set = " + std::to_string(setIndex) + ", binding = " +
-                                std::to_string(binding) + ") uniform " + type + " " + name + "[" + count + "];\n";
-            } else {
-                uniformMembers += "    " + type + " " + name + "[" + count + "];\n";
-            }
-        } else {
-            body += line + "\n";
-        }
-    }
-
-    std::string res;
-    if (!uniformMembers.empty()) {
-        res += "layout(set = " + std::to_string(setIndex) + ", binding = 0, std140) uniform UserUniforms {\n" +
-               uniformMembers +
-               "};\n";
-    }
-    res += samplerDecls;
-    res += body;
-    return res;
+bool isIntegerType(const std::string& type) {
+    return type == "int" || type == "uint" || type == "bool" || type.rfind("ivec", 0) == 0 ||
+           type.rfind("uvec", 0) == 0 || type.rfind("bvec", 0) == 0;
 }
 
-std::vector<std::pair<std::string, uint32_t>> SceneVkCustomShader::parseUniformOffsets(const std::string& chunk,
-                                                                                       uint32_t& outTotalSize) {
-    std::vector<std::pair<std::string, uint32_t>> offsets;
-    outTotalSize = 0;
-    if (chunk.empty()) return offsets;
+// std140 size and alignment of one non-array member (arrays round both to 16).
+void std140(const std::string& type, uint32_t& size, uint32_t& align) {
+    const char last = type.empty() ? '1' : type.back();
+    const bool vector = type.find("vec") != std::string::npos;
+    if (type == "mat2") { size = 32; align = 16; return; }
+    if (type == "mat3") { size = 48; align = 16; return; }
+    if (type == "mat4") { size = 64; align = 16; return; }
+    if (!vector) { size = 4; align = 4; return; }
+    const uint32_t n = static_cast<uint32_t>(last - '0');
+    size = 4 * n;
+    align = n == 2 ? 8 : 16;
+}
 
-    std::istringstream stream(chunk);
-    std::string line;
-    static const std::regex uniformRegex(R"(^\s*uniform\s+([A-Za-z0-9_]+)\s+([A-Za-z0-9_]+)\s*;)");
-
-    uint32_t curOffset = 0;
-    while (std::getline(stream, line)) {
-        std::smatch match;
-        if (std::regex_search(line, match, uniformRegex)) {
-            std::string type = match[1].str();
-            std::string name = match[2].str();
-            if (type.rfind("sampler", 0) == 0) continue;
-
-            uint32_t size = 4;
-            uint32_t align = 4;
-            if (type == "vec2" || type == "ivec2" || type == "uvec2" || type == "bvec2") {
-                size = 8; align = 8;
-            } else if (type == "vec3" || type == "ivec3" || type == "uvec3") {
-                size = 12; align = 16;
-            } else if (type == "vec4" || type == "ivec4" || type == "uvec4") {
-                size = 16; align = 16;
-            } else if (type == "mat3") {
-                size = 48; align = 16;
-            } else if (type == "mat4") {
-                size = 64; align = 16;
-            }
-
-            curOffset = (curOffset + align - 1) & ~(align - 1);
-            offsets.push_back({name, curOffset});
-            curOffset += size;
-        }
+const char* vertexBase(SceneRenderer::CustomShaderTarget target) {
+    switch (target) {
+    case SceneRenderer::CustomShaderTarget::Instanced: return kVkMeshInstancedVertSrc;
+    case SceneRenderer::CustomShaderTarget::Skinned: return kVkMeshSkinnedVertSrc;
+    default: return kVkMeshVertSrc;
     }
+}
 
-    outTotalSize = (curOffset + 15) & ~15;
-    if (outTotalSize == 0) outTotalSize = 16;
-    return offsets;
+}  // namespace
+
+bool CustomShaderInterface::declareUniform(const std::string& type, const std::string& declarator,
+                                           uint32_t& offset, std::string& err) {
+    static const std::regex declRe(R"(^\s*(\w+)\s*(\[\s*(\d+)\s*\])?\s*(=[\s\S]*)?$)");
+    std::smatch m;
+    if (!std::regex_match(declarator, m, declRe)) {
+        err = "custom shader: cannot parse the uniform declaration '" + declarator + "'";
+        return false;
+    }
+    const std::string name = m[1].str();
+    const bool array = m[2].matched;
+    if (type.rfind("sampler", 0) == 0) {
+        if ((type != "sampler2D" && type != "sampler2DArray") || array) {
+            err = "custom shader: only single sampler2D / sampler2DArray uniforms are supported ('" + name + "')";
+            return false;
+        }
+        if (std::none_of(samplers_.begin(), samplers_.end(), [&](const Sampler& x) { return x.name == name; })) {
+            if (samplers_.size() == kMaxSamplers) {
+                err = "custom shader: more than " + std::to_string(kMaxSamplers) + " samplers";
+                return false;
+            }
+            samplers_.push_back({name, type == "sampler2DArray"});
+        }
+        return true;
+    }
+    if (std::any_of(uniforms_.begin(), uniforms_.end(), [&](const Uniform& u) { return u.name == name; })) {
+        return true;   // declared by the other chunk too: one member
+    }
+    uint32_t size = 0, align = 0;
+    std140(type, size, align);
+    if (array) {
+        const uint32_t count = static_cast<uint32_t>(std::max(1, std::stoi(m[3].str())));
+        align = 16;
+        size = ((size + 15) & ~15u) * count;
+    }
+    offset = (offset + align - 1) & ~(align - 1);
+    uniforms_.push_back({type, name, offset, isIntegerType(type)});
+    uniformDecls_.push_back("    " + type + " " + name + (array ? m[2].str() : "") + ";\n");
+    offset += size;
+    return true;
+}
+
+bool CustomShaderInterface::scan(const std::string& chunk, bool vertex, std::string& body, uint32_t& offset,
+                                 std::string& err) {
+    static const std::regex uniformRe(R"(\buniform\s+(?:(?:highp|mediump|lowp)\s+)?(\w+)\s+([^;]+);)");
+    static const std::regex varyingRe(
+        R"(^\s*(?:(flat|smooth|noperspective)\s+)?(in|out)\s+(\w+)\s+(\w+)\s*(\[\s*\d+\s*\])?\s*;)");
+
+    std::istringstream lines(chunk);
+    std::string line;
+    while (std::getline(lines, line)) {
+        // Declarations are matched in the code, not in a trailing comment;
+        // each is cut from the line (the line stays, so error line numbers
+        // still name the user's lines).
+        const size_t comment = line.find("//");
+        std::string code = line.substr(0, comment);
+        const std::string tail = comment == std::string::npos ? std::string() : line.substr(comment);
+
+        std::string rest;
+        auto last = code.cbegin();
+        for (std::sregex_iterator it(code.begin(), code.end(), uniformRe), end; it != end; ++it) {
+            const std::smatch& m = *it;
+            rest.append(last, m[0].first);
+            last = m[0].second;
+            // A comma inside an initialiser (vec3(1, 2, 3)) is not a separator.
+            std::string pending;
+            int depth = 0;
+            for (char c : m[2].str()) {
+                if (c == '(') ++depth;
+                if (c == ')') --depth;
+                if (c == ',' && depth == 0) {
+                    if (!declareUniform(m[1].str(), pending, offset, err)) return false;
+                    pending.clear();
+                } else {
+                    pending += c;
+                }
+            }
+            if (!declareUniform(m[1].str(), pending, offset, err)) return false;
+        }
+        rest.append(last, code.cend());
+        code = rest;
+
+        std::smatch m;
+        if (std::regex_search(code, m, varyingRe)) {
+            const bool out = m[2].str() == "out";
+            // Only a vertex `out` / fragment `in` is a varying.
+            if (out == vertex) {
+                const std::string name = m[4].str();
+                auto it = std::find_if(varyings_.begin(), varyings_.end(),
+                                       [&](const Varying& v) { return v.name == name; });
+                if (vertex && it == varyings_.end()) {
+                    varyings_.push_back({m[1].str(), m[3].str(), name, m[5].str(),
+                                         kFirstVaryingLocation + static_cast<uint32_t>(varyings_.size())});
+                } else if (!vertex && it == varyings_.end()) {
+                    err = "custom shader: fragment input '" + name + "' has no matching vertex output";
+                    return false;
+                }
+                code = m.prefix().str() + m.suffix().str();
+            }
+        }
+        body += code;
+        body += tail;
+        body += '\n';
+    }
+    return true;
+}
+
+bool CustomShaderInterface::parse(const std::string& vertexChunk, const std::string& fragmentChunk,
+                                  std::string& err) {
+    *this = CustomShaderInterface{};
+    hasVertex_ = !vertexChunk.empty();
+    hasFragment_ = !fragmentChunk.empty();
+    uint32_t offset = 0;
+    if (!scan(vertexChunk, true, vertexBody_, offset, err) || !scan(fragmentChunk, false, fragmentBody_, offset, err))
+        return false;
+    uboSize_ = std::max<uint32_t>(16, (offset + 15) & ~15u);
+    return true;
+}
+
+std::string CustomShaderInterface::declarations(bool vertex) const {
+    std::string s = vertex ? kVertexAliases : kFragmentAliases;
+    if (!uniformDecls_.empty()) {
+        s += "layout(set = " + std::to_string(kCustomSet) + ", binding = 0, std140) uniform UserUniforms {\n";
+        for (const std::string& d : uniformDecls_) s += d;
+        s += "};\n";
+    }
+    for (size_t i = 0; i < samplers_.size(); ++i) {
+        s += "layout(set = " + std::to_string(kCustomSet) + ", binding = " + std::to_string(i + 1) + ") uniform " +
+             (samplers_[i].array ? "sampler2DArray " : "sampler2D ") + samplers_[i].name + ";\n";
+    }
+    for (const Varying& v : varyings_) {
+        s += "layout(location = " + std::to_string(v.location) + ") ";
+        if (!v.qualifier.empty()) s += v.qualifier + " ";
+        s += std::string(vertex ? "out " : "in ") + v.type + " " + v.name + v.array + ";\n";
+    }
+    // The chunk's own line numbers in compile errors.
+    s += "#line 1\n";
+    return s;
+}
+
+std::string CustomShaderInterface::vertexSource() const {
+    return hasVertex_ ? declarations(true) + vertexBody_ : std::string();
+}
+
+std::string CustomShaderInterface::fragmentSource() const {
+    return hasFragment_ ? declarations(false) + fragmentBody_ : std::string();
 }
 
 bool SceneVkCustomShader::validateCustomShader(SceneRenderer::CustomShaderTarget target,
                                                const std::string& vertexChunk,
                                                const std::string& fragmentChunk,
                                                std::string& errOut) {
+    CustomShaderInterface iface;
+    if (!iface.parse(vertexChunk, fragmentChunk, errOut)) return false;
     if (!vertexChunk.empty()) {
-        std::vector<std::string> samplers;
-        std::string pre = preprocessUserGlsl(vertexChunk, 4, samplers);
-        std::string vsSrc;
-        if (target == SceneRenderer::CustomShaderTarget::Instanced) {
-            vsSrc = spliceChunk(kVkMeshInstancedVertSrc, pre, "CUSTOM_VERTEX");
-        } else if (target == SceneRenderer::CustomShaderTarget::Skinned) {
-            vsSrc = spliceChunk(kVkMeshSkinnedVertSrc, pre, "CUSTOM_VERTEX");
-        } else {
-            vsSrc = spliceChunk(kVkMeshVertSrc, pre, "CUSTOM_VERTEX");
-        }
-        auto spirv = SceneVkShaderCompiler::compileGlsl(vsSrc, VK_SHADER_STAGE_VERTEX_BIT, &errOut);
-        if (spirv.empty()) {
-            return false;
-        }
+        const std::string vs = splice(vertexBase(target), iface.vertexSource(), "CUSTOM_VERTEX");
+        if (SceneVkShaderCompiler::compileGlsl(vs, VK_SHADER_STAGE_VERTEX_BIT, &errOut).empty()) return false;
     }
     if (!fragmentChunk.empty()) {
-        std::vector<std::string> samplers;
-        std::string pre = preprocessUserGlsl(fragmentChunk, 4, samplers);
-        std::string fsSrc = spliceChunk(kVkMeshFragSrc, pre, "CUSTOM_FRAGMENT");
-        auto spirv = SceneVkShaderCompiler::compileGlsl(fsSrc, VK_SHADER_STAGE_FRAGMENT_BIT, &errOut);
-        if (spirv.empty()) {
-            return false;
-        }
+        const std::string fs = splice(kVkMeshFragSrc, iface.fragmentSource(), "CUSTOM_FRAGMENT");
+        if (SceneVkShaderCompiler::compileGlsl(fs, VK_SHADER_STAGE_FRAGMENT_BIT, &errOut).empty()) return false;
     }
     return true;
 }
 
 bool SceneVkCustomShader::compileCustomShaderModules(VkDevice device,
                                                      SceneRenderer::CustomShaderTarget target,
-                                                     const std::string& vertexChunk,
-                                                     const std::string& fragmentChunk,
+                                                     const CustomShaderInterface& iface,
                                                      VkShaderModule& outVs,
                                                      VkShaderModule& outFs,
                                                      bool indirectOutput,
-                                                     std::vector<std::string>& outSamplerNames,
                                                      std::string& errOut) {
-    // Vertex stage
-    std::string vsSrc;
-    if (!vertexChunk.empty()) {
-        std::string preVs = preprocessUserGlsl(vertexChunk, 4, outSamplerNames);
-        if (target == SceneRenderer::CustomShaderTarget::Instanced) {
-            vsSrc = spliceChunk(kVkMeshInstancedVertSrc, preVs, "CUSTOM_VERTEX");
-        } else if (target == SceneRenderer::CustomShaderTarget::Skinned) {
-            vsSrc = spliceChunk(kVkMeshSkinnedVertSrc, preVs, "CUSTOM_VERTEX");
-        } else {
-            vsSrc = spliceChunk(kVkMeshVertSrc, preVs, "CUSTOM_VERTEX");
-        }
-    } else {
-        if (target == SceneRenderer::CustomShaderTarget::Instanced) {
-            vsSrc = kVkMeshInstancedVertSrc;
-        } else if (target == SceneRenderer::CustomShaderTarget::Skinned) {
-            vsSrc = kVkMeshSkinnedVertSrc;
-        } else {
-            vsSrc = kVkMeshVertSrc;
-        }
-    }
-
-    auto vsSpirv = SceneVkShaderCompiler::compileGlsl(vsSrc, VK_SHADER_STAGE_VERTEX_BIT, &errOut);
-    if (vsSpirv.empty()) {
-        return false;
-    }
-
-    // Fragment stage
-    std::string fsSrc;
-    if (!fragmentChunk.empty()) {
-        std::string preFs = preprocessUserGlsl(fragmentChunk, 4, outSamplerNames);
-        fsSrc = spliceChunk(kVkMeshFragSrc, preFs, "CUSTOM_FRAGMENT");
-    } else {
-        fsSrc = kVkMeshFragSrc;
-    }
+    // A custom varying needs the vertex stage to write it even when only the
+    // fragment chunk reads it, so both stages always splice their chunk.
+    const std::string vsSrc = splice(vertexBase(target), iface.vertexSource(), "CUSTOM_VERTEX");
+    std::string fsSrc = splice(kVkMeshFragSrc, iface.fragmentSource(), "CUSTOM_FRAGMENT");
     if (indirectOutput) fsSrc = defineAfterVersion(std::move(fsSrc), "SCENE_INDIRECT_OUTPUT");
 
-    auto fsSpirv = SceneVkShaderCompiler::compileGlsl(fsSrc, VK_SHADER_STAGE_FRAGMENT_BIT, &errOut);
-    if (fsSpirv.empty()) {
-        return false;
-    }
+    const auto vsSpirv = SceneVkShaderCompiler::compileGlsl(vsSrc, VK_SHADER_STAGE_VERTEX_BIT, &errOut);
+    if (vsSpirv.empty()) return false;
+    const auto fsSpirv = SceneVkShaderCompiler::compileGlsl(fsSrc, VK_SHADER_STAGE_FRAGMENT_BIT, &errOut);
+    if (fsSpirv.empty()) return false;
 
     outVs = SceneVkShaderModule::create(device, vsSpirv);
     outFs = SceneVkShaderModule::create(device, fsSpirv);
     if (outVs == VK_NULL_HANDLE || outFs == VK_NULL_HANDLE) {
-        if (outVs != VK_NULL_HANDLE) { SceneVkShaderModule::destroy(device, outVs); outVs = VK_NULL_HANDLE; }
-        if (outFs != VK_NULL_HANDLE) { SceneVkShaderModule::destroy(device, outFs); outFs = VK_NULL_HANDLE; }
+        if (outVs != VK_NULL_HANDLE) SceneVkShaderModule::destroy(device, outVs);
+        if (outFs != VK_NULL_HANDLE) SceneVkShaderModule::destroy(device, outFs);
+        outVs = outFs = VK_NULL_HANDLE;
         errOut = "Failed to create VkShaderModule";
         return false;
     }
@@ -247,18 +288,16 @@ bool SceneVkCustomShader::compileCustomShaderModules(VkDevice device,
 
 bool SceneVkCustomShader::compileCustomShadowShaderModule(VkDevice device,
                                                           bool isSkinned,
-                                                          const std::string& vertexChunk,
+                                                          const CustomShaderInterface& iface,
                                                           VkShaderModule& outVs,
                                                           std::string& errOut) {
-    if (vertexChunk.empty()) return false;
-    std::vector<std::string> samplers;
-    std::string preVs = preprocessUserGlsl(vertexChunk, 4, samplers);
-    std::string vsSrc = spliceChunk(isSkinned ? kVkShadowSkinnedVertSrc : kVkShadowVertSrc,
-                                    preVs, "CUSTOM_VERTEX");
-    auto spirv = SceneVkShaderCompiler::compileGlsl(vsSrc, VK_SHADER_STAGE_VERTEX_BIT, &errOut);
-    if (spirv.empty()) {
-        return false;
-    }
+    const std::string chunk = iface.vertexSource();
+    if (chunk.empty()) return false;
+    // CUSTOM_CASTER declares the inputs only a custom caster's pipeline feeds.
+    const std::string vsSrc = defineAfterVersion(
+        splice(isSkinned ? kVkShadowSkinnedVertSrc : kVkShadowVertSrc, chunk, "CUSTOM_VERTEX"), "CUSTOM_CASTER");
+    const auto spirv = SceneVkShaderCompiler::compileGlsl(vsSrc, VK_SHADER_STAGE_VERTEX_BIT, &errOut);
+    if (spirv.empty()) return false;
     outVs = SceneVkShaderModule::create(device, spirv);
     return outVs != VK_NULL_HANDLE;
 }

@@ -8,6 +8,32 @@
 
 namespace bro::webgl::vk {
 
+namespace {
+
+// A fragment stage sees GL's window space through the FragmentPush mapping
+// (webgl_vk_types.h): gl_FragCoord.y, dFdy and gl_PointCoord.y rebuilt from
+// Vulkan's. A macro is not re-expanded inside its own replacement, so each one
+// reads the built-in it shadows.
+std::string fragmentWindowSpace(const ParsedShader& fs) {
+    std::string out = "layout(push_constant) uniform BroFragmentPush { float yOffset; float yScale; } bro_push;\n";
+    if (fs.hasFragCoord) {
+        out += "vec4 bro_fragCoord() {\n"
+               "    return vec4(gl_FragCoord.x, bro_push.yOffset + bro_push.yScale * gl_FragCoord.y, gl_FragCoord.zw);\n"
+               "}\n"
+               "#define gl_FragCoord bro_fragCoord()\n";
+    }
+    if (fs.hasPointCoord) {
+        out += "vec2 bro_pointCoord() {\n"
+               "    return vec2(gl_PointCoord.x, 0.5 - bro_push.yScale * (gl_PointCoord.y - 0.5));\n"
+               "}\n"
+               "#define gl_PointCoord bro_pointCoord()\n";
+    }
+    out += "#define dFdy(p) (bro_push.yScale * dFdy(p))\n";
+    return out;
+}
+
+} // namespace
+
 uint32_t WebGLVkShaderParser::alignTo(uint32_t offset, uint32_t alignment) {
     return (offset + alignment - 1) & ~(alignment - 1);
 }
@@ -426,6 +452,7 @@ std::string WebGLVkShaderParser::generateStandaloneVulkanGLSL(const ParsedShader
             out << vSource;
         }
     } else {
+        out << fragmentWindowSpace(parsed);
         out << parsed.cleanedSource;
     }
     return out.str();
@@ -748,6 +775,7 @@ ProgramLinkResult WebGLVkShaderParser::linkAndGenerateVulkanGLSL(
         fout << samplerDecls;
         fout << uboDecls;
         fout << defaultBlock;
+        fout << fragmentWindowSpace(fs);
         fout << fs.cleanedSource;
         res.fsVulkanSource = fout.str();
     }
