@@ -70,7 +70,10 @@ if (!bro.terminal || !bro.terminal.available) {
     assert(pct(stepMs, 0.95) < 16.7, 'p95 step ' + pct(stepMs, 0.95).toFixed(2) + ' ms within a 60 Hz frame');
     assert(pct(renderMs, 0.95) < pct(idleRender, 0.95) * 1.5 + 4,
            'p95 render ' + pct(renderMs, 0.95).toFixed(2) + ' ms close to idle ' + pct(idleRender, 0.95).toFixed(2));
-    assert(frames > 10, 'frames kept coming during the flood (' + frames + ')');
+    // Frames kept coming: at least 10 per second of flood (a fast PTY, as on
+    // Linux, finishes 24 MB in a fraction of a second, so no fixed count).
+    assert(frames >= Math.max(3, Math.floor(secs * 10)),
+           'frames kept coming during the flood (' + frames + ' in ' + secs.toFixed(2) + ' s)');
 
     // Exactly the last lines, nothing lost: the line numbers the byte count implies.
     let sent = 0, n = 0;

@@ -325,12 +325,15 @@ bool TermSession::parseSlice(Clock::time_point now, bool& published) {
     // frame it has (acquireFrame), so the final state is never left behind.
     published = maybePublish(Clock::now(), /*onlyIfConsumed=*/true);
 
+    // Exited = all output parsed AND the status collected. On POSIX the pty's
+    // EOF (every slave descriptor closed) can come before bropty's waiter has
+    // the child's status; the PTY's wakeup fires again when it does.
     if (pty_ && !pending && !exited() && pty_->eof()) {
         if (auto code = pty_->exit_code()) {
             exitCode_.store(*code, std::memory_order_relaxed);
             haveExitCode_.store(true, std::memory_order_release);
+            exited_.store(true, std::memory_order_release);
         }
-        exited_.store(true, std::memory_order_release);
     }
     return pending;
 }

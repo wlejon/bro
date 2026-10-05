@@ -60,7 +60,8 @@ async function run() {
         const green = await until(() => {
             img = presentedFrame();
             const p = img ? px(img, ...cell(1, 1)) : [0, 0, 0];
-            return p[1] > 150 && p[0] < 80 && p[2] < 80;
+            // The palette's green is (13,188,121): green-dominant, not pure.
+            return p[1] > 150 && p[1] > p[0] + 60 && p[1] > p[2] + 40;
         }, 300);
         assert(green, 'a child\'s output is presented: got (' + (img ? px(img, ...cell(1, 1)) : 'none') + ')');
         await until(() => !t.running, 300);
