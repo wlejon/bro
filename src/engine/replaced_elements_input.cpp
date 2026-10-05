@@ -79,7 +79,8 @@ static dom::Element* clickFocusTarget(dom::Element* target) {
         }
         if (tag == "TEXTAREA" || tag == "textarea" ||
             tag == "SELECT"   || tag == "select"   ||
-            tag == "BUTTON"   || tag == "button")
+            tag == "BUTTON"   || tag == "button"   ||
+            tag == "TERMINAL" || tag == "terminal")
             return e;
         if ((tag == "A" || tag == "a" || tag == "AREA" || tag == "area") &&
             e->hasAttribute("href"))
@@ -482,6 +483,11 @@ void focusNewControl(
         // windowed mode. IME preedit rendering inside contenteditable is
         // not wired (form controls only).
         safeStartTextInput(ctx.window);
+    } else if (target && clickFocusTarget(target) && clickFocusTarget(target)->terminalControl()) {
+        // A press anywhere in a <terminal> focuses it, and it takes typing
+        // and IME composition (engine/input_terminal.cpp).
+        safeStartTextInput(ctx.window);
+        *ctx.dirtyFlag = true;
     } else {
         safeStopTextInput(ctx.window);
     }

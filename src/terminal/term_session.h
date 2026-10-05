@@ -109,6 +109,9 @@ public:
     [[nodiscard]] bropty::CursorState cursor() const;
     [[nodiscard]] bropty::Modes modes() const;
     [[nodiscard]] std::string title() const;
+    [[nodiscard]] uint32_t kittyKeyboardFlags() const;
+    // The selected text ("" when nothing is selected).
+    [[nodiscard]] std::string selectionText() const;
     // Selection over the view (absolute rows), for painting tests until T2's
     // mouse selection; an empty range clears it.
     void select(bropty::RowRange range);
@@ -153,6 +156,7 @@ private:
     std::chrono::steady_clock::time_point syncSince_{};
     bool syncTimedOut_ = false;
     int esuMatch_ = 0;  // bytes of "\x1b[?2026l" matched at the end of the last chunk
+    int cellPxW_ = 0, cellPxH_ = 0;  // the cell pixel size last given (mu_)
 
     std::atomic<int> cols_;
     std::atomic<int> rows_;

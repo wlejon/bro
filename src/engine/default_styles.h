@@ -168,6 +168,17 @@ select {
     border: 1px solid #767676;
 }
 
+/* The native terminal (layout/el_terminal.h): a block of cells in a
+   monospace face. The colours match its default palette, so padding and the
+   cell area read as one surface. */
+terminal {
+    display: block;
+    font-family: monospace;
+    background-color: #0c0c0c;
+    color: #cccccc;
+    cursor: text;
+}
+
 input[type="checkbox"] {
     box-sizing: border-box;
     width: 13px;

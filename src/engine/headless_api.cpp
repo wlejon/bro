@@ -50,6 +50,7 @@ namespace bro::engine {
 
 void Engine::flush() {
     pumpVideoEvents();
+    pumpTerminals();
     pumpWebGLContextEvents();
 
     if (document_) {

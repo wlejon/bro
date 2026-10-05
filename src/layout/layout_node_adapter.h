@@ -6,6 +6,7 @@
 #include "layout/el_select.h"
 #include "layout/el_svg.h"
 #include "layout/el_video.h"
+#include "layout/el_terminal.h"
 #include "dom/element.h"
 #include "dom/text_node.h"
 #include "dom/node.h"
@@ -137,6 +138,10 @@ public:
             return true;
         }
         if (auto* ctrl = elem_->videoControl()) {
+            ctrl->getContentSize(w, h);
+            return true;
+        }
+        if (auto* ctrl = elem_->terminalControl()) {
             ctrl->getContentSize(w, h);
             return true;
         }
@@ -424,6 +429,8 @@ private:
             // <iframe> hosts an isolated sub-document rendered into its box; its
             // markup children (fallback content) are not laid out by the host.
             if (tag == "iframe" || tag == "IFRAME") return;
+            // <terminal> paints its own screen; markup inside it is not content.
+            if (tag == "terminal" || tag == "TERMINAL") return;
         }
 
         // If element has shadow DOM, use composed children (top-level slot replacement)

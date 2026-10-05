@@ -507,6 +507,19 @@ private:
     void dispatchPointerAlias(const char* type, dom::Element* target,
                               const dom::MouseEvent& src);
     void pumpVideoEvents();
+
+    // <terminal> (input_terminal.cpp). The focused terminal takes keys,
+    // text, IME composition and paste before the page's own handling; each
+    // returns true when it consumed the event. pumpTerminals runs once per
+    // frame (and per headless step) on the main thread.
+    layout::ElTerminal* focusedTerminal(dom::Element** elOut = nullptr);
+    bool terminalKeyDown(int keycode, int scancode, int mod, bool repeat);
+    bool terminalKeyUp(int keycode, int scancode, int mod, bool repeat);
+    bool terminalTextInput(const std::string& text);
+    bool terminalTextEditing(const std::string& text);
+    bool terminalPaste(const std::string& text);
+    void pumpTerminals();
+
     float overlayMouseY(float y) const;
     void applyKeyResult(dom::Element* el, const layout::KeyHandleResult& r);
     void dispatchInputEvent(dom::Element* el, const std::string& data = "",

@@ -317,6 +317,7 @@ void Engine::run() {
         }
 
         pumpVideoEvents();
+        pumpTerminals();
         pumpWebGLContextEvents();
 
         framePresenter_->consumeIfReady();

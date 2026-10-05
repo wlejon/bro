@@ -12,6 +12,7 @@
 #include "layout/control_text.h"
 #include "layout/el_input.h"
 #include "layout/el_textarea.h"
+#include "layout/el_terminal.h"
 #include "layout/key_handle_result.h"
 #include "layout/selection_geometry.h"
 #include "layout/skia_text_metrics.h"
@@ -223,6 +224,8 @@ void Engine::updateTextInputArea() {
         have = input->caretRect(x, y, w, h);
     } else if (auto* ta = getElTextarea(activeEl); ta && ta->isFocused()) {
         have = ta->caretRect(x, y, w, h);
+    } else if (auto* term = focusedTerminal()) {
+        have = term->caretRect(x, y, w, h);
     } else if (textMetrics_) {
         auto* sel = document_->selection();
         auto* range = (sel && sel->rangeCount() > 0) ? sel->getRangeAt(0)
@@ -265,6 +268,7 @@ void Engine::handleTextEditing(const std::string& text, int start,
                                int /*length*/) {
     if (!document_) return;
     if (overlayMgr_.hasActive()) return;
+    if (terminalTextEditing(text)) return;
 
     auto* activeEl = document_->activeElement();
     auto* input = getElInput(activeEl);
@@ -373,6 +377,7 @@ void Engine::handleTextInput(const std::string& text) {
         uiDirty_ = true;
         return;
     }
+    if (terminalTextInput(text)) return;
 
     auto* activeEl = document_->activeElement();
     layout::KeyHandleResult result;
@@ -425,6 +430,7 @@ void Engine::handleTextInput(const std::string& text) {
 
 void Engine::simulatePaste(const std::string& text) {
     if (!document_) return;
+    if (terminalPaste(text)) return;
 
     auto* activeEl = document_->activeElement();
     dom::Element* target = activeEl ? activeEl : document_->body();

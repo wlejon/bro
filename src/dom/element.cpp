@@ -10,6 +10,7 @@
 #include "layout/el_select.h"
 #include "layout/el_svg.h"
 #include "layout/el_video.h"
+#include "layout/el_terminal.h"
 #include "layout/element_ref_adapter.h"
 #include "css/selector.h"
 #include "util/log.h"
@@ -1006,6 +1007,11 @@ void Element::setSvgControl(std::unique_ptr<layout::ElSvg> ctrl) {
 void Element::setVideoControl(std::unique_ptr<layout::ElVideo> ctrl) {
     videoControl_ = std::move(ctrl);
     if (videoControl_) noteReplacedControlInstalled();
+}
+
+void Element::setTerminalControl(std::unique_ptr<layout::ElTerminal> ctrl) {
+    terminalControl_ = std::move(ctrl);
+    if (terminalControl_) noteReplacedControlInstalled();
 }
 
 } // namespace bro::dom

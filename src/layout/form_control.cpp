@@ -202,7 +202,7 @@ int tabIndex(const dom::Element* el) {
     }
     static const char* const kFocusable[] = {
         "a", "area", "button", "input", "select", "textarea", "iframe",
-        "summary", "audio", "video",
+        "summary", "audio", "video", "terminal",
     };
     std::string t = el->tagName();
     for (char& c : t)

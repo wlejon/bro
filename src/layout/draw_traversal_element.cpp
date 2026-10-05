@@ -9,6 +9,7 @@
 #include "layout/el_select.h"
 #include "layout/el_svg.h"
 #include "layout/el_video.h"
+#include "layout/el_terminal.h"
 #include "layout/formatting_context.h"
 #include "layout/line_clamp.h"
 #include "canvas/canvas_scene.h"
@@ -651,6 +652,9 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
             if (auto ofIt = style.find("object-fit"); ofIt != style.end() && !ofIt->second.empty())
                 videoFit = ofIt->second;
             videoCtrl->draw(renderer_, elem, box, offsetX, offsetY, videoFit);
+        }
+        if (auto* termCtrl = elem->terminalControl()) {
+            termCtrl->draw(renderer_, box, offsetX, offsetY);
         }
         // <img> replaced content. Layout already sized the box via
         // intrinsicSize() in layout_node_adapter; here we paint the raster

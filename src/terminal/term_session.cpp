@@ -159,7 +159,13 @@ bool TermSession::resize(int cols, int rows, int cellPxW, int cellPxH) {
             session_.resize(cols, rows);
             changed = true;
         }
-        if (cellPxW > 0 && cellPxH > 0) session_.set_cell_pixel_size(cellPxW, cellPxH);
+        // Only on a change: the pixel size reaches the PTY's window size too,
+        // and the element calls this every frame.
+        if (cellPxW > 0 && cellPxH > 0 && (cellPxW != cellPxW_ || cellPxH != cellPxH_)) {
+            session_.set_cell_pixel_size(cellPxW, cellPxH);
+            cellPxW_ = cellPxW;
+            cellPxH_ = cellPxH;
+        }
         cols_.store(t.cols(), std::memory_order_relaxed);
         rows_.store(t.rows(), std::memory_order_relaxed);
     }
@@ -207,6 +213,17 @@ bropty::Modes TermSession::modes() const {
 std::string TermSession::title() const {
     std::lock_guard<std::mutex> g(mu_);
     return session_.terminal().title();
+}
+
+uint32_t TermSession::kittyKeyboardFlags() const {
+    std::lock_guard<std::mutex> g(mu_);
+    return session_.terminal().kitty_keyboard_flags();
+}
+
+std::string TermSession::selectionText() const {
+    std::lock_guard<std::mutex> g(mu_);
+    const bropty::Selection& sel = view_->selection();
+    return sel.active() ? sel.text() : std::string();
 }
 
 void TermSession::select(bropty::RowRange range) {

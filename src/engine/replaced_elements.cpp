@@ -16,6 +16,7 @@
 #include "layout/el_textarea.h"
 #include "layout/el_svg.h"
 #include "layout/el_video.h"
+#include "layout/el_terminal.h"
 #include "platform/sdl_window.h"
 #include "svg/svg_renderer.h"
 #include "util/object_url.h"
@@ -207,6 +208,10 @@ void ensureReplacedElements(dom::Element* elem, render::Renderer* renderer,
         std::string src = elem->getAttribute("src");
         if (!src.empty()) ctrl->load(src);
         elem->setVideoControl(std::move(ctrl));
+    } else if ((tag == "TERMINAL" || tag == "terminal") && !elem->terminalControl()) {
+        auto ctrl = std::make_unique<layout::ElTerminal>(renderer);
+        ctrl->setElement(elem);
+        elem->setTerminalControl(std::move(ctrl));
     }
 
     // Recurse into children

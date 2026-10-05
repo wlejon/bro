@@ -95,7 +95,7 @@ void Engine::handleProgrammaticFocus(dom::Document* doc, dom::Element* oldEl,
                             : newEl->textContent();
         newTa->setCursorPos(static_cast<int>(v.size()));
         safeStartTextInput(window_.get());
-    } else if (newEl && inEditableHost(newEl)) {
+    } else if (newEl && (inEditableHost(newEl) || newEl->terminalControl())) {
         safeStartTextInput(window_.get());
     } else {
         safeStopTextInput(window_.get());
@@ -158,6 +158,10 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
         }
         return;
     }
+
+    // A focused <terminal> takes its keys before the page's own handling
+    // and the engine's hotkeys (input_terminal.cpp).
+    if (terminalKeyDown(keycode, scancode, mod, repeat)) return;
 
     if (handleGlobalHotkey(keycode, mod, repeat)) return;
 
@@ -463,6 +467,11 @@ void Engine::handleKeyUp(int keycode, int scancode, int mod, bool repeat) {
     }
     if (!document_) return;
 
+    if (terminalKeyUp(keycode, scancode, mod, repeat)) {
+        dispatchActionEventForKey(sdlKeycodeToWebKey(keycode, mod), "up", 0.0f);
+        return;
+    }
+
     auto evt = makeKeyboardEvent("keyup", keycode, scancode, mod, repeat);
     evt.setIsComposing(compositionActive());
 
@@ -489,7 +498,8 @@ void Engine::advanceFocus(bool reverse) {
             auto* el = static_cast<dom::Element*>(node);
             std::string tag = el->tagName();
             for (auto& c : tag) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            bool isFocusable = (tag == "input" || tag == "textarea" || tag == "select" || tag == "button");
+            bool isFocusable = (tag == "input" || tag == "textarea" || tag == "select" || tag == "button" ||
+                                tag == "terminal");
             if (isFocusable) {
                 auto* inp = getElInput(el);
                 if (inp && inp->inputType(el) == layout::ElInput::InputType::Hidden)
@@ -559,6 +569,8 @@ void Engine::advanceFocus(bool reverse) {
         newTa->setFocused(true);
         std::string v = nextEl->getAttribute("value");
         newTa->setCursorPos(static_cast<int>(v.size()));
+        safeStartTextInput(window_.get());
+    } else if (nextEl->terminalControl()) {
         safeStartTextInput(window_.get());
     } else {
         safeStopTextInput(window_.get());
