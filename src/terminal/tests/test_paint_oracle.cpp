@@ -13,9 +13,12 @@
 #include "tests.h"
 
 #include <bropty/cell.h>
+#include <bropty/search_regex.h>
 #include <bropty/unicode.h>
 
 #include <algorithm>
+#include <cctype>
+#include <cmath>
 #include <cstdlib>
 #include <map>
 #include <optional>
@@ -85,7 +88,9 @@ using Grid = std::vector<std::vector<CellLook>>;
 
 // ---- expectation: the Frame ------------------------------------------------
 
-Grid expected(const bropty::Frame& f, const std::set<std::pair<int, int>>& selected) {
+// `highlighted`: the overlay each highlighted cell carries (selection, match).
+Grid expected(const bropty::Frame& f, const std::map<std::pair<int, int>, bropty::HighlightKind>& highlighted,
+              bool boldIsBright = false) {
     const bropty::Palette& pal = *f.palette;
     const bool rv = f.modes.reverse_video;
     const bropty::Rgb defFg = rv ? pal.background : pal.foreground;
@@ -98,7 +103,11 @@ Grid expected(const bropty::Frame& f, const std::set<std::pair<int, int>>& selec
             const bool tail = v[x].wide() == bropty::Wide::SpacerTail && x > 0;
             const int sx = tail ? x - 1 : x;  // the cell whose style paints here
             const bropty::Style& st = v.style(sx);
-            bropty::Rgb fg = st.fg.is_default() ? defFg : pal.resolve_fg(st.fg);
+            bropty::Color fgc = st.fg;
+            // xterm's boldColors: bold in one of the eight base colours is its bright twin.
+            if (boldIsBright && st.has(bropty::Attr_Bold) && fgc.is_indexed() && fgc.index() < 8)
+                fgc = bropty::Color::indexed(uint8_t(fgc.index() + 8));
+            bropty::Rgb fg = fgc.is_default() ? defFg : pal.resolve_fg(fgc);
             bropty::Rgb bg = st.bg.is_default() ? defBg : pal.resolve_bg(st.bg);
             if (st.has(bropty::Attr_Inverse)) std::swap(fg, bg);
             if (st.has(bropty::Attr_Dim)) {
@@ -109,7 +118,7 @@ Grid expected(const bropty::Frame& f, const std::set<std::pair<int, int>>& selec
 
             c.fills.push_back(rgbColor(defBg));
             if (!(bg == defBg)) c.fills.push_back(rgbColor(bg));
-            if (selected.count({y, x})) c.fills.push_back(highlightColor(bropty::HighlightKind::Selection));
+            if (auto h = highlighted.find({y, x}); h != highlighted.end()) c.fills.push_back(highlightColor(h->second));
 
             const char32_t cp = v[sx].cp();
             if (!tail && cp != 0 && cp != U' ' && cp != kImageCell && !hidden) {
@@ -309,7 +318,20 @@ struct Case {
     std::string bytes;
     int cols = 40;
     int rows = 6;
+    bool boldIsBright = false;
+    std::optional<bropty::Palette> palette;  // set as the base palette after the bytes
 };
+
+// A theme the way the element sets one from CSS or JS: every base colour and
+// the defaults moved off the standard palette.
+bropty::Palette themedPalette() {
+    bropty::Palette p = bropty::Palette::standard();
+    for (int i = 0; i < 16; ++i) p.colors[size_t(i)] = bropty::Rgb{uint8_t(20 + i * 13), uint8_t(200 - i * 9), uint8_t(i * 15)};
+    p.colors[200] = bropty::Rgb{1, 2, 3};
+    p.foreground = bropty::Rgb{230, 220, 200};
+    p.background = bropty::Rgb{40, 30, 60};
+    return p;
+}
 
 std::vector<Case> corpus() {
     std::vector<Case> c;
@@ -358,20 +380,157 @@ std::vector<Case> corpus() {
     c.push_back({"reverse video",
                  "\x1b[?5hdefault \x1b[31mred\x1b[0m \x1b[44mbluebg\x1b[0m \x1b[7minv\x1b[0m"});
     c.push_back({"scrolled", "1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7\r\n\x1b[42m8 green\x1b[0m\r\n9", 20, 4});
+    const std::string themed =
+        "\x1b[31mred\x1b[0m \x1b[1;32mboldgreen\x1b[0m \x1b[1;38;5;9mbold9\x1b[0m\r\n"
+        "\x1b[1;34;43mbold blue on yellow\x1b[0m \x1b[38;5;200mx200\x1b[0m\r\n"
+        "\x1b[1;7;35minv bold\x1b[0m \x1b[1;2;36mdim bold\x1b[0m \x1b[1;38;2;1;2;3mrgb\x1b[0m plain";
+    c.push_back({"palette", themed, 40, 4, false, themedPalette()});
+    c.push_back({"bold is bright", themed, 40, 4, true});
+    c.push_back({"bold is bright, palette", themed, 40, 4, true, themedPalette()});
     return c;
 }
 
 void runCase(const Case& c) {
     Fixture fx(c.cols, c.rows, c.bytes);
+    if (c.palette) fx.term->set_base_palette(*c.palette);
     auto frame = fx.frame();
+    if (c.palette) {
+        CHECK_MSG(frame->palette->colors[1] == c.palette->colors[1] &&
+                      frame->palette->background == c.palette->background,
+                  std::string(c.name) + ": the frame carries the base palette");
+    }
     CaptureRenderer r;
     TermPainter painter;
     PaintOptions opts;
     opts.font = fixedFont();
     opts.focused = false;  // the cursor is a stroked rect, out of the cell decoding's way
+    opts.colors.boldIsBright = c.boldIsBright;
     const CellMetrics m = fixedMetrics();
     painter.paint(&r, *frame, kOriginX, kOriginY, float(c.cols) * m.cellW, float(c.rows) * m.cellH, m, opts);
-    compare(c.name, expected(*frame, {}), decode(r.ops, frame->cols, frame->rows, m));
+    compare(c.name, expected(*frame, {}, c.boldIsBright), decode(r.ops, frame->cols, frame->rows, m));
+}
+
+// WCAG 2 contrast ratio, spelled out here rather than taken from brothemes.
+// bromath colours are linear light already (cfromColor8 decodes sRGB).
+double contrastRatio(const bromath::Color& a, const bromath::Color& b) {
+    auto lum = [](const bromath::Color& c) { return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b; };
+    const double la = lum(a), lb = lum(b);
+    return (std::max(la, lb) + 0.05) / (std::min(la, lb) + 0.05);
+}
+
+void runMinimumContrast() {
+    section("paint oracle: minimum contrast");
+    // Low-contrast pairs (lifted) beside ones already readable (kept).
+    Fixture fx(40, 3,
+               "\x1b[38;2;40;40;40;48;2;30;30;30mdark on dark\x1b[0m \x1b[38;2;200;200;210;48;2;230;230;230mpale\x1b[0m\r\n"
+               "\x1b[38;2;250;250;250;48;2;0;0;0mwhite on black\x1b[0m \x1b[34;44msame\x1b[0m");
+    auto frame = fx.frame();
+    const CellMetrics m = fixedMetrics();
+    for (float ratio : {4.5f, 7.0f}) {
+        CaptureRenderer off, on;
+        TermPainter p0, p1;
+        PaintOptions opts;
+        opts.font = fixedFont();
+        p0.paint(&off, *frame, kOriginX, kOriginY, 40 * m.cellW, 3 * m.cellH, m, opts);
+        opts.colors.minimumContrast = ratio;
+        p1.paint(&on, *frame, kOriginX, kOriginY, 40 * m.cellW, 3 * m.cellH, m, opts);
+        const Decoded plain = decode(off.ops, frame->cols, frame->rows, m);
+        const Decoded lifted = decode(on.ops, frame->cols, frame->rows, m);
+        int glyphs = 0, changed = 0;
+        for (int y = 0; y < frame->rows; ++y)
+            for (int x = 0; x < frame->cols; ++x) {
+                const CellLook& a = plain.grid[size_t(y)][size_t(x)];
+                const CellLook& b = lifted.grid[size_t(y)][size_t(x)];
+                if (b.text.empty()) continue;
+                ++glyphs;
+                const bromath::Color bg = b.fills.back();
+                const double before = contrastRatio(a.fg, bg), after = contrastRatio(b.fg, bg);
+                const std::string where = "(" + std::to_string(y) + "," + std::to_string(x) + ") ratio " +
+                                          std::to_string(ratio);
+                CHECK_MSG(a.text == b.text && b.fills.size() == a.fills.size(), "same glyphs and fills " + where);
+                // Where the ratio is out of reach (7:1 on a mid blue), the best there is: white or black.
+                const double reach = std::min(double(ratio), std::max(contrastRatio({1, 1, 1, 1}, bg),
+                                                                      contrastRatio({0, 0, 0, 1}, bg)));
+                CHECK_MSG(after >= reach - 0.05, "lifted to " + std::to_string(after) + " " + where +
+                                                             " fg " + describe(a.fg) + " -> " + describe(b.fg));
+                if (before >= double(ratio)) CHECK_MSG(sameColor(a.fg, b.fg), "readable colours kept " + where);
+                else ++changed;
+            }
+        CHECK_MSG(glyphs == 30 && changed >= 14, std::to_string(glyphs) + " glyphs, " + std::to_string(changed) + " lifted");
+    }
+}
+
+void runLetterSpacing() {
+    section("paint oracle: letter-spacing and device-pixel cells");
+    CaptureRenderer measure;
+    measure.advance = 8.3f;
+    // letter-spacing 1.5px at a render scale of 2: the cell is the advance
+    // plus the spacing, snapped to half-pixels; the glyphs still sit one per cell.
+    const CellMetrics m = CellMetrics::measure(&measure, fixedFont(), 0.0f, 1.5f, 2.0f);
+    CHECK_MSG(std::fabs(m.cellW * 2.0f - std::round(m.cellW * 2.0f)) < 1e-4f && std::fabs(m.cellW - 9.8f) <= 0.25f,
+              "cellW " + std::to_string(m.cellW));
+    CHECK(std::fabs(m.cellH * 2.0f - std::round(m.cellH * 2.0f)) < 1e-4f);
+    CHECK_MSG(std::fabs(m.letterSpacing - (m.cellW - m.advance)) < 1e-4f, "spacing " + std::to_string(m.letterSpacing));
+    CHECK(m.pixelWidth() == int(std::lround(m.cellW * 2.0f)));
+    Fixture fx(30, 2, "spaced \x1b[31mletters\x1b[0m here\r\n\x1b[1mbold\x1b[0m and \xe6\x97\xa5\xe6\x9c\xac wide");
+    auto frame = fx.frame();
+    CaptureRenderer r;
+    TermPainter painter;
+    PaintOptions opts;
+    opts.font = fixedFont();
+    painter.paint(&r, *frame, kOriginX, kOriginY, 30 * m.cellW, 2 * m.cellH, m, opts);
+    compare("letter-spacing", expected(*frame, {}), decode(r.ops, frame->cols, frame->rows, m));
+}
+
+void runSearchHighlights() {
+    section("paint oracle: search matches");
+    Fixture fx(30, 4, "find the cat, the CAT\r\nand concatenate cat\r\nno match here");
+    auto& search = fx.view->search();
+    std::string err;
+    search.start(bropty::RegexMatcher::create("cat", bropty::RegexSearchOptions{}, &err));
+    while (search.step()) {
+    }
+    CHECK_MSG(search.size() == 4, "matches " + std::to_string(search.size()) + err);  // smart case: CAT too
+    fx.view->search_next(false);
+    auto frame = fx.frame();
+    std::map<std::pair<int, int>, bropty::HighlightKind> lit;
+    int current = 0;
+    for (const bropty::Highlight& h : frame->highlights)
+        for (int x = h.col0; x < h.col1; ++x) {
+            lit[{h.y, x}] = h.kind;
+            if (h.kind == bropty::HighlightKind::CurrentMatch) ++current;
+        }
+    // The oracle's own scan of the screen text: every "cat", any case.
+    std::set<std::pair<int, int>> want;
+    for (int y = 0; y < frame->rows; ++y) {
+        std::string row = frame->lines[size_t(y)]->view().text();
+        for (char& ch : row) ch = char(std::tolower(static_cast<unsigned char>(ch)));
+        for (size_t at = row.find("cat"); at != std::string::npos; at = row.find("cat", at + 1))
+            for (int k = 0; k < 3; ++k) want.insert({y, int(at) + k});
+    }
+    std::set<std::pair<int, int>> got;
+    for (auto& [cell, kind] : lit) got.insert(cell);
+    CHECK_MSG(got == want, "highlighted " + std::to_string(got.size()) + " cells, want " + std::to_string(want.size()));
+    CHECK_MSG(current == 3, "one current match of three cells: " + std::to_string(current));
+    CaptureRenderer r;
+    TermPainter painter;
+    PaintOptions opts;
+    opts.font = fixedFont();
+    const CellMetrics m = fixedMetrics();
+    painter.paint(&r, *frame, kOriginX, kOriginY, 30 * m.cellW, 4 * m.cellH, m, opts);
+    compare("search matches", expected(*frame, lit), decode(r.ops, frame->cols, frame->rows, m));
+    // Custom highlight colours reach the fills.
+    CaptureRenderer r2;
+    opts.highlights.match = bromath::Color{0.0f, 1.0f, 0.0f, 0.5f};
+    opts.highlights.currentMatch = bromath::Color{1.0f, 0.0f, 1.0f, 0.5f};
+    painter.paint(&r2, *frame, kOriginX, kOriginY, 30 * m.cellW, 4 * m.cellH, m, opts);
+    const Decoded d = decode(r2.ops, frame->cols, frame->rows, m);
+    for (auto& [cell, kind] : lit) {
+        const bromath::Color want2 = kind == bropty::HighlightKind::CurrentMatch ? opts.highlights.currentMatch
+                                                                                 : opts.highlights.match;
+        CHECK_MSG(sameColor(d.grid[size_t(cell.first)][size_t(cell.second)].fills.back(), want2),
+                  "match colour at (" + std::to_string(cell.first) + "," + std::to_string(cell.second) + ")");
+    }
 }
 
 void runSelection() {
@@ -394,7 +553,9 @@ void runSelection() {
     opts.font = fixedFont();
     const CellMetrics m = fixedMetrics();
     painter.paint(&r, *frame, kOriginX, kOriginY, 30 * m.cellW, 4 * m.cellH, m, opts);
-    compare("selection", expected(*frame, sel), decode(r.ops, frame->cols, frame->rows, m));
+    std::map<std::pair<int, int>, bropty::HighlightKind> lit;
+    for (const auto& cell : sel) lit[cell] = bropty::HighlightKind::Selection;
+    compare("selection", expected(*frame, lit), decode(r.ops, frame->cols, frame->rows, m));
 }
 
 void runRowCache() {
@@ -426,6 +587,9 @@ void run_paint_oracle_tests() {
         runCase(c);
     }
     runSelection();
+    runSearchHighlights();
+    runMinimumContrast();
+    runLetterSpacing();
     runRowCache();
 }
 

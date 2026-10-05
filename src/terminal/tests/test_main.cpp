@@ -16,6 +16,7 @@ int main(int argc, char** argv) {
     run_paint_oracle_tests();
     run_paint_cursor_tests();
     run_session_tests();
+    run_session_search_tests();
     std::printf("---\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

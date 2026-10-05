@@ -6,11 +6,14 @@
 
 add_library(bro_terminal STATIC
     term_session.cpp
+    term_session_host.cpp
+    term_session_view.cpp
     term_paint.cpp
+    term_paint_color.cpp
     term_keys.cpp
 )
 target_include_directories(bro_terminal PUBLIC ${bro_SOURCE_DIR}/src)
-target_link_libraries(bro_terminal PUBLIC bropty bro_render)
+target_link_libraries(bro_terminal PUBLIC bropty bro_render PRIVATE brothemes)
 
 if(BRO_BUILD_TESTS)
     # pty_child, bropty's test child (echoes raw input bytes as hex, reports
@@ -35,6 +38,7 @@ if(BRO_BUILD_TESTS)
         tests/test_paint_oracle.cpp
         tests/test_paint_cursor.cpp
         tests/test_session.cpp
+        tests/test_session_search.cpp
     )
     target_link_libraries(bro_terminal_test PRIVATE bro_terminal)
     target_include_directories(bro_terminal_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)

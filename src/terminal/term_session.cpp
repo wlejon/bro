@@ -1,4 +1,5 @@
 #include "terminal/term_session.h"
+#include "terminal/term_session_host.h"  // the delegate's complete type, for ~TermSession
 
 #include <algorithm>
 #include <cstdlib>
@@ -41,6 +42,8 @@ TermSession::TermSession(int cols, int rows, size_t scrollbackRows)
       cols_(std::max(1, cols)),
       rows_(std::max(1, rows)) {
     view_ = std::make_unique<bropty::TerminalView>(session_.terminal());
+    host_ = makeHost();
+    session_.set_delegate(hostDelegate());
     // A first frame before the thread exists, so a terminal that never gets a
     // process still paints its (empty) screen.
     if (view_->publish(channel_)) framesPublished_.fetch_add(1, std::memory_order_relaxed);
@@ -59,6 +62,8 @@ TermSession::~TermSession() {
         pty = pty_;
     }
     if (pty) pty->terminate();
+    std::lock_guard<std::mutex> g(mu_);
+    session_.set_delegate(nullptr);
 }
 
 bool TermSession::spawn(const SpawnOptions& opts, std::string* error) {
@@ -124,22 +129,48 @@ void TermSession::feed(std::string_view output) {
     wake();
 }
 
+// Input that reached the program brings a scrolled-back view home (when
+// scrollOnInput is on): called under mu_, returns whether the view moved.
+bool TermSession::snapOnInput(bool sent) {
+    if (!sent || !scrollOnInput_.load(std::memory_order_relaxed) || view_->at_bottom()) return false;
+    view_->scroll_to_bottom();
+    return true;
+}
+
 bool TermSession::sendKey(const bropty::KeyEvent& ev) {
-    std::lock_guard<std::mutex> g(mu_);
-    if (!pty_ || exited()) return false;
-    return session_.send_key(ev);
+    bool sent, moved;
+    {
+        std::lock_guard<std::mutex> g(mu_);
+        if (!pty_ || exited()) return false;
+        sent = session_.send_key(ev);
+        moved = snapOnInput(sent);
+    }
+    if (moved) wake();
+    return sent;
 }
 
 bool TermSession::sendText(std::string_view text) {
-    std::lock_guard<std::mutex> g(mu_);
-    if (!pty_ || exited()) return false;
-    return session_.send_text(text);
+    bool sent, moved;
+    {
+        std::lock_guard<std::mutex> g(mu_);
+        if (!pty_ || exited()) return false;
+        sent = session_.send_text(text);
+        moved = snapOnInput(sent);
+    }
+    if (moved) wake();
+    return sent;
 }
 
 bool TermSession::paste(std::string_view text) {
-    std::lock_guard<std::mutex> g(mu_);
-    if (!pty_ || exited()) return false;
-    return session_.paste(text);
+    bool sent, moved;
+    {
+        std::lock_guard<std::mutex> g(mu_);
+        if (!pty_ || exited()) return false;
+        sent = session_.paste(text);
+        moved = snapOnInput(sent);
+    }
+    if (moved) wake();
+    return sent;
 }
 
 bool TermSession::focus(bool focused) {
@@ -290,6 +321,13 @@ void TermSession::threadMain() {
             {
                 std::lock_guard<std::mutex> g(mu_);
                 more = parseSlice(Clock::now(), published);
+                // A search works back through history in budgeted steps,
+                // between slices of output, until it has matched it all.
+                bropty::Search& search = view_->search();
+                if (search.active() && !search.complete() && !search.waiting()) {
+                    if (search.step(kSearchStep) && !search.complete()) more = true;
+                    maybePublish(Clock::now(), /*onlyIfConsumed=*/true);
+                }
             }
             if (!more || stop_.load(std::memory_order_acquire)) break;
             std::this_thread::yield();

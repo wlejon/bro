@@ -10,5 +10,6 @@ inline std::string g_exeDir;
 void run_paint_oracle_tests();
 void run_paint_cursor_tests();
 void run_session_tests();
+void run_session_search_tests();
 
 } // namespace bro::terminal::test

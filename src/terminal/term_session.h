@@ -39,6 +39,8 @@
 #include <bropty/session.h>
 #include <bropty/view.h>
 
+#include "terminal/term_types.h"
+
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -70,6 +72,7 @@ class TermSession {
 public:
     static constexpr std::chrono::milliseconds kSyncTimeout{200};
     static constexpr std::chrono::microseconds kSliceTime{2000};
+    static constexpr std::chrono::microseconds kSearchStep{1000};
 
     TermSession(int cols, int rows, size_t scrollbackRows = 10000);
     ~TermSession();
@@ -112,9 +115,75 @@ public:
     [[nodiscard]] uint32_t kittyKeyboardFlags() const;
     // The selected text ("" when nothing is selected).
     [[nodiscard]] std::string selectionText() const;
-    // Selection over the view (absolute rows), for painting tests until T2's
-    // mouse selection; an empty range clears it.
+    // Select an explicit stream range (absolute rows); an empty one clears.
     void select(bropty::RowRange range);
+
+    // ---- the view: scrollback position, selection, search, links ---------
+    // (term_session_view.cpp). Each takes the lock and wakes the parser,
+    // which publishes the change in the next frame.
+    [[nodiscard]] ViewState viewState() const;
+    void scrollBy(int64_t rows);          // negative: back into history
+    void scrollToRow(int64_t row);        // `row` at the top, clamped
+    void scrollToBottom();
+    void scrollToTop();
+    // To the previous / next OSC 133 prompt. False when there is none.
+    bool scrollToPrompt(bool backward);
+    // Typing and pasting return the view to the bottom (default on).
+    void setScrollOnInput(bool on) { scrollOnInput_.store(on, std::memory_order_relaxed); }
+    [[nodiscard]] bool scrollOnInput() const { return scrollOnInput_.load(std::memory_order_relaxed); }
+
+    // Selection gestures over absolute cells (see bropty::Selection).
+    void selectStart(bropty::RowPos cell, bropty::SelectionMode mode, bool rightHalf);
+    void selectExtend(bropty::RowPos cell, bool rightHalf);
+    void selectClear();
+    void selectAll();
+    // The output of the command at `cell` (or the last one). False: none.
+    bool selectOutput(std::optional<bropty::RowPos> cell);
+    [[nodiscard]] bool selectionActive() const;
+    [[nodiscard]] std::optional<bropty::RowRange> selectionRange() const;
+    [[nodiscard]] bool selectionIsBlock() const;
+
+    // Search over the screen and history. False with *error on a bad pattern.
+    bool searchStart(std::string_view pattern, const SearchOptions& opts, std::string* error);
+    void searchClear();
+    // The next / previous match (wrapping), brought into view.
+    std::optional<bropty::RowRange> searchNext(bool backward);
+    [[nodiscard]] SearchStatus searchStatus() const;
+
+    // The link at a cell, and the hovered one (underlined while it is).
+    [[nodiscard]] std::optional<LinkInfo> linkAt(bropty::RowPos cell) const;
+    void setHover(std::optional<bropty::RowPos> cell);
+
+    // Text of absolute rows [first, end), rows joined by "\n" (no trailing
+    // spaces): what a range of the buffer reads as.
+    [[nodiscard]] std::string rowsText(int64_t first, int64_t end) const;
+    [[nodiscard]] std::string rangeText(bropty::RowRange range) const;
+
+    // ---- the mouse (term_session_view.cpp) ---------------------------------
+    // A report for the program's mouse mode; false when it reports nothing
+    // (no tracking, or a mode that drops this event).
+    bool sendMouse(const bropty::MouseEvent& ev);
+    [[nodiscard]] bropty::MouseTracking mouseTracking() const;
+    [[nodiscard]] bool altScreen() const;
+
+    // ---- what the program says to the embedder (term_session_host.cpp) -------
+    void setClipboardPolicy(ClipboardPolicy p) { clipboardPolicy_.store(p, std::memory_order_relaxed); }
+    [[nodiscard]] ClipboardPolicy clipboardPolicy() const { return clipboardPolicy_.load(std::memory_order_relaxed); }
+    // Answer / refuse an OSC 52 read request (TermEvent::ClipboardRead).
+    bool answerClipboard(uint64_t request, std::string_view data);
+    bool cancelClipboard(uint64_t request);
+    // Events queued since the last call, oldest first (main thread).
+    std::vector<TermEvent> takeEvents();
+    [[nodiscard]] std::string cwd() const;
+    // The shell's commands (OSC 133), oldest first, and a counter that
+    // changes whenever the list does.
+    [[nodiscard]] std::vector<CommandInfo> commands() const;
+    [[nodiscard]] uint64_t commandsVersion() const { return commandsVersion_.load(std::memory_order_relaxed); }
+    // The pointer shape the program asked for (OSC 22), "" for none.
+    [[nodiscard]] std::string pointerShape() const;
+    // The theme: what the palette is and what the program's resets return to.
+    void setBasePalette(const bropty::Palette& palette);
+    [[nodiscard]] bropty::Palette palette() const;
 
     // ---- data plane (main thread, lock-free) ---------------------------------
     // The newest published frame (the same one again when nothing is newer).
@@ -134,6 +203,16 @@ public:
     [[nodiscard]] Stats stats() const noexcept;
 
 private:
+    // The embedder's half of bropty's TerminalHost: the Session forwards
+    // here, on whichever thread holds mu_ (term_session_host.cpp).
+    class Host;
+    friend class Host;
+    std::unique_ptr<Host> makeHost();
+    bropty::TerminalHost* hostDelegate();
+    void pushEvent(TermEvent ev);
+    void afterViewChange();  // a gesture moved the view: present it
+    bool snapOnInput(bool sent);  // mu_
+
     void threadMain();
     void wake();
     // One parse slice under mu_. Returns whether more output is pending.
@@ -165,6 +244,14 @@ private:
     std::atomic<int64_t> pid_{0};
     std::atomic<int> exitCode_{0};
     std::atomic<bool> haveExitCode_{false};
+
+    std::unique_ptr<Host> host_;
+    std::atomic<ClipboardPolicy> clipboardPolicy_{ClipboardPolicy::WriteOnly};
+    std::atomic<bool> scrollOnInput_{true};
+    std::atomic<uint64_t> commandsVersion_{0};
+    std::string searchPattern_;  // mu_
+    mutable std::mutex evMu_;    // after mu_ when both are held
+    std::vector<TermEvent> events_;  // evMu_
 
     std::atomic<uint64_t> bytesParsed_{0};
     std::atomic<uint64_t> framesPublished_{0};

@@ -15,56 +15,12 @@ constexpr char32_t kImageCell = 0x10EEEE;  // bropty's image placeholder (drawn 
 
 bool sameRgb(bropty::Rgb a, bropty::Rgb b) { return a == b; }
 
-bropty::Rgb mix(bropty::Rgb a, bropty::Rgb b, float t) {
-    auto ch = [t](uint8_t x, uint8_t y) {
-        return uint8_t(std::lround(float(x) + (float(y) - float(x)) * t));
-    };
-    return bropty::Rgb{ch(a.r, b.r), ch(a.g, b.g), ch(a.b, b.b)};
-}
-
 void appendUtf8(std::string& out, char32_t cp) { bropty::append_utf8(out, cp); }
 
 } // namespace
 
 // ---------------------------------------------------------------------------
-// Colours
-
-bropty::Rgb defaultBg(const bropty::Palette& pal, bool rv) { return rv ? pal.foreground : pal.background; }
-bropty::Rgb defaultFg(const bropty::Palette& pal, bool rv) { return rv ? pal.background : pal.foreground; }
-
-// SGR semantics as painted:
-//  * default colours come from the palette's defaults; under reverse video
-//    (DECSCNM) the two defaults trade places, explicit colours do not;
-//  * inverse (SGR 7) swaps the cell's resolved foreground and background;
-//  * dim (SGR 2) draws the foreground halfway to the background;
-//  * bold (SGR 1) is a heavier face only: it does not brighten the first
-//    eight palette colours (kitty, Alacritty and Ghostty's default);
-//  * invisible (SGR 8) keeps the background and draws no glyph and no lines.
-ResolvedCell resolveCell(const bropty::Style& st, const bropty::Palette& pal, bool rv) {
-    ResolvedCell rc;
-    rc.fg = st.fg.is_default() ? defaultFg(pal, rv) : pal.resolve_fg(st.fg);
-    rc.bg = st.bg.is_default() ? defaultBg(pal, rv) : pal.resolve_bg(st.bg);
-    if (st.has(bropty::Attr_Inverse)) std::swap(rc.fg, rc.bg);
-    if (st.has(bropty::Attr_Dim)) rc.fg = mix(rc.fg, rc.bg, 0.5f);
-    rc.hidden = st.has(bropty::Attr_Invisible);
-    return rc;
-}
-
-bromath::Color toColor(bropty::Rgb c, float alpha) {
-    bromath::Color out = bromath::cfromColor8({c.r, c.g, c.b, 255});
-    out.a = alpha;
-    return out;
-}
-
-bromath::Color highlightColor(bropty::HighlightKind kind) {
-    switch (kind) {
-        case bropty::HighlightKind::Selection: return toColor({90, 140, 230}, 0.45f);
-        case bropty::HighlightKind::Match: return toColor({230, 200, 60}, 0.35f);
-        case bropty::HighlightKind::CurrentMatch: return toColor({240, 140, 40}, 0.55f);
-        case bropty::HighlightKind::Hover: return toColor({255, 255, 255}, 0.0f);
-    }
-    return toColor({0, 0, 0}, 0.0f);
-}
+// Batching
 
 bool batchableCodepoint(char32_t cp) {
     if (cp >= 0x21 && cp <= 0x7E) return true;     // ASCII
@@ -79,17 +35,31 @@ bool batchableCodepoint(char32_t cp) {
 // ---------------------------------------------------------------------------
 // Metrics
 
-CellMetrics CellMetrics::measure(render::Renderer* r, const render::FontRef& font, float lineHeightPx) {
+CellMetrics CellMetrics::measure(render::Renderer* r, const render::FontRef& font, float lineHeightPx,
+                                 float letterSpacingPx, float scale, bool keepAdvance) {
     CellMetrics m;
+    const float s = scale > 0.0f && std::isfinite(scale) ? scale : 1.0f;
+    m.scale = s;
     if (!r) return m;
+    // Whole device pixels: round to nearest, and up (for heights that must
+    // hold the glyph box), with at least one pixel.
+    auto snap = [s](float v) { return std::max(1.0f, std::round(v * s)) / s; };
+    auto snapUp = [s](float v) { return std::max(1.0f, std::ceil(v * s - 1e-3f)) / s; };
     const render::TextMetrics wide = r->measureText("MMMMMMMMMM", font);
     const render::TextMetrics line = r->measureText("", font);
-    m.cellW = wide.width > 0 ? wide.width / 10.0f : font.size * 0.6f;
+    m.advance = wide.width > 0 ? wide.width / 10.0f : font.size * 0.6f;
+    m.cellW = snap(m.advance + letterSpacingPx);
+    m.letterSpacing = m.cellW - m.advance;
     m.ascent = line.ascent > 0 ? line.ascent : font.size * 0.8f;
     m.descent = line.descent > 0 ? line.descent : font.size * 0.2f;
-    const float natural = std::ceil(m.ascent + m.descent);
-    m.cellH = lineHeightPx > 0 ? std::max(1.0f, lineHeightPx) : std::max(1.0f, natural);
-    m.baseline = std::round((m.cellH - (m.ascent + m.descent)) * 0.5f + m.ascent);
+    if (keepAdvance) {
+        // Ligatures across cells need the font's own advance per cell.
+        m.cellW = std::max(1.0f / s, m.advance + letterSpacingPx);
+        m.letterSpacing = letterSpacingPx;
+    }
+    const float natural = snapUp(m.ascent + m.descent);
+    m.cellH = lineHeightPx > 0 ? snap(lineHeightPx) : natural;
+    m.baseline = std::round(((m.cellH - (m.ascent + m.descent)) * 0.5f + m.ascent) * s) / s;
     m.lineThickness = std::max(1.0f, std::round(font.size / 14.0f));
     m.underlineY = std::min(m.cellH - m.lineThickness * 0.5f,
                             m.baseline + std::max(m.lineThickness, m.descent * 0.35f));
@@ -99,10 +69,14 @@ CellMetrics CellMetrics::measure(render::Renderer* r, const render::FontRef& fon
     return m;
 }
 
+int CellMetrics::pixelWidth() const { return std::max(1, int(std::lround(cellW * scale))); }
+int CellMetrics::pixelHeight() const { return std::max(1, int(std::lround(cellH * scale))); }
+
 // ---------------------------------------------------------------------------
 // Row preparation
 
-TermPainter::RowOps TermPainter::buildRow(const bropty::FrameRow& row, const bropty::Palette& pal, bool rv) {
+TermPainter::RowOps TermPainter::buildRow(const bropty::FrameRow& row, const bropty::Palette& pal, bool rv,
+                                          const ColorPolicy& policy) {
     RowOps ops;
     const bropty::RowView v = row.view();
     if (!v.cells) return ops;
@@ -141,7 +115,7 @@ TermPainter::RowOps TermPainter::buildRow(const bropty::FrameRow& row, const bro
         const int width = cell.wide() == bropty::Wide::Lead ? 2 : 1;
         const int end = std::min(v.cols, col + width);
         const bropty::Style& st = v.style(col);
-        const ResolvedCell rc = resolveCell(st, pal, rv);
+        const ResolvedCell rc = resolveCell(st, pal, rv, policy);
 
         // Background runs (merged by colour across style changes).
         if (!sameRgb(rc.bg, base)) {
@@ -207,11 +181,12 @@ TermPainter::RowOps TermPainter::buildRow(const bropty::FrameRow& row, const bro
     return ops;
 }
 
-const TermPainter::RowOps& TermPainter::rowOps(const bropty::FrameRow& row, const bropty::Palette& pal, bool rv) {
+const TermPainter::RowOps& TermPainter::rowOps(const bropty::FrameRow& row, const bropty::Palette& pal, bool rv,
+                                               const ColorPolicy& cp) {
     auto it = cache_.find(row.serial);
     if (it == cache_.end()) {
         ++rowsBuilt_;
-        it = cache_.emplace(row.serial, Entry{buildRow(row, pal, rv), 0}).first;
+        it = cache_.emplace(row.serial, Entry{buildRow(row, pal, rv, cp), 0}).first;
     }
     it->second.usedIn = paintCount_;
     return it->second.ops;
@@ -300,11 +275,12 @@ void TermPainter::paint(render::Renderer* r, const bropty::Frame& f, float x, fl
     const bool rv = f.modes.reverse_video;
     ++paintCount_;
     rowsBuilt_ = 0;
-    if (cachePalette_ != f.palette.get() || cacheReverse_ != rv) {
+    if (cachePalette_ != f.palette.get() || cacheReverse_ != rv || !(cachePolicy_ == opts.colors)) {
         cache_.clear();
         cachePalette_ = f.palette.get();
         cachePaletteRef_ = f.palette;
         cacheReverse_ = rv;
+        cachePolicy_ = opts.colors;
     }
 
     r->save();
@@ -314,12 +290,15 @@ void TermPainter::paint(render::Renderer* r, const bropty::Frame& f, float x, fl
     const int rows = std::min<int>(f.rows, int(f.lines.size()));
     std::vector<const RowOps*> ops(size_t(std::max(0, rows)), nullptr);
     for (int row = 0; row < rows; ++row) {
-        if (f.lines[size_t(row)]) ops[size_t(row)] = &rowOps(*f.lines[size_t(row)], pal, rv);
+        if (f.lines[size_t(row)]) ops[size_t(row)] = &rowOps(*f.lines[size_t(row)], pal, rv, opts.colors);
     }
     auto rowTop = [&](int row) { return y + float(row) * m.cellH; };
-    // Cell x edges snap to whole CSS px, so neighbouring fills meet without
-    // an antialiased seam however fractional the advance is.
-    auto colX = [&](int col) { return std::round(x + float(col) * m.cellW); };
+    // Cell x edges snap to whole device pixels, so neighbouring fills meet
+    // without an antialiased seam however fractional the origin is.
+    const float s = m.scale > 0.0f ? m.scale : 1.0f;
+    auto colX = [&](int col) { return std::round((x + float(col) * m.cellW) * s) / s; };
+    render::FontRef textFont = opts.font;
+    textFont.ligatures = opts.ligatures;
 
     // 1. backgrounds
     for (int row = 0; row < rows; ++row) {
@@ -332,23 +311,31 @@ void TermPainter::paint(render::Renderer* r, const bropty::Frame& f, float x, fl
     // 2. highlights
     for (const bropty::Highlight& hl : f.highlights) {
         if (hl.y < 0 || hl.y >= rows || hl.col1 <= hl.col0) continue;
-        const bromath::Color c = highlightColor(hl.kind);
+        const bromath::Color c = highlightColor(hl.kind, opts.highlights);
         if (c.a <= 0.0f) continue;
         const float x0 = colX(hl.col0);
         r->fillRect(x0, rowTop(hl.y), colX(hl.col1) - x0, m.cellH, c);
     }
-    // 3. glyphs
+    // 3. glyphs. A batched run gets the cell's spacing after every glyph, so
+    // its glyph i lands exactly on cell col + i whatever the font's advance.
     for (int row = 0; row < rows; ++row) {
         if (!ops[size_t(row)]) continue;
         const float base = rowTop(row) + m.baseline;
-        for (const TextOp& t : ops[size_t(row)]->text)
-            r->drawText(t.text, x + float(t.col) * m.cellW, base, faceFor(opts.font, t.bold, t.italic), toColor(t.fg));
+        for (const TextOp& t : ops[size_t(row)]->text) {
+            const render::FontRef face = faceFor(textFont, t.bold, t.italic);
+            const float tx = x + float(t.col) * m.cellW;
+            if (m.letterSpacing != 0.0f && t.text.size() > 1)
+                r->drawTextEx(t.text, tx, base, face, toColor(t.fg), m.letterSpacing, 0.0f);
+            else
+                r->drawText(t.text, tx, base, face, toColor(t.fg));
+        }
     }
-    // 4. decorations
+    // 4. decorations, and the underline of the hovered link
     for (int row = 0; row < rows; ++row) {
         if (!ops[size_t(row)]) continue;
         for (const DecoOp& d : ops[size_t(row)]->deco) drawDeco(r, d, x, rowTop(row), m);
     }
+    drawHover(r, f, x, y, m, pal, rv);
     // 5. cursor, 6. preedit
     drawCursor(r, f, x, y, m, opts, pal, rv);
 
@@ -358,6 +345,25 @@ void TermPainter::paint(render::Renderer* r, const bropty::Frame& f, float x, fl
     for (auto it = cache_.begin(); it != cache_.end();) {
         if (it->second.usedIn != paintCount_) it = cache_.erase(it);
         else ++it;
+    }
+}
+
+void TermPainter::drawHover(render::Renderer* r, const bropty::Frame& f, float x, float y, const CellMetrics& m,
+                            const bropty::Palette& pal, bool rv) {
+    const float s = m.scale > 0.0f ? m.scale : 1.0f;
+    for (const bropty::Highlight& hl : f.highlights) {
+        if (hl.kind != bropty::HighlightKind::Hover || hl.y < 0 || hl.y >= f.rows || hl.col1 <= hl.col0) continue;
+        // The link's own colour where its first cell has one, else the
+        // default foreground: a solid line under the whole link.
+        bropty::Rgb c = defaultFg(pal, rv);
+        if (size_t(hl.y) < f.lines.size() && f.lines[size_t(hl.y)]) {
+            const bropty::RowView v = f.lines[size_t(hl.y)]->view();
+            if (v.cells && hl.col0 < v.cols) c = resolveCell(v.style(hl.col0), pal, rv).fg;
+        }
+        const float x0 = std::round((x + float(hl.col0) * m.cellW) * s) / s;
+        const float x1 = std::round((x + float(hl.col1) * m.cellW) * s) / s;
+        const float uy = y + float(hl.y) * m.cellH + m.underlineY;
+        r->drawLine(x0, uy, x1, uy, toColor(c), m.lineThickness);
     }
 }
 
