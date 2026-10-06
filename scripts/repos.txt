@@ -58,6 +58,11 @@ brodmabuf       desktop   -          public   linux            -
 brodbus         desktop   submodule  public   linux            -
 browl           desktop   submodule  public   linux            -
 broportal       desktop   submodule  public   linux            brodbus
+brodecor        desktop   -          public   win,linux,mac    bromath
+broclip         desktop   -          public   win,linux,mac    brodbus
+brompris        desktop   -          public   win,linux,mac    brodbus
+bropulse        desktop   -          public   linux            -
+broime          desktop   -          public   win,linux,mac    brosearch
 broworkshop     app       -          public   win,linux,mac    bro
 broterm         app       -          public   win,linux,mac    bro
 helm            app       -          public   win,linux,mac    bro

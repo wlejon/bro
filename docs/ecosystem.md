@@ -17,7 +17,7 @@ engine libs   htmlayout brokit broaudio ...     bronze ── brass
 terminal libs bropty brosearch brothemes bromux
 desktop libs  brovfs brosys brocas brocred broapps brothumb brodisplays
               brocompositor brokeys broa11y broconf broseat brodmabuf brodbus browl
-              broportal
+              broportal brodecor broclip brompris bropulse broime
 ```
 
 ## Runtime and compiler
@@ -83,6 +83,13 @@ Standalone C++20 libraries for the desktop environment. bro mounts their JavaScr
 | [brodbus](https://github.com/wlejon/brodbus) | D-Bus layer: connection setup with private bus Hello, signal matching, property caching, message containers, and test fixtures | none | Linux (Windows and macOS build stubs that report unavailable) | — |
 | [browl](https://github.com/wlejon/browl) | Wayland shell-protocol client: layer shell, session lock, foreign toplevels, screencopy, idle inhibit | none | Linux | `BRO_WITH_WL` |
 | [broportal](https://github.com/wlejon/broportal) | xdg-desktop-portal backend: file chooser, screenshot, screencast, remote desktop, settings, global shortcuts | brodbus | Linux | `BRO_WITH_PORTAL` |
+| brodecor | Window decorations: SSD frames, captions, buttons, 9-slice blur drop shadows, and hit-testing | bromath | Windows, Linux, macOS | `BRO_WITH_DECOR` |
+| broclip | Clipboard history and data control: ring store, MIME stream caching, Wayland data-control client | brodbus | Windows, Linux, macOS | `BRO_WITH_CLIP` |
+| brompris | Media player controller: MPRIS2 on Linux, WinRT SMTC on Windows, CoreMedia on macOS | brodbus | Windows, Linux, macOS | `BRO_WITH_MPRIS` |
+| bropulse | Audio routing and policy: native PipeWire 0.3 stream graph and PulseAudio fallback | none | Linux | `BRO_WITH_PULSE` |
+| broime | Input methods: compose key sequences, dead keys, candidate popup placement, dictionary prefix trie | brosearch | Windows, Linux, macOS | `BRO_WITH_IME` |
+
+brodecor, broclip, brompris, bropulse and broime are not on GitHub yet; their links will be `github.com/wlejon/<name>` once they are.
 
 ## Apps and tools
 
