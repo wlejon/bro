@@ -13,7 +13,13 @@ WaylandCompositor::~WaylandCompositor() {
 bool WaylandCompositor::init(const CompositorConfig& config, std::string* error) {
 #if defined(__linux__) && defined(BRO_WITH_COMPOSITOR)
     brocompositor::wl::ServerConfig sCfg;
-    sCfg.backend = config.headless ? brocompositor::wl::BackendKind::Headless : brocompositor::wl::BackendKind::Auto;
+    if (config.headless) {
+        sCfg.backend = brocompositor::wl::BackendKind::Headless;
+    } else if (config.drm) {
+        sCfg.backend = brocompositor::wl::BackendKind::Drm;
+    } else {
+        sCfg.backend = brocompositor::wl::BackendKind::Auto;
+    }
     sCfg.initial_outputs = 1;
     sCfg.initial_output_size = {static_cast<int32_t>(config.width), static_cast<int32_t>(config.height)};
     sCfg.socket_name = config.socketName;
