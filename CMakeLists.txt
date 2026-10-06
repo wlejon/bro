@@ -211,6 +211,7 @@ set(BRO_WITH_BRONZE ON CACHE BOOL "bronze runtime (mandatory)" FORCE)
 option(BRO_WITH_NET      "Game networking (GameNetworkingSockets / vcpkg)"   ${_d_svc})
 option(BRO_WITH_VIDEO    "Video + GIF encode/decode (libvpx/webm / vcpkg)"   ${_d_svc})
 option(BRO_WITH_STEAM    "Steam integration (runtime-loaded redistributable)" ${_d_svc})
+option(BRO_WITH_CONF     "Settings store with schemas and watchers (broconf)" ${_d_svc})
 # The native <terminal> element: bropty (VT emulation + PTY/ConPTY), its
 # brosearch dependency and brothemes (minimum contrast), plus bromux
 # (persistent sessions) when found; all vcpkg-free siblings. On in app and
@@ -343,13 +344,14 @@ set(BRODIFFUSION_ENABLE_API ON CACHE BOOL "Build Bronze JavaScript API for brodi
 set(BROSOUNDML_ENABLE_API   ON CACHE BOOL "Build Bronze JavaScript API for brosoundml" FORCE)
 set(BROMESH_ENABLE_API      ON CACHE BOOL "Build Bronze JavaScript API for bromesh" FORCE)
 set(BROVISIONML_ENABLE_API  ON CACHE BOOL "Build Bronze JavaScript API for brovisionml" FORCE)
+set(BROCONF_ENABLE_API      ON CACHE BOOL "Build Bronze JavaScript API for broconf" FORCE)
 
 # Stamp every feature flag as a 0/1 compile definition so C++ can `#if` on it.
 # Applied to the targets that carry feature-gated code (bro_engine, bro_scene,
 # bro_bronze_host). Uses the #if BRO_WITH_X convention.
 set(BRO_FEATURE_FLAGS
     3D PHYSICS AUDIO GAMEAI FLORA
-    NET VIDEO STEAM TERMINAL
+    NET VIDEO STEAM TERMINAL CONF
     TENSOR TENSOR_CUDA TENSOR_METAL TENSOR_VULKAN LM DIFFUSION VISION SOUNDML TRIPOSPLAT GAMEAI_NN
     BRONZE)
 function(bro_apply_feature_defs target)

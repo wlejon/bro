@@ -73,6 +73,9 @@
 #if BRO_WITH_PHYSICS
 #include "physics/physics_world.h"
 #endif
+#if BRO_WITH_CONF
+#include <broconf/api.h>
+#endif
 #include "api/api.h"  // brokit::api::resolveAssetPath
 #include <broimage/api.h>
 
@@ -393,6 +396,20 @@ void installSiblingApis(engine::Engine& engine) {
         broimage::api::setPathResolver(&brokit::api::resolveAssetPath);
         broimage::api::installImage();
     }
+#if BRO_WITH_CONF
+    broconf::api::installConf();
+    {
+        static bool confHooksInstalled = false;
+        if (!confHooksInstalled) {
+            confHooksInstalled = true;
+            engine.addFramePump([] {
+                broconf::api::tickConfAsync();
+                if (ev::microtasksPending()) ev::drainMicrotasks();
+            });
+            engine.addShutdownHook([] { broconf::api::shutdownConfAsync(); });
+        }
+    }
+#endif
 }
 
 // The Worker realm's share of the same list (host_natives.h). Every

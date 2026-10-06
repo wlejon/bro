@@ -454,6 +454,21 @@ if(BRO_WITH_DIFFUSION)
     endif()
 endif()
 
+# --- broconf ---
+# Prefer the standalone repo at ../broconf for local development.
+# Falls back to the git submodule at third_party/broconf.
+if(BRO_WITH_CONF)
+    bro_default_sibling_dir(broconf _broconf_default)
+    set(BROCONF_DIR "${_broconf_default}" CACHE PATH "Path to standalone broconf repo")
+    if(EXISTS "${BROCONF_DIR}/CMakeLists.txt")
+        message(STATUS "broconf: using standalone repo at ${BROCONF_DIR}")
+        add_subdirectory("${BROCONF_DIR}" "${CMAKE_BINARY_DIR}/broconf" EXCLUDE_FROM_ALL)
+    else()
+        message(STATUS "broconf: using submodule at third_party/broconf")
+        add_subdirectory(broconf EXCLUDE_FROM_ALL)
+    endif()
+endif()
+
 # --- Jolt Physics ---
 if(BRO_WITH_PHYSICS)
 set(USE_STATIC_MSVC_RUNTIME_LIBRARY OFF CACHE BOOL "" FORCE)  # match bro's /MD runtime

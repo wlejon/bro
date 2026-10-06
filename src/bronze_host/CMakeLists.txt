@@ -427,6 +427,10 @@ if(BRO_WITH_3D)
     target_link_libraries(bro_bronze_host PUBLIC bromesh_api)
 endif()
 
+if(BRO_WITH_CONF)
+    target_link_libraries(bro_bronze_host PUBLIC broconf broconf_api)
+endif()
+
 if(BRO_WITH_WEBP)
     target_link_libraries(bro_bronze_host PUBLIC bro_webp)
 endif()

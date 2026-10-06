@@ -241,6 +241,9 @@ void installBroRoots(engine::Engine& engine) {
 #if !BRO_WITH_NET
     setUnavailable("net", "BRO_WITH_NET");
 #endif
+#if !BRO_WITH_CONF
+    setUnavailable("conf", "BRO_WITH_CONF");
+#endif
     // bro.terminal: the <terminal> element's namespace (host_element_terminal.cpp).
 #if BRO_WITH_TERMINAL
     {
@@ -344,7 +347,7 @@ void markAvailableNamespaces() {
         "tts", "lm", "stt", "diar", "net", "ai", "gesture", "gizmo", "impostor", "kws",
         "listen", "motion", "rave", "sense", "triposplat", "vision", "wake", "diffusion",
         "tensor", "flora", "media", "mesh", "rigging", "scene", "terrain", "clipmap",
-        "tile_world", "lighting", "animation", "mic",
+        "tile_world", "lighting", "animation", "mic", "conf",
     };
     auto decorate = [](Value nsIn) {
         if (!ev::isObject(nsIn)) return;
