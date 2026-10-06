@@ -18,8 +18,13 @@ Every repo is listed in [ecosystem.md](ecosystem.md). This page records where th
   - Look and input: brothemes, brokeys, broa11y
   - Settings and portals: broconf, broportal
 - **JS bindings for desktop libraries**: all `<sibling>_api` bindings completed with trust model and host integration.
-- **Nested Wayland compositor in bro**: `brocompositor` + `brodmabuf` Vulkan image import with explicit sync and fences compositing into `VulkanPresenter`. Headless test client screenshot oracle verified.
-- **bro owns the screen (DRM/KMS compositor output)**: KMS atomic modesetting through `brodmabuf` and `KmsDirectPresenter`, scanout buffers imported into Vulkan for composited presentation, seat management via `broseat`/`logind`, input event dispatch via `libinput`, and VT switching handling (pause & resume) with `--drm` CLI flag support. Verified with native test `bro_drm_screen_test`.
+- **Desktop compositor (Milestones 1–5)**:
+  - Milestone 1: Nested Wayland compositor in bro (`brocompositor` + `brodmabuf` Vulkan image import with explicit sync and fences compositing into `VulkanPresenter`).
+  - Milestone 2: bro owns the screen (`KmsDirectPresenter` atomic modesetting through DRM/KMS scanout imported into Vulkan, seat management via `broseat`/`logind`, input via `libinput`, VT switching pause/resume, `--drm` CLI mode).
+  - Milestone 3: Shell surfaces and window management (`xdg-shell` WM focus/placement/state, `wlr-layer-shell` panels/docks ordering, `ext-session-lock-v1` isolated display).
+  - Milestone 4: XWayland lazy lifecycle, X11 client window management, and X11 <-> Wayland clipboard/selection bridging.
+  - Milestone 5: Daily-driver gaps (multi-monitor hotplug & layout, fractional scaling via `wp_fractional_scale_manager_v1` / viewporter, per-frame damage tracking, text-input-v3 / input-method-v2, screencopy via `wlr-screencopy-v1` / `ext-image-copy-capture-v1`).
+- **Session and app model**: process launch and tracking (`broapps`), cross-platform single-instance with argument forwarding (`bro.window.requestSingleInstance`), autostart (`broseat`), unified D-Bus layer (`brodbus`), and desktop trust boundary permissions.
 - **One D-Bus layer (`brodbus`)**: unified C++20 library owning connection setup (with private bus Hello), signal matching, message container serialization, property caching, error mapping, and private test fixtures. Adopted across `broseat`, `brocred`, `brosys`, and `broportal`.
 - **[DONE] Comprehensive README pass**: across all 5 terminal libraries (bropty, bromux, brosearch, brothemes, brokeys), 14 desktop libraries (brovfs, brosys, brocas, brocred, broapps, brothumb, brodisplays, brocompositor, broseat, brodmabuf, browl, broa11y, broconf, broportal), and brodbus.
 - **Terminal milestone: Claude Code in broterm** is complete:
@@ -46,13 +51,14 @@ Every repo is listed in [ecosystem.md](ecosystem.md). This page records where th
 
 ## Open: foundational pieces for the desktop
 
-1. **bro on Linux as the compositor:** Complete! All five milestones are implemented and verified: Milestone 1 (nested compositor), Milestone 2 (bro owns the screen via DRM/KMS/broseat/libinput/VT switching), Milestone 3 (shell surfaces, window management, layer-shell, session-lock), Milestone 4 (XWayland integration), and Milestone 5 (daily-driver gaps: multi-monitor hotplug/layout, fractional scale, damage tracking, IME, clipboard bridging, screencopy).
-2. **An accessibility tree out of bro:** the engine-side DOM export into `broa11y::Tree` is implemented and verified. Platform-specific AT-SPI/UIA/NSAccessibility testing remains.
-3. **Shell apps on top:**
+1. **Accessibility tree platform verification:** the engine-side DOM export into `broa11y::Tree` is implemented and verified in bro. Platform-specific AT-SPI/UIA/NSAccessibility screen reader validation remains.
+2. **Shell apps on top:**
    - panel, launcher and taskbar (broapps, brocompositor's foreign-toplevel)
    - notification centre (brosys)
    - file manager (brovfs, brothumb)
    - settings (broconf, brodisplays, brothemes)
    - lock screen and greeter (session lock, brocred authentication)
-4. **[DONE] brocompositor gap audit:** verified and tested across protocols: multi-monitor layout, fractional scaling, per-frame damage tracking, input methods (text-input-v3/input-method-v2), clipboard and data-control across clients, screencopy/capture, and gamma control.
-5. **[DONE] Session and app model:** process launch and tracking via broapps, cross-platform single-instance with argument forwarding (`bro.window.requestSingleInstance`), IPC sockets, autostart via broseat, and desktop trust boundary permissions.
+3. **Packaging and install:**
+   - desktop installation, package managers, and update pipeline on Windows and Linux
+   - Linux session desktop entry registration for display managers and bro greeter
+   - installation into trusted desktop locations
