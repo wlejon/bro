@@ -32,6 +32,7 @@ struct TermEvent {
         ClipboardRead,   // id: the request to answer, selection: the Pc field
         PromptMark,      // kind: 'A' 'B' 'C' 'D', params: the mark's parameters
         PointerShape,    // text: the CSS cursor name the program asked for ("" = default)
+        Foreground,      // the foreground process changed (TermSession::foregroundProcess)
     };
     Kind kind = Kind::Bell;
     std::string text;

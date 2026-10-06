@@ -210,6 +210,27 @@ class HTMLTerminalElement extends HTMLElement {
   /** The working directory the shell reported (OSC 7), as a path; "" when
    *  none. @type {string} */
   cwd;
+  /** The process that owns the terminal now: the shell at its prompt, the
+   *  program it is running while it runs. null before spawn() and after exit.
+   *  `name` is what the process goes by (argv[0]'s base name on POSIX, so a
+   *  node program that set process.title is known by that title; the
+   *  executable's file name on Windows), `path` its executable ("" when not
+   *  readable), `commandLine` how it was started (POSIX: argv, shell-quoted).
+   *  POSIX: the leader of the terminal's foreground process group -- the
+   *  job the shell started, whose own children share its group (`make`
+   *  while it runs `cc`). Windows has no foreground group: the answer is the
+   *  youngest console program in the child's process tree (`cc` under
+   *  `make`), skipping GUI programs the shell started; a console program
+   *  started in the background (`start /b`) counts while it is the youngest.
+   *  Checked shortly after input or output and every few seconds otherwise,
+   *  so it trails a change by up to ~2 s when nothing is printed, and fires
+   *  `foregroundchange` when it changes.
+   *  @type {{pid: number, name: string, path: string, commandLine: string}|null}
+   *  @example
+   *    term.addEventListener('foregroundchange', (e) => {
+   *      tab.label = e.detail.process ? e.detail.process.name : 'exited';
+   *    }); */
+  foregroundProcess;
   /** The pointer the program asked for with OSC 22 (a CSS cursor name), ""
    *  when it did not. @type {string} */
   pointerShape;
@@ -397,6 +418,8 @@ class HTMLTerminalElement extends HTMLElement {
  *  events, before the terminal acts; preventDefault() cancels its action. */
 /** `titlechange`: the program set its title (OSC 0 / 2). detail `{ title }`. */
 /** `cwdchange`: the shell reported its directory (OSC 7). detail `{ cwd }`. */
+/** `foregroundchange`: `foregroundProcess` changed. detail `{ process }`,
+ *  the new value (null once the child has exited). */
 /** `bell`: BEL. detail `{}`. */
 /** `notification`: a desktop notification. OSC 9 carries a body; OSC 777
  *  (notify;title;body) and OSC 99 (kitty) carry title and body. detail

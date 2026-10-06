@@ -115,9 +115,14 @@ void TermSession::kill() {
 }
 
 bool TermSession::write(std::string_view bytes) {
-    std::lock_guard<std::mutex> g(mu_);
-    if (!pty_ || exited()) return false;
-    return pty_->write(bytes) == bytes.size();
+    bool sent;
+    {
+        std::lock_guard<std::mutex> g(mu_);
+        if (!pty_ || exited()) return false;
+        sent = pty_->write(bytes) == bytes.size();
+    }
+    if (sent) noteInput();
+    return sent;
 }
 
 void TermSession::feed(std::string_view output) {
@@ -145,7 +150,8 @@ bool TermSession::sendKey(const bropty::KeyEvent& ev) {
         sent = session_.send_key(ev);
         moved = snapOnInput(sent);
     }
-    if (moved) wake();
+    if (sent) noteInput();  // wakes the parser, which presents a moved view too
+    else if (moved) wake();
     return sent;
 }
 
@@ -157,7 +163,8 @@ bool TermSession::sendText(std::string_view text) {
         sent = session_.send_text(text);
         moved = snapOnInput(sent);
     }
-    if (moved) wake();
+    if (sent) noteInput();
+    else if (moved) wake();
     return sent;
 }
 
@@ -169,7 +176,8 @@ bool TermSession::paste(std::string_view text) {
         sent = session_.paste(text);
         moved = snapOnInput(sent);
     }
-    if (moved) wake();
+    if (sent) noteInput();
+    else if (moved) wake();
     return sent;
 }
 
@@ -296,16 +304,21 @@ void TermSession::wake() {
 }
 
 void TermSession::threadMain() {
+    Clock::time_point foregroundAt{};
+    auto earliest = [](Clock::time_point& until, Clock::time_point t) {
+        if (t != Clock::time_point{} && (until == Clock::time_point{} || t < until)) until = t;
+    };
     while (!stop_.load(std::memory_order_acquire)) {
-        // Sleep until woken, until a held synchronized update times out, or
-        // until an image animation's next frame is due.
+        // Sleep until woken, until a held synchronized update times out,
+        // until an image animation's next frame is due, or until the
+        // foreground process is next to be checked.
         Clock::time_point until{};
         {
             std::lock_guard<std::mutex> g(mu_);
             if (syncActive_ && !syncTimedOut_) until = syncSince_ + kSyncTimeout;
-            const Clock::time_point frameAt = advanceAnimations(Clock::now());
-            if (frameAt != Clock::time_point{} && (until == Clock::time_point{} || frameAt < until)) until = frameAt;
+            earliest(until, advanceAnimations(Clock::now()));
         }
+        earliest(until, foregroundAt);
         {
             std::unique_lock<std::mutex> lk(wakeMu_);
             auto ready = [this] { return wakeFlag_ || stop_.load(std::memory_order_acquire); };
@@ -315,6 +328,7 @@ void TermSession::threadMain() {
         }
         wakePending_.store(false, std::memory_order_release);
         if (stop_.load(std::memory_order_acquire)) break;
+        const uint64_t parsedBefore = bytesParsed_.load(std::memory_order_relaxed);
 
         // Drain in slices, letting go of the lock between them so input and
         // resizes from the main thread get in.
@@ -335,6 +349,9 @@ void TermSession::threadMain() {
             if (!more || stop_.load(std::memory_order_acquire)) break;
             std::this_thread::yield();
         }
+        const bool activity = fgPoke_.exchange(false, std::memory_order_relaxed) ||
+                              bytesParsed_.load(std::memory_order_relaxed) != parsedBefore;
+        foregroundAt = pollForeground(Clock::now(), activity);
     }
 }
 

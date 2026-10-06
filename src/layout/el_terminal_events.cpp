@@ -9,6 +9,7 @@
 //   clipboardwrite {text, selection}             OSC 52 write; cancelable
 //   clipboardread  {id, selection}               OSC 52 read; cancelable
 //   promptmark     {mark, params, exitCode}      OSC 133 A / B / C / D
+//   foregroundchange {process}                   {pid, name, path, commandLine} or null
 //   scroll         {topRow, firstRow, screenTopRow, rows, atBottom, altScreen}
 //   searchchange   {active, complete, count, current}
 //
@@ -167,6 +168,16 @@ void ElTerminal::dispatchEvents() {
             case K::PointerShape:
                 m.cursorChanged = true;
                 break;
+            case K::Foreground: {
+                // The answer now, not the one queued: changes coalesce.
+                std::string json = "null";
+                if (const auto p = foregroundProcess())
+                    json = "{\"pid\":" + std::to_string(p->pid) + ",\"name\":" + termJsonString(p->name) +
+                           ",\"path\":" + termJsonString(p->path) +
+                           ",\"commandLine\":" + termJsonString(p->commandLine) + "}";
+                termDispatch(elem_, "foregroundchange", "{\"process\":" + json + "}");
+                break;
+            }
         }
     }
 

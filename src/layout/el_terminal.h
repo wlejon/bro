@@ -107,6 +107,16 @@ public:
     bool running() const;
     bool exited() const;
     std::optional<int> exitCode() const;
+    // The process that owns the terminal now (the shell at its prompt, the
+    // program it runs): empty before spawn and after exit. A
+    // "foregroundchange" event follows each change.
+    struct ProcessInfo {
+        int64_t pid = 0;
+        std::string name;         // what it goes by ("vim", "cmd.exe")
+        std::string path;         // its executable, "" when unreadable
+        std::string commandLine;
+    };
+    std::optional<ProcessInfo> foregroundProcess() const;
 
     // ---- reads ------------------------------------------------------------
     int cols() const;

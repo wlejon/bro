@@ -198,6 +198,17 @@ public:
     // The decoded-image quota (bropty's storage_limit); lowering it evicts now.
     void setImageMemoryLimit(size_t bytes);
 
+    // ---- the foreground process (term_session_foreground.cpp) --------------
+    // What owns the terminal now (bropty's IPtyProcess::foreground_process),
+    // as last checked: the parser thread checks shortly after input or
+    // output (at most every kForegroundGap, and again twice as things
+    // settle) and every kForegroundIdle while quiet, and queues a
+    // TermEvent::Foreground when the answer changes. Empty before spawn and
+    // once the child has exited.
+    static constexpr std::chrono::milliseconds kForegroundGap{250};
+    static constexpr std::chrono::milliseconds kForegroundIdle{3000};
+    [[nodiscard]] std::optional<bropty::ProcessInfo> foregroundProcess() const;
+
     // ---- data plane (main thread, lock-free) ---------------------------------
     // The newest published frame (the same one again when nothing is newer).
     // Frames are published at most one per frame taken: newer output than
@@ -233,6 +244,15 @@ private:
     // Run image animations up to `now` (mu_); when the next frame is due,
     // or {} when nothing animates.
     std::chrono::steady_clock::time_point advanceAnimations(std::chrono::steady_clock::time_point now);
+    // Check the foreground process when one is due (parser thread, outside
+    // mu_); `activity`: input or output since the last call. Returns when
+    // the next check is due, {} for none.
+    std::chrono::steady_clock::time_point pollForeground(std::chrono::steady_clock::time_point now, bool activity);
+    // Input went to the program: the foreground may be about to change.
+    void noteInput() {
+        fgPoke_.store(true, std::memory_order_relaxed);
+        wake();
+    }
     // Publish if presentation is not held by a synchronized update.
     bool maybePublish(std::chrono::steady_clock::time_point now, bool onlyIfConsumed);
     // Feed `chunk`, cutting it after each end-of-synchronized-update so the
@@ -268,6 +288,15 @@ private:
     std::string searchPattern_;  // mu_
     mutable std::mutex evMu_;    // after mu_ when both are held
     std::vector<TermEvent> events_;  // evMu_
+
+    // The foreground process: the answer (fgMu_), and the parser thread's
+    // schedule for checking it.
+    mutable std::mutex fgMu_;
+    std::optional<bropty::ProcessInfo> fg_;  // fgMu_
+    std::atomic<bool> fgPoke_{false};
+    std::chrono::steady_clock::time_point fgDue_{}, fgLast_{};
+    int fgTrail_ = 0;  // settle checks still to make after the last activity
+    bool fgFinal_ = false;  // the exit has been reported; no more checks
 
     std::atomic<uint64_t> bytesParsed_{0};
     std::atomic<uint64_t> framesPublished_{0};

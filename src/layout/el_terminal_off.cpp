@@ -45,6 +45,7 @@ int64_t ElTerminal::pid() const { return 0; }
 bool ElTerminal::running() const { return false; }
 bool ElTerminal::exited() const { return false; }
 std::optional<int> ElTerminal::exitCode() const { return std::nullopt; }
+std::optional<ElTerminal::ProcessInfo> ElTerminal::foregroundProcess() const { return std::nullopt; }
 int ElTerminal::cols() const { return 0; }
 int ElTerminal::rows() const { return 0; }
 std::string ElTerminal::screenText() const { return {}; }

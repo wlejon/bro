@@ -31,7 +31,7 @@ void TermSession::pushEvent(TermEvent ev) {
         const bool coalesce = last.kind == ev.kind &&
             (ev.kind == TermEvent::Kind::Bell || ev.kind == TermEvent::Kind::Title ||
              ev.kind == TermEvent::Kind::Progress || ev.kind == TermEvent::Kind::PointerShape ||
-             ev.kind == TermEvent::Kind::Cwd);
+             ev.kind == TermEvent::Kind::Cwd || ev.kind == TermEvent::Kind::Foreground);
         if (coalesce) {
             last = std::move(ev);
             return;

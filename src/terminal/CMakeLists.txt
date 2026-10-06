@@ -8,6 +8,7 @@ add_library(bro_terminal STATIC
     term_session.cpp
     term_session_host.cpp
     term_session_view.cpp
+    term_session_foreground.cpp
     term_paint.cpp
     term_paint_color.cpp
     term_paint_images.cpp

@@ -36,6 +36,17 @@ bool ElTerminal::scroll(ScrollOp op, int64_t amount) {
     return s.viewState().topRow != before.topRow;
 }
 
+std::optional<ElTerminal::ProcessInfo> ElTerminal::foregroundProcess() const {
+    const std::optional<bropty::ProcessInfo> p = impl_->session->foregroundProcess();
+    if (!p) return std::nullopt;
+    ProcessInfo out;
+    out.pid = p->pid;
+    out.name = p->name;
+    out.path = p->path;
+    out.commandLine = p->command_line;
+    return out;
+}
+
 void ElTerminal::selectRange(const Range& r) { impl_->session->select(termToRowRange(r)); }
 void ElTerminal::selectAll() { impl_->session->selectAll(); }
 void ElTerminal::clearSelection() { impl_->session->selectClear(); }

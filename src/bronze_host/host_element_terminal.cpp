@@ -324,6 +324,16 @@ void decorateTerminalProto(ObjectBuilder& b) {
     });
     readOnly("title", [](layout::ElTerminal& t) { return ev::fromUtf8(t.title()); });
     readOnly("cwd", [](layout::ElTerminal& t) { return ev::fromUtf8(t.cwd()); });
+    readOnly("foregroundProcess", [](layout::ElTerminal& t) {
+        const auto p = t.foregroundProcess();
+        if (!p) return ev::null();
+        ObjectBuilder o;
+        o.set("pid", ev::fromDouble(double(p->pid)));
+        o.set("name", ev::fromUtf8(p->name));
+        o.set("path", ev::fromUtf8(p->path));
+        o.set("commandLine", ev::fromUtf8(p->commandLine));
+        return o.get();
+    });
     readOnly("pointerShape", [](layout::ElTerminal& t) { return ev::fromUtf8(t.pointerShape()); });
     readOnly("cursor", [](layout::ElTerminal& t) {
         const auto c = t.cursor();
