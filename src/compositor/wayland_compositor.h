@@ -24,6 +24,7 @@ namespace bro::compositor {
 struct CompositorConfig {
     bool headless = true;
     bool drm = false;
+    bool xwayland = true;
     uint32_t width = 1280;
     uint32_t height = 720;
     std::string socketName = "";
@@ -51,6 +52,7 @@ public:
 
     bool isRunning() const;
     std::string socketName() const;
+    std::string xwaylandDisplay() const;
 
     /// Pump and dispatch compositor events (server_events and wm events)
     void pollEvents();

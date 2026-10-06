@@ -20,6 +20,7 @@ bool WaylandCompositor::init(const CompositorConfig& config, std::string* error)
     } else {
         sCfg.backend = brocompositor::wl::BackendKind::Auto;
     }
+    sCfg.xwayland = config.xwayland ? brocompositor::wl::XwaylandMode::Lazy : brocompositor::wl::XwaylandMode::Off;
     sCfg.initial_outputs = 1;
     sCfg.initial_output_size = {static_cast<int32_t>(config.width), static_cast<int32_t>(config.height)};
     sCfg.socket_name = config.socketName;
@@ -53,6 +54,15 @@ bool WaylandCompositor::isRunning() const {
 
 std::string WaylandCompositor::socketName() const {
     return socketName_;
+}
+
+std::string WaylandCompositor::xwaylandDisplay() const {
+#if defined(__linux__) && defined(BRO_WITH_COMPOSITOR)
+    if (backend_) {
+        return backend_->xwayland_display();
+    }
+#endif
+    return {};
 }
 
 void WaylandCompositor::pollEvents() {

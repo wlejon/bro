@@ -40,4 +40,16 @@ if(BRO_BUILD_TESTS AND BRO_WITH_COMPOSITOR)
         target_link_libraries(bro_shell_surfaces_test PRIVATE brodmabuf::brodmabuf)
     endif()
     target_include_directories(bro_shell_surfaces_test PRIVATE ${bro_SOURCE_DIR}/src)
+
+    add_executable(bro_xwayland_test tests/test_xwayland.cpp)
+    target_link_libraries(bro_xwayland_test PRIVATE
+        bro_compositor
+        bro_render
+        bro_util
+        brocompositor
+    )
+    if(BRO_WITH_DMABUF)
+        target_link_libraries(bro_xwayland_test PRIVATE brodmabuf::brodmabuf)
+    endif()
+    target_include_directories(bro_xwayland_test PRIVATE ${bro_SOURCE_DIR}/src)
 endif()
