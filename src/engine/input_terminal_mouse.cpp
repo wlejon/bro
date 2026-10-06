@@ -24,45 +24,43 @@ namespace bro::engine {
 
 namespace {
 
-// Headless never touches the OS clipboard or opens anything: the clipboard
-// and the primary selection are process-local strings. Windowed has no
-// primary selection off X11/Wayland either, so it keeps one here too.
-std::string g_clipboard;
+// The clipboard is the one the page has (navigator.clipboard, execCommand,
+// the editing shortcuts): platform::setClipboardText / getClipboardText, in
+// headless as in a window, so a terminal's copy is the page's paste and the
+// other way round. The primary selection is the OS's only on X11/Wayland in
+// a window; everywhere else it is this process-local string.
 std::string g_primary;
 
 } // namespace
 
 void installTerminalHost(bool headless) {
     layout::ElTerminal::Host h;
-    if (headless) {
-        h.writeClipboard = [](const std::string& text, bool primary) {
-            (primary ? g_primary : g_clipboard) = text;
-            return true;
-        };
-        h.readClipboard = [](bool primary) { return primary ? g_primary : g_clipboard; };
-        h.openLink = [](const std::string&, const std::string&) {};
-    } else {
-        h.writeClipboard = [](const std::string& text, bool primary) {
-            if (!primary) return platform::setClipboardText(text);
+    h.writeClipboard = [headless](const std::string& text, bool primary) {
+        if (!primary) return platform::setClipboardText(text);
 #if defined(__linux__) || defined(__FreeBSD__)
-            if (SDL_SetPrimarySelectionText(text.c_str())) return true;
+        if (!headless && SDL_SetPrimarySelectionText(text.c_str())) return true;
 #endif
-            g_primary = text;
-            return true;
-        };
-        h.readClipboard = [](bool primary) -> std::string {
-            if (!primary) return platform::getClipboardText();
+        (void)headless;
+        g_primary = text;
+        return true;
+    };
+    h.readClipboard = [headless](bool primary) -> std::string {
+        if (!primary) return platform::getClipboardText();
 #if defined(__linux__) || defined(__FreeBSD__)
-            if (SDL_HasPrimarySelectionText()) {
-                if (char* t = SDL_GetPrimarySelectionText()) {
-                    std::string s(t);
-                    SDL_free(t);
-                    return s;
-                }
+        if (!headless && SDL_HasPrimarySelectionText()) {
+            if (char* t = SDL_GetPrimarySelectionText()) {
+                std::string s(t);
+                SDL_free(t);
+                return s;
             }
+        }
 #endif
-            return g_primary;
-        };
+        (void)headless;
+        return g_primary;
+    };
+    if (headless) {
+        h.openLink = [](const std::string&, const std::string&) {};  // headless opens nothing
+    } else {
         h.openLink = [](const std::string& target, const std::string&) {
             if (!SDL_OpenURL(target.c_str())) LOG_WARN("terminal: could not open %s: %s", target.c_str(), SDL_GetError());
         };

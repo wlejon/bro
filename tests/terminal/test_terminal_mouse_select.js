@@ -3,8 +3,9 @@
 // A drag selects by character, a double click by word, a triple click by
 // line, Alt+drag a block; Shift+click extends the selection and a click that
 // does not move clears it. With copyOnSelect the selection goes to the
-// clipboard, and a middle click pastes it (middleClickPaste). Headless the
-// clipboard is the process's own, never the OS's.
+// clipboard, and a middle click pastes it (middleClickPaste). The clipboard
+// is the page's (navigator.clipboard, the system clipboard), so the test
+// puts back what it held.
 
 const path = require('path');
 const fs = require('fs');
@@ -118,6 +119,7 @@ if (!bro.terminal || !bro.terminal.available) {
     // Copy-on-select puts the selection on the clipboard, and a middle click
     // pastes it into the program.
     if (fs.existsSync(CHILD)) {
+        const clipboardBefore = navigator.clipboard.__read();
         t.options = { copyOnSelect: true, middleClickPaste: true };
         assert(t.options.copyOnSelect === true && t.options.middleClickPaste === true, 'options read back');
         drag(t, [11, 0, 0.2], [15, 0, 0.8]);
@@ -136,5 +138,6 @@ if (!bro.terminal || !bro.terminal.available) {
         waitFor(() => k.screenText().includes('KEYS:'), 'the child read the pastes');
         const hex = 'KEYS:' + '67616d6d61' + '67616d6d61';
         assert(k.screenText().includes(hex), 'pasted "gamma" twice: ' + JSON.stringify(k.screenText()));
+        navigator.clipboard.__write(clipboardBefore);
     }
 }
