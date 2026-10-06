@@ -10,7 +10,7 @@
 // Wayland server behind them is Linux-only.
 #include <brocompositor/events.h>
 
-#if defined(__linux__) && BRO_WITH_COMPOSITOR
+#if BRO_HAVE_WAYLAND_SERVER
 #include <brocompositor/linux/server.h>
 #include <brocompositor/surface.h>
 #include <brocompositor/window_manager.h>
@@ -38,7 +38,7 @@ struct CompositorConfig {
 
 struct LeasedSurfaceFrame {
     uint32_t surfaceId = 0;
-#if defined(__linux__) && BRO_WITH_COMPOSITOR
+#if BRO_HAVE_WAYLAND_SERVER
     std::shared_ptr<brocompositor::wl::ClientSurface> surface;
     brocompositor::Frame frame;
 #endif
@@ -85,14 +85,14 @@ public:
     // Shell state queries
     bool isSessionLocked() const;
 
-#if defined(__linux__) && BRO_WITH_COMPOSITOR
+#if BRO_HAVE_WAYLAND_SERVER
     brocompositor::wl::ServerBackend* backend() { return backend_.get(); }
     brocompositor::WindowManager* windowManager() { return wm_.get(); }
     std::vector<brocompositor::wl::LayerSurfaceInfo> layerSurfaces() const;
 #endif
 
 private:
-#if defined(__linux__) && BRO_WITH_COMPOSITOR
+#if BRO_HAVE_WAYLAND_SERVER
     std::unique_ptr<brocompositor::wl::ServerBackend> backend_;
     std::unique_ptr<brocompositor::WindowManager> wm_;
 #endif

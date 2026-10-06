@@ -127,8 +127,8 @@ ChildProcess spawnX11Client(const std::string& binary, const std::vector<std::st
 int main() {
     std::cout << "=== bro_xwayland_test: XWayland Server & Window Management ===" << std::endl;
 
-#if !defined(__linux__) || !BRO_WITH_COMPOSITOR
-    std::cout << "SKIP (77): Only supported on Linux with BRO_WITH_COMPOSITOR" << std::endl;
+#if !BRO_HAVE_WAYLAND_SERVER
+    std::cout << "SKIP (77): needs brocompositor's Wayland server (Linux, wlroots 0.18)" << std::endl;
     return 77;
 #else
 
