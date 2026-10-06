@@ -2,7 +2,7 @@
 
 bro is one repository among many. This page lists all of them: what each one is for, what it builds against, and where it runs. It also describes the dependency convention they share. The same list in machine-readable form is [`scripts/repos.txt`](../scripts/repos.txt), which `scripts/repo-status.sh`, `scripts/repo-status.ps1` and `tests/run_tests.sh` read. Change both together.
 
-**Where it is going.** The goal is a cross-platform desktop environment, on Windows and Linux at least, with apps written in HTML/CSS/JS on the bro runtime. On Linux bro drives the screen itself. The current milestone is a terminal in bro good enough to run Claude Code: the `<terminal>` element ([terminal-api.js](terminal-api.js)) and [broterm](https://github.com/wlejon/broterm), the first app of the desktop environment.
+**Where it is going.** The goal is a cross-platform desktop environment, on Windows and Linux at least, with apps written in HTML/CSS/JS on the bro runtime. On Linux bro drives the screen itself. The current milestone is a terminal in bro good enough to run Claude Code: the `<terminal>` element ([terminal-api.js](terminal-api.js)) and [broterm](https://github.com/wlejon/broterm), the first app of the desktop environment. What is done and what is open: [desktop-roadmap.md](desktop-roadmap.md).
 
 All repositories are at `github.com/wlejon/<name>` under the MIT license unless noted, and each is checked out beside bro at `../<name>`.
 
