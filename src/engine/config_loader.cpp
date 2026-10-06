@@ -79,8 +79,45 @@ bool parseConfig(const std::string& path, EngineConfig& config,
         return std::stof(num);
     };
 
+    auto getStringArray = [&](const char* key) -> std::vector<std::string> {
+        std::string needle = std::string("\"") + key + "\"";
+        size_t pos = content.find(needle);
+        if (pos == std::string::npos) return {};
+        pos += needle.size();
+        while (pos < content.size() && (content[pos] == ' ' || content[pos] == '\t' || content[pos] == '\n' || content[pos] == '\r' || content[pos] == ':')) pos++;
+        if (pos >= content.size() || content[pos] != '[') return {};
+        pos++;
+        std::vector<std::string> items;
+        while (pos < content.size() && content[pos] != ']') {
+            while (pos < content.size() && content[pos] != '"' && content[pos] != ']') pos++;
+            if (pos >= content.size() || content[pos] == ']') break;
+            pos++;
+            std::string item;
+            while (pos < content.size() && content[pos] != '"') {
+                if (content[pos] == '\\' && pos + 1 < content.size()) {
+                    pos++;
+                    item += content[pos];
+                } else {
+                    item += content[pos];
+                }
+                pos++;
+            }
+            if (pos < content.size() && content[pos] == '"') pos++;
+            items.push_back(item);
+        }
+        return items;
+    };
+
     std::string app = getString("app");
     if (!app.empty()) config.appDir = app;
+
+    int shellFlag = getBool("shell");
+    if (shellFlag == 1) config.isShellApp = true;
+
+    auto priv = getStringArray("privileged");
+    if (!priv.empty()) {
+        config.privilegedNamespaces = std::move(priv);
+    }
 
     std::string title = getString("title");
     if (!title.empty()) config.title = title;

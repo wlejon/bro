@@ -91,6 +91,7 @@ Engine::Engine(const EngineConfig& config)
     installHostBindings_ = config.installHostBindings;
     installWorkerHostBindings_ = config.installWorkerHostBindings;
     initDevLoopConfig(config);
+    desktopTrust_ = evaluateDesktopTrust(config.appDir, config.projectRoot, config.isShellApp, config.privilegedNamespaces);
     // JS runs on bronze's tiered default; BRO_JIT_TIER pins a tier to debug one.
     bronze_host::applyJitTierOverride();
     // CSS animations are Web Animations records (css_transitions.h).

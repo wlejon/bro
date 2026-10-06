@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <vector>
 
 namespace bro::engine {
 
@@ -73,6 +74,8 @@ struct EngineConfig {
     // Colours come from the element's scheme / scrollbar-color at draw time
     // (Scrollbar::colorsFor).
     Scrollbar::Style elementScrollbar{5.0f, 1.0f, 16.0f};
+    bool isShellApp = false;
+    std::vector<std::string> privilegedNamespaces;
     std::function<void(Engine&)> installHostBindings;
     // Called on each Worker thread after its `bro` root is in, so an embedder
     // can put its own namespace (bro.<app>) into workers as well. Runs on the

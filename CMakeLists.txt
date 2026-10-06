@@ -217,6 +217,7 @@ option(BRO_WITH_KEYS     "Keybinding engine (brokeys)"                      ${_d
 option(BRO_WITH_SEARCH   "Fuzzy matching, file walking, and grep (brosearch)" ${_d_render})
 option(BRO_WITH_APPS     "App catalog, launch, and desktop entries (broapps)" ${_d_render})
 option(BRO_WITH_VFS      "Virtual filesystem and file operations (brovfs)"   ${_d_render})
+option(BRO_WITH_THUMB    "Freedesktop thumbnailer and cache (brothumb)"       ${_d_render})
 # The native <terminal> element: bropty (VT emulation + PTY/ConPTY), its
 # brosearch dependency and brothemes (minimum contrast), plus bromux
 # (persistent sessions) when found; all vcpkg-free siblings. On in app and
@@ -353,13 +354,14 @@ set(BROCONF_ENABLE_API      ON CACHE BOOL "Build Bronze JavaScript API for broco
 set(BROTHEMES_ENABLE_API    ON CACHE BOOL "Build Bronze JavaScript API for brothemes" FORCE)
 set(BROKEYS_ENABLE_API      ON CACHE BOOL "Build Bronze JavaScript API for brokeys" FORCE)
 set(BROSEARCH_ENABLE_API    ON CACHE BOOL "Build Bronze JavaScript API for brosearch" FORCE)
+set(BROTHUMB_ENABLE_API     ON CACHE BOOL "Build Bronze JavaScript API for brothumb" FORCE)
 
 # Stamp every feature flag as a 0/1 compile definition so C++ can `#if` on it.
 # Applied to the targets that carry feature-gated code (bro_engine, bro_scene,
 # bro_bronze_host). Uses the #if BRO_WITH_X convention.
 set(BRO_FEATURE_FLAGS
     3D PHYSICS AUDIO GAMEAI FLORA
-    NET VIDEO STEAM TERMINAL CONF THEMES KEYS SEARCH APPS VFS
+    NET VIDEO STEAM TERMINAL CONF THEMES KEYS SEARCH APPS VFS THUMB
     TENSOR TENSOR_CUDA TENSOR_METAL TENSOR_VULKAN LM DIFFUSION VISION SOUNDML TRIPOSPLAT GAMEAI_NN
     BRONZE)
 function(bro_apply_feature_defs target)

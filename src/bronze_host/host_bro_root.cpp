@@ -334,6 +334,20 @@ void installBroRoots(engine::Engine& engine) {
 #if !BRO_WITH_VFS
     setUnavailable("vfs", "BRO_WITH_VFS");
 #endif
+#if !BRO_WITH_THUMB
+    setUnavailable("thumb", "BRO_WITH_THUMB");
+#endif
+    // Privileged desktop shell namespaces:
+    // If not granted to this app by the desktop trust model, install the unavailable
+    // namespace stub so that bro.<ns>.available === false and every call throws.
+    static const char* const kPrivilegedNamespaces[] = {
+        "displays", "cred", "seat", "portal", "sys", "compositor", "wl",
+    };
+    for (const char* ns : kPrivilegedNamespaces) {
+        if (!engine.hasPrivilege(ns)) {
+            setUnavailable(ns, "trusted shell declaration in bro.json");
+        }
+    }
     {
         // installBroWindowOpen roots it and installs `parent` as well.
         Value broWin = ev::getProperty(bro->get(), "window");
@@ -363,7 +377,8 @@ void markAvailableNamespaces() {
         "listen", "motion", "rave", "sense", "triposplat", "vision", "wake", "diffusion",
         "tensor", "flora", "media", "mesh", "rigging", "scene", "terrain", "clipmap",
         "tile_world", "lighting", "animation", "mic", "conf", "themes", "keys", "search",
-        "apps", "vfs",
+        "apps", "vfs", "thumb",
+        "displays", "cred", "seat", "portal", "sys", "compositor", "wl",
     };
     auto decorate = [](Value nsIn) {
         if (!ev::isObject(nsIn)) return;

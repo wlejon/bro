@@ -39,6 +39,7 @@ add_library(bro_engine STATIC
     scrollbar.cpp
     app_loader.cpp
     config_loader.cpp
+    desktop_trust.cpp
     launcher.cpp
     replaced_elements.cpp
     replaced_elements_input.cpp

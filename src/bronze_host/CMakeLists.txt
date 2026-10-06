@@ -451,6 +451,10 @@ if(BRO_WITH_VFS)
     target_link_libraries(bro_bronze_host PUBLIC brovfs brovfs_api)
 endif()
 
+if(BRO_WITH_THUMB)
+    target_link_libraries(bro_bronze_host PUBLIC brothumb brothumb_api)
+endif()
+
 if(BRO_WITH_WEBP)
     target_link_libraries(bro_bronze_host PUBLIC bro_webp)
 endif()

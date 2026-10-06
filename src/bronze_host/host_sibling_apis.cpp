@@ -91,6 +91,9 @@
 #if BRO_WITH_VFS
 #include <brovfs/api.h>
 #endif
+#if BRO_WITH_THUMB
+#include <brothumb/api.h>
+#endif
 #include "api/api.h"  // brokit::api::resolveAssetPath
 #include <broimage/api.h>
 
@@ -471,6 +474,20 @@ void installSiblingApis(engine::Engine& engine) {
                 if (ev::microtasksPending()) ev::drainMicrotasks();
             });
             engine.addShutdownHook([] { brovfs::api::shutdownVfsAsync(); });
+        }
+    }
+#endif
+#if BRO_WITH_THUMB
+    brothumb::api::installThumb();
+    {
+        static bool thumbHooksInstalled = false;
+        if (!thumbHooksInstalled) {
+            thumbHooksInstalled = true;
+            engine.addFramePump([] {
+                brothumb::api::tickThumbAsync();
+                if (ev::microtasksPending()) ev::drainMicrotasks();
+            });
+            engine.addShutdownHook([] { brothumb::api::shutdownThumbAsync(); });
         }
     }
 #endif

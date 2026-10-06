@@ -2,6 +2,7 @@
 
 #include "engine/app_loader.h"
 #include "engine/css_transitions.h"
+#include "engine/desktop_trust.h"
 #include "engine/device_scale.h"
 #include "engine/dom_undo.h"
 #include "engine/engine_config.h"
@@ -47,11 +48,8 @@
 #include <vulkan/vulkan.h>
 
 namespace bro::render {
-struct PresentFrame;
-struct PresentImage;
-class VulkanContext;
-class VulkanSwapchain;
-class VulkanPresenter;
+struct PresentFrame; struct PresentImage;
+class VulkanContext; class VulkanSwapchain; class VulkanPresenter;
 }
 
 namespace bro::engine {
@@ -75,13 +73,10 @@ public:
 #if BRO_WITH_3D
     using SceneGraphEntry = bro::engine::SceneGraphEntry;
 #endif
-    using TouchContact = bro::engine::TouchContact;
-    using GestureState = bro::engine::GestureState;
+    using TouchContact = bro::engine::TouchContact; using GestureState = bro::engine::GestureState;
     using EditableComposition = bro::engine::EditableComposition;
-    using IframeDoc = bro::engine::IframeDoc;
-    using SystemDocument = bro::engine::SystemDocument;
-    using WindowHostOptions = bro::engine::WindowHostOptions;
-    using WindowHost = bro::engine::WindowHost;
+    using IframeDoc = bro::engine::IframeDoc; using SystemDocument = bro::engine::SystemDocument;
+    using WindowHostOptions = bro::engine::WindowHostOptions; using WindowHost = bro::engine::WindowHost;
 
     void run();
     void handleResize(int w, int h);
@@ -115,9 +110,7 @@ public:
     void handleWheel(float x, float y, float dx, float dy);
     void drainWheelSmoothing(float frameDtSec);
     void handleDropFile(const std::vector<std::string>& paths, float x = -1, float y = -1);
-    void handleDropFile(const std::string& path, float x = -1, float y = -1) {
-        handleDropFile(std::vector<std::string>{ path }, x, y);
-    }
+    void handleDropFile(const std::string& path, float x = -1, float y = -1) { handleDropFile(std::vector<std::string>{ path }, x, y); }
     void handleDropText(const std::string& text, float x = -1, float y = -1);
 
     // Gamepads (gamepad.cpp)
@@ -389,6 +382,9 @@ public:
     /// (bronze_host/app_module.h) — is handed the Engine, not the config that
     /// built it.
     const std::string& appDir() const { return appDir_; }
+    const DesktopTrustInfo& desktopTrust() const { return desktopTrust_; }
+    bool isShellApp() const { return desktopTrust_.isShell; }
+    bool hasPrivilege(const std::string& ns) const { return desktopTrust_.hasPrivilege(ns); }
     const std::function<void(Engine&)>& installHostBindings() const { return installHostBindings_; }
     const std::function<void()>& installWorkerHostBindings() const { return installWorkerHostBindings_; }
     /// Engine-supplied virtual path prefixes (`/app`, `/lib`, `/system`, ...),
@@ -413,12 +409,8 @@ public:
     int contentLeft() const { return contentInsets().left; }
     int contentRight() const { return contentInsets().right; }
     int contentBottom() const { return contentInsets().bottom; }
-    int contentWidth() const {
-        auto i = contentInsets(); return viewportWidth_ - i.left - i.right;
-    }
-    int contentHeight() const {
-        auto i = contentInsets(); return viewportHeight_ - i.top - i.bottom;
-    }
+    int contentWidth() const { auto i = contentInsets(); return viewportWidth_ - i.left - i.right; }
+    int contentHeight() const { auto i = contentInsets(); return viewportHeight_ - i.top - i.bottom; }
 
     InspectorState& inspector() { return inspector_; }
     const InspectorState& inspector() const { return inspector_; }
@@ -729,6 +721,7 @@ private:
 
     AppManifest manifest_;
     std::string appDir_;
+    DesktopTrustInfo desktopTrust_;
     std::string titleOverride_;
     std::function<void(Engine&)> installHostBindings_;
     std::function<void()> installWorkerHostBindings_;

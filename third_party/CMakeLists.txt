@@ -541,6 +541,20 @@ if(BRO_WITH_VFS AND NOT TARGET brovfs)
     endif()
 endif()
 
+# --- brothumb ---
+if(BRO_WITH_THUMB AND NOT TARGET brothumb)
+    set(BROTHUMB_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    bro_default_sibling_dir(brothumb _brothumb_default)
+    set(BROTHUMB_DIR "${_brothumb_default}" CACHE PATH "Path to standalone brothumb repo")
+    if(EXISTS "${BROTHUMB_DIR}/CMakeLists.txt")
+        message(STATUS "brothumb: using standalone repo at ${BROTHUMB_DIR}")
+        add_subdirectory("${BROTHUMB_DIR}" "${CMAKE_BINARY_DIR}/brothumb" EXCLUDE_FROM_ALL)
+    elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/brothumb/CMakeLists.txt")
+        message(STATUS "brothumb: using submodule at third_party/brothumb")
+        add_subdirectory(brothumb EXCLUDE_FROM_ALL)
+    endif()
+endif()
+
 # --- Jolt Physics ---
 if(BRO_WITH_PHYSICS)
 set(USE_STATIC_MSVC_RUNTIME_LIBRARY OFF CACHE BOOL "" FORCE)  # match bro's /MD runtime
