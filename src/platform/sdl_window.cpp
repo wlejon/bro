@@ -13,7 +13,8 @@ namespace bro::platform {
 Window::Window(const std::string& title, uint32_t width, uint32_t height,
                bool hidden, bool resizable, bool vsync, bool borderless,
                GraphicsBackend backend)
-    : m_width(width), m_height(height), m_vsyncPref(vsync), m_backend(backend)
+    : m_width(width), m_height(height), m_vsyncPref(vsync), m_backend(backend),
+      m_borderless(borderless)
 {
     // SDL library lifetime is refcounted across all windows (SdlRuntime);
     // this primary window holds one reference like any other.
@@ -115,6 +116,7 @@ std::unique_ptr<Window> Window::createSecondary(const SecondaryConfig& cfg) {
     win->m_vsyncPref = false;  // secondary swaps run at interval 0 by policy
     win->m_backend = cfg.backend;
     win->m_alwaysOnTop = cfg.alwaysOnTop;
+    win->m_borderless = cfg.borderless;
 
     // Placement: explicit position wins; else center on the requested
     // display; else leave it to the OS. Skipped for hidden windows — where a
@@ -255,6 +257,7 @@ std::vector<DisplayModeInfo> Window::getDisplayModes() const {
 
 void Window::setBorderless(bool borderless) {
     if (!m_window) return;
+    m_borderless = borderless;
     if (!SDL_SetWindowBordered(m_window, !borderless)) {
         LOG_ERROR("Failed to set borderless: %s", SDL_GetError());
     }
@@ -262,7 +265,7 @@ void Window::setBorderless(bool borderless) {
 
 bool Window::isBorderless() const {
     if (!m_window) return false;
-    return (SDL_GetWindowFlags(m_window) & SDL_WINDOW_BORDERLESS) != 0;
+    return m_borderless;
 }
 
 void Window::setAlwaysOnTop(bool onTop) {

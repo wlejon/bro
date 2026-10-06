@@ -91,8 +91,11 @@ async function run() {
 
     if (layered) {
         // Page changes only: the terminal's layer is left alone.
+        const beforeFeed = bro.terminal.stats().layerRecords;
         t.feed('idle');
-        await forMs(200);
+        while (!t.frameText().includes('idle')) await frames(1);
+        while (bro.terminal.stats().layerRecords === beforeFeed) await frames(1);
+        await frames(3);
         const a0 = bro.terminal.stats();
         for (let i = 0; i < 30; ++i) {
             clock.textContent = 'page ' + i;

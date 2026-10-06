@@ -401,7 +401,7 @@ void markAvailableNamespaces() {
         "listen", "motion", "rave", "sense", "triposplat", "vision", "wake", "diffusion",
         "tensor", "flora", "media", "mesh", "rigging", "scene", "terrain", "clipmap",
         "tile_world", "lighting", "animation", "mic", "conf", "themes", "keys", "search",
-        "apps", "vfs", "thumb",
+        "apps", "vfs", "thumb", "a11y",
         "displays", "cred", "seat", "portal", "sys", "compositor", "wl",
     };
     auto decorate = [](Value nsIn) {

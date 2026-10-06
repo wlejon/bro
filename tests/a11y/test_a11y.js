@@ -1,6 +1,8 @@
 // Headless test for bro.a11y
 assert(typeof bro.a11y === 'object', 'bro.a11y namespace exists');
-assert(bro.a11y.available === true, 'bro.a11y.available is true');
+if (!bro.a11y.available) {
+    skipTest('bro.a11y is compiled out of this build');
+}
 
 // 1. Announcements
 assert(typeof bro.a11y.announce === 'function', 'announce is function');
