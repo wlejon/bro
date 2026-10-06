@@ -75,8 +75,26 @@ bool isTrustedAppLocation(const std::string& appDir, const std::string& projectR
         fs::current_path() / "apps",
     };
 
-    // Standard OS install prefixes on Linux
-#ifndef _WIN32
+    // Standard OS install prefixes per platform
+#ifdef _WIN32
+    if (const char* pf = std::getenv("ProgramFiles")) {
+        trustedPrefixes.emplace_back(fs::path(pf) / "bro" / "apps");
+        trustedPrefixes.emplace_back(fs::path(pf) / "bro" / "system");
+    }
+    if (const char* pd = std::getenv("ProgramData")) {
+        trustedPrefixes.emplace_back(fs::path(pd) / "bro" / "apps");
+        trustedPrefixes.emplace_back(fs::path(pd) / "bro" / "system");
+    }
+    if (const char* la = std::getenv("LOCALAPPDATA")) {
+        trustedPrefixes.emplace_back(fs::path(la) / "bro" / "system");
+    }
+#elif defined(__APPLE__)
+    trustedPrefixes.emplace_back("/Library/Application Support/bro/apps");
+    trustedPrefixes.emplace_back("/Library/Application Support/bro/system");
+    trustedPrefixes.emplace_back("/Applications/bro.app/Contents/Resources/apps");
+    trustedPrefixes.emplace_back("/usr/local/share/bro");
+    trustedPrefixes.emplace_back("/opt/bro/apps");
+#else
     trustedPrefixes.emplace_back("/usr/share/bro");
     trustedPrefixes.emplace_back("/usr/local/share/bro");
     trustedPrefixes.emplace_back("/opt/bro/apps");
