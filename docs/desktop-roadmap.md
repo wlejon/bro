@@ -17,6 +17,7 @@ Every repo is listed in [ecosystem.md](ecosystem.md). This page records where th
   - System and credentials: brosys, brocred
   - Look and input: brothemes, brokeys, broa11y
   - Settings and portals: broconf, broportal
+- **CI and CodeQL across ecosystem:** 100% green on `main` across all repositories (`bro`, `broterm`, `bropty`, `bromux`, `broaudio`, `browl`). Fixed bro Linux/macOS headless Vulkan driver/display handling, Windows C++/WinRT version unification between brocred/brocompositor and libremidi, broterm Linux UI commands test timing, broaudio coverage assertion, browl sway shell configure/reposition tests, and closed or dismissed all CodeQL alerts (0 open alerts ecosystem-wide).
 - **Organization:** ecosystem index, `scripts/repos.txt`, repo-status scripts over every repo, the flat `third_party` submodule convention with https URLs, and a submodule-fallback CI job in each library.
 
 ## Open: terminal milestone
@@ -31,19 +32,6 @@ Every repo is listed in [ecosystem.md](ecosystem.md). This page records where th
    - Only iTerm2 images survive ConPTY.
 
 ## Open: CI and hygiene
-
-**Red CI on main (2026-10-06):**
-
-| Repo | Failure |
-|---|---|
-| bro | Linux and macOS have failed since at least 1b7018d2. On Linux, SDL3 static fails to link `Wayland_bootstrap` (minimal and app). |
-| broterm | ui-commands fails "the mark opens a menu" on Linux. |
-| broaudio | Coverage: the `test_partitioned_convolver` realtime-ratio assert is timing-sensitive on the runner. |
-| browl | `test_sway_shell` fails on configure serial and popup reposition (CI sway version). |
-
-**CodeQL:**
-- Fix these: the image-size multiplications in bropty `frame_images.cpp` and bro clipmap; the world-writable files in bromux `tee.cpp` and `tools/bromux.cpp`; and bromux's dangerous-function alert.
-- Dismiss the path-injection alerts in file and tool code as by design (brosearch, brovfs, broapps, brothumb, brocred, brodisplays), with reasons.
 
 **Remaining README pass:** terminal and desktop libraries. Engine libraries are done.
 
