@@ -498,16 +498,25 @@ run_one_test() {
         esac
     fi
 
+    local TEST_APP_FOR_RUN="$TEST_APP"
+    local EXTRA_ENV=()
+    case "$REL" in
+        compositor/*|cred/*|displays/*|portal/*|seat/*|sys/*|wl/*)
+            TEST_APP_FOR_RUN="$(to_win_path "$SCRIPT_DIR/desktop_trust/trusted_app")"
+            EXTRA_ENV+=( "BRO_TRUSTED=1" )
+            ;;
+    esac
+
     local EXTRA_TEST_ARGS=()
     if [[ "${BRO_TEST_ALLOW_RASTER:-0}" == "1" ]]; then
         EXTRA_TEST_ARGS+=( "--no-gpu" )
     fi
 
     if [[ -n "$TIMEOUT_BIN" ]]; then
-        OUTPUT=$("$TIMEOUT_BIN" -k 10 "$TEST_TIMEOUT" "$BRO" "${EXTRA_TEST_ARGS[@]}" "$TEST_APP" "$TEST_FILE" 2>&1)
+        OUTPUT=$(env "${EXTRA_ENV[@]}" "$TIMEOUT_BIN" -k 10 "$TEST_TIMEOUT" "$BRO" "${EXTRA_TEST_ARGS[@]}" "$TEST_APP_FOR_RUN" "$TEST_FILE" 2>&1)
         STATUS=$?
     else
-        OUTPUT=$("$BRO" "${EXTRA_TEST_ARGS[@]}" "$TEST_APP" "$TEST_FILE" 2>&1)
+        OUTPUT=$(env "${EXTRA_ENV[@]}" "$BRO" "${EXTRA_TEST_ARGS[@]}" "$TEST_APP_FOR_RUN" "$TEST_FILE" 2>&1)
         STATUS=$?
     fi
 
