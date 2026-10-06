@@ -133,6 +133,7 @@ static void printUsage() {
         "  --no-splash / --splash  Disable or force the startup splash screen.\n"
         "  --no-gpu                Run without Vulkan: CPU-rendered frames shown in a\n"
         "                          software window (no 3D scenes or WebGL).\n"
+        "  --drm                   Run bare-metal on Linux DRM/KMS display with seat & libinput.\n"
         "\n"
         "Additional bro.json options:\n"
         "  vsync (bool), resizable (bool), maxFps (number),\n"
@@ -188,11 +189,13 @@ int main(int argc, char* argv[]) {
     bool cliNoSplash = false;
     bool cliSplash   = false;
     bool cliNoGpu    = false;
+    bool cliDrm      = false;
     std::vector<const char*> posArgs;
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--no-splash") == 0)     cliNoSplash = true;
         else if (strcmp(argv[i], "--splash") == 0)   cliSplash   = true;
         else if (strcmp(argv[i], "--no-gpu") == 0)   cliNoGpu    = true;
+        else if (strcmp(argv[i], "--drm") == 0)      cliDrm      = true;
         else posArgs.push_back(argv[i]);
     }
 
@@ -216,6 +219,7 @@ int main(int argc, char* argv[]) {
     if (cliNoSplash) config.showSplash = false;
     if (cliSplash)   config.showSplash = true;
     if (cliNoGpu)    config.graphics.useGPU = false;
+    if (cliDrm)      config.displayMode = bro::engine::DisplayMode::Drm;
 
     // Does this app directory carry a compiled module? Asked BEFORE the Engine
     // is constructed because engine init uses the answer: it is what

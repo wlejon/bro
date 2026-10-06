@@ -22,6 +22,7 @@
 #include "engine/ui_layer.h"
 #include "engine/web_animations.h"
 #include "engine/window_host.h"
+#include "engine/engine_drm.h"
 #include "dom/event_target.h"
 #include "dom/node_handle.h"
 #include "engine/drag_drop.h"
@@ -74,8 +75,7 @@ public:
 #endif
     using TouchContact = bro::engine::TouchContact; using GestureState = bro::engine::GestureState;
     using EditableComposition = bro::engine::EditableComposition; using IframeDoc = bro::engine::IframeDoc;
-    using SystemDocument = bro::engine::SystemDocument; using WindowHost = bro::engine::WindowHost;
-    using WindowHostOptions = bro::engine::WindowHostOptions;
+    using SystemDocument = bro::engine::SystemDocument; using WindowHost = bro::engine::WindowHost; using WindowHostOptions = bro::engine::WindowHostOptions;
 
     void run();
     void handleResize(int w, int h);
@@ -676,15 +676,15 @@ private:
 
     void rasterThreadFunc();
     void layoutThreadFunc();
-
     DisplayMode displayMode_;
     std::unique_ptr<platform::Window> window_;
     std::unique_ptr<render::Renderer> renderer_;
     std::unique_ptr<render::VulkanContext> vulkanContext_;
     std::unique_ptr<render::VulkanSwapchain> vulkanSwapchain_;
     std::unique_ptr<render::VulkanPresenter> vulkanPresenter_;
-    // Skia's GPU context (null: Skia draws on the CPU). Shared by the raster
-    // thread's renderer, renderer_, and every 2D canvas.
+    std::unique_ptr<DrmPlatformContext> drmCtx_;
+    void initDrm(const EngineConfig& config); void runDrm();
+    // Skia's GPU context (null: Skia draws on CPU).
     std::unique_ptr<render::SkiaGpu> skiaGpu_;
     render::SkiaGpu* createSkiaGpu();
     std::unique_ptr<dom::Document> document_;

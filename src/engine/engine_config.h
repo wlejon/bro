@@ -11,7 +11,7 @@ namespace bro::engine {
 
 class Engine;
 
-enum class DisplayMode { Windowed, Headless, Server };
+enum class DisplayMode { Windowed, Headless, Server, Drm };
 
 /// Sentinel for "no explicit startup window position requested" (the bro.json
 /// windowX/windowY keys). Any real coordinate — including negative ones on a

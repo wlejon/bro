@@ -1,4 +1,5 @@
 #include "engine/engine.h"
+#include "engine/engine_drm.h"
 #include "engine/frame_presenter.h"
 #include "engine/layout_pipeline.h"
 #include "engine/scene_audio_sync.h"

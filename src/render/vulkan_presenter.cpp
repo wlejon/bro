@@ -104,6 +104,31 @@ bool VulkanPresenter::enableKmsScanout(int drmFd) {
 #endif
 }
 
+bool VulkanPresenter::initKms(int drmFd) {
+#if BRO_WITH_DMABUF
+    if (!kmsPresenter_) {
+        kmsPresenter_ = std::make_unique<KmsDirectPresenter>();
+    }
+    if (!kmsPresenter_->init(drmFd)) return false;
+    if (!kmsPresenter_->initScanoutBuffers(context_)) {
+        LOG_WARN("VulkanPresenter: initScanoutBuffers failed on DRM fd %d", drmFd);
+    }
+    width_ = kmsPresenter_->width();
+    height_ = kmsPresenter_->height();
+    return kmsPresenter_->isActive();
+#else
+    (void)drmFd;
+    return false;
+#endif
+}
+
+bool VulkanPresenter::isHeadless() const {
+#if BRO_WITH_DMABUF
+    if (kmsPresenter_ && kmsPresenter_->isActive()) return false;
+#endif
+    return swapchain_ == nullptr;
+}
+
 void VulkanPresenter::cleanup() {
     if (context_.device() == VK_NULL_HANDLE) return;
     context_.queue().waitIdle();
@@ -192,7 +217,22 @@ bool VulkanPresenter::ensureReadbackBuffer(VkDeviceSize size) {
 bool VulkanPresenter::present(const PresentFrame& frame) {
     // An empty frame is just the clear color, given a size to clear.
     if (!frame.below && !frame.hasImages() && !swapchain_ && (frame.width == 0 || frame.height == 0)) return false;
+#if BRO_WITH_DMABUF
+    if (kmsPresenter_ && kmsPresenter_->isActive()) {
+        return presentToKms(frame);
+    }
+#endif
     return swapchain_ ? presentToSwapchain(frame) : presentOffscreen(frame);
+}
+
+bool VulkanPresenter::presentToKms(const PresentFrame& frame) {
+#if BRO_WITH_DMABUF
+    if (!kmsPresenter_ || !kmsPresenter_->isActive()) return false;
+    return kmsPresenter_->presentComposited(context_, *this, frame);
+#else
+    (void)frame;
+    return false;
+#endif
 }
 
 // Record the frame into `target`, reporting the layout it is left in

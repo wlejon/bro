@@ -129,7 +129,7 @@ public:
     /// those captured (setCapturePresents). False if there is none.
     bool readbackPixels(std::vector<uint8_t>& outPixels, uint32_t& outWidth, uint32_t& outHeight);
 
-    bool isHeadless() const { return swapchain_ == nullptr; }
+    bool isHeadless() const;
     VulkanSwapchain* swapchain() const { return swapchain_; }
 
     /// Size of the last presented frame (the swapchain extent when windowed).
@@ -148,7 +148,11 @@ public:
     /// Enable direct KMS scanout if a DRM master fd is available
     bool enableKmsScanout(int drmFd);
 
+    /// Initialize KMS display modesetting and scanout presentation
+    bool initKms(int drmFd);
+
 private:
+    friend class KmsDirectPresenter;
     struct Image {
         VkImage image = VK_NULL_HANDLE;
         VkDeviceMemory memory = VK_NULL_HANDLE;
@@ -178,6 +182,7 @@ private:
     // vulkan_presenter.cpp
     bool presentToSwapchain(const PresentFrame& frame);
     bool presentOffscreen(const PresentFrame& frame);
+    bool presentToKms(const PresentFrame& frame);
     bool recordFrame(VkCommandBuffer cmd, const PresentFrame& frame, const Target& target,
                      VkPipelineStageFlags acquireStages, VkImageLayout& targetLayout);
     bool recordLayers(VkCommandBuffer cmd, const PresentFrame& frame, const Target& target,

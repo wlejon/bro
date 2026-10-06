@@ -18,3 +18,34 @@ endif()
 find_package(Vulkan REQUIRED)
 target_link_libraries(bro_platform PUBLIC bro_util Vulkan::Headers)
 target_link_libraries(bro_platform PRIVATE broimage::broimage ${CMAKE_DL_LIBS})
+
+if(BRO_WITH_SEAT)
+    target_sources(bro_platform PRIVATE drm_seat.cpp drm_input.cpp)
+    target_link_libraries(bro_platform PUBLIC broseat)
+    if(UNIX AND NOT APPLE)
+        find_package(PkgConfig QUIET)
+        if(PKG_CONFIG_FOUND)
+            pkg_check_modules(LIBINPUT QUIET IMPORTED_TARGET libinput)
+            pkg_check_modules(LIBUDEV QUIET IMPORTED_TARGET libudev)
+            if(TARGET PkgConfig::LIBINPUT)
+                target_link_libraries(bro_platform PRIVATE PkgConfig::LIBINPUT)
+            endif()
+            if(TARGET PkgConfig::LIBUDEV)
+                target_link_libraries(bro_platform PRIVATE PkgConfig::LIBUDEV)
+            endif()
+        endif()
+    endif()
+endif()
+
+if(BRO_BUILD_TESTS AND BRO_WITH_SEAT AND BRO_WITH_DMABUF)
+    add_executable(bro_drm_screen_test tests/test_drm_screen.cpp)
+    target_link_libraries(bro_drm_screen_test PRIVATE
+        bro_platform
+        bro_render
+        bro_util
+        broseat
+        brodmabuf::brodmabuf
+        Vulkan::Vulkan
+    )
+    target_include_directories(bro_drm_screen_test PRIVATE ${bro_SOURCE_DIR}/src)
+endif()

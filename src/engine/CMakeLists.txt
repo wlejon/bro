@@ -6,6 +6,7 @@ add_library(bro_engine STATIC
     engine_frame_composite.cpp
     engine_compile_frame.cpp
     engine_init.cpp
+    engine_init_drm.cpp
     engine_lifecycle.cpp
     engine_threads.cpp
     engine_frame.cpp

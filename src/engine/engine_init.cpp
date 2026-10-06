@@ -293,6 +293,8 @@ Engine::Engine(const EngineConfig& config)
         } catch (const std::exception& e) {
             throw;
         }
+    } else if (displayMode_ == DisplayMode::Drm) {
+        initDrm(config);
     } else {
         renderer_ = std::make_unique<render::RasterRenderer>();
     }

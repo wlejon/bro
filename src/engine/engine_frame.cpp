@@ -1,10 +1,15 @@
 #include "engine/engine.h"
+#include "engine/engine_drm.h"
 #include "engine/frame_presenter.h"
 #include "engine/layout_pipeline.h"
 #include "engine/overflow.h"
 #include "engine/replaced_elements.h"
 #include "engine/navmesh_subsystem.h"
 #include "engine/scene_audio_sync.h"
+#include "platform/drm_seat.h"
+#include "platform/drm_input.h"
+#include "render/kms_direct_presenter.h"
+#include "render/vulkan_presenter.h"
 
 #include "canvas/canvas_scene.h"
 #include "dom/document.h"
@@ -160,6 +165,11 @@ void Engine::run() {
         }
 
         LOG_INFO("[server] Stopped (uptime: %.1fs)", serverUptime());
+        return;
+    }
+
+    if (displayMode_ == DisplayMode::Drm) {
+        runDrm();
         return;
     }
 
