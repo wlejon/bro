@@ -94,6 +94,21 @@
 #if BRO_WITH_THUMB
 #include <brothumb/api.h>
 #endif
+#if BRO_WITH_SEAT
+#include <broseat/api.h>
+#endif
+#if BRO_WITH_CRED
+#include <brocred/api.h>
+#endif
+#if BRO_WITH_SYS
+#include <brosys/api.h>
+#endif
+#if BRO_WITH_DISPLAYS
+#include <brodisplays/api.h>
+#endif
+#if BRO_WITH_PORTAL
+#include <broportal/api.h>
+#endif
 #include "api/api.h"  // brokit::api::resolveAssetPath
 #include <broimage/api.h>
 
@@ -488,6 +503,76 @@ void installSiblingApis(engine::Engine& engine) {
                 if (ev::microtasksPending()) ev::drainMicrotasks();
             });
             engine.addShutdownHook([] { brothumb::api::shutdownThumbAsync(); });
+        }
+    }
+#endif
+#if BRO_WITH_SEAT
+    broseat::api::installSeat();
+    {
+        static bool seatHooksInstalled = false;
+        if (!seatHooksInstalled) {
+            seatHooksInstalled = true;
+            engine.addFramePump([] {
+                broseat::api::tickSeatAsync();
+                if (ev::microtasksPending()) ev::drainMicrotasks();
+            });
+            engine.addShutdownHook([] { broseat::api::shutdownSeatAsync(); });
+        }
+    }
+#endif
+#if BRO_WITH_CRED
+    brocred::api::installCred();
+    {
+        static bool credHooksInstalled = false;
+        if (!credHooksInstalled) {
+            credHooksInstalled = true;
+            engine.addFramePump([] {
+                brocred::api::tickCredAsync();
+                if (ev::microtasksPending()) ev::drainMicrotasks();
+            });
+            engine.addShutdownHook([] { brocred::api::shutdownCredAsync(); });
+        }
+    }
+#endif
+#if BRO_WITH_SYS
+    brosys::api::installSys();
+    {
+        static bool sysHooksInstalled = false;
+        if (!sysHooksInstalled) {
+            sysHooksInstalled = true;
+            engine.addFramePump([] {
+                brosys::api::tickSysAsync();
+                if (ev::microtasksPending()) ev::drainMicrotasks();
+            });
+            engine.addShutdownHook([] { brosys::api::shutdownSysAsync(); });
+        }
+    }
+#endif
+#if BRO_WITH_DISPLAYS
+    brodisplays::api::installDisplays();
+    {
+        static bool displaysHooksInstalled = false;
+        if (!displaysHooksInstalled) {
+            displaysHooksInstalled = true;
+            engine.addFramePump([] {
+                brodisplays::api::tickDisplaysAsync();
+                if (ev::microtasksPending()) ev::drainMicrotasks();
+            });
+            engine.addShutdownHook([] { brodisplays::api::shutdownDisplaysAsync(); });
+        }
+    }
+#endif
+#if BRO_WITH_PORTAL
+    broportal::api::installPortal();
+    {
+        static bool portalHooksInstalled = false;
+        if (!portalHooksInstalled) {
+            portalHooksInstalled = true;
+            engine.addFramePump([] {
+                broportal::api::tickPortalAsync();
+                if (ev::microtasksPending()) ev::drainMicrotasks();
+            });
+            engine.addShutdownHook([] { broportal::api::shutdownPortalAsync(); });
         }
     }
 #endif

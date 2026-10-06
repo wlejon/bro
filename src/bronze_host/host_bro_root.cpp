@@ -337,6 +337,21 @@ void installBroRoots(engine::Engine& engine) {
 #if !BRO_WITH_THUMB
     setUnavailable("thumb", "BRO_WITH_THUMB");
 #endif
+#if !BRO_WITH_SEAT
+    setUnavailable("seat", "BRO_WITH_SEAT");
+#endif
+#if !BRO_WITH_CRED
+    setUnavailable("cred", "BRO_WITH_CRED");
+#endif
+#if !BRO_WITH_SYS
+    setUnavailable("sys", "BRO_WITH_SYS");
+#endif
+#if !BRO_WITH_DISPLAYS
+    setUnavailable("displays", "BRO_WITH_DISPLAYS");
+#endif
+#if !BRO_WITH_PORTAL
+    setUnavailable("portal", "BRO_WITH_PORTAL");
+#endif
     // Privileged desktop shell namespaces:
     // If not granted to this app by the desktop trust model, install the unavailable
     // namespace stub so that bro.<ns>.available === false and every call throws.

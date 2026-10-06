@@ -218,6 +218,11 @@ option(BRO_WITH_SEARCH   "Fuzzy matching, file walking, and grep (brosearch)" ${
 option(BRO_WITH_APPS     "App catalog, launch, and desktop entries (broapps)" ${_d_render})
 option(BRO_WITH_VFS      "Virtual filesystem and file operations (brovfs)"   ${_d_render})
 option(BRO_WITH_THUMB    "Freedesktop thumbnailer and cache (brothumb)"       ${_d_render})
+option(BRO_WITH_SEAT     "Session state, VT switching, idle inhibition (broseat)" ${_d_render})
+option(BRO_WITH_CRED     "Lock screen auth, biometrics, secrets, polkit (brocred)" ${_d_render})
+option(BRO_WITH_SYS      "System services: power, audio, network, bluetooth, tray (brosys)" ${_d_render})
+option(BRO_WITH_DISPLAYS "Display configuration, modes, night light, brightness (brodisplays)" ${_d_render})
+option(BRO_WITH_PORTAL   "Desktop portal backend handlers (broportal)"                      ${_d_render})
 # The native <terminal> element: bropty (VT emulation + PTY/ConPTY), its
 # brosearch dependency and brothemes (minimum contrast), plus bromux
 # (persistent sessions) when found; all vcpkg-free siblings. On in app and
@@ -355,13 +360,21 @@ set(BROTHEMES_ENABLE_API    ON CACHE BOOL "Build Bronze JavaScript API for broth
 set(BROKEYS_ENABLE_API      ON CACHE BOOL "Build Bronze JavaScript API for brokeys" FORCE)
 set(BROSEARCH_ENABLE_API    ON CACHE BOOL "Build Bronze JavaScript API for brosearch" FORCE)
 set(BROTHUMB_ENABLE_API     ON CACHE BOOL "Build Bronze JavaScript API for brothumb" FORCE)
+set(BROSEAT_ENABLE_API      ON CACHE BOOL "Build Bronze JavaScript API for broseat" FORCE)
+set(BROCRED_ENABLE_API      ON CACHE BOOL "Build Bronze JavaScript API for brocred" FORCE)
+set(BROSYS_ENABLE_API       ON CACHE BOOL "Build Bronze JavaScript API for brosys" FORCE)
+set(BROIMAGE_ENABLE_API     ON CACHE BOOL "Build Bronze JavaScript API for broimage" FORCE)
+set(BROAPPS_ENABLE_API      ON CACHE BOOL "Build Bronze JavaScript API for broapps" FORCE)
+set(BROVFS_ENABLE_API       ON CACHE BOOL "Build Bronze JavaScript API for brovfs" FORCE)
+set(BROPORTAL_ENABLE_API    ON CACHE BOOL "Build Bronze JavaScript API for broportal" FORCE)
+set(BRODISPLAYS_ENABLE_API  ON CACHE BOOL "Build Bronze JavaScript API for brodisplays" FORCE)
 
 # Stamp every feature flag as a 0/1 compile definition so C++ can `#if` on it.
 # Applied to the targets that carry feature-gated code (bro_engine, bro_scene,
 # bro_bronze_host). Uses the #if BRO_WITH_X convention.
 set(BRO_FEATURE_FLAGS
     3D PHYSICS AUDIO GAMEAI FLORA
-    NET VIDEO STEAM TERMINAL CONF THEMES KEYS SEARCH APPS VFS THUMB
+    NET VIDEO STEAM TERMINAL CONF THEMES KEYS SEARCH APPS VFS THUMB SEAT CRED SYS DISPLAYS PORTAL
     TENSOR TENSOR_CUDA TENSOR_METAL TENSOR_VULKAN LM DIFFUSION VISION SOUNDML TRIPOSPLAT GAMEAI_NN
     BRONZE)
 function(bro_apply_feature_defs target)
