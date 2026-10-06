@@ -26,12 +26,15 @@
 
 #include <algorithm>
 #include <chrono>
-#include <fcntl.h>
 #include <stdexcept>
 #include <thread>
-#include <unistd.h>
 
-#if defined(__linux__) && defined(BRO_WITH_DMABUF)
+#ifdef __linux__
+#include <fcntl.h>
+#include <unistd.h>
+#endif
+
+#if defined(__linux__) && BRO_WITH_DMABUF
 #include <brodmabuf/gbm.h>
 #endif
 
@@ -41,7 +44,7 @@ DrmPlatformContext::DrmPlatformContext() = default;
 DrmPlatformContext::~DrmPlatformContext() = default;
 
 void Engine::initDrm(const EngineConfig& config) {
-#if defined(__linux__) && defined(BRO_WITH_SEAT) && defined(BRO_WITH_DMABUF)
+#if defined(__linux__) && BRO_WITH_SEAT && BRO_WITH_DMABUF
     drmCtx_ = std::make_unique<DrmPlatformContext>();
     drmCtx_->seat = std::make_unique<platform::DrmSeatPlatform>();
     if (!drmCtx_->seat->initSeat("seat0")) {
@@ -108,7 +111,7 @@ void Engine::initDrm(const EngineConfig& config) {
 }
 
 void Engine::runDrm() {
-#if defined(__linux__) && defined(BRO_WITH_SEAT) && defined(BRO_WITH_DMABUF)
+#if defined(__linux__) && BRO_WITH_SEAT && BRO_WITH_DMABUF
     running_ = true;
     windowFocused_ = true;
     if (splashVisible_) splashStartMs_ = util::currentTimeMs();

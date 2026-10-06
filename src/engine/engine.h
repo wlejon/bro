@@ -242,7 +242,11 @@ public:
 
     // Headless & DOM API
     dom::Document* document() const { return document_.get(); }
+#if BRO_WITH_A11Y
     a11y::AccessibilityBridge* a11yBridge() const { return a11yBridge_.get(); }
+#else
+    a11y::AccessibilityBridge* a11yBridge() const { return nullptr; }
+#endif
     render::Renderer* renderer() const { return renderer_.get(); }
 
     dom::ListenerHandle addWindowEventListener(const std::string& type,
@@ -688,7 +692,9 @@ private:
     std::unique_ptr<render::SkiaGpu> skiaGpu_;
     render::SkiaGpu* createSkiaGpu();
     std::unique_ptr<dom::Document> document_;
+#if BRO_WITH_A11Y
     std::unique_ptr<a11y::AccessibilityBridge> a11yBridge_;
+#endif
     TransitionManager transitionManager_;
     AnimationManager animationManager_;
     WebAnimationManager webAnimationManager_;

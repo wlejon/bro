@@ -5,8 +5,12 @@
 struct SDL_Window;
 
 #ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
+// HWND without <windows.h>: this header reaches engine code, where windows.h's
+// min/max macros break std::min/std::max in sibling headers. Matches
+// DECLARE_HANDLE(HWND) under STRICT, so the .cpp files that do include
+// windows.h see the same type.
+struct HWND__;
+typedef HWND__* HWND;
 #endif
 
 namespace bro::platform::desktop {

@@ -127,7 +127,7 @@ ChildProcess spawnX11Client(const std::string& binary, const std::vector<std::st
 int main() {
     std::cout << "=== bro_xwayland_test: XWayland Server & Window Management ===" << std::endl;
 
-#if !defined(__linux__) || !defined(BRO_WITH_COMPOSITOR)
+#if !defined(__linux__) || !BRO_WITH_COMPOSITOR
     std::cout << "SKIP (77): Only supported on Linux with BRO_WITH_COMPOSITOR" << std::endl;
     return 77;
 #else

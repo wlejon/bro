@@ -11,7 +11,9 @@ if(BRO_WITH_DMABUF)
     target_link_libraries(bro_compositor PUBLIC brodmabuf::brodmabuf)
 endif()
 
-if(BRO_BUILD_TESTS AND BRO_WITH_COMPOSITOR)
+# The tests run bro as a Wayland compositor with real clients, so they exist
+# only where the Wayland server does.
+if(BRO_BUILD_TESTS AND BRO_WITH_COMPOSITOR AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     find_package(Vulkan REQUIRED)
     add_executable(bro_nested_compositor_test tests/test_nested_compositor.cpp)
     target_link_libraries(bro_nested_compositor_test PRIVATE

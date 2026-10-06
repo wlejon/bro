@@ -5,7 +5,7 @@ namespace bro::platform {
 DrmSeatPlatform::DrmSeatPlatform() = default;
 
 DrmSeatPlatform::~DrmSeatPlatform() {
-#if defined(__linux__) && defined(BRO_WITH_SEAT)
+#if defined(__linux__) && BRO_WITH_SEAT
     activeLock_.reset();
     openDevicesByFd_.clear();
     seat_.reset();
@@ -15,7 +15,7 @@ DrmSeatPlatform::~DrmSeatPlatform() {
 }
 
 bool DrmSeatPlatform::initSeat(const std::string& seatName) {
-#if defined(__linux__) && defined(BRO_WITH_SEAT)
+#if defined(__linux__) && BRO_WITH_SEAT
     broseat::SeatConfig cfg;
     cfg.seat_name = seatName;
     std::string err;
@@ -35,7 +35,7 @@ bool DrmSeatPlatform::initSeat(const std::string& seatName) {
 }
 
 int DrmSeatPlatform::openDevice(const std::string& path) {
-#if defined(__linux__) && defined(BRO_WITH_SEAT)
+#if defined(__linux__) && BRO_WITH_SEAT
     if (!seat_) return -1;
     std::string err;
     auto dev = seat_->open_device(path, &err);
@@ -50,7 +50,7 @@ int DrmSeatPlatform::openDevice(const std::string& path) {
 }
 
 void DrmSeatPlatform::closeDevice(int fd) {
-#if defined(__linux__) && defined(BRO_WITH_SEAT)
+#if defined(__linux__) && BRO_WITH_SEAT
     auto it = openDevicesByFd_.find(fd);
     if (it != openDevicesByFd_.end()) {
         it->second->close();
@@ -62,7 +62,7 @@ void DrmSeatPlatform::closeDevice(int fd) {
 }
 
 bool DrmSeatPlatform::switchVT(int vtNumber) {
-#if defined(__linux__) && defined(BRO_WITH_SEAT)
+#if defined(__linux__) && BRO_WITH_SEAT
     if (!seat_) return false;
     return seat_->switch_vt(vtNumber) == 0;
 #else
@@ -72,7 +72,7 @@ bool DrmSeatPlatform::switchVT(int vtNumber) {
 }
 
 bool DrmSeatPlatform::startGraphicalSession() {
-#if defined(__linux__) && defined(BRO_WITH_SEAT)
+#if defined(__linux__) && BRO_WITH_SEAT
     return broseat::start_unit(std::string(broseat::kGraphicalSessionTarget));
 #else
     return false;
@@ -80,7 +80,7 @@ bool DrmSeatPlatform::startGraphicalSession() {
 }
 
 bool DrmSeatPlatform::stopGraphicalSession() {
-#if defined(__linux__) && defined(BRO_WITH_SEAT)
+#if defined(__linux__) && BRO_WITH_SEAT
     return broseat::stop_unit(std::string(broseat::kGraphicalSessionTarget));
 #else
     return false;
@@ -88,7 +88,7 @@ bool DrmSeatPlatform::stopGraphicalSession() {
 }
 
 bool DrmSeatPlatform::isGraphicalSessionActive() const {
-#if defined(__linux__) && defined(BRO_WITH_SEAT)
+#if defined(__linux__) && BRO_WITH_SEAT
     return broseat::is_unit_active(std::string(broseat::kGraphicalSessionTarget));
 #else
     return false;
@@ -96,7 +96,7 @@ bool DrmSeatPlatform::isGraphicalSessionActive() const {
 }
 
 bool DrmSeatPlatform::importEnvironment(const std::vector<std::string>& envVars) {
-#if defined(__linux__) && defined(BRO_WITH_SEAT)
+#if defined(__linux__) && BRO_WITH_SEAT
     return broseat::export_environment(envVars);
 #else
     (void)envVars;
@@ -105,7 +105,7 @@ bool DrmSeatPlatform::importEnvironment(const std::vector<std::string>& envVars)
 }
 
 bool DrmSeatPlatform::hasSessionManager() const {
-#if defined(__linux__) && defined(BRO_WITH_SEAT)
+#if defined(__linux__) && BRO_WITH_SEAT
     return sessionMgr_ != nullptr;
 #else
     return false;
@@ -113,7 +113,7 @@ bool DrmSeatPlatform::hasSessionManager() const {
 }
 
 bool DrmSeatPlatform::hasInhibitManager() const {
-#if defined(__linux__) && defined(BRO_WITH_SEAT)
+#if defined(__linux__) && BRO_WITH_SEAT
     return inhibitorMgr_ != nullptr;
 #else
     return false;
@@ -121,7 +121,7 @@ bool DrmSeatPlatform::hasInhibitManager() const {
 }
 
 bool DrmSeatPlatform::setIdleInhibited(bool inhibit, const std::string& reason) {
-#if defined(__linux__) && defined(BRO_WITH_SEAT)
+#if defined(__linux__) && BRO_WITH_SEAT
     if (!inhibitorMgr_) return false;
     if (inhibit) {
         activeLock_ = inhibitorMgr_->inhibit("idle:sleep", "bro", reason);
@@ -144,7 +144,7 @@ bool DrmSeatPlatform::isIdleInhibited() const {
 }
 
 bool DrmSeatPlatform::isSeatActive() const {
-#if defined(__linux__) && defined(BRO_WITH_SEAT)
+#if defined(__linux__) && BRO_WITH_SEAT
     return seat_ && seat_->is_active();
 #else
     return false;
@@ -152,7 +152,7 @@ bool DrmSeatPlatform::isSeatActive() const {
 }
 
 void DrmSeatPlatform::pollEvents() {
-#if defined(__linux__) && defined(BRO_WITH_SEAT)
+#if defined(__linux__) && BRO_WITH_SEAT
     if (seat_) {
         seat_->dispatch(0);
         bool currentActive = seat_->is_active();

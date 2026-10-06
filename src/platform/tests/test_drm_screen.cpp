@@ -20,7 +20,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-#if defined(__linux__) && defined(BRO_WITH_DMABUF)
+#if defined(__linux__) && BRO_WITH_DMABUF
 #include <brodmabuf/kms.h>
 #include <brodmabuf/gbm.h>
 #include <brodmabuf/allocator.h>
@@ -45,7 +45,7 @@ int gFailures = 0;
 int main() {
     std::cout << "=== bro_drm_screen_test: DRM/KMS Composited Output, Seat & Input ===" << std::endl;
 
-#if !defined(__linux__) || !defined(BRO_WITH_SEAT) || !defined(BRO_WITH_DMABUF)
+#if !defined(__linux__) || !BRO_WITH_SEAT || !BRO_WITH_DMABUF
     std::cout << "SKIP (77): Only supported on Linux with seat and dmabuf enabled" << std::endl;
     return 77;
 #else

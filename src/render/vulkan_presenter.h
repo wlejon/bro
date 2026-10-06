@@ -139,11 +139,19 @@ public:
     VkImage offscreenImage() const { return offscreen_.image; }
     VkImageView offscreenView() const { return offscreen_.view; }
 
-    /// DMA-BUF client buffer importer and KMS direct presenter
+    /// DMA-BUF client buffer importer and KMS direct presenter. Both types are
+    /// defined only when BRO_WITH_DMABUF is on; otherwise these return null.
+#if BRO_WITH_DMABUF
     VulkanDmabufImporter* dmabufImporter() { return dmabufImporter_.get(); }
     const VulkanDmabufImporter* dmabufImporter() const { return dmabufImporter_.get(); }
     KmsDirectPresenter* kmsDirectPresenter() { return kmsPresenter_.get(); }
     const KmsDirectPresenter* kmsDirectPresenter() const { return kmsPresenter_.get(); }
+#else
+    VulkanDmabufImporter* dmabufImporter() { return nullptr; }
+    const VulkanDmabufImporter* dmabufImporter() const { return nullptr; }
+    KmsDirectPresenter* kmsDirectPresenter() { return nullptr; }
+    const KmsDirectPresenter* kmsDirectPresenter() const { return nullptr; }
+#endif
 
     /// Enable direct KMS scanout if a DRM master fd is available
     bool enableKmsScanout(int drmFd);
@@ -238,8 +246,10 @@ private:
     VkPipelineLayout blendPipelineLayout_ = VK_NULL_HANDLE;
     std::map<VkFormat, VkPipeline> blendPipelines_;
 
+#if BRO_WITH_DMABUF
     std::unique_ptr<VulkanDmabufImporter> dmabufImporter_;
     std::unique_ptr<KmsDirectPresenter> kmsPresenter_;
+#endif
 };
 
 } // namespace bro::render

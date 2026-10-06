@@ -7,7 +7,7 @@
 #include <unordered_map>
 #include <vector>
 
-#if defined(__linux__) && defined(BRO_WITH_SEAT)
+#if defined(__linux__) && BRO_WITH_SEAT
 #include <broseat/broseat.h>
 #include <broseat/session.h>
 #include <broseat/inhibit.h>
@@ -54,7 +54,7 @@ public:
     /// Poll pending seat and session events
     void pollEvents();
 
-#if defined(__linux__) && defined(BRO_WITH_SEAT)
+#if defined(__linux__) && BRO_WITH_SEAT
     broseat::Seat* seat() { return seat_.get(); }
     const broseat::Seat* seat() const { return seat_.get(); }
     broseat::SessionManager* sessionManager() { return sessionMgr_.get(); }
@@ -64,7 +64,7 @@ public:
 #endif
 
 private:
-#if defined(__linux__) && defined(BRO_WITH_SEAT)
+#if defined(__linux__) && BRO_WITH_SEAT
     std::unique_ptr<broseat::Seat> seat_;
     std::unique_ptr<broseat::SessionManager> sessionMgr_;
     std::unique_ptr<broseat::InhibitManager> inhibitorMgr_;

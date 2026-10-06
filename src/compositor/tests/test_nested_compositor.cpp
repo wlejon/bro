@@ -54,7 +54,7 @@ std::string findBcWlClient() {
 int main() {
     std::cout << "=== bro_nested_compositor_test: Nested Wayland Compositor in bro ===" << std::endl;
 
-#if !defined(__linux__) || !defined(BRO_WITH_COMPOSITOR)
+#if !defined(__linux__) || !BRO_WITH_COMPOSITOR
     std::cout << "SKIP (77): Only supported on Linux with BRO_WITH_COMPOSITOR" << std::endl;
     return 77;
 #else

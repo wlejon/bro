@@ -125,7 +125,7 @@ ChildProcess spawnClient(const std::string& binary, const std::vector<std::strin
 int main() {
     std::cout << "=== bro_shell_surfaces_test: Shell Surfaces and Window Management ===" << std::endl;
 
-#if !defined(__linux__) || !defined(BRO_WITH_COMPOSITOR)
+#if !defined(__linux__) || !BRO_WITH_COMPOSITOR
     std::cout << "SKIP (77): Only supported on Linux with BRO_WITH_COMPOSITOR" << std::endl;
     return 77;
 #else

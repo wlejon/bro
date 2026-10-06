@@ -23,7 +23,7 @@
 #include <unistd.h>
 #include <vector>
 
-#if defined(__linux__) && defined(BRO_WITH_DMABUF)
+#if defined(__linux__) && BRO_WITH_DMABUF
 #include <brodmabuf/allocator.h>
 #include <brodmabuf/formats.h>
 #include <brodmabuf/gbm.h>
@@ -50,7 +50,7 @@ int gFailures = 0;
 int main() {
     std::cout << "=== bro_vulkan_dmabuf_test: Vulkan DMA-BUF & KMS Direct Presenter ===" << std::endl;
 
-#if !defined(__linux__) || !defined(BRO_WITH_DMABUF)
+#if !defined(__linux__) || !BRO_WITH_DMABUF
     std::cout << "[test_dmabuf_presenter] DMA-BUF is only supported on Linux with brodmabuf; skipping (77)" << std::endl;
     return 77;
 #else

@@ -11,7 +11,7 @@ WaylandCompositor::~WaylandCompositor() {
 }
 
 bool WaylandCompositor::init(const CompositorConfig& config, std::string* error) {
-#if defined(__linux__) && defined(BRO_WITH_COMPOSITOR)
+#if defined(__linux__) && BRO_WITH_COMPOSITOR
     brocompositor::wl::ServerConfig sCfg;
     if (config.headless) {
         sCfg.backend = brocompositor::wl::BackendKind::Headless;
@@ -40,7 +40,7 @@ bool WaylandCompositor::init(const CompositorConfig& config, std::string* error)
 }
 
 void WaylandCompositor::shutdown() {
-#if defined(__linux__) && defined(BRO_WITH_COMPOSITOR)
+#if defined(__linux__) && BRO_WITH_COMPOSITOR
     wm_.reset();
     backend_.reset();
 #endif
@@ -57,7 +57,7 @@ std::string WaylandCompositor::socketName() const {
 }
 
 std::string WaylandCompositor::xwaylandDisplay() const {
-#if defined(__linux__) && defined(BRO_WITH_COMPOSITOR)
+#if defined(__linux__) && BRO_WITH_COMPOSITOR
     if (backend_) {
         return backend_->xwayland_display();
     }
@@ -66,7 +66,7 @@ std::string WaylandCompositor::xwaylandDisplay() const {
 }
 
 void WaylandCompositor::pollEvents() {
-#if defined(__linux__) && defined(BRO_WITH_COMPOSITOR)
+#if defined(__linux__) && BRO_WITH_COMPOSITOR
     if (!backend_) return;
 
     auto events = backend_->events().drain();
@@ -83,7 +83,7 @@ void WaylandCompositor::pollEvents() {
 }
 
 std::vector<LeasedSurfaceFrame> WaylandCompositor::acquireClientLayers(std::vector<engine::UILayer>& outLayers) {
-#if defined(__linux__) && defined(BRO_WITH_COMPOSITOR)
+#if defined(__linux__) && BRO_WITH_COMPOSITOR
     if (!backend_) return {};
 
     std::vector<LeasedSurfaceFrame> leasedFrames;
@@ -198,7 +198,7 @@ std::vector<LeasedSurfaceFrame> WaylandCompositor::acquireClientLayers(std::vect
 }
 
 void WaylandCompositor::releaseClientLayers(const std::vector<LeasedSurfaceFrame>& frames) {
-#if defined(__linux__) && defined(BRO_WITH_COMPOSITOR)
+#if defined(__linux__) && BRO_WITH_COMPOSITOR
     for (const auto& lf : frames) {
         if (lf.surface) {
             lf.surface->presented_on(brocompositor::kNoMonitor, 0);
@@ -211,7 +211,7 @@ void WaylandCompositor::releaseClientLayers(const std::vector<LeasedSurfaceFrame
 }
 
 bool WaylandCompositor::focusWindow(uint64_t winId) {
-#if defined(__linux__) && defined(BRO_WITH_COMPOSITOR)
+#if defined(__linux__) && BRO_WITH_COMPOSITOR
     if (!backend_) return false;
     return backend_->focus(static_cast<brocompositor::WindowId>(winId));
 #else
@@ -221,7 +221,7 @@ bool WaylandCompositor::focusWindow(uint64_t winId) {
 }
 
 bool WaylandCompositor::closeWindow(uint64_t winId) {
-#if defined(__linux__) && defined(BRO_WITH_COMPOSITOR)
+#if defined(__linux__) && BRO_WITH_COMPOSITOR
     if (!backend_) return false;
     return backend_->close(static_cast<brocompositor::WindowId>(winId));
 #else
@@ -231,7 +231,7 @@ bool WaylandCompositor::closeWindow(uint64_t winId) {
 }
 
 bool WaylandCompositor::setWindowState(uint64_t winId, bool maximized, bool fullscreen) {
-#if defined(__linux__) && defined(BRO_WITH_COMPOSITOR)
+#if defined(__linux__) && BRO_WITH_COMPOSITOR
     if (!backend_) return false;
     return backend_->set_window_state(static_cast<brocompositor::WindowId>(winId), maximized, fullscreen);
 #else
@@ -243,7 +243,7 @@ bool WaylandCompositor::setWindowState(uint64_t winId, bool maximized, bool full
 }
 
 bool WaylandCompositor::setWindowMinimized(uint64_t winId, bool minimized) {
-#if defined(__linux__) && defined(BRO_WITH_COMPOSITOR)
+#if defined(__linux__) && BRO_WITH_COMPOSITOR
     if (!backend_) return false;
     return backend_->set_window_minimized(static_cast<brocompositor::WindowId>(winId), minimized);
 #else
@@ -254,7 +254,7 @@ bool WaylandCompositor::setWindowMinimized(uint64_t winId, bool minimized) {
 }
 
 bool WaylandCompositor::placeWindow(uint64_t winId, int x, int y, int w, int h) {
-#if defined(__linux__) && defined(BRO_WITH_COMPOSITOR)
+#if defined(__linux__) && BRO_WITH_COMPOSITOR
     if (!backend_) return false;
     brocompositor::Rect frame{x, y, w, h};
     return backend_->place(static_cast<brocompositor::WindowId>(winId), frame);
@@ -266,7 +266,7 @@ bool WaylandCompositor::placeWindow(uint64_t winId, int x, int y, int w, int h) 
 }
 
 std::vector<uint64_t> WaylandCompositor::windows() const {
-#if defined(__linux__) && defined(BRO_WITH_COMPOSITOR)
+#if defined(__linux__) && BRO_WITH_COMPOSITOR
     if (!backend_) return {};
     auto wins = backend_->windows();
     std::vector<uint64_t> res;
@@ -279,7 +279,7 @@ std::vector<uint64_t> WaylandCompositor::windows() const {
 }
 
 std::optional<brocompositor::WindowSnapshot> WaylandCompositor::queryWindow(uint64_t winId) const {
-#if defined(__linux__) && defined(BRO_WITH_COMPOSITOR)
+#if defined(__linux__) && BRO_WITH_COMPOSITOR
     if (!backend_) return std::nullopt;
     return backend_->query(static_cast<brocompositor::WindowId>(winId));
 #else
@@ -289,7 +289,7 @@ std::optional<brocompositor::WindowSnapshot> WaylandCompositor::queryWindow(uint
 }
 
 uint32_t WaylandCompositor::addOutput(uint32_t width, uint32_t height) {
-#if defined(__linux__) && defined(BRO_WITH_COMPOSITOR)
+#if defined(__linux__) && BRO_WITH_COMPOSITOR
     if (!backend_) return 0;
     brocompositor::Size sz{static_cast<int32_t>(width), static_cast<int32_t>(height)};
     return static_cast<uint32_t>(backend_->add_output(sz));
@@ -300,7 +300,7 @@ uint32_t WaylandCompositor::addOutput(uint32_t width, uint32_t height) {
 }
 
 bool WaylandCompositor::configureOutput(uint32_t outputId, float scale, int32_t x, int32_t y) {
-#if defined(__linux__) && defined(BRO_WITH_COMPOSITOR)
+#if defined(__linux__) && BRO_WITH_COMPOSITOR
     if (!backend_) return false;
     brocompositor::wl::OutputConfig cfg;
     cfg.scale = scale;
@@ -313,7 +313,7 @@ bool WaylandCompositor::configureOutput(uint32_t outputId, float scale, int32_t 
 }
 
 std::vector<brocompositor::MonitorSnapshot> WaylandCompositor::monitors() const {
-#if defined(__linux__) && defined(BRO_WITH_COMPOSITOR)
+#if defined(__linux__) && BRO_WITH_COMPOSITOR
     if (!backend_) return {};
     return backend_->monitors();
 #else
@@ -322,7 +322,7 @@ std::vector<brocompositor::MonitorSnapshot> WaylandCompositor::monitors() const 
 }
 
 bool WaylandCompositor::isSessionLocked() const {
-#if defined(__linux__) && defined(BRO_WITH_COMPOSITOR)
+#if defined(__linux__) && BRO_WITH_COMPOSITOR
     if (!backend_) return false;
     return backend_->session_lock_state() != brocompositor::wl::LockState::Unlocked;
 #else
@@ -330,7 +330,7 @@ bool WaylandCompositor::isSessionLocked() const {
 #endif
 }
 
-#if defined(__linux__) && defined(BRO_WITH_COMPOSITOR)
+#if defined(__linux__) && BRO_WITH_COMPOSITOR
 std::vector<brocompositor::wl::LayerSurfaceInfo> WaylandCompositor::layerSurfaces() const {
     if (!backend_) return {};
     return backend_->layer_surfaces();
