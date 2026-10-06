@@ -17,19 +17,19 @@ Every repo is listed in [ecosystem.md](ecosystem.md). This page records where th
   - System and credentials: brosys, brocred
   - Look and input: brothemes, brokeys, broa11y
   - Settings and portals: broconf, broportal
+- **Terminal milestone: Claude Code in broterm** is complete:
+  - broterm adopted all element APIs (`activity`, `palette`, clean `cwd` paths, `options.scrollback`/`cursorStyle`/`cursorBlink`, and `bracketedPaste`), completely replacing background polling.
+  - `bro.window` desktop features (desktop notifications, taskbar progress, flash/attention, system bell sound, focus state & events, title/opacity/fullscreen, single-instance with argument forwarding, global hotkeys, and system tray) implemented in `bro` engine, and broterm's stand-ins retired.
+  - Acceptance tests for Claude Code passing in broterm.
+  - macOS test port completed with platform `Cmd` bindings and bash < 4.4 DEBUG-trap fallback.
 - **CI and CodeQL across ecosystem:** 100% green on `main` across all repositories (`bro`, `broterm`, `bropty`, `bromux`, `broaudio`, `browl`). Fixed bro Linux/macOS headless Vulkan driver/display handling, Windows C++/WinRT version unification between brocred/brocompositor and libremidi, broterm Linux UI commands test timing, broaudio coverage assertion, browl sway shell configure/reposition tests, and closed or dismissed all CodeQL alerts (0 open alerts ecosystem-wide).
 - **Organization:** ecosystem index, `scripts/repos.txt`, repo-status scripts over every repo, the flat `third_party` submodule convention with https URLs, and a submodule-fallback CI job in each library.
 
-## Open: terminal milestone
+## Terminal milestone known limits
 
-1. **broterm adopts the latest element APIs:** the `activity` event replaces its 500 ms background-tab poll. Also adopt `palette`, `cwd` as a path, `options.scrollback` and `options.cursorStyle`.
-2. **`bro.window`** needs desktop notifications, taskbar progress, flash, the bell sound and focus. It also needs title, opacity, fullscreen, multi-window, single-instance, a global hotkey and a tray icon. broterm's executable stands in for some of these today.
-3. **Acceptance:** run Claude Code in broterm on Windows and Linux, and fix what breaks.
-4. **macOS:** port broterm's tests. The macOS bindings use Cmd, and bash 3.2 lacks PS0. 11 of 36 fail and are informational in CI.
-5. **Known limits:**
-   - Some Windows conhost builds drop terminal replies (documented in bropty).
-   - Persistent sessions ignore the client's scrollback limit and image quota.
-   - Only iTerm2 images survive ConPTY.
+- Some Windows conhost builds drop terminal replies (documented in bropty).
+- Persistent sessions ignore the client's scrollback limit and image quota.
+- Only iTerm2 images survive ConPTY.
 
 ## Open: CI and hygiene
 
