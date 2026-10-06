@@ -203,7 +203,9 @@ if (!bro.terminal || !bro.terminal.available) {
         p.theme = THEME;
         p.options = { cursorStyle: 'bar', cursorBlink: false, scrollback: 50 };
         p.spawn(WIN ? { command: 'cmd.exe', args: ['/d'], persistent: true, server: SERVER }
-                    : { command: '/bin/sh', args: [], env: { PS1: '$ ' }, persistent: true, server: SERVER });
+                    // TERM=dumb: a bash /bin/sh's readline turns bracketed paste on at every prompt
+                    // otherwise, and this checks the mode the program below sets.
+                    : { command: '/bin/sh', args: [], env: { PS1: '$ ', TERM: 'dumb' }, persistent: true, server: SERVER });
         waitFor(() => p.screenText().trim().length > 0, 'the prompt');
         assert(p.cursor.shape === 'bar' && !p.cursor.blink, 'the element\'s default cursor: ' + JSON.stringify(p.cursor));
         assert(p.palette.background === '#101010', 'the theme before the program changes it');

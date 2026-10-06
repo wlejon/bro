@@ -23,6 +23,11 @@ namespace bro::platform {
 // Callers must honour the result. A `copy` that reports success it did not
 // have is a paste of somebody else's text later; a `cut` that does is the
 // text deleted and nowhere to paste it back from.
+//
+// Headless (no video subsystem) uses the system clipboard where SDL reaches
+// it without one (Windows). Where it cannot (a Linux box with no X server or
+// Wayland) the clipboard is a string in this process instead: still one
+// clipboard for the page (navigator.clipboard, execCommand) and its terminals.
 bool setClipboardText(const std::string& text);
 
 // The reading half. `SDL_GetClipboardText` answers "" both for a clipboard
