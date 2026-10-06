@@ -13,7 +13,7 @@
 #                compiler  bronze and brass, which run every app's JavaScript
 #                engine    libraries bro links for its engine subsystems
 #                terminal  libraries bro links for the <terminal> element
-#                desktop   desktop-environment substrate libraries (not linked by bro yet)
+#                desktop   desktop-environment substrate libraries (bro mounts their JS bindings)
 #                app       applications that run on, or link, bro
 #                tool      development tools around bro
 #   bro        self      | submodule (bro records it at third_party/<name>) | -
@@ -22,8 +22,8 @@
 #   deps       comma-separated bro-ecosystem repos it builds against (from its CMake)
 #
 # name          group     bro        github   platforms        deps
-bro             runtime   self       public   win,linux,mac    bronze,brass,bromath,brokit,htmlayout,broaudio,bromesh,broflora,brotensor,brogameagent,brolm,brodiffusion,broimage,brosoundml,brovisionml,bropty,brosearch,brothemes,bromux,brovfs,brosys,brocred,broapps,brothumb,brodisplays,brocompositor,brokeys,broa11y,broconf,broseat,browl,broportal
-bronze          compiler  submodule  public   win,linux,mac    brass
+bro             runtime   self       public   win,linux,mac    bronze,brass,bromath,brokit,htmlayout,broaudio,bromesh,broflora,brotensor,brogameagent,brolm,brodiffusion,broimage,brosoundml,brovisionml,bropty,brosearch,brothemes,bromux,brovfs,brosys,brocred,broapps,brothumb,brodisplays,brocompositor,brokeys,broa11y,broconf,broseat,browl,broportal,brodbus
+bronze         compiler  submodule  public   win,linux,mac    brass
 brass           compiler  submodule  public   win,linux,mac    -
 bromath         engine    submodule  public   win,linux,mac    -
 brokit          engine    submodule  public   win,linux,mac    bromath,broimage,bronze,brass
@@ -54,8 +54,8 @@ brokeys         desktop   submodule  public   win,linux,mac    brosearch
 broa11y         desktop   submodule  public   win,linux,mac    -
 broconf         desktop   submodule  public   win,linux,mac    -
 broseat         desktop   submodule  public   linux            brodbus
-brodmabuf       desktop   -          pending  linux            -
-brodbus         desktop   -          public   linux            -
+brodmabuf       desktop   -          public   linux            -
+brodbus         desktop   submodule  public   linux            -
 browl           desktop   submodule  public   linux            -
 broportal       desktop   submodule  public   linux            brodbus
 broworkshop     app       -          public   win,linux,mac    bro

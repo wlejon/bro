@@ -76,15 +76,13 @@ Standalone C++20 libraries for the desktop environment. bro mounts their JavaScr
 | [brodisplays](https://github.com/wlejon/brodisplays) | Display configuration: enumeration, modes, scale, EDID, HDR, gamma and night light, hot-plug, test-then-revert | none | Windows, macOS, Linux (X11 and Wayland) | `BRO_WITH_DISPLAYS` |
 | [brocompositor](https://github.com/wlejon/brocompositor) | Window management and compositing: a portable WM core, a shell over DWM on Windows, window tracking on macOS, a wlroots Wayland compositor on Linux whose output the host renders | brodisplays | Windows, Linux, macOS | `BRO_WITH_COMPOSITOR` |
 | [brokeys](https://github.com/wlejon/brokeys) | Keybindings: chords and sequences, VS Code-style `when` clauses, layout-aware matching, VS Code import/export | brosearch | Windows, Linux, macOS | `BRO_WITH_KEYS` |
-| broa11y | Accessibility tree with AT-SPI 2, UI Automation and NSAccessibility bridges | none | Windows, Linux, macOS | `BRO_WITH_A11Y` |
-| broconf | Desktop settings: a typed, schema'd store that notifies across processes | none | Windows, Linux, macOS | `BRO_WITH_CONF` |
-| broseat | Session and seat management: libseat / logind device access, systemd user session, XDG autostart, inhibitors | brodbus | Linux | `BRO_WITH_SEAT` |
-| brodmabuf | GPU buffer sharing: DMA-BUF and DRM formats, GBM allocation, Vulkan external memory, DRM sync objects | none | Linux | — |
+| [broa11y](https://github.com/wlejon/broa11y) | Accessibility tree with AT-SPI 2, UI Automation and NSAccessibility bridges | none | Windows, Linux, macOS | `BRO_WITH_A11Y` |
+| [broconf](https://github.com/wlejon/broconf) | Desktop settings: a typed, schema'd store that notifies across processes | none | Windows, Linux, macOS | `BRO_WITH_CONF` |
+| [broseat](https://github.com/wlejon/broseat) | Session and seat management: libseat / logind device access, systemd user session, XDG autostart, inhibitors | brodbus | Linux | `BRO_WITH_SEAT` |
+| [brodmabuf](https://github.com/wlejon/brodmabuf) | GPU buffer sharing: DMA-BUF and DRM formats, GBM allocation, Vulkan external memory, DRM sync objects | none | Linux | — |
 | [brodbus](https://github.com/wlejon/brodbus) | D-Bus layer: connection setup with private bus Hello, signal matching, property caching, message containers, and test fixtures | none | Linux (Windows and macOS build stubs that report unavailable) | — |
-| browl | Wayland shell-protocol client: layer shell, session lock, foreign toplevels, screencopy, idle inhibit | none | Linux | `BRO_WITH_WL` |
-| broportal | xdg-desktop-portal backend: file chooser, screenshot, screencast, remote desktop, settings, global shortcuts | brodbus | Linux | `BRO_WITH_PORTAL` |
-
-broa11y, broconf, broseat, brodmabuf, browl and broportal are not on GitHub yet; their links will be `github.com/wlejon/<name>` once they are.
+| [browl](https://github.com/wlejon/browl) | Wayland shell-protocol client: layer shell, session lock, foreign toplevels, screencopy, idle inhibit | none | Linux | `BRO_WITH_WL` |
+| [broportal](https://github.com/wlejon/broportal) | xdg-desktop-portal backend: file chooser, screenshot, screencast, remote desktop, settings, global shortcuts | brodbus | Linux | `BRO_WITH_PORTAL` |
 
 ## Apps and tools
 

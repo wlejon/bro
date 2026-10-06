@@ -8,7 +8,9 @@
 #include "platform/drm_input.h"
 #include "render/vulkan_context.h"
 #include "render/vulkan_presenter.h"
+#if BRO_WITH_DMABUF
 #include "render/kms_direct_presenter.h"
+#endif
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/event.h"

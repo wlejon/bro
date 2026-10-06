@@ -100,3 +100,6 @@
 [submodule "third_party/broportal"]
 	path = third_party/broportal
 	url = https://github.com/wlejon/broportal.git
+[submodule "third_party/brodbus"]
+	path = third_party/brodbus
+	url = https://github.com/wlejon/brodbus.git
