@@ -43,9 +43,9 @@ brosearch       terminal  submodule  public   win,linux,mac    -
 brothemes       terminal  submodule  public   win,linux,mac    -
 bromux          terminal  submodule  public   win,linux,mac    bropty,brosearch,broimage,bromath
 brovfs          desktop   submodule  public   win,linux,mac    -
-brosys          desktop   submodule  public   win,linux,mac    -
+brosys          desktop   submodule  public   win,linux,mac    brodbus
 brocas          desktop   -          public   win,linux,mac    -
-brocred         desktop   submodule  public   win,linux,mac    -
+brocred         desktop   submodule  public   win,linux,mac    brodbus
 broapps         desktop   submodule  public   win,linux,mac    brovfs
 brothumb        desktop   submodule  public   win,linux,mac    brovfs,broimage,bromath
 brodisplays     desktop   submodule  public   win,linux,mac    -
@@ -53,10 +53,11 @@ brocompositor   desktop   submodule  public   win,linux,mac    brodisplays
 brokeys         desktop   submodule  public   win,linux,mac    brosearch
 broa11y         desktop   submodule  public   win,linux,mac    -
 broconf         desktop   submodule  public   win,linux,mac    -
-broseat         desktop   submodule  public   linux            -
+broseat         desktop   submodule  public   linux            brodbus
 brodmabuf       desktop   -          pending  linux            -
+brodbus         desktop   -          pending  linux            -
 browl           desktop   submodule  public   linux            -
-broportal       desktop   submodule  public   linux            -
+broportal       desktop   submodule  public   linux            brodbus
 broworkshop     app       -          public   win,linux,mac    bro
 broterm         app       -          public   win,linux,mac    bro
 ffmpeg-bro      app       -          public   win,linux,mac    bro

@@ -11,12 +11,15 @@ Every repo is listed in [ecosystem.md](ecosystem.md). This page records where th
 - **bro `<terminal>`** is a native replaced element painted by bro, on its own compositor layer, over bropty. It covers keys, IME and paste; mouse selection and reporting; scrollback, search and links; OSC title/cwd/bell/notification/progress/52/133/99/22 events; inline images (kitty, sixel, iTerm2); the foreground process; an `activity` event; the effective palette; runtime scrollback and cursor options; and persistent sessions through bromux (protocol 2.1 carries the same extras). API: [terminal-api.js](terminal-api.js).
 - **broterm** has tabs and splits, profiles, settings, a command palette and keybindings. It also has find, links, a clipboard-read policy and paste safety. Shell integration for pwsh, Windows PowerShell, bash, zsh and fish provides command marks, prompt navigation, durations, re-run, a sticky header and long-command notifications. Titles follow the foreground process, and persistent sessions reattach on restart. 36 tests pass on Windows and Linux.
 - **Desktop substrate libraries**, all public with CI:
-  - Linux session: broseat, brodmabuf, browl
+  - Linux session: broseat, brodmabuf, brodbus, browl
   - Display and shell: brodisplays, brocompositor
   - Files and apps: brovfs, broapps, brothumb, brocas
   - System and credentials: brosys, brocred
   - Look and input: brothemes, brokeys, broa11y
   - Settings and portals: broconf, broportal
+- **JS bindings for desktop libraries**: all `<sibling>_api` bindings completed with trust model and host integration.
+- **Nested Wayland compositor in bro**: `brocompositor` + `brodmabuf` Vulkan image import with explicit sync and fences compositing into `VulkanPresenter`. Headless test client screenshot oracle verified.
+- **One D-Bus layer (`brodbus`)**: unified C++20 library owning connection setup (with private bus Hello), signal matching, message container serialization, property caching, error mapping, and private test fixtures. Adopted across `broseat`, `brocred`, `brosys`, and `broportal`.
 - **Terminal milestone: Claude Code in broterm** is complete:
   - broterm adopted all element APIs (`activity`, `palette`, clean `cwd` paths, `options.scrollback`/`cursorStyle`/`cursorBlink`, and `bracketedPaste`), completely replacing background polling.
   - `bro.window` desktop features (desktop notifications, taskbar progress, flash/attention, system bell sound, focus state & events, title/opacity/fullscreen, single-instance with argument forwarding, global hotkeys, and system tray) implemented in `bro` engine, and broterm's stand-ins retired.
@@ -41,15 +44,13 @@ Every repo is listed in [ecosystem.md](ecosystem.md). This page records where th
 
 ## Open: foundational pieces for the desktop
 
-1. **JS bindings for the desktop libraries.** None of brosys, brovfs, brodisplays, broapps, brothumb, brocred, broconf, brothemes, brokeys, broa11y or broportal has a `<name>_api` yet, so bro apps cannot use them. The binding convention is the engine siblings' `src/api/` plus `installSiblingApis`. Plan, namespaces, the trust model and the order of work: [desktop-sibling-apis.md](desktop-sibling-apis.md).
-2. **bro on Linux as the compositor:** a nested compositor first (client buffers via brodmabuf, with fences), then bro owning the screen (composited KMS output, input through broseat and libinput), then browl shell surfaces, then XWayland. A prototype (`722ea9a0`) is on halo, on branch `halo-substrate-prototype`. It is reference only: DesktopPlatform is not wired into the engine, fences are ignored, and only direct scanout works.
-3. **An accessibility tree out of bro:** the DOM has to become a broa11y tree (UIA, AT-SPI, NSAccessibility).
-4. **One D-Bus layer:** brosys, brocred, broseat and broportal each carry their own sd-bus code. Unify them in one library.
-5. **Shell apps on top:**
+1. **bro on Linux as the compositor:** Milestone 1 (nested compositor with DMA-BUF Vulkan image import into `VulkanPresenter`) is complete. Open: Milestone 2 (bro owning the screen via KMS output, broseat, libinput, VT switching), Milestone 3 (shell surfaces and window management), Milestone 4 (XWayland), and Milestone 5 (daily-driver gaps).
+2. **An accessibility tree out of bro:** the engine-side DOM export into `broa11y::Tree` is implemented and verified. Platform-specific AT-SPI/UIA/NSAccessibility testing remains.
+3. **Shell apps on top:**
    - panel, launcher and taskbar (broapps, brocompositor's foreign-toplevel)
    - notification centre (brosys)
    - file manager (brovfs, brothumb)
    - settings (broconf, brodisplays, brothemes)
    - lock screen and greeter (session lock, brocred authentication)
-6. **brocompositor gap audit** against what a daily-driver session needs: protocols, multi-monitor, HiDPI, damage, input methods, clipboard and drag-and-drop across clients.
-7. **Session and app model:** launching and tracking DE apps, single-instance and IPC between them, autostart, and permissions (portal-style) for apps that are not trusted.
+4. **brocompositor gap audit** against what a daily-driver session needs: protocols, multi-monitor, HiDPI, damage, input methods, clipboard and drag-and-drop across clients.
+5. **Session and app model:** launching and tracking DE apps, single-instance and IPC between them, autostart, and permissions (portal-style) for apps that are not trusted.

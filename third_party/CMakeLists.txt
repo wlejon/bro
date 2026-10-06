@@ -690,6 +690,20 @@ if(BRO_WITH_DMABUF AND NOT TARGET brodmabuf)
     endif()
 endif()
 
+# --- brodbus ---
+if(NOT TARGET brodbus)
+    set(BRODBUS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    bro_default_sibling_dir(brodbus _brodbus_default)
+    set(BRODBUS_DIR "${_brodbus_default}" CACHE PATH "Path to standalone brodbus repo")
+    if(EXISTS "${BRODBUS_DIR}/CMakeLists.txt")
+        message(STATUS "brodbus: using standalone repo at ${BRODBUS_DIR}")
+        add_subdirectory("${BRODBUS_DIR}" "${CMAKE_BINARY_DIR}/brodbus" EXCLUDE_FROM_ALL)
+    elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/brodbus/CMakeLists.txt")
+        message(STATUS "brodbus: using submodule at third_party/brodbus")
+        add_subdirectory(brodbus EXCLUDE_FROM_ALL)
+    endif()
+endif()
+
 # --- Jolt Physics ---
 if(BRO_WITH_PHYSICS)
 set(USE_STATIC_MSVC_RUNTIME_LIBRARY OFF CACHE BOOL "" FORCE)  # match bro's /MD runtime

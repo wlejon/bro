@@ -67,9 +67,9 @@ Standalone C++20 libraries for the desktop environment. bro mounts their JavaScr
 | Repo | Role | Depends on | Platforms | bro gate |
 |------|------|------------|-----------|----------|
 | [brovfs](https://github.com/wlejon/brovfs) | File operations for a file manager: scanning, copy/move with undo, trash, volumes, file watching, MIME types | none | Windows, Linux, macOS | `BRO_WITH_VFS` |
-| [brosys](https://github.com/wlejon/brosys) | System services: power, audio devices, network, notifications, the system tray | none | Windows, Linux, macOS | `BRO_WITH_SYS` |
+| [brosys](https://github.com/wlejon/brosys) | System services: power, audio devices, network, notifications, the system tray | brodbus | Windows, Linux, macOS | `BRO_WITH_SYS` |
 | [brocas](https://github.com/wlejon/brocas) | Content-addressed storage: BLAKE3, FastCDC chunking, Merkle DAG manifests, a sync wire protocol | none | Windows, Linux, macOS | — |
-| [brocred](https://github.com/wlejon/brocred) | Credentials: OS secret stores, lock-screen password verification, biometric capability detection | none | Windows, Linux, macOS | `BRO_WITH_CRED` |
+| [brocred](https://github.com/wlejon/brocred) | Credentials: OS secret stores, lock-screen password verification, biometric capability detection | brodbus | Windows, Linux, macOS | `BRO_WITH_CRED` |
 | [broapps](https://github.com/wlejon/broapps) | Application catalog: installed apps, file associations, recent items, icons, scoped process launch | brovfs | Windows, Linux, macOS | `BRO_WITH_APPS` |
 | [brothumb](https://github.com/wlejon/brothumb) | Thumbnails: the freedesktop cache, native OS extractors, PDF first pages, built-in generators | brovfs, broimage, bromath | Windows, Linux, macOS | `BRO_WITH_THUMB` |
 | [brodisplays](https://github.com/wlejon/brodisplays) | Display configuration: enumeration, modes, scale, EDID, HDR, gamma and night light, hot-plug, test-then-revert | none | Windows, macOS, Linux (X11 and Wayland) | `BRO_WITH_DISPLAYS` |
@@ -77,12 +77,13 @@ Standalone C++20 libraries for the desktop environment. bro mounts their JavaScr
 | [brokeys](https://github.com/wlejon/brokeys) | Keybindings: chords and sequences, VS Code-style `when` clauses, layout-aware matching, VS Code import/export | brosearch | Windows, Linux, macOS | `BRO_WITH_KEYS` |
 | broa11y | Accessibility tree with AT-SPI 2, UI Automation and NSAccessibility bridges | none | Windows, Linux, macOS | `BRO_WITH_A11Y` |
 | broconf | Desktop settings: a typed, schema'd store that notifies across processes | none | Windows, Linux, macOS | `BRO_WITH_CONF` |
-| broseat | Session and seat management: libseat / logind device access, systemd user session, XDG autostart, inhibitors | none | Linux | `BRO_WITH_SEAT` |
+| broseat | Session and seat management: libseat / logind device access, systemd user session, XDG autostart, inhibitors | brodbus | Linux | `BRO_WITH_SEAT` |
 | brodmabuf | GPU buffer sharing: DMA-BUF and DRM formats, GBM allocation, Vulkan external memory, DRM sync objects | none | Linux | — |
+| brodbus | D-Bus layer: connection setup with private bus Hello, signal matching, property caching, message containers, and test fixtures | none | Linux | — |
 | browl | Wayland shell-protocol client: layer shell, session lock, foreign toplevels, screencopy, idle inhibit | none | Linux | `BRO_WITH_WL` |
-| broportal | xdg-desktop-portal backend: file chooser, screenshot, screencast, remote desktop, settings, global shortcuts | none | Linux | `BRO_WITH_PORTAL` |
+| broportal | xdg-desktop-portal backend: file chooser, screenshot, screencast, remote desktop, settings, global shortcuts | brodbus | Linux | `BRO_WITH_PORTAL` |
 
-broa11y, broconf, broseat, brodmabuf, browl and broportal are not on GitHub yet; their links will be `github.com/wlejon/<name>` once they are.
+broa11y, broconf, broseat, brodmabuf, brodbus, browl and broportal are not on GitHub yet; their links will be `github.com/wlejon/<name>` once they are.
 
 ## Apps and tools
 
