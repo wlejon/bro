@@ -26,6 +26,7 @@ Every repo is listed in [ecosystem.md](ecosystem.md). This page records where th
   - Milestone 5: Daily-driver gaps (multi-monitor hotplug & layout, fractional scaling via `wp_fractional_scale_manager_v1` / viewporter, per-frame damage tracking, text-input-v3 / input-method-v2, screencopy via `wlr-screencopy-v1` / `ext-image-copy-capture-v1`).
 - **Session and app model**: process launch and tracking (`broapps`), cross-platform single-instance with argument forwarding (`bro.window.requestSingleInstance`), autostart (`broseat`), unified D-Bus layer (`brodbus`), and desktop trust boundary permissions.
 - **One D-Bus layer (`brodbus`)**: unified C++20 library owning connection setup (with private bus Hello), signal matching, message container serialization, property caching, error mapping, and private test fixtures. Adopted across `broseat`, `brocred`, `brosys`, and `broportal`.
+- **Packaging and install**: Wayland session registration for display managers (`packaging/linux/wayland-sessions/bro.desktop`), application entry, systemd user target, installers for Linux (`install.sh`) and Windows (`install.ps1`), and trusted location fulfillment architecture ([packaging-and-install.md](packaging-and-install.md)).
 - **[DONE] Comprehensive README pass**: across all 5 terminal libraries (bropty, bromux, brosearch, brothemes, brokeys), 14 desktop libraries (brovfs, brosys, brocas, brocred, broapps, brothumb, brodisplays, brocompositor, broseat, brodmabuf, browl, broa11y, broconf, broportal), and brodbus.
 - **Terminal milestone: Claude Code in broterm** is complete:
   - broterm adopted all element APIs (`activity`, `palette`, clean `cwd` paths, `options.scrollback`/`cursorStyle`/`cursorBlink`, and `bracketedPaste`), completely replacing background polling.
@@ -58,7 +59,4 @@ Every repo is listed in [ecosystem.md](ecosystem.md). This page records where th
    - file manager (brovfs, brothumb)
    - settings (broconf, brodisplays, brothemes)
    - lock screen and greeter (session lock, brocred authentication)
-3. **Packaging and install:**
-   - desktop installation, package managers, and update pipeline on Windows and Linux
-   - Linux session desktop entry registration for display managers and bro greeter
-   - installation into trusted desktop locations
+

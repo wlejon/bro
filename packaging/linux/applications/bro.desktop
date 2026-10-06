@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Bro
+GenericName=Application Runtime & Desktop Environment
+Comment=Cross-platform GPU application runtime and Wayland desktop environment
+Exec=bro %U
+TryExec=bro
+Icon=bro
+Terminal=false
+Type=Application
+Categories=Development;System;Utility;
+MimeType=x-scheme-handler/bro;
+Keywords=runtime;wayland;desktop;vulkan;compositor;

@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=bro
+Comment=The bro desktop environment
+Exec=bro --drm
+TryExec=bro
+Type=Application
+DesktopNames=bro
