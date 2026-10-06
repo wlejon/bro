@@ -85,6 +85,12 @@
 #if BRO_WITH_SEARCH
 #include <brosearch/api.h>
 #endif
+#if BRO_WITH_APPS
+#include <broapps/api.h>
+#endif
+#if BRO_WITH_VFS
+#include <brovfs/api.h>
+#endif
 #include "api/api.h"  // brokit::api::resolveAssetPath
 #include <broimage/api.h>
 
@@ -437,6 +443,34 @@ void installSiblingApis(engine::Engine& engine) {
                 if (ev::microtasksPending()) ev::drainMicrotasks();
             });
             engine.addShutdownHook([] { brosearch::api::shutdownSearchAsync(); });
+        }
+    }
+#endif
+#if BRO_WITH_APPS
+    broapps::api::installApps();
+    {
+        static bool appsHooksInstalled = false;
+        if (!appsHooksInstalled) {
+            appsHooksInstalled = true;
+            engine.addFramePump([] {
+                broapps::api::tickAppsAsync();
+                if (ev::microtasksPending()) ev::drainMicrotasks();
+            });
+            engine.addShutdownHook([] { broapps::api::shutdownAppsAsync(); });
+        }
+    }
+#endif
+#if BRO_WITH_VFS
+    brovfs::api::installVfs();
+    {
+        static bool vfsHooksInstalled = false;
+        if (!vfsHooksInstalled) {
+            vfsHooksInstalled = true;
+            engine.addFramePump([] {
+                brovfs::api::tickVfsAsync();
+                if (ev::microtasksPending()) ev::drainMicrotasks();
+            });
+            engine.addShutdownHook([] { brovfs::api::shutdownVfsAsync(); });
         }
     }
 #endif

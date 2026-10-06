@@ -443,6 +443,14 @@ if(BRO_WITH_SEARCH)
     target_link_libraries(bro_bronze_host PUBLIC brosearch brosearch_api)
 endif()
 
+if(BRO_WITH_APPS)
+    target_link_libraries(bro_bronze_host PUBLIC broapps broapps_api)
+endif()
+
+if(BRO_WITH_VFS)
+    target_link_libraries(bro_bronze_host PUBLIC brovfs brovfs_api)
+endif()
+
 if(BRO_WITH_WEBP)
     target_link_libraries(bro_bronze_host PUBLIC bro_webp)
 endif()

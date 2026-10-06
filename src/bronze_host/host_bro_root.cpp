@@ -177,7 +177,7 @@ void installBroRoots(engine::Engine& engine) {
                                              "scene", "terrain", "clipmap", "tile_world", "lighting", "animation", "lm",
                                              "rave", "motion", "mic", "sense", "gesture", "wake", "kws", "listen",
                                              "triposplat", "diffusion", "vision", "diar", "stt", "tts",
-                                             "flora", "tensor", "impostor", "profiler"}));
+                                             "flora", "tensor", "impostor", "profiler", "apps", "vfs"}));
     auto* dunder = new ev::Persistent(
         makeRoot({"splash", "viewport", "perf", "bronze", "menu", "settingsUI", "inspector"}));
     auto* native = new ev::Persistent(
@@ -328,6 +328,12 @@ void installBroRoots(engine::Engine& engine) {
 #if !BRO_WITH_SEARCH
     setUnavailable("search", "BRO_WITH_SEARCH");
 #endif
+#if !BRO_WITH_APPS
+    setUnavailable("apps", "BRO_WITH_APPS");
+#endif
+#if !BRO_WITH_VFS
+    setUnavailable("vfs", "BRO_WITH_VFS");
+#endif
     {
         // installBroWindowOpen roots it and installs `parent` as well.
         Value broWin = ev::getProperty(bro->get(), "window");
@@ -357,6 +363,7 @@ void markAvailableNamespaces() {
         "listen", "motion", "rave", "sense", "triposplat", "vision", "wake", "diffusion",
         "tensor", "flora", "media", "mesh", "rigging", "scene", "terrain", "clipmap",
         "tile_world", "lighting", "animation", "mic", "conf", "themes", "keys", "search",
+        "apps", "vfs",
     };
     auto decorate = [](Value nsIn) {
         if (!ev::isObject(nsIn)) return;
@@ -468,6 +475,12 @@ void installWorkerBroRoot() {
 #endif
 #if !BRO_WITH_TRIPOSPLAT
     setUnavailable("triposplat", "BRO_WITH_TRIPOSPLAT");
+#endif
+#if !BRO_WITH_APPS
+    setUnavailable("apps", "BRO_WITH_APPS");
+#endif
+#if !BRO_WITH_VFS
+    setUnavailable("vfs", "BRO_WITH_VFS");
 #endif
     markAvailableNamespaces();
 }

@@ -513,6 +513,34 @@ if(BRO_WITH_SEARCH AND NOT TARGET brosearch)
     endif()
 endif()
 
+# --- broapps ---
+if(BRO_WITH_APPS AND NOT TARGET broapps)
+    set(BROAPPS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    bro_default_sibling_dir(broapps _broapps_default)
+    set(BROAPPS_DIR "${_broapps_default}" CACHE PATH "Path to standalone broapps repo")
+    if(EXISTS "${BROAPPS_DIR}/CMakeLists.txt")
+        message(STATUS "broapps: using standalone repo at ${BROAPPS_DIR}")
+        add_subdirectory("${BROAPPS_DIR}" "${CMAKE_BINARY_DIR}/broapps" EXCLUDE_FROM_ALL)
+    elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/broapps/CMakeLists.txt")
+        message(STATUS "broapps: using submodule at third_party/broapps")
+        add_subdirectory(broapps EXCLUDE_FROM_ALL)
+    endif()
+endif()
+
+# --- brovfs ---
+if(BRO_WITH_VFS AND NOT TARGET brovfs)
+    set(BROVFS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    bro_default_sibling_dir(brovfs _brovfs_default)
+    set(BROVFS_DIR "${_brovfs_default}" CACHE PATH "Path to standalone brovfs repo")
+    if(EXISTS "${BROVFS_DIR}/CMakeLists.txt")
+        message(STATUS "brovfs: using standalone repo at ${BROVFS_DIR}")
+        add_subdirectory("${BROVFS_DIR}" "${CMAKE_BINARY_DIR}/brovfs" EXCLUDE_FROM_ALL)
+    elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/brovfs/CMakeLists.txt")
+        message(STATUS "brovfs: using submodule at third_party/brovfs")
+        add_subdirectory(brovfs EXCLUDE_FROM_ALL)
+    endif()
+endif()
+
 # --- Jolt Physics ---
 if(BRO_WITH_PHYSICS)
 set(USE_STATIC_MSVC_RUNTIME_LIBRARY OFF CACHE BOOL "" FORCE)  # match bro's /MD runtime
