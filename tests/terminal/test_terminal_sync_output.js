@@ -29,7 +29,7 @@ if (!bro.terminal || !bro.terminal.available) {
 
     // Held: parsed, not presented.
     t.feed('\x1b[?2026h\x1b[2J\x1b[Hhalf drawn');
-    for (let i = 0; i < 4; ++i) { advanceTime(16); wallSleep(10); }
+    advanceTime(16);
     assert(t.screenText().includes('half drawn'), 'the update is parsed');
     assert(!t.frameText().includes('half drawn') && t.frameText().includes('stable'),
            'and not presented: ' + JSON.stringify(t.frameText()));

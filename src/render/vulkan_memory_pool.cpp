@@ -79,8 +79,9 @@ bool VulkanMemoryPool::allocate(VkDevice device, VkDeviceSize size, VkDeviceSize
         bool isHostVis = (properties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0;
         if (isHostVis) {
             if (vkMapMemory(device, mem, 0, size, 0, &mapped) != VK_SUCCESS) {
-                LOG_WARN("VulkanMemoryPool: Failed to map host-visible dedicated memory");
-                mapped = nullptr;
+                LOG_ERROR("VulkanMemoryPool: Failed to map host-visible dedicated memory");
+                vkFreeMemory(device, mem, nullptr);
+                return false;
             }
         }
 
@@ -109,7 +110,16 @@ bool VulkanMemoryPool::allocate(VkDevice device, VkDeviceSize size, VkDeviceSize
     size_t targetRangeIdx = 0;
     VkDeviceSize targetAlignedOffset = 0;
 
+    const bool needHostVis = (properties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0;
+
     for (auto& block : p.blocks) {
+        if (needHostVis && !block->mappedBase) {
+            if (vkMapMemory(device, block->memory, 0, block->size, 0, &block->mappedBase) == VK_SUCCESS) {
+                block->isHostVisible = true;
+            } else {
+                continue;
+            }
+        }
         for (size_t r = 0; r < block->freeRanges.size(); ++r) {
             const auto& range = block->freeRanges[r];
             VkDeviceSize alignedOffset = (range.offset + (alignment - 1)) & ~(alignment - 1);
@@ -141,11 +151,12 @@ bool VulkanMemoryPool::allocate(VkDevice device, VkDeviceSize size, VkDeviceSize
         newBlock->size = blockSize;
         newBlock->memoryTypeIndex = memoryTypeIndex;
         newBlock->properties = properties;
-        newBlock->isHostVisible = (properties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0;
-        if (newBlock->isHostVisible) {
+        newBlock->isHostVisible = needHostVis;
+        if (needHostVis) {
             if (vkMapMemory(device, mem, 0, blockSize, 0, &newBlock->mappedBase) != VK_SUCCESS) {
-                LOG_WARN("VulkanMemoryPool: Failed to map host-visible memory block");
-                newBlock->mappedBase = nullptr;
+                LOG_ERROR("VulkanMemoryPool: Failed to map host-visible memory block");
+                vkFreeMemory(device, mem, nullptr);
+                return false;
             }
         }
         newBlock->freeRanges.push_back({0, blockSize});
