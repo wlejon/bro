@@ -129,17 +129,22 @@
  *
  * Replies on Windows. Programs run behind ConPTY's console host (conhost),
  * which sits between them and the terminal and filters what each side
- * sees. No OSC reply ever reaches a native Windows program (WSL included):
- * conhost discards OSC sequences in its input, so OSC 4/10/11 colour
- * answers and OSC 52 clipboard answers are lost. In fact conhost never
- * forwards the OSC 10/11/12 colour queries or the OSC 52 clipboard read at
- * all, so programs that ask for the background colour or the clipboard
- * simply time out, and `clipboardRead` is never called for them. Device
+ * sees, and what it filters differs between Windows builds. On the builds
+ * checked (Windows 11 build 26300 and Windows Server 2022, build 20348) no
+ * OSC reply reaches a native Windows program (WSL included): conhost
+ * discards OSC sequences in its input, so OSC 4/10/11/12 colour answers and
+ * OSC 52 clipboard answers are lost. Whether the colour queries reach the
+ * terminal at all varies: build 26300 swallows OSC 10/11/12 queries, build
+ * 20348 forwards them and the terminal answers from its theme, only for
+ * conhost to drop the answer; either way a program that asks for the
+ * background colour times out. Neither build forwards the OSC 52 clipboard
+ * read, so `clipboardRead` is never called for a Windows program. Device
  * attribute and cursor position queries are answered by conhost itself, not
- * the terminal; CSI replies such as kitty keyboard-protocol queries do
- * arrive, for programs that read with ENABLE_VIRTUAL_TERMINAL_INPUT. The
- * same holds for a persistent session's program on Windows (the server runs
- * it on ConPTY). On Linux and macOS every reply arrives.
+ * the terminal. CSI replies such as kitty keyboard-protocol answers arrive
+ * on both builds, for programs that read with ENABLE_VIRTUAL_TERMINAL_INPUT;
+ * DCS replies (XTVERSION, XTGETTCAP) arrive on 26300 and are dropped on
+ * 20348. The same holds for a persistent session's program on Windows (the
+ * server runs it on ConPTY). On Linux and macOS every reply arrives.
  *
  * @example
  *   // kitty: a 2 x 2 red RGBA image stretched over 6 x 3 cells at the cursor.
