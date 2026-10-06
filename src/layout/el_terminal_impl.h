@@ -45,6 +45,7 @@ struct ElTerminal::Impl {
     double blinkEpoch = 0;
     bool exitDispatched = false;
     int lastCols = 0, lastRows = 0;
+    double imageMemoryLimit = 320.0 * 1024 * 1024;  // as the session has it (bropty's default)
 
     // A text key held until the text input it produces arrives (or the key
     // is released, or another key comes first), so the encoder gets both the

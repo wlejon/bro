@@ -10,10 +10,11 @@ add_library(bro_terminal STATIC
     term_session_view.cpp
     term_paint.cpp
     term_paint_color.cpp
+    term_paint_images.cpp
     term_keys.cpp
 )
 target_include_directories(bro_terminal PUBLIC ${bro_SOURCE_DIR}/src)
-target_link_libraries(bro_terminal PUBLIC bropty bro_render PRIVATE brothemes)
+target_link_libraries(bro_terminal PUBLIC bropty bro_render PRIVATE brothemes broimage::broimage)
 
 if(BRO_BUILD_TESTS)
     # pty_child, bropty's test child (echoes raw input bytes as hex, reports
@@ -37,14 +38,19 @@ if(BRO_BUILD_TESTS)
         tests/capture_renderer.cpp
         tests/test_paint_oracle.cpp
         tests/test_paint_cursor.cpp
+        tests/test_paint_images.cpp
         tests/test_session.cpp
+        tests/test_session_images.cpp
         tests/test_session_search.cpp
     )
-    target_link_libraries(bro_terminal_test PRIVATE bro_terminal)
+    target_link_libraries(bro_terminal_test PRIVATE bro_terminal broimage::broimage)
     target_include_directories(bro_terminal_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
     add_dependencies(bro_terminal_test bro_pty_child)
+    # bropty's image fixtures: test images and the captured output of real
+    # image programs (kitten icat, img2sixel, chafa, imgcat).
     target_compile_definitions(bro_terminal_test PRIVATE
-        BRO_PTY_CHILD_NAME="bro_pty_child${CMAKE_EXECUTABLE_SUFFIX}")
+        BRO_PTY_CHILD_NAME="bro_pty_child${CMAKE_EXECUTABLE_SUFFIX}"
+        BROPTY_TEST_DATA="${_bropty_src}/tests/data")
     if(MSVC)
         target_compile_options(bro_terminal_test PRIVATE /utf-8)
     endif()

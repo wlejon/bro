@@ -19,6 +19,7 @@
 #include "engine/terminal_layers.h"
 #include "layout/el_terminal.h"
 
+#include <cmath>
 #include <memory>
 #include <string>
 
@@ -126,6 +127,7 @@ Value optionsValue(const layout::ElTerminal::Options& o) {
     b.set("ligatures", ev::fromBool(o.ligatures));
     b.set("clipboard", ev::fromUtf8(o.clipboard));
     b.set("wheelLines", ev::fromDouble(o.wheelLines));
+    b.set("imageMemoryLimit", ev::fromDouble(o.imageMemoryLimit));
     return b.get();
 }
 
@@ -157,6 +159,14 @@ bool readOptions(Value v, layout::ElTerminal::Options& o, std::string& error) {
             return false;
         }
         o.wheelLines = int(d);
+    }
+    if (prop(obj, "imageMemoryLimit", p)) {
+        const double d = ev::isObject(p.get()) ? -1.0 : ev::toDouble(p.get());
+        if (!(d >= 0.0 && d <= 4.0 * 1024 * 1024 * 1024)) {
+            error = "imageMemoryLimit must be a byte count from 0 to 4 GiB";
+            return false;
+        }
+        o.imageMemoryLimit = std::floor(d);
     }
     if (prop(obj, "clipboard", p)) {
         const std::string c = ev::toUtf8(p.get());
@@ -337,6 +347,15 @@ void decorateTerminalProto(ObjectBuilder& b) {
         return o.get();
     });
     readOnly("layerRecords", [](layout::ElTerminal& t) { return ev::fromDouble(double(t.layerRecords())); });
+    readOnly("images", [](layout::ElTerminal& t) {
+        const auto s = t.images();
+        ObjectBuilder o;
+        o.set("count", ev::fromDouble(s.count));
+        o.set("placements", ev::fromDouble(s.placements));
+        o.set("bytes", ev::fromDouble(s.bytes));
+        o.set("limit", ev::fromDouble(s.limit));
+        return o.get();
+    });
 
     // options: read as a fresh object; assigning merges the keys given.
     b.accessor("options",

@@ -15,7 +15,9 @@ int main(int argc, char** argv) {
     if (argc > 0) g_exeDir = std::filesystem::absolute(argv[0]).parent_path().string();
     run_paint_oracle_tests();
     run_paint_cursor_tests();
+    run_paint_image_tests();
     run_session_tests();
+    run_session_image_tests();
     run_session_search_tests();
     std::printf("---\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

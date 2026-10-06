@@ -8,6 +8,10 @@
 
 namespace bro::terminal {
 
+// The image decoder behind every session's TerminalHost::decode_image
+// (broimage, bounded by bropty's limits before anything is decoded).
+bool decodeTerminalImage(std::string_view data, const bropty::ImageLimits& limits, bropty::DecodedImage& out);
+
 class TermSession::Host final : public bropty::TerminalHost {
 public:
     explicit Host(TermSession& s) : s_(s) {}
@@ -22,6 +26,10 @@ public:
     void progress(int state, int value) override;
     void semantic_mark(char kind, std::string_view params) override;
     void pointer_shape_changed(std::string_view name) override;
+    // PNG for kitty f=100, and every format broimage reads (PNG, JPEG, GIF
+    // with all its frames, BMP, ...) for iTerm2 images; refused before
+    // anything is decoded when it would exceed bropty's limits.
+    bool decode_image(std::string_view data, const bropty::ImageLimits& limits, bropty::DecodedImage& out) override;
 
 private:
     TermSession& s_;

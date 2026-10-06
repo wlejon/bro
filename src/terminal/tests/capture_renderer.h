@@ -12,7 +12,12 @@
 namespace bro::terminal::test {
 
 struct Op {
-    enum Kind { Fill, Stroke, Text, Line, Path, Save, Restore, Clip } kind = Fill;
+    enum Kind { Fill, Stroke, Text, Line, Path, Save, Restore, Clip, Image } kind = Fill;
+    // Image: the destination is (x, y, w, h); the source rect and the pixels.
+    float sx = 0, sy = 0, sw = 0, sh = 0;
+    uint64_t pixelsId = 0;
+    const uint8_t* pixels = nullptr;
+    int pixelsW = 0, pixelsH = 0;
     float x = 0, y = 0, w = 0, h = 0;   // Fill/Stroke/Clip rect; Text origin (x, baseline y)
     float x2 = 0, y2 = 0;               // Line end
     float thickness = 0;                // Line / Path stroke width
@@ -45,6 +50,18 @@ public:
                                     render::TextDirection direction = render::TextDirection::LTR) override;
     void drawLine(float x1, float y1, float x2, float y2, bromath::Color color, float thickness) override;
     void drawImage(const void*, size_t, float, float, float, float, uint64_t = 0) override {}
+    void drawSharedPixels(const render::SharedPixels& px, float sx, float sy, float sw, float sh, float x, float y,
+                          float w, float h) override {
+        Op op;
+        op.kind = Op::Image;
+        op.x = x, op.y = y, op.w = w, op.h = h;
+        op.sx = sx, op.sy = sy, op.sw = sw, op.sh = sh;
+        op.pixelsId = px.id;
+        op.pixels = px.rgba;
+        op.pixelsW = px.width;
+        op.pixelsH = px.height;
+        ops.push_back(std::move(op));
+    }
     void drawCircle(float, float, float, bromath::Color, bromath::Color, float) override {}
     void drawEllipse(float, float, float, float, bromath::Color, bromath::Color, float) override {}
     void drawPath(std::string_view d, bromath::Color fill, bromath::Color stroke, float strokeWidth) override;

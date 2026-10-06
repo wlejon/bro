@@ -91,6 +91,44 @@
  *     --terminal-color-1: #f38ba8;     --terminal-selection: rgba(137, 180, 250, 0.35);
  *   }
  *
+ * Inline images. Programs can show images with the kitty graphics protocol
+ * (transmission, placements with z-index, relative placements, deletion,
+ * animation frames, Unicode placeholders), sixel, and iTerm2's OSC 1337
+ * File=. PNG (kitty f=100) and the iTerm2 formats are decoded by broimage:
+ * PNG, JPEG, GIF (every frame), BMP, TGA, PSD, PNM and baseline TIFF (what
+ * chafa sends). Each image is drawn on the cells bropty placed it in, so it
+ * lands on the text grid at any font size and device scale. Images scroll
+ * with their text and leave with it when history evicts it. Kitty
+ * placements stay where they were drawn when text is written over them, and
+ * their z-index puts them under the cell backgrounds, between the
+ * backgrounds and the text, or over the text. Sixel and iTerm2 images are
+ * cells: text written over them replaces that part, and they are erased,
+ * scrolled and reflowed like text. Animations (kitty frames, animated GIFs)
+ * run on the terminal's own thread and present their frames on time
+ * without any script. Decoded pixels are held once, shared by every frame
+ * that shows them, and uploaded to the GPU once.
+ *
+ * Memory is bounded per terminal: `options.imageMemoryLimit` (320 MiB by
+ * default) caps the decoded RGBA held, counting every frame of every image
+ * on both screens. An image that would go over it evicts images without
+ * placements first, then the least recently used. One image larger than the
+ * whole quota is refused, and the program gets kitty's ENOSPC. Dimensions
+ * are capped at 10000 px (4096 for sixel), and an encoded transmission at
+ * 256 MiB. Sizes are read from the image headers and checked before
+ * anything is decoded. `images` reports what is held. Files, temporary
+ * files and shared memory (kitty t=f / t=t / t=s) are refused, because a
+ * program on the far side of an ssh connection must not read local files.
+ * On Windows the child's output goes through ConPTY, whose console host
+ * re-renders it: iTerm2 images (an OSC) pass through, kitty graphics (APC)
+ * and sixel (DCS) do not, so those two reach a Windows terminal only from
+ * `feed()` (for example, bytes from a socket the page reads itself).
+ *
+ * @example
+ *   // kitty: a 2 x 2 red RGBA image stretched over 6 x 3 cells at the cursor.
+ *   const px = btoa(String.fromCharCode(...[255,0,0,255, 255,0,0,255, 255,0,0,255, 255,0,0,255]));
+ *   term.feed(`\x1b_Ga=T,f=32,s=2,v=2,c=6,r=3;${px}\x1b\\`);
+ *   console.log(term.images);   // { count: 1, placements: 1, bytes: 16, limit: 335544320 }
+ *
  * Performance. Every <terminal> is its own compositor layer, recorded only
  * when the terminal changes. A busy terminal therefore re-records only
  * itself, and a page change never re-records a terminal. Set

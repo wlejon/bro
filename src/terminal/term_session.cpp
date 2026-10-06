@@ -297,16 +297,19 @@ void TermSession::wake() {
 
 void TermSession::threadMain() {
     while (!stop_.load(std::memory_order_acquire)) {
-        // Sleep until woken, or until a held synchronized update times out.
-        Clock::time_point holdUntil{};
+        // Sleep until woken, until a held synchronized update times out, or
+        // until an image animation's next frame is due.
+        Clock::time_point until{};
         {
             std::lock_guard<std::mutex> g(mu_);
-            if (syncActive_ && !syncTimedOut_) holdUntil = syncSince_ + kSyncTimeout;
+            if (syncActive_ && !syncTimedOut_) until = syncSince_ + kSyncTimeout;
+            const Clock::time_point frameAt = advanceAnimations(Clock::now());
+            if (frameAt != Clock::time_point{} && (until == Clock::time_point{} || frameAt < until)) until = frameAt;
         }
         {
             std::unique_lock<std::mutex> lk(wakeMu_);
             auto ready = [this] { return wakeFlag_ || stop_.load(std::memory_order_acquire); };
-            if (holdUntil != Clock::time_point{}) wakeCv_.wait_until(lk, holdUntil, ready);
+            if (until != Clock::time_point{}) wakeCv_.wait_until(lk, until, ready);
             else wakeCv_.wait(lk, ready);
             wakeFlag_ = false;
         }
@@ -333,6 +336,41 @@ void TermSession::threadMain() {
             std::this_thread::yield();
         }
     }
+}
+
+Clock::time_point TermSession::advanceAnimations(Clock::time_point now) {
+    bropty::Terminal& t = session_.terminal();
+    const uint64_t before = t.change_count();
+    const uint64_t nowMs =
+        uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count());
+    const uint64_t wait = t.advance_animations(nowMs);
+    // A frame changed: show it (once the renderer has taken the last frame,
+    // like output; what is owed is paid when it does).
+    if (t.change_count() != before) maybePublish(now, /*onlyIfConsumed=*/true);
+    if (wait == UINT64_MAX) return {};
+    return now + std::chrono::milliseconds(std::min<uint64_t>(wait, 60000));
+}
+
+TermSession::ImageStats TermSession::imageStats() const {
+    std::lock_guard<std::mutex> g(mu_);
+    const bropty::Terminal& t = session_.terminal();
+    ImageStats s;
+    for (bool alt : {false, true}) {
+        const bropty::ImageLayer& l = t.images(alt);
+        s.images += l.image_count();
+        s.placements += l.placements().size();
+    }
+    s.bytes = t.image_bytes();
+    s.limit = t.graphics_options().storage_limit;
+    return s;
+}
+
+void TermSession::setImageMemoryLimit(size_t bytes) {
+    {
+        std::lock_guard<std::mutex> g(mu_);
+        session_.terminal().set_image_storage_limit(bytes);
+    }
+    wake();
 }
 
 bool TermSession::parseSlice(Clock::time_point now, bool& published) {

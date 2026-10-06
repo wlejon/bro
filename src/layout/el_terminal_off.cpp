@@ -88,6 +88,7 @@ ElTerminal::SearchInfo ElTerminal::searchInfo() const { return {}; }
 std::optional<ElTerminal::Link> ElTerminal::linkAt(int64_t, int) const { return std::nullopt; }
 std::string ElTerminal::rangeText(const Range&) const { return {}; }
 std::vector<ElTerminal::Command> ElTerminal::commands() const { return {}; }
+ElTerminal::ImageInfo ElTerminal::images() const { return {}; }
 bool ElTerminal::answerClipboard(uint64_t, std::string_view) { return false; }
 bool ElTerminal::denyClipboard(uint64_t) { return false; }
 std::string ElTerminal::pointerShape() const { return {}; }

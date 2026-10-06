@@ -175,6 +175,10 @@ void ElTerminal::setOptions(const Options& o) {
     else if (o.clipboard == "read-write") p = terminal::ClipboardPolicy::ReadWrite;
     m.session->setClipboardPolicy(p);
     m.session->setScrollOnInput(o.scrollOnInput);
+    if (o.imageMemoryLimit != m.imageMemoryLimit) {
+        m.imageMemoryLimit = o.imageMemoryLimit;
+        m.session->setImageMemoryLimit(size_t(o.imageMemoryLimit));
+    }
     refreshFont();   // ligatures change the cell width
     refreshTheme();  // the colour policy
     m.layerDirty = true;

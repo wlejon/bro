@@ -11,7 +11,7 @@ namespace bro::terminal {
 
 namespace {
 
-constexpr char32_t kImageCell = 0x10EEEE;  // bropty's image placeholder (drawn by T2)
+constexpr char32_t kImageCell = bropty::kImagePlaceholder;  // drawn as an image (term_paint_images.cpp)
 
 bool sameRgb(bropty::Rgb a, bropty::Rgb b) { return a == b; }
 
@@ -300,6 +300,8 @@ void TermPainter::paint(render::Renderer* r, const bropty::Frame& f, float x, fl
     render::FontRef textFont = opts.font;
     textFont.ligatures = opts.ligatures;
 
+    const bool images = !f.images.empty();
+    if (images) drawImages(r, f, bropty::ImagePlane::BelowBackground, x, y, m);
     // 1. backgrounds
     for (int row = 0; row < rows; ++row) {
         if (!ops[size_t(row)]) continue;
@@ -307,6 +309,10 @@ void TermPainter::paint(render::Renderer* r, const bropty::Frame& f, float x, fl
             const float x0 = colX(b.col0);
             r->fillRect(x0, rowTop(row), colX(b.col1) - x0, m.cellH, toColor(b.color));
         }
+    }
+    if (images) {
+        drawImages(r, f, bropty::ImagePlane::BelowText, x, y, m);
+        drawImages(r, f, bropty::ImagePlane::Text, x, y, m);
     }
     // 2. highlights
     for (const bropty::Highlight& hl : f.highlights) {
@@ -335,6 +341,7 @@ void TermPainter::paint(render::Renderer* r, const bropty::Frame& f, float x, fl
         if (!ops[size_t(row)]) continue;
         for (const DecoOp& d : ops[size_t(row)]->deco) drawDeco(r, d, x, rowTop(row), m);
     }
+    if (images) drawImages(r, f, bropty::ImagePlane::AboveText, x, y, m);
     drawHover(r, f, x, y, m, pal, rv);
     // 5. cursor, 6. preedit
     drawCursor(r, f, x, y, m, opts, pal, rv);

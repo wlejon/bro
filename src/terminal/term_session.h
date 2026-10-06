@@ -185,6 +185,19 @@ public:
     void setBasePalette(const bropty::Palette& palette);
     [[nodiscard]] bropty::Palette palette() const;
 
+    // ---- inline images (kitty graphics, sixel, iTerm2) ----------------------
+    // Decoded through broimage (term_session_host.cpp), animated on the
+    // parser thread, shown in the frames (bropty::Frame::images).
+    struct ImageStats {
+        size_t images = 0;      // both screens
+        size_t placements = 0;  // kitty placements, both screens
+        size_t bytes = 0;       // decoded RGBA held
+        size_t limit = 0;       // the quota `bytes` is held to
+    };
+    [[nodiscard]] ImageStats imageStats() const;
+    // The decoded-image quota (bropty's storage_limit); lowering it evicts now.
+    void setImageMemoryLimit(size_t bytes);
+
     // ---- data plane (main thread, lock-free) ---------------------------------
     // The newest published frame (the same one again when nothing is newer).
     // Frames are published at most one per frame taken: newer output than
@@ -217,6 +230,9 @@ private:
     void wake();
     // One parse slice under mu_. Returns whether more output is pending.
     bool parseSlice(std::chrono::steady_clock::time_point now, bool& published);
+    // Run image animations up to `now` (mu_); when the next frame is due,
+    // or {} when nothing animates.
+    std::chrono::steady_clock::time_point advanceAnimations(std::chrono::steady_clock::time_point now);
     // Publish if presentation is not held by a synchronized update.
     bool maybePublish(std::chrono::steady_clock::time_point now, bool onlyIfConsumed);
     // Feed `chunk`, cutting it after each end-of-synchronized-update so the

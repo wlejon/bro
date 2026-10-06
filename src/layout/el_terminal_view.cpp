@@ -120,4 +120,9 @@ bool ElTerminal::answerClipboard(uint64_t request, std::string_view text) {
 bool ElTerminal::denyClipboard(uint64_t request) { return impl_->session->cancelClipboard(request); }
 std::string ElTerminal::pointerShape() const { return impl_->session->pointerShape(); }
 
+ElTerminal::ImageInfo ElTerminal::images() const {
+    const terminal::TermSession::ImageStats s = impl_->session->imageStats();
+    return ImageInfo{double(s.images), double(s.placements), double(s.bytes), double(s.limit)};
+}
+
 } // namespace bro::layout

@@ -227,6 +227,11 @@ public:
         std::string commandLine;
     };
     std::vector<Command> commands() const;
+    // Inline images held (kitty graphics, sixel, iTerm2), both screens.
+    struct ImageInfo {
+        double count = 0, placements = 0, bytes = 0, limit = 0;
+    };
+    ImageInfo images() const;
 
     // ---- program requests answered by the page ------------------------------
     bool answerClipboard(uint64_t request, std::string_view text);
@@ -243,6 +248,7 @@ public:
         bool ligatures = false;
         std::string clipboard = "write";  // "deny" | "write" | "read-write"
         int wheelLines = 3;
+        double imageMemoryLimit = 320.0 * 1024 * 1024;  // decoded image bytes (bropty's quota)
     };
     const Options& options() const { return options_; }
     void setOptions(const Options& o);

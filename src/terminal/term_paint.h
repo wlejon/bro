@@ -11,10 +11,16 @@
 // characters, emoji, combining sequences, anything bidi could reorder) is
 // drawn on its own at its cell's x.
 //
-// Paint order, over the whole frame: the default background, the cell
-// background runs, the highlight overlays (selection, search matches), the
-// glyphs, the decorations (underline in its five styles, strikethrough,
-// overline), the cursor, and the IME preedit.
+// Paint order, over the whole frame: the default background, images under
+// the cell backgrounds, the cell background runs, images between the
+// backgrounds and the text, image cells (sixel, iTerm2, kitty placeholders),
+// the highlight overlays (selection, search matches), the glyphs, the
+// decorations (underline in its five styles, strikethrough, overline),
+// images over the text, the hovered link, the cursor, and the IME preedit.
+//
+// Images (bropty::Frame::images) are placed in cells, so they land on the
+// same grid as the text at any cell size or device scale; their pixels are
+// drawn by reference (render::SharedPixels), uploaded once per buffer.
 //
 // Rows are prepared once per content: each frame row carries a serial that
 // changes whenever its content does (bropty's copy-on-write snapshot), and
@@ -168,6 +174,18 @@ private:
     void drawDeco(render::Renderer* r, const DecoOp& d, float x, float rowTop, const CellMetrics& m);
     void drawCursor(render::Renderer* r, const bropty::Frame& f, float x, float y, const CellMetrics& m,
                     const PaintOptions& opts, const bropty::Palette& pal, bool rv);
+
+public:
+    // The frame's images on one plane, in the frame's order (term_paint_images.cpp).
+    static void drawImages(render::Renderer* r, const bropty::Frame& f, bropty::ImagePlane plane, float x, float y,
+                           const CellMetrics& m);
+    // Where an image lands, in CSS px, with the frame's top-left cell at (x, y).
+    struct ImageRect {
+        float x = 0, y = 0, w = 0, h = 0;
+    };
+    static ImageRect imageRect(const bropty::FrameImage& im, float x, float y, const CellMetrics& m);
+
+private:
 
     struct Entry {
         RowOps ops;
