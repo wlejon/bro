@@ -22,7 +22,7 @@
 #   deps       comma-separated bro-ecosystem repos it builds against (from its CMake)
 #
 # name          group     bro        github   platforms        deps
-bro             runtime   self       public   win,linux,mac    bronze,brass,bromath,brokit,htmlayout,broaudio,bromesh,broflora,brotensor,brogameagent,brolm,brodiffusion,broimage,brosoundml,brovisionml,bropty,brosearch,brothemes,bromux
+bro             runtime   self       public   win,linux,mac    bronze,brass,bromath,brokit,htmlayout,broaudio,bromesh,broflora,brotensor,brogameagent,brolm,brodiffusion,broimage,brosoundml,brovisionml,bropty,brosearch,brothemes,bromux,brovfs,brosys,brocred,broapps,brothumb,brodisplays,brocompositor,brokeys,broa11y,broconf,broseat,browl,broportal
 bronze          compiler  submodule  public   win,linux,mac    brass
 brass           compiler  submodule  public   win,linux,mac    -
 bromath         engine    submodule  public   win,linux,mac    -
@@ -42,21 +42,21 @@ bropty          terminal  submodule  public   win,linux,mac    brosearch
 brosearch       terminal  submodule  public   win,linux,mac    -
 brothemes       terminal  submodule  public   win,linux,mac    -
 bromux          terminal  submodule  public   win,linux,mac    bropty,brosearch,broimage,bromath
-brovfs          desktop   -          public   win,linux,mac    -
-brosys          desktop   -          public   win,linux,mac    -
+brovfs          desktop   submodule  public   win,linux,mac    -
+brosys          desktop   submodule  public   win,linux,mac    -
 brocas          desktop   -          public   win,linux,mac    -
-brocred         desktop   -          public   win,linux,mac    -
-broapps         desktop   -          public   win,linux,mac    brovfs
-brothumb        desktop   -          public   win,linux,mac    brovfs,broimage,bromath
-brodisplays     desktop   -          public   win,linux,mac    -
-brocompositor   desktop   -          public   win,linux,mac    brodisplays
-brokeys         desktop   -          public   win,linux,mac    brosearch
-broa11y         desktop   -          pending  win,linux,mac    -
-broconf         desktop   -          pending  win,linux,mac    -
-broseat         desktop   -          pending  linux            -
+brocred         desktop   submodule  public   win,linux,mac    -
+broapps         desktop   submodule  public   win,linux,mac    brovfs
+brothumb        desktop   submodule  public   win,linux,mac    brovfs,broimage,bromath
+brodisplays     desktop   submodule  public   win,linux,mac    -
+brocompositor   desktop   submodule  public   win,linux,mac    brodisplays
+brokeys         desktop   submodule  public   win,linux,mac    brosearch
+broa11y         desktop   submodule  public   win,linux,mac    -
+broconf         desktop   submodule  public   win,linux,mac    -
+broseat         desktop   submodule  public   linux            -
 brodmabuf       desktop   -          pending  linux            -
-browl           desktop   -          pending  linux            -
-broportal       desktop   -          pending  linux            -
+browl           desktop   submodule  public   linux            -
+broportal       desktop   submodule  public   linux            -
 broworkshop     app       -          public   win,linux,mac    bro
 broterm         app       -          public   win,linux,mac    bro
 ffmpeg-bro      app       -          public   win,linux,mac    bro

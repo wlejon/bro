@@ -61,3 +61,42 @@
 [submodule "third_party/bromux"]
 	path = third_party/bromux
 	url = https://github.com/wlejon/bromux.git
+[submodule "third_party/broconf"]
+	path = third_party/broconf
+	url = https://github.com/wlejon/broconf.git
+[submodule "third_party/brovfs"]
+	path = third_party/brovfs
+	url = https://github.com/wlejon/brovfs.git
+[submodule "third_party/brosys"]
+	path = third_party/brosys
+	url = https://github.com/wlejon/brosys.git
+[submodule "third_party/brocred"]
+	path = third_party/brocred
+	url = https://github.com/wlejon/brocred.git
+[submodule "third_party/broapps"]
+	path = third_party/broapps
+	url = https://github.com/wlejon/broapps.git
+[submodule "third_party/brothumb"]
+	path = third_party/brothumb
+	url = https://github.com/wlejon/brothumb.git
+[submodule "third_party/brodisplays"]
+	path = third_party/brodisplays
+	url = https://github.com/wlejon/brodisplays.git
+[submodule "third_party/brocompositor"]
+	path = third_party/brocompositor
+	url = https://github.com/wlejon/brocompositor.git
+[submodule "third_party/brokeys"]
+	path = third_party/brokeys
+	url = https://github.com/wlejon/brokeys.git
+[submodule "third_party/broa11y"]
+	path = third_party/broa11y
+	url = https://github.com/wlejon/broa11y.git
+[submodule "third_party/broseat"]
+	path = third_party/broseat
+	url = https://github.com/wlejon/broseat.git
+[submodule "third_party/browl"]
+	path = third_party/browl
+	url = https://github.com/wlejon/browl.git
+[submodule "third_party/broportal"]
+	path = third_party/broportal
+	url = https://github.com/wlejon/broportal.git
