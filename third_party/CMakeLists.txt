@@ -323,6 +323,13 @@ if(BRO_WITH_TERMINAL)
             message(STATUS "bromux: not found (../bromux or third_party/bromux); persistent terminal sessions off")
         endif()
     endif()
+    # MSVC links an executable that exports symbols with an import library
+    # named after it in its ARCHIVE directory: for the `bromux` server that
+    # is bromux-lib/<config>/bromux.lib, the static library it links, and
+    # the link fails (LNK1149). Name the import library apart.
+    if(TARGET bromux_cli AND MSVC)
+        set_target_properties(bromux_cli PROPERTIES ARCHIVE_OUTPUT_NAME bromux_cli)
+    endif()
 endif()
 
 # --- bromesh (mesh generation + manipulation library) ---
