@@ -77,61 +77,109 @@ std::vector<LeasedSurfaceFrame> WaylandCompositor::acquireClientLayers(std::vect
     if (!backend_) return {};
 
     std::vector<LeasedSurfaceFrame> leasedFrames;
+
+    auto appendSurfaceNode = [&](const brocompositor::wl::SurfaceNode& node, float baseX, float baseY) {
+        auto surface = backend_->surface(node.surface);
+        if (!surface) return;
+
+        auto frameOpt = surface->acquire();
+        if (!frameOpt) return;
+
+        auto imgOpt = surface->image(frameOpt->image_id);
+        if (!imgOpt) {
+            surface->release(*frameOpt);
+            return;
+        }
+
+        if (imgOpt->type == brocompositor::ImageHandleType::DmaBuf) {
+            render::DmabufLayerSource dmabufSrc;
+            dmabufSrc.bufferId = imgOpt->id;
+            dmabufSrc.width = imgOpt->width;
+            dmabufSrc.height = imgOpt->height;
+            dmabufSrc.drmFormat = imgOpt->drm_format;
+            dmabufSrc.modifier = imgOpt->drm_modifier;
+            dmabufSrc.planeCount = static_cast<uint32_t>(imgOpt->planes.size());
+            for (size_t p = 0; p < imgOpt->planes.size() && p < 4; ++p) {
+                dmabufSrc.fds[p] = brocompositor::wl::fd_of(imgOpt->planes[p].handle);
+                dmabufSrc.strides[p] = imgOpt->planes[p].stride;
+                dmabufSrc.offsets[p] = imgOpt->planes[p].offset;
+            }
+            dmabufSrc.syncFd = brocompositor::wl::fd_of(frameOpt->sync_fd);
+
+            engine::UILayer layer;
+            layer.quad.x = baseX + static_cast<float>(node.offset.x);
+            layer.quad.y = baseY + static_cast<float>(node.offset.y);
+            layer.quad.w = static_cast<float>(imgOpt->width);
+            layer.quad.h = static_cast<float>(imgOpt->height);
+            layer.quad.clipW = -1.0f;
+            layer.content = dmabufSrc;
+
+            outLayers.push_back(layer);
+
+            LeasedSurfaceFrame leased;
+            leased.surfaceId = static_cast<uint32_t>(node.surface);
+            leased.surface = surface;
+            leased.frame = *frameOpt;
+            leasedFrames.push_back(std::move(leased));
+        } else {
+            surface->release(*frameOpt);
+        }
+    };
+
+    // 1. Session lock: if locked, ONLY lock surfaces are visible
+    if (backend_->session_lock_state() != brocompositor::wl::LockState::Unlocked) {
+        for (const auto& mon : backend_->monitors()) {
+            for (const auto& node : backend_->lock_surface_tree(mon.id)) {
+                appendSurfaceNode(node, static_cast<float>(mon.bounds.x), static_cast<float>(mon.bounds.y));
+            }
+        }
+        return leasedFrames;
+    }
+
+    // 2. Background layer surfaces (e.g. wallpaper)
+    for (const auto& ls : backend_->layer_surfaces()) {
+        if (!ls.mapped || ls.layer != brocompositor::wl::Layer::Background) continue;
+        for (const auto& node : backend_->layer_surface_tree(ls.id)) {
+            appendSurfaceNode(node, static_cast<float>(ls.rect.x), static_cast<float>(ls.rect.y));
+        }
+    }
+
+    // 3. Bottom layer surfaces (desktop widgets/desktop icons)
+    for (const auto& ls : backend_->layer_surfaces()) {
+        if (!ls.mapped || ls.layer != brocompositor::wl::Layer::Bottom) continue;
+        for (const auto& node : backend_->layer_surface_tree(ls.id)) {
+            appendSurfaceNode(node, static_cast<float>(ls.rect.x), static_cast<float>(ls.rect.y));
+        }
+    }
+
+    // 4. xdg-shell client windows & unmanaged X11 surfaces
     auto windows = backend_->windows();
     for (auto winId : windows) {
         if (!backend_->visible(winId)) continue;
         auto optSnap = backend_->query(winId);
-        auto surfaceNodes = backend_->window_surfaces(winId);
-        for (const auto& node : surfaceNodes) {
-            auto surface = backend_->surface(node.surface);
-            if (!surface) continue;
-
-            auto frameOpt = surface->acquire();
-            if (!frameOpt) continue;
-
-            auto imgOpt = surface->image(frameOpt->image_id);
-            if (!imgOpt) {
-                surface->release(*frameOpt);
-                continue;
-            }
-
-            if (imgOpt->type == brocompositor::ImageHandleType::DmaBuf) {
-                render::DmabufLayerSource dmabufSrc;
-                dmabufSrc.bufferId = imgOpt->id;
-                dmabufSrc.width = imgOpt->width;
-                dmabufSrc.height = imgOpt->height;
-                dmabufSrc.drmFormat = imgOpt->drm_format;
-                dmabufSrc.modifier = imgOpt->drm_modifier;
-                dmabufSrc.planeCount = static_cast<uint32_t>(imgOpt->planes.size());
-                for (size_t p = 0; p < imgOpt->planes.size() && p < 4; ++p) {
-                    dmabufSrc.fds[p] = brocompositor::wl::fd_of(imgOpt->planes[p].handle);
-                    dmabufSrc.strides[p] = imgOpt->planes[p].stride;
-                    dmabufSrc.offsets[p] = imgOpt->planes[p].offset;
-                }
-                dmabufSrc.syncFd = brocompositor::wl::fd_of(frameOpt->sync_fd);
-
-                engine::UILayer layer;
-                float wx = optSnap ? static_cast<float>(optSnap->frame.x) : 0.0f;
-                float wy = optSnap ? static_cast<float>(optSnap->frame.y) : 0.0f;
-                layer.quad.x = wx + static_cast<float>(node.offset.x);
-                layer.quad.y = wy + static_cast<float>(node.offset.y);
-                layer.quad.w = static_cast<float>(imgOpt->width);
-                layer.quad.h = static_cast<float>(imgOpt->height);
-                layer.quad.clipW = -1.0f;
-                layer.content = dmabufSrc;
-
-                outLayers.push_back(layer);
-
-                LeasedSurfaceFrame leased;
-                leased.surfaceId = static_cast<uint32_t>(node.surface);
-                leased.surface = surface;
-                leased.frame = *frameOpt;
-                leasedFrames.push_back(std::move(leased));
-            } else {
-                surface->release(*frameOpt);
-            }
+        float wx = optSnap ? static_cast<float>(optSnap->frame.x) : 0.0f;
+        float wy = optSnap ? static_cast<float>(optSnap->frame.y) : 0.0f;
+        for (const auto& node : backend_->window_surfaces(winId)) {
+            appendSurfaceNode(node, wx, wy);
         }
     }
+
+    // 5. Top layer surfaces (panels, taskbars, docks)
+    for (const auto& ls : backend_->layer_surfaces()) {
+        if (!ls.mapped || ls.layer != brocompositor::wl::Layer::Top) continue;
+        for (const auto& node : backend_->layer_surface_tree(ls.id)) {
+            appendSurfaceNode(node, static_cast<float>(ls.rect.x), static_cast<float>(ls.rect.y));
+        }
+    }
+
+    // 6. Overlay layer surfaces (notifications, OSD, popups)
+    for (const auto& ls : backend_->layer_surfaces()) {
+        if (!ls.mapped || ls.layer != brocompositor::wl::Layer::Overlay) continue;
+        for (const auto& node : backend_->layer_surface_tree(ls.id)) {
+            appendSurfaceNode(node, static_cast<float>(ls.rect.x), static_cast<float>(ls.rect.y));
+        }
+    }
+
     return leasedFrames;
 #else
     (void)outLayers;
@@ -151,5 +199,89 @@ void WaylandCompositor::releaseClientLayers(const std::vector<LeasedSurfaceFrame
     (void)frames;
 #endif
 }
+
+bool WaylandCompositor::focusWindow(uint64_t winId) {
+#if defined(__linux__) && defined(BRO_WITH_COMPOSITOR)
+    if (!backend_) return false;
+    return backend_->focus(static_cast<brocompositor::WindowId>(winId));
+#else
+    (void)winId;
+    return false;
+#endif
+}
+
+bool WaylandCompositor::closeWindow(uint64_t winId) {
+#if defined(__linux__) && defined(BRO_WITH_COMPOSITOR)
+    if (!backend_) return false;
+    return backend_->close(static_cast<brocompositor::WindowId>(winId));
+#else
+    (void)winId;
+    return false;
+#endif
+}
+
+bool WaylandCompositor::setWindowState(uint64_t winId, bool maximized, bool fullscreen) {
+#if defined(__linux__) && defined(BRO_WITH_COMPOSITOR)
+    if (!backend_) return false;
+    return backend_->set_window_state(static_cast<brocompositor::WindowId>(winId), maximized, fullscreen);
+#else
+    (void)winId;
+    (void)maximized;
+    (void)fullscreen;
+    return false;
+#endif
+}
+
+bool WaylandCompositor::setWindowMinimized(uint64_t winId, bool minimized) {
+#if defined(__linux__) && defined(BRO_WITH_COMPOSITOR)
+    if (!backend_) return false;
+    return backend_->set_window_minimized(static_cast<brocompositor::WindowId>(winId), minimized);
+#else
+    (void)winId;
+    (void)minimized;
+    return false;
+#endif
+}
+
+bool WaylandCompositor::placeWindow(uint64_t winId, int x, int y, int w, int h) {
+#if defined(__linux__) && defined(BRO_WITH_COMPOSITOR)
+    if (!backend_) return false;
+    brocompositor::Rect frame{x, y, w, h};
+    return backend_->place(static_cast<brocompositor::WindowId>(winId), frame);
+#else
+    (void)winId;
+    (void)x; (void)y; (void)w; (void)h;
+    return false;
+#endif
+}
+
+std::vector<uint64_t> WaylandCompositor::windows() const {
+#if defined(__linux__) && defined(BRO_WITH_COMPOSITOR)
+    if (!backend_) return {};
+    auto wins = backend_->windows();
+    std::vector<uint64_t> res;
+    res.reserve(wins.size());
+    for (auto w : wins) res.push_back(static_cast<uint64_t>(w));
+    return res;
+#else
+    return {};
+#endif
+}
+
+bool WaylandCompositor::isSessionLocked() const {
+#if defined(__linux__) && defined(BRO_WITH_COMPOSITOR)
+    if (!backend_) return false;
+    return backend_->session_lock_state() != brocompositor::wl::LockState::Unlocked;
+#else
+    return false;
+#endif
+}
+
+#if defined(__linux__) && defined(BRO_WITH_COMPOSITOR)
+std::vector<brocompositor::wl::LayerSurfaceInfo> WaylandCompositor::layerSurfaces() const {
+    if (!backend_) return {};
+    return backend_->layer_surfaces();
+}
+#endif
 
 } // namespace bro::compositor

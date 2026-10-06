@@ -46,7 +46,7 @@ Every repo is listed in [ecosystem.md](ecosystem.md). This page records where th
 
 ## Open: foundational pieces for the desktop
 
-1. **bro on Linux as the compositor:** Milestones 1 & 2 (nested compositor and bro owning the screen via KMS, broseat, libinput, VT switching) are complete. Open: Milestone 3 (shell surfaces and window management), Milestone 4 (XWayland), and Milestone 5 (daily-driver gaps).
+1. **bro on Linux as the compositor:** Milestones 1, 2, and 3 (nested compositor, bro owning the screen via KMS/broseat/libinput, and shell surfaces/window management/layer-shell/session-lock) are complete. Open: Milestone 4 (XWayland), and Milestone 5 (daily-driver gaps).
 2. **An accessibility tree out of bro:** the engine-side DOM export into `broa11y::Tree` is implemented and verified. Platform-specific AT-SPI/UIA/NSAccessibility testing remains.
 3. **Shell apps on top:**
    - panel, launcher and taskbar (broapps, brocompositor's foreign-toplevel)

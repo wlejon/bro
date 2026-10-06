@@ -61,9 +61,21 @@ public:
     /// Release leased frames after presentation has completed
     void releaseClientLayers(const std::vector<LeasedSurfaceFrame>& frames);
 
+    // Window management controls
+    bool focusWindow(uint64_t winId);
+    bool closeWindow(uint64_t winId);
+    bool setWindowState(uint64_t winId, bool maximized, bool fullscreen);
+    bool setWindowMinimized(uint64_t winId, bool minimized);
+    bool placeWindow(uint64_t winId, int x, int y, int w, int h);
+    std::vector<uint64_t> windows() const;
+
+    // Shell state queries
+    bool isSessionLocked() const;
+
 #if defined(__linux__) && defined(BRO_WITH_COMPOSITOR)
     brocompositor::wl::ServerBackend* backend() { return backend_.get(); }
     brocompositor::WindowManager* windowManager() { return wm_.get(); }
+    std::vector<brocompositor::wl::LayerSurfaceInfo> layerSurfaces() const;
 #endif
 
 private:
