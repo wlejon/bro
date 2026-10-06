@@ -26,7 +26,7 @@ bro             runtime   self       public   win,linux,mac    bronze,brass,brom
 bronze          compiler  submodule  public   win,linux,mac    brass
 brass           compiler  submodule  public   win,linux,mac    -
 bromath         engine    submodule  public   win,linux,mac    -
-brokit          engine    submodule  public   win,linux,mac    broimage,bronze,brass
+brokit          engine    submodule  public   win,linux,mac    bromath,broimage,bronze,brass
 htmlayout       engine    submodule  public   win,linux,mac    -
 broaudio        engine    submodule  public   win,linux,mac    bromath,bronze,brass
 bromesh         engine    submodule  public   win,linux,mac    bromath,bronze,brass
@@ -36,7 +36,7 @@ brogameagent    engine    submodule  public   win,linux,mac    bromath,brotensor
 brolm           engine    submodule  public   win,linux,mac    bromath,brotensor,broimage,bronze,brass
 brodiffusion    engine    submodule  public   win,linux,mac    bromath,brotensor,brolm,broimage,brovisionml,bronze,brass
 broimage        engine    submodule  public   win,linux,mac    bromath,brotensor,bronze,brass
-brosoundml      engine    submodule  public   win,linux,mac    bromath,brotensor,brolm,broaudio,bronze,brass
+brosoundml      engine    submodule  public   win,linux,mac    bromath,brotensor,broimage,brolm,broaudio,bronze,brass
 brovisionml     engine    submodule  public   win,linux,mac    bromath,brotensor,broimage,bronze,brass
 bropty          terminal  submodule  public   win,linux,mac    brosearch
 brosearch       terminal  submodule  public   win,linux,mac    -

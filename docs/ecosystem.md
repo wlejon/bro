@@ -36,7 +36,7 @@ Each has a JavaScript binding, `<name>_api` under its own `src/api/`, that bro m
 |------|------|------------|----------|
 | [bromath](https://github.com/wlejon/bromath) | Header-only math: vectors, quaternions, matrices, transforms, colour, curves, RNG/hash, spatial hash | none | always |
 | [htmlayout](https://github.com/wlejon/htmlayout) | HTML5 parsing, CSS cascade and selectors, block/inline/flex/grid layout, hit testing | none | always |
-| [brokit](https://github.com/wlejon/brokit) | Web-standard and Node-style system APIs: fetch, streams, storage, fs, crypto, child_process | broimage, bronze, brass | always |
+| [brokit](https://github.com/wlejon/brokit) | Web-standard and Node-style system APIs: fetch, streams, storage, fs, crypto, child_process | bromath, broimage (codecs), bronze, brass | always |
 | [broimage](https://github.com/wlejon/broimage) | Image decode/encode, geometric and colour ops, composable typed-buffer kernels, ML preprocessing | bromath, brotensor (optional), bronze, brass | always |
 | [broaudio](https://github.com/wlejon/broaudio) | Real-time audio engine: synthesis, effects, spatial mixing, MIDI, lock-free bus routing on SDL3 | bromath, bronze, brass | `BRO_WITH_AUDIO` |
 | [bromesh](https://github.com/wlejon/bromesh) | Mesh generation, CSG, simplification, rigging, glTF/FBX/STL I/O | bromath, bronze, brass | `BRO_WITH_3D` |
@@ -44,8 +44,8 @@ Each has a JavaScript binding, `<name>_api` under its own `src/api/`, that bro m
 | [brotensor](https://github.com/wlejon/brotensor) | One tensor type, device-neutral ops including training; CPU always, CUDA / Metal / Vulkan optional | bronze, brass | `BRO_WITH_TENSOR` |
 | [brogameagent](https://github.com/wlejon/brogameagent) | Game AI: navigation, steering, perception, MCTS planners, an autograd-free NN stack | bromath, brotensor (NN half), bronze, brass | `BRO_WITH_GAMEAI` |
 | [brolm](https://github.com/wlejon/brolm) | Text-model inference: tokenizers, CLIP/T5 encoders, LLMs from safetensors and GGUF | bromath, brotensor, broimage, bronze, brass | `BRO_WITH_LM` |
-| [brodiffusion](https://github.com/wlejon/brodiffusion) | Diffusion inference: text-to-image, image-to-3D, text-to-motion | bromath, brotensor, brolm, broimage, brovisionml, bronze, brass | `BRO_WITH_DIFFUSION` |
-| [brosoundml](https://github.com/wlejon/brosoundml) | Audio-ML inference: TTS, STT, diarization, RAVE, keyword spotting, wake words | bromath, brotensor, brolm, broaudio, bronze, brass | `BRO_WITH_SOUNDML` |
+| [brodiffusion](https://github.com/wlejon/brodiffusion) | Diffusion inference: text-to-image, image-to-3D, text-to-motion, terrain | bromath, brotensor, brolm, broimage, brovisionml, bronze, brass | `BRO_WITH_DIFFUSION` |
+| [brosoundml](https://github.com/wlejon/brosoundml) | Audio-ML inference: TTS, STT, diarization, RAVE, keyword spotting, wake words | bromath, brotensor, broimage (for brolm), brolm, broaudio, bronze, brass | `BRO_WITH_SOUNDML` |
 | [brovisionml](https://github.com/wlejon/brovisionml) | Vision-ML inference: segmentation, depth, normals, matting, pose, ControlNet annotators | bromath, brotensor, broimage, bronze, brass | `BRO_WITH_VISION` |
 
 All of them build and test on Windows, Linux and macOS.
