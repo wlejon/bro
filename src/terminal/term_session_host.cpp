@@ -73,14 +73,14 @@ std::string TermSession::cwd() const {
 
 std::string TermSession::pointerShape() const {
     std::lock_guard<std::mutex> g(mu_);
-    if (mux_) return {};  // OSC 22 does not cross bromux
+    if (mux_) return muxPointerShape();
     return session_.terminal().pointer_shape();
 }
 
 std::vector<CommandInfo> TermSession::commands() const {
     std::lock_guard<std::mutex> g(mu_);
+    if (mux_) return muxCommands();
     std::vector<CommandInfo> out;
-    if (mux_) return out;  // nor do OSC 133's command records
     const auto& list = session_.terminal().commands();
     out.reserve(list.size());
     for (const bropty::CommandRecord& c : list) {

@@ -63,5 +63,12 @@ std::string TermSession::muxTitle() const { return {}; }
 std::string TermSession::muxCwd() const { return {}; }
 uint32_t TermSession::muxKittyFlags() const { return 0; }
 std::string TermSession::muxScrollbackText() const { return {}; }
+const bromux::ScreenModel* TermSession::muxModel() const { return nullptr; }
+bool TermSession::muxFeed(std::string_view) { return false; }
+std::vector<CommandInfo> TermSession::muxCommands() const { return {}; }
+std::string TermSession::muxPointerShape() const { return {}; }
+TermSession::ImageStats TermSession::muxImageStats() const { return {}; }
+void TermSession::muxSetForeground(std::optional<bropty::ProcessInfo>) {}
+void TermSession::muxFrameApplied(bool, bool) {}
 
 } // namespace bro::terminal

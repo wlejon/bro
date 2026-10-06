@@ -127,6 +127,20 @@
  * and sixel (DCS) do not, so those two reach a Windows terminal only from
  * `feed()` (for example, bytes from a socket the page reads itself).
  *
+ * Replies on Windows. Programs run behind ConPTY's console host (conhost),
+ * which sits between them and the terminal and filters what each side
+ * sees. No OSC reply ever reaches a native Windows program (WSL included):
+ * conhost discards OSC sequences in its input, so OSC 4/10/11 colour
+ * answers and OSC 52 clipboard answers are lost. In fact conhost never
+ * forwards the OSC 10/11/12 colour queries or the OSC 52 clipboard read at
+ * all, so programs that ask for the background colour or the clipboard
+ * simply time out, and `clipboardRead` is never called for them. Device
+ * attribute and cursor position queries are answered by conhost itself, not
+ * the terminal; CSI replies such as kitty keyboard-protocol queries do
+ * arrive, for programs that read with ENABLE_VIRTUAL_TERMINAL_INPUT. The
+ * same holds for a persistent session's program on Windows (the server runs
+ * it on ConPTY). On Linux and macOS every reply arrives.
+ *
  * @example
  *   // kitty: a 2 x 2 red RGBA image stretched over 6 x 3 cells at the cursor.
  *   const px = btoa(String.fromCharCode(...[255,0,0,255, 255,0,0,255, 255,0,0,255, 255,0,0,255]));
@@ -149,13 +163,18 @@
  * or at killServer().
  * What crosses bromux: the screen (cells, colours, hyperlinks, cursor,
  * modes, title, cwd), history (fetched as the view needs it), keys, text,
- * paste, mouse, focus, resizes, the bell, notifications (title and body),
- * progress, OSC 133 marks (`promptmark`), OSC 52 (under the element's
- * clipboard policy) and the exit status. The element's theme applies to
- * every colour the program left at its default. What does not cross (yet):
- * inline images, `pointerShape` (OSC 22), `commands` (OSC 133 records),
- * `foregroundProcess`, OSC 99's notification id and urgency; and `feed()`
- * does nothing on a persistent session (its emulator is the server's).
+ * paste, mouse, focus, resizes, the bell, notifications (title, body, and
+ * OSC 99's id, urgency and source), progress, OSC 133 marks (`promptmark`)
+ * and `commands` records with their exit codes, `pointerShape` (OSC 22),
+ * inline images, `foregroundProcess` and `foregroundchange`, OSC 52 (under
+ * the element's clipboard policy) and the exit status. `feed()` writes into
+ * the server's emulator, so every attached terminal shows what was fed. The
+ * element's theme applies to every colour the program left at its default.
+ * Compressed images (kitty PNG, iTerm2) are decoded by the server; their
+ * quota is the server's (the default 320 MiB), so `imageMemoryLimit` does
+ * not apply. A server older than protocol 2.1 (an older `bromux` still
+ * running) carries none of the records, images, pointer shape or
+ * foreground process -- those read empty -- and ignores `feed()`.
  *
  * @example
  *   // A shell that survives reloads: remember its id, reattach on load.
@@ -277,7 +296,9 @@ class HTMLTerminalElement extends HTMLElement {
   write(data) {}
 
   /** Bytes into the emulator as if the process had written them (escape
-   *  sequences included). Works with or without a process. */
+   *  sequences included). Works with or without a process. On a persistent
+   *  session the bytes go into the server's emulator (protocol 2.1), so
+   *  every terminal attached to it sees them. */
   feed(data) {}
 
   /** Stop the process (a polite signal, then a forceful one). The screen stays. */
@@ -334,8 +355,10 @@ class HTMLTerminalElement extends HTMLElement {
    *  job the shell started, whose own children share its group (`make`
    *  while it runs `cc`). Windows has no foreground group: the answer is the
    *  youngest console program in the child's process tree (`cc` under
-   *  `make`), skipping GUI programs the shell started; a console program
-   *  started in the background (`start /b`) counts while it is the youngest.
+   *  `make`), skipping GUI programs the shell started and background jobs:
+   *  a program in a console process group of its own (cmd's `start /b`),
+   *  which the console's Ctrl+C no longer reaches. Persistent sessions too:
+   *  the server checks and tells every attached element (with a 2.1 server).
    *  Checked shortly after input or output and every few seconds otherwise,
    *  so it trails a change by up to ~2 s when nothing is printed, and fires
    *  `foregroundchange` when it changes.
@@ -385,6 +408,7 @@ class HTMLTerminalElement extends HTMLElement {
    *    'read-write' also lets it ask for the clipboard (see clipboardread).
    *  - wheelLines (3, range 1-100): lines one wheel notch scrolls.
    *  - imageMemoryLimit (335544320, range 0-4 GiB): see "Inline images".
+   *    No effect on a persistent session (the server keeps the default).
    *  - scrollback (10000, range 0-1000000): rows of history kept. Applied at
    *    once: lowering it drops the oldest rows now (with the images and
    *    shell-integration records on them); raising it keeps more from then

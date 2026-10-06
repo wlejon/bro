@@ -64,6 +64,10 @@ public:
     [[nodiscard]] const bropty::Palette& palette() const noexcept override;
     void advance_generation() noexcept override { inner_->advance_generation(); }
     void request_rows(int64_t first, int64_t end) const override { inner_->request_rows(first, end); }
+    // The session's inline images (protocol 2.1), so the view's frames show them.
+    [[nodiscard]] bropty::SourceImages source_images() const noexcept override {
+        return inner_ ? inner_->source_images() : bropty::SourceImages{};
+    }
 
 private:
     void before_resize() override { notify_before_resize(); }

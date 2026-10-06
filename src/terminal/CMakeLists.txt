@@ -22,7 +22,8 @@ target_link_libraries(bro_terminal PUBLIC bropty bro_render PRIVATE brothemes br
 # found bromux): the client side links in, and the server executable is
 # built with bro so the client can start it from beside bro.
 if(TARGET bromux)
-    target_sources(bro_terminal PRIVATE term_mux.cpp term_mux_source.cpp term_session_mux.cpp)
+    target_sources(bro_terminal PRIVATE term_mux.cpp term_mux_source.cpp term_session_mux.cpp
+                                            term_session_mux_state.cpp)
     target_link_libraries(bro_terminal PRIVATE bromux)
     target_compile_definitions(bro_terminal PUBLIC BRO_TERMINAL_MUX=1)
     add_dependencies(bro_terminal bromux_cli)

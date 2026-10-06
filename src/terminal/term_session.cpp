@@ -138,7 +138,10 @@ bool TermSession::write(std::string_view bytes) {
 void TermSession::feed(std::string_view output) {
     {
         std::lock_guard<std::mutex> g(mu_);
-        if (mux_) return;  // the emulator is the server's
+        if (mux_) {  // into the server's emulator (protocol 2.1)
+            muxFeed(output);
+            return;
+        }
         feedSplitting(output, Clock::now());
         bytesParsed_.fetch_add(output.size(), std::memory_order_relaxed);
     }
@@ -395,6 +398,7 @@ Clock::time_point TermSession::advanceAnimations(Clock::time_point now) {
 
 TermSession::ImageStats TermSession::imageStats() const {
     std::lock_guard<std::mutex> g(mu_);
+    if (mux_) return muxImageStats();
     const bropty::Terminal& t = session_.terminal();
     ImageStats s;
     for (bool alt : {false, true}) {

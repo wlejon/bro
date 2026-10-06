@@ -27,7 +27,8 @@ std::optional<bropty::ProcessInfo> TermSession::foregroundProcess() const {
 }
 
 Clock::time_point TermSession::pollForeground(Clock::time_point now, bool activity) {
-    if (fgFinal_ || !spawned()) return {};
+    // A persistent session's foreground is the server's, told in events.
+    if (fgFinal_ || !spawned() || persistent()) return {};
     if (activity) {
         fgTrail_ = int(std::size(kTrail));
         const Clock::time_point due = std::max(now + kSettle, fgLast_ + kForegroundGap);

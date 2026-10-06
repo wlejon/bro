@@ -9,11 +9,9 @@
 // applies inside dispatch() and inside any blocking request -- so after each
 // of those the view is dropped first if the mirror has gone (muxCheckMirror).
 
-#include "terminal/term_session.h"
 #include "terminal/term_mux_connect.h"
-#include "terminal/term_mux_source.h"
+#include "terminal/term_mux_impl.h"
 
-#include <bromux/client.h>
 #include <bromux/paths.h>
 
 #include <algorithm>
@@ -27,16 +25,6 @@ using Clock = std::chrono::steady_clock;
 constexpr uint32_t kHistoryChunk = 2000;  // rows per request when reading all of history
 
 } // namespace
-
-struct TermSession::Mux {
-    std::unique_ptr<bromux::Client> client;  // destroyed last: the views read its mirror
-    uint64_t id = 0;
-    bool attached = false;
-    std::unique_ptr<MuxSource> source;
-    std::unique_ptr<bropty::TerminalView> view;
-    std::vector<bromux::ClientEvent> events;
-    uint64_t feedSeq = 0;  // the server's state version last seen (remoteUpdates_)
-};
 
 void TermSession::MuxDelete::operator()(Mux* m) const { delete m; }
 
@@ -153,6 +141,7 @@ void TermSession::detach() {
         mux_->client->detach(mux_->id);
         mux_->attached = false;
         detached_.store(true, std::memory_order_release);
+        muxSetForeground(std::nullopt);
     }
     wake();
 }
@@ -200,8 +189,26 @@ bool TermSession::muxPump(Clock::time_point now, bool& published) {
                         te.kind = TermEvent::Kind::Notification;
                         te.title = ev.a;
                         te.text = ev.b;
-                        te.source = "bromux";
+                        if (m.client->server_minor() >= 1) {  // 2.1 carries OSC 99's fields
+                            te.id = ev.c;
+                            te.source = ev.d;
+                            te.number = int(ev.x);
+                        } else {
+                            te.source = "bromux";
+                        }
                         break;
+                    case bromux::EventKind::Foreground: {
+                        std::optional<bropty::ProcessInfo> fg;
+                        if (ev.x > 0) {
+                            fg.emplace();
+                            fg->pid = ev.x;
+                            fg->name = ev.a;
+                            fg->path = ev.b;
+                            fg->command_line = ev.c;
+                        }
+                        muxSetForeground(std::move(fg));
+                        continue;
+                    }
                     case bromux::EventKind::Progress:
                         te.kind = TermEvent::Kind::Progress;
                         te.number = int(std::clamp<int64_t>(ev.x, 0, 4));
@@ -241,6 +248,9 @@ bool TermSession::muxPump(Clock::time_point now, bool& published) {
                     te.selection = e.text;
                     pushEvent(std::move(te));
                 }
+                break;
+            case K::Frame:
+                muxFrameApplied(e.effects.pointer_shape, e.effects.commands);
                 break;
             case K::Detached:
             case K::Disconnected:
@@ -386,6 +396,7 @@ void TermSession::muxMirrorLost() {
     muxDropView();
     m.attached = false;
     detached_.store(true, std::memory_order_release);
+    muxSetForeground(std::nullopt);  // nothing of the session's is known from here
 }
 
 } // namespace bro::terminal

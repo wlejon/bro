@@ -55,6 +55,10 @@
 #include <utility>
 #include <vector>
 
+namespace bromux {
+class ScreenModel;
+}
+
 namespace bro::terminal {
 
 struct SpawnOptions {
@@ -95,9 +99,10 @@ public:
     // others -- attach to it by id. The screen is the server's, mirrored
     // (bromux's ScreenSource); input, resize, mouse, focus and the
     // clipboard go through bromux's protocol, and the program's events come
-    // back through it. What bromux does not carry stays local and empty:
-    // inline images, OSC 22 pointer shapes, OSC 133 command records, the
-    // foreground process, feed().
+    // back through it. With a protocol 2.1 server the foreground process,
+    // OSC 133 command records, the OSC 22 pointer shape, inline images and
+    // feed() cross too (term_session_mux_state.cpp); a 2.0 server carries
+    // none of them, and they stay empty.
     struct PersistentOptions {
         std::string server;  // bromux server name; empty: the per-user default
         std::string name;    // the session's display name (its "name" meta)
@@ -327,6 +332,14 @@ private:
     std::string muxCwd() const;
     uint32_t muxKittyFlags() const;
     std::string muxScrollbackText() const;
+    // Protocol 2.1's extras (term_session_mux_state.cpp), mu_ held.
+    const bromux::ScreenModel* muxModel() const;  // null unless attached with a mirror
+    bool muxFeed(std::string_view bytes);
+    std::vector<CommandInfo> muxCommands() const;
+    std::string muxPointerShape() const;
+    ImageStats muxImageStats() const;
+    void muxSetForeground(std::optional<bropty::ProcessInfo> info);  // queues Foreground on a change
+    void muxFrameApplied(bool pointerShape, bool commands);
     int muxCellW_ = 0, muxCellH_ = 0;  // the cell size last sent (mu_)
     bool muxSized_ = false;
 
