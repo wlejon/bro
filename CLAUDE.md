@@ -159,6 +159,9 @@ Annotated `.js` files with JSDoc + examples. Read the file before using or chang
 | `iframe-api.js` | `<iframe src=dir>`: isolated sub-document (own realm/DOM/timers), input routed in |
 | `terminal-api.js` | `<terminal>` (HTMLTerminalElement) + `bro.terminal`: native terminal element over bropty; spawn/write/feed/kill, screen/scrollback/frame text, key/IME/paste routing; mouse selection + reporting, scrollback view, search, links, OSC events (title/cwd/bell/notification/progress/OSC 52/OSC 133 commands), options + theme (CSS `--terminal-*`), own compositor layer |
 | `conf-api.js` | `bro.conf`: layered desktop settings store with schemas, defaults, validation, and watcher handles |
+| `themes-api.js` | `bro.themes`: colour schemes + WCAG/APCA contrast, color spaces, theme import/export |
+| `keys-api.js` | `bro.keys`: keybinding engine with chords, sequences, when-clause evaluation, and VS Code json |
+| `search-api.js` | `bro.search`: fzf-compatible fuzzy matching, ripgrep-style directory walk and regex grep |
 
 Other docs: `docs/headless.md` (headless reference including input/IME injection and the WebGL2 support matrix), `docs/settings.md`, `docs/inspect.md` (DOM inspector, great in headless), `docs/system-panels.md`, `docs/embedding.md` (linking bro_engine into your own executable: media backends, the headless driver), `docs/hot-reload.md` (the edit loop: source watcher, F5, `BRO_JIT_TIER` override), `docs/code-cache.md` (on-disk compiled-IL cache: key, location, `BRO_CODE_CACHE*`), `docs/compile-progress.md` (window stays live during a compile; `bro-compiling` / `--bro-compile-progress` on `<html>`), `docs/multi-repo-workflow.md`, `docs/coverage.md` (Windows-only line coverage), `docs/perf-ratchet.md` (end-to-end perf ratchet: `bench/ratchet.sh`, CPU/GC/page-compile/tats-startup goldens, load guard, `--update`).
 

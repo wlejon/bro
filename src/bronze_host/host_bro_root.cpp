@@ -319,6 +319,15 @@ void installBroRoots(engine::Engine& engine) {
 #if !(BRO_WITH_DIFFUSION && BRO_WITH_LM)
     setUnavailable("motion", "BRO_WITH_DIFFUSION+BRO_WITH_LM");
 #endif
+#if !BRO_WITH_THEMES
+    setUnavailable("themes", "BRO_WITH_THEMES");
+#endif
+#if !BRO_WITH_KEYS
+    setUnavailable("keys", "BRO_WITH_KEYS");
+#endif
+#if !BRO_WITH_SEARCH
+    setUnavailable("search", "BRO_WITH_SEARCH");
+#endif
     {
         // installBroWindowOpen roots it and installs `parent` as well.
         Value broWin = ev::getProperty(bro->get(), "window");
@@ -347,7 +356,7 @@ void markAvailableNamespaces() {
         "tts", "lm", "stt", "diar", "net", "ai", "gesture", "gizmo", "impostor", "kws",
         "listen", "motion", "rave", "sense", "triposplat", "vision", "wake", "diffusion",
         "tensor", "flora", "media", "mesh", "rigging", "scene", "terrain", "clipmap",
-        "tile_world", "lighting", "animation", "mic", "conf",
+        "tile_world", "lighting", "animation", "mic", "conf", "themes", "keys", "search",
     };
     auto decorate = [](Value nsIn) {
         if (!ev::isObject(nsIn)) return;

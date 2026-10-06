@@ -76,6 +76,15 @@
 #if BRO_WITH_CONF
 #include <broconf/api.h>
 #endif
+#if BRO_WITH_THEMES
+#include <brothemes/api.h>
+#endif
+#if BRO_WITH_KEYS
+#include <brokeys/api.h>
+#endif
+#if BRO_WITH_SEARCH
+#include <brosearch/api.h>
+#endif
 #include "api/api.h"  // brokit::api::resolveAssetPath
 #include <broimage/api.h>
 
@@ -410,6 +419,27 @@ void installSiblingApis(engine::Engine& engine) {
         }
     }
 #endif
+#if BRO_WITH_THEMES
+    bro::themes::api::setPathResolver(&brokit::api::resolveAssetPath);
+    bro::themes::api::installThemes();
+#endif
+#if BRO_WITH_KEYS
+    bro::keys::api::installKeys();
+#endif
+#if BRO_WITH_SEARCH
+    brosearch::api::installSearch();
+    {
+        static bool searchHooksInstalled = false;
+        if (!searchHooksInstalled) {
+            searchHooksInstalled = true;
+            engine.addFramePump([] {
+                brosearch::api::tickSearchAsync();
+                if (ev::microtasksPending()) ev::drainMicrotasks();
+            });
+            engine.addShutdownHook([] { brosearch::api::shutdownSearchAsync(); });
+        }
+    }
+#endif
 }
 
 // The Worker realm's share of the same list (host_natives.h). Every
@@ -476,6 +506,16 @@ void installWorkerSiblingApis() {
 #endif
     broimage::api::setPathResolver(&brokit::api::resolveAssetPath);
     broimage::api::installImage();
+#if BRO_WITH_THEMES
+    bro::themes::api::setPathResolver(&brokit::api::resolveAssetPath);
+    bro::themes::api::installThemes();
+#endif
+#if BRO_WITH_KEYS
+    bro::keys::api::installKeys();
+#endif
+#if BRO_WITH_SEARCH
+    brosearch::api::installSearch();
+#endif
 }
 
 void tickWorkerSiblingApis() {
@@ -495,6 +535,9 @@ void tickWorkerSiblingApis() {
 #if BRO_WITH_DIFFUSION
     brodiffusion::api::tickDiffusionAsync();
 #endif
+#if BRO_WITH_SEARCH
+    brosearch::api::tickSearchAsync();
+#endif
 }
 
 void shutdownWorkerSiblingApis() {
@@ -502,6 +545,9 @@ void shutdownWorkerSiblingApis() {
     // This thread's diffusion jobs: cancelled and joined while the worker's
     // realm (their callbacks' home) still exists.
     brodiffusion::api::shutdownDiffusionAsync();
+#endif
+#if BRO_WITH_SEARCH
+    brosearch::api::shutdownSearchAsync();
 #endif
 }
 

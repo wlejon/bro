@@ -24,6 +24,11 @@ bro.conf.registerSchema({
     }
 });
 
+// Ensure clean defaults if previous runs persisted overrides
+bro.conf.reset('headless.conf', 'enabled');
+bro.conf.reset('headless.conf', 'count');
+bro.conf.reset('headless.conf', 'title');
+
 // =========================================================================
 // 2. Introspection (has, isDefault, listKeys)
 // =========================================================================
@@ -145,6 +150,11 @@ await (async function() {
 
     // Unwatch using bro.conf.unwatch(token)
     assert(bro.conf.unwatch(h2.token) === true, 'unwatch by token returns true');
+
+    // Clean up overrides
+    bro.conf.reset('headless.conf', 'enabled');
+    bro.conf.reset('headless.conf', 'count');
+    bro.conf.reset('headless.conf', 'title');
 })();
 
 console.log('test_conf.js PASSED');

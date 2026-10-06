@@ -212,6 +212,9 @@ option(BRO_WITH_NET      "Game networking (GameNetworkingSockets / vcpkg)"   ${_
 option(BRO_WITH_VIDEO    "Video + GIF encode/decode (libvpx/webm / vcpkg)"   ${_d_svc})
 option(BRO_WITH_STEAM    "Steam integration (runtime-loaded redistributable)" ${_d_svc})
 option(BRO_WITH_CONF     "Settings store with schemas and watchers (broconf)" ${_d_svc})
+option(BRO_WITH_THEMES   "Colour schemes + WCAG/APCA contrast (brothemes)"   ${_d_render})
+option(BRO_WITH_KEYS     "Keybinding engine (brokeys)"                      ${_d_render})
+option(BRO_WITH_SEARCH   "Fuzzy matching, file walking, and grep (brosearch)" ${_d_render})
 # The native <terminal> element: bropty (VT emulation + PTY/ConPTY), its
 # brosearch dependency and brothemes (minimum contrast), plus bromux
 # (persistent sessions) when found; all vcpkg-free siblings. On in app and
@@ -345,13 +348,16 @@ set(BROSOUNDML_ENABLE_API   ON CACHE BOOL "Build Bronze JavaScript API for broso
 set(BROMESH_ENABLE_API      ON CACHE BOOL "Build Bronze JavaScript API for bromesh" FORCE)
 set(BROVISIONML_ENABLE_API  ON CACHE BOOL "Build Bronze JavaScript API for brovisionml" FORCE)
 set(BROCONF_ENABLE_API      ON CACHE BOOL "Build Bronze JavaScript API for broconf" FORCE)
+set(BROTHEMES_ENABLE_API    ON CACHE BOOL "Build Bronze JavaScript API for brothemes" FORCE)
+set(BROKEYS_ENABLE_API      ON CACHE BOOL "Build Bronze JavaScript API for brokeys" FORCE)
+set(BROSEARCH_ENABLE_API    ON CACHE BOOL "Build Bronze JavaScript API for brosearch" FORCE)
 
 # Stamp every feature flag as a 0/1 compile definition so C++ can `#if` on it.
 # Applied to the targets that carry feature-gated code (bro_engine, bro_scene,
 # bro_bronze_host). Uses the #if BRO_WITH_X convention.
 set(BRO_FEATURE_FLAGS
     3D PHYSICS AUDIO GAMEAI FLORA
-    NET VIDEO STEAM TERMINAL CONF
+    NET VIDEO STEAM TERMINAL CONF THEMES KEYS SEARCH
     TENSOR TENSOR_CUDA TENSOR_METAL TENSOR_VULKAN LM DIFFUSION VISION SOUNDML TRIPOSPLAT GAMEAI_NN
     BRONZE)
 function(bro_apply_feature_defs target)
