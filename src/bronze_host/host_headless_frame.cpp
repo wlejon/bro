@@ -18,6 +18,7 @@
 #include "dom/shadow_root.h"
 #include "broimage/encode.h"
 #include "util/log.h"
+#include "util/time.h"
 
 #include <chrono>
 #include <cstring>
@@ -620,6 +621,13 @@ void installHeadlessFrame(engine::Engine& engine) {
             auto now = std::chrono::steady_clock::now().time_since_epoch();
             double ms = std::chrono::duration<double, std::milli>(now).count();
             return ev::fromDouble(ms);
+        });
+    // The main thread's own CPU time: a measurement of the engine's work
+    // that load on the machine (other processes holding the cores) does not
+    // inflate the way it inflates wall time.
+    setPerfFn("threadCpuMs", 0,
+        [](Value, std::span<const Value>) -> Value {
+            return ev::fromDouble(util::threadCpuTimeMs());
         });
     setPerfFn("reset", 0,
         [&engine](Value, std::span<const Value>) -> Value {
