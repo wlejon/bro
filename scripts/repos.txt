@@ -55,7 +55,7 @@ broa11y         desktop   submodule  public   win,linux,mac    -
 broconf         desktop   submodule  public   win,linux,mac    -
 broseat         desktop   submodule  public   linux            brodbus
 brodmabuf       desktop   -          pending  linux            -
-brodbus         desktop   -          pending  linux            -
+brodbus         desktop   -          public   linux            -
 browl           desktop   submodule  public   linux            -
 broportal       desktop   submodule  public   linux            brodbus
 broworkshop     app       -          public   win,linux,mac    bro

@@ -16,7 +16,8 @@ runtime       bro ────────────────────�
 engine libs   htmlayout brokit broaudio ...     bronze ── brass
 terminal libs bropty brosearch brothemes bromux
 desktop libs  brovfs brosys brocas brocred broapps brothumb brodisplays
-              brocompositor brokeys broa11y broconf broseat brodmabuf browl broportal
+              brocompositor brokeys broa11y broconf broseat brodmabuf brodbus browl
+              broportal
 ```
 
 ## Runtime and compiler
@@ -79,11 +80,11 @@ Standalone C++20 libraries for the desktop environment. bro mounts their JavaScr
 | broconf | Desktop settings: a typed, schema'd store that notifies across processes | none | Windows, Linux, macOS | `BRO_WITH_CONF` |
 | broseat | Session and seat management: libseat / logind device access, systemd user session, XDG autostart, inhibitors | brodbus | Linux | `BRO_WITH_SEAT` |
 | brodmabuf | GPU buffer sharing: DMA-BUF and DRM formats, GBM allocation, Vulkan external memory, DRM sync objects | none | Linux | — |
-| brodbus | D-Bus layer: connection setup with private bus Hello, signal matching, property caching, message containers, and test fixtures | none | Linux | — |
+| [brodbus](https://github.com/wlejon/brodbus) | D-Bus layer: connection setup with private bus Hello, signal matching, property caching, message containers, and test fixtures | none | Linux (Windows and macOS build stubs that report unavailable) | — |
 | browl | Wayland shell-protocol client: layer shell, session lock, foreign toplevels, screencopy, idle inhibit | none | Linux | `BRO_WITH_WL` |
 | broportal | xdg-desktop-portal backend: file chooser, screenshot, screencast, remote desktop, settings, global shortcuts | brodbus | Linux | `BRO_WITH_PORTAL` |
 
-broa11y, broconf, broseat, brodmabuf, brodbus, browl and broportal are not on GitHub yet; their links will be `github.com/wlejon/<name>` once they are.
+broa11y, broconf, broseat, brodmabuf, browl and broportal are not on GitHub yet; their links will be `github.com/wlejon/<name>` once they are.
 
 ## Apps and tools
 
