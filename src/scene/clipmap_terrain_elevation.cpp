@@ -276,7 +276,7 @@ float ClipmapTerrain::detailBound() const {
     const int n = kDetailUpOctaves + std::min(cfg_.detailOctaves, 8);
     for (int i = 0; i < n; ++i) {
         sum += cfg_.detailRelief * lambda
-             * std::pow(cfg_.detailGain, std::max(0, i - kDetailUpOctaves));
+             * std::pow(cfg_.detailGain, float(std::max(0, i - kDetailUpOctaves)));
         lambda *= 0.5f;
     }
     return sum;

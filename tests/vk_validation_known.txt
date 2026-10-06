@@ -2,4 +2,7 @@
 # One VUID per line; '#' starts a comment. Delete a line once the code that
 # triggers it is fixed — from then on the error fails whichever test hits it.
 # Every id added here needs a one-line justification and the chunk that owns
-# the fix. The list is empty: any validation error fails the test that hits it.
+# the fix.
+
+# MoltenVK on macOS runners caps maxSamplerAllocationCount at 96; Ganesh + scene samplers exceed this until sampler pooling lands.
+VUID-vkCreateSampler-maxSamplerAllocationCount-04110

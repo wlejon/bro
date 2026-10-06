@@ -162,7 +162,7 @@ if (!bro.terminal || !bro.terminal.available) {
         rp.reset();
         p.write((WIN ? 'for /L %i in (1,1,30) do @echo act-%i' : 'i=1; while [ $i -le 30 ]; do echo act-$i; i=$((i+1)); done') + ENTER);
         const until = Date.now() + 20000;
-        while (!/^act-30\s*$/m.test(p.screenText()) && Date.now() < until) {
+        while ((!/^act-30\s*$/m.test(p.screenText()) || rp.list.length === 0) && Date.now() < until) {
             rp.step();
             wallSleep(5);
         }

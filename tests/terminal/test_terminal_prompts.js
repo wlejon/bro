@@ -24,7 +24,7 @@ function waitFor(pred, what, ms) {
 function findBash() {
     const list = WIN
         ? ['C:/Program Files/Git/bin/bash.exe', 'C:/Program Files/Git/usr/bin/bash.exe']
-        : ['/bin/bash', '/usr/bin/bash', '/usr/local/bin/bash'];
+        : ['/opt/homebrew/bin/bash', '/usr/local/bin/bash', '/usr/bin/bash', '/bin/bash'];
     for (const p of list) if (fs.existsSync(p)) return p;
     return null;
 }
