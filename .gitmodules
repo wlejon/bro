@@ -58,3 +58,6 @@
 [submodule "third_party/brothemes"]
 	path = third_party/brothemes
 	url = https://github.com/wlejon/brothemes.git
+[submodule "third_party/bromux"]
+	path = third_party/bromux
+	url = https://github.com/wlejon/bromux.git
