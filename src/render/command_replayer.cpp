@@ -96,6 +96,9 @@ void CommandReplayer::replay(const CommandBuffer& buffer) {
                                          buffer.bytesAt(c.pixelsOffset)),
                                      c.srcW, c.srcH, c.stride,
                                      c.x, c.y, c.w, c.h);
+            } else if constexpr (std::is_same_v<T, Cmd_DrawSharedPixels>) {
+                if (const SharedPixels* px = buffer.sharedPixelsAt(c.index))
+                    dst_->drawSharedPixels(*px, c.sx, c.sy, c.sw, c.sh, c.x, c.y, c.w, c.h);
 
             } else if constexpr (std::is_same_v<T, Cmd_DrawCircle>) {
                 dst_->drawCircle(c.cx, c.cy, c.r, c.fill, c.stroke, c.strokeWidth);

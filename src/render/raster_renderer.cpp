@@ -1,6 +1,7 @@
 #include "render/raster_renderer.h"
 #include "render/filter_chain.h"
 #include "render/font_family.h"
+#include "render/shared_pixels_image.h"
 #include "render/system_font_mgr.h"
 #include "svg/svg_renderer.h"
 
@@ -328,6 +329,12 @@ void RasterRenderer::drawPixelsRGBA(const uint8_t* rgba, int srcW, int srcH, int
     auto image = bmp.asImage();
     if (!image) return;
     canvas_->drawImageRect(image, SkRect::MakeXYWH(x, y, w, h), SkSamplingOptions());
+}
+
+void RasterRenderer::drawSharedPixels(const SharedPixels& px, float sx, float sy, float sw, float sh,
+                                      float x, float y, float w, float h) {
+    // No cache: the image wraps the pixels without copying them.
+    if (canvas_) drawSharedPixelsImage(canvas_, makeSharedPixelsImage(px), sx, sy, sw, sh, x, y, w, h);
 }
 
 void RasterRenderer::drawSvgMarkup(const char* data, size_t len,

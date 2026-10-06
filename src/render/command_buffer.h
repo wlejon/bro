@@ -27,6 +27,7 @@ public:
         cmds_.clear();
         arena_.clear();
         blobs_.clear();
+        pixels_.clear();
     }
 
     void reserve(size_t cmdHint, size_t arenaHint) {
@@ -76,10 +77,21 @@ public:
 
     static constexpr uint32_t kNoTextBlob = 0xFFFFFFFFu;
 
+    // Shared pixels (Renderer::drawSharedPixels) are held by reference, like
+    // text blobs: the entry keeps its owner alive until the buffer is cleared,
+    // so a replay on another thread reads them however long it takes.
+    uint32_t pushSharedPixels(const SharedPixels& px) {
+        pixels_.push_back(px);
+        return static_cast<uint32_t>(pixels_.size() - 1);
+    }
+
     // ---- read-side accessors (replayer) ----
 
     const SkTextBlob* textBlobAt(uint32_t index) const {
         return index < blobs_.size() ? blobs_[index].get() : nullptr;
+    }
+    const SharedPixels* sharedPixelsAt(uint32_t index) const {
+        return index < pixels_.size() ? &pixels_[index] : nullptr;
     }
 
     const std::vector<DrawCommand>& commands() const { return cmds_; }
@@ -104,6 +116,7 @@ private:
     std::vector<DrawCommand>       cmds_;
     std::vector<std::byte>         arena_;
     std::vector<sk_sp<SkTextBlob>> blobs_;
+    std::vector<SharedPixels>      pixels_;
 };
 
 } // namespace bro::render

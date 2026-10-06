@@ -52,6 +52,9 @@ struct Cmd_DrawLine        { float x1, y1, x2, y2; bromath::Color color; float t
 struct Cmd_DrawImage       { uint32_t dataOffset, dataLen; float x, y, w, h; uint64_t imageId; };  // arena: encoded bytes
 struct Cmd_DrawPixelsRGBA  { uint32_t pixelsOffset; int srcW, srcH, stride; float x, y, w, h; }; // arena: rgba8
 struct Cmd_DrawSvgMarkup   { uint32_t dataOffset, dataLen; float x, y, w, h; };  // arena: utf8 markup
+// Shared pixels by reference: `index` names an entry of the buffer's
+// SharedPixels table (CommandBuffer::pushSharedPixels), which keeps them alive.
+struct Cmd_DrawSharedPixels { uint32_t index; float sx, sy, sw, sh, x, y, w, h; };
 struct Cmd_DrawCircle      { float cx, cy, r; bromath::Color fill; bromath::Color stroke; float strokeWidth; };
 struct Cmd_DrawEllipse     { float cx, cy, rx, ry; bromath::Color fill; bromath::Color stroke; float strokeWidth; };
 struct Cmd_DrawPath        { uint32_t pathOffset, pathLen; bromath::Color fill; bromath::Color stroke; float strokeWidth; }; // arena: char[] (svg path)
@@ -134,6 +137,7 @@ using DrawCommand = std::variant<
     Cmd_DrawImage,
     Cmd_DrawPixelsRGBA,
     Cmd_DrawSvgMarkup,
+    Cmd_DrawSharedPixels,
     Cmd_DrawCircle,
     Cmd_DrawEllipse,
     Cmd_DrawPath,

@@ -40,6 +40,7 @@ find_package(Vulkan REQUIRED)
 add_library(bro_render STATIC
     skia_backend.cpp
     skia_backend_surfaces.cpp
+    shared_pixels_image.cpp
     skia_backend_gradient.cpp
     skia_gpu.cpp
     skia_persistent_cache.cpp

@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <memory>
 #include <string_view>
 #include <string>
 #include <span>
@@ -180,6 +181,17 @@ struct StrokeStyle {
 
 enum class PathFillRule : uint8_t { NonZero, EvenOdd };
 
+// Immutable RGBA8 pixels drawn by reference (Renderer::drawSharedPixels):
+// a recording keeps `owner`, never a copy, and a backend uploads them once
+// per `id` and reuses the texture until they stop being drawn. `id` must be
+// process-unique for these exact pixels (a new buffer, a new id).
+struct SharedPixels {
+    uint64_t id = 0;
+    int width = 0, height = 0;
+    const uint8_t* rgba = nullptr;  // width * height * 4, rows packed, straight alpha
+    std::shared_ptr<const void> owner;  // keeps `rgba` alive
+};
+
 class Renderer {
 public:
     virtual ~Renderer() = default;
@@ -309,6 +321,12 @@ public:
     virtual void drawPixelsRGBA(const uint8_t* /*rgba*/,
                                 int /*srcW*/, int /*srcH*/, int /*stride*/,
                                 float /*x*/, float /*y*/, float /*w*/, float /*h*/) {}
+
+    // Draw the source rect (sx, sy, sw, sh) of shared pixels into the rect
+    // (x, y, w, h), filtered, never sampling outside the source rect (so
+    // pieces of one image drawn side by side meet without seams).
+    virtual void drawSharedPixels(const SharedPixels& /*px*/, float /*sx*/, float /*sy*/, float /*sw*/,
+                                  float /*sh*/, float /*x*/, float /*y*/, float /*w*/, float /*h*/) {}
 
     // Render SVG markup (an entire <svg>...</svg> document or fragment) into
     // the rect (x, y, w, h). Backends parse via SkSVGDOM. The recording layer

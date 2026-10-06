@@ -72,6 +72,8 @@ public:
                    uint64_t imageId) override;
     void drawPixelsRGBA(const uint8_t* rgba, int srcW, int srcH, int stride,
                         float x, float y, float w, float h) override;
+    void drawSharedPixels(const SharedPixels& px, float sx, float sy, float sw, float sh,
+                          float x, float y, float w, float h) override;
     void drawSvgMarkup(const char* data, size_t len,
                        float x, float y, float w, float h) override;
 
@@ -198,6 +200,17 @@ private:
         uint64_t lastFrame = 0;
     };
     std::unordered_map<uint64_t, GpuImage> gpuImages_;
+    // Shared pixels (drawSharedPixels) by their id: the zero-copy raster
+    // image and, drawing on the GPU, its texture, made once. Dropped with the
+    // gpu images (and as they are), so the pixels are released ~a second
+    // after they were last drawn.
+    struct SharedImage {
+        sk_sp<SkImage> raster;
+        sk_sp<SkImage> texture;
+        const uint8_t* rgba = nullptr;  // identity check: the id names these pixels
+        uint64_t lastFrame = 0;
+    };
+    std::unordered_map<uint64_t, SharedImage> sharedImages_;
     uint64_t imageFrame_ = 0;
     sk_sp<SkImage> gpuImage(uint64_t id, const sk_sp<SkImage>& source);
     void evictGpuImages(bool all);

@@ -6,6 +6,7 @@
 #include "render/skia_backend.h"
 #include "broimage/encode.h"
 #include "render/pixel_convert.h"
+#include "render/shared_pixels_image.h"
 #include "util/log.h"
 
 #include <include/core/SkBitmap.h>
@@ -115,14 +116,43 @@ sk_sp<SkImage> SkiaRenderer::gpuImage(uint64_t id, const sk_sp<SkImage>& source)
     return texture;
 }
 
+void SkiaRenderer::drawSharedPixels(const SharedPixels& px, float sx, float sy, float sw, float sh,
+                                    float x, float y, float w, float h) {
+    if (!canvas_ || !px.rgba || px.id == 0) return;
+    SharedImage& e = sharedImages_[px.id];
+    if (e.rgba != px.rgba || !e.raster) {
+        e = SharedImage{};
+        e.raster = makeSharedPixelsImage(px);
+        e.rgba = px.rgba;
+    }
+    e.lastFrame = imageFrame_;
+    if (!e.raster) return;
+    sk_sp<SkImage> image = e.raster;
+    if (recorder_) {
+        // A recorded (GPU) list samples a texture, uploaded once per id.
+        if (!e.texture) {
+            SkiaGpu::Lock lock = gpu_->lock();
+            e.texture = SkImages::TextureFromImage(gpu_->context(), e.raster, skgpu::Mipmapped::kNo,
+                                                   skgpu::Budgeted::kYes);
+        }
+        if (e.texture) image = e.texture;
+    }
+    drawSharedPixelsImage(canvas_, image, sx, sy, sw, sh, x, y, w, h);
+}
+
 void SkiaRenderer::evictGpuImages(bool all) {
     // As long as the decoded image cache keeps its entries (and a little
     // longer: a replaced source just stops matching).
     constexpr uint64_t kEvictAfterFrames = 60;
-    if (gpuImages_.empty()) return;
-    SkiaGpu::Lock lock = gpu_->lock();
+    if (gpuImages_.empty() && sharedImages_.empty()) return;
+    SkiaGpu::Lock lock;
+    if (gpu_) lock = gpu_->lock();
     for (auto it = gpuImages_.begin(); it != gpuImages_.end();) {
         if (all || it->second.lastFrame + kEvictAfterFrames < imageFrame_) it = gpuImages_.erase(it);
+        else ++it;
+    }
+    for (auto it = sharedImages_.begin(); it != sharedImages_.end();) {
+        if (all || it->second.lastFrame + kEvictAfterFrames < imageFrame_) it = sharedImages_.erase(it);
         else ++it;
     }
 }
