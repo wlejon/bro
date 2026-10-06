@@ -5,7 +5,7 @@
 #include <memory>
 #include <string>
 
-#if defined(__linux__) && BRO_WITH_SEAT
+#if defined(__linux__) && BRO_WITH_SEAT && BRO_HAVE_LIBINPUT
 #include <libinput.h>
 #include <libudev.h>
 #endif
@@ -82,7 +82,7 @@ private:
     float cursorX_ = 0.0f;
     float cursorY_ = 0.0f;
 
-#if defined(__linux__) && BRO_WITH_SEAT
+#if defined(__linux__) && BRO_WITH_SEAT && BRO_HAVE_LIBINPUT
     struct udev* udev_ = nullptr;
     struct libinput* li_ = nullptr;
 #endif

@@ -4,7 +4,7 @@
 #include <algorithm>
 #include <unistd.h>
 
-#if defined(__linux__) && BRO_WITH_SEAT
+#if defined(__linux__) && BRO_WITH_SEAT && BRO_HAVE_LIBINPUT
 #include <linux/input-event-codes.h>
 
 namespace {
@@ -50,7 +50,7 @@ bool DrmInputPlatform::init(DrmSeatPlatform& seat, const std::string& seatName,
     cursorX_ = static_cast<float>(screenWidth_) / 2.0f;
     cursorY_ = static_cast<float>(screenHeight_) / 2.0f;
 
-#if defined(__linux__) && BRO_WITH_SEAT
+#if defined(__linux__) && BRO_WITH_SEAT && BRO_HAVE_LIBINPUT
     udev_ = udev_new();
     if (!udev_) return false;
 
@@ -78,7 +78,7 @@ bool DrmInputPlatform::init(DrmSeatPlatform& seat, const std::string& seatName,
 }
 
 void DrmInputPlatform::shutdown() {
-#if defined(__linux__) && BRO_WITH_SEAT
+#if defined(__linux__) && BRO_WITH_SEAT && BRO_HAVE_LIBINPUT
     if (li_) {
         libinput_unref(li_);
         li_ = nullptr;
@@ -98,7 +98,7 @@ void DrmInputPlatform::setScreenSize(uint32_t width, uint32_t height) {
 }
 
 int DrmInputPlatform::pollFd() const {
-#if defined(__linux__) && BRO_WITH_SEAT
+#if defined(__linux__) && BRO_WITH_SEAT && BRO_HAVE_LIBINPUT
     return li_ ? libinput_get_fd(li_) : -1;
 #else
     return -1;
@@ -106,7 +106,7 @@ int DrmInputPlatform::pollFd() const {
 }
 
 void DrmInputPlatform::pollEvents(const DrmInputHandler& handler) {
-#if defined(__linux__) && BRO_WITH_SEAT
+#if defined(__linux__) && BRO_WITH_SEAT && BRO_HAVE_LIBINPUT
     if (!li_ || !valid_) return;
 
     libinput_dispatch(li_);

@@ -103,7 +103,7 @@ jobs:
             libxi-dev libxfixes-dev libxss-dev libxtst-dev libwayland-dev libxkbcommon-dev \
             libasound2-dev libpulse-dev libudev-dev \
             libfreetype-dev libfontconfig1-dev libpng-dev libjpeg-dev libwebp-dev \
-            libsystemd-dev libseat-dev libxcb-randr0-dev libxau-dev
+            libsystemd-dev libseat-dev libxcb-randr0-dev libxau-dev libinput-dev
 
       # bash: tests/run_tests.sh needs bash 4+ and macOS ships 3.2 as
       # /bin/bash. coreutils: GNU `gtimeout` for the per-test cap (the runner

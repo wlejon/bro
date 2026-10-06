@@ -691,7 +691,21 @@ if(BRO_WITH_DMABUF AND NOT TARGET brodmabuf)
 endif()
 
 # --- brodbus ---
-if(NOT TARGET brodbus)
+# The shared sd-bus layer of brocred, brosys, broseat and broportal: Linux
+# only, and only with libsystemd, whose absence those libraries handle
+# themselves (brocred and brosys build without D-Bus).
+set(_bro_wants_brodbus OFF)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
+   (BRO_WITH_CRED OR BRO_WITH_SYS OR BRO_WITH_SEAT OR BRO_WITH_PORTAL))
+    find_package(PkgConfig QUIET)
+    if(PKG_CONFIG_FOUND)
+        pkg_check_modules(_bro_libsystemd QUIET libsystemd)
+        if(_bro_libsystemd_FOUND)
+            set(_bro_wants_brodbus ON)
+        endif()
+    endif()
+endif()
+if(_bro_wants_brodbus AND NOT TARGET brodbus)
     set(BRODBUS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
     bro_default_sibling_dir(brodbus _brodbus_default)
     set(BRODBUS_DIR "${_brodbus_default}" CACHE PATH "Path to standalone brodbus repo")
