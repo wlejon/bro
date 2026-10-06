@@ -207,7 +207,13 @@ bool ElTerminal::spawn(const SpawnSpec& spec, std::string* error) {
     o.args = spec.args;
     o.cwd = spec.cwd;
     o.env = spec.env;
-    impl_->exitDispatched = false;
+    if (!readySession(/*attaching=*/false, error)) return false;
+    if (spec.persistent) {
+        terminal::TermSession::PersistentOptions p;
+        p.server = spec.server;
+        p.name = spec.name;
+        return impl_->session->spawnPersistent(o, p, error);
+    }
     return impl_->session->spawn(o, error);
 }
 
@@ -363,6 +369,7 @@ bool ElTerminal::pump(double nowMs, bool focused, float scale) {
     Impl& m = *impl_;
     m.nowMs = nowMs;
     if (!elem_) return false;
+    detachIfRemoved();
 
     if (scale > 0.0f && std::isfinite(scale)) {
         std::lock_guard<std::mutex> g(m.fontMu);
@@ -423,6 +430,9 @@ bool ElTerminal::pump(double nowMs, bool focused, float scale) {
         const auto code = m.session->exitCode();
         termDispatch(elem_, "exit", code ? "{\"exitCode\":" + std::to_string(*code) + "}" : "{\"exitCode\":null}");
         m.layerDirty = true;
+    } else if (m.session->detached() && !m.session->exited() && !m.detachDispatched) {
+        m.detachDispatched = true;
+        termDispatch(elem_, "detach", "{\"sessionId\":" + std::to_string(m.session->sessionId()) + "}");
     }
     return m.layerDirty.load();
 }

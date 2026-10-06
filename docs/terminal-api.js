@@ -129,6 +129,41 @@
  *   term.feed(`\x1b_Ga=T,f=32,s=2,v=2,c=6,r=3;${px}\x1b\\`);
  *   console.log(term.images);   // { count: 1, placements: 1, bytes: 16, limit: 335544320 }
  *
+ * Persistent sessions. spawn({ persistent: true }) runs the program in a
+ * session of a bromux server, a per-user process that owns the shells (a
+ * Unix socket in the user's runtime directory; on Windows a named pipe only
+ * the user can open). The session outlives the element: removing the element,
+ * reloading the page or quitting bro detaches it, and attach(id) -- here or
+ * in any other page or process, including `bromux attach` -- shows the same
+ * screen and scrollback and drives the same program. Several terminals can
+ * be attached at once: all see its output, all can type, and its size
+ * follows the one most recently active. When the program exits, every
+ * terminal attached gets `exit`, and the finished session stays listed (with
+ * its exit code) until closeSession(). The server starts on demand from the
+ * `bromux` executable built beside bro, and exits by itself 30 s after it
+ * has neither a running session nor a client (finished sessions go with it),
+ * or at killServer().
+ * What crosses bromux: the screen (cells, colours, hyperlinks, cursor,
+ * modes, title, cwd), history (fetched as the view needs it), keys, text,
+ * paste, mouse, focus, resizes, the bell, notifications (title and body),
+ * progress, OSC 133 marks (`promptmark`), OSC 52 (under the element's
+ * clipboard policy) and the exit status. The element's theme applies to
+ * every colour the program left at its default. What does not cross (yet):
+ * inline images, `pointerShape` (OSC 22), `commands` (OSC 133 records),
+ * `foregroundProcess`, OSC 99's notification id and urgency; and `feed()`
+ * does nothing on a persistent session (its emulator is the server's).
+ *
+ * @example
+ *   // A shell that survives reloads: remember its id, reattach on load.
+ *   const term = document.querySelector('terminal');
+ *   const saved = Number(localStorage.getItem('shell')) || 0;
+ *   if (saved && bro.terminal.sessions().some((s) => s.id === saved && s.running)) {
+ *     term.attach(saved);
+ *   } else {
+ *     term.spawn({ persistent: true, name: 'main shell' });
+ *     localStorage.setItem('shell', String(term.sessionId));
+ *   }
+ *
  * Performance. Every <terminal> is its own compositor layer, recorded only
  * when the terminal changes. A busy terminal therefore re-records only
  * itself, and a page change never re-records a terminal. Set
@@ -159,21 +194,78 @@ const terminal = {
    *   console.log('page re-recorded', after.pageRecords - before.pageRecords, 'times');
    */
   stats() {},
+
+  /** Whether persistent sessions are built in (bro found bromux at build
+   *  time). @type {boolean} */
+  persistentAvailable: true,
+  /**
+   * The sessions a bromux server holds (see "Persistent sessions" below):
+   * running ones and finished ones not yet closed. [] when the server is not
+   * running; this never starts one.
+   * @param {{server?: string}|string} [server] the server name; omitted: the per-user default
+   * @returns {{id: number, name: string, command: string, pid: number, running: boolean,
+   *            exitCode: number|null, cols: number, rows: number, clients: number,
+   *            created: number, title: string, cwd: string}[]}
+   *   `clients`: how many terminals (here, in other pages or processes, or
+   *   `bromux attach`) are attached; `created` is a Unix time in ms.
+   * @example
+   *   // Reattach to every shell left running by an earlier run of this app.
+   *   for (const s of bro.terminal.sessions().filter((s) => s.running && s.name.startsWith('myapp:'))) {
+   *     const t = document.createElement('terminal');
+   *     document.body.appendChild(t);
+   *     t.attach(s.id);
+   *   }
+   */
+  sessions(server) {},
+  /** Close a session: its program is killed and the session removed (every
+   *  terminal attached to it gets `exit`). @param {number} id
+   *  @param {{server?: string}|string} [server] @returns {boolean} */
+  closeSession(id, server) {},
+  /** Stop the server and every session in it. @param {{server?: string}|string} [server]
+   *  @returns {boolean} false when none was running */
+  killServer(server) {},
 };
 
 // ── HTMLTerminalElement ─────────────────────────────────────────────────────
 
 class HTMLTerminalElement extends HTMLElement {
   /**
-   * Start a process on a new PTY sized like the terminal. One per element.
-   * `env` entries are added to the inherited environment. On POSIX the
-   * process is the leader of a new session with the PTY as its controlling
-   * terminal; TERM is whatever the environment says (set it in `env`).
-   * @param {{command?: string, args?: string[], cwd?: string, env?: Object<string,string>}} options
+   * Start a process on a new PTY sized like the terminal. One per element
+   * (after a detach() the element takes another). `env` entries are added
+   * to the inherited environment. On POSIX the process is the leader of a
+   * new session with the PTY as its controlling terminal; TERM is whatever
+   * the environment says (set it in `env`).
+   *
+   * With `persistent: true` the process runs in a session of a bromux
+   * server instead (see "Persistent sessions"), which outlives this element:
+   * `server` names the server (omitted: the per-user default, started on
+   * demand from the `bromux` executable beside bro), `name` is the
+   * session's display name in sessions(). `sessionId` then names it.
+   * @param {{command?: string, args?: string[], cwd?: string, env?: Object<string,string>,
+   *          persistent?: boolean, server?: string, name?: string}} options
    * @returns {number} the process id
    * @throws {DOMException} OperationError when it cannot be started or a process already ran here
    */
   spawn(options) {}
+
+  /**
+   * Show and drive a persistent session: one from spawn({persistent}) in
+   * this page, an earlier page, another process, or `bromux new`. The
+   * screen and scrollback are the session's; input, resizes, the mouse,
+   * focus reports and the clipboard go to it, and its events come here.
+   * Replaces whatever finished or detached session this element had.
+   * @param {number} sessionId
+   * @param {{server?: string}|string} [server]
+   * @throws {DOMException} OperationError when there is no such session or
+   *   server, or this element's process is running
+   */
+  attach(sessionId, server) {}
+
+  /** Let go of the persistent session; its program runs on, and `detach`
+   *  fires. The screen stays as it was. Removing the element from the
+   *  document, reloading the page or closing bro does the same. A local
+   *  (non-persistent) process is not affected. */
+  detach() {}
 
   /** Raw bytes (a UTF-8 string) to the process's input, unencoded.
    *  @returns {boolean} false when there is no running process */
@@ -201,6 +293,8 @@ class HTMLTerminalElement extends HTMLElement {
   /** Grid size in cells. @type {number} */ cols;
   /** @type {number} */ rows;
   /** The process id, 0 before spawn(). @type {number} */ pid;
+  /** The persistent session this element shows (attached or detached
+   *  from), null for a local process. @type {number|null} */ sessionId;
   /** Spawned and not yet exited (all its output parsed). @type {boolean} */ running;
   /** The exit status once it has exited (POSIX: 128 + signal when killed),
    *  else null. @type {number|null} */ exitCode;
@@ -418,6 +512,9 @@ class HTMLTerminalElement extends HTMLElement {
  *  events, before the terminal acts; preventDefault() cancels its action. */
 /** `titlechange`: the program set its title (OSC 0 / 2). detail `{ title }`. */
 /** `cwdchange`: the shell reported its directory (OSC 7). detail `{ cwd }`. */
+/** `detach`: the element let go of its persistent session (detach(), or it
+ *  left the document) while the session's program still runs. detail
+ *  `{ sessionId }`. */
 /** `foregroundchange`: `foregroundProcess` changed. detail `{ process }`,
  *  the new value (null once the child has exited). */
 /** `bell`: BEL. detail `{}`. */

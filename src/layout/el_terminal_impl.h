@@ -44,6 +44,7 @@ struct ElTerminal::Impl {
     double nowMs = 0;
     double blinkEpoch = 0;
     bool exitDispatched = false;
+    bool detachDispatched = false;
     int lastCols = 0, lastRows = 0;
     double imageMemoryLimit = 320.0 * 1024 * 1024;  // as the session has it (bropty's default)
 

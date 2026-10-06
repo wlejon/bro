@@ -65,6 +65,12 @@ bool readSpawnSpec(Value opts, layout::ElTerminal::SpawnSpec& spec, std::string&
     if (!ev::isUndefined(cmd) && !ev::isNull(cmd)) spec.command = ev::toUtf8(cmd);
     Value cwd = ev::getProperty(root.get(), "cwd");
     if (!ev::isUndefined(cwd) && !ev::isNull(cwd)) spec.cwd = ev::toUtf8(cwd);
+    Value persistent = ev::getProperty(root.get(), "persistent");
+    spec.persistent = !ev::isUndefined(persistent) && !ev::isNull(persistent) && ev::toBool(persistent);
+    Value server = ev::getProperty(root.get(), "server");
+    if (!ev::isUndefined(server) && !ev::isNull(server)) spec.server = ev::toUtf8(server);
+    Value name = ev::getProperty(root.get(), "name");
+    if (!ev::isUndefined(name) && !ev::isNull(name)) spec.name = ev::toUtf8(name);
 
     ev::Persistent args(ev::getProperty(root.get(), "args"));
     if (!ev::isUndefined(args.get()) && !ev::isNull(args.get())) {
@@ -236,11 +242,69 @@ bool readTheme(Value v, layout::ElTerminal::Theme& t, std::string& error) {
     return true;
 }
 
+// The bromux server an options argument names: { server } or a string;
+// empty (the per-user default) otherwise.
+std::string serverOf(std::span<const Value> a, size_t i) {
+    if (i >= a.size() || ev::isUndefined(a[i]) || ev::isNull(a[i])) return {};
+    if (!ev::isObject(a[i])) return ev::toUtf8(a[i]);
+    Value s = ev::getProperty(a[i], "server");
+    return ev::isUndefined(s) || ev::isNull(s) ? std::string() : ev::toUtf8(s);
+}
+
+// A session id argument: a non-negative integer.
+bool sessionIdOf(std::span<const Value> a, size_t i, uint64_t& out) {
+    if (i >= a.size()) return false;
+    const double d = ev::toDouble(a[i]);
+    if (!(d >= 1) || d > 9007199254740991.0 || std::floor(d) != d) return false;
+    out = uint64_t(d);
+    return true;
+}
+
+Value sessionInfoValue(const layout::ElTerminal::SessionInfo& s) {
+    ObjectBuilder o;
+    o.set("id", ev::fromDouble(double(s.id)));
+    o.set("name", ev::fromUtf8(s.name));
+    o.set("command", ev::fromUtf8(s.command));
+    o.set("pid", ev::fromDouble(double(s.pid)));
+    o.set("running", ev::fromBool(s.running));
+    o.set("exitCode", s.running || s.exitCode < 0 ? ev::null() : ev::fromDouble(s.exitCode));
+    o.set("cols", ev::fromDouble(s.cols));
+    o.set("rows", ev::fromDouble(s.rows));
+    o.set("clients", ev::fromDouble(s.clients));
+    o.set("created", ev::fromDouble(s.createdMs));
+    o.set("title", ev::fromUtf8(s.title));
+    o.set("cwd", ev::fromUtf8(s.cwd));
+    return o.get();
+}
+
 }  // namespace
 
 Value makeBroTerminalValue() {
     ObjectBuilder o;
     o.set("available", ev::fromBool(layout::ElTerminal::available()));
+    // Persistent sessions (spawn({persistent}), attach) are built in.
+    o.set("persistentAvailable", ev::fromBool(layout::ElTerminal::persistentAvailable()));
+    // sessions({server}) -> [{id, name, command, pid, running, exitCode, cols,
+    // rows, clients, created, title, cwd}]: what the bromux server holds
+    // ([] when it is not running; never starts it).
+    o.def("sessions", 1, [](Value, std::span<const Value> a) -> Value {
+        std::string error;
+        auto list = layout::ElTerminal::sessions(serverOf(a, 0), &error);
+        if (!list) return ev::throwValue(hostMakeDomError("OperationError", "sessions(): " + error));
+        return hostArrayOf(list->size(), [&list](size_t i) -> Value { return sessionInfoValue((*list)[i]); });
+    });
+    // closeSession(id, {server}) -> bool: kill its program and remove it.
+    o.def("closeSession", 2, [](Value, std::span<const Value> a) -> Value {
+        uint64_t id = 0;
+        if (!sessionIdOf(a, 0, id)) return ev::throwTypeError("closeSession(id): id must be a session id");
+        std::string error;
+        return ev::fromBool(layout::ElTerminal::closeSession(serverOf(a, 1), id, &error));
+    });
+    // killServer({server}) -> bool: stop the server and every session in it.
+    o.def("killServer", 1, [](Value, std::span<const Value> a) -> Value {
+        std::string error;
+        return ev::fromBool(layout::ElTerminal::killServer(serverOf(a, 0), &error));
+    });
     // The shell spawn() starts when no command is given.
     o.accessor("defaultShell",
         [](Value, std::span<const Value>) -> Value { return ev::fromUtf8(layout::ElTerminal::defaultShell()); },
@@ -273,6 +337,23 @@ void decorateTerminalProto(ObjectBuilder& b) {
         if (!t->spawn(spec, &error))
             return ev::throwValue(hostMakeDomError("OperationError", "spawn(): " + error));
         return ev::fromDouble(double(t->pid()));
+    });
+    // attach(sessionId, {server}): show and drive a persistent session.
+    // Throws when it cannot (no such session, no server, a running process).
+    b.def("attach", 2, [](Value self, std::span<const Value> a) -> Value {
+        auto* t = control(self);
+        if (!t) return ev::throwTypeError("attach(): not a <terminal>");
+        uint64_t id = 0;
+        if (!sessionIdOf(a, 0, id)) return ev::throwTypeError("attach(id): id must be a session id");
+        std::string error;
+        if (!t->attach(id, serverOf(a, 1), &error))
+            return ev::throwValue(hostMakeDomError("OperationError", "attach(): " + error));
+        return ev::undefined();
+    });
+    // detach(): let go of the persistent session; its program runs on.
+    b.def("detach", 0, [](Value self, std::span<const Value>) -> Value {
+        if (auto* t = control(self, false)) t->detach();
+        return ev::undefined();
     });
     // write(data): raw bytes (a UTF-8 string) to the child's input.
     b.def("write", 1, [](Value self, std::span<const Value> a) -> Value {
@@ -317,6 +398,10 @@ void decorateTerminalProto(ObjectBuilder& b) {
     readOnly("cols", [](layout::ElTerminal& t) { return ev::fromDouble(t.cols()); });
     readOnly("rows", [](layout::ElTerminal& t) { return ev::fromDouble(t.rows()); });
     readOnly("pid", [](layout::ElTerminal& t) { return ev::fromDouble(double(t.pid())); });
+    readOnly("sessionId", [](layout::ElTerminal& t) {
+        const uint64_t id = t.sessionId();
+        return id ? ev::fromDouble(double(id)) : ev::null();
+    });
     readOnly("running", [](layout::ElTerminal& t) { return ev::fromBool(t.running()); });
     readOnly("exitCode", [](layout::ElTerminal& t) {
         auto c = t.exitCode();

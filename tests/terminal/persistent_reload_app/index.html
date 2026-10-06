@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html>
+<head><title>boot</title></head>
+<body>
+<script>
+// Two-run app for the persistent-session reload test (driven by
+// tests/terminal/test_terminal_persistent.js through a child bro-headless).
+//
+// Run 1 starts a shell in a persistent session (on the bromux server named
+// by BRO_MUX_SERVER), types a command into it, notes the session id in
+// process.env (which outlives the realm) and reloads the page. Tearing down
+// the document destroys the <terminal>, which detaches; the shell runs on.
+// Run 2 does nothing: verify.js, in the fresh realm, attaches to the id.
+(function () {
+    if (process.env.BRO_MUX_STAGE) return;
+    process.env.BRO_MUX_STAGE = '1';
+    const t = document.createElement('terminal');
+    document.body.appendChild(t);
+    const win = process.platform === 'win32';
+    t.spawn({
+        command: win ? 'cmd.exe' : '/bin/sh',
+        args: win ? ['/d'] : [],
+        env: win ? {} : { PS1: '$ ' },
+        persistent: true,
+        server: process.env.BRO_MUX_SERVER,
+        name: 'reload-test',
+    });
+    process.env.BRO_MUX_SESSION = String(t.sessionId);
+    t.write('echo before-' + 'reload' + (win ? '\r' : '\n'));
+    location.reload();
+})();
+</script>
+</body>
+</html>

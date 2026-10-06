@@ -12,7 +12,7 @@ endif()
 # el_terminal.cpp: the same arrangement for <terminal> and bro_terminal.
 if(BRO_WITH_TERMINAL)
     target_sources(bro_layout PRIVATE el_terminal_layer.cpp el_terminal_mouse.cpp el_terminal_view.cpp
-                                      el_terminal_events.cpp el_terminal_theme.cpp)
+                                      el_terminal_events.cpp el_terminal_theme.cpp el_terminal_mux.cpp)
     target_link_libraries(bro_layout PUBLIC bro_terminal)
 else()
     target_sources(bro_layout PRIVATE el_terminal_off.cpp)

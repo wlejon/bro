@@ -98,8 +98,38 @@ public:
         std::vector<std::string> args;
         std::string cwd;
         std::vector<std::pair<std::string, std::string>> env;
+        // In a bromux server's session that outlives this element (see
+        // attach); `server` names the server (empty: the per-user default),
+        // `name` is the session's display name.
+        bool persistent = false;
+        std::string server;
+        std::string name;
     };
+    // One process per element; after a detach, the element takes a new one
+    // (the screen starts over).
     bool spawn(const SpawnSpec& spec, std::string* error);
+
+    // ---- persistent sessions (el_terminal_mux.cpp) ------------------------
+    // Attach to a session by id (from spawn({persistent}) here or anywhere,
+    // or sessions()). Removing the element from the document, reloading the
+    // page or destroying the element detaches; the program runs on.
+    bool attach(uint64_t sessionId, const std::string& server, std::string* error);
+    void detach();
+    uint64_t sessionId() const;  // 0: not attached to a persistent session
+    struct SessionInfo {
+        uint64_t id = 0;
+        std::string name, command, title, cwd;
+        int64_t pid = 0;
+        bool running = false;
+        int exitCode = -1;
+        int cols = 0, rows = 0;
+        uint32_t clients = 0;
+        double createdMs = 0;
+    };
+    static std::optional<std::vector<SessionInfo>> sessions(const std::string& server, std::string* error);
+    static bool closeSession(const std::string& server, uint64_t id, std::string* error);
+    static bool killServer(const std::string& server, std::string* error);
+    static bool persistentAvailable();
     bool write(std::string_view bytes);  // raw bytes to the child's input
     void feed(std::string_view output);  // bytes into the emulator, as if the child wrote them
     void kill();
@@ -293,6 +323,13 @@ private:
     void flushDeferredKey();
     void dispatchEvents();
     void autoScroll(double nowMs);
+    // Ready the session for a spawn / attach: false (with *error) while one
+    // runs, and for a spawn after a process ran here unless it was a
+    // detached session; otherwise a used session is replaced by a fresh one
+    // with this element's options and theme (el_terminal_mux.cpp).
+    bool readySession(bool attaching, std::string* error);
+    // The element left the document: let go of a persistent session.
+    void detachIfRemoved();
 
     render::Renderer* renderer_;
     dom::Element* elem_ = nullptr;

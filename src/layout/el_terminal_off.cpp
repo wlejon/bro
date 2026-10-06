@@ -38,6 +38,21 @@ bool ElTerminal::spawn(const SpawnSpec&, std::string* error) {
     if (error) *error = "<terminal> is not compiled into this build (BRO_WITH_TERMINAL)";
     return false;
 }
+bool ElTerminal::attach(uint64_t, const std::string&, std::string* error) {
+    if (error) *error = "<terminal> is not compiled into this build (BRO_WITH_TERMINAL)";
+    return false;
+}
+void ElTerminal::detach() {}
+uint64_t ElTerminal::sessionId() const { return 0; }
+bool ElTerminal::persistentAvailable() { return false; }
+std::optional<std::vector<ElTerminal::SessionInfo>> ElTerminal::sessions(const std::string&, std::string* error) {
+    if (error) *error = "<terminal> is not compiled into this build (BRO_WITH_TERMINAL)";
+    return std::nullopt;
+}
+bool ElTerminal::closeSession(const std::string&, uint64_t, std::string*) { return false; }
+bool ElTerminal::killServer(const std::string&, std::string*) { return false; }
+bool ElTerminal::readySession(bool, std::string*) { return false; }
+void ElTerminal::detachIfRemoved() {}
 bool ElTerminal::write(std::string_view) { return false; }
 void ElTerminal::feed(std::string_view) {}
 void ElTerminal::kill() {}
