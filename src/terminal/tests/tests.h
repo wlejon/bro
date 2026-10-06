@@ -13,5 +13,6 @@ void run_paint_image_tests();
 void run_session_image_tests();
 void run_session_tests();
 void run_session_search_tests();
+void run_session_mux_tests();
 
 } // namespace bro::terminal::test

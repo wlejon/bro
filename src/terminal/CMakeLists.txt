@@ -17,6 +17,18 @@ add_library(bro_terminal STATIC
 target_include_directories(bro_terminal PUBLIC ${bro_SOURCE_DIR}/src)
 target_link_libraries(bro_terminal PUBLIC bropty bro_render PRIVATE brothemes broimage::broimage)
 
+# Persistent sessions through a bromux server (third_party/CMakeLists.txt
+# found bromux): the client side links in, and the server executable is
+# built with bro so the client can start it from beside bro.
+if(TARGET bromux)
+    target_sources(bro_terminal PRIVATE term_mux.cpp term_mux_source.cpp term_session_mux.cpp)
+    target_link_libraries(bro_terminal PRIVATE bromux)
+    target_compile_definitions(bro_terminal PUBLIC BRO_TERMINAL_MUX=1)
+    add_dependencies(bro_terminal bromux_cli)
+else()
+    target_sources(bro_terminal PRIVATE term_mux_off.cpp)
+endif()
+
 if(BRO_BUILD_TESTS)
     # pty_child, bropty's test child (echoes raw input bytes as hex, reports
     # its window size, floods output, exits with a status), compiled from
@@ -43,6 +55,7 @@ if(BRO_BUILD_TESTS)
         tests/test_session.cpp
         tests/test_session_images.cpp
         tests/test_session_search.cpp
+        tests/test_session_mux.cpp
     )
     target_link_libraries(bro_terminal_test PRIVATE bro_terminal broimage::broimage)
     target_include_directories(bro_terminal_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)

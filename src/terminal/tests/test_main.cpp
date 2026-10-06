@@ -19,6 +19,7 @@ int main(int argc, char** argv) {
     run_session_tests();
     run_session_image_tests();
     run_session_search_tests();
+    run_session_mux_tests();
     std::printf("---\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

@@ -80,12 +80,38 @@ public:
     TermSession& operator=(const TermSession&) = delete;
 
     // ---- control plane (main thread) -----------------------------------------
-    // Start a child on a new PTY sized like the terminal. One per session.
+    // Start a child on a new PTY sized like the terminal. One per session
+    // (spawn, spawnPersistent and attach alike).
     bool spawn(const SpawnOptions& opts, std::string* error);
     [[nodiscard]] bool spawned() const noexcept { return spawned_.load(std::memory_order_acquire); }
     // The child has exited and every byte of its output has been parsed.
     [[nodiscard]] bool exited() const noexcept { return exited_.load(std::memory_order_acquire); }
-    [[nodiscard]] bool running() const noexcept { return spawned() && !exited(); }
+    [[nodiscard]] bool running() const noexcept { return spawned() && !exited() && !detached(); }
+
+    // ---- persistent sessions (term_session_mux.cpp; term_mux.h) -------------
+    // The program runs in a bromux server's session instead of on a PTY of
+    // this process: the session keeps running when this TermSession goes
+    // (it detaches), and any number of TermSessions -- in this process or
+    // others -- attach to it by id. The screen is the server's, mirrored
+    // (bromux's ScreenSource); input, resize, mouse, focus and the
+    // clipboard go through bromux's protocol, and the program's events come
+    // back through it. What bromux does not carry stays local and empty:
+    // inline images, OSC 22 pointer shapes, OSC 133 command records, the
+    // foreground process, feed().
+    struct PersistentOptions {
+        std::string server;  // bromux server name; empty: the per-user default
+        std::string name;    // the session's display name (its "name" meta)
+    };
+    // Create a session running `opts` and attach to it.
+    bool spawnPersistent(const SpawnOptions& opts, const PersistentOptions& p, std::string* error);
+    // Attach to an existing session.
+    bool attach(uint64_t sessionId, const std::string& server, std::string* error);
+    // Let go of the session, which keeps running. The screen stays as it was.
+    void detach();
+    [[nodiscard]] bool detached() const noexcept { return detached_.load(std::memory_order_acquire); }
+    // The session's id while attached to one (0: a local session, or none).
+    [[nodiscard]] uint64_t sessionId() const noexcept { return sessionId_.load(std::memory_order_acquire); }
+    [[nodiscard]] bool persistent() const noexcept { return persistent_.load(std::memory_order_acquire); }
     [[nodiscard]] std::optional<int> exitCode() const;
     [[nodiscard]] int64_t pid() const noexcept { return pid_.load(std::memory_order_relaxed); }
     // Stop the child (bropty's bounded escalation). The session keeps its screen.
@@ -259,9 +285,47 @@ private:
     // finished update is published before the next one starts.
     void feedSplitting(std::string_view chunk, std::chrono::steady_clock::time_point now);
 
-    mutable std::mutex mu_;  // guards session_, view_, the sync state
+    // The persistent-session state (term_session_mux.cpp), under mu_.
+    struct Mux;
+    struct MuxDelete {
+        void operator()(Mux* m) const;
+    };
+    // mu_ held: dispatch what the server sent; publish. Returns whether
+    // more is pending.
+    bool muxPump(std::chrono::steady_clock::time_point now, bool& published);
+    // mu_ held: the bromux-side parts of the reads and the input. Input is
+    // refused (false) once detached or exited.
+    bool muxAttachLocked(uint64_t id, std::string* error);
+    void muxDropView();
+    void muxMirrorLost();  // the Client dropped the session's mirror: let go of it
+    void muxKill();
+    bool muxWrite(std::string_view bytes);
+    bool muxSendKey(const bropty::KeyEvent& ev);
+    bool muxSendText(std::string_view text, bool paste);
+    bool muxFocus(bool focused);
+    bool muxMouse(const bropty::MouseEvent& ev);
+    void muxResize(int cols, int rows, int cellPxW, int cellPxH);
+    bool muxAnswerClipboard(uint64_t request, bool ok, std::string_view data);
+    void muxSetBasePalette(const bropty::Palette& palette);
+    std::string muxTitle() const;
+    std::string muxCwd() const;
+    uint32_t muxKittyFlags() const;
+    std::string muxScrollbackText() const;
+    int muxCellW_ = 0, muxCellH_ = 0;  // the cell size last sent (mu_)
+    bool muxSized_ = false;
+
+    mutable std::mutex mu_;  // guards session_, the views, the sync state, mux_
     bropty::Session session_;
-    std::unique_ptr<bropty::TerminalView> view_;
+    // The view the frames come from: over the local Terminal, or over the
+    // mirror of a persistent session (muxView). view_ / src_ point at the
+    // one in use.
+    std::unique_ptr<bropty::TerminalView> localView_;
+    bropty::TerminalView* view_ = nullptr;
+    bropty::RowSource* src_ = nullptr;
+    std::unique_ptr<Mux, MuxDelete> mux_;
+    std::atomic<bool> detached_{false};
+    std::atomic<bool> persistent_{false};
+    std::atomic<uint64_t> sessionId_{0};
     bropty::FrameChannel channel_;
     std::shared_ptr<bropty::IPtyProcess> pty_;
     std::unique_ptr<char[]> readBuf_;

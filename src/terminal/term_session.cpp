@@ -41,7 +41,9 @@ TermSession::TermSession(int cols, int rows, size_t scrollbackRows)
       readBuf_(std::make_unique<char[]>(kReadChunk)),
       cols_(std::max(1, cols)),
       rows_(std::max(1, rows)) {
-    view_ = std::make_unique<bropty::TerminalView>(session_.terminal());
+    localView_ = std::make_unique<bropty::TerminalView>(session_.terminal());
+    view_ = localView_.get();
+    src_ = &view_->source();
     host_ = makeHost();
     session_.set_delegate(hostDelegate());
     // A first frame before the thread exists, so a terminal that never gets a
@@ -54,6 +56,12 @@ TermSession::~TermSession() {
     stop_.store(true, std::memory_order_release);
     wake();
     if (thread_.joinable()) thread_.join();
+    // A persistent session is let go, not stopped: it runs on in its server.
+    detach();
+    {
+        std::lock_guard<std::mutex> g(mu_);
+        mux_.reset();
+    }
     // Outside every lock: teardown is bounded but may take the grace periods,
     // and the PTY's threads call wake() until they are joined.
     std::shared_ptr<bropty::IPtyProcess> pty;
@@ -70,7 +78,7 @@ bool TermSession::spawn(const SpawnOptions& opts, std::string* error) {
     std::shared_ptr<bropty::IPtyProcess> pty;
     {
         std::lock_guard<std::mutex> g(mu_);
-        if (pty_) {
+        if (pty_ || mux_) {
             if (error) *error = "this terminal already has a process";
             return false;
         }
@@ -108,6 +116,7 @@ void TermSession::kill() {
     std::shared_ptr<bropty::IPtyProcess> pty;
     {
         std::lock_guard<std::mutex> g(mu_);
+        if (mux_) muxKill();
         pty = pty_;
     }
     if (pty) pty->terminate();
@@ -118,8 +127,9 @@ bool TermSession::write(std::string_view bytes) {
     bool sent;
     {
         std::lock_guard<std::mutex> g(mu_);
-        if (!pty_ || exited()) return false;
-        sent = pty_->write(bytes) == bytes.size();
+        if (mux_) sent = muxWrite(bytes);
+        else if (!pty_ || exited()) return false;
+        else sent = pty_->write(bytes) == bytes.size();
     }
     if (sent) noteInput();
     return sent;
@@ -128,6 +138,7 @@ bool TermSession::write(std::string_view bytes) {
 void TermSession::feed(std::string_view output) {
     {
         std::lock_guard<std::mutex> g(mu_);
+        if (mux_) return;  // the emulator is the server's
         feedSplitting(output, Clock::now());
         bytesParsed_.fetch_add(output.size(), std::memory_order_relaxed);
     }
@@ -146,8 +157,9 @@ bool TermSession::sendKey(const bropty::KeyEvent& ev) {
     bool sent, moved;
     {
         std::lock_guard<std::mutex> g(mu_);
-        if (!pty_ || exited()) return false;
-        sent = session_.send_key(ev);
+        if (mux_) sent = muxSendKey(ev);
+        else if (!pty_ || exited()) return false;
+        else sent = session_.send_key(ev);
         moved = snapOnInput(sent);
     }
     if (sent) noteInput();  // wakes the parser, which presents a moved view too
@@ -159,8 +171,9 @@ bool TermSession::sendText(std::string_view text) {
     bool sent, moved;
     {
         std::lock_guard<std::mutex> g(mu_);
-        if (!pty_ || exited()) return false;
-        sent = session_.send_text(text);
+        if (mux_) sent = muxSendText(text, /*paste=*/false);
+        else if (!pty_ || exited()) return false;
+        else sent = session_.send_text(text);
         moved = snapOnInput(sent);
     }
     if (sent) noteInput();
@@ -172,8 +185,9 @@ bool TermSession::paste(std::string_view text) {
     bool sent, moved;
     {
         std::lock_guard<std::mutex> g(mu_);
-        if (!pty_ || exited()) return false;
-        sent = session_.paste(text);
+        if (mux_) sent = muxSendText(text, /*paste=*/true);
+        else if (!pty_ || exited()) return false;
+        else sent = session_.paste(text);
         moved = snapOnInput(sent);
     }
     if (sent) noteInput();
@@ -183,6 +197,7 @@ bool TermSession::paste(std::string_view text) {
 
 bool TermSession::focus(bool focused) {
     std::lock_guard<std::mutex> g(mu_);
+    if (mux_) return muxFocus(focused);
     if (!pty_ || exited()) return false;
     return session_.focus(focused);
 }
@@ -207,6 +222,13 @@ bool TermSession::resize(int cols, int rows, int cellPxW, int cellPxH) {
         }
         cols_.store(t.cols(), std::memory_order_relaxed);
         rows_.store(t.rows(), std::memory_order_relaxed);
+        // A persistent session's grid is the server's: ask for this size.
+        if (mux_ && (changed || cellPxW_ != muxCellW_ || cellPxH_ != muxCellH_ || !muxSized_)) {
+            muxResize(t.cols(), t.rows(), cellPxW_, cellPxH_);
+            muxCellW_ = cellPxW_;
+            muxCellH_ = cellPxH_;
+            muxSized_ = true;
+        }
     }
     if (changed) wake();
     return changed;
@@ -214,10 +236,10 @@ bool TermSession::resize(int cols, int rows, int cellPxW, int cellPxH) {
 
 std::string TermSession::screenText() const {
     std::lock_guard<std::mutex> g(mu_);
-    const bropty::Terminal& t = session_.terminal();
+    const bropty::RowSource& s = *src_;
     std::vector<std::string> lines;
-    lines.reserve(size_t(t.rows()));
-    for (int y = 0; y < t.rows(); ++y) lines.push_back(t.row_text(y));
+    lines.reserve(size_t(s.rows()));
+    for (int y = 0; y < s.rows(); ++y) lines.push_back(s.row_at(s.screen_top_row() + y).text());
     while (!lines.empty() && lines.back().empty()) lines.pop_back();
     std::string out;
     for (size_t i = 0; i < lines.size(); ++i) {
@@ -229,6 +251,7 @@ std::string TermSession::screenText() const {
 
 std::string TermSession::scrollbackText() const {
     std::lock_guard<std::mutex> g(mu_);
+    if (mux_) return muxScrollbackText();
     const bropty::Terminal& t = session_.terminal();
     std::string out;
     const size_t n = t.history_rows();
@@ -241,21 +264,23 @@ std::string TermSession::scrollbackText() const {
 
 bropty::CursorState TermSession::cursor() const {
     std::lock_guard<std::mutex> g(mu_);
-    return session_.terminal().cursor();
+    return src_->cursor();
 }
 
 bropty::Modes TermSession::modes() const {
     std::lock_guard<std::mutex> g(mu_);
-    return session_.terminal().modes();
+    return src_->modes();
 }
 
 std::string TermSession::title() const {
     std::lock_guard<std::mutex> g(mu_);
+    if (mux_) return muxTitle();
     return session_.terminal().title();
 }
 
 uint32_t TermSession::kittyKeyboardFlags() const {
     std::lock_guard<std::mutex> g(mu_);
+    if (mux_) return muxKittyFlags();
     return session_.terminal().kitty_keyboard_flags();
 }
 
@@ -391,6 +416,7 @@ void TermSession::setImageMemoryLimit(size_t bytes) {
 }
 
 bool TermSession::parseSlice(Clock::time_point now, bool& published) {
+    if (mux_) return muxPump(now, published);
     const Clock::time_point deadline = now + kSliceTime;
     bool pending = false;
     if (pty_) {
@@ -452,7 +478,9 @@ void TermSession::feedSplitting(std::string_view chunk, Clock::time_point now) {
 }
 
 bool TermSession::maybePublish(Clock::time_point now, bool onlyIfConsumed) {
-    const bool sync = session_.terminal().modes().synchronized_output;
+    // Detached, the view is not the session's any more: the last frame stays.
+    if (detached()) return false;
+    const bool sync = src_->modes().synchronized_output;
     if (sync) {
         if (!syncActive_) {
             syncActive_ = true;

@@ -50,7 +50,9 @@ std::vector<TermEvent> TermSession::takeEvents() {
 
 bool TermSession::answerClipboard(uint64_t request, std::string_view data) {
     std::lock_guard<std::mutex> g(mu_);
-    if (clipboardPolicy() != ClipboardPolicy::ReadWrite) {
+    const bool allowed = clipboardPolicy() == ClipboardPolicy::ReadWrite;
+    if (mux_) return muxAnswerClipboard(request, allowed, data);
+    if (!allowed) {
         session_.terminal().cancel_clipboard(request);
         return false;
     }
@@ -59,22 +61,26 @@ bool TermSession::answerClipboard(uint64_t request, std::string_view data) {
 
 bool TermSession::cancelClipboard(uint64_t request) {
     std::lock_guard<std::mutex> g(mu_);
+    if (mux_) return muxAnswerClipboard(request, false, {});
     return session_.terminal().cancel_clipboard(request);
 }
 
 std::string TermSession::cwd() const {
     std::lock_guard<std::mutex> g(mu_);
+    if (mux_) return muxCwd();
     return session_.terminal().cwd();
 }
 
 std::string TermSession::pointerShape() const {
     std::lock_guard<std::mutex> g(mu_);
+    if (mux_) return {};  // OSC 22 does not cross bromux
     return session_.terminal().pointer_shape();
 }
 
 std::vector<CommandInfo> TermSession::commands() const {
     std::lock_guard<std::mutex> g(mu_);
     std::vector<CommandInfo> out;
+    if (mux_) return out;  // nor do OSC 133's command records
     const auto& list = session_.terminal().commands();
     out.reserve(list.size());
     for (const bropty::CommandRecord& c : list) {
@@ -105,13 +111,14 @@ void TermSession::setBasePalette(const bropty::Palette& palette) {
     {
         std::lock_guard<std::mutex> g(mu_);
         session_.terminal().set_base_palette(palette);
+        if (mux_) muxSetBasePalette(palette);
     }
     wake();  // the next frame carries the new palette
 }
 
 bropty::Palette TermSession::palette() const {
     std::lock_guard<std::mutex> g(mu_);
-    return session_.terminal().palette();
+    return src_->palette();
 }
 
 // ---------------------------------------------------------------------------

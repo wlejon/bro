@@ -301,6 +301,26 @@ if(BRO_WITH_TERMINAL)
             add_subdirectory(bropty EXCLUDE_FROM_ALL)
         endif()
     endif()
+    # bromux: persistent terminal sessions (a per-user server that owns the
+    # shells; <terminal> elements attach to them and survive reloads). Same
+    # sibling-first lookup; it reuses the bropty / brosearch targets above.
+    # Its `bromux` executable (the server the client starts on demand) lands
+    # beside bro. Without it, persistent sessions are compiled out
+    # (BRO_TERMINAL_MUX undefined) and the JS surface says so.
+    set(BROMUX_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    if(NOT TARGET bromux)
+        bro_default_sibling_dir(bromux _bromux_default)
+        set(BROMUX_DIR "${_bromux_default}" CACHE PATH "Path to standalone bromux repo")
+        if(EXISTS "${BROMUX_DIR}/CMakeLists.txt")
+            message(STATUS "bromux: using standalone repo at ${BROMUX_DIR}")
+            add_subdirectory("${BROMUX_DIR}" "${CMAKE_BINARY_DIR}/bromux" EXCLUDE_FROM_ALL)
+        elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/bromux/CMakeLists.txt")
+            message(STATUS "bromux: using submodule at third_party/bromux")
+            add_subdirectory(bromux EXCLUDE_FROM_ALL)
+        else()
+            message(STATUS "bromux: not found (../bromux or third_party/bromux); persistent terminal sessions off")
+        endif()
+    endif()
 endif()
 
 # --- bromesh (mesh generation + manipulation library) ---

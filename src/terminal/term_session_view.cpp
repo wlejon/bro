@@ -16,7 +16,7 @@ void TermSession::afterViewChange() { wake(); }
 
 ViewState TermSession::viewState() const {
     std::lock_guard<std::mutex> g(mu_);
-    const bropty::Terminal& t = session_.terminal();
+    const bropty::RowSource& t = *src_;
     ViewState v;
     v.topRow = view_->top_row();
     v.firstRow = t.first_row();
@@ -55,7 +55,7 @@ void TermSession::scrollToBottom() {
 void TermSession::scrollToTop() {
     {
         std::lock_guard<std::mutex> g(mu_);
-        view_->scroll_to_row(session_.terminal().first_row());
+        view_->scroll_to_row(src_->first_row());
     }
     afterViewChange();
 }
@@ -214,7 +214,7 @@ const char* linkKindName(bropty::LinkKind k) {
 
 std::optional<LinkInfo> TermSession::linkAt(bropty::RowPos cell) const {
     std::lock_guard<std::mutex> g(mu_);
-    const bropty::Terminal& t = session_.terminal();
+    const bropty::RowSource& t = *src_;
     if (cell.row < t.first_row() || cell.row >= t.end_row() || cell.col < 0 || cell.col >= t.cols())
         return std::nullopt;
     std::optional<bropty::LinkHit> hit = bropty::link_at(t, cell);
@@ -237,7 +237,7 @@ void TermSession::setHover(std::optional<bropty::RowPos> cell) {
         const auto& cur = view_->hover();
         // Moving within the same link (or over no link) changes nothing seen.
         if (cell) {
-            const auto hit = bropty::link_at(session_.terminal(), *cell);
+            const auto hit = bropty::link_at(*src_, *cell);
             if (!hit && !cur) return;
             if (hit && cur && hit->range == cur->range && hit->target == cur->target) return;
         } else if (!cur) {
@@ -250,7 +250,7 @@ void TermSession::setHover(std::optional<bropty::RowPos> cell) {
 
 std::string TermSession::rowsText(int64_t first, int64_t end) const {
     std::lock_guard<std::mutex> g(mu_);
-    const bropty::Terminal& t = session_.terminal();
+    const bropty::RowSource& t = *src_;
     first = std::max(first, t.first_row());
     end = std::min(end, t.end_row());
     std::string out;
@@ -264,7 +264,7 @@ std::string TermSession::rowsText(int64_t first, int64_t end) const {
 std::string TermSession::rangeText(bropty::RowRange range) const {
     std::lock_guard<std::mutex> g(mu_);
     if (range.empty()) return {};
-    bropty::Selection probe(session_.terminal());
+    bropty::Selection probe(*src_);
     probe.select_range(range);
     return probe.text();
 }
@@ -273,18 +273,19 @@ std::string TermSession::rangeText(bropty::RowRange range) const {
 
 bool TermSession::sendMouse(const bropty::MouseEvent& ev) {
     std::lock_guard<std::mutex> g(mu_);
+    if (mux_) return muxMouse(ev);
     if (!pty_ || exited()) return false;
     return session_.send_mouse(ev);
 }
 
 bropty::MouseTracking TermSession::mouseTracking() const {
     std::lock_guard<std::mutex> g(mu_);
-    return session_.terminal().modes().mouse_tracking;
+    return src_->modes().mouse_tracking;
 }
 
 bool TermSession::altScreen() const {
     std::lock_guard<std::mutex> g(mu_);
-    return session_.terminal().alt_screen_active();
+    return src_->alt_screen_active();
 }
 
 } // namespace bro::terminal
