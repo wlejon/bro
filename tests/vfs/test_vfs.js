@@ -1,25 +1,24 @@
 // Headless test for bro.vfs
 assert(typeof bro.vfs === 'object', 'bro.vfs namespace exists');
-assert(bro.vfs.available === true, 'bro.vfs.available is true');
+if (!bro.vfs.available) {
+    skipTest('bro.vfs is compiled out of this build');
+} else {
+    // 1. MIME and Volumes
+    const mime = bro.vfs.getMime('README.md');
+    assert(typeof mime === 'string' && mime.length > 0, 'getMime returns non-empty string');
 
-// 1. MIME and Volumes
-const mime = bro.vfs.getMime('README.md');
-assert(typeof mime === 'string' && mime.length > 0, 'getMime returns non-empty string');
+    const volumes = bro.vfs.listVolumes();
+    assert(Array.isArray(volumes), 'listVolumes returns an array');
+    if (volumes.length > 0) {
+        assert(typeof volumes[0].mountPoint === 'string', 'volume has mountPoint');
+        assert(typeof volumes[0].totalBytes === 'number', 'volume has totalBytes');
+    }
 
-const volumes = bro.vfs.listVolumes();
-assert(Array.isArray(volumes), 'listVolumes returns an array');
-if (volumes.length > 0) {
-    assert(typeof volumes[0].mountPoint === 'string', 'volume has mountPoint');
-    assert(typeof volumes[0].totalBytes === 'number', 'volume has totalBytes');
-}
-
-// 2. Directory scanning
-await (async function() {
+    // 2. Directory scanning
     const entries = await bro.vfs.scan('tests', { recursive: false });
     assert(Array.isArray(entries), 'scan returns an array');
     assert(entries.length > 0, 'tests directory has entries');
-    const hasApps = entries.some(e => e.name === 'apps');
-    assert(hasApps, 'scan found tests/apps');
+    assert(entries.some(e => e.name === 'apps'), 'scan found tests/apps');
 
     // 3. DirectoryModel
     const model = new bro.vfs.DirectoryModel('tests');
@@ -30,8 +29,9 @@ await (async function() {
     assert(Array.isArray(modelEntries), 'model.entries returns array');
 
     // 4. File operations (copy, move, remove)
-    const testDir = '/tmp/bro_vfs_test_headless_' + Date.now();
     const fs = require('fs');
+    const os = require('os');
+    const testDir = os.tmpdir().replace(/\\/g, '/') + '/bro_vfs_test_headless_' + Date.now();
     fs.mkdirSync(testDir, { recursive: true });
     const srcFile = testDir + '/source.txt';
     const dstFile = testDir + '/copy.txt';
@@ -56,6 +56,6 @@ await (async function() {
     // Clean up testDir
     await bro.vfs.remove(testDir, { recursive: true });
     assert(!fs.existsSync(testDir), 'testDir removed');
-})();
 
-console.log('test_vfs.js PASSED');
+    console.log('test_vfs.js PASSED');
+}

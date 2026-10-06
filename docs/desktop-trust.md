@@ -31,9 +31,11 @@ The bro engine establishes two explicit tiers:
 - Granted standard application-facing APIs (`bro.vfs`, `bro.apps`, `bro.keys`, `bro.themes`, `bro.search`, `bro.thumb`, `bro.conf` for its own app keys).
 - Granted application-local window APIs (`bro.window` for its own title, opacity, fullscreen, progress, notifications, system tray icon, and global hotkeys).
 - Privileged desktop namespaces are completely unavailable:
-  - `bro.<ns>.available === false`
+  - `bro.<ns>.available === false`, and `bro.<ns>.reason` says why.
   - Attempting to invoke or access functions on a privileged namespace throws an immediate `Error`:
-    `"bro.<ns> is unavailable: this build was compiled without trusted shell declaration in bro.json"`
+    `"bro.<ns> is unavailable: it is privileged and granted only to a trusted shell app (see docs/desktop-trust.md)"`
+- A namespace compiled out of the build looks the same, with the reason
+  `"this build was compiled without BRO_WITH_<NAME>"`.
 - Any system-wide privileged action (such as opening arbitrary files or capturing a window) must be requested via user-mediated OS portals or bro-hosted portal dialogs.
 
 ### Tier 2: Shell Applications

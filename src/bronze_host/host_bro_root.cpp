@@ -148,24 +148,32 @@ void publish(const char* name, const ev::Persistent& root) {
 
 }  // namespace
 
+// `flag` is either a feature flag (BRO_WITH_X: the namespace is compiled out)
+// or, for a namespace the build has but this app may not use, the reason in
+// words. Either way the stub reports `available: false` and `reason`, and
+// every other property is a function that throws that reason.
 Value makeUnavailableNamespace(const std::string& name, const std::string& flag) {
+    const std::string reason = flag.rfind("BRO_WITH_", 0) == 0
+        ? "this build was compiled without " + flag
+        : flag;
     ObjectBuilder base;
     base.set("available", ev::fromBool(false));
+    base.set("reason", ev::fromUtf8(reason));
 
     HostProxyTraps traps;
     traps.methods = base.get();
-    traps.get = [name, flag](const std::string& key, Value& out) -> bool {
-        std::string err = "bro." + name + " is unavailable: this build was compiled without " + flag;
+    traps.get = [name, reason](const std::string& key, Value& out) -> bool {
+        std::string err = "bro." + name + " is unavailable: " + reason;
         out = ev::makeFunction([err](Value, std::span<const Value>) -> Value {
             return ev::throwError(err.c_str());
         }, 0);
         return true;
     };
     traps.has = [](const std::string& key) -> bool {
-        return key == "available";
+        return key == "available" || key == "reason";
     };
     traps.ownKeys = []() -> std::vector<std::string> {
-        return { "available" };
+        return { "available", "reason" };
     };
     return makeHostProxy(std::move(traps));
 }
@@ -369,7 +377,8 @@ void installBroRoots(engine::Engine& engine) {
     };
     for (const char* ns : kPrivilegedNamespaces) {
         if (!engine.hasPrivilege(ns)) {
-            setUnavailable(ns, "trusted shell declaration in bro.json");
+            setUnavailable(ns, "it is privileged and granted only to a trusted shell app "
+                               "(see docs/desktop-trust.md)");
         }
     }
     {

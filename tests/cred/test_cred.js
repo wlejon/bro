@@ -18,11 +18,13 @@ if (!bro.cred.available) {
     authPromise.catch(() => {});
 
     // 3. Secrets storage
-    const setPromise = bro.cred.setSecret('test_service', 'test_acc', 'test_secret_123');
-    assert(typeof setPromise === 'object' && typeof setPromise.then === 'function', 'setSecret returns Promise');
-
-    const getPromise = bro.cred.getSecret('test_service', 'test_acc');
+    // Writes go to the account's real keystore (Credential Manager, Secret
+    // Service, Keychain), so only a read of an entry that cannot exist is made;
+    // brocred's own tests cover writes against an isolated store.
+    assert(typeof bro.cred.setSecret === 'function', 'setSecret is function');
+    const getPromise = bro.cred.getSecret('bro-headless-test-never-stored', 'nobody');
     assert(typeof getPromise === 'object' && typeof getPromise.then === 'function', 'getSecret returns Promise');
+    getPromise.catch(() => {});
 
     // 4. Polkit registration
     assert(typeof bro.cred.registerPolkitAgent === 'function', 'registerPolkitAgent is function');

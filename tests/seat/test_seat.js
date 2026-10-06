@@ -10,14 +10,13 @@ if (!bro.seat.available) {
     assert(typeof session.locked === 'boolean', 'session.locked is boolean');
     assert(typeof session.id === 'string', 'session.id is string');
 
-    // 2. Lock & Unlock
-    const lockRes = bro.seat.lock();
-    assert(typeof lockRes === 'boolean', 'lock returns boolean');
+    // 2. Lock & Unlock: not called. They lock the real session of whoever
+    // runs the tests; broseat's own tests cover them on a private bus.
+    assert(typeof bro.seat.lock === 'function', 'lock is function');
+    assert(typeof bro.seat.unlock === 'function', 'unlock is function');
 
-    const unlockRes = bro.seat.unlock();
-    assert(typeof unlockRes === 'boolean', 'unlock returns boolean');
-
-    // 3. Inhibitors
+    // 3. Inhibitors (an idle inhibitor held by this process, released below
+    // and with the process)
     const inhId = bro.seat.inhibit('idle', 'Automated test inhibition');
     assert(typeof inhId === 'number', 'inhibit returns number');
 
@@ -33,9 +32,9 @@ if (!bro.seat.available) {
     const autostart = bro.seat.listAutostart();
     assert(Array.isArray(autostart), 'listAutostart returns array');
 
-    const runPromise = bro.seat.runAutostart();
-    assert(typeof runPromise === 'object' && typeof runPromise.then === 'function', 'runAutostart returns Promise');
-    runPromise.catch(() => {});
+    // runAutostart launches every autostart entry of the real account, so it
+    // is not called here.
+    assert(typeof bro.seat.runAutostart === 'function', 'runAutostart is function');
 
     console.log('test_seat.js PASSED');
 }
