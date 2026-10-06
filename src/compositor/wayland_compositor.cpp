@@ -278,6 +278,49 @@ std::vector<uint64_t> WaylandCompositor::windows() const {
 #endif
 }
 
+std::optional<brocompositor::WindowSnapshot> WaylandCompositor::queryWindow(uint64_t winId) const {
+#if defined(__linux__) && defined(BRO_WITH_COMPOSITOR)
+    if (!backend_) return std::nullopt;
+    return backend_->query(static_cast<brocompositor::WindowId>(winId));
+#else
+    (void)winId;
+    return std::nullopt;
+#endif
+}
+
+uint32_t WaylandCompositor::addOutput(uint32_t width, uint32_t height) {
+#if defined(__linux__) && defined(BRO_WITH_COMPOSITOR)
+    if (!backend_) return 0;
+    brocompositor::Size sz{static_cast<int32_t>(width), static_cast<int32_t>(height)};
+    return static_cast<uint32_t>(backend_->add_output(sz));
+#else
+    (void)width; (void)height;
+    return 0;
+#endif
+}
+
+bool WaylandCompositor::configureOutput(uint32_t outputId, float scale, int32_t x, int32_t y) {
+#if defined(__linux__) && defined(BRO_WITH_COMPOSITOR)
+    if (!backend_) return false;
+    brocompositor::wl::OutputConfig cfg;
+    cfg.scale = scale;
+    cfg.position = brocompositor::Point{x, y};
+    return backend_->configure_output(static_cast<brocompositor::MonitorId>(outputId), cfg);
+#else
+    (void)outputId; (void)scale; (void)x; (void)y;
+    return false;
+#endif
+}
+
+std::vector<brocompositor::MonitorSnapshot> WaylandCompositor::monitors() const {
+#if defined(__linux__) && defined(BRO_WITH_COMPOSITOR)
+    if (!backend_) return {};
+    return backend_->monitors();
+#else
+    return {};
+#endif
+}
+
 bool WaylandCompositor::isSessionLocked() const {
 #if defined(__linux__) && defined(BRO_WITH_COMPOSITOR)
     if (!backend_) return false;

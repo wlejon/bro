@@ -70,6 +70,12 @@ public:
     bool setWindowMinimized(uint64_t winId, bool minimized);
     bool placeWindow(uint64_t winId, int x, int y, int w, int h);
     std::vector<uint64_t> windows() const;
+    std::optional<brocompositor::WindowSnapshot> queryWindow(uint64_t winId) const;
+
+    // Multi-monitor & output management
+    uint32_t addOutput(uint32_t width, uint32_t height);
+    bool configureOutput(uint32_t outputId, float scale, int32_t x, int32_t y);
+    std::vector<brocompositor::MonitorSnapshot> monitors() const;
 
     // Shell state queries
     bool isSessionLocked() const;

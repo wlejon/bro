@@ -52,4 +52,16 @@ if(BRO_BUILD_TESTS AND BRO_WITH_COMPOSITOR)
         target_link_libraries(bro_xwayland_test PRIVATE brodmabuf::brodmabuf)
     endif()
     target_include_directories(bro_xwayland_test PRIVATE ${bro_SOURCE_DIR}/src)
+
+    add_executable(bro_daily_driver_test tests/test_daily_driver.cpp)
+    target_link_libraries(bro_daily_driver_test PRIVATE
+        bro_compositor
+        bro_render
+        bro_util
+        brocompositor
+    )
+    if(BRO_WITH_DMABUF)
+        target_link_libraries(bro_daily_driver_test PRIVATE brodmabuf::brodmabuf)
+    endif()
+    target_include_directories(bro_daily_driver_test PRIVATE ${bro_SOURCE_DIR}/src)
 endif()
