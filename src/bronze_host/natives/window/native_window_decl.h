@@ -192,6 +192,66 @@ void bro_window_setSize(int32_t width, int32_t height);
 //   registered at __bro_native.window.quit
 void bro_window_quit(void);
 
+// bro.window.title read & write
+const char* bro_window_title_get(void);
+void bro_window_title_set(const char* title);
+
+// bro.window.opacity read & write
+double bro_window_opacity_get(void);
+void bro_window_opacity_set(double opacity);
+
+// bro.window.fullscreen read & write
+bool bro_window_fullscreen_get(void);
+void bro_window_fullscreen_set(bool fullscreen);
+
+// bro.window.focused read
+bool bro_window_focused_get(void);
+
+// bro.window.flash / requestAttention
+bool bro_window_flash(bool on);
+
+// bro.window.beep
+bool bro_window_beep(void);
+int32_t bro_window_getBeepCount(void);
+void bro_window_resetBeepCount(void);
+
+// bro.window.setProgress
+bool bro_window_setProgress(int32_t state, int32_t value);
+int32_t bro_window_getProgressState(void);
+int32_t bro_window_getProgressValue(void);
+
+// bro.window.notify
+int32_t bro_window_notify(const char* title, const char* body, const char* icon, int32_t timeoutMs, bool silent, int32_t replacesId);
+int32_t bro_window_getNotificationCount(void);
+const char* bro_window_getLastNotificationTitle(void);
+const char* bro_window_getLastNotificationBody(void);
+void bro_window_clearNotifications(void);
+
+// bro.window tray
+bool bro_window_setTray(const char* icon, const char* tooltip, const char* menuJson);
+bool bro_window_removeTray(void);
+bool bro_window_hasTray(void);
+bool bro_window_isTrayAvailable(void);
+void bro_window_simulateTrayClick(const char* itemId);
+
+// bro.window global hotkeys
+int32_t bro_window_registerGlobalHotkey(const char* accelerator);
+bool bro_window_unregisterGlobalHotkey(int32_t id);
+void bro_window_unregisterAllGlobalHotkeys(void);
+bool bro_window_simulateGlobalHotkey(const char* accelerator);
+
+// bro.window single instance
+bool bro_window_requestSingleInstance(const char* name, const char* argsJson);
+void bro_window_shutdownSingleInstance(void);
+bool bro_window_simulateSingleInstance(const char* name, const char* argsJson);
+
+// JS dispatchers & test simulation
+void bro_window_setFocusDispatcher(uint64_t fnBits);
+void bro_window_setHotkeyDispatcher(uint64_t fnBits);
+void bro_window_setTrayDispatcher(uint64_t fnBits);
+void bro_window_setSingleInstanceDispatcher(uint64_t fnBits);
+void bro_window_simulateFocus(bool gained);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif

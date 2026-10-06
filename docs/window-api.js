@@ -91,6 +91,162 @@ bro.window.borderless;
 bro.window.alwaysOnTop;
 
 /**
+ * Window title text.
+ * @type {string}
+ */
+bro.window.title;
+
+/**
+ * @returns {string}
+ */
+bro.window.getTitle = function() {};
+
+/**
+ * @param {string} title
+ */
+bro.window.setTitle = function(title) {};
+
+/**
+ * Window opacity from 0.0 (fully transparent) to 1.0 (fully opaque).
+ * @type {number}
+ */
+bro.window.opacity;
+
+/**
+ * @returns {number}
+ */
+bro.window.getOpacity = function() {};
+
+/**
+ * @param {number} opacity
+ */
+bro.window.setOpacity = function(opacity) {};
+
+/**
+ * Whether the window is in fullscreen mode.
+ * @type {boolean}
+ */
+bro.window.fullscreen;
+
+/**
+ * Toggles fullscreen display mode.
+ * @returns {boolean}
+ */
+bro.window.toggleFullscreen = function() {};
+
+/**
+ * Whether the window currently has keyboard/input focus.
+ * @readonly
+ * @type {boolean}
+ */
+bro.window.focused;
+
+/**
+ * Flashes the taskbar/dock button to request user attention until focused.
+ * @param {boolean} [on=true]
+ * @returns {boolean}
+ */
+bro.window.flash = function(on) {};
+
+/**
+ * Alias for bro.window.flash(on).
+ * @param {boolean} [on=true]
+ * @returns {boolean}
+ */
+bro.window.requestAttention = function(on) {};
+
+/**
+ * Plays the system's default alert or bell sound.
+ * @returns {boolean}
+ */
+bro.window.beep = function() {};
+
+/**
+ * Sets taskbar progress indicator state ('none', 'normal', 'error', 'indeterminate', 'paused')
+ * and completion percentage (0 - 100).
+ * @param {string|number} state
+ * @param {number} [value=0]
+ * @returns {boolean}
+ */
+bro.window.setProgress = function(state, value) {};
+
+/**
+ * Displays a desktop notification.
+ * @param {string} title
+ * @param {string} [body=""]
+ * @param {Object} [options]
+ * @param {string} [options.icon]
+ * @param {number} [options.timeout]
+ * @param {boolean} [options.silent]
+ * @param {number} [options.replacesId]
+ * @returns {number}
+ */
+bro.window.notify = function(title, body, options) {};
+
+/**
+ * Configures or updates the system tray icon with context menu.
+ * @param {Object} options
+ * @param {string} [options.icon]
+ * @param {string} [options.tooltip]
+ * @param {Array<Object>} [options.menu]
+ * @returns {boolean}
+ */
+bro.window.setTray = function(options) {};
+
+/**
+ * Removes the system tray icon.
+ * @returns {boolean}
+ */
+bro.window.removeTray = function() {};
+
+/**
+ * Whether a tray icon is currently active.
+ * @returns {boolean}
+ */
+bro.window.hasTray = function() {};
+
+/**
+ * Whether the system tray is supported on this platform.
+ * @returns {boolean}
+ */
+bro.window.isTrayAvailable = function() {};
+
+/**
+ * Registers an OS-wide global hotkey accelerator.
+ * @param {string} accelerator e.g. "CommandOrControl+Shift+T", "Alt+Space"
+ * @param {function} callback
+ * @returns {number} hotkey ID (> 0) on success, 0 on failure
+ */
+bro.window.registerGlobalHotkey = function(accelerator, callback) {};
+
+/**
+ * Unregisters a previously registered global hotkey.
+ * @param {number} id
+ * @returns {boolean}
+ */
+bro.window.unregisterGlobalHotkey = function(id) {};
+
+/**
+ * Unregisters all global hotkeys.
+ */
+bro.window.unregisterAllGlobalHotkeys = function() {};
+
+/**
+ * Enforces single-instance application execution and forwards arguments from
+ * subsequent launches.
+ * @param {Object} options
+ * @param {string} options.name Unique application identifier
+ * @param {function(Array<string>)} [options.onInstance] Callback receiving forwarded argv
+ * @returns {boolean} True if this is the primary instance, false if forwarded to existing instance
+ */
+bro.window.requestSingleInstance = function(options) {};
+
+/**
+ * Shuts down single-instance IPC listener and frees application lock.
+ */
+bro.window.shutdownSingleInstance = function() {};
+
+/**
  * Minimizes the window.
  */
 bro.window.minimize = function() {};
@@ -215,7 +371,8 @@ bro.window.open = function(src, opts) {};
  * @property {boolean} closed   true once closed, by close(), the OS, or a src
  *                              that failed to load (it closes at the drain)
  * getSize() / setSize(w, h) / getPosition() / setPosition(x, y) (a no-op on a
- * hidden window) / setTitle(s) / focus() / close()
+ * hidden window) / getTitle() / setTitle(s) / getOpacity() / setOpacity(v) /
+ * flash(on) / requestAttention(on) / focus() / close()
  * capture() -> ImageData of the window's rendered document, or null
  * postMessage(data, targetOrigin | options | transfer) -> a MessageEvent at
  *   the child's window (events-api.js)

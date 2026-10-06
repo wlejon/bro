@@ -233,12 +233,13 @@ public:
     void setDocumentReadyState(const std::string& state);
     void dispatchDocumentReadyEvents();
 
-    // Page visibility, as document.hidden / document.visibilityState read
-    // it: false while the window is minimized or unfocused. Stored so the
-    // getter answers the current state; the change event fires on the edge.
+    // Page visibility (document.hidden) and window focus tracking.
     void setPageVisibility(bool visible);
     bool pageVisible() const { return pageVisible_; }
     void setFullscreenState(bool fullscreen);
+    bool isWindowFocused() const { return windowFocused_; }
+    void setWindowFocused(bool f) { windowFocused_ = f; }
+    void dispatchWindowFocusChange(bool focused);
 
     // Headless & DOM API
     dom::Document* document() const { return document_.get(); }
@@ -979,9 +980,7 @@ private:
 
     static constexpr double kGCIntervalMs = 1000.0;
     double lastGCMs_ = 0.0;
-
     double lastGpuFrameMs_ = -1.0;
-
     bool testFailure_ = false;
 
     // The frame's composite, bottom to top: CPU layers composite into

@@ -48,6 +48,201 @@
              (v) => { __bro_native.window.borderless = !!v; });
     accessor(bro.window, 'alwaysOnTop', () => __bro_native.window.alwaysOnTop,
              (v) => { __bro_native.window.alwaysOnTop = !!v; });
+    accessor(bro.window, 'title', () => __bro_native.window.title,
+             (v) => { __bro_native.window.title = String(v ?? ''); });
+    fn(bro.window, 'getTitle', function getTitle() { return __bro_native.window.title; });
+    fn(bro.window, 'setTitle', function setTitle(v) { __bro_native.window.title = String(v ?? ''); });
+
+    accessor(bro.window, 'opacity', () => __bro_native.window.opacity,
+             (v) => {
+                 const n = Number(v);
+                 __bro_native.window.opacity = Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 1.0;
+             });
+    fn(bro.window, 'getOpacity', function getOpacity() { return __bro_native.window.opacity; });
+    fn(bro.window, 'setOpacity', function setOpacity(v) {
+        const n = Number(v);
+        __bro_native.window.opacity = Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 1.0;
+    });
+
+    accessor(bro.window, 'fullscreen', () => __bro_native.window.fullscreen,
+             (v) => { __bro_native.window.fullscreen = !!v; });
+    fn(bro.window, 'getFullscreen', function getFullscreen() { return __bro_native.window.fullscreen; });
+    fn(bro.window, 'setFullscreen', function setFullscreen(v) { __bro_native.window.fullscreen = !!v; });
+    fn(bro.window, 'toggleFullscreen', function toggleFullscreen() {
+        __bro_native.window.fullscreen = !__bro_native.window.fullscreen;
+        return __bro_native.window.fullscreen;
+    });
+
+    accessor(bro.window, 'focused', () => __bro_native.window.focused, undefined);
+
+    // Focus & blur events on bro.window
+    const focusListeners = { focus: new Set(), blur: new Set() };
+    let onFocusHandler = null;
+    let onBlurHandler = null;
+
+    accessor(bro.window, 'onfocus', () => onFocusHandler, (cb) => { onFocusHandler = typeof cb === 'function' ? cb : null; });
+    accessor(bro.window, 'onblur', () => onBlurHandler, (cb) => { onBlurHandler = typeof cb === 'function' ? cb : null; });
+
+    fn(bro.window, 'addEventListener', function addEventListener(type, listener) {
+        if (typeof listener !== 'function') return;
+        if (focusListeners[type]) focusListeners[type].add(listener);
+    });
+    fn(bro.window, 'removeEventListener', function removeEventListener(type, listener) {
+        if (focusListeners[type]) focusListeners[type].delete(listener);
+    });
+
+    __bro_native.window._setFocusDispatcher(function (gained) {
+        const type = gained ? 'focus' : 'blur';
+        const evObj = { type, target: bro.window };
+        if (gained && onFocusHandler) {
+            try { onFocusHandler(evObj); } catch (e) { console.error(e); }
+        } else if (!gained && onBlurHandler) {
+            try { onBlurHandler(evObj); } catch (e) { console.error(e); }
+        }
+        for (const l of focusListeners[type]) {
+            try { l(evObj); } catch (e) { console.error(e); }
+        }
+    });
+
+    fn(bro.window, 'flash', function flash(on) {
+        return __bro_native.window.flash(on === undefined ? true : !!on);
+    });
+    fn(bro.window, 'requestAttention', function requestAttention(on) {
+        return __bro_native.window.flash(on === undefined ? true : !!on);
+    });
+
+    fn(bro.window, 'beep', function beep() {
+        return __bro_native.window.beep();
+    });
+
+    const PROGRESS_STATES = { none: 0, normal: 1, error: 2, indeterminate: 3, paused: 4 };
+    fn(bro.window, 'setProgress', function setProgress(state, value) {
+        let s = 0;
+        if (typeof state === 'string') s = PROGRESS_STATES[state.toLowerCase()] ?? 0;
+        else if (typeof state === 'number') s = Math.max(0, Math.min(4, Math.floor(state)));
+        const v = Math.max(0, Math.min(100, Math.floor(Number(value) || 0)));
+        return __bro_native.window.setProgress(s, v);
+    });
+
+    fn(bro.window, 'notify', function notify(title, body, options) {
+        if (title === undefined) throw new TypeError('bro.window.notify: title is required');
+        const t = String(title);
+        const b = body !== undefined ? String(body) : '';
+        const opts = (options && typeof options === 'object') ? options : {};
+        const icon = opts.icon ? String(opts.icon) : '';
+        const timeout = typeof opts.timeout === 'number' ? Math.floor(opts.timeout) : -1;
+        const silent = !!opts.silent;
+        const replacesId = typeof opts.replacesId === 'number' ? (opts.replacesId >>> 0) : 0;
+        return __bro_native.window.notify(t, b, icon, timeout, silent, replacesId);
+    });
+
+    const trayItemCallbacks = new Map();
+    fn(bro.window, 'setTray', function setTray(options) {
+        if (!options || typeof options !== 'object') throw new TypeError('bro.window.setTray: options object required');
+        const icon = options.icon ? String(options.icon) : '';
+        const tooltip = options.tooltip ? String(options.tooltip) : '';
+        trayItemCallbacks.clear();
+        const menuItems = [];
+        if (Array.isArray(options.menu)) {
+            for (let i = 0; i < options.menu.length; i++) {
+                const item = options.menu[i];
+                if (!item || typeof item !== 'object') continue;
+                const id = item.id ? String(item.id) : ('item_' + i);
+                if (typeof item.click === 'function') {
+                    trayItemCallbacks.set(id, item.click);
+                }
+                menuItems.push({
+                    id,
+                    label: item.label ? String(item.label) : '',
+                    type: item.type ? String(item.type) : 'normal',
+                    checked: !!item.checked,
+                    enabled: item.enabled !== false,
+                });
+            }
+        }
+        return __bro_native.window.setTray(icon, tooltip, JSON.stringify(menuItems));
+    });
+
+    fn(bro.window, 'removeTray', function removeTray() {
+        trayItemCallbacks.clear();
+        return __bro_native.window.removeTray();
+    });
+
+    fn(bro.window, 'hasTray', function hasTray() {
+        return __bro_native.window.hasTray();
+    });
+
+    fn(bro.window, 'isTrayAvailable', function isTrayAvailable() {
+        return __bro_native.window.isTrayAvailable();
+    });
+
+    __bro_native.window._setTrayDispatcher(function (id) {
+        const cb = trayItemCallbacks.get(id);
+        if (typeof cb === 'function') {
+            try { cb({ id }); } catch (e) { console.error(e); }
+        }
+    });
+
+    const hotkeyCallbacks = new Map();
+    fn(bro.window, 'registerGlobalHotkey', function registerGlobalHotkey(accelerator, callback) {
+        if (typeof accelerator !== 'string' || !accelerator) {
+            throw new TypeError('bro.window.registerGlobalHotkey: accelerator string required');
+        }
+        if (typeof callback !== 'function') {
+            throw new TypeError('bro.window.registerGlobalHotkey: callback function required');
+        }
+        const id = __bro_native.window.registerGlobalHotkey(accelerator);
+        if (id > 0) {
+            hotkeyCallbacks.set(id, callback);
+        }
+        return id;
+    });
+
+    fn(bro.window, 'unregisterGlobalHotkey', function unregisterGlobalHotkey(id) {
+        const n = Number(id) >>> 0;
+        hotkeyCallbacks.delete(n);
+        return __bro_native.window.unregisterGlobalHotkey(n);
+    });
+
+    fn(bro.window, 'unregisterAllGlobalHotkeys', function unregisterAllGlobalHotkeys() {
+        hotkeyCallbacks.clear();
+        __bro_native.window.unregisterAllGlobalHotkeys();
+    });
+
+    __bro_native.window._setHotkeyDispatcher(function (accelOrId) {
+        for (const [id, cb] of hotkeyCallbacks) {
+            try { cb({ id, accelerator: accelOrId }); } catch (e) { console.error(e); }
+        }
+    });
+
+    let singleInstanceCallback = null;
+    fn(bro.window, 'requestSingleInstance', function requestSingleInstance(options) {
+        if (!options || typeof options !== 'object') {
+            throw new TypeError('bro.window.requestSingleInstance: options object required');
+        }
+        const name = options.name ? String(options.name) : 'default';
+        if (typeof options.onInstance === 'function') {
+            singleInstanceCallback = options.onInstance;
+        } else {
+            singleInstanceCallback = null;
+        }
+        const args = Array.isArray(options.args) ? options.args.map(String) : [];
+        return __bro_native.window.requestSingleInstance(name, JSON.stringify(args));
+    });
+
+    __bro_native.window._setSingleInstanceDispatcher(function (argsJson) {
+        if (typeof singleInstanceCallback === 'function') {
+            let args = [];
+            try { args = JSON.parse(argsJson); } catch (_) {}
+            try { singleInstanceCallback(args); } catch (e) { console.error(e); }
+        }
+    });
+
+    fn(bro.window, 'shutdownSingleInstance', function shutdownSingleInstance() {
+        singleInstanceCallback = null;
+        __bro_native.window.shutdownSingleInstance();
+    });
+
     fn(bro.window, 'minimize', function minimize() { __bro_native.window.minimize(); });
     fn(bro.window, 'maximize', function maximize() { __bro_native.window.maximize(); });
     fn(bro.window, 'restore', function restore() { __bro_native.window.restore(); });

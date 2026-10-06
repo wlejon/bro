@@ -6,7 +6,15 @@
 #include "bronze_host/host_runtime.h"
 #include "bronze_host/host_natives.h"
 #include "engine/engine.h"
+#include "bronze_host/native_window.h"
 #include "natives/window/native_window_decl.h"
+#include "platform/desktop_platform.h"
+#include "platform/desktop_bell.h"
+#include "platform/desktop_progress.h"
+#include "platform/desktop_notifications.h"
+#include "platform/desktop_tray.h"
+#include "platform/desktop_hotkeys.h"
+#include "platform/desktop_single_instance.h"
 #include "platform/sdl_window.h"
 #include "util/interrupt.h"
 
@@ -15,6 +23,11 @@
 namespace bro::bronze_host {
 
 namespace {
+
+ev::Persistent* g_focusDispatcher = nullptr;
+ev::Persistent* g_hotkeyDispatcher = nullptr;
+ev::Persistent* g_trayDispatcher = nullptr;
+ev::Persistent* g_singleInstanceDispatcher = nullptr;
 
 bool isHeadless() {
     auto* eng = hostEngine();
@@ -56,6 +69,7 @@ const platform::DisplayInfo* displayAt(int32_t i) {
 
 extern "C" {
 
+using namespace bro;
 using namespace bro::bronze_host;
 
 const char* bro_window_state_get(void) {
@@ -254,9 +268,295 @@ void bro_window_quit(void) {
     if (!bro::util::interrupted()) bro::util::requestInterrupt();
 }
 
+const char* bro_window_title_get(void) {
+    if (auto* child = childHost()) {
+        return natives::strResult(child->opts.title);
+    }
+    if (auto* w = getWindow()) {
+        return natives::strResult(w->getTitle());
+    }
+    return natives::strResult("");
+}
+
+void bro_window_title_set(const char* title) {
+    std::string t = title ? title : "";
+    if (auto* child = childHost()) {
+        child->opts.title = t;
+        if (child->window) child->window->setTitle(t);
+        return;
+    }
+    if (auto* w = getWindow()) {
+        w->setTitle(t);
+    }
+}
+
+double bro_window_opacity_get(void) {
+    if (auto* child = childHost()) {
+        if (child->window) return static_cast<double>(child->window->getOpacity());
+        return 1.0;
+    }
+    if (auto* w = getWindow()) {
+        return static_cast<double>(w->getOpacity());
+    }
+    return 1.0;
+}
+
+void bro_window_opacity_set(double opacity) {
+    float op = static_cast<float>(opacity);
+    if (auto* child = childHost()) {
+        if (child->window) child->window->setOpacity(op);
+        return;
+    }
+    if (auto* w = getWindow()) {
+        w->setOpacity(op);
+    }
+}
+
+bool bro_window_fullscreen_get(void) {
+    if (auto* child = childHost()) {
+        if (child->window) return child->window->isFullscreen();
+        return false;
+    }
+    if (auto* w = getWindow()) {
+        return w->isFullscreen();
+    }
+    return false;
+}
+
+void bro_window_fullscreen_set(bool fullscreen) {
+    if (auto* child = childHost()) {
+        if (child->window) child->window->setFullscreen(fullscreen);
+        return;
+    }
+    if (auto* w = getWindow()) {
+        w->setFullscreen(fullscreen);
+    }
+}
+
+bool bro_window_focused_get(void) {
+    auto* eng = hostEngine();
+    if (auto* child = childHost()) {
+        if (child->window && !isHeadless()) {
+            return child->window->isFocused();
+        }
+        return child->focused;
+    }
+    if (auto* w = getWindow()) {
+        if (!isHeadless()) {
+            return w->isFocused();
+        }
+    }
+    return eng ? eng->isWindowFocused() : true;
+}
+
+bool bro_window_flash(bool on) {
+    if (auto* child = childHost()) {
+        if (child->window) return child->window->flash(on);
+        return true;
+    }
+    if (auto* w = getWindow()) {
+        return w->flash(on);
+    }
+    return true;
+}
+
+bool bro_window_beep(void) {
+    return platform::desktop::beep();
+}
+
+int32_t bro_window_getBeepCount(void) {
+    return static_cast<int32_t>(platform::desktop::getHeadlessBeepCount());
+}
+
+void bro_window_resetBeepCount(void) {
+    platform::desktop::resetHeadlessBeepCount();
+}
+
+bool bro_window_setProgress(int32_t state, int32_t value) {
+    auto* w = getWindow();
+    SDL_Window* sdlWin = w ? w->getSDLWindow() : nullptr;
+    auto s = static_cast<platform::desktop::ProgressState>(state);
+    return platform::desktop::setTaskbarProgress(sdlWin, s, value);
+}
+
+int32_t bro_window_getProgressState(void) {
+    return static_cast<int32_t>(platform::desktop::getHeadlessProgressState());
+}
+
+int32_t bro_window_getProgressValue(void) {
+    return platform::desktop::getHeadlessProgressValue();
+}
+
+int32_t bro_window_notify(const char* title, const char* body, const char* icon, int32_t timeoutMs, bool silent, int32_t replacesId) {
+    auto* w = getWindow();
+    SDL_Window* sdlWin = w ? w->getSDLWindow() : nullptr;
+    platform::desktop::NotificationOptions opts;
+    opts.icon = icon ? icon : "";
+    opts.timeoutMs = timeoutMs;
+    opts.silent = silent;
+    opts.replacesId = static_cast<uint32_t>(replacesId);
+    return static_cast<int32_t>(platform::desktop::showNotification(sdlWin, title ? title : "", body ? body : "", opts));
+}
+
+int32_t bro_window_getNotificationCount(void) {
+    return static_cast<int32_t>(platform::desktop::getRecordedNotifications().size());
+}
+
+const char* bro_window_getLastNotificationTitle(void) {
+    auto list = platform::desktop::getRecordedNotifications();
+    return natives::strResult(list.empty() ? "" : list.back().title);
+}
+
+const char* bro_window_getLastNotificationBody(void) {
+    auto list = platform::desktop::getRecordedNotifications();
+    return natives::strResult(list.empty() ? "" : list.back().body);
+}
+
+void bro_window_clearNotifications(void) {
+    platform::desktop::clearRecordedNotifications();
+}
+
+bool bro_window_setTray(const char* icon, const char* tooltip, const char* menuJson) {
+    (void)menuJson;
+    auto* w = getWindow();
+    SDL_Window* sdlWin = w ? w->getSDLWindow() : nullptr;
+    platform::desktop::TrayConfig config;
+    config.icon = icon ? icon : "";
+    config.tooltip = tooltip ? tooltip : "";
+    return platform::desktop::setTray(sdlWin, config);
+}
+
+bool bro_window_removeTray(void) {
+    return platform::desktop::removeTray();
+}
+
+bool bro_window_hasTray(void) {
+    return platform::desktop::hasTray();
+}
+
+bool bro_window_isTrayAvailable(void) {
+    return platform::desktop::isTrayAvailable();
+}
+
+void bro_window_simulateTrayClick(const char* itemId) {
+    if (g_trayDispatcher) {
+        ev::Persistent arg(ev::fromUtf8(itemId ? itemId : ""));
+        Value argv[1] = {arg.get()};
+        ev::call(g_trayDispatcher->get(), ev::undefined(), argv);
+    }
+}
+
+int32_t bro_window_registerGlobalHotkey(const char* accelerator) {
+    if (!accelerator || !*accelerator) return 0;
+    auto* w = getWindow();
+    SDL_Window* sdlWin = w ? w->getSDLWindow() : nullptr;
+    std::string accel = accelerator;
+    uint32_t id = platform::desktop::registerGlobalHotkey(sdlWin, accel, [accel]() {
+        if (g_hotkeyDispatcher) {
+            ev::Persistent arg(ev::fromUtf8(accel));
+            Value argv[1] = {arg.get()};
+            ev::call(g_hotkeyDispatcher->get(), ev::undefined(), argv);
+        }
+    });
+    return static_cast<int32_t>(id);
+}
+
+bool bro_window_unregisterGlobalHotkey(int32_t id) {
+    return platform::desktop::unregisterGlobalHotkey(static_cast<uint32_t>(id));
+}
+
+void bro_window_unregisterAllGlobalHotkeys(void) {
+    platform::desktop::unregisterAllGlobalHotkeys();
+}
+
+bool bro_window_simulateGlobalHotkey(const char* accelerator) {
+    if (!accelerator) return false;
+    return platform::desktop::simulateGlobalHotkey(accelerator);
+}
+
+bool bro_window_requestSingleInstance(const char* name, const char* argsJson) {
+    std::string n = (name && *name) ? name : "bro_app";
+    std::vector<std::string> currentArgs;
+    if (argsJson && *argsJson) {
+        currentArgs.push_back(argsJson);
+    }
+    return platform::desktop::requestSingleInstance(n, currentArgs, [](const std::vector<std::string>& args) {
+        if (g_singleInstanceDispatcher) {
+            std::string json = "[";
+            for (size_t i = 0; i < args.size(); ++i) {
+                if (i > 0) json += ",";
+                json += "\"";
+                for (char c : args[i]) {
+                    if (c == '"') json += "\\\"";
+                    else if (c == '\\') json += "\\\\";
+                    else json += c;
+                }
+                json += "\"";
+            }
+            json += "]";
+            ev::Persistent arg(ev::fromUtf8(json));
+            Value argv[1] = {arg.get()};
+            ev::call(g_singleInstanceDispatcher->get(), ev::undefined(), argv);
+        }
+    });
+}
+
+void bro_window_shutdownSingleInstance(void) {
+    platform::desktop::shutdownSingleInstance();
+}
+
+bool bro_window_simulateSingleInstance(const char* name, const char* argsJson) {
+    (void)name;
+    if (g_singleInstanceDispatcher) {
+        ev::Persistent arg(ev::fromUtf8(argsJson ? argsJson : "[]"));
+        Value argv[1] = {arg.get()};
+        ev::call(g_singleInstanceDispatcher->get(), ev::undefined(), argv);
+        return true;
+    }
+    return false;
+}
+
+void bro_window_setFocusDispatcher(uint64_t fnBits) {
+    if (!g_focusDispatcher) g_focusDispatcher = new ev::Persistent();
+    g_focusDispatcher->set(ev::fromBits(fnBits));
+}
+
+void bro_window_setHotkeyDispatcher(uint64_t fnBits) {
+    if (!g_hotkeyDispatcher) g_hotkeyDispatcher = new ev::Persistent();
+    g_hotkeyDispatcher->set(ev::fromBits(fnBits));
+}
+
+void bro_window_setTrayDispatcher(uint64_t fnBits) {
+    if (!g_trayDispatcher) g_trayDispatcher = new ev::Persistent();
+    g_trayDispatcher->set(ev::fromBits(fnBits));
+}
+
+void bro_window_setSingleInstanceDispatcher(uint64_t fnBits) {
+    if (!g_singleInstanceDispatcher) g_singleInstanceDispatcher = new ev::Persistent();
+    g_singleInstanceDispatcher->set(ev::fromBits(fnBits));
+}
+
+void bro_window_simulateFocus(bool gained) {
+    auto* eng = hostEngine();
+    if (eng) {
+        eng->setWindowFocused(gained);
+        eng->dispatchWindowFocusChange(gained);
+    } else {
+        dispatchWindowFocus(gained);
+    }
+}
+
 }  // extern "C"
 
 namespace bro::bronze_host {
+
+void dispatchWindowFocus(bool gained) {
+    if (g_focusDispatcher) {
+        ev::Persistent arg(ev::fromBool(gained));
+        Value argv[1] = {arg.get()};
+        ev::call(g_focusDispatcher->get(), ev::undefined(), argv);
+    }
+}
 
 bool registerNatives_window(std::string* error);
 

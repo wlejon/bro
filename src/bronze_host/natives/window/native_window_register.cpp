@@ -88,7 +88,43 @@ bool registerNatives_window(std::string* error) {
         fn("__bro_native.window.getSize_width", p(&bro_window_getSize_width), "i32", {}, error) &&
         fn("__bro_native.window.getSize_height", p(&bro_window_getSize_height), "i32", {}, error) &&
         fn("__bro_native.window.setSize", p(&bro_window_setSize), "void", {"i32", "i32"}, error) &&
-        fn("__bro_native.window.quit", p(&bro_window_quit), "void", {}, error);
+        fn("__bro_native.window.quit", p(&bro_window_quit), "void", {}, error) &&
+        getter("__bro_native.window.title", p(&bro_window_title_get), "str", error) &&
+        setter("__bro_native.window.title", p(&bro_window_title_set), "str", error) &&
+        getter("__bro_native.window.opacity", p(&bro_window_opacity_get), "f64", error) &&
+        setter("__bro_native.window.opacity", p(&bro_window_opacity_set), "f64", error) &&
+        getter("__bro_native.window.fullscreen", p(&bro_window_fullscreen_get), "bool", error) &&
+        setter("__bro_native.window.fullscreen", p(&bro_window_fullscreen_set), "bool", error) &&
+        getter("__bro_native.window.focused", p(&bro_window_focused_get), "bool", error) &&
+        fn("__bro_native.window.flash", p(&bro_window_flash), "bool", {"bool"}, error) &&
+        fn("__bro_native.window.beep", p(&bro_window_beep), "bool", {}, error) &&
+        fn("__bro_native.window.getBeepCount", p(&bro_window_getBeepCount), "i32", {}, error) &&
+        fn("__bro_native.window.resetBeepCount", p(&bro_window_resetBeepCount), "void", {}, error) &&
+        fn("__bro_native.window.setProgress", p(&bro_window_setProgress), "bool", {"i32", "i32"}, error) &&
+        fn("__bro_native.window.getProgressState", p(&bro_window_getProgressState), "i32", {}, error) &&
+        fn("__bro_native.window.getProgressValue", p(&bro_window_getProgressValue), "i32", {}, error) &&
+        fn("__bro_native.window.notify", p(&bro_window_notify), "i32", {"str", "str", "str", "i32", "bool", "i32"}, error) &&
+        fn("__bro_native.window.getNotificationCount", p(&bro_window_getNotificationCount), "i32", {}, error) &&
+        fn("__bro_native.window.getLastNotificationTitle", p(&bro_window_getLastNotificationTitle), "str", {}, error) &&
+        fn("__bro_native.window.getLastNotificationBody", p(&bro_window_getLastNotificationBody), "str", {}, error) &&
+        fn("__bro_native.window.clearNotifications", p(&bro_window_clearNotifications), "void", {}, error) &&
+        fn("__bro_native.window.setTray", p(&bro_window_setTray), "bool", {"str", "str", "str"}, error) &&
+        fn("__bro_native.window.removeTray", p(&bro_window_removeTray), "bool", {}, error) &&
+        fn("__bro_native.window.hasTray", p(&bro_window_hasTray), "bool", {}, error) &&
+        fn("__bro_native.window.isTrayAvailable", p(&bro_window_isTrayAvailable), "bool", {}, error) &&
+        fn("__bro_native.window.simulateTrayClick", p(&bro_window_simulateTrayClick), "void", {"str"}, error) &&
+        fn("__bro_native.window.registerGlobalHotkey", p(&bro_window_registerGlobalHotkey), "i32", {"str"}, error) &&
+        fn("__bro_native.window.unregisterGlobalHotkey", p(&bro_window_unregisterGlobalHotkey), "bool", {"i32"}, error) &&
+        fn("__bro_native.window.unregisterAllGlobalHotkeys", p(&bro_window_unregisterAllGlobalHotkeys), "void", {}, error) &&
+        fn("__bro_native.window.simulateGlobalHotkey", p(&bro_window_simulateGlobalHotkey), "bool", {"str"}, error) &&
+        fn("__bro_native.window.requestSingleInstance", p(&bro_window_requestSingleInstance), "bool", {"str", "str"}, error) &&
+        fn("__bro_native.window.shutdownSingleInstance", p(&bro_window_shutdownSingleInstance), "void", {}, error) &&
+        fn("__bro_native.window.simulateSingleInstance", p(&bro_window_simulateSingleInstance), "bool", {"str", "str"}, error) &&
+        fn("__bro_native.window._setFocusDispatcher", p(&bro_window_setFocusDispatcher), "void", {"dynamic"}, error) &&
+        fn("__bro_native.window._setHotkeyDispatcher", p(&bro_window_setHotkeyDispatcher), "void", {"dynamic"}, error) &&
+        fn("__bro_native.window._setTrayDispatcher", p(&bro_window_setTrayDispatcher), "void", {"dynamic"}, error) &&
+        fn("__bro_native.window._setSingleInstanceDispatcher", p(&bro_window_setSingleInstanceDispatcher), "void", {"dynamic"}, error) &&
+        fn("__bro_native.window.simulateFocus", p(&bro_window_simulateFocus), "void", {"bool"}, error);
     if (!ok) return false;
     return true;
 }

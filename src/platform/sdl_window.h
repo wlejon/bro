@@ -118,6 +118,17 @@ public:
 
     void setSize(uint32_t width, uint32_t height) { m_width = width; m_height = height; }
     void setTitle(const std::string& title);
+    std::string getTitle() const;
+
+    /// Read or write window opacity in [0.0, 1.0]. Backed by SDL_SetWindowOpacity.
+    float getOpacity() const;
+    void setOpacity(float opacity);
+
+    /// Whether the window has input focus.
+    bool isFocused() const;
+
+    /// Flash the window/taskbar button to request user attention.
+    bool flash(bool on = true);
 
     /// Software backend: copy a frame of 32-bit pixels to the window's
     /// framebuffer and show it, clipped to the window. False on failure or
@@ -217,8 +228,13 @@ private:
     Window() = default;  // secondary-window factory path (createSecondary)
 
     SDL_Window* m_window = nullptr;
+    std::string m_title;
     uint32_t m_width = 0;
     uint32_t m_height = 0;
+    float m_opacity = 1.0f;
+    bool m_fullscreen = false;
+    bool m_flashing = false;
+    bool m_headlessFocused = true;
     bool m_vsyncPref = true;
     bool m_alwaysOnTop = false;
     bool m_borderless = false;

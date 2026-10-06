@@ -20,8 +20,10 @@
 #include "physics/physics_world.h"
 #endif
 #include "audio_inference/audio_inference.h"
+#include "platform/desktop_platform.h"
 #include "platform/event_loop.h"
 #include "platform/sdl_window.h"
+#include "bronze_host/native_window.h"
 #include "render/skia_backend.h"
 
 #include <broaudio/engine.h>
@@ -233,12 +235,23 @@ void Engine::run() {
     eventLoop_->onGamepadButton = [this](uint32_t id, int b, bool down) { handleGamepadButton(id, b, down); };
     eventLoop_->onGamepadAxis = [this](uint32_t id, int a, float v) { handleGamepadAxis(id, a, v); };
     eventLoop_->onFocusLost = [this, mainWin](uint32_t id) {
-        if (mainWin(id)) { windowFocused_ = false; exitPointerLock(); setPageVisibility(false); }
-        else handleHostFocusChanged(id, false);
+        if (mainWin(id)) {
+            windowFocused_ = false;
+            exitPointerLock();
+            setPageVisibility(false);
+            dispatchWindowFocusChange(false);
+        } else {
+            handleHostFocusChanged(id, false);
+        }
     };
     eventLoop_->onFocusGained = [this, mainWin](uint32_t id) {
-        if (mainWin(id)) { windowFocused_ = true; setPageVisibility(true); }
-        else handleHostFocusChanged(id, true);
+        if (mainWin(id)) {
+            windowFocused_ = true;
+            setPageVisibility(true);
+            dispatchWindowFocusChange(true);
+        } else {
+            handleHostFocusChanged(id, true);
+        }
     };
     eventLoop_->onMinimized = [this, mainWin](uint32_t id) {
         if (mainWin(id)) setPageVisibility(false);
@@ -325,6 +338,7 @@ void Engine::run() {
         if (!canvasScenesDetached_.empty() && framePresenter_->isRasterIdle()) canvasScenesDetached_.clear();
 
         eventLoop_->pollEvents();
+        platform::desktop::pumpEvents();
         if (eventLoop_->shouldQuit()) {
             running_ = false;
             break;
@@ -538,6 +552,15 @@ void Engine::flushLayoutForRead(dom::Document* doc) {
         updateDocumentHeight();
 
     doc->noteLayoutCurrent();
+}
+
+void Engine::dispatchWindowFocusChange(bool focused) {
+    if (document_ && document_->documentElement()) {
+        dom::Event evt(focused ? "focus" : "blur", false, false);
+        evt.setIsTrusted(true);
+        dispatchEvent(document_->documentElement(), evt);
+    }
+    bronze_host::dispatchWindowFocus(focused);
 }
 
 } // namespace bro::engine

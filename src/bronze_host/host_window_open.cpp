@@ -118,6 +118,17 @@ static Value makeWindowHandle(std::shared_ptr<WindowHandleState> state) {
         return ev::fromBool(false);
     }, nullptr);
 
+    b.accessor("focused", [id](Value, std::span<const Value>) -> Value {
+        auto it = s_handleStates.find(id);
+        if (it != s_handleStates.end() && it->second->engine) {
+            if (auto* host = it->second->engine->windowHostById(id)) {
+                if (host->window) return ev::fromBool(host->window->isFocused());
+                return ev::fromBool(host->focused);
+            }
+        }
+        return ev::fromBool(false);
+    }, nullptr);
+
     b.def("getSize", 0, [id](Value, std::span<const Value>) -> Value {
         int w = 800, h = 600;
         auto it = s_handleStates.find(id);
@@ -209,6 +220,66 @@ static Value makeWindowHandle(std::shared_ptr<WindowHandleState> state) {
             }
         }
         return ev::undefined();
+    });
+
+    b.def("getTitle", 0, [id](Value, std::span<const Value>) -> Value {
+        std::string t;
+        auto it = s_handleStates.find(id);
+        if (it != s_handleStates.end()) {
+            t = it->second->title;
+            if (it->second->engine) {
+                if (auto* host = it->second->engine->windowHostById(id)) {
+                    if (host->window) t = host->window->getTitle();
+                    else t = host->opts.title;
+                }
+            }
+        }
+        return ev::fromUtf8(t);
+    });
+
+    b.def("getOpacity", 0, [id](Value, std::span<const Value>) -> Value {
+        float op = 1.0f;
+        auto it = s_handleStates.find(id);
+        if (it != s_handleStates.end() && it->second->engine) {
+            if (auto* host = it->second->engine->windowHostById(id)) {
+                if (host->window) op = host->window->getOpacity();
+            }
+        }
+        return ev::fromDouble(static_cast<double>(op));
+    });
+
+    b.def("setOpacity", 1, [id](Value, std::span<const Value> a) -> Value {
+        if (a.empty()) return ev::undefined();
+        float op = static_cast<float>(ev::toDouble(a[0]));
+        auto it = s_handleStates.find(id);
+        if (it != s_handleStates.end() && it->second->engine) {
+            if (auto* host = it->second->engine->windowHostById(id)) {
+                if (host->window) host->window->setOpacity(op);
+            }
+        }
+        return ev::undefined();
+    });
+
+    b.def("flash", 1, [id](Value, std::span<const Value> a) -> Value {
+        bool on = a.empty() || ev::toBool(a[0]);
+        auto it = s_handleStates.find(id);
+        if (it != s_handleStates.end() && it->second->engine) {
+            if (auto* host = it->second->engine->windowHostById(id)) {
+                if (host->window) return ev::fromBool(host->window->flash(on));
+            }
+        }
+        return ev::fromBool(true);
+    });
+
+    b.def("requestAttention", 1, [id](Value, std::span<const Value> a) -> Value {
+        bool on = a.empty() || ev::toBool(a[0]);
+        auto it = s_handleStates.find(id);
+        if (it != s_handleStates.end() && it->second->engine) {
+            if (auto* host = it->second->engine->windowHostById(id)) {
+                if (host->window) return ev::fromBool(host->window->flash(on));
+            }
+        }
+        return ev::fromBool(true);
     });
 
     b.def("focus", 0, [id](Value, std::span<const Value>) -> Value {

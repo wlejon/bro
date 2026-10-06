@@ -13,8 +13,8 @@ namespace bro::platform {
 Window::Window(const std::string& title, uint32_t width, uint32_t height,
                bool hidden, bool resizable, bool vsync, bool borderless,
                GraphicsBackend backend)
-    : m_width(width), m_height(height), m_vsyncPref(vsync), m_backend(backend),
-      m_borderless(borderless)
+    : m_title(title), m_width(width), m_height(height), m_vsyncPref(vsync),
+      m_borderless(borderless), m_backend(backend)
 {
     // SDL library lifetime is refcounted across all windows (SdlRuntime);
     // this primary window holds one reference like any other.
@@ -111,6 +111,7 @@ std::unique_ptr<Window> Window::createSecondary(const SecondaryConfig& cfg) {
     // unique_ptr can't reach the private default ctor through make_unique.
     std::unique_ptr<Window> win(new Window());
     win->m_window = sdlWin;
+    win->m_title = cfg.title;
     win->m_width = cfg.width;
     win->m_height = cfg.height;
     win->m_vsyncPref = false;  // secondary swaps run at interval 0 by policy
@@ -204,12 +205,48 @@ bool Window::presentPixels(const void* pixels, int width, int height, int stride
 }
 
 void Window::setTitle(const std::string& title) {
+    m_title = title;
     if (m_window) {
         SDL_SetWindowTitle(m_window, title.c_str());
     }
 }
 
+std::string Window::getTitle() const {
+    if (m_window) {
+        const char* t = SDL_GetWindowTitle(m_window);
+        if (t) return std::string(t);
+    }
+    return m_title;
+}
+
+float Window::getOpacity() const {
+    if (m_window) {
+        float op = SDL_GetWindowOpacity(m_window);
+        if (op >= 0.0f) return op;
+    }
+    return m_opacity;
+}
+
+void Window::setOpacity(float opacity) {
+    m_opacity = std::max(0.0f, std::min(1.0f, opacity));
+    if (m_window) {
+        SDL_SetWindowOpacity(m_window, m_opacity);
+    }
+}
+
+bool Window::isFocused() const {
+    if (!m_window) return m_headlessFocused;
+    return (SDL_GetWindowFlags(m_window) & SDL_WINDOW_INPUT_FOCUS) != 0;
+}
+
+bool Window::flash(bool on) {
+    m_flashing = on;
+    if (!m_window) return true;
+    return SDL_FlashWindow(m_window, on ? SDL_FLASH_UNTIL_FOCUSED : SDL_FLASH_CANCEL);
+}
+
 void Window::setFullscreen(bool fullscreen) {
+    m_fullscreen = fullscreen;
     if (!m_window) return;
     if (!SDL_SetWindowFullscreen(m_window, fullscreen)) {
         LOG_ERROR("Failed to set fullscreen: %s", SDL_GetError());
@@ -352,8 +389,8 @@ bool Window::isMaximized() const {
 }
 
 bool Window::isFullscreen() const {
-    if (!m_window) return false;
-    return (SDL_GetWindowFlags(m_window) & SDL_WINDOW_FULLSCREEN) != 0;
+    if (!m_window) return m_fullscreen;
+    return (SDL_GetWindowFlags(m_window) & SDL_WINDOW_FULLSCREEN) != 0 || m_fullscreen;
 }
 
 std::vector<DisplayInfo> Window::getDisplays() const {
