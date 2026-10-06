@@ -24,6 +24,11 @@
 #include "scene/scene_renderer.h"
 #endif
 
+#if BRO_WITH_DMABUF
+#include "render/vulkan_dmabuf_importer.h"
+#include "render/kms_direct_presenter.h"
+#endif
+
 #include <include/core/SkCanvas.h>
 #include <include/core/SkImage.h>
 #include <include/core/SkPaint.h>
@@ -231,6 +236,23 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, int offsetY) {
                     placeLayerImage(entry.context->drawingBuffer(), quad);
                     return;
                 }
+            },
+            [&](const render::DmabufLayerSource& src) {
+#if BRO_WITH_DMABUF
+                if (!vulkanPresenter_ || !vulkanPresenter_->dmabufImporter()) return;
+                static uint64_t s_dmabufFrameCounter = 0;
+                ++s_dmabufFrameCounter;
+                auto* buf = vulkanPresenter_->dmabufImporter()->getOrImport(src, s_dmabufFrameCounter);
+                if (!buf || buf->image == VK_NULL_HANDLE) return;
+                if (vulkanPresenter_->kmsDirectPresenter() &&
+                    vulkanPresenter_->kmsDirectPresenter()->canDirectScanout(src, quad, vulkanPresenter_->width(), vulkanPresenter_->height())) {
+                    vulkanPresenter_->kmsDirectPresenter()->directScanout(src);
+                    return;
+                }
+                place(buf->image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, buf->width, buf->height, at.dst(quad), &quad).view = buf->view;
+#else
+                (void)src;
+#endif
             },
         }, layer.content);
     }

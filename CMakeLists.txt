@@ -224,10 +224,12 @@ endmacro()
 set(_d_linux_seat OFF)
 set(_d_linux_wl OFF)
 set(_d_linux_portal OFF)
+set(_d_linux_dmabuf OFF)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(_d_linux_seat ${_d_render})
     set(_d_linux_wl ${_d_render})
     set(_d_linux_portal ${_d_render})
+    set(_d_linux_dmabuf ${_d_render})
 endif()
 
 bro_check_sibling(broconf      _d_svc          _d_conf)
@@ -245,6 +247,7 @@ bro_check_sibling(broportal    _d_linux_portal _d_portal)
 bro_check_sibling(brocompositor _d_render      _d_compositor)
 bro_check_sibling(browl        _d_linux_wl     _d_wl)
 bro_check_sibling(broa11y      _d_render       _d_a11y)
+bro_check_sibling(brodmabuf    _d_linux_dmabuf _d_dmabuf)
 
 # Services (each pulls a vcpkg dependency).
 option(BRO_WITH_NET      "Game networking (GameNetworkingSockets / vcpkg)"   ${_d_svc})
@@ -265,6 +268,7 @@ option(BRO_WITH_PORTAL   "Desktop portal backend handlers (broportal)"          
 option(BRO_WITH_COMPOSITOR "Window-management policy and compositor (brocompositor)" ${_d_compositor})
 option(BRO_WITH_WL         "Wayland client protocol layers and surfaces (browl)"         ${_d_wl})
 option(BRO_WITH_A11Y       "Accessibility tree export and announcements (broa11y)"       ${_d_a11y})
+option(BRO_WITH_DMABUF     "DMA-BUF import and KMS presentation (brodmabuf)"             ${_d_dmabuf})
 # The native <terminal> element: bropty (VT emulation + PTY/ConPTY), its
 # brosearch dependency and brothemes (minimum contrast), plus bromux
 # (persistent sessions) when found; all vcpkg-free siblings. On in app and

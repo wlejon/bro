@@ -11,6 +11,9 @@ class SkSurface;
 
 namespace bro::render {
 
+class VulkanDmabufImporter;
+class KmsDirectPresenter;
+
 /// A CPU layer of a PresentFrame: 32-bit premultiplied pixels.
 struct PresentPixels {
     const void* pixels = nullptr;
@@ -136,6 +139,15 @@ public:
     VkImage offscreenImage() const { return offscreen_.image; }
     VkImageView offscreenView() const { return offscreen_.view; }
 
+    /// DMA-BUF client buffer importer and KMS direct presenter
+    VulkanDmabufImporter* dmabufImporter() { return dmabufImporter_.get(); }
+    const VulkanDmabufImporter* dmabufImporter() const { return dmabufImporter_.get(); }
+    KmsDirectPresenter* kmsDirectPresenter() { return kmsPresenter_.get(); }
+    const KmsDirectPresenter* kmsDirectPresenter() const { return kmsPresenter_.get(); }
+
+    /// Enable direct KMS scanout if a DRM master fd is available
+    bool enableKmsScanout(int drmFd);
+
 private:
     struct Image {
         VkImage image = VK_NULL_HANDLE;
@@ -220,6 +232,9 @@ private:
     VkDescriptorSetLayout blendSetLayout_ = VK_NULL_HANDLE;
     VkPipelineLayout blendPipelineLayout_ = VK_NULL_HANDLE;
     std::map<VkFormat, VkPipeline> blendPipelines_;
+
+    std::unique_ptr<VulkanDmabufImporter> dmabufImporter_;
+    std::unique_ptr<KmsDirectPresenter> kmsPresenter_;
 };
 
 } // namespace bro::render

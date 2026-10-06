@@ -30,7 +30,7 @@ struct HtmlLayer {
 struct UILayer {
     using Content = std::variant<HtmlLayer, render::CanvasLayerSource, render::WebGLLayerSource,
                                  render::SceneLayerSource, render::IframeLayerSource,
-                                 render::TerminalLayerSource>;
+                                 render::TerminalLayerSource, render::DmabufLayerSource>;
     Content content;
     render::LayerQuad quad;  // non-HTML layers
 

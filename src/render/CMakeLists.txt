@@ -87,8 +87,25 @@ else()
     target_compile_definitions(bro_render PRIVATE BRO_WITH_WEBP=0)
 endif()
 
+if(BRO_WITH_DMABUF)
+    target_sources(bro_render PRIVATE
+        vulkan_dmabuf_importer.cpp
+        kms_direct_presenter.cpp
+    )
+    target_link_libraries(bro_render PUBLIC brodmabuf::brodmabuf)
+    target_compile_definitions(bro_render PUBLIC BRO_WITH_DMABUF=1)
+else()
+    target_compile_definitions(bro_render PUBLIC BRO_WITH_DMABUF=0)
+endif()
+
 if(BRO_BUILD_TESTS)
     add_executable(bro_vulkan_test tests/test_vulkan.cpp)
     target_link_libraries(bro_vulkan_test PRIVATE bro_render bro_platform bro_util skia Vulkan::Vulkan)
     target_include_directories(bro_vulkan_test PRIVATE ${bro_SOURCE_DIR}/src)
+
+    if(BRO_WITH_DMABUF)
+        add_executable(bro_vulkan_dmabuf_test tests/test_dmabuf_presenter.cpp)
+        target_link_libraries(bro_vulkan_dmabuf_test PRIVATE bro_render bro_platform bro_util skia Vulkan::Vulkan brodmabuf::brodmabuf)
+        target_include_directories(bro_vulkan_dmabuf_test PRIVATE ${bro_SOURCE_DIR}/src)
+    endif()
 endif()

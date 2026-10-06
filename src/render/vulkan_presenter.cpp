@@ -3,6 +3,11 @@
 #include "render/vulkan_util.h"
 #include "util/log.h"
 
+#if BRO_WITH_DMABUF
+#include "render/vulkan_dmabuf_importer.h"
+#include "render/kms_direct_presenter.h"
+#endif
+
 #include <include/core/SkColorType.h>
 #include <include/core/SkPixmap.h>
 #include <include/core/SkSurface.h>
@@ -79,7 +84,24 @@ bool VulkanPresenter::init() {
         width_ = swapchain_->extent().width;
         height_ = swapchain_->extent().height;
     }
+#if BRO_WITH_DMABUF
+    dmabufImporter_ = std::make_unique<VulkanDmabufImporter>(context_);
+    dmabufImporter_->init();
+    kmsPresenter_ = std::make_unique<KmsDirectPresenter>();
+#endif
     return initBlendResources();
+}
+
+bool VulkanPresenter::enableKmsScanout(int drmFd) {
+#if BRO_WITH_DMABUF
+    if (!kmsPresenter_) {
+        kmsPresenter_ = std::make_unique<KmsDirectPresenter>();
+    }
+    return kmsPresenter_->init(drmFd);
+#else
+    (void)drmFd;
+    return false;
+#endif
 }
 
 void VulkanPresenter::cleanup() {

@@ -479,6 +479,22 @@ bool VulkanContext::createLogicalDevice() {
         }
     }
 
+#if defined(__linux__)
+    auto enableDeviceIfAvailable = [&](const char* ext) {
+        if (hasExtension(availExts, ext)) {
+            if (std::find_if(enabledExtensions.begin(), enabledExtensions.end(),
+                             [ext](const char* e) { return std::strcmp(e, ext) == 0; }) == enabledExtensions.end()) {
+                enabledExtensions.push_back(ext);
+            }
+        }
+    };
+    enableDeviceIfAvailable(VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME);
+    enableDeviceIfAvailable(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
+    enableDeviceIfAvailable(VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME);
+    enableDeviceIfAvailable(VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME);
+    enableDeviceIfAvailable(VK_KHR_IMAGE_FORMAT_LIST_EXTENSION_NAME);
+#endif
+
     // Selection guaranteed dynamicRendering and timelineSemaphore;
     // synchronization2 is enabled only where the device has it.
     const DeviceFeatureSupport support = queryFeatureSupport(physicalDevice_);
