@@ -54,5 +54,5 @@ Every repo is listed in [ecosystem.md](ecosystem.md). This page records where th
    - file manager (brovfs, brothumb)
    - settings (broconf, brodisplays, brothemes)
    - lock screen and greeter (session lock, brocred authentication)
-4. **brocompositor gap audit** against what a daily-driver session needs: protocols, multi-monitor, HiDPI, damage, input methods, clipboard and drag-and-drop across clients.
-5. **Session and app model:** launching and tracking DE apps, single-instance and IPC between them, autostart, and permissions (portal-style) for apps that are not trusted.
+4. **[DONE] brocompositor gap audit:** verified and tested across protocols: multi-monitor layout, fractional scaling, per-frame damage tracking, input methods (text-input-v3/input-method-v2), clipboard and data-control across clients, screencopy/capture, and gamma control.
+5. **[DONE] Session and app model:** process launch and tracking via broapps, cross-platform single-instance with argument forwarding (`bro.window.requestSingleInstance`), IPC sockets, autostart via broseat, and desktop trust boundary permissions.
