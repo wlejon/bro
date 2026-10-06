@@ -16,6 +16,8 @@ function waitFor(pred, what, ms) {
 
 if (!bro.terminal || !bro.terminal.available) {
     skipTest('<terminal> is compiled out of this build (BRO_WITH_TERMINAL)');
+} else if (!bro.terminal.stats().layered) {
+    skipTest('BRO_TERMINAL_LAYER=0: terminals are painted inline');
 } else {
     const note = document.createElement('div');
     note.textContent = 'page text 0';
