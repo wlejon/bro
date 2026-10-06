@@ -20,6 +20,7 @@
 
 #if BRO_WITH_TERMINAL
 #include "layout/el_terminal_impl.h"
+#include "terminal/term_cwd.h"
 #endif
 
 namespace bro::layout {
@@ -229,7 +230,9 @@ int ElTerminal::rows() const { return impl_->session->rows(); }
 std::string ElTerminal::screenText() const { return impl_->session->screenText(); }
 std::string ElTerminal::scrollbackText() const { return impl_->session->scrollbackText(); }
 std::string ElTerminal::title() const { return impl_->session->title(); }
-std::string ElTerminal::cwd() const { return impl_->session->cwd(); }
+std::string ElTerminal::cwd() const { return terminal::cwdFromUri(impl_->session->cwd()).path; }
+std::string ElTerminal::cwdUri() const { return impl_->session->cwd(); }
+bool ElTerminal::bracketedPaste() const { return impl_->session->modes().bracketed_paste; }
 std::string ElTerminal::selectionText() const { return impl_->session->selectionText(); }
 std::string ElTerminal::defaultShell() { return terminal::defaultShell(); }
 
@@ -423,6 +426,7 @@ bool ElTerminal::pump(double nowMs, bool focused, float scale) {
 
     autoScroll(nowMs);
     dispatchEvents();
+    dispatchActivity();
 
     if (m.session->exited() && !m.exitDispatched) {
         m.exitDispatched = true;

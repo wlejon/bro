@@ -58,6 +58,7 @@ bool TermSession::muxMouse(const bropty::MouseEvent&) { return false; }
 void TermSession::muxResize(int, int, int, int) {}
 bool TermSession::muxAnswerClipboard(uint64_t, bool, std::string_view) { return false; }
 void TermSession::muxSetBasePalette(const bropty::Palette&) {}
+void TermSession::muxSetDefaultCursor(bropty::CursorShape, bool) {}
 std::string TermSession::muxTitle() const { return {}; }
 std::string TermSession::muxCwd() const { return {}; }
 uint32_t TermSession::muxKittyFlags() const { return 0; }

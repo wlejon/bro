@@ -134,6 +134,9 @@ Value optionsValue(const layout::ElTerminal::Options& o) {
     b.set("clipboard", ev::fromUtf8(o.clipboard));
     b.set("wheelLines", ev::fromDouble(o.wheelLines));
     b.set("imageMemoryLimit", ev::fromDouble(o.imageMemoryLimit));
+    b.set("scrollback", ev::fromDouble(o.scrollback));
+    b.set("cursorStyle", ev::fromUtf8(o.cursorStyle));
+    b.set("cursorBlink", ev::fromBool(o.cursorBlink));
     return b.get();
 }
 
@@ -174,6 +177,23 @@ bool readOptions(Value v, layout::ElTerminal::Options& o, std::string& error) {
         }
         o.imageMemoryLimit = std::floor(d);
     }
+    if (prop(obj, "scrollback", p)) {
+        const double d = ev::isObject(p.get()) ? -1.0 : ev::toDouble(p.get());
+        if (!(d >= 0.0 && d <= 1000000.0)) {
+            error = "scrollback must be a row count from 0 to 1000000";
+            return false;
+        }
+        o.scrollback = std::floor(d);
+    }
+    if (prop(obj, "cursorStyle", p)) {
+        const std::string c = ev::toUtf8(p.get());
+        if (c != "block" && c != "underline" && c != "bar") {
+            error = "cursorStyle must be \"block\", \"underline\" or \"bar\"";
+            return false;
+        }
+        o.cursorStyle = c;
+    }
+    if (prop(obj, "cursorBlink", p)) o.cursorBlink = ev::toBool(p.get());
     if (prop(obj, "clipboard", p)) {
         const std::string c = ev::toUtf8(p.get());
         if (c != "deny" && c != "write" && c != "read-write") {
@@ -409,6 +429,19 @@ void decorateTerminalProto(ObjectBuilder& b) {
     });
     readOnly("title", [](layout::ElTerminal& t) { return ev::fromUtf8(t.title()); });
     readOnly("cwd", [](layout::ElTerminal& t) { return ev::fromUtf8(t.cwd()); });
+    readOnly("cwdUri", [](layout::ElTerminal& t) { return ev::fromUtf8(t.cwdUri()); });
+    readOnly("bracketedPaste", [](layout::ElTerminal& t) { return ev::fromBool(t.bracketedPaste()); });
+    // palette: the colours the program sees (theme + its OSC 4/10/11/12).
+    readOnly("palette", [](layout::ElTerminal& t) {
+        const layout::ElTerminal::Theme p = t.palette();
+        ObjectBuilder o;
+        o.set("foreground", ev::fromUtf8(p.foreground));
+        o.set("background", ev::fromUtf8(p.background));
+        o.set("cursor", ev::fromUtf8(p.cursor));
+        ev::Persistent ansi(hostArrayOf(p.ansi.size(), [&p](size_t i) { return ev::fromUtf8(p.ansi[i]); }));
+        o.set("ansi", ansi.get());
+        return o.get();
+    });
     readOnly("foregroundProcess", [](layout::ElTerminal& t) {
         const auto p = t.foregroundProcess();
         if (!p) return ev::null();

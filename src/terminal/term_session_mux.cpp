@@ -35,6 +35,7 @@ struct TermSession::Mux {
     std::unique_ptr<MuxSource> source;
     std::unique_ptr<bropty::TerminalView> view;
     std::vector<bromux::ClientEvent> events;
+    uint64_t feedSeq = 0;  // the server's state version last seen (remoteUpdates_)
 };
 
 void TermSession::MuxDelete::operator()(Mux* m) const { delete m; }
@@ -119,6 +120,9 @@ bool TermSession::muxAttachLocked(uint64_t id, std::string* error) {
     m.attached = true;
     m.source = std::make_unique<MuxSource>(*inner);
     m.source->setBase(t.palette());  // the theme, as the element last gave it
+    m.source->setDefaultCursor(t.default_cursor_shape(), t.default_cursor_blink());
+    // The attach synced the screen: changes count from here (remoteUpdates_).
+    if (const bromux::ScreenModel* s = m.client->screen(id)) m.feedSeq = s->feed_seq();
     m.view = std::make_unique<bropty::TerminalView>(*m.source);
     view_ = m.view.get();
     src_ = m.source.get();
@@ -250,7 +254,15 @@ bool TermSession::muxPump(Clock::time_point now, bool& published) {
         }
         if (!m.attached) break;
     }
-    if (m.attached) published = maybePublish(now, /*onlyIfConsumed=*/true);
+    if (m.attached) {
+        // A frame that advanced the server's state is the program's output
+        // (or a resize) reaching this mirror: the element's `activity`.
+        if (const bromux::ScreenModel* s = m.client->screen(m.id); s && s->feed_seq() != m.feedSeq) {
+            m.feedSeq = s->feed_seq();
+            remoteUpdates_.fetch_add(1, std::memory_order_relaxed);
+        }
+        published = maybePublish(now, /*onlyIfConsumed=*/true);
+    }
     if (ended) exited_.store(true, std::memory_order_release);
     return false;
 }
@@ -317,6 +329,10 @@ bool TermSession::muxAnswerClipboard(uint64_t request, bool ok, std::string_view
 
 void TermSession::muxSetBasePalette(const bropty::Palette& palette) {
     if (mux_->source) mux_->source->setBase(palette);
+}
+
+void TermSession::muxSetDefaultCursor(bropty::CursorShape shape, bool blink) {
+    if (mux_->source) mux_->source->setDefaultCursor(shape, blink);
 }
 
 std::string TermSession::muxTitle() const {

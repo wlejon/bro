@@ -24,6 +24,7 @@ ElTerminal::~ElTerminal() {
 void ElTerminal::refreshFont() {}
 void ElTerminal::refreshTheme() {}
 void ElTerminal::dispatchEvents() {}
+void ElTerminal::dispatchActivity() {}
 void ElTerminal::autoScroll(double) {}
 void ElTerminal::getContentSize(float& w, float& h) {
     w = float(termIntAttr(elem_, "cols", 80, 1, 1000)) * 8.0f;
@@ -68,6 +69,8 @@ std::string ElTerminal::scrollbackText() const { return {}; }
 std::string ElTerminal::frameText() const { return {}; }
 std::string ElTerminal::title() const { return {}; }
 std::string ElTerminal::cwd() const { return {}; }
+std::string ElTerminal::cwdUri() const { return {}; }
+bool ElTerminal::bracketedPaste() const { return false; }
 std::string ElTerminal::selectionText() const { return {}; }
 std::string ElTerminal::defaultShell() { return {}; }
 ElTerminal::CursorInfo ElTerminal::cursor() const { return {}; }
@@ -110,6 +113,7 @@ bool ElTerminal::denyClipboard(uint64_t) { return false; }
 std::string ElTerminal::pointerShape() const { return {}; }
 void ElTerminal::setOptions(const Options& o) { options_ = o; }
 ElTerminal::Theme ElTerminal::theme() const { return {}; }
+ElTerminal::Theme ElTerminal::palette() const { return {}; }
 void ElTerminal::setTheme(const Theme& t) { scriptTheme_ = t; }
 bool ElTerminal::pump(double, bool, float) { return false; }
 

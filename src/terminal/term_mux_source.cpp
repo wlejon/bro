@@ -31,6 +31,13 @@ void MuxSource::setBase(const bropty::Palette& base) {
     ++themeChanges_;
 }
 
+void MuxSource::setDefaultCursor(bropty::CursorShape shape, bool blink) {
+    if (shape == cursorShape_ && blink == cursorBlink_) return;
+    cursorShape_ = shape;
+    cursorBlink_ = blink;
+    ++themeChanges_;  // the view republishes on a change_count() change
+}
+
 const bropty::Palette& MuxSource::palette() const noexcept {
     const bropty::Palette& server = inner_->palette();
     if (composedTheme_ == themeChanges_ && samePalette(server, composedFrom_)) return composed_;

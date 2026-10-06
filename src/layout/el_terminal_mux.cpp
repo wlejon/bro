@@ -9,6 +9,7 @@
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/shadow_root.h"
+#include "terminal/term_cwd.h"
 #include "terminal/term_mux.h"
 
 #include <algorithm>
@@ -57,7 +58,8 @@ bool ElTerminal::readySession(bool attaching, std::string* error) {
     m.exitDispatched = false;
     m.detachDispatched = false;
     m.haveView = false;
-    m.paletteKey.clear();       // the theme goes to the new session ...
+    m.activityParsed = m.activityRemote = 0;  // the new session counts from zero
+    m.paletteKey.clear();      // the theme goes to the new session ...
     m.imageMemoryLimit = -1.0;  // ... and so does every option
     setOptions(options_);
     return true;
@@ -95,7 +97,7 @@ std::optional<std::vector<ElTerminal::SessionInfo>> ElTerminal::sessions(const s
         i.name = s.name;
         i.command = s.command;
         i.title = s.title;
-        i.cwd = s.cwd;
+        i.cwd = terminal::cwdFromUri(s.cwd).path;  // OSC 7's URI, as the element's `cwd` reads it
         i.pid = s.pid;
         i.running = s.running;
         i.exitCode = s.exitCode;

@@ -33,6 +33,11 @@ public:
 
     // The theme's palette: what entries left at the standard values show.
     void setBase(const bropty::Palette& base);
+    // The element's default cursor style, shown while the server's cursor
+    // is bropty's default (a blinking block): the server's terminal has its
+    // own default, so a program's DECSCUSR 0 there lands on that, and this
+    // shows it as the element's default, as a local session would.
+    void setDefaultCursor(bropty::CursorShape shape, bool blink);
 
     // ---- bropty::RowSource
     [[nodiscard]] int cols() const noexcept override { return inner_->cols(); }
@@ -46,7 +51,14 @@ public:
         return inner_->hyperlink_uri(row, id);
     }
     [[nodiscard]] uint64_t change_count() const noexcept override { return inner_->change_count() + themeChanges_; }
-    [[nodiscard]] bropty::CursorState cursor() const noexcept override { return inner_->cursor(); }
+    [[nodiscard]] bropty::CursorState cursor() const noexcept override {
+        bropty::CursorState c = inner_->cursor();
+        if (c.shape == bropty::CursorShape::Block && c.blink) {
+            c.shape = cursorShape_;
+            c.blink = cursorBlink_;
+        }
+        return c;
+    }
     [[nodiscard]] const bropty::Modes& modes() const noexcept override { return inner_->modes(); }
     // The theme over the server's palette (noexcept: copies of fixed-size arrays).
     [[nodiscard]] const bropty::Palette& palette() const noexcept override;
@@ -62,6 +74,8 @@ private:
     bropty::Palette base_;
     const bropty::Palette standard_;
     uint64_t themeChanges_ = 0;
+    bropty::CursorShape cursorShape_ = bropty::CursorShape::Block;
+    bool cursorBlink_ = true;
     // The composed palette, rebuilt when the server's or the theme's changes.
     mutable bropty::Palette composed_;
     mutable bropty::Palette composedFrom_;

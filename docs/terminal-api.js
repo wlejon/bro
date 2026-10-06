@@ -24,7 +24,10 @@
  * still gets every keydown first, and preventDefault() keeps a key from the
  * program. Copy is Ctrl+Shift+C / Ctrl+Insert, paste Ctrl+Shift+V /
  * Shift+Insert (Cmd+C / Cmd+V on macOS); a paste is bracketed when the
- * program set mode 2004. IME compositions are drawn at the cursor and only
+ * program set mode 2004. The clipboard is the page's, the one
+ * navigator.clipboard and execCommand('copy') use, in headless as in a
+ * window: what a terminal copies the page can read, and the other way round.
+ * IME compositions are drawn at the cursor and only
  * the committed text is sent. Focus changes are reported under mode 1004.
  *
  * Output never runs on the main thread: a parser thread per terminal reads
@@ -78,7 +81,8 @@
  *      --terminal-color-255;
  *   3. what script set through `theme`.
  * The result is the base palette, the one a program's own OSC 4 / 10 / 11 /
- * 12 changes reset to (OSC 104 / 110 / 111 / 112). The font is the element's
+ * 12 changes reset to (OSC 104 / 110 / 111 / 112); `theme` reads it, and
+ * `palette` reads what is in effect with the program's changes over it. The font is the element's
  * CSS font (family with fallback, size, weight, line-height,
  * letter-spacing). Cells are snapped to whole device pixels at the window's
  * pixel density (devicePixelRatio), so the grid stays crisp on HiDPI.
@@ -207,7 +211,8 @@ const terminal = {
    *            exitCode: number|null, cols: number, rows: number, clients: number,
    *            created: number, title: string, cwd: string}[]}
    *   `clients`: how many terminals (here, in other pages or processes, or
-   *   `bromux attach`) are attached; `created` is a Unix time in ms.
+   *   `bromux attach`) are attached; `created` is a Unix time in ms; `cwd`
+   *   is a path, as the element's `cwd` reads OSC 7.
    * @example
    *   // Reattach to every shell left running by an earlier run of this app.
    *   for (const s of bro.terminal.sessions().filter((s) => s.running && s.name.startsWith('myapp:'))) {
@@ -302,8 +307,23 @@ class HTMLTerminalElement extends HTMLElement {
   /** The cursor in screen cells. @type {{row: number, col: number, visible: boolean, blink: boolean, shape: 'block'|'underline'|'bar'}} */
   cursor;
   /** The working directory the shell reported (OSC 7), as a path; "" when
-   *  none. @type {string} */
+   *  none. OSC 7 sends a URI, file://<host>/<path> by convention: the path
+   *  is percent-decoded and ends at a `?` or `#`, and a Windows drive comes
+   *  back in Windows form on every platform (file:///C:/Users/me/My%20Files
+   *  is `C:\Users\me\My Files`; file:///c: is `C:\`); any other path keeps
+   *  its slashes. Another scheme of the same shape (kitty's
+   *  kitty-shell-cwd://host/path) gives its path as written, and a program
+   *  that sends a bare path gets it back unchanged. The host is not part of
+   *  the path: a shell on another machine (over ssh) names its own, which
+   *  `cwdchange` reports. Persistent sessions too, from the server's mirror.
+   *  @type {string} */
   cwd;
+  /** OSC 7 as the program sent it (the URI), "" when none. @type {string} */
+  cwdUri;
+  /** The program turned bracketed paste on (mode 2004): a paste() is
+   *  wrapped in ESC[200~ ... ESC[201~. Persistent sessions too (the mode
+   *  crosses bromux). @type {boolean} */
+  bracketedPaste;
   /** The process that owns the terminal now: the shell at its prompt, the
    *  program it is running while it runs. null before spawn() and after exit.
    *  `name` is what the process goes by (argv[0]'s base name on POSIX, so a
@@ -364,10 +384,30 @@ class HTMLTerminalElement extends HTMLElement {
    *    allows none, 'write' lets a program set the clipboard, and
    *    'read-write' also lets it ask for the clipboard (see clipboardread).
    *  - wheelLines (3, range 1-100): lines one wheel notch scrolls.
+   *  - imageMemoryLimit (335544320, range 0-4 GiB): see "Inline images".
+   *  - scrollback (10000, range 0-1000000): rows of history kept. Applied at
+   *    once: lowering it drops the oldest rows now (with the images and
+   *    shell-integration records on them); raising it keeps more from then
+   *    on. 0 keeps none. A persistent session's history is the server's,
+   *    held to the server's own limit: there the option is kept (and applies
+   *    if the element later spawns a local process) but changes nothing.
+   *  - cursorStyle ('block'), cursorBlink (true): the cursor's default
+   *    shape ('block', 'underline' or 'bar') and blinking. It is what a
+   *    program's DECSCUSR 0 (`CSI 0 SP q`) and a reset (RIS) return to;
+   *    DECSCUSR 1-6 still choose their own. Assigning a different default
+   *    applies it at once, replacing a style the program set (assigning an
+   *    unchanged one, or other options, leaves the program's alone). On a
+   *    persistent session the server's terminal keeps its own default (a
+   *    blinking block); the element shows its default whenever the server's
+   *    cursor is a blinking block, so DECSCUSR 0 there looks the same, and
+   *    a program that asks for a blinking block explicitly (DECSCUSR 1) gets
+   *    the element's default instead.
    * @type {{copyOnSelect: boolean, middleClickPaste: boolean, scrollOnInput: boolean, boldIsBright: boolean,
-   *         minimumContrast: number, ligatures: boolean, clipboard: 'deny'|'write'|'read-write', wheelLines: number}}
+   *         minimumContrast: number, ligatures: boolean, clipboard: 'deny'|'write'|'read-write', wheelLines: number,
+   *         imageMemoryLimit: number, scrollback: number, cursorStyle: 'block'|'underline'|'bar', cursorBlink: boolean}}
    * @example
    *   term.options = { copyOnSelect: true, minimumContrast: 4.5, clipboard: 'read-write' };
+   *   term.options = { scrollback: 50000, cursorStyle: 'bar', cursorBlink: false };
    */
   options;
 
@@ -390,6 +430,21 @@ class HTMLTerminalElement extends HTMLElement {
    *   term.theme = null;                                                      // back to CSS
    */
   theme;
+
+  /**
+   * The colours the program sees: `theme`'s foreground, background, cursor
+   * and ansi, with what the program set over them (OSC 4 for a table entry,
+   * OSC 10 / 11 / 12 for foreground / background / cursor) until it resets
+   * them (OSC 104 / 110 / 111 / 112). Read-only; "#rrggbb" strings, `ansi`
+   * all 256. On a local session a new theme replaces the program's
+   * changes, as in kitty. Persistent sessions too: there the program's
+   * changes come from the server and stay over this element's theme.
+   * @type {{foreground: string, background: string, cursor: string, ansi: string[]}}
+   * @example
+   *   // Paint the tab strip in the colours a program (or a theme script) chose.
+   *   tab.style.background = term.palette.background;
+   */
+  palette;
 
   // ── Scrollback view ──
 
@@ -511,7 +566,24 @@ class HTMLTerminalElement extends HTMLElement {
 /** `keydown` / `keyup` / `composition*` / `paste` / `copy`: the usual DOM
  *  events, before the terminal acts; preventDefault() cancels its action. */
 /** `titlechange`: the program set its title (OSC 0 / 2). detail `{ title }`. */
-/** `cwdchange`: the shell reported its directory (OSC 7). detail `{ cwd }`. */
+/** `cwdchange`: the shell reported its directory (OSC 7). detail
+ *  `{ cwd, uri, host }`: the path as `cwd` reads it, the URI as sent
+ *  (`cwdUri`), and the URI's host ("" for none). */
+/** `activity`: the program produced output. At most one per frame however
+ *  much arrived (a flood is one event a frame, not one per write), and only
+ *  for output: the page's scrolling, selecting and searching, a theme or
+ *  option change, and input that is not echoed fire none. Output is what
+ *  reached the emulator, feed()'s bytes included, since they stand for a
+ *  program's (a socket the page reads, say). A resize that makes the
+ *  program redraw counts, through that redraw. detail `{ bytes }`: the bytes
+ *  parsed since the last `activity`; null on a persistent session, where a
+ *  frame from the server that changed the screen is the signal and the byte
+ *  count is the server's. Typical use: mark a background tab busy without
+ *  polling the screen.
+ *  @example
+ *    term.addEventListener('activity', () => {
+ *      if (!tab.selected) tab.classList.add('busy');
+ *    }); */
 /** `detach`: the element let go of its persistent session (detach(), or it
  *  left the document) while the session's program still runs. detail
  *  `{ sessionId }`. */

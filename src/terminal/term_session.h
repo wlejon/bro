@@ -209,7 +209,22 @@ public:
     [[nodiscard]] std::string pointerShape() const;
     // The theme: what the palette is and what the program's resets return to.
     void setBasePalette(const bropty::Palette& palette);
+    // The palette in effect: the base, with what the program set (OSC 4 /
+    // 10 / 11 / 12) over it; a persistent session's, composed by the mirror.
     [[nodiscard]] bropty::Palette palette() const;
+
+    // ---- host settings (term_session_host.cpp) --------------------------------
+    // History capacity in rows, applied to the emulator now (a lower one
+    // drops the oldest rows). A persistent session's history is the
+    // server's: there this has no effect.
+    void setScrollbackRows(size_t rows);
+    // The cursor style the program's DECSCUSR 0 and RIS return to, applied
+    // now. On a persistent session it is shown while the server's cursor is
+    // at bropty's default (MuxSource::setDefaultCursor).
+    void setDefaultCursor(bropty::CursorShape shape, bool blink);
+    // Changes a persistent session's server reported (bromux frames that
+    // advanced its state): the mirror's counterpart of Stats::bytesParsed.
+    [[nodiscard]] uint64_t remoteUpdates() const noexcept { return remoteUpdates_.load(std::memory_order_relaxed); }
 
     // ---- inline images (kitty graphics, sixel, iTerm2) ----------------------
     // Decoded through broimage (term_session_host.cpp), animated on the
@@ -307,6 +322,7 @@ private:
     void muxResize(int cols, int rows, int cellPxW, int cellPxH);
     bool muxAnswerClipboard(uint64_t request, bool ok, std::string_view data);
     void muxSetBasePalette(const bropty::Palette& palette);
+    void muxSetDefaultCursor(bropty::CursorShape shape, bool blink);
     std::string muxTitle() const;
     std::string muxCwd() const;
     uint32_t muxKittyFlags() const;
@@ -363,6 +379,7 @@ private:
     bool fgFinal_ = false;  // the exit has been reported; no more checks
 
     std::atomic<uint64_t> bytesParsed_{0};
+    std::atomic<uint64_t> remoteUpdates_{0};
     std::atomic<uint64_t> framesPublished_{0};
     std::atomic<uint64_t> syncHolds_{0};
     std::atomic<uint64_t> syncTimeouts_{0};

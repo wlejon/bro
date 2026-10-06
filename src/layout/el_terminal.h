@@ -81,8 +81,9 @@ public:
     void draw(render::Renderer* renderer, float x, float y, float w, float h);
 
     // ---- what the terminal asks of its host ---------------------------------
-    // Installed once by the engine. Headless installs an in-process clipboard
-    // and never opens a link; windowed, the OS clipboard and opener.
+    // Installed once by the engine: the page's clipboard (the one
+    // navigator.clipboard uses, headless too) and the OS opener (headless
+    // never opens a link).
     struct Host {
         // `primary`: the X11 primary selection rather than the clipboard.
         std::function<bool(const std::string& text, bool primary)> writeClipboard;
@@ -155,7 +156,9 @@ public:
     std::string scrollbackText() const;  // history, oldest first
     std::string frameText() const;       // what is presented (the frame last drawn / to draw)
     std::string title() const;
-    std::string cwd() const;             // OSC 7 URI, "" before any
+    std::string cwd() const;             // OSC 7, as a path (terminal/term_cwd.h); "" before any
+    std::string cwdUri() const;          // OSC 7 as the program sent it
+    bool bracketedPaste() const;         // the program set mode 2004
     struct CursorInfo {
         int row = 0, col = 0;
         bool visible = true;
@@ -289,6 +292,10 @@ public:
         std::string clipboard = "write";  // "deny" | "write" | "read-write"
         int wheelLines = 3;
         double imageMemoryLimit = 320.0 * 1024 * 1024;  // decoded image bytes (bropty's quota)
+        double scrollback = 10000;        // history rows (bropty's scrollback_rows)
+        // The cursor style the program's DECSCUSR 0 returns to.
+        std::string cursorStyle = "block";  // "block" | "underline" | "bar"
+        bool cursorBlink = true;
     };
     const Options& options() const { return options_; }
     void setOptions(const Options& o);
@@ -301,6 +308,10 @@ public:
         std::array<std::string, 256> ansi;  // the 16 ANSI colours, then the 256-colour table
     };
     Theme theme() const;        // the resolved colours in effect
+    // The palette the program sees: the theme's foreground, background,
+    // cursor and ansi with the program's OSC 4 / 10 / 11 / 12 over them (the
+    // overlay slots are left empty).
+    Theme palette() const;
     void setTheme(const Theme& t);  // what script set ("" leaves a slot to CSS)
     const Theme& scriptTheme() const { return scriptTheme_; }
 
@@ -322,6 +333,7 @@ private:
     void refreshTheme();
     void flushDeferredKey();
     void dispatchEvents();
+    void dispatchActivity();  // `activity`: the program's output since the last pump
     void autoScroll(double nowMs);
     // Ready the session for a spawn / attach: false (with *error) while one
     // runs, and for a spawn after a process ran here unless it was a

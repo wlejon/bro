@@ -156,6 +156,16 @@ void ElTerminal::refreshTheme() {
 
 ElTerminal::Theme ElTerminal::theme() const { return impl_->resolved; }
 
+ElTerminal::Theme ElTerminal::palette() const {
+    const bropty::Palette p = impl_->session->palette();
+    Theme out;
+    out.foreground = hex(p.foreground);
+    out.background = hex(p.background);
+    out.cursor = hex(p.cursor);
+    for (size_t i = 0; i < 256; ++i) out.ansi[i] = hex(p.colors[i]);
+    return out;
+}
+
 void ElTerminal::setTheme(const Theme& t) {
     scriptTheme_ = t;
     refreshTheme();
@@ -179,6 +189,13 @@ void ElTerminal::setOptions(const Options& o) {
         m.imageMemoryLimit = o.imageMemoryLimit;
         m.session->setImageMemoryLimit(size_t(o.imageMemoryLimit));
     }
+    // Both no-ops while unchanged: assigning an unrelated option must not
+    // undo a cursor style the program chose.
+    m.session->setScrollbackRows(size_t(std::max(0.0, o.scrollback)));
+    const bropty::CursorShape shape = o.cursorStyle == "bar"         ? bropty::CursorShape::Bar
+                                    : o.cursorStyle == "underline" ? bropty::CursorShape::Underline
+                                                                   : bropty::CursorShape::Block;
+    m.session->setDefaultCursor(shape, o.cursorBlink);
     refreshFont();   // ligatures change the cell width
     refreshTheme();  // the colour policy
     m.layerDirty = true;

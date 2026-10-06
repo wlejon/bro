@@ -56,9 +56,16 @@ if (!bro.terminal || !bro.terminal.available) {
     assert(e.length === 1 && e[0].title === 'Hello title', 'titlechange: ' + JSON.stringify(e));
     assert(t.title === 'Hello title', 'title property');
 
+    // OSC 7: the path (decoded), the URI as sent and its host.
     e = eventsOf(t, 'cwdchange', '\x1b]7;file://host/tmp/some%20dir\x1b\\');
-    assert(e.length === 1 && e[0].cwd === 'file://host/tmp/some%20dir', 'cwdchange: ' + JSON.stringify(e));
-    assert(t.cwd === 'file://host/tmp/some%20dir', 'cwd property: ' + t.cwd);
+    assert(e.length === 1 && e[0].cwd === '/tmp/some dir' && e[0].uri === 'file://host/tmp/some%20dir' &&
+           e[0].host === 'host', 'cwdchange: ' + JSON.stringify(e));
+    assert(t.cwd === '/tmp/some dir', 'cwd property: ' + t.cwd);
+    assert(t.cwdUri === 'file://host/tmp/some%20dir', 'cwdUri property: ' + t.cwdUri);
+    e = eventsOf(t, 'cwdchange', '\x1b]7;file:///C:/Users/me/My%20Files\x07');
+    assert(e.length === 1 && e[0].cwd === 'C:\\Users\\me\\My Files' && e[0].host === '',
+           'a Windows drive: ' + JSON.stringify(e));
+    assert(t.cwd === 'C:\\Users\\me\\My Files', 'cwd property, Windows drive: ' + t.cwd);
 
     e = eventsOf(t, 'bell', 'ding\x07');
     assert(e.length === 1, 'bell: ' + e.length);
@@ -101,6 +108,8 @@ if (!bro.terminal || !bro.terminal.available) {
     assert(currentCursor() === 'text', 'an empty OSC 22 returns to the I-beam: ' + currentCursor());
 
     // OSC 52, write-only (the default): writes reach the page, reads do not.
+    // They reach the system clipboard too (the page's): put it back after.
+    const clipboardBefore = navigator.clipboard.__read();
     e = eventsOf(t, 'clipboardwrite', '\x1b]52;c;aGVsbG8=\x07');
     assert(e.length === 1 && e[0].text === 'hello' && e[0].selection === 'c', 'clipboardwrite: ' + JSON.stringify(e));
     e = eventsOf(t, 'clipboardread', '\x1b]52;c;?\x07');
@@ -151,4 +160,5 @@ if (!bro.terminal || !bro.terminal.available) {
                    'the answers: ' + JSON.stringify(rw.screenText()));
         }
     }
+    navigator.clipboard.__write(clipboardBefore);
 }

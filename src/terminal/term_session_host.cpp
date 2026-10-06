@@ -121,6 +121,27 @@ bropty::Palette TermSession::palette() const {
     return src_->palette();
 }
 
+void TermSession::setScrollbackRows(size_t rows) {
+    {
+        std::lock_guard<std::mutex> g(mu_);
+        bropty::Terminal& t = session_.terminal();
+        if (t.scrollback_rows() == rows) return;
+        t.set_scrollback_rows(rows);
+    }
+    wake();  // the next frame shows the shorter history
+}
+
+void TermSession::setDefaultCursor(bropty::CursorShape shape, bool blink) {
+    {
+        std::lock_guard<std::mutex> g(mu_);
+        bropty::Terminal& t = session_.terminal();
+        if (t.default_cursor_shape() == shape && t.default_cursor_blink() == blink) return;
+        t.set_default_cursor_style(shape, blink);
+        if (mux_) muxSetDefaultCursor(shape, blink);
+    }
+    wake();
+}
+
 // ---------------------------------------------------------------------------
 // TerminalHost
 

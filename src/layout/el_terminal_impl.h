@@ -91,6 +91,8 @@ struct ElTerminal::Impl {
     bool haveView = false;
     terminal::SearchStatus lastSearch;
     uint64_t lastCommandsVersion = 0;
+    uint64_t activityParsed = 0;   // the session's bytesParsed at the last `activity`
+    uint64_t activityRemote = 0;   // ... and its remoteUpdates
 
     render::FontRef font() const { return render::FontRef{family, size, weight, italic, ligatures}; }
     terminal::CellMetrics cellMetrics() const {

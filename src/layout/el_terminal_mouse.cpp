@@ -12,6 +12,7 @@
 // is reported (or, on the alternate screen under ?1007, sent as arrow keys).
 
 #include "layout/el_terminal_impl.h"
+#include "terminal/term_cwd.h"
 
 #include "dom/element.h"
 #include "dom/element_geometry.h"
@@ -118,12 +119,10 @@ std::string openTarget(const terminal::LinkInfo& link, const std::string& cwdUri
         if (c == '\\') c = '/';
     const bool absolute = (!p.empty() && p[0] == '/') || (p.size() > 1 && p[1] == ':');
     if (!absolute) {
-        // file://host/dir -> /dir
-        std::string dir;
-        if (cwdUri.rfind("file://", 0) == 0) {
-            const size_t slash = cwdUri.find('/', 7);
-            if (slash != std::string::npos) dir = cwdUri.substr(slash);
-        }
+        // file://host/dir -> /dir (decoded, as `cwd` reads it)
+        std::string dir = terminal::cwdFromUri(cwdUri).path;
+        for (char& c : dir)
+            if (c == '\\') c = '/';
         if (dir.empty()) return link.target;
         if (p.rfind("./", 0) == 0) p = p.substr(2);
         if (p.rfind("~/", 0) == 0) return link.target;

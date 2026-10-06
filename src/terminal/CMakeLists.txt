@@ -9,6 +9,7 @@ add_library(bro_terminal STATIC
     term_session_host.cpp
     term_session_view.cpp
     term_session_foreground.cpp
+    term_cwd.cpp
     term_paint.cpp
     term_paint_color.cpp
     term_paint_images.cpp
@@ -56,6 +57,7 @@ if(BRO_BUILD_TESTS)
         tests/test_session_images.cpp
         tests/test_session_search.cpp
         tests/test_session_mux.cpp
+        tests/test_cwd.cpp
     )
     target_link_libraries(bro_terminal_test PRIVATE bro_terminal broimage::broimage)
     target_include_directories(bro_terminal_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)

@@ -1,8 +1,9 @@
 // What the program says, as DOM events on the <terminal> element, and the
 // view's changes the page tracks (scroll position, search status).
 //
+//   activity       {bytes}                       output since the last pump (null bytes: persistent)
 //   titlechange    {title}                       OSC 0 / 2
-//   cwdchange      {cwd}                         OSC 7 (a file:// URI)
+//   cwdchange      {cwd, uri, host}              OSC 7 (the path, the URI as sent, its host)
 //   bell           {}                            BEL
 //   notification   {title, body, id, source, urgency}  OSC 9 / 777 / 99
 //   progress       {state, value}                OSC 9;4
@@ -20,6 +21,7 @@
 // policy decides whether either reaches the page at all (term_session_host.cpp).
 
 #include "layout/el_terminal_impl.h"
+#include "terminal/term_cwd.h"
 
 #include "dom/element.h"
 #include "dom/event.h"
@@ -94,6 +96,25 @@ std::string viewJson(const terminal::ViewState& v) {
 
 } // namespace
 
+// The program produced output since the last pump: one `activity` a frame at
+// most, however much arrived. Output is what the emulator parsed (the PTY's
+// bytes, and feed()'s, which stand for a program's), or for a persistent
+// session a frame from the server that advanced its state. The page's own
+// scrolling, selection and searching parse nothing and do not count.
+void ElTerminal::dispatchActivity() {
+    Impl& m = *impl_;
+    if (!elem_) return;
+    const uint64_t parsed = m.session->stats().bytesParsed;
+    const uint64_t remote = m.session->remoteUpdates();
+    if (parsed == m.activityParsed && remote == m.activityRemote) return;
+    const uint64_t bytes = parsed - m.activityParsed;
+    m.activityParsed = parsed;
+    m.activityRemote = remote;
+    // A persistent session's byte count is the server's, not known here.
+    termDispatch(elem_, "activity",
+                 "{\"bytes\":" + (m.session->persistent() ? std::string("null") : std::to_string(bytes)) + "}");
+}
+
 bool ElTerminal::takeCursorChanged() {
     const bool c = impl_->cursorChanged;
     impl_->cursorChanged = false;
@@ -109,9 +130,13 @@ void ElTerminal::dispatchEvents() {
             case K::Title:
                 termDispatch(elem_, "titlechange", "{\"title\":" + termJsonString(e.text) + "}");
                 break;
-            case K::Cwd:
-                termDispatch(elem_, "cwdchange", "{\"cwd\":" + termJsonString(e.text) + "}");
+            case K::Cwd: {
+                const terminal::CwdLocation where = terminal::cwdFromUri(e.text);
+                termDispatch(elem_, "cwdchange",
+                             "{\"cwd\":" + termJsonString(where.path) + ",\"uri\":" + termJsonString(e.text) +
+                                 ",\"host\":" + termJsonString(where.host) + "}");
                 break;
+            }
             case K::Bell:
                 termDispatch(elem_, "bell", "{}");
                 break;
