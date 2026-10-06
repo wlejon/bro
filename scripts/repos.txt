@@ -60,5 +60,6 @@ browl           desktop   submodule  public   linux            -
 broportal       desktop   submodule  public   linux            brodbus
 broworkshop     app       -          public   win,linux,mac    bro
 broterm         app       -          public   win,linux,mac    bro
+helm            app       -          public   win,linux,mac    bro
 ffmpeg-bro      app       -          public   win,linux,mac    bro
 broparity       tool      -          public   win,linux,mac    bro

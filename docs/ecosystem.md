@@ -9,7 +9,7 @@ All repositories are at `github.com/wlejon/<name>` under the MIT license unless 
 ## The layers
 
 ```
-apps          broworkshop · broterm · ffmpeg-bro            (tools: broparity)
+apps          broworkshop · broterm · helm · ffmpeg-bro     (tools: broparity)
                  │ run on / link
 runtime       bro ──────────────────────────────┐
                  │ links                        │ runs all JavaScript through
@@ -90,6 +90,7 @@ Standalone C++20 libraries for the desktop environment. bro mounts their JavaScr
 |------|------|------------|-----------|
 | [broworkshop](https://github.com/wlejon/broworkshop) | The launcher and starter apps (games, tools, demos, AI labs) that show what the engine does. Run by bro, not built against it | bro | Windows, Linux, macOS |
 | [broterm](https://github.com/wlejon/broterm) | The terminal app: tabs, splits, profiles, shell integration, inline images. Its own executable linking the bro engine; the first app of the desktop environment | bro | Windows, Linux, macOS |
+| [helm](https://github.com/wlejon/helm) | The desktop environment shell: top panel, status popups, spotlight fuzzy launcher, notification center, and session lock screen. Standalone executable linking bro_engine | bro | Windows, Linux, macOS |
 | [ffmpeg-bro](https://github.com/wlejon/ffmpeg-bro) | A GUI for ffmpeg: in-process playback, a timeline, a filtergraph editor, exports. GPLv3: it links bro, and bro never links GPL code | bro | Windows, Linux, macOS |
 | [broparity](https://github.com/wlejon/broparity) | Rendering parity between bro and Chromium: pixel and layout-tree diffs over small HTML cases ([live report](https://wlejon.github.io/broparity/)) | bro (`bro-headless`) | Windows, Linux, macOS |
 
