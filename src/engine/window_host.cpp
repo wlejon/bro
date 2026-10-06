@@ -189,6 +189,10 @@ void Engine::processPendingWindowHosts() {
         }
 
         h->window = platform::Window::createSecondary(cfg);
+        if (!h->window && cfg.backend != platform::GraphicsBackend::Software) {
+            cfg.backend = platform::GraphicsBackend::Software;
+            h->window = platform::Window::createSecondary(cfg);
+        }
         if (!h->window) {
             LOG_ERROR("bro.window.open: secondary window creation failed (id=%llu)",
                       static_cast<unsigned long long>(h->id));

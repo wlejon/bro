@@ -174,12 +174,24 @@ Engine::Engine(const EngineConfig& config)
     // - Server: never initializes graphics.
     if (displayMode_ == DisplayMode::Headless) {
         try {
-            window_ = std::make_unique<platform::Window>("Bro",
-                static_cast<uint32_t>(gfx.width),
-                static_cast<uint32_t>(gfx.height), /*hidden=*/true,
-                gfx.resizable, gfx.vsync, config.graphics.borderless,
-                config.graphics.useGPU ? platform::GraphicsBackend::Vulkan
-                                       : platform::GraphicsBackend::Software);
+            const auto backend = config.graphics.useGPU ? platform::GraphicsBackend::Vulkan
+                                                        : platform::GraphicsBackend::Software;
+            try {
+                window_ = std::make_unique<platform::Window>("Bro",
+                    static_cast<uint32_t>(gfx.width),
+                    static_cast<uint32_t>(gfx.height), /*hidden=*/true,
+                    gfx.resizable, gfx.vsync, config.graphics.borderless, backend);
+            } catch (const std::exception& e) {
+                // When Vulkan window creation is not supported by the SDL video driver (e.g. dummy driver
+                // on headless Linux), fall back to a software window so headless still has a primary window.
+                LOG_INFO("Headless window creation with %s backend failed (%s); falling back to Software backend",
+                         backend == platform::GraphicsBackend::Vulkan ? "Vulkan" : "Software", e.what());
+                window_ = std::make_unique<platform::Window>("Bro",
+                    static_cast<uint32_t>(gfx.width),
+                    static_cast<uint32_t>(gfx.height), /*hidden=*/true,
+                    gfx.resizable, gfx.vsync, config.graphics.borderless,
+                    platform::GraphicsBackend::Software);
+            }
 
             const auto& wcfg = config.graphics;
             if (wcfg.alwaysOnTop) window_->setAlwaysOnTop(true);
