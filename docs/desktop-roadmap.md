@@ -53,7 +53,7 @@ Every repo is listed in [ecosystem.md](ecosystem.md). This page records where th
 
 ## Open: foundational pieces for the desktop
 
-1. **JS bindings for the desktop libraries.** None of brosys, brovfs, brodisplays, broapps, brothumb, brocred, broconf, brothemes, brokeys, broa11y or broportal has a `<name>_api` yet, so bro apps cannot use them. The binding convention is the engine siblings' `src/api/` plus `installSiblingApis`.
+1. **JS bindings for the desktop libraries.** None of brosys, brovfs, brodisplays, broapps, brothumb, brocred, broconf, brothemes, brokeys, broa11y or broportal has a `<name>_api` yet, so bro apps cannot use them. The binding convention is the engine siblings' `src/api/` plus `installSiblingApis`. Plan, namespaces, the trust model and the order of work: [desktop-sibling-apis.md](desktop-sibling-apis.md).
 2. **bro on Linux as the compositor:** a nested compositor first (client buffers via brodmabuf, with fences), then bro owning the screen (composited KMS output, input through broseat and libinput), then browl shell surfaces, then XWayland. A prototype (`722ea9a0`) is on halo, on branch `halo-substrate-prototype`. It is reference only: DesktopPlatform is not wired into the engine, fences are ignored, and only direct scanout works.
 3. **An accessibility tree out of bro:** the DOM has to become a broa11y tree (UIA, AT-SPI, NSAccessibility).
 4. **One D-Bus layer:** brosys, brocred, broseat and broportal each carry their own sd-bus code. Unify them in one library.
