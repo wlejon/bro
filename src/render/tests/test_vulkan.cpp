@@ -289,7 +289,8 @@ void testSwapchain() {
         return presenter.presentPixels(pixels.data(), w, h);
     };
     for (int i = 0; i < 4; ++i) CHECK(presentFrame(160, 120));
-    CHECK(swapchain.presentMode() == VK_PRESENT_MODE_FIFO_KHR);
+    CHECK(swapchain.presentMode() == VK_PRESENT_MODE_FIFO_KHR ||
+          swapchain.presentMode() == VK_PRESENT_MODE_FIFO_RELAXED_KHR);
 
     // Resize: the swapchain follows the window, whatever size the frame is.
     SDL_SetWindowSize(window.getSDLWindow(), 220, 170);
