@@ -223,6 +223,9 @@ option(BRO_WITH_CRED     "Lock screen auth, biometrics, secrets, polkit (brocred
 option(BRO_WITH_SYS      "System services: power, audio, network, bluetooth, tray (brosys)" ${_d_render})
 option(BRO_WITH_DISPLAYS "Display configuration, modes, night light, brightness (brodisplays)" ${_d_render})
 option(BRO_WITH_PORTAL   "Desktop portal backend handlers (broportal)"                      ${_d_render})
+option(BRO_WITH_COMPOSITOR "Window-management policy and compositor (brocompositor)" ${_d_render})
+option(BRO_WITH_WL         "Wayland client protocol layers and surfaces (browl)"         ${_d_render})
+option(BRO_WITH_A11Y       "Accessibility tree export and announcements (broa11y)"       ${_d_render})
 # The native <terminal> element: bropty (VT emulation + PTY/ConPTY), its
 # brosearch dependency and brothemes (minimum contrast), plus bromux
 # (persistent sessions) when found; all vcpkg-free siblings. On in app and
@@ -368,13 +371,16 @@ set(BROAPPS_ENABLE_API      ON CACHE BOOL "Build Bronze JavaScript API for broap
 set(BROVFS_ENABLE_API       ON CACHE BOOL "Build Bronze JavaScript API for brovfs" FORCE)
 set(BROPORTAL_ENABLE_API    ON CACHE BOOL "Build Bronze JavaScript API for broportal" FORCE)
 set(BRODISPLAYS_ENABLE_API  ON CACHE BOOL "Build Bronze JavaScript API for brodisplays" FORCE)
+set(BROCOMPOSITOR_ENABLE_API ON CACHE BOOL "Build Bronze JavaScript API for brocompositor" FORCE)
+set(BROWL_ENABLE_API         ON CACHE BOOL "Build Bronze JavaScript API for browl" FORCE)
+set(BROA11Y_ENABLE_API       ON CACHE BOOL "Build Bronze JavaScript API for broa11y" FORCE)
 
 # Stamp every feature flag as a 0/1 compile definition so C++ can `#if` on it.
 # Applied to the targets that carry feature-gated code (bro_engine, bro_scene,
 # bro_bronze_host). Uses the #if BRO_WITH_X convention.
 set(BRO_FEATURE_FLAGS
     3D PHYSICS AUDIO GAMEAI FLORA
-    NET VIDEO STEAM TERMINAL CONF THEMES KEYS SEARCH APPS VFS THUMB SEAT CRED SYS DISPLAYS PORTAL
+    NET VIDEO STEAM TERMINAL CONF THEMES KEYS SEARCH APPS VFS THUMB SEAT CRED SYS DISPLAYS PORTAL COMPOSITOR WL A11Y
     TENSOR TENSOR_CUDA TENSOR_METAL TENSOR_VULKAN LM DIFFUSION VISION SOUNDML TRIPOSPLAT GAMEAI_NN
     BRONZE)
 function(bro_apply_feature_defs target)

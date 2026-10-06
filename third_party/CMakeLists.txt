@@ -625,6 +625,48 @@ if(BRO_WITH_PORTAL AND NOT TARGET broportal)
     endif()
 endif()
 
+# --- brocompositor ---
+if(BRO_WITH_COMPOSITOR AND NOT TARGET brocompositor)
+    set(BROCOMPOSITOR_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    bro_default_sibling_dir(brocompositor _brocompositor_default)
+    set(BROCOMPOSITOR_DIR "${_brocompositor_default}" CACHE PATH "Path to standalone brocompositor repo")
+    if(EXISTS "${BROCOMPOSITOR_DIR}/CMakeLists.txt")
+        message(STATUS "brocompositor: using standalone repo at ${BROCOMPOSITOR_DIR}")
+        add_subdirectory("${BROCOMPOSITOR_DIR}" "${CMAKE_BINARY_DIR}/brocompositor" EXCLUDE_FROM_ALL)
+    elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/brocompositor/CMakeLists.txt")
+        message(STATUS "brocompositor: using submodule at third_party/brocompositor")
+        add_subdirectory(brocompositor EXCLUDE_FROM_ALL)
+    endif()
+endif()
+
+# --- browl ---
+if(BRO_WITH_WL AND NOT TARGET browl)
+    set(BROWL_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    bro_default_sibling_dir(browl _browl_default)
+    set(BROWL_DIR "${_browl_default}" CACHE PATH "Path to standalone browl repo")
+    if(EXISTS "${BROWL_DIR}/CMakeLists.txt")
+        message(STATUS "browl: using standalone repo at ${BROWL_DIR}")
+        add_subdirectory("${BROWL_DIR}" "${CMAKE_BINARY_DIR}/browl" EXCLUDE_FROM_ALL)
+    elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/browl/CMakeLists.txt")
+        message(STATUS "browl: using submodule at third_party/browl")
+        add_subdirectory(browl EXCLUDE_FROM_ALL)
+    endif()
+endif()
+
+# --- broa11y ---
+if(BRO_WITH_A11Y AND NOT TARGET broa11y)
+    set(BROA11Y_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    bro_default_sibling_dir(broa11y _broa11y_default)
+    set(BROA11Y_DIR "${_broa11y_default}" CACHE PATH "Path to standalone broa11y repo")
+    if(EXISTS "${BROA11Y_DIR}/CMakeLists.txt")
+        message(STATUS "broa11y: using standalone repo at ${BROA11Y_DIR}")
+        add_subdirectory("${BROA11Y_DIR}" "${CMAKE_BINARY_DIR}/broa11y" EXCLUDE_FROM_ALL)
+    elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/broa11y/CMakeLists.txt")
+        message(STATUS "broa11y: using submodule at third_party/broa11y")
+        add_subdirectory(broa11y EXCLUDE_FROM_ALL)
+    endif()
+endif()
+
 # --- Jolt Physics ---
 if(BRO_WITH_PHYSICS)
 set(USE_STATIC_MSVC_RUNTIME_LIBRARY OFF CACHE BOOL "" FORCE)  # match bro's /MD runtime

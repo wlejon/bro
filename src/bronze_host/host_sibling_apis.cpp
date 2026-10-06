@@ -109,6 +109,15 @@
 #if BRO_WITH_PORTAL
 #include <broportal/api.h>
 #endif
+#if BRO_WITH_COMPOSITOR
+#include <brocompositor/api.h>
+#endif
+#if BRO_WITH_WL
+#include <browl/api.h>
+#endif
+#if BRO_WITH_A11Y
+#include <broa11y/api.h>
+#endif
 #include "api/api.h"  // brokit::api::resolveAssetPath
 #include <broimage/api.h>
 
@@ -573,6 +582,48 @@ void installSiblingApis(engine::Engine& engine) {
                 if (ev::microtasksPending()) ev::drainMicrotasks();
             });
             engine.addShutdownHook([] { broportal::api::shutdownPortalAsync(); });
+        }
+    }
+#endif
+#if BRO_WITH_COMPOSITOR
+    brocompositor::api::installCompositor();
+    {
+        static bool compositorHooksInstalled = false;
+        if (!compositorHooksInstalled) {
+            compositorHooksInstalled = true;
+            engine.addFramePump([] {
+                brocompositor::api::tickCompositorAsync();
+                if (ev::microtasksPending()) ev::drainMicrotasks();
+            });
+            engine.addShutdownHook([] { brocompositor::api::shutdownCompositorAsync(); });
+        }
+    }
+#endif
+#if BRO_WITH_WL
+    browl::api::installWl();
+    {
+        static bool wlHooksInstalled = false;
+        if (!wlHooksInstalled) {
+            wlHooksInstalled = true;
+            engine.addFramePump([] {
+                browl::api::tickWlAsync();
+                if (ev::microtasksPending()) ev::drainMicrotasks();
+            });
+            engine.addShutdownHook([] { browl::api::shutdownWlAsync(); });
+        }
+    }
+#endif
+#if BRO_WITH_A11Y
+    broa11y::api::installA11y();
+    {
+        static bool a11yHooksInstalled = false;
+        if (!a11yHooksInstalled) {
+            a11yHooksInstalled = true;
+            engine.addFramePump([] {
+                broa11y::api::tickA11yAsync();
+                if (ev::microtasksPending()) ev::drainMicrotasks();
+            });
+            engine.addShutdownHook([] { broa11y::api::shutdownA11yAsync(); });
         }
     }
 #endif

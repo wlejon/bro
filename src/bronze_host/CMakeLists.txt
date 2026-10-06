@@ -475,6 +475,18 @@ if(BRO_WITH_PORTAL)
     target_link_libraries(bro_bronze_host PUBLIC broportal broportal_api)
 endif()
 
+if(BRO_WITH_COMPOSITOR)
+    target_link_libraries(bro_bronze_host PUBLIC brocompositor brocompositor_api)
+endif()
+
+if(BRO_WITH_WL)
+    target_link_libraries(bro_bronze_host PUBLIC browl browl_api)
+endif()
+
+if(BRO_WITH_A11Y)
+    target_link_libraries(bro_bronze_host PUBLIC broa11y broa11y_api)
+endif()
+
 if(BRO_WITH_WEBP)
     target_link_libraries(bro_bronze_host PUBLIC bro_webp)
 endif()

@@ -352,6 +352,15 @@ void installBroRoots(engine::Engine& engine) {
 #if !BRO_WITH_PORTAL
     setUnavailable("portal", "BRO_WITH_PORTAL");
 #endif
+#if !BRO_WITH_COMPOSITOR
+    setUnavailable("compositor", "BRO_WITH_COMPOSITOR");
+#endif
+#if !BRO_WITH_WL
+    setUnavailable("wl", "BRO_WITH_WL");
+#endif
+#if !BRO_WITH_A11Y
+    setUnavailable("a11y", "BRO_WITH_A11Y");
+#endif
     // Privileged desktop shell namespaces:
     // If not granted to this app by the desktop trust model, install the unavailable
     // namespace stub so that bro.<ns>.available === false and every call throws.
