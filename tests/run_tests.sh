@@ -351,7 +351,8 @@ fi
 # BRO_BUILD_TESTS). Listed by name so a renamed or dropped one is noticed here.
 NATIVE_TESTS=(bro_vulkan_test bro_vulkan_scene_test bro_vulkan_scene_passes_test
               bro_vulkan_webgl_test bro_tile_test bro_mediaclocktest
-              bro_mediabackendtest bro_videoencodetest bro_terminal_test)
+              bro_mediabackendtest bro_videoencodetest bro_terminal_test
+              bro_a11y_test)
 BRO_DIR="$(dirname "$BRO")"
 EXE_SUFFIX=""
 [[ "$BRO" == *.exe ]] && EXE_SUFFIX=".exe"

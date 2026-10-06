@@ -48,6 +48,9 @@
 #include "canvas/canvas_scene.h"
 #include "webgl/webgl2_context.h"
 #include "dom/document.h"
+#if BRO_WITH_A11Y
+#include "a11y/a11y_bridge.h"
+#endif
 #include "dom/element.h"
 #include "dom/event.h"
 #include "layout/draw_traversal.h"
@@ -502,6 +505,10 @@ void Engine::initAppRealm() {
                                  static_cast<float>(contentHeight()), *textMetrics_);
         updateDocumentHeight();
         syncIframes();
+#if BRO_WITH_A11Y
+        a11yBridge_ = std::make_unique<a11y::AccessibilityBridge>();
+        a11yBridge_->initialize(document_.get());
+#endif
     }
 
     // bro-server runs its server script, not the page: index.html's scripts

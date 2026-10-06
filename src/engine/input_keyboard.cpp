@@ -5,6 +5,9 @@
 #include "engine/key_mapping.h"
 #include "platform/clipboard.h"
 #include "platform/sdl_window.h"
+#if BRO_WITH_A11Y
+#include "a11y/a11y_bridge.h"
+#endif
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/range.h"
@@ -104,6 +107,11 @@ void Engine::handleProgrammaticFocus(dom::Document* doc, dom::Element* oldEl,
     updateTextInputArea();
     markAppBaseDirty();
     uiDirty_ = true;
+#if BRO_WITH_A11Y
+    if (a11yBridge_) {
+        a11yBridge_->onFocusChanged(newEl);
+    }
+#endif
 }
 
 bool Engine::handleGlobalHotkey(int keycode, int mod, bool repeat) {
@@ -552,6 +560,11 @@ void Engine::advanceFocus(bool reverse) {
     document_->setActiveElement(nextEl);
     dispatchFocusEvents(activeEl, nextEl);
     armValueChange(nextEl);
+#if BRO_WITH_A11Y
+    if (a11yBridge_) {
+        a11yBridge_->onFocusChanged(nextEl);
+    }
+#endif
 
     auto* newInput = getElInput(nextEl);
     auto* newTa = getElTextarea(nextEl);

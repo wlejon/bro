@@ -11,6 +11,9 @@
 #include "api/fs_watch.h"
 
 #include "canvas/canvas_scene.h"
+#if BRO_WITH_A11Y
+#include "a11y/a11y_bridge.h"
+#endif
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/event.h"
@@ -94,6 +97,9 @@ void Engine::shutdown() {
     closeAllGamepads();
     destroyAllWindowHosts();
     removeModalEventWatch();
+#if BRO_WITH_A11Y
+    if (a11yBridge_) a11yBridge_->shutdown();
+#endif
 }
 
 Engine::~Engine() {
@@ -162,6 +168,9 @@ Engine::~Engine() {
     audioInference_.reset();
     SceneAudioSync::shutdown();
     bro::bronze_host::hostCollectGarbage();
+#if BRO_WITH_A11Y
+    if (a11yBridge_) a11yBridge_.reset();
+#endif
     document_.reset();
     audioEngine_.reset();
     renderer_.reset();

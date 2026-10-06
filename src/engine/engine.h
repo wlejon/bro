@@ -51,6 +51,7 @@ namespace bro::render {
 struct PresentFrame; struct PresentImage;
 class VulkanContext; class VulkanSwapchain; class VulkanPresenter;
 }
+namespace bro::a11y { class AccessibilityBridge; }
 
 namespace bro::engine {
 
@@ -66,17 +67,15 @@ private:
     void removeModalEventWatch();
 
 public:
-    using ContentInsets = bro::engine::ContentInsets;
-    using LoadedFont = bro::engine::LoadedFont;
-    using SelectionSnapshot = bro::engine::SelectionSnapshot;
-    using WebGLEntry = bro::engine::WebGLEntry;
+    using ContentInsets = bro::engine::ContentInsets; using LoadedFont = bro::engine::LoadedFont;
+    using SelectionSnapshot = bro::engine::SelectionSnapshot; using WebGLEntry = bro::engine::WebGLEntry;
 #if BRO_WITH_3D
     using SceneGraphEntry = bro::engine::SceneGraphEntry;
 #endif
     using TouchContact = bro::engine::TouchContact; using GestureState = bro::engine::GestureState;
-    using EditableComposition = bro::engine::EditableComposition;
-    using IframeDoc = bro::engine::IframeDoc; using SystemDocument = bro::engine::SystemDocument;
-    using WindowHostOptions = bro::engine::WindowHostOptions; using WindowHost = bro::engine::WindowHost;
+    using EditableComposition = bro::engine::EditableComposition; using IframeDoc = bro::engine::IframeDoc;
+    using SystemDocument = bro::engine::SystemDocument; using WindowHost = bro::engine::WindowHost;
+    using WindowHostOptions = bro::engine::WindowHostOptions;
 
     void run();
     void handleResize(int w, int h);
@@ -243,6 +242,7 @@ public:
 
     // Headless & DOM API
     dom::Document* document() const { return document_.get(); }
+    a11y::AccessibilityBridge* a11yBridge() const { return a11yBridge_.get(); }
     render::Renderer* renderer() const { return renderer_.get(); }
 
     dom::ListenerHandle addWindowEventListener(const std::string& type,
@@ -688,6 +688,7 @@ private:
     std::unique_ptr<render::SkiaGpu> skiaGpu_;
     render::SkiaGpu* createSkiaGpu();
     std::unique_ptr<dom::Document> document_;
+    std::unique_ptr<a11y::AccessibilityBridge> a11yBridge_;
     TransitionManager transitionManager_;
     AnimationManager animationManager_;
     WebAnimationManager webAnimationManager_;
@@ -971,16 +972,11 @@ private:
     dom::ElementHandle scrollbarHoveredElement_;
     SystemDocument* scrollbarDragSystemDoc_ = nullptr;
 
-    double uiFrameIntervalMs_ = 8.0;
-    double lastUIRenderMs_ = 0.0;
-    double frameCapIntervalMs_ = 0.0;
-    bool windowFocused_ = true;
-    bool pageVisible_ = true;
+    double uiFrameIntervalMs_ = 8.0, lastUIRenderMs_ = 0.0, frameCapIntervalMs_ = 0.0;
+    bool windowFocused_ = true, pageVisible_ = true;
     static constexpr double kUnfocusedFps = 30.0;
-
     static constexpr double kGCIntervalMs = 1000.0;
-    double lastGCMs_ = 0.0;
-    double lastGpuFrameMs_ = -1.0;
+    double lastGCMs_ = 0.0, lastGpuFrameMs_ = -1.0;
     bool testFailure_ = false;
 
     // The frame's composite, bottom to top: CPU layers composite into
