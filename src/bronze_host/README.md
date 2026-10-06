@@ -1,6 +1,6 @@
 # bronze_host — running bronze-compiled JS apps in bro
 
-The host layer for [bronze](../../../bronze)-compiled (AOT) JavaScript:
+The host layer for [bronze](https://github.com/wlejon/bronze)-compiled (AOT) JavaScript:
 registers a browser-shaped set of host globals (`document`, `window`,
 `requestAnimationFrame`, the timers, `Image`, `XMLHttpRequest`, `fetch`, `Blob`
 and friends, the observers, `Physics`, `bro.net`/`WebSocket`) backed by the

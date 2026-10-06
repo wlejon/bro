@@ -106,7 +106,7 @@ HTML/CSS + Canvas2D + WebGL runtime with working screenshots and native Vulkan p
 | `BRO_WITH_NET` | GameNetworkingSockets | off | on | on | **needs vcpkg**; a runtime without JS network access would be surprising |
 | `BRO_WITH_VIDEO` | libvpx/webm/Opus | off | on | on | **needs vcpkg**; `<video>` should work out of the box |
 | `BRO_WITH_STEAM` | none (runtime dlopen) | off | on | on | already implemented; the stub template |
-| `BRO_WITH_TERMINAL` | bropty + brosearch | off | on | on | no vcpkg; the native `<terminal>` element ([terminal-api.js](terminal-api.js)). Off = `bro.terminal.available === false` and `<terminal>` is an inert box |
+| `BRO_WITH_TERMINAL` | bropty + brosearch + brothemes, and bromux when found (persistent sessions; compiled out without it) | off | on | on | no vcpkg; the native `<terminal>` element ([terminal-api.js](terminal-api.js)). Off = `bro.terminal.available === false` and `<terminal>` is an inert box |
 
 ### Tier 2: the AI tower (brotensor is the base)
 

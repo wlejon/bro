@@ -73,7 +73,8 @@ jobs:
           # to compile there.
           - { name: macos,   os: macos-15,     cuda: false, triplet: arm64-osx,   jobs: 3 }
     steps:
-      # The AI-tower + flora submodules use git@github.com: URLs. Rewrite them
+      # bro's own submodules are HTTPS, but a nested one can still carry a
+      # git@github.com: URL (brokit's third_party/broimage). Rewrite them
       # to HTTPS *before* checkout so the default GITHUB_TOKEN can fetch them
       # (every sibling repo is public). Must run before actions/checkout syncs
       # submodule URLs into .git/config.

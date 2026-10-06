@@ -1,34 +1,39 @@
 <#
 .SYNOPSIS
-    Multi-repo status for the bro stack (PowerShell port of repo-status.sh).
+    Multi-repo status for the bro ecosystem (PowerShell port of repo-status.sh).
 
 .DESCRIPTION
-    Walks bro + its sibling libraries (standalone repos at ..\<name>) + broworkshop,
-    printing the working-tree state of each, then reports which siblings are out of
-    submodule sync: i.e. the standalone repo you actually build against (..\<name>)
-    sits at a different commit than the pointer bro records in third_party\<name>.
+    Walks every repo in scripts/repos.txt (bro, bronze/brass, the libraries bro
+    links, the desktop substrate libraries, the apps and tools), each a standalone
+    checkout at ..\<name>, printing the working-tree state of each and how far it
+    sits from its upstream. Then, for the repos bro records as submodules, reports
+    which are out of submodule sync: the standalone repo you actually build against
+    (..\<name>) at a different commit than the pointer bro records in third_party\<name>.
 
-    See docs/multi-repo-workflow.md for the layout this reflects.
+    Ahead/behind (up<n> / dn<n>) is against the upstream as last fetched; -Pull
+    fetches. A repo that is not checked out is listed and skipped.
+
+    See docs/ecosystem.md and docs/multi-repo-workflow.md.
 
 .PARAMETER ListFiles
     Also list changed files for dirty repos.
 
 .PARAMETER Pull
-    Fast-forward every repo (bro, broworkshop, and each sibling) to its upstream
-    before reporting, so the status below reflects what's on the remotes. Uses
-    --ff-only and never recurses into submodules: a repo that has diverged, is
-    detached, or has no upstream is reported and skipped, never merged.
+    Fast-forward every repo to its upstream before reporting, so the status below
+    reflects what's on the remotes. Uses --ff-only and never recurses into
+    submodules: a repo that has diverged, is detached, or has no upstream is
+    reported and skipped, never merged.
 
 .PARAMETER Sync
     Bump bro's stale submodule pointers up to the standalone repos' HEADs and
-    make a single bro commit recording it. Only acts on siblings where the
-    standalone is ahead of (or diverged from) bro's recorded pointer; siblings
+    make a single bro commit recording it. Only acts on submodule siblings where
+    the standalone is ahead of (or diverged from) bro's recorded pointer; those
     whose standalone is behind bro are left alone (pull the standalone first).
 
 .PARAMETER Push
-    Push every repo (bro, broworkshop, and each sibling) that is ahead of its
-    upstream. If run alongside -Sync, submodules in bro are bumped and committed
-    first, then pushed along with the siblings.
+    Push every repo that is ahead of its upstream. If run alongside -Sync,
+    submodules in bro are bumped and committed first, then pushed along with the
+    rest.
 
 .EXAMPLE
     pwsh scripts/repo-status.ps1
@@ -45,18 +50,33 @@ $ErrorActionPreference = 'Continue'
 
 $BroRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $ProjectsRoot = (Resolve-Path (Join-Path $BroRoot '..')).Path
+$ReposFile = Join-Path $BroRoot 'scripts/repos.txt'
 
-# Sibling libraries: <name> => standalone at ..\<name>, submodule at third_party\<name>.
-# bronze and brass are in this list on the same terms as the rest even though they are
-# compilers / backends rather than libraries bro directly links: bro resolves ..\bronze
-# and ..\brass first and third_party\ second (src/bronze_host/CMakeLists.txt), so the
-# standalone tree being ahead of the recorded pointer means exactly what it means for the
-# others - CI and the nightly package are building an older bronze/brass than you are.
-$Siblings = @(
-    'bromath', 'brokit', 'htmlayout', 'broaudio', 'bromesh', 'broflora',
-    'brotensor', 'brogameagent', 'brolm', 'brodiffusion', 'broimage', 'brosoundml', 'brovisionml',
-    'brass', 'bronze'
-)
+if (-not (Test-Path $ReposFile)) {
+    Write-Host "missing $ReposFile" -ForegroundColor Red
+    exit 1
+}
+
+# The repo list: name, group and bro relation, from scripts/repos.txt.
+$Repos = @()
+foreach ($line in (Get-Content $ReposFile)) {
+    $t = $line.Trim()
+    if ($t -eq '' -or $t.StartsWith('#')) { continue }
+    $f = $t -split '\s+'
+    $Repos += [pscustomobject]@{ Name = $f[0]; Group = $f[1]; Bro = $f[2] }
+}
+
+# Submodule siblings: the repos bro records at third_party\<name>. bronze and
+# brass are among them on the same terms as the libraries: bro resolves ..\bronze
+# and ..\brass first and third_party\ second, so the standalone tree being ahead of
+# the recorded pointer means CI and the nightly build an older one than you do.
+$Siblings = @($Repos | Where-Object { $_.Bro -eq 'submodule' } | ForEach-Object { $_.Name })
+
+function Repo-Path {
+    param([string]$Name)
+    if ($Name -eq 'bro') { return $BroRoot }
+    return (Join-Path $ProjectsRoot $Name)
+}
 
 # Run a git command in a repo, returning trimmed stdout (errors swallowed).
 function Git-In {
@@ -75,16 +95,18 @@ function Is-GitRepo {
 function Repo-State {
     param([string]$Label, [string]$Path)
 
+    Write-Host ("  {0,-14} " -f $Label) -NoNewline
     if (-not (Is-GitRepo $Path)) {
-        Write-Host ("  {0,-14} " -f $Label) -NoNewline
-        Write-Host "no git repo ($Path)" -ForegroundColor DarkGray
+        Write-Host "not checked out (github.com/wlejon/$Label)" -ForegroundColor DarkGray
         return
     }
 
     $branch = Git-In $Path rev-parse --abbrev-ref HEAD
+    $detached = $false
     if ($branch -eq 'HEAD') {
         $short = Git-In $Path rev-parse --short HEAD
         $branch = "(detached @ $short)"
+        $detached = $true
     }
 
     $diffStat = Git-In $Path diff --shortstat
@@ -107,10 +129,14 @@ function Repo-State {
         if ($b) { $behind = [int]$b }
     }
 
-    Write-Host ("  {0,-14} " -f $Label) -NoNewline
     Write-Host $branch -ForegroundColor Blue -NoNewline
     if ($ahead -gt 0) { Write-Host " up$ahead" -ForegroundColor Yellow -NoNewline }
     if ($behind -gt 0) { Write-Host " dn$behind" -ForegroundColor Yellow -NoNewline }
+    # Name an upstream that is not on origin (a repo tracking another machine).
+    if ($upstream -and -not $upstream.StartsWith('origin/')) {
+        Write-Host " [$upstream]" -ForegroundColor DarkGray -NoNewline
+    }
+    if (-not $upstream -and -not $detached) { Write-Host ' no upstream' -ForegroundColor DarkGray -NoNewline }
 
     $hasChanges = $false
     if ($dirty -gt 0) { Write-Host " ~$dirty" -ForegroundColor Red -NoNewline; $hasChanges = $true }
@@ -135,7 +161,7 @@ function Repo-Pull {
     Write-Host ("  {0,-14} " -f $Label) -NoNewline
 
     if (-not (Is-GitRepo $Path)) {
-        Write-Host "no git repo ($Path)" -ForegroundColor DarkGray
+        Write-Host 'not checked out' -ForegroundColor DarkGray
         return
     }
 
@@ -183,7 +209,7 @@ function Repo-Push {
     Write-Host ("  {0,-14} " -f $Label) -NoNewline
 
     if (-not (Is-GitRepo $Path)) {
-        Write-Host "no git repo ($Path)" -ForegroundColor DarkGray
+        Write-Host 'not checked out' -ForegroundColor DarkGray
         return
     }
 
@@ -225,19 +251,18 @@ function Repo-Push {
 
 if ($Pull) {
     Write-Host '== Pulling (fast-forward only) ==' -ForegroundColor White
-    Repo-Pull 'bro' $BroRoot
-    Repo-Pull 'broworkshop' (Join-Path $ProjectsRoot 'broworkshop')
-    foreach ($name in $Siblings) {
-        Repo-Pull $name (Join-Path $ProjectsRoot $name)
-    }
+    foreach ($r in $Repos) { Repo-Pull $r.Name (Repo-Path $r.Name) }
     Write-Host ''
 }
 
 Write-Host '== Repo state ==' -ForegroundColor White
-Repo-State 'bro' $BroRoot
-Repo-State 'broworkshop' (Join-Path $ProjectsRoot 'broworkshop')
-foreach ($name in $Siblings) {
-    Repo-State $name (Join-Path $ProjectsRoot $name)
+$prevGroup = ''
+foreach ($r in $Repos) {
+    if ($r.Group -ne $prevGroup) {
+        $prevGroup = $r.Group
+        Write-Host " $prevGroup" -ForegroundColor DarkGray
+    }
+    Repo-State $r.Name (Repo-Path $r.Name)
 }
 
 Write-Host ''
@@ -256,7 +281,7 @@ foreach ($name in $Siblings) {
     $recorded = Git-In $BroRoot rev-parse --verify --quiet "HEAD:$subPath"
     if (-not $recorded) {
         Write-Host ("  {0,-14} " -f $name) -NoNewline
-        Write-Host 'not a recorded submodule' -ForegroundColor DarkGray
+        Write-Host 'not a recorded submodule (scripts/repos.txt says it is)' -ForegroundColor Yellow
         continue
     }
 
@@ -320,6 +345,19 @@ foreach ($name in $Siblings) {
     }
 }
 
+# A wlejon submodule bro records that scripts/repos.txt does not list as one
+# would be skipped above without a word; name it instead.
+$urls = Git-In $BroRoot config -f .gitmodules --get-regexp '^submodule\..*\.url$'
+foreach ($line in ($urls -split "`n")) {
+    $parts = $line -split '\s+'
+    if ($parts.Count -lt 2 -or $parts[1] -notmatch 'wlejon/') { continue }
+    $subName = [IO.Path]::GetFileNameWithoutExtension(($parts[1] -split '[/:]')[-1])
+    if ($Siblings -notcontains $subName) {
+        Write-Host ("  {0,-14} " -f $subName) -NoNewline
+        Write-Host 'bro has it as a submodule but scripts/repos.txt does not - add it there' -ForegroundColor Yellow
+    }
+}
+
 Write-Host ''
 if ($outOfSync -eq 0) {
     Write-Host 'All siblings in submodule sync.' -ForegroundColor Green
@@ -370,7 +408,7 @@ if ($Sync) {
             $msg = "Update submodules: $namesList (sync to standalone HEAD)"
             Write-Host ''
             & git -C $BroRoot commit --quiet -m $msg -- @stagedPaths 2>$null
-            if ($LASTEXITCODE -ne 0) {
+            if ($LASTEXITCODE -eq 0) {
                 Write-Host "Committed: " -ForegroundColor Green -NoNewline
                 Write-Host $msg
                 & git -C $BroRoot log -1 --oneline | ForEach-Object { Write-Host "  $_" }
@@ -389,9 +427,5 @@ if ($Sync) {
 if ($Push) {
     Write-Host ''
     Write-Host '== Pushing ==' -ForegroundColor White
-    Repo-Push 'bro' $BroRoot
-    Repo-Push 'broworkshop' (Join-Path $ProjectsRoot 'broworkshop')
-    foreach ($name in $Siblings) {
-        Repo-Push $name (Join-Path $ProjectsRoot $name)
-    }
+    foreach ($r in $Repos) { Repo-Push $r.Name (Repo-Path $r.Name) }
 }

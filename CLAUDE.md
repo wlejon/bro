@@ -40,7 +40,7 @@ util → platform (SDL3, event loop) → render (Renderer iface) → svg → lay
 ```
 `src/svg` is only the `<img src="*.svg">` rasterizer (SkSVGDOM into an RGBA buffer); *inline* `<svg>` is painted by `src/layout/svg_*` — a native traversal emitting `Renderer` primitives with cascaded SVG paint, so SVG children have real `getBoundingClientRect` geometry, falling back to SkSVGDOM only for text/filters/masks/patterns/markers.
 
-`src/bronze_host/` exposes the engine to the [bronze](../bronze) JavaScript runtime and AOT compiler (backed by [brass](../brass)). An app is a folder carrying `app.dll`/`.so`/`.dylib` beside its `index.html`, which the stock `bro`/`bro-headless` load; a folder without one has its `<script>` tags compiled in-process by bronze at boot. bronze resolves as `../bronze` first, `third_party/bronze` (submodule) second, and brass resolves as `../brass` / `third_party/brass`. bro's own natives (scene, physics, net, time, window, settings, ...) live under `natives/<sub>/` (prototypes `native_<sub>_decl.h`, registrations `native_<sub>_register.cpp`, JS wrapper `<sub>.js`, `module.globals`) with bodies in `native_*.cpp`, all hand-maintained — adding a native means editing all of them together; every sibling library's JS API is the sibling's own `<name>_api` library, linked per feature flag in `src/bronze_host/CMakeLists.txt` and installed exactly once per realm by `installSiblingApis` (`host_sibling_apis.cpp`) — never call a sibling `install*()` anywhere else. See `src/bronze_host/README.md` and `tests/bronze_host/README.md`.
+`src/bronze_host/` exposes the engine to the [bronze](https://github.com/wlejon/bronze) JavaScript runtime and AOT compiler (backed by [brass](https://github.com/wlejon/brass)). An app is a folder carrying `app.dll`/`.so`/`.dylib` beside its `index.html`, which the stock `bro`/`bro-headless` load; a folder without one has its `<script>` tags compiled in-process by bronze at boot. bronze resolves as `../bronze` first, `third_party/bronze` (submodule) second, and brass resolves as `../brass` / `third_party/brass`. bro's own natives (scene, physics, net, time, window, settings, ...) live under `natives/<sub>/` (prototypes `native_<sub>_decl.h`, registrations `native_<sub>_register.cpp`, JS wrapper `<sub>.js`, `module.globals`) with bodies in `native_*.cpp`, all hand-maintained — adding a native means editing all of them together; every sibling library's JS API is the sibling's own `<name>_api` library, linked per feature flag in `src/bronze_host/CMakeLists.txt` and installed exactly once per realm by `installSiblingApis` (`host_sibling_apis.cpp`) — never call a sibling `install*()` anywhere else. See `src/bronze_host/README.md` and `tests/bronze_host/README.md`.
 
 Key patterns:
 - **Pipeline:** gumbo parses into a `bro::dom` tree; `htmlayout::css::Cascade` resolves style, `layoutTree()` lays out, `DrawTraversal` issues Skia calls. Mutations `markDirty()`; the loop re-layouts only when dirty. A geometry read lays the document out first — `Engine::flushLayoutForRead` — so an element appended and measured in one turn measures correctly rather than reporting the box it does not have yet. The flush re-arms the *paint* half of the dirty flag, because the frame still has to draw what was measured; `Document::layoutIsCurrent()` keeps a run of reads to one pass.
@@ -55,7 +55,7 @@ Key patterns:
 
 ## Third-party dependencies (third_party/)
 
-bro-* siblings build from `../<name>` working trees when present, else submodules ([docs/multi-repo-workflow.md](docs/multi-repo-workflow.md)). ML siblings depend on brotensor (plus broimage for preprocessing). Every bro-* library below except bromath and htmlayout also builds `<name>_api` from its `src/api/` (public header `include/<name>/api.h`; brokit and broflora differ), its bronze JS binding; those siblings depend on bronze + brass with no submodule fallback, so a standalone sibling build needs `../bronze` and `../brass` checked out.
+Every repo in the ecosystem (these, the desktop substrate libraries, the apps) is indexed in [docs/ecosystem.md](docs/ecosystem.md); `scripts/repos.txt` is the machine-readable list tooling reads. bro-* siblings build from `../<name>` working trees when present, else submodules ([docs/multi-repo-workflow.md](docs/multi-repo-workflow.md)). ML siblings depend on brotensor (plus broimage for preprocessing). Every bro-* library below except bromath, htmlayout and the terminal ones (bropty, brosearch, brothemes, bromux) also builds `<name>_api` from its `src/api/` (public header `include/<name>/api.h`; brokit and broflora differ), its bronze JS binding; those siblings depend on bronze + brass with no submodule fallback, so a standalone sibling build needs `../bronze` and `../brass` checked out.
 
 | Library | Target | What |
 |---------|--------|------|
@@ -65,7 +65,7 @@ bro-* siblings build from `../<name>` working trees when present, else submodule
 | broaudio | `broaudio` | real-time audio engine (synthesis, effects, spatial, MIDI) |
 | bromesh | `bromesh` | mesh generation/manipulation/analysis/IO |
 | broflora | `broflora` | ecosystem simulation (plants, foliage, blooms) |
-| brotensor | `brotensor` | unified Tensor + device-neutral ops including the full training surface; CPU always, CUDA/Metal opt-in |
+| brotensor | `brotensor` | unified Tensor + device-neutral ops including the full training surface; CPU always, CUDA/Metal/Vulkan opt-in |
 | brogameagent | `brogameagent` | game AI: navmesh, pathfinding, steering, perception |
 | brolm | `brolm` | text-model inference: tokenizers, CLIP/T5 encoders, LLMs |
 | brodiffusion | `brodiffusion` | diffusion text-to-image: U-Net/VAE, schedulers, LoRA |
@@ -74,6 +74,8 @@ bro-* siblings build from `../<name>` working trees when present, else submodule
 | brovisionml | `brovisionml::brovisionml` | vision-ML inference: SAM, depth, normals, matting, ControlNet annotators |
 | bropty | `bropty` | VT emulator + PTY/ConPTY behind `<terminal>` (`BRO_WITH_TERMINAL`; `src/terminal/`) |
 | brosearch | `brosearch` | regex scrollback search (bropty's dependency) |
+| brothemes | `brothemes` | colour schemes + WCAG/APCA contrast (the terminal's minimum contrast) |
+| bromux | `bromux` | terminal multiplexer: the server behind persistent `<terminal>` sessions (optional; off when absent) |
 | brass | `brass` | JIT / AOT native code generator backend for bronze |
 | bronze | `bronze` / `bronze-cli` / `bronze::runtime_shared` | JavaScript compiler + shared runtime (mandatory) |
 | Jolt Physics | `Jolt::Jolt` | rigid-body physics |

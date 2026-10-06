@@ -1,0 +1,63 @@
+# The bro ecosystem's repositories: the one machine-readable list.
+#
+# docs/ecosystem.md is the human index (a role and a description per repo);
+# this file is what tooling reads (scripts/repo-status.sh, scripts/repo-status.ps1,
+# tests/run_tests.sh). Add a repo here and to docs/ecosystem.md together.
+#
+# Every repo lives at github.com/wlejon/<name> and is checked out beside bro, at
+# ../<name>. Columns are whitespace-separated; '-' means none.
+#
+#   name       repository name (and directory name under the projects root)
+#   group      runtime | compiler | engine | terminal | desktop | app | tool
+#                runtime   bro itself
+#                compiler  bronze and brass, which run every app's JavaScript
+#                engine    libraries bro links for its engine subsystems
+#                terminal  libraries bro links for the <terminal> element
+#                desktop   desktop-environment substrate libraries (not linked by bro yet)
+#                app       applications that run on, or link, bro
+#                tool      development tools around bro
+#   bro        self      | submodule (bro records it at third_party/<name>) | -
+#   github     public | pending (not on GitHub yet)
+#   platforms  comma-separated: win, linux, mac
+#   deps       comma-separated bro-ecosystem repos it builds against (from its CMake)
+#
+# name          group     bro        github   platforms        deps
+bro             runtime   self       public   win,linux,mac    bronze,brass,bromath,brokit,htmlayout,broaudio,bromesh,broflora,brotensor,brogameagent,brolm,brodiffusion,broimage,brosoundml,brovisionml,bropty,brosearch,brothemes,bromux
+bronze          compiler  submodule  public   win,linux,mac    brass
+brass           compiler  submodule  public   win,linux,mac    -
+bromath         engine    submodule  public   win,linux,mac    -
+brokit          engine    submodule  public   win,linux,mac    broimage,bronze,brass
+htmlayout       engine    submodule  public   win,linux,mac    -
+broaudio        engine    submodule  public   win,linux,mac    bromath,bronze,brass
+bromesh         engine    submodule  public   win,linux,mac    bromath,bronze,brass
+broflora        engine    submodule  public   win,linux,mac    bromath,bromesh,bronze,brass
+brotensor       engine    submodule  public   win,linux,mac    bronze,brass
+brogameagent    engine    submodule  public   win,linux,mac    bromath,brotensor,bronze,brass
+brolm           engine    submodule  public   win,linux,mac    bromath,brotensor,broimage,bronze,brass
+brodiffusion    engine    submodule  public   win,linux,mac    bromath,brotensor,brolm,broimage,brovisionml,bronze,brass
+broimage        engine    submodule  public   win,linux,mac    bromath,brotensor,bronze,brass
+brosoundml      engine    submodule  public   win,linux,mac    bromath,brotensor,brolm,broaudio,bronze,brass
+brovisionml     engine    submodule  public   win,linux,mac    bromath,brotensor,broimage,bronze,brass
+bropty          terminal  submodule  public   win,linux,mac    brosearch
+brosearch       terminal  submodule  public   win,linux,mac    -
+brothemes       terminal  submodule  public   win,linux,mac    -
+bromux          terminal  submodule  public   win,linux,mac    bropty,brosearch,broimage,bromath
+brovfs          desktop   -          public   win,linux,mac    -
+brosys          desktop   -          public   win,linux,mac    -
+brocas          desktop   -          public   win,linux,mac    -
+brocred         desktop   -          public   win,linux,mac    -
+broapps         desktop   -          public   win,linux,mac    brovfs
+brothumb        desktop   -          public   win,linux,mac    brovfs,broimage,bromath
+brodisplays     desktop   -          public   win,linux,mac    -
+brocompositor   desktop   -          public   win,linux,mac    brodisplays
+brokeys         desktop   -          public   win,linux,mac    brosearch
+broa11y         desktop   -          pending  win,linux,mac    -
+broconf         desktop   -          pending  win,linux,mac    -
+broseat         desktop   -          pending  linux            -
+brodmabuf       desktop   -          pending  linux            -
+browl           desktop   -          pending  linux            -
+broportal       desktop   -          pending  linux            -
+broworkshop     app       -          public   win,linux,mac    bro
+broterm         app       -          public   win,linux,mac    bro
+ffmpeg-bro      app       -          public   win,linux,mac    bro
+broparity       tool      -          public   win,linux,mac    bro

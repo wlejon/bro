@@ -17,7 +17,9 @@
 - While rare exceptions may exist, files over 2,000 lines must be decomposed.
 
 ## 4. Multi-Repo & Submodule Workflow
-- Standalone sibling repositories (`broaudio`, `broflora`, `brogameagent`, `brotensor`, `brolm`, `brosoundml`, `brodiffusion`, `brovisionml`, `bromesh`, `broimage`, etc.) own their native code and Bronze JavaScript APIs (`<sibling>_api`).
+- Every repo in the ecosystem is listed in `docs/ecosystem.md` (machine-readable: `scripts/repos.txt`); each is a standalone checkout at `../<name>`. `CLAUDE.md` is the engine guide and applies to every agent, not only Claude.
+- Standalone sibling repositories (`broaudio`, `broflora`, `brogameagent`, `brotensor`, `brolm`, `brosoundml`, `brodiffusion`, `brovisionml`, `bromesh`, `broimage`, etc.) own their native code and Bronze JavaScript APIs (`<sibling>_api`). The terminal libraries (`bropty`, `brosearch`, `brothemes`, `bromux`) have no JavaScript binding; bro wraps them in `src/terminal/`.
+- Edit a sibling in its standalone repo (`../<name>`), never under `third_party/`.
 - **Submodule pinning**: Do NOT update or pin git submodules after every commit. Only update/pin submodules at the end of a full session before pushing.
 
 ## 5. System Memory & Execution Defaults

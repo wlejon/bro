@@ -24,25 +24,25 @@
 	url = https://github.com/wlejon/bromath.git
 [submodule "third_party/brotensor"]
 	path = third_party/brotensor
-	url = git@github.com:wlejon/brotensor.git
+	url = https://github.com/wlejon/brotensor.git
 [submodule "third_party/brodiffusion"]
 	path = third_party/brodiffusion
-	url = git@github.com:wlejon/brodiffusion.git
+	url = https://github.com/wlejon/brodiffusion.git
 [submodule "third_party/broflora"]
 	path = third_party/broflora
-	url = git@github.com:wlejon/broflora.git
+	url = https://github.com/wlejon/broflora.git
 [submodule "third_party/brolm"]
 	path = third_party/brolm
-	url = git@github.com:wlejon/brolm.git
+	url = https://github.com/wlejon/brolm.git
 [submodule "third_party/broimage"]
 	path = third_party/broimage
-	url = git@github.com:wlejon/broimage.git
+	url = https://github.com/wlejon/broimage.git
 [submodule "third_party/brosoundml"]
 	path = third_party/brosoundml
-	url = git@github.com:wlejon/brosoundml.git
+	url = https://github.com/wlejon/brosoundml.git
 [submodule "third_party/brovisionml"]
 	path = third_party/brovisionml
-	url = git@github.com:wlejon/brovisionml.git
+	url = https://github.com/wlejon/brovisionml.git
 [submodule "third_party/bronze"]
 	path = third_party/bronze
 	url = https://github.com/wlejon/bronze.git

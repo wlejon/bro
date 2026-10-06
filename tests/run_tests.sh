@@ -148,12 +148,16 @@ TEST_APP="$(to_win_path "$SCRIPT_DIR/test_app")"
 # --- Staleness gate ---------------------------------------------------------
 # Refuse to run if any source file is newer than the selected binary. Fails
 # closed: an unbuildable answer is better than a false green. Scans bro's own
-# src/ plus any sibling library working trees the build compiles from (see
-# docs/multi-repo-workflow.md) — an edit in ../htmlayout is just as capable of
-# invalidating a binary as an edit in src/.
+# src/ plus any sibling library working trees the build compiles from (the
+# engine and terminal groups of scripts/repos.txt; see docs/ecosystem.md) — an
+# edit in ../htmlayout is just as capable of invalidating a binary as an edit
+# in src/.
 SOURCE_ROOTS=("$PROJECT_DIR/src")
-for SIB in htmlayout brokit bromath broaudio bromesh broflora brotensor \
-           brogameagent brolm brodiffusion broimage brosoundml brovisionml; do
+SIBLING_LIBS=()
+while read -r SIB GROUP _REST; do
+    [[ "$GROUP" == "engine" || "$GROUP" == "terminal" ]] && SIBLING_LIBS+=("$SIB")
+done < <(grep -v '^#' "$PROJECT_DIR/scripts/repos.txt" 2>/dev/null)
+for SIB in "${SIBLING_LIBS[@]}"; do
     [[ -d "$PROJECT_DIR/../$SIB/src" ]] && SOURCE_ROOTS+=("$PROJECT_DIR/../$SIB/src")
     [[ -d "$PROJECT_DIR/../$SIB/include" ]] && SOURCE_ROOTS+=("$PROJECT_DIR/../$SIB/include")
 done

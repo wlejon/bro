@@ -191,7 +191,8 @@ git submodule update --init --recursive
 Sibling libraries (`brokit`, `htmlayout`, `broaudio`, `bromesh`,
 `brogameagent`, …) are also picked up from standalone checkouts at `../<name>`
 if present — as are `bronze` and `brass`. See
-[docs/multi-repo-workflow.md](docs/multi-repo-workflow.md).
+[docs/multi-repo-workflow.md](docs/multi-repo-workflow.md), and
+[docs/ecosystem.md](docs/ecosystem.md) for the list of every repo.
 
 ## Skia
 

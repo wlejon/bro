@@ -1,33 +1,35 @@
 #!/usr/bin/env bash
-# Multi-repo status for the bro stack.
+# Multi-repo status for the bro ecosystem.
 #
-# Walks bro + its sibling libraries (standalone repos at ../<name>) + broworkshop,
-# printing the working-tree state of each, then reports which siblings are out of
-# submodule sync: i.e. the standalone repo you actually build against (../<name>)
-# sits at a different commit than the pointer bro records in third_party/<name>.
+# Walks every repo in scripts/repos.txt (bro, bronze/brass, the libraries bro
+# links, the desktop substrate libraries, the apps and tools), each a standalone
+# checkout at ../<name>, printing the working-tree state of each and how far it
+# sits from its upstream. Then, for the repos bro records as submodules, reports
+# which are out of submodule sync: the standalone repo you actually build against
+# (../<name>) at a different commit than the pointer bro records in third_party/<name>.
 #
 # Usage: scripts/repo-status.sh [-v] [-p] [-s] [-u]
 #   -v, --verbose   also list changed files for dirty repos
-#   -p, --pull      fast-forward every repo (bro, broworkshop, each sibling) to
-#                   its upstream first, so the status below reflects the remotes
+#   -p, --pull      fast-forward every repo to its upstream first, so the
+#                   status below reflects the remotes
 #   -s, --sync      bump bro's stale submodule pointers up to the standalone
 #                   repos' HEADs and make a single bro commit recording it
-#   -u, --push      push every repo (bro, broworkshop, each sibling) that is
-#                   ahead of its upstream
+#   -u, --push      push every repo that is ahead of its upstream
 #
-# Pull is --ff-only and never recurses into submodules: a repo that has diverged,
-# is detached, or has no upstream is reported and skipped, never merged.
-# Sync only acts on siblings where the standalone repo is ahead of (or diverged
-# from) bro's recorded pointer. Siblings whose standalone is *behind* bro are
-# left alone (pull the standalone first); the apps tree has no submodule.
-#
-# See docs/multi-repo-workflow.md for the layout this reflects.
+# Ahead/behind (up<n> / dn<n>) is against the upstream as last fetched; --pull
+# fetches. Pull is --ff-only and never recurses into submodules: a repo that has
+# diverged, is detached, or has no upstream is reported and skipped, never merged.
+# Sync only acts on submodule siblings where the standalone repo is ahead of (or
+# diverged from) bro's recorded pointer; those whose standalone is *behind* bro
+# are left alone (pull the standalone first). A repo that is not checked out is
+# listed and skipped. See docs/ecosystem.md and docs/multi-repo-workflow.md.
 
 set -uo pipefail
 
 cd "$(dirname "$0")/.."
 BRO_ROOT="$(pwd)"
 PROJECTS_ROOT="$(cd .. && pwd)"
+REPOS_FILE="$BRO_ROOT/scripts/repos.txt"
 
 VERBOSE=0
 PULL=0
@@ -40,23 +42,38 @@ for arg in "$@"; do
         -s|--sync)    SYNC=1 ;;
         -u|--push)    PUSH=1 ;;
         -h|--help)
-            sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
+            sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'
             exit 0 ;;
         *) echo "unknown option: $arg (try --help)" >&2; exit 2 ;;
     esac
 done
 
-# Sibling libraries: <name> => standalone at ../<name>, submodule at third_party/<name>.
-# bronze and brass are in this list on the same terms as the rest even though they are
-# compilers / backends rather than libraries bro directly links: bro resolves ../bronze
-# and ../brass first and third_party/ second (src/bronze_host/CMakeLists.txt), so the
-# standalone tree being ahead of the recorded pointer means exactly what it means for the
-# others — CI and the nightly package are building an older bronze/brass than you are.
-SIBLINGS=(
-    bromath brokit htmlayout broaudio bromesh broflora
-    brotensor brogameagent brolm brodiffusion broimage brosoundml brovisionml
-    brass bronze
-)
+if [[ ! -f "$REPOS_FILE" ]]; then
+    echo "missing $REPOS_FILE" >&2
+    exit 1
+fi
+
+# The repo list: name, group and bro relation, from scripts/repos.txt.
+NAMES=(); GROUPS_OF=(); BROREL=()
+while read -r name group brorel _rest; do
+    [[ -z "$name" || "$name" == \#* ]] && continue
+    NAMES+=("$name"); GROUPS_OF+=("$group"); BROREL+=("$brorel")
+done < "$REPOS_FILE"
+
+# Submodule siblings: the repos bro records at third_party/<name>. bronze and
+# brass are among them on the same terms as the libraries: bro resolves ../bronze
+# and ../brass first and third_party/ second, so the standalone tree being ahead of
+# the recorded pointer means CI and the nightly build an older one than you do.
+SIBLINGS=()
+for i in "${!NAMES[@]}"; do
+    [[ "${BROREL[$i]}" == "submodule" ]] && SIBLINGS+=("${NAMES[$i]}")
+done
+
+repo_path() {
+    if [[ "$1" == "bro" ]]; then printf '%s' "$BRO_ROOT"; else printf '%s' "$PROJECTS_ROOT/$1"; fi
+}
+
+is_repo() { [[ -d "$1/.git" || -f "$1/.git" ]]; }
 
 # ANSI colors (disabled when not a tty).
 if [[ -t 1 ]]; then
@@ -69,8 +86,8 @@ fi
 # Args: <label> <path>
 repo_state() {
     local label="$1" path="$2"
-    if [[ ! -d "$path/.git" && ! -f "$path/.git" ]]; then
-        printf '  %-14s %sno git repo (%s)%s\n' "$label" "$DIM" "$path" "$N"
+    if ! is_repo "$path"; then
+        printf '  %-14s %snot checked out (github.com/wlejon/%s)%s\n' "$label" "$DIM" "$label" "$N"
         return
     fi
 
@@ -89,6 +106,10 @@ repo_state() {
         behind="$(git -C "$path" rev-list --count 'HEAD..@{u}' 2>/dev/null || echo 0)"
         [[ "$ahead" -gt 0 ]] && tracking+=" ${Y}up${ahead}${N}"
         [[ "$behind" -gt 0 ]] && tracking+=" ${Y}dn${behind}${N}"
+        # Name an upstream that is not on origin (a repo tracking another machine).
+        [[ "$upstream" != origin/* ]] && tracking+=" ${DIM}[${upstream}]${N}"
+    elif [[ "$branch" != \(detached* ]]; then
+        tracking+=" ${DIM}no upstream${N}"
     fi
 
     local flags=''
@@ -111,8 +132,8 @@ repo_state() {
 # Args: <label> <path>
 repo_pull() {
     local label="$1" path="$2" branch upstream before after n out
-    if [[ ! -d "$path/.git" && ! -f "$path/.git" ]]; then
-        printf '  %-14s %sno git repo (%s)%s\n' "$label" "$DIM" "$path" "$N"
+    if ! is_repo "$path"; then
+        printf '  %-14s %snot checked out%s\n' "$label" "$DIM" "$N"
         return
     fi
 
@@ -153,8 +174,8 @@ repo_pull() {
 # Args: <label> <path>
 repo_push() {
     local label="$1" path="$2" branch upstream ahead out head
-    if [[ ! -d "$path/.git" && ! -f "$path/.git" ]]; then
-        printf '  %-14s %sno git repo (%s)%s\n' "$label" "$DIM" "$path" "$N"
+    if ! is_repo "$path"; then
+        printf '  %-14s %snot checked out%s\n' "$label" "$DIM" "$N"
         return
     fi
 
@@ -190,19 +211,20 @@ repo_push() {
 
 if [[ "$PULL" -eq 1 ]]; then
     echo "${BOLD}== Pulling (fast-forward only) ==${N}"
-    repo_pull "bro" "$BRO_ROOT"
-    repo_pull "broworkshop" "$PROJECTS_ROOT/broworkshop"
-    for name in "${SIBLINGS[@]}"; do
-        repo_pull "$name" "$PROJECTS_ROOT/$name"
+    for name in "${NAMES[@]}"; do
+        repo_pull "$name" "$(repo_path "$name")"
     done
     echo
 fi
 
 echo "${BOLD}== Repo state ==${N}"
-repo_state "bro" "$BRO_ROOT"
-repo_state "broworkshop" "$PROJECTS_ROOT/broworkshop"
-for name in "${SIBLINGS[@]}"; do
-    repo_state "$name" "$PROJECTS_ROOT/$name"
+prev_group=''
+for i in "${!NAMES[@]}"; do
+    if [[ "${GROUPS_OF[$i]}" != "$prev_group" ]]; then
+        prev_group="${GROUPS_OF[$i]}"
+        echo " ${DIM}${prev_group}${N}"
+    fi
+    repo_state "${NAMES[$i]}" "$(repo_path "${NAMES[$i]}")"
 done
 
 echo
@@ -221,11 +243,11 @@ for name in "${SIBLINGS[@]}"; do
     # "HEAD:third_party/<name>" and be compared as though it were a sha.
     recorded="$(git -C "$BRO_ROOT" rev-parse --verify --quiet "HEAD:$sub_path" 2>/dev/null || true)"
     if [[ -z "$recorded" ]]; then
-        printf '  %-14s %snot a recorded submodule%s\n' "$name" "$DIM" "$N"
+        printf '  %-14s %snot a recorded submodule (scripts/repos.txt says it is)%s\n' "$name" "$Y" "$N"
         continue
     fi
 
-    if [[ ! -d "$standalone/.git" && ! -f "$standalone/.git" ]]; then
+    if ! is_repo "$standalone"; then
         printf '  %-14s %sstandalone repo missing - using submodule only%s\n' "$name" "$DIM" "$N"
         continue
     fi
@@ -267,6 +289,19 @@ for name in "${SIBLINGS[@]}"; do
         SYNC_SHAS+=("$head")
     fi
 done
+
+# A wlejon submodule bro records that scripts/repos.txt does not list as one
+# would be skipped above without a word; name it instead.
+while read -r _key sub_url; do
+    sub_name="$(basename "$sub_url" .git)"
+    case "$sub_url" in *wlejon/*) ;; *) continue ;; esac
+    listed=0
+    for name in "${SIBLINGS[@]}"; do [[ "$name" == "$sub_name" ]] && listed=1; done
+    if [[ "$listed" -eq 0 ]]; then
+        printf '  %-14s %sbro has it as a submodule but scripts/repos.txt does not - add it there%s\n' \
+            "$sub_name" "$Y" "$N"
+    fi
+done < <(git -C "$BRO_ROOT" config -f .gitmodules --get-regexp '^submodule\..*\.url$' 2>/dev/null)
 
 echo
 if [[ "$out_of_sync" -eq 0 ]]; then
@@ -334,10 +369,8 @@ fi
 if [[ "$PUSH" -eq 1 ]]; then
     echo
     echo "${BOLD}== Pushing ==${N}"
-    repo_push "bro" "$BRO_ROOT"
-    repo_push "broworkshop" "$PROJECTS_ROOT/broworkshop"
-    for name in "${SIBLINGS[@]}"; do
-        repo_push "$name" "$PROJECTS_ROOT/$name"
+    for name in "${NAMES[@]}"; do
+        repo_push "$name" "$(repo_path "$name")"
     done
 fi
 

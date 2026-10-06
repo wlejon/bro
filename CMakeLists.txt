@@ -48,9 +48,9 @@ endif()
 
 # Submodule preflight: a `git clone` without --recursive leaves the third_party
 # submodule dirs empty and produces cryptic downstream failures. Only check
-# non-sibling submodules — the brokit/htmlayout/broaudio/bromesh/
-# brogameagent deps fall back to sibling repos at ../<name> (see third_party/
-# CMakeLists.txt), so it's fine if their third_party/<name> dirs are empty.
+# non-sibling submodules — the bro-* libraries, bronze and brass resolve from
+# sibling repos at ../<name> first (see third_party/CMakeLists.txt and
+# docs/ecosystem.md), so it's fine if their third_party/<name> dirs are empty.
 foreach(_bro_submodule IN ITEMS SDL jolt)
     set(_bro_submodule_dir "${CMAKE_CURRENT_SOURCE_DIR}/third_party/${_bro_submodule}")
     file(GLOB _bro_submodule_contents "${_bro_submodule_dir}/*")
@@ -211,9 +211,10 @@ set(BRO_WITH_BRONZE ON CACHE BOOL "bronze runtime (mandatory)" FORCE)
 option(BRO_WITH_NET      "Game networking (GameNetworkingSockets / vcpkg)"   ${_d_svc})
 option(BRO_WITH_VIDEO    "Video + GIF encode/decode (libvpx/webm / vcpkg)"   ${_d_svc})
 option(BRO_WITH_STEAM    "Steam integration (runtime-loaded redistributable)" ${_d_svc})
-# The native <terminal> element: bropty (VT emulation + PTY/ConPTY) and its
-# brosearch dependency, both vcpkg-free siblings. On in app and full; minimal
-# leaves it out (a compiled-out build gets the `available: false` stub).
+# The native <terminal> element: bropty (VT emulation + PTY/ConPTY), its
+# brosearch dependency and brothemes (minimum contrast), plus bromux
+# (persistent sessions) when found; all vcpkg-free siblings. On in app and
+# full; minimal leaves it out (a compiled-out build gets the `available: false` stub).
 option(BRO_WITH_TERMINAL "Native <terminal> element (bropty + brosearch)"    ${_d_render})
 # Tier 2 — the AI tower (brotensor is the base).
 option(BRO_WITH_TENSOR       "brotensor tensor ops (ML backbone)"            ${_d_ai})

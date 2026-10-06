@@ -90,19 +90,22 @@ The left-hand `bro.*` names are the whole surface. Each has an annotated JSDoc r
 
 ## Architecture
 
+bro is the runtime in a family of repositories. [docs/ecosystem.md](docs/ecosystem.md) lists all of them, with their roles, dependencies and platforms. The ones bro links:
+
 - **bromath.** Header-only C++20 math: Vec/Quat/Mat, Color, AABB, easing curves. Used transitively by most siblings. See [bromath](https://github.com/wlejon/bromath).
 - **brokit.** Web-standard and system APIs (fetch, streams, storage, fs, crypto, events, and more). See [brokit](https://github.com/wlejon/brokit).
 - **htmlayout.** HTML5 parsing (gumbo), CSS parsing, selector matching, style cascade, and block/inline/flex layout. See [htmlayout](https://github.com/wlejon/htmlayout).
 - **broaudio.** Real-time audio engine. See [broaudio](https://github.com/wlejon/broaudio).
 - **bromesh.** Mesh generation, manipulation, analysis, and I/O. See [bromesh](https://github.com/wlejon/bromesh).
 - **broflora.** Ecosystem simulation (Makowski et al. "Synthetic Silviculture"): plants, foliage, blooms. See [broflora](https://github.com/wlejon/broflora).
-- **brotensor.** Tensor type and device-neutral ops including a full training surface; CPU backend always built, CUDA/Metal additive and opt-in. Underpins brogameagent, brolm, brodiffusion, brosoundml, and brovisionml. See [brotensor](https://github.com/wlejon/brotensor).
+- **brotensor.** Tensor type and device-neutral ops including a full training surface; CPU backend always built, CUDA/Metal/Vulkan additive and opt-in. Underpins brogameagent, brolm, brodiffusion, brosoundml, and brovisionml. See [brotensor](https://github.com/wlejon/brotensor).
 - **brogameagent.** Game AI: navmesh, A* pathfinding, steering, perception. See [brogameagent](https://github.com/wlejon/brogameagent).
 - **brolm.** Language/text-model inference: BPE + Unigram tokenizers, transformer text encoders (CLIP, T5), CLIP vision encoder + scorer, and GGUF/safetensors LLMs. The text frontend brodiffusion builds on. See [brolm](https://github.com/wlejon/brolm).
 - **brodiffusion.** Diffusion-model text-to-image inference: U-Net + VAE, DDIM/LCM schedulers, LoRA, INT8. See [brodiffusion](https://github.com/wlejon/brodiffusion).
 - **brosoundml.** Audio-ML model inference (TTS, STT, diarization, neural codec, wake) built on brotensor's FP32 audio op family. See [brosoundml](https://github.com/wlejon/brosoundml).
 - **brovisionml.** Vision-model inference: SAM segmentation, Depth-Anything-V2 depth, DSINE surface normals, BiRefNet matting, and the ControlNet conditioning annotators (HED, lineart, MLSD, OpenPose, SegFormer). See [brovisionml](https://github.com/wlejon/brovisionml).
 - **broimage.** Image decode/encode (stb) plus composable kernels (reduce/map/combine/lookup/stencil/resample/gradient), geometric ops, alpha-correct compositing, color/HSV/sRGB, normalization presets, and NHWC/NCHW preproc. Backs `bro.image` and host-side preprocessing in brolm/brodiffusion. See [broimage](https://github.com/wlejon/broimage).
+- **bropty, brosearch, brothemes & bromux.** The native `<terminal>` element: VT emulation and PTY/ConPTY plumbing ([bropty](https://github.com/wlejon/bropty)), regex scrollback search ([brosearch](https://github.com/wlejon/brosearch)), colour schemes and minimum contrast ([brothemes](https://github.com/wlejon/brothemes)), and persistent sessions held by a multiplexer server ([bromux](https://github.com/wlejon/bromux)). [broterm](https://github.com/wlejon/broterm) is the terminal app built on it.
 - **bronze & brass.** Ahead-of-time compiler and runtime that turns JavaScript into native machine code (backed by brass). Powers JavaScript execution in bro via `src/bronze_host`. See [bronze](https://github.com/wlejon/bronze) and [brass](https://github.com/wlejon/brass).
 - **Jolt Physics.** Rigid body physics with contact listeners, integrated into the scene graph.
 - **Skia.** 2D rasterization (text, paths, images, gradients) on the GPU: Ganesh on Vulkan, sharing the engine's device and queue, draws UI layers, iframes and 2D canvases into images the presenter samples in place. `--no-gpu` keeps the same pipeline with Skia on the CPU. Text runs through HarfBuzz shaping and Skia's UAX#9 bidi subset, both compiled from the Skia source bundle and on in every build profile, so ligatures, cursive joining, and RTL reordering are the one text path rather than an optional upgrade.
@@ -138,7 +141,6 @@ Loads the app's `index.html`, applies stylesheets, executes scripts, and opens a
 ### Headless mode
 
 ```bash
-bro-headless ../broworkshop/demos/example                                   # interactive REPL
 bro-headless ../broworkshop/demos/example test.js                           # script file
 bro-headless ../broworkshop/demos/example -e "document.querySelector('#btn').click()"
 bro-headless --no-gpu ../broworkshop/demos/example                          # CPU-only (CI)
@@ -167,13 +169,13 @@ Annotated `.js` files in [docs/](docs/), hand-maintained alongside the bindings 
 
 **Graphics & world.** `scene-api.js`, `scene-nodes-api.js`, `animation-api.js`, `lighting-api.js`, `mesh-api.js`, `mesh-io-api.js`, `mesh-plants-api.js`, `rigging-api.js`, `terrain-api.js`, `clipmap-api.js`, `tile-api.js`, `flora-api.js`, `physics-api.js`, `gizmo-api.js`, `math-api.js`, `noise-api.js`, `canvas-api.js`, `webgl2-api.js`.
 
-**Web & app surface.** `brokit-api.js`, `worker-api.js`, `iframe-api.js`, `window-api.js`, `matchmedia-api.js`, `web-animations-api.js`, `events-api.js`, `gamepad-api.js`, `time-api.js`, `menu-api.js`, `dialogs-api.js`, `image-api.js`, `image-gpu-api.js`, `imagebitmap-api.js`, `media-api.js`, `audio-api.js`, `audio-engine-api.js`, `net-api.js`, `intl-api.js`; settings are in [settings.md](docs/settings.md).
+**Web & app surface.** `brokit-api.js`, `worker-api.js`, `iframe-api.js`, `window-api.js`, `matchmedia-api.js`, `web-animations-api.js`, `events-api.js`, `gamepad-api.js`, `time-api.js`, `menu-api.js`, `dialogs-api.js`, `image-api.js`, `image-gpu-api.js`, `imagebitmap-api.js`, `media-api.js`, `audio-api.js`, `audio-engine-api.js`, `net-api.js`, `intl-api.js`, `terminal-api.js`; settings are in [settings.md](docs/settings.md).
 
 **On-device AI.** `gpu-api.js`, `tensor-api.js`, `tensor-nn-api.js`, `lm-api.js`, `diffusion-api.js`, `diffusion-control-api.js`, `vision-api.js`, `triposplat-api.js`, `motion-api.js`, `tts-api.js`, `stt-api.js`, `diar-api.js`, `rave-api.js`, `wake-api.js`, `kws-api.js`, `mic-api.js`, `sense-api.js`, `gesture-api.js`, `listen-api.js`.
 
 **Game AI.** `ai-api.js` (index), `ai-game-api.js` (navigation), `ai-game-planning.js` (agents, world, steering, perception), `ai-game-learning.js` (MCTS, planners, belief, replay), `ai-nn-api.js` (`bro.ai.game.nn`), `ai-learn-api.js` (`bro.ai.game.learn`), `ai-game-tools.js` (`bro.ai.game.grid`).
 
-Plus [settings.md](docs/settings.md) (settings + action binding), [inspect.md](docs/inspect.md) (DOM inspector, very useful in headless), [system-panels.md](docs/system-panels.md) (authoring/overriding engine-level UI panels: menu bar, preferences modal, splash, inspector), [projects.md](docs/projects.md) (the project manager and skeletons), and [build-options.md](docs/build-options.md) (profiles and feature flags).
+Plus [settings.md](docs/settings.md) (settings + action binding), [inspect.md](docs/inspect.md) (DOM inspector, very useful in headless), [system-panels.md](docs/system-panels.md) (authoring/overriding engine-level UI panels: menu bar, preferences modal, splash, inspector), [projects.md](docs/projects.md) (the project manager and skeletons), [build-options.md](docs/build-options.md) (profiles and feature flags), and [ecosystem.md](docs/ecosystem.md) (every repo in the family).
 
 ## Warning
 
@@ -181,7 +183,7 @@ while you technically could easily wire this up to be an actual web browser, it 
 
 ## why are there so many repos?
 
-splitting the codebase exploration into chunks makes coding agents work better for my workflow. i'll try to keep setup reasonable but i expect the submodule list will continue to grow.
+splitting the codebase exploration into chunks makes coding agents work better for my workflow. i'll try to keep setup reasonable but i expect the submodule list will continue to grow. [docs/ecosystem.md](docs/ecosystem.md) is the map: every repo, what it's for, and how they depend on each other, including the desktop-environment libraries bro doesn't link yet.
 
 ## License
 

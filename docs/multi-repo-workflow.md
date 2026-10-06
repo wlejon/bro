@@ -1,12 +1,14 @@
 # Multi-Repo Workflow: bro + sibling libraries
 
-bro depends on sibling repos with submodule fallbacks under `third_party/`: the libraries linked directly into the engine, **[bronze](https://github.com/wlejon/bronze)** (the JavaScript compiler and runtime), and **[brass](https://github.com/wlejon/brass)** (the code-generation backend bronze requires).
+This page is bro's side of working across repositories. [ecosystem.md](ecosystem.md) is the index of every repo in the family (including the desktop-environment libraries and apps that bro does not build against) and of the dependency convention they share; `scripts/repos.txt` is the same list for tooling.
+
+bro depends on sibling repos with submodule fallbacks under `third_party/`: the libraries linked directly into the engine (the terminal ones, bropty, brosearch, brothemes and bromux, included), **[bronze](https://github.com/wlejon/bronze)** (the JavaScript compiler and runtime), and **[brass](https://github.com/wlejon/brass)** (the code-generation backend bronze requires).
 
 Each has a standalone repo at `../<name>` and a git submodule fallback under `third_party/`. The configure that resolves bronze and brass reports which trees it picked (`bronze: standalone tree (...)` or `bronze: submodule tree (...)`) — a build against the pinned submodule must never be mistaken for a build against the checkout you are editing.
 
-Every library but bromath and htmlayout also owns its JavaScript binding, a `<name>_api` static library under the sibling's `src/api/`, so those siblings depend on bronze — and through it brass. See [Sibling JavaScript APIs](#sibling-javascript-apis-name_api) below for what that changes.
+Every library but bromath, htmlayout and the four terminal libraries also owns its JavaScript binding, a `<name>_api` static library under the sibling's `src/api/`, so those siblings depend on bronze — and through it brass. See [Sibling JavaScript APIs](#sibling-javascript-apis-name_api) below for what that changes.
 
-One more sibling repo, **[broworkshop](https://github.com/wlejon/broworkshop)** at `../broworkshop`, is **not** a library or CMake dependency. It's the apps tree (launcher, games, tools, demos, AI) with no submodule fallback; bro just runs it via `bro ../broworkshop` or `bro ../broworkshop/bro.json`. See the [Apps tree](#apps-tree) section below.
+One more sibling repo, **[broworkshop](https://github.com/wlejon/broworkshop)** at `../broworkshop`, is **not** a library or CMake dependency. It's the apps tree (launcher, games, tools, demos, AI) with no submodule fallback; bro just runs it via `bro ../broworkshop` or `bro ../broworkshop/bro.json`. See the [Apps tree](#apps-tree) section below. The dependency runs the other way for **[broterm](https://github.com/wlejon/broterm)** and **[ffmpeg-bro](https://github.com/wlejon/ffmpeg-bro)**: each is its own executable that builds bro from `../bro` (broterm falls back to a `third_party/bro` submodule).
 
 | Library / Tool | Standalone repo | Submodule fallback |
 |---------|----------------|-------------------|
@@ -23,6 +25,10 @@ One more sibling repo, **[broworkshop](https://github.com/wlejon/broworkshop)** 
 | **broimage** | `../broimage` | `third_party/broimage` |
 | **brosoundml** | `../brosoundml` | `third_party/brosoundml` |
 | **brovisionml** | `../brovisionml` | `third_party/brovisionml` |
+| **bropty** | `../bropty` | `third_party/bropty` |
+| **brosearch** | `../brosearch` | `third_party/brosearch` |
+| **brothemes** | `../brothemes` | `third_party/brothemes` |
+| **bromux** | `../bromux` | `third_party/bromux` |
 | **brass** (compiler backend, required) | `../brass` | `third_party/brass` |
 | **bronze** (JS runtime, mandatory) | `../bronze` | `third_party/bronze` |
 
@@ -45,6 +51,8 @@ D:/projects/
 │       ├── broimage/             # submodule (CI / fallback)
 │       ├── brosoundml/           # submodule (CI / fallback)
 │       ├── brovisionml/          # submodule (CI / fallback)
+│       ├── bropty/ brosearch/    # submodules (CI / fallback; <terminal>)
+│       ├── brothemes/ bromux/    # submodules (CI / fallback; <terminal>)
 │       ├── brass/                # submodule (CI / fallback; backend for bronze)
 │       └── bronze/               # submodule (CI / fallback; JS runtime)
 ├── bromath/                      # standalone repo (preferred for dev)
@@ -60,9 +68,12 @@ D:/projects/
 ├── broimage/                     # standalone repo (preferred for dev)
 ├── brosoundml/                   # standalone repo (preferred for dev)
 ├── brovisionml/                  # standalone repo (preferred for dev)
+├── bropty/ brosearch/            # standalone repos (preferred for dev)
+├── brothemes/ bromux/            # standalone repos (preferred for dev)
 ├── brass/                        # standalone repo (the backend JIT/AOT compiler)
 ├── bronze/                       # standalone repo (the JS compiler + runtime)
-└── broworkshop/                  # apps tree (launcher + games/tools/demos/ai)
+├── broworkshop/                  # apps tree (launcher + games/tools/demos/ai)
+└── ...                           # desktop libraries, broterm, ...: see ecosystem.md
 ```
 
 ## How It Works
@@ -101,6 +112,8 @@ Most siblings are added **conditionally**, behind the modular-build flags (see [
 | brosoundml | `BRO_WITH_SOUNDML` |
 | brodiffusion | `BRO_WITH_DIFFUSION` |
 | brovisionml | `BRO_WITH_VISION` |
+| bropty, brosearch, brothemes | `BRO_WITH_TERMINAL` |
+| bromux | `BRO_WITH_TERMINAL`, and only when found: without it persistent sessions are compiled out |
 | bronze | Mandatory (always ON; `BRO_WITH_BRONZE=1`) |
 
 With a gate off, the sibling is never added and the features it backs are compiled out. The flags auto-resolve their prerequisites (`_bro_require` in the top-level `CMakeLists.txt`), so e.g. `BRO_WITH_DIFFUSION=ON` forces `BRO_WITH_LM` and `BRO_WITH_TENSOR` on.
@@ -237,11 +250,13 @@ git add third_party/brokit
 git commit -m "Update brokit: add new API"
 ```
 
-Same shape for `bromath`, `htmlayout`, `broaudio`, `bromesh`, `broflora`, `brotensor`, `brogameagent`, `brolm`, `brodiffusion`, `broimage`, `brosoundml`, `brovisionml`, `brass`, and `bronze`.
+Same shape for `bromath`, `htmlayout`, `broaudio`, `bromesh`, `broflora`, `brotensor`, `brogameagent`, `brolm`, `brodiffusion`, `broimage`, `brosoundml`, `brovisionml`, `bropty`, `brosearch`, `brothemes`, `bromux`, `brass`, and `bronze`.
 
 ## Status, pull, sync across all repos
 
 `scripts/repo-status.ps1` (Windows) and `scripts/repo-status.sh` (Linux/macOS) are the same tool in two ports. Run either from anywhere; both resolve paths from the script location.
+
+Both walk every repo in `scripts/repos.txt`, grouped as there (runtime, compiler, engine, terminal, desktop, app, tool): branch, dirty/staged/untracked counts, and ahead/behind against the upstream as last fetched (`up<n>` / `dn<n>`; an upstream that is not on `origin` is shown in brackets, a branch with none says `no upstream`). A repo that is not checked out at `../<name>` is listed and skipped. The submodule-sync report then covers the repos the list marks `submodule`, and names any wlejon submodule in bro's `.gitmodules` that the list does not mark, so the two cannot drift apart unnoticed.
 
 ```powershell
 pwsh scripts/repo-status.ps1              # working-tree state + submodule-pointer drift
@@ -258,7 +273,7 @@ scripts/repo-status.sh --pull
 scripts/repo-status.sh --sync --push
 ```
 
-**`-Pull` / `--pull`** fast-forwards bro, broworkshop, and every sibling onto its upstream before the report, so what you read reflects the remotes rather than whatever you last fetched. Use it after a round of merges lands on GitHub (dependabot, PRs merged from the web) to bring the whole tree forward in one shot. It is deliberately conservative:
+**`-Pull` / `--pull`** fast-forwards every listed repo onto its upstream before the report, so what you read reflects the remotes rather than whatever you last fetched. Use it after a round of merges lands on GitHub (dependabot, PRs merged from the web) to bring the whole tree forward in one shot. It is deliberately conservative:
 
 - `--ff-only`, so a repo that has diverged from its upstream is reported and skipped, never merged or rebased. Resolve those by hand.
 - `-c pull.rebase=false`, because a repo configured to rebase on pull refuses outright when the tree is dirty — even for a pure fast-forward. Forcing the merge backend removes that false failure without ever allowing a real merge.
@@ -267,7 +282,7 @@ scripts/repo-status.sh --sync --push
 
 **`-Sync` / `--sync`** then bumps bro's stale submodule pointers to the standalone HEADs and records them in a single bro commit. It only acts where the standalone is ahead of (or diverged from) the recorded pointer; a sibling whose standalone is *behind* bro is left alone, since that one needs a pull, not a bump. Note the ordering `-Pull -Sync` implies: pull first so the pointers you record are the real remote HEADs.
 
-**`-Push` / `-u, --push`** pushes bro, broworkshop, and every sibling that has local commits ahead of its upstream. When combined with `-Sync` (`-Sync -Push`), it updates and commits the submodule pointers in `bro` first, then pushes both `bro` and all sibling repos in one pass.
+**`-Push` / `-u, --push`** pushes every listed repo that has local commits ahead of its upstream. When combined with `-Sync` (`-Sync -Push`), it updates and commits the submodule pointers in `bro` first, then pushes both `bro` and all sibling repos in one pass.
 
 ## Overriding Paths
 
@@ -286,6 +301,10 @@ cmake -B build \
     -DBROIMAGE_DIR=/path/to/broimage \
     -DBROSOUNDML_DIR=/path/to/brosoundml \
     -DBROVISIONML_DIR=/path/to/brovisionml \
+    -DBROPTY_DIR=/path/to/bropty \
+    -DBROSEARCH_DIR=/path/to/brosearch \
+    -DBROTHEMES_DIR=/path/to/brothemes \
+    -DBROMUX_DIR=/path/to/bromux \
     -DBRASS_ROOT=/path/to/brass \
     -DBRONZE_DIR=/path/to/bronze
 ```
@@ -297,7 +316,8 @@ cmake -B build -DBROMATH_DIR=none -DBROKIT_DIR=none \
                -DHTMLAYOUT_DIR=none -DBROAUDIO_DIR=none -DBROMESH_DIR=none \
                -DBROFLORA_DIR=none -DBROTENSOR_DIR=none -DBROGAMEAGENT_DIR=none \
                -DBROLM_DIR=none -DBRODIFFUSION_DIR=none -DBROIMAGE_DIR=none \
-               -DBROSOUNDML_DIR=none -DBROVISIONML_DIR=none
+               -DBROSOUNDML_DIR=none -DBROVISIONML_DIR=none \
+               -DBROPTY_DIR=none -DBROSEARCH_DIR=none -DBROTHEMES_DIR=none -DBROMUX_DIR=none
 ```
 
 bronze and brass are the exceptions: neither falls through on a bad path. The first sibling to resolve bronze (brotensor or broimage, from `third_party/CMakeLists.txt`) honours an explicit `BRONZE_DIR` and errors with "bronze not found" when it does not exist, and bro's brass block does the same with "brass not found" for a `BRASS_ROOT` (cache variable or environment) holding no brass. Forcing either submodule means pointing at it: `-DBRONZE_DIR=<abs path>/third_party/bronze -DBRASS_ROOT=<abs path>/third_party/brass`. `BRASS_ROOT` is read in exactly one place inside bro, `third_party/CMakeLists.txt`, which runs before anything else names brass and prints `brass: standalone tree (...)` or `brass: submodule tree (...)`; every later brass block (bronze's, the siblings') finds the target already there.
