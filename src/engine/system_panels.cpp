@@ -590,6 +590,7 @@ void Engine::drawSystemPanelDoc(render::Renderer* renderer,
 
 void Engine::drawSystemPanels(render::Renderer* renderer,
                               layout::DrawTraversal& traversal) {
+    systemDirty_ = false;
     if (!renderer || !isSystemVisible()) return;
 
     for (auto& doc : systemDocs_) {
@@ -599,7 +600,6 @@ void Engine::drawSystemPanels(render::Renderer* renderer,
     }
 
     overlayMgr_.drawIfContext(OverlayContext::System, renderer);
-    systemDirty_ = false;
 }
 
 // ---------------------------------------------------------------------------

@@ -71,6 +71,7 @@ public:
             uint32_t s = state_.load(std::memory_order_acquire);
             if (s == Done) {
                 state_.store(Idle, std::memory_order_release);
+                state_.notify_one();
                 return true;
             }
             if (s == Idle || s == Shutdown) return false;
@@ -88,6 +89,7 @@ public:
             if (s == Idle || s == Shutdown) return true;
             if (s == Done) {
                 state_.store(Idle, std::memory_order_release);
+                state_.notify_one();
                 return true;
             }
             state_.wait(s, std::memory_order_acquire);
@@ -101,10 +103,10 @@ public:
     /// Returns false on shutdown.
     bool waitForRequest() {
         for (;;) {
-            state_.wait(Idle, std::memory_order_acquire);
             uint32_t s = state_.load(std::memory_order_acquire);
             if (s == Shutdown) return false;
             if (s == Requested) return true;
+            state_.wait(s, std::memory_order_acquire);
         }
     }
 

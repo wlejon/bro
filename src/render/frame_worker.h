@@ -52,9 +52,14 @@ public:
     /// If the worker has published a result, transition back to Idle.
     /// Returns true iff a result was claimed.
     bool tryClaimResult() {
-        if (state_.load(std::memory_order_acquire) != ResultReady) return false;
-        state_.store(Idle, std::memory_order_release);
-        return true;
+        uint32_t expected = ResultReady;
+        if (state_.compare_exchange_strong(expected, Idle,
+                                           std::memory_order_release,
+                                           std::memory_order_relaxed)) {
+            state_.notify_one();
+            return true;
+        }
+        return false;
     }
 
     /// Block until the worker is Idle. Used at shutdown / before destructive
@@ -102,11 +107,10 @@ public:
     /// Returns false on shutdown (worker should exit its loop).
     bool waitForRequest() {
         for (;;) {
-            state_.wait(Idle, std::memory_order_acquire);
             uint32_t s = state_.load(std::memory_order_acquire);
             if (s == Shutdown) return false;
             if (s == Requested) return true;
-            // Spurious wake (shouldn't happen with futex but be safe).
+            state_.wait(s, std::memory_order_acquire);
         }
     }
 

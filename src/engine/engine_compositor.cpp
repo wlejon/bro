@@ -227,6 +227,7 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
 void Engine::recordSystemPanelLayers(render::CommandBuffer& outBuffer,
                                      int vpW, int vpH) {
     outBuffer.clear();
+    systemDirty_ = false;
     if (!recordingRenderer_ || !drawTraversal_ || !isSystemVisible()) return;
 
     // Layout still runs on main thread using textMetrics_ (paired with

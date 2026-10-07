@@ -241,7 +241,7 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
     }
 
     if (frameStats_.addFrame(util::currentTimeMs() - frameStart)) {
-        uiDirty_ = true;
+        if (systemPerfVisible_) uiDirty_ = true;
     }
 }
 
