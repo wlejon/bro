@@ -4,6 +4,7 @@
 #include "render/vulkan_util.h"
 #include "util/log.h"
 
+#include <algorithm>
 #include <unistd.h>
 
 namespace bro::render {
@@ -73,8 +74,25 @@ bool KmsDirectPresenter::initScanoutBuffers(VulkanContext& ctx, uint32_t count) 
             modifiers.push_back(m.modifier);
         }
     }
-    if (modifiers.empty()) {
+    if (std::find(modifiers.begin(), modifiers.end(), DRM_FORMAT_MOD_LINEAR) == modifiers.end()) {
         modifiers.push_back(DRM_FORMAT_MOD_LINEAR);
+    }
+
+    uint64_t workingModifier = DRM_FORMAT_MOD_INVALID;
+    for (uint64_t m : modifiers) {
+        std::vector<uint64_t> singleMod = {m};
+        auto testBo = gbmDevice_->create_buffer_with_modifiers(width_, height_, DRM_FORMAT_XRGB8888, singleMod);
+        if (!testBo) continue;
+        auto attrs = testBo.value()->export_dmabuf();
+        if (!attrs) continue;
+        auto fb = brodmabuf::KmsFramebuffer::create_from_dmabuf(device_->fd(), attrs.value());
+        if (!fb) continue;
+        auto vk = dmabufVkCtx_->import_dmabuf(attrs.value(),
+            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+        if (!vk) continue;
+        workingModifier = m;
+        LOG_INFO("KmsDirectPresenter: negotiated scanout modifier 0x%lx", static_cast<unsigned long>(m));
+        break;
     }
 
     scanoutSlots_.clear();
@@ -85,7 +103,12 @@ bool KmsDirectPresenter::initScanoutBuffers(VulkanContext& ctx, uint32_t count) 
         slot.width = width_;
         slot.height = height_;
 
-        auto boRes = gbmDevice_->create_buffer_with_modifiers(width_, height_, DRM_FORMAT_XRGB8888, modifiers);
+        brodmabuf::Result<std::unique_ptr<brodmabuf::GbmBuffer>> boRes =
+            brodmabuf::Status::unsupported("not tried");
+        if (workingModifier != DRM_FORMAT_MOD_INVALID) {
+            std::vector<uint64_t> singleMod = {workingModifier};
+            boRes = gbmDevice_->create_buffer_with_modifiers(width_, height_, DRM_FORMAT_XRGB8888, singleMod);
+        }
         if (!boRes) {
             boRes = gbmDevice_->create_buffer(width_, height_, DRM_FORMAT_XRGB8888,
                                                GBM_BO_USE_RENDERING | GBM_BO_USE_SCANOUT);
