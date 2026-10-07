@@ -347,6 +347,28 @@ bool KmsDirectPresenter::presentComposited(
     uint64_t ticket = frames.submit(cmd, {});
     ctx.queue().wait(ticket);
 
+    static uint32_t s_dumpCheckFrame = 0;
+    if ((++s_dumpCheckFrame % 60 == 0) && access("/tmp/dump_screen", F_OK) == 0) {
+        unlink("/tmp/dump_screen");
+        auto mapping = slot.gbm->map(0, 0, slot.width, slot.height, GBM_BO_TRANSFER_READ);
+        if (mapping && mapping->valid()) {
+            FILE* f = fopen("/tmp/screen_current.ppm", "wb");
+            if (f) {
+                fprintf(f, "P6\n%u %u\n255\n", slot.width, slot.height);
+                const uint8_t* src = static_cast<const uint8_t*>(mapping->data());
+                for (uint32_t y = 0; y < slot.height; ++y) {
+                    const uint8_t* row = src + y * mapping->stride();
+                    for (uint32_t x = 0; x < slot.width; ++x) {
+                        uint8_t rgb[3] = {row[x * 4 + 2], row[x * 4 + 1], row[x * 4 + 0]};
+                        fwrite(rgb, 1, 3, f);
+                    }
+                }
+                fclose(f);
+                LOG_INFO("KmsDirectPresenter: captured /tmp/screen_current.ppm (%ux%u)", slot.width, slot.height);
+            }
+        }
+    }
+
     auto flipRes = presenter_->present(*slot.fb, inFenceFd, true);
     if (!flipRes) {
         static uint32_t s_flipFailCount = 0;
