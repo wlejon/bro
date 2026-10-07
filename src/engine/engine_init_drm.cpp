@@ -59,9 +59,10 @@ void Engine::initDrm(const EngineConfig& config) {
 
     std::string cardNode = brodmabuf::find_card_node();
     int cardFd = -1;
-    if (drmCtx_->seat->isSeatActive() && !cardNode.empty()) {
+    if (drmCtx_->seat && !cardNode.empty()) {
         cardFd = drmCtx_->seat->openDevice(cardNode);
-    } else if (!cardNode.empty()) {
+    }
+    if (cardFd < 0 && !cardNode.empty()) {
         cardFd = ::open(cardNode.c_str(), O_RDWR | O_CLOEXEC);
     }
     if (cardFd < 0) {

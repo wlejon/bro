@@ -114,7 +114,8 @@ bool KmsDirectPresenter::initScanoutBuffers(VulkanContext& ctx, uint32_t count) 
 
         auto fbRes = brodmabuf::KmsFramebuffer::create_from_dmabuf(device_->fd(), attrs);
         if (!fbRes) {
-            LOG_WARN("KmsDirectPresenter: KmsFramebuffer::create_from_dmabuf failed");
+            LOG_WARN("KmsDirectPresenter: KmsFramebuffer::create_from_dmabuf failed: %s",
+                     std::string(fbRes.status().message()).c_str());
             slot.gbm.reset();
             close();
             return false;

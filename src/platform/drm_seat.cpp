@@ -1,5 +1,8 @@
 #include "platform/drm_seat.h"
 
+#include <chrono>
+#include <thread>
+
 namespace bro::platform {
 
 DrmSeatPlatform::DrmSeatPlatform() = default;
@@ -20,7 +23,16 @@ bool DrmSeatPlatform::initSeat(const std::string& seatName) {
     cfg.seat_name = seatName;
     std::string err;
     seat_ = broseat::Seat::create(cfg, &err);
-    seatActive_ = (seat_ != nullptr && seat_->is_active());
+    if (seat_) {
+        for (int i = 0; i < 20 && !seat_->is_active(); ++i) {
+            seat_->dispatch(50);
+            if (seat_->is_active()) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        seatActive_ = seat_->is_active();
+    } else {
+        seatActive_ = false;
+    }
 
     sessionMgr_ = broseat::SessionManager::create(&err);
     sessionActive_ = (sessionMgr_ != nullptr);
