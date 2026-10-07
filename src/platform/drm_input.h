@@ -32,6 +32,7 @@ struct DrmInputEvent {
     int32_t keycode = 0;
     int32_t scancode = 0;
     int32_t modifiers = 0;
+    uint32_t rawKeycode = 0; // Linux evdev KEY_* code
     bool repeat = false;
 
     // Pointer / mouse
@@ -40,6 +41,7 @@ struct DrmInputEvent {
     float dx = 0.0f;
     float dy = 0.0f;
     int32_t button = 0; // 1 = left, 2 = middle, 3 = right
+    uint32_t rawButton = 0; // Linux evdev BTN_* code
 
     // Wheel
     float wheelDx = 0.0f;
@@ -81,6 +83,7 @@ private:
     uint32_t screenHeight_ = 1080;
     float cursorX_ = 0.0f;
     float cursorY_ = 0.0f;
+    int32_t modifiers_ = 0;
 
 #if defined(__linux__) && BRO_WITH_SEAT && BRO_HAVE_LIBINPUT
     struct udev* udev_ = nullptr;

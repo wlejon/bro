@@ -9,6 +9,7 @@ class DrmInputPlatform;
 
 namespace bro::compositor {
 class WaylandCompositor;
+struct LeasedSurfaceFrame;
 }
 
 namespace bro::engine {
@@ -24,6 +25,7 @@ struct DrmPlatformContext {
 #endif
 #if BRO_WITH_COMPOSITOR
     std::unique_ptr<compositor::WaylandCompositor> compositor;
+    std::vector<compositor::LeasedSurfaceFrame> leasedFrames;
 #endif
 };
 

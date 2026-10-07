@@ -183,7 +183,7 @@ void DrawTraversal::draw(dom::Element* root, float scrollX, float scrollY,
     // positioned-non-SC descendants and z:auto SC children in tree order,
     // then positive-z child SCs.
     auto rootSC = buildStackingContextTree(root, scrollX, scrollY);
-    if (rootSC) paintStackingContext(rootSC.get());
+    if (rootSC) paintStackingContext(rootSC.get(), false, true);
     // Then the top layer, above everything, each entry over its ::backdrop.
     if (rootSC) paintTopLayer(root);
     topLayerSCs_.clear();
@@ -455,7 +455,7 @@ std::unique_ptr<StackingContext> DrawTraversal::buildStackingContextTree(
     return rootSC;
 }
 
-void DrawTraversal::paintStackingContext(StackingContext* sc, bool withinPromoted) {
+void DrawTraversal::paintStackingContext(StackingContext* sc, bool withinPromoted, bool isRoot) {
     if (!sc || !sc->root) return;
 
     // Paint-mode filter. In the default PaintMode::All (or with no promoted set
@@ -683,10 +683,30 @@ void DrawTraversal::paintStackingContext(StackingContext* sc, bool withinPromote
         if (a->zIndex != b->zIndex) return a->zIndex < b->zIndex;
         return a->treeOrder < b->treeOrder;
     });
+    bool emittedWindows = false;
     for (auto* c : posSCs) {
+        if (isRoot && shellClientWindows_ && !emittedWindows && c->zIndex >= 1000) {
+            emittedWindows = true;
+            if (layerBreakCb_) {
+                LayerBreak lb;
+                lb.source = render::ClientWindowsLayerSource{};
+                lb.quad.w = static_cast<float>(viewportW_);
+                lb.quad.h = static_cast<float>(viewportH_);
+                layerBreakCb_(lb);
+            }
+        }
         pushClips(c->ancestorClips);
         paintStackingContext(c, withinPromoted);
         popClips(c->ancestorClips);
+    }
+    if (isRoot && shellClientWindows_ && !emittedWindows) {
+        if (layerBreakCb_) {
+            LayerBreak lb;
+            lb.source = render::ClientWindowsLayerSource{};
+            lb.quad.w = static_cast<float>(viewportW_);
+            lb.quad.h = static_cast<float>(viewportH_);
+            layerBreakCb_(lb);
+        }
     }
 
     if (didWrap) {

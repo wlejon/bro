@@ -37,8 +37,11 @@ struct DmabufLayerSource {
     int syncFd = -1;  // explicit sync fence fd (<0 means none/implicit)
 };
 
+/// Placeholder layer break for client windows in shell applications
+struct ClientWindowsLayerSource {};
+
 using LayerSource = std::variant<CanvasLayerSource, WebGLLayerSource, SceneLayerSource, IframeLayerSource,
-                                 TerminalLayerSource, DmabufLayerSource>;
+                                 TerminalLayerSource, DmabufLayerSource, ClientWindowsLayerSource>;
 
 /// Where a layer lands, in the surface space of the HTML painted around it
 /// (CSS px; content space for the app document), and the overflow/scroll

@@ -1,6 +1,7 @@
 #include "compositor/wayland_compositor.h"
 #include "engine/ui_layer.h"
 #include "render/layer_source.h"
+#include "util/time.h"
 
 #include <brocompositor/api.h>
 
@@ -74,11 +75,16 @@ void WaylandCompositor::pollEvents() {
     auto events = backend_->events().drain();
     auto q = brocompositor::api::getEventQueue();
     for (auto& ev : events) {
+        if (wm_) {
+            auto cmd = wm_->handle(ev);
+            if (auto* a = std::get_if<brocompositor::WindowAdded>(&ev)) {
+                auto focusCmds = wm_->focus(a->window.id);
+                cmd.insert(cmd.end(), focusCmds.begin(), focusCmds.end());
+            }
+            backend_->execute(cmd);
+        }
         if (q) {
             q->push(ev);
-        } else if (wm_) {
-            auto cmd = wm_->handle(ev);
-            backend_->execute(cmd);
         }
     }
 
@@ -89,7 +95,10 @@ void WaylandCompositor::pollEvents() {
 
 void WaylandCompositor::injectKey(uint32_t keycode, bool pressed) {
 #if BRO_HAVE_WAYLAND_SERVER
-    if (backend_) backend_->inject_key(keycode, pressed);
+    if (backend_) {
+        uint32_t t = static_cast<uint32_t>(util::currentTimeMs());
+        backend_->keyboard_key(t, keycode, pressed, {});
+    }
 #else
     (void)keycode; (void)pressed;
 #endif
@@ -113,7 +122,11 @@ void WaylandCompositor::injectPointerWarp(double x, double y) {
 
 void WaylandCompositor::injectPointerButton(uint32_t button, bool pressed) {
 #if BRO_HAVE_WAYLAND_SERVER
-    if (backend_) backend_->inject_pointer_button(button, pressed);
+    if (backend_) {
+        uint32_t t = static_cast<uint32_t>(util::currentTimeMs());
+        backend_->pointer_button(t, button, pressed);
+        backend_->pointer_frame();
+    }
 #else
     (void)button; (void)pressed;
 #endif
@@ -121,7 +134,11 @@ void WaylandCompositor::injectPointerButton(uint32_t button, bool pressed) {
 
 void WaylandCompositor::injectPointerAxis(uint32_t orientation, double delta, int32_t discrete) {
 #if BRO_HAVE_WAYLAND_SERVER
-    if (backend_) backend_->inject_pointer_axis(orientation, delta, discrete);
+    if (backend_) {
+        uint32_t t = static_cast<uint32_t>(util::currentTimeMs());
+        backend_->pointer_axis(t, orientation, delta, discrete, 0);
+        backend_->pointer_frame();
+    }
 #else
     (void)orientation; (void)delta; (void)discrete;
 #endif
@@ -258,6 +275,10 @@ void WaylandCompositor::releaseClientLayers(const std::vector<LeasedSurfaceFrame
 bool WaylandCompositor::focusWindow(uint64_t winId) {
 #if BRO_HAVE_WAYLAND_SERVER
     if (!backend_) return false;
+    if (wm_) {
+        auto cmds = wm_->focus(static_cast<brocompositor::WindowId>(winId));
+        backend_->execute(cmds);
+    }
     return backend_->focus(static_cast<brocompositor::WindowId>(winId));
 #else
     (void)winId;
@@ -299,11 +320,13 @@ bool WaylandCompositor::routePointer(double x, double y, uint32_t time) {
                 y >= mon.bounds.y && y < mon.bounds.y + mon.bounds.height) {
                 if (auto hit = backend_->hit_test_lock(mon.id, x - mon.bounds.x, y - mon.bounds.y)) {
                     backend_->pointer_route(hit->surface, hit->sx, hit->sy, time);
+                    backend_->pointer_frame();
                     return true;
                 }
             }
         }
         backend_->pointer_route(brocompositor::wl::kNoSurface, 0, 0, time);
+        backend_->pointer_frame();
         return false;
     }
 
@@ -311,6 +334,7 @@ bool WaylandCompositor::routePointer(double x, double y, uint32_t time) {
         if (x >= u.rect.x && x < u.rect.x + u.rect.width &&
             y >= u.rect.y && y < u.rect.y + u.rect.height) {
             backend_->pointer_route(u.surface, x - u.rect.x, y - u.rect.y, time);
+            backend_->pointer_frame();
             return true;
         }
     }
@@ -321,12 +345,14 @@ bool WaylandCompositor::routePointer(double x, double y, uint32_t time) {
         if (snap) {
             if (auto hit = backend_->hit_test(hitWin, x - snap->frame.x, y - snap->frame.y)) {
                 backend_->pointer_route(hit->surface, hit->sx, hit->sy, time);
+                backend_->pointer_frame();
                 return true;
             }
         }
     }
 
     backend_->pointer_route(brocompositor::wl::kNoSurface, 0, 0, time);
+    backend_->pointer_frame();
     return false;
 }
 #endif

@@ -78,9 +78,9 @@ void Engine::recordAppLayers(render::CommandBuffer& outBuffer,
     drawTraversal_->setLayerBreakCallback([this](const layout::DrawTraversal::LayerBreak& lb) {
         recordingRenderer_->recordLayerBreak(lb.source, lb.quad);
     });
-    // A <terminal> is its own layer (TerminalLayers) except in a promoted
-    // subtree, whose replay has no layers: it draws inline there.
     drawTraversal_->setTerminalLayers(!promotedOnly && terminalLayersEnabled());
+    bool hasCompositor = (displayMode_ == DisplayMode::Drm && isShellApp());
+    drawTraversal_->setShellClientWindowsLayer(!promotedOnly && hasCompositor);
 
     // Everything below records in *content space*: the app layer surfaces are
     // content-sized (contentW × contentH) and origin-based; the engine-reserved
@@ -138,6 +138,7 @@ void Engine::recordAppLayers(render::CommandBuffer& outBuffer,
 
     drawTraversal_->setLayerBreakCallback(nullptr);
     drawTraversal_->setTerminalLayers(false);
+    drawTraversal_->setShellClientWindowsLayer(false);
     recordingRenderer_->setBuffer(nullptr);
     // Restore default paint mode so subsequent recorders (system panels, the
     // next full pass) aren't affected.

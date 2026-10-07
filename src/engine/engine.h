@@ -63,10 +63,8 @@ public:
 
     void stopBackgroundServices();
     void shutdown();
-
 private:
     void removeModalEventWatch();
-
 public:
     using ContentInsets = bro::engine::ContentInsets; using LoadedFont = bro::engine::LoadedFont;
     using SelectionSnapshot = bro::engine::SelectionSnapshot; using WebGLEntry = bro::engine::WebGLEntry;
@@ -88,11 +86,9 @@ public:
     int framePixelHeight() const { return deviceScale_.drawableH; }
     /// Headless: render as a display with `scale` device px per CSS px.
     void setDeviceScaleFactor(float scale);
-
     render::VulkanContext* vulkanContext() const { return vulkanContext_.get(); }
     render::SkiaGpu* skiaGpu() const { return skiaGpu_.get(); }
     render::VulkanPresenter* vulkanPresenter() const { return vulkanPresenter_.get(); }
-
     std::string effectiveColorScheme() const;
     void applyColorScheme();
     void deliverMediaQueryChangesAllRealms();
@@ -175,9 +171,7 @@ public:
     /// BRO_CAPTURE_PRESENTS=1 only (every present is then also read back, for
     /// a test harness); empty otherwise.
     std::vector<uint8_t> presentedPixels(uint64_t hostId, int& outW, int& outH);
-
     const std::vector<GamepadState>& gamepads() const { return gamepads_; }
-
     // Polled action state (action_input.cpp)
     float actionStrength(const std::string& action) const;
     bool actionPressed(const std::string& action) const;
@@ -490,6 +484,7 @@ public:
     /// when the point lands on no box at all. Public because JS asks the same
     /// question through document.elementFromPoint().
     dom::Element* hitTest(float x, float y);
+    bool isShellOverlayAt(float x, float y);
 
 private:
     GraphicsConfig graphicsConfig_;

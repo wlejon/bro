@@ -4,8 +4,11 @@
 #include "engine/layout_pipeline.h"
 #include "engine/navmesh_subsystem.h"
 #include "engine/replaced_elements.h"
+#include "engine/key_mapping.h"
 #include "platform/drm_seat.h"
 #include "platform/drm_input.h"
+#include <SDL3/SDL_keycode.h>
+#include <SDL3/SDL_scancode.h>
 #include "render/vulkan_context.h"
 #include "render/vulkan_presenter.h"
 #if BRO_WITH_DMABUF
@@ -28,6 +31,7 @@
 #include "webgl/webgl2_context.h"
 #include "util/interrupt.h"
 #include "util/log.h"
+#include "util/platform.h"
 #include "util/time.h"
 
 #include <algorithm>
@@ -157,7 +161,65 @@ void Engine::runDrm() {
     windowFocused_ = true;
     if (splashVisible_) splashStartMs_ = util::currentTimeMs();
 
-    auto dispatchInput = [this](const platform::DrmInputEvent& ev) {
+    auto shellWantsKeyboard = [this](const platform::DrmInputEvent& ev) -> bool {
+        if (!isShellApp()) return true;
+        if (!document_) return false;
+
+        auto isVisible = [](dom::Element* el) {
+            if (!el) return false;
+            std::string cls = el->className();
+            if (cls.find("hidden") != std::string::npos) return false;
+            auto it = el->computedStyle().find("display");
+            if (it != el->computedStyle().end() && it->second == "none") return false;
+            return true;
+        };
+
+        if (isVisible(document_->getElementById("lock-screen"))) return true;
+        if (isVisible(document_->getElementById("launcher-modal"))) return true;
+        if (isVisible(document_->getElementById("notify-drawer"))) return true;
+        if (isVisible(document_->getElementById("popup-volume"))) return true;
+        if (isVisible(document_->getElementById("popup-network"))) return true;
+        if (isVisible(document_->getElementById("popup-power"))) return true;
+
+        dom::Element* active = document_->activeElement();
+        if (active && active != document_->body() && active != document_->documentElement()) {
+            const std::string& tag = active->tagName();
+            if (tag == "input" || tag == "INPUT" || tag == "textarea" || tag == "TEXTAREA") {
+                return true;
+            }
+        }
+
+        // Hotkeys that shell intercepts regardless of client focus:
+        if (ev.rawKeycode == 125 || ev.rawKeycode == 126 ||
+            ev.scancode == SDL_SCANCODE_LGUI || ev.scancode == SDL_SCANCODE_RGUI) {
+            return true;
+        }
+
+        bool isCtrl = (ev.modifiers & SDL_KMOD_CTRL) != 0;
+        bool isAlt  = (ev.modifiers & SDL_KMOD_ALT) != 0;
+        bool isShift = (ev.modifiers & SDL_KMOD_SHIFT) != 0;
+        bool isMeta  = (ev.modifiers & SDL_KMOD_GUI) != 0;
+
+        // Ctrl+Space or Alt+Space (KEY_SPACE = 57, SDL_SCANCODE_SPACE = 44)
+        bool isSpace = (ev.rawKeycode == 57 || ev.scancode == SDL_SCANCODE_SPACE);
+        if (isSpace && (isCtrl || isAlt)) return true;
+
+        // Ctrl+Alt+L or Meta+L (KEY_L = 38, SDL_SCANCODE_L = 15)
+        bool isL = (ev.rawKeycode == 38 || ev.scancode == SDL_SCANCODE_L);
+        if (isL && ((isCtrl && isAlt) || isMeta)) return true;
+
+        // Super+V or Ctrl+Alt+V (KEY_V = 47, SDL_SCANCODE_V = 25)
+        bool isV = (ev.rawKeycode == 47 || ev.scancode == SDL_SCANCODE_V);
+        if (isV && ((isCtrl && isAlt) || isMeta)) return true;
+
+        // Ctrl+Shift+N (KEY_N = 49, SDL_SCANCODE_N = 17)
+        bool isN = (ev.rawKeycode == 49 || ev.scancode == SDL_SCANCODE_N);
+        if (isN && isCtrl && isShift) return true;
+
+        return false;
+    };
+
+    auto dispatchInput = [this, &shellWantsKeyboard](const platform::DrmInputEvent& ev) {
         if (ev.type == platform::DrmInputEvent::Type::MouseMove ||
             ev.type == platform::DrmInputEvent::Type::MouseDown ||
             ev.type == platform::DrmInputEvent::Type::MouseUp) {
@@ -168,43 +230,62 @@ void Engine::runDrm() {
 #if BRO_WITH_COMPOSITOR
         if (drmCtx_ && drmCtx_->compositor && drmCtx_->compositor->isRunning()) {
             if (ev.type == platform::DrmInputEvent::Type::KeyDown) {
-                if (drmCtx_->compositor->focusedWindow() != 0) {
-                    drmCtx_->compositor->injectKey(static_cast<uint32_t>(ev.scancode), true);
+                if (!shellWantsKeyboard(ev) && drmCtx_->compositor->focusedWindow() != 0) {
+                    uint32_t k = ev.rawKeycode ? ev.rawKeycode : static_cast<uint32_t>(ev.scancode);
+                    drmCtx_->compositor->injectKey(k, true);
                     return;
                 }
             } else if (ev.type == platform::DrmInputEvent::Type::KeyUp) {
-                if (drmCtx_->compositor->focusedWindow() != 0) {
-                    drmCtx_->compositor->injectKey(static_cast<uint32_t>(ev.scancode), false);
+                if (!shellWantsKeyboard(ev) && drmCtx_->compositor->focusedWindow() != 0) {
+                    uint32_t k = ev.rawKeycode ? ev.rawKeycode : static_cast<uint32_t>(ev.scancode);
+                    drmCtx_->compositor->injectKey(k, false);
                     return;
                 }
             } else if (ev.type == platform::DrmInputEvent::Type::MouseMove) {
-                drmCtx_->compositor->injectPointerWarp(static_cast<double>(ev.x), static_cast<double>(ev.y));
-                drmCtx_->compositor->routePointer(static_cast<double>(ev.x), static_cast<double>(ev.y));
+                bool overlay = isShellOverlayAt(ev.x, ev.y);
+                if (overlay) {
+                    drmCtx_->compositor->routePointer(-1.0, -1.0);
+                } else {
+                    drmCtx_->compositor->injectPointerWarp(static_cast<double>(ev.x), static_cast<double>(ev.y));
+                    drmCtx_->compositor->routePointer(static_cast<double>(ev.x), static_cast<double>(ev.y));
+                }
             } else if (ev.type == platform::DrmInputEvent::Type::MouseDown) {
-                uint32_t wlButton = BTN_LEFT;
-                if (ev.button == 3) wlButton = BTN_RIGHT;
-                else if (ev.button == 2) wlButton = BTN_MIDDLE;
+                bool overlay = isShellOverlayAt(ev.x, ev.y);
+                uint32_t wlButton = ev.rawButton ? ev.rawButton : BTN_LEFT;
+                if (!ev.rawButton) {
+                    if (ev.button == 3) wlButton = BTN_RIGHT;
+                    else if (ev.button == 2) wlButton = BTN_MIDDLE;
+                }
 
-                bool hitClient = drmCtx_->compositor->routePointer(static_cast<double>(ev.x), static_cast<double>(ev.y));
-                if (hitClient) {
-                    uint64_t hitWin = drmCtx_->compositor->windowAt(static_cast<double>(ev.x), static_cast<double>(ev.y));
-                    if (hitWin != 0 && hitWin != drmCtx_->compositor->focusedWindow()) {
-                        drmCtx_->compositor->focusWindow(hitWin);
+                if (!overlay) {
+                    bool hitClient = drmCtx_->compositor->routePointer(static_cast<double>(ev.x), static_cast<double>(ev.y));
+                    if (hitClient) {
+                        uint64_t hitWin = drmCtx_->compositor->windowAt(static_cast<double>(ev.x), static_cast<double>(ev.y));
+                        if (hitWin != 0 && hitWin != drmCtx_->compositor->focusedWindow()) {
+                            drmCtx_->compositor->focusWindow(hitWin);
+                        }
+                        drmCtx_->compositor->injectPointerButton(wlButton, true);
+                        return;
                     }
-                    drmCtx_->compositor->injectPointerButton(wlButton, true);
-                    return;
-                } else if (drmCtx_->compositor->focusedWindow() != 0) {
-                    drmCtx_->compositor->focusWindow(0);
+                } else {
+                    if (drmCtx_->compositor->focusedWindow() != 0) {
+                        drmCtx_->compositor->focusWindow(0);
+                    }
                 }
             } else if (ev.type == platform::DrmInputEvent::Type::MouseUp) {
-                uint32_t wlButton = BTN_LEFT;
-                if (ev.button == 3) wlButton = BTN_RIGHT;
-                else if (ev.button == 2) wlButton = BTN_MIDDLE;
-                if (drmCtx_->compositor->focusedWindow() != 0) {
+                bool overlay = isShellOverlayAt(ev.x, ev.y);
+                uint32_t wlButton = ev.rawButton ? ev.rawButton : BTN_LEFT;
+                if (!ev.rawButton) {
+                    if (ev.button == 3) wlButton = BTN_RIGHT;
+                    else if (ev.button == 2) wlButton = BTN_MIDDLE;
+                }
+                if (!overlay && drmCtx_->compositor->focusedWindow() != 0) {
                     drmCtx_->compositor->injectPointerButton(wlButton, false);
+                    return;
                 }
             } else if (ev.type == platform::DrmInputEvent::Type::MouseWheel) {
-                if (drmCtx_->compositor->focusedWindow() != 0) {
+                bool overlay = isShellOverlayAt(ev.x, ev.y);
+                if (!overlay && drmCtx_->compositor->focusedWindow() != 0) {
                     drmCtx_->compositor->injectPointerAxis(0, static_cast<double>(ev.wheelDy), 0);
                     return;
                 }
@@ -212,9 +293,16 @@ void Engine::runDrm() {
         }
 #endif
         switch (ev.type) {
-            case platform::DrmInputEvent::Type::KeyDown:
+            case platform::DrmInputEvent::Type::KeyDown: {
                 handleKeyDown(ev.keycode, ev.scancode, ev.modifiers, ev.repeat);
+                if (!util::hasPrimaryMod(ev.modifiers)) {
+                    std::string webKey = sdlKeycodeToWebKey(ev.keycode, ev.modifiers);
+                    if (webKey.size() == 1) {
+                        handleTextInput(webKey);
+                    }
+                }
                 break;
+            }
             case platform::DrmInputEvent::Type::KeyUp:
                 handleKeyUp(ev.keycode, ev.scancode, ev.modifiers, ev.repeat);
                 break;
@@ -448,6 +536,43 @@ void Engine::runDrm() {
 
     shutdown();
 #endif
+}
+
+bool Engine::isShellOverlayAt(float x, float y) {
+    if (!isShellApp()) return true;
+    if (!document_ || !document_->documentElement()) return false;
+
+    dom::Element* hit = hitTest(x, y);
+    if (!hit) return false;
+    if (hit == document_->documentElement() || hit == document_->body()) {
+        return false;
+    }
+
+    for (dom::Element* cur = hit; cur; cur = cur->parentElement()) {
+        if (cur == document_->body() || cur == document_->documentElement()) break;
+
+        const std::string& id = cur->id();
+        if (id == "wallpaper") return false;
+        const std::string& cls = cur->className();
+        if (cls.find("desktop-wallpaper") != std::string::npos) return false;
+
+        if (id == "top-panel" || id == "launcher-modal" ||
+            id == "notify-drawer" || id == "lock-screen" ||
+            cls.find("quick-popup") != std::string::npos ||
+            cls.find("toast") != std::string::npos) {
+            return true;
+        }
+
+        const auto& style = cur->computedStyle();
+        auto it = style.find("z-index");
+        if (it != style.end() && !it->second.empty() && it->second != "auto") {
+            try {
+                int z = std::stoi(it->second);
+                if (z >= 1000) return true;
+            } catch (...) {}
+        }
+    }
+    return false;
 }
 
 } // namespace bro::engine

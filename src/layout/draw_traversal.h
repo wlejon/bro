@@ -129,6 +129,7 @@ public:
     // A <terminal> as its own layer (render::TerminalLayerSource) instead of
     // drawn inline: the app document's pass, whose compositor places it.
     void setTerminalLayers(bool on) { terminalLayers_ = on; }
+    void setShellClientWindowsLayer(bool on) { shellClientWindows_ = on; }
 
     // Viewport. `top` is the Y position in the output surface where the
     // content area begins — used for the html/body background paint rect.
@@ -187,7 +188,7 @@ private:
     // withinPromoted tracks (PromotedOnly mode only) whether the recursion is
     // already inside a promoted SC subtree; false at the top. Ignored in All /
     // BaseSkipPromoted modes.
-    void paintStackingContext(StackingContext* sc, bool withinPromoted = false);
+    void paintStackingContext(StackingContext* sc, bool withinPromoted = false, bool isRoot = false);
 
     // The top layer (dom::Document::topLayer, draw_traversal_top_layer.cpp).
     // buildStackingContextTree lifts each entry's subtree out of its ancestors
@@ -265,6 +266,7 @@ private:
     std::unordered_map<std::string, CachedImage> imageCache_;
     LayerBreakCallback layerBreakCb_;
     bool terminalLayers_ = false;
+    bool shellClientWindows_ = false;
 
     // Running stack of axis-aligned overflow/scroll clip rects (each already
     // intersected with the one below it, so the top is the effective clip).

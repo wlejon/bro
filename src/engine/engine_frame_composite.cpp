@@ -24,6 +24,10 @@
 #include "scene/scene_renderer.h"
 #endif
 
+#if BRO_WITH_COMPOSITOR
+#include "compositor/wayland_compositor.h"
+#endif
+
 #if BRO_WITH_DMABUF
 #include "render/vulkan_dmabuf_importer.h"
 #include "render/kms_direct_presenter.h"
@@ -252,6 +256,22 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, int offsetY) {
                 place(buf->image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, buf->width, buf->height, at.dst(quad), &quad).view = buf->view;
 #else
                 (void)src;
+#endif
+            },
+            [&](const render::ClientWindowsLayerSource&) {
+#if BRO_WITH_COMPOSITOR
+                if (drmCtx_ && drmCtx_->compositor) {
+                    std::vector<engine::UILayer> clientLayers;
+                    auto leased = drmCtx_->compositor->acquireClientLayers(clientLayers);
+                    if (!clientLayers.empty()) {
+                        compositeLayers(clientLayers);
+                    }
+                    if (!leased.empty()) {
+                        drmCtx_->leasedFrames.insert(drmCtx_->leasedFrames.end(),
+                                                     std::make_move_iterator(leased.begin()),
+                                                     std::make_move_iterator(leased.end()));
+                    }
+                }
 #endif
             },
         }, layer.content);
