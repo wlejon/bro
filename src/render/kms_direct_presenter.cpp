@@ -90,6 +90,8 @@ bool KmsDirectPresenter::initScanoutBuffers(VulkanContext& ctx, uint32_t count) 
         auto vk = dmabufVkCtx_->import_dmabuf(attrs.value(),
             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
         if (!vk) continue;
+        auto msTest = presenter_->initialize_modeset(*fb.value());
+        if (!msTest) continue;
         workingModifier = m;
         LOG_INFO("KmsDirectPresenter: negotiated scanout modifier 0x%lx", static_cast<unsigned long>(m));
         break;
