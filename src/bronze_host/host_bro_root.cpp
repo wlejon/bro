@@ -369,11 +369,26 @@ void installBroRoots(engine::Engine& engine) {
 #if !BRO_WITH_A11Y
     setUnavailable("a11y", "BRO_WITH_A11Y");
 #endif
+#if !BRO_WITH_DECOR
+    setUnavailable("decor", "BRO_WITH_DECOR");
+#endif
+#if !BRO_WITH_CLIP
+    setUnavailable("clip", "BRO_WITH_CLIP");
+#endif
+#if !BRO_WITH_MPRIS
+    setUnavailable("mpris", "BRO_WITH_MPRIS");
+#endif
+#if !BRO_WITH_PULSE
+    setUnavailable("pulse", "BRO_WITH_PULSE");
+#endif
+#if !BRO_WITH_IME
+    setUnavailable("ime", "BRO_WITH_IME");
+#endif
     // Privileged desktop shell namespaces:
     // If not granted to this app by the desktop trust model, install the unavailable
     // namespace stub so that bro.<ns>.available === false and every call throws.
     static const char* const kPrivilegedNamespaces[] = {
-        "displays", "cred", "seat", "portal", "sys", "compositor", "wl",
+        "displays", "cred", "seat", "portal", "sys", "compositor", "wl", "clip", "pulse",
     };
     for (const char* ns : kPrivilegedNamespaces) {
         if (!engine.hasPrivilege(ns)) {
@@ -412,6 +427,7 @@ void markAvailableNamespaces() {
         "tile_world", "lighting", "animation", "mic", "conf", "themes", "keys", "search",
         "apps", "vfs", "thumb", "a11y",
         "displays", "cred", "seat", "portal", "sys", "compositor", "wl",
+        "decor", "clip", "mpris", "pulse", "ime",
     };
     auto decorate = [](Value nsIn) {
         if (!ev::isObject(nsIn)) return;
@@ -529,6 +545,21 @@ void installWorkerBroRoot() {
 #endif
 #if !BRO_WITH_VFS
     setUnavailable("vfs", "BRO_WITH_VFS");
+#endif
+#if !BRO_WITH_DECOR
+    setUnavailable("decor", "BRO_WITH_DECOR");
+#endif
+#if !BRO_WITH_CLIP
+    setUnavailable("clip", "BRO_WITH_CLIP");
+#endif
+#if !BRO_WITH_MPRIS
+    setUnavailable("mpris", "BRO_WITH_MPRIS");
+#endif
+#if !BRO_WITH_PULSE
+    setUnavailable("pulse", "BRO_WITH_PULSE");
+#endif
+#if !BRO_WITH_IME
+    setUnavailable("ime", "BRO_WITH_IME");
 #endif
     markAvailableNamespaces();
 }

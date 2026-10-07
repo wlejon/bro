@@ -118,6 +118,21 @@
 #if BRO_WITH_A11Y
 #include <broa11y/api.h>
 #endif
+#if BRO_WITH_DECOR
+#include <brodecor/api.h>
+#endif
+#if BRO_WITH_CLIP
+#include <broclip/api.h>
+#endif
+#if BRO_WITH_MPRIS
+#include <brompris/api.h>
+#endif
+#if BRO_WITH_PULSE
+#include <bropulse/api.h>
+#endif
+#if BRO_WITH_IME
+#include <broime/api.h>
+#endif
 #include "api/api.h"  // brokit::api::resolveAssetPath
 #include <broimage/api.h>
 
@@ -624,6 +639,76 @@ void installSiblingApis(engine::Engine& engine) {
                 if (ev::microtasksPending()) ev::drainMicrotasks();
             });
             engine.addShutdownHook([] { broa11y::api::shutdownA11yAsync(); });
+        }
+    }
+#endif
+#if BRO_WITH_DECOR
+    brodecor::api::installDecor();
+    {
+        static bool decorHooksInstalled = false;
+        if (!decorHooksInstalled) {
+            decorHooksInstalled = true;
+            engine.addFramePump([] {
+                brodecor::api::tickDecorAsync();
+                if (ev::microtasksPending()) ev::drainMicrotasks();
+            });
+            engine.addShutdownHook([] { brodecor::api::shutdownDecorAsync(); });
+        }
+    }
+#endif
+#if BRO_WITH_CLIP
+    broclip::api::installClip();
+    {
+        static bool clipHooksInstalled = false;
+        if (!clipHooksInstalled) {
+            clipHooksInstalled = true;
+            engine.addFramePump([] {
+                broclip::api::tickClipAsync();
+                if (ev::microtasksPending()) ev::drainMicrotasks();
+            });
+            engine.addShutdownHook([] { broclip::api::shutdownClipAsync(); });
+        }
+    }
+#endif
+#if BRO_WITH_MPRIS
+    brompris::api::installMpris();
+    {
+        static bool mprisHooksInstalled = false;
+        if (!mprisHooksInstalled) {
+            mprisHooksInstalled = true;
+            engine.addFramePump([] {
+                brompris::api::tickMprisAsync();
+                if (ev::microtasksPending()) ev::drainMicrotasks();
+            });
+            engine.addShutdownHook([] { brompris::api::shutdownMprisAsync(); });
+        }
+    }
+#endif
+#if BRO_WITH_PULSE
+    bropulse::api::installPulse();
+    {
+        static bool pulseHooksInstalled = false;
+        if (!pulseHooksInstalled) {
+            pulseHooksInstalled = true;
+            engine.addFramePump([] {
+                bropulse::api::tickPulseAsync();
+                if (ev::microtasksPending()) ev::drainMicrotasks();
+            });
+            engine.addShutdownHook([] { bropulse::api::shutdownPulseAsync(); });
+        }
+    }
+#endif
+#if BRO_WITH_IME
+    bro::ime::api::installIme();
+    {
+        static bool imeHooksInstalled = false;
+        if (!imeHooksInstalled) {
+            imeHooksInstalled = true;
+            engine.addFramePump([] {
+                bro::ime::api::tickImeAsync();
+                if (ev::microtasksPending()) ev::drainMicrotasks();
+            });
+            engine.addShutdownHook([] { bro::ime::api::shutdownImeAsync(); });
         }
     }
 #endif

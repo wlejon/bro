@@ -253,6 +253,11 @@ bro_check_sibling(brocompositor _d_render      _d_compositor)
 bro_check_sibling(browl        _d_linux_wl     _d_wl)
 bro_check_sibling(broa11y      _d_render       _d_a11y)
 bro_check_sibling(brodmabuf    _d_linux_dmabuf _d_dmabuf)
+bro_check_sibling(brodecor     _d_render       _d_decor)
+bro_check_sibling(broclip      _d_render       _d_clip)
+bro_check_sibling(brompris     _d_render       _d_mpris)
+bro_check_sibling(bropulse     _d_render       _d_pulse)
+bro_check_sibling(broime       _d_render       _d_ime)
 
 # Services (each pulls a vcpkg dependency).
 option(BRO_WITH_NET      "Game networking (GameNetworkingSockets / vcpkg)"   ${_d_svc})
@@ -274,6 +279,11 @@ option(BRO_WITH_COMPOSITOR "Window-management policy and compositor (brocomposit
 option(BRO_WITH_WL         "Wayland client protocol layers and surfaces (browl)"         ${_d_wl})
 option(BRO_WITH_A11Y       "Accessibility tree export and announcements (broa11y)"       ${_d_a11y})
 option(BRO_WITH_DMABUF     "DMA-BUF import and KMS presentation (brodmabuf)"             ${_d_dmabuf})
+option(BRO_WITH_DECOR      "Window decorations and frame metrics (brodecor)"             ${_d_decor})
+option(BRO_WITH_CLIP       "Clipboard history and selection preservation (broclip)"       ${_d_clip})
+option(BRO_WITH_MPRIS      "Media player control and metadata (brompris)"                ${_d_mpris})
+option(BRO_WITH_PULSE      "PipeWire/PulseAudio policy and stream router (bropulse)"     ${_d_pulse})
+option(BRO_WITH_IME        "Compose keys and input method candidate engine (broime)"      ${_d_ime})
 # The native <terminal> element: bropty (VT emulation + PTY/ConPTY), its
 # brosearch dependency and brothemes (minimum contrast), plus bromux
 # (persistent sessions) when found; all vcpkg-free siblings. On in app and
@@ -422,6 +432,11 @@ set(BRODISPLAYS_ENABLE_API  ON CACHE BOOL "Build Bronze JavaScript API for brodi
 set(BROCOMPOSITOR_ENABLE_API ON CACHE BOOL "Build Bronze JavaScript API for brocompositor" FORCE)
 set(BROWL_ENABLE_API         ON CACHE BOOL "Build Bronze JavaScript API for browl" FORCE)
 set(BROA11Y_ENABLE_API       ON CACHE BOOL "Build Bronze JavaScript API for broa11y" FORCE)
+set(BRODECOR_ENABLE_API      ON CACHE BOOL "Build Bronze JavaScript API for brodecor" FORCE)
+set(BROCLIP_ENABLE_API       ON CACHE BOOL "Build Bronze JavaScript API for broclip" FORCE)
+set(BROMPRIS_ENABLE_API      ON CACHE BOOL "Build Bronze JavaScript API for brompris" FORCE)
+set(BROPULSE_ENABLE_API      ON CACHE BOOL "Build Bronze JavaScript API for bropulse" FORCE)
+set(BROIME_ENABLE_API        ON CACHE BOOL "Build Bronze JavaScript API for broime" FORCE)
 
 # Stamp every feature flag as a 0/1 compile definition so C++ can `#if` on it.
 # Applied to the targets that carry feature-gated code (bro_engine, bro_scene,
@@ -429,6 +444,7 @@ set(BROA11Y_ENABLE_API       ON CACHE BOOL "Build Bronze JavaScript API for broa
 set(BRO_FEATURE_FLAGS
     3D PHYSICS AUDIO GAMEAI FLORA
     NET VIDEO STEAM TERMINAL CONF THEMES KEYS SEARCH APPS VFS THUMB SEAT CRED SYS DISPLAYS PORTAL COMPOSITOR WL A11Y
+    DECOR CLIP MPRIS PULSE IME
     TENSOR TENSOR_CUDA TENSOR_METAL TENSOR_VULKAN LM DIFFUSION VISION SOUNDML TRIPOSPLAT GAMEAI_NN
     BRONZE)
 function(bro_apply_feature_defs target)

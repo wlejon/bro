@@ -691,12 +691,12 @@ if(BRO_WITH_DMABUF AND NOT TARGET brodmabuf)
 endif()
 
 # --- brodbus ---
-# The shared sd-bus layer of brocred, brosys, broseat and broportal: Linux
+# The shared sd-bus layer of brocred, brosys, broseat, broportal, and brompris: Linux
 # only, and only with libsystemd, whose absence those libraries handle
 # themselves (brocred and brosys build without D-Bus).
 set(_bro_wants_brodbus OFF)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
-   (BRO_WITH_CRED OR BRO_WITH_SYS OR BRO_WITH_SEAT OR BRO_WITH_PORTAL))
+   (BRO_WITH_CRED OR BRO_WITH_SYS OR BRO_WITH_SEAT OR BRO_WITH_PORTAL OR BRO_WITH_MPRIS))
     find_package(PkgConfig QUIET)
     if(PKG_CONFIG_FOUND)
         pkg_check_modules(_bro_libsystemd QUIET libsystemd)
@@ -715,6 +715,76 @@ if(_bro_wants_brodbus AND NOT TARGET brodbus)
     elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/brodbus/CMakeLists.txt")
         message(STATUS "brodbus: using submodule at third_party/brodbus")
         add_subdirectory(brodbus EXCLUDE_FROM_ALL)
+    endif()
+endif()
+
+# --- brodecor ---
+if(BRO_WITH_DECOR AND NOT TARGET brodecor)
+    set(BRODECOR_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    bro_default_sibling_dir(brodecor _brodecor_default)
+    set(BRODECOR_DIR "${_brodecor_default}" CACHE PATH "Path to standalone brodecor repo")
+    if(EXISTS "${BRODECOR_DIR}/CMakeLists.txt")
+        message(STATUS "brodecor: using standalone repo at ${BRODECOR_DIR}")
+        add_subdirectory("${BRODECOR_DIR}" "${CMAKE_BINARY_DIR}/brodecor" EXCLUDE_FROM_ALL)
+    elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/brodecor/CMakeLists.txt")
+        message(STATUS "brodecor: using submodule at third_party/brodecor")
+        add_subdirectory(brodecor EXCLUDE_FROM_ALL)
+    endif()
+endif()
+
+# --- broclip ---
+if(BRO_WITH_CLIP AND NOT TARGET broclip)
+    set(BROCLIP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    bro_default_sibling_dir(broclip _broclip_default)
+    set(BROCLIP_DIR "${_broclip_default}" CACHE PATH "Path to standalone broclip repo")
+    if(EXISTS "${BROCLIP_DIR}/CMakeLists.txt")
+        message(STATUS "broclip: using standalone repo at ${BROCLIP_DIR}")
+        add_subdirectory("${BROCLIP_DIR}" "${CMAKE_BINARY_DIR}/broclip" EXCLUDE_FROM_ALL)
+    elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/broclip/CMakeLists.txt")
+        message(STATUS "broclip: using submodule at third_party/broclip")
+        add_subdirectory(broclip EXCLUDE_FROM_ALL)
+    endif()
+endif()
+
+# --- brompris ---
+if(BRO_WITH_MPRIS AND NOT TARGET brompris)
+    set(BROMPRIS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    bro_default_sibling_dir(brompris _brompris_default)
+    set(BROMPRIS_DIR "${_brompris_default}" CACHE PATH "Path to standalone brompris repo")
+    if(EXISTS "${BROMPRIS_DIR}/CMakeLists.txt")
+        message(STATUS "brompris: using standalone repo at ${BROMPRIS_DIR}")
+        add_subdirectory("${BROMPRIS_DIR}" "${CMAKE_BINARY_DIR}/brompris" EXCLUDE_FROM_ALL)
+    elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/brompris/CMakeLists.txt")
+        message(STATUS "brompris: using submodule at third_party/brompris")
+        add_subdirectory(brompris EXCLUDE_FROM_ALL)
+    endif()
+endif()
+
+# --- bropulse ---
+if(BRO_WITH_PULSE AND NOT TARGET bropulse)
+    set(BROPULSE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    bro_default_sibling_dir(bropulse _bropulse_default)
+    set(BROPULSE_DIR "${_bropulse_default}" CACHE PATH "Path to standalone bropulse repo")
+    if(EXISTS "${BROPULSE_DIR}/CMakeLists.txt")
+        message(STATUS "bropulse: using standalone repo at ${BROPULSE_DIR}")
+        add_subdirectory("${BROPULSE_DIR}" "${CMAKE_BINARY_DIR}/bropulse" EXCLUDE_FROM_ALL)
+    elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/bropulse/CMakeLists.txt")
+        message(STATUS "bropulse: using submodule at third_party/bropulse")
+        add_subdirectory(bropulse EXCLUDE_FROM_ALL)
+    endif()
+endif()
+
+# --- broime ---
+if(BRO_WITH_IME AND NOT TARGET broime)
+    set(BROIME_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    bro_default_sibling_dir(broime _broime_default)
+    set(BROIME_DIR "${_broime_default}" CACHE PATH "Path to standalone broime repo")
+    if(EXISTS "${BROIME_DIR}/CMakeLists.txt")
+        message(STATUS "broime: using standalone repo at ${BROIME_DIR}")
+        add_subdirectory("${BROIME_DIR}" "${CMAKE_BINARY_DIR}/broime" EXCLUDE_FROM_ALL)
+    elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/broime/CMakeLists.txt")
+        message(STATUS "broime: using submodule at third_party/broime")
+        add_subdirectory(broime EXCLUDE_FROM_ALL)
     endif()
 endif()
 

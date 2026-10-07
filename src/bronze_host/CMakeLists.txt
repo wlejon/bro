@@ -487,6 +487,26 @@ if(BRO_WITH_A11Y)
     target_link_libraries(bro_bronze_host PUBLIC broa11y broa11y_api)
 endif()
 
+if(BRO_WITH_DECOR)
+    target_link_libraries(bro_bronze_host PUBLIC brodecor brodecor_api)
+endif()
+
+if(BRO_WITH_CLIP)
+    target_link_libraries(bro_bronze_host PUBLIC broclip broclip_api)
+endif()
+
+if(BRO_WITH_MPRIS)
+    target_link_libraries(bro_bronze_host PUBLIC brompris brompris_api)
+endif()
+
+if(BRO_WITH_PULSE)
+    target_link_libraries(bro_bronze_host PUBLIC bropulse bropulse_api)
+endif()
+
+if(BRO_WITH_IME)
+    target_link_libraries(bro_bronze_host PUBLIC broime broime_api)
+endif()
+
 if(BRO_WITH_WEBP)
     target_link_libraries(bro_bronze_host PUBLIC bro_webp)
 endif()
