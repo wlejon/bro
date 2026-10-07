@@ -22,12 +22,13 @@ struct DesktopTrustInfo {
     }
 };
 
-/// Check if an app directory qualifies as a trusted desktop install location.
-bool isTrustedAppLocation(const std::string& appDir, const std::string& projectRoot = {});
+/// Check if an app directory qualifies as a trusted desktop install location:
+/// under a directory bro ships apps in, an OS install prefix, or one named in
+/// BRO_TRUSTED_APP_DIR. Never decided by the app's own folder or manifest.
+bool isTrustedAppLocation(const std::string& appDir);
 
 /// Evaluates trust and grants requested privileged shell namespaces.
 DesktopTrustInfo evaluateDesktopTrust(const std::string& appDir,
-                                      const std::string& projectRoot,
                                       bool requestedShell,
                                       const std::vector<std::string>& requestedPrivileges);
 

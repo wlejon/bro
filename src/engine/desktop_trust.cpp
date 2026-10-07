@@ -35,20 +35,16 @@ bool isSubpath(const fs::path& base, const fs::path& sub) {
 
 } // namespace
 
-bool isTrustedAppLocation(const std::string& appDir, const std::string& projectRoot) {
+bool isTrustedAppLocation(const std::string& appDir) {
     if (appDir.empty()) return false;
-
-    // 1. Explicit developer / test opt-in via environment variable
-    const char* envTrusted = std::getenv("BRO_TRUSTED");
-    if (envTrusted && (std::string(envTrusted) == "1" || std::string(envTrusted) == "true")) {
-        return true;
-    }
 
     fs::path appPath(appDir);
     std::error_code ec;
     if (!fs::exists(appPath, ec)) return false;
 
-    // 2. Extra trusted directories via BRO_TRUSTED_APP_DIR (colon-separated on POSIX, semicolon on Windows)
+    // 1. Extra trusted directories via BRO_TRUSTED_APP_DIR (colon-separated on
+    // POSIX, semicolon on Windows): how a developer or a test suite names the
+    // shell it is working on. There is no blanket "trust everything" switch.
     const char* envDirs = std::getenv("BRO_TRUSTED_APP_DIR");
     if (envDirs && *envDirs) {
         std::stringstream ss(envDirs);
@@ -65,14 +61,15 @@ bool isTrustedAppLocation(const std::string& appDir, const std::string& projectR
         }
     }
 
-    // 3. System and desktop directories relative to executable or resources
+    // 2. The apps bro itself ships, beside the executable or in its resources.
+    // Nothing relative to the working directory or the app's own project:
+    // where bro was launched from, or what the app's folder contains, must not
+    // decide what the app is granted.
     std::vector<fs::path> trustedPrefixes = {
         fs::path(util::executableDir()) / "apps",
         fs::path(util::executableDir()) / "system",
         fs::path(util::resourceDir()) / "apps",
         fs::path(util::resourceDir()) / "system",
-        fs::current_path() / "system",
-        fs::current_path() / "apps",
     };
 
     // Standard OS install prefixes per platform
@@ -84,9 +81,6 @@ bool isTrustedAppLocation(const std::string& appDir, const std::string& projectR
     if (const char* pd = std::getenv("ProgramData")) {
         trustedPrefixes.emplace_back(fs::path(pd) / "bro" / "apps");
         trustedPrefixes.emplace_back(fs::path(pd) / "bro" / "system");
-    }
-    if (const char* la = std::getenv("LOCALAPPDATA")) {
-        trustedPrefixes.emplace_back(fs::path(la) / "bro" / "system");
     }
 #elif defined(__APPLE__)
     trustedPrefixes.emplace_back("/Library/Application Support/bro/apps");
@@ -100,13 +94,6 @@ bool isTrustedAppLocation(const std::string& appDir, const std::string& projectR
     trustedPrefixes.emplace_back("/opt/bro/apps");
 #endif
 
-    // 4. Project-relative trusted paths (system apps in project root)
-    if (!projectRoot.empty()) {
-        trustedPrefixes.push_back(fs::path(projectRoot) / "system");
-        trustedPrefixes.push_back(fs::path(projectRoot) / "desktop");
-        trustedPrefixes.push_back(fs::path(projectRoot) / "apps");
-    }
-
     for (const auto& prefix : trustedPrefixes) {
         if (fs::exists(prefix, ec) && isSubpath(prefix, appPath)) {
             return true;
@@ -117,7 +104,6 @@ bool isTrustedAppLocation(const std::string& appDir, const std::string& projectR
 }
 
 DesktopTrustInfo evaluateDesktopTrust(const std::string& appDir,
-                                      const std::string& projectRoot,
                                       bool requestedShell,
                                       const std::vector<std::string>& requestedPrivileges) {
     DesktopTrustInfo info;
@@ -126,7 +112,7 @@ DesktopTrustInfo evaluateDesktopTrust(const std::string& appDir,
         return info;
     }
 
-    info.isTrusted = isTrustedAppLocation(appDir, projectRoot);
+    info.isTrusted = isTrustedAppLocation(appDir);
     if (!info.isTrusted) {
         LOG_WARN("DesktopTrust: app at '%s' requested privileged shell access (%s) but is not installed in a trusted desktop location; access denied",
                  appDir.c_str(), requestedShell ? "shell: true" : "privileged: [...]");

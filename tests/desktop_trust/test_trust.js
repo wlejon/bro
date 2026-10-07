@@ -44,15 +44,34 @@ const candidates = [
 const headlessBin = candidates.find(p => fs.existsSync(p));
 assert(headlessBin, `a bro-headless binary to run the trusted app (tried ${candidates.join(', ')})`);
 
+const path = require('path');
+const trustedApp = path.resolve('tests/desktop_trust/trusted_app');
+const baseEnv = { ...process.env };
+delete baseEnv.BRO_TRUSTED_APP_DIR;
+
 const out = cp.execFileSync(headlessBin, [
-    'tests/desktop_trust/trusted_app',
+    trustedApp,
     '--test',
     'tests/desktop_trust/test_trust_shell.js'
 ], {
-    env: { ...process.env, BRO_TRUSTED: '1' },
+    env: { ...baseEnv, BRO_TRUSTED_APP_DIR: trustedApp },
     encoding: 'utf8'
 });
 assert(out.includes('test_trust_shell.js trusted shell check PASSED'),
        `trusted shell check passed, got: ${out}`);
+
+// The same app outside a trusted location gets nothing, though its manifest
+// asks for "shell": true: the manifest and the retired blanket BRO_TRUSTED
+// switch decide nothing.
+const denied = cp.execFileSync(headlessBin, [
+    trustedApp,
+    '-e',
+    'console.log("sys-available=" + bro.sys.available)'
+], {
+    env: { ...baseEnv, BRO_TRUSTED: '1' },
+    encoding: 'utf8'
+});
+assert(denied.includes('sys-available=false'),
+       `a shell app outside a trusted location is refused, got: ${denied}`);
 
 console.log('test_trust.js PASSED');

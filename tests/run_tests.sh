@@ -503,7 +503,7 @@ run_one_test() {
     case "$REL" in
         compositor/*|cred/*|displays/*|portal/*|seat/*|sys/*|wl/*)
             TEST_APP_FOR_RUN="$(to_win_path "$SCRIPT_DIR/desktop_trust/trusted_app")"
-            EXTRA_ENV+=( "BRO_TRUSTED=1" )
+            EXTRA_ENV+=( "BRO_TRUSTED_APP_DIR=$TEST_APP_FOR_RUN" )
             ;;
     esac
 

@@ -83,7 +83,6 @@ To ensure unprivileged user downloads cannot escalate privileges simply by autho
   - `%ProgramFiles%\bro\system`
   - `%ProgramData%\bro\apps`
   - `%ProgramData%\bro\system`
-  - `%LOCALAPPDATA%\bro\system`
 - Engine-relative prefixes:
   - `<executable_dir>\apps`
   - `<executable_dir>\system`
@@ -101,8 +100,11 @@ To ensure unprivileged user downloads cannot escalate privileges simply by autho
 
 ### Development & Testing Overrides
 For development, automated test suites, and CI environments where root/administrator installation is impractical:
-- `BRO_TRUSTED=1` (or `BRO_TRUSTED=true`): Unconditionally treats the launched app as trusted (useful in headless integration tests).
-- `BRO_TRUSTED_APP_DIR=<path1>[:<path2>...]` (colon-delimited on POSIX, semicolon-delimited on Windows): Explicitly adds directories to the trusted prefix list.
+- `BRO_TRUSTED_APP_DIR=<path1>[:<path2>...]` (colon-delimited on POSIX, semicolon-delimited on Windows): Explicitly adds directories to the trusted prefix list. A shell under development and the test suites name their app this way.
+
+There is no switch that trusts every app, and nothing relative to the working directory or the app's own project counts: where bro was launched from, or what the app's folder or manifest contains, never decides what the app is granted.
+
+The boundary this draws is between app folders, not between processes. An app holding `child_process` can launch bro with any environment it likes, so the trust model keeps an app from *granting itself* shell namespaces; it does not contain an app that already runs arbitrary programs as the user.
 
 ---
 
