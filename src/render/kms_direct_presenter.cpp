@@ -67,15 +67,12 @@ bool KmsDirectPresenter::initScanoutBuffers(VulkanContext& ctx, uint32_t count) 
         return false;
     }
 
-    std::vector<uint64_t> modifiers;
+    std::vector<uint64_t> modifiers = {DRM_FORMAT_MOD_LINEAR};
     auto vkMods = dmabufVkCtx_->query_format_modifiers(VK_FORMAT_B8G8R8A8_UNORM);
     for (const auto& m : vkMods) {
         if (m.tiling_features & (VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_TRANSFER_DST_BIT)) {
             modifiers.push_back(m.modifier);
         }
-    }
-    if (std::find(modifiers.begin(), modifiers.end(), DRM_FORMAT_MOD_LINEAR) == modifiers.end()) {
-        modifiers.push_back(DRM_FORMAT_MOD_LINEAR);
     }
 
     uint64_t workingModifier = DRM_FORMAT_MOD_INVALID;
@@ -191,6 +188,41 @@ bool KmsDirectPresenter::initScanoutBuffers(VulkanContext& ctx, uint32_t count) 
 
     if (scanoutSlots_.empty()) return false;
 
+    // Clear all scanout slots to opaque black so the monitor never shows uninitialized RAM
+    auto& frames = ctx.frames();
+    frames.ensureFrame();
+    VkCommandBuffer initCmd = frames.beginCommands();
+    if (initCmd != VK_NULL_HANDLE) {
+        for (auto& s : scanoutSlots_) {
+            ImageBarrier b;
+            b.image = s.vkImage->handle();
+            b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            b.srcStages = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+            b.dstStages = VK_PIPELINE_STAGE_TRANSFER_BIT;
+            b.dstAccess = VK_ACCESS_TRANSFER_WRITE_BIT;
+            cmdImageBarrier(initCmd, b);
+
+            VkClearColorValue black{};
+            black.float32[0] = 0.0f;
+            black.float32[1] = 0.0f;
+            black.float32[2] = 0.0f;
+            black.float32[3] = 1.0f;
+            const VkImageSubresourceRange range = colorRange();
+            vkCmdClearColorImage(initCmd, s.vkImage->handle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &range);
+
+            b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            b.srcStages = VK_PIPELINE_STAGE_TRANSFER_BIT;
+            b.srcAccess = VK_ACCESS_TRANSFER_WRITE_BIT;
+            b.dstStages = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+            b.dstAccess = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+            cmdImageBarrier(initCmd, b);
+        }
+        uint64_t t = frames.submit(initCmd, {});
+        ctx.queue().wait(t);
+    }
+
     // Attach initial modeset commit
     auto msRes = presenter_->initialize_modeset(*scanoutSlots_[0].fb);
     if (!msRes) {
@@ -276,6 +308,14 @@ bool KmsDirectPresenter::presentComposited(
 
     currentSlot_ = (currentSlot_ + 1) % scanoutSlots_.size();
     auto& slot = scanoutSlots_[currentSlot_];
+
+    static uint32_t s_frameLogCount = 0;
+    if (s_frameLogCount++ < 5) {
+        LOG_INFO("KmsDirectPresenter: presentComposited slot=%zu images=%zu below=%d clear=[%.1f,%.1f,%.1f,%.1f] dims=%ux%u",
+                 currentSlot_, frame.images.size(), frame.below ? 1 : 0,
+                 frame.clearColor[0], frame.clearColor[1], frame.clearColor[2], frame.clearColor[3],
+                 frame.width, frame.height);
+    }
 
     auto& frames = ctx.frames();
     frames.ensureFrame();
