@@ -2,9 +2,9 @@
 #include "platform/drm_seat.h"
 
 #include <algorithm>
-#include <unistd.h>
 
 #if defined(__linux__) && BRO_WITH_SEAT && BRO_HAVE_LIBINPUT
+#include <unistd.h>
 #include <linux/input-event-codes.h>
 
 namespace {
