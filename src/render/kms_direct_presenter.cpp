@@ -90,7 +90,15 @@ bool KmsDirectPresenter::initScanoutBuffers(VulkanContext& ctx, uint32_t count) 
         auto vk = dmabufVkCtx_->import_dmabuf(attrs.value(),
             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
         if (!vk) continue;
-        auto msTest = presenter_->initialize_modeset(*fb.value());
+        brodmabuf::KmsAtomicReq testReq;
+        const auto& pipe = presenter_->pipeline();
+        testReq.add_property(pipe.connector_id, pipe.connector_props.crtc_id, pipe.crtc_id);
+        testReq.add_property(pipe.crtc_id, pipe.crtc_props.active, 1);
+        testReq.set_plane(
+            pipe.plane_props, pipe.plane_id, pipe.crtc_id, fb.value()->fb_id(),
+            0, 0, width_, height_,
+            0, 0, width_, height_);
+        auto msTest = testReq.commit(device_->fd(), DRM_MODE_ATOMIC_TEST_ONLY | DRM_MODE_ATOMIC_ALLOW_MODESET);
         if (!msTest) continue;
         workingModifier = m;
         LOG_INFO("KmsDirectPresenter: negotiated scanout modifier 0x%lx", static_cast<unsigned long>(m));
@@ -256,7 +264,15 @@ bool KmsDirectPresenter::presentComposited(
     VulkanContext& ctx, VulkanPresenter& presenter,
     const PresentFrame& frame, int inFenceFd, int* outFenceFd) {
 #if defined(__linux__)
-    if (!active_ || paused_ || !presenter_ || scanoutSlots_.empty()) return false;
+    if (!active_ || paused_ || !presenter_ || scanoutSlots_.empty()) {
+        static bool s_logged = false;
+        if (!s_logged) {
+            LOG_WARN("KmsDirectPresenter: presentComposited inactive (active=%d paused=%d presenter=%d slots=%zu)",
+                     active_, paused_, presenter_ != nullptr, scanoutSlots_.size());
+            s_logged = true;
+        }
+        return false;
+    }
 
     currentSlot_ = (currentSlot_ + 1) % scanoutSlots_.size();
     auto& slot = scanoutSlots_[currentSlot_];
@@ -265,7 +281,10 @@ bool KmsDirectPresenter::presentComposited(
     frames.ensureFrame();
 
     VkCommandBuffer cmd = frames.beginCommands();
-    if (cmd == VK_NULL_HANDLE) return false;
+    if (cmd == VK_NULL_HANDLE) {
+        LOG_WARN("KmsDirectPresenter: beginCommands returned null");
+        return false;
+    }
 
     VulkanPresenter::Target target;
     target.image = slot.vkImage->handle();
@@ -279,6 +298,7 @@ bool KmsDirectPresenter::presentComposited(
     VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
 
     if (!presenter.recordFrame(cmd, frame, target, kAcquireStages, layout)) {
+        LOG_WARN("KmsDirectPresenter: recordFrame failed");
         return false;
     }
 
@@ -287,8 +307,17 @@ bool KmsDirectPresenter::presentComposited(
     uint64_t ticket = frames.submit(cmd, {});
     ctx.queue().wait(ticket);
 
-    auto flipRes = presenter_->present(*slot.fb, inFenceFd, false);
-    if (!flipRes) return false;
+    auto flipRes = presenter_->present(*slot.fb, inFenceFd, true);
+    if (!flipRes) {
+        static uint32_t s_flipFailCount = 0;
+        if (s_flipFailCount++ < 5) {
+            LOG_WARN("KmsDirectPresenter: presenter_->present failed: %s",
+                     std::string(flipRes.status().message()).c_str());
+        }
+        return false;
+    }
+
+    (void)presenter_->handle_event(100);
 
     if (outFenceFd) {
         *outFenceFd = flipRes.value().release();
