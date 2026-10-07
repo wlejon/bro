@@ -140,15 +140,20 @@ endif()
 # "minimal" is the 2D/canvas/WebGL + audio floor — it links, runs, and renders
 # with no vcpkg, no Jolt/bromesh/brogameagent, and no AI tower (the renderer and
 # service subsystems are gated behind their BRO_WITH_* flags at the engine seam).
-set(BRO_PROFILE "app" CACHE STRING "Feature profile: minimal | app | full")
-set_property(CACHE BRO_PROFILE PROPERTY STRINGS minimal app full)
+set(BRO_PROFILE "app" CACHE STRING "Feature profile: minimal | app | desktop | full")
+set_property(CACHE BRO_PROFILE PROPERTY STRINGS minimal app desktop full)
 
 # Per-profile defaults.  minimal = 2D/canvas/WebGL + audio (broaudio is
 # self-contained and <audio>/Web Audio is core HTML, so it stays in every
-# profile).  app = full renderer (3D + physics + core game-AI) + net/video/
-# steam.  full = everything (the CUDA sub-lever stays opt-in even here).
+# profile).  desktop = full UI/compositor + desktop services (no AI).
+# app = full renderer (3D + physics + core game-AI) + net/video/steam.
+# full = everything (the CUDA sub-lever stays opt-in even here).
 if(BRO_PROFILE STREQUAL "minimal")
     set(_d_render OFF)
+    set(_d_ai     OFF)
+    set(_d_svc    OFF)
+elseif(BRO_PROFILE STREQUAL "desktop")
+    set(_d_render ON)
     set(_d_ai     OFF)
     set(_d_svc    OFF)
 elseif(BRO_PROFILE STREQUAL "app")
@@ -232,7 +237,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(_d_linux_dmabuf ${_d_render})
 endif()
 
-bro_check_sibling(broconf      _d_svc          _d_conf)
+bro_check_sibling(broconf      _d_render       _d_conf)
 bro_check_sibling(brothemes    _d_render       _d_themes)
 bro_check_sibling(brokeys      _d_render       _d_keys)
 bro_check_sibling(brosearch    _d_render       _d_search)
