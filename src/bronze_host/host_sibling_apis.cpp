@@ -35,6 +35,7 @@
 #include "bronze_host/host_js_modules.h"
 #include "bronze_host/host_natives.h"
 #include "engine/engine.h"
+#include "util/log.h"
 
 #if BRO_WITH_AUDIO
 #include <broaudio/api.h>
@@ -111,6 +112,9 @@
 #endif
 #if BRO_WITH_COMPOSITOR
 #include <brocompositor/api.h>
+#if defined(_WIN32)
+#include <brocompositor/win/shell_backend.h>
+#endif
 #endif
 #if BRO_WITH_WL
 #include <browl/api.h>
@@ -606,11 +610,36 @@ void installSiblingApis(engine::Engine& engine) {
         static bool compositorHooksInstalled = false;
         if (!compositorHooksInstalled) {
             compositorHooksInstalled = true;
+#if defined(_WIN32)
+            static std::unique_ptr<brocompositor::win::ShellBackend> s_winShellBackend;
+            if (engine.displayMode() != engine::DisplayMode::Headless) {
+                brocompositor::win::ShellConfig sCfg;
+                sCfg.recover = true;
+                sCfg.report_existing = true;
+                std::string sErr;
+                s_winShellBackend = brocompositor::win::ShellBackend::create(sCfg, &sErr);
+                if (!s_winShellBackend) {
+                    LOG_WARN("brocompositor: win::ShellBackend::create failed: %s", sErr.c_str());
+                } else {
+                    auto eqPtr = std::shared_ptr<brocompositor::EventQueue>(
+                        &s_winShellBackend->events(), [](brocompositor::EventQueue*) {});
+                    brocompositor::api::setEventQueue(eqPtr);
+                    brocompositor::api::setCommandSink([](const std::vector<brocompositor::Command>& cmds) {
+                        if (s_winShellBackend) s_winShellBackend->execute(cmds);
+                    });
+                }
+            }
+#endif
             engine.addFramePump([] {
                 brocompositor::api::tickCompositorAsync();
                 if (ev::microtasksPending()) ev::drainMicrotasks();
             });
-            engine.addShutdownHook([] { brocompositor::api::shutdownCompositorAsync(); });
+            engine.addShutdownHook([] {
+                brocompositor::api::shutdownCompositorAsync();
+#if defined(_WIN32)
+                s_winShellBackend.reset();
+#endif
+            });
         }
     }
 #endif

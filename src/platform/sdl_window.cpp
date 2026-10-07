@@ -9,6 +9,14 @@
 #include <algorithm>
 #include <stdexcept>
 
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 namespace bro::platform {
 
 Window::Window(const std::string& title, uint32_t width, uint32_t height,
@@ -30,6 +38,8 @@ Window::Window(const std::string& title, uint32_t width, uint32_t height,
         flags |= SDL_WINDOW_RESIZABLE;
     }
     if (borderless) {
+        SDL_SetHint("SDL_BORDERLESS_WINDOWED_STYLE", "0");
+        SDL_SetHint("SDL_BORDERLESS_RESIZABLE_STYLE", "0");
         flags |= SDL_WINDOW_BORDERLESS;
     }
     m_window = SDL_CreateWindow(title.c_str(),
@@ -43,9 +53,22 @@ Window::Window(const std::string& title, uint32_t width, uint32_t height,
         throw std::runtime_error(std::string("SDL_CreateWindow failed: ") + SDL_GetError());
     }
 
+#if defined(_WIN32)
+    HWND hwnd = (HWND)SDL_GetPointerProperty(SDL_GetWindowProperties(m_window),
+                                             SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
+    if (hwnd && borderless) {
+        LONG style = GetWindowLongW(hwnd, GWL_STYLE);
+        style &= ~(WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU);
+        style |= WS_POPUP;
+        SetWindowLongW(hwnd, GWL_STYLE, style);
+        SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+    }
+#endif
+
     // Clamp a visible window to the display's usable area so the whole window —
-    // title bar and borders included — fits on screen.
-    if (!hidden) {
+    // title bar and borders included — fits on screen. Skip for borderless windows.
+    if (!hidden && !borderless) {
         SDL_DisplayID disp = SDL_GetDisplayForWindow(m_window);
         SDL_Rect usable{};
         if (disp && SDL_GetDisplayUsableBounds(disp, &usable)) {
@@ -96,7 +119,11 @@ std::unique_ptr<Window> Window::createSecondary(const SecondaryConfig& cfg) {
     } else if (cfg.resizable) {
         flags |= SDL_WINDOW_RESIZABLE;
     }
-    if (cfg.borderless) flags |= SDL_WINDOW_BORDERLESS;
+    if (cfg.borderless) {
+        SDL_SetHint("SDL_BORDERLESS_WINDOWED_STYLE", "0");
+        SDL_SetHint("SDL_BORDERLESS_RESIZABLE_STYLE", "0");
+        flags |= SDL_WINDOW_BORDERLESS;
+    }
     if (cfg.alwaysOnTop) flags |= SDL_WINDOW_ALWAYS_ON_TOP;
 
     SDL_Window* sdlWin = SDL_CreateWindow(cfg.title.c_str(),
@@ -108,6 +135,19 @@ std::unique_ptr<Window> Window::createSecondary(const SecondaryConfig& cfg) {
         SdlRuntime::release();
         return nullptr;
     }
+
+#if defined(_WIN32)
+    HWND hwnd = (HWND)SDL_GetPointerProperty(SDL_GetWindowProperties(sdlWin),
+                                             SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
+    if (hwnd && cfg.borderless) {
+        LONG style = GetWindowLongW(hwnd, GWL_STYLE);
+        style &= ~(WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU);
+        style |= WS_POPUP;
+        SetWindowLongW(hwnd, GWL_STYLE, style);
+        SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+    }
+#endif
 
     // unique_ptr can't reach the private default ctor through make_unique.
     std::unique_ptr<Window> win(new Window());
