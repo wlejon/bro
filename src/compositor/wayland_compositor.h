@@ -76,6 +76,7 @@ public:
     bool placeWindow(uint64_t winId, int x, int y, int w, int h);
     std::vector<uint64_t> windows() const;
     std::optional<brocompositor::WindowSnapshot> queryWindow(uint64_t winId) const;
+    uint64_t focusedWindow() const;
 
     // Multi-monitor & output management
     uint32_t addOutput(uint32_t width, uint32_t height);
@@ -85,16 +86,24 @@ public:
     // Shell state queries
     bool isSessionLocked() const;
 
+    // Input injection
+    void injectKey(uint32_t keycode, bool pressed);
+    void injectPointerMotion(double dx, double dy);
+    void injectPointerWarp(double x, double y);
+    void injectPointerButton(uint32_t button, bool pressed);
+    void injectPointerAxis(uint32_t orientation, double delta, int32_t discrete = 0);
+
 #if BRO_HAVE_WAYLAND_SERVER
     brocompositor::wl::ServerBackend* backend() { return backend_.get(); }
     brocompositor::WindowManager* windowManager() { return wm_.get(); }
+    std::shared_ptr<brocompositor::WindowManager> windowManagerShared() const { return wm_; }
     std::vector<brocompositor::wl::LayerSurfaceInfo> layerSurfaces() const;
 #endif
 
 private:
 #if BRO_HAVE_WAYLAND_SERVER
     std::unique_ptr<brocompositor::wl::ServerBackend> backend_;
-    std::unique_ptr<brocompositor::WindowManager> wm_;
+    std::shared_ptr<brocompositor::WindowManager> wm_;
 #endif
     bool running_ = false;
     std::string socketName_;

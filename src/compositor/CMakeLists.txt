@@ -7,6 +7,9 @@ target_link_libraries(bro_compositor PUBLIC
     bro_util
     brocompositor
 )
+target_link_libraries(bro_compositor PRIVATE
+    brocompositor_api
+)
 if(BRO_WITH_DMABUF)
     target_link_libraries(bro_compositor PUBLIC brodmabuf::brodmabuf)
 endif()

@@ -7,6 +7,10 @@ class DrmSeatPlatform;
 class DrmInputPlatform;
 }
 
+namespace bro::compositor {
+class WaylandCompositor;
+}
+
 namespace bro::engine {
 
 // The seat and input types are compiled only with BRO_WITH_SEAT
@@ -17,6 +21,9 @@ struct DrmPlatformContext {
 #if BRO_WITH_SEAT
     std::unique_ptr<platform::DrmSeatPlatform> seat;
     std::unique_ptr<platform::DrmInputPlatform> input;
+#endif
+#if BRO_WITH_COMPOSITOR
+    std::unique_ptr<compositor::WaylandCompositor> compositor;
 #endif
 };
 

@@ -11,6 +11,10 @@
 #include "platform/sdl_window.h"
 #include "util/time.h"
 #include "bronze_host/host_window_open.h"
+#include "engine/engine_drm.h"
+#if BRO_WITH_COMPOSITOR
+#include "compositor/wayland_compositor.h"
+#endif
 
 #include <algorithm>
 #include <chrono>
@@ -197,6 +201,17 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
     beginFrameComposite();
     compositeLayers(layers.appLayers, layers.appInsetTop);
 
+#if BRO_WITH_COMPOSITOR
+    std::vector<compositor::LeasedSurfaceFrame> leasedFrames;
+    if (drmCtx_ && drmCtx_->compositor) {
+        std::vector<engine::UILayer> clientLayers;
+        leasedFrames = drmCtx_->compositor->acquireClientLayers(clientLayers);
+        if (!clientLayers.empty()) {
+            compositeLayers(clientLayers);
+        }
+    }
+#endif
+
     compositeLayers(layers.systemLayers);
 
     compositeWindowHosts();
@@ -204,6 +219,12 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
     frameStats_.accumGpuMs += util::currentTimeMs() - tGpu;
 
     presentCurrentFrame();
+
+#if BRO_WITH_COMPOSITOR
+    if (drmCtx_ && drmCtx_->compositor && !leasedFrames.empty()) {
+        drmCtx_->compositor->releaseClientLayers(leasedFrames);
+    }
+#endif
 
     {
         double capMs = frameCapIntervalMs_;

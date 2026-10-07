@@ -92,7 +92,7 @@ void Engine::initAppWatcher() {
     // edit loop: a window, and scripts the engine itself compiles from the
     // dir. A compiled app is rebuilt and relaunched by its own build; a
     // headless run is a test, whose driver owns every reload.
-    if (!watchSources_ || displayMode_ != DisplayMode::Windowed || hostProvidesCompiledApp_ || appDir_.empty()) return;
+    if (!watchSources_ || (displayMode_ != DisplayMode::Windowed && displayMode_ != DisplayMode::Drm) || hostProvidesCompiledApp_ || appDir_.empty()) return;
 
     // The app dir, and the project's shared /lib when it is not already
     // inside it — the code an app imports from `/lib/...` is edited in the

@@ -2,6 +2,8 @@
 #include "engine/ui_layer.h"
 #include "render/layer_source.h"
 
+#include <brocompositor/api.h>
+
 namespace bro::compositor {
 
 WaylandCompositor::WaylandCompositor() = default;
@@ -29,7 +31,7 @@ bool WaylandCompositor::init(const CompositorConfig& config, std::string* error)
     backend_ = brocompositor::wl::ServerBackend::create(sCfg, error);
     if (!backend_) return false;
 
-    wm_ = std::make_unique<brocompositor::WindowManager>();
+    wm_ = std::make_shared<brocompositor::WindowManager>();
     socketName_ = backend_->socket_name();
     running_ = true;
     return true;
@@ -70,8 +72,11 @@ void WaylandCompositor::pollEvents() {
     if (!backend_) return;
 
     auto events = backend_->events().drain();
+    auto q = brocompositor::api::getEventQueue();
     for (auto& ev : events) {
-        if (wm_) {
+        if (q) {
+            q->push(ev);
+        } else if (wm_) {
             auto cmd = wm_->handle(ev);
             backend_->execute(cmd);
         }
@@ -79,6 +84,46 @@ void WaylandCompositor::pollEvents() {
 
     auto sevents = backend_->server_events().drain();
     (void)sevents;
+#endif
+}
+
+void WaylandCompositor::injectKey(uint32_t keycode, bool pressed) {
+#if BRO_HAVE_WAYLAND_SERVER
+    if (backend_) backend_->inject_key(keycode, pressed);
+#else
+    (void)keycode; (void)pressed;
+#endif
+}
+
+void WaylandCompositor::injectPointerMotion(double dx, double dy) {
+#if BRO_HAVE_WAYLAND_SERVER
+    if (backend_) backend_->inject_pointer_motion(dx, dy);
+#else
+    (void)dx; (void)dy;
+#endif
+}
+
+void WaylandCompositor::injectPointerWarp(double x, double y) {
+#if BRO_HAVE_WAYLAND_SERVER
+    if (backend_) backend_->inject_pointer_warp(x, y);
+#else
+    (void)x; (void)y;
+#endif
+}
+
+void WaylandCompositor::injectPointerButton(uint32_t button, bool pressed) {
+#if BRO_HAVE_WAYLAND_SERVER
+    if (backend_) backend_->inject_pointer_button(button, pressed);
+#else
+    (void)button; (void)pressed;
+#endif
+}
+
+void WaylandCompositor::injectPointerAxis(uint32_t orientation, double delta, int32_t discrete) {
+#if BRO_HAVE_WAYLAND_SERVER
+    if (backend_) backend_->inject_pointer_axis(orientation, delta, discrete);
+#else
+    (void)orientation; (void)delta; (void)discrete;
 #endif
 }
 
@@ -285,6 +330,14 @@ std::optional<brocompositor::WindowSnapshot> WaylandCompositor::queryWindow(uint
 #else
     (void)winId;
     return std::nullopt;
+#endif
+}
+
+uint64_t WaylandCompositor::focusedWindow() const {
+#if BRO_HAVE_WAYLAND_SERVER
+    return wm_ ? wm_->focused() : 0;
+#else
+    return 0;
 #endif
 }
 

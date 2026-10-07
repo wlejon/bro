@@ -11,6 +11,10 @@
 #if BRO_WITH_DMABUF
 #include "render/kms_direct_presenter.h"
 #endif
+#if BRO_WITH_COMPOSITOR
+#include "compositor/wayland_compositor.h"
+#include <brocompositor/api.h>
+#endif
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/event.h"
@@ -106,6 +110,39 @@ void Engine::initDrm(const EngineConfig& config) {
     renderer_ = std::move(skia);
 
     LOG_INFO("Engine: DRM display mode initialized (%ux%u)", viewportWidth_, viewportHeight_);
+
+#if BRO_WITH_COMPOSITOR
+    compositor::CompositorConfig compCfg;
+    compCfg.headless = true;
+    compCfg.drm = false;
+    compCfg.width = viewportWidth_;
+    compCfg.height = viewportHeight_;
+    compCfg.xwayland = true;
+    compCfg.socketName = "wayland-0";
+
+    drmCtx_->compositor = std::make_unique<compositor::WaylandCompositor>();
+    std::string compErr;
+    if (drmCtx_->compositor->init(compCfg, &compErr)) {
+        LOG_INFO("Engine: WaylandCompositor started on socket %s",
+                 drmCtx_->compositor->socketName().c_str());
+        ::setenv("WAYLAND_DISPLAY", drmCtx_->compositor->socketName().c_str(), 1);
+        if (!drmCtx_->compositor->xwaylandDisplay().empty()) {
+            ::setenv("DISPLAY", drmCtx_->compositor->xwaylandDisplay().c_str(), 1);
+        }
+#if BRO_HAVE_WAYLAND_SERVER
+        if (drmCtx_->compositor->windowManager()) {
+            brocompositor::api::setWindowManager(drmCtx_->compositor->windowManagerShared());
+            brocompositor::api::setCommandSink([comp = drmCtx_->compositor.get()](const std::vector<brocompositor::Command>& cmds) {
+                if (comp && comp->backend()) {
+                    comp->backend()->execute(cmds);
+                }
+            });
+        }
+#endif
+    } else {
+        LOG_WARN("Engine: WaylandCompositor init failed: %s", compErr.c_str());
+    }
+#endif
 #else
     (void)config;
     throw std::runtime_error("DRM display mode is only supported on Linux with seat and dmabuf enabled");
@@ -119,6 +156,28 @@ void Engine::runDrm() {
     if (splashVisible_) splashStartMs_ = util::currentTimeMs();
 
     auto dispatchInput = [this](const platform::DrmInputEvent& ev) {
+#if BRO_WITH_COMPOSITOR
+        if (drmCtx_ && drmCtx_->compositor && drmCtx_->compositor->isRunning()) {
+            if (drmCtx_->compositor->focusedWindow() != 0) {
+                if (ev.type == platform::DrmInputEvent::Type::KeyDown) {
+                    drmCtx_->compositor->injectKey(static_cast<uint32_t>(ev.scancode), true);
+                    return;
+                } else if (ev.type == platform::DrmInputEvent::Type::KeyUp) {
+                    drmCtx_->compositor->injectKey(static_cast<uint32_t>(ev.scancode), false);
+                    return;
+                }
+            }
+            if (ev.type == platform::DrmInputEvent::Type::MouseMove) {
+                drmCtx_->compositor->injectPointerWarp(static_cast<double>(ev.x), static_cast<double>(ev.y));
+            } else if (ev.type == platform::DrmInputEvent::Type::MouseDown) {
+                drmCtx_->compositor->injectPointerButton(static_cast<uint32_t>(ev.button), true);
+            } else if (ev.type == platform::DrmInputEvent::Type::MouseUp) {
+                drmCtx_->compositor->injectPointerButton(static_cast<uint32_t>(ev.button), false);
+            } else if (ev.type == platform::DrmInputEvent::Type::MouseWheel) {
+                drmCtx_->compositor->injectPointerAxis(0, static_cast<double>(ev.wheelDy), 0);
+            }
+        }
+#endif
         switch (ev.type) {
             case platform::DrmInputEvent::Type::KeyDown:
                 handleKeyDown(ev.keycode, ev.scancode, ev.modifiers, ev.repeat);
@@ -214,6 +273,9 @@ void Engine::runDrm() {
         if (drmCtx_) {
             if (drmCtx_->seat) drmCtx_->seat->pollEvents();
             if (drmCtx_->input) drmCtx_->input->pollEvents(dispatchInput);
+#if BRO_WITH_COMPOSITOR
+            if (drmCtx_->compositor) drmCtx_->compositor->pollEvents();
+#endif
         }
 
         beginGpuFrame();
