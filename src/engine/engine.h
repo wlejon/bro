@@ -211,6 +211,8 @@ public:
     float getLastMouseX() const { return lastMouseX_; }
     float getLastMouseY() const { return lastMouseY_; }
     const std::string& resolvedCursor() const { return resolvedCursor_; }
+    bool isCursorVisible() const { return cursorVisible_; }
+    void setCursorVisible(bool v) { cursorVisible_ = v; }
 
     // Pointer lock
     bool requestPointerLock(dom::Element* target);
@@ -896,6 +898,7 @@ private:
 
     float lastMouseX_ = 0.0f;
     float lastMouseY_ = 0.0f;
+    bool cursorVisible_ = false;
 
     dom::ElementHandle lockedElement_;
     float lockedMouseX_ = 0.0f;

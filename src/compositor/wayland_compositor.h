@@ -98,6 +98,15 @@ public:
     brocompositor::WindowManager* windowManager() { return wm_.get(); }
     std::shared_ptr<brocompositor::WindowManager> windowManagerShared() const { return wm_; }
     std::vector<brocompositor::wl::LayerSurfaceInfo> layerSurfaces() const;
+
+    /// Current cursor state requested by Wayland clients or compositor
+    brocompositor::wl::CursorChanged cursor() const;
+
+    /// Hit-test Wayland windows at coordinates (x, y)
+    uint64_t windowAt(double x, double y) const;
+
+    /// Route pointer to surface under (x, y), returns true if a Wayland surface was hit
+    bool routePointer(double x, double y, uint32_t time = 0);
 #endif
 
 private:

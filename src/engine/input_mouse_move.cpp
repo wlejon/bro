@@ -422,6 +422,10 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
 
     lastMouseX_ = x;
     lastMouseY_ = y;
+    if (displayMode_ == DisplayMode::Drm) {
+        cursorVisible_ = true;
+        uiDirty_ = true;
+    }
 }
 
 #if BRO_WITH_3D

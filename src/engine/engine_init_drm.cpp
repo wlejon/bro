@@ -38,6 +38,7 @@
 #ifdef __linux__
 #include <fcntl.h>
 #include <unistd.h>
+#include <linux/input-event-codes.h>
 #endif
 
 #if defined(__linux__) && BRO_WITH_DMABUF
@@ -157,25 +158,56 @@ void Engine::runDrm() {
     if (splashVisible_) splashStartMs_ = util::currentTimeMs();
 
     auto dispatchInput = [this](const platform::DrmInputEvent& ev) {
+        if (ev.type == platform::DrmInputEvent::Type::MouseMove ||
+            ev.type == platform::DrmInputEvent::Type::MouseDown ||
+            ev.type == platform::DrmInputEvent::Type::MouseUp) {
+            cursorVisible_ = true;
+            uiDirty_ = true;
+        }
+
 #if BRO_WITH_COMPOSITOR
         if (drmCtx_ && drmCtx_->compositor && drmCtx_->compositor->isRunning()) {
-            if (drmCtx_->compositor->focusedWindow() != 0) {
-                if (ev.type == platform::DrmInputEvent::Type::KeyDown) {
+            if (ev.type == platform::DrmInputEvent::Type::KeyDown) {
+                if (drmCtx_->compositor->focusedWindow() != 0) {
                     drmCtx_->compositor->injectKey(static_cast<uint32_t>(ev.scancode), true);
                     return;
-                } else if (ev.type == platform::DrmInputEvent::Type::KeyUp) {
+                }
+            } else if (ev.type == platform::DrmInputEvent::Type::KeyUp) {
+                if (drmCtx_->compositor->focusedWindow() != 0) {
                     drmCtx_->compositor->injectKey(static_cast<uint32_t>(ev.scancode), false);
                     return;
                 }
-            }
-            if (ev.type == platform::DrmInputEvent::Type::MouseMove) {
+            } else if (ev.type == platform::DrmInputEvent::Type::MouseMove) {
                 drmCtx_->compositor->injectPointerWarp(static_cast<double>(ev.x), static_cast<double>(ev.y));
+                drmCtx_->compositor->routePointer(static_cast<double>(ev.x), static_cast<double>(ev.y));
             } else if (ev.type == platform::DrmInputEvent::Type::MouseDown) {
-                drmCtx_->compositor->injectPointerButton(static_cast<uint32_t>(ev.button), true);
+                uint32_t wlButton = BTN_LEFT;
+                if (ev.button == 3) wlButton = BTN_RIGHT;
+                else if (ev.button == 2) wlButton = BTN_MIDDLE;
+
+                bool hitClient = drmCtx_->compositor->routePointer(static_cast<double>(ev.x), static_cast<double>(ev.y));
+                if (hitClient) {
+                    uint64_t hitWin = drmCtx_->compositor->windowAt(static_cast<double>(ev.x), static_cast<double>(ev.y));
+                    if (hitWin != 0 && hitWin != drmCtx_->compositor->focusedWindow()) {
+                        drmCtx_->compositor->focusWindow(hitWin);
+                    }
+                    drmCtx_->compositor->injectPointerButton(wlButton, true);
+                    return;
+                } else if (drmCtx_->compositor->focusedWindow() != 0) {
+                    drmCtx_->compositor->focusWindow(0);
+                }
             } else if (ev.type == platform::DrmInputEvent::Type::MouseUp) {
-                drmCtx_->compositor->injectPointerButton(static_cast<uint32_t>(ev.button), false);
+                uint32_t wlButton = BTN_LEFT;
+                if (ev.button == 3) wlButton = BTN_RIGHT;
+                else if (ev.button == 2) wlButton = BTN_MIDDLE;
+                if (drmCtx_->compositor->focusedWindow() != 0) {
+                    drmCtx_->compositor->injectPointerButton(wlButton, false);
+                }
             } else if (ev.type == platform::DrmInputEvent::Type::MouseWheel) {
-                drmCtx_->compositor->injectPointerAxis(0, static_cast<double>(ev.wheelDy), 0);
+                if (drmCtx_->compositor->focusedWindow() != 0) {
+                    drmCtx_->compositor->injectPointerAxis(0, static_cast<double>(ev.wheelDy), 0);
+                    return;
+                }
             }
         }
 #endif

@@ -12,6 +12,7 @@
 #include "util/time.h"
 #include "bronze_host/host_window_open.h"
 #include "engine/engine_drm.h"
+#include "render/software_cursor.h"
 #if BRO_WITH_COMPOSITOR
 #include "compositor/wayland_compositor.h"
 #endif
@@ -215,6 +216,24 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
     compositeLayers(layers.systemLayers);
 
     compositeWindowHosts();
+
+    if (displayMode_ == DisplayMode::Drm && cursorVisible_ && !lockedElement_.get()) {
+        std::string shape = resolvedCursor_;
+#if BRO_WITH_COMPOSITOR
+        if (drmCtx_ && drmCtx_->compositor) {
+            auto c = drmCtx_->compositor->cursor();
+            if (c.hidden) shape = "none";
+            else if (!c.shape.empty()) shape = c.shape;
+        }
+#endif
+        if (shape != "none") {
+            if (SkCanvas* canvas = frameSegmentCanvas()) {
+                float sx = static_cast<float>(frameCompositeW_) / static_cast<float>(viewportWidth_ > 0 ? viewportWidth_ : 1);
+                float sy = static_cast<float>(frameCompositeH_) / static_cast<float>(viewportHeight_ > 0 ? viewportHeight_ : 1);
+                render::drawSoftwareCursor(canvas, lastMouseX_ * sx, lastMouseY_ * sy, shape, deviceScale_.render);
+            }
+        }
+    }
 
     frameStats_.accumGpuMs += util::currentTimeMs() - tGpu;
 

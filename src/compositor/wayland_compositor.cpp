@@ -265,6 +265,72 @@ bool WaylandCompositor::focusWindow(uint64_t winId) {
 #endif
 }
 
+#if BRO_HAVE_WAYLAND_SERVER
+brocompositor::wl::CursorChanged WaylandCompositor::cursor() const {
+    if (!backend_) return {};
+    return backend_->cursor();
+}
+
+uint64_t WaylandCompositor::windowAt(double x, double y) const {
+    if (!backend_) return 0;
+    uint64_t f = focusedWindow();
+    if (f != 0 && backend_->visible(f)) {
+        auto snap = backend_->query(f);
+        if (snap && backend_->hit_test(f, x - snap->frame.x, y - snap->frame.y)) {
+            return f;
+        }
+    }
+    for (auto w : backend_->windows()) {
+        if (w == f || !backend_->visible(w)) continue;
+        auto snap = backend_->query(w);
+        if (snap && backend_->hit_test(w, x - snap->frame.x, y - snap->frame.y)) {
+            return w;
+        }
+    }
+    return 0;
+}
+
+bool WaylandCompositor::routePointer(double x, double y, uint32_t time) {
+    if (!backend_) return false;
+
+    if (backend_->session_lock_state() != brocompositor::wl::LockState::Unlocked) {
+        for (const auto& mon : backend_->monitors()) {
+            if (x >= mon.bounds.x && x < mon.bounds.x + mon.bounds.width &&
+                y >= mon.bounds.y && y < mon.bounds.y + mon.bounds.height) {
+                if (auto hit = backend_->hit_test_lock(mon.id, x - mon.bounds.x, y - mon.bounds.y)) {
+                    backend_->pointer_route(hit->surface, hit->sx, hit->sy, time);
+                    return true;
+                }
+            }
+        }
+        backend_->pointer_route(brocompositor::wl::kNoSurface, 0, 0, time);
+        return false;
+    }
+
+    for (const auto& u : backend_->unmanaged_surfaces()) {
+        if (x >= u.rect.x && x < u.rect.x + u.rect.width &&
+            y >= u.rect.y && y < u.rect.y + u.rect.height) {
+            backend_->pointer_route(u.surface, x - u.rect.x, y - u.rect.y, time);
+            return true;
+        }
+    }
+
+    uint64_t hitWin = windowAt(x, y);
+    if (hitWin != 0) {
+        auto snap = backend_->query(hitWin);
+        if (snap) {
+            if (auto hit = backend_->hit_test(hitWin, x - snap->frame.x, y - snap->frame.y)) {
+                backend_->pointer_route(hit->surface, hit->sx, hit->sy, time);
+                return true;
+            }
+        }
+    }
+
+    backend_->pointer_route(brocompositor::wl::kNoSurface, 0, 0, time);
+    return false;
+}
+#endif
+
 bool WaylandCompositor::closeWindow(uint64_t winId) {
 #if BRO_HAVE_WAYLAND_SERVER
     if (!backend_) return false;

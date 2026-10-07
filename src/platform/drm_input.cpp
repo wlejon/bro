@@ -4,6 +4,9 @@
 #include <algorithm>
 
 #if defined(__linux__) && BRO_WITH_SEAT && BRO_HAVE_LIBINPUT
+#include "util/log.h"
+#include <cerrno>
+#include <fcntl.h>
 #include <unistd.h>
 #include <linux/input-event-codes.h>
 
@@ -11,18 +14,23 @@ namespace {
 
 static int open_restricted(const char* path, int flags, void* user_data) {
     auto* self = static_cast<bro::platform::DrmInputPlatform*>(user_data);
-    if (!self || !self->seat()) return -1;
-    (void)flags;
-    return self->seat()->openDevice(path);
+    int fd = -1;
+    if (self && self->seat()) {
+        fd = self->seat()->openDevice(path);
+    }
+    if (fd < 0) {
+        fd = ::open(path, flags);
+    }
+    return fd < 0 ? -errno : fd;
 }
 
 static void close_restricted(int fd, void* user_data) {
     auto* self = static_cast<bro::platform::DrmInputPlatform*>(user_data);
-    if (!self || !self->seat()) {
+    if (self && self->seat()) {
+        self->seat()->closeDevice(fd);
+    } else {
         ::close(fd);
-        return;
     }
-    self->seat()->closeDevice(fd);
 }
 
 const struct libinput_interface kLibinputInterface = {
@@ -234,6 +242,20 @@ void DrmInputPlatform::pollEvents(const DrmInputHandler& handler) {
                 out.x = cursorX_;
                 out.y = cursorY_;
                 if (handler) handler(out);
+                break;
+            }
+            case LIBINPUT_EVENT_DEVICE_ADDED: {
+                auto* dev = libinput_event_get_device(ev);
+                LOG_INFO("DrmInput: device added: %s (%s)",
+                         libinput_device_get_name(dev),
+                         libinput_device_get_sysname(dev));
+                break;
+            }
+            case LIBINPUT_EVENT_DEVICE_REMOVED: {
+                auto* dev = libinput_event_get_device(ev);
+                LOG_INFO("DrmInput: device removed: %s (%s)",
+                         libinput_device_get_name(dev),
+                         libinput_device_get_sysname(dev));
                 break;
             }
             default:

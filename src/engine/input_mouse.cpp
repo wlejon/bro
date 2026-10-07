@@ -500,7 +500,13 @@ void Engine::updateCursorFromHover(dom::Element* target) {
         if (it != cs.end()) css = it->second;
     }
     platform::CursorShape shape = cursorShapeFromCss(css);
-    resolvedCursor_ = cursorShapeName(shape);
+    const char* shapeName = cursorShapeName(shape);
+    if (resolvedCursor_ != shapeName) {
+        resolvedCursor_ = shapeName;
+        if (displayMode_ == DisplayMode::Drm && cursorVisible_) {
+            uiDirty_ = true;
+        }
+    }
     if (displayMode_ == DisplayMode::Windowed && window_ && !lockedElement_.get()) {
         window_->setCursor(shape);
     }

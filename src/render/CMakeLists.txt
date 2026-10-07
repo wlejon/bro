@@ -65,6 +65,7 @@ add_library(bro_render STATIC
     recording_renderer.cpp
     command_replayer.cpp
     image_cache.cpp
+    software_cursor.cpp
     ${RENDER_SPV_HEADERS}
 )
 target_include_directories(bro_render PUBLIC ${bro_SOURCE_DIR}/src)
@@ -102,6 +103,10 @@ if(BRO_BUILD_TESTS)
     add_executable(bro_vulkan_test tests/test_vulkan.cpp)
     target_link_libraries(bro_vulkan_test PRIVATE bro_render bro_platform bro_util skia Vulkan::Vulkan)
     target_include_directories(bro_vulkan_test PRIVATE ${bro_SOURCE_DIR}/src)
+
+    add_executable(bro_software_cursor_test tests/test_software_cursor.cpp)
+    target_link_libraries(bro_software_cursor_test PRIVATE bro_render bro_platform bro_util skia Vulkan::Vulkan)
+    target_include_directories(bro_software_cursor_test PRIVATE ${bro_SOURCE_DIR}/src)
 
     if(BRO_WITH_DMABUF)
         add_executable(bro_vulkan_dmabuf_test tests/test_dmabuf_presenter.cpp)
