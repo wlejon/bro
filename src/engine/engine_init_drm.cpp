@@ -357,15 +357,20 @@ void Engine::runDrm() {
 
 #if BRO_WITH_PHYSICS
         if (physicsWorld_ && physicsWorld_->isIdle()) {
-            double stepMs = physicsWorld_->timeStep() * 1000.0;
-            double nowPhys = util::currentTimeMs();
-            if (lastPhysicsTimeMs_ == 0.0) lastPhysicsTimeMs_ = nowPhys;
-            physicsAccumMs_ += (nowPhys - lastPhysicsTimeMs_) * effectiveTimeScale();
-            lastPhysicsTimeMs_ = nowPhys;
-            if (physicsAccumMs_ >= stepMs) {
-                physicsAccumMs_ -= stepMs;
-                if (physicsAccumMs_ > stepMs * 3) physicsAccumMs_ = 0;
-                physicsWorld_->signalStep();
+            if (!physicsWorld_->hasActiveBodies()) {
+                lastPhysicsTimeMs_ = util::currentTimeMs();
+                physicsAccumMs_ = 0.0;
+            } else {
+                double stepMs = physicsWorld_->timeStep() * 1000.0;
+                double nowPhys = util::currentTimeMs();
+                if (lastPhysicsTimeMs_ == 0.0) lastPhysicsTimeMs_ = nowPhys;
+                physicsAccumMs_ += (nowPhys - lastPhysicsTimeMs_) * effectiveTimeScale();
+                lastPhysicsTimeMs_ = nowPhys;
+                if (physicsAccumMs_ >= stepMs) {
+                    physicsAccumMs_ -= stepMs;
+                    if (physicsAccumMs_ > stepMs * 3) physicsAccumMs_ = 0;
+                    physicsWorld_->signalStep();
+                }
             }
         }
 #endif

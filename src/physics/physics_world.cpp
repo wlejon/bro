@@ -539,6 +539,11 @@ bool PhysicsWorld::isIdle() const {
     return shared_.state == kPhysicsIdle;
 }
 
+bool PhysicsWorld::hasActiveBodies() const {
+    if (!initialized_) return false;
+    return physicsSystem_.GetNumActiveBodies(JPH::EBodyType::RigidBody) > 0 || !characters_.empty();
+}
+
 JPH::BodyInterface& PhysicsWorld::getBodyInterface() {
     return isIdle() ? physicsSystem_.GetBodyInterfaceNoLock() : physicsSystem_.GetBodyInterface();
 }

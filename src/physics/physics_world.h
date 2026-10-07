@@ -726,6 +726,9 @@ public:
     /// Returns true if the physics thread is idle (JS can access bodies).
     bool isIdle() const;
 
+    /// Returns true if there are dynamic bodies or characters requiring simulation.
+    bool hasActiveBodies() const;
+
     /// Return the appropriate BodyInterface (NoLock when idle, locking otherwise).
     JPH::BodyInterface& getBodyInterface();
     const JPH::BodyInterface& getBodyInterface() const;
