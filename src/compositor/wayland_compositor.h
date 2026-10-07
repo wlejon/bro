@@ -59,8 +59,8 @@ public:
     std::string socketName() const;
     std::string xwaylandDisplay() const;
 
-    /// Pump and dispatch compositor events (server_events and wm events)
-    void pollEvents();
+    /// Pump and dispatch compositor events (server_events and wm events). Returns true if events occurred.
+    bool pollEvents();
 
     /// Acquire layers for currently mapped client surfaces to be composited by bro
     std::vector<LeasedSurfaceFrame> acquireClientLayers(std::vector<engine::UILayer>& outLayers);
@@ -77,6 +77,15 @@ public:
     std::vector<uint64_t> windows() const;
     std::optional<brocompositor::WindowSnapshot> queryWindow(uint64_t winId) const;
     uint64_t focusedWindow() const;
+
+    // Interactive window move & resize
+    bool startInteractiveMove(uint64_t winId, double startX, double startY, bool immediate = true);
+    bool startInteractiveResize(uint64_t winId, double startX, double startY, uint32_t edges, bool immediate = true);
+    bool updateInteractiveDrag(double curX, double curY);
+    void endInteractiveDrag();
+    bool isDraggingWindow() const;
+    bool isDragActive() const;
+    uint64_t draggedWindow() const;
 
     // Multi-monitor & output management
     uint32_t addOutput(uint32_t width, uint32_t height);
@@ -116,6 +125,23 @@ private:
 #endif
     bool running_ = false;
     std::string socketName_;
+
+    enum class DragOp : uint32_t { None = 0, Move = 1, Resize = 2 };
+    struct DragState {
+        DragOp op = DragOp::None;
+        uint64_t windowId = 0;
+        double startPointerX = 0;
+        double startPointerY = 0;
+        int initialWinX = 0;
+        int initialWinY = 0;
+        int initialWinW = 0;
+        int initialWinH = 0;
+        uint32_t resizeEdges = 0;
+        bool active = false;
+    } dragState_;
+
+    double lastPointerX_ = 0.0;
+    double lastPointerY_ = 0.0;
 };
 
 } // namespace bro::compositor

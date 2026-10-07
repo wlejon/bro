@@ -4,6 +4,7 @@
 #include "util/time.h"
 
 #include <brocompositor/api.h>
+#include <cmath>
 
 namespace bro::compositor {
 
@@ -68,11 +69,14 @@ std::string WaylandCompositor::xwaylandDisplay() const {
     return {};
 }
 
-void WaylandCompositor::pollEvents() {
+bool WaylandCompositor::pollEvents() {
 #if BRO_HAVE_WAYLAND_SERVER
-    if (!backend_) return;
+    if (!backend_) return false;
 
+    bool hadEvents = false;
     auto events = backend_->events().drain();
+    if (!events.empty()) hadEvents = true;
+
     auto q = brocompositor::api::getEventQueue();
     for (auto& ev : events) {
         if (wm_) {
@@ -89,7 +93,35 @@ void WaylandCompositor::pollEvents() {
     }
 
     auto sevents = backend_->server_events().drain();
-    (void)sevents;
+    if (!sevents.empty()) hadEvents = true;
+
+    for (const auto& sev : sevents) {
+        if (auto* req = std::get_if<brocompositor::wl::WindowRequest>(&sev)) {
+            if (req->kind == brocompositor::wl::WindowRequestKind::Move) {
+                startInteractiveMove(req->window, lastPointerX_, lastPointerY_, true);
+            } else if (req->kind == brocompositor::wl::WindowRequestKind::Resize) {
+                startInteractiveResize(req->window, lastPointerX_, lastPointerY_, req->edges, true);
+            } else if (req->kind == brocompositor::wl::WindowRequestKind::Close) {
+                closeWindow(req->window);
+            } else if (req->kind == brocompositor::wl::WindowRequestKind::Maximize) {
+                setWindowState(req->window, true, false);
+            } else if (req->kind == brocompositor::wl::WindowRequestKind::Unmaximize) {
+                setWindowState(req->window, false, false);
+            } else if (req->kind == brocompositor::wl::WindowRequestKind::Fullscreen) {
+                setWindowState(req->window, false, true);
+            } else if (req->kind == brocompositor::wl::WindowRequestKind::Unfullscreen) {
+                setWindowState(req->window, false, false);
+            } else if (req->kind == brocompositor::wl::WindowRequestKind::Minimize) {
+                setWindowMinimized(req->window, true);
+            } else if (req->kind == brocompositor::wl::WindowRequestKind::Unminimize) {
+                setWindowMinimized(req->window, false);
+            }
+        }
+    }
+
+    return hadEvents;
+#else
+    return false;
 #endif
 }
 
@@ -114,6 +146,8 @@ void WaylandCompositor::injectPointerMotion(double dx, double dy) {
 
 void WaylandCompositor::injectPointerWarp(double x, double y) {
 #if BRO_HAVE_WAYLAND_SERVER
+    lastPointerX_ = x;
+    lastPointerY_ = y;
     if (backend_) backend_->inject_pointer_warp(x, y);
 #else
     (void)x; (void)y;
@@ -288,6 +322,20 @@ bool WaylandCompositor::focusWindow(uint64_t winId) {
 
 #if BRO_HAVE_WAYLAND_SERVER
 brocompositor::wl::CursorChanged WaylandCompositor::cursor() const {
+    if (isDragActive()) {
+        brocompositor::wl::CursorChanged c;
+        if (dragState_.op == DragOp::Move) {
+            c.shape = "move";
+        } else if (dragState_.op == DragOp::Resize) {
+            bool ns = (dragState_.resizeEdges & 1) || (dragState_.resizeEdges & 2);
+            bool ew = (dragState_.resizeEdges & 4) || (dragState_.resizeEdges & 8);
+            if (ns && ew) c.shape = "move";
+            else if (ns) c.shape = "ns-resize";
+            else if (ew) c.shape = "ew-resize";
+            else c.shape = "move";
+        }
+        return c;
+    }
     if (!backend_) return {};
     return backend_->cursor();
 }
@@ -312,6 +360,10 @@ uint64_t WaylandCompositor::windowAt(double x, double y) const {
 }
 
 bool WaylandCompositor::routePointer(double x, double y, uint32_t time) {
+    if (x >= 0.0 && y >= 0.0) {
+        lastPointerX_ = x;
+        lastPointerY_ = y;
+    }
     if (!backend_) return false;
 
     if (backend_->session_lock_state() != brocompositor::wl::LockState::Unlocked) {
@@ -481,5 +533,167 @@ std::vector<brocompositor::wl::LayerSurfaceInfo> WaylandCompositor::layerSurface
     return backend_->layer_surfaces();
 }
 #endif
+
+bool WaylandCompositor::startInteractiveMove(uint64_t winId, double startX, double startY, bool immediate) {
+#if BRO_HAVE_WAYLAND_SERVER
+    if (!backend_ || winId == 0) return false;
+    auto snap = backend_->query(static_cast<brocompositor::WindowId>(winId));
+    if (!snap) return false;
+
+    int winX = snap->frame.x;
+    int winY = snap->frame.y;
+    int winW = snap->frame.width;
+    int winH = snap->frame.height;
+
+    if (snap->maximized || snap->fullscreen) {
+        setWindowState(winId, false, false);
+        auto unmaxSnap = backend_->query(static_cast<brocompositor::WindowId>(winId));
+        if (unmaxSnap) {
+            winW = unmaxSnap->frame.width;
+            winH = unmaxSnap->frame.height;
+            winX = static_cast<int>(std::round(startX)) - winW / 2;
+            winY = static_cast<int>(std::round(startY)) - 18;
+            if (winY < 0) winY = 0;
+            backend_->place(static_cast<brocompositor::WindowId>(winId), {winX, winY, winW, winH});
+        }
+    }
+
+    dragState_.op = DragOp::Move;
+    dragState_.windowId = winId;
+    dragState_.startPointerX = startX;
+    dragState_.startPointerY = startY;
+    dragState_.initialWinX = winX;
+    dragState_.initialWinY = winY;
+    dragState_.initialWinW = winW;
+    dragState_.initialWinH = winH;
+    dragState_.resizeEdges = 0;
+    dragState_.active = immediate;
+
+    focusWindow(winId);
+    return true;
+#else
+    (void)winId; (void)startX; (void)startY; (void)immediate;
+    return false;
+#endif
+}
+
+bool WaylandCompositor::startInteractiveResize(uint64_t winId, double startX, double startY, uint32_t edges, bool immediate) {
+#if BRO_HAVE_WAYLAND_SERVER
+    if (!backend_ || winId == 0) return false;
+    auto snap = backend_->query(static_cast<brocompositor::WindowId>(winId));
+    if (!snap) return false;
+
+    dragState_.op = DragOp::Resize;
+    dragState_.windowId = winId;
+    dragState_.startPointerX = startX;
+    dragState_.startPointerY = startY;
+    dragState_.initialWinX = snap->frame.x;
+    dragState_.initialWinY = snap->frame.y;
+    dragState_.initialWinW = snap->frame.width;
+    dragState_.initialWinH = snap->frame.height;
+    dragState_.resizeEdges = edges;
+    dragState_.active = immediate;
+
+    focusWindow(winId);
+    return true;
+#else
+    (void)winId; (void)startX; (void)startY; (void)edges; (void)immediate;
+    return false;
+#endif
+}
+
+bool WaylandCompositor::updateInteractiveDrag(double curX, double curY) {
+#if BRO_HAVE_WAYLAND_SERVER
+    if (!backend_ || dragState_.op == DragOp::None || dragState_.windowId == 0) {
+        return false;
+    }
+
+    lastPointerX_ = curX;
+    lastPointerY_ = curY;
+
+    double dx = curX - dragState_.startPointerX;
+    double dy = curY - dragState_.startPointerY;
+
+    if (!dragState_.active) {
+        if (std::hypot(dx, dy) >= 5.0) {
+            dragState_.active = true;
+        }
+    }
+
+    if (!dragState_.active) {
+        return false;
+    }
+
+    if (dragState_.op == DragOp::Move) {
+        int newX = dragState_.initialWinX + static_cast<int>(std::round(dx));
+        int newY = dragState_.initialWinY + static_cast<int>(std::round(dy));
+        if (newY < 0) newY = 0;
+        return backend_->place(static_cast<brocompositor::WindowId>(dragState_.windowId),
+                              {newX, newY, dragState_.initialWinW, dragState_.initialWinH});
+    }
+
+    if (dragState_.op == DragOp::Resize) {
+        int newX = dragState_.initialWinX;
+        int newY = dragState_.initialWinY;
+        int newW = dragState_.initialWinW;
+        int newH = dragState_.initialWinH;
+
+        if (dragState_.resizeEdges & 4) { // Left
+            int delta = static_cast<int>(std::round(dx));
+            newX += delta;
+            newW -= delta;
+        }
+        if (dragState_.resizeEdges & 8) { // Right
+            newW += static_cast<int>(std::round(dx));
+        }
+        if (dragState_.resizeEdges & 1) { // Top
+            int delta = static_cast<int>(std::round(dy));
+            newY += delta;
+            newH -= delta;
+        }
+        if (dragState_.resizeEdges & 2) { // Bottom
+            newH += static_cast<int>(std::round(dy));
+        }
+
+        constexpr int kMinW = 200;
+        constexpr int kMinH = 150;
+        if (newW < kMinW) {
+            if (dragState_.resizeEdges & 4) newX = dragState_.initialWinX + dragState_.initialWinW - kMinW;
+            newW = kMinW;
+        }
+        if (newH < kMinH) {
+            if (dragState_.resizeEdges & 1) newY = dragState_.initialWinY + dragState_.initialWinH - kMinH;
+            newH = kMinH;
+        }
+
+        return backend_->place(static_cast<brocompositor::WindowId>(dragState_.windowId),
+                              {newX, newY, newW, newH});
+    }
+
+    return false;
+#else
+    (void)curX; (void)curY;
+    return false;
+#endif
+}
+
+void WaylandCompositor::endInteractiveDrag() {
+    dragState_.op = DragOp::None;
+    dragState_.windowId = 0;
+    dragState_.active = false;
+    dragState_.resizeEdges = 0;
+}
+
+bool WaylandCompositor::isDraggingWindow() const {
+    return dragState_.op != DragOp::None && dragState_.windowId != 0;
+}
+
+bool WaylandCompositor::isDragActive() const {
+    return isDraggingWindow() && dragState_.active;
+}
+
+uint64_t WaylandCompositor::draggedWindow() const {
+    return dragState_.windowId;
+}
 
 } // namespace bro::compositor

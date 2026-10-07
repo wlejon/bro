@@ -234,6 +234,40 @@ int main() {
     std::cout << "  Window moved to second display: frame at (" << snap->frame.x << ", " << snap->frame.y
               << ") assigned to monitor=" << snap->monitor << std::endl;
 
+    // 4b. Test interactive window move and resize
+    std::cout << "[step 4b] Testing interactive window move and resize..." << std::endl;
+    CHECK(comp.startInteractiveMove(winId, 1150, 110, false));
+    CHECK(comp.isDraggingWindow());
+    CHECK(!comp.isDragActive());
+    // Small jitter (< 5px) does not activate drag
+    comp.updateInteractiveDrag(1152, 112);
+    CHECK(!comp.isDragActive());
+    // Larger motion (> 5px) activates drag and moves window
+    comp.updateInteractiveDrag(1200, 160);
+    CHECK(comp.isDragActive());
+    comp.endInteractiveDrag();
+    CHECK(!comp.isDraggingWindow());
+    snap = comp.queryWindow(winId);
+    CHECK(snap.has_value());
+    CHECK(snap->frame.x == 1150);
+    CHECK(snap->frame.y == 150);
+    std::cout << "  Interactive move verified: new frame at (" << snap->frame.x << ", " << snap->frame.y << ")" << std::endl;
+
+    // Test interactive resize (edges = 10: bottom=2 | right=8)
+    CHECK(comp.startInteractiveResize(winId, 1200, 160, 10, true));
+    CHECK(comp.isDragActive());
+    comp.updateInteractiveDrag(1250, 210);
+    comp.endInteractiveDrag();
+    for (int r = 0; r < 20; ++r) {
+        comp.pollEvents();
+        ::usleep(10000);
+    }
+    snap = comp.queryWindow(winId);
+    CHECK(snap.has_value());
+    CHECK(snap->frame.width == 550);
+    CHECK(snap->frame.height == 450);
+    std::cout << "  Interactive resize verified: new frame size " << snap->frame.width << "x" << snap->frame.height << std::endl;
+
     // 5. Layer acquisition across multi-monitor setup
     std::cout << "[step 5] Testing layer acquisition with multi-monitor outputs..." << std::endl;
     std::vector<engine::UILayer> layers;

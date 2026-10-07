@@ -225,6 +225,8 @@ void Engine::runDrm() {
             ev.type == platform::DrmInputEvent::Type::MouseUp) {
             cursorVisible_ = true;
             uiDirty_ = true;
+            lastMouseX_ = ev.x;
+            lastMouseY_ = ev.y;
         }
 
 #if BRO_WITH_COMPOSITOR
@@ -242,6 +244,16 @@ void Engine::runDrm() {
                     return;
                 }
             } else if (ev.type == platform::DrmInputEvent::Type::MouseMove) {
+                if (drmCtx_->compositor->isDraggingWindow()) {
+                    bool wasActive = drmCtx_->compositor->isDragActive();
+                    bool moved = drmCtx_->compositor->updateInteractiveDrag(static_cast<double>(ev.x), static_cast<double>(ev.y));
+                    if (!wasActive && drmCtx_->compositor->isDragActive()) {
+                        drmCtx_->compositor->injectPointerButton(BTN_LEFT, false);
+                    }
+                    if (moved) uiDirty_ = true;
+                    return;
+                }
+
                 bool overlay = isShellOverlayAt(ev.x, ev.y);
                 if (overlay) {
                     drmCtx_->compositor->routePointer(-1.0, -1.0);
@@ -258,9 +270,65 @@ void Engine::runDrm() {
                 }
 
                 if (!overlay) {
+                    uint64_t hitWin = drmCtx_->compositor->windowAt(static_cast<double>(ev.x), static_cast<double>(ev.y));
+                    bool isSuper = (ev.modifiers & SDL_KMOD_GUI) != 0;
+                    bool isAlt   = (ev.modifiers & SDL_KMOD_ALT) != 0;
+                    bool isLeft  = (wlButton == BTN_LEFT);
+                    bool isRight = (wlButton == BTN_RIGHT);
+
+                    if (hitWin != 0 && (isSuper || isAlt) && isLeft) {
+                        drmCtx_->compositor->startInteractiveMove(hitWin, static_cast<double>(ev.x), static_cast<double>(ev.y), true);
+                        if (hitWin != drmCtx_->compositor->focusedWindow()) {
+                            drmCtx_->compositor->focusWindow(hitWin);
+                        }
+                        return;
+                    }
+
+                    if (hitWin != 0 && (isSuper || isAlt) && isRight) {
+                        drmCtx_->compositor->startInteractiveResize(hitWin, static_cast<double>(ev.x), static_cast<double>(ev.y), 10, true);
+                        if (hitWin != drmCtx_->compositor->focusedWindow()) {
+                            drmCtx_->compositor->focusWindow(hitWin);
+                        }
+                        return;
+                    }
+
+                    if (hitWin != 0 && isLeft) {
+                        auto snap = drmCtx_->compositor->queryWindow(hitWin);
+                        if (snap) {
+                            float lx = ev.x - snap->frame.x;
+                            float ly = ev.y - snap->frame.y;
+
+                            uint32_t resizeEdges = 0;
+                            constexpr float kB = 6.0f;
+                            if (lx >= 0.0f && lx < snap->frame.width && ly >= 0.0f && ly < snap->frame.height) {
+                                if (lx < kB) resizeEdges |= 4;
+                                else if (lx >= snap->frame.width - kB) resizeEdges |= 8;
+                                if (ly < kB) resizeEdges |= 1;
+                                else if (ly >= snap->frame.height - kB) resizeEdges |= 2;
+                            }
+
+                            if (resizeEdges != 0) {
+                                drmCtx_->compositor->startInteractiveResize(hitWin, static_cast<double>(ev.x), static_cast<double>(ev.y), resizeEdges, true);
+                                if (hitWin != drmCtx_->compositor->focusedWindow()) {
+                                    drmCtx_->compositor->focusWindow(hitWin);
+                                }
+                                return;
+                            }
+
+                            if (ly >= 0.0f && ly < 38.0f) {
+                                drmCtx_->compositor->startInteractiveMove(hitWin, static_cast<double>(ev.x), static_cast<double>(ev.y), false);
+                                if (hitWin != drmCtx_->compositor->focusedWindow()) {
+                                    drmCtx_->compositor->focusWindow(hitWin);
+                                }
+                                drmCtx_->compositor->routePointer(static_cast<double>(ev.x), static_cast<double>(ev.y));
+                                drmCtx_->compositor->injectPointerButton(wlButton, true);
+                                return;
+                            }
+                        }
+                    }
+
                     bool hitClient = drmCtx_->compositor->routePointer(static_cast<double>(ev.x), static_cast<double>(ev.y));
                     if (hitClient) {
-                        uint64_t hitWin = drmCtx_->compositor->windowAt(static_cast<double>(ev.x), static_cast<double>(ev.y));
                         if (hitWin != 0 && hitWin != drmCtx_->compositor->focusedWindow()) {
                             drmCtx_->compositor->focusWindow(hitWin);
                         }
@@ -273,6 +341,21 @@ void Engine::runDrm() {
                     }
                 }
             } else if (ev.type == platform::DrmInputEvent::Type::MouseUp) {
+                if (drmCtx_->compositor->isDraggingWindow()) {
+                    bool wasActive = drmCtx_->compositor->isDragActive();
+                    drmCtx_->compositor->endInteractiveDrag();
+                    if (!wasActive && drmCtx_->compositor->focusedWindow() != 0) {
+                        uint32_t wlButton = ev.rawButton ? ev.rawButton : BTN_LEFT;
+                        if (!ev.rawButton) {
+                            if (ev.button == 3) wlButton = BTN_RIGHT;
+                            else if (ev.button == 2) wlButton = BTN_MIDDLE;
+                        }
+                        drmCtx_->compositor->injectPointerButton(wlButton, false);
+                    }
+                    uiDirty_ = true;
+                    return;
+                }
+
                 bool overlay = isShellOverlayAt(ev.x, ev.y);
                 uint32_t wlButton = ev.rawButton ? ev.rawButton : BTN_LEFT;
                 if (!ev.rawButton) {
@@ -395,7 +478,9 @@ void Engine::runDrm() {
             if (drmCtx_->seat) drmCtx_->seat->pollEvents();
             if (drmCtx_->input) drmCtx_->input->pollEvents(dispatchInput);
 #if BRO_WITH_COMPOSITOR
-            if (drmCtx_->compositor) drmCtx_->compositor->pollEvents();
+            if (drmCtx_->compositor && drmCtx_->compositor->pollEvents()) {
+                uiDirty_ = true;
+            }
 #endif
         }
 
