@@ -20,6 +20,7 @@
 #include <fstream>
 
 #include "platform/sdl_window.h"
+#include "platform/desktop_platform.h"
 #include "platform/dialogs.h"
 #include "platform/event_loop.h"
 #include "render/renderer.h"
@@ -175,6 +176,9 @@ Engine::Engine(const EngineConfig& config)
     //   VulkanSwapchain + VulkanPresenter; without the GPU (useGPU = false)
     //   the window is a software one and frames are blitted to it on the CPU.
     // - Server: never initializes graphics.
+    // Headless never reaches the desktop: tray, notifications, taskbar
+    // progress and the bell record their state instead of touching the OS.
+    platform::desktop::setHeadless(displayMode_ == DisplayMode::Headless);
     if (displayMode_ == DisplayMode::Headless) {
         try {
             const auto backend = config.graphics.useGPU ? platform::GraphicsBackend::Vulkan

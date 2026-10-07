@@ -1,5 +1,6 @@
 #include "platform/sdl_window.h"
 #include "platform/sdl_runtime.h"
+#include "platform/desktop_platform.h"
 #include "util/log.h"
 
 #include <SDL3/SDL.h>
@@ -219,11 +220,10 @@ std::string Window::getTitle() const {
     return m_title;
 }
 
+// The requested opacity is the window's opacity: a video driver without
+// per-window opacity (the dummy driver headless Linux runs on) ignores the
+// request, and reading SDL back would report 1.0 for a value never refused.
 float Window::getOpacity() const {
-    if (m_window) {
-        float op = SDL_GetWindowOpacity(m_window);
-        if (op >= 0.0f) return op;
-    }
     return m_opacity;
 }
 
@@ -241,7 +241,7 @@ bool Window::isFocused() const {
 
 bool Window::flash(bool on) {
     m_flashing = on;
-    if (!m_window) return true;
+    if (!m_window || desktop::isHeadless()) return true;
     return SDL_FlashWindow(m_window, on ? SDL_FLASH_UNTIL_FOCUSED : SDL_FLASH_CANCEL);
 }
 
