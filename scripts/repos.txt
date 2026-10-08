@@ -22,7 +22,7 @@
 #   deps       comma-separated bro-ecosystem repos it builds against (from its CMake)
 #
 # name          group     bro        github   platforms        deps
-bro             runtime   self       public   win,linux,mac    bronze,brass,bromath,brokit,htmlayout,broaudio,bromesh,broflora,brotensor,brogameagent,brolm,brodiffusion,broimage,brosoundml,brovisionml,bropty,brosearch,brothemes,bromux,brovfs,brosys,brocred,broapps,brothumb,brodisplays,brocompositor,brokeys,broa11y,broconf,broseat,browl,broportal,brodbus
+bro             runtime   self       public   win,linux,mac    bronze,brass,bromath,brokit,htmlayout,broaudio,bromesh,broflora,brotensor,brogameagent,brolm,brodiffusion,broimage,brosoundml,brovisionml,bropty,brosearch,brothemes,bromux,brovfs,brosys,brocred,broapps,brothumb,brodisplays,brocompositor,brokeys,broa11y,broconf,broseat,browl,broportal,brodbus,broremote
 bronze         compiler  submodule  public   win,linux,mac    brass
 brass           compiler  submodule  public   win,linux,mac    -
 bromath         engine    submodule  public   win,linux,mac    -
@@ -63,6 +63,7 @@ broclip         desktop   -          public   win,linux,mac    -
 brompris        desktop   -          public   linux            brodbus
 bropulse        desktop   -          public   linux            -
 broime          desktop   -          public   win,linux,mac    brosearch
+broremote       desktop   -          pending  win,linux        -
 broworkshop     app       -          public   win,linux,mac    bro
 broterm         app       -          public   win,linux,mac    bro
 helm            app       -          public   win,linux,mac    bro

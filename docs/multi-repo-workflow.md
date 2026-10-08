@@ -29,6 +29,7 @@ One more sibling repo, **[broworkshop](https://github.com/wlejon/broworkshop)** 
 | **brosearch** | `../brosearch` | `third_party/brosearch` |
 | **brothemes** | `../brothemes` | `third_party/brothemes` |
 | **bromux** | `../bromux` | `third_party/bromux` |
+| **broremote** (optional, `bro.remote`) | `../broremote` | none: not on GitHub yet, so no submodule |
 | **brass** (compiler backend, required) | `../brass` | `third_party/brass` |
 | **bronze** (JS runtime, mandatory) | `../bronze` | `third_party/bronze` |
 
@@ -114,6 +115,7 @@ Most siblings are added **conditionally**, behind the modular-build flags (see [
 | brovisionml | `BRO_WITH_VISION` |
 | bropty, brosearch, brothemes | `BRO_WITH_TERMINAL` |
 | bromux | `BRO_WITH_TERMINAL`, and only when found: without it persistent sessions are compiled out |
+| broremote | `BRO_WITH_REMOTE`, and only when `../broremote` is found (there is no submodule): without it `bro.remote` is the unavailable stub |
 | bronze | Mandatory (always ON; `BRO_WITH_BRONZE=1`) |
 
 With a gate off, the sibling is never added and the features it backs are compiled out. The flags auto-resolve their prerequisites (`_bro_require` in the top-level `CMakeLists.txt`), so e.g. `BRO_WITH_DIFFUSION=ON` forces `BRO_WITH_LM` and `BRO_WITH_TENSOR` on.
@@ -153,6 +155,7 @@ The JavaScript surface of every sibling (`bro.mesh`, `bro.lm`, `AudioContext`, `
 | broimage | `broimage_api` | `broimage::api::installImage()` | `broimage_test_api` |
 | brosoundml | `brosoundml_api` | `brosoundml::api::installSoundML()` (+ path/log hooks, `tickSoundML`, `shutdownSoundML`) | `brosoundml_test_api` |
 | brovisionml | `brovisionml_api` | `brovisionml::api::installVision()` | `brovisionml_test_api` |
+| broremote | `broremote_api` (`BROREMOTE_ENABLE_API`, forced on by bro) | `broremote::api::installRemote()` (+ `setHostHooks`, `tickRemote`, `shutdownRemote`; bro's side is `host_remote.cpp`) | `broremote_test_api` |
 
 **What a sibling api is.** `src/api/` in the sibling builds a static library, `<name>_api`, that links the sibling's own library plus `bronze_runtime_shared`. It is a bronze *embed* binding: classes built through the sibling's copy of `HostClass` (`src/api/host_class.{h,cpp}`, `object_builder.h`), natives registered under `__bro_native.<ns>` with `bronze::embed::registerNative`, and for brokit, broflora and brotensor a bronze-compiled JS module (`src/api/js/*.js`, compiled at build time by the `bronze` CLI against `src/api/<name>.globals`, natively on x86_64 and AArch64 alike, Apple Silicon included; `bronze_js_stubs_nobackend.cpp` stands in only where brass has no code generator, see below). brotensor additionally runs its own `brotensor-native-manifest` tool at build time so `tensor.js` compiles against a native manifest, the same cycle-breaking bro's `bro-native-manifest` does. Each `install*()` mounts onto the `bro` root it finds on `globalThis` (or, absent one, registers its own — which is why bro's order below matters) and registers the classes it wants as compiled-app globals.
 

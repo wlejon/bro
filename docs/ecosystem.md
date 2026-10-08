@@ -88,6 +88,7 @@ Standalone C++20 libraries for the desktop environment. bro mounts their JavaScr
 | [brompris](https://github.com/wlejon/brompris) | Media player controller: MPRIS2 on Linux | brodbus | Linux (Windows and macOS build, with no backend yet: no players) | `BRO_WITH_MPRIS` |
 | [bropulse](https://github.com/wlejon/bropulse) | Audio routing and policy: native PipeWire 0.3 stream graph and PulseAudio fallback | none | Linux (Windows and macOS build the graph and policy, with no audio server) | `BRO_WITH_PULSE` |
 | [broime](https://github.com/wlejon/broime) | Input methods: compose key sequences, dead keys, candidate popup placement, dictionary prefix trie | brosearch | Windows, Linux, macOS | `BRO_WITH_IME` |
+| broremote (not on GitHub yet: a local checkout at `../broremote`, no submodule) | Remote sessions: a server the host feeds composited frames (dmabuf or CPU) and drains input from, hardware video encode (VA-API) and decode (Media Foundation), a viewer (`broremote-view`) that reaches it locally or over ssh. Backs `bro.remote` and `helm --remote` | none (its JS binding: bronze, brass) | Linux (hosting with VA-API), Windows (viewer; Raw-only hosting for development) | `BRO_WITH_REMOTE` |
 
 ## Apps and tools
 

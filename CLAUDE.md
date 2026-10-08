@@ -76,6 +76,7 @@ Every repo in the ecosystem (these, the desktop substrate libraries, the apps) i
 | brosearch | `brosearch` | regex scrollback search (bropty's dependency) |
 | brothemes | `brothemes` | colour schemes + WCAG/APCA contrast (the terminal's minimum contrast) |
 | bromux | `bromux` | terminal multiplexer: the server behind persistent `<terminal>` sessions (optional; off when absent) |
+| broremote | `broremote` | remote sessions behind `bro.remote`: frames to a viewer (VA-API video), its input back (`BRO_WITH_REMOTE`; `../broremote` only, no submodule; off when absent) |
 | brass | `brass` | JIT / AOT native code generator backend for bronze |
 | bronze | `bronze` / `bronze-cli` / `bronze::runtime_shared` | JavaScript compiler + shared runtime (mandatory) |
 | Jolt Physics | `Jolt::Jolt` | rigid-body physics |
@@ -173,6 +174,7 @@ Annotated `.js` files with JSDoc + examples. Read the file before using or chang
 | `compositor-api.js` | `bro.compositor`: window-management policy, workspace switching, tiling/floating layout modes, and event hooks |
 | `wl-api.js` | `bro.wl`: Wayland client protocols: wlr-layer-shell panels/docks, foreign-toplevel, session lock, and screencopy |
 | `a11y-api.js` | `bro.a11y`: accessibility tree inspection, node query/mutation, live-region announcements, and custom widget roles |
+| `remote-api.js` | `bro.remote`: host this screen for `broremote-view` (local or over ssh): `host({socket, codecs, bitrateKbps, fps})` / `stop` / `status` / attach + detach events; frames from the presenter (KMS dmabuf under DRM), viewer input routed as local input |
 
 Other docs: `docs/headless.md` (headless reference including input/IME injection and the WebGL2 support matrix), `docs/settings.md`, `docs/inspect.md` (DOM inspector, great in headless), `docs/system-panels.md`, `docs/embedding.md` (linking bro_engine into your own executable: media backends, the headless driver), `docs/hot-reload.md` (the edit loop: source watcher, F5, `BRO_JIT_TIER` override), `docs/code-cache.md` (on-disk compiled-IL cache: key, location, `BRO_CODE_CACHE*`), `docs/compile-progress.md` (window stays live during a compile; `bro-compiling` / `--bro-compile-progress` on `<html>`), `docs/multi-repo-workflow.md`, `docs/coverage.md` (Windows-only line coverage), `docs/perf-ratchet.md` (end-to-end perf ratchet: `bench/ratchet.sh`, CPU/GC/page-compile/tats-startup goldens, load guard, `--update`).
 
