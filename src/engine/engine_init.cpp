@@ -444,7 +444,11 @@ void Engine::initAppRealm() {
     manifest_ = AppLoader::loadApp(appDir_, &assetMounts_);
     util::setAssetPathContext(manifest_.basePath, &assetMounts_);
     std::string html;
-    if (!manifest_.htmlPath.empty()) {
+    if (!appHtmlOverride_.empty()) {
+        html = appHtmlOverride_;
+        manifest_.scripts.clear();
+        manifest_.stylePaths.clear();
+    } else if (!manifest_.htmlPath.empty()) {
         html = AppLoader::loadFile(manifest_.htmlPath);
     }
     if (html.empty()) {

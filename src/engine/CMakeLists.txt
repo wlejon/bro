@@ -1,5 +1,6 @@
 add_library(bro_engine STATIC
     app_reload.cpp
+    source_preflight.cpp
     engine.cpp
     scene_audio_sync.cpp
     engine_compositor.cpp
@@ -96,6 +97,16 @@ if(BRO_WITH_A11Y)
 endif()
 if(BRO_WITH_COMPOSITOR)
     target_link_libraries(bro_engine PUBLIC bro_compositor)
+endif()
+
+if(BRO_BUILD_TESTS)
+    # The reload preflight alone: it needs the manifest reader and nothing
+    # else of the engine.
+    add_executable(bro_source_preflight_test
+        tests/test_source_preflight.cpp source_preflight.cpp app_loader.cpp)
+    target_include_directories(bro_source_preflight_test PRIVATE ${bro_SOURCE_DIR}/src)
+    target_link_libraries(bro_source_preflight_test PRIVATE bro_util)
+    target_compile_features(bro_source_preflight_test PRIVATE cxx_std_20)
 endif()
 
 # Stamp BRO_WITH_* compile definitions so engine_init.cpp can #if on features

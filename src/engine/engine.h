@@ -616,6 +616,9 @@ private:
     // App-realm lifecycle (engine_init.cpp + app_reload.cpp)
     void initAppRealm();
     void performAppReload();
+    // After a reload whose page failed (index.html unloadable, or a top-level
+    // script threw): the error, logged and shown over whatever the page drew.
+    void showAppReloadFailure(const std::string& what);
     void resetMenuBarDefaults();
     // Source watching (app_reload.cpp): recursive watchers on the app dir and
     // the project's /lib mount that turn a changed .js/.mjs/.cjs/.html/.htm/
@@ -865,6 +868,11 @@ private:
     std::vector<std::unique_ptr<brokit::api::FsWatcher>> appWatchers_;  // app dir, then /lib
     double appWatchLastChangeMs_ = 0.0;
     bool appWatchPending_ = false;
+    std::string appWatchDeferReason_;   // why the last watcher reload was held back
+    bool appWatchRearm_ = false;        // a watcher died; re-create it once the dir is back
+    // A page initAppRealm parses instead of index.html, with no scripts or
+    // stylesheets: the error page a failed reload leaves up (app_reload.cpp).
+    std::string appHtmlOverride_;
     std::vector<dom::Element*> pendingIframeReloads_;
     std::vector<render::SkiaRenderer::LayerSurface> iframeSurfaceFrees_;
     bool iframeSyncNeeded_ = false;

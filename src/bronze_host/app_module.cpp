@@ -243,4 +243,6 @@ void unloadAppModule(bronze::embed::ModuleHandle handle) {
     }
 }
 
+void clearAppModuleRegistry() { bronze::embed::clearModuleRegistry(); }
+
 }  // namespace bro::bronze_host

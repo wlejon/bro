@@ -105,6 +105,14 @@ AppModuleResult runAppModule(engine::Engine& engine, const std::string& modulePa
 /// Removes the module's root spans from Bronze GC tracking.
 void unloadAppModule(bronze::embed::ModuleHandle handle);
 
+/// Forget the realm's module registry (the namespaces the page's module
+/// scripts published). An app reload calls this so the reloaded page compiles
+/// and evaluates its modules afresh: without it every file the previous page
+/// imported is bound as an external instance, so an edited module keeps its
+/// old exports (a renamed class reads `undefined`) and a deleted one keeps
+/// answering.
+void clearAppModuleRegistry();
+
 /// Whether `status` means the app is running. Anything else left the page
 /// scripts-only, with `detail` saying why.
 inline bool ran(AppModuleStatus status) { return status == AppModuleStatus::Ran; }

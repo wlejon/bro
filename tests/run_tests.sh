@@ -354,7 +354,7 @@ NATIVE_TESTS=(bro_vulkan_test bro_vulkan_scene_test bro_vulkan_scene_passes_test
               bro_mediabackendtest bro_videoencodetest bro_terminal_test
               bro_a11y_test bro_vulkan_dmabuf_test bro_nested_compositor_test
               bro_drm_screen_test bro_shell_surfaces_test bro_xwayland_test
-              bro_daily_driver_test)
+              bro_daily_driver_test bro_source_preflight_test)
 BRO_DIR="$(dirname "$BRO")"
 EXE_SUFFIX=""
 [[ "$BRO" == *.exe ]] && EXE_SUFFIX=".exe"
