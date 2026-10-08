@@ -19,7 +19,9 @@
  *   frames   Only while a viewer is attached; with none, hosting costs one
  *            branch a frame.
  *              bro --drm   every composited frame, as the KMS scanout buffer
- *                          itself (a dmabuf the encoder reads with no copy).
+ *                          itself (a dmabuf the encoder reads with no copy),
+ *                          handed over as soon as it is rendered, before
+ *                          its flip, so encoding never waits for a vblank.
  *                          While a viewer watches, a fullscreen client is
  *                          composited instead of scanned out directly, so the
  *                          stream sees it too.
@@ -72,7 +74,8 @@
  *       codec, width, height,         the stream being sent (null / 0 before
  *                                     the first frame is encoded)
  *       bitrateKbps, fps, codecs,     (while hosting) the configuration
- *       stats: { submitted, encoded, keyframes, replaced, unwatched, failed, streams }
+ *       stats: { submitted, encoded, keyframes, replaced, unwatched, failed, streams,
+ *                windowWaits }       frames submitted while a viewer was at its ack window
  *     }
  *   bro.remote.codecs() -> string[]  what this machine can encode ('raw' always)
  *   bro.remote.on(type, fn) / off(type, fn)
