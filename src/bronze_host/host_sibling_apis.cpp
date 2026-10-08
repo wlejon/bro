@@ -540,7 +540,12 @@ void installSiblingApis(engine::Engine& engine) {
         static bool seatHooksInstalled = false;
         if (!seatHooksInstalled) {
             seatHooksInstalled = true;
-            engine.addFramePump([] {
+            // The idle timer (bro.seat.setIdleTimeout) runs on the engine's
+            // record of user input: under DRM the engine reads the devices
+            // itself, and a compositor client's idle-inhibit holds it off.
+            engine.addFramePump([&engine] {
+                broseat::api::tickIdle(engine.activityClockMs(), engine.lastUserActivityMs(),
+                                       engine.hostIdleInhibited());
                 broseat::api::tickSeatAsync();
                 if (ev::microtasksPending()) ev::drainMicrotasks();
             });

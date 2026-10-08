@@ -22,6 +22,7 @@
 #include "engine/key_mapping.h"
 #include "platform/desktop_hotkeys.h"
 #include "util/platform.h"
+#include "util/time.h"
 
 #if defined(__linux__) && BRO_WITH_SEAT && BRO_WITH_DMABUF
 #include "platform/drm_input.h"
@@ -36,6 +37,18 @@
 #include "dom/element.h"
 
 namespace bro::engine {
+
+double Engine::activityClockMs() const {
+    return displayMode_ == DisplayMode::Headless ? virtualTime_ : util::currentTimeMs();
+}
+
+bool Engine::hostIdleInhibited() const {
+#if defined(__linux__) && BRO_WITH_SEAT && BRO_WITH_DMABUF && BRO_WITH_COMPOSITOR && BRO_HAVE_WAYLAND_SERVER
+    if (drmCtx_ && drmCtx_->compositor && drmCtx_->compositor->backend())
+        return drmCtx_->compositor->backend()->idle_inhibited();
+#endif
+    return false;
+}
 
 void Engine::blurShellFocus() {
     if (!document_) return;
@@ -87,6 +100,7 @@ brocompositor::PressButton pressButton(uint32_t wlButton) {
 }  // namespace
 
 void Engine::dispatchDrmInput(const platform::DrmInputEvent& ev) {
+    noteUserActivity();
     const bool pointer = ev.type == EvType::MouseMove || ev.type == EvType::MouseDown ||
                          ev.type == EvType::MouseUp;
     if (pointer) {

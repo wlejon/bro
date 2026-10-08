@@ -136,6 +136,7 @@ bool Engine::handleGlobalHotkey(int keycode, int mod, bool repeat) {
 }
 
 void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
+    noteUserActivity();
     heldModifierMask_ |= modifierBitForKeycode(keycode);
     heldKeys_[keycode] = sdlKeycodeToWebKey(keycode, mod);
 
@@ -466,6 +467,7 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
 }
 
 void Engine::handleKeyUp(int keycode, int scancode, int mod, bool repeat) {
+    noteUserActivity();
     heldModifierMask_ &= ~modifierBitForKeycode(keycode);
     heldKeys_.erase(keycode);
 

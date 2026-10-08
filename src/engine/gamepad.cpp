@@ -209,6 +209,7 @@ void Engine::handleGamepadRemoved(uint32_t instanceId) {
 }
 
 void Engine::handleGamepadButton(uint32_t instanceId, int sdlButton, bool down) {
+    noteUserActivity();
     GamepadState* gp = gamepadByInstance(instanceId);
     if (!gp) return;
     int w3c = sdlButtonToW3C(sdlButton);

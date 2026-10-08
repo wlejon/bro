@@ -344,6 +344,7 @@ void Engine::gestureEndIfFounder(uint64_t endedFinger) {
 // ---------------------------------------------------------------------------
 
 void Engine::handleTouchDown(uint64_t fingerId, float x, float y, float pressure) {
+    noteUserActivity();
     if (!document_) return;
     if (touchByFinger(fingerId)) return;   // duplicate down for a live contact
     uiDirty_ = true;
@@ -375,6 +376,7 @@ void Engine::handleTouchDown(uint64_t fingerId, float x, float y, float pressure
 }
 
 void Engine::handleTouchMove(uint64_t fingerId, float x, float y, float pressure) {
+    noteUserActivity();
     if (!document_) return;
     TouchContact* live = touchByFinger(fingerId);
     if (!live) return;   // move for an unknown/ended contact
@@ -395,6 +397,7 @@ void Engine::handleTouchMove(uint64_t fingerId, float x, float y, float pressure
 }
 
 void Engine::handleTouchUp(uint64_t fingerId, float x, float y) {
+    noteUserActivity();
     if (!document_) return;
     TouchContact* live = touchByFinger(fingerId);
     if (!live) return;

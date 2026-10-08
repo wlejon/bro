@@ -286,6 +286,16 @@ public:
     void addFramePump(std::function<void()> pump) {
         framePumps_.push_back(std::move(pump));
     }
+    /// User activity, for idle detection (bro.seat.setIdleTimeout). Every
+    /// input path stamps it — libinput under DRM, SDL in a window, injected
+    /// input headless — on activityClockMs(): the wall clock, or the virtual
+    /// one in headless so advanceTime() drives idleness deterministically.
+    void noteUserActivity() { lastUserActivityMs_ = activityClockMs(); }
+    double lastUserActivityMs() const { return lastUserActivityMs_; }
+    double activityClockMs() const;
+    /// Whether a client of the engine's own Wayland compositor holds an idle
+    /// inhibitor on a visible surface (zwp_idle_inhibit_v1: a playing video).
+    bool hostIdleInhibited() const;
     /// Runs once at the top of shutdown(), before the runtime, brotensor and
     /// the audio engine go away: where a sibling cancels + joins its
     /// in-flight jobs and drops the JS values they root.
@@ -896,6 +906,7 @@ private:
     SystemDocument* systemHoverDoc_ = nullptr;
 
     double virtualTime_ = 0.0;
+    double lastUserActivityMs_ = -1.0;   // activityClockMs() of the last input; -1: none yet
     double audioFrameCarry_ = 0.0;
 
     double serverTickRate_ = 60.0;

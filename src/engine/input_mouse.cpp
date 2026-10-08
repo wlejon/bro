@@ -104,6 +104,7 @@ bool Engine::iframeHandleMouseUp(dom::Element* frameEl, float docX, float docY,
 }
 
 void Engine::handleMouseDown(float x, float y, int button) {
+    noteUserActivity();
     float docX = x, docY = y - static_cast<float>(contentTop()) + scrollY_;
     uiDirty_ = true;
 
@@ -361,6 +362,7 @@ void Engine::handleMouseDown(float x, float y, int button) {
 }
 
 void Engine::handleMouseUp(float x, float y, int button) {
+    noteUserActivity();
     float docX = x, docY = y - static_cast<float>(contentTop()) + scrollY_;
     uiDirty_ = true;
 

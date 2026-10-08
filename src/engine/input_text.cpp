@@ -370,6 +370,7 @@ void Engine::commitActiveComposition() {
 }
 
 void Engine::handleTextInput(const std::string& text) {
+    noteUserActivity();
     if (!document_) return;
     if (isControlChar(text)) return;
 

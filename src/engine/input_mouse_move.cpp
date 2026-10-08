@@ -79,6 +79,7 @@ bool Engine::iframeHandleMouseMove(dom::Element* frameEl, float docX, float docY
 }
 
 void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
+    noteUserActivity();
     if (lockedElement_.held() && !lockedElement_.get()) exitPointerLock();
 
     if (dom::Element* locked = lockedElement_.get()) {

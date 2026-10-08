@@ -57,6 +57,7 @@ void Engine::scrollViewportTo(float y) {
 }
 
 void Engine::handleWheel(float x, float y, float dx, float dy) {
+    noteUserActivity();
     if (!document_) return;
 
     if (overlayMgr_.handleWheel(x, overlayMouseY(y), dx, dy)) {
