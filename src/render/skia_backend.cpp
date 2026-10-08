@@ -1,5 +1,6 @@
 #include "render/skia_backend.h"
 #include "render/filter_chain.h"
+#include "render/shadow_ninepatch.h"
 #include "render/system_font_mgr.h"
 #include "svg/svg_renderer.h"
 #include "util/log.h"
@@ -368,7 +369,12 @@ void SkiaRenderer::drawBoxShadowRadii(float x, float y, float w, float h,
     // the element and doesn't show through a transparent background.
     canvas_->save();
     canvas_->clipRRect(makeRRect(x, y, w, h, r), SkClipOp::kDifference, true);
-    canvas_->drawRRect(makeRRect(sx, sy, sw, sh, sr), paint);
+    const SkRRect shadow = makeRRect(sx, sy, sw, sh, sr);
+    // A shape the GPU cannot blur analytically goes through the cached
+    // nine-patch instead of a CPU blur per draw (shadow_ninepatch.h).
+    if (!(blur > 0 && shadowNeedsNinePatch(shadow) &&
+          drawBlurredRRectNinePatch(canvas_, shadow, blur / 2.0f, toSkColor(color))))
+        canvas_->drawRRect(shadow, paint);
     canvas_->restore();
 }
 

@@ -42,6 +42,7 @@ add_library(bro_render STATIC
     skia_backend_surfaces.cpp
     shared_pixels_image.cpp
     skia_backend_gradient.cpp
+    shadow_ninepatch.cpp
     skia_gpu.cpp
     skia_persistent_cache.cpp
     vulkan_context.cpp
