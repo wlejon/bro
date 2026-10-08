@@ -75,7 +75,10 @@ void ElInput::drawText_(float x, float y, float w, float h) {
 
     if (!val.empty()) {
         text = displayText_();
-    } else if (!focused_ && !placeholder.empty()) {
+    } else if (!placeholder.empty()) {
+        // Shown until there is content, focused or not, as browsers do: the
+        // caret is drawn over it at offset 0. (An IME preedit lives in the
+        // value, so composing text hides it.)
         text = placeholder;
         isPlaceholder = true;
     }

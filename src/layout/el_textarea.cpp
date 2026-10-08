@@ -712,7 +712,10 @@ void ElTextarea::draw(render::Renderer* renderer,
 
     if (!val.empty()) {
         text = val;
-    } else if (!focused_ && !placeholder.empty()) {
+    } else if (!placeholder.empty()) {
+        // Shown until there is content, focused or not, as browsers do: the
+        // caret is drawn over it at offset 0. (An IME preedit lives in the
+        // value, so composing text hides it.)
         text = placeholder;
         isPlaceholder = true;
     }
@@ -736,7 +739,7 @@ void ElTextarea::draw(render::Renderer* renderer,
     auto lineStr = [&](const VisLine& v) { return text.substr(v.start, v.end - v.start); };
 
     if (focused_) {
-        int cpos = std::clamp(sel_.caret, 0, static_cast<int>(text.size()));
+        int cpos = std::clamp(sel_.caret, 0, static_cast<int>(val.size()));
         int cursorLine = caretVisualLine(vls, cpos);
         float cursorY = cursorLine * lineHeight;
         if (cursorY < scrollY_) scrollY_ = cursorY;

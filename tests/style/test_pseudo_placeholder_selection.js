@@ -69,6 +69,37 @@ flush();
 }
 
 // =========================================================================
+// The placeholder stays visible while the empty control is focused (browsers
+// show it until there is content; the caret is drawn over it).
+// =========================================================================
+{
+  const inp = document.getElementById('in-ph');
+  const r = inp.getBoundingClientRect();
+  click(r.left + 5, r.top + r.height / 2);
+  flush();
+  const [x, y] = centerOf(inp);
+  const px = getPixel(x, y);
+  assert(px.r > 150 && px.g < 90 && px.b < 90,
+         `focused empty input still shows its placeholder, got rgb(${px.r},${px.g},${px.b})`);
+  // Typing replaces it: the value is spaces, so the pixel goes back to white.
+  inp.value = '      ';
+  flush();
+  const px2 = getPixel(x, y);
+  assert(px2.r > 240 && px2.g > 240 && px2.b > 240,
+         `placeholder hidden once there is content, got rgb(${px2.r},${px2.g},${px2.b})`);
+  inp.value = '';
+}
+{
+  const ta = document.getElementById('ta-ph');
+  const r = ta.getBoundingClientRect();
+  click(r.left + 5, r.top + r.height / 2);
+  flush();
+  const px = getPixel(Math.floor(r.left + 20), Math.floor(r.top + 14));
+  assert(px.b > 150 && px.r < 90 && px.g < 90,
+         `focused empty textarea still shows its placeholder, got rgb(${px.r},${px.g},${px.b})`);
+}
+
+// =========================================================================
 // ::selection background-color on <input> (value is spaces → wash visible)
 // =========================================================================
 // Controls take visual focus via the pointer path (same as the other input
