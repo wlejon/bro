@@ -1,5 +1,7 @@
 #pragma once
 
+#include "engine/window_frames.h"
+
 #include <cstdint>
 #include <memory>
 #include <set>
@@ -35,6 +37,19 @@ struct DrmPlatformContext {
     // follow it (engine_drm_input.cpp). Keyed by scancode.
     std::set<uint32_t> keysToClient;
     std::set<uint32_t> keysToShell;
+
+    // The frames the shell draws around client windows (window_frames.h),
+    // synced with the compositor's stack after every poll.
+    WindowFrames frames;
+    // Set when a paint pass's client-window breaks composited the windows
+    // this frame; otherwise (an app with no such break) they go on top.
+    bool clientLayersComposited = false;
+    // Where the held pointer button's press went, so its moves and its
+    // release follow it: the shell document, or a client window.
+    bool pressToShell = false;
+    bool pressToClient = false;
+    // The pointer is over a client surface (its cursor is the client's).
+    bool pointerOnClient = false;
 };
 
 } // namespace bro::engine

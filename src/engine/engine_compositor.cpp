@@ -79,8 +79,21 @@ void Engine::recordAppLayers(render::CommandBuffer& outBuffer,
         recordingRenderer_->recordLayerBreak(lb.source, lb.quad);
     });
     drawTraversal_->setTerminalLayers(!promotedOnly && terminalLayersEnabled());
-    bool hasCompositor = (displayMode_ == DisplayMode::Drm && isShellApp());
-    drawTraversal_->setShellClientWindowsLayer(!promotedOnly && hasCompositor);
+    // A shell host's client windows go where its desktop level ends,
+    // interleaved with the frames it draws for them (window_frames.h).
+    bool hasCompositor = false;
+#if BRO_WITH_COMPOSITOR
+    hasCompositor = isShellApp() && drmCtx_ && drmCtx_->compositor;
+#endif
+    const bool clientWindows = !promotedOnly && hasCompositor;
+    drawTraversal_->setShellClientWindowsLayer(clientWindows);
+    std::vector<layout::DrawTraversal::ClientWindowSlot> clientSlots;
+    if (clientWindows) {
+        clientSlots = drmCtx_->frames.slots();
+        uint32_t listId = 0;
+        auto& refs = drmCtx_->frames.beginList(listId);
+        drawTraversal_->setClientWindows(&clientSlots, &refs, listId);
+    }
 
     // Everything below records in *content space*: the app layer surfaces are
     // content-sized (contentW × contentH) and origin-based; the engine-reserved
@@ -139,6 +152,7 @@ void Engine::recordAppLayers(render::CommandBuffer& outBuffer,
     drawTraversal_->setLayerBreakCallback(nullptr);
     drawTraversal_->setTerminalLayers(false);
     drawTraversal_->setShellClientWindowsLayer(false);
+    drawTraversal_->setClientWindows(nullptr, nullptr, 0);
     recordingRenderer_->setBuffer(nullptr);
     // Restore default paint mode so subsequent recorders (system panels, the
     // next full pass) aren't affected.

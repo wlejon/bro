@@ -131,6 +131,25 @@ public:
     void setTerminalLayers(bool on) { terminalLayers_ = on; }
     void setShellClientWindowsLayer(bool on) { shellClientWindows_ = on; }
 
+    // The shell host's client windows, bottom to top, each with the element
+    // the shell draws as its frame (null: none). A frame element leaves the
+    // document's stacking order: it is painted, with its subtree, just below
+    // its window, where the windows interleave with the shell (the
+    // ClientWindowsLayerSource breaks). `insetLeft/Top` is where the client
+    // sits inside the frame's border box. The runs the pass recorded are
+    // appended to `out`; `listId` names them in the breaks.
+    struct ClientWindowSlot {
+        uint64_t windowId = 0;
+        dom::Element* frame = nullptr;
+        float insetLeft = 0, insetTop = 0;
+    };
+    void setClientWindows(const std::vector<ClientWindowSlot>* slots,
+                          std::vector<render::ClientWindowRef>* out, uint32_t listId) {
+        clientSlots_ = slots;
+        clientRefs_ = out;
+        clientListId_ = listId;
+    }
+
     // Viewport. `top` is the Y position in the output surface where the
     // content area begins — used for the html/body background paint rect.
     // 0 for the app document (content-space surfaces) and system panels.
@@ -267,6 +286,12 @@ private:
     LayerBreakCallback layerBreakCb_;
     bool terminalLayers_ = false;
     bool shellClientWindows_ = false;
+    const std::vector<ClientWindowSlot>* clientSlots_ = nullptr;
+    std::vector<render::ClientWindowRef>* clientRefs_ = nullptr;
+    uint32_t clientListId_ = 0;
+    // Frame elements' stacking contexts, lifted out of the tree, by element.
+    std::unordered_map<const dom::Element*, std::unique_ptr<StackingContext>> frameSCs_;
+    void emitClientWindows();
 
     // Running stack of axis-aligned overflow/scroll clip rects (each already
     // intersected with the one below it, so the top is the effective clip).

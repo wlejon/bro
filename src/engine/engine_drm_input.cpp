@@ -13,10 +13,17 @@
 //             switcher sees the modifier release that ends its chord.
 //
 //   pointer   Points the shell claims (Engine::shellClaimsPointerAt: z-index
-//             >= 1000) go to the document; elsewhere the window manager's
-//             interaction policy (bro.compositor.setInteraction: title band,
-//             resize border, drag modifiers) decides whether a press moves or
-//             resizes the window under it before the client gets it.
+//             >= 1000) go to the document. Elsewhere the window stack is
+//             walked top down (drmPointerOnClient): a client surface takes
+//             the pointer, unless the shell's frame for a window above it
+//             (window_frames.h) is hit first; under every window, the
+//             document. On a client the window manager's interaction policy
+//             (bro.compositor.setInteraction: title band, resize border, drag
+//             modifiers) decides whether a press moves or resizes the window
+//             before the client gets it. A press raises and focuses its
+//             window (frame or client); its moves and release follow it, and
+//             a drag (the policy's, a client's xdg move, or the shell's
+//             bro.compositor.beginMove) takes the moves until the release.
 #include "engine/engine.h"
 #include "engine/engine_drm.h"
 #include "engine/key_mapping.h"
@@ -161,11 +168,50 @@ bool Engine::routeDrmKey(const platform::DrmInputEvent& ev) {
     return !toShell;
 }
 
+// Whether the pointer at (x, y) is a client's: walking the stack top down,
+// the first window whose surface is under it takes it, unless the shell's
+// frame for a window above is (the frame's own hit test: a transparent shadow
+// with pointer-events: none lets it through). The shell's overlays (z-index
+// >= 1000) are above every window, its desktop below them all.
+bool Engine::drmPointerOnClient(float x, float y, uint64_t* frameWindow) {
+    if (frameWindow) *frameWindow = 0;
+#if BRO_WITH_COMPOSITOR && BRO_HAVE_WAYLAND_SERVER
+    if (!drmCtx_ || !drmCtx_->compositor || !drmCtx_->compositor->isRunning()) return false;
+    if (shellOwnsDrmPointerAt(x, y)) return false;
+    auto* comp = drmCtx_->compositor.get();
+    if (comp->isSessionLocked() || comp->unmanagedAt(x, y)) return true;
+    const auto& stack = drmCtx_->frames.stack();
+    dom::Element* hit = nullptr;
+    bool hitTested = false;
+    for (auto it = stack.rbegin(); it != stack.rend(); ++it) {
+        if (comp->windowSurfaceAt(it->id, x, y)) return true;
+        dom::Element* frame = drmCtx_->frames.frameOf(it->id);
+        if (!frame) continue;
+        if (!hitTested) {
+            hit = hitTest(x, y);
+            hitTested = true;
+        }
+        for (dom::Element* cur = hit; cur; cur = cur->parentElement()) {
+            if (cur != frame) continue;
+            if (frameWindow) *frameWindow = it->id;
+            return false;
+        }
+    }
+    return false;
+#else
+    (void)x;
+    (void)y;
+    return false;
+#endif
+}
+
 // True when a client window took the event and the shell must not see it.
+// A press goes where the pointer is; its moves and its release follow it.
 bool Engine::routeDrmPointer(const platform::DrmInputEvent& ev) {
 #if BRO_WITH_COMPOSITOR && BRO_HAVE_WAYLAND_SERVER
     if (!drmCtx_ || !drmCtx_->compositor || !drmCtx_->compositor->isRunning()) return false;
     auto* comp = drmCtx_->compositor.get();
+    auto& ctx = *drmCtx_;
     const double x = ev.x, y = ev.y;
 
     switch (ev.type) {
@@ -174,22 +220,48 @@ bool Engine::routeDrmPointer(const platform::DrmInputEvent& ev) {
                 bool wasActive = comp->isDragActive();
                 bool moved = comp->updateInteractiveDrag(x, y);
                 // A title-bar press the client got: release it once it is a drag.
-                if (!wasActive && comp->isDragActive()) comp->injectPointerButton(BTN_LEFT, false);
-                if (moved) uiDirty_ = true;
+                if (!wasActive && comp->isDragActive() && ctx.pressToClient) {
+                    comp->injectPointerButton(BTN_LEFT, false);
+                    ctx.pressToClient = false;
+                }
+                if (moved) {
+                    uiDirty_ = true;
+                    syncShellWindowFrames();
+                }
                 return true;
             }
-            if (shellOwnsDrmPointerAt(ev.x, ev.y)) {
+            bool onClient = ctx.pressToClient ||
+                            (!ctx.pressToShell && drmPointerOnClient(ev.x, ev.y, nullptr));
+            if (!onClient) {
+                ctx.pointerOnClient = false;
                 comp->routePointer(-1.0, -1.0);
-            } else {
-                comp->injectPointerWarp(x, y);
-                comp->routePointer(x, y);
+                return false;
             }
-            return false;  // the document still tracks the pointer (hover leaves)
+            comp->injectPointerWarp(x, y);
+            comp->routePointer(x, y);
+            if (!ctx.pointerOnClient) {
+                // Onto a client: the shell's hover leaves whatever was under it.
+                ctx.pointerOnClient = true;
+                handleMouseMove(-1.0f, -1.0f, 0.0f, 0.0f);
+                lastMouseX_ = ev.x;
+                lastMouseY_ = ev.y;
+            }
+            return true;
         }
         case EvType::MouseDown: {
             const uint32_t wlButton = waylandButton(ev);
-            if (shellOwnsDrmPointerAt(ev.x, ev.y)) {
-                if (comp->focusedWindow() != 0) comp->focusWindow(0);
+            uint64_t frameWin = 0;
+            if (!drmPointerOnClient(ev.x, ev.y, &frameWin)) {
+                ctx.pressToShell = true;
+                ctx.pointerOnClient = false;
+                // A press on a window's frame raises and focuses it; on the
+                // shell's own surfaces, no client keeps the focus.
+                if (frameWin != 0) {
+                    if (frameWin != comp->focusedWindow()) comp->focusWindow(frameWin);
+                    syncShellWindowFrames();
+                } else if (comp->focusedWindow() != 0) {
+                    comp->focusWindow(0);
+                }
                 return false;
             }
             uint64_t hitWin = comp->windowAt(x, y);
@@ -204,7 +276,9 @@ bool Engine::routeDrmPointer(const platform::DrmInputEvent& ev) {
                     if (d.forward) {
                         comp->routePointer(x, y);
                         comp->injectPointerButton(wlButton, true);
+                        ctx.pressToClient = true;
                     }
+                    syncShellWindowFrames();
                     return true;
                 }
             }
@@ -212,28 +286,41 @@ bool Engine::routeDrmPointer(const platform::DrmInputEvent& ev) {
                 blurShellFocus();
                 if (hitWin != 0 && hitWin != comp->focusedWindow()) comp->focusWindow(hitWin);
                 comp->injectPointerButton(wlButton, true);
+                ctx.pressToClient = true;
+                syncShellWindowFrames();
                 return true;
             }
+            ctx.pressToShell = true;
             return false;
         }
         case EvType::MouseUp: {
             const uint32_t wlButton = waylandButton(ev);
+            const bool toShell = ctx.pressToShell, toClient = ctx.pressToClient;
+            ctx.pressToShell = ctx.pressToClient = false;
             if (comp->isDraggingWindow()) {
                 bool wasActive = comp->isDragActive();
                 comp->endInteractiveDrag();
                 // A forwarded press that never became a drag: the client gets its release.
-                if (!wasActive && comp->focusedWindow() != 0) comp->injectPointerButton(wlButton, false);
+                if (!wasActive && toClient) comp->injectPointerButton(wlButton, false);
                 uiDirty_ = true;
+                syncShellWindowFrames();
+                // A drag the shell began (its frame's title bar): its press
+                // gets its release, so the shell's own handlers finish.
+                return !toShell;
+            }
+            if (toClient) {
+                comp->injectPointerButton(wlButton, false);
                 return true;
             }
-            if (!shellOwnsDrmPointerAt(ev.x, ev.y) && comp->focusedWindow() != 0) {
+            if (toShell) return false;
+            if (drmPointerOnClient(ev.x, ev.y, nullptr) && comp->focusedWindow() != 0) {
                 comp->injectPointerButton(wlButton, false);
                 return true;
             }
             return false;
         }
         case EvType::MouseWheel: {
-            if (!shellOwnsDrmPointerAt(ev.x, ev.y) && comp->focusedWindow() != 0) {
+            if (drmPointerOnClient(ev.x, ev.y, nullptr) && comp->focusedWindow() != 0) {
                 comp->injectPointerAxis(0, static_cast<double>(ev.wheelDy), 0);
                 return true;
             }
@@ -290,6 +377,10 @@ void Engine::deliverDrmInputToShell(const platform::DrmInputEvent& ev) {
 #else
 
 void Engine::dispatchDrmInput(const platform::DrmInputEvent&) {}
+bool Engine::drmPointerOnClient(float, float, uint64_t* frameWindow) {
+    if (frameWindow) *frameWindow = 0;
+    return false;
+}
 bool Engine::routeDrmKey(const platform::DrmInputEvent&) { return false; }
 bool Engine::routeDrmPointer(const platform::DrmInputEvent&) { return false; }
 void Engine::deliverDrmInputToShell(const platform::DrmInputEvent&) {}

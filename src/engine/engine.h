@@ -514,6 +514,15 @@ public:
     bool shellClaimsPointerAt(float x, float y);
     bool shellClaimsKeyboard();
 
+    /// Headless shell-host testing (engine_shell_compositor.cpp): a pointer
+    /// event ("move", "down", "up", "wheel") through the DRM input router,
+    /// as libinput would deliver it, when the headless engine runs a
+    /// compositor (BRO_HEADLESS_COMPOSITOR=1). Returns whether the shell
+    /// document received it. Without a compositor it goes to the document.
+    bool injectHostPointer(const std::string& type, float x, float y, int button, float wheelDy = 0.0f);
+    /// The Wayland socket the shell host's compositor serves ("": none).
+    std::string shellCompositorSocket() const;
+
 private:
     GraphicsConfig graphicsConfig_;
     InputConfig inputConfig_;
@@ -730,7 +739,19 @@ private:
     bool routeDrmPointer(const platform::DrmInputEvent& ev);
     void deliverDrmInputToShell(const platform::DrmInputEvent& ev);
     bool shellOwnsDrmPointerAt(float x, float y);
+    // Whether the pointer at (x, y) belongs to a client surface rather than
+    // the shell; `frameWindow` gets the window whose shell-drawn frame is
+    // under it (0: none).
+    bool drmPointerOnClient(float x, float y, uint64_t* frameWindow);
     void blurShellFocus();
+    // engine_shell_compositor.cpp: the compositor a shell host runs (DRM, or
+    // headless with BRO_HEADLESS_COMPOSITOR=1), and the frames it keeps on
+    // the windows.
+    bool startShellCompositor(uint32_t width, uint32_t height, const std::string& socketName, bool xwayland);
+    bool pollShellCompositor();
+    void syncShellWindowFrames();
+    void compositeRemainingClientWindows();
+    void releaseClientWindowFrames();
     // Skia's GPU context (null: Skia draws on CPU).
     std::unique_ptr<render::SkiaGpu> skiaGpu_;
     render::SkiaGpu* createSkiaGpu();

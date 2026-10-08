@@ -50,6 +50,9 @@
 namespace bro::engine {
 
 void Engine::flush() {
+    // A shell host's compositor (BRO_HEADLESS_COMPOSITOR): client events and
+    // the window frames, before the layout below places them.
+    if (drmCtx_ && pollShellCompositor()) uiDirty_ = true;
     pumpVideoEvents();
     pumpTerminals();
     pumpWebGLContextEvents();
@@ -377,9 +380,13 @@ std::vector<uint8_t> Engine::capturePixels() {
     skia->endFrame();
 
     beginFrameComposite();
+    if (drmCtx_) drmCtx_->clientLayersComposited = false;
     compositeLayers(appLayers, insetTop);
+    compositeRemainingClientWindows();
     compositeLayers(systemLayers);
-    return readCompositedFrame();
+    auto pixels = readCompositedFrame();
+    releaseClientWindowFrames();
+    return pixels;
 }
 
 bool Engine::screenshot(const std::string& path) {

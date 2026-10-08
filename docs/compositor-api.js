@@ -15,6 +15,11 @@
  * - Monitors and the work area (`getMonitors`, `getWorkArea`) and the shell's edge reservations
  *   (`reserveEdge`, `releaseEdge`, `getReservations`)
  * - Pointer-interaction policy for windows the host routes itself (`getInteraction`, `setInteraction`)
+ * - Stacking (`getStacking`, `raiseWindow`) and shell-drawn window frames (`setDecorations`,
+ *   `getDecorations`, the `data-window-frame` attribute)
+ * - Interactive move / resize from script (`beginMove`, `beginResize`, `dragTo`, `endDrag`,
+ *   `cancelDrag`, `getDrag`) and snapping (`getSnapping`, `setSnapping`, `snapWindow`,
+ *   `snapWindowToward`)
  * - Event listeners (`on`, `off`, `addEventListener`, `removeEventListener`)
  *
  * Privileged API: mounted when `BRO_WITH_COMPOSITOR` is enabled and the app is a trusted shell
@@ -26,16 +31,28 @@
  * backend refuses returns false (the Windows / macOS shell backends refuse window states).
  *
  * The DRM shell host: client windows are drawn between the shell document's desktop level
- * and its overlays. Input routing follows the document, with no ids or classes special:
+ * and its overlays, bottom to top in the window manager's stacking order (`getStacking`), each
+ * window's shell-drawn frame (section 7) just below it. One order drives the composite, the hit
+ * tests and focus: a new window maps on top and focused, focusing a window (a click, a press on
+ * its frame, `focusWindow`) raises it, and closing or minimizing the focused window focuses the
+ * most recently used other window. Input routing follows the document, with no ids or classes
+ * special:
  * - Pointer: to the shell where the element under the pointer, or an ancestor, has a computed
- *   `z-index` >= 1000 (`pointer-events: none` elements are never hit); otherwise to the client
- *   window there, after the interaction policy below has had its say.
+ *   `z-index` >= 1000 (`pointer-events: none` elements are never hit). Otherwise down the stack
+ *   from the top: the first window whose surface is under the pointer gets it (after the
+ *   interaction policy below has had its say), unless a window's frame above it is hit first,
+ *   which goes to the shell (and raises / focuses that window); below every window, the shell's
+ *   desktop. A press's moves and release follow it (an implicit grab), and the cursor is the
+ *   client's over a client, the shell's CSS cursor over the shell.
  * - Keyboard: to the focused client window, except while the shell claims it: a rendered element
  *   carries `data-shell-keyboard` (not `="false"`; rendered = no `hidden` attribute or
  *   `display: none` on it or an ancestor, and not `visibility: hidden`), or a rendered text
  *   field / contenteditable in the shell has focus. Global chords are
  *   `bro.window.registerGlobalHotkey` (docs/window-api.js), matched before either.
- * Headless tests can ask the same questions: `shellClaimsPointerAt(x, y)`, `shellClaimsKeyboard()`.
+ * Headless tests can ask the same questions: `shellClaimsPointerAt(x, y)`, `shellClaimsKeyboard()`;
+ * with `BRO_HEADLESS_COMPOSITOR=1` a headless shell runs the same compositor (its socket:
+ * `hostCompositorSocket()`), and `hostPointer(type, x, y)` drives the same router
+ * (docs/headless.md).
  */
 
 // ============================================================================
@@ -216,7 +233,10 @@ if (bro.compositor.available) {
  * 'windowChanged' ({ window, changes }), 'focusChanged', 'workspaceChanged', 'layoutChanged',
  * 'monitorsChanged' ({ monitors }, work areas as getMonitors reports them), 'moveSizeStarted',
  * 'moveSizeEnded', 'reservationChanged' (Reservation fields; also after every monitor change
- * for each shell reservation), '*' for all.
+ * for each shell reservation), 'stackingChanged' ({ stacking }: window ids bottom to top),
+ * 'snapPreview' ({ windowId, zone, rect }: while a drag has a snap armed, the zone and the rect
+ * the window's frame, decoration included, will take; zone 'none' and rect null when it is
+ * disarmed or the drag ends), '*' for all.
  */
 if (bro.compositor.available) {
     const sub = bro.compositor.on('windowCreated', (event) => {
@@ -226,4 +246,174 @@ if (bro.compositor.available) {
         console.log(`Active workspace changed to ${event.workspaceId}`);
     });
     // sub.remove();  or  bro.compositor.off(sub);
+}
+
+// ============================================================================
+// 7. Stacking and shell-drawn window frames
+// ============================================================================
+
+/**
+ * WindowInfo (getWindow / getWindows / windowCreated / windowChanged) also carries:
+ * @typedef {Object} WindowFrameInfo
+ * @property {boolean} decorated   the host draws this window's frame: an xdg-decoration
+ *                                 server-side window, or an X11 window without its own frame
+ * @property {{top:number, left:number, right:number, bottom:number}} decoration
+ *                                 the frame band around it right now (zero: no frame)
+ * @property {{x:number, y:number, width:number, height:number}} outerFrame
+ *                                 frame plus decoration (the rect a frame element takes)
+ * @property {string} snap         'none' | 'maximize' | 'left' | 'right' | 'top-left' |
+ *                                 'top-right' | 'bottom-left' | 'bottom-right'
+ */
+
+/** @returns {number[]} window ids, bottom to top (hidden windows included) */
+bro.compositor.getStacking = function () {};
+
+/**
+ * Puts a window (and its transients) on top without focusing it.
+ * @param {number} id
+ * @returns {boolean} false when unknown or already on top
+ */
+bro.compositor.raiseWindow = function (id) {};
+
+/**
+ * The frame the shell draws around decorated windows: how far it reaches past the client on
+ * each side (title bar: top; the sides and bottom are typically an invisible resize grab).
+ * Maximized windows use `maximizedInsets` (usually the title bar only). The window manager
+ * fits frame and client together: maximize and snapping fill the work area with the whole
+ * frame, a new window is nudged so its title bar is on screen, and the decoration counts in
+ * the minimum size. Zero insets (the default) mean no frames. A number sets all four sides.
+ * @param {{insets?: number|{top?:number,left?:number,right?:number,bottom?:number},
+ *          maximizedInsets?: number|{top?:number,left?:number,right?:number,bottom?:number}}} config
+ * @returns {{insets:Object, maximizedInsets:Object}} the resulting configuration
+ */
+bro.compositor.setDecorations = function (config) {};
+/** @returns {{insets:Object, maximizedInsets:Object}} */
+bro.compositor.getDecorations = function () {};
+
+/**
+ * Frame elements. Any element of the shell document carrying `data-window-frame="<window id>"`
+ * is that window's frame (the first one naming a window wins). The engine keeps it on the
+ * window, in the same frame the window moves, with no script involved:
+ * - it is lifted out of the document's stacking order and painted, with its subtree, just
+ *   below its window in the window stacking order: the window covers the inside of the frame,
+ *   windows above cover the frame, and the frame covers windows below;
+ * - it writes, as inline style: `position: fixed`, `box-sizing: border-box`, `left`, `top`,
+ *   `width`, `height` (outerFrame), `z-index` (1 + its place in the stack, so DOM hit tests
+ *   between frames agree with the composite), and `display: none` while its window shows no
+ *   frame (not decorated, no insets, fullscreen, minimized, on a hidden workspace, unknown id);
+ * - and as attributes: `data-window-state` ('normal' | 'maximized'), `data-window-snap`
+ *   (the snapped zone; absent when not snapped), `data-window-focused` (present while focused).
+ * Everything else (title, buttons, shadow, glow) is the shell's markup and CSS. Contract:
+ * - put frames in a container at desktop level (z-index below 1000) with `pointer-events: none`
+ *   so the container itself is never hit; give the frames `pointer-events: auto` where they
+ *   should take the pointer (a shadow outside the resize band should stay `none`);
+ * - do not transform or animate a frame's box (the engine owns its geometry); animate children;
+ * - the client is drawn at (left + insets.left, top + insets.top): leave that area to it.
+ * A press on a frame reaches the shell's handlers after its window has been raised and focused.
+ */
+
+/**
+ * Starts an interactive move / resize of a window from the shell (its frame's title bar or
+ * edge, in a `mousedown` handler). Until the release, the host routes the pointer to the drag:
+ * the window (and its frame) follow, and the release still reaches the shell element that got
+ * the press, so its own click / dblclick handlers finish. A move is not `immediate` by default:
+ * nothing moves until the pointer travels `dragThreshold` px, so a click or double-click on a
+ * title bar stays one. Dragging a maximized or snapped window restores its own size under the
+ * pointer (`restoreOnDrag`); a move armed at a monitor edge snaps on release (see setSnapping).
+ * A resize of a maximized window does not start.
+ * @param {number} id
+ * @param {{x?: number, y?: number, immediate?: boolean}} [options]  the pointer the drag starts
+ *        from (omitted: where the host's pointer is now)
+ * @returns {boolean}
+ */
+bro.compositor.beginMove = function (id, options) {};
+/**
+ * @param {number} id
+ * @param {string|string[]|number} edges  'top left', ['bottom', 'right'], or resize_edge bits
+ *        (1 top, 2 bottom, 4 left, 8 right)
+ * @param {{x?: number, y?: number, immediate?: boolean}} [options]  immediate defaults to true
+ * @returns {boolean}
+ */
+bro.compositor.beginResize = function (id, edges, options) {};
+/** For hosts that route the pointer themselves (the DRM host does this for you). */
+bro.compositor.dragTo = function (x, y) {};
+bro.compositor.endDrag = function () {};
+/** Ends the drag where the window is, ignoring an armed snap. */
+bro.compositor.cancelDrag = function () {};
+/**
+ * @returns {{windowId:number, action:'move'|'resize', edges:string, active:boolean,
+ *            snap:string, snapRect:{x:number,y:number,width:number,height:number}|null}|null}
+ */
+bro.compositor.getDrag = function () {};
+
+/**
+ * Snapping. A moved window's pointer within `edgeThreshold` px of a monitor edge that no other
+ * monitor continues past arms a snap: the top edge maximizes, the left / right edges take that
+ * half of the work area, and with `cornerSize` > 0 the ends of the side edges take quarters.
+ * `snapPreview` reports it while armed, so the shell can draw where the window will land.
+ * @typedef {Object} Snapping
+ * @property {boolean} enabled        default true
+ * @property {number} edgeThreshold   default 8
+ * @property {number} cornerSize      default 0 (quarters off)
+ * @property {boolean} restoreOnDrag  default true
+ */
+/** @returns {Snapping} */
+bro.compositor.getSnapping = function () {};
+/** @param {Partial<Snapping>} options  @returns {Snapping} */
+bro.compositor.setSnapping = function (options) {};
+/**
+ * Fits a window's frame (decoration included) to a zone of its monitor's work area; 'none'
+ * returns a snapped or maximized window to the frame it had before. A snapped window follows
+ * the work area when reservations or monitors change.
+ * @param {number} id
+ * @param {'left'|'right'|'maximize'|'top-left'|'top-right'|'bottom-left'|'bottom-right'|'none'} zone
+ * @returns {boolean}
+ */
+bro.compositor.snapWindow = function (id, zone) {};
+/**
+ * The keyboard step (bind it to Super+arrows): left / right snap to that half (from the other
+ * half: restore), up maximizes, down restores a maximized or snapped window and minimizes a
+ * normal one.
+ * @param {number} id
+ * @param {'left'|'right'|'up'|'down'} direction
+ * @returns {boolean}
+ */
+bro.compositor.snapWindowToward = function (id, direction) {};
+
+if (bro.compositor.available) {
+    // A 36 px title bar and a 6 px invisible resize band; maximized: the title bar only.
+    bro.compositor.setDecorations({ insets: { top: 36, left: 6, right: 6, bottom: 6 },
+                                    maximizedInsets: { top: 36 } });
+    const layer = document.createElement('div');
+    layer.style.cssText = 'position: fixed; inset: 0; z-index: 900; pointer-events: none';
+    document.body.appendChild(layer);
+    const frames = new Map();
+    const addFrame = (w) => {
+        if (frames.has(w.id)) return;
+        const f = document.createElement('div');
+        f.setAttribute('data-window-frame', String(w.id));
+        f.style.pointerEvents = 'auto';
+        const title = document.createElement('div');
+        title.textContent = w.title;
+        title.addEventListener('mousedown', () => bro.compositor.beginMove(w.id));
+        title.addEventListener('dblclick', () => {
+            const now = bro.compositor.getWindow(w.id);
+            if (now.maximized) bro.compositor.restoreWindow(w.id);
+            else bro.compositor.maximizeWindow(w.id);
+        });
+        const corner = document.createElement('div');
+        corner.addEventListener('mousedown', () => bro.compositor.beginResize(w.id, 'bottom right'));
+        f.append(title, corner);
+        layer.appendChild(f);
+        frames.set(w.id, f);
+    };
+    bro.compositor.getWindows().forEach(addFrame);
+    bro.compositor.on('windowCreated', (e) => addFrame(e.window));
+    bro.compositor.on('windowClosed', (e) => {
+        frames.get(e.windowId)?.remove();
+        frames.delete(e.windowId);
+    });
+    bro.compositor.on('snapPreview', (e) => {
+        // e.rect: where the window will land; null when disarmed.
+    });
 }

@@ -313,6 +313,11 @@ Engine::Engine(const EngineConfig& config)
     if (displayMode_ == DisplayMode::Headless) {
         virtualTime_ = util::currentTimeMs();
         engineNowMs_ = virtualTime_;
+        // A shell under test can host real clients: the DRM shell host's
+        // compositor, window manager and input router, with no seat or KMS.
+        const char* hostComp = std::getenv("BRO_HEADLESS_COMPOSITOR");
+        if (hostComp && std::string(hostComp) == "1" && isShellApp())
+            startShellCompositor(viewportWidth_, viewportHeight_, "", /*xwayland=*/false);
     }
 
     audioEngine_ = std::make_unique<broaudio::Engine>();

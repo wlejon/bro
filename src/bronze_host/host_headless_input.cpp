@@ -119,6 +119,32 @@ void installHeadlessInput(engine::Engine& engine) {
             return ev::fromBool(engine.shellClaimsKeyboard());
         }, 0, "shellClaimsKeyboard"));
 
+    // hostPointer(type, x, y [, button | wheelDy]): a pointer event through
+    // the shell host's input router (engine_drm_input.cpp), as libinput
+    // delivers it: type "move" | "down" | "up" | "wheel". With
+    // BRO_HEADLESS_COMPOSITOR=1 it reaches client windows and the shell's
+    // window frames the way it does on a DRM session. Returns whether the
+    // shell document received it.
+    regBoth("hostPointer", ev::makeFunction(
+        [&engine](Value, std::span<const Value> a) -> Value {
+            if (a.size() < 3) return ev::throwTypeError("hostPointer(type, x, y [, button]) requires type, x and y");
+            const std::string type = ev::toUtf8(a[0]);
+            const float x = static_cast<float>(ev::toDouble(a[1]));
+            const float y = static_cast<float>(ev::toDouble(a[2]));
+            const double extra = a.size() > 3 && !ev::isUndefined(a[3]) ? ev::toDouble(a[3]) : 0.0;
+            const int button = type == "wheel" ? 1 : domToSdlButton(satCast<int>(extra));
+            const bool shell = engine.injectHostPointer(type, x, y, button, type == "wheel" ? static_cast<float>(extra) : 0.0f);
+            engine.flush();
+            return ev::fromBool(shell);
+        }, 3, "hostPointer"));
+
+    // hostCompositorSocket(): the Wayland socket the headless shell host
+    // serves (BRO_HEADLESS_COMPOSITOR=1), "" without one.
+    regBoth("hostCompositorSocket", ev::makeFunction(
+        [&engine](Value, std::span<const Value>) -> Value {
+            return ev::fromUtf8(engine.shellCompositorSocket());
+        }, 0, "hostCompositorSocket"));
+
     // click(x, y [, button, windowId])
     regBoth("click", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {

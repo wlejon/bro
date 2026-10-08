@@ -79,4 +79,16 @@ if(BRO_BUILD_TESTS AND BRO_WITH_COMPOSITOR AND _bro_wayland_server)
         target_link_libraries(bro_daily_driver_test PRIVATE brodmabuf::brodmabuf)
     endif()
     target_include_directories(bro_daily_driver_test PRIVATE ${bro_SOURCE_DIR}/src)
+
+    add_executable(bro_window_stacking_test tests/test_window_stacking.cpp)
+    target_link_libraries(bro_window_stacking_test PRIVATE
+        bro_compositor
+        bro_render
+        bro_util
+        brocompositor
+    )
+    if(BRO_WITH_DMABUF)
+        target_link_libraries(bro_window_stacking_test PRIVATE brodmabuf::brodmabuf)
+    endif()
+    target_include_directories(bro_window_stacking_test PRIVATE ${bro_SOURCE_DIR}/src)
 endif()

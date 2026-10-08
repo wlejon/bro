@@ -200,22 +200,9 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
     }
 
     beginFrameComposite();
+    if (drmCtx_) drmCtx_->clientLayersComposited = false;
     compositeLayers(layers.appLayers, layers.appInsetTop);
-
-#if BRO_WITH_COMPOSITOR
-    if (drmCtx_ && drmCtx_->compositor && drmCtx_->leasedFrames.empty()) {
-        std::vector<engine::UILayer> clientLayers;
-        auto leased = drmCtx_->compositor->acquireClientLayers(clientLayers);
-        if (!clientLayers.empty()) {
-            compositeLayers(clientLayers);
-        }
-        if (!leased.empty()) {
-            drmCtx_->leasedFrames.insert(drmCtx_->leasedFrames.end(),
-                                         std::make_move_iterator(leased.begin()),
-                                         std::make_move_iterator(leased.end()));
-        }
-    }
-#endif
+    compositeRemainingClientWindows();
 
     compositeLayers(layers.systemLayers);
 
@@ -224,7 +211,10 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
     if (displayMode_ == DisplayMode::Drm && cursorVisible_ && !lockedElement_.get()) {
         std::string shape = resolvedCursor_;
 #if BRO_WITH_COMPOSITOR
-        if (drmCtx_ && drmCtx_->compositor) {
+        // The client's cursor while the pointer is on a client (or a window
+        // is being dragged); over the shell, the shell's.
+        if (drmCtx_ && drmCtx_->compositor &&
+            (drmCtx_->pointerOnClient || drmCtx_->compositor->isDragActive() || !isShellApp())) {
             auto c = drmCtx_->compositor->cursor();
             if (c.hidden) shape = "none";
             else if (!c.shape.empty()) shape = c.shape;
@@ -243,12 +233,7 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
 
     presentCurrentFrame();
 
-#if BRO_WITH_COMPOSITOR
-    if (drmCtx_ && drmCtx_->compositor && !drmCtx_->leasedFrames.empty()) {
-        drmCtx_->compositor->releaseClientLayers(drmCtx_->leasedFrames);
-        drmCtx_->leasedFrames.clear();
-    }
-#endif
+    releaseClientWindowFrames();
 
     {
         double capMs = frameCapIntervalMs_;

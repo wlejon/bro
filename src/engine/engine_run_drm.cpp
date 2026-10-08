@@ -130,9 +130,8 @@ void Engine::drmPollPlatform() {
     if (drmCtx_->seat) drmCtx_->seat->pollEvents();
     if (drmCtx_->input)
         drmCtx_->input->pollEvents([this](const platform::DrmInputEvent& ev) { dispatchDrmInput(ev); });
-#if BRO_WITH_COMPOSITOR
-    if (drmCtx_->compositor && drmCtx_->compositor->pollEvents()) uiDirty_ = true;
-#endif
+    // Client events, then the shell's window frames moved with them.
+    if (pollShellCompositor()) uiDirty_ = true;
 #endif
 }
 

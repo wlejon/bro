@@ -258,24 +258,51 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, int offsetY) {
                 (void)src;
 #endif
             },
-            [&](const render::ClientWindowsLayerSource&) {
+            [&](const render::ClientWindowsLayerSource& src) {
 #if BRO_WITH_COMPOSITOR
-                if (drmCtx_ && drmCtx_->compositor) {
-                    std::vector<engine::UILayer> clientLayers;
-                    auto leased = drmCtx_->compositor->acquireClientLayers(clientLayers);
-                    if (!clientLayers.empty()) {
-                        compositeLayers(clientLayers);
-                    }
-                    if (!leased.empty()) {
-                        drmCtx_->leasedFrames.insert(drmCtx_->leasedFrames.end(),
-                                                     std::make_move_iterator(leased.begin()),
-                                                     std::make_move_iterator(leased.end()));
-                    }
+                if (!drmCtx_ || !drmCtx_->compositor) return;
+                drmCtx_->clientLayersComposited = true;
+                // The run this break names, from the pass that recorded it.
+                std::span<const render::ClientWindowRef> run;
+                if (const auto* refs = drmCtx_->frames.list(src.list)) {
+                    const size_t first = std::min<size_t>(src.first, refs->size());
+                    const size_t count = std::min<size_t>(src.count, refs->size() - first);
+                    run = std::span<const render::ClientWindowRef>(refs->data() + first, count);
                 }
+                std::vector<engine::UILayer> clientLayers;
+                auto leased = drmCtx_->compositor->acquireClientLayers(run, src.parts, clientLayers);
+                if (!clientLayers.empty()) compositeLayers(clientLayers);
+                drmCtx_->leasedFrames.insert(drmCtx_->leasedFrames.end(), std::make_move_iterator(leased.begin()),
+                                             std::make_move_iterator(leased.end()));
+#else
+                (void)src;
 #endif
             },
         }, layer.content);
     }
+}
+
+// The client windows of a frame whose paint pass had no client-window break
+// (an app that is not a shell, a compile frame): all of them, on top.
+void Engine::compositeRemainingClientWindows() {
+#if BRO_WITH_COMPOSITOR
+    if (!drmCtx_ || !drmCtx_->compositor || drmCtx_->clientLayersComposited) return;
+    drmCtx_->clientLayersComposited = true;
+    std::vector<engine::UILayer> clientLayers;
+    auto leased = drmCtx_->compositor->acquireClientLayers(clientLayers);
+    if (!clientLayers.empty()) compositeLayers(clientLayers);
+    drmCtx_->leasedFrames.insert(drmCtx_->leasedFrames.end(), std::make_move_iterator(leased.begin()),
+                                 std::make_move_iterator(leased.end()));
+#endif
+}
+
+// Leased client frames go back once the frame that sampled them is done.
+void Engine::releaseClientWindowFrames() {
+#if BRO_WITH_COMPOSITOR
+    if (!drmCtx_ || !drmCtx_->compositor || drmCtx_->leasedFrames.empty()) return;
+    drmCtx_->compositor->releaseClientLayers(drmCtx_->leasedFrames);
+    drmCtx_->leasedFrames.clear();
+#endif
 }
 
 static render::PresentPixels layerOf(SkSurface* surface) {

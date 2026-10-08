@@ -187,6 +187,7 @@ void DrawTraversal::draw(dom::Element* root, float scrollX, float scrollY,
     // Then the top layer, above everything, each entry over its ::backdrop.
     if (rootSC) paintTopLayer(root);
     topLayerSCs_.clear();
+    frameSCs_.clear();
 }
 
 void DrawTraversal::drawElement(dom::Element* elem, float offsetX, float offsetY) {
@@ -235,6 +236,12 @@ std::unique_ptr<StackingContext> DrawTraversal::buildStackingContextTree(
     if (dom::Document* doc = root->document(); doc && doc->documentElement() == root) {
         for (const auto& e : doc->topLayer()) topLayerSet.insert(e.element);
     }
+    // The shell's window frames, painted with their windows instead.
+    std::unordered_set<const dom::Element*> frameSet;
+    frameSCs_.clear();
+    if (shellClientWindows_ && clientSlots_)
+        for (const auto& s : *clientSlots_)
+            if (s.frame) frameSet.insert(s.frame);
 
     // Compute the border-box clip rect contributed by `elem` if it has overflow
     // clipping on either axis. Mirrors the overflow clip drawElementContent
@@ -324,6 +331,11 @@ std::unique_ptr<StackingContext> DrawTraversal::buildStackingContextTree(
         static const std::vector<ClipRect> kNoClips;
         StackingContext topHolder;
         const bool inTopLayer = elem != root && topLayerSet.count(elem) != 0;
+        // A window frame likewise leaves every ancestor stacking context and
+        // clip; emitClientWindows paints it under its window.
+        StackingContext frameHolder;
+        const bool isFrame = elem != root && !inTopLayer && frameSet.count(elem) != 0;
+        if (isFrame) currentSC = &frameHolder;
         if (inTopLayer) {
             topLayerOffset(elem, offX, offY);
             currentSC = &topHolder;
@@ -337,7 +349,7 @@ std::unique_ptr<StackingContext> DrawTraversal::buildStackingContextTree(
                 !fixedContainingBlock(elem))
                 topLayerOffset(elem, offX, offY);
         }
-        const std::vector<ClipRect>& inClips = inTopLayer ? kNoClips : ancestorClips;
+        const std::vector<ClipRect>& inClips = (inTopLayer || isFrame) ? kNoClips : ancestorClips;
 
         // Compute child offset using the same logic as drawElementContent
         auto& box = elem->layoutBox();
@@ -349,7 +361,7 @@ std::unique_ptr<StackingContext> DrawTraversal::buildStackingContextTree(
         float childOffY = y - scrollTop;
 
         bool isThisRoot = (elem == root);
-        bool isSC = inTopLayer || createsStackingContext(elem, isThisRoot);
+        bool isSC = inTopLayer || isFrame || createsStackingContext(elem, isThisRoot);
         bool positioned = isPositioned(style);
 
         // Clips this element is actually subject to: an out-of-flow box drops
@@ -423,6 +435,9 @@ std::unique_ptr<StackingContext> DrawTraversal::buildStackingContextTree(
 
         if (inTopLayer && !topHolder.children.empty()) {
             topLayerSCs_[elem] = std::move(topHolder.children.back());
+        }
+        if (isFrame && !frameHolder.children.empty()) {
+            frameSCs_[elem] = std::move(frameHolder.children.back());
         }
     };
 
@@ -687,27 +702,13 @@ void DrawTraversal::paintStackingContext(StackingContext* sc, bool withinPromote
     for (auto* c : posSCs) {
         if (isRoot && shellClientWindows_ && !emittedWindows && c->zIndex >= 1000) {
             emittedWindows = true;
-            if (layerBreakCb_) {
-                LayerBreak lb;
-                lb.source = render::ClientWindowsLayerSource{};
-                lb.quad.w = static_cast<float>(viewportW_);
-                lb.quad.h = static_cast<float>(viewportH_);
-                layerBreakCb_(lb);
-            }
+            emitClientWindows();
         }
         pushClips(c->ancestorClips);
         paintStackingContext(c, withinPromoted);
         popClips(c->ancestorClips);
     }
-    if (isRoot && shellClientWindows_ && !emittedWindows) {
-        if (layerBreakCb_) {
-            LayerBreak lb;
-            lb.source = render::ClientWindowsLayerSource{};
-            lb.quad.w = static_cast<float>(viewportW_);
-            lb.quad.h = static_cast<float>(viewportH_);
-            layerBreakCb_(lb);
-        }
-    }
+    if (isRoot && shellClientWindows_ && !emittedWindows) emitClientWindows();
 
     if (didWrap) {
         scRootSkipWrap_.erase(sc->root);
@@ -716,6 +717,52 @@ void DrawTraversal::paintStackingContext(StackingContext* sc, bool withinPromote
         if (wrappedTransform) renderer_->restore();
         if (wrappedBlend) renderer_->restore();
     }
+}
+
+// The shell host's client windows, where the shell's desktop level ends:
+// runs of windows separated by the frames the shell draws, each frame painted
+// into the HTML just below its window. The runs go to clientRefs_; each break
+// names its slice of them.
+void DrawTraversal::emitClientWindows() {
+    if (!layerBreakCb_) return;
+    std::vector<render::ClientWindowRef> scratch;
+    std::vector<render::ClientWindowRef>& refs = clientRefs_ ? *clientRefs_ : scratch;
+    size_t first = refs.size();
+    bool firstRun = true;
+    auto flush = [&](uint32_t parts) {
+        LayerBreak lb;
+        render::ClientWindowsLayerSource src;
+        src.list = clientListId_;
+        src.first = static_cast<uint32_t>(first);
+        src.count = static_cast<uint32_t>(refs.size() - first);
+        src.parts = parts | (firstRun ? render::kClientLayersBelow : 0u);
+        lb.source = src;
+        lb.quad.w = static_cast<float>(viewportW_);
+        lb.quad.h = static_cast<float>(viewportH_);
+        layerBreakCb_(lb);
+        first = refs.size();
+        firstRun = false;
+    };
+    if (clientSlots_) {
+        for (const auto& slot : *clientSlots_) {
+            auto it = slot.frame ? frameSCs_.find(slot.frame) : frameSCs_.end();
+            if (it == frameSCs_.end() || !it->second) {
+                refs.push_back(render::ClientWindowRef{slot.windowId, false, 0.0f, 0.0f});
+                continue;
+            }
+            // The windows below go under this frame.
+            if (refs.size() > first || firstRun) flush(0);
+            StackingContext* sc = it->second.get();
+            paintStackingContext(sc, false);
+            // The client origin: the frame's border box (where layout put it
+            // this pass) plus the inset the frame was sized with.
+            const auto& box = slot.frame->layoutBox();
+            const float bx = box.contentRect.x + sc->offsetX - box.padding.left - box.border.left;
+            const float by = box.contentRect.y + sc->offsetY - box.padding.top - box.border.top;
+            refs.push_back(render::ClientWindowRef{slot.windowId, true, bx + slot.insetLeft, by + slot.insetTop});
+        }
+    }
+    flush(render::kClientLayersAbove);
 }
 
 } // namespace bro::layout

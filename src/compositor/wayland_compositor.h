@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -18,6 +19,7 @@
 
 namespace bro::render {
 struct DmabufLayerSource;
+struct ClientWindowRef;
 }
 
 namespace bro::engine {
@@ -34,6 +36,18 @@ struct CompositorConfig {
     uint32_t height = 720;
     std::string socketName = "";
     std::string renderNode = "";
+};
+
+/// A window as the shell host composites it: shown windows only, in stacking
+/// order (stack(): bottom to top).
+struct ClientWindowInfo {
+    uint64_t id = 0;
+    brocompositor::Rect frame;      // the client, layout px
+    brocompositor::Margins insets;  // the shell frame's reach around it (zero: no frame)
+    bool focused = false;
+    bool maximized = false;
+    bool fullscreen = false;
+    std::string snap;               // "none", "left", "right", "top-left", ...
 };
 
 struct LeasedSurfaceFrame {
@@ -62,8 +76,22 @@ public:
     /// Pump and dispatch compositor events (server_events and wm events). Returns true if events occurred.
     bool pollEvents();
 
-    /// Acquire layers for currently mapped client surfaces to be composited by bro
+    /// Acquire layers for every mapped client surface, bottom to top: layer
+    /// shell background / bottom, the windows in stacking order, override-
+    /// redirect X11 surfaces, layer shell top / overlay (or, while the
+    /// session is locked, only the lock surfaces).
     std::vector<LeasedSurfaceFrame> acquireClientLayers(std::vector<engine::UILayer>& outLayers);
+
+    /// The same for one run of windows the shell interleaves with its own
+    /// frames (render::ClientWindowsLayerSource): `parts` adds the layers
+    /// below the windows (kClientLayersBelow) and above them
+    /// (kClientLayersAbove). A pinned window is placed at its recorded
+    /// client origin, any other where the compositor has it now.
+    std::vector<LeasedSurfaceFrame> acquireClientLayers(std::span<const render::ClientWindowRef> windows,
+                                                        uint32_t parts, std::vector<engine::UILayer>& outLayers);
+
+    /// Shown windows, bottom to top (the window manager's stacking order).
+    std::vector<ClientWindowInfo> stack() const;
 
     /// Release leased frames after presentation has completed
     void releaseClientLayers(const std::vector<LeasedSurfaceFrame>& frames);
@@ -111,8 +139,13 @@ public:
     /// Current cursor state requested by Wayland clients or compositor
     brocompositor::wl::CursorChanged cursor() const;
 
-    /// Hit-test Wayland windows at coordinates (x, y)
+    /// Hit-test Wayland windows at coordinates (x, y): the topmost window
+    /// whose surfaces are under the point, in stacking order.
     uint64_t windowAt(double x, double y) const;
+    /// Whether a surface of window winId is under (x, y).
+    bool windowSurfaceAt(uint64_t winId, double x, double y) const;
+    /// Whether an override-redirect X11 surface (a menu) is under (x, y).
+    bool unmanagedAt(double x, double y) const;
 
     /// Route pointer to surface under (x, y), returns true if a Wayland surface was hit
     bool routePointer(double x, double y, uint32_t time = 0);
@@ -130,20 +163,6 @@ private:
 #endif
     bool running_ = false;
     std::string socketName_;
-
-    enum class DragOp : uint32_t { None = 0, Move = 1, Resize = 2 };
-    struct DragState {
-        DragOp op = DragOp::None;
-        uint64_t windowId = 0;
-        double startPointerX = 0;
-        double startPointerY = 0;
-        int initialWinX = 0;
-        int initialWinY = 0;
-        int initialWinW = 0;
-        int initialWinH = 0;
-        uint32_t resizeEdges = 0;
-        bool active = false;
-    } dragState_;
 
     double lastPointerX_ = 0.0;
     double lastPointerY_ = 0.0;

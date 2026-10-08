@@ -354,7 +354,7 @@ NATIVE_TESTS=(bro_vulkan_test bro_vulkan_scene_test bro_vulkan_scene_passes_test
               bro_mediabackendtest bro_videoencodetest bro_terminal_test
               bro_a11y_test bro_vulkan_dmabuf_test bro_nested_compositor_test
               bro_drm_screen_test bro_shell_surfaces_test bro_xwayland_test
-              bro_daily_driver_test bro_source_preflight_test)
+              bro_daily_driver_test bro_window_stacking_test bro_source_preflight_test)
 BRO_DIR="$(dirname "$BRO")"
 EXE_SUFFIX=""
 [[ "$BRO" == *.exe ]] && EXE_SUFFIX=".exe"
@@ -504,6 +504,14 @@ run_one_test() {
         compositor/*|cred/*|displays/*|portal/*|seat/*|sys/*|wl/*)
             TEST_APP_FOR_RUN="$(to_win_path "$SCRIPT_DIR/desktop_trust/trusted_app")"
             EXTRA_ENV+=( "BRO_TRUSTED_APP_DIR=$TEST_APP_FOR_RUN" )
+            ;;
+    esac
+    # The window-frame tests run the DRM shell host's compositor headless,
+    # with brocompositor's test clients (a sibling checkout's build).
+    case "$REL" in
+        compositor/test_window_frames*)
+            EXTRA_ENV+=( "BRO_HEADLESS_COMPOSITOR=1"
+                         "BC_TEST_CLIENT_DIR=${BC_TEST_CLIENT_DIR:-$SCRIPT_DIR/../../brocompositor/build-release/tests}" )
             ;;
     esac
 

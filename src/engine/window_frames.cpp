@@ -1,0 +1,172 @@
+// Shell-drawn window frames (window_frames.h): finding the frame elements,
+// keeping each on its window, and the client-window runs paint passes record.
+#include "engine/window_frames.h"
+
+#include "dom/document.h"
+#include "dom/element.h"
+
+#include <algorithm>
+#include <charconv>
+#include <functional>
+
+namespace bro::engine {
+
+namespace {
+
+constexpr const char* kFrameAttr = "data-window-frame";
+constexpr size_t kKeptLists = 8;
+
+std::string px(int v) { return std::to_string(v) + "px"; }
+
+uint64_t parseId(const std::string& s) {
+    uint64_t id = 0;
+    const char* b = s.data();
+    while (b < s.data() + s.size() && (*b == ' ' || *b == '\t')) ++b;
+    std::from_chars(b, s.data() + s.size(), id);
+    return id;
+}
+
+}  // namespace
+
+void WindowFrames::rescan(dom::Document* doc) {
+    std::vector<Entry> next;
+    if (doc && doc->documentElement()) {
+        std::function<void(dom::Element*)> walk = [&](dom::Element* el) {
+            if (el->hasAttribute(kFrameAttr)) {
+                Entry e;
+                e.element = dom::ElementHandle(doc, el);
+                e.window = parseId(el->getAttribute(kFrameAttr));
+                // Keep what was written on an element seen before.
+                for (auto& old : entries_)
+                    if (old.element.get() == el) {
+                        e.written = old.written;
+                        break;
+                    }
+                next.push_back(std::move(e));
+            }
+            for (dom::Node* child : el->childNodes())
+                if (child->nodeType() == dom::NodeType::Element) walk(static_cast<dom::Element*>(child));
+        };
+        walk(doc->documentElement());
+    }
+    entries_ = std::move(next);
+}
+
+void WindowFrames::write(Entry& e, dom::Element* el, const FrameWindow* w, int z) {
+    Written& was = e.written;
+    auto& style = el->style();
+    if (!w) {
+        if (!was.hidden) {
+            style.setProperty("display", "none");
+            was.hidden = true;
+        }
+        return;
+    }
+    if (was.hidden) {
+        style.removeProperty("display");
+        was.hidden = false;
+    }
+    if (!was.placed) {
+        style.setProperty("position", "fixed");
+        style.setProperty("box-sizing", "border-box");
+        was.placed = true;
+    }
+    auto set = [&](const char* prop, std::string& last, std::string value) {
+        if (last == value) return;
+        style.setProperty(prop, value);
+        last = std::move(value);
+    };
+    set("left", was.left, px(w->x - w->insetLeft));
+    set("top", was.top, px(w->y - w->insetTop));
+    set("width", was.width, px(w->width + w->insetLeft + w->insetRight));
+    set("height", was.height, px(w->height + w->insetTop + w->insetBottom));
+    set("z-index", was.z, std::to_string(z));
+
+    const std::string state = w->maximized ? "maximized" : "normal";
+    if (was.state != state) {
+        el->setAttribute("data-window-state", state);
+        was.state = state;
+    }
+    const std::string snap = w->snap == "none" || w->snap == "maximize" ? "" : w->snap;
+    if (was.snap != snap) {
+        if (snap.empty()) el->removeAttribute("data-window-snap");
+        else el->setAttribute("data-window-snap", snap);
+        was.snap = snap;
+    }
+    if (was.focused != w->focused) {
+        if (w->focused) el->setAttribute("data-window-focused", "");
+        else el->removeAttribute("data-window-focused");
+        was.focused = w->focused;
+    }
+}
+
+void WindowFrames::sync(dom::Document* doc, std::vector<FrameWindow> stack) {
+    stack_ = std::move(stack);
+    shown_.clear();
+    if (!doc) {
+        entries_.clear();
+        doc_ = nullptr;
+        return;
+    }
+    if (doc != doc_ || doc->mutationEpoch() != scannedEpoch_) {
+        if (doc != doc_) entries_.clear();
+        doc_ = doc;
+        rescan(doc);
+    }
+    for (auto& e : entries_) {
+        dom::Element* el = e.element.get();
+        if (!el) continue;
+        const FrameWindow* w = nullptr;
+        int z = 0;
+        // One frame per window: the first element naming it.
+        if (e.window != 0 && !shown_.count(e.window)) {
+            for (size_t i = 0; i < stack_.size(); ++i) {
+                if (stack_[i].id != e.window) continue;
+                if (stack_[i].framed()) {
+                    w = &stack_[i];
+                    z = static_cast<int>(i) + 1;
+                }
+                break;
+            }
+        }
+        write(e, el, w, z);
+        if (w) shown_[e.window] = e.element;
+    }
+    // What was just written is not a reason to look again.
+    scannedEpoch_ = doc->mutationEpoch();
+}
+
+dom::Element* WindowFrames::frameOf(uint64_t windowId) const {
+    auto it = shown_.find(windowId);
+    return it == shown_.end() ? nullptr : it->second.get();
+}
+
+std::vector<layout::DrawTraversal::ClientWindowSlot> WindowFrames::slots() const {
+    std::vector<layout::DrawTraversal::ClientWindowSlot> out;
+    out.reserve(stack_.size());
+    for (const auto& w : stack_) {
+        layout::DrawTraversal::ClientWindowSlot s;
+        s.windowId = w.id;
+        s.frame = frameOf(w.id);
+        s.insetLeft = static_cast<float>(w.insetLeft);
+        s.insetTop = static_cast<float>(w.insetTop);
+        out.push_back(s);
+    }
+    return out;
+}
+
+std::vector<render::ClientWindowRef>& WindowFrames::beginList(uint32_t& id) {
+    id = nextList_++;
+    if (nextList_ == 0) nextList_ = 1;
+    while (lists_.size() >= kKeptLists) lists_.pop_front();
+    lists_.emplace_back(id, std::vector<render::ClientWindowRef>{});
+    return lists_.back().second;
+}
+
+const std::vector<render::ClientWindowRef>* WindowFrames::list(uint32_t id) const {
+    for (const auto& [lid, refs] : lists_)
+        if (lid == id) return &refs;
+    return nullptr;
+}
+
+}  // namespace bro::engine

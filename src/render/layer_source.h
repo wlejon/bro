@@ -37,8 +37,34 @@ struct DmabufLayerSource {
     int syncFd = -1;  // explicit sync fence fd (<0 means none/implicit)
 };
 
-/// Placeholder layer break for client windows in shell applications
-struct ClientWindowsLayerSource {};
+/// The client windows a shell host composites (bro as the display server),
+/// reached where the shell's desktop level ends. One break is a run of
+/// windows, bottom to top: entries [first, first + count) of the client-window
+/// list recorded with the pass (`list` names it; the engine keeps the last
+/// few, since a recorded pass is composited a frame or two later). A window
+/// with a shell-drawn frame starts a new run, the frame painted in the HTML
+/// below it. `parts` adds what is not a window: kClientLayersBelow (layer-shell
+/// background / bottom surfaces, under the first run) and kClientLayersAbove
+/// (override-redirect X11 surfaces, layer-shell top / overlay, the session
+/// lock, over the last run).
+struct ClientWindowsLayerSource {
+    uint32_t list = 0;
+    uint32_t first = 0;
+    uint32_t count = 0;
+    uint32_t parts = 0;
+};
+inline constexpr uint32_t kClientLayersBelow = 1u << 0;
+inline constexpr uint32_t kClientLayersAbove = 1u << 1;
+
+/// One client window in a recorded run. `pinned`: its frame was painted in
+/// this pass, so the window is placed where that frame put it (x, y: the
+/// client origin, CSS px), keeping frame and window in step; otherwise it is
+/// placed where the compositor has it at composite time.
+struct ClientWindowRef {
+    uint64_t windowId = 0;
+    bool pinned = false;
+    float x = 0, y = 0;
+};
 
 using LayerSource = std::variant<CanvasLayerSource, WebGLLayerSource, SceneLayerSource, IframeLayerSource,
                                  TerminalLayerSource, DmabufLayerSource, ClientWindowsLayerSource>;

@@ -112,9 +112,12 @@ void Engine::pumpCompileFrame(double progress) {
     skia->endFrame();
 
     beginFrameComposite();
+    if (drmCtx_) drmCtx_->clientLayersComposited = false;
     compositeLayers(appLayers, insetTop);
+    compositeRemainingClientWindows();
     compositeLayers(systemLayers);
     presentCurrentFrame();
+    releaseClientWindowFrames();
 
     // About one frame per display refresh; the compile is on another core.
     const double spent = util::currentTimeMs() - frameStart;

@@ -35,7 +35,10 @@ if (!bro.compositor.available) {
     // 6. Window-management policy: states, edge reservations, interaction.
     for (const name of ['minimizeWindow', 'maximizeWindow', 'fullscreenWindow', 'restoreWindow',
                         'reserveEdge', 'releaseEdge', 'getReservations', 'getWorkArea',
-                        'getInteraction', 'setInteraction']) {
+                        'getInteraction', 'setInteraction',
+                        'getStacking', 'raiseWindow', 'getDecorations', 'setDecorations',
+                        'beginMove', 'beginResize', 'dragTo', 'endDrag', 'cancelDrag', 'getDrag',
+                        'getSnapping', 'setSnapping', 'snapWindow', 'snapWindowToward']) {
         assert(typeof bro.compositor[name] === 'function', name + ' is function');
     }
     assert(bro.compositor.maximizeWindow(987654) === false, 'maximizing an unknown window fails');
@@ -54,6 +57,24 @@ if (!bro.compositor.available) {
     assert(ia.titlebarHeight === 38 && ia.resizeBorder === 6, 'interaction defaults');
     assert(bro.compositor.setInteraction({ resizeBorder: 8 }).resizeBorder === 8, 'setInteraction');
     bro.compositor.setInteraction({ resizeBorder: 6 });
+
+    // Stacking, decorations and snapping (the policy half; with no windows).
+    assert(Array.isArray(bro.compositor.getStacking()), 'getStacking returns an array');
+    assert(bro.compositor.raiseWindow(987654) === false, 'raising an unknown window fails');
+    const d = bro.compositor.setDecorations({ insets: { top: 36, left: 6, right: 6, bottom: 6 },
+                                              maximizedInsets: { top: 36 } });
+    assert(d, 'setDecorations');
+    const d2 = bro.compositor.getDecorations();
+    assert(d2.insets.top === 36 && d2.insets.left === 6 && d2.maximizedInsets.left === 0, 'decorations round-trip');
+    bro.compositor.setDecorations({ insets: 0, maximizedInsets: 0 });
+    assert(bro.compositor.getDecorations().insets.top === 0, 'decorations cleared');
+    const sn = bro.compositor.getSnapping();
+    assert(sn.enabled === true && typeof sn.edgeThreshold === 'number', 'snapping defaults');
+    assert(bro.compositor.setSnapping({ edgeThreshold: 12 }).edgeThreshold === 12, 'setSnapping');
+    bro.compositor.setSnapping({ edgeThreshold: sn.edgeThreshold });
+    assert(bro.compositor.getDrag() === null, 'no drag');
+    assert(bro.compositor.beginMove(987654, { x: 0, y: 0 }) === false, 'beginMove of an unknown window fails');
+    assert(bro.compositor.snapWindow(987654, 'left') === false, 'snapping an unknown window fails');
 
     console.log('test_compositor.js PASSED');
 }

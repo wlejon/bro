@@ -11,8 +11,7 @@
 #include "render/kms_direct_presenter.h"
 #endif
 #if BRO_WITH_COMPOSITOR
-#include "compositor/wayland_compositor.h"
-#include <brocompositor/api.h>
+#include "compositor/wayland_compositor.h"  // DrmPlatformContext owns one
 #endif
 #include "util/log.h"
 
@@ -99,35 +98,7 @@ void Engine::initDrm(const EngineConfig& config) {
              static_cast<int>(::getpid()), defaultScreenCapturePath().c_str(), screenCaptureRequestPath().c_str());
 
 #if BRO_WITH_COMPOSITOR
-    compositor::CompositorConfig compCfg;
-    compCfg.headless = true;
-    compCfg.drm = false;
-    compCfg.width = viewportWidth_;
-    compCfg.height = viewportHeight_;
-    compCfg.xwayland = true;
-    compCfg.socketName = "wayland-0";
-
-    drmCtx_->compositor = std::make_unique<compositor::WaylandCompositor>();
-    std::string compErr;
-    if (drmCtx_->compositor->init(compCfg, &compErr)) {
-        LOG_INFO("Engine: WaylandCompositor started on socket %s",
-                 drmCtx_->compositor->socketName().c_str());
-        ::setenv("WAYLAND_DISPLAY", drmCtx_->compositor->socketName().c_str(), 1);
-        if (!drmCtx_->compositor->xwaylandDisplay().empty()) {
-            ::setenv("DISPLAY", drmCtx_->compositor->xwaylandDisplay().c_str(), 1);
-        }
-#if BRO_HAVE_WAYLAND_SERVER
-        if (drmCtx_->compositor->windowManager()) {
-            brocompositor::api::setWindowManager(drmCtx_->compositor->windowManagerShared());
-            brocompositor::api::setCommandSink([comp = drmCtx_->compositor.get()](const std::vector<brocompositor::Command>& cmds) -> size_t {
-                if (comp && comp->backend()) return comp->backend()->execute(cmds);
-                return cmds.size();
-            });
-        }
-#endif
-    } else {
-        LOG_WARN("Engine: WaylandCompositor init failed: %s", compErr.c_str());
-    }
+    startShellCompositor(viewportWidth_, viewportHeight_, "wayland-0", /*xwayland=*/true);
 #endif
 #else
     (void)config;
