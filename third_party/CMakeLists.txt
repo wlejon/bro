@@ -690,6 +690,28 @@ if(BRO_WITH_DMABUF AND NOT TARGET brodmabuf)
     endif()
 endif()
 
+# --- brovideo ---
+# Hardware video encode and decode (VA-API, Media Foundation), the codec
+# layer broremote builds on. A standalone checkout only (no submodule yet);
+# loaded here, with bro's paths, so broremote's own lookup finds the target.
+# On Linux it takes brodmabuf from above, or ../brodmabuf itself.
+if(BRO_WITH_REMOTE AND NOT TARGET brovideo)
+    set(BROVIDEO_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    bro_default_sibling_dir(brovideo _brovideo_default)
+    set(BROVIDEO_DIR "${_brovideo_default}" CACHE PATH "Path to standalone brovideo repo")
+    if(EXISTS "${BROVIDEO_DIR}/CMakeLists.txt")
+        message(STATUS "brovideo: using standalone repo at ${BROVIDEO_DIR}")
+        add_subdirectory("${BROVIDEO_DIR}" "${CMAKE_BINARY_DIR}/brovideo" EXCLUDE_FROM_ALL)
+    elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/brovideo/CMakeLists.txt")
+        message(STATUS "brovideo: using submodule at third_party/brovideo")
+        add_subdirectory(brovideo EXCLUDE_FROM_ALL)
+    else()
+        message(STATUS "brovideo: not found (../brovideo); remote hosting off")
+        set(BRO_WITH_REMOTE OFF)
+        set(BRO_WITH_REMOTE OFF PARENT_SCOPE)
+    endif()
+endif()
+
 # --- broremote ---
 # Remote session hosting (bro.remote). A standalone checkout only (no
 # submodule yet): without one, remote hosting is off, said once here, and the

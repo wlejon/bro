@@ -17,7 +17,7 @@ engine libs   htmlayout brokit broaudio ...     bronze ── brass
 terminal libs bropty brosearch brothemes bromux
 desktop libs  brovfs brosys brocas brocred broapps brothumb brodisplays
               brocompositor brokeys broa11y broconf broseat brodmabuf brodbus browl
-              broportal brodecor broclip brompris bropulse broime
+              broportal brodecor broclip brompris bropulse broime brovideo broremote
 ```
 
 ## Runtime and compiler
@@ -88,7 +88,8 @@ Standalone C++20 libraries for the desktop environment. bro mounts their JavaScr
 | [brompris](https://github.com/wlejon/brompris) | Media player controller: MPRIS2 on Linux | brodbus | Linux (Windows and macOS build, with no backend yet: no players) | `BRO_WITH_MPRIS` |
 | [bropulse](https://github.com/wlejon/bropulse) | Audio routing and policy: native PipeWire 0.3 stream graph and PulseAudio fallback | none | Linux (Windows and macOS build the graph and policy, with no audio server) | `BRO_WITH_PULSE` |
 | [broime](https://github.com/wlejon/broime) | Input methods: compose key sequences, dead keys, candidate popup placement, dictionary prefix trie | brosearch | Windows, Linux, macOS | `BRO_WITH_IME` |
-| broremote (not on GitHub yet: a local checkout at `../broremote`, no submodule) | Remote sessions: a server the host feeds composited frames (dmabuf or CPU) and drains input from, hardware video encode (VA-API) and decode (Media Foundation), a viewer (`broremote-view`) that reaches it locally or over ssh. Backs `bro.remote` and `helm --remote` | none (its JS binding: bronze, brass) | Linux (hosting with VA-API), Windows (viewer; Raw-only hosting for development) | `BRO_WITH_REMOTE` |
+| brovideo (not on GitHub yet: a local checkout at `../brovideo`, no submodule) | Hardware video encode and decode through platform APIs only: a VA-API encoder (H.264, HEVC, AV1; dmabuf with its acquire fence, or CPU frames), a Media Foundation decoder (CPU NV12 or D3D11 textures), the Raw codec, and a capability probe. broremote's codec layer, with no remoting concepts, so `<video>`, `VideoEncoder` and screen recording can use it later | brodmabuf (Linux) | Linux (encode), Windows (decode) | `BRO_WITH_REMOTE` |
+| broremote (not on GitHub yet: a local checkout at `../broremote`, no submodule) | Remote sessions: a server the host feeds composited frames (dmabuf or CPU) and drains input from, encoding through brovideo, a viewer (`broremote-view`) that reaches it locally or over ssh. Backs `bro.remote` and `helm --remote` | brovideo (its JS binding: bronze, brass) | Linux (hosting with VA-API), Windows (viewer; Raw-only hosting for development) | `BRO_WITH_REMOTE` |
 
 ## Apps and tools
 

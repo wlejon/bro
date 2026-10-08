@@ -115,7 +115,9 @@ std::unique_ptr<Client> connectViewer(Viewer& v, const std::string& socket, std:
     h.on_config = [&v](const StreamConfig& cfg) {
         std::lock_guard<std::mutex> lk(v.m);
         std::string e;
-        v.decoder = create_decoder(cfg.codec, &e);
+        DecoderConfig dc;
+        dc.codec = cfg.codec;
+        v.decoder = brovideo::create_decoder(dc, &e);
         if (!v.decoder) v.decodeError = "no decoder: " + e;
     };
     h.on_video = [&v](const VideoPacket& pkt) {

@@ -29,6 +29,7 @@ One more sibling repo, **[broworkshop](https://github.com/wlejon/broworkshop)** 
 | **brosearch** | `../brosearch` | `third_party/brosearch` |
 | **brothemes** | `../brothemes` | `third_party/brothemes` |
 | **bromux** | `../bromux` | `third_party/bromux` |
+| **brovideo** (optional, broremote's codecs) | `../brovideo` | none: not on GitHub yet, so no submodule |
 | **broremote** (optional, `bro.remote`) | `../broremote` | none: not on GitHub yet, so no submodule |
 | **brass** (compiler backend, required) | `../brass` | `third_party/brass` |
 | **bronze** (JS runtime, mandatory) | `../bronze` | `third_party/bronze` |
@@ -115,7 +116,7 @@ Most siblings are added **conditionally**, behind the modular-build flags (see [
 | brovisionml | `BRO_WITH_VISION` |
 | bropty, brosearch, brothemes | `BRO_WITH_TERMINAL` |
 | bromux | `BRO_WITH_TERMINAL`, and only when found: without it persistent sessions are compiled out |
-| broremote | `BRO_WITH_REMOTE`, and only when `../broremote` is found (there is no submodule): without it `bro.remote` is the unavailable stub |
+| brovideo, broremote | `BRO_WITH_REMOTE`, and only when `../brovideo` and `../broremote` are found (there are no submodules): without them `bro.remote` is the unavailable stub. brovideo's VA-API encoder on Linux needs brodmabuf (bro's, or `../brodmabuf`) |
 | bronze | Mandatory (always ON; `BRO_WITH_BRONZE=1`) |
 
 With a gate off, the sibling is never added and the features it backs are compiled out. The flags auto-resolve their prerequisites (`_bro_require` in the top-level `CMakeLists.txt`), so e.g. `BRO_WITH_DIFFUSION=ON` forces `BRO_WITH_LM` and `BRO_WITH_TENSOR` on.
