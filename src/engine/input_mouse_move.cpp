@@ -314,41 +314,45 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
                 }
             }
             int mod = currentModState();
-
-            if (prevHover) {
-                dom::MouseEvent outEvt("mouseout", true, true);
-                populateMouseEvent(outEvt, x, y, -1, pressedButtons_,
+            // The hover transition, as the UI Events and Pointer Events
+            // specs order it: out on the element left, leave on it and each
+            // ancestor the pointer is no longer inside (innermost first),
+            // over on the element entered, enter on each ancestor it is now
+            // inside that it was not (outermost first) and on the element.
+            // Each mouse event follows its pointer alias (pointerId 1).
+            auto fire = [&](const char* type, dom::Element* el, bool bubbles,
+                            dom::Element* related) {
+                dom::MouseEvent evt(type, bubbles, bubbles);
+                populateMouseEvent(evt, x, y, -1, pressedButtons_,
                                   xrel, yrel, scrollY_, mod, static_cast<float>(contentTop()));
-                outEvt.setRelatedTarget(target);
-                applyMouseOffset(outEvt, prevHover);
-                dispatchEvent(prevHover, outEvt);
+                evt.setRelatedTarget(related);
+                applyMouseOffset(evt, el);
+                dispatchEvent(el, evt);
+            };
+            std::vector<dom::Element*> left, entered;
+            for (dom::Element* e = prevHover; e; e = e->parentElement()) left.push_back(e);
+            for (dom::Element* e = target; e; e = e->parentElement()) entered.push_back(e);
+            // Drop the shared ancestors (the pointer is still inside them).
+            while (!left.empty() && !entered.empty() && left.back() == entered.back()) {
+                left.pop_back();
+                entered.pop_back();
             }
 
             if (prevHover) {
-                dom::MouseEvent leaveEvt("mouseleave", false, false);
-                populateMouseEvent(leaveEvt, x, y, -1, pressedButtons_,
-                                  xrel, yrel, scrollY_, mod, static_cast<float>(contentTop()));
-                leaveEvt.setRelatedTarget(target);
-                applyMouseOffset(leaveEvt, prevHover);
-                dispatchEvent(prevHover, leaveEvt);
+                fire("pointerout", prevHover, true, target);
+                fire("mouseout", prevHover, true, target);
             }
-
-            if (target) {
-                dom::MouseEvent overEvt("mouseover", true, true);
-                populateMouseEvent(overEvt, x, y, -1, pressedButtons_,
-                                  xrel, yrel, scrollY_, mod, static_cast<float>(contentTop()));
-                overEvt.setRelatedTarget(prevHover);
-                applyMouseOffset(overEvt, target);
-                dispatchEvent(target, overEvt);
+            for (dom::Element* e : left) {
+                fire("pointerleave", e, false, target);
+                fire("mouseleave", e, false, target);
             }
-
             if (target) {
-                dom::MouseEvent enterEvt("mouseenter", false, false);
-                populateMouseEvent(enterEvt, x, y, -1, pressedButtons_,
-                                  xrel, yrel, scrollY_, mod, static_cast<float>(contentTop()));
-                enterEvt.setRelatedTarget(prevHover);
-                applyMouseOffset(enterEvt, target);
-                dispatchEvent(target, enterEvt);
+                fire("pointerover", target, true, prevHover);
+                fire("mouseover", target, true, prevHover);
+            }
+            for (auto it = entered.rbegin(); it != entered.rend(); ++it) {
+                fire("pointerenter", *it, false, prevHover);
+                fire("mouseenter", *it, false, prevHover);
             }
 
             if (document_ && document_->cascade().usesHoverPseudo()) {

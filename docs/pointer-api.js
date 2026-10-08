@@ -13,7 +13,12 @@
  *   mouse   pointerId 1 (always), pointerType "mouse", always primary.
  *           Synthesized just before each mouse event: pointerdown before
  *           mousedown, pointermove before mousemove, pointerup before
- *           mouseup. pressure reads 0.5 while any button is held, else 0.
+ *           mouseup, and the hover transition: pointerout / pointerleave /
+ *           pointerover / pointerenter before their mouse twins. Leave and
+ *           enter go to every element the pointer left or entered, not just
+ *           the hit target: leave innermost first, enter outermost first,
+ *           neither bubbling (the elements both old and new targets sit in
+ *           hear nothing). pressure reads 0.5 while any button is held, else 0.
  *
  *   touch   one pointer per finger. pointerIds are unique per contact,
  *           minted monotonically starting at 2: they NEVER collide with the
@@ -41,8 +46,9 @@
  * throws NotFoundError). Classic mouse events are never retargeted by
  * capture: only the pointer aliases are.
  *
- * pointercancel is a TOUCH-ONLY event in bro: the mouse path aliases exactly
- * pointerdown / pointermove / pointerup and never emits one. So a mouse
+ * pointercancel is a TOUCH-ONLY event in bro: the mouse path aliases
+ * pointerdown / pointermove / pointerup and the hover events, and never
+ * emits one. So a mouse
  * capture whose pointerup went missing (swallowed by a native dialog, a
  * window switch) is not ended by a cancel: it self-heals instead on the
  * next pointermove that arrives with no buttons held, which releases the
