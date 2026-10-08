@@ -767,6 +767,9 @@ private:
     void drmPollPlatform();
     double drmTickWorld(double scaledFrameDtMs);  // returns the wall time it ticked panels at
     bool drmSignalLayout(bool baseWasDirty);
+    void drmPaceNextFrame(double frameStart);
+    double drmPresentTargetMs(double frameStart) const;
+    double drmWorkPeakMs_ = 0.0;  // a decaying peak of the frame's work before its commit
     // engine_drm_input.cpp: input routing between the shell document and
     // client windows.
     void dispatchDrmInput(const platform::DrmInputEvent& ev);

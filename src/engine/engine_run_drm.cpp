@@ -37,6 +37,12 @@
 #include <algorithm>
 #include <thread>
 
+#if defined(__linux__)
+#include <cerrno>
+#include <ctime>
+#include <poll.h>
+#endif
+
 namespace bro::engine {
 
 void Engine::runDrm() {
@@ -69,9 +75,14 @@ void Engine::runDrm() {
 void Engine::drmFrame() {
 #if defined(__linux__) && BRO_WITH_SEAT && BRO_WITH_DMABUF
     const double frameStart = util::currentTimeMs();
+    // The clock advances to the vblank this frame will be shown at, not to
+    // when the frame happened to start: frame starts move about within the
+    // refresh period (pacing, input handlers), and an animation sampled at
+    // the start time would step unevenly on a screen that steps evenly.
+    const double clockAt = drmPresentTargetMs(frameStart);
     double wallFrameDtMs = 0.0;
-    if (lastWallTickMs_ > 0.0 && frameStart > lastWallTickMs_) wallFrameDtMs = frameStart - lastWallTickMs_;
-    lastWallTickMs_ = frameStart;
+    if (lastWallTickMs_ > 0.0 && clockAt > lastWallTickMs_) wallFrameDtMs = clockAt - lastWallTickMs_;
+    lastWallTickMs_ = std::max(lastWallTickMs_, clockAt);
     const double scaledFrameDtMs = wallFrameDtMs * effectiveTimeScale();
     engineNowMs_ += scaledFrameDtMs;
     traceFrameBegin(frameStart);
@@ -115,11 +126,79 @@ void Engine::drmFrame() {
     renderAndPresentFrame(frameStart, now, wallFrameDtMs, layoutSignaled, baseWasDirty);
     pollScreenCaptureTriggers();
 
-    t = util::currentTimeMs();
-    if (vulkanPresenter_ && vulkanPresenter_->kmsDirectPresenter())
-        vulkanPresenter_->kmsDirectPresenter()->handlePageFlipEvent(10);
-    rec.pacingWaitMs += util::currentTimeMs() - t;
+    drmPaceNextFrame(frameStart);
     traceFrameEnd();
+#endif
+}
+
+// The vblank a frame starting at `frameStart` will flip on: the first one
+// after the last flip that is still ahead of now. Without a flip yet (or off
+// KMS), the start time itself.
+double Engine::drmPresentTargetMs(double frameStart) const {
+#if defined(__linux__) && BRO_WITH_SEAT && BRO_WITH_DMABUF
+    auto* kms = vulkanPresenter_ ? vulkanPresenter_->kmsDirectPresenter() : nullptr;
+    if (!kms) return frameStart;
+    const double period = kms->refreshPeriodMs();
+    const double last = kms->lastFlip().vblankMs;
+    if (period <= 0.0 || last <= 0.0 || frameStart - last > 1000.0) return frameStart;
+    double target = last + period;
+    while (target < frameStart + 1.0) target += period;
+    return target;
+#else
+    return frameStart;
+#endif
+}
+
+// When the next frame starts. A composited present returns once its flip has
+// landed, at vblank V; the next frame's commit has to be in before V + one
+// refresh period. Starting it at once would leave the most slack but sample
+// input and the animation clock most of a period before they reach the
+// screen; starting it late leaves the frame only what is left. So the next
+// frame starts as late as recent frames' work allows: a decaying peak of the
+// work before the commit, with headroom, decides how early.
+void Engine::drmPaceNextFrame(double frameStart) {
+#if defined(__linux__) && BRO_WITH_SEAT && BRO_WITH_DMABUF
+    auto* kms = vulkanPresenter_ ? vulkanPresenter_->kmsDirectPresenter() : nullptr;
+    if (!kms) return;
+    FrameRecord& rec = frameTrace_->current();
+    const double t0 = util::currentTimeMs();
+    // A direct scanout commits without waiting for its flip: wait for it here.
+    if (kms->flipPending()) kms->handlePageFlipEvent(50);
+    const bool presented = kms->lastFlip().count != flipCountAtFrameStart_;
+    const double period = kms->refreshPeriodMs();
+    if (!presented || period <= 0.0) {
+        // Nothing went to the screen (a VT switch, a failed commit): keep the
+        // loop from spinning.
+        kms->handlePageFlipEvent(10);
+        rec.pacingWaitMs += util::currentTimeMs() - t0;
+        return;
+    }
+    const double work = std::max(0.0, t0 - frameStart - rec.flipWaitMs - rec.pacingWaitMs);
+    drmWorkPeakMs_ = std::max(work, drmWorkPeakMs_ * 0.97);
+    // Never less than ~10 ms at 60 Hz: an input frame's handlers are not in
+    // the peak until they have run, and a clicked animation's first frame
+    // that misses its vblank shows as a hitch.
+    const double budget = std::clamp(drmWorkPeakMs_ * 1.5 + 3.0, period * 0.6, period);
+    const double startAt = kms->lastFlip().vblankMs + period - budget;
+    // Input (or an agent command) ends the wait early: its handlers then get
+    // the whole period to make the next vblank, rather than the budget.
+    struct pollfd fds[2];
+    nfds_t n = 0;
+    if (drmCtx_ && drmCtx_->input && drmCtx_->input->pollFd() >= 0) fds[n++] = {drmCtx_->input->pollFd(), POLLIN, 0};
+    if (control_ && control_->pollFd() >= 0) fds[n++] = {control_->pollFd(), POLLIN, 0};
+    for (;;) {
+        const double waitMs = startAt - util::currentTimeMs();
+        if (waitMs <= 0.25) break;
+        struct timespec ts;
+        ts.tv_sec = static_cast<time_t>(waitMs / 1000.0);
+        ts.tv_nsec = static_cast<long>((waitMs - ts.tv_sec * 1000.0) * 1e6);
+        const int rc = ::ppoll(fds, n, &ts, nullptr);
+        if (rc > 0) break;
+        if (rc < 0 && errno != EINTR) break;
+    }
+    rec.pacingWaitMs += util::currentTimeMs() - t0;
+#else
+    (void)frameStart;
 #endif
 }
 

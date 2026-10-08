@@ -328,6 +328,7 @@ bool KmsDirectPresenter::directScanout(
     auto flipRes = presenter_->present(*fbRes.value(), inFenceFd, false);
     if (!flipRes) return false;
     directOnScreen_ = true;
+    flipPending_ = true;
 
     if (outFenceFd) {
         *outFenceFd = flipRes.value().release();
@@ -445,6 +446,7 @@ bool KmsDirectPresenter::presentComposited(
         return false;
     }
 
+    flipPending_ = true;
     (void)readEvents(100);
     lastTiming_.flipWaitMs = nowMs() - tFlip;
     composited_ = true;
@@ -522,6 +524,7 @@ bool KmsDirectPresenter::readEvents(int timeoutMs) {
     bool gotFlip = false;
     const bool any = presenter_->handle_event(timeoutMs, &flip, &gotFlip);
     if (gotFlip) {
+        flipPending_ = false;
         lastFlip_.vblankMs = static_cast<double>(flip.timestamp_us) / 1000.0;
         lastFlip_.sequence = flip.sequence;
         ++lastFlip_.count;
@@ -554,6 +557,7 @@ bool KmsDirectPresenter::restoreModeset() {
 
 void KmsDirectPresenter::pause() {
     paused_ = true;
+    flipPending_ = false;  // a VT switch can swallow the event
 }
 
 void KmsDirectPresenter::close() {

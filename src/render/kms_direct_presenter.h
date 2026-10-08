@@ -105,6 +105,10 @@ public:
         uint64_t count = 0;
     };
     const FlipInfo& lastFlip() const { return lastFlip_; }
+    /// A flip has been committed and its completion event not read yet: a
+    /// direct scanout commits without waiting (presentComposited waits for
+    /// its own flip), so the frame loop waits for it before the next commit.
+    bool flipPending() const { return flipPending_; }
     /// The mode's refresh period, ms (0 before init).
     double refreshPeriodMs() const;
 
@@ -172,6 +176,7 @@ private:
     // Reads pending DRM events for up to timeoutMs, noting a flip in lastFlip_.
     bool readEvents(int timeoutMs);
     FlipInfo lastFlip_;
+    bool flipPending_ = false;
     PresentTiming lastTiming_;
     FrameTap* frameTap_ = nullptr;
     ScanoutListener scanoutListener_;
