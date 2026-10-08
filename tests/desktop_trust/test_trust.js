@@ -35,8 +35,11 @@ for (const ns of ['apps', 'vfs', 'keys', 'themes', 'search', 'thumb', 'conf']) {
 // A trusted shell app receives the privileged namespaces.
 const cp = require('child_process');
 const fs = require('fs');
+// The binary running this test first: a stale build elsewhere in the tree
+// may predate the trust rules under test.
 const candidates = [
     process.env.BRO_HEADLESS,
+    process.execPath,
     './build/Release/bro-headless.exe',
     './build/bro-headless',
     './build-release/bro-headless',
