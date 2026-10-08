@@ -155,6 +155,18 @@ public:
         return promotedActive_.load(std::memory_order_relaxed);
     }
 
+    /// Whether the last pass advanced an animation the compositor cannot
+    /// carry (left/width/color/...): that element's new value is in the base
+    /// layer, so the base has to be re-recorded for it to show. The pass
+    /// clears the document's dirty flag, so the main thread cannot see this
+    /// any other way.
+    void setBaseAnimated(bool animated) {
+        baseAnimated_.store(animated, std::memory_order_relaxed);
+    }
+    bool baseAnimated() const {
+        return baseAnimated_.load(std::memory_order_relaxed);
+    }
+
     // ---- lifecycle ----
 
     void postShutdown() {
@@ -171,6 +183,7 @@ private:
     std::atomic<int> insetBottom_{0};
     std::atomic<bool> animationsActive_{false};
     std::atomic<bool> promotedActive_{false};
+    std::atomic<bool> baseAnimated_{false};
     std::atomic<dom::Element*> hoveredElement_{nullptr};
     std::atomic<double> timeMs_{0.0};
 };

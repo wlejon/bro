@@ -125,6 +125,7 @@ void Engine::layoutThreadFunc() {
             // layer composites over the whole base, and the top layer has to
             // stay above everything. Those animations re-record instead.
             const bool topLayerActive = !document_->topLayer().empty();
+            bool baseAnimated = false;
             auto routePromotion = [&](dom::Element* e) {
                 if (!topLayerActive &&
                     isTransformOpacityOnly(e, webAnimationManager_) &&
@@ -135,6 +136,7 @@ void Engine::layoutThreadFunc() {
                     // layout, so it dirties the element and forces the pass.
                     e->markDirty();
                     layoutAffecting = true;
+                    baseAnimated = true;
                 }
             };
             // CSS animations and transitions are Web Animations records: the
@@ -142,7 +144,9 @@ void Engine::layoutThreadFunc() {
             for (auto* e : webAnimationManager_.activeThisTick()) routePromotion(e);
 
             layoutPipeline_->setAnimationsActive(animActive);
-            layoutPipeline_->setPromotedActive(!promotedElements_.empty());            const double tLayout = util::currentTimeMs();
+            layoutPipeline_->setPromotedActive(!promotedElements_.empty());
+            layoutPipeline_->setBaseAnimated(baseAnimated);
+            const double tLayout = util::currentTimeMs();
             layoutPassTimes_.animTickMs = tLayout - tTick;
             layoutPassTimes_.activeAnimations =
                 static_cast<uint32_t>(webAnimationManager_.activeThisTick().size());

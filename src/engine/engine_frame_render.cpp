@@ -94,7 +94,9 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
             deliverMediaQueryChangesAllRealms();
 
             bool promotedSetChanged = (promotedElements_ != basePromotedSet_);
-            if (baseWasDirty || promotedSetChanged || !baseValid_) {
+            // An animation the compositor cannot carry changed the base this
+            // pass; the pass cleared the document's dirty flag behind it.
+            if (baseWasDirty || promotedSetChanged || !baseValid_ || layoutPipeline_->baseAnimated()) {
                 uiDirty_ = true;
                 appBaseDirty_ = true;
             }
