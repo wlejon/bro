@@ -43,7 +43,8 @@ struct CompositorConfig {
 struct ClientWindowInfo {
     uint64_t id = 0;
     brocompositor::Rect frame;      // the client, layout px
-    brocompositor::Margins insets;  // the shell frame's reach around it (zero: no frame)
+    brocompositor::Margins insets;  // the shell frame's reach around it
+    bool framed = false;            // the shell frames it (zero insets: borderless)
     bool focused = false;
     bool maximized = false;
     bool fullscreen = false;

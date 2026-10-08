@@ -98,6 +98,12 @@ void WindowFrames::write(Entry& e, dom::Element* el, const FrameWindow* w, int z
         else el->removeAttribute("data-window-focused");
         was.focused = w->focused;
     }
+    const bool borderless = w->borderless();
+    if (was.borderless != borderless) {
+        if (borderless) el->setAttribute("data-window-borderless", "");
+        else el->removeAttribute("data-window-borderless");
+        was.borderless = borderless;
+    }
 }
 
 void WindowFrames::sync(dom::Document* doc, std::vector<FrameWindow> stack) {
@@ -122,7 +128,7 @@ void WindowFrames::sync(dom::Document* doc, std::vector<FrameWindow> stack) {
         if (e.window != 0 && !shown_.count(e.window)) {
             for (size_t i = 0; i < stack_.size(); ++i) {
                 if (stack_[i].id != e.window) continue;
-                if (stack_[i].framed()) {
+                if (stack_[i].framed) {
                     w = &stack_[i];
                     z = static_cast<int>(i) + 1;
                 }
@@ -139,6 +145,17 @@ void WindowFrames::sync(dom::Document* doc, std::vector<FrameWindow> stack) {
 dom::Element* WindowFrames::frameOf(uint64_t windowId) const {
     auto it = shown_.find(windowId);
     return it == shown_.end() ? nullptr : it->second.get();
+}
+
+bool WindowFrames::overlayHit(uint64_t windowId, const dom::Element* hit) const {
+    const dom::Element* frame = frameOf(windowId);
+    if (!frame || !hit) return false;
+    bool inOverlay = false;
+    for (const dom::Element* cur = hit; cur; cur = cur->parentElement()) {
+        if (cur == frame) return inOverlay;
+        if (cur->hasAttribute("data-window-overlay")) inOverlay = true;
+    }
+    return false;
 }
 
 std::vector<layout::DrawTraversal::ClientWindowSlot> WindowFrames::slots() const {

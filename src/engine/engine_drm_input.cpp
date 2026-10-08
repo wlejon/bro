@@ -171,7 +171,8 @@ bool Engine::routeDrmKey(const platform::DrmInputEvent& ev) {
 // Whether the pointer at (x, y) is a client's: walking the stack top down,
 // the first window whose surface is under it takes it, unless the shell's
 // frame for a window above is (the frame's own hit test: a transparent shadow
-// with pointer-events: none lets it through). The shell's overlays (z-index
+// with pointer-events: none lets it through). A frame's data-window-overlay
+// parts are over its own client, so they are hit before it. The shell's overlays (z-index
 // >= 1000) are above every window, its desktop below them all.
 bool Engine::drmPointerOnClient(float x, float y, uint64_t* frameWindow) {
     if (frameWindow) *frameWindow = 0;
@@ -184,13 +185,18 @@ bool Engine::drmPointerOnClient(float x, float y, uint64_t* frameWindow) {
     dom::Element* hit = nullptr;
     bool hitTested = false;
     for (auto it = stack.rbegin(); it != stack.rend(); ++it) {
-        if (comp->windowSurfaceAt(it->id, x, y)) return true;
         dom::Element* frame = drmCtx_->frames.frameOf(it->id);
-        if (!frame) continue;
-        if (!hitTested) {
+        if (frame && !hitTested) {
             hit = hitTest(x, y);
             hitTested = true;
         }
+        // The frame's overlays are drawn over its client: theirs first.
+        if (frame && drmCtx_->frames.overlayHit(it->id, hit)) {
+            if (frameWindow) *frameWindow = it->id;
+            return false;
+        }
+        if (comp->windowSurfaceAt(it->id, x, y)) return true;
+        if (!frame) continue;
         for (dom::Element* cur = hit; cur; cur = cur->parentElement()) {
             if (cur != frame) continue;
             if (frameWindow) *frameWindow = it->id;

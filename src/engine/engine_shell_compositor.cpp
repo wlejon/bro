@@ -110,6 +110,7 @@ void Engine::syncShellWindowFrames() {
                 f.insetTop = w.insets.top;
                 f.insetRight = w.insets.right;
                 f.insetBottom = w.insets.bottom;
+                f.framed = w.framed;
             }
             f.focused = w.focused;
             f.maximized = w.maximized;
@@ -122,7 +123,7 @@ void Engine::syncShellWindowFrames() {
     const auto& was = drmCtx_->frames.stack();
     bool restacked = was.size() != stack.size();
     for (size_t i = 0; !restacked && i < stack.size(); ++i)
-        restacked = was[i].id != stack[i].id || was[i].framed() != stack[i].framed();
+        restacked = was[i].id != stack[i].id || was[i].framed != stack[i].framed;
     drmCtx_->frames.sync(isShellApp() ? document_.get() : nullptr, std::move(stack));
     if (restacked) markAppBaseDirty();
 #endif

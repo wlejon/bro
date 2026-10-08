@@ -142,6 +142,47 @@ try {
     flush();
     assert(frames[b.id].getAttribute('data-window-state') === 'maximized', 'maximized state attribute');
     assert(frames[b.id].getBoundingClientRect().top === 0, 'maximized frame at the top of the work area');
+    assert(!frames[b.id].hasAttribute('data-window-borderless'), 'a title bar is not borderless');
+
+    // Borderless maximize: zero maximized insets. The client fills the work
+    // area from its top-left pixel, and the frame stays, covering exactly it.
+    bro.compositor.setDecorations({ maximizedInsets: 0 });
+    waitFor(() => bro.compositor.getWindow(b.id).frame.y === 0, 'b re-fitted without a title bar');
+    flush();
+    const bw = bro.compositor.getWindow(b.id);
+    assert(bw.framed && bw.borderless, 'b framed and borderless: ' + JSON.stringify(bw));
+    assert(bw.frame.x === 0 && bw.frame.width === window.innerWidth, 'b fills the width: ' + JSON.stringify(bw.frame));
+    assert(frames[b.id].style.display !== 'none', 'a borderless window keeps its frame');
+    assert(frames[b.id].hasAttribute('data-window-borderless'), 'borderless attribute');
+    const rbl = frames[b.id].getBoundingClientRect();
+    assert(rbl.left === 0 && rbl.top === 0 && rbl.width === bw.frame.width && rbl.height === bw.frame.height,
+           'the borderless frame covers exactly the client: ' + JSON.stringify(rbl));
+    assert(!bro.compositor.getWindow(a.id).borderless, 'a normal window is not borderless');
+
+    // A press near its top is the client's: no title band out of the policy.
+    assert(hostPointer('down', 600, 10) === false, 'a borderless client keeps its top edge');
+    hostPointer('up', 600, 10);
+    assert(!bro.compositor.getDrag(), 'no move armed on a borderless client');
+
+    // An overlay in the frame is over the client and takes the pointer first.
+    const overlay = document.createElement('div');
+    overlay.setAttribute('data-window-overlay', '');
+    overlay.style.cssText = 'position: absolute; top: 0; right: 0; width: 24px; height: 24px; background: #f0f';
+    let overlayDowns = 0;
+    overlay.addEventListener('mousedown', () => ++overlayDowns);
+    frames[b.id].appendChild(overlay);
+    flush();
+    const ox = window.innerWidth - 10;
+    assert(hostPointer('down', ox, 10) === true, 'the overlay over the client is the shell\'s');
+    hostPointer('up', ox, 10);
+    assert(overlayDowns === 1, 'the overlay got the press');
+    assert(hostPointer('down', ox, 40) === false, 'below the overlay the client has it');
+    hostPointer('up', ox, 40);
+    // Back to a title bar: the attribute goes.
+    bro.compositor.setDecorations({ maximizedInsets: { top: 36 } });
+    waitFor(() => bro.compositor.getWindow(b.id).frame.y === 36, 'title bar back');
+    flush();
+    assert(!frames[b.id].hasAttribute('data-window-borderless'), 'borderless attribute cleared');
 
     if (process.env.BRO_FRAMES_SCREENSHOT) screenshot(process.env.BRO_FRAMES_SCREENSHOT);
 } catch (e) {

@@ -342,6 +342,7 @@ std::vector<ClientWindowInfo> WaylandCompositor::stack() const {
         w.snap = "none";
         if (wm_) {
             w.insets = wm_->decoration_insets(id);
+            w.framed = wm_->framed(id);
             if (auto v = wm_->window(id)) w.snap = brocompositor::to_string(v->snap);
         }
         out.push_back(std::move(w));

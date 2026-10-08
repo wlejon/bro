@@ -16,10 +16,18 @@
 //   position: fixed, box-sizing: border-box, left / top / width / height (the
 //   outer rect), z-index (1 + its window's place in the stack), display: none
 //   while its window is not shown with a frame (no such window, minimized,
-//   fullscreen, on another workspace, not decorated, no insets);
+//   fullscreen, on another workspace, not decorated, no frames declared);
 //   data-window-state="normal" | "maximized", data-window-snap="left" | ...
 //   (absent when not snapped), data-window-focused (present on the focused
-//   window's frame).
+//   window's frame), data-window-borderless (present while the window's
+//   state has a zero band: the frame's box is exactly the client's).
+//
+// Overlays: an element inside a frame carrying data-window-overlay is lifted
+// out of the frame and painted just above its window (still under the
+// windows above it), and the pointer over it is the shell's before the
+// client's. That is how a frame floats controls over its own client, the
+// way a borderless window shows its buttons on hover; parts with
+// pointer-events: none let the client have the pointer.
 #pragma once
 
 #include "dom/node_handle.h"
@@ -44,11 +52,12 @@ struct FrameWindow {
     uint64_t id = 0;
     int x = 0, y = 0, width = 0, height = 0;                    // the client
     int insetLeft = 0, insetTop = 0, insetRight = 0, insetBottom = 0;  // the frame's reach around it
+    bool framed = false;     // the shell frames it (with zero insets: borderless)
     bool focused = false;
     bool maximized = false;
     std::string snap = "none";
 
-    bool framed() const { return insetLeft > 0 || insetTop > 0 || insetRight > 0 || insetBottom > 0; }
+    bool borderless() const { return insetLeft <= 0 && insetTop <= 0 && insetRight <= 0 && insetBottom <= 0; }
 };
 
 class WindowFrames {
@@ -61,6 +70,9 @@ public:
     const std::vector<FrameWindow>& stack() const { return stack_; }
     // The frame element drawn for a window (null: none shown).
     dom::Element* frameOf(uint64_t windowId) const;
+    // Whether `hit` (a hit-tested element) is inside one of the overlays of
+    // the frame drawn for `windowId`.
+    bool overlayHit(uint64_t windowId, const dom::Element* hit) const;
     // The stack with each window's frame element, for the paint pass.
     std::vector<layout::DrawTraversal::ClientWindowSlot> slots() const;
 
@@ -76,6 +88,7 @@ private:
         bool placed = false;
         std::string state, snap;
         bool focused = false;
+        bool borderless = false;
     };
     // Every [data-window-frame] element (document order) with the window it
     // names and what was last written on it. Handles, not pointers: a frame

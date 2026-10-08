@@ -203,7 +203,8 @@ if (bro.compositor.available) {
  * - a left press within `titlebarHeight` px of the frame top moves the window once the pointer
  *   has travelled a few pixels; the press also reaches the client, so a click there (a CSD
  *   button) is still a click (not for fullscreen windows).
- * 0 or an empty list switches a rule off.
+ * The border and title rules skip windows the shell frames (`framed`, borderless ones too):
+ * their frame's own edges and title bar do that. 0 or an empty list switches a rule off.
  * @typedef {Object} Interaction
  * @property {number} titlebarHeight   default 38
  * @property {number} resizeBorder     default 6
@@ -261,7 +262,11 @@ if (bro.compositor.available) {
  *                                 the frame band around it right now (zero: no frame)
  * @property {{x:number, y:number, width:number, height:number}} outerFrame
  *                                 frame plus decoration (the rect a frame element takes)
- * @property {string} snap         'none' | 'maximize' | 'left' | 'right' | 'top-left' |
+ * @property {boolean} framed      the shell frames it right now (decorated, frames declared,
+ *                                 not fullscreen), whether or not its band is zero
+ * @property {boolean} borderless  framed with a zero band: the client fills its rect edge to
+ *                                 edge and the frame element covers exactly the client
+ * @property {string} snap        'none' | 'maximize' | 'left' | 'right' | 'top-left' |
  *                                 'top-right' | 'bottom-left' | 'bottom-right'
  */
 
@@ -278,10 +283,15 @@ bro.compositor.raiseWindow = function (id) {};
 /**
  * The frame the shell draws around decorated windows: how far it reaches past the client on
  * each side (title bar: top; the sides and bottom are typically an invisible resize grab).
- * Maximized windows use `maximizedInsets` (usually the title bar only). The window manager
+ * Maximized windows use `maximizedInsets` (a title bar, or zero). The window manager
  * fits frame and client together: maximize and snapping fill the work area with the whole
  * frame, a new window is nudged so its title bar is on screen, and the decoration counts in
- * the minimum size. Zero insets (the default) mean no frames. A number sets all four sides.
+ * the minimum size. Zero insets in both (the default) mean no frames. Zero in one state only
+ * makes that state borderless: the window is still framed (its frame element shows, with
+ * `data-window-borderless`, covering exactly the client), so the shell can float controls
+ * over it (overlays, below), and a press anywhere on its client is the client's (the
+ * interaction policy's title band does not apply to a framed window). A number sets all
+ * four sides.
  * @param {{insets?: number|{top?:number,left?:number,right?:number,bottom?:number},
  *          maximizedInsets?: number|{top?:number,left?:number,right?:number,bottom?:number}}} config
  * @returns {{insets:Object, maximizedInsets:Object}} the resulting configuration
@@ -300,9 +310,16 @@ bro.compositor.getDecorations = function () {};
  * - it writes, as inline style: `position: fixed`, `box-sizing: border-box`, `left`, `top`,
  *   `width`, `height` (outerFrame), `z-index` (1 + its place in the stack, so DOM hit tests
  *   between frames agree with the composite), and `display: none` while its window shows no
- *   frame (not decorated, no insets, fullscreen, minimized, on a hidden workspace, unknown id);
+ *   frame (not `framed`: not decorated, no frames declared, fullscreen; or minimized, on a
+ *   hidden workspace, unknown id);
  * - and as attributes: `data-window-state` ('normal' | 'maximized'), `data-window-snap`
- *   (the snapped zone; absent when not snapped), `data-window-focused` (present while focused).
+ *   (the snapped zone; absent when not snapped), `data-window-focused` (present while focused),
+ *   `data-window-borderless` (present while its band is zero).
+ * Overlays: an element inside a frame carrying `data-window-overlay` leaves the frame's paint
+ * and is drawn just above the window instead (still under the windows above it), and the
+ * pointer over it goes to the shell before the client. That is how a frame floats controls
+ * over its client, such as a borderless window's buttons revealed by hovering its corner;
+ * keep overlays small and give `pointer-events: none` to any part the client should keep.
  * Everything else (title, buttons, shadow, glow) is the shell's markup and CSS. Contract:
  * - put frames in a container at desktop level (z-index below 1000) with `pointer-events: none`
  *   so the container itself is never hit; give the frames `pointer-events: auto` where they

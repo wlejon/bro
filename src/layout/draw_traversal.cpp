@@ -194,6 +194,7 @@ void DrawTraversal::draw(dom::Element* root, float scrollX, float scrollY,
     if (rootSC) paintTopLayer(root);
     topLayerSCs_.clear();
     frameSCs_.clear();
+    frameOverlaySCs_.clear();
 }
 
 void DrawTraversal::drawElement(dom::Element* elem, float offsetX, float offsetY) {
@@ -245,6 +246,7 @@ std::unique_ptr<StackingContext> DrawTraversal::buildStackingContextTree(
     // The shell's window frames, painted with their windows instead.
     std::unordered_set<const dom::Element*> frameSet;
     frameSCs_.clear();
+    frameOverlaySCs_.clear();
     if (shellClientWindows_ && clientSlots_)
         for (const auto& s : *clientSlots_)
             if (s.frame) frameSet.insert(s.frame);
@@ -342,6 +344,20 @@ std::unique_ptr<StackingContext> DrawTraversal::buildStackingContextTree(
         StackingContext frameHolder;
         const bool isFrame = elem != root && !inTopLayer && frameSet.count(elem) != 0;
         if (isFrame) currentSC = &frameHolder;
+        // An overlay inside a frame leaves the frame: emitClientWindows
+        // paints it over the frame's window.
+        const dom::Element* overlayFrame = nullptr;
+        if (!isFrame && !inTopLayer && !frameSet.empty() && elem != root &&
+            elem->hasAttribute("data-window-overlay")) {
+            for (dom::Element* p = elem->parentElement(); p; p = p->parentElement())
+                if (frameSet.count(p)) {
+                    overlayFrame = p;
+                    break;
+                }
+        }
+        const bool isOverlay = overlayFrame != nullptr;
+        StackingContext overlayHolder;
+        if (isOverlay) currentSC = &overlayHolder;
         if (inTopLayer) {
             topLayerOffset(elem, offX, offY);
             currentSC = &topHolder;
@@ -355,7 +371,7 @@ std::unique_ptr<StackingContext> DrawTraversal::buildStackingContextTree(
                 !fixedContainingBlock(elem))
                 topLayerOffset(elem, offX, offY);
         }
-        const std::vector<ClipRect>& inClips = (inTopLayer || isFrame) ? kNoClips : ancestorClips;
+        const std::vector<ClipRect>& inClips = (inTopLayer || isFrame || isOverlay) ? kNoClips : ancestorClips;
 
         // Compute child offset using the same logic as drawElementContent
         auto& box = elem->layoutBox();
@@ -367,7 +383,7 @@ std::unique_ptr<StackingContext> DrawTraversal::buildStackingContextTree(
         float childOffY = y - scrollTop;
 
         bool isThisRoot = (elem == root);
-        bool isSC = inTopLayer || isFrame || createsStackingContext(elem, isThisRoot);
+        bool isSC = inTopLayer || isFrame || isOverlay || createsStackingContext(elem, isThisRoot);
         bool positioned = isPositioned(style);
 
         // Clips this element is actually subject to: an out-of-flow box drops
@@ -444,6 +460,9 @@ std::unique_ptr<StackingContext> DrawTraversal::buildStackingContextTree(
         }
         if (isFrame && !frameHolder.children.empty()) {
             frameSCs_[elem] = std::move(frameHolder.children.back());
+        }
+        if (isOverlay && !overlayHolder.children.empty()) {
+            frameOverlaySCs_[overlayFrame].push_back(std::move(overlayHolder.children.back()));
         }
     };
 
@@ -785,6 +804,13 @@ void DrawTraversal::emitClientWindows() {
             const float bx = box.contentRect.x + sc->offsetX - box.padding.left - box.border.left;
             const float by = box.contentRect.y + sc->offsetY - box.padding.top - box.border.top;
             refs.push_back(render::ClientWindowRef{slot.windowId, true, bx + slot.insetLeft, by + slot.insetTop});
+            // The frame's overlays go over its window: end the run here.
+            auto ov = frameOverlaySCs_.find(slot.frame);
+            if (ov != frameOverlaySCs_.end() && !ov->second.empty()) {
+                flush(0);
+                for (auto& osc : ov->second)
+                    if (osc) paintStackingContext(osc.get(), false);
+            }
         }
     }
     flush(render::kClientLayersAbove);

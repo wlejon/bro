@@ -135,7 +135,10 @@ public:
     // the shell draws as its frame (null: none). A frame element leaves the
     // document's stacking order: it is painted, with its subtree, just below
     // its window, where the windows interleave with the shell (the
-    // ClientWindowsLayerSource breaks). `insetLeft/Top` is where the client
+    // ClientWindowsLayerSource breaks). An element inside a frame carrying
+    // data-window-overlay leaves the frame too: it is painted just above
+    // the window (controls floated over the client, e.g. a borderless
+    // window's buttons), under the windows above it. `insetLeft/Top` is where the client
     // sits inside the frame's border box. The runs the pass recorded are
     // appended to `out`; `listId` names them in the breaks.
     struct ClientWindowSlot {
@@ -291,6 +294,9 @@ private:
     uint32_t clientListId_ = 0;
     // Frame elements' stacking contexts, lifted out of the tree, by element.
     std::unordered_map<const dom::Element*, std::unique_ptr<StackingContext>> frameSCs_;
+    // A frame's overlays ([data-window-overlay] inside it), lifted out of the
+    // frame and painted over its window, by frame element, document order.
+    std::unordered_map<const dom::Element*, std::vector<std::unique_ptr<StackingContext>>> frameOverlaySCs_;
     void emitClientWindows();
 
     // Running stack of axis-aligned overflow/scroll clip rects (each already
