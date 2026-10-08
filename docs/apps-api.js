@@ -69,9 +69,18 @@ console.log(`Is running: ${processHandle.isRunning()}`);
 // 3. Icon Resolution (`bro.apps.resolveIcon`)
 // ============================================================================
 
-// Resolve an icon name to a file path on disk:
+// Resolve an icon name to a file path on disk (null when nothing matches).
+// Follows the freedesktop Icon Theme Specification: the theme (default: the
+// desktop's configured one: KDE kdeglobals, then GTK settings.ini, else hicolor),
+// its Inherits chain, hicolor, then the unthemed dirs (~/.icons, <data>/icons,
+// /usr/share/pixmaps). An exact size/scale match wins, otherwise the closest size.
+// An absolute path is returned as is when the file exists.
+//   size  - logical px (default 48); a bare number may be passed instead of options
+//   scale - integer UI scale (default 1); 2 prefers 48x48@2 dirs on a 2x display
+//   theme - theme directory name; unknown themes fall back to the configured one
 const iconPath = bro.apps.resolveIcon('text-editor', {
     size: 48,
+    scale: 1,
     theme: 'Adwaita'
 });
 console.log(`Resolved icon path: ${iconPath}`);
