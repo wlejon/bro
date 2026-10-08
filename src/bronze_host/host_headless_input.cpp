@@ -105,6 +105,20 @@ void installHeadlessInput(engine::Engine& engine) {
             return ev::fromUtf8(engine.resolvedCursor(wid));
         }, 0, "currentCursor"));
 
+    // shellClaimsPointerAt(x, y) / shellClaimsKeyboard(): the DRM shell host's
+    // routing rules (engine/shell_input_rules.cpp), asked of this document.
+    regBoth("shellClaimsPointerAt", ev::makeFunction(
+        [&engine](Value, std::span<const Value> a) -> Value {
+            if (a.size() < 2) return ev::throwTypeError("shellClaimsPointerAt(x, y) requires x and y");
+            engine.flush();
+            return ev::fromBool(engine.shellClaimsPointerAt(static_cast<float>(ev::toDouble(a[0])),
+                                                            static_cast<float>(ev::toDouble(a[1]))));
+        }, 2, "shellClaimsPointerAt"));
+    regBoth("shellClaimsKeyboard", ev::makeFunction(
+        [&engine](Value, std::span<const Value>) -> Value {
+            return ev::fromBool(engine.shellClaimsKeyboard());
+        }, 0, "shellClaimsKeyboard"));
+
     // click(x, y [, button, windowId])
     regBoth("click", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {

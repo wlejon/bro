@@ -113,10 +113,13 @@ bool registerNatives_window(std::string* error) {
         fn("__bro_native.window.hasTray", p(&bro_window_hasTray), "bool", {}, error) &&
         fn("__bro_native.window.isTrayAvailable", p(&bro_window_isTrayAvailable), "bool", {}, error) &&
         fn("__bro_native.window.simulateTrayClick", p(&bro_window_simulateTrayClick), "void", {"str"}, error) &&
-        fn("__bro_native.window.registerGlobalHotkey", p(&bro_window_registerGlobalHotkey), "i32", {"str"}, error) &&
+        fn("__bro_native.window.registerGlobalHotkey", p(&bro_window_registerGlobalHotkey), "i32", {"str", "bool"}, error) &&
         fn("__bro_native.window.unregisterGlobalHotkey", p(&bro_window_unregisterGlobalHotkey), "bool", {"i32"}, error) &&
         fn("__bro_native.window.unregisterAllGlobalHotkeys", p(&bro_window_unregisterAllGlobalHotkeys), "void", {}, error) &&
         fn("__bro_native.window.simulateGlobalHotkey", p(&bro_window_simulateGlobalHotkey), "bool", {"str"}, error) &&
+        fn("__bro_native.window.simulateHotkeyKey", p(&bro_window_simulateHotkeyKey), "i32", {"str", "str", "i32", "bool", "bool"}, error) &&
+        fn("__bro_native.window.resetHotkeyKeys", p(&bro_window_resetHotkeyKeys), "void", {}, error) &&
+        getter("__bro_native.window.displayMode", p(&bro_window_displayMode_get), "str", error) &&
         fn("__bro_native.window.requestSingleInstance", p(&bro_window_requestSingleInstance), "bool", {"str", "str"}, error) &&
         fn("__bro_native.window.shutdownSingleInstance", p(&bro_window_shutdownSingleInstance), "void", {}, error) &&
         fn("__bro_native.window.simulateSingleInstance", p(&bro_window_simulateSingleInstance), "bool", {"str", "str"}, error) &&

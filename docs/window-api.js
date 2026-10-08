@@ -212,12 +212,42 @@ bro.window.hasTray = function() {};
 bro.window.isTrayAvailable = function() {};
 
 /**
- * Registers an OS-wide global hotkey accelerator.
- * @param {string} accelerator e.g. "CommandOrControl+Shift+T", "Alt+Space"
- * @param {function} callback
+ * How bro is presenting: 'windowed' (an OS window), 'headless', 'server' (bro-server) or
+ * 'drm' (bro --drm: bro is the display server and the app is the desktop shell; see
+ * docs/compositor-api.js for how input is routed between the shell and client windows).
+ * @type {string}
+ * @readonly
+ */
+bro.window.displayMode;
+
+/**
+ * Registers a global hotkey: a chord that reaches the app whichever window has the keyboard.
+ *
+ * Accelerators: modifiers (Ctrl/Control, Alt/Option, Shift, Super/Meta/Cmd/Win,
+ * CommandOrControl) joined by '+' with one key: A-Z, 0-9, F1-F24, Space, Tab, Enter, Escape,
+ * Backspace, Delete, Insert, Home, End, PageUp, PageDown, Up/Down/Left/Right, punctuation (','),
+ * VolumeUp, VolumeDown, VolumeMute, MediaPlayPause, MediaNextTrack, MediaPreviousTrack,
+ * MediaStop, PrintScreen. Modifiers alone ("Super") are a tap: pressed and released with no
+ * other key or pointer button in between; it fires on the release.
+ *
+ * Delivery: under DRM (bro.window.displayMode === 'drm') every key is matched before it is
+ * routed: a matched chord's key reaches neither the focused client nor the app's DOM (its
+ * repeats and release included), and the callback runs before the next key is routed.
+ * Modifier keys themselves are never swallowed. Other hosts accept the registration (Windows
+ * also reserves the chord with RegisterHotKey) but do not deliver it yet, and headless only
+ * through __bro_native.window.simulateGlobalHotkey; keep a keydown handler for those.
+ *
+ * @param {string} accelerator e.g. "Super+L", "CommandOrControl+Shift+T", "Alt+Tab", "Super"
+ * @param {function({id:number, accelerator:string})} callback runs only for this registration
+ * @param {Object} [options]
+ * @param {boolean} [options.grab=false] When the chord fires, the app keeps the keyboard until
+ *   every modifier of the chord has been released, the release included, so its DOM sees the
+ *   keys that follow (arrows, Escape, the Alt keyup). For an Alt+Tab switcher: register
+ *   'Alt+Tab' and 'Alt+Shift+Tab' with grab (each further Tab fires the callback again) and
+ *   commit on the Alt keyup. DRM only.
  * @returns {number} hotkey ID (> 0) on success, 0 on failure
  */
-bro.window.registerGlobalHotkey = function(accelerator, callback) {};
+bro.window.registerGlobalHotkey = function(accelerator, callback, options) {};
 
 /**
  * Unregisters a previously registered global hotkey.

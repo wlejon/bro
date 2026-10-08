@@ -1,10 +1,14 @@
 #pragma once
 
+#include <cstdint>
 #include <memory>
+#include <set>
+#include <vector>
 
 namespace bro::platform {
 class DrmSeatPlatform;
 class DrmInputPlatform;
+struct DrmInputEvent;
 }
 
 namespace bro::compositor {
@@ -27,6 +31,10 @@ struct DrmPlatformContext {
     std::unique_ptr<compositor::WaylandCompositor> compositor;
     std::vector<compositor::LeasedSurfaceFrame> leasedFrames;
 #endif
+    // Where each held key's press went, so its auto-repeats and its release
+    // follow it (engine_drm_input.cpp). Keyed by scancode.
+    std::set<uint32_t> keysToClient;
+    std::set<uint32_t> keysToShell;
 };
 
 } // namespace bro::engine

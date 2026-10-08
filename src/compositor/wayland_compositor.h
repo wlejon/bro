@@ -116,6 +116,11 @@ public:
 
     /// Route pointer to surface under (x, y), returns true if a Wayland surface was hit
     bool routePointer(double x, double y, uint32_t time = 0);
+
+    /// The window manager's reading of a press at layout point (x, y) on
+    /// window winId under its interaction policy (bro.compositor.setInteraction).
+    brocompositor::PressDecision classifyPress(uint64_t winId, double x, double y, uint32_t modifiers,
+                                               brocompositor::PressButton button) const;
 #endif
 
 private:

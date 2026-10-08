@@ -484,7 +484,13 @@ public:
     /// when the point lands on no box at all. Public because JS asks the same
     /// question through document.elementFromPoint().
     dom::Element* hitTest(float x, float y);
-    bool isShellOverlayAt(float x, float y);
+
+    /// DRM shell-host routing rules, read from the document's markup and
+    /// style (shell_input_rules.cpp): whether the pointer at (x, y) belongs
+    /// to the shell rather than the client window under it, and whether the
+    /// keyboard does rather than the focused client window.
+    bool shellClaimsPointerAt(float x, float y);
+    bool shellClaimsKeyboard();
 
 private:
     GraphicsConfig graphicsConfig_;
@@ -684,7 +690,22 @@ private:
     std::unique_ptr<render::VulkanSwapchain> vulkanSwapchain_;
     std::unique_ptr<render::VulkanPresenter> vulkanPresenter_;
     std::unique_ptr<DrmPlatformContext> drmCtx_;
-    void initDrm(const EngineConfig& config); void runDrm();
+    void initDrm(const EngineConfig& config);
+    void runDrm();
+    // engine_run_drm.cpp: one frame of the DRM loop, in stages.
+    void drmFrame();
+    void drmDrainLayoutEvents();
+    void drmPollPlatform();
+    double drmTickWorld(double scaledFrameDtMs);  // returns the wall time it ticked panels at
+    bool drmSignalLayout(bool baseWasDirty);
+    // engine_drm_input.cpp: input routing between the shell document and
+    // client windows.
+    void dispatchDrmInput(const platform::DrmInputEvent& ev);
+    bool routeDrmKey(const platform::DrmInputEvent& ev);
+    bool routeDrmPointer(const platform::DrmInputEvent& ev);
+    void deliverDrmInputToShell(const platform::DrmInputEvent& ev);
+    bool shellOwnsDrmPointerAt(float x, float y);
+    void blurShellFocus();
     // Skia's GPU context (null: Skia draws on CPU).
     std::unique_ptr<render::SkiaGpu> skiaGpu_;
     render::SkiaGpu* createSkiaGpu();

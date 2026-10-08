@@ -95,27 +95,41 @@ bool WaylandCompositor::pollEvents() {
     auto sevents = backend_->server_events().drain();
     if (!sevents.empty()) hadEvents = true;
 
+    using Kind = brocompositor::wl::WindowRequestKind;
     for (const auto& sev : sevents) {
-        if (auto* req = std::get_if<brocompositor::wl::WindowRequest>(&sev)) {
-            if (req->kind == brocompositor::wl::WindowRequestKind::Move) {
-                startInteractiveMove(req->window, lastPointerX_, lastPointerY_, true);
-            } else if (req->kind == brocompositor::wl::WindowRequestKind::Resize) {
-                startInteractiveResize(req->window, lastPointerX_, lastPointerY_, req->edges, true);
-            } else if (req->kind == brocompositor::wl::WindowRequestKind::Close) {
-                closeWindow(req->window);
-            } else if (req->kind == brocompositor::wl::WindowRequestKind::Maximize) {
-                setWindowState(req->window, true, false);
-            } else if (req->kind == brocompositor::wl::WindowRequestKind::Unmaximize) {
-                setWindowState(req->window, false, false);
-            } else if (req->kind == brocompositor::wl::WindowRequestKind::Fullscreen) {
-                setWindowState(req->window, false, true);
-            } else if (req->kind == brocompositor::wl::WindowRequestKind::Unfullscreen) {
-                setWindowState(req->window, false, false);
-            } else if (req->kind == brocompositor::wl::WindowRequestKind::Minimize) {
-                setWindowMinimized(req->window, true);
-            } else if (req->kind == brocompositor::wl::WindowRequestKind::Unminimize) {
-                setWindowMinimized(req->window, false);
+        auto* req = std::get_if<brocompositor::wl::WindowRequest>(&sev);
+        if (!req) continue;
+        if (req->kind == Kind::Move) {
+            startInteractiveMove(req->window, lastPointerX_, lastPointerY_, true);
+        } else if (req->kind == Kind::Resize) {
+            startInteractiveResize(req->window, lastPointerX_, lastPointerY_, req->edges, true);
+        } else if (req->kind == Kind::Close) {
+            closeWindow(req->window);
+        } else if (wm_ && wm_->window(req->window)) {
+            // State requests (the client's own buttons, a taskbar) go through
+            // the window manager, so maximize fills the work area the shell
+            // left free and restore returns the remembered frame.
+            std::vector<brocompositor::Command> cmds;
+            switch (req->kind) {
+                case Kind::Maximize: cmds = wm_->maximize(req->window); break;
+                case Kind::Fullscreen: cmds = wm_->fullscreen(req->window); break;
+                case Kind::Minimize: cmds = wm_->minimize(req->window); break;
+                case Kind::Unmaximize:
+                case Kind::Unfullscreen:
+                case Kind::Unminimize: cmds = wm_->restore(req->window); break;
+                default: break;
             }
+            backend_->execute(cmds);
+        } else if (req->kind == Kind::Maximize) {
+            setWindowState(req->window, true, false);
+        } else if (req->kind == Kind::Unmaximize || req->kind == Kind::Unfullscreen) {
+            setWindowState(req->window, false, false);
+        } else if (req->kind == Kind::Fullscreen) {
+            setWindowState(req->window, false, true);
+        } else if (req->kind == Kind::Minimize) {
+            setWindowMinimized(req->window, true);
+        } else if (req->kind == Kind::Unminimize) {
+            setWindowMinimized(req->window, false);
         }
     }
 
@@ -357,6 +371,14 @@ uint64_t WaylandCompositor::windowAt(double x, double y) const {
         }
     }
     return 0;
+}
+
+brocompositor::PressDecision WaylandCompositor::classifyPress(uint64_t winId, double x, double y,
+                                                             uint32_t modifiers,
+                                                             brocompositor::PressButton button) const {
+    if (!wm_) return {};
+    brocompositor::Point p{static_cast<int32_t>(std::floor(x)), static_cast<int32_t>(std::floor(y))};
+    return wm_->classify_press(static_cast<brocompositor::WindowId>(winId), p, modifiers, button);
 }
 
 bool WaylandCompositor::routePointer(double x, double y, uint32_t time) {

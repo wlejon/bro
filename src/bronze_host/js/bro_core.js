@@ -183,15 +183,20 @@
         }
     });
 
+    // 'windowed' | 'headless' | 'server' | 'drm' (bro owns the display and
+    // input as a desktop shell host).
+    accessor(bro.window, 'displayMode', () => __bro_native.window.displayMode, undefined);
+
     const hotkeyCallbacks = new Map();
-    fn(bro.window, 'registerGlobalHotkey', function registerGlobalHotkey(accelerator, callback) {
+    fn(bro.window, 'registerGlobalHotkey', function registerGlobalHotkey(accelerator, callback, options) {
         if (typeof accelerator !== 'string' || !accelerator) {
             throw new TypeError('bro.window.registerGlobalHotkey: accelerator string required');
         }
         if (typeof callback !== 'function') {
             throw new TypeError('bro.window.registerGlobalHotkey: callback function required');
         }
-        const id = __bro_native.window.registerGlobalHotkey(accelerator);
+        const grab = !!(options && options.grab);
+        const id = __bro_native.window.registerGlobalHotkey(accelerator, grab);
         if (id > 0) {
             hotkeyCallbacks.set(id, callback);
         }
@@ -209,9 +214,10 @@
         __bro_native.window.unregisterAllGlobalHotkeys();
     });
 
-    __bro_native.window._setHotkeyDispatcher(function (accelOrId) {
-        for (const [id, cb] of hotkeyCallbacks) {
-            try { cb({ id, accelerator: accelOrId }); } catch (e) { console.error(e); }
+    __bro_native.window._setHotkeyDispatcher(function (id, accelerator) {
+        const cb = hotkeyCallbacks.get(id);
+        if (typeof cb === 'function') {
+            try { cb({ id, accelerator }); } catch (e) { console.error(e); }
         }
     });
 

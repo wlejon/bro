@@ -446,19 +446,45 @@ void bro_window_simulateTrayClick(const char* itemId) {
     }
 }
 
-int32_t bro_window_registerGlobalHotkey(const char* accelerator) {
+int32_t bro_window_registerGlobalHotkey(const char* accelerator, bool grab) {
     if (!accelerator || !*accelerator) return 0;
     auto* w = getWindow();
     SDL_Window* sdlWin = w ? w->getSDLWindow() : nullptr;
     std::string accel = accelerator;
-    uint32_t id = platform::desktop::registerGlobalHotkey(sdlWin, accel, [accel]() {
+    platform::desktop::HotkeyOptions opts;
+    opts.grab = grab;
+    uint32_t id = platform::desktop::registerGlobalHotkey(sdlWin, accel, [accel](uint32_t hid) {
         if (g_hotkeyDispatcher) {
-            ev::Persistent arg(ev::fromUtf8(accel));
-            Value argv[1] = {arg.get()};
+            ev::Persistent idArg(ev::fromDouble(static_cast<double>(hid)));
+            ev::Persistent accelArg(ev::fromUtf8(accel));
+            Value argv[2] = {idArg.get(), accelArg.get()};
             ev::call(g_hotkeyDispatcher->get(), ev::undefined(), argv);
         }
-    });
+    }, opts);
     return static_cast<int32_t>(id);
+}
+
+int32_t bro_window_simulateHotkeyKey(const char* key, const char* mods, int32_t code, bool down, bool repeat) {
+    auto k = platform::desktop::hotkeyKeyFromNames(key ? key : "", mods ? mods : "",
+                                                   static_cast<uint32_t>(code), down, repeat);
+    auto r = platform::desktop::routeHotkeyKey(k);
+    return (r.consumed ? 1 : 0) | (r.fired ? 2 : 0) | (r.grabbed ? 4 : 0);
+}
+
+void bro_window_resetHotkeyKeys(void) {
+    platform::desktop::resetHotkeyKeyState();
+}
+
+const char* bro_window_displayMode_get(void) {
+    auto* eng = hostEngine();
+    if (!eng) return "headless";
+    switch (eng->displayMode()) {
+        case engine::DisplayMode::Windowed: return "windowed";
+        case engine::DisplayMode::Headless: return "headless";
+        case engine::DisplayMode::Server: return "server";
+        case engine::DisplayMode::Drm: return "drm";
+    }
+    return "windowed";
 }
 
 bool bro_window_unregisterGlobalHotkey(int32_t id) {

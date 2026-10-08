@@ -235,10 +235,17 @@ bool bro_window_isTrayAvailable(void);
 void bro_window_simulateTrayClick(const char* itemId);
 
 // bro.window global hotkeys
-int32_t bro_window_registerGlobalHotkey(const char* accelerator);
+int32_t bro_window_registerGlobalHotkey(const char* accelerator, bool grab);
 bool bro_window_unregisterGlobalHotkey(int32_t id);
 void bro_window_unregisterAllGlobalHotkeys(void);
 bool bro_window_simulateGlobalHotkey(const char* accelerator);
+// Feeds one key event through the hotkey router a DRM host uses (tests):
+// key is a key or modifier name, mods the held modifiers ("alt+shift").
+// Returns bits: 1 consumed, 2 fired, 4 grabbed.
+int32_t bro_window_simulateHotkeyKey(const char* key, const char* mods, int32_t code, bool down, bool repeat);
+void bro_window_resetHotkeyKeys(void);
+// "windowed" | "headless" | "server" | "drm"
+const char* bro_window_displayMode_get(void);
 
 // bro.window single instance
 bool bro_window_requestSingleInstance(const char* name, const char* argsJson);
