@@ -110,6 +110,10 @@ if(BRO_BUILD_TESTS)
     target_link_libraries(bro_software_cursor_test PRIVATE bro_render bro_platform bro_util skia Vulkan::Vulkan)
     target_include_directories(bro_software_cursor_test PRIVATE ${bro_SOURCE_DIR}/src)
 
+    add_executable(bro_shadow_ninepatch_test tests/test_shadow_ninepatch.cpp)
+    target_link_libraries(bro_shadow_ninepatch_test PRIVATE bro_render bro_platform bro_util skia Vulkan::Vulkan)
+    target_include_directories(bro_shadow_ninepatch_test PRIVATE ${bro_SOURCE_DIR}/src)
+
     if(BRO_WITH_DMABUF)
         add_executable(bro_vulkan_dmabuf_test tests/test_dmabuf_presenter.cpp)
         target_link_libraries(bro_vulkan_dmabuf_test PRIVATE bro_render bro_platform bro_util skia Vulkan::Vulkan brodmabuf::brodmabuf)
