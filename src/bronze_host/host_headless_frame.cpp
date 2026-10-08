@@ -367,20 +367,32 @@ void installHeadlessFrame(engine::Engine& engine) {
             return makeImageDataValue(w, h, pixels.data());
         }, 1, "presentedFrame"));
 
-    // screenshot(path [, selector])
+    // screenshot(path [, selector]) / screenshot(path, x, y, w, h)
+    //
+    // The rect form crops to a block of document CSS px, the space getPixels
+    // reads (and the selector form's getBoundingClientRect box).
     ev::registerGlobal("screenshot", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             if (a.empty()) return ev::throwTypeError("screenshot() requires a path argument");
             std::string path = ev::toUtf8(a[0]);
             bool ok = false;
-            if (a.size() >= 2 && ev::isString(a[1])) {
+            if (a.size() >= 2 && ev::isNumber(a[1])) {
+                if (a.size() < 5 || !ev::isNumber(a[2]) || !ev::isNumber(a[3]) || !ev::isNumber(a[4]))
+                    return ev::throwTypeError("screenshot(path, x, y, w, h) requires numeric x, y, w and h");
+                const int x = satCast<int>(ev::toDouble(a[1]));
+                const int y = satCast<int>(ev::toDouble(a[2]));
+                const int w = satCast<int>(ev::toDouble(a[3]));
+                const int h = satCast<int>(ev::toDouble(a[4]));
+                if (w <= 0 || h <= 0) return ev::throwRangeError("screenshot: w and h must be positive");
+                ok = engine.screenshot(path, x + engine.contentLeft(), y + engine.contentTop(), w, h);
+            } else if (a.size() >= 2 && ev::isString(a[1])) {
                 std::string selector = ev::toUtf8(a[1]);
                 auto* el = engine.querySelector(selector);
                 if (!el) {
                     return ev::throwTypeError(std::string("screenshot: element not found: ") + selector);
                 }
                 bro::dom::AbsoluteRect r = bro::dom::absoluteBorderBox(el);
-                float ax = r.x;
+                float ax = r.x + static_cast<float>(engine.contentLeft());
                 float ay = r.y + static_cast<float>(engine.contentTop());
                 int w = static_cast<int>(r.width);
                 int h = static_cast<int>(r.height);

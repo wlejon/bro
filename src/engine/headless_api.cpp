@@ -414,8 +414,10 @@ bool Engine::screenshot(const std::string& path, int cx, int cy, int cw, int ch)
         ch = y1 - cy;
     }
 
-    if (cx < 0) cx = 0;
-    if (cy < 0) cy = 0;
+    // Cut the rect to the frame: what hangs off an edge is dropped, not
+    // shifted back in.
+    if (cx < 0) { cw += cx; cx = 0; }
+    if (cy < 0) { ch += cy; cy = 0; }
     if (cx + cw > fw) cw = fw - cx;
     if (cy + ch > fh) ch = fh - cy;
     if (cw <= 0 || ch <= 0) return false;
