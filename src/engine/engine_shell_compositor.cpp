@@ -39,8 +39,13 @@ bool Engine::startShellCompositor(uint32_t width, uint32_t height, const std::st
     }
     auto* comp = drmCtx_->compositor.get();
     LOG_INFO("Engine: WaylandCompositor started on socket %s", comp->socketName().c_str());
+#if defined(_WIN32)
+    _putenv_s("WAYLAND_DISPLAY", comp->socketName().c_str());
+    if (!comp->xwaylandDisplay().empty()) _putenv_s("DISPLAY", comp->xwaylandDisplay().c_str());
+#else
     ::setenv("WAYLAND_DISPLAY", comp->socketName().c_str(), 1);
     if (!comp->xwaylandDisplay().empty()) ::setenv("DISPLAY", comp->xwaylandDisplay().c_str(), 1);
+#endif
 #if BRO_HAVE_WAYLAND_SERVER
     if (comp->windowManager()) {
         brocompositor::api::setWindowManager(comp->windowManagerShared());

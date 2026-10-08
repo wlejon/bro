@@ -312,8 +312,9 @@ public:
     std::string rel(const fs::path& p) const {
         std::error_code ec;
         fs::path r = fs::relative(p, appDir_, ec);
-        if (ec || r.empty() || r.native().rfind("..", 0) == 0) return p.generic_string();
-        return r.generic_string();
+        const std::string g = r.generic_string();
+        if (ec || r.empty() || g.rfind("..", 0) == 0) return p.generic_string();
+        return g;
     }
 
     // Walks the static import graph from `file`.

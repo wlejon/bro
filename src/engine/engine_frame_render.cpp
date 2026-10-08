@@ -210,7 +210,7 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
 
     if (displayMode_ == DisplayMode::Drm && cursorVisible_ && !lockedElement_.get()) {
         std::string shape = resolvedCursor_;
-#if BRO_WITH_COMPOSITOR
+#if BRO_WITH_COMPOSITOR && BRO_HAVE_WAYLAND_SERVER
         // The client's cursor while the pointer is on a client (or a window
         // is being dragged); over the shell, the shell's.
         if (drmCtx_ && drmCtx_->compositor &&
