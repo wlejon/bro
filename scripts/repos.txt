@@ -22,7 +22,7 @@
 #   deps       comma-separated bro-ecosystem repos it builds against (from its CMake)
 #
 # name          group     bro        github   platforms        deps
-bro             runtime   self       public   win,linux,mac    bronze,brass,bromath,brokit,htmlayout,broaudio,bromesh,broflora,brotensor,brogameagent,brolm,brodiffusion,broimage,brosoundml,brovisionml,bropty,brosearch,brothemes,bromux,brovfs,brosys,brocred,broapps,brothumb,brodisplays,brocompositor,brokeys,broa11y,broconf,broseat,browl,broportal,brodbus,brovideo,broremote
+bro             runtime   self       public   win,linux,mac    bronze,brass,bromath,brokit,htmlayout,broaudio,bromesh,broflora,brotensor,brogameagent,brolm,brodiffusion,broimage,brosoundml,brovisionml,bropty,brosearch,brothemes,bromux,brolink,brovfs,brosys,brocred,broapps,brothumb,brodisplays,brocompositor,brokeys,broa11y,broconf,broseat,browl,broportal,brodbus,brovideo,broremote
 bronze         compiler  submodule  public   win,linux,mac    brass
 brass           compiler  submodule  public   win,linux,mac    -
 bromath         engine    submodule  public   win,linux,mac    -
@@ -41,7 +41,8 @@ brovisionml     engine    submodule  public   win,linux,mac    bromath,brotensor
 bropty          terminal  submodule  public   win,linux,mac    brosearch
 brosearch       terminal  submodule  public   win,linux,mac    -
 brothemes       terminal  submodule  public   win,linux,mac    -
-bromux          terminal  submodule  public   win,linux,mac    bropty,brosearch,broimage,bromath
+bromux          terminal  submodule  public   win,linux,mac    bropty,brosearch,brolink,broimage,bromath
+brolink         terminal  -          pending  win,linux,mac    -
 brovfs          desktop   submodule  public   win,linux,mac    -
 brosys          desktop   submodule  public   win,linux,mac    brodbus
 brocas          desktop   -          public   win,linux,mac    -
@@ -64,7 +65,7 @@ brompris        desktop   -          public   linux            brodbus
 bropulse        desktop   -          public   linux            -
 broime          desktop   -          public   win,linux,mac    brosearch
 brovideo        desktop   -          pending  win,linux        brodmabuf
-broremote       desktop   -          pending  win,linux        brovideo
+broremote       desktop   -          pending  win,linux        brovideo,brolink
 broworkshop     app       -          public   win,linux,mac    bro
 broterm         app       -          public   win,linux,mac    bro
 helm            app       -          public   win,linux,mac    bro

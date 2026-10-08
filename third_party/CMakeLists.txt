@@ -250,6 +250,27 @@ else()
     add_subdirectory(broaudio EXCLUDE_FROM_ALL)
 endif()
 
+# --- brolink (bromux's and broremote's transport) ---
+# Local IPC and the ssh proxy: framing, the local listener and connector,
+# spawned streams, lanes. bro links nothing of it directly; it is loaded
+# here, once, with bro's paths, so bromux and broremote both find the target.
+# A standalone checkout only (no submodule yet). Without one, broremote is
+# skipped below (remote hosting off); a bromux that needs it says so itself.
+if((BRO_WITH_TERMINAL OR BRO_WITH_REMOTE) AND NOT TARGET brolink)
+    set(BROLINK_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    bro_default_sibling_dir(brolink _brolink_default)
+    set(BROLINK_DIR "${_brolink_default}" CACHE PATH "Path to standalone brolink repo")
+    if(EXISTS "${BROLINK_DIR}/CMakeLists.txt")
+        message(STATUS "brolink: using standalone repo at ${BROLINK_DIR}")
+        add_subdirectory("${BROLINK_DIR}" "${CMAKE_BINARY_DIR}/brolink" EXCLUDE_FROM_ALL)
+    elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/brolink/CMakeLists.txt")
+        message(STATUS "brolink: using submodule at third_party/brolink")
+        add_subdirectory(brolink "${CMAKE_BINARY_DIR}/brolink" EXCLUDE_FROM_ALL)
+    else()
+        message(STATUS "brolink: not found (../brolink)")
+    endif()
+endif()
+
 # --- brosearch + bropty (the <terminal> element) ---
 # bropty is the VT emulator and PTY/ConPTY layer behind <terminal>; brosearch
 # is its regex scrollback search. Both prefer the standalone repo at
@@ -723,7 +744,10 @@ if(BRO_WITH_REMOTE AND NOT TARGET broremote)
     set(BROREMOTE_BUILD_VIEWER OFF CACHE BOOL "" FORCE)
     bro_default_sibling_dir(broremote _broremote_default)
     set(BROREMOTE_DIR "${_broremote_default}" CACHE PATH "Path to standalone broremote repo")
-    if(EXISTS "${BROREMOTE_DIR}/CMakeLists.txt")
+    if(NOT TARGET brolink)
+        message(STATUS "broremote: needs brolink (../brolink), not found; remote hosting off")
+        set(BRO_WITH_REMOTE OFF PARENT_SCOPE)
+    elseif(EXISTS "${BROREMOTE_DIR}/CMakeLists.txt")
         message(STATUS "broremote: using standalone repo at ${BROREMOTE_DIR}")
         # Not ${CMAKE_BINARY_DIR}/broremote, the name its CLI would take
         # there under a single-config generator (as with bromux).

@@ -29,6 +29,7 @@ One more sibling repo, **[broworkshop](https://github.com/wlejon/broworkshop)** 
 | **brosearch** | `../brosearch` | `third_party/brosearch` |
 | **brothemes** | `../brothemes` | `third_party/brothemes` |
 | **bromux** | `../bromux` | `third_party/bromux` |
+| **brolink** (bromux's and broremote's transport; bro links none of it itself) | `../brolink` | none: not on GitHub yet, so no submodule |
 | **brovideo** (optional, broremote's codecs) | `../brovideo` | none: not on GitHub yet, so no submodule |
 | **broremote** (optional, `bro.remote`) | `../broremote` | none: not on GitHub yet, so no submodule |
 | **brass** (compiler backend, required) | `../brass` | `third_party/brass` |
@@ -115,8 +116,9 @@ Most siblings are added **conditionally**, behind the modular-build flags (see [
 | brodiffusion | `BRO_WITH_DIFFUSION` |
 | brovisionml | `BRO_WITH_VISION` |
 | bropty, brosearch, brothemes | `BRO_WITH_TERMINAL` |
-| bromux | `BRO_WITH_TERMINAL`, and only when found: without it persistent sessions are compiled out |
-| brovideo, broremote | `BRO_WITH_REMOTE`, and only when `../brovideo` and `../broremote` are found (there are no submodules): without them `bro.remote` is the unavailable stub. brovideo's VA-API encoder on Linux needs brodmabuf (bro's, or `../brodmabuf`) |
+| bromux | `BRO_WITH_TERMINAL`, and only when found: without it persistent sessions are compiled out. A bromux checkout from after its move to brolink needs `../brolink` (or `-DBROLINK_DIR=`) |
+| brovideo, broremote | `BRO_WITH_REMOTE`, and only when `../brovideo` and `../broremote` are found (there are no submodules): without them `bro.remote` is the unavailable stub. broremote needs `../brolink` too; brovideo's VA-API encoder on Linux needs brodmabuf (bro's, or `../brodmabuf`) |
+| brolink | `BRO_WITH_TERMINAL` or `BRO_WITH_REMOTE`, when `../brolink` is found (`-DBROLINK_DIR=` points elsewhere): bro loads it once, before bromux and broremote, so one copy serves both. Without it `bro.remote` is the unavailable stub |
 | bronze | Mandatory (always ON; `BRO_WITH_BRONZE=1`) |
 
 With a gate off, the sibling is never added and the features it backs are compiled out. The flags auto-resolve their prerequisites (`_bro_require` in the top-level `CMakeLists.txt`), so e.g. `BRO_WITH_DIFFUSION=ON` forces `BRO_WITH_LM` and `BRO_WITH_TENSOR` on.
