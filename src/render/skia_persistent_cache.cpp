@@ -12,8 +12,12 @@ namespace bro::render {
 
 namespace {
 
-// The file: a header, then (key size, data size, key, data) records.
-constexpr char kMagic[8] = {'B', 'R', 'O', 'S', 'K', 'C', '0', '1'};
+// The file: a header, then (key size, data size, key, data) records. Skia's
+// keys do not cover how a program lays out its uniforms, so the version in
+// the header changes whenever bro changes that: 02 = no push constants (see
+// skiaPhysicalDeviceProperties in skia_gpu.cpp); a 01 file's shaders read
+// their uniforms from push constants Skia no longer sets.
+constexpr char kMagic[8] = {'B', 'R', 'O', 'S', 'K', 'C', '0', '2'};
 // A cache past this size is not written back; the next launch rebuilds what
 // it uses, which bounds the file without an LRU.
 constexpr size_t kMaxBytes = 64u << 20;
@@ -31,7 +35,7 @@ SkiaPersistentCache::SkiaPersistentCache(std::string path) : path_(std::move(pat
     if (!in) return;
     const std::vector<char> file{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
     if (file.size() < sizeof(kMagic) || std::memcmp(file.data(), kMagic, sizeof(kMagic)) != 0) {
-        LOG_WARN("SkiaGpu: ignoring the shader cache %s (not one of ours)", path_.c_str());
+        LOG_INFO("SkiaGpu: ignoring the shader cache %s (another format or version)", path_.c_str());
         return;
     }
     size_t at = sizeof(kMagic);

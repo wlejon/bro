@@ -76,7 +76,27 @@ VKAPI_ATTR VkResult VKAPI_CALL routedDeviceWaitIdle(VkDevice device) {
     return owner && owner->waitIdle() ? VK_SUCCESS : VK_ERROR_DEVICE_LOST;
 }
 
+// Ganesh keeps a program's uniforms in push constants whenever they fit
+// (maxPushConstantsSize, 256 bytes on most desktop drivers) and in a uniform
+// buffer otherwise. Its gradient colorizer for three or more intervals (any
+// CSS gradient with a stop not at 0% or 100%, or more than three stops) picks
+// its interval by binary search and then reads `scale[pos]` / `bias[pos]` with
+// a per-pixel index. RADV (Mesa 26.2, RDNA) gets a push-constant array read
+// with a lane-divergent index wrong: whole waves take a neighbouring
+// interval's scale and bias, so the ramp extrapolates past its stops in
+// blocky, hue-shifted squares wherever a wave straddles a stop. The same read
+// from a uniform buffer is correct, so Skia is told the device has no push
+// constant space and puts every uniform in its uniform buffer: one path on
+// every driver, at the cost of a descriptor bind per program change.
+VKAPI_ATTR void VKAPI_CALL skiaPhysicalDeviceProperties(VkPhysicalDevice physicalDevice,
+                                                        VkPhysicalDeviceProperties* properties) {
+    vkGetPhysicalDeviceProperties(physicalDevice, properties);
+    properties->limits.maxPushConstantsSize = 0;
+}
+
 PFN_vkVoidFunction skiaGetProc(const char* name, VkInstance instance, VkDevice device) {
+    if (std::strcmp(name, "vkGetPhysicalDeviceProperties") == 0)
+        return reinterpret_cast<PFN_vkVoidFunction>(&skiaPhysicalDeviceProperties);
     if (std::strcmp(name, "vkQueueSubmit") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&routedQueueSubmit);
     if (std::strcmp(name, "vkQueueWaitIdle") == 0)
         return reinterpret_cast<PFN_vkVoidFunction>(&routedQueueWaitIdle);
