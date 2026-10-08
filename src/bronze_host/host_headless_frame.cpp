@@ -80,6 +80,9 @@ void absolutePos(bro::dom::Element* el, float& ax, float& ay) {
     }
 }
 
+}  // namespace
+
+// Shared with the agent control commands (host_control.cpp).
 std::string buildInspectString(bro::dom::Element* el, bool verbose) {
     std::ostringstream out;
     auto& box = el->layoutBox();
@@ -218,6 +221,8 @@ void buildTreeString(std::ostringstream& out, bro::dom::Element* el,
         }
     }
 }
+
+namespace {
 
 // Byte offset in capturePixels() of the device pixel at the centre of CSS
 // pixel (x, y) — the frame is device px, viewport × the render scale.

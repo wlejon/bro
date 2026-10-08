@@ -1,4 +1,7 @@
 #include "engine/engine.h"
+#include "engine/control.h"
+#include "engine/frame_trace.h"
+#include "util/time.h"
 #include "engine/capture_path.h"
 #include "engine/overflow.h"
 #include "engine/navmesh_subsystem.h"
@@ -65,6 +68,7 @@ void Engine::flush() {
         bool animActive = transitionManager_.tick(engineNowMs_) |
                           animationManager_.tick(engineNowMs_) |
                           webAnimationManager_.tick(engineNowMs_);
+        frameTrace_->current().animating |= animActive;
         if (animActive) {
             document_->markPaintDirty();
             uiDirty_ = true;
@@ -86,6 +90,7 @@ void Engine::flush() {
                                      static_cast<float>(contentHeight()),
                                      *textMetrics_);
             updateDocumentHeight();
+            frameTrace_->current().layoutRan = frameTrace_->current().layoutPerformed = true;
         }
 
         document_->clearDirty();
@@ -207,6 +212,9 @@ void Engine::advanceTime(double ms) {
         double step = std::min(remaining, 16.0);
         virtualTime_ += step;
         remaining -= step;
+        // A headless frame is this step, in the flight recorder too (wall
+        // time, as everywhere in the trace).
+        traceFrameBegin(util::currentTimeMs());
         beginGpuFrame();
 
         double scaledStep = step * effectiveTimeScale();
@@ -239,6 +247,10 @@ void Engine::advanceTime(double ms) {
         pumpWebGLContextEvents();
 
         syncWebGLCanvasSizes();
+
+        // Agent-control commands and the input they play out (control.h):
+        // a headless frame is this step.
+        control_->pump();
 
         if (!timePaused_) fireFrameCallbacks(scaledStep);
 
@@ -299,6 +311,7 @@ void Engine::advanceTime(double ms) {
 
         flush();
         mediaHeldForStep_ = false;
+        traceFrameEnd();
     }
 }
 

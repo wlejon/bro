@@ -4,6 +4,8 @@
 #include "engine/engine.h"
 #include "bronze_host/host_numeric.h"
 #include <span>
+#include <sstream>
+#include <string>
 
 namespace bro::bronze_host {
 
@@ -37,6 +39,12 @@ inline uint64_t argWindowId(std::span<const Value> a, size_t idx) {
 inline float toWindowY(engine::Engine* engine, double y, uint64_t windowId) {
     return windowId ? static_cast<float>(y) : toScreenY(engine, y);
 }
+
+// The text inspect() and inspectTree() return (host_headless_frame.cpp), for
+// an element whose layout is current.
+std::string buildInspectString(bro::dom::Element* el, bool verbose);
+void buildTreeString(std::ostringstream& out, bro::dom::Element* el, int depth, int maxDepth,
+                     const std::string& indent);
 
 void installHeadlessInput(engine::Engine& engine);
 void installHeadlessFrame(engine::Engine& engine);

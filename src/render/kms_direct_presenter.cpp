@@ -14,6 +14,18 @@
 
 namespace bro::render {
 
+namespace {
+// A scanout slot is drawn into, sampled, cleared, and copied out of (the
+// frame tap: the screen recorder).
+constexpr VkImageUsageFlags kScanoutUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                                            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+
+double nowMs() {
+    using namespace std::chrono;
+    return duration<double, std::milli>(steady_clock::now().time_since_epoch()).count();
+}
+}  // namespace
+
 struct KmsDirectPresenter::SlotHolds {
     std::mutex m;
     std::condition_variable cv;
@@ -120,7 +132,7 @@ bool KmsDirectPresenter::initScanoutBuffers(VulkanContext& ctx, uint32_t count) 
         auto fb = brodmabuf::KmsFramebuffer::create_from_dmabuf(device_->fd(), attrs.value());
         if (!fb) continue;
         auto vk = dmabufVkCtx_->import_dmabuf(attrs.value(),
-            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+            kScanoutUsage);
         if (!vk) continue;
         brodmabuf::KmsAtomicReq testReq;
         const auto& pipe = presenter_->pipeline();
@@ -189,7 +201,7 @@ bool KmsDirectPresenter::initScanoutBuffers(VulkanContext& ctx, uint32_t count) 
 
         auto vkImgRes = dmabufVkCtx_->import_dmabuf(
             attrs,
-            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+            kScanoutUsage);
         if (!vkImgRes) {
             std::string err(vkImgRes.status().message());
             LOG_WARN("KmsDirectPresenter: dmabuf import into Vulkan failed: %s (modifier=0x%lx)",
@@ -391,9 +403,13 @@ bool KmsDirectPresenter::presentComposited(
     }
 
     cmdTransitionImage(cmd, target.image, colorRange(), layout, VK_IMAGE_LAYOUT_GENERAL);
+    if (frameTap_) frameTap_->record(cmd, target.image, slot.width, slot.height);
 
     uint64_t ticket = frames.submit(cmd, {});
+    const double tWait = nowMs();
     ctx.queue().wait(ticket);
+    const double tFlip = nowMs();
+    lastTiming_.gpuWaitMs = tFlip - tWait;
 
     // The slot's GPU work is done, so its content is complete: hand it to a
     // reader (the remote encoder) now, before the flip. After the flip the
@@ -429,13 +445,16 @@ bool KmsDirectPresenter::presentComposited(
         return false;
     }
 
-    (void)presenter_->handle_event(100);
+    (void)readEvents(100);
+    lastTiming_.flipWaitMs = nowMs() - tFlip;
     composited_ = true;
     directOnScreen_ = false;
+    if (frameTap_) frameTap_->completed(lastFlip_);
 
     if (outFenceFd) {
         *outFenceFd = flipRes.value().release();
     }
+
     return true;
 #else
     (void)ctx;
@@ -490,10 +509,35 @@ bool KmsDirectPresenter::readLastFrame(std::vector<uint8_t>& rgba, uint32_t& wid
 bool KmsDirectPresenter::handlePageFlipEvent(int timeoutMs) {
 #if defined(__linux__)
     if (!active_ || !presenter_) return false;
-    return presenter_->handle_event(timeoutMs);
+    return readEvents(timeoutMs);
 #else
     (void)timeoutMs;
     return false;
+#endif
+}
+
+bool KmsDirectPresenter::readEvents(int timeoutMs) {
+#if defined(__linux__)
+    brodmabuf::KmsFlipEvent flip;
+    bool gotFlip = false;
+    const bool any = presenter_->handle_event(timeoutMs, &flip, &gotFlip);
+    if (gotFlip) {
+        lastFlip_.vblankMs = static_cast<double>(flip.timestamp_us) / 1000.0;
+        lastFlip_.sequence = flip.sequence;
+        ++lastFlip_.count;
+    }
+    return any;
+#else
+    (void)timeoutMs;
+    return false;
+#endif
+}
+
+double KmsDirectPresenter::refreshPeriodMs() const {
+#if defined(__linux__)
+    return presenter_ ? presenter_->refresh_period_ms() : 0.0;
+#else
+    return 0.0;
 #endif
 }
 

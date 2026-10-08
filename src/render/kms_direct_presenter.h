@@ -17,6 +17,7 @@
 
 #include <string>
 #include <vector>
+#include <vulkan/vulkan.h>
 
 namespace bro::render {
 
@@ -95,6 +96,39 @@ public:
     /// Process page-flip events via drmHandleEvent (vblank sync)
     bool handlePageFlipEvent(int timeoutMs = 100);
 
+    /// The last flip the kernel reported complete: the vblank it landed on
+    /// (CLOCK_MONOTONIC ms, the clock util::currentTimeMs reads) and the
+    /// CRTC's vblank counter; `count` goes up by one per flip seen.
+    struct FlipInfo {
+        double vblankMs = 0.0;
+        uint32_t sequence = 0;
+        uint64_t count = 0;
+    };
+    const FlipInfo& lastFlip() const { return lastFlip_; }
+    /// The mode's refresh period, ms (0 before init).
+    double refreshPeriodMs() const;
+
+    /// Where the last presentComposited spent its wait: on the composite's
+    /// GPU work, and on the commit plus the flip landing.
+    struct PresentTiming {
+        double gpuWaitMs = 0.0;
+        double flipWaitMs = 0.0;
+    };
+    const PresentTiming& lastPresentTiming() const { return lastTiming_; }
+
+    /// A consumer that copies each composited frame out (the screen
+    /// recorder): record() adds its commands to the frame's own command
+    /// buffer, after the composite (the image is in GENERAL layout, and is
+    /// a transfer source); completed() runs once that work is done and the
+    /// frame is on screen. One tap at a time; null to remove.
+    class FrameTap {
+    public:
+        virtual ~FrameTap() = default;
+        virtual void record(VkCommandBuffer cmd, VkImage image, uint32_t width, uint32_t height) = 0;
+        virtual void completed(const FlipInfo& flip) = 0;
+    };
+    void setFrameTap(FrameTap* tap) { frameTap_ = tap; }
+
     /// Restore KMS modeset after VT switch resume
     bool restoreModeset();
 
@@ -135,6 +169,11 @@ private:
     // hands out, which can outlive the presenter.
     struct SlotHolds;
     std::shared_ptr<SlotHolds> holds_;
+    // Reads pending DRM events for up to timeoutMs, noting a flip in lastFlip_.
+    bool readEvents(int timeoutMs);
+    FlipInfo lastFlip_;
+    PresentTiming lastTiming_;
+    FrameTap* frameTap_ = nullptr;
     ScanoutListener scanoutListener_;
     bool directScanoutInhibited_ = false;
 

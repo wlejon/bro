@@ -149,6 +149,7 @@ set(BRO_BRONZE_HOST_SOURCES
     host_headless.cpp
     host_headless_input.cpp
     host_headless_frame.cpp
+    host_control.cpp
     host_headless_test_hooks.cpp
     host_mem_probe.cpp
     host_touch.cpp

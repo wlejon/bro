@@ -1,4 +1,5 @@
 #include "engine/engine.h"
+#include "engine/frame_trace.h"
 #include "engine/frame_presenter.h"
 #include "engine/layout_pipeline.h"
 #include "engine/overflow.h"
@@ -13,6 +14,10 @@
 #include "bronze_host/host_window_open.h"
 #include "engine/engine_drm.h"
 #include "render/software_cursor.h"
+#include "render/vulkan_presenter.h"
+#if BRO_WITH_DMABUF
+#include "render/kms_direct_presenter.h"
+#endif
 #if BRO_WITH_COMPOSITOR
 #include "compositor/wayland_compositor.h"
 #endif
@@ -46,7 +51,9 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
         double tWait = util::currentTimeMs();
         bool layoutClaimed = layoutPipeline_->waitClaimDone();
         layoutWaitMs = util::currentTimeMs() - tWait;
+        frameTrace_->current().layoutWaitMs = layoutWaitMs;
         if (layoutClaimed) {
+            traceLayoutClaimed();
             updateDocumentHeight();
 
             if (document_ && !document_->scrollToBottomElements().empty()) {
@@ -94,6 +101,7 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
         }
     }
 
+    const double tRecord = util::currentTimeMs();
     if (framePresenter_->isRasterIdle()) {
         bool uiThrottled = (now - lastUIRenderMs_ < uiFrameIntervalMs_);
         bool promotedActive = layoutPipeline_->promotedActive();
@@ -128,6 +136,7 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
                 baseValid_ = true;
                 appBaseDirty_ = false;
                 ++frameStats_.baseRecords;
+                frameTrace_->current().recorded = true;
             }
 
             if (pset) {
@@ -160,6 +169,7 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
             if (terminalLayers_) terminalLayers_->record(rsnap.scale);
 
             framePresenter_->signalRender(rsnap);
+            traceRasterSignalled();
             uiDirty_ = false;
             hasRenderedOnce_ = true;
             lastUIRenderMs_ = now;
@@ -168,6 +178,7 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
 
     auto layers = framePresenter_->currentLayers();
 
+    frameTrace_->current().recordMs = util::currentTimeMs() - tRecord;
     frameStats_.accumRasterMs += (util::currentTimeMs() - tRaster) - layoutWaitMs;
     frameStats_.accumLayoutMs += layoutWaitMs;
 
@@ -221,7 +232,17 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
 
     frameStats_.accumGpuMs += util::currentTimeMs() - tGpu;
 
+    FrameRecord& rec = frameTrace_->current();
+    const double tPresent = util::currentTimeMs();
+    rec.compositeMs = tPresent - tGpu;
     presentCurrentFrame();
+    rec.presentMs = util::currentTimeMs() - tPresent;
+#if BRO_WITH_DMABUF
+    if (auto* kms = vulkanPresenter_ ? vulkanPresenter_->kmsDirectPresenter() : nullptr) {
+        rec.gpuWaitMs = kms->lastPresentTiming().gpuWaitMs;
+        rec.flipWaitMs = kms->lastPresentTiming().flipWaitMs;
+    }
+#endif
 
     releaseClientWindowFrames();
 
@@ -235,6 +256,7 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
             if (sleepMs > 0.5) {
                 std::this_thread::sleep_for(std::chrono::microseconds(
                     static_cast<int64_t>(sleepMs * 1000.0)));
+                rec.pacingWaitMs += sleepMs;
             }
         }
     }

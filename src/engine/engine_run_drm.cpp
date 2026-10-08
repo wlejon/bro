@@ -3,6 +3,8 @@
 // thread's events, polls the seat / input / compositor, ticks the world,
 // signals layout and renders. Input routing lives in engine_drm_input.cpp.
 #include "engine/engine.h"
+#include "engine/control.h"
+#include "engine/frame_trace.h"
 #include "engine/engine_drm.h"
 #include "engine/frame_presenter.h"
 #include "engine/layout_pipeline.h"
@@ -50,6 +52,7 @@ void Engine::runDrm() {
     layoutThread_ = std::thread(&Engine::layoutThreadFunc, this);
     rasterThread_ = std::thread(&Engine::rasterThreadFunc, this);
     rasterReady_.wait(false, std::memory_order_acquire);
+    startControl();
 
     while (running_) {
         if (bro::util::interrupted()) {
@@ -71,8 +74,17 @@ void Engine::drmFrame() {
     lastWallTickMs_ = frameStart;
     const double scaledFrameDtMs = wallFrameDtMs * effectiveTimeScale();
     engineNowMs_ += scaledFrameDtMs;
+    traceFrameBegin(frameStart);
+    FrameRecord& rec = frameTrace_->current();
 
     drmDrainLayoutEvents();
+    double t = util::currentTimeMs();
+    rec.eventsMs = t - frameStart;
+
+    // Agent control commands, while the layout thread is idle (docs/agent-control.md).
+    control_->pump();
+    double t1 = util::currentTimeMs();
+    rec.controlMs = t1 - t;
 
     pollAppWatcher(util::currentTimeMs());
     if (pendingAppReload_) {
@@ -85,21 +97,29 @@ void Engine::drmFrame() {
     pumpTerminals();
     pumpWebGLContextEvents();
 
-    framePresenter_->consumeIfReady();
+    if (framePresenter_->consumeIfReady()) traceRasterConsumed();
     if (!canvasScenesDetached_.empty() && framePresenter_->isRasterIdle()) canvasScenesDetached_.clear();
 
+    t = util::currentTimeMs();
+    rec.miscMs = t - t1;
     drmPollPlatform();
     beginGpuFrame();
+    double t2 = util::currentTimeMs();
+    rec.inputMs = t2 - t;
 
     const double now = drmTickWorld(scaledFrameDtMs);
+    rec.tickMs = util::currentTimeMs() - t2;
     const bool baseWasDirty = document_ && document_->isDirty();
     const bool layoutSignaled = drmSignalLayout(baseWasDirty);
 
     renderAndPresentFrame(frameStart, now, wallFrameDtMs, layoutSignaled, baseWasDirty);
     pollScreenCaptureTriggers();
 
+    t = util::currentTimeMs();
     if (vulkanPresenter_ && vulkanPresenter_->kmsDirectPresenter())
         vulkanPresenter_->kmsDirectPresenter()->handlePageFlipEvent(10);
+    rec.pacingWaitMs += util::currentTimeMs() - t;
+    traceFrameEnd();
 #endif
 }
 
@@ -129,7 +149,10 @@ void Engine::drmPollPlatform() {
     if (!drmCtx_) return;
     if (drmCtx_->seat) drmCtx_->seat->pollEvents();
     if (drmCtx_->input)
-        drmCtx_->input->pollEvents([this](const platform::DrmInputEvent& ev) { dispatchDrmInput(ev); });
+        drmCtx_->input->pollEvents([this](const platform::DrmInputEvent& ev) {
+            ++frameTrace_->current().inputEvents;
+            dispatchDrmInput(ev);
+        });
     // Client events, then the shell's window frames moved with them.
     if (pollShellCompositor()) uiDirty_ = true;
 #endif
@@ -177,8 +200,10 @@ double Engine::drmTickWorld(double scaledFrameDtMs) {
     if (systemDirty_) uiDirty_ = true;
 
     syncWebGLCanvasSizes();
+    const double tJs = util::currentTimeMs();
     if (!timePaused_) fireFrameCallbacks(scaledFrameDtMs);
     for (auto& pump : framePumps_) pump();
+    frameTrace_->current().jsMs = util::currentTimeMs() - tJs;
 
 #if BRO_WITH_3D
     if (auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get())) {
@@ -250,6 +275,7 @@ bool Engine::drmSignalLayout(bool baseWasDirty) {
     ls.hoveredElement = hoveredElement_.get();
     ls.timeMs = engineNowMs_;
     layoutPipeline_->signalLayout(ls);
+    traceLayoutSignalled();
     return true;
 }
 

@@ -41,6 +41,7 @@
 #include <broaudio/api.h>
 #endif
 #include "bronze_host/host_headless.h"
+#include "bronze_host/host_control.h"
 #include "bronze_host/host_gc.h"
 #include "bronze_host/host_node_sweep.h"
 #include "bronze_host/host_globals_internal.h"
@@ -567,6 +568,8 @@ void installWebHostGlobals(engine::Engine& engine) {
     // off globalThis at the point of use.
     installObserversModule();
     installHeadlessGlobals(engine);
+    // The agent-control commands that need this realm (eval, dom, inspect).
+    installControlCommands(engine);
     installPlatformExtensions(engine);
     installRangeGlobals();
     installSelectionGlobals();

@@ -92,6 +92,7 @@ if(BRO_WITH_DMABUF)
     target_sources(bro_render PRIVATE
         vulkan_dmabuf_importer.cpp
         kms_direct_presenter.cpp
+        scanout_capture.cpp
     )
     target_link_libraries(bro_render PUBLIC brodmabuf::brodmabuf)
     target_compile_definitions(bro_render PUBLIC BRO_WITH_DMABUF=1)

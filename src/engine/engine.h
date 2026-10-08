@@ -126,6 +126,9 @@ public:
         int32_t wheelY = 0;
     };
     void injectDeviceInput(const DeviceInput& in);
+    /// Where the pointer last was, CSS px.
+    float pointerX() const { return lastMouseX_; }
+    float pointerY() const { return lastMouseY_; }
     /// The pointer shape the screen shows (a CSS cursor name; "none" when
     /// hidden): the document's, or under DRM a client window's while the
     /// pointer is on one.
@@ -492,6 +495,15 @@ public:
     double perfGpuMs() const { return frameStats_.phaseGpuMs; }
     double perfDrawMs() const { return frameStats_.phaseDrawMs; }
     const FrameStats& frameStats() const { return frameStats_; }
+
+    /// The frame flight recorder (frame_trace.h) and the agent control
+    /// channel (control.h, docs/agent-control.md). startControl serves the
+    /// socket; it is on by default under DRM, and elsewhere with BRO_CONTROL.
+    FrameTrace& frameTrace() { return *frameTrace_; }
+    ControlServer& control() { return *control_; }
+    void startControl();
+    /// Monotonic count of trips round the frame loop.
+    uint64_t frameNumber() const { return frameNumber_; }
 
     /// Every secondary window (bro.window.open), live or pending, in
     /// creation order. The perf HUD lists them.
@@ -970,6 +982,29 @@ private:
     bool serverStopRequested_ = false;
 
     FrameStats frameStats_;
+    std::unique_ptr<FrameTrace> frameTrace_;
+    std::unique_ptr<ControlServer> control_;
+    uint64_t frameNumber_ = 0;
+    // What the layout and raster threads measured for the pass the main
+    // thread last claimed / consumed (written by those threads before they
+    // publish, read by the main thread after it claims), and the content
+    // generation in flight / on screen.
+    struct PassTimes {
+        double styleMs = 0, layoutMs = 0, animTickMs = 0, rasterMs = 0;
+        uint32_t activeAnimations = 0, promoted = 0;
+        bool layoutPerformed = false;
+    };
+    PassTimes layoutPassTimes_, rasterPassTimes_;
+    // The flight recorder's hooks into the frame loops (engine_frame_trace.cpp).
+    void traceFrameBegin(double frameStart);
+    void traceLayoutSignalled();
+    void traceLayoutClaimed();
+    void traceRasterSignalled();
+    void traceRasterConsumed();
+    void traceFrameEnd();
+    uint64_t flipCountAtFrameStart_ = 0;
+    uint64_t contentGenSignalled_ = 0, contentGenShown_ = 0;
+    double contentTimeSignalled_ = 0.0, contentTimeShown_ = 0.0, layoutSignalTimeMs_ = 0.0;
     bool uiDirty_ = true;
     bool hasRenderedOnce_ = false;
     bool mediaEventsArmed_ = false;

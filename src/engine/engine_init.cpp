@@ -1,4 +1,6 @@
 #include "engine/engine.h"
+#include "engine/control.h"
+#include "engine/frame_trace.h"
 #include "engine/frame_presenter.h"
 #include "engine/layout_pipeline.h"
 #include "engine/inspector_highlight.h"
@@ -81,6 +83,14 @@ Engine::Engine(const EngineConfig& config)
     , uiFrameIntervalMs_(config.graphics.maxFrameIntervalMs) {
     // Before the raster thread exists: it reads the pointer.
     terminalLayers_ = std::make_shared<TerminalLayers>();
+
+    // The frame flight recorder and the agent control commands exist in
+    // every mode; the socket is served from startControl().
+    frameTrace_ = std::make_unique<FrameTrace>();
+    control_ = std::make_unique<ControlServer>(*this);
+    registerEngineControlCommands(*control_);
+    registerControlInputCommands(*control_);
+    registerControlRecordCommands(*control_);
 
     // The system font collection can take most of a second to build on some
     // machines; start it now so it overlaps window creation and page compile

@@ -3,7 +3,8 @@ add_library(bro_platform STATIC sdl_window.cpp sdl_runtime.cpp event_loop.cpp
                                 desktop_platform.cpp desktop_bell.cpp
                                 desktop_progress.cpp desktop_notifications.cpp
                                 desktop_tray.cpp desktop_hotkeys.cpp
-                                desktop_single_instance.cpp evdev_keymap.cpp)
+                                desktop_single_instance.cpp evdev_keymap.cpp
+                                control_socket.cpp)
 target_include_directories(bro_platform PUBLIC ${bro_SOURCE_DIR}/src)
 
 # SDL3 — use the umbrella target (resolves to shared or static automatically)

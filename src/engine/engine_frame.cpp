@@ -1,4 +1,6 @@
 #include "engine/engine.h"
+#include "engine/control.h"
+#include "engine/frame_trace.h"
 #include "engine/engine_drm.h"
 #include "engine/frame_presenter.h"
 #include "engine/layout_pipeline.h"
@@ -287,6 +289,7 @@ void Engine::run() {
     rasterReady_.wait(false, std::memory_order_acquire);
 
     SDL_AddEventWatch(modalEventWatcher, this);
+    startControl();
 
     while (running_) {
         if (bro::util::interrupted()) {
@@ -301,6 +304,7 @@ void Engine::run() {
         lastWallTickMs_ = frameStart;
         const double scaledFrameDtMs = wallFrameDtMs * effectiveTimeScale();
         engineNowMs_ += scaledFrameDtMs;
+        traceFrameBegin(frameStart);
 
         if (layoutPipeline_->waitForIdle()) {
             updateDocumentHeight();
@@ -319,6 +323,8 @@ void Engine::run() {
                 dispatchEvent(ev.element, aevt);
             }
         }
+        frameTrace_->current().eventsMs = util::currentTimeMs() - frameStart;
+        control_->pump();
 
         pollAppWatcher(util::currentTimeMs());
         if (pendingAppReload_) {
@@ -340,7 +346,7 @@ void Engine::run() {
         pumpTerminals();
         pumpWebGLContextEvents();
 
-        framePresenter_->consumeIfReady();
+        if (framePresenter_->consumeIfReady()) traceRasterConsumed();
 
         if (!canvasScenesDetached_.empty() && framePresenter_->isRasterIdle()) canvasScenesDetached_.clear();
 
@@ -493,10 +499,12 @@ void Engine::run() {
             ls.hoveredElement   = hoveredElement_.get();
             ls.timeMs           = engineNowMs_;
             layoutPipeline_->signalLayout(ls);
+            traceLayoutSignalled();
             layoutSignaled = true;
         }
 
         renderAndPresentFrame(frameStart, now, wallFrameDtMs, layoutSignaled, baseWasDirty);
+        traceFrameEnd();
     }
 
     shutdown();
@@ -546,6 +554,7 @@ void Engine::flushLayoutForRead(dom::Document* doc) {
         if (!found || width <= 0.0f) return;
     }
 
+    const double tForced = util::currentTimeMs();
     if (doc->isStructureDirty()) ensureReplacedElements(doc->documentElement());
 
     dom::Element* previousHover = hoveredElement_.get();
@@ -564,6 +573,13 @@ void Engine::flushLayoutForRead(dom::Document* doc) {
         updateDocumentHeight();
 
     doc->noteLayoutCurrent();
+
+    // Script-forced layout (a geometry read after a mutation), for the trace.
+    if (frameTrace_) {
+        FrameRecord& rec = frameTrace_->current();
+        ++rec.forcedLayouts;
+        rec.forcedLayoutMs += util::currentTimeMs() - tForced;
+    }
 }
 
 void Engine::dispatchWindowFocusChange(bool focused) {

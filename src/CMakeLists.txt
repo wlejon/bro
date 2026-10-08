@@ -34,6 +34,9 @@ add_subdirectory(engine)
 
 # bronze JavaScript runtime host layer.
 add_subdirectory(bronze_host)
+if(UNIX)
+    add_subdirectory(ctl)
+endif()
 
 # The three stock executables. A host application that embeds bro (links
 # bro_engine and supplies its own main) turns these off with

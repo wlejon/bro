@@ -2,6 +2,12 @@ add_library(bro_engine STATIC
     app_reload.cpp
     source_preflight.cpp
     screen_capture.cpp
+    frame_trace.cpp
+    engine_frame_trace.cpp
+    control.cpp
+    control_commands.cpp
+    control_input.cpp
+    control_record.cpp
     engine.cpp
     scene_audio_sync.cpp
     engine_compositor.cpp

@@ -13,6 +13,7 @@
 #include "render/raster_renderer.h"
 #include "render/skia_backend.h"
 #include "util/log.h"
+#include "util/time.h"
 
 #include <SDL3/SDL.h>
 
@@ -88,7 +89,11 @@ void Engine::layoutThreadFunc() {
             // would freeze on its first applied value (e.g. 2048's tile-pop-in
             // stuck at scale(0), tiles invisible). Re-trigger after completion
             // is prevented by AnimationManager's longhand signature memo.
+            const double tStyle = util::currentTimeMs();
             document_->resolveStyles();
+            const double tTick = util::currentTimeMs();
+            layoutPassTimes_ = PassTimes{};
+            layoutPassTimes_.styleMs = tTick - tStyle;
 
             // Decided AFTER resolveStyles so it sees layoutDirty_ promotions:
             // a paint-only (hover) frame whose re-resolve turned up a real
@@ -137,7 +142,12 @@ void Engine::layoutThreadFunc() {
             for (auto* e : webAnimationManager_.activeThisTick()) routePromotion(e);
 
             layoutPipeline_->setAnimationsActive(animActive);
-            layoutPipeline_->setPromotedActive(!promotedElements_.empty());
+            layoutPipeline_->setPromotedActive(!promotedElements_.empty());            const double tLayout = util::currentTimeMs();
+            layoutPassTimes_.animTickMs = tLayout - tTick;
+            layoutPassTimes_.activeAnimations =
+                static_cast<uint32_t>(webAnimationManager_.activeThisTick().size());
+            layoutPassTimes_.promoted = static_cast<uint32_t>(promotedElements_.size());
+            layoutPassTimes_.layoutPerformed = layoutAffecting;
 
             // Skip the full layoutTree() pass on a promoted-only frame — the
             // layout is identical to last frame, only paint-time transforms
@@ -150,6 +160,7 @@ void Engine::layoutThreadFunc() {
                 lastLayoutContentW_ = contentW;
                 lastLayoutContentH_ = contentH;
             }
+            layoutPassTimes_.layoutMs = util::currentTimeMs() - tLayout;
             document_->clearDirty();
         }
 
@@ -186,6 +197,7 @@ void Engine::rasterThreadFunc() {
 
     while (framePresenter_->waitForRequest()) {
         framePresenter_->markBusy();
+        const double tRaster = util::currentTimeMs();
         auto snap = framePresenter_->loadSnapshot();
 
         // Same slot the main thread wrote command buffers into (1 - front_).
@@ -247,6 +259,7 @@ void Engine::rasterThreadFunc() {
         rasterRenderer->setDeviceScale(1.0f);
         rasterRenderer->endFrame();
 
+        rasterPassTimes_.rasterMs = util::currentTimeMs() - tRaster;
         framePresenter_->publishResult();
     }
 

@@ -1,4 +1,6 @@
 #include "engine/engine.h"
+#include "engine/control.h"
+#include "engine/frame_trace.h"
 #include "engine/engine_drm.h"
 #include "engine/frame_presenter.h"
 #include "engine/layout_pipeline.h"
@@ -104,6 +106,8 @@ void Engine::shutdown() {
 }
 
 Engine::~Engine() {
+    // No command may arrive for an engine on its way out.
+    if (control_) control_->stop();
     // The dialog tick callback captures this engine.
     platform::Dialogs::setTickCallback(nullptr);
     platform::Dialogs::setWindow(nullptr);
