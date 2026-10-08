@@ -615,6 +615,13 @@ void SkiaRenderer::saveLayerWithFilter(std::span<const CssFilterParams> filters,
     canvas_->saveLayer(SkCanvas::SaveLayerRec(&bounds, &paint));
 }
 
+void SkiaRenderer::drawBackdropFilter(std::span<const CssFilterParams> filters,
+                                      float x, float y, float w, float h, const Radii& r,
+                                      float opacity) {
+    if (!canvas_) return;
+    DrawSkBackdropFilter(canvas_, filters, makeRRect(x, y, w, h, r), opacity);
+}
+
 void SkiaRenderer::saveLayerWithBlend(BlendMode mode) {
     if (!canvas_) return;
     SkPaint paint;

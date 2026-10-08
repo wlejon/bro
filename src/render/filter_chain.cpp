@@ -3,8 +3,11 @@
 #include <algorithm>
 #include <cmath>
 
+#include <include/core/SkCanvas.h>
 #include <include/core/SkColor.h>
+#include <include/core/SkRRect.h>
 #include <include/core/SkColorFilter.h>
+#include <include/core/SkPaint.h>
 #include <include/effects/SkImageFilters.h>
 
 namespace bro::render {
@@ -167,6 +170,25 @@ SkBlendMode toSkBlendMode(BlendMode mode) {
         case BlendMode::Normal:
         default:                    return SkBlendMode::kSrcOver;
     }
+}
+
+void DrawSkBackdropFilter(SkCanvas* canvas, std::span<const CssFilterParams> filters, const SkRRect& clip,
+                          float opacity) {
+    if (!canvas || clip.isEmpty() || !(opacity > 0.0f)) return;
+    sk_sp<SkImageFilter> filter = BuildSkImageFilterChain(filters);
+    if (!filter) return;
+    canvas->save();
+    if (clip.isRect()) canvas->clipRect(clip.rect(), true);
+    else canvas->clipRRect(clip, true);
+    // The layer starts as the backdrop run through `filter`; a blur samples
+    // past the box's edge (clamped at the surface's), as CSS asks, and the
+    // clip keeps its output inside the box.
+    const SkRect bounds = clip.rect();
+    SkPaint alpha;
+    alpha.setAlphaf(std::min(opacity, 1.0f));
+    canvas->saveLayer(SkCanvas::SaveLayerRec(&bounds, opacity < 1.0f ? &alpha : nullptr, filter.get(), 0));
+    canvas->restore();
+    canvas->restore();
 }
 
 } // namespace bro::render

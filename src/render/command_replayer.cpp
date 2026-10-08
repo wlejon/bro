@@ -138,6 +138,9 @@ void CommandReplayer::replay(const CommandBuffer& buffer) {
                 f.filters.assign(filters.begin(), filters.end());
                 f.flx = c.x; f.fly = c.y; f.flw = c.w; f.flh = c.h;
                 openStack_.push_back(std::move(f));
+            } else if constexpr (std::is_same_v<T, Cmd_DrawBackdropFilter>) {
+                auto filters = buffer.spanAt<CssFilterParams>(c.filtersOffset, c.filtersLen);
+                dst_->drawBackdropFilter(filters, c.x, c.y, c.w, c.h, c.r, c.opacity);
             } else if constexpr (std::is_same_v<T, Cmd_SaveLayerWithBlend>) {
                 dst_->saveLayerWithBlend(c.mode);
                 OpenFrame f; f.saveKind = OpenFrame::LayerBlend; f.blendMode = c.mode;

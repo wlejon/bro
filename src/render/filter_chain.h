@@ -5,7 +5,9 @@
 #include <include/core/SkRefCnt.h>
 #include <span>
 
+class SkCanvas;
 class SkImageFilter;
+class SkRRect;
 
 namespace bro::render {
 
@@ -17,5 +19,10 @@ SkBlendMode toSkBlendMode(BlendMode mode);
 // to implement Renderer::saveLayerWithFilter without leaking Skia types into
 // the public Renderer interface or DrawTraversal.
 sk_sp<SkImageFilter> BuildSkImageFilterChain(std::span<const CssFilterParams> filters);
+
+// Renderer::drawBackdropFilter on a Skia canvas: an empty layer over `clip`
+// initialised from the filtered backdrop, restored straight back at `opacity`.
+void DrawSkBackdropFilter(SkCanvas* canvas, std::span<const CssFilterParams> filters, const SkRRect& clip,
+                          float opacity);
 
 } // namespace bro::render

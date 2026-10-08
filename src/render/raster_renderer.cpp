@@ -512,6 +512,12 @@ void RasterRenderer::saveLayerWithFilter(std::span<const CssFilterParams> filter
     if (imgFilter) bounds = imgFilter->computeFastBounds(bounds);
     canvas_->saveLayer(SkCanvas::SaveLayerRec(&bounds, &paint));
 }
+void RasterRenderer::drawBackdropFilter(std::span<const CssFilterParams> filters,
+                                        float x, float y, float w, float h, const Radii& r,
+                                        float opacity) {
+    if (!canvas_) return;
+    DrawSkBackdropFilter(canvas_, filters, makeRRectRaster(x, y, w, h, r), opacity);
+}
 void RasterRenderer::saveLayerWithBlend(BlendMode mode) {
     if (!canvas_) return;
     SkPaint paint;

@@ -341,6 +341,19 @@ void RecordingRenderer::saveLayerWithFilter(std::span<const CssFilterParams> fil
     cmd.x = x; cmd.y = y; cmd.w = w; cmd.h = h;
     buffer_->append(cmd);
 }
+void RecordingRenderer::drawBackdropFilter(std::span<const CssFilterParams> filters,
+                                           float x, float y, float w, float h, const Radii& r,
+                                           float opacity) {
+    if (!buffer_) { measureRenderer_->drawBackdropFilter(filters, x, y, w, h, r, opacity); return; }
+    Cmd_DrawBackdropFilter cmd{};
+    auto [off, count] = buffer_->pushSpan(filters);
+    cmd.filtersOffset = off;
+    cmd.filtersLen = count;
+    cmd.x = x; cmd.y = y; cmd.w = w; cmd.h = h;
+    cmd.r = r;
+    cmd.opacity = opacity;
+    buffer_->append(cmd);
+}
 void RecordingRenderer::saveLayerWithBlend(BlendMode mode) {
     if (!buffer_) { measureRenderer_->saveLayerWithBlend(mode); return; }
     buffer_->append(Cmd_SaveLayerWithBlend{mode});

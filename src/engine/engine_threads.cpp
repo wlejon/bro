@@ -5,6 +5,7 @@
 
 #include "dom/document.h"
 #include "dom/element.h"
+#include "dom/shadow_root.h"
 #include "layout/draw_traversal.h"
 #include "layout/element_ref_adapter.h"
 #include "layout/skia_text_metrics.h"
@@ -19,6 +20,28 @@
 #include <bit>
 
 namespace bro::engine {
+
+namespace {
+
+// Whether `elem` or anything under it (shadow trees included) has a
+// backdrop-filter. A compositor layer is painted into a surface of its own,
+// where the backdrop such an element filters is an empty layer, so a subtree
+// holding one is never promoted: it re-records over its real backdrop.
+bool subtreeHasBackdropFilter(const dom::Node* node) {
+    if (!node) return false;
+    if (node->nodeType() == dom::NodeType::Element) {
+        const auto* el = static_cast<const dom::Element*>(node);
+        const auto& cs = el->computedStyle();
+        auto it = cs.find("backdrop-filter");
+        if (it != cs.end() && !it->second.empty() && it->second != "none") return true;
+        if (subtreeHasBackdropFilter(el->shadowRoot())) return true;
+    }
+    for (const dom::Node* child : node->childNodes())
+        if (subtreeHasBackdropFilter(child)) return true;
+    return false;
+}
+
+} // namespace
 
 // ---------------------------------------------------------------------------
 // Layout thread — owns style resolution + layout computation. Reads DOM tree
@@ -99,7 +122,8 @@ void Engine::layoutThreadFunc() {
             const bool topLayerActive = !document_->topLayer().empty();
             auto routePromotion = [&](dom::Element* e) {
                 if (!topLayerActive &&
-                    isTransformOpacityOnly(e, webAnimationManager_))
+                    isTransformOpacityOnly(e, webAnimationManager_) &&
+                    !subtreeHasBackdropFilter(e))
                     promotedElements_.insert(e);
                 else {
                     // A non-promoted animation (width/left/color/…) can change

@@ -93,6 +93,9 @@ public:
     void saveLayerWithFilter(std::span<const CssFilterParams> filters,
                              float x, float y, float w, float h) override;
     void saveLayerWithBlend(BlendMode mode) override;
+    void drawBackdropFilter(std::span<const CssFilterParams> filters,
+                            float x, float y, float w, float h, const Radii& r,
+                            float opacity) override;
 
     void setClip(float x, float y, float w, float h) override;
     void resetClip() override;

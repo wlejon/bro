@@ -413,6 +413,20 @@ public:
     // source-over) so backends can adopt incrementally.
     virtual void saveLayerWithBlend(BlendMode mode) { (void)mode; save(); }
 
+    // CSS backdrop-filter: replace what is already drawn under the box
+    // (x, y, w, h), clipped to its border radii, with that content passed
+    // through the filter chain. The element's own background then paints on
+    // top. The backdrop is what this surface holds, so content composited as
+    // a separate layer (a canvas, WebGL, an iframe, a promoted subtree) is
+    // not part of it. `opacity` is the element's: the filtered backdrop is
+    // mixed over the unfiltered one by it. Default: no-op, the box shows its
+    // unfiltered backdrop.
+    virtual void drawBackdropFilter(std::span<const CssFilterParams> filters,
+                                    float x, float y, float w, float h, const Radii& r,
+                                    float opacity) {
+        (void)filters; (void)x; (void)y; (void)w; (void)h; (void)r; (void)opacity;
+    }
+
     virtual void setClip(float x, float y, float w, float h) = 0;
     virtual void resetClip() = 0;
 

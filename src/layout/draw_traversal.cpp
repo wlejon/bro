@@ -115,6 +115,12 @@ bool createsStackingContext(dom::Element* elem, bool isRoot) {
     if (fIt != s.end() && !fIt->second.empty() && fIt->second != "none")
         return true;
 
+    // backdrop-filter != none (CSS Filter Effects 2): its backdrop is drawn
+    // as the root's first paint, so the element has to be one.
+    auto bfIt = s.find("backdrop-filter");
+    if (bfIt != s.end() && !bfIt->second.empty() && bfIt->second != "none")
+        return true;
+
     // isolation: isolate
     auto isoIt = s.find("isolation");
     if (isoIt != s.end() && isoIt->second == "isolate") return true;
@@ -584,6 +590,25 @@ void DrawTraversal::paintStackingContext(StackingContext* sc, bool withinPromote
                 renderer_->translate(rbx + ox, rby + oy);
                 renderer_->concat(mat.a, mat.b, mat.c, mat.d, mat.e, mat.f);
                 renderer_->translate(-(rbx + ox), -(rby + oy));
+            }
+        }
+    }
+    // backdrop-filter: the root's backdrop is what is on the surface under
+    // it now, inside its transform but before its opacity/filter layers open
+    // (inside them the surface would be an empty layer). Opacity mixes the
+    // filtered backdrop over the plain one, as it would the whole element.
+    {
+        auto bfIt = rootStyle.find("backdrop-filter");
+        if (bfIt != rootStyle.end() && !bfIt->second.empty() && bfIt->second != "none") {
+            auto filters = parseCSSFilter(bfIt->second, styleCurrentColor(rootStyle),
+                shadowLengthContext(sc->root, rootStyle, viewportW_, viewportH_));
+            if (!filters.empty()) {
+                float opacity = 1.0f;
+                auto opIt = rootStyle.find("opacity");
+                if (opIt != rootStyle.end())
+                    opacity = std::clamp(std::strtof(opIt->second.c_str(), nullptr), 0.0f, 1.0f);
+                renderer_->drawBackdropFilter(filters, rbx, rby, rbw, rbh,
+                                              getRadii(rootStyle, rbw, rbh), opacity);
             }
         }
     }
