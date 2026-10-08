@@ -221,6 +221,17 @@ bro.window.isTrayAvailable = function() {};
 bro.window.displayMode;
 
 /**
+ * Captures what is on screen to a PNG (docs/screen-capture.md). Under DRM it is the frame bro
+ * last handed to KMS scanout, read back from the scanout buffer: client windows, the shell and
+ * its overlays exactly as the display shows them. Elsewhere it is the app's own composite.
+ * Synchronous; under DRM it costs a read of the scanout buffer and a PNG encode.
+ *
+ * @param {string} [path] where to write the PNG; default `$XDG_RUNTIME_DIR/bro-screen.png`
+ * @returns {string|null} the path written, or null (the reason is logged)
+ */
+bro.window.captureScreen('/tmp/desktop.png');
+
+/**
  * Registers a global hotkey: a chord that reaches the app whichever window has the keyboard.
  *
  * Accelerators: modifiers (Ctrl/Control, Alt/Option, Shift, Super/Meta/Cmd/Win,

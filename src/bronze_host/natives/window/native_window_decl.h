@@ -246,6 +246,9 @@ int32_t bro_window_simulateHotkeyKey(const char* key, const char* mods, int32_t 
 void bro_window_resetHotkeyKeys(void);
 // "windowed" | "headless" | "server" | "drm"
 const char* bro_window_displayMode_get(void);
+// Captures what is on screen to a PNG at `path` (empty: the default path in
+// the runtime dir). Returns the path written, or "" (the reason is logged).
+const char* bro_window_captureScreen(const char* path);
 
 // bro.window single instance
 bool bro_window_requestSingleInstance(const char* name, const char* argsJson);

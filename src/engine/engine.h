@@ -352,6 +352,18 @@ public:
     void setTestFailure(bool f = true) { testFailure_ = f; }
     void clearTestFailure() { testFailure_ = false; }
     bool screenshot(const std::string& path);
+    /// What is on screen, as a PNG at `path` (docs/screen-capture.md). Under
+    /// DRM: the last frame handed to KMS scanout, read back from the scanout
+    /// buffer, so client windows and the shell exactly as composited.
+    /// Elsewhere: the engine's own composite (screenshot()). False, with
+    /// `why`, when there is nothing to read or the file cannot be written.
+    bool captureScreen(const std::string& path, std::string* why = nullptr);
+    /// The out-of-process triggers for captureScreen under DRM: SIGUSR2, or a
+    /// request file in the runtime dir. Polled by the DRM frame loop.
+    void pollScreenCaptureTriggers();
+    static void installScreenCaptureSignal();
+    static std::string defaultScreenCapturePath();
+    static std::string screenCaptureRequestPath();
     bool screenshot(const std::string& path, int x, int y, int w, int h);
     std::vector<uint8_t> capturePixels();
     double gpuFrameMs();

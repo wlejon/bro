@@ -17,6 +17,9 @@
 #include "platform/desktop_single_instance.h"
 #include "platform/sdl_window.h"
 #include "util/interrupt.h"
+#include "util/log.h"
+
+#include <string>
 
 #include <vector>
 
@@ -485,6 +488,21 @@ const char* bro_window_displayMode_get(void) {
         case engine::DisplayMode::Drm: return "drm";
     }
     return "windowed";
+}
+
+const char* bro_window_captureScreen(const char* path) {
+    static thread_local std::string s_written;
+    s_written.clear();
+    auto* eng = hostEngine();
+    if (!eng) return "";
+    std::string target = (path && *path) ? path : engine::Engine::defaultScreenCapturePath();
+    std::string why;
+    if (!eng->captureScreen(target, &why)) {
+        LOG_WARN("bro.window.captureScreen('%s') failed: %s", target.c_str(), why.c_str());
+        return "";
+    }
+    s_written = std::move(target);
+    return s_written.c_str();
 }
 
 bool bro_window_unregisterGlobalHotkey(int32_t id) {

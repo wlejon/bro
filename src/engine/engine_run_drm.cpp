@@ -96,6 +96,7 @@ void Engine::drmFrame() {
     const bool layoutSignaled = drmSignalLayout(baseWasDirty);
 
     renderAndPresentFrame(frameStart, now, wallFrameDtMs, layoutSignaled, baseWasDirty);
+    pollScreenCaptureTriggers();
 
     if (vulkanPresenter_ && vulkanPresenter_->kmsDirectPresenter())
         vulkanPresenter_->kmsDirectPresenter()->handlePageFlipEvent(10);

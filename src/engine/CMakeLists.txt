@@ -1,6 +1,7 @@
 add_library(bro_engine STATIC
     app_reload.cpp
     source_preflight.cpp
+    screen_capture.cpp
     engine.cpp
     scene_audio_sync.cpp
     engine_compositor.cpp

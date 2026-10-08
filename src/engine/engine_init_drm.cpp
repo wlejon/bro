@@ -94,6 +94,9 @@ void Engine::initDrm(const EngineConfig& config) {
     renderer_ = std::move(skia);
 
     LOG_INFO("Engine: DRM display mode initialized (%ux%u)", viewportWidth_, viewportHeight_);
+    installScreenCaptureSignal();
+    LOG_INFO("Engine: screen capture: kill -USR2 %d (to %s), or write a path into %s",
+             static_cast<int>(::getpid()), defaultScreenCapturePath().c_str(), screenCaptureRequestPath().c_str());
 
 #if BRO_WITH_COMPOSITOR
     compositor::CompositorConfig compCfg;

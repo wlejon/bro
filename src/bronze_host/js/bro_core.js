@@ -187,6 +187,14 @@
     // input as a desktop shell host).
     accessor(bro.window, 'displayMode', () => __bro_native.window.displayMode, undefined);
 
+    // A PNG of what is on screen (docs/screen-capture.md): under DRM the frame
+    // KMS scans out (client windows + shell), elsewhere the app's composite.
+    // Returns the path written, or null (the reason is logged).
+    fn(bro.window, 'captureScreen', function captureScreen(path) {
+        const written = __bro_native.window.captureScreen(path === undefined || path === null ? '' : String(path));
+        return written ? written : null;
+    });
+
     const hotkeyCallbacks = new Map();
     fn(bro.window, 'registerGlobalHotkey', function registerGlobalHotkey(accelerator, callback, options) {
         if (typeof accelerator !== 'string' || !accelerator) {

@@ -14,6 +14,9 @@
 #include <vulkan/vulkan.h>
 #endif
 
+#include <string>
+#include <vector>
+
 namespace bro::render {
 
 class VulkanContext;
@@ -60,6 +63,16 @@ public:
     bool presentComposited(VulkanContext& ctx, VulkanPresenter& presenter,
                            const PresentFrame& frame, int inFenceFd = -1, int* outFenceFd = nullptr);
 
+    /// The last composited frame as it went to scanout, as tightly packed
+    /// RGBA8 (alpha forced opaque: the scanout format is XRGB). Reads the
+    /// scanout buffer itself, so it is exactly what the display was given.
+    /// Call on the thread that presents (the engine thread): the slot read is
+    /// the one the next-but-one present reuses. False — with `why` — before
+    /// the first composited present, or while a client buffer is scanned out
+    /// directly (the composited slot is then not what is on screen).
+    bool readLastFrame(std::vector<uint8_t>& rgba, uint32_t& width, uint32_t& height,
+                       std::string* why = nullptr);
+
     /// Process page-flip events via drmHandleEvent (vblank sync)
     bool handlePageFlipEvent(int timeoutMs = 100);
 
@@ -81,6 +94,8 @@ private:
     uint32_t width_ = 0;
     uint32_t height_ = 0;
     size_t currentSlot_ = 0;
+    bool composited_ = false;      // a composited frame has been presented
+    bool directOnScreen_ = false;  // the last present was a direct client scanout
 
 #if defined(__linux__)
     std::shared_ptr<brodmabuf::KmsDevice> device_;
