@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>remote host test</title>
+<style>
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; }
+  body { background: rgb(32, 80, 160); }
+  body.key { background: rgb(160, 32, 80); }
+  body.click { background: rgb(32, 160, 80); }
+</style>
+</head>
+<body>
+<script>
+  // What bro_remote_host_test's viewer does arrives here as DOM events: the
+  // page records it and changes colour, so the viewer sees the effect in the
+  // stream and the driving script (host_remote.js) can check the details.
+  // Windowed there is no driving script, so the page hosts itself.
+  window.remoteSeen = { keys: [], clicks: [] };
+  if (process.env.BRO_REMOTE_TEST_WINDOWED === '1')
+    bro.remote.host({ socket: process.env.BRO_REMOTE_TEST_SOCKET, codecs: 'raw', fps: 30 });
+  document.addEventListener('keydown', (e) => {
+    window.remoteSeen.keys.push(e.key);
+    document.body.className = 'key';
+  });
+  document.addEventListener('click', (e) => {
+    window.remoteSeen.clicks.push([e.clientX, e.clientY, e.button]);
+    document.body.className = 'click';
+  });
+</script>
+</body>
+</html>

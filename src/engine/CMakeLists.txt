@@ -11,6 +11,7 @@ add_library(bro_engine STATIC
     engine_init_drm.cpp
     engine_run_drm.cpp
     engine_drm_input.cpp
+    engine_device_input.cpp
     shell_input_rules.cpp
     engine_shell_compositor.cpp
     window_frames.cpp

@@ -121,8 +121,10 @@ public:
     /// Windowed: also copy each presented swapchain image into the readback
     /// buffer, in the frame's own submission, so readbackPixels() returns
     /// what was put on screen (where the surface lets swapchain images be
-    /// read). Test harnesses only: it costs a copy per frame.
+    /// read). Test harnesses and a remote viewer (bro.remote) only: it costs
+    /// a copy per frame.
     void setCapturePresents(bool capture) { capturePresents_ = capture; }
+    bool capturePresents() const { return capturePresents_; }
 
     /// Wait for the last present's readback and return its pixels (RGBA8,
     /// tightly packed). Offscreen every present is read back; windowed only

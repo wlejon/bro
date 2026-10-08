@@ -108,6 +108,29 @@ public:
     void handleDropFile(const std::string& path, float x = -1, float y = -1) { handleDropFile(std::vector<std::string>{ path }, x, y); }
     void handleDropText(const std::string& text, float x = -1, float y = -1);
 
+    /// Input from a device bro's platform layer does not own (a remote
+    /// viewer, bro.remote), as such a device reports it: evdev KEY_* / BTN_*
+    /// codes, an absolute pointer in frame pixels (framePixelWidth/Height),
+    /// wheel in 120ths of a detent (+y down, libinput's sense). It is routed
+    /// as local input is: under DRM through the libinput path (hotkeys, the
+    /// shell or a client window, sharing the seat's modifiers and pointer);
+    /// otherwise through the handle* entry points above, with key text the
+    /// way the DRM path derives it. engine_device_input.cpp.
+    struct DeviceInput {
+        enum class Kind : uint8_t { Key, Motion, Button, Wheel } kind = Kind::Key;
+        uint32_t code = 0;
+        bool pressed = false;
+        float x = 0.0f;
+        float y = 0.0f;
+        int32_t wheelX = 0;
+        int32_t wheelY = 0;
+    };
+    void injectDeviceInput(const DeviceInput& in);
+    /// The pointer shape the screen shows (a CSS cursor name; "none" when
+    /// hidden): the document's, or under DRM a client window's while the
+    /// pointer is on one.
+    std::string screenCursorShape() const;
+
     // Gamepads (gamepad.cpp)
     void handleGamepadAdded(uint32_t instanceId);
     void handleGamepadRemoved(uint32_t instanceId);
@@ -967,6 +990,7 @@ private:
     float lastMouseX_ = 0.0f;
     float lastMouseY_ = 0.0f;
     bool cursorVisible_ = false;
+    int deviceInputMods_ = 0;  // injectDeviceInput's modifier state, off DRM
 
     dom::ElementHandle lockedElement_;
     float lockedMouseX_ = 0.0f;

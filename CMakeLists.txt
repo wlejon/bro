@@ -258,6 +258,7 @@ bro_check_sibling(broclip      _d_render       _d_clip)
 bro_check_sibling(brompris     _d_render       _d_mpris)
 bro_check_sibling(bropulse     _d_render       _d_pulse)
 bro_check_sibling(broime       _d_render       _d_ime)
+bro_check_sibling(broremote    _d_render       _d_remote)
 
 # Services (each pulls a vcpkg dependency).
 option(BRO_WITH_NET      "Game networking (GameNetworkingSockets / vcpkg)"   ${_d_svc})
@@ -284,6 +285,10 @@ option(BRO_WITH_CLIP       "Clipboard history and selection preservation (brocli
 option(BRO_WITH_MPRIS      "Media player control and metadata (brompris)"                ${_d_mpris})
 option(BRO_WITH_PULSE      "PipeWire/PulseAudio policy and stream router (bropulse)"     ${_d_pulse})
 option(BRO_WITH_IME        "Compose keys and input method candidate engine (broime)"      ${_d_ime})
+# Hosting a remote session (bro.remote): broremote streams the composited
+# frame to a viewer and feeds its input back. Only when ../broremote is
+# checked out (it has no submodule); third_party turns it off otherwise.
+option(BRO_WITH_REMOTE     "Remote session hosting (broremote)"                           ${_d_remote})
 # The native <terminal> element: bropty (VT emulation + PTY/ConPTY), its
 # brosearch dependency and brothemes (minimum contrast), plus bromux
 # (persistent sessions) when found; all vcpkg-free siblings. On in app and
@@ -437,6 +442,7 @@ set(BROCLIP_ENABLE_API       ON CACHE BOOL "Build Bronze JavaScript API for broc
 set(BROMPRIS_ENABLE_API      ON CACHE BOOL "Build Bronze JavaScript API for brompris" FORCE)
 set(BROPULSE_ENABLE_API      ON CACHE BOOL "Build Bronze JavaScript API for bropulse" FORCE)
 set(BROIME_ENABLE_API        ON CACHE BOOL "Build Bronze JavaScript API for broime" FORCE)
+set(BROREMOTE_ENABLE_API     ON CACHE BOOL "Build Bronze JavaScript API for broremote" FORCE)
 
 # Stamp every feature flag as a 0/1 compile definition so C++ can `#if` on it.
 # Applied to the targets that carry feature-gated code (bro_engine, bro_scene,
@@ -444,7 +450,7 @@ set(BROIME_ENABLE_API        ON CACHE BOOL "Build Bronze JavaScript API for broi
 set(BRO_FEATURE_FLAGS
     3D PHYSICS AUDIO GAMEAI FLORA
     NET VIDEO STEAM TERMINAL CONF THEMES KEYS SEARCH APPS VFS THUMB SEAT CRED SYS DISPLAYS PORTAL COMPOSITOR WL A11Y
-    DECOR CLIP MPRIS PULSE IME
+    DECOR CLIP MPRIS PULSE IME REMOTE
     TENSOR TENSOR_CUDA TENSOR_METAL TENSOR_VULKAN LM DIFFUSION VISION SOUNDML TRIPOSPLAT GAMEAI_NN
     BRONZE)
 function(bro_apply_feature_defs target)

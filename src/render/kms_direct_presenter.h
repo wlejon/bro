@@ -3,6 +3,7 @@
 #include "render/layer_source.h"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -29,9 +30,27 @@ struct KmsScanoutSlot {
     std::unique_ptr<brodmabuf::KmsFramebuffer> fb;
     std::unique_ptr<brodmabuf::VulkanImage> vkImage;
     VkImageView vkView = VK_NULL_HANDLE;
+    brodmabuf::DmaBufAttributes dmabuf;  // the exported planes (the fds the slot keeps open)
 #endif
     uint32_t width = 0;
     uint32_t height = 0;
+};
+
+/// A composited frame as it went to scanout, for a consumer that reads the
+/// scanout buffer itself (bro.remote's encoder). The fds belong to the
+/// presenter; a consumer that keeps reading after the listener returns
+/// takes a hold on the slot (KmsDirectPresenter::holdSlot) and keeps it
+/// until it is done.
+struct KmsScanoutFrame {
+    size_t slot = 0;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    uint32_t drmFormat = 0;
+    uint64_t modifier = 0;
+    uint32_t planeCount = 0;
+    int fds[4] = {-1, -1, -1, -1};
+    uint32_t offsets[4] = {};
+    uint32_t strides[4] = {};
 };
 
 class KmsDirectPresenter {
@@ -87,7 +106,37 @@ public:
     uint32_t height() const { return height_; }
     void close();
 
+    /// Called on the presenting thread after each composited frame is on
+    /// screen (the flip has completed and its GPU work is done, so the
+    /// content is complete: no acquire fence is needed). Empty to stop.
+    using ScanoutListener = std::function<void(const KmsScanoutFrame&)>;
+    void setScanoutListener(ScanoutListener listener) { scanoutListener_ = std::move(listener); }
+
+    /// Keeps `slot` from being rendered into until the returned release is
+    /// called (exactly once, from any thread; it stays safe to call after the
+    /// presenter is gone). presentComposited waits for a held slot before
+    /// drawing into it — a bounded wait (kHoldWaitMs), after which it draws
+    /// anyway and logs, because a stalled screen is worse than one torn
+    /// frame in a stream. close() waits the same way.
+    std::function<void()> holdSlot(size_t slot);
+    static constexpr int kHoldWaitMs = 200;
+
+    /// While set, canDirectScanout answers false, so a fullscreen client is
+    /// composited into a scanout slot (where the scanout listener sees it)
+    /// rather than flipped to directly.
+    void setDirectScanoutInhibited(bool inhibited) { directScanoutInhibited_ = inhibited; }
+
 private:
+    // Waits (bounded) until no hold is left on `slot`; false on timeout.
+    bool waitForSlotRelease(size_t slot);
+
+    // The holds on each slot, shared with the release functions holdSlot
+    // hands out, which can outlive the presenter.
+    struct SlotHolds;
+    std::shared_ptr<SlotHolds> holds_;
+    ScanoutListener scanoutListener_;
+    bool directScanoutInhibited_ = false;
+
     bool active_ = false;
     bool paused_ = false;
     int drmFd_ = -1;

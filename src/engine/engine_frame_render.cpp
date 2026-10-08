@@ -209,17 +209,7 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
     compositeWindowHosts();
 
     if (displayMode_ == DisplayMode::Drm && cursorVisible_ && !lockedElement_.get()) {
-        std::string shape = resolvedCursor_;
-#if BRO_WITH_COMPOSITOR && BRO_HAVE_WAYLAND_SERVER
-        // The client's cursor while the pointer is on a client (or a window
-        // is being dragged); over the shell, the shell's.
-        if (drmCtx_ && drmCtx_->compositor &&
-            (drmCtx_->pointerOnClient || drmCtx_->compositor->isDragActive() || !isShellApp())) {
-            auto c = drmCtx_->compositor->cursor();
-            if (c.hidden) shape = "none";
-            else if (!c.shape.empty()) shape = c.shape;
-        }
-#endif
+        const std::string shape = screenCursorShape();
         if (shape != "none") {
             if (SkCanvas* canvas = frameSegmentCanvas()) {
                 float sx = static_cast<float>(frameCompositeW_) / static_cast<float>(viewportWidth_ > 0 ? viewportWidth_ : 1);

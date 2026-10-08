@@ -5,9 +5,44 @@
 #include "util/log.h"
 
 #include <algorithm>
+#include <array>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <mutex>
 #include <unistd.h>
 
 namespace bro::render {
+
+struct KmsDirectPresenter::SlotHolds {
+    std::mutex m;
+    std::condition_variable cv;
+    std::array<int, 8> count{};
+};
+
+std::function<void()> KmsDirectPresenter::holdSlot(size_t slot) {
+    if (!holds_) holds_ = std::make_shared<SlotHolds>();
+    if (slot >= holds_->count.size()) return [] {};
+    {
+        std::lock_guard<std::mutex> lk(holds_->m);
+        ++holds_->count[slot];
+    }
+    return [holds = holds_, slot, released = std::make_shared<std::atomic<bool>>(false)] {
+        if (released->exchange(true)) return;
+        {
+            std::lock_guard<std::mutex> lk(holds->m);
+            --holds->count[slot];
+        }
+        holds->cv.notify_all();
+    };
+}
+
+bool KmsDirectPresenter::waitForSlotRelease(size_t slot) {
+    if (!holds_ || slot >= holds_->count.size()) return true;
+    std::unique_lock<std::mutex> lk(holds_->m);
+    return holds_->cv.wait_for(lk, std::chrono::milliseconds(kHoldWaitMs),
+                               [&] { return holds_->count[slot] == 0; });
+}
 
 KmsDirectPresenter::~KmsDirectPresenter() {
     close();
@@ -183,6 +218,7 @@ bool KmsDirectPresenter::initScanoutBuffers(VulkanContext& ctx, uint32_t count) 
             return false;
         }
 
+        slot.dmabuf = std::move(attrs);
         scanoutSlots_.push_back(std::move(slot));
     }
 
@@ -242,7 +278,7 @@ bool KmsDirectPresenter::initScanoutBuffers(VulkanContext& ctx, uint32_t count) 
 bool KmsDirectPresenter::canDirectScanout(
     const DmabufLayerSource& src, const LayerQuad& quad,
     uint32_t crtcWidth, uint32_t crtcHeight) const {
-    if (!active_ || paused_) return false;
+    if (!active_ || paused_ || directScanoutInhibited_) return false;
     if (quad.clipped()) return false;
     if (quad.x != 0.0f || quad.y != 0.0f) return false;
     if (static_cast<uint32_t>(quad.w) != crtcWidth ||
@@ -310,6 +346,17 @@ bool KmsDirectPresenter::presentComposited(
     currentSlot_ = (currentSlot_ + 1) % scanoutSlots_.size();
     auto& slot = scanoutSlots_[currentSlot_];
 
+    // A reader (the remote encoder) may still be copying this slot out.
+    // That copy takes well under a frame; the bound is for an encoder that
+    // is being set up or has stalled.
+    if (!waitForSlotRelease(currentSlot_)) {
+        static uint32_t s_heldLogCount = 0;
+        if (s_heldLogCount++ < 5) {
+            LOG_WARN("KmsDirectPresenter: scanout slot %zu still held after %d ms; drawing into it",
+                     currentSlot_, kHoldWaitMs);
+        }
+    }
+
     static uint32_t s_frameLogCount = 0;
     if (s_frameLogCount++ < 5) {
         LOG_INFO("KmsDirectPresenter: presentComposited slot=%zu images=%zu below=%d clear=[%.1f,%.1f,%.1f,%.1f] dims=%ux%u",
@@ -364,6 +411,26 @@ bool KmsDirectPresenter::presentComposited(
 
     if (outFenceFd) {
         *outFenceFd = flipRes.value().release();
+    }
+
+    // The GPU work was waited for above, so the slot is complete: a reader
+    // needs no acquire fence. (Were the CPU wait ever replaced by a fence on
+    // the flip, the render-done sync_file would have to be exported for the
+    // reader too.)
+    if (scanoutListener_) {
+        KmsScanoutFrame out;
+        out.slot = currentSlot_;
+        out.width = slot.width;
+        out.height = slot.height;
+        out.drmFormat = slot.dmabuf.drm_format;
+        out.modifier = slot.dmabuf.modifier;
+        out.planeCount = static_cast<uint32_t>(std::min<size_t>(slot.dmabuf.planes.size(), 4));
+        for (uint32_t i = 0; i < out.planeCount; ++i) {
+            out.fds[i] = slot.dmabuf.planes[i].fd.get();
+            out.offsets[i] = slot.dmabuf.planes[i].offset;
+            out.strides[i] = slot.dmabuf.planes[i].stride;
+        }
+        scanoutListener_(out);
     }
     return true;
 #else
@@ -443,6 +510,10 @@ void KmsDirectPresenter::pause() {
 
 void KmsDirectPresenter::close() {
 #if defined(__linux__)
+    for (size_t i = 0; i < scanoutSlots_.size(); ++i) {
+        if (!waitForSlotRelease(i))
+            LOG_WARN("KmsDirectPresenter: closing with scanout slot %zu still held", i);
+    }
     for (auto& s : scanoutSlots_) {
         if (s.vkView != VK_NULL_HANDLE && vkDevice_ != VK_NULL_HANDLE) {
             vkDestroyImageView(vkDevice_, s.vkView, nullptr);

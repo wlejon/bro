@@ -690,6 +690,31 @@ if(BRO_WITH_DMABUF AND NOT TARGET brodmabuf)
     endif()
 endif()
 
+# --- broremote ---
+# Remote session hosting (bro.remote). A standalone checkout only (no
+# submodule yet): without one, remote hosting is off, said once here, and the
+# build carries the `available: false` stub. Its own tools, viewer and tests
+# build in its own tree.
+if(BRO_WITH_REMOTE AND NOT TARGET broremote)
+    set(BROREMOTE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(BROREMOTE_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+    set(BROREMOTE_BUILD_VIEWER OFF CACHE BOOL "" FORCE)
+    bro_default_sibling_dir(broremote _broremote_default)
+    set(BROREMOTE_DIR "${_broremote_default}" CACHE PATH "Path to standalone broremote repo")
+    if(EXISTS "${BROREMOTE_DIR}/CMakeLists.txt")
+        message(STATUS "broremote: using standalone repo at ${BROREMOTE_DIR}")
+        # Not ${CMAKE_BINARY_DIR}/broremote, the name its CLI would take
+        # there under a single-config generator (as with bromux).
+        add_subdirectory("${BROREMOTE_DIR}" "${CMAKE_BINARY_DIR}/broremote-lib" EXCLUDE_FROM_ALL)
+    elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/broremote/CMakeLists.txt")
+        message(STATUS "broremote: using submodule at third_party/broremote")
+        add_subdirectory(broremote "${CMAKE_BINARY_DIR}/broremote-lib" EXCLUDE_FROM_ALL)
+    else()
+        message(STATUS "broremote: not found (../broremote); remote hosting off")
+        set(BRO_WITH_REMOTE OFF PARENT_SCOPE)
+    endif()
+endif()
+
 # --- brodbus ---
 # The shared sd-bus layer of brocred, brosys, broseat, broportal, and brompris: Linux
 # only, and only with libsystemd, whose absence those libraries handle

@@ -507,6 +507,21 @@ if(BRO_WITH_IME)
     target_link_libraries(bro_bronze_host PUBLIC broime broime_api)
 endif()
 
+# bro.remote: broremote's binding, and the host side it reaches through its
+# hooks (host_remote.cpp: frames from the presenter, input into the engine).
+if(BRO_WITH_REMOTE)
+    target_sources(bro_bronze_host PRIVATE host_remote.cpp)
+    target_link_libraries(bro_bronze_host PUBLIC broremote broremote_api)
+    if(BRO_BUILD_TESTS)
+        # The viewer end of a hosted session: spawns the bro-headless beside
+        # it on tests/remote (a native test in tests/run_tests.sh).
+        add_executable(bro_remote_host_test tests/test_remote_host.cpp)
+        target_link_libraries(bro_remote_host_test PRIVATE broremote)
+        target_compile_definitions(bro_remote_host_test PRIVATE
+            BRO_REMOTE_TEST_DIR="${bro_SOURCE_DIR}/tests/remote")
+    endif()
+endif()
+
 if(BRO_WITH_WEBP)
     target_link_libraries(bro_bronze_host PUBLIC bro_webp)
 endif()

@@ -384,6 +384,9 @@ void installBroRoots(engine::Engine& engine) {
 #if !BRO_WITH_IME
     setUnavailable("ime", "BRO_WITH_IME");
 #endif
+#if !BRO_WITH_REMOTE
+    setUnavailable("remote", "BRO_WITH_REMOTE");
+#endif
     // Privileged desktop shell namespaces:
     // If not granted to this app by the desktop trust model, install the unavailable
     // namespace stub so that bro.<ns>.available === false and every call throws.

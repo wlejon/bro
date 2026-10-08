@@ -137,6 +137,9 @@
 #if BRO_WITH_IME
 #include <broime/api.h>
 #endif
+#if BRO_WITH_REMOTE
+#include "bronze_host/host_remote.h"
+#endif
 #include "api/api.h"  // brokit::api::resolveAssetPath
 #include <broimage/api.h>
 
@@ -747,6 +750,10 @@ void installSiblingApis(engine::Engine& engine) {
             engine.addShutdownHook([] { bro::ime::api::shutdownImeAsync(); });
         }
     }
+#endif
+#if BRO_WITH_REMOTE
+    // bro.remote, with its frame pump and shutdown hook (host_remote.cpp).
+    installRemoteHost(engine);
 #endif
 }
 
