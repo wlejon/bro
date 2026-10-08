@@ -51,8 +51,8 @@
  *       options.socket       socket name, 1-64 of [A-Za-z0-9._-] (default
  *                            "default", which `broremote-view --ssh HOST`
  *                            reaches with no other options)
- *       options.codecs       a name or an array in preference order: 'h264',
- *                            'hevc', 'av1', 'raw' (default 'h264'). Ones this
+ *       options.codecs       a name or an array in preference order: 'hevc',
+ *                            'h264', 'av1', 'raw' (default ['hevc', 'h264']). Ones this
  *                            machine cannot encode are skipped; a viewer gets
  *                            the first one it can decode. Hardware encoders
  *                            are VA-API (Linux); elsewhere only 'raw'
@@ -85,10 +85,11 @@
  */
 
 // ---------------------------------------------------------------------------
-// Host on the default socket, with hardware H.264 where the machine has it.
+// Host on the default socket, with hardware HEVC (else H.264) where the
+// machine has it.
 // ---------------------------------------------------------------------------
 if (bro.remote.available) {
-    const status = bro.remote.host({ codecs: ['h264', 'hevc', 'raw'] });
+    const status = bro.remote.host({ codecs: ['hevc', 'h264', 'raw'] });
     console.log(`hosting on ${status.socketPath}`);
     // On another machine:  broremote-view --ssh this-host
 }
@@ -116,7 +117,7 @@ function remoteStatusText() {
 // A setting that turns hosting on and off (helm's ui/js/remote.js).
 // ---------------------------------------------------------------------------
 function setHosting(on) {
-    if (on) bro.remote.host({ socket: 'desk', codecs: ['h264', 'raw'] });
+    if (on) bro.remote.host({ socket: 'desk', codecs: ['hevc', 'h264', 'raw'] });
     else bro.remote.stop();
 }
 
