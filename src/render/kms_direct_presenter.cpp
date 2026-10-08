@@ -395,6 +395,30 @@ bool KmsDirectPresenter::presentComposited(
     uint64_t ticket = frames.submit(cmd, {});
     ctx.queue().wait(ticket);
 
+    // The slot's GPU work is done, so its content is complete: hand it to a
+    // reader (the remote encoder) now, before the flip. After the flip the
+    // frame would first wait for the next vblank, most of a refresh period,
+    // before it could be encoded. The reader needs no acquire fence (were
+    // the CPU wait above ever replaced by a fence on the flip, the
+    // render-done sync_file would have to be exported for the reader too),
+    // and its hold keeps the slot from being drawn into again whatever the
+    // flip does.
+    if (scanoutListener_) {
+        KmsScanoutFrame out;
+        out.slot = currentSlot_;
+        out.width = slot.width;
+        out.height = slot.height;
+        out.drmFormat = slot.dmabuf.drm_format;
+        out.modifier = slot.dmabuf.modifier;
+        out.planeCount = static_cast<uint32_t>(std::min<size_t>(slot.dmabuf.planes.size(), 4));
+        for (uint32_t i = 0; i < out.planeCount; ++i) {
+            out.fds[i] = slot.dmabuf.planes[i].fd.get();
+            out.offsets[i] = slot.dmabuf.planes[i].offset;
+            out.strides[i] = slot.dmabuf.planes[i].stride;
+        }
+        scanoutListener_(out);
+    }
+
     auto flipRes = presenter_->present(*slot.fb, inFenceFd, true);
     if (!flipRes) {
         static uint32_t s_flipFailCount = 0;
@@ -411,26 +435,6 @@ bool KmsDirectPresenter::presentComposited(
 
     if (outFenceFd) {
         *outFenceFd = flipRes.value().release();
-    }
-
-    // The GPU work was waited for above, so the slot is complete: a reader
-    // needs no acquire fence. (Were the CPU wait ever replaced by a fence on
-    // the flip, the render-done sync_file would have to be exported for the
-    // reader too.)
-    if (scanoutListener_) {
-        KmsScanoutFrame out;
-        out.slot = currentSlot_;
-        out.width = slot.width;
-        out.height = slot.height;
-        out.drmFormat = slot.dmabuf.drm_format;
-        out.modifier = slot.dmabuf.modifier;
-        out.planeCount = static_cast<uint32_t>(std::min<size_t>(slot.dmabuf.planes.size(), 4));
-        for (uint32_t i = 0; i < out.planeCount; ++i) {
-            out.fds[i] = slot.dmabuf.planes[i].fd.get();
-            out.offsets[i] = slot.dmabuf.planes[i].offset;
-            out.strides[i] = slot.dmabuf.planes[i].stride;
-        }
-        scanoutListener_(out);
     }
     return true;
 #else

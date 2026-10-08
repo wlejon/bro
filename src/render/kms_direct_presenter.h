@@ -106,9 +106,10 @@ public:
     uint32_t height() const { return height_; }
     void close();
 
-    /// Called on the presenting thread after each composited frame is on
-    /// screen (the flip has completed and its GPU work is done, so the
-    /// content is complete: no acquire fence is needed). Empty to stop.
+    /// Called on the presenting thread for each composited frame as soon as
+    /// its GPU work is done, just before it is flipped to the screen (the
+    /// content is complete: no acquire fence is needed; a reader that keeps
+    /// it past the call holds the slot, holdSlot). Empty to stop.
     using ScanoutListener = std::function<void(const KmsScanoutFrame&)>;
     void setScanoutListener(ScanoutListener listener) { scanoutListener_ = std::move(listener); }
 

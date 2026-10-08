@@ -11,7 +11,9 @@
 //   frames   Only while Server::wants_frames() (a viewer is attached):
 //              DRM       every composited frame, as the KMS scanout buffer it
 //                        is: a dmabuf the encoder imports, no copy. The
-//                        presenter calls back after each flip; the slot is
+//                        presenter calls back as soon as each composite's
+//                        GPU work is done, before its flip (encoding
+//                        starts without waiting for the vblank); the slot is
 //                        held (KmsDirectPresenter::holdSlot) until the server
 //                        releases the frame, and the presenter waits (briefly,
 //                        bounded) before drawing into a held slot. Direct
