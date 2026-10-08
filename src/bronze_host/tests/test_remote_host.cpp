@@ -252,7 +252,9 @@ int main(int argc, char** argv) {
                 (dir / "host_remote.js").string()},
                socket, true);
 
-    if (fs::exists(windowed)) {
+    // is_regular_file: in an embedding build (helm) "bro" beside the test is
+    // bro's binary directory, not the executable.
+    if (fs::is_regular_file(windowed)) {
         socket = "bro-remote-test-w" + id;
         setEnv("BRO_REMOTE_TEST_SOCKET", socket);
         setEnv("BRO_REMOTE_TEST_WINDOWED", "1");
