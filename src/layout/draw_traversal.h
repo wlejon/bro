@@ -144,7 +144,7 @@ public:
     struct ClientWindowSlot {
         uint64_t windowId = 0;
         dom::Element* frame = nullptr;
-        float insetLeft = 0, insetTop = 0;
+        float insetLeft = 0, insetTop = 0, insetRight = 0, insetBottom = 0;
     };
     void setClientWindows(const std::vector<ClientWindowSlot>* slots,
                           std::vector<render::ClientWindowRef>* out, uint32_t listId) {

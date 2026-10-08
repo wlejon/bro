@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cmath>
 #include <functional>
 
 namespace bro::engine {
@@ -52,7 +53,13 @@ void WindowFrames::rescan(dom::Document* doc) {
     entries_ = std::move(next);
 }
 
-void WindowFrames::write(Entry& e, dom::Element* el, const FrameWindow* w, int z) {
+WindowFrames::Box WindowFrames::outerOf(const FrameWindow& w) {
+    return Box{static_cast<float>(w.x - w.insetLeft), static_cast<float>(w.y - w.insetTop),
+               static_cast<float>(w.width + w.insetLeft + w.insetRight),
+               static_cast<float>(w.height + w.insetTop + w.insetBottom)};
+}
+
+void WindowFrames::write(Entry& e, dom::Element* el, const FrameWindow* w, const Box& box, int z) {
     Written& was = e.written;
     auto& style = el->style();
     if (!w) {
@@ -76,10 +83,10 @@ void WindowFrames::write(Entry& e, dom::Element* el, const FrameWindow* w, int z
         style.setProperty(prop, value);
         last = std::move(value);
     };
-    set("left", was.left, px(w->x - w->insetLeft));
-    set("top", was.top, px(w->y - w->insetTop));
-    set("width", was.width, px(w->width + w->insetLeft + w->insetRight));
-    set("height", was.height, px(w->height + w->insetTop + w->insetBottom));
+    set("left", was.left, px(static_cast<int>(std::lround(box.x))));
+    set("top", was.top, px(static_cast<int>(std::lround(box.y))));
+    set("width", was.width, px(static_cast<int>(std::lround(box.w))));
+    set("height", was.height, px(static_cast<int>(std::lround(box.h))));
     set("z-index", was.z, std::to_string(z));
 
     const std::string state = w->maximized ? "maximized" : "normal";
@@ -106,12 +113,43 @@ void WindowFrames::write(Entry& e, dom::Element* el, const FrameWindow* w, int z
     }
 }
 
-void WindowFrames::sync(dom::Document* doc, std::vector<FrameWindow> stack) {
+void WindowFrames::sync(dom::Document* doc, std::vector<FrameWindow> stack, double nowMs) {
+    // A framed window whose state changed glides from where it was shown.
+    std::unordered_map<uint64_t, Box> shownNow;
+    for (const auto& w : stack) {
+        if (!w.framed) continue;
+        const Box to = outerOf(w);
+        auto prev = std::find_if(stack_.begin(), stack_.end(), [&](const FrameWindow& p) { return p.id == w.id; });
+        if (prev != stack_.end() && prev->framed && (prev->maximized != w.maximized || prev->snap != w.snap)) {
+            auto shown = shownBox_.find(w.id);
+            const Box from = shown != shownBox_.end() ? shown->second : outerOf(*prev);
+            if (!(from == to)) motions_[w.id] = Motion{from, nowMs};
+        }
+        Box box = to;
+        if (auto m = motions_.find(w.id); m != motions_.end()) {
+            const double t = (nowMs - m->second.start) / kMotionMs;
+            if (t >= 1.0 || t < 0.0) {
+                motions_.erase(m);
+            } else {
+                // Ease out (cubic): quick to leave, settling into place.
+                const float k = static_cast<float>(1.0 - std::pow(1.0 - t, 3.0));
+                const Box& f = m->second.from;
+                box = Box{f.x + (to.x - f.x) * k, f.y + (to.y - f.y) * k, f.w + (to.w - f.w) * k,
+                          f.h + (to.h - f.h) * k};
+            }
+        }
+        shownNow[w.id] = box;
+    }
+    for (auto it = motions_.begin(); it != motions_.end();)
+        it = shownNow.count(it->first) ? std::next(it) : motions_.erase(it);
+    shownBox_ = std::move(shownNow);
+
     stack_ = std::move(stack);
     shown_.clear();
     if (!doc) {
         entries_.clear();
         doc_ = nullptr;
+        motions_.clear();
         return;
     }
     if (doc != doc_ || doc->mutationEpoch() != scannedEpoch_) {
@@ -135,7 +173,7 @@ void WindowFrames::sync(dom::Document* doc, std::vector<FrameWindow> stack) {
                 break;
             }
         }
-        write(e, el, w, z);
+        write(e, el, w, w ? shownBox_[w->id] : Box{}, z);
         if (w) shown_[e.window] = e.element;
     }
     // What was just written is not a reason to look again.
@@ -167,6 +205,8 @@ std::vector<layout::DrawTraversal::ClientWindowSlot> WindowFrames::slots() const
         s.frame = frameOf(w.id);
         s.insetLeft = static_cast<float>(w.insetLeft);
         s.insetTop = static_cast<float>(w.insetTop);
+        s.insetRight = static_cast<float>(w.insetRight);
+        s.insetBottom = static_cast<float>(w.insetBottom);
         out.push_back(s);
     }
     return out;

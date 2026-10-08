@@ -798,12 +798,18 @@ void DrawTraversal::emitClientWindows() {
             if (refs.size() > first || firstRun) flush(0);
             StackingContext* sc = it->second.get();
             paintStackingContext(sc, false);
-            // The client origin: the frame's border box (where layout put it
-            // this pass) plus the inset the frame was sized with.
+            // The client rect: the frame's border box (where layout put it
+            // this pass) less the insets the frame was sized with.
             const auto& box = slot.frame->layoutBox();
             const float bx = box.contentRect.x + sc->offsetX - box.padding.left - box.border.left;
             const float by = box.contentRect.y + sc->offsetY - box.padding.top - box.border.top;
-            refs.push_back(render::ClientWindowRef{slot.windowId, true, bx + slot.insetLeft, by + slot.insetTop});
+            const float bw = box.contentRect.width + box.padding.left + box.padding.right + box.border.left +
+                             box.border.right;
+            const float bh = box.contentRect.height + box.padding.top + box.padding.bottom + box.border.top +
+                             box.border.bottom;
+            refs.push_back(render::ClientWindowRef{slot.windowId, true, bx + slot.insetLeft, by + slot.insetTop,
+                                                   std::max(0.0f, bw - slot.insetLeft - slot.insetRight),
+                                                   std::max(0.0f, bh - slot.insetTop - slot.insetBottom)});
             // The frame's overlays go over its window: end the run here.
             auto ov = frameOverlaySCs_.find(slot.frame);
             if (ov != frameOverlaySCs_.end() && !ov->second.empty()) {

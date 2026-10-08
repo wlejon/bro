@@ -18,6 +18,9 @@
 #include "bronze_host/app_module.h"
 #include "bronze_host/host_gc.h"
 #include "api/fs_watch.h"
+#if BRO_WITH_COMPOSITOR
+#include <brocompositor/api.h>
+#endif
 
 #include <cstdlib>
 #include <cstring>
@@ -286,6 +289,12 @@ void Engine::performAppReload() {
     bro::bronze_host::clearParsedDocuments();
     bro::bronze_host::clearDynamicModules();
     bro::bronze_host::clearMenuHandlers();
+#if BRO_WITH_COMPOSITOR
+    // The compositor outlives the page (a shell host reloading its shell):
+    // the old page's listeners and edge reservations go with it, or the new
+    // page's bar would be reserved on top of the old one's.
+    brocompositor::api::resetCompositorScript();
+#endif
 
     // The registry of module namespaces the page published goes with it.
     // Kept, it would make the new page's compile bind every file the old one

@@ -10,6 +10,7 @@
 //     frame follows
 //   - a press on a client surface reaches the client, raising it
 //   - frames are hidden for windows that are not decorated
+//   - maximized with zero insets, a frame is borderless; a restore glides
 
 if (typeof hostCompositorSocket !== 'function' || hostCompositorSocket() === '' ||
     !bro.compositor || !bro.compositor.available) {
@@ -30,6 +31,11 @@ function waitFor(pred, what) {
         realSleep(20);
     }
     throw new Error('timed out waiting for ' + what);
+}
+// Past a state change's glide (WindowFrames::kMotionMs).
+function settle() {
+    advanceTime(300);
+    flush();
 }
 
 document.body.style.margin = '0';
@@ -139,7 +145,7 @@ try {
     // Maximized: the frame keeps its title bar inside the work area.
     assert(bro.compositor.maximizeWindow(b.id), 'maximize');
     waitFor(() => bro.compositor.getWindow(b.id).maximized, 'b maximized');
-    flush();
+    settle();
     assert(frames[b.id].getAttribute('data-window-state') === 'maximized', 'maximized state attribute');
     assert(frames[b.id].getBoundingClientRect().top === 0, 'maximized frame at the top of the work area');
     assert(!frames[b.id].hasAttribute('data-window-borderless'), 'a title bar is not borderless');
@@ -147,8 +153,12 @@ try {
     // Borderless maximize: zero maximized insets. The client fills the work
     // area from its top-left pixel, and the frame stays, covering exactly it.
     bro.compositor.setDecorations({ maximizedInsets: 0 });
-    waitFor(() => bro.compositor.getWindow(b.id).frame.y === 0, 'b re-fitted without a title bar');
-    flush();
+    assert(bro.compositor.restoreWindow(b.id), 'restore');
+    waitFor(() => !bro.compositor.getWindow(b.id).maximized, 'b restored');
+    assert(bro.compositor.maximizeWindow(b.id), 'maximize borderless');
+    waitFor(() => bro.compositor.getWindow(b.id).maximized && bro.compositor.getWindow(b.id).frame.y === 0,
+            'b maximized without a title bar');
+    settle();
     const bw = bro.compositor.getWindow(b.id);
     assert(bw.framed && bw.borderless, 'b framed and borderless: ' + JSON.stringify(bw));
     assert(bw.frame.x === 0 && bw.frame.width === window.innerWidth, 'b fills the width: ' + JSON.stringify(bw.frame));
@@ -178,11 +188,27 @@ try {
     assert(overlayDowns === 1, 'the overlay got the press');
     assert(hostPointer('down', ox, 40) === false, 'below the overlay the client has it');
     hostPointer('up', ox, 40);
-    // Back to a title bar: the attribute goes.
-    bro.compositor.setDecorations({ maximizedInsets: { top: 36 } });
-    waitFor(() => bro.compositor.getWindow(b.id).frame.y === 36, 'title bar back');
+    // Restored, it has its band again: the attribute goes. And it glides
+    // there: the frame starts from the rect it was shown at and eases onto
+    // the window's new one.
+    assert(bro.compositor.restoreWindow(b.id), 'restore b');
+    waitFor(() => !bro.compositor.getWindow(b.id).maximized, 'b restored again');
     flush();
+    const to = bro.compositor.getWindow(b.id).frame;
+    const g0 = frames[b.id].getBoundingClientRect();
+    assert(g0.left === 0 && g0.top === 0 && g0.width === window.innerWidth,
+           'the restore starts where the window was shown: ' + JSON.stringify(g0));
+    advanceTime(80);
+    flush();
+    const g1 = frames[b.id].getBoundingClientRect();
+    assert(g1.width < g0.width && g1.width > to.width + 12 && g1.left > 0 && g1.left < to.x - 6,
+           'mid-glide: ' + JSON.stringify(g1) + ' toward ' + JSON.stringify(to));
+    settle();
+    const g2 = frames[b.id].getBoundingClientRect();
+    assert(g2.left === to.x - 6 && g2.top === to.y - 36 && g2.width === to.width + 12 && g2.height === to.height + 42,
+           'lands around the window: ' + JSON.stringify(g2) + ' ' + JSON.stringify(to));
     assert(!frames[b.id].hasAttribute('data-window-borderless'), 'borderless attribute cleared');
+    assert(!bro.compositor.getWindow(b.id).borderless, 'restored b is not borderless');
 
     if (process.env.BRO_FRAMES_SCREENSHOT) screenshot(process.env.BRO_FRAMES_SCREENSHOT);
 } catch (e) {

@@ -315,6 +315,12 @@ bro.compositor.getDecorations = function () {};
  * - and as attributes: `data-window-state` ('normal' | 'maximized'), `data-window-snap`
  *   (the snapped zone; absent when not snapped), `data-window-focused` (present while focused),
  *   `data-window-borderless` (present while its band is zero).
+ * Motion: when a framed window changes state (maximized, restored, snapped, unsnapped) its
+ * frame glides from the rect it was shown at to the new one (about 220 ms, easing out) rather
+ * than jumping, and the window, drawn at its frame's inside, is scaled with it until they
+ * meet. The new state's attributes and insets apply at once, so the trim of a window being
+ * restored rides the glide. Moves and resizes made by hand are not animated. The window
+ * itself moves and takes its new size together, when the client has drawn that size.
  * Overlays: an element inside a frame carrying `data-window-overlay` leaves the frame's paint
  * and is drawn just above the window instead (still under the windows above it), and the
  * pointer over it goes to the shell before the client. That is how a frame floats controls

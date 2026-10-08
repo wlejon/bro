@@ -199,7 +199,7 @@ namespace {
 // the node's offset. Only dmabuf buffers are composited.
 void appendSurfaceNode(brocompositor::wl::ServerBackend& backend, const brocompositor::wl::SurfaceNode& node,
                        float baseX, float baseY, std::vector<engine::UILayer>& outLayers,
-                       std::vector<LeasedSurfaceFrame>& leasedFrames) {
+                       std::vector<LeasedSurfaceFrame>& leasedFrames, float scaleX = 1.0f, float scaleY = 1.0f) {
     auto surface = backend.surface(node.surface);
     if (!surface) return;
     auto frameOpt = surface->acquire();
@@ -224,12 +224,12 @@ void appendSurfaceNode(brocompositor::wl::ServerBackend& backend, const brocompo
     dmabufSrc.syncFd = brocompositor::wl::fd_of(frameOpt->sync_fd);
 
     engine::UILayer layer;
-    layer.quad.x = baseX + static_cast<float>(node.offset.x);
-    layer.quad.y = baseY + static_cast<float>(node.offset.y);
+    layer.quad.x = baseX + static_cast<float>(node.offset.x) * scaleX;
+    layer.quad.y = baseY + static_cast<float>(node.offset.y) * scaleY;
     // Logical size (a scale-2 buffer covers half its pixels).
     const bool logical = node.size.width > 0 && node.size.height > 0;
-    layer.quad.w = static_cast<float>(logical ? node.size.width : int32_t(imgOpt->width));
-    layer.quad.h = static_cast<float>(logical ? node.size.height : int32_t(imgOpt->height));
+    layer.quad.w = static_cast<float>(logical ? node.size.width : int32_t(imgOpt->width)) * scaleX;
+    layer.quad.h = static_cast<float>(logical ? node.size.height : int32_t(imgOpt->height)) * scaleY;
     layer.quad.clipW = -1.0f;
     layer.content = dmabufSrc;
     outLayers.push_back(layer);
@@ -290,13 +290,26 @@ std::vector<LeasedSurfaceFrame> WaylandCompositor::acquireClientLayers(std::span
     for (const auto& ref : windows) {
         if (!b.visible(ref.windowId)) continue;
         float wx = ref.x, wy = ref.y;
+        float sx = 1.0f, sy = 1.0f;
         if (!ref.pinned) {
             auto snap = b.query(ref.windowId);
             if (!snap) continue;
             wx = static_cast<float>(snap->frame.x);
             wy = static_cast<float>(snap->frame.y);
+        } else if (ref.w > 0.0f && ref.h > 0.0f) {
+            // Shown at its frame's size: scaled while that differs from the
+            // size the client drew at (a window gliding between states).
+            if (auto snap = b.query(ref.windowId); snap && snap->frame.width > 0 && snap->frame.height > 0) {
+                const float fw = static_cast<float>(snap->frame.width);
+                const float fh = static_cast<float>(snap->frame.height);
+                if (std::abs(ref.w - fw) > 0.5f || std::abs(ref.h - fh) > 0.5f) {
+                    sx = ref.w / fw;
+                    sy = ref.h / fh;
+                }
+            }
         }
-        for (const auto& node : b.window_surfaces(ref.windowId)) appendSurfaceNode(b, node, wx, wy, outLayers, leased);
+        for (const auto& node : b.window_surfaces(ref.windowId))
+            appendSurfaceNode(b, node, wx, wy, outLayers, leased, sx, sy);
     }
     if (parts & render::kClientLayersAbove) {
         // Override-redirect X11 surfaces (menus, tooltips) above every window.

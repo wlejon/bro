@@ -60,12 +60,21 @@ struct FrameWindow {
     bool borderless() const { return insetLeft <= 0 && insetTop <= 0 && insetRight <= 0 && insetBottom <= 0; }
 };
 
+// Motion: a framed window that changes state (maximized, restored, snapped,
+// unsnapped) glides there. The frame's outer rect is eased from where it was
+// shown to the new one over kMotionMs, and the window, pinned to its frame,
+// is drawn scaled to the frame's inside (render::ClientWindowRef::w/h) until
+// they meet. Moves and resizes the user makes by hand are not animated.
 class WindowFrames {
 public:
+    static constexpr double kMotionMs = 220.0;
+
     // Takes the window stack (bottom to top) and brings every frame element
-    // of `doc` up to date with it. Writes only what changed, so a still
-    // desktop costs no restyle.
-    void sync(dom::Document* doc, std::vector<FrameWindow> stack);
+    // of `doc` up to date with it, at time `nowMs` (the motion clock). Writes
+    // only what changed, so a still desktop costs no restyle.
+    void sync(dom::Document* doc, std::vector<FrameWindow> stack, double nowMs);
+    // A window is still gliding: sync again next frame.
+    bool animating() const { return !motions_.empty(); }
 
     const std::vector<FrameWindow>& stack() const { return stack_; }
     // The frame element drawn for a window (null: none shown).
@@ -98,14 +107,26 @@ private:
         uint64_t window = 0;
         Written written;
     };
+    // An outer rect (the frame's box), CSS px.
+    struct Box {
+        float x = 0, y = 0, w = 0, h = 0;
+        bool operator==(const Box&) const = default;
+    };
+    struct Motion {
+        Box from;
+        double start = 0;
+    };
+    static Box outerOf(const FrameWindow& w);
     void rescan(dom::Document* doc);
-    void write(Entry& e, dom::Element* el, const FrameWindow* w, int z);
+    void write(Entry& e, dom::Element* el, const FrameWindow* w, const Box& box, int z);
 
     dom::Document* doc_ = nullptr;
     uint64_t scannedEpoch_ = ~uint64_t(0);
     std::vector<Entry> entries_;
     std::unordered_map<uint64_t, dom::ElementHandle> shown_;  // window id -> the frame drawn for it
     std::vector<FrameWindow> stack_;
+    std::unordered_map<uint64_t, Motion> motions_;  // window id -> its glide
+    std::unordered_map<uint64_t, Box> shownBox_;    // window id -> the outer rect last shown
 
     uint32_t nextList_ = 1;
     std::deque<std::pair<uint32_t, std::vector<render::ClientWindowRef>>> lists_;

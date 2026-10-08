@@ -59,11 +59,15 @@ inline constexpr uint32_t kClientLayersAbove = 1u << 1;
 /// One client window in a recorded run. `pinned`: its frame was painted in
 /// this pass, so the window is placed where that frame put it (x, y: the
 /// client origin, CSS px), keeping frame and window in step; otherwise it is
-/// placed where the compositor has it at composite time.
+/// placed where the compositor has it at composite time. A pinned window is
+/// also shown at its frame's size (w, h: the client size that frame was laid
+/// out around), its surfaces scaled to fit when that differs from the size
+/// the client drew at: how a window glides between states. 0: its own size.
 struct ClientWindowRef {
     uint64_t windowId = 0;
     bool pinned = false;
     float x = 0, y = 0;
+    float w = 0, h = 0;
 };
 
 using LayerSource = std::variant<CanvasLayerSource, WebGLLayerSource, SceneLayerSource, IframeLayerSource,

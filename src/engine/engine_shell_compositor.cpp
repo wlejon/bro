@@ -13,6 +13,7 @@
 #include "platform/drm_input.h"
 #endif
 #include "util/log.h"
+#include "util/time.h"
 
 #include <cmath>
 #include <cstdlib>
@@ -87,7 +88,7 @@ bool Engine::pollShellCompositor() {
     if (!drmCtx_ || !drmCtx_->compositor) return false;
     const bool events = drmCtx_->compositor->pollEvents();
     syncShellWindowFrames();
-    return events;
+    return events || drmCtx_->frames.animating();
 #else
     return false;
 #endif
@@ -124,7 +125,10 @@ void Engine::syncShellWindowFrames() {
     bool restacked = was.size() != stack.size();
     for (size_t i = 0; !restacked && i < stack.size(); ++i)
         restacked = was[i].id != stack[i].id || was[i].framed != stack[i].framed;
-    drmCtx_->frames.sync(isShellApp() ? document_.get() : nullptr, std::move(stack));
+    // Window motion runs on the wall clock (the desktop's, not the app's
+    // scalable one), virtual time in headless so tests can step it.
+    const double nowMs = displayMode_ == DisplayMode::Headless ? virtualTime_ : util::currentTimeMs();
+    drmCtx_->frames.sync(isShellApp() ? document_.get() : nullptr, std::move(stack), nowMs);
     if (restacked) markAppBaseDirty();
 #endif
 }
