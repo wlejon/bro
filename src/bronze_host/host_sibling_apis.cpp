@@ -629,9 +629,11 @@ void installSiblingApis(engine::Engine& engine) {
                     auto eqPtr = std::shared_ptr<brocompositor::EventQueue>(
                         &s_winShellBackend->events(), [](brocompositor::EventQueue*) {});
                     brocompositor::api::setEventQueue(eqPtr);
-                    brocompositor::api::setCommandSink([](const std::vector<brocompositor::Command>& cmds) {
-                        if (s_winShellBackend) s_winShellBackend->execute(cmds);
-                    });
+                    brocompositor::api::setCommandSink(
+                        [](const std::vector<brocompositor::Command>& cmds) -> size_t {
+                            if (s_winShellBackend) return s_winShellBackend->execute(cmds);
+                            return cmds.size();
+                        });
                 }
             }
 #endif
