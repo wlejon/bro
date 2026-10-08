@@ -236,65 +236,126 @@ void DrawTraversal::drawBackground(dom::Element* elem, float x, float y, float w
                 size_t colorStart = 0;
 
                 // Radial-gradient defaults: ellipse, farthest-corner, center.
+                // The prefix is `[<shape> || <size>] [at <position>]`, where a
+                // size is an extent keyword or explicit radii: one <length>
+                // (a circle) or two <length-percentage>s (an ellipse, the
+                // percentages against the gradient box's width and height).
                 bool radialIsCircle = false;
                 enum RadExtent { RAD_FARTHEST_CORNER, RAD_FARTHEST_SIDE,
                                  RAD_CLOSEST_CORNER,  RAD_CLOSEST_SIDE };
                 RadExtent radExtent = RAD_FARTHEST_CORNER;
-                float radCxFrac = 0.5f, radCyFrac = 0.5f; // fraction of (w, h)
+                std::vector<std::string> radSize;   // explicit radii; empty: the extent keyword
+                std::string radPosX = "50%", radPosY = "50%";
+
+                auto isLengthTok = [](const std::string& t) -> bool {
+                    if (t.empty()) return false;
+                    char c = t[0];
+                    return (c >= '0' && c <= '9') || c == '.' || c == '+' || c == '-';
+                };
 
                 if (isRadial && !parts.empty()) {
-                    std::string first = parts[0];
-                    while (!first.empty() && first.front() == ' ') first.erase(first.begin());
-                    while (!first.empty() && first.back() == ' ') first.pop_back();
-                    // The prefix (if present) ends before the first color stop.
-                    // Heuristic: if the first part contains shape/extent keywords
-                    // or starts with "at ", treat it as the prefix.
-                    bool looksPrefix =
-                        first.find("circle") != std::string::npos ||
-                        first.find("ellipse") != std::string::npos ||
-                        first.find("at ") != std::string::npos ||
-                        first.find("closest") != std::string::npos ||
-                        first.find("farthest") != std::string::npos;
-                    if (looksPrefix) {
-                        if (first.find("circle") != std::string::npos) radialIsCircle = true;
-                        if (first.find("closest-side") != std::string::npos) radExtent = RAD_CLOSEST_SIDE;
-                        else if (first.find("closest-corner") != std::string::npos) radExtent = RAD_CLOSEST_CORNER;
-                        else if (first.find("farthest-side") != std::string::npos) radExtent = RAD_FARTHEST_SIDE;
-                        else if (first.find("farthest-corner") != std::string::npos) radExtent = RAD_FARTHEST_CORNER;
-                        // Position: "at <x> <y>"
-                        auto atPos = first.find("at ");
-                        if (atPos != std::string::npos) {
-                            std::string posStr = first.substr(atPos + 3);
-                            while (!posStr.empty() && posStr.front() == ' ') posStr.erase(posStr.begin());
-                            // Tokenize on spaces
-                            std::vector<std::string> toks;
-                            std::string t;
-                            for (char c : posStr) {
-                                if (c == ' ') { if (!t.empty()) { toks.push_back(t); t.clear(); } }
-                                else t += c;
+                    // Tokenize the first part on top-level whitespace.
+                    std::vector<std::string> toks;
+                    {
+                        std::string t;
+                        int d = 0;
+                        for (char c : parts[0]) {
+                            if (c == '(') ++d;
+                            else if (c == ')') --d;
+                            if (d == 0 && (c == ' ' || c == '\t')) {
+                                if (!t.empty()) { toks.push_back(t); t.clear(); }
+                            } else {
+                                t += c;
                             }
-                            if (!t.empty()) toks.push_back(t);
-                            auto resolveAxis = [](const std::string& tok, bool isX, float& outFrac) {
-                                if (tok == "left") { if (isX) outFrac = 0.0f; }
-                                else if (tok == "right") { if (isX) outFrac = 1.0f; }
-                                else if (tok == "top") { if (!isX) outFrac = 0.0f; }
-                                else if (tok == "bottom") { if (!isX) outFrac = 1.0f; }
-                                else if (tok == "center") { outFrac = 0.5f; }
-                                else if (!tok.empty() && tok.back() == '%') {
-                                    outFrac = std::strtof(tok.c_str(), nullptr) / 100.0f;
-                                }
-                            };
-                            if (toks.size() == 1) {
-                                resolveAxis(toks[0], true, radCxFrac);
-                                resolveAxis(toks[0], false, radCyFrac);
-                            } else if (toks.size() >= 2) {
-                                resolveAxis(toks[0], true, radCxFrac);
-                                resolveAxis(toks[1], false, radCyFrac);
+                        }
+                        if (!t.empty()) toks.push_back(t);
+                    }
+                    // A colour stop never begins with a shape/extent keyword,
+                    // `at`, or a number, so any of those marks the prefix.
+                    auto isPrefixTok = [&](const std::string& t) {
+                        return t == "circle" || t == "ellipse" || t == "at" ||
+                               t == "closest-side" || t == "closest-corner" ||
+                               t == "farthest-side" || t == "farthest-corner" ||
+                               isLengthTok(t);
+                    };
+                    if (!toks.empty() && isPrefixTok(toks[0])) {
+                        size_t k = 0;
+                        for (; k < toks.size() && toks[k] != "at"; ++k) {
+                            const std::string& t = toks[k];
+                            if (t == "circle") radialIsCircle = true;
+                            else if (t == "ellipse") radialIsCircle = false;
+                            else if (t == "closest-side") radExtent = RAD_CLOSEST_SIDE;
+                            else if (t == "closest-corner") radExtent = RAD_CLOSEST_CORNER;
+                            else if (t == "farthest-side") radExtent = RAD_FARTHEST_SIDE;
+                            else if (t == "farthest-corner") radExtent = RAD_FARTHEST_CORNER;
+                            else if (isLengthTok(t) && radSize.size() < 2) radSize.push_back(t);
+                        }
+                        // A single explicit radius is a circle's.
+                        if (radSize.size() == 1) radialIsCircle = true;
+                        else if (radSize.size() == 2 && radialIsCircle) radSize.resize(1);
+                        // Position: "at <x> [<y>]", keywords in either order.
+                        if (k < toks.size()) {
+                            std::vector<std::string> pos(toks.begin() + static_cast<long>(k) + 1, toks.end());
+                            auto isY = [](const std::string& t) { return t == "top" || t == "bottom"; };
+                            auto isX = [](const std::string& t) { return t == "left" || t == "right"; };
+                            if (pos.size() == 1) {
+                                if (isY(pos[0])) radPosY = pos[0];
+                                else radPosX = pos[0];
+                            } else if (pos.size() >= 2) {
+                                if (isY(pos[0]) || isX(pos[1])) { radPosX = pos[1]; radPosY = pos[0]; }
+                                else { radPosX = pos[0]; radPosY = pos[1]; }
                             }
                         }
                         colorStart = 1;
                     }
                 }
+
+                // The radial gradient's center and end radii in a (bw x bh)
+                // gradient box, relative to its origin.
+                auto radialGeometry = [&](float bw, float bh, float& cx, float& cy, float& rx, float& ry) {
+                    auto resolvePos = [](const std::string& t, float box) -> float {
+                        if (t == "left" || t == "top") return 0.0f;
+                        if (t == "right" || t == "bottom") return box;
+                        if (t == "center") return box * 0.5f;
+                        return parseLengthPx(t, box);
+                    };
+                    cx = resolvePos(radPosX, bw);
+                    cy = resolvePos(radPosY, bh);
+                    if (!radSize.empty()) {
+                        rx = parseLengthPx(radSize[0], bw);
+                        ry = radSize.size() > 1 ? parseLengthPx(radSize[1], bh) : rx;
+                    } else {
+                        float dL = cx, dR = bw - cx, dT = cy, dB = bh - cy;
+                        float csX = std::min(std::abs(dL), std::abs(dR));
+                        float csY = std::min(std::abs(dT), std::abs(dB));
+                        float fsX = std::max(std::abs(dL), std::abs(dR));
+                        float fsY = std::max(std::abs(dT), std::abs(dB));
+                        if (radialIsCircle) {
+                            switch (radExtent) {
+                                case RAD_CLOSEST_SIDE:  rx = std::min(csX, csY); break;
+                                case RAD_CLOSEST_CORNER: rx = std::sqrt(csX * csX + csY * csY); break;
+                                case RAD_FARTHEST_SIDE: rx = std::max(fsX, fsY); break;
+                                case RAD_FARTHEST_CORNER:
+                                default:                rx = std::sqrt(fsX * fsX + fsY * fsY); break;
+                            }
+                            ry = rx;
+                        } else {
+                            // Ellipse: the side extents directly; the corner
+                            // extents keep the side ellipse's aspect and pass
+                            // through the corner (a factor of sqrt 2).
+                            const float k = std::sqrt(2.0f);
+                            switch (radExtent) {
+                                case RAD_CLOSEST_SIDE:   rx = csX; ry = csY; break;
+                                case RAD_FARTHEST_SIDE:  rx = fsX; ry = fsY; break;
+                                case RAD_CLOSEST_CORNER: rx = csX * k; ry = csY * k; break;
+                                case RAD_FARTHEST_CORNER:
+                                default:                 rx = fsX * k; ry = fsY * k; break;
+                            }
+                        }
+                    }
+                    if (rx < 0.001f) rx = 0.001f;
+                    if (ry < 0.001f) ry = 0.001f;
+                };
 
                 if (!isRadial && !isConic && !parts.empty()) {
                     std::string first = parts[0];
@@ -357,22 +418,10 @@ void DrawTraversal::drawBackground(dom::Element* elem, float x, float y, float w
                 // back to auto.
                 float refLen = 1.0f;
                 if (isRadial) {
-                    float rcx = radCxFrac * w, rcy = radCyFrac * h;
-                    float csX = std::min(rcx, w - rcx), csY = std::min(rcy, h - rcy);
-                    float fsX = std::max(rcx, w - rcx), fsY = std::max(rcy, h - rcy);
-                    switch (radExtent) {
-                        case RAD_CLOSEST_SIDE:
-                            refLen = radialIsCircle ? std::min(csX, csY) : csX; break;
-                        case RAD_CLOSEST_CORNER:
-                            refLen = radialIsCircle ? std::sqrt(csX*csX + csY*csY)
-                                                    : csX * std::sqrt(2.0f); break;
-                        case RAD_FARTHEST_SIDE:
-                            refLen = radialIsCircle ? std::max(fsX, fsY) : fsX; break;
-                        case RAD_FARTHEST_CORNER:
-                        default:
-                            refLen = radialIsCircle ? std::sqrt(fsX*fsX + fsY*fsY)
-                                                    : fsX * std::sqrt(2.0f); break;
-                    }
+                    // Stops lie along the horizontal radius.
+                    float cx0, cy0, rx0, ry0;
+                    radialGeometry(w, h, cx0, cy0, rx0, ry0);
+                    refLen = rx0;
                     if (refLen < 1.0f) refLen = 1.0f;
                 } else if (!isConic) {
                     float rad0 = angleDeg * 3.14159265f / 180.0f;
@@ -597,53 +646,8 @@ void DrawTraversal::drawBackground(dom::Element* elem, float x, float y, float w
                         renderer_->fillLinearGradient(gx, gy, gw, gh,
                             cx2 - dx, cy2 - dy, cx2 + dx, cy2 + dy, stops);
                     } else if (isRadial) {
-                        float rcx = radCxFrac * gw;
-                        float rcy = radCyFrac * gh;
-                        // Distances to each side from center.
-                        float dL = rcx, dR = gw - rcx;
-                        float dT = rcy, dB = gh - rcy;
-                        float closestSideX = std::min(dL, dR);
-                        float closestSideY = std::min(dT, dB);
-                        float farthestSideX = std::max(dL, dR);
-                        float farthestSideY = std::max(dT, dB);
-                        float rx = 0, ry = 0;
-                        if (radialIsCircle) {
-                            // Circle: pick a single radius based on distances.
-                            switch (radExtent) {
-                                case RAD_CLOSEST_SIDE:
-                                    rx = ry = std::min(closestSideX, closestSideY); break;
-                                case RAD_CLOSEST_CORNER:
-                                    rx = ry = std::sqrt(closestSideX*closestSideX +
-                                                        closestSideY*closestSideY); break;
-                                case RAD_FARTHEST_SIDE:
-                                    rx = ry = std::max(farthestSideX, farthestSideY); break;
-                                case RAD_FARTHEST_CORNER:
-                                default:
-                                    rx = ry = std::sqrt(farthestSideX*farthestSideX +
-                                                        farthestSideY*farthestSideY); break;
-                            }
-                        } else {
-                            // Ellipse: rx, ry computed independently per CSS spec.
-                            switch (radExtent) {
-                                case RAD_CLOSEST_SIDE:
-                                    rx = closestSideX; ry = closestSideY; break;
-                                case RAD_FARTHEST_SIDE:
-                                    rx = farthestSideX; ry = farthestSideY; break;
-                                case RAD_CLOSEST_CORNER: {
-                                    // Ellipse with same aspect as closest-side, passing
-                                    // through closest corner.
-                                    float k = std::sqrt(2.0f);
-                                    rx = closestSideX * k; ry = closestSideY * k; break;
-                                }
-                                case RAD_FARTHEST_CORNER:
-                                default: {
-                                    float k = std::sqrt(2.0f);
-                                    rx = farthestSideX * k; ry = farthestSideY * k; break;
-                                }
-                            }
-                        }
-                        if (rx < 0.001f) rx = 0.001f;
-                        if (ry < 0.001f) ry = 0.001f;
+                        float rcx, rcy, rx, ry;
+                        radialGeometry(gw, gh, rcx, rcy, rx, ry);
                         renderer_->fillRadialGradient(gx, gy, gw, gh,
                             gx + rcx, gy + rcy, rx, ry, stops);
                     } else if (val.find("conic-gradient") != std::string::npos) {
