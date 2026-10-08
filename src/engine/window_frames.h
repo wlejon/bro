@@ -114,7 +114,9 @@ private:
     };
     struct Motion {
         Box from;
+        Box to;
         double start = 0;
+        double settleUntil = 0;  // rect changes until then are the same change landing
     };
     static Box outerOf(const FrameWindow& w);
     void rescan(dom::Document* doc);

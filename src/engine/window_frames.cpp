@@ -114,23 +114,33 @@ void WindowFrames::write(Entry& e, dom::Element* el, const FrameWindow* w, const
 }
 
 void WindowFrames::sync(dom::Document* doc, std::vector<FrameWindow> stack, double nowMs) {
-    // A framed window whose state changed glides from where it was shown.
+    // A framed window whose state changed glides from where it was shown. A
+    // state change lands in steps (the band changes when it is asked for;
+    // the client acks the state, then draws the new size): each step within
+    // the settle time re-aims the glide from where it has got to.
     std::unordered_map<uint64_t, Box> shownNow;
     for (const auto& w : stack) {
         if (!w.framed) continue;
         const Box to = outerOf(w);
+        auto shown = shownBox_.find(w.id);
         auto prev = std::find_if(stack_.begin(), stack_.end(), [&](const FrameWindow& p) { return p.id == w.id; });
-        if (prev != stack_.end() && prev->framed && (prev->maximized != w.maximized || prev->snap != w.snap)) {
-            auto shown = shownBox_.find(w.id);
-            const Box from = shown != shownBox_.end() ? shown->second : outerOf(*prev);
-            if (!(from == to)) motions_[w.id] = Motion{from, nowMs};
+        const bool stateChanged =
+            prev != stack_.end() && prev->framed &&
+            (prev->maximized != w.maximized || prev->snap != w.snap || prev->borderless() != w.borderless());
+        auto m = motions_.find(w.id);
+        const bool settling = m != motions_.end() && nowMs <= m->second.settleUntil;
+        if ((stateChanged || (settling && !(m->second.to == to))) && shown != shownBox_.end()) {
+            const double settleUntil = stateChanged ? nowMs + 2 * kMotionMs : m->second.settleUntil;
+            motions_[w.id] = Motion{shown->second, to, nowMs, settleUntil};
+            m = motions_.find(w.id);
         }
         Box box = to;
-        if (auto m = motions_.find(w.id); m != motions_.end()) {
+        if (m != motions_.end()) {
+            m->second.to = to;
             const double t = (nowMs - m->second.start) / kMotionMs;
-            if (t >= 1.0 || t < 0.0) {
+            if ((t >= 1.0 && nowMs > m->second.settleUntil) || t < 0.0) {
                 motions_.erase(m);
-            } else {
+            } else if (t < 1.0) {
                 // Ease out (cubic): quick to leave, settling into place.
                 const float k = static_cast<float>(1.0 - std::pow(1.0 - t, 3.0));
                 const Box& f = m->second.from;
