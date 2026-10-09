@@ -18,6 +18,18 @@ namespace bro::layout {
 
 using bromath::cfromColor8;
 
+// True when the style's `opacity` makes its whole subtree invisible: the
+// alpha it would composite at is 0. Such a subtree records no paint at all, so
+// a closed, faded-out overlay leaves its layer empty instead of compositing a
+// transparent surface over what is under it.
+template <class Style>
+inline bool opacityHidesAll(const Style& style) {
+    auto it = style.find("opacity");
+    if (it == style.end() || it->second.empty()) return false;
+    const float opacity = std::strtof(it->second.c_str(), nullptr);
+    return static_cast<int>(opacity * 255) <= 0;
+}
+
 // ---------------------------------------------------------------------------
 // Transforms
 // ---------------------------------------------------------------------------

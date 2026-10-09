@@ -105,15 +105,25 @@ public:
         uint64_t count = 0;
     };
     const FlipInfo& lastFlip() const { return lastFlip_; }
-    /// A flip has been committed and its completion event not read yet: a
-    /// direct scanout commits without waiting (presentComposited waits for
-    /// its own flip), so the frame loop waits for it before the next commit.
+    /// A flip has been committed and its completion event not read yet.
+    /// Neither present waits for its own flip: the frame loop waits for it
+    /// (polling pollFd() with its input), and the next present waits for it
+    /// before it draws or commits.
     bool flipPending() const { return flipPending_; }
+    /// Reads DRM events until the pending flip lands, for up to timeoutMs;
+    /// true when no flip is pending any more.
+    bool waitForFlip(int timeoutMs);
+    /// The DRM fd flip events arrive on (readable when one has), or -1.
+    int pollFd() const;
+    /// Called on the presenting thread as each flip lands (after the frame
+    /// tap's completed()). Null to remove.
+    using FlipListener = std::function<void(const FlipInfo&)>;
+    void setFlipListener(FlipListener listener) { flipListener_ = std::move(listener); }
     /// The mode's refresh period, ms (0 before init).
     double refreshPeriodMs() const;
 
     /// Where the last presentComposited spent its wait: on the composite's
-    /// GPU work, and on the commit plus the flip landing.
+    /// GPU work, and on the previous flip landing plus the commit.
     struct PresentTiming {
         double gpuWaitMs = 0.0;
         double flipWaitMs = 0.0;
@@ -177,6 +187,8 @@ private:
     bool readEvents(int timeoutMs);
     FlipInfo lastFlip_;
     bool flipPending_ = false;
+    bool compositedFlipPending_ = false;  // the pending flip is a composited frame's
+    FlipListener flipListener_;
     PresentTiming lastTiming_;
     FrameTap* frameTap_ = nullptr;
     ScanoutListener scanoutListener_;

@@ -155,6 +155,7 @@ DrmInputEvent DrmInputPlatform::pointerMotion(float dx, float dy) {
 }
 
 DrmInputEvent DrmInputPlatform::pointerMotionAbsolute(float x, float y) {
+    const float fromX = cursorX_, fromY = cursorY_;
     cursorX_ = std::clamp(x, 0.0f, static_cast<float>(screenWidth_));
     cursorY_ = std::clamp(y, 0.0f, static_cast<float>(screenHeight_));
 
@@ -162,6 +163,11 @@ DrmInputEvent DrmInputPlatform::pointerMotionAbsolute(float x, float y) {
     out.type = DrmInputEvent::Type::MouseMove;
     out.x = cursorX_;
     out.y = cursorY_;
+    // The move as a delta too, as wlroots compositors derive one: a client
+    // holding the pointer (a lock) sees an absolute device's motion as
+    // relative motion, and a remote viewer's mouse drives a game.
+    out.dx = x - fromX;
+    out.dy = y - fromY;
     return out;
 }
 

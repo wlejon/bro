@@ -61,6 +61,13 @@ void Engine::runDrm() {
     rasterReady_.wait(false, std::memory_order_acquire);
     startControl();
 
+    auto* kms = vulkanPresenter_ ? vulkanPresenter_->kmsDirectPresenter() : nullptr;
+    if (kms) {
+        kms->setFlipListener([this](const render::KmsDirectPresenter::FlipInfo& flip) {
+            drmFlipLanded(flip.vblankMs, flip.sequence);
+        });
+    }
+
     while (running_) {
         if (bro::util::interrupted()) {
             running_ = false;
@@ -68,6 +75,19 @@ void Engine::runDrm() {
         }
         drmFrame();
     }
+
+    if (kms) {
+        kms->waitForFlip(100);
+        kms->setFlipListener(nullptr);
+    }
+#if BRO_WITH_COMPOSITOR
+    if (drmCtx_ && drmCtx_->compositor) {
+        drmCtx_->compositor->returnClientLayers(drmCtx_->onScreenLeases);
+        drmCtx_->compositor->releaseClientLayers(drmCtx_->flipLeases, nullptr);
+        drmCtx_->onScreenLeases.clear();
+        drmCtx_->flipLeases.clear();
+    }
+#endif
 
     shutdown();
 #endif
@@ -143,7 +163,8 @@ double Engine::drmPresentTargetMs(double frameStart) const {
     const double period = kms->refreshPeriodMs();
     const double last = kms->lastFlip().vblankMs;
     if (period <= 0.0 || last <= 0.0 || frameStart - last > 1000.0) return frameStart;
-    double target = last + period;
+    // A flip still in flight takes the next vblank.
+    double target = last + period * (kms->flipPending() ? 2.0 : 1.0);
     while (target < frameStart + 1.0) target += period;
     return target;
 #else
@@ -151,27 +172,74 @@ double Engine::drmPresentTargetMs(double frameStart) const {
 #endif
 }
 
-// When the next frame starts. A composited present returns once its flip has
-// landed, at vblank V; the next frame's commit has to be in before V + one
-// refresh period. Starting it at once would leave the most slack but sample
-// input and the animation clock most of a period before they reach the
-// screen; starting it late leaves the frame only what is left. So the next
-// frame starts as late as recent frames' work allows: a decaying peak of the
-// work before the commit, with headroom, decides how early.
+// When the next frame starts. A composited present returns once its flip is
+// committed; the flip lands at vblank V, and the next frame's commit has to be
+// in before V + one refresh period. Starting it at once would leave the most
+// slack but sample input and the animation clock most of a period before they
+// reach the screen; starting it late leaves the frame only what is left. So
+// the next frame starts as late as recent frames' work allows: a decaying peak
+// of the work before the commit, with headroom, decides how early.
+//
+// Input and agent commands are handled as they arrive, flip wait included,
+// not at the next frame's start: a key for a client window reaches it at
+// once, and its answer is in time for the next frame. Input that changed the
+// shell document starts the next frame at once instead, so its handlers get
+// the whole period to make the next vblank rather than the budget.
 void Engine::drmPaceNextFrame(double frameStart) {
 #if defined(__linux__) && BRO_WITH_SEAT && BRO_WITH_DMABUF
     auto* kms = vulkanPresenter_ ? vulkanPresenter_->kmsDirectPresenter() : nullptr;
     if (!kms) return;
     FrameRecord& rec = frameTrace_->current();
     const double t0 = util::currentTimeMs();
-    // A direct scanout commits without waiting for its flip: wait for it here.
-    if (kms->flipPending()) kms->handlePageFlipEvent(50);
-    const bool presented = kms->lastFlip().count != flipCountAtFrameStart_;
+
+    struct pollfd fds[3];
+    nfds_t nInput = 0;
+    if (drmCtx_ && drmCtx_->input && drmCtx_->input->pollFd() >= 0) fds[nInput++] = {drmCtx_->input->pollFd(), POLLIN, 0};
+    if (control_ && control_->pollFd() >= 0) fds[nInput++] = {control_->pollFd(), POLLIN, 0};
+    const int drmFd = kms->pollFd();
+    int dispatches = 0;
+    // Waits until `untilMs` (with `forFlip`, or until the flip lands),
+    // handling input as it comes; false when it changed the shell.
+    auto waitHandlingInput = [&](double untilMs, bool forFlip) -> bool {
+        for (;;) {
+            if (forFlip && !kms->flipPending()) return true;
+            const double waitMs = untilMs - util::currentTimeMs();
+            if (waitMs <= 0.25) return true;
+            nfds_t n = nInput;
+            if (forFlip && drmFd >= 0) fds[n++] = {drmFd, POLLIN, 0};
+            struct timespec ts;
+            ts.tv_sec = static_cast<time_t>(waitMs / 1000.0);
+            ts.tv_nsec = static_cast<long>((waitMs - ts.tv_sec * 1000.0) * 1e6);
+            const int rc = ::ppoll(fds, n, &ts, nullptr);
+            if (rc < 0 && errno != EINTR) return true;
+            if (rc <= 0) continue;
+            if (n > nInput && (fds[nInput].revents & POLLIN)) kms->handlePageFlipEvent(0);
+            bool input = false;
+            for (nfds_t i = 0; i < nInput; ++i) input = input || (fds[i].revents & (POLLIN | POLLERR | POLLHUP));
+            // (A source that stays readable however often it is read ends
+            // the wait rather than spinning it.)
+            if (input && (++dispatches > 64 || drmDispatchBetweenFrames())) return false;
+        }
+    };
+
+    // This frame's flip.
+    const bool committed = drmFlipFrame_ == frameNumber_;
+    if (!waitHandlingInput(t0 + 50.0, true)) {
+        rec.pacingWaitMs += util::currentTimeMs() - t0;
+        return;
+    }
+#if BRO_WITH_COMPOSITOR
+    // Leases held for a flip that will not land (a VT switch dropped it).
+    if (!kms->flipPending() && drmCtx_ && drmCtx_->compositor && !drmCtx_->flipLeases.empty()) {
+        drmCtx_->compositor->releaseClientLayers(drmCtx_->flipLeases, nullptr);
+        drmCtx_->flipLeases.clear();
+    }
+#endif
     const double period = kms->refreshPeriodMs();
-    if (!presented || period <= 0.0) {
+    if (!committed || kms->flipPending() || period <= 0.0) {
         // Nothing went to the screen (a VT switch, a failed commit): keep the
         // loop from spinning.
-        kms->handlePageFlipEvent(10);
+        waitHandlingInput(util::currentTimeMs() + 10.0, false);
         rec.pacingWaitMs += util::currentTimeMs() - t0;
         return;
     }
@@ -181,26 +249,54 @@ void Engine::drmPaceNextFrame(double frameStart) {
     // the peak until they have run, and a clicked animation's first frame
     // that misses its vblank shows as a hitch.
     const double budget = std::clamp(drmWorkPeakMs_ * 1.5 + 3.0, period * 0.6, period);
-    const double startAt = kms->lastFlip().vblankMs + period - budget;
-    // Input (or an agent command) ends the wait early: its handlers then get
-    // the whole period to make the next vblank, rather than the budget.
-    struct pollfd fds[2];
-    nfds_t n = 0;
-    if (drmCtx_ && drmCtx_->input && drmCtx_->input->pollFd() >= 0) fds[n++] = {drmCtx_->input->pollFd(), POLLIN, 0};
-    if (control_ && control_->pollFd() >= 0) fds[n++] = {control_->pollFd(), POLLIN, 0};
-    for (;;) {
-        const double waitMs = startAt - util::currentTimeMs();
-        if (waitMs <= 0.25) break;
-        struct timespec ts;
-        ts.tv_sec = static_cast<time_t>(waitMs / 1000.0);
-        ts.tv_nsec = static_cast<long>((waitMs - ts.tv_sec * 1000.0) * 1e6);
-        const int rc = ::ppoll(fds, n, &ts, nullptr);
-        if (rc > 0) break;
-        if (rc < 0 && errno != EINTR) break;
-    }
+    waitHandlingInput(kms->lastFlip().vblankMs + period - budget, false);
     rec.pacingWaitMs += util::currentTimeMs() - t0;
 #else
     (void)frameStart;
+#endif
+}
+
+bool Engine::drmDispatchBetweenFrames() {
+#if defined(__linux__) && BRO_WITH_SEAT && BRO_WITH_DMABUF
+    drmDrainLayoutEvents();  // the layout pass this frame signalled is done
+    const bool wasDirty = document_ && document_->isDirty();
+    control_->pump();
+    drmPollPlatform();
+    return !running_ || (!wasDirty && document_ && document_->isDirty());
+#else
+    return true;
+#endif
+}
+
+void Engine::drmFlipLanded(double vblankMs, uint32_t sequence) {
+#if defined(__linux__) && BRO_WITH_SEAT && BRO_WITH_DMABUF
+    auto* kms = vulkanPresenter_ ? vulkanPresenter_->kmsDirectPresenter() : nullptr;
+    const double period = kms ? kms->refreshPeriodMs() : 0.0;
+    frameTrace_->notePresentation(drmFlipFrame_, vblankMs, sequence, period);
+#if BRO_WITH_COMPOSITOR
+    if (drmCtx_ && drmCtx_->compositor) {
+        auto* comp = drmCtx_->compositor.get();
+        // Whatever was scanned out directly has left the screen now.
+        if (!drmCtx_->onScreenLeases.empty()) {
+            comp->returnClientLayers(drmCtx_->onScreenLeases);
+            drmCtx_->onScreenLeases.clear();
+        }
+        if (!drmCtx_->flipLeases.empty()) {
+            compositor::WaylandCompositor::FramePresentation shown;
+            shown.timestampNs = static_cast<int64_t>(vblankMs * 1e6);
+            shown.sequence = sequence;
+            shown.refreshNs = static_cast<uint32_t>(period * 1e6);
+            comp->notifyClientLayersShown(drmCtx_->flipLeases, vblankMs > 0.0 ? &shown : nullptr);
+            if (drmCtx_->flipIsDirect) drmCtx_->onScreenLeases.swap(drmCtx_->flipLeases);
+            else comp->returnClientLayers(drmCtx_->flipLeases);
+            drmCtx_->flipLeases.clear();
+        }
+    }
+#endif
+    if (drmCtx_) drmCtx_->flipIsDirect = false;
+#else
+    (void)vblankMs;
+    (void)sequence;
 #endif
 }
 

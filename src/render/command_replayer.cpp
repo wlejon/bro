@@ -39,6 +39,19 @@ void CommandReplayer::replay(const CommandBuffer& buffer) {
     for (const auto& cmd : buffer.commands()) {
         std::visit([&](const auto& c) {
             using T = std::decay_t<decltype(c)>;
+            // Everything but state (save/restore, transforms, clips) and the
+            // frame/layer/surface markers puts something on the surface.
+            if constexpr (!(std::is_same_v<T, Cmd_Save> || std::is_same_v<T, Cmd_Restore> ||
+                            std::is_same_v<T, Cmd_SaveLayerAlpha> || std::is_same_v<T, Cmd_SaveLayerWithFilter> ||
+                            std::is_same_v<T, Cmd_SaveLayerWithBlend> || std::is_same_v<T, Cmd_Translate> ||
+                            std::is_same_v<T, Cmd_Scale> || std::is_same_v<T, Cmd_Rotate> ||
+                            std::is_same_v<T, Cmd_Concat> || std::is_same_v<T, Cmd_Concat4x4> ||
+                            std::is_same_v<T, Cmd_SetClip> || std::is_same_v<T, Cmd_SetClipRRect> ||
+                            std::is_same_v<T, Cmd_ResetClip> || std::is_same_v<T, Cmd_SetClipPolygon> ||
+                            std::is_same_v<T, Cmd_ClipSvgPath> || std::is_same_v<T, Cmd_BeginFrame> ||
+                            std::is_same_v<T, Cmd_EndFrame> || std::is_same_v<T, Cmd_LayerBreak> ||
+                            std::is_same_v<T, Cmd_SurfaceBreak>))
+                ++draws_;
 
             if constexpr (std::is_same_v<T, Cmd_Clear>) {
                 dst_->clear(c.color);

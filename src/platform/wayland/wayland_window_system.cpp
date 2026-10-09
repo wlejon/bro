@@ -107,6 +107,9 @@ void Connection::pump(int timeoutMs) {
     if (d.dispatch_pending() < 0) lost_ = true;
     for (auto& ev : d.events().drain()) {
         route(ev);
+        if (!std::holds_alternative<browl::FrameDoneEvent>(ev) &&
+            !std::holds_alternative<browl::PresentationFeedbackEvent>(ev))
+            ++frameWorthy_;
         backlog_.push_back(std::move(ev));
     }
     if (lost_) LOG_ERROR("Wayland: lost the connection to the compositor");
@@ -120,6 +123,7 @@ void Connection::roundtrip() {
 std::deque<browl::ShellEvent> Connection::takeBacklog() {
     std::deque<browl::ShellEvent> out;
     out.swap(backlog_);
+    frameWorthyTaken_ = frameWorthy_;
     return out;
 }
 
@@ -130,6 +134,8 @@ void Connection::route(const browl::ShellEvent& ev) {
         if (WaylandWindow* w = window(e->surface_id)) w->applyScale(e->scale120);
     } else if (auto* e = std::get_if<browl::PresentationFeedbackEvent>(&ev)) {
         if (WaylandWindow* w = window(e->surface_id)) w->addPresentation(*e);
+    } else if (auto* e = std::get_if<browl::FrameDoneEvent>(&ev)) {
+        if (WaylandWindow* w = window(e->surface_id)) w->frameDone(e->request);
     } else if (auto* e = std::get_if<browl::ActivationTokenEvent>(&ev)) {
         auto it = tokenRequests_.find(e->request);
         if (it == tokenRequests_.end()) return;

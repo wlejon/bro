@@ -66,6 +66,11 @@ void writeRecord(util::JsonOut& j, const FrameRecord& r) {
     j.key("contentTime").number(r.contentTimeMs);
     j.key("vblank").number(r.vblankMs);
     j.key("vblankSeq").integer(r.vblankSeq);
+    j.key("keyAt").number(r.keyAtMs);
+    j.key("ptyWriteAt").number(r.ptyWriteAtMs);
+    j.key("ptyOutputAt").number(r.ptyOutputAtMs);
+    j.key("presentAt").number(r.presentAtMs);
+    j.key("scanoutMiss").integer(r.scanoutMiss);
     j.key("inputEvents").integer(r.inputEvents);
     j.key("forcedLayouts").integer(r.forcedLayouts);
     j.key("forcedLayoutMs").number(r.forcedLayoutMs);

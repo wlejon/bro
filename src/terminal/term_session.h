@@ -269,6 +269,10 @@ public:
         uint64_t framesPublished = 0;
         uint64_t syncHolds = 0;      // synchronized updates that held presentation
         uint64_t syncTimeouts = 0;   // ... and ended by the timeout
+        // CLOCK_MONOTONIC ms (util::currentTimeMs), 0 = never: the last
+        // input sent to the program, and the last frame published.
+        double lastInputMs = 0.0;
+        double lastPublishMs = 0.0;
     };
     [[nodiscard]] Stats stats() const noexcept;
 
@@ -296,6 +300,7 @@ private:
     std::chrono::steady_clock::time_point pollForeground(std::chrono::steady_clock::time_point now, bool activity);
     // Input went to the program: the foreground may be about to change.
     void noteInput() {
+        lastInputMs_.store(nowMs(), std::memory_order_relaxed);
         fgPoke_.store(true, std::memory_order_relaxed);
         wake();
     }
@@ -396,6 +401,9 @@ private:
     std::atomic<uint64_t> framesPublished_{0};
     std::atomic<uint64_t> syncHolds_{0};
     std::atomic<uint64_t> syncTimeouts_{0};
+    std::atomic<double> lastInputMs_{0.0};
+    std::atomic<double> lastPublishMs_{0.0};
+    static double nowMs();
 
     std::mutex wakeMu_;
     std::condition_variable wakeCv_;

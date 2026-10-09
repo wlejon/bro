@@ -135,6 +135,13 @@ public:
     void feed(std::string_view output);  // bytes into the emulator, as if the child wrote them
     void kill();
     int64_t pid() const;
+    // The flight recorder's latency stamps (CLOCK_MONOTONIC ms, 0 = none
+    // yet): when input last went to the program, and when the output in the
+    // frame this terminal shows was parsed.
+    double lastInputMs() const;
+    double shownOutputMs() const;
+    // When the newest frame not yet taken was published; 0 when there is none.
+    double pendingOutputMs() const;
     bool running() const;
     bool exited() const;
     std::optional<int> exitCode() const;

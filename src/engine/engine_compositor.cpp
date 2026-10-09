@@ -199,6 +199,11 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
     auto origSurface = renderer->switchSurface(pool[0].surface);
 
     render::CommandReplayer replayer(renderer);
+    // An HTML layer above a break that nothing drew into is left out: it
+    // would composite as a transparent surface, and a frame that is one
+    // client window with nothing over it can then be shown as that window's
+    // buffer alone (direct scanout).
+    uint64_t drawsAtSwitch = 0;
     replayer.setLayerBreakHandler([&](const render::LayerSource& source, const render::LayerQuad& quad) {
         int prevIdx = htmlLayerIdx;
         htmlLayerIdx++;
@@ -207,7 +212,8 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
         }
         renderer->switchSurface(pool[htmlLayerIdx].surface);
 
-        outLayers.push_back(htmlLayerOf(pool[prevIdx]));
+        if (prevIdx == 0 || replayer.draws() != drawsAtSwitch) outLayers.push_back(htmlLayerOf(pool[prevIdx]));
+        drawsAtSwitch = replayer.draws();
         outLayers.push_back(UILayer::of(source, quad));
     });
 
@@ -215,7 +221,7 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
 
     // Capture the trailing HTML layer.
     renderer->switchSurface(origSurface);
-    outLayers.push_back(htmlLayerOf(pool[htmlLayerIdx]));
+    if (htmlLayerIdx == 0 || replayer.draws() != drawsAtSwitch) outLayers.push_back(htmlLayerOf(pool[htmlLayerIdx]));
 
     // Compositor-promoted layer: replay the promoted subtrees into one extra
     // pool surface and append it as the topmost HTML layer, filling the holes
@@ -235,7 +241,7 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
         promotedReplayer.replay(*promotedBuffer);
         renderer->switchSurface(origSurface);
 
-        outLayers.push_back(htmlLayerOf(pool[promotedIdx]));
+        if (promotedReplayer.draws() != 0) outLayers.push_back(htmlLayerOf(pool[promotedIdx]));
     }
 }
 

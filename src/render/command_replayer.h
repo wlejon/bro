@@ -36,8 +36,12 @@ public:
 
     // Replay every command in the buffer in order against `dst`.
     void replay(const CommandBuffer& buffer);
+    // How many commands that draw (anything but state, clips and markers)
+    // have been replayed so far: unchanged across a span, it drew nothing.
+    uint64_t draws() const { return draws_; }
 
 private:
+    uint64_t draws_ = 0;
     // A layer-break hands `dst_` a brand-new surface (fresh matrix/clip
     // state) partway through replay — see openStack_ below.
     struct StackOp {

@@ -597,6 +597,10 @@ private:
     void terminalMouseUp(float docX, float docY, int button);
     bool terminalWheel(dom::Element* target, float docX, float docY, float dy);
     void pumpTerminals();  // once per frame / headless step: also installs ElTerminal::Host
+    // Windowed, before the frame is recorded: when this frame sent a
+    // terminal's program input, wait up to kTerminalEchoWaitMs for the echo
+    // and take it, so a typed key shows in the frame that sent it.
+    void awaitTerminalEcho(double frameStart);
     std::shared_ptr<TerminalLayers> terminalLayers_;  // (terminal_layers.h)
     dom::ElementHandle terminalCapture_;               // the terminal a press is captured by
 
@@ -780,6 +784,13 @@ private:
     void drmPaceNextFrame(double frameStart);
     double drmPresentTargetMs(double frameStart) const;
     double drmWorkPeakMs_ = 0.0;  // a decaying peak of the frame's work before its commit
+    // Input and agent commands handled while the loop waits between frames;
+    // true when they changed the shell document (the next frame starts now).
+    bool drmDispatchBetweenFrames();
+    // A KMS flip landed (the presenter's flip listener): the frame it showed
+    // gets its vblank, and the client frames it sampled go back.
+    void drmFlipLanded(double vblankMs, uint32_t sequence);
+    uint64_t drmFlipFrame_ = 0;  // the frame whose flip was committed last
     // engine_drm_input.cpp: input routing between the shell document and
     // client windows.
     void dispatchDrmInput(const platform::DrmInputEvent& ev);
@@ -1016,8 +1027,10 @@ private:
     void traceLayoutClaimed();
     void traceRasterSignalled();
     void traceRasterConsumed();
+    void traceKeyPress();
     void traceFrameEnd();
     uint64_t flipCountAtFrameStart_ = 0;
+    double ptyOutputTraced_ = 0.0;  // the terminal output stamp the trace last reported
     uint64_t contentGenSignalled_ = 0, contentGenShown_ = 0;
     double contentTimeSignalled_ = 0.0, contentTimeShown_ = 0.0, layoutSignalTimeMs_ = 0.0;
     bool uiDirty_ = true;
@@ -1131,6 +1144,13 @@ private:
     // viewport than the window's (0: it is not), so the frame is held back.
     double resizeHoldSinceMs_ = 0.0;
     static constexpr double kResizeHoldMaxMs = 250.0;
+    // Windowed: the longest the loop waits for the window system to want a
+    // frame (Window::waitForFrame) before building one anyway.
+    static constexpr double kFrameWaitMaxMs = 100.0;
+    // Windowed: after input went to a <terminal>'s program, how long the
+    // frame waits for the echo, so it shows in this frame rather than the
+    // next (awaitTerminalEcho).
+    static constexpr double kTerminalEchoWaitMs = 3.0;
     double lastGCMs_ = 0.0, lastGpuFrameMs_ = -1.0;
     bool testFailure_ = false;
 
@@ -1144,6 +1164,15 @@ private:
     std::vector<render::SkiaImageRef> frameSkiaImages_;
     int frameCompositeW_ = 0, frameCompositeH_ = 0;
     SkCanvas* frameSegmentCanvas();  // the segment being composited into
+    // The client buffer last placed this frame (an index into frameImages_,
+    // SIZE_MAX: none), with its source and where it went in device px: the
+    // frame KMS can show as that buffer alone when it is all there is.
+    size_t directImage_ = SIZE_MAX;
+    render::DmabufLayerSource directSrc_;
+    render::LayerQuad directQuad_;
+    // DRM: presents this frame by scanning that buffer out directly, when
+    // nothing else of the frame would show; false to composite it.
+    bool presentDirectScanout();
 };
 
 } // namespace bro::engine

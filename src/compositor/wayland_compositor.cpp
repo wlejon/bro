@@ -97,6 +97,13 @@ bool WaylandCompositor::pollEvents() {
 
     using Kind = brocompositor::wl::WindowRequestKind;
     for (const auto& sev : sevents) {
+        if (auto* pc = std::get_if<brocompositor::wl::PointerConstraintChanged>(&sev)) {
+            using K = brocompositor::wl::PointerConstraintKind;
+            pointerConstraint_ = pc->kind == K::Locked     ? PointerConstraint::Locked
+                                 : pc->kind == K::Confined ? PointerConstraint::Confined
+                                                           : PointerConstraint::None;
+            continue;
+        }
         auto* req = std::get_if<brocompositor::wl::WindowRequest>(&sev);
         if (!req) continue;
         if (req->kind == Kind::Move) {
@@ -171,13 +178,13 @@ void WaylandCompositor::injectPointerMotion(double dx, double dy) {
 #endif
 }
 
-void WaylandCompositor::injectPointerWarp(double x, double y) {
+void WaylandCompositor::injectPointerWarp(double x, double y, double dx, double dy) {
 #if BRO_HAVE_WAYLAND_SERVER
     lastPointerX_ = x;
     lastPointerY_ = y;
-    if (backend_) backend_->inject_pointer_warp(x, y);
+    if (backend_) backend_->inject_pointer_warp(x, y, dx, dy);
 #else
-    (void)x; (void)y;
+    (void)x; (void)y; (void)dx; (void)dy;
 #endif
 }
 
@@ -379,6 +386,21 @@ std::vector<ClientWindowInfo> WaylandCompositor::stack() const {
 
 void WaylandCompositor::releaseClientLayers(const std::vector<LeasedSurfaceFrame>& frames,
                                             const FramePresentation* shown) {
+    notifyClientLayersShown(frames, shown);
+    returnClientLayers(frames);
+}
+
+void WaylandCompositor::returnClientLayers(const std::vector<LeasedSurfaceFrame>& frames) {
+#if BRO_HAVE_WAYLAND_SERVER
+    for (const auto& lf : frames)
+        if (lf.surface) lf.surface->release(lf.frame);
+#else
+    (void)frames;
+#endif
+}
+
+void WaylandCompositor::notifyClientLayersShown(const std::vector<LeasedSurfaceFrame>& frames,
+                                                const FramePresentation* shown) {
 #if BRO_HAVE_WAYLAND_SERVER
     // With the flip that showed them, the clients hear when their frames
     // turned to light (wp_presentation feedback, on the output it happened
@@ -392,12 +414,8 @@ void WaylandCompositor::releaseClientLayers(const std::vector<LeasedSurfaceFrame
         t.refresh_ns = shown->refreshNs;
         t.flags = 0x1 | 0x2 | 0x4;  // vsync, hw clock, hw completion: a KMS flip event
     }
-    for (const auto& lf : frames) {
-        if (lf.surface) {
-            lf.surface->presented_with(t);
-            lf.surface->release(lf.frame);
-        }
-    }
+    for (const auto& lf : frames)
+        if (lf.surface) lf.surface->presented_frame(lf.frame, t);
 #else
     (void)frames;
     (void)shown;

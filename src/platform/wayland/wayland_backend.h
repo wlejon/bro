@@ -48,6 +48,9 @@ public:
     /// Round-trip to the compositor and pump what came back.
     void roundtrip();
     std::deque<browl::ShellEvent> takeBacklog();
+    /// Events that want a frame (input, configures: anything but frame
+    /// callbacks and presentation feedback) are queued and not yet taken.
+    bool frameWorthyPending() const { return frameWorthy_ != frameWorthyTaken_; }
     /// The connection broke (the compositor went away or killed us).
     bool lost() const { return lost_; }
 
@@ -86,6 +89,8 @@ private:
     std::string pendingToken_;
     KeyMods modState_ = 0;
     bool lost_ = false;
+    uint64_t frameWorthy_ = 0;       // frame-worthy events queued, ever
+    uint64_t frameWorthyTaken_ = 0;  // ... as of the last takeBacklog
 };
 
 /// The Keycode for a key event: what `scancode` types unshifted in the

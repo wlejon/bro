@@ -62,6 +62,23 @@ struct FrameRecord {
     double vblankMs = 0.0;     // kernel timestamp, CLOCK_MONOTONIC ms; 0 = no flip seen
     uint32_t vblankSeq = 0;
 
+    // Input to light, stamped where it happened (CLOCK_MONOTONIC ms; 0 =
+    // nothing this frame): the first key press handled, the first input a
+    // <terminal> wrote to its program, when the output in the newest
+    // terminal frame taken was parsed, and when the present began. With the
+    // vblank the present landed on, a key's way to the screen reads off the
+    // records frame by frame.
+    double keyAtMs = 0.0;
+    double ptyWriteAtMs = 0.0;
+    double ptyOutputAtMs = 0.0;
+    double presentAtMs = 0.0;
+    // DRM: why a frame with a client buffer was composited rather than
+    // scanned out directly (0: it was, or there was none). 1 a GPU image
+    // drawn above it, 2 the shell drew above it (bar, frame, cursor), 3 the
+    // composite is not the screen's size, 4 the buffer does not cover the
+    // screen exactly (or direct scanout is inhibited), 5 the commit failed.
+    uint8_t scanoutMiss = 0;
+
     uint32_t inputEvents = 0;
     // Layout forced by script on the main thread (a geometry read after a
     // mutation): how many times, and the ms they took (inside control/input/tick).
@@ -117,8 +134,8 @@ public:
     void setRefreshPeriodMs(double ms) { refreshMs_ = ms; }
     double refreshPeriodMs() const { return refreshMs_; }
 
-    /// A windowed frame's presentation, reported by the window system after
-    /// the fact (Wayland presentation-time): fills in that frame's vblank if
+    /// A frame's presentation, reported after the fact (a window system's
+    /// Wayland presentation-time, a KMS flip landing): fills in that frame's vblank if
     /// its record is still in the ring, and becomes the newest presentation.
     void notePresentation(uint64_t frame, double vblankMs, uint64_t sequence, double refreshMs) {
         if (refreshMs > 0.0) refreshMs_ = refreshMs;
@@ -126,6 +143,7 @@ public:
         auto fill = [&](FrameRecord& r) {
             r.vblankMs = vblankMs;
             r.vblankSeq = static_cast<uint32_t>(sequence);
+            if (!r.presented) r.presented = 1;
         };
         if (cur_.frame == frame) {
             fill(cur_);

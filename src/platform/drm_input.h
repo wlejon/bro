@@ -83,6 +83,12 @@ public:
     DrmInputEvent pointerMotionAbsolute(float x, float y);
     DrmInputEvent buttonEvent(uint32_t evdevButton, bool pressed);
     DrmInputEvent wheelEvent(float horizontal, float vertical);
+    /// Put the pointer at (x, y) without an event: a client's pointer lock
+    /// or confinement holds it where the motion would have taken it.
+    void setCursorPosition(float x, float y) {
+        cursorX_ = x;
+        cursorY_ = y;
+    }
 
     bool isValid() const { return valid_; }
     int pollFd() const;

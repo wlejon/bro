@@ -522,6 +522,8 @@ void DrawTraversal::paintStackingContext(StackingContext* sc, bool withinPromote
     // promoted roots. In All / BaseSkipPromoted this is always false.
     const bool suppressSelf =
         (paintMode_ == PaintMode::PromotedOnly && promotedElements_ && !withinPromoted);
+    // Fully transparent: nothing in this stacking context can show.
+    if (!suppressSelf && opacityHidesAll(sc->root->computedStyle())) return;
 
     // The SC root's transform/opacity/filter must wrap ALL of its descendants'
     // painting — not just step 1 (the in-flow walk). Positioned descendants
@@ -617,8 +619,11 @@ void DrawTraversal::paintStackingContext(StackingContext* sc, bool withinPromote
     // (inside them the surface would be an empty layer). Opacity mixes the
     // filtered backdrop over the plain one, as it would the whole element.
     {
+        // An invisible element's backdrop is not filtered either.
+        auto visIt = rootStyle.find("visibility");
+        const bool rootVisible = visIt == rootStyle.end() || visIt->second != "hidden";
         auto bfIt = rootStyle.find("backdrop-filter");
-        if (bfIt != rootStyle.end() && !bfIt->second.empty() && bfIt->second != "none") {
+        if (rootVisible && bfIt != rootStyle.end() && !bfIt->second.empty() && bfIt->second != "none") {
             auto filters = parseCSSFilter(bfIt->second, styleCurrentColor(rootStyle),
                 shadowLengthContext(sc->root, rootStyle, viewportW_, viewportH_));
             if (!filters.empty()) {

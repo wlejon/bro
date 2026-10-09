@@ -1,10 +1,14 @@
 #include "terminal/term_session.h"
 #include "terminal/term_session_host.h"  // the delegate's complete type, for ~TermSession
 
+#include "util/time.h"
+
 #include <algorithm>
 #include <cstdlib>
 
 namespace bro::terminal {
+
+double TermSession::nowMs() { return util::currentTimeMs(); }
 
 namespace {
 
@@ -314,6 +318,8 @@ TermSession::Stats TermSession::stats() const noexcept {
     s.framesPublished = framesPublished_.load(std::memory_order_relaxed);
     s.syncHolds = syncHolds_.load(std::memory_order_relaxed);
     s.syncTimeouts = syncTimeouts_.load(std::memory_order_relaxed);
+    s.lastInputMs = lastInputMs_.load(std::memory_order_relaxed);
+    s.lastPublishMs = lastPublishMs_.load(std::memory_order_relaxed);
     return s;
 }
 
@@ -510,6 +516,7 @@ bool TermSession::maybePublish(Clock::time_point now, bool onlyIfConsumed) {
     }
     publishOwed_.store(false, std::memory_order_relaxed);
     if (!view_->publish(channel_)) return false;
+    lastPublishMs_.store(nowMs(), std::memory_order_relaxed);
     framesPublished_.fetch_add(1, std::memory_order_relaxed);
     return true;
 }

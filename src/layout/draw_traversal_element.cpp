@@ -41,6 +41,10 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     // subtree alike. The clamped text needs no check; its runs are gone.
     if (elem->layoutBox().clampHidden) return;
 
+    // Fully transparent (a stacking-context root's was checked, and its
+    // wrappers applied, by paintStackingContext): nothing of it shows.
+    if (!scRootSkipWrap_.count(elem) && opacityHidesAll(style)) return;
+
     // Check visibility:hidden (still occupies space but not drawn)
     bool visible = true;
     auto visIt = style.find("visibility");

@@ -227,6 +227,11 @@ bool ElTerminal::write(std::string_view bytes) { return impl_->session->write(by
 void ElTerminal::feed(std::string_view output) { impl_->session->feed(output); }
 void ElTerminal::kill() { impl_->session->kill(); }
 int64_t ElTerminal::pid() const { return impl_->session->pid(); }
+double ElTerminal::lastInputMs() const { return impl_->session->stats().lastInputMs; }
+double ElTerminal::shownOutputMs() const { return impl_->frameOutputMs; }
+double ElTerminal::pendingOutputMs() const {
+    return impl_->session->hasNewFrame() ? impl_->session->stats().lastPublishMs : 0.0;
+}
 bool ElTerminal::running() const { return impl_->session->running(); }
 bool ElTerminal::exited() const { return impl_->session->exited(); }
 std::optional<int> ElTerminal::exitCode() const { return impl_->session->exitCode(); }
@@ -423,6 +428,7 @@ bool ElTerminal::pump(double nowMs, bool focused, float scale) {
 
     if (m.session->hasNewFrame() || !m.frame) {
         m.frame = m.session->acquireFrame();
+        m.frameOutputMs = m.session->stats().lastPublishMs;
         m.layerDirty = true;
     }
 

@@ -32,7 +32,15 @@ struct DrmPlatformContext {
 #if BRO_WITH_COMPOSITOR
     std::unique_ptr<compositor::WaylandCompositor> compositor;
     std::vector<compositor::LeasedSurfaceFrame> leasedFrames;
+    // The last presented frame's leases, held until its flip lands (the
+    // flip's vblank is when they reached the screen).
+    std::vector<compositor::LeasedSurfaceFrame> flipLeases;
+    // A direct scanout's leases once its flip has landed: its buffer is on
+    // screen until the next flip lands, and goes back then.
+    std::vector<compositor::LeasedSurfaceFrame> onScreenLeases;
 #endif
+    // The flip in flight scans a client buffer out directly.
+    bool flipIsDirect = false;
     // Where each held key's press went, so its auto-repeats and its release
     // follow it (engine_drm_input.cpp). Keyed by scancode.
     std::set<uint32_t> keysToClient;

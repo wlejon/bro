@@ -218,10 +218,51 @@ bool WaylandWindow::presentPixels(const void* pixels, int width, int height, int
 }
 
 void WaylandWindow::beforePresent(uint64_t tag) {
+    // The frame callback paces the loop (waitForFrame) when presents are
+    // vsynced; an unthrottled loop (vsync off) has nothing to wait for.
+    const browl::RequestId frame = vsyncPref_ ? conn_.display().request_frame_callback(window_->wl_surface_ptr()) : 0;
     const browl::RequestId id = conn_.display().request_presentation_feedback(window_->wl_surface_ptr());
-    if (!id) return;
     std::lock_guard<std::mutex> lock(presentMu_);
-    pendingFeedback_[id] = tag;
+    frameRequest_ = frame;
+    if (id) pendingFeedback_[id] = tag;
+}
+
+void WaylandWindow::frameDone(browl::RequestId request) {
+    std::lock_guard<std::mutex> lock(presentMu_);
+    if (request == frameRequest_) {
+        frameRequest_ = 0;
+        earlyFrame_ = false;
+    }
+}
+
+bool WaylandWindow::waitForFrame(double timeoutMs) {
+    const double until = util::currentTimeMs() + timeoutMs;
+    for (;;) {
+        {
+            std::lock_guard<std::mutex> lock(presentMu_);
+            if (!frameRequest_) return true;
+            // Input (or a configure) while waiting: one frame now, rather
+            // than at the next callback, so its answer reaches the
+            // compositor in time for the compositor's next frame. One per
+            // callback: input streaming in (pointer motion) still paces at
+            // the compositor's rate. (The present does not block: the
+            // swapchain is MAILBOX where this paces, pacesPresents.)
+            if (!earlyFrame_ && conn_.frameWorthyPending()) {
+                earlyFrame_ = true;
+                return true;
+            }
+        }
+        // Hidden (suspended): the compositor answers nothing until shown.
+        if (conn_.lost() || isMinimized()) break;
+        const double left = until - util::currentTimeMs();
+        if (left <= 0.0) break;
+        conn_.pump(std::max(1, static_cast<int>(std::ceil(left))));
+    }
+    // Not answered (a compositor that stopped drawing the window without
+    // saying so): give up on this one; the present paces as it can.
+    std::lock_guard<std::mutex> lock(presentMu_);
+    frameRequest_ = 0;
+    return false;
 }
 
 void WaylandWindow::addPresentation(const browl::PresentationFeedbackEvent& ev) {

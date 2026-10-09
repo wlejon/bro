@@ -36,6 +36,8 @@ public:
     void beforePresent(uint64_t tag) override;
     std::vector<PresentedFrame> takePresentedFrames() override;
     bool reportsPresentation() const override;
+    bool waitForFrame(double timeoutMs) override;
+    bool pacesPresents() const override { return vsyncPref_; }
 
     uint32_t getWidth() const override { return width_; }
     uint32_t getHeight() const override { return height_; }
@@ -100,6 +102,7 @@ public:
     /// The preferred scale changed; true when the drawable changed.
     bool applyScale(uint32_t scale120);
     void addPresentation(const browl::PresentationFeedbackEvent& ev);
+    void frameDone(browl::RequestId request);
     void setFocused(bool focused) { focused_ = focused; }
     void setMinimizedFlag(bool m) { minimized_ = m; }
     bool textInputActive() const { return textInputActive_; }
@@ -155,6 +158,8 @@ private:
 
     mutable std::mutex presentMu_;
     std::unordered_map<browl::RequestId, uint64_t> pendingFeedback_;  // request -> tag
+    browl::RequestId frameRequest_ = 0;  // the frame callback waitForFrame waits on; 0 none
+    bool earlyFrame_ = false;  // a frame went early for input since the last callback
     std::vector<PresentedFrame> presented_;
     bool feedbackSeen_ = false;
 

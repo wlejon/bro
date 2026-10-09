@@ -85,6 +85,9 @@ public:
     }
 
     bool isRasterIdle() const { return worker_.isIdle(); }
+    /// Wait up to `timeoutMs` for the raster in flight to publish; true when
+    /// a result is ready to consume.
+    bool waitForRaster(double timeoutMs) { return worker_.waitForResult(timeoutMs); }
     bool isRasterBusyOrRequested() const { return worker_.isBusyOrRequested(); }
 
     // Layers name CanvasScenes by sceneId (resolved through the engine's

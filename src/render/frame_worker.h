@@ -1,7 +1,9 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
+#include <thread>
 
 namespace bro::render {
 
@@ -95,6 +97,22 @@ public:
     bool isBusyOrRequested() const {
         uint32_t s = state_.load(std::memory_order_acquire);
         return s == Requested || s == Busy;
+    }
+
+    /// Wait up to `timeoutMs` for the request in flight to publish. True
+    /// once a result is ready; false at the timeout, or at once when nothing
+    /// is in flight. Polls (std::atomic::wait has no timeout): it is for
+    /// short, bounded waits.
+    bool waitForResult(double timeoutMs) {
+        const auto until = std::chrono::steady_clock::now() +
+                           std::chrono::microseconds(static_cast<int64_t>(timeoutMs * 1000.0));
+        for (;;) {
+            const uint32_t s = state_.load(std::memory_order_acquire);
+            if (s == ResultReady) return true;
+            if (s != Requested && s != Busy) return false;
+            if (std::chrono::steady_clock::now() >= until) return false;
+            std::this_thread::sleep_for(std::chrono::microseconds(100));
+        }
     }
 
     State stateForDebug() const {

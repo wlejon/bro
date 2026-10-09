@@ -31,6 +31,8 @@
 #include "platform/keys.h"
 #include "util/time.h"
 
+#include <algorithm>
+
 #if defined(__linux__) && BRO_WITH_SEAT && BRO_WITH_DMABUF
 #include "platform/drm_input.h"
 #include <linux/input-event-codes.h>
@@ -120,6 +122,7 @@ void Engine::dispatchDrmInput(const platform::DrmInputEvent& ev) {
         platform::desktop::cancelHotkeyTap();
 
     if (ev.type == EvType::KeyDown || ev.type == EvType::KeyUp) {
+        if (ev.type == EvType::KeyDown && !ev.repeat) traceKeyPress();
         if (routeDrmKey(ev)) return;
     } else if (routeDrmPointer(ev)) {
         return;
@@ -235,15 +238,42 @@ bool Engine::routeDrmPointer(const platform::DrmInputEvent& ev) {
                 }
                 return true;
             }
-            bool onClient = ctx.pressToClient ||
+            // A client holding the pointer (zwp_pointer_constraints_v1): locked,
+            // it stays where it is and only the delta moves on (relative
+            // motion); confined, it stays inside the client's window.
+            using PC = compositor::WaylandCompositor::PointerConstraint;
+            const PC constraint = ctx.pointerOnClient ? comp->pointerConstraint() : PC::None;
+            double px = x, py = y;
+            if (constraint == PC::Locked) {
+                px = comp->pointerX();
+                py = comp->pointerY();
+            } else if (constraint == PC::Confined) {
+                const double cx = comp->pointerX(), cy = comp->pointerY();
+                const auto order = comp->stack();
+                for (auto it = order.rbegin(); it != order.rend(); ++it) {
+                    const auto& f = it->frame;
+                    if (cx < f.x || cy < f.y || cx >= f.x + f.width || cy >= f.y + f.height) continue;
+                    px = std::clamp(px, double(f.x), double(f.x + f.width - 1));
+                    py = std::clamp(py, double(f.y), double(f.y + f.height - 1));
+                    break;
+                }
+            }
+            if (px != x || py != y) {
+#if defined(__linux__) && BRO_WITH_SEAT && BRO_WITH_DMABUF
+                if (ctx.input) ctx.input->setCursorPosition(static_cast<float>(px), static_cast<float>(py));
+#endif
+                lastMouseX_ = static_cast<float>(px);
+                lastMouseY_ = static_cast<float>(py);
+            }
+            bool onClient = constraint != PC::None || ctx.pressToClient ||
                             (!ctx.pressToShell && drmPointerOnClient(ev.x, ev.y, nullptr));
             if (!onClient) {
                 ctx.pointerOnClient = false;
                 comp->routePointer(-1.0, -1.0);
                 return false;
             }
-            comp->injectPointerWarp(x, y);
-            comp->routePointer(x, y);
+            comp->injectPointerWarp(px, py, ev.dx, ev.dy);
+            comp->routePointer(px, py);
             if (!ctx.pointerOnClient) {
                 // Onto a client: the shell's hover leaves whatever was under it.
                 ctx.pointerOnClient = true;

@@ -22,6 +22,7 @@ struct ElTerminal::Impl {
     std::unique_ptr<terminal::TermSession> session;
     terminal::TermPainter painter;
     std::shared_ptr<const bropty::Frame> frame;  // the frame drawn (main thread)
+    double frameOutputMs = 0.0;  // when `frame` was published (the flight recorder's latency stamps)
 
     // The element's font and the cell metrics measured from it. Read by
     // getContentSize() on the layout thread too, hence the lock.

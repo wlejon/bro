@@ -24,6 +24,10 @@
 #include "platform/keys.h"
 #include "util/time.h"
 
+#include <algorithm>
+#include <chrono>
+#include <thread>
+
 namespace bro::engine {
 
 layout::ElTerminal* Engine::focusedTerminal(dom::Element** elOut) {
@@ -193,6 +197,25 @@ void Engine::pumpTerminals() {
         if (layered) uiDirty_ = true;
         else markAppBaseDirty();
     }
+}
+
+void Engine::awaitTerminalEcho(double frameStart) {
+    // The frame is otherwise recorded before the program has answered (its
+    // echo is a process switch and a parse away, well under a millisecond
+    // for a shell), and the echo waits a whole frame for the next pump.
+    double sent = 0.0;
+    layout::ElTerminal::forEach([&](layout::ElTerminal& t) { sent = std::max(sent, t.lastInputMs()); });
+    if (sent < frameStart) return;
+    const double until = util::currentTimeMs() + kTerminalEchoWaitMs;
+    for (;;) {
+        bool answered = false;
+        layout::ElTerminal::forEach([&](layout::ElTerminal& t) {
+            if (t.pendingOutputMs() >= sent) answered = true;
+        });
+        if (answered || util::currentTimeMs() >= until) break;
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
+    }
+    pumpTerminals();
 }
 
 } // namespace bro::engine

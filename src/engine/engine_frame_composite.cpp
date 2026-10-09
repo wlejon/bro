@@ -8,6 +8,7 @@
 #include "engine/engine.h"
 #include "engine/app_runtime.h"
 #include "engine/frame_presenter.h"
+#include "engine/frame_trace.h"
 #include "engine/terminal_layers.h"
 #include "engine/window_host.h"
 
@@ -104,6 +105,7 @@ void Engine::beginFrameComposite() {
     frameSegmentUsed_.clear();
     frameImages_.clear();
     frameSkiaImages_.clear();
+    directImage_ = SIZE_MAX;
 }
 
 // The segment the next CPU layer composites into: the one above the last GPU
@@ -249,15 +251,24 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, int offsetY) {
                 ++s_dmabufFrameCounter;
                 auto* buf = vulkanPresenter_->dmabufImporter()->getOrImport(src, s_dmabufFrameCounter);
                 if (!buf || buf->image == VK_NULL_HANDLE) return;
-                // No direct scanout here: this frame goes on to present its
-                // composite, whose flip would replace (or, while the direct
-                // flip is pending, be refused behind) the client's buffer, and
-                // the client gets its buffer back before it has left the
-                // screen. A fullscreen client that covers the CRTC is
-                // composited like any other until a frame can be presented as
-                // the client's buffer alone. (Flipping to it here turned the
-                // CRTC off on amdgpu and froze the display.)
-                place(buf->image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, buf->width, buf->height, at.dst(quad), &quad).view = buf->view;
+                // Placed like any other image; whether the frame can be shown
+                // as this buffer alone is decided once the frame is complete
+                // (presentDirectScanout: nothing may be drawn over it).
+                const SkRect dst = at.dst(quad);
+                place(buf->image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, buf->width, buf->height, dst, &quad).view = buf->view;
+                directImage_ = frameImages_.size() - 1;
+                directSrc_ = src;
+                directQuad_ = render::LayerQuad{};
+                directQuad_.x = dst.left();
+                directQuad_.y = dst.top();
+                directQuad_.w = dst.width();
+                directQuad_.h = dst.height();
+                if (frameImages_.back().clipped) {
+                    directQuad_.clipX = static_cast<float>(frameImages_.back().clip.offset.x);
+                    directQuad_.clipY = static_cast<float>(frameImages_.back().clip.offset.y);
+                    directQuad_.clipW = static_cast<float>(frameImages_.back().clip.extent.width);
+                    directQuad_.clipH = static_cast<float>(frameImages_.back().clip.extent.height);
+                }
 #else
                 (void)src;
 #endif
@@ -304,23 +315,22 @@ void Engine::compositeRemainingClientWindows() {
 void Engine::releaseClientWindowFrames() {
 #if BRO_WITH_COMPOSITOR
     if (!drmCtx_ || !drmCtx_->compositor || drmCtx_->leasedFrames.empty()) return;
-    // A composited present returns once its flip has landed: that flip is
-    // when these client frames reached the screen. (A direct scanout's flip
-    // lands later; its clients get frame callbacks only.)
-    compositor::WaylandCompositor::FramePresentation shown;
-    bool flipped = false;
+    // A present returns once its flip is committed; the flip landing is when
+    // these client frames reach the screen, so they wait for it
+    // (drmFlipLanded). Without a flip in flight (a failed commit) they go
+    // back now, with frame callbacks only.
 #if BRO_WITH_DMABUF
     if (auto* kms = vulkanPresenter_ ? vulkanPresenter_->kmsDirectPresenter() : nullptr) {
-        const auto& flip = kms->lastFlip();
-        if (flip.count != flipCountAtFrameStart_ && flip.vblankMs > 0.0) {
-            shown.timestampNs = static_cast<int64_t>(flip.vblankMs * 1e6);
-            shown.sequence = flip.sequence;
-            shown.refreshNs = static_cast<uint32_t>(kms->refreshPeriodMs() * 1e6);
-            flipped = true;
+        if (kms->flipPending()) {
+            auto& held = drmCtx_->flipLeases;
+            held.insert(held.end(), std::make_move_iterator(drmCtx_->leasedFrames.begin()),
+                        std::make_move_iterator(drmCtx_->leasedFrames.end()));
+            drmCtx_->leasedFrames.clear();
+            return;
         }
     }
 #endif
-    drmCtx_->compositor->releaseClientLayers(drmCtx_->leasedFrames, flipped ? &shown : nullptr);
+    drmCtx_->compositor->releaseClientLayers(drmCtx_->leasedFrames, nullptr);
     drmCtx_->leasedFrames.clear();
 #endif
 }
@@ -350,11 +360,51 @@ render::PresentFrame Engine::describeCompositedFrame() {
     return frame;
 }
 
+// A frame that is one client buffer covering the screen, with nothing drawn
+// over it (no shell bar or pill, no software cursor: anything drawn after the
+// buffer lands in the segment above it), is flipped to as that buffer: no
+// composite, no GPU work, and the client's frame reaches the screen without a
+// copy. Its framebuffer stays alive while it is on screen (the presenter
+// keeps it), and its lease until the next flip has replaced it
+// (drmFlipLanded). What is under it does not show.
+bool Engine::presentDirectScanout() {
+#if BRO_WITH_DMABUF
+    if (displayMode_ != DisplayMode::Drm || !drmCtx_ || directImage_ == SIZE_MAX) return false;
+    auto* kms = vulkanPresenter_ ? vulkanPresenter_->kmsDirectPresenter() : nullptr;
+    if (!kms) return false;
+    uint8_t& miss = frameTrace_->current().scanoutMiss;
+    if (directImage_ + 1 != frameImages_.size()) return miss = 1, false;  // something GPU-drawn above it
+    if (directImage_ + 1 < frameSegmentUsed_.size() && frameSegmentUsed_[directImage_ + 1]) return miss = 2, false;
+    if (static_cast<uint32_t>(frameCompositeW_) != kms->width() ||
+        static_cast<uint32_t>(frameCompositeH_) != kms->height())
+        return miss = 3, false;
+    if (!kms->canDirectScanout(directSrc_, directQuad_, kms->width(), kms->height())) return miss = 4, false;
+    if (!kms->directScanout(directSrc_)) return miss = 5, false;
+    drmCtx_->flipIsDirect = true;
+    return true;
+#else
+    return false;
+#endif
+}
+
 void Engine::presentCurrentFrame() {
+    if (presentDirectScanout()) {
+        frameImages_.clear();
+        frameSegmentUsed_.clear();
+        frameSkiaImages_.clear();
+        noteFramePresented();
+        drmFlipFrame_ = frameNumber_;
+        frameTrace_->current().presented = 2;  // scanned out directly; its flip fills in the vblank
+        return;
+    }
     const render::PresentFrame frame = describeCompositedFrame();
     if (vulkanPresenter_ && !vulkanPresenter_->isHeadless()) {
-        if (!vulkanPresenter_->present(frame)) LOG_ERROR("Engine: presenting the frame failed");
-        else noteFramePresented();  // the first one logs the launch's time to it
+        if (!vulkanPresenter_->present(frame)) {
+            LOG_ERROR("Engine: presenting the frame failed");
+        } else {
+            noteFramePresented();  // the first one logs the launch's time to it
+            drmFlipFrame_ = frameNumber_;  // a KMS flip landing later belongs to this frame
+        }
         frameSkiaImages_.clear();  // submitted
     } else if (window_ && window_->backend() == platform::GraphicsBackend::Software && frame.below) {
         // No GPU, so no GPU layer: the CPU composite is the frame.

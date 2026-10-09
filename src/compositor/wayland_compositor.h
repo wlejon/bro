@@ -105,6 +105,12 @@ public:
     /// known, is the flip the frame landed on.
     void releaseClientLayers(const std::vector<LeasedSurfaceFrame>& frames,
                              const FramePresentation* shown = nullptr);
+    /// The two halves of that: the clients hear their frames were shown
+    /// (presentation feedback, frame callbacks), and the buffers go back. A
+    /// buffer scanned out directly is shown at one flip and goes back at the
+    /// next, once it has left the screen.
+    void notifyClientLayersShown(const std::vector<LeasedSurfaceFrame>& frames, const FramePresentation* shown);
+    void returnClientLayers(const std::vector<LeasedSurfaceFrame>& frames);
 
     // Window management controls
     bool focusWindow(uint64_t winId);
@@ -136,9 +142,19 @@ public:
     // Input injection
     void injectKey(uint32_t keycode, bool pressed);
     void injectPointerMotion(double dx, double dy);
-    void injectPointerWarp(double x, double y);
+    /// The pointer at (x, y); a device delta (dx, dy) also reaches the
+    /// pointer-focused client as relative motion.
+    void injectPointerWarp(double x, double y, double dx = 0.0, double dy = 0.0);
     void injectPointerButton(uint32_t button, bool pressed);
     void injectPointerAxis(uint32_t orientation, double delta, int32_t discrete = 0);
+
+    /// The constraint the pointer-focused client holds on the pointer
+    /// (zwp_pointer_constraints_v1), as of the last pollEvents.
+    enum class PointerConstraint { None, Locked, Confined };
+    PointerConstraint pointerConstraint() const { return pointerConstraint_; }
+    /// Where the pointer was last put (injectPointerWarp), layout px.
+    double pointerX() const { return lastPointerX_; }
+    double pointerY() const { return lastPointerY_; }
 
 #if BRO_HAVE_WAYLAND_SERVER
     brocompositor::wl::ServerBackend* backend() { return backend_.get(); }
@@ -176,6 +192,7 @@ private:
 
     double lastPointerX_ = 0.0;
     double lastPointerY_ = 0.0;
+    PointerConstraint pointerConstraint_ = PointerConstraint::None;
 };
 
 } // namespace bro::compositor

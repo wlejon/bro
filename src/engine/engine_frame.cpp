@@ -189,6 +189,7 @@ void Engine::run() {
         else hostMouseMove(host(id), x, y, xr, yr);
     };
     eventLoop_->onKeyDown = [this, mainWin, host](uint32_t id, int32_t k, int32_t s, uint16_t m, bool r) {
+        if (!r) traceKeyPress();
         if (mainWin(id)) handleKeyDown(k, s, (int)m, r);
         else hostKeyDown(host(id), k, s, (int)m, r);
     };
@@ -284,6 +285,14 @@ void Engine::run() {
             running_ = false;
             break;
         }
+        // Where the window system says when it wants the next frame (a
+        // Wayland frame callback), wait for that here, before input is read
+        // and the frame built: the frame then carries the newest input and
+        // its present goes out at once. Without the wait, a vsynced present
+        // holds the finished frame until the compositor's next frame, and
+        // everything it shows is a refresh older than it need be.
+        const double frameWaitStart = util::currentTimeMs();
+        if (window_) window_->waitForFrame(kFrameWaitMaxMs);
         double frameStart = util::currentTimeMs();
 
         // Where the window system reports presentation (Wayland), the clock
@@ -305,7 +314,9 @@ void Engine::run() {
         lastWallTickMs_ = std::max(lastWallTickMs_, clockAt);
         const double scaledFrameDtMs = wallFrameDtMs * effectiveTimeScale();
         engineNowMs_ += scaledFrameDtMs;
-        traceFrameBegin(frameStart);
+        // The record spans the wait: it is this frame's pacing.
+        traceFrameBegin(frameWaitStart);
+        frameTrace_->current().pacingWaitMs = frameStart - frameWaitStart;
 
         if (layoutPipeline_->waitForIdle()) {
             updateDocumentHeight();
@@ -470,6 +481,8 @@ void Engine::run() {
             }
         }
 #endif
+
+        awaitTerminalEcho(frameStart);
 
         bool layoutIdle = layoutPipeline_->isIdle();
         bool layoutSignaled = false;

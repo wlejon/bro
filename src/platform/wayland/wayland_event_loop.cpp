@@ -391,13 +391,20 @@ void WaylandEventLoop::handle(const browl::ShellEvent& ev) {
             auto has = [&](const char* m) {
                 return std::find(e.mime_types.begin(), e.mime_types.end(), m) != e.mime_types.end();
             };
+            // Files when the URI list names local ones; anything else (a
+            // link dragged out of a browser) arrives as its text.
+            bool dropped = false;
             if (has("text/uri-list")) {
                 if (auto bytes = seat->read_drop("text/uri-list")) {
                     auto paths = pathsFromUriList(std::string(bytes->begin(), bytes->end()));
-                    if (!paths.empty() && onDropFile) onDropFile(w->windowId(), paths, x, y);
+                    if (!paths.empty() && onDropFile) {
+                        onDropFile(w->windowId(), paths, x, y);
+                        dropped = true;
+                    }
                 }
-            } else {
-                for (const char* m : {"text/plain;charset=utf-8", "UTF8_STRING", "text/plain"}) {
+            }
+            if (!dropped) {
+                for (const char* m : {"text/plain;charset=utf-8", "UTF8_STRING", "text/plain", "text/uri-list"}) {
                     if (!has(m)) continue;
                     if (auto bytes = seat->read_drop(m); bytes && onDropText)
                         onDropText(w->windowId(), std::string(bytes->begin(), bytes->end()), x, y);

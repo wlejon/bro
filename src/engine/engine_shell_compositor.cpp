@@ -61,6 +61,17 @@ bool Engine::startShellCompositor(uint32_t width, uint32_t height, const std::st
             y = static_cast<int32_t>(std::floor(lastMouseY_));
             return true;
         });
+        // A launcher's processes get a token, so their first window takes
+        // focus the way the protocol intends (bro.compositor.activationToken).
+        brocompositor::api::setActivationTokenSource([comp](const std::string& appId) -> std::string {
+            return comp && comp->backend() ? comp->backend()->create_activation_token(appId) : std::string();
+        });
+        // The icons clients set on their windows (bro.compositor.getWindowIcon).
+        brocompositor::api::setWindowIconSource(
+            [comp](brocompositor::WindowId id, int32_t size) -> std::optional<brocompositor::WindowIcon> {
+                if (!comp || !comp->backend()) return std::nullopt;
+                return comp->backend()->window_icon(id, size);
+            });
     }
 #endif
     return true;

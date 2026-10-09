@@ -8,6 +8,7 @@
 #include "engine/control.h"
 #include "engine/frame_trace.h"
 #include "engine/layout_pipeline.h"
+#include "layout/el_terminal.h"
 #include "platform/window.h"
 #include "render/vulkan_presenter.h"
 #include "render/vulkan_swapchain.h"
@@ -18,6 +19,7 @@
 #include "render/kms_direct_presenter.h"
 #endif
 
+#include <algorithm>
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
@@ -80,23 +82,32 @@ void Engine::traceRasterConsumed() {
     contentTimeShown_ = contentTimeSignalled_;
 }
 
+void Engine::traceKeyPress() {
+    FrameRecord& r = frameTrace_->current();
+    if (r.keyAtMs == 0.0) r.keyAtMs = util::currentTimeMs();
+}
+
 void Engine::traceFrameEnd() {
     FrameRecord& r = frameTrace_->current();
     r.endMs = util::currentTimeMs();
+    // Terminals: input written to a program this frame, and output newer
+    // than any shown before taken for this frame's paint.
+    double newestOutput = ptyOutputTraced_;
+    layout::ElTerminal::forEach([&](layout::ElTerminal& t) {
+        const double in = t.lastInputMs();
+        if (in >= r.startMs && (r.ptyWriteAtMs == 0.0 || in < r.ptyWriteAtMs)) r.ptyWriteAtMs = in;
+        newestOutput = std::max(newestOutput, t.shownOutputMs());
+    });
+    if (newestOutput > ptyOutputTraced_) {
+        r.ptyOutputAtMs = newestOutput;
+        ptyOutputTraced_ = newestOutput;
+    }
     r.contentGen = contentGenShown_;
     r.contentTimeMs = contentTimeShown_;
     // Headless has no layout thread; its step set the flag as it ticked.
     if (layoutPipeline_) r.animating = layoutPipeline_->animationsActive() || layoutPipeline_->promotedActive();
-#if BRO_WITH_DMABUF
-    if (auto* kms = vulkanPresenter_ ? vulkanPresenter_->kmsDirectPresenter() : nullptr) {
-        const auto& flip = kms->lastFlip();
-        if (flip.count != flipCountAtFrameStart_) {
-            r.vblankMs = flip.vblankMs;
-            r.vblankSeq = flip.sequence;
-            r.presented = 1;
-        }
-    }
-#endif
+    // A KMS frame's flip fills in its vblank when it lands (drmFlipLanded),
+    // usually before this, sometimes during the next frame.
     if (!r.presented && displayMode_ != DisplayMode::Drm && r.presentMs > 0.0) r.presented = 1;
     frameTrace_->commit();
 }

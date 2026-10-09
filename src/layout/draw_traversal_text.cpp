@@ -68,6 +68,11 @@ void DrawTraversal::drawText(dom::Node* textNode, dom::Element* parent,
 
     auto& style = parent->computedStyle();
 
+    // visibility inherits, so the parent's computed value is the text's own.
+    if (auto visIt = style.find("visibility");
+        visIt != style.end() && (visIt->second == "hidden" || visIt->second == "collapse"))
+        return;
+
     // Collapse whitespace to match the CSS white-space property that the layout
     // measured. Without this, raw newlines/tabs render as tofu glyphs and the
     // drawn width drifts from the measured width.

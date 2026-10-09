@@ -177,6 +177,22 @@ public:
     virtual std::vector<PresentedFrame> takePresentedFrames() { return {}; }
     /// Whether takePresentedFrames ever reports anything for this window.
     virtual bool reportsPresentation() const { return false; }
+    /// Wait, up to `timeoutMs`, until the window system wants this window's
+    /// next frame (Wayland: the frame callback asked for with the last
+    /// present). The engine waits here before it reads input and builds the
+    /// frame, so the frame is drawn from the newest input and goes straight
+    /// to the screen, instead of being built at once and then held in a
+    /// blocking FIFO present for most of a refresh. Returns at once when no
+    /// such signal is pending or the window system has none; true when it
+    /// came (or there was none to wait for), false on the timeout.
+    virtual bool waitForFrame(double timeoutMs) {
+        (void)timeoutMs;
+        return true;
+    }
+    /// Whether waitForFrame paces this window's presents, so the swapchain
+    /// need not block in its present as well (it can use MAILBOX): a frame
+    /// begun early for input then reaches the compositor at once.
+    virtual bool pacesPresents() const { return false; }
 
     // --- Geometry ---
 

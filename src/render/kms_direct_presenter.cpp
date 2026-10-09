@@ -307,6 +307,7 @@ bool KmsDirectPresenter::directScanout(
     const DmabufLayerSource& src, int inFenceFd, int* outFenceFd) {
 #if defined(__linux__)
     if (!active_ || paused_ || !presenter_ || !device_) return false;
+    if (flipPending_) waitForFlip(100);  // one commit in flight at a time
 
     brodmabuf::DmaBufAttributes attrs;
     attrs.width = src.width;
@@ -360,6 +361,15 @@ bool KmsDirectPresenter::presentComposited(
             s_logged = true;
         }
         return false;
+    }
+
+    // The slot drawn into next is the one on screen until the last flip
+    // lands (and the frame tap's one copy is that flip's until it does).
+    lastTiming_.flipWaitMs = 0.0;
+    if (flipPending_) {
+        const double t = nowMs();
+        waitForFlip(100);
+        lastTiming_.flipWaitMs = nowMs() - t;
     }
 
     currentSlot_ = (currentSlot_ + 1) % scanoutSlots_.size();
@@ -452,13 +462,15 @@ bool KmsDirectPresenter::presentComposited(
         return false;
     }
 
+    // The flip lands at the next vblank; the frame loop waits for it (and
+    // handles input meanwhile), and the next present waits for it before it
+    // draws. Its landing does the rest (readEvents): the direct scanout
+    // buffers it replaced go, and the frame tap gets its frame.
     flipPending_ = true;
-    (void)readEvents(100);
-    lastTiming_.flipWaitMs = nowMs() - tFlip;
+    compositedFlipPending_ = true;
+    lastTiming_.flipWaitMs += nowMs() - tFlip;
     composited_ = true;
     directOnScreen_ = false;
-    directFbs_.clear();  // the composited flip has landed: none is on screen
-    if (frameTap_) frameTap_->completed(lastFlip_);
 
     if (outFenceFd) {
         *outFenceFd = flipRes.value().release();
@@ -525,6 +537,30 @@ bool KmsDirectPresenter::handlePageFlipEvent(int timeoutMs) {
 #endif
 }
 
+bool KmsDirectPresenter::waitForFlip(int timeoutMs) {
+#if defined(__linux__)
+    if (!presenter_) return false;
+    const double until = nowMs() + timeoutMs;
+    while (flipPending_) {
+        const double left = until - nowMs();
+        if (left <= 0.0) break;
+        (void)readEvents(static_cast<int>(left) + 1);
+    }
+    return !flipPending_;
+#else
+    (void)timeoutMs;
+    return true;
+#endif
+}
+
+int KmsDirectPresenter::pollFd() const {
+#if defined(__linux__)
+    return device_ ? device_->fd() : -1;
+#else
+    return -1;
+#endif
+}
+
 bool KmsDirectPresenter::readEvents(int timeoutMs) {
 #if defined(__linux__)
     brodmabuf::KmsFlipEvent flip;
@@ -535,6 +571,12 @@ bool KmsDirectPresenter::readEvents(int timeoutMs) {
         lastFlip_.vblankMs = static_cast<double>(flip.timestamp_us) / 1000.0;
         lastFlip_.sequence = flip.sequence;
         ++lastFlip_.count;
+        if (compositedFlipPending_) {
+            compositedFlipPending_ = false;
+            directFbs_.clear();  // a composited frame is on screen: no direct buffer is
+            if (frameTap_) frameTap_->completed(lastFlip_);
+        }
+        if (flipListener_) flipListener_(lastFlip_);
     }
     return any;
 #else
@@ -565,6 +607,7 @@ bool KmsDirectPresenter::restoreModeset() {
 void KmsDirectPresenter::pause() {
     paused_ = true;
     flipPending_ = false;  // a VT switch can swallow the event
+    compositedFlipPending_ = false;
 }
 
 void KmsDirectPresenter::close() {

@@ -177,6 +177,19 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
             uiDirty_ = false;
             hasRenderedOnce_ = true;
             lastUIRenderMs_ = now;
+
+            // Windowed, the raster just asked for is shown in this frame when
+            // it is done in the first half of the refresh: the present is
+            // paced by the window system anyway, so waiting costs nothing,
+            // and otherwise what was recorded now (a key's echo) shows a
+            // refresh later. A raster that takes longer is shown next frame,
+            // as before.
+            if (displayMode_ == DisplayMode::Windowed) {
+                const double period = frameTrace_->refreshPeriodMs() > 0.0 ? frameTrace_->refreshPeriodMs() : 1000.0 / 60.0;
+                const double waitMs = frameStart + period * 0.5 - util::currentTimeMs();
+                if (waitMs > 0.0 && framePresenter_->waitForRaster(waitMs) && framePresenter_->consumeIfReady())
+                    traceRasterConsumed();
+            }
         }
     }
 
@@ -259,6 +272,7 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
 
         const double tPresent = util::currentTimeMs();
         rec.compositeMs = tPresent - tGpu;
+        rec.presentAtMs = tPresent;
         presentCurrentFrame();
         rec.presentMs = util::currentTimeMs() - tPresent;
 #if BRO_WITH_DMABUF

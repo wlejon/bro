@@ -166,6 +166,15 @@ VkPresentModeKHR VulkanSwapchain::chooseSwapPresentMode(const std::vector<VkPres
         }
         return VK_PRESENT_MODE_FIFO_KHR;
     }
+    // A window that paces its own frames (Wayland frame callbacks) only
+    // presents when the compositor wants a frame: MAILBOX then adds no wait,
+    // where FIFO would hold a frame begun early for input until the
+    // compositor's next one.
+    if (window_ && window_->pacesPresents()) {
+        for (const auto& mode : availablePresentModes) {
+            if (mode == VK_PRESENT_MODE_MAILBOX_KHR) return mode;
+        }
+    }
     // Vsync is adaptive where the surface offers it: a frame that misses the
     // interval presents at once (and may tear) rather than waiting a whole
     // extra one. FIFO, the strict form, is the one every surface has.

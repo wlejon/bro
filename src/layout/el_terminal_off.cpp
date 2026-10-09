@@ -58,6 +58,9 @@ bool ElTerminal::write(std::string_view) { return false; }
 void ElTerminal::feed(std::string_view) {}
 void ElTerminal::kill() {}
 int64_t ElTerminal::pid() const { return 0; }
+double ElTerminal::lastInputMs() const { return 0.0; }
+double ElTerminal::shownOutputMs() const { return 0.0; }
+double ElTerminal::pendingOutputMs() const { return 0.0; }
 bool ElTerminal::running() const { return false; }
 bool ElTerminal::exited() const { return false; }
 std::optional<int> ElTerminal::exitCode() const { return std::nullopt; }
