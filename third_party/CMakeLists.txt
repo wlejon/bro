@@ -236,7 +236,16 @@ if(BRO_WITH_COMPOSITOR)
     if(EXISTS "$ENV{HOME}/opt/bc-wlr/lib/pkgconfig/wlroots-0.18.pc")
         set(ENV{PKG_CONFIG_PATH} "$ENV{HOME}/opt/bc-wlr/lib/pkgconfig:$ENV{PKG_CONFIG_PATH}")
     endif()
-    bro_dependency(brocompositor OPTIONS BROCOMPOSITOR_BUILD_TESTS=OFF)
+    # Its scripted Wayland clients (bc_wl_client, ...) come with bro's tests,
+    # beside bro-headless: the compositor tests drive them against bro's
+    # server, built from the same brocompositor.
+    bro_dependency(brocompositor OPTIONS BROCOMPOSITOR_BUILD_TESTS=OFF
+                   BROCOMPOSITOR_BUILD_TEST_CLIENTS=${BRO_BUILD_TESTS})
+    # The dependency is EXCLUDE_FROM_ALL; the clients are part of a test build.
+    if(TARGET bc_wl_client)
+        add_custom_target(bro_wl_test_clients ALL)
+        add_dependencies(bro_wl_test_clients bc_wl_client bc_wl_input_client bc_wl_session_client)
+    endif()
     if(WIN32 AND TARGET brocompositor_win AND EXISTS "${CMAKE_BINARY_DIR}/cppwinrt")
         target_include_directories(brocompositor_win PRIVATE "${CMAKE_BINARY_DIR}/cppwinrt")
     endif()

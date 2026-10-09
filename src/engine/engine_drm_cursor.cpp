@@ -30,6 +30,21 @@
 
 namespace bro::engine {
 
+#if BRO_WITH_COMPOSITOR
+namespace {
+
+// The picture of the client that has the pointer, when it set one
+// (wl_pointer.set_cursor with a surface): where the cursor is the client's
+// (screenCursorShape), and not while the shell's drag is under way.
+bool clientCursor(DrmPlatformContext* ctx, bool shellApp, compositor::WaylandCompositor::CursorPixels& out) {
+    if (!ctx || !ctx->compositor || ctx->shellDrag != 0) return false;
+    if (shellApp && !ctx->pointerOnClient) return false;
+    return ctx->compositor->acquireClientCursor(out) && out.bgra && out.pixelW > 0 && out.pixelH > 0;
+}
+
+}  // namespace
+#endif
+
 bool Engine::drmPlaceHardwareCursor() {
 #if BRO_WITH_DMABUF
     auto* kms = vulkanPresenter_ ? vulkanPresenter_->kmsDirectPresenter() : nullptr;
@@ -38,6 +53,54 @@ bool Engine::drmPlaceHardwareCursor() {
         kms->setCursor(false, 0, 0);
         return false;
     }
+#if BRO_WITH_COMPOSITOR
+    // A client's own picture, scaled to device pixels: on the plane when it
+    // fits there, else drawn into the frame (drawClientCursorIntoFrame).
+    compositor::WaylandCompositor::CursorPixels cur;
+    if (cursorVisible_ && !lockedElement_.get() && clientCursor(drmCtx_.get(), isShellApp(), cur)) {
+        const float scale = deviceScale_.render > 0.0f ? deviceScale_.render : 1.0f;
+        char key[96];
+        std::snprintf(key, sizeof(key), "client:%llx@%.3f", static_cast<unsigned long long>(cur.key), scale);
+        if (hwCursorKey_ != key) {
+            hwCursorKey_ = key;
+            hwCursorFits_ = false;
+            const int w = std::max(1, static_cast<int>(std::lround(cur.w * scale)));
+            const int h = std::max(1, static_cast<int>(std::lround(cur.h * scale)));
+            if (static_cast<uint32_t>(w) <= kms->cursorWidth() && static_cast<uint32_t>(h) <= kms->cursorHeight()) {
+                if (w == cur.pixelW && h == cur.pixelH) {
+                    hwCursorFits_ = kms->setCursorImage(cur.bgra->data(), static_cast<uint32_t>(w),
+                                                        static_cast<uint32_t>(h), static_cast<uint32_t>(w) * 4);
+                } else {
+                    const SkImageInfo src =
+                        SkImageInfo::Make(cur.pixelW, cur.pixelH, kBGRA_8888_SkColorType, kPremul_SkAlphaType);
+                    sk_sp<SkImage> image = SkImages::RasterFromPixmapCopy(
+                        SkPixmap(src, cur.bgra->data(), static_cast<size_t>(cur.pixelW) * 4));
+                    const SkImageInfo dst = SkImageInfo::Make(w, h, kBGRA_8888_SkColorType, kPremul_SkAlphaType);
+                    sk_sp<SkSurface> surface = SkSurfaces::Raster(dst);
+                    if (image && surface) {
+                        surface->getCanvas()->clear(SK_ColorTRANSPARENT);
+                        surface->getCanvas()->drawImageRect(image, SkRect::MakeWH(float(w), float(h)),
+                                                            SkSamplingOptions(SkFilterMode::kLinear), nullptr);
+                        std::vector<uint8_t> px(static_cast<size_t>(w) * h * 4);
+                        if (surface->readPixels(dst, px.data(), static_cast<size_t>(w) * 4, 0, 0))
+                            hwCursorFits_ = kms->setCursorImage(px.data(), static_cast<uint32_t>(w),
+                                                                static_cast<uint32_t>(h), static_cast<uint32_t>(w) * 4);
+                    }
+                }
+            }
+        }
+        if (!hwCursorFits_) {
+            kms->setCursor(false, 0, 0);
+            return false;
+        }
+        // The hotspot moves without a new picture (wl_surface.offset).
+        const float sx = static_cast<float>(frameCompositeW_) / static_cast<float>(viewportWidth_ > 0 ? viewportWidth_ : 1);
+        const float sy = static_cast<float>(frameCompositeH_) / static_cast<float>(viewportHeight_ > 0 ? viewportHeight_ : 1);
+        kms->setCursor(true, static_cast<int32_t>(std::lround((lastMouseX_ - cur.hotX) * sx)),
+                       static_cast<int32_t>(std::lround((lastMouseY_ - cur.hotY) * sy)));
+        return true;
+    }
+#endif
     const std::string shape = cursorVisible_ && !lockedElement_.get() ? screenCursorShape() : std::string("none");
     if (shape == "none" || shape.empty()) {
         kms->setCursor(false, 0, 0);
@@ -106,6 +169,28 @@ bool Engine::drmPlaceHardwareCursor() {
 void Engine::compositeDragIcon() {
 #if BRO_WITH_COMPOSITOR
     if (!drmCtx_ || !drmCtx_->compositor) return;
+    const float sx = static_cast<float>(frameCompositeW_) / static_cast<float>(viewportWidth_ > 0 ? viewportWidth_ : 1);
+    const float sy = static_cast<float>(frameCompositeH_) / static_cast<float>(viewportHeight_ > 0 ? viewportHeight_ : 1);
+    // The shell's own drag (startShellDrag): its label at the pointer.
+    if (auto& ctx = *drmCtx_; ctx.shellDrag != 0) {
+        if (ctx.shellDragIcon.empty() || ctx.shellDragIconW <= 0 || ctx.shellDragIconH <= 0) return;
+        SkCanvas* canvas = frameSegmentCanvas();
+        if (!canvas) return;
+        const SkImageInfo info =
+            SkImageInfo::Make(ctx.shellDragIconW, ctx.shellDragIconH, kBGRA_8888_SkColorType, kPremul_SkAlphaType);
+        sk_sp<SkImage> image = SkImages::RasterFromPixmapCopy(
+            SkPixmap(info, ctx.shellDragIcon.data(), static_cast<size_t>(ctx.shellDragIconW) * 4));
+        if (!image) return;
+        const float x = lastMouseX_ - static_cast<float>(ctx.shellDragHotX);
+        const float y = lastMouseY_ - static_cast<float>(ctx.shellDragHotY);
+        frameKeyAdd(0x5d4au ^ ctx.shellDrag);
+        frameKeyAdd(static_cast<uint64_t>(std::lround(x)) << 32 ^ static_cast<uint32_t>(std::lround(y)));
+        canvas->drawImageRect(image,
+                              SkRect::MakeXYWH(x * sx, y * sy, static_cast<float>(ctx.shellDragIconW) * sx,
+                                               static_cast<float>(ctx.shellDragIconH) * sy),
+                              SkSamplingOptions(SkFilterMode::kLinear), nullptr);
+        return;
+    }
     std::vector<engine::UILayer> layers;
     std::vector<compositor::LeasedSurfaceFrame> leased;
     compositor::WaylandCompositor::DragIconPixels icon;
@@ -134,10 +219,36 @@ void Engine::compositeDragIcon() {
     sk_sp<SkImage> image =
         SkImages::RasterFromPixmapCopy(SkPixmap(info, icon.bgra->data(), static_cast<size_t>(icon.pixelW) * 4));
     if (!image) return;
-    const float sx = static_cast<float>(frameCompositeW_) / static_cast<float>(viewportWidth_ > 0 ? viewportWidth_ : 1);
-    const float sy = static_cast<float>(frameCompositeH_) / static_cast<float>(viewportHeight_ > 0 ? viewportHeight_ : 1);
     canvas->drawImageRect(image, SkRect::MakeXYWH(icon.x * sx, icon.y * sy, icon.w * sx, icon.h * sy),
                           SkSamplingOptions(SkFilterMode::kLinear), nullptr);
+#endif
+}
+
+// A client's cursor picture drawn into the frame, its hotspot on the
+// pointer: under DRM where the cursor plane cannot take it, and in the
+// headless shell host (no plane), where a screenshot shows it. Part of the
+// frame's key (picture, hotspot, place).
+bool Engine::drawClientCursorIntoFrame() {
+#if BRO_WITH_COMPOSITOR
+    if (!cursorVisible_ || lockedElement_.get()) return false;
+    compositor::WaylandCompositor::CursorPixels cur;
+    if (!clientCursor(drmCtx_.get(), isShellApp(), cur)) return false;
+    SkCanvas* canvas = frameSegmentCanvas();
+    if (!canvas) return false;
+    const SkImageInfo info = SkImageInfo::Make(cur.pixelW, cur.pixelH, kBGRA_8888_SkColorType, kPremul_SkAlphaType);
+    sk_sp<SkImage> image =
+        SkImages::RasterFromPixmapCopy(SkPixmap(info, cur.bgra->data(), static_cast<size_t>(cur.pixelW) * 4));
+    if (!image) return false;
+    const float sx = static_cast<float>(frameCompositeW_) / static_cast<float>(viewportWidth_ > 0 ? viewportWidth_ : 1);
+    const float sy = static_cast<float>(frameCompositeH_) / static_cast<float>(viewportHeight_ > 0 ? viewportHeight_ : 1);
+    const float x = lastMouseX_ - cur.hotX, y = lastMouseY_ - cur.hotY;
+    frameKeyAdd(0xc0c5u ^ cur.key);
+    frameKeyAdd(static_cast<uint64_t>(std::lround(x * 16.0f)) << 32 ^ static_cast<uint32_t>(std::lround(y * 16.0f)));
+    canvas->drawImageRect(image, SkRect::MakeXYWH(x * sx, y * sy, cur.w * sx, cur.h * sy),
+                          SkSamplingOptions(SkFilterMode::kNearest), nullptr);
+    return true;
+#else
+    return false;
 #endif
 }
 

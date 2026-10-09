@@ -7,6 +7,7 @@
 // Oracle: a test client's frames appear in bro's headless screenshot.
 
 #include "compositor/wayland_compositor.h"
+#include "compositor/tests/test_clients.h"
 #include "engine/ui_layer.h"
 #include "render/layer_source.h"
 #include "render/vulkan_context.h"
@@ -37,17 +38,7 @@ int gFailures = 0;
         }                                                                             \
     } while (0)
 
-std::string findBcWlClient() {
-    std::vector<std::string> paths = {
-        "/home/j/projects/brocompositor/build-release/tests/bc_wl_client",
-        "/home/j/projects/brocompositor/build/tests/bc_wl_client",
-        "/home/j/projects/bro/build/brocompositor/tests/bc_wl_client",
-    };
-    for (const auto& p : paths) {
-        if (::access(p.c_str(), X_OK) == 0) return p;
-    }
-    return "";
-}
+std::string findBcWlClient() { return bro::compositor::test::findTestClient("bc_wl_client"); }
 
 } // namespace
 

@@ -400,6 +400,9 @@ std::vector<uint8_t> Engine::capturePixels() {
     compositeLayers(appLayers, insetTop);
     compositeRemainingClientWindows();
     compositeLayers(systemLayers);
+    // The shell host's pointer pictures: a drag's icon, a client's cursor.
+    compositeDragIcon();
+    drawClientCursorIntoFrame();
     auto pixels = readCompositedFrame();
     releaseClientWindowFrames();
     return pixels;

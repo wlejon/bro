@@ -5,6 +5,7 @@
 // shell's window frames (window_frames.h) on the windows it reports.
 #include "engine/engine.h"
 #include "engine/engine_drm.h"
+#include "platform/window.h"
 #if BRO_WITH_COMPOSITOR
 #include "compositor/wayland_compositor.h"
 #include <brocompositor/api.h>
@@ -98,10 +99,54 @@ bool Engine::pollShellCompositor() {
 #if BRO_WITH_COMPOSITOR
     if (!drmCtx_ || !drmCtx_->compositor) return false;
     const bool events = drmCtx_->compositor->pollEvents();
+    finishShellDrags();
     syncShellWindowFrames();
     return events || drmCtx_->frames.animating();
 #else
     return false;
+#endif
+}
+
+// The page's drag (beginNativeDrag) offered to the clients: the compositor
+// takes the pointer's drag from here, and routeShellDragPointer splits the
+// pointer between it (over a client) and the page's own drag (over the
+// shell) until it ends.
+bool Engine::startShellDrag(const platform::DragSource& drag) {
+#if BRO_WITH_COMPOSITOR
+    if (!drmCtx_ || !drmCtx_->compositor || !drmCtx_->compositor->isRunning()) return false;
+    const uint32_t actions = (drag.allowCopy ? 1u : 0u) | (drag.allowMove ? 2u : 0u);
+    const uint64_t id = drmCtx_->compositor->startHostDrag(drag.data, actions ? actions : 1u);
+    if (id == 0) return false;
+    auto& ctx = *drmCtx_;
+    ctx.shellDrag = id;
+    ctx.shellDragOverClient = false;
+    ctx.shellDragIcon = drag.iconBgra;
+    ctx.shellDragIconW = drag.iconWidth;
+    ctx.shellDragIconH = drag.iconHeight;
+    ctx.shellDragHotX = drag.hotX;
+    ctx.shellDragHotY = drag.hotY;
+    return true;
+#else
+    (void)drag;
+    return false;
+#endif
+}
+
+// A shell drag the compositor reports over: dropped on a client, the page
+// hears dragend with what that client did; released over the shell, the
+// page's drop already ran (routeShellDragPointer).
+void Engine::finishShellDrags() {
+#if BRO_WITH_COMPOSITOR
+    if (!drmCtx_ || !drmCtx_->compositor) return;
+    auto& ctx = *drmCtx_;
+    for (const auto& end : ctx.compositor->takeHostDragEnds()) {
+        if (end.drag != ctx.shellDrag) continue;
+        ctx.shellDrag = 0;
+        ctx.shellDragOverClient = false;
+        ctx.shellDragIcon.clear();
+        uiDirty_ = true;  // the label goes
+        handleOwnDragEnd(end.action == 2 ? "move" : end.action == 1 ? "copy" : "none");
+    }
 #endif
 }
 

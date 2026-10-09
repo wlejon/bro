@@ -13,6 +13,39 @@
 
 namespace bro::compositor {
 
+#if BRO_HAVE_WAYLAND_SERVER
+namespace {
+
+constexpr uint32_t kArgb8888 = 0x34325241, kXrgb8888 = 0x34325258;  // 'AR24', 'XR24'
+
+// A shm buffer the host can read as BGRA (drag icons and cursors: small
+// pictures, read back rather than imported).
+bool isShmBgra(const brocompositor::SharedImage& img) {
+    return img.type == brocompositor::ImageHandleType::ShmFd && !img.planes.empty() &&
+           (img.drm_format == kArgb8888 || img.drm_format == kXrgb8888);
+}
+
+// Its pixels, tightly packed premultiplied BGRA (XRGB made opaque).
+bool readShmImage(const brocompositor::SharedImage& img, std::vector<uint8_t>& out) {
+    const auto& plane = img.planes[0];
+    const size_t rowBytes = static_cast<size_t>(img.width) * 4;
+    const size_t len = static_cast<size_t>(plane.offset) + static_cast<size_t>(plane.stride) * img.height;
+    const int fd = brocompositor::wl::fd_of(plane.handle);
+    void* map = fd >= 0 && plane.stride >= rowBytes ? ::mmap(nullptr, len, PROT_READ, MAP_SHARED, fd, 0) : MAP_FAILED;
+    if (map == MAP_FAILED) return false;
+    out.resize(rowBytes * img.height);
+    const auto* src = static_cast<const uint8_t*>(map) + plane.offset;
+    for (uint32_t row = 0; row < img.height; ++row)
+        std::memcpy(out.data() + row * rowBytes, src + static_cast<size_t>(row) * plane.stride, rowBytes);
+    ::munmap(map, len);
+    if (img.drm_format == kXrgb8888)
+        for (size_t i = 3; i < out.size(); i += 4) out[i] = 255;
+    return true;
+}
+
+}  // namespace
+#endif
+
 WaylandCompositor::WaylandCompositor() = default;
 
 WaylandCompositor::~WaylandCompositor() {
@@ -115,6 +148,10 @@ bool WaylandCompositor::pollEvents() {
 
     using Kind = brocompositor::wl::WindowRequestKind;
     for (const auto& sev : sevents) {
+        if (auto* he = std::get_if<brocompositor::wl::HostDragEnded>(&sev)) {
+            hostDragEnds_.push_back(HostDragEnd{he->drag, he->dropped, he->action});
+            continue;
+        }
         if (auto* pc = std::get_if<brocompositor::wl::PointerConstraintChanged>(&sev)) {
             using K = brocompositor::wl::PointerConstraintKind;
             pointerConstraint_ = pc->kind == K::Locked     ? PointerConstraint::Locked
@@ -393,28 +430,13 @@ bool WaylandCompositor::acquireDragIcon(float px, float py, std::vector<engine::
         return outLayers.size() > before;
     }
     // A shm icon: its pixels, copied once per frame of it.
-    constexpr uint32_t kArgb8888 = 0x34325241, kXrgb8888 = 0x34325258;  // 'AR24', 'XR24'
-    const bool shm = img && img->type == brocompositor::ImageHandleType::ShmFd && !img->planes.empty() &&
-                     (img->drm_format == kArgb8888 || img->drm_format == kXrgb8888);
-    if (shm && (dragIconSurface_ != node->surface || dragIconSequence_ != frame->sequence)) {
-        const auto& plane = img->planes[0];
-        const size_t rowBytes = static_cast<size_t>(img->width) * 4;
-        const size_t len = static_cast<size_t>(plane.offset) + static_cast<size_t>(plane.stride) * img->height;
-        const int fd = brocompositor::wl::fd_of(plane.handle);
-        void* map = fd >= 0 && plane.stride >= rowBytes ? ::mmap(nullptr, len, PROT_READ, MAP_SHARED, fd, 0) : MAP_FAILED;
-        if (map != MAP_FAILED) {
-            dragIconPixels_.resize(rowBytes * img->height);
-            const auto* src = static_cast<const uint8_t*>(map) + plane.offset;
-            for (uint32_t row = 0; row < img->height; ++row)
-                std::memcpy(dragIconPixels_.data() + row * rowBytes, src + static_cast<size_t>(row) * plane.stride, rowBytes);
-            ::munmap(map, len);
-            if (img->drm_format == kXrgb8888)
-                for (size_t i = 3; i < dragIconPixels_.size(); i += 4) dragIconPixels_[i] = 255;
-            dragIconSurface_ = node->surface;
-            dragIconSequence_ = frame->sequence;
-            dragIconW_ = static_cast<int>(img->width);
-            dragIconH_ = static_cast<int>(img->height);
-        }
+    const bool shm = img && isShmBgra(*img);
+    if (shm && (dragIconSurface_ != node->surface || dragIconSequence_ != frame->sequence) &&
+        readShmImage(*img, dragIconPixels_)) {
+        dragIconSurface_ = node->surface;
+        dragIconSequence_ = frame->sequence;
+        dragIconW_ = static_cast<int>(img->width);
+        dragIconH_ = static_cast<int>(img->height);
     }
     surface->release(*frame);
     // The frame callbacks the icon waits on: sent as shown now.
@@ -437,6 +459,73 @@ bool WaylandCompositor::acquireDragIcon(float px, float py, std::vector<engine::
     (void)pixels;
     return false;
 #endif
+}
+
+bool WaylandCompositor::acquireClientCursor(CursorPixels& pixels) {
+#if BRO_HAVE_WAYLAND_SERVER
+    if (!backend_ || isDragActive()) return false;
+    const auto c = backend_->cursor();
+    if (c.hidden || c.surface == brocompositor::wl::kNoSurface) {
+        cursorSurface_ = 0;
+        cursorPixels_.clear();
+        return false;
+    }
+    auto surface = backend_->surface(c.surface);
+    if (!surface) return false;
+    auto frame = surface->acquire();
+    if (!frame) return false;  // nothing attached yet
+    auto img = surface->image(frame->image_id);
+    const bool shm = img && isShmBgra(*img);
+    if (shm && (cursorSurface_ != c.surface || cursorSequence_ != frame->sequence) &&
+        readShmImage(*img, cursorPixels_)) {
+        cursorSurface_ = c.surface;
+        cursorSequence_ = frame->sequence;
+        cursorW_ = static_cast<int>(img->width);
+        cursorH_ = static_cast<int>(img->height);
+    }
+    surface->release(*frame);
+    // An animated cursor waits on its frame callbacks: shown now.
+    surface->presented_on(brocompositor::kNoMonitor, 0);
+    if (!shm || cursorSurface_ != c.surface || cursorPixels_.empty()) return false;
+    const auto st = surface->state();
+    pixels.w = static_cast<float>(st.size.width > 0 ? st.size.width : cursorW_);
+    pixels.h = static_cast<float>(st.size.height > 0 ? st.size.height : cursorH_);
+    pixels.hotX = static_cast<float>(c.hotspot.x);
+    pixels.hotY = static_cast<float>(c.hotspot.y);
+    pixels.pixelW = cursorW_;
+    pixels.pixelH = cursorH_;
+    pixels.bgra = &cursorPixels_;
+    pixels.key = (static_cast<uint64_t>(c.surface) << 40) ^ cursorSequence_;
+    return true;
+#else
+    (void)pixels;
+    return false;
+#endif
+}
+
+uint64_t WaylandCompositor::startHostDrag(const std::vector<std::pair<std::string, std::string>>& data,
+                                          uint32_t actions) {
+#if BRO_HAVE_WAYLAND_SERVER
+    if (!backend_) return 0;
+    brocompositor::wl::ServerBackend::HostDrag d;
+    d.data = data;
+    d.actions = actions;
+    return backend_->start_host_drag(std::move(d));
+#else
+    (void)data;
+    (void)actions;
+    return 0;
+#endif
+}
+
+void WaylandCompositor::cancelHostDrag() {
+#if BRO_HAVE_WAYLAND_SERVER
+    if (backend_) backend_->cancel_host_drag();
+#endif
+}
+
+std::vector<WaylandCompositor::HostDragEnd> WaylandCompositor::takeHostDragEnds() {
+    return std::exchange(hostDragEnds_, {});
 }
 
 std::vector<ClientWindowInfo> WaylandCompositor::stack() const {

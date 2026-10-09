@@ -5,6 +5,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 // Window and monitor snapshots are brocompositor's platform-neutral types; the
@@ -115,6 +116,38 @@ public:
     bool acquireDragIcon(float px, float py, std::vector<engine::UILayer>& outLayers,
                          std::vector<LeasedSurfaceFrame>& leased, DragIconPixels& pixels);
 
+    /// The picture a client set as its pointer (wl_pointer.set_cursor with a
+    /// surface), while it holds the pointer: premultiplied BGRA at `pixelW`
+    /// x `pixelH`, shown `w` x `h` layout px with the hotspot (hotX, hotY,
+    /// layout px from its top left) under the pointer. Its frame callbacks
+    /// are answered as it is read. False: no surface cursor (a shape, hidden,
+    /// or a dmabuf cursor, which is not read back).
+    struct CursorPixels {
+        float hotX = 0, hotY = 0, w = 0, h = 0;
+        int pixelW = 0, pixelH = 0;
+        const std::vector<uint8_t>* bgra = nullptr;  // owned by the compositor, until the next call
+        uint64_t key = 0;                            // changes with the picture
+    };
+    bool acquireClientCursor(CursorPixels& pixels);
+
+    /// The shell's own drag carried to clients (wl_data_source on the
+    /// host's side): offered as (MIME type, bytes) pairs, `actions` the
+    /// dnd actions allowed (1 copy, 2 move). From here the pointer drives it
+    /// (injectPointerWarp / routePointer onto a client, routePointer(-1, -1)
+    /// off them) and the left button's release drops it. 0: not started (a
+    /// drag already under way, or nothing to offer).
+    uint64_t startHostDrag(const std::vector<std::pair<std::string, std::string>>& data, uint32_t actions);
+    void cancelHostDrag();
+    /// Host drags that ended since the last call (gathered by pollEvents):
+    /// `dropped` on a client that took it, `action` what it did (1 copy,
+    /// 2 move, 0 nothing).
+    struct HostDragEnd {
+        uint64_t drag = 0;
+        bool dropped = false;
+        uint32_t action = 0;
+    };
+    std::vector<HostDragEnd> takeHostDragEnds();
+
     /// Release leased frames after presentation has completed. `shown`, when
     /// known, is the flip the frame landed on.
     void releaseClientLayers(const std::vector<LeasedSurfaceFrame>& frames,
@@ -212,6 +245,12 @@ private:
     uint64_t dragIconSequence_ = 0;
     int dragIconW_ = 0, dragIconH_ = 0;
     std::vector<uint8_t> dragIconPixels_;
+    // The same for a client's cursor surface.
+    uint32_t cursorSurface_ = 0;
+    uint64_t cursorSequence_ = 0;
+    int cursorW_ = 0, cursorH_ = 0;
+    std::vector<uint8_t> cursorPixels_;
+    std::vector<HostDragEnd> hostDragEnds_;
 };
 
 } // namespace bro::compositor

@@ -6,6 +6,7 @@
 // Verifies Milestone 3 of Item 3 ("Shell surfaces and window management").
 
 #include "compositor/wayland_compositor.h"
+#include "compositor/tests/test_clients.h"
 #include "engine/ui_layer.h"
 #include "render/layer_source.h"
 
@@ -34,17 +35,7 @@ int gFailures = 0;
         }                                                                             \
     } while (0)
 
-std::string findClient(const char* name) {
-    std::vector<std::string> paths = {
-        std::string("/home/j/projects/brocompositor/build-release/tests/") + name,
-        std::string("/home/j/projects/brocompositor/build/tests/") + name,
-        std::string("/home/j/projects/bro/build/brocompositor/tests/") + name,
-    };
-    for (const auto& p : paths) {
-        if (::access(p.c_str(), X_OK) == 0) return p;
-    }
-    return "";
-}
+std::string findClient(const char* name) { return bro::compositor::test::findTestClient(name); }
 
 struct ChildProcess {
     pid_t pid = -1;

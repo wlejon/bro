@@ -52,7 +52,7 @@ bro_dependency(brocred GITHUB wlejon/brocred REF 02f9177951f31c7d55e93becf783270
 bro_dependency(brosys GITHUB wlejon/brosys REF c569f713db822e48c5fa6d2cc0eba905db496b96 PIN_ONLY)
 bro_dependency(brodisplays GITHUB wlejon/brodisplays REF 8f1bb8b0d2c8c580b5a71d0d34b4b580ed9b2a47 PIN_ONLY)
 bro_dependency(broportal GITHUB wlejon/broportal REF 7cf466e94e4a01f017917dbe178390a8bad1a6fc PIN_ONLY)
-bro_dependency(brocompositor GITHUB wlejon/brocompositor REF 0ca0a78c7507bbb0f03337f6847fea1b8abddef4 PIN_ONLY)
+bro_dependency(brocompositor GITHUB wlejon/brocompositor REF 0e9580a47f5ec1c849e2f217b54ce9856bb5a45c PIN_ONLY)
 bro_dependency(browl GITHUB wlejon/browl REF 15f63bc630f056908fb0a097b078fcef67819aac PIN_ONLY)
 bro_dependency(broa11y GITHUB wlejon/broa11y REF 9ef3ade447e6d9971b4f0ad6947a7eb3b264efb7 PIN_ONLY)
 bro_dependency(brodmabuf GITHUB wlejon/brodmabuf REF 6c85bf49489d5488af53afd7c8f9274b8a0d2b0a PIN_ONLY)

@@ -139,6 +139,13 @@ bool Engine::routeDrmKey(const platform::DrmInputEvent& ev) {
     if (routed.consumed) return true;
 
     if (!drmCtx_) return false;
+#if BRO_WITH_COMPOSITOR && BRO_HAVE_WAYLAND_SERVER
+    // Escape gives up the shell's drag carried to the clients.
+    if (drmCtx_->shellDrag != 0 && drmCtx_->compositor && (ev.rawKeycode == KEY_ESC || ev.keycode == 0x1B)) {
+        if (down && !ev.repeat) drmCtx_->compositor->cancelHostDrag();
+        return true;
+    }
+#endif
     const uint32_t code = hk.code;
     bool clientFocused = false;
 #if BRO_WITH_COMPOSITOR && BRO_HAVE_WAYLAND_SERVER
@@ -222,6 +229,7 @@ bool Engine::routeDrmPointer(const platform::DrmInputEvent& ev) {
     auto* comp = drmCtx_->compositor.get();
     auto& ctx = *drmCtx_;
     const double x = ev.x, y = ev.y;
+    if (ctx.shellDrag != 0) return routeShellDragPointer(ev);
 
     switch (ev.type) {
         case EvType::MouseMove: {
@@ -371,6 +379,54 @@ bool Engine::routeDrmPointer(const platform::DrmInputEvent& ev) {
 #endif
 }
 
+// The page's drag while the compositor carries it (startShellDrag). Over a
+// client the drag is the compositor's (the client sees wl_data_device enter /
+// motion / leave); over the shell it is the page's own (dragenter / dragover
+// there), as for a drag that left a window and came back. The left button's
+// release drops it where it is: on a client through the compositor, which
+// reports the end (finishShellDrags); on the shell as the page's drop.
+bool Engine::routeShellDragPointer(const platform::DrmInputEvent& ev) {
+#if BRO_WITH_COMPOSITOR && BRO_HAVE_WAYLAND_SERVER
+    auto& ctx = *drmCtx_;
+    auto* comp = ctx.compositor.get();
+    switch (ev.type) {
+        case EvType::MouseMove: {
+            uiDirty_ = true;  // the label follows the pointer
+            if (drmPointerOnClient(ev.x, ev.y, nullptr)) {
+                if (!ctx.shellDragOverClient) {
+                    ctx.shellDragOverClient = true;
+                    handleOwnDragLeave();
+                }
+                comp->injectPointerWarp(ev.x, ev.y, ev.dx, ev.dy);
+                comp->routePointer(ev.x, ev.y);
+                return true;
+            }
+            if (ctx.shellDragOverClient) {
+                ctx.shellDragOverClient = false;
+                comp->routePointer(-1.0, -1.0);  // the client's drag-leave
+            }
+            handleOwnDragMotion(ev.x, ev.y);
+            return true;
+        }
+        case EvType::MouseUp: {
+            if (waylandButton(ev) != BTN_LEFT) return true;
+            ctx.pressToShell = ctx.pressToClient = false;
+            const bool onClient = ctx.shellDragOverClient;
+            comp->injectPointerButton(BTN_LEFT, false);
+            if (!onClient) handleOwnDragDrop(ev.x, ev.y);
+            return true;
+        }
+        case EvType::MouseDown:
+            return true;  // another button mid-drag: nobody's
+        default:
+            return false;
+    }
+#else
+    (void)ev;
+    return false;
+#endif
+}
+
 void Engine::deliverDrmInputToShell(const platform::DrmInputEvent& ev) {
     switch (ev.type) {
         case EvType::KeyDown: {
@@ -419,6 +475,7 @@ bool Engine::drmPointerOnClient(float, float, uint64_t* frameWindow) {
 }
 bool Engine::routeDrmKey(const platform::DrmInputEvent&) { return false; }
 bool Engine::routeDrmPointer(const platform::DrmInputEvent&) { return false; }
+bool Engine::routeShellDragPointer(const platform::DrmInputEvent&) { return false; }
 void Engine::deliverDrmInputToShell(const platform::DrmInputEvent&) {}
 
 #endif

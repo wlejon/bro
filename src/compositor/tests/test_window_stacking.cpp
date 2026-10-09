@@ -8,6 +8,7 @@
 //   - closing the focused window focuses the next most recently used one
 //   - decoration insets reach stack() for server-side-decorated windows only
 #include "compositor/wayland_compositor.h"
+#include "compositor/tests/test_clients.h"
 #include "engine/ui_layer.h"
 #include "render/layer_source.h"
 
@@ -39,17 +40,7 @@ int gFailures = 0;
         }                                                                             \
     } while (0)
 
-std::string findClient(const char* name) {
-    std::vector<std::string> paths = {
-        std::string("../brocompositor/build-release/tests/") + name,
-        std::string("/home/j/projects/brocompositor/build-release/tests/") + name,
-        std::string("/home/j/projects/brocompositor/build/tests/") + name,
-    };
-    if (const char* dir = std::getenv("BC_TEST_CLIENT_DIR")) paths.insert(paths.begin(), std::string(dir) + "/" + name);
-    for (const auto& p : paths)
-        if (::access(p.c_str(), X_OK) == 0) return p;
-    return "";
-}
+std::string findClient(const char* name) { return bro::compositor::test::findTestClient(name); }
 
 struct Client {
     pid_t pid = -1;

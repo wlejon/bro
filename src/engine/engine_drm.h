@@ -11,6 +11,7 @@ namespace bro::platform {
 class DrmSeatPlatform;
 class DrmInputPlatform;
 struct DrmInputEvent;
+struct DragSource;
 }
 
 namespace bro::compositor {
@@ -58,6 +59,17 @@ struct DrmPlatformContext {
     bool pressToClient = false;
     // The pointer is over a client surface (its cursor is the client's).
     bool pointerOnClient = false;
+
+    // The shell page's drag carried to the clients (Engine::startShellDrag):
+    // the compositor's id for it (0: none), whether the pointer is over a
+    // client (which then has the drag) or the shell (the page's own drag
+    // events), and the label drawn at the pointer, premultiplied BGRA with
+    // the pixel under the pointer at (hotX, hotY).
+    uint64_t shellDrag = 0;
+    bool shellDragOverClient = false;
+    std::vector<uint8_t> shellDragIcon;
+    int shellDragIconW = 0, shellDragIconH = 0;
+    int shellDragHotX = 0, shellDragHotY = 0;
 };
 
 } // namespace bro::engine

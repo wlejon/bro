@@ -128,7 +128,10 @@ void renderDragIcon(const std::string& text, platform::DragSource& out) {
 
 void Engine::beginNativeDrag() {
     nativeDrag_ = false;
-    if (displayMode_ != DisplayMode::Windowed || !window_) return;
+    // A shell host (DRM, or its headless stand-in) is the window system:
+    // its compositor carries the drag to the client windows.
+    const bool toClients = !shellCompositorSocket().empty();
+    if (!toClients && (displayMode_ != DisplayMode::Windowed || !window_)) return;
     const dom::DragDataStore& store = dom::dragDataStore();
     if (store.data.empty()) return;  // nothing another application could take
 
@@ -155,7 +158,7 @@ void Engine::beginNativeDrag() {
     for (const auto& fmt : rest) drag.data.emplace_back(fmt, store.data.at(fmt));
 
     renderDragIcon(dragLabel(store), drag);
-    nativeDrag_ = window_->startDrag(drag);
+    nativeDrag_ = toClients ? startShellDrag(drag) : window_->startDrag(drag);
 }
 
 void Engine::handleOwnDragMotion(float x, float y) {

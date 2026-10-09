@@ -853,6 +853,15 @@ private:
     void syncShellWindowFrames();
     void compositeRemainingClientWindows();
     void compositeDragIcon();  // engine_drm_cursor.cpp
+    // The page's drag carried to the clients (engine_shell_compositor.cpp):
+    // offered as the host's wl_data_source, then followed by the pointer
+    // (routeShellDragPointer) until the compositor says it ended.
+    bool startShellDrag(const platform::DragSource& drag);
+    bool routeShellDragPointer(const platform::DrmInputEvent& ev);  // engine_drm_input.cpp
+    void finishShellDrags();
+    // A client's own cursor picture (wl_pointer.set_cursor), drawn into the
+    // frame where the cursor plane cannot take it (engine_drm_cursor.cpp).
+    bool drawClientCursorIntoFrame();
     void releaseClientWindowFrames();
     // Skia's GPU context (null: Skia draws on CPU).
     std::unique_ptr<render::SkiaGpu> skiaGpu_;

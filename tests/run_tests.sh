@@ -109,6 +109,19 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 export BRO_PROJECT_ROOT="$PROJECT_DIR"
 
+# Where brocompositor's scripted Wayland clients are: BC_TEST_CLIENT_DIR,
+# else beside bro-headless (this build made them), else a sibling
+# brocompositor checkout's build.
+bc_client_dir() {
+    if [[ -n "${BC_TEST_CLIENT_DIR:-}" ]]; then
+        echo "$BC_TEST_CLIENT_DIR"
+    elif [[ -x "$(dirname "$BRO")/bc_wl_client" ]]; then
+        dirname "$BRO"
+    else
+        echo "$SCRIPT_DIR/../../brocompositor/build-release/tests"
+    fi
+}
+
 # Find the headless binary. BRO_HEADLESS overrides auto-detection so the suite
 # can run against an arbitrary build dir or a packaged dist binary.
 BRO=""
@@ -521,12 +534,13 @@ run_one_test() {
             EXTRA_ENV+=( "BRO_TRUSTED_APP_DIR=$TEST_APP_FOR_RUN" )
             ;;
     esac
-    # The window-frame tests run the DRM shell host's compositor headless,
-    # with brocompositor's test clients (a sibling checkout's build).
+    # The shell-host tests run the DRM shell host's compositor headless, with
+    # brocompositor's scripted clients: the ones this build made beside
+    # bro-headless (BRO_BUILD_TESTS), else a sibling checkout's build. A test
+    # that finds none skips.
     case "$REL" in
-        compositor/test_window_frames*)
-            EXTRA_ENV+=( "BRO_HEADLESS_COMPOSITOR=1"
-                         "BC_TEST_CLIENT_DIR=${BC_TEST_CLIENT_DIR:-$SCRIPT_DIR/../../brocompositor/build-release/tests}" )
+        compositor/test_window_frames*|compositor/test_shell_drag*|compositor/test_client_cursor*)
+            EXTRA_ENV+=( "BRO_HEADLESS_COMPOSITOR=1" "BC_TEST_CLIENT_DIR=$(bc_client_dir)" )
             ;;
     esac
 

@@ -262,7 +262,12 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
 
         // Under DRM the pointer goes on the cursor plane where it can, else
         // into the frame (and into its key: a moved cursor is a new frame).
-        if (displayMode_ == DisplayMode::Drm && !drmPlaceHardwareCursor() && cursorVisible_ && !lockedElement_.get()) {
+        // A client's own picture first, then the shape. The headless shell
+        // host has no cursor of its own, but draws a client's (tests read it).
+        if (displayMode_ == DisplayMode::Headless) {
+            drawClientCursorIntoFrame();
+        } else if (displayMode_ == DisplayMode::Drm && !drmPlaceHardwareCursor() && cursorVisible_ &&
+                   !lockedElement_.get() && !drawClientCursorIntoFrame()) {
             const std::string shape = screenCursorShape();
             if (shape != "none") {
                 if (SkCanvas* canvas = frameSegmentCanvas()) {
