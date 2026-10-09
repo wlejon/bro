@@ -38,7 +38,8 @@ bool controlResolvePoint(Engine& engine, const std::vector<std::string>& args, s
 bool controlGrabScreen(Engine& engine, std::vector<uint8_t>& rgba, uint32_t& width, uint32_t& height,
                        std::string* why);
 
-/// $XDG_RUNTIME_DIR/bro-control/<file>.
+/// <file> in the control channel's private runtime directory
+/// (platform::ControlSocket::runtimeDir: $XDG_RUNTIME_DIR/bro-control).
 std::string controlRuntimePath(const std::string& file);
 
 }  // namespace bro::engine

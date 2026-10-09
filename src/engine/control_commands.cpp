@@ -12,6 +12,7 @@
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/element_geometry.h"
+#include "platform/control_socket.h"
 #include "render/vulkan_presenter.h"
 #include "util/json_out.h"
 #include "util/time.h"
@@ -156,12 +157,12 @@ bool controlGrabScreen(Engine& engine, std::vector<uint8_t>& rgba, uint32_t& wid
 }
 
 std::string controlRuntimePath(const std::string& file) {
-    const char* xdg = std::getenv("XDG_RUNTIME_DIR");
-    std::error_code ec;
-    std::filesystem::path base = (xdg && *xdg) ? std::filesystem::path(xdg) : std::filesystem::temp_directory_path(ec);
-    std::filesystem::path dir = base / "bro-control";
-    std::filesystem::create_directories(dir, ec);
-    return (dir / file).string();
+    std::string dir = platform::ControlSocket::runtimeDir();
+    if (dir.empty()) {
+        std::error_code ec;
+        dir = std::filesystem::temp_directory_path(ec).string();
+    }
+    return (std::filesystem::path(std::u8string(dir.begin(), dir.end())) / file).string();
 }
 
 namespace {

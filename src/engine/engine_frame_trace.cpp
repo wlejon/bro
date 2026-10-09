@@ -124,10 +124,13 @@ void Engine::startControl() {
 #else
         const long long pid = ::getpid();
 #endif
-        name = app + "-" + std::to_string(pid);
+        // Endpoint names are at most 64 characters: the app gives way, the pid stays.
+        const std::string suffix = "-" + std::to_string(pid);
+        name = app.substr(0, 64 - suffix.size()) + suffix;
     }
     for (char& c : name)
         if (!std::isalnum(static_cast<unsigned char>(c)) && c != '-' && c != '_' && c != '.') c = '_';
+    if (name.size() > 64) name.resize(64);
     std::string why;
     if (!control_->start(name, &why)) LOG_WARN("Engine: agent control not started: %s", why.c_str());
 }

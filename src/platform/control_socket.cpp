@@ -1,304 +1,76 @@
 #include "platform/control_socket.h"
 
-#include "util/log.h"
+#include "platform/control_protocol.h"
+
+#include <brolink/loop.h>
+#include <brolink/paths.h>
+#include <brolink/wire.h>
 
 #include <atomic>
-#include <cerrno>
-#include <cstdlib>
-#include <cstring>
-#include <filesystem>
 #include <map>
 #include <mutex>
 #include <thread>
 
-#if defined(_WIN32)
-// AF_UNIX sockets have been in Winsock since Windows 10 1803: the same
-// stream sockets, bound to a path, polled with WSAPoll.
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <winsock2.h>
-#include <afunix.h>
-#include <windows.h>
-#else
+#if !defined(_WIN32)
 #include <fcntl.h>
-#include <poll.h>
-#include <signal.h>
-#include <sys/socket.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <sys/un.h>
 #include <unistd.h>
 #endif
 
 namespace bro::platform {
 
-// ---------------------------------------------------------------------------
-// The request line: a JSON array of strings.
-// ---------------------------------------------------------------------------
-
 namespace {
 
-void appendUtf8(std::string& out, uint32_t cp) {
-    if (cp < 0x80) {
-        out += static_cast<char>(cp);
-    } else if (cp < 0x800) {
-        out += static_cast<char>(0xC0 | (cp >> 6));
-        out += static_cast<char>(0x80 | (cp & 0x3F));
-    } else if (cp < 0x10000) {
-        out += static_cast<char>(0xE0 | (cp >> 12));
-        out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
-        out += static_cast<char>(0x80 | (cp & 0x3F));
-    } else {
-        out += static_cast<char>(0xF0 | (cp >> 18));
-        out += static_cast<char>(0x80 | ((cp >> 12) & 0x3F));
-        out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
-        out += static_cast<char>(0x80 | (cp & 0x3F));
-    }
-}
+// How long the loop sleeps with nothing to do: wake() ends it sooner.
+constexpr int kIdleMs = 1000;
 
 }  // namespace
 
-bool parseJsonStringArray(const std::string& s, std::vector<std::string>& out, std::string* why) {
-    auto fail = [&](const char* w) {
-        if (why) *why = w;
-        return false;
-    };
-    size_t i = 0;
-    auto ws = [&] {
-        while (i < s.size() && (s[i] == ' ' || s[i] == '\t' || s[i] == '\r' || s[i] == '\n')) ++i;
-    };
-    auto hex4 = [&](uint32_t& v) {
-        if (i + 4 > s.size()) return false;
-        v = 0;
-        for (int k = 0; k < 4; ++k) {
-            char c = s[i++];
-            v <<= 4;
-            if (c >= '0' && c <= '9') v |= c - '0';
-            else if (c >= 'a' && c <= 'f') v |= c - 'a' + 10;
-            else if (c >= 'A' && c <= 'F') v |= c - 'A' + 10;
-            else return false;
-        }
-        return true;
-    };
-    out.clear();
-    ws();
-    if (i >= s.size() || s[i] != '[') return fail("expected a JSON array of strings");
-    ++i;
-    ws();
-    if (i < s.size() && s[i] == ']') return true;
-    for (;;) {
-        ws();
-        if (i >= s.size()) return fail("unterminated array");
-        std::string item;
-        if (s[i] == '"') {
-            ++i;
-            for (;;) {
-                if (i >= s.size()) return fail("unterminated string");
-                char c = s[i++];
-                if (c == '"') break;
-                if (c != '\\') {
-                    item += c;
-                    continue;
-                }
-                if (i >= s.size()) return fail("bad escape");
-                char e = s[i++];
-                switch (e) {
-                    case '"': item += '"'; break;
-                    case '\\': item += '\\'; break;
-                    case '/': item += '/'; break;
-                    case 'b': item += '\b'; break;
-                    case 'f': item += '\f'; break;
-                    case 'n': item += '\n'; break;
-                    case 'r': item += '\r'; break;
-                    case 't': item += '\t'; break;
-                    case 'u': {
-                        uint32_t cp = 0;
-                        if (!hex4(cp)) return fail("bad \\u escape");
-                        if (cp >= 0xD800 && cp < 0xDC00 && i + 6 <= s.size() && s[i] == '\\' && s[i + 1] == 'u') {
-                            i += 2;
-                            uint32_t lo = 0;
-                            if (!hex4(lo)) return fail("bad \\u escape");
-                            cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
-                        }
-                        appendUtf8(item, cp);
-                        break;
-                    }
-                    default: return fail("bad escape");
-                }
-            }
-        } else {
-            // A bare scalar (number, true, false, null): its text.
-            while (i < s.size() && s[i] != ',' && s[i] != ']' && s[i] != ' ') item += s[i++];
-            if (item.empty()) return fail("expected a string");
-        }
-        out.push_back(std::move(item));
-        ws();
-        if (i < s.size() && s[i] == ',') {
-            ++i;
-            continue;
-        }
-        if (i < s.size() && s[i] == ']') return true;
-        return fail("expected , or ]");
-    }
-}
-
-std::string ControlSocket::socketDir() {
-    const char* xdg = std::getenv("XDG_RUNTIME_DIR");
-    std::string base = (xdg && *xdg) ? xdg : std::filesystem::temp_directory_path().string();
-    return (std::filesystem::path(base) / "bro-control").string();
-}
-
-// ---------------------------------------------------------------------------
-// The few socket calls that differ between Winsock and POSIX.
-// ---------------------------------------------------------------------------
-
-#if !defined(MSG_NOSIGNAL)
-#define MSG_NOSIGNAL 0
-#endif
-
-namespace {
-
-#if defined(_WIN32)
-using Sock = SOCKET;
-const Sock kNoSock = INVALID_SOCKET;
-using PollFd = WSAPOLLFD;
-void closeSock(Sock s) { ::closesocket(s); }
-int pollSocks(PollFd* fds, size_t n, int ms) { return ::WSAPoll(fds, static_cast<ULONG>(n), ms); }
-bool interrupted() { return false; }
-bool wouldBlock() { return ::WSAGetLastError() == WSAEWOULDBLOCK; }
-std::string lastSocketError() { return "winsock error " + std::to_string(::WSAGetLastError()); }
-void setNonBlockCloexec(Sock s) {
-    u_long on = 1;
-    ::ioctlsocket(s, FIONBIO, &on);
-    ::SetHandleInformation(reinterpret_cast<HANDLE>(s), HANDLE_FLAG_INHERIT, 0);
-}
-bool startSockets() {
-    static const bool ok = [] {
-        WSADATA d;
-        return ::WSAStartup(MAKEWORD(2, 2), &d) == 0;
-    }();
-    return ok;
-}
-void removePath(const std::string& path) {
-    std::error_code ec;
-    std::filesystem::remove(std::filesystem::path(std::u8string(path.begin(), path.end())), ec);
-}
-#else
-using Sock = int;
-const Sock kNoSock = -1;
-using PollFd = pollfd;
-void closeSock(Sock s) { ::close(s); }
-int pollSocks(PollFd* fds, size_t n, int ms) { return ::poll(fds, n, ms); }
-bool interrupted() { return errno == EINTR; }
-bool wouldBlock() { return errno == EAGAIN || errno == EWOULDBLOCK; }
-std::string lastSocketError() { return std::strerror(errno); }
-void setNonBlockCloexec(int fd) {
-    ::fcntl(fd, F_SETFL, ::fcntl(fd, F_GETFL) | O_NONBLOCK);
-    ::fcntl(fd, F_SETFD, FD_CLOEXEC);
-}
-bool startSockets() { return true; }
-void removePath(const std::string& path) { ::unlink(path.c_str()); }
-#endif
-
-bool socketAddress(const std::string& path, sockaddr_un& addr) {
-    std::memset(&addr, 0, sizeof(addr));
-    addr.sun_family = AF_UNIX;
-    if (path.size() >= sizeof(addr.sun_path)) return false;
-    std::memcpy(addr.sun_path, path.c_str(), path.size() + 1);
-    return true;
-}
-
-// Whether something answers on `path` (a live server, not a stale file).
-bool socketAnswers(const sockaddr_un& addr) {
-    Sock probe = ::socket(AF_UNIX, SOCK_STREAM, 0);
-    if (probe == kNoSock) return false;
-    const bool live = ::connect(probe, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) == 0;
-    closeSock(probe);
-    return live;
-}
-
-// Whether process `pid` exists (a reused pid counts: kept, never wrongly removed).
-bool processAlive(long pid) {
-#if defined(_WIN32)
-    HANDLE h = ::OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(pid));
-    if (!h) return ::GetLastError() == ERROR_ACCESS_DENIED;
-    const bool alive = ::WaitForSingleObject(h, 0) == WAIT_TIMEOUT;
-    ::CloseHandle(h);
-    return alive;
-#else
-    return ::kill(static_cast<pid_t>(pid), 0) == 0 || errno == EPERM;
-#endif
-}
-
-// Names carry their server's pid (<app>-<pid>.sock), so one left by a process
-// that died without unlinking it (killed; Winsock never unlinks) is never
-// reclaimed by a later bind of the same name. Remove those whose process is
-// gone; a name without a pid is left to the bind of that name.
-void removeDeadSockets(const std::string& dir) {
-    std::error_code ec;
-    const std::filesystem::path d(std::u8string(dir.begin(), dir.end()));
-    for (std::filesystem::directory_iterator it(d, ec), end; !ec && it != end; it.increment(ec)) {
-        const std::string n = it->path().filename().string();
-        if (n.size() <= 5 || n.compare(n.size() - 5, 5, ".sock") != 0) continue;
-        const std::string stem = n.substr(0, n.size() - 5);
-        const size_t dash = stem.rfind('-');
-        if (dash == std::string::npos || dash + 1 == stem.size()) continue;
-        const std::string pid = stem.substr(dash + 1);
-        if (pid.find_first_not_of("0123456789") != std::string::npos || pid.size() > 9) continue;
-        if (processAlive(std::strtol(pid.c_str(), nullptr, 10))) continue;
-        std::filesystem::remove(it->path(), ec);
-        ec.clear();
-    }
-}
-
-}  // namespace
-
-struct ControlSocket::Impl {
-    Sock listenFd = kNoSock;
-    // POSIX: a pipe that wakes the poll, and one readable while requests wait
-    // for take(). Windows cannot poll a pipe: wake() connects to the socket
-    // itself instead, and there is no ready fd (readyFd() is -1).
-    int wakeRead = -1, wakeWrite = -1;
-    int readyRead = -1, readyWrite = -1;
-    std::string path;
-    sockaddr_un addr{};
+struct ControlSocket::Impl final : brolink::LoopHandler {
+    // Made by start(), dropped by stop() (under `mu`, which reply() wakes it under).
+    std::unique_ptr<brolink::EventLoop> loop;
+    std::string address;
     std::thread thread;
     std::atomic<bool> running{false};
 
-    struct Conn {
-        Sock fd = kNoSock;
-        std::string in;
-        std::string out;
-        int pending = 0;   // requests handed out, not yet replied to
-        bool eof = false;  // the peer finished sending
-    };
-    std::map<uint64_t, Conn> conns;  // thread-owned
-    uint64_t nextConn = 1;
+    // Loop thread only: each connection's frame splitter.
+    std::map<brolink::ConnId, brolink::wire::MessageSplitter> conns;
 
-    std::mutex mu;  // guards the two queues below
+    std::mutex mu;  // guards the two queues below and the ready pipe
     std::vector<Request> requests;
-    std::vector<std::pair<uint64_t, std::string>> replies;
+    struct Reply {
+        uint64_t conn;
+        std::string message;
+    };
+    std::vector<Reply> replies;
+    // POSIX: readable while requests wait for take(), for a caller asleep in poll().
+    int readyRead = -1, readyWrite = -1;
 
-    void wake() {
-#if defined(_WIN32)
-        // A connection the loop accepts, finds closed and drops: enough to
-        // end its WSAPoll.
-        if (listenFd == kNoSock) return;
-        Sock s = ::socket(AF_UNIX, SOCK_STREAM, 0);
-        if (s == kNoSock) return;
-        (void)::connect(s, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr));
-        closeSock(s);
-#else
-        if (wakeWrite >= 0) {
-            char c = 1;
-            (void)::write(wakeWrite, &c, 1);
+    void on_accept(brolink::ConnId id) override { conns.emplace(id, brolink::wire::MessageSplitter(control::kMaxMessage)); }
+
+    void on_data(brolink::ConnId id, const char* data, size_t n) override {
+        auto it = conns.find(id);
+        if (it == conns.end()) return;
+        brolink::wire::MessageSplitter& split = it->second;
+        split.feed(data, n);
+        brolink::wire::MessageSplitter::Message m;
+        std::vector<Request> got;
+        while (split.next(m)) {
+            Request req;
+            req.conn = id;
+            if (m.type != control::kRequest || !control::decodeRequest(m.payload, req.id, req.argv))
+                req.parseError = "bad request (message type " + std::to_string(m.type) + ")";
+            got.push_back(std::move(req));
         }
-#endif
+        if (!got.empty()) {
+            std::lock_guard<std::mutex> lk(mu);
+            if (requests.empty()) signalReady();
+            for (auto& r : got) requests.push_back(std::move(r));
+        }
+        // A frame that cannot be resynchronised: the connection is done.
+        if (split.error()) loop->close(id, false);
     }
+
+    void on_closed(brolink::ConnId id) override { conns.erase(id); }
 
     void signalReady() {
 #if !defined(_WIN32)
@@ -309,125 +81,19 @@ struct ControlSocket::Impl {
 #endif
     }
 
-    bool peerIsUs(Sock fd) {
-#if defined(_WIN32)
-        // Winsock has no peer credentials. The socket lives in the user's
-        // own temp directory, which only they (and administrators) can open.
-        (void)fd;
-        return true;
-#elif defined(SO_PEERCRED)
-        struct ucred cred {};
-        socklen_t len = sizeof(cred);
-        if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &len) != 0) return false;
-        return cred.uid == ::getuid();
-#else
-        uid_t uid = 0;
-        gid_t gid = 0;
-        if (getpeereid(fd, &uid, &gid) != 0) return false;
-        return uid == ::getuid();
-#endif
-    }
-
-    void loop() {
-        std::vector<PollFd> fds;
-        std::vector<uint64_t> ids;
-        const size_t fixed = wakeRead >= 0 ? 2 : 1;
+    void run() {
+        std::vector<Reply> out;
         while (running.load(std::memory_order_acquire)) {
             {
                 std::lock_guard<std::mutex> lk(mu);
-                for (auto& [id, text] : replies) {
-                    auto it = conns.find(id);
-                    if (it == conns.end()) continue;
-                    it->second.out += text;
-                    --it->second.pending;
-                }
-                replies.clear();
+                out.swap(replies);
             }
-            fds.clear();
-            ids.clear();
-            fds.push_back({listenFd, POLLIN, 0});
-            if (wakeRead >= 0) fds.push_back({static_cast<Sock>(wakeRead), POLLIN, 0});
-            for (auto& [id, c] : conns) {
-                // A peer done sending, with nothing to write to it yet, is
-                // left out: its hangup would wake the poll on every turn.
-                if (c.eof && c.out.empty()) continue;
-                short ev = c.eof ? 0 : POLLIN;
-                if (!c.out.empty()) ev |= POLLOUT;
-                fds.push_back({c.fd, ev, 0});
-                ids.push_back(id);
-            }
-            int n = pollSocks(fds.data(), fds.size(), 500);
-            if (n < 0) {
-                if (interrupted()) continue;
-                break;
-            }
-#if !defined(_WIN32)
-            if (fixed > 1 && (fds[1].revents & POLLIN)) {
-                char buf[64];
-                while (::read(wakeRead, buf, sizeof(buf)) > 0) {
-                }
-            }
-#endif
-            if (fds[0].revents & POLLIN) {
-                Sock cfd = ::accept(listenFd, nullptr, nullptr);
-                if (cfd != kNoSock) {
-                    setNonBlockCloexec(cfd);
-                    if (!peerIsUs(cfd)) {
-                        closeSock(cfd);
-                    } else {
-                        conns[nextConn++] = Conn{cfd, {}, {}};
-                    }
-                }
-            }
-            for (size_t k = 0; k < ids.size(); ++k) {
-                const PollFd& p = fds[k + fixed];
-                auto it = conns.find(ids[k]);
-                if (it == conns.end()) continue;
-                Conn& c = it->second;
-                bool drop = false;
-                if (p.revents & POLLOUT) {
-                    const int w = static_cast<int>(::send(c.fd, c.out.data(), static_cast<int>(c.out.size()), MSG_NOSIGNAL));
-                    if (w > 0) c.out.erase(0, static_cast<size_t>(w));
-                    else if (w < 0 && !wouldBlock()) drop = true;
-                }
-                // Winsock reports a peer's close as POLLHUP without POLLIN:
-                // read then too, to see the end of the stream.
-                if (p.revents & (POLLIN | POLLHUP)) {
-                    char buf[4096];
-                    const int r = static_cast<int>(::recv(c.fd, buf, sizeof(buf), 0));
-                    if (r > 0) {
-                        c.in.append(buf, static_cast<size_t>(r));
-                        size_t nl;
-                        while ((nl = c.in.find('\n')) != std::string::npos) {
-                            std::string line = c.in.substr(0, nl);
-                            c.in.erase(0, nl + 1);
-                            if (line.empty() || line == "\r") continue;
-                            Request req;
-                            req.conn = ids[k];
-                            if (!parseJsonStringArray(line, req.argv, &req.parseError) && req.parseError.empty())
-                                req.parseError = "bad request";
-                            ++c.pending;
-                            std::lock_guard<std::mutex> lk(mu);
-                            if (requests.empty()) signalReady();
-                            requests.push_back(std::move(req));
-                        }
-                        if (c.in.size() > (1u << 20)) drop = true;  // a 1 MB line is not a command
-                    } else if (r == 0 || !wouldBlock()) {
-                        // The peer is done sending; it still gets the replies
-                        // to what it asked.
-                        c.eof = true;
-                    }
-                }
-                if (p.revents & (POLLERR | POLLNVAL)) drop = true;
-                if ((c.eof || (p.revents & POLLHUP)) && c.pending <= 0 && c.out.empty()) drop = true;
-                if (drop) {
-                    closeSock(c.fd);
-                    conns.erase(it);
-                }
-            }
+            for (Reply& r : out)
+                if (conns.count(r.conn)) loop->write(r.conn, r.message);
+            out.clear();
+            loop->run_once(kIdleMs);
         }
-        for (auto& [id, c] : conns) closeSock(c.fd);
-        conns.clear();
+        loop->close_listener();
     }
 };
 
@@ -435,111 +101,62 @@ ControlSocket::ControlSocket() : impl_(std::make_unique<Impl>()) {}
 ControlSocket::~ControlSocket() { stop(); }
 
 bool ControlSocket::running() const { return impl_->running.load(std::memory_order_acquire); }
-const std::string& ControlSocket::path() const { return impl_->path; }
+const std::string& ControlSocket::path() const { return impl_->address; }
+
+std::string ControlSocket::runtimeDir() { return brolink::runtime_dir(control::kApp); }
 
 bool ControlSocket::start(const std::string& name, std::string* why) {
-    auto fail = [&](const std::string& w) {
-        if (why) *why = w;
-        return false;
-    };
     if (running()) return true;
-    if (!startSockets()) return fail("Winsock did not start");
-    const std::string dir = socketDir();
-#if defined(_WIN32)
+    std::string err;
+    const std::string address = brolink::local_address(control::kApp, name, &err);
+    if (address.empty()) {
+        if (why) *why = err;
+        return false;
+    }
+    auto loop = brolink::EventLoop::create(*impl_);
+    bool inUse = false;
+    if (!loop->listen(address, err, inUse)) {
+        if (why) *why = inUse ? "another process is serving " + address : err;
+        return false;
+    }
+#if !defined(_WIN32)
+    int ready[2];
+    if (::pipe(ready) != 0) {
+        if (why) *why = "pipe failed";
+        return false;  // the loop's destructor removes the endpoint
+    }
+    for (int fd : ready) {
+        ::fcntl(fd, F_SETFL, ::fcntl(fd, F_GETFL) | O_NONBLOCK);
+        ::fcntl(fd, F_SETFD, FD_CLOEXEC);
+    }
+    impl_->readyRead = ready[0];
+    impl_->readyWrite = ready[1];
+#endif
     {
-        std::error_code ec;
-        std::filesystem::create_directories(std::filesystem::path(std::u8string(dir.begin(), dir.end())), ec);
-        if (!std::filesystem::is_directory(std::filesystem::path(std::u8string(dir.begin(), dir.end())), ec))
-            return fail("cannot create " + dir);
+        std::lock_guard<std::mutex> lk(impl_->mu);
+        impl_->loop = std::move(loop);
+        impl_->conns.clear();
     }
-#else
-    ::mkdir(dir.c_str(), 0700);
-    struct stat st {};
-    if (::stat(dir.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) return fail("cannot create " + dir);
-    if (st.st_uid != ::getuid()) return fail(dir + " belongs to another user");
-    ::chmod(dir.c_str(), 0700);
-#endif
-
-    removeDeadSockets(dir);
-    const std::string path = dir + "/" + name + ".sock";
-    sockaddr_un addr{};
-    if (!socketAddress(path, addr)) return fail("socket path too long: " + path);
-
-    // A live server already on this name keeps it; a dead one's file goes.
-    if (socketAnswers(addr)) return fail("another process is serving " + path);
-    removePath(path);
-
-    Sock fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
-    if (fd == kNoSock) return fail("socket: " + lastSocketError());
-    setNonBlockCloexec(fd);
-#if defined(_WIN32)
-    int rc = ::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
-#else
-    mode_t old = ::umask(0177);
-    int rc = ::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
-    ::umask(old);
-#endif
-    if (rc != 0) {
-        const std::string err = lastSocketError();
-        closeSock(fd);
-        return fail("bind " + path + ": " + err);
-    }
-#if !defined(_WIN32)
-    ::chmod(path.c_str(), 0600);
-#endif
-    if (::listen(fd, 16) != 0) {
-        const std::string err = lastSocketError();
-        closeSock(fd);
-        removePath(path);
-        return fail("listen: " + err);
-    }
-#if !defined(_WIN32)
-    int pipeFds[2];
-    if (::pipe(pipeFds) != 0) {
-        closeSock(fd);
-        removePath(path);
-        return fail("pipe failed");
-    }
-    int readyFds[2];
-    if (::pipe(readyFds) != 0) {
-        ::close(pipeFds[0]);
-        ::close(pipeFds[1]);
-        closeSock(fd);
-        removePath(path);
-        return fail("pipe failed");
-    }
-    for (int p : {pipeFds[0], pipeFds[1], readyFds[0], readyFds[1]}) setNonBlockCloexec(p);
-    impl_->wakeRead = pipeFds[0];
-    impl_->wakeWrite = pipeFds[1];
-    impl_->readyRead = readyFds[0];
-    impl_->readyWrite = readyFds[1];
-#endif
-    impl_->listenFd = fd;
-    impl_->addr = addr;
-    impl_->path = path;
+    impl_->address = address;
     impl_->running.store(true, std::memory_order_release);
-    impl_->thread = std::thread([this] { impl_->loop(); });
+    impl_->thread = std::thread([this] { impl_->run(); });
     return true;
 }
 
 void ControlSocket::stop() {
     if (!impl_ || !impl_->running.exchange(false)) return;
-    impl_->wake();
+    impl_->loop->wake();
     if (impl_->thread.joinable()) impl_->thread.join();
-    closeSock(impl_->listenFd);
+    std::lock_guard<std::mutex> lk(impl_->mu);
+    // Its connections close and the endpoint goes with the loop.
+    impl_->loop.reset();
+    impl_->conns.clear();
+    impl_->replies.clear();
 #if !defined(_WIN32)
-    ::close(impl_->wakeRead);
-    ::close(impl_->wakeWrite);
-    {
-        std::lock_guard<std::mutex> lk(impl_->mu);
-        ::close(impl_->readyRead);
-        ::close(impl_->readyWrite);
-        impl_->readyRead = impl_->readyWrite = -1;
-    }
+    ::close(impl_->readyRead);
+    ::close(impl_->readyWrite);
+    impl_->readyRead = impl_->readyWrite = -1;
 #endif
-    impl_->listenFd = kNoSock;
-    impl_->wakeRead = impl_->wakeWrite = -1;
-    removePath(impl_->path);
 }
 
 std::vector<ControlSocket::Request> ControlSocket::take() {
@@ -549,7 +166,8 @@ std::vector<ControlSocket::Request> ControlSocket::take() {
 #if !defined(_WIN32)
     if (impl_->readyRead >= 0) {
         char buf[64];
-        while (::read(impl_->readyRead, buf, sizeof(buf)) > 0) {}
+        while (::read(impl_->readyRead, buf, sizeof(buf)) > 0) {
+        }
     }
 #endif
     return out;
@@ -557,14 +175,13 @@ std::vector<ControlSocket::Request> ControlSocket::take() {
 
 int ControlSocket::readyFd() const { return impl_ ? impl_->readyRead : -1; }
 
-void ControlSocket::reply(uint64_t conn, bool ok, std::string payload) {
-    std::string text = (ok ? "ok " : "error ") + std::to_string(payload.size()) + "\n";
-    text += payload;
-    {
-        std::lock_guard<std::mutex> lk(impl_->mu);
-        impl_->replies.emplace_back(conn, std::move(text));
-    }
-    impl_->wake();
+void ControlSocket::reply(uint64_t conn, uint64_t id, bool ok, std::string payload) {
+    std::string message = control::encodeReply(id, ok, payload);
+    // A reply after stop() (from a command's worker thread) has nowhere to go.
+    std::lock_guard<std::mutex> lk(impl_->mu);
+    if (!impl_->loop) return;
+    impl_->replies.push_back({conn, std::move(message)});
+    impl_->loop->wake();
 }
 
 }  // namespace bro::platform

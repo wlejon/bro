@@ -73,7 +73,8 @@ public:
     explicit ControlServer(Engine& engine);
     ~ControlServer();
 
-    /// Starts serving $XDG_RUNTIME_DIR/bro-control/<name>.sock.
+    /// Starts serving control endpoint <name> (brolink's local IPC:
+    /// $XDG_RUNTIME_DIR/bro-control/<name>.sock, a named pipe on Windows).
     bool start(const std::string& name, std::string* why = nullptr);
     void stop();
     bool running() const;

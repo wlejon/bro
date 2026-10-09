@@ -112,12 +112,11 @@ bro_dependency(SDL TARGET SDL3-static
 # --- broaudio (audio engine library) ---
 bro_dependency(broaudio)
 
-# --- brolink (bromux's and broremote's transport) ---
-# Local IPC and the ssh proxy. bro links nothing of it directly; it is added
-# here, once, so bromux and broremote both find the target.
-if(BRO_WITH_TERMINAL OR BRO_WITH_REMOTE)
-    bro_dependency(brolink OPTIONS BROLINK_BUILD_TESTS=OFF)
-endif()
+# --- brolink (the agent control channel's, bromux's and broremote's transport) ---
+# Local IPC and the ssh proxy, dependency-free. Every profile: the control
+# channel (src/platform/control_socket.cpp, bro-ctl) is always built. Added
+# here, once, so bromux and broremote find the same target.
+bro_dependency(brolink OPTIONS BROLINK_BUILD_TESTS=OFF)
 
 # --- brosearch + brothemes + bropty + bromux (the <terminal> element) ---
 # bropty is the VT emulator and PTY/ConPTY layer behind <terminal>; brosearch

@@ -36,7 +36,7 @@ bro_dependency(brosoundml GITHUB wlejon/brosoundml REF 616ffb72758d24000f7408736
 bro_dependency(brosearch GITHUB wlejon/brosearch REF e408e853181e353e086d547b6d1d3e9cc1c0167f PIN_ONLY)
 bro_dependency(brothemes GITHUB wlejon/brothemes REF e993808342a94338a8845664b92631c13128e52a PIN_ONLY)
 bro_dependency(bropty GITHUB wlejon/bropty REF d0b7ee2b4ed32e5d0762d7eb0efae7a00094c5c2 PIN_ONLY)
-bro_dependency(brolink GITHUB wlejon/brolink REF 5696d385803b6e03fecd43694c5e6039da121ed5 PIN_ONLY)
+bro_dependency(brolink GITHUB wlejon/brolink REF ddf82bbec31b5251a0a465a5f945ee1c18149242 PIN_ONLY)
 bro_dependency(bromux GITHUB wlejon/bromux REF ce5e2862c16afb835414becceefb353986a5c599 PIN_ONLY)
 bro_dependency(brovideo GITHUB wlejon/brovideo REF 6182bff5a5c619ba5756615aee99a271969c9ed3 PIN_ONLY)
 bro_dependency(broremote GITHUB wlejon/broremote REF e003f664964a48d8f88a8807d75b34452dcb0419 PIN_ONLY)

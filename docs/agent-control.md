@@ -7,7 +7,7 @@ animation stuttered: screenshots, short full-rate recordings with the vblank
 each frame landed on, a frame-timing flight recorder, and a native profile.
 
 `bro-ctl` is the client. It is built beside `bro` (target `bro-ctl`; it links
-nothing of bro's) on Linux, macOS and Windows.
+brolink and nothing of bro's) on Linux, macOS and Windows.
 
 ```bash
 bro-ctl info                                  # what is running
@@ -27,18 +27,21 @@ printf 'key super+s\nsleep 1\nkey escape\n' | ssh box bro-ctl batch
 
 ## Security
 
-The socket is `$XDG_RUNTIME_DIR/bro-control/<name>.sock`: a directory only
-its owner can enter (0700), a socket only its owner can open (0600), and the
-peer's uid checked against the process's on every connection (SO_PEERCRED /
-getpeereid). It is never a network listener: reaching it from elsewhere means
-logging in as that user first (ssh), and anyone who can do that can already
-run anything as them. It is the same model as `bro.remote`'s socket.
+The channel is [brolink](https://github.com/wlejon/brolink)'s local IPC,
+the transport bromux and `bro.remote` use. On Linux and macOS the socket is
+`$XDG_RUNTIME_DIR/bro-control/<name>.sock` (without `XDG_RUNTIME_DIR`,
+`${TMPDIR:-/tmp}/bro-control-<uid>/`): a directory only its owner can enter
+(0700, and refused if it is anything else), a socket only its owner can open
+(0600), and the peer's uid checked on every connection, by the server and by
+bro-ctl alike (SO_PEERCRED / getpeereid). It is never a network listener:
+reaching it from elsewhere means logging in as that user first (ssh), and
+anyone who can do that can already run anything as them.
 
-On Windows (10 1803 or later) it is the same AF_UNIX socket through Winsock,
-in `%TEMP%\bro-control\` when `XDG_RUNTIME_DIR` is unset. Winsock has no peer
-credentials: the gate is that directory, which only its user (and
-administrators) can open. Sockets are named as on Linux (`helmterm-4242.sock`),
-so two bros with control on never collide.
+On Windows it is a named pipe, `\\.\pipe\bro-control-<user SID>-<name>`,
+whose DACL admits only that user and which refuses remote clients; bro-ctl
+checks that the process serving it runs as the same user before it speaks.
+Files a command writes for bro-ctl (`-o -`, a default screenshot or record
+path) go to `%LOCALAPPDATA%\bro-control\`.
 
 ## When it is on
 
@@ -48,14 +51,17 @@ so two bros with control on never collide.
 - `BRO_CONTROL=0` turns it off everywhere.
 
 The pid is in the name on every OS, so any number of bros (two windows of one
-app included) serve side by side. A bro that died without removing its
-socket (killed; on Windows, always) leaves the file behind; the next bro to
-start control removes every `<name>-<pid>.sock` whose process is gone. `bro-ctl list` shows the sockets and which
+app included) serve side by side. A live server keeps its name: a second bro
+asking for it is refused. A bro killed without removing its socket leaves the
+file behind (POSIX; a pipe goes with its process), and the next bro to start
+control removes every such socket in the directory, whatever its name: a
+server holds a lock file beside its socket while it serves, so a lock anyone
+can take marks a dead one. `bro-ctl list` shows the endpoints and which
 answer. `-s NAME` picks one: the whole name (`helmterm-4242`), the app alone
 (`helmterm`, when one process of it is running; with several, bro-ctl lists
 them and asks), or the pid (`4242`). Without `-s` the default is `display`,
-else the only live socket. `-S PATH` names a socket directly, as does
-`$BRO_CONTROL_SOCKET`.
+else the only live endpoint. `-S PATH` names an address directly (a socket
+path, or a pipe name on Windows), as does `$BRO_CONTROL_SOCKET`.
 
 ## Commands
 
@@ -176,7 +182,8 @@ virtual clock, so advance time while waiting
 
 | | |
 |---|---|
-| `src/platform/control_socket.*` | the transport: socket, framing, peer check |
+| `src/platform/control_socket.*` | the server on brolink's event loop: requests in, replies out |
+| `src/platform/control_protocol.h` | the messages, shared with bro-ctl |
 | `src/engine/control.*` | the command registry and per-frame pump (no socket details) |
 | `src/engine/control_commands.cpp`, `control_input.cpp`, `control_record.cpp` | engine commands |
 | `src/bronze_host/host_control.*` | `eval`, `dom`, `inspect`, `style`; the headless globals |
@@ -184,6 +191,10 @@ virtual clock, so advance time while waiting
 | `src/render/scanout_capture.*` | the recorder's GPU frame tap on the KMS presenter |
 | `src/ctl/bro_ctl.cpp` | the client |
 
-Wire format: a request is one line, a JSON array of strings (the argv); a
-reply is a line `ok <bytes>` or `error <bytes>` followed by exactly that many
-bytes. A connection may carry several requests.
+The transport is [brolink](https://github.com/wlejon/brolink)'s local IPC
+(listening, peer checks, stale-endpoint cleanup) and its message framing
+(`u32` length, `u16` type, body). A `Request` (type 1) is `varint id,
+strings argv`; a `Reply` (type 2) is `varint id, bool ok, str payload`. A
+connection may carry several requests, and each reply names the request it
+answers. Nothing in it depends on the local socket, so any brolink stream (a
+remote session's lane) can carry the same protocol.

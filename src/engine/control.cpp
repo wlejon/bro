@@ -118,8 +118,10 @@ void ControlServer::dispatch(std::vector<std::string> argv, std::function<void(b
 void ControlServer::pump() {
     if (socket_->running()) {
         for (auto& req : socket_->take()) {
-            const uint64_t conn = req.conn;
-            auto reply = [this, conn](bool ok, std::string payload) { socket_->reply(conn, ok, std::move(payload)); };
+            const uint64_t conn = req.conn, id = req.id;
+            auto reply = [this, conn, id](bool ok, std::string payload) {
+                socket_->reply(conn, id, ok, std::move(payload));
+            };
             if (!req.parseError.empty()) {
                 reply(false, req.parseError);
                 continue;

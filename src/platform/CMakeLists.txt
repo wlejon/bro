@@ -32,9 +32,9 @@ endif()
 if(WIN32)
     # SetCurrentProcessExplicitAppUserModelID (the window's app id).
     target_link_libraries(bro_platform PRIVATE shell32)
-    # The agent control socket (AF_UNIX through Winsock).
-    target_link_libraries(bro_platform PRIVATE ws2_32)
 endif()
+# The agent control channel's transport (control_socket.cpp).
+target_link_libraries(bro_platform PRIVATE brolink)
 
 find_package(Vulkan REQUIRED)
 target_link_libraries(bro_platform PUBLIC bro_util Vulkan::Headers)

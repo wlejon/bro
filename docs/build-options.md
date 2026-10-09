@@ -89,7 +89,8 @@ cmake -B build -DBRO_PROFILE=app -DBRO_WITH_LM=ON   # app + language models (add
 `util · platform · render · svg · layout · dom · canvas · webgl · engine ·
 headless` + Skia · SDL (Vulkan) · Vulkan 1.3 (headers + loader; MoltenVK on
 macOS) · glslang (in-process GLSL → SPIR-V, built from source) · brokit · htmlayout ·
-**broimage (tensor-free)**. A complete
+**broimage (tensor-free)** · brolink (dependency-free; the agent control channel and
+`bro-ctl`, [agent-control.md](agent-control.md)). A complete
 HTML/CSS + Canvas2D + WebGL runtime with working screenshots and native Vulkan presentation.
 
 ### Tier 1: feature groups (brotensor-free)

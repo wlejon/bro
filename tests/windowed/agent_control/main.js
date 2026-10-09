@@ -30,6 +30,27 @@ function ctl(args) {
     return { status: r.status, out: text(r.stdout), err: text(r.stderr) };
 }
 
+// An endpoint's address ends in its name: <dir>/<name>.sock, or on Windows
+// the pipe \\.\pipe\bro-control-<SID>-<name>.
+function endsWithEndpoint(address, name) {
+    return address.endsWith(isWin ? '-' + name : '/' + name + '.sock');
+}
+
+// The endpoints `bro-ctl list` printed: { live: [addresses], stale: [...] }.
+function parseList(listed) {
+    const out = { live: [], stale: [] };
+    for (const line of listed.split('\n').map((l) => l.trim()).filter((l) => l)) {
+        if (line.endsWith('(stale)')) out.stale.push(line.replace(/\s*\(stale\)$/, ''));
+        else out.live.push(line);
+    }
+    return out;
+}
+
+function listedName(listed, name, liveOnly) {
+    const l = parseList(listed);
+    return (liveOnly ? l.live : l.live.concat(l.stale)).some((a) => endsWithEndpoint(a, name));
+}
+
 function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -67,17 +88,18 @@ async function run() {
     // Each serves <app>-<pid>: the names differ, so neither takes the other's.
     const names = pids.map((p) => 'child-' + p);
     let listed = '';
+    const waitStart = Date.now();
     for (const until = Date.now() + 60000; Date.now() < until; await sleep(200)) {
         listed = ctl(['list']).out;
-        const live = listed.split('\n').filter((l) => !l.includes('(stale)'));
-        if (names.every((n) => live.some((l) => l.includes(n + '.sock')))) break;
+        if (names.every((n) => listedName(listed, n, true))) break;
         if (children.some((c) => c.exit !== null)) break;
     }
     children.forEach((c, i) => {
-        const ok = listed.includes(names[i] + '.sock');
-        assert(ok, `bro-ctl list shows ${names[i]}.sock: ${listed}` + (ok ? '' : childReport(c)));
+        const ok = listedName(listed, names[i], true);
+        assert(ok, `bro-ctl list shows ${names[i]} serving: ${listed}` + (ok ? '' : childReport(c)));
     });
-    if (!names.every((n) => listed.includes(n + '.sock'))) return;
+    if (!names.every((n) => listedName(listed, n, true))) return;
+    console.log(`agent control: both children serving ${Date.now() - waitStart} ms after spawn`);
 
     // -s <pid> and -s <app>-<pid> each reach their own process.
     for (const p of pids) {
@@ -86,8 +108,7 @@ async function run() {
         const info = JSON.parse(byPid.out);
         assert(info.pid === p, `-s ${p} reached pid ${info.pid}`);
         assert(info.mode === 'windowed', `the child is windowed: ${info.mode}`);
-        assert(/child-\d+\.sock$/.test(info.socket) && info.socket.endsWith('child-' + p + '.sock'),
-               `the socket is named after app and pid: ${info.socket}`);
+        assert(endsWithEndpoint(info.socket, 'child-' + p), `the socket is named after app and pid: ${info.socket}`);
         const byName = ctl(['-s', 'child-' + p, 'info']);
         assert(byName.status === 0 && JSON.parse(byName.out).pid === p, `-s child-${p} reaches ${p}`);
     }
@@ -119,22 +140,26 @@ async function run() {
         console.log('agent control: ffmpeg not on PATH, video.mp4 not checked');
     }
 
-    // A killed bro leaves its socket file (Winsock never unlinks one); the
-    // next bro to start control removes it, its pid being gone.
+    // A killed bro leaves its socket file (POSIX; a pipe goes with its
+    // process); the next bro to start control removes it, as brolink sweeps
+    // every dead server's socket from the directory it binds in.
     const dead = children[0].proc;
     const exited = new Promise((resolve) => dead.on('exit', resolve));
     dead.kill('SIGKILL');
     await exited;
-    const third = cp.spawn(broExe, ['--no-splash', childApp], { env, cwd: children[1].dir });
-    children.push({ proc: third, dir: children[1].dir });
-    const thirdName = 'child-' + third.pid + '.sock';
-    for (const until = Date.now() + 30000; Date.now() < until; await sleep(200)) {
+    const thirdChild = { proc: cp.spawn(broExe, ['--no-splash', childApp], { env, cwd: children[1].dir }),
+                         dir: children[1].dir, exit: null };
+    thirdChild.proc.on('exit', (code, signal) => (thirdChild.exit = `${code}/${signal}`));
+    children.push(thirdChild);
+    const thirdName = 'child-' + thirdChild.proc.pid;
+    for (const until = Date.now() + 60000; Date.now() < until; await sleep(200)) {
         listed = ctl(['list']).out;
-        if (listed.includes(thirdName)) break;
+        if (listedName(listed, thirdName, true) || thirdChild.exit !== null) break;
     }
-    assert(listed.includes(thirdName), `the third bro serves ${thirdName}: ${listed}`);
-    assert(!listed.includes(names[0] + '.sock'), `the killed bro's ${names[0]}.sock was removed: ${listed}`);
-    assert(listed.includes(names[1] + '.sock'), `the live one's stays: ${listed}`);
+    const thirdUp = listedName(listed, thirdName, true);
+    assert(thirdUp, `the third bro serves ${thirdName}: ${listed}` + (thirdUp ? '' : childReport(thirdChild)));
+    assert(!listedName(listed, names[0], false), `the killed bro's ${names[0]} was removed: ${listed}`);
+    assert(listedName(listed, names[1], true), `the live one's stays: ${listed}`);
 
     console.log(`windowed agent control: ${names.join(', ')}; recorded ${reply.frames} frames`);
 }

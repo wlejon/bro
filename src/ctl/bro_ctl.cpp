@@ -9,16 +9,22 @@
 //   bro-ctl profile <secs>   native CPU profile of the process (perf)
 //
 // Every other command is the engine's (bro-ctl help lists them). The request
-// is the argv as a JSON array of strings on one line; the reply is
-// "ok <n>\n" or "error <n>\n" and n bytes, printed as they are. Exit status:
-// 0 ok, 1 the command failed, 2 no bro to talk to.
+// is the argv, the reply ok or not and a payload printed as it is
+// (platform/control_protocol.h: brolink-framed messages over brolink's local
+// IPC). Exit status: 0 ok, 1 the command failed, 2 no bro to talk to.
 //
 // Files: `-o -` sends a screenshot (or anything a command writes to a path)
 // to stdout — `ssh host bro-ctl -o - screenshot > shot.png` — and `-o FILE`
 // names where it goes. `record` also makes video.mp4 from its frames when
 // ffmpeg is on the PATH.
 
-#include <cerrno>
+#include "platform/control_protocol.h"
+
+#include <brolink/paths.h>
+#include <brolink/stream.h>
+#include <brolink/wire.h>
+
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -26,58 +32,44 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
 
 #if defined(_WIN32)
-// The same AF_UNIX socket, through Winsock (Windows 10 1803 and later).
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <winsock2.h>
-#include <afunix.h>
-#include <windows.h>
 #include <fcntl.h>
 #include <io.h>
-#include <process.h>
-#else
-#include <sys/socket.h>
-#include <sys/un.h>
-#include <unistd.h>
 #endif
 
 namespace {
 
-#if defined(_WIN32)
-using Sock = SOCKET;
-const Sock kNoSock = INVALID_SOCKET;
-void closeSock(Sock s) { ::closesocket(s); }
-int sockWrite(Sock s, const char* p, size_t n) { return ::send(s, p, static_cast<int>(n), 0); }
-int sockRead(Sock s, char* p, size_t n) { return ::recv(s, p, static_cast<int>(n), 0); }
-long processId() { return static_cast<long>(::_getpid()); }
-#else
-using Sock = int;
-const Sock kNoSock = -1;
-void closeSock(Sock s) { ::close(s); }
-int sockWrite(Sock s, const char* p, size_t n) { return static_cast<int>(::write(s, p, n)); }
-int sockRead(Sock s, char* p, size_t n) { return static_cast<int>(::read(s, p, n)); }
-long processId() { return static_cast<long>(::getpid()); }
-#endif
+namespace control = bro::platform::control;
 
-// Where the engine binds its sockets (platform/control_socket.cpp says the
-// same): $XDG_RUNTIME_DIR, else the temp directory, /bro-control.
-std::string socketDir() {
-    const char* xdg = std::getenv("XDG_RUNTIME_DIR");
-    std::error_code ec;
-    std::string base = (xdg && *xdg) ? std::string(xdg) : std::filesystem::temp_directory_path(ec).string();
-    if (base.empty()) base = "/tmp";
-    while (base.size() > 1 && (base.back() == '/' || base.back() == '\\')) base.pop_back();
-    return base + "/bro-control";
+long processId() { return static_cast<long>(brolink::current_pid()); }
+
+// The files a command writes for bro-ctl to pass on (-o -) and perf's data
+// go in the control channel's private directory, which the engine uses too.
+std::string runtimeDir() {
+    std::string dir = brolink::runtime_dir(control::kApp);
+    if (dir.empty()) {
+        std::error_code ec;
+        dir = std::filesystem::temp_directory_path(ec).string();
+    }
+    return dir;
+}
+
+std::string addressOf(const std::string& name) { return brolink::local_address(control::kApp, name); }
+
+// Where the endpoints are, for messages: the socket directory, or on
+// Windows the pipe namespace.
+std::string endpointsWhere() {
+#if defined(_WIN32)
+    return "the named pipes \\\\.\\pipe\\" + std::string(control::kApp) + "-<SID>-*";
+#else
+    return runtimeDir();
+#endif
 }
 
 std::string quote(const std::string& s) {
@@ -102,49 +94,15 @@ std::string quote(const std::string& s) {
     return out + "\"";
 }
 
-Sock connectTo(const std::string& path) {
-    Sock fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
-    if (fd == kNoSock) return kNoSock;
-    sockaddr_un addr{};
-    addr.sun_family = AF_UNIX;
-    if (path.size() >= sizeof(addr.sun_path)) {
-        closeSock(fd);
-        return kNoSock;
-    }
-    std::memcpy(addr.sun_path, path.c_str(), path.size() + 1);
-    if (::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
-        closeSock(fd);
-        return kNoSock;
-    }
-    return fd;
-}
+// Whether a server answers at `address` (and passes brolink's peer check).
+bool answers(const std::string& address) { return brolink::connect_local(address) != nullptr; }
 
-std::vector<std::string> listSockets() {
-    std::vector<std::string> out;
-    const std::string dir = socketDir();
-    std::error_code ec;
-    for (std::filesystem::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
-        const std::string n = it->path().filename().string();
-        if (n.size() > 5 && n.compare(n.size() - 5, 5, ".sock") == 0) out.push_back(dir + "/" + n);
-    }
-    return out;
-}
-
-std::vector<std::string> liveSockets() {
+// The endpoint names that answer.
+std::vector<std::string> liveNames() {
     std::vector<std::string> live;
-    for (const auto& s : listSockets()) {
-        Sock fd = connectTo(s);
-        if (fd != kNoSock) {
-            closeSock(fd);
-            live.push_back(s);
-        }
-    }
+    for (const auto& n : brolink::list_local(control::kApp))
+        if (answers(addressOf(n))) live.push_back(n);
     return live;
-}
-
-std::string socketStem(const std::string& path) {
-    std::string n = std::filesystem::path(path).filename().string();
-    return n.size() > 5 ? n.substr(0, n.size() - 5) : n;
 }
 
 bool allDigits(const std::string& s) {
@@ -166,79 +124,64 @@ bool nameMatches(const std::string& stem, const std::string& name) {
 }
 
 std::string pickOne(const std::vector<std::string>& live, const std::string& what, std::string& why) {
-    if (live.size() == 1) return live[0];
-    if (live.empty()) why = "no running bro serves a control socket " + what + " in " + socketDir() +
+    if (live.size() == 1) return addressOf(live[0]);
+    if (live.empty()) why = "no running bro serves a control socket " + what + " in " + endpointsWhere() +
                             " (bro --drm serves one; elsewhere start it with BRO_CONTROL=1)";
     else {
         why = "several bro processes answer" + (what.empty() ? std::string() : " " + what) +
               "; pick one with -s NAME (app-pid, app or pid):";
-        for (const auto& s : live) why += "\n  " + socketStem(s);
+        for (const auto& n : live) why += "\n  " + n;
     }
     return {};
 }
 
-// The socket to use: -S, -s, $BRO_CONTROL_SOCKET, display.sock, else the one live socket.
+// The address to use: -S, -s, $BRO_CONTROL_SOCKET, display, else the one live endpoint.
 std::string resolveSocket(const std::string& path, const std::string& name, std::string& why) {
     if (!path.empty()) return path;
+    const std::vector<std::string> names = brolink::list_local(control::kApp);
+    auto have = [&](const std::string& n) { return std::find(names.begin(), names.end(), n) != names.end(); };
     if (!name.empty()) {
         // An exact name first (display, or what BRO_CONTROL=<name> chose),
         // even if it does not answer: connecting says why.
-        const std::string exact = socketDir() + "/" + name + ".sock";
-        std::error_code ec;
-        if (std::filesystem::exists(exact, ec)) return exact;
+        if (have(name)) return addressOf(name);
         std::vector<std::string> match;
-        for (const auto& s : liveSockets())
-            if (nameMatches(socketStem(s), name)) match.push_back(s);
+        for (const auto& n : liveNames())
+            if (nameMatches(n, name)) match.push_back(n);
         return pickOne(match, "to -s " + name, why);
     }
     if (const char* env = std::getenv("BRO_CONTROL_SOCKET"); env && *env) return env;
-    const std::string display = socketDir() + "/display.sock";
-    std::error_code ec;
-    if (std::filesystem::exists(display, ec)) return display;
-    return pickOne(liveSockets(), "", why);
+    if (have("display")) return addressOf("display");
+    return pickOne(liveNames(), "", why);
 }
 
+// One connection: requests out, replies back by id (control_protocol.h).
 struct Conn {
-    Sock fd = kNoSock;
-    std::string buf;
+    std::unique_ptr<brolink::Stream> stream;
+    brolink::wire::MessageSplitter split{control::kMaxMessage};
+    uint64_t nextId = 1;
+    uint64_t sent = 0;
 
     bool send(const std::vector<std::string>& argv) {
-        std::string line = "[";
-        for (size_t i = 0; i < argv.size(); ++i) line += (i ? "," : "") + quote(argv[i]);
-        line += "]\n";
-        size_t off = 0;
-        while (off < line.size()) {
-            const int w = sockWrite(fd, line.data() + off, line.size() - off);
-            if (w <= 0) return false;
-            off += static_cast<size_t>(w);
-        }
-        return true;
+        sent = nextId++;
+        return stream->write(control::encodeRequest(sent, argv));
     }
 
-    bool fill() {
-        char tmp[65536];
-        const int r = sockRead(fd, tmp, sizeof(tmp));
-        if (r <= 0) return false;
-        buf.append(tmp, static_cast<size_t>(r));
-        return true;
-    }
-
-    // One reply: ok, payload. False when the connection died.
+    // The reply to the last request sent: ok, payload. False when the
+    // connection died or spoke something else.
     bool receive(bool& ok, std::string& payload) {
-        size_t nl;
-        while ((nl = buf.find('\n')) == std::string::npos)
-            if (!fill()) return false;
-        std::string head = buf.substr(0, nl);
-        buf.erase(0, nl + 1);
-        const size_t sp = head.find(' ');
-        if (sp == std::string::npos) return false;
-        ok = head.compare(0, sp, "ok") == 0;
-        const size_t n = std::strtoull(head.c_str() + sp + 1, nullptr, 10);
-        while (buf.size() < n)
-            if (!fill()) return false;
-        payload = buf.substr(0, n);
-        buf.erase(0, n);
-        return true;
+        brolink::wire::MessageSplitter::Message m;
+        for (;;) {
+            while (split.next(m)) {
+                uint64_t id = 0;
+                if (m.type != control::kReply || !control::decodeReply(m.payload, id, ok, payload)) return false;
+                if (id == sent) return true;
+            }
+            if (split.error()) return false;
+            char tmp[65536];
+            const size_t r = stream->read(tmp, sizeof(tmp));
+            if (r == 0) return false;
+            split.feed(tmp, r);
+        }
     }
 };
 
@@ -367,8 +310,9 @@ int runOne(Conn& c, std::vector<std::string> argv, const std::string& out) {
     const std::string& cmd = argv[0];
     if (!out.empty() && (cmd == "screenshot" || cmd == "record")) {
         plan.toStdout = (out == "-");
-        plan.path = plan.toStdout ? socketDir() + "/stdout-" + std::to_string(processId()) +
-                                        (cmd == "screenshot" ? ".png" : "")
+        plan.path = plan.toStdout ? (std::filesystem::path(runtimeDir()) /
+                                     ("stdout-" + std::to_string(processId()) + (cmd == "screenshot" ? ".png" : "")))
+                                        .string()
                                   : out;
         // Insert the path where the command reads it.
         std::vector<std::string> pos;
@@ -453,7 +397,7 @@ int runProfile(Conn& c, const std::vector<std::string>& argv) {
         std::fprintf(stderr, "bro-ctl: profile needs perf (pacman -S perf / apt install linux-perf)\n");
         return 1;
     }
-    const std::string data = socketDir() + "/perf-" + std::to_string(processId()) + ".data";
+    const std::string data = runtimeDir() + "/perf-" + std::to_string(processId()) + ".data";
     char cmd[1024];
     std::snprintf(cmd, sizeof(cmd),
                   "perf record -q -F 1999 -p %ld -o '%s' -- sleep %.3f >/dev/null 2>&1 && "
@@ -483,17 +427,14 @@ int main(int argc, char** argv) {
     std::vector<std::string> args(argv + i, argv + argc);
 
 #if defined(_WIN32)
-    WSADATA wsa;
-    if (::WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return std::fprintf(stderr, "bro-ctl: Winsock did not start\n"), 2;
     // Replies (a PNG to stdout with -o -) are bytes, not text.
     ::_setmode(::_fileno(stdout), _O_BINARY);
 #endif
 
     if (args[0] == "list") {
-        for (const auto& s : listSockets()) {
-            Sock fd = connectTo(s);
-            std::printf("%s%s\n", s.c_str(), fd != kNoSock ? "" : "  (stale)");
-            if (fd != kNoSock) closeSock(fd);
+        for (const auto& n : brolink::list_local(control::kApp)) {
+            const std::string address = addressOf(n);
+            std::printf("%s%s\n", address.c_str(), answers(address) ? "" : "  (stale)");
         }
         return 0;
     }
@@ -502,8 +443,9 @@ int main(int argc, char** argv) {
     const std::string sock = resolveSocket(path, name, why);
     if (sock.empty()) return std::fprintf(stderr, "bro-ctl: %s\n", why.c_str()), 2;
     Conn c;
-    c.fd = connectTo(sock);
-    if (c.fd == kNoSock) return std::fprintf(stderr, "bro-ctl: cannot connect to %s: %s\n", sock.c_str(), std::strerror(errno)), 2;
+    std::string err;
+    c.stream = brolink::connect_local(sock, &err);
+    if (!c.stream) return std::fprintf(stderr, "bro-ctl: %s\n", err.c_str()), 2;
 
     if (args[0] == "profile") return runProfile(c, args);
     if (args[0] == "batch") {
