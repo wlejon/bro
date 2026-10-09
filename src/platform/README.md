@@ -95,9 +95,12 @@ All of it is inside `src/platform/sdl/`:
   subsystem does not need SDL video.
 - **Power, theme, opening URLs.** Under DRM, `SystemInfo` is the SDL one,
   which uses SDL as a library with no video.
-- **Audio** belongs to broaudio, a sibling library that opens SDL audio
-  devices itself. It is untouched by this layer, and it is why SDL's include
-  directory reaches every bro target, which in turn is why the fence exists.
+- **Audio** belongs to broaudio, a sibling library with its own
+  backend-neutral device layer (`broaudio/device.h`): native PipeWire on
+  Linux when a daemon is reachable, SDL audio on Windows and macOS and as
+  the Linux fallback. SDL is private to broaudio there too (linked
+  PRIVATE, named by no public header), so it does not put SDL's include
+  directory on bro's targets.
 
 ## The fence
 

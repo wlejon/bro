@@ -38,7 +38,7 @@ Each has a JavaScript binding, `<name>_api` under its own `src/api/`, that bro m
 | [htmlayout](https://github.com/wlejon/htmlayout) | HTML5 parsing, CSS cascade and selectors, block/inline/flex/grid layout, hit testing | none | always |
 | [brokit](https://github.com/wlejon/brokit) | Web-standard and Node-style system APIs: fetch, streams, storage, fs, crypto, child_process | bromath, broimage (codecs), bronze, brass | always |
 | [broimage](https://github.com/wlejon/broimage) | Image decode/encode, geometric and colour ops, composable typed-buffer kernels, ML preprocessing | bromath, brotensor (optional), bronze, brass | always |
-| [broaudio](https://github.com/wlejon/broaudio) | Real-time audio engine: synthesis, effects, spatial mixing, MIDI, lock-free bus routing on SDL3 | bromath, bronze, brass | `BRO_WITH_AUDIO` |
+| [broaudio](https://github.com/wlejon/broaudio) | Real-time audio engine: synthesis, effects, spatial mixing, MIDI, lock-free bus routing; device I/O on native PipeWire (Linux) or SDL3 | bromath, bronze, brass | `BRO_WITH_AUDIO` |
 | [bromesh](https://github.com/wlejon/bromesh) | Mesh generation, CSG, simplification, rigging, glTF/FBX/STL I/O | bromath, bronze, brass | `BRO_WITH_3D` |
 | [broflora](https://github.com/wlejon/broflora) | Plant ecosystem simulation emitting branch and foliage geometry | bromath, bromesh, bronze, brass | `BRO_WITH_FLORA` |
 | [brotensor](https://github.com/wlejon/brotensor) | One tensor type, device-neutral ops including training; CPU always, CUDA / Metal / Vulkan optional | bronze, brass | `BRO_WITH_TENSOR` |

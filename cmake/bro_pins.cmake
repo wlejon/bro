@@ -22,7 +22,7 @@ bro_dependency(bromath GITHUB wlejon/bromath REF 8b511fbd69c014bf0584d2b42e6c96a
 bro_dependency(htmlayout GITHUB wlejon/htmlayout REF 955b1575be1e9e5a27f3a8a99d0a85b74458a323 PIN_ONLY)
 bro_dependency(brokit GITHUB wlejon/brokit REF 23291c709f98d7a30f84a4443502f322a6f99732 PIN_ONLY)
 bro_dependency(broimage GITHUB wlejon/broimage REF 9346cd5e97cb2fba0bae15e9f15fc0d9e37349ee PIN_ONLY)
-bro_dependency(broaudio GITHUB wlejon/broaudio REF 964a428ce8d8eae432cba8ac1a437ca5e2bf1b3f PIN_ONLY)
+bro_dependency(broaudio GITHUB wlejon/broaudio REF 3b207e85de8721224de6f3fc5598896ee31c6000 PIN_ONLY)
 bro_dependency(bromesh GITHUB wlejon/bromesh REF fe7fdc1801f96d246d34e3f33b706ba9359cd217 PIN_ONLY)
 bro_dependency(broflora GITHUB wlejon/broflora REF 69b8ead27cb2c0c7d7c2a18d6a7566f8cd91b2a6 PIN_ONLY)
 bro_dependency(brotensor GITHUB wlejon/brotensor REF 39fb8e5857af60ba51b8131baf87805bc79b62c0 PIN_ONLY)

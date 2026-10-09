@@ -1079,7 +1079,12 @@ class AudioContext {
   /** 'running' | 'suspended' | 'closed'. @readonly @type {string} */
   state;
 
-  /** Device-buffer latency estimate in seconds (0 headless). @readonly @type {number} */
+  /**
+   * Output latency in seconds as the device layer measures it now (0 headless).
+   * PipeWire: one graph period plus the measured delay to the device; SDL
+   * (Windows, macOS, the Linux fallback): the device buffer only, a lower bound.
+   * @readonly @type {number}
+   */
   outputLatency;
 
   /** Always 0. @readonly @type {number} */

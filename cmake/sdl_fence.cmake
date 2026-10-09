@@ -4,9 +4,11 @@
 # header with one that stops the compile, and returns its path. src/ puts it
 # first on the include path of every target it defines; src/platform takes it
 # off again. An `#include <SDL3/...>` anywhere else in bro then fails with a
-# message pointing at the platform interfaces, even though SDL's own include
-# directory still reaches those targets transitively (broaudio links SDL
-# publicly for its audio devices).
+# message pointing at the platform interfaces. No bro dependency hands SDL's
+# include directory to bro targets (broaudio links SDL privately, behind its
+# device interface), so this is the guard that keeps it that way: a sibling
+# that starts exporting SDL headers still cannot make engine code compile
+# against them.
 
 function(bro_sdl_fence_dir out_var)
     # SDL's library targets get their headers from an interface target

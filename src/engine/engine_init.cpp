@@ -394,7 +394,12 @@ void Engine::construct(const EngineConfig& config) {
 
     audioEngine_ = std::make_unique<broaudio::Engine>();
     if (displayMode_ == DisplayMode::Windowed || config.realAudio) {
-        audioEngine_->init();
+        // The app's identity names its streams in the system mixer (the
+        // PipeWire node, SDL's app name), as it names the window.
+        broaudio::AudioDeviceConfig audioCfg;
+        audioCfg.appId = config.appId;
+        audioCfg.appName = config.manifest.name.empty() ? config.appId : config.manifest.name;
+        if (!audioEngine_->init(audioCfg)) audioEngine_->initHeadless();
     } else {
         audioEngine_->initHeadless();
     }
