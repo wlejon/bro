@@ -285,13 +285,14 @@ bro.compositor.raiseWindow = function (id) {};
  * each side (title bar: top; the sides and bottom are typically an invisible resize grab).
  * Maximized windows use `maximizedInsets` (a title bar, or zero). The window manager
  * fits frame and client together: maximize and snapping fill the work area with the whole
- * frame, a new window is nudged so its title bar is on screen, and the decoration counts in
- * the minimum size. Zero insets in both (the default) mean no frames. Zero in one state only
- * makes that state borderless: the window is still framed (its frame element shows, with
- * `data-window-borderless`, covering exactly the client), so the shell can float controls
- * over it (overlays, below), and a press anywhere on its client is the client's (the
- * interaction policy's title band does not apply to a framed window). A number sets all
- * four sides.
+ * frame, a new window is fitted inside the work area frame and all (moved in, and shrunk
+ * when it opens larger than the area), and the decoration counts in the minimum size.
+ * Insets changed while a window is maximized or snapped re-fit it in place. Zero insets in
+ * both (the default) mean no frames. Zero in one state only makes that state borderless:
+ * the window is still framed (its frame element shows, with `data-window-borderless`,
+ * covering exactly the client), so the shell can float controls over it (overlays, below),
+ * and a press anywhere on its client is the client's (the interaction policy's title band
+ * does not apply to a framed window). A number sets all four sides.
  * @param {{insets?: number|{top?:number,left?:number,right?:number,bottom?:number},
  *          maximizedInsets?: number|{top?:number,left?:number,right?:number,bottom?:number}}} config
  * @returns {{insets:Object, maximizedInsets:Object}} the resulting configuration

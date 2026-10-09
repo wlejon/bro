@@ -152,13 +152,11 @@ try {
 
     // Borderless maximize: zero maximized insets. The client fills the work
     // area from its top-left pixel, and the frame stays, covering exactly it.
+    // Changed while it is maximized, the window is re-fitted in place.
     bro.compositor.setDecorations({ maximizedInsets: 0 });
-    assert(bro.compositor.restoreWindow(b.id), 'restore');
-    waitFor(() => !bro.compositor.getWindow(b.id).maximized, 'b restored');
-    assert(bro.compositor.maximizeWindow(b.id), 'maximize borderless');
-    waitFor(() => bro.compositor.getWindow(b.id).maximized && bro.compositor.getWindow(b.id).frame.y === 0,
-            'b maximized without a title bar');
+    waitFor(() => bro.compositor.getWindow(b.id).frame.y === 0, 'b re-fitted without a title bar');
     settle();
+    assert(bro.compositor.getWindow(b.id).maximized, 'b still maximized');
     const bw = bro.compositor.getWindow(b.id);
     assert(bw.framed && bw.borderless, 'b framed and borderless: ' + JSON.stringify(bw));
     assert(bw.frame.x === 0 && bw.frame.width === window.innerWidth, 'b fills the width: ' + JSON.stringify(bw.frame));
@@ -188,6 +186,16 @@ try {
     assert(overlayDowns === 1, 'the overlay got the press');
     assert(hostPointer('down', ox, 40) === false, 'below the overlay the client has it');
     hostPointer('up', ox, 40);
+    // Back to a title bar, in place: the attribute goes; and borderless again.
+    bro.compositor.setDecorations({ maximizedInsets: { top: 36 } });
+    waitFor(() => bro.compositor.getWindow(b.id).frame.y === 36, 'title bar back');
+    settle();
+    assert(!frames[b.id].hasAttribute('data-window-borderless'), 'title bar: not borderless');
+    assert(frames[b.id].getBoundingClientRect().top === 0, 'title bar back at the top of the work area');
+    bro.compositor.setDecorations({ maximizedInsets: 0 });
+    waitFor(() => bro.compositor.getWindow(b.id).frame.y === 0, 'borderless again');
+    settle();
+    assert(frames[b.id].hasAttribute('data-window-borderless'), 'borderless again: attribute');
     // Restored, it has its band again: the attribute goes. And it glides
     // there: the frame starts from the rect it was shown at and eases onto
     // the window's new one.
