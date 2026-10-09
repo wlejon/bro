@@ -290,6 +290,17 @@ bool requestSingleInstance(
 ) {
     shutdownSingleInstance();
 
+    // A process that leaves through exit() rather than its driver's return
+    // (Xlib's fatal IO handler when the display goes away, for one) still
+    // gives the channel up: removes the socket, and joins the server thread
+    // before its static std::thread is destroyed joinable (terminate()).
+    // Registered after the statics here are built, so it runs before they go.
+    static const bool releaseAtExit = [] {
+        std::atexit([] { shutdownSingleInstance(); });
+        return true;
+    }();
+    (void)releaseAtExit;
+
     {
         std::lock_guard<std::mutex> lock(s_instanceMutex);
         s_callback = std::move(onInstanceCallback);
