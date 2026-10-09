@@ -1,6 +1,7 @@
 #include "platform/control_socket.h"
 
 #include "platform/control_protocol.h"
+#include "util/main_loop_wake.h"
 
 #include <brolink/loop.h>
 #include <brolink/paths.h>
@@ -62,9 +63,12 @@ struct ControlSocket::Impl final : brolink::LoopHandler {
             got.push_back(std::move(req));
         }
         if (!got.empty()) {
-            std::lock_guard<std::mutex> lk(mu);
-            if (requests.empty()) signalReady();
-            for (auto& r : got) requests.push_back(std::move(r));
+            {
+                std::lock_guard<std::mutex> lk(mu);
+                if (requests.empty()) signalReady();
+                for (auto& r : got) requests.push_back(std::move(r));
+            }
+            util::wakeMainLoop();  // a windowed frame loop waiting for work
         }
         // A frame that cannot be resynchronised: the connection is done.
         if (split.error()) loop->close(id, false);

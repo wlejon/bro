@@ -1,6 +1,7 @@
 #include "terminal/term_session.h"
 #include "terminal/term_session_host.h"  // the delegate's complete type, for ~TermSession
 
+#include "util/main_loop_wake.h"
 #include "util/time.h"
 
 #include <algorithm>
@@ -545,6 +546,7 @@ bool TermSession::maybePublish(Clock::time_point now, bool onlyIfConsumed) {
     if (!view_->publish(channel_)) return false;
     lastPublishMs_.store(nowMs(), std::memory_order_relaxed);
     framesPublished_.fetch_add(1, std::memory_order_relaxed);
+    util::wakeMainLoop();
     return true;
 }
 

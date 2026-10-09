@@ -14,6 +14,7 @@
 #include "engine/engine.h"
 #include "util/asset_mounts.h"
 #include "util/log.h"
+#include "util/main_loop_wake.h"
 #include "eval/eval.h"
 #include <api/api.h>
 
@@ -102,8 +103,11 @@ public:
     }
 
     void postToMain(std::unique_ptr<Message> msg) {
-        std::lock_guard<std::mutex> lock(toMainMutex_);
-        toMainQueue_.push_back(std::move(msg));
+        {
+            std::lock_guard<std::mutex> lock(toMainMutex_);
+            toMainQueue_.push_back(std::move(msg));
+        }
+        util::wakeMainLoop();
     }
 
     struct Listener {

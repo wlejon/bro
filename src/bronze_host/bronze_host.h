@@ -64,6 +64,12 @@ std::vector<std::string> registeredHostGlobals();
 /// cannot be written.
 bool writeNativeManifest(const std::string& path, std::string* error);
 
+/// How long (ms of the host clock, which runs at bro.time's scale) until the
+/// next frame has script work: 0 while a requestAnimationFrame callback,
+/// promise job or host task waits, else until the earliest timer; +infinity
+/// with none. The windowed loop's idle wait ends there.
+double hostFrameDueInMs();
+
 /// Clear active setTimeout and setInterval timers and tasks on reload.
 void clearHostTimers();
 

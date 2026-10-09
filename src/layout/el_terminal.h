@@ -334,6 +334,10 @@ public:
     // exit (`exit` event). `scale` is the render scale (DeviceScale::render).
     // Returns whether the terminal's layer must be re-recorded.
     bool pump(double nowMs, bool focused, float scale);
+    // How long after `nowMs` the terminal next repaints on its own (the
+    // cursor's blink, a selection drag scrolling): +infinity when only new
+    // output or input would change it.
+    double nextRepaintInMs(double nowMs) const;
 
     // Every live controller (main thread).
     static void forEach(const std::function<void(ElTerminal&)>& fn);

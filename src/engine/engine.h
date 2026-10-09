@@ -1244,6 +1244,22 @@ private:
     bool holdUnchangedFrame();
     uint64_t heldFrame_ = 0;  // the last frame held (frameNumber_)
 
+    // engine_idle.cpp: a window whose event loop can wait (SDL) holds an
+    // unchanged frame only when nothing is about to change it (windowIdle),
+    // and the loop then waits for work (idleWait) instead of presenting the
+    // same picture every vblank. Input, a wake from another thread
+    // (util/main_loop_wake.h), the next timer or terminal blink, or the poll
+    // bound ends the wait.
+    bool windowIdle() const;
+    void idleWait();
+    void installMainLoopWaker();
+    void removeMainLoopWaker();
+    bool idleWaitEnabled_ = true;  // BRO_IDLE_WAIT=0 turns it off
+    bool idleHeld_ = false;        // this frame was held by windowIdle
+    // The longest idle wait: what is only polled each frame (fetch and
+    // socket completions, ML jobs, audio events) is picked up within it.
+    static constexpr double kIdlePollMs = 16.0;
+
     // engine_drm_cursor.cpp: the pointer on the KMS cursor plane. Places
     // this frame's cursor there; false when it must be drawn into the frame
     // (no plane, a shape too big for it, a driver that refused it).

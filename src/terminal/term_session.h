@@ -28,10 +28,10 @@
 // publishes right there, so a program that opens the next update at once
 // still has each finished one presented, never a half-drawn successor.
 //
-// bro's main loop runs continuously at its frame cap (it does not block in
-// the OS event queue), so a published frame is picked up by the next frame's
-// pump without any cross-thread wakeup of the main thread; the parser only
-// has to be woken itself, which the PTY's hook does.
+// A published frame is picked up by the next frame's pump. A windowed bro
+// with nothing changing waits in the OS event queue rather than running
+// frames, so each publish also wakes the main loop (util/main_loop_wake.h);
+// the parser itself is woken by the PTY's hook.
 
 #include <bropty/frame.h>
 #include <bropty/input.h>

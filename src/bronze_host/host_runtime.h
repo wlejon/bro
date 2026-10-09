@@ -111,4 +111,8 @@ void installTimerGlobals();
 // the bronze frame seam, before requestAnimationFrame.
 void fireHostTimers(double nowMs);
 
+// The earliest timer deadline on hostClockMs() (+infinity with none; minus
+// infinity while a host task waits to be drained).
+double nextHostTimerDueMs();
+
 }  // namespace bro::bronze_host

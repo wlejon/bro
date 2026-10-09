@@ -8,6 +8,10 @@
 
 #include <SDL3/SDL.h>
 
+#include <algorithm>
+#include <atomic>
+#include <cmath>
+
 namespace bro::platform {
 
 // bro's key model is SDL's numbering, so SDL key events pass through as they
@@ -92,7 +96,40 @@ public:
     void pollEvents() override;
     void setModalWindowEventHook(std::function<void()> hook) override;
 
+    bool canWaitEvents() const override { return true; }
+    void waitEvents(double timeoutMs) override {
+        if (m_wakePending.exchange(false, std::memory_order_acq_rel)) return;
+        if (timeoutMs >= 0.0 && timeoutMs < 2.0) {
+            // SDL takes its own pump time off a wait and rounds what is left
+            // down to the OS's whole ms: a wait this short would not wait at
+            // all. A precise sleep instead (input waits a ms at most).
+            SDL_DelayNS(static_cast<Uint64>(timeoutMs * 1e6));
+        } else {
+            // One ms more than asked for, for the same rounding; a wait that
+            // still ends early comes back for the rest.
+            const Sint32 ms = timeoutMs < 0.0 ? -1 : static_cast<Sint32>(std::min(std::floor(timeoutMs) + 1.0, 2.0e9));
+            SDL_WaitEventTimeout(nullptr, ms);
+        }
+        m_wakePending.store(false, std::memory_order_release);
+    }
+    // One queued event per pending wake: an SDL_PushEvent from another
+    // thread posts the window a message, which ends the wait (Win32:
+    // MsgWaitForMultipleObjects). pollEvents drops the event.
+    void wake() override {
+        if (m_wakePending.exchange(true, std::memory_order_acq_rel)) return;
+        static const Uint32 type = [] {
+            const Uint32 t = SDL_RegisterEvents(1);
+            return t ? t : static_cast<Uint32>(SDL_EVENT_USER);
+        }();
+        SDL_Event e;
+        SDL_zero(e);
+        e.type = type;
+        SDL_PushEvent(&e);
+    }
+
 private:
+    std::atomic<bool> m_wakePending{false};
+
     // In-progress file drop, accumulated between DROP_BEGIN and DROP_COMPLETE.
     // m_dropActive distinguishes "a group is open" from "no files yet", so a
     // DROP_FILE arriving without the bracketing events (defensive: SDL always

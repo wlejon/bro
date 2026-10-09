@@ -67,8 +67,10 @@
 #include "util/log.h"
 #include <unordered_set>
 
+#include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <limits>
 #include <memory>
 #include <string>
 #include <utility>
@@ -299,6 +301,12 @@ Value makeCancelAnimationFrame() {
 }
 
 }  // namespace
+
+double hostFrameDueInMs() {
+    if (!g_host) return std::numeric_limits<double>::infinity();
+    if (!g_host->rafPending.empty() || ev::microtasksPending()) return 0.0;
+    return std::max(0.0, nextHostTimerDueMs() - g_host->clockMs);
+}
 
 void clearHostAnimationFramesForDocument(dom::Document* doc) {
     if (!g_host || !doc) return;

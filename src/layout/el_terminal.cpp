@@ -16,6 +16,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstdlib>
+#include <limits>
 #include <mutex>
 
 #if BRO_WITH_TERMINAL
@@ -462,6 +463,18 @@ bool ElTerminal::pump(double nowMs, bool focused, float scale) {
         termDispatch(elem_, "detach", "{\"sessionId\":" + std::to_string(m.session->sessionId()) + "}");
     }
     return m.layerDirty.load();
+}
+
+double ElTerminal::nextRepaintInMs(double nowMs) const {
+    const Impl& m = *impl_;
+    double in = std::numeric_limits<double>::infinity();
+    // The selection drag scrolls every 15-80 ms (autoScroll).
+    if (m.drag.selecting) in = 15.0;
+    if (m.focused && m.frame && (m.frame->cursor.blink || m.frame->modes.cursor_blink)) {
+        const double phase = std::fmod(std::max(0.0, nowMs - m.blinkEpoch), 1060.0);
+        in = std::min(in, (phase < 530.0 ? 530.0 : 1060.0) - phase);
+    }
+    return in;
 }
 
 #endif  // BRO_WITH_TERMINAL

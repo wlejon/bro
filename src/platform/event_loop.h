@@ -105,6 +105,17 @@ public:
     /// keep timers running through the modal loop. Empty to remove.
     virtual void setModalWindowEventHook(std::function<void()> hook) = 0;
 
+    /// Whether waitEvents can block: the engine then stops presenting an
+    /// unchanged frame and waits here instead. False where the window
+    /// system paces the loop itself (Window::waitForFrame).
+    virtual bool canWaitEvents() const { return false; }
+    /// Block until an OS event is queued, wake() is called, or `timeoutMs`
+    /// passes (< 0: no limit). Returns at once if a wake() came since the
+    /// last wait. Leaves the events queued for pollEvents.
+    virtual void waitEvents(double timeoutMs) { (void)timeoutMs; }
+    /// Any thread: end the current waitEvents, or the next one at once.
+    virtual void wake() {}
+
     /// Runs a blocking loop that polls events each frame until quit.
     /// The perFrame callback is invoked once per iteration.
     void run(std::function<void(float deltaTime)> perFrame);

@@ -512,6 +512,18 @@ void Engine::tickSystemPanels(double nowMs) {
                 systemDirty_ = true;
             }
         }
+    } else {
+        // A hidden splash animates nothing. Its rAF loop ends itself once its
+        // own dismiss fade finishes, but an app with "splash": false never
+        // shows it, and a fade cut short by the timeout above never finishes:
+        // either way the loop would run every frame forever, and a pending
+        // frame callback keeps the window from ever idling.
+        for (auto& doc : systemDocs_) {
+            if (doc.group == "splash" && doc.document) {
+                bronze_host::clearHostAnimationFramesForDocument(doc.document.get());
+                break;
+            }
+        }
     }
 
     if (!isSystemVisible()) return;

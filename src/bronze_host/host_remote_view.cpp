@@ -34,6 +34,7 @@
 #include "render/remote_picture.h"
 #include "render/vulkan_context.h"
 #include "util/log.h"
+#include "util/main_loop_wake.h"
 
 #include <broremote/api.h>
 #include <broremote/latency.h>
@@ -576,6 +577,9 @@ void installRemoteViewHost(engine::Engine& engine) {
     broremote::api::ViewerHooks hooks;
     hooks.sessionStarting = &sessionStarting;
     hooks.sessionGone = &sessionGone;
+    // A picture, the cursor or the status changed: a windowed loop waiting
+    // for work takes it now rather than at its next poll.
+    hooks.wake = &util::wakeMainLoop;
     broremote::api::setViewerHooks(std::move(hooks));
     engine.setRemoteViewHost(&g_hostImpl);
     engine.addFramePump(&pump);

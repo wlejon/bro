@@ -4,6 +4,7 @@
 #include "layout/el_terminal.h"
 
 #include <algorithm>
+#include <limits>
 
 namespace bro::layout {
 
@@ -119,5 +120,6 @@ ElTerminal::Theme ElTerminal::theme() const { return {}; }
 ElTerminal::Theme ElTerminal::palette() const { return {}; }
 void ElTerminal::setTheme(const Theme& t) { scriptTheme_ = t; }
 bool ElTerminal::pump(double, bool, float) { return false; }
+double ElTerminal::nextRepaintInMs(double) const { return std::numeric_limits<double>::infinity(); }
 
 } // namespace bro::layout

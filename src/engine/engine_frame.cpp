@@ -272,7 +272,12 @@ void Engine::run() {
         else handleHostMinimized(id, false);
     };
     eventLoop_->onOccluded = [this, mainWin](uint32_t id) { if (!mainWin(id)) handleHostOccluded(id, true); };
-    eventLoop_->onExposed = [this, mainWin](uint32_t id) { if (!mainWin(id)) handleHostOccluded(id, false); };
+    eventLoop_->onExposed = [this, mainWin](uint32_t id) {
+        // The window system asked for the picture again: present the next
+        // frame even if it is unchanged.
+        if (mainWin(id)) presentedKeyValid_ = false;
+        else handleHostOccluded(id, false);
+    };
     eventLoop_->onSystemThemeChanged = [this]() { applyColorScheme(); };
     eventLoop_->onDisplayScaleChanged = [this, mainWin](uint32_t id) { if (mainWin(id)) handleDisplayScaleChanged(); };
 
@@ -289,6 +294,7 @@ void Engine::run() {
 
     eventLoop_->setModalWindowEventHook([this]() { tickTimersOnly(); });
     startControl();
+    installMainLoopWaker();
 
     while (running_) {
         if (bro::util::interrupted()) {
@@ -530,8 +536,17 @@ void Engine::run() {
 
         renderAndPresentFrame(frameStart, now, wallFrameDtMs, layoutSignaled, baseWasDirty);
         traceFrameEnd();
+
+        // A held frame: nothing is due, so wait for work rather than run
+        // the next frame (engine_idle.cpp). Outside the frame records: an
+        // idle stretch is not a frame.
+        if (idleHeld_) {
+            idleHeld_ = false;
+            idleWait();
+        }
     }
 
+    removeMainLoopWaker();
     shutdown();
 }
 

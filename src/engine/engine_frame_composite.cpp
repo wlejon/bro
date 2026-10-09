@@ -462,8 +462,15 @@ bool Engine::holdUnchangedFrame() {
 #else
         return false;
 #endif
-    } else if (displayMode_ != DisplayMode::Windowed || !window_ || !window_->holdFrame()) {
+    } else if (displayMode_ != DisplayMode::Windowed || !window_) {
         return false;
+    } else if (!window_->holdFrame()) {
+        // The window system cannot pace a loop that presents nothing
+        // (SDL): hold only when nothing is about to change, and let the
+        // loop wait for work (engine_idle.cpp). Otherwise the present keeps
+        // the beat, as before.
+        if (!windowIdle()) return false;
+        idleHeld_ = true;
     }
     frameImages_.clear();
     frameSegmentUsed_.clear();

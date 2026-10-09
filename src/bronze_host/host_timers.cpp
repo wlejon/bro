@@ -29,6 +29,7 @@
 
 #include <algorithm>
 #include <deque>
+#include <limits>
 #include <vector>
 
 namespace bro::bronze_host {
@@ -199,6 +200,14 @@ void drainHostTasks() {
     std::deque<std::function<void()>> batch;
     batch.swap(queue);
     for (auto& task : batch) task();
+}
+
+double nextHostTimerDueMs() {
+    if (g_tasks && !g_tasks->empty()) return -std::numeric_limits<double>::infinity();
+    double due = std::numeric_limits<double>::infinity();
+    if (g_timers)
+        for (const TimerEntry& entry : *g_timers) due = std::min(due, entry.dueMs);
+    return due;
 }
 
 // ---------------------------------------------------------------------------

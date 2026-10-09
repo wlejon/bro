@@ -86,6 +86,8 @@ public:
     /// `usage` is one line: the arguments, then what it does.
     void registerCommand(const std::string& name, const std::string& usage, Handler handler);
     void addTicker(Ticker ticker) { tickers_.push_back(std::move(ticker)); }
+    /// Whether a ticker is running: every frame is then needed.
+    bool hasTickers() const { return !tickers_.empty(); }
 
     /// Engine thread, between frames: runs the commands that arrived and
     /// this frame's tickers.
