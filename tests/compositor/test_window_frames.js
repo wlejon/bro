@@ -12,16 +12,23 @@
 //   - frames are hidden for windows that are not decorated
 //   - maximized with zero insets, a frame is borderless; a restore glides
 
-if (typeof hostCompositorSocket !== 'function' || hostCompositorSocket() === '' ||
-    !bro.compositor || !bro.compositor.available) {
-    skipTest('needs BRO_HEADLESS_COMPOSITOR=1 and the Wayland server');
-}
-
 const cp = require('child_process');
 const fs = require('fs');
 const dir = process.env.BC_TEST_CLIENT_DIR || '../brocompositor/build-release/tests';
 const clientBin = dir + '/bc_wl_client';
-if (!fs.existsSync(clientBin)) skipTest('bc_wl_client not found (BC_TEST_CLIENT_DIR)');
+
+// skipTest() does not stop the script: everything below runs only when the
+// test can.
+if (typeof hostCompositorSocket !== 'function' || hostCompositorSocket() === '' ||
+    !bro.compositor || !bro.compositor.available) {
+    skipTest('needs BRO_HEADLESS_COMPOSITOR=1 and the Wayland server');
+} else if (!fs.existsSync(clientBin)) {
+    skipTest('bc_wl_client not found (BC_TEST_CLIENT_DIR)');
+} else {
+    run();
+}
+
+function run() {
 
 const realSleep = (ms) => cp.execSync('sleep ' + (ms / 1000));
 function waitFor(pred, what) {
@@ -226,3 +233,4 @@ try {
     for (const ch of children) ch.kill();
 }
 if (exitCode) throw new Error('test_window_frames failed');
+}  // run
