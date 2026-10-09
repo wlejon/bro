@@ -46,7 +46,7 @@ bool TermSession::muxPump(std::chrono::steady_clock::time_point, bool& published
     published = false;
     return false;
 }
-bool TermSession::muxAttachLocked(uint64_t, std::string*) { return false; }
+bool TermSession::muxAttachLocked(uint64_t, bool, std::string*) { return false; }
 void TermSession::muxDropView() {}
 void TermSession::muxMirrorLost() {}
 void TermSession::muxKill() {}

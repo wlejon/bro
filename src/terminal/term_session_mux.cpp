@@ -65,7 +65,7 @@ bool TermSession::spawnPersistent(const SpawnOptions& opts, const PersistentOpti
         std::optional<bromux::SessionInfo> info = m->client->create_session(spec, error);
         if (!info) return false;
         mux_ = std::move(m);
-        if (!muxAttachLocked(info->id, error)) {
+        if (!muxAttachLocked(info->id, /*created=*/true, error)) {
             mux_.reset();
             return false;
         }
@@ -85,7 +85,7 @@ bool TermSession::attach(uint64_t sessionId, const std::string& server, std::str
         // Attaching names a session that exists, so its server runs: never start one.
         if (!connectMux(m->client, server, /*autostart=*/false, error)) return false;
         mux_ = std::move(m);
-        if (!muxAttachLocked(sessionId, error)) {
+        if (!muxAttachLocked(sessionId, /*created=*/false, error)) {
             mux_.reset();
             return false;
         }
@@ -94,7 +94,7 @@ bool TermSession::attach(uint64_t sessionId, const std::string& server, std::str
     return true;
 }
 
-bool TermSession::muxAttachLocked(uint64_t id, std::string* error) {
+bool TermSession::muxAttachLocked(uint64_t id, bool created, std::string* error) {
     Mux& m = *mux_;
     const bropty::Terminal& t = session_.terminal();
     std::optional<bromux::SessionInfo> info = m.client->attach(id, t.cols(), t.rows(), 0, error);
@@ -109,8 +109,12 @@ bool TermSession::muxAttachLocked(uint64_t id, std::string* error) {
     m.source = std::make_unique<MuxSource>(*inner);
     m.source->setBase(t.palette());  // the theme, as the element last gave it
     m.source->setDefaultCursor(t.default_cursor_shape(), t.default_cursor_blink());
-    // The attach synced the screen: changes count from here (remoteUpdates_).
-    if (const bromux::ScreenModel* s = m.client->screen(id)) m.feedSeq = s->feed_seq();
+    // Activity (remoteUpdates_) is the server's state version moving past
+    // m.feedSeq. Attaching to an existing session counts from the screen the
+    // attach synced. A session this element created counts from its start
+    // (version 0): the program may well have printed (the shell's prompt)
+    // before the attach synced, and that output is activity too.
+    if (const bromux::ScreenModel* s = m.client->screen(id)) m.feedSeq = created ? 0 : s->feed_seq();
     m.view = std::make_unique<bropty::TerminalView>(*m.source);
     view_ = m.view.get();
     src_ = m.source.get();

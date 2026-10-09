@@ -326,7 +326,10 @@ private:
     bool muxPump(std::chrono::steady_clock::time_point now, bool& published);
     // mu_ held: the bromux-side parts of the reads and the input. Input is
     // refused (false) once detached or exited.
-    bool muxAttachLocked(uint64_t id, std::string* error);
+    // `created`: this element just created the session, so everything it
+    // already did (the shell's prompt, say) counts as activity, not only
+    // what follows the attach.
+    bool muxAttachLocked(uint64_t id, bool created, std::string* error);
     void muxDropView();
     void muxMirrorLost();  // the Client dropped the session's mirror: let go of it
     void muxKill();
