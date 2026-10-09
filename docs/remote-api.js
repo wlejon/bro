@@ -41,6 +41,23 @@
  *            is nothing remote-specific to handle.
  *   cursor   The pointer's shape (CSS cursor name) and position. Under DRM
  *            the cursor is also drawn into the frame, as on screen.
+ *   audio    (Linux with PipeWire; protocol 1.3, an audio lane of its own) Both
+ *            ways, raw PCM:
+ *              down  what this machine plays (the default output's monitor,
+ *                    bro's own audio included) goes to the viewer's speakers.
+ *              up    the viewer's microphone (on Windows the communications
+ *                    mic, with Windows' echo cancellation where the device
+ *                    has it) becomes a microphone here: a PipeWire source
+ *                    named "broremote: <viewer's host> mic" that exists while
+ *                    that viewer is attached. bro.mic, bro.stt, bro.wake and
+ *                    any other program recording from it hear the viewer;
+ *                    with micAsDefault it is the default source meanwhile,
+ *                    so they hear it without being told, and the previous
+ *                    default comes back when the viewer goes.
+ *            Measured Windows to Linux over ssh on a LAN: about 25-30 ms mic
+ *            to this machine, 35-42 ms this machine to the viewer's speakers.
+ *            The viewer chooses (`--no-audio-lane`, `--no-mic`, mute keys);
+ *            losing audio never touches frames or input.
  *
  * SECURITY: the socket is local and private to the user (a 0600 socket in a
  * 0700 directory under $XDG_RUNTIME_DIR, the peer's uid checked); a viewer on
@@ -63,6 +80,10 @@
  *       options.fps          frame rate the encoder is set up for, and the cap
  *                            on CPU frames windowed and headless (default 60)
  *       options.name         the name viewers are told (default "bro")
+ *       options.audio        offer viewers the audio lane (default true; it is
+ *                            off anyway where there is no PipeWire)
+ *       options.micAsDefault make each viewer's mic the default source while
+ *                            it is attached (default false)
  *     Hosting already with the same options is a no-op; other options
  *     replace the server (attached viewers are disconnected). Throws a
  *     TypeError for a bad option, an Error when the server cannot start
@@ -75,7 +96,21 @@
  *                                     the first frame is encoded)
  *       bitrateKbps, fps, codecs,     (while hosting) the configuration
  *       stats: { submitted, encoded, keyframes, replaced, unwatched, failed, streams,
- *                windowWaits }       frames submitted while a viewer was at its ack window
+ *                windowWaits,        frames submitted while a viewer was at its ack window
+ *                lanes,              input lanes joined
+ *                audioLanes,         audio lanes joined
+ *                audioUp, audioDown }  audio packets from viewers' mics / to viewers
+ *       audio: {                      (while hosting)
+ *           enabled, micAsDefault,    as configured
+ *           viewers: [{ source,       the viewer's machine
+ *                       playback, playbackMuted,   it hears this machine
+ *                       mic, micMuted,             its mic is a source here
+ *                       micNode,      the source's description, or null
+ *                       micDefault,   it is the default source
+ *                       micBufferMs, micUnderruns, micDroppedFrames }]
+ *       }                             (micDroppedFrames grows while nothing
+ *                                     records from the source: it is the
+ *                                     bound on its buffer, not loss)
  *     }
  *   bro.remote.codecs() -> string[]  what this machine can encode ('raw' always)
  *   bro.remote.on(type, fn) / off(type, fn)
@@ -122,6 +157,23 @@ function remoteStatusText() {
 function setHosting(on) {
     if (on) bro.remote.host({ socket: 'desk', codecs: ['hevc', 'h264', 'raw'] });
     else bro.remote.stop();
+}
+
+// ---------------------------------------------------------------------------
+// "Use my mic here to talk to that machine": the remote viewer's mic becomes
+// the default source, so bro.mic (and stt / wake on top of it) hears the
+// person at the viewer.
+// ---------------------------------------------------------------------------
+// The audio lane joins a moment after 'attach' (the viewer opens it once
+// video is up), so read status().audio when it is needed, not in the event.
+function hostWithRemoteMic() {
+    bro.remote.host({ socket: 'desk', micAsDefault: true });
+}
+function remoteMicText() {
+    const s = bro.remote.status();
+    if (!s.hosting) return 'not hosting';
+    const mics = s.audio.viewers.filter((v) => v.mic && !v.micMuted);
+    return mics.length ? `listening to ${mics.map((v) => v.source).join(', ')}` : 'no remote mic';
 }
 
 // ---------------------------------------------------------------------------
