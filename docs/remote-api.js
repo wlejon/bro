@@ -3,8 +3,9 @@
  * bro.remote — host this screen for a remote viewer (broremote)
  * =============================================================================
  *
- * A page starts a broremote server; a viewer (`broremote-view`, on this
- * machine or over ssh) attaches to it, sees what bro composites and drives
+ * A page starts a broremote server; a viewer (bro's `<remoteview>`, below,
+ * e.g. helmapps' helmremote, on this machine or over ssh; or `broremote
+ * probe` for scripted checks) attaches to it, sees what bro composites and drives
  * it with its own keyboard and mouse. helm uses it for `helm --remote`.
  * The binding is broremote's own (broremote_api, ../broremote/src/api); bro
  * feeds it frames and input (src/bronze_host/host_remote.cpp).
@@ -68,7 +69,7 @@
  *   bro.remote.available            true (false on the compiled-out stub)
  *   bro.remote.host(options?) -> status
  *       options.socket       socket name, 1-64 of [A-Za-z0-9._-] (default
- *                            "default", which `broremote-view --ssh HOST`
+ *                            "default", which `bro.remote.connect({ ssh: HOST })`
  *                            reaches with no other options)
  *       options.codecs       a name or an array in preference order: 'hevc',
  *                            'h264', 'av1', 'raw' (default ['hevc', 'h264']). Ones this
@@ -102,6 +103,12 @@
  *                audioUp, audioDown }  audio packets from viewers' mics / to viewers
  *       audio: {                      (while hosting)
  *           enabled, micAsDefault,    as configured
+ *           status,                   what is wrong with this machine's audio
+ *                                     now ('' when nothing): no audio system,
+ *                                     or PipeWire restarting. A restarted
+ *                                     PipeWire is reconnected to by itself,
+ *                                     and each viewer's mic source and the
+ *                                     desktop capture come back
  *           viewers: [{ source,       the viewer's machine
  *                       playback, playbackMuted,   it hears this machine
  *                       mic, micMuted,             its mic is a source here
@@ -145,7 +152,7 @@
  *                            audioBufferMs (the playback jitter target, 20)
  *   session.id, session.target
  *   session.status() -> { state: 'connecting' | 'connected' | 'closed',
- *       message, failed, server, protocol ("1.4"), codec, width, height, fps,
+ *       message, failed, server, protocol ("1.5"), codec, width, height, fps,
  *       stream, decoder, hardware, inputLane, inputLaneError, micMuted,
  *       playbackMuted, cursor: { visible, x, y, shape, locked } | null }
  *   session.stats() -> { packets, decoded, failed, keyframeRequests,
@@ -154,7 +161,9 @@
  *       latency: { frames, rtt, age, maxAge, queue, encode, wait, net, dwait,
  *                  decode, present, kbytes } }   (ms, the mean per frame)
  *   session.audio() -> null, or the audio lane: { connected, closed, playback,
- *       mic, micNode, rttMs, micLatencyMs, playbackLatencyMs, ... }
+ *       mic, micNode, rttMs, micLatencyMs, playbackLatencyMs, notes,
+ *       hostStatus (protocol 1.5: what is wrong with the host's audio now,
+ *       e.g. its PipeWire restarting; '' when nothing; also in notes), ... }
  *   session.probe() -> bool    a latency probe (a press and release of
  *                              KEY_F13) against `serve-test --latency`; false
  *                              while one is open
@@ -236,7 +245,8 @@ function viewRemote(host) {
 if (bro.remote.available) {
     const status = bro.remote.host({ codecs: ['hevc', 'h264', 'raw'] });
     console.log(`hosting on ${status.socketPath}`);
-    // On another machine:  broremote-view --ssh this-host
+    // On another machine:  bro.remote.connect({ ssh: 'this-host' }) in a
+    // <remoteview> (helmapps' helmremote), or `broremote probe --ssh this-host`
 }
 
 // ---------------------------------------------------------------------------
