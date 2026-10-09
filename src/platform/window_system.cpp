@@ -11,6 +11,9 @@
 #include "util/log.h"
 
 #include <chrono>
+#include <cstdlib>
+#include <cstring>
+#include <string>
 
 namespace bro::platform {
 
@@ -18,10 +21,68 @@ namespace {
 WindowSystem* g_active = nullptr;
 }  // namespace
 
-void selectWindowSystem(WindowSystemKind kind) {
-    WindowSystem* next = kind == WindowSystemKind::Drm ? &drmWindowSystem() : &sdlWindowSystem();
+#if !BRO_HAVE_WAYLAND_BACKEND
+WindowSystem* waylandWindowSystem(std::string* why) {
+    if (why) *why = "this build has no Wayland window system (browl, xkbcommon)";
+    return nullptr;
+}
+#endif
+
+bool selectWindowSystem(WindowSystemKind kind) {
+    WindowSystem* next = nullptr;
+    bool ok = true;
+    switch (kind) {
+        case WindowSystemKind::Drm: next = &drmWindowSystem(); break;
+        case WindowSystemKind::Sdl: next = &sdlWindowSystem(); break;
+        case WindowSystemKind::Wayland: {
+            std::string why;
+            next = waylandWindowSystem(&why);
+            if (!next) {
+                LOG_INFO("Wayland window system unavailable (%s); using SDL", why.c_str());
+                next = &sdlWindowSystem();
+                ok = false;
+            }
+            break;
+        }
+    }
     if (g_active != next) LOG_INFO("Window system: %s", next->name());
     g_active = next;
+    return ok;
+}
+
+void selectDesktopWindowSystem() {
+    const char* force = std::getenv("BRO_WINDOW_SYSTEM");
+    const std::string forced = force ? force : "";
+    if (forced == "sdl") {
+        selectWindowSystem(WindowSystemKind::Sdl);
+        return;
+    }
+#if defined(__linux__)
+    // An SDL video driver asked for by name (offscreen, x11, dummy) is a
+    // request for SDL; only "wayland" or none leaves the choice here.
+    const char* sdlDriver = std::getenv("SDL_VIDEODRIVER");
+    const bool sdlNamed = sdlDriver && *sdlDriver && std::strcmp(sdlDriver, "wayland") != 0;
+    const char* wl = std::getenv("WAYLAND_DISPLAY");
+    if (forced == "wayland" || (forced.empty() && !sdlNamed && wl && *wl)) {
+        selectWindowSystem(WindowSystemKind::Wayland);
+        return;
+    }
+#endif
+    if (!forced.empty() && forced != "wayland")
+        LOG_WARN("BRO_WINDOW_SYSTEM=%s: unknown (sdl, wayland); using SDL", forced.c_str());
+    selectWindowSystem(WindowSystemKind::Sdl);
+}
+
+const std::string& launchActivationToken() {
+    static const std::string token = [] {
+        std::string t;
+        if (const char* env = std::getenv("XDG_ACTIVATION_TOKEN")) t = env;
+#ifndef _WIN32
+        unsetenv("XDG_ACTIVATION_TOKEN");
+#endif
+        return t;
+    }();
+    return token;
 }
 
 WindowSystem& windowSystem() {

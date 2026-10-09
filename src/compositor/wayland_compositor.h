@@ -94,8 +94,17 @@ public:
     /// Shown windows, bottom to top (the window manager's stacking order).
     std::vector<ClientWindowInfo> stack() const;
 
-    /// Release leased frames after presentation has completed
-    void releaseClientLayers(const std::vector<LeasedSurfaceFrame>& frames);
+    /// The flip that showed a frame, for the clients' presentation feedback.
+    struct FramePresentation {
+        int64_t timestampNs = 0;  // CLOCK_MONOTONIC
+        uint64_t sequence = 0;    // the CRTC's vblank counter
+        uint32_t refreshNs = 0;
+    };
+
+    /// Release leased frames after presentation has completed. `shown`, when
+    /// known, is the flip the frame landed on.
+    void releaseClientLayers(const std::vector<LeasedSurfaceFrame>& frames,
+                             const FramePresentation* shown = nullptr);
 
     // Window management controls
     bool focusWindow(uint64_t winId);

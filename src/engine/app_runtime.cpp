@@ -1,6 +1,7 @@
 #include "engine/app_runtime.h"
 
 #include "platform/desktop_single_instance.h"
+#include "platform/window_system.h"
 #include "svg/svg_renderer.h"
 #include "util/exe_dir.h"
 #include "util/log.h"
@@ -45,12 +46,17 @@ AppRuntimeInfo& info() {
 }
 
 // The hand-off message: a tag (so a stray client cannot pass for a launch),
-// the launch's working directory, then its argv.
-constexpr const char* kInstanceTag = "bro-app-instance/1";
+// the launch's working directory, then its argv. /2 puts the launch's
+// activation token (XDG_ACTIVATION_TOKEN, possibly empty) after the working
+// directory, so the running instance raises its window with the token the
+// launcher gave the second launch. /1 (no token) is still accepted.
+constexpr const char* kInstanceTag = "bro-app-instance/2";
+constexpr const char* kInstanceTagV1 = "bro-app-instance/1";
 
 struct Launch {
     std::vector<std::string> argv;
     std::string cwd;
+    std::string activationToken;
 };
 
 // Main thread only: the desktop pump and setAppInstanceHandler both run there.
@@ -69,19 +75,26 @@ void deliver(Launch launch) {
         backlog().push_back(std::move(launch));
         return;
     }
+    // The handler raises the window (host_app's onInstance); a token handed
+    // over with the launch is what lets that raise take focus.
+    if (!launch.activationToken.empty())
+        platform::windowSystem().setActivationToken(launch.activationToken);
     // A copy: the handler may replace itself.
     AppInstanceHandler h = handler();
     h(launch.argv, launch.cwd);
 }
 
 void onWire(const std::vector<std::string>& msg) {
-    if (msg.size() < 2 || msg[0] != kInstanceTag) {
+    const bool v2 = msg.size() >= 3 && msg[0] == kInstanceTag;
+    const bool v1 = msg.size() >= 2 && msg[0] == kInstanceTagV1;
+    if (!v1 && !v2) {
         LOG_WARN("app: ignored a malformed single-instance message");
         return;
     }
     Launch l;
     l.cwd = msg[1];
-    l.argv.assign(msg.begin() + 2, msg.end());
+    if (v2) l.activationToken = msg[2];
+    l.argv.assign(msg.begin() + (v2 ? 3 : 2), msg.end());
     LOG_INFO("app: another launch handed off %zu argument(s) from %s", l.argv.size(), l.cwd.c_str());
     deliver(std::move(l));
 }
@@ -124,9 +137,10 @@ void setCurrentAppLogFile(const std::string& path) { info().logFile = path; }
 
 InstanceClaim claimSingleInstance(const EngineConfig& config) {
     std::vector<std::string> msg;
-    msg.reserve(config.appArgs.size() + 2);
+    msg.reserve(config.appArgs.size() + 3);
     msg.emplace_back(kInstanceTag);
     msg.push_back(config.launchCwd.empty() ? currentWorkingDirectory() : config.launchCwd);
+    msg.push_back(platform::launchActivationToken());
     msg.insert(msg.end(), config.appArgs.begin(), config.appArgs.end());
 
     const std::string channel = "app-" + (config.appId.empty() ? std::string("app") : config.appId);

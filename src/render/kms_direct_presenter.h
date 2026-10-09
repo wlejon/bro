@@ -197,6 +197,8 @@ private:
     std::unique_ptr<brodmabuf::GbmDevice> gbmDevice_;
     std::unique_ptr<brodmabuf::VulkanContext> dmabufVkCtx_;
     std::vector<KmsScanoutSlot> scanoutSlots_;
+    // directScanout's framebuffers, alive while they may be on screen.
+    std::vector<std::unique_ptr<brodmabuf::KmsFramebuffer>> directFbs_;
     VkDevice vkDevice_ = VK_NULL_HANDLE;
 #endif
 };

@@ -327,6 +327,12 @@ bool KmsDirectPresenter::directScanout(
 
     auto flipRes = presenter_->present(*fbRes.value(), inFenceFd, false);
     if (!flipRes) return false;
+    // The framebuffer must outlive its time on screen: removing one that a
+    // plane scans out disables the plane (and, on amdgpu, the CRTC), after
+    // which every commit without a modeset is refused. Kept until a
+    // composited flip has replaced it, the last few at most.
+    directFbs_.push_back(std::move(fbRes.value()));
+    if (directFbs_.size() > 3) directFbs_.erase(directFbs_.begin());
     directOnScreen_ = true;
     flipPending_ = true;
 
@@ -451,6 +457,7 @@ bool KmsDirectPresenter::presentComposited(
     lastTiming_.flipWaitMs = nowMs() - tFlip;
     composited_ = true;
     directOnScreen_ = false;
+    directFbs_.clear();  // the composited flip has landed: none is on screen
     if (frameTap_) frameTap_->completed(lastFlip_);
 
     if (outFenceFd) {

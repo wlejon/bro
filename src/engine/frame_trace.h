@@ -117,6 +117,33 @@ public:
     void setRefreshPeriodMs(double ms) { refreshMs_ = ms; }
     double refreshPeriodMs() const { return refreshMs_; }
 
+    /// A windowed frame's presentation, reported by the window system after
+    /// the fact (Wayland presentation-time): fills in that frame's vblank if
+    /// its record is still in the ring, and becomes the newest presentation.
+    void notePresentation(uint64_t frame, double vblankMs, uint64_t sequence, double refreshMs) {
+        if (refreshMs > 0.0) refreshMs_ = refreshMs;
+        if (vblankMs > lastPresentationMs_) lastPresentationMs_ = vblankMs;
+        auto fill = [&](FrameRecord& r) {
+            r.vblankMs = vblankMs;
+            r.vblankSeq = static_cast<uint32_t>(sequence);
+        };
+        if (cur_.frame == frame) {
+            fill(cur_);
+            return;
+        }
+        for (size_t back = 1; back <= 16 && back <= head_; ++back) {
+            FrameRecord& r = ring_[(head_ - back) % kCapacity];
+            if (r.frame == frame) {
+                fill(r);
+                return;
+            }
+            if (r.frame < frame) return;
+        }
+    }
+    /// When the newest reported presentation turned to light (CLOCK_MONOTONIC
+    /// ms); 0 when none was reported.
+    double lastPresentationMs() const { return lastPresentationMs_; }
+
     /// JSON: every record in the window, one object each, plus the marks.
     std::string toJson(double fromMs, double toMs) const;
     /// JSON: pacing over the window — presents, vblank gaps (in refresh
@@ -133,6 +160,7 @@ private:
     std::vector<FrameMark> marks_;
     size_t markHead_ = 0;
     double refreshMs_ = 0.0;
+    double lastPresentationMs_ = 0.0;
 };
 
 }  // namespace bro::engine

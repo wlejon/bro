@@ -23,4 +23,12 @@ SystemInfo& sdlSystemInfo();
 /// initializes (SdlRuntime).
 Gamepads& sdlGamepads();
 
+/// SDL's gamepad subsystem without its video subsystem, for a window system
+/// that is not SDL's (Wayland): SDL then only reads controllers. Idempotent;
+/// false when there is no controller backend (the app sees no gamepads).
+bool sdlStartGamepadsOnly();
+/// Dispatch the gamepad events SDL has queued to `loop`'s handlers (after
+/// sdlStartGamepadsOnly).
+void sdlPollGamepadEvents(EventLoop& loop);
+
 }  // namespace bro::platform

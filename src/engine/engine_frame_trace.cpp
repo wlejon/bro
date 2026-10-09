@@ -8,7 +8,9 @@
 #include "engine/control.h"
 #include "engine/frame_trace.h"
 #include "engine/layout_pipeline.h"
+#include "platform/window.h"
 #include "render/vulkan_presenter.h"
+#include "render/vulkan_swapchain.h"
 #include "util/log.h"
 #include "util/time.h"
 
@@ -32,6 +34,14 @@ namespace bro::engine {
 void Engine::traceFrameBegin(double frameStart) {
     ++frameNumber_;
     frameTrace_->begin(frameNumber_, frameStart);
+    // A window system that reports when frames reached the screen (Wayland
+    // presentation-time) fills in their vblanks after the fact, and is told
+    // which frame the coming present belongs to.
+    if (displayMode_ == DisplayMode::Windowed && window_) {
+        for (const platform::PresentedFrame& p : window_->takePresentedFrames())
+            if (p.presented) frameTrace_->notePresentation(p.tag, p.presentedMs, p.sequence, p.refreshMs);
+        if (vulkanSwapchain_) vulkanSwapchain_->setPresentTag(frameNumber_);
+    }
 #if BRO_WITH_DMABUF
     if (auto* kms = vulkanPresenter_ ? vulkanPresenter_->kmsDirectPresenter() : nullptr) {
         flipCountAtFrameStart_ = kms->lastFlip().count;

@@ -34,6 +34,9 @@
 # is run by the windowed `bro` in a real window on SDL's offscreen video driver,
 # checking what its swapchain presented (see run_one_test). They need `bro`
 # beside bro-headless; BRO_TEST_WINDOWED=0 leaves them out.
+# BRO_TEST_WINDOW_SYSTEM=wayland runs them on bro's own Wayland backend
+# instead, as clients of the compositor at $WAYLAND_DISPLAY (a desktop
+# session, or a nested headless one) — Linux only.
 #
 # Runs on the GPU path (headless's default) so the
 # tests exercise the same renderer, WebGL, and layer compositing that ship —
@@ -471,16 +474,25 @@ run_one_test() {
         APP="$(to_win_path "$SCRIPT_DIR/windowed/$NAME")"
         # bro writes its log to bro.log in the cwd: a scratch one, read back.
         RUN_CWD=$(mktemp -d "${TMPDIR:-/tmp}/bro_windowed.XXXXXX")
+        local WS_ENV=(SDL_VIDEODRIVER=offscreen)
+        if [[ "${BRO_TEST_WINDOW_SYSTEM:-sdl}" == "wayland" ]]; then
+            WS_ENV=(BRO_WINDOW_SYSTEM=wayland SDL_VIDEODRIVER=)
+        fi
         if [[ -n "$TIMEOUT_BIN" ]]; then
-            (cd "$RUN_CWD" && SDL_VIDEODRIVER=offscreen SDL_AUDIODRIVER=dummy BRO_CAPTURE_PRESENTS=1 \
+            (cd "$RUN_CWD" && env "${WS_ENV[@]}" SDL_AUDIODRIVER=dummy BRO_CAPTURE_PRESENTS=1 \
                 "$TIMEOUT_BIN" -k 10 "$TEST_TIMEOUT" "$BIN" --no-splash "$APP" >/dev/null 2>&1)
         else
-            (cd "$RUN_CWD" && SDL_VIDEODRIVER=offscreen SDL_AUDIODRIVER=dummy BRO_CAPTURE_PRESENTS=1 \
+            (cd "$RUN_CWD" && env "${WS_ENV[@]}" SDL_AUDIODRIVER=dummy BRO_CAPTURE_PRESENTS=1 \
                 "$BIN" --no-splash "$APP" >/dev/null 2>&1)
         fi
         STATUS=$?
         OUTPUT=$(cat "$RUN_CWD"/bro*.log 2>/dev/null)
         rm -rf "$RUN_CWD"
+        if [[ "${BRO_TEST_WINDOW_SYSTEM:-sdl}" == "wayland" && "$OUTPUT" != *"Window system: wayland"* ]]; then
+            echo "  FAIL  $REL  (did not run on the Wayland window system)"
+            echo "$OUTPUT" | grep -i "wayland" | head -5 | sed 's/^/        /'
+            return 1
+        fi
         if [[ "$OUTPUT" =~ Vulkan\ validation:\ ([0-9]+)\ error ]]; then
             echo "  FAIL  $REL  (${BASH_REMATCH[1]} Vulkan validation error(s))"
             echo "$OUTPUT" | grep -A2 "\[Vulkan .* ERROR\]" | head -24 | sed 's/^/        /'

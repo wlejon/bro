@@ -153,7 +153,10 @@ void WaylandCompositor::injectKey(uint32_t keycode, bool pressed) {
 #if BRO_HAVE_WAYLAND_SERVER
     if (backend_) {
         uint32_t t = static_cast<uint32_t>(util::currentTimeMs());
-        backend_->keyboard_key(t, keycode, pressed, {});
+        // The modifiers that follow the key come from the seat's keymap
+        // (brocompositor tracks them): with {} here clients never saw Shift,
+        // and typed "4" for "$".
+        backend_->keyboard_key(t, keycode, pressed);
     }
 #else
     (void)keycode; (void)pressed;
@@ -374,16 +377,30 @@ std::vector<ClientWindowInfo> WaylandCompositor::stack() const {
     return out;
 }
 
-void WaylandCompositor::releaseClientLayers(const std::vector<LeasedSurfaceFrame>& frames) {
+void WaylandCompositor::releaseClientLayers(const std::vector<LeasedSurfaceFrame>& frames,
+                                            const FramePresentation* shown) {
 #if BRO_HAVE_WAYLAND_SERVER
+    // With the flip that showed them, the clients hear when their frames
+    // turned to light (wp_presentation feedback, on the output it happened
+    // on); without one, only their frame callbacks, stamped now.
+    brocompositor::wl::PresentationTime t;
+    if (shown && backend_) {
+        const auto mons = backend_->monitors();
+        if (!mons.empty()) t.output = mons.front().id;
+        t.timestamp_ns = shown->timestampNs;
+        t.sequence = shown->sequence;
+        t.refresh_ns = shown->refreshNs;
+        t.flags = 0x1 | 0x2 | 0x4;  // vsync, hw clock, hw completion: a KMS flip event
+    }
     for (const auto& lf : frames) {
         if (lf.surface) {
-            lf.surface->presented_on(brocompositor::kNoMonitor, 0);
+            lf.surface->presented_with(t);
             lf.surface->release(lf.frame);
         }
     }
 #else
     (void)frames;
+    (void)shown;
 #endif
 }
 

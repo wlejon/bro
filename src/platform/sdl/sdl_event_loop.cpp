@@ -55,6 +55,36 @@ void fingerWindowCoords(const SDL_TouchFingerEvent& tf, float& outX, float& outY
     outY = tf.y * static_cast<float>(h);
 }
 
+// A gamepad event to the loop's handlers; false for any other event.
+bool dispatchGamepadEvent(const SDL_Event& event, EventLoop& loop) {
+    switch (event.type) {
+        case SDL_EVENT_GAMEPAD_ADDED:
+            if (loop.onGamepadAdded) loop.onGamepadAdded(event.gdevice.which);
+            return true;
+        case SDL_EVENT_GAMEPAD_REMOVED:
+            if (loop.onGamepadRemoved) loop.onGamepadRemoved(event.gdevice.which);
+            return true;
+        case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+        case SDL_EVENT_GAMEPAD_BUTTON_UP:
+            if (loop.onGamepadButton) {
+                loop.onGamepadButton(event.gbutton.which, static_cast<int>(event.gbutton.button),
+                                     event.gbutton.down);
+            }
+            return true;
+        case SDL_EVENT_GAMEPAD_AXIS_MOTION:
+            if (loop.onGamepadAxis) {
+                // Normalize Sint16 to float: sticks -1..1 (SDL min is
+                // -32768, so clamp), triggers land in 0..1 naturally.
+                float v = static_cast<float>(event.gaxis.value) / 32767.0f;
+                if (v < -1.0f) v = -1.0f;
+                loop.onGamepadAxis(event.gaxis.which, static_cast<int>(event.gaxis.axis), v);
+            }
+            return true;
+        default:
+            return false;
+    }
+}
+
 class SdlEventLoop final : public EventLoop {
 public:
     ~SdlEventLoop() override { setModalWindowEventHook(nullptr); }
@@ -232,31 +262,11 @@ void SdlEventLoop::pollEvents() {
                 break;
 
             case SDL_EVENT_GAMEPAD_ADDED:
-                if (onGamepadAdded) onGamepadAdded(event.gdevice.which);
-                break;
-
             case SDL_EVENT_GAMEPAD_REMOVED:
-                if (onGamepadRemoved) onGamepadRemoved(event.gdevice.which);
-                break;
-
             case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
             case SDL_EVENT_GAMEPAD_BUTTON_UP:
-                if (onGamepadButton) {
-                    onGamepadButton(event.gbutton.which,
-                                    static_cast<int>(event.gbutton.button),
-                                    event.gbutton.down);
-                }
-                break;
-
             case SDL_EVENT_GAMEPAD_AXIS_MOTION:
-                if (onGamepadAxis) {
-                    // Normalize Sint16 to float: sticks -1..1 (SDL min is
-                    // -32768, so clamp), triggers land in 0..1 naturally.
-                    float v = static_cast<float>(event.gaxis.value) / 32767.0f;
-                    if (v < -1.0f) v = -1.0f;
-                    onGamepadAxis(event.gaxis.which,
-                                  static_cast<int>(event.gaxis.axis), v);
-                }
+                dispatchGamepadEvent(event, *this);
                 break;
 
             case SDL_EVENT_FINGER_DOWN:
@@ -354,6 +364,26 @@ void SdlEventLoop::flushDropGroup() {
 
 std::unique_ptr<EventLoop> createSdlEventLoop() {
     return std::make_unique<SdlEventLoop>();
+}
+
+bool sdlStartGamepadsOnly() {
+    static int state = 0;  // 0 untried, 1 running, -1 unavailable
+    if (state == 0) {
+        // The click-through hint is SdlRuntime's business; nothing here
+        // touches video, so SDL never opens a window-system connection.
+        if (SDL_InitSubSystem(SDL_INIT_GAMEPAD)) {
+            state = 1;
+        } else {
+            LOG_INFO("SDL gamepad subsystem unavailable: %s", SDL_GetError());
+            state = -1;
+        }
+    }
+    return state == 1;
+}
+
+void sdlPollGamepadEvents(EventLoop& loop) {
+    SDL_Event event;
+    while (SDL_PollEvent(&event)) dispatchGamepadEvent(event, loop);
 }
 
 } // namespace bro::platform

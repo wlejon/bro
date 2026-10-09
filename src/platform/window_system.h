@@ -49,6 +49,11 @@ public:
     /// once the backend has made a window.
     virtual std::vector<std::string> vulkanInstanceExtensions() = 0;
 
+    /// An activation token another process handed over (xdg-activation: the
+    /// launch that found this app already running). The next Window::raise
+    /// spends it; a backend without activation tokens ignores it.
+    virtual void setActivationToken(const std::string& token) { (void)token; }
+
     virtual Displays& displays() = 0;
     virtual Keyboard& keyboard() = 0;
     virtual Clipboard& clipboard() = 0;
@@ -58,13 +63,27 @@ public:
 };
 
 enum class WindowSystemKind {
-    Sdl,  // SDL3: desktop windows on Windows, macOS, X11 and Wayland (the default)
-    Drm,  // bro owns the screen through KMS and the input devices through libinput
+    Sdl,      // SDL3: desktop windows on Windows, macOS, X11 and Wayland (the default)
+    Drm,      // bro owns the screen through KMS and the input devices through libinput
+    Wayland,  // a Wayland client of its own (browl), Linux only
 };
 
 /// Choose the process's windowing system. Call before the first window or
-/// service use; the default is Sdl.
-void selectWindowSystem(WindowSystemKind kind);
+/// service use; the default is Sdl. Selecting Wayland connects to the
+/// compositor; when that fails (or the build has no Wayland backend) SDL is
+/// selected instead and false is returned.
+bool selectWindowSystem(WindowSystemKind kind);
+
+/// Choose the window system for desktop windows: on Linux the Wayland
+/// backend when $WAYLAND_DISPLAY is set and the compositor offers what it
+/// needs, else SDL. $BRO_WINDOW_SYSTEM=wayland|sdl forces one.
+void selectDesktopWindowSystem();
+
+/// The activation token this process was launched with ($XDG_ACTIVATION_TOKEN;
+/// read once and removed from the environment, so children do not inherit
+/// it); "" when there was none. A single-instance hand-off forwards it to the
+/// running instance; otherwise the first window spends it as it maps.
+const std::string& launchActivationToken();
 
 /// The active windowing system.
 WindowSystem& windowSystem();

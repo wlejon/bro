@@ -11,7 +11,7 @@ leak: an `#include <SDL3/...>` outside `src/platform/` fails to compile (see
 
 | Header | What |
 |--------|------|
-| `window_system.h` | `WindowSystem`, the backend: creates windows and the event loop, pumps events, lists the Vulkan instance extensions a surface needs, and owns the services below. `selectWindowSystem(Sdl\|Drm)` picks one before the first window. `windowSystem()` returns the active one and defaults to SDL. |
+| `window_system.h` | `WindowSystem`, the backend: creates windows and the event loop, pumps events, lists the Vulkan instance extensions a surface needs, and owns the services below. `selectWindowSystem(Sdl\|Drm\|Wayland)` picks one before the first window; `selectDesktopWindowSystem()` applies the desktop policy (Wayland on a Wayland session, else SDL). `windowSystem()` returns the active one and defaults to SDL. |
 | `window.h` | `Window` (size and position, style, state, displays, icon, `createVulkanSurface`, `presentPixels` for software frames, `nativeHandle()`), plus `WindowConfig` and `createWindow()`. Each window owns its `TextInput` (IME on/off, candidate area) and `Cursor` (shape, relative mode, warp). |
 | `event_loop.h` | `EventLoop`: polls the backend and calls bro's handlers (`onKeyDown`, `onMouseMove`, `onResize`, ...) with bro's own types. Every event carries a window id. `setModalWindowEventHook` keeps timers alive while an OS modal loop (a Win32 live resize) owns the thread. |
 | `keys.h` | The **one** key model: `Scancode` (a physical key, USB HID usage), `Keycode` (a code point, or `kScancodeMask \| scancode` for keys without one), `KeyMods`, named in `sc::`, `kc::` and `kmod::`. `defaultKeyFromScancode` / `defaultScancodeFromKey` give the US layout. |
@@ -45,6 +45,44 @@ xkbcommon keysyms to it, and a Win32 backend maps VK/scan codes.
   clipboard belongs to the process, and there are no native dialogs and no
   desktop display list (the engine reads KMS outputs through `drm_seat`).
   `--drm` never starts SDL video.
+
+- **Wayland** (`wayland/`, Linux): bro as a Wayland client of its own, with
+  the protocol code in [browl](https://github.com/wlejon/browl) and only the
+  adapter here. The engine's windowed mode calls `selectDesktopWindowSystem()`,
+  which picks it when `$WAYLAND_DISPLAY` is set and the compositor offers
+  xdg-shell and xdg-decoration (without the latter a window would need
+  client-side decorations, which SDL draws through libdecor and this backend
+  does not), and falls back to SDL otherwise. `BRO_WINDOW_SYSTEM=wayland|sdl`
+  forces either. What it does that SDL's Wayland backend did not:
+  - **Scale**: the surface's preferred scale (fractional scale, else the
+    preferred buffer scale) is the window's pixel density, and wp_viewporter
+    shows the drawable at the logical size, so the engine renders at 1.5x on
+    a 150% output instead of being upscaled.
+  - **Presentation time**: the swapchain's present asks wp_presentation when
+    the commit turned to light (`Window::beforePresent` /
+    `takePresentedFrames`). The frame recorder gets real vblank stamps for
+    windowed apps, and the engine's animation clock advances to the expected
+    vblank rather than to the frame start.
+  - **Activation**: the first window spends `$XDG_ACTIVATION_TOKEN`, and a
+    single-instance hand-off forwards the second launch's token to the
+    running instance (`WindowSystem::setActivationToken`), which raises with
+    it; without one it asks xdg-activation for a token of its own.
+  - **Input**: text-input-v3 for IME composition, cursor-shape-v1 (else the
+    XCursor theme), pointer constraints + relative pointer for pointer lock,
+    the data device and primary selection, drops of files and text, touch.
+    Key repeat and the left/right modifier bits are generated here as SDL
+    does, and key events carry the same Keycodes SDL3 reports with its default
+    keycode options (`wayland_keys.cpp`).
+  - Gamepads, power, URL opening and native dialogs stay SDL's, used as a
+    library with no video. The light/dark theme is the desktop portal's
+    `color-scheme` (where SDL read it), polled on a thread.
+  - A window the compositor hides (minimized, another workspace) is
+    "suspended", which reads as minimized: the page is hidden and the
+    swapchain stops presenting, where a FIFO present would block until the
+    window is shown again (and with it timers and a single-instance raise).
+  - What Wayland does not let a client do is not emulated: windows are not
+    placed (`setPosition` is a no-op, positions read 0,0), opacity and
+    always-on-top only read back, and the work area is the whole output.
 
 Headless uses the SDL backend with a hidden window, as before.
 

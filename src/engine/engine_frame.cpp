@@ -286,10 +286,23 @@ void Engine::run() {
         }
         double frameStart = util::currentTimeMs();
 
+        // Where the window system reports presentation (Wayland), the clock
+        // advances to the vblank this frame is expected on, as under DRM:
+        // frame starts wander within the refresh period, the screen does not.
+        // Elsewhere the frame start is the best guess there is.
+        double clockAt = frameStart;
+        {
+            const double last = frameTrace_->lastPresentationMs();
+            const double period = frameTrace_->refreshPeriodMs();
+            if (last > 0.0 && period > 0.0 && frameStart - last < 1000.0) {
+                clockAt = last + period;
+                while (clockAt < frameStart + 1.0) clockAt += period;
+            }
+        }
         double wallFrameDtMs = 0.0;
-        if (lastWallTickMs_ > 0.0 && frameStart > lastWallTickMs_)
-            wallFrameDtMs = frameStart - lastWallTickMs_;
-        lastWallTickMs_ = frameStart;
+        if (lastWallTickMs_ > 0.0 && clockAt > lastWallTickMs_)
+            wallFrameDtMs = clockAt - lastWallTickMs_;
+        lastWallTickMs_ = std::max(lastWallTickMs_, clockAt);
         const double scaledFrameDtMs = wallFrameDtMs * effectiveTimeScale();
         engineNowMs_ += scaledFrameDtMs;
         traceFrameBegin(frameStart);

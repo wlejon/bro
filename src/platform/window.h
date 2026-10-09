@@ -106,6 +106,17 @@ struct NativeHandle {
     void* cocoaWindow = nullptr;     // NSWindow*
 };
 
+/// When a frame a window presented reached the screen, as the window system
+/// reported it back (Wayland presentation-time). Times are CLOCK_MONOTONIC
+/// milliseconds, the clock util::currentTimeMs reads.
+struct PresentedFrame {
+    uint64_t tag = 0;          // what Window::beforePresent was given
+    bool presented = false;    // false: the frame was never shown (discarded)
+    double presentedMs = 0.0;  // when it turned to light
+    double refreshMs = 0.0;    // the output's refresh period; 0 unknown
+    uint64_t sequence = 0;     // the output's vblank counter; 0 unknown
+};
+
 /// Text entry for one window: turns key presses into committed text
 /// (EventLoop::onTextInput) and IME composition (onTextEditing). Off until
 /// started; the engine starts it while an editable element has focus.
@@ -157,6 +168,15 @@ public:
     /// Record the vsync preference; the engine applies it to the swapchain.
     virtual void setVSync(bool enabled) = 0;
     virtual bool vsyncPreference() const = 0;
+    /// Called right before each present of this window's surface, with a tag
+    /// naming the frame. A window system that can say when a frame reached
+    /// the screen asks to be told, and answers through takePresentedFrames.
+    virtual void beforePresent(uint64_t tag) { (void)tag; }
+    /// The presented (or discarded) frames reported since the last call,
+    /// oldest first. Always empty where the window system cannot tell.
+    virtual std::vector<PresentedFrame> takePresentedFrames() { return {}; }
+    /// Whether takePresentedFrames ever reports anything for this window.
+    virtual bool reportsPresentation() const { return false; }
 
     // --- Geometry ---
 

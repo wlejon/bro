@@ -62,6 +62,21 @@ if(BRO_WITH_SEAT)
 endif()
 target_compile_definitions(bro_platform PUBLIC BRO_HAVE_LIBINPUT=${_bro_have_libinput})
 
+# The Wayland window system (wayland/): a Wayland client of its own through
+# browl, picked over SDL's Wayland backend when $WAYLAND_DISPLAY is set
+# (selectDesktopWindowSystem). Linux with browl only; elsewhere
+# waylandWindowSystem() reports it absent.
+set(_bro_have_wayland 0)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND BRO_WITH_WL AND TARGET browl)
+    target_sources(bro_platform PRIVATE
+        wayland/wayland_window_system.cpp wayland/wayland_window.cpp
+        wayland/wayland_event_loop.cpp wayland/wayland_keys.cpp wayland/portal_theme.cpp)
+    # Vulkan::Vulkan for vkGetInstanceProcAddr (vkCreateWaylandSurfaceKHR).
+    target_link_libraries(bro_platform PRIVATE browl Vulkan::Vulkan)
+    set(_bro_have_wayland 1)
+endif()
+target_compile_definitions(bro_platform PRIVATE BRO_HAVE_WAYLAND_BACKEND=${_bro_have_wayland})
+
 if(BRO_BUILD_TESTS AND BRO_WITH_SEAT AND BRO_WITH_DMABUF)
     add_executable(bro_drm_screen_test tests/test_drm_screen.cpp)
     target_link_libraries(bro_drm_screen_test PRIVATE

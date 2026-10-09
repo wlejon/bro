@@ -249,11 +249,14 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, int offsetY) {
                 ++s_dmabufFrameCounter;
                 auto* buf = vulkanPresenter_->dmabufImporter()->getOrImport(src, s_dmabufFrameCounter);
                 if (!buf || buf->image == VK_NULL_HANDLE) return;
-                if (vulkanPresenter_->kmsDirectPresenter() &&
-                    vulkanPresenter_->kmsDirectPresenter()->canDirectScanout(src, quad, vulkanPresenter_->width(), vulkanPresenter_->height())) {
-                    vulkanPresenter_->kmsDirectPresenter()->directScanout(src);
-                    return;
-                }
+                // No direct scanout here: this frame goes on to present its
+                // composite, whose flip would replace (or, while the direct
+                // flip is pending, be refused behind) the client's buffer, and
+                // the client gets its buffer back before it has left the
+                // screen. A fullscreen client that covers the CRTC is
+                // composited like any other until a frame can be presented as
+                // the client's buffer alone. (Flipping to it here turned the
+                // CRTC off on amdgpu and froze the display.)
                 place(buf->image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, buf->width, buf->height, at.dst(quad), &quad).view = buf->view;
 #else
                 (void)src;
@@ -301,7 +304,23 @@ void Engine::compositeRemainingClientWindows() {
 void Engine::releaseClientWindowFrames() {
 #if BRO_WITH_COMPOSITOR
     if (!drmCtx_ || !drmCtx_->compositor || drmCtx_->leasedFrames.empty()) return;
-    drmCtx_->compositor->releaseClientLayers(drmCtx_->leasedFrames);
+    // A composited present returns once its flip has landed: that flip is
+    // when these client frames reached the screen. (A direct scanout's flip
+    // lands later; its clients get frame callbacks only.)
+    compositor::WaylandCompositor::FramePresentation shown;
+    bool flipped = false;
+#if BRO_WITH_DMABUF
+    if (auto* kms = vulkanPresenter_ ? vulkanPresenter_->kmsDirectPresenter() : nullptr) {
+        const auto& flip = kms->lastFlip();
+        if (flip.count != flipCountAtFrameStart_ && flip.vblankMs > 0.0) {
+            shown.timestampNs = static_cast<int64_t>(flip.vblankMs * 1e6);
+            shown.sequence = flip.sequence;
+            shown.refreshNs = static_cast<uint32_t>(kms->refreshPeriodMs() * 1e6);
+            flipped = true;
+        }
+    }
+#endif
+    drmCtx_->compositor->releaseClientLayers(drmCtx_->leasedFrames, flipped ? &shown : nullptr);
     drmCtx_->leasedFrames.clear();
 #endif
 }

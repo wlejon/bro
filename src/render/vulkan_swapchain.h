@@ -69,6 +69,9 @@ public:
     /// Present `imageIndex`. `ticket` is the queue ticket of the submission that
     /// waited on acquireSemaphore() and signalled presentSemaphore(imageIndex).
     SwapchainResult present(uint32_t imageIndex, uint64_t ticket);
+    /// The tag the next present hands Window::beforePresent (the engine's
+    /// frame number), for matching presentation reports to frames.
+    void setPresentTag(uint64_t tag) { presentTag_ = tag; }
 
     VkSurfaceKHR surface() const { return surface_; }
     VkSwapchainKHR swapchain() const { return swapchain_; }
@@ -105,6 +108,7 @@ private:
     bool wantVsync_ = true;
     bool vsync_ = true;          // the mode the current swapchain was made with
     bool needsRecreate_ = false;
+    uint64_t presentTag_ = 0;
 
     VkSurfaceKHR surface_ = VK_NULL_HANDLE;
     VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;

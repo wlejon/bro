@@ -356,6 +356,9 @@ SwapchainResult VulkanSwapchain::present(uint32_t imageIndex, uint64_t ticket) {
     presentInfo.pSwapchains = &swapchain_;
     presentInfo.pImageIndices = &imageIndex;
 
+    // A window system that reports presentation (Wayland presentation-time)
+    // asks about the commit this present makes.
+    if (window_) window_->beforePresent(presentTag_);
     VkResult result = context_.queue().present(presentInfo);
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
         needsRecreate_ = true;

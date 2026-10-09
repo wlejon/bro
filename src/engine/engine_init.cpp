@@ -143,6 +143,9 @@ void Engine::construct(const EngineConfig& config) {
     // no SDL video. Chosen before anything asks the platform layer a question.
     if (displayMode_ == DisplayMode::Drm)
         platform::selectWindowSystem(platform::WindowSystemKind::Drm);
+    // A desktop window: Wayland on a Wayland session, else SDL.
+    else if (displayMode_ == DisplayMode::Windowed)
+        platform::selectDesktopWindowSystem();
 
     // Before the raster thread exists: it reads the pointer.
     terminalLayers_ = std::make_shared<TerminalLayers>();
