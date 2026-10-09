@@ -333,5 +333,11 @@ function(bro_dependency name)
         set(${key} "${value}" CACHE ${type} "" FORCE)
     endforeach()
     set_property(GLOBAL PROPERTY ${P}_added TRUE)
+    # Offline, a dependency's own FetchContent (osqp's git qdldl) must not try
+    # to update either; this scope is the one its subdirectory inherits.
+    get_property(offline GLOBAL PROPERTY _bro_deps_offline_warned)
+    if(offline OR BRO_DEPS_OFFLINE)
+        set(FETCHCONTENT_UPDATES_DISCONNECTED ON)
+    endif()
     add_subdirectory("${src}" "${FETCHCONTENT_BASE_DIR}/${lc}-build" EXCLUDE_FROM_ALL)
 endfunction()
