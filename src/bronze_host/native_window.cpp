@@ -6,6 +6,7 @@
 #include "bronze_host/host_runtime.h"
 #include "bronze_host/host_natives.h"
 #include "engine/engine.h"
+#include "engine/app_runtime.h"
 #include "bronze_host/native_window.h"
 #include "natives/window/native_window_decl.h"
 #include "platform/desktop_platform.h"
@@ -515,25 +516,17 @@ bool bro_window_simulateGlobalHotkey(const char* accelerator) {
 }
 
 bool bro_window_requestSingleInstance(const char* name, const char* argsJson) {
+    // An app whose manifest declares `"singleInstance": true` already holds
+    // its channel (engine/app_runtime.h); the hand-offs it receives reach this
+    // API's onInstance as well (host_app.cpp), so there is nothing to claim.
+    if (engine::currentApp().singleInstance) return true;
     std::string n = (name && *name) ? name : "bro_app";
-    std::vector<std::string> currentArgs;
-    if (argsJson && *argsJson) {
-        currentArgs.push_back(argsJson);
-    }
+    // The arguments cross as the one JSON array the wrapper serialised, and
+    // are handed to onInstance as that same array.
+    std::vector<std::string> currentArgs{(argsJson && *argsJson) ? argsJson : "[]"};
     return platform::desktop::requestSingleInstance(n, currentArgs, [](const std::vector<std::string>& args) {
         if (g_singleInstanceDispatcher) {
-            std::string json = "[";
-            for (size_t i = 0; i < args.size(); ++i) {
-                if (i > 0) json += ",";
-                json += "\"";
-                for (char c : args[i]) {
-                    if (c == '"') json += "\\\"";
-                    else if (c == '\\') json += "\\\\";
-                    else json += c;
-                }
-                json += "\"";
-            }
-            json += "]";
+            const std::string json = args.empty() ? std::string("[]") : args[0];
             ev::Persistent arg(ev::fromUtf8(json));
             Value argv[1] = {arg.get()};
             ev::call(g_singleInstanceDispatcher->get(), ev::undefined(), argv);

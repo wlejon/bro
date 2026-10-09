@@ -1,1 +1,2 @@
-{ "title": "remote host test", "width": 320, "height": 240, "resizable": false, "splash": false }
+{ "title": "remote host test", "width": 320, "height": 240, "resizable": false, "splash": false,
+  "permissions": ["remote"] }

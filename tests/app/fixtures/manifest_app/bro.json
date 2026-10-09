@@ -1,0 +1,21 @@
+{
+    "id": "org.bro.test.ManifestApp",
+    "name": "Manifest App",
+    "version": "1.2.3",
+    "description": "The app tests/app reads its own manifest from",
+    "icon": "icon.svg",
+    "title": "Manifest App",
+    "width": 640,
+    "height": 480,
+    "categories": ["Utility", "Development"],
+    "keywords": ["test", "manifest"],
+    "singleInstance": true,
+    "fileTypes": [
+        { "name": "Plain text", "mimeTypes": ["text/plain"], "extensions": [".txt", "text"] }
+    ],
+    "actions": [
+        { "id": "new-window", "name": "New Window", "args": ["--new-window"] },
+        { "id": "bad id", "name": "Skipped" }
+    ],
+    "permissions": ["remote", "compositor"]
+}

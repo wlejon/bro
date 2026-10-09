@@ -1,4 +1,5 @@
 #include "engine/engine.h"
+#include "engine/app_runtime.h"
 #include "engine/control.h"
 #include "engine/frame_trace.h"
 #include "engine/frame_presenter.h"
@@ -89,6 +90,7 @@ platform::WindowConfig primaryWindowConfig(const EngineConfig& config, const Gra
     wc.borderless = config.graphics.borderless;
     wc.backend = backend;
     wc.fitToWorkArea = true;
+    wc.appId = config.appId;
     return wc;
 }
 
@@ -132,7 +134,9 @@ Engine::Engine(const EngineConfig& config)
     installHostBindings_ = config.installHostBindings;
     installWorkerHostBindings_ = config.installWorkerHostBindings;
     initDevLoopConfig(config);
-    desktopTrust_ = evaluateDesktopTrust(config.appDir, config.isShellApp, config.privilegedNamespaces);
+    desktopTrust_ = evaluateDesktopTrust(config.appDir, config.appId.empty() ? appIdFor(config.manifest, config.appDir)
+                                                                             : config.appId,
+                                         config.isShellApp, config.privilegedNamespaces);
     // JS runs on bronze's tiered default; BRO_JIT_TIER pins a tier to debug one.
     bronze_host::applyJitTierOverride();
     // CSS animations are Web Animations records (css_transitions.h).
@@ -635,6 +639,7 @@ void Engine::dispatchDocumentReadyEvents() {
         bro::dom::Event loadWin("load", /*bubbles=*/false, /*cancelable=*/false);
         dispatchWindowEvent(loadWin);
     }
+    noteDocumentLoaded();  // the next presented frame is the page's first
 
     mediaEventsArmed_ = true;
 }

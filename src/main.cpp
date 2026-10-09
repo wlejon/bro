@@ -1,6 +1,7 @@
 #include "engine/engine.h"
 #include "engine/config_loader.h"
 #include "engine/launcher.h"
+#include "engine/app_runtime.h"
 #include "util/exe_dir.h"
 #include "util/interrupt.h"
 #include "util/log.h"
@@ -13,6 +14,7 @@
 #include "broaudio/log.h"
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -20,6 +22,7 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include <shellapi.h>
 #include <cstdio>
 #include <io.h>
 #include <fcntl.h>
@@ -48,7 +51,17 @@
 //
 // One file descriptor is dup'd to both stderr and stdout so the two streams
 // share a kernel write position and don't fight over file size.
-static void redirectLogToFile() {
+// `logPath` is the file to take ("bro.log" in the working directory, or an
+// app's own log), `fallbackStem` + "-<pid>.log" beside it the one to use when
+// another process already writes there. Returns the path actually opened, ""
+// when neither could be.
+static std::string redirectLogToFile(const std::string& logPath = "bro.log",
+                                     const std::string& fallbackStem = "bro") {
+    std::string opened;
+    const std::string dir = [&] {
+        size_t i = logPath.find_last_of("/\\");
+        return i == std::string::npos ? std::string() : logPath.substr(0, i + 1);
+    }();
 #ifdef _WIN32
     // bro.exe is /SUBSYSTEM:WINDOWS; when launched from a non-console parent
     // (PowerShell Start-Process, the launcher's CreateProcess, double-click,
@@ -62,12 +75,20 @@ static void redirectLogToFile() {
     // _SH_DENYWR: refuse the open if another writer already has the file.
     // Falls back to bro-<pid>.log on contention so launcher children don't
     // clobber the launcher's log.
-    int fd = _sopen("bro.log", _O_WRONLY | _O_CREAT | _O_TRUNC, _SH_DENYWR, _S_IREAD | _S_IWRITE);
+    // The path is UTF-8 (an app's log dir holds the user's name): open it
+    // through the wide API.
+    auto openExclusive = [](const std::string& path) -> int {
+        int wlen = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, nullptr, 0);
+        std::wstring w(size_t(wlen > 0 ? wlen : 1), L'\0');
+        MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, w.data(), wlen);
+        return _wsopen(w.c_str(), _O_WRONLY | _O_CREAT | _O_TRUNC, _SH_DENYWR, _S_IREAD | _S_IWRITE);
+    };
+    int fd = openExclusive(logPath);
+    opened = logPath;
     if (fd < 0) {
-        char fallback[64];
-        std::snprintf(fallback, sizeof(fallback), "bro-%lu.log", static_cast<unsigned long>(_getpid()));
-        fd = _sopen(fallback, _O_WRONLY | _O_CREAT | _O_TRUNC, _SH_DENYWR, _S_IREAD | _S_IWRITE);
-        if (fd < 0) return;
+        opened = dir + fallbackStem + "-" + std::to_string(static_cast<unsigned long>(_getpid())) + ".log";
+        fd = openExclusive(opened);
+        if (fd < 0) return {};
     }
     _dup2(fd, _fileno(stderr));
     _dup2(fd, _fileno(stdout));
@@ -96,12 +117,12 @@ static void redirectLogToFile() {
         }
         return fd;
     };
-    int fd = openLocked("bro.log");
+    int fd = openLocked(logPath.c_str());
+    opened = logPath;
     if (fd < 0) {
-        char fallback[64];
-        std::snprintf(fallback, sizeof(fallback), "bro-%ld.log", static_cast<long>(getpid()));
-        fd = openLocked(fallback);
-        if (fd < 0) return;
+        opened = dir + fallbackStem + "-" + std::to_string(static_cast<long>(getpid())) + ".log";
+        fd = openLocked(opened.c_str());
+        if (fd < 0) return {};
     }
     dup2(fd, fileno(stderr));
     dup2(fd, fileno(stdout));
@@ -109,16 +130,23 @@ static void redirectLogToFile() {
 #endif
     setvbuf(stderr, nullptr, _IONBF, 0);
     setvbuf(stdout, nullptr, _IONBF, 0);
+    return opened;
 }
 
 static void printUsage() {
     fprintf(stderr,
         "bro -- lightweight HTML/CSS/JS app runtime\n"
         "\n"
-        "Usage: bro <app-directory>\n"
+        "Usage: bro [flags] <app-directory | app-id> [app arguments...]\n"
+        "       bro --install <app-directory> [--link] [--system] [--exec <bro>]\n"
+        "       bro --uninstall <app-id> [--system]\n"
+        "       bro --list-apps\n"
+        "       bro --desktop-entry <app-directory>\n"
         "\n"
         "Loads index.html from the given directory and runs it in a\n"
-        "GPU-accelerated window (Skia + Vulkan via SDL3).\n"
+        "GPU-accelerated window (Skia + Vulkan via SDL3). Everything after the\n"
+        "directory is the app's (bro.app.argv), apart from the flags below\n"
+        "before a `--`. An installed app can be named by its id. See docs/apps.md.\n"
         "\n"
         "Alternatively, place a bro.json config file or index.html\n"
         "next to the executable to run without arguments.\n"
@@ -134,6 +162,8 @@ static void printUsage() {
         "  --no-gpu                Run without Vulkan: CPU-rendered frames shown in a\n"
         "                          software window (no 3D scenes or WebGL).\n"
         "  --drm                   Run bare-metal on Linux DRM/KMS display with seat & libinput.\n"
+        "  --new-instance          Start a new instance of a single-instance app instead of\n"
+        "                          handing the arguments to the running one.\n"
         "\n"
         "Additional bro.json options:\n"
         "  vsync (bool), resizable (bool), maxFps (number),\n"
@@ -147,8 +177,149 @@ static void printUsage() {
         "See also: bro-headless for scripted/headless mode.\n");
 }
 
+// The command line after the program name, as UTF-8. On Windows main()'s argv
+// is in the ANSI code page, which cannot carry a path or an argument in
+// another script; the wide command line can.
+static std::vector<std::string> utf8Args(int argc, char* argv[]) {
+    std::vector<std::string> out;
+#ifdef _WIN32
+    int n = 0;
+    LPWSTR* w = CommandLineToArgvW(GetCommandLineW(), &n);
+    if (w) {
+        for (int i = 1; i < n; ++i) {
+            int len = WideCharToMultiByte(CP_UTF8, 0, w[i], -1, nullptr, 0, nullptr, nullptr);
+            std::string s(size_t(len > 0 ? len - 1 : 0), '\0');
+            WideCharToMultiByte(CP_UTF8, 0, w[i], -1, s.data(), len, nullptr, nullptr);
+            out.push_back(std::move(s));
+        }
+        LocalFree(w);
+        return out;
+    }
+#endif
+    for (int i = 1; i < argc; ++i) out.emplace_back(argv[i]);
+    return out;
+}
+
+// --help from a console: bro.exe is a GUI-subsystem program, so borrow the
+// parent console for the text.
+static void attachParentConsole() {
+#ifdef _WIN32
+    auto redirected = [](DWORD which) {
+        HANDLE h = GetStdHandle(which);
+        if (!h || h == INVALID_HANDLE_VALUE) return false;
+        DWORD t = GetFileType(h);
+        return t == FILE_TYPE_DISK || t == FILE_TYPE_PIPE;
+    };
+    bool out = redirected(STD_OUTPUT_HANDLE), err = redirected(STD_ERROR_HANDLE);
+    if ((!out || !err) && AttachConsole(ATTACH_PARENT_PROCESS)) {
+        FILE* f = nullptr;
+        if (!out) freopen_s(&f, "CONOUT$", "w", stdout);
+        if (!err) freopen_s(&f, "CONOUT$", "w", stderr);
+    }
+#endif
+}
+
 int main(int argc, char* argv[]) {
-    redirectLogToFile();
+    const std::vector<std::string> args = utf8Args(argc, argv);
+
+    // App management (`bro --install <dir>`, docs/apps.md) prints and exits,
+    // and never starts an engine.
+    if (int status = bro::engine::runAppCommand(args); status >= 0) return status;
+
+    if (!args.empty() && (args[0] == "--help" || args[0] == "-h")) {
+        attachParentConsole();
+        printUsage();
+        return 0;
+    }
+
+    // The command line: bro's own flags, the launch target, then the app's
+    // arguments (bro.app.argv). bro's flags are taken from anywhere before a
+    // `--`; everything else after the target is the app's, verbatim, `--`
+    // included.
+    bool cliNoSplash = false;
+    bool cliSplash   = false;
+    bool cliNoGpu    = false;
+    bool cliDrm      = false;
+    bool cliNewInstance = false;
+    std::string target;
+    bool haveTarget = false;
+    std::vector<std::string> appArgs;
+    bool dashDash = false;
+    for (const std::string& a : args) {
+        if (!dashDash) {
+            if (a == "--no-splash")    { cliNoSplash = true; continue; }
+            if (a == "--splash")       { cliSplash = true; continue; }
+            if (a == "--no-gpu")       { cliNoGpu = true; continue; }
+            if (a == "--drm")          { cliDrm = true; continue; }
+            if (a == "--new-instance") { cliNewInstance = true; continue; }
+        }
+        if (!haveTarget) { target = a; haveTarget = true; continue; }
+        if (a == "--") dashDash = true;
+        appArgs.push_back(a);
+    }
+
+    bro::engine::EngineConfig config;
+    // Settings persist next to the executable (or, in a macOS bundle, in the
+    // user data dir); an app with an id of its own keeps them in its config
+    // directory, below.
+    config.settingsPath = bro::util::defaultSettingsPath();
+
+    // Resolve launch target → projectRoot + appDir. The target may be an app
+    // directory, a project directory, a bro.json of either kind, or an
+    // installed app's id; with no argument the executable's own directory is
+    // probed. Shared with bro-headless, bro-server and any host application
+    // that links bro_engine — see engine/launcher.h.
+    if (!bro::engine::resolveLaunchTarget(target, config)) {
+        redirectLogToFile();
+        printUsage();
+        return 1;
+    }
+    config.appArgs = std::move(appArgs);
+    config.launchCwd = bro::engine::currentWorkingDirectory();
+
+    // CLI overrides — applied last so they win over bro.json.
+    if (cliNoSplash) config.showSplash = false;
+    if (cliSplash)   config.showSplash = true;
+    if (cliNoGpu)    config.graphics.useGPU = false;
+    if (cliDrm)      config.displayMode = bro::engine::DisplayMode::Drm;
+
+    // Absolutise and publish BRO_EXE_DIR / BRO_APP_DIR / BRO_PROJECT_ROOT so
+    // JS and spawned children can locate themselves without guessing from cwd,
+    // and settle the app's id (bro.app, BRO_APP_ID).
+    bro::engine::publishLaunchEnv(config);
+    const bool appHasId = !config.manifest.id.empty();
+
+    // A single-instance app (`"singleInstance": true`): a launch while one is
+    // running hands its argv and working directory over and exits, before
+    // any window, GPU or script work, so it costs a launcher next to nothing.
+    // A DRM shell host is the session, never a second launch of something.
+    if (config.manifest.singleInstance && !cliNewInstance &&
+        config.displayMode != bro::engine::DisplayMode::Drm) {
+        if (bro::engine::claimSingleInstance(config) == bro::engine::InstanceClaim::HandedOff) return 0;
+    }
+
+    // Logs: an app with an id writes its own log in its state directory
+    // (bro.app.logFile); an anonymous app writes bro.log in the working
+    // directory, as bro always has.
+    {
+        std::string logFile;
+        if (appHasId) {
+            const auto& dirs = bro::engine::currentApp().dirs;
+            std::error_code ec;
+            std::filesystem::create_directories(std::filesystem::path(std::u8string(
+                dirs.logDir.begin(), dirs.logDir.end())), ec);
+            logFile = redirectLogToFile(dirs.logFile, config.appId);
+            if (logFile.empty()) logFile = redirectLogToFile();
+            // The app's window and engine settings live with its config.
+            std::filesystem::create_directories(std::filesystem::path(std::u8string(
+                dirs.config.begin(), dirs.config.end())), ec);
+            config.settingsPath = dirs.config + "/bro_settings.json";
+        } else {
+            logFile = redirectLogToFile();
+        }
+        if (!logFile.empty()) logFile = bro::engine::absolutePath(logFile);
+        bro::engine::setCurrentAppLogFile(logFile);
+    }
 
 #if defined(_WIN32) && defined(_DEBUG)
     // Route the Debug CRT's assert()/error report dialogs ("Debug Error!
@@ -165,11 +336,6 @@ int main(int argc, char* argv[]) {
     _CrtSetReportFile(_CRT_ERROR, _CRTDBG_FILE_STDERR);
 #endif
 
-    if (argc >= 2 && (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0)) {
-        printUsage();
-        return 0;
-    }
-
     bro::util::installSignalHandler();
 
     // Route broaudio's diagnostics through our logger so they land in bro.log
@@ -182,45 +348,6 @@ int main(int argc, char* argv[]) {
         }
     });
 
-    bro::engine::EngineConfig config;
-
-    // CLI flags parsed up-front (so bro.json values can still override on
-    // purpose, and --no-splash wins as a final override applied after).
-    bool cliNoSplash = false;
-    bool cliSplash   = false;
-    bool cliNoGpu    = false;
-    bool cliDrm      = false;
-    std::vector<const char*> posArgs;
-    for (int i = 1; i < argc; ++i) {
-        if (strcmp(argv[i], "--no-splash") == 0)     cliNoSplash = true;
-        else if (strcmp(argv[i], "--splash") == 0)   cliSplash   = true;
-        else if (strcmp(argv[i], "--no-gpu") == 0)   cliNoGpu    = true;
-        else if (strcmp(argv[i], "--drm") == 0)      cliDrm      = true;
-        else posArgs.push_back(argv[i]);
-    }
-
-    // Settings persist next to the executable (or, in a macOS bundle, in the
-    // user data dir).
-    config.settingsPath = bro::util::defaultSettingsPath();
-
-    // Resolve launch target → projectRoot + appDir. The target may be an app
-    // directory, a project directory, or a bro.json of either kind; with no
-    // argument the executable's own directory is probed. Shared with
-    // bro-headless, bro-server and any host application that links
-    // bro_engine — see engine/launcher.h.
-    if (!bro::engine::resolveLaunchTarget(posArgs.empty() ? std::string()
-                                                          : std::string(posArgs[0]),
-                                          config)) {
-        printUsage();
-        return 1;
-    }
-
-    // CLI splash overrides — applied last so they win over bro.json.
-    if (cliNoSplash) config.showSplash = false;
-    if (cliSplash)   config.showSplash = true;
-    if (cliNoGpu)    config.graphics.useGPU = false;
-    if (cliDrm)      config.displayMode = bro::engine::DisplayMode::Drm;
-
     // Does this app directory carry a compiled module? Asked BEFORE the Engine
     // is constructed because engine init uses the answer: it is what
     // distinguishes an app that declares `"compiled": true` and was opened by a
@@ -229,10 +356,6 @@ int main(int argc, char* argv[]) {
     // side of the Engine — see below.
     std::optional<std::string> appModule = bro::bronze_host::findAppModule(config.appDir);
     config.hostProvidesCompiledApp = appModule.has_value();
-
-    // Absolutise and publish BRO_EXE_DIR / BRO_APP_DIR / BRO_PROJECT_ROOT so
-    // JS and spawned children can locate themselves without guessing from cwd.
-    bro::engine::publishLaunchEnv(config);
 
     int exitCode = 0;
     try {

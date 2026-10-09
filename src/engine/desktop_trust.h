@@ -27,8 +27,13 @@ struct DesktopTrustInfo {
 /// BRO_TRUSTED_APP_DIR. Never decided by the app's own folder or manifest.
 bool isTrustedAppLocation(const std::string& appDir);
 
-/// Evaluates trust and grants requested privileged shell namespaces.
+/// Evaluates trust and grants requested privileged shell namespaces. An app
+/// gets what it asks for (`"shell": true`, `"permissions": [...]`) when it is
+/// installed in a trusted location, or when the user's own permissions file
+/// grants it to `appId` (app_manifest.h, userPermissionGrants). Asking alone
+/// grants nothing.
 DesktopTrustInfo evaluateDesktopTrust(const std::string& appDir,
+                                      const std::string& appId,
                                       bool requestedShell,
                                       const std::vector<std::string>& requestedPrivileges);
 

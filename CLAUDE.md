@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Build Commands
 
-**Apps live in `../broworkshop/`** (launcher + starter apps: `games/`, `tools/`, `demos/`, `ai/`). bro is the runtime only; run any app by passing its directory to `bro` or `bro-headless`. Naked `bro` opens the project manager (`system/projects/`); new projects seed from `system/skeletons/<name>/`; registry persists in the OS user-data dir. See [docs/projects.md](docs/projects.md).
+**Apps live in `../broworkshop/`** (launcher + starter apps: `games/`, `tools/`, `demos/`, `ai/`). bro is the runtime only; run any app by passing its directory to `bro` or `bro-headless`. Naked `bro` opens the project manager (`system/projects/`); new projects seed from `system/skeletons/<name>/`; registry persists in the OS user-data dir. See [docs/projects.md](docs/projects.md). A folder with `bro.json` + a page is a desktop app (helm's core apps are folders in `../helmapps/`): manifest identity/single-instance/permissions, `bro.app`, and `bro --install` (desktop entries) are in [docs/apps.md](docs/apps.md); app capabilities go into bro, never into the app.
 
 **Modular build:** `-DBRO_PROFILE=<minimal|app|full>`, individual `-DBRO_WITH_*` flags override. Default `app` = full renderer + net/video/steam (needs vcpkg), no AI tower. `minimal` = 2D/canvas/WebGL/audio floor, no vcpkg. `full` adds the AI tower (CUDA opt-in via `-DBRO_WITH_TENSOR_CUDA=ON`). Compiled-out features install `{ available: false }` JS stubs. See [BUILDING.md](BUILDING.md), [docs/build-options.md](docs/build-options.md).
 
@@ -133,6 +133,7 @@ Annotated `.js` files with JSDoc + examples. Read the file before using or chang
 | `ai-game-tools.js` | `bro.ai.game.grid`: observation windows, tapes, `GridTrainer` |
 | `gpu-api.js` | `bro.gpu`: runtime backend probe (`available`/`backend`/`devices`/`compiledBackends`) |
 | `paths-api.js` | `bro.appDir` / `bro.resolvePath`: real filesystem paths, for sidecar binaries and external tools |
+| `app-api.js` | `bro.app`: the running folder app's id/name/version, argv + cwd, per-app config/data/cache dirs and log, single-instance `instance` events, granted permissions, `spawn`; manifest + install in `docs/apps.md` |
 | `tensor-api.js` | `bro.tensor` core: `GpuTensor`, RNG, safetensors, dense/elementwise, norms, matmul, RoPE, reductions, optimisers |
 | `tensor-nn-api.js` | `bro.tensor` part 2: the attention family, conv2d/3d + NCHW spatial, diffusion sampler steps, INT8/k-quant, audio/codec ops |
 | `diffusion-api.js` | `bro.diffusion`: `loadModel`, `generate`, the step-wise `PipelineState` API, LoRA, schedulers |

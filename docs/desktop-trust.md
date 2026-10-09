@@ -54,7 +54,15 @@ The bro engine establishes two explicit tiers:
       "privileged": ["displays", "sys", "conf"]
   }
   ```
-- **Prerequisite:** Privileges are ONLY granted if the application is installed in a trusted desktop location verified by the engine. If an app outside a trusted location requests privileges, the engine rejects the request with a warning log and mounts unavailable stubs instead.
+  `"permissions"` is the current spelling of `"privileged"`; both are read
+  ([apps.md](apps.md)).
+- **Prerequisite:** privileges are granted only when either:
+  - the application is installed in a trusted desktop location the engine verifies (§3), in which case it gets everything it asks for; or
+  - the user's own permissions file grants them to the app's id (§3a), in which case it gets the intersection of what it asked for and what the user granted.
+
+  Otherwise the engine rejects the request with a warning log and mounts unavailable stubs instead. `bro.app.permissions` reports `{requested, granted, shell}`.
+
+The privileged namespaces are `displays`, `cred`, `seat`, `portal`, `sys`, `compositor`, `wl`, `clip`, `pulse` and `remote` (hosting the screen for a remote viewer and routing its input in as local input).
 
 ---
 
@@ -101,6 +109,29 @@ To ensure unprivileged user downloads cannot escalate privileges simply by autho
 ### Development & Testing Overrides
 For development, automated test suites, and CI environments where root/administrator installation is impractical:
 - `BRO_TRUSTED_APP_DIR=<path1>[:<path2>...]` (colon-delimited on POSIX, semicolon-delimited on Windows): Explicitly adds directories to the trusted prefix list. A shell under development and the test suites name their app this way.
+
+### 3a. The user's permissions file
+
+An app that is not installed somewhere trusted gets privileges only when the
+user grants them, by id, in a file only the user's configuration holds:
+
+- Linux: `$XDG_CONFIG_HOME/bro/permissions.json` (`~/.config/bro/permissions.json`)
+- Windows: `%APPDATA%\bro\permissions.json`
+- macOS: `~/Library/Application Support/bro/permissions.json`
+
+```json
+{
+    "org.example.ScreenShare": ["remote"],
+    "org.example.MyShell": ["shell"],
+    "org.example.Settings": ["*"]
+}
+```
+
+`"shell"` grants shell status to an app that declares `"shell": true`. `"*"`
+grants every namespace the app asks for. A grant for something the app did not
+ask for grants nothing. The app's id is its manifest `id` (or its folder name),
+so a grant follows the app wherever it is installed. The same caveat as below
+applies: a process already running as the user can edit this file.
 
 There is no switch that trusts every app, and nothing relative to the working directory or the app's own project counts: where bro was launched from, or what the app's folder or manifest contains, never decides what the app is granted.
 

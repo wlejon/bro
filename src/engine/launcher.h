@@ -37,7 +37,15 @@ bool resolveLaunchTarget(const std::string& target, EngineConfig& config);
 /// BRO_APP_DIR and BRO_PROJECT_ROOT. JS reads these through process.env, and
 /// child bro processes inherit them so a launcher's children land in the same
 /// project. Call after resolveLaunchTarget; it also absolutises the paths in
-/// `config` in place.
+/// `config` in place, and settles the app's identity (finalizeAppIdentity in
+/// app_runtime.h: config.appId, BRO_APP_ID, bro.app). Set config.appArgs and
+/// config.launchCwd first.
 void publishLaunchEnv(EngineConfig& config);
+
+/// `bro --install` and friends (docs/apps.md): install, link, uninstall and
+/// list folder apps, and write their FreeDesktop desktop entries. `args` is
+/// the command line after the program name. Returns the process exit status,
+/// or -1 when `args` is not an app-management command.
+int runAppCommand(const std::vector<std::string>& args);
 
 } // namespace bro::engine

@@ -236,6 +236,11 @@ void installBroRoots(engine::Engine& engine) {
         ev::Persistent media(makeBroMediaValue());
         ev::setProperty(bro->get(), "media", media.get());
     }
+    {
+        // Before bro_core.js, which adds the instance events over it.
+        ev::Persistent app(makeBroAppValue());
+        ev::setProperty(bro->get(), "app", app.get());
+    }
 
     // Feature-gated unavailable namespace stubs (Proxy throwing on any call)
     auto setUnavailable = [&](const char* name, const char* flag) {
@@ -392,6 +397,9 @@ void installBroRoots(engine::Engine& engine) {
     // namespace stub so that bro.<ns>.available === false and every call throws.
     static const char* const kPrivilegedNamespaces[] = {
         "displays", "cred", "seat", "portal", "sys", "compositor", "wl", "clip", "pulse",
+        // Hosting this screen for a remote viewer, and routing its input in
+        // as local input: the whole session, so the user's decision.
+        "remote",
     };
     for (const char* ns : kPrivilegedNamespaces) {
         if (!engine.hasPrivilege(ns)) {

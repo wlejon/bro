@@ -2,6 +2,8 @@
 
 #include "engine/engine.h"
 #include "engine/config_loader.h"
+#include "engine/app_manifest.h"
+#include "engine/app_runtime.h"
 
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/eval.h"
@@ -90,6 +92,7 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
     std::vector<std::string> inlineExprs;
     std::vector<std::string> scriptArgs;
     bool printHostGlobals = false;
+    bool claimInstance = false;
     std::string nativeManifestOut;
 
     bool passThrough = false;
@@ -114,6 +117,10 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
                 "  --splash        Show splash screen during load\n"
                 "  --no-splash     Skip splash screen\n"
                 "  -e <expr>       Evaluate JavaScript expression\n"
+                "  --single-instance\n"
+                "                  Honour the app's \"singleInstance\": take its channel, or\n"
+                "                  hand `-- args` to the instance holding it and exit 0\n"
+                "                  (headless runs otherwise never claim it)\n"
                 "  --print-host-globals\n"
                 "                  Print the host globals this binary registers, one per\n"
                 "                  line, and exit: the --host-globals manifest for\n"
@@ -144,6 +151,8 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
             cliSplash = 0;
         } else if (strcmp(argv[i], "-e") == 0 && i + 1 < argc) {
             inlineExprs.push_back(argv[++i]);
+        } else if (strcmp(argv[i], "--single-instance") == 0) {
+            claimInstance = true;
         } else if (strcmp(argv[i], "--print-host-globals") == 0) {
             printHostGlobals = true;
         } else if (strcmp(argv[i], "--print-native-manifest") == 0 && i + 1 < argc) {
@@ -171,6 +180,10 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
             std::string candidate = "src/bronze_host/" + appDir;
             if (fileExists(candidate) || fileExists(candidate + "/bro.json") || fileExists(candidate + "/index.html")) {
                 appDir = candidate;
+            } else if (isValidAppId(appDir)) {
+                // An installed app's id (docs/apps.md).
+                std::string installed = findInstalledApp(appDir);
+                if (!installed.empty()) appDir = installed;
             }
         }
     }
@@ -256,6 +269,17 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
         else unsetenv("BRO_PROJECT_ROOT");
         setenv("BRO_EXE_DIR", exeDirPath.c_str(), 1);
 #endif
+
+        // The app's identity and launch context (bro.app): its argv is what
+        // follows `--` (the script's arguments, scriptArgs, are the same list).
+        config.appArgs = scriptArgs;
+        finalizeAppIdentity(config);
+        if (claimInstance && config.manifest.singleInstance &&
+            claimSingleInstance(config) == InstanceClaim::HandedOff) {
+            fprintf(stderr, "%s: handed off to the running instance of %s\n",
+                    hooks.programName.c_str(), config.appId.c_str());
+            return 0;
+        }
 
         config.displayMode = bro::engine::DisplayMode::Headless;
         config.realAudio = realAudio;

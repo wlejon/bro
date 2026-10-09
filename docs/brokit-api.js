@@ -189,6 +189,8 @@ const os = require('os');
 os.platform();           // → 'win32' | 'linux' | 'darwin'
 os.arch();               // → 'x64' | 'arm64' | ...
 os.homedir();            // → home directory path
+os.userInfo();           // → { uid, gid, username, homedir, shell } (Node's shape;
+                         //   shell is the passwd login shell, null on Windows)
 os.tmpdir();             // → temp directory path
 os.hostname();           // → machine hostname
 os.EOL;                  // '\r\n' on Windows, '\n' on Linux

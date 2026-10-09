@@ -53,6 +53,9 @@ add_library(bro_engine STATIC
     overflow.cpp
     scrollbar.cpp
     app_loader.cpp
+    app_install.cpp
+    app_manifest.cpp
+    app_runtime.cpp
     config_loader.cpp
     desktop_trust.cpp
     launcher.cpp

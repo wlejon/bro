@@ -37,6 +37,10 @@ void cleanupSteamBindings();
 // unavailable stub there instead.
 Value makeBroTerminalValue();
 
+// bro.app (host_app.cpp): the running app's identity, argv, per-app
+// directories, permissions and single-instance hand-off.
+Value makeBroAppValue();
+
 // Stubs for unavailable / compiled-out subsystems (host_bro_root.cpp)
 Value makeUnavailableNamespace(const std::string& name, const std::string& flag);
 

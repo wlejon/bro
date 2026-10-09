@@ -1,4 +1,6 @@
 #include "engine/config_loader.h"
+#include "engine/app_manifest.h"
+#include "util/log.h"
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -132,8 +134,26 @@ bool parseConfig(const std::string& path, EngineConfig& config,
     std::string systemName = getString("system");
     if (!systemName.empty()) config.systemDirName = systemName;
 
-    if (outIsProjectManifest) {
-        *outIsProjectManifest = !defaultApp.empty() || !libName.empty() || !systemName.empty();
+    const bool isProject = !defaultApp.empty() || !libName.empty() || !systemName.empty();
+    if (outIsProjectManifest) *outIsProjectManifest = isProject;
+
+    // An app manifest's identity and desktop keys (engine/app_manifest.h).
+    // A project manifest names no app of its own: the app's bro.json, parsed
+    // after it, does.
+    if (!isProject) {
+        AppDescriptor m;
+        std::string err;
+        if (parseAppManifest(path, m, &err)) {
+            if (m.shell) config.isShellApp = true;
+            for (const auto& p : m.permissions) {
+                bool have = false;
+                for (const auto& q : config.privilegedNamespaces) have = have || q == p;
+                if (!have) config.privilegedNamespaces.push_back(p);
+            }
+            config.manifest = std::move(m);
+        } else {
+            LOG_WARN("bro.json: %s", err.c_str());
+        }
     }
 
     int w = getInt("width", 0);

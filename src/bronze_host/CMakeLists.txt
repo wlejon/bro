@@ -111,6 +111,7 @@ set(BRO_BRONZE_HOST_SOURCES
     host_realm_scope.cpp
     host_observer_hooks.cpp
     host_js_modules.cpp
+    host_app.cpp
     host_bro_root.cpp
     host_sibling_apis.cpp
     native_time.cpp

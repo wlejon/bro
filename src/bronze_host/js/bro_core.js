@@ -340,6 +340,51 @@
     // Stops the app as closing the main window does. A no-op headless.
     fn(bro, 'quit', function quit() { __bro_native.window.quit(); });
 
+    // ---- bro.app instance events -------------------------------------------
+    // A later launch of a `"singleInstance": true` app hands its argv and
+    // working directory here and exits (engine/app_runtime.h). Launches that
+    // arrive before the app listens are held, then delivered to the first
+    // listener, so a page that subscribes after its first await still sees
+    // the launch that raced its startup.
+    const app = bro.app;
+    if (app && typeof app._setInstanceDispatcher === 'function') {
+        const instanceListeners = new Set();
+        let onInstanceHandler = null;
+        const held = [];
+        const listening = () => instanceListeners.size > 0 || onInstanceHandler !== null;
+        const deliver = (ev) => {
+            if (onInstanceHandler) {
+                try { onInstanceHandler(ev); } catch (e) { console.error(e); }
+            }
+            for (const l of instanceListeners) {
+                try { l(ev); } catch (e) { console.error(e); }
+            }
+        };
+        const flushHeld = () => {
+            if (!held.length || !listening()) return;
+            globalThis.queueMicrotask(() => {
+                while (held.length && listening()) deliver(held.shift());
+            });
+        };
+        app._setInstanceDispatcher(function (argv, cwd) {
+            const ev = { type: 'instance', target: app, argv: Array.from(argv || []), cwd: String(cwd || '') };
+            if (listening()) deliver(ev);
+            else held.push(ev);
+        });
+        accessor(app, 'oninstance', () => onInstanceHandler, (cb) => {
+            onInstanceHandler = typeof cb === 'function' ? cb : null;
+            flushHeld();
+        });
+        fn(app, 'addEventListener', function addEventListener(type, listener) {
+            if (type !== 'instance' || typeof listener !== 'function') return;
+            instanceListeners.add(listener);
+            flushHeld();
+        });
+        fn(app, 'removeEventListener', function removeEventListener(type, listener) {
+            if (type === 'instance') instanceListeners.delete(listener);
+        });
+    }
+
     // ---- bro.settings ------------------------------------------------------
     // The store is text. A value is typed by its content on the way out —
     // the one rule that works for the engine's own keys and an app's alike —

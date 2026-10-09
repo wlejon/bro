@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/app_manifest.h"
 #include "engine/scrollbar.h"
 #include <climits>
 #include <cstdint>
@@ -76,6 +77,16 @@ struct EngineConfig {
     Scrollbar::Style elementScrollbar{5.0f, 1.0f, 16.0f};
     bool isShellApp = false;
     std::vector<std::string> privilegedNamespaces;
+    // The app manifest's identity and desktop keys (engine/app_manifest.h,
+    // docs/apps.md), and the effective id finalizeAppIdentity() settles on:
+    // the declared one, else the folder's name. The id is the window's
+    // app_id / WM class and keys the per-app directories.
+    AppDescriptor manifest;
+    std::string appId;
+    // The command line after the app directory (bro.app.argv), and the
+    // directory the app was launched from (bro.app.cwd).
+    std::vector<std::string> appArgs;
+    std::string launchCwd;
     std::function<void(Engine&)> installHostBindings;
     // Called on each Worker thread after its `bro` root is in, so an embedder
     // can put its own namespace (bro.<app>) into workers as well. Runs on the

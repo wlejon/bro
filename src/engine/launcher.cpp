@@ -1,5 +1,7 @@
 #include "engine/launcher.h"
 
+#include "engine/app_manifest.h"
+#include "engine/app_runtime.h"
 #include "engine/config_loader.h"
 #include "util/exe_dir.h"
 
@@ -86,6 +88,11 @@ bool resolveLaunchTarget(const std::string& target, EngineConfig& config) {
         if (fileExists(candidate) || fileExists(candidate + "/bro.json") ||
             fileExists(candidate + "/index.html")) {
             actualTarget = candidate;
+        } else if (isValidAppId(actualTarget)) {
+            // Not a path: an installed app's id (`bro org.example.Notes`),
+            // looked up in the install roots (docs/apps.md).
+            std::string installed = findInstalledApp(actualTarget);
+            if (!installed.empty()) actualTarget = installed;
         }
     }
     if (!actualTarget.empty()) {
@@ -171,6 +178,9 @@ void publishLaunchEnv(EngineConfig& config) {
     setEnvVar("BRO_EXE_DIR", util::executableDir());
     setEnvVar("BRO_APP_DIR", config.appDir);
     setEnvVar("BRO_PROJECT_ROOT", config.projectRoot);
+
+    // The app's id and launch context (bro.app, BRO_APP_ID).
+    finalizeAppIdentity(config);
 }
 
 } // namespace bro::engine

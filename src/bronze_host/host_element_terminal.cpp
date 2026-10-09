@@ -20,10 +20,79 @@
 #include "layout/el_terminal.h"
 
 #include <cmath>
+#include <cwchar>
 #include <memory>
 #include <string>
+#include <vector>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
 
 namespace bro::bronze_host {
+
+namespace {
+
+struct WslDistribution {
+    std::string name;
+    bool isDefault = false;
+    int version = 0;
+};
+
+// The WSL distributions registered for this user (HKCU\...\Lxss), read from
+// the registry rather than by running wsl.exe, which is slow to start and
+// prints UTF-16. Empty off Windows.
+std::vector<WslDistribution> wslDistributions() {
+    std::vector<WslDistribution> out;
+#ifdef _WIN32
+    auto narrow = [](const std::wstring& w) {
+        if (w.empty()) return std::string();
+        int len = WideCharToMultiByte(CP_UTF8, 0, w.data(), int(w.size()), nullptr, 0, nullptr, nullptr);
+        std::string s(size_t(len), '\0');
+        WideCharToMultiByte(CP_UTF8, 0, w.data(), int(w.size()), s.data(), len, nullptr, nullptr);
+        return s;
+    };
+    auto readString = [](HKEY key, const wchar_t* sub, const wchar_t* name, std::wstring& value) {
+        DWORD bytes = 0;
+        if (RegGetValueW(key, sub, name, RRF_RT_REG_SZ, nullptr, nullptr, &bytes) != ERROR_SUCCESS) return false;
+        std::wstring buf(bytes / sizeof(wchar_t) + 1, L'\0');
+        if (RegGetValueW(key, sub, name, RRF_RT_REG_SZ, nullptr, buf.data(), &bytes) != ERROR_SUCCESS) return false;
+        buf.resize(wcslen(buf.c_str()));
+        value = std::move(buf);
+        return true;
+    };
+    HKEY lxss = nullptr;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Lxss", 0, KEY_READ,
+                      &lxss) != ERROR_SUCCESS)
+        return out;
+    std::wstring defaultGuid;
+    readString(lxss, nullptr, L"DefaultDistribution", defaultGuid);
+    for (DWORD i = 0;; ++i) {
+        wchar_t guid[256];
+        DWORD len = 256;
+        if (RegEnumKeyExW(lxss, i, guid, &len, nullptr, nullptr, nullptr, nullptr) != ERROR_SUCCESS) break;
+        std::wstring name;
+        if (!readString(lxss, guid, L"DistributionName", name) || name.empty()) continue;
+        WslDistribution d;
+        d.name = narrow(name);
+        d.isDefault = _wcsicmp(guid, defaultGuid.c_str()) == 0;
+        DWORD version = 0, bytes = sizeof(version);
+        if (RegGetValueW(lxss, guid, L"Version", RRF_RT_REG_DWORD, nullptr, &version, &bytes) == ERROR_SUCCESS)
+            d.version = int(version);
+        out.push_back(std::move(d));
+    }
+    RegCloseKey(lxss);
+#endif
+    return out;
+}
+
+}  // namespace
 
 layout::ElTerminal* hostTerminalControl(Value self, bool create) {
     HostNodeState* st = hostNodeStateOfValue(self);
@@ -329,6 +398,18 @@ Value makeBroTerminalValue() {
     o.accessor("defaultShell",
         [](Value, std::span<const Value>) -> Value { return ev::fromUtf8(layout::ElTerminal::defaultShell()); },
         nullptr);
+    // wslDistributions() -> [{name, isDefault, version}]: the WSL
+    // distributions a Windows terminal can offer as profiles ([] elsewhere).
+    o.def("wslDistributions", 0, [](Value, std::span<const Value>) -> Value {
+        const std::vector<WslDistribution> list = wslDistributions();
+        return hostArrayOf(list.size(), [&list](size_t i) -> Value {
+            ObjectBuilder d;
+            d.set("name", ev::fromUtf8(list[i].name));
+            d.set("isDefault", ev::fromBool(list[i].isDefault));
+            d.set("version", ev::fromDouble(list[i].version));
+            return d.get();
+        });
+    });
     // Lifetime counters: how often the terminals' own layers and the page's
     // cached paint were recorded (the compositor-layer tests and the perf
     // probe read these).

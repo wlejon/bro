@@ -3,6 +3,7 @@
 // thread's events, polls the seat / input / compositor, ticks the world,
 // signals layout and renders. Input routing lives in engine_drm_input.cpp.
 #include "engine/engine.h"
+#include "engine/app_runtime.h"
 #include "engine/control.h"
 #include "engine/frame_trace.h"
 #include "engine/engine_drm.h"
@@ -104,6 +105,7 @@ void Engine::drmFrame() {
     }
     if (document_ && !document_->isStructureDirty()) document_->drainPendingFrees();
 
+    pumpAppInstances();
     pumpVideoEvents();
     pumpTerminals();
     pumpWebGLContextEvents();

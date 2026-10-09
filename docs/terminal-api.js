@@ -209,6 +209,17 @@ const terminal = {
    *  $SHELL (else /bin/sh) elsewhere. @type {string} */
   defaultShell: '',
   /**
+   * The WSL distributions registered for this user, read from the registry
+   * (no wsl.exe launch): what a Windows terminal offers as profiles. [] on
+   * other platforms. The user's login shell, the other profile probe, is
+   * `os.userInfo().shell` (docs/brokit-api.js).
+   * @returns {{name: string, isDefault: boolean, version: number}[]}
+   * @example
+   *   for (const d of bro.terminal.wslDistributions())
+   *     addProfile({ name: d.name, command: 'wsl.exe', args: ['-d', d.name] });
+   */
+  wslDistributions() {},
+  /**
    * Lifetime counters. `layerRecords` counts how often any terminal's layer
    * was recorded. `pageRecords` and `pageInvalidations` count the page's
    * cached paint being re-recorded and being invalidated; those two move

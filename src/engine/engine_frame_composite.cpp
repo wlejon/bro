@@ -6,6 +6,7 @@
 // as pixels for a capture.
 
 #include "engine/engine.h"
+#include "engine/app_runtime.h"
 #include "engine/frame_presenter.h"
 #include "engine/terminal_layers.h"
 #include "engine/window_host.h"
@@ -334,6 +335,7 @@ void Engine::presentCurrentFrame() {
     const render::PresentFrame frame = describeCompositedFrame();
     if (vulkanPresenter_ && !vulkanPresenter_->isHeadless()) {
         if (!vulkanPresenter_->present(frame)) LOG_ERROR("Engine: presenting the frame failed");
+        else noteFramePresented();  // the first one logs the launch's time to it
         frameSkiaImages_.clear();  // submitted
     } else if (window_ && window_->backend() == platform::GraphicsBackend::Software && frame.below) {
         // No GPU, so no GPU layer: the CPU composite is the frame.

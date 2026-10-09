@@ -1,4 +1,5 @@
 #include "engine/engine.h"
+#include "engine/app_runtime.h"
 #include "engine/control.h"
 #include "engine/frame_trace.h"
 #include "util/time.h"
@@ -56,6 +57,7 @@ void Engine::flush() {
     // A shell host's compositor (BRO_HEADLESS_COMPOSITOR): client events and
     // the window frames, before the layout below places them.
     if (drmCtx_ && pollShellCompositor()) uiDirty_ = true;
+    pumpAppInstances();
     pumpVideoEvents();
     pumpTerminals();
     pumpWebGLContextEvents();

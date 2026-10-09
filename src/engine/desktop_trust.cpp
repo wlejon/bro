@@ -1,4 +1,5 @@
 #include "engine/desktop_trust.h"
+#include "engine/app_manifest.h"
 #include "util/exe_dir.h"
 #include "util/log.h"
 
@@ -103,6 +104,7 @@ bool isTrustedAppLocation(const std::string& appDir) {
 }
 
 DesktopTrustInfo evaluateDesktopTrust(const std::string& appDir,
+                                      const std::string& appId,
                                       bool requestedShell,
                                       const std::vector<std::string>& requestedPrivileges) {
     DesktopTrustInfo info;
@@ -111,16 +113,36 @@ DesktopTrustInfo evaluateDesktopTrust(const std::string& appDir,
         return info;
     }
 
-    info.isTrusted = isTrustedAppLocation(appDir);
-    if (!info.isTrusted) {
-        LOG_WARN("DesktopTrust: app at '%s' requested privileged shell access (%s) but is not installed in a trusted desktop location; access denied",
-                 appDir.c_str(), requestedShell ? "shell: true" : "privileged: [...]");
+    if (isTrustedAppLocation(appDir)) {
+        info.isTrusted = true;
+        info.isShell = requestedShell;
+        info.grantedPrivileges = requestedPrivileges;
+        LOG_INFO("DesktopTrust: app at '%s' verified as trusted shell app", appDir.c_str());
         return info;
     }
 
-    info.isShell = requestedShell;
-    info.grantedPrivileges = requestedPrivileges;
-    LOG_INFO("DesktopTrust: app at '%s' verified as trusted shell app", appDir.c_str());
+    // Not installed somewhere trusted: what the user granted this id, and
+    // only as much of it as the app asked for.
+    const std::vector<std::string> grants = userPermissionGrants(appId);
+    auto granted = [&grants](const std::string& ns) {
+        for (const auto& g : grants)
+            if (g == ns || g == "*") return true;
+        return false;
+    };
+    if (requestedShell && granted("shell")) info.isShell = true;
+    for (const auto& ns : requestedPrivileges)
+        if (ns != "shell" && granted(ns)) info.grantedPrivileges.push_back(ns);
+    if (info.isShell || !info.grantedPrivileges.empty()) {
+        info.isTrusted = true;
+        LOG_INFO("DesktopTrust: app '%s' granted %s by %s", appId.c_str(),
+                 info.isShell ? "shell status" : "privileged namespaces", userPermissionsFile().c_str());
+        return info;
+    }
+
+    LOG_WARN("DesktopTrust: app '%s' at '%s' requested privileged access (%s) but is neither installed in a "
+             "trusted desktop location nor granted it in %s; access denied",
+             appId.c_str(), appDir.c_str(), requestedShell ? "shell: true" : "permissions: [...]",
+             userPermissionsFile().c_str());
     return info;
 }
 
