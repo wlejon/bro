@@ -104,7 +104,9 @@ std::string findInstalledApp(const std::string& id);
 /// ids to the privileged namespaces granted to them:
 ///   { "org.example.Remote": ["remote"], "my.shell": ["shell"] }
 /// "*" grants every namespace the app asks for; "shell" grants shell status.
-/// Returns what is listed for `id` ([] when the file or the id is absent).
+/// The id "*" grants to every app ({ "*": ["*"] }: a development machine that
+/// does not want the trust check). Returns what is listed for `id` plus what
+/// is listed for "*" ([] when the file or both are absent).
 std::vector<std::string> userPermissionGrants(const std::string& id);
 std::string userPermissionsFile();
 

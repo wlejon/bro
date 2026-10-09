@@ -509,6 +509,10 @@ std::vector<std::string> userPermissionGrants(const std::string& id) {
     }
     Fields f{root, path};
     f.strings(id.c_str(), out);
+    // "*" as an id grants to every app: a development machine's one switch.
+    std::vector<std::string> everyApp;
+    f.strings("*", everyApp);
+    out.insert(out.end(), everyApp.begin(), everyApp.end());
     return out;
 }
 

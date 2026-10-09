@@ -44,7 +44,8 @@ bool isTrustedAppLocation(const std::string& appDir) {
 
     // 1. Extra trusted directories via BRO_TRUSTED_APP_DIR (colon-separated on
     // POSIX, semicolon on Windows): how a developer or a test suite names the
-    // shell it is working on. There is no blanket "trust everything" switch.
+    // shell it is working on. The blanket development switches (BRO_TRUST_ALL,
+    // "*" in the permissions file) are applied by evaluateDesktopTrust.
     const char* envDirs = std::getenv("BRO_TRUSTED_APP_DIR");
     if (envDirs && *envDirs) {
         std::stringstream ss(envDirs);
@@ -118,6 +119,16 @@ DesktopTrustInfo evaluateDesktopTrust(const std::string& appDir,
         info.isShell = requestedShell;
         info.grantedPrivileges = requestedPrivileges;
         LOG_INFO("DesktopTrust: app at '%s' verified as trusted shell app", appDir.c_str());
+        return info;
+    }
+
+    // BRO_TRUST_ALL=1: development, every app gets what its manifest asks for
+    // (the persistent form is { "*": ["*"] } in the user's permissions file).
+    if (const char* all = std::getenv("BRO_TRUST_ALL"); all && *all && std::string(all) != "0") {
+        info.isTrusted = true;
+        info.isShell = requestedShell;
+        info.grantedPrivileges = requestedPrivileges;
+        LOG_INFO("DesktopTrust: BRO_TRUST_ALL grants '%s' what it asks for", appId.c_str());
         return info;
     }
 
