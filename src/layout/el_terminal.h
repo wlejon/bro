@@ -330,6 +330,8 @@ public:
 
 private:
     void refreshFont();
+    // Resize the grid (and the PTY) to the laid-out content box.
+    void fitToBox();
     void refreshTheme();
     void flushDeferredKey();
     void dispatchEvents();

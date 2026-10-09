@@ -209,6 +209,11 @@ bool ElTerminal::spawn(const SpawnSpec& spec, std::string* error) {
     o.cwd = spec.cwd;
     o.env = spec.env;
     if (!readySession(/*attaching=*/false, error)) return false;
+    // Start the child at the grid the element is laid out to (the caller
+    // lays the document out first), not the 80x24 placeholder: a resize
+    // right after the start makes ConPTY repaint the whole screen from its
+    // own buffer, wiping whatever the page fed the terminal meanwhile.
+    fitToBox();
     if (spec.persistent) {
         terminal::TermSession::PersistentOptions p;
         p.server = spec.server;
@@ -368,6 +373,20 @@ bool ElTerminal::caretRect(float& x, float& y, float& w, float& h) const {
 
 // ---- the main loop -------------------------------------------------------------
 
+void ElTerminal::fitToBox() {
+    Impl& m = *impl_;
+    refreshFont();
+    const terminal::CellMetrics metrics = m.cellMetrics();
+    // The grid follows the content box; the PTY's pixel size counts device px.
+    if (!elem_) return;
+    const auto& box = elem_->layoutBox();
+    if (box.contentRect.width > 0 && box.contentRect.height > 0 && metrics.cellW > 0 && metrics.cellH > 0) {
+        const int cols = std::max(1, int(std::floor(box.contentRect.width / metrics.cellW + 1e-3f)));
+        const int rows = std::max(1, int(std::floor(box.contentRect.height / metrics.cellH + 1e-3f)));
+        m.session->resize(cols, rows, metrics.pixelWidth(), metrics.pixelHeight());
+    }
+}
+
 bool ElTerminal::pump(double nowMs, bool focused, float scale) {
     Impl& m = *impl_;
     m.nowMs = nowMs;
@@ -378,17 +397,9 @@ bool ElTerminal::pump(double nowMs, bool focused, float scale) {
         std::lock_guard<std::mutex> g(m.fontMu);
         m.scale = scale;
     }
-    refreshFont();
     refreshTheme();
+    fitToBox();
     const terminal::CellMetrics metrics = m.cellMetrics();
-
-    // The grid follows the content box; the PTY's pixel size counts device px.
-    const auto& box = elem_->layoutBox();
-    if (box.contentRect.width > 0 && box.contentRect.height > 0 && metrics.cellW > 0 && metrics.cellH > 0) {
-        const int cols = std::max(1, int(std::floor(box.contentRect.width / metrics.cellW + 1e-3f)));
-        const int rows = std::max(1, int(std::floor(box.contentRect.height / metrics.cellH + 1e-3f)));
-        m.session->resize(cols, rows, metrics.pixelWidth(), metrics.pixelHeight());
-    }
     if (m.session->cols() != m.lastCols || m.session->rows() != m.lastRows) {
         const bool first = m.lastCols == 0;
         m.lastCols = m.session->cols();

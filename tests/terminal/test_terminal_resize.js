@@ -73,4 +73,25 @@ if (!bro.terminal || !bro.terminal.available) {
 
     t.write('q');
     waitFor(() => !t.running, 'the child to exit');
+
+    // Made, sized and spawned in one turn, before any frame: the child starts
+    // at the laid-out grid, not the 80x24 placeholder, so there is no resize
+    // straight after the start (ConPTY repaints the whole screen on one,
+    // wiping what the page fed the terminal meanwhile).
+    const u = document.createElement('terminal');
+    u.style.font = '14px monospace';
+    u.style.width = (cellW * 50 + 2) + 'px';
+    u.style.height = (cellH * 12 + 2) + 'px';
+    document.body.appendChild(u);
+    const uResizes = [];
+    u.addEventListener('resize', (e) => uResizes.push(e.detail));
+    u.spawn({ command: CHILD, args: ['size'] });
+    assert(u.cols === 50 && u.rows === 12, 'spawned at the laid-out grid: ' + u.cols + 'x' + u.rows);
+    u.write('x');
+    waitFor(() => u.screenText().includes('SIZE 12x50'), 'the child to start at 12x50, ' + JSON.stringify(u.screenText()));
+    advanceTime(16);
+    advanceTime(16);
+    assert(uResizes.length === 0, 'no resize after the start: ' + JSON.stringify(uResizes));
+    u.write('q');
+    waitFor(() => !u.running, 'the second child to exit');
 }

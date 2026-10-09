@@ -435,6 +435,10 @@ void decorateTerminalProto(ObjectBuilder& b) {
         layout::ElTerminal::SpawnSpec spec;
         std::string error;
         if (!readSpawnSpec(a.empty() ? ev::undefined() : a[0], spec, error)) return ev::throwTypeError(error.c_str());
+        // Lay the document out first, so the child starts at the element's
+        // real grid (a terminal made and spawned in one turn has no box yet).
+        if (HostNodeState* st = hostNodeStateOfValue(self); st && st->el && st->el->document())
+            if (auto* eng = hostEngine()) eng->flushLayoutForRead(st->el->document());
         if (!t->spawn(spec, &error))
             return ev::throwValue(hostMakeDomError("OperationError", "spawn(): " + error));
         return ev::fromDouble(double(t->pid()));
