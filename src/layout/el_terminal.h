@@ -89,6 +89,11 @@ public:
         std::function<bool(const std::string& text, bool primary)> writeClipboard;
         std::function<std::string(bool primary)> readClipboard;
         std::function<void(const std::string& target, const std::string& kind)> openLink;
+        // Each pump first lets the session's parser thread catch up with what
+        // it was handed (TermSession::settle), so a frame shows output fed,
+        // scrolls and settings made before it. For headless runs on virtual
+        // time, whose frames would otherwise race that thread.
+        bool settleFrames = false;
     };
     static void setHost(Host host);
     static const Host& host();

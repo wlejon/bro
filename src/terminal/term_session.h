@@ -262,6 +262,12 @@ public:
     // woken for it), so the next acquire within a few ms has it.
     std::shared_ptr<const bropty::Frame> acquireFrame();
     [[nodiscard]] bool hasNewFrame() const noexcept { return channel_.has_new(); }
+    // Waits (up to `budget`) until the parser thread has served every wake
+    // asked of it before this call: what was fed, scrolled or set by then is
+    // published (or owed, when the renderer has not taken the frame it has).
+    // For a virtual-time headless run, whose frames would otherwise race the
+    // parser thread. Returns whether it got there in time.
+    bool settle(std::chrono::milliseconds budget);
 
     // Counters for perf tests (relaxed atomics, any thread).
     struct Stats {
@@ -409,6 +415,11 @@ private:
     std::condition_variable wakeCv_;
     bool wakeFlag_ = false;  // wakeMu_
     std::atomic<bool> wakePending_{false};
+    // Wakes asked for (wake()), and the newest the parser thread has served:
+    // a parse slice that began after it was asked (settle()).
+    std::atomic<uint64_t> wakesAsked_{0};
+    uint64_t wakesServed_ = 0;  // wakeMu_
+    std::condition_variable servedCv_;
     // A publish was skipped because the renderer had not taken the previous
     // frame; acquireFrame() wakes the parser to make it.
     std::atomic<bool> publishOwed_{false};

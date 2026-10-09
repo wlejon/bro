@@ -308,8 +308,18 @@ void TermSession::select(bropty::RowRange range) {
 
 std::shared_ptr<const bropty::Frame> TermSession::acquireFrame() {
     auto f = channel_.acquire();
+    // After the take, against maybePublish's store of the debt (it checks
+    // the channel again after storing it).
+    std::atomic_thread_fence(std::memory_order_seq_cst);
     if (publishOwed_.exchange(false, std::memory_order_acq_rel)) wake();
     return f;
+}
+
+bool TermSession::settle(std::chrono::milliseconds budget) {
+    const uint64_t want = wakesAsked_.load();
+    std::unique_lock<std::mutex> lk(wakeMu_);
+    return servedCv_.wait_for(lk, budget,
+                              [&] { return wakesServed_ >= want || stop_.load(std::memory_order_acquire); });
 }
 
 TermSession::Stats TermSession::stats() const noexcept {
@@ -329,7 +339,8 @@ TermSession::Stats TermSession::stats() const noexcept {
 void TermSession::wake() {
     // The PTY's reader calls this for every chunk it buffers: coalesce, so a
     // flood costs one notification per drain rather than one per read.
-    if (wakePending_.exchange(true, std::memory_order_acq_rel)) return;
+    wakesAsked_.fetch_add(1);
+    if (wakePending_.exchange(true)) return;
     {
         std::lock_guard<std::mutex> g(wakeMu_);
         wakeFlag_ = true;
@@ -360,13 +371,18 @@ void TermSession::threadMain() {
             else wakeCv_.wait(lk, ready);
             wakeFlag_ = false;
         }
-        wakePending_.store(false, std::memory_order_release);
+        wakePending_.store(false);
         if (stop_.load(std::memory_order_acquire)) break;
         const uint64_t parsedBefore = bytesParsed_.load(std::memory_order_relaxed);
 
         // Drain in slices, letting go of the lock between them so input and
         // resizes from the main thread get in.
         for (;;) {
+            // Every wake asked for by now is served by this slice: it parses
+            // and publishes after it (settle()). One coalesced into a wake
+            // already pending found wakePending_ set before the store above,
+            // so it is counted here.
+            const uint64_t serving = wakesAsked_.load();
             bool published = false;
             bool more;
             {
@@ -380,6 +396,11 @@ void TermSession::threadMain() {
                     maybePublish(Clock::now(), /*onlyIfConsumed=*/true);
                 }
             }
+            {
+                std::lock_guard<std::mutex> g(wakeMu_);
+                wakesServed_ = serving;
+            }
+            servedCv_.notify_all();
             if (!more || stop_.load(std::memory_order_acquire)) break;
             std::this_thread::yield();
         }
@@ -511,8 +532,14 @@ bool TermSession::maybePublish(Clock::time_point now, bool onlyIfConsumed) {
         // The renderer has not taken the last frame yet: building another
         // now would only replace it unseen. Owe it instead; acquireFrame()
         // wakes this thread to pay once the renderer takes the one it has.
-        publishOwed_.store(true, std::memory_order_release);
-        return false;
+        publishOwed_.store(true, std::memory_order_relaxed);
+        // The renderer may have taken it between the check and the store,
+        // and found nothing owed: then nobody would pay, and the newest
+        // state would wait for the next output (a fed image that stayed on
+        // the screen). Look again after the store; acquireFrame() looks at
+        // the debt after its take, so one of the two sees the other.
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+        if (channel_.has_new()) return false;
     }
     publishOwed_.store(false, std::memory_order_relaxed);
     if (!view_->publish(channel_)) return false;

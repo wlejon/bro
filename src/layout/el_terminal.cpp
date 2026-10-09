@@ -426,7 +426,13 @@ bool ElTerminal::pump(double nowMs, bool focused, float scale) {
         m.layerDirty = true;
     }
 
-    if (m.session->hasNewFrame() || !m.frame) {
+    // Settling, twice: taking a frame can wake the parser for a publish it
+    // owed (the renderer had not taken the frame before it), and the second
+    // round takes that one.
+    const bool settle = host().settleFrames;
+    for (int round = 0; round < (settle ? 2 : 1); ++round) {
+        if (settle) m.session->settle(std::chrono::milliseconds(250));
+        if (!m.session->hasNewFrame() && m.frame) break;
         m.frame = m.session->acquireFrame();
         m.frameOutputMs = m.session->stats().lastPublishMs;
         m.layerDirty = true;

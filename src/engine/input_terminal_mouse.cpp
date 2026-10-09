@@ -55,6 +55,9 @@ void installTerminalHost(bool headless) {
             if (!platform::systemInfo().openUrl(target, &err)) LOG_WARN("terminal: could not open %s: %s", target.c_str(), err.c_str());
         };
     }
+    // Headless frames run on virtual time: each shows what its terminals were
+    // handed before it, not whatever their parser threads reached by then.
+    h.settleFrames = headless;
     layout::ElTerminal::setHost(std::move(h));
 }
 
