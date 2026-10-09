@@ -37,8 +37,8 @@ run anything as them. It is the same model as `bro.remote`'s socket.
 On Windows (10 1803 or later) it is the same AF_UNIX socket through Winsock,
 in `%TEMP%\bro-control\` when `XDG_RUNTIME_DIR` is unset. Winsock has no peer
 credentials: the gate is that directory, which only its user (and
-administrators) can open. A windowed app's socket is named after the app
-folder alone (`helmterm.sock`), without the pid.
+administrators) can open. Sockets are named as on Linux (`helmterm-4242.sock`),
+so two bros with control on never collide.
 
 ## When it is on
 
@@ -47,8 +47,15 @@ folder alone (`helmterm.sock`), without the pid.
   `<app>-<pid>`; `BRO_CONTROL=<name>` picks the name.
 - `BRO_CONTROL=0` turns it off everywhere.
 
-`bro-ctl list` shows the sockets that answer; `-s NAME` picks one (the
-default is `display`, else the only one), `-S PATH` names a socket directly.
+The pid is in the name on every OS, so any number of bros (two windows of one
+app included) serve side by side. A bro that died without removing its
+socket (killed; on Windows, always) leaves the file behind; the next bro to
+start control removes every `<name>-<pid>.sock` whose process is gone. `bro-ctl list` shows the sockets and which
+answer. `-s NAME` picks one: the whole name (`helmterm-4242`), the app alone
+(`helmterm`, when one process of it is running; with several, bro-ctl lists
+them and asks), or the pid (`4242`). Without `-s` the default is `display`,
+else the only live socket. `-S PATH` names a socket directly, as does
+`$BRO_CONTROL_SOCKET`.
 
 ## Commands
 
@@ -60,7 +67,7 @@ first match's centre).
 |---|---|
 | `info` | mode, app, viewport, refresh period, frame number, pid, socket |
 | `screenshot [path] [--selector=S [--pad=8]] [--region=x,y,w,h] [--scale=F]` | PNG of the screen (the KMS scanout buffer under DRM), cropped and scaled |
-| `record [secs=3] [dir] [--scale=0.5] [--max-mb=3072] [--no-video]` | every presented frame for a while (DRM): see below |
+| `record [secs=3] [dir] [--scale=0.5] [--max-mb=3072] [--no-video]` | every presented frame for a while (DRM or windowed): see below |
 | `trace [secs=5] [--since=ms] [--until=ms] [--json] [--frames] [--worst=N]` | the flight recorder's pacing summary, or (`--frames`) every frame record |
 | `mark <label>` | a labelled mark in the trace; `now` prints the trace's clock |
 | `animations [--all]` | running animations and transitions: element, properties, time |
@@ -102,12 +109,20 @@ and the command replies once it has all been delivered.
 bro-ctl record 3 /tmp/rec [--scale=0.5]
 ```
 
-Every frame the display presents for 3 s is copied off the scanout image on
-the GPU (scaled), with the kernel's flip timestamp and vblank counter, and
-written out:
+Under DRM, every frame the display presents for 3 s is copied off the
+scanout image on the GPU (scaled), with the kernel's flip timestamp and
+vblank counter. A windowed bro (Windows, macOS, a Wayland or X11 client)
+records each frame its presenter read back from the swapchain (asking for
+the socket with `BRO_CONTROL` keeps that readback on), stamped with the time
+the frame loop saw the present: the system compositor owns the vblank there,
+so `seq` is 0 and gaps are measured against the refresh period (the window
+system's, else the display's mode, else the median frame interval). A
+window draws only when its content changes, so an idle app records few
+frames. Either way it is written out:
 
 - `frames/NNNNN.png` and `frames.ffconcat` (true per-frame durations);
-  `video.mp4` when ffmpeg is on the path (bro-ctl runs it; `--no-video` skips)
+  `video.mp4` when ffmpeg is on the path (bro-ctl runs it, through cmd.exe
+  on Windows and sh elsewhere; `--no-video` skips)
 - `contact.png`: a sheet of up to 48 frames around the motion, cropped to
   where the picture changed, each labelled with its time; a frame shown
   after a missed vblank is outlined amber, a stall (a frame identical to the

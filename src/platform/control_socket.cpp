@@ -26,6 +26,7 @@
 #else
 #include <fcntl.h>
 #include <poll.h>
+#include <signal.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -218,6 +219,40 @@ bool socketAnswers(const sockaddr_un& addr) {
     const bool live = ::connect(probe, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) == 0;
     closeSock(probe);
     return live;
+}
+
+// Whether process `pid` exists (a reused pid counts: kept, never wrongly removed).
+bool processAlive(long pid) {
+#if defined(_WIN32)
+    HANDLE h = ::OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(pid));
+    if (!h) return ::GetLastError() == ERROR_ACCESS_DENIED;
+    const bool alive = ::WaitForSingleObject(h, 0) == WAIT_TIMEOUT;
+    ::CloseHandle(h);
+    return alive;
+#else
+    return ::kill(static_cast<pid_t>(pid), 0) == 0 || errno == EPERM;
+#endif
+}
+
+// Names carry their server's pid (<app>-<pid>.sock), so one left by a process
+// that died without unlinking it (killed; Winsock never unlinks) is never
+// reclaimed by a later bind of the same name. Remove those whose process is
+// gone; a name without a pid is left to the bind of that name.
+void removeDeadSockets(const std::string& dir) {
+    std::error_code ec;
+    const std::filesystem::path d(std::u8string(dir.begin(), dir.end()));
+    for (std::filesystem::directory_iterator it(d, ec), end; !ec && it != end; it.increment(ec)) {
+        const std::string n = it->path().filename().string();
+        if (n.size() <= 5 || n.compare(n.size() - 5, 5, ".sock") != 0) continue;
+        const std::string stem = n.substr(0, n.size() - 5);
+        const size_t dash = stem.rfind('-');
+        if (dash == std::string::npos || dash + 1 == stem.size()) continue;
+        const std::string pid = stem.substr(dash + 1);
+        if (pid.find_first_not_of("0123456789") != std::string::npos || pid.size() > 9) continue;
+        if (processAlive(std::strtol(pid.c_str(), nullptr, 10))) continue;
+        std::filesystem::remove(it->path(), ec);
+        ec.clear();
+    }
 }
 
 }  // namespace
@@ -425,6 +460,7 @@ bool ControlSocket::start(const std::string& name, std::string* why) {
     ::chmod(dir.c_str(), 0700);
 #endif
 
+    removeDeadSockets(dir);
     const std::string path = dir + "/" + name + ".sock";
     sockaddr_un addr{};
     if (!socketAddress(path, addr)) return fail("socket path too long: " + path);

@@ -31,7 +31,9 @@
 #include <memory>
 #include <thread>
 
-#if !defined(_WIN32)
+#if defined(_WIN32)
+#include <process.h>
+#else
 #include <unistd.h>
 #endif
 
@@ -181,7 +183,9 @@ void cmdInfo(ControlServer& s, const ControlCallPtr& call) {
     Engine& e = s.engine();
     util::JsonOut j;
     j.beginObject();
-#if !defined(_WIN32)
+#if defined(_WIN32)
+    j.key("pid").integer(::_getpid());
+#else
     j.key("pid").integer(::getpid());
 #endif
     j.key("mode").string(modeName(e.displayMode()));

@@ -15,12 +15,18 @@
 //                      recorder's records and summary for the same window
 //   summary.txt        the pacing in a few lines
 //
-// Under DRM only (the frames are the scanout's).
+// Under DRM the frames are the scanout's, each with the vblank it landed on.
+// A windowed bro (Windows, macOS, X11/Wayland clients) records what its
+// presenter read back from each swapchain present (the control socket keeps
+// that readback on), stamped with the time the frame loop saw it: the
+// window system's compositor, not bro, decides the vblank there, so gaps are
+// measured against the refresh period rather than counted.
 
 #include "engine/control.h"
 #include "engine/control_helpers.h"
 #include "engine/engine.h"
 #include "engine/frame_trace.h"
+#include "platform/window.h"
 #include "render/system_font_mgr.h"
 #include "render/vulkan_presenter.h"
 #include "util/json_out.h"
@@ -75,6 +81,7 @@ struct Recording {
     std::vector<CapturedFrame> frames;
     ControlCallPtr call;
     bool overflow = false;
+    uint64_t lastSerial = 0;  // windowed: the presenter's last read-back present
 #if BRO_WITH_DMABUF
     std::unique_ptr<render::ScanoutCapture> capture;
 #endif
@@ -358,17 +365,93 @@ void finish(Engine& e, std::shared_ptr<Recording> r) {
 }
 #endif
 
+// The refresh period a windowed recording measures gaps against: the frame
+// trace's when the window system reported one, else the rate of the display
+// the window is on, else the median interval between the recorded presents.
+double windowedRefreshMs(Engine& e, const Recording& r, double traced) {
+    if (traced > 0.0) return traced;
+    if (platform::Window* w = e.window())
+        for (const platform::DisplayInfo& d : w->getDisplays())
+            if (d.isCurrent && d.refreshRate > 1.0f) return 1000.0 / d.refreshRate;
+    std::vector<double> d;
+    for (size_t i = 1; i < r.frames.size(); ++i) d.push_back(r.frames[i].vblankMs - r.frames[i - 1].vblankMs);
+    if (d.empty()) return 1000.0 / 60.0;
+    std::nth_element(d.begin(), d.begin() + d.size() / 2, d.end());
+    return std::max(1.0, d[d.size() / 2]);
+}
+
+// Windowed: each present the presenter read back, scaled into the
+// recording's size (BGRA, as the scanout tap delivers it).
+void recordWindowed(ControlServer& s, Engine& e, const ControlCallPtr& call, double secs, std::string dir,
+                    double scale) {
+    render::VulkanPresenter* presenter = e.vulkanPresenter();
+    if (!presenter || presenter->isHeadless() || e.displayMode() != DisplayMode::Windowed)
+        return call->fail("record needs a windowed bro or bro --drm");
+    if (!presenter->capturePresents())
+        return call->fail("this window does not read back its presents (BRO_CONTROL turns that on at start)");
+    auto r = std::make_shared<Recording>();
+    r->dir = std::move(dir);
+    r->durationMs = secs * 1000.0;
+    r->scale = scale;
+    r->call = call;
+    const uint32_t fw = static_cast<uint32_t>(std::max(1, e.framePixelWidth()));
+    const uint32_t fh = static_cast<uint32_t>(std::max(1, e.framePixelHeight()));
+    r->width = std::max(16u, static_cast<uint32_t>(std::lround(fw * scale)) & ~1u);
+    r->height = std::max(16u, static_cast<uint32_t>(std::lround(fh * scale)) & ~1u);
+    const size_t frameBytes = static_cast<size_t>(r->width) * r->height * 4;
+    const size_t capBytes = static_cast<size_t>(call->number("max-mb", 3072)) << 20;
+    r->maxFrames = std::max<size_t>(1, capBytes / frameBytes);
+    // What was on screen before the recording is not part of it.
+    r->lastSerial = presenter->readbackSerial();
+    r->startMs = util::currentTimeMs();
+    g_active = r;
+    s.addTicker([&e, r]() {
+        render::VulkanPresenter* p = e.vulkanPresenter();
+        const uint64_t serial = p ? p->readbackSerial() : 0;
+        if (p && serial != 0 && serial != r->lastSerial && r->frames.size() < r->maxFrames) {
+            r->lastSerial = serial;
+            std::vector<uint8_t> rgba;
+            uint32_t w = 0, h = 0;
+            if (p->readbackPixels(rgba, w, h) && w && h) {
+                CapturedFrame f;
+                f.rgba.resize(static_cast<size_t>(r->width) * r->height * 4);
+                const SkPixmap src(SkImageInfo::Make(static_cast<int>(w), static_cast<int>(h), kRGBA_8888_SkColorType,
+                                                     kUnpremul_SkAlphaType),
+                                   rgba.data(), static_cast<size_t>(w) * 4);
+                const SkPixmap dst(SkImageInfo::Make(static_cast<int>(r->width), static_cast<int>(r->height),
+                                                     kBGRA_8888_SkColorType, kUnpremul_SkAlphaType),
+                                   f.rgba.data(), static_cast<size_t>(r->width) * 4);
+                if (src.scalePixels(dst, SkSamplingOptions(SkFilterMode::kLinear, SkMipmapMode::kNone))) {
+                    f.vblankMs = util::currentTimeMs();
+                    f.frame = e.frameNumber();
+                    r->frames.push_back(std::move(f));
+                }
+            }
+        } else if (r->frames.size() >= r->maxFrames) {
+            r->overflow = true;
+        }
+        if (util::currentTimeMs() - r->startMs < r->durationMs && !r->overflow) return false;
+        g_active.reset();
+        const double from = r->startMs, to = util::currentTimeMs();
+        FrameTrace& tr = e.frameTrace();
+        std::thread(writeRecording, r, windowedRefreshMs(e, *r, tr.refreshPeriodMs()), tr.summaryJson(from, to),
+                    tr.summaryText(from, to), tr.toJson(from, to))
+            .detach();
+        return true;
+    });
+}
+
 void cmdRecord(ControlServer& s, const ControlCallPtr& call) {
-#if BRO_WITH_DMABUF
     Engine& e = s.engine();
-    auto* kms = e.vulkanPresenter() ? e.vulkanPresenter()->kmsDirectPresenter() : nullptr;
-    if (e.displayMode() != DisplayMode::Drm || !kms || !e.vulkanContext())
-        return call->fail("record needs bro --drm (it records the scanout)");
     if (g_active) return call->fail("a recording is already running");
     const double secs = std::clamp(std::atof(call->arg(0, "3").c_str()), 0.1, 60.0);
     std::string dir = call->arg(1);
     if (dir.empty()) dir = controlRuntimePath("record");
     const double scale = std::clamp(call->number("scale", 0.5), 0.1, 1.0);
+    if (e.displayMode() != DisplayMode::Drm) return recordWindowed(s, e, call, secs, std::move(dir), scale);
+#if BRO_WITH_DMABUF
+    auto* kms = e.vulkanPresenter() ? e.vulkanPresenter()->kmsDirectPresenter() : nullptr;
+    if (!kms || !e.vulkanContext()) return call->fail("record needs bro --drm (it records the scanout)");
 
     auto r = std::make_shared<Recording>();
     r->dir = dir;
@@ -413,8 +496,7 @@ void cmdRecord(ControlServer& s, const ControlCallPtr& call) {
         return true;
     });
 #else
-    (void)s;
-    call->fail("record needs a build with DMA-BUF / DRM support");
+    call->fail("record under DRM needs a build with DMA-BUF / DRM support");
 #endif
 }
 
@@ -423,7 +505,8 @@ void cmdRecord(ControlServer& s, const ControlCallPtr& call) {
 void registerControlRecordCommands(ControlServer& s) {
     s.registerCommand("record",
                       "[seconds=3] [dir] [--scale=0.5] [--max-mb=3072]  every presented frame for a while, with "
-                      "its vblank: frames/, contact.png, timeline.json, summary.txt, frames.ffconcat (DRM only)",
+                      "its vblank (DRM) or present time (windowed): frames/, contact.png, timeline.json, "
+                      "summary.txt, frames.ffconcat",
                       [&s](const ControlCallPtr& c) { cmdRecord(s, c); });
 }
 

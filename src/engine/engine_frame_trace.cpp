@@ -21,7 +21,9 @@
 #include <cstring>
 #include <filesystem>
 
-#if !defined(_WIN32)
+#if defined(_WIN32)
+#include <process.h>
+#else
 #include <unistd.h>
 #endif
 
@@ -108,10 +110,11 @@ void Engine::startControl() {
         std::string app = std::filesystem::path(appDir_).filename().string();
         if (app.empty()) app = "bro";
 #if defined(_WIN32)
-        name = app;
+        const long long pid = ::_getpid();
 #else
-        name = app + "-" + std::to_string(static_cast<long long>(::getpid()));
+        const long long pid = ::getpid();
 #endif
+        name = app + "-" + std::to_string(pid);
     }
     for (char& c : name)
         if (!std::isalnum(static_cast<unsigned char>(c)) && c != '-' && c != '_' && c != '.') c = '_';

@@ -3,6 +3,9 @@
 //   bro-ctl [-s NAME | -S PATH] [-o OUT] <command> [args...]
 //   bro-ctl batch            commands from stdin, one per line, one connection
 //   bro-ctl list             the control sockets of this user's bro processes
+//
+// A windowed or headless bro's socket is <app>-<pid>; -s takes that whole
+// name, the app alone (when one process of it runs) or the pid.
 //   bro-ctl profile <secs>   native CPU profile of the process (perf)
 //
 // Every other command is the engine's (bro-ctl help lists them). The request
@@ -127,14 +130,7 @@ std::vector<std::string> listSockets() {
     return out;
 }
 
-// The socket to use: -S, -s, $BRO_CONTROL_SOCKET, display.sock, else the one live socket.
-std::string resolveSocket(const std::string& path, const std::string& name, std::string& why) {
-    if (!path.empty()) return path;
-    if (!name.empty()) return socketDir() + "/" + name + ".sock";
-    if (const char* env = std::getenv("BRO_CONTROL_SOCKET"); env && *env) return env;
-    const std::string display = socketDir() + "/display.sock";
-    std::error_code ec;
-    if (std::filesystem::exists(display, ec)) return display;
+std::vector<std::string> liveSockets() {
     std::vector<std::string> live;
     for (const auto& s : listSockets()) {
         Sock fd = connectTo(s);
@@ -143,14 +139,63 @@ std::string resolveSocket(const std::string& path, const std::string& name, std:
             live.push_back(s);
         }
     }
+    return live;
+}
+
+std::string socketStem(const std::string& path) {
+    std::string n = std::filesystem::path(path).filename().string();
+    return n.size() > 5 ? n.substr(0, n.size() - 5) : n;
+}
+
+bool allDigits(const std::string& s) {
+    if (s.empty()) return false;
+    for (char c : s)
+        if (c < '0' || c > '9') return false;
+    return true;
+}
+
+// Does a socket's stem answer to `-s NAME`? The whole name (`helmterm-4242`),
+// the app (`helmterm`, matching `helmterm-<pid>`), or the pid (`4242`).
+bool nameMatches(const std::string& stem, const std::string& name) {
+    if (stem == name) return true;
+    const size_t dash = stem.rfind('-');
+    if (dash == std::string::npos) return false;
+    const std::string app = stem.substr(0, dash), pid = stem.substr(dash + 1);
+    if (!allDigits(pid)) return false;
+    return app == name || pid == name;
+}
+
+std::string pickOne(const std::vector<std::string>& live, const std::string& what, std::string& why) {
     if (live.size() == 1) return live[0];
-    if (live.empty()) why = "no running bro serves a control socket in " + socketDir() +
+    if (live.empty()) why = "no running bro serves a control socket " + what + " in " + socketDir() +
                             " (bro --drm serves one; elsewhere start it with BRO_CONTROL=1)";
     else {
-        why = "several bro processes are running; pick one with -s NAME:";
-        for (const auto& s : live) why += "\n  " + s;
+        why = "several bro processes answer" + (what.empty() ? std::string() : " " + what) +
+              "; pick one with -s NAME (app-pid, app or pid):";
+        for (const auto& s : live) why += "\n  " + socketStem(s);
     }
     return {};
+}
+
+// The socket to use: -S, -s, $BRO_CONTROL_SOCKET, display.sock, else the one live socket.
+std::string resolveSocket(const std::string& path, const std::string& name, std::string& why) {
+    if (!path.empty()) return path;
+    if (!name.empty()) {
+        // An exact name first (display, or what BRO_CONTROL=<name> chose),
+        // even if it does not answer: connecting says why.
+        const std::string exact = socketDir() + "/" + name + ".sock";
+        std::error_code ec;
+        if (std::filesystem::exists(exact, ec)) return exact;
+        std::vector<std::string> match;
+        for (const auto& s : liveSockets())
+            if (nameMatches(socketStem(s), name)) match.push_back(s);
+        return pickOne(match, "to -s " + name, why);
+    }
+    if (const char* env = std::getenv("BRO_CONTROL_SOCKET"); env && *env) return env;
+    const std::string display = socketDir() + "/display.sock";
+    std::error_code ec;
+    if (std::filesystem::exists(display, ec)) return display;
+    return pickOne(liveSockets(), "", why);
 }
 
 struct Conn {
@@ -209,6 +254,35 @@ std::string jsonString(const std::string& json, const std::string& key) {
         out += json[i++];
     }
     return out;
+}
+
+// One argument for std::system's shell: cmd.exe on Windows, sh elsewhere.
+std::string shellArg(const std::string& s) {
+#if defined(_WIN32)
+    // cmd.exe has no escape inside "..." and a path cannot hold '"'; '%'
+    // would expand a variable, but %TEMP% paths do not carry one.
+    return "\"" + s + "\"";
+#else
+    std::string out = "'";
+    for (char c : s) out += (c == '\'') ? std::string("'\\''") : std::string(1, c);
+    return out + "'";
+#endif
+}
+
+// ffmpeg turns a recording's frames.ffconcat into video.mp4. The concat
+// demuxer reads the frames relative to the .ffconcat file, so no cd is
+// needed and the command is the same on every shell but for the quoting.
+std::string ffmpegCommand(const std::string& dir) {
+    const std::filesystem::path d(dir);
+    std::string cmd = "ffmpeg -loglevel error -y -f concat -safe 0 -i " + shellArg((d / "frames.ffconcat").string()) +
+                      " -fps_mode cfr -r 60 -pix_fmt yuv420p -c:v libx264 -preset veryfast " +
+                      shellArg((d / "video.mp4").string());
+#if defined(_WIN32)
+    // cmd /c strips the outer quotes of a line that starts with one; wrapping
+    // the whole line keeps the inner ones.
+    cmd = "\"" + cmd + "\"";
+#endif
+    return cmd;
 }
 
 bool onPath(const char* tool) {
@@ -341,10 +415,10 @@ int runOne(Conn& c, std::vector<std::string> argv, const std::string& out) {
         for (const auto& a : argv)
             if (a == "--no-video") wantVideo = false;
         if (!dir.empty() && wantVideo && onPath("ffmpeg")) {
-            std::string ff = "cd '" + dir + "' && ffmpeg -loglevel error -y -f concat -safe 0 -i frames.ffconcat "
-                             "-fps_mode cfr -r 60 -pix_fmt yuv420p -c:v libx264 -preset veryfast video.mp4";
-            if (std::system(ff.c_str()) == 0 && !plan.toStdout) {
-                payload.insert(payload.size() - 1, ",\"video\":\"" + dir + "/video.mp4\"");
+            const std::string video = (std::filesystem::path(dir) / "video.mp4").string();
+            if (std::system(ffmpegCommand(dir).c_str()) == 0 && !plan.toStdout && !payload.empty() &&
+                payload.back() == '}') {
+                payload.insert(payload.size() - 1, ",\"video\":" + quote(video));
             }
         }
         if (plan.toStdout) {

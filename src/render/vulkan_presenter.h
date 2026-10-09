@@ -130,6 +130,10 @@ public:
     /// tightly packed). Offscreen every present is read back; windowed only
     /// those captured (setCapturePresents). False if there is none.
     bool readbackPixels(std::vector<uint8_t>& outPixels, uint32_t& outWidth, uint32_t& outHeight);
+    /// The last read-back present's queue ticket (0: none). It grows with
+    /// every captured present, so a change means readbackPixels() has a new
+    /// frame (the control socket's windowed `record` polls it).
+    uint64_t readbackSerial() const { return readbackTicket_; }
 
     bool isHeadless() const;
     VulkanSwapchain* swapchain() const { return swapchain_; }
