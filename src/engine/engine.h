@@ -60,6 +60,15 @@ class Engine {
 public:
     explicit Engine(const EngineConfig& config);
     ~Engine();
+private:
+    // The constructor's work. A throw from it (no index.html, Vulkan or the
+    // renderer failing to start) runs teardown() before the members go, in
+    // the order ~Engine keeps: left to member destruction, Skia's context
+    // would go before the renderer that draws with it.
+    void construct(const EngineConfig& config);
+    // ~Engine's body: what is torn down, in what order.
+    void teardown();
+public:
 
     void stopBackgroundServices();
     void shutdown();

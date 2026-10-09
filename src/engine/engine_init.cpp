@@ -130,6 +130,15 @@ Engine::Engine(const EngineConfig& config)
     , viewportScrollbar_(config.viewportScrollbar)
     , elementScrollbar_(config.elementScrollbar)
     , uiFrameIntervalMs_(config.graphics.maxFrameIntervalMs) {
+    try {
+        construct(config);
+    } catch (...) {
+        teardown();
+        throw;
+    }
+}
+
+void Engine::construct(const EngineConfig& config) {
     // Under DRM bro is the display server: no desktop window system, and so
     // no SDL video. Chosen before anything asks the platform layer a question.
     if (displayMode_ == DisplayMode::Drm)

@@ -19,6 +19,7 @@ using bro::engine::findAncestorProjectRoot;
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -185,6 +186,14 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
                 std::string installed = findInstalledApp(appDir);
                 if (!installed.empty()) appDir = installed;
             }
+        }
+        // Nothing there at all: say so, before a GPU or a realm is started
+        // for an app that cannot load.
+        std::error_code ec;
+        if (!std::filesystem::exists(std::filesystem::path(std::u8string(appDir.begin(), appDir.end())), ec)) {
+            fprintf(stderr, "%s: no app directory or bro.json at '%s'\n", hooks.programName.c_str(),
+                    appDir.c_str());
+            return 1;
         }
     }
 
