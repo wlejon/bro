@@ -368,7 +368,12 @@ std::vector<uint8_t> Engine::readCompositedFrame() {
 
 bool Engine::capturePresentsRequested() {
     const char* v = std::getenv("BRO_CAPTURE_PRESENTS");
-    return v && std::strcmp(v, "1") == 0;
+    if (v && std::strcmp(v, "1") == 0) return true;
+    // The agent control socket's screenshot of a windowed bro reads back the
+    // last present: asking for the socket (BRO_CONTROL, any value but 0/off)
+    // keeps one.
+    const char* c = std::getenv("BRO_CONTROL");
+    return c && *c && std::strcmp(c, "0") != 0 && std::strcmp(c, "off") != 0;
 }
 
 std::vector<uint8_t> Engine::presentedPixels(uint64_t hostId, int& outW, int& outH) {

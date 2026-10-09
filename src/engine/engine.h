@@ -646,8 +646,9 @@ private:
     void presentCurrentFrame();
     std::vector<uint8_t> readCompositedFrame();
     render::PresentFrame describeCompositedFrame();
-    // BRO_CAPTURE_PRESENTS=1: windowed presenters also read back each frame
-    // they present (presentedPixels).
+    // BRO_CAPTURE_PRESENTS=1, or the control socket asked for with
+    // BRO_CONTROL: windowed presenters also read back each frame they present
+    // (presentedPixels, the control socket's screenshot).
     static bool capturePresentsRequested();
     FramePresenter::Snapshot buildRasterSnapshot() const;
     void renderAndPresentFrame(double frameStart, double now, double wallFrameDtMs,
