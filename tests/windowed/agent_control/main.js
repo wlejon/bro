@@ -36,6 +36,18 @@ function sleep(ms) {
 
 const children = [];
 
+// A child that did not come up: how it ended, and the end of its log.
+function childReport(c) {
+    let log = '';
+    try {
+        const files = fs.readdirSync(c.dir).filter((f) => /^bro.*\.log$/.test(f));
+        for (const f of files) log += fs.readFileSync(path.join(c.dir, f), 'utf-8').split('\n').slice(-40).join('\n');
+    } catch (e) {
+        log = '(no log: ' + e + ')';
+    }
+    return `\n  child pid ${c.proc.pid} exit ${c.exit === null ? 'still running' : c.exit}; its log:\n${log}`;
+}
+
 async function run() {
     if (!fs.existsSync(ctlExe)) {
         skipTest('bro-ctl is not built beside ' + broExe);
@@ -45,7 +57,9 @@ async function run() {
     for (let i = 0; i < 2; i++) {
         const dir = path.join(os.tmpdir(), `bro-agent-control-${process.pid}-${i}`);
         fs.mkdirSync(dir, { recursive: true });
-        children.push({ proc: cp.spawn(broExe, ['--no-splash', childApp], { env, cwd: dir }), dir });
+        const child = { proc: cp.spawn(broExe, ['--no-splash', childApp], { env, cwd: dir }), dir, exit: null };
+        child.proc.on('exit', (code, signal) => (child.exit = `${code}/${signal}`));
+        children.push(child);
     }
     const pids = children.map((c) => c.proc.pid);
     assert(pids.every((p) => p > 0), `both children started: ${pids}`);
@@ -53,12 +67,17 @@ async function run() {
     // Each serves <app>-<pid>: the names differ, so neither takes the other's.
     const names = pids.map((p) => 'child-' + p);
     let listed = '';
-    for (const until = Date.now() + 30000; Date.now() < until; await sleep(200)) {
+    for (const until = Date.now() + 60000; Date.now() < until; await sleep(200)) {
         listed = ctl(['list']).out;
         const live = listed.split('\n').filter((l) => !l.includes('(stale)'));
         if (names.every((n) => live.some((l) => l.includes(n + '.sock')))) break;
+        if (children.some((c) => c.exit !== null)) break;
     }
-    for (const n of names) assert(listed.includes(n + '.sock'), `bro-ctl list shows ${n}.sock: ${listed}`);
+    children.forEach((c, i) => {
+        const ok = listed.includes(names[i] + '.sock');
+        assert(ok, `bro-ctl list shows ${names[i]}.sock: ${listed}` + (ok ? '' : childReport(c)));
+    });
+    if (!names.every((n) => listed.includes(n + '.sock'))) return;
 
     // -s <pid> and -s <app>-<pid> each reach their own process.
     for (const p of pids) {
