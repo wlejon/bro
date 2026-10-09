@@ -1,15 +1,15 @@
 # Desktop environment roadmap
 
-**North star:** a cross-platform desktop environment, as complete as we can manage, built on bro: Windows and Linux at least. On Linux, bro drives the screen itself (DRM/KMS, libinput, logind, XWayland). Desktop apps are their own repos; broterm is the first.
+**North star:** a cross-platform desktop environment, as complete as we can manage, built on bro: Windows and Linux at least. On Linux, bro drives the screen itself (DRM/KMS, libinput, logind, XWayland). Desktop apps are bro folder apps; the core ones live in [helmapps](https://github.com/wlejon/helmapps), helmterm first.
 
-**Current milestone:** a terminal in bro good enough to run Claude Code (`<terminal>` in bro and [broterm](https://github.com/wlejon/broterm)).
+**Current milestone:** a terminal in bro good enough to run Claude Code (`<terminal>` in bro and helmterm).
 
 Every repo is listed in [ecosystem.md](ecosystem.md). This page records where things stand and what is left. Last updated 2026-10-06.
 
 ## Done
 
 - **bro `<terminal>`** is a native replaced element painted by bro, on its own compositor layer, over bropty. It covers keys, IME and paste; mouse selection and reporting; scrollback, search and links; OSC title/cwd/bell/notification/progress/52/133/99/22 events; inline images (kitty, sixel, iTerm2); the foreground process; an `activity` event; the effective palette; runtime scrollback and cursor options; and persistent sessions through bromux (protocol 2.1 carries the same extras). API: [terminal-api.js](terminal-api.js).
-- **broterm** has tabs and splits, profiles, settings, a command palette and keybindings. It also has find, links, a clipboard-read policy and paste safety. Shell integration for pwsh, Windows PowerShell, bash, zsh and fish provides command marks, prompt navigation, durations, re-run, a sticky header and long-command notifications. Titles follow the foreground process, and persistent sessions reattach on restart. 36 tests pass on Windows and Linux.
+- **helmterm** (formerly broterm, its own executable, now a helmapps folder app) has tabs and splits, profiles, settings, a command palette and keybindings. It also has find, links, a clipboard-read policy and paste safety. Shell integration for pwsh, Windows PowerShell, bash, zsh and fish provides command marks, prompt navigation, durations, re-run, a sticky header and long-command notifications. Titles follow the foreground process, and persistent sessions reattach on restart. 36 tests pass on Windows and Linux.
 - **Desktop substrate libraries**, all public with CI:
   - Linux session: broseat, brodmabuf, brodbus, browl
   - Display and shell: brodisplays, brocompositor

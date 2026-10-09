@@ -8,7 +8,7 @@ Each dependency is a `bro_dependency()` call (see [How it works](#how-it-works))
 
 Every library but bromath, htmlayout and the four terminal libraries also owns its JavaScript binding, a `<name>_api` static library under the sibling's `src/api/`, so those siblings depend on bronze — and through it brass. See [Sibling JavaScript APIs](#sibling-javascript-apis-name_api) below for what that changes.
 
-One more sibling repo, **[broworkshop](https://github.com/wlejon/broworkshop)** at `../broworkshop`, is **not** a library or CMake dependency. It's the apps tree (launcher, games, tools, demos, AI) and no CMake dependency at all; bro just runs it via `bro ../broworkshop` or `bro ../broworkshop/bro.json`. See the [Apps tree](#apps-tree) section below. The dependency runs the other way for **[broterm](https://github.com/wlejon/broterm)**, **[helm](https://github.com/wlejon/helm)** and **[ffmpeg-bro](https://github.com/wlejon/ffmpeg-bro)**: each is its own executable that pins bro with `bro_dependency(bro ...)`, so it builds `../bro` when present and the pinned bro otherwise.
+One more sibling repo, **[broworkshop](https://github.com/wlejon/broworkshop)** at `../broworkshop`, is **not** a library or CMake dependency. It's the apps tree (launcher, games, tools, demos, AI) and no CMake dependency at all; bro just runs it via `bro ../broworkshop` or `bro ../broworkshop/bro.json`. See the [Apps tree](#apps-tree) section below. The dependency runs the other way for **[helm](https://github.com/wlejon/helm)** and **[ffmpeg-bro](https://github.com/wlejon/ffmpeg-bro)**: each is its own executable that pins bro with `bro_dependency(bro ...)`, so it builds `../bro` when present and the pinned bro otherwise.
 
 `cmake/bro_pins.cmake` pins every ecosystem library bro builds against (all of `scripts/repos.txt`'s `pinned` rows: the engine, terminal and desktop libraries, brolink/brovideo/broremote/brodmabuf, bronze and brass), plus bro's own third-party code: SDL, Jolt and FastNoise2.
 
@@ -27,7 +27,7 @@ D:/projects/
 ├── brass/                        # the backend JIT/AOT compiler
 ├── bronze/                       # the JS compiler + runtime
 ├── broworkshop/                  # apps tree (launcher + games/tools/demos/ai)
-└── ...                           # desktop libraries, broterm, helm, ...: see ecosystem.md
+└── ...                           # desktop libraries, helm, helmapps, ...: see ecosystem.md
 ```
 
 Any of the sibling directories may be missing; that dependency then comes from its pin.
