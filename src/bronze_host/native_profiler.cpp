@@ -85,6 +85,10 @@ std::string resultJson(const rt::ProfilerResult& r, bool callers, bool report) {
             j += ",\"line\":";
             u64(f.line);
         }
+        if (!f.tier1Rejected.empty()) {
+            j += ",\"tier1Rejected\":";
+            appendJsonString(j, f.tier1Rejected);
+        }
         j += ",\"self\":";
         u64(f.self);
         j += ",\"total\":";

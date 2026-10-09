@@ -23,6 +23,13 @@
  *   'stub'         JIT trampolines and lazy-link stubs
  *   'native'       everything else: bronze runtime helpers, bro, the OS
  *
+ * A JS function the baseline JIT (tier 1) does not compile carries
+ * `tier1Rejected`, the construct it rejected (or the function whose
+ * rejection it inherits). It never shows a 'tier 1' row: it runs in the
+ * interpreter until it is as hot as tier-1 code is when it tiers up, then
+ * moves straight to 'tier 2', and back to the interpreter if its optimized
+ * code is dropped. The text report lists the rejected rows and why.
+ *
  * SELF goes to the innermost frame that is not the interpreter's own dispatch
  * loop: a function the interpreter runs is billed for its bytecode, a runtime
  * helper it calls (a property store, an allocation) is billed to the helper.
@@ -85,6 +92,7 @@
  * @property {string} module  The image a native or aot frame is in; 'jit' or 'interpreter' otherwise.
  * @property {string} [file]  A JS function's source file, when known.
  * @property {number} [line]  Its definition line, when known.
+ * @property {string} [tier1Rejected]  Why tier 1 rejected this JS function, when it did.
  * @property {number} self    Samples with this function innermost.
  * @property {number} total   Samples with this function anywhere on the stack.
  */

@@ -14,8 +14,8 @@ bro_dependency(jolt GITHUB jrouwe/JoltPhysics REF 945d1d5ce29a8ccc8fa78c74059b18
 bro_dependency(FastNoise2 GITHUB Auburn/FastNoise2 REF ba93f17ec40a9d09066c8d07b3e72b789e5b5657 THIRD_PARTY PIN_ONLY)
 
 # The JavaScript toolchain.
-bro_dependency(bronze GITHUB wlejon/bronze REF 8aa8f504ded1d4e5a8393109673a1d2e9d1c04e0 PIN_ONLY)
-bro_dependency(brass GITHUB wlejon/brass REF b49d2bde0046fb96b93b95f544d766137dd5563a PIN_ONLY)
+bro_dependency(bronze GITHUB wlejon/bronze REF 9d69001772161ff515aa5b01b674e1011fa8d1e9 PIN_ONLY)
+bro_dependency(brass GITHUB wlejon/brass REF d272c0172c2755079c8679c64129d7f3fa8133a7 PIN_ONLY)
 
 # Engine libraries.
 bro_dependency(bromath GITHUB wlejon/bromath REF 8b511fbd69c014bf0584d2b42e6c96a8cf720f6a PIN_ONLY)
