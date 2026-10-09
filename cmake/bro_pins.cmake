@@ -25,8 +25,8 @@ bro_dependency(broimage GITHUB wlejon/broimage REF 9346cd5e97cb2fba0bae15e9f15fc
 bro_dependency(broaudio GITHUB wlejon/broaudio REF 964a428ce8d8eae432cba8ac1a437ca5e2bf1b3f PIN_ONLY)
 bro_dependency(bromesh GITHUB wlejon/bromesh REF fe7fdc1801f96d246d34e3f33b706ba9359cd217 PIN_ONLY)
 bro_dependency(broflora GITHUB wlejon/broflora REF 69b8ead27cb2c0c7d7c2a18d6a7566f8cd91b2a6 PIN_ONLY)
-bro_dependency(brotensor GITHUB wlejon/brotensor REF a332d9283c1e23b9f39e8ecaa4393f937dd26c0a PIN_ONLY)
-bro_dependency(brogameagent GITHUB wlejon/brogameagent REF ef3bad38d6428ab55ff8bcb768be9c0c58437b00 PIN_ONLY)
+bro_dependency(brotensor GITHUB wlejon/brotensor REF 39fb8e5857af60ba51b8131baf87805bc79b62c0 PIN_ONLY)
+bro_dependency(brogameagent GITHUB wlejon/brogameagent REF b037a5e173d866bf8d3dbd73b4510231ca858cf2 PIN_ONLY)
 bro_dependency(brolm GITHUB wlejon/brolm REF 3e2547cba802e183196b95523bc53ee99304664b PIN_ONLY)
 bro_dependency(brovisionml GITHUB wlejon/brovisionml REF 55727b93a9dbdaf87d86f191fa7c368ec1202ada PIN_ONLY)
 bro_dependency(brodiffusion GITHUB wlejon/brodiffusion REF f805fca4c6b0651f775f168514e3d3dbf379f000 PIN_ONLY)
@@ -35,11 +35,11 @@ bro_dependency(brosoundml GITHUB wlejon/brosoundml REF 616ffb72758d24000f7408736
 # The <terminal> element and remote sessions.
 bro_dependency(brosearch GITHUB wlejon/brosearch REF e408e853181e353e086d547b6d1d3e9cc1c0167f PIN_ONLY)
 bro_dependency(brothemes GITHUB wlejon/brothemes REF e993808342a94338a8845664b92631c13128e52a PIN_ONLY)
-bro_dependency(bropty GITHUB wlejon/bropty REF 3683d1cc3cc9249d3f866f217b1ca8dbb7b953e6 PIN_ONLY)
-bro_dependency(brolink GITHUB wlejon/brolink REF b393d00256a47445b594fad06779fb546d7e0f65 PIN_ONLY)
+bro_dependency(bropty GITHUB wlejon/bropty REF d0b7ee2b4ed32e5d0762d7eb0efae7a00094c5c2 PIN_ONLY)
+bro_dependency(brolink GITHUB wlejon/brolink REF 5696d385803b6e03fecd43694c5e6039da121ed5 PIN_ONLY)
 bro_dependency(bromux GITHUB wlejon/bromux REF ce5e2862c16afb835414becceefb353986a5c599 PIN_ONLY)
 bro_dependency(brovideo GITHUB wlejon/brovideo REF 6182bff5a5c619ba5756615aee99a271969c9ed3 PIN_ONLY)
-bro_dependency(broremote GITHUB wlejon/broremote REF 36023046c23c1a3da176cad61add4358512046c3 PIN_ONLY)
+bro_dependency(broremote GITHUB wlejon/broremote REF e003f664964a48d8f88a8807d75b34452dcb0419 PIN_ONLY)
 
 # Desktop substrate.
 bro_dependency(broconf GITHUB wlejon/broconf REF 10c99aee9741dff4108b71378bd25fc6c0a83cb7 PIN_ONLY)
