@@ -10,8 +10,9 @@
 //   bro --desktop-entry <dir> [--exec <bro>]   print the entry, write nothing
 //
 // The roots are app_manifest.h's installedAppRoots(): the user's
-// ($XDG_DATA_HOME/bro/apps, %LOCALAPPDATA%\bro\apps) unless --system
-// (/usr/local/share/bro/apps, %ProgramFiles%\bro\apps). Desktop entries go to
+// ($XDG_DATA_HOME/bro/apps, %LOCALAPPDATA%\bro\apps, ~/Library/Application
+// Support/bro/apps) unless --system (/usr/local/share/bro/apps,
+// %ProgramFiles%\bro\apps, /Library/Application Support/bro/apps). Desktop entries go to
 // $XDG_DATA_HOME/applications (--system: /usr/local/share/applications);
 // Windows and macOS keep the copy and skip the entry.
 
@@ -205,15 +206,15 @@ std::string appsRoot(bool system) {
 #ifdef _WIN32
     if (system) return u8str(u8path(envOr("ProgramFiles", "C:/Program Files")) / "bro" / "apps");
     return u8str(u8path(envOr("LOCALAPPDATA", envOr("APPDATA", "."))) / "bro" / "apps");
-#else
-    if (system) return "/usr/local/share/bro/apps";
-#if defined(__APPLE__)
+#elif defined(__APPLE__)
+    // installedAppRoots()' macOS roots: the user's Library, then the machine's.
+    if (system) return "/Library/Application Support/bro/apps";
     return u8str(u8path(envOr("HOME", ".")) / "Library" / "Application Support" / "bro" / "apps");
 #else
+    if (system) return "/usr/local/share/bro/apps";
     std::string dataHome = envOr("XDG_DATA_HOME", "");
     if (dataHome.empty() || dataHome[0] != '/') dataHome = u8str(u8path(envOr("HOME", ".")) / ".local" / "share");
     return u8str(u8path(dataHome) / "bro" / "apps");
-#endif
 #endif
 }
 

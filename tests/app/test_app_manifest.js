@@ -97,6 +97,11 @@ const norm = (p) => path.resolve(p).replace(/\\/g, '/').toLowerCase();
         assert(norm(p.c) === norm(path.join(base, 'config', id)), 'config is $XDG_CONFIG_HOME/<id>: ' + p.c);
         assert(norm(p.d) === norm(path.join(base, 'data', id)), 'data is $XDG_DATA_HOME/<id>: ' + p.d);
         assert(norm(p.k) === norm(path.join(base, 'cache', id)), 'cache is $XDG_CACHE_HOME/<id>: ' + p.k);
+    } else if (process.platform === 'darwin') {
+        const support = path.join(base, 'Library', 'Application Support');
+        assert(norm(p.c) === norm(path.join(support, id)), 'config is ~/Library/Application Support/<id>: ' + p.c);
+        assert(norm(p.d) === norm(path.join(support, id, 'data')), 'data: ' + p.d);
+        assert(norm(p.k) === norm(path.join(base, 'Library', 'Caches', id)), 'cache is ~/Library/Caches/<id>: ' + p.k);
     }
 
     // An app with no manifest is named after its folder.
@@ -162,11 +167,14 @@ if (!fs.existsSync(windowed)) {
     // launches it.
     const data = path.join(scratch, 'install');
     // XDG_DATA_DIRS stays: the Vulkan loader finds its drivers through it.
-    const env = isWin ? { LOCALAPPDATA: data } : { XDG_DATA_HOME: data };
+    // macOS keeps apps in ~/Library/Application Support/bro/apps.
+    const isMac = process.platform === 'darwin';
+    const env = isWin ? { LOCALAPPDATA: data } : isMac ? { HOME: data } : { XDG_DATA_HOME: data };
     cp.execFileSync(windowed, ['--install', fixture, '--exec', '/opt/bro/bin/bro'], { env: scratchEnv(env), encoding: 'utf8' });
-    const installed = path.join(data, 'bro', 'apps', 'org.bro.test.ManifestApp');
+    const installed = isMac ? path.join(data, 'Library', 'Application Support', 'bro', 'apps', 'org.bro.test.ManifestApp')
+                            : path.join(data, 'bro', 'apps', 'org.bro.test.ManifestApp');
     assert(fs.existsSync(path.join(installed, 'bro.json')), 'installed at ' + installed);
-    if (!isWin && process.platform !== 'darwin') {
+    if (!isWin && !isMac) {
         const de = path.join(data, 'applications', 'org.bro.test.ManifestApp.desktop');
         assert(fs.existsSync(de), 'desktop entry written to ' + de);
         assert(fs.readFileSync(de, 'utf8').indexOf(installed) >= 0, 'it runs the installed copy');
