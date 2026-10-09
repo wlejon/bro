@@ -24,6 +24,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <functional>
 #include <thread>
 #include <unordered_set>
 #include <vector>
@@ -256,14 +258,20 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
         compositeLayers(layers.systemLayers);
 
         compositeWindowHosts();
+        compositeDragIcon();
 
-        if (displayMode_ == DisplayMode::Drm && cursorVisible_ && !lockedElement_.get()) {
+        // Under DRM the pointer goes on the cursor plane where it can, else
+        // into the frame (and into its key: a moved cursor is a new frame).
+        if (displayMode_ == DisplayMode::Drm && !drmPlaceHardwareCursor() && cursorVisible_ && !lockedElement_.get()) {
             const std::string shape = screenCursorShape();
             if (shape != "none") {
                 if (SkCanvas* canvas = frameSegmentCanvas()) {
                     float sx = static_cast<float>(frameCompositeW_) / static_cast<float>(viewportWidth_ > 0 ? viewportWidth_ : 1);
                     float sy = static_cast<float>(frameCompositeH_) / static_cast<float>(viewportHeight_ > 0 ? viewportHeight_ : 1);
                     render::drawSoftwareCursor(canvas, lastMouseX_ * sx, lastMouseY_ * sy, shape, deviceScale_.render);
+                    frameKeyAdd(std::hash<std::string>{}(shape));
+                    frameKeyAdd(static_cast<uint64_t>(std::lround(lastMouseX_ * sx)) << 32 ^
+                                static_cast<uint32_t>(std::lround(lastMouseY_ * sy)));
                 }
             }
         }
@@ -273,12 +281,14 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
         const double tPresent = util::currentTimeMs();
         rec.compositeMs = tPresent - tGpu;
         rec.presentAtMs = tPresent;
-        presentCurrentFrame();
-        rec.presentMs = util::currentTimeMs() - tPresent;
+        // An unchanged frame is held: nothing presented, no GPU work.
+        const bool presented = presentCurrentFrame(/*mayHold=*/true);
+        rec.presentMs = presented ? util::currentTimeMs() - tPresent : 0.0;
+        if (!presented) rec.presentAtMs = 0.0;
 #if BRO_WITH_DMABUF
         if (auto* kms = vulkanPresenter_ ? vulkanPresenter_->kmsDirectPresenter() : nullptr) {
-            rec.gpuWaitMs = kms->lastPresentTiming().gpuWaitMs;
-            rec.flipWaitMs = kms->lastPresentTiming().flipWaitMs;
+            rec.gpuWaitMs = presented ? kms->lastPresentTiming().gpuWaitMs : 0.0;
+            rec.flipWaitMs = presented ? kms->lastPresentTiming().flipWaitMs : 0.0;
         }
 #endif
 

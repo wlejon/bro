@@ -16,6 +16,7 @@ add_library(bro_engine STATIC
     engine_init.cpp
     engine_init_drm.cpp
     engine_run_drm.cpp
+    engine_drm_cursor.cpp
     engine_drm_input.cpp
     engine_device_input.cpp
     shell_input_rules.cpp
@@ -44,6 +45,7 @@ add_library(bro_engine STATIC
     terminal_layers.cpp
     input_wheel_drag.cpp
     drag_drop.cpp
+    engine_native_drag.cpp
     action_input.cpp
     touch_input.cpp
     gamepad.cpp

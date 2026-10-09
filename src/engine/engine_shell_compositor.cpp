@@ -163,8 +163,7 @@ bool Engine::injectHostPointer(const std::string& type, float x, float y, int bu
     noteUserActivity();
     lastMouseX_ = x;
     lastMouseY_ = y;
-    cursorVisible_ = true;
-    uiDirty_ = true;
+    cursorVisible_ = true;  // the cursor is the composite's (its own frame key), not the UI's
     if (routeDrmPointer(ev)) {
         pollShellCompositor();
         return false;

@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace bro::platform {
@@ -117,6 +118,20 @@ struct PresentedFrame {
     uint64_t sequence = 0;     // the output's vblank counter; 0 unknown
 };
 
+/// A drag the page started (dragstart), handed to the window system so it
+/// can leave the window: what it carries and how it looks under the pointer.
+struct DragSource {
+    /// (MIME type, bytes), in order of preference.
+    std::vector<std::pair<std::string, std::string>> data;
+    /// The picture: premultiplied BGRA, width * 4 bytes a row; empty: none.
+    int iconWidth = 0, iconHeight = 0;
+    std::vector<uint8_t> iconBgra;
+    /// The icon's pixel that sits under the pointer.
+    int hotX = 0, hotY = 0;
+    bool allowCopy = true;
+    bool allowMove = false;
+};
+
 /// Text entry for one window: turns key presses into committed text
 /// (EventLoop::onTextInput) and IME composition (onTextEditing). Off until
 /// started; the engine starts it while an editable element has focus.
@@ -193,6 +208,24 @@ public:
     /// need not block in its present as well (it can use MAILBOX): a frame
     /// begun early for input then reaches the compositor at once.
     virtual bool pacesPresents() const { return false; }
+    /// The frame is the same as the last one presented: keep showing that,
+    /// present nothing, and still have waitForFrame pace the next frame
+    /// (Wayland: a frame callback on a commit with no new buffer). False
+    /// where the window system cannot pace without a present (the engine
+    /// presents the frame again).
+    virtual bool holdFrame() { return false; }
+
+    // --- Drag and drop ---
+
+    /// Hand a drag the page started out of this window to the window system,
+    /// while the button that began it is still held. From then on the drag
+    /// is reported through EventLoop's onOwnDrag* handlers, not as pointer
+    /// events. False where the window system cannot carry a drag out of a
+    /// window (SDL has no drag-source API): the drag stays inside the page.
+    virtual bool startDrag(const DragSource& drag) {
+        (void)drag;
+        return false;
+    }
 
     // --- Geometry ---
 

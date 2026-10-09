@@ -2,6 +2,8 @@
 
 #include "dom/node_handle.h"
 
+#include <utility>
+
 namespace bro::dom { class Element; }
 
 namespace bro::engine {
@@ -22,7 +24,15 @@ public:
     /// Drop everything (app reload, window loss, escape).
     void cancel();
 
+    /// The drag went out of the window (the window system carries it): the
+    /// element it was over gets dragleave; it stays the page's drag, which
+    /// a later update() brings back in and finish() ends (without a drop in
+    /// the page when it is still outside).
+    void leaveWindow(float x, float y);
+
     bool dragging() const { return active_; }
+    /// True once after update() started a drag (dragstart went through).
+    bool takeStarted() { return std::exchange(started_, false); }
 
 private:
     dom::ElementHandle candidate_;   // draggable element under the press
@@ -31,6 +41,7 @@ private:
     float startX_ = 0.0f, startY_ = 0.0f;
     bool armed_ = false;
     bool active_ = false;
+    bool started_ = false;
     bool dropAllowed_ = false;
 };
 

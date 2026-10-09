@@ -101,6 +101,20 @@ public:
         uint32_t refreshNs = 0;
     };
 
+    /// The icon of a drag under way between clients (wl_data_device), drawn
+    /// at the pointer (px, py, layout px) above everything: a dmabuf icon as
+    /// a layer (leased like a window's frame), a shm one (the usual case for
+    /// a small picture) as pixels for the caller to draw — premultiplied
+    /// BGRA at `pixelW` x `pixelH`, shown at (x, y, w, h). False: no icon.
+    struct DragIconPixels {
+        float x = 0, y = 0, w = 0, h = 0;
+        int pixelW = 0, pixelH = 0;
+        const std::vector<uint8_t>* bgra = nullptr;  // owned by the compositor, until the next call
+        uint64_t key = 0;                            // changes with the picture
+    };
+    bool acquireDragIcon(float px, float py, std::vector<engine::UILayer>& outLayers,
+                         std::vector<LeasedSurfaceFrame>& leased, DragIconPixels& pixels);
+
     /// Release leased frames after presentation has completed. `shown`, when
     /// known, is the flip the frame landed on.
     void releaseClientLayers(const std::vector<LeasedSurfaceFrame>& frames,
@@ -193,6 +207,11 @@ private:
     double lastPointerX_ = 0.0;
     double lastPointerY_ = 0.0;
     PointerConstraint pointerConstraint_ = PointerConstraint::None;
+    // The shm drag icon's pixels, read once per frame of it.
+    uint32_t dragIconSurface_ = 0;
+    uint64_t dragIconSequence_ = 0;
+    int dragIconW_ = 0, dragIconH_ = 0;
+    std::vector<uint8_t> dragIconPixels_;
 };
 
 } // namespace bro::compositor

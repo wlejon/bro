@@ -236,20 +236,32 @@ void Engine::drmPaceNextFrame(double frameStart) {
     }
 #endif
     const double period = kms->refreshPeriodMs();
-    if (!committed || kms->flipPending() || period <= 0.0) {
+    const double lastVblank = kms->lastFlip().vblankMs;
+    const bool held = heldFrame_ == frameNumber_;
+    if (kms->flipPending() || period <= 0.0 || (!committed && (!held || lastVblank <= 0.0))) {
         // Nothing went to the screen (a VT switch, a failed commit): keep the
         // loop from spinning.
         waitHandlingInput(util::currentTimeMs() + 10.0, false);
         rec.pacingWaitMs += util::currentTimeMs() - t0;
         return;
     }
-    const double work = std::max(0.0, t0 - frameStart - rec.flipWaitMs - rec.pacingWaitMs);
-    drmWorkPeakMs_ = std::max(work, drmWorkPeakMs_ * 0.97);
     // Never less than ~10 ms at 60 Hz: an input frame's handlers are not in
     // the peak until they have run, and a clicked animation's first frame
     // that misses its vblank shows as a hitch.
+    if (committed) {
+        const double work = std::max(0.0, t0 - frameStart - rec.flipWaitMs - rec.pacingWaitMs);
+        drmWorkPeakMs_ = std::max(work, drmWorkPeakMs_ * 0.97);
+    }
     const double budget = std::clamp(drmWorkPeakMs_ * 1.5 + 3.0, period * 0.6, period);
-    waitHandlingInput(kms->lastFlip().vblankMs + period - budget, false);
+    // A held frame (nothing changed, nothing committed) keeps the beat: the
+    // next frame starts where it would have after a flip at the next vblank,
+    // and the screen goes on showing what it shows.
+    double next = lastVblank + period - budget;
+    if (!committed) {
+        const double now = util::currentTimeMs();
+        if (next < now + 1.0) next += std::ceil((now + 1.0 - next) / period) * period;
+    }
+    waitHandlingInput(next, false);
     rec.pacingWaitMs += util::currentTimeMs() - t0;
 #else
     (void)frameStart;
@@ -276,8 +288,10 @@ void Engine::drmFlipLanded(double vblankMs, uint32_t sequence) {
 #if BRO_WITH_COMPOSITOR
     if (drmCtx_ && drmCtx_->compositor) {
         auto* comp = drmCtx_->compositor.get();
-        // Whatever was scanned out directly has left the screen now.
-        if (!drmCtx_->onScreenLeases.empty()) {
+        // Whatever was scanned out directly has left the screen now — unless
+        // the flip moved only the cursor, over it.
+        const bool cursorOnly = kms && kms->cursorOnlyFlip();
+        if (!drmCtx_->onScreenLeases.empty() && !cursorOnly) {
             comp->returnClientLayers(drmCtx_->onScreenLeases);
             drmCtx_->onScreenLeases.clear();
         }

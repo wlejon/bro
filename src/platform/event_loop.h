@@ -49,6 +49,18 @@ public:
     // platform specifies and what a batch drop target needs to group its work.
     std::function<void(uint32_t windowId, const std::vector<std::string>& paths, float x, float y)> onDropFile;
     std::function<void(uint32_t windowId, const std::string& text, float x, float y)> onDropText;
+    // A drag this process handed to the window system (Window::startDrag).
+    // Pointer events stop while the window system carries it, so it is
+    // reported here instead: moving over one of our windows (window
+    // coordinates), leaving it, dropped on it (the page takes the drop
+    // itself: onDropFile/onDropText do not fire for it), and over —
+    // `action` "copy" / "move" when another client took it, "none" when it
+    // was cancelled or refused. onOwnDragEnd fires once per drag, after a
+    // drop on our own window as well.
+    std::function<void(uint32_t windowId, float x, float y)> onOwnDragMotion;
+    std::function<void(uint32_t windowId)> onOwnDragLeave;
+    std::function<void(uint32_t windowId, float x, float y)> onOwnDragDrop;
+    std::function<void(const std::string& action)> onOwnDragEnd;
     std::function<void(uint32_t windowId)> onFocusLost;
     std::function<void(uint32_t windowId)> onFocusGained;
     // Window state transitions. Restored fires on un-minimize AND

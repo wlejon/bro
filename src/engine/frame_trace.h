@@ -84,7 +84,7 @@ struct FrameRecord {
     // mutation): how many times, and the ms they took (inside control/input/tick).
     uint32_t forcedLayouts = 0;
     double forcedLayoutMs = 0.0;
-    uint8_t presented = 0;     // 0 nothing, 1 composited, 2 client scanned out directly
+    uint8_t presented = 0;     // 0 nothing, 1 composited, 2 client scanned out directly, 3 the cursor plane alone
     bool layoutRan = false;    // a layout pass was signalled this frame
     bool layoutPerformed = false;  // ... and it ran layoutTree (not style/paint only)
     bool recorded = false;     // the app's base display list was re-recorded

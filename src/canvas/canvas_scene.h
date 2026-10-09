@@ -400,6 +400,8 @@ public:
     /// Mark the canvas as dirty (needing re-rasterization).
     void markDirty() { dirty_ = true; }
     bool isDirty() const { return dirty_; }
+    /// Changes whenever rasterize() changed what the compositor samples.
+    uint64_t contentGeneration() const { return contentGeneration_; }
     void clearDirty() { dirty_ = false; }
     void checkDetached() {
         if (!detachedCb_) return;
@@ -540,6 +542,8 @@ private:
     std::atomic<int> intrinsicH_{0};
 
     bool dirty_ = false;  // surface pixels changed since the compositor last took them
+    uint64_t contentGeneration_ = 0;  // bumped by each rasterize() that changed the pixels
+    int rasterizedW_ = 0, rasterizedH_ = 0;
 
     // Screen-space position for compositing
     float screenX_ = 0, screenY_ = 0;

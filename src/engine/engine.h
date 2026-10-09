@@ -116,6 +116,14 @@ public:
     void handleDropFile(const std::vector<std::string>& paths, float x = -1, float y = -1);
     void handleDropFile(const std::string& path, float x = -1, float y = -1) { handleDropFile(std::vector<std::string>{ path }, x, y); }
     void handleDropText(const std::string& text, float x = -1, float y = -1);
+    // A page's drag handed to the window system (engine_native_drag.cpp):
+    // offered there when dragstart went through, then followed through the
+    // window system's reports while it carries it.
+    void beginNativeDrag();
+    void handleOwnDragMotion(float x, float y);
+    void handleOwnDragLeave();
+    void handleOwnDragDrop(float x, float y);
+    void handleOwnDragEnd(const std::string& action);
 
     /// Input from a device bro's platform layer does not own (a remote
     /// viewer, bro.remote), as such a device reports it: evdev KEY_* / BTN_*
@@ -656,7 +664,9 @@ private:
     void beginFrameComposite();
     /// `offsetY`: where the layers' top edge sits in the frame (the app's inset).
     void compositeLayers(const std::vector<UILayer>& layers, int offsetY = 0);
-    void presentCurrentFrame();
+    /// `mayHold`: an unchanged frame is not presented (holdUnchangedFrame).
+    /// False when nothing was presented.
+    bool presentCurrentFrame(bool mayHold = false);
     std::vector<uint8_t> readCompositedFrame();
     render::PresentFrame describeCompositedFrame();
     // BRO_CAPTURE_PRESENTS=1, or the control socket asked for with
@@ -810,6 +820,7 @@ private:
     bool pollShellCompositor();
     void syncShellWindowFrames();
     void compositeRemainingClientWindows();
+    void compositeDragIcon();  // engine_drm_cursor.cpp
     void releaseClientWindowFrames();
     // Skia's GPU context (null: Skia draws on CPU).
     std::unique_ptr<render::SkiaGpu> skiaGpu_;
@@ -1049,6 +1060,7 @@ private:
     // HTML5 drag and drop between elements (see engine/drag_drop.h). Distinct
     // from the OS file drop, which arrives from outside the window.
     DragDrop dragDrop_;
+    bool nativeDrag_ = false;  // the window system carries the page's drag (beginNativeDrag)
 
     float lastMouseX_ = 0.0f;
     float lastMouseY_ = 0.0f;
@@ -1173,6 +1185,31 @@ private:
     // DRM: presents this frame by scanning that buffer out directly, when
     // nothing else of the frame would show; false to composite it.
     bool presentDirectScanout();
+
+    // What this frame shows, as a key built while it composites (the raster
+    // generation, every placed image and where it went, each client frame's
+    // sequence, each sub-document's publish, the drawn cursor): a frame
+    // whose key matches the last presented one shows nothing new, and is not
+    // presented. A layer whose content cannot be keyed (a 3D scene, a WebGL
+    // canvas: drawn every frame) makes the frame volatile, always presented.
+    void frameKeyAdd(uint64_t v);
+    uint64_t frameKey_ = 0;
+    bool frameVolatile_ = false;
+    uint64_t presentedKey_ = 0;
+    bool presentedKeyValid_ = false;
+    // Present nothing for an unchanged frame: DRM commits the cursor plane
+    // alone if the pointer moved; a window keeps its last buffer (where its
+    // window system paces without a present). True when held.
+    bool holdUnchangedFrame();
+    uint64_t heldFrame_ = 0;  // the last frame held (frameNumber_)
+
+    // engine_drm_cursor.cpp: the pointer on the KMS cursor plane. Places
+    // this frame's cursor there; false when it must be drawn into the frame
+    // (no plane, a shape too big for it, a driver that refused it).
+    bool drmPlaceHardwareCursor();
+    std::string hwCursorKey_;  // shape@scale whose image the plane holds
+    bool hwCursorFits_ = false;
+    int32_t hwCursorHotX_ = 0, hwCursorHotY_ = 0;
 };
 
 } // namespace bro::engine

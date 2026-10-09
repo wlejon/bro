@@ -1,5 +1,6 @@
 #include "engine/drag_drop.h"
 
+#include "dom/drag_data_store.h"
 #include "dom/element.h"
 #include "dom/event.h"
 #include "dom/event_dispatch.h"
@@ -68,13 +69,16 @@ bool DragDrop::update(dom::Element* under, float x, float y, int buttons) {
         candidate_.reset();
         if (!src) return false;
 
+        dom::dragDataStore().reset();
         if (fireDrag(src, "dragstart", x, y)) {
+            dom::dragDataStore().reset();
             return false;
         }
         source_.assign(src->document(), src);
         target_.reset();
         dropAllowed_ = false;
         active_ = true;
+        started_ = true;
     }
 
     if (dom::Element* src = source_.get())
@@ -107,12 +111,21 @@ bool DragDrop::finish(dom::Element* under, float x, float y) {
     if (dropAllowed_ && t) fireDrag(t, "drop", x, y);
 
     if (dom::Element* src = source_.get()) fireDrag(src, "dragend", x, y);
+    dom::dragDataStore().reset();
 
     source_.reset();
     target_.reset();
     active_ = false;
+    started_ = false;
     dropAllowed_ = false;
     return true;
+}
+
+void DragDrop::leaveWindow(float x, float y) {
+    if (!active_) return;
+    if (dom::Element* prev = target_.get()) fireDrag(prev, "dragleave", x, y);
+    target_.reset();
+    dropAllowed_ = false;
 }
 
 void DragDrop::cancel() {
@@ -120,10 +133,13 @@ void DragDrop::cancel() {
     candidate_.reset();
     if (!active_) return;
     if (dom::Element* prev = target_.get()) fireDrag(prev, "dragleave", 0, 0);
+    dom::dragDataStore().dropEffect = "none";
     if (dom::Element* src = source_.get()) fireDrag(src, "dragend", 0, 0);
+    dom::dragDataStore().reset();
     source_.reset();
     target_.reset();
     active_ = false;
+    started_ = false;
     dropAllowed_ = false;
 }
 

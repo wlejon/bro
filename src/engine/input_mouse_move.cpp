@@ -423,14 +423,12 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
         }
 
         dragDrop_.update(target, x, y, pressedButtons_);
+        if (dragDrop_.takeStarted()) beginNativeDrag();
     }
 
     lastMouseX_ = x;
     lastMouseY_ = y;
-    if (displayMode_ == DisplayMode::Drm) {
-        cursorVisible_ = true;
-        uiDirty_ = true;
-    }
+    if (displayMode_ == DisplayMode::Drm) cursorVisible_ = true;
 }
 
 #if BRO_WITH_3D

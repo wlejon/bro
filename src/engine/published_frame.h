@@ -24,11 +24,19 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         image_ = std::move(image);
         gpu_.reset();
+        ++generation_;
     }
     void publish(render::SkiaImageRef image) {
         std::lock_guard<std::mutex> lock(mutex_);
         gpu_ = std::move(image);
         image_.reset();
+        ++generation_;
+    }
+    /// Bumped by every publish (and clear): the compositor tells a new frame
+    /// from the one it last showed by it, whatever image it lands in.
+    uint64_t generation() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return generation_;
     }
     /// The CPU snapshot (null for a GPU frame).
     sk_sp<SkImage> get() const {
@@ -44,10 +52,12 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         image_.reset();
         gpu_.reset();
+        ++generation_;
     }
 
 private:
     mutable std::mutex mutex_;
+    uint64_t generation_ = 0;
     sk_sp<SkImage> image_;
     render::SkiaImageRef gpu_;
 };

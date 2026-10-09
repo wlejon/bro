@@ -384,10 +384,35 @@ void WaylandEventLoop::handle(const browl::ShellEvent& ev) {
                 preediting_ = false;
                 if (onTextEditing) onTextEditing(id, "", 0, 0);
             }
+        } else if constexpr (std::is_same_v<T, browl::DragEnterEvent> || std::is_same_v<T, browl::DragMotionEvent>) {
+            // Our own drag over our window: the page goes on dragging, as
+            // pointer events stopped when the compositor took the drag.
+            WaylandWindow* w = win(e.surface_id);
+            if (w && c_.ownDrag && onOwnDragMotion)
+                onOwnDragMotion(w->windowId(), static_cast<float>(e.x), static_cast<float>(e.y));
+        } else if constexpr (std::is_same_v<T, browl::DragLeaveEvent>) {
+            WaylandWindow* w = win(e.surface_id);
+            if (w && c_.ownDrag && onOwnDragLeave) onOwnDragLeave(w->windowId());
+        } else if constexpr (std::is_same_v<T, browl::DragSourceEvent>) {
+            using Kind = browl::DragSourceEvent::Kind;
+            if (e.kind != Kind::Finished && e.kind != Kind::Cancelled) return;
+            if (!c_.ownDrag) return;
+            c_.ownDrag = false;
+            const char* action = "none";
+            if (e.kind == Kind::Finished)
+                action = (e.action & browl::dnd_action::Move) ? "move" : "copy";
+            if (onOwnDragEnd) onOwnDragEnd(action);
         } else if constexpr (std::is_same_v<T, browl::DragDropEvent>) {
             WaylandWindow* w = win(e.surface_id);
             if (!w || !seat) return;
             const float x = static_cast<float>(e.x), y = static_cast<float>(e.y);
+            if (c_.ownDrag) {
+                // Our own drag dropped on our window: the page drops it
+                // (with the data it set), nothing to read.
+                if (onOwnDragDrop) onOwnDragDrop(w->windowId(), x, y);
+                seat->finish_drop();
+                return;
+            }
             auto has = [&](const char* m) {
                 return std::find(e.mime_types.begin(), e.mime_types.end(), m) != e.mime_types.end();
             };

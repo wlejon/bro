@@ -112,8 +112,9 @@ void Engine::dispatchDrmInput(const platform::DrmInputEvent& ev) {
     const bool pointer = ev.type == EvType::MouseMove || ev.type == EvType::MouseDown ||
                          ev.type == EvType::MouseUp;
     if (pointer) {
+        // The cursor is drawn by the composite (or the cursor plane) under
+        // its own frame key: moving it re-records nothing.
         cursorVisible_ = true;
-        uiDirty_ = true;
         lastMouseX_ = ev.x;
         lastMouseY_ = ev.y;
     }

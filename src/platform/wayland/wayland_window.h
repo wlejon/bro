@@ -38,6 +38,8 @@ public:
     bool reportsPresentation() const override;
     bool waitForFrame(double timeoutMs) override;
     bool pacesPresents() const override { return vsyncPref_; }
+    bool holdFrame() override;
+    bool startDrag(const DragSource& drag) override;
 
     uint32_t getWidth() const override { return width_; }
     uint32_t getHeight() const override { return height_; }

@@ -175,7 +175,44 @@ public:
     /// rather than flipped to directly.
     void setDirectScanoutInhibited(bool inhibited) { directScanoutInhibited_ = inhibited; }
 
+    // --- The hardware cursor: the CRTC's cursor plane ---
+    //
+    // The pointer drawn by the display rather than into the frame, so moving
+    // it redraws nothing and a client scanned out directly stays so. Every
+    // present carries the cursor as last set; presentCursorOnly commits it
+    // alone. A driver that refuses it over some frame turns it off
+    // (cursorRefused) until its image changes; the caller draws it then.
+
+    /// The CRTC has a cursor plane, and its buffers were made.
+    bool hasCursorPlane() const;
+    /// The size of the cursor plane's buffer (the image's limit), px.
+    uint32_t cursorWidth() const;
+    uint32_t cursorHeight() const;
+    /// The image the cursor shows from the next commit: `w` x `h` premultiplied
+    /// B G R A rows (`stride` bytes apart), placed at the buffer's top-left;
+    /// at most cursorWidth x cursorHeight.
+    bool setCursorImage(const uint8_t* bgra, uint32_t w, uint32_t h, size_t stride);
+    /// Where the cursor buffer's top-left goes on the screen (device px), and
+    /// whether it shows at all.
+    void setCursor(bool visible, int32_t x, int32_t y);
+    /// The cursor the screen shows is not the one set: a commit is due.
+    bool cursorChanged() const;
+    /// The driver refused the cursor plane over the last frame.
+    bool cursorRefused() const;
+    /// Commit the cursor plane alone, flipping at the next vblank like a
+    /// present. Waits for a pending flip first. False when there is nothing
+    /// to commit it with, or the commit failed.
+    bool presentCursorOnly();
+    /// The flip pending (or the last one landed) carried the cursor alone.
+    bool cursorOnlyFlip() const { return cursorOnlyFlip_; }
+
 private:
+    // Hands the cursor as set to the brodmabuf presenter before a commit.
+    void stageCursor();
+    // After a commit that carried it: the screen shows the staged cursor.
+    void cursorCommitted();
+    bool cursorOnlyFlip_ = false;
+    bool cursorRefused_ = false;  // sticky until the image changes
     // Waits (bounded) until no hold is left on `slot`; false on timeout.
     bool waitForSlotRelease(size_t slot);
 
@@ -211,6 +248,12 @@ private:
     std::vector<KmsScanoutSlot> scanoutSlots_;
     // directScanout's framebuffers, alive while they may be on screen.
     std::vector<std::unique_ptr<brodmabuf::KmsFramebuffer>> directFbs_;
+    // The cursor plane's two buffers (one shown, one written), and the
+    // cursor as set and as last committed.
+    std::unique_ptr<brodmabuf::KmsDumbBuffer> cursorBufs_[2];
+    int cursorBuf_ = -1;  // the buffer holding the newest image (-1: none yet)
+    brodmabuf::KmsCursor cursorWant_;
+    brodmabuf::KmsCursor cursorShown_;
     VkDevice vkDevice_ = VK_NULL_HANDLE;
 #endif
 };

@@ -888,8 +888,11 @@ void ElVideo::pumpEvents(bool advanceClock) {
         pipeline_->pause();
         stopAudioPlayback();
         // When loop is set, rewind and resume instead of firing ended — matches
-        // HTMLMediaElement.loop behavior (no ended event while looping).
-        if (loop_) {
+        // HTMLMediaElement.loop behavior (no ended event while looping). The
+        // markup's loop attribute counts as much as the property: the
+        // property's setter is what sets loop_, and a parsed attribute never
+        // went through it.
+        if (loop_ || (elem_ && elem_->hasAttribute("loop"))) {
             seekTo(0.0);
             pipeline_->play();
             if (audioStreamId_ >= 0 && audioEngine_) {

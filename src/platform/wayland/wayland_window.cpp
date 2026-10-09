@@ -227,6 +227,49 @@ void WaylandWindow::beforePresent(uint64_t tag) {
     if (id) pendingFeedback_[id] = tag;
 }
 
+bool WaylandWindow::holdFrame() {
+    // Without vsync nothing paces the loop but the present.
+    if (!vsyncPref_ || !window_) return false;
+    const browl::RequestId frame = conn_.display().request_frame_callback(window_->wl_surface_ptr());
+    if (!frame) return false;
+    {
+        std::lock_guard<std::mutex> lock(presentMu_);
+        frameRequest_ = frame;
+    }
+    // A commit with nothing attached: the compositor keeps the buffer it has
+    // and answers the frame callback when it would have shown a new one.
+    window_->commit();
+    conn_.display().flush();
+    return true;
+}
+
+bool WaylandWindow::startDrag(const DragSource& drag) {
+    browl::Seat* seat = conn_.seat();
+    if (!seat || !window_ || drag.data.empty()) return false;
+    browl::SelectionContents contents;
+    contents.reserve(drag.data.size());
+    for (const auto& [mime, bytes] : drag.data)
+        contents.emplace_back(mime, std::vector<uint8_t>(bytes.begin(), bytes.end()));
+    browl::Seat::DragIcon icon;
+    const bool hasIcon = drag.iconWidth > 0 && drag.iconHeight > 0 &&
+                         drag.iconBgra.size() >= static_cast<size_t>(drag.iconWidth) * drag.iconHeight * 4;
+    if (hasIcon) {
+        icon.width = drag.iconWidth;
+        icon.height = drag.iconHeight;
+        icon.pixels = drag.iconBgra;  // premultiplied BGRA is wl_shm ARGB8888 in memory
+        icon.hotspot_x = drag.hotX;
+        icon.hotspot_y = drag.hotY;
+    }
+    uint32_t actions = 0;
+    if (drag.allowCopy) actions |= browl::dnd_action::Copy;
+    if (drag.allowMove) actions |= browl::dnd_action::Move;
+    if (!seat->start_drag(window_->wl_surface_ptr(), std::move(contents), hasIcon ? &icon : nullptr,
+                          actions ? actions : browl::dnd_action::Copy))
+        return false;
+    conn_.ownDrag = true;
+    return true;
+}
+
 void WaylandWindow::frameDone(browl::RequestId request) {
     std::lock_guard<std::mutex> lock(presentMu_);
     if (request == frameRequest_) {

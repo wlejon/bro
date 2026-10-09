@@ -75,6 +75,9 @@ void Engine::initDrm(const EngineConfig& config) {
 
     // Hook VT switch callbacks
     drmCtx_->seat->setActiveChangeCallback([this](bool active) {
+        // Whatever comes back after the switch is presented in full: the
+        // screen no longer shows what was last presented.
+        presentedKeyValid_ = false;
         if (!active) {
             LOG_INFO("Engine: VT switched away, pausing KMS presentation");
             if (vulkanPresenter_ && vulkanPresenter_->kmsDirectPresenter()) {

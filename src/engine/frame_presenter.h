@@ -75,8 +75,14 @@ public:
         worker_.tryClaimResult();
         int newFront = pendingFront_.load(std::memory_order_acquire);
         front_.store(newFront, std::memory_order_release);
+        ++generation_;
         return makeView(newFront);
     }
+
+    /// Bumped by every consumeIfReady that took new layers (main thread): a
+    /// frame whose generation matches the last presented one shows the same
+    /// recorded content.
+    uint64_t generation() const { return generation_; }
 
     /// View into the current front buffer. Safe to call any time on the main
     /// thread; references remain valid until the next consumeIfReady().
@@ -160,6 +166,7 @@ private:
 
     LayerBuffer buffers_[2];
     std::atomic<int> front_{0};
+    uint64_t generation_ = 0;  // main thread only
     std::atomic<int> pendingFront_{0};
 
     // Snapshot atomics — main writes inside signalRender, worker reads inside

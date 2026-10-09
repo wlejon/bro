@@ -83,6 +83,25 @@
  *     const before = e.offsetY < e.target.clientHeight / 2;
  *     e.target.parentNode.insertBefore(moved, before ? e.target : e.target.nextSibling);
  *   });
+ *
+ * @example
+ *   // --- Dragging out of the window ----------------------------------------
+ *   // On the native Wayland backend a drag leaves the window: what dragstart
+ *   // set is offered to other applications ('text/plain' also as UTF8_STRING
+ *   // and friends; 'text/uri-list' of file:// URIs drops as files in a file
+ *   // manager), under a label of the text or file name. dragend's
+ *   // dropEffect says what the target did ('copy', 'move', or 'none' when
+ *   // it was cancelled). Dropped back on the page it is the page's own drag,
+ *   // as above. effectAllowed 'move' / 'copyMove' / 'all' lets the target
+ *   // move it. SDL has no drag-source API, so there the drag stays inside
+ *   // the page.
+ *   file.draggable = true;
+ *   file.addEventListener('dragstart', e => {
+ *     e.dataTransfer.setData('text/uri-list', 'file://' + path);
+ *     e.dataTransfer.setData('text/plain', path);
+ *     e.dataTransfer.effectAllowed = 'copy';
+ *   });
+ *   file.addEventListener('dragend', e => console.log('target did', e.dataTransfer.dropEffect));
  */
 
 // ── Typedefs ─────────────────────────────────────────────────────────────────

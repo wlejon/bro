@@ -76,6 +76,9 @@ public:
     /// The last pointer position, per window (for wheel events).
     float pointerX = 0.0f, pointerY = 0.0f;
     browl::SurfaceId pointerSurface = browl::kNoSurface;
+    /// A drag this process started (WaylandWindow::startDrag) is under way:
+    /// drag events over our windows are its own, not another client's.
+    bool ownDrag = false;
 
 private:
     Connection() = default;

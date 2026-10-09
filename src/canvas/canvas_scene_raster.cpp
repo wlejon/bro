@@ -284,6 +284,9 @@ void CanvasScene::rasterize() {
     if (canvasW <= 0 || canvasH <= 0) return;
     ensureSurface(canvasW, canvasH);
 
+    if (dirty_ || !commands_.empty() || canvasW != rasterizedW_ || canvasH != rasterizedH_) ++contentGeneration_;
+    rasterizedW_ = canvasW;
+    rasterizedH_ = canvasH;
     flushCommands();
     dirty_ = false;
 

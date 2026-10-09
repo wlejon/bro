@@ -43,6 +43,7 @@
 #include <include/core/SkSamplingOptions.h>
 #include <include/core/SkSurface.h>
 
+#include <bit>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -82,6 +83,22 @@ struct Overloaded : Fs... {
 template <class... Fs>
 Overloaded(Fs...) -> Overloaded<Fs...>;
 
+#if BRO_WITH_COMPOSITOR
+// Which client frames a frame samples: each surface's frame sequence, which
+// a new buffer (or a commit that changed what it shows) advances.
+uint64_t clientFramesKey(const std::vector<compositor::LeasedSurfaceFrame>& leased) {
+    uint64_t k = leased.size();
+    for (const auto& lf : leased) {
+        k = k * 0x100000001b3ull ^ lf.surfaceId;
+#if BRO_HAVE_WAYLAND_SERVER
+        k = k * 0x100000001b3ull ^ lf.frame.sequence;
+        k = k * 0x100000001b3ull ^ lf.frame.image_id;
+#endif
+    }
+    return k;
+}
+#endif
+
 } // namespace
 
 // Start the next GPU frame: waits for the frame slot about to be reused (not
@@ -106,6 +123,14 @@ void Engine::beginFrameComposite() {
     frameImages_.clear();
     frameSkiaImages_.clear();
     directImage_ = SIZE_MAX;
+    frameKey_ = 0x84222325cbf29ce4ull;
+    frameVolatile_ = false;
+    frameKeyAdd(static_cast<uint64_t>(fbW) << 32 | static_cast<uint32_t>(fbH));
+    if (framePresenter_) frameKeyAdd(framePresenter_->generation());
+}
+
+void Engine::frameKeyAdd(uint64_t v) {
+    frameKey_ ^= v + 0x9e3779b97f4a7c15ull + (frameKey_ << 6) + (frameKey_ >> 2);
 }
 
 // The segment the next CPU layer composites into: the one above the last GPU
@@ -155,6 +180,13 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, int offsetY) {
             out.clip = {{r.left(), r.top()},
                         {static_cast<uint32_t>(std::max(0, r.width())), static_cast<uint32_t>(std::max(0, r.height()))}};
         }
+        frameKeyAdd((uint64_t)(image));  // a pointer or a 64-bit handle, by platform
+        frameKeyAdd(static_cast<uint64_t>(w) << 32 | h);
+        for (float f : {out.dstX, out.dstY, out.dstW, out.dstH}) frameKeyAdd(std::bit_cast<uint32_t>(f));
+        if (out.clipped)
+            frameKeyAdd(static_cast<uint64_t>(static_cast<uint32_t>(out.clip.offset.x)) << 32 ^
+                        static_cast<uint32_t>(out.clip.offset.y) ^ static_cast<uint64_t>(out.clip.extent.width) << 16 ^
+                        static_cast<uint64_t>(out.clip.extent.height) << 40);
         return out;
     };
     // A 3D scene's or WebGL canvas's image, sampled where it is. One never
@@ -189,12 +221,14 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, int offsetY) {
             [&](const render::IframeLayerSource& src) {
                 IframeDoc* d = iframeDocById(src.docId);
                 if (!d) return;
+                frameKeyAdd(d->published.generation());
                 if (render::SkiaImageRef image = d->published.gpu()) placeSkiaImage(image, at.dst(quad), &quad);
                 else if (SkCanvas* canvas = frameSegmentCanvas()) at.draw(canvas, d->published.get(), quad);
             },
             [&](const render::TerminalLayerSource& src) {
                 const PublishedFrame* p = terminalLayers_ ? terminalLayers_->published(src.layerId) : nullptr;
                 if (!p) return;
+                frameKeyAdd(p->generation());
                 // Pixel for pixel at a whole device-pixel origin, so the
                 // glyphs stay as crisp as they were rasterized.
                 auto dstFor = [&](int w, int h) {
@@ -217,6 +251,7 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, int offsetY) {
             [&](const render::CanvasLayerSource& src) {
                 canvas::CanvasScene* cs = canvasSceneById(src.sceneId);
                 if (!cs) return;
+                frameKeyAdd(cs->contentGeneration());
                 if (render::SkiaImageRef image = cs->gpuImage()) placeSkiaImage(image, at.dst(quad), &quad);
                 else if (cs->surface())
                     if (SkCanvas* canvas = frameSegmentCanvas())
@@ -224,6 +259,7 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, int offsetY) {
             },
             [&](const render::SceneLayerSource& src) {
 #if BRO_WITH_3D
+                frameVolatile_ = true;  // rendered every frame
                 for (auto& sg : sceneGraphs_) {
                     if (!sg.graph || sg.elementId != src.elementId) continue;
                     if (sg.graph->renderer().hasMeshContent())
@@ -235,6 +271,7 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, int offsetY) {
 #endif
             },
             [&](const render::WebGLLayerSource& src) {
+                frameVolatile_ = true;  // its drawing buffer is redrawn in place
                 for (auto& entry : webglEntries_) {
                     if (!entry.context || !entry.element || entry.element->nodeId() != src.elementId) continue;
                     // The canvas's recorded work must be submitted before the
@@ -286,6 +323,7 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, int offsetY) {
                 }
                 std::vector<engine::UILayer> clientLayers;
                 auto leased = drmCtx_->compositor->acquireClientLayers(run, src.parts, clientLayers);
+                frameKeyAdd(clientFramesKey(leased));
                 if (!clientLayers.empty()) compositeLayers(clientLayers);
                 drmCtx_->leasedFrames.insert(drmCtx_->leasedFrames.end(), std::make_move_iterator(leased.begin()),
                                              std::make_move_iterator(leased.end()));
@@ -305,6 +343,7 @@ void Engine::compositeRemainingClientWindows() {
     drmCtx_->clientLayersComposited = true;
     std::vector<engine::UILayer> clientLayers;
     auto leased = drmCtx_->compositor->acquireClientLayers(clientLayers);
+    frameKeyAdd(clientFramesKey(leased));
     if (!clientLayers.empty()) compositeLayers(clientLayers);
     drmCtx_->leasedFrames.insert(drmCtx_->leasedFrames.end(), std::make_move_iterator(leased.begin()),
                                  std::make_move_iterator(leased.end()));
@@ -387,7 +426,36 @@ bool Engine::presentDirectScanout() {
 #endif
 }
 
-void Engine::presentCurrentFrame() {
+bool Engine::holdUnchangedFrame() {
+    if (frameVolatile_ || !presentedKeyValid_ || frameKey_ != presentedKey_) return false;
+    if (displayMode_ == DisplayMode::Drm) {
+#if BRO_WITH_DMABUF
+        auto* kms = vulkanPresenter_ ? vulkanPresenter_->kmsDirectPresenter() : nullptr;
+        if (!kms) return false;
+        // The pointer moved over a picture that did not change: the cursor
+        // plane alone, at the next vblank.
+        if (kms->cursorChanged()) {
+            if (!kms->presentCursorOnly()) return false;
+            drmFlipFrame_ = frameNumber_;
+            frameTrace_->current().presented = 3;
+        }
+#else
+        return false;
+#endif
+    } else if (displayMode_ != DisplayMode::Windowed || !window_ || !window_->holdFrame()) {
+        return false;
+    }
+    frameImages_.clear();
+    frameSegmentUsed_.clear();
+    frameSkiaImages_.clear();
+    heldFrame_ = frameNumber_;
+    return true;
+}
+
+bool Engine::presentCurrentFrame(bool mayHold) {
+    if (mayHold && holdUnchangedFrame()) return false;
+    const uint64_t key = frameKey_;
+    presentedKeyValid_ = false;
     if (presentDirectScanout()) {
         frameImages_.clear();
         frameSegmentUsed_.clear();
@@ -395,23 +463,32 @@ void Engine::presentCurrentFrame() {
         noteFramePresented();
         drmFlipFrame_ = frameNumber_;
         frameTrace_->current().presented = 2;  // scanned out directly; its flip fills in the vblank
-        return;
+        presentedKey_ = key;
+        presentedKeyValid_ = mayHold;
+        return true;
     }
     const render::PresentFrame frame = describeCompositedFrame();
+    bool presented = false;
     if (vulkanPresenter_ && !vulkanPresenter_->isHeadless()) {
         if (!vulkanPresenter_->present(frame)) {
             LOG_ERROR("Engine: presenting the frame failed");
         } else {
             noteFramePresented();  // the first one logs the launch's time to it
             drmFlipFrame_ = frameNumber_;  // a KMS flip landing later belongs to this frame
+            presented = true;
         }
         frameSkiaImages_.clear();  // submitted
     } else if (window_ && window_->backend() == platform::GraphicsBackend::Software && frame.below) {
         // No GPU, so no GPU layer: the CPU composite is the frame.
         const render::PresentPixels& p = frame.below;
-        window_->presentPixels(p.pixels, static_cast<int>(p.width), static_cast<int>(p.height),
-                               static_cast<int>(p.stride), p.bgra);
+        presented = window_->presentPixels(p.pixels, static_cast<int>(p.width), static_cast<int>(p.height),
+                                           static_cast<int>(p.stride), p.bgra);
     }
+    // Only a frame presented by the path that may hold its repeats keys
+    // them: a compile or panel frame in between always re-presents.
+    presentedKey_ = key;
+    presentedKeyValid_ = presented && mayHold;
+    return presented;
 }
 
 // Headless capture of the composited frame as RGBA8. A frame that is only the

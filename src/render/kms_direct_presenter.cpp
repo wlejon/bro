@@ -9,6 +9,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstring>
 #include <mutex>
 #include <unistd.h>
 
@@ -277,6 +278,26 @@ bool KmsDirectPresenter::initScanoutBuffers(VulkanContext& ctx, uint32_t count) 
         std::string err(msRes.status().message());
         LOG_WARN("KmsDirectPresenter: initialize_modeset: %s", err.c_str());
     }
+    cursorShown_ = {};
+
+    // The cursor plane's buffers. Without them the cursor is drawn into the
+    // frame as before.
+    if (presenter_->has_cursor_plane()) {
+        const auto& pipe = presenter_->pipeline();
+        for (auto& b : cursorBufs_) {
+            auto r = brodmabuf::KmsDumbBuffer::create(device_->fd(), pipe.cursor_width, pipe.cursor_height);
+            if (!r) {
+                LOG_WARN("KmsDirectPresenter: no cursor buffer: %s", std::string(r.status().message()).c_str());
+                cursorBufs_[0].reset();
+                cursorBufs_[1].reset();
+                break;
+            }
+            b = std::move(r.value());
+        }
+        if (cursorBufs_[0])
+            LOG_INFO("KmsDirectPresenter: cursor plane %u, %ux%u", pipe.cursor_plane_id, pipe.cursor_width,
+                     pipe.cursor_height);
+    }
 
     currentSlot_ = 0;
     return true;
@@ -326,8 +347,10 @@ bool KmsDirectPresenter::directScanout(
     auto fbRes = brodmabuf::KmsFramebuffer::create_from_dmabuf(device_->fd(), attrs);
     if (!fbRes) return false;
 
+    stageCursor();
     auto flipRes = presenter_->present(*fbRes.value(), inFenceFd, false);
     if (!flipRes) return false;
+    cursorCommitted();
     // The framebuffer must outlive its time on screen: removing one that a
     // plane scans out disables the plane (and, on amdgpu, the CRTC), after
     // which every commit without a modeset is refused. Kept until a
@@ -452,6 +475,7 @@ bool KmsDirectPresenter::presentComposited(
         scanoutListener_(out);
     }
 
+    stageCursor();
     auto flipRes = presenter_->present(*slot.fb, inFenceFd, true);
     if (!flipRes) {
         static uint32_t s_flipFailCount = 0;
@@ -461,6 +485,7 @@ bool KmsDirectPresenter::presentComposited(
         }
         return false;
     }
+    cursorCommitted();
 
     // The flip lands at the next vblank; the frame loop waits for it (and
     // handles input meanwhile), and the next present waits for it before it
@@ -593,11 +618,121 @@ double KmsDirectPresenter::refreshPeriodMs() const {
 #endif
 }
 
+bool KmsDirectPresenter::hasCursorPlane() const {
+#if defined(__linux__)
+    return active_ && presenter_ && presenter_->has_cursor_plane() && cursorBufs_[0] && cursorBufs_[1];
+#else
+    return false;
+#endif
+}
+
+uint32_t KmsDirectPresenter::cursorWidth() const {
+#if defined(__linux__)
+    return cursorBufs_[0] ? cursorBufs_[0]->width() : 0;
+#else
+    return 0;
+#endif
+}
+
+uint32_t KmsDirectPresenter::cursorHeight() const {
+#if defined(__linux__)
+    return cursorBufs_[0] ? cursorBufs_[0]->height() : 0;
+#else
+    return 0;
+#endif
+}
+
+bool KmsDirectPresenter::setCursorImage(const uint8_t* bgra, uint32_t w, uint32_t h, size_t stride) {
+#if defined(__linux__)
+    if (!hasCursorPlane() || !bgra || w > cursorWidth() || h > cursorHeight()) return false;
+    // Into the buffer not on screen; the next commit swaps them.
+    const int next = cursorBufs_[0]->fb_id() == cursorShown_.fb_id ? 1 : 0;
+    brodmabuf::KmsDumbBuffer& buf = *cursorBufs_[next];
+    std::memset(buf.pixels(), 0, static_cast<size_t>(buf.stride()) * buf.height());
+    for (uint32_t y = 0; y < h; ++y) std::memcpy(buf.pixels() + static_cast<size_t>(y) * buf.stride(), bgra + y * stride, w * 4);
+    cursorBuf_ = next;
+    cursorRefused_ = false;
+    if (cursorWant_.fb_id != 0) cursorWant_.fb_id = buf.fb_id();
+    return true;
+#else
+    (void)bgra;
+    (void)w;
+    (void)h;
+    (void)stride;
+    return false;
+#endif
+}
+
+void KmsDirectPresenter::setCursor(bool visible, int32_t x, int32_t y) {
+#if defined(__linux__)
+    if (!visible || cursorBuf_ < 0 || !hasCursorPlane()) {
+        cursorWant_ = {};
+        return;
+    }
+    const auto& b = *cursorBufs_[cursorBuf_];
+    cursorWant_ = brodmabuf::KmsCursor{b.fb_id(), x, y, b.width(), b.height()};
+#else
+    (void)visible;
+    (void)x;
+    (void)y;
+#endif
+}
+
+bool KmsDirectPresenter::cursorChanged() const {
+#if defined(__linux__)
+    return !(cursorWant_ == cursorShown_);
+#else
+    return false;
+#endif
+}
+
+bool KmsDirectPresenter::cursorRefused() const { return cursorRefused_; }
+
+void KmsDirectPresenter::stageCursor() {
+#if defined(__linux__)
+    if (presenter_) presenter_->set_cursor(cursorRefused_ ? brodmabuf::KmsCursor{} : cursorWant_);
+#endif
+}
+
+void KmsDirectPresenter::cursorCommitted() {
+#if defined(__linux__)
+    if (presenter_ && presenter_->cursor_refused() && cursorWant_.fb_id != 0) {
+        if (!cursorRefused_) LOG_INFO("KmsDirectPresenter: the driver refused the cursor plane; drawing the cursor");
+        cursorRefused_ = true;
+    }
+    cursorShown_ = cursorRefused_ ? brodmabuf::KmsCursor{} : cursorWant_;
+    cursorOnlyFlip_ = false;
+#endif
+}
+
+bool KmsDirectPresenter::presentCursorOnly() {
+#if defined(__linux__)
+    if (!active_ || paused_ || !hasCursorPlane()) return false;
+    if (flipPending_) waitForFlip(100);
+    if (flipPending_) return false;
+    stageCursor();
+    auto r = presenter_->commit_cursor();
+    if (!r) {
+        static uint32_t s_failCount = 0;
+        if (s_failCount++ < 5)
+            LOG_WARN("KmsDirectPresenter: cursor commit failed: %s", std::string(r.status().message()).c_str());
+        return false;
+    }
+    cursorCommitted();
+    cursorOnlyFlip_ = true;
+    flipPending_ = true;
+    return true;
+#else
+    return false;
+#endif
+}
+
 bool KmsDirectPresenter::restoreModeset() {
 #if defined(__linux__)
     if (!active_ || !presenter_ || scanoutSlots_.empty()) return false;
     paused_ = false;
     auto msRes = presenter_->initialize_modeset(*scanoutSlots_[currentSlot_].fb);
+    cursorShown_ = {};  // the modeset turned the cursor plane off
     return msRes.ok();
 #else
     return false;
@@ -626,6 +761,11 @@ void KmsDirectPresenter::close() {
         s.gbm.reset();
     }
     scanoutSlots_.clear();
+    cursorBufs_[0].reset();
+    cursorBufs_[1].reset();
+    cursorBuf_ = -1;
+    cursorWant_ = {};
+    cursorShown_ = {};
     dmabufVkCtx_.reset();
     gbmDevice_.reset();
     presenter_.reset();

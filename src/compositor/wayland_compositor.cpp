@@ -6,6 +6,10 @@
 #include <brocompositor/api.h>
 #include <algorithm>
 #include <cmath>
+#include <cstring>
+#if BRO_HAVE_WAYLAND_SERVER
+#include <sys/mman.h>
+#endif
 
 namespace bro::compositor {
 
@@ -93,7 +97,21 @@ bool WaylandCompositor::pollEvents() {
     }
 
     auto sevents = backend_->server_events().drain();
-    if (!sevents.empty()) hadEvents = true;
+    // A client's commit, an output's frame and the seat's own input change
+    // nothing the shell draws: client content is sampled where it is each
+    // frame, and a frame that sampled nothing new is not presented. Counting
+    // them had the shell re-rastered for every client frame (or frame
+    // callback) and every pointer motion.
+    for (const auto& sev : sevents) {
+        using namespace brocompositor::wl;
+        if (std::holds_alternative<SurfaceCommitted>(sev) || std::holds_alternative<OutputFrame>(sev) ||
+            std::holds_alternative<OutputPresented>(sev) || std::holds_alternative<PointerMotion>(sev) ||
+            std::holds_alternative<PointerButton>(sev) || std::holds_alternative<PointerAxis>(sev) ||
+            std::holds_alternative<PointerFrame>(sev) || std::holds_alternative<KeyboardKey>(sev))
+            continue;
+        hadEvents = true;
+        break;
+    }
 
     using Kind = brocompositor::wl::WindowRequestKind;
     for (const auto& sev : sevents) {
@@ -348,6 +366,76 @@ std::vector<LeasedSurfaceFrame> WaylandCompositor::acquireClientLayers(std::span
     (void)parts;
     (void)outLayers;
     return {};
+#endif
+}
+
+bool WaylandCompositor::acquireDragIcon(float px, float py, std::vector<engine::UILayer>& outLayers,
+                                        std::vector<LeasedSurfaceFrame>& leased, DragIconPixels& pixels) {
+#if BRO_HAVE_WAYLAND_SERVER
+    if (!backend_) return false;
+    const auto node = backend_->drag_icon();
+    if (!node) {
+        dragIconSurface_ = 0;
+        dragIconPixels_.clear();
+        return false;
+    }
+    auto surface = backend_->surface(node->surface);
+    if (!surface) return false;
+    const float x = px + static_cast<float>(node->offset.x), y = py + static_cast<float>(node->offset.y);
+    auto frame = surface->acquire();
+    if (!frame) return false;
+    auto img = surface->image(frame->image_id);
+    if (img && img->type == brocompositor::ImageHandleType::DmaBuf) {
+        surface->release(*frame);
+        const size_t before = outLayers.size();
+        appendSurfaceNode(*backend_, brocompositor::wl::SurfaceNode{node->surface, {}, node->size, false}, x, y,
+                          outLayers, leased);
+        return outLayers.size() > before;
+    }
+    // A shm icon: its pixels, copied once per frame of it.
+    constexpr uint32_t kArgb8888 = 0x34325241, kXrgb8888 = 0x34325258;  // 'AR24', 'XR24'
+    const bool shm = img && img->type == brocompositor::ImageHandleType::ShmFd && !img->planes.empty() &&
+                     (img->drm_format == kArgb8888 || img->drm_format == kXrgb8888);
+    if (shm && (dragIconSurface_ != node->surface || dragIconSequence_ != frame->sequence)) {
+        const auto& plane = img->planes[0];
+        const size_t rowBytes = static_cast<size_t>(img->width) * 4;
+        const size_t len = static_cast<size_t>(plane.offset) + static_cast<size_t>(plane.stride) * img->height;
+        const int fd = brocompositor::wl::fd_of(plane.handle);
+        void* map = fd >= 0 && plane.stride >= rowBytes ? ::mmap(nullptr, len, PROT_READ, MAP_SHARED, fd, 0) : MAP_FAILED;
+        if (map != MAP_FAILED) {
+            dragIconPixels_.resize(rowBytes * img->height);
+            const auto* src = static_cast<const uint8_t*>(map) + plane.offset;
+            for (uint32_t row = 0; row < img->height; ++row)
+                std::memcpy(dragIconPixels_.data() + row * rowBytes, src + static_cast<size_t>(row) * plane.stride, rowBytes);
+            ::munmap(map, len);
+            if (img->drm_format == kXrgb8888)
+                for (size_t i = 3; i < dragIconPixels_.size(); i += 4) dragIconPixels_[i] = 255;
+            dragIconSurface_ = node->surface;
+            dragIconSequence_ = frame->sequence;
+            dragIconW_ = static_cast<int>(img->width);
+            dragIconH_ = static_cast<int>(img->height);
+        }
+    }
+    surface->release(*frame);
+    // The frame callbacks the icon waits on: sent as shown now.
+    surface->presented_on(brocompositor::kNoMonitor, 0);
+    if (!shm || dragIconSurface_ != node->surface || dragIconPixels_.empty()) return false;
+    pixels.x = x;
+    pixels.y = y;
+    pixels.w = static_cast<float>(node->size.width > 0 ? node->size.width : dragIconW_);
+    pixels.h = static_cast<float>(node->size.height > 0 ? node->size.height : dragIconH_);
+    pixels.pixelW = dragIconW_;
+    pixels.pixelH = dragIconH_;
+    pixels.bgra = &dragIconPixels_;
+    pixels.key = (static_cast<uint64_t>(node->surface) << 40) ^ dragIconSequence_;
+    return true;
+#else
+    (void)px;
+    (void)py;
+    (void)outLayers;
+    (void)leased;
+    (void)pixels;
+    return false;
 #endif
 }
 

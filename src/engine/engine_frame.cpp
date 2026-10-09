@@ -217,6 +217,16 @@ void Engine::run() {
         if (mainWin(id)) handleDropText(t, x, y);
         else hostDropText(host(id), t, x, y);
     };
+    eventLoop_->onOwnDragMotion = [this, mainWin](uint32_t id, float x, float y) {
+        if (mainWin(id)) handleOwnDragMotion(x, y);
+    };
+    eventLoop_->onOwnDragLeave = [this, mainWin](uint32_t id) {
+        if (mainWin(id)) handleOwnDragLeave();
+    };
+    eventLoop_->onOwnDragDrop = [this, mainWin](uint32_t id, float x, float y) {
+        if (mainWin(id)) handleOwnDragDrop(x, y);
+    };
+    eventLoop_->onOwnDragEnd = [this](const std::string& action) { handleOwnDragEnd(action); };
     eventLoop_->onFingerDown = [this, mainWin](uint32_t wid, uint64_t id, float x, float y, float p) {
         if (mainWin(wid)) handleTouchDown(id, x, y, p);
     };

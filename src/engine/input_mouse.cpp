@@ -502,12 +502,8 @@ void Engine::updateCursorFromHover(dom::Element* target) {
     }
     platform::CursorShape shape = cursorShapeFromCss(css);
     const char* shapeName = cursorShapeName(shape);
-    if (resolvedCursor_ != shapeName) {
-        resolvedCursor_ = shapeName;
-        if (displayMode_ == DisplayMode::Drm && cursorVisible_) {
-            uiDirty_ = true;
-        }
-    }
+    // Under DRM the composite keys the cursor's shape; nothing to re-record.
+    if (resolvedCursor_ != shapeName) resolvedCursor_ = shapeName;
     if (displayMode_ == DisplayMode::Windowed && window_ && !lockedElement_.get()) {
         window_->cursor().setShape(shape);
     }

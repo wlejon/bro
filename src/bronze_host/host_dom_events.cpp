@@ -42,6 +42,7 @@
 
 #include "engine/engine.h"
 #include "dom/document.h"
+#include "dom/drag_data_store.h"
 #include "dom/element.h"
 #include "dom/event.h"
 #include "dom/event_target.h"
@@ -58,12 +59,9 @@
 
 namespace bro::bronze_host {
 
-struct DragSessionState {
-    std::unordered_map<std::string, std::string> data;
-    std::string effectAllowed = "all";
-    std::string dropEffect = "none";
-};
-static DragSessionState g_dragSession;
+// The drag data store is the engine's too: it offers it to other
+// applications when a drag leaves the window.
+static dom::DragDataStore& g_dragSession = dom::dragDataStore();
 
 // ---------------------------------------------------------------------------
 // Target identity
@@ -266,11 +264,9 @@ Value buildEventValue(dom::Event& e, const LiveEventPtr& live) {
     populateMouseEvent(b, e);
 
     if (auto* drag = dynamic_cast<dom::DragEvent*>(&e)) {
-        if (drag->type() == "dragstart") {
-            g_dragSession.data.clear();
-            g_dragSession.effectAllowed = "all";
-            g_dragSession.dropEffect = "none";
-        }
+        // The store is emptied by the engine before dragstart is dispatched
+        // (DragDrop), not here: this runs once per listener, and a second
+        // dragstart listener would wipe what the first one set.
 
         ObjectBuilder dt;
 
@@ -406,12 +402,9 @@ Value buildEventValue(dom::Event& e, const LiveEventPtr& live) {
         dt.set("items", itemsArr);
 
         b.set("dataTransfer", ev::setPrototype(dt.get(), dataTransferHostClass().prototype()));
-
-        if (drag->type() == "dragend") {
-            g_dragSession.data.clear();
-            g_dragSession.effectAllowed = "all";
-            g_dragSession.dropEffect = "none";
-        }
+        // dragend's listeners read the store as the drag left it (dropEffect
+        // says what the target did); the engine resets it once dragend has
+        // been dispatched to all of them (DragDrop).
     }
 
     populateKeyboardEvent(b, e);
