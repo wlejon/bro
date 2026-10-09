@@ -67,7 +67,9 @@ broime          desktop   pinned     public   win,linux,mac    brosearch
 brovideo        desktop   pinned     public   win,linux        brodmabuf
 broremote       desktop   pinned     public   win,linux        brovideo,brolink
 broworkshop     app       -          public   win,linux,mac    bro
+# broterm is superseded by helmapps/helmterm (the repo stays, unarchived).
 broterm         app       -          public   win,linux,mac    bro
 helm            app       -          public   win,linux,mac    bro
+helmapps        app       -          public   win,linux,mac    bro
 ffmpeg-bro      app       -          public   win,linux,mac    bro
 broparity       tool      -          public   win,linux,mac    bro

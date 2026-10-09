@@ -2,14 +2,14 @@
 
 bro is one repository among many. This page lists all of them: what each one is for, what it builds against, and where it runs. It also describes the dependency convention they share. The same list in machine-readable form is [`scripts/repos.txt`](../scripts/repos.txt), which `scripts/repo-status.sh`, `scripts/repo-status.ps1` and `tests/run_tests.sh` read. Change both together.
 
-**Where it is going.** The goal is a cross-platform desktop environment, on Windows and Linux at least, with apps written in HTML/CSS/JS on the bro runtime. On Linux bro drives the screen itself. The current milestone is a terminal in bro good enough to run Claude Code: the `<terminal>` element ([terminal-api.js](terminal-api.js)) and [broterm](https://github.com/wlejon/broterm), the first app of the desktop environment. What is done and what is open: [desktop-roadmap.md](desktop-roadmap.md).
+**Where it is going.** The goal is a cross-platform desktop environment, on Windows and Linux at least, with apps written in HTML/CSS/JS on the bro runtime. On Linux bro drives the screen itself. The current milestone is a terminal in bro good enough to run Claude Code: the `<terminal>` element ([terminal-api.js](terminal-api.js)) and helmterm in [helmapps](https://github.com/wlejon/helmapps), the desktop's core apps (helmterm supersedes [broterm](https://github.com/wlejon/broterm), the first terminal app). What is done and what is open: [desktop-roadmap.md](desktop-roadmap.md).
 
 All repositories are at `github.com/wlejon/<name>` under the MIT license unless noted, and each is checked out beside bro at `../<name>`.
 
 ## The layers
 
 ```
-apps          broworkshop · broterm · helm · ffmpeg-bro     (tools: broparity)
+apps          broworkshop · helm · helmapps · ffmpeg-bro    (tools: broparity)
                  │ run on / link
 runtime       bro ──────────────────────────────┐
                  │ links                        │ runs all JavaScript through
@@ -97,7 +97,8 @@ Standalone C++20 libraries for the desktop environment. bro mounts their JavaScr
 | Repo | Role | Depends on | Platforms |
 |------|------|------------|-----------|
 | [broworkshop](https://github.com/wlejon/broworkshop) | The launcher and starter apps (games, tools, demos, AI labs) that show what the engine does. Run by bro, not built against it | bro | Windows, Linux, macOS |
-| [broterm](https://github.com/wlejon/broterm) | The terminal app: tabs, splits, profiles, shell integration, inline images. Its own executable linking the bro engine; the first app of the desktop environment | bro | Windows, Linux, macOS |
+| [broterm](https://github.com/wlejon/broterm) | **Superseded by helmapps/helmterm.** The first terminal app: tabs, splits, profiles, shell integration, inline images, as its own executable linking the bro engine. Kept for reference, not archived | bro | Windows, Linux, macOS |
+| [helmapps](https://github.com/wlejon/helmapps) | The helm desktop's core apps, one bro folder app each (no native code, no build step), starting with helmterm, the terminal over bro's `<terminal>` element | bro (run by the stock `bro`) | Windows, Linux, macOS |
 | [helm](https://github.com/wlejon/helm) | The desktop environment shell: top panel, status popups, spotlight fuzzy launcher, notification center, and session lock screen. Standalone executable linking bro_engine | bro | Windows, Linux, macOS |
 | [ffmpeg-bro](https://github.com/wlejon/ffmpeg-bro) | A GUI for ffmpeg: in-process playback, a timeline, a filtergraph editor, exports. GPLv3: it links bro, and bro never links GPL code | bro | Windows, Linux, macOS |
 | [broparity](https://github.com/wlejon/broparity) | Rendering parity between bro and Chromium: pixel and layout-tree diffs over small HTML cases ([live report](https://wlejon.github.io/broparity/)) | bro (`bro-headless`) | Windows, Linux, macOS |
