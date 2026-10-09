@@ -478,6 +478,10 @@ std::vector<std::string> installedAppRoots() {
 }
 
 std::string userPermissionsFile() {
+    // BRO_PERMISSIONS_FILE names the file outright: how a test keeps the
+    // user's own grants (a development machine's { "*": ["*"] }) out of it.
+    std::string over = getEnv("BRO_PERMISSIONS_FILE");
+    if (!over.empty()) return over;
 #if defined(_WIN32)
     std::string base = getEnv("APPDATA");
     if (base.empty()) return {};

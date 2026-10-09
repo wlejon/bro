@@ -51,6 +51,9 @@ const path = require('path');
 const trustedApp = path.resolve('tests/desktop_trust/trusted_app');
 const baseEnv = { ...process.env };
 delete baseEnv.BRO_TRUSTED_APP_DIR;
+delete baseEnv.BRO_TRUST_ALL;
+// Not the user's own grants (a development machine may grant everything).
+baseEnv.BRO_PERMISSIONS_FILE = path.join(require('os').tmpdir(), 'bro_trust_test_no_permissions.json');
 
 const out = cp.execFileSync(headlessBin, [
     trustedApp,

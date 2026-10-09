@@ -110,6 +110,7 @@ To ensure unprivileged user downloads cannot escalate privileges simply by autho
 For development, automated test suites, and CI environments where root/administrator installation is impractical:
 - `BRO_TRUSTED_APP_DIR=<path1>[:<path2>...]` (colon-delimited on POSIX, semicolon-delimited on Windows): Explicitly adds directories to the trusted prefix list. A shell under development and the test suites name their app this way.
 - `BRO_TRUST_ALL=1`, or `{ "*": ["*"] }` in the user's permissions file (below): every app gets what its manifest asks for. The way to switch the check off on a development machine.
+- `BRO_PERMISSIONS_FILE=<path>`: read that file instead of the user's own. The test suites point it at a file that does not exist, so a development machine's `{ "*": ["*"] }` never reaches a test that expects a refusal.
 
 ### 3a. The user's permissions file
 

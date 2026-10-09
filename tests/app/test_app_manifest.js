@@ -27,6 +27,9 @@ function scratchEnv(extra) {
     const env = { ...process.env };
     delete env.BRO_TRUSTED_APP_DIR;
     delete env.BRO_APP_HOME;
+    delete env.BRO_TRUST_ALL;
+    // Not the user's own grants (a development machine may grant everything).
+    env.BRO_PERMISSIONS_FILE = path.join(scratch, 'no-permissions.json');
     return { ...env, ...(extra || {}) };
 }
 
@@ -138,7 +141,8 @@ const norm = (p) => real(p).replace(/\\/g, '/').toLowerCase();
     fs.mkdirSync(permDir, { recursive: true });
     fs.writeFileSync(path.join(permDir, 'permissions.json'),
         JSON.stringify({ 'org.bro.test.ManifestApp': ['remote', 'sys'] }));
-    const grantEnv = { ...home, ...(isWin ? { APPDATA: cfg } : mac ? { HOME: cfg } : { XDG_CONFIG_HOME: cfg }) };
+    // BRO_PERMISSIONS_FILE emptied: the platform's own location, under cfg.
+    const grantEnv = { ...home, BRO_PERMISSIONS_FILE: '', ...(isWin ? { APPDATA: cfg } : mac ? { HOME: cfg } : { XDG_CONFIG_HOME: cfg }) };
     const g = probe(fixture, '({remote: bro.remote.available, reason: bro.remote.reason, comp: bro.compositor.available, ' +
         'sys: bro.sys.available, granted: bro.app.permissions.granted})', grantEnv);
     assert(JSON.stringify(g.granted) === '["remote"]', 'the user granted remote: ' + JSON.stringify(g));

@@ -107,6 +107,7 @@ std::string findInstalledApp(const std::string& id);
 /// The id "*" grants to every app ({ "*": ["*"] }: a development machine that
 /// does not want the trust check). Returns what is listed for `id` plus what
 /// is listed for "*" ([] when the file or both are absent).
+/// BRO_PERMISSIONS_FILE=<path> reads that file instead (tests isolate with it).
 std::vector<std::string> userPermissionGrants(const std::string& id);
 std::string userPermissionsFile();
 
