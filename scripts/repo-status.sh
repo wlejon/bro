@@ -247,7 +247,7 @@ done
 # against the repos scripts/repos.txt marks `dep`.
 declared="$(awk '/^bro_dependencies\(/ { f = 1; next } f && /^\)/ { f = 0 }
                  f { sub(/#.*/, ""); print }' "$BRO_ROOT/cmake/bro_pins.cmake" |
-            tr -s ' \t' '\n' | grep -v '^$' | sort)"
+            tr -s ' \t\r' '\n' | grep -v '^$' | sort)"
 listed="$(for i in "${!NAMES[@]}"; do [[ "${BROREL[$i]}" == dep ]] && echo "${NAMES[$i]}"; done | sort)"
 while read -r x; do
     [[ -z "$x" ]] && continue

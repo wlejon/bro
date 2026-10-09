@@ -62,7 +62,7 @@ declarations() {
         'CMakeLists.txt' '*/CMakeLists.txt' '*.cmake' 2>/dev/null |
     grep -v '^cmake/bro_deps.cmake$' | while IFS= read -r f; do printf '%s\n' "$dir/$f"; done |
     tr '\n' '\0' | xargs -0 -r awk '
-        { sub(/#.*/, "") }
+        { sub(/\r$/, ""); sub(/#.*/, "") }
         inlist {
             line = $0; done = sub(/\).*/, "", line)
             n = split(line, w, /[ \t]+/)
@@ -114,7 +114,7 @@ declare -A listed_deps
 if [[ -f "$self/scripts/repos.txt" ]]; then
     while read -r n _ _ _ _ deps; do
         [[ -z "$n" || "$n" == \#* ]] && continue
-        listed_deps[$n]="$deps"
+        listed_deps[$n]="${deps%$'\r'}"  # a CRLF checkout
     done < "$self/scripts/repos.txt"
 fi
 
