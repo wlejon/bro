@@ -5,6 +5,9 @@
 #include "bronze_host/host_iframe.h"
 #include "bronze_host/host_element_video.h"
 #include "bronze_host/host_element_terminal.h"
+#if BRO_WITH_REMOTE
+#include "bronze_host/host_remote_view.h"
+#endif
 #include "bronze_host/host_builder.h"
 #include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_node.h"
@@ -63,6 +66,7 @@ HostClass g_htmlAudioElementClass;
 HostClass g_audioClass;
 HostClass g_htmlDetailsElementClass;
 HostClass g_htmlTerminalElementClass;
+HostClass g_htmlRemoteViewElementClass;
 
 // `new Option(text, value, defaultSelected, selected)`, the legacy factory:
 // an <option> holding `text`, with `value` when one is given. Selectedness
@@ -320,6 +324,11 @@ void installHtmlInterfaces() {
         {g_htmlTemplateElementClass, "HTMLTemplateElement", decorateTemplateProto},
         {g_htmlDialogElementClass, "HTMLDialogElement", decorateDialogProto},
         {g_htmlTerminalElementClass, "HTMLTerminalElement", decorateTerminalProto},
+#if BRO_WITH_REMOTE
+        {g_htmlRemoteViewElementClass, "HTMLRemoteViewElement", decorateRemoteViewProto},
+#else
+        {g_htmlRemoteViewElementClass, "HTMLRemoteViewElement"},
+#endif
         {g_htmlHtmlElementClass, "HTMLHtmlElement"},
         {g_htmlBodyElementClass, "HTMLBodyElement"},
     };
@@ -420,6 +429,7 @@ Value htmlInterfaceProto(const std::string& tagName) {
     if (tag == "template") return g_htmlTemplateElementClass.prototype();
     if (tag == "dialog") return g_htmlDialogElementClass.prototype();
     if (tag == "terminal") return g_htmlTerminalElementClass.prototype();
+    if (tag == "remoteview") return g_htmlRemoteViewElementClass.prototype();
     if (tag == "html") return g_htmlHtmlElementClass.prototype();
     if (tag == "body") return g_htmlBodyElementClass.prototype();
     if (tag == "video") return g_htmlVideoElementClass.prototype();

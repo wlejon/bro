@@ -13,6 +13,8 @@
 #include "platform/keyboard.h"
 #include "platform/keys.h"
 
+#include <algorithm>
+
 #if defined(__linux__) && BRO_WITH_SEAT && BRO_WITH_DMABUF
 #include "platform/drm_input.h"
 #endif
@@ -44,6 +46,10 @@ void Engine::injectDeviceInput(const DeviceInput& in) {
         switch (in.kind) {
             case Kind::Key: dispatchDrmInput(seat.keyEvent(in.code, in.pressed)); break;
             case Kind::Motion: dispatchDrmInput(seat.pointerMotionAbsolute(cssX, cssY)); break;
+            case Kind::RelativeMotion:
+                dispatchDrmInput(seat.pointerMotion(toCss(in.x, viewportWidth_, framePixelWidth()),
+                                                    toCss(in.y, viewportHeight_, framePixelHeight())));
+                break;
             case Kind::Button: dispatchDrmInput(seat.buttonEvent(in.code, in.pressed)); break;
             case Kind::Wheel:
                 // libinput reports a wheel in degrees, 15 to a detent.
@@ -85,6 +91,17 @@ void Engine::injectDeviceInput(const DeviceInput& in) {
         case Kind::Motion:
             handleMouseMove(cssX, cssY, cssX - lastMouseX_, cssY - lastMouseY_);
             break;
+        case Kind::RelativeMotion:
+            // The pointer stays put (a page holding pointer lock reads the
+            // movement); unlocked, it moves by the delta.
+            if (lockedElement_.get()) {
+                handleMouseMove(lastMouseX_, lastMouseY_, cssX, cssY);
+            } else {
+                const float x = std::clamp(lastMouseX_ + cssX, 0.0f, float(std::max(0, viewportWidth_ - 1)));
+                const float y = std::clamp(lastMouseY_ + cssY, 0.0f, float(std::max(0, viewportHeight_ - 1)));
+                handleMouseMove(x, y, cssX, cssY);
+            }
+            break;
         case Kind::Button: {
             const int button = platform::evdevButtonToMouseButton(in.code);
             if (in.pressed) handleMouseDown(lastMouseX_, lastMouseY_, button);
@@ -112,6 +129,15 @@ std::string Engine::screenCursorShape() const {
     }
 #endif
     return shape;
+}
+
+bool Engine::screenPointerLocked() const {
+#if BRO_WITH_COMPOSITOR && BRO_HAVE_WAYLAND_SERVER
+    if (displayMode_ == DisplayMode::Drm && drmCtx_ && drmCtx_->compositor && drmCtx_->pointerOnClient &&
+        drmCtx_->compositor->pointerConstraint() == compositor::WaylandCompositor::PointerConstraint::Locked)
+        return true;
+#endif
+    return lockedElement_.get() != nullptr;
 }
 
 }  // namespace bro::engine

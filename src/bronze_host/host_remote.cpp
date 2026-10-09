@@ -28,6 +28,7 @@
 //
 // With no server the pump is one branch, and no presenter state is touched.
 #include "bronze_host/host_remote.h"
+#include "bronze_host/host_remote_view.h"
 
 #include "engine/engine.h"
 #include "render/vulkan_presenter.h"
@@ -192,6 +193,11 @@ engine::Engine::DeviceInput toDeviceInput(const broremote::InputEvent& in) {
             out.x = in.x;
             out.y = in.y;
             break;
+        case broremote::InputKind::RelativeMotion:
+            out.kind = Kind::RelativeMotion;
+            out.x = in.x;
+            out.y = in.y;
+            break;
         case broremote::InputKind::Button: out.kind = Kind::Button; break;
         case broremote::InputKind::Wheel:
             out.kind = Kind::Wheel;
@@ -219,6 +225,7 @@ void pump() {
     broremote::CursorState cursor;
     cursor.shape = e.screenCursorShape();
     cursor.visible = cursor.shape != "none" && (e.displayMode() != DisplayMode::Drm || e.isCursorVisible());
+    cursor.locked = e.screenPointerLocked();
     cursor.x = static_cast<int32_t>(
         std::lround(cssToFrame(e.getLastMouseX(), e.viewportWidth(), e.framePixelWidth())));
     cursor.y = static_cast<int32_t>(
@@ -255,6 +262,8 @@ void installRemoteHost(engine::Engine& engine) {
         broremote::api::setHostHooks(std::move(hooks));
         engine.addFramePump(&pump);
         engine.addShutdownHook([] { broremote::api::shutdownRemote(); });
+        // The viewer side: <remoteview> and bro.remote.connect()'s sessions.
+        installRemoteViewHost(engine);
     }
     broremote::api::installRemote();
 }

@@ -70,6 +70,7 @@ public:
 
     TextInput& textInput() override { return *this; }
     Cursor& cursor() override { return *this; }
+    void setKeyboardGrab(bool on) override;
     NativeHandle nativeHandle() const override;
 
 private:

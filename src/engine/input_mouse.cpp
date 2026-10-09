@@ -111,6 +111,9 @@ void Engine::handleMouseDown(float x, float y, int button) {
     lastMouseX_ = x;
     lastMouseY_ = y;
 
+    // A press on a <remoteview> goes to its screen too, and captures it.
+    remotePointer(x, y, 0.0f, 0.0f, button, true);
+
     button = sdlToDomButton(button);
 
     if (overlayMgr_.handleMouseDown(x, overlayMouseY(y), button)) {
@@ -369,6 +372,8 @@ void Engine::handleMouseUp(float x, float y, int button) {
     lastMouseX_ = x;
     lastMouseY_ = y;
 
+    remotePointer(x, y, 0.0f, 0.0f, button, false);
+
     button = sdlToDomButton(button);
     pressedButtons_ &= ~domButtonMask(button);
     dispatchMouseButtonAction(button, false);
@@ -495,6 +500,9 @@ void Engine::updateCursorFromHover(dom::Element* target) {
         // I-beam over text, pointer over a link, the program's own shape
         // (OSC 22), the arrow while the program has the mouse.
         css = term->pointerCursor(currentModState());
+    } else if (auto* rv = target ? target->remoteViewControl() : nullptr; rv && !rv->cursorCss().empty()) {
+        // The remote screen's own pointer shape.
+        css = rv->cursorCss();
     } else if (target) {
         const auto& cs = target->computedStyle();
         auto it = cs.find("cursor");

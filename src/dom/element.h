@@ -20,6 +20,7 @@ namespace bro::layout {
     class ElSvg;
     class ElVideo;
     class ElTerminal;
+    class ElRemoteView;
 }
 
 namespace bro::dom {
@@ -383,6 +384,7 @@ public:
     layout::ElSvg* svgControl() const { return svgControl_.get(); }
     layout::ElVideo* videoControl() const { return videoControl_.get(); }
     layout::ElTerminal* terminalControl() const { return terminalControl_.get(); }
+    layout::ElRemoteView* remoteViewControl() const { return remoteViewControl_.get(); }
 
     // <img> intrinsic size — the decoded pixel dimensions of `src`.
     //
@@ -434,6 +436,7 @@ public:
     void setSvgControl(std::unique_ptr<layout::ElSvg> ctrl);
     void setVideoControl(std::unique_ptr<layout::ElVideo> ctrl);
     void setTerminalControl(std::unique_ptr<layout::ElTerminal> ctrl);
+    void setRemoteViewControl(std::unique_ptr<layout::ElRemoteView> ctrl);
 
     // Canvas scene (opaque pointer — set by engine, read by draw traversal).
     // The optional onDestroy hook is invoked from ~Element so the backing
@@ -615,6 +618,7 @@ private:
     int imageNaturalHeight_ = 0;
     std::unique_ptr<layout::ElVideo> videoControl_;
     std::unique_ptr<layout::ElTerminal> terminalControl_;
+    std::unique_ptr<layout::ElRemoteView> remoteViewControl_;
     std::string customValidity_;
     void* canvasScene_ = nullptr;
     void (*canvasSceneOnDestroy_)(void*) = nullptr;

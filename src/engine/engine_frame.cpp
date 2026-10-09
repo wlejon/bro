@@ -366,6 +366,7 @@ void Engine::run() {
 
         pumpVideoEvents();
         pumpTerminals();
+        pumpRemoteViews();
         pumpWebGLContextEvents();
 
         if (framePresenter_->consumeIfReady()) traceRasterConsumed();

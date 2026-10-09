@@ -17,6 +17,7 @@
 #include "layout/el_svg.h"
 #include "layout/el_video.h"
 #include "layout/el_terminal.h"
+#include "layout/el_remote_view.h"
 #include "platform/window.h"
 #include "svg/svg_renderer.h"
 #include "util/object_url.h"
@@ -211,6 +212,10 @@ void ensureReplacedElements(dom::Element* elem, render::Renderer* renderer,
         auto ctrl = std::make_unique<layout::ElTerminal>(renderer);
         ctrl->setElement(elem);
         elem->setTerminalControl(std::move(ctrl));
+    } else if ((tag == "REMOTEVIEW" || tag == "remoteview") && !elem->remoteViewControl()) {
+        auto ctrl = std::make_unique<layout::ElRemoteView>();
+        ctrl->setElement(elem);
+        elem->setRemoteViewControl(std::move(ctrl));
     }
 
     // Recurse into children

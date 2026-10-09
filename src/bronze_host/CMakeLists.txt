@@ -456,7 +456,7 @@ endif()
 # bro.remote: broremote's binding, and the host side it reaches through its
 # hooks (host_remote.cpp: frames from the presenter, input into the engine).
 if(BRO_WITH_REMOTE)
-    target_sources(bro_bronze_host PRIVATE host_remote.cpp)
+    target_sources(bro_bronze_host PRIVATE host_remote.cpp host_remote_view.cpp)
     target_link_libraries(bro_bronze_host PUBLIC broremote broremote_api)
     if(BRO_BUILD_TESTS)
         # The viewer end of a hosted session: spawns the bro-headless beside

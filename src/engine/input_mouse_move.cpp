@@ -82,6 +82,13 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
     noteUserActivity();
     if (lockedElement_.held() && !lockedElement_.get()) exitPointerLock();
 
+    // Over a <remoteview> the motion goes to its screen too; while that
+    // screen's pointer is locked, only there (input_remote.cpp).
+    if (!lockedElement_.get()) {
+        remotePointer(x, y, xrel, yrel, 0, false);
+        if (remoteLockedView_) return;
+    }
+
     if (dom::Element* locked = lockedElement_.get()) {
         if (document_) {
             int mod = currentModState();

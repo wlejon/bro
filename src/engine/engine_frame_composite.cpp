@@ -9,6 +9,7 @@
 #include "engine/app_runtime.h"
 #include "engine/frame_presenter.h"
 #include "engine/frame_trace.h"
+#include "engine/remote_view_host.h"
 #include "engine/terminal_layers.h"
 #include "engine/window_host.h"
 
@@ -122,6 +123,7 @@ void Engine::beginFrameComposite() {
     frameSegmentUsed_.clear();
     frameImages_.clear();
     frameSkiaImages_.clear();
+    frameRemoteViews_.clear();
     directImage_ = SIZE_MAX;
     frameKey_ = 0x84222325cbf29ce4ull;
     frameVolatile_ = false;
@@ -247,6 +249,24 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, int offsetY) {
                         canvas->restore();
                     }
                 }
+            },
+            [&](const render::RemoteViewLayerSource& src) {
+                // A remote screen, letterboxed inside the content box (its
+                // aspect kept, centred), sampled where the decoder put it.
+                if (!remoteViewHost_) return;
+                uint64_t serial = 0;
+                const render::LayerImage img = remoteViewHost_->layerImage(src.viewId, serial);
+                frameKeyAdd(src.viewId);
+                frameKeyAdd(serial);
+                if (!img || img.layout == VK_IMAGE_LAYOUT_UNDEFINED || img.width == 0 || img.height == 0) return;
+                const float s = std::min(quad.w / float(img.width), quad.h / float(img.height));
+                render::LayerQuad fit = quad;
+                fit.w = float(img.width) * s;
+                fit.h = float(img.height) * s;
+                fit.x = quad.x + (quad.w - fit.w) * 0.5f;
+                fit.y = quad.y + (quad.h - fit.h) * 0.5f;
+                placeLayerImage(img, fit);
+                frameRemoteViews_.push_back(src.viewId);
             },
             [&](const render::CanvasLayerSource& src) {
                 canvas::CanvasScene* cs = canvasSceneById(src.sceneId);
@@ -476,6 +496,8 @@ bool Engine::presentCurrentFrame(bool mayHold) {
             noteFramePresented();  // the first one logs the launch's time to it
             drmFlipFrame_ = frameNumber_;  // a KMS flip landing later belongs to this frame
             presented = true;
+            if (remoteViewHost_ && !frameRemoteViews_.empty())
+                remoteViewHost_->presented(frameRemoteViews_.data(), frameRemoteViews_.size());
         }
         frameSkiaImages_.clear();  // submitted
     } else if (window_ && window_->backend() == platform::GraphicsBackend::Software && frame.below) {

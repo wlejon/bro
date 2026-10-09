@@ -509,6 +509,10 @@ void SdlWindow::setRelativeMode(bool enabled) {
     SDL_SetWindowRelativeMouseMode(m_window, enabled);
 }
 
+void SdlWindow::setKeyboardGrab(bool on) {
+    SDL_SetWindowKeyboardGrab(m_window, on);
+}
+
 void SdlWindow::warp(float x, float y) {
     SDL_WarpMouseInWindow(m_window, x, y);
 }

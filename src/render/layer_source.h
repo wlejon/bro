@@ -23,6 +23,10 @@ struct IframeLayerSource { uint64_t docId = 0; };
 /// A <terminal>'s screen: its ElTerminal::layerId() (never recycled).
 struct TerminalLayerSource { uint64_t layerId = 0; };
 
+/// A <remoteview>'s picture: its ElRemoteView::viewId() (never recycled),
+/// resolved through the engine's RemoteViewHost.
+struct RemoteViewLayerSource { uint64_t viewId = 0; };
+
 /// A DMA-BUF client buffer: foreign toplevel or client surface imported via brodmabuf
 struct DmabufLayerSource {
     uint64_t bufferId = 0;
@@ -71,7 +75,8 @@ struct ClientWindowRef {
 };
 
 using LayerSource = std::variant<CanvasLayerSource, WebGLLayerSource, SceneLayerSource, IframeLayerSource,
-                                 TerminalLayerSource, DmabufLayerSource, ClientWindowsLayerSource>;
+                                 TerminalLayerSource, DmabufLayerSource, ClientWindowsLayerSource,
+                                 RemoteViewLayerSource>;
 
 /// Where a layer lands, in the surface space of the HTML painted around it
 /// (CSS px; content space for the app document), and the overflow/scroll

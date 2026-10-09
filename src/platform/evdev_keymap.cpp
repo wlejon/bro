@@ -1,5 +1,7 @@
 #include "platform/evdev_keymap.h"
 
+#include <unordered_map>
+
 namespace bro::platform {
 
 Scancode evdevKeyToScancode(uint32_t key) {
@@ -204,6 +206,32 @@ Scancode evdevKeyToScancode(uint32_t key) {
     };
     if (key < 256) return kTable[key];
     return sc::Unknown;
+}
+
+uint32_t scancodeToEvdevKey(Scancode scancode) {
+    // The table above, inverted once (the first evdev code wins where two
+    // name the same key).
+    static const auto kInverse = [] {
+        std::unordered_map<Scancode, uint32_t> m;
+        for (uint32_t key = 1; key < 256; ++key) {
+            const Scancode s = evdevKeyToScancode(key);
+            if (s != sc::Unknown) m.emplace(s, key);
+        }
+        return m;
+    }();
+    auto it = kInverse.find(scancode);
+    return it == kInverse.end() ? 0 : it->second;
+}
+
+uint32_t mouseButtonToEvdevButton(int button) {
+    switch (button) {
+        case 1: return kEvdevBtnLeft;
+        case 2: return kEvdevBtnMiddle;
+        case 3: return kEvdevBtnRight;
+        case 4: return kEvdevBtnSide;
+        case 5: return kEvdevBtnExtra;
+        default: return 0;
+    }
 }
 
 int evdevButtonToMouseButton(uint32_t button) {

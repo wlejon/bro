@@ -60,6 +60,7 @@ void Engine::flush() {
     pumpAppInstances();
     pumpVideoEvents();
     pumpTerminals();
+    pumpRemoteViews();
     pumpWebGLContextEvents();
 
     if (document_) {

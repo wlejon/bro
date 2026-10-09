@@ -22,6 +22,13 @@ constexpr uint32_t kEvdevBtnExtra = 0x114;
 /// counterpart.
 Scancode evdevKeyToScancode(uint32_t key);
 
+/// The evdev KEY_* code for a Scancode (the inverse of the above); 0 for
+/// one with no counterpart.
+uint32_t scancodeToEvdevKey(Scancode scancode);
+
+/// The evdev BTN_* code for an engine mouse button number; 0 for none.
+uint32_t mouseButtonToEvdevButton(int button);
+
 /// The engine's mouse button number (1 left, 2 middle, 3 right, 4 and 5 the
 /// side buttons) for an evdev BTN_* code; other buttons are left (1).
 int evdevButtonToMouseButton(uint32_t button);

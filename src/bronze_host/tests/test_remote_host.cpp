@@ -231,6 +231,33 @@ void runSession(const std::string& label, const std::vector<std::string>& argv, 
     if (code != 0) fail("bro-headless exited " + std::to_string(code) + " (its asserts above)");
 }
 
+// bro as the viewer: a second bro-headless shows the host in a <remoteview>
+// (tests/remote/view_remote.js) and sends the key and the click host_remote.js
+// checks for. Both scripts' exit statuses are the verdict.
+void runViewerSession(const std::vector<std::string>& hostArgv, const std::vector<std::string>& viewerArgv) {
+    auto fail = [&](const std::string& what) { check(false, "viewer: " + what); };
+    std::string err;
+    auto host = Process::spawn(hostArgv, &err);
+    if (!host) return fail("spawning the host: " + err);
+    auto viewer = Process::spawn(viewerArgv, &err);
+    if (!viewer) {
+        host->kill();
+        return fail("spawning the viewer: " + err);
+    }
+    int vcode = -1, hcode = -1;
+    if (!viewer->wait_for(180s, &vcode)) {
+        viewer->kill();
+        fail("the viewer did not finish within 180 s");
+    } else if (vcode != 0) {
+        fail("the viewer's bro-headless exited " + std::to_string(vcode) + " (its asserts above)");
+    }
+    if (!host->wait_for(60s, &hcode)) {
+        host->kill();
+        return fail("the host did not exit within 60 s of the viewer");
+    }
+    if (hcode != 0) fail("the host's bro-headless exited " + std::to_string(hcode) + " (its asserts above)");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -256,6 +283,13 @@ int main(int argc, char** argv) {
                {headless.string(), "--width", "320", "--height", "240", (dir / "app").string(),
                 (dir / "host_remote.js").string()},
                socket, true);
+
+    socket = "bro-remote-test-v" + id;
+    setEnv("BRO_REMOTE_TEST_SOCKET", socket);
+    runViewerSession({headless.string(), "--width", "320", "--height", "240", (dir / "app").string(),
+                      (dir / "host_remote.js").string()},
+                     {headless.string(), "--width", "320", "--height", "240", (dir / "app").string(),
+                      (dir / "view_remote.js").string()});
 
     // is_regular_file: in an embedding build (helm) "bro" beside the test is
     // bro's binary directory, not the executable.

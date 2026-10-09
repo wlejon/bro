@@ -10,6 +10,7 @@
 #include "layout/el_svg.h"
 #include "layout/el_video.h"
 #include "layout/el_terminal.h"
+#include "layout/el_remote_view.h"
 #include "layout/formatting_context.h"
 #include "layout/line_clamp.h"
 #include "canvas/canvas_scene.h"
@@ -676,6 +677,24 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
             } else {
                 termCtrl->draw(renderer_, box.contentRect.x + offsetX, box.contentRect.y + offsetY,
                                box.contentRect.width, box.contentRect.height);
+            }
+        }
+        if (auto* remoteCtrl = elem->remoteViewControl()) {
+            // A remote screen is its own layer, the decoded picture sampled
+            // where it is (the engine's RemoteViewHost); a pass with no
+            // compositor behind it shows only the element's background.
+            if (layerBreakCb_) {
+                LayerBreak lb;
+                lb.element = elem;
+                const auto cb = dom::absoluteContentBox(elem);
+                lb.quad.x = cb.x + rootOffsetX_;
+                lb.quad.y = cb.y + rootOffsetY_;
+                lb.quad.w = cb.width;
+                lb.quad.h = cb.height;
+                if (!currentClipRect(lb.quad.clipX, lb.quad.clipY, lb.quad.clipW, lb.quad.clipH))
+                    lb.quad.clipW = lb.quad.clipH = -1.0f;
+                lb.source = render::RemoteViewLayerSource{remoteCtrl->viewId()};
+                if (lb.quad.w > 0 && lb.quad.h > 0) layerBreakCb_(lb);
             }
         }
         // <img> replaced content. Layout already sized the box via

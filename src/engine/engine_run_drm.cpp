@@ -128,6 +128,7 @@ void Engine::drmFrame() {
     pumpAppInstances();
     pumpVideoEvents();
     pumpTerminals();
+    pumpRemoteViews();
     pumpWebGLContextEvents();
 
     if (framePresenter_->consumeIfReady()) traceRasterConsumed();

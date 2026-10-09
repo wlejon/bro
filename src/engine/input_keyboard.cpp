@@ -139,6 +139,10 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
     heldModifierMask_ |= modifierBitForKeycode(keycode);
     heldKeys_[keycode] = sdlKeycodeToWebKey(keycode, mod);
 
+    // A captured <remoteview> takes every key, ahead of everything of bro's
+    // own (input_remote.cpp).
+    if (remoteKey(scancode, mod, true, repeat)) return;
+
     if (overlayMgr_.handleKeyDown(keycode, mod)) {
         uiDirty_ = true;
         return;
@@ -464,6 +468,8 @@ void Engine::handleKeyUp(int keycode, int scancode, int mod, bool repeat) {
     heldModifierMask_ &= ~modifierBitForKeycode(keycode);
     heldKeys_.erase(keycode);
 
+    if (remoteKey(scancode, mod, false, repeat)) return;
+
     if (systemSettingsVisible_) {
         systemHandleKeyUp(keycode, scancode, mod, repeat);
         return;
@@ -502,7 +508,7 @@ void Engine::advanceFocus(bool reverse) {
             std::string tag = el->tagName();
             for (auto& c : tag) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
             bool isFocusable = (tag == "input" || tag == "textarea" || tag == "select" || tag == "button" ||
-                                tag == "terminal");
+                                tag == "terminal" || tag == "remoteview");
             if (isFocusable) {
                 auto* inp = getElInput(el);
                 if (inp && inp->inputType(el) == layout::ElInput::InputType::Hidden)

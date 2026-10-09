@@ -300,7 +300,10 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
 
     {
         double capMs = frameCapIntervalMs_;
-        if (!windowFocused_ && !anyWindowHostFocused())
+        // Unfocused, a window slows down; one showing a remote screen does
+        // not (it is watched while the user works elsewhere, and every
+        // picture it holds back is latency).
+        if (!windowFocused_ && !anyWindowHostFocused() && frameRemoteViews_.empty())
             capMs = std::max(capMs, 1000.0 / kUnfocusedFps);
         if (capMs > 0.0) {
             double elapsed = util::currentTimeMs() - frameStart;

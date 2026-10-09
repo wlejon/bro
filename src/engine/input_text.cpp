@@ -266,6 +266,7 @@ void Engine::handleTextEditing(const std::string& text, int start,
                                int /*length*/) {
     if (!document_) return;
     if (overlayMgr_.hasActive()) return;
+    if (capturedRemoteView()) return;
     if (terminalTextEditing(text)) return;
 
     auto* activeEl = document_->activeElement();
@@ -371,6 +372,7 @@ void Engine::handleTextInput(const std::string& text) {
     noteUserActivity();
     if (!document_) return;
     if (isControlChar(text)) return;
+    if (capturedRemoteView()) return;  // its keys went to the remote screen
 
     if (overlayMgr_.handleTextInput(text)) {
         uiDirty_ = true;

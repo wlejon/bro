@@ -494,6 +494,15 @@ bool VulkanContext::createLogicalDevice() {
     enableDeviceIfAvailable(VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME);
     enableDeviceIfAvailable(VK_KHR_IMAGE_FORMAT_LIST_EXTENSION_NAME);
 #endif
+#if defined(_WIN32)
+    // D3D11 textures imported as images: a remote viewer's decoded pictures
+    // (render/remote_picture.h). Named by string so no platform header is
+    // needed here.
+    if (hasExtension(availExts, "VK_KHR_external_memory_win32")) {
+        enabledExtensions.push_back("VK_KHR_external_memory_win32");
+        externalMemoryWin32_ = true;
+    }
+#endif
 
     // Selection guaranteed dynamicRendering and timelineSemaphore;
     // synchronization2 is enabled only where the device has it.

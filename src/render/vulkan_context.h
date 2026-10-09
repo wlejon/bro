@@ -75,6 +75,8 @@ public:
     /// (1.3) and what the device supports.
     uint32_t apiVersion() const { return apiVersion_; }
     bool hasSynchronization2() const { return synchronization2_; }
+    /// VK_KHR_external_memory_win32 is enabled (Windows, when the device has it).
+    bool hasExternalMemoryWin32() const { return externalMemoryWin32_; }
     /// Line widths other than 1 (enabled whenever the device has them;
     /// MoltenVK does not).
     bool wideLines() const { return deviceFeatures_.wideLines == VK_TRUE; }
@@ -217,6 +219,7 @@ private:
 
     uint32_t apiVersion_ = 0;
     bool synchronization2_ = false;
+    bool externalMemoryWin32_ = false;
     bool vertexAttributeDivisor_ = false;
     bool listRestart_ = false;
     bool imageView2DOn3D_ = true;

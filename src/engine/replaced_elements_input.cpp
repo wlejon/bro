@@ -80,7 +80,8 @@ static dom::Element* clickFocusTarget(dom::Element* target) {
         if (tag == "TEXTAREA" || tag == "textarea" ||
             tag == "SELECT"   || tag == "select"   ||
             tag == "BUTTON"   || tag == "button"   ||
-            tag == "TERMINAL" || tag == "terminal")
+            tag == "TERMINAL" || tag == "terminal" ||
+            tag == "REMOTEVIEW" || tag == "remoteview")
             return e;
         if ((tag == "A" || tag == "a" || tag == "AREA" || tag == "area") &&
             e->hasAttribute("href"))

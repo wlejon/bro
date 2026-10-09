@@ -39,7 +39,7 @@ bro_dependency(bropty GITHUB wlejon/bropty REF d0b7ee2b4ed32e5d0762d7eb0efae7a00
 bro_dependency(brolink GITHUB wlejon/brolink REF ddf82bbec31b5251a0a465a5f945ee1c18149242 PIN_ONLY)
 bro_dependency(bromux GITHUB wlejon/bromux REF 506b39341ca0be8ad8a8d753f48f28a9a06090df PIN_ONLY)
 bro_dependency(brovideo GITHUB wlejon/brovideo REF 6182bff5a5c619ba5756615aee99a271969c9ed3 PIN_ONLY)
-bro_dependency(broremote GITHUB wlejon/broremote REF 11549f4a3e9574129772689beeff081422060fe0 PIN_ONLY)
+bro_dependency(broremote GITHUB wlejon/broremote REF 98635f8e393b60f287e05fa88fd6906c8462d7d9 PIN_ONLY)
 
 # Desktop substrate.
 bro_dependency(broconf GITHUB wlejon/broconf REF 10c99aee9741dff4108b71378bd25fc6c0a83cb7 PIN_ONLY)

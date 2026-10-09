@@ -53,8 +53,11 @@ struct PresentFrame; struct PresentImage;
 class VulkanContext; class VulkanSwapchain; class VulkanPresenter;
 }
 namespace bro::a11y { class AccessibilityBridge; }
+namespace bro::layout { class ElRemoteView; }
 
 namespace bro::engine {
+
+class RemoteViewHost;
 
 class Engine {
 public:
@@ -132,9 +135,12 @@ public:
     /// as local input is: under DRM through the libinput path (hotkeys, the
     /// shell or a client window, sharing the seat's modifiers and pointer);
     /// otherwise through the handle* entry points above, with key text the
-    /// way the DRM path derives it. engine_device_input.cpp.
+    /// way the DRM path derives it. RelativeMotion (x, y: a delta in frame
+    /// pixels) is what a viewer sends while the pointer is locked: it moves
+    /// a locked client's pointer under DRM, and elsewhere reaches a page's
+    /// pointer lock as movementX/Y. engine_device_input.cpp.
     struct DeviceInput {
-        enum class Kind : uint8_t { Key, Motion, Button, Wheel } kind = Kind::Key;
+        enum class Kind : uint8_t { Key, Motion, Button, Wheel, RelativeMotion } kind = Kind::Key;
         uint32_t code = 0;
         bool pressed = false;
         float x = 0.0f;
@@ -150,6 +156,18 @@ public:
     /// hidden): the document's, or under DRM a client window's while the
     /// pointer is on one.
     std::string screenCursorShape() const;
+    /// Whether the screen's pointer is locked: the page holds pointer lock,
+    /// or under DRM the client window the pointer is on locked it. A remote
+    /// viewer then sends relative motion.
+    bool screenPointerLocked() const;
+
+    /// What drives <remoteview> elements (remote_view_host.h); null: none,
+    /// and a view shows only its background.
+    void setRemoteViewHost(RemoteViewHost* host) { remoteViewHost_ = host; }
+    RemoteViewHost* remoteViewHost() const { return remoteViewHost_; }
+    /// The pointer shape over the hovered element, again (a remote view's
+    /// screen changed its pointer).
+    void refreshHoverCursor();
 
     // Gamepads (gamepad.cpp)
     void handleGamepadAdded(uint32_t instanceId);
@@ -611,6 +629,20 @@ private:
     void awaitTerminalEcho(double frameStart);
     std::shared_ptr<TerminalLayers> terminalLayers_;  // (terminal_layers.h)
     dom::ElementHandle terminalCapture_;               // the terminal a press is captured by
+
+    // <remoteview> (input_remote.cpp): a captured view takes every key before
+    // anything else; the pointer over a view goes to it as well as the page.
+    layout::ElRemoteView* capturedRemoteView();
+    bool remoteKey(int scancode, int mod, bool pressed, bool repeat);
+    void remotePointer(float x, float y, float xrel, float yrel, int button, bool pressed);
+    bool remoteWheel(float x, float y, float dx, float dy);
+    void pumpRemoteViews();  // once per frame: capture, keyboard grab, relative mode
+    RemoteViewHost* remoteViewHost_ = nullptr;
+    uint64_t remotePointerGrab_ = 0;   // the view a held button went to
+    uint32_t remotePointerButtons_ = 0;
+    uint64_t remoteKeyboardView_ = 0;  // the captured view (keyboard grab on)
+    uint64_t remoteLockedView_ = 0;    // the view holding relative mode
+    std::vector<uint64_t> frameRemoteViews_;  // views composited this frame
 
     float overlayMouseY(float y) const;
     void applyKeyResult(dom::Element* el, const layout::KeyHandleResult& r);

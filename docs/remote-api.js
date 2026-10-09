@@ -118,9 +118,116 @@
  *   bro.remote.onattach / ondetach    a viewer attached / left:
  *                                     fn({ type: 'attach' | 'detach', clients })
  *
+ * =============================================================================
+ * THE VIEWER SIDE: bro.remote.connect() and <remoteview>
+ * =============================================================================
+ *
+ * The other end: a page shows another machine's broremote server (helm
+ * --remote, `broremote serve-test`, another bro hosting) and drives it.
+ * helmremote (helmapps) is the app built on it. Needs the "remote"
+ * permission, like host().
+ *
+ *   bro.remote.connect(options?) -> session
+ *       options.ssh          ssh destination ([user@]host): `ssh HOST
+ *                            broremote proxy`; none: a socket on this machine
+ *       options.socket       the server's socket name (default "default")
+ *       options.sshCommand   the remote command instead of `broremote proxy`
+ *       options.sshProgram   the ssh to run (default: Windows' own OpenSSH
+ *                            where present, else ssh from PATH)
+ *       options.pty          run the proxy on a remote pty (ssh -tt)
+ *       options.inputLane    input on a connection of its own (default true)
+ *       options.name         this viewer's name, as the server sees it ("bro")
+ *       options.negotiate    tell the server which codecs decode here (true)
+ *       options.audio        the audio lane (true); options.mic, options.playback
+ *                            (both true), micMuted / playbackMuted (start muted),
+ *                            micDevice / speakerDevice (part of a name),
+ *                            micTone (Hz: a tone instead of the mic),
+ *                            audioBufferMs (the playback jitter target, 20)
+ *   session.id, session.target
+ *   session.status() -> { state: 'connecting' | 'connected' | 'closed',
+ *       message, failed, server, protocol ("1.4"), codec, width, height, fps,
+ *       stream, decoder, hardware, inputLane, inputLaneError, micMuted,
+ *       playbackMuted, cursor: { visible, x, y, shape, locked } | null }
+ *   session.stats() -> { packets, decoded, failed, keyframeRequests,
+ *       gpuPictures (decoded pictures that stayed on the GPU), bytes, seconds,
+ *       fps, mbps, decodeMs, decodeMaxMs (since the last call),
+ *       latency: { frames, rtt, age, maxAge, queue, encode, wait, net, dwait,
+ *                  decode, present, kbytes } }   (ms, the mean per frame)
+ *   session.audio() -> null, or the audio lane: { connected, closed, playback,
+ *       mic, micNode, rttMs, micLatencyMs, playbackLatencyMs, ... }
+ *   session.probe() -> bool    a latency probe (a press and release of
+ *                              KEY_F13) against `serve-test --latency`; false
+ *                              while one is open
+ *   session.probes() -> { count, lost, presented: {mean, p50, p90, min, max},
+ *       decoded: {...}, parts: { uplink, queue, encode, wait, net, dwait,
+ *       decode, present, rtt } }   key press to the answering picture (ms)
+ *   session.sendInput({ kind: 'key' | 'button' | 'motion' | 'relative' |
+ *       'wheel', code, pressed, x, y, wheelX, wheelY })   (evdev codes,
+ *       stream pixels; a <remoteview> sends the user's input itself)
+ *   session.setMicMuted(b), session.setPlaybackMuted(b)
+ *   session.close()           ends it; the 'state' event says 'closed'
+ *   session.on('state' | 'config', fn) / off, onstate / onconfig
+ *
+ * <remoteview> (HTMLRemoteViewElement) shows a session: its own compositor
+ * layer, the picture letterboxed (aspect kept) in the content box. Its
+ * intrinsic size is the stream's (300x150 until there is one).
+ *   view.session          the session shown (null: none). A session shows in
+ *                         one view at a time; a closed one leaves the view.
+ *   view.captured         keys go to the remote screen
+ *   view.capture()        focus the view and capture; a press on it does too
+ *   view.release()        give the keyboard back
+ *   view.releaseChord     the chord that releases ("Ctrl+Alt+Escape"):
+ *                         modifiers (Ctrl, Alt, Shift, Meta) and a key by its
+ *                         KeyboardEvent.code (a bare letter or digit works)
+ *   view.streamWidth / streamHeight
+ *   view.stats() -> { path: 'gpu' | 'cpu' | 'none', zeroCopy, pictures,
+ *       gpuPictures, uploads, unshown, presented, streamWidth, streamHeight,
+ *       bridge, bridgeImports, bridgeConversions, bridgeError? }
+ *   events: 'capture', 'release'
+ *
+ *   Pictures. On Windows the decoder (Media Foundation, the GPU's own) leaves
+ *   each picture on the GPU; the D3D11 video processor converts it into a
+ *   texture Vulkan shares (VK_KHR_external_memory_win32), and the compositor
+ *   samples that: no CPU readback, no copy through system memory
+ *   (stats().zeroCopy). When that cannot work (the decoder on another
+ *   adapter than bro's) and elsewhere, pictures are decoded to the CPU and
+ *   uploaded. Linux decode in hardware (VA-API) will hand over dmabufs,
+ *   imported as client windows' buffers are.
+ *   Input. While captured (and focused), every key goes to the remote screen
+ *   before anything of bro's own sees it: no DOM key events, no hotkeys, no
+ *   text input, and the window grabs the keyboard so Alt+Tab and the Windows
+ *   key go too; only the release chord stays here. The pointer over the view
+ *   goes to the remote screen in stream pixels (and to the page as usual,
+ *   which may show controls on hover); the wheel only to the remote screen.
+ *   While the remote screen's pointer is locked (a game; cursor.locked) the
+ *   local pointer is hidden and held, and only its movement is sent. The
+ *   pointer shape over the view is the remote screen's. Blur, or the window
+ *   losing focus, lets go of every key and button held through the view.
+ *   A window showing a remote screen is never slowed down while unfocused.
+ *
  * TESTING: tests/remote (bro_remote_host_test) hosts headless and windowed
- * and attaches a viewer that checks the pixels and sends a key and a click.
+ * and attaches a viewer that checks the pixels and sends a key and a click;
+ * then a second bro-headless views the first through a <remoteview>
+ * (view_remote.js) and does the same through it.
  */
+
+// ---------------------------------------------------------------------------
+// Viewing: connect, show, and get the keyboard back.
+// ---------------------------------------------------------------------------
+function viewRemote(host) {
+    const view = document.createElement('remoteview');
+    view.style.cssText = 'position: absolute; inset: 0; width: 100%; height: 100%; display: block;';
+    document.body.appendChild(view);
+    const session = bro.remote.connect({ ssh: host, socket: 'helm' });
+    view.session = session;
+    session.onstate = () => {
+        const s = session.status();
+        if (s.state === 'connected') view.capture();
+        if (s.state === 'closed') console.log('closed: ' + s.message);
+    };
+    view.addEventListener('release', () => console.log('keys are back; click the view to send them again'));
+    return session;
+}
 
 // ---------------------------------------------------------------------------
 // Host on the default socket, with hardware HEVC (else H.264) where the

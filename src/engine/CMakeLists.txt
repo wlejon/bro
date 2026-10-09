@@ -41,6 +41,7 @@ add_library(bro_engine STATIC
     input_mouse_move.cpp
     input_text.cpp
     input_terminal.cpp
+    input_remote.cpp
     input_terminal_mouse.cpp
     terminal_layers.cpp
     input_wheel_drag.cpp

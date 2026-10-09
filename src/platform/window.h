@@ -323,6 +323,10 @@ public:
 
     virtual TextInput& textInput() = 0;
     virtual Cursor& cursor() = 0;
+    /// Keyboard grab: while on (and the window focused), the system's own
+    /// shortcuts (Alt+Tab, the Windows key) reach the window as keys rather
+    /// than acting. A remote screen's view captures them so. Default: none.
+    virtual void setKeyboardGrab(bool /*on*/) {}
 
     /// The OS handles behind the window, for desktop integration code.
     virtual NativeHandle nativeHandle() const = 0;

@@ -60,6 +60,9 @@ void Engine::handleWheel(float x, float y, float dx, float dy) {
     noteUserActivity();
     if (!document_) return;
 
+    // Over a <remoteview> the wheel scrolls its screen, not the page.
+    if (remoteWheel(x, y, dx, dy)) return;
+
     if (overlayMgr_.handleWheel(x, overlayMouseY(y), dx, dy)) {
         uiDirty_ = true;
         return;

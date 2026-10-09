@@ -67,8 +67,14 @@ add_library(bro_render STATIC
     command_replayer.cpp
     image_cache.cpp
     software_cursor.cpp
+    remote_picture.cpp
     ${RENDER_SPV_HEADERS}
 )
+if(WIN32)
+    # The remote viewer's zero-copy path: decoder D3D11 pictures into Vulkan.
+    target_sources(bro_render PRIVATE remote_picture_d3d11.cpp)
+    target_link_libraries(bro_render PRIVATE d3d11 dxgi)
+endif()
 target_include_directories(bro_render PUBLIC ${bro_SOURCE_DIR}/src)
 target_include_directories(bro_render PRIVATE ${RENDER_GEN_DIR})
 target_link_libraries(bro_render PUBLIC bro_platform skia bro_svg bro_util bro_bidi bro_glsl broimage::broimage Vulkan::Vulkan)
