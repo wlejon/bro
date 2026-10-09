@@ -92,6 +92,7 @@ private:
     bool m_vsyncPref = true;
     bool m_alwaysOnTop = false;
     bool m_borderless = false;
+    bool m_keepHidden = false;  // standing in for the offscreen driver (SdlRuntime::offscreenFallback)
     GraphicsBackend m_backend = GraphicsBackend::Vulkan;
     SDL_Cursor* m_cursors[static_cast<int>(CursorShape::Count_)] = {};
     CursorShape m_cursorShape = CursorShape::Default;

@@ -60,11 +60,15 @@ SdlWindow::SdlWindow(const WindowConfig& cfg)
     }
 
     SDL_WindowFlags flags = baseWindowFlags(m_backend);
+    // Standing in for the offscreen driver (SdlRuntime::offscreenFallback):
+    // a real window that is never shown, but otherwise the one asked for.
+    m_keepHidden = SdlRuntime::offscreenFallback();
     if (cfg.hidden) {
         flags |= SDL_WINDOW_HIDDEN;
     } else if (cfg.resizable) {
         flags |= SDL_WINDOW_RESIZABLE;
     }
+    if (m_keepHidden) flags |= SDL_WINDOW_HIDDEN;
     if (cfg.borderless) {
         SDL_SetHint("SDL_BORDERLESS_WINDOWED_STYLE", "0");
         SDL_SetHint("SDL_BORDERLESS_RESIZABLE_STYLE", "0");
@@ -96,8 +100,8 @@ SdlWindow::SdlWindow(const WindowConfig& cfg)
 
     // Placement only for a visible window: where a hidden window "is" depends
     // on the desktop the process runs on, and headless tests must stay
-    // desk-independent.
-    if (!cfg.hidden) {
+    // desk-independent (the offscreen stand-in included).
+    if (!cfg.hidden && !m_keepHidden) {
         // Clamp to the display's usable area so the whole window — title bar
         // and borders included — fits on screen, then center it.
         if (cfg.fitToWorkArea && !cfg.borderless) {
@@ -352,10 +356,15 @@ bool SdlWindow::isMaximized() const {
 }
 
 bool SdlWindow::isHidden() const {
+    // The offscreen stand-in is the window the offscreen driver would have
+    // shown: it presents as a shown one does.
+    if (m_keepHidden) return false;
     return (SDL_GetWindowFlags(m_window) & SDL_WINDOW_HIDDEN) != 0;
 }
 
-void SdlWindow::show() { SDL_ShowWindow(m_window); }
+void SdlWindow::show() {
+    if (!m_keepHidden) SDL_ShowWindow(m_window);
+}
 void SdlWindow::hide() { SDL_HideWindow(m_window); }
 void SdlWindow::sync() { SDL_SyncWindow(m_window); }
 

@@ -455,7 +455,9 @@ run_one_test() {
     # A windowed self-test (`windowed:<app>`, tests/windowed/<app>/): the
     # windowed `bro` itself runs the app in a real window — SDL's offscreen
     # video driver, whose Vulkan surface (VK_EXT_headless_surface) needs no
-    # display — so the frame loop, raster thread, swapchains and presenters a
+    # display; where the GPU driver lacks that extension (NVIDIA, AMD on
+    # Windows) bro stands in with hidden windows on the native driver — so the
+    # frame loop, raster thread, swapchains and presenters a
     # headless run never touches are what it exercises. BRO_CAPTURE_PRESENTS=1
     # reads every presented frame back for its presentedFrame() checks. It
     # reports like a JS test: assert() fails it (exit 1), skipTest() 77.

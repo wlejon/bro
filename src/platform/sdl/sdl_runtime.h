@@ -21,6 +21,13 @@ public:
 
     /// Decrement the refcount, calling SDL_Quit on the 1→0 edge.
     static void release();
+
+    /// True when SDL_VIDEODRIVER=offscreen was asked for but the Vulkan
+    /// driver has no VK_EXT_headless_surface (NVIDIA and AMD on Windows), so
+    /// the runtime fell back to the platform's own video driver: every window
+    /// is then a real one that stays hidden, presenting through a real
+    /// swapchain exactly as the offscreen surface would have.
+    static bool offscreenFallback();
 };
 
 } // namespace bro::platform
