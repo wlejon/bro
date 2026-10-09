@@ -6,12 +6,15 @@
     Walks every repo in scripts/repos.txt (bro, bronze/brass, the libraries bro
     links, the desktop substrate libraries, the apps and tools), each a standalone
     checkout at ..\<name>, printing the working-tree state of each and how far it
-    sits from its upstream. Then, for the repos bro pins (cmake/bro_pins.cmake),
-    reports which pins are stale: the working tree you actually build against
-    (..\<name>) at a different commit than the one a plain clone of bro fetches.
+    sits from its upstream. Then checks the dependency declarations: every repo's
+    cmake/bro_deps.cmake identical to bro's, no wlejon/* dependency pinned with a
+    REF (they track main), no release lock (cmake/bro_lock.cmake) left on a
+    checkout, and bro's declared dependency list matching scripts/repos.txt.
 
     Ahead/behind (up<n> / dn<n>) is against the upstream as last fetched; -Pull
-    fetches. A repo that is not checked out is listed and skipped.
+    fetches. Dependencies track main, so CI and a fresh clone build what is
+    pushed: an up<n> is invisible to them. A repo that is not checked out is
+    listed and skipped.
 
     See docs/ecosystem.md and docs/multi-repo-workflow.md.
 
@@ -23,27 +26,19 @@
     reflects what's on the remotes. Uses --ff-only: a repo that has diverged, is
     detached, or has no upstream is reported and skipped, never merged.
 
-.PARAMETER Sync
-    Move bro's stale pins (cmake/bro_pins.cmake) to the working trees' HEADs and
-    make a single bro commit recording it (what scripts/bump-deps.sh --local
-    does). Only acts on pins whose working tree is ahead of (or diverged from)
-    the pin; those whose working tree is behind are left alone (pull it first).
-
 .PARAMETER Push
-    Push every repo that is ahead of its upstream, bro last, so its pins never
-    name a commit GitHub does not have yet. If run alongside -Sync, the pins are
-    moved and committed first.
+    Push every repo that is ahead of its upstream: the libraries first, then bro,
+    then the apps and tools that build on it, so a consumer's main never needs a
+    dependency commit GitHub does not have yet.
 
 .EXAMPLE
     pwsh scripts/repo-status.ps1
     pwsh scripts/repo-status.ps1 -ListFiles
     pwsh scripts/repo-status.ps1 -Pull
-    pwsh scripts/repo-status.ps1 -Pull -Sync
     pwsh scripts/repo-status.ps1 -Push
-    pwsh scripts/repo-status.ps1 -Sync -Push
 #>
 [CmdletBinding()]
-param([switch]$ListFiles, [switch]$Pull, [switch]$Sync, [switch]$Push)
+param([switch]$ListFiles, [switch]$Pull, [switch]$Push)
 
 $ErrorActionPreference = 'Continue'
 
@@ -63,23 +58,6 @@ foreach ($line in (Get-Content $ReposFile)) {
     if ($t -eq '' -or $t.StartsWith('#')) { continue }
     $f = $t -split '\s+'
     $Repos += [pscustomobject]@{ Name = $f[0]; Group = $f[1]; Bro = $f[2] }
-}
-
-# Pinned siblings: the repos bro pins in cmake/bro_pins.cmake. bronze and brass
-# are among them on the same terms as the libraries: bro builds ..\bronze and
-# ..\brass when they are there and the pin otherwise, so a working tree ahead of
-# its pin means CI and the nightly build an older one than you do.
-$PinsFile = Join-Path $BroRoot 'cmake/bro_pins.cmake'
-$Siblings = @($Repos | Where-Object { $_.Bro -eq 'pinned' } | ForEach-Object { $_.Name })
-
-# The commit bro pins for a name, from cmake/bro_pins.cmake ('' if none).
-$PinRegex = '(?m)^bro_dependency\((?<name>[A-Za-z0-9_.-]+) GITHUB (?<repo>\S+) REF (?<sha>[0-9a-f]{40})'
-function Pinned-Sha {
-    param([string]$Name)
-    foreach ($m in [regex]::Matches((Get-Content -Raw $PinsFile), $PinRegex)) {
-        if ($m.Groups['name'].Value -eq $Name) { return $m.Groups['sha'].Value }
-    }
-    return ''
 }
 
 function Repo-Path {
@@ -163,8 +141,7 @@ function Repo-State {
     }
 }
 
-# Fast-forward one repo onto its upstream. Never merges, never rebases (bro's
-# pins move via -Sync, not via a pull).
+# Fast-forward one repo onto its upstream. Never merges, never rebases.
 function Repo-Pull {
     param([string]$Label, [string]$Path)
 
@@ -276,143 +253,86 @@ foreach ($r in $Repos) {
 }
 
 Write-Host ''
-Write-Host "== Pins (working tree ..\<name> vs the commit cmake/bro_pins.cmake pins) ==" -ForegroundColor White
+Write-Host '== Dependencies (cmake/bro_deps.cmake) ==' -ForegroundColor White
 
-$outOfSync = 0
-$toSync = @()   # @{ Name; Sha } for siblings whose pin should move to the working tree's HEAD
-foreach ($name in $Siblings) {
-    $standalone = Join-Path $ProjectsRoot $name
-
-    $recorded = Pinned-Sha $name
-    if (-not $recorded) {
-        Write-Host ("  {0,-14} " -f $name) -NoNewline
-        Write-Host 'not pinned in cmake/bro_pins.cmake (scripts/repos.txt says it is)' -ForegroundColor Yellow
-        continue
+# Per repo: a bro_deps.cmake that drifted from bro's, a wlejon dependency pinned
+# with a REF, or a release lock.
+$depIssues = 0
+$BroDeps = Join-Path $BroRoot 'cmake/bro_deps.cmake'
+$BroDepsHash = (Get-FileHash $BroDeps).Hash
+$RefRegex = 'bro_dependency\((?<name>[A-Za-z0-9_.-]+) GITHUB wlejon/[A-Za-z0-9_.-]+ REF [0-9a-f]{40}'
+foreach ($r in $Repos) {
+    $path = Repo-Path $r.Name
+    if (-not (Is-GitRepo $path)) { continue }
+    $notes = @()
+    $deps = Join-Path $path 'cmake/bro_deps.cmake'
+    if ($r.Name -ne 'bro' -and (Test-Path $deps) -and (Get-FileHash $deps).Hash -ne $BroDepsHash) {
+        $notes += @{ Text = "cmake/bro_deps.cmake differs from bro's"; Color = 'Yellow' }
     }
-
-    if (-not (Is-GitRepo $standalone)) {
-        Write-Host ("  {0,-14} " -f $name) -NoNewline
-        Write-Host 'no working tree - builds use the pin' -ForegroundColor DarkGray
-        continue
+    $files = @(& git -C $path ls-files -- 'CMakeLists.txt' '*/CMakeLists.txt' '*.cmake' 2>$null)
+    $refs = @()
+    foreach ($f in $files) {
+        $full = Join-Path $path $f
+        if (-not (Test-Path $full)) { continue }
+        foreach ($m in [regex]::Matches((Get-Content -Raw $full), $RefRegex)) { $refs += $m.Groups['name'].Value }
     }
-
-    $head = Git-In $standalone rev-parse HEAD
-    if ($head -eq $recorded) {
-        Write-Host ("  {0,-14} " -f $name) -NoNewline
-        Write-Host 'in sync ' -ForegroundColor Green -NoNewline
-        Write-Host ("({0})" -f $recorded.Substring(0, 9)) -ForegroundColor DarkGray
-        continue
+    if ($refs.Count -gt 0) {
+        $notes += @{ Text = ('pinned with a REF: ' + (($refs | Sort-Object -Unique) -join ' ')); Color = 'Yellow' }
     }
-
-    $outOfSync++
-
-    # Describe the divergence if the pinned commit is reachable locally.
-    & git -C $standalone cat-file -e "$recorded^{commit}" 2>$null
-    $reachable = ($LASTEXITCODE -eq 0)
-
-    Write-Host ("  {0,-14} " -f $name) -NoNewline
-    Write-Host 'STALE PIN' -ForegroundColor Red -NoNewline
-    Write-Host ' - ' -NoNewline
-
-    # syncable: moving the pin to the working tree's HEAD is the right fix.
-    $syncable = $false
-    if ($reachable) {
-        $localAhead = [int](Git-In $standalone rev-list --count "$recorded..HEAD")
-        $localBehind = [int](Git-In $standalone rev-list --count "HEAD..$recorded")
-        if ($localAhead -gt 0 -and $localBehind -gt 0) {
-            Write-Host "diverged (working tree $localAhead ahead, $localBehind behind)" -ForegroundColor Red
-            $syncable = $true
-        }
-        elseif ($localAhead -gt 0) {
-            Write-Host "working tree ahead by $localAhead - bro's pin is stale" -ForegroundColor Yellow
-            $syncable = $true
-        }
-        else {
-            Write-Host "working tree behind by $localBehind - it needs a pull (-Pull)" -ForegroundColor Yellow
-        }
+    $lock = Join-Path $path 'cmake/bro_lock.cmake'
+    if (Test-Path $lock) {
+        $locked = @(Get-Content $lock | Where-Object { $_ -match '^bro_lock\(' }).Count
+        $notes += @{ Text = "LOCKED ($locked dependencies in cmake/bro_lock.cmake)"; Color = 'Red' }
     }
-    else {
-        # Can't compare, but the working tree is the source of truth, so a bump is valid.
-        Write-Host 'pinned commit not in the working tree (fetch it to compare)' -ForegroundColor Red
-        $syncable = $true
+    if ($notes.Count -eq 0) { continue }
+    $depIssues++
+    Write-Host ("  {0,-14} " -f $r.Name) -NoNewline
+    for ($i = 0; $i -lt $notes.Count; $i++) {
+        if ($i -gt 0) { Write-Host '; ' -NoNewline }
+        Write-Host $notes[$i].Text -ForegroundColor $notes[$i].Color -NoNewline
     }
-
-    Write-Host ("  {0,14} pinned {1}  working tree {2}" -f '', $recorded.Substring(0, 9), $head.Substring(0, 9)) -ForegroundColor DarkGray
-
-    if ($syncable) {
-        $toSync += [pscustomobject]@{ Name = $name; Sha = $head }
-    }
+    Write-Host ''
 }
 
-# A wlejon pin bro carries that scripts/repos.txt does not mark as one would be
-# skipped above without a word; name it instead.
-foreach ($m in [regex]::Matches((Get-Content -Raw $PinsFile), $PinRegex)) {
-    if ($m.Groups['repo'].Value -notmatch '^wlejon/') { continue }
-    $pinName = $m.Groups['name'].Value
-    if ($Siblings -notcontains $pinName) {
-        Write-Host ("  {0,-14} " -f $pinName) -NoNewline
-        Write-Host 'bro pins it but scripts/repos.txt does not mark it pinned - add it there' -ForegroundColor Yellow
+# bro's declared dependencies (bro_dependencies() in cmake/bro_pins.cmake)
+# against the repos scripts/repos.txt marks `dep`.
+$pinsText = Get-Content -Raw (Join-Path $BroRoot 'cmake/bro_pins.cmake')
+$declared = @()
+$block = [regex]::Match($pinsText, '(?ms)^bro_dependencies\((?<body>.*?)^\)')
+if ($block.Success) {
+    foreach ($line in ($block.Groups['body'].Value -split "`n")) {
+        $line = ($line -replace '#.*$', '').Trim()
+        if ($line) { $declared += ($line -split '\s+') }
     }
 }
+$listed = @($Repos | Where-Object { $_.Bro -eq 'dep' } | ForEach-Object { $_.Name })
+foreach ($x in ($declared | Where-Object { $listed -notcontains $_ })) {
+    Write-Host ("  {0,-14} " -f $x) -NoNewline
+    Write-Host 'declared in cmake/bro_pins.cmake, not marked dep in scripts/repos.txt' -ForegroundColor Yellow
+    $depIssues++
+}
+foreach ($x in ($listed | Where-Object { $declared -notcontains $_ })) {
+    Write-Host ("  {0,-14} " -f $x) -NoNewline
+    Write-Host 'marked dep in scripts/repos.txt, not declared in cmake/bro_pins.cmake' -ForegroundColor Yellow
+    $depIssues++
+}
 
-Write-Host ''
-if ($outOfSync -eq 0) {
-    Write-Host 'All pins match the working trees.' -ForegroundColor Green
+if ($depIssues -eq 0) {
+    Write-Host "  Every repo carries bro's cmake/bro_deps.cmake; no REF pins, no locks." -ForegroundColor Green
 } else {
-    Write-Host "$outOfSync stale pin(s)." -ForegroundColor Yellow
-}
-
-if ($Sync) {
-    if ($toSync.Count -eq 0) {
-        Write-Host 'Nothing to sync: stale pins have working trees behind them (pull those first).' -ForegroundColor Yellow
-    } else {
-        Write-Host ''
-        Write-Host ("== Moving {0} pin(s) to the working trees' HEADs ==" -f $toSync.Count) -ForegroundColor White
-
-        # The same rewrite scripts/bump-deps.sh --local makes.
-        $text = Get-Content -Raw $PinsFile
-        $movedNames = @()
-        foreach ($s in $toSync) {
-            $pattern = '(?m)^(bro_dependency\(' + [regex]::Escape($s.Name) + ' GITHUB \S+ REF )[0-9a-f]{40}'
-            $new = [regex]::Replace($text, $pattern, { param($m) $m.Groups[1].Value + $s.Sha })
-            if ($new -ne $text) {
-                $text = $new
-                $movedNames += $s.Name
-                Write-Host ("  {0,-14} " -f $s.Name) -NoNewline
-                Write-Host ("pinned -> {0}" -f $s.Sha.Substring(0, 9)) -ForegroundColor Green
-            }
-        }
-
-        if ($movedNames.Count -gt 0) {
-            [IO.File]::WriteAllText($PinsFile, $text)
-            # One bro commit recording exactly the moved pins (the pathspec keeps
-            # any unrelated staged changes out of it).
-            $namesList = $movedNames -join ', '
-            $msg = "Pin $namesList to the working trees' HEADs"
-            Write-Host ''
-            & git -C $BroRoot commit --quiet -m $msg -- cmake/bro_pins.cmake 2>$null
-            if ($LASTEXITCODE -eq 0) {
-                Write-Host "Committed: " -ForegroundColor Green -NoNewline
-                Write-Host $msg
-                & git -C $BroRoot log -1 --oneline | ForEach-Object { Write-Host "  $_" }
-            }
-            else {
-                Write-Host 'Commit failed.' -ForegroundColor Red
-            }
-        } else {
-            Write-Host 'No pins were moved.' -ForegroundColor Yellow
-        }
-    }
-} elseif ($outOfSync -gt 0) {
-    Write-Host "Re-run with -Sync to move bro's pins to the working trees' HEADs and commit." -ForegroundColor DarkGray
+    Write-Host '  scripts/sync-deps.sh fixes drift and REF pins; a lock belongs on a release tag (scripts/lock-deps.sh --unlock).' -ForegroundColor DarkGray
 }
 
 if ($Push) {
     Write-Host ''
-    Write-Host '== Pushing (bro last) ==' -ForegroundColor White
+    Write-Host '== Pushing (libraries, then bro, then apps and tools) ==' -ForegroundColor White
+    $isApp = { param($r) $r.Group -eq 'app' -or $r.Group -eq 'tool' }
     foreach ($r in $Repos) {
-        if ($r.Name -eq 'bro') { continue }
+        if ($r.Name -eq 'bro' -or (& $isApp $r)) { continue }
         Repo-Push $r.Name (Repo-Path $r.Name)
     }
     Repo-Push 'bro' $BroRoot
+    foreach ($r in $Repos) {
+        if (& $isApp $r) { Repo-Push $r.Name (Repo-Path $r.Name) }
+    }
 }

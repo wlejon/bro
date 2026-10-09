@@ -1,8 +1,7 @@
 # bronze host layer — always configured (bronze is the JS runtime for bro).
 
 # bronze and brass are already targets here: third_party/CMakeLists.txt adds
-# both (pinned in cmake/bro_pins.cmake, or the ../bronze and ../brass working
-# trees) before any sibling, whose bronze bindings link the same runtime, and
+# both (the ../bronze and ../brass working trees, or their mains) before any sibling, whose bronze bindings link the same runtime, and
 # reports which tree each came from.
 
 # One name for "build the compiler", on every generator. `--target bronze`

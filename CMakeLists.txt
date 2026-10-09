@@ -48,9 +48,10 @@ endif()
 
 project(bro VERSION 0.1.0 LANGUAGES C CXX)
 
-# Dependencies: every library bro builds is pinned here, before anything is
-# added, so these pins win across the whole graph. A working tree at ../<name>
-# replaces a pin; otherwise the pinned commit is fetched at configure. See
+# Dependencies: every library bro builds is declared here, before anything is
+# added, so these declarations win across the whole graph. A working tree at
+# ../<name> builds as it is; otherwise the sibling's main (third-party code: its
+# pinned commit; a release tag: cmake/bro_lock.cmake) is fetched at configure. See
 # cmake/bro_deps.cmake and docs/multi-repo-workflow.md.
 include(cmake/bro_deps.cmake)
 include(cmake/bro_pins.cmake)
@@ -205,7 +206,7 @@ option(BRO_BUILD_TESTS "Build bro's C++ unit tests and smoke tools" ${_d_exes})
 set(BRO_WITH_BRONZE ON CACHE BOOL "bronze runtime (mandatory)" FORCE)
 
 # Helper: a sibling library's feature defaults to its tier. Every sibling is
-# pinned (cmake/bro_pins.cmake), so each one is always available.
+# declared (cmake/bro_pins.cmake), so each one is always available.
 macro(bro_check_sibling _name _tier _out)
     if(${_tier})
         set(${_out} ON)

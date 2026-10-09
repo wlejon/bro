@@ -4,26 +4,26 @@
 # Walks every repo in scripts/repos.txt (bro, bronze/brass, the libraries bro
 # links, the desktop substrate libraries, the apps and tools), each a standalone
 # checkout at ../<name>, printing the working-tree state of each and how far it
-# sits from its upstream. Then, for the repos bro pins (cmake/bro_pins.cmake),
-# reports which pins are stale: the working tree you actually build against
-# (../<name>) at a different commit than the one a plain clone of bro fetches.
+# sits from its upstream. Then checks the dependency declarations: every repo's
+# cmake/bro_deps.cmake identical to bro's, no wlejon/* dependency pinned with a
+# REF (they track main), no release lock (cmake/bro_lock.cmake) left on a
+# checkout, and bro's declared dependency list matching scripts/repos.txt.
 #
-# Usage: scripts/repo-status.sh [-v] [-p] [-s] [-u]
+# Usage: scripts/repo-status.sh [-v] [-p] [-u]
 #   -v, --verbose   also list changed files for dirty repos
 #   -p, --pull      fast-forward every repo to its upstream first, so the
 #                   status below reflects the remotes
-#   -s, --sync      move bro's stale pins to the working trees' HEADs
-#                   (scripts/bump-deps.sh --local) and make a single bro commit
-#   -u, --push      push every repo that is ahead of its upstream, bro last so
-#                   its pins never name a commit GitHub does not have yet
+#   -u, --push      push every repo that is ahead of its upstream: the
+#                   libraries first, then bro, then the apps that build on it,
+#                   so a consumer's main never needs a dependency commit GitHub
+#                   does not have yet
 #
 # Ahead/behind (up<n> / dn<n>) is against the upstream as last fetched; --pull
 # fetches. Pull is --ff-only: a repo that has diverged, is detached, or has no
-# upstream is reported and skipped, never merged.
-# Sync only acts on pins where the working tree is ahead of (or diverged from)
-# the pin; those whose working tree is *behind* the pin are left alone (pull
-# it first). A repo that is not checked out is listed and skipped. See
-# docs/ecosystem.md and docs/multi-repo-workflow.md.
+# upstream is reported and skipped, never merged. Dependencies track main, so
+# CI and a fresh clone build what is pushed: an up<n> is invisible to them. A
+# repo that is not checked out is listed and skipped. See docs/ecosystem.md and
+# docs/multi-repo-workflow.md.
 
 set -uo pipefail
 
@@ -34,16 +34,14 @@ REPOS_FILE="$BRO_ROOT/scripts/repos.txt"
 
 VERBOSE=0
 PULL=0
-SYNC=0
 PUSH=0
 for arg in "$@"; do
     case "$arg" in
         -v|--verbose) VERBOSE=1 ;;
         -p|--pull)    PULL=1 ;;
-        -s|--sync)    SYNC=1 ;;
         -u|--push)    PUSH=1 ;;
         -h|--help)
-            sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'
+            sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'
             exit 0 ;;
         *) echo "unknown option: $arg (try --help)" >&2; exit 2 ;;
     esac
@@ -60,21 +58,6 @@ while read -r name group brorel _rest; do
     [[ -z "$name" || "$name" == \#* ]] && continue
     NAMES+=("$name"); GROUPS_OF+=("$group"); BROREL+=("$brorel")
 done < "$REPOS_FILE"
-
-# Pinned siblings: the repos bro pins in cmake/bro_pins.cmake. bronze and brass
-# are among them on the same terms as the libraries: bro builds ../bronze and
-# ../brass when they are there and the pin otherwise, so a working tree ahead of
-# its pin means CI and the nightly build an older one than you do.
-PINS_FILE="$BRO_ROOT/cmake/bro_pins.cmake"
-SIBLINGS=()
-for i in "${!NAMES[@]}"; do
-    [[ "${BROREL[$i]}" == "pinned" ]] && SIBLINGS+=("${NAMES[$i]}")
-done
-
-# The commit bro pins for <name>, from cmake/bro_pins.cmake ('' if none).
-pinned_sha() {
-    sed -nE "s/^bro_dependency\\($1 GITHUB [^ ]+ REF ([0-9a-f]{40}).*/\\1/p" "$PINS_FILE" | head -1
-}
 
 repo_path() {
     if [[ "$1" == "bro" ]]; then printf '%s' "$BRO_ROOT"; else printf '%s' "$PROJECTS_ROOT/$1"; fi
@@ -134,8 +117,7 @@ repo_state() {
     fi
 }
 
-# Fast-forward one repo onto its upstream. Never merges, never rebases (bro's
-# pins move via --sync, not via a pull).
+# Fast-forward one repo onto its upstream. Never merges, never rebases.
 # Args: <label> <path>
 repo_pull() {
     local label="$1" path="$2" branch upstream before after n out
@@ -235,111 +217,67 @@ for i in "${!NAMES[@]}"; do
 done
 
 echo
-echo "${BOLD}== Pins (working tree ../<name> vs the commit cmake/bro_pins.cmake pins) ==${N}"
+echo "${BOLD}== Dependencies (cmake/bro_deps.cmake) ==${N}"
 
-out_of_sync=0
-SYNC_NAMES=()   # siblings whose pin should move to the working tree's HEAD
-for name in "${SIBLINGS[@]}"; do
-    standalone="$PROJECTS_ROOT/$name"
-
-    recorded="$(pinned_sha "$name")"
-    if [[ -z "$recorded" ]]; then
-        printf '  %-14s %snot pinned in cmake/bro_pins.cmake (scripts/repos.txt says it is)%s\n' "$name" "$Y" "$N"
-        continue
+# Per repo: a bro_deps.cmake that drifted from bro's, a wlejon dependency pinned
+# with a REF, or a release lock.
+dep_issues=0
+for name in "${NAMES[@]}"; do
+    path="$(repo_path "$name")"
+    is_repo "$path" || continue
+    notes=''
+    if [[ "$name" != bro && -f "$path/cmake/bro_deps.cmake" ]] &&
+       ! cmp -s "$BRO_ROOT/cmake/bro_deps.cmake" "$path/cmake/bro_deps.cmake"; then
+        notes+="; ${Y}cmake/bro_deps.cmake differs from bro's${N}"
     fi
-
-    if ! is_repo "$standalone"; then
-        printf '  %-14s %sno working tree - builds use the pin%s\n' "$name" "$DIM" "$N"
-        continue
+    refs="$(git -C "$path" grep -hoE 'bro_dependency\([A-Za-z0-9_.-]+ GITHUB wlejon/[A-Za-z0-9_.-]+ REF [0-9a-f]{40}' \
+                -- 'CMakeLists.txt' '*/CMakeLists.txt' '*.cmake' 2>/dev/null |
+            sed -E 's/bro_dependency\(([^ ]+).*/\1/' | sort -u | tr '\n' ' ')"
+    [[ -n "$refs" ]] && notes+="; ${Y}pinned with a REF: ${refs% }${N}"
+    if [[ -f "$path/cmake/bro_lock.cmake" ]]; then
+        locked="$(grep -c '^bro_lock(' "$path/cmake/bro_lock.cmake")"
+        notes+="; ${R}LOCKED${N} (${locked} dependencies in cmake/bro_lock.cmake)"
     fi
-
-    head="$(git -C "$standalone" rev-parse HEAD 2>/dev/null || true)"
-    if [[ "$head" == "$recorded" ]]; then
-        printf '  %-14s %sin sync%s %s(%s)%s\n' "$name" "$G" "$N" "$DIM" "${recorded:0:9}" "$N"
-        continue
-    fi
-
-    out_of_sync=$((out_of_sync + 1))
-
-    # Describe the divergence if the pinned commit is reachable locally.
-    # syncable=1 means moving the pin to the working tree's HEAD is the right fix.
-    local_ahead='' local_behind='' rel='' syncable=0
-    if git -C "$standalone" cat-file -e "$recorded^{commit}" 2>/dev/null; then
-        local_ahead="$(git -C "$standalone" rev-list --count "$recorded..HEAD" 2>/dev/null || echo '?')"
-        local_behind="$(git -C "$standalone" rev-list --count "HEAD..$recorded" 2>/dev/null || echo '?')"
-        if [[ "$local_ahead" -gt 0 && "$local_behind" -gt 0 ]]; then
-            rel="${R}diverged${N} (working tree ${local_ahead} ahead, ${local_behind} behind)"
-            syncable=1
-        elif [[ "$local_ahead" -gt 0 ]]; then
-            rel="${Y}working tree ahead by ${local_ahead}${N} - bro's pin is stale"
-            syncable=1
-        else
-            rel="${Y}working tree behind by ${local_behind}${N} - it needs a pull (--pull)"
-        fi
-    else
-        # Can't compare, but the working tree is the source of truth, so a bump is valid.
-        rel="${R}pinned commit not in the working tree${N} (fetch it to compare)"
-        syncable=1
-    fi
-
-    printf '  %-14s %sSTALE PIN%s - %s\n' "$name" "$R" "$N" "$rel"
-    printf '  %14s %spinned %s  working tree %s%s\n' '' "$DIM" "${recorded:0:9}" "${head:0:9}" "$N"
-
-    [[ "$syncable" -eq 1 ]] && SYNC_NAMES+=("$name")
+    [[ -z "$notes" ]] && continue
+    dep_issues=$((dep_issues + 1))
+    printf '  %-14s %s\n' "$name" "${notes#; }"
 done
 
-# A wlejon pin bro carries that scripts/repos.txt does not mark as one would be
-# skipped above without a word; name it instead.
-while read -r pin_name; do
-    listed=0
-    for name in "${SIBLINGS[@]}"; do [[ "$name" == "$pin_name" ]] && listed=1; done
-    if [[ "$listed" -eq 0 ]]; then
-        printf '  %-14s %sbro pins it but scripts/repos.txt does not mark it pinned - add it there%s\n' \
-            "$pin_name" "$Y" "$N"
-    fi
-done < <(sed -nE 's/^bro_dependency\(([A-Za-z0-9_.-]+) GITHUB wlejon\/.*/\1/p' "$PINS_FILE")
+# bro's declared dependencies (bro_dependencies() in cmake/bro_pins.cmake)
+# against the repos scripts/repos.txt marks `dep`.
+declared="$(awk '/^bro_dependencies\(/ { f = 1; next } f && /^\)/ { f = 0 }
+                 f { sub(/#.*/, ""); print }' "$BRO_ROOT/cmake/bro_pins.cmake" |
+            tr -s ' \t' '\n' | grep -v '^$' | sort)"
+listed="$(for i in "${!NAMES[@]}"; do [[ "${BROREL[$i]}" == dep ]] && echo "${NAMES[$i]}"; done | sort)"
+while read -r x; do
+    [[ -z "$x" ]] && continue
+    printf '  %-14s %sdeclared in cmake/bro_pins.cmake, not marked dep in scripts/repos.txt%s\n' "$x" "$Y" "$N"
+    dep_issues=$((dep_issues + 1))
+done < <(comm -23 <(echo "$declared") <(echo "$listed"))
+while read -r x; do
+    [[ -z "$x" ]] && continue
+    printf '  %-14s %smarked dep in scripts/repos.txt, not declared in cmake/bro_pins.cmake%s\n' "$x" "$Y" "$N"
+    dep_issues=$((dep_issues + 1))
+done < <(comm -13 <(echo "$declared") <(echo "$listed"))
 
-echo
-if [[ "$out_of_sync" -eq 0 ]]; then
-    echo "${G}All pins match the working trees.${N}"
+if [[ "$dep_issues" -eq 0 ]]; then
+    echo "  ${G}Every repo carries bro's cmake/bro_deps.cmake; no REF pins, no locks.${N}"
 else
-    echo "${Y}${out_of_sync} stale pin(s).${N}"
-fi
-
-if [[ "$SYNC" -eq 1 ]]; then
-    if [[ "${#SYNC_NAMES[@]}" -eq 0 ]]; then
-        echo "${Y}Nothing to sync: stale pins have working trees behind them (pull those first).${N}"
-    else
-        echo
-        echo "${BOLD}== Moving ${#SYNC_NAMES[@]} pin(s) to the working trees' HEADs ==${N}"
-        if "$BRO_ROOT/scripts/bump-deps.sh" --local "${SYNC_NAMES[@]}" | sed 's/^/  /'; then
-            # One bro commit recording exactly the moved pins (the pathspec keeps
-            # any unrelated staged changes out of it).
-            names_list="$(printf '%s, ' "${SYNC_NAMES[@]}")"; names_list="${names_list%, }"
-            msg="Pin ${names_list} to the working trees' HEADs"
-            echo
-            if git -C "$BRO_ROOT" commit --quiet -m "$msg" -- cmake/bro_pins.cmake; then
-                echo "${G}Committed:${N} $msg"
-                git -C "$BRO_ROOT" log -1 --oneline | sed 's/^/  /'
-            else
-                echo "${R}Commit failed.${N}"
-            fi
-        else
-            echo "${R}bump-deps.sh failed; nothing committed.${N}"
-        fi
-    fi
-elif [[ "$out_of_sync" -gt 0 ]]; then
-    echo "${DIM}Re-run with --sync to move bro's pins to the working trees' HEADs and commit.${N}"
+    echo "  ${DIM}scripts/sync-deps.sh fixes drift and REF pins; a lock belongs on a release tag (scripts/lock-deps.sh --unlock).${N}"
 fi
 
 if [[ "$PUSH" -eq 1 ]]; then
     echo
-    echo "${BOLD}== Pushing (bro last) ==${N}"
-    for name in "${NAMES[@]}"; do
-        [[ "$name" == "bro" ]] && continue
-        repo_push "$name" "$(repo_path "$name")"
+    echo "${BOLD}== Pushing (libraries, then bro, then apps and tools) ==${N}"
+    for i in "${!NAMES[@]}"; do
+        [[ "${NAMES[$i]}" == bro || "${GROUPS_OF[$i]}" == app || "${GROUPS_OF[$i]}" == tool ]] && continue
+        repo_push "${NAMES[$i]}" "$(repo_path "${NAMES[$i]}")"
     done
     repo_push bro "$BRO_ROOT"
+    for i in "${!NAMES[@]}"; do
+        [[ "${GROUPS_OF[$i]}" == app || "${GROUPS_OF[$i]}" == tool ]] || continue
+        repo_push "${NAMES[$i]}" "$(repo_path "${NAMES[$i]}")"
+    done
 fi
 
 exit 0

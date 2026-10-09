@@ -34,7 +34,7 @@ Every repo is listed in [ecosystem.md](ecosystem.md). This page records where th
   - Acceptance tests for Claude Code passing in broterm.
   - macOS test port completed with platform `Cmd` bindings and bash < 4.4 DEBUG-trap fallback.
 - **CI and CodeQL across ecosystem:** 100% green on `main` across all repositories (`bro`, `broterm`, `bropty`, `bromux`, `broaudio`, `browl`). Fixed bro Linux/macOS headless Vulkan driver/display handling, Windows C++/WinRT version unification between brocred/brocompositor and libremidi, broterm Linux UI commands test timing, broaudio coverage assertion, browl sway shell configure/reposition tests, and closed or dismissed all CodeQL alerts (0 open alerts ecosystem-wide).
-- **Organization:** ecosystem index, `scripts/repos.txt`, repo-status scripts over every repo, one `bro_dependency()` mechanism with exact-commit pins in every repo (no submodules), so each library's CI is a lone checkout.
+- **Organization:** ecosystem index, `scripts/repos.txt`, repo-status scripts over every repo, one `bro_dependency()` mechanism in every repo (no submodules; ecosystem repos track main, a release tag locks them), so each library's CI is a lone checkout.
 
 ## Terminal milestone known limits
 

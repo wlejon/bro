@@ -16,11 +16,11 @@
 - If a file grows beyond 1,000 lines, properly decompose it into smaller, focused modules.
 - While rare exceptions may exist, files over 2,000 lines must be decomposed.
 
-## 4. Multi-Repo & Pinning Workflow
+## 4. Multi-Repo & Dependency Workflow
 - Every repo in the ecosystem is listed in `docs/ecosystem.md` (machine-readable: `scripts/repos.txt`); each is a standalone checkout at `../<name>`. `CLAUDE.md` is the engine guide and applies to every agent, not only Claude.
 - Standalone sibling repositories (`broaudio`, `broflora`, `brogameagent`, `brotensor`, `brolm`, `brosoundml`, `brodiffusion`, `brovisionml`, `bromesh`, `broimage`, etc.) own their native code and Bronze JavaScript APIs (`<sibling>_api`). The terminal libraries (`bropty`, `brosearch`, `brothemes`, `bromux`) have no JavaScript binding; bro wraps them in `src/terminal/`.
-- Edit a sibling in its standalone repo (`../<name>`), never under a build tree's `_deps/<name>-src` (that is a downloaded copy of the pinned commit).
-- **Pinning**: there are no git submodules; `cmake/bro_pins.cmake` pins each dependency's commit. Do NOT move pins after every commit. Move them (`scripts/bump-deps.sh`, or `scripts/repo-status.sh --sync`) at the end of a full session before pushing, after the siblings are pushed.
+- Edit a sibling in its standalone repo (`../<name>`), never under a build tree's `_deps/<name>-src` (that is a downloaded copy of the sibling's main).
+- **Dependencies track main**: there are no git submodules and no commit pins for ecosystem repos; without a `../<name>` working tree a build fetches the sibling's GitHub main as of that configure. There is nothing to bump: push siblings before the repos that use them (libraries, then bro, then apps; `scripts/repo-status.sh --push`). Only a release tag carries `cmake/bro_lock.cmake` (`scripts/lock-deps.sh`); never commit a lock to main. Third-party code (SDL, Jolt, ...) stays pinned to exact commits.
 
 ## 5. System Memory & Execution Defaults
 - **System memory constraint**: This system doesn't have enough RAM (16 GB for 32 threads) to run memory-intensive operations (C++ compilation of heavy units, parallel headless rendering instances) in unbounded parallel without OOM-killing processes.

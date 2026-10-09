@@ -14,7 +14,7 @@ name: Nightly
 # The zip carries BOTH halves of the compiled-app story: binaries built with
 # BRO_WITH_BRONZE=ON, which load an app directory's app.dll/.so/.dylib, and the
 # bronze compiler under bronze/, which produces one. They are built from the
-# same pinned bronze tree (build/_deps/bronze-src) in the same job on purpose — a compiled
+# same fetched bronze tree (build/_deps/bronze-src) in the same job on purpose — a compiled
 # module carries the ABI fingerprint of the bronze that emitted it and the host
 # refuses to load a module whose fingerprint is not its own, so a compiler and
 # a host from two different bronze commits would ship as a pair that cannot
@@ -73,9 +73,9 @@ jobs:
           # to compile there.
           - { name: macos,   os: macos-15,     cuda: false, triplet: arm64-osx,   jobs: 3 }
     steps:
-      # A plain clone: configure fetches every dependency at the commit
-      # cmake/bro_pins.cmake pins, bronze included — the compiler shipped in
-      # the zip is that pinned one.
+      # A plain clone: configure fetches every sibling at the head of its main
+      # (on a release tag, at the commit cmake/bro_lock.cmake locks), bronze
+      # included — the compiler shipped in the zip is that one.
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0        # tags needed for package-release.sh's version fallback

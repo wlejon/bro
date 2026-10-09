@@ -93,9 +93,9 @@ cmake --build build --config Release --target bronze-cli # ...and the compiler t
 
 bronze resolves like every other sibling (see
 [Dependencies](#dependencies)): a `../bronze` checkout first, otherwise the
-commit `cmake/bro_pins.cmake` pins, downloaded at configure. The configure line
+head of bronze's main, downloaded at configure. The configure line
 says which it took (`bronze: working tree <path>` /
-`bronze: https://github.com/wlejon/bronze/archive/<sha>.tar.gz`), so a build against the pin is never
+`bronze: github.com/wlejon/bronze <sha> (default branch)`), so a build of GitHub's bronze is never
 mistaken for a build against the tree you are editing.
 `-DFETCHCONTENT_SOURCE_DIR_BRONZE=<path>` points it anywhere else.
 
@@ -186,21 +186,25 @@ class of problem.
 ## Dependencies
 
 There are no git submodules; a plain `git clone` is the whole checkout.
-`cmake/bro_pins.cmake` pins every dependency (each ecosystem sibling, plus SDL,
-Jolt and FastNoise2) to an exact commit, and `cmake/bro_deps.cmake`'s
-`bro_dependency()` resolves each one at configure time, in order:
+`cmake/bro_pins.cmake` declares every dependency: each ecosystem sibling with
+no commit, so it tracks its main, and SDL, Jolt and FastNoise2 pinned to exact
+commits. `cmake/bro_deps.cmake`'s `bro_dependency()` resolves each one at
+configure time, in order:
 
 1. a target that already exists;
 2. a working tree at `../<name>` beside the source dir (siblings only, not
    third-party code), or any path given as `-DFETCHCONTENT_SOURCE_DIR_<NAME>=<path>`;
-3. the GitHub archive tarball of the pinned commit, downloaded into
-   `<build>/_deps/<name>-src`.
+3. the GitHub archive tarball of one commit, downloaded into
+   `<build>/_deps/<name>-src`: the commit `cmake/bro_lock.cmake` locks on a
+   release tag, else a third-party pin, else the head of the sibling's main,
+   looked up (all at once) at every configure.
 
-So a lone clone downloads everything it needs, and a checkout with siblings
-beside it (`brokit`, `htmlayout`, `broaudio`, `bronze`, `brass`, …) builds
-against those working trees. Pins are first-declaration-wins: bro declares all
-of them before adding any sibling, so a sibling's own pins never override
-bro's. `scripts/bump-deps.sh` moves a pin. See
+So a lone clone downloads everything it needs, at the siblings' current mains,
+and a checkout with siblings beside it (`brokit`, `htmlayout`, `broaudio`,
+`bronze`, `brass`, …) builds against those working trees. Offline, a configure
+reuses the commits that build directory last resolved, with a warning
+(`-DBRO_DEPS_OFFLINE=ON` forces that). A release tag carries the lock written by
+`scripts/lock-deps.sh`, so it builds the same commits forever. See
 [docs/multi-repo-workflow.md](docs/multi-repo-workflow.md), and
 [docs/ecosystem.md](docs/ecosystem.md) for the list of every repo.
 

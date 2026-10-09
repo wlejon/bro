@@ -4,13 +4,13 @@ This page is bro's side of working across repositories. [ecosystem.md](ecosystem
 
 bro depends on sibling repos: the libraries linked directly into the engine (the terminal ones, bropty, brosearch, brothemes and bromux, included), **[bronze](https://github.com/wlejon/bronze)** (the JavaScript compiler and runtime), and **[brass](https://github.com/wlejon/brass)** (the code-generation backend bronze requires). There are **no git submodules** anywhere in the ecosystem; a plain `git clone` of any repo is its whole checkout.
 
-Each dependency is a `bro_dependency()` call (see [How it works](#how-it-works)): it builds from the working tree at `../<name>` when there is one, and otherwise downloads the commit bro pins in `cmake/bro_pins.cmake`. The configure prints which it took for every dependency (`bronze: working tree D:/projects/bronze` or `bronze: https://github.com/wlejon/bronze/archive/<sha>.tar.gz`) — a build against the pin must never be mistaken for a build against the checkout you are editing.
+Each dependency is a `bro_dependency()` call (see [How it works](#how-it-works)): it builds from the working tree at `../<name>` when there is one, and otherwise downloads the head of the sibling's `main` as of this configure — or, on a release tag, the commit `cmake/bro_lock.cmake` locks. The configure prints which it took for every dependency (`bronze: working tree D:/projects/bronze`, `bronze: github.com/wlejon/bronze <sha> (default branch)`, `... (locked in cmake/bro_lock.cmake)`) — a build of GitHub's main must never be mistaken for a build of the checkout you are editing.
 
 Every library but bromath, htmlayout and the four terminal libraries also owns its JavaScript binding, a `<name>_api` static library under the sibling's `src/api/`, so those siblings depend on bronze — and through it brass. See [Sibling JavaScript APIs](#sibling-javascript-apis-name_api) below for what that changes.
 
-One more sibling repo, **[broworkshop](https://github.com/wlejon/broworkshop)** at `../broworkshop`, is **not** a library or CMake dependency. It's the apps tree (launcher, games, tools, demos, AI) and no CMake dependency at all; bro just runs it via `bro ../broworkshop` or `bro ../broworkshop/bro.json`. See the [Apps tree](#apps-tree) section below. The dependency runs the other way for **[helm](https://github.com/wlejon/helm)** and **[ffmpeg-bro](https://github.com/wlejon/ffmpeg-bro)**: each is its own executable that pins bro with `bro_dependency(bro ...)`, so it builds `../bro` when present and the pinned bro otherwise.
+One more sibling repo, **[broworkshop](https://github.com/wlejon/broworkshop)** at `../broworkshop`, is **not** a library or CMake dependency. It's the apps tree (launcher, games, tools, demos, AI) and no CMake dependency at all; bro just runs it via `bro ../broworkshop` or `bro ../broworkshop/bro.json`. See the [Apps tree](#apps-tree) section below. The dependency runs the other way for **[helm](https://github.com/wlejon/helm)** and **[ffmpeg-bro](https://github.com/wlejon/ffmpeg-bro)**: each is its own executable that depends on bro with `bro_dependency(bro ...)`, so it builds `../bro` when present and bro's main otherwise.
 
-`cmake/bro_pins.cmake` pins every ecosystem library bro builds against (all of `scripts/repos.txt`'s `pinned` rows: the engine, terminal and desktop libraries, brolink/brovideo/broremote/brodmabuf, bronze and brass), plus bro's own third-party code: SDL, Jolt and FastNoise2.
+`cmake/bro_pins.cmake` declares every ecosystem library bro builds against (one `bro_dependencies()` list, matching `scripts/repos.txt`'s `dep` rows: the engine, terminal and desktop libraries, brolink/brovideo/broremote/brodmabuf, bronze and brass) with no commit, so each tracks its main, and pins bro's own third-party code to exact commits: SDL, Jolt and FastNoise2.
 
 ## Directory Layout
 
@@ -18,8 +18,9 @@ One more sibling repo, **[broworkshop](https://github.com/wlejon/broworkshop)** 
 D:/projects/
 ├── bro/                          # main project
 │   ├── cmake/bro_deps.cmake      # bro_dependency(), identical in every repo
-│   ├── cmake/bro_pins.cmake      # every pin bro builds against
-│   └── build/_deps/<name>-src/   # downloaded pins (only for what has no ../<name>)
+│   ├── cmake/bro_pins.cmake      # every dependency bro builds (third-party ones pinned)
+│   ├── cmake/bro_lock.cmake      # only on a release tag: every sibling at one commit
+│   └── build/_deps/<name>-src/   # downloads (only for what has no ../<name>)
 ├── bromath/ brokit/ htmlayout/   # sibling working trees (preferred for dev)
 ├── broaudio/ bromesh/ broflora/
 ├── brotensor/ brogameagent/ brolm/ brodiffusion/ broimage/ brosoundml/ brovisionml/
@@ -30,35 +31,44 @@ D:/projects/
 └── ...                           # desktop libraries, helm, helmapps, ...: see ecosystem.md
 ```
 
-Any of the sibling directories may be missing; that dependency then comes from its pin.
+Any of the sibling directories may be missing; that dependency then comes from GitHub, at its main's head.
 
 ## How It Works
 
-Every repo that has dependencies carries the same file, `cmake/bro_deps.cmake`, byte for byte (copy bro's when it changes). It defines one function:
+Every repo that has dependencies carries the same file, `cmake/bro_deps.cmake`, byte for byte: edit bro's, then `scripts/sync-deps.sh` copies it to every repo in `scripts/repos.txt` (`--check` only reports). It defines:
 
 ```cmake
-bro_dependency(<name> [GITHUB <owner/repo> REF <sha>] [TARGET <target>]
+bro_dependency(<name> [GITHUB <owner/repo>] [REF <sha|branch|tag>] [TARGET <target>]
                [THIRD_PARTY] [PIN_ONLY | SOURCE_ONLY] [OPTIONS <VAR>=<value> ...])
+bro_dependencies(<name>...)        # declare several, as PIN_ONLY
+bro_lock(<name> <sha>)             # only inside cmake/bro_lock.cmake
 ```
 
-which resolves `<name>` in this order:
+`GITHUB` defaults to `wlejon/<name>`; third-party code names its repo, marks itself `THIRD_PARTY`, and pins a `REF` sha. A dependency resolves in this order:
 
 1. **An existing target** (`TARGET`, default `<name>`): someone already added it, so nothing happens. This is how a dependency shared by several siblings is built once.
 2. **A working tree**: `FETCHCONTENT_SOURCE_DIR_<NAME>` if set (`-D` on the command line), else `../<name>` beside the top-level source dir (then beside the current project's). `THIRD_PARTY` dependencies skip the `../` lookup — a stray `../SDL` is not taken for the pin.
-3. **The pin**: FetchContent of `https://github.com/<owner/repo>/archive/<sha>.tar.gz` (a tarball, not a clone) into `<build>/_deps/<name>-src`, added with `add_subdirectory(... EXCLUDE_FROM_ALL)`.
+3. **A download** of `https://github.com/<owner/repo>/archive/<sha>.tar.gz` (a tarball, not a clone) into `<build>/_deps/<name>-src`, added with `add_subdirectory(... EXCLUDE_FROM_ALL)`. The commit is the first of:
+   1. the one the **top-level project's `cmake/bro_lock.cmake`** names (a release; see [Releases](#releases-lock-tag-unlock));
+   2. `REF`, when it is a 40-hex sha (third-party code);
+   3. **the head of the branch**: `REF` when it names a branch or tag, else the default branch (`main` for every wlejon repo), read with `git ls-remote` at every configure.
 
-`OPTIONS` become cache entries before the add (each sibling's tests/tools off, and so on). `PIN_ONLY` only records the pin; `SOURCE_ONLY` resolves and populates the source (`<name>_SOURCE_DIR`) without adding it, for a dependency whose CMake entry point is not its root (Jolt's `Build/`) or that needs work done between populate and add.
+`OPTIONS` become cache entries before the add (each sibling's tests/tools off, and so on). `PIN_ONLY` only declares; `SOURCE_ONLY` resolves and populates the source (`<name>_SOURCE_DIR`) without adding it, for a dependency whose CMake entry point is not its root (Jolt's `Build/`) or that needs work done between populate and add.
 
-**Pins are first-declaration-wins.** A pin is a global property; a second `bro_dependency(<name> GITHUB ... REF ...)` for the same name keeps the first one's sha. bro includes `cmake/bro_pins.cmake` right after `project()`, before any sibling is added, so a sibling's own pins never override bro's, and every sibling's dependency on (say) bromath resolves to the one commit bro pins. A sibling built standalone has nobody above it and uses its own pins.
+**Branch heads, concurrently.** The first dependency that needs a head resolves every *declared* dependency that will need one, in one batch: one `git ls-remote` per repo, all running at once (stages of a single `execute_process` pipeline, each child a `cmake -P` of `bro_deps.cmake` itself writing its answer to a file). That is why bro declares all of its siblings up front in `cmake/bro_pins.cmake`: a fresh configure of bro resolves its ~40 heads in about a second instead of one round trip each. Dependencies with a working tree, a lock or a sha are never looked up, so a local build with the siblings beside bro makes no network call at all. Resolution is not cached between configures (the next configure sees a moved main), but a moved main is a new sha, so a new URL, so FetchContent downloads the new tarball; an unchanged head is the same URL and nothing is downloaded. Without `git` on the PATH the lookup falls back to one GitHub API call per repo.
+
+**Offline.** Every resolved head is remembered in the build's cache. When a lookup fails, or with `-DBRO_DEPS_OFFLINE=ON` or `FETCHCONTENT_FULLY_DISCONNECTED=ON`, the configure warns once and builds the last commit that build directory resolved (printed as `(default branch, OFFLINE: last resolved)`); that commit's tarball is already in `_deps`, so the configure needs no network. A build directory that has never resolved a dependency cannot fall back and stops with an error naming it.
+
+**Declarations are first-wins.** The first `bro_dependency()` that names a dependency fixes its `GITHUB`, `REF` and `THIRD_PARTY`; later declarations of the same name are ignored. bro includes `cmake/bro_pins.cmake` right after `project()`, before any sibling is added, so its third-party pins (SDL, Jolt, ...) beat any sibling's, and its lock, when there is one, covers the whole graph. A lock is read only from the top-level project: a sibling's or bro's own lock is ignored when something above it is building.
 
 This means:
 
 - **Edit once**: only touch files in the sibling's working tree at `../<name>`; bro builds it from there.
-- **One build**: `cmake --build build` in bro compiles every sibling from its working tree or pin.
-- **Pins only matter without a working tree**: CI, fresh clones, a machine with only bro checked out.
-- **Never edit `_deps/<name>-src`**: it is a download of the pinned commit, not a checkout.
+- **One build**: `cmake --build build` in bro compiles every sibling from its working tree or from GitHub's main.
+- **No pin bumps**: a pushed sibling commit is what CI and fresh clones build on their next configure.
+- **Never edit `_deps/<name>-src`**: it is a download, not a checkout.
 
-A pin line keeps `name`, `GITHUB` and `REF` on one line, `bro_dependency(<name> GITHUB <owner/repo> REF <40-hex sha> ...)`, because `scripts/bump-deps.sh` and the repo-status scripts read and rewrite it with a line-oriented match.
+Keep a call's `name`, `GITHUB` and `REF` on one line: `scripts/sync-deps.sh`, `scripts/lock-deps.sh` and the repo-status scripts read them with a line-oriented match. `scripts/sync-deps.sh` also drops any `REF <sha>` from a wlejon dependency, since an ecosystem repo is pinned only by a lock.
 
 ### Feature gates
 
@@ -125,11 +135,11 @@ The JavaScript surface of every sibling (`bro.mesh`, `bro.lm`, `AudioContext`, `
 
 **The public header is a trampoline.** `include/<name>/api.h` is two lines that include `../../src/api/api.h`, guarded by a named `#ifndef <NAME>_API_H` rather than `#pragma once`. The reason is in each header: every sibling ships this same two-line file, and GCC identifies a `#pragma once` header by content and mtime rather than path, so two siblings checked out in the same second make GCC silently skip the second include — and bro includes all of them from one file (`src/bronze_host/host_sibling_apis.cpp`). broflora is the odd one out: its entry is `include/broflora/api/api.h`, a real declaration under `#pragma once`, not a trampoline. brokit has no `include/` header; bro reaches its `api/api.h` through the target's include directories.
 
-**Siblings depend on bronze and brass like anything else.** Each sibling with a binding pins bronze (`bro_dependency(bronze ... TARGET bronze_runtime_shared OPTIONS BRONZE_BUILD_SHARED_RUNTIME=ON BRONZE_BUILD_TESTS=OFF)`) and brass (`PIN_ONLY`; bronze adds it). bronze resolves brass itself, in `bronze/src/codegen-brass/CMakeLists.txt`: an explicit `BRASS_ROOT` (cache or environment) first, else `bro_dependency(brass)` — `../brass` or bronze's pin — **added with `add_subdirectory`**, so nothing is pre-built and brotensor's kernel-JIT block then finds the `brass` target already there.
+**Siblings depend on bronze and brass like anything else.** Each sibling with a binding declares bronze (`bro_dependency(bronze ... TARGET bronze_runtime_shared OPTIONS BRONZE_BUILD_SHARED_RUNTIME=ON BRONZE_BUILD_TESTS=OFF)`); bronze declares brass. bronze resolves brass itself, in `bronze/src/codegen-brass/CMakeLists.txt`: an explicit `BRASS_ROOT` (cache or environment) first, else `bro_dependency(brass)` — `../brass` or brass's main — **added with `add_subdirectory`**, so nothing is pre-built and brotensor's kernel-JIT block then finds the `brass` target already there.
 
-Under bro, `third_party/CMakeLists.txt` adds brass and then bronze before any sibling, at bro's pins, so every sibling's bronze/brass `bro_dependency` finds the targets already there and the configure prints one `bronze:` / `brass:` line for the trees actually in use.
+Under bro, `third_party/CMakeLists.txt` adds brass and then bronze before any sibling, so every sibling's bronze/brass `bro_dependency` finds the targets already there and the configure prints one `bronze:` / `brass:` line for the trees actually in use.
 
-**Sibling CI: a lone checkout.** Because every dependency falls back to its pin, a sibling's workflow is just its own checkout and a configure; the pins download at configure time:
+**Sibling CI: a lone checkout.** Because every dependency falls back to GitHub, a sibling's workflow is just its own checkout and a configure; its dependencies' mains download at configure time:
 
 ```yaml
 - uses: actions/checkout@v7
@@ -147,7 +157,7 @@ Two rules follow from that layout. CI builds beside the checkout rather than ins
 
 **Sibling api tests.** Each sibling has `tests/test_*api*.cpp` registered as a ctest (names in the table; they run standalone only, since the siblings gate `tests/` on being the top-level project) that boots a bronze realm, calls the installer, and checks the mount points and shape. Every one carries the same `if(WIN32)` block: a `POST_BUILD` `copy_if_different` of `$<TARGET_FILE:bronze_runtime_shared>` and its import library beside the test executable, and `PATH` set on the test property, because bronze builds the DLL into `BRONZE_SHARED_RUNTIME_DIR` and the PE loader only looks beside the `.exe` (`0xc0000135` and a modal "dll was not found" otherwise). bro's `bro_bronze_stage_runtime` does the same for bro's own executables, but as one custom command all four depend on rather than a `POST_BUILD` on each: four `copy_if_different`s of one file into one directory at the end of a parallel build race, and on macOS (`clonefile()` behind an unlink) a racing copy can remove the file another just staged.
 
-**What `-Sync` now means.** A sibling api is compiled against bronze's `embed` headers and linked to `bronze_runtime_shared`, and the compiled-JS siblings carry bronze's ABI fingerprint in their objects. A bronze change that moves that surface therefore has to land in bronze **and** in every sibling that binds it before bro's pins can move, and the pins have to move together: a bro commit that pins a new bronze against old sibling pins does not build in CI, where every sibling is its pin. That is exactly the case `scripts/repo-status.sh --sync` exists for (one commit moving every stale pin), and one more reason pin bumps are batched at the end of a session rather than made per commit.
+**Changing bronze's embed surface.** A sibling api is compiled against bronze's `embed` headers and linked to `bronze_runtime_shared`, and the compiled-JS siblings carry bronze's ABI fingerprint in their objects. A bronze change that moves that surface therefore has to land in bronze **and** in every sibling that binds it. With every repo tracking main there is no pin to move afterwards, but between the bronze push and the sibling pushes a sibling's CI (and a fresh clone of bro) builds the new bronze against the old binding. Push the set together, bronze first, the binding siblings straight after (`scripts/repo-status.sh --push` orders it), and expect a CI run caught in that window to fail once.
 
 ## Day-to-Day Development
 
@@ -178,7 +188,7 @@ cd D:/projects/bromesh && cmake --build build --config Release
 ./build/tests/Release/bromesh_test.exe
 
 # The sibling's JS binding has its own ctest (see the <name>_api section):
-# bronze and brass come from ../bronze and ../brass or their pins, and on
+# bronze and brass come from ../bronze and ../brass or their mains, and on
 # Windows the POST_BUILD step stages bronze_runtime_shared.dll beside the test exe.
 cd D:/projects/bromesh && ctest --test-dir build -C Release -R test_mesh_api
 cd D:/projects/brolm   && ctest --test-dir build -C Release -R brolm_test_api
@@ -199,42 +209,49 @@ git add src/api/new_api.cpp
 git commit -m "Add new API"
 ```
 
-### 4. Move the pins — at the end of the session, not per commit
+### 4. Push, dependencies first
 
-The pins are what CI and a fresh clone build, so they have to move eventually — but **not with every sibling commit**. Move them once at the end of a session, after the siblings are pushed, so every pin names a commit that is on GitHub. Per-commit bumps produce a bro history of pin-only commits and, since the [`<name>_api` libraries](#sibling-javascript-apis-name_api) bind bronze, a half-moved set (new bronze, old siblings) that does not build in CI. `AGENTS.md` at the bro root states the same rule.
+There is nothing to bump: CI and fresh clones build each sibling's main, so a sibling commit reaches them when it is pushed. What matters is the order. Push in dependency order — leaves first, bro after the libraries, the apps that build on bro last — so that no pushed main needs a dependency commit GitHub does not have yet (`scripts/repo-status.sh --push` uses that order). A change that spans repos (a bronze embed change and the bindings that follow it) is pushed as one run of pushes, not spread over a session.
 
-`scripts/bump-deps.sh` rewrites pins in place (review with `git diff`, then commit):
+Third-party pins (SDL, Jolt, curl, ...) are still exact commits: move one by editing its `REF` in every repo that declares it (bro's `cmake/bro_pins.cmake` wins under bro).
+
+## Releases: lock, tag, unlock
+
+A release tag has to build the same thing forever, so it carries a lock: `cmake/bro_lock.cmake`, one `bro_lock(<name> <sha>)` per ecosystem dependency, transitive ones included (bronze's brass). While it exists, `cmake/bro_deps.cmake` builds exactly those commits instead of the branch heads (a working tree at `../<name>` still wins, as always; the configure says so). On main there is no lock.
 
 ```bash
-scripts/bump-deps.sh                     # every wlejon pin -> that repo's GitHub HEAD
-scripts/bump-deps.sh brokit bronze       # just these
-scripts/bump-deps.sh --local brokit      # -> HEAD of ../brokit (warns if not pushed yet)
-scripts/bump-deps.sh SDL                 # third-party pins move only when named
-scripts/bump-deps.sh --repo ../bromux --local   # a sibling's own pins
-git commit -m "Pin brokit: add new API" -- cmake/bro_pins.cmake
+scripts/lock-deps.sh                 # lock every dependency at its GitHub main head
+scripts/lock-deps.sh --local         # ...or at the ../<name> HEADs (warns if unpushed or dirty)
+scripts/lock-deps.sh --dry-run       # print the lock instead of writing it
+git add cmake/bro_lock.cmake && git commit -m "Lock dependencies for v0.2.0"
+git tag v0.2.0 && git push origin main v0.2.0
+scripts/lock-deps.sh --unlock        # back to tracking main
+git commit -m "Unlock dependencies after v0.2.0" -- cmake/bro_lock.cmake
+git push
 ```
 
-A sibling's own pins (used when it is built standalone) move the same way with `--repo`. Push in dependency order — leaves first, bro last, the apps that pin bro after it — so that no pushed pin names a commit GitHub does not have.
+`--repo <dir>` locks another repo the same way (helm and ffmpeg-bro lock bro and everything bro builds). The dependency set is every non-third-party `bro_dependency()` the repo declares, closed over the declarations in the `../<name>` working trees and the `deps` column of `scripts/repos.txt`, so it needs those working trees or that list to be current. A build from a release tarball or a checkout of the tag needs nothing else: the lock is in the tree.
 
-## Status, pull, sync across all repos
+The release workflow (`.github/workflows/nightly.yml` and the release scripts) builds whatever the checked-out commit says — main's heads on a nightly, the lock on a tag.
+
+## Status, pull, push across all repos
 
 `scripts/repo-status.ps1` (Windows) and `scripts/repo-status.sh` (Linux/macOS) are the same tool in two ports. Run either from anywhere; both resolve paths from the script location.
 
-Both walk every repo in `scripts/repos.txt`, grouped as there (runtime, compiler, engine, terminal, desktop, app, tool): branch, dirty/staged/untracked counts, and ahead/behind against the upstream as last fetched (`up<n>` / `dn<n>`; an upstream that is not on `origin` is shown in brackets, a branch with none says `no upstream`). A repo that is not checked out at `../<name>` is listed and skipped. The pin report then compares, for each repo the list marks `pinned`, the commit `cmake/bro_pins.cmake` pins against the HEAD of `../<name>` (`STALE PIN` when they differ), and names any wlejon pin that the list does not mark, so the two cannot drift apart unnoticed.
+Both walk every repo in `scripts/repos.txt`, grouped as there (runtime, compiler, engine, terminal, desktop, app, tool): branch, dirty/staged/untracked counts, and ahead/behind against the upstream as last fetched (`up<n>` / `dn<n>`; an upstream that is not on `origin` is shown in brackets, a branch with none says `no upstream`). Since dependencies track main, an `up<n>` is work CI and fresh clones cannot see yet. A repo that is not checked out at `../<name>` is listed and skipped. The dependency report then names any repo whose `cmake/bro_deps.cmake` differs from bro's, any wlejon dependency pinned with a `REF`, any `cmake/bro_lock.cmake` left in a checkout, and any mismatch between bro's `bro_dependencies()` list and the repos `scripts/repos.txt` marks `dep`.
 
 ```powershell
-pwsh scripts/repo-status.ps1              # working-tree state + stale pins
+pwsh scripts/repo-status.ps1              # working-tree state + dependency report
 pwsh scripts/repo-status.ps1 -ListFiles   # also list changed files in dirty repos
 pwsh scripts/repo-status.ps1 -Pull        # fast-forward everything first, then report
-pwsh scripts/repo-status.ps1 -Pull -Sync  # ...and move bro's stale pins + commit
-pwsh scripts/repo-status.ps1 -Push        # push repos ahead of upstream to their remotes
-pwsh scripts/repo-status.ps1 -Sync -Push  # move pins, commit in bro, push all (bro last)
+pwsh scripts/repo-status.ps1 -Push        # push repos ahead of upstream: libraries, bro, apps
 ```
 
 ```bash
-scripts/repo-status.sh              # -v / --verbose, -p / --pull, -s / --sync, -u / --push
+scripts/repo-status.sh              # -v / --verbose, -p / --pull, -u / --push
 scripts/repo-status.sh --pull
-scripts/repo-status.sh --sync --push
+scripts/repo-status.sh --push
+scripts/sync-deps.sh [--check]      # bro_deps.cmake identical everywhere, no wlejon REFs
 ```
 
 **`-Pull` / `--pull`** fast-forwards every listed repo onto its upstream before the report, so what you read reflects the remotes rather than whatever you last fetched. Use it after a round of merges lands on GitHub (dependabot, PRs merged from the web) to bring the whole tree forward in one shot. It is deliberately conservative:
@@ -244,9 +261,7 @@ scripts/repo-status.sh --sync --push
 - `--no-recurse-submodules`, a no-op now that there are none, kept so a stray `.gitmodules` in some unrelated checkout is never followed.
 - Detached HEADs and branches with no upstream are reported and skipped.
 
-**`-Sync` / `--sync`** then moves bro's stale pins to the `../<name>` HEADs (`scripts/bump-deps.sh --local`) and records them in a single bro commit of `cmake/bro_pins.cmake`. It only acts where the working tree is ahead of (or diverged from) the pin; a sibling whose working tree is *behind* the pin is left alone, since that one needs a pull, not a bump. Note the ordering `-Pull -Sync` implies: pull first so the pins you record are the real remote HEADs.
-
-**`-Push` / `-u, --push`** pushes every listed repo that has local commits ahead of its upstream, siblings first and bro last, so bro's pins never name a commit GitHub does not have yet. With `-Sync` (`-Sync -Push`) the pins move and are committed first.
+**`-Push` / `-u, --push`** pushes every listed repo that has local commits ahead of its upstream: the libraries (compiler, engine, terminal, desktop groups) first, then bro, then the apps and tools, so no pushed main builds against a dependency commit GitHub does not have yet.
 
 ## Overriding Paths
 
@@ -259,7 +274,7 @@ cmake -B build \
     -DFETCHCONTENT_SOURCE_DIR_SDL=/path/to/SDL
 ```
 
-To build against the pins even with working trees beside bro, configure from a directory that has no siblings (a fresh clone somewhere else) — or point a single dependency at a downloaded copy the same way.
+To build what CI builds (every sibling at GitHub's main) even with working trees beside bro, configure from a directory that has no siblings (a fresh clone somewhere else) — or point a single dependency at a downloaded copy the same way. `-DBRO_DEPS_OFFLINE=ON` (a cache entry; `=OFF` to go back) skips the branch lookups and reuses the commits that build directory last resolved.
 
 brass also honours an explicit `BRASS_ROOT` (cache variable or environment), read in one place inside bro, `third_party/CMakeLists.txt`, which runs before anything else names brass; every later brass block (bronze's, the siblings') finds the target already there.
 

@@ -16,56 +16,57 @@
 #                desktop   desktop-environment substrate libraries (bro mounts their JS bindings)
 #                app       applications that run on, or link, bro
 #                tool      development tools around bro
-#   bro        self | pinned (bro pins a commit of it in cmake/bro_pins.cmake) | -
+#   bro        self | dep (bro builds against it: declared in cmake/bro_pins.cmake,
+#              tracked at its main, locked only on a release tag) | -
 #   github     public | pending (not on GitHub yet)
 #   platforms  comma-separated: win, linux, mac
 #   deps       comma-separated bro-ecosystem repos it builds against (from its CMake)
 #
 # name          group     bro        github   platforms        deps
 bro             runtime   self       public   win,linux,mac    bronze,brass,bromath,brokit,htmlayout,broaudio,bromesh,broflora,brotensor,brogameagent,brolm,brodiffusion,broimage,brosoundml,brovisionml,bropty,brosearch,brothemes,bromux,brolink,brovfs,brosys,brocred,broapps,brothumb,brodisplays,brocompositor,brokeys,broa11y,broconf,broseat,browl,broportal,brodbus,brovideo,broremote,brodmabuf,brodecor,broclip,brompris,bropulse,broime
-bronze          compiler  pinned     public   win,linux,mac    brass
-brass           compiler  pinned     public   win,linux,mac    -
-bromath         engine    pinned     public   win,linux,mac    -
-brokit          engine    pinned     public   win,linux,mac    bromath,broimage,bronze,brass
-htmlayout       engine    pinned     public   win,linux,mac    -
-broaudio        engine    pinned     public   win,linux,mac    bromath,bronze,brass
-bromesh         engine    pinned     public   win,linux,mac    bromath,bronze,brass
-broflora        engine    pinned     public   win,linux,mac    bromath,bromesh,bronze,brass
-brotensor       engine    pinned     public   win,linux,mac    bronze,brass
-brogameagent    engine    pinned     public   win,linux,mac    bromath,brotensor,bronze,brass
-brolm           engine    pinned     public   win,linux,mac    bromath,brotensor,broimage,bronze,brass
-brodiffusion    engine    pinned     public   win,linux,mac    bromath,brotensor,brolm,broimage,brovisionml,bronze,brass
-broimage        engine    pinned     public   win,linux,mac    bromath,brotensor,bronze,brass
-brosoundml      engine    pinned     public   win,linux,mac    bromath,brotensor,broimage,brolm,broaudio,bronze,brass
-brovisionml     engine    pinned     public   win,linux,mac    bromath,brotensor,broimage,bronze,brass
-bropty          terminal  pinned     public   win,linux,mac    brosearch
-brosearch       terminal  pinned     public   win,linux,mac    -
-brothemes       terminal  pinned     public   win,linux,mac    -
-bromux          terminal  pinned     public   win,linux,mac    bropty,brosearch,brolink,broimage,bromath
-brolink         terminal  pinned     public   win,linux,mac    -
-brovfs          desktop   pinned     public   win,linux,mac    -
-brosys          desktop   pinned     public   win,linux,mac    brodbus
+bronze          compiler  dep        public   win,linux,mac    brass
+brass           compiler  dep        public   win,linux,mac    -
+bromath         engine    dep        public   win,linux,mac    -
+brokit          engine    dep        public   win,linux,mac    bromath,broimage,bronze,brass
+htmlayout       engine    dep        public   win,linux,mac    -
+broaudio        engine    dep        public   win,linux,mac    bromath,bronze,brass
+bromesh         engine    dep        public   win,linux,mac    bromath,bronze,brass
+broflora        engine    dep        public   win,linux,mac    bromath,bromesh,bronze,brass
+brotensor       engine    dep        public   win,linux,mac    bronze,brass
+brogameagent    engine    dep        public   win,linux,mac    bromath,brotensor,bronze,brass
+brolm           engine    dep        public   win,linux,mac    bromath,brotensor,broimage,bronze,brass
+brodiffusion    engine    dep        public   win,linux,mac    bromath,brotensor,brolm,broimage,brovisionml,bronze,brass
+broimage        engine    dep        public   win,linux,mac    bromath,brotensor,bronze,brass
+brosoundml      engine    dep        public   win,linux,mac    bromath,brotensor,broimage,brolm,broaudio,bronze,brass
+brovisionml     engine    dep        public   win,linux,mac    bromath,brotensor,broimage,bronze,brass
+bropty          terminal  dep        public   win,linux,mac    brosearch
+brosearch       terminal  dep        public   win,linux,mac    -
+brothemes       terminal  dep        public   win,linux,mac    -
+bromux          terminal  dep        public   win,linux,mac    bropty,brosearch,brolink,broimage,bromath
+brolink         terminal  dep        public   win,linux,mac    -
+brovfs          desktop   dep        public   win,linux,mac    -
+brosys          desktop   dep        public   win,linux,mac    brodbus
 brocas          desktop   -          public   win,linux,mac    -
-brocred         desktop   pinned     public   win,linux,mac    brodbus
-broapps         desktop   pinned     public   win,linux,mac    brovfs
-brothumb        desktop   pinned     public   win,linux,mac    brovfs,broimage,bromath
-brodisplays     desktop   pinned     public   win,linux,mac    -
-brocompositor   desktop   pinned     public   win,linux,mac    brodisplays
-brokeys         desktop   pinned     public   win,linux,mac    brosearch
-broa11y         desktop   pinned     public   win,linux,mac    -
-broconf         desktop   pinned     public   win,linux,mac    -
-broseat         desktop   pinned     public   linux            brodbus
-brodmabuf       desktop   pinned     public   linux            -
-brodbus         desktop   pinned     public   linux            -
-browl           desktop   pinned     public   linux            -
-broportal       desktop   pinned     public   linux            brodbus
-brodecor        desktop   pinned     public   win,linux,mac    bromath
-broclip         desktop   pinned     public   win,linux,mac    -
-brompris        desktop   pinned     public   linux            brodbus
-bropulse        desktop   pinned     public   linux            -
-broime          desktop   pinned     public   win,linux,mac    brosearch
-brovideo        desktop   pinned     public   win,linux        brodmabuf
-broremote       desktop   pinned     public   win,linux        brovideo,brolink
+brocred         desktop   dep        public   win,linux,mac    brodbus
+broapps         desktop   dep        public   win,linux,mac    brovfs
+brothumb        desktop   dep        public   win,linux,mac    brovfs,broimage,bromath
+brodisplays     desktop   dep        public   win,linux,mac    -
+brocompositor   desktop   dep        public   win,linux,mac    brodisplays
+brokeys         desktop   dep        public   win,linux,mac    brosearch
+broa11y         desktop   dep        public   win,linux,mac    -
+broconf         desktop   dep        public   win,linux,mac    -
+broseat         desktop   dep        public   linux            brodbus
+brodmabuf       desktop   dep        public   linux            -
+brodbus         desktop   dep        public   linux            -
+browl           desktop   dep        public   linux            -
+broportal       desktop   dep        public   linux            brodbus
+brodecor        desktop   dep        public   win,linux,mac    bromath
+broclip         desktop   dep        public   win,linux,mac    -
+brompris        desktop   dep        public   linux            brodbus
+bropulse        desktop   dep        public   linux            -
+broime          desktop   dep        public   win,linux,mac    brosearch
+brovideo        desktop   dep        public   win,linux        brodmabuf
+broremote       desktop   dep        public   win,linux        brovideo,brolink
 broworkshop     app       -          public   win,linux,mac    bro
 helm            app       -          public   win,linux,mac    bro
 helmapps        app       -          public   win,linux,mac    bro

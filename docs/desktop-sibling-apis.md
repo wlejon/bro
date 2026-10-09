@@ -15,7 +15,7 @@ These are the conventions the engine siblings already use (broimage, brotensor, 
 - **Native state wrapped in a JS object** is a handle created with `makeHandle(data, dtor, when)`. bronze calls its destructor at finalisation.
 
 ### Library layout
-- **Static library.** Each sibling builds `<name>_api` from `src/api/`, linking the sibling's core library and `bronze_runtime_shared`. bronze and brass are pinned like any other dependency, so a standalone build takes `../bronze` and `../brass` when present and the pins otherwise.
+- **Static library.** Each sibling builds `<name>_api` from `src/api/`, linking the sibling's core library and `bronze_runtime_shared`. bronze and brass resolve like any other dependency, so a standalone build takes `../bronze` and `../brass` when present and their mains otherwise.
 - **Public header.** `include/<name>/api.h` is a trampoline to `src/api/api.h`.
 - **Shared helpers.** `host_class.{h,cpp}`, `object_builder.h` and `arg_reader.h` are sibling-local copies, because the siblings stay standalone. Copy them verbatim from broimage rather than rewriting them; `HostClass::inherit` keeps `instanceof` working.
 - **Binding files** are `native_<area>.cpp`, each under 1000 lines.
@@ -244,8 +244,8 @@ Work proceeds in chunks of about 4k LOC per agent, at most three agents at once,
 6. **broa11y:** the engine-side tree export first, then the small JS surface.
 
 When a sibling's binding lands, bro starts depending on that sibling:
-- pin it in `cmake/bro_pins.cmake` (`bro_dependency(<name> GITHUB wlejon/<name> REF <sha> PIN_ONLY)`) along with its transitive siblings, and add it with `bro_dependency(<name> ...)` in `third_party/CMakeLists.txt`;
-- mark it `pinned` in `scripts/repos.txt`;
+- declare it in `cmake/bro_pins.cmake`'s `bro_dependencies()` list along with its transitive siblings, and add it with `bro_dependency(<name> ...)` in `third_party/CMakeLists.txt`;
+- mark it `dep` in `scripts/repos.txt`;
 - add its namespace to [ecosystem.md](ecosystem.md) and its API file to the table in CLAUDE.md.
 
-After that, `scripts/repo-status.sh --sync` keeps its pin current.
+After that, bro builds the sibling's main (or `../<name>`); there is no pin to keep current.

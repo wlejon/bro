@@ -61,11 +61,11 @@ jobs:
           - { name: windows, os: windows-2022, triplet: x64-windows, test: false, bronze_compiler: false }
           - { name: macos,   os: macos-15,     triplet: arm64-osx,   test: true,  bronze_compiler: true }
     steps:
-      # A plain clone: every dependency (bronze, brass, the bro-* siblings, SDL,
-      # Jolt) comes from the commit cmake/bro_pins.cmake pins, fetched at
-      # configure into build/_deps. So the bronze built here is a pinned one
-      # that moves when someone bumps the pin, never whatever bronze main
-      # happens to be this morning.
+      # A plain clone: every dependency is fetched at configure into
+      # build/_deps. bronze, brass and the bro-* siblings come from the head of
+      # their main as of this run (the configure prints each sha), SDL and Jolt
+      # from the commits cmake/bro_pins.cmake pins. A release tag builds the
+      # commits its cmake/bro_lock.cmake locks instead.
       - uses: actions/checkout@v7
 
       # SDL3 builds from the pinned source. Linux gets the Vulkan headers and
@@ -172,11 +172,11 @@ jobs:
       # (`../../../../bronze/tests/oracle/threejs/three.module.js`, and
       # node_modules shims whose "main" points the same way) — the layout every
       # developer has, with bronze checked out beside bro. A runner has the
-      # pinned tree configure fetched into build/_deps and no sibling, so give
-      # it the sibling name. A symlink, not a copy: one pinned tree under both
-      # names. It goes in after configure, so configure still fetched the pin
+      # tree configure fetched into build/_deps and no sibling, so give
+      # it the sibling name. A symlink, not a copy: one fetched tree under both
+      # names. It goes in after configure, so configure still fetched bronze
       # rather than taking ../bronze as a working tree.
-      - name: Link the pinned bronze as the sibling checkout
+      - name: Link the fetched bronze as the sibling checkout
         if: matrix.test
         run: ln -s "$PWD/build/_deps/bronze-src" "$PWD/../bronze"
 

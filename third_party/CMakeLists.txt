@@ -1,8 +1,9 @@
 # --- bro's dependencies ---
 #
 # Every library below comes through bro_dependency() (cmake/bro_deps.cmake),
-# pinned in cmake/bro_pins.cmake: a working tree at ../<name> beside bro when
-# there is one, otherwise the pinned commit fetched from GitHub at configure.
+# declared in cmake/bro_pins.cmake: a working tree at ../<name> beside bro when
+# there is one, otherwise its main (third-party code: its pinned commit)
+# fetched from GitHub at configure.
 # There are no submodules. -DFETCHCONTENT_SOURCE_DIR_<NAME>=<path> builds any
 # of them from another tree. Order matters only where noted: a library a later
 # one depends on is added first, so the later one's own lookup finds the target.

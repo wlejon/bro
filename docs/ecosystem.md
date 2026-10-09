@@ -108,21 +108,23 @@ Every repo here that builds against another resolves it the same way, in this or
 
 1. **An existing target wins.** If a superbuild such as bro has already added `bropty`, bromux's lookup finds that target and adds nothing. That way a library is configured once per build, and the first loader picks its options. bro is the first loader of brotensor, brosearch and the others for this reason.
 2. **The sibling checkout**, at `../<name>` beside the top-level project, overridable with `-DFETCHCONTENT_SOURCE_DIR_<NAME>=<path>`. This is the development layout: you edit the standalone repo and every consumer builds from it, with no copy to keep in sync.
-3. **The pinned commit**, downloaded at configure as the GitHub archive tarball of an exact sha. This is what CI and a fresh `git clone` use. There are no git submodules anywhere.
+3. **GitHub**, downloaded at configure as the archive tarball of one commit: for an ecosystem repo, the head of its `main` as of that configure (read with `git ls-remote`, all of a build's heads at once), or the commit a release's `cmake/bro_lock.cmake` locks; for third-party code, the exact sha its declaration pins. This is what CI and a fresh `git clone` use. There are no git submodules anywhere.
 
-All three steps are one function, `bro_dependency(<name> GITHUB <owner/repo> REF <sha>)`, in `cmake/bro_deps.cmake`: one identical file in every repo that has dependencies. A repo pins every ecosystem repo it needs, transitive ones included (bromux pins bropty *and* brosearch), plus the third-party code it builds from source (SDL, Jolt, curl, libremidi, meshoptimizer, ...), each at an exact commit. bronze and brass are pinned like the rest.
+All three steps are one function, `bro_dependency(<name> ...)`, in `cmake/bro_deps.cmake`: one identical file in every repo that has dependencies (bro's `scripts/sync-deps.sh` copies it out). A repo declares every ecosystem repo it needs, with no commit, so it builds their mains, plus the third-party code it builds from source (SDL, Jolt, curl, libremidi, meshoptimizer, ...), each pinned to an exact commit with `REF`.
 
-**Pins are first-declaration-wins**, so the top-level project's pins apply to the whole build: bro declares all of its pins (`cmake/bro_pins.cmake`) before it adds anything, and a sibling's own pins only matter when it is built standalone.
+**Declarations are first-wins**, so the top-level project's choices apply to the whole build: bro declares all of its dependencies (`cmake/bro_pins.cmake`) before it adds anything, so its third-party pins beat a sibling's and its ecosystem heads resolve in one concurrent batch.
 
-**Pins move at the end of a session, not per commit**, after the siblings are pushed: `scripts/bump-deps.sh` (or `scripts/repo-status.sh --sync`) rewrites them, and push order is leaves first, bro last. [multi-repo-workflow.md](multi-repo-workflow.md) has bro's side in detail: the configure order, the feature gates, the `<name>_api` bindings, and the status/pull/sync/push tool.
+**There are no pins to move.** A pushed commit is what the next configure of every consumer builds, so push in dependency order: leaves first, bro after the libraries, the apps last. **A release locks**: `scripts/lock-deps.sh` writes `cmake/bro_lock.cmake` (every ecosystem dependency, transitive ones included, at one commit), the lock is committed and tagged, and then removed from main again. [multi-repo-workflow.md](multi-repo-workflow.md) has bro's side in detail: the configure order, the offline fallback, the feature gates, the `<name>_api` bindings, the release flow, and the status/pull/push tool.
 
 ## Working across the repos
 
 ```bash
 scripts/repo-status.sh            # every repo in scripts/repos.txt: branch, dirty, ahead/behind,
-                                  # then bro's pins against the ../<name> HEADs
+                                  # then dependency hygiene (bro_deps.cmake drift, REFs, locks)
 scripts/repo-status.sh --verbose  # also list changed files
-pwsh scripts/repo-status.ps1      # the same tool on Windows (-ListFiles, -Pull, -Sync, -Push)
+pwsh scripts/repo-status.ps1      # the same tool on Windows (-ListFiles, -Pull, -Push)
+scripts/sync-deps.sh              # copy bro's bro_deps.cmake everywhere, drop wlejon REFs
+scripts/lock-deps.sh              # release lock (--local, --repo <dir>, --unlock)
 ```
 
 A repo that isn't checked out is listed as such and skipped. A repo tracking an upstream that isn't on `origin` shows it in brackets.

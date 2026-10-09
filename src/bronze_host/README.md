@@ -273,17 +273,17 @@ write `const slice = blob.slice`.
 ## Configure
 
 ```bash
-cmake -B build -DBRO_WITH_BRONZE=ON            # ../bronze, else the pinned bronze
+cmake -B build -DBRO_WITH_BRONZE=ON            # ../bronze, else bronze's main
 ```
 
-Resolves bronze at `../bronze`, falling back to the commit `cmake/bro_pins.cmake`
-pins, downloaded at configure (`-DFETCHCONTENT_SOURCE_DIR_BRONZE=<path>`
+Resolves bronze at `../bronze`, falling back to the head of bronze's main,
+downloaded at configure (`-DFETCHCONTENT_SOURCE_DIR_BRONZE=<path>`
 overrides both). The configure line says which tree it took —
-`bronze: working tree <path>` or `bronze: https://github.com/wlejon/bronze/archive/<sha>.tar.gz`
+`bronze: working tree <path>` or `bronze: github.com/wlejon/bronze <sha> (default branch)`
 — because the whole hazard of having a fallback is building one while
-editing the other. CI and the nightly build the pin, so the pin is what they
-ship; `scripts/bump-deps.sh --local bronze` (or `scripts/repo-status.sh --sync`)
-moves it to your `../bronze` HEAD the same way it does for every other sibling. bronze's own configure
+editing the other. CI and the nightly build bronze's main as of their
+configure (a release tag, the commit its `cmake/bro_lock.cmake` locks), so a
+bronze change reaches them when it is pushed. bronze's own configure
 requires doctest, so the toolchain must provide it (bronze auto-detects a vcpkg
 root when bro's configure didn't set one).
 
