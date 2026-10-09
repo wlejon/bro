@@ -7,9 +7,6 @@
 //   - windowAt answers with the topmost window under the point
 //   - closing the focused window focuses the next most recently used one
 //   - decoration insets reach stack() for server-side-decorated windows only
-//
-// Run with stdin open (the test clients exit when it closes):
-//   sleep 60 | ./bro_window_stacking_test
 #include "compositor/wayland_compositor.h"
 #include "engine/ui_layer.h"
 #include "render/layer_source.h"
@@ -56,6 +53,7 @@ std::string findClient(const char* name) {
 
 struct Client {
     pid_t pid = -1;
+    int stdinFd = -1;  // held open: a test client exits when its stdin closes
     ~Client() { kill(); }
     void kill() {
         if (pid > 0) {
@@ -64,13 +62,21 @@ struct Client {
             ::waitpid(pid, &status, 0);
             pid = -1;
         }
+        if (stdinFd >= 0) {
+            ::close(stdinFd);
+            stdinFd = -1;
+        }
     }
 };
 
 std::unique_ptr<Client> spawn(const std::string& bin, const std::vector<std::string>& args, const std::string& sock) {
     auto c = std::make_unique<Client>();
+    // Its own stdin, not the runner's (which may be /dev/null or closed).
+    int in[2];
+    if (::pipe2(in, O_CLOEXEC) != 0) return c;
     pid_t pid = ::fork();
     if (pid == 0) {
+        ::dup2(in[0], STDIN_FILENO);
         int devnull = ::open("/dev/null", O_WRONLY);
         if (devnull >= 0) ::dup2(devnull, STDOUT_FILENO);
         ::setenv("WAYLAND_DISPLAY", sock.c_str(), 1);
@@ -81,7 +87,9 @@ std::unique_ptr<Client> spawn(const std::string& bin, const std::vector<std::str
         ::execv(bin.c_str(), argv.data());
         std::_Exit(127);
     }
+    ::close(in[0]);
     c->pid = pid;
+    c->stdinFd = in[1];
     return c;
 }
 

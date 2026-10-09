@@ -16,6 +16,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <unistd.h>
+#include <fcntl.h>
 #include <sys/wait.h>
 #include <poll.h>
 
@@ -48,6 +49,10 @@ std::string findClient(const char* name) {
 struct ChildProcess {
     pid_t pid = -1;
     int pipeOut = -1;
+    // The client's stdin, held open for its lifetime: the test clients exit
+    // when their stdin closes, so they must not read the runner's (which may
+    // be /dev/null, or closed).
+    int pipeIn = -1;
 
     ~ChildProcess() {
         kill();
@@ -63,6 +68,10 @@ struct ChildProcess {
         if (pipeOut >= 0) {
             ::close(pipeOut);
             pipeOut = -1;
+        }
+        if (pipeIn >= 0) {
+            ::close(pipeIn);
+            pipeIn = -1;
         }
     }
 
@@ -94,14 +103,18 @@ struct ChildProcess {
 
 ChildProcess spawnClient(const std::string& binary, const std::vector<std::string>& args, const std::string& sock) {
     ChildProcess cp;
-    int p[2];
-    if (::pipe(p) != 0) return cp;
+    int p[2], in[2];
+    if (::pipe2(p, O_CLOEXEC) != 0) return cp;
+    if (::pipe2(in, O_CLOEXEC) != 0) {
+        ::close(p[0]);
+        ::close(p[1]);
+        return cp;
+    }
 
     pid_t pid = ::fork();
     if (pid == 0) {
-        ::close(p[0]);
         ::dup2(p[1], STDOUT_FILENO);
-        ::close(p[1]);
+        ::dup2(in[0], STDIN_FILENO);
 
         ::setenv("WAYLAND_DISPLAY", sock.c_str(), 1);
 
@@ -115,8 +128,10 @@ ChildProcess spawnClient(const std::string& binary, const std::vector<std::strin
     }
 
     ::close(p[1]);
+    ::close(in[0]);
     cp.pid = pid;
     cp.pipeOut = p[0];
+    cp.pipeIn = in[1];
     return cp;
 }
 
