@@ -6,7 +6,7 @@
 // it goes on as the page's drag (dragenter/dragover/drop in the page, with
 // the page's own data), dropped on another application it ends with dragend
 // and the effect that application took. Where the window system cannot
-// carry it (SDL), the drag stays inside the page as before.
+// carry it (SDL on Linux), the drag stays inside the page as before.
 #include "engine/engine.h"
 #include "dom/drag_data_store.h"
 #include "platform/window.h"

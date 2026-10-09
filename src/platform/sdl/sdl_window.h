@@ -24,6 +24,9 @@ public:
     void setVSync(bool enabled) override { m_vsyncPref = enabled; }
     bool vsyncPreference() const override { return m_vsyncPref; }
 
+    /// Windows (OLE) and macOS (NSDraggingSession); see sdl_drag.h.
+    bool startDrag(const DragSource& drag) override;
+
     uint32_t getWidth() const override { return m_width; }
     uint32_t getHeight() const override { return m_height; }
     void setSize(uint32_t width, uint32_t height) override { m_width = width; m_height = height; }

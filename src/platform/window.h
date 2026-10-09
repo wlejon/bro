@@ -221,7 +221,8 @@ public:
     /// while the button that began it is still held. From then on the drag
     /// is reported through EventLoop's onOwnDrag* handlers, not as pointer
     /// events. False where the window system cannot carry a drag out of a
-    /// window (SDL has no drag-source API): the drag stays inside the page.
+    /// window (SDL on Linux; SDL on Windows and macOS drives the OS drag
+    /// itself, sdl/sdl_drag.h): the drag stays inside the page.
     virtual bool startDrag(const DragSource& drag) {
         (void)drag;
         return false;

@@ -1,5 +1,6 @@
 #include "platform/sdl/sdl_window.h"
 #include "platform/sdl/sdl_runtime.h"
+#include "platform/sdl/sdl_drag.h"
 #include "platform/desktop_platform.h"
 #include "util/log.h"
 
@@ -158,6 +159,11 @@ SDL_Window* sdlWindowOf(const Window* window) {
 
 uint32_t SdlWindow::windowId() const {
     return static_cast<uint32_t>(SDL_GetWindowID(m_window));
+}
+
+bool SdlWindow::startDrag(const DragSource& drag) {
+    if (m_keepHidden || !m_window) return false;
+    return sdlQueueDrag(m_window, windowId(), drag);
 }
 
 bool SdlWindow::createVulkanSurface(VkInstance instance, VkSurfaceKHR* surface) {

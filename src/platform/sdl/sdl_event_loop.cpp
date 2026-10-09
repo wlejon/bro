@@ -1,4 +1,5 @@
 #include "platform/sdl/sdl_backend.h"
+#include "platform/sdl/sdl_drag.h"
 
 #include "platform/event_loop.h"
 #include "platform/gamepads.h"
@@ -91,7 +92,11 @@ bool dispatchGamepadEvent(const SDL_Event& event, EventLoop& loop) {
 
 class SdlEventLoop final : public EventLoop {
 public:
-    ~SdlEventLoop() override { setModalWindowEventHook(nullptr); }
+    SdlEventLoop() { sdlDragAttach(this); }
+    ~SdlEventLoop() override {
+        sdlDragAttach(nullptr);
+        setModalWindowEventHook(nullptr);
+    }
 
     void pollEvents() override;
     void setModalWindowEventHook(std::function<void()> hook) override;
@@ -143,6 +148,7 @@ private:
     bool m_watching = false;
 
     void flushDropGroup();
+    void dispatch(const SDL_Event& event);
     static bool SDLCALL modalWatch(void* userdata, SDL_Event* event);
 };
 
@@ -169,8 +175,41 @@ void SdlEventLoop::setModalWindowEventHook(std::function<void()> hook) {
 }
 
 void SdlEventLoop::pollEvents() {
+    // A drag begun by input that did not come through here (the control
+    // socket's) starts now.
+    sdlRunPendingDrag();
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
+        // A drag the OS carries (sdl_drag.h): the pointer is its until it
+        // ends, and so is anything SDL's drop target makes of it; the
+        // release it swallowed comes later, and is not the page's.
+        switch (event.type) {
+            case SDL_EVENT_MOUSE_MOTION:
+            case SDL_EVENT_MOUSE_BUTTON_DOWN:
+            case SDL_EVENT_DROP_FILE:
+            case SDL_EVENT_DROP_TEXT:
+            case SDL_EVENT_DROP_BEGIN:
+            case SDL_EVENT_DROP_COMPLETE:
+            case SDL_EVENT_DROP_POSITION:
+                if (sdlOwnDragActive()) continue;
+                if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) sdlButtonPressed(event.button.button);
+                break;
+            case SDL_EVENT_MOUSE_BUTTON_UP:
+                if (sdlOwnDragActive() || sdlTakeStaleButtonUp(event.button.button)) continue;
+                break;
+            default:
+                break;
+        }
+        dispatch(event);
+        // A handler that began a drag: start it now, outside the dispatch.
+        sdlRunPendingDrag();
+        sdlDeliverDragReports();
+    }
+    sdlDeliverDragReports();
+}
+
+void SdlEventLoop::dispatch(const SDL_Event& event) {
+    {
         switch (event.type) {
             case SDL_EVENT_QUIT:
                 // Treat the window close button like Ctrl+C: tell JS to bail

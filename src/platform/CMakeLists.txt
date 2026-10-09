@@ -14,7 +14,7 @@ add_library(bro_platform STATIC
     window_system.cpp keys.cpp dialogs.cpp evdev_keymap.cpp
     # SDL window system
     sdl/sdl_window_system.cpp sdl/sdl_window.cpp sdl/sdl_runtime.cpp
-    sdl/sdl_event_loop.cpp sdl/sdl_clipboard.cpp sdl/sdl_dialogs.cpp
+    sdl/sdl_event_loop.cpp sdl/sdl_clipboard.cpp sdl/sdl_dialogs.cpp sdl/sdl_drag.cpp
     # DRM window system (the KMS/libinput halves are drm_seat / drm_input)
     drm_window_system.cpp
     # desktop integration
@@ -30,8 +30,15 @@ else()
     message(FATAL_ERROR "No SDL3 target found")
 endif()
 if(WIN32)
-    # SetCurrentProcessExplicitAppUserModelID (the window's app id).
-    target_link_libraries(bro_platform PRIVATE shell32)
+    # SetCurrentProcessExplicitAppUserModelID (the window's app id); OLE
+    # DoDragDrop and the shell's drag-image helper (sdl/sdl_drag_win.cpp).
+    target_sources(bro_platform PRIVATE sdl/sdl_drag_win.cpp)
+    target_link_libraries(bro_platform PRIVATE shell32 ole32 uuid)
+elseif(APPLE)
+    # NSDraggingSession (drags out of a window).
+    target_sources(bro_platform PRIVATE sdl/sdl_drag_mac.mm)
+    set_source_files_properties(sdl/sdl_drag_mac.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    target_link_libraries(bro_platform PRIVATE "-framework AppKit")
 endif()
 # The agent control channel's transport (control_socket.cpp).
 target_link_libraries(bro_platform PRIVATE brolink)
