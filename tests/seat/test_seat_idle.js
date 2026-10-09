@@ -3,7 +3,8 @@
 // nobody else can tell it the user went quiet). Headless, the record is fed by
 // injected input and the clock is advanceTime()'s, so this is deterministic.
 assert(typeof bro.seat === 'object', 'bro.seat namespace exists');
-if (typeof bro.seat.setIdleTimeout !== 'function') {
+if (!bro.seat.available || typeof bro.seat.setIdleTimeout !== 'function') {
+    // Compiled out (BRO_WITH_SEAT off, Windows): the stub's methods throw.
     skipTest('bro.seat has no idle timer in this build');
 } else {
     const log = [];
