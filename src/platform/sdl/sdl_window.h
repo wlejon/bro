@@ -63,6 +63,7 @@ public:
     bool isFocused() const override;
     bool flash(bool on = true) override;
     void setIcon(const std::string& pngPath) override;
+    bool setIconPixels(int width, int height, const uint8_t* rgba) override;
 
     uint32_t currentDisplay() const override;
     bool moveToDisplay(uint32_t displayId) override;

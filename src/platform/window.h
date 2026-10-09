@@ -233,6 +233,10 @@ public:
     /// Set the window icon from a PNG file (taskbar / Alt-Tab / title bar).
     /// A missing or malformed file is logged and ignored.
     virtual void setIcon(const std::string& pngPath) = 0;
+    /// Set the window icon from straight-alpha RGBA8 pixels (stride width*4),
+    /// for an icon decoded or rasterized above the platform layer (an app's
+    /// SVG icon). Returns false when the window system refused it.
+    virtual bool setIconPixels(int width, int height, const uint8_t* rgba) = 0;
 
     // --- Displays ---
 

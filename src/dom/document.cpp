@@ -438,19 +438,27 @@ void Document::setTitle(const std::string& title) {
     if (!documentElement_) return;
     std::vector<Element*> allElems;
     collectElements(root_, allElems);
+    bool set = false;
     for (auto* elem : allElems) {
         if (elem->tagName() == "TITLE") {
             elem->setTextContent(title);
-            return;
+            set = true;
+            break;
         }
     }
     for (auto* elem : allElems) {
+        if (set) break;
         if (elem->tagName() == "HEAD") {
             auto* titleElem = createElement("title");
             titleElem->setTextContent(title);
             elem->appendChild(titleElem);
-            return;
+            set = true;
         }
+    }
+    if (set && titleListener_) {
+        // A copy: the listener may replace itself.
+        auto fn = titleListener_;
+        fn(title);
     }
 }
 

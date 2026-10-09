@@ -833,6 +833,8 @@ private:
     std::string appDir_;
     DesktopTrustInfo desktopTrust_;
     std::string titleOverride_;
+    std::string fallbackTitle_ = "Bro";   // the window's title while the page has none
+    void applyWindowIcon(const EngineConfig& config);
     std::function<void(Engine&)> installHostBindings_;
     std::function<void()> installWorkerHostBindings_;
     util::AssetMounts assetMounts_;

@@ -395,16 +395,23 @@ void SdlWindow::setIcon(const std::string& pngPath) {
         LOG_INFO("Window icon: could not load '%s' (%s)", pngPath.c_str(), err.c_str());
         return;
     }
-    SDL_Surface* surf = SDL_CreateSurfaceFrom(img.width, img.height,
-        SDL_PIXELFORMAT_RGBA32, img.pixels.data(), img.width * 4);
+    setIconPixels(img.width, img.height, img.pixels.data());
+}
+
+bool SdlWindow::setIconPixels(int width, int height, const uint8_t* rgba) {
+    if (!m_window || width <= 0 || height <= 0 || !rgba) return false;
+    SDL_Surface* surf = SDL_CreateSurfaceFrom(width, height, SDL_PIXELFORMAT_RGBA32,
+                                              const_cast<uint8_t*>(rgba), width * 4);
     if (!surf) {
         LOG_ERROR("Window icon: SDL_CreateSurfaceFrom failed: %s", SDL_GetError());
-        return;
+        return false;
     }
-    if (!SDL_SetWindowIcon(m_window, surf)) {
-        LOG_ERROR("Window icon: SDL_SetWindowIcon failed: %s", SDL_GetError());
-    }
+    const bool ok = SDL_SetWindowIcon(m_window, surf);
+    // Not an error: some video drivers (offscreen, a Wayland compositor
+    // without xdg-toplevel-icon) have no window icons.
+    if (!ok) LOG_INFO("Window icon: not set (%s)", SDL_GetError());
     SDL_DestroySurface(surf);
+    return ok;
 }
 
 NativeHandle SdlWindow::nativeHandle() const {

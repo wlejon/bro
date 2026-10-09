@@ -1,14 +1,20 @@
 #include "engine/app_runtime.h"
 
 #include "platform/desktop_single_instance.h"
+#include "svg/svg_renderer.h"
 #include "util/exe_dir.h"
 #include "util/log.h"
 
+#include "broimage/decode.h"
+
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <deque>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <mutex>
 #include <system_error>
 #include <utility>
@@ -165,5 +171,50 @@ void noteFramePresented() {
 }
 
 double firstFrameMs() { return gFirstFrameMs.load(std::memory_order_relaxed); }
+
+std::string initialWindowTitle(const EngineConfig& config) {
+    if (!config.title.empty()) return config.title;
+    if (!config.manifest.name.empty()) return config.manifest.name;
+    return "Bro";
+}
+
+std::string appIconPath(const AppDescriptor& manifest, const std::string& appDir) {
+    if (manifest.icon.empty()) return {};
+    namespace fs = std::filesystem;
+    const std::u8string rel(manifest.icon.begin(), manifest.icon.end());
+    fs::path p(rel);
+    if (p.is_relative() && !appDir.empty()) p = fs::path(std::u8string(appDir.begin(), appDir.end())) / p;
+    std::error_code ec;
+    if (!fs::is_regular_file(p, ec)) {
+        LOG_WARN("app: icon '%s' not found", manifest.icon.c_str());
+        return {};
+    }
+    fs::path abs = fs::absolute(p, ec);
+    std::u8string u = (ec ? p : abs).lexically_normal().u8string();
+    return std::string(u.begin(), u.end());
+}
+
+bool loadIconPixels(const std::string& path, int size, int& width, int& height, std::vector<uint8_t>& rgba) {
+    std::ifstream f(std::filesystem::path(std::u8string(path.begin(), path.end())), std::ios::binary);
+    if (!f) return false;
+    std::vector<char> bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    if (bytes.empty()) return false;
+    if (svg::looksLikeSvg(bytes.data(), bytes.size())) {
+        float sw = 0, sh = 0;
+        svg::svgIntrinsicSize(bytes.data(), bytes.size(), sw, sh);
+        int w = size, h = size;
+        if (sw > 0 && sh > 0) {
+            if (sw >= sh) h = (std::max)(1, static_cast<int>(size * sh / sw + 0.5f));
+            else w = (std::max)(1, static_cast<int>(size * sw / sh + 0.5f));
+        }
+        return svg::rasterizeSvgMarkup(bytes.data(), bytes.size(), w, h, width, height, rgba);
+    }
+    broimage::Image img;
+    if (!broimage::decode_memory(reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size(), img)) return false;
+    width = img.width;
+    height = img.height;
+    rgba = std::move(img.pixels);
+    return width > 0 && height > 0;
+}
 
 }  // namespace bro::engine

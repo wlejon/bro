@@ -16,6 +16,7 @@
 #include "engine/terminal_layers.h"
 #include "dom/event_dispatch.h"
 #include "util/asset_path.h"
+#include "util/exe_dir.h"
 #include "util/user_dirs.h"
 
 #include <algorithm>
@@ -82,7 +83,7 @@ namespace {
 platform::WindowConfig primaryWindowConfig(const EngineConfig& config, const GraphicsSettings& gfx,
                                            platform::GraphicsBackend backend) {
     platform::WindowConfig wc;
-    wc.title = "Bro";
+    wc.title = initialWindowTitle(config);
     wc.width = static_cast<uint32_t>(gfx.width);
     wc.height = static_cast<uint32_t>(gfx.height);
     wc.resizable = gfx.resizable;
@@ -95,6 +96,30 @@ platform::WindowConfig primaryWindowConfig(const EngineConfig& config, const Gra
 }
 
 }  // namespace
+
+// The manifest's icon (SVG rasterized, or any bitmap broimage reads), else
+// bro's own system/icon.png. SDL hands it to the window system: the window
+// and taskbar icon on Windows, _NET_WM_ICON on X11, xdg-toplevel-icon on a
+// Wayland compositor that has it (the others find the icon through the
+// app_id's desktop entry, which `bro --install` writes).
+void Engine::applyWindowIcon(const EngineConfig& config) {
+    if (!window_) return;
+    std::string path = appIconPath(config.manifest, config.appDir);
+    if (path.empty()) {
+        path = assetMounts_.resolve("/system/icon.png");
+        std::error_code ec;
+        if (path.empty() ||
+            !std::filesystem::is_regular_file(std::filesystem::path(std::u8string(path.begin(), path.end())), ec))
+            path = util::executableDir() + "/system/icon.png";
+    }
+    int w = 0, h = 0;
+    std::vector<uint8_t> rgba;
+    if (!loadIconPixels(path, 256, w, h, rgba)) {
+        LOG_INFO("Window icon: could not load '%s'", path.c_str());
+        return;
+    }
+    window_->setIconPixels(w, h, rgba.data());
+}
 
 Engine::Engine(const EngineConfig& config)
     : graphicsConfig_(config.graphics)
@@ -131,6 +156,7 @@ Engine::Engine(const EngineConfig& config)
     hostProvidesCompiledApp_ = config.hostProvidesCompiledApp;
     appDir_ = config.appDir;
     titleOverride_ = config.title;
+    fallbackTitle_ = initialWindowTitle(config);
     installHostBindings_ = config.installHostBindings;
     installWorkerHostBindings_ = config.installWorkerHostBindings;
     initDevLoopConfig(config);
@@ -293,7 +319,7 @@ Engine::Engine(const EngineConfig& config)
             if (wcfg.windowX != kWindowPosUnset && wcfg.windowY != kWindowPosUnset)
                 window_->setPosition(wcfg.windowX, wcfg.windowY);
 
-            window_->setIcon("system/icon.png");
+            applyWindowIcon(config);
             int ww = 0, wh = 0;
             window_->getSize(ww, wh);
             if (ww > 0 && wh > 0) {
@@ -531,13 +557,16 @@ void Engine::initAppRealm() {
     document_->parse(html, authorStyles, kDefaultStyles);
 
     if (window_) {
+        // bro.json's "title" fixes the title; otherwise the window follows
+        // the page's title, live, and shows the app's name while it has none.
+        auto apply = [this](const std::string& t) {
+            if (window_) window_->setTitle(t.empty() ? fallbackTitle_ : t);
+        };
         if (!titleOverride_.empty()) {
             window_->setTitle(titleOverride_);
         } else {
-            std::string docTitle = document_->title();
-            if (!docTitle.empty()) {
-                window_->setTitle(docTitle);
-            }
+            apply(document_->title());
+            document_->setTitleListener(apply);
         }
     }
 

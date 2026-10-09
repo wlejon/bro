@@ -76,4 +76,16 @@ void noteFramePresented();
 /// Milliseconds from start to the page's first presented frame, or -1 before it.
 double firstFrameMs();
 
+/// The window's title before the page names one: bro.json's "title", else
+/// the manifest name, else "Bro".
+std::string initialWindowTitle(const EngineConfig& config);
+
+/// The manifest icon as an absolute path ("" when none is declared or the
+/// file is missing).
+std::string appIconPath(const AppDescriptor& manifest, const std::string& appDir);
+
+/// Load an icon file as straight-alpha RGBA8: an SVG is rasterized at
+/// fit `size` x `size` (its own aspect kept), any other format decoded.
+bool loadIconPixels(const std::string& path, int size, int& width, int& height, std::vector<uint8_t>& rgba);
+
 }  // namespace bro::engine

@@ -36,7 +36,6 @@ is [app-api.js](app-api.js) (`bro.app`).
     ],
     "permissions": [],
 
-    "title": "Notes",
     "width": 900, "height": 640, "minWidth": 360, "minHeight": 240,
     "splash": false, "watch": false
 }
@@ -45,8 +44,8 @@ is [app-api.js](app-api.js) (`bro.app`).
 | Key | Meaning |
 |---|---|
 | `id` | Reverse-DNS (`org.example.Notes`) or a slug (`notes`): `[A-Za-z0-9._-]`, no leading/trailing `.`, no `..`. It becomes the window's Wayland `app_id` / X11 `WM_CLASS` / Windows AppUserModelID, the desktop entry's name (`<id>.desktop`), the single-instance channel and the key of the app's directories. Without one, the folder's name is the id, and the app keeps the old anonymous behaviour (bro.log in the working directory, settings beside the executable). |
-| `name`, `version`, `description` | Shown by launchers (desktop entry `Name`, `Comment`). |
-| `icon` | Path relative to the app folder. The desktop entry names the absolute path. |
+| `name`, `version`, `description` | Shown by launchers (desktop entry `Name`, `Comment`). `name` is also the window's title until the page has one (below). |
+| `icon` | Path relative to the app folder: an SVG or any bitmap bro decodes. It is the window icon (title bar and taskbar on Windows, `_NET_WM_ICON` on X11, `xdg-toplevel-icon` where a Wayland compositor offers it), and the desktop entry names its absolute path, which is how a Wayland shell finds it through the window's `app_id`. |
 | `categories`, `keywords` | FreeDesktop menu categories and search keywords. |
 | `singleInstance` | A launch while the app runs hands its argv and working directory to the running instance and exits (below). |
 | `display` | `false` hides the app from launchers (`NoDisplay=true`): a helper started by another app. |
@@ -57,6 +56,12 @@ is [app-api.js](app-api.js) (`bro.app`).
 
 The engine reads bro.json with a real JSON parser for these keys. A key of the
 wrong type is skipped with a warning; it never fails the launch.
+
+**Window title.** The window opens titled with `name`, then follows the page's
+title: its `<title>` once it loads, and every later `document.title = ...`
+(an empty title shows `name` again). `bro.window.setTitle()` sets it directly.
+The window key `title` is a fixed title instead: it wins over both and the
+window ignores `document.title`. Without `name` or `title` the window is "Bro".
 
 ## The command line
 
@@ -93,7 +98,11 @@ An app with a declared `id` also keeps bro's own per-app settings (window
 geometry, engine preferences; [settings.md](settings.md)) in
 `<configDir>/bro_settings.json` rather than beside the executable. Its stdout
 and stderr go to the log (`bro.app.logFile`). A second instance that finds the
-log taken writes `<id>-<pid>.log` beside it.
+log taken (`--new-instance`, or an app without `singleInstance`) writes
+`<id>-<pid>.log` beside it. Those are pruned at every launch: a `<id>-<pid>.log`
+no running process is writing is deleted, except the newest five, kept for a
+look after a crash. (The anonymous `bro.log` / `bro-<pid>.log` in a working
+directory follow the same rule.)
 
 ## Single instance
 

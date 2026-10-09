@@ -12,6 +12,7 @@
 #include <optional>
 
 #include "broaudio/log.h"
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -51,6 +52,50 @@
 //
 // One file descriptor is dup'd to both stderr and stdout so the two streams
 // share a kernel write position and don't fight over file size.
+// Retention for the fallback logs: every launch that finds the main log taken
+// (a --new-instance launch, a second launcher child) writes <stem>-<pid>.log,
+// and nothing else ever removes those. Before taking a log, delete the
+// <stem>-<pid>.log files beside it that no process is writing, keeping the
+// newest kKeepInstanceLogs of them for a look after a crash. A log still being
+// written is never touched: on Windows its writer opened it without
+// FILE_SHARE_DELETE, so the delete fails; on POSIX its writer holds the flock.
+static constexpr size_t kKeepInstanceLogs = 5;
+
+static void pruneInstanceLogs(const std::string& dir, const std::string& stem) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    const fs::path d = dir.empty() ? fs::path(".") : fs::path(std::u8string(dir.begin(), dir.end()));
+    const std::string prefix = stem + "-";
+    struct Stale { fs::path path; fs::file_time_type time; };
+    std::vector<Stale> stale;
+    for (fs::directory_iterator it(d, ec), end; !ec && it != end; it.increment(ec)) {
+        const std::u8string u = it->path().filename().u8string();
+        const std::string name(u.begin(), u.end());
+        if (name.size() <= prefix.size() + 4 || name.compare(0, prefix.size(), prefix) != 0 ||
+            name.compare(name.size() - 4, 4, ".log") != 0)
+            continue;
+        const std::string pid = name.substr(prefix.size(), name.size() - prefix.size() - 4);
+        if (pid.find_first_not_of("0123456789") != std::string::npos) continue;
+        std::error_code tec;
+        if (!it->is_regular_file(tec)) continue;
+#ifndef _WIN32
+        // In use: its writer holds the flock (see openLocked below).
+        int fd = open(it->path().c_str(), O_RDONLY | O_CLOEXEC);
+        if (fd < 0) continue;
+        const bool idle = flock(fd, LOCK_EX | LOCK_NB) == 0;
+        close(fd);
+        if (!idle) continue;
+#endif
+        stale.push_back({it->path(), it->last_write_time(tec)});
+    }
+    if (stale.size() <= kKeepInstanceLogs) return;
+    std::sort(stale.begin(), stale.end(), [](const Stale& a, const Stale& b) { return a.time > b.time; });
+    for (size_t i = kKeepInstanceLogs; i < stale.size(); ++i) {
+        std::error_code rec;
+        fs::remove(stale[i].path, rec);  // fails, harmlessly, for one a writer has open (Windows)
+    }
+}
+
 // `logPath` is the file to take ("bro.log" in the working directory, or an
 // app's own log), `fallbackStem` + "-<pid>.log" beside it the one to use when
 // another process already writes there. Returns the path actually opened, ""
@@ -62,6 +107,7 @@ static std::string redirectLogToFile(const std::string& logPath = "bro.log",
         size_t i = logPath.find_last_of("/\\");
         return i == std::string::npos ? std::string() : logPath.substr(0, i + 1);
     }();
+    pruneInstanceLogs(dir, fallbackStem);
 #ifdef _WIN32
     // bro.exe is /SUBSYSTEM:WINDOWS; when launched from a non-console parent
     // (PowerShell Start-Process, the launcher's CreateProcess, double-click,

@@ -250,6 +250,9 @@ public:
     // Title
     std::string title() const;
     void setTitle(const std::string& title);
+    // Called after setTitle (document.title = ...) with the new title: how the
+    // engine keeps the window's title following the page's.
+    void setTitleListener(std::function<void(const std::string&)> fn) { titleListener_ = std::move(fn); }
 
     // Dirty tracking. Two levels:
     //  - dirty_       : the frame needs a re-record (paint). Set by everything.
@@ -691,6 +694,7 @@ private:
     // nothing. Membership here says only "claimed this id at some point";
     // getElementById is what decides which candidate is in the document now.
     std::unordered_map<std::string, std::vector<Element*>> idMap_;
+    std::function<void(const std::string&)> titleListener_;
     std::unordered_map<Node*, std::unique_ptr<Node>> ownedNodes_;
 
     // Nodes moved out of ownedNodes_ by freeNode() but not yet destroyed.
