@@ -68,7 +68,9 @@ const got = JSON.parse(fs.readFileSync(report, 'utf8'));
 assert(got.type === 'instance', 'an instance event');
 assert(JSON.stringify(got.argv) === JSON.stringify(['--new-tab', 'two words', '']),
     'the argv arrived intact: ' + JSON.stringify(got.argv));
-const norm = (p) => path.resolve(p).replace(/\\/g, '/').toLowerCase();
+// Real paths: macOS's temp directory is /var/..., a symlink to /private/var/...
+const real = (p) => { try { return fs.realpathSync(p); } catch (e) { return path.resolve(p); } };
+const norm = (p) => real(p).replace(/\\/g, '/').toLowerCase();
 assert(norm(got.cwd) === norm(launchCwd), 'with the launch\'s working directory: ' + got.cwd);
 console.log('test_app_single_instance: hand-off took ' + handoffMs + ' ms');
 

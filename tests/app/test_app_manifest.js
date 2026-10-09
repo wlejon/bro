@@ -41,7 +41,9 @@ function probe(appDir, expr, env, extraArgs) {
     return JSON.parse(line.slice(line.indexOf('RESULT:') + 7));
 }
 
-const norm = (p) => path.resolve(p).replace(/\\/g, '/').toLowerCase();
+// Real paths: macOS's temp directory is /var/..., a symlink to /private/var/...
+const real = (p) => { try { return fs.realpathSync(p); } catch (e) { return path.resolve(p); } };
+const norm = (p) => real(p).replace(/\\/g, '/').toLowerCase();
 
 // ---- identity and manifest ----------------------------------------------------
 {
@@ -129,12 +131,14 @@ const norm = (p) => path.resolve(p).replace(/\\/g, '/').toLowerCase();
     // The user's permissions file grants `remote` to this id, and only what
     // the app asked for (compositor is asked for but not granted; sys is
     // granted but not asked for).
+    // The file: %APPDATA%\bro, $XDG_CONFIG_HOME/bro, ~/Library/Application Support/bro.
     const cfg = path.join(scratch, 'usercfg');
-    const permDir = isWin ? path.join(cfg, 'bro') : path.join(cfg, 'bro');
+    const mac = process.platform === 'darwin';
+    const permDir = mac ? path.join(cfg, 'Library', 'Application Support', 'bro') : path.join(cfg, 'bro');
     fs.mkdirSync(permDir, { recursive: true });
     fs.writeFileSync(path.join(permDir, 'permissions.json'),
         JSON.stringify({ 'org.bro.test.ManifestApp': ['remote', 'sys'] }));
-    const grantEnv = { ...home, ...(isWin ? { APPDATA: cfg } : { XDG_CONFIG_HOME: cfg }) };
+    const grantEnv = { ...home, ...(isWin ? { APPDATA: cfg } : mac ? { HOME: cfg } : { XDG_CONFIG_HOME: cfg }) };
     const g = probe(fixture, '({remote: bro.remote.available, reason: bro.remote.reason, comp: bro.compositor.available, ' +
         'sys: bro.sys.available, granted: bro.app.permissions.granted})', grantEnv);
     assert(JSON.stringify(g.granted) === '["remote"]', 'the user granted remote: ' + JSON.stringify(g));
