@@ -20,7 +20,7 @@ bro_dependency(brass GITHUB wlejon/brass REF 634e3d5cd3ea27c48e3b820aec3115fb66a
 # Engine libraries.
 bro_dependency(bromath GITHUB wlejon/bromath REF 8b511fbd69c014bf0584d2b42e6c96a8cf720f6a PIN_ONLY)
 bro_dependency(htmlayout GITHUB wlejon/htmlayout REF 955b1575be1e9e5a27f3a8a99d0a85b74458a323 PIN_ONLY)
-bro_dependency(brokit GITHUB wlejon/brokit REF 45fec1e12cfa61e80e39e97a7bf24cc952e18e03 PIN_ONLY)
+bro_dependency(brokit GITHUB wlejon/brokit REF 23291c709f98d7a30f84a4443502f322a6f99732 PIN_ONLY)
 bro_dependency(broimage GITHUB wlejon/broimage REF 9346cd5e97cb2fba0bae15e9f15fc0d9e37349ee PIN_ONLY)
 bro_dependency(broaudio GITHUB wlejon/broaudio REF 964a428ce8d8eae432cba8ac1a437ca5e2bf1b3f PIN_ONLY)
 bro_dependency(bromesh GITHUB wlejon/bromesh REF fe7fdc1801f96d246d34e3f33b706ba9359cd217 PIN_ONLY)
@@ -35,7 +35,7 @@ bro_dependency(brosoundml GITHUB wlejon/brosoundml REF 616ffb72758d24000f7408736
 # The <terminal> element and remote sessions.
 bro_dependency(brosearch GITHUB wlejon/brosearch REF e408e853181e353e086d547b6d1d3e9cc1c0167f PIN_ONLY)
 bro_dependency(brothemes GITHUB wlejon/brothemes REF e993808342a94338a8845664b92631c13128e52a PIN_ONLY)
-bro_dependency(bropty GITHUB wlejon/bropty REF 978186bba7f670e39c7c5dce7b4d5e4b690f1727 PIN_ONLY)
+bro_dependency(bropty GITHUB wlejon/bropty REF 3683d1cc3cc9249d3f866f217b1ca8dbb7b953e6 PIN_ONLY)
 bro_dependency(brolink GITHUB wlejon/brolink REF b393d00256a47445b594fad06779fb546d7e0f65 PIN_ONLY)
 bro_dependency(bromux GITHUB wlejon/bromux REF ce5e2862c16afb835414becceefb353986a5c599 PIN_ONLY)
 bro_dependency(brovideo GITHUB wlejon/brovideo REF 6182bff5a5c619ba5756615aee99a271969c9ed3 PIN_ONLY)
