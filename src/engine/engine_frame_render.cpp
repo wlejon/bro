@@ -154,6 +154,8 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
             backBuf.appContentW = rsnap.vpWidth - rsnap.insetRight;
             backBuf.appContentH = rsnap.vpHeight - rsnap.insetTop
                                   - rsnap.insetBottom;
+            backBuf.vpWidth = rsnap.vpWidth;
+            backBuf.vpHeight = rsnap.vpHeight;
             recordSystemPanelLayers(backBuf.systemCommands,
                                     rsnap.vpWidth, rsnap.vpHeight);
 
@@ -205,48 +207,72 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
         }
     }
 
-    // Bring each composited canvas up to date: replay what its script drew
-    // since the last frame (on the GPU, leaving its image ready to sample).
-    for (const auto& layer : layers.appLayers) {
-        if (const auto* canvas = std::get_if<render::CanvasLayerSource>(&layer.content))
-            if (auto* cs = canvasSceneById(canvas->sceneId)) cs->rasterize();
+    // A window is shown at a new size only once a frame drawn at that size is
+    // ready. The raster runs behind the main thread, so for the first frames
+    // after a resize (a maximize, a restore) the newest layer set is still
+    // the one recorded at the old viewport, while the swapchain follows the
+    // window's new size: presented, that would put the old frame in a corner
+    // of a black one. Until the set catches up nothing is presented, so the
+    // window keeps its last buffer and its compositor keeps showing it at the
+    // old size (and scales it, if it animates the change). A raster that
+    // never catches up (the size changing every frame) is presented anyway
+    // after kResizeHoldMaxMs.
+    bool holdForResize = false;
+    if (displayMode_ == DisplayMode::Windowed && layers.vpWidth > 0 &&
+        (layers.vpWidth != viewportWidth_ || layers.vpHeight != viewportHeight_)) {
+        if (resizeHoldSinceMs_ <= 0.0) resizeHoldSinceMs_ = now;
+        holdForResize = now - resizeHoldSinceMs_ < kResizeHoldMaxMs;
+    } else {
+        resizeHoldSinceMs_ = 0.0;
     }
-
-    beginFrameComposite();
-    if (drmCtx_) drmCtx_->clientLayersComposited = false;
-    compositeLayers(layers.appLayers, layers.appInsetTop);
-    compositeRemainingClientWindows();
-
-    compositeLayers(layers.systemLayers);
-
-    compositeWindowHosts();
-
-    if (displayMode_ == DisplayMode::Drm && cursorVisible_ && !lockedElement_.get()) {
-        const std::string shape = screenCursorShape();
-        if (shape != "none") {
-            if (SkCanvas* canvas = frameSegmentCanvas()) {
-                float sx = static_cast<float>(frameCompositeW_) / static_cast<float>(viewportWidth_ > 0 ? viewportWidth_ : 1);
-                float sy = static_cast<float>(frameCompositeH_) / static_cast<float>(viewportHeight_ > 0 ? viewportHeight_ : 1);
-                render::drawSoftwareCursor(canvas, lastMouseX_ * sx, lastMouseY_ * sy, shape, deviceScale_.render);
-            }
-        }
-    }
-
-    frameStats_.accumGpuMs += util::currentTimeMs() - tGpu;
 
     FrameRecord& rec = frameTrace_->current();
-    const double tPresent = util::currentTimeMs();
-    rec.compositeMs = tPresent - tGpu;
-    presentCurrentFrame();
-    rec.presentMs = util::currentTimeMs() - tPresent;
+    if (!holdForResize) {
+        // Bring each composited canvas up to date: replay what its script drew
+        // since the last frame (on the GPU, leaving its image ready to sample).
+        for (const auto& layer : layers.appLayers) {
+            if (const auto* canvas = std::get_if<render::CanvasLayerSource>(&layer.content))
+                if (auto* cs = canvasSceneById(canvas->sceneId)) cs->rasterize();
+        }
+
+        beginFrameComposite();
+        if (drmCtx_) drmCtx_->clientLayersComposited = false;
+        compositeLayers(layers.appLayers, layers.appInsetTop);
+        compositeRemainingClientWindows();
+
+        compositeLayers(layers.systemLayers);
+
+        compositeWindowHosts();
+
+        if (displayMode_ == DisplayMode::Drm && cursorVisible_ && !lockedElement_.get()) {
+            const std::string shape = screenCursorShape();
+            if (shape != "none") {
+                if (SkCanvas* canvas = frameSegmentCanvas()) {
+                    float sx = static_cast<float>(frameCompositeW_) / static_cast<float>(viewportWidth_ > 0 ? viewportWidth_ : 1);
+                    float sy = static_cast<float>(frameCompositeH_) / static_cast<float>(viewportHeight_ > 0 ? viewportHeight_ : 1);
+                    render::drawSoftwareCursor(canvas, lastMouseX_ * sx, lastMouseY_ * sy, shape, deviceScale_.render);
+                }
+            }
+        }
+
+        frameStats_.accumGpuMs += util::currentTimeMs() - tGpu;
+
+        const double tPresent = util::currentTimeMs();
+        rec.compositeMs = tPresent - tGpu;
+        presentCurrentFrame();
+        rec.presentMs = util::currentTimeMs() - tPresent;
 #if BRO_WITH_DMABUF
-    if (auto* kms = vulkanPresenter_ ? vulkanPresenter_->kmsDirectPresenter() : nullptr) {
-        rec.gpuWaitMs = kms->lastPresentTiming().gpuWaitMs;
-        rec.flipWaitMs = kms->lastPresentTiming().flipWaitMs;
-    }
+        if (auto* kms = vulkanPresenter_ ? vulkanPresenter_->kmsDirectPresenter() : nullptr) {
+            rec.gpuWaitMs = kms->lastPresentTiming().gpuWaitMs;
+            rec.flipWaitMs = kms->lastPresentTiming().flipWaitMs;
+        }
 #endif
 
-    releaseClientWindowFrames();
+        releaseClientWindowFrames();
+    } else {
+        // No present to pace the loop on: wait a little for the raster.
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
 
     {
         double capMs = frameCapIntervalMs_;

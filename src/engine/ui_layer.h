@@ -75,6 +75,10 @@ struct LayerBuffer {
     int appInsetTop = 0;
     int appContentW = 0;
     int appContentH = 0;
+    // The viewport (CSS px) the set was recorded at. A windowed frame is not
+    // presented from a set drawn at another size (Engine::renderAndPresentFrame).
+    int vpWidth = 0;
+    int vpHeight = 0;
 };
 
 } // namespace bro::engine

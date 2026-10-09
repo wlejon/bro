@@ -46,6 +46,8 @@ public:
         int appInsetTop;
         int appContentW;
         int appContentH;
+        int vpWidth;   // the viewport the set was recorded at (0: none yet)
+        int vpHeight;
     };
 
     // ---- main thread ----
@@ -148,7 +150,9 @@ private:
         return LayerView{idx, buffers_[idx].appLayers, buffers_[idx].systemLayers,
                          buffers_[idx].appInsetTop,
                          buffers_[idx].appContentW,
-                         buffers_[idx].appContentH};
+                         buffers_[idx].appContentH,
+                         buffers_[idx].vpWidth,
+                         buffers_[idx].vpHeight};
     }
 
     LayerBuffer buffers_[2];

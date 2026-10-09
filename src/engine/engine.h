@@ -1115,6 +1115,10 @@ private:
     bool windowFocused_ = true, pageVisible_ = true;
     static constexpr double kUnfocusedFps = 30.0;
     static constexpr double kGCIntervalMs = 1000.0;
+    // Windowed: since when the newest layer set has been drawn at another
+    // viewport than the window's (0: it is not), so the frame is held back.
+    double resizeHoldSinceMs_ = 0.0;
+    static constexpr double kResizeHoldMaxMs = 250.0;
     double lastGCMs_ = 0.0, lastGpuFrameMs_ = -1.0;
     bool testFailure_ = false;
 
