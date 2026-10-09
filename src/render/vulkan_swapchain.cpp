@@ -315,9 +315,23 @@ SwapchainResult VulkanSwapchain::acquire(uint32_t& outImageIndex) {
         AcquireSlot& slot = acquireSlots_[acquireCursor_];
         context_.queue().wait(slot.ticket);
 
-        VkResult result = vkAcquireNextImageKHR(context_.device(), swapchain_, UINT64_MAX,
+        // Bounded: a window system that stops answering (a Wayland compositor
+        // that went away under the window) would otherwise hold the frame
+        // loop in here for good, deaf to input, quit and SIGTERM alike.
+        VkResult result = vkAcquireNextImageKHR(context_.device(), swapchain_, kAcquireTimeoutNs,
                                                 slot.semaphore, VK_NULL_HANDLE, &outImageIndex);
-        if (result == VK_SUCCESS) return SwapchainResult::Success;
+        if (result == VK_SUCCESS) {
+            acquireTimeouts_ = 0;
+            return SwapchainResult::Success;
+        }
+        if (result == VK_TIMEOUT || result == VK_NOT_READY) {
+            // The semaphore was not signalled and is not pending: the slot is
+            // reusable. Nothing to present this frame; the loop goes on.
+            if (acquireTimeouts_++ == 0)
+                LOG_WARN("VulkanSwapchain: no image within %llu ms; skipping frames until one is free",
+                         static_cast<unsigned long long>(kAcquireTimeoutNs / 1000000));
+            return SwapchainResult::Minimized;
+        }
         if (result == VK_SUBOPTIMAL_KHR) {
             needsRecreate_ = true;  // usable now; rebuilt at the next acquire
             return SwapchainResult::Suboptimal;

@@ -119,6 +119,9 @@ private:
 
     std::vector<AcquireSlot> acquireSlots_;
     size_t acquireCursor_ = 0;
+    // How long acquire() waits for an image before skipping the frame.
+    static constexpr uint64_t kAcquireTimeoutNs = 1'000'000'000ull;
+    uint32_t acquireTimeouts_ = 0;  // in a row, for logging the first
 };
 
 } // namespace bro::render
