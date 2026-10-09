@@ -385,6 +385,8 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
         exitCode = 1;
     }
 
+    // _exit skips every destructor: the single-instance socket goes by hand.
+    releaseSingleInstance();
     if (hooks.beforeExit) hooks.beforeExit();
     _exit(exitCode);
 }

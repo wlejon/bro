@@ -136,6 +136,12 @@ InstanceClaim claimSingleInstance(const EngineConfig& config) {
     return InstanceClaim::Primary;
 }
 
+void releaseSingleInstance() {
+    // Unconditional: bro.window.requestSingleInstance claims a channel too.
+    platform::desktop::shutdownSingleInstance();
+    info().singleInstance = false;
+}
+
 void setAppInstanceHandler(AppInstanceHandler h) {
     handler() = std::move(h);
     while (handler() && !backlog().empty()) {

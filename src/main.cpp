@@ -420,8 +420,11 @@ int main(int argc, char* argv[]) {
         else if (bro::bronze_host::wasTestSkipped()) exitCode = 77;
     } catch (const std::exception& e) {
         LOG_ERROR("Fatal: %s", e.what());
-        return 1;
+        exitCode = 1;
     }
+    // Before static destruction: the channel's server thread is a static
+    // std::thread, and destroying it still joinable would terminate().
+    bro::engine::releaseSingleInstance();
     // A Vulkan validation error (BRO_VK_VALIDATION=1) fails the run, the
     // device teardown included.
     if (const uint32_t errors = bro::render::vulkanValidationErrorCount()) {

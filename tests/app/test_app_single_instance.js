@@ -77,5 +77,15 @@ console.log('test_app_single_instance: hand-off took ' + handoffMs + ' ms');
 until(() => primaryExit !== null, 30000, 'the primary to exit');
 assert(primaryExit === 0, 'the primary passed: exit ' + primaryExit);
 
+// The primary gave its channel up on the way out: no socket is left behind
+// (POSIX; a Windows pipe goes with its process). The lock file stays, as
+// flock lock files do; this run's is removed so runs do not pile them up.
+if (process.platform !== 'win32') {
+    const runDir = process.env.XDG_RUNTIME_DIR || '/tmp';
+    const mine = fs.readdirSync(runDir).filter((f) => f.startsWith('bro_single_') && f.includes('_app-' + id + '.'));
+    assert(!mine.some((f) => f.endsWith('.sock')), 'the exited primary removed its socket: ' + JSON.stringify(mine));
+    for (const f of mine) { try { fs.unlinkSync(path.join(runDir, f)); } catch (e) { /* best effort */ } }
+}
+
 try { fs.rmSync(scratch, { recursive: true, force: true }); } catch (e) { /* best effort */ }
 console.log('test_app_single_instance.js PASSED');

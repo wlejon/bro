@@ -50,6 +50,11 @@ std::string currentWorkingDirectory();
 enum class InstanceClaim { Primary, HandedOff };
 InstanceClaim claimSingleInstance(const EngineConfig& config);
 
+/// Give the channel up on the way out (both drivers call it after the Engine
+/// is gone): the socket is removed and the server thread joined, so the next
+/// launch becomes the primary. A no-op when nothing holds a channel.
+void releaseSingleInstance();
+
 /// Where a handed-off launch goes. Called on the main thread from the frame
 /// loop's desktop pump; launches that arrive before a handler is set are
 /// queued and delivered when it is. Pass nullptr to queue again.
