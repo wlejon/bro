@@ -1,3 +1,9 @@
+# SDL is private to src/platform: every target below gets the fence first on
+# its include path (src/platform removes it for itself).
+include(${bro_SOURCE_DIR}/cmake/sdl_fence.cmake)
+bro_sdl_fence_dir(BRO_SDL_FENCE_DIR)
+include_directories(BEFORE "${BRO_SDL_FENCE_DIR}")
+
 add_subdirectory(util)
 add_subdirectory(tile)
 add_subdirectory(audio_inference)
