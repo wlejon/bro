@@ -32,6 +32,8 @@ endif()
 if(WIN32)
     # SetCurrentProcessExplicitAppUserModelID (the window's app id).
     target_link_libraries(bro_platform PRIVATE shell32)
+    # The agent control socket (AF_UNIX through Winsock).
+    target_link_libraries(bro_platform PRIVATE ws2_32)
 endif()
 
 find_package(Vulkan REQUIRED)

@@ -15,7 +15,10 @@
 // to whoever polls take() (the engine, between frames), and replies go back
 // through reply() from any thread.
 //
-// POSIX only; elsewhere start() reports it is unavailable.
+// On Windows (10 1803 and later) it is the same AF_UNIX socket through
+// Winsock, under %TEMP%\bro-control\ (the user's own directory) when
+// $XDG_RUNTIME_DIR is unset; Winsock has no peer credentials, so that
+// directory's ACL is the gate. readyFd() is -1 there.
 
 #include <cstdint>
 #include <memory>

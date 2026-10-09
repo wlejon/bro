@@ -6,8 +6,8 @@ the DOM and computed styles, run JavaScript in the page, and find out why an
 animation stuttered: screenshots, short full-rate recordings with the vblank
 each frame landed on, a frame-timing flight recorder, and a native profile.
 
-`bro-ctl` is the client. It is built beside `bro` on Linux and macOS (target
-`bro-ctl`; it links nothing of bro's).
+`bro-ctl` is the client. It is built beside `bro` (target `bro-ctl`; it links
+nothing of bro's) on Linux, macOS and Windows.
 
 ```bash
 bro-ctl info                                  # what is running
@@ -33,6 +33,12 @@ peer's uid checked against the process's on every connection (SO_PEERCRED /
 getpeereid). It is never a network listener: reaching it from elsewhere means
 logging in as that user first (ssh), and anyone who can do that can already
 run anything as them. It is the same model as `bro.remote`'s socket.
+
+On Windows (10 1803 or later) it is the same AF_UNIX socket through Winsock,
+in `%TEMP%\bro-control\` when `XDG_RUNTIME_DIR` is unset. Winsock has no peer
+credentials: the gate is that directory, which only its user (and
+administrators) can open. A windowed app's socket is named after the app
+folder alone (`helmterm.sock`), without the pid.
 
 ## When it is on
 

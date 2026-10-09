@@ -16,25 +16,64 @@
 // ffmpeg is on the PATH.
 
 #include <cerrno>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <dirent.h>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <thread>
+#include <vector>
+
+#if defined(_WIN32)
+// The same AF_UNIX socket, through Winsock (Windows 10 1803 and later).
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <winsock2.h>
+#include <afunix.h>
+#include <windows.h>
+#include <fcntl.h>
+#include <io.h>
+#include <process.h>
+#else
 #include <sys/socket.h>
-#include <sys/stat.h>
 #include <sys/un.h>
 #include <unistd.h>
-#include <vector>
+#endif
 
 namespace {
 
+#if defined(_WIN32)
+using Sock = SOCKET;
+const Sock kNoSock = INVALID_SOCKET;
+void closeSock(Sock s) { ::closesocket(s); }
+int sockWrite(Sock s, const char* p, size_t n) { return ::send(s, p, static_cast<int>(n), 0); }
+int sockRead(Sock s, char* p, size_t n) { return ::recv(s, p, static_cast<int>(n), 0); }
+long processId() { return static_cast<long>(::_getpid()); }
+#else
+using Sock = int;
+const Sock kNoSock = -1;
+void closeSock(Sock s) { ::close(s); }
+int sockWrite(Sock s, const char* p, size_t n) { return static_cast<int>(::write(s, p, n)); }
+int sockRead(Sock s, char* p, size_t n) { return static_cast<int>(::read(s, p, n)); }
+long processId() { return static_cast<long>(::getpid()); }
+#endif
+
+// Where the engine binds its sockets (platform/control_socket.cpp says the
+// same): $XDG_RUNTIME_DIR, else the temp directory, /bro-control.
 std::string socketDir() {
     const char* xdg = std::getenv("XDG_RUNTIME_DIR");
-    std::string base = (xdg && *xdg) ? xdg : "/tmp";
+    std::error_code ec;
+    std::string base = (xdg && *xdg) ? std::string(xdg) : std::filesystem::temp_directory_path(ec).string();
+    if (base.empty()) base = "/tmp";
+    while (base.size() > 1 && (base.back() == '/' || base.back() == '\\')) base.pop_back();
     return base + "/bro-control";
 }
 
@@ -60,19 +99,19 @@ std::string quote(const std::string& s) {
     return out + "\"";
 }
 
-int connectTo(const std::string& path) {
-    int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
-    if (fd < 0) return -1;
+Sock connectTo(const std::string& path) {
+    Sock fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd == kNoSock) return kNoSock;
     sockaddr_un addr{};
     addr.sun_family = AF_UNIX;
     if (path.size() >= sizeof(addr.sun_path)) {
-        ::close(fd);
-        return -1;
+        closeSock(fd);
+        return kNoSock;
     }
     std::memcpy(addr.sun_path, path.c_str(), path.size() + 1);
     if (::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
-        ::close(fd);
-        return -1;
+        closeSock(fd);
+        return kNoSock;
     }
     return fd;
 }
@@ -80,12 +119,10 @@ int connectTo(const std::string& path) {
 std::vector<std::string> listSockets() {
     std::vector<std::string> out;
     const std::string dir = socketDir();
-    if (DIR* d = ::opendir(dir.c_str())) {
-        while (dirent* e = ::readdir(d)) {
-            std::string n = e->d_name;
-            if (n.size() > 5 && n.compare(n.size() - 5, 5, ".sock") == 0) out.push_back(dir + "/" + n);
-        }
-        ::closedir(d);
+    std::error_code ec;
+    for (std::filesystem::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+        const std::string n = it->path().filename().string();
+        if (n.size() > 5 && n.compare(n.size() - 5, 5, ".sock") == 0) out.push_back(dir + "/" + n);
     }
     return out;
 }
@@ -96,13 +133,13 @@ std::string resolveSocket(const std::string& path, const std::string& name, std:
     if (!name.empty()) return socketDir() + "/" + name + ".sock";
     if (const char* env = std::getenv("BRO_CONTROL_SOCKET"); env && *env) return env;
     const std::string display = socketDir() + "/display.sock";
-    struct stat st{};
-    if (::stat(display.c_str(), &st) == 0) return display;
+    std::error_code ec;
+    if (std::filesystem::exists(display, ec)) return display;
     std::vector<std::string> live;
     for (const auto& s : listSockets()) {
-        int fd = connectTo(s);
-        if (fd >= 0) {
-            ::close(fd);
+        Sock fd = connectTo(s);
+        if (fd != kNoSock) {
+            closeSock(fd);
             live.push_back(s);
         }
     }
@@ -117,7 +154,7 @@ std::string resolveSocket(const std::string& path, const std::string& name, std:
 }
 
 struct Conn {
-    int fd = -1;
+    Sock fd = kNoSock;
     std::string buf;
 
     bool send(const std::vector<std::string>& argv) {
@@ -126,7 +163,7 @@ struct Conn {
         line += "]\n";
         size_t off = 0;
         while (off < line.size()) {
-            ssize_t w = ::write(fd, line.data() + off, line.size() - off);
+            const int w = sockWrite(fd, line.data() + off, line.size() - off);
             if (w <= 0) return false;
             off += static_cast<size_t>(w);
         }
@@ -135,7 +172,7 @@ struct Conn {
 
     bool fill() {
         char tmp[65536];
-        ssize_t r = ::read(fd, tmp, sizeof(tmp));
+        const int r = sockRead(fd, tmp, sizeof(tmp));
         if (r <= 0) return false;
         buf.append(tmp, static_cast<size_t>(r));
         return true;
@@ -175,7 +212,11 @@ std::string jsonString(const std::string& json, const std::string& key) {
 }
 
 bool onPath(const char* tool) {
+#if defined(_WIN32)
+    std::string cmd = std::string("where ") + tool + " >NUL 2>&1";
+#else
     std::string cmd = std::string("command -v ") + tool + " >/dev/null 2>&1";
+#endif
     return std::system(cmd.c_str()) == 0;
 }
 
@@ -252,7 +293,7 @@ int runOne(Conn& c, std::vector<std::string> argv, const std::string& out) {
     const std::string& cmd = argv[0];
     if (!out.empty() && (cmd == "screenshot" || cmd == "record")) {
         plan.toStdout = (out == "-");
-        plan.path = plan.toStdout ? socketDir() + "/stdout-" + std::to_string(::getpid()) +
+        plan.path = plan.toStdout ? socketDir() + "/stdout-" + std::to_string(processId()) +
                                         (cmd == "screenshot" ? ".png" : "")
                                   : out;
         // Insert the path where the command reads it.
@@ -313,7 +354,7 @@ int runOne(Conn& c, std::vector<std::string> argv, const std::string& out) {
     }
     if (ok && plan.toStdout) {
         const bool sent = catFile(plan.path);
-        ::unlink(plan.path.c_str());
+        std::remove(plan.path.c_str());
         return sent ? 0 : 1;
     }
     return printReply(ok, payload);
@@ -338,7 +379,7 @@ int runProfile(Conn& c, const std::vector<std::string>& argv) {
         std::fprintf(stderr, "bro-ctl: profile needs perf (pacman -S perf / apt install linux-perf)\n");
         return 1;
     }
-    const std::string data = socketDir() + "/perf-" + std::to_string(::getpid()) + ".data";
+    const std::string data = socketDir() + "/perf-" + std::to_string(processId()) + ".data";
     char cmd[1024];
     std::snprintf(cmd, sizeof(cmd),
                   "perf record -q -F 1999 -p %ld -o '%s' -- sleep %.3f >/dev/null 2>&1 && "
@@ -367,11 +408,18 @@ int main(int argc, char** argv) {
     if (i >= argc) return usage(), 2;
     std::vector<std::string> args(argv + i, argv + argc);
 
+#if defined(_WIN32)
+    WSADATA wsa;
+    if (::WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return std::fprintf(stderr, "bro-ctl: Winsock did not start\n"), 2;
+    // Replies (a PNG to stdout with -o -) are bytes, not text.
+    ::_setmode(::_fileno(stdout), _O_BINARY);
+#endif
+
     if (args[0] == "list") {
         for (const auto& s : listSockets()) {
-            int fd = connectTo(s);
-            std::printf("%s%s\n", s.c_str(), fd >= 0 ? "" : "  (stale)");
-            if (fd >= 0) ::close(fd);
+            Sock fd = connectTo(s);
+            std::printf("%s%s\n", s.c_str(), fd != kNoSock ? "" : "  (stale)");
+            if (fd != kNoSock) closeSock(fd);
         }
         return 0;
     }
@@ -381,7 +429,7 @@ int main(int argc, char** argv) {
     if (sock.empty()) return std::fprintf(stderr, "bro-ctl: %s\n", why.c_str()), 2;
     Conn c;
     c.fd = connectTo(sock);
-    if (c.fd < 0) return std::fprintf(stderr, "bro-ctl: cannot connect to %s: %s\n", sock.c_str(), std::strerror(errno)), 2;
+    if (c.fd == kNoSock) return std::fprintf(stderr, "bro-ctl: cannot connect to %s: %s\n", sock.c_str(), std::strerror(errno)), 2;
 
     if (args[0] == "profile") return runProfile(c, args);
     if (args[0] == "batch") {
@@ -393,7 +441,7 @@ int main(int argc, char** argv) {
             std::printf("$ %s\n", line.c_str());
             std::fflush(stdout);
             if (argvLine[0] == "sleep" && argvLine.size() > 1) {
-                ::usleep(static_cast<useconds_t>(std::atof(argvLine[1].c_str()) * 1e6));
+                std::this_thread::sleep_for(std::chrono::duration<double>(std::atof(argvLine[1].c_str())));
                 continue;
             }
             int rc = runOne(c, argvLine, {});
