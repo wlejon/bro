@@ -105,6 +105,16 @@ bool WaylandCompositor::pollEvents() {
             startInteractiveResize(req->window, lastPointerX_, lastPointerY_, req->edges, true);
         } else if (req->kind == Kind::Close) {
             closeWindow(req->window);
+        } else if (req->kind == Kind::Activate) {
+            // xdg-activation (a client raising itself with a token wlroots
+            // validated: a single-instance app handed a second launch) or a
+            // taskbar's foreign-toplevel activate. A minimized window comes
+            // back first.
+            if (wm_) {
+                const auto w = wm_->window(req->window);
+                if (w && w->snapshot.minimized) backend_->execute(wm_->restore(req->window));
+            }
+            focusWindow(req->window);
         } else if (wm_ && wm_->window(req->window)) {
             // State requests (the client's own buttons, a taskbar) go through
             // the window manager, so maximize fills the work area the shell
