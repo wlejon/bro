@@ -1,7 +1,6 @@
 #include "platform/desktop_hotkeys.h"
 #include "platform/desktop_platform.h"
-
-#include <SDL3/SDL_keycode.h>
+#include "platform/keys.h"
 
 #include <algorithm>
 #include <atomic>
@@ -174,7 +173,7 @@ bool parseWinModifiersAndKey(const std::string& normalized, UINT& fsModifiers, U
 } // namespace
 
 uint32_t registerGlobalHotkey(
-    SDL_Window* window,
+    const Window* window,
     const std::string& accelerator,
     HotkeyCallback callback,
     HotkeyOptions options
@@ -282,47 +281,47 @@ bool simulateGlobalHotkeyId(uint32_t id) {
 
 namespace {
 
-uint32_t modifierBitOfKeycode(int32_t kc) {
-    switch (kc) {
-        case SDLK_LCTRL: case SDLK_RCTRL: return hotkey_mod::Ctrl;
-        case SDLK_LALT: case SDLK_RALT: return hotkey_mod::Alt;
-        case SDLK_LSHIFT: case SDLK_RSHIFT: return hotkey_mod::Shift;
-        case SDLK_LGUI: case SDLK_RGUI: return hotkey_mod::Meta;
+uint32_t modifierBitOfKeycode(int32_t key) {
+    switch (key) {
+        case kc::LCtrl: case kc::RCtrl: return hotkey_mod::Ctrl;
+        case kc::LAlt: case kc::RAlt: return hotkey_mod::Alt;
+        case kc::LShift: case kc::RShift: return hotkey_mod::Shift;
+        case kc::LGui: case kc::RGui: return hotkey_mod::Meta;
         default: return 0;
     }
 }
 
-std::string keyNameOfKeycode(int32_t kc) {
-    if ((kc >= 'a' && kc <= 'z') || (kc >= '0' && kc <= '9')) return std::string(1, static_cast<char>(kc));
-    if (kc >= SDLK_F1 && kc <= SDLK_F12) return "f" + std::to_string(kc - SDLK_F1 + 1);
-    if (kc >= SDLK_F13 && kc <= SDLK_F24) return "f" + std::to_string(kc - SDLK_F13 + 13);
-    switch (kc) {
-        case SDLK_SPACE: return "space";
-        case SDLK_TAB: return "tab";
-        case SDLK_RETURN: case SDLK_KP_ENTER: return "enter";
-        case SDLK_ESCAPE: return "escape";
-        case SDLK_BACKSPACE: return "backspace";
-        case SDLK_DELETE: return "delete";
-        case SDLK_INSERT: return "insert";
-        case SDLK_HOME: return "home";
-        case SDLK_END: return "end";
-        case SDLK_PAGEUP: return "pageup";
-        case SDLK_PAGEDOWN: return "pagedown";
-        case SDLK_UP: return "up";
-        case SDLK_DOWN: return "down";
-        case SDLK_LEFT: return "left";
-        case SDLK_RIGHT: return "right";
-        case SDLK_VOLUMEUP: return "volumeup";
-        case SDLK_VOLUMEDOWN: return "volumedown";
-        case SDLK_MUTE: return "volumemute";
-        case SDLK_MEDIA_PLAY_PAUSE: return "mediaplaypause";
-        case SDLK_MEDIA_NEXT_TRACK: return "medianexttrack";
-        case SDLK_MEDIA_PREVIOUS_TRACK: return "mediaprevioustrack";
-        case SDLK_MEDIA_STOP: return "mediastop";
-        case SDLK_PRINTSCREEN: return "printscreen";
+std::string keyNameOfKeycode(int32_t key) {
+    if ((key >= 'a' && key <= 'z') || (key >= '0' && key <= '9')) return std::string(1, static_cast<char>(key));
+    if (key >= kc::F1 && key <= kc::F12) return "f" + std::to_string(key - kc::F1 + 1);
+    if (key >= kc::F13 && key <= kc::F24) return "f" + std::to_string(key - kc::F13 + 13);
+    switch (key) {
+        case kc::Space: return "space";
+        case kc::Tab: return "tab";
+        case kc::Return: case kc::KpEnter: return "enter";
+        case kc::Escape: return "escape";
+        case kc::Backspace: return "backspace";
+        case kc::Delete: return "delete";
+        case kc::Insert: return "insert";
+        case kc::Home: return "home";
+        case kc::End: return "end";
+        case kc::PageUp: return "pageup";
+        case kc::PageDown: return "pagedown";
+        case kc::Up: return "up";
+        case kc::Down: return "down";
+        case kc::Left: return "left";
+        case kc::Right: return "right";
+        case kc::VolumeUp: return "volumeup";
+        case kc::VolumeDown: return "volumedown";
+        case kc::Mute: return "volumemute";
+        case kc::MediaPlayPause: return "mediaplaypause";
+        case kc::MediaNextTrack: return "medianexttrack";
+        case kc::MediaPreviousTrack: return "mediaprevioustrack";
+        case kc::MediaStop: return "mediastop";
+        case kc::PrintScreen: return "printscreen";
         default: break;
     }
-    if (kc > 0x20 && kc < 0x7f) return std::string(1, static_cast<char>(kc));
+    if (key > 0x20 && key < 0x7f) return std::string(1, static_cast<char>(key));
     return {};
 }
 
@@ -335,15 +334,15 @@ const HotkeyEntry* findEntry(const std::string& norm) {
 
 } // namespace
 
-HotkeyKey hotkeyKeyFromSdl(int32_t keycode, int32_t scancode, int32_t sdlMods, bool down, bool repeat) {
+HotkeyKey hotkeyKeyFromKeyEvent(int32_t keycode, int32_t scancode, int32_t mods, bool down, bool repeat) {
     HotkeyKey k;
     k.code = static_cast<uint32_t>(scancode ? scancode : keycode);
     k.modifierKey = modifierBitOfKeycode(keycode);
     if (!k.modifierKey) k.key = keyNameOfKeycode(keycode);
-    if (sdlMods & SDL_KMOD_CTRL) k.mods |= hotkey_mod::Ctrl;
-    if (sdlMods & SDL_KMOD_ALT) k.mods |= hotkey_mod::Alt;
-    if (sdlMods & SDL_KMOD_SHIFT) k.mods |= hotkey_mod::Shift;
-    if (sdlMods & SDL_KMOD_GUI) k.mods |= hotkey_mod::Meta;
+    if (mods & kmod::Ctrl) k.mods |= hotkey_mod::Ctrl;
+    if (mods & kmod::Alt) k.mods |= hotkey_mod::Alt;
+    if (mods & kmod::Shift) k.mods |= hotkey_mod::Shift;
+    if (mods & kmod::Gui) k.mods |= hotkey_mod::Meta;
     k.down = down;
     k.repeat = repeat;
     return k;

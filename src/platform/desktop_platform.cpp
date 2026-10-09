@@ -1,5 +1,5 @@
 #include "platform/desktop_platform.h"
-#include <SDL3/SDL.h>
+#include "platform/window.h"
 #include <atomic>
 
 #ifdef _WIN32
@@ -28,10 +28,9 @@ void setHeadless(bool headless) {
 }
 
 #ifdef _WIN32
-HWND hwndOf(SDL_Window* window) {
+HWND hwndOf(const Window* window) {
     if (!window) return nullptr;
-    return static_cast<HWND>(
-        SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr));
+    return static_cast<HWND>(window->nativeHandle().hwnd);
 }
 
 std::wstring utf8ToWide(const std::string& s) {

@@ -182,7 +182,7 @@ uint32_t sendDbusNotification(const std::string& title, const std::string& body,
 } // namespace
 
 uint32_t showNotification(
-    SDL_Window* window,
+    const Window* window,
     const std::string& title,
     const std::string& body,
     const NotificationOptions& options

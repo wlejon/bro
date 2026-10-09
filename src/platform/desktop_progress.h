@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-struct SDL_Window;
+namespace bro::platform { class Window; }
 
 namespace bro::platform::desktop {
 
@@ -15,7 +15,7 @@ enum class ProgressState : int32_t {
 };
 
 /// Sets the taskbar progress indicator.
-bool setTaskbarProgress(SDL_Window* window, ProgressState state, int value);
+bool setTaskbarProgress(const Window* window, ProgressState state, int value);
 
 /// Headless inspection and query.
 ProgressState getHeadlessProgressState();

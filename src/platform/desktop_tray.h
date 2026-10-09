@@ -3,7 +3,7 @@
 #include <string>
 #include <vector>
 
-struct SDL_Window;
+namespace bro::platform { class Window; }
 
 namespace bro::platform::desktop {
 
@@ -22,7 +22,7 @@ struct TrayConfig {
 };
 
 /// Sets or updates the system tray icon and menu.
-bool setTray(SDL_Window* window, const TrayConfig& config);
+bool setTray(const Window* window, const TrayConfig& config);
 
 /// Removes the tray icon.
 bool removeTray();

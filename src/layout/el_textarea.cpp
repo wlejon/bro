@@ -5,10 +5,9 @@
 #include "dom/element.h"
 #include "dom/element_geometry.h"
 #include "render/renderer.h"
-#include "util/platform.h"
+#include "platform/keys.h"
 #include "util/time.h"
 
-#include <SDL3/SDL_keycode.h>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -202,7 +201,7 @@ KeyHandleResult ElTextarea::handleKeyDown(dom::Element* el, int keycode, int mod
     const int len = static_cast<int>(val.size());
     sel_.clampTo(len);
     const int pos = sel_.caret;
-    const bool shift = (mod & SDL_KMOD_SHIFT) != 0;
+    const bool shift = (mod & platform::kmod::Shift) != 0;
 
     // Shift moves the caret end only, leaving the anchor pinned — that is what
     // grows a selection. Without shift the caret and anchor move together.
@@ -215,8 +214,8 @@ KeyHandleResult ElTextarea::handleKeyDown(dom::Element* el, int keycode, int mod
     // Handled before the editing branches (and returning early) so the
     // recording chokepoint at the bottom never sees these as fresh edits.
     // Empty-stack undo and spent redo are handled no-ops.
-    if (util::hasPrimaryMod(mod) && (keycode == SDLK_Z || keycode == SDLK_Y)) {
-        const bool isRedo = (keycode == SDLK_Y) || shift;
+    if (platform::hasPrimaryMod(mod) && (keycode == platform::kc::Z || keycode == platform::kc::Y)) {
+        const bool isRedo = (keycode == platform::kc::Y) || shift;
         std::string v = val;
         TextUndoStack::Sel s{sel_.anchor, sel_.caret};
         if (isRedo ? undo_.redo(v, s) : undo_.undo(v, s)) {
@@ -237,7 +236,7 @@ KeyHandleResult ElTextarea::handleKeyDown(dom::Element* el, int keycode, int mod
     const TextUndoStack::Sel selBefore{sel_.anchor, sel_.caret};
     TextUndoStack::Kind kind = TextUndoStack::Kind::Discrete;
 
-    if (keycode == SDLK_BACKSPACE) {
+    if (keycode == platform::kc::Backspace) {
         if (deleteSelection_(val, r.inputData)) {
             el->setAttribute("value", val);
             r.dispatchInput = true;
@@ -253,7 +252,7 @@ KeyHandleResult ElTextarea::handleKeyDown(dom::Element* el, int keycode, int mod
             kind = TextUndoStack::Kind::Backspace;
         }
         r.handled = true;
-    } else if (keycode == SDLK_DELETE) {
+    } else if (keycode == platform::kc::Delete) {
         if (deleteSelection_(val, r.inputData)) {
             el->setAttribute("value", val);
             r.dispatchInput = true;
@@ -268,7 +267,7 @@ KeyHandleResult ElTextarea::handleKeyDown(dom::Element* el, int keycode, int mod
             kind = TextUndoStack::Kind::DeleteForward;
         }
         r.handled = true;
-    } else if (keycode == SDLK_RETURN || keycode == SDLK_KP_ENTER) {
+    } else if (keycode == platform::kc::Return || keycode == platform::kc::KpEnter) {
         std::string discarded;
         deleteSelection_(val, discarded);   // Enter replaces a selection
         int at = sel_.caret;
@@ -279,24 +278,24 @@ KeyHandleResult ElTextarea::handleKeyDown(dom::Element* el, int keycode, int mod
         r.dispatchInput = true;
         r.inputData = "\n";
         r.inputType = "insertLineBreak";
-    } else if (keycode == SDLK_LEFT) {
+    } else if (keycode == platform::kc::Left) {
         // An unshifted arrow against a selection collapses to that edge rather
         // than stepping — the selection itself was the movement.
         if (!shift && hasSelection()) setCursorPos(sel_.start());
         else moveCaret(caretStepPrev_(val, pos));
         r.handled = true;
-    } else if (keycode == SDLK_RIGHT) {
+    } else if (keycode == platform::kc::Right) {
         if (!shift && hasSelection()) setCursorPos(sel_.end());
         else moveCaret(caretStepNext_(val, pos));
         r.handled = true;
-    } else if (keycode == SDLK_UP || keycode == SDLK_DOWN) {
+    } else if (keycode == platform::kc::Up || keycode == platform::kc::Down) {
         // Move by VISUAL line so wrapped rows behave like the browser. Fall back
         // to hard-newline lines if the box hasn't been drawn yet (no wrap width).
         if (wrapWidth_ > 0 && renderer_) {
             auto vls = buildVisualLines(val, wrapWidth_, getFontRef(), renderer_);
             int li = caretVisualLine(vls, pos);
             int col = pos - static_cast<int>(vls[li].start);
-            int target = li + (keycode == SDLK_UP ? -1 : 1);
+            int target = li + (keycode == platform::kc::Up ? -1 : 1);
             if (target >= 0 && target < static_cast<int>(vls.size())) {
                 int tlen = static_cast<int>(vls[target].end - vls[target].start);
                 moveCaret(static_cast<int>(vls[target].start) + std::min(col, tlen));
@@ -304,7 +303,7 @@ KeyHandleResult ElTextarea::handleKeyDown(dom::Element* el, int keycode, int mod
         } else {
             int line, col;
             cursorLineCol(val, pos, line, col);
-            if (keycode == SDLK_UP) {
+            if (keycode == platform::kc::Up) {
                 if (line > 0) {
                     int prev = lineStart(val, line - 1);
                     moveCaret(prev + std::min(col, lineLength(val, prev)));
@@ -318,7 +317,7 @@ KeyHandleResult ElTextarea::handleKeyDown(dom::Element* el, int keycode, int mod
             }
         }
         r.handled = true;
-    } else if (keycode == SDLK_HOME) {
+    } else if (keycode == platform::kc::Home) {
         // Start of the current VISUAL line.
         if (wrapWidth_ > 0 && renderer_) {
             auto vls = buildVisualLines(val, wrapWidth_, getFontRef(), renderer_);
@@ -329,7 +328,7 @@ KeyHandleResult ElTextarea::handleKeyDown(dom::Element* el, int keycode, int mod
             moveCaret(ls);
         }
         r.handled = true;
-    } else if (keycode == SDLK_END) {
+    } else if (keycode == platform::kc::End) {
         // End of the current VISUAL line.
         if (wrapWidth_ > 0 && renderer_) {
             auto vls = buildVisualLines(val, wrapWidth_, getFontRef(), renderer_);
@@ -340,7 +339,7 @@ KeyHandleResult ElTextarea::handleKeyDown(dom::Element* el, int keycode, int mod
             moveCaret(le);
         }
         r.handled = true;
-    } else if (keycode == SDLK_ESCAPE) {
+    } else if (keycode == platform::kc::Escape) {
         // Escape does nothing to a text field. A browser leaves the value,
         // the caret and the focus exactly where they were — there is no
         // "revert" on a plain input, and the field is not a dialog to
@@ -349,7 +348,7 @@ KeyHandleResult ElTextarea::handleKeyDown(dom::Element* el, int keycode, int mod
         // gesture a user makes when they have changed their mind was the one
         // that committed. Left unhandled so the keydown still reaches the
         // page, which is where an app's own "escape closes my panel" lives.
-    } else if (util::hasPrimaryMod(mod) && keycode == SDLK_A) {
+    } else if (platform::hasPrimaryMod(mod) && keycode == platform::kc::A) {
         selectAll();
         r.handled = true;
     }

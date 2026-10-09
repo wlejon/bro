@@ -7,26 +7,27 @@
 #include "layout/el_input.h"
 #include "layout/el_textarea.h"
 #include "css/cascade.h"
-#include <SDL3/SDL.h>
+#include "platform/keyboard.h"
+#include "platform/keys.h"
 #include <algorithm>
 #include <cctype>
 
 namespace bro::engine {
 
 void safeStartTextInput(platform::Window* window) {
-    if (window) SDL_StartTextInput(window->getSDLWindow());
+    if (window) window->textInput().start();
 }
 
 void safeStopTextInput(platform::Window* window) {
-    if (window) SDL_StopTextInput(window->getSDLWindow());
+    if (window) window->textInput().stop();
 }
 
 int modifierBitForKeycode(int keycode) {
     switch (keycode) {
-        case SDLK_LSHIFT: case SDLK_RSHIFT: return SDL_KMOD_SHIFT;
-        case SDLK_LCTRL:  case SDLK_RCTRL:  return SDL_KMOD_CTRL;
-        case SDLK_LALT:   case SDLK_RALT:   return SDL_KMOD_ALT;
-        case SDLK_LGUI:   case SDLK_RGUI:   return SDL_KMOD_GUI;
+        case platform::kc::LShift: case platform::kc::RShift: return platform::kmod::Shift;
+        case platform::kc::LCtrl:  case platform::kc::RCtrl:  return platform::kmod::Ctrl;
+        case platform::kc::LAlt:   case platform::kc::RAlt:   return platform::kmod::Alt;
+        case platform::kc::LGui:   case platform::kc::RGui:   return platform::kmod::Gui;
         default: return 0;
     }
 }
@@ -43,20 +44,20 @@ dom::KeyboardEvent makeKeyboardEvent(const char* type,
     dom::KeyboardEvent evt(type);
     evt.setKey(sdlKeycodeToWebKey(keycode, mod));
     evt.setCode(sdlScancodeToWebCode(scancode));
-    evt.setCtrlKey((mod & SDL_KMOD_CTRL) != 0);
-    evt.setShiftKey((mod & SDL_KMOD_SHIFT) != 0);
-    evt.setAltKey((mod & SDL_KMOD_ALT) != 0);
-    evt.setMetaKey((mod & SDL_KMOD_GUI) != 0);
+    evt.setCtrlKey((mod & platform::kmod::Ctrl) != 0);
+    evt.setShiftKey((mod & platform::kmod::Shift) != 0);
+    evt.setAltKey((mod & platform::kmod::Alt) != 0);
+    evt.setMetaKey((mod & platform::kmod::Gui) != 0);
     evt.setRepeat(repeat);
     evt.setIsTrusted(true);
 
-    if (scancode == SDL_SCANCODE_LSHIFT || scancode == SDL_SCANCODE_LCTRL ||
-        scancode == SDL_SCANCODE_LALT || scancode == SDL_SCANCODE_LGUI)
+    if (scancode == platform::sc::LShift || scancode == platform::sc::LCtrl ||
+        scancode == platform::sc::LAlt || scancode == platform::sc::LGui)
         evt.setLocation(1);
-    else if (scancode == SDL_SCANCODE_RSHIFT || scancode == SDL_SCANCODE_RCTRL ||
-             scancode == SDL_SCANCODE_RALT || scancode == SDL_SCANCODE_RGUI)
+    else if (scancode == platform::sc::RShift || scancode == platform::sc::RCtrl ||
+             scancode == platform::sc::RAlt || scancode == platform::sc::RGui)
         evt.setLocation(2);
-    else if (keycode >= SDLK_KP_DIVIDE && keycode <= SDLK_KP_EQUALS)
+    else if (keycode >= platform::kc::KpDivide && keycode <= platform::kc::KpEquals)
         evt.setLocation(3);
 
     return evt;
@@ -100,10 +101,10 @@ void populateMouseEvent(dom::MouseEvent& evt, float x, float y,
     evt.setMovementY(static_cast<double>(movementY));
     evt.setButton(button);
     evt.setButtons(buttons);
-    evt.setCtrlKey((mod & SDL_KMOD_CTRL) != 0);
-    evt.setShiftKey((mod & SDL_KMOD_SHIFT) != 0);
-    evt.setAltKey((mod & SDL_KMOD_ALT) != 0);
-    evt.setMetaKey((mod & SDL_KMOD_GUI) != 0);
+    evt.setCtrlKey((mod & platform::kmod::Ctrl) != 0);
+    evt.setShiftKey((mod & platform::kmod::Shift) != 0);
+    evt.setAltKey((mod & platform::kmod::Alt) != 0);
+    evt.setMetaKey((mod & platform::kmod::Gui) != 0);
     evt.setIsTrusted(true);
 }
 
@@ -228,7 +229,7 @@ void deleteRangeContents(dom::Document* doc,
 }
 
 int Engine::currentModState() const {
-    return (window_ ? static_cast<int>(SDL_GetModState()) : 0) | heldModifierMask_;
+    return (window_ ? static_cast<int>(platform::keyboard().modState()) : 0) | heldModifierMask_;
 }
 
 } // namespace bro::engine

@@ -9,13 +9,11 @@
 #include "layout/draw_traversal.h"
 #include "layout/element_ref_adapter.h"
 #include "layout/skia_text_metrics.h"
-#include "platform/sdl_window.h"
+#include "platform/window.h"
 #include "render/raster_renderer.h"
 #include "render/skia_backend.h"
 #include "util/log.h"
 #include "util/time.h"
-
-#include <SDL3/SDL.h>
 
 #include <algorithm>
 #include <bit>

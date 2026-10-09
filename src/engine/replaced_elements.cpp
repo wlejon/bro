@@ -17,7 +17,7 @@
 #include "layout/el_svg.h"
 #include "layout/el_video.h"
 #include "layout/el_terminal.h"
-#include "platform/sdl_window.h"
+#include "platform/window.h"
 #include "svg/svg_renderer.h"
 #include "util/object_url.h"
 #include "util/string_utils.h"
@@ -27,7 +27,6 @@
 #include "render/webp_image.h"
 #endif
 
-#include <SDL3/SDL.h>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>

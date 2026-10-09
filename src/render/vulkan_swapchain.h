@@ -5,7 +5,7 @@
 #include <memory>
 #include <vector>
 
-struct SDL_Window;
+namespace bro::platform { class Window; }
 
 namespace bro::render {
 
@@ -27,7 +27,7 @@ struct SwapchainSupportDetails {
     std::vector<VkPresentModeKHR> presentModes;
 };
 
-/// The swapchain of one SDL window.
+/// The swapchain of one platform window.
 ///
 /// The swapchain follows the window: acquire() recreates it when the window's
 /// pixel size, the surface, or the vsync preference changed, and reports
@@ -43,7 +43,7 @@ struct SwapchainSupportDetails {
 /// CPU/GPU frame pacing is VulkanFrames' job, so there are no fences here.
 class VulkanSwapchain {
 public:
-    VulkanSwapchain(VulkanContext& context, SDL_Window* window, bool vsync = true);
+    VulkanSwapchain(VulkanContext& context, platform::Window* window, bool vsync = true);
     ~VulkanSwapchain();
 
     VulkanSwapchain(const VulkanSwapchain&) = delete;
@@ -101,7 +101,7 @@ private:
     VkExtent2D chooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities, uint32_t width, uint32_t height);
 
     VulkanContext& context_;
-    SDL_Window* window_ = nullptr;
+    platform::Window* window_ = nullptr;
     bool wantVsync_ = true;
     bool vsync_ = true;          // the mode the current swapchain was made with
     bool needsRecreate_ = false;

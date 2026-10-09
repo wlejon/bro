@@ -12,12 +12,11 @@
 #include "dom/document.h"
 #include "dom/element.h"
 #include "platform/event_loop.h"
-#include "platform/sdl_window.h"
+#include "platform/window.h"
+#include "platform/window_system.h"
 #include "render/recording_renderer.h"
 #include "render/skia_backend.h"
 #include "util/time.h"
-
-#include <SDL3/SDL.h>
 
 #include <algorithm>
 #include <chrono>
@@ -58,12 +57,13 @@ void Engine::pumpCompileFrame(double progress) {
     if (eventLoop_) {
         eventLoop_->pollEvents();
     } else {
-        SDL_PumpEvents();
+        platform::pumpEvents();
     }
     // A resize while compiling: the run loop's handler is not installed yet
     // at boot, so the window's size is read back directly.
     int winW = 0, winH = 0;
-    if (SDL_GetWindowSize(window_->getSDLWindow(), &winW, &winH) && winW > 0 && winH > 0 &&
+    window_->getSize(winW, winH);
+    if (winW > 0 && winH > 0 &&
         (winW != viewportWidth_ || winH != viewportHeight_)) {
         handleResize(winW, winH);
     }

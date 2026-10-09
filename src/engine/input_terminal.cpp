@@ -21,9 +21,8 @@
 #include "dom/event.h"
 #include "layout/el_terminal.h"
 #include "platform/clipboard.h"
+#include "platform/keys.h"
 #include "util/time.h"
-
-#include <SDL3/SDL.h>
 
 namespace bro::engine {
 
@@ -38,21 +37,21 @@ layout::ElTerminal* Engine::focusedTerminal(dom::Element** elOut) {
 namespace {
 
 bool isPasteChord(int keycode, int mod) {
-    const bool ctrl = (mod & SDL_KMOD_CTRL) != 0;
-    const bool shift = (mod & SDL_KMOD_SHIFT) != 0;
+    const bool ctrl = (mod & platform::kmod::Ctrl) != 0;
+    const bool shift = (mod & platform::kmod::Shift) != 0;
 #ifdef __APPLE__
-    if ((mod & SDL_KMOD_GUI) && keycode == SDLK_V) return true;
+    if ((mod & platform::kmod::Gui) && keycode == platform::kc::V) return true;
 #endif
-    return (ctrl && shift && keycode == SDLK_V) || (shift && !ctrl && keycode == SDLK_INSERT);
+    return (ctrl && shift && keycode == platform::kc::V) || (shift && !ctrl && keycode == platform::kc::Insert);
 }
 
 bool isCopyChord(int keycode, int mod) {
-    const bool ctrl = (mod & SDL_KMOD_CTRL) != 0;
-    const bool shift = (mod & SDL_KMOD_SHIFT) != 0;
+    const bool ctrl = (mod & platform::kmod::Ctrl) != 0;
+    const bool shift = (mod & platform::kmod::Shift) != 0;
 #ifdef __APPLE__
-    if ((mod & SDL_KMOD_GUI) && keycode == SDLK_C) return true;
+    if ((mod & platform::kmod::Gui) && keycode == platform::kc::C) return true;
 #endif
-    return (ctrl && shift && keycode == SDLK_C) || (ctrl && !shift && keycode == SDLK_INSERT);
+    return (ctrl && shift && keycode == platform::kc::C) || (ctrl && !shift && keycode == platform::kc::Insert);
 }
 
 } // namespace

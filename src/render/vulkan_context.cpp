@@ -1,10 +1,10 @@
 #include "render/vulkan_context.h"
 #include "render/vulkan_debug.h"
 #include "util/exe_dir.h"
+#include "platform/window.h"
+#include "platform/window_system.h"
 #include "util/log.h"
 
-#include <SDL3/SDL.h>
-#include <SDL3/SDL_vulkan.h>
 #include <vulkan/vulkan_beta.h>  // VkPhysicalDevicePortabilitySubsetFeaturesKHR
 
 #include <algorithm>
@@ -107,7 +107,7 @@ VulkanContext::~VulkanContext() {
     cleanup();
 }
 
-bool VulkanContext::init(SDL_Window* presentTarget) {
+bool VulkanContext::init(platform::Window* presentTarget) {
     if (!createInstance()) {
         LOG_ERROR("Vulkan: Failed to create VkInstance");
         return false;
@@ -122,13 +122,13 @@ bool VulkanContext::init(SDL_Window* presentTarget) {
     // away again; the swapchain creates its own.
     VkSurfaceKHR probe = VK_NULL_HANDLE;
     if (presentTarget && !config_.headless &&
-        !SDL_Vulkan_CreateSurface(presentTarget, instance_, nullptr, &probe)) {
-        LOG_ERROR("Vulkan: SDL_Vulkan_CreateSurface failed: %s", SDL_GetError());
+        !presentTarget->createVulkanSurface(instance_, &probe)) {
+        LOG_ERROR("Vulkan: could not create a surface on the window");
         cleanup();
         return false;
     }
     const bool selected = selectPhysicalDevice(probe);
-    if (probe != VK_NULL_HANDLE) SDL_Vulkan_DestroySurface(instance_, probe, nullptr);
+    if (probe != VK_NULL_HANDLE) vkDestroySurfaceKHR(instance_, probe, nullptr);
     if (!selected) {
         LOG_ERROR("Vulkan: Failed to select suitable physical device");
         cleanup();
@@ -235,15 +235,15 @@ bool VulkanContext::createInstance() {
     vkEnumerateInstanceExtensionProperties(nullptr, &availExtCount, availExts.data());
     auto hasExt = [&](const char* name) { return hasExtension(availExts, name); };
 
-    // Windowed: the platform surface extensions SDL needs.
+    // Windowed: the surface extensions the window system's windows need.
+    std::vector<std::string> surfaceExtensions;
     if (!config_.headless) {
-        uint32_t sdlExtCount = 0;
-        char const* const* sdlExtensions = SDL_Vulkan_GetInstanceExtensions(&sdlExtCount);
-        if (!sdlExtensions) {
-            LOG_ERROR("Vulkan: SDL_Vulkan_GetInstanceExtensions failed: %s", SDL_GetError());
+        surfaceExtensions = platform::windowSystem().vulkanInstanceExtensions();
+        if (surfaceExtensions.empty()) {
+            LOG_ERROR("Vulkan: the window system named no surface extensions");
             return false;
         }
-        for (uint32_t i = 0; i < sdlExtCount; ++i) extensions.push_back(sdlExtensions[i]);
+        for (const auto& ext : surfaceExtensions) extensions.push_back(ext.c_str());
     }
 
     if (config_.enableValidation && hasExt(VK_EXT_DEBUG_UTILS_EXTENSION_NAME)) {

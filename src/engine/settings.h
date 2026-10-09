@@ -55,7 +55,7 @@ struct InputSettings {
     float scrollSpeed = 48.0f;
     double doubleClickThresholdMs = 500.0;
     float doubleClickDistancePx = 5.0f;
-    uint32_t overlayToggleKey = 0x40000041u; // SDLK_F8
+    uint32_t overlayToggleKey = 0x40000041u; // platform::kc::F8
     std::vector<ActionBinding> actionBindings;
 };
 

@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-struct SDL_Window;
+namespace bro::platform { class Window; }
 
 namespace bro::render {
 
@@ -56,7 +56,7 @@ public:
     /// the queue owner and the frame ring. With `presentTarget` (windowed), the
     /// chosen device and present queue family must be able to present to a
     /// surface on that window.
-    bool init(SDL_Window* presentTarget = nullptr);
+    bool init(platform::Window* presentTarget = nullptr);
 
     VkInstance instance() const { return instance_; }
     VkPhysicalDevice physicalDevice() const { return physicalDevice_; }

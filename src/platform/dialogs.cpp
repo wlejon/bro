@@ -1,9 +1,10 @@
+// Dialog policy: who answers (a user, or the headless auto-answer), what a
+// file filter may say, and the `<input accept>` mapping. The native dialogs
+// themselves are the active WindowSystem's DialogBackend.
 #include "platform/dialogs.h"
+#include "platform/window_system.h"
 #include "util/log.h"
-#include <SDL3/SDL.h>
-#include <SDL3/SDL_dialog.h>
-#include <SDL3/SDL_messagebox.h>
-#include <atomic>
+
 #include <cctype>
 #include <cstring>
 #include <utility>
@@ -12,7 +13,7 @@ namespace bro::platform {
 
 namespace {
 
-SDL_Window* s_window = nullptr;
+Window* s_window = nullptr;
 bool s_interactive = true;
 bool s_autoAccept = true;
 Dialogs::TickCallback s_tickCb;
@@ -27,79 +28,35 @@ std::string normalizeSeparators(std::string s) {
     return s;
 }
 
-#ifdef _WIN32
-constexpr int kMaxDialogCallbacks = 2;
-#else
-constexpr int kMaxDialogCallbacks = 1;
-#endif
-
-struct DialogResult {
-    std::atomic<bool> haveResult{false};
-    std::atomic<int> callbackCount{0};
-    std::vector<std::string> files;
-    // Why the dialog was refused, read out of SDL on the thread that set it.
-    // SDL's error is thread-local and the refusal that matters here — a filter
-    // SDL will not accept — is delivered synchronously from
-    // `SDL_ShowOpenFileDialog` itself, but a backend may refuse from a thread
-    // of its own. Taking it here rather than after the wait is the only
-    // spelling that is right in both cases.
-    std::string error;
-};
-
-void SDLCALL dialogCallback(void* userdata, const char* const* filelist, int /*filter*/) {
-    auto* result = static_cast<DialogResult*>(userdata);
-    if (filelist) {
-        for (const char* const* p = filelist; *p; ++p) {
-            result->files.emplace_back(*p);
-        }
-        result->haveResult.store(true, std::memory_order_release);
-    } else if (result->error.empty()) {
-        const char* msg = SDL_GetError();
-        result->error = msg && *msg ? msg : "the dialog was refused";
-    }
-    result->callbackCount.fetch_add(1, std::memory_order_release);
-}
-
-// A filter string as SDL's filter array. `"Images|png;jpg"` is one filter and
+// A filter string as a filter list. `"Images|png;jpg"` is one filter and
 // `"Documents|json|Media|mp4;mkv|All files|*"` is three: names and patterns
 // alternating. A string with no `|` at all is the pattern of a filter called
 // "Files". A trailing name with no pattern is dropped rather than guessed at.
-struct FileFilters {
-    std::vector<std::string> parts;          // name, pattern, name, pattern, …
-    std::vector<SDL_DialogFileFilter> list;  // built once `parts` has stopped growing
+std::vector<DialogBackend::FileFilter> filtersFrom(const std::string& filterStr) {
+    std::vector<DialogBackend::FileFilter> list;
+    if (filterStr.empty()) return list;
 
-    const SDL_DialogFileFilter* data() const { return list.empty() ? nullptr : list.data(); }
-    int count() const { return static_cast<int>(list.size()); }
-};
-
-FileFilters filtersFrom(const std::string& filterStr) {
-    FileFilters f;
-    if (filterStr.empty()) return f;
-
+    std::vector<std::string> parts;  // name, pattern, name, pattern, …
     for (size_t start = 0;;) {
         const size_t bar = filterStr.find('|', start);
         if (bar == std::string::npos) {
-            f.parts.push_back(filterStr.substr(start));
+            parts.push_back(filterStr.substr(start));
             break;
         }
-        f.parts.push_back(filterStr.substr(start, bar - start));
+        parts.push_back(filterStr.substr(start, bar - start));
         start = bar + 1;
     }
-    if (f.parts.size() == 1) f.parts.insert(f.parts.begin(), "Files");
-    if (f.parts.size() % 2 != 0) f.parts.pop_back();
+    if (parts.size() == 1) parts.insert(parts.begin(), "Files");
+    if (parts.size() % 2 != 0) parts.pop_back();
 
-    f.list.reserve(f.parts.size() / 2);
-    for (size_t i = 0; i + 1 < f.parts.size(); i += 2) {
-        SDL_DialogFileFilter one;
-        one.name = f.parts[i].c_str();
-        one.pattern = f.parts[i + 1].c_str();
-        f.list.push_back(one);
-    }
-    return f;
+    list.reserve(parts.size() / 2);
+    for (size_t i = 0; i + 1 < parts.size(); i += 2) list.push_back({parts[i], parts[i + 1]});
+    return list;
 }
 
-// SDL's own rule, applied here so a bad pattern is refused with a sentence
-// even on a backend that would answer it with a silent null callback.
+// The one rule every backend's file dialog shares (it is SDL's), applied
+// here so a bad pattern is refused with a sentence even on a backend that
+// would answer it with a silent cancel.
 const char* validateFilterPattern(const char* list) {
     if (!list || !*list) return "Empty pattern not allowed";
     if (std::strcmp(list, "*") == 0) return nullptr;
@@ -117,59 +74,14 @@ const char* validateFilterPattern(const char* list) {
     return nullptr;
 }
 
-bool refusedFilters(const FileFilters& filters, std::string& refusal) {
-    for (const auto& filter : filters.list) {
-        if (const char* err = validateFilterPattern(filter.pattern)) {
+bool refusedFilters(const std::vector<DialogBackend::FileFilter>& filters, std::string& refusal) {
+    for (const auto& filter : filters) {
+        if (const char* err = validateFilterPattern(filter.pattern.c_str())) {
             refusal = std::string("file dialog refused: Invalid dialog file filters: ") + err;
             return true;
         }
     }
     return false;
-}
-
-// How long a dialog that has already answered once is given to answer again.
-// Any second callback is delivered from the same place as the first and
-// arrives immediately; this is a bound, not a poll interval.
-constexpr Uint64 kExtraCallbackGraceMs = 500;
-
-// Block until the dialog has answered, keeping timers running while it is up.
-//
-// An error answers once, and waiting for a second answer that is not coming is
-// a window that never comes back. SDL calls back with a null `filelist` when it
-// refuses the request, and on Windows this loop wants two callbacks before it
-// returns; one bad filter string therefore used to hang the application with
-// its last frame on the screen and no dialog to close. The second callback is
-// still waited for — `DialogResult` lives on the caller's stack, and a callback
-// arriving after this returns would write into a frame that is gone — but the
-// wait is bounded, and the reason is logged.
-//
-// False when refused, which is NOT the same as cancelled: SDL hands over an
-// empty list for a cancel and a null one for a refusal.
-bool waitForDialog(DialogResult& result) {
-    Uint64 answeredAt = 0;
-    for (;;) {
-        const bool have = result.haveResult.load(std::memory_order_acquire);
-        const int count = result.callbackCount.load(std::memory_order_acquire);
-        if (have || count >= kMaxDialogCallbacks) break;
-        if (count > 0) {
-            const Uint64 now = SDL_GetTicks();
-            if (!answeredAt) {
-                answeredAt = now;
-                LOG_WARN("dialog: refused — %s", result.error.c_str());
-            } else if (now - answeredAt >= kExtraCallbackGraceMs) {
-                break;
-            }
-        }
-        SDL_PumpEvents();
-        if (s_tickCb) s_tickCb();
-        SDL_Delay(8);
-    }
-    return result.haveResult.load(std::memory_order_acquire);
-}
-
-std::string refusalOf(const DialogResult& result) {
-    return "file dialog refused: " + (result.error.empty() ? std::string("unknown reason")
-                                                            : result.error);
 }
 
 std::vector<std::string> takeQueuedPicks() {
@@ -178,30 +90,15 @@ std::vector<std::string> takeQueuedPicks() {
     return picked;
 }
 
-enum : int { kBtnCancel = 0, kBtnOk = 1 };
-
 bool showMessageBox(const std::string& message, bool withCancel) {
-    SDL_MessageBoxButtonData buttons[2];
-    int nButtons = 0;
-    if (withCancel) {
-        buttons[nButtons++] = {SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, kBtnCancel, "Cancel"};
-    }
-    buttons[nButtons++] = {SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, kBtnOk, "OK"};
+    const std::optional<bool> ok = windowSystem().dialogs().messageBox(s_window, message, withCancel);
+    // No message box at all: an alert has been "seen", a question declined.
+    return ok ? *ok : !withCancel;
+}
 
-    SDL_MessageBoxData data{};
-    data.flags = SDL_MESSAGEBOX_INFORMATION;
-    data.window = s_window;
-    data.title = "";
-    data.message = message.c_str();
-    data.numbuttons = nButtons;
-    data.buttons = buttons;
-
-    int pressed = kBtnCancel;
-    if (!SDL_ShowMessageBox(&data, &pressed)) {
-        LOG_WARN("[dialog] message box unavailable: %s", SDL_GetError());
-        return !withCancel;
-    }
-    return pressed == kBtnOk;
+bool showFileDialog(const DialogBackend::FileDialogRequest& request,
+                    std::vector<std::string>& picked, std::string& refusal) {
+    return windowSystem().dialogs().fileDialog(s_window, request, s_tickCb, picked, refusal);
 }
 
 // `<input accept>`'s comma list of `.ext` and `type/*` tokens as one
@@ -242,7 +139,7 @@ std::string patternFromAccept(const std::string& accept) {
 
 } // namespace
 
-void Dialogs::setWindow(SDL_Window* window) {
+void Dialogs::setWindow(Window* window) {
     s_window = window;
 }
 
@@ -294,23 +191,17 @@ std::optional<std::string> Dialogs::showPrompt(const std::string& message,
 
 bool Dialogs::showOpenFileDialog(const std::string& filter, bool allowMultiple,
                                  std::vector<std::string>& picked, std::string& refusal) {
-    const FileFilters filters = filtersFrom(filter);
-    if (refusedFilters(filters, refusal)) return false;
+    DialogBackend::FileDialogRequest request;
+    request.kind = DialogBackend::FileDialogKind::OpenFile;
+    request.filters = filtersFrom(filter);
+    request.allowMultiple = allowMultiple;
+    if (refusedFilters(request.filters, refusal)) return false;
 
     if (!s_interactive) {
         picked = takeQueuedPicks();
         return true;
     }
-
-    DialogResult result;
-    SDL_ShowOpenFileDialog(dialogCallback, &result, s_window, filters.data(), filters.count(),
-                           nullptr, allowMultiple);
-    if (!waitForDialog(result)) {
-        refusal = refusalOf(result);
-        return false;
-    }
-    picked = std::move(result.files);
-    return true;
+    return showFileDialog(request, picked, refusal);
 }
 
 bool Dialogs::showOpenFolderDialog(const std::string& defaultLocation, bool allowMultiple,
@@ -320,24 +211,21 @@ bool Dialogs::showOpenFolderDialog(const std::string& defaultLocation, bool allo
         return true;
     }
 
-    const std::string defaultLoc = normalizeSeparators(defaultLocation);
-    DialogResult result;
-    SDL_ShowOpenFolderDialog(dialogCallback, &result, s_window,
-                             defaultLoc.empty() ? nullptr : defaultLoc.c_str(), allowMultiple);
-    if (!waitForDialog(result)) {
-        refusal = refusalOf(result);
-        return false;
-    }
-    picked = std::move(result.files);
-    return true;
+    DialogBackend::FileDialogRequest request;
+    request.kind = DialogBackend::FileDialogKind::OpenFolder;
+    request.defaultLocation = normalizeSeparators(defaultLocation);
+    request.allowMultiple = allowMultiple;
+    return showFileDialog(request, picked, refusal);
 }
 
 bool Dialogs::showSaveFileDialog(const std::string& filter, const std::string& defaultName,
                                  std::optional<std::string>& saved, std::string& refusal) {
-    const FileFilters filters = filtersFrom(filter);
-    if (refusedFilters(filters, refusal)) return false;
+    DialogBackend::FileDialogRequest request;
+    request.kind = DialogBackend::FileDialogKind::SaveFile;
+    request.filters = filtersFrom(filter);
+    if (refusedFilters(request.filters, refusal)) return false;
 
-    const std::string defaultLoc = normalizeSeparators(defaultName);
+    request.defaultLocation = normalizeSeparators(defaultName);
     if (!s_interactive) {
         if (!s_autoAccept) {
             saved = std::nullopt;
@@ -348,21 +236,16 @@ bool Dialogs::showSaveFileDialog(const std::string& filter, const std::string& d
             s_queuedPicks.erase(s_queuedPicks.begin());
             return true;
         }
-        saved = defaultLoc.empty() ? std::string("untitled") : defaultLoc;
+        saved = request.defaultLocation.empty() ? std::string("untitled") : request.defaultLocation;
         return true;
     }
 
-    DialogResult result;
-    SDL_ShowSaveFileDialog(dialogCallback, &result, s_window, filters.data(), filters.count(),
-                           defaultLoc.empty() ? nullptr : defaultLoc.c_str());
-    if (!waitForDialog(result)) {
-        refusal = refusalOf(result);
-        return false;
-    }
-    if (result.files.empty()) {
+    std::vector<std::string> picked;
+    if (!showFileDialog(request, picked, refusal)) return false;
+    if (picked.empty()) {
         saved = std::nullopt;
     } else {
-        saved = result.files[0];
+        saved = picked[0];
     }
     return true;
 }

@@ -32,7 +32,7 @@
 #include "engine/engine.h"
 #include "engine/engine_config.h"
 #include "platform/dialogs.h"
-#include "platform/sdl_window.h"
+#include "platform/window.h"
 #include "util/log.h"
 
 #include <cstdint>

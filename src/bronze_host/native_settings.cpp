@@ -26,7 +26,7 @@
 #include "bronze_host/host_natives.h"
 #include "engine/engine.h"
 #include "engine/settings.h"
-#include "platform/sdl_window.h"
+#include "platform/window.h"
 #include "natives/settings/native_settings_decl.h"
 
 #include <cstdio>

@@ -13,7 +13,7 @@
 #include "layout/el_textarea.h"
 #include "layout/key_handle_result.h"
 #include "util/time.h"
-#include <SDL3/SDL.h>
+#include "platform/keys.h"
 
 #include <algorithm>
 #include <cctype>
@@ -475,11 +475,11 @@ bool Engine::editHistoryStep(bool redo) {
     // that one, as primary+Z / primary+Y do.
     if (dom::Element* active = document_ ? document_->activeElement() : nullptr) {
         layout::KeyHandleResult r;
-        const int keycode = redo ? SDLK_Y : SDLK_Z;
+        const int keycode = redo ? platform::kc::Y : platform::kc::Z;
         if (auto* in = getElInput(active); in && in->isFocused())
-            r = in->handleKeyDown(active, keycode, SDL_KMOD_CTRL);
+            r = in->handleKeyDown(active, keycode, platform::kmod::Ctrl);
         else if (auto* ta = getElTextarea(active); ta && ta->isFocused())
-            r = ta->handleKeyDown(active, keycode, SDL_KMOD_CTRL);
+            r = ta->handleKeyDown(active, keycode, platform::kmod::Ctrl);
         else
             r.handled = false;
         if (r.handled) {

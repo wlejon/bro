@@ -1,72 +1,72 @@
 #include "engine/key_mapping.h"
 
-#include <SDL3/SDL_keycode.h>
+#include "platform/keys.h"
 
 namespace bro::engine {
 
 std::string sdlKeycodeToWebKey(int32_t keycode, int mod)
 {
-    // Special keys (with SDLK_SCANCODE_MASK = 0x40000000)
+    // Special keys (with platform::kScancodeMask = 0x40000000)
     switch (keycode) {
-        case SDLK_RETURN:    return "Enter";
-        case SDLK_ESCAPE:    return "Escape";
-        case SDLK_BACKSPACE: return "Backspace";
-        case SDLK_TAB:       return "Tab";
-        case SDLK_SPACE:     return " ";
-        case SDLK_DELETE:    return "Delete";
-        case SDLK_INSERT:    return "Insert";
-        case SDLK_HOME:      return "Home";
-        case SDLK_END:       return "End";
-        case SDLK_PAGEUP:    return "PageUp";
-        case SDLK_PAGEDOWN:  return "PageDown";
-        case SDLK_RIGHT:     return "ArrowRight";
-        case SDLK_LEFT:      return "ArrowLeft";
-        case SDLK_DOWN:      return "ArrowDown";
-        case SDLK_UP:        return "ArrowUp";
-        case SDLK_F1:  return "F1";  case SDLK_F2:  return "F2";
-        case SDLK_F3:  return "F3";  case SDLK_F4:  return "F4";
-        case SDLK_F5:  return "F5";  case SDLK_F6:  return "F6";
-        case SDLK_F7:  return "F7";  case SDLK_F8:  return "F8";
-        case SDLK_F9:  return "F9";  case SDLK_F10: return "F10";
-        case SDLK_F11: return "F11"; case SDLK_F12: return "F12";
-        case SDLK_LSHIFT: case SDLK_RSHIFT: return "Shift";
-        case SDLK_LCTRL:  case SDLK_RCTRL:  return "Control";
-        case SDLK_LALT:   case SDLK_RALT:   return "Alt";
-        case SDLK_LGUI:   case SDLK_RGUI:   return "Meta";
-        case SDLK_CAPSLOCK:   return "CapsLock";
-        case SDLK_NUMLOCKCLEAR: return "NumLock";
-        case SDLK_SCROLLLOCK: return "ScrollLock";
-        case SDLK_PAUSE:     return "Pause";
-        case SDLK_PRINTSCREEN: return "PrintScreen";
-        case SDLK_MENU:      return "ContextMenu";
-        case SDLK_APPLICATION: return "ContextMenu";
+        case platform::kc::Return:    return "Enter";
+        case platform::kc::Escape:    return "Escape";
+        case platform::kc::Backspace: return "Backspace";
+        case platform::kc::Tab:       return "Tab";
+        case platform::kc::Space:     return " ";
+        case platform::kc::Delete:    return "Delete";
+        case platform::kc::Insert:    return "Insert";
+        case platform::kc::Home:      return "Home";
+        case platform::kc::End:       return "End";
+        case platform::kc::PageUp:    return "PageUp";
+        case platform::kc::PageDown:  return "PageDown";
+        case platform::kc::Right:     return "ArrowRight";
+        case platform::kc::Left:      return "ArrowLeft";
+        case platform::kc::Down:      return "ArrowDown";
+        case platform::kc::Up:        return "ArrowUp";
+        case platform::kc::F1:  return "F1";  case platform::kc::F2:  return "F2";
+        case platform::kc::F3:  return "F3";  case platform::kc::F4:  return "F4";
+        case platform::kc::F5:  return "F5";  case platform::kc::F6:  return "F6";
+        case platform::kc::F7:  return "F7";  case platform::kc::F8:  return "F8";
+        case platform::kc::F9:  return "F9";  case platform::kc::F10: return "F10";
+        case platform::kc::F11: return "F11"; case platform::kc::F12: return "F12";
+        case platform::kc::LShift: case platform::kc::RShift: return "Shift";
+        case platform::kc::LCtrl:  case platform::kc::RCtrl:  return "Control";
+        case platform::kc::LAlt:   case platform::kc::RAlt:   return "Alt";
+        case platform::kc::LGui:   case platform::kc::RGui:   return "Meta";
+        case platform::kc::CapsLock:   return "CapsLock";
+        case platform::kc::NumLockClear: return "NumLock";
+        case platform::kc::ScrollLock: return "ScrollLock";
+        case platform::kc::Pause:     return "Pause";
+        case platform::kc::PrintScreen: return "PrintScreen";
+        case platform::kc::Menu:      return "ContextMenu";
+        case platform::kc::Application: return "ContextMenu";
         // Keypad: the character it types (the Mac keypad has no NumLock, and
-        // SDL reports these keycodes whatever the NumLock state).
-        case SDLK_KP_ENTER:    return "Enter";
-        case SDLK_KP_DIVIDE:   return "/";
-        case SDLK_KP_MULTIPLY: return "*";
-        case SDLK_KP_MINUS:    return "-";
-        case SDLK_KP_PLUS:     return "+";
-        case SDLK_KP_PERIOD:   return ".";
-        case SDLK_KP_EQUALS:   return "=";
-        case SDLK_KP_0: return "0";
-        case SDLK_KP_1: return "1"; case SDLK_KP_2: return "2";
-        case SDLK_KP_3: return "3"; case SDLK_KP_4: return "4";
-        case SDLK_KP_5: return "5"; case SDLK_KP_6: return "6";
-        case SDLK_KP_7: return "7"; case SDLK_KP_8: return "8";
-        case SDLK_KP_9: return "9";
+        // key events carry these keycodes whatever the NumLock state).
+        case platform::kc::KpEnter:    return "Enter";
+        case platform::kc::KpDivide:   return "/";
+        case platform::kc::KpMultiply: return "*";
+        case platform::kc::KpMinus:    return "-";
+        case platform::kc::KpPlus:     return "+";
+        case platform::kc::KpPeriod:   return ".";
+        case platform::kc::KpEquals:   return "=";
+        case platform::kc::Kp0: return "0";
+        case platform::kc::Kp1: return "1"; case platform::kc::Kp2: return "2";
+        case platform::kc::Kp3: return "3"; case platform::kc::Kp4: return "4";
+        case platform::kc::Kp5: return "5"; case platform::kc::Kp6: return "6";
+        case platform::kc::Kp7: return "7"; case platform::kc::Kp8: return "8";
+        case platform::kc::Kp9: return "9";
         default: break;
     }
 
     // Printable ASCII characters
     if (keycode >= 'a' && keycode <= 'z') {
-        bool shift = (mod & SDL_KMOD_SHIFT) != 0;
+        bool shift = (mod & platform::kmod::Shift) != 0;
         char c = shift ? (char)(keycode - 32) : (char)keycode;
         return std::string(1, c);
     }
     if (keycode >= '0' && keycode <= '9') {
         // Handle shift+digit for symbols
-        if (mod & SDL_KMOD_SHIFT) {
+        if (mod & platform::kmod::Shift) {
             const char* symbols = ")!@#$%^&*(";
             return std::string(1, symbols[keycode - '0']);
         }
@@ -75,17 +75,17 @@ std::string sdlKeycodeToWebKey(int32_t keycode, int mod)
 
     // Punctuation
     switch (keycode) {
-        case SDLK_MINUS:         return (mod & SDL_KMOD_SHIFT) ? "_" : "-";
-        case SDLK_EQUALS:        return (mod & SDL_KMOD_SHIFT) ? "+" : "=";
-        case SDLK_LEFTBRACKET:   return (mod & SDL_KMOD_SHIFT) ? "{" : "[";
-        case SDLK_RIGHTBRACKET:  return (mod & SDL_KMOD_SHIFT) ? "}" : "]";
-        case SDLK_BACKSLASH:     return (mod & SDL_KMOD_SHIFT) ? "|" : "\\";
-        case SDLK_SEMICOLON:     return (mod & SDL_KMOD_SHIFT) ? ":" : ";";
-        case SDLK_APOSTROPHE:    return (mod & SDL_KMOD_SHIFT) ? "\"" : "'";
-        case SDLK_GRAVE:         return (mod & SDL_KMOD_SHIFT) ? "~" : "`";
-        case SDLK_COMMA:         return (mod & SDL_KMOD_SHIFT) ? "<" : ",";
-        case SDLK_PERIOD:        return (mod & SDL_KMOD_SHIFT) ? ">" : ".";
-        case SDLK_SLASH:         return (mod & SDL_KMOD_SHIFT) ? "?" : "/";
+        case platform::kc::Minus:         return (mod & platform::kmod::Shift) ? "_" : "-";
+        case platform::kc::Equals:        return (mod & platform::kmod::Shift) ? "+" : "=";
+        case platform::kc::LeftBracket:   return (mod & platform::kmod::Shift) ? "{" : "[";
+        case platform::kc::RightBracket:  return (mod & platform::kmod::Shift) ? "}" : "]";
+        case platform::kc::Backslash:     return (mod & platform::kmod::Shift) ? "|" : "\\";
+        case platform::kc::Semicolon:     return (mod & platform::kmod::Shift) ? ":" : ";";
+        case platform::kc::Apostrophe:    return (mod & platform::kmod::Shift) ? "\"" : "'";
+        case platform::kc::Grave:         return (mod & platform::kmod::Shift) ? "~" : "`";
+        case platform::kc::Comma:         return (mod & platform::kmod::Shift) ? "<" : ",";
+        case platform::kc::Period:        return (mod & platform::kmod::Shift) ? ">" : ".";
+        case platform::kc::Slash:         return (mod & platform::kmod::Shift) ? "?" : "/";
         default: break;
     }
 
@@ -95,12 +95,12 @@ std::string sdlKeycodeToWebKey(int32_t keycode, int mod)
 
 std::string sdlScancodeToWebCode(int32_t scancode)
 {
-    // Letters (SDL_SCANCODE_A=4 through SDL_SCANCODE_Z=29)
+    // Letters (platform::sc::A=4 through platform::sc::Z=29)
     if (scancode >= 4 && scancode <= 29) {
         char c = 'A' + (char)(scancode - 4);
         return std::string("Key") + c;
     }
-    // Digits (SDL_SCANCODE_1=30 through SDL_SCANCODE_0=39)
+    // Digits (platform::sc::Digit1=30 through platform::sc::Digit0=39)
     if (scancode >= 30 && scancode <= 39) {
         char c = (scancode == 39) ? '0' : (char)('1' + (scancode - 30));
         return std::string("Digit") + c;
@@ -167,12 +167,12 @@ std::string sdlScancodeToWebCode(int32_t scancode)
         case 231: return "MetaRight";
         default: break;
     }
-    // Numpad digits (SDL_SCANCODE_KP_1=89 through SDL_SCANCODE_KP_0=98)
+    // Numpad digits (platform::sc::Kp1=89 through platform::sc::Kp0=98)
     if (scancode >= 89 && scancode <= 98) {
         char c = (scancode == 98) ? '0' : (char)('1' + (scancode - 89));
         return std::string("Numpad") + c;
     }
-    // F13..F24 (SDL_SCANCODE_F13=104 through SDL_SCANCODE_F24=115)
+    // F13..F24 (platform::sc::F13=104 through platform::sc::F24=115)
     if (scancode >= 104 && scancode <= 115) {
         return "F" + std::to_string(13 + (scancode - 104));
     }

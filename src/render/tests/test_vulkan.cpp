@@ -12,7 +12,8 @@
 #include "render/vulkan_presenter.h"
 #include "render/vulkan_swapchain.h"
 #include "render/vulkan_util.h"
-#include "platform/sdl_window.h"
+#include "platform/window.h"
+#include "platform/window_system.h"
 
 #include <include/core/SkCanvas.h>
 #include <include/core/SkColor.h>
@@ -20,8 +21,6 @@
 #include <include/core/SkPaint.h>
 #include <include/core/SkRect.h>
 #include <include/core/SkSurface.h>
-
-#include <SDL3/SDL.h>
 
 #include <cstdlib>
 #include <cstring>
@@ -263,22 +262,30 @@ void testGlslCompiler() {
 }
 
 void testSwapchain() {
-    if (!SDL_Init(SDL_INIT_VIDEO)) {
-        std::cout << "[swapchain] SKIPPED (no video: " << SDL_GetError() << ")" << std::endl;
+    platform::WindowConfig wcfg;
+    wcfg.title = "bro_vulkan_test";
+    wcfg.width = 160;
+    wcfg.height = 120;
+    wcfg.fitToWorkArea = true;
+    std::unique_ptr<platform::Window> windowPtr;
+    try {
+        windowPtr = platform::createWindow(wcfg);
+    } catch (const std::exception& e) {
+        std::cout << "[swapchain] SKIPPED (no window: " << e.what() << ")" << std::endl;
         return;
     }
-    const char* driver = SDL_GetCurrentVideoDriver();
-    if (!driver || std::strcmp(driver, "dummy") == 0 || std::strcmp(driver, "offscreen") == 0) {
+    platform::Window& window = *windowPtr;
+    const std::string driver = platform::windowSystem().driverName();
+    if (driver.empty() || driver == "dummy" || driver == "offscreen") {
         std::cout << "[swapchain] SKIPPED (no display)" << std::endl;
         return;
     }
     std::cout << "[swapchain] presentation on a " << driver << " window" << std::endl;
-    platform::Window window("bro_vulkan_test", 160, 120, /*hidden=*/false, /*resizable=*/true);
     render::VulkanContextConfig cfg;
     render::VulkanContext ctx(cfg);
-    CHECK(ctx.init(window.getSDLWindow()));
+    CHECK(ctx.init(&window));
     if (!ctx.isValid()) return;
-    render::VulkanSwapchain swapchain(ctx, window.getSDLWindow(), /*vsync=*/true);
+    render::VulkanSwapchain swapchain(ctx, &window, /*vsync=*/true);
     CHECK(swapchain.init());
     render::VulkanPresenter presenter(ctx, swapchain);
     CHECK(presenter.init());
@@ -293,14 +300,14 @@ void testSwapchain() {
           swapchain.presentMode() == VK_PRESENT_MODE_FIFO_RELAXED_KHR);
 
     // Resize: the swapchain follows the window, whatever size the frame is.
-    SDL_SetWindowSize(window.getSDLWindow(), 220, 170);
-    SDL_SyncWindow(window.getSDLWindow());
+    window.setWindowSize(220, 170);
+    window.sync();
     for (int i = 0; i < 4; ++i) {
-        SDL_PumpEvents();
+        platform::pumpEvents();
         CHECK(presentFrame(160, 120));
     }
     int pw = 0, ph = 0;
-    SDL_GetWindowSizeInPixels(window.getSDLWindow(), &pw, &ph);
+    window.getSizeInPixels(pw, ph);
     CHECK(swapchain.extent().width == static_cast<uint32_t>(pw));
     CHECK(swapchain.extent().height == static_cast<uint32_t>(ph));
 
@@ -309,11 +316,11 @@ void testSwapchain() {
     std::cout << "  vsync off -> present mode " << swapchain.presentMode() << std::endl;
 
     // Hidden: nothing to present, and nothing fails.
-    SDL_HideWindow(window.getSDLWindow());
-    SDL_SyncWindow(window.getSDLWindow());
+    window.hide();
+    window.sync();
     CHECK(presentFrame(160, 120));
-    SDL_ShowWindow(window.getSDLWindow());
-    SDL_SyncWindow(window.getSDLWindow());
+    window.show();
+    window.sync();
     for (int i = 0; i < 3; ++i) CHECK(presentFrame(160, 120));
     ctx.queue().waitIdle();
 }
@@ -471,7 +478,6 @@ int main() {
     }
     fs::remove_all(cacheDir, ec);
     testSwapchain();
-    SDL_Quit();
 
     const uint32_t validationErrors = render::vulkanValidationErrorCount();
     if (validationErrors > 0) {

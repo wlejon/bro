@@ -21,7 +21,7 @@
 #include "bronze_host/host_window_open.h"
 
 #include "engine/engine.h"
-#include "platform/sdl_window.h"
+#include "platform/window.h"
 #include "dom/document.h"
 #include "dom/event.h"
 #include "dom/event_target.h"

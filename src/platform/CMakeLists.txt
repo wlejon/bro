@@ -1,19 +1,37 @@
-add_library(bro_platform STATIC sdl_window.cpp sdl_runtime.cpp event_loop.cpp
-                                clipboard.cpp dialogs.cpp
-                                desktop_platform.cpp desktop_bell.cpp
-                                desktop_progress.cpp desktop_notifications.cpp
-                                desktop_tray.cpp desktop_hotkeys.cpp
-                                desktop_single_instance.cpp evdev_keymap.cpp
-                                control_socket.cpp)
-target_include_directories(bro_platform PUBLIC ${bro_SOURCE_DIR}/src)
+# The platform layer: backend-neutral interfaces (window.h, event_loop.h,
+# keys.h, ...) and the backends behind them. See README.md.
 
-# SDL3 — use the umbrella target (resolves to shared or static automatically)
+# SDL3 is private: only src/platform compiles against it. Every other bro
+# target has the SDL fence (cmake/sdl_fence.cmake) first on its include path;
+# this directory takes it off, before any target here copies the directory's
+# include path.
+get_property(_bro_platform_dirs DIRECTORY PROPERTY INCLUDE_DIRECTORIES)
+list(REMOVE_ITEM _bro_platform_dirs "${BRO_SDL_FENCE_DIR}")
+set_property(DIRECTORY PROPERTY INCLUDE_DIRECTORIES "${_bro_platform_dirs}")
+
+add_library(bro_platform STATIC
+    # interfaces and policy
+    window_system.cpp keys.cpp dialogs.cpp evdev_keymap.cpp
+    # SDL window system
+    sdl/sdl_window_system.cpp sdl/sdl_window.cpp sdl/sdl_runtime.cpp
+    sdl/sdl_event_loop.cpp sdl/sdl_clipboard.cpp sdl/sdl_dialogs.cpp
+    # DRM window system (the KMS/libinput halves are drm_seat / drm_input)
+    drm_window_system.cpp
+    # desktop integration
+    desktop_platform.cpp desktop_bell.cpp desktop_progress.cpp
+    desktop_notifications.cpp desktop_tray.cpp desktop_hotkeys.cpp
+    desktop_single_instance.cpp control_socket.cpp)
+target_include_directories(bro_platform PUBLIC ${bro_SOURCE_DIR}/src)
 if(TARGET SDL3::SDL3)
-    target_link_libraries(bro_platform PUBLIC SDL3::SDL3)
+    target_link_libraries(bro_platform PRIVATE SDL3::SDL3)
 elseif(TARGET SDL3::SDL3-static)
-    target_link_libraries(bro_platform PUBLIC SDL3::SDL3-static)
+    target_link_libraries(bro_platform PRIVATE SDL3::SDL3-static)
 else()
     message(FATAL_ERROR "No SDL3 target found")
+endif()
+if(WIN32)
+    # SetCurrentProcessExplicitAppUserModelID (the window's app id).
+    target_link_libraries(bro_platform PRIVATE shell32)
 endif()
 
 find_package(Vulkan REQUIRED)

@@ -1,15 +1,15 @@
-// Engine gamepad handling — SDL gamepad events in, W3C-standard-layout state
-// out. These are Engine member function implementations (same split style as
-// input_handling.cpp). The JS surface (navigator.getGamepads() snapshots,
+// Engine gamepad handling — platform gamepad events in, W3C-standard-layout
+// state out. These are Engine member function implementations (same split style
+// as input_handling.cpp). The JS surface (navigator.getGamepads() snapshots,
 // connection events' `gamepad` payload) is built by js/gamepad_bindings.cpp
 // from the GamepadState slots owned here.
 //
 // Two producers feed the same path:
-//   - real hardware: EventLoop forwards SDL_EVENT_GAMEPAD_* to the
+//   - real hardware: EventLoop's onGamepad* callbacks reach the
 //     handleGamepad*() methods (windowed mode's frame loop pumps them);
 //   - the headless simulation seam: gamepadConnectVirtual() & friends inject
-//     below the JS API and above SDL, so tests exercise the identical slot,
-//     snapshot, event, and action-dispatch code without hardware.
+//     below the JS API and above the platform, so tests exercise the identical
+//     slot, snapshot, event, and action-dispatch code without hardware.
 
 #include "engine/engine.h"
 #include "engine/gamepad.h"
@@ -18,10 +18,10 @@
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/event.h"
+#include "platform/gamepads.h"
 #include "util/time.h"
 #include "util/log.h"
 
-#include <SDL3/SDL.h>
 #include <algorithm>
 #include <cstring>
 
@@ -68,28 +68,29 @@ int gamepadAxisIndex(const std::string& name) {
 }
 
 // ---------------------------------------------------------------------------
-// SDL -> W3C layout mapping. SDL's gamepad abstraction already normalizes
+// Platform -> W3C layout mapping. The platform's gamepad layer already normalizes
 // every device to one logical layout, so this is a fixed table, not per-device.
 // ---------------------------------------------------------------------------
 
-static int sdlButtonToW3C(int sdlButton) {
-    switch (sdlButton) {
-        case SDL_GAMEPAD_BUTTON_SOUTH:          return 0;
-        case SDL_GAMEPAD_BUTTON_EAST:           return 1;
-        case SDL_GAMEPAD_BUTTON_WEST:           return 2;
-        case SDL_GAMEPAD_BUTTON_NORTH:          return 3;
-        case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER:  return 4;
-        case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER: return 5;
-        // 6/7 (triggers) arrive as SDL axes; see handleGamepadAxis.
-        case SDL_GAMEPAD_BUTTON_BACK:           return 8;
-        case SDL_GAMEPAD_BUTTON_START:          return 9;
-        case SDL_GAMEPAD_BUTTON_LEFT_STICK:     return 10;
-        case SDL_GAMEPAD_BUTTON_RIGHT_STICK:    return 11;
-        case SDL_GAMEPAD_BUTTON_DPAD_UP:        return 12;
-        case SDL_GAMEPAD_BUTTON_DPAD_DOWN:      return 13;
-        case SDL_GAMEPAD_BUTTON_DPAD_LEFT:      return 14;
-        case SDL_GAMEPAD_BUTTON_DPAD_RIGHT:     return 15;
-        case SDL_GAMEPAD_BUTTON_GUIDE:          return 16;
+static int platformButtonToW3C(int button) {
+    using B = platform::GamepadButton;
+    switch (static_cast<B>(button)) {
+        case B::South:          return 0;
+        case B::East:           return 1;
+        case B::West:           return 2;
+        case B::North:          return 3;
+        case B::LeftShoulder:   return 4;
+        case B::RightShoulder:  return 5;
+        // 6/7 (triggers) arrive as axes; see handleGamepadAxis.
+        case B::Back:           return 8;
+        case B::Start:          return 9;
+        case B::LeftStick:      return 10;
+        case B::RightStick:     return 11;
+        case B::DpadUp:         return 12;
+        case B::DpadDown:       return 13;
+        case B::DpadLeft:       return 14;
+        case B::DpadRight:      return 15;
+        case B::Guide:          return 16;
         default: return -1;  // misc/paddles/touchpad: not in the standard layout
     }
 }
@@ -174,21 +175,21 @@ void Engine::gamepadAxisChanged(GamepadState& gp, int w3cAxis, float value) {
 }
 
 // ---------------------------------------------------------------------------
-// SDL event path (called from the EventLoop callbacks; windowed frame loop)
+// Device event path (called from the EventLoop callbacks; windowed frame loop)
 // ---------------------------------------------------------------------------
 
 void Engine::handleGamepadAdded(uint32_t instanceId) {
     if (gamepadByInstance(instanceId)) return;  // already open (duplicate event)
-    SDL_Gamepad* handle = SDL_OpenGamepad(instanceId);
-    if (!handle) {
-        LOG_WARN("Gamepad %u: SDL_OpenGamepad failed: %s", instanceId, SDL_GetError());
+    std::string err;
+    if (!platform::gamepads().open(instanceId, &err)) {
+        LOG_WARN("Gamepad %u: opening the gamepad failed: %s", instanceId, err.c_str());
         return;
     }
     GamepadState& gp = allocateGamepadSlot();
     gp.instanceId = instanceId;
-    gp.handle = handle;
-    const char* name = SDL_GetGamepadName(handle);
-    gp.id = name ? name : "Gamepad";
+    gp.opened = true;
+    std::string name = platform::gamepads().name(instanceId);
+    gp.id = name.empty() ? "Gamepad" : std::move(name);
     gp.connected = true;
     gp.timestampMs = util::currentTimeMs();
     LOG_INFO("Gamepad connected: \"%s\" (slot %d)", gp.id.c_str(), gp.index);
@@ -198,9 +199,9 @@ void Engine::handleGamepadAdded(uint32_t instanceId) {
 void Engine::handleGamepadRemoved(uint32_t instanceId) {
     GamepadState* gp = gamepadByInstance(instanceId);
     if (!gp) return;
-    if (gp->handle) {
-        SDL_CloseGamepad(gp->handle);
-        gp->handle = nullptr;
+    if (gp->opened) {
+        platform::gamepads().close(gp->instanceId);
+        gp->opened = false;
     }
     gp->connected = false;
     gp->timestampMs = util::currentTimeMs();
@@ -208,30 +209,31 @@ void Engine::handleGamepadRemoved(uint32_t instanceId) {
     dispatchGamepadConnectionEvent(*gp, false);
 }
 
-void Engine::handleGamepadButton(uint32_t instanceId, int sdlButton, bool down) {
+void Engine::handleGamepadButton(uint32_t instanceId, int button, bool down) {
     noteUserActivity();
     GamepadState* gp = gamepadByInstance(instanceId);
     if (!gp) return;
-    int w3c = sdlButtonToW3C(sdlButton);
+    int w3c = platformButtonToW3C(button);
     if (w3c < 0) return;
     gamepadButtonChanged(*gp, w3c, down ? 1.0f : 0.0f);
 }
 
-void Engine::handleGamepadAxis(uint32_t instanceId, int sdlAxis, float value) {
+void Engine::handleGamepadAxis(uint32_t instanceId, int axis, float value) {
+    using A = platform::GamepadAxis;
     GamepadState* gp = gamepadByInstance(instanceId);
     if (!gp) return;
-    switch (sdlAxis) {
-        case SDL_GAMEPAD_AXIS_LEFTX:  case SDL_GAMEPAD_AXIS_LEFTY:
-        case SDL_GAMEPAD_AXIS_RIGHTX: case SDL_GAMEPAD_AXIS_RIGHTY: {
-            int w3c = sdlAxis - SDL_GAMEPAD_AXIS_LEFTX;  // enum values are contiguous
+    switch (static_cast<A>(axis)) {
+        case A::LeftX:  case A::LeftY:
+        case A::RightX: case A::RightY: {
+            int w3c = axis - static_cast<int>(A::LeftX);  // enum values are contiguous
             gamepadAxisChanged(*gp, w3c, value);
             break;
         }
         // Triggers are axes on the wire but buttons 6/7 in the W3C layout.
-        case SDL_GAMEPAD_AXIS_LEFT_TRIGGER:
+        case A::LeftTrigger:
             gamepadButtonChanged(*gp, 6, value);
             break;
-        case SDL_GAMEPAD_AXIS_RIGHT_TRIGGER:
+        case A::RightTrigger:
             gamepadButtonChanged(*gp, 7, value);
             break;
         default:
@@ -246,7 +248,7 @@ void Engine::handleGamepadAxis(uint32_t instanceId, int sdlAxis, float value) {
 int Engine::gamepadConnectVirtual(const std::string& id) {
     GamepadState& gp = allocateGamepadSlot();
     gp.instanceId = 0;
-    gp.handle = nullptr;
+    gp.opened = false;
     gp.id = id.empty() ? "Virtual Gamepad (bro)" : id;
     gp.connected = true;
     gp.virtualPad = true;
@@ -299,11 +301,9 @@ bool Engine::gamepadRumble(int index, float strongMagnitude, float weakMagnitude
     gp->rumbleStrong = strongMagnitude;
     gp->rumbleWeak = weakMagnitude;
     gp->rumbleDurationMs = durationMs;
-    if (gp->handle) {
-        return SDL_RumbleGamepad(gp->handle,
-                                 static_cast<Uint16>(strongMagnitude * 0xFFFF),
-                                 static_cast<Uint16>(weakMagnitude * 0xFFFF),
-                                 static_cast<Uint32>(durationMs));
+    if (gp->opened) {
+        return platform::gamepads().rumble(gp->instanceId, strongMagnitude, weakMagnitude,
+                                           durationMs);
     }
     return true;  // virtual pad: recorded above, nothing to drive
 }
@@ -318,11 +318,9 @@ bool Engine::gamepadRumbleTriggers(int index, float leftMagnitude,
     gp->rumbleLeftTrigger = leftMagnitude;
     gp->rumbleRightTrigger = rightMagnitude;
     gp->rumbleTriggerDurationMs = durationMs;
-    if (gp->handle) {
-        return SDL_RumbleGamepadTriggers(gp->handle,
-                                         static_cast<Uint16>(leftMagnitude * 0xFFFF),
-                                         static_cast<Uint16>(rightMagnitude * 0xFFFF),
-                                         static_cast<Uint32>(durationMs));
+    if (gp->opened) {
+        return platform::gamepads().rumbleTriggers(gp->instanceId, leftMagnitude,
+                                                   rightMagnitude, durationMs);
     }
     return true;  // virtual pad: recorded above, nothing to drive
 }
@@ -333,9 +331,9 @@ bool Engine::gamepadRumbleTriggers(int index, float leftMagnitude,
 
 void Engine::closeAllGamepads() {
     for (auto& gp : gamepads_) {
-        if (gp.handle) {
-            SDL_CloseGamepad(gp.handle);
-            gp.handle = nullptr;
+        if (gp.opened) {
+            platform::gamepads().close(gp.instanceId);
+            gp.opened = false;
         }
         gp.connected = false;
     }

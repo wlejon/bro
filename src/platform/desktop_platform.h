@@ -2,7 +2,7 @@
 
 #include <string>
 
-struct SDL_Window;
+namespace bro::platform { class Window; }
 
 #ifdef _WIN32
 // HWND without <windows.h>: this header reaches engine code, where windows.h's
@@ -20,8 +20,8 @@ bool isHeadless();
 void setHeadless(bool headless);
 
 #ifdef _WIN32
-/// Retrieves HWND from an SDL_Window pointer.
-HWND hwndOf(SDL_Window* window);
+/// The HWND behind a window (null for none).
+HWND hwndOf(const Window* window);
 
 /// UTF-8 / UTF-16 conversions.
 std::wstring utf8ToWide(const std::string& s);

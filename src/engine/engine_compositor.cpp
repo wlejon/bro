@@ -12,7 +12,7 @@
 #include "layout/draw_traversal.h"
 #include "layout/element_ref_adapter.h"
 #include "layout/skia_text_metrics.h"
-#include "platform/sdl_window.h"
+#include "platform/window.h"
 #include "render/command_buffer.h"
 #include "render/command_replayer.h"
 #include "render/recording_renderer.h"

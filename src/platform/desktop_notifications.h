@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-struct SDL_Window;
+namespace bro::platform { class Window; }
 
 namespace bro::platform::desktop {
 
@@ -25,7 +25,7 @@ struct NotificationRecord {
 
 /// Shows a desktop notification and returns a notification ID (> 0 on success).
 uint32_t showNotification(
-    SDL_Window* window,
+    const Window* window,
     const std::string& title,
     const std::string& body,
     const NotificationOptions& options = {}

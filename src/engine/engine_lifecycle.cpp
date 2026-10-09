@@ -41,7 +41,8 @@
 #include "webgl/webgl2_context.h"
 #include "platform/dialogs.h"
 #include "platform/event_loop.h"
-#include "platform/sdl_window.h"
+#include "platform/system_info.h"
+#include "platform/window.h"
 #include "render/renderer.h"
 #include "layout/draw_traversal.h"
 #if BRO_WITH_3D
@@ -54,7 +55,6 @@
 #include "util/interrupt.h"
 #include "util/log.h"
 
-#include <SDL3/SDL.h>
 #include "render/vulkan_context.h"
 #include "render/vulkan_swapchain.h"
 #include "render/vulkan_presenter.h"
@@ -314,7 +314,7 @@ std::string Engine::effectiveColorScheme() const {
         const std::string& pref = settings_->appearance().colorScheme;
         if (pref == "light" || pref == "dark") return pref;
     }
-    return SDL_GetSystemTheme() == SDL_SYSTEM_THEME_DARK ? "dark" : "light";
+    return platform::systemInfo().theme() == platform::SystemTheme::Dark ? "dark" : "light";
 }
 
 void Engine::applyColorScheme() {

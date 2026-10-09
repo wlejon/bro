@@ -10,7 +10,8 @@
 #include "engine/engine_drm.h"
 #include "engine/key_mapping.h"
 #include "platform/evdev_keymap.h"
-#include "util/platform.h"
+#include "platform/keyboard.h"
+#include "platform/keys.h"
 
 #if defined(__linux__) && BRO_WITH_SEAT && BRO_WITH_DMABUF
 #include "platform/drm_input.h"
@@ -18,10 +19,6 @@
 #if BRO_WITH_COMPOSITOR && BRO_HAVE_WAYLAND_SERVER
 #include "compositor/wayland_compositor.h"
 #endif
-
-#include <SDL3/SDL_keyboard.h>
-#include <SDL3/SDL_keycode.h>
-#include <SDL3/SDL_scancode.h>
 
 namespace bro::engine {
 
@@ -60,24 +57,26 @@ void Engine::injectDeviceInput(const DeviceInput& in) {
 
     switch (in.kind) {
         case Kind::Key: {
-            const auto scancode = static_cast<SDL_Scancode>(platform::evdevKeyToSdlScancode(in.code));
-            if (scancode == SDL_SCANCODE_UNKNOWN) return;
-            const SDL_Keycode keycode = SDL_GetKeyFromScancode(scancode, SDL_KMOD_NONE, true);
-            auto track = [&](SDL_Keymod bit) {
+            namespace psc = platform::sc;
+            namespace kmod = platform::kmod;
+            const platform::Scancode scancode = platform::evdevKeyToScancode(in.code);
+            if (scancode == psc::Unknown) return;
+            const platform::Keycode keycode = platform::keyboard().eventKeycode(scancode);
+            auto track = [&](platform::KeyMods bit) {
                 if (in.pressed) deviceInputMods_ |= bit;
                 else deviceInputMods_ &= ~bit;
             };
-            if (scancode == SDL_SCANCODE_LSHIFT || scancode == SDL_SCANCODE_RSHIFT) track(SDL_KMOD_SHIFT);
-            else if (scancode == SDL_SCANCODE_LCTRL || scancode == SDL_SCANCODE_RCTRL) track(SDL_KMOD_CTRL);
-            else if (scancode == SDL_SCANCODE_LALT || scancode == SDL_SCANCODE_RALT) track(SDL_KMOD_ALT);
-            else if (scancode == SDL_SCANCODE_LGUI || scancode == SDL_SCANCODE_RGUI) track(SDL_KMOD_GUI);
+            if (scancode == psc::LShift || scancode == psc::RShift) track(kmod::Shift);
+            else if (scancode == psc::LCtrl || scancode == psc::RCtrl) track(kmod::Ctrl);
+            else if (scancode == psc::LAlt || scancode == psc::RAlt) track(kmod::Alt);
+            else if (scancode == psc::LGui || scancode == psc::RGui) track(kmod::Gui);
             const int code = static_cast<int>(keycode), sc = static_cast<int>(scancode);
             if (!in.pressed) {
                 handleKeyUp(code, sc, deviceInputMods_, false);
                 break;
             }
             handleKeyDown(code, sc, deviceInputMods_, false);
-            if (!util::hasPrimaryMod(deviceInputMods_)) {
+            if (!platform::hasPrimaryMod(deviceInputMods_)) {
                 const std::string webKey = sdlKeycodeToWebKey(code, deviceInputMods_);
                 if (webKey.size() == 1) handleTextInput(webKey);
             }
@@ -93,7 +92,7 @@ void Engine::injectDeviceInput(const DeviceInput& in) {
             break;
         }
         case Kind::Wheel:
-            // SDL's sense, which handleWheel takes: detents, +y away from the user.
+            // The sense handleWheel takes: detents, +y away from the user.
             handleWheel(lastMouseX_, lastMouseY_, static_cast<float>(in.wheelX) / 120.0f,
                         -static_cast<float>(in.wheelY) / 120.0f);
             break;

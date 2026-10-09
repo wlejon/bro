@@ -4,7 +4,8 @@
 #include "engine/settings.h"
 #include "engine/key_mapping.h"
 #include "platform/clipboard.h"
-#include "platform/sdl_window.h"
+#include "platform/keys.h"
+#include "platform/window.h"
 #if BRO_WITH_A11Y
 #include "a11y/a11y_bridge.h"
 #endif
@@ -18,9 +19,7 @@
 #include "layout/el_textarea.h"
 #include "layout/el_select.h"
 #include "layout/key_handle_result.h"
-#include "util/platform.h"
 
-#include <SDL3/SDL.h>
 #include <algorithm>
 #include <cctype>
 #include <functional>
@@ -145,7 +144,7 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
         return;
     }
 
-    if (inspector_.pickerMode && keycode == SDLK_ESCAPE && !repeat) {
+    if (inspector_.pickerMode && keycode == platform::kc::Escape && !repeat) {
         inspectorSetPickerMode(false);
         uiDirty_ = true;
         return;
@@ -154,7 +153,7 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
     if (systemSettingsVisible_) {
         bool prevented = systemHandleKeyDown(keycode, scancode, mod, repeat);
         if (!prevented && !repeat) {
-            if (keycode == SDLK_ESCAPE) {
+            if (keycode == platform::kc::Escape) {
                 toggleSystemSettings();
                 uiDirty_ = true;
             } else if (settings_) {
@@ -178,25 +177,25 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
 
     {
         const bool caretOrCommandKey =
-            util::hasPrimaryMod(mod) ||
-            keycode == SDLK_LEFT || keycode == SDLK_RIGHT ||
-            keycode == SDLK_UP || keycode == SDLK_DOWN ||
-            keycode == SDLK_HOME || keycode == SDLK_END ||
-            keycode == SDLK_PAGEUP || keycode == SDLK_PAGEDOWN ||
-            keycode == SDLK_BACKSPACE || keycode == SDLK_DELETE ||
-            keycode == SDLK_RETURN || keycode == SDLK_KP_ENTER ||
-            keycode == SDLK_TAB || keycode == SDLK_ESCAPE;
+            platform::hasPrimaryMod(mod) ||
+            keycode == platform::kc::Left || keycode == platform::kc::Right ||
+            keycode == platform::kc::Up || keycode == platform::kc::Down ||
+            keycode == platform::kc::Home || keycode == platform::kc::End ||
+            keycode == platform::kc::PageUp || keycode == platform::kc::PageDown ||
+            keycode == platform::kc::Backspace || keycode == platform::kc::Delete ||
+            keycode == platform::kc::Return || keycode == platform::kc::KpEnter ||
+            keycode == platform::kc::Tab || keycode == platform::kc::Escape;
         if (caretOrCommandKey) commitActiveComposition();
     }
 
-    if (keycode == SDLK_TAB) {
+    if (keycode == platform::kc::Tab) {
         auto evt = makeKeyboardEvent("keydown", keycode, scancode, mod, repeat);
         dom::Element* target = document_->activeElement();
         if (!target) target = document_->body();
         if (target) dispatchEvent(target, evt);
 
         if (!evt.defaultPrevented()) {
-            advanceFocus((mod & SDL_KMOD_SHIFT) != 0);
+            advanceFocus((mod & platform::kmod::Shift) != 0);
             uiDirty_ = true;
         }
         return;
@@ -205,7 +204,7 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
     // Escape while the top layer holds something: the keydown goes to the
     // focused element first, and unless it is cancelled it is a close request
     // to the topmost entry (a modal dialog: `cancel`, then close).
-    if (keycode == SDLK_ESCAPE && !document_->topLayer().empty()) {
+    if (keycode == platform::kc::Escape && !document_->topLayer().empty()) {
         auto evt = makeKeyboardEvent("keydown", keycode, scancode, mod, repeat);
         dom::Element* target = document_->activeElement();
         if (!target) target = document_->body();
@@ -217,13 +216,13 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
         return;
     }
 
-    if (util::hasPrimaryMod(mod) &&
-        (keycode == SDLK_C || keycode == SDLK_X || keycode == SDLK_V)) {
+    if (platform::hasPrimaryMod(mod) &&
+        (keycode == platform::kc::C || keycode == platform::kc::X || keycode == platform::kc::V)) {
 
         auto* activeEl = document_->activeElement();
         dom::Element* target = activeEl ? activeEl : document_->body();
 
-        if (keycode == SDLK_V) {
+        if (keycode == platform::kc::V) {
             std::string text = platform::getClipboardText();
 
             dom::ClipboardEvent pasteEvt("paste", true, true);
@@ -232,14 +231,8 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
                 pasteEvt.addItem({"text/plain", {}, text});
             }
             for (const char* mime : {"image/png", "image/bmp", "image/jpeg"}) {
-                if (!SDL_HasClipboardData(mime)) continue;
-                size_t n = 0;
-                void* p = SDL_GetClipboardData(mime, &n);
-                if (p && n > 0) {
-                    auto* bp = static_cast<const uint8_t*>(p);
-                    pasteEvt.addItem({mime, std::vector<uint8_t>(bp, bp + n), ""});
-                }
-                if (p) SDL_free(p);
+                if (auto data = platform::clipboard().getData(mime))
+                    pasteEvt.addItem({mime, std::move(*data), ""});
             }
             pasteEvt.setIsTrusted(true);
             dispatchEvent(target, pasteEvt);
@@ -301,7 +294,7 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
                 }
             }
 
-            std::string evtType = (keycode == SDLK_C) ? "copy" : "cut";
+            std::string evtType = (keycode == platform::kc::C) ? "copy" : "cut";
             dom::ClipboardEvent clipEvt(evtType, true, true);
             clipEvt.setClipboardText(text);
             clipEvt.setIsTrusted(true);
@@ -309,7 +302,7 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
 
             if (!clipEvt.defaultPrevented() && !text.empty() &&
                 platform::setClipboardText(text)) {
-                if (keycode == SDLK_X && fromFormField && activeEl) {
+                if (keycode == platform::kc::X && fromFormField && activeEl) {
                     bool cut = false;
                     if (auto* input = getElInput(activeEl)) {
                         cut = input->cutSelection(activeEl);
@@ -324,7 +317,7 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
                         if (activeEl->document()) activeEl->document()->markDirty();
                         uiDirty_ = true;
                     }
-                } else if (keycode == SDLK_X && !fromFormField) {
+                } else if (keycode == platform::kc::X && !fromFormField) {
                     auto* sel = document_->selection();
                     if (sel && sel->rangeCount() > 0 && !sel->isCollapsed()) {
                         auto* fn = sel->focusNode();
@@ -389,8 +382,8 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
     if (document_) {
         auto* sel = document_->selection();
         if (sel && sel->rangeCount() > 0) {
-            bool shift = (mod & SDL_KMOD_SHIFT) != 0;
-            bool ctrl = util::hasPrimaryMod(mod);
+            bool shift = (mod & platform::kmod::Shift) != 0;
+            bool ctrl = platform::hasPrimaryMod(mod);
             bool handled = false;
 
             auto moveFocus = [&](dom::Node* n, int off) {
@@ -408,35 +401,35 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
 
             bool editable = focusN && inEditableHost(focusN);
 
-            if (editable && ctrl && (keycode == SDLK_Z || keycode == SDLK_Y)) {
-                editHistoryStep(/*redo=*/(keycode == SDLK_Y) || shift);
+            if (editable && ctrl && (keycode == platform::kc::Z || keycode == platform::kc::Y)) {
+                editHistoryStep(/*redo=*/(keycode == platform::kc::Y) || shift);
                 handled = true;
-            } else if (editable && (keycode == SDLK_BACKSPACE || keycode == SDLK_DELETE)) {
-                editDeleteAtCaret(/*backward=*/keycode == SDLK_BACKSPACE);
+            } else if (editable && (keycode == platform::kc::Backspace || keycode == platform::kc::Delete)) {
+                editDeleteAtCaret(/*backward=*/keycode == platform::kc::Backspace);
                 handled = true;
-            } else if (editable && keycode == SDLK_RETURN) {
+            } else if (editable && keycode == platform::kc::Return) {
                 editInsertLineBreak();
                 handled = true;
-            } else if (ctrl && keycode == SDLK_A) {
+            } else if (ctrl && keycode == platform::kc::A) {
                 editSelectAll();
                 handled = true;
             } else if (focusText) {
                 const std::string& data = focusText->data();
                 int len = static_cast<int>(data.size());
-                if (keycode == SDLK_LEFT) {
+                if (keycode == platform::kc::Left) {
                     if (focusO > 0) {
                         moveFocus(focusText, layout::utf8Prev(data, focusO));
                         handled = true;
                     }
-                } else if (keycode == SDLK_RIGHT) {
+                } else if (keycode == platform::kc::Right) {
                     if (focusO < len) {
                         moveFocus(focusText, layout::utf8Next(data, focusO));
                         handled = true;
                     }
-                } else if (keycode == SDLK_HOME) {
+                } else if (keycode == platform::kc::Home) {
                     moveFocus(focusText, 0);
                     handled = true;
-                } else if (keycode == SDLK_END) {
+                } else if (keycode == platform::kc::End) {
                     moveFocus(focusText, len);
                     handled = true;
                 }

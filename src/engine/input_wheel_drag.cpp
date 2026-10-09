@@ -7,7 +7,7 @@
 #include "dom/element.h"
 #include "dom/event.h"
 #include "layout/el_textarea.h"
-#include "util/platform.h"
+#include "platform/wheel.h"
 
 #include <algorithm>
 #include <cmath>
@@ -74,10 +74,10 @@ void Engine::handleWheel(float x, float y, float dx, float dy) {
     dom::Element* target = hitTest(docX, docY);
 
     const float pxPerTick = inputConfig_.scrollSpeed;
-    const float pxX = util::wheelDeltaToPixels(dx, pxPerTick);
-    const float pxY = util::wheelDeltaToPixels(dy, pxPerTick);
-    const float pxV = util::wheelDeltaToPixels(
-        util::verticalWheelDelta(dx, dy), pxPerTick);
+    const float pxX = platform::wheelDeltaToPixels(dx, pxPerTick);
+    const float pxY = platform::wheelDeltaToPixels(dy, pxPerTick);
+    const float pxV = platform::wheelDeltaToPixels(
+        platform::verticalWheelDelta(dx, dy), pxPerTick);
 
     if (target) {
         dom::WheelEvent wheelEvt("wheel", true, true);
@@ -96,7 +96,7 @@ void Engine::handleWheel(float x, float y, float dx, float dy) {
             return;
         }
         // A <terminal> scrolls its history (or reports the wheel to the program).
-        if (terminalWheel(target, docX, docY, util::verticalWheelDelta(dx, dy))) {
+        if (terminalWheel(target, docX, docY, platform::verticalWheelDelta(dx, dy))) {
             uiDirty_ = true;
             return;
         }

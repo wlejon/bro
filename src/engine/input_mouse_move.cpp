@@ -19,7 +19,8 @@
 #include "layout/layout_node_adapter.h"
 #include "layout/selection_geometry.h"
 #include "layout/skia_text_metrics.h"
-#include "platform/sdl_window.h"
+#include "platform/keys.h"
+#include "platform/window.h"
 
 #if BRO_WITH_3D
 #include "layout/draw_traversal.h"
@@ -27,7 +28,6 @@
 #include "scene/html_node.h"
 #endif
 
-#include <SDL3/SDL.h>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -519,10 +519,10 @@ void Engine::dispatchHtmlNodeMouseEvent(const std::string& type,
     evt.setMovementY(static_cast<double>(movY));
     evt.setButton(button);
     evt.setButtons(pressedButtons);
-    evt.setShiftKey((mods & SDL_KMOD_SHIFT) != 0);
-    evt.setCtrlKey ((mods & SDL_KMOD_CTRL ) != 0);
-    evt.setAltKey  ((mods & SDL_KMOD_ALT  ) != 0);
-    evt.setMetaKey ((mods & SDL_KMOD_GUI  ) != 0);
+    evt.setShiftKey((mods & platform::kmod::Shift) != 0);
+    evt.setCtrlKey ((mods & platform::kmod::Ctrl ) != 0);
+    evt.setAltKey  ((mods & platform::kmod::Alt  ) != 0);
+    evt.setMetaKey ((mods & platform::kmod::Gui  ) != 0);
     if (relatedTarget) evt.setRelatedTarget(relatedTarget);
 
     evt.setOffsetX(static_cast<double>(localPxX));

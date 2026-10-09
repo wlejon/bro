@@ -4,6 +4,8 @@
 // not own (a remote viewer, which speaks evdev on the wire) arrives as them
 // anywhere.
 
+#include "platform/keys.h"
+
 #include <cstdint>
 
 namespace bro::platform {
@@ -16,12 +18,12 @@ constexpr uint32_t kEvdevBtnMiddle = 0x112;
 constexpr uint32_t kEvdevBtnSide = 0x113;
 constexpr uint32_t kEvdevBtnExtra = 0x114;
 
-/// The SDL_Scancode (as an int, so this header needs no SDL) for an evdev
-/// KEY_* code; SDL_SCANCODE_UNKNOWN (0) for one with no counterpart.
-int evdevKeyToSdlScancode(uint32_t key);
+/// The Scancode for an evdev KEY_* code; sc::Unknown for one with no
+/// counterpart.
+Scancode evdevKeyToScancode(uint32_t key);
 
-/// The engine's mouse button number (SDL's: 1 left, 2 middle, 3 right, 4 and
-/// 5 the side buttons) for an evdev BTN_* code; other buttons are left (1).
+/// The engine's mouse button number (1 left, 2 middle, 3 right, 4 and 5 the
+/// side buttons) for an evdev BTN_* code; other buttons are left (1).
 int evdevButtonToMouseButton(uint32_t button);
 
 }  // namespace bro::platform

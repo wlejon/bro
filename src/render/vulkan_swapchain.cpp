@@ -1,9 +1,7 @@
 #include "render/vulkan_swapchain.h"
 #include "render/vulkan_context.h"
+#include "platform/window.h"
 #include "util/log.h"
-
-#include <SDL3/SDL.h>
-#include <SDL3/SDL_vulkan.h>
 
 #include <algorithm>
 #include <limits>
@@ -26,7 +24,7 @@ VkSemaphore createBinarySemaphore(VkDevice device) {
 
 } // namespace
 
-VulkanSwapchain::VulkanSwapchain(VulkanContext& context, SDL_Window* window, bool vsync)
+VulkanSwapchain::VulkanSwapchain(VulkanContext& context, platform::Window* window, bool vsync)
     : context_(context), window_(window), wantVsync_(vsync), vsync_(vsync)
 {
 }
@@ -105,25 +103,21 @@ void VulkanSwapchain::cleanup() {
     swapchain_ = VK_NULL_HANDLE;
 
     if (surface_ != VK_NULL_HANDLE && context_.instance() != VK_NULL_HANDLE) {
-        SDL_Vulkan_DestroySurface(context_.instance(), surface_, nullptr);
+        vkDestroySurfaceKHR(context_.instance(), surface_, nullptr);
         surface_ = VK_NULL_HANDLE;
     }
 }
 
 bool VulkanSwapchain::createSurface() {
     if (!window_ || context_.instance() == VK_NULL_HANDLE) return false;
-    if (!SDL_Vulkan_CreateSurface(window_, context_.instance(), nullptr, &surface_)) {
-        LOG_ERROR("SDL_Vulkan_CreateSurface failed: %s", SDL_GetError());
-        return false;
-    }
-    return true;
+    return window_->createVulkanSurface(context_.instance(), &surface_);
 }
 
 bool VulkanSwapchain::windowPixelSize(uint32_t& w, uint32_t& h) const {
     int pw = 0, ph = 0;
-    SDL_GetWindowSizeInPixels(window_, &pw, &ph);
+    window_->getSizeInPixels(pw, ph);
     // A hidden or minimized window shows nothing; presenting to it can block.
-    const bool unseen = (SDL_GetWindowFlags(window_) & (SDL_WINDOW_MINIMIZED | SDL_WINDOW_HIDDEN)) != 0;
+    const bool unseen = window_->isMinimized() || window_->isHidden();
     w = static_cast<uint32_t>(std::max(pw, 0));
     h = static_cast<uint32_t>(std::max(ph, 0));
     return !unseen && w > 0 && h > 0;

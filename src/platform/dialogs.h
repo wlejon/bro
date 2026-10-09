@@ -5,9 +5,43 @@
 #include <string>
 #include <vector>
 
-struct SDL_Window;
-
 namespace bro::platform {
+
+class Window;
+
+/// The native half of a dialog, which the active WindowSystem provides.
+/// Dialogs (below) owns the policy — who answers, filter validation — and
+/// calls this only when a user is there to ask.
+class DialogBackend {
+public:
+    virtual ~DialogBackend() = default;
+
+    /// An OK (or OK / Cancel) message box over `parent` (may be null).
+    /// Answers whether OK was chosen; nullopt when no message box could be
+    /// shown at all.
+    virtual std::optional<bool> messageBox(Window* parent, const std::string& message,
+                                           bool withCancel) = 0;
+
+    struct FileFilter {
+        std::string name;
+        std::string pattern;  // `png;jpg` or `*`, already validated
+    };
+    enum class FileDialogKind { OpenFile, OpenFolder, SaveFile };
+    struct FileDialogRequest {
+        FileDialogKind kind = FileDialogKind::OpenFile;
+        std::vector<FileFilter> filters;  // OpenFile / SaveFile
+        std::string defaultLocation;      // folder, or the save name; "" = none
+        bool allowMultiple = false;       // OpenFile / OpenFolder
+    };
+
+    /// Show a file dialog and block until it is answered, calling `tick`
+    /// repeatedly meanwhile so the app's timers keep running behind it.
+    /// True with the chosen paths (none for a cancel); false when the dialog
+    /// was refused, with the reason in `refusal`.
+    virtual bool fileDialog(Window* parent, const FileDialogRequest& request,
+                            const std::function<void()>& tick,
+                            std::vector<std::string>& picked, std::string& refusal) = 0;
+};
 
 /// Native dialogs as engine operations, with no scripting runtime in sight.
 /// The bronze host layer's `alert`/`confirm`/`prompt`/`show*Dialog` globals and
@@ -22,7 +56,8 @@ class Dialogs {
 public:
     using TickCallback = std::function<void()>;
 
-    static void setWindow(SDL_Window* window);
+    /// The window dialogs are parented on (null for none).
+    static void setWindow(Window* window);
     static void setInteractive(bool interactive);
     /// Called repeatedly while a native dialog is open so timers and pending
     /// jobs keep running behind it. Clear it before the object it captures dies.
@@ -52,8 +87,8 @@ public:
     /// or a bare `*`. Anything else is refused BEFORE a dialog opens: the call
     /// returns false with `refusal` set, which a caller must not report as a
     /// cancel — a cancel is `true` with nothing picked. A refusal reaches the
-    /// script as an exception carrying SDL's own sentence, because the script
-    /// wrote the filter SDL is objecting to.
+    /// script as an exception carrying the refusal's sentence, because the
+    /// script wrote the filter being objected to.
     static bool showOpenFileDialog(const std::string& filter, bool allowMultiple,
                                    std::vector<std::string>& picked, std::string& refusal);
     static bool showOpenFolderDialog(const std::string& defaultLocation, bool allowMultiple,

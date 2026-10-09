@@ -21,7 +21,8 @@
 #include <filesystem>
 #include <fstream>
 
-#include "platform/sdl_window.h"
+#include "platform/window.h"
+#include "platform/window_system.h"
 #include "platform/desktop_platform.h"
 #include "platform/dialogs.h"
 #include "platform/event_loop.h"
@@ -72,6 +73,27 @@
 #include <utility>
 
 namespace bro::engine {
+
+namespace {
+
+// The primary window: headless makes it hidden; a visible one is fitted into
+// its display's work area.
+platform::WindowConfig primaryWindowConfig(const EngineConfig& config, const GraphicsSettings& gfx,
+                                           platform::GraphicsBackend backend) {
+    platform::WindowConfig wc;
+    wc.title = "Bro";
+    wc.width = static_cast<uint32_t>(gfx.width);
+    wc.height = static_cast<uint32_t>(gfx.height);
+    wc.resizable = gfx.resizable;
+    wc.vsync = gfx.vsync;
+    wc.borderless = config.graphics.borderless;
+    wc.backend = backend;
+    wc.fitToWorkArea = true;
+    return wc;
+}
+
+}  // namespace
+
 Engine::Engine(const EngineConfig& config)
     : graphicsConfig_(config.graphics)
     , inputConfig_(config.input)
@@ -81,6 +103,11 @@ Engine::Engine(const EngineConfig& config)
     , viewportScrollbar_(config.viewportScrollbar)
     , elementScrollbar_(config.elementScrollbar)
     , uiFrameIntervalMs_(config.graphics.maxFrameIntervalMs) {
+    // Under DRM bro is the display server: no desktop window system, and so
+    // no SDL video. Chosen before anything asks the platform layer a question.
+    if (displayMode_ == DisplayMode::Drm)
+        platform::selectWindowSystem(platform::WindowSystemKind::Drm);
+
     // Before the raster thread exists: it reads the pointer.
     terminalLayers_ = std::make_shared<TerminalLayers>();
 
@@ -193,21 +220,17 @@ Engine::Engine(const EngineConfig& config)
         try {
             const auto backend = config.graphics.useGPU ? platform::GraphicsBackend::Vulkan
                                                         : platform::GraphicsBackend::Software;
+            platform::WindowConfig wc = primaryWindowConfig(config, gfx, backend);
+            wc.hidden = true;
             try {
-                window_ = std::make_unique<platform::Window>("Bro",
-                    static_cast<uint32_t>(gfx.width),
-                    static_cast<uint32_t>(gfx.height), /*hidden=*/true,
-                    gfx.resizable, gfx.vsync, config.graphics.borderless, backend);
+                window_ = platform::createWindow(wc);
             } catch (const std::exception& e) {
-                // When Vulkan window creation is not supported by the SDL video driver (e.g. dummy driver
+                // When the video driver cannot create Vulkan windows (e.g. SDL's dummy driver
                 // on headless Linux), fall back to a software window so headless still has a primary window.
                 LOG_INFO("Headless window creation with %s backend failed (%s); falling back to Software backend",
                          backend == platform::GraphicsBackend::Vulkan ? "Vulkan" : "Software", e.what());
-                window_ = std::make_unique<platform::Window>("Bro",
-                    static_cast<uint32_t>(gfx.width),
-                    static_cast<uint32_t>(gfx.height), /*hidden=*/true,
-                    gfx.resizable, gfx.vsync, config.graphics.borderless,
-                    platform::GraphicsBackend::Software);
+                wc.backend = platform::GraphicsBackend::Software;
+                window_ = platform::createWindow(wc);
             }
 
             const auto& wcfg = config.graphics;
@@ -246,10 +269,7 @@ Engine::Engine(const EngineConfig& config)
         try {
             const auto backend = config.graphics.useGPU ? platform::GraphicsBackend::Vulkan
                                                         : platform::GraphicsBackend::Software;
-            window_ = std::make_unique<platform::Window>("Bro",
-                static_cast<uint32_t>(gfx.width),
-                static_cast<uint32_t>(gfx.height), false,
-                gfx.resizable, gfx.vsync, config.graphics.borderless, backend);
+            window_ = platform::createWindow(primaryWindowConfig(config, gfx, backend));
 
             const auto& wcfg = config.graphics;
             if (wcfg.alwaysOnTop) window_->setAlwaysOnTop(true);
@@ -286,10 +306,10 @@ Engine::Engine(const EngineConfig& config)
                 render::VulkanContextConfig vkCfg;
                 vkCfg.headless = false;
                 vulkanContext_ = std::make_unique<render::VulkanContext>(vkCfg);
-                if (!window_->getSDLWindow() || !vulkanContext_->init(window_->getSDLWindow())) {
+                if (!vulkanContext_->init(window_.get())) {
                     throw std::runtime_error("Windowed Vulkan context initialization failed");
                 }
-                vulkanSwapchain_ = std::make_unique<render::VulkanSwapchain>(*vulkanContext_, window_->getSDLWindow(), gfx.vsync);
+                vulkanSwapchain_ = std::make_unique<render::VulkanSwapchain>(*vulkanContext_, window_.get(), gfx.vsync);
                 if (!vulkanSwapchain_->init()) {
                     throw std::runtime_error("Windowed Vulkan swapchain initialization failed");
                 }
@@ -401,7 +421,7 @@ Engine::Engine(const EngineConfig& config)
     textMetrics_ = std::make_unique<layout::SkiaTextMetrics>(renderer_.get());
 
     if (displayMode_ == DisplayMode::Windowed) {
-        eventLoop_ = std::make_unique<platform::EventLoop>();
+        eventLoop_ = platform::windowSystem().createEventLoop();
     }
 
     // Native dialogs parent on the window and tick timers while they are up.
@@ -409,7 +429,7 @@ Engine::Engine(const EngineConfig& config)
     // answer themselves (see platform::Dialogs) instead of blocking on a
     // window nobody sees. Set before any script runs: the first alert() an
     // app's boot script reaches must already know there is no one to ask.
-    platform::Dialogs::setWindow(window_ ? window_->getSDLWindow() : nullptr);
+    platform::Dialogs::setWindow(window_.get());
     platform::Dialogs::setInteractive(displayMode_ == DisplayMode::Windowed);
     platform::Dialogs::setTickCallback([this]() { tickTimersOnly(); });
 

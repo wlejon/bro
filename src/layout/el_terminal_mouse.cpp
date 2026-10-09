@@ -24,7 +24,7 @@ namespace bro::layout {
 
 namespace {
 
-constexpr int kModShift = 0x0001 | 0x0002;  // SDL_KMOD_LSHIFT | RSHIFT
+constexpr int kModShift = 0x0001 | 0x0002;  // platform::kmod::LShift | RShift
 constexpr int kModCtrl = 0x0040 | 0x0080;
 constexpr int kModAlt = 0x0100 | 0x0200;
 constexpr int kModGui = 0x0400 | 0x0800;

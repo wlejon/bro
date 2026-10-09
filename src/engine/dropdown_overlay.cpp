@@ -1,6 +1,7 @@
 #include "engine/dropdown_overlay.h"
 
-#include <SDL3/SDL_keycode.h>
+#include "platform/keys.h"
+
 #include <algorithm>
 
 namespace bro::engine {
@@ -118,15 +119,15 @@ bool DropdownOverlay::onMouseMove(float x, float y) {
 bool DropdownOverlay::onKeyDown(int keycode, int /*mod*/) {
     if (options_.empty()) return false;
     int n = static_cast<int>(options_.size());
-    if (keycode == SDLK_DOWN) {
+    if (keycode == platform::kc::Down) {
         highlightedIndex_ = std::min(n - 1, highlightedIndex_ + 1);
         return true;
     }
-    if (keycode == SDLK_UP) {
+    if (keycode == platform::kc::Up) {
         highlightedIndex_ = std::max(0, highlightedIndex_ - 1);
         return true;
     }
-    if (keycode == SDLK_RETURN || keycode == SDLK_KP_ENTER) {
+    if (keycode == platform::kc::Return || keycode == platform::kc::KpEnter) {
         if (highlightedIndex_ >= 0 && highlightedIndex_ < n) {
             if (onSelect_) onSelect_(highlightedIndex_);
         }

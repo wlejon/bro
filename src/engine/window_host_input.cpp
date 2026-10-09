@@ -1,7 +1,7 @@
 // Per-window input routing — the engine side of "a secondary window is a real
 // window you can actually use".
 //
-// Every input event SDL delivers carries a windowID. The main window keeps the
+// Every input event the event loop delivers carries a windowID. The main window keeps the
 // full pipeline it always had (overlays → system panels → inspector → gizmo →
 // scrollbars → app document); an event on a bro.window.open() secondary lands
 // here instead and is dispatched against THAT window's isolated document,
@@ -42,12 +42,11 @@
 #include "layout/el_textarea.h"
 #include "layout/key_handle_result.h"
 #include "layout/layout_node_adapter.h"
-#include "platform/sdl_window.h"
+#include "platform/keys.h"
+#include "platform/wheel.h"
+#include "platform/window.h"
 #include "util/log.h"
-#include "util/platform.h"
 #include "util/time.h"
-
-#include <SDL3/SDL.h>
 
 #include <algorithm>
 #include <cmath>
@@ -197,12 +196,12 @@ void Engine::windowHostUpdateCursor(WindowHost& h, dom::Element* target) {
     }
     platform::CursorShape shape = cursorShapeFromCss(css);
     h.resolvedCursor = cursorShapeName(shape);
-    // Window::setCursor caches the last shape PER WINDOW (sdl_window.h), so
+    // A window's Cursor caches the last shape PER WINDOW (platform/window.h), so
     // setting the host's cursor cannot disturb the main window's, and a
     // repeated shape costs nothing. Pointer lock is main-window-only in v1, so
     // there is no relative-mouse-mode case to skip here.
     if (displayMode_ == DisplayMode::Windowed && h.window)
-        h.window->setCursor(shape);
+        h.window->cursor().setShape(shape);
 }
 
 // ---------------------------------------------------------------------------
@@ -238,7 +237,7 @@ void Engine::hostMouseDown(uint64_t hostId, float x, float y, int sdlButton) {
                                   util::currentTimeMs(),
                                   inputConfig_.doubleClickThresholdMs,
                                   inputConfig_.doubleClickDistancePx);
-    intent.extend = (mod & SDL_KMOD_SHIFT) != 0;
+    intent.extend = (mod & platform::kmod::Shift) != 0;
 
     // Drag-selection inside this window's text controls. Per-window, so a drag
     // in a palette window cannot extend a selection in the main app.
@@ -462,28 +461,29 @@ void Engine::hostKeyDown(uint64_t hostId, int keycode, int scancode, int mod,
     if (handleGlobalHotkey(keycode, mod, repeat)) return;
 
     // A caret-moving or command key commits an in-progress composition first.
-    if (util::hasPrimaryMod(mod) ||
-        keycode == SDLK_LEFT || keycode == SDLK_RIGHT ||
-        keycode == SDLK_UP || keycode == SDLK_DOWN ||
-        keycode == SDLK_HOME || keycode == SDLK_END ||
-        keycode == SDLK_BACKSPACE || keycode == SDLK_DELETE ||
-        keycode == SDLK_RETURN || keycode == SDLK_KP_ENTER ||
-        keycode == SDLK_TAB || keycode == SDLK_ESCAPE) {
+    namespace kc = platform::kc;
+    if (platform::hasPrimaryMod(mod) ||
+        keycode == kc::Left || keycode == kc::Right ||
+        keycode == kc::Up || keycode == kc::Down ||
+        keycode == kc::Home || keycode == kc::End ||
+        keycode == kc::Backspace || keycode == kc::Delete ||
+        keycode == kc::Return || keycode == kc::KpEnter ||
+        keycode == kc::Tab || keycode == kc::Escape) {
         windowHostCommitComposition(h);
     }
 
     // Tab: dispatch first, advance focus within THIS document unless prevented.
-    if (keycode == SDLK_TAB) {
+    if (keycode == kc::Tab) {
         auto evt = makeKeyboardEvent("keydown", keycode, scancode, mod, repeat);
         dom::Element* target = h.document->activeElement();
         if (!target) target = h.document->body();
         if (target) windowHostDispatch(h, target, evt);
-        if (!evt.defaultPrevented()) windowHostAdvanceFocus(h, (mod & SDL_KMOD_SHIFT) != 0);
+        if (!evt.defaultPrevented()) windowHostAdvanceFocus(h, (mod & platform::kmod::Shift) != 0);
         return;
     }
 
     // Escape with a top layer: a close request to its topmost entry.
-    if (keycode == SDLK_ESCAPE && !h.document->topLayer().empty()) {
+    if (keycode == kc::Escape &&!h.document->topLayer().empty()) {
         auto evt = makeKeyboardEvent("keydown", keycode, scancode, mod, repeat);
         dom::Element* target = h.document->activeElement();
         if (!target) target = h.document->body();
@@ -660,12 +660,10 @@ void Engine::windowHostUpdateTextInputArea(WindowHost& h) {
     if (!have) return;
     // No engine inset to fold back in: a host window's control-draw space IS
     // its window space.
-    SDL_Rect rect;
-    rect.x = static_cast<int>(std::lround(x));
-    rect.y = static_cast<int>(std::lround(y));
-    rect.w = static_cast<int>(std::lround(std::max(1.0f, w)));
-    rect.h = static_cast<int>(std::lround(std::max(1.0f, ht)));
-    SDL_SetTextInputArea(h.window->getSDLWindow(), &rect, 0);
+    h.window->textInput().setArea(static_cast<int>(std::lround(x)),
+                                  static_cast<int>(std::lround(y)),
+                                  static_cast<int>(std::lround(std::max(1.0f, w))),
+                                  static_cast<int>(std::lround(std::max(1.0f, ht))), 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -680,16 +678,16 @@ void Engine::hostWheel(uint64_t hostId, float x, float y, float dx, float dy) {
     dom::Element* target = windowHostHitTest(h, x, y);
 
     const float pxPerTick = inputConfig_.scrollSpeed;
-    const float pxX = util::wheelDeltaToPixels(dx, pxPerTick);
-    const float pxY = util::wheelDeltaToPixels(dy, pxPerTick);
-    const float pxV = util::wheelDeltaToPixels(util::verticalWheelDelta(dx, dy),
-                                               pxPerTick);
+    const float pxX = platform::wheelDeltaToPixels(dx, pxPerTick);
+    const float pxY = platform::wheelDeltaToPixels(dy, pxPerTick);
+    const float pxV = platform::wheelDeltaToPixels(platform::verticalWheelDelta(dx, dy),
+                                                   pxPerTick);
 
     if (target) {
         dom::WheelEvent wheelEvt("wheel", true, true);
         populateMouseEvent(wheelEvt, x, y, -1, h.pressedButtons, 0.0f, 0.0f,
                            0.0f, currentModState(), 0.0f);
-        // SDL's positive wheel.y is "scroll up"; the DOM's positive deltaY is
+        // The event loop's positive wheel y is "scroll up"; the DOM's positive deltaY is
         // "toward the bottom of the content". Negate, as handleWheel does.
         wheelEvt.setDeltaX(static_cast<double>(-pxX));
         wheelEvt.setDeltaY(static_cast<double>(-pxY));

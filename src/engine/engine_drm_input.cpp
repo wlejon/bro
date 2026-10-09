@@ -28,12 +28,11 @@
 #include "engine/engine_drm.h"
 #include "engine/key_mapping.h"
 #include "platform/desktop_hotkeys.h"
-#include "util/platform.h"
+#include "platform/keys.h"
 #include "util/time.h"
 
 #if defined(__linux__) && BRO_WITH_SEAT && BRO_WITH_DMABUF
 #include "platform/drm_input.h"
-#include <SDL3/SDL_keycode.h>
 #include <linux/input-event-codes.h>
 #endif
 #if BRO_WITH_COMPOSITOR
@@ -85,12 +84,12 @@ uint32_t waylandButton(const platform::DrmInputEvent& ev) {
     return BTN_LEFT;
 }
 
-uint32_t wmModifiers(int32_t sdlMods) {
+uint32_t wmModifiers(int32_t mods) {
     uint32_t m = 0;
-    if (sdlMods & SDL_KMOD_SHIFT) m |= brocompositor::modifier::Shift;
-    if (sdlMods & SDL_KMOD_CTRL) m |= brocompositor::modifier::Ctrl;
-    if (sdlMods & SDL_KMOD_ALT) m |= brocompositor::modifier::Alt;
-    if (sdlMods & SDL_KMOD_GUI) m |= brocompositor::modifier::Super;
+    if (mods & platform::kmod::Shift) m |= brocompositor::modifier::Shift;
+    if (mods & platform::kmod::Ctrl) m |= brocompositor::modifier::Ctrl;
+    if (mods & platform::kmod::Alt) m |= brocompositor::modifier::Alt;
+    if (mods & platform::kmod::Gui) m |= brocompositor::modifier::Super;
     return m;
 }
 
@@ -131,7 +130,7 @@ void Engine::dispatchDrmInput(const platform::DrmInputEvent& ev) {
 // True when the event was consumed by a hotkey or went to a client only.
 bool Engine::routeDrmKey(const platform::DrmInputEvent& ev) {
     const bool down = ev.type == EvType::KeyDown;
-    auto hk = platform::desktop::hotkeyKeyFromSdl(ev.keycode, ev.scancode, ev.modifiers, down, ev.repeat);
+    auto hk = platform::desktop::hotkeyKeyFromKeyEvent(ev.keycode, ev.scancode, ev.modifiers, down, ev.repeat);
     auto routed = platform::desktop::routeHotkeyKey(hk);
     if (routed.consumed) return true;
 
@@ -345,7 +344,7 @@ void Engine::deliverDrmInputToShell(const platform::DrmInputEvent& ev) {
     switch (ev.type) {
         case EvType::KeyDown: {
             handleKeyDown(ev.keycode, ev.scancode, ev.modifiers, ev.repeat);
-            if (!util::hasPrimaryMod(ev.modifiers)) {
+            if (!platform::hasPrimaryMod(ev.modifiers)) {
                 std::string webKey = sdlKeycodeToWebKey(ev.keycode, ev.modifiers);
                 if (webKey.size() == 1) handleTextInput(webKey);
             }

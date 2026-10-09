@@ -17,9 +17,8 @@
 #include "layout/selection_geometry.h"
 #include "layout/skia_text_metrics.h"
 #include "util/time.h"
-#include "platform/sdl_window.h"
+#include "platform/window.h"
 
-#include <SDL3/SDL.h>
 #include <cmath>
 #include <cstring>
 
@@ -256,12 +255,11 @@ void Engine::updateTextInputArea() {
         }
     }
     if (!have) return;
-    SDL_Rect rect;
-    rect.x = static_cast<int>(std::lround(x));
-    rect.y = static_cast<int>(std::lround(y + static_cast<float>(contentTop())));
-    rect.w = static_cast<int>(std::lround(std::max(1.0f, w)));
-    rect.h = static_cast<int>(std::lround(std::max(1.0f, h)));
-    SDL_SetTextInputArea(window_->getSDLWindow(), &rect, 0);
+    const int rx = static_cast<int>(std::lround(x));
+    const int ry = static_cast<int>(std::lround(y + static_cast<float>(contentTop())));
+    const int rw = static_cast<int>(std::lround(std::max(1.0f, w)));
+    const int rh = static_cast<int>(std::lround(std::max(1.0f, h)));
+    window_->textInput().setArea(rx, ry, rw, rh, 0);
 }
 
 void Engine::handleTextEditing(const std::string& text, int start,

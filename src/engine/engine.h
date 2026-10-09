@@ -137,8 +137,8 @@ public:
     // Gamepads (gamepad.cpp)
     void handleGamepadAdded(uint32_t instanceId);
     void handleGamepadRemoved(uint32_t instanceId);
-    void handleGamepadButton(uint32_t instanceId, int sdlButton, bool down);
-    void handleGamepadAxis(uint32_t instanceId, int sdlAxis, float value);
+    void handleGamepadButton(uint32_t instanceId, int button, bool down);  // platform::GamepadButton
+    void handleGamepadAxis(uint32_t instanceId, int axis, float value);    // platform::GamepadAxis
     int  gamepadConnectVirtual(const std::string& id);
     bool gamepadDisconnectVirtual(int index);
     bool gamepadSetVirtualButton(int index, int w3cButton, bool pressed, float value);

@@ -1,6 +1,6 @@
 #include "engine/overlay.h"
 
-#include <SDL3/SDL_keycode.h>
+#include "platform/keys.h"
 
 namespace bro::engine {
 
@@ -96,7 +96,7 @@ bool OverlayManager::handleWheel(float x, float y, float dx, float dy) {
 
 bool OverlayManager::handleKeyDown(int keycode, int mod) {
     if (!active_) return false;
-    if (keycode == SDLK_ESCAPE && active_->dismissesOnEscape()) {
+    if (keycode == platform::kc::Escape && active_->dismissesOnEscape()) {
         close();
         return true;
     }

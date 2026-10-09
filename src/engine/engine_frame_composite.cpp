@@ -12,7 +12,7 @@
 
 #include "canvas/canvas_scene.h"
 #include "dom/element.h"
-#include "platform/sdl_window.h"
+#include "platform/window.h"
 #include "render/pixel_convert.h"
 #include "render/vulkan_context.h"
 #include "render/vulkan_presenter.h"

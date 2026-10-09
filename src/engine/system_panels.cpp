@@ -11,8 +11,9 @@
 #include "engine/settings.h"
 #include "engine/key_mapping.h"
 #include "engine/overflow.h"
-#include "util/platform.h"
-#include <SDL3/SDL.h>
+#include "platform/keys.h"
+#include "platform/wheel.h"
+#include "platform/window_system.h"
 #include <algorithm>
 #include <chrono>
 #include <thread>
@@ -30,7 +31,7 @@
 #include "dom/event.h"
 #include "dom/event_dispatch.h"
 #include "canvas/canvas_scene.h"
-#include "platform/sdl_window.h"
+#include "platform/window.h"
 #include "platform/event_loop.h"
 #if BRO_WITH_3D
 #include "scene/scene_renderer.h"
@@ -457,7 +458,7 @@ void Engine::renderSplashImmediate() {
     beginFrameComposite();
     compositeLayers(systemLayers);
     presentCurrentFrame();
-    SDL_PumpEvents();
+    platform::pumpEvents();
 }
 
 void Engine::pumpSplashFrame(double dtMs) {
@@ -469,7 +470,7 @@ void Engine::pumpSplashFrame(double dtMs) {
     if (eventLoop_) {
         eventLoop_->pollEvents();
     } else {
-        SDL_PumpEvents();
+        platform::pumpEvents();
     }
     fireFrameCallbacks(dtMs > 0.0 ? dtMs : 16.67);
     tickSystemPanels(now);
@@ -485,7 +486,7 @@ void Engine::pumpEventsOnly() {
     if (eventLoop_) {
         eventLoop_->pollEvents();
     } else {
-        SDL_PumpEvents();
+        platform::pumpEvents();
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(16));
 }
@@ -708,7 +709,7 @@ bool Engine::systemHandleMouseDown(float x, float y, int button) {
                                           util::currentTimeMs(),
                                           inputConfig_.doubleClickThresholdMs,
                                           inputConfig_.doubleClickDistancePx);
-            intent.extend = (currentModState() & SDL_KMOD_SHIFT) != 0;
+            intent.extend = (currentModState() & platform::kmod::Shift) != 0;
 
             controlDragElement_.reset();
             if (button == 0 &&
@@ -833,10 +834,10 @@ bool Engine::systemHandleKeyDown(int keycode, int scancode, int mod, bool repeat
         dom::KeyboardEvent evt("keydown");
         evt.setKey(sdlKeycodeToWebKey(keycode, mod));
         evt.setCode(sdlScancodeToWebCode(scancode));
-        evt.setCtrlKey((mod & SDL_KMOD_CTRL) != 0);
-        evt.setShiftKey((mod & SDL_KMOD_SHIFT) != 0);
-        evt.setAltKey((mod & SDL_KMOD_ALT) != 0);
-        evt.setMetaKey((mod & SDL_KMOD_GUI) != 0);
+        evt.setCtrlKey((mod & platform::kmod::Ctrl) != 0);
+        evt.setShiftKey((mod & platform::kmod::Shift) != 0);
+        evt.setAltKey((mod & platform::kmod::Alt) != 0);
+        evt.setMetaKey((mod & platform::kmod::Gui) != 0);
         evt.setRepeat(repeat);
         evt.setIsTrusted(true);
         dom::dispatchDomEvent(body, evt);
@@ -859,8 +860,8 @@ bool Engine::systemHandleWheel(float x, float y, float dx, float dy) {
             if (overflowScrollable(ov)) {
                 float maxST = maxScrollTop(el);
                 if (maxST > 0) {
-                    float scrollPx = -util::wheelDeltaToPixels(
-                        util::verticalWheelDelta(dx, dy), inputConfig_.scrollSpeed);
+                    float scrollPx = -platform::wheelDeltaToPixels(
+                        platform::verticalWheelDelta(dx, dy), inputConfig_.scrollSpeed);
                     float prev = el->scrollTopValue();
                     float next = std::clamp(prev + scrollPx, 0.0f, maxST);
                     if (next != prev) {
@@ -889,10 +890,10 @@ bool Engine::systemHandleKeyUp(int keycode, int scancode, int mod, bool repeat) 
         dom::KeyboardEvent evt("keyup");
         evt.setKey(sdlKeycodeToWebKey(keycode, mod));
         evt.setCode(sdlScancodeToWebCode(scancode));
-        evt.setCtrlKey((mod & SDL_KMOD_CTRL) != 0);
-        evt.setShiftKey((mod & SDL_KMOD_SHIFT) != 0);
-        evt.setAltKey((mod & SDL_KMOD_ALT) != 0);
-        evt.setMetaKey((mod & SDL_KMOD_GUI) != 0);
+        evt.setCtrlKey((mod & platform::kmod::Ctrl) != 0);
+        evt.setShiftKey((mod & platform::kmod::Shift) != 0);
+        evt.setAltKey((mod & platform::kmod::Alt) != 0);
+        evt.setMetaKey((mod & platform::kmod::Gui) != 0);
         evt.setRepeat(repeat);
         evt.setIsTrusted(true);
         dom::dispatchDomEvent(body, evt);

@@ -3,7 +3,7 @@
 #include "engine/engine.h"
 #include "engine/gamepad.h"
 #include "engine/window_host.h"
-#include <SDL3/SDL.h>
+#include "platform/keyboard.h"
 #include <string>
 #include <vector>
 
@@ -13,8 +13,8 @@ namespace {
 
 int scancodeForKeycode(int keycode) {
     if (keycode == 0) return 0;
-    return static_cast<int>(SDL_GetScancodeFromKey(
-        static_cast<SDL_Keycode>(keycode), nullptr));
+    return static_cast<int>(platform::keyboard().scancodeFromKey(
+        static_cast<platform::Keycode>(keycode), nullptr));
 }
 
 int gamepadResolveIndex(Value arg, int (*fromName)(const std::string&)) {

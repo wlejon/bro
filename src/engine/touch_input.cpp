@@ -35,9 +35,9 @@
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/event.h"
+#include "platform/keys.h"
 #include "util/time.h"
 
-#include <SDL3/SDL.h>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -103,10 +103,10 @@ bool Engine::dispatchTouchPointerEvent(const char* type, const TouchContact& c,
         pe.setButton(isMove ? -1 : 0);
         pe.setButtons(ends ? 0 : 1);
         int mod = currentModState();
-        pe.setCtrlKey((mod & SDL_KMOD_CTRL) != 0);
-        pe.setShiftKey((mod & SDL_KMOD_SHIFT) != 0);
-        pe.setAltKey((mod & SDL_KMOD_ALT) != 0);
-        pe.setMetaKey((mod & SDL_KMOD_GUI) != 0);
+        pe.setCtrlKey((mod & platform::kmod::Ctrl) != 0);
+        pe.setShiftKey((mod & platform::kmod::Shift) != 0);
+        pe.setAltKey((mod & platform::kmod::Alt) != 0);
+        pe.setMetaKey((mod & platform::kmod::Gui) != 0);
         pe.setPointerId(c.pointerId);
         pe.setPointerType("touch");
         pe.setIsPrimaryPointer(c.primary);
@@ -171,10 +171,10 @@ bool Engine::dispatchTouchEvent(const char* type, const TouchContact& changed,
     evt.addChangedTouch(makePoint(changed, target));
 
     int mod = currentModState();
-    evt.setCtrlKey((mod & SDL_KMOD_CTRL) != 0);
-    evt.setShiftKey((mod & SDL_KMOD_SHIFT) != 0);
-    evt.setAltKey((mod & SDL_KMOD_ALT) != 0);
-    evt.setMetaKey((mod & SDL_KMOD_GUI) != 0);
+    evt.setCtrlKey((mod & platform::kmod::Ctrl) != 0);
+    evt.setShiftKey((mod & platform::kmod::Shift) != 0);
+    evt.setAltKey((mod & platform::kmod::Alt) != 0);
+    evt.setMetaKey((mod & platform::kmod::Gui) != 0);
 
     dom::dispatchDomEvent(target, evt);
     return evt.defaultPrevented();
@@ -210,10 +210,10 @@ void Engine::dispatchCompatMouseForTap(const TouchContact& c) {
         evt.setPageY(static_cast<double>(clientY + scrollY_));
         evt.setButton(0);
         evt.setButtons(buttons);
-        evt.setCtrlKey((mod & SDL_KMOD_CTRL) != 0);
-        evt.setShiftKey((mod & SDL_KMOD_SHIFT) != 0);
-        evt.setAltKey((mod & SDL_KMOD_ALT) != 0);
-        evt.setMetaKey((mod & SDL_KMOD_GUI) != 0);
+        evt.setCtrlKey((mod & platform::kmod::Ctrl) != 0);
+        evt.setShiftKey((mod & platform::kmod::Shift) != 0);
+        evt.setAltKey((mod & platform::kmod::Alt) != 0);
+        evt.setMetaKey((mod & platform::kmod::Gui) != 0);
         if (target) applyMouseOffset(evt, target);
     };
 

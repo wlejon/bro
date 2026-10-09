@@ -1,10 +1,7 @@
 #include "platform/drm_input.h"
 #include "platform/drm_seat.h"
 #include "platform/evdev_keymap.h"
-
-#include <SDL3/SDL_keyboard.h>
-#include <SDL3/SDL_keycode.h>
-#include <SDL3/SDL_scancode.h>
+#include "platform/keys.h"
 
 #include <algorithm>
 
@@ -120,17 +117,20 @@ int DrmInputPlatform::pollFd() const {
 }
 
 DrmInputEvent DrmInputPlatform::keyEvent(uint32_t key, bool pressed) {
-    const SDL_Scancode scancode = static_cast<SDL_Scancode>(evdevKeyToSdlScancode(key));
-    const SDL_Keycode keycode = SDL_GetKeyFromScancode(scancode, SDL_KMOD_NONE, true);
+    // The seat has no layout of its own yet: keys mean what they mean on
+    // US-QWERTY (a client of the shell's compositor gets the raw key and
+    // applies its own keymap).
+    const Scancode scancode = evdevKeyToScancode(key);
+    const Keycode keycode = defaultKeyFromScancode(scancode);
 
-    auto track = [&](SDL_Keymod bit) {
+    auto track = [&](KeyMods bit) {
         if (pressed) modifiers_ |= bit;
         else modifiers_ &= ~bit;
     };
-    if (scancode == SDL_SCANCODE_LSHIFT || scancode == SDL_SCANCODE_RSHIFT) track(SDL_KMOD_SHIFT);
-    else if (scancode == SDL_SCANCODE_LCTRL || scancode == SDL_SCANCODE_RCTRL) track(SDL_KMOD_CTRL);
-    else if (scancode == SDL_SCANCODE_LALT || scancode == SDL_SCANCODE_RALT) track(SDL_KMOD_ALT);
-    else if (scancode == SDL_SCANCODE_LGUI || scancode == SDL_SCANCODE_RGUI) track(SDL_KMOD_GUI);
+    if (scancode == sc::LShift || scancode == sc::RShift) track(kmod::Shift);
+    else if (scancode == sc::LCtrl || scancode == sc::RCtrl) track(kmod::Ctrl);
+    else if (scancode == sc::LAlt || scancode == sc::RAlt) track(kmod::Alt);
+    else if (scancode == sc::LGui || scancode == sc::RGui) track(kmod::Gui);
 
     DrmInputEvent out;
     out.type = pressed ? DrmInputEvent::Type::KeyDown : DrmInputEvent::Type::KeyUp;

@@ -21,8 +21,8 @@
 #include "layout/layout_node_adapter.h"
 #include "layout/selection_geometry.h"
 #include "layout/skia_text_metrics.h"
-#include "platform/sdl_window.h"
-#include "util/platform.h"
+#include "platform/keys.h"
+#include "platform/window.h"
 #include "util/time.h"
 
 #if BRO_WITH_3D
@@ -30,7 +30,6 @@
 #include "scene/html_node.h"
 #endif
 
-#include <SDL3/SDL.h>
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -238,7 +237,7 @@ void Engine::handleMouseDown(float x, float y, int button) {
                                       util::currentTimeMs(),
                                       inputConfig_.doubleClickThresholdMs,
                                       inputConfig_.doubleClickDistancePx);
-        intent.extend = (mod & SDL_KMOD_SHIFT) != 0;
+        intent.extend = (mod & platform::kmod::Shift) != 0;
 
         controlDragElement_.reset();
         if (button == 0 && isCaretControl(target)) {
@@ -510,7 +509,7 @@ void Engine::updateCursorFromHover(dom::Element* target) {
         }
     }
     if (displayMode_ == DisplayMode::Windowed && window_ && !lockedElement_.get()) {
-        window_->setCursor(shape);
+        window_->cursor().setShape(shape);
     }
 }
 
@@ -523,7 +522,7 @@ bool Engine::requestPointerLock(dom::Element* target) {
     lockedMouseY_ = lastMouseY_;
 
     if (window_) {
-        SDL_SetWindowRelativeMouseMode(window_->getSDLWindow(), true);
+        window_->cursor().setRelativeMode(true);
     }
 
     if (document_ && document_->documentElement()) {
@@ -560,8 +559,8 @@ void Engine::exitPointerLock() {
     lockedElement_.reset();
 
     if (window_) {
-        SDL_WarpMouseInWindow(window_->getSDLWindow(), lockedMouseX_, lockedMouseY_);
-        SDL_SetWindowRelativeMouseMode(window_->getSDLWindow(), false);
+        window_->cursor().warp(lockedMouseX_, lockedMouseY_);
+        window_->cursor().setRelativeMode(false);
     }
 
     if (document_ && document_->documentElement()) {

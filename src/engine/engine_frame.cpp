@@ -26,7 +26,7 @@
 #include "audio_inference/audio_inference.h"
 #include "platform/desktop_platform.h"
 #include "platform/event_loop.h"
-#include "platform/sdl_window.h"
+#include "platform/window.h"
 #include "bronze_host/native_window.h"
 #include "render/skia_backend.h"
 
@@ -38,8 +38,6 @@
 #include "util/interrupt.h"
 #include "util/log.h"
 #include "util/time.h"
-
-#include <SDL3/SDL.h>
 
 #include <algorithm>
 #include <chrono>
@@ -97,15 +95,6 @@ void Engine::pumpWebGLContextEvents() {
 double Engine::serverUptime() const {
     if (serverStartTime_ <= 0.0) return 0.0;
     return (util::currentTimeMs() - serverStartTime_) / 1000.0;
-}
-
-static bool modalEventWatcher(void* userdata, SDL_Event* event)
-{
-    if (event->type >= SDL_EVENT_WINDOW_FIRST &&
-        event->type <= SDL_EVENT_WINDOW_LAST) {
-        static_cast<Engine*>(userdata)->tickTimersOnly();
-    }
-    return true;
 }
 
 void Engine::run() {
@@ -276,8 +265,7 @@ void Engine::run() {
     eventLoop_->onSystemThemeChanged = [this]() { applyColorScheme(); };
     eventLoop_->onDisplayScaleChanged = [this, mainWin](uint32_t id) { if (mainWin(id)) handleDisplayScaleChanged(); };
 
-    windowFocused_ =
-        (SDL_GetWindowFlags(window_->getSDLWindow()) & SDL_WINDOW_INPUT_FOCUS) != 0;
+    windowFocused_ = window_->isFocused();
 
     rasterReady_.store(false, std::memory_order_relaxed);
 
@@ -288,7 +276,7 @@ void Engine::run() {
     rasterThread_ = std::thread(&Engine::rasterThreadFunc, this);
     rasterReady_.wait(false, std::memory_order_acquire);
 
-    SDL_AddEventWatch(modalEventWatcher, this);
+    eventLoop_->setModalWindowEventHook([this]() { tickTimersOnly(); });
     startControl();
 
     while (running_) {
@@ -511,7 +499,7 @@ void Engine::run() {
 }
 
 void Engine::removeModalEventWatch() {
-    SDL_RemoveEventWatch(modalEventWatcher, this);
+    if (eventLoop_) eventLoop_->setModalWindowEventHook(nullptr);
 }
 
 void Engine::flushLayoutForRead(dom::Document* doc) {

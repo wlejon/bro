@@ -1,119 +1,121 @@
 #include "terminal/term_keys.h"
 
-#include <SDL3/SDL_keyboard.h>
-#include <SDL3/SDL_keycode.h>
+#include "platform/keyboard.h"
+#include "platform/keys.h"
 
 namespace bro::terminal {
 
 using bropty::Key;
+namespace kc = platform::kc;
+namespace kmod = platform::kmod;
 
 bropty::KeyMods translateMods(int m) {
     bropty::KeyMods out = bropty::Mod_None;
-    if (m & SDL_KMOD_SHIFT) out |= bropty::Mod_Shift;
-    if (m & SDL_KMOD_CTRL) out |= bropty::Mod_Ctrl;
-    if (m & SDL_KMOD_ALT) out |= bropty::Mod_Alt;
-    if (m & SDL_KMOD_GUI) out |= bropty::Mod_Super;
-    if (m & SDL_KMOD_CAPS) out |= bropty::Mod_CapsLock;
-    if (m & SDL_KMOD_NUM) out |= bropty::Mod_NumLock;
+    if (m & kmod::Shift) out |= bropty::Mod_Shift;
+    if (m & kmod::Ctrl) out |= bropty::Mod_Ctrl;
+    if (m & kmod::Alt) out |= bropty::Mod_Alt;
+    if (m & kmod::Gui) out |= bropty::Mod_Super;
+    if (m & kmod::Caps) out |= bropty::Mod_CapsLock;
+    if (m & kmod::Num) out |= bropty::Mod_NumLock;
     return out;
 }
 
 namespace {
 
-Key functionalKey(SDL_Keycode k) {
+Key functionalKey(platform::Keycode k) {
     switch (k) {
-        case SDLK_ESCAPE: return Key::Escape;
-        case SDLK_RETURN: return Key::Enter;
-        case SDLK_TAB: return Key::Tab;
-        case SDLK_BACKSPACE: return Key::Backspace;
-        case SDLK_INSERT: return Key::Insert;
-        case SDLK_DELETE: return Key::Delete;
-        case SDLK_LEFT: return Key::Left;
-        case SDLK_RIGHT: return Key::Right;
-        case SDLK_UP: return Key::Up;
-        case SDLK_DOWN: return Key::Down;
-        case SDLK_PAGEUP: return Key::PageUp;
-        case SDLK_PAGEDOWN: return Key::PageDown;
-        case SDLK_HOME: return Key::Home;
-        case SDLK_END: return Key::End;
-        case SDLK_CAPSLOCK: return Key::CapsLock;
-        case SDLK_SCROLLLOCK: return Key::ScrollLock;
-        case SDLK_NUMLOCKCLEAR: return Key::NumLock;
-        case SDLK_PRINTSCREEN: return Key::PrintScreen;
-        case SDLK_PAUSE: return Key::Pause;
-        case SDLK_APPLICATION:
-        case SDLK_MENU: return Key::Menu;
-        case SDLK_KP_0: return Key::Kp0;
-        case SDLK_KP_1: return Key::Kp1;
-        case SDLK_KP_2: return Key::Kp2;
-        case SDLK_KP_3: return Key::Kp3;
-        case SDLK_KP_4: return Key::Kp4;
-        case SDLK_KP_5: return Key::Kp5;
-        case SDLK_KP_6: return Key::Kp6;
-        case SDLK_KP_7: return Key::Kp7;
-        case SDLK_KP_8: return Key::Kp8;
-        case SDLK_KP_9: return Key::Kp9;
-        case SDLK_KP_PERIOD: return Key::KpDecimal;
-        case SDLK_KP_DIVIDE: return Key::KpDivide;
-        case SDLK_KP_MULTIPLY: return Key::KpMultiply;
-        case SDLK_KP_MINUS: return Key::KpSubtract;
-        case SDLK_KP_PLUS: return Key::KpAdd;
-        case SDLK_KP_ENTER: return Key::KpEnter;
-        case SDLK_KP_EQUALS: return Key::KpEqual;
-        case SDLK_KP_COMMA: return Key::KpSeparator;
-        case SDLK_LSHIFT: return Key::LeftShift;
-        case SDLK_LCTRL: return Key::LeftControl;
-        case SDLK_LALT: return Key::LeftAlt;
-        case SDLK_LGUI: return Key::LeftSuper;
-        case SDLK_RSHIFT: return Key::RightShift;
-        case SDLK_RCTRL: return Key::RightControl;
-        case SDLK_RALT: return Key::RightAlt;
-        case SDLK_RGUI: return Key::RightSuper;
-        case SDLK_MODE: return Key::IsoLevel3Shift;
-        case SDLK_MEDIA_PLAY: return Key::MediaPlay;
-        case SDLK_MEDIA_PAUSE: return Key::MediaPause;
-        case SDLK_MEDIA_PLAY_PAUSE: return Key::MediaPlayPause;
-        case SDLK_MEDIA_STOP: return Key::MediaStop;
-        case SDLK_MEDIA_FAST_FORWARD: return Key::MediaFastForward;
-        case SDLK_MEDIA_REWIND: return Key::MediaRewind;
-        case SDLK_MEDIA_NEXT_TRACK: return Key::MediaTrackNext;
-        case SDLK_MEDIA_PREVIOUS_TRACK: return Key::MediaTrackPrevious;
-        case SDLK_MEDIA_RECORD: return Key::MediaRecord;
-        case SDLK_VOLUMEDOWN: return Key::LowerVolume;
-        case SDLK_VOLUMEUP: return Key::RaiseVolume;
-        case SDLK_MUTE: return Key::MuteVolume;
+        case kc::Escape: return Key::Escape;
+        case kc::Return: return Key::Enter;
+        case kc::Tab: return Key::Tab;
+        case kc::Backspace: return Key::Backspace;
+        case kc::Insert: return Key::Insert;
+        case kc::Delete: return Key::Delete;
+        case kc::Left: return Key::Left;
+        case kc::Right: return Key::Right;
+        case kc::Up: return Key::Up;
+        case kc::Down: return Key::Down;
+        case kc::PageUp: return Key::PageUp;
+        case kc::PageDown: return Key::PageDown;
+        case kc::Home: return Key::Home;
+        case kc::End: return Key::End;
+        case kc::CapsLock: return Key::CapsLock;
+        case kc::ScrollLock: return Key::ScrollLock;
+        case kc::NumLockClear: return Key::NumLock;
+        case kc::PrintScreen: return Key::PrintScreen;
+        case kc::Pause: return Key::Pause;
+        case kc::Application:
+        case kc::Menu: return Key::Menu;
+        case kc::Kp0: return Key::Kp0;
+        case kc::Kp1: return Key::Kp1;
+        case kc::Kp2: return Key::Kp2;
+        case kc::Kp3: return Key::Kp3;
+        case kc::Kp4: return Key::Kp4;
+        case kc::Kp5: return Key::Kp5;
+        case kc::Kp6: return Key::Kp6;
+        case kc::Kp7: return Key::Kp7;
+        case kc::Kp8: return Key::Kp8;
+        case kc::Kp9: return Key::Kp9;
+        case kc::KpPeriod: return Key::KpDecimal;
+        case kc::KpDivide: return Key::KpDivide;
+        case kc::KpMultiply: return Key::KpMultiply;
+        case kc::KpMinus: return Key::KpSubtract;
+        case kc::KpPlus: return Key::KpAdd;
+        case kc::KpEnter: return Key::KpEnter;
+        case kc::KpEquals: return Key::KpEqual;
+        case kc::KpComma: return Key::KpSeparator;
+        case kc::LShift: return Key::LeftShift;
+        case kc::LCtrl: return Key::LeftControl;
+        case kc::LAlt: return Key::LeftAlt;
+        case kc::LGui: return Key::LeftSuper;
+        case kc::RShift: return Key::RightShift;
+        case kc::RCtrl: return Key::RightControl;
+        case kc::RAlt: return Key::RightAlt;
+        case kc::RGui: return Key::RightSuper;
+        case kc::Mode: return Key::IsoLevel3Shift;
+        case kc::MediaPlay: return Key::MediaPlay;
+        case kc::MediaPause: return Key::MediaPause;
+        case kc::MediaPlayPause: return Key::MediaPlayPause;
+        case kc::MediaStop: return Key::MediaStop;
+        case kc::MediaFastForward: return Key::MediaFastForward;
+        case kc::MediaRewind: return Key::MediaRewind;
+        case kc::MediaNextTrack: return Key::MediaTrackNext;
+        case kc::MediaPreviousTrack: return Key::MediaTrackPrevious;
+        case kc::MediaRecord: return Key::MediaRecord;
+        case kc::VolumeDown: return Key::LowerVolume;
+        case kc::VolumeUp: return Key::RaiseVolume;
+        case kc::Mute: return Key::MuteVolume;
         default: break;
     }
-    if (k >= SDLK_F1 && k <= SDLK_F12) return Key(uint32_t(Key::F1) + uint32_t(k - SDLK_F1));
-    if (k >= SDLK_F13 && k <= SDLK_F24) return Key(uint32_t(Key::F13) + uint32_t(k - SDLK_F13));
+    if (k >= kc::F1 && k <= kc::F12) return Key(uint32_t(Key::F1) + uint32_t(k - kc::F1));
+    if (k >= kc::F13 && k <= kc::F24) return Key(uint32_t(Key::F13) + uint32_t(k - kc::F13));
     return Key::None;
 }
 
 } // namespace
 
-TranslatedKey translateKey(int keycode, int scancode, int sdlMod, bropty::KeyAction action) {
+TranslatedKey translateKey(int keycode, int scancode, int mods, bropty::KeyAction action) {
     TranslatedKey out;
-    const SDL_Keycode k = static_cast<SDL_Keycode>(keycode);
+    const platform::Keycode k = static_cast<platform::Keycode>(keycode);
     const Key fk = functionalKey(k);
-    out.ev.mods = translateMods(sdlMod);
+    out.ev.mods = translateMods(mods);
     out.ev.action = action;
     if (fk != Key::None) {
         out.kind = KeyKind::Functional;
         out.ev.key = fk;
         return out;
     }
-    // Printable keys: SDL keycodes are the unshifted character of the key in
-    // the active layout (Latin letters for non-Latin layouts by SDL's default
-    // keycode options, which is what kitty's base-layout key wants too).
-    if (k == 0 || (k & SDLK_SCANCODE_MASK) || k > 0x10FFFF || k < 0x20 || k == 0x7F) return out;
+    // Printable keys: keycodes are the unshifted character of the key in the
+    // active layout (Latin letters for non-Latin layouts, which is what
+    // kitty's base-layout key wants too).
+    if (k == 0 || (k & platform::kScancodeMask) || k > 0x10FFFF || k < 0x20 || k == 0x7F) return out;
     out.kind = KeyKind::Text;
     char32_t cp = char32_t(k);
     if (cp >= U'A' && cp <= U'Z') cp = cp - U'A' + U'a';
     out.ev.codepoint = cp;
-    if (scancode > 0 && scancode < SDL_SCANCODE_COUNT) {
-        const SDL_Keycode shifted =
-            SDL_GetKeyFromScancode(static_cast<SDL_Scancode>(scancode), SDL_KMOD_SHIFT, false);
-        if (shifted != 0 && !(shifted & SDLK_SCANCODE_MASK) && shifted <= 0x10FFFF && shifted >= 0x20 &&
+    if (scancode > 0 && scancode < platform::sc::Count) {
+        const platform::Keycode shifted = platform::keyboard().layoutKeycode(
+            static_cast<platform::Scancode>(scancode), kmod::Shift);
+        if (shifted != 0 && !(shifted & platform::kScancodeMask) && shifted <= 0x10FFFF && shifted >= 0x20 &&
             char32_t(shifted) != cp)
             out.ev.shifted = char32_t(shifted);
     }

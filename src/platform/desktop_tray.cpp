@@ -37,7 +37,7 @@ bool isTrayAvailable() {
 #endif
 }
 
-bool setTray(SDL_Window* window, const TrayConfig& config) {
+bool setTray(const Window* window, const TrayConfig& config) {
     {
         std::lock_guard<std::mutex> lock(s_trayMutex);
         s_recordedTray = config;

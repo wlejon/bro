@@ -17,11 +17,11 @@
 #include "layout/form_control.h"
 #include "layout/value_change.h"
 #include "platform/dialogs.h"
-#include "platform/sdl_window.h"
+#include "platform/keys.h"
+#include "platform/window.h"
 #include "bronze_host/host_anchor_download.h"
 #include "util/string_utils.h"
 
-#include <SDL3/SDL.h>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -37,10 +37,10 @@ namespace bro::engine {
 // ---------------------------------------------------------------------------
 
 static void safeStartTextInput(platform::Window* window) {
-    if (window) SDL_StartTextInput(window->getSDLWindow());
+    if (window) window->textInput().start();
 }
 static void safeStopTextInput(platform::Window* window) {
-    if (window) SDL_StopTextInput(window->getSDLWindow());
+    if (window) window->textInput().stop();
 }
 
 // True when the element sits inside a contenteditable host (attribute set to
@@ -371,7 +371,7 @@ void focusNewControl(
                 ctx.overlays->open(std::move(picker), ctx.overlayContext,
                                    ctx.renderer);
 
-                // Enable SDL text input so the hex field receives characters.
+                // Enable text input so the hex field receives characters.
                 safeStartTextInput(ctx.window);
             }
             *ctx.dirtyFlag = true;
@@ -479,7 +479,7 @@ void focusNewControl(
     } else if (insideEditableHost(target)) {
         // A contenteditable host still takes text input (raw TEXT_INPUT
         // commits insert via the DOM Selection) — without this, clicking
-        // into one would stop SDL text input and typing would go dead in
+        // into one would stop the window's text input and typing would go dead in
         // windowed mode. IME preedit rendering inside contenteditable is
         // not wired (form controls only).
         safeStartTextInput(ctx.window);
@@ -679,10 +679,10 @@ void dispatchDocMouseRelease(
             e.setPageX(pageX);     e.setPageY(pageY);
             e.setMovementX(movementX); e.setMovementY(movementY);
             e.setButton(button); e.setButtons(buttons);
-            e.setCtrlKey((mod & SDL_KMOD_CTRL) != 0);
-            e.setShiftKey((mod & SDL_KMOD_SHIFT) != 0);
-            e.setAltKey((mod & SDL_KMOD_ALT) != 0);
-            e.setMetaKey((mod & SDL_KMOD_GUI) != 0);
+            e.setCtrlKey((mod & platform::kmod::Ctrl) != 0);
+            e.setShiftKey((mod & platform::kmod::Shift) != 0);
+            e.setAltKey((mod & platform::kmod::Alt) != 0);
+            e.setMetaKey((mod & platform::kmod::Gui) != 0);
             e.setIsTrusted(true);
         };
 

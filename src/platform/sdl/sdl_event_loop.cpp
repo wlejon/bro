@@ -1,4 +1,8 @@
+#include "platform/sdl/sdl_backend.h"
+
 #include "platform/event_loop.h"
+#include "platform/gamepads.h"
+#include "platform/keys.h"
 #include "util/interrupt.h"
 #include "util/log.h"
 
@@ -6,13 +10,43 @@
 
 namespace bro::platform {
 
+// bro's key model is SDL's numbering, so SDL key events pass through as they
+// are. Pin the equivalence for every family of keys.
+static_assert(sc::A == SDL_SCANCODE_A && sc::Digit1 == SDL_SCANCODE_1 &&
+              sc::Return == SDL_SCANCODE_RETURN && sc::NonUsHash == SDL_SCANCODE_NONUSHASH &&
+              sc::CapsLock == SDL_SCANCODE_CAPSLOCK && sc::F24 == SDL_SCANCODE_F24 &&
+              sc::VolumeDown == SDL_SCANCODE_VOLUMEDOWN && sc::Lang9 == SDL_SCANCODE_LANG9 &&
+              sc::KpHexadecimal == SDL_SCANCODE_KP_HEXADECIMAL && sc::RGui == SDL_SCANCODE_RGUI &&
+              sc::Mode == SDL_SCANCODE_MODE && sc::EndCall == SDL_SCANCODE_ENDCALL &&
+              sc::Count == SDL_SCANCODE_COUNT);
+static_assert(kScancodeMask == SDLK_SCANCODE_MASK && kExtendedMask == SDLK_EXTENDED_MASK);
+static_assert(kc::Return == SDLK_RETURN && kc::Delete == SDLK_DELETE && kc::A == SDLK_A &&
+              kc::PlusMinus == SDLK_PLUSMINUS && kc::F1 == SDLK_F1 && kc::KpEnter == SDLK_KP_ENTER &&
+              kc::RGui == SDLK_RGUI && kc::MediaPlayPause == SDLK_MEDIA_PLAY_PAUSE &&
+              kc::LeftTab == SDLK_LEFT_TAB && kc::RHyper == SDLK_RHYPER);
+static_assert(kmod::LShift == SDL_KMOD_LSHIFT && kmod::Level5 == SDL_KMOD_LEVEL5 &&
+              kmod::LCtrl == SDL_KMOD_LCTRL && kmod::RAlt == SDL_KMOD_RALT &&
+              kmod::RGui == SDL_KMOD_RGUI && kmod::Num == SDL_KMOD_NUM &&
+              kmod::Caps == SDL_KMOD_CAPS && kmod::Mode == SDL_KMOD_MODE &&
+              kmod::Scroll == SDL_KMOD_SCROLL && kmod::Ctrl == SDL_KMOD_CTRL &&
+              kmod::Shift == SDL_KMOD_SHIFT && kmod::Alt == SDL_KMOD_ALT && kmod::Gui == SDL_KMOD_GUI);
+static_assert(static_cast<int>(GamepadButton::South) == SDL_GAMEPAD_BUTTON_SOUTH &&
+              static_cast<int>(GamepadButton::Back) == SDL_GAMEPAD_BUTTON_BACK &&
+              static_cast<int>(GamepadButton::LeftShoulder) == SDL_GAMEPAD_BUTTON_LEFT_SHOULDER &&
+              static_cast<int>(GamepadButton::DpadRight) == SDL_GAMEPAD_BUTTON_DPAD_RIGHT &&
+              static_cast<int>(GamepadButton::Touchpad) == SDL_GAMEPAD_BUTTON_TOUCHPAD);
+static_assert(static_cast<int>(GamepadAxis::LeftX) == SDL_GAMEPAD_AXIS_LEFTX &&
+              static_cast<int>(GamepadAxis::RightY) == SDL_GAMEPAD_AXIS_RIGHTY &&
+              static_cast<int>(GamepadAxis::RightTrigger) == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER);
+
+namespace {
+
 // SDL delivers finger coordinates normalized to 0-1 across the window;
 // convert to window coordinates so touch flows through the same coordinate
 // space as mouse input. SDL3 mouse events report window coordinates (points,
 // not pixels), and SDL_GetWindowSize returns the same units, so this stays
 // consistent under DPI scaling.
-static void fingerWindowCoords(const SDL_TouchFingerEvent& tf,
-                               float& outX, float& outY) {
+void fingerWindowCoords(const SDL_TouchFingerEvent& tf, float& outX, float& outY) {
     int w = 0, h = 0;
     if (SDL_Window* win = SDL_GetWindowFromID(tf.windowID)) {
         SDL_GetWindowSize(win, &w, &h);
@@ -21,7 +55,53 @@ static void fingerWindowCoords(const SDL_TouchFingerEvent& tf,
     outY = tf.y * static_cast<float>(h);
 }
 
-void EventLoop::pollEvents() {
+class SdlEventLoop final : public EventLoop {
+public:
+    ~SdlEventLoop() override { setModalWindowEventHook(nullptr); }
+
+    void pollEvents() override;
+    void setModalWindowEventHook(std::function<void()> hook) override;
+
+private:
+    // In-progress file drop, accumulated between DROP_BEGIN and DROP_COMPLETE.
+    // m_dropActive distinguishes "a group is open" from "no files yet", so a
+    // DROP_FILE arriving without the bracketing events (defensive: SDL always
+    // sends them today) still dispatches on its own rather than being lost.
+    bool m_dropActive = false;
+    uint32_t m_dropWindowId = 0;
+    float m_dropX = -1.0f, m_dropY = -1.0f;
+    std::vector<std::string> m_dropPaths;
+
+    std::function<void()> m_modalHook;
+    bool m_watching = false;
+
+    void flushDropGroup();
+    static bool SDLCALL modalWatch(void* userdata, SDL_Event* event);
+};
+
+// Win32 runs its own message loop while the user drags a window edge or the
+// title bar, and SDL_PollEvent does not return until it ends; an event watch
+// is called from inside that loop.
+bool SDLCALL SdlEventLoop::modalWatch(void* userdata, SDL_Event* event) {
+    if (event->type >= SDL_EVENT_WINDOW_FIRST && event->type <= SDL_EVENT_WINDOW_LAST) {
+        auto* self = static_cast<SdlEventLoop*>(userdata);
+        if (self->m_modalHook) self->m_modalHook();
+    }
+    return true;
+}
+
+void SdlEventLoop::setModalWindowEventHook(std::function<void()> hook) {
+    m_modalHook = std::move(hook);
+    if (m_modalHook && !m_watching) {
+        SDL_AddEventWatch(modalWatch, this);
+        m_watching = true;
+    } else if (!m_modalHook && m_watching) {
+        SDL_RemoveEventWatch(modalWatch, this);
+        m_watching = false;
+    }
+}
+
+void SdlEventLoop::pollEvents() {
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
         switch (event.type) {
@@ -262,7 +342,7 @@ void EventLoop::pollEvents() {
 
 // Dispatch whatever the current DROP_BEGIN..DROP_COMPLETE group accumulated.
 // A group with no files (drag cancelled over the window) fires nothing.
-void EventLoop::flushDropGroup() {
+void SdlEventLoop::flushDropGroup() {
     if (!m_dropActive) return;
     m_dropActive = false;
     if (m_dropPaths.empty()) return;
@@ -270,35 +350,10 @@ void EventLoop::flushDropGroup() {
     m_dropPaths.clear();
 }
 
-void EventLoop::updateTiming() {
-    uint64_t now = SDL_GetPerformanceCounter();
-    if (m_lastFrameTime == 0) {
-        m_lastFrameTime = now;
-        m_deltaTime = 0.0f;
-        return;
-    }
+}  // namespace
 
-    uint64_t frequency = SDL_GetPerformanceFrequency();
-    m_deltaTime = static_cast<float>(now - m_lastFrameTime) / static_cast<float>(frequency);
-    m_lastFrameTime = now;
-}
-
-void EventLoop::run(std::function<void(float deltaTime)> perFrame) {
-    m_quit = false;
-    m_lastFrameTime = 0;
-
-    LOG_INFO("Event loop started");
-
-    while (!m_quit) {
-        updateTiming();
-        pollEvents();
-
-        if (!m_quit && perFrame) {
-            perFrame(m_deltaTime);
-        }
-    }
-
-    LOG_INFO("Event loop ended");
+std::unique_ptr<EventLoop> createSdlEventLoop() {
+    return std::make_unique<SdlEventLoop>();
 }
 
 } // namespace bro::platform

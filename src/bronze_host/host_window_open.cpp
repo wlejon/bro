@@ -6,11 +6,9 @@
 #include "bronze_host/host_worker_msg.h"
 #include "bronze_host/host_realm_scope.h"
 #include "engine/engine.h"
-#include "platform/sdl_window.h"
+#include "platform/system_info.h"
+#include "platform/window.h"
 #include "util/log.h"
-
-#include <SDL3/SDL_error.h>
-#include <SDL3/SDL_misc.h>
 
 #include <cctype>
 #include <memory>
@@ -670,8 +668,10 @@ Value handleWindowOpen(std::span<const Value> a) {
     if (isExternalUrl(url)) {
         if (e->displayMode() == engine::DisplayMode::Headless || !e->window()) {
             LOG_INFO("window.open('%s'): external URL not opened (headless)", url.c_str());
-        } else if (!SDL_OpenURL(url.c_str())) {
-            LOG_WARN("window.open('%s'): SDL_OpenURL failed: %s", url.c_str(), SDL_GetError());
+        } else {
+            std::string err;
+            if (!platform::systemInfo().openUrl(url, &err))
+                LOG_WARN("window.open('%s'): opening the URL failed: %s", url.c_str(), err.c_str());
         }
         return ev::null();
     }

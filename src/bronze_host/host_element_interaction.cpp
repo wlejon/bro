@@ -13,7 +13,7 @@
 #include "dom/event_dispatch.h"
 #include "dom/node_handle.h"
 #include "engine/engine.h"
-#include "platform/sdl_window.h"
+#include "platform/window.h"
 
 namespace bro::bronze_host {
 

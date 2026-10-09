@@ -9,7 +9,7 @@
 #include "dom/element.h"
 #include "dom/event.h"
 #include "webgl/webgl2_context.h"
-#include "platform/sdl_window.h"
+#include "platform/window.h"
 #include "util/time.h"
 #include "bronze_host/host_window_open.h"
 #include "engine/engine_drm.h"

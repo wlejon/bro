@@ -1,4 +1,4 @@
-#include "platform/sdl_runtime.h"
+#include "platform/sdl/sdl_runtime.h"
 #include "util/log.h"
 
 #include <SDL3/SDL.h>

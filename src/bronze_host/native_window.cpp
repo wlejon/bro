@@ -15,7 +15,7 @@
 #include "platform/desktop_tray.h"
 #include "platform/desktop_hotkeys.h"
 #include "platform/desktop_single_instance.h"
-#include "platform/sdl_window.h"
+#include "platform/window.h"
 #include "util/interrupt.h"
 #include "util/log.h"
 
@@ -377,9 +377,8 @@ void bro_window_resetBeepCount(void) {
 
 bool bro_window_setProgress(int32_t state, int32_t value) {
     auto* w = getWindow();
-    SDL_Window* sdlWin = w ? w->getSDLWindow() : nullptr;
     auto s = static_cast<platform::desktop::ProgressState>(state);
-    return platform::desktop::setTaskbarProgress(sdlWin, s, value);
+    return platform::desktop::setTaskbarProgress(w, s, value);
 }
 
 int32_t bro_window_getProgressState(void) {
@@ -392,13 +391,12 @@ int32_t bro_window_getProgressValue(void) {
 
 int32_t bro_window_notify(const char* title, const char* body, const char* icon, int32_t timeoutMs, bool silent, int32_t replacesId) {
     auto* w = getWindow();
-    SDL_Window* sdlWin = w ? w->getSDLWindow() : nullptr;
     platform::desktop::NotificationOptions opts;
     opts.icon = icon ? icon : "";
     opts.timeoutMs = timeoutMs;
     opts.silent = silent;
     opts.replacesId = static_cast<uint32_t>(replacesId);
-    return static_cast<int32_t>(platform::desktop::showNotification(sdlWin, title ? title : "", body ? body : "", opts));
+    return static_cast<int32_t>(platform::desktop::showNotification(w, title ? title : "", body ? body : "", opts));
 }
 
 int32_t bro_window_getNotificationCount(void) {
@@ -422,11 +420,10 @@ void bro_window_clearNotifications(void) {
 bool bro_window_setTray(const char* icon, const char* tooltip, const char* menuJson) {
     (void)menuJson;
     auto* w = getWindow();
-    SDL_Window* sdlWin = w ? w->getSDLWindow() : nullptr;
     platform::desktop::TrayConfig config;
     config.icon = icon ? icon : "";
     config.tooltip = tooltip ? tooltip : "";
-    return platform::desktop::setTray(sdlWin, config);
+    return platform::desktop::setTray(w, config);
 }
 
 bool bro_window_removeTray(void) {
@@ -452,11 +449,10 @@ void bro_window_simulateTrayClick(const char* itemId) {
 int32_t bro_window_registerGlobalHotkey(const char* accelerator, bool grab) {
     if (!accelerator || !*accelerator) return 0;
     auto* w = getWindow();
-    SDL_Window* sdlWin = w ? w->getSDLWindow() : nullptr;
     std::string accel = accelerator;
     platform::desktop::HotkeyOptions opts;
     opts.grab = grab;
-    uint32_t id = platform::desktop::registerGlobalHotkey(sdlWin, accel, [accel](uint32_t hid) {
+    uint32_t id = platform::desktop::registerGlobalHotkey(w, accel, [accel](uint32_t hid) {
         if (g_hotkeyDispatcher) {
             ev::Persistent idArg(ev::fromDouble(static_cast<double>(hid)));
             ev::Persistent accelArg(ev::fromUtf8(accel));

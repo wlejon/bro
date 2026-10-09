@@ -30,7 +30,7 @@
 #include "dom/shadow_root.h"
 #include "engine/engine.h"
 #include "layout/svg_geometry.h"
-#include "platform/sdl_window.h"
+#include "platform/window.h"
 #include "util/log.h"
 
 #include <algorithm>

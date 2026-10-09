@@ -18,7 +18,7 @@
 #include "engine/engine.h"
 #include "dom/document.h"
 #include "dom/element.h"
-#include "platform/sdl_window.h"
+#include "platform/window.h"
 
 #include "canvas/canvas_scene.h"
 #include "layout/form_control.h"

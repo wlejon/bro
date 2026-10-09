@@ -3,10 +3,9 @@
 #include "layout/el_input.h"
 #include "layout/control_text.h"
 #include "dom/element.h"
-#include "util/platform.h"
+#include "platform/keys.h"
 #include "util/time.h"
 
-#include <SDL3/SDL_keycode.h>
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -46,7 +45,7 @@ KeyHandleResult ElInput::handleKeyDown(dom::Element* el, int keycode, int mod) {
 
     // Checkbox/radio: space toggles
     if ((itype == InputType::Checkbox || itype == InputType::Radio)
-        && keycode == SDLK_SPACE) {
+        && keycode == platform::kc::Space) {
         if (itype == InputType::Checkbox) {
             if (el->hasAttribute("checked"))
                 el->removeAttribute("checked");
@@ -63,7 +62,7 @@ KeyHandleResult ElInput::handleKeyDown(dom::Element* el, int keycode, int mod) {
 
     // Range: arrow keys adjust value
     if (itype == InputType::Range) {
-        if (keycode == SDLK_LEFT || keycode == SDLK_DOWN) {
+        if (keycode == platform::kc::Left || keycode == platform::kc::Down) {
             float v = std::clamp(rangeValue() - rangeStep(), rangeMin(), rangeMax());
             char buf[64]; snprintf(buf, sizeof(buf), "%g", static_cast<double>(v));
             el->setAttribute("value", buf);
@@ -71,7 +70,7 @@ KeyHandleResult ElInput::handleKeyDown(dom::Element* el, int keycode, int mod) {
             r.dispatchInput = true;
             return r;
         }
-        if (keycode == SDLK_RIGHT || keycode == SDLK_UP) {
+        if (keycode == platform::kc::Right || keycode == platform::kc::Up) {
             float v = std::clamp(rangeValue() + rangeStep(), rangeMin(), rangeMax());
             char buf[64]; snprintf(buf, sizeof(buf), "%g", static_cast<double>(v));
             el->setAttribute("value", buf);
@@ -89,7 +88,7 @@ KeyHandleResult ElInput::handleKeyDown(dom::Element* el, int keycode, int mod) {
     const int len = static_cast<int>(val.size());
     sel_.clampTo(len);
     const int pos = sel_.caret;
-    const bool shift = (mod & SDL_KMOD_SHIFT) != 0;
+    const bool shift = (mod & platform::kmod::Shift) != 0;
 
     // Shift moves the caret end only, leaving the anchor pinned — that is what
     // grows a selection. Without shift the caret and anchor move together.
@@ -102,8 +101,8 @@ KeyHandleResult ElInput::handleKeyDown(dom::Element* el, int keycode, int mod) {
     // Handled before the editing branches (and returning early) so the
     // recording chokepoint at the bottom never sees these as fresh edits.
     // Empty-stack undo and spent redo are handled no-ops.
-    if (util::hasPrimaryMod(mod) && (keycode == SDLK_Z || keycode == SDLK_Y)) {
-        const bool isRedo = (keycode == SDLK_Y) || shift;
+    if (platform::hasPrimaryMod(mod) && (keycode == platform::kc::Z || keycode == platform::kc::Y)) {
+        const bool isRedo = (keycode == platform::kc::Y) || shift;
         std::string v = val;
         TextUndoStack::Sel s{sel_.anchor, sel_.caret};
         if (isRedo ? undo_.redo(v, s) : undo_.undo(v, s)) {
@@ -124,7 +123,7 @@ KeyHandleResult ElInput::handleKeyDown(dom::Element* el, int keycode, int mod) {
     const TextUndoStack::Sel selBefore{sel_.anchor, sel_.caret};
     TextUndoStack::Kind kind = TextUndoStack::Kind::Discrete;
 
-    if (keycode == SDLK_BACKSPACE) {
+    if (keycode == platform::kc::Backspace) {
         if (deleteSelection_(val, r.inputData)) {
             el->setAttribute("value", val);
             r.dispatchInput = true;
@@ -140,7 +139,7 @@ KeyHandleResult ElInput::handleKeyDown(dom::Element* el, int keycode, int mod) {
             kind = TextUndoStack::Kind::Backspace;
         }
         r.handled = true;
-    } else if (keycode == SDLK_DELETE) {
+    } else if (keycode == platform::kc::Delete) {
         if (deleteSelection_(val, r.inputData)) {
             el->setAttribute("value", val);
             r.dispatchInput = true;
@@ -155,27 +154,27 @@ KeyHandleResult ElInput::handleKeyDown(dom::Element* el, int keycode, int mod) {
             kind = TextUndoStack::Kind::DeleteForward;
         }
         r.handled = true;
-    } else if (keycode == SDLK_LEFT) {
+    } else if (keycode == platform::kc::Left) {
         // An unshifted arrow against a selection collapses to that edge rather
         // than stepping — the selection itself was the movement.
         if (!shift && hasSelection()) setCursorPos(sel_.start());
         else moveCaret(caretStepPrev_(val, pos));
         r.handled = true;
-    } else if (keycode == SDLK_RIGHT) {
+    } else if (keycode == platform::kc::Right) {
         if (!shift && hasSelection()) setCursorPos(sel_.end());
         else moveCaret(caretStepNext_(val, pos));
         r.handled = true;
-    } else if (keycode == SDLK_HOME) {
+    } else if (keycode == platform::kc::Home) {
         moveCaret(0);
         r.handled = true;
-    } else if (keycode == SDLK_END) {
+    } else if (keycode == platform::kc::End) {
         moveCaret(len);
         r.handled = true;
     } else if (itype == InputType::Number &&
-               (keycode == SDLK_UP || keycode == SDLK_DOWN)) {
+               (keycode == platform::kc::Up || keycode == platform::kc::Down)) {
         float v = val.empty() ? 0.0f : static_cast<float>(atof(val.c_str()));
         float step = rangeStep();
-        v += (keycode == SDLK_UP) ? step : -step;
+        v += (keycode == platform::kc::Up) ? step : -step;
         std::string minStr = el->getAttribute("min");
         std::string maxStr = el->getAttribute("max");
         if (!minStr.empty()) v = std::max(v, rangeMin());
@@ -185,7 +184,7 @@ KeyHandleResult ElInput::handleKeyDown(dom::Element* el, int keycode, int mod) {
         setCursorPos(static_cast<int>(strlen(buf)));
         r.handled = true;
         r.dispatchInput = true;
-    } else if (keycode == SDLK_RETURN || keycode == SDLK_KP_ENTER) {
+    } else if (keycode == platform::kc::Return || keycode == platform::kc::KpEnter) {
         // Enter does NOT blur a single-line text input (matches browsers).
         // Mark it handled so the keydown is still delivered to this element's
         // own listeners — form/app code commonly submits on Enter — while
@@ -200,7 +199,7 @@ KeyHandleResult ElInput::handleKeyDown(dom::Element* el, int keycode, int mod) {
         // moves the baseline, so the blur that eventually follows is silent.
         r.dispatchChange = takeChange(el);
         r.handled = true;
-    } else if (keycode == SDLK_ESCAPE) {
+    } else if (keycode == platform::kc::Escape) {
         // Escape does nothing to a text field. A browser leaves the value,
         // the caret and the focus exactly where they were — there is no
         // "revert" on a plain input, and the field is not a dialog to
@@ -209,7 +208,7 @@ KeyHandleResult ElInput::handleKeyDown(dom::Element* el, int keycode, int mod) {
         // gesture a user makes when they have changed their mind was the one
         // that committed. Left unhandled so the keydown still reaches the
         // page, which is where an app's own "escape closes my panel" lives.
-    } else if (util::hasPrimaryMod(mod) && keycode == SDLK_A) {
+    } else if (platform::hasPrimaryMod(mod) && keycode == platform::kc::A) {
         selectAll();
         r.handled = true;
     }

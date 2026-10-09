@@ -2,7 +2,7 @@
 
 #include "dom/event.h"
 #include "dom/event_dispatch.h"
-#include "platform/sdl_window.h"
+#include "platform/window.h"
 
 #include <string>
 

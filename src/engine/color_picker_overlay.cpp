@@ -1,9 +1,8 @@
 #include "engine/color_picker_overlay.h"
 
 #include "layout/draw_traversal.h"
-#include "util/platform.h"
+#include "platform/keys.h"
 
-#include <SDL3/SDL_keycode.h>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -498,7 +497,7 @@ bool ColorPickerOverlay::onMouseUp(float /*x*/, float /*y*/, int /*button*/) {
 
 bool ColorPickerOverlay::onKeyDown(int keycode, int mod) {
     if (!hexFocused_) {
-        if (keycode == SDLK_RETURN || keycode == SDLK_KP_ENTER) {
+        if (keycode == platform::kc::Return || keycode == platform::kc::KpEnter) {
             requestDismiss();
             return true;
         }
@@ -507,7 +506,7 @@ bool ColorPickerOverlay::onKeyDown(int keycode, int mod) {
 
     int pos = std::clamp(hexCursor_, 0, static_cast<int>(hexText_.size()));
 
-    if (keycode == SDLK_BACKSPACE) {
+    if (keycode == platform::kc::Backspace) {
         if (pos > 0) {
             hexText_.erase(pos - 1, 1);
             hexCursor_ = pos - 1;
@@ -515,28 +514,28 @@ bool ColorPickerOverlay::onKeyDown(int keycode, int mod) {
         }
         return true;
     }
-    if (keycode == SDLK_DELETE) {
+    if (keycode == platform::kc::Delete) {
         if (pos < static_cast<int>(hexText_.size())) {
             hexText_.erase(pos, 1);
             applyHexText();
         }
         return true;
     }
-    if (keycode == SDLK_LEFT)  { if (pos > 0) hexCursor_ = pos - 1; return true; }
-    if (keycode == SDLK_RIGHT) {
+    if (keycode == platform::kc::Left)  { if (pos > 0) hexCursor_ = pos - 1; return true; }
+    if (keycode == platform::kc::Right) {
         if (pos < static_cast<int>(hexText_.size())) hexCursor_ = pos + 1;
         return true;
     }
-    if (keycode == SDLK_HOME) { hexCursor_ = 0; return true; }
-    if (keycode == SDLK_END)  { hexCursor_ = static_cast<int>(hexText_.size()); return true; }
-    if (keycode == SDLK_RETURN || keycode == SDLK_KP_ENTER) {
+    if (keycode == platform::kc::Home) { hexCursor_ = 0; return true; }
+    if (keycode == platform::kc::End)  { hexCursor_ = static_cast<int>(hexText_.size()); return true; }
+    if (keycode == platform::kc::Return || keycode == platform::kc::KpEnter) {
         applyHexText();
         syncHexText();
         hexFocused_ = false;
         requestDismiss();
         return true;
     }
-    if (util::hasPrimaryMod(mod) && keycode == SDLK_A) {
+    if (platform::hasPrimaryMod(mod) && keycode == platform::kc::A) {
         hexCursor_ = static_cast<int>(hexText_.size());
         return true;
     }

@@ -105,8 +105,8 @@ public:
     void setScrollY(float y) { scrollY_ = y; }
 
     // Caret rectangle in the draw pass's surface space, computed live against
-    // the same soft-wrapped visual lines the frame drew — feeds
-    // SDL_SetTextInputArea so the IME candidate window tracks the caret.
+    // the same soft-wrapped visual lines the frame drew — feeds the window's
+    // text-input area so the IME candidate window tracks the caret.
     bool caretRect(float& x, float& y, float& w, float& h);
 
     void setElement(dom::Element* el) { elem_ = el; }

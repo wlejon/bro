@@ -1,6 +1,6 @@
 // Secondary window hosts — the engine side of secondary windows.
 //
-// Each host owns a real OS window (platform::Window::createSecondary, with
+// Each host owns a real OS window (platform::createWindow, with
 // the primary window's graphics backend) AND the isolated document rendered
 // into it: its own DOM tree and 2D canvas scenes, built from
 // `opts.src` by the shared sub-document core (engine/sub_document.h) that also
@@ -30,7 +30,7 @@
 #include "dom/event_dispatch.h"
 #include "canvas/canvas_scene.h"
 #include "platform/event_loop.h"
-#include "platform/sdl_window.h"
+#include "platform/window.h"
 #include "render/command_buffer.h"
 #include "render/vulkan_context.h"
 #include "render/vulkan_presenter.h"
@@ -38,7 +38,7 @@
 #include "util/interrupt.h"
 #include "util/log.h"
 
-#include <SDL3/SDL.h>
+#include <exception>
 
 #include <include/core/SkCanvas.h>
 #include <include/core/SkColor.h>
@@ -167,7 +167,8 @@ void Engine::processPendingWindowHosts() {
         }
         applyChildManifestDefaults(*h, source.appDir);
 
-        platform::Window::SecondaryConfig cfg;
+        platform::WindowConfig cfg;
+        cfg.vsync = false;
         cfg.title = h->opts.title;
         cfg.width = static_cast<uint32_t>(h->opts.width);
         cfg.height = static_cast<uint32_t>(h->opts.height);
@@ -175,7 +176,7 @@ void Engine::processPendingWindowHosts() {
         cfg.resizable = h->opts.resizable;
         cfg.borderless = h->opts.borderless;
         cfg.alwaysOnTop = h->opts.alwaysOnTop;
-        cfg.x = h->opts.x;  // kWindowPosUnset == SecondaryConfig::kPosUnset (INT_MIN)
+        cfg.x = h->opts.x;  // kWindowPosUnset == WindowConfig::kPosUnset (INT_MIN)
         cfg.y = h->opts.y;
         cfg.backend = window_->backend();
         if (h->opts.display >= 0 && window_) {
@@ -188,10 +189,18 @@ void Engine::processPendingWindowHosts() {
             }
         }
 
-        h->window = platform::Window::createSecondary(cfg);
+        auto tryCreate = [](const platform::WindowConfig& c) -> std::unique_ptr<platform::Window> {
+            try {
+                return platform::createWindow(c);
+            } catch (const std::exception& e) {
+                LOG_ERROR("bro.window.open: %s", e.what());
+                return nullptr;
+            }
+        };
+        h->window = tryCreate(cfg);
         if (!h->window && cfg.backend != platform::GraphicsBackend::Software) {
             cfg.backend = platform::GraphicsBackend::Software;
-            h->window = platform::Window::createSecondary(cfg);
+            h->window = tryCreate(cfg);
         }
         if (!h->window) {
             LOG_ERROR("bro.window.open: secondary window creation failed (id=%llu)",
@@ -245,7 +254,7 @@ void Engine::createWindowHostPresenter(WindowHost& h) {
     if (displayMode_ != DisplayMode::Windowed || !vulkanContext_ || !h.window ||
         h.window->backend() != platform::GraphicsBackend::Vulkan)
         return;
-    auto swapchain = std::make_unique<render::VulkanSwapchain>(*vulkanContext_, h.window->getSDLWindow(),
+    auto swapchain = std::make_unique<render::VulkanSwapchain>(*vulkanContext_, h.window.get(),
                                                                /*vsync=*/false);
     if (!swapchain->init()) {
         LOG_ERROR("bro.window: no swapchain for secondary window id=%llu; it will stay blank",

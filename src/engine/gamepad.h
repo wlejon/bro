@@ -1,13 +1,10 @@
 #pragma once
 
 // Gamepad state shared between the engine input layer and the JS bindings.
-// Deliberately SDL-header-free (engine.h includes this): SDL_Gamepad is an
-// opaque struct so a plain forward declaration suffices.
+// Real devices are opened through platform::gamepads(), by instance id.
 
 #include <cstdint>
 #include <string>
-
-typedef struct SDL_Gamepad SDL_Gamepad;
 
 namespace bro::engine {
 
@@ -24,11 +21,11 @@ inline constexpr int kGamepadAxisCount = 4;
 /// connected=false and is reused by the next device that arrives.
 struct GamepadState {
     int index = 0;                  // W3C Gamepad.index (slot position)
-    uint32_t instanceId = 0;        // SDL joystick instance id (0 = virtual pad)
-    SDL_Gamepad* handle = nullptr;  // open SDL handle; null for virtual pads
+    uint32_t instanceId = 0;        // platform device instance id (0 = virtual pad)
+    bool opened = false;            // open in platform::gamepads(); false for virtual pads
     std::string id;                 // W3C Gamepad.id (device name)
     bool connected = false;
-    bool virtualPad = false;        // injected via the headless seam, no SDL device
+    bool virtualPad = false;        // injected via the headless seam, no OS device
     float buttons[kGamepadButtonCount] = {};  // analog value 0..1 per button
     float axes[kGamepadAxisCount] = {};       // -1..1
     // Per axis-direction action latch for "gamepad:<axis>+/-" bindings
@@ -38,7 +35,7 @@ struct GamepadState {
     // evaluateAxisActions in action_input.cpp).
     bool axisActionPressed[kGamepadAxisCount][2] = {};
     double timestampMs = 0.0;       // last state change (engine wall clock)
-    // Last rumble request. SDL only sees it for real pads; recorded for all
+    // Last rumble request. The device only sees it for real pads; recorded for all
     // so the headless seam can observe what an app asked for.
     float rumbleStrong = 0.0f;
     float rumbleWeak = 0.0f;

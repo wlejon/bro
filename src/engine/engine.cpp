@@ -13,7 +13,7 @@
 #include <fstream>
 
 #include "dom/event_dispatch.h"
-#include "platform/sdl_window.h"
+#include "platform/window.h"
 #include "platform/event_loop.h"
 #include "render/renderer.h"
 #include "render/raster_renderer.h"
@@ -60,8 +60,6 @@
 #include <include/core/SkPaint.h>
 #include <include/core/SkSurface.h>
 
-#include <SDL3/SDL.h>
-#include <SDL3/SDL_keycode.h>
 #include <algorithm>
 #include <bit>
 #include <cmath>

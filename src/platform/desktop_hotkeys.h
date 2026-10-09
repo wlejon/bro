@@ -4,7 +4,7 @@
 #include <functional>
 #include <string>
 
-struct SDL_Window;
+namespace bro::platform { class Window; }
 
 namespace bro::platform::desktop {
 
@@ -32,7 +32,7 @@ using HotkeyCallback = std::function<void(uint32_t id)>;
 /// no key ("Super") name a tap: the modifiers pressed and released with no
 /// other key or pointer button in between, firing on the release.
 uint32_t registerGlobalHotkey(
-    SDL_Window* window,
+    const Window* window,
     const std::string& accelerator,
     HotkeyCallback callback,
     HotkeyOptions options = {}
@@ -83,8 +83,9 @@ struct HotkeyKeyResult {
     bool grabbed = false;   // a grab holds the keyboard for this event: deliver it to the app
 };
 
-/// Builds a HotkeyKey from an SDL keycode / scancode / SDL_Keymod state.
-HotkeyKey hotkeyKeyFromSdl(int32_t keycode, int32_t scancode, int32_t sdlMods, bool down, bool repeat);
+/// Builds a HotkeyKey from a key event (platform/keys.h: Keycode, Scancode,
+/// KeyMods).
+HotkeyKey hotkeyKeyFromKeyEvent(int32_t keycode, int32_t scancode, int32_t mods, bool down, bool repeat);
 
 /// Builds a HotkeyKey from accelerator spellings: `key` is a key name or a
 /// modifier name ("alt", "super", ...), `mods` the modifiers held

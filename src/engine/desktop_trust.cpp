@@ -1,7 +1,6 @@
 #include "engine/desktop_trust.h"
 #include "util/exe_dir.h"
 #include "util/log.h"
-#include "util/platform.h"
 
 #include <algorithm>
 #include <cstdlib>

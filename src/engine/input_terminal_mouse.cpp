@@ -14,9 +14,8 @@
 #include "dom/element.h"
 #include "layout/el_terminal.h"
 #include "platform/clipboard.h"
+#include "platform/system_info.h"
 #include "util/log.h"
-
-#include <SDL3/SDL.h>
 
 #include <string>
 
@@ -37,32 +36,23 @@ void installTerminalHost(bool headless) {
     layout::ElTerminal::Host h;
     h.writeClipboard = [headless](const std::string& text, bool primary) {
         if (!primary) return platform::setClipboardText(text);
-#if defined(__linux__) || defined(__FreeBSD__)
-        if (!headless && SDL_SetPrimarySelectionText(text.c_str())) return true;
-#endif
-        (void)headless;
+        if (!headless && platform::clipboard().setPrimaryText(text)) return true;
         g_primary = text;
         return true;
     };
     h.readClipboard = [headless](bool primary) -> std::string {
         if (!primary) return platform::getClipboardText();
-#if defined(__linux__) || defined(__FreeBSD__)
-        if (!headless && SDL_HasPrimarySelectionText()) {
-            if (char* t = SDL_GetPrimarySelectionText()) {
-                std::string s(t);
-                SDL_free(t);
-                return s;
-            }
+        if (!headless) {
+            if (auto t = platform::clipboard().getPrimaryText()) return *t;
         }
-#endif
-        (void)headless;
         return g_primary;
     };
     if (headless) {
         h.openLink = [](const std::string&, const std::string&) {};  // headless opens nothing
     } else {
         h.openLink = [](const std::string& target, const std::string&) {
-            if (!SDL_OpenURL(target.c_str())) LOG_WARN("terminal: could not open %s: %s", target.c_str(), SDL_GetError());
+            std::string err;
+            if (!platform::systemInfo().openUrl(target, &err)) LOG_WARN("terminal: could not open %s: %s", target.c_str(), err.c_str());
         };
     }
     layout::ElTerminal::setHost(std::move(h));

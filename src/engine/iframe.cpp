@@ -13,7 +13,6 @@
 #include "engine/engine.h"
 #include "engine/sub_document.h"
 #include "engine/app_loader.h"
-#include "util/platform.h"
 #include "util/log.h"
 #include "layout/box.h"
 #include "layout/skia_text_metrics.h"

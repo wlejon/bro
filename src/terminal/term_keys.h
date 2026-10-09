@@ -1,5 +1,5 @@
 #pragma once
-// SDL key events in bropty's terms (bropty/input.h). The encoding itself --
+// Key events (platform/keys.h) in bropty's terms (bropty/input.h). The encoding itself --
 // legacy xterm, modifyOtherKeys, the kitty keyboard protocol -- is bropty's,
 // chosen by the modes the program set; this only says which key it was.
 
@@ -7,8 +7,8 @@
 
 namespace bro::terminal {
 
-// SDL_Keymod bits -> bropty modifier bits.
-bropty::KeyMods translateMods(int sdlMod);
+// platform::KeyMods bits -> bropty modifier bits.
+bropty::KeyMods translateMods(int mods);
 
 enum class KeyKind {
     None,        // nothing a terminal encodes (an unknown key)
@@ -21,9 +21,8 @@ struct TranslatedKey {
     bropty::KeyEvent ev;
 };
 
-// One SDL key event. `scancode` (0 when unknown) supplies the shifted
-// character of a text key in the active layout; without it bropty derives
-// the US one.
-TranslatedKey translateKey(int keycode, int scancode, int sdlMod, bropty::KeyAction action);
+// One key event. `scancode` (0 when unknown) supplies the shifted character
+// of a text key in the active layout; without it bropty derives the US one.
+TranslatedKey translateKey(int keycode, int scancode, int mods, bropty::KeyAction action);
 
 } // namespace bro::terminal

@@ -1,6 +1,6 @@
 // `navigator`: the base object dom_gamepad.cpp builds (userAgent, platform,
 // language, getGamepads), plus the two members that are not about input —
-// `clipboard` over the platform clipboard and `getBattery()` over SDL's
+// `clipboard` over the platform clipboard and `getBattery()` over the platform's
 // power query. Registered as a host global AND set on globalThis, like the
 // other roots, so a compiled read and a dynamic one find the same object.
 
@@ -10,8 +10,7 @@
 #include "bronze_host/host_web_globals.h"
 #include "engine/engine.h"
 #include "platform/clipboard.h"
-
-#include <SDL3/SDL_power.h>
+#include "platform/system_info.h"
 
 #include <limits>
 #include <string>
@@ -59,7 +58,7 @@ Value makeClipboardValue() {
 }
 
 // navigator.getBattery() — a Promise of a BatteryManager-shaped SNAPSHOT over
-// SDL_GetPowerInfo. Snapshot-on-call: call again for fresh values; there are
+// platform::SystemInfo::power(). Snapshot-on-call: call again for fresh values; there are
 // no change events, so the listener methods are present but inert and the
 // `on*change` slots are null. A desktop without a battery reports the web's
 // convention — charging, full, forever — and headless always reports that
@@ -74,25 +73,25 @@ Value batterySnapshot() {
     auto* eng = hostEngine();
     const bool headless = !eng || eng->displayMode() == engine::DisplayMode::Headless;
     if (!headless) {
-        int secs = 0, pct = 0;
-        switch (SDL_GetPowerInfo(&secs, &pct)) {
-            case SDL_POWERSTATE_ON_BATTERY:
+        const platform::PowerInfo power = platform::systemInfo().power();
+        const int secs = power.secondsLeft, pct = power.percent;
+        switch (power.state) {
+            case platform::PowerInfo::State::OnBattery:
                 charging = false;
                 chargingTime = inf;
                 dischargingTime = secs >= 0 ? static_cast<double>(secs) : inf;
                 if (pct >= 0) level = pct / 100.0;
                 break;
-            case SDL_POWERSTATE_CHARGING:
-                // SDL has no time-to-full estimate — unknown is Infinity per spec.
+            case platform::PowerInfo::State::Charging:
+                // No time-to-full estimate — unknown is Infinity per spec.
                 chargingTime = inf;
                 if (pct >= 0) level = pct / 100.0;
                 break;
-            case SDL_POWERSTATE_CHARGED:
+            case platform::PowerInfo::State::Charged:
                 if (pct >= 0) level = pct / 100.0;
                 break;
-            case SDL_POWERSTATE_NO_BATTERY:
-            case SDL_POWERSTATE_UNKNOWN:
-            case SDL_POWERSTATE_ERROR:
+            case platform::PowerInfo::State::NoBattery:
+            case platform::PowerInfo::State::Unknown:
             default:
                 break;  // keep the desktop no-battery shape
         }

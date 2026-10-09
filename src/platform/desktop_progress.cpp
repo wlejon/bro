@@ -37,7 +37,7 @@ std::atomic<ProgressState> s_lastState{ProgressState::None};
 std::atomic<int> s_lastValue{0};
 }
 
-bool setTaskbarProgress(SDL_Window* window, ProgressState state, int value) {
+bool setTaskbarProgress(const Window* window, ProgressState state, int value) {
     const int clampedValue = std::clamp(value, 0, 100);
     s_lastState.store(state, std::memory_order_relaxed);
     s_lastValue.store(clampedValue, std::memory_order_relaxed);

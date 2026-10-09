@@ -99,7 +99,7 @@ public:
     const std::string& compositionText() const { return comp_.preedit; }
     // Replace the current preedit with `text`, starting the composition on
     // the first call (which also deletes any active selection — part of the
-    // same eventual undo entry). `cursorCp` is SDL's composition cursor in
+    // same eventual undo entry). `cursorCp` is the IME's composition cursor in
     // UTF-8 characters within `text` (< 0 → end); the control caret lands
     // there so the caret renders at the composition cursor. No undo entry.
     KeyHandleResult compositionUpdate(dom::Element* el, const std::string& text,
@@ -160,8 +160,8 @@ public:
     }
 
     // Caret rectangle in the draw pass's surface space (content space for the
-    // app document), computed live — feeds SDL_SetTextInputArea so the native
-    // IME candidate window tracks the caret. False for non-text types or when
+    // app document), computed live — feeds the window's text-input area so the
+    // native IME candidate window tracks the caret. False for non-text types or when
     // the control has no box yet.
     bool caretRect(float& x, float& y, float& w, float& h);
 
