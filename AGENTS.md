@@ -16,11 +16,11 @@
 - If a file grows beyond 1,000 lines, properly decompose it into smaller, focused modules.
 - While rare exceptions may exist, files over 2,000 lines must be decomposed.
 
-## 4. Multi-Repo & Submodule Workflow
+## 4. Multi-Repo & Pinning Workflow
 - Every repo in the ecosystem is listed in `docs/ecosystem.md` (machine-readable: `scripts/repos.txt`); each is a standalone checkout at `../<name>`. `CLAUDE.md` is the engine guide and applies to every agent, not only Claude.
 - Standalone sibling repositories (`broaudio`, `broflora`, `brogameagent`, `brotensor`, `brolm`, `brosoundml`, `brodiffusion`, `brovisionml`, `bromesh`, `broimage`, etc.) own their native code and Bronze JavaScript APIs (`<sibling>_api`). The terminal libraries (`bropty`, `brosearch`, `brothemes`, `bromux`) have no JavaScript binding; bro wraps them in `src/terminal/`.
-- Edit a sibling in its standalone repo (`../<name>`), never under `third_party/`.
-- **Submodule pinning**: Do NOT update or pin git submodules after every commit. Only update/pin submodules at the end of a full session before pushing.
+- Edit a sibling in its standalone repo (`../<name>`), never under a build tree's `_deps/<name>-src` (that is a downloaded copy of the pinned commit).
+- **Pinning**: there are no git submodules; `cmake/bro_pins.cmake` pins each dependency's commit. Do NOT move pins after every commit. Move them (`scripts/bump-deps.sh`, or `scripts/repo-status.sh --sync`) at the end of a full session before pushing, after the siblings are pushed.
 
 ## 5. System Memory & Execution Defaults
 - **System memory constraint**: This system doesn't have enough RAM (16 GB for 32 threads) to run memory-intensive operations (C++ compilation of heavy units, parallel headless rendering instances) in unbounded parallel without OOM-killing processes.

@@ -3,7 +3,7 @@
 ## Quickstart
 
 ```bash
-git clone --recursive https://github.com/wlejon/bro
+git clone https://github.com/wlejon/bro
 cd bro
 
 cmake -B build
@@ -14,7 +14,7 @@ That's it. **Skia downloads itself** (prebuilt, from the repo's GitHub releases)
 and the default `app` profile builds the full runtime. The only external
 dependency the default build needs is **vcpkg** (for networking + video); if you
 don't have it, build the `minimal` profile instead, which needs nothing beyond
-the submodules:
+what configure downloads itself:
 
 ```bash
 cmake -B build -DBRO_PROFILE=minimal      # HTML/CSS/JS + Canvas2D + WebGL + audio; no vcpkg
@@ -91,11 +91,13 @@ cmake -B build                                            # binaries with bronze
 cmake --build build --config Release --target bronze-cli # ...and the compiler that makes one
 ```
 
-bronze resolves as a standalone `../bronze` checkout first and the
-`third_party/bronze` submodule second; the configure line says which of the two
-it took (`bronze: standalone tree (...)` / `bronze: submodule tree (...)`), so a
-build against the pin is never mistaken for a build against the tree you are
-editing. `-DBRONZE_DIR=<path>` overrides both.
+bronze resolves like every other sibling (see
+[Dependencies](#dependencies)): a `../bronze` checkout first, otherwise the
+commit `cmake/bro_pins.cmake` pins, downloaded at configure. The configure line
+says which it took (`bronze: working tree <path>` /
+`bronze: https://github.com/wlejon/bronze/archive/<sha>.tar.gz`), so a build against the pin is never
+mistaken for a build against the tree you are editing.
+`-DFETCHCONTENT_SOURCE_DIR_BRONZE=<path>` points it anywhere else.
 
 The `bronze` target is `EXCLUDE_FROM_ALL` — bro links bronze's *runtime*, not
 its compiler — so building the compiler means naming it, as above. Name
@@ -181,16 +183,24 @@ top-level `CMakeLists.txt` detects arm64 hardware via `sysctl` and forces
 `arm64-osx` / `-arch arm64` as a defense, but a native brew removes the whole
 class of problem.
 
-**Submodules** must be initialized (a plain `git clone` without `--recursive`
-leaves them empty and CMake stops with a clear error):
+## Dependencies
 
-```bash
-git submodule update --init --recursive
-```
+There are no git submodules; a plain `git clone` is the whole checkout.
+`cmake/bro_pins.cmake` pins every dependency (each ecosystem sibling, plus SDL,
+Jolt and FastNoise2) to an exact commit, and `cmake/bro_deps.cmake`'s
+`bro_dependency()` resolves each one at configure time, in order:
 
-Sibling libraries (`brokit`, `htmlayout`, `broaudio`, `bromesh`,
-`brogameagent`, …) are also picked up from standalone checkouts at `../<name>`
-if present — as are `bronze` and `brass`. See
+1. a target that already exists;
+2. a working tree at `../<name>` beside the source dir (siblings only, not
+   third-party code), or any path given as `-DFETCHCONTENT_SOURCE_DIR_<NAME>=<path>`;
+3. the GitHub archive tarball of the pinned commit, downloaded into
+   `<build>/_deps/<name>-src`.
+
+So a lone clone downloads everything it needs, and a checkout with siblings
+beside it (`brokit`, `htmlayout`, `broaudio`, `bronze`, `brass`, …) builds
+against those working trees. Pins are first-declaration-wins: bro declares all
+of them before adding any sibling, so a sibling's own pins never override
+bro's. `scripts/bump-deps.sh` moves a pin. See
 [docs/multi-repo-workflow.md](docs/multi-repo-workflow.md), and
 [docs/ecosystem.md](docs/ecosystem.md) for the list of every repo.
 

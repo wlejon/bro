@@ -46,22 +46,14 @@ if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
     endif()
 endif()
 
-# Submodule preflight: a `git clone` without --recursive leaves the third_party
-# submodule dirs empty and produces cryptic downstream failures. Only check
-# non-sibling submodules — the bro-* libraries, bronze and brass resolve from
-# sibling repos at ../<name> first (see third_party/CMakeLists.txt and
-# docs/ecosystem.md), so it's fine if their third_party/<name> dirs are empty.
-foreach(_bro_submodule IN ITEMS SDL jolt)
-    set(_bro_submodule_dir "${CMAKE_CURRENT_SOURCE_DIR}/third_party/${_bro_submodule}")
-    file(GLOB _bro_submodule_contents "${_bro_submodule_dir}/*")
-    if(_bro_submodule_contents STREQUAL "")
-        message(FATAL_ERROR
-            "third_party/${_bro_submodule} is empty — submodules are not initialized.\n"
-            "Run:  git submodule update --init --recursive")
-    endif()
-endforeach()
-
 project(bro VERSION 0.1.0 LANGUAGES C CXX)
+
+# Dependencies: every library bro builds is pinned here, before anything is
+# added, so these pins win across the whole graph. A working tree at ../<name>
+# replaces a pin; otherwise the pinned commit is fetched at configure. See
+# cmake/bro_deps.cmake and docs/multi-repo-workflow.md.
+include(cmake/bro_deps.cmake)
+include(cmake/bro_pins.cmake)
 
 # Enable Objective-C++ at top level on Apple, since enable_language() inside
 # a nested add_subdirectory (Metal backends, broaudio's CoreAudio loopback,
@@ -212,15 +204,11 @@ option(BRO_BUILD_TESTS "Build bro's C++ unit tests and smoke tools" ${_d_exes})
 # Bronze is mandatory: it is the JS execution engine for bro.
 set(BRO_WITH_BRONZE ON CACHE BOOL "bronze runtime (mandatory)" FORCE)
 
-# Helper: check if a sibling library is present (standalone checkout or submodule)
+# Helper: a sibling library's feature defaults to its tier. Every sibling is
+# pinned (cmake/bro_pins.cmake), so each one is always available.
 macro(bro_check_sibling _name _tier _out)
     if(${_tier})
-        if(EXISTS "${CMAKE_SOURCE_DIR}/../${_name}/CMakeLists.txt" OR
-           EXISTS "${CMAKE_SOURCE_DIR}/third_party/${_name}/CMakeLists.txt")
-            set(${_out} ON)
-        else()
-            set(${_out} OFF)
-        endif()
+        set(${_out} ON)
     else()
         set(${_out} OFF)
     endif()
@@ -258,7 +246,12 @@ bro_check_sibling(broclip      _d_render       _d_clip)
 bro_check_sibling(brompris     _d_render       _d_mpris)
 bro_check_sibling(bropulse     _d_render       _d_pulse)
 bro_check_sibling(broime       _d_render       _d_ime)
-bro_check_sibling(broremote    _d_render       _d_remote)
+# Remote hosting needs brovideo's codecs, which exist on Windows and Linux.
+set(_d_linux_win_render ${_d_render})
+if(APPLE)
+    set(_d_linux_win_render OFF)
+endif()
+bro_check_sibling(broremote    _d_linux_win_render _d_remote)
 
 # Services (each pulls a vcpkg dependency).
 option(BRO_WITH_NET      "Game networking (GameNetworkingSockets / vcpkg)"   ${_d_svc})
@@ -286,8 +279,7 @@ option(BRO_WITH_MPRIS      "Media player control and metadata (brompris)"       
 option(BRO_WITH_PULSE      "PipeWire/PulseAudio policy and stream router (bropulse)"     ${_d_pulse})
 option(BRO_WITH_IME        "Compose keys and input method candidate engine (broime)"      ${_d_ime})
 # Hosting a remote session (bro.remote): broremote streams the composited
-# frame to a viewer and feeds its input back. Only when ../broremote is
-# checked out (it has no submodule); third_party turns it off otherwise.
+# frame to a viewer and feeds its input back. Windows and Linux.
 option(BRO_WITH_REMOTE     "Remote session hosting (broremote)"                           ${_d_remote})
 # The native <terminal> element: bropty (VT emulation + PTY/ConPTY), its
 # brosearch dependency and brothemes (minimum contrast), plus bromux
@@ -307,14 +299,14 @@ option(BRO_WITH_TRIPOSPLAT   "Image -> 3D gaussian-splat pipeline"           ${_
 option(BRO_WITH_GAMEAI_NN    "brogameagent neural/learning layer"            ${_d_ai})
 
 # brotensor's cmake helper (BrotensorVulkan.cmake) for the auto-detection
-# below, from the brotensor bro will add.
+# below, from the brotensor bro will add (fetched now, added in third_party/).
 set(_bro_brotensor_cmake_dir "")
-foreach(_d "${BROTENSOR_DIR}" "${CMAKE_SOURCE_DIR}/../brotensor" "${CMAKE_SOURCE_DIR}/third_party/brotensor")
-    if(_d AND EXISTS "${_d}/cmake/BrotensorVulkan.cmake")
-        set(_bro_brotensor_cmake_dir "${_d}/cmake")
-        break()
+if(BRO_WITH_TENSOR)
+    bro_dependency(brotensor SOURCE_ONLY)
+    if(EXISTS "${brotensor_SOURCE_DIR}/cmake/BrotensorVulkan.cmake")
+        set(_bro_brotensor_cmake_dir "${brotensor_SOURCE_DIR}/cmake")
     endif()
-endforeach()
+endif()
 
 # The Vulkan compute backend (brotensor docs/vulkan.md: hand-written GLSL on any
 # Vulkan 1.2+ driver), the AMD GPU path. Unlike CUDA / Metal it is additive:

@@ -1,16 +1,16 @@
 name: CodeQL
 
 # Static analysis for bro's OWN C++ (engine core, DOM/layout/render/canvas/WebGL,
-# and the bronze host layer). The vendored siblings under third_party/
-# each run their own CodeQL and own their Security tab, so they're excluded here.
+# and the bronze host layer). The sibling libraries bro builds against each run
+# their own CodeQL and own their Security tab, so they're excluded here.
 #
 # Build-mode: none (build-free extraction). This is deliberate: for a *built*
 # C/C++ analysis, CodeQL extracts whatever the compiler touches and path filters
-# have no effect — and bro can't be built without compiling the submodules it
+# have no effect — and bro can't be built without compiling the dependencies it
 # links (bronze, brass, brokit, htmlayout, gumbo, …), so a traced build would always
-# drag third_party/ into the results. Build-free extraction is the one mode where
+# drag them into the results. Build-free extraction is the one mode where
 # paths-ignore is honored for C/C++; it also needs no vcpkg/CUDA/X11 toolchain.
-# Submodules aren't checked out, so there is nothing under third_party/ to scan.
+# Without a configure nothing is fetched, so only bro's own tree is scanned.
 
 on:
   push:
@@ -33,9 +33,8 @@ jobs:
       contents: read
       actions: read
     steps:
-      # No submodules: the siblings live in third_party/ and are analysed in
-      # their own repositories. Leaving them unchecked-out means there is
-      # nothing beneath third_party/ for the extractor to see.
+      # The dependencies are fetched by configure, which never runs here, so
+      # the checkout holds bro's own sources and the vendored Skia glue only.
       - uses: actions/checkout@v7
 
       - name: Initialize CodeQL
@@ -43,7 +42,7 @@ jobs:
         with:
           languages: c-cpp
           build-mode: none
-          # Belt-and-suspenders with the missing submodule checkout above:
+          # Keeps the vendored Skia glue under third_party/ out of the results:
           # paths-ignore IS honored in build-mode none (unlike a traced build).
           config: |
             paths-ignore:

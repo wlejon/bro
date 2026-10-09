@@ -1,64 +1,9 @@
 # bronze host layer — always configured (bronze is the JS runtime for bro).
 
-# --- Resolve the bronze compiler: sibling working tree, else submodule ---
-# Same resolution as the bro-* siblings (third_party/CMakeLists.txt's
-# bro_default_sibling_dir — defined before src/ is processed, function scope is
-# global): a standalone ../bronze wins, and third_party/bronze is the fallback.
-#
-# The fallback used to be absent, deliberately, on the grounds that bronze is a
-# peer project rather than a vendored dependency and that quietly building some
-# other tree is worse than failing. Both halves of that are still true; what
-# changed is that CI, the nightly package and a fresh clone all need a bronze
-# that arrives with the repo at a pinned commit, and a pin is exactly what a
-# submodule is. So the fallback exists now and the objection is answered by
-# making it LOUD instead: this always reports which of the two trees it picked,
-# so a build against the submodule can never be mistaken for a build against
-# the checkout you are editing.
-bro_default_sibling_dir(bronze _bronze_default)
-if(NOT EXISTS "${_bronze_default}/CMakeLists.txt")
-    set(_bronze_default "${bro_SOURCE_DIR}/third_party/bronze")
-endif()
-set(BRONZE_DIR "${_bronze_default}" CACHE PATH "bronze AOT compiler source tree")
-if(NOT EXISTS "${BRONZE_DIR}/CMakeLists.txt")
-    message(FATAL_ERROR
-        "BRO_WITH_BRONZE=ON needs a bronze checkout, and none was found at\n"
-        "    ${BRONZE_DIR}\n"
-        "Initialize the submodule (git submodule update --init third_party/bronze), "
-        "clone it as a sibling of bro (../bronze), or pass -DBRONZE_DIR=<path>.")
-endif()
-get_filename_component(_bronze_submodule "${bro_SOURCE_DIR}/third_party/bronze" ABSOLUTE)
-get_filename_component(_bronze_chosen "${BRONZE_DIR}" ABSOLUTE)
-if(_bronze_chosen STREQUAL _bronze_submodule)
-    message(STATUS "bronze: submodule tree (${BRONZE_DIR})")
-else()
-    message(STATUS "bronze: standalone tree (${BRONZE_DIR})")
-endif()
-
-# brass is already a target here: third_party/CMakeLists.txt resolves it
-# (BRASS_ROOT) before any sibling, and reports which tree it picked.
-
-# bronze builds its runtime as a shared library only when asked, and its own
-# default for the question is "am I the top-level project" — which is OFF here,
-# where it is a subdirectory. bro always needs it ON: an app arrives as a
-# module bro LOADS, and host and module must bind to one runtime image. FORCE
-# rather than a default, because there is no working configuration of bro with
-# it off, so an inherited OFF in a cache would be a link error a long way from
-# its cause.
-set(BRONZE_BUILD_SHARED_RUNTIME ON CACHE BOOL "" FORCE)
-
-# EXCLUDE_FROM_ALL: only the bronze targets our libraries name get built;
-# bronze's CLI, backend, and test binaries stay out of bro's default target.
-# Note bronze's own configure requires doctest (find_package REQUIRED) — the
-# configure fails there, loudly, if the toolchain cannot provide it.
-# The binary directory is bronze-build and NOT bronze, which is not cosmetic:
-# bro sends every executable to ${CMAKE_BINARY_DIR} (top-level CMakeLists.txt),
-# so the CLI wants to be the file build/bronze — and a directory of that name
-# is already there. On Windows the exe is bronze.exe and the two never meet;
-# on Linux and macOS the link fails with "cannot open output file: Is a
-# directory", pointing at ld rather than at the name clash that caused it.
-if(NOT TARGET bronze_runtime_shared)
-    add_subdirectory("${BRONZE_DIR}" "${CMAKE_BINARY_DIR}/bronze-build" EXCLUDE_FROM_ALL)
-endif()
+# bronze and brass are already targets here: third_party/CMakeLists.txt adds
+# both (pinned in cmake/bro_pins.cmake, or the ../bronze and ../brass working
+# trees) before any sibling, whose bronze bindings link the same runtime, and
+# reports which tree each came from.
 
 # One name for "build the compiler", on every generator. `--target bronze`
 # works under Ninja and Make and CANNOT work under Visual Studio: the targets
@@ -287,9 +232,8 @@ target_include_directories(bro_bronze_host PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/lighting
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/animation
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/gizmo
-    # tinygltf's json.hpp, from whichever bromesh third_party/CMakeLists.txt
-    # resolved (standalone ../bromesh or the submodule), not the submodule path.
-    $<$<TARGET_EXISTS:bromesh>:$<TARGET_PROPERTY:bromesh,SOURCE_DIR>/third_party/tinygltf>
+    # tinygltf's json.hpp, from the tinygltf tree bromesh resolved.
+    $<$<TARGET_EXISTS:tinygltf>:$<TARGET_PROPERTY:tinygltf,INTERFACE_INCLUDE_DIRECTORIES>>
 )
 
 # The runtime is a DLL now, and bronze builds it into its own output directory

@@ -60,7 +60,7 @@ These have no JavaScript binding and do not depend on bro or bronze. bro links t
 | [brosearch](https://github.com/wlejon/brosearch) | Search: fzf-compatible fuzzy matching, rg-compatible file walking with gitignore rules, a linear-time Unicode regex engine for grep | none | Windows, Linux, macOS |
 | [brothemes](https://github.com/wlejon/brothemes) | Colour schemes: import/export of terminal and editor theme formats, Oklab/Oklch, WCAG and APCA contrast. bro uses it for the terminal's minimum contrast | none | Windows, Linux, macOS |
 | [bromux](https://github.com/wlejon/bromux) | Terminal multiplexer as a library: a server owns PTY sessions and their emulators, clients attach locally or over ssh. Backs persistent terminal sessions; optional in bro | bropty, brosearch, brolink, broimage (optional) | Windows, Linux, macOS |
-| brolink (not on GitHub yet: a local checkout at `../brolink`, no submodule) | Local IPC and ssh transport, platform APIs only: length-prefixed framing and LE/LEB128 wire helpers, a local listener and connector with peer-credential checks (AF_UNIX on Linux and macOS, named pipes with a user-only DACL on Windows), an event loop, byte streams over local connections, a spawned child's stdio (how ssh is run) and our own, the `proxy` relay (binary-clean `--pty` mode too), runtime paths, and lanes: a session as a bundle of connections joined with a one-time CSPRNG token. The transport under bromux and broremote | none | Windows, Linux, macOS |
+| [brolink](https://github.com/wlejon/brolink) | Local IPC and ssh transport, platform APIs only: length-prefixed framing and LE/LEB128 wire helpers, a local listener and connector with peer-credential checks (AF_UNIX on Linux and macOS, named pipes with a user-only DACL on Windows), an event loop, byte streams over local connections, a spawned child's stdio (how ssh is run) and our own, the `proxy` relay (binary-clean `--pty` mode too), runtime paths, and lanes: a session as a bundle of connections joined with a one-time CSPRNG token. The transport under bromux and broremote | none | Windows, Linux, macOS |
 
 ## Desktop-environment libraries (linked by bro)
 
@@ -89,8 +89,8 @@ Standalone C++20 libraries for the desktop environment. bro mounts their JavaScr
 | [brompris](https://github.com/wlejon/brompris) | Media player controller: MPRIS2 on Linux | brodbus | Linux (Windows and macOS build, with no backend yet: no players) | `BRO_WITH_MPRIS` |
 | [bropulse](https://github.com/wlejon/bropulse) | Audio routing and policy: native PipeWire 0.3 stream graph and PulseAudio fallback | none | Linux (Windows and macOS build the graph and policy, with no audio server) | `BRO_WITH_PULSE` |
 | [broime](https://github.com/wlejon/broime) | Input methods: compose key sequences, dead keys, candidate popup placement, dictionary prefix trie | brosearch | Windows, Linux, macOS | `BRO_WITH_IME` |
-| brovideo (not on GitHub yet: a local checkout at `../brovideo`, no submodule) | Hardware video encode and decode through platform APIs only: a VA-API encoder (H.264, HEVC, AV1; dmabuf with its acquire fence, or CPU frames), a Media Foundation decoder (CPU NV12 or D3D11 textures), the Raw codec, and a capability probe. broremote's codec layer, with no remoting concepts, so `<video>`, `VideoEncoder` and screen recording can use it later | brodmabuf (Linux) | Linux (encode), Windows (decode) | `BRO_WITH_REMOTE` |
-| broremote (not on GitHub yet: a local checkout at `../broremote`, no submodule) | Remote sessions: a server the host feeds composited frames (dmabuf or CPU) and drains input from, encoding through brovideo, a viewer (`broremote-view`) that reaches it locally or over ssh. Backs `bro.remote` and `helm --remote` | brovideo, brolink (its JS binding: bronze, brass) | Linux (hosting with VA-API), Windows (viewer; Raw-only hosting for development) | `BRO_WITH_REMOTE` |
+| [brovideo](https://github.com/wlejon/brovideo) | Hardware video encode and decode through platform APIs only: a VA-API encoder (H.264, HEVC, AV1; dmabuf with its acquire fence, or CPU frames), a Media Foundation decoder (CPU NV12 or D3D11 textures), the Raw codec, and a capability probe. broremote's codec layer, with no remoting concepts, so `<video>`, `VideoEncoder` and screen recording can use it later | brodmabuf (Linux) | Linux (encode), Windows (decode) | `BRO_WITH_REMOTE` |
+| [broremote](https://github.com/wlejon/broremote) | Remote sessions: a server the host feeds composited frames (dmabuf or CPU) and drains input from, encoding through brovideo, a viewer (`broremote-view`) that reaches it locally or over ssh. Backs `bro.remote` and `helm --remote` | brovideo, brolink (its JS binding: bronze, brass) | Linux (hosting with VA-API), Windows (viewer; Raw-only hosting for development) | `BRO_WITH_REMOTE` |
 
 ## Apps and tools
 
@@ -107,20 +107,20 @@ Standalone C++20 libraries for the desktop environment. bro mounts their JavaScr
 Every repo here that builds against another resolves it the same way, in this order:
 
 1. **An existing target wins.** If a superbuild such as bro has already added `bropty`, bromux's lookup finds that target and adds nothing. That way a library is configured once per build, and the first loader picks its options. bro is the first loader of brotensor, brosearch and the others for this reason.
-2. **The sibling checkout**, at `../<name>` beside the top-level project, overridable with `-D<NAME>_DIR=<path>`. This is the development layout: you edit the standalone repo and every consumer builds from it, with no copy to keep in sync.
-3. **The `third_party/<name>` submodule** of the top-level project. This is what CI and a fresh `git clone --recursive` use.
+2. **The sibling checkout**, at `../<name>` beside the top-level project, overridable with `-DFETCHCONTENT_SOURCE_DIR_<NAME>=<path>`. This is the development layout: you edit the standalone repo and every consumer builds from it, with no copy to keep in sync.
+3. **The pinned commit**, downloaded at configure as the GitHub archive tarball of an exact sha. This is what CI and a fresh `git clone` use. There are no git submodules anywhere.
 
-The submodule fallback is **flat**: a repo's own `third_party/` carries every ecosystem repo it needs, transitive ones included, side by side rather than nested. bromux carries bropty *and* brosearch; brothumb carries brovfs, broimage and bromath. Submodule URLs are `https://github.com/wlejon/<name>.git`, so a recursive clone works without SSH keys.
+All three steps are one function, `bro_dependency(<name> GITHUB <owner/repo> REF <sha>)`, in `cmake/bro_deps.cmake`: one identical file in every repo that has dependencies. A repo pins every ecosystem repo it needs, transitive ones included (bromux pins bropty *and* brosearch), plus the third-party code it builds from source (SDL, Jolt, curl, libremidi, meshoptimizer, ...), each at an exact commit. bronze and brass are pinned like the rest.
 
-**bronze and brass are the exception.** A library with a JavaScript binding needs `../bronze` and `../brass` checked out beside it and has no submodule for either; its CI checks them out with bronze's `checkout-toolchain` action. bro itself does carry `third_party/bronze` and `third_party/brass`.
+**Pins are first-declaration-wins**, so the top-level project's pins apply to the whole build: bro declares all of its pins (`cmake/bro_pins.cmake`) before it adds anything, and a sibling's own pins only matter when it is built standalone.
 
-**Submodule pointers move at the end of a session, not per commit.** The repo owner records them in one bro commit with `scripts/repo-status.sh --sync`. [multi-repo-workflow.md](multi-repo-workflow.md) has bro's side in detail: the configure order, the feature gates, the `<name>_api` bindings, and the status/pull/sync/push tool.
+**Pins move at the end of a session, not per commit**, after the siblings are pushed: `scripts/bump-deps.sh` (or `scripts/repo-status.sh --sync`) rewrites them, and push order is leaves first, bro last. [multi-repo-workflow.md](multi-repo-workflow.md) has bro's side in detail: the configure order, the feature gates, the `<name>_api` bindings, and the status/pull/sync/push tool.
 
 ## Working across the repos
 
 ```bash
 scripts/repo-status.sh            # every repo in scripts/repos.txt: branch, dirty, ahead/behind,
-                                  # then bro's submodule pointers against the ../<name> HEADs
+                                  # then bro's pins against the ../<name> HEADs
 scripts/repo-status.sh --verbose  # also list changed files
 pwsh scripts/repo-status.ps1      # the same tool on Windows (-ListFiles, -Pull, -Sync, -Push)
 ```

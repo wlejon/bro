@@ -9,8 +9,8 @@
  * The binding is broremote's own (broremote_api, ../broremote/src/api); bro
  * feeds it frames and input (src/bronze_host/host_remote.cpp).
  *
- * Build: BRO_WITH_REMOTE, on when a ../broremote checkout is present (there
- * is no submodule). Without one, `bro.remote` is the usual stub:
+ * Build: BRO_WITH_REMOTE, on by default on Windows and Linux (broremote comes
+ * from ../broremote or bro's pin). Off, `bro.remote` is the usual stub:
  * `available: false`, `reason`, and every call throws. Main realm only (not
  * in Workers). One server per process: a page reload keeps it running, and
  * the reloaded page sees it in status() and can stop it.

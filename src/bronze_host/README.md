@@ -273,17 +273,17 @@ write `const slice = blob.slice`.
 ## Configure
 
 ```bash
-cmake -B build -DBRO_WITH_BRONZE=ON            # ../bronze, else third_party/bronze
+cmake -B build -DBRO_WITH_BRONZE=ON            # ../bronze, else the pinned bronze
 ```
 
-Resolves bronze at `../bronze`, falling back to the `third_party/bronze`
-submodule (`-DBRONZE_DIR=<path>` overrides both; with neither present it is a
-configure error naming the path it looked at). The configure line says which
-tree it took — `bronze: standalone tree (...)` or `bronze: submodule tree
-(...)` — because the whole hazard of having a fallback is building one while
-editing the other. CI and the nightly build the submodule, so the pointer is
-what they ship; `scripts/repo-status.sh --sync` bumps it to your standalone
-HEAD the same way it does for every other sibling. bronze's own configure
+Resolves bronze at `../bronze`, falling back to the commit `cmake/bro_pins.cmake`
+pins, downloaded at configure (`-DFETCHCONTENT_SOURCE_DIR_BRONZE=<path>`
+overrides both). The configure line says which tree it took —
+`bronze: working tree <path>` or `bronze: https://github.com/wlejon/bronze/archive/<sha>.tar.gz`
+— because the whole hazard of having a fallback is building one while
+editing the other. CI and the nightly build the pin, so the pin is what they
+ship; `scripts/bump-deps.sh --local bronze` (or `scripts/repo-status.sh --sync`)
+moves it to your `../bronze` HEAD the same way it does for every other sibling. bronze's own configure
 requires doctest, so the toolchain must provide it (bronze auto-detects a vcpkg
 root when bro's configure didn't set one).
 

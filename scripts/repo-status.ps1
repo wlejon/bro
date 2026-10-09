@@ -6,9 +6,9 @@
     Walks every repo in scripts/repos.txt (bro, bronze/brass, the libraries bro
     links, the desktop substrate libraries, the apps and tools), each a standalone
     checkout at ..\<name>, printing the working-tree state of each and how far it
-    sits from its upstream. Then, for the repos bro records as submodules, reports
-    which are out of submodule sync: the standalone repo you actually build against
-    (..\<name>) at a different commit than the pointer bro records in third_party\<name>.
+    sits from its upstream. Then, for the repos bro pins (cmake/bro_pins.cmake),
+    reports which pins are stale: the working tree you actually build against
+    (..\<name>) at a different commit than the one a plain clone of bro fetches.
 
     Ahead/behind (up<n> / dn<n>) is against the upstream as last fetched; -Pull
     fetches. A repo that is not checked out is listed and skipped.
@@ -20,20 +20,19 @@
 
 .PARAMETER Pull
     Fast-forward every repo to its upstream before reporting, so the status below
-    reflects what's on the remotes. Uses --ff-only and never recurses into
-    submodules: a repo that has diverged, is detached, or has no upstream is
-    reported and skipped, never merged.
+    reflects what's on the remotes. Uses --ff-only: a repo that has diverged, is
+    detached, or has no upstream is reported and skipped, never merged.
 
 .PARAMETER Sync
-    Bump bro's stale submodule pointers up to the standalone repos' HEADs and
-    make a single bro commit recording it. Only acts on submodule siblings where
-    the standalone is ahead of (or diverged from) bro's recorded pointer; those
-    whose standalone is behind bro are left alone (pull the standalone first).
+    Move bro's stale pins (cmake/bro_pins.cmake) to the working trees' HEADs and
+    make a single bro commit recording it (what scripts/bump-deps.sh --local
+    does). Only acts on pins whose working tree is ahead of (or diverged from)
+    the pin; those whose working tree is behind are left alone (pull it first).
 
 .PARAMETER Push
-    Push every repo that is ahead of its upstream. If run alongside -Sync,
-    submodules in bro are bumped and committed first, then pushed along with the
-    rest.
+    Push every repo that is ahead of its upstream, bro last, so its pins never
+    name a commit GitHub does not have yet. If run alongside -Sync, the pins are
+    moved and committed first.
 
 .EXAMPLE
     pwsh scripts/repo-status.ps1
@@ -66,11 +65,22 @@ foreach ($line in (Get-Content $ReposFile)) {
     $Repos += [pscustomobject]@{ Name = $f[0]; Group = $f[1]; Bro = $f[2] }
 }
 
-# Submodule siblings: the repos bro records at third_party\<name>. bronze and
-# brass are among them on the same terms as the libraries: bro resolves ..\bronze
-# and ..\brass first and third_party\ second, so the standalone tree being ahead of
-# the recorded pointer means CI and the nightly build an older one than you do.
-$Siblings = @($Repos | Where-Object { $_.Bro -eq 'submodule' } | ForEach-Object { $_.Name })
+# Pinned siblings: the repos bro pins in cmake/bro_pins.cmake. bronze and brass
+# are among them on the same terms as the libraries: bro builds ..\bronze and
+# ..\brass when they are there and the pin otherwise, so a working tree ahead of
+# its pin means CI and the nightly build an older one than you do.
+$PinsFile = Join-Path $BroRoot 'cmake/bro_pins.cmake'
+$Siblings = @($Repos | Where-Object { $_.Bro -eq 'pinned' } | ForEach-Object { $_.Name })
+
+# The commit bro pins for a name, from cmake/bro_pins.cmake ('' if none).
+$PinRegex = '(?m)^bro_dependency\((?<name>[A-Za-z0-9_.-]+) GITHUB (?<repo>\S+) REF (?<sha>[0-9a-f]{40})'
+function Pinned-Sha {
+    param([string]$Name)
+    foreach ($m in [regex]::Matches((Get-Content -Raw $PinsFile), $PinRegex)) {
+        if ($m.Groups['name'].Value -eq $Name) { return $m.Groups['sha'].Value }
+    }
+    return ''
+}
 
 function Repo-Path {
     param([string]$Name)
@@ -153,8 +163,8 @@ function Repo-State {
     }
 }
 
-# Fast-forward one repo onto its upstream. Never merges, never rebases, and never
-# recurses into submodules (bro's pointers move via -Sync, not via a pull).
+# Fast-forward one repo onto its upstream. Never merges, never rebases (bro's
+# pins move via -Sync, not via a pull).
 function Repo-Pull {
     param([string]$Label, [string]$Path)
 
@@ -266,28 +276,23 @@ foreach ($r in $Repos) {
 }
 
 Write-Host ''
-Write-Host "== Submodule sync (standalone ..\<name> vs bro's recorded pointer) ==" -ForegroundColor White
+Write-Host "== Pins (working tree ..\<name> vs the commit cmake/bro_pins.cmake pins) ==" -ForegroundColor White
 
 $outOfSync = 0
-$toSync = @()   # @{ Name; Sha } for siblings whose pointer should bump to standalone HEAD
+$toSync = @()   # @{ Name; Sha } for siblings whose pin should move to the working tree's HEAD
 foreach ($name in $Siblings) {
     $standalone = Join-Path $ProjectsRoot $name
-    $subPath = "third_party/$name"
 
-    # Commit bro records for this submodule in its HEAD tree.
-    # --verify: a bare rev-parse echoes an unresolvable argument back on
-    # stdout, so a path that is not a recorded submodule would arrive here as
-    # the literal "HEAD:third_party/<name>" and be compared as if it were a sha.
-    $recorded = Git-In $BroRoot rev-parse --verify --quiet "HEAD:$subPath"
+    $recorded = Pinned-Sha $name
     if (-not $recorded) {
         Write-Host ("  {0,-14} " -f $name) -NoNewline
-        Write-Host 'not a recorded submodule (scripts/repos.txt says it is)' -ForegroundColor Yellow
+        Write-Host 'not pinned in cmake/bro_pins.cmake (scripts/repos.txt says it is)' -ForegroundColor Yellow
         continue
     }
 
     if (-not (Is-GitRepo $standalone)) {
         Write-Host ("  {0,-14} " -f $name) -NoNewline
-        Write-Host 'standalone repo missing - using submodule only' -ForegroundColor DarkGray
+        Write-Host 'no working tree - builds use the pin' -ForegroundColor DarkGray
         continue
     }
 
@@ -301,113 +306,91 @@ foreach ($name in $Siblings) {
 
     $outOfSync++
 
-    # Try to describe the divergence if the recorded commit is reachable locally.
+    # Describe the divergence if the pinned commit is reachable locally.
     & git -C $standalone cat-file -e "$recorded^{commit}" 2>$null
     $reachable = ($LASTEXITCODE -eq 0)
 
     Write-Host ("  {0,-14} " -f $name) -NoNewline
-    Write-Host 'OUT OF SYNC' -ForegroundColor Red -NoNewline
+    Write-Host 'STALE PIN' -ForegroundColor Red -NoNewline
     Write-Host ' - ' -NoNewline
 
-    # syncable: bumping bro's pointer to standalone HEAD is the right fix.
+    # syncable: moving the pin to the working tree's HEAD is the right fix.
     $syncable = $false
     if ($reachable) {
         $localAhead = [int](Git-In $standalone rev-list --count "$recorded..HEAD")
         $localBehind = [int](Git-In $standalone rev-list --count "HEAD..$recorded")
         if ($localAhead -gt 0 -and $localBehind -gt 0) {
-            Write-Host "diverged (standalone $localAhead ahead, $localBehind behind)" -ForegroundColor Red
+            Write-Host "diverged (working tree $localAhead ahead, $localBehind behind)" -ForegroundColor Red
             $syncable = $true
         }
         elseif ($localAhead -gt 0) {
-            Write-Host "standalone ahead by $localAhead - bro pointer is stale" -ForegroundColor Yellow
+            Write-Host "working tree ahead by $localAhead - bro's pin is stale" -ForegroundColor Yellow
             $syncable = $true
         }
         else {
-            Write-Host "standalone behind by $localBehind - standalone needs a pull (-Pull)" -ForegroundColor Yellow
+            Write-Host "working tree behind by $localBehind - it needs a pull (-Pull)" -ForegroundColor Yellow
         }
     }
     else {
-        # Can't compare, but standalone is the source of truth, so a bump is valid.
-        Write-Host 'recorded commit not in standalone (will fetch on sync)' -ForegroundColor Red
+        # Can't compare, but the working tree is the source of truth, so a bump is valid.
+        Write-Host 'pinned commit not in the working tree (fetch it to compare)' -ForegroundColor Red
         $syncable = $true
     }
 
-    Write-Host ("  {0,14} recorded {1}  standalone {2}" -f '', $recorded.Substring(0, 9), $head.Substring(0, 9)) -ForegroundColor DarkGray
+    Write-Host ("  {0,14} pinned {1}  working tree {2}" -f '', $recorded.Substring(0, 9), $head.Substring(0, 9)) -ForegroundColor DarkGray
 
     if ($syncable) {
-        $toSync += [pscustomobject]@{
-            Name       = $name
-            Sha        = $head
-            SubPath    = $subPath                       # relative, for git add/commit under -C $BroRoot
-            SubFull    = (Join-Path $BroRoot $subPath)   # absolute, for git -C / Test-Path
-            Standalone = $standalone
-        }
+        $toSync += [pscustomobject]@{ Name = $name; Sha = $head }
     }
 }
 
-# A wlejon submodule bro records that scripts/repos.txt does not list as one
-# would be skipped above without a word; name it instead.
-$urls = Git-In $BroRoot config -f .gitmodules --get-regexp '^submodule\..*\.url$'
-foreach ($line in ($urls -split "`n")) {
-    $parts = $line -split '\s+'
-    if ($parts.Count -lt 2 -or $parts[1] -notmatch 'wlejon/') { continue }
-    $subName = [IO.Path]::GetFileNameWithoutExtension(($parts[1] -split '[/:]')[-1])
-    if ($Siblings -notcontains $subName) {
-        Write-Host ("  {0,-14} " -f $subName) -NoNewline
-        Write-Host 'bro has it as a submodule but scripts/repos.txt does not - add it there' -ForegroundColor Yellow
+# A wlejon pin bro carries that scripts/repos.txt does not mark as one would be
+# skipped above without a word; name it instead.
+foreach ($m in [regex]::Matches((Get-Content -Raw $PinsFile), $PinRegex)) {
+    if ($m.Groups['repo'].Value -notmatch '^wlejon/') { continue }
+    $pinName = $m.Groups['name'].Value
+    if ($Siblings -notcontains $pinName) {
+        Write-Host ("  {0,-14} " -f $pinName) -NoNewline
+        Write-Host 'bro pins it but scripts/repos.txt does not mark it pinned - add it there' -ForegroundColor Yellow
     }
 }
 
 Write-Host ''
 if ($outOfSync -eq 0) {
-    Write-Host 'All siblings in submodule sync.' -ForegroundColor Green
+    Write-Host 'All pins match the working trees.' -ForegroundColor Green
 } else {
-    Write-Host "$outOfSync sibling(s) out of submodule sync." -ForegroundColor Yellow
+    Write-Host "$outOfSync stale pin(s)." -ForegroundColor Yellow
 }
 
 if ($Sync) {
     if ($toSync.Count -eq 0) {
-        Write-Host 'Nothing to sync: out-of-sync siblings have standalone behind bro (pull them first).' -ForegroundColor Yellow
+        Write-Host 'Nothing to sync: stale pins have working trees behind them (pull those first).' -ForegroundColor Yellow
     } else {
         Write-Host ''
-        Write-Host ("== Syncing {0} pointer(s) to standalone HEAD ==" -f $toSync.Count) -ForegroundColor White
+        Write-Host ("== Moving {0} pin(s) to the working trees' HEADs ==" -f $toSync.Count) -ForegroundColor White
 
-        $stagedPaths = @()
-        $stagedNames = @()
+        # The same rewrite scripts/bump-deps.sh --local makes.
+        $text = Get-Content -Raw $PinsFile
+        $movedNames = @()
         foreach ($s in $toSync) {
-            if (-not (Test-Path (Join-Path $s.SubFull '.git'))) {
+            $pattern = '(?m)^(bro_dependency\(' + [regex]::Escape($s.Name) + ' GITHUB \S+ REF )[0-9a-f]{40}'
+            $new = [regex]::Replace($text, $pattern, { param($m) $m.Groups[1].Value + $s.Sha })
+            if ($new -ne $text) {
+                $text = $new
+                $movedNames += $s.Name
                 Write-Host ("  {0,-14} " -f $s.Name) -NoNewline
-                Write-Host ("skip: submodule not initialized (git submodule update --init {0})" -f $s.SubPath) -ForegroundColor Yellow
-                continue
+                Write-Host ("pinned -> {0}" -f $s.Sha.Substring(0, 9)) -ForegroundColor Green
             }
-
-            # Bring the standalone HEAD commit into the submodule, then point at it.
-            & git -C $s.SubFull fetch --quiet $s.Standalone HEAD 2>$null
-            if ($LASTEXITCODE -ne 0) {
-                Write-Host ("  {0,-14} " -f $s.Name) -NoNewline
-                Write-Host 'skip: fetch from standalone failed' -ForegroundColor Red
-                continue
-            }
-            & git -C $s.SubFull checkout --quiet $s.Sha 2>$null
-            if ($LASTEXITCODE -ne 0) {
-                Write-Host ("  {0,-14} " -f $s.Name) -NoNewline
-                Write-Host ("skip: checkout {0} failed" -f $s.Sha.Substring(0, 9)) -ForegroundColor Red
-                continue
-            }
-            & git -C $BroRoot add $s.SubPath 2>$null
-            Write-Host ("  {0,-14} " -f $s.Name) -NoNewline
-            Write-Host ("bumped -> {0}" -f $s.Sha.Substring(0, 9)) -ForegroundColor Green
-            $stagedPaths += $s.SubPath
-            $stagedNames += $s.Name
         }
 
-        if ($stagedPaths.Count -gt 0) {
-            # Single bro commit recording exactly the bumped pointers (pathspec keeps any
-            # unrelated staged changes out of this commit).
-            $namesList = $stagedNames -join ', '
-            $msg = "Update submodules: $namesList (sync to standalone HEAD)"
+        if ($movedNames.Count -gt 0) {
+            [IO.File]::WriteAllText($PinsFile, $text)
+            # One bro commit recording exactly the moved pins (the pathspec keeps
+            # any unrelated staged changes out of it).
+            $namesList = $movedNames -join ', '
+            $msg = "Pin $namesList to the working trees' HEADs"
             Write-Host ''
-            & git -C $BroRoot commit --quiet -m $msg -- @stagedPaths 2>$null
+            & git -C $BroRoot commit --quiet -m $msg -- cmake/bro_pins.cmake 2>$null
             if ($LASTEXITCODE -eq 0) {
                 Write-Host "Committed: " -ForegroundColor Green -NoNewline
                 Write-Host $msg
@@ -417,15 +400,19 @@ if ($Sync) {
                 Write-Host 'Commit failed.' -ForegroundColor Red
             }
         } else {
-            Write-Host 'No pointers were updated.' -ForegroundColor Yellow
+            Write-Host 'No pins were moved.' -ForegroundColor Yellow
         }
     }
 } elseif ($outOfSync -gt 0) {
-    Write-Host "Re-run with -Sync to bump bro's pointers to the standalone HEADs and commit." -ForegroundColor DarkGray
+    Write-Host "Re-run with -Sync to move bro's pins to the working trees' HEADs and commit." -ForegroundColor DarkGray
 }
 
 if ($Push) {
     Write-Host ''
-    Write-Host '== Pushing ==' -ForegroundColor White
-    foreach ($r in $Repos) { Repo-Push $r.Name (Repo-Path $r.Name) }
+    Write-Host '== Pushing (bro last) ==' -ForegroundColor White
+    foreach ($r in $Repos) {
+        if ($r.Name -eq 'bro') { continue }
+        Repo-Push $r.Name (Repo-Path $r.Name)
+    }
+    Repo-Push 'bro' $BroRoot
 }

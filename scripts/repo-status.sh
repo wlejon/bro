@@ -4,25 +4,26 @@
 # Walks every repo in scripts/repos.txt (bro, bronze/brass, the libraries bro
 # links, the desktop substrate libraries, the apps and tools), each a standalone
 # checkout at ../<name>, printing the working-tree state of each and how far it
-# sits from its upstream. Then, for the repos bro records as submodules, reports
-# which are out of submodule sync: the standalone repo you actually build against
-# (../<name>) at a different commit than the pointer bro records in third_party/<name>.
+# sits from its upstream. Then, for the repos bro pins (cmake/bro_pins.cmake),
+# reports which pins are stale: the working tree you actually build against
+# (../<name>) at a different commit than the one a plain clone of bro fetches.
 #
 # Usage: scripts/repo-status.sh [-v] [-p] [-s] [-u]
 #   -v, --verbose   also list changed files for dirty repos
 #   -p, --pull      fast-forward every repo to its upstream first, so the
 #                   status below reflects the remotes
-#   -s, --sync      bump bro's stale submodule pointers up to the standalone
-#                   repos' HEADs and make a single bro commit recording it
-#   -u, --push      push every repo that is ahead of its upstream
+#   -s, --sync      move bro's stale pins to the working trees' HEADs
+#                   (scripts/bump-deps.sh --local) and make a single bro commit
+#   -u, --push      push every repo that is ahead of its upstream, bro last so
+#                   its pins never name a commit GitHub does not have yet
 #
 # Ahead/behind (up<n> / dn<n>) is against the upstream as last fetched; --pull
-# fetches. Pull is --ff-only and never recurses into submodules: a repo that has
-# diverged, is detached, or has no upstream is reported and skipped, never merged.
-# Sync only acts on submodule siblings where the standalone repo is ahead of (or
-# diverged from) bro's recorded pointer; those whose standalone is *behind* bro
-# are left alone (pull the standalone first). A repo that is not checked out is
-# listed and skipped. See docs/ecosystem.md and docs/multi-repo-workflow.md.
+# fetches. Pull is --ff-only: a repo that has diverged, is detached, or has no
+# upstream is reported and skipped, never merged.
+# Sync only acts on pins where the working tree is ahead of (or diverged from)
+# the pin; those whose working tree is *behind* the pin are left alone (pull
+# it first). A repo that is not checked out is listed and skipped. See
+# docs/ecosystem.md and docs/multi-repo-workflow.md.
 
 set -uo pipefail
 
@@ -60,14 +61,20 @@ while read -r name group brorel _rest; do
     NAMES+=("$name"); GROUPS_OF+=("$group"); BROREL+=("$brorel")
 done < "$REPOS_FILE"
 
-# Submodule siblings: the repos bro records at third_party/<name>. bronze and
-# brass are among them on the same terms as the libraries: bro resolves ../bronze
-# and ../brass first and third_party/ second, so the standalone tree being ahead of
-# the recorded pointer means CI and the nightly build an older one than you do.
+# Pinned siblings: the repos bro pins in cmake/bro_pins.cmake. bronze and brass
+# are among them on the same terms as the libraries: bro builds ../bronze and
+# ../brass when they are there and the pin otherwise, so a working tree ahead of
+# its pin means CI and the nightly build an older one than you do.
+PINS_FILE="$BRO_ROOT/cmake/bro_pins.cmake"
 SIBLINGS=()
 for i in "${!NAMES[@]}"; do
-    [[ "${BROREL[$i]}" == "submodule" ]] && SIBLINGS+=("${NAMES[$i]}")
+    [[ "${BROREL[$i]}" == "pinned" ]] && SIBLINGS+=("${NAMES[$i]}")
 done
+
+# The commit bro pins for <name>, from cmake/bro_pins.cmake ('' if none).
+pinned_sha() {
+    sed -nE "s/^bro_dependency\\($1 GITHUB [^ ]+ REF ([0-9a-f]{40}).*/\\1/p" "$PINS_FILE" | head -1
+}
 
 repo_path() {
     if [[ "$1" == "bro" ]]; then printf '%s' "$BRO_ROOT"; else printf '%s' "$PROJECTS_ROOT/$1"; fi
@@ -127,8 +134,8 @@ repo_state() {
     fi
 }
 
-# Fast-forward one repo onto its upstream. Never merges, never rebases, and never
-# recurses into submodules (bro's pointers move via --sync, not via a pull).
+# Fast-forward one repo onto its upstream. Never merges, never rebases (bro's
+# pins move via --sync, not via a pull).
 # Args: <label> <path>
 repo_pull() {
     local label="$1" path="$2" branch upstream before after n out
@@ -228,27 +235,21 @@ for i in "${!NAMES[@]}"; do
 done
 
 echo
-echo "${BOLD}== Submodule sync (standalone ../<name> vs bro's recorded pointer) ==${N}"
+echo "${BOLD}== Pins (working tree ../<name> vs the commit cmake/bro_pins.cmake pins) ==${N}"
 
 out_of_sync=0
-SYNC_NAMES=()   # siblings whose pointer should be bumped to standalone HEAD
-SYNC_SHAS=()    # matching standalone HEAD sha for each
+SYNC_NAMES=()   # siblings whose pin should move to the working tree's HEAD
 for name in "${SIBLINGS[@]}"; do
     standalone="$PROJECTS_ROOT/$name"
-    sub_path="third_party/$name"
 
-    # Commit bro records for this submodule in its HEAD tree. --verify, because
-    # a bare rev-parse echoes an argument it could not resolve straight back at
-    # you: a path that is not a recorded submodule would come out as the literal
-    # "HEAD:third_party/<name>" and be compared as though it were a sha.
-    recorded="$(git -C "$BRO_ROOT" rev-parse --verify --quiet "HEAD:$sub_path" 2>/dev/null || true)"
+    recorded="$(pinned_sha "$name")"
     if [[ -z "$recorded" ]]; then
-        printf '  %-14s %snot a recorded submodule (scripts/repos.txt says it is)%s\n' "$name" "$Y" "$N"
+        printf '  %-14s %snot pinned in cmake/bro_pins.cmake (scripts/repos.txt says it is)%s\n' "$name" "$Y" "$N"
         continue
     fi
 
     if ! is_repo "$standalone"; then
-        printf '  %-14s %sstandalone repo missing - using submodule only%s\n' "$name" "$DIM" "$N"
+        printf '  %-14s %sno working tree - builds use the pin%s\n' "$name" "$DIM" "$N"
         continue
     fi
 
@@ -260,118 +261,85 @@ for name in "${SIBLINGS[@]}"; do
 
     out_of_sync=$((out_of_sync + 1))
 
-    # Try to describe the divergence if the recorded commit is reachable locally.
-    # syncable=1 means bumping bro's pointer to standalone HEAD is the right fix.
+    # Describe the divergence if the pinned commit is reachable locally.
+    # syncable=1 means moving the pin to the working tree's HEAD is the right fix.
     local_ahead='' local_behind='' rel='' syncable=0
     if git -C "$standalone" cat-file -e "$recorded^{commit}" 2>/dev/null; then
         local_ahead="$(git -C "$standalone" rev-list --count "$recorded..HEAD" 2>/dev/null || echo '?')"
         local_behind="$(git -C "$standalone" rev-list --count "HEAD..$recorded" 2>/dev/null || echo '?')"
         if [[ "$local_ahead" -gt 0 && "$local_behind" -gt 0 ]]; then
-            rel="${R}diverged${N} (standalone ${local_ahead} ahead, ${local_behind} behind)"
+            rel="${R}diverged${N} (working tree ${local_ahead} ahead, ${local_behind} behind)"
             syncable=1
         elif [[ "$local_ahead" -gt 0 ]]; then
-            rel="${Y}standalone ahead by ${local_ahead}${N} - bro pointer is stale"
+            rel="${Y}working tree ahead by ${local_ahead}${N} - bro's pin is stale"
             syncable=1
         else
-            rel="${Y}standalone behind by ${local_behind}${N} - standalone needs a pull (--pull)"
+            rel="${Y}working tree behind by ${local_behind}${N} - it needs a pull (--pull)"
         fi
     else
-        # Can't compare, but standalone is the source of truth, so a bump is valid.
-        rel="${R}recorded commit not in standalone${N} (will fetch on sync)"
+        # Can't compare, but the working tree is the source of truth, so a bump is valid.
+        rel="${R}pinned commit not in the working tree${N} (fetch it to compare)"
         syncable=1
     fi
 
-    printf '  %-14s %sOUT OF SYNC%s - %s\n' "$name" "$R" "$N" "$rel"
-    printf '  %14s %srecorded %s  standalone %s%s\n' '' "$DIM" "${recorded:0:9}" "${head:0:9}" "$N"
+    printf '  %-14s %sSTALE PIN%s - %s\n' "$name" "$R" "$N" "$rel"
+    printf '  %14s %spinned %s  working tree %s%s\n' '' "$DIM" "${recorded:0:9}" "${head:0:9}" "$N"
 
-    if [[ "$syncable" -eq 1 ]]; then
-        SYNC_NAMES+=("$name")
-        SYNC_SHAS+=("$head")
-    fi
+    [[ "$syncable" -eq 1 ]] && SYNC_NAMES+=("$name")
 done
 
-# A wlejon submodule bro records that scripts/repos.txt does not list as one
-# would be skipped above without a word; name it instead.
-while read -r _key sub_url; do
-    sub_name="$(basename "$sub_url" .git)"
-    case "$sub_url" in *wlejon/*) ;; *) continue ;; esac
+# A wlejon pin bro carries that scripts/repos.txt does not mark as one would be
+# skipped above without a word; name it instead.
+while read -r pin_name; do
     listed=0
-    for name in "${SIBLINGS[@]}"; do [[ "$name" == "$sub_name" ]] && listed=1; done
+    for name in "${SIBLINGS[@]}"; do [[ "$name" == "$pin_name" ]] && listed=1; done
     if [[ "$listed" -eq 0 ]]; then
-        printf '  %-14s %sbro has it as a submodule but scripts/repos.txt does not - add it there%s\n' \
-            "$sub_name" "$Y" "$N"
+        printf '  %-14s %sbro pins it but scripts/repos.txt does not mark it pinned - add it there%s\n' \
+            "$pin_name" "$Y" "$N"
     fi
-done < <(git -C "$BRO_ROOT" config -f .gitmodules --get-regexp '^submodule\..*\.url$' 2>/dev/null)
+done < <(sed -nE 's/^bro_dependency\(([A-Za-z0-9_.-]+) GITHUB wlejon\/.*/\1/p' "$PINS_FILE")
 
 echo
 if [[ "$out_of_sync" -eq 0 ]]; then
-    echo "${G}All siblings in submodule sync.${N}"
+    echo "${G}All pins match the working trees.${N}"
 else
-    echo "${Y}${out_of_sync} sibling(s) out of submodule sync.${N}"
+    echo "${Y}${out_of_sync} stale pin(s).${N}"
 fi
 
 if [[ "$SYNC" -eq 1 ]]; then
     if [[ "${#SYNC_NAMES[@]}" -eq 0 ]]; then
-        echo "${Y}Nothing to sync: out-of-sync siblings have standalone behind bro (pull them first).${N}"
+        echo "${Y}Nothing to sync: stale pins have working trees behind them (pull those first).${N}"
     else
         echo
-        echo "${BOLD}== Syncing ${#SYNC_NAMES[@]} pointer(s) to standalone HEAD ==${N}"
-
-        staged_paths=()
-        staged_names=()
-        for i in "${!SYNC_NAMES[@]}"; do
-            name="${SYNC_NAMES[$i]}"
-            sha="${SYNC_SHAS[$i]}"
-            standalone="$PROJECTS_ROOT/$name"
-            sub_path="third_party/$name"
-
-            if [[ ! -e "$sub_path/.git" ]]; then
-                printf '  %-14s %sskip: submodule not initialized (git submodule update --init %s)%s\n' \
-                    "$name" "$Y" "$sub_path" "$N"
-                continue
-            fi
-
-            # Bring the standalone HEAD commit into the submodule, then point at it.
-            if ! git -C "$sub_path" fetch --quiet "$standalone" HEAD 2>/dev/null; then
-                printf '  %-14s %sskip: fetch from standalone failed%s\n' "$name" "$R" "$N"
-                continue
-            fi
-            if ! git -C "$sub_path" checkout --quiet "$sha" 2>/dev/null; then
-                printf '  %-14s %sskip: checkout %s failed%s\n' "$name" "$R" "${sha:0:9}" "$N"
-                continue
-            fi
-            git -C "$BRO_ROOT" add "$sub_path"
-            printf '  %-14s %sbumped -> %s%s\n' "$name" "$G" "${sha:0:9}" "$N"
-            staged_paths+=("$sub_path")
-            staged_names+=("$name")
-        done
-
-        if [[ "${#staged_paths[@]}" -gt 0 ]]; then
-            # Single bro commit recording exactly the bumped pointers (pathspec keeps any
-            # unrelated staged changes out of this commit).
-            names_list="$(printf '%s, ' "${staged_names[@]}")"; names_list="${names_list%, }"
-            msg="Update submodules: ${names_list} (sync to standalone HEAD)"
+        echo "${BOLD}== Moving ${#SYNC_NAMES[@]} pin(s) to the working trees' HEADs ==${N}"
+        if "$BRO_ROOT/scripts/bump-deps.sh" --local "${SYNC_NAMES[@]}" | sed 's/^/  /'; then
+            # One bro commit recording exactly the moved pins (the pathspec keeps
+            # any unrelated staged changes out of it).
+            names_list="$(printf '%s, ' "${SYNC_NAMES[@]}")"; names_list="${names_list%, }"
+            msg="Pin ${names_list} to the working trees' HEADs"
             echo
-            if git -C "$BRO_ROOT" commit --quiet -m "$msg" -- "${staged_paths[@]}"; then
+            if git -C "$BRO_ROOT" commit --quiet -m "$msg" -- cmake/bro_pins.cmake; then
                 echo "${G}Committed:${N} $msg"
                 git -C "$BRO_ROOT" log -1 --oneline | sed 's/^/  /'
             else
                 echo "${R}Commit failed.${N}"
             fi
         else
-            echo "${Y}No pointers were updated.${N}"
+            echo "${R}bump-deps.sh failed; nothing committed.${N}"
         fi
     fi
 elif [[ "$out_of_sync" -gt 0 ]]; then
-    echo "${DIM}Re-run with --sync to bump bro's pointers to the standalone HEADs and commit.${N}"
+    echo "${DIM}Re-run with --sync to move bro's pins to the working trees' HEADs and commit.${N}"
 fi
 
 if [[ "$PUSH" -eq 1 ]]; then
     echo
-    echo "${BOLD}== Pushing ==${N}"
+    echo "${BOLD}== Pushing (bro last) ==${N}"
     for name in "${NAMES[@]}"; do
+        [[ "$name" == "bro" ]] && continue
         repo_push "$name" "$(repo_path "$name")"
     done
+    repo_push bro "$BRO_ROOT"
 fi
 
 exit 0

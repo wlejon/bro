@@ -36,7 +36,7 @@ each isolated to a small number of edges:
 | **Skia** hand-built | gitignored `lib/`, no prebuilt | core; fixed on a separate track (see [Skia](#skia-orthogonal-but-required)) |
 
 Gate net/video and the AI tower, keep CUDA opt-in, auto-fetch Skia, and a minimal
-build needs nothing but the submodules.
+build needs nothing but what configure fetches itself.
 
 Build mass, for scale (sibling source-file counts): the AI tower (
 brotensor (362) + brosoundml (171) + brolm (151) + brovisionml (121) +
@@ -107,7 +107,7 @@ HTML/CSS + Canvas2D + WebGL runtime with working screenshots and native Vulkan p
 | `BRO_WITH_VIDEO` | libvpx/webm/Opus | off | on | on | **needs vcpkg**; `<video>` should work out of the box |
 | `BRO_WITH_STEAM` | none (runtime dlopen) | off | on | on | already implemented; the stub template |
 | `BRO_WITH_TERMINAL` | bropty + brosearch + brothemes, and bromux when found (persistent sessions; compiled out without it; bromux brings brolink, `../brolink`) | off | on | on | no vcpkg; the native `<terminal>` element ([terminal-api.js](terminal-api.js)). Off = `bro.terminal.available === false` and `<terminal>` is an inert box |
-| `BRO_WITH_REMOTE` | broremote + brovideo + brolink (`../broremote`, `../brovideo`, `../brolink` only; no submodules) | off | on | on | no vcpkg; `bro.remote`, hosting the screen for a remote viewer ([remote-api.js](remote-api.js)). Switches itself off with a status line when `../broremote` or `../brovideo` is missing (`-DBROREMOTE_DIR=` / `-DBROVIDEO_DIR=` point elsewhere). brovideo's VA-API encoders on Linux when libva is present (with brodmabuf). Off = `bro.remote.available === false` |
+| `BRO_WITH_REMOTE` | broremote + brovideo + brolink | off | on | on | no vcpkg; `bro.remote`, hosting the screen for a remote viewer ([remote-api.js](remote-api.js)). Windows and Linux only (off by default on macOS). brovideo's VA-API encoders on Linux when libva is present (with brodmabuf). Off = `bro.remote.available === false` |
 
 ### Tier 2: the AI tower (brotensor is the base)
 
@@ -165,7 +165,7 @@ feature flags do not.
 |---|:--:|---|
 | `BRO_BUILD_EXECUTABLES` | ON top-level, **OFF** under `add_subdirectory` | Builds `bro` / `bro-headless` / `bro-server`. An embedder linking `bro_engine` with its own `main` wants the libraries, not a second `bro.exe` in its tree, and gets that without asking. See [embedding.md](embedding.md). |
 | `BRO_BUILD_TESTS` | ON top-level, **OFF** under `add_subdirectory` | Builds bro's own C++ unit tests and smoke tools: `bro_tile_test`, `bro_videoinspect`, `bro_videoencodetest`, `bro_mediabackendtest`, `bro_mediaclocktest`. They test bro, not the application embedding it, so an embedder's build never compiles or links them. The JS suite under `tests/` is separate and runs on `bro-headless`. |
-| `BRO_WITH_BRONZE` | **ON (mandatory)** | The JavaScript runtime host layer: `src/bronze_host` re-exposes the engine's DOM, WebGL2, audio, physics and AI as bronze host globals, executing all JavaScript via Bronze backed by Brass. Bronze is mandatory and configured on all profiles. It resolves a bronze checkout, `../bronze` first and the `third_party/bronze` submodule second, and builds its shared runtime into this tree. The configure prints which of the two it chose. The `bronze` compiler itself is built as an `EXCLUDE_FROM_ALL` target: `cmake --build build --target bronze-cli` (that name, not `bronze` — the Visual Studio generator keeps an `EXCLUDE_FROM_ALL` subdirectory's targets out of the solution, and `bronze-cli` is declared in bro's own tree so every generator can reach it). `src/bronze_host/README.md` is the reference. |
+| `BRO_WITH_BRONZE` | **ON (mandatory)** | The JavaScript runtime host layer: `src/bronze_host` re-exposes the engine's DOM, WebGL2, audio, physics and AI as bronze host globals, executing all JavaScript via Bronze backed by Brass. Bronze is mandatory and configured on all profiles. It resolves bronze like every sibling, `../bronze` first and otherwise the commit `cmake/bro_pins.cmake` pins (downloaded at configure), and builds its shared runtime into this tree. The configure prints which of the two it chose. The `bronze` compiler itself is built as an `EXCLUDE_FROM_ALL` target: `cmake --build build --target bronze-cli` (that name, not `bronze` — the Visual Studio generator keeps an `EXCLUDE_FROM_ALL` subdirectory's targets out of the solution, and `bronze-cli` is declared in bro's own tree so every generator can reach it). `src/bronze_host/README.md` is the reference. |
 
 An app built for `BRO_WITH_BRONZE` is a **folder** carrying
 `app.dll`/`app.so`/`app.dylib` beside its `index.html`; nothing in bro's build

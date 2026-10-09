@@ -61,33 +61,14 @@ jobs:
           - { name: windows, os: windows-2022, triplet: x64-windows, test: false, bronze_compiler: false }
           - { name: macos,   os: macos-15,     triplet: arm64-osx,   test: true,  bronze_compiler: true }
     steps:
-      - name: Rewrite SSH submodule URLs to HTTPS
-        run: git config --global url."https://github.com/".insteadOf "git@github.com:"
-
-      # submodules: recursive brings third_party/bronze along with the rest, at
-      # the commit this bro records — so the bronze built here is a pinned one
-      # that moves when someone bumps the pointer, never whatever bronze main
+      # A plain clone: every dependency (bronze, brass, the bro-* siblings, SDL,
+      # Jolt) comes from the commit cmake/bro_pins.cmake pins, fetched at
+      # configure into build/_deps. So the bronze built here is a pinned one
+      # that moves when someone bumps the pin, never whatever bronze main
       # happens to be this morning.
       - uses: actions/checkout@v7
-        with:
-          submodules: recursive
 
-      # The bronze_host checks compile fixtures that import three.js and pixi.js
-      # OUT OF the bronze tree, by sibling-relative path
-      # (`../../../../bronze/tests/oracle/threejs/three.module.js`, and
-      # node_modules shims whose "main" points the same way) — the layout every
-      # developer has, with bronze checked out beside bro. A runner has the same
-      # tree at third_party/bronze and no sibling, so give it the sibling name.
-      # A symlink, not a copy: one pinned tree under both names, which also
-      # means the configure resolves it as the standalone checkout and the
-      # checks run in exactly the layout they were written for. (Windows gets
-      # no link and so exercises the submodule branch of that resolution
-      # instead.)
-      - name: Link the bronze submodule as the sibling checkout
-        if: matrix.test
-        run: ln -s "$PWD/third_party/bronze" "$PWD/../bronze"
-
-      # SDL3 builds from third_party/SDL. Linux gets the Vulkan headers and
+      # SDL3 builds from the pinned source. Linux gets the Vulkan headers and
       # loader, Lavapipe (mesa-vulkan-drivers: the software Vulkan device the
       # headless tests run on, no Xvfb) and the Khronos validation layer, which
       # run_tests.sh turns on wherever it is installed. Shaders need nothing
@@ -129,20 +110,6 @@ jobs:
 
       - name: sccache
         uses: mozilla-actions/sccache-action@v0.0.11
-
-      # Build brass (submodule), which bronze uses as its code generator backend.
-      - name: Build brass
-        shell: bash
-        run: |
-          GEN_ARGS=""
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            GEN_ARGS="-G Ninja -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded"
-          elif [ "$RUNNER_OS" = "macOS" ]; then
-            GEN_ARGS="-G Ninja -DCMAKE_OSX_ARCHITECTURES=arm64"
-          fi
-          cmake -B third_party/brass/build third_party/brass -DCMAKE_BUILD_TYPE=Release $GEN_ARGS
-          cmake --build third_party/brass/build --config Release --target brass --parallel 4
-          echo "BRASS_ROOT=$PWD/third_party/brass" >> "$GITHUB_ENV"
 
       # Persist vcpkg's built-package archives across runs. The pinned manifest
       # keeps package ABIs stable, so after one warm run the configure-time dep
@@ -191,19 +158,27 @@ jobs:
           elif [ "$RUNNER_OS" = "macOS" ]; then
             GEN_ARGS="-G Ninja -DCMAKE_OSX_ARCHITECTURES=arm64"
           fi
-          BRASS_ARGS=""
-          if [ -n "${BRASS_ROOT:-}" ]; then
-            BRASS_ARGS="-DBRASS_ROOT=$BRASS_ROOT"
-          fi
           cmake -B build \
             -DBRO_PROFILE=app \
             -DBROGAMEAGENT_WITH_NAVMESH=ON \
-            $BRASS_ARGS \
             -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }} \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER_LAUNCHER=sccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
             $GEN_ARGS
+
+      # The bronze_host checks compile fixtures that import three.js and pixi.js
+      # OUT OF the bronze tree, by sibling-relative path
+      # (`../../../../bronze/tests/oracle/threejs/three.module.js`, and
+      # node_modules shims whose "main" points the same way) — the layout every
+      # developer has, with bronze checked out beside bro. A runner has the
+      # pinned tree configure fetched into build/_deps and no sibling, so give
+      # it the sibling name. A symlink, not a copy: one pinned tree under both
+      # names. It goes in after configure, so configure still fetched the pin
+      # rather than taking ../bronze as a working tree.
+      - name: Link the pinned bronze as the sibling checkout
+        if: matrix.test
+        run: ln -s "$PWD/build/_deps/bronze-src" "$PWD/../bronze"
 
       - name: Build
         # Bounded jobs: a bare --parallel passes unlimited -j to make and OOM-kills
@@ -289,12 +264,7 @@ jobs:
           - { name: windows, os: windows-2022, smoke: false }
           - { name: macos,   os: macos-15,     smoke: false }
     steps:
-      - name: Rewrite SSH submodule URLs to HTTPS
-        run: git config --global url."https://github.com/".insteadOf "git@github.com:"
-
       - uses: actions/checkout@v7
-        with:
-          submodules: recursive
 
       # Minimal profile Linux build dependencies: Vulkan headers + loader,
       # Lavapipe for the smoke run, windowing, fonts and audio.
@@ -328,20 +298,6 @@ jobs:
       - name: sccache
         uses: mozilla-actions/sccache-action@v0.0.11
 
-      # Build brass (submodule), required by bronze runtime.
-      - name: Build brass
-        shell: bash
-        run: |
-          GEN_ARGS=""
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            GEN_ARGS="-G Ninja -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded"
-          elif [ "$RUNNER_OS" = "macOS" ]; then
-            GEN_ARGS="-G Ninja -DCMAKE_OSX_ARCHITECTURES=arm64"
-          fi
-          cmake -B third_party/brass/build third_party/brass -DCMAKE_BUILD_TYPE=Release $GEN_ARGS
-          cmake --build third_party/brass/build --config Release --target brass --parallel 4
-          echo "BRASS_ROOT=$PWD/third_party/brass" >> "$GITHUB_ENV"
-
       - name: Configure
         shell: bash
         run: |
@@ -351,13 +307,8 @@ jobs:
           elif [ "$RUNNER_OS" = "macOS" ]; then
             GEN_ARGS="-G Ninja -DCMAKE_OSX_ARCHITECTURES=arm64"
           fi
-          BRASS_ARGS=""
-          if [ -n "${BRASS_ROOT:-}" ]; then
-            BRASS_ARGS="-DBRASS_ROOT=$BRASS_ROOT"
-          fi
           cmake -B build \
             -DBRO_PROFILE=minimal \
-            $BRASS_ARGS \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER_LAUNCHER=sccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \

@@ -183,7 +183,7 @@ while you technically could easily wire this up to be an actual web browser, it 
 
 ## why are there so many repos?
 
-splitting the codebase exploration into chunks makes coding agents work better for my workflow. i'll try to keep setup reasonable but i expect the submodule list will continue to grow. [docs/ecosystem.md](docs/ecosystem.md) is the map: every repo, what it's for, and how they depend on each other, including the desktop-environment libraries bro doesn't link yet.
+splitting the codebase exploration into chunks makes coding agents work better for my workflow. i'll try to keep setup reasonable but i expect the list of sibling repos will continue to grow. [docs/ecosystem.md](docs/ecosystem.md) is the map: every repo, what it's for, and how they depend on each other, including the desktop-environment libraries bro doesn't link yet.
 
 ## License
 

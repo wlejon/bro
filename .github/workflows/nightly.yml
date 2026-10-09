@@ -14,7 +14,7 @@ name: Nightly
 # The zip carries BOTH halves of the compiled-app story: binaries built with
 # BRO_WITH_BRONZE=ON, which load an app directory's app.dll/.so/.dylib, and the
 # bronze compiler under bronze/, which produces one. They are built from the
-# same third_party/bronze checkout in the same job on purpose — a compiled
+# same pinned bronze tree (build/_deps/bronze-src) in the same job on purpose — a compiled
 # module carries the ABI fingerprint of the bronze that emitted it and the host
 # refuses to load a module whose fingerprint is not its own, so a compiler and
 # a host from two different bronze commits would ship as a pair that cannot
@@ -73,22 +73,14 @@ jobs:
           # to compile there.
           - { name: macos,   os: macos-15,     cuda: false, triplet: arm64-osx,   jobs: 3 }
     steps:
-      # bro's own submodules are HTTPS, but a nested one can still carry a
-      # git@github.com: URL (brokit's third_party/broimage). Rewrite them
-      # to HTTPS *before* checkout so the default GITHUB_TOKEN can fetch them
-      # (every sibling repo is public). Must run before actions/checkout syncs
-      # submodule URLs into .git/config.
-      - name: Rewrite SSH submodule URLs to HTTPS
-        run: git config --global url."https://github.com/".insteadOf "git@github.com:"
-
-      # submodules: recursive also brings third_party/bronze, at the commit this
-      # bro records — the compiler shipped in the zip is that pinned one.
+      # A plain clone: configure fetches every dependency at the commit
+      # cmake/bro_pins.cmake pins, bronze included — the compiler shipped in
+      # the zip is that pinned one.
       - uses: actions/checkout@v7
         with:
-          submodules: recursive
           fetch-depth: 0        # tags needed for package-release.sh's version fallback
 
-      # SDL3 is built from third_party/SDL. Linux gets the Vulkan headers and
+      # SDL3 is built from the pinned source. Linux gets the Vulkan headers and
       # loader and Lavapipe (mesa-vulkan-drivers), the software Vulkan device
       # the smoke tests run on. Shaders need nothing here: glslang is built
       # from source in-process (cmake/glslang.cmake).
@@ -146,18 +138,6 @@ jobs:
 
       - name: sccache
         uses: mozilla-actions/sccache-action@v0.0.11
-
-      # Build brass (submodule), which bronze uses as its code generator backend.
-      - name: Build brass
-        shell: bash
-        run: |
-          GEN_ARGS=""
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            GEN_ARGS="-G Ninja -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded"
-          fi
-          cmake -B third_party/brass/build third_party/brass -DCMAKE_BUILD_TYPE=Release $GEN_ARGS
-          cmake --build third_party/brass/build --config Release --target brass --parallel ${{ matrix.jobs }}
-          echo "BRASS_ROOT=$PWD/third_party/brass" >> "$GITHUB_ENV"
 
       # Persist vcpkg's built-package archives across runs (same scheme as
       # ci.yml: per-run key + restore-keys pick the newest, so rebuilds after
@@ -235,7 +215,6 @@ jobs:
           cmake -B build \
             -DBRO_PROFILE=full \
             -DBROGAMEAGENT_WITH_NAVMESH=ON \
-            -DBRASS_ROOT=$BRASS_ROOT \
             -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }} \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER_LAUNCHER=sccache \
