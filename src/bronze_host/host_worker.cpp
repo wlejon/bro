@@ -571,36 +571,14 @@ void WorkerInstance::threadFunc() {
         // on-disk code cache like the page's.
         applyCodeCacheOptions(opts);
 
-        auto hasAwaitStmt = [](const std::string& code) {
-            size_t i = 0;
-            while (i < code.size()) {
-                while (i < code.size() && (code[i] == ' ' || code[i] == '\t')) i++;
-                if (i + 5 <= code.size() && code.compare(i, 5, "await") == 0) {
-                    char next = (i + 5 < code.size()) ? code[i + 5] : '\0';
-                    if (next == ' ' || next == '\t' || next == '(') return true;
-                }
-                while (i < code.size() && code[i] != '\n') i++;
-                if (i < code.size() && code[i] == '\n') i++;
-            }
-            return false;
-        };
-
-        if (hasAwaitStmt(scriptCode)) {
-            scriptCode = "(async () => {\n" + scriptCode +
-                         "\n})().catch(err => { console.error(err && err.stack ? err.stack : err); });\n";
-        }
-
+        // Compiled as written. bronze's parser takes `await` at the top level
+        // of a script or a module (its lowering then runs the top level as an
+        // async body and hands back its promise), so neither a module worker
+        // nor a classic one with top-level await is rewritten: an async
+        // wrapper would turn a module's imports into syntax errors and a
+        // script's declarations into locals. A top level that rejects reaches
+        // the rejection tracking installed above, like any other promise.
         auto res = bronze::eval::evalScript(scriptCode, opts);
-        if (res.thrown) {
-            // thrownValueText, not toUtf8: a thrown Error is an object, and
-            // toUtf8 of an object is a hard error in the embed API.
-            std::string errStr = thrownValueText(res.value);
-            if (errStr.find("await") != std::string::npos) {
-                std::string wrapped = "(async () => {\n" + scriptCode +
-                                      "\n})().catch(err => { console.error(err && err.stack ? err.stack : err); });\n";
-                res = bronze::eval::evalScript(wrapped, opts);
-            }
-        }
 
         if (res.thrown) {
             std::string errStr;
@@ -632,6 +610,13 @@ void WorkerInstance::threadFunc() {
     ev::Persistent fetchTick(ev::globalValue("__brokit_fetch_tick").value);
     ev::Persistent wsTick(ev::globalValue("__brokit_ws_tick").value);
     ev::Persistent timersTick(ev::globalValue("__brokit_tick_timers").value);
+    ev::Persistent timersNext(ev::globalValue("__brokit_next_timer").value);
+    // Date.now()'s clock, which brokit's timers are set on.
+    auto wallNowMs = [] {
+        return static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                       std::chrono::system_clock::now().time_since_epoch())
+                                       .count());
+    };
     ev::Persistent fetchHasPending(ev::globalValue("__brokit_fetch_has_pending").value);
     ev::Persistent fsAsyncTick(ev::globalValue("__brokit_fs_async_tick").value);
     ev::Persistent fsAsyncHasPending(ev::globalValue("__brokit_fs_async_has_pending").value);
@@ -693,17 +678,22 @@ void WorkerInstance::threadFunc() {
                     dispatchWorkerError(errStr, scriptPath_, 0);
                 }
             }
+            // Each message is a task: its microtasks run before the next one.
+            if (ev::microtasksPending()) ev::drainMicrotasks();
         }
 
-        double nextTimerMs = -1.0;
-        double nowMs = static_cast<double>(
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::system_clock::now().time_since_epoch()).count());
+        // The due timers, one task each with its microtask checkpoint after
+        // it (so a promise a timer resolves continues before the next timer,
+        // and a zero timer that continuation sets runs in this same pass).
+        // Bounded so a timer that keeps re-arming itself at 0 ms cannot
+        // starve messages.
+        const double nowMs = wallNowMs();
         if (ev::isFunction(timersTick.get())) {
-            Value nowVal = ev::fromDouble(nowMs);
-            ev::CallResult res = ev::call(timersTick.get(), ev::undefined(), std::span<const Value>(&nowVal, 1));
-            if (!res.thrown && ev::isNumber(res.value)) {
-                nextTimerMs = ev::toDouble(res.value);
+            Value args[2] = {ev::fromDouble(nowMs), ev::fromDouble(1.0)};
+            for (int fired = 0; fired < 256; ++fired) {
+                ev::CallResult res = ev::call(timersTick.get(), ev::undefined(), std::span<const Value>(args, 2));
+                if (ev::microtasksPending()) ev::drainMicrotasks();
+                if (res.thrown || !ev::isNumber(res.value) || ev::toDouble(res.value) != 0.0) break;
             }
         }
         if (ev::isFunction(fetchTick.get())) {
@@ -736,6 +726,16 @@ void WorkerInstance::threadFunc() {
             Value has = ev::call(fsAsyncHasPending.get(), ev::undefined(), {}).value;
             if (ev::toBool(has)) hasPendingWork = true;
         }
+
+        // The next timer, read after everything this turn ran: a timer set
+        // by a message, a fetch, a sibling job or a microtask counts.
+        double nextTimerMs = -1.0;
+        if (ev::isFunction(timersNext.get())) {
+            Value nowVal = ev::fromDouble(wallNowMs());
+            ev::CallResult res = ev::call(timersNext.get(), ev::undefined(), std::span<const Value>(&nowVal, 1));
+            if (!res.thrown && ev::isNumber(res.value)) nextTimerMs = ev::toDouble(res.value);
+        }
+        if (nextTimerMs == 0.0) continue;  // one is due already: no wait
 
         {
             std::unique_lock<std::mutex> lock(toWorkerMutex_);

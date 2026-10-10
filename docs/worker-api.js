@@ -7,6 +7,17 @@
  *
  * Dedicated background thread running an isolated JavaScript runtime
  * communicating via structured clone postMessage/onmessage.
+ *
+ * The script is compiled as written: a worker with `import` / `export` is a
+ * module, and top-level `await` works in a module or a classic script (its
+ * messages wait until the top level finishes, as in a module worker).
+ *
+ * Event loop: each message, and each due timer, is a task followed by a
+ * microtask checkpoint (a promise a timer resolves continues before the next
+ * timer runs). `setTimeout(fn, 0)` runs on the worker's next turn — well under
+ * a millisecond (50 chained zero timers take ~0-1 ms), so yielding to the loop
+ * with `await new Promise(r => setTimeout(r, 0))` is cheap — and an idle
+ * worker sleeps until its next timer or message. Timers run on real time.
  * @example
  * const worker = new Worker('worker.js');
  *   worker.onmessage = (e) => console.log('From worker:', e.data);
