@@ -275,12 +275,26 @@ bool VulkanContext::createInstance() {
     createInfo.ppEnabledExtensionNames = extensions.data();
 
     VkDebugUtilsMessengerCreateInfoEXT debugCreateInfo{};
+    // BRO_VK_SYNC_VALIDATION=1 adds the layer's synchronization validation
+    // (hazards between commands and between submissions; several times
+    // slower). The layer's own VK_KHRONOS_VALIDATION_VALIDATE_SYNC=1 does the
+    // same without bro's help.
+    const VkValidationFeatureEnableEXT syncFeature = VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT;
+    VkValidationFeaturesEXT validationFeatures{};
     if (config_.enableValidation) {
         createInfo.enabledLayerCount = static_cast<uint32_t>(validationLayers.size());
         createInfo.ppEnabledLayerNames = validationLayers.data();
         populateDebugMessengerCreateInfo(debugCreateInfo);
         debugCreateInfo.pNext = createInfo.pNext;
         createInfo.pNext = &debugCreateInfo;
+        if (envFlag("BRO_VK_SYNC_VALIDATION", "BRO_VULKAN_SYNC_VALIDATION")) {
+            validationFeatures.sType = VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT;
+            validationFeatures.enabledValidationFeatureCount = 1;
+            validationFeatures.pEnabledValidationFeatures = &syncFeature;
+            validationFeatures.pNext = createInfo.pNext;
+            createInfo.pNext = &validationFeatures;
+            LOG_INFO("Vulkan: synchronization validation on");
+        }
     } else {
         createInfo.enabledLayerCount = 0;
     }

@@ -53,10 +53,15 @@ LayoutUsage layoutUsage(VkImageLayout layout, bool asSource) {
     case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
     case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL:
     case VK_IMAGE_LAYOUT_STENCIL_ATTACHMENT_OPTIMAL:
-        u.stages = kDepthStages;
-        u.access = asSource ? VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT
+        // A depth/stencil image in this layout may also be an MSAA resolve
+        // target, and a depth/stencil resolve writes in the COLOR_ATTACHMENT_
+        // OUTPUT stage with COLOR_ATTACHMENT_WRITE access (the spec's resolve
+        // rule), so both halves of a barrier cover that too.
+        u.stages = kDepthStages | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        u.access = asSource ? VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT
                             : VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
-                                  VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                                  VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+                                  VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
         break;
     case VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL:
     case VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL:
