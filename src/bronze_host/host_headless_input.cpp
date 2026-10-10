@@ -2,6 +2,7 @@
 #include "bronze_host/host_builder.h"
 #include "engine/engine.h"
 #include "engine/gamepad.h"
+#include "engine/key_mapping.h"
 #include "engine/window_host.h"
 #include "platform/keyboard.h"
 #include <string>
@@ -15,6 +16,22 @@ int scancodeForKeycode(int keycode) {
     if (keycode == 0) return 0;
     return static_cast<int>(platform::keyboard().scancodeFromKey(
         static_cast<platform::Keycode>(keycode), nullptr));
+}
+
+// keyDown/keyUp's first argument: a keycode, or a name — a KeyboardEvent.code
+// ("KeyA", "MediaPlayPause"), a KeyboardEvent.key ("Enter", "MediaTrackNext",
+// "AudioVolumeUp") or one character. A name fills in the scancode too.
+bool keyArg(Value v, int& keycode, int& scancode) {
+    if (ev::isString(v)) {
+        int32_t kc = 0, sc = 0;
+        if (!engine::webKeyToKeycode(ev::toUtf8(v), kc, sc)) return false;
+        keycode = kc;
+        scancode = sc;
+        return true;
+    }
+    keycode = satCast<int>(ev::toDouble(v));
+    scancode = 0;
+    return true;
 }
 
 int gamepadResolveIndex(Value arg, int (*fromName)(const std::string&)) {
@@ -253,8 +270,11 @@ void installHeadlessInput(engine::Engine& engine) {
     regBoth("keyDown", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             if (a.empty()) return ev::throwTypeError("keyDown(keycode [, scancode, mod, repeat, windowId])");
-            int keycode = satCast<int>(ev::toDouble(a[0]));
-            int scancode = a.size() > 1 && !ev::isUndefined(a[1]) ? satCast<int>(ev::toDouble(a[1])) : 0;
+            int keycode = 0, scancode = 0;
+            if (!keyArg(a[0], keycode, scancode)) return ev::throwTypeError("keyDown: no key has that name");
+            if (a.size() > 1 && !ev::isUndefined(a[1]) && ev::toDouble(a[1]) != 0) {
+                scancode = satCast<int>(ev::toDouble(a[1]));
+            }
             int mod = a.size() > 2 && !ev::isUndefined(a[2]) ? satCast<int>(ev::toDouble(a[2])) : 0;
             bool repeat = a.size() > 3 && !ev::isUndefined(a[3]) ? ev::toBool(a[3]) : false;
             if (scancode == 0) scancode = scancodeForKeycode(keycode);
@@ -270,8 +290,11 @@ void installHeadlessInput(engine::Engine& engine) {
     regBoth("keyUp", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             if (a.empty()) return ev::throwTypeError("keyUp(keycode [, scancode, mod, windowId])");
-            int keycode = satCast<int>(ev::toDouble(a[0]));
-            int scancode = a.size() > 1 && !ev::isUndefined(a[1]) ? satCast<int>(ev::toDouble(a[1])) : 0;
+            int keycode = 0, scancode = 0;
+            if (!keyArg(a[0], keycode, scancode)) return ev::throwTypeError("keyUp: no key has that name");
+            if (a.size() > 1 && !ev::isUndefined(a[1]) && ev::toDouble(a[1]) != 0) {
+                scancode = satCast<int>(ev::toDouble(a[1]));
+            }
             int mod = a.size() > 2 && !ev::isUndefined(a[2]) ? satCast<int>(ev::toDouble(a[2])) : 0;
             if (scancode == 0) scancode = scancodeForKeycode(keycode);
 

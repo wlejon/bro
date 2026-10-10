@@ -4,6 +4,58 @@
 
 namespace bro::engine {
 
+namespace {
+
+// The keys past the HID keyboard page (consumer keys) and the volume keys.
+// Their `key` and `code` are the same name in UI Events, except where noted.
+struct NamedKey {
+    platform::Scancode scancode;
+    const char* key;
+    const char* code;
+};
+
+constexpr NamedKey kNamedKeys[] = {
+    {platform::sc::Mute, "AudioVolumeMute", "AudioVolumeMute"},
+    {platform::sc::VolumeUp, "AudioVolumeUp", "AudioVolumeUp"},
+    {platform::sc::VolumeDown, "AudioVolumeDown", "AudioVolumeDown"},
+    {platform::sc::Sleep, "Standby", "Sleep"},
+    {platform::sc::Wake, "WakeUp", "WakeUp"},
+    {platform::sc::MediaPlay, "MediaPlay", "MediaPlay"},
+    {platform::sc::MediaPause, "MediaPause", "MediaPause"},
+    {platform::sc::MediaRecord, "MediaRecord", "MediaRecord"},
+    {platform::sc::MediaFastForward, "MediaFastForward", "MediaFastForward"},
+    {platform::sc::MediaRewind, "MediaRewind", "MediaRewind"},
+    {platform::sc::MediaNextTrack, "MediaTrackNext", "MediaTrackNext"},
+    {platform::sc::MediaPreviousTrack, "MediaTrackPrevious", "MediaTrackPrevious"},
+    {platform::sc::MediaStop, "MediaStop", "MediaStop"},
+    {platform::sc::MediaEject, "Eject", "Eject"},
+    {platform::sc::MediaPlayPause, "MediaPlayPause", "MediaPlayPause"},
+    {platform::sc::MediaSelect, "LaunchMediaPlayer", "MediaSelect"},
+    {platform::sc::AcSearch, "BrowserSearch", "BrowserSearch"},
+    {platform::sc::AcHome, "BrowserHome", "BrowserHome"},
+    {platform::sc::AcBack, "BrowserBack", "BrowserBack"},
+    {platform::sc::AcForward, "BrowserForward", "BrowserForward"},
+    {platform::sc::AcStop, "BrowserStop", "BrowserStop"},
+    {platform::sc::AcRefresh, "BrowserRefresh", "BrowserRefresh"},
+    {platform::sc::AcBookmarks, "BrowserFavorites", "BrowserFavorites"},
+};
+
+const char* mediaKeyName(int32_t keycode) {
+    for (const auto& k : kNamedKeys) {
+        if (platform::keycodeFromScancode(k.scancode) == keycode) return k.key;
+    }
+    return nullptr;
+}
+
+const char* mediaCodeName(int32_t scancode) {
+    for (const auto& k : kNamedKeys) {
+        if (k.scancode == scancode) return k.code;
+    }
+    return nullptr;
+}
+
+}  // namespace
+
 std::string sdlKeycodeToWebKey(int32_t keycode, int mod)
 {
     // Special keys (with platform::kScancodeMask = 0x40000000)
@@ -57,6 +109,10 @@ std::string sdlKeycodeToWebKey(int32_t keycode, int mod)
         case platform::kc::Kp9: return "9";
         default: break;
     }
+
+    // Media, volume and browser keys: the names UI Events KeyboardEvent key
+    // Values gives them (and Chromium reports).
+    if (const char* named = mediaKeyName(keycode)) return named;
 
     // Printable ASCII characters
     if (keycode >= 'a' && keycode <= 'z') {
@@ -176,7 +232,38 @@ std::string sdlScancodeToWebCode(int32_t scancode)
     if (scancode >= 104 && scancode <= 115) {
         return "F" + std::to_string(13 + (scancode - 104));
     }
+    if (const char* named = mediaCodeName(scancode)) return named;
     return "Unknown" + std::to_string(scancode);
+}
+
+bool webKeyToKeycode(const std::string& name, int32_t& keycode, int32_t& scancode)
+{
+    if (name.empty()) return false;
+    // A code name first ("KeyA", "MediaPlayPause", "ArrowLeft", ...): the
+    // physical key, and the key it types unshifted.
+    for (int32_t sc = 1; sc < platform::sc::Count; ++sc) {
+        if (sdlScancodeToWebCode(sc) != name) continue;
+        scancode = sc;
+        keycode = platform::defaultKeyFromScancode(sc);
+        return true;
+    }
+    // A single character types itself.
+    if (name.size() == 1) {
+        const unsigned char c = static_cast<unsigned char>(name[0]);
+        keycode = (c >= 'A' && c <= 'Z') ? c - 'A' + 'a' : c;
+        scancode = 0;
+        return true;
+    }
+    // A key name ("Enter", "MediaTrackNext", "AudioVolumeUp", "Shift"): the
+    // first scancode whose keycode names it.
+    for (int32_t sc = 1; sc < platform::sc::Count; ++sc) {
+        const int32_t kc = platform::defaultKeyFromScancode(sc);
+        if (kc == 0 || sdlKeycodeToWebKey(kc, 0) != name) continue;
+        scancode = sc;
+        keycode = kc;
+        return true;
+    }
+    return false;
 }
 
 } // namespace bro::engine

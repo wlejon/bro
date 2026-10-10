@@ -95,6 +95,14 @@ int legacyKeyCodeFor(const std::string& code, const std::string& key) {
         if (c >= '0' && c <= '9') return 96 + (c - '0');
     }
     if (key == "CapsLock") return 20;
+    // Media and volume keys, as Chromium on Windows reports them (VK_*).
+    if (key == "AudioVolumeMute") return 173;
+    if (key == "AudioVolumeDown") return 174;
+    if (key == "AudioVolumeUp") return 175;
+    if (key == "MediaTrackNext") return 176;
+    if (key == "MediaTrackPrevious") return 177;
+    if (key == "MediaStop") return 178;
+    if (key == "MediaPlayPause") return 179;
     if (key == "NumLock") return 144;
     if (key == "ScrollLock") return 145;
     if (code.size() == 4 && code.rfind("Key", 0) == 0) {
