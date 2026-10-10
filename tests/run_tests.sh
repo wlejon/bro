@@ -543,6 +543,15 @@ run_one_test() {
             EXTRA_ENV+=( "BRO_HEADLESS_COMPOSITOR=1" "BC_TEST_CLIENT_DIR=$(bc_client_dir)" )
             ;;
     esac
+    # bro.conf tests write settings: into a scratch BRO_APP_HOME, never the
+    # user's own settings.ini.
+    local CONF_HOME=""
+    case "$REL" in
+        conf/*)
+            CONF_HOME=$(mktemp -d "${TMPDIR:-/tmp}/bro_conf.XXXXXX")
+            EXTRA_ENV+=( "BRO_APP_HOME=$(to_win_path "$CONF_HOME")" )
+            ;;
+    esac
 
     local EXTRA_TEST_ARGS=()
     if [[ "${BRO_TEST_ALLOW_RASTER:-0}" == "1" ]]; then
@@ -556,6 +565,7 @@ run_one_test() {
         OUTPUT=$(env "${EXTRA_ENV[@]}" "$BRO" "${EXTRA_TEST_ARGS[@]}" "$TEST_APP_FOR_RUN" "$TEST_FILE" 2>&1)
         STATUS=$?
     fi
+    [[ -n "$CONF_HOME" ]] && rm -rf "$CONF_HOME"
 
     # The engine fails fast or throws if Vulkan initialization fails when GPU is configured.
     # Catch any Vulkan failure and fail loud and clear.

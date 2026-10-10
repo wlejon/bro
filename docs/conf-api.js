@@ -69,20 +69,58 @@ bro.conf.getOptional = function(keyOrPath, optKey) {};
 
 /**
  * Sets a configuration value for the user layer. Validates against any registered
- * schema for the key and persists the change.
+ * schema for the key and updates the store in memory at once: a `get` right after
+ * reads the new value, and this process's watchers hear it on the next frame pump.
  *
- * Returns a Promise that resolves on successful update and disk commit, or rejects
- * on validation error (e.g. out of range, type mismatch, invalid enum).
+ * Writing is cheap and asynchronous: `set` does not touch the disk. The settings
+ * file is written about 50 ms after the first unwritten change, on a writer
+ * thread, as ONE write for everything changed in that window (a burst of sets is
+ * one write), atomically (a temp file renamed over the old one, so a crash never
+ * leaves a torn file). The write merges the changed keys onto the file as it is
+ * on disk, so keys another process wrote meanwhile are kept. Other processes
+ * watching the file hear the change once it is written. Pending changes are
+ * written by `bro.conf.flush()`, at engine/realm teardown, and when the store is
+ * destroyed at exit, so nothing set is lost on a normal exit. A large store makes
+ * `set` no slower: the cost is the value set, not the file.
+ *
+ * Returns a Promise that resolves once the value is in memory (not on disk: call
+ * `flush()` for that), or rejects on validation error (e.g. out of range, type
+ * mismatch, invalid enum).
  *
  * @param {string} keyOrPath - Dotted key path ("section.key") or section path
  * @param {string|*} [optKeyOrValue] - Key name if 3 arguments, or value if 2 arguments
  * @param {*} [optValue] - Value if 3 arguments
  * @returns {Promise<void>} Resolves on success, rejects on validation error
+ *
+ * @example
+ *   // Cheap enough per frame or per keystroke; the file is written once.
+ *   for (const p of paths) list.push(p);
+ *   bro.conf.set('music.library.paths', list);
+ *   bro.conf.set('music.ui.volume', 0.8);
  */
 bro.conf.set = function(keyOrPath, optKeyOrValue, optValue) {};
 
 /**
+ * Writes every change made by `set`/`reset` so far to the settings file now, and
+ * returns once it is there. Blocking (it waits for the write, a few ms for a large
+ * store), so call it where the file must be current: before handing off to
+ * another process that will read it, before a deliberate hard exit, or in a test
+ * that reads the file. Not needed for normal exits: teardown flushes.
+ *
+ * A failed write keeps the changes pending; they are retried by the next change
+ * or flush.
+ *
+ * @returns {boolean} true when everything is on disk; false if the write failed
+ *
+ * @example
+ *   bro.conf.set('app.session.lastFile', path);
+ *   bro.conf.flush();   // the file holds lastFile now: a process started next reads it
+ */
+bro.conf.flush = function() {};
+
+/**
  * Resets a configuration key to its default value by removing any user override.
+ * Like `set`, it changes memory at once and the file on the next coalesced write.
  *
  * @param {string} keyOrPath - Dotted key path ("section.key") or section path
  * @param {string} [optKey] - Key name if first parameter is section path
@@ -126,6 +164,11 @@ bro.conf.listKeys = function(path) {};
  * Registers a change watcher for a section path or specific key. Notifications
  * from other threads or external processes are safely queued and delivered on
  * the JavaScript main thread during the engine frame pump.
+ *
+ * Another process changing the same settings file is heard when its write lands
+ * (the file is watched); this process's own writes are not mistaken for external
+ * changes, and a value set here but not yet written is never reverted by such a
+ * reload.
  *
  * Callback receives `(key, newValue, oldValue, path)`.
  *
