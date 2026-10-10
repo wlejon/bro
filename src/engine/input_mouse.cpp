@@ -490,7 +490,11 @@ void Engine::handleMouseUp(float x, float y, int button) {
                                 movX, movY, x, pageY,
                                 util::currentTimeMs(),
                                 inputConfig_.doubleClickThresholdMs,
-                                inputConfig_.doubleClickDistancePx);
+                                inputConfig_.doubleClickDistancePx,
+                                [this, docX, docY]() {
+                                    flushLayoutForRead(document_.get());
+                                    return hitTest(docX, docY);
+                                });
     }
 }
 

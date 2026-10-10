@@ -290,7 +290,12 @@ void focusNewControl(
         newInput->setFocused(true);
         auto itype = newInput->inputType(target);
 
-        if (itype == layout::ElInput::InputType::Checkbox) {
+        if (!intent.primary &&
+            (itype == layout::ElInput::InputType::Checkbox ||
+             itype == layout::ElInput::InputType::Radio)) {
+            // A right or middle press focuses the box but does not toggle it:
+            // it makes no click, so nothing would confirm or undo the toggle.
+        } else if (itype == layout::ElInput::InputType::Checkbox) {
             state.activationTarget.assign(ctx.document, target);
             state.activationWasChecked = target->hasAttribute("checked");
             if (target->hasAttribute("checked")) {
@@ -587,6 +592,7 @@ bool dispatchDocMousePress(
         armValueChange(focusEl);
     }
 
+    intent.primary = evt.button() == 0;
     focusNewControl(ctx, state, target, focusX, focusY, intent);
 
     dom::dispatchDomEvent(target, evt);
@@ -624,7 +630,13 @@ void dispatchDocMouseRelease(
     float pageX, float pageY,
     double nowMs,
     double dblThresholdMs,
-    float dblDistPx) {
+    float dblDistPx,
+    const std::function<dom::Element*()>& hitAgain) {
+
+    // The release target, held across the mouseup and click handlers, which
+    // may take it out of the tree (a list repainting its rows on select).
+    dom::ElementHandle releaseTarget;
+    if (target) releaseTarget.assign(ctx.document, target);
 
     if (target) {
         dom::dispatchDomEvent(target, upEvt);
@@ -656,7 +668,35 @@ void dispatchDocMouseRelease(
                     if (d == a) { clickTarget = a; break; }
         }
     }
-    if (clickTarget && !isInDisabledControl(clickTarget)) {
+    auto populate = [&](dom::MouseEvent& e) {
+        e.setClientX(clientX); e.setClientY(clientY);
+        e.setScreenX(clientX); e.setScreenY(clientY);
+        e.setPageX(pageX);     e.setPageY(pageY);
+        e.setMovementX(movementX); e.setMovementY(movementY);
+        e.setButton(button); e.setButtons(buttons);
+        e.setCtrlKey((mod & platform::kmod::Ctrl) != 0);
+        e.setShiftKey((mod & platform::kmod::Shift) != 0);
+        e.setAltKey((mod & platform::kmod::Alt) != 0);
+        e.setMetaKey((mod & platform::kmod::Gui) != 0);
+        e.setIsTrusted(true);
+    };
+
+    // Only the primary button clicks (UI Events): a middle or right
+    // press-and-release is an auxclick, with no activation behaviour and no
+    // part in double-click counting. Counting it let a left click followed by
+    // a right click on the same spot read as a double-click, opening what was
+    // only meant to get a context menu. It does break a left-click run.
+    if (clickTarget && button != 0) {
+        if (!isInDisabledControl(clickTarget)) {
+            dom::MouseEvent auxEvt("auxclick", true, true);
+            populate(auxEvt);
+            auxEvt.setDetail(1);
+            applyMouseOffset(auxEvt, clickTarget);
+            dom::dispatchDomEvent(clickTarget, auxEvt);
+        }
+        state.clickCount = 0;
+        state.lastClickTarget.reset();
+    } else if (clickTarget && !isInDisabledControl(clickTarget)) {
         // The click's own target from here on: the double-click bookkeeping,
         // the activation behaviours and the form walk are all about it.
         dom::Element* target = clickTarget;
@@ -673,19 +713,6 @@ void dispatchDocMouseRelease(
         state.lastClickX = clientX;
         state.lastClickY = clientY;
         state.lastClickTarget.assign(ctx.document, target);
-
-        auto populate = [&](dom::MouseEvent& e) {
-            e.setClientX(clientX); e.setClientY(clientY);
-            e.setScreenX(clientX); e.setScreenY(clientY);
-            e.setPageX(pageX);     e.setPageY(pageY);
-            e.setMovementX(movementX); e.setMovementY(movementY);
-            e.setButton(button); e.setButtons(buttons);
-            e.setCtrlKey((mod & platform::kmod::Ctrl) != 0);
-            e.setShiftKey((mod & platform::kmod::Shift) != 0);
-            e.setAltKey((mod & platform::kmod::Alt) != 0);
-            e.setMetaKey((mod & platform::kmod::Gui) != 0);
-            e.setIsTrusted(true);
-        };
 
         dom::MouseEvent clickEvt("click");
         populate(clickEvt);
@@ -893,12 +920,23 @@ void dispatchDocMouseRelease(
             if (target) applyMouseOffset(dblEvt, target);
             dom::dispatchDomEvent(target, dblEvt);
         }
+    }
 
-        if (button == 2) {
+    // contextmenu follows a right release whether or not it made a click,
+    // and is on what is under the pointer when it fires, as on Windows where
+    // a browser hit-tests it after mouseup. When the mouseup or click
+    // handlers took the release target out of the tree, the element standing
+    // there now gets it; otherwise it would bubble through a detached
+    // subtree and never reach the list or page listening for it.
+    if (button == 2) {
+        dom::Element* ctxTarget = releaseTarget.get();
+        if (ctxTarget && !isAttached(ctx.document, ctxTarget)) ctxTarget = nullptr;
+        if (!ctxTarget && target && hitAgain) ctxTarget = hitAgain();
+        if (ctxTarget) {
             dom::MouseEvent ctxEvt("contextmenu", true, true);
             populate(ctxEvt);
-            if (target) applyMouseOffset(ctxEvt, target);
-            dom::dispatchDomEvent(target, ctxEvt);
+            applyMouseOffset(ctxEvt, ctxTarget);
+            dom::dispatchDomEvent(ctxTarget, ctxEvt);
         }
     }
 

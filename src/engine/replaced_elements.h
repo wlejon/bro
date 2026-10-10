@@ -9,6 +9,8 @@
 #include "layout/el_input.h"
 #include "layout/el_textarea.h"
 
+#include <functional>
+
 namespace bro::dom { class Document; }
 namespace bro::platform { class Window; }
 namespace broaudio { class Engine; }
@@ -113,6 +115,9 @@ struct PressIntent {
     /// Shift held: extend the existing selection from its anchor instead of
     /// collapsing the caret at the click.
     bool extend = false;
+    /// The primary button. Only it toggles a checkbox or radio; set by
+    /// dispatchDocMousePress from the event.
+    bool primary = true;
 };
 
 /// The ordinal of the press about to be dispatched, from the rolling
@@ -138,9 +143,13 @@ bool dispatchDocMousePress(
     PressIntent intent = {});
 
 /// Dispatch mouseup to `target` and, if it matches state.mouseDownTarget,
-/// follow up with click / dblclick / contextmenu per DOM semantics. Clears
-/// state.mouseDownTarget. Uses provided thresholds for double-click detection.
-/// Caller populates `upEvt` coords/button; coords are reused for follow-ups.
+/// follow up with click / dblclick per DOM semantics; a right release is then
+/// followed by contextmenu. Clears state.mouseDownTarget. Uses provided
+/// thresholds for double-click detection. Caller populates `upEvt`
+/// coords/button; coords are reused for follow-ups. `hitAgain` answers the
+/// element under the pointer now (layout current), for a contextmenu whose
+/// release target the mouseup/click handlers removed; without it that
+/// contextmenu is dropped.
 void dispatchDocMouseRelease(
     const ControlContext& ctx,
     MouseDispatchState& state,
@@ -152,7 +161,8 @@ void dispatchDocMouseRelease(
     float pageX, float pageY,
     double nowMs,
     double dblThresholdMs,
-    float dblDistPx);
+    float dblDistPx,
+    const std::function<dom::Element*()>& hitAgain = nullptr);
 
 /// Unfocus the previously-active replaced element control (unfocus inputs
 /// and textareas). Dropdowns and color pickers now live in the overlay
