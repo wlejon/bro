@@ -232,6 +232,10 @@ public:
     /// BRO_CAPTURE_PRESENTS=1 only (every present is then also read back, for
     /// a test harness); empty otherwise.
     std::vector<uint8_t> presentedPixels(uint64_t hostId, int& outW, int& outH);
+    /// Draws and presents the page again at the next frame though nothing
+    /// changed: for a reader that just turned on present readback
+    /// (bro.remote), which otherwise waits for the page's next change.
+    void requestPresent() { uiDirty_ = true; }
     const std::vector<GamepadState>& gamepads() const { return gamepads_; }
     /// The page uses gamepads (getGamepads, a gamepad event listener, a
     /// "gamepad:" action binding): start reading controllers, once. Not at

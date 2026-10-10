@@ -133,6 +133,11 @@ void setFeeding(bool on) {
                 g_host.captureWas = presenter->capturePresents();
                 g_host.captureSet = true;
                 presenter->setCapturePresents(true);
+                // Only a present is read back, and a still page has already
+                // presented its last frame (usually before the viewer
+                // came): present it again, or the viewer sees nothing until
+                // the page next changes.
+                e.requestPresent();
             } else if (g_host.captureSet) {
                 presenter->setCapturePresents(g_host.captureWas);
                 g_host.captureSet = false;
