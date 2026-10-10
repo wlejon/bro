@@ -40,8 +40,9 @@ These functions are available in addition to all standard DOM APIs:
 |----------|-------------|
 | `advanceTime(ms)` | Advance virtual time by N milliseconds (fires timers, rAF callbacks, and pending JS jobs) |
 | `sleep(ms)` | Alias for `advanceTime` |
+| `runFrames(n, { stepMs }?)` | Run `n` frames of the windowed frame loop itself (layout and raster threads, offscreen present, idle holds), in real time or, with `stepMs`, on a stepped clock. Returns `{ frames, presented, held, wallMs }`. See "The windowed pipeline" below. |
 | `wallSleep(ms)` | Block for N milliseconds of *real* wall-clock time without advancing virtual time. Gives real threads (network, child process, mic) time to produce work; pair it with `advanceTime()` to deliver that work into JS (see "Waiting in scripts" below). |
-| `flush()` | Force layout recalculation (called automatically after `advanceTime`) |
+| `flush()` | Force layout recalculation (called automatically after `advanceTime`). Also waits for the image decodes started so far (they run off the page thread, [image-api.js](image-api.js)), so after `img.src = p; flush();` the image is complete and drawable; its `load` event is still a task for the next turn. Paints and screenshots likewise wait for the pictures they show. |
 | `assert(condition, message?)` | Throw if condition is falsy. Failed assertions produce a nonzero exit code. |
 | `skipTest(reason)` | This environment cannot test the script's subject (weights absent, feature compiled out): the run exits 77, which `tests/run_tests.sh` reports as SKIP — never as a pass. Something that also failed still fails the run. The script keeps running, so do nothing further after it. |
 | `missingGpuContext(kind)` | Call when `getContext('webgl2')` / `getContext('scene')` returned null. On a run with no GPU device (`--no-gpu`) or with the feature compiled out it skips like `skipTest`; on a GPU run a null context is a bug, and it fails the run. |
@@ -383,6 +384,57 @@ responsiveness here rather than in a windowed run:
   ```
 - **Which functions.** `bro.profiler` (`docs/profiler-api.js`) samples the
   thread between `start()` and `stop({ report: true })`.
+
+#### The windowed pipeline: `runFrames`
+
+`advanceTime()` is not the frame a window runs. It does style, layout and the
+record inline on the calling thread, and renders only when a script asks for
+pixels. A window runs a different machine: the layout thread with its snapshot
+handoff, the raster thread replaying into double-buffered layer pools, the
+presenter, frames held while nothing changes (and the idle waits between
+them), the event pump and the source watcher. Anything that lives only there
+(a leak, a race, a stall) never shows under `advanceTime()`.
+
+`runFrames(n, opts?)` runs `n` frames of that loop, `Engine::windowedFrame`,
+the same function `bro`'s window loops on, and presents each to the headless
+presenter's offscreen target instead of a swapchain:
+
+| Call | Clock |
+|------|-------|
+| `runFrames(600)` | Real time: the frame clock is the wall clock, a frame with nothing new is held and the loop waits for work as a window's does (input, a wake, the next timer, at most 16 ms), and a presented frame is paced like a 60 Hz FIFO swapchain. 600 frames take about 10 s. |
+| `runFrames(3000, { stepMs: 16 })` | Stepped: the clock moves 16 ms a frame and nothing waits on the wall clock, so thousands of frames run in seconds. Held frames are still held; they just do not wait. |
+
+It returns `{ frames, presented, held, wallMs }`: how many frames ran, were
+presented, and were held unchanged. The first call starts the pipeline (the
+event loop over the hidden window, the layout and raster threads, the physics
+and audio-inference workers, the source watcher) and it stays up until exit.
+Between calls it is idle, so input functions, `advanceTime()`, `flush()` and
+screenshots work as usual in between; the virtual clock carries on from where
+the frames left it. `--real-audio` adds the audio device a window opens.
+
+Measuring memory over it is the headless way to look for a leak in a running
+app: sample `perf.stats().processBytes` between chunks of frames, after a
+warm-up (the first frames allocate the layer pools and the offscreen target:
+tens of MB). `__host.memory()` says where growth lives: the C/C++ heaps
+(`heapCommitted`), the JS heap, Skia's CPU caches, or outside every heap
+(drivers, GPU memory); `__host.memory(true)` adds a histogram of heap block
+sizes, which usually names the leaked object by its size.
+
+```js
+// Idle, then in use: is anything still climbing after warm-up?
+const mb = () => (perf.stats().processBytes / 1048576).toFixed(1);
+runFrames(300, { stepMs: 16 });                 // warm-up
+for (let i = 0; i < 10; i++) {
+  for (let k = 0; k < 300; k += 4) {
+    mouseMove(40 + (k * 7) % 1200, 60 + (k * 13) % 700);
+    runFrames(4, { stepMs: 16 });
+  }
+  const r = runFrames(300);                     // idle, in real time
+  console.log(`${mb()} MB  (${r.presented} presented, ${r.held} held)`);
+}
+```
+
+`tests/engine/test_pipeline_memory.js` is the regression test built on it.
 
 ## Examples
 

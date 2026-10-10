@@ -35,6 +35,7 @@
 #include "dom/document.h"
 #include "dom/element.h"
 #include "engine/engine.h"
+#include "layout/image_loading.h"
 
 #include <memory>
 #include <string>
@@ -45,24 +46,21 @@ namespace {
 
 HostClass g_imageClass;
 
-// The image state behind this receiver, minted on first use. An <img> that has
-// never been given a `src` still has to answer `width` and `complete`, so the
-// state exists from the first read rather than from the first load.
-HostImage* imageStateOf(Value self) {
-    HostNodeState* st = hostNodeStateOfValue(self);
-    if (!st || !st->el) return nullptr;
-    if (!st->image) st->image = std::make_unique<HostImage>();
-    return st->image.get();
+// The image state behind this receiver, refreshed from its element's load
+// (hostImageOf). An <img> that has never been given a `src` still has to
+// answer `width` and `complete`, so the state exists from the first read.
+const HostImage* imageStateOf(Value self) {
+    return hostImageOf(self);
 }
 
 Value sizeMember(Value self, int HostImage::*field) {
-    HostImage* img = imageStateOf(self);
+    const HostImage* img = imageStateOf(self);
     return ev::fromDouble(img ? img->*field : 0);
 }
 
 Value imageSrcGetter(Value self, std::span<const Value>) {
-    HostImage* img = imageStateOf(self);
-    return ev::fromUtf8(img ? img->src : std::string());
+    HostNodeState* st = hostNodeStateOfValue(self);
+    return ev::fromUtf8(st && st->el ? st->el->getAttribute("src") : std::string());
 }
 
 Value imageSrcSetter(Value self, std::span<const Value> a) {
@@ -76,43 +74,14 @@ Value imageSrcSetter(Value self, std::span<const Value> a) {
     // Host pointers, read from the receiver's CURRENT address.
     HostNodeState* st = hostNodeStateOfValue(receiver.get());
     if (!st || !st->el) return ev::throwTypeError("img.src: the receiver is not an img");
-    if (!st->image) st->image = std::make_unique<HostImage>();
-    HostImage& img = *st->image;
 
-    // The attribute on the DOM element
+    // The attribute, then the load: a stat and a header read here, the
+    // decode on the store's threads (layout/image_loading.h). Starting it
+    // here rather than at the next layout pass is what makes a detached image
+    // — three.js's ImageLoader never appends one — load at all, and what
+    // records the src as loaded, so the layout walk does not start it twice.
     st->el->setAttribute("src", src);
-
-    if (src.rfind("http://", 0) == 0 || src.rfind("https://", 0) == 0) {
-        // Remote images load asynchronously via background thread;
-        // loadHostImage will update natural size and dispatch 'load' or 'error' event on completion.
-        loadHostImage(img, src, st->el->document(), st->el);
-        return ev::undefined();
-    }
-
-    loadHostImage(img, src, st->el->document(), st->el);
-
-    // The attribute and the natural size too. This element is in a real
-    // document, so if it is ever laid out the painter must find the picture
-    // that was just decoded rather than probing the file a second time.
-    // A failed load is recorded too (as zero-sized), so the layout walk does
-    // not probe this src again and queue a second `error` of its own.
-    st->el->setImageNaturalSize(src, img.ok ? img.width : 0, img.ok ? img.height : 0);
-
-    dom::Element* target = st->el;
-    const bool loaded = img.ok;
-    if (st->fromImageConstructor) {
-        dom::Event evt(loaded ? "load" : "error", false, false);
-        if (auto* eng = hostEngine()) {
-            eng->dispatchElementEvent(target, evt);
-        }
-    } else {
-        postHostTask([target, loaded]() {
-            engine::Engine* engine = hostEngine();
-            if (!engine) return;
-            dom::Event evt(loaded ? "load" : "error", false, false);
-            engine->dispatchElementEvent(target, evt);
-        });
-    }
+    loadHostImage(st->el, src);
     return ev::undefined();
 }
 
@@ -145,30 +114,23 @@ void decorateImageProto(ObjectBuilder& b) {
     b.accessor(
         "complete",
         [](Value self, std::span<const Value>) {
-            HostImage* img = imageStateOf(self);
+            const HostImage* img = imageStateOf(self);
             return ev::fromBool(img && img->complete);
         },
         nullptr);
 
-    // decode(): the promise a loader awaits before it uses the pixels.
+    // decode(): the promise a loader awaits before it uses the pixels —
+    // resolved when the decode off the page thread has landed (now, when it
+    // already has), rejected with an EncodingError for a broken image or one
+    // whose src changed before it landed.
     b.def("decode", 0, [](Value self, std::span<const Value>) {
-        HostImage* img = imageStateOf(self);
         ev::Persistent p{ev::createPromise()};
-        if (!img) {
-            ev::Persistent reason{ev::fromUtf8("EncodingError: image state missing")};
-            ev::rejectPromise(p.get(), reason.get());
-            return p.get();
-        }
-        if (!img->complete && img->activeLoadToken) {
-            // Async load is in progress
-            img->pendingDecodePromises.push_back(p);
-            return p.get();
-        }
-
-        const bool ok = img->ok && img->width > 0 && img->height > 0;
-        if (ok) {
-            ev::resolvePromise(p.get(), ev::undefined());
-        } else {
+        HostNodeState* st = hostNodeStateOfValue(self);
+        auto settle = [p](bool ok) {
+            if (ok) {
+                ev::resolvePromise(p.get(), ev::undefined());
+                return;
+            }
             // Rooted: the Error lookup may allocate (builtins build lazily).
             Rooted reason(ev::fromUtf8("EncodingError: the image could not be decoded"));
             Value ctor = ev::globalValue("Error").value;
@@ -178,7 +140,13 @@ void decorateImageProto(ObjectBuilder& b) {
                 if (!made.thrown) reason.set(made.value);
             }
             ev::rejectPromise(p.get(), reason.get());
+        };
+        if (!st || !st->el) {
+            settle(false);
+            return p.get();
         }
+        // The settle runs from the frame pump (or now), on the main thread.
+        layout::whenImageSettled(st->el, settle);
         return p.get();
     });
 
@@ -228,15 +196,13 @@ Value makeImageElementHandle(dom::Element* el) {
 
 void primeImageFromMarkup(dom::Element* el) {
     // An <img> parsed from the page's own markup already carries its src, and
-    // nothing will assign it again. Decoding here, once, is what makes
-    // `complete` and the size true before the program's first read — the same
-    // answer the markup path gives on the web.
+    // nothing will assign it again. Starting its load here, once, is what
+    // makes the size true before the program's first read (from the header)
+    // and the decode under way — the same answer the markup path gives on the
+    // web. The layout walk sees the src already loaded and leaves it.
     const std::string src = el->getAttribute("src");
-    if (src.empty()) return;
-    HostNodeState* st = hostNodeStateFor(el);
-    if (!st) return;
-    if (!st->image) st->image = std::make_unique<HostImage>();
-    loadHostImage(*st->image, src, el->document(), el);
+    if (src.empty() || src == el->imageProbedSrc()) return;
+    loadHostImage(el, src);
 }
 
 }  // namespace bro::bronze_host

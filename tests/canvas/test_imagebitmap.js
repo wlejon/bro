@@ -120,8 +120,8 @@ document.body.removeChild(srcCanvas);
 // createImageBitmap from an Image (HTMLImageElement)
 // =========================================================================
 // screenshot() gives us a real PNG on disk without checking a binary asset
-// into the tree. Image decoding is synchronous (stb_image), so the image is
-// complete before createImageBitmap sees it.
+// into the tree. The decode runs off the page thread; decode() resolves once
+// the image is complete.
 const os = require('os');
 const path = require('path');
 const shotPath = path.join(os.tmpdir(), 'bro_test_bitmap_src_' + Date.now() + '.png');
@@ -129,7 +129,8 @@ screenshot(shotPath);
 
 const img = new Image();
 img.src = shotPath;
-assert(img.complete === true, 'Image loads synchronously');
+await img.decode();
+assert(img.complete === true, 'Image complete after decode()');
 assert(img.naturalWidth > 0, 'screenshot decoded into the Image');
 const fromImage = await createImageBitmap(img);
 assert(fromImage.width === img.width && fromImage.height === img.height,
@@ -139,6 +140,9 @@ assert(fromImage.width === img.width && fromImage.height === img.height,
 // createImageBitmap must reject rather than hand back a 1x1 white bitmap.
 const brokenImg = new Image();
 brokenImg.src = '/nonexistent-imagebitmap-source.png';
+let decodeRejected = false;
+try { await brokenImg.decode(); } catch (e) { decodeRejected = true; }
+assert(decodeRejected, 'decode() of a broken image rejects');
 assert(brokenImg.complete === true, 'broken image still settles');
 assert(brokenImg.naturalWidth === 0, 'broken image has no natural size');
 let brokenRejected = false;

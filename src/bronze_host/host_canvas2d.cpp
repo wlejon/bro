@@ -714,10 +714,10 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
                 imgH = bmp->height;
             }
         } else if (const HostImage* img = hostImageOf(src)) {
-            if (img && img->ok && !img->rgba.empty()) {
-                rgba = img->rgba.data();
-                imgW = img->width;
-                imgH = img->height;
+            // The decoded picture by reference: no copy of a photo per draw.
+            if (img && img->ok && (skImg = img->skImage())) {
+                imgW = skImg->width();
+                imgH = skImg->height();
             }
         } else if (dom::Element* srcEl = hostElementOf(src)) {
             if (auto* srcCs = static_cast<canvas::CanvasScene*>(srcEl->canvasScene())) {

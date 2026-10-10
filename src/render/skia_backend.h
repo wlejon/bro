@@ -74,7 +74,8 @@ public:
     void drawPixelsRGBA(const uint8_t* rgba, int srcW, int srcH, int stride,
                         float x, float y, float w, float h) override;
     void drawSharedPixels(const SharedPixels& px, float sx, float sy, float sw, float sh,
-                          float x, float y, float w, float h) override;
+                          float x, float y, float w, float h,
+                          ImageSampling sampling = ImageSampling::Smooth) override;
     void drawSvgMarkup(const char* data, size_t len,
                        float x, float y, float w, float h) override;
 
@@ -212,6 +213,7 @@ private:
         sk_sp<SkImage> raster;
         sk_sp<SkImage> texture;
         const uint8_t* rgba = nullptr;  // identity check: the id names these pixels
+        bool mipmapped = false;         // the texture carries mips
         uint64_t lastFrame = 0;
     };
     std::unordered_map<uint64_t, SharedImage> sharedImages_;

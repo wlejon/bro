@@ -29,6 +29,19 @@
  * gives transparent black at its width/height (300x150 by default) and is
  * not given a context by the call. A zero-sized canvas rejects with an
  * InvalidStateError.
+ *
+ * createImageBitmap(blob) decodes off the page thread: the call copies the
+ * Blob's bytes and returns its promise (well under a millisecond for an
+ * 8 MP JPEG); the decode, the crop and the bitmap are made on a decoder
+ * thread and the promise settles on a later frame. Same decoders as an
+ * `<img>` (PNG, JPEG, WebP, SVG, ...). EXIF orientation is applied unless the
+ * options say `{ imageOrientation: 'none' }` (options come after the source,
+ * or after the crop rectangle). In a Worker the decode runs on the worker's
+ * own thread instead.
+ *
+ * @example
+ *   const bmp = await createImageBitmap(await (await fetch(url)).blob());
+ *   const raw = await createImageBitmap(blob, { imageOrientation: 'none' });
  */
 
 // ── Classes & Interfaces ─────────────────────────────────────────────────────

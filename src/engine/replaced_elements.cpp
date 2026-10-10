@@ -18,15 +18,8 @@
 #include "layout/el_video.h"
 #include "layout/el_terminal.h"
 #include "layout/el_remote_view.h"
+#include "layout/image_loading.h"
 #include "platform/window.h"
-#include "svg/svg_renderer.h"
-#include "util/object_url.h"
-#include "util/string_utils.h"
-
-#include "broimage/decode.h"
-#if BRO_WITH_WEBP
-#include "render/webp_image.h"
-#endif
 
 #include <algorithm>
 #include <cmath>
@@ -38,123 +31,6 @@
 
 namespace bro::engine {
 
-// ---------------------------------------------------------------------------
-// <img> intrinsic size
-// ---------------------------------------------------------------------------
-
-namespace {
-
-// Dimensions of encoded image bytes, without decoding the pixels.
-bool probeBytes(const uint8_t* data, size_t len, int& w, int& h) {
-    if (!data || len == 0) return false;
-    int c = 0;
-    if (broimage::probe_dimensions_memory(data, len, &w, &h, &c)) return true;
-#if BRO_WITH_WEBP
-    // broimage is stb-backed and stb has no WebP, so a .webp needs libwebp's
-    // header reader — the same split the decode paths have (render/webp_image.h).
-    std::vector<uint8_t> ignored;
-    int ww = 0, hh = 0;
-    if (render::decodeWebPHeader(data, len, ww, hh)) { w = ww; h = hh; return true; }
-#endif
-    return false;
-}
-
-} // namespace
-
-// Resolve `src` and read enough of it to learn the image's size. Returns
-// false (leaving w/h at 0) for a missing file or an unreadable header, which
-// leaves the <img> zero-sized — the same as a browser showing a broken image.
-// True means the image is usable (its `load`, not `error`); an SVG is, even
-// one with no intrinsic size (w/h left 0 for the layout adapter to settle).
-//
-// Public because the JS `img.src =` setter needs the same answer for an image
-// that is never inserted into the document — three.js's ImageLoader builds one,
-// sets src, and reads the size off it without ever appending it, so nothing
-// here would ever walk to it. One implementation, so a detached image and a
-// laid-out one cannot disagree about how big the same file is.
-bool probeImageSize(dom::Element* elem, const std::string& src,
-                    int& w, int& h) {
-    w = 0;
-    h = 0;
-    if (!elem || src.empty()) return false;
-
-    // data: URLs carry their bytes inline. SVG data URLs are handled in the
-    // layout adapter (it parses the <svg> width/height out of the markup), so
-    // only raster payloads need probing here.
-    if (src.compare(0, 5, "data:") == 0) {
-        const auto comma = src.find(',');
-        if (comma == std::string::npos) return false;
-        const std::string meta = src.substr(5, comma - 5);
-        // Usable, its size left to the adapter.
-        if (meta.find("image/svg+xml") != std::string::npos) return true;
-        const std::string body = src.substr(comma + 1);
-        if (meta.find(";base64") == std::string::npos) return false;
-        const std::vector<uint8_t> bytes = util::base64Decode(body);
-        return probeBytes(bytes.data(), bytes.size(), w, h);
-    }
-
-    // blob: URL — bytes the page holds, registered when it minted the URL.
-    // An SVG object URL answers from its markup, the same as an SVG file does.
-    if (util::isObjectURL(src)) {
-        auto data = util::lookupObjectURL(src);
-        if (!data || data->bytes.empty()) return false;
-        const char* chars = reinterpret_cast<const char*>(data->bytes.data());
-        if (svg::looksLikeSvg(chars, data->bytes.size())) {
-            float sw = 0, sh = 0;
-            svg::svgIntrinsicSize(chars, data->bytes.size(), sw, sh);
-            w = static_cast<int>(sw);
-            h = static_cast<int>(sh);
-            return true;  // an SVG is usable with or without an intrinsic size
-        }
-        return probeBytes(data->bytes.data(), data->bytes.size(), w, h);
-    }
-
-    // Resolve against the document's base path, matching the rule
-    // DrawTraversal::loadImage uses when it later reads the same file.
-    std::string clean = src;
-    if (const auto q = clean.find_first_of("?#"); q != std::string::npos)
-        clean.resize(q);
-    std::string path;
-    const bool absolute =
-        (clean.size() >= 2 && clean[1] == ':') ||
-        (!clean.empty() && (clean[0] == '/' || clean[0] == '\\'));
-    const std::string& base = elem->document() ? elem->document()->basePath()
-                                               : std::string();
-    if (absolute || base.empty()) {
-        path = clean;
-    } else {
-        path = base;
-        if (path.back() != '/' && path.back() != '\\') path += '/';
-        path += clean;
-    }
-
-    std::ifstream ifs(path, std::ios::binary);
-    if (!ifs.is_open()) return false;
-    // Header only. Every format we probe puts its dimensions in the first few
-    // hundred bytes, so a 64 KB ceiling covers them all without reading a
-    // multi-megabyte photo just to size its box. The full decode happens later
-    // in the draw path, and only for images that are actually painted.
-    std::vector<uint8_t> head(64 * 1024);
-    ifs.read(reinterpret_cast<char*>(head.data()),
-             static_cast<std::streamsize>(head.size()));
-    head.resize(static_cast<size_t>(ifs.gcount()));
-
-    // An SVG carries its size in the root tag, not in a binary header, so the
-    // bitmap probe cannot see it. Reading it here is what makes the <img> a
-    // replaced element with a real intrinsic size; otherwise it lays out as an
-    // empty inline box and the icon has nowhere to paint. Same reader the paint
-    // path and the rasterizer use, so all three agree on how big it is.
-    if (svg::looksLikeSvg(reinterpret_cast<const char*>(head.data()), head.size())) {
-        float sw = 0, sh = 0;
-        svg::svgIntrinsicSize(reinterpret_cast<const char*>(head.data()),
-                              head.size(), sw, sh);
-        w = static_cast<int>(sw);
-        h = static_cast<int>(sh);
-        return true;  // an SVG is usable with or without an intrinsic size
-    }
-
-    return probeBytes(head.data(), head.size(), w, h);
-}
 
 // ---------------------------------------------------------------------------
 // Replaced element initialization
@@ -185,32 +61,21 @@ void ensureReplacedElements(dom::Element* elem, render::Renderer* renderer,
         ctrl->parseAttributes();
         elem->setSvgControl(std::move(ctrl));
     } else if (tag == "IMG" || tag == "img") {
-        // Give layout the image's intrinsic size. Without it an <img> is not a
-        // replaced element, so it lays out as an empty inline box and never
-        // appears — see Element::imageNaturalWidth().
+        // Start the image's load (layout/image_loading.h): a src set in
+        // markup, through setAttribute or innerHTML. The decode runs off the
+        // page thread; layout gets the intrinsic size from the header now
+        // where that is cheap — without one an <img> is not a replaced
+        // element and lays out as an empty inline box — and the load / error
+        // event follows as a task when the picture lands.
         //
-        // Re-probed only when `src` changes: this runs on every DOM-dirty
-        // pass, and reading a header per pass per image would put file I/O on
-        // the layout path.
+        // Only when `src` changes: this runs on every DOM-dirty pass.
         const std::string src = elem->getAttribute("src");
         if (!src.empty() && src != elem->imageProbedSrc()) {
-            int w = 0, h = 0;
-            const bool ok = probeImageSize(elem, src, w, h);
-            elem->setImageNaturalSize(src, w, h);
-            // The image's own load / error, as a task: a src set in markup,
-            // through setAttribute or innerHTML gets one, like the `img.src`
-            // setter's. A file that is missing, or present but not an image
-            // this engine decodes (an .exe, a format with no decoder), is an
-            // error. A remote src is fetched and reported by the script host
-            // (loadHostImage), not probed here.
-            const bool remote = src.rfind("http://", 0) == 0 || src.rfind("https://", 0) == 0;
-            if (!remote) {
-                if (auto* doc = elem->document()) doc->queueElementEvent(elem, ok ? "load" : "error");
-            }
+            layout::loadImageElement(elem, src);
         } else if (src.empty() && !elem->imageProbedSrc().empty()) {
             // src removed: drop the stale size rather than keep sizing the
             // box from an image that is no longer referenced.
-            elem->setImageNaturalSize("", 0, 0);
+            layout::loadImageElement(elem, "");
         }
     } else if ((tag == "VIDEO" || tag == "video") && !elem->videoControl()) {
         auto ctrl = std::make_unique<layout::ElVideo>(renderer);

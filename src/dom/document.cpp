@@ -54,6 +54,10 @@ void Document::noteInputModality(bool keyboard) {
     }
 }
 
+void Document::markAllPaintDirty() {
+    for (const Document* d : liveDocuments()) const_cast<Document*>(d)->markPaintDirty();
+}
+
 Document::Document() {
     liveDocuments().insert(this);
 }

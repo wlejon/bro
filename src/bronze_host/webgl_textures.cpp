@@ -59,7 +59,7 @@ SourcePixels resolveSource(Value sourceIn, const char* who) {
     }
 
     if (const HostImage* img = hostImageOf(source)) {
-        if (img->rgba.empty()) {
+        if (!img->rgba()) {
             // A broken image: HTML gives it zero natural dimensions and no
             // pixels, so there is nothing to upload and the texture keeps
             // whatever it had. Warned, because a silently unchanged texture is
@@ -68,7 +68,7 @@ SourcePixels resolveSource(Value sourceIn, const char* who) {
                      img->src.c_str());
             return {};
         }
-        return {img->rgba.data(), img->width, img->height};
+        return {img->rgba(), img->width, img->height};
     }
 
     if (dom::Element* el = hostElementOf(source)) {

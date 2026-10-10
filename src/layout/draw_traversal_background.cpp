@@ -3,6 +3,7 @@
 // gradients, repeating forms included — with background-blend-mode.
 
 #include "layout/draw_traversal_internal.h"
+#include "render/image_store.h"
 
 #include <algorithm>
 #include <cctype>
@@ -11,8 +12,8 @@
 
 namespace bro::layout {
 
-void DrawTraversal::drawBackground(dom::Element* elem, float x, float y, float w, float h) {
-    auto& style = elem->computedStyle();
+void DrawTraversal::drawBackground(const PaintBox& pb, float x, float y, float w, float h) {
+    auto& style = pb.style;
     render::Radii radii = getRadii(style, w, h);
     bool rounded = !radii.isZero();
 
@@ -108,11 +109,20 @@ void DrawTraversal::drawBackground(dom::Element* elem, float x, float y, float w
                 if (!url.empty() && (url.front() == '"' || url.front() == '\'')) {
                     url = url.substr(1, url.size() - 2);
                 }
-                loadImage(url, basePath_);
-                auto imgCacheIt = imageCache_.find(url);
-                if (imgCacheIt != imageCache_.end() && !imgCacheIt->second.data.empty()) {
-                    float imgW = static_cast<float>(imgCacheIt->second.width);
-                    float imgH = static_cast<float>(imgCacheIt->second.height);
+                // Decoded off the page thread; nothing paints until it lands.
+                auto pic = paintImage(url, styleImageOriented(style));
+                if (pic && (pic->isSvg ? !pic->svgMarkup.empty() : !pic->rgba.empty())) {
+                    const render::ImageSampling sampling = styleImageSampling(style);
+                    const render::SharedPixels px = render::sharedPixelsOf(pic);
+                    auto drawTile = [&](float tx, float ty, float tw, float th) {
+                        if (pic->isSvg)
+                            renderer_->drawSvgMarkup(pic->svgMarkup.data(), pic->svgMarkup.size(), tx, ty, tw, th);
+                        else
+                            renderer_->drawSharedPixels(px, 0, 0, static_cast<float>(pic->width),
+                                                        static_cast<float>(pic->height), tx, ty, tw, th, sampling);
+                    };
+                    float imgW = static_cast<float>(pic->width);
+                    float imgH = static_cast<float>(pic->height);
                     float drawW = imgW > 0 ? imgW : w;
                     float drawH = imgH > 0 ? imgH : h;
 
@@ -170,10 +180,7 @@ void DrawTraversal::drawBackground(dom::Element* elem, float x, float y, float w
                         // than the element) doesn't bleed past its bounds.
                         renderer_->save();
                         renderer_->setClip(x, y, w, h);
-                        renderer_->drawImage(imgCacheIt->second.data.data(),
-                                            imgCacheIt->second.data.size(),
-                                            posX, posY, drawW, drawH,
-                                            imgCacheIt->second.id);
+                        drawTile(posX, posY, drawW, drawH);
                         renderer_->restore();
                     } else {
                         // Tile the image
@@ -187,10 +194,7 @@ void DrawTraversal::drawBackground(dom::Element* elem, float x, float y, float w
                         float endY = repeatY ? y + h : startY + drawH;
                         for (float iy = startY; iy < endY; iy += drawH) {
                             for (float ix = startX; ix < endX; ix += drawW) {
-                                renderer_->drawImage(imgCacheIt->second.data.data(),
-                                                    imgCacheIt->second.data.size(),
-                                                    ix, iy, drawW, drawH,
-                                                    imgCacheIt->second.id);
+                                drawTile(ix, iy, drawW, drawH);
                             }
                         }
                         renderer_->restore();

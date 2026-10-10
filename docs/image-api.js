@@ -89,9 +89,39 @@
 
 /**
  * `Image` and `HTMLImageElement` are the same constructor under two names, as
- * on the web. `new Image()` makes a detached `<img>`; assigning `src` decodes
- * synchronously, so `complete` and the size members are true by the time the
- * assignment returns and the `load` event fires on the next turn.
+ * on the web. `new Image()` makes a detached `<img>`.
+ *
+ * DECODING IS OFF THE PAGE THREAD. Assigning `src` reads the file's header and
+ * returns (well under a millisecond, whatever the image's size): the natural
+ * size is known at once, so layout gives the `<img>` its box straight away,
+ * but `complete` stays false until a decoder thread has the pixels. Then
+ * `decode()` resolves and `load` (or `error`) fires as a task. Await one of
+ * them before drawing the image into a canvas or uploading it as a texture.
+ *
+ *     const img = new Image();
+ *     img.src = 'photos/big.jpg';
+ *     await img.decode();
+ *     ctx.drawImage(img, 0, 0);
+ *
+ * Decoded pictures are cached by source (a file by path, size and mtime; a
+ * data: or blob: URL by its bytes), bounded by memory (512 MB, or
+ * `BRO_IMAGE_CACHE_MB`), least recently used out first. The same `src` on
+ * another element, or in a CSS `background-image`, reuses the picture: that
+ * element is `complete` as soon as `src` is set (its `load` is still a task).
+ *
+ * In bro-headless, `flush()` waits for every decode started so far and
+ * screenshots wait for the pictures they show, so tests are deterministic;
+ * `img.src = p; flush();` leaves `img` complete.
+ *
+ * ORIENTATION. `image-orientation: from-image` (the initial value) turns a
+ * photo with EXIF orientation upright: its natural size, its box and its
+ * paint, in `<img>` and in CSS backgrounds alike. `image-orientation: none`
+ * shows the stored pixels.
+ *
+ * SAMPLING. A scaled image is filtered (linear, mipmapped when it is scaled
+ * down). `image-rendering: pixelated` or `crisp-edges` switches to
+ * nearest-neighbour, for pixel art. A `<canvas>` drawImage follows the
+ * context's `imageSmoothingEnabled` / `imageSmoothingQuality` instead.
  *
  * Optional width/height constructor arguments are accepted and ignored: they
  * set a layout box, and a detached image has none.
@@ -126,7 +156,9 @@ class HTMLImageElement {
   naturalHeight;
 
   /**
-   * True once there are pixels. Zero-sized until a `src` decodes.
+   * True once the load settled: the pixels are decoded, or the image is
+   * broken (then the natural size is 0). False between a `src` assignment and
+   * the decode landing, unless the picture was already cached.
    * @readonly
    * @type {boolean}
    */
@@ -140,10 +172,10 @@ class HTMLImageElement {
   crossOrigin;
 
   /**
-   * The promise a loader awaits before touching the pixels. Already settled
-   * when returned (the decode happened at `src` assignment), so an `await`
-   * continues on the next microtask; rejects with an `EncodingError` when the
-   * image did not decode.
+   * The promise a loader awaits before touching the pixels: resolves when the
+   * off-thread decode has landed (at once when the image is already
+   * complete), rejects with an `EncodingError` when the image did not decode
+   * or a newer `src` replaced the one it was waiting for.
    * @returns {Promise<void>}
    */
   decode() {}

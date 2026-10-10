@@ -40,6 +40,8 @@ let loaded = false, errored = false;
 img.onload = function () { loaded = true; };
 img.onerror = function () { errored = true; };
 img.src = url;
+await img.decode();
+await new Promise((r) => setTimeout(r, 0));  // load is a task after the decode
 
 assert(loaded && !errored, 'an <img> loads from an object URL');
 assert(img.naturalWidth > 1 && img.naturalHeight > 1,
@@ -87,6 +89,7 @@ await (async function () {
     let deadErrored = false;
     dead.onerror = function () { deadErrored = true; };
     dead.src = url;
+    await new Promise((r) => setTimeout(r, 0));  // error is a task
     assert(deadErrored && dead.naturalWidth === 0,
            'a revoked URL no longer loads as an image');
 

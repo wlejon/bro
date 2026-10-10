@@ -48,7 +48,8 @@ function snap(tag) {
     screenshot(p);
     shots.push(p);
     const img = new Image();
-    img.src = p;                        // sync decode in bro
+    img.src = p;
+    flush();                            // settles the off-thread decode
     assert(img.naturalWidth > 0, 'screenshot decodes: ' + tag);
     const c = document.createElement('canvas');
     c.width = img.naturalWidth; c.height = img.naturalHeight;

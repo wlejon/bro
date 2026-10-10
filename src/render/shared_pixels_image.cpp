@@ -22,14 +22,21 @@ sk_sp<SkImage> makeSharedPixelsImage(const SharedPixels& px) {
     return SkImages::RasterFromData(info, std::move(data), rowBytes);
 }
 
+SkSamplingOptions imageSamplingOptions(ImageSampling sampling, bool mipmaps) {
+    if (sampling == ImageSampling::Pixelated)
+        return SkSamplingOptions(SkFilterMode::kNearest, SkMipmapMode::kNone);
+    return SkSamplingOptions(SkFilterMode::kLinear, mipmaps ? SkMipmapMode::kLinear : SkMipmapMode::kNone);
+}
+
 void drawSharedPixelsImage(SkCanvas* canvas, const sk_sp<SkImage>& image, float sx, float sy, float sw, float sh,
-                           float x, float y, float w, float h) {
+                           float x, float y, float w, float h, ImageSampling sampling, bool mipmaps) {
     if (!canvas || !image || sw <= 0 || sh <= 0 || w <= 0 || h <= 0) return;
-    // Linear filtering, and never a texel from outside the source rect: the
+    // Never a texel from outside a source rect that is part of the image: the
     // kitty placeholder cells of one image are drawn as abutting pieces.
+    const bool whole = sx <= 0 && sy <= 0 && sx + sw >= image->width() && sy + sh >= image->height();
     canvas->drawImageRect(image, SkRect::MakeXYWH(sx, sy, sw, sh), SkRect::MakeXYWH(x, y, w, h),
-                          SkSamplingOptions(SkFilterMode::kLinear), nullptr,
-                          SkCanvas::kStrict_SrcRectConstraint);
+                          imageSamplingOptions(sampling, mipmaps && whole), nullptr,
+                          whole ? SkCanvas::kFast_SrcRectConstraint : SkCanvas::kStrict_SrcRectConstraint);
 }
 
 } // namespace bro::render

@@ -1,6 +1,7 @@
 #include "render/skia_backend.h"
 #include "render/filter_chain.h"
 #include "render/shadow_ninepatch.h"
+#include "render/shared_pixels_image.h"
 #include "render/system_font_mgr.h"
 #include "svg/svg_renderer.h"
 #include "util/log.h"
@@ -667,7 +668,11 @@ void SkiaRenderer::drawImage(const void* data, size_t len, float x, float y, flo
     sk_sp<SkImage> image = imageCache_.resolve(imageId, data, len);
     if (!image) return;
     if (recorder_ && imageId != 0) image = gpuImage(imageId, image);
-    canvas_->drawImageRect(image, SkRect::MakeXYWH(x, y, w, h), SkSamplingOptions());
+    // Smoothed (gpuImage's textures carry mips); a texture made without them
+    // (an uncached id) is sampled bilinear.
+    const bool mips = !recorder_ || imageId != 0;
+    canvas_->drawImageRect(image, SkRect::MakeXYWH(x, y, w, h),
+                           imageSamplingOptions(ImageSampling::Smooth, mips));
 }
 
 void SkiaRenderer::drawPixelsRGBA(const uint8_t* rgba, int srcW, int srcH, int stride,
@@ -680,7 +685,8 @@ void SkiaRenderer::drawPixelsRGBA(const uint8_t* rgba, int srcW, int srcH, int s
     if (!bmp.installPixels(info, const_cast<uint8_t*>(rgba), static_cast<size_t>(stride))) return;
     auto image = bmp.asImage();
     if (!image) return;
-    canvas_->drawImageRect(image, SkRect::MakeXYWH(x, y, w, h), SkSamplingOptions());
+    canvas_->drawImageRect(image, SkRect::MakeXYWH(x, y, w, h),
+                           imageSamplingOptions(ImageSampling::Smooth, /*mipmaps=*/false));
 }
 
 void SkiaRenderer::drawSvgMarkup(const char* data, size_t len,

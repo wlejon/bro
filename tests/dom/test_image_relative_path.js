@@ -25,6 +25,7 @@ try {
     // --- new Image() (the decode-helper path) ---
     const helper = new Image();
     helper.src = NAME;
+    await helper.decode();
     assert(helper.complete === true, 'new Image() settled');
     assert(helper.width > 0 && helper.height > 0,
            'new Image() with a relative src decoded, got ' + helper.width + 'x' + helper.height);

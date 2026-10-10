@@ -109,7 +109,9 @@ sk_sp<SkImage> SkiaRenderer::gpuImage(uint64_t id, const sk_sp<SkImage>& source)
         return it->second.texture;
     }
     SkiaGpu::Lock lock = gpu_->lock();
-    sk_sp<SkImage> texture = SkImages::TextureFromImage(gpu_->context(), source, skgpu::Mipmapped::kNo,
+    // Mipmapped: an image drawn smaller than it is samples a smaller level
+    // rather than aliasing (imageSamplingOptions).
+    sk_sp<SkImage> texture = SkImages::TextureFromImage(gpu_->context(), source, skgpu::Mipmapped::kYes,
                                                         skgpu::Budgeted::kYes);
     if (!texture) return source;
     gpuImages_[id] = GpuImage{source, texture, imageFrame_};
@@ -117,7 +119,7 @@ sk_sp<SkImage> SkiaRenderer::gpuImage(uint64_t id, const sk_sp<SkImage>& source)
 }
 
 void SkiaRenderer::drawSharedPixels(const SharedPixels& px, float sx, float sy, float sw, float sh,
-                                    float x, float y, float w, float h) {
+                                    float x, float y, float w, float h, ImageSampling sampling) {
     if (!canvas_ || !px.rgba || px.id == 0) return;
     SharedImage& e = sharedImages_[px.id];
     if (e.rgba != px.rgba || !e.raster) {
@@ -128,16 +130,24 @@ void SkiaRenderer::drawSharedPixels(const SharedPixels& px, float sx, float sy, 
     e.lastFrame = imageFrame_;
     if (!e.raster) return;
     sk_sp<SkImage> image = e.raster;
+    const bool wantMips = sampling == ImageSampling::Smooth;
     if (recorder_) {
-        // A recorded (GPU) list samples a texture, uploaded once per id.
-        if (!e.texture) {
+        // A recorded (GPU) list samples a texture, uploaded once per id —
+        // with mips the first time it is drawn smoothed.
+        if (!e.texture || (wantMips && !e.mipmapped)) {
             SkiaGpu::Lock lock = gpu_->lock();
-            e.texture = SkImages::TextureFromImage(gpu_->context(), e.raster, skgpu::Mipmapped::kNo,
-                                                   skgpu::Budgeted::kYes);
+            sk_sp<SkImage> tex = SkImages::TextureFromImage(
+                gpu_->context(), e.raster, wantMips ? skgpu::Mipmapped::kYes : skgpu::Mipmapped::kNo,
+                skgpu::Budgeted::kYes);
+            if (tex) {
+                e.texture = std::move(tex);
+                e.mipmapped = wantMips;
+            }
         }
         if (e.texture) image = e.texture;
     }
-    drawSharedPixelsImage(canvas_, image, sx, sy, sw, sh, x, y, w, h);
+    drawSharedPixelsImage(canvas_, image, sx, sy, sw, sh, x, y, w, h, sampling,
+                          /*mipmaps=*/wantMips && (!recorder_ || e.mipmapped));
 }
 
 void SkiaRenderer::evictGpuImages(bool all) {

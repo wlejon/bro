@@ -11,7 +11,10 @@
 #include <vector>
 
 namespace bro::canvas { class CanvasScene; }
+namespace bro::render { struct DecodedImage; class ImageRequest; }
 namespace bro::dom { class Element; class Node; }
+namespace htmlayout::css { class ComputedStyle; }
+namespace htmlayout::layout { struct LayoutBox; }
 
 namespace bro::layout {
 
@@ -77,17 +80,6 @@ struct StackingContext {
     int treeOrder = 0; // DFS index assigned when first encountered (for stable sort)
 };
 
-// Image cache entry for background-image / <img> rendering
-struct CachedImage {
-    std::vector<uint8_t> data;  // raster bytes (PNG/JPG/etc) OR raw SVG markup when isSvg
-    int width = 0;
-    int height = 0;
-    bool isSvg = false;
-    // Process-unique id for the decoded-image cache in the renderer. Assigned
-    // when the entry is created; 0 means "uncacheable" (e.g. a failed load).
-    uint64_t id = 0;
-};
-
 // Walks the DOM tree with layout boxes and issues Renderer draw calls.
 class DrawTraversal {
 public:
@@ -104,8 +96,12 @@ public:
     // Draw a single element and its subtree (used for overlays)
     void drawElement(dom::Element* elem, float offsetX, float offsetY);
 
-    // Load an image from disk into the cache
-    void loadImage(const std::string& url, const std::string& basePath);
+    // The decoded picture behind an image URL (a CSS url(), an <img> src)
+    // for painting: the shared store's (render/image_store.h), decoded off
+    // the page thread. Null while it decodes — the gap paints nothing, and
+    // the settle repaints (layout/image_loading.h) — or when it is broken.
+    // `oriented`: EXIF orientation applied (image-orientation: from-image).
+    std::shared_ptr<const render::DecodedImage> paintImage(const std::string& url, bool oriented = true);
 
     // Set base path for resolving relative image URLs
     void setBasePath(const std::string& path) { basePath_ = path; }
@@ -179,16 +175,36 @@ public:
     }
 
 private:
+    // The box a decoration painter paints: an element's, or a ::before /
+    // ::after pseudo-element's. A generated box is painted by the same
+    // painter as an element (shadows, backgrounds and gradients, borders of
+    // every style and radius, outline), so `elem` is null for a pseudo and
+    // the element-only cases (the viewport background of html/body, a
+    // fieldset's legend gap, collapsed tables) do not apply to it. `host` is
+    // the element itself, or the pseudo's originating element: what em/rem
+    // and the document resolve against.
+    struct PaintBox {
+        const htmlayout::css::ComputedStyle& style;
+        const htmlayout::layout::LayoutBox& box;
+        dom::Element* elem;
+        dom::Element* host;
+    };
+    static PaintBox paintBoxOf(dom::Element* elem);
+
     void drawNode(dom::Node* node, float offsetX, float offsetY);
     void drawElementContent(dom::Element* elem, float offsetX, float offsetY);
-    void drawBackground(dom::Element* elem, float x, float y, float w, float h);
-    void drawBorders(dom::Element* elem, float x, float y, float w, float h);
+    // Box shadows (outset, then inset over the background), background,
+    // borders and outline of the border box (bx, by, bw, bh), in CSS paint
+    // order. One painter for elements and pseudo-elements alike.
+    void paintBoxDecorations(const PaintBox& pb, float bx, float by, float bw, float bh);
+    void drawBackground(const PaintBox& pb, float x, float y, float w, float h);
+    void drawBorders(const PaintBox& pb, float x, float y, float w, float h);
     // CSS border-image (Backgrounds-3 §6): draws the nine-slice over the
     // border area when border-image-source names a loaded raster image.
     // Returns true when border-image took over painting (normal border
     // painting must then be skipped); false → fall back to normal borders
     // (source absent, `none`, failed to load, SVG, or gradient).
-    bool drawBorderImage(dom::Element* elem, float x, float y, float w, float h);
+    bool drawBorderImage(const PaintBox& pb, float x, float y, float w, float h);
     // <fieldset> paints its block-start border and background from the
     // vertical center of its <legend>, which straddles the border (HTML
     // rendering spec). Returns the downward shift of the painted top edge
@@ -285,7 +301,11 @@ private:
     float rootOffsetX_ = 0;
     float rootOffsetY_ = 0;
 
-    std::unordered_map<std::string, CachedImage> imageCache_;
+    // paintImage's per-traversal memo: URL (and orientation) to the store's
+    // request. Weak, so the store's memory bound decides what stays decoded.
+    std::unordered_map<std::string, std::weak_ptr<render::ImageRequest>> imageRequests_;
+    // The pixels for <img> `elem` as painted under its image-orientation.
+    std::shared_ptr<const render::DecodedImage> elementPaintImage(dom::Element* elem, bool oriented);
     LayerBreakCallback layerBreakCb_;
     bool terminalLayers_ = false;
     bool shellClientWindows_ = false;

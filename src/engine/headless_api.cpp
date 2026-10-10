@@ -29,6 +29,7 @@
 #include "dom/event_dispatch.h"
 #include "layout/draw_traversal.h"
 #include "layout/element_ref_adapter.h"
+#include "layout/image_loading.h"
 #include "layout/skia_text_metrics.h"
 #include "canvas/canvas_scene.h"
 #if BRO_WITH_3D
@@ -62,6 +63,11 @@ void Engine::flush() {
     pumpTerminals();
     pumpRemoteViews();
     pumpWebGLContextEvents();
+    // Headless settles image loads deterministically: every decode started so
+    // far (an <img> or `new Image()` src, attached or not) finishes here, so
+    // after flush() the image is complete and drawable. Its load / error
+    // event is still a task, dispatched on the next turn.
+    layout::settleImageLoads();
 
     if (document_) {
         document_->setTransitionManager(&transitionManager_, engineNowMs_);
@@ -83,6 +89,8 @@ void Engine::flush() {
             ensureReplacedElements(document_->documentElement());
             iframeSyncNeeded_ = true;
         }
+        // ... and the loads the markup just started.
+        layout::settleImageLoads();
 
         dom::Element* previousHover = hoveredElement_.get();
         layout::ElementRefAdapter::setHoveredElement(previousHover);

@@ -59,6 +59,7 @@
 #include "bronze_host/host_web_animations.h"
 
 #include "engine/engine.h"
+#include "layout/image_loading.h"
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/event.h"
@@ -305,6 +306,9 @@ Value makeCancelAnimationFrame() {
 double hostFrameDueInMs() {
     if (!g_host) return std::numeric_limits<double>::infinity();
     if (!g_host->rafPending.empty() || ev::microtasksPending()) return 0.0;
+    // A picture finished decoding off the page thread: the frame pump has its
+    // load to settle and its paint to redo.
+    if (layout::imageSettlesPending()) return 0.0;
     return std::max(0.0, nextHostTimerDueMs() - g_host->clockMs);
 }
 
@@ -454,6 +458,10 @@ void installWebHostGlobals(engine::Engine& engine) {
         if (ev::microtasksPending()) ev::drainMicrotasks();
     });
 #endif
+
+    // Pictures decoded off the page thread (host_image.cpp): their loads
+    // settle, and their decode() promises resolve, from a frame pump.
+    installHostImagePump(engine);
 
     // Install HTML interfaces BEFORE document is created:
     installHtmlInterfaces();

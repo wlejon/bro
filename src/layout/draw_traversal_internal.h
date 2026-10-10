@@ -87,6 +87,24 @@ inline bromath::Color styleCurrentColor(const htmlayout::css::ComputedStyle& sty
     return c;
 }
 
+// CSS image-rendering: pixelated / crisp-edges sample nearest, the rest
+// (auto, smooth, high-quality) smooth. Inherited, so the computed value is
+// the element's own.
+inline render::ImageSampling styleImageSampling(const htmlayout::css::ComputedStyle& style) {
+    auto it = style.find("image-rendering");
+    if (it != style.end() &&
+        (it->second == "pixelated" || it->second == "crisp-edges" || it->second == "-webkit-optimize-contrast"))
+        return render::ImageSampling::Pixelated;
+    return render::ImageSampling::Smooth;
+}
+
+// CSS image-orientation: `none` draws a photo as stored; anything else
+// (from-image, the initial value) turns it upright by its EXIF orientation.
+inline bool styleImageOriented(const htmlayout::css::ComputedStyle& style) {
+    auto it = style.find("image-orientation");
+    return it == style.end() || it->second != "none";
+}
+
 // What a shadow's em/rem/vw lengths resolve against for `elem`.
 CssLengthContext shadowLengthContext(dom::Element* elem,
                                      const htmlayout::css::ComputedStyle& style,

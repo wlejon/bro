@@ -56,6 +56,7 @@ static dom::Element* enclosingCollapsedTable(dom::Element* elem) {
 
 float DrawTraversal::fieldsetTopShift(dom::Element* elem, float x, float y,
                                       float* gapX0, float* gapX1) {
+    if (!elem) return 0.0f;  // a pseudo-element is never a fieldset
     std::string tag = elem->tagName();
     if (tag != "fieldset" && tag != "FIELDSET") return 0.0f;
     for (auto* child : elem->composedChildNodes()) {
@@ -80,9 +81,10 @@ float DrawTraversal::fieldsetTopShift(dom::Element* elem, float x, float y,
     return 0.0f;
 }
 
-void DrawTraversal::drawBorders(dom::Element* elem, float x, float y, float w, float h) {
-    auto& box = elem->layoutBox();
-    auto& style = elem->computedStyle();
+void DrawTraversal::drawBorders(const PaintBox& pb, float x, float y, float w, float h) {
+    dom::Element* elem = pb.elem;  // null for a pseudo-element
+    auto& box = pb.box;
+    auto& style = pb.style;
     render::Radii radii = getRadii(style, w, h);
     bool rounded = !radii.isZero();
 
@@ -189,7 +191,7 @@ void DrawTraversal::drawBorders(dom::Element* elem, float x, float y, float w, f
     // REPLACES the normal border painting for this element (Backgrounds-3
     // §6). Absent, `none`, or failed sources fall through to the normal
     // border paint below.
-    if (drawBorderImage(elem, x, y, w, h)) return;
+    if (drawBorderImage(pb, x, y, w, h)) return;
 
     // <fieldset>: the painted border box starts at the legend's vertical
     // center and the top border skips the legend's horizontal extent.

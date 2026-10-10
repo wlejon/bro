@@ -66,6 +66,8 @@ add_library(bro_render STATIC
     recording_renderer.cpp
     command_replayer.cpp
     image_cache.cpp
+    image_store.cpp
+    image_source.cpp
     software_cursor.cpp
     remote_picture.cpp
     ${RENDER_SPV_HEADERS}

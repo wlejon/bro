@@ -187,6 +187,11 @@ struct StrokeStyle {
 
 enum class PathFillRule : uint8_t { NonZero, EvenOdd };
 
+// How a scaled image is sampled (CSS image-rendering). Smooth is bilinear,
+// mipmapped where the image is drawn smaller than it is (auto, smooth,
+// high-quality); Pixelated is nearest-neighbour (pixelated, crisp-edges).
+enum class ImageSampling : uint8_t { Smooth, Pixelated };
+
 // Immutable RGBA8 pixels drawn by reference (Renderer::drawSharedPixels):
 // a recording keeps `owner`, never a copy, and a backend uploads them once
 // per `id` and reuses the texture until they stop being drawn. `id` must be
@@ -329,10 +334,12 @@ public:
                                 float /*x*/, float /*y*/, float /*w*/, float /*h*/) {}
 
     // Draw the source rect (sx, sy, sw, sh) of shared pixels into the rect
-    // (x, y, w, h), filtered, never sampling outside the source rect (so
-    // pieces of one image drawn side by side meet without seams).
+    // (x, y, w, h), filtered by `sampling`, never sampling outside a source
+    // rect smaller than the image (so pieces of one image drawn side by side
+    // meet without seams).
     virtual void drawSharedPixels(const SharedPixels& /*px*/, float /*sx*/, float /*sy*/, float /*sw*/,
-                                  float /*sh*/, float /*x*/, float /*y*/, float /*w*/, float /*h*/) {}
+                                  float /*sh*/, float /*x*/, float /*y*/, float /*w*/, float /*h*/,
+                                  ImageSampling /*sampling*/ = ImageSampling::Smooth) {}
 
     // Render SVG markup (an entire <svg>...</svg> document or fragment) into
     // the rect (x, y, w, h). Backends parse via SkSVGDOM. The recording layer

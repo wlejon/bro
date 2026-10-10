@@ -13,6 +13,7 @@
 #include "layout/el_remote_view.h"
 #include "layout/formatting_context.h"
 #include "layout/line_clamp.h"
+#include "render/image_store.h"
 #include "canvas/canvas_scene.h"
 #include "dom/element_geometry.h"
 #include "dom/element_scroll.h"
@@ -23,6 +24,91 @@
 #include <sstream>
 
 namespace bro::layout {
+
+DrawTraversal::PaintBox DrawTraversal::paintBoxOf(dom::Element* elem) {
+    return PaintBox{elem->computedStyle(), elem->layoutBox(), elem, elem};
+}
+
+void DrawTraversal::paintBoxDecorations(const PaintBox& pb, float bx, float by, float bw, float bh) {
+    auto& style = pb.style;
+    dom::Element* elem = pb.elem;  // null for a pseudo-element
+
+    // Box shadows. CSS paint order:
+    //   1. outset shadows (drawn before background, behind the element)
+    //   2. background
+    //   3. inset shadows (drawn over background, under content/border)
+    // Within outset/inset groups, the first shadow in the list paints on
+    // top of later ones, so we draw in reverse list order.
+    auto bsIt = style.find("box-shadow");
+    std::vector<CssShadow> shadows;
+    render::Radii shadowRadii = {{0, 0, 0, 0}, {0, 0, 0, 0}};
+    bool hasShadows = (bsIt != style.end() && !bsIt->second.empty() && bsIt->second != "none");
+    if (hasShadows) {
+        shadowRadii = getRadii(style, bw, bh);
+        // A shadow with no colour is currentcolor.
+        shadows = parseCssShadowList(bsIt->second, styleCurrentColor(style), 4,
+                                     shadowLengthContext(pb.host, style, viewportW_, viewportH_));
+    }
+
+    auto drawShadows = [&](bool wantInset) {
+        for (int si = static_cast<int>(shadows.size()) - 1; si >= 0; --si) {
+            const CssShadow& s = shadows[si];
+            if (s.inset != wantInset) continue;
+            renderer_->drawBoxShadowRadii(bx, by, bw, bh, shadowRadii,
+                                          s.dx, s.dy, s.blur, s.spread, s.color, s.inset);
+        }
+    };
+
+    // Outset shadows first (behind background).
+    if (hasShadows) drawShadows(false);
+
+    // For html/body elements, background covers the entire viewport (CSS2.1 spec).
+    // viewportTop_ offsets for engine-reserved insets (e.g. menu bar).
+    std::string tag = elem ? elem->tagName() : std::string();
+    if ((tag == "html" || tag == "HTML" || tag == "body" || tag == "BODY") &&
+        viewportW_ > 0 && viewportH_ > 0) {
+        drawBackground(pb, 0, static_cast<float>(viewportTop_),
+                       static_cast<float>(viewportW_), static_cast<float>(viewportH_));
+    } else {
+        // A fieldset's background starts at its painted border-box top
+        // (the legend's vertical center), not the layout box top.
+        float fsShift = fieldsetTopShift(elem, bx, by);
+        drawBackground(pb, bx, by + fsShift, bw, bh - fsShift);
+    }
+
+    // Inset shadows after background (so they're visible on top of it).
+    if (hasShadows) drawShadows(true);
+
+    // Draw borders (skipped here for border-collapse tables — they
+    // repaint after children so the table border wins on the gridline)
+    if (!isCollapsedTable(elem)) {
+        drawBorders(pb, bx, by, bw, bh);
+    }
+
+    // Draw outline (outside the border box)
+    auto olwIt = style.find("outline-width");
+    auto olsIt = style.find("outline-style");
+    if (olwIt != style.end() && olsIt != style.end() && olsIt->second != "none") {
+        float olw = parseLengthPx(olwIt->second);
+        if (olw > 0) {
+            bromath::Color olc = cfromColor8({0, 0, 0, 255});
+            auto olcIt = style.find("outline-color");
+            if (olcIt != style.end()) tryParseColor(olcIt->second, olc);
+            float olOff = 0;
+            auto oloIt = style.find("outline-offset");
+            if (oloIt != style.end()) olOff = parseLengthPx(oloIt->second);
+            float ox = bx - olw - olOff;
+            float oy = by - olw - olOff;
+            float ow = bw + 2 * (olw + olOff);
+            float oh = bh + 2 * (olw + olOff);
+            // Top, Bottom, Left, Right as filled rects
+            renderer_->fillRect(ox, oy, ow, olw, olc);
+            renderer_->fillRect(ox, oy + oh - olw, ow, olw, olc);
+            renderer_->fillRect(ox, oy + olw, olw, oh - 2*olw, olc);
+            renderer_->fillRect(ox + ow - olw, oy + olw, olw, oh - 2*olw, olc);
+        }
+    }
+}
 
 void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float offsetY) {
     if (!elem) return;
@@ -207,81 +293,7 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     }
 
     if (visible) {
-        // Box shadows. CSS paint order:
-        //   1. outset shadows (drawn before background, behind the element)
-        //   2. background
-        //   3. inset shadows (drawn over background, under content/border)
-        // Within outset/inset groups, the first shadow in the list paints on
-        // top of later ones, so we draw in reverse list order.
-        auto bsIt = style.find("box-shadow");
-        std::vector<CssShadow> shadows;
-        render::Radii shadowRadii = {{0, 0, 0, 0}, {0, 0, 0, 0}};
-        bool hasShadows = (bsIt != style.end() && !bsIt->second.empty() && bsIt->second != "none");
-        if (hasShadows) {
-            shadowRadii = getRadii(style, bw, bh);
-            // A shadow with no colour is currentcolor.
-            shadows = parseCssShadowList(bsIt->second, styleCurrentColor(style), 4,
-                                         shadowLengthContext(elem, style, viewportW_, viewportH_));
-        }
-
-        auto drawShadows = [&](bool wantInset) {
-            for (int si = static_cast<int>(shadows.size()) - 1; si >= 0; --si) {
-                const CssShadow& s = shadows[si];
-                if (s.inset != wantInset) continue;
-                renderer_->drawBoxShadowRadii(bx, by, bw, bh, shadowRadii,
-                                              s.dx, s.dy, s.blur, s.spread, s.color, s.inset);
-            }
-        };
-
-        // Outset shadows first (behind background).
-        if (hasShadows) drawShadows(false);
-
-        // For html/body elements, background covers the entire viewport (CSS2.1 spec).
-        // viewportTop_ offsets for engine-reserved insets (e.g. menu bar).
-        std::string tag = elem->tagName();
-        if ((tag == "html" || tag == "HTML" || tag == "body" || tag == "BODY") &&
-            viewportW_ > 0 && viewportH_ > 0) {
-            drawBackground(elem, 0, static_cast<float>(viewportTop_),
-                           static_cast<float>(viewportW_), static_cast<float>(viewportH_));
-        } else {
-            // A fieldset's background starts at its painted border-box top
-            // (the legend's vertical center), not the layout box top.
-            float fsShift = fieldsetTopShift(elem, bx, by);
-            drawBackground(elem, bx, by + fsShift, bw, bh - fsShift);
-        }
-
-        // Inset shadows after background (so they're visible on top of it).
-        if (hasShadows) drawShadows(true);
-
-        // Draw borders (skipped here for border-collapse tables — they
-        // repaint after children so the table border wins on the gridline)
-        if (!isCollapsedTable(elem)) {
-            drawBorders(elem, bx, by, bw, bh);
-        }
-
-        // Draw outline (outside the border box)
-        auto olwIt = style.find("outline-width");
-        auto olsIt = style.find("outline-style");
-        if (olwIt != style.end() && olsIt != style.end() && olsIt->second != "none") {
-            float olw = parseLengthPx(olwIt->second);
-            if (olw > 0) {
-                bromath::Color olc = cfromColor8({0, 0, 0, 255});
-                auto olcIt = style.find("outline-color");
-                if (olcIt != style.end()) tryParseColor(olcIt->second, olc);
-                float olOff = 0;
-                auto oloIt = style.find("outline-offset");
-                if (oloIt != style.end()) olOff = parseLengthPx(oloIt->second);
-                float ox = bx - olw - olOff;
-                float oy = by - olw - olOff;
-                float ow = bw + 2 * (olw + olOff);
-                float oh = bh + 2 * (olw + olOff);
-                // Top, Bottom, Left, Right as filled rects
-                renderer_->fillRect(ox, oy, ow, olw, olc);
-                renderer_->fillRect(ox, oy + oh - olw, ow, olw, olc);
-                renderer_->fillRect(ox, oy + olw, olw, oh - 2*olw, olc);
-                renderer_->fillRect(ox + ow - olw, oy + olw, olw, oh - 2*olw, olc);
-            }
-        }
+        paintBoxDecorations(paintBoxOf(elem), bx, by, bw, bh);
 
         // Column rules for multicol containers: one rule centered in each
         // column gap, spanning the content height. Geometry mirrors the
@@ -698,15 +710,15 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
             }
         }
         // <img> replaced content. Layout already sized the box via
-        // intrinsicSize() in layout_node_adapter; here we paint the raster
-        // bytes (or SVG markup) into the content rect.
+        // intrinsicSize() in layout_node_adapter; here we paint the decoded
+        // pixels (or SVG markup) into the content rect — nothing while the
+        // picture is still decoding off the page thread.
         const std::string& tag = elem->tagName();
         if (tag == "img" || tag == "IMG") {
             std::string src = elem->getAttribute("src");
             if (!src.empty()) {
-                loadImage(src, basePath_);
-                auto it = imageCache_.find(src);
-                if (it != imageCache_.end() && !it->second.data.empty()) {
+                auto pic = elementPaintImage(elem, styleImageOriented(style));
+                if (pic && (pic->isSvg ? !pic->svgMarkup.empty() : !pic->rgba.empty())) {
                     float ix = box.contentRect.x + offsetX;
                     float iy = box.contentRect.y + offsetY;
                     float iw = box.contentRect.width;
@@ -719,8 +731,8 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
                         // center). cover/none can overflow the content box, so we
                         // clip to it.
                         float dx = ix, dy = iy, dw = iw, dh = ih;
-                        float imgW = static_cast<float>(it->second.width);
-                        float imgH = static_cast<float>(it->second.height);
+                        float imgW = static_cast<float>(pic->width);
+                        float imgH = static_cast<float>(pic->height);
                         std::string fit = "fill";
                         if (auto ofIt = style.find("object-fit"); ofIt != style.end() && !ofIt->second.empty())
                             fit = ofIt->second;
@@ -770,17 +782,15 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
                         }
 
                         if (needClip) { renderer_->save(); renderer_->setClip(ix, iy, iw, ih); }
-                        if (it->second.isSvg) {
+                        if (pic->isSvg) {
                             // Recorded; replayer re-parses and draws the SVG markup at the fitted rect.
-                            renderer_->drawSvgMarkup(
-                                reinterpret_cast<const char*>(it->second.data.data()),
-                                it->second.data.size(),
-                                dx, dy, dw, dh);
+                            renderer_->drawSvgMarkup(pic->svgMarkup.data(), pic->svgMarkup.size(),
+                                                     dx, dy, dw, dh);
                         } else {
-                            renderer_->drawImage(it->second.data.data(),
-                                                 it->second.data.size(),
-                                                 dx, dy, dw, dh,
-                                                 it->second.id);
+                            // By reference: the recording keeps the decoded
+                            // pixels alive, and a backend uploads them once.
+                            renderer_->drawSharedPixels(render::sharedPixelsOf(pic), 0, 0, imgW, imgH,
+                                                        dx, dy, dw, dh, styleImageSampling(style));
                         }
                         if (needClip) renderer_->restore();
                     }
@@ -795,7 +805,7 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     // table — last in the list paints on top). drawBorders() handles the
     // collapsed-mode centering when isCollapsedTable() is true.
     if (visible && isCollapsedTable(elem)) {
-        drawBorders(elem, bx, by, bw, bh);
+        drawBorders(paintBoxOf(elem), bx, by, bw, bh);
     }
 
     if (needsClip) {

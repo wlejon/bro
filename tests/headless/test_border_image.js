@@ -82,6 +82,7 @@ const SHOT = path.join(os.tmpdir(), 'bro_border_image_shot_' + Date.now() + '.pn
 screenshot(SHOT);
 const img = new Image();
 img.src = SHOT;
+flush();  // settles the off-thread decode
 assert(img.naturalWidth > 0, 'screenshot decodes');
 const cnv = document.createElement('canvas');
 cnv.width = img.naturalWidth; cnv.height = img.naturalHeight;
@@ -142,6 +143,9 @@ function edgeTransitions(el) {
     for (let x = r.x + 13; x <= r.x + r.w - 14; x++) {
         const p = px(x, y);
         const cls = isMagentaish(p) ? 'm' : (isWhiteish(p) ? 'w' : 'o');
+        // The slice is sampled smoothly (as on the web): the blend between
+        // magenta and white is part of one transition, not two.
+        if (cls === 'o') continue;
         if (last !== null && cls !== last) n++;
         last = cls;
     }

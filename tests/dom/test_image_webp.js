@@ -35,10 +35,12 @@ function writeTemp(name, b64) {
     return p;
 }
 
-// Decoding is synchronous, so load/error has fired by the time `src` returns.
+// The decode runs off the page thread; a headless flush() settles it, so the
+// image is complete (or broken) when this returns.
 function load(p) {
     const img = new Image();
     img.src = p;
+    flush();
     return img;
 }
 

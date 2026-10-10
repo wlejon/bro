@@ -205,6 +205,9 @@ public:
     // in ctor/dtor (main thread only), letting NodeHandle survive its whole
     // document being destroyed (e.g. a closed system panel).
     static bool isLiveDocument(const Document* doc);
+    // Every live document's paint is stale (a picture they may show finished
+    // decoding off the page thread): each repaints on its next frame.
+    static void markAllPaintDirty();
 
     // Queries
     Element* getElementById(const std::string& id);

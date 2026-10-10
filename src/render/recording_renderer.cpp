@@ -185,13 +185,14 @@ void RecordingRenderer::drawPixelsRGBA(const uint8_t* rgba,
 }
 
 void RecordingRenderer::drawSharedPixels(const SharedPixels& px, float sx, float sy, float sw, float sh,
-                                         float x, float y, float w, float h) {
+                                         float x, float y, float w, float h,
+                                         ImageSampling sampling) {
     if (!buffer_) {
-        measureRenderer_->drawSharedPixels(px, sx, sy, sw, sh, x, y, w, h);
+        measureRenderer_->drawSharedPixels(px, sx, sy, sw, sh, x, y, w, h, sampling);
         return;
     }
     if (!px.rgba || px.width <= 0 || px.height <= 0) return;
-    buffer_->append(Cmd_DrawSharedPixels{buffer_->pushSharedPixels(px), sx, sy, sw, sh, x, y, w, h});
+    buffer_->append(Cmd_DrawSharedPixels{buffer_->pushSharedPixels(px), sx, sy, sw, sh, x, y, w, h, sampling});
 }
 
 void RecordingRenderer::drawCircle(float cx, float cy, float r,

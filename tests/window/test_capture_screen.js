@@ -29,6 +29,7 @@ assert(w === window.innerWidth * devicePixelRatio && h === window.innerHeight * 
 // The pixels are the page's: decode it back and look at the red square.
 const img = new Image();
 img.src = out;
+flush();  // settles the off-thread decode
 const c = document.createElement('canvas');
 c.width = 20; c.height = 20;
 const ctx = c.getContext('2d');

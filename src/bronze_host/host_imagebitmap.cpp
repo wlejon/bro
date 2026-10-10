@@ -7,6 +7,7 @@
 #include "canvas/canvas_scene.h"
 #include "dom/element.h"
 #include "engine/engine.h"
+#include "render/image_store.h"
 #include "webgl/webgl2_context.h"
 #include "broimage/decode.h"
 #include <api/api.h>
@@ -277,8 +278,8 @@ static Value js_createImageBitmap(Value, std::span<const Value> a) {
         resultImg = buildBitmap(bmp->pixels.data(), bmp->width, bmp->height,
                                 crop, sx, sy, sw, sh, outPixels, err);
     } else if (const HostImage* img = hostImageOf(a[0])) {
-        if (!img->complete || !img->ok || img->rgba.empty()) return reject("Image has no valid pixels");
-        resultImg = buildBitmap(img->rgba.data(), img->width, img->height,
+        if (!img->complete || !img->ok || !img->rgba()) return reject("Image has no valid pixels");
+        resultImg = buildBitmap(img->rgba(), img->width, img->height,
                                 crop, sx, sy, sw, sh, outPixels, err);
     } else if (dom::Element* el = hostElementOf(a[0])) {
         if (el->tagName() == "canvas" || el->tagName() == "CANVAS") {
@@ -299,17 +300,79 @@ static Value js_createImageBitmap(Value, std::span<const Value> a) {
         const uint8_t* bytes = nullptr;
         size_t len = 0;
         if (brokit::api::blobBytes(a[0], &bytes, &len) && bytes && len > 0) {
-            // The same ladder an <img> src goes through (host_image.cpp):
+            // The same ladder an <img> src goes through (render/image_store):
             // bitmap codecs, WebP, then SVG — a fetched .webp or .svg blob
-            // is as much an image here as a PNG one.
-            int dw = 0, dh = 0;
-            std::vector<uint8_t> decoded;
-            std::string decErr;
-            if (decodeHostImageBytes(bytes, len, dw, dh, decoded, &decErr)) {
-                resultImg = buildBitmap(decoded.data(), dw, dh,
-                                        crop, sx, sy, sw, sh, outPixels, err);
+            // is as much an image here as a PNG one. EXIF orientation applies
+            // unless the options say imageOrientation: 'none'.
+            bool orient = true;
+            {
+                const size_t optAt = crop ? 5 : 1;
+                if (a.size() > optAt && ev::isObject(a[optAt])) {
+                    Value io = ev::getProperty(a[optAt], "imageOrientation");
+                    if (ev::isString(io) && ev::toUtf8(io) == "none") orient = false;
+                }
+            }
+            // The decode, the crop and the Skia image are built on a decoder
+            // thread; the page thread only copies the bytes (the Blob may be
+            // collected before the decode runs) and settles the promise.
+            struct Result {
+                std::vector<uint8_t> pixels;
+                sk_sp<SkImage> image;
+                std::string err;
+            };
+            auto result = std::make_shared<Result>();
+            auto work = [data = std::vector<uint8_t>(bytes, bytes + len), orient, crop, sx, sy, sw, sh,
+                         result](render::DecodedImage& out, std::string& werr) -> bool {
+                render::DecodedImage img;
+                std::string decErr;
+                if (!render::decodeImageData(data.data(), data.size(), orient, img, decErr) ||
+                    img.rgba.empty()) {
+                    werr = "Blob image decode failed: " +
+                           (decErr.empty() ? std::string("SVG markup did not rasterize (no intrinsic size?)") : decErr);
+                    result->err = werr;
+                    return false;
+                }
+                std::string cropErr;
+                result->image = buildBitmap(img.rgba.data(), img.width, img.height,
+                                            crop, sx, sy, sw, sh, result->pixels, cropErr);
+                if (!result->image) {
+                    werr = cropErr.empty() ? std::string("createImageBitmap failed") : cropErr;
+                    result->err = werr;
+                    return false;
+                }
+                out.width = result->image->width();
+                out.height = result->image->height();
+                return true;
+            };
+            if (!onHostImageMainThread()) {
+                // A worker realm is already off the page thread: decode here.
+                render::DecodedImage unused;
+                std::string werr;
+                if (work(unused, werr)) {
+                    resultImg = result->image;
+                    outPixels = std::move(result->pixels);
+                } else {
+                    err = werr;
+                }
             } else {
-                err = "Blob image decode failed: " + decErr;
+                auto req = render::ImageStore::instance().submit(std::move(work));
+                auto held = std::make_shared<ev::Persistent>(promise.get());
+                whenHostDecodeSettles(req, [held, result]() {
+                    if (result->image && !result->pixels.empty()) {
+                        auto* newBmp = new HostImageBitmap();
+                        newBmp->image = std::move(result->image);
+                        newBmp->pixels = std::move(result->pixels);
+                        newBmp->width = newBmp->image->width();
+                        newBmp->height = newBmp->image->height();
+                        ev::Persistent bmpVal(g_imageBitmapClass.make(newBmp, hostImageBitmapDtor));
+                        ev::resolvePromise(held->get(), bmpVal.get());
+                    } else {
+                        ev::Persistent errVal(makeTypeError(
+                            result->err.empty() ? std::string("createImageBitmap failed") : result->err));
+                        ev::rejectPromise(held->get(), errVal.get());
+                    }
+                });
+                return promise.get();
             }
         } else if (ev::isObject(a[0])) {
             // Each read reduced to a number before the next getProperty

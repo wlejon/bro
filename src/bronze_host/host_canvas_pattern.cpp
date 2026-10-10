@@ -120,14 +120,14 @@ PatternSource resolvePatternSource(Value srcIn) {
     }
     if (const HostImage* img = hostImageOf(src)) {
         if (!img->complete) { out.bad = true; return out; }
-        if (!img->ok || img->rgba.empty()) {
+        if (!img->ok || !img->rgba()) {
             if (img->src.empty()) { out.bad = true; return out; }
             ev::throwValue(hostMakeDomError("InvalidStateError",
                 "createPattern: the image is broken"));
             out.threw = true;
             return out;
         }
-        out.image = imageFromRgba(img->rgba.data(), img->width, img->height);
+        out.image = img->skImage();
         if (!out.image) out.bad = true;
         return out;
     }

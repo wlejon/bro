@@ -17,12 +17,18 @@ assert(img.src === '', 'initial src empty');
 
 // A real PNG on disk to load — screenshot() gives us one without checking a
 // binary asset into the tree. Absolute path, so it bypasses app-relative src
-// resolution. Decoding is synchronous (stb_image), so load/error fires before
-// the `src` assignment returns.
+// resolution. The decode runs off the page thread and load / error are tasks,
+// as on the web: neither fires before the `src` assignment returns. settle()
+// lets them land (a headless flush() finishes the decode, a zero timeout
+// runs the queued event).
 const os = require('os');
 const path = require('path');
 const REAL_PNG = path.join(os.tmpdir(), 'bro_test_image_' + Date.now() + '.png');
 screenshot(REAL_PNG);
+async function settle() {
+    flush();
+    await new Promise((r) => setTimeout(r, 0));
+}
 
 // =========================================================================
 // onload fires on a successful decode
@@ -33,7 +39,9 @@ img.onload = function() { loadFired = true; };
 img.onerror = function() { errFired = true; };
 
 img.src = REAL_PNG;
-assert(img.complete === true, 'complete set after src assignment');
+assert(loadFired === false, 'load does not fire inside the src setter');
+await settle();
+assert(img.complete === true, 'complete once the decode settled');
 assert(loadFired === true, 'onload fired on success');
 assert(errFired === false, 'onerror did NOT fire on success');
 assert(img.width > 1, 'width set from the decoded image');
@@ -53,6 +61,7 @@ bad.onload = () => { badLoad = true; };
 bad.onerror = () => { badErr = true; };
 
 bad.src = '/nonexistent.png';
+await settle();
 assert(badErr === true, 'onerror fired on missing file');
 assert(badLoad === false, 'onload did NOT fire on missing file');
 assert(bad.complete === true, 'complete is true even on error (fetch settled)');
@@ -65,6 +74,7 @@ assert(bad.naturalWidth === 0, 'broken image has zero naturalWidth');
 const thrower = new Image();
 thrower.onerror = () => { throw new Error('handler blew up (expected)'); };
 thrower.src = '/nonexistent-2.png';
+await settle();
 assert(thrower.complete === true, 'src setter survives a throwing onerror');
 
 // =========================================================================
@@ -74,12 +84,14 @@ const img2 = new Image();
 let loadEvFired = false;
 img2.addEventListener('load', () => { loadEvFired = true; });
 img2.src = REAL_PNG;
+await settle();
 assert(loadEvFired === true, 'load event fired via addEventListener');
 
 const img2e = new Image();
 let errEvFired = false;
 img2e.addEventListener('error', () => { errEvFired = true; });
 img2e.src = '/also-nonexistent.png';
+await settle();
 assert(errEvFired === true, 'error event fired via addEventListener');
 
 // removeEventListener clears
@@ -94,6 +106,7 @@ const eHandler = () => { throw new Error('should not fire'); };
 img3e.addEventListener('error', eHandler);
 img3e.removeEventListener('error', eHandler);
 img3e.src = '/foo.png';
+await settle();
 // (no throw = success)
 
 // =========================================================================
@@ -111,6 +124,7 @@ let count = 0;
 img5.onload = () => count++;
 img5.onload = () => count += 10; // replaces
 img5.src = REAL_PNG;
+await settle();
 assert(count === 10, 'onload assignment replaces, got count=' + count);
 
 // onerror assignment replaces too
@@ -119,13 +133,16 @@ let ecount = 0;
 img6.onerror = () => ecount++;
 img6.onerror = () => ecount += 10; // replaces
 img6.src = '/x.png';
+await settle();
 assert(ecount === 10, 'onerror assignment replaces, got ecount=' + ecount);
 
 // A successful load must not leave a stale broken state behind: reusing an
 // Image for a good src after a bad one has to recover its dimensions.
 const reused = new Image();
 reused.src = '/gone.png';
+await settle();
 assert(reused.naturalWidth === 0, 'broken after bad src');
 reused.src = REAL_PNG;
+await settle();
 assert(reused.naturalWidth > 0, 'recovers dimensions after a good src');
 assert(reused.complete === true, 'complete after recovery');

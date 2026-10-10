@@ -13,6 +13,10 @@
 #include <memory>
 #include <cstdint>
 
+namespace bro::render {
+    class ImageRequest;
+}
+
 namespace bro::layout {
     class ElInput;
     class ElTextarea;
@@ -415,6 +419,24 @@ public:
         if (sizeChanged) markDirty();
     }
 
+    // <img> load state, kept by layout/image_loading.cpp (which sets it; the
+    // DOM only holds it): the decode request for the current src — shared
+    // with every other image naming the same bytes, and with the painter —
+    // whether that load has settled (`complete`) and as what (`ok`), and the
+    // source's EXIF orientation (1..8), which the natural size above already
+    // reflects (image-orientation: from-image, the default).
+    const std::shared_ptr<render::ImageRequest>& imageRequest() const { return imageRequest_; }
+    bool imageComplete() const { return imageComplete_; }
+    bool imageOk() const { return imageOk_; }
+    int imageOrientation() const { return imageOrientation_; }
+    void setImageLoadState(std::shared_ptr<render::ImageRequest> req, bool complete, bool ok,
+                           int orientation) {
+        imageRequest_ = std::move(req);
+        imageComplete_ = complete;
+        imageOk_ = ok;
+        imageOrientation_ = orientation;
+    }
+
     // Pre-layout <select> selection. selectedIndex is a DOM property scripts
     // read and write before any frame, but the ElSelect control that stores it
     // is not created until the first layout pass. This carries a value set
@@ -616,6 +638,11 @@ private:
     std::string imageProbedSrc_;
     int imageNaturalWidth_ = 0;
     int imageNaturalHeight_ = 0;
+    // <img> load state — see imageRequest().
+    std::shared_ptr<render::ImageRequest> imageRequest_;
+    int imageOrientation_ = 1;
+    bool imageComplete_ = false;
+    bool imageOk_ = false;
     std::unique_ptr<layout::ElVideo> videoControl_;
     std::unique_ptr<layout::ElTerminal> terminalControl_;
     std::unique_ptr<layout::ElRemoteView> remoteViewControl_;

@@ -2,6 +2,7 @@
 // the border area, with slice / width / outset / repeat.
 
 #include "layout/draw_traversal_internal.h"
+#include "render/image_store.h"
 
 #include <algorithm>
 #include <array>
@@ -10,8 +11,8 @@
 
 namespace bro::layout {
 
-bool DrawTraversal::drawBorderImage(dom::Element* elem, float x, float y, float w, float h) {
-    auto& style = elem->computedStyle();
+bool DrawTraversal::drawBorderImage(const PaintBox& pb, float x, float y, float w, float h) {
+    auto& style = pb.style;
     auto srcIt = style.find("border-image-source");
     if (srcIt == style.end() || srcIt->second.empty() || srcIt->second == "none")
         return false;
@@ -26,20 +27,18 @@ bool DrawTraversal::drawBorderImage(dom::Element* elem, float x, float y, float 
         url = url.substr(1, url.size() - 2);
     if (url.empty()) return false;
 
-    loadImage(url, basePath_);
-    auto imgIt = imageCache_.find(url);
-    // Missing/broken source (or an SVG, whose sub-rect sampling the encoded-
-    // image path can't express): normal border painting takes over.
-    if (imgIt == imageCache_.end() || imgIt->second.data.empty() || imgIt->second.isSvg)
-        return false;
-    const float imgW = static_cast<float>(imgIt->second.width);
-    const float imgH = static_cast<float>(imgIt->second.height);
+    // Missing/broken source, one still decoding (it repaints when it lands),
+    // or an SVG without an intrinsic raster: normal border painting takes
+    // over. An SVG with one slices its raster.
+    auto pic = paintImage(url, styleImageOriented(style));
+    if (!pic || pic->rgba.empty()) return false;
+    const float imgW = static_cast<float>(pic->width);
+    const float imgH = static_cast<float>(pic->height);
     if (imgW <= 0 || imgH <= 0) return false;
-    const void* bytes = imgIt->second.data.data();
-    const size_t byteLen = imgIt->second.data.size();
-    const uint64_t imageId = imgIt->second.id;
+    const render::SharedPixels pixels = render::sharedPixelsOf(pic);
+    const render::ImageSampling sampling = styleImageSampling(style);
 
-    auto& box = elem->layoutBox();
+    auto& box = pb.box;
     // Computed border widths — the reference for number-valued
     // border-image-width and border-image-outset.
     const float cbw[4] = {box.border.top, box.border.right,
@@ -176,20 +175,12 @@ bool DrawTraversal::drawBorderImage(dom::Element* elem, float x, float y, float 
     const float midH = imgH - sT - sB;  // <= 0 → left/right edges + middle empty
 
     // Draw the source sub-rect (sx, sy, sw, sh) into the dest rect
-    // (dx, dy, dw, dh) using the existing clip + scaled whole-image drawImage
-    // primitives: the full image is scaled so the sub-rect lands exactly on
-    // the dest rect, and the clip cuts everything else away. drawImage
-    // samples nearest-neighbor, so no neighboring-slice texels bleed in.
+    // (dx, dy, dw, dh). A sub-rect is sampled strictly inside itself, so no
+    // neighbouring-slice texels bleed in, smoothed or not.
     auto drawRegion = [&](float sx, float sy, float sw, float sh,
                           float dx, float dy, float dw, float dh) {
         if (sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0) return;
-        float scX = dw / sw, scY = dh / sh;
-        renderer_->save();
-        renderer_->setClip(dx, dy, dw, dh);
-        renderer_->drawImage(bytes, byteLen,
-                             dx - sx * scX, dy - sy * scY,
-                             imgW * scX, imgH * scY, imageId);
-        renderer_->restore();
+        renderer_->drawSharedPixels(pixels, sx, sy, sw, sh, dx, dy, dw, dh, sampling);
     };
 
     // Tile positions along one axis for a repeat mode. `ideal` is the tile

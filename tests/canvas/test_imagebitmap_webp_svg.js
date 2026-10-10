@@ -46,6 +46,7 @@ await (async function () {
     try {
         const img = new Image();
         img.src = svgPath;
+        await img.decode();
         assert(img.complete === true, 'SVG <img> settled');
         assert(img.width === 24 && img.height === 16, 'SVG <img> decoded its size, got ' + img.width + 'x' + img.height);
         const q = pixelAt(img, 24, 16, 3, 3);
@@ -62,6 +63,7 @@ await (async function () {
     try {
         const img = new Image();
         img.src = webpPath;
+        await img.decode();
         assert(img.complete === true && img.width === 1 && img.height === 1, 'WebP <img> decoded 1x1');
         const fromImg = await createImageBitmap(img);
         assert(fromImg.width === 1, 'createImageBitmap(<img webp>) works');

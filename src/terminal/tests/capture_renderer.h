@@ -51,7 +51,8 @@ public:
     void drawLine(float x1, float y1, float x2, float y2, bromath::Color color, float thickness) override;
     void drawImage(const void*, size_t, float, float, float, float, uint64_t = 0) override {}
     void drawSharedPixels(const render::SharedPixels& px, float sx, float sy, float sw, float sh, float x, float y,
-                          float w, float h) override {
+                          float w, float h,
+                          render::ImageSampling = render::ImageSampling::Smooth) override {
         Op op;
         op.kind = Op::Image;
         op.x = x, op.y = y, op.w = w, op.h = h;

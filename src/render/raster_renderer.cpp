@@ -334,7 +334,8 @@ void RasterRenderer::drawImage(const void* data, size_t len, float x, float y, f
     // Decoding happens once per image id; subsequent frames reuse the SkImage.
     sk_sp<SkImage> image = imageCache_.resolve(imageId, data, len);
     if (!image) return;
-    canvas_->drawImageRect(image, SkRect::MakeXYWH(x, y, w, h), SkSamplingOptions());
+    canvas_->drawImageRect(image, SkRect::MakeXYWH(x, y, w, h),
+                           imageSamplingOptions(ImageSampling::Smooth, /*mipmaps=*/true));
 }
 
 void RasterRenderer::drawPixelsRGBA(const uint8_t* rgba, int srcW, int srcH, int stride,
@@ -347,13 +348,16 @@ void RasterRenderer::drawPixelsRGBA(const uint8_t* rgba, int srcW, int srcH, int
     if (!bmp.installPixels(info, const_cast<uint8_t*>(rgba), static_cast<size_t>(stride))) return;
     auto image = bmp.asImage();
     if (!image) return;
-    canvas_->drawImageRect(image, SkRect::MakeXYWH(x, y, w, h), SkSamplingOptions());
+    canvas_->drawImageRect(image, SkRect::MakeXYWH(x, y, w, h),
+                           imageSamplingOptions(ImageSampling::Smooth, /*mipmaps=*/false));
 }
 
 void RasterRenderer::drawSharedPixels(const SharedPixels& px, float sx, float sy, float sw, float sh,
-                                      float x, float y, float w, float h) {
+                                      float x, float y, float w, float h, ImageSampling sampling) {
     // No cache: the image wraps the pixels without copying them.
-    if (canvas_) drawSharedPixelsImage(canvas_, makeSharedPixelsImage(px), sx, sy, sw, sh, x, y, w, h);
+    if (canvas_)
+        drawSharedPixelsImage(canvas_, makeSharedPixelsImage(px), sx, sy, sw, sh, x, y, w, h, sampling,
+                              /*mipmaps=*/true);
 }
 
 void RasterRenderer::drawSvgMarkup(const char* data, size_t len,

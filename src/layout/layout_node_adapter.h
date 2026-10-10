@@ -220,8 +220,16 @@ public:
             // appeared. SVG data URLs are parsed above and win, since their
             // declared size is authoritative and needs no file read.
             if (intrW <= 0 && intrH <= 0) {
-                const int natW = elem_->imageNaturalWidth();
-                const int natH = elem_->imageNaturalHeight();
+                int natW = elem_->imageNaturalWidth();
+                int natH = elem_->imageNaturalHeight();
+                // The natural size is the upright one (image-orientation:
+                // from-image); `none` lays the photo out as stored, so a
+                // quarter-turned one keeps its stored axes.
+                if (elem_->imageOrientation() >= 5) {
+                    const auto& cs = elem_->computedStyle();
+                    auto oIt = cs.find("image-orientation");
+                    if (oIt != cs.end() && oIt->second == "none") std::swap(natW, natH);
+                }
                 if (natW > 0 && natH > 0) {
                     intrW = static_cast<float>(natW);
                     intrH = static_cast<float>(natH);

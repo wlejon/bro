@@ -81,7 +81,8 @@ public:
                         int srcW, int srcH, int stride,
                         float x, float y, float w, float h) override;
     void drawSharedPixels(const SharedPixels& px, float sx, float sy, float sw, float sh,
-                          float x, float y, float w, float h) override;
+                          float x, float y, float w, float h,
+                          ImageSampling sampling = ImageSampling::Smooth) override;
     void drawSvgMarkup(const char* data, size_t len,
                        float x, float y, float w, float h) override;
 
