@@ -71,6 +71,8 @@
  * @property {number} bufferedFrames -  decodedFrames - playedFrames.
  * @property {number} underrunFrames -  Silent frames emitted while the ring was starved.
  * @property {boolean} finished -  Disk stream: end of file reached and ring drained.
+ * @property {number} duration -  Disk stream: the file's length in seconds (as getStreamDuration); 0 for a live stream.
+ * @property {number} position -  getPlaybackPositionSeconds, in the same snapshot.
  */
 
 /**
@@ -623,7 +625,9 @@ class AudioContext {
    * does an unknown id. A `createStream` stream counts for as long as it is
    * open and not paused, even while its ring is empty; a
    * `createStreamFromFile` stream starts counting once its prebuffer is
-   * decoded.
+   * decoded and stops once a non-looping stream has played its last frame
+   * (`getStreamStats(pb).finished`); it stays open until closeStream, and a
+   * seek or setPlaybackLoop(pb, true) starts it again.
    * @param {number} playbackId
    * @returns {boolean}
    */
@@ -685,14 +689,19 @@ class AudioContext {
   setPlaybackRate(playbackId, rate) {}
 
   /**
+   * Normalized 0..1. Clips: within the region (wraps when looping). Disk
+   * streams: getPlaybackPositionSeconds / getStreamDuration (0 while the
+   * duration is unknown). Live streams: 0.
    * @param {number} playbackId
-   * @returns {number} normalized position 0..1 within the region
+   * @returns {number}
    */
   getPlaybackPosition(playbackId) {}
 
   /**
-   * Clips: seconds from the region start. Disk streams: file time. Live
-   * streams: seconds consumed since opening. 0 for an unknown id.
+   * Clips: seconds from the region start (wraps when looping). Disk
+   * streams: file time in [0, duration] — a looping stream wraps to 0 at
+   * each pass, a finished one reads its duration. Live streams: seconds
+   * consumed since opening. 0 for an unknown id.
    * @param {number} playbackId
    * @returns {number}
    */
@@ -895,12 +904,25 @@ class AudioContext {
 
   /**
    * Plays a file from disk, decoding incrementally on a worker (WAV, FLAC,
-   * MP3, Ogg Vorbis; up to 2 channels). Playback starts once the prebuffer
-   * is decoded. TypeError without a path; Error("createStreamFromFile: <reason>")
-   * when the file cannot be opened.
+   * MP3, Ogg Vorbis, Ogg Opus — `.opus` or Opus in `.ogg`, 48 kHz; up to 2
+   * channels). Memory stays bounded by the ring whatever the file's length,
+   * and seekPlayback works for every format. Playback starts once the
+   * prebuffer is decoded. TypeError without a path;
+   * Error("createStreamFromFile: <reason>") when the file cannot be opened.
+   * Ogg Opus needs a build with libopus (every vcpkg profile); without it
+   * the reason says so.
    * @param {string} path
    * @param {StreamFromFileOptions} [options]
    * @returns {number} playback id
+   *
+   * @example
+   *   const pb = ctx.createStreamFromFile('music/track.opus');
+   *   const len = ctx.getStreamDuration(pb);          // seconds
+   *   requestAnimationFrame(function tick() {
+   *       bar.style.width = (ctx.getPlaybackPosition(pb) * 100) + '%';
+   *       if (ctx.isClipPlaying(pb)) requestAnimationFrame(tick);
+   *       else ctx.closeStream(pb);                    // played out
+   *   });
    */
   createStreamFromFile(path, options) {}
 
@@ -909,6 +931,17 @@ class AudioContext {
    * @returns {StreamStats|null} null when the id is not a stream
    */
   getStreamStats(playbackId) {}
+
+  /**
+   * A disk stream's file length in seconds, known as soon as
+   * createStreamFromFile returns: exact from the container for WAV, FLAC,
+   * Ogg Vorbis and Ogg Opus (granule positions, pre-skip trimmed); for MP3
+   * from the Xing/LAME header, else a scan of the frame headers at open
+   * (no decoding). 0 for a live stream, a clip playback or an unknown id.
+   * @param {number} playbackId
+   * @returns {number}
+   */
+  getStreamDuration(playbackId) {}
 
   // ── Voices ──────────────────────────────────────────────────────────────
   // Raw engine voices (an OscillatorNode's voiceId is one too). Waveform
