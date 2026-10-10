@@ -154,6 +154,25 @@ bro.app.cacheDir;
  */
 bro.app.logFile;
 
+// ── Startup ──────────────────────────────────────────────────────────────────
+
+/**
+ * How long this launch took, in ms since the process started:
+ * `{ loadedMs, firstFrameMs }`. `loadedMs` is when the page's scripts had
+ * run; `firstFrameMs` when its first frame was drawn (0 until then). The log
+ * says the same once: `app <id>: first frame N ms after start (page loaded
+ * at M ms)`. bro-headless draws the first frame before its script runs, so a
+ * test reads both:
+ *
+ *   const { loadedMs, firstFrameMs } = bro.app.startup;
+ *   assert(firstFrameMs - loadedMs < 250, 'nothing between the load and the first frame');
+ *
+ * Most of a launch is the engine's (the GPU device, compiling the page);
+ * what an app adds shows against an empty page's numbers.
+ * @readonly @type {{loadedMs: number, firstFrameMs: number}}
+ */
+bro.app.startup;
+
 // ── Single instance ──────────────────────────────────────────────────────────
 
 /**

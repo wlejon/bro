@@ -349,6 +349,13 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
         };
         drainAppReloads();
 
+        // The page's first frame: lay it out before the test script
+        // compiles, as a window shows it before anything else happens.
+        // This is the frame bro.app.startup.firstFrameMs (and the log's
+        // "first frame N ms after start") measures, so a launch's cost reads
+        // the same headless as windowed and owes nothing to the test script.
+        engine->flush();
+
         if (bro::bronze_host::hasTestFailure() || engine->hasTestFailure()) {
             exitCode = 1;
         }

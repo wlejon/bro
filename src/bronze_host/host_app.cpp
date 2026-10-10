@@ -277,6 +277,15 @@ Value makeBroAppValue() {
     o.accessor("singleInstance", [](Value, std::span<const Value>) -> Value {
         return ev::fromBool(engine::currentApp().singleInstance);
     }, nullptr);
+    // How long this launch took, in ms from just before main(): the page
+    // loaded (its scripts ran) and its first frame shown (-1 until then;
+    // headless counts its first layout after load). The log's "first frame".
+    o.accessor("startup", [](Value, std::span<const Value>) -> Value {
+        ObjectBuilder s;
+        s.set("loadedMs", ev::fromDouble(engine::documentLoadedMs()));
+        s.set("firstFrameMs", ev::fromDouble(engine::firstFrameMs()));
+        return s.get();
+    }, nullptr);
 
     {
         ObjectBuilder man;

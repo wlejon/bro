@@ -71,7 +71,9 @@ struct BrokitPumps {
     ev::Persistent wsTick;
     ev::Persistent netTick;
     ev::Persistent fsWatchTick;
+    ev::Persistent fsAsyncTick;
     ev::Persistent fetchHasPending;
+    ev::Persistent fsAsyncHasPending;
     ev::Persistent wsHasPending;
     ev::Persistent netHasPending;
     ev::Persistent fsWatchHasPending;
@@ -244,7 +246,9 @@ void installBrokitGlobals(engine::Engine& engine) {
     g_pumps->wsTick.set(globalProperty("__brokit_ws_tick"));
     g_pumps->netTick.set(globalProperty("__brokit_net_tick"));
     g_pumps->fsWatchTick.set(globalProperty("__brokit_fs_watch_tick"));
+    g_pumps->fsAsyncTick.set(globalProperty("__brokit_fs_async_tick"));
     g_pumps->fetchHasPending.set(globalProperty("__brokit_fetch_has_pending"));
+    g_pumps->fsAsyncHasPending.set(globalProperty("__brokit_fs_async_has_pending"));
     g_pumps->wsHasPending.set(globalProperty("__brokit_ws_has_pending"));
     g_pumps->netHasPending.set(globalProperty("__brokit_net_has_pending"));
     g_pumps->fsWatchHasPending.set(globalProperty("__brokit_fs_watch_has_pending"));
@@ -256,6 +260,7 @@ void pumpBrokitTicks() {
     callTick(g_pumps->wsTick, "__brokit_ws_tick");
     callTick(g_pumps->netTick, "__brokit_net_tick");
     callTick(g_pumps->fsWatchTick, "__brokit_fs_watch_tick");
+    callTick(g_pumps->fsAsyncTick, "__brokit_fs_async_tick");
 }
 
 void drainMicrotasksAndLocalFetches(bool always) {
@@ -280,7 +285,8 @@ bool brokitHasPendingWork() {
     return askPending(g_pumps->fetchHasPending) ||
            askPending(g_pumps->wsHasPending) ||
            askPending(g_pumps->netHasPending) ||
-           askPending(g_pumps->fsWatchHasPending);
+           askPending(g_pumps->fsWatchHasPending) ||
+           askPending(g_pumps->fsAsyncHasPending);
 }
 
 }  // namespace bro::bronze_host

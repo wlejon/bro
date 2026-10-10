@@ -156,6 +156,7 @@ Value makeNavigatorValue() {
         if (!engine) {
             return hostArrayOf(0, [](size_t) { return ev::null(); });
         }
+        engine->useGamepads();   // the first call starts reading controllers
         const auto& pads = engine->gamepads();
         return hostArrayOf(pads.size(), [&pads](size_t i) -> Value {
             if (!pads[i].connected) return ev::null();

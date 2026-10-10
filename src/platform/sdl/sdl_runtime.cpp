@@ -64,13 +64,9 @@ bool SdlRuntime::acquire() {
                      "standing in with hidden windows on the '%s' driver", SDL_GetCurrentVideoDriver());
         }
 
-        // Gamepad support is best-effort: a headless box or stripped-down
-        // driver stack may have no controller backend, and apps must still run
-        // (they just see zero gamepads). So init it as a subsystem and only
-        // log on failure.
-        if (!SDL_InitSubSystem(SDL_INIT_GAMEPAD)) {
-            LOG_INFO("SDL gamepad subsystem unavailable: %s", SDL_GetError());
-        }
+        // No gamepad subsystem here: it costs ~200 ms of device enumeration
+        // on Windows, so it starts when a page first asks about gamepads
+        // (Gamepads::start, sdlStartGamepadsOnly).
 
         // Deliver the click that activates an unfocused window. SDL defaults
         // this off on every platform (Windows/X11/Wayland all gate on the same

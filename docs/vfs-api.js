@@ -12,7 +12,8 @@
  * - Freedesktop / OS trash specification (`trash`, `restoreTrash`, `listTrash`, `emptyTrash`)
  * - Reactive directory models with sorting and filtering (`DirectoryModel`)
  * - File and directory change watching (`watch`)
- * - MIME type detection and volume listing (`getMime`, `listVolumes`)
+ * - MIME type detection and volume listing (`getMime`, `volumes`, `listVolumes`)
+ * - Disk usage of a whole tree, live while it is counted (`usage`)
  *
  * Mounted automatically in Bronze when `BRO_WITH_VFS` is enabled.
  */
@@ -116,8 +117,48 @@ const watcher = bro.vfs.watch('/home/j/projects/bro', (events) => {
 const mime = bro.vfs.getMime('/home/j/projects/bro/README.md');
 console.log(`MIME type: ${mime}`); // e.g. text/markdown
 
-const volumes = bro.vfs.listVolumes();
+// bro.vfs.volumes() answers the same list off the calling thread. Asking a
+// volume for its size can take seconds (a sleeping disk, a network share that
+// has gone away), so a window lists drives with this, never with the
+// synchronous listVolumes() on its way to the first frame.
+const volumes = await bro.vfs.volumes();      // or bro.vfs.listVolumes(), synchronous
 for (const vol of volumes) {
-    console.log(`Mount: ${vol.mountPoint} (${vol.filesystemType})`);
+    // { mountPoint, volumeLabel, fsType, totalBytes, freeBytes, availableBytes,
+    //   isReadOnly, isRemovable, isNetwork, usedPercentage }
+    console.log(`Mount: ${vol.mountPoint} ${vol.volumeLabel} (${vol.fsType})`);
     console.log(`  Total: ${vol.totalBytes} bytes, Available: ${vol.availableBytes} bytes`);
 }
+
+// ============================================================================
+// 7. Disk Usage of a Whole Tree (`bro.vfs.usage`)
+// ============================================================================
+//
+// Totals a tree in the background, on a few threads of its own, while the
+// page reads partial results: every directory's bytes / files / directories
+// cover its whole subtree and grow as the scan counts its descendants. The
+// page never holds the tree; it asks for the one folder it shows. A drive of
+// a million files takes seconds and costs the page nothing but its reads.
+// Links are counted, never followed; sizes are logical (bytes held, not
+// clusters). Hidden: a dot name on POSIX, the hidden attribute on Windows.
+
+const scan = bro.vfs.usage('/home/j', { includeHidden: false, threads: 4 });  // running already
+scan.root;                       // '/home/j'
+scan.done.then((p) => console.log(`done in ${p.elapsedMs} ms`));  // settles when finished or cancelled
+
+// Poll from requestAnimationFrame; redraw only when `version` moved.
+const p = scan.progress();
+// { files, directories, bytes, errors, version, finished, cancelled, elapsedMs }
+
+// The children of a folder (the root when omitted), biggest first, cut to
+// `limit` natively; null until the scan has reached that folder.
+const top = scan.children('/home/j', { sort: 'bytes', limit: 500 });   // sort: 'bytes' | 'name'
+for (const it of top || []) {
+    // { name, path, kind, isDirectory, bytes, files, directories, children,
+    //   mtime, hidden, complete }   complete: its whole subtree is counted
+    console.log(`${it.name}: ${it.bytes} bytes${it.complete ? '' : ' so far'}`);
+}
+
+scan.entry('/home/j/Videos');    // one item (the root when omitted), or null
+scan.remove('/home/j/Videos/old.mkv');  // after trashing it: its bytes come off every folder above; false if unknown
+scan.errors();                   // [{ path, message, code }], the first 100
+scan.cancel();                   // stops; what was counted stays readable

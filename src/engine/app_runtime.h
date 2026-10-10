@@ -79,7 +79,12 @@ void noteDocumentLoaded();
 void noteFramePresented();
 
 /// Milliseconds from start to the page's first presented frame, or -1 before it.
+/// Headless has no present; its first flush after the page loaded counts.
 double firstFrameMs();
+
+/// Milliseconds from start to the page's load (its scripts run, load fired),
+/// or -1 before it.
+double documentLoadedMs();
 
 /// The window's title before the page names one: bro.json's "title", else
 /// the manifest name, else "Bro".

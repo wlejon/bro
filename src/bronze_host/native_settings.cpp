@@ -223,15 +223,30 @@ void reset(const char* category) {
 }
 
 // deadzone < 0: none given, the store's default stands.
+// An action bound to a gamepad control needs controllers read (they are not
+// at startup: Engine::useGamepads).
+void useGamepadsFor(const std::vector<std::string>& keys) {
+    for (const auto& k : keys) {
+        if (k.rfind("gamepad:", 0) == 0) {
+            if (auto* eng = hostEngine()) eng->useGamepads();
+            return;
+        }
+    }
+}
+
 void defineAction(const char* action, const char* keysJoined, double deadzone) {
     auto* s = store();
     if (!s) return;
-    s->defineAction(action, splitLines(keysJoined));
+    auto keys = splitLines(keysJoined);
+    useGamepadsFor(keys);
+    s->defineAction(action, keys);
     if (deadzone >= 0.0) s->setActionDeadzone(action, static_cast<float>(deadzone));
 }
 
 void rebindAction(const char* action, const char* keysJoined) {
-    if (auto* s = store()) s->rebindAction(action, splitLines(keysJoined));
+    auto keys = splitLines(keysJoined);
+    useGamepadsFor(keys);
+    if (auto* s = store()) s->rebindAction(action, keys);
 }
 
 void resetAction(const char* action) { if (auto* s = store()) s->resetAction(action); }

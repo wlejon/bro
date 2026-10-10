@@ -57,7 +57,8 @@ const p = bro.profiler.stop({ callers: true, report: true, top: 15 });
 assert(bro.profiler.running === false, 'not running after stop');
 
 assert(p.hz === 2000, 'hz echoed, got ' + p.hz);
-assert(p.durationMs >= 400, 'duration covers the window, got ' + p.durationMs);
+// burn() counts whole Date.now() milliseconds, so its 400 can be 399.x.
+assert(p.durationMs >= 399, 'duration covers the window, got ' + p.durationMs);
 assert(p.samples > 50, 'a 400 ms window at 2 kHz has samples, got ' + p.samples);
 assert(p.truncated === false, 'not truncated');
 assert(p.threads.length === 1 && p.threads[0].kind === 'main', 'only the main thread sampled: ' + JSON.stringify(p.threads));

@@ -76,6 +76,9 @@
 #endif
 #if BRO_WITH_CONF
 #include <broconf/api.h>
+#include <broconf/store.h>
+#include <cstdlib>
+#include <filesystem>
 #endif
 #if BRO_WITH_THEMES
 #include <brothemes/api.h>
@@ -147,7 +150,6 @@
 #include <cstdint>
 #include <string>
 #include <vector>
-
 namespace bro::bronze_host {
 
 namespace {
@@ -461,6 +463,20 @@ void installSiblingApis(engine::Engine& engine) {
         broimage::api::installImage();
     }
 #if BRO_WITH_CONF
+    {
+        // BRO_APP_HOME (an app's tests, a scratch profile) holds everything the app keeps,
+        // the desktop settings it reads and writes through bro.conf included: never the
+        // user's own settings.ini, and no session bus to hear the real desktop's changes.
+        static bool confStoreChosen = false;
+        const char* appHome = std::getenv("BRO_APP_HOME");
+        if (!confStoreChosen && appHome && *appHome) {
+            broconf::StoreOptions opts;
+            opts.user_config_path = std::filesystem::absolute(std::filesystem::u8path(appHome)) / "config" / "settings.ini";
+            opts.enable_dbus = false;
+            broconf::api::setStore(broconf::Store::create(std::move(opts)));
+        }
+        confStoreChosen = true;
+    }
     broconf::api::installConf();
     {
         static bool confHooksInstalled = false;

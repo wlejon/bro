@@ -178,6 +178,14 @@ void Engine::gamepadAxisChanged(GamepadState& gp, int w3cAxis, float value) {
 // Device event path (called from the EventLoop callbacks; windowed frame loop)
 // ---------------------------------------------------------------------------
 
+void Engine::useGamepads() {
+    if (gamepadsStarted_) return;
+    gamepadsStarted_ = true;
+    // A dedicated server has no window system to read them through.
+    if (displayMode_ == DisplayMode::Server) return;
+    platform::gamepads().start();
+}
+
 void Engine::handleGamepadAdded(uint32_t instanceId) {
     if (gamepadByInstance(instanceId)) return;  // already open (duplicate event)
     std::string err;

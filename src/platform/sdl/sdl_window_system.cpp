@@ -144,6 +144,8 @@ public:
 
 class SdlGamepads final : public Gamepads {
 public:
+    void start() override { sdlStartGamepadsOnly(); }
+
     bool open(uint32_t instanceId, std::string* error) override {
         if (m_open.count(instanceId)) return true;
         SDL_Gamepad* pad = SDL_OpenGamepad(static_cast<SDL_JoystickID>(instanceId));

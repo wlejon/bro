@@ -192,6 +192,8 @@ void noteFramePresented() {
 
 double firstFrameMs() { return gFirstFrameMs.load(std::memory_order_relaxed); }
 
+double documentLoadedMs() { return gLoadedMs.load(std::memory_order_relaxed); }
+
 std::string initialWindowTitle(const EngineConfig& config) {
     if (!config.title.empty()) return config.title;
     if (!config.manifest.name.empty()) return config.manifest.name;

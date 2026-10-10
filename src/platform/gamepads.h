@@ -46,6 +46,12 @@ class Gamepads {
 public:
     virtual ~Gamepads() = default;
 
+    /// Begin reading controllers; until then no device is announced. Finding
+    /// them enumerates every HID device (~200 ms on Windows), so the engine
+    /// starts it the first time a page asks about gamepads, never at startup.
+    /// Idempotent.
+    virtual void start() = 0;
+
     /// Open the device an onGamepadAdded announced. False when it cannot be
     /// opened (it vanished, or there is no controller backend); `error` then
     /// says why.

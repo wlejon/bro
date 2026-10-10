@@ -6,6 +6,14 @@
  * Implements the W3C Gamepad API for polling game controller hardware,
  * button/axis states, standard mappings, and dual-rumble / trigger-rumble haptic actuators.
  *
+ * Controllers are read from the first time a page asks about them: a
+ * navigator.getGamepads() call, a gamepadconnected / gamepaddisconnected
+ * listener, or a "gamepad:" action binding (bro.settings). Finding them
+ * enumerates every HID device (~200 ms on Windows), so an app that never
+ * asks never pays for it. Pads already plugged in announce themselves
+ * (gamepadconnected) on the frames right after; the first getGamepads()
+ * call answers before they have.
+ *
  * @example
  *   // Polling gamepad in input loop
  *   const gp = navigator.getGamepads()[0];

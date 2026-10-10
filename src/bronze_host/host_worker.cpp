@@ -633,6 +633,8 @@ void WorkerInstance::threadFunc() {
     ev::Persistent wsTick(ev::globalValue("__brokit_ws_tick").value);
     ev::Persistent timersTick(ev::globalValue("__brokit_tick_timers").value);
     ev::Persistent fetchHasPending(ev::globalValue("__brokit_fetch_has_pending").value);
+    ev::Persistent fsAsyncTick(ev::globalValue("__brokit_fs_async_tick").value);
+    ev::Persistent fsAsyncHasPending(ev::globalValue("__brokit_fs_async_has_pending").value);
 
     while (!terminated_.load(std::memory_order_relaxed)) {
         Value gtVal = ev::globalValue("globalThis").value;
@@ -710,6 +712,10 @@ void WorkerInstance::threadFunc() {
         if (ev::isFunction(wsTick.get())) {
             ev::call(wsTick.get(), ev::undefined(), {});
         }
+        // fs.promises / callback fs calls this worker made, settled here.
+        if (ev::isFunction(fsAsyncTick.get())) {
+            ev::call(fsAsyncTick.get(), ev::undefined(), {});
+        }
         // This thread's NetSubscriber: its connect/disconnect/message
         // callbacks fire here, into the dispatcher js/net.js registered.
         pollNet();
@@ -724,6 +730,10 @@ void WorkerInstance::threadFunc() {
         bool hasPendingWork = false;
         if (ev::isFunction(fetchHasPending.get())) {
             Value has = ev::call(fetchHasPending.get(), ev::undefined(), {}).value;
+            if (ev::toBool(has)) hasPendingWork = true;
+        }
+        if (!hasPendingWork && ev::isFunction(fsAsyncHasPending.get())) {
+            Value has = ev::call(fsAsyncHasPending.get(), ev::undefined(), {}).value;
             if (ev::toBool(has)) hasPendingWork = true;
         }
 

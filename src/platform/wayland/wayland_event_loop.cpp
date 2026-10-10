@@ -100,7 +100,7 @@ std::vector<std::string> pathsFromUriList(const std::string& list) {
 
 class WaylandEventLoop final : public EventLoop {
 public:
-    explicit WaylandEventLoop(Connection& c) : c_(c) { gamepads_ = sdlStartGamepadsOnly(); }
+    explicit WaylandEventLoop(Connection& c) : c_(c) {}
 
     void pollEvents() override;
     // Wayland has no modal OS loop: nothing ever keeps pollEvents from returning.
@@ -116,7 +116,6 @@ private:
     WaylandWindow* win(browl::SurfaceId id) const { return c_.window(id); }
 
     Connection& c_;
-    bool gamepads_ = false;
 
     // Modifiers: left/right from the keys held, locks from the keymap state.
     KeyMods heldMods_ = 0;
@@ -156,7 +155,7 @@ void WaylandEventLoop::pollEvents() {
     for (auto& ev : c_.takeBacklog()) handle(ev);
     reportWindows();
     keyRepeat();
-    if (gamepads_) sdlPollGamepadEvents(*this);
+    if (sdlGamepadsStarted()) sdlPollGamepadEvents(*this);
     if (portalColorSchemeChanged() && onSystemThemeChanged) onSystemThemeChanged();
     if (c_.lost() && !m_quit) quit();
 }

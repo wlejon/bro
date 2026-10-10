@@ -233,6 +233,10 @@ public:
     /// a test harness); empty otherwise.
     std::vector<uint8_t> presentedPixels(uint64_t hostId, int& outW, int& outH);
     const std::vector<GamepadState>& gamepads() const { return gamepads_; }
+    /// The page uses gamepads (getGamepads, a gamepad event listener, a
+    /// "gamepad:" action binding): start reading controllers, once. Not at
+    /// startup, where finding them would cost every app ~200 ms.
+    void useGamepads();
     // Polled action state (action_input.cpp)
     float actionStrength(const std::string& action) const;
     bool actionPressed(const std::string& action) const;
@@ -430,8 +434,9 @@ public:
     double gpuFrameMs();
 
     dom::Element* querySelector(const std::string& selector) const;
+    // Builds the panel first if it has not been shown yet.
     dom::Element* overlayQuerySelector(const std::string& panelName,
-                                       const std::string& selector) const;
+                                       const std::string& selector);
     std::vector<std::string> overlayPanelNames() const;
     void dispatchClickOn(dom::Element* target);
 
@@ -754,6 +759,8 @@ private:
     void destroySystemPanels();
     void loadSystemPanels(const std::string& systemDir);
     void scanSystemPanelDir(const std::string& baseDir, const std::string& relPath);
+    void loadSystemPanel(SystemDocument& doc);
+    void loadVisibleSystemPanels();
     bool isSystemDocVisible(const SystemDocument& doc) const;
     void tickSystemPanels(double nowMs);
     void layoutSystemPanels(layout::SkiaTextMetrics& metrics);
@@ -1149,6 +1156,7 @@ private:
     std::unordered_map<int, std::string> heldKeys_;
     void dispatchGamepadConnectionEvent(const GamepadState& gp, bool connected);
     void closeAllGamepads();
+    bool gamepadsStarted_ = false;
 
     int heldModifierMask_ = 0;
     int currentModState() const;

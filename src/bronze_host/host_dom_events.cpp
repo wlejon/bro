@@ -699,6 +699,9 @@ void installElementEventTarget(ObjectBuilder& b, ElementSource source,
         // are what the collector updates).
         std::string type = ev::toUtf8(argAt(a, 0));
         dom::ListenerOptions opts = readOptions(argAt(a, 2));
+        if (type.rfind("gamepad", 0) == 0) {
+            if (auto* eng = hostEngine()) eng->useGamepads();
+        }
 
         if (!el) {
             // The registration says so rather than vanishing: a listener the

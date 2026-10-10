@@ -359,6 +359,31 @@ console.log(`${wall.toFixed(1)}ms/event, ${p.nodesLaidOut / 20} nodes laid out, 
 Note `flush()` is what runs the passes, so a benchmark must call it inside the
 loop; mutating the DOM ten times and flushing once measures one pass, not ten.
 
+#### Startup and frames
+
+Headless times an app the way a window would, so check startup and
+responsiveness here rather than in a windowed run:
+
+- **Startup.** The runner draws the page's first frame before the script or
+  `-e` expression runs, and `bro.app.startup` gives `{ loadedMs,
+  firstFrameMs }` (ms since the process started; `docs/app-api.js`). The log
+  line `app <id>: first frame N ms after start` says the same.
+- **A frame's cost.** Time `advanceTime(16)` with `perf.now()`: it is one
+  frame (timers, rAF, style, layout, paint).
+- **Where a frame went.** The flight recorder fills the same phases as in a
+  window (`js`, `style`, `layout`, `record`, and the forced layouts a script's
+  geometry reads caused). Ask for it through the agent-control `trace`
+  command (`docs/agent-control.md`):
+
+  ```js
+  const id = controlCommand('trace', '20', '--worst=3');   // the next 20 ms of frames
+  let r = null;
+  while (r == null) { advanceTime(16); r = controlResult(id); }
+  console.log(r.payload);
+  ```
+- **Which functions.** `bro.profiler` (`docs/profiler-api.js`) samples the
+  thread between `start()` and `stop({ report: true })`.
+
 ## Examples
 
 ### Inline expressions
@@ -706,18 +731,24 @@ Time does not advance automatically in headless mode. Use `advanceTime(ms)` to a
 
 Virtual time starts from the wall clock at engine initialization. The timer subsystem is seeded with this time at startup so that `setTimeout`/`setInterval` registered during script execution fire correctly relative to `advanceTime()` calls.
 
-### Waiting in scripts: pump, don't await
+### Waiting in scripts: await, or pump
 
 A script file with a top-level `await` runs as an ES module, with the same
 globals as a classic script, `require` included. Node modules are
 `require('fs')`, never bare globals; `import ... from 'node:fs'` is rejected
 at compile time (see docs/brokit-api.js).
 
-While a top-level `await` is pending the runner drains **microtasks only**, no
-timers, no frame pumps. Anything delivered per-frame (`setTimeout`,
-`bro.net` callbacks, worker messages, Steam events) can never fire during a
-bare top-level `await`, so `await new Promise(r => setTimeout(r, ...))` hangs
-forever. Wait with a synchronous pump loop instead:
+While a top-level `await` is pending the runner pumps frames: timers, rAF,
+host tasks, worker messages and the microtask checkpoint, one 60 Hz frame
+of virtual time at a time and never faster than the wall clock, so a worker
+or another thread gets the real time its reply takes. So
+`await new Promise(r => setTimeout(r, 100))` resolves after 100 ms of
+virtual time. A script whose await never settles fails the run after 30 s
+(`BRO_SCRIPT_SETTLE_MS` changes the limit): a test whose remainder never ran
+has not passed.
+
+A synchronous pump loop is still the way to wait while measuring or
+interleaving steps, since you choose each frame's step and can time it:
 
 ```js
 // advanceTime() drains the event queues and fires callbacks;
@@ -735,9 +766,7 @@ function pumpUntil(desc, fn, iters) {
 
 A long-lived headless server (e.g. a `bro.net.host` process) should end with
 `for (;;) { advanceTime(16); wallSleep(16); }` and exit via `process.exit()`
-from a callback. Promises resolved directly by async C++ APIs (model loaders,
-inference calls) are the exception: those settle through the microtask queue,
-so plain `await` works for them.
+from a callback.
 
 ### location.reload() and the app realm
 

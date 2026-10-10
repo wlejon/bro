@@ -19,16 +19,18 @@ DialogBackend& sdlDialogs();
 /// Power, theme and URL opening through SDL; none of it needs SDL's video
 /// subsystem, so the DRM window system uses these too.
 SystemInfo& sdlSystemInfo();
-/// Gamepads through SDL's gamepad subsystem, which the first SDL window
-/// initializes (SdlRuntime).
+/// Gamepads through SDL's gamepad subsystem, started by Gamepads::start.
 Gamepads& sdlGamepads();
 
-/// SDL's gamepad subsystem without its video subsystem, for a window system
-/// that is not SDL's (Wayland): SDL then only reads controllers. Idempotent;
-/// false when there is no controller backend (the app sees no gamepads).
+/// Start SDL's gamepad subsystem (with or without its video subsystem: a
+/// window system that is not SDL's, like Wayland, uses SDL only to read
+/// controllers). Idempotent; false when there is no controller backend (the
+/// app sees no gamepads).
 bool sdlStartGamepadsOnly();
-/// Dispatch the gamepad events SDL has queued to `loop`'s handlers (after
-/// sdlStartGamepadsOnly).
+/// Whether sdlStartGamepadsOnly has started it.
+bool sdlGamepadsStarted();
+/// Dispatch the gamepad events SDL has queued to `loop`'s handlers (once
+/// started).
 void sdlPollGamepadEvents(EventLoop& loop);
 
 }  // namespace bro::platform

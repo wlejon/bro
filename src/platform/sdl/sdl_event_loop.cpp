@@ -442,8 +442,14 @@ std::unique_ptr<EventLoop> createSdlEventLoop() {
     return std::make_unique<SdlEventLoop>();
 }
 
+namespace {
+int g_gamepadState = 0;  // 0 untried, 1 running, -1 unavailable
+}
+
+bool sdlGamepadsStarted() { return g_gamepadState == 1; }
+
 bool sdlStartGamepadsOnly() {
-    static int state = 0;  // 0 untried, 1 running, -1 unavailable
+    int& state = g_gamepadState;
     if (state == 0) {
         // The click-through hint is SdlRuntime's business; nothing here
         // touches video, so SDL never opens a window-system connection.

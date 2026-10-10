@@ -86,7 +86,10 @@ void Engine::flush() {
 
         dom::Element* previousHover = hoveredElement_.get();
         layout::ElementRefAdapter::setHoveredElement(previousHover);
+        const double tStyle = util::currentTimeMs();
         document_->resolveStyles();
+        const double tLayout = util::currentTimeMs();
+        frameTrace_->current().styleMs += tLayout - tStyle;
 
         if (document_->isLayoutDirty() || document_->isStructureDirty() || !document_->layoutRoot()) {
             document_->performLayout(static_cast<float>(viewportWidth_),
@@ -94,6 +97,7 @@ void Engine::flush() {
                                      *textMetrics_);
             updateDocumentHeight();
             frameTrace_->current().layoutRan = frameTrace_->current().layoutPerformed = true;
+            frameTrace_->current().layoutPassMs += util::currentTimeMs() - tLayout;
         }
 
         document_->clearDirty();
@@ -207,6 +211,11 @@ void Engine::flush() {
         std::remove_if(canvasScenes_.begin(), canvasScenes_.end(),
             [](auto& cs) { return cs->isDetached(); }),
         canvasScenes_.end());
+
+    // Headless has no present: the first flush after the page loaded is its
+    // first frame (the page laid out and its canvases drawn), for startup
+    // timing. Free after the first.
+    if (displayMode_ == DisplayMode::Headless) noteFramePresented();
 }
 
 void Engine::advanceTime(double ms) {
@@ -217,7 +226,13 @@ void Engine::advanceTime(double ms) {
         remaining -= step;
         // A headless frame is this step, in the flight recorder too (wall
         // time, as everywhere in the trace).
-        traceFrameBegin(util::currentTimeMs());
+        // Its phases are timed as the windowed loop's are, so `trace` says
+        // where a slow step went: control (injected input and its handlers),
+        // tick (timers, promises, rAF, workers' messages; js of it the frame
+        // callbacks), layoutWait (style and layout, which headless runs on
+        // this thread), record (the rest of the flush), misc (media, audio).
+        const double tStep = util::currentTimeMs();
+        traceFrameBegin(tStep);
         beginGpuFrame();
 
         double scaledStep = step * effectiveTimeScale();
@@ -253,9 +268,14 @@ void Engine::advanceTime(double ms) {
 
         // Agent-control commands and the input they play out (control.h):
         // a headless frame is this step.
+        const double tControl = util::currentTimeMs();
+        frameTrace_->current().miscMs = tControl - tStep;
         control_->pump();
+        const double tTick = util::currentTimeMs();
+        frameTrace_->current().controlMs = tTick - tControl;
 
         if (!timePaused_) fireFrameCallbacks(scaledStep);
+        frameTrace_->current().jsMs = util::currentTimeMs() - tTick;
 
         if (audioInference_) audioInference_->stepInline();
         for (auto& pump : framePumps_) pump();
@@ -312,7 +332,15 @@ void Engine::advanceTime(double ms) {
         }
 #endif
 
+        const double tFlush = util::currentTimeMs();
+        frameTrace_->current().tickMs = tFlush - tTick;
         flush();
+        {
+            FrameRecord& rec = frameTrace_->current();
+            const double inline_ = rec.styleMs + rec.layoutPassMs;
+            rec.layoutWaitMs = inline_;
+            rec.recordMs = std::max(0.0, util::currentTimeMs() - tFlush - inline_);
+        }
         mediaHeldForStep_ = false;
         traceFrameEnd();
     }

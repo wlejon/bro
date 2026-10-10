@@ -116,15 +116,12 @@ void Engine::loadSystemPanels(const std::string& systemDir) {
         }
     }
 
-    LOG_INFO("System panels: loaded %zu panel(s)", systemDocs_.size());
+    LOG_INFO("System panels: found %zu panel(s)", systemDocs_.size());
+}
 
-    // All panels are in systemDocs_ — fire __onPanelsReady on each so scripts
-    // that query the panel list (e.g. the preferences nav building tabs) see
-    // the full set rather than only the panels loaded before them.
+void Engine::loadVisibleSystemPanels() {
     for (auto& doc : systemDocs_) {
-        if (doc.document) {
-            bronze_host::triggerPanelsReady(doc.document.get());
-        }
+        if (!doc.loaded && isSystemDocVisible(doc)) loadSystemPanel(doc);
     }
 }
 
@@ -165,12 +162,10 @@ void Engine::scanSystemPanelDir(const std::string& baseDir, const std::string& r
         }
         if (duplicate) continue;
 
-        std::string htmlPath = entry.path().string();
-        std::string html = AppLoader::loadFile(htmlPath);
-        if (html.empty()) continue;
-
         SystemDocument doc;
         doc.name = fullRel;
+        doc.htmlPath = entry.path().string();
+        doc.dirPath = dirPath;
 
         // Assign tab label and group based on panel path
         if (fullRel == "perf") {
@@ -199,7 +194,17 @@ void Engine::scanSystemPanelDir(const std::string& baseDir, const std::string& r
             doc.group = "";
         }
 
-        std::string savedBasePath = dirPath;
+        systemDocs_.push_back(std::move(doc));
+    }
+}
+
+void Engine::loadSystemPanel(SystemDocument& liveDoc) {
+    liveDoc.loaded = true;
+    const std::string& dirPath = liveDoc.dirPath;
+    std::string html = AppLoader::loadFile(liveDoc.htmlPath);
+    if (html.empty()) return;
+    {
+        const std::string& savedBasePath = dirPath;
 
         // Extract inline CSS from <style> elements
         std::string authorStyles;
@@ -214,25 +219,21 @@ void Engine::scanSystemPanelDir(const std::string& baseDir, const std::string& r
         }
 
         // Parse HTML — UA defaults at UserAgent origin, inline styles at Author
-        doc.document = std::make_unique<dom::Document>();
-        doc.document->setMediaViewport(static_cast<float>(viewportWidth_),
-                                       static_cast<float>(viewportHeight_));
-        doc.document->setMediaColorScheme(effectiveColorScheme());
-        doc.document->setMediaResolution(deviceScale_.ratio);
-        doc.document->parse(html, authorStyles, kDefaultStyles);
+        liveDoc.document = std::make_unique<dom::Document>();
+        liveDoc.document->setMediaViewport(static_cast<float>(viewportWidth_),
+                                           static_cast<float>(viewportHeight_));
+        liveDoc.document->setMediaColorScheme(effectiveColorScheme());
+        liveDoc.document->setMediaResolution(deviceScale_.ratio);
+        liveDoc.document->parse(html, authorStyles, kDefaultStyles);
 
         // Initial layout — shared engine text metrics (same renderer/fontManager
         // as the app document; system panels are just additional documents).
-        doc.document->resolveStyles();
-        doc.document->performLayout(static_cast<float>(viewportWidth_),
-                                    static_cast<float>(viewportHeight_),
-                                    *textMetrics_);
+        liveDoc.document->resolveStyles();
+        liveDoc.document->performLayout(static_cast<float>(viewportWidth_),
+                                        static_cast<float>(viewportHeight_),
+                                        *textMetrics_);
 
-        LOG_INFO("System panels: loaded panel '%s'", doc.name.c_str());
-
-        systemDocs_.push_back(std::move(doc));
-        size_t docIdx = systemDocs_.size() - 1;
-        auto& liveDoc = systemDocs_[docIdx];
+        LOG_INFO("System panels: loaded panel '%s'", liveDoc.name.c_str());
 
         // Initialize replaced elements
         bro::engine::ensureReplacedElements(liveDoc.document->documentElement(),
@@ -287,6 +288,10 @@ void Engine::scanSystemPanelDir(const std::string& baseDir, const std::string& r
         liveDoc.document->performLayout(static_cast<float>(viewportWidth_),
                                         static_cast<float>(viewportHeight_),
                                         *textMetrics_);
+
+        // Every panel is listed from startup, so a script that queries the
+        // panel list (the preferences nav building its tabs) sees the full set.
+        bronze_host::triggerPanelsReady(liveDoc.document.get());
     }
 }
 
@@ -492,6 +497,10 @@ void Engine::pumpEventsOnly() {
 }
 
 void Engine::tickSystemPanels(double nowMs) {
+    // A panel shown since the last frame is built here, at the top of a frame,
+    // never from inside the script or input handler that asked for it.
+    loadVisibleSystemPanels();
+
     if (splashVisible_) {
         constexpr double kMinDisplayMs = 1800.0;
         double elapsed = nowMs - splashStartMs_;
@@ -920,11 +929,11 @@ bool Engine::systemHandleKeyUp(int keycode, int scancode, int mod, bool repeat) 
 // ---------------------------------------------------------------------------
 
 dom::Element* Engine::overlayQuerySelector(const std::string& panelName,
-                                           const std::string& selector) const {
+                                           const std::string& selector) {
     for (auto& doc : systemDocs_) {
-        if (doc.name == panelName && doc.document) {
-            return doc.document->querySelector(selector);
-        }
+        if (doc.name != panelName) continue;
+        if (!doc.loaded) loadSystemPanel(doc);   // inspecting a panel builds it
+        return doc.document ? doc.document->querySelector(selector) : nullptr;
     }
     return nullptr;
 }

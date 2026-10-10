@@ -11,6 +11,8 @@ At startup, `Engine::initSystemPanels()` scans two directories, in order:
 1. `system/`: the engine-shipped panels (this repo's `system/` directory).
 2. `<appDir>/system/`: the app's own override directory, if it has one.
 
+The scan only lists the panels. A panel is built (parsed, laid out, its scripts run) the first time it is shown, at the top of the next frame (`Engine::loadVisibleSystemPanels`), or when a headless script inspects it (`inspectOverlay`). Most windows never open the inspector or the preferences, and building every panel at startup cost each app ~250 ms before its first frame.
+
 Both scans match panels by relative path (`menu.html`, `settings/graphics.html`, etc.). If the app directory provides a file at the same relative path as an engine one, the app's version wins, same mechanism apps use to add new settings tabs (drop a file at `<appDir>/system/settings/gameplay.html`) or replace a built-in panel outright (drop a file at `<appDir>/system/menu.html`).
 
 **Exception:** a subdirectory containing its own `bro.json` (e.g. `system/projects/`, the built-in project manager. See [projects.md](projects.md)) is treated as a self-contained app, not a panel, and is skipped entirely by this scan.
@@ -43,7 +45,7 @@ A panel's script can define any of these on `window`; the engine calls them when
 | `window.__onMenuChanged` | The menu tree is mutated (via `bro.menu.*` from app JS) |
 | `window.__onInspectorChanged` | Inspector state changes (selection, dock, size, picker mode) |
 | `window.__onDismiss` | Sent to the splash panel when the engine decides it's time to swirl away |
-| `window.__onPanelsReady` | Fired once, after every system panel has finished loading (used by `nav.html` to build tabs, since settings panels may still be loading when `nav.html` itself loads) |
+| `window.__onPanelsReady` | Fired once, when this panel has been built. Every panel is listed from startup, so the panel list it reads is complete (used by `nav.html` to build tabs; a settings tab is built when it is first shown) |
 
 ## `<script src>` support
 

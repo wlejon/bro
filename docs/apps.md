@@ -92,7 +92,10 @@ Keyed by the id, created on first read:
 | log | `$XDG_STATE_HOME/<id>/<id>.log` | `%LOCALAPPDATA%\<id>\<id>.log` | `~/Library/Logs/<id>/<id>.log` |
 
 `BRO_APP_HOME=<dir>` puts all four under `<dir>/{config,data,cache,log}`. Tests
-and portable installs use it to keep an app away from the user's own state.
+and portable installs use it to keep an app away from the user's own state,
+the desktop settings it keeps through `bro.conf` included: under
+`BRO_APP_HOME` those live in `<dir>/config/settings.ini`, not the user's own
+store, and no session bus is listened to.
 
 An app with a declared `id` also keeps bro's own per-app settings (window
 geometry, engine preferences; [settings.md](settings.md)) in

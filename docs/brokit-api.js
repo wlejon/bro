@@ -83,6 +83,13 @@ fs.chmodSync(path, mode);
 fs.realpathSync(path);
 
 // ── Async (callback or Promise) ──
+//
+// Really asynchronous: the I/O runs on brokit's fs threads (a few of them),
+// and the callback or promise settles on a later turn, never inside the call.
+// A page waiting on a slow disk keeps drawing. Use these, not the *Sync
+// forms, anywhere a window is on screen (startup included). Errors are Error
+// objects with Node's code / syscall / path. chmod is the exception: it runs
+// in place and settles later.
 
 fs.readFile(path, encoding, callback?);  // callback(err, data) or returns Promise
 fs.writeFile(path, data, encoding, callback?);
