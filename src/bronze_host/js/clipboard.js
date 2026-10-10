@@ -112,64 +112,53 @@
         return true;
     }
 
-    // Plain promise chains rather than an async function: the representations
-    // are gathered in order, then written in one go.
-    function write(data) {
+    // Every representation is gathered, in order, then written in one go.
+    async function write(data) {
         if (data === null || data === undefined || typeof data[Symbol.iterator] !== 'function') {
-            return Promise.reject(new TypeError("Failed to execute 'write' on 'Clipboard': " +
-                                                'the argument is not a sequence of ClipboardItem'));
+            throw new TypeError("Failed to execute 'write' on 'Clipboard': " +
+                                'the argument is not a sequence of ClipboardItem');
         }
         const list = Array.from(data);
         if (list.length > 1) {
-            return Promise.reject(domError('NotAllowedError',
-                'Support for multiple ClipboardItems is not implemented.'));
+            throw domError('NotAllowedError', 'Support for multiple ClipboardItems is not implemented.');
         }
         const types = [];
         const buffers = [];
-        let chain = Promise.resolve();
         if (list.length === 1) {
             const item = list[0];
             if (!(item instanceof ClipboardItem)) {
-                return Promise.reject(new TypeError("Failed to execute 'write' on 'Clipboard': " +
-                                                    'the item is not a ClipboardItem'));
+                throw new TypeError("Failed to execute 'write' on 'Clipboard': " +
+                                    'the item is not a ClipboardItem');
             }
             for (const t of item.types) {
                 if (!ClipboardItem.supports(t)) {
-                    return Promise.reject(domError('NotAllowedError',
-                        'Type ' + t + ' not supported on write.'));
+                    throw domError('NotAllowedError', 'Type ' + t + ' not supported on write.');
                 }
             }
             for (const t of item.types) {
-                chain = chain
-                    .then(() => item.getType(t))
-                    .then((blob) => blob.arrayBuffer())
-                    .then((buffer) => {
-                        if (t === 'image/png' && !isPng(buffer)) {
-                            throw domError('DataError', 'The image/png representation is not a PNG.');
-                        }
-                        types.push(t);
-                        buffers.push(buffer);
-                    });
+                const blob = await item.getType(t);
+                const buffer = await blob.arrayBuffer();
+                if (t === 'image/png' && !isPng(buffer)) {
+                    throw domError('DataError', 'The image/png representation is not a PNG.');
+                }
+                types.push(t);
+                buffers.push(buffer);
             }
         }
-        return chain.then(() => {
-            if (!clip.__writeItems(types, buffers)) {
-                throw domError('NotAllowedError', 'clipboard write failed');
-            }
-        });
+        if (!clip.__writeItems(types, buffers)) {
+            throw domError('NotAllowedError', 'clipboard write failed');
+        }
     }
 
-    function read() {
-        return new Promise((resolve) => {
-            const flat = clip.__readItems();
-            const items = {};
-            let n = 0;
-            for (let i = 0; i + 1 < flat.length; i += 2) {
-                items[flat[i]] = new g.Blob([flat[i + 1]], { type: flat[i] });
-                ++n;
-            }
-            resolve(n ? [new ClipboardItem(items)] : []);
-        });
+    async function read() {
+        const flat = clip.__readItems();
+        const items = {};
+        let n = 0;
+        for (let i = 0; i + 1 < flat.length; i += 2) {
+            items[flat[i]] = new g.Blob([flat[i + 1]], { type: flat[i] });
+            ++n;
+        }
+        return n ? [new ClipboardItem(items)] : [];
     }
 
     for (const [name, fn] of [['write', write], ['read', read]]) {

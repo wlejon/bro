@@ -19,7 +19,7 @@ The log (`bro.log`, or stderr headless) says per compile whether it hit and why 
 
 ## Location and knobs
 
-`<user cache dir>/code-cache/`: `%LOCALAPPDATA%\bro\code-cache`, `~/Library/Caches/bro/code-cache`, `$XDG_CACHE_HOME/bro/code-cache`. Trimmed to 512 MB, least recently used first. Deleting it is always safe.
+`<user cache dir>/code-cache/`: `%LOCALAPPDATA%\bro\code-cache`, `~/Library/Caches/bro/code-cache`, `$XDG_CACHE_HOME/bro/code-cache`. Held to 512 MB of disk space (whole 4 KiB units, warm lists `.bzw` included): a store that takes it past the limit has a background thread delete the least recently used entries, each with its warm list, down to 7/8 of the limit. The page thread never walks the directory; engine shutdown waits for a trim in progress. Deleting it is always safe.
 
 | Variable | Effect |
 |---|---|
