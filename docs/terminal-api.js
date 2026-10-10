@@ -99,7 +99,7 @@
  * (transmission, placements with z-index, relative placements, deletion,
  * animation frames, Unicode placeholders), sixel, and iTerm2's OSC 1337
  * File=. PNG (kitty f=100) and the iTerm2 formats are decoded by broimage:
- * PNG, JPEG, GIF (every frame), BMP, TGA, PSD, PNM and baseline TIFF (what
+ * PNG, JPEG, GIF (every frame), BMP, TGA, PSD, PNM, ICO and TIFF (what
  * chafa sends). Each image is drawn on the cells bropty placed it in, so it
  * lands on the text grid at any font size and device scale. Images scroll
  * with their text and leave with it when history evicts it. Kitty

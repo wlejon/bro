@@ -30,7 +30,7 @@ std::string mimeForName(const std::string& name) {
     static const std::pair<const char*, const char*> kTable[] = {
         {"png", "image/png"},    {"jpg", "image/jpeg"},  {"jpeg", "image/jpeg"},
         {"gif", "image/gif"},    {"webp", "image/webp"}, {"bmp", "image/bmp"},
-        {"svg", "image/svg+xml"},
+        {"svg", "image/svg+xml"}, {"tif", "image/tiff"}, {"tiff", "image/tiff"},
         {"json", "application/json"}, {"js", "text/javascript"},
         {"mjs", "text/javascript"},   {"css", "text/css"},
         {"html", "text/html"},   {"txt", "text/plain"},  {"md", "text/plain"},

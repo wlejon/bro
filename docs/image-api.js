@@ -387,10 +387,21 @@ bro.image.alloc = function(w, h, channels, dtype) {};
 // `{width, height, channels, pixels}`. Plain 8-bit RGBA decode is already
 // covered by `new Image()`; these are the high-bit-depth, HDR and
 // auto-oriented cases.
+//
+// Formats (broimage): PNG, JPEG, BMP, TGA, GIF (first frame), PSD, PIC, PNM,
+// HDR, ICO/CUR and TIFF. TIFF reads the first page: uncompressed, LZW (with
+// the horizontal predictor), Deflate, PackBits or JPEG compression; 1/2/4/8
+// or 16-bit unsigned samples; bilevel, gray, RGB, RGBA (associated alpha is
+// straightened), palette, CMYK, and YCbCr when JPEG-compressed; strips or
+// tiles, chunky or planar, either byte order. Not read: BigTIFF, float or
+// signed samples, old-style JPEG (compression 6), uncompressed YCbCr, CIELab,
+// 12-bit or arithmetic-coded JPEG, JPEG with alpha. `<img>`, CSS images and
+// createImageBitmap read the same set (plus WebP and SVG, decoded in bro).
 
 /**
  * Decode a 16-bit image — most importantly 16-bit PNG depth maps and masks,
- * which an 8-bit decode would quantize away.
+ * which an 8-bit decode would quantize away. 16-bit TIFFs keep their
+ * precision here too.
  * @param {string|ArrayBufferView} src path or encoded bytes
  * @returns {{width:number,height:number,channels:number,pixels:Uint16Array}|null}
  *   null on failure.
@@ -407,8 +418,9 @@ bro.image.decodeF32 = function(src) {};
 
 /**
  * Decode to 8-bit RGBA with the EXIF orientation already applied, so phone
- * photos come out upright. Shares `decode_file`'s 1x1 fallback, so this one
- * never returns null — check `width`/`height` if you care.
+ * photos come out upright — the Orientation tag of a JPEG, a TIFF (its own
+ * IFD0), a WebP or a PNG (eXIf). Never returns null: a failed decode
+ * returns `width`/`height` 0 and an empty `pixels`, so check them.
  * @param {string|ArrayBufferView} src
  * @returns {{width:number,height:number,channels:number,pixels:Uint8Array}}
  */
@@ -424,12 +436,70 @@ bro.image.probeDimensions = function(bytes) {};
 
 /**
  * Read the raw EXIF Orientation tag: 1 Normal, 2 FlipH, 3 Rotate180,
- * 4 FlipV, 5 Transpose, 6 Rotate90CW, 7 Transverse, 8 Rotate90CCW; 0 when
- * there is no tag.
+ * 4 FlipV, 5 Transpose, 6 Rotate90CW, 7 Transverse, 8 Rotate90CCW; 1 when
+ * there is no tag (or no EXIF). JPEG, TIFF, WebP and PNG, as `readExif`.
  * @param {string|ArrayBufferView} src path or encoded bytes
  * @returns {number}
  */
 bro.image.readExifOrientation = function(src) {};
+
+/**
+ * Read a photo's EXIF metadata without decoding pixels: from a JPEG (APP1
+ * "Exif" segment), a TIFF (its IFD0 and the Exif / GPS sub-IFDs), a WebP
+ * (RIFF `EXIF` chunk) or a PNG (`eXIf` chunk).
+ *
+ * Returns null when the file carries no EXIF block. Otherwise an object
+ * holding ONLY the fields the file has: a missing tag is an absent key (not
+ * null, not 0), so test with `'iso' in exif` or `exif.iso !== undefined`.
+ * An EXIF block with none of these tags is `{}`.
+ *
+ *   make, model            string   camera maker / model (IFD0)
+ *   lensMake, lensModel    string   LensMake / LensModel
+ *   exposureTime           number   seconds (0.004)
+ *   exposureTimeText       string   as photographers write it: "1/250" below
+ *                                   a quarter second or whenever 1/t is whole,
+ *                                   else decimal seconds ("0.3", "2.5", "30")
+ *   fNumber                number   2.8
+ *   iso                    number   PhotographicSensitivity, else ISOSpeed
+ *   focalLength            number   millimetres
+ *   focalLength35mm        number   FocalLengthIn35mmFilm (absent when 0)
+ *   dateTaken              string   DateTimeOriginal as ISO 8601,
+ *                                   "2024-05-06T14:30:00", with the
+ *                                   OffsetTimeOriginal appended when present
+ *                                   ("2024-05-06T14:30:00+02:00"); without
+ *                                   it the time is local to an unknown zone.
+ *                                   Absent for the all-zero placeholder.
+ *   offsetTime             string   OffsetTimeOriginal as stored ("+02:00")
+ *   latitude, longitude    number   signed decimal degrees (south / west
+ *                                   negative); each only with its N/S or
+ *                                   E/W reference present
+ *   altitude               number   metres, below sea level negative
+ *   orientation            number   1..8, as readExifOrientation
+ *
+ * Strings are the stored ASCII with trailing NULs / spaces trimmed.
+ *
+ * @param {string|ArrayBufferView} src path or encoded bytes. A path reads a
+ *   JPEG's first 256 KB, any other file whole (a TIFF's directory, a WebP's
+ *   EXIF chunk or a PNG's eXIf may follow the pixels).
+ * @returns {?{make?:string, model?:string, lensMake?:string, lensModel?:string,
+ *   exposureTime?:number, exposureTimeText?:string, fNumber?:number,
+ *   iso?:number, focalLength?:number, focalLength35mm?:number,
+ *   dateTaken?:string, offsetTime?:string, latitude?:number,
+ *   longitude?:number, altitude?:number, orientation?:number}}
+ *
+ * @example
+ *   const bytes = new Uint8Array(await (await fetch('IMG_0412.jpg')).arrayBuffer());
+ *   const exif = bro.image.readExif(bytes);
+ *   if (exif) {
+ *     caption.textContent = [exif.model, exif.lensModel,
+ *       exif.exposureTimeText && exif.exposureTimeText + ' s',
+ *       exif.fNumber && 'f/' + exif.fNumber,
+ *       exif.iso && 'ISO ' + exif.iso].filter(Boolean).join(' · ');
+ *     if ('latitude' in exif && 'longitude' in exif) pinOnMap(exif.latitude, exif.longitude);
+ *     taken = exif.dateTaken ? new Date(exif.dateTaken) : null;  // local time when no offset
+ *   }
+ */
+bro.image.readExif = function(src) {};
 
 /**
  * Apply an orientation transform to an RGBA8 buffer. The transposing codes
