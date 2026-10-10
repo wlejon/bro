@@ -526,6 +526,17 @@ Value makeDocumentValue(dom::Document* fixed) {
         if (!e || a.empty()) return ev::fromUtf8("");
         return ev::fromUtf8(e->queryCommandValue(ev::toUtf8(a[0])));
     });
+    // Node.contains on the document: true for any node connected to it (and
+    // the document itself). UIs ask `document.contains(el)` to tell whether an
+    // element is still on the page before acting on it.
+    b.def("contains", 1, [fixed](Value, std::span<const Value> a) {
+        dom::Document* doc = documentFor(fixed);
+        dom::Node* n = doc ? hostNodeOf(argAt(a, 0)) : nullptr;
+        if (!n) return ev::fromBool(false);
+        dom::Node* top = n;
+        while (top->parentNode()) top = top->parentNode();
+        return ev::fromBool(top == doc->documentElement());
+    });
     b.def("getElementById", 1, [fixed](Value, std::span<const Value> a) {
         Value idV = argAt(a, 0);
         if (ev::isObject(idV) || ev::isUndefined(idV)) return ev::null();
