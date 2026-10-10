@@ -4,6 +4,7 @@
 #include "dom/shadow_root.h"
 #include "dom/style_proxy.h"
 #include "dom/string_flat_map.h"
+#include "dom/style_share.h"
 #include "css/cascade.h"
 #include "layout/box.h"
 #include <memory>
@@ -245,8 +246,43 @@ public:
 
     // Computed style (set by Cascade::resolve during style resolution)
     const htmlayout::css::ComputedStyle& computedStyle() const { return computedStyle_; }
-    htmlayout::css::ComputedStyle& computedStyleMut() { return computedStyle_; }
-    void setComputedStyle(htmlayout::css::ComputedStyle style) { computedStyle_ = std::move(style); }
+    htmlayout::css::ComputedStyle& computedStyleMut() {
+        styleShareKey_.reset();
+        inheritToken_ = 0;
+        return computedStyle_;
+    }
+    void setComputedStyle(htmlayout::css::ComputedStyle style) {
+        computedStyle_ = std::move(style);
+        styleShareKey_.reset();
+        inheritToken_ = 0;
+    }
+
+    // Style sharing (dom/style_share.h). The key the current computed style
+    // was resolved under, when it is exactly what that key resolves to (no
+    // animation or transition value laid over it); null otherwise. Cleared by
+    // every write of the style; the restyle pass sets it after one.
+    const std::shared_ptr<const StyleShareKey>& styleShareKey() const { return styleShareKey_; }
+    void setStyleShareKey(std::shared_ptr<const StyleShareKey> key) { styleShareKey_ = std::move(key); }
+    // The document's token for the values this element's style hands its
+    // children (0: not worked out for the current style).
+    uint64_t inheritToken() const { return inheritToken_; }
+    void setInheritToken(uint64_t t) { inheritToken_ = t; }
+
+    // Layout retention (layout::LayoutNodeAdapter). Every layout node built
+    // for this element is stamped with a fresh generation, recorded here; a
+    // layout node for it is current only while the two agree. When a parent's
+    // layout children are rebuilt without this element (it was removed), its
+    // current layout subtree is parked here, opaque to the DOM, so putting the
+    // element back hands the subtree, and its cached geometry, back instead
+    // of building and laying it out again.
+    uint64_t layoutGen() const { return layoutGen_; }
+    void setLayoutGen(uint64_t g) { layoutGen_ = g; }
+    std::unique_ptr<htmlayout::layout::LayoutNode> takeRetainedLayout() {
+        return std::move(retainedLayout_);
+    }
+    void setRetainedLayout(std::unique_ptr<htmlayout::layout::LayoutNode> n) {
+        retainedLayout_ = std::move(n);
+    }
 
     // Layout box (set by htmlayout::layout::layoutTree)
     const htmlayout::layout::LayoutBox& layoutBox() const { return layoutBox_; }
@@ -609,7 +645,11 @@ private:
 
     // htmlayout integration
     htmlayout::css::ComputedStyle computedStyle_;
+    std::shared_ptr<const StyleShareKey> styleShareKey_;
+    uint64_t inheritToken_ = 0;
     htmlayout::layout::LayoutBox layoutBox_;
+    uint64_t layoutGen_ = 0;
+    std::unique_ptr<htmlayout::layout::LayoutNode> retainedLayout_;
 
     // ::before / ::after generated content, lazily allocated (see accessors).
     // Null until an element actually has a pseudo-element resolved.

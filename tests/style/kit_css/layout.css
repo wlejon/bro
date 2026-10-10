@@ -1,0 +1,435 @@
+/* =============================================================================
+   helm app kit: the window's layout
+   An app window is a column: an optional toolbar, the body, an optional
+   status bar. The body is a row: an optional sidebar and the content. Use
+   these classes (or lib/layout.js, which builds them) rather than inventing
+   a frame per app. helm draws the title bar; the app never does.
+
+     <div class="app-frame">
+       <header class="toolbar">...</header>
+       <div class="app-body">
+         <nav class="sidebar">...</nav>
+         <main class="content">...</main>
+       </div>
+       <footer class="statusbar">...</footer>
+     </div>
+   ============================================================================= */
+
+.app-frame {
+  position: absolute;
+  left: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-0);
+}
+
+.app-body {
+  position: relative;
+  display: flex;
+  flex: 1 1 0px;
+  min-height: 0;
+}
+
+.content {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0px;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* An empty state that is the whole content area sits in its middle. */
+.content > .empty, .vlist-wrap > .empty { flex: 1 1 0px; }
+
+/* A scrolling region inside the content. */
+.scroll {
+  flex: 1 1 0px;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* Toolbar ---------------------------------------------------------------- */
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: var(--s2);
+  height: var(--toolbar-h);
+  padding: 0 var(--s3);
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.toolbar-group { display: flex; align-items: center; gap: 2px; flex: none; }
+.toolbar-spacer { flex: 1; }
+.toolbar-sep { width: 1px; height: 20px; margin: 0 var(--s1); background: var(--hairline); flex: none; }
+.toolbar-title { font-size: var(--fs-title); font-weight: 600; color: var(--t1); }
+.toolbar .search-field { width: 240px; }
+
+/* Breadcrumbs: a path as clickable segments ------------------------------ */
+
+.crumbs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s1);
+  flex: none;
+  max-width: 220px;
+  height: 28px;
+  padding: 0 var(--s2);
+  border-radius: var(--r-ctl);
+  color: var(--t2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.crumb:hover { background: var(--well-2); color: var(--t1); }
+.crumb.current { color: var(--t1); font-weight: 600; }
+.crumb-sep { flex: none; color: var(--t4); }
+.crumb-sep .icon { width: 14px; height: 14px; }
+
+/* Sidebar ---------------------------------------------------------------- */
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  width: var(--sidebar-w);
+  min-height: 0;
+  padding: var(--s2);
+  gap: 1px;
+  overflow-y: auto;
+  background: var(--surface-1);
+  border-right: 1px solid var(--hairline);
+}
+
+.sidebar-section {
+  padding: var(--s4) var(--s2) 6px;
+}
+
+.sidebar-section:first-child { padding-top: var(--s2); }
+
+.sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+  width: 100%;
+  min-height: 30px;
+  padding: 4px var(--s2);
+  border-radius: var(--r-ctl);
+  color: var(--t2);
+  text-align: left;
+  transition: background var(--d-quick) var(--ease-std), color var(--d-quick) var(--ease-std);
+}
+
+.sidebar-item .icon { width: 16px; height: 16px; color: var(--t3); }
+.sidebar-item:hover { background: var(--well-2); color: var(--t1); }
+.sidebar-item.selected { background: var(--accent-soft); color: var(--t1); font-weight: 500; }
+.sidebar-item.selected .icon { color: var(--accent-text); }
+.sidebar-item:focus-visible { box-shadow: inset 0 0 0 1px var(--accent-line); }
+.sidebar-item .count { color: var(--t4); font-size: var(--fs-cap); font-variant-numeric: tabular-nums; }
+
+/* An item with a second line (a drive's free space) and an optional meter. */
+.sidebar-item .sidebar-text { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
+.sidebar-item .sidebar-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar-item .sidebar-sub { color: var(--t4); font-size: var(--fs-cap); font-weight: 400; font-variant-numeric: tabular-nums; }
+.sidebar-item .meter { margin-top: 3px; }
+.sidebar-item.two-line { align-items: flex-start; padding: 7px var(--s2); }
+.sidebar-item.two-line > .icon { margin-top: 1px; }
+
+/* A meter: how full something is, as a thin bar. --fill is 0..1. */
+.meter {
+  position: relative;
+  height: 3px;
+  border-radius: var(--r-chip);
+  background: var(--well-3);
+  overflow: hidden;
+}
+
+.meter-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  border-radius: var(--r-chip);
+  background: var(--t3);
+}
+
+.meter.high .meter-fill { background: var(--warn); }
+.meter.full .meter-fill { background: var(--danger); }
+
+/* Split pane: two children and a draggable divider ----------------------- */
+
+.split {
+  position: relative;
+  display: flex;
+  flex: 1 1 0px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.split.vertical { flex-direction: column; }
+.split > .split-pane { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.split > .split-pane.fill { flex: 1 1 0px; }
+.split > .split-pane.fixed { flex: none; }
+
+.split-divider {
+  flex: none;
+  width: 5px;
+  margin: 0 -2px;
+  z-index: 1;
+  cursor: col-resize;
+  background: linear-gradient(to right, transparent 2px, var(--hairline) 2px, var(--hairline) 3px, transparent 3px);
+}
+
+.split.vertical > .split-divider {
+  width: auto;
+  height: 5px;
+  margin: -2px 0;
+  cursor: row-resize;
+  background: linear-gradient(to bottom, transparent 2px, var(--hairline) 2px, var(--hairline) 3px, transparent 3px);
+}
+
+.split-divider:hover, .split-divider.dragging { background: var(--accent-soft); }
+
+/* Status bar ------------------------------------------------------------- */
+
+.statusbar {
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: var(--s4);
+  height: var(--statusbar-h);
+  padding: 0 var(--s3);
+  background: var(--surface-1);
+  border-top: 1px solid var(--hairline);
+  color: var(--t3);
+  font-size: var(--fs-cap);
+}
+
+/* Tabs: a strip of document tabs ----------------------------------------- */
+
+.tabstrip {
+  display: flex;
+  align-items: flex-end;
+  flex: none;
+  gap: 2px;
+  height: 36px;
+  padding: 0 var(--s2);
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--hairline);
+  overflow: hidden;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex: 0 1 200px;
+  min-width: 80px;
+  height: 30px;
+  padding: 0 var(--s2) 0 var(--s3);
+  border-radius: var(--r-ctl) var(--r-ctl) 0 0;
+  color: var(--t3);
+  transition: background var(--d-quick) var(--ease-std), color var(--d-quick) var(--ease-std);
+}
+
+.tab:hover { background: var(--well); color: var(--t2); }
+.tab.active { background: var(--surface-0); color: var(--t1); box-shadow: inset 0 2px 0 var(--accent); }
+.tab .tab-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tab .tab-close { opacity: 0; }
+.tab:hover .tab-close, .tab.active .tab-close { opacity: 1; }
+.tab.dirty .tab-label::after { content: " •"; color: var(--accent-text); }
+
+/* Column headers for a list view (VirtualList's header) ------------------ */
+
+.list-header {
+  display: flex;
+  align-items: center;
+  flex: none;
+  height: 30px;
+  padding: 0 16px;        /* a row's 4px inset + its own 12px */
+  gap: var(--s3);
+  border-bottom: 1px solid var(--hairline);
+  color: var(--t3);
+}
+
+.list-header .col {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 100%;
+  min-width: 0;
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  letter-spacing: var(--track-micro);
+}
+
+.list-header .col { position: relative; }
+
+/* The divider after a column: a visible rule in the gap between two header
+   cells, so every column edge (a flexible Name column's too, far from any
+   right-aligned label) can be found and dragged. The grab area is wider
+   than the rule. */
+.col-grip {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -12px;
+  width: 12px;
+  z-index: 1;
+  cursor: col-resize;
+}
+
+.col-grip::after {
+  content: '';
+  position: absolute;
+  left: 5px;
+  top: 9px;
+  bottom: 9px;
+  width: 1px;
+  background: var(--rim-strong);
+}
+
+.list-header:hover .col-grip::after { top: 6px; bottom: 6px; background: var(--t4); }
+.col-grip:hover::after, .list-header.resizing .col-grip::after { top: 4px; bottom: 4px; width: 2px; left: 5px; background: var(--accent); }
+.list-header.resizing { cursor: col-resize; }
+
+.list-header .col.sortable:hover { color: var(--t1); }
+.list-header .col.sorted { color: var(--t1); }
+.list-header .col .icon { width: 12px; height: 12px; }
+
+/* VirtualList and VirtualGrid (lib/list.js) ------------------------------ */
+
+.vlist {
+  position: relative;
+  flex: 1 1 0px;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  outline: none;
+}
+
+.vlist-spacer { position: relative; width: 100%; }
+
+.vlist-row {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding: 0 var(--s3);
+  border-radius: var(--r-ctl);
+  color: var(--t2);
+}
+
+.vlist-row:hover { background: var(--well); }
+.vlist-row.selected { background: var(--accent-soft); color: var(--t1); }
+.vlist-row.selected:hover { background: var(--accent-soft); }
+.vlist:focus-visible .vlist-row.cursor { box-shadow: inset 0 0 0 1px var(--accent-line); }
+.vlist-row .col { display: flex; align-items: center; gap: 10px; min-width: 0; overflow: hidden; white-space: nowrap; }
+.vlist-row .col .icon { width: 16px; height: 16px; color: var(--t3); }
+.vlist-row .col.right { font-variant-numeric: tabular-nums; }
+.vlist-row.selected .col .icon { color: var(--accent-text); }
+.vlist-row .col.right, .list-header .col.right { justify-content: flex-end; text-align: right; }
+
+.vgrid-cell {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--s1);
+  padding: var(--s2);
+  border-radius: var(--r-card);
+  color: var(--t2);
+  text-align: center;
+}
+
+.vgrid-cell:hover { background: var(--well); }
+.vgrid-cell.selected { background: var(--accent-soft); color: var(--t1); }
+.vlist:focus-visible .vgrid-cell.cursor { box-shadow: inset 0 0 0 1px var(--accent-line); }
+
+/* Rubber-band selection rectangle */
+.vlist-band {
+  position: absolute;
+  z-index: 2;
+  border: 1px solid var(--accent-line);
+  background: var(--accent-faint);
+  border-radius: 4px;
+  pointer-events: none;
+}
+
+/* A sideways strip (orientation: 'horizontal') */
+.vlist.horizontal { overflow-x: auto; overflow-y: hidden; }
+
+/* Drag to reorder: where the row would land */
+.vlist-drop {
+  position: absolute;
+  z-index: 2;
+  left: var(--s2);
+  right: var(--s2);
+  height: 2px;
+  border-radius: var(--r-chip);
+  background: var(--accent);
+  pointer-events: none;
+}
+.vlist-drop.vertical { left: auto; right: auto; top: var(--s1); bottom: var(--s1); width: 2px; height: auto; }
+.vlist-wrap.reordering, .vlist-wrap.reordering * { cursor: grabbing; }
+
+/* Cards and settings forms ----------------------------------------------- */
+
+.card {
+  border-radius: var(--r-card);
+  background: var(--surface-2);
+  border: 1px solid var(--hairline);
+}
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s5);
+  max-width: 760px;
+  padding: var(--s6) var(--s8);
+}
+
+.group { display: flex; flex-direction: column; gap: var(--s2); }
+.group > .micro { padding: 0 var(--s2); }
+
+.group-rows {
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--r-card);
+  background: var(--surface-2);
+  border: 1px solid var(--hairline);
+  overflow: hidden;
+}
+
+.form-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s4);
+  min-height: 52px;
+  padding: var(--s2) var(--s4);
+  border-top: 1px solid var(--hairline);
+}
+
+.form-row:first-child { border-top: none; }
+.form-row .form-label { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.form-row .form-label .dim { font-size: var(--fs-cap); }
+.form-row .form-control { display: flex; align-items: center; gap: var(--s2); flex: none; }

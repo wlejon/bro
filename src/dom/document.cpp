@@ -289,7 +289,11 @@ void Document::applyLayoutInvalidation() {
         htmlayout::layout::markSubtreeDirty(layoutRoot_.get());
         fullLayout_ = false;
     }
-    perf_.treeRebuilds += layoutRoot_->markDirtyFromElements();
+    layout::LayoutNodeAdapter::RebuildContext ctx;
+    ctx.isLive = [this](const Node* n) { return ownsNode(n); };
+    ctx.epoch = layoutEpoch_;
+    perf_.treeRebuilds += layoutRoot_->markDirtyFromElements(ctx);
+    perf_.layoutSubtreesKept += ctx.subtreesKept;
 }
 
 void Document::performLayout(float viewportWidth, htmlayout::layout::TextMetrics& metrics) {
@@ -317,7 +321,16 @@ void Document::performLayout(float viewportWidth, float viewportHeight, htmlayou
     structureDirty_ = false;
     auto t2 = clk::now();
     htmlayout::layout::Viewport vp{viewportWidth, viewportHeight};
-    htmlayout::layout::layoutTree(layoutRoot_.get(), vp, metrics);
+    {
+        auto* r = layoutRoot_.get();
+        const float vw = r->cachedViewportW, vh = r->cachedViewportH, rf = r->cachedRootFontSize;
+        htmlayout::layout::layoutTree(r, vp, metrics);
+        // layoutTree dirtied the whole tree for a document-wide input: what is
+        // parked off-tree did not see it (see layoutEpoch_).
+        if (!(r->cachedViewportW == vw) || !(r->cachedViewportH == vh) ||
+            !(r->cachedRootFontSize == rf))
+            ++layoutEpoch_;
+    }
     auto t3 = clk::now();
     layoutRoot_->syncBoxToElement();
     auto t4 = clk::now();
@@ -361,8 +374,10 @@ void Document::settleContainerQueries(const std::function<void()>& relayout) {
     // Forced re-resolve: the elements aren't dirty (they were just resolved),
     // but @container matching depends on the layout boxes that only now exist.
     layout::ElementRefAdapter::clearCache();
+    styleDonors_.clear();
     resolveStylesRecursive(documentElement_, nullptr, /*force=*/true,
                            /*selectorForce=*/true);
+    styleDonors_.clear();
     resolveGeneratedContent();
     layout::ElementRefAdapter::clearCache();
     relayout();

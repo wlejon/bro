@@ -32,16 +32,30 @@ public:
         return elem_ ? std::string_view{elem_->className()} : std::string_view{};
     }
 
+    // Element::getAttribute / hasAttribute, without building a std::string
+    // for the name: "style" lives in the StyleProxy, every other attribute in
+    // the element's flat map, which a view can search directly.
     std::string_view getAttribute(std::string_view name) const override {
         if (!elem_) return {};
-        return std::string_view{elem_->getAttribute(std::string{name})};
+        if (name == "style") return std::string_view{elem_->getAttribute("style")};
+        const auto& attrs = elem_->attributes();
+        auto it = attrs.findView(name);
+        return it != attrs.end() ? std::string_view{it->second} : std::string_view{};
     }
 
     bool hasAttribute(std::string_view name) const override {
         if (!elem_) return false;
-        // Element::hasAttribute special-cases "style" (lives in StyleProxy,
-        // not attributes_) — go through it rather than checking the map directly.
-        return elem_->hasAttribute(std::string{name});
+        if (name == "style") return elem_->hasAttribute("style");
+        const auto& attrs = elem_->attributes();
+        return attrs.findView(name) != attrs.end();
+    }
+
+    // The attributes in the element's map (never "style", which the cascade
+    // takes as inline style).
+    bool forEachAttribute(AttributeVisitor fn, void* ctx) const override {
+        if (!elem_) return true;
+        for (const auto& [k, v] : elem_->attributes()) fn(ctx, k, v);
+        return true;
     }
 
     ElementRef* parent() const override {

@@ -19,6 +19,7 @@
 #include <string_view>
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -401,8 +402,10 @@ void Document::resolveStyles() {
     restyled_.clear();
     // A new sheet can change what matches anywhere, so it is a selector-level
     // invalidation, not just a re-resolve of the values already matched.
+    styleDonors_.clear();
     resolveStylesRecursive(documentElement_, nullptr, /*force=*/sheetAdded,
                            /*selectorForce=*/sheetAdded);
+    styleDonors_.clear();
     auto genT0 = std::chrono::steady_clock::now();
     resolveGeneratedContent();
     perf_.genContentMs += std::chrono::duration<double, std::milli>(
@@ -436,11 +439,48 @@ bool Document::reconcileStyleElements() {
     return added;
 }
 
+uint64_t Document::inheritTokenOf(Element* el) {
+    if (uint64_t t = el->inheritToken()) return t;
+    // The fingerprint: the parent-side inputs of Cascade::resolveMatched (the
+    // properties parentPropertyIsRead names, sorted so two maps with the same
+    // contents agree, and the custom-property set handed down, by address —
+    // the table entry holds the set, so the address cannot be reused while
+    // the token names it).
+    const auto& cs = el->computedStyle();
+    auto vars = cs.varsForChildren();
+    std::vector<const std::pair<const std::string, std::string>*> read;
+    read.reserve(32);
+    for (const auto& kv : cs)
+        if (htmlayout::css::Cascade::parentPropertyIsRead(kv.first)) read.push_back(&kv);
+    std::sort(read.begin(), read.end(), [](auto* a, auto* b) { return a->first < b->first; });
+    std::string& fp = tokenScratch_;
+    fp.clear();
+    const void* varsAddr = vars.get();
+    fp.append(reinterpret_cast<const char*>(&varsAddr), sizeof(varsAddr));
+    for (auto* kv : read) {
+        fp += kv->first;
+        fp += '\x1f';
+        fp += kv->second;
+        fp += '\x1e';
+    }
+    auto it = inheritTokens_.find(fp);
+    if (it == inheritTokens_.end()) {
+        // Bounded: dropping the table only costs a re-intern under a new
+        // token (tokens are never reissued, so no stale key can match one).
+        if (inheritTokens_.size() >= 4096) inheritTokens_.clear();
+        it = inheritTokens_.emplace(fp, InheritTokenEntry{nextInheritToken_++, std::move(vars)}).first;
+    }
+    el->setInheritToken(it->second.token);
+    return it->second.token;
+}
+
 void Document::resolveStylesRecursive(Element* elem,
-                                       const htmlayout::css::ComputedStyle* parentStyle,
+                                       Element* parentEl,
                                        bool force,
                                        bool selectorForce,
                                        bool hoverForce) {
+    const htmlayout::css::ComputedStyle* parentStyle =
+        parentEl ? &parentEl->computedStyle() : nullptr;
     // Did a selector input change on this element (class/id/attribute/:hover),
     // or on an ancestor? Either way every rule in this subtree may now match
     // differently, so the subtree has to re-resolve and `selDirty` carries that
@@ -496,10 +536,79 @@ void Document::resolveStylesRecursive(Element* elem,
         // Inline style: StyleProxy is the sole source (Element::setAttribute
         // routes "style" attribute writes into it too, see element.cpp), so
         // there's only one declaration block to resolve, not two to merge.
+        const std::string& inlineText = elem->style().cssText();
         auto cascadeT0 = std::chrono::steady_clock::now();
-        auto computed = cascade_.resolve(*adapter, elem->style().cssText(), parentStyle);
+
+        // The selector half of the cascade, always: what the element matches
+        // is the one input that can change without anything on the element
+        // itself changing (an ancestor's class, a sibling inserted before it).
+        cascade_.matchRules(*adapter, parentStyle, /*startingStyle=*/false, matchScratch_);
+
+        // Style sharing (dom/style_share.h). The rest of the inputs, when they
+        // are all there is: not when the style also reads the element's
+        // attributes (presentation attributes, table spans, <svg width>), nor
+        // when the sheet forces `inherit` onto a non-inherited property, which
+        // makes every parent value an input.
+        // BRO_STYLE_SHARE=0 turns sharing off (every element resolves in full),
+        // for comparing against it.
+        static const bool kShareOn = [] {
+            const char* v = std::getenv("BRO_STYLE_SHARE");
+            return !(v && std::strcmp(v, "0") == 0);
+        }();
+        const std::string& tag = elem->tagName();
+        const bool keyable = kShareOn && !cascade_.usesForcedInherit() && tag != "svg" && tag != "SVG" &&
+                             !cascade_.readsElementAttributes(*adapter);
+        StyleShareKey& key = keyScratch_;
+        if (keyable) {
+            key.cascadeGeneration = cascade_.generation();
+            key.mediaGeneration = mediaGeneration_;
+            static_assert(sizeof(float) == sizeof(uint32_t));
+            std::memcpy(&key.rootFontSizeBits, &rootFontSize_, sizeof(uint32_t));
+            key.parentToken = parentEl ? inheritTokenOf(parentEl) : 0;            key.tag = tag;
+            key.inlineStyle = inlineText;
+            key.rules.assign(matchScratch_.begin(), matchScratch_.end());
+            key.computeHash();
+        }
+
+        // Kept: the style the element has was resolved under these very
+        // inputs and nothing has been laid over it since, so it is what a
+        // resolve would produce. (Not while an ancestor just entered the
+        // rendering — that resolve wants a starting style — and not with a
+        // CSS animation named, which re-insertion has to restart.)
+        const auto& oldKey = elem->styleShareKey();
+        if (keyable && oldKey && *oldKey == key && enteringRendering_ == 0 && !animatingSelf &&
+            !(webAnimationManager_ && webAnimationManager_->hasAny(elem))) {
+            auto an = elem->computedStyle().find("animation-name");
+            if (an == elem->computedStyle().end() || an->second == "none") {
+                perf_.cascadeMs += std::chrono::duration<double, std::milli>(
+                                       std::chrono::steady_clock::now() - cascadeT0).count();
+                perf_.stylesKept++;
+                restyled_.push_back(elem);
+                elem->clearDirty();
+                goto children;
+            }
+        }
+
+        // Shared: an element resolved earlier in this walk under equal inputs.
+        std::shared_ptr<const StyleShareKey> sharedKey;
+        const Element* donor = nullptr;
+        if (keyable) {
+            auto dit = styleDonors_.find(key.hash);
+            if (dit != styleDonors_.end()) {
+                for (const Element* d : dit->second) {
+                    if (d->styleShareKey() && *d->styleShareKey() == key) { donor = d; break; }
+                }
+            }
+            if (donor) sharedKey = donor->styleShareKey();
+            else sharedKey = std::make_shared<const StyleShareKey>(key);
+        }
+        htmlayout::css::ComputedStyle computed =
+            donor ? donor->computedStyle()
+                  : cascade_.resolveMatched(*adapter, matchScratch_, inlineText, parentStyle);
         perf_.cascadeMs += std::chrono::duration<double, std::milli>(
                                std::chrono::steady_clock::now() - cascadeT0).count();
+        if (donor) perf_.stylesShared++;
+        else perf_.stylesResolved++;
 
         // The element has no before-change style when this is its first style,
         // or its first since it (or an ancestor) left display:none. Then its
@@ -509,11 +618,12 @@ void Document::resolveStylesRecursive(Element* elem,
         if (transitionManager_ && cascade_.usesStartingStyle() && !isDisplayNone(computed) &&
             (elem->computedStyle().empty() || isDisplayNone(elem->computedStyle()) ||
              enteringRendering_ > 0)) {
-            startingStyle = cascade_.resolve(*adapter, elem->style().cssText(), parentStyle,
+            startingStyle = cascade_.resolve(*adapter, inlineText, parentStyle,
                                              /*startingStyle=*/true);
             finishComputedStyle(elem, *startingStyle, parentStyle);
         }
-        finishComputedStyle(elem, computed, parentStyle);
+        // A donor's style is already finished.
+        if (!donor) finishComputedStyle(elem, computed, parentStyle);
 
         auto mgrT0 = std::chrono::steady_clock::now();
         // CSS transitions: detect property changes and start transitions
@@ -575,6 +685,13 @@ void Document::resolveStylesRecursive(Element* elem,
         const bool displayFlipped = wasNone != isDisplayNone(computed);
         enteredRendering = displayFlipped && wasNone && cascade_.usesStartingStyle();
         elem->setComputedStyle(std::move(computed));
+        // The style is its key's exactly unless an animation or transition
+        // laid a value over it (or holds one back): then it carries no key, so
+        // it is neither kept next time nor copied into another element.
+        if (sharedKey && !(webAnimationManager_ && webAnimationManager_->hasAny(elem))) {
+            if (!donor) styleDonors_[sharedKey->hash].push_back(elem);
+            elem->setStyleShareKey(std::move(sharedKey));
+        }
         if (displayFlipped) {
             if (transitionManager_) transitionManager_->displayToggled(elem);
             if (animationManager_) animationManager_->displayToggled(elem);
@@ -590,6 +707,7 @@ void Document::resolveStylesRecursive(Element* elem,
 
         elem->clearDirty();
     }
+children:
 
     // Recurse into children. They must re-resolve when a selector input changed
     // at or above this element (their rule set may differ) or when an inherited
@@ -618,7 +736,7 @@ void Document::resolveStylesRecursive(Element* elem,
     if (!sr) {
         for (auto* child : elem->childNodes()) {
             if (child->nodeType() == NodeType::Element) {
-                resolveStylesRecursive(static_cast<Element*>(child), &elem->computedStyle(),
+                resolveStylesRecursive(static_cast<Element*>(child), elem,
                                        childForce, selDirty, childHoverForce);
             }
         }
@@ -634,7 +752,7 @@ void Document::resolveStylesRecursive(Element* elem,
     const size_t restyledBefore = restyled_.size();
     for (auto* child : sr->childNodes()) {
         if (child->nodeType() == NodeType::Element) {
-            resolveStylesRecursive(static_cast<Element*>(child), &elem->computedStyle(),
+            resolveStylesRecursive(static_cast<Element*>(child), elem,
                                    childForce, selDirty, childHoverForce);
         }
     }
@@ -646,8 +764,7 @@ void Document::resolveStylesRecursive(Element* elem,
         if (child->nodeType() != NodeType::Element) continue;
         auto* childEl = static_cast<Element*>(child);
         Element* slot = sr->assignedSlot(childEl);
-        const htmlayout::css::ComputedStyle* inheritFrom =
-            slot ? &slot->computedStyle() : &elem->computedStyle();
+        Element* inheritFrom = slot ? slot : elem;
         const bool force = childForce || (slot && restyledSlots.count(slot) != 0);
         resolveStylesRecursive(childEl, inheritFrom, force, selDirty, childHoverForce);
     }

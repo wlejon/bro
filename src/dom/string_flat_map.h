@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include <string_view>
 #include <vector>
 #include <utility>
 #include <cstddef>
@@ -40,6 +41,15 @@ public:
         return items_.end();
     }
     const_iterator find(const std::string& key) const {
+        for (auto it = items_.begin(); it != items_.end(); ++it)
+            if (it->first == key) return it;
+        return items_.end();
+    }
+
+    // find() by a view, for a caller holding no std::string (the selector
+    // matcher asks by string_view). A separate name: an overload would make
+    // find("literal") ambiguous.
+    const_iterator findView(std::string_view key) const {
         for (auto it = items_.begin(); it != items_.end(); ++it)
             if (it->first == key) return it;
         return items_.end();

@@ -404,7 +404,12 @@ public:
         double syncMs = 0;         // writing boxes back onto elements
         uint64_t passes = 0;       // performLayout() calls
         uint64_t treeRebuilds = 0; // layout subtrees rebuilt from the DOM
+        uint64_t layoutSubtreesKept = 0; // element layout subtrees those rebuilds kept (or took back from a removed element)
         uint64_t elementsStyled = 0;
+        // Of elementsStyled, by how the style was arrived at (dom/style_share.h):
+        uint64_t stylesKept = 0;     //   inputs unchanged: the style it had stands
+        uint64_t stylesShared = 0;   //   copied from an element with equal inputs
+        uint64_t stylesResolved = 0; //   resolved in full by the cascade
         uint64_t pseudoResolves = 0; // Cascade::resolvePseudo() calls (before/after)
         uint64_t nodesLaidOut = 0;
         uint64_t nodeVisits = 0;
@@ -631,9 +636,29 @@ private:
 
     void buildTreeFromGumbo(::GumboNode* node, Element* parentElem);
     void collectElements(Node* node, std::vector<Element*>& out);
-    void resolveStylesRecursive(Element* elem, const htmlayout::css::ComputedStyle* parentStyle,
+    // `parentEl`: the element this one inherits from (its parent, or the slot
+    // it is assigned to); null for the document element.
+    void resolveStylesRecursive(Element* elem, Element* parentEl,
                                 bool force = false, bool selectorForce = false,
                                 bool hoverForce = false);
+
+    // Style sharing (dom/style_share.h). The token naming the values `el`'s
+    // style hands its children: equal tokens, equal handed-down values. Worked
+    // out once per style an element takes, interned in inheritTokens_.
+    uint64_t inheritTokenOf(Element* el);
+    // Elements resolved in full earlier in this restyle walk, by key: a later
+    // element under an equal key copies its style. Cleared around every walk,
+    // so the pointers never outlive it.
+    std::unordered_map<size_t, std::vector<Element*>> styleDonors_;
+    struct InheritTokenEntry {
+        uint64_t token;
+        std::shared_ptr<const htmlayout::css::StyleMap> vars;  // keeps the address in the key unique
+    };
+    std::unordered_map<std::string, InheritTokenEntry> inheritTokens_;
+    uint64_t nextInheritToken_ = 1;
+    std::vector<uint32_t> matchScratch_;
+    std::string tokenScratch_;
+    StyleShareKey keyScratch_;
     // Add the CSS of any connected <style> element whose rules aren't in the
     // cascade yet (a runtime document.head.appendChild(styleEl)). Incremental —
     // it never clears the cascade, so UA / linked / shadow-scoped sheets and
@@ -738,6 +763,11 @@ private:
 
     // Persistent layout tree (see layoutRoot()).
     std::unique_ptr<layout::LayoutNodeAdapter> layoutRoot_;
+    // Bumped whenever layout dirtied the whole tree for a document-wide input
+    // (the viewport, the root font size). A layout subtree parked on a removed
+    // element (LayoutNodeAdapter::RebuildContext) missed that, so one parked
+    // under an older epoch is laid out again when it is put back.
+    uint64_t layoutEpoch_ = 0;
 
     // CSS cascade
     htmlayout::css::Cascade cascade_;

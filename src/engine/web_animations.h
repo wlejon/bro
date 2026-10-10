@@ -254,6 +254,11 @@ public:
     // per-frame re-resolve (animatingSelf) and compositor promotion.
     bool hasActive(dom::Element* elem) const;
 
+    // Element has any animation record at all, in whatever state: one that
+    // could lay a value over its computed style (a filling finished one, a
+    // paused one, a transition). False means applyOverrides() is a no-op.
+    bool hasAny(const dom::Element* elem) const { return byElem_.count(elem) != 0; }
+
     // Union of properties across running animations on `elem` is a non-empty
     // subset of `allowed` (compositor-promotion hint, cf. TransitionManager).
     bool activeAnimatesOnly(dom::Element* elem,

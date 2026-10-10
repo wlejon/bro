@@ -684,7 +684,11 @@ void installHeadlessFrame(engine::Engine& engine) {
             num("totalMs", p.totalMs());
             num("passes", static_cast<double>(p.passes));
             num("treeRebuilds", static_cast<double>(p.treeRebuilds));
+            num("layoutSubtreesKept", static_cast<double>(p.layoutSubtreesKept));
             num("elementsStyled", static_cast<double>(p.elementsStyled));
+            num("stylesKept", static_cast<double>(p.stylesKept));
+            num("stylesShared", static_cast<double>(p.stylesShared));
+            num("stylesResolved", static_cast<double>(p.stylesResolved));
             num("nodesLaidOut", static_cast<double>(p.nodesLaidOut));
             num("nodeVisits", static_cast<double>(p.nodeVisits));
             num("nodeRevisitsSkipped", static_cast<double>(p.nodeRevisitsSkipped));

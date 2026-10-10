@@ -14,6 +14,7 @@
 #include "dom/node.h"
 #include "dom/shadow_root.h"
 #include <algorithm>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <span>
@@ -290,11 +291,30 @@ public:
     // dangling mark behind.
     //
     // Returns how many subtrees it rebuilt, for the perf counters.
-    uint64_t markDirtyFromElements() {
+    //
+    // A rebuild keeps the layout subtrees of the children that are still
+    // there (and parks the ones that left on their elements, see
+    // Element::takeRetainedLayout), so appending a row to a list, or putting
+    // back rows taken out a frame ago, lays out only what is new.
+    struct RebuildContext {
+        // Is this pointer a node the document still owns? A child that left
+        // may since have been freed; nothing here dereferences it unless this
+        // says it is alive.
+        std::function<bool(const dom::Node*)> isLive;
+        // Bumped by the document whenever layout's document-wide inputs moved
+        // (a full relayout, the viewport, the root font size). A subtree
+        // parked under another epoch is reused but laid out again.
+        uint64_t epoch = 0;
+        uint64_t subtreesKept = 0;    // out: layout subtrees reused by rebuilds
+    };
+
+    uint64_t markDirtyFromElements(RebuildContext& ctx) {
         uint64_t rebuilds = 0;
         if (elem_ && elem_->takeStructureDirty()) {
+            auto old = std::move(children_);
             children_.clear();
-            buildChildren(this, elem_);   // clears the flag on everything it builds
+            buildChildren(this, elem_, &old, &ctx);   // clears the flag on everything it builds
+            parkLeftovers(old, ctx);
             htmlayout::layout::markDirty(this);
             rebuilds++;
         }
@@ -309,7 +329,7 @@ public:
         // them takes their dirt.
         if (elem_ && widgetHidesChildren(elem_) && takeSubtreeDirty(elem_))
             htmlayout::layout::markDirty(this);
-        for (auto& child : children_) rebuilds += child->markDirtyFromElements();
+        for (auto& child : children_) rebuilds += child->markDirtyFromElements(ctx);
         return rebuilds;
     }
 
@@ -377,6 +397,7 @@ public:
     // This handles shadow DOM composed children and slot distribution.
     static std::unique_ptr<LayoutNodeAdapter> buildTree(dom::Element* root) {
         auto node = std::make_unique<LayoutNodeAdapter>(root);
+        node->stampFresh();
         buildChildren(node.get(), root);
         return node;
     }
@@ -409,7 +430,101 @@ private:
         return elem ? elem->containingShadowRoot() : nullptr;
     }
 
-    static void buildChildren(LayoutNodeAdapter* parent, dom::Element* elem) {
+    using AdapterList = std::vector<std::unique_ptr<LayoutNodeAdapter>>;
+
+    // A fresh layout node for this element: give it a generation of its own
+    // and drop whatever the element had parked, which is now stale.
+    void stampFresh() {
+        if (!elem_) return;
+        gen_ = ++nextGen();
+        elem_->setLayoutGen(gen_);
+        elem_->setRetainedLayout(nullptr);
+    }
+    static uint64_t& nextGen() { static uint64_t g = 0; return g; }
+
+    // The parent's previous layout children, during a rebuild, and where in
+    // them the next match is expected (children usually keep their order).
+    struct OldChildren {
+        AdapterList* list = nullptr;
+        size_t cursor = 0;
+        std::unordered_map<const dom::Element*, size_t> index;   // built on the first out-of-order miss
+
+        std::unique_ptr<LayoutNodeAdapter> take(dom::Element* e) {
+            if (!list) return nullptr;
+            auto& v = *list;
+            auto matches = [&](size_t i) {
+                // Pointer compare first: an entry whose element is gone is never
+                // dereferenced, and one whose address was reused fails the gen.
+                return v[i] && v[i]->elem_ == e && v[i]->gen_ == e->layoutGen();
+            };
+            if (cursor < v.size() && matches(cursor)) {
+                auto r = std::move(v[cursor]);
+                ++cursor;
+                return r;
+            }
+            if (index.empty() && !v.empty()) {
+                for (size_t i = 0; i < v.size(); i++)
+                    if (v[i] && v[i]->elem_) index.emplace(v[i]->elem_, i);
+            }
+            auto it = index.find(e);
+            if (it == index.end() || !matches(it->second)) return nullptr;
+            cursor = it->second + 1;
+            return std::move(v[it->second]);
+        }
+    };
+
+    // The layout node for one element child: the one it had under this parent,
+    // else the subtree it parked when it was taken out, else a new one.
+    static std::unique_ptr<LayoutNodeAdapter> childFor(LayoutNodeAdapter* parent,
+                                                       dom::Element* childElem,
+                                                       OldChildren* old,
+                                                       RebuildContext* ctx) {
+        if (ctx) {
+            if (auto kept = old ? old->take(childElem) : nullptr) {
+                kept->parent_ = parent;
+                ctx->subtreesKept++;
+                return kept;
+            }
+            if (auto parked = childElem->takeRetainedLayout()) {
+                auto* a = static_cast<LayoutNodeAdapter*>(parked.get());
+                if (a->gen_ == childElem->layoutGen()) {
+                    parked.release();
+                    std::unique_ptr<LayoutNodeAdapter> kept(a);
+                    // Its geometry was computed under another parent, or before
+                    // the viewport or root font size moved: keep the nodes, not
+                    // the boxes.
+                    if (kept->parkedParentGen_ != parent->gen_ || kept->parkedEpoch_ != ctx->epoch)
+                        htmlayout::layout::markSubtreeDirty(kept.get());
+                    kept->parent_ = parent;
+                    ctx->subtreesKept++;
+                    return kept;
+                }
+            }
+        }
+        auto child = std::make_unique<LayoutNodeAdapter>(childElem);
+        child->stampFresh();
+        child->parent_ = parent;
+        buildChildren(child.get(), childElem, nullptr, ctx);
+        return child;
+    }
+
+    // The previous children no element claimed: park each one still alive and
+    // current on its element, for when it is put back; drop the rest.
+    void parkLeftovers(AdapterList& old, RebuildContext& ctx) {
+        for (auto& a : old) {
+            if (!a || !a->elem_) continue;
+            dom::Element* e = a->elem_;
+            if (!ctx.isLive || !ctx.isLive(e)) continue;     // freed or adopted: never touched
+            if (a->gen_ != e->layoutGen()) continue;         // rebuilt somewhere already
+            a->parkedParentGen_ = gen_;
+            a->parkedEpoch_ = ctx.epoch;
+            a->parent_ = nullptr;
+            e->setRetainedLayout(std::move(a));
+        }
+    }
+
+    static void buildChildren(LayoutNodeAdapter* parent, dom::Element* elem,
+                              AdapterList* oldList = nullptr, RebuildContext* ctx = nullptr) {
         // Building an element's layout children straight from the DOM is exactly
         // what a pending structural mark is asking for, so consume it here. This
         // is what keeps an innerHTML of N nodes from rebuilding N nested
@@ -460,6 +575,14 @@ private:
         // Check if we're inside a shadow tree — needed for nested slot replacement
         dom::ShadowRoot* enclosingSR = containingShadow(elem);
 
+        // Nothing is kept across a rebuild in a shadow tree: a <slot>'s assigned
+        // nodes are spliced in by its parent's rebuild, and a change to them
+        // marks only the host, so a node kept there could hold slot content
+        // that has since moved.
+        RebuildContext* reuseCtx = (sr || enclosingSR) ? nullptr : ctx;
+        OldChildren old;
+        if (reuseCtx) old.list = oldList;
+
         for (auto* childNode : childNodes) {
             if (childNode->nodeType() == dom::NodeType::Element) {
                 auto* childElem = static_cast<dom::Element*>(childNode);
@@ -491,10 +614,7 @@ private:
                 // so descendants stay 0×0 and absolutely-positioned ones
                 // resolve their containing block up past the now-orphan
                 // ancestors to the viewport, painting full-width streaks.
-                auto child = std::make_unique<LayoutNodeAdapter>(childElem);
-                child->parent_ = parent;
-                buildChildren(child.get(), childElem);
-                parent->children_.push_back(std::move(child));
+                parent->children_.push_back(childFor(parent, childElem, &old, reuseCtx));
             } else if (childNode->nodeType() == dom::NodeType::Text) {
                 auto* textNode = static_cast<dom::TextNode*>(childNode);
                 if (textNode->data().empty()) continue;
@@ -516,10 +636,7 @@ private:
                                  dom::Element* contextElem) {
         if (node->nodeType() == dom::NodeType::Element) {
             auto* elem = static_cast<dom::Element*>(node);
-            auto child = std::make_unique<LayoutNodeAdapter>(elem);
-            child->parent_ = parent;
-            buildChildren(child.get(), elem);
-            parent->children_.push_back(std::move(child));
+            parent->children_.push_back(childFor(parent, elem, nullptr, nullptr));
         } else if (node->nodeType() == dom::NodeType::Text) {
             auto* textNode = static_cast<dom::TextNode*>(node);
             if (textNode->data().empty()) return;
@@ -534,6 +651,12 @@ private:
     dom::Element* parentElem_ = nullptr;  // for text nodes: their parent element
     LayoutNodeAdapter* parent_ = nullptr;
     std::vector<std::unique_ptr<LayoutNodeAdapter>> children_;
+    // Layout retention (see markDirtyFromElements): this node's generation,
+    // matched against its element's; and, while parked, the generation of the
+    // parent it was laid out under and the document's layout epoch then.
+    uint64_t gen_ = 0;
+    uint64_t parkedParentGen_ = 0;
+    uint64_t parkedEpoch_ = 0;
     mutable std::vector<LayoutNode*> childrenView_;
 
     // Synthetic ::before / ::after wrappers (only set on element-kind adapters

@@ -1,0 +1,132 @@
+/* =============================================================================
+   helm app kit: tokens
+   Graphite: quiet near-neutral surfaces, one accent colour used sparingly
+   (the selection, the focused control, the one primary action, a value that
+   matters), and small consistent radii. The same tokens as the helm shell
+   (helm/ui/css/tokens.css), so a window and the desktop read as one thing.
+
+   --accent-h is written from the shell's accentHue setting (lib/app.js), so
+   every app follows the shell when the user changes it.
+
+   An app window is opaque. The content is --surface-0; the chrome around it
+   (toolbar, sidebar, status bar) is one step darker, --surface-1; cards sit
+   one step lighter, --surface-2; menus, popovers and dialogs at --surface-3.
+   Use these names; never hard-code a colour in an app.
+   ============================================================================= */
+
+@font-face { font-family: "Inter"; src: url("/lib/fonts/Inter-Regular.ttf"); font-weight: 400; }
+@font-face { font-family: "Inter"; src: url("/lib/fonts/Inter-Medium.ttf"); font-weight: 500; }
+@font-face { font-family: "Inter"; src: url("/lib/fonts/Inter-SemiBold.ttf"); font-weight: 600; }
+@font-face { font-family: "Inter"; src: url("/lib/fonts/Inter-Bold.ttf"); font-weight: 700; }
+
+:root {
+  --accent-h: 255;
+
+  /* -- Accent: one colour, never a gradient ------------------------------ */
+  --accent: oklch(0.70 0.15 var(--accent-h));          /* fills: primary button, switch, progress */
+  --accent-hover: oklch(0.75 0.15 var(--accent-h));
+  --accent-soft: oklch(0.70 0.15 var(--accent-h) / 0.18);   /* selected rows and items */
+  --accent-faint: oklch(0.70 0.15 var(--accent-h) / 0.10);  /* hover on something already lit */
+  --accent-line: oklch(0.70 0.15 var(--accent-h) / 0.55);   /* a focused field's border, the list cursor */
+  --accent-text: oklch(0.84 0.10 var(--accent-h));     /* accent as text or an icon on a dark surface */
+  --on-accent: oklch(0.16 0.02 var(--accent-h));       /* text on an --accent fill */
+
+  /* -- Surfaces: near-neutral, a breath of the accent hue ---------------- */
+  --surface-0: oklch(0.205 0.006 var(--accent-h));   /* content */
+  --surface-1: oklch(0.180 0.006 var(--accent-h));   /* chrome: toolbar, sidebar, status bar */
+  --surface-2: oklch(0.235 0.007 var(--accent-h));   /* cards, raised panes */
+  --surface-3: oklch(0.255 0.008 var(--accent-h));   /* menus, popovers, dialogs, tooltips */
+  --scrim: rgb(0 0 0 / 0.50);                         /* behind a modal dialog */
+
+  /* Wells: a tint over whatever surface they sit on (hover, pressed, a track) */
+  --well: rgb(255 255 255 / 0.04);
+  --well-2: rgb(255 255 255 / 0.065);
+  --well-3: rgb(255 255 255 / 0.10);
+  --well-4: rgb(255 255 255 / 0.14);
+  --sink: rgb(0 0 0 / 0.20);                          /* inputs, tracks: below the surface */
+
+  /* Edges */
+  --hairline: rgb(255 255 255 / 0.075);               /* dividers between regions and rows */
+  --rim: rgb(255 255 255 / 0.09);                     /* a control's or card's border */
+  --rim-strong: rgb(255 255 255 / 0.15);
+  --rim-top: inset 0 1px 0 rgb(255 255 255 / 0.06);   /* the top edge of a raised surface */
+
+  /* -- Depth: only things that float cast a shadow ----------------------- */
+  --depth-1: 0 2px 8px rgb(0 0 0 / 0.28), 0 0 0 1px rgb(0 0 0 / 0.20);
+  --depth-2: 0 12px 32px rgb(0 0 0 / 0.40), 0 0 0 1px rgb(0 0 0 / 0.25);
+  --depth-3: 0 24px 64px rgb(0 0 0 / 0.50), 0 0 0 1px rgb(0 0 0 / 0.30);
+  --focus-ring: 0 0 0 2px var(--surface-0), 0 0 0 4px var(--accent-line);
+
+  /* -- Text ---------------------------------------------------------------- */
+  --t1: oklch(0.96 0.004 var(--accent-h));   /* primary: names, values, headings */
+  --t2: oklch(0.82 0.006 var(--accent-h));   /* secondary: body, unselected items */
+  --t3: oklch(0.66 0.008 var(--accent-h));   /* tertiary: labels, meta */
+  --t4: oklch(0.52 0.010 var(--accent-h));   /* hints, empty values, disabled */
+  --selection: oklch(0.70 0.15 var(--accent-h) / 0.35);
+
+  /* -- Semantic ------------------------------------------------------------ */
+  --ok: oklch(0.76 0.14 155);
+  --warn: oklch(0.82 0.13 80);
+  --danger: oklch(0.65 0.19 25);
+  --danger-hover: oklch(0.70 0.19 25);
+  --danger-soft: oklch(0.65 0.19 25 / 0.18);
+  --danger-text: oklch(0.80 0.11 25);
+
+  /* -- Type ----------------------------------------------------------------
+     Inter everywhere, shipped with the kit (lib/fonts) so every machine
+     draws the same letters. Figures that line up in columns or tick use
+     tabular figures (.num), not a monospace face; --font-mono is for code
+     and paths only. */
+  --font-ui: "Inter", "Adwaita Sans", "Segoe UI", "Noto Sans", sans-serif;
+  --font-mono: "JetBrains Mono", "Adwaita Mono", "Cascadia Mono", "DejaVu Sans Mono", monospace;
+  --fs-micro: 11px;     /* column headers, section labels */
+  --fs-cap: 12px;       /* meta, hints, status bar */
+  --fs-body: 13px;
+  --fs-title: 14px;     /* a row's or card's title */
+  --fs-head: 18px;      /* a page heading */
+  --fs-display: 26px;   /* the one big figure of a view */
+  --track-micro: 0.04em;
+
+  /* -- Space: a 4px rhythm ------------------------------------------------- */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 20px;
+  --s6: 24px;
+  --s8: 32px;
+  --s10: 40px;
+
+  /* -- Shape: small and consistent ----------------------------------------
+     Controls and rows 6px, cards 10px, floating panels 12px. Fully round
+     only for things that are round by nature: switches, badges, avatars. */
+  --r-sm: 4px;
+  --r-ctl: 6px;
+  --r-card: 10px;
+  --r-panel: 12px;
+  --r-chip: 999px;
+
+  /* -- Motion --------------------------------------------------------------
+     Quick and plain: state changes ease, things that appear rise slightly,
+     exits are quicker than entrances. --spring-pop is for a switch knob. */
+  --spring-pop: linear(0, 0.0303, 0.1079, 0.2154, 0.3384, 0.4655, 0.5883, 0.7009, 0.7996, 0.8827, 0.9496, 1.001, 1.0381, 1.0628, 1.0771, 1.0831, 1.0826, 1.0775, 1.0693, 1.0595, 1.0489, 1.0384, 1.0286, 1.0199, 1.0124, 1.0063, 1.0015, 0.9979, 0.9955, 0.9939, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-exit: cubic-bezier(0.5, 0, 0.75, 0);
+  --ease-std: cubic-bezier(0.4, 0, 0.2, 1);
+  --d-quick: 100ms;
+  --d-state: 160ms;
+  --d-enter: 220ms;
+
+  /* -- Geometry ------------------------------------------------------------ */
+  --toolbar-h: 44px;
+  --statusbar-h: 26px;
+  --sidebar-w: 216px;
+  --row-h: 30px;          /* VirtualList's default row height */
+
+  /* -- Stacking (inside the app window) ------------------------------------ */
+  --z-popover: 100;
+  --z-dialog: 200;
+  --z-menu: 300;
+  --z-toast: 400;
+  --z-tooltip: 500;
+}
