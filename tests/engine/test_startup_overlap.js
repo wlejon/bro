@@ -11,7 +11,8 @@
 // page { globalsAtMs, globalsMs, compileStartMs, compileEndMs, compileMs,
 // waitMs, codeCache, overlapMs }. (Window and GPU one after the other were
 // ~175 ms, together ~163 ms; with the page's host globals and compile also
-// under the device, music's first frame went from ~318 to ~283 ms.)
+// under the device, music's first frame went from ~323 to ~236 ms, warm
+// code cache.)
 // BRO_STARTUP_OVERLAP=0 compiles after the GPU instead, as bro did.
 
 const s = bro.app.startup;
