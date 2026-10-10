@@ -98,6 +98,12 @@ struct FontRef {
     // Ligature features (liga, clig, calt, ...). False draws one glyph per
     // character, as `font-variant-ligatures: none` does (the terminal grid).
     bool             ligatures = true;
+    // OpenType features from font-variant-numeric / font-feature-settings, in
+    // htmlayout's canonical form ("tnum=1,zero=1"; see css/font_features.h).
+    // Empty = none, which shapes exactly as before. Like `family`, the view
+    // must outlive the call; the shaper copies it into its cache key. Part of
+    // what a run measures, so layout's TextMetrics carries the same string.
+    std::string_view features;
 };
 
 // CSS filter primitive — a single function in a `filter:` chain. The list is

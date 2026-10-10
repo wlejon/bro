@@ -94,7 +94,9 @@ Value imageSrcSetter(Value self, std::span<const Value> a) {
     // The attribute and the natural size too. This element is in a real
     // document, so if it is ever laid out the painter must find the picture
     // that was just decoded rather than probing the file a second time.
-    if (img.ok) st->el->setImageNaturalSize(src, img.width, img.height);
+    // A failed load is recorded too (as zero-sized), so the layout walk does
+    // not probe this src again and queue a second `error` of its own.
+    st->el->setImageNaturalSize(src, img.ok ? img.width : 0, img.ok ? img.height : 0);
 
     dom::Element* target = st->el;
     const bool loaded = img.ok;

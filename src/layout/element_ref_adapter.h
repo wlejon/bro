@@ -163,7 +163,7 @@ public:
         }
         return false;
     }
-    bool isFocusVisible() const override { return isFocused(); }
+    bool isFocusVisible() const override { return isFocused() && elem_->document()->focusVisible(); }
 
     // Container queries — type/name come from the element's computed style,
     // sizes from its last layout box. Style resolution runs before layout, so

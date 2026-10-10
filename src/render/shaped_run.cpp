@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <vector>
 
 #include <include/core/SkMatrix.h>
 #include <include/core/SkTextBlob.h>
@@ -568,6 +569,28 @@ private:
     std::size_t first_ = 0;
     std::size_t count_ = 0;
 };
+
+// FontRef::features ("tnum=1,zero=1", htmlayout's canonical form) as shaper
+// features spanning the whole run. An entry that is not `tttt=<digits>` is
+// skipped; the producer never writes one.
+void appendCssFeatures(std::string_view list, std::size_t textLen,
+                       std::vector<SkShaper::Feature>& out) {
+    while (!list.empty()) {
+        const std::size_t comma = list.find(',');
+        const std::string_view entry = list.substr(0, comma);
+        list = comma == std::string_view::npos ? std::string_view{} : list.substr(comma + 1);
+        if (entry.size() < 6 || entry[4] != '=') continue;
+        uint32_t value = 0;
+        bool ok = true;
+        for (char c : entry.substr(5)) {
+            if (c < '0' || c > '9') { ok = false; break; }
+            value = value * 10u + static_cast<uint32_t>(c - '0');
+        }
+        if (!ok) continue;
+        out.push_back({SkSetFourByteTag(entry[0], entry[1], entry[2], entry[3]),
+                       value, 0, textLen});
+    }
+}
 #endif  // BRO_WITH_TEXT_SHAPING
 
 }  // namespace
@@ -587,6 +610,7 @@ std::size_t TextShapingEngine::KeyHash::operator()(const Key& k) const noexcept 
     mix(static_cast<std::size_t>(k.italic));
     mix(static_cast<std::size_t>(k.direction));
     mix(static_cast<std::size_t>(k.ligatures));
+    if (!k.features.empty()) mix(std::hash<std::string_view>{}(k.features));
     return h;
 }
 
@@ -623,7 +647,8 @@ const ShapedRun* TextShapingEngine::shape(std::string_view utf8,
                                           SkFontMgr* fontMgr,
                                           FontFallbackCache& fallback,
                                           TextDirection direction,
-                                          Ligatures ligatures) {
+                                          Ligatures ligatures,
+                                          std::string_view cssFeatures) {
     if (utf8.empty()) return nullptr;
 
     std::string scratch;
@@ -631,7 +656,7 @@ const ShapedRun* TextShapingEngine::shape(std::string_view utf8,
 
     Key key{std::string(utf8), std::string(family), primary.getSize(),
             style.weight(), style.slant() != SkFontStyle::kUpright_Slant,
-            direction, ligatures};
+            direction, ligatures, std::string(cssFeatures)};
     if (auto it = cache_.find(key); it != cache_.end()) {
         ++hits_;
         return it->second.get();
@@ -667,22 +692,25 @@ const ShapedRun* TextShapingEngine::shape(std::string_view utf8,
         // A terminal's grid (Ligatures::None) also turns off what coding
         // fonts build their ligatures from: contextual alternates and the
         // discretionary / historical sets.
-        SkShaper::Feature features[5];
-        std::size_t featureCount = 0;
+        std::vector<SkShaper::Feature> features;
         if (ligatures != Ligatures::Normal) {
-            features[featureCount++] = {SkSetFourByteTag('l','i','g','a'), 0, 0, utf8.size()};
-            features[featureCount++] = {SkSetFourByteTag('c','l','i','g'), 0, 0, utf8.size()};
+            features.push_back({SkSetFourByteTag('l','i','g','a'), 0, 0, utf8.size()});
+            features.push_back({SkSetFourByteTag('c','l','i','g'), 0, 0, utf8.size()});
         }
         if (ligatures == Ligatures::None) {
-            features[featureCount++] = {SkSetFourByteTag('c','a','l','t'), 0, 0, utf8.size()};
-            features[featureCount++] = {SkSetFourByteTag('d','l','i','g'), 0, 0, utf8.size()};
-            features[featureCount++] = {SkSetFourByteTag('h','l','i','g'), 0, 0, utf8.size()};
+            features.push_back({SkSetFourByteTag('c','a','l','t'), 0, 0, utf8.size()});
+            features.push_back({SkSetFourByteTag('d','l','i','g'), 0, 0, utf8.size()});
+            features.push_back({SkSetFourByteTag('h','l','i','g'), 0, 0, utf8.size()});
         }
+        // CSS-selected features (font-variant-numeric / font-feature-settings)
+        // last, so an explicit setting of a tag above wins as later features
+        // do in HarfBuzz.
+        appendCssFeatures(cssFeatures, utf8.size(), features);
         if (fontRuns && language && scriptRuns && bidiRuns) {
             ShapedRunHandler handler(b);
             shaper_->shape(utf8.data(), utf8.size(), *fontRuns, *bidiRuns, *scriptRuns,
-                           *language, featureCount ? features : nullptr, featureCount,
-                           std::numeric_limits<SkScalar>::max(), &handler);
+                           *language, features.empty() ? nullptr : features.data(),
+                           features.size(), std::numeric_limits<SkScalar>::max(), &handler);
             b.setNaturalWidth(handler.pen().fX);
             shaped = true;
         }

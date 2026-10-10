@@ -259,7 +259,8 @@ private:
             cache_.clear();
             fontGeneration_ = renderer_->fontGeneration();
         }
-        Key key{std::string{text}, std::string{ref.family}, ref.size, ref.weight};
+        Key key{std::string{text}, std::string{ref.family}, ref.size, ref.weight,
+                std::string{ref.features}};
         if (auto it = cache_.find(key); it != cache_.end()) return it->second;
 
         render::TextMetrics tm = renderer_->measureText(text, ref);
@@ -278,9 +279,10 @@ private:
         std::string family;
         float size;
         int weight;
+        std::string features;   // TextMetrics::fontFeatures; empty for nearly all
         bool operator==(const Key& o) const {
             return size == o.size && weight == o.weight &&
-                   text == o.text && family == o.family;
+                   text == o.text && family == o.family && features == o.features;
         }
     };
     struct KeyHash {
@@ -290,6 +292,7 @@ private:
             mix(std::hash<std::string_view>{}(k.family));
             mix(std::hash<float>{}(k.size));
             mix(static_cast<size_t>(k.weight));
+            if (!k.features.empty()) mix(std::hash<std::string_view>{}(k.features));
             return h;
         }
     };
@@ -315,9 +318,13 @@ private:
             long v = std::strtol(ws.c_str(), &end, 10);
             if (end != ws.c_str() && v > 0) w = static_cast<int>(v);
         }
-        return render::FontRef{
+        render::FontRef ref{
             family.empty() ? std::string_view{"Arial"} : family,
             size > 0 ? size : 16.0f, w, false};
+        // The features layout set for this box's text (FontFeatureScope), so a
+        // tabular run measures as the tabular run DrawTraversal paints.
+        ref.features = fontFeatures;
+        return ref;
     }
 
     render::Renderer* renderer_;

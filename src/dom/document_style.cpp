@@ -40,6 +40,22 @@ void Document::setActiveElement(Element* el) {
     if (focusedElement_) focusedElement_->markDirty();
     if (el) el->markDirty();
     focusedElement_ = el;
+    focusVisible_ = el && (s_keyboardModality || isTextEntry(el));
+}
+
+bool Document::isTextEntry(const Element* el) {
+    std::string tag = el->tagName();
+    for (auto& c : tag) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (tag == "textarea") return true;
+    if (tag == "input") {
+        std::string type = el->getAttribute("type");
+        for (auto& c : type) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        static const char* const kNotText[] = {"button", "submit", "reset", "checkbox", "radio", "range",
+                                              "color", "file", "image", "hidden"};
+        for (const char* t : kNotText) if (type == t) return false;
+        return true;
+    }
+    return el->hasAttribute("contenteditable") && el->getAttribute("contenteditable") != "false";
 }
 
 namespace {

@@ -64,6 +64,8 @@ bool probeBytes(const uint8_t* data, size_t len, int& w, int& h) {
 // Resolve `src` and read enough of it to learn the image's size. Returns
 // false (leaving w/h at 0) for a missing file or an unreadable header, which
 // leaves the <img> zero-sized — the same as a browser showing a broken image.
+// True means the image is usable (its `load`, not `error`); an SVG is, even
+// one with no intrinsic size (w/h left 0 for the layout adapter to settle).
 //
 // Public because the JS `img.src =` setter needs the same answer for an image
 // that is never inserted into the document — three.js's ImageLoader builds one,
@@ -83,7 +85,8 @@ bool probeImageSize(dom::Element* elem, const std::string& src,
         const auto comma = src.find(',');
         if (comma == std::string::npos) return false;
         const std::string meta = src.substr(5, comma - 5);
-        if (meta.find("image/svg+xml") != std::string::npos) return false;
+        // Usable, its size left to the adapter.
+        if (meta.find("image/svg+xml") != std::string::npos) return true;
         const std::string body = src.substr(comma + 1);
         if (meta.find(";base64") == std::string::npos) return false;
         const std::vector<uint8_t> bytes = util::base64Decode(body);
@@ -101,7 +104,7 @@ bool probeImageSize(dom::Element* elem, const std::string& src,
             svg::svgIntrinsicSize(chars, data->bytes.size(), sw, sh);
             w = static_cast<int>(sw);
             h = static_cast<int>(sh);
-            return w > 0 && h > 0;
+            return true;  // an SVG is usable with or without an intrinsic size
         }
         return probeBytes(data->bytes.data(), data->bytes.size(), w, h);
     }
@@ -147,7 +150,7 @@ bool probeImageSize(dom::Element* elem, const std::string& src,
                               head.size(), sw, sh);
         w = static_cast<int>(sw);
         h = static_cast<int>(sh);
-        return w > 0 && h > 0;
+        return true;  // an SVG is usable with or without an intrinsic size
     }
 
     return probeBytes(head.data(), head.size(), w, h);
@@ -192,8 +195,18 @@ void ensureReplacedElements(dom::Element* elem, render::Renderer* renderer,
         const std::string src = elem->getAttribute("src");
         if (!src.empty() && src != elem->imageProbedSrc()) {
             int w = 0, h = 0;
-            probeImageSize(elem, src, w, h);
+            const bool ok = probeImageSize(elem, src, w, h);
             elem->setImageNaturalSize(src, w, h);
+            // The image's own load / error, as a task: a src set in markup,
+            // through setAttribute or innerHTML gets one, like the `img.src`
+            // setter's. A file that is missing, or present but not an image
+            // this engine decodes (an .exe, a format with no decoder), is an
+            // error. A remote src is fetched and reported by the script host
+            // (loadHostImage), not probed here.
+            const bool remote = src.rfind("http://", 0) == 0 || src.rfind("https://", 0) == 0;
+            if (!remote) {
+                if (auto* doc = elem->document()) doc->queueElementEvent(elem, ok ? "load" : "error");
+            }
         } else if (src.empty() && !elem->imageProbedSrc().empty()) {
             // src removed: drop the stale size rather than keep sizing the
             // box from an image that is no longer referenced.

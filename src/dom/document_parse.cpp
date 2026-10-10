@@ -27,6 +27,13 @@ namespace bro::dom {
 
 void Document::parse(const std::string& html, const std::string& authorCss,
                      const std::string& uaCss) {
+    std::vector<AuthorSheet> sheets;
+    if (!authorCss.empty()) sheets.push_back({authorCss, {}});
+    parse(html, sheets, uaCss);
+}
+
+void Document::parse(const std::string& html, const std::vector<AuthorSheet>& authorSheets,
+                     const std::string& uaCss) {
     // Clear any existing tree
     root_ = nullptr;
     documentElement_ = nullptr;
@@ -65,9 +72,13 @@ void Document::parse(const std::string& html, const std::string& authorCss,
                           htmlayout::css::Origin::UserAgent);
     }
 
-    // Add author CSS (app stylesheets)
-    if (!authorCss.empty()) {
-        addSheetToCascade(htmlayout::css::parse(authorCss));
+    // Add author CSS (app stylesheets), each its own sheet with its own base
+    // so its relative URLs (@import, @font-face src) resolve against it.
+    for (const auto& as : authorSheets) {
+        if (as.css.empty()) continue;
+        auto sheet = htmlayout::css::parse(as.css);
+        sheet.baseUrl = as.baseUrl;
+        addSheetToCascade(std::move(sheet));
     }
 
     // Parse HTML with gumbo

@@ -1,0 +1,4 @@
+@import "tokens.css";
+
+html, body { margin: 0; background: #fff; color: #000; }
+.m { display: inline-block; white-space: nowrap; font-size: 32px; line-height: 40px; }

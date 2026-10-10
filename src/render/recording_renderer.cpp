@@ -110,6 +110,11 @@ void RecordingRenderer::drawTextEx(std::string_view text, float x, float y,
     auto [fOff, fLen] = buffer_->pushString(font.family);
     cmd.familyOffset = fOff;
     cmd.familyLen = fLen;
+    if (!font.features.empty()) {
+        auto [ftOff, ftLen] = buffer_->pushString(font.features);
+        cmd.featuresOffset = ftOff;
+        cmd.featuresLen = ftLen;
+    }
     cmd.fontSize = font.size;
     cmd.fontWeight = font.weight;
     cmd.fontItalic = font.italic;

@@ -37,6 +37,7 @@ struct Cmd_DrawText {
     uint32_t blobIndex;               // CommandBuffer::kNoTextBlob if unshaped
     uint32_t textOffset, textLen;     // arena: char[]
     uint32_t familyOffset, familyLen; // arena: char[]
+    uint32_t featuresOffset, featuresLen; // arena: char[] (FontRef::features; len 0 = none)
     float x, y;
     float fontSize;
     int   fontWeight;

@@ -4,6 +4,7 @@
 
 #include "layout/draw_traversal_internal.h"
 #include "dom/text_node.h"
+#include "css/font_features.h"
 
 #include <algorithm>
 #include <cctype>
@@ -34,6 +35,18 @@ std::string DrawTraversal::applyTextTransform(const std::string& text,
         return r;
     }
     return text;
+}
+
+// The OpenType features a style selects (font-variant-numeric +
+// font-feature-settings), resolved and interned by htmlayout — the same
+// string layout measured the text with, so paint and measurement agree.
+static std::string_view styleFontFeatures(const htmlayout::css::ComputedStyle& style) {
+    auto numIt = style.find("font-variant-numeric");
+    auto ffsIt = style.find("font-feature-settings");
+    if (numIt == style.end() && ffsIt == style.end()) return {};
+    return htmlayout::css::internFontFeatures(
+        numIt != style.end() ? std::string_view(numIt->second) : std::string_view{},
+        ffsIt != style.end() ? std::string_view(ffsIt->second) : std::string_view{});
 }
 
 // Parse text-shadow: a list of `offsetX offsetY [blur] [color]`, each colour
@@ -365,6 +378,7 @@ void DrawTraversal::drawPseudo(dom::Element* host, const std::string& which,
         italic = (styleIt->second == "italic" || styleIt->second == "oblique");
     }
     render::FontRef fontRef{family, size, weight, italic};
+    fontRef.features = styleFontFeatures(style);
     auto fm = renderer_->measureText("", fontRef);
     float ascent = fm.ascent;
 
@@ -474,7 +488,9 @@ render::FontRef DrawTraversal::getFontRef(dom::Element* elem) {
         italic = (styleIt->second == "italic" || styleIt->second == "oblique");
     }
 
-    return render::FontRef{family, size, weight, italic};
+    render::FontRef ref{family, size, weight, italic};
+    ref.features = styleFontFeatures(style);
+    return ref;
 }
 
 } // namespace bro::layout

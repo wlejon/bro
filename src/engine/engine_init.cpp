@@ -544,11 +544,14 @@ void Engine::initAppRealm() {
     drawTraversal_->setBasePath(manifest_.basePath);
     drawTraversal_->setViewport(contentWidth(), contentHeight(), 0);
 
-    std::string authorStyles;
+    // Each linked sheet stays its own sheet, based at its own directory, so
+    // its relative url()s resolve against it rather than the document.
+    std::vector<dom::Document::AuthorSheet> authorStyles;
     for (auto& cssPath : manifest_.stylePaths) {
         std::string css = AppLoader::loadFile(cssPath);
         if (!css.empty()) {
-            authorStyles += css + "\n";
+            authorStyles.push_back(
+                {std::move(css), std::filesystem::path(cssPath).parent_path().string()});
         }
     }
 
@@ -561,14 +564,17 @@ void Engine::initAppRealm() {
                                 static_cast<float>(contentHeight()));
     document_->setMediaColorScheme(effectiveColorScheme());
     document_->setMediaResolution(deviceScale_.ratio);
-    document_->cascade().setImportResolver([this](const std::string& url) {
-        std::string path = AppLoader::resolvePath(document_->basePath(), url,
-                                                  &assetMounts_);
+    document_->cascade().setImportResolver(
+        [this](const std::string& url, const std::string& base, std::string& importedBase) {
+        // Relative to the importing sheet (its directory), else the document.
+        std::string path = AppLoader::resolvePath(
+            base.empty() ? document_->basePath() : base, url, &assetMounts_);
         std::string css = AppLoader::loadFile(path);
         if (css.empty()) {
             LOG_WARN("@import: failed to load '%s' (resolved to '%s')",
                      url.c_str(), path.c_str());
         }
+        importedBase = std::filesystem::path(path).parent_path().string();
         return css;
     });
     document_->parse(html, authorStyles, kDefaultStyles);
@@ -1019,7 +1025,10 @@ void Engine::loadCustomFonts() {
             });
         if (alreadyLoaded) continue;
 
-        std::string path = AppLoader::resolvePath(basePath, ff.src, &assetMounts_);
+        // src is relative to the sheet that declared the rule (its directory,
+        // through @import too); a sheet with no base is the document's.
+        std::string path = AppLoader::resolvePath(
+            ff.baseUrl.empty() ? basePath : ff.baseUrl, ff.src, &assetMounts_);
 
         std::ifstream file(path, std::ios::binary | std::ios::ate);
         if (!file.is_open()) {

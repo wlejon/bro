@@ -104,6 +104,7 @@ bool Engine::iframeHandleMouseUp(dom::Element* frameEl, float docX, float docY,
 
 void Engine::handleMouseDown(float x, float y, int button) {
     noteUserActivity();
+    dom::Document::noteInputModality(false);   // a click does not show :focus-visible
     float docX = x, docY = y - static_cast<float>(contentTop()) + scrollY_;
     uiDirty_ = true;
 

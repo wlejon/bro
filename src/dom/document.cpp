@@ -13,6 +13,7 @@
 #include "dom/selection.h"
 #include "dom/event.h"
 #include "dom/event_dispatch.h"
+#include "dom/node_handle.h"
 #include "engine/css_transitions.h"
 #include "layout/element_ref_adapter.h"
 #include "layout/layout_node_adapter.h"
@@ -37,6 +38,20 @@ static std::unordered_set<const Document*>& liveDocuments() {
 
 bool Document::isLiveDocument(const Document* doc) {
     return doc && liveDocuments().count(doc) != 0;
+}
+
+void Document::noteInputModality(bool keyboard) {
+    s_keyboardModality = keyboard;
+    if (!keyboard) return;
+    // A key pressed while something focused by a click has focus shows its
+    // indicator from now on.
+    for (const Document* d : liveDocuments()) {
+        auto* doc = const_cast<Document*>(d);
+        if (doc->focusedElement_ && !doc->focusVisible_) {
+            doc->focusVisible_ = true;
+            doc->focusedElement_->markDirty();
+        }
+    }
 }
 
 Document::Document() {
@@ -168,6 +183,19 @@ Document::TaskPoster Document::s_taskPoster = nullptr;
 // or a script that collapses and then extends — reports once per task, the
 // coalescing Chromium applies. Fired at the document (whose listeners live on
 // the document element here), neither bubbling nor cancelable.
+void Document::queueElementEvent(Element* target, const char* type) {
+    if (!target || !s_taskPoster) return;
+    NodeHandle<Element> handle(this, target);
+    std::string name = type;
+    s_taskPoster([handle, name] {
+        Element* el = handle.get();
+        if (!el) return;
+        Event evt(name, /*bubbles=*/false, /*cancelable=*/false);
+        evt.setIsTrusted(true);
+        dispatchDomEvent(el, evt);
+    });
+}
+
 void Document::fireSelectionChange() {
     // Whatever moved the selection, its highlight has to be repainted.
     markPaintDirty();

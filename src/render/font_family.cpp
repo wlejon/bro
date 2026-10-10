@@ -39,9 +39,83 @@ const char* resolveGenericFamily(const std::string& name) {
 
 } // namespace
 
+namespace {
+
+bool equalsIgnoreAsciiCase(std::string_view a, std::string_view b) {
+    if (a.size() != b.size()) return false;
+    for (size_t i = 0; i < a.size(); ++i) {
+        char x = a[i], y = b[i];
+        if (x >= 'A' && x <= 'Z') x = char(x - 'A' + 'a');
+        if (y >= 'A' && y <= 'Z') y = char(y - 'A' + 'a');
+        if (x != y) return false;
+    }
+    return true;
+}
+
+// Rank of a face's weight for a desired weight under CSS Fonts 4 §5.2
+// (lower is better). Three bands, each ordered by distance.
+int weightRank(int desired, int face) {
+    constexpr int kBand = 10000;
+    if (desired >= 400 && desired <= 500) {
+        if (face >= desired && face <= 500) return face - desired;
+        if (face < desired) return kBand + (desired - face);
+        return 2 * kBand + (face - 500);
+    }
+    if (desired < 400) {
+        if (face <= desired) return desired - face;
+        return kBand + (face - desired);
+    }
+    if (face >= desired) return face - desired;
+    return kBand + (desired - face);
+}
+
+} // namespace
+
+CustomFontMatch matchCustomFontFace(const std::vector<CustomFontFace>& faces,
+                                    std::string_view family,
+                                    int weight, bool italic) {
+    CustomFontMatch best;
+    bool bestStyleMatches = false;
+    int bestRank = 0;
+    for (const auto& f : faces) {
+        if (!f.typeface || !equalsIgnoreAsciiCase(f.family, family)) continue;
+        const bool styleMatches = f.italic == italic;
+        const int rank = weightRank(weight, f.weight);
+        // Style narrows first: a face of the wanted style beats any weight
+        // of the other style.
+        if (!best.face || (styleMatches && !bestStyleMatches) ||
+            (styleMatches == bestStyleMatches && rank < bestRank)) {
+            best.face = &f;
+            bestStyleMatches = styleMatches;
+            bestRank = rank;
+        }
+    }
+    if (best.face) {
+        best.syntheticBold = weight >= 600 && best.face->weight < 600;
+        best.syntheticItalic = italic && !best.face->italic;
+    }
+    return best;
+}
+
+void applyFontSynthesis(SkFont& font, const CustomFontMatch& match) {
+    if (match.syntheticBold) font.setEmbolden(true);
+    // Skia's (and Blink's) synthetic oblique: a 1/4 horizontal skew.
+    if (match.syntheticItalic) font.setSkewX(-0.25f);
+}
+
 sk_sp<SkTypeface> resolveFontFamilyList(std::string_view cssFamily,
                                          SkFontStyle style,
                                          SkFontMgr* mgr) {
+    static const std::vector<CustomFontFace> kNone;
+    return resolveFontFamilyList(cssFamily, style, mgr, kNone, nullptr);
+}
+
+sk_sp<SkTypeface> resolveFontFamilyList(std::string_view cssFamily,
+                                         SkFontStyle style,
+                                         SkFontMgr* mgr,
+                                         const std::vector<CustomFontFace>& faces,
+                                         CustomFontMatch* match) {
+    if (match) *match = {};
     if (!mgr) return nullptr;
 
     // CSS font-family is comma-separated — try each name in order.
@@ -51,6 +125,14 @@ sk_sp<SkTypeface> resolveFontFamilyList(std::string_view cssFamily,
         while (!name.empty() && (name.front() == ' ' || name.front() == '\'' || name.front() == '"')) name.erase(name.begin());
         while (!name.empty() && (name.back() == ' ' || name.back() == '\'' || name.back() == '"')) name.pop_back();
         if (name.empty()) continue;
+        if (!faces.empty()) {
+            CustomFontMatch m = matchCustomFontFace(
+                faces, name, style.weight(), style.slant() != SkFontStyle::kUpright_Slant);
+            if (m.face) {
+                if (match) *match = m;
+                return m.face->typeface;
+            }
+        }
         if (const char* resolved = resolveGenericFamily(name)) {
             if (auto tf = sk_sp<SkTypeface>(mgr->matchFamilyStyle(resolved, style))) return tf;
         }

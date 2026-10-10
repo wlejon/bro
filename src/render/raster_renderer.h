@@ -2,6 +2,7 @@
 
 #include "render/renderer.h"
 #include "render/font_fallback.h"
+#include "render/font_family.h"
 #include "render/image_cache.h"
 #include "render/shaped_run.h"
 
@@ -167,8 +168,14 @@ public:
     TextShapingEngine* textEngine() override { return &shaper_; }
     bool drawTextBlob(const SkTextBlob* blob, float x, float y,
                       bromath::Color color, float blur) override;
+    // @font-face faces, so layout-thread measurement picks the same face
+    // (by CSS font matching) as the drawing renderer.
+    bool registerCustomFont(const std::string& family,
+                            const void* data, size_t len,
+                            int weight, bool italic) override;
 
 private:
+    std::vector<CustomFontFace> customFonts_;
     // Private and unshared, on the same footing as fonts_/fallbackCache_ —
     // that is what keeps the data plane lock-free here.
     TextShapingEngine shaper_;

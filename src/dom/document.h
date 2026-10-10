@@ -34,6 +34,15 @@ public:
     // authorCss: app/user stylesheets (normal author priority)
     void parse(const std::string& html, const std::string& authorCss = {},
                const std::string& uaCss = {});
+    // Same, with the author CSS as separate sheets, each carrying the base its
+    // relative URLs resolve against (a linked sheet's directory; empty = the
+    // document's base path).
+    struct AuthorSheet {
+        std::string css;
+        std::string baseUrl;
+    };
+    void parse(const std::string& html, const std::vector<AuthorSheet>& authorSheets,
+               const std::string& uaCss);
 
     // Parse `xml` as an XML document (DOMParser's XML and SVG types) into
     // this FRESH document: names keep their case, prefixes resolve through
@@ -209,6 +218,17 @@ public:
     // Focus tracking
     Element* activeElement() const { return focusedElement_ ? focusedElement_ : body_; }
     void setActiveElement(Element* el);
+
+    // :focus-visible (Selectors 4 §9.4), with the browsers' heuristic: the
+    // indicator shows when focus arrived by keyboard (or by script while the
+    // user was last using the keyboard), and always for a text field; a
+    // click that focuses a button does not show it, and a key pressed while
+    // such an element has focus then does. The modality is the user's, so
+    // it is shared by every document (main thread only).
+    bool focusVisible() const { return focusedElement_ && focusVisible_; }
+    // The engine reports each user input: a non-modifier key (true) or a
+    // pointer press (false).
+    static void noteInputModality(bool keyboard);
 
     // ---------- The top layer (CSS Position 4 §top-layer, HTML §6.3) ----------
     // An ordered set of elements painted above the whole document, each over
@@ -520,6 +540,11 @@ public:
     using TaskPoster = void (*)(std::function<void()>);
     static void setTaskPoster(TaskPoster poster) { s_taskPoster = poster; }
 
+    // Queue a trusted, non-bubbling, non-cancelable event named `type` at
+    // `target` as a task (an <img>'s `load` / `error`). Dropped if the
+    // element is gone by the time the task runs; a no-op without a poster.
+    void queueElementEvent(Element* target, const char* type);
+
     // External host layers that wrap elements (e.g. the Bronze host holds a
     // compiled-side object per element, keyed by raw Element*). Observers receive
     // node destruction notices in registration order.
@@ -668,6 +693,9 @@ private:
     Element* documentElement_ = nullptr;
     Element* body_ = nullptr;
     Element* focusedElement_ = nullptr;
+    bool focusVisible_ = false;                      // see focusVisible()
+    static bool isTextEntry(const Element* el);      // a field that always shows its focus
+    static inline bool s_keyboardModality = true;    // last user input was a key (before any: script focus shows)
     std::vector<TopLayerEntry> topLayer_;
     bool dirty_ = false;
     uint64_t mutationEpoch_ = 0;

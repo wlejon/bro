@@ -322,6 +322,11 @@ public:
     /// is a shaping input (it changes which glyphs come out) and so it belongs
     /// in the cache key — the spacing *amount* does not, and is applied to the
     /// positioned output instead.
+    ///
+    /// `features` is FontRef::features, the CSS-selected OpenType features
+    /// ("tnum=1,zero=1"), applied over the whole run after the ligature
+    /// toggles. A shaping input like `ligatures`, so it is in the key too;
+    /// empty (nearly all text) shapes and caches exactly as without it.
     enum class Ligatures : uint8_t { Normal, NoCommon, None };
     const ShapedRun* shape(std::string_view utf8,
                            const SkFont& primary,
@@ -330,7 +335,8 @@ public:
                            SkFontMgr* fontMgr,
                            FontFallbackCache& fallback,
                            TextDirection direction = TextDirection::LTR,
-                           Ligatures ligatures = Ligatures::Normal);
+                           Ligatures ligatures = Ligatures::Normal,
+                           std::string_view features = {});
     /// The mode a draw asks for: letter-spacing turns common ligatures off,
     /// a font that wants none turns them all off.
     static Ligatures ligaturesFor(bool letterSpacing, bool fontLigatures) {
@@ -353,7 +359,8 @@ private:
         int           weight;
         bool          italic;
         TextDirection direction;
-        Ligatures     ligatures;     // the only feature toggle callers have
+        Ligatures     ligatures;
+        std::string   features;      // FontRef::features; empty for nearly all text
         // Script is derived from the text itself and language is the process
         // locale, so neither adds information to this key today. Note what is
         // NOT here: letter-spacing and word-spacing. Spacing does not change
@@ -361,7 +368,7 @@ private:
         bool operator==(const Key& o) const {
             return size == o.size && weight == o.weight && italic == o.italic &&
                    direction == o.direction && ligatures == o.ligatures &&
-                   text == o.text && family == o.family;
+                   text == o.text && family == o.family && features == o.features;
         }
     };
     struct KeyHash {

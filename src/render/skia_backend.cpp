@@ -105,7 +105,8 @@ const ShapedRun* SkiaRenderer::shapeText(std::string_view text, FontRef font,
     if (!fe) return nullptr;
     return shaper_.shape(text, *fe->font, font.family, fe->style,
                          ensureFontMgr(), fallbackCache_,
-                         direction, TextShapingEngine::ligaturesFor(disableLigatures, font.ligatures));
+                         direction, TextShapingEngine::ligaturesFor(disableLigatures, font.ligatures),
+                         font.features);
 }
 
 void SkiaRenderer::drawText(std::string_view text, float x, float y, FontRef font, Color color,
@@ -212,20 +213,20 @@ const SkiaRenderer::FontEntry* SkiaRenderer::getOrCreateFont(FontRef ref) {
     };
 
     sk_sp<SkTypeface> typeface;
+    CustomFontMatch custom;
     std::istringstream stream{std::string(ref.family)};
     std::string name;
     while (std::getline(stream, name, ',')) {
         while (!name.empty() && (name.front() == ' ' || name.front() == '\'' || name.front() == '"')) name.erase(name.begin());
         while (!name.empty() && (name.back() == ' ' || name.back() == '\'' || name.back() == '"')) name.pop_back();
         if (name.empty()) continue;
-        // Check custom fonts first (@font-face registered)
-        for (auto& cf : customFonts_) {
-            if (cf.family == name) {
-                typeface = cf.typeface;
-                break;
-            }
+        // Check custom fonts first (@font-face registered): CSS font
+        // matching picks the declared face nearest the requested weight/style.
+        custom = matchCustomFontFace(customFonts_, name, ref.weight, ref.italic);
+        if (custom.face) {
+            typeface = custom.face->typeface;
+            break;
         }
-        if (typeface) break;
         // Try CSS generic name
         const char* resolved = resolveGeneric(name);
         if (resolved) {
@@ -247,6 +248,7 @@ const SkiaRenderer::FontEntry* SkiaRenderer::getOrCreateFont(FontRef ref) {
     // quantizes every advance and drifts a run's width away from what the
     // font actually specifies. Browsers position text subpixel; so do we.
     sk_font->setSubpixel(true);
+    applyFontSynthesis(*sk_font, custom);
 
     auto [ins, _] = fonts_.emplace(std::move(key),
         FontEntry{std::move(typeface), std::move(sk_font), style});
@@ -601,8 +603,10 @@ bool SkiaRenderer::registerCustomFont(const std::string& family,
     if (!typeface) return false;
     customFonts_.push_back({family, weight, italic, typeface});
     // The same descriptor can now resolve to a different face, so every run
-    // shaped against the old one is stale.
+    // shaped against the old one is stale — and so is every cached SkFont
+    // (runs hold SkFonts derived from fonts_, so they go first).
     shaper_.clear();
+    fonts_.clear();
     noteFontRegistered();
     return true;
 }

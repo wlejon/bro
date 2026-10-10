@@ -15,6 +15,7 @@
 #include <include/core/SkFontStyle.h>
 
 #include "render/font_fallback.h"
+#include "render/font_family.h"
 #include "render/image_cache.h"
 #include "render/shaped_run.h"
 #include "render/skia_gpu.h"
@@ -276,13 +277,8 @@ private:
     TextShapingEngine shaper_;
 
     // Custom font typefaces registered via @font-face
-    struct CustomFont {
-        std::string family;
-        int weight;
-        bool italic;
-        sk_sp<SkTypeface> typeface;
-    };
-    std::vector<CustomFont> customFonts_;
+    // (one entry per face; getOrCreateFont runs CSS font matching over them).
+    std::vector<CustomFontFace> customFonts_;
 };
 
 // ---------------------------------------------------------------------------

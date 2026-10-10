@@ -220,7 +220,8 @@ const ShapedRun* RasterRenderer::shapeText(std::string_view text, FontRef font,
     if (!fe) return nullptr;
     return shaper_.shape(text, *fe->font, font.family, fe->style,
                          ensureFontMgr(), fallbackCache_,
-                         direction, TextShapingEngine::ligaturesFor(disableLigatures, font.ligatures));
+                         direction, TextShapingEngine::ligaturesFor(disableLigatures, font.ligatures),
+                         font.features);
 }
 
 void RasterRenderer::drawText(std::string_view text, float x, float y, FontRef font, Color c,
@@ -277,6 +278,21 @@ SkFontMgr* RasterRenderer::ensureFontMgr() {
     return fontMgr_.get();
 }
 
+bool RasterRenderer::registerCustomFont(const std::string& family,
+                                        const void* data, size_t len,
+                                        int weight, bool italic) {
+    auto skData = SkData::MakeWithCopy(data, len);
+    auto typeface = SkFontMgr::RefEmpty()->makeFromData(skData);
+    if (!typeface) typeface = ensureFontMgr()->makeFromData(skData);
+    if (!typeface) return false;
+    customFonts_.push_back({family, weight, italic, typeface});
+    // Runs hold SkFonts derived from fonts_, so they go first.
+    shaper_.clear();
+    fonts_.clear();
+    noteFontRegistered();
+    return true;
+}
+
 const RasterRenderer::FontEntry* RasterRenderer::getOrCreateFont(FontRef ref) {
     FontKey key{std::string(ref.family), ref.size, ref.weight, ref.italic};
     auto it = fonts_.find(key);
@@ -286,7 +302,9 @@ const RasterRenderer::FontEntry* RasterRenderer::getOrCreateFont(FontRef ref) {
                       ref.italic ? SkFontStyle::kItalic_Slant : SkFontStyle::kUpright_Slant);
     SkFontMgr* mgrRaw = ensureFontMgr();
 
-    sk_sp<SkTypeface> typeface = bro::render::resolveFontFamilyList(ref.family, style, mgrRaw);
+    CustomFontMatch custom;
+    sk_sp<SkTypeface> typeface = bro::render::resolveFontFamilyList(
+        ref.family, style, mgrRaw, customFonts_, &custom);
     auto sk_font = std::make_unique<SkFont>(typeface, ref.size);
     sk_font->setEdging(SkFont::Edging::kAntiAlias);
     // Subpixel advances. HarfBuzz asks the SkFont for glyph widths and rounds
@@ -295,6 +313,7 @@ const RasterRenderer::FontEntry* RasterRenderer::getOrCreateFont(FontRef ref) {
     // quantizes every advance and drifts a run's width away from what the
     // font actually specifies. Browsers position text subpixel; so do we.
     sk_font->setSubpixel(true);
+    applyFontSynthesis(*sk_font, custom);
     auto [ins, _] = fonts_.emplace(std::move(key),
         FontEntry{ std::move(typeface), std::move(sk_font), style });
     return &ins->second;

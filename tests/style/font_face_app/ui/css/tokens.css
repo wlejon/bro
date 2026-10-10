@@ -1,0 +1,10 @@
+/* One family declared once per weight, the way an app bundles Inter. The
+   relative srcs resolve against THIS sheet (ui/css/), not the document; the
+   /lib ones go through the app's /lib mount. */
+@font-face { font-family: "TestInter"; font-weight: 400; src: url("../fonts/Inter-Regular.ttf"); }
+@font-face { font-family: "TestInter"; font-weight: 500; src: url("/lib/fonts/Inter-Medium.ttf"); }
+@font-face { font-family: "TestInter"; font-weight: 600; src: url("../fonts/Inter-SemiBold.ttf"); }
+@font-face { font-family: "TestInter"; font-weight: 700; src: url("/lib/fonts/Inter-Bold.ttf"); }
+
+/* Only a regular face: bold text in it is synthesized. */
+@font-face { font-family: "TestInterRegularOnly"; font-weight: 400; src: url("../fonts/Inter-Regular.ttf"); }

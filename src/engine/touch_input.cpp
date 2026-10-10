@@ -345,6 +345,7 @@ void Engine::gestureEndIfFounder(uint64_t endedFinger) {
 
 void Engine::handleTouchDown(uint64_t fingerId, float x, float y, float pressure) {
     noteUserActivity();
+    dom::Document::noteInputModality(false);   // a tap does not show :focus-visible
     if (!document_) return;
     if (touchByFinger(fingerId)) return;   // duplicate down for a live contact
     uiDirty_ = true;
