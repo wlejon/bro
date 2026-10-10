@@ -22,9 +22,11 @@
 #include "util/time.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <thread>
 
 namespace bro::engine {
 
@@ -60,7 +62,10 @@ void Engine::removeMainLoopWaker() {
 }
 
 bool Engine::windowIdle() const {
-    if (!idleWaitEnabled_ || !eventLoop_ || !eventLoop_->canWaitEvents()) return false;
+    if (!idleWaitEnabled_) return false;
+    // Headless frames of the windowed pipeline wait on the event loop when
+    // there is one, else they sleep (idleWait).
+    if (!headlessPipeline_ && (!eventLoop_ || !eventLoop_->canWaitEvents())) return false;
     if (!hasRenderedOnce_ || uiDirty_ || systemDirty_ || appBaseDirty_ || splashVisible_ || pendingAppReload_)
         return false;
     if (document_ && document_->isDirty()) return false;
@@ -90,7 +95,11 @@ void Engine::idleWait() {
     }
     const double now = util::currentTimeMs();
     layout::ElTerminal::forEach([&](layout::ElTerminal& t) { waitMs = std::min(waitMs, t.nextRepaintInMs(now)); });
-    if (waitMs > 0.0) eventLoop_->waitEvents(waitMs);
+    if (waitMs <= 0.0) return;
+    if (eventLoop_ && eventLoop_->canWaitEvents())
+        eventLoop_->waitEvents(waitMs);
+    else
+        std::this_thread::sleep_for(std::chrono::microseconds(static_cast<int64_t>(waitMs * 1000.0)));
 }
 
 }  // namespace bro::engine

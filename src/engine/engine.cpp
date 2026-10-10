@@ -318,7 +318,9 @@ void Engine::pumpVideoEvents() {
     // a callback makes, the step's own closing flush — is one frame and reads
     // one position, as the windowed frame's callbacks do. Events still pump.
     const bool hold = mediaHeldForStep_;
-    const bool advanceHere = (displayMode_ == DisplayMode::Headless) && !hold;
+    // Headless frames run through the windowed pipeline (runPipelineFrames)
+    // have the raster thread drawing the video, as a window does.
+    const bool advanceHere = (displayMode_ == DisplayMode::Headless) && !headlessPipeline_ && !hold;
     pumpVideoEventsWalk(document_->documentElement(), anyPlaying, advanceHere, !hold);
     // Playing <video> elements don't mutate the DOM, so nothing else would
     // mark the document dirty. Force a re-raster each frame while any video

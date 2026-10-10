@@ -462,9 +462,9 @@ bool Engine::holdUnchangedFrame() {
 #else
         return false;
 #endif
-    } else if (displayMode_ != DisplayMode::Windowed || !window_) {
+    } else if (!windowedPipeline() || (!window_ && !headlessPipeline_)) {
         return false;
-    } else if (!window_->holdFrame()) {
+    } else if (headlessPipeline_ || !window_->holdFrame()) {
         // The window system cannot pace a loop that presents nothing
         // (SDL): hold only when nothing is about to change, and let the
         // loop wait for work (engine_idle.cpp). Otherwise the present keeps
@@ -476,6 +476,7 @@ bool Engine::holdUnchangedFrame() {
     frameSegmentUsed_.clear();
     frameSkiaImages_.clear();
     heldFrame_ = frameNumber_;
+    if (headlessPipeline_) ++pipelineRun_.held;
     return true;
 }
 
@@ -507,6 +508,10 @@ bool Engine::presentCurrentFrame(bool mayHold) {
                 remoteViewHost_->presented(frameRemoteViews_.data(), frameRemoteViews_.size());
         }
         frameSkiaImages_.clear();  // submitted
+    } else if (headlessPipeline_) {
+        // Headless frames of the windowed pipeline present to the offscreen
+        // target, paced as a 60 Hz FIFO swapchain would pace them.
+        presented = presentHeadlessPipelineFrame(frame);
     } else if (window_ && window_->backend() == platform::GraphicsBackend::Software && frame.below) {
         // No GPU, so no GPU layer: the CPU composite is the frame.
         const render::PresentPixels& p = frame.below;

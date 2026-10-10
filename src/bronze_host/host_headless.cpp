@@ -143,6 +143,29 @@ void installHeadlessGlobals(engine::Engine& engine) {
             return ev::undefined();
         }, 1, "wallSleep"));
 
+    // 4b. runFrames(n [, { stepMs }]): n frames of the windowed frame loop
+    // itself — layout and raster threads, presenter to an offscreen target,
+    // idle holds — in real time (paced at 60 Hz), or with stepMs > 0 on a
+    // clock stepped that much per frame. Returns { frames, presented, held,
+    // wallMs }. docs/headless.md, "The windowed pipeline".
+    regBoth("runFrames", ev::makeFunction(
+        [&engine](Value, std::span<const Value> a) -> Value {
+            const int n = a.empty() ? 1 : satCast<int>(ev::toDouble(a[0]));
+            double stepMs = 0.0;
+            if (a.size() > 1 && ev::isObject(a[1])) {
+                const Value s = ev::getProperty(a[1], "stepMs");
+                if (!ev::isUndefined(s)) stepMs = ev::toDouble(s);
+            }
+            const engine::Engine::PipelineRun run = engine.runPipelineFrames(n, stepMs);
+            drainMicrotasksAndLocalFetches();
+            ev::Persistent o(ev::createObject());
+            o.set(ev::setProperty(o.get(), "frames", ev::fromDouble(run.frames)));
+            o.set(ev::setProperty(o.get(), "presented", ev::fromDouble(run.presented)));
+            o.set(ev::setProperty(o.get(), "held", ev::fromDouble(run.held)));
+            o.set(ev::setProperty(o.get(), "wallMs", ev::fromDouble(run.wallMs)));
+            return o.get();
+        }, 2, "runFrames"));
+
     // 5. assert(bool condition [, const std::string& message])
     regBoth("assert", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {

@@ -186,7 +186,7 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
             // and otherwise what was recorded now (a key's echo) shows a
             // refresh later. A raster that takes longer is shown next frame,
             // as before.
-            if (displayMode_ == DisplayMode::Windowed) {
+            if (windowedPipeline()) {
                 const double period = frameTrace_->refreshPeriodMs() > 0.0 ? frameTrace_->refreshPeriodMs() : 1000.0 / 60.0;
                 const double waitMs = frameStart + period * 0.5 - util::currentTimeMs();
                 if (waitMs > 0.0 && framePresenter_->waitForRaster(waitMs) && framePresenter_->consumeIfReady())
@@ -233,7 +233,7 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
     // never catches up (the size changing every frame) is presented anyway
     // after kResizeHoldMaxMs.
     bool holdForResize = false;
-    if (displayMode_ == DisplayMode::Windowed && layers.vpWidth > 0 &&
+    if (windowedPipeline() && layers.vpWidth > 0 &&
         (layers.vpWidth != viewportWidth_ || layers.vpHeight != viewportHeight_)) {
         if (resizeHoldSinceMs_ <= 0.0) resizeHoldSinceMs_ = now;
         holdForResize = now - resizeHoldSinceMs_ < kResizeHoldMaxMs;
@@ -310,7 +310,7 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
         // picture it holds back is latency).
         if (!windowFocused_ && !anyWindowHostFocused() && frameRemoteViews_.empty())
             capMs = std::max(capMs, 1000.0 / kUnfocusedFps);
-        if (capMs > 0.0) {
+        if (capMs > 0.0 && !(headlessPipeline_ && pipelineStepMs_ > 0.0)) {
             double elapsed = util::currentTimeMs() - frameStart;
             double sleepMs = capMs - elapsed;
             if (sleepMs > 0.5) {

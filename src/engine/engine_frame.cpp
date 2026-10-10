@@ -164,7 +164,30 @@ void Engine::run() {
     running_ = true;
     if (splashVisible_) splashStartMs_ = util::currentTimeMs();
 
-    const uint32_t mainWinId = window_->windowId();
+    installWindowEventHandlers();
+    windowFocused_ = window_->isFocused();
+
+    startFramePipeline();
+
+    eventLoop_->setModalWindowEventHook([this]() { tickTimersOnly(); });
+    startControl();
+    installMainLoopWaker();
+
+    while (running_) {
+        if (bro::util::interrupted()) {
+            running_ = false;
+            break;
+        }
+        windowedFrame();
+    }
+
+    removeMainLoopWaker();
+    shutdown();
+}
+
+// The event loop's callbacks into the engine: input, window state, focus.
+void Engine::installWindowEventHandlers() {
+    const uint32_t mainWinId = window_ ? window_->windowId() : 0;
     auto mainWin = [mainWinId](uint32_t id) { return id == mainWinId || id == 0; };
     auto host = [this](uint32_t id) -> uint64_t {
         WindowHost* h = windowHostBySdlId(id);
@@ -280,9 +303,10 @@ void Engine::run() {
     };
     eventLoop_->onSystemThemeChanged = [this]() { applyColorScheme(); };
     eventLoop_->onDisplayScaleChanged = [this, mainWin](uint32_t id) { if (mainWin(id)) handleDisplayScaleChanged(); };
+}
 
-    windowFocused_ = window_->isFocused();
-
+// The layout and raster workers and the handoffs between them and this thread.
+void Engine::startFramePipeline() {
     rasterReady_.store(false, std::memory_order_relaxed);
 
     framePresenter_ = std::make_unique<FramePresenter>();
@@ -291,16 +315,15 @@ void Engine::run() {
     layoutThread_ = std::thread(&Engine::layoutThreadFunc, this);
     rasterThread_ = std::thread(&Engine::rasterThreadFunc, this);
     rasterReady_.wait(false, std::memory_order_acquire);
+}
 
-    eventLoop_->setModalWindowEventHook([this]() { tickTimersOnly(); });
-    startControl();
-    installMainLoopWaker();
-
-    while (running_) {
-        if (bro::util::interrupted()) {
-            running_ = false;
-            break;
-        }
+// One frame of the windowed loop. Headless runs the same frame through
+// runPipelineFrames (headless_pipeline.cpp), presenting to an offscreen target.
+void Engine::windowedFrame() {
+    // Stepped headless frames: the clock moves a fixed step per frame and
+    // nothing waits on the wall clock.
+    const bool stepped = headlessPipeline_ && pipelineStepMs_ > 0.0;
+    {
         // Where the window system says when it wants the next frame (a
         // Wayland frame callback), wait for that here, before input is read
         // and the frame built: the frame then carries the newest input and
@@ -308,7 +331,7 @@ void Engine::run() {
         // holds the finished frame until the compositor's next frame, and
         // everything it shows is a refresh older than it need be.
         const double frameWaitStart = util::currentTimeMs();
-        if (window_) window_->waitForFrame(kFrameWaitMaxMs);
+        if (window_ && !headlessPipeline_) window_->waitForFrame(kFrameWaitMaxMs);
         double frameStart = util::currentTimeMs();
 
         // Where the window system reports presentation (Wayland), the clock
@@ -325,9 +348,16 @@ void Engine::run() {
             }
         }
         double wallFrameDtMs = 0.0;
-        if (lastWallTickMs_ > 0.0 && clockAt > lastWallTickMs_)
-            wallFrameDtMs = clockAt - lastWallTickMs_;
-        lastWallTickMs_ = std::max(lastWallTickMs_, clockAt);
+        if (stepped) {
+            wallFrameDtMs = pipelineStepMs_;
+        } else {
+            if (lastWallTickMs_ > 0.0 && clockAt > lastWallTickMs_)
+                wallFrameDtMs = clockAt - lastWallTickMs_;
+            lastWallTickMs_ = std::max(lastWallTickMs_, clockAt);
+        }
+        // Headless keeps its virtual clock on the frames' time, so what a
+        // script does after the run (advanceTime, timers) carries on from it.
+        if (headlessPipeline_) virtualTime_ += wallFrameDtMs;
         const double scaledFrameDtMs = wallFrameDtMs * effectiveTimeScale();
         engineNowMs_ += scaledFrameDtMs;
         // The record spans the wait: it is this frame's pacing.
@@ -379,11 +409,11 @@ void Engine::run() {
 
         if (!canvasScenesDetached_.empty() && framePresenter_->isRasterIdle()) canvasScenesDetached_.clear();
 
-        eventLoop_->pollEvents();
+        if (eventLoop_) eventLoop_->pollEvents();
         platform::desktop::pumpEvents();
-        if (eventLoop_->shouldQuit()) {
+        if (eventLoop_ && eventLoop_->shouldQuit()) {
             running_ = false;
-            break;
+            return;
         }
         beginGpuFrame();
 
@@ -445,7 +475,7 @@ void Engine::run() {
             drainWheelSmoothing(wheelDt);
         }
 
-        double now = util::currentTimeMs();
+        const double now = headlessPipeline_ ? virtualTime_ : util::currentTimeMs();
         tickSystemPanels(now);
         if (!timePaused_ && tickIframes(engineNowMs_)) uiDirty_ = true;
         if (!timePaused_ && tickWindowHosts(engineNowMs_)) uiDirty_ = true;
@@ -542,12 +572,9 @@ void Engine::run() {
         // idle stretch is not a frame.
         if (idleHeld_) {
             idleHeld_ = false;
-            idleWait();
+            if (!stepped) idleWait();
         }
     }
-
-    removeMainLoopWaker();
-    shutdown();
 }
 
 void Engine::removeModalEventWatch() {

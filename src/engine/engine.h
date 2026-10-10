@@ -412,6 +412,20 @@ public:
 
     void flush();
     void advanceTime(double ms);
+    /// Headless: run `frames` frames of the windowed frame loop itself (the
+    /// layout and raster threads, the event pump, the source watcher, the
+    /// presenter presenting to an offscreen target, idle holds and waits).
+    /// `stepMs` > 0 steps the clock that much per frame with no wall-clock
+    /// waits; 0 runs in real time, paced like a 60 Hz FIFO swapchain. The
+    /// first call starts the pipeline; it stays up until shutdown, idle
+    /// between calls. docs/headless.md, "The windowed pipeline".
+    struct PipelineRun {
+        int frames = 0;      // frames run
+        int presented = 0;   // presented to the offscreen target
+        int held = 0;        // held unchanged (not presented)
+        double wallMs = 0.0;
+    };
+    PipelineRun runPipelineFrames(int frames, double stepMs);
     std::string eval(const std::string& code);
     bool hasTestFailure() const { return testFailure_; }
     void setTestFailure(bool f = true) { testFailure_ = f; }
@@ -1260,6 +1274,19 @@ private:
     // bound ends the wait.
     bool windowIdle() const;
     void idleWait();
+
+    // The windowed frame loop in parts (engine_frame.cpp), so headless can
+    // run the same frame (runPipelineFrames, headless_pipeline.cpp).
+    void installWindowEventHandlers();
+    void startFramePipeline();
+    void windowedFrame();
+    bool windowedPipeline() const { return displayMode_ == DisplayMode::Windowed || headlessPipeline_; }
+    bool presentHeadlessPipelineFrame(const render::PresentFrame& frame);
+    bool headlessPipeline_ = false;         // inside runPipelineFrames
+    bool headlessPipelineStarted_ = false;  // its threads are up
+    double pipelineStepMs_ = 0.0;           // > 0: stepped clock
+    double pipelineVblankMs_ = 0.0;         // the last emulated vblank
+    PipelineRun pipelineRun_;
     void installMainLoopWaker();
     void removeMainLoopWaker();
     bool idleWaitEnabled_ = true;  // BRO_IDLE_WAIT=0 turns it off
