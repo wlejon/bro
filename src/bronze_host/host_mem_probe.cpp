@@ -16,6 +16,8 @@
 #include "bronze_host/host_runtime.h"
 #include "bronze_host/host_builder.h"
 #include "embed/embed.h"
+#include "render/image_store.h"
+#include "render/skia_gpu.h"
 
 #include <include/core/SkGraphics.h>
 
@@ -194,6 +196,35 @@ Value hostMemoryBreakdown(bool sizes) {
     out.set("jsHeapCommitted", num(tel.heapCommittedBytes));
     out.set("skiaFontCache", num(SkGraphics::GetFontCacheUsed()));
     out.set("skiaResourceCache", num(SkGraphics::GetResourceCacheTotalBytesUsed()));
+    // The decoded-image store (<img>, CSS images, createImageBitmap(blob)):
+    // what its cache holds, and the budget past which it evicts.
+    {
+        render::ImageStore& store = render::ImageStore::instance();
+        ObjectBuilder images;
+        images.set("cachedBytes", num(store.cachedBytes()));
+        images.set("cachedCount", num(store.cachedCount()));
+        images.set("budgetBytes", num(store.budgetBytes()));
+        out.set("imageStore", images.get());
+    }
+    // GPU memory: Ganesh's resource cache and the device pool. Device-only
+    // memory is not the process's; host-visible pool memory is (mapped).
+    const render::SkiaGpu::MemoryStats g = render::SkiaGpu::targetMemoryStats();
+    if (g.valid) {
+        ObjectBuilder gpu;
+        gpu.set("ganeshBytes", num(g.ganeshBytes));
+        gpu.set("ganeshPurgeableBytes", num(g.ganeshPurgeableBytes));
+        gpu.set("ganeshLimit", num(g.ganeshLimit));
+        gpu.set("ganeshAllocatorBytes", num(g.ganeshVmaAllocated));
+        gpu.set("ganeshAllocatorUsedBytes", num(g.ganeshVmaUsed));
+        gpu.set("ganeshCount", num(static_cast<uint64_t>(g.ganeshCount)));
+        gpu.set("poolHostVisibleBytes", num(g.poolHostVisibleBytes));
+        gpu.set("poolDeviceOnlyBytes", num(g.poolDeviceOnlyBytes));
+        gpu.set("poolAllocations", num(g.poolAllocations));
+        gpu.set("poolBlocks", num(g.poolBlocks));
+        gpu.set("poolDedicated", num(g.poolDedicated));
+        gpu.set("uploadTexturesLive", num(g.uploadsLive));
+        out.set("gpu", gpu.get());
+    }
     return out.get();
 }
 

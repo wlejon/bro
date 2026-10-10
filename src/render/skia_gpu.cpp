@@ -218,6 +218,7 @@ bool SkiaGpu::init() {
     // Skia's own VMA-based allocator (its GN build does not make one by
     // itself). Not internally locked: every Skia call runs under lock().
     backend.fMemoryAllocator = skgpu::VulkanMemoryAllocators::Make(backend, skgpu::ThreadSafe::kNo);
+    memoryAllocator_ = backend.fMemoryAllocator;
     if (!backend.fMemoryAllocator) {
         LOG_ERROR("SkiaGpu: Skia could not create its Vulkan memory allocator; drawing on the CPU");
         std::lock_guard<std::mutex> lock(gRoutesMutex);

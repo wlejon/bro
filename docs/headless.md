@@ -438,7 +438,19 @@ warm-up (the first frames allocate the layer pools and the offscreen target:
 tens of MB). `__host.memory()` says where growth lives: the C/C++ heaps
 (`heapCommitted`), the JS heap, Skia's CPU caches, or outside every heap
 (drivers, GPU memory); `__host.memory(true)` adds a histogram of heap block
-sizes, which usually names the leaked object by its size.
+sizes, which usually names the leaked object by its size, and of committed
+private regions by protection and size (`regions`: protection 1028, i.e.
+write-combined, is mapped GPU memory). `heapBusyBytes` against `heapCommitted`
+tells a heap that holds more from one that is only fragmented. `imageStore`
+is the decoded-image cache (`cachedBytes`, `budgetBytes`); `gpu` is Ganesh's
+resource cache and allocator (`ganeshBytes`, `ganeshAllocatorBytes`) and the
+device pool split by `poolHostVisibleBytes` (mapped: the process's own
+memory) and `poolDeviceOnlyBytes`.
+
+Collections the host starts are logged with `BRO_GC_LOG=1` (why: idle,
+periodic, memory pressure, the DOM sweep; and how long). Measure with an exe
+whose name has no Image File Execution Options set: a `gflags +ust` stack
+database adds hundreds of MB of 64 KB regions and skews every number.
 
 ```js
 // Idle, then in use: is anything still climbing after warm-up?

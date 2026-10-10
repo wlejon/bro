@@ -30,6 +30,7 @@
 
 #include <include/core/SkRefCnt.h>
 #include <include/core/SkSurface.h>
+#include <include/gpu/vk/VulkanMemoryAllocator.h>
 
 #include <vulkan/vulkan.h>
 
@@ -172,6 +173,20 @@ public:
     /// findUpload(pixelsId, claim = false) on the upload target.
     static std::shared_ptr<GpuImageUpload> findOnTarget(uint64_t pixelsId);
 
+    /// Where the upload target's GPU memory is, for __host.memory(): Ganesh's
+    /// resource cache, and the device's own pool (bro's textures, buffers,
+    /// staging), split by whether it is mapped into the process.
+    struct MemoryStats {
+        size_t ganeshBytes = 0, ganeshPurgeableBytes = 0, ganeshLimit = 0;
+        size_t ganeshVmaAllocated = 0, ganeshVmaUsed = 0;  // its allocator's blocks, and what is in use
+        int ganeshCount = 0;
+        size_t poolHostVisibleBytes = 0, poolDeviceOnlyBytes = 0;
+        size_t poolAllocations = 0, poolBlocks = 0, poolDedicated = 0;
+        size_t uploadsLive = 0;
+        bool valid = false;
+    };
+    static MemoryStats targetMemoryStats();
+
 private:
     friend struct SkiaImage;
     friend class Lock;
@@ -209,6 +224,7 @@ private:
     VulkanContext& vulkan_;
     std::unique_ptr<SkiaPersistentCache> persistentCache_;  // outlives context_
     sk_sp<GrDirectContext> context_;
+    sk_sp<skgpu::VulkanMemoryAllocator> memoryAllocator_;  // Ganesh's; for its totals
 
     std::recursive_mutex mutex_;
     std::atomic<std::thread::id> owner_{};

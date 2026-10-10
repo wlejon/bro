@@ -47,6 +47,10 @@ struct VulkanAllocatorStats {
     size_t activeBlockCount = 0;
     size_t activeAllocationCount = 0;
     size_t dedicatedAllocationCount = 0;
+    // VkDeviceMemory held, by whether it is mapped into the process (host
+    // visible: the process's own committed memory) or not.
+    size_t hostVisibleBytes = 0;
+    size_t deviceOnlyBytes = 0;
 };
 
 /// High-performance chunked block sub-allocator for Vulkan buffers and images.

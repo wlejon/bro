@@ -45,10 +45,12 @@ VulkanAllocatorStats VulkanMemoryPool::stats() const {
         s.totalAllocatedBytes += record.size;
         if (record.isDedicated) {
             s.dedicatedAllocationCount++;
+            (record.isHostVisible ? s.hostVisibleBytes : s.deviceOnlyBytes) += record.size;
         }
     }
     for (const auto& [key, p] : pools_) {
         s.activeBlockCount += p.blocks.size();
+        for (const auto& b : p.blocks) (b->isHostVisible ? s.hostVisibleBytes : s.deviceOnlyBytes) += b->size;
     }
     return s;
 }

@@ -136,6 +136,39 @@ std::shared_ptr<GpuImageUpload> SkiaGpu::findOnTarget(uint64_t pixelsId) {
     return gTarget ? gTarget->findUpload(pixelsId, /*claim=*/false) : nullptr;
 }
 
+SkiaGpu::MemoryStats SkiaGpu::targetMemoryStats() {
+    MemoryStats m;
+    // Not under gTargetMutex while taking the Skia lock: a draw holding the
+    // lock may look an upload up on the target (findOnTarget). The target is
+    // the engine's SkiaGpu, alive while a page can ask.
+    SkiaGpu* gpu = nullptr;
+    {
+        std::lock_guard<std::mutex> targetLock(gTargetMutex);
+        gpu = gTarget;
+    }
+    if (!gpu) return m;
+    m.valid = true;
+    if (gpu->context_) {
+        Lock lock(*gpu);
+        gpu->context_->getResourceCacheUsage(&m.ganeshCount, &m.ganeshBytes);
+        m.ganeshPurgeableBytes = gpu->context_->getResourceCachePurgeableBytes();
+        m.ganeshLimit = gpu->context_->getResourceCacheLimit();
+        if (gpu->memoryAllocator_) {
+            const auto [allocated, used] = gpu->memoryAllocator_->totalAllocatedAndUsedMemory();
+            m.ganeshVmaAllocated = static_cast<size_t>(allocated);
+            m.ganeshVmaUsed = static_cast<size_t>(used);
+        }
+    }
+    const VulkanAllocatorStats s = gpu->vulkan_.memoryPool().stats();
+    m.poolHostVisibleBytes = s.hostVisibleBytes;
+    m.poolDeviceOnlyBytes = s.deviceOnlyBytes;
+    m.poolAllocations = s.activeAllocationCount;
+    m.poolBlocks = s.activeBlockCount;
+    m.poolDedicated = s.dedicatedAllocationCount;
+    m.uploadsLive = static_cast<size_t>(gpu->liveImages_.load(std::memory_order_relaxed));
+    return m;
+}
+
 // ---------------------------------------------------------------------------
 // SkiaGpu: queueing and the registry
 // ---------------------------------------------------------------------------
