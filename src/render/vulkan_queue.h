@@ -29,7 +29,10 @@ struct QueueSubmit {
     std::vector<SemaphoreSignal> signals;
 };
 
-/// The single owner of the device's graphics (and present) queue.
+/// The single owner of the device's graphics (and present) queue. (The
+/// context has a second one, VulkanContext::uploadQueue(), for the transfer
+/// family when the device has one apart from graphics; its tickets are its
+/// own timeline's.)
 ///
 /// VkQueue needs external synchronisation, so every vkQueueSubmit and
 /// vkQueuePresentKHR in bro goes through here, under one lock. Each submission

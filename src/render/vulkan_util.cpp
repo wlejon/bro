@@ -104,8 +104,8 @@ void cmdImageBarrier(VkCommandBuffer cmd, const ImageBarrier& b) {
     barrier.dstAccessMask = b.dstAccess;
     barrier.oldLayout = b.oldLayout;
     barrier.newLayout = b.newLayout;
-    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.srcQueueFamilyIndex = b.srcQueueFamily;
+    barrier.dstQueueFamilyIndex = b.dstQueueFamily;
     barrier.image = b.image;
     barrier.subresourceRange = b.range;
     vkCmdPipelineBarrier(cmd, b.srcStages, b.dstStages, 0, 0, nullptr, 0, nullptr, 1, &barrier);

@@ -50,18 +50,20 @@
  * createImageBitmap(img) without a crop shares them too. Neither side copies
  * the pixels, so receiving a 24 MP bitmap from a Worker costs the page thread
  * well under a millisecond. On the page, a bitmap of 512x512 or more starts
- * its texture upload the moment it exists — the staging copy written and the
- * GPU copy (with its mip chain, made by GPU blits) submitted on an uploader
- * thread — so the frame that first draws it, with drawImage or through a
+ * its texture upload the moment it exists — the staging copy written, the
+ * GPU copy run and its mip chain (GPU blits) submitted on an uploader thread
+ * — so the frame that first draws it, with drawImage or through a
  * bitmaprenderer canvas, samples a texture already made instead of uploading
  * 96 MB in the frame. A bitmap transferred out of a Worker starts that upload
- * as it is posted, so it overlaps the hop to the page. A drawImage in the very
- * frame the bitmap arrived, before its staging copy is written (~7 ms for
- * 24 MP), does not stall that frame: the canvas shows its new content a frame
- * or two later instead. A read that needs the pixels now (getImageData, a
- * snapshot, a headless getPixel/screenshot) waits for the rest of the staging
- * copy. Nothing waits for the GPU copy itself, which every later draw is
- * ordered behind on the queue. close() lets the pixels and
+ * as it is posted, so it overlaps the hop to the page. The GPU copy crosses
+ * the bus on the device's copy queue where it has one (a discrete GPU; tens
+ * of ms for 24 MP), beside the frames rather than in front of them. A
+ * drawImage before the upload is in — the very frame the bitmap arrived, or
+ * while its copy is in flight — does not stall the frame: the canvas keeps
+ * what it showed and shows the new content once the texture is in (a windowed
+ * frame and a headless advanceTime step alike). A read that needs the pixels
+ * now (getImageData, a snapshot, a headless getPixel/screenshot) waits for the
+ * rest of the upload. close() lets the pixels and
  * the texture go at once. A decoded `<img>` of 512x512 or more gets the same
  * upload when its decode lands, so the frame that first paints it does not
  * pay one either.

@@ -9,35 +9,49 @@
 // Pixels that are known to be wanted on screen soon — an ImageBitmap the page
 // received, a big <img> whose decode just landed — start their upload here
 // instead, when they arrive: the staging buffer is written on the uploader
-// thread, the copy and the mip chain (GPU blits) are recorded into a command
-// buffer of its own and submitted through VulkanQueue, and the first draw
-// finds a texture.
+// thread, the copy and the mip chain (GPU blits) are recorded into command
+// buffers of their own, and the first draw finds a texture.
 //
-// ORDERING, NOT WAITING. An upload is usable as soon as its copy has been
-// SUBMITTED, not when it has completed: image() hands Skia the texture with
-// every level in TRANSFER_DST_OPTIMAL, so the draw that samples it records
-// the transition out of TRANSFER_DST, whose first scope is every transfer
-// write submitted to the queue before it — the upload's. A draw never waits
-// on the upload's ticket.
+// THE COPY IS OFF THE FRAMES' QUEUE. Over a PCIe link a 24 MP copy is tens of
+// ms of GPU time (15-35 ms on a x16 link; 60-130 ms on a x4 one, or after
+// the GPU sat idle long enough for its link to train down). On the graphics
+// queue every submission after it — every frame's — completes after it, so
+// the frame ring's wait for a slot (VulkanFrames::beginFrame) blocked on the
+// copy two frames later, whether or not anything drew the picture. Where the
+// device has a transfer family apart from graphics (a discrete GPU's copy
+// engine), the copy is submitted on VulkanContext::uploadQueue() and the
+// uploader thread waits for it there; the image then changes queue family
+// (release on the copy queue, acquire on the graphics queue) in the same
+// graphics submission as the mip blits, a few ms of VRAM-to-VRAM work.
+// Without such a family (unified memory, where the copy is short) the copy
+// and the mips are one graphics submission.
 //
-// A DRAW BEFORE THE SUBMISSION. While the staging buffer is still being
-// written (a draw in the very frame the pixels arrived — the write takes
-// ~7 ms for 24 MP), the windowed frame does not wait for it: a canvas holds
-// its replay back to a later frame (CanvasScene::rasterize(mayDefer), the
-// submission wakes the loop) and keeps showing what it showed. Where the
-// pixels must be there now — getImageData, a snapshot, a headless capture,
-// the UI painter on the raster thread — ensureSubmitted() decides: an upload
-// no thread has started yet runs on the caller's thread right there (no worse
-// than Skia's own upload, minus the CPU mips); one the uploader thread is
-// writing is waited for (the rest of one memcpy). Either way the draw then
-// samples the texture.
+// ORDERING, NOT WAITING, ONCE SUBMITTED. The upload becomes Submitted with
+// its graphics submission (the mips), and is usable from then on, before it
+// completes: image() hands Skia the texture with every level in
+// TRANSFER_DST_OPTIMAL, so the draw that samples it records the transition
+// out of TRANSFER_DST, whose first scope is every transfer write submitted to
+// the queue before it — the mip blits. A draw never waits on that ticket.
+//
+// A DRAW BEFORE THE SUBMISSION. While the staging buffer is being written or
+// the copy is crossing the bus (a draw in the frame the pixels arrived, or
+// shortly after), a frame does not wait for it: a canvas holds its replay
+// back to a later frame (CanvasScene::rasterize(mayDefer), in a windowed
+// frame and a headless step; the submission wakes the loop) and keeps
+// showing what it showed. Where the pixels must be there now — getImageData,
+// a snapshot, a headless capture, the UI painter on the raster thread —
+// ensureSubmitted() decides: an upload no thread has started yet runs on the
+// caller's thread right there (no worse than Skia's own upload, minus the
+// CPU mips); one the uploader thread is running is waited for (the rest of
+// the memcpy and the copy). Either way the draw then samples the texture.
 //
 // LIFETIME. The texture (a SkiaImage, sampled through a Skia image borrowed
 // once and cached) lives as long as the upload object; dropping the last
 // reference retires it to the SkiaGpu, which destroys it once the queue has
 // finished every submission made before that. The pixels' owner is released
 // as soon as the staging copy has been made, and the staging buffer once the
-// copy's ticket completes.
+// copy is done (at once on the copy queue, else when the graphics ticket
+// completes).
 
 #include "render/renderer.h"  // SharedPixels
 
@@ -72,7 +86,8 @@ public:
     uint64_t pixelsId() const { return pixelsId_; }
     State state() const { return state_.load(std::memory_order_acquire); }
     bool submitted() const { return state() == State::Submitted; }
-    /// The queue ticket of the copy (0 until submitted).
+    /// The graphics queue ticket of the mip chain (with the copy, without a
+    /// copy queue); 0 until submitted.
     uint64_t ticket() const { return ticket_.load(std::memory_order_acquire); }
 
     /// Bring the upload to Submitted: run it on this thread if nothing has

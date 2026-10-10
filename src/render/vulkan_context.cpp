@@ -154,6 +154,18 @@ bool VulkanContext::init(platform::Window* presentTarget) {
         cleanup();
         return false;
     }
+    // A transfer family apart from graphics: uploads copy there, beside the
+    // frames, instead of in front of them on the graphics queue.
+    if (queueIndices_.transferFamily >= 0 && queueIndices_.transferFamily != queueIndices_.graphicsFamily &&
+        transferQueue_ != VK_NULL_HANDLE) {
+        if (uploadQueue_.init(device_, transferQueue_, VK_NULL_HANDLE,
+                              static_cast<uint32_t>(queueIndices_.transferFamily))) {
+            hasUploadQueue_ = true;
+        } else {
+            uploadQueue_.shutdown();
+            LOG_WARN("Vulkan: no upload queue on the transfer family; uploads copy on the graphics queue");
+        }
+    }
     pipelineCache_.init(device_, deviceProperties_);
 
     LOG_INFO("Vulkan: Initialized successfully on device: %s (Driver %u.%u.%u), API %u.%u%s",
@@ -171,6 +183,8 @@ void VulkanContext::cleanup() {
         vkDeviceWaitIdle(device_);
         pipelineCache_.shutdown();
         frames_.shutdown();
+        uploadQueue_.shutdown();
+        hasUploadQueue_ = false;
         queue_.shutdown();
         memoryPool_.cleanup(device_);
     }
@@ -332,8 +346,17 @@ VulkanQueueFamilyIndices VulkanContext::findQueueFamilies(VkPhysicalDevice devic
         if ((qf.queueFlags & VK_QUEUE_COMPUTE_BIT) && indices.computeFamily < 0) {
             indices.computeFamily = static_cast<int>(i);
         }
+        // Transfer: the copy engine (a transfer-only family) if there is one,
+        // else any family without graphics, else graphics. A family without
+        // graphics is what lets an upload's copy run beside the frames
+        // (VulkanContext::uploadQueue).
         if (qf.queueFlags & VK_QUEUE_TRANSFER_BIT) {
-            if (indices.transferFamily < 0 || !(qf.queueFlags & VK_QUEUE_GRAPHICS_BIT)) {
+            auto rank = [](VkQueueFlags f) {
+                if (f & VK_QUEUE_GRAPHICS_BIT) return 0;
+                return (f & VK_QUEUE_COMPUTE_BIT) ? 1 : 2;
+            };
+            if (indices.transferFamily < 0 ||
+                rank(qf.queueFlags) > rank(queueFamilies[static_cast<uint32_t>(indices.transferFamily)].queueFlags)) {
                 indices.transferFamily = static_cast<int>(i);
             }
         }

@@ -452,7 +452,10 @@ tells a heap that holds more from one that is only fragmented. `imageStore`
 is the decoded-image cache (`cachedBytes`, `budgetBytes`); `gpu` is Ganesh's
 resource cache and allocator (`ganeshBytes`, `ganeshAllocatorBytes`) and the
 device pool split by `poolHostVisibleBytes` (mapped: the process's own
-memory) and `poolDeviceOnlyBytes`.
+memory) and `poolDeviceOnlyBytes`; `uploadTexturesLive` counts the textures
+uploaded ahead of their draw, and `uploadCopyQueue` says whether their copies
+run on a queue of their own (a transfer family apart from graphics) or on the
+graphics queue, where a frame submitted after one waits for it.
 
 Collections the host starts are logged with `BRO_GC_LOG=1` (why: idle,
 periodic, memory pressure, the DOM sweep; and how long). Measure with an exe

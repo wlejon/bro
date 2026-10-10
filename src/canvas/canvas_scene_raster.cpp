@@ -4,6 +4,7 @@
 
 #include "canvas/canvas_scene.h"
 #include "util/log.h"
+#include "util/time.h"
 
 #include <include/core/SkData.h>
 #include <include/core/SkImage.h>
@@ -210,10 +211,11 @@ void CanvasScene::replayCommands(SkCanvas* c, std::vector<CanvasCmd>& cmds) {
 }
 
 void CanvasScene::readyUploads(std::vector<CanvasCmd>& cmds) {
-    // A draw recorded before its texture's copy was submitted (a bitmap drawn
-    // in the frame it arrived) waits for the rest of the staging write, or
-    // runs an upload nothing has started yet — never for the copy's ticket
-    // (render/gpu_image_upload.h). A failed upload leaves the raster image.
+    // A draw recorded before its texture was submitted (a bitmap drawn in the
+    // frame it arrived, a replay that may not defer) waits for the rest of
+    // the staging write and the copy, or runs an upload nothing has started
+    // yet — never for the graphics ticket (render/gpu_image_upload.h). A
+    // failed upload leaves the raster image.
     for (CanvasCmd& cmd : cmds)
         if (cmd.upload && !cmd.upload->ensureSubmitted()) cmd.upload.reset();
 }
@@ -315,12 +317,13 @@ void CanvasScene::rasterize(bool mayDefer) {
             return cmd.upload && cmd.upload->state() != render::GpuImageUpload::State::Submitted &&
                    cmd.upload->state() != render::GpuImageUpload::State::Failed;
         });
-        if (pending && uploadDeferrals_ < kMaxUploadDeferrals) {
-            ++uploadDeferrals_;
-            return;
+        if (pending) {
+            const double now = util::currentTimeMs();
+            if (uploadDeferSinceMs_ == 0) uploadDeferSinceMs_ = now;
+            if (now - uploadDeferSinceMs_ < kMaxUploadDeferMs) return;
         }
     }
-    uploadDeferrals_ = 0;
+    uploadDeferSinceMs_ = 0;
     ensureSurface(canvasW, canvasH);
 
     if (dirty_ || !commands_.empty() || canvasW != rasterizedW_ || canvasH != rasterizedH_) ++contentGeneration_;

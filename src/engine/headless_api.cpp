@@ -208,8 +208,11 @@ void Engine::flush() {
             }),
         webglEntries_.end());
 
+    // As in a windowed frame, a canvas drawing a texture whose upload is not
+    // in yet keeps what it showed rather than wait for the copy
+    // (render/gpu_image_upload.h); capturePixels and readbacks never defer.
     for (auto& cs : canvasScenes_) {
-        cs->rasterize();
+        cs->rasterize(/*mayDefer=*/true);
         if (!cs->isDetached()) continue;
         canvasSceneRegistry_.erase(cs->sceneId());
         if (auto* el = static_cast<dom::Element*>(cs->backingElement()))

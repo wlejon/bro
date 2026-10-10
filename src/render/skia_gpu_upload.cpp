@@ -166,6 +166,7 @@ SkiaGpu::MemoryStats SkiaGpu::targetMemoryStats() {
     m.poolBlocks = s.activeBlockCount;
     m.poolDedicated = s.dedicatedAllocationCount;
     m.uploadsLive = static_cast<size_t>(gpu->liveImages_.load(std::memory_order_relaxed));
+    m.uploadCopyQueue = gpu->vulkan_.uploadQueue() != nullptr;
     return m;
 }
 
@@ -333,29 +334,77 @@ void SkiaGpu::runUpload(GpuImageUpload& up) {
     std::memcpy(mapped, px.rgba, static_cast<size_t>(bytes));
     px = SharedPixels{};  // the owner may go now
 
-    // The copy and the mip chain, in a command buffer of this upload's own.
-    VkCommandPool pool = VK_NULL_HANDLE;
-    VkCommandBuffer cmd = VK_NULL_HANDLE;
-    VkCommandPoolCreateInfo poolInfo{};
-    poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-    poolInfo.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
-    poolInfo.queueFamilyIndex = static_cast<uint32_t>(vulkan_.queueFamilies().graphicsFamily);
-    VkCommandBufferAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    allocInfo.commandBufferCount = 1;
-    VkCommandBufferBeginInfo begin{};
-    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    bool recorded = vkCreateCommandPool(device, &poolInfo, nullptr, &pool) == VK_SUCCESS;
-    if (recorded) {
+    // The copy, then the mip chain. Where the device has a transfer family
+    // apart from graphics (a discrete GPU's copy engine), the copy runs on it:
+    // over PCIe a 24 MP copy is tens of ms of GPU time (60-130 ms on a x4
+    // link, or once an idle GPU's link has trained down), and on the graphics
+    // queue every frame submitted after it would
+    // finish after it, so the frame ring's wait for a frame slot two frames
+    // later waited for the copy. The uploader waits for it here instead, then
+    // gives the image to the graphics family for the mip blits (blits need a
+    // graphics queue; a few ms of VRAM-to-VRAM work). Without such a family
+    // (unified memory, where the copy is short) both are one graphics
+    // submission.
+    VulkanQueue& gfxQueue = vulkan_.queue();
+    VulkanQueue* copyQueue = vulkan_.uploadQueue();
+    const uint32_t gfxFamily = static_cast<uint32_t>(vulkan_.queueFamilies().graphicsFamily);
+    const uint32_t copyFamily =
+        copyQueue ? static_cast<uint32_t>(vulkan_.queueFamilies().transferFamily) : gfxFamily;
+    const VkImage image = img->image;
+
+    // A command buffer in a transient pool of its own, begun.
+    auto beginCommands = [&](uint32_t family, VkCommandPool& pool) -> VkCommandBuffer {
+        VkCommandPoolCreateInfo poolInfo{};
+        poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        poolInfo.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+        poolInfo.queueFamilyIndex = family;
+        if (vkCreateCommandPool(device, &poolInfo, nullptr, &pool) != VK_SUCCESS) {
+            pool = VK_NULL_HANDLE;
+            return VK_NULL_HANDLE;
+        }
+        VkCommandBufferAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        allocInfo.commandBufferCount = 1;
         allocInfo.commandPool = pool;
-        recorded = vkAllocateCommandBuffers(device, &allocInfo, &cmd) == VK_SUCCESS &&
-                   vkBeginCommandBuffer(cmd, &begin) == VK_SUCCESS;
-    }
+        VkCommandBufferBeginInfo begin{};
+        begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        VkCommandBuffer cmd = VK_NULL_HANDLE;
+        if (vkAllocateCommandBuffers(device, &allocInfo, &cmd) != VK_SUCCESS ||
+            vkBeginCommandBuffer(cmd, &begin) != VK_SUCCESS)
+            return VK_NULL_HANDLE;
+        return cmd;
+    };
+    // Every level between the copy queue and the graphics queue, in
+    // TRANSFER_DST: recorded once on each side.
+    auto ownership = [&](VkCommandBuffer cmd, bool release) {
+        ImageBarrier b;
+        b.image = image;
+        b.range = colorRange(levels);
+        b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        b.srcQueueFamily = copyFamily;
+        b.dstQueueFamily = gfxFamily;
+        if (release) {
+            b.srcStages = VK_PIPELINE_STAGE_TRANSFER_BIT;
+            b.srcAccess = VK_ACCESS_TRANSFER_WRITE_BIT;
+            b.dstStages = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+        } else {
+            b.srcStages = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+            b.dstStages = VK_PIPELINE_STAGE_TRANSFER_BIT;
+            b.dstAccess = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+        }
+        cmdImageBarrier(cmd, b);
+    };
+
+    // The copy.
+    VkCommandPool copyPool = VK_NULL_HANDLE;
+    VkCommandBuffer cmd = beginCommands(copyFamily, copyPool);
+    bool recorded = cmd != VK_NULL_HANDLE;
     if (recorded) {
         ImageBarrier toDst;
-        toDst.image = img->image;
+        toDst.image = image;
         toDst.range = colorRange(levels);
         toDst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         toDst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
@@ -367,15 +416,49 @@ void SkiaGpu::runUpload(GpuImageUpload& up) {
         VkBufferImageCopy region{};
         region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         region.imageExtent = {w, h, 1};
-        vkCmdCopyBufferToImage(cmd, staging, img->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+        vkCmdCopyBufferToImage(cmd, staging, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+        if (copyQueue) {
+            ownership(cmd, /*release=*/true);
+            recorded = vkEndCommandBuffer(cmd) == VK_SUCCESS;
+        }
+    }
 
+    // On the upload queue: submit the copy and wait for it, on this thread.
+    // The staging buffer and the copy's pool go as soon as it is done.
+    SemaphoreWait copyDone;
+    VkCommandPool gfxPool = copyPool;
+    if (recorded && copyQueue) {
+        const uint64_t copyTicket = copyQueue->submit(QueueSubmit{{cmd}, {}, {}});
+        const bool copied = copyTicket != 0 && copyQueue->wait(copyTicket);
+        if (copyTicket != 0 && !copied) copyQueue->waitIdle();  // nothing may still read what goes below
+        vkDestroyCommandPool(device, copyPool, nullptr);
+        vulkan_.destroyBuffer(staging, stagingAlloc);
+        staging = VK_NULL_HANDLE;
+        stagingAlloc = 0;
+        if (!copied) {
+            LOG_ERROR("SkiaGpu: an upload's copy could not be submitted or did not complete");
+            settle(GpuImageUpload::State::Failed);
+            return;  // img retires with its last reference
+        }
+        // Already signalled: orders the acquire after the release for the
+        // queues (and validation) without the graphics queue waiting.
+        copyDone.semaphore = copyQueue->timeline();
+        copyDone.stages = VK_PIPELINE_STAGE_TRANSFER_BIT;
+        copyDone.value = copyTicket;
+        cmd = beginCommands(gfxFamily, gfxPool);
+        recorded = cmd != VK_NULL_HANDLE;
+        if (recorded) ownership(cmd, /*release=*/false);
+    }
+
+    // The mip chain, on the graphics queue.
+    if (recorded) {
         // The mip chain on the GPU: each level a linear blit of the one above
         // (the CPU chain Skia builds for a raster image costs a 24 MP photo
         // ~100 ms; this is a millisecond or two of GPU time).
         int32_t mw = static_cast<int32_t>(w), mh = static_cast<int32_t>(h);
         for (uint32_t level = 1; level < levels; ++level) {
             ImageBarrier toSrc;
-            toSrc.image = img->image;
+            toSrc.image = image;
             toSrc.range = {VK_IMAGE_ASPECT_COLOR_BIT, level - 1, 1, 0, 1};
             toSrc.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
             toSrc.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
@@ -390,7 +473,7 @@ void SkiaGpu::runUpload(GpuImageUpload& up) {
             blit.srcOffsets[1] = {mw, mh, 1};
             blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, 0, 1};
             blit.dstOffsets[1] = {nw, nh, 1};
-            vkCmdBlitImage(cmd, img->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, img->image,
+            vkCmdBlitImage(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, image,
                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
             mw = nw;
             mh = nh;
@@ -399,7 +482,7 @@ void SkiaGpu::runUpload(GpuImageUpload& up) {
             // Every level back in TRANSFER_DST: one layout for the whole image,
             // the one Skia is told it is in.
             ImageBarrier back;
-            back.image = img->image;
+            back.image = image;
             back.range = {VK_IMAGE_ASPECT_COLOR_BIT, 0, levels - 1, 0, 1};
             back.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
             back.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
@@ -416,12 +499,13 @@ void SkiaGpu::runUpload(GpuImageUpload& up) {
     if (recorded) {
         QueueSubmit submit;
         submit.commandBuffers.push_back(cmd);
-        ticket = vulkan_.queue().submit(submit);
+        if (copyDone.semaphore != VK_NULL_HANDLE) submit.waits.push_back(copyDone);
+        ticket = gfxQueue.submit(submit);
     }
     if (ticket == 0) {
-        LOG_ERROR("SkiaGpu: an upload's copy could not be recorded or submitted");
-        if (pool != VK_NULL_HANDLE) vkDestroyCommandPool(device, pool, nullptr);
-        vulkan_.destroyBuffer(staging, stagingAlloc);
+        LOG_ERROR("SkiaGpu: an upload's copy or mip chain could not be recorded or submitted");
+        if (gfxPool != VK_NULL_HANDLE) vkDestroyCommandPool(device, gfxPool, nullptr);
+        if (staging != VK_NULL_HANDLE) vulkan_.destroyBuffer(staging, stagingAlloc);
         settle(GpuImageUpload::State::Failed);
         return;  // img retires with its last reference
     }
@@ -434,7 +518,7 @@ void SkiaGpu::runUpload(GpuImageUpload& up) {
     up.ticket_.store(ticket, std::memory_order_release);
     {
         std::lock_guard<std::mutex> lock(uploadMutex_);
-        uploadStaging_.push_back({ticket, staging, stagingAlloc, pool});
+        uploadStaging_.push_back({ticket, staging, stagingAlloc, gfxPool});
     }
     uploadCv_.notify_one();
     settle(GpuImageUpload::State::Submitted);
@@ -456,7 +540,7 @@ void SkiaGpu::freeUploadStaging(bool all) {
     }
     for (const UploadStaging& s : done) {
         vkDestroyCommandPool(vulkan_.device(), s.pool, nullptr);
-        vulkan_.destroyBuffer(s.buffer, s.allocId);
+        if (s.buffer != VK_NULL_HANDLE) vulkan_.destroyBuffer(s.buffer, s.allocId);  // none: freed after the copy
     }
 }
 

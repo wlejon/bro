@@ -40,6 +40,10 @@ struct ImageBarrier {
     VkAccessFlags srcAccess = 0;
     VkPipelineStageFlags dstStages = 0;
     VkAccessFlags dstAccess = 0;
+    // A queue family ownership transfer: the same barrier is recorded on the
+    // releasing family's queue and then on the acquiring one's.
+    uint32_t srcQueueFamily = VK_QUEUE_FAMILY_IGNORED;
+    uint32_t dstQueueFamily = VK_QUEUE_FAMILY_IGNORED;
 };
 void cmdImageBarrier(VkCommandBuffer cmd, const ImageBarrier& barrier);
 

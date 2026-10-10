@@ -223,6 +223,7 @@ Value hostMemoryBreakdown(bool sizes) {
         gpu.set("poolBlocks", num(g.poolBlocks));
         gpu.set("poolDedicated", num(g.poolDedicated));
         gpu.set("uploadTexturesLive", num(g.uploadsLive));
+        gpu.set("uploadCopyQueue", ev::fromBool(g.uploadCopyQueue));
         out.set("gpu", gpu.get());
     }
     return out.get();

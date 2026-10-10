@@ -6,7 +6,9 @@
 //  - the page receives it without copying its pixels: the delivery costs the
 //    page thread well under the ~20 ms two 96 MB copies took;
 //  - its texture upload starts when it arrives, off the page thread, so the
-//    first frame that draws it does not pay the upload (mips included);
+//    first frame that draws it does not pay the upload (mips included), and
+//    no frame waits for the copy while it is in flight (on a device with a
+//    copy queue);
 //  - it draws the right pixels whether the draw comes long after the upload
 //    finished or in the very frame it arrived (the upload still in flight),
 //    into a 2D canvas and through a bitmaprenderer canvas;
@@ -106,6 +108,45 @@ function idleFrameMs() {
     let best = Infinity;
     for (let i = 0; i < 4; i++) best = Math.min(best, frameMs());
     return best;
+}
+
+// --- Steps while the upload is in flight never wait for it -----------------
+// The copy of 96 MB over the bus is GPU time that depends on the link and
+// its power state: ~15-35 ms on a x16 link, 60-120 ms on a x4 one or one an
+// idle GPU has trained down (so this runs first, on a GPU left idle). It
+// runs on the copy queue where the device has one, and a canvas drawing the
+// bitmap before it is in keeps what it showed, so no step waits for it.
+// (Before, every frame submitted after the copy finished after it, and the
+// frame ring's wait for a slot two frames later took the copy's time.) The
+// canvas draws the bitmap every step, as a viewer redrawing it would; steps
+// are spaced like a frame loop's so they span the copy.
+{
+    const c = makeCanvas();
+    const ctx = c.getContext('2d');
+    advanceTime(16);
+    wallSleep(5000);  // an idle GPU's link trains down within seconds
+    const { bmp } = requestBitmap('inflight');
+    let worst = 0, steps = 0;
+    const t0 = perf.now();
+    while (perf.now() - t0 < 300) {
+        ctx.clearRect(0, 0, CW, CH);
+        ctx.drawImage(bmp, 0, 0, CW, CH);
+        const t = perf.now();
+        advanceTime(16);
+        worst = Math.max(worst, perf.now() - t);
+        steps++;
+        wallSleep(2);
+    }
+    // A device with no transfer family apart from graphics (Lavapipe, say)
+    // copies on the graphics queue, and a frame behind it waits.
+    const gpu = __host.memory().gpu;
+    const copyQueue = !!(gpu && gpu.uploadCopyQueue);
+    console.log(`steps drawing it while its upload is in flight: ${steps}, worst ${worst.toFixed(2)} ms` +
+                (copyQueue ? '' : ' (no copy queue: not bounded)'));
+    checkQuadrants(canvasPixel(ctx), CW, CH, 'drawn while the upload was in flight');
+    if (copyQueue) assert(worst < 25, `no step waits for a 24 MP upload's copy (worst ${worst.toFixed(2)} ms)`);
+    bmp.close();
+    c.remove();
 }
 
 // --- A: receive, let the upload land, then draw -----------------------------

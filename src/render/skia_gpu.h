@@ -183,6 +183,9 @@ public:
         size_t poolHostVisibleBytes = 0, poolDeviceOnlyBytes = 0;
         size_t poolAllocations = 0, poolBlocks = 0, poolDedicated = 0;
         size_t uploadsLive = 0;
+        // Uploads copy on a queue of their own, beside the frames
+        // (VulkanContext::uploadQueue); else on the graphics queue.
+        bool uploadCopyQueue = false;
         bool valid = false;
     };
     static MemoryStats targetMemoryStats();

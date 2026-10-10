@@ -388,15 +388,16 @@ public:
     /// Bring the backing surface to the layout size and replay the frame's
     /// commands onto it. Call once per frame before compositing.
     ///
-    /// `mayDefer` (the windowed frame): when a command draws a texture whose
-    /// upload has not been submitted yet (an ImageBitmap drawn in the frame it
-    /// arrived, its staging copy still being written), the replay waits for a
-    /// later frame instead of stalling this one — the canvas keeps showing
-    /// what it showed, for a frame or two, and the upload's submission wakes
-    /// the loop. Bounded: after kMaxUploadDeferrals frames the replay waits.
-    /// Readbacks (getImageData, snapshots) and headless captures never defer.
+    /// `mayDefer` (a windowed frame, a headless step's flush): when a command
+    /// draws a texture whose upload is not in yet (an ImageBitmap drawn in the
+    /// frame it arrived: its staging copy being written, or its copy still
+    /// crossing the bus on the copy queue), the replay waits for a later frame
+    /// instead of stalling this one — the canvas keeps showing what it showed
+    /// and the upload's submission wakes the loop. Bounded: after
+    /// kMaxUploadDeferMs of holding back the replay waits. Readbacks
+    /// (getImageData, snapshots) and headless captures never defer.
     void rasterize(bool mayDefer = false);
-    static constexpr int kMaxUploadDeferrals = 6;
+    static constexpr double kMaxUploadDeferMs = 500.0;
 
     void getScreenRect(float& x, float& y, float& w, float& h) const {
         x = screenX_; y = screenY_;
@@ -572,7 +573,7 @@ private:
     bool dirty_ = false;  // surface pixels changed since the compositor last took them
     uint64_t contentGeneration_ = 0;  // bumped by each rasterize() that changed the pixels
     int rasterizedW_ = 0, rasterizedH_ = 0;
-    int uploadDeferrals_ = 0;  // consecutive frames rasterize(mayDefer) held back for an upload
+    double uploadDeferSinceMs_ = 0;  // when rasterize(mayDefer) began holding back for an upload (0: not)
 
     // Screen-space position for compositing
     float screenX_ = 0, screenY_ = 0;

@@ -100,6 +100,13 @@ public:
     bool comparisonSamplers() const { return mutableComparisonSamplers_; }
 
     VulkanQueue& queue() { return queue_; }
+    /// The queue owner of the transfer family (the copy engine) when the
+    /// device has one apart from graphics, else null. Long copies submitted
+    /// here run beside the frames: a frame's work on queue() is never ordered
+    /// behind them. Its tickets are its own timeline's, not queue()'s, and an
+    /// image it writes changes queue family ownership (release here, acquire
+    /// on queue()).
+    VulkanQueue* uploadQueue() { return hasUploadQueue_ ? &uploadQueue_ : nullptr; }
     VulkanFrames& frames() { return frames_; }
     /// The device's pipeline cache, persisted across runs; pass it to every
     /// vkCreate*Pipelines.
@@ -231,6 +238,8 @@ private:
     // Declared after the memory pool: destroyed before it (frames free their
     // upload chunks back into the pool).
     mutable VulkanQueue queue_;  // thread-safe; const helpers submit through it
+    VulkanQueue uploadQueue_;    // the transfer family's, when apart from graphics
+    bool hasUploadQueue_ = false;
     VulkanFrames frames_;
     VulkanPipelineCache pipelineCache_;
 };
