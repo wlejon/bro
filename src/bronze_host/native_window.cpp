@@ -390,13 +390,29 @@ int32_t bro_window_getProgressValue(void) {
     return platform::desktop::getHeadlessProgressValue();
 }
 
-int32_t bro_window_notify(const char* title, const char* body, const char* icon, int32_t timeoutMs, bool silent, int32_t replacesId) {
+int32_t bro_window_notify(const char* title, const char* body, const char* icon, int32_t timeoutMs, bool silent, int32_t replacesId,
+                          const char* actions, const char* payload) {
     auto* w = getWindow();
     platform::desktop::NotificationOptions opts;
     opts.icon = icon ? icon : "";
     opts.timeoutMs = timeoutMs;
     opts.silent = silent;
     opts.replacesId = static_cast<uint32_t>(replacesId);
+    opts.payload = payload ? payload : "";
+    if (actions && *actions) {
+        const std::string all = actions;
+        size_t start = 0;
+        while (start <= all.size()) {
+            size_t end = all.find('\x1e', start);
+            if (end == std::string::npos) end = all.size();
+            const std::string pair = all.substr(start, end - start);
+            const size_t sep = pair.find('\x1f');
+            if (!pair.empty()) {
+                opts.actions.push_back({pair.substr(0, sep), sep == std::string::npos ? pair : pair.substr(sep + 1)});
+            }
+            start = end + 1;
+        }
+    }
     // The app is who notifies: its id (the Windows AUMID, the Linux desktop
     // entry) and its name.
     const engine::AppRuntimeInfo& app = engine::currentApp();

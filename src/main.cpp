@@ -9,6 +9,7 @@
 #include "bronze_host/app_module.h"
 #include "bronze_host/host_headless.h"
 #include "render/vulkan_debug.h"
+#include "platform/desktop_notifications.h"
 #include <optional>
 
 #include "broaudio/log.h"
@@ -210,6 +211,8 @@ static void printUsage() {
         "  --drm                   Run bare-metal on Linux DRM/KMS display with seat & libinput.\n"
         "  --new-instance          Start a new instance of a single-instance app instead of\n"
         "                          handing the arguments to the running one.\n"
+        "  --notification <args>   Start as a click on one of the app's notifications\n"
+        "                          (the page hears notificationclick; docs/sys-api.js).\n"
         "\n"
         "Additional bro.json options:\n"
         "  vsync (bool), resizable (bool), maxFps (number),\n"
@@ -287,17 +290,28 @@ int main(int argc, char* argv[]) {
     bool cliNoGpu    = false;
     bool cliDrm      = false;
     bool cliNewInstance = false;
+    // A click on one of the app's notifications started this run: its
+    // activation text (`--notification <args>`), or, from a Windows toast,
+    // `--notification-activated` with the text to come through COM (which
+    // also appends -Embedding).
+    std::string cliNotification;
+    bool cliNotificationCom = false;
+    bool expectNotificationArgs = false;
     std::string target;
     bool haveTarget = false;
     std::vector<std::string> appArgs;
     bool dashDash = false;
     for (const std::string& a : args) {
+        if (expectNotificationArgs) { cliNotification = a; expectNotificationArgs = false; continue; }
         if (!dashDash) {
             if (a == "--no-splash")    { cliNoSplash = true; continue; }
             if (a == "--splash")       { cliSplash = true; continue; }
             if (a == "--no-gpu")       { cliNoGpu = true; continue; }
             if (a == "--drm")          { cliDrm = true; continue; }
             if (a == "--new-instance") { cliNewInstance = true; continue; }
+            if (a == "--notification") { expectNotificationArgs = true; continue; }
+            if (a == "--notification-activated") { cliNotificationCom = true; continue; }
+            if (cliNotificationCom && (a == "-Embedding" || a == "/Embedding")) continue;
         }
         if (!haveTarget) { target = a; haveTarget = true; continue; }
         if (a == "--") dashDash = true;
@@ -334,6 +348,28 @@ int main(int argc, char* argv[]) {
     // and settle the app's id (bro.app, BRO_APP_ID).
     bro::engine::publishLaunchEnv(config);
     const bool appHasId = !config.manifest.id.empty();
+
+    // Notification clicks (docs/sys-api.js 5a): set up before anything else
+    // touches the desktop (macOS wants the notification center's delegate
+    // before the app finishes launching; a toast's activation waits on the
+    // activator this registers), and the click that started this run queued
+    // for the page.
+    {
+        std::string exePath;
+#ifdef _WIN32
+        wchar_t buf[MAX_PATH * 4];
+        const DWORD n = GetModuleFileNameW(nullptr, buf, static_cast<DWORD>(std::size(buf)));
+        if (n > 0 && n < std::size(buf)) {
+            const std::filesystem::path p(std::wstring(buf, n));
+            const std::u8string u8 = p.u8string();
+            exePath.assign(u8.begin(), u8.end());
+        }
+#endif
+        bro::platform::desktop::initNotificationActivation(bro::engine::currentApp().id, exePath,
+                                                           bro::engine::absolutePath(config.appDir),
+                                                           cliNotificationCom);
+        if (!cliNotification.empty()) bro::platform::desktop::noteLaunchNotification(cliNotification);
+    }
 
     // A single-instance app (`"singleInstance": true`): a launch while one is
     // running hands its argv and working directory over and exits, before

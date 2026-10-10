@@ -103,7 +103,7 @@ bool registerNatives_window(std::string* error) {
         fn("__bro_native.window.setProgress", p(&bro_window_setProgress), "bool", {"i32", "i32"}, error) &&
         fn("__bro_native.window.getProgressState", p(&bro_window_getProgressState), "i32", {}, error) &&
         fn("__bro_native.window.getProgressValue", p(&bro_window_getProgressValue), "i32", {}, error) &&
-        fn("__bro_native.window.notify", p(&bro_window_notify), "i32", {"str", "str", "str", "i32", "bool", "i32"}, error) &&
+        fn("__bro_native.window.notify", p(&bro_window_notify), "i32", {"str", "str", "str", "i32", "bool", "i32", "str", "str"}, error) &&
         fn("__bro_native.window.getNotificationCount", p(&bro_window_getNotificationCount), "i32", {}, error) &&
         fn("__bro_native.window.getLastNotificationTitle", p(&bro_window_getLastNotificationTitle), "str", {}, error) &&
         fn("__bro_native.window.getLastNotificationBody", p(&bro_window_getLastNotificationBody), "str", {}, error) &&

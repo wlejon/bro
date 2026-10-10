@@ -9,6 +9,7 @@
 #include "bronze_host/eval.h"
 #include "bronze_host/host_headless.h"
 #include "render/vulkan_debug.h"
+#include "platform/desktop_notifications.h"
 
 using bro::engine::parseConfig;
 using bro::engine::findAncestorProjectRoot;
@@ -118,6 +119,9 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
                 "  --splash        Show splash screen during load\n"
                 "  --no-splash     Skip splash screen\n"
                 "  -e <expr>       Evaluate JavaScript expression\n"
+                "  --notification <args>\n"
+                "                  Start as a click on a notification would: the page\n"
+                "                  hears notificationclick after load (docs/sys-api.js)\n"
                 "  --single-instance\n"
                 "                  Honour the app's \"singleInstance\": take its channel, or\n"
                 "                  hand `-- args` to the instance holding it and exit 0\n"
@@ -154,6 +158,11 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
             inlineExprs.push_back(argv[++i]);
         } else if (strcmp(argv[i], "--single-instance") == 0) {
             claimInstance = true;
+        } else if (strcmp(argv[i], "--notification") == 0 && i + 1 < argc) {
+            // This run was started by a click on one of the app's
+            // notifications, as `bro --notification <args>` is: the page
+            // hears it after load (docs/sys-api.js 5a).
+            bro::platform::desktop::noteLaunchNotification(argv[++i]);
         } else if (strcmp(argv[i], "--print-host-globals") == 0) {
             printHostGlobals = true;
         } else if (strcmp(argv[i], "--print-native-manifest") == 0 && i + 1 < argc) {

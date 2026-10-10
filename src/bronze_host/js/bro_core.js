@@ -133,7 +133,16 @@
         const timeout = typeof opts.timeout === 'number' ? Math.floor(opts.timeout) : -1;
         const silent = !!opts.silent;
         const replacesId = typeof opts.replacesId === 'number' ? (opts.replacesId >>> 0) : 0;
-        return __bro_native.window.notify(t, b, icon, timeout, silent, replacesId);
+        // Buttons: [{ action, title }]; the click hands back `action` and
+        // `payload` (Notification's notificationclick).
+        const actions = Array.isArray(opts.actions)
+            ? opts.actions.filter((a) => a && a.action !== undefined && a.action !== '')
+                .map((a) => String(a.action).replace(/[\x1e\x1f]/g, '') + '\x1f' +
+                    String(a.title === undefined ? a.action : a.title).replace(/[\x1e\x1f]/g, ''))
+                .join('\x1e')
+            : '';
+        const payload = opts.payload === undefined ? '' : String(opts.payload);
+        return __bro_native.window.notify(t, b, icon, timeout, silent, replacesId, actions, payload);
     });
 
     const trayItemCallbacks = new Map();

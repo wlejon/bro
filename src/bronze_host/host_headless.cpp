@@ -4,6 +4,7 @@
 #include "bronze_host/host_brokit.h"
 #include "bronze_host/host_gc.h"
 #include "bronze_host/host_js_modules.h"
+#include "bronze_host/host_notification.h"
 #include "bronze_host/host_storage.h"
 #include "bronze_host/host_natives.h"  // pollNet
 #include "bronze_host/host_builder.h"
@@ -285,9 +286,53 @@ void installHeadlessGlobals(engine::Engine& engine) {
                 o.set("appId", ev::fromUtf8(n.options.appId));
                 o.set("appName", ev::fromUtf8(n.options.appName));
                 o.set("via", ev::fromUtf8(n.via));
+                {
+                    ev::Persistent actions(hostArrayOf(n.options.actions.size(), [&n](size_t j) -> Value {
+                        ObjectBuilder a;
+                        a.set("action", ev::fromUtf8(n.options.actions[j].id));
+                        a.set("title", ev::fromUtf8(n.options.actions[j].title));
+                        return a.get();
+                    }));
+                    o.set("actions", actions.get());
+                }
+                o.set("payload", ev::fromUtf8(n.options.payload));
                 return o.get();
             });
         }, 1, "notifications"));
+
+    // 6d'. clickNotification(id, action?) / dismissNotification(id): what
+    // the desktop reports when the user clicks a posted notification (or
+    // its `action` button) or closes it, delivered at the next frame as a
+    // real one is (host_notification.cpp). False for an id never posted.
+    // notificationActivations({ clear }) lists what reached the page:
+    // [{ type, id, action, payload, earlierRun, raised }].
+    regBoth("clickNotification", ev::makeFunction(
+        [](Value, std::span<const Value> a) -> Value {
+            const uint32_t id = a.empty() ? 0u : static_cast<uint32_t>(ev::toDouble(a[0]));
+            const std::string action = a.size() > 1 && !ev::isUndefined(a[1]) ? ev::toUtf8(a[1]) : std::string();
+            return ev::fromBool(platform::desktop::simulateNotificationActivation(id, action, false));
+        }, 2, "clickNotification"));
+    regBoth("dismissNotification", ev::makeFunction(
+        [](Value, std::span<const Value> a) -> Value {
+            const uint32_t id = a.empty() ? 0u : static_cast<uint32_t>(ev::toDouble(a[0]));
+            return ev::fromBool(platform::desktop::simulateNotificationActivation(id, "", true));
+        }, 1, "dismissNotification"));
+    regBoth("notificationActivations", ev::makeFunction(
+        [](Value, std::span<const Value> a) -> Value {
+            const bool clear = !a.empty() && ev::isObject(a[0]) && ev::toBool(ev::getProperty(a[0], "clear"));
+            auto list = deliveredNotificationActivations(clear);
+            return hostArrayOf(list.size(), [&list](size_t i) -> Value {
+                const auto& d = list[i];
+                ObjectBuilder o;
+                o.set("type", ev::fromUtf8(d.type));
+                o.set("id", ev::fromDouble(double(d.id)));
+                o.set("action", ev::fromUtf8(d.action));
+                o.set("payload", ev::fromUtf8(d.payload));
+                o.set("earlierRun", ev::fromBool(d.earlierRun));
+                o.set("raised", ev::fromBool(d.raised));
+                return o.get();
+            });
+        }, 1, "notificationActivations"));
 
     // 6e. lastFileDialogFilter(): the filter the last open/save file dialog
     // was asked for ("Accepted files|wav;mp3;..." for <input accept>), "" for none.

@@ -117,6 +117,8 @@ void installClipboardModule() {
 void installNotificationModule() {
     bronze::embed::runEntry(bro_notification_main);
     adoptGlobalProperty("Notification");
+    // What host_notification.cpp calls with each click and dismissal.
+    adoptGlobalProperty("__bro_notificationActivated");
 }
 
 void installNetSyncModule() {

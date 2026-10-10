@@ -90,18 +90,54 @@ for (const dev of btState.devices) {
 // 'granted' and requestPermission() resolves 'granted'. `show` fires once the
 // desktop took it, `error` when nothing could show it, `close` after close().
 // A repeated `tag` replaces the earlier notification; requireInteraction keeps
-// it up until dismissed. `click` and actions are not delivered yet.
-// bro.window.notify(title, body, { icon, silent, timeout, replacesId }) is the
-// same path with the native id returned.
+// it up until dismissed. bro.window.notify(title, body, { icon, silent,
+// timeout, replacesId, actions, payload }) is the same path with the native
+// id returned.
+//
+// Clicks and actions. `actions: [{ action, title }]` adds buttons (at most
+// Notification.maxActions, 4; the desktop may show fewer). A click on the
+// notification, or on a button, raises and focuses the app's window (restored
+// if minimized) and fires `click` with `event.action` ('' for the body, else
+// the button's `action`). The user dismissing it fires `close`. A
+// notification with no listener for the event — or one an earlier run
+// posted — fires `notificationclick` / `notificationclose` on window instead,
+// with `event.notification` rebuilt from what was posted (title, body, tag,
+// icon, data, actions) and `event.action`. Events are delivered once the page
+// has loaded.
+//
+// If the app has exited, a click starts it: the launch carries the
+// notification (`--notification <args>`), and the page gets a
+// `notificationclick` on window after load, as for an earlier run.
+//   - Windows: the toast's launch/action arguments go to a COM activator
+//     (INotificationActivationCallback) registered per user under the
+//     AppUserModelID (HKCU\Software\Classes\CLSID\{...}\LocalServer32 runs
+//     `bro --notification-activated <appDir>`); a running app takes the
+//     activation in process. Tray balloons have no click.
+//   - Linux: the server's ActionInvoked and NotificationClosed signals (a
+//     running app only; the server forgets a notification when its poster
+//     exits).
+//   - macOS: a UNUserNotificationCenter delegate (inside a bundle); a click
+//     launches the bundle, which gets the notification's userInfo.
+// Headless simulates both: clickNotification(id, action?) and
+// dismissNotification(id), with the ids from notifications(), and
+// notificationActivations() lists what reached the page (docs/headless.md).
 
 const done = new Notification('Download finished', {
     body: 'report.pdf',
     icon: 'assets/done.png',   // app-relative, absolute, or file://; default bro.app.icon
     tag: 'download',
     silent: true,
+    data: { path: 'report.pdf' },
+    actions: [{ action: 'open', title: 'Open' }, { action: 'folder', title: 'Show in folder' }],
 });
 done.onshow = () => console.log('shown');
 done.onerror = () => console.log('no notification service');
+done.onclick = (e) => console.log(e.action === 'folder' ? 'reveal' : 'open', done.data.path);
+
+// Clicks on notifications nothing listens to any more, or from before this run:
+window.addEventListener('notificationclick', (e) => {
+    console.log('clicked', e.notification.title, e.action, e.notification.data);
+});
 
 // ============================================================================
 // 5. Notifications Server Host

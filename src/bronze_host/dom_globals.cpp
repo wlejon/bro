@@ -32,6 +32,7 @@
 #include "bronze_host/host_document.h"
 #include "bronze_host/host_brokit.h"
 #include "bronze_host/host_js_modules.h"
+#include "bronze_host/host_notification.h"
 #include "bronze_host/host_web_globals.h"
 #include "bronze_host/host_bro_namespaces.h"
 #include "bronze_host/host_touch.h"
@@ -543,6 +544,8 @@ void installWebHostGlobals(engine::Engine& engine) {
     // Notification (js/notification.js): over bro.window.notify, read when
     // a notification is made.
     installNotificationModule();
+    // Its clicks and dismissals, taken from the desktop once a frame.
+    installNotificationPump(engine);
     // window -> Window.prototype -> EventTarget.prototype -> Object.prototype
     // (brokit's EventTarget is installed by now), so String(window) and
     // window instanceof Window work.

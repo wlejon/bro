@@ -221,7 +221,9 @@ int32_t bro_window_getProgressState(void);
 int32_t bro_window_getProgressValue(void);
 
 // bro.window.notify
-int32_t bro_window_notify(const char* title, const char* body, const char* icon, int32_t timeoutMs, bool silent, int32_t replacesId);
+// actions: "id\x1ftitle" pairs joined by \x1e; payload: handed back with a click.
+int32_t bro_window_notify(const char* title, const char* body, const char* icon, int32_t timeoutMs, bool silent, int32_t replacesId,
+                          const char* actions, const char* payload);
 int32_t bro_window_getNotificationCount(void);
 const char* bro_window_getLastNotificationTitle(void);
 const char* bro_window_getLastNotificationBody(void);
