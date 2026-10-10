@@ -46,8 +46,9 @@ void pumpBrokitTicks();
 // 6 and 6c) must run one every frame or a bare Promise.reject is never heard.
 void drainMicrotasksAndLocalFetches(bool always = false);
 
-// Whether brokit still has a fetch, socket or watcher in flight — the realm is
-// not idle while it does (host_gc.cpp).
-bool brokitHasPendingWork();
+// Whether brokit has a fetch or an async fs call in flight — the realm is not
+// idle while it does (host_gc.cpp, the DOM sweep). An open socket or fs.watch
+// watcher is not work in flight: it may be open for the app's whole life.
+bool brokitHasWorkInFlight();
 
 }  // namespace bro::bronze_host

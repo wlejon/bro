@@ -2,6 +2,7 @@
 #include "bronze_host/host_headless_internal.h"
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/host_brokit.h"
+#include "bronze_host/host_gc.h"
 #include "bronze_host/host_js_modules.h"
 #include "bronze_host/host_storage.h"
 #include "bronze_host/host_natives.h"  // pollNet
@@ -156,7 +157,13 @@ void installHeadlessGlobals(engine::Engine& engine) {
                 const Value s = ev::getProperty(a[1], "stepMs");
                 if (!ev::isUndefined(s)) stepMs = ev::toDouble(s);
             }
-            const engine::Engine::PipelineRun run = engine.runPipelineFrames(n, stepMs);
+            engine::Engine::PipelineRun run;
+            {
+                // The frames collect as a window's do (idle and pressure
+                // GC), not as frames under a host eval, which never do.
+                HostEvalSuspend frames;
+                run = engine.runPipelineFrames(n, stepMs);
+            }
             drainMicrotasksAndLocalFetches();
             ev::Persistent o(ev::createObject());
             o.set(ev::setProperty(o.get(), "frames", ev::fromDouble(run.frames)));

@@ -74,9 +74,6 @@ struct BrokitPumps {
     ev::Persistent fsAsyncTick;
     ev::Persistent fetchHasPending;
     ev::Persistent fsAsyncHasPending;
-    ev::Persistent wsHasPending;
-    ev::Persistent netHasPending;
-    ev::Persistent fsWatchHasPending;
 };
 
 BrokitPumps* g_pumps = nullptr;
@@ -249,9 +246,6 @@ void installBrokitGlobals(engine::Engine& engine) {
     g_pumps->fsAsyncTick.set(globalProperty("__brokit_fs_async_tick"));
     g_pumps->fetchHasPending.set(globalProperty("__brokit_fetch_has_pending"));
     g_pumps->fsAsyncHasPending.set(globalProperty("__brokit_fs_async_has_pending"));
-    g_pumps->wsHasPending.set(globalProperty("__brokit_ws_has_pending"));
-    g_pumps->netHasPending.set(globalProperty("__brokit_net_has_pending"));
-    g_pumps->fsWatchHasPending.set(globalProperty("__brokit_fs_watch_has_pending"));
 }
 
 void pumpBrokitTicks() {
@@ -280,12 +274,13 @@ void drainMicrotasksAndLocalFetches(bool always) {
     }
 }
 
-bool brokitHasPendingWork() {
+bool brokitHasWorkInFlight() {
     if (!g_pumps) return false;
+    // Only requests that complete: brokit's websocket, net and fs.watch
+    // predicates are true for as long as a socket or a watcher is merely
+    // open, and an app holding one (lib/settings.js watches its settings
+    // file) would never be idle and never be collected.
     return askPending(g_pumps->fetchHasPending) ||
-           askPending(g_pumps->wsHasPending) ||
-           askPending(g_pumps->netHasPending) ||
-           askPending(g_pumps->fsWatchHasPending) ||
            askPending(g_pumps->fsAsyncHasPending);
 }
 

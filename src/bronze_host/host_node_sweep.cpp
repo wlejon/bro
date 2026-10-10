@@ -71,26 +71,6 @@ struct SweepGroup {
 
 namespace {
 
-uint64_t processPrivateBytes() {
-#if defined(_WIN32)
-    PROCESS_MEMORY_COUNTERS_EX pmc{};
-    if (GetProcessMemoryInfo(GetCurrentProcess(),
-                             reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&pmc), sizeof(pmc)))
-        return static_cast<uint64_t>(pmc.PrivateUsage);
-    return 0;
-#elif defined(__linux__)
-    unsigned long size = 0, resident = 0;
-    FILE* f = std::fopen("/proc/self/statm", "r");
-    if (!f) return 0;
-    const int got = std::fscanf(f, "%lu %lu", &size, &resident);
-    std::fclose(f);
-    if (got != 2) return 0;
-    return static_cast<uint64_t>(resident) * static_cast<uint64_t>(sysconf(_SC_PAGESIZE));
-#else
-    return 0;
-#endif
-}
-
 // ---------------------------------------------------------------------------
 // Policy
 // ---------------------------------------------------------------------------
@@ -707,7 +687,7 @@ void hostDomSweepFrame(double dtMs) {
     const double oldest = oldestYoungMs();
     const double waited = oldest >= 0.0 ? s.clockMs - oldest : 0.0;
     const bool quiet = !ev::microtasksPending() && !hasPendingAnimationFrames() &&
-                       !brokitHasPendingWork();
+                       !brokitHasWorkInFlight();
     s.quietMs = quiet ? s.quietMs + dt : 0.0;
     const bool quietDue = s.quietMs >= kQuietCollectMs && oldest > s.quietCollectAtMs;
     bool forced = false;
@@ -771,7 +751,7 @@ DomSweepStats hostDomSweepStats() {
     out.groups = s.groups.size();
     out.queued = s.queue.size() - s.head;
     for (dom::Document* doc : hostObservedDocuments()) out.nodes += doc->ownedNodeCount();
-    out.processBytes = processPrivateBytes();
+    out.processBytes = hostProcessPrivateBytes();
     return out;
 }
 
