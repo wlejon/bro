@@ -34,6 +34,8 @@ void adoptGlobalProperty(const char* name);
 // primitives); `__bro_image_gpu` (colormap, fbm2D).
 void installObserversModule();
 void installEventsModule();
+// js/clipboard.js: ClipboardItem and navigator.clipboard.write/read.
+void installClipboardModule();
 // The global object's prototype chain (host_global_proto.cpp): globalThis ->
 // <ctorName>.prototype -> EventTarget.prototype (Object.prototype without
 // one), with Symbol.toStringTag = <ctorName>, and <ctorName> registered as

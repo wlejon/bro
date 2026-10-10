@@ -2,6 +2,7 @@
 
 #include "platform/backends.h"
 #include "platform/clipboard.h"
+#include "platform/desktop_platform.h"
 #include "platform/displays.h"
 #include "platform/event_loop.h"
 #include "platform/gamepads.h"
@@ -98,7 +99,18 @@ std::unique_ptr<Window> createWindow(const WindowConfig& config) {
 
 Displays& displays() { return windowSystem().displays(); }
 Keyboard& keyboard() { return windowSystem().keyboard(); }
-Clipboard& clipboard() { return windowSystem().clipboard(); }
+// Headless is a test harness: its copies and pastes stay in the process, so
+// a test is deterministic and never eats (or reads) the developer's clipboard.
+Clipboard& clipboard() {
+    if (desktop::isHeadless()) {
+        static const bool system = [] {
+            const char* e = std::getenv("BRO_HEADLESS_SYSTEM_CLIPBOARD");
+            return e && std::strcmp(e, "1") == 0;
+        }();
+        if (!system) return localClipboard();
+    }
+    return windowSystem().clipboard();
+}
 SystemInfo& systemInfo() { return windowSystem().systemInfo(); }
 Gamepads& gamepads() { return windowSystem().gamepads(); }
 

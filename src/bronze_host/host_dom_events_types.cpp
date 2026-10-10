@@ -1,6 +1,7 @@
 #include "bronze_host/host_dom_events_types.h"
 #include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_html_interfaces.h"
+#include "bronze_host/host_runtime.h"
 
 #include <algorithm>
 #include <cctype>
@@ -17,6 +18,29 @@ HostClass g_keyboardEventClass;
 HostClass g_wheelEventClass;
 HostClass g_focusEventClass;
 HostClass g_customEventClass;
+
+// `new File([bytes], "image.png", {type})` for a pasted image: the name and
+// shape Chromium gives a pasted screenshot. undefined when File is missing.
+Value makeClipboardFile(const dom::ClipboardItem& it) {
+    ev::GlobalValue fileCtor = ev::globalValue("File");
+    if (!fileCtor.found || !ev::isFunction(fileCtor.value)) return ev::undefined();
+    ev::Persistent ctor(fileCtor.value);
+    ev::Persistent view(ev::createTypedArray(ev::elements::Uint8, static_cast<uint32_t>(it.bytes.size())));
+    ev::fillTypedArray(view.get(), it.bytes);
+    ev::Persistent parts(hostArrayOf(1, [&view](size_t) { return view.get(); }));
+    ev::Persistent opts(ev::createObject());
+    ev::Persistent mime(ev::fromUtf8(it.mime));
+    opts.set(ev::setProperty(opts.get(), "type", mime.get()));
+    const std::string ext = it.mime.size() > 6 ? it.mime.substr(6) : std::string("bin");
+    ev::Persistent name(ev::fromUtf8("image." + ext));
+    Value args[3] = {parts.get(), name.get(), opts.get()};
+    ev::CallResult r = ev::construct(ctor.get(), std::span<const Value>(args, 3));
+    if (r.thrown) {
+        reportBronzeError("pasted File", r.value);
+        return ev::undefined();
+    }
+    return r.value;
+}
 
 }  // namespace
 
@@ -258,12 +282,58 @@ void populateClipboardEvent(ObjectBuilder& b, dom::Event& e) {
             textHolder->clear();
             return ev::undefined();
         });
+        // A pasted image is a file on the web: `files` holds an
+        // "image.png" File, `items` a {kind: 'file'} entry whose getAsFile
+        // gives it, and `types` says "Files" — what a paste handler written
+        // for Chromium looks for.
+        auto images = std::make_shared<std::vector<dom::ClipboardItem>>();
+        for (const auto& it : clip->items())
+            if (!it.bytes.empty() && it.mime.rfind("image/", 0) == 0) images->push_back(it);
+
         std::vector<std::string> typeList;
         if (!textHolder->empty()) typeList.push_back("text/plain");
+        if (!images->empty()) typeList.push_back("Files");
         Value typesArr = hostArrayOf(typeList.size(), [&typeList](size_t i) {
             return ev::fromUtf8(typeList[i]);
         });
         dt.set("types", typesArr);
+
+        Value filesArr = hostArrayOf(images->size(), [&images](size_t i) {
+            return makeClipboardFile((*images)[i]);
+        });
+        dt.set("files", filesArr);
+        const size_t textItems = textHolder->empty() ? 0 : 1;
+        Value itemsArr = hostArrayOf(textItems + images->size(), [&](size_t i) -> Value {
+            ObjectBuilder item;
+            if (i < textItems) {
+                item.set("kind", ev::fromUtf8("string"));
+                item.set("type", ev::fromUtf8("text/plain"));
+                item.def("getAsFile", 0, [](Value, std::span<const Value>) { return ev::null(); });
+                item.def("getAsString", 1, [textHolder](Value, std::span<const Value> a) {
+                    Value cb = argAt(a, 0);
+                    if (!ev::isFunction(cb)) return ev::undefined();
+                    auto held = std::make_shared<ev::Persistent>(cb);
+                    const std::string text = *textHolder;
+                    postHostTask([held, text]() {
+                        ev::Persistent s(ev::fromUtf8(text));
+                        Value v = s.get();
+                        ev::CallResult r = ev::call(held->get(), ev::undefined(), std::span<const Value>(&v, 1));
+                        if (r.thrown) reportBronzeError("DataTransferItem.getAsString", r.value);
+                    });
+                    return ev::undefined();
+                });
+                return item.get();
+            }
+            const size_t k = i - textItems;
+            item.set("kind", ev::fromUtf8("file"));
+            item.set("type", ev::fromUtf8((*images)[k].mime));
+            item.def("getAsFile", 0, [images, k](Value, std::span<const Value>) {
+                return makeClipboardFile((*images)[k]);
+            });
+            item.def("getAsString", 1, [](Value, std::span<const Value>) { return ev::undefined(); });
+            return item.get();
+        });
+        dt.set("items", itemsArr);
         b.set("clipboardData", ev::setPrototype(dt.get(), dataTransferHostClass().prototype()));
     }
 }

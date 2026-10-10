@@ -106,6 +106,7 @@ Annotated `.js` files with JSDoc + examples. Read the file before using or chang
 | `image-gpu-api.js` | `bro.image.gpu.*` WebGL2 renderer (bro-side JS): `colormap`, `fbm2D`, ranging, `viewRect` |
 | `imagebitmap-api.js` | `ImageBitmap` / `createImageBitmap`: drawImage + texImage2D source, Blob decode, Worker transfer |
 | `file-api.js` | `Blob`/`File`, `FileReader`, `URL.createObjectURL` (resolves in `<img>` and `fetch`), dropped-file `dataTransfer` |
+| `clipboard-api.js` | `navigator.clipboard` readText/writeText/read/write + `ClipboardItem` (text/plain, image/png; text + image in one write), what other apps see per platform (Windows PNG + CF_DIB/CF_DIBV5), pasted images as `clipboardData.files`, headless's in-process clipboard |
 | `scene-api.js` | `bro.scene`: `SceneGraph` + `SceneNode` core: hierarchy, transforms, cameras, render settings, raycast/project, capture, `attachTo` |
 | `scene-nodes-api.js` | `bro.scene` node types: create* options (mesh/skinned/instanced, splats, shapes, sprites, HTML, lights, particles, decals, probes), `bro.impostor`, per-type SceneNode members (shaders, LOD, instances, skeletal playback) |
 | `animation-api.js` | `scene.createAnimationPlayer()`: data-driven keyframe clips for node properties, plus skeletal blend spaces, layered blending, and an authored state machine |

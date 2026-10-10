@@ -26,6 +26,7 @@
 
 extern "C" void bro_observers_main();
 extern "C" void bro_events_main();
+extern "C" void bro_clipboard_main();
 extern "C" void bro_net_sync_main();
 extern "C" void bro_image_gpu_main();
 extern "C" void bro_core_main();
@@ -100,6 +101,14 @@ void installEventsModule() {
     // DOMException brokit installed; re-registering the (same) object keeps a
     // compiled bare `DOMException` resolving to it.
     adoptGlobalProperty("DOMException");
+}
+
+// js/clipboard.js puts write()/read() on the navigator.clipboard that
+// installNavigatorGlobal made and builds on brokit's Blob, so it runs after
+// both.
+void installClipboardModule() {
+    bronze::embed::runEntry(bro_clipboard_main);
+    adoptGlobalProperty("ClipboardItem");
 }
 
 void installNetSyncModule() {

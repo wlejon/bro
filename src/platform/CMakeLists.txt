@@ -11,7 +11,7 @@ set_property(DIRECTORY PROPERTY INCLUDE_DIRECTORIES "${_bro_platform_dirs}")
 
 add_library(bro_platform STATIC
     # interfaces and policy
-    window_system.cpp keys.cpp dialogs.cpp evdev_keymap.cpp
+    window_system.cpp keys.cpp dialogs.cpp evdev_keymap.cpp clipboard_image.cpp
     # SDL window system
     sdl/sdl_window_system.cpp sdl/sdl_window.cpp sdl/sdl_runtime.cpp
     sdl/sdl_event_loop.cpp sdl/sdl_clipboard.cpp sdl/sdl_dialogs.cpp sdl/sdl_drag.cpp
@@ -32,7 +32,8 @@ endif()
 if(WIN32)
     # SetCurrentProcessExplicitAppUserModelID (the window's app id); OLE
     # DoDragDrop and the shell's drag-image helper (sdl/sdl_drag_win.cpp).
-    target_sources(bro_platform PRIVATE sdl/sdl_drag_win.cpp)
+    # The clipboard's multi-format write and image reads (sdl/win32_clipboard.cpp).
+    target_sources(bro_platform PRIVATE sdl/sdl_drag_win.cpp sdl/win32_clipboard.cpp)
     target_link_libraries(bro_platform PRIVATE shell32 ole32 uuid)
 elseif(APPLE)
     # NSDraggingSession (drags out of a window).

@@ -15,6 +15,7 @@
 #include <limits>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace bro::bronze_host {
 
@@ -30,6 +31,50 @@ Value makeClipboardValue() {
         std::string text = (!ev::isObject(textV) && !ev::isUndefined(textV)) ? ev::toUtf8(textV) : "";
         bool ok = bro::platform::setClipboardText(text);
         return ev::fromBool(ok);
+    });
+    // __writeItems(types, buffers): every representation of one
+    // ClipboardItem in one write (js/clipboard.js builds write() on it).
+    clip.def("__writeItems", 2, [](Value, std::span<const Value> a) {
+        const ev::Persistent types(argAt(a, 0));
+        const ev::Persistent buffers(argAt(a, 1));
+        std::vector<bro::platform::ClipboardData> items;
+        if (ev::isObject(types.get()) && ev::isObject(buffers.get())) {
+            const uint32_t n = static_cast<uint32_t>(
+                ev::toDouble(ev::getProperty(types.get(), "length")));
+            for (uint32_t i = 0; i < n; ++i) {
+                bro::platform::ClipboardData d;
+                d.mimeType = ev::toUtf8(ev::getElement(types.get(), i));
+                Value buf = ev::getElement(buffers.get(), i);
+                const uint8_t* data = nullptr;
+                size_t len = 0, elem = 1;
+                if (bufferBytes(buf, &data, &len, &elem) && data) d.bytes.assign(data, data + len);
+                items.push_back(std::move(d));
+            }
+        }
+        return ev::fromBool(bro::platform::clipboard().setData(items));
+    });
+    // __readItems(): [type, ArrayBuffer, ...] — the text, and the image as
+    // PNG whatever format the OS holds it in.
+    clip.def("__readItems", 0, [](Value, std::span<const Value>) {
+        std::vector<bro::platform::ClipboardData> items;
+        bool ok = true;
+        std::string text = bro::platform::getClipboardText(&ok);
+        if (!text.empty()) items.push_back({"text/plain", std::vector<uint8_t>(text.begin(), text.end())});
+        if (auto png = bro::platform::getClipboardImagePng()) items.push_back({"image/png", std::move(*png)});
+        return hostArrayOf(items.size() * 2, [&items](size_t i) -> Value {
+            const auto& it = items[i / 2];
+            if (i % 2 == 0) return ev::fromUtf8(it.mimeType);
+            return ev::createArrayBuffer(std::span<const uint8_t>(it.bytes.data(), it.bytes.size()));
+        });
+    });
+    // __readType(mime): the raw bytes the clipboard offers under one MIME
+    // type (no conversion; "image/bmp" is CF_DIB on Windows), or null. A
+    // diagnostic, for checking what another app would paste.
+    clip.def("__readType", 1, [](Value, std::span<const Value> a) {
+        const std::string mime = ev::toUtf8(argAt(a, 0));
+        auto bytes = bro::platform::clipboard().getData(mime);
+        if (!bytes) return ev::null();
+        return ev::createArrayBuffer(std::span<const uint8_t>(bytes->data(), bytes->size()));
     });
     clip.def("readText", 0, [](Value, std::span<const Value>) {
         ev::Persistent p(ev::createPromise());

@@ -306,6 +306,24 @@ public:
     explicit WaylandClipboard(Connection& c) : c_(c) {}
 
     bool setText(const std::string& text) override { return set(browl::Selection::Clipboard, text); }
+    // Every representation in one offer: text under the usual text types,
+    // everything else under its own MIME type.
+    bool setData(const std::vector<ClipboardData>& items) override {
+        browl::Seat* s = c_.seat();
+        if (!s || !s->has_selection_protocol(browl::Selection::Clipboard)) return false;
+        browl::SelectionContents contents;
+        for (const auto& it : items) {
+            if (it.mimeType == "text/plain") {
+                for (auto& t : browl::text_selection(std::string(it.bytes.begin(), it.bytes.end())))
+                    contents.push_back(std::move(t));
+            } else {
+                contents.emplace_back(it.mimeType, it.bytes);
+            }
+        }
+        const bool ok = s->set_selection(browl::Selection::Clipboard, std::move(contents));
+        c_.display().flush();
+        return ok;
+    }
     std::string getText(bool* ok) override {
         auto t = get(browl::Selection::Clipboard, ok);
         return t ? *t : std::string();

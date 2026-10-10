@@ -21,9 +21,11 @@ const KMOD_LCTRL = 0x0040;
 
 const root = document.getElementById('root');
 
-// copy/cut go to the REAL system clipboard (that is the point — a scripted
-// copy has to leave it where the key press would). Save the developer's
-// clipboard and put it back at the end so running the suite doesn't eat it.
+// copy/cut go to the clipboard the page has (that is the point — a scripted
+// copy has to leave it where the key press would). In headless that is an
+// in-process clipboard (platform::clipboard()), unless
+// BRO_HEADLESS_SYSTEM_CLIPBOARD=1 points it at the machine's — the case the
+// save/restore and the retry below are for.
 // __read/__write are the synchronous primitives behind the Promise-returning
 // navigator.clipboard.readText/writeText; a sync test wants them directly.
 const clipboardBefore = navigator.clipboard.__read();

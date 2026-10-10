@@ -41,29 +41,6 @@ public:
     }
 };
 
-// One clipboard for the shell, its page and its terminals. Clients of the
-// shell's Wayland compositor keep theirs in the compositor.
-class LocalClipboard final : public Clipboard {
-public:
-    bool setText(const std::string& text) override {
-        std::lock_guard<std::mutex> g(m_mu);
-        m_text = text;
-        return true;
-    }
-    std::string getText(bool* ok) override {
-        std::lock_guard<std::mutex> g(m_mu);
-        if (ok) *ok = true;
-        return m_text;
-    }
-    std::optional<std::vector<uint8_t>> getData(const std::string&) override { return std::nullopt; }
-    bool setPrimaryText(const std::string&) override { return false; }
-    std::optional<std::string> getPrimaryText() override { return std::nullopt; }
-
-private:
-    std::mutex m_mu;
-    std::string m_text;
-};
-
 class NoDialogs final : public DialogBackend {
 public:
     std::optional<bool> messageBox(Window*, const std::string&, bool) override { return std::nullopt; }
@@ -88,7 +65,10 @@ public:
 
     Displays& displays() override { return m_displays; }
     Keyboard& keyboard() override { return m_keyboard; }
-    Clipboard& clipboard() override { return m_clipboard; }
+    // One clipboard for the shell, its page and its terminals: this
+    // process's. Clients of the shell's Wayland compositor keep theirs in
+    // the compositor.
+    Clipboard& clipboard() override { return localClipboard(); }
     DialogBackend& dialogs() override { return m_dialogs; }
     SystemInfo& systemInfo() override { return sdlSystemInfo(); }
     Gamepads& gamepads() override { return sdlGamepads(); }
@@ -96,7 +76,6 @@ public:
 private:
     DrmDisplays m_displays;
     DrmKeyboard m_keyboard;
-    LocalClipboard m_clipboard;
     NoDialogs m_dialogs;
 };
 

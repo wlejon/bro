@@ -235,10 +235,10 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
             if (!text.empty()) {
                 pasteEvt.addItem({"text/plain", {}, text});
             }
-            for (const char* mime : {"image/png", "image/bmp", "image/jpeg"}) {
-                if (auto data = platform::clipboard().getData(mime))
-                    pasteEvt.addItem({mime, std::move(*data), ""});
-            }
+            // An image as PNG whatever the OS holds it as (a Windows
+            // screenshot is CF_DIB), the one image type the web pastes.
+            if (auto png = platform::getClipboardImagePng())
+                pasteEvt.addItem({"image/png", std::move(*png), ""});
             pasteEvt.setIsTrusted(true);
             dispatchEvent(target, pasteEvt);
 

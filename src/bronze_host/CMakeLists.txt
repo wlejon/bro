@@ -567,6 +567,7 @@ else()
 
     bro_compile_js(observers  bro_observers_main)
     bro_compile_js(events     bro_events_main)
+    bro_compile_js(clipboard  bro_clipboard_main)
     bro_compile_js(net_sync   bro_net_sync_main)
     bro_compile_js(image_gpu  bro_image_gpu_main)
     bro_compile_js(bro_core   bro_core_main  NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")

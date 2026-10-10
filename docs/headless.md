@@ -205,7 +205,7 @@ history. `execCommand("undo")` and Ctrl+Z step the same stack.
 | `forwardDelete` | Delete | One character forward. |
 | `undo`, `redo` | Ctrl+Z / Ctrl+Y | False when the host's history has nothing in that direction. |
 | `selectAll` | Ctrl+A | Selects the containing host's children, or the body's: the one command that works outside an editable. |
-| `copy`, `cut`, `paste` | Ctrl+C/X/V | Real system clipboard, not the `copy()`/`paste()` headless hooks. |
+| `copy`, `cut`, `paste` | Ctrl+C/X/V | The page's clipboard (in headless, an in-process one; see below), not the `copy()`/`paste()` headless hooks. |
 
 Returns false for an unsupported command, and for a supported one with
 nothing to act on (no editable selection, empty history, collapsed selection
@@ -216,6 +216,16 @@ inline-formatting model plaintext-v1 doesn't have, and they report
 callers can feature-detect instead of discovering it from a no-op.
 
 Unlike browsers, `paste`, `cut` and `copy` work from script without a user gesture.
+
+### Clipboard
+
+Headless has an in-process clipboard: `navigator.clipboard` (readText,
+writeText, read, write with `ClipboardItem`), `execCommand('copy')`, Ctrl+C/V
+and `<terminal>` copies all share it, and nothing reaches or reads the
+machine's clipboard, so a test's round trip is exact. Images go through it
+too (`image/png`; a bitmap put there reads back as PNG). Set
+`BRO_HEADLESS_SYSTEM_CLIPBOARD=1` to use the real OS clipboard instead, for
+checking what other apps paste. See [clipboard-api.js](clipboard-api.js).
 
 ### Settings
 
