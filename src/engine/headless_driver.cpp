@@ -254,15 +254,14 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
                 }
             }
 
-            if (config.projectRoot.empty()) {
-                if (const char* env = std::getenv("BRO_PROJECT_ROOT")) {
-                    if (*env) config.projectRoot = env;
-                }
-            }
-
+            // The nearest ancestor project, else the parent's (launcher.cpp).
+            const bool launchedProject = !config.projectRoot.empty();
             if (config.projectRoot.empty() && !config.appDir.empty()) {
                 config.projectRoot = findAncestorProjectRoot(config.appDir);
             }
+            if (config.projectRoot.empty()) config.projectRoot = inheritedProjectRoot(config.appDir);
+            // A project found either way names its own lib/system directories.
+            if (!launchedProject) applyProjectDirNames(config.projectRoot, config);
         }
 
         config.appDir = absolutize(config.appDir);

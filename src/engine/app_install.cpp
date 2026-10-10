@@ -17,6 +17,7 @@
 // Windows and macOS keep the copy and skip the entry.
 
 #include "engine/app_manifest.h"
+#include "engine/config_loader.h"
 #include "engine/launcher.h"
 #include "util/exe_dir.h"
 
@@ -253,13 +254,12 @@ void removeAll(const fs::path& p) {
     else fs::remove_all(p, ec);
 }
 
-bool copyApp(const fs::path& from, const fs::path& to, std::string& err) {
+// Copy the tree under `from` into `to`, leaving out version control and build
+// output.
+bool copyTree(const fs::path& from, const fs::path& to, std::string& err) {
     std::error_code ec;
-    fs::path staging = to;
-    staging += ".new";
-    removeAll(staging);
-    fs::create_directories(staging, ec);
-    if (ec) { err = "cannot create " + u8str(staging) + ": " + ec.message(); return false; }
+    fs::create_directories(to, ec);
+    if (ec) { err = "cannot create " + u8str(to) + ": " + ec.message(); return false; }
     for (auto it = fs::recursive_directory_iterator(from, fs::directory_options::skip_permission_denied, ec);
          it != fs::recursive_directory_iterator(); it.increment(ec)) {
         if (ec) break;
@@ -270,12 +270,27 @@ bool copyApp(const fs::path& from, const fs::path& to, std::string& err) {
             if (it->is_directory(ec)) it.disable_recursion_pending();
             continue;
         }
-        const fs::path dst = staging / rel;
+        const fs::path dst = to / rel;
         if (it->is_directory(ec)) fs::create_directories(dst, ec);
         else fs::copy_file(it->path(), dst, fs::copy_options::overwrite_existing, ec);
-        if (ec) { err = "cannot copy " + u8str(it->path()) + ": " + ec.message(); removeAll(staging); return false; }
+        if (ec) { err = "cannot copy " + u8str(it->path()) + ": " + ec.message(); return false; }
     }
-    if (ec) { err = "cannot read " + u8str(from) + ": " + ec.message(); removeAll(staging); return false; }
+    if (ec) { err = "cannot read " + u8str(from) + ": " + ec.message(); return false; }
+    return true;
+}
+
+// `lib`, when not empty, is the project library the app imports as /lib: the
+// copy carries it as its own lib/, which the engine mounts first, so the
+// installed app runs with no project around it.
+bool copyApp(const fs::path& from, const fs::path& to, const fs::path& lib, std::string& err) {
+    fs::path staging = to;
+    staging += ".new";
+    removeAll(staging);
+    if (!copyTree(from, staging, err) || (!lib.empty() && !copyTree(lib, staging / "lib", err))) {
+        removeAll(staging);
+        return false;
+    }
+    std::error_code ec;
     fs::path old = to;
     old += ".old";
     removeAll(old);
@@ -284,6 +299,16 @@ bool copyApp(const fs::path& from, const fs::path& to, std::string& err) {
     if (ec) { err = "cannot move the copy into " + u8str(to) + ": " + ec.message(); return false; }
     removeAll(old);
     return true;
+}
+
+// The project library an app inside a project imports as /lib, to bundle into
+// a copy; empty when the app has a lib/ of its own (that one wins) or sits in
+// no project.
+fs::path bundledLib(const fs::path& app) {
+    std::error_code ec;
+    if (fs::is_directory(app / "lib", ec)) return {};
+    const std::string lib = projectLibDir(findAncestorProjectRoot(u8str(app)));
+    return lib.empty() ? fs::path() : u8path(lib);
 }
 
 int usage() {
@@ -368,7 +393,7 @@ int runAppCommand(const std::vector<std::string>& args) {
         removeAll(dest);
         fs::create_directory_symlink(src, dest, ec);
         if (ec) { std::fprintf(stderr, "bro: cannot link %s: %s\n", u8str(dest).c_str(), ec.message().c_str()); return 1; }
-    } else if (!copyApp(src, dest, err)) {
+    } else if (!copyApp(src, dest, bundledLib(src), err)) {
         std::fprintf(stderr, "bro: %s\n", err.c_str());
         return 1;
     }

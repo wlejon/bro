@@ -48,3 +48,15 @@ bro                              # no args + no bro.json next to exe → project
 ```
 
 Placing a `bro.json` or `index.html` next to `bro.exe` short-circuits the manager and runs that instead. Useful for redistributing a bro app as a single zip.
+
+## A project holding several apps
+
+A project root is a folder whose `bro.json` carries project keys (`default_app`, `lib`, `system`). Its `lib` directory (default `lib/`) is mounted at `/lib` and its `system` directory at `/system` for every app inside it, so sibling apps share modules and styles by absolute path (`import { h } from '/lib/dom.js'`). `{"lib": "shared"}` mounts `shared/` instead. [helmapps](https://github.com/wlejon/helmapps) is laid out this way: one project, an app per folder, a kit in `lib/`.
+
+An app launched by its own folder finds its project like this:
+
+1. the project manifest it was launched through, if any;
+2. else the nearest ancestor folder whose `bro.json` has project keys, starting from the app's real path, so an app reached through a symlink (`bro --install --link`) still finds the project its checkout lives in;
+3. else `BRO_PROJECT_ROOT`, which a bro process sets for everything it starts, but only when the app lies inside that root. The variable reaches a terminal's shells too, so an unrelated app started from one does not take the other project's `/lib`.
+
+`bro --install` (copy) bundles the project's `lib` into the installed copy as `<id>/lib`, so the copy keeps working away from its project; an app with its own `lib/` keeps that instead. See [apps.md](apps.md#installing-and-how-launchers-find-apps).

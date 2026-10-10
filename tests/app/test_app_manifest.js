@@ -153,6 +153,17 @@ const norm = (p) => real(p).replace(/\\/g, '/').toLowerCase();
     assert(g.sys === false, 'sys, granted but not asked for, stays a stub');
 }
 
+// ---- an app inside a project ---------------------------------------------------
+// Launched by its own folder, the app walks up to the project and mounts the
+// library the project's bro.json names ("lib": "shared") at /lib.
+const member = path.resolve('tests/app/fixtures/project/member');
+{
+    const r = probe(member, '({id: bro.app.id, greeting: globalThis.sharedGreeting})',
+        { BRO_APP_HOME: path.join(scratch, 'home-member') });
+    assert(r.id === 'org.bro.test.ProjectMember', 'the member keeps its own id: ' + r.id);
+    assert(r.greeting === 'from the project library', '/lib is the project\'s "shared" folder: ' + JSON.stringify(r));
+}
+
 // ---- desktop entry and install ------------------------------------------------
 if (!fs.existsSync(windowed)) {
     console.log('test_app_manifest: no windowed bro beside ' + headless + '; --install / --desktop-entry not tested');
@@ -195,6 +206,28 @@ if (!fs.existsSync(windowed)) {
     assert(list.indexOf('org.bro.test.ManifestApp') >= 0, '--list-apps lists it: ' + list);
     cp.execFileSync(windowed, ['--uninstall', 'org.bro.test.ManifestApp'], { env: scratchEnv(env), encoding: 'utf8' });
     assert(!fs.existsSync(installed), '--uninstall removed it');
+
+    // A copy of a project's app carries the project library as its own lib/,
+    // so it runs with no project around it.
+    const appsRoot = path.dirname(installed);
+    cp.execFileSync(windowed, ['--install', member], { env: scratchEnv(env), encoding: 'utf8' });
+    const copied = path.join(appsRoot, 'org.bro.test.ProjectMember');
+    assert(fs.existsSync(path.join(copied, 'lib', 'greet.js')), 'the project library bundled at ' + copied + '/lib');
+    const inst = probe('org.bro.test.ProjectMember', '({dir: bro.app.dir, greeting: globalThis.sharedGreeting})',
+        { ...env, BRO_APP_HOME: path.join(scratch, 'home6') });
+    assert(norm(inst.dir) === norm(copied) && inst.greeting === 'from the project library',
+        'the installed copy imports its bundled /lib: ' + JSON.stringify(inst));
+    cp.execFileSync(windowed, ['--uninstall', 'org.bro.test.ProjectMember'], { env: scratchEnv(env), encoding: 'utf8' });
+
+    // A linked install follows the source, project included. (Windows needs
+    // developer mode for a symlink; there it is not tested.)
+    if (!isWin) {
+        cp.execFileSync(windowed, ['--install', member, '--link'], { env: scratchEnv(env), encoding: 'utf8' });
+        const linked = probe('org.bro.test.ProjectMember', '({greeting: globalThis.sharedGreeting})',
+            { ...env, BRO_APP_HOME: path.join(scratch, 'home7') });
+        assert(linked.greeting === 'from the project library', 'a linked install finds its project: ' + JSON.stringify(linked));
+        cp.execFileSync(windowed, ['--uninstall', 'org.bro.test.ProjectMember'], { env: scratchEnv(env), encoding: 'utf8' });
+    }
 }
 
 try { fs.rmSync(scratch, { recursive: true, force: true }); } catch (e) { /* best effort */ }

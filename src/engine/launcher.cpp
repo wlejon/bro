@@ -139,20 +139,17 @@ bool resolveLaunchTarget(const std::string& target, EngineConfig& config) {
         }
     }
 
-    // Inherit the project from a parent bro process (a launcher spawning an
-    // app inside its project).
-    if (config.projectRoot.empty()) {
-        if (const char* env = std::getenv("BRO_PROJECT_ROOT")) {
-            if (*env) config.projectRoot = env;
-        }
-    }
-
-    // Still nothing: the app was launched by pointing at its own directory
-    // and its bro.json carries no project keys. Walk up for an ancestor
-    // project manifest so /lib, /system, /std still resolve.
+    // The app was launched by pointing at its own directory and its bro.json
+    // carries no project keys. Walk up for an ancestor project manifest so
+    // /lib, /system, /std still resolve; failing that, inherit the project
+    // of a parent bro process (a launcher spawning an app inside it).
+    const bool launchedProject = !config.projectRoot.empty();
     if (config.projectRoot.empty() && !config.appDir.empty()) {
         config.projectRoot = findAncestorProjectRoot(config.appDir);
     }
+    if (config.projectRoot.empty()) config.projectRoot = inheritedProjectRoot(config.appDir);
+    // A project found either way names its own lib/system directories.
+    if (!launchedProject) applyProjectDirNames(config.projectRoot, config);
 
     // When launched via a PROJECT manifest, the app's own bro.json still
     // supplies per-app overrides (title, size). Parse it after the project so

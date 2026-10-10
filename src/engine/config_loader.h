@@ -30,6 +30,25 @@ bool parseConfig(const std::string& path,
 /// carries no project keys itself and BRO_PROJECT_ROOT isn't preset — without
 /// this, apps that import shared `/lib/*` modules only work when spawned by
 /// a parent bro process that already resolved the project root.
+///
+/// The walk starts from the app's real path, so an app reached through a
+/// symlink (`bro --install --link`) still finds the project it lives in.
 std::string findAncestorProjectRoot(const std::string& appDir);
+
+/// The project root a parent bro process published (BRO_PROJECT_ROOT), when
+/// `appDir` lies inside it; else "". The variable is inherited by everything
+/// the parent starts, a terminal's shells included, so an app elsewhere must
+/// not take another project's /lib.
+std::string inheritedProjectRoot(const std::string& appDir);
+
+/// Take a project root's `lib` and `system` directory names from its
+/// bro.json into `config` (defaults "lib" / "system"). For a root found by
+/// walking up or inherited from BRO_PROJECT_ROOT, whose manifest was not the
+/// one launched.
+void applyProjectDirNames(const std::string& projectRoot, EngineConfig& config);
+
+/// The directory a project root mounts at /lib (its manifest's `lib`, default
+/// "lib"), or "" when there is no such directory.
+std::string projectLibDir(const std::string& projectRoot);
 
 } // namespace bro::engine

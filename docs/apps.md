@@ -185,8 +185,12 @@ bro --desktop-entry <app-dir> [--exec <bro>]
 ```
 
 `--install` copies the folder there (leaving out `.git`), replacing a previous
-copy atomically. `--link` symlinks it instead, which suits a checkout you are
-working in. On Linux it also writes a FreeDesktop desktop entry,
+copy atomically. An app inside a project (see
+[projects.md](projects.md#a-project-holding-several-apps)) gets the project's
+`lib` copied in as `<id>/lib`, so `/lib/...` imports keep resolving; an app
+with its own `lib/` keeps it. `--link` symlinks the folder instead, which suits
+a checkout you are working in, and the linked app finds its project through
+the link. On Linux it also writes a FreeDesktop desktop entry,
 `$XDG_DATA_HOME/applications/<id>.desktop` (`--system`:
 `/usr/local/share/applications`). Any launcher reading the standard
 directories lists the app: `bro.apps`, helm's launcher, a GNOME or KDE menu.

@@ -1,6 +1,7 @@
 #include "engine/config_loader.h"
 #include "engine/app_manifest.h"
 #include "util/log.h"
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -233,6 +234,10 @@ std::string findAncestorProjectRoot(const std::string& appDir)
     std::error_code ec;
     fs::path dir = fs::absolute(appDir, ec);
     if (ec) return {};
+    // Through any symlink to where the app really lives: a linked install
+    // sits in the apps root, its project beside the real folder.
+    if (fs::path real = fs::weakly_canonical(dir, ec); !ec && !real.empty()) dir = real;
+    ec.clear();
 
     for (int depth = 0; depth < 8; ++depth) {
         fs::path parent = dir.parent_path();
@@ -249,6 +254,45 @@ std::string findAncestorProjectRoot(const std::string& appDir)
         dir = parent;
     }
     return {};
+}
+
+std::string inheritedProjectRoot(const std::string& appDir)
+{
+    namespace fs = std::filesystem;
+    const char* env = std::getenv("BRO_PROJECT_ROOT");
+    if (!env || !*env || appDir.empty()) return {};
+    std::error_code ec;
+    fs::path root = fs::weakly_canonical(fs::absolute(env, ec), ec);
+    if (ec) return {};
+    fs::path app = fs::weakly_canonical(fs::absolute(appDir, ec), ec);
+    if (ec) return {};
+    // Component-wise prefix: /a/proj contains /a/proj/x, not /a/project.
+    auto r = root.begin(), a = app.begin();
+    for (; r != root.end(); ++r, ++a) {
+        if (r->empty()) continue;   // a trailing separator's empty element
+        if (a == app.end() || *a != *r) return {};
+    }
+    return env;
+}
+
+void applyProjectDirNames(const std::string& projectRoot, EngineConfig& config)
+{
+    if (projectRoot.empty()) return;
+    EngineConfig scratch;
+    if (!parseConfig(projectRoot + "/bro.json", scratch)) return;
+    config.libDirName = scratch.libDirName;
+    config.systemDirName = scratch.systemDirName;
+}
+
+std::string projectLibDir(const std::string& projectRoot)
+{
+    namespace fs = std::filesystem;
+    if (projectRoot.empty()) return {};
+    EngineConfig names;
+    applyProjectDirNames(projectRoot, names);
+    std::error_code ec;
+    fs::path lib = fs::path(projectRoot) / (names.libDirName.empty() ? std::string("lib") : names.libDirName);
+    return fs::is_directory(lib, ec) ? lib.string() : std::string();
 }
 
 } // namespace bro::engine
