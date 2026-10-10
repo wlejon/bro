@@ -16,6 +16,13 @@
  * - Base cache directory discovery (`getBaseDir`)
  *
  * Mounted automatically in Bronze when `BRO_WITH_THUMB` is enabled.
+ *
+ * The cache lives in the platform's thumbnail directory
+ * (`$XDG_CACHE_HOME/thumbnails`, `%LOCALAPPDATA%\thumbnails`), except under
+ * `BRO_APP_HOME` (a test's or a scratch profile's home), where it is
+ * `<BRO_APP_HOME>/cache/thumbnails`: `getBaseDir()`, `getThumbnailPath()`
+ * and every generated file follow it, so a test never writes into the
+ * user's real cache.
  */
 
 // ============================================================================

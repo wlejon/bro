@@ -97,6 +97,7 @@
 #endif
 #if BRO_WITH_THUMB
 #include <brothumb/api.h>
+#include <brothumb/service.h>
 #endif
 #if BRO_WITH_SEAT
 #include <broseat/api.h>
@@ -540,6 +541,26 @@ void installSiblingApis(engine::Engine& engine) {
     }
 #endif
 #if BRO_WITH_THUMB
+    {
+        // BRO_APP_HOME (an app's tests, a scratch profile) holds the thumbnail
+        // cache too, as it holds bro.conf's store: a headless test's previews
+        // land under <home>/cache/thumbnails, never in the user's real
+        // %LOCALAPPDATA%\thumbnails or ~/.cache/thumbnails. Chosen once per
+        // process, before the first realm mounts bro.thumb.
+        static bool thumbServiceChosen = false;
+        const char* appHome = std::getenv("BRO_APP_HOME");
+        if (!thumbServiceChosen && appHome && *appHome) {
+            brothumb::ThumbnailService::Config cfg;
+            cfg.cache_dir =
+                std::filesystem::absolute(std::filesystem::u8path(appHome)) / "cache" / "thumbnails";
+            std::string err;
+            if (auto svc = brothumb::ThumbnailService::create(cfg, &err))
+                brothumb::api::setService(std::move(svc));
+            else
+                LOG_WARN("bro.thumb: no service under BRO_APP_HOME (%s)", err.c_str());
+        }
+        thumbServiceChosen = true;
+    }
     brothumb::api::installThumb();
     {
         static bool thumbHooksInstalled = false;
