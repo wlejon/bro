@@ -6,9 +6,13 @@
 
 #include "embed/embed.h"
 
+#include "util/log.h"
+
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdio>
+#include <cstdlib>
 
 #if defined(_WIN32)
 #  ifndef WIN32_LEAN_AND_MEAN
@@ -39,13 +43,35 @@ constexpr uint64_t kPressureMinGrowthBytes = 64ull << 20;  // at least 64 MB
 constexpr uint64_t kPressureGrowthDivisor = 4;             // or a quarter of the baseline
 constexpr double kPressureMinIntervalMs = 1000.0;          // at most one a second
 constexpr double kPressureSampleIntervalMs = 250.0;        // sample private bytes 4x a second
+constexpr double kPressureMaxWaitMs = 2000.0;              // then collect even on a busy frame
+constexpr double kPressureQuietMs = 100.0;                 // quiet this long: collect now
 
 double s_idleAccumulatorMs = 0.0;
 double s_timeSinceLastGcMs = 0.0;
 double s_timeSinceSampleMs = 0.0;
+double s_pressureWaitedMs = 0.0;
 uint64_t s_bytesAfterLastGc = 0;
 bool s_collectedForCurrentIdle = false;
+bool s_pressurePending = false;
 std::atomic<int> s_evalDepth{0};
+
+// BRO_GC_PRESSURE=0 turns the memory-pressure collection off; BRO_GC_LOG=1
+// logs every collection this file starts, with why and how long it took.
+bool envFlag(const char* name, bool fallback) {
+    const char* v = std::getenv(name);
+    if (!v || !*v) return fallback;
+    return !(v[0] == '0' && v[1] == '\0');
+}
+bool pressureEnabled() {
+    static const bool on = envFlag("BRO_GC_PRESSURE", true);
+    return on;
+}
+bool gcLogEnabled() {
+    static const bool on = envFlag("BRO_GC_LOG", false);
+    return on;
+}
+
+void collectFor(const char* why);
 
 bool underMemoryPressure() {
     if (s_timeSinceLastGcMs < kPressureMinIntervalMs) return false;
@@ -92,11 +118,31 @@ void hostCollectGarbage() {
         return;
     }
     bronze::embed::collectGarbage();
+    s_pressurePending = false;
     s_timeSinceLastGcMs = 0.0;
     s_timeSinceSampleMs = 0.0;
     s_bytesAfterLastGc = hostProcessPrivateBytes();
     s_collectedForCurrentIdle = true;
 }
+
+bool hostGcLogEnabled() {
+    return gcLogEnabled();
+}
+
+namespace {
+void collectFor(const char* why) {
+    if (!gcLogEnabled()) {
+        hostCollectGarbage();
+        return;
+    }
+    const uint64_t before = hostProcessPrivateBytes();
+    const auto t0 = std::chrono::steady_clock::now();
+    hostCollectGarbage();
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    LOG_INFO("gc: %s collection in %.1f ms, private %.1f -> %.1f MB", why, ms, before / 1048576.0,
+             hostProcessPrivateBytes() / 1048576.0);
+}
+}  // namespace
 
 uint64_t hostProcessPrivateBytes() {
 #if defined(_WIN32)
@@ -141,17 +187,29 @@ void hostNotifyIdleFrame(double dtMs) {
 
     if (isQuiescent) {
         s_idleAccumulatorMs += delta;
-        if ((!s_collectedForCurrentIdle && s_idleAccumulatorMs >= kIdleQuiescentThresholdMs) ||
-            (s_timeSinceLastGcMs >= kIdlePeriodicIntervalMs)) {
-            hostCollectGarbage();
-        }
+        if (!s_collectedForCurrentIdle && s_idleAccumulatorMs >= kIdleQuiescentThresholdMs)
+            collectFor("idle");
+        else if (s_timeSinceLastGcMs >= kIdlePeriodicIntervalMs)
+            collectFor("periodic");
+        else if (s_pressurePending && s_idleAccumulatorMs >= kPressureQuietMs)
+            collectFor("pressure (quiet)");
     } else {
         s_idleAccumulatorMs = 0.0;
         s_collectedForCurrentIdle = false;
-        if (underMemoryPressure()) {
-            hostCollectGarbage();
-            // A busy page still gets its idle collection when it settles.
-            s_collectedForCurrentIdle = false;
+        // Under pressure a busy page is collected at its next quiescent
+        // frame, or, if it never has one, once the pressure has waited
+        // kPressureMaxWaitMs: not in the frame that made it (a big bitmap
+        // arriving is a frame the page is busy showing it).
+        if (!s_pressurePending && pressureEnabled() && underMemoryPressure()) {
+            s_pressurePending = true;
+            s_pressureWaitedMs = 0.0;
+        } else if (s_pressurePending) {
+            s_pressureWaitedMs += delta;
+            if (s_pressureWaitedMs >= kPressureMaxWaitMs) {
+                collectFor("pressure (busy)");
+                // A busy page still gets its idle collection when it settles.
+                s_collectedForCurrentIdle = false;
+            }
         }
     }
 }

@@ -15,6 +15,7 @@
 #include "dom/shadow_root.h"
 #include "layout/el_video.h"
 #include "layout/el_terminal.h"
+#include "util/log.h"
 
 #include <algorithm>
 #include <chrono>
@@ -615,6 +616,8 @@ void collectForSweep() {
     s.stats.lastCollectMs =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - c0).count();
     ++s.stats.collections;
+    if (hostGcLogEnabled())
+        LOG_INFO("gc: DOM sweep collection in %.1f ms (quiet %.0f ms)", s.stats.lastCollectMs, s.quietMs);
 }
 
 bool sweepEnabled() {

@@ -21,6 +21,10 @@ void hostNotifyIdleFrame(double dtMs);
 /// where unknown. What the memory-pressure collection and perf.stats() read.
 uint64_t hostProcessPrivateBytes();
 
+/// BRO_GC_LOG=1: log each collection the host starts (idle, periodic,
+/// pressure, the DOM sweep's), with why and how long it took.
+bool hostGcLogEnabled();
+
 /// Reset idle GC timers (e.g. across app reload or major scene teardown).
 void hostResetIdleGCTimer();
 
