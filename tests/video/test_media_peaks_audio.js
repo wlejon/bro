@@ -16,6 +16,9 @@ const files = [
     { name: 'vorbis', file: path.resolve(FIX, 'quiet_loud.ogg'), rate: 22050 },
     { name: 'opus', file: path.resolve(FIX, 'quiet_loud.opus'), rate: 48000 },
 ];
+// M4A (AAC) through the platform's decoder; Linux has none (null there).
+if (os.platform() !== 'linux') files.push({ name: 'm4a', file: path.resolve(FIX, 'quiet_loud.m4a'), rate: 44100 });
+else assert(bro.media.peaks(path.resolve(FIX, 'quiet_loud.m4a')) === null, 'Linux: no AAC decoder, so M4A peaks are null');
 
 // WAV straight from the engine's own writer.
 {

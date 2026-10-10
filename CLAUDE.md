@@ -158,7 +158,7 @@ Annotated `.js` files with JSDoc + examples. Read the file before using or chang
 | `time-api.js` | `bro.time`: global pause + timescale over one engine-owned scaled clock |
 | `profiler-api.js` | `bro.profiler`: bronze's sampling profiler from script: `start({hz, threads})` / `stop({callers, report})` → per-function self/total + tier (interpreter / tier 1 / tier 2 / aot / native), caller edges, text; zero cost while stopped |
 | `gizmo-api.js` | `bro.gizmo`: 3D transform handles |
-| `video-api.js` | `<video>` playback (HTMLMediaElement subset, WebM/VP9+Opus) incl. `stepFrame`/`frameRate`, `bro.media` waveform + filmstrip analysis, `VideoEncoder` (WebM/VP9) / `GifEncoder`: RGBA in, file out |
+| `video-api.js` | `<video>` playback (HTMLMediaElement subset, WebM/VP9+Opus) incl. `stepFrame`/`frameRate`, `bro.media` waveform + filmstrip analysis + `tags` (ID3/Vorbis/FLAC/WAV/MP4 tags, cover, length; worker-callable), `VideoEncoder` (WebM/VP9) / `GifEncoder`: RGBA in, file out |
 | `iframe-api.js` | `<iframe src=dir>`: isolated sub-document (own realm/DOM/timers), input routed in |
 | `terminal-api.js` | `<terminal>` (HTMLTerminalElement) + `bro.terminal`: native terminal element over bropty; spawn/write/feed/kill, screen/scrollback/frame text, key/IME/paste routing; mouse selection + reporting, scrollback view, search, links, OSC events (title/cwd/bell/notification/progress/OSC 52/OSC 133 commands), options + theme (CSS `--terminal-*`), own compositor layer |
 | `conf-api.js` | `bro.conf`: layered desktop settings store with schemas, defaults, validation, and watcher handles |

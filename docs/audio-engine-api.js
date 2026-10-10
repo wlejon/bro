@@ -904,13 +904,16 @@ class AudioContext {
 
   /**
    * Plays a file from disk, decoding incrementally on a worker (WAV, FLAC,
-   * MP3, Ogg Vorbis, Ogg Opus — `.opus` or Opus in `.ogg`, 48 kHz; up to 2
-   * channels). Memory stays bounded by the ring whatever the file's length,
-   * and seekPlayback works for every format. Playback starts once the
-   * prebuffer is decoded. TypeError without a path;
+   * MP3, Ogg Vorbis, Ogg Opus — `.opus` or Opus in `.ogg`, 48 kHz —, M4A/MP4
+   * AAC; up to 2 channels). Memory stays bounded by the ring whatever the
+   * file's length, and seekPlayback works for every format. Playback starts
+   * once the prebuffer is decoded. TypeError without a path;
    * Error("createStreamFromFile: <reason>") when the file cannot be opened.
    * Ogg Opus needs a build with libopus (every vcpkg profile); without it
-   * the reason says so.
+   * the reason says so. M4A decodes AAC-LC (and HE-AAC where the platform
+   * decoder takes it) through Media Foundation on Windows and AudioToolbox
+   * on macOS; Linux has no AAC decoder and the reason says "M4A/AAC needs a
+   * platform AAC decoder".
    * @param {string} path
    * @param {StreamFromFileOptions} [options]
    * @returns {number} playback id
@@ -935,7 +938,8 @@ class AudioContext {
   /**
    * A disk stream's file length in seconds, known as soon as
    * createStreamFromFile returns: exact from the container for WAV, FLAC,
-   * Ogg Vorbis and Ogg Opus (granule positions, pre-skip trimmed); for MP3
+   * Ogg Vorbis and Ogg Opus (granule positions, pre-skip trimmed) and M4A
+   * (the edit list, the encoder's priming trimmed); for MP3
    * from the Xing/LAME header, else a scan of the frame headers at open
    * (no decoding). 0 for a live stream, a clip playback or an unknown id.
    * @param {number} playbackId

@@ -531,7 +531,7 @@ assert(vid.currentTime > 0, 'playback advanced');
 vid.pause();
 
 // ---------------------------------------------------------------------------
-// bro.media — the waveform and the filmstrip
+// bro.media — the waveform, the filmstrip, and a music file's tags
 // ---------------------------------------------------------------------------
 //
 // A timeline has to show what is INSIDE a file, not just play it. Neither the
@@ -570,13 +570,15 @@ vid.pause();
 //     is empty.
 //
 //   Formats: anything a media backend opens (built in: WebM), plus audio-only
-//   files — WAV, FLAC, MP3, Ogg Vorbis and Ogg Opus — decoded through
-//   broaudio's streaming decoders a chunk at a time (never the whole file in
-//   memory), seeking to `from`. Same shape and window rules for both; for an
-//   audio-only file `sampleRate` is the file's own rate (48000 for Opus) and
-//   `duration` comes from the container (MP3 without a Xing header: from a
-//   frame-header scan, so it includes the encoder delay). M4A/AAC needs a
-//   backend that decodes it.
+//   files — WAV, FLAC, MP3, Ogg Vorbis, Ogg Opus and M4A (AAC) — decoded
+//   through broaudio's streaming decoders a chunk at a time (never the whole
+//   file in memory), seeking to `from`. Same shape and window rules for both;
+//   for an audio-only file `sampleRate` is the file's own rate (48000 for
+//   Opus) and `duration` comes from the container (MP3 without a Xing header:
+//   from a frame-header scan, so it includes the encoder delay; M4A: the edit
+//   list, priming trimmed). M4A decodes through the platform's AAC decoder
+//   (Media Foundation on Windows, AudioToolbox on macOS); on Linux there is
+//   none and an M4A gives null.
 //
 //   Cost: one audio decode of the span. ~350 ms for five minutes of AAC.
 
@@ -593,6 +595,56 @@ if (peaks) {
 // A minute of a long one, at a resolution the whole file could not afford:
 // 6000 buckets over 60 s is 10 ms each, and it costs a minute of decoding.
 const near = bro.media.peaks('vod.m3u8', { buckets: 6000, from: 3600, to: 3660 });
+
+// bro.media.tags(path)
+//   → { title, artist, album, albumArtist,   strings, '' when absent; several
+//                                            artists joined with ", "
+//       track, trackTotal, disc, discTotal,  numbers, 0 when absent ("3/12")
+//       year, genre,                         year from any date ("2021-05-03");
+//                                            ID3v1 genre numbers as names
+//       duration,                            seconds, 0 when the file does not say
+//       sampleRate, channels,
+//       bitrate,                             average bits per second of the audio
+//       codec,                               'mp3' 'flac' 'vorbis' 'opus' 'pcm'
+//                                            'float' 'aac' 'alac' ...
+//       container,                           'mp3' 'flac' 'ogg' 'wav' 'mp4'
+//       picture }                            { mime, bytes: Uint8Array } — the
+//                                            front cover, else the first
+//                                            picture — or null
+//   → null when the file cannot be opened or is not one of the formats below.
+//
+//   A music file's tags and length WITHOUT decoding it, and without reading
+//   all of it: the headers, the tag blocks, and for a length the last Ogg page
+//   or an MP3 frame header or two (a VBR MP3 with no Xing/VBRI header is the
+//   exception: its frame headers are walked, a few bytes each). The format is
+//   found from the bytes, not the extension. Native (broaudio's tag reader),
+//   synchronous, and callable from a Worker — a library scan should run it
+//   there.
+//
+//   Container   Tags                                       Length
+//   MP3         ID3v2.2/2.3/2.4 (unsynchronisation,         Xing/Info or VBRI;
+//               extended headers, Latin-1/UTF-16/UTF-8),    else the bit rate
+//               ID3v1 filling what v2 left empty            (CBR); else a walk
+//   FLAC        VORBIS_COMMENT + PICTURE (an ID3v2 tag in   STREAMINFO
+//               front is read past)
+//   Ogg         Vorbis / Opus comments, incl. a base64      last granule (Opus
+//               METADATA_BLOCK_PICTURE                      pre-skip trimmed)
+//   WAV         LIST/INFO, an "id3 " chunk                  data size / byte rate
+//   MP4 / M4A   moov/udta/meta/ilst: ©nam ©ART ©alb aART    edit list, else mdhd
+//               trkn disk ©day ©gen gnre covr
+//
+//   Tags are read on every platform; whether an M4A PLAYS is the AAC decoder's
+//   business (see createStreamFromFile in audio-engine-api.js). It is not a
+//   media backend call: a host's registered backends do not add formats here.
+
+// In a library scan's worker:
+self.onmessage = (e) => {
+    const t = bro.media.tags(e.data.path);
+    if (!t) return self.postMessage({ path: e.data.path, unreadable: true });
+    const cover = t.picture ? t.picture.bytes : null;      // JPEG/PNG bytes: decode with createImageBitmap(new Blob([cover]))
+    self.postMessage({ path: e.data.path, title: t.title || null, artist: t.artist, track: t.track,
+                       seconds: t.duration, cover }, cover ? [cover.buffer] : []);
+};
 
 // bro.media.thumbnails(path, { count = 24, height = 72, from = 0, to = 0 })
 //   → { width, height, count,  width is per thumbnail, from the DISPLAYED aspect

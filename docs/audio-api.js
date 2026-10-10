@@ -1234,11 +1234,14 @@ class AudioContext {
   // ── Decoding ────────────────────────────────────────────────────────────
 
   /**
-   * Decodes WAV / FLAC / MP3 / Ogg Vorbis / Ogg Opus bytes synchronously
-   * (format from the leading bytes; Opus decodes at 48 kHz over libopus, in
-   * every build with vcpkg — without libopus Opus input fails with a reason
-   * saying so), resamples to the engine rate, and returns an
-   * already-settled promise of an AudioBuffer. M4A/AAC is not decoded.
+   * Decodes WAV / FLAC / MP3 / Ogg Vorbis / Ogg Opus / M4A (AAC) bytes
+   * synchronously (format from the leading bytes; Opus decodes at 48 kHz
+   * over libopus, in every build with vcpkg — without libopus Opus input
+   * fails with a reason saying so; M4A/MP4 AAC decodes through the
+   * platform's decoder, Media Foundation on Windows and AudioToolbox on
+   * macOS, and fails on Linux with "M4A/AAC needs a platform AAC decoder"),
+   * resamples to the engine rate, and returns an already-settled promise of
+   * an AudioBuffer.
    * The AudioBuffer (and the promise object itself, so
    * `ctx.decodeAudioData(bytes).samples` works without awaiting) also carry
    * the AudioDecodedBuffer fields. `successCallback` / `errorCallback` are
@@ -1256,7 +1259,7 @@ class AudioContext {
   /**
    * Decodes a file synchronously (resampled to the engine rate): the same
    * formats as decodeAudioData, chosen by extension (.wav .flac .mp3
-   * .ogg .opus; .ogg/.opus sniff Vorbis vs Opus).
+   * .ogg .opus .m4a .m4b .mp4; .ogg/.opus sniff Vorbis vs Opus).
    * @param {string} path
    * @returns {AudioDecodedBuffer|null} null when missing or undecodable
    */

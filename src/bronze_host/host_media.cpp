@@ -10,6 +10,9 @@
 #include <cmath>
 #include <string>
 #include <vector>
+#if BRO_WITH_AUDIO
+#include "broaudio/io/audio_tags.h"
+#endif
 #endif
 
 namespace bro::bronze_host {
@@ -120,6 +123,47 @@ static Value js_media_thumbnails(Value, std::span<const Value> a) {
     return out.get();
 }
 
+#if BRO_WITH_AUDIO
+// bro.media.tags(path): a music file's tags, length and format, read by
+// broaudio's tag reader (headers and tag blocks only, never the audio).
+static Value js_media_tags(Value, std::span<const Value> a) {
+    if (a.empty()) return ev::throwTypeError("tags(path)");
+    const std::string path = resolveMediaPath(ev::toUtf8(a[0]));
+    broaudio::AudioTags t;
+    if (!broaudio::readAudioTags(path.c_str(), t)) return ev::null();
+
+    // Each value is made as it is stored, so none is held across another's allocation.
+    ObjectBuilder out;
+    auto str = [&](const char* name, const std::string& s) { out.set(name, ev::fromUtf8(s)); };
+    auto num = [&](const char* name, double v) { out.set(name, ev::fromDouble(v)); };
+    str("title", t.title);
+    str("artist", t.artist);
+    str("album", t.album);
+    str("albumArtist", t.albumArtist);
+    num("track", t.track);
+    num("trackTotal", t.trackTotal);
+    num("disc", t.disc);
+    num("discTotal", t.discTotal);
+    num("year", t.year);
+    str("genre", t.genre);
+    num("duration", t.duration);
+    num("sampleRate", t.sampleRate);
+    num("channels", t.channels);
+    num("bitrate", t.bitrate);
+    str("codec", t.codec);
+    str("container", t.container);
+    if (t.hasPicture) {
+        ObjectBuilder pic;
+        pic.set("mime", ev::fromUtf8(t.picture.mime));
+        pic.set("bytes", makeUint8Array(t.picture.bytes));
+        out.set("picture", pic.get());
+    } else {
+        out.set("picture", ev::null());
+    }
+    return out.get();
+}
+#endif
+
 } // namespace
 
 Value makeBroMediaValue() {
@@ -127,6 +171,9 @@ Value makeBroMediaValue() {
     media.set("available", ev::fromBool(true));
     media.def("peaks", 2, js_media_peaks);
     media.def("thumbnails", 2, js_media_thumbnails);
+#if BRO_WITH_AUDIO
+    media.def("tags", 1, js_media_tags);
+#endif
     return media.get();
 }
 
