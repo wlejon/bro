@@ -97,6 +97,8 @@
  *                                     the first frame is encoded)
  *       bitrateKbps, fps, codecs,     (while hosting) the configuration
  *       stats: { submitted, encoded, keyframes, replaced, unwatched, failed, streams,
+ *                repeats,            the last picture encoded again with no new frame: sharpening a
+ *                                    still screen, or the keyframe a viewer asked for
  *                windowWaits,        frames submitted while a viewer was at its ack window
  *                lanes,              input lanes joined
  *                audioLanes,         audio lanes joined
