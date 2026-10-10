@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<html>
+<head><title>Unwatched App</title></head>
+<body>
+<p>an installed app that is not watched for source changes</p>
+<script>
+window.keysSeen = [];
+document.addEventListener('keydown', (e) => window.keysSeen.push(e.key));
+</script>
+</body>
+</html>

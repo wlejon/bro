@@ -25,6 +25,8 @@ Unchanged script units load from the [code cache](code-cache.md); while a unit c
 - `"watch": false` in `bro.json`.
 - `BRO_WATCH=0` (`BRO_WATCH=1` forces it on over the manifest).
 
+An app that is not watched also gets **F5** for itself: `system_reload_app` is defined but unbound, so the key reaches the page as an ordinary `keydown` (a file manager's refresh, say). An app or user can still bind the action to a key in [settings](settings.md).
+
 It is never on for `bro-headless`, `bro-server`, or an app with an `app.dll`.
 
 ## JIT tier

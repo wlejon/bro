@@ -214,7 +214,11 @@ void Engine::construct(const EngineConfig& config) {
     settings_ = std::make_unique<Settings>(config.settingsPath);
     settings_->defineEngineAction("system_toggle_perf", {"F8"});
     settings_->defineEngineAction("system_toggle_settings", {});
-    settings_->defineEngineAction("system_reload_app", {"F5"});
+    // F5 belongs to the edit loop: an app that is not watched for source
+    // changes (bro.json `"watch": false`, or BRO_WATCH=0) gets the key for
+    // itself. The action still exists, unbound, for an app or user to bind.
+    settings_->defineEngineAction("system_reload_app",
+                                  watchSources_ ? std::vector<std::string>{"F5"} : std::vector<std::string>{});
     settings_->applyAppOverrides(config.graphics, config.input);
 
     auto& gfx = settings_->graphics();

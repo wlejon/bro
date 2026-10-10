@@ -1,0 +1,5 @@
+{
+  "id": "org.bro.test.UnwatchedApp",
+  "name": "Unwatched App",
+  "watch": false
+}
