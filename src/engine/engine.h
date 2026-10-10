@@ -756,6 +756,19 @@ private:
 
     // App-realm lifecycle (engine_init.cpp + app_reload.cpp)
     void initAppRealm();
+    // The page's first script unit — every classic script as one, else the
+    // first module script — as initAppRealm runs it; false when there is none.
+    struct PageScriptUnit {
+        std::string code;
+        std::string name;
+        bool moduleFile = false;
+    };
+    bool firstPageScriptUnit(PageScriptUnit& out) const;
+    std::string combinedClassicScripts() const;
+    // At launch, while the GPU comes up: the realm's host globals installed
+    // and the page's first script compiling on its own thread, for
+    // initAppRealm's run of it to take.
+    void beginPageCompile();
     void performAppReload();
     // After a reload whose page failed (index.html unloadable, or a top-level
     // script threw): the error, logged and shown over whatever the page drew.

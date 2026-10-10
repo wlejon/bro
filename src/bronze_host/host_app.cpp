@@ -408,13 +408,41 @@ Value makeBroAppValue() {
         s.set("loadedMs", ev::fromDouble(engine::documentLoadedMs()));
         s.set("firstFrameMs", ev::fromDouble(engine::firstFrameMs()));
         // How the graphics came up: the window, the GPU, and both (headless
-        // does the two at once).
+        // does the two at once), with when they began and when the GPU was up.
         const engine::GraphicsStartup g = engine::graphicsStartup();
         ObjectBuilder gfx;
         gfx.set("windowMs", ev::fromDouble(g.windowMs));
         gfx.set("gpuMs", ev::fromDouble(g.gpuMs));
         gfx.set("totalMs", ev::fromDouble(g.totalMs));
+        gfx.set("startAtMs", ev::fromDouble(g.startAtMs));
+        gfx.set("readyAtMs", ev::fromDouble(g.readyAtMs));
         s.set("graphics", gfx.get());
+        // How the page's first script came up beside the GPU: the host
+        // globals installed and the script compiled while the device came
+        // up, and how much of that work the device hid (overlapMs: the part
+        // of it done before readyAtMs).
+        const engine::PageStartup p = engine::pageStartup();
+        ObjectBuilder page;
+        page.set("globalsAtMs", ev::fromDouble(p.globalsAtMs));
+        page.set("globalsMs", ev::fromDouble(p.globalsMs));
+        page.set("compileStartMs", ev::fromDouble(p.compileStartMs));
+        page.set("compileEndMs", ev::fromDouble(p.compileEndMs));
+        page.set("compileMs", ev::fromDouble(p.compileStartMs >= 0.0 && p.compileEndMs >= 0.0
+                                                   ? p.compileEndMs - p.compileStartMs
+                                                   : -1.0));
+        page.set("waitMs", ev::fromDouble(p.waitMs));
+        page.set("codeCache", ev::fromUtf8(p.codeCache));
+        double overlap = -1.0;
+        if (g.readyAtMs >= 0.0 && (p.globalsAtMs >= 0.0 || p.compileStartMs >= 0.0)) {
+            // The globals, then the compile, back to back on the page side.
+            const double from = std::max(p.globalsAtMs >= 0.0 ? p.globalsAtMs : p.compileStartMs, g.startAtMs);
+            const double to = std::min(p.compileEndMs >= 0.0 ? p.compileEndMs
+                                                            : p.globalsAtMs + p.globalsMs,
+                                       g.readyAtMs);
+            overlap = std::max(0.0, to - from);
+        }
+        page.set("overlapMs", ev::fromDouble(overlap));
+        s.set("page", page.get());
         return s.get();
     }, nullptr);
 

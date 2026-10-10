@@ -46,6 +46,21 @@ bronze::embed::CallResult evalScriptJitResult(engine::Engine& engine, const std:
                                               bronze::embed::ModuleHandle* moduleHandleOut = nullptr,
                                               bool moduleFile = false);
 
+/// Starts compiling the page's first script on another thread, ahead of its
+/// run: the realm's host globals are installed here (on this, the page
+/// thread) and the compile's inputs captured, so the compile itself needs
+/// nothing from this thread. The engine calls it while the GPU comes up; the
+/// evalAppScript that later runs exactly this script (same text, name and
+/// module-ness) takes the compiled program instead of compiling again,
+/// waiting for the rest of the compile if it is still going. Only one at a
+/// time; false (nothing started) when JIT evaluation is off or `code` is
+/// empty.
+bool startAppScriptCompile(engine::Engine& engine, const std::string& code, const std::string& filename,
+                           bool moduleFile);
+
+/// Waits out and drops a compile startAppScriptCompile began that no run took.
+void discardAppScriptCompile();
+
 /// Evaluates JavaScript code in-memory using the Brass JIT engine without disk files.
 /// Returns true on success, false on failure (and logs error / sets test failure).
 bool evalScriptJit(engine::Engine& engine, const std::string& code, const std::string& filename = {},

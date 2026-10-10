@@ -262,29 +262,43 @@ void Engine::construct(const EngineConfig& config) {
     // - Server: never initializes graphics.
     // Headless never reaches the desktop: tray, notifications, taskbar
     // progress and the bell record their state instead of touching the OS.
+    //
+    // The graphics come up in two halves with the page's script between them
+    // (beginPageCompile): the GPU is the long pole (~160-190 ms on Windows:
+    // the Vulkan loader and the GPU driver, instance, device, presenter,
+    // Skia's context), and nothing before the page's first run needs it, so
+    // the realm's host globals are installed and its first script compiled
+    // while the device comes up rather than after.
     platform::desktop::setHeadless(displayMode_ == DisplayMode::Headless);
+    GraphicsStartup gfxTiming;
+    gfxTiming.startAtMs = sinceStartMs();
+    const double gfxStart = util::currentTimeMs();
+    render::SkiaGpu* headlessSkiaGpu = nullptr;
+    std::string gpuInitError;
+    std::thread gpuInit;
+    double gpuMs = -1.0, gpuReadyAt = -1.0;
+    struct JoinOnExit {
+        std::thread& t;
+        ~JoinOnExit() { if (t.joinable()) t.join(); }
+    } joinGpuInit{gpuInit};
     if (displayMode_ == DisplayMode::Headless) {
         // The offscreen device needs no window, so it comes up on a thread
-        // while this one creates the hidden window. The device is the long
-        // pole (~160 ms on Windows: loading the Vulkan loader and the GPU
-        // driver, instance, device, presenter, Skia's context); the window
-        // (~90 ms, SDL's video init, which loads the same Vulkan loader for a
-        // SDL_WINDOW_VULKAN window) now runs inside it instead of before it.
-        // Nothing else touches the context, the presenter or skiaGpu_ until
-        // the join.
-        render::SkiaGpu* headlessSkiaGpu = nullptr;
-        std::string gpuInitError;
-        std::thread gpuInit;
-        const double gfxStart = util::currentTimeMs();
-        double gpuMs = -1.0, windowMs = -1.0;
+        // while this one creates the hidden window (~90 ms, SDL's video init,
+        // which loads the same Vulkan loader for a SDL_WINDOW_VULKAN window),
+        // installs the host globals and starts the page's compile. Nothing
+        // else touches the context, the presenter or skiaGpu_ until the join.
         if (config.graphics.useGPU) {
-            gpuInit = std::thread([this, &headlessSkiaGpu, &gpuInitError, &gpuMs] {
+            gpuInit = std::thread([this, &headlessSkiaGpu, &gpuInitError, &gpuMs, &gpuReadyAt] {
                 const double t0 = util::currentTimeMs();
                 struct Timed {
                     double t0;
                     double& out;
-                    ~Timed() { out = util::currentTimeMs() - t0; }
-                } timed{t0, gpuMs};
+                    double& readyAt;
+                    ~Timed() {
+                        out = util::currentTimeMs() - t0;
+                        readyAt = sinceStartMs();
+                    }
+                } timed{t0, gpuMs, gpuReadyAt};
                 try {
                     render::VulkanContextConfig vkCfg;
                     vkCfg.headless = true;
@@ -304,10 +318,6 @@ void Engine::construct(const EngineConfig& config) {
                 }
             });
         }
-        struct JoinOnExit {
-            std::thread& t;
-            ~JoinOnExit() { if (t.joinable()) t.join(); }
-        } joinGpuInit{gpuInit};
 
         try {
             const auto backend = config.graphics.useGPU ? platform::GraphicsBackend::Vulkan
@@ -335,24 +345,9 @@ void Engine::construct(const EngineConfig& config) {
             LOG_INFO("Headless window creation skipped: %s", e.what());
             window_.reset();
         }
-        windowMs = util::currentTimeMs() - gfxStart;
-
-        if (gpuInit.joinable()) gpuInit.join();
-        noteGraphicsStartup(windowMs, gpuMs, util::currentTimeMs() - gfxStart);
-        if (!gpuInitError.empty()) throw std::runtime_error(gpuInitError);
-        if (config.graphics.useGPU) {
-#if BRO_WITH_3D
-            scene::SceneRenderer::setDefaultVulkanContext(vulkanContext_.get());
-#endif
-            LOG_INFO("Engine: Headless Vulkan initialized successfully");
-        }
-        // Without the GPU, Skia draws the same layers on the CPU and the
-        // frame composites on the CPU: one pipeline either way.
-        auto skia = std::make_unique<render::SkiaRenderer>();
-        if (vulkanPresenter_) skia->setGpu(headlessSkiaGpu);
-        renderer_ = std::move(skia);
+        gfxTiming.windowMs = util::currentTimeMs() - gfxStart;
     } else if (displayMode_ == DisplayMode::Windowed) {
-        try {
+        {
             const auto backend = config.graphics.useGPU ? platform::GraphicsBackend::Vulkan
                                                         : platform::GraphicsBackend::Software;
             window_ = platform::createWindow(primaryWindowConfig(config, gfx, backend));
@@ -382,7 +377,65 @@ void Engine::construct(const EngineConfig& config) {
                 viewportWidth_ = ww;
                 viewportHeight_ = wh;
             }
+        }
+        gfxTiming.windowMs = util::currentTimeMs() - gfxStart;
+    } else if (displayMode_ == DisplayMode::Drm) {
+        initDrm(config);
+    } else {
+        renderer_ = std::make_unique<render::RasterRenderer>();
+    }
 
+    auto initAudio = [&] {
+        audioEngine_ = std::make_unique<broaudio::Engine>();
+        if (displayMode_ == DisplayMode::Windowed || config.realAudio) {
+            // The app's identity names its streams in the system mixer (the
+            // PipeWire node, SDL's app name), as it names the window.
+            broaudio::AudioDeviceConfig audioCfg;
+            audioCfg.appId = config.appId;
+            audioCfg.appName = config.manifest.name.empty() ? config.appId : config.manifest.name;
+            if (!audioEngine_->init(audioCfg)) audioEngine_->initHeadless();
+        } else {
+            audioEngine_->initHeadless();
+        }
+        SceneAudioSync::install(audioEngine_.get());
+    };
+
+    // The page's first script compiles on its own thread from here; its run
+    // (initAppRealm) takes the program. Windowed, the device below comes up
+    // on this thread meanwhile; headless, it is already coming up on its own.
+    // Audio first: AudioContext binds the engine's audio engine when the host
+    // globals are installed. BRO_STARTUP_OVERLAP=0 keeps the order bro had
+    // (device, audio, then the page compiled when it runs), to measure what
+    // the overlap is worth or to rule it out.
+    const char* overlapEnv = std::getenv("BRO_STARTUP_OVERLAP");
+    const bool overlapPage = (displayMode_ == DisplayMode::Headless || displayMode_ == DisplayMode::Windowed) &&
+                             !(overlapEnv && std::string(overlapEnv) == "0");
+    if (overlapPage) {
+        initAudio();
+        beginPageCompile();
+    }
+
+    if (displayMode_ == DisplayMode::Headless) {
+        if (gpuInit.joinable()) gpuInit.join();
+        if (!gpuInitError.empty()) throw std::runtime_error(gpuInitError);
+        if (config.graphics.useGPU) {
+#if BRO_WITH_3D
+            scene::SceneRenderer::setDefaultVulkanContext(vulkanContext_.get());
+#endif
+            LOG_INFO("Engine: Headless Vulkan initialized successfully");
+        }
+        // Without the GPU, Skia draws the same layers on the CPU and the
+        // frame composites on the CPU: one pipeline either way.
+        auto skia = std::make_unique<render::SkiaRenderer>();
+        if (vulkanPresenter_) skia->setGpu(headlessSkiaGpu);
+        renderer_ = std::move(skia);
+    } else if (displayMode_ == DisplayMode::Windowed) {
+        // The device is chosen against the window's surface (VulkanContext::
+        // init), and the surface stays on this thread (a Cocoa view must be
+        // made on the main thread), so the device comes up here while the
+        // page's compile runs on its own.
+        const double gpuStart = util::currentTimeMs();
+        {
             renderer_ = render::createRenderer();
             if (!renderer_) {
                 throw std::runtime_error("Failed to create renderer");
@@ -409,15 +462,18 @@ void Engine::construct(const EngineConfig& config) {
 #endif
                 if (auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get()))
                     skia->setGpu(createSkiaGpu());
+                gpuMs = util::currentTimeMs() - gpuStart;
+                gpuReadyAt = sinceStartMs();
             }
-        } catch (const std::exception& e) {
-            throw;
         }
-    } else if (displayMode_ == DisplayMode::Drm) {
-        initDrm(config);
-    } else {
-        renderer_ = std::make_unique<render::RasterRenderer>();
     }
+    if (displayMode_ == DisplayMode::Headless || displayMode_ == DisplayMode::Windowed) {
+        gfxTiming.gpuMs = gpuMs;
+        gfxTiming.readyAtMs = gpuReadyAt;
+        gfxTiming.totalMs = util::currentTimeMs() - gfxStart;
+        noteGraphicsStartup(gfxTiming);
+    }
+    if (!overlapPage) initAudio();
 
     deviceScale_.configured = config.deviceScaleFactor;
     updateDeviceScale();
@@ -435,20 +491,6 @@ void Engine::construct(const EngineConfig& config) {
         if (hostComp && std::string(hostComp) == "1" && isShellApp())
             startShellCompositor(viewportWidth_, viewportHeight_, "", /*xwayland=*/false);
     }
-
-    audioEngine_ = std::make_unique<broaudio::Engine>();
-    if (displayMode_ == DisplayMode::Windowed || config.realAudio) {
-        // The app's identity names its streams in the system mixer (the
-        // PipeWire node, SDL's app name), as it names the window.
-        broaudio::AudioDeviceConfig audioCfg;
-        audioCfg.appId = config.appId;
-        audioCfg.appName = config.manifest.name.empty() ? config.appId : config.manifest.name;
-        if (!audioEngine_->init(audioCfg)) audioEngine_->initHeadless();
-    } else {
-        audioEngine_->initHeadless();
-    }
-
-    SceneAudioSync::install(audioEngine_.get());
 
     audioInference_ = std::make_unique<AudioInference>();
     if (displayMode_ == DisplayMode::Windowed)
@@ -675,15 +717,7 @@ void Engine::initAppRealm() {
         // from where it lives rather than from index.html; an inline one is
         // named for the page, whose URL is its base. The realm's module
         // registry evaluates a module two scripts import once.
-        std::string combinedScripts;
-        for (const auto& script : manifest_.scripts) {
-            if (script.isModule) continue;
-            std::string code = script.isInline() ? script.code : AppLoader::loadFile(script.path);
-            if (!code.empty()) {
-                if (!combinedScripts.empty()) combinedScripts += "\n;\n";
-                combinedScripts += code;
-            }
-        }
+        const std::string combinedScripts = combinedClassicScripts();
         if (!combinedScripts.empty()) {
             if (!bro::bronze_host::evalAppScript(*this, combinedScripts, manifest_.htmlPath)) {
                 setTestFailure(true);
@@ -714,9 +748,55 @@ void Engine::initAppRealm() {
         }
     }
 
+    // A compile begun at launch that no run took (nothing should be left).
+    bronze_host::discardAppScriptCompile();
+
     if (!hostProvidesCompiledApp_) {
         dispatchDocumentReadyEvents();
     }
+}
+
+std::string Engine::combinedClassicScripts() const {
+    std::string combined;
+    for (const auto& script : manifest_.scripts) {
+        if (script.isModule) continue;
+        std::string code = script.isInline() ? script.code : AppLoader::loadFile(script.path);
+        if (!code.empty()) {
+            if (!combined.empty()) combined += "\n;\n";
+            combined += code;
+        }
+    }
+    return combined;
+}
+
+bool Engine::firstPageScriptUnit(PageScriptUnit& out) const {
+    if (displayMode_ == DisplayMode::Server && !manifest_.htmlPath.empty()) return false;
+    std::string classic = combinedClassicScripts();
+    if (!classic.empty()) {
+        out = {std::move(classic), manifest_.htmlPath, false};
+        return true;
+    }
+    for (const auto& script : manifest_.scripts) {
+        if (!script.isModule) continue;
+        std::string code = script.isInline() ? script.code : AppLoader::loadFile(script.path);
+        if (code.empty()) continue;
+        out = {std::move(code), script.isInline() ? manifest_.htmlPath : script.path, !script.isInline()};
+        return true;
+    }
+    return false;
+}
+
+// Only the FIRST unit compiles ahead: it is compiled against the realm as it
+// stands before any of the page's scripts ran, which is the realm its compile
+// at run time would see too. A later unit may import a module an earlier one
+// published, so its compile has to wait for that run.
+void Engine::beginPageCompile() {
+    if (!appHtmlOverride_.empty()) return;
+    manifest_ = AppLoader::loadApp(appDir_, &assetMounts_);
+    util::setAssetPathContext(manifest_.basePath, &assetMounts_);
+    PageScriptUnit unit;
+    if (!firstPageScriptUnit(unit)) return;
+    bronze_host::startAppScriptCompile(*this, unit.code, unit.name, unit.moduleFile);
 }
 
 void Engine::dispatchDocumentReadyEvents() {

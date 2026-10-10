@@ -36,10 +36,6 @@ const std::chrono::steady_clock::time_point kStart = std::chrono::steady_clock::
 std::atomic<double> gFirstFrameMs{-1.0};
 std::atomic<double> gLoadedMs{-1.0};
 
-double sinceStartMs() {
-    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - kStart).count();
-}
-
 AppRuntimeInfo& info() {
     static AppRuntimeInfo s;
     return s;
@@ -173,6 +169,10 @@ void simulateAppInstance(const std::vector<std::string>& argv, const std::string
     deliver(Launch{argv, cwd});
 }
 
+double sinceStartMs() {
+    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - kStart).count();
+}
+
 void noteDocumentLoaded() {
     double expected = -1.0;
     gLoadedMs.compare_exchange_strong(expected, sinceStartMs());
@@ -194,19 +194,41 @@ double firstFrameMs() { return gFirstFrameMs.load(std::memory_order_relaxed); }
 
 double documentLoadedMs() { return gLoadedMs.load(std::memory_order_relaxed); }
 
+// Written once at launch on the page thread and read there (bro.app.startup),
+// so no atomics: a mutex keeps a reader on another thread honest.
 namespace {
-std::atomic<double> gGfxWindowMs{-1.0}, gGfxGpuMs{-1.0}, gGfxTotalMs{-1.0};
-}
+std::mutex gStartupMutex;
+GraphicsStartup gGraphicsStartup;
+PageStartup gPageStartup;
+}  // namespace
 
-void noteGraphicsStartup(double windowMs, double gpuMs, double totalMs) {
-    gGfxWindowMs.store(windowMs, std::memory_order_relaxed);
-    gGfxGpuMs.store(gpuMs, std::memory_order_relaxed);
-    gGfxTotalMs.store(totalMs, std::memory_order_relaxed);
+void noteGraphicsStartup(const GraphicsStartup& g) {
+    std::lock_guard<std::mutex> lock(gStartupMutex);
+    gGraphicsStartup = g;
 }
 
 GraphicsStartup graphicsStartup() {
-    return {gGfxWindowMs.load(std::memory_order_relaxed), gGfxGpuMs.load(std::memory_order_relaxed),
-            gGfxTotalMs.load(std::memory_order_relaxed)};
+    std::lock_guard<std::mutex> lock(gStartupMutex);
+    return gGraphicsStartup;
+}
+
+void notePageGlobals(double atMs, double ms) {
+    std::lock_guard<std::mutex> lock(gStartupMutex);
+    gPageStartup.globalsAtMs = atMs;
+    gPageStartup.globalsMs = ms;
+}
+
+void notePageCompile(double startMs, double endMs, double waitMs, const std::string& codeCache) {
+    std::lock_guard<std::mutex> lock(gStartupMutex);
+    gPageStartup.compileStartMs = startMs;
+    gPageStartup.compileEndMs = endMs;
+    gPageStartup.waitMs = waitMs;
+    gPageStartup.codeCache = codeCache;
+}
+
+PageStartup pageStartup() {
+    std::lock_guard<std::mutex> lock(gStartupMutex);
+    return gPageStartup;
 }
 
 std::string initialWindowTitle(const EngineConfig& config) {

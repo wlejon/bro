@@ -8,6 +8,7 @@
 #include "bronze_host/host_pins.h"
 #include "bronze_host/host_rejection_events.h"
 #include "engine/engine.h"
+#include "engine/app_runtime.h"
 #include "util/asset_mounts.h"
 #include "util/log.h"
 #include "util/user_dirs.h"
@@ -220,11 +221,72 @@ const char* cacheStatusName(bronze::eval::CodeCacheStatus s) {
 // page's static markup drawn with the compile's progress published on <html>
 // (Engine::pumpCompileFrame, docs/compile-progress.md). Headless compiles
 // inline, which is what keeps a test run deterministic.
+// The page's first script, compiling ahead on its own thread
+// (startAppScriptCompile) while the engine brings the GPU up. Only the page
+// thread touches it.
+struct AheadCompile {
+    std::string code;  // exactly what is compiled (the async-IIFE form when wrapped)
+    std::string filename;
+    bool moduleFile = false;
+    bronze::eval::EvalOptions opts;  // the options it compiles with, inputs captured
+    std::shared_ptr<std::atomic<double>> progress;
+    std::shared_ptr<std::atomic<double>> endMs;
+    double startMs = -1.0;
+    std::future<std::unique_ptr<bronze::eval::CompiledScript>> future;
+};
+std::unique_ptr<AheadCompile> s_ahead;
+
+// Waits for `future`, keeping a window alive while it does (see below).
+std::unique_ptr<bronze::eval::CompiledScript> awaitCompile(
+    engine::Engine& engine, std::future<std::unique_ptr<bronze::eval::CompiledScript>>& future,
+    const std::shared_ptr<std::atomic<double>>& progress) {
+    if (engine.displayMode() == engine::DisplayMode::Windowed && engine.window()) {
+        engine.setAppCompiling(true);
+        while (future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) {
+            engine.pumpCompileFrame(progress->load(std::memory_order_relaxed));
+        }
+        engine.setAppCompiling(false);
+        engine.setCompileProgress(false, 1.0);
+    }
+    return future.get();
+}
+
+// The ahead-of-time compile of exactly this script, if one is running: taken
+// (and its captured inputs copied into `opts`, which the run then binds
+// against) or null.
+std::unique_ptr<AheadCompile> takeAheadCompile(const bronze::eval::EvalOptions& opts, const std::string& code) {
+    if (!s_ahead) return nullptr;
+    if (s_ahead->filename != opts.filename || s_ahead->moduleFile != opts.publishEntry ||
+        s_ahead->code != code) {
+        return nullptr;
+    }
+    return std::move(s_ahead);
+}
+
 std::unique_ptr<bronze::eval::CompiledScript> compileWithPumping(engine::Engine& engine,
                                                                  bronze::eval::EvalOptions& opts,
                                                                  const std::string& code) {
     const auto start = std::chrono::steady_clock::now();
     std::unique_ptr<bronze::eval::CompiledScript> compiled;
+    if (auto ahead = takeAheadCompile(opts, code)) {
+        // Compiled while the GPU came up (Engine::beginPageCompile): run it
+        // against the inputs it was compiled with, and wait out the rest.
+        opts.externalModules = ahead->opts.externalModules;
+        opts.externalModulesCaptured = ahead->opts.externalModulesCaptured;
+        opts.nativeManifestJson = ahead->opts.nativeManifestJson;
+        const double waitStart = engine::sinceStartMs();
+        compiled = awaitCompile(engine, ahead->future, ahead->progress);
+        const double waited = engine::sinceStartMs() - waitStart;
+        const double endMs = ahead->endMs->load(std::memory_order_relaxed);
+        const char* cache = compiled ? cacheStatusName(compiled->cacheStatus) : "off";
+        engine::notePageCompile(ahead->startMs, endMs, waited, cache);
+        if (compiled && compiled->cacheStatus != bronze::eval::CodeCacheStatus::Off) {
+            LOG_INFO("compiled %s in %.0f ms (code cache %s%s%s), while the GPU came up; waited %.0f ms for it",
+                     opts.filename.c_str(), endMs - ahead->startMs, cache,
+                     compiled->cacheNote.empty() ? "" : ": ", compiled->cacheNote.c_str(), waited);
+        }
+        return compiled;
+    }
     if (engine.displayMode() == engine::DisplayMode::Windowed && engine.window()) {
         // Captured fresh for every compile: a retry after a failed run sees
         // the modules that run published.
@@ -236,17 +298,11 @@ std::unique_ptr<bronze::eval::CompiledScript> compileWithPumping(engine::Engine&
         opts.onProgress = [progress](const bronze::eval::CompileProgress& p) {
             progress->store(p.fraction, std::memory_order_relaxed);
         };
-        engine.setAppCompiling(true);
         auto future = std::async(std::launch::async, [&opts, &code] {
             return bronze::eval::compileScript(code, opts);
         });
-        while (future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) {
-            engine.pumpCompileFrame(progress->load(std::memory_order_relaxed));
-        }
-        engine.setAppCompiling(false);
-        engine.setCompileProgress(false, 1.0);
+        compiled = awaitCompile(engine, future, progress);
         opts.onProgress = nullptr;
-        compiled = future.get();
     } else {
         compiled = bronze::eval::compileScript(code, opts);
     }
@@ -259,7 +315,86 @@ std::unique_ptr<bronze::eval::CompiledScript> compileWithPumping(engine::Engine&
     return compiled;
 }
 
+// The options a script of the page (or a string evaluated as one) compiles
+// and runs with. Host globals must be installed: the list is read off them.
+bronze::eval::EvalOptions scriptEvalOptions(engine::Engine& engine, const std::string& filename,
+                                            bool moduleFile) {
+    bronze::eval::EvalOptions opts;
+    opts.filename = filename.empty() ? "<eval>" : filename;
+    // Read off the registry the install filled, not from a list kept beside
+    // it: what is registered is exactly what the compile admits.
+    opts.hostGlobals = registeredHostGlobals();
+    opts.moduleRoots = moduleRootsFor(engine);
+    opts.entryResolvesAs = entryResolvesAsFor(engine, filename);
+    opts.retainSource = true;
+    opts.pinsPath = discoverPinsPath(engine, filename);
+    opts.censusOutPath = discoverCensusOutPath(engine, filename);
+    // One module map per realm. The page is one compilation unit and a headless
+    // driver script is another, so without this a test's `import "/app/lib/x.js"`
+    // compiles the app's module into its OWN unit and evaluates it a second
+    // time — a second instance of state the page already holds. Publishing here
+    // is what makes the page's instances the ones a later unit binds
+    // (bronze: runtime/module_registry.h).
+    opts.moduleRegistry = true;
+    // A `<script type="module" src>` is itself a module instance: published
+    // too, so a driver's `import "/app/main.js"` binds it rather than booting
+    // the app a second time. Inline script text and driver scripts are not.
+    opts.publishEntry = moduleFile && !filename.empty();
+    configureCodeCache(opts);
+    return opts;
+}
+
+// What is compiled for `code`: a script with a top-level `await` and no
+// `import` becomes an async IIFE.
+std::string scriptExecCode(const std::string& code, const std::string& filename) {
+    if (hasAwaitStmt(code) && !hasImportStmt(code)) return wrapAsyncIife(code, filename);
+    return code;
+}
+
 } // namespace
+
+bool startAppScriptCompile(engine::Engine& engine, const std::string& code, const std::string& filename,
+                           bool moduleFile) {
+    if (isJitDisabled() || s_ahead || code.empty()) return false;
+    {
+        HostEvalScope evalScope;
+        if (!isWebHostGlobalsInstalled()) {
+            const double at = engine::sinceStartMs();
+            installWebHostGlobals(engine);
+            engine::notePageGlobals(at, engine::sinceStartMs() - at);
+        }
+    }
+    auto ahead = std::make_unique<AheadCompile>();
+    ahead->code = scriptExecCode(code, filename);
+    ahead->filename = filename.empty() ? "<eval>" : filename;
+    ahead->moduleFile = moduleFile && !filename.empty();
+    ahead->opts = scriptEvalOptions(engine, filename, moduleFile);
+    // Everything the compile reads from this thread's runtime, captured here:
+    // the compile itself then runs on its own thread (bronze compileScript).
+    bronze::eval::captureThreadInputs(ahead->opts);
+    ahead->progress = std::make_shared<std::atomic<double>>(0.0);
+    ahead->endMs = std::make_shared<std::atomic<double>>(-1.0);
+    ahead->opts.onProgress = [progress = ahead->progress](const bronze::eval::CompileProgress& p) {
+        progress->store(p.fraction, std::memory_order_relaxed);
+    };
+    ahead->startMs = engine::sinceStartMs();
+    // The task owns copies of what it reads: the entry may be dropped (the
+    // page changed its scripts) while it runs, and is then joined.
+    ahead->future = std::async(std::launch::async,
+                               [code = ahead->code, opts = ahead->opts, endMs = ahead->endMs] {
+        auto compiled = bronze::eval::compileScript(code, opts);
+        endMs->store(engine::sinceStartMs(), std::memory_order_relaxed);
+        return compiled;
+    });
+    s_ahead = std::move(ahead);
+    return true;
+}
+
+void discardAppScriptCompile() {
+    if (!s_ahead) return;
+    if (s_ahead->future.valid()) s_ahead->future.wait();
+    s_ahead.reset();
+}
 
 void applyCodeCacheOptions(bronze::eval::EvalOptions& opts) {
     configureCodeCache(opts);
@@ -293,34 +428,9 @@ bronze::embed::CallResult evalScriptJitResult(engine::Engine& engine, const std:
         installWebHostGlobals(engine);
     }
 
-    bronze::eval::EvalOptions opts;
-    opts.filename = filename.empty() ? "<eval>" : filename;
-    // Read off the registry the install above filled, not from a list kept
-    // beside it: what is registered is exactly what the compile admits.
-    opts.hostGlobals = registeredHostGlobals();
-    opts.moduleRoots = moduleRootsFor(engine);
-    opts.entryResolvesAs = entryResolvesAsFor(engine, filename);
-    opts.retainSource = true;
-    opts.pinsPath = discoverPinsPath(engine, filename);
-    opts.censusOutPath = discoverCensusOutPath(engine, filename);
+    bronze::eval::EvalOptions opts = scriptEvalOptions(engine, filename, moduleFile);
     opts.moduleHandleOut = moduleHandleOut;
-    // One module map per realm. The page is one compilation unit and a headless
-    // driver script is another, so without this a test's `import "/app/lib/x.js"`
-    // compiles the app's module into its OWN unit and evaluates it a second
-    // time — a second instance of state the page already holds. Publishing here
-    // is what makes the page's instances the ones a later unit binds
-    // (bronze: runtime/module_registry.h).
-    opts.moduleRegistry = true;
-    // A `<script type="module" src>` is itself a module instance: published
-    // too, so a driver's `import "/app/main.js"` binds it rather than booting
-    // the app a second time. Inline script text and driver scripts are not.
-    opts.publishEntry = moduleFile && !filename.empty();
-    configureCodeCache(opts);
-
-    std::string execCode = code;
-    if (hasAwaitStmt(execCode) && !hasImportStmt(execCode)) {
-        execCode = wrapAsyncIife(execCode, filename);
-    }
+    const std::string execCode = scriptExecCode(code, filename);
 
     auto compiled = compileWithPumping(engine, opts, execCode);
     auto res = bronze::eval::runCompiledScript(std::move(compiled), opts);

@@ -115,6 +115,9 @@ void Engine::teardown() {
     platform::Dialogs::setWindow(nullptr);
 
     appWatchers_.clear();
+    // A launch that failed between starting the page's compile and running
+    // it: the compile is waited out before anything it read goes away.
+    bronze_host::discardAppScriptCompile();
 
     shutdown();
 

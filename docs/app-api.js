@@ -222,9 +222,26 @@ bro.app.logFile;
  * `gpuMs` (the Vulkan device, the presenter and Skia's context) and `totalMs`
  * (both; -1 for a phase that did not run). Headless brings the GPU up on a
  * thread while it creates its window, so `totalMs` is about the longer of the
- * two rather than their sum.
+ * two rather than their sum. `startAtMs` / `readyAtMs` are when the GPU
+ * began and was up.
+ *
+ * While the GPU comes up (headless and windowed alike) bro installs the
+ * realm's host globals and compiles the page's first script unit (its
+ * classic scripts together, else its first module script) on a thread;
+ * the script runs once the device is up. `page` times that: `globalsAtMs` /
+ * `globalsMs` (the host globals), `compileStartMs` / `compileEndMs` /
+ * `compileMs`, `waitMs` (how long the run waited for the compile to finish),
+ * `codeCache` (`'hit'`, `'miss'`, `'off'`, ...) and `overlapMs` (how much of
+ * that work ran before `readyAtMs`). Every field is -1 (and `codeCache` '')
+ * when nothing compiled ahead: a page with no script, or
+ * `BRO_STARTUP_OVERLAP=0`, which keeps the old order (the device, then the
+ * page) for comparing the two.
  * @readonly @type {{loadedMs: number, firstFrameMs: number,
- *                   graphics: {windowMs: number, gpuMs: number, totalMs: number}}}
+ *                   graphics: {windowMs: number, gpuMs: number, totalMs: number,
+ *                              startAtMs: number, readyAtMs: number},
+ *                   page: {globalsAtMs: number, globalsMs: number, compileStartMs: number,
+ *                          compileEndMs: number, compileMs: number, waitMs: number,
+ *                          codeCache: string, overlapMs: number}}}
  */
 bro.app.startup;
 

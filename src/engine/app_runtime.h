@@ -78,6 +78,9 @@ void noteDocumentLoaded();
 /// before the page ran (the empty window) does not count. Later calls are free.
 void noteFramePresented();
 
+/// Milliseconds since start (the clock firstFrameMs and documentLoadedMs read).
+double sinceStartMs();
+
 /// Milliseconds from start to the page's first presented frame, or -1 before it.
 /// Headless has no present; its first flush after the page loaded counts.
 double firstFrameMs();
@@ -89,14 +92,35 @@ double documentLoadedMs();
 /// How the graphics came up at launch, in ms (-1 for a phase that did not
 /// run): creating the window, bringing up the GPU (Vulkan device, presenter,
 /// Skia's context), and the two together. Headless does the two at once, so
-/// totalMs is about the longer of them rather than their sum.
+/// totalMs is about the longer of them rather than their sum. startAtMs and
+/// readyAtMs are on the sinceStartMs clock: when the graphics began, and when
+/// the GPU was up for the page to use.
 struct GraphicsStartup {
     double windowMs = -1.0;
     double gpuMs = -1.0;
     double totalMs = -1.0;
+    double startAtMs = -1.0;
+    double readyAtMs = -1.0;
 };
-void noteGraphicsStartup(double windowMs, double gpuMs, double totalMs);
+void noteGraphicsStartup(const GraphicsStartup& g);
 GraphicsStartup graphicsStartup();
+
+/// How the page's first script came up at launch, beside the GPU. The realm's
+/// host globals are installed and the script compiled while the device comes
+/// up; the script runs once it is (Engine::beginPageCompile). Times in ms;
+/// the *AtMs ones are on the sinceStartMs clock; -1 for what did not happen
+/// (a page with no script compiles nothing).
+struct PageStartup {
+    double globalsAtMs = -1.0;     // installing the host globals began
+    double globalsMs = -1.0;       // ... and took
+    double compileStartMs = -1.0;  // the first script's compile began
+    double compileEndMs = -1.0;    // ... and ended (on its own thread)
+    double waitMs = -1.0;          // the page thread waited for it when it came to run it
+    std::string codeCache;         // "hit", "miss", "off", or "" (no compile)
+};
+void notePageGlobals(double atMs, double ms);
+void notePageCompile(double startMs, double endMs, double waitMs, const std::string& codeCache);
+PageStartup pageStartup();
 
 /// The window's title before the page names one: bro.json's "title", else
 /// the manifest name, else "Bro".
