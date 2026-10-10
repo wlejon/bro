@@ -82,6 +82,36 @@ fs.copyFileSync(src, dest);
 fs.chmodSync(path, mode);
 fs.realpathSync(path);
 
+// ── File descriptors (sync) ──
+//
+// Read or write part of a file without loading all of it: a tag reader that
+// wants a header and a footer, one frame of a large container. Same thread
+// rules as the other *Sync calls (fine on a worker; on the page, keep reads
+// small). Descriptors are brokit's own small integers (not OS handles),
+// valid until closeSync; close every one you open.
+
+fs.openSync(path, flags);                // flags: 'r' (default) | 'r+' | 'w' | 'w+' | 'a' | 'a+' → fd
+                                         //   throws ENOENT for a missing file ('r', 'r+'); other flags throw TypeError
+fs.readSync(fd, buffer, offset, length, position);
+                                         // → bytes read (0 at end of file, fewer than length near it)
+                                         //   buffer: a Uint8Array (or any typed array / Buffer); bytes land at
+                                         //   buffer[offset .. offset + length). offset defaults to 0, length to
+                                         //   buffer.byteLength. position: a byte offset in the file to read
+                                         //   from, or null/undefined to continue where the last read stopped.
+                                         //   Node's form readSync(fd, buffer, { offset, length, position }) works too.
+fs.writeSync(fd, buffer, offset, length, position);
+                                         // → bytes written; fd must be opened writable; position as for readSync
+fs.fstatSync(fd);                        // → { size, isFile(), isDirectory(), isSymbolicLink() } (size only:
+                                         //   no times or mode; use statSync(path) for those)
+fs.closeSync(fd);                        // EBADF for an fd that is not open
+// e.g. the last 128 bytes (an ID3v1 tag) of an MP3:
+//   const fd = fs.openSync(file);
+//   try {
+//       const size = fs.fstatSync(fd).size;
+//       const tail = new Uint8Array(128);
+//       const n = fs.readSync(fd, tail, 0, 128, Math.max(0, size - 128));
+//   } finally { fs.closeSync(fd); }
+
 // ── Async (callback or Promise) ──
 //
 // Really asynchronous: the I/O runs on brokit's fs threads (a few of them),
