@@ -5,6 +5,9 @@
 #if BRO_WITH_WEBP
 #include "render/webp_image.h"
 #endif
+#if BRO_WITH_AVIF
+#include "render/avif_av1.h"
+#endif
 
 #include "broimage/codec.h"
 
@@ -53,6 +56,11 @@ void registerImageCodecs() {
     std::call_once(once, [] {
 #if BRO_WITH_WEBP
         registerWebPCodec();
+#endif
+#if BRO_WITH_AVIF
+        // AVIF: broimage reads the HEIF container; dav1d decodes the AV1.
+        // (HEIC needs nothing here: broimage hands it to the OS.)
+        registerAvifDecoder();
 #endif
         broimage::Codec svg;
         svg.name = "svg";

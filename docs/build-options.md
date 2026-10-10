@@ -4,8 +4,8 @@ The profiles and `BRO_WITH_*` flags. Quickstart: [BUILDING.md](../BUILDING.md).
 
 A flag that is off leaves its sibling unbuilt, compiles its code out behind
 `#if BRO_WITH_*`, and installs its JS namespace as the `{ available: false }`
-stub. Only `BRO_WITH_NET` (GameNetworkingSockets) and `BRO_WITH_VIDEO`
-(libvpx/webm/Opus) need vcpkg; only `BRO_WITH_TENSOR_CUDA` needs the CUDA
+stub. Only `BRO_WITH_NET` (GameNetworkingSockets), `BRO_WITH_VIDEO`
+(libvpx/webm/Opus) and `BRO_WITH_AVIF` (dav1d) need vcpkg; only `BRO_WITH_TENSOR_CUDA` needs the CUDA
 toolkit.
 
 ## Profiles (presets)
@@ -49,6 +49,7 @@ HTML/CSS + Canvas2D + WebGL runtime with working screenshots and native Vulkan p
 | `BRO_WITH_WEBP` | libwebp decoder | **on** | on | on | compiled from the Skia source bundle alongside HarfBuzz, so `.webp` decodes the same on every platform. Off = `.webp` does not decode anywhere |
 | `BRO_WITH_NET` | GameNetworkingSockets | off | on | on | **needs vcpkg** |
 | `BRO_WITH_VIDEO` | libvpx/webm/Opus | off | on | on | **needs vcpkg** |
+| `BRO_WITH_AVIF` | dav1d (BSD-2) | off | on | on | **needs vcpkg** (or a system libdav1d). The AV1 decoder behind AVIF; broimage reads the HEIF container and converts YUV→RGBA itself. Off = AVIF still probes and reports its size, but does not decode (`bro.image.canDecode('image/avif') === ''`). HEIC never needs a flag: it uses the OS decoder (WIC / ImageIO), see [image-api.js](image-api.js) |
 | `BRO_WITH_STEAM` | none (runtime dlopen) | off | on | on | the stub template |
 | `BRO_WITH_TERMINAL` | bropty + brosearch + brothemes + bromux (persistent sessions, over brolink) | off | on | on | no vcpkg; the native `<terminal>` element ([terminal-api.js](terminal-api.js)). Off = `bro.terminal.available === false` and `<terminal>` is an inert box |
 | `BRO_WITH_REMOTE` | broremote + brovideo + brolink | off | on | on | `bro.remote` ([remote-api.js](remote-api.js)). Windows and Linux only (off by default on macOS). brovideo's VA-API encoders on Linux when libva is present (with brodmabuf). Off = `bro.remote.available === false` |

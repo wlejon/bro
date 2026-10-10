@@ -257,6 +257,7 @@ bro_check_sibling(broremote    _d_linux_win_render _d_remote)
 # Services (each pulls a vcpkg dependency).
 option(BRO_WITH_NET      "Game networking (GameNetworkingSockets / vcpkg)"   ${_d_svc})
 option(BRO_WITH_VIDEO    "Video + GIF encode/decode (libvpx/webm / vcpkg)"   ${_d_svc})
+option(BRO_WITH_AVIF     "AVIF images: dav1d AV1 decode (vcpkg)"            ${_d_svc})
 option(BRO_WITH_STEAM    "Steam integration (runtime-loaded redistributable)" ${_d_svc})
 option(BRO_WITH_CONF     "Settings store with schemas and watchers (broconf)" ${_d_conf})
 option(BRO_WITH_THEMES   "Colour schemes + WCAG/APCA contrast (brothemes)"   ${_d_themes})

@@ -100,6 +100,31 @@ else()
     target_compile_definitions(bro_render PRIVATE BRO_WITH_WEBP=0)
 endif()
 
+# AVIF's AV1 decode: dav1d (BSD-2) from vcpkg, registered with broimage,
+# which reads the HEIF container and converts the YUV itself. vcpkg's dav1d
+# is a meson build with no CMake package: found by header and library.
+if(BRO_WITH_AVIF)
+    find_path(DAV1D_INCLUDE_DIR dav1d/dav1d.h REQUIRED)
+    find_library(DAV1D_LIBRARY_RELEASE NAMES dav1d libdav1d REQUIRED)
+    if(DEFINED VCPKG_INSTALLED_DIR AND DEFINED VCPKG_TARGET_TRIPLET)
+        find_library(DAV1D_LIBRARY_DEBUG NAMES dav1d libdav1d
+                     PATHS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/debug/lib" NO_DEFAULT_PATH)
+    endif()
+    add_library(bro_avif STATIC avif_av1.cpp)
+    target_include_directories(bro_avif PUBLIC ${bro_SOURCE_DIR}/src)
+    target_include_directories(bro_avif PRIVATE ${DAV1D_INCLUDE_DIR})
+    if(DAV1D_LIBRARY_DEBUG)
+        target_link_libraries(bro_avif PRIVATE optimized ${DAV1D_LIBRARY_RELEASE} debug ${DAV1D_LIBRARY_DEBUG})
+    else()
+        target_link_libraries(bro_avif PRIVATE ${DAV1D_LIBRARY_RELEASE})
+    endif()
+    target_link_libraries(bro_avif PRIVATE broimage::broimage)
+    target_compile_definitions(bro_render PRIVATE BRO_WITH_AVIF=1)
+    target_link_libraries(bro_render PRIVATE bro_avif)
+else()
+    target_compile_definitions(bro_render PRIVATE BRO_WITH_AVIF=0)
+endif()
+
 if(BRO_WITH_DMABUF)
     target_sources(bro_render PRIVATE
         vulkan_dmabuf_importer.cpp

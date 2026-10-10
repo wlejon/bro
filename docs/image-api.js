@@ -401,7 +401,101 @@ bro.image.alloc = function(w, h, channels, dtype) {};
 // signed samples, old-style JPEG (compression 6), uncompressed YCbCr, CIELab,
 // 12-bit or arithmetic-coded JPEG, JPEG with alpha. `<img>`, CSS images and
 // createImageBitmap read the same set. An `<img>` or CSS image of an animated
-// GIF / WebP plays it (see "Animated images" below).
+// GIF / WebP plays it (see "Animated images" below). AVIF and HEIC/HEIF go
+// through broimage's own HEIF reader (see "HEIF: AVIF and HEIC" below).
+
+// ── HEIF: AVIF and HEIC ──────────────────────────────────────────────────────
+//
+// broimage reads the HEIF container itself (ISO/IEC 23008-12, MIAF): the
+// primary item, grids, alpha auxiliary images (premultiplied ones are
+// straightened), clap crops, colr (nclx and ICC), Exif items and thumbnail
+// items, so `probeDimensions`, `readExif`, `readExifOrientation` and
+// `readHeifInfo` work on any HEIF, decoder or not. The coded pixels then go
+// to a codec:
+//
+//   AVIF  dav1d, built into bro (BRO_WITH_AVIF, vcpkg); same on every
+//         platform. 8, 10 and 12 bit; 4:2:0, 4:2:2, 4:4:4 and monochrome;
+//         BT.601/709/2020 (and the other H.273 matrices, identity, YCgCo),
+//         full or limited range, from the item's nclx (else the bitstream's).
+//         Out comes 8-bit sRGB RGBA. An animated AVIF (avis) shows its first
+//         frame; an AVIF with only a sequence track decodes that track's
+//         first sample.
+//   HEIC  the system's decoder only — bro carries no HEVC decoder. Windows:
+//         WIC, which needs the HEVC Video Extensions from the Microsoft Store
+//         (and the HEIF Image Extensions); macOS: ImageIO; Linux: none.
+//         `decodeSupport` says which, and why not.
+//
+// HDR: a PQ (transfer 16) or HLG (18) image is tone-mapped to SDR — linear
+// light by the PQ EOTF (or HLG's inverse OETF plus a 1000-nit OOTF), SDR
+// white at 203 nits, BT.2020 gamut converted to BT.709, highlights above 75 %
+// rolled off (extended Reinhard on max(R,G,B)) up to the clli maximum (else
+// 1000 nits), then sRGB-encoded. No HDR surface is produced. `readHeifInfo`'s
+// `hdr` says the image was HDR.
+//
+// Orientation: a HEIF's turn is its irot/imir properties, NOT its Exif
+// Orientation tag (which the spec says to ignore). `decode*` returns the
+// stored pixels (after clap); `decodeOriented`, `<img>`, CSS images and
+// createImageBitmap apply the transform; `readExifOrientation` and
+// `readExif().orientation` report it as the equivalent 1..8 code. imir is
+// read as the 2022 revision defines it (mode 0 flips top-to-bottom), as
+// WIC, libavif and Chrome do.
+//
+// Limits: 65536 px a side, 2^28 pixels; a grid's tiles must cover its
+// output. Not read: image sequences past their first frame, depth and other
+// non-alpha auxiliary images, derived `iovl` overlays, gain maps (the base
+// SDR image shows), and HEVC tiles inside a grid where the system decoder
+// takes the file whole (the OS decodes the whole HEIC, grids included).
+
+/**
+ * Whether this bro can decode a type: 'probably' or ''. Takes a MIME type
+ * ('image/avif', 'image/heic', 'image/png', ...) or an extension ('heic',
+ * '.avif'). For HEIC it probes the system decoder (cached after the first
+ * call).
+ * @param {string} type
+ * @returns {''|'probably'}
+ * @example if (!bro.image.canDecode('image/heic')) hideHeicFromThePicker();
+ */
+bro.image.canDecode = function(type) {};
+
+/**
+ * `canDecode` with the reason: `{supported, reason}`. `reason` is '' when
+ * supported, else what a decode of that type will report, e.g. "HEIC needs
+ * the HEVC Video Extensions from the Microsoft Store (...)" or "HEIC is not
+ * supported on this platform: ...".
+ * @param {string} type MIME type or extension
+ * @returns {{supported:boolean, reason:string}}
+ */
+bro.image.decodeSupport = function(type) {};
+
+/**
+ * A HEIF's container facts without decoding pixels (null if not HEIF).
+ *   mime                 'image/avif' | 'image/heic' | 'image/heif'
+ *   codec                the primary item's type: 'av01', 'hvc1', 'grid', ...
+ *   majorBrand           ftyp major brand
+ *   width, height        as displayed after clap, before irot/imir
+ *   bitDepth, hasAlpha
+ *   grid                 (gridRows, gridColumns when true)
+ *   orientation          1..8 from irot/imir
+ *   hasExif, hasIcc
+ *   colorPrimaries, transferCharacteristics, matrixCoefficients, fullRange
+ *                        H.273 codes (nclx, else the bitstream's)
+ *   hdr                  PQ or HLG
+ *   sequence             an image sequence (only its first frame decodes)
+ *   thumbnails           [{width, height, codec}]
+ * @param {string|ArrayBufferView} src path or encoded bytes
+ * @returns {?Object}
+ */
+bro.image.readHeifInfo = function(src) {};
+
+/**
+ * A HEIF's own thumbnail item, decoded and upright: the smallest whose
+ * shorter side is at least `minSide` (0: the largest). Null when it has no
+ * usable thumbnail (decode the image instead).
+ * @param {string|ArrayBufferView} src path or encoded bytes
+ * @param {number} [minSide=0]
+ * @returns {?{width:number,height:number,channels:number,pixels:Uint8Array}}
+ */
+bro.image.decodeThumbnail = function(src, minSide) {};
 
 /**
  * Decode a 16-bit image — most importantly 16-bit PNG depth maps and masks,
@@ -424,10 +518,11 @@ bro.image.decodeF32 = function(src) {};
 /**
  * Decode to 8-bit RGBA with the EXIF orientation already applied, so phone
  * photos come out upright — the Orientation tag of a JPEG, a TIFF (its own
- * IFD0), a WebP or a PNG (eXIf). Never returns null: a failed decode
- * returns `width`/`height` 0 and an empty `pixels`, so check them.
+ * IFD0), a WebP or a PNG (eXIf); for a HEIF, its irot/imir. Never returns
+ * null: a failed decode returns `width`/`height` 0, an empty `pixels` and
+ * `error`, the reason (e.g. HEIC without a system decoder), so check them.
  * @param {string|ArrayBufferView} src
- * @returns {{width:number,height:number,channels:number,pixels:Uint8Array}}
+ * @returns {{width:number,height:number,channels:number,pixels:Uint8Array,error?:string}}
  */
 bro.image.decodeOriented = function(src) {};
 
@@ -555,7 +650,8 @@ bro.image.openFrames = function(src) {};
 /**
  * Read the raw EXIF Orientation tag: 1 Normal, 2 FlipH, 3 Rotate180,
  * 4 FlipV, 5 Transpose, 6 Rotate90CW, 7 Transverse, 8 Rotate90CCW; 1 when
- * there is no tag (or no EXIF). JPEG, TIFF, WebP and PNG, as `readExif`.
+ * there is no tag (or no EXIF). JPEG, TIFF, WebP and PNG, as `readExif`; for
+ * a HEIF (AVIF/HEIC) the code equivalent to its irot/imir, never its Exif tag.
  * @param {string|ArrayBufferView} src path or encoded bytes
  * @returns {number}
  */
@@ -564,7 +660,8 @@ bro.image.readExifOrientation = function(src) {};
 /**
  * Read a photo's EXIF metadata without decoding pixels: from a JPEG (APP1
  * "Exif" segment), a TIFF (its IFD0 and the Exif / GPS sub-IFDs), a WebP
- * (RIFF `EXIF` chunk) or a PNG (`eXIf` chunk).
+ * (RIFF `EXIF` chunk), a PNG (`eXIf` chunk) or a HEIF (its `Exif` item;
+ * `orientation` is then the irot/imir transform, not the Exif tag).
  *
  * Returns null when the file carries no EXIF block. Otherwise an object
  * holding ONLY the fields the file has: a missing tag is an absent key (not

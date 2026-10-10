@@ -1,8 +1,9 @@
 #pragma once
 
 // The image formats bro decodes that broimage does not carry — WebP
-// (libwebp from the Skia source bundle, render/webp_image.h) and SVG (Skia's
-// SVG module, svg/svg_renderer.h) — registered with broimage
+// (libwebp from the Skia source bundle, render/webp_image.h), SVG (Skia's
+// SVG module, svg/svg_renderer.h) and AVIF's AV1 decoder (dav1d,
+// render/avif_av1.h; broimage reads the HEIF container) — registered with broimage
 // (broimage/codec.h), so every broimage entry point reads them: `bro.image`
 // (decodeOriented, probeDimensions, openFrames, ...) on the page and in
 // workers, bro.thumb, the terminal's inline images, and the image store,
