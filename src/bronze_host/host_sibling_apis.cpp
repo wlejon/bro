@@ -146,6 +146,7 @@
 #endif
 #include "api/api.h"  // brokit::api::resolveAssetPath
 #include <broimage/api.h>
+#include "render/image_codecs.h"
 
 #include <cmath>
 #include <cstdint>
@@ -461,6 +462,8 @@ void installSiblingApis(engine::Engine& engine) {
         // after installBroRoots returns. brokit carries a copy of the
         // kernels too; broimage's are the ones installed.
         broimage::api::setPathResolver(&brokit::api::resolveAssetPath);
+        // WebP and SVG read by broimage — bro.image, bro.thumb — as by <img>.
+        render::registerImageCodecs();
         broimage::api::installImage();
     }
 #if BRO_WITH_CONF
@@ -857,6 +860,7 @@ void installWorkerSiblingApis() {
     adoptGlobalProperty("FloraWorld");
 #endif
     broimage::api::setPathResolver(&brokit::api::resolveAssetPath);
+    render::registerImageCodecs();
     broimage::api::installImage();
 #if BRO_WITH_THEMES
     bro::themes::api::setPathResolver(&brokit::api::resolveAssetPath);

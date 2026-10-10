@@ -27,6 +27,7 @@
 // use: an element (or a recording) holding the request keeps its pixels, and
 // they go when the last holder lets go. A pending request is never evicted.
 
+#include "render/animated_image.h"
 #include "render/renderer.h"  // SharedPixels
 
 #include <atomic>
@@ -59,8 +60,14 @@ struct DecodedImage {
     bool oriented = false;
     // Process-unique id for these pixels (SharedPixels::id).
     uint64_t id = 0;
+    // An animated GIF / WebP shown by an <img> or a CSS image: `rgba` is its
+    // first frame, and this its other frames, timeline and repaints
+    // (render/animated_image.h). Null for a still.
+    std::shared_ptr<AnimatedImage> animation;
 
-    size_t bytes() const { return rgba.size() + svgMarkup.size(); }
+    size_t bytes() const {
+        return rgba.size() + svgMarkup.size() + (animation ? animation->budgetBytes() : 0);
+    }
 };
 
 // A process-unique id for a new buffer of pixels (DecodedImage::id): what an
@@ -72,10 +79,14 @@ uint64_t newPixelsId();
 SharedPixels sharedPixelsOf(const std::shared_ptr<const DecodedImage>& img);
 
 // Decode encoded bytes into `out`: SVG (markup kept, rasterized at its
-// intrinsic size), WebP, then Skia's codecs, then broimage (stb). When
-// `orient` is set a JPEG's EXIF orientation is applied. Any thread.
+// intrinsic size), a format registered with broimage (WebP:
+// render/image_codecs.h), then Skia's codecs, then broimage (stb and its
+// own). When `orient` is set the EXIF orientation is applied. `animate`: an
+// animated GIF / WebP keeps its frames (`out.animation`, its first frame in
+// `rgba`) — what an <img> or a CSS image shows; otherwise it is its first
+// frame. Any thread.
 bool decodeImageData(const uint8_t* bytes, size_t len, bool orient, DecodedImage& out,
-                     std::string& err);
+                     std::string& err, bool animate = false);
 
 // Natural size from the header alone, without decoding: cheap enough for the
 // page thread. `orientation` reports the EXIF orientation (and the size is
@@ -127,6 +138,10 @@ public:
     std::shared_ptr<ImageRequest> find(const std::string& key);
     // A request outside the cache (createImageBitmap(blob): bytes with no URL).
     std::shared_ptr<ImageRequest> submit(ImageWork work);
+    // Run `task` on a decoder thread after the queued requests: an
+    // animation's decode-ahead (animated_image.h). Not a request — nothing
+    // settles, and waitIdle() does not wait for it.
+    void post(std::function<void()> task);
 
     // Bumped on every settle; the page compares it with what it last saw.
     uint64_t settledCount() const { return settled_.load(std::memory_order_acquire); }

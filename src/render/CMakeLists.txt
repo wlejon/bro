@@ -69,6 +69,8 @@ add_library(bro_render STATIC
     image_cache.cpp
     image_store.cpp
     image_source.cpp
+    image_codecs.cpp
+    animated_image.cpp
     software_cursor.cpp
     remote_picture.cpp
     ${RENDER_SPV_HEADERS}
@@ -91,7 +93,7 @@ target_link_libraries(bro_render PUBLIC bro_platform skia bro_svg bro_util bro_b
 if(BRO_WITH_WEBP)
     add_library(bro_webp STATIC webp_image.cpp)
     target_include_directories(bro_webp PUBLIC ${bro_SOURCE_DIR}/src)
-    target_link_libraries(bro_webp PRIVATE webp_decode)
+    target_link_libraries(bro_webp PRIVATE webp_decode broimage::broimage)
     target_compile_definitions(bro_webp PUBLIC BRO_WITH_WEBP=1)
     target_link_libraries(bro_render PRIVATE bro_webp)
 else()

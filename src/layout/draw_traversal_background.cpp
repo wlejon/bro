@@ -110,7 +110,7 @@ void DrawTraversal::drawBackground(const PaintBox& pb, float x, float y, float w
                     url = url.substr(1, url.size() - 2);
                 }
                 // Decoded off the page thread; nothing paints until it lands.
-                auto pic = paintImage(url, styleImageOriented(style));
+                auto pic = paintImage(url, styleImageOriented(style), pb.elem);
                 if (pic && (pic->isSvg ? !pic->svgMarkup.empty() : !pic->rgba.empty())) {
                     const render::ImageSampling sampling = styleImageSampling(style);
                     const render::SharedPixels px = render::sharedPixelsOf(pic);

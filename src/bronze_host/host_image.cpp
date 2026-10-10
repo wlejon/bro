@@ -31,6 +31,7 @@
 #include "dom/element.h"
 #include "engine/engine.h"
 #include "layout/image_loading.h"
+#include "render/animated_image.h"
 #include "render/image_store.h"
 #include "render/shared_pixels_image.h"
 #include "util/log.h"
@@ -80,6 +81,12 @@ const HostImage* hostImageOf(Value v) {
     img.ok = el->imageOk();
     const auto& req = el->imageRequest();
     img.pixels = (img.complete && img.ok && req) ? req->image() : nullptr;
+    // An animated GIF / WebP: the frame it shows now (a canvas drawImage or
+    // a texture upload takes the current frame, as in browsers).
+    if (img.pixels && img.pixels->animation) {
+        if (auto frame = img.pixels->animation->frameAt(render::imageAnimationClock(), false, false))
+            img.pixels = std::move(frame);
+    }
     if (img.pixels && !img.pixels->rgba.empty()) {
         // The pixels' own size: an SVG without an intrinsic one has none.
         img.width = img.pixels->width;
@@ -143,12 +150,22 @@ void installHostImagePump(engine::Engine& engine) {
     // finished decoding lands (and repaints) while bro.time is paused too.
     // Its load events and decode() settles are tasks and promise jobs; the
     // promise jobs drain here, in the frame that produced them.
-    engine.addFramePump([] {
+    // Animated images run on the engine's clock (bro.time's, virtual under
+    // headless advanceTime); one whose next frame is due repaints every
+    // document, and painting it again schedules the frame after.
+    render::setImageAnimationClockSource([&engine] { return engine.timeNowMs(); });
+    engine.addFramePump([&engine] {
         pumpHostImageDecodes();
+        const double now = engine.timeNowMs();
+        render::setImageAnimationClock(now);
+        if (render::takeDueImageAnimations(now)) dom::Document::markAllPaintDirty();
         if (ev::microtasksPending()) ev::drainMicrotasks();
     });
     // The pending callbacks hold rooted promises: they go before the runtime.
-    engine.addShutdownHook([] { pendingDecodes().clear(); });
+    engine.addShutdownHook([] {
+        pendingDecodes().clear();
+        render::setImageAnimationClockSource(nullptr);
+    });
     // Headless settles loads deterministically: its paints wait for the
     // decodes they need rather than painting the gap.
     if (engine.displayMode() == engine::DisplayMode::Headless) layout::setPaintWaitsForImages(true);

@@ -353,6 +353,10 @@ if(BRO_WITH_WEBP)
         "${_webp_src}/dec/vp8_dec.c"
         "${_webp_src}/dec/vp8l_dec.c"
         "${_webp_src}/dec/webp_dec.c"
+        # demux/ — the container walk and the animation compositor behind
+        # animated WebP (render/webp_image.cpp's frame decoder)
+        "${_webp_src}/demux/demux.c"
+        "${_webp_src}/demux/anim_decode.c"
         # dsp/ COMMON_SOURCES + the decode SIMD variants
         "${_webp_src}/dsp/alpha_processing.c"
         "${_webp_src}/dsp/alpha_processing_sse2.c"

@@ -388,15 +388,20 @@ bro.image.alloc = function(w, h, channels, dtype) {};
 // covered by `new Image()`; these are the high-bit-depth, HDR and
 // auto-oriented cases.
 //
-// Formats (broimage): PNG, JPEG, BMP, TGA, GIF (first frame), PSD, PIC, PNM,
-// HDR, ICO/CUR and TIFF. TIFF reads the first page: uncompressed, LZW (with
+// Formats (broimage): PNG, JPEG, BMP, TGA, GIF (the first frame; every frame
+// through `decodeFrames` / `openFrames` below), PSD, PIC, PNM, HDR, ICO/CUR
+// and TIFF — and, in bro, WebP (still, with an EXIF turn, and animated) and
+// SVG (rasterized at its intrinsic size: its width/height, else its viewBox),
+// which bro registers with broimage so every entry point here reads them, in
+// workers too. TIFF reads the first page: uncompressed, LZW (with
 // the horizontal predictor), Deflate, PackBits or JPEG compression; 1/2/4/8
 // or 16-bit unsigned samples; bilevel, gray, RGB, RGBA (associated alpha is
 // straightened), palette, CMYK, and YCbCr when JPEG-compressed; strips or
 // tiles, chunky or planar, either byte order. Not read: BigTIFF, float or
 // signed samples, old-style JPEG (compression 6), uncompressed YCbCr, CIELab,
 // 12-bit or arithmetic-coded JPEG, JPEG with alpha. `<img>`, CSS images and
-// createImageBitmap read the same set (plus WebP and SVG, decoded in bro).
+// createImageBitmap read the same set. An `<img>` or CSS image of an animated
+// GIF / WebP plays it (see "Animated images" below).
 
 /**
  * Decode a 16-bit image — most importantly 16-bit PNG depth maps and masks,
@@ -433,6 +438,119 @@ bro.image.decodeOriented = function(src) {};
  * @returns {{width:number,height:number,channels:number}|null}
  */
 bro.image.probeDimensions = function(bytes) {};
+
+// ── Animation frames ─────────────────────────────────────────────────────────
+//
+// An animated GIF or WebP, frame by frame. Each frame comes out COMPOSED: the
+// full canvas (`width` x `height`) as it shows at that frame, straight-alpha
+// RGBA8, with the format's disposal, blending, transparency and (GIF) local
+// palettes and interlace applied — what a viewer draws, not the raw patch.
+// Any other image is an animation of one frame (`frameCount` 1).
+//
+//   frameCount  frames in one play-through, from the file's own structure
+//   loopCount   how many times it plays; 0 = forever. GIF: no NETSCAPE2.0
+//               extension plays once, a stored count n plays n + 1 times (as
+//               browsers read it). WebP: the ANIM chunk's count.
+//   delay       a frame's delay in ms as stored (0 = unspecified). A player
+//               should clamp tiny ones as browsers do — <img> shows a delay
+//               of 10 ms or less for 100 ms.
+//
+// `decodeFrames` returns the whole animation at once, under a cap; use it for
+// short animations. `openFrames` steps through one frame at a time and holds
+// only the canvas it composes onto (plus, for a GIF frame that restores what
+// was under it, that region), so a long or huge animation never has to be
+// held as RGBA. Both take a path or the encoded bytes.
+
+/**
+ * Every frame of an animation (or the one frame of a still), stopping before
+ * a frame that would pass `maxFrames` or `maxBytes` (RGBA bytes of the frames
+ * returned) — `truncated` then says frames were left out. A frame that fails
+ * to decode after the first ends the list there (also `truncated`).
+ * @param {string|ArrayBufferView} src path or encoded bytes
+ * @param {{maxFrames?:number, maxBytes?:number}} [options] 0 / absent: no cap
+ * @returns {{width:number, height:number, frameCount:number, loopCount:number,
+ *            truncated:boolean,
+ *            frames:Array<{pixels:Uint8Array, delay:number, index:number}>}|null}
+ *   null when nothing decodes the bytes.
+ * @example
+ *   // A sprite strip from a short GIF: every frame side by side.
+ *   const anim = bro.image.decodeFrames('spinner.gif', { maxBytes: 64 << 20 });
+ *   const strip = new Uint8Array(anim.width * anim.frames.length * anim.height * 4);
+ *   anim.frames.forEach((f, i) => {
+ *     for (let y = 0; y < anim.height; y++)
+ *       strip.set(f.pixels.subarray(y * anim.width * 4, (y + 1) * anim.width * 4),
+ *                 (y * anim.width * anim.frames.length + i * anim.width) * 4);
+ *   });
+ */
+bro.image.decodeFrames = function(src, options) {};
+
+/**
+ * A frame decoder: the frames in order, one per `next()`, each composed onto
+ * the canvas. It keeps a copy of the bytes and one canvas — never the frames
+ * already returned — so stepping through a thousand-frame GIF costs one
+ * frame's memory. `next()` returns null after the last frame (or on a frame
+ * that does not decode); `reset()` goes back before the first; `close()`
+ * frees it now rather than at collection.
+ * @param {string|ArrayBufferView} src path or encoded bytes
+ * @returns {{width:number, height:number, frameCount:number, loopCount:number,
+ *            delays:number[], readonly index:number,
+ *            next():({pixels:Uint8Array, delay:number, index:number}|null),
+ *            reset():boolean, close():void}|null}
+ *   null when nothing decodes the bytes. `delays` are every frame's stored
+ *   delay, read from the headers before anything is decoded.
+ * @example
+ *   // Play an animation into a canvas, one frame decoded at a time.
+ *   const dec = bro.image.openFrames(bytes);
+ *   const ctx = canvas.getContext('2d');
+ *   let plays = 0;
+ *   function show() {
+ *     let f = dec.next();
+ *     if (!f) {
+ *       if (dec.loopCount && ++plays >= dec.loopCount) return dec.close();
+ *       dec.reset();
+ *       f = dec.next();
+ *     }
+ *     ctx.putImageData(new ImageData(new Uint8ClampedArray(f.pixels.buffer), dec.width, dec.height), 0, 0);
+ *     setTimeout(show, f.delay <= 10 ? 100 : f.delay);
+ *   }
+ *   show();
+ * @example
+ *   // Thumbnails of every 10th frame of a huge GIF, without holding it.
+ *   const dec = bro.image.openFrames('/photos/huge.gif');
+ *   const thumbs = [];
+ *   for (let f; (f = dec.next()); ) {
+ *     if (f.index % 10 !== 0) continue;
+ *     const thumb = new Uint8Array(160 * 120 * 4);
+ *     bro.image.resize(thumb, f.pixels, { srcW: dec.width, srcH: dec.height, dstW: 160, dstH: 120, channels: 4 });
+ *     thumbs.push(thumb);
+ *   }
+ *   dec.close();
+ */
+bro.image.openFrames = function(src) {};
+
+// ── Animated images in <img> and CSS ────────────────────────────────────────
+//
+// An <img> (or `new Image()`, or a CSS background / border-image) of an
+// animated GIF or WebP plays it, as browsers do:
+//   - Frame 0 is the image: natural size is the canvas, `decode()`, `load`
+//     and `complete` are about frame 0, and createImageBitmap(img or blob)
+//     takes frame 0. Canvas drawImage and WebGL texImage2D of the <img> take
+//     the frame showing now.
+//   - The timeline starts when the image is first painted and runs on the
+//     engine's clock: bro.time pause / timescale apply, and headless
+//     advanceTime(ms) moves it deterministically. Each frame shows for its
+//     delay (<= 10 ms shows for 100 ms); the loop count is honoured, after
+//     which the last frame stays. Every element showing the same source
+//     shares one timeline.
+//   - Only an animation painted on screen asks for frames: off screen,
+//     clipped out, display:none, detached or in a hidden window it requests
+//     no repaints and decodes nothing, so an idle page costs nothing. Shown
+//     again, it is on the frame its clock has reached.
+//   - Frames are budgeted per animation by BRO_IMAGE_ANIM_MB (default 32 MB
+//     of RGBA): one whose frames fit decodes them all once and keeps them; a
+//     bigger one is streamed, decoded ahead on the image decoder threads in a
+//     window of 2-8 frames within the budget. They count against the image
+//     cache (BRO_IMAGE_CACHE_MB) like any picture.
 
 /**
  * Read the raw EXIF Orientation tag: 1 Normal, 2 FlipH, 3 Rotate180,

@@ -134,12 +134,12 @@ std::shared_ptr<ImageRequest> requestImage(const ImageSource& src) {
                 err = "cannot read " + path;
                 return false;
             }
-            return decodeImageData(bytes.data(), bytes.size(), orient, out, err);
+            return decodeImageData(bytes.data(), bytes.size(), orient, out, err, /*animate=*/true);
         };
         break;
     case ImageSource::Kind::Bytes:
         work = [bytes = src.bytes, orient](DecodedImage& out, std::string& err) {
-            return decodeImageData(bytes->data(), bytes->size(), orient, out, err);
+            return decodeImageData(bytes->data(), bytes->size(), orient, out, err, /*animate=*/true);
         };
         break;
     case ImageSource::Kind::Data:
@@ -149,7 +149,7 @@ std::shared_ptr<ImageRequest> requestImage(const ImageSource& src) {
                 err = "the data: URL carries no bytes";
                 return false;
             }
-            return decodeImageData(bytes.data(), bytes.size(), orient, out, err);
+            return decodeImageData(bytes.data(), bytes.size(), orient, out, err, /*animate=*/true);
         };
         break;
     case ImageSource::Kind::Remote:
@@ -160,7 +160,7 @@ std::shared_ptr<ImageRequest> requestImage(const ImageSource& src) {
                 return false;
             }
             return decodeImageData(reinterpret_cast<const uint8_t*>(body.data()), body.size(), orient,
-                                   out, err);
+                                   out, err, /*animate=*/true);
         };
         break;
     case ImageSource::Kind::None:

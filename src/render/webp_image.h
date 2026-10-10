@@ -55,4 +55,12 @@ bool decodeWebPHeader(const void* data, std::size_t len, int& width, int& height
 bool decodeWebPFile(const std::string& path,
                     int& width, int& height, std::vector<uint8_t>& out);
 
+/// Register WebP with broimage (broimage/codec.h): from then on every
+/// broimage entry point — decode, probe, the oriented and bounded decodes,
+/// open_frames — reads WebP, still or animated (libwebp's demux and
+/// animation compositor), and so does everything that decodes through
+/// broimage: `bro.image`, bro.thumb, the image store. Idempotent, any thread;
+/// render/image_codecs.h calls it.
+void registerWebPCodec();
+
 } // namespace bro::render

@@ -5,11 +5,10 @@
 #include "util/log.h"
 #include "util/main_loop_wake.h"
 
-#include "broimage/decode.h"
+#include "render/image_codecs.h"
 
-#if BRO_WITH_WEBP
-#include "render/webp_image.h"
-#endif
+#include "broimage/codec.h"
+#include "broimage/decode.h"
 
 #include <include/codec/SkCodec.h>
 #include <include/core/SkData.h>
@@ -18,6 +17,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 #include <deque>
 #include <thread>
 #include <unordered_map>
@@ -88,7 +88,8 @@ SharedPixels sharedPixelsOf(const std::shared_ptr<const DecodedImage>& img) {
 }
 
 bool decodeImageData(const uint8_t* bytes, size_t len, bool orient, DecodedImage& out,
-                     std::string& err) {
+                     std::string& err, bool animate) {
+    registerImageCodecs();
     out = DecodedImage{};
     out.id = nextPixelsId();
     if (!bytes || len == 0) {
@@ -102,14 +103,14 @@ bool decodeImageData(const uint8_t* bytes, size_t len, bool orient, DecodedImage
         // without an intrinsic size is still a usable image; it has no raster.
         out.isSvg = true;
         out.svgMarkup.assign(chars, len);
+        // The raster is broimage's registered SVG codec (image_codecs.h).
         float sw = 0, sh = 0;
         svg::svgIntrinsicSize(chars, len, sw, sh);
-        int w = 0, h = 0;
-        std::vector<uint8_t> rgba;
-        if (svg::rasterizeSvgMarkup(chars, len, 0, 0, w, h, rgba)) {
-            out.width = w;
-            out.height = h;
-            out.rgba = std::move(rgba);
+        broimage::Image raster;
+        if (broimage::decode_memory(bytes, len, raster) && !raster.pixels.empty()) {
+            out.width = raster.width;
+            out.height = raster.height;
+            out.rgba = std::move(raster.pixels);
         } else {
             out.width = static_cast<int>(sw);
             out.height = static_cast<int>(sh);
@@ -118,21 +119,38 @@ bool decodeImageData(const uint8_t* bytes, size_t len, bool orient, DecodedImage
         return true;
     }
 
+    // An animated GIF / WebP an element shows: its frames, decoded through
+    // broimage (render/animated_image.h). Only those two can animate, and
+    // only they are copied to be kept.
+    const bool gif = len >= 6 && std::memcmp(bytes, "GIF8", 4) == 0;
+    const bool webp = len >= 12 && std::memcmp(bytes, "RIFF", 4) == 0 && std::memcmp(bytes + 8, "WEBP", 4) == 0;
+    if (animate && (gif || webp)) {
+        auto dec = broimage::open_frames(std::make_shared<const std::vector<uint8_t>>(bytes, bytes + len));
+        broimage::AnimationFrame first;
+        if (dec && dec->frame_count() > 1 && dec->next(first)) {
+            out.width = dec->width();
+            out.height = dec->height();
+            out.rgba = std::move(first.rgba);
+            out.animation = AnimatedImage::make(std::move(dec));
+            if (out.animation) return true;  // no EXIF turn: animations play as stored
+            out = DecodedImage{};
+            out.id = nextPixelsId();
+        }
+    }
+
     bool ok = false;
-#if BRO_WITH_WEBP
-    // bro's own WebP decoder first, on every platform: a Skia built with
-    // libwebp would otherwise take the bytes on one OS and not another.
-    {
-        int w = 0, h = 0;
-        std::vector<uint8_t> rgba;
-        if (decodeWebP(bytes, len, w, h, rgba)) {
-            out.width = w;
-            out.height = h;
-            out.rgba = std::move(rgba);
+    // A format registered with broimage (WebP) through its codec, first, on
+    // every platform: a Skia built with libwebp would otherwise take the
+    // bytes on one OS and not another.
+    if (const broimage::Codec* codec = broimage::find_registered_codec(bytes, len)) {
+        broimage::Image decoded;
+        if (codec->decode(bytes, len, decoded, nullptr) && !decoded.pixels.empty()) {
+            out.width = decoded.width;
+            out.height = decoded.height;
+            out.rgba = std::move(decoded.pixels);
             ok = true;
         }
     }
-#endif
     if (!ok) ok = decodeWithSkCodec(bytes, len, out);
     if (!ok) {
         broimage::Image decoded;
@@ -161,6 +179,7 @@ bool probeImageData(const uint8_t* bytes, size_t len, bool orient, int& width, i
     orientation = 1;
     isSvg = false;
     if (!bytes || len == 0) return false;
+    registerImageCodecs();
     const char* chars = reinterpret_cast<const char*>(bytes);
     if (svg::looksLikeSvg(chars, len)) {
         float sw = 0, sh = 0;
@@ -171,11 +190,8 @@ bool probeImageData(const uint8_t* bytes, size_t len, bool orient, int& width, i
         return true;
     }
     int w = 0, h = 0, c = 0;
-    bool ok = broimage::probe_dimensions_memory(bytes, len, &w, &h, &c);
-#if BRO_WITH_WEBP
-    if (!ok) ok = decodeWebPHeader(bytes, len, w, h);
-#endif
-    if (!ok) return false;
+    // WebP through its registered codec, like every other format here.
+    if (!broimage::probe_dimensions_memory(bytes, len, &w, &h, &c)) return false;
     orientation = exifOrientationOf(bytes, len);
     if (orient && orientation >= 5) std::swap(w, h);
     width = w;
@@ -214,6 +230,7 @@ struct ImageStore::Impl {
     std::condition_variable idleCv;   // a job finished
     std::unordered_map<std::string, Entry> entries;
     std::deque<Job> queue;
+    std::deque<std::function<void()>> tasks;  // post(): after the queued requests
     std::vector<std::thread> threads;
     size_t inFlight = 0;  // queued + running
     size_t budget = size_t(512) << 20;
@@ -251,14 +268,23 @@ ImageStore::ImageStore() : impl_(std::make_unique<Impl>()) {
         impl_->threads.emplace_back([this] {
             for (;;) {
                 Impl::Job job;
+                std::function<void()> task;
                 {
                     std::unique_lock<std::mutex> lk(impl_->mu);
-                    impl_->workCv.wait(lk, [this] { return impl_->stopping || !impl_->queue.empty(); });
+                    impl_->workCv.wait(lk, [this] {
+                        return impl_->stopping || !impl_->queue.empty() || !impl_->tasks.empty();
+                    });
                     if (impl_->stopping) return;
-                    job = std::move(impl_->queue.front());
-                    impl_->queue.pop_front();
+                    if (!impl_->queue.empty()) {
+                        job = std::move(impl_->queue.front());
+                        impl_->queue.pop_front();
+                    } else {
+                        task = std::move(impl_->tasks.front());
+                        impl_->tasks.pop_front();
+                    }
                 }
-                run(job.req, std::move(job.work));
+                if (task) task();
+                else run(job.req, std::move(job.work));
             }
         });
     }
@@ -269,6 +295,7 @@ ImageStore::~ImageStore() {
         std::lock_guard<std::mutex> lk(impl_->mu);
         impl_->stopping = true;
         impl_->queue.clear();
+        impl_->tasks.clear();
     }
     impl_->workCv.notify_all();
     for (auto& t : impl_->threads)
@@ -361,6 +388,16 @@ std::shared_ptr<ImageRequest> ImageStore::submit(ImageWork work) {
     }
     impl_->workCv.notify_one();
     return req;
+}
+
+void ImageStore::post(std::function<void()> task) {
+    if (!task) return;
+    {
+        std::lock_guard<std::mutex> lk(impl_->mu);
+        if (impl_->stopping) return;
+        impl_->tasks.push_back(std::move(task));
+    }
+    impl_->workCv.notify_one();
 }
 
 size_t ImageStore::pendingCount() const {

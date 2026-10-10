@@ -101,7 +101,11 @@ public:
     // the page thread. Null while it decodes — the gap paints nothing, and
     // the settle repaints (layout/image_loading.h) — or when it is broken.
     // `oriented`: EXIF orientation applied (image-orientation: from-image).
-    std::shared_ptr<const render::DecodedImage> paintImage(const std::string& url, bool oriented = true);
+    // An animated image is the frame showing now (render/animated_image.h);
+    // `forElem` is the element it paints, whose box on screen is what lets
+    // the animation ask for its next frame (null: assume it is on screen).
+    std::shared_ptr<const render::DecodedImage> paintImage(const std::string& url, bool oriented = true,
+                                                           dom::Element* forElem = nullptr);
 
     // Set base path for resolving relative image URLs
     void setBasePath(const std::string& path) { basePath_ = path; }
@@ -306,6 +310,12 @@ private:
     std::unordered_map<std::string, std::weak_ptr<render::ImageRequest>> imageRequests_;
     // The pixels for <img> `elem` as painted under its image-orientation.
     std::shared_ptr<const render::DecodedImage> elementPaintImage(dom::Element* elem, bool oriented);
+    // The picture to paint for `img` now: itself, or an animation's current
+    // frame — scheduling the next one only when `elem`'s box is on screen.
+    std::shared_ptr<const render::DecodedImage> currentFrame(std::shared_ptr<const render::DecodedImage> img,
+                                                             dom::Element* elem) const;
+    // Whether `elem`'s border box meets the viewport and the active clip.
+    bool boxOnScreen(dom::Element* elem) const;
     LayerBreakCallback layerBreakCb_;
     bool terminalLayers_ = false;
     bool shellClientWindows_ = false;

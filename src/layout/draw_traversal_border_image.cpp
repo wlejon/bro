@@ -30,7 +30,7 @@ bool DrawTraversal::drawBorderImage(const PaintBox& pb, float x, float y, float 
     // Missing/broken source, one still decoding (it repaints when it lands),
     // or an SVG without an intrinsic raster: normal border painting takes
     // over. An SVG with one slices its raster.
-    auto pic = paintImage(url, styleImageOriented(style));
+    auto pic = paintImage(url, styleImageOriented(style), pb.elem);
     if (!pic || pic->rgba.empty()) return false;
     const float imgW = static_cast<float>(pic->width);
     const float imgH = static_cast<float>(pic->height);

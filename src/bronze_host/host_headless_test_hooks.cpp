@@ -10,6 +10,8 @@
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/event.h"
+#include "render/animated_image.h"
+#include "render/image_store.h"
 
 #include <chrono>
 #include <vector>
@@ -281,6 +283,43 @@ void installHeadlessTestHooks(engine::Engine& engine) {
 
         parent->appendChild(canvas);
         return hostElementValue(canvas);
+    });
+
+    // Animated images (render/animated_image.h): how many are alive, how
+    // many wait for a repaint, frames painted / decoded, repaints fired;
+    // `element` (an <img>) adds the frame it shows.
+    host.def("imageAnimations", 1, [](Value, std::span<const Value> a) -> Value {
+        const render::ImageAnimationStats s = render::imageAnimationStats();
+        int frame = -1, frames = 0;
+        bool cachesAll = false;
+        if (!a.empty()) {
+            if (auto* el = hostElementOf(a[0])) {
+                if (auto req = el->imageRequest(); req && req->ready() && req->image()->animation) {
+                    const auto& anim = req->image()->animation;
+                    frame = anim->currentIndex();
+                    frames = anim->frameCount();
+                    cachesAll = anim->cachesAll();
+                }
+            }
+        }
+        ObjectBuilder o;
+        o.set("live", ev::fromDouble(double(s.live)));
+        o.set("scheduled", ev::fromDouble(double(s.scheduled)));
+        o.set("paints", ev::fromDouble(double(s.paints)));
+        o.set("framesDecoded", ev::fromDouble(double(s.framesDecoded)));
+        o.set("repaints", ev::fromDouble(double(s.repaints)));
+        o.set("nextDueInMs", ev::fromDouble(render::nextImageAnimationDueMs() - render::imageAnimationClock()));
+        o.set("frame", ev::fromDouble(frame));
+        o.set("frameCount", ev::fromDouble(frames));
+        o.set("cachesAll", ev::fromBool(cachesAll));
+        return o.get();
+    });
+    // The per-animation frame budget in MB (BRO_IMAGE_ANIM_MB), for decodes
+    // that start after the call.
+    host.def("setImageAnimationBudgetMB", 1, [](Value, std::span<const Value> a) -> Value {
+        if (!a.empty() && ev::isNumber(a[0]))
+            render::setAnimationBudgetBytes(static_cast<size_t>(std::max(0.0, ev::toDouble(a[0])) * 1048576.0));
+        return ev::undefined();
     });
 
     host.def("sceneContextCount", 0, [](Value, std::span<const Value>) {

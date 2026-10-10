@@ -60,6 +60,7 @@
 
 #include "engine/engine.h"
 #include "layout/image_loading.h"
+#include "render/animated_image.h"
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/event.h"
@@ -309,7 +310,15 @@ double hostFrameDueInMs() {
     // A picture finished decoding off the page thread: the frame pump has its
     // load to settle and its paint to redo.
     if (layout::imageSettlesPending()) return 0.0;
-    return std::max(0.0, nextHostTimerDueMs() - g_host->clockMs);
+    double due = nextHostTimerDueMs() - g_host->clockMs;
+    // A painted animated image's next frame (render/animated_image.h), on
+    // the engine's clock.
+    if (g_host->engine) {
+        const double animDue = render::nextImageAnimationDueMs();
+        if (animDue != std::numeric_limits<double>::infinity())
+            due = std::min(due, animDue - g_host->engine->timeNowMs());
+    }
+    return std::max(0.0, due);
 }
 
 void clearHostAnimationFramesForDocument(dom::Document* doc) {
