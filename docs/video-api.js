@@ -569,7 +569,18 @@ vid.pause();
 //   → null if the file has no audio track this build can decode, or the window
 //     is empty.
 //
+//   Formats: anything a media backend opens (built in: WebM), plus audio-only
+//   files — WAV, FLAC, MP3, Ogg Vorbis and Ogg Opus — decoded through
+//   broaudio's streaming decoders a chunk at a time (never the whole file in
+//   memory), seeking to `from`. Same shape and window rules for both; for an
+//   audio-only file `sampleRate` is the file's own rate (48000 for Opus) and
+//   `duration` comes from the container (MP3 without a Xing header: from a
+//   frame-header scan, so it includes the encoder delay). M4A/AAC needs a
+//   backend that decodes it.
+//
 //   Cost: one audio decode of the span. ~350 ms for five minutes of AAC.
+
+const song = bro.media.peaks('music/track.flac', { buckets: 1200 });
 
 const peaks = bro.media.peaks('clip.mp4', { buckets: 3000 });
 if (peaks) {

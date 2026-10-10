@@ -8,6 +8,10 @@
 
 #include "util/log.h"
 
+#if defined(BRO_VIDEO_HAS_BROAUDIO) && BRO_VIDEO_HAS_BROAUDIO
+#include "broaudio/io/audio_stream.h"
+#endif
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -63,6 +67,95 @@ bool clampWindow(Window w, TimeNs duration, TimeNs& from, TimeNs& to) {
     return to > from;
 }
 
+#if defined(BRO_VIDEO_HAS_BROAUDIO) && BRO_VIDEO_HAS_BROAUDIO
+// Audio-only files — WAV, FLAC, MP3, Ogg Vorbis, Ogg Opus — which no media
+// backend claims: decode through broaudio's pull decoder, one chunk at a time
+// (the file is never resident), seeking to the window's start. Same buckets
+// as the packet path: bucket b covers [from + b*span/buckets, ...) of file
+// time, and a sample belongs to the bucket its own time falls in.
+bool analyzeAudioFilePeaks(const std::string& path, int buckets, AudioPeaks& out,
+                           Window window) {
+    broaudio::AudioFileStream s;
+    if (!s.open(path.c_str())) return false;
+    const int ch = s.channels();
+    const int rate = s.sampleRate();
+    const uint64_t total = s.totalFrames();
+    if (ch <= 0 || rate <= 0 || total == 0) return false;
+
+    const TimeNs duration = static_cast<TimeNs>(
+        static_cast<double>(total) * 1e9 / static_cast<double>(rate) + 0.5);
+    TimeNs from = 0, to = 0;
+    if (!clampWindow(window, duration, from, to)) return false;
+
+    // The window in frames (fractional), and the integer frames it covers.
+    const double fromF = static_cast<double>(from) * rate / 1e9;
+    const double toF = static_cast<double>(to) * rate / 1e9;
+    const double perBucket = (toF - fromF) / buckets;
+    uint64_t first = static_cast<uint64_t>(std::ceil(fromF));
+    uint64_t last = std::min<uint64_t>(total, static_cast<uint64_t>(std::ceil(toF)));
+    if (last <= first) return false;
+
+    out.sampleRate = static_cast<uint32_t>(rate);
+    out.channels = static_cast<uint32_t>(ch);
+    out.durationNs = duration;
+    out.fromNs = from;
+    out.toNs = to;
+    out.minv.assign(static_cast<size_t>(buckets), 0.0f);
+    out.maxv.assign(static_cast<size_t>(buckets), 0.0f);
+    out.rms.assign(static_cast<size_t>(buckets), 0.0f);
+    std::vector<double> sumSq(static_cast<size_t>(buckets), 0.0);
+    std::vector<uint64_t> counts(static_cast<size_t>(buckets), 0);
+
+    // A decoder that will not seek is read from the top and the lead-in
+    // dropped — the same buckets, just slower (as on the packet path).
+    uint64_t f = 0;
+    if (first > 0) {
+        if (s.seekToFrame(first)) f = first;
+        else LOG_INFO("peaks: '%s' will not seek; reading from the start", path.c_str());
+    }
+
+    constexpr int kChunk = 4096;
+    std::vector<float> buf(static_cast<size_t>(kChunk) * ch);
+    int b = std::clamp(static_cast<int>((static_cast<double>(f) - fromF) / perBucket), 0, buckets - 1);
+    double nextEdge = fromF + (b + 1) * perBucket;
+    while (f < last) {
+        const int want = static_cast<int>(std::min<uint64_t>(kChunk, last - f));
+        const int got = s.readFrames(buf.data(), want);
+        if (got <= 0) break;
+        for (int i = 0; i < got; ++i, ++f) {
+            if (f < first) continue;
+            while (b < buckets - 1 && static_cast<double>(f) >= nextEdge) {
+                ++b;
+                nextEdge = fromF + (b + 1) * perBucket;
+            }
+            float lo = out.minv[static_cast<size_t>(b)];
+            float hi = out.maxv[static_cast<size_t>(b)];
+            double sq = 0.0;
+            const float* p = buf.data() + static_cast<size_t>(i) * ch;
+            for (int c = 0; c < ch; ++c) {
+                const float v = p[c];
+                if (v < lo) lo = v;
+                if (v > hi) hi = v;
+                sq += double(v) * v;
+            }
+            out.minv[static_cast<size_t>(b)] = lo;
+            out.maxv[static_cast<size_t>(b)] = hi;
+            sumSq[static_cast<size_t>(b)] += sq;
+            counts[static_cast<size_t>(b)] += static_cast<uint64_t>(ch);
+        }
+    }
+
+    uint64_t n = 0;
+    for (int i = 0; i < buckets; ++i) {
+        if (counts[static_cast<size_t>(i)])
+            out.rms[static_cast<size_t>(i)] = static_cast<float>(
+                std::sqrt(sumSq[static_cast<size_t>(i)] / double(counts[static_cast<size_t>(i)])));
+        n += counts[static_cast<size_t>(i)];
+    }
+    return n > 0;
+}
+#endif
+
 } // namespace
 
 bool analyzeAudioPeaks(const std::string& path, int buckets, AudioPeaks& out,
@@ -70,7 +163,11 @@ bool analyzeAudioPeaks(const std::string& path, int buckets, AudioPeaks& out,
     if (buckets <= 0) return false;
 
     Opened opened = openAny(path, TrackKind::Audio);
+#if defined(BRO_VIDEO_HAS_BROAUDIO) && BRO_VIDEO_HAS_BROAUDIO
+    if (!opened) return analyzeAudioFilePeaks(path, buckets, out, window);
+#else
     if (!opened) return false;
+#endif
     const TrackInfo* track = firstTrack(*opened.source, TrackKind::Audio);
     if (!track) return false;
 

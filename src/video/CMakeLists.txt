@@ -23,6 +23,14 @@ target_link_libraries(bro_video
             Opus::opus
 )
 
+# Audio-only files (WAV, FLAC, MP3, Ogg Vorbis/Opus) have no WebM track for
+# the backend registry to find; analyzeAudioPeaks falls back to broaudio's
+# streaming decoders for them.
+if(TARGET broaudio)
+    target_link_libraries(bro_video PRIVATE broaudio)
+    target_compile_definitions(bro_video PRIVATE BRO_VIDEO_HAS_BROAUDIO=1)
+endif()
+
 # vcpkg's unofficial-libwebm target exposes headers at include/webm/, but
 # libwebm's own headers cross-reference each other via mkvparser/... with
 # no prefix. Add the webm/ subdir directly so those resolve.

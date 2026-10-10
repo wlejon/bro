@@ -58,7 +58,9 @@ struct AudioPeaks {
 
 // Decode the audio track over `window` and reduce it to `buckets` columns.
 // Returns false when the file has no audio track this build can decode, or
-// when the window is empty.
+// when the window is empty. A file no backend claims is tried as an
+// audio-only file (WAV, FLAC, MP3, Ogg Vorbis, Ogg Opus) through broaudio's
+// streaming decoder, when bro_video is built with broaudio.
 //
 // Cost is one audio decode of the span — around 300 ms for five minutes of
 // AAC. Everything else about a timeline is cheap; this is the part worth doing
