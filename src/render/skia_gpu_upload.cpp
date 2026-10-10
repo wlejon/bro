@@ -186,6 +186,8 @@ std::shared_ptr<GpuImageUpload> SkiaGpu::uploadImage(const SharedPixels& px) {
         if (uploadStop_) return nullptr;
         if (!uploader_.joinable()) uploader_ = std::thread([this] { uploaderLoop(); });
         uploadQueue_.push_back(up);
+        std::erase_if(uploads_, [](const std::weak_ptr<GpuImageUpload>& w) { return w.expired(); });
+        uploads_.push_back(up);
     }
     uploadCv_.notify_one();
     return up;
@@ -485,6 +487,35 @@ void SkiaGpu::stopUploads() {
     }
     published.clear();
     while (uploadsRunning_.load(std::memory_order_acquire) > 0) std::this_thread::yield();
+
+    // Uploads somebody still holds (a page's ImageBitmap outlives the GPU
+    // context at teardown) give their texture back now, while the Skia
+    // context their borrowed image unrefs into is alive; the SkiaImage then
+    // retires with Skia's own last reference, at the context's release. The
+    // upload becomes a Failed one with no GPU, which draws its raster image
+    // and whose destructor reaches nothing.
+    std::vector<std::weak_ptr<GpuImageUpload>> uploads;
+    {
+        std::lock_guard<std::mutex> lock(uploadMutex_);
+        uploads.swap(uploads_);
+    }
+    for (auto& weak : uploads) {
+        std::shared_ptr<GpuImageUpload> up = weak.lock();
+        if (!up) continue;
+        {
+            Lock lock(*this);
+            up->image_.reset();
+            up->backend_.reset();
+        }
+        up->vkImage_.reset();
+        up->ticket_.store(0, std::memory_order_release);
+        {
+            std::lock_guard<std::mutex> lk(up->mu_);
+            up->state_.store(GpuImageUpload::State::Failed, std::memory_order_release);
+            up->gpu_ = nullptr;
+        }
+        up->cv_.notify_all();
+    }
     freeUploadStaging(/*all=*/true);
 }
 

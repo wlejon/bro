@@ -458,6 +458,20 @@ bool VulkanPresenter::recordReadback(VkCommandBuffer cmd, const Target& target, 
     cmdTransitionImage(cmd, target.image, colorRange(), layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
     layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
 
+    // One readback buffer serves every present, and the previous frame's copy
+    // into it may still be in flight (frames in flight): order this copy after
+    // every transfer write submitted before it.
+    VkBufferMemoryBarrier afterPrevious{};
+    afterPrevious.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    afterPrevious.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    afterPrevious.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    afterPrevious.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    afterPrevious.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    afterPrevious.buffer = readbackBuffer_;
+    afterPrevious.size = bytes;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                         0, nullptr, 1, &afterPrevious, 0, nullptr);
+
     VkBufferImageCopy region{};
     region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
     region.imageExtent = {target.width, target.height, 1};

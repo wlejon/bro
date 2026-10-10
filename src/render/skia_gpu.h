@@ -217,6 +217,9 @@ private:
     std::deque<std::weak_ptr<GpuImageUpload>> uploadQueue_;  // guarded by uploadMutex_
     std::vector<UploadStaging> uploadStaging_;               // guarded by uploadMutex_
     std::unordered_map<uint64_t, PublishedUpload> published_;  // guarded by uploadMutex_
+    // Every upload made here, so teardown can take the texture back from one
+    // a page still holds (an ImageBitmap in a global outlives this context).
+    std::vector<std::weak_ptr<GpuImageUpload>> uploads_;  // guarded by uploadMutex_
     std::thread uploader_;
     bool uploadStop_ = false;  // guarded by uploadMutex_
     std::atomic<int> uploadsRunning_{0};
