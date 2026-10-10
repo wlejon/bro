@@ -596,6 +596,20 @@ if (peaks) {
 // 6000 buckets over 60 s is 10 ms each, and it costs a minute of decoding.
 const near = bro.media.peaks('vod.m3u8', { buckets: 6000, from: 3600, to: 3660 });
 
+// bro.media.canDecode(type)
+//   → '' | 'maybe' | 'probably', as HTMLMediaElement.canPlayType answers:
+//   whether bro's audio decoders (decodeAudioData, createClipFromFile,
+//   createStreamFromFile, bro.media.peaks) read a file of `type` on THIS
+//   machine. `type` is a MIME type, with or without codecs=
+//   ('audio/mp4; codecs="mp4a.40.2"'), or a file extension ('.m4a', 'flac').
+//   wav, mp3, flac and Ogg Vorbis are 'probably' everywhere; Opus where the
+//   build has libopus; M4A/M4B (AAC) where the platform has an AAC decoder
+//   (Media Foundation on Windows, AudioToolbox on macOS; not Linux). A bare
+//   'audio/mp4' is 'maybe' (MP4 holds more than AAC). Works in workers.
+//
+//   const exts = ['mp3', 'flac', 'ogg', 'opus', 'wav', 'm4a', 'm4b']
+//       .filter((e) => bro.media.canDecode(e) !== '');
+
 // bro.media.tags(path)
 //   → { title, artist, album, albumArtist,   strings, '' when absent; several
 //                                            artists joined with ", "

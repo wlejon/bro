@@ -9,6 +9,8 @@
 #include "bronze_host/host_builder.h"
 
 #include "engine/engine.h"
+#include "bronze_host/host_bro_namespaces.h"
+#include "platform/desktop_notifications.h"
 #include "platform/dialogs.h"
 #include "util/log.h"
 
@@ -244,6 +246,55 @@ void installHeadlessGlobals(engine::Engine& engine) {
             engine.flush();
             return ev::undefined();
         }, 1, "setDeviceScaleFactor"));
+
+    // 6c. openedApps(): what bro.app.open was asked to start (headless starts
+    // nothing): [{ id, dir, from, command, args, cwd, spawned }], oldest
+    // first. openedApps({ clear: true }) also forgets them.
+    regBoth("openedApps", ev::makeFunction(
+        [](Value, std::span<const Value> a) -> Value {
+            const bool clear = !a.empty() && ev::isObject(a[0]) && ev::toBool(ev::getProperty(a[0], "clear"));
+            Value v = appOpenRecordsValue();
+            if (clear) {
+                ev::Persistent keep(v);
+                clearAppOpenRecords();
+                return keep.get();
+            }
+            return v;
+        }, 1, "openedApps"));
+
+    // 6d. notifications(): the desktop notifications the page posted
+    // (Notification, bro.window.notify), which headless records and does not
+    // show: [{ id, title, body, icon, silent, timeout, replacesId, appId,
+    // appName, via }].
+    // notifications({ clear: true }) also forgets them.
+    regBoth("notifications", ev::makeFunction(
+        [](Value, std::span<const Value> a) -> Value {
+            const bool clear = !a.empty() && ev::isObject(a[0]) && ev::toBool(ev::getProperty(a[0], "clear"));
+            auto list = platform::desktop::getRecordedNotifications();
+            if (clear) platform::desktop::clearRecordedNotifications();
+            return hostArrayOf(list.size(), [&list](size_t i) -> Value {
+                const auto& n = list[i];
+                ObjectBuilder o;
+                o.set("id", ev::fromDouble(double(n.id)));
+                o.set("title", ev::fromUtf8(n.title));
+                o.set("body", ev::fromUtf8(n.body));
+                o.set("icon", ev::fromUtf8(n.options.icon));
+                o.set("silent", ev::fromBool(n.options.silent));
+                o.set("timeout", ev::fromDouble(double(n.options.timeoutMs)));
+                o.set("replacesId", ev::fromDouble(double(n.options.replacesId)));
+                o.set("appId", ev::fromUtf8(n.options.appId));
+                o.set("appName", ev::fromUtf8(n.options.appName));
+                o.set("via", ev::fromUtf8(n.via));
+                return o.get();
+            });
+        }, 1, "notifications"));
+
+    // 6e. lastFileDialogFilter(): the filter the last open/save file dialog
+    // was asked for ("Accepted files|wav;mp3;..." for <input accept>), "" for none.
+    regBoth("lastFileDialogFilter", ev::makeFunction(
+        [](Value, std::span<const Value>) -> Value {
+            return ev::fromUtf8(platform::Dialogs::lastFileFilter());
+        }, 0, "lastFileDialogFilter"));
 
     // 7. setDialogAnswer(accept)
     regBoth("setDialogAnswer", ev::makeFunction(

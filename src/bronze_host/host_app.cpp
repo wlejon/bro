@@ -9,6 +9,8 @@
 //   bro.app.manifest                        the declared desktop keys
 //   bro.app.permissions                     { requested, granted, shell }
 //   bro.app.spawn(args, {newInstance})      start another process of this app
+//   bro.app.open(id, args, {newInstance})   start another app, found by id
+//   bro.app.find(id)                        where open(id) would find it
 //   instance events                         js/bro_core.js, over _setInstanceDispatcher
 //
 // Everything here is the same for an app.dll and a page compiled at boot.
@@ -18,12 +20,15 @@
 #include "bronze_host/host_realm_scope.h"
 #include "bronze_host/host_runtime.h"
 #include "bronze_host/host_values.h"
+#include "engine/app_manifest.h"
 #include "engine/app_runtime.h"
+#include "engine/config_loader.h"
 #include "engine/engine.h"
 #include "platform/window.h"  // platform::Window::raise()
 #include "util/log.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <span>
 #include <string>
@@ -211,6 +216,124 @@ bool spawnDetached(const std::vector<std::string>& argv, const std::string& cwd,
 }
 #endif
 
+// ---- open: another app by id ---------------------------------------------------
+
+std::string u8str(const fs::path& p) {
+    std::u8string u = p.u8string();
+    return std::string(u.begin(), u.end());
+}
+
+// The folder app `id` beside this one: a directory of the project this app
+// belongs to (BRO_PROJECT_ROOT, else the nearest project above the app, else
+// the folder holding the app) whose bro.json declares that id, or which is
+// named for it.
+std::string findSiblingApp(const std::string& id, const engine::AppRuntimeInfo& self) {
+    std::string root;
+    if (const char* env = std::getenv("BRO_PROJECT_ROOT"); env && *env) root = env;
+    if (root.empty() && !self.dir.empty()) root = engine::findAncestorProjectRoot(self.dir);
+    if (root.empty() && !self.dir.empty()) root = u8str(u8path(self.dir).parent_path());
+    if (root.empty()) return {};
+    std::error_code ec;
+    fs::directory_iterator it(u8path(root), fs::directory_options::skip_permission_denied, ec);
+    if (ec) return {};
+    std::string byName;
+    for (const fs::directory_entry& e : it) {
+        if (!e.is_directory(ec)) continue;
+        const fs::path dir = e.path();
+        const fs::path manifest = dir / "bro.json";
+        if (fs::is_regular_file(manifest, ec)) {
+            engine::AppDescriptor d;
+            if (engine::parseAppManifest(u8str(manifest), d) && engine::appIdFor(d, u8str(dir)) == id)
+                return u8str(dir);
+        } else if (byName.empty() && u8str(dir.filename()) == id && fs::is_regular_file(dir / "index.html", ec)) {
+            byName = u8str(dir);
+        }
+    }
+    return byName;
+}
+
+struct AppTarget {
+    std::string dir;
+    std::string from;  // "installed" | "project" | "self"
+};
+
+// Where `bro <id>` finds the app (the install roots, docs/apps.md), else a
+// sibling in this app's project.
+AppTarget resolveAppId(const std::string& id) {
+    const engine::AppRuntimeInfo& self = engine::currentApp();
+    if (!engine::isValidAppId(id)) return {};
+    if (std::string dir = engine::findInstalledApp(id); !dir.empty()) return {native(dir), "installed"};
+    if (std::string dir = findSiblingApp(id, self); !dir.empty()) return {native(dir), "project"};
+    if (id == self.id && !self.dir.empty()) return {native(self.dir), "self"};
+    return {};
+}
+
+// The stock bro beside this executable: bro-headless and a host that embeds
+// the engine open apps with the `bro` they ship with, which is what runs a
+// folder app on its own.
+std::string stockBro() {
+    const std::string self = exePath();
+    if (self.empty()) return self;
+    fs::path p = u8path(self);
+    std::string stem = u8str(p.stem());
+    if (stem == "bro") return self;
+#ifdef _WIN32
+    fs::path bro = p.parent_path() / "bro.exe";
+#else
+    fs::path bro = p.parent_path() / "bro";
+#endif
+    std::error_code ec;
+    return fs::is_regular_file(bro, ec) ? native(u8str(bro)) : self;
+}
+
+struct AppOpen {
+    std::string id;
+    std::string dir;
+    std::string from;
+    std::vector<std::string> command;
+    std::string cwd;
+    bool spawned = false;
+};
+std::vector<AppOpen>& appOpens() {
+    static std::vector<AppOpen> opens;
+    return opens;
+}
+
+Value appOpenValue(const AppOpen& o) {
+    ObjectBuilder b;
+    b.set("id", ev::fromUtf8(o.id));
+    b.set("dir", ev::fromUtf8(o.dir));
+    b.set("from", ev::fromUtf8(o.from));
+    {
+        ev::Persistent cmd(strings(o.command));
+        b.set("command", cmd.get());
+    }
+    {
+        // The app's own arguments: what it reads as bro.app.argv.
+        std::vector<std::string> args;
+        size_t first = 2;
+        if (o.command.size() > 1 && o.command[1] == "--new-instance") first = 3;
+        if (o.command.size() > first) args.assign(o.command.begin() + first, o.command.end());
+        ev::Persistent a(strings(args));
+        b.set("args", a.get());
+    }
+    b.set("cwd", ev::fromUtf8(o.cwd));
+    b.set("spawned", ev::fromBool(o.spawned));
+    return b.get();
+}
+
+Value makeErrorValue(const std::string& message) {
+    ev::Persistent text(ev::fromUtf8(message));
+    auto ctor = ev::globalValue("Error");
+    if (ctor.found && ev::isFunction(ctor.value)) {
+        ev::Persistent c(ctor.value);
+        const Value arg = text.get();
+        auto r = ev::construct(c.get(), std::span<const Value>(&arg, 1));
+        if (!r.thrown) return r.value;
+    }
+    return text.get();
+}
+
 // The JS side's dispatcher (bro_core.js): called with (argvArray, cwd).
 ev::Persistent* g_instanceDispatcher = nullptr;
 
@@ -284,6 +407,14 @@ Value makeBroAppValue() {
         ObjectBuilder s;
         s.set("loadedMs", ev::fromDouble(engine::documentLoadedMs()));
         s.set("firstFrameMs", ev::fromDouble(engine::firstFrameMs()));
+        // How the graphics came up: the window, the GPU, and both (headless
+        // does the two at once).
+        const engine::GraphicsStartup g = engine::graphicsStartup();
+        ObjectBuilder gfx;
+        gfx.set("windowMs", ev::fromDouble(g.windowMs));
+        gfx.set("gpuMs", ev::fromDouble(g.gpuMs));
+        gfx.set("totalMs", ev::fromDouble(g.totalMs));
+        s.set("graphics", gfx.get());
         return s.get();
     }, nullptr);
 
@@ -359,6 +490,73 @@ Value makeBroAppValue() {
         return ev::fromBool(true);
     });
 
+    // find(id) -> { id, dir, from } | null: where open(id) would find the app.
+    o.def("find", 1, [](Value, std::span<const Value> a) -> Value {
+        if (!hasArg(a, 0) || !ev::isString(a[0])) return ev::null();
+        const std::string id = ev::toUtf8(a[0]);
+        AppTarget t = resolveAppId(id);
+        if (t.dir.empty()) return ev::null();
+        ObjectBuilder b;
+        b.set("id", ev::fromUtf8(id));
+        b.set("dir", ev::fromUtf8(t.dir));
+        b.set("from", ev::fromUtf8(t.from));
+        return b.get();
+    });
+
+    // open(id, args = [], {newInstance}) -> Promise<{ id, dir, from, command,
+    // args, cwd, spawned }>: another folder app, found as `bro <id>` finds it
+    // (installed), else beside this one in its project, started with the
+    // stock bro: `bro <dir> args...`. A single-instance app that is running
+    // gets an `instance` event instead of a second window (bro does the
+    // hand-off). Headless records the call (openedApps()) and starts nothing.
+    o.def("open", 3, [](Value, std::span<const Value> a) -> Value {
+        ev::Persistent promise(ev::createPromise());
+        if (!hasArg(a, 0) || !ev::isString(a[0])) {
+            ev::Persistent err(makeErrorValue("bro.app.open: an app id is required"));
+            ev::rejectPromise(promise.get(), err.get());
+            return promise.get();
+        }
+        const std::string id = ev::toUtf8(a[0]);
+        std::vector<std::string> extra = hasArg(a, 1) ? readStrings(a[1]) : std::vector<std::string>{};
+        bool newInstance = false;
+        if (hasArg(a, 2) && ev::isObject(a[2])) newInstance = ev::toBool(ev::getProperty(a[2], "newInstance"));
+
+        AppTarget t = resolveAppId(id);
+        if (t.dir.empty()) {
+            ev::Persistent err(makeErrorValue(
+                engine::isValidAppId(id) ? "bro.app.open: no app '" + id + "' is installed or in this app's project"
+                                         : "bro.app.open: '" + id + "' is not an app id"));
+            ev::rejectPromise(promise.get(), err.get());
+            return promise.get();
+        }
+        AppOpen rec;
+        rec.id = id;
+        rec.dir = t.dir;
+        rec.from = t.from;
+        rec.command.push_back(stockBro());
+        if (newInstance) rec.command.push_back("--new-instance");
+        rec.command.push_back(t.dir);
+        rec.command.insert(rec.command.end(), extra.begin(), extra.end());
+        rec.cwd = engine::currentWorkingDirectory();
+
+        auto* eng = hostEngine();
+        const bool headless = eng && eng->displayMode() == engine::DisplayMode::Headless;
+        if (!headless) {
+            std::string err;
+            if (!spawnDetached(rec.command, rec.cwd, err)) {
+                LOG_WARN("bro.app.open %s: %s", id.c_str(), err.c_str());
+                ev::Persistent e(makeErrorValue("bro.app.open: " + err));
+                ev::rejectPromise(promise.get(), e.get());
+                return promise.get();
+            }
+            rec.spawned = true;
+        }
+        appOpens().push_back(rec);
+        ev::Persistent result(appOpenValue(rec));
+        ev::resolvePromise(promise.get(), result.get());
+        return promise.get();
+    });
+
     o.def("_setInstanceDispatcher", 1, [](Value, std::span<const Value> a) -> Value {
         // The app's top-level page hears launches; an <iframe>'s realm runs
         // bro_core.js too and must not take them over.
@@ -377,5 +575,12 @@ Value makeBroAppValue() {
     });
     return o.get();
 }
+
+Value appOpenRecordsValue() {
+    const auto& opens = appOpens();
+    return hostArrayOf(opens.size(), [&opens](size_t i) -> Value { return appOpenValue(opens[i]); });
+}
+
+void clearAppOpenRecords() { appOpens().clear(); }
 
 }  // namespace bro::bronze_host

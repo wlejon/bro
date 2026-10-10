@@ -397,6 +397,11 @@ int32_t bro_window_notify(const char* title, const char* body, const char* icon,
     opts.timeoutMs = timeoutMs;
     opts.silent = silent;
     opts.replacesId = static_cast<uint32_t>(replacesId);
+    // The app is who notifies: its id (the Windows AUMID, the Linux desktop
+    // entry) and its name.
+    const engine::AppRuntimeInfo& app = engine::currentApp();
+    opts.appId = app.id;
+    opts.appName = app.manifest.name.empty() ? app.id : app.manifest.name;
     return static_cast<int32_t>(platform::desktop::showNotification(w, title ? title : "", body ? body : "", opts));
 }
 

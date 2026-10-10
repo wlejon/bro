@@ -36,6 +36,8 @@ void installObserversModule();
 void installEventsModule();
 // js/clipboard.js: ClipboardItem and navigator.clipboard.write/read.
 void installClipboardModule();
+// js/notification.js: the web Notification API over bro.window.notify.
+void installNotificationModule();
 // The global object's prototype chain (host_global_proto.cpp): globalThis ->
 // <ctorName>.prototype -> EventTarget.prototype (Object.prototype without
 // one), with Symbol.toStringTag = <ctorName>, and <ctorName> registered as

@@ -194,6 +194,21 @@ double firstFrameMs() { return gFirstFrameMs.load(std::memory_order_relaxed); }
 
 double documentLoadedMs() { return gLoadedMs.load(std::memory_order_relaxed); }
 
+namespace {
+std::atomic<double> gGfxWindowMs{-1.0}, gGfxGpuMs{-1.0}, gGfxTotalMs{-1.0};
+}
+
+void noteGraphicsStartup(double windowMs, double gpuMs, double totalMs) {
+    gGfxWindowMs.store(windowMs, std::memory_order_relaxed);
+    gGfxGpuMs.store(gpuMs, std::memory_order_relaxed);
+    gGfxTotalMs.store(totalMs, std::memory_order_relaxed);
+}
+
+GraphicsStartup graphicsStartup() {
+    return {gGfxWindowMs.load(std::memory_order_relaxed), gGfxGpuMs.load(std::memory_order_relaxed),
+            gGfxTotalMs.load(std::memory_order_relaxed)};
+}
+
 std::string initialWindowTitle(const EngineConfig& config) {
     if (!config.title.empty()) return config.title;
     if (!config.manifest.name.empty()) return config.manifest.name;

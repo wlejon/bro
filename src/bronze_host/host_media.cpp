@@ -124,6 +124,87 @@ static Value js_media_thumbnails(Value, std::span<const Value> a) {
 }
 
 #if BRO_WITH_AUDIO
+#ifndef BROAUDIO_HAS_AAC
+#define BROAUDIO_HAS_AAC 0
+#endif
+#ifndef BROAUDIO_HAS_OPUS
+#define BROAUDIO_HAS_OPUS 0
+#endif
+
+// bro.media.canDecode(type) -> '' | 'maybe' | 'probably', shaped like
+// HTMLMediaElement.canPlayType: whether broaudio decodes a file of `type`
+// (decodeAudioData, createClipFromFile, createStreamFromFile, bro.media.peaks)
+// on this machine. `type` is a MIME type, with or without codecs=
+// ('audio/mp4; codecs="mp4a.40.2"'), or a file extension ('.m4a', 'flac').
+// M4A/AAC is 'probably' only where the platform has an AAC decoder (Media
+// Foundation, AudioToolbox), and Opus only in a build with libopus.
+static std::string decodeSupport(std::string type) {
+    for (auto& c : type) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    auto trim = [](std::string s) {
+        while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) s.erase(s.begin());
+        while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) s.pop_back();
+        return s;
+    };
+    std::string base = trim(type.substr(0, type.find(';')));
+    std::vector<std::string> codecs;
+    if (size_t at = type.find("codecs="); at != std::string::npos) {
+        std::string list = type.substr(at + 7);
+        if (size_t semi = list.find(';'); semi != std::string::npos) list.resize(semi);
+        std::string cur;
+        for (char c : list) {
+            if (c == '"' || c == '\'') continue;
+            if (c == ',') { codecs.push_back(trim(cur)); cur.clear(); }
+            else cur += c;
+        }
+        if (!trim(cur).empty()) codecs.push_back(trim(cur));
+    }
+    const bool aac = BROAUDIO_HAS_AAC != 0;
+    const bool opus = BROAUDIO_HAS_OPUS != 0;
+    // An extension, with or without its dot.
+    if (base.find('/') == std::string::npos) {
+        if (!base.empty() && base[0] == '.') base.erase(0, 1);
+        if (base == "wav" || base == "mp3" || base == "flac") return "probably";
+        if (base == "ogg" || base == "oga") return opus ? "probably" : "maybe";  // Vorbis or Opus inside
+        if (base == "opus") return opus ? "probably" : "";
+        if (base == "m4a" || base == "m4b" || base == "mp4") return aac ? "probably" : "";
+        return "";
+    }
+    auto allCodecs = [&](std::initializer_list<const char*> prefixes) {
+        for (const auto& c : codecs) {
+            bool ok = false;
+            for (const char* p : prefixes) ok = ok || c.rfind(p, 0) == 0;
+            if (!ok) return false;
+        }
+        return true;
+    };
+    if (base == "audio/wav" || base == "audio/x-wav" || base == "audio/wave" || base == "audio/vnd.wave")
+        return codecs.empty() || allCodecs({"1", "3"}) ? "probably" : "";
+    if (base == "audio/mpeg" || base == "audio/mp3")
+        return codecs.empty() || allCodecs({"mp3", "mp4a.6b", "mp4a.69"}) ? "probably" : "";
+    if (base == "audio/flac" || base == "audio/x-flac") return "probably";
+    if (base == "audio/ogg" || base == "application/ogg") {
+        if (codecs.empty()) return opus ? "probably" : "maybe";
+        for (const auto& c : codecs) {
+            if (c == "vorbis") continue;
+            if (c == "opus" && opus) continue;
+            return "";
+        }
+        return "probably";
+    }
+    if (base == "audio/opus") return opus ? "probably" : "";
+    if (base == "audio/mp4" || base == "audio/x-m4a" || base == "audio/m4a" || base == "audio/x-m4b") {
+        if (!aac) return "";
+        if (codecs.empty()) return "maybe";  // MP4 can hold more than AAC
+        return allCodecs({"mp4a.40", "mp4a.67", "aac"}) ? "probably" : "";
+    }
+    return "";
+}
+
+static Value js_media_canDecode(Value, std::span<const Value> a) {
+    if (a.empty() || ev::isUndefined(a[0])) return ev::throwTypeError("canDecode(type)");
+    return ev::fromUtf8(decodeSupport(ev::toUtf8(a[0])));
+}
+
 // bro.media.tags(path): a music file's tags, length and format, read by
 // broaudio's tag reader (headers and tag blocks only, never the audio).
 static Value js_media_tags(Value, std::span<const Value> a) {
@@ -173,6 +254,7 @@ Value makeBroMediaValue() {
     media.def("thumbnails", 2, js_media_thumbnails);
 #if BRO_WITH_AUDIO
     media.def("tags", 1, js_media_tags);
+    media.def("canDecode", 1, js_media_canDecode);
 #endif
     return media.get();
 }

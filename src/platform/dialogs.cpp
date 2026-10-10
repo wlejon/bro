@@ -18,6 +18,7 @@ bool s_interactive = true;
 bool s_autoAccept = true;
 Dialogs::TickCallback s_tickCb;
 std::vector<std::string> s_queuedPicks;
+std::string s_lastFileFilter;
 
 std::string normalizeSeparators(std::string s) {
 #ifdef _WIN32
@@ -123,7 +124,10 @@ std::string patternFromAccept(const std::string& accept) {
             } else if (tok == "image/*") {
                 add("png"); add("jpg"); add("jpeg"); add("gif"); add("webp"); add("bmp");
             } else if (tok == "audio/*") {
-                add("wav"); add("mp3"); add("ogg"); add("flac");
+                // What bro decodes (bro.media.canDecode): M4A/M4B too, which
+                // the platform's AAC decoder plays where there is one.
+                add("wav"); add("mp3"); add("ogg"); add("oga"); add("opus"); add("flac");
+                add("m4a"); add("m4b");
             } else if (tok == "video/*") {
                 add("webm"); add("mp4");
             } else if (auto slash = tok.find('/');
@@ -189,8 +193,13 @@ std::optional<std::string> Dialogs::showPrompt(const std::string& message,
     return defaultText;
 }
 
+std::string Dialogs::lastFileFilter() {
+    return s_lastFileFilter;
+}
+
 bool Dialogs::showOpenFileDialog(const std::string& filter, bool allowMultiple,
                                  std::vector<std::string>& picked, std::string& refusal) {
+    s_lastFileFilter = filter;
     DialogBackend::FileDialogRequest request;
     request.kind = DialogBackend::FileDialogKind::OpenFile;
     request.filters = filtersFrom(filter);
@@ -220,6 +229,7 @@ bool Dialogs::showOpenFolderDialog(const std::string& defaultLocation, bool allo
 
 bool Dialogs::showSaveFileDialog(const std::string& filter, const std::string& defaultName,
                                  std::optional<std::string>& saved, std::string& refusal) {
+    s_lastFileFilter = filter;
     DialogBackend::FileDialogRequest request;
     request.kind = DialogBackend::FileDialogKind::SaveFile;
     request.filters = filtersFrom(filter);

@@ -40,6 +40,9 @@ Value makeBroTerminalValue();
 // bro.app (host_app.cpp): the running app's identity, argv, per-app
 // directories, permissions and single-instance hand-off.
 Value makeBroAppValue();
+// What bro.app.open was asked to start, oldest first (headless openedApps()).
+Value appOpenRecordsValue();
+void clearAppOpenRecords();
 
 // Stubs for unavailable / compiled-out subsystems (host_bro_root.cpp)
 Value makeUnavailableNamespace(const std::string& name, const std::string& flag);

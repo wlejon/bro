@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstdlib>
 #include <mutex>
+#include <thread>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -11,7 +12,11 @@
 #include <shellapi.h>
 #else
 #include <dlfcn.h>
+#include <fcntl.h>
+#include <spawn.h>
+#include <sys/wait.h>
 #include <unistd.h>
+extern "C" char** environ;
 #endif
 
 namespace bro::platform::desktop {
@@ -22,10 +27,71 @@ std::mutex s_mutex;
 std::vector<NotificationRecord> s_records;
 std::atomic<uint32_t> s_nextId{1};
 
+void record(uint32_t id, const std::string& title, const std::string& body, const NotificationOptions& options,
+            const char* via) {
+    std::lock_guard<std::mutex> lock(s_mutex);
+    s_records.push_back({id, title, body, options, via});
+}
+
 #ifdef _WIN32
 constexpr UINT kNotificationTrayId = 0xBE;
 HWND g_trayOwner = nullptr;
-#elif !defined(__APPLE__)
+
+bool showBalloon(const Window* window, const std::string& title, const std::string& body,
+                 const NotificationOptions& options) {
+    HWND hwnd = hwndOf(window);
+    if (!hwnd) return false;
+    NOTIFYICONDATAW nid{};
+    nid.cbSize = sizeof(nid);
+    nid.hWnd = hwnd;
+    nid.uID = kNotificationTrayId;
+    if (!g_trayOwner) {
+        nid.uFlags = NIF_ICON | NIF_TIP;
+        nid.hIcon = LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(1));
+        if (!nid.hIcon) nid.hIcon = LoadIconW(nullptr, MAKEINTRESOURCEW(32512));
+        copyWide(nid.szTip, ARRAYSIZE(nid.szTip), utf8ToWide(options.appName.empty() ? "bro" : options.appName));
+        if (Shell_NotifyIconW(NIM_ADD, &nid)) g_trayOwner = hwnd;
+    }
+    nid.uFlags = NIF_INFO;
+    nid.dwInfoFlags = NIIF_INFO | NIIF_RESPECT_QUIET_TIME | (options.silent ? NIIF_NOSOUND : 0);
+    copyWide(nid.szInfoTitle, ARRAYSIZE(nid.szInfoTitle), utf8ToWide(title.empty() ? "bro" : title));
+    copyWide(nid.szInfo, ARRAYSIZE(nid.szInfo), utf8ToWide(body.empty() ? " " : body));
+    return Shell_NotifyIconW(NIM_MODIFY, &nid) != FALSE;
+}
+#else
+
+// Runs `argv` without a shell (nothing in a title can be read as a command)
+// and reaps it off this thread.
+bool spawnQuiet(const std::vector<std::string>& args) {
+    std::vector<char*> argv;
+    for (const auto& a : args) argv.push_back(const_cast<char*>(a.c_str()));
+    argv.push_back(nullptr);
+    posix_spawn_file_actions_t fa;
+    posix_spawn_file_actions_init(&fa);
+    posix_spawn_file_actions_addopen(&fa, 1, "/dev/null", O_WRONLY, 0);
+    posix_spawn_file_actions_addopen(&fa, 2, "/dev/null", O_WRONLY, 0);
+    pid_t pid = 0;
+    const int rc = posix_spawnp(&pid, argv[0], &fa, nullptr, argv.data(), environ);
+    posix_spawn_file_actions_destroy(&fa);
+    if (rc != 0) return false;
+    std::thread([pid] {
+        int status = 0;
+        waitpid(pid, &status, 0);
+    }).detach();
+    return true;
+}
+
+#if defined(__APPLE__)
+// An AppleScript string literal.
+std::string appleScriptString(const std::string& s) {
+    std::string out = "\"";
+    for (char c : s) {
+        if (c == '"' || c == '\\') out += '\\';
+        out += c;
+    }
+    return out + "\"";
+}
+#else
 
 // Dynamic D-Bus definitions for org.freedesktop.Notifications
 typedef struct DBusConnection DBusConnection;
@@ -45,6 +111,9 @@ typedef enum {
 #define DBUS_TYPE_UINT32 ((int)'u')
 #define DBUS_TYPE_INT32  ((int)'i')
 #define DBUS_TYPE_ARRAY  ((int)'a')
+#define DBUS_TYPE_VARIANT ((int)'v')
+#define DBUS_TYPE_DICT_ENTRY ((int)'e')
+#define DBUS_TYPE_BOOLEAN ((int)'b')
 
 typedef DBusConnection* (*Fn_dbus_bus_get)(DBusBusType, DBusError*);
 typedef DBusMessage* (*Fn_dbus_message_new_method_call)(const char*, const char*, const char*, const char*);
@@ -80,7 +149,7 @@ struct DBusApi {
         if (!handle) handle = dlopen("libdbus-1.so", RTLD_LAZY);
         if (!handle) return false;
 
-        #define LOAD_SYM(member, sym) member = (Fn_##sym)dlsym(handle, #sym); if (!member) return false
+        #define LOAD_SYM(member, sym) member = (Fn_##sym)dlsym(handle, #sym); if (!member) { handle = nullptr; return false; }
         LOAD_SYM(bus_get, dbus_bus_get);
         LOAD_SYM(message_new_method_call, dbus_message_new_method_call);
         LOAD_SYM(message_iter_init_append, dbus_message_iter_init_append);
@@ -100,6 +169,28 @@ struct DBusApi {
 
 DBusApi g_dbus;
 bool g_dbusTried = false;
+
+// One string-valued hint: {key: <string>}.
+void appendStringHint(DBusMessageIter* hints, const char* key, const char* value) {
+    DBusMessageIter entry, variant;
+    g_dbus.message_iter_open_container(hints, DBUS_TYPE_DICT_ENTRY, nullptr, &entry);
+    g_dbus.message_iter_append_basic(&entry, DBUS_TYPE_STRING, &key);
+    g_dbus.message_iter_open_container(&entry, DBUS_TYPE_VARIANT, "s", &variant);
+    g_dbus.message_iter_append_basic(&variant, DBUS_TYPE_STRING, &value);
+    g_dbus.message_iter_close_container(&entry, &variant);
+    g_dbus.message_iter_close_container(hints, &entry);
+}
+
+void appendBoolHint(DBusMessageIter* hints, const char* key, bool value) {
+    DBusMessageIter entry, variant;
+    const int v = value ? 1 : 0;
+    g_dbus.message_iter_open_container(hints, DBUS_TYPE_DICT_ENTRY, nullptr, &entry);
+    g_dbus.message_iter_append_basic(&entry, DBUS_TYPE_STRING, &key);
+    g_dbus.message_iter_open_container(&entry, DBUS_TYPE_VARIANT, "b", &variant);
+    g_dbus.message_iter_append_basic(&variant, DBUS_TYPE_BOOLEAN, &v);
+    g_dbus.message_iter_close_container(&entry, &variant);
+    g_dbus.message_iter_close_container(hints, &entry);
+}
 
 uint32_t sendDbusNotification(const std::string& title, const std::string& body, const NotificationOptions& options) {
     if (!g_dbusTried) {
@@ -137,7 +228,10 @@ uint32_t sendDbusNotification(const std::string& title, const std::string& body,
     DBusMessageIter args;
     g_dbus.message_iter_init_append(msg, &args);
 
-    const char* appName = "bro";
+    // The app's own name, so the server groups and labels it as the app
+    // rather than as "bro".
+    const std::string appNameText = options.appName.empty() ? std::string("bro") : options.appName;
+    const char* appName = appNameText.c_str();
     uint32_t replacesId = options.replacesId;
     const char* appIcon = options.icon.c_str();
     const char* summary = title.c_str();
@@ -155,9 +249,13 @@ uint32_t sendDbusNotification(const std::string& title, const std::string& body,
     g_dbus.message_iter_open_container(&args, DBUS_TYPE_ARRAY, "s", &actionsIter);
     g_dbus.message_iter_close_container(&args, &actionsIter);
 
-    // hints: dictionary (a{sv})
+    // hints: dictionary (a{sv}). desktop-entry is the app's id: the desktop
+    // entry `bro --install` writes is <id>.desktop, which is how a server
+    // (helm's included) finds the app's icon and settings.
     DBusMessageIter hintsIter;
     g_dbus.message_iter_open_container(&args, DBUS_TYPE_ARRAY, "{sv}", &hintsIter);
+    if (!options.appId.empty()) appendStringHint(&hintsIter, "desktop-entry", options.appId.c_str());
+    if (options.silent) appendBoolHint(&hintsIter, "suppress-sound", true);
     g_dbus.message_iter_close_container(&args, &hintsIter);
 
     g_dbus.message_iter_append_basic(&args, DBUS_TYPE_INT32, &timeout);
@@ -177,7 +275,8 @@ uint32_t sendDbusNotification(const std::string& title, const std::string& body,
     return notificationId;
 }
 
-#endif
+#endif  // !__APPLE__
+#endif  // !_WIN32
 
 } // namespace
 
@@ -189,51 +288,49 @@ uint32_t showNotification(
 ) {
     const uint32_t generatedId = s_nextId.fetch_add(1, std::memory_order_relaxed);
 
-    {
-        std::lock_guard<std::mutex> lock(s_mutex);
-        s_records.push_back({generatedId, title, body, options});
-    }
-
     if (isHeadless()) {
+        record(generatedId, title, body, options, "headless");
         return generatedId;
     }
 
 #ifdef _WIN32
-    HWND hwnd = hwndOf(window);
-    if (!hwnd) return generatedId;
-
-    NOTIFYICONDATAW nid{};
-    nid.cbSize = sizeof(nid);
-    nid.hWnd = hwnd;
-    nid.uID = kNotificationTrayId;
-    if (!g_trayOwner) {
-        nid.uFlags = NIF_ICON | NIF_TIP;
-        nid.hIcon = LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(1));
-        if (!nid.hIcon) nid.hIcon = LoadIconW(nullptr, MAKEINTRESOURCEW(32512));
-        copyWide(nid.szTip, ARRAYSIZE(nid.szTip), L"bro");
-        if (Shell_NotifyIconW(NIM_ADD, &nid)) {
-            g_trayOwner = hwnd;
-        }
+    // A toast needs an AppUserModelID: the app's id. An anonymous app (no
+    // id) gets the tray balloon.
+    if (!options.appId.empty() &&
+        showWindowsToast(options.appId, options.appName, title, body, options, options.replacesId ? options.replacesId : generatedId)) {
+        record(generatedId, title, body, options, "toast");
+        return options.replacesId ? options.replacesId : generatedId;
     }
-    nid.uFlags = NIF_INFO;
-    nid.dwInfoFlags = NIIF_INFO | NIIF_RESPECT_QUIET_TIME;
-    copyWide(nid.szInfoTitle, ARRAYSIZE(nid.szInfoTitle), utf8ToWide(title.empty() ? "bro" : title));
-    copyWide(nid.szInfo, ARRAYSIZE(nid.szInfo), utf8ToWide(body.empty() ? " " : body));
-    Shell_NotifyIconW(NIM_MODIFY, &nid);
+    const bool shown = showBalloon(window, title, body, options);
+    record(generatedId, title, body, options, shown ? "balloon" : "");
     return generatedId;
 #elif defined(__APPLE__)
     (void)window;
-    std::string cmd = "osascript -e 'display notification \"" + body + "\" with title \"" + title + "\"' >/dev/null 2>&1 &";
-    std::system(cmd.c_str());
+    if (showMacUserNotification(title, body, options, options.replacesId ? options.replacesId : generatedId)) {
+        record(generatedId, title, body, options, "usernotifications");
+        return options.replacesId ? options.replacesId : generatedId;
+    }
+    std::string script = "display notification " + appleScriptString(body) + " with title " +
+                         appleScriptString(title.empty() ? (options.appName.empty() ? "bro" : options.appName) : title);
+    if (!options.silent) script += " sound name \"default\"";
+    const bool shown = spawnQuiet({"osascript", "-e", script});
+    record(generatedId, title, body, options, shown ? "osascript" : "");
     return generatedId;
 #else
     (void)window;
     uint32_t dbusId = sendDbusNotification(title, body, options);
-    if (dbusId > 0) return dbusId;
-
-    // Fallback to notify-send
-    std::string cmd = "notify-send \"" + title + "\" \"" + body + "\" >/dev/null 2>&1 &";
-    std::system(cmd.c_str());
+    if (dbusId > 0) {
+        record(dbusId, title, body, options, "dbus");
+        return dbusId;
+    }
+    std::vector<std::string> args{"notify-send"};
+    if (!options.appName.empty()) args.push_back("--app-name=" + options.appName);
+    if (!options.icon.empty()) args.push_back("--icon=" + options.icon);
+    args.push_back("--");
+    args.push_back(title);
+    args.push_back(body);
+    const bool shown = spawnQuiet(args);
+    record(generatedId, title, body, options, shown ? "notify-send" : "");
     return generatedId;
 #endif
 }

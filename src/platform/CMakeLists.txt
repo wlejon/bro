@@ -34,12 +34,17 @@ if(WIN32)
     # DoDragDrop and the shell's drag-image helper (sdl/sdl_drag_win.cpp).
     # The clipboard's multi-format write and image reads (sdl/win32_clipboard.cpp).
     target_sources(bro_platform PRIVATE sdl/sdl_drag_win.cpp sdl/win32_clipboard.cpp)
-    target_link_libraries(bro_platform PRIVATE shell32 ole32 uuid)
+    # Toasts under the app's AppUserModelID (WinRT, runtimeobject).
+    target_sources(bro_platform PRIVATE desktop_notifications_win.cpp)
+    target_link_libraries(bro_platform PRIVATE shell32 ole32 uuid runtimeobject)
 elseif(APPLE)
     # NSDraggingSession (drags out of a window).
     target_sources(bro_platform PRIVATE sdl/sdl_drag_mac.mm)
     set_source_files_properties(sdl/sdl_drag_mac.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
-    target_link_libraries(bro_platform PRIVATE "-framework AppKit")
+    # UNUserNotificationCenter (notifications from a bundled bro).
+    target_sources(bro_platform PRIVATE desktop_notifications_mac.mm)
+    set_source_files_properties(desktop_notifications_mac.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    target_link_libraries(bro_platform PRIVATE "-framework AppKit" "-framework UserNotifications")
 endif()
 # The agent control channel's transport (control_socket.cpp).
 target_link_libraries(bro_platform PRIVATE brolink)

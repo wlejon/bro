@@ -27,6 +27,7 @@
 extern "C" void bro_observers_main();
 extern "C" void bro_events_main();
 extern "C" void bro_clipboard_main();
+extern "C" void bro_notification_main();
 extern "C" void bro_net_sync_main();
 extern "C" void bro_image_gpu_main();
 extern "C" void bro_core_main();
@@ -109,6 +110,13 @@ void installEventsModule() {
 void installClipboardModule() {
     bronze::embed::runEntry(bro_clipboard_main);
     adoptGlobalProperty("ClipboardItem");
+}
+
+// js/notification.js reads bro.window.notify at the point of use, so it
+// loads anywhere after brokit's Event.
+void installNotificationModule() {
+    bronze::embed::runEntry(bro_notification_main);
+    adoptGlobalProperty("Notification");
 }
 
 void installNetSyncModule() {

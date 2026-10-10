@@ -119,6 +119,55 @@ bro.app.cwd;
  */
 bro.app.spawn = function(args, options) {};
 
+/**
+ * @typedef {Object} AppOpenResult
+ * @property {string} id       The id asked for.
+ * @property {string} dir      The app's folder.
+ * @property {string} from     Where it was found: "installed" (a `bro --install`
+ *                             root, as `bro <id>` finds it), "project" (beside
+ *                             this app in its project: BRO_PROJECT_ROOT, else the
+ *                             nearest project above this app, else this app's
+ *                             parent folder; by bro.json id or by folder name), or
+ *                             "self".
+ * @property {string[]} command The command line: the stock bro beside this
+ *                             executable, `--new-instance` if asked, the folder,
+ *                             then `args`.
+ * @property {string[]} args   The app's own arguments (its bro.app.argv).
+ * @property {string} cwd      The working directory it starts in (this app's).
+ * @property {boolean} spawned Whether a process was started (false headless).
+ */
+
+/**
+ * Open another folder app by its id, on every platform: found as `bro <id>`
+ * finds it (the install roots of `bro --install`: `%LOCALAPPDATA%\bro\apps`
+ * and `%ProgramFiles%\bro\apps` on Windows, `~/Library/Application Support/bro/apps`
+ * on macOS, `$XDG_DATA_HOME/bro/apps` and `$XDG_DATA_DIRS/bro/apps` on Linux),
+ * else beside this app in its project, and started detached with the stock
+ * bro: `bro <dir> ...args`. A single-instance app that is already running
+ * gets an `instance` event with these args instead of a second window (bro
+ * does the hand-off, as for any launch). Rejects when no app has the id, or
+ * the process could not be started.
+ *
+ * Headless starts nothing: it resolves with `spawned: false` and records the
+ * call, which `openedApps()` lists (docs/headless.md).
+ *
+ *   await bro.app.open('org.helm.Music', ['--play', file]);
+ *
+ * @param {string} id
+ * @param {string[]} [args]
+ * @param {{newInstance?: boolean}} [options]
+ * @returns {Promise<AppOpenResult>}
+ */
+bro.app.open = function(id, args, options) {};
+
+/**
+ * Where `open(id)` would find the app, without opening it: `{ id, dir, from }`,
+ * or null when no app has that id.
+ * @param {string} id
+ * @returns {?{id: string, dir: string, from: string}}
+ */
+bro.app.find = function(id) {};
+
 // ── Directories ──────────────────────────────────────────────────────────────
 
 /**
@@ -167,9 +216,15 @@ bro.app.logFile;
  *   const { loadedMs, firstFrameMs } = bro.app.startup;
  *   assert(firstFrameMs - loadedMs < 250, 'nothing between the load and the first frame');
  *
- * Most of a launch is the engine's (the GPU device, compiling the page);
- * what an app adds shows against an empty page's numbers.
- * @readonly @type {{loadedMs: number, firstFrameMs: number}}
+ * Most of a launch is the engine's (the window, the GPU device, compiling the
+ * page); what an app adds shows against an empty page's numbers.
+ * `graphics` times the first of those: `windowMs` (creating the window),
+ * `gpuMs` (the Vulkan device, the presenter and Skia's context) and `totalMs`
+ * (both; -1 for a phase that did not run). Headless brings the GPU up on a
+ * thread while it creates its window, so `totalMs` is about the longer of the
+ * two rather than their sum.
+ * @readonly @type {{loadedMs: number, firstFrameMs: number,
+ *                   graphics: {windowMs: number, gpuMs: number, totalMs: number}}}
  */
 bro.app.startup;
 

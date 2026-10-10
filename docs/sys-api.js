@@ -69,6 +69,41 @@ for (const dev of btState.devices) {
 }
 
 // ============================================================================
+// 5a. Posting a notification: the web `Notification` API
+// ============================================================================
+//
+// Any app (not only a trusted shell) posts desktop notifications with the
+// web API, a global like a browser's. The desktop shows it under the app's
+// own identity (bro.json `id` and `name`):
+//   - Windows: a toast under the app's AppUserModelID, registered for the
+//     current user on first use (HKCU\Software\Classes\AppUserModelId\<id>,
+//     DisplayName + IconUri); an app with no id, or a system with toasts off,
+//     gets a tray balloon instead.
+//   - macOS: UNUserNotificationCenter inside a bundle; outside one, AppleScript's
+//     `display notification` (osascript).
+//   - Linux: org.freedesktop.Notifications over D-Bus (app name, icon,
+//     desktop-entry and suppress-sound hints), else notify-send.
+// Headless shows nothing and records each one: `notifications()` in
+// docs/headless.md.
+//
+// A desktop app needs no leave to notify: Notification.permission is
+// 'granted' and requestPermission() resolves 'granted'. `show` fires once the
+// desktop took it, `error` when nothing could show it, `close` after close().
+// A repeated `tag` replaces the earlier notification; requireInteraction keeps
+// it up until dismissed. `click` and actions are not delivered yet.
+// bro.window.notify(title, body, { icon, silent, timeout, replacesId }) is the
+// same path with the native id returned.
+
+const done = new Notification('Download finished', {
+    body: 'report.pdf',
+    icon: 'assets/done.png',   // app-relative, absolute, or file://; default bro.app.icon
+    tag: 'download',
+    silent: true,
+});
+done.onshow = () => console.log('shown');
+done.onerror = () => console.log('no notification service');
+
+// ============================================================================
 // 5. Notifications Server Host
 // ============================================================================
 

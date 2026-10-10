@@ -130,6 +130,13 @@ the page listens are held and delivered to the first listener.
 skips the hand-off and opens a second instance. That is how an app does
 "New Window".
 
+One app opens another by id with `bro.app.open(id, args)`, on every
+platform: the id is found as `bro <id>` finds it (the install roots), else
+beside the calling app in its project, and the stock bro starts it. A
+single-instance target that is running gets the `instance` event above
+rather than a second window. `bro.app.find(id)` says where it would be found.
+See [app-api.js](app-api.js).
+
 `bro-headless` claims the channel only with `--single-instance`, so parallel
 test runs of one app never hand off to each other.
 

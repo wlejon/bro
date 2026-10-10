@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <thread>
 
 #include "platform/window.h"
 #include "platform/window_system.h"
@@ -263,6 +264,51 @@ void Engine::construct(const EngineConfig& config) {
     // progress and the bell record their state instead of touching the OS.
     platform::desktop::setHeadless(displayMode_ == DisplayMode::Headless);
     if (displayMode_ == DisplayMode::Headless) {
+        // The offscreen device needs no window, so it comes up on a thread
+        // while this one creates the hidden window. The device is the long
+        // pole (~160 ms on Windows: loading the Vulkan loader and the GPU
+        // driver, instance, device, presenter, Skia's context); the window
+        // (~90 ms, SDL's video init, which loads the same Vulkan loader for a
+        // SDL_WINDOW_VULKAN window) now runs inside it instead of before it.
+        // Nothing else touches the context, the presenter or skiaGpu_ until
+        // the join.
+        render::SkiaGpu* headlessSkiaGpu = nullptr;
+        std::string gpuInitError;
+        std::thread gpuInit;
+        const double gfxStart = util::currentTimeMs();
+        double gpuMs = -1.0, windowMs = -1.0;
+        if (config.graphics.useGPU) {
+            gpuInit = std::thread([this, &headlessSkiaGpu, &gpuInitError, &gpuMs] {
+                const double t0 = util::currentTimeMs();
+                struct Timed {
+                    double t0;
+                    double& out;
+                    ~Timed() { out = util::currentTimeMs() - t0; }
+                } timed{t0, gpuMs};
+                try {
+                    render::VulkanContextConfig vkCfg;
+                    vkCfg.headless = true;
+                    vulkanContext_ = std::make_unique<render::VulkanContext>(vkCfg);
+                    if (!vulkanContext_->init()) {
+                        gpuInitError = "Headless Vulkan initialization failed (render::VulkanContext::init returned false)";
+                        return;
+                    }
+                    vulkanPresenter_ = std::make_unique<render::VulkanPresenter>(*vulkanContext_);
+                    if (!vulkanPresenter_->init()) {
+                        gpuInitError = "Headless VulkanPresenter initialization failed (render::VulkanPresenter::init returned false)";
+                        return;
+                    }
+                    headlessSkiaGpu = createSkiaGpu();
+                } catch (const std::exception& e) {
+                    gpuInitError = std::string("Headless Vulkan initialization failed: ") + e.what();
+                }
+            });
+        }
+        struct JoinOnExit {
+            std::thread& t;
+            ~JoinOnExit() { if (t.joinable()) t.join(); }
+        } joinGpuInit{gpuInit};
+
         try {
             const auto backend = config.graphics.useGPU ? platform::GraphicsBackend::Vulkan
                                                         : platform::GraphicsBackend::Software;
@@ -289,18 +335,12 @@ void Engine::construct(const EngineConfig& config) {
             LOG_INFO("Headless window creation skipped: %s", e.what());
             window_.reset();
         }
+        windowMs = util::currentTimeMs() - gfxStart;
 
+        if (gpuInit.joinable()) gpuInit.join();
+        noteGraphicsStartup(windowMs, gpuMs, util::currentTimeMs() - gfxStart);
+        if (!gpuInitError.empty()) throw std::runtime_error(gpuInitError);
         if (config.graphics.useGPU) {
-            render::VulkanContextConfig vkCfg;
-            vkCfg.headless = true;
-            vulkanContext_ = std::make_unique<render::VulkanContext>(vkCfg);
-            if (!vulkanContext_->init()) {
-                throw std::runtime_error("Headless Vulkan initialization failed (render::VulkanContext::init returned false)");
-            }
-            vulkanPresenter_ = std::make_unique<render::VulkanPresenter>(*vulkanContext_);
-            if (!vulkanPresenter_->init()) {
-                throw std::runtime_error("Headless VulkanPresenter initialization failed (render::VulkanPresenter::init returned false)");
-            }
 #if BRO_WITH_3D
             scene::SceneRenderer::setDefaultVulkanContext(vulkanContext_.get());
 #endif
@@ -309,7 +349,7 @@ void Engine::construct(const EngineConfig& config) {
         // Without the GPU, Skia draws the same layers on the CPU and the
         // frame composites on the CPU: one pipeline either way.
         auto skia = std::make_unique<render::SkiaRenderer>();
-        if (vulkanPresenter_) skia->setGpu(createSkiaGpu());
+        if (vulkanPresenter_) skia->setGpu(headlessSkiaGpu);
         renderer_ = std::move(skia);
     } else if (displayMode_ == DisplayMode::Windowed) {
         try {

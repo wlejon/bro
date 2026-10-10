@@ -540,6 +540,9 @@ void installWebHostGlobals(engine::Engine& engine) {
     // ClipboardItem + navigator.clipboard.write/read (js/clipboard.js): over
     // the navigator above and brokit's Blob.
     installClipboardModule();
+    // Notification (js/notification.js): over bro.window.notify, read when
+    // a notification is made.
+    installNotificationModule();
     // window -> Window.prototype -> EventTarget.prototype -> Object.prototype
     // (brokit's EventTarget is installed by now), so String(window) and
     // window instanceof Window work.

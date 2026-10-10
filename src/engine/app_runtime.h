@@ -86,6 +86,18 @@ double firstFrameMs();
 /// or -1 before it.
 double documentLoadedMs();
 
+/// How the graphics came up at launch, in ms (-1 for a phase that did not
+/// run): creating the window, bringing up the GPU (Vulkan device, presenter,
+/// Skia's context), and the two together. Headless does the two at once, so
+/// totalMs is about the longer of them rather than their sum.
+struct GraphicsStartup {
+    double windowMs = -1.0;
+    double gpuMs = -1.0;
+    double totalMs = -1.0;
+};
+void noteGraphicsStartup(double windowMs, double gpuMs, double totalMs);
+GraphicsStartup graphicsStartup();
+
 /// The window's title before the page names one: bro.json's "title", else
 /// the manifest name, else "Bro".
 std::string initialWindowTitle(const EngineConfig& config);

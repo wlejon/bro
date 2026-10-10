@@ -14,7 +14,26 @@
  * - Live catalog watching (`watch`, `unwatch`)
  *
  * Mounted automatically in Bronze when `BRO_WITH_APPS` is enabled.
+ *
+ * THE CATALOG IS BUILT OFF THE PAGE THREAD. Reading every installed app's
+ * desktop entry (Start-menu shortcuts on Windows, .desktop files on Linux,
+ * bundles on macOS) and the MIME associations over them takes ~0.4 s warm
+ * and over a second cold. `bro.apps.ready()` starts that build on a worker
+ * thread and returns a promise that resolves once it is done; the page keeps
+ * running meanwhile. The sync calls (`list`, `get`, `search`,
+ * `getDefaultApp`, `getAppsForMime`, `launch`'s lookup) stay: called before
+ * the build finished, they wait for it (and start it if nothing has), so a
+ * page that wants to stay responsive awaits `ready()` first. `isReady` says
+ * whether it is done.
+ *
+ *   await bro.apps.ready();                       // off-thread, ~0.4 s
+ *   const viewer = bro.apps.getDefaultApp('image/png');   // ~1 ms now
  */
+
+/** @returns {Promise<void>} Resolves once the catalog is built. */
+bro.apps.ready = function() {};
+/** Whether the catalog is built (a sync call will not wait). @readonly @type {boolean} */
+bro.apps.isReady;
 
 // ============================================================================
 // 1. Application Discovery & Inspection

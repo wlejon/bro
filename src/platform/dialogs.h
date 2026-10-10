@@ -103,6 +103,11 @@ public:
     /// one to throw at).
     static std::vector<std::string> pickFiles(const std::string& accept,
                                               bool allowMultiple);
+
+    /// The filter string the last open/save file dialog was asked for
+    /// ("Accepted files|wav;mp3;..."), shown or not: what headless's
+    /// lastFileDialogFilter() reports.
+    static std::string lastFileFilter();
 };
 
 } // namespace bro::platform

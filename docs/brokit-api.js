@@ -204,6 +204,9 @@ watcher.on('error', err => console.error('watch error:', err.message));
 
 const path = require('path');
 
+// join, resolve, normalize, dirname, basename and extname are native (~0.5 us
+// a call; a grid of thousands of names can join each one). Both separators
+// are read, the platform's own is written; `..` above a relative path is kept.
 path.join(...segments);
 path.resolve(...segments);
 path.normalize(p);
@@ -231,6 +234,23 @@ os.userInfo();           // → { uid, gid, username, homedir, shell } (Node's s
 os.tmpdir();             // → temp directory path
 os.hostname();           // → machine hostname
 os.EOL;                  // '\r\n' on Windows, '\n' on Linux
+
+// System information, in Node's shapes.
+os.cpus();               // → [{ model, speed (MHz), times: { user, nice, sys, idle, irq } (ms) }],
+                         //   one per logical processor
+os.availableParallelism(); // → number of logical processors
+os.totalmem();           // → bytes of physical memory
+os.freemem();            // → bytes available (MemAvailable on Linux)
+os.uptime();             // → seconds since boot
+os.loadavg();            // → [1, 5, 15 minute load]; [0, 0, 0] on Windows, as Node
+os.networkInterfaces();  // → { name: [{ address, netmask, family: 'IPv4'|'IPv6', mac,
+                         //   internal, cidr, scopeid (IPv6) }] }, interfaces that are up
+os.release();            // → kernel version: '10.0.26100', '6.8.0-45-generic', '24.1.0'
+os.version();            // → 'Windows 11 Pro', '#47-Ubuntu SMP ...', 'Darwin Kernel Version ...'
+os.machine();            // → 'x86_64' | 'arm64' | 'aarch64' | ...
+os.endianness();         // → 'LE'
+os.constants.signals;    // → { SIGHUP: 1, SIGINT: 2, SIGKILL: 9, SIGTERM: 15, ... }
+os.devNull;              // '\\\\.\\nul' on Windows, '/dev/null' elsewhere
 
 
 // -----------------------------------------------------------------------------
@@ -737,7 +757,14 @@ clearInterval(id);
 process.platform;        // 'win32' | 'linux' | 'darwin' (or 'unknown')
 process.cwd();           // → string, current working directory
 process.exit(code?);     // terminates the process; default code 0
-process.env;             // Proxy, string-keyed environment variables
+process.kill(pid, signal?); // → true; signal is a name ('SIGTERM', the default) or a
+                         //   number. Signal 0 only asks whether pid exists. Windows
+                         //   ends the process for SIGINT/SIGQUIT/SIGTERM/SIGKILL
+                         //   (TerminateProcess, exit code 1) and throws ENOSYS for
+                         //   other signals. A failure throws Node's error:
+                         //   { code: 'ESRCH' | 'EPERM' | 'EINVAL', errno, syscall: 'kill' };
+                         //   an unknown signal name is a TypeError.
+process.env;            // Proxy, string-keyed environment variables
                          //   read:    process.env.PATH       → string | undefined
                          //   write:   process.env.FOO = 'x'  // updates real env (setenv)
                          //   delete:  delete process.env.FOO
