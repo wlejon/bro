@@ -7,7 +7,10 @@
 #include "canvas/canvas_scene.h"
 #include "dom/element.h"
 #include "engine/engine.h"
+#include "render/gpu_image_upload.h"
 #include "render/image_store.h"
+#include "render/shared_pixels_image.h"
+#include "render/skia_gpu.h"
 #include "webgl/webgl2_context.h"
 #include "broimage/decode.h"
 #include <api/api.h>
@@ -42,10 +45,18 @@ static void hostImageBitmapDtor(void* p) {
     delete static_cast<HostImageBitmap*>(p);
 }
 
-static sk_sp<SkImage> buildBitmap(const uint8_t* rgba, int srcW, int srcH,
-                                  bool crop, int sx, int sy, int sw, int sh,
-                                  std::vector<uint8_t>& outPixels,
-                                  std::string& err) {
+static Value makeBitmapValue(std::shared_ptr<const render::DecodedImage> px, sk_sp<SkImage> image = nullptr,
+                             std::shared_ptr<render::GpuImageUpload> upload = nullptr);
+
+// The bitmap's pixels as a crop of `rgba` (srcW x srcH), copied: the source
+// is mutable (an ImageData, a canvas) or is about to go (a decode buffer).
+// When `shared` holds `rgba` already (another bitmap, a decoded <img>) and the
+// crop is the whole of it, the bitmap shares those pixels instead: they are as
+// immutable as the bitmap.
+static std::shared_ptr<const render::DecodedImage> buildBitmap(
+        const uint8_t* rgba, int srcW, int srcH,
+        bool crop, int sx, int sy, int sw, int sh, std::string& err,
+        const std::shared_ptr<const render::DecodedImage>& shared = nullptr) {
     if (!rgba || srcW <= 0 || srcH <= 0) { err = "empty source"; return nullptr; }
     if (!crop) { sx = 0; sy = 0; sw = srcW; sh = srcH; }
     // The crop rectangle is a script's four numbers: clipped in 64 bits so an
@@ -61,23 +72,72 @@ static sk_sp<SkImage> buildBitmap(const uint8_t* rgba, int srcW, int srcH,
     sx = static_cast<int>(cx); sy = static_cast<int>(cy);
     sw = static_cast<int>(cw); sh = static_cast<int>(ch);
 
-    outPixels.resize(static_cast<size_t>(sw) * sh * 4);
-    if (sx == 0 && sy == 0 && sw == srcW && sh == srcH) {
-        std::memcpy(outPixels.data(), rgba, outPixels.size());
+    const bool whole = sx == 0 && sy == 0 && sw == srcW && sh == srcH;
+    if (whole && shared && shared->rgba.data() == rgba && shared->width == srcW && shared->height == srcH)
+        return shared;
+
+    auto out = std::make_shared<render::DecodedImage>();
+    out->id = render::newPixelsId();
+    out->width = sw;
+    out->height = sh;
+    out->rgba.resize(static_cast<size_t>(sw) * sh * 4);
+    if (whole) {
+        std::memcpy(out->rgba.data(), rgba, out->rgba.size());
     } else {
         for (int row = 0; row < sh; ++row) {
-            std::memcpy(outPixels.data() + static_cast<size_t>(row) * sw * 4,
+            std::memcpy(out->rgba.data() + static_cast<size_t>(row) * sw * 4,
                         rgba + (static_cast<size_t>(sy + row) * srcW + sx) * 4,
                         static_cast<size_t>(sw) * 4);
         }
     }
+    return out;
+}
 
-    SkImageInfo info = SkImageInfo::Make(sw, sh, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
-    sk_sp<SkData> data = SkData::MakeWithCopy(outPixels.data(), outPixels.size());
-    return SkImages::RasterFromData(info, data, static_cast<size_t>(sw) * 4);
+// The one place a bitmap is made. The raster image is a view of the pixels
+// (no copy). In the page realm a big bitmap starts its texture upload now —
+// staging written and copy submitted on the uploader thread — so the frame
+// that first draws it does not pay it (render/gpu_image_upload.h). A worker's
+// bitmaps do not: they are on their way to the page.
+static bool wantsEagerUpload(const render::DecodedImage& px) {
+    return int64_t(px.width) * px.height >= render::kEagerUploadMinPixels;
+}
+
+static Value makeBitmapValue(std::shared_ptr<const render::DecodedImage> px, sk_sp<SkImage> image,
+                             std::shared_ptr<render::GpuImageUpload> upload) {
+    auto* bmp = new HostImageBitmap();
+    if (px && !px->rgba.empty() && px->width > 0 && px->height > 0) {
+        const render::SharedPixels shared = render::sharedPixelsOf(px);
+        bmp->width = px->width;
+        bmp->height = px->height;
+        bmp->image = image ? std::move(image) : render::makeSharedPixelsImage(shared);
+        if (onHostImageMainThread() && wantsEagerUpload(*px)) {
+            if (upload && upload->pixelsId() == px->id) bmp->upload = std::move(upload);
+            else bmp->upload = render::SkiaGpu::uploadToTarget(shared);
+        }
+        bmp->pixels = std::move(px);
+    }
+    return g_imageBitmapClass.make(bmp, hostImageBitmapDtor);
 }
 
 } // namespace
+
+const uint8_t* HostImageBitmap::rgba() const {
+    return !closed && pixels && !pixels->rgba.empty() ? pixels->rgba.data() : nullptr;
+}
+
+void HostImageBitmap::detach() {
+    closed = true;
+    width = 0;
+    height = 0;
+    image = nullptr;
+    // Let the pixels and the texture go now, not when the wrapper is
+    // collected: a page that closes its bitmaps allocates too little JS to
+    // bring a collection round for a long time (an image viewer: a full-size
+    // picture held per picture shown). Pixels a clone still shares stay
+    // with it.
+    pixels.reset();
+    upload.reset();
+}
 
 const HostImageBitmap* hostImageBitmapOf(Value v) {
     if (!ev::isObject(v)) return nullptr;
@@ -96,29 +156,34 @@ HostImageBitmap* hostImageBitmapOfMut(Value v) {
 }
 
 Value wrapHostImageBitmap(sk_sp<SkImage> img) {
-    auto* bmp = new HostImageBitmap();
-    bmp->image = std::move(img);
-    bmp->width = bmp->image ? bmp->image->width() : 0;
-    bmp->height = bmp->image ? bmp->image->height() : 0;
-    if (bmp->width > 0 && bmp->height > 0) {
-        bmp->pixels.resize(static_cast<size_t>(bmp->width) * bmp->height * 4);
-        SkImageInfo info = SkImageInfo::Make(bmp->width, bmp->height, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
-        bmp->image->readPixels(nullptr, info, bmp->pixels.data(), static_cast<size_t>(bmp->width) * 4, 0, 0);
-    }
-    return g_imageBitmapClass.make(bmp, hostImageBitmapDtor);
+    const int w = img ? img->width() : 0;
+    const int h = img ? img->height() : 0;
+    if (w <= 0 || h <= 0) return makeBitmapValue(nullptr);
+    auto px = std::make_shared<render::DecodedImage>();
+    px->id = render::newPixelsId();
+    px->width = w;
+    px->height = h;
+    px->rgba.resize(static_cast<size_t>(w) * h * 4);
+    SkImageInfo info = SkImageInfo::Make(w, h, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
+    img->readPixels(nullptr, info, px->rgba.data(), static_cast<size_t>(w) * 4, 0, 0);
+    return makeBitmapValue(std::move(px), std::move(img));
 }
 
 Value wrapHostImageBitmap(const uint8_t* rgba, int w, int h) {
-    auto* bmp = new HostImageBitmap();
-    bmp->width = w > 0 ? w : 0;
-    bmp->height = h > 0 ? h : 0;
-    if (rgba && bmp->width > 0 && bmp->height > 0) {
-        bmp->pixels.assign(rgba, rgba + static_cast<size_t>(w) * h * 4);
-        SkImageInfo info = SkImageInfo::Make(w, h, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
-        sk_sp<SkData> data = SkData::MakeWithCopy(bmp->pixels.data(), bmp->pixels.size());
-        bmp->image = SkImages::RasterFromData(info, data, static_cast<size_t>(w) * 4);
-    }
-    return g_imageBitmapClass.make(bmp, hostImageBitmapDtor);
+    if (!rgba || w <= 0 || h <= 0) return makeBitmapValue(nullptr);
+    std::string err;
+    return makeBitmapValue(buildBitmap(rgba, w, h, false, 0, 0, 0, 0, err));
+}
+
+Value wrapHostImageBitmap(std::shared_ptr<const render::DecodedImage> pixels,
+                          std::shared_ptr<render::GpuImageUpload> upload) {
+    return makeBitmapValue(std::move(pixels), nullptr, std::move(upload));
+}
+
+std::shared_ptr<render::GpuImageUpload> startTransferUpload(const HostImageBitmap& bmp) {
+    if (bmp.upload) return bmp.upload;
+    if (onHostImageMainThread() || !bmp.pixels || !wantsEagerUpload(*bmp.pixels)) return nullptr;
+    return render::SkiaGpu::uploadToTarget(render::sharedPixelsOf(bmp.pixels));
 }
 
 Value makeImageDataValue(int width, int height, Value dataArr) {
@@ -270,24 +335,24 @@ static Value js_createImageBitmap(Value, std::span<const Value> a) {
     }
 
     std::string err;
-    std::vector<uint8_t> outPixels;
-    sk_sp<SkImage> resultImg;
+    std::shared_ptr<const render::DecodedImage> result;
 
     if (auto* bmp = hostImageBitmapOfMut(a[0])) {
-        if (bmp->closed) return reject("ImageBitmap is closed");
-        resultImg = buildBitmap(bmp->pixels.data(), bmp->width, bmp->height,
-                                crop, sx, sy, sw, sh, outPixels, err);
+        if (bmp->closed || !bmp->rgba()) return reject("ImageBitmap is closed");
+        // Uncropped, the new bitmap shares the source's pixels.
+        result = buildBitmap(bmp->rgba(), bmp->width, bmp->height,
+                             crop, sx, sy, sw, sh, err, bmp->pixels);
     } else if (const HostImage* img = hostImageOf(a[0])) {
         if (!img->complete || !img->ok || !img->rgba()) return reject("Image has no valid pixels");
-        resultImg = buildBitmap(img->rgba(), img->width, img->height,
-                                crop, sx, sy, sw, sh, outPixels, err);
+        result = buildBitmap(img->rgba(), img->width, img->height,
+                             crop, sx, sy, sw, sh, err, img->pixels);
     } else if (dom::Element* el = hostElementOf(a[0])) {
         if (el->tagName() == "canvas" || el->tagName() == "CANVAS") {
             std::vector<uint8_t> px;
             int w = 0, h = 0;
             bool invalidState = false;
             if (canvasBitmapPixels(el, px, w, h, invalidState, err)) {
-                resultImg = buildBitmap(px.data(), w, h, crop, sx, sy, sw, sh, outPixels, err);
+                result = buildBitmap(px.data(), w, h, crop, sx, sy, sw, sh, err);
             } else if (invalidState) {
                 ev::Persistent domErr(hostMakeDomError("InvalidStateError", err));
                 ev::rejectPromise(promise.get(), domErr.get());
@@ -312,36 +377,38 @@ static Value js_createImageBitmap(Value, std::span<const Value> a) {
                     if (ev::isString(io) && ev::toUtf8(io) == "none") orient = false;
                 }
             }
-            // The decode, the crop and the Skia image are built on a decoder
-            // thread; the page thread only copies the bytes (the Blob may be
-            // collected before the decode runs) and settles the promise.
+            // The decode and the crop run on a decoder thread; the page thread
+            // only copies the bytes (the Blob may be collected before the
+            // decode runs) and settles the promise. Uncropped, the decoded
+            // buffer itself becomes the bitmap's pixels.
             struct Result {
-                std::vector<uint8_t> pixels;
-                sk_sp<SkImage> image;
+                std::shared_ptr<const render::DecodedImage> pixels;
                 std::string err;
             };
-            auto result = std::make_shared<Result>();
+            auto shared = std::make_shared<Result>();
             auto work = [data = std::vector<uint8_t>(bytes, bytes + len), orient, crop, sx, sy, sw, sh,
-                         result](render::DecodedImage& out, std::string& werr) -> bool {
-                render::DecodedImage img;
+                         shared](render::DecodedImage& out, std::string& werr) -> bool {
+                auto img = std::make_shared<render::DecodedImage>();
                 std::string decErr;
-                if (!render::decodeImageData(data.data(), data.size(), orient, img, decErr) ||
-                    img.rgba.empty()) {
+                if (!render::decodeImageData(data.data(), data.size(), orient, *img, decErr) ||
+                    img->rgba.empty()) {
                     werr = "Blob image decode failed: " +
                            (decErr.empty() ? std::string("SVG markup did not rasterize (no intrinsic size?)") : decErr);
-                    result->err = werr;
+                    shared->err = werr;
                     return false;
                 }
+                img->isSvg = false;
+                img->svgMarkup.clear();
                 std::string cropErr;
-                result->image = buildBitmap(img.rgba.data(), img.width, img.height,
-                                            crop, sx, sy, sw, sh, result->pixels, cropErr);
-                if (!result->image) {
+                shared->pixels = buildBitmap(img->rgba.data(), img->width, img->height,
+                                             crop, sx, sy, sw, sh, cropErr, img);
+                if (!shared->pixels) {
                     werr = cropErr.empty() ? std::string("createImageBitmap failed") : cropErr;
-                    result->err = werr;
+                    shared->err = werr;
                     return false;
                 }
-                out.width = result->image->width();
-                out.height = result->image->height();
+                out.width = shared->pixels->width;
+                out.height = shared->pixels->height;
                 return true;
             };
             if (!onHostImageMainThread()) {
@@ -349,26 +416,20 @@ static Value js_createImageBitmap(Value, std::span<const Value> a) {
                 render::DecodedImage unused;
                 std::string werr;
                 if (work(unused, werr)) {
-                    resultImg = result->image;
-                    outPixels = std::move(result->pixels);
+                    result = std::move(shared->pixels);
                 } else {
                     err = werr;
                 }
             } else {
                 auto req = render::ImageStore::instance().submit(std::move(work));
                 auto held = std::make_shared<ev::Persistent>(promise.get());
-                whenHostDecodeSettles(req, [held, result]() {
-                    if (result->image && !result->pixels.empty()) {
-                        auto* newBmp = new HostImageBitmap();
-                        newBmp->image = std::move(result->image);
-                        newBmp->pixels = std::move(result->pixels);
-                        newBmp->width = newBmp->image->width();
-                        newBmp->height = newBmp->image->height();
-                        ev::Persistent bmpVal(g_imageBitmapClass.make(newBmp, hostImageBitmapDtor));
+                whenHostDecodeSettles(req, [held, shared]() {
+                    if (shared->pixels) {
+                        ev::Persistent bmpVal(makeBitmapValue(std::move(shared->pixels)));
                         ev::resolvePromise(held->get(), bmpVal.get());
                     } else {
                         ev::Persistent errVal(makeTypeError(
-                            result->err.empty() ? std::string("createImageBitmap failed") : result->err));
+                            shared->err.empty() ? std::string("createImageBitmap failed") : shared->err));
                         ev::rejectPromise(held->get(), errVal.get());
                     }
                 });
@@ -383,7 +444,7 @@ static Value js_createImageBitmap(Value, std::span<const Value> a) {
             Value dV = ev::getProperty(a[0], "data");
             auto info = ev::typedArrayInfo(dV);
             if (info.data && w > 0 && h > 0 && info.byteLength >= static_cast<size_t>(w) * h * 4) {
-                resultImg = buildBitmap(info.data, w, h, crop, sx, sy, sw, sh, outPixels, err);
+                result = buildBitmap(info.data, w, h, crop, sx, sy, sw, sh, err);
             } else {
                 err = "Malformed image data source";
             }
@@ -392,13 +453,8 @@ static Value js_createImageBitmap(Value, std::span<const Value> a) {
         }
     }
 
-    if (resultImg && !outPixels.empty()) {
-        auto* newBmp = new HostImageBitmap();
-        newBmp->image = resultImg;
-        newBmp->pixels = std::move(outPixels);
-        newBmp->width = resultImg->width();
-        newBmp->height = resultImg->height();
-        ev::Persistent bmpVal(g_imageBitmapClass.make(newBmp, hostImageBitmapDtor));
+    if (result) {
+        ev::Persistent bmpVal(makeBitmapValue(std::move(result)));
         ev::resolvePromise(promise.get(), bmpVal.get());
         return promise.get();
     }
@@ -422,13 +478,9 @@ void installImageBitmapGlobals() {
                     return ev::fromDouble((bmp && !bmp->closed) ? bmp->height : 0);
                 }, nullptr);
             proto.def("close", 0, [](Value thisVal, std::span<const Value>) -> Value {
-                if (auto* bmp = hostImageBitmapOfMut(thisVal)) {
-                    bmp->closed = true;
-                    bmp->width = 0;
-                    bmp->height = 0;
-                    bmp->image = nullptr;
-                    bmp->pixels.clear();
-                }
+                // Frees the pixels (and the texture) now, not when the
+                // wrapper is collected (HostImageBitmap::detach).
+                if (auto* bmp = hostImageBitmapOfMut(thisVal)) bmp->detach();
                 return ev::undefined();
             });
         });

@@ -18,6 +18,8 @@
 #include "engine/engine.h"
 #include "layout/computed_style.h"
 #include "layout/el_video.h"
+#include "render/image_store.h"
+#include "render/skia_gpu.h"
 #include "util/string_utils.h"
 
 #include <cmath>
@@ -701,15 +703,20 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
         const uint8_t* rgba = nullptr;
         int imgW = 0, imgH = 0;
         sk_sp<SkImage> skImg;
+        // The source's texture, uploading since it arrived (a big bitmap, a
+        // big decoded <img>): the replay samples it rather than uploading
+        // the raster image in the frame (render/gpu_image_upload.h).
+        std::shared_ptr<render::GpuImageUpload> upload;
 
         if (auto* bmp = hostImageBitmapOfMut(src)) {
             if (bmp->closed) return ev::undefined();
             if (bmp->image) {
                 skImg = bmp->image;
+                upload = bmp->upload;
                 imgW = bmp->width;
                 imgH = bmp->height;
-            } else if (!bmp->pixels.empty()) {
-                rgba = bmp->pixels.data();
+            } else if (bmp->rgba()) {
+                rgba = bmp->rgba();
                 imgW = bmp->width;
                 imgH = bmp->height;
             }
@@ -718,6 +725,7 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
             if (img && img->ok && (skImg = img->skImage())) {
                 imgW = skImg->width();
                 imgH = skImg->height();
+                if (img->pixels) upload = render::SkiaGpu::findOnTarget(img->pixels->id);
             }
         } else if (dom::Element* srcEl = hostElementOf(src)) {
             if (auto* srcCs = static_cast<canvas::CanvasScene*>(srcEl->canvasScene())) {
@@ -762,7 +770,7 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
         }
 
         if (skImg) {
-            cs->drawImage(skImg, sx, sy, sw, sh, dx, dy, dw, dh);
+            cs->drawImage(skImg, sx, sy, sw, sh, dx, dy, dw, dh, std::move(upload));
         } else {
             cs->drawImage(rgba, imgW, imgH, sx, sy, sw, sh, dx, dy, dw, dh);
         }

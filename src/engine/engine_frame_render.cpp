@@ -245,9 +245,11 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
     if (!holdForResize) {
         // Bring each composited canvas up to date: replay what its script drew
         // since the last frame (on the GPU, leaving its image ready to sample).
+        // A canvas drawing a texture still being staged waits for a later
+        // frame rather than stall this one (CanvasScene::rasterize).
         for (const auto& layer : layers.appLayers) {
             if (const auto* canvas = std::get_if<render::CanvasLayerSource>(&layer.content))
-                if (auto* cs = canvasSceneById(canvas->sceneId)) cs->rasterize();
+                if (auto* cs = canvasSceneById(canvas->sceneId)) cs->rasterize(/*mayDefer=*/true);
         }
 
         beginFrameComposite();

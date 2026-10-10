@@ -24,6 +24,7 @@
 // in-flight work, a compositor's layer list — and is destroyed once the queue
 // has finished every submission made before the last reference went.
 
+#include "render/gpu_image_upload.h"
 #include "render/skia_persistent_cache.h"
 #include "render/vulkan_context.h"
 
@@ -33,11 +34,14 @@
 #include <vulkan/vulkan.h>
 
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <span>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 class GrDirectContext;
@@ -141,10 +145,66 @@ public:
     /// does not take the lock.
     void collect();
 
+    // ---- Uploads ahead of the first draw (gpu_image_upload.h) -------------
+
+    /// Start uploading `px` into a mipmapped texture: queued for the uploader
+    /// thread, which writes the staging buffer and submits the copy. `px`'s
+    /// owner is held until the staging copy is made. Any thread; null when
+    /// there is no context or nothing to upload.
+    std::shared_ptr<GpuImageUpload> uploadImage(const SharedPixels& px);
+
+    /// uploadImage, and keep the upload findable by the pixels' id
+    /// (findUpload) until a renderer claims it, the pixels' owner dies, or it
+    /// has gone unclaimed for a while. For pictures the UI will paint (a big
+    /// decoded <img>), whose painter knows only their SharedPixels.
+    void preloadImage(const SharedPixels& px);
+
+    /// The upload preloadImage started for `pixelsId`, or null. `claim`
+    /// passes ownership to the caller (the registry stops holding it; a UI
+    /// renderer keeps it as long as it keeps the texture).
+    std::shared_ptr<GpuImageUpload> findUpload(uint64_t pixelsId, bool claim);
+
+    /// uploadImage / preloadImage on the process's upload target: the first
+    /// SkiaGpu initialised and still alive (the engine's). Null / no-op
+    /// without one (CPU rendering). Any thread.
+    static std::shared_ptr<GpuImageUpload> uploadToTarget(const SharedPixels& px);
+    static void preloadOnTarget(const SharedPixels& px);
+    /// findUpload(pixelsId, claim = false) on the upload target.
+    static std::shared_ptr<GpuImageUpload> findOnTarget(uint64_t pixelsId);
+
 private:
     friend struct SkiaImage;
     friend class Lock;
+    friend class GpuImageUpload;
     void retire(VkImage image, VkImageView view, uint64_t allocId);
+
+    // Uploads (skia_gpu_upload.cpp).
+    void runUpload(GpuImageUpload& up);
+    void uploaderLoop();
+    // Free the staging buffers whose copies have completed (all: wait first).
+    void freeUploadStaging(bool all);
+    void stopUploads();
+    static void becomeUploadTarget(SkiaGpu* gpu);
+    struct UploadStaging {
+        uint64_t ticket;
+        VkBuffer buffer;
+        uint64_t allocId;
+        VkCommandPool pool;
+    };
+    struct PublishedUpload {
+        std::weak_ptr<const void> owner;
+        std::shared_ptr<GpuImageUpload> hold;  // until claimed
+        std::weak_ptr<GpuImageUpload> upload;
+        uint64_t sinceMs = 0;
+    };
+    std::mutex uploadMutex_;
+    std::condition_variable uploadCv_;
+    std::deque<std::weak_ptr<GpuImageUpload>> uploadQueue_;  // guarded by uploadMutex_
+    std::vector<UploadStaging> uploadStaging_;               // guarded by uploadMutex_
+    std::unordered_map<uint64_t, PublishedUpload> published_;  // guarded by uploadMutex_
+    std::thread uploader_;
+    bool uploadStop_ = false;  // guarded by uploadMutex_
+    std::atomic<int> uploadsRunning_{0};
 
     VulkanContext& vulkan_;
     std::unique_ptr<SkiaPersistentCache> persistentCache_;  // outlives context_

@@ -2,12 +2,14 @@
 
 #include "bronze_host/host_document.h"
 #include <include/core/SkImage.h>
+#include <memory>
 #include <span>
 #include <string>
 #include <vector>
 
 namespace bro::engine { class Engine; }
 namespace bro::dom { class Element; class Node; }
+namespace bro::render { struct DecodedImage; class GpuImageUpload; }
 
 namespace bro::bronze_host {
 
@@ -15,19 +17,40 @@ namespace bro::bronze_host {
 // ImageBitmap & ImageData
 // ---------------------------------------------------------------------------
 
+// An ImageBitmap is immutable, so its pixels are a shared, read-only buffer:
+// a clone (structured clone, createImageBitmap(bitmap) uncropped) shares it,
+// a transfer moves the reference, and nothing on the page thread copies it.
+// In the page realm a big bitmap also starts its texture upload the moment it
+// exists (render/gpu_image_upload.h), so the frame that first draws it finds
+// the texture made.
 struct HostImageBitmap {
     uint32_t tag = 0x4849424D; // 'HIBM'
-    sk_sp<SkImage> image;
-    std::vector<uint8_t> pixels; // RGBA8
+    sk_sp<SkImage> image;  // raster, over `pixels` (no copy)
+    std::shared_ptr<const render::DecodedImage> pixels;  // straight-alpha RGBA8, width*height*4
+    std::shared_ptr<render::GpuImageUpload> upload;      // page realm, big bitmaps only
     int width = 0;
     int height = 0;
     bool closed = false;
+
+    const uint8_t* rgba() const;  // null when closed / empty
+    // close(), a transfer, transferFromImageBitmap: detached, and everything
+    // it held let go now rather than when the wrapper is collected.
+    void detach();
 };
 
 const HostImageBitmap* hostImageBitmapOf(Value v);
 HostImageBitmap* hostImageBitmapOfMut(Value v);
 Value wrapHostImageBitmap(sk_sp<SkImage> img);
 Value wrapHostImageBitmap(const uint8_t* rgba, int w, int h);
+// Over `pixels` as they are: a transferred bitmap arriving, or a bitmap whose
+// pixels were made for it. No copy. `upload`: the texture upload its sender
+// started (startTransferUpload), adopted in the page realm.
+Value wrapHostImageBitmap(std::shared_ptr<const render::DecodedImage> pixels,
+                          std::shared_ptr<render::GpuImageUpload> upload = nullptr);
+// A bitmap about to be transferred out of a worker: a big one starts its
+// texture upload now, so it overlaps the message's hop to the page. Its own
+// upload when it has one; null on the page thread or for a small bitmap.
+std::shared_ptr<render::GpuImageUpload> startTransferUpload(const HostImageBitmap& bmp);
 void installImageBitmapGlobals();
 
 // ImageData helpers

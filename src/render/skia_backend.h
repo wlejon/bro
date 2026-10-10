@@ -214,6 +214,9 @@ private:
         sk_sp<SkImage> texture;
         const uint8_t* rgba = nullptr;  // identity check: the id names these pixels
         bool mipmapped = false;         // the texture carries mips
+        // The upload SkiaGpu::preloadImage started when the picture was
+        // decoded, claimed here: `texture` is its image, kept as long as this.
+        std::shared_ptr<GpuImageUpload> upload;
         uint64_t lastFrame = 0;
     };
     std::unordered_map<uint64_t, SharedImage> sharedImages_;

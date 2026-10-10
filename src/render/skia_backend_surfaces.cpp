@@ -133,7 +133,20 @@ void SkiaRenderer::drawSharedPixels(const SharedPixels& px, float sx, float sy, 
     const bool wantMips = sampling == ImageSampling::Smooth;
     if (recorder_) {
         // A recorded (GPU) list samples a texture, uploaded once per id —
-        // with mips the first time it is drawn smoothed.
+        // with mips the first time it is drawn smoothed. A big picture was
+        // preloaded when its decode landed (SkiaGpu::preloadImage): its
+        // texture, mips and all, was made off this thread; if its staging
+        // copy is still being written, the rest of that is waited for here
+        // (gpu_image_upload.h), never the copy's GPU ticket.
+        if (!e.texture && !e.upload && gpu_) {
+            if ((e.upload = gpu_->findUpload(px.id, /*claim=*/true)) && e.upload->ensureSubmitted()) {
+                SkiaGpu::Lock lock = gpu_->lock();
+                if (sk_sp<SkImage> tex = e.upload->image(*gpu_)) {
+                    e.texture = std::move(tex);
+                    e.mipmapped = true;
+                }
+            }
+        }
         if (!e.texture || (wantMips && !e.mipmapped)) {
             SkiaGpu::Lock lock = gpu_->lock();
             sk_sp<SkImage> tex = SkImages::TextureFromImage(

@@ -502,7 +502,8 @@ std::vector<uint8_t> CanvasScene::getImageData(int x, int y, int w, int h) {
 
 void CanvasScene::drawImage(sk_sp<SkImage> img,
                             float sx, float sy, float sw, float sh,
-                            float dx, float dy, float dw, float dh) {
+                            float dx, float dy, float dw, float dh,
+                            std::shared_ptr<render::GpuImageUpload> upload) {
     if (!img) return;
     CanvasCmd cmd;
     cmd.type = CanvasCmd::kDrawImage;
@@ -511,7 +512,21 @@ void CanvasScene::drawImage(sk_sp<SkImage> img,
     cmd.src = SkRect::MakeXYWH(sx, sy, sw, sh);
     cmd.dst = SkRect::MakeXYWH(dx, dy, dw, dh);
     cmd.samp = imageSampling();
+    if (gpu()) cmd.upload = std::move(upload);
     recordDraw(std::move(cmd));
+}
+
+void CanvasScene::putImage(sk_sp<SkImage> img, std::shared_ptr<render::GpuImageUpload> upload) {
+    if (!img) return;
+    CanvasCmd cmd;
+    cmd.type = CanvasCmd::kPutImageData;
+    cmd.paint.setBlendMode(SkBlendMode::kSrc);
+    cmd.img = std::move(img);
+    if (gpu()) cmd.upload = std::move(upload);
+    commands_.push_back(std::move(cmd));
+    dirty_ = true;
+    snapshotValid_ = false;
+    snapshotImageValid_ = false;
 }
 
 sk_sp<SkImage> CanvasScene::snapshotImage() {

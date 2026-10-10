@@ -1,4 +1,5 @@
 #include "render/image_store.h"
+#include "render/skia_gpu.h"
 
 #include "svg/svg_renderer.h"
 #include "util/log.h"
@@ -23,13 +24,17 @@
 
 namespace bro::render {
 
-namespace {
-
-uint64_t nextPixelsId() {
+uint64_t newPixelsId() {
     // Shares no range with anything else that mints SharedPixels ids: those
     // count up from 1, these from the top bit.
     static std::atomic<uint64_t> counter{1};
     return (uint64_t(1) << 62) | counter.fetch_add(1, std::memory_order_relaxed);
+}
+
+namespace {
+
+uint64_t nextPixelsId() {
+    return newPixelsId();
 }
 
 void orientInPlace(DecodedImage& out, int orientation) {
@@ -281,6 +286,14 @@ void ImageStore::run(const std::shared_ptr<ImageRequest>& req, ImageWork work) {
         ok = false;
     }
     if (ok && img->id == 0) img->id = nextPixelsId();
+    // A big picture an element will show starts its texture upload now, off
+    // the page thread, so the frame that first paints it finds the texture
+    // (gpu_image_upload.h). Queued before the request settles, so a painter
+    // that sees it Ready finds the upload too. Not for createImageBitmap's
+    // keyless requests: the bitmap made of them starts its own.
+    if (ok && !req->key_.empty() && !img->isSvg &&
+        int64_t(img->width) * img->height >= kEagerUploadMinPixels)
+        SkiaGpu::preloadOnTarget(sharedPixelsOf(img));
     {
         std::lock_guard<std::mutex> lk(req->mu_);
         if (ok) {

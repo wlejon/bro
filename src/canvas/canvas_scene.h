@@ -73,6 +73,11 @@ struct CanvasCmd {
     // shape.
     float layerAlpha = 1.0f;
     SkBlendMode layerBlend = SkBlendMode::kSrcOver;
+    // An image command whose source has a texture uploading ahead of its
+    // first draw (an ImageBitmap, a big <img>): at replay `img` becomes that
+    // texture, and stays the raster image if the upload failed or the
+    // surface is on the CPU. See render/gpu_image_upload.h.
+    std::shared_ptr<render::GpuImageUpload> upload;
 };
 
 /// The state behind a CanvasPattern: an immutable image snapshot, the
@@ -327,9 +332,18 @@ public:
     /// per-call rgba copy + SkImage allocation that the rgbaData overload
     /// pays — instead the caller provides an already-built SkImage (typically
     /// one shared across many blits, e.g. the snapshot of a sprite atlas).
+    /// `upload`, when given, is `img`'s texture uploading ahead of the draw:
+    /// the replay samples it instead (CanvasCmd::upload).
     void drawImage(sk_sp<SkImage> img,
                    float sx, float sy, float sw, float sh,
-                   float dx, float dy, float dw, float dh);
+                   float dx, float dy, float dw, float dh,
+                   std::shared_ptr<render::GpuImageUpload> upload = nullptr);
+
+    /// The whole surface becomes `img` (w x h, the surface's size), as
+    /// putImageData at (0, 0) would make it, without reading its pixels on
+    /// this thread: an ImageBitmap shown through a bitmaprenderer context.
+    /// With `upload` the replay copies from that texture on the GPU.
+    void putImage(sk_sp<SkImage> img, std::shared_ptr<render::GpuImageUpload> upload);
 
     // --- Pixel manipulation ---
 
@@ -373,7 +387,16 @@ public:
 
     /// Bring the backing surface to the layout size and replay the frame's
     /// commands onto it. Call once per frame before compositing.
-    void rasterize();
+    ///
+    /// `mayDefer` (the windowed frame): when a command draws a texture whose
+    /// upload has not been submitted yet (an ImageBitmap drawn in the frame it
+    /// arrived, its staging copy still being written), the replay waits for a
+    /// later frame instead of stalling this one — the canvas keeps showing
+    /// what it showed, for a frame or two, and the upload's submission wakes
+    /// the loop. Bounded: after kMaxUploadDeferrals frames the replay waits.
+    /// Readbacks (getImageData, snapshots) and headless captures never defer.
+    void rasterize(bool mayDefer = false);
+    static constexpr int kMaxUploadDeferrals = 6;
 
     void getScreenRect(float& x, float& y, float& w, float& h) const {
         x = screenX_; y = screenY_;
@@ -460,6 +483,11 @@ private:
     void flushCommands();
     /// Replay staged commands (raster thread path).
     void flushStagedCommands();
+    /// Commands drawing an uploading texture: bring each upload to its
+    /// submission (before the GPU lock is taken), then, under it, swap the
+    /// texture in for the raster image.
+    static void readyUploads(std::vector<CanvasCmd>& cmds);
+    void adoptUploads(std::vector<CanvasCmd>& cmds);
 
     int queryLayoutWidth() const;
     int queryLayoutHeight() const;
@@ -544,6 +572,7 @@ private:
     bool dirty_ = false;  // surface pixels changed since the compositor last took them
     uint64_t contentGeneration_ = 0;  // bumped by each rasterize() that changed the pixels
     int rasterizedW_ = 0, rasterizedH_ = 0;
+    int uploadDeferrals_ = 0;  // consecutive frames rasterize(mayDefer) held back for an upload
 
     // Screen-space position for compositing
     float screenX_ = 0, screenY_ = 0;

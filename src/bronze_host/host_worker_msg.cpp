@@ -363,17 +363,16 @@ bool Writer::handle(uint32_t m) {
             return false;
         }
         const uint32_t idx = static_cast<uint32_t>(msg_.transferredImages.size());
+        // The pixels cross by reference, never by copy: a transfer moves the
+        // sender's reference into the message (and detaches the sender), a
+        // clone shares it — an ImageBitmap's pixels are immutable.
         SerializedImage simg;
         simg.width = bmp->width;
         simg.height = bmp->height;
+        simg.pixels = bmp->pixels;
         if (isTransferred(val, transfers_)) {
-            simg.pixels = std::move(bmp->pixels);
-            bmp->closed = true;
-            bmp->width = 0;
-            bmp->height = 0;
-            bmp->image = nullptr;
-        } else {
-            simg.pixels = bmp->pixels;
+            simg.upload = startTransferUpload(*bmp);
+            bmp->detach();
         }
         msg_.transferredImages.push_back(std::move(simg));
         out_.u8(kTransferImageBitmap);

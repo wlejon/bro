@@ -51,11 +51,11 @@ SourcePixels resolveSource(Value sourceIn, const char* who) {
     // current address.
     const Rooted source(sourceIn);
     if (const HostImageBitmap* bmp = hostImageBitmapOf(source)) {
-        if (bmp->closed || bmp->pixels.empty()) {
+        if (!bmp->rgba()) {
             LOG_WARN("bronze_host: %s was given an ImageBitmap with no pixels", who);
             return {};
         }
-        return {bmp->pixels.data(), static_cast<GLsizei>(bmp->width), static_cast<GLsizei>(bmp->height)};
+        return {bmp->rgba(), static_cast<GLsizei>(bmp->width), static_cast<GLsizei>(bmp->height)};
     }
 
     if (const HostImage* img = hostImageOf(source)) {

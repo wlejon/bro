@@ -211,8 +211,11 @@ Value ReaderState::tagged(uint8_t tag, size_t slot, int depth) {
         if (!r_.ok(4)) return ev::throwTypeError("postMessage: truncated imagebitmap transfer index");
         const uint32_t idx = r_.u32();
         if (idx >= msg_.transferredImages.size()) return ev::throwTypeError("postMessage: invalid imagebitmap index");
-        const auto& simg = msg_.transferredImages[idx];
-        return wrapHostImageBitmap(simg.pixels.data(), simg.width, simg.height);
+        // The sender's pixels themselves (shared, immutable): no copy on the
+        // receiving thread. In the page realm a big one starts its texture
+        // upload here (wrapHostImageBitmap).
+        const SerializedImage& simg = msg_.transferredImages[idx];
+        return wrapHostImageBitmap(simg.pixels, simg.upload);
     }
     case kTransferMesh: {
         if (!r_.ok(4)) return ev::throwTypeError("postMessage: truncated mesh transfer index");

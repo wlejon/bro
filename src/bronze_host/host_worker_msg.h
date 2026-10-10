@@ -12,10 +12,16 @@
 
 namespace bro::bronze_host {
 
+// An ImageBitmap in a message: its pixels by reference (they are immutable),
+// so neither the post nor the receipt copies them.
 struct SerializedImage {
     int width = 0;
     int height = 0;
-    std::vector<uint8_t> pixels;
+    std::shared_ptr<const render::DecodedImage> pixels;
+    // A big bitmap transferred out of a worker starts its texture upload as
+    // it is posted (render/gpu_image_upload.h), so the copy overlaps the hop
+    // to the page; the page's bitmap adopts it.
+    std::shared_ptr<render::GpuImageUpload> upload;
 };
 
 // A malloc'd block of ArrayBuffer bytes the message owns until a reader

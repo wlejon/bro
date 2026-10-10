@@ -63,6 +63,10 @@ struct DecodedImage {
     size_t bytes() const { return rgba.size() + svgMarkup.size(); }
 };
 
+// A process-unique id for a new buffer of pixels (DecodedImage::id): what an
+// ImageBitmap's pixels made outside the store are named by.
+uint64_t newPixelsId();
+
 // The pixels of `img` as SharedPixels, kept alive by the image itself: a
 // recording or a texture upload may outlive the caller's reference.
 SharedPixels sharedPixelsOf(const std::shared_ptr<const DecodedImage>& img);

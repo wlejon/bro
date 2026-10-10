@@ -42,6 +42,36 @@
  * @example
  *   const bmp = await createImageBitmap(await (await fetch(url)).blob());
  *   const raw = await createImageBitmap(blob, { imageOrientation: 'none' });
+ *
+ * Transfer and the GPU. A bitmap's pixels are immutable and held by
+ * reference: postMessage with the bitmap in the transfer list moves that
+ * reference (the sender's bitmap reads 0x0 afterwards), without it the
+ * receiver shares the same pixels, and createImageBitmap(bitmap) or
+ * createImageBitmap(img) without a crop shares them too. Neither side copies
+ * the pixels, so receiving a 24 MP bitmap from a Worker costs the page thread
+ * well under a millisecond. On the page, a bitmap of 512x512 or more starts
+ * its texture upload the moment it exists — the staging copy written and the
+ * GPU copy (with its mip chain, made by GPU blits) submitted on an uploader
+ * thread — so the frame that first draws it, with drawImage or through a
+ * bitmaprenderer canvas, samples a texture already made instead of uploading
+ * 96 MB in the frame. A bitmap transferred out of a Worker starts that upload
+ * as it is posted, so it overlaps the hop to the page. A drawImage in the very
+ * frame the bitmap arrived, before its staging copy is written (~7 ms for
+ * 24 MP), does not stall that frame: the canvas shows its new content a frame
+ * or two later instead. A read that needs the pixels now (getImageData, a
+ * snapshot, a headless getPixel/screenshot) waits for the rest of the staging
+ * copy. Nothing waits for the GPU copy itself, which every later draw is
+ * ordered behind on the queue. close() lets the pixels and
+ * the texture go at once. A decoded `<img>` of 512x512 or more gets the same
+ * upload when its decode lands, so the frame that first paints it does not
+ * pay one either.
+ *
+ * @example
+ *   // worker: post a decoded picture to the page without a copy
+ *   const bmp = await createImageBitmap(blob);
+ *   self.postMessage({ bmp }, [bmp]);   // bmp.width === 0 here from now on
+ *   // page: draw it next frame; its texture is already uploading
+ *   worker.onmessage = (e) => ctx.drawImage(e.data.bmp, 0, 0, w, h);
  */
 
 // ── Classes & Interfaces ─────────────────────────────────────────────────────

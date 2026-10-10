@@ -11,6 +11,7 @@
 #include <include/core/SkM44.h>
 #include <include/core/SkPixmap.h>
 
+#include <algorithm>
 #include <iterator>
 
 namespace bro::canvas {
@@ -208,10 +209,32 @@ void CanvasScene::replayCommands(SkCanvas* c, std::vector<CanvasCmd>& cmds) {
     }
 }
 
+void CanvasScene::readyUploads(std::vector<CanvasCmd>& cmds) {
+    // A draw recorded before its texture's copy was submitted (a bitmap drawn
+    // in the frame it arrived) waits for the rest of the staging write, or
+    // runs an upload nothing has started yet — never for the copy's ticket
+    // (render/gpu_image_upload.h). A failed upload leaves the raster image.
+    for (CanvasCmd& cmd : cmds)
+        if (cmd.upload && !cmd.upload->ensureSubmitted()) cmd.upload.reset();
+}
+
+void CanvasScene::adoptUploads(std::vector<CanvasCmd>& cmds) {
+    render::SkiaGpu* g = gpu();
+    for (CanvasCmd& cmd : cmds) {
+        if (!cmd.upload) continue;
+        if (g) {
+            if (sk_sp<SkImage> tex = cmd.upload->image(*g)) cmd.img = std::move(tex);
+        }
+        cmd.upload.reset();
+    }
+}
+
 void CanvasScene::flushStagedCommands() {
     if (stagedCommands_.empty()) return;
 
+    readyUploads(stagedCommands_);
     auto lock = lockGpu();
+    adoptUploads(stagedCommands_);
     unfinished_ = surface_.isGpu();
     if (tryStreamingPutImageDataFastPath(surface_.surface.get(), stagedCommands_)) {
         stagedCommands_.clear();
@@ -232,7 +255,9 @@ void CanvasScene::flushStagedCommands() {
 void CanvasScene::flushCommands() {
     if (commands_.empty()) return;
 
+    readyUploads(commands_);
     auto lock = lockGpu();
+    adoptUploads(commands_);
     unfinished_ = surface_.isGpu();
     if (tryStreamingPutImageDataFastPath(surface_.surface.get(), commands_)) {
         commands_.clear();
@@ -253,7 +278,7 @@ void CanvasScene::flushCommands() {
 // Compositing — bring the surface up to date for this frame
 // ---------------------------------------------------------------------------
 
-void CanvasScene::rasterize() {
+void CanvasScene::rasterize(bool mayDefer) {
     // Was the element removed from the DOM? An offscreen canvas (created and
     // never appended, a sprite atlas say) reads as orphaned from frame one, so
     // only one that has been seen attached counts as detached. The backing
@@ -282,6 +307,20 @@ void CanvasScene::rasterize() {
     int canvasW = queryLayoutWidth();
     int canvasH = queryLayoutHeight();
     if (canvasW <= 0 || canvasH <= 0) return;
+
+    // A texture still being staged: show this canvas as it was for now
+    // rather than wait in the frame (see the header).
+    if (mayDefer) {
+        const bool pending = std::any_of(commands_.begin(), commands_.end(), [](const CanvasCmd& cmd) {
+            return cmd.upload && cmd.upload->state() != render::GpuImageUpload::State::Submitted &&
+                   cmd.upload->state() != render::GpuImageUpload::State::Failed;
+        });
+        if (pending && uploadDeferrals_ < kMaxUploadDeferrals) {
+            ++uploadDeferrals_;
+            return;
+        }
+    }
+    uploadDeferrals_ = 0;
     ensureSurface(canvasW, canvasH);
 
     if (dirty_ || !commands_.empty() || canvasW != rasterizedW_ || canvasH != rasterizedH_) ++contentGeneration_;

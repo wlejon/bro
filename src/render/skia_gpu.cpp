@@ -166,6 +166,9 @@ SkiaGpu::Lock::~Lock() {
 SkiaGpu::SkiaGpu(VulkanContext& vulkan) : vulkan_(vulkan) {}
 
 SkiaGpu::~SkiaGpu() {
+    // The uploader thread, the uploads it still held, and their staging
+    // buffers, while the context they borrow textures from is alive.
+    stopUploads();
     if (context_) {
         Lock lock(*this);
         // Frees everything Skia allocated on the device and invokes the
@@ -237,6 +240,7 @@ bool SkiaGpu::init() {
         return false;
     }
     LOG_INFO("SkiaGpu: Ganesh on Vulkan");
+    becomeUploadTarget(this);
     return true;
 }
 
@@ -318,6 +322,7 @@ void SkiaGpu::retire(VkImage image, VkImageView view, uint64_t allocId) {
 }
 
 void SkiaGpu::collect() {
+    freeUploadStaging(/*all=*/false);
     std::vector<Retired> done;
     {
         std::lock_guard<std::mutex> lock(retireMutex_);

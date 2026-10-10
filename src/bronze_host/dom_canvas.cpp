@@ -190,16 +190,14 @@ Value makeBitmapRendererContextValue(const ev::Persistent& canvasRoot, dom::Elem
             return ev::throwValue(hostMakeDomError("InvalidStateError",
                 "ImageBitmapRenderingContext.transferFromImageBitmap: the ImageBitmap is detached"));
         }
-        if (scene && bmp->width > 0 && bmp->height > 0 && !bmp->pixels.empty()) {
+        if (scene && bmp->width > 0 && bmp->height > 0 && bmp->image) {
             scene->setIntrinsicSize(bmp->width, bmp->height);
             scene->reset();
-            scene->putImageData(bmp->pixels.data(), bmp->width, bmp->height, 0, 0);
+            // The bitmap's own image, not a copy of its pixels; on the GPU the
+            // replay copies from its texture, uploading since it arrived.
+            scene->putImage(bmp->image, bmp->upload);
         }
-        bmp->closed = true;
-        bmp->width = 0;
-        bmp->height = 0;
-        bmp->image = nullptr;
-        bmp->pixels.clear();
+        bmp->detach();
         return ev::undefined();
     });
     Value proto = g_bitmapRendererClass.prototype();

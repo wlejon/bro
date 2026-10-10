@@ -114,7 +114,7 @@ PatternSource resolvePatternSource(Value srcIn) {
             out.threw = true;
             return out;
         }
-        out.image = bmp->image ? bmp->image : imageFromRgba(bmp->pixels.data(), bmp->width, bmp->height);
+        out.image = bmp->image ? bmp->image : imageFromRgba(bmp->rgba(), bmp->width, bmp->height);
         if (!out.image) out.bad = true;
         return out;
     }
