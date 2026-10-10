@@ -199,6 +199,32 @@ const rect = (e) => e.getBoundingClientRect();
     flush();
 }
 
+// ---- a scroll write is paint, not layout ---------------------------------------------------
+{
+    const sc = el('lr-box');
+    sc.style.cssText = 'height: 100px; overflow-y: auto';
+    for (let i = 0; i < 30; i++) sc.appendChild(el('lr-row', `row ${i}`));
+    box.appendChild(sc);
+    flush();
+    const third = sc.children[3];
+    const top0 = rect(third).top;
+    perf.reset();
+    sc.scrollTop = 0;          // where it already is: a list resetting on a view switch
+    flush();
+    eq(perf.stats().nodesLaidOut, 0, 'scrollTop = 0 at the top lays nothing out');
+    perf.reset();
+    sc.scrollTop = 40;
+    flush();
+    eq(perf.stats().nodesLaidOut, 0, 'a real scroll lays nothing out either');
+    near(rect(third).top, top0 - 40, 'and the rows move by it');
+    eq(document.elementFromPoint(rect(third).left + 2, rect(third).top + 2), third, 'hit testing follows the scroll');
+    sc.scrollTop = 0;
+    flush();
+    near(rect(third).top, top0, 'back at the top');
+    sc.remove();
+    flush();
+}
+
 // ---- a positioned descendant inside a kept subtree -------------------------------------------
 {
     const holder = el('lr-box');

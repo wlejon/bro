@@ -102,7 +102,12 @@ void setElementScrollTop(Element* el, double v) {
         // yet (max == 0). A definite mid-position cancels any pending jump.
         const bool wantsEnd = requested > 0.0f && requested >= maxScroll;
         el->setScrollToBottom(wantsEnd && doc->isDirty());
-        doc->markDirty();
+        // A scroll offset is read live by paint, hit testing and the rects
+        // (none of it is baked into a layout box), so moving it only repaints,
+        // as a wheel scroll does. It used to mark the whole document for
+        // layout: a list resetting `scrollTop = 0` on a view switch laid out
+        // every node in the window, even when it was at 0 already.
+        if (clamped != prev) doc->markPaintDirty();
     }
 
     if (requested != prev) {
@@ -119,8 +124,9 @@ void setElementScrollLeft(Element* el, double v) {
     const float prev = el->scrollLeftValue();
     el->setScrollLeftValue(clamped);
 
-    if (Document* doc = el->document()) {
-        doc->markDirty();
+    // Paint only, as for scrollTop above.
+    if (clamped != prev) {
+        if (Document* doc = el->document()) doc->markPaintDirty();
     }
 
     if (clamped != prev) {
