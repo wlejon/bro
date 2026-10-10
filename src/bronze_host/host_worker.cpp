@@ -252,6 +252,11 @@ private:
 };
 
 void WorkerInstance::threadFunc() {
+    // Where a worker's boot goes, for the one line logged once its script
+    // has run: the env, brokit, bro's own globals, then compile + top level.
+    using BootClock = std::chrono::steady_clock;
+    const BootClock::time_point bootStart = BootClock::now();
+    BootClock::time_point bootMarks[4] = {bootStart, bootStart, bootStart, bootStart};
     ensureSharedRuntimeEnv();
     const ProfilerThreadScope profiled(scriptPath_);  // bro.profiler {threads: 'workers'}
 
@@ -401,6 +406,7 @@ void WorkerInstance::threadFunc() {
         ev::setProperty(gt.get(), name, fn.get());
     }
 
+    bootMarks[0] = BootClock::now();
     namespace bk = brokit::api;
     bk::installModuleRegistry();
     bk::installConsole();
@@ -473,6 +479,7 @@ void WorkerInstance::threadFunc() {
     // `bro`: bro.net / bro.net.sync over this thread's own subscriber, the
     // sibling compute APIs over this thread's own classes, bro.server over
     // the control above (host_bro_root.cpp); the loop below polls them.
+    bootMarks[1] = BootClock::now();
     installWorkerBroRoot();
     if (auto* host = hostEngine(); host && host->installWorkerHostBindings()) {
         host->installWorkerHostBindings()();
@@ -578,7 +585,16 @@ void WorkerInstance::threadFunc() {
         // wrapper would turn a module's imports into syntax errors and a
         // script's declarations into locals. A top level that rejects reaches
         // the rejection tracking installed above, like any other promise.
+        bootMarks[2] = BootClock::now();
         auto res = bronze::eval::evalScript(scriptCode, opts);
+        bootMarks[3] = BootClock::now();
+        auto ms = [](BootClock::time_point a, BootClock::time_point b) {
+            return std::chrono::duration<double, std::milli>(b - a).count();
+        };
+        LOG_INFO("worker %s ready in %.1f ms (setup %.1f, brokit %.1f, bro %.1f, compile + top level %.1f)",
+                 resolvedPath.filename().string().c_str(), ms(bootStart, bootMarks[3]),
+                 ms(bootStart, bootMarks[0]), ms(bootMarks[0], bootMarks[1]), ms(bootMarks[1], bootMarks[2]),
+                 ms(bootMarks[2], bootMarks[3]));
 
         if (res.thrown) {
             std::string errStr;
