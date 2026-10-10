@@ -4,8 +4,7 @@
 //
 // THE IMPORT is the single-file r160 ESM bundle vendored in the bronze
 // checkout — `bronze/tests/oracle/threejs/three.module.js`, byte-for-byte as
-// released. That is option 2 in MISSING_MODULES.md beside this file, taken:
-// `WebGLRenderer`'s import closure is ~200 files and the bundle is one, and
+// released: `WebGLRenderer`'s import closure is ~200 files and the bundle is one, and
 // nothing about the 28-file tree the milestone compiles changes. The path is
 // relative to this file, on the same sibling-checkout assumption
 // main_scenegraph.js documents at length — module resolution is the bronze

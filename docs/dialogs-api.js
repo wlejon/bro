@@ -7,8 +7,10 @@
  * the browser's standard modal dialog trio (alert, confirm, prompt). All six are
  * globals (on `globalThis`), not members of `bro`.
  *
- * Every one of them blocks until the user answers, so never call one from a
- * headless test: there is nobody to answer it.
+ * In a window every one of them blocks until the user answers. Headless never
+ * blocks: the file dialogs answer with the paths queued by `setPickedFiles()`
+ * (none queued is a cancelled pick), and alert/confirm/prompt follow
+ * `setDialogAnswer()` (see docs/headless.md).
  *
  * @example
  *   const files = showOpenFileDialog('Audio Files|wav;flac;mp3;ogg;opus');

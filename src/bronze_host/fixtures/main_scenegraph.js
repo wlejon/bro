@@ -1,10 +1,8 @@
 // The runnable half of the cube app: everything three.js's WebGLRenderer would
 // do EXCEPT the drawing, built from the modules that are actually vendored.
 //
-// Why this file exists at all is in MISSING_MODULES.md beside it: r160's
-// WebGLRenderer is not in the vendored tree and its import closure is ~200
-// files, so `main.js` (the renderer version) cannot be compiled today. This one
-// can, and it is the real integration proof for the host layer — it drives
+// It imports only the 28-file vendored module tree (no WebGLRenderer), so it
+// proves module-graph resolution across relative specifiers, and it drives
 // every seam the renderer would drive except the GL calls themselves:
 //
 //   * document.createElement('canvas') and body.appendChild

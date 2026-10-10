@@ -404,7 +404,7 @@ void installBroRoots(engine::Engine& engine) {
     for (const char* ns : kPrivilegedNamespaces) {
         if (!engine.hasPrivilege(ns)) {
             setUnavailable(ns, "it is privileged and granted only to a trusted shell app "
-                               "(see docs/desktop-trust.md)");
+                               "(see docs/apps.md, Permissions)");
         }
     }
     {

@@ -31,7 +31,7 @@ let all = bro.settings.getAll("audio");
 | `bro.settings.setDefault(key, value)` | Set an app-level default (not persisted, overridden by user settings) |
 
 ```js
-// User overrides, persisted to .bro_settings.json, applied at runtime
+// User overrides, persisted (see Persistence), applied at runtime
 bro.settings.set("graphics.fullscreen", true);
 bro.settings.set("audio.masterVolume", 0.7);
 bro.settings.set("graphics.vsync", false);
@@ -281,7 +281,7 @@ Settings are resolved with three layers (later wins):
 
 1. **Engine defaults**: hardcoded values (see tables above)
 2. **App overrides**: set via `bro.json` or `bro.settings.setDefault()` at runtime
-3. **User overrides**: set via `bro.settings.set()`, persisted to `.bro_settings.json`
+3. **User overrides**: set via `bro.settings.set()`, persisted (see Persistence)
 
 When a user override exists, it takes priority. When it doesn't, the app override is used. When neither exists, the engine default is used. `bro.settings.reset()` clears user overrides, reverting to app/engine defaults.
 
@@ -303,7 +303,12 @@ Settings changed via `bro.settings.set()` take effect immediately:
 
 ## Persistence
 
-User settings are stored in `.bro_settings.json` next to the executable. The file uses a flat key-value JSON format:
+Where user settings are stored depends on the app:
+
+- An app whose `bro.json` gives it an id keeps its own file, `bro_settings.json` in its config directory (`bro.app.configDir`, [app-api.js](app-api.js)).
+- Any other app shares the engine-global `.bro_settings.json` next to the executable (inside a macOS app bundle, in the user data directory instead).
+
+The file uses a flat key-value JSON format:
 
 ```json
 {
@@ -313,7 +318,7 @@ User settings are stored in `.bro_settings.json` next to the executable. The fil
 }
 ```
 
-This file is engine-global (shared across all apps). It is written automatically on every `bro.settings.set()` or `bro.settings.rebindAction()` call. It is read at engine startup.
+It is written automatically on every `bro.settings.set()` or `bro.settings.rebindAction()` call, and read at engine startup.
 
 ## Preferences modal
 
@@ -372,7 +377,7 @@ h1 { margin: 0 0 20px 0; font-size: 16px; color: #e0e0e0; }
 </html>
 ```
 
-The tab label comes from the `<title>` element; the file's stem (`gameplay`) becomes the panel id. Use `bro.settings.set(...)` for any key, custom app keys are persisted to `.bro_settings.json` alongside engine keys and survive restarts. `PanelLayout` (`system/lib/panel-runtime.js`) is what keeps this tab's content region aligned with the modal shell. See [system-panels.md](system-panels.md#panellayout--shared-modal-geometry).
+The tab label comes from the `<title>` element; the file's stem (`gameplay`) becomes the panel id. Use `bro.settings.set(...)` for any key, custom app keys are persisted alongside engine keys and survive restarts. `PanelLayout` (`system/lib/panel-runtime.js`) is what keeps this tab's content region aligned with the modal shell. See [system-panels.md](system-panels.md#panellayout--shared-modal-geometry).
 
 ## bro.json integration
 
@@ -393,7 +398,7 @@ Settings from `bro.json` flow into the app override layer. These keys are suppor
 }
 ```
 
-User overrides from `.bro_settings.json` take priority over `bro.json` values.
+User overrides take priority over `bro.json` values.
 
 Additionally, `bro.json` carries **startup-only window-management keys**. These
 configure the window at creation and are *not* settings (no user-override layer,

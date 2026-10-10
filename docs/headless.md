@@ -28,7 +28,7 @@ Scripts and `-e` expressions are compiled in-process by bronze and run against t
 | `--print-host-globals` | Install the host globals exactly as a run would, print bronze's host-global registry to stdout one name per line, and exit: the `--host-globals` manifest for `bronze build` of an app that will run on this binary. |
 | `--print-native-manifest <path>` | The other half of the same contract: write the native registry — the `__bro_native.*` entry points and signatures behind `bro.time`, `bro.settings`, `bro.window` and the panels' `__bro.*` — as the JSON `--native-manifest` for the same compile, and exit. Combines with `--print-host-globals` in one run; `tests/bronze_host/lib.sh` asks for both that way. |
 
-By default, headless renders offscreen on a Vulkan device (no window, no X server) through the same pipeline as windowed mode: Skia on the GPU, WebGL2 and 3D scene layers, composited by the same presenter.
+By default headless renders offscreen on a Vulkan device through the same pipeline as windowed mode; no display is needed.
 
 ## Headless globals
 
@@ -214,12 +214,7 @@ inline-formatting model plaintext-v1 doesn't have, and they report
 `queryCommandSupported === false` rather than silently doing nothing, so
 callers can feature-detect instead of discovering it from a no-op.
 
-Deliberate divergence from browsers: `paste` (and `cut`/`copy`) work from
-script. Browsers refuse them because a web page reading the user's clipboard
-without a gesture is a privilege escalation; bro is an app runtime whose app
-is the trusted party, and `navigator.clipboard` is already available to it
-unconditionally. Refusing here would buy no safety and would only make the
-keyboard and scripted paths disagree.
+Unlike browsers, `paste`, `cut` and `copy` work from script without a user gesture.
 
 ### Settings
 
@@ -389,20 +384,6 @@ bro-headless ../broworkshop/demos/example test.js
 
 Exit code is 0 on success, 1 if any assertion fails or an uncaught exception occurs, and 77 if the script called `skipTest()` (or `missingGpuContext()` without a GPU) and nothing failed.
 
-### Await in scripts
-
-Top-level `await` is not accepted by the compiler. Wrap asynchronous work in an async function and pump the engine until it settles (see "Waiting in scripts: pump, don't await" below):
-
-```js
-async function main() {
-  let resp = await fetch('data.json');
-  let data = await resp.json();
-  assert(data.items.length > 0, 'data loaded');
-  screenshot('loaded.png');
-}
-main();
-```
-
 ## Integration tests
 
 The `tests/` directory contains integration tests that exercise the engine via `bro-headless` on its default GPU path, the same renderer, WebGL, and layer compositing the shipping runtime uses. (`--no-gpu` selects the CPU raster fallback, which is a different code path; running the suite there would leave the real one untested.) Run them with:
@@ -415,23 +396,6 @@ bash tests/run_tests.sh events   # filter by substring
 Each test is a self-contained JS file that manipulates the DOM and uses `assert()` to verify behavior. The runner discovers all `tests/*/test_*.js` files, runs each against the minimal `tests/test_app/` HTML page, and reports pass/fail with a summary.
 
 What a headless run never touches — the windowed frame loop, the raster thread, swapchains and the presenters of real windows (the main one and `bro.window.open()` ones) — is covered by the **windowed self-tests**: each `tests/windowed/<app>/` is an app the runner opens with the windowed `bro` on SDL's offscreen video driver (a Vulkan surface via `VK_EXT_headless_surface`, no display needed), with `BRO_CAPTURE_PRESENTS=1` so every presented swapchain image is also read back. The app checks pixels with `presentedFrame([windowHandle])` (an ImageData of what the main window, or that secondary window, last presented; `null` without the capture) and `assert()`, then `window.close()`; a failed assert exits 1, `skipTest()` 77, as in headless. bro logs to `bro.log` in its working directory, which the runner reads back.
-
-### Test categories
-
-`tests/` holds 40+ directories, one per subsystem (`webgl/`, `scene/`, `physics/`,
-`audio/`, `net/`, `window/`, `video/`, the ML suites, ...). A sample of the core
-ones:
-
-| Directory | What it tests |
-|-----------|---------------|
-| `tests/dom/` | createElement, appendChild/removeChild, innerHTML, textContent, querySelector, attributes, classList, dataset, cloneNode |
-| `tests/events/` | click dispatch, event bubbling, stopPropagation, preventDefault, addEventListener/removeEventListener, `document.dispatchEvent` |
-| `tests/style/` | Inline style get/set, getComputedStyle |
-| `tests/layout/` | getBoundingClientRect, offsetWidth/Height/Left/Top, clientWidth/Height |
-| `tests/timers/` | setTimeout, setInterval, requestAnimationFrame (all with virtual time via advanceTime) |
-| `tests/shadow_dom/` | attachShadow, shadow root querySelector, slot distribution |
-| `tests/custom_elements/` | customElements.define, lifecycle callbacks (connected/disconnected), observedAttributes + attributeChangedCallback |
-| `tests/gc/` | Orphan element cleanup after innerHTML removal, rapid create/remove cycles |
 
 ### Writing tests
 
@@ -477,18 +441,9 @@ advanceTime(150);
 assert(fired, 'timer fired after advancing past deadline');
 ```
 
-## Architecture
+## Rendering
 
-Headless mode shares the same `Engine` class as windowed mode, configured via `EngineConfig` with `DisplayMode::Headless`. Headless testing APIs (`screenshot`, `advanceTime`, etc.) operate directly against the engine after `engine.run()` initializes layout.
-
-### GPU mode (default)
-
-- A Vulkan 1.3 device (`VulkanContext`) and `VulkanPresenter` with no surface: no window and no X server
-- Uses `SkiaRenderer`: same Skia rasterization backend as windowed mode. Skia draws on the GPU (Ganesh on Vulkan, `SkiaGpu`, sharing the engine's device and queue): UI layers, iframes and 2D canvases are GPU images the presenter samples in place, read back only for a capture or `getImageData`. `BRO_SKIA_GPU=0` keeps Skia on the CPU (raster layers uploaded to the composite) for comparing the two; anti-aliased edges can differ by a few levels, flat colours and `getImageData`/`putImageData` round trips match exactly
-- WebGL2 runs on Vulkan (`WebGLVkContext`), so Three.js, PixiJS and raw WebGL code run unchanged; the support matrix below lists exactly what is implemented
-- 3D scene graph runs Vulkan render passes; its shaders are compiled to SPIR-V by the in-process glslang (built-in ones at build time, custom shaders and WebGL programs at run time), and pipelines persist in the on-disk pipeline cache
-- Screenshots are the windowed composite: the presenter samples every layer image in place into an offscreen target, which is copied to a host buffer and read back
-- Text metrics use Skia with platform-native fonts (DirectWrite on Windows, FreeType/fontconfig on Linux), pixel-identical to windowed rendering
+`BRO_SKIA_GPU=0` keeps Skia on the CPU (raster layers uploaded to the composite) to compare against the GPU path; anti-aliased edges can differ by a few levels, flat colours and `getImageData`/`putImageData` round trips match exactly.
 
 ### WebGL2 support matrix
 
@@ -674,7 +629,7 @@ results are the typed arrays the IDL names.
 
 **Not implemented:** an antialiased canvas (`antialias` is reported false;
 render into a multisampled renderbuffer and blit instead). The other context
-attributes are not honoured either (as before the Vulkan port):
+attributes are not honoured either:
 `getContextAttributes()` reports fixed values, an `alpha: false` canvas
 still composites its alpha, and `preserveDrawingBuffer: false` preserves.
 `toDataURL` on a WebGL canvas encodes premultiplied bytes, and a WebGL canvas
@@ -731,14 +686,9 @@ draws its contents as of the last upload.
 
 ### CPU mode (`--no-gpu`)
 
-- No Vulkan device; the hidden window that carries `bro.window` state is a plain (non-Vulkan) SDL one
-- Uses `SkiaRenderer` with Skia on the CPU: the same record → replay → composite pipeline as the GPU path, with CPU layer surfaces composited on the CPU, so iframes, system panels and a device scale above 1 render as they do on the GPU
-- Canvas 2D rendered via software command replay
-- No WebGL support (apps fall back gracefully)
-- No 3D scene: `canvas.getContext('scene')` returns `null`, so branch on it (`const s = canvas.getContext('scene'); if (!s) { /* 2D fallback */ }`). The 3D renderer is Vulkan end to end and requires a GPU device. Note that `bro.gpu.available` reports the ML/compute backend (Vulkan/CUDA/Metal).
-- Nothing falls back to it silently: a headless boot that asks for the GPU and finds no usable Vulkan device fails (`Fatal: Headless Vulkan initialization failed`) rather than quietly testing the CPU path; pass `--no-gpu` to choose it
-- Screenshots read straight from the CPU composite
-- Input simulation (click, mouseDown, etc.) works fully, hit testing, event dispatch, focus management all function without a GPU
+- Skia on the CPU through the same record → replay → composite pipeline, so iframes, system panels and a device scale above 1 render as on the GPU
+- No WebGL and no 3D scene: `getContext('webgl2')` / `getContext('scene')` return `null`. `bro.gpu.available` is the ML/compute backend, not this.
+- Never chosen silently: a headless boot that finds no usable Vulkan device fails (`Fatal: Headless Vulkan initialization failed`); pass `--no-gpu` to choose it
 
 ### Virtual time
 
@@ -758,14 +708,12 @@ Virtual time starts from the wall clock at engine initialization. The timer subs
 
 ### Waiting in scripts: pump, don't await
 
-A script file with a top-level `await` runs as an ES module. It has the same
-globals as a classic script, `require` included.
-Node modules are `require('fs')` in both and never bare globals, so a bare
-`fs` is a ReferenceError in either; `import ... from 'node:fs'` is rejected
+A script file with a top-level `await` runs as an ES module, with the same
+globals as a classic script, `require` included. Node modules are
+`require('fs')`, never bare globals; `import ... from 'node:fs'` is rejected
 at compile time (see docs/brokit-api.js).
 
-A script file with a top-level `await` is evaluated as an ES module, and while
-its evaluation promise is pending the runner drains **microtasks only**, no
+While a top-level `await` is pending the runner drains **microtasks only**, no
 timers, no frame pumps. Anything delivered per-frame (`setTimeout`,
 `bro.net` callbacks, worker messages, Steam events) can never fire during a
 bare top-level `await`, so `await new Promise(r => setTimeout(r, ...))` hangs
@@ -823,5 +771,5 @@ not survive the swap.
 
 - `[INFO]` and `[console.log]` lines go to stderr; `-e` print results go to stdout. Separate them with `2>/dev/null`.
 - Screenshots are PNG format.
-- The default viewport is 1920x1080. Override with `--width` and `--height`. These are applied *after* the app config loads, so an appdir's `bro.json` `width`/`height` has no effect in headless ? every headless run is 1920x1080 on every machine unless the flags are passed. Derive test expectations from `window.innerWidth`/`innerHeight` rather than from the manifest.
+- The default viewport is 1920x1080. Override with `--width` and `--height`. These are applied *after* the app config loads, so an appdir's `bro.json` `width`/`height` has no effect in headless: every headless run is 1920x1080 on every machine unless the flags are passed. Derive test expectations from `window.innerWidth`/`innerHeight` rather than from the manifest.
 - Audio engine runs in headless mode; by default no audio device is opened (pass `--audio` to open the real device + mic). `advanceTime()` pumps the audio DSP pipeline, so voices, effects, sequencer, metering, recording, and FFT analysis all work. The pump carries the fractional frame between calls, so thirty `advanceTime(1000 / 30)` calls render exactly one second of audio; capture a soundtrack for a video rendered at a fixed frame rate with `startRecording({ channels: 2, seconds })` and `exportRecordingToWav()`. Use `getBusPeakL/R()`, `getBusRmsL/R()`, `getSpectrum()`, and `stopRecording()` to inspect audio output numerically.

@@ -1,8 +1,8 @@
 # The bro ecosystem
 
-bro is one repository among many. This page lists all of them: what each one is for, what it builds against, and where it runs. It also describes the dependency convention they share. The same list in machine-readable form is [`scripts/repos.txt`](../scripts/repos.txt), which `scripts/repo-status.sh`, `scripts/repo-status.ps1` and `tests/run_tests.sh` read. Change both together.
+Every repository in the family: what each one is for, what it builds against, and where it runs. The same list in machine-readable form is [`scripts/repos.txt`](../scripts/repos.txt), which `scripts/repo-status.sh`, `scripts/repo-status.ps1` and `tests/run_tests.sh` read. Change both together.
 
-**Where it is going.** The goal is a cross-platform desktop environment, on Windows and Linux at least, with apps written in HTML/CSS/JS on the bro runtime. On Linux bro drives the screen itself. The current milestone is a terminal in bro good enough to run Claude Code: the `<terminal>` element ([terminal-api.js](terminal-api.js)) and helmterm in [helmapps](https://github.com/wlejon/helmapps), the desktop's core apps. What is done and what is open: [desktop-roadmap.md](desktop-roadmap.md).
+**Where it is going.** The goal is a cross-platform desktop environment, on Windows and Linux at least, with apps written in HTML/CSS/JS on the bro runtime. On Linux bro drives the screen itself.
 
 All repositories are at `github.com/wlejon/<name>` under the MIT license unless noted, and each is checked out beside bro at `../<name>`.
 
@@ -52,7 +52,7 @@ All of them build and test on Windows, Linux and macOS.
 
 ## Terminal libraries (linked by bro)
 
-These have no JavaScript binding and do not depend on bro or bronze. bro links them under `BRO_WITH_TERMINAL` for the `<terminal>` element.
+bro links them under `BRO_WITH_TERMINAL` for the `<terminal>` element. bropty, bromux and brolink have no JavaScript binding and do not depend on bro or bronze; brosearch and brothemes also build a `<name>_api` binding, mounted as `bro.search` (`BRO_WITH_SEARCH`) and `bro.themes` (`BRO_WITH_THEMES`).
 
 | Repo | Role | Depends on | Platforms |
 |------|------|------------|-----------|
@@ -102,29 +102,4 @@ Standalone C++20 libraries for the desktop environment. bro mounts their JavaScr
 | [ffmpeg-bro](https://github.com/wlejon/ffmpeg-bro) | A GUI for ffmpeg: in-process playback, a timeline, a filtergraph editor, exports. GPLv3: it links bro, and bro never links GPL code | bro | Windows, Linux, macOS |
 | [broparity](https://github.com/wlejon/broparity) | Rendering parity between bro and Chromium: pixel and layout-tree diffs over small HTML cases ([live report](https://wlejon.github.io/broparity/)) | bro (`bro-headless`) | Windows, Linux, macOS |
 
-## The dependency convention
-
-Every repo here that builds against another resolves it the same way, in this order:
-
-1. **An existing target wins.** If a superbuild such as bro has already added `bropty`, bromux's lookup finds that target and adds nothing. That way a library is configured once per build, and the first loader picks its options. bro is the first loader of brotensor, brosearch and the others for this reason.
-2. **The sibling checkout**, at `../<name>` beside the top-level project, overridable with `-DFETCHCONTENT_SOURCE_DIR_<NAME>=<path>`. This is the development layout: you edit the standalone repo and every consumer builds from it, with no copy to keep in sync.
-3. **GitHub**, downloaded at configure as the archive tarball of one commit: for an ecosystem repo, the head of its `main` as of that configure (read with `git ls-remote`, all of a build's heads at once), or the commit a release's `cmake/bro_lock.cmake` locks; for third-party code, the exact sha its declaration pins. This is what CI and a fresh `git clone` use. There are no git submodules anywhere.
-
-All three steps are one function, `bro_dependency(<name> ...)`, in `cmake/bro_deps.cmake`: one identical file in every repo that has dependencies (bro's `scripts/sync-deps.sh` copies it out). A repo declares every ecosystem repo it needs, with no commit, so it builds their mains, plus the third-party code it builds from source (SDL, Jolt, curl, libremidi, meshoptimizer, ...), each pinned to an exact commit with `REF`.
-
-**Declarations are first-wins**, so the top-level project's choices apply to the whole build: bro declares all of its dependencies (`cmake/bro_pins.cmake`) before it adds anything, so its third-party pins beat a sibling's and its ecosystem heads resolve in one concurrent batch.
-
-**There are no pins to move.** A pushed commit is what the next configure of every consumer builds, so push in dependency order: leaves first, bro after the libraries, the apps last. **A release locks**: `scripts/lock-deps.sh` writes `cmake/bro_lock.cmake` (every ecosystem dependency, transitive ones included, at one commit), the lock is committed and tagged, and then removed from main again. [multi-repo-workflow.md](multi-repo-workflow.md) has bro's side in detail: the configure order, the offline fallback, the feature gates, the `<name>_api` bindings, the release flow, and the status/pull/push tool.
-
-## Working across the repos
-
-```bash
-scripts/repo-status.sh            # every repo in scripts/repos.txt: branch, dirty, ahead/behind,
-                                  # then dependency hygiene (bro_deps.cmake drift, REFs, locks)
-scripts/repo-status.sh --verbose  # also list changed files
-pwsh scripts/repo-status.ps1      # the same tool on Windows (-ListFiles, -Pull, -Push)
-scripts/sync-deps.sh              # copy bro's bro_deps.cmake everywhere, drop wlejon REFs
-scripts/lock-deps.sh              # release lock (--local, --repo <dir>, --unlock)
-```
-
-A repo that isn't checked out is listed as such and skipped. A repo tracking an upstream that isn't on `origin` shows it in brackets.
+How dependencies resolve, how to push, and the release lock: [multi-repo-workflow.md](multi-repo-workflow.md).

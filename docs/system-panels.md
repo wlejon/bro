@@ -2,8 +2,6 @@
 
 bro ships a handful of engine-level UI overlays, the menu bar, the perf HUD, the preferences modal and its settings tabs, the startup splash screen, and the DOM inspector. These are **system panels**: HTML files rendered through the same layout/CSS/Skia pipeline as an app's own document, each with its own `dom::Document`.
 
-This doc is the single reference for how that layer works and how to author or override a panel. It replaces scattered mentions in `docs/settings.md` and `docs/menu-api.js`, which now link here instead of describing `__bro` inline.
-
 > **Not to be confused with:** `system/inspector.html` (this doc) is a visual DOM-tree overlay panel toggled from the View menu. `docs/inspect.md`'s `inspect()`/`inspectTree()`/`computedStyle()` globals are a completely different, headless-only scripting API for querying layout from a `bro-headless` script. Same-ish name, unrelated code paths.
 
 ## How panels are discovered
@@ -72,7 +70,7 @@ PanelLayout.positionContent(panelEl)          // settings/*.html: position this 
 PanelLayout.onResize(fn)  // call fn() now, then wire it as window.__onResize
 ```
 
-Before this helper existed, every settings-panel file hand-copied `CARD_W`/`CARD_H`/`SIDEBAR_W`/`HEADER_H` and its own positioning math. A panel authored today should load `panel-runtime.js` and call `PanelLayout.onResize(...)` instead of re-deriving these constants. See any file under `system/settings/` for the pattern.
+A new panel loads `panel-runtime.js` and calls `PanelLayout.onResize(...)` rather than re-deriving these constants; any file under `system/settings/` shows the pattern.
 
 ## `__bro` reference
 

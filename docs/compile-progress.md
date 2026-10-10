@@ -36,14 +36,3 @@ No script of the page runs from these frames: no timers, no
 `requestAnimationFrame`, no input dispatch at boot. Headless runs compile on
 the calling thread, which keeps tests deterministic, and never set the
 attribute.
-
-For an embedder, bronze exposes the pieces directly: `EvalOptions::onProgress`
-reports `CompileProgress { phase, fraction }` from the compiling thread, and
-`captureThreadInputs(options)` copies what a compile reads from the calling
-thread's runtime (host globals, natives, the realm's module registry) so the
-compile may run on any thread and still build the program that thread would
-have (bronze `src/eval/eval.h`).
-
-Where it lives: `compileWithPumping` in `src/bronze_host/eval_jit.cpp`, and
-`Engine::pumpCompileFrame` / `setCompileProgress` in
-`src/engine/engine_compile_frame.cpp`.

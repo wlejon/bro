@@ -198,6 +198,7 @@ const GROUPS = [
     ["menu-api.js", "bro.menu: native menu bar"],
     ["math-api.js", "bro.math: bromath types (SpatialHash3D)"],
     ["paths-api.js", "bro.appDir / bro.resolvePath: real filesystem paths"],
+    ["app-api.js", "bro.app: folder app identity, argv, config/data/cache dirs, single instance, permissions"],
     ["terminal-api.js", "&lt;terminal&gt; + bro.terminal: native terminal element over bropty"],
     ["profiler-api.js", "bro.profiler: bronze sampling profiler (self/total, call graphs)"],
     ["steam-api.js", "bro.steam: Steamworks SDK wrapper (achievements, stats, cloud)"],
@@ -218,6 +219,7 @@ const GROUPS = [
     ["compositor-api.js", "bro.compositor: window management, workspace switching, layouts"],
     ["wl-api.js", "bro.wl: Wayland client protocols (layer-shell, toplevel, lock, screencopy)"],
     ["a11y-api.js", "bro.a11y: accessibility tree inspection, announcements, custom roles"],
+    ["remote-api.js", "bro.remote: host this screen for a remote viewer; &lt;remoteview&gt; viewer sessions"],
   ]],
 ];
 const GUIDES = [
@@ -231,9 +233,8 @@ const GUIDES = [
   ["multi-repo-workflow.md", "Working across bro and its sibling repos"],
   ["embedding.md", "Linking bro_engine into your own executable"],
   ["coverage.md", "OpenCppCoverage line-coverage reports"],
-  ["desktop-trust.md", "Desktop trust model: tiers, trusted install locations, privileged namespaces"],
-  ["desktop-sibling-apis.md", "Desktop sibling libraries: JS API plan, conventions, trust"],
-  ["desktop-roadmap.md", "Desktop foundations roadmap: milestones and deliverables"],
+  ["apps.md", "Folder apps: manifest, command line, per-app dirs, single instance, permissions, install"],
+  ["agent-control.md", "bro-ctl: the local control socket for screenshots, input, eval, recordings"],
   ["hot-reload.md", "Hot reload: edit loop, file watcher, F5 refresh"],
   ["code-cache.md", "Compiled IL cache: storage format, location, cache keys"],
   ["compile-progress.md", "Compilation progress indicators and styling"],

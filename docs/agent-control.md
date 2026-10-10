@@ -27,21 +27,15 @@ printf 'key super+s\nsleep 1\nkey escape\n' | ssh box bro-ctl batch
 
 ## Security
 
-The channel is [brolink](https://github.com/wlejon/brolink)'s local IPC,
-the transport bromux and `bro.remote` use. On Linux and macOS the socket is
-`$XDG_RUNTIME_DIR/bro-control/<name>.sock` (without `XDG_RUNTIME_DIR`,
-`${TMPDIR:-/tmp}/bro-control-<uid>/`): a directory only its owner can enter
-(0700, and refused if it is anything else), a socket only its owner can open
-(0600), and the peer's uid checked on every connection, by the server and by
-bro-ctl alike (SO_PEERCRED / getpeereid). It is never a network listener:
-reaching it from elsewhere means logging in as that user first (ssh), and
-anyone who can do that can already run anything as them.
+Local IPC only, never a network listener; only the same user can connect
+(reach another machine's over ssh).
 
-On Windows it is a named pipe, `\\.\pipe\bro-control-<user SID>-<name>`,
-whose DACL admits only that user and which refuses remote clients; bro-ctl
-checks that the process serving it runs as the same user before it speaks.
-Files a command writes for bro-ctl (`-o -`, a default screenshot or record
-path) go to `%LOCALAPPDATA%\bro-control\`.
+- Linux/macOS: `$XDG_RUNTIME_DIR/bro-control/<name>.sock` (without
+  `XDG_RUNTIME_DIR`, `${TMPDIR:-/tmp}/bro-control-<uid>/`); the directory must
+  be 0700.
+- Windows: the named pipe `\\.\pipe\bro-control-<user SID>-<name>`. Files a
+  command writes for bro-ctl (`-o -`, a default screenshot or record path) go
+  to `%LOCALAPPDATA%\bro-control\`.
 
 ## When it is on
 
@@ -50,13 +44,8 @@ path) go to `%LOCALAPPDATA%\bro-control\`.
   `<app>-<pid>`; `BRO_CONTROL=<name>` picks the name.
 - `BRO_CONTROL=0` turns it off everywhere.
 
-The pid is in the name on every OS, so any number of bros (two windows of one
-app included) serve side by side. A live server keeps its name: a second bro
-asking for it is refused. A bro killed without removing its socket leaves the
-file behind (POSIX; a pipe goes with its process), and the next bro to start
-control removes every such socket in the directory, whatever its name: a
-server holds a lock file beside its socket while it serves, so a lock anyone
-can take marks a dead one. `bro-ctl list` shows the endpoints and which
+A second bro asking for a live server's name is refused. Stale sockets from
+killed bros are removed when the next bro starts control. `bro-ctl list` shows the endpoints and which
 answer. `-s NAME` picks one: the whole name (`helmterm-4242`), the app alone
 (`helmterm`, when one process of it is running; with several, bro-ctl lists
 them and asks), or the pid (`4242`). Without `-s` the default is `display`,
@@ -177,24 +166,3 @@ The same commands run in-process in `bro-headless`, without a socket:
 until the reply, then `{ok, payload}`. Input timelines play out against the
 virtual clock, so advance time while waiting
 (`tests/headless/test_agent_control.js`).
-
-## Where it lives
-
-| | |
-|---|---|
-| `src/platform/control_socket.*` | the server on brolink's event loop: requests in, replies out |
-| `src/platform/control_protocol.h` | the messages, shared with bro-ctl |
-| `src/engine/control.*` | the command registry and per-frame pump (no socket details) |
-| `src/engine/control_commands.cpp`, `control_input.cpp`, `control_record.cpp` | engine commands |
-| `src/bronze_host/host_control.*` | `eval`, `dom`, `inspect`, `style`; the headless globals |
-| `src/engine/frame_trace.*`, `engine_frame_trace.cpp` | the flight recorder |
-| `src/render/scanout_capture.*` | the recorder's GPU frame tap on the KMS presenter |
-| `src/ctl/bro_ctl.cpp` | the client |
-
-The transport is [brolink](https://github.com/wlejon/brolink)'s local IPC
-(listening, peer checks, stale-endpoint cleanup) and its message framing
-(`u32` length, `u16` type, body). A `Request` (type 1) is `varint id,
-strings argv`; a `Reply` (type 2) is `varint id, bool ok, str payload`. A
-connection may carry several requests, and each reply names the request it
-answers. Nothing in it depends on the local socket, so any brolink stream (a
-remote session's lane) can carry the same protocol.

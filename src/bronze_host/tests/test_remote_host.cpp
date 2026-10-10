@@ -272,7 +272,7 @@ int main(int argc, char** argv) {
     }
     const fs::path dir = BRO_REMOTE_TEST_DIR;
     // bro.remote is privileged: the app asks for it (bro.json "permissions")
-    // and the test names its folder trusted (docs/desktop-trust.md).
+    // and the test names its folder trusted (docs/apps.md, Permissions).
     setEnv("BRO_TRUSTED_APP_DIR", (dir / "app").string());
     std::random_device rd;
     const std::string id = std::to_string(rd() % 1000000);

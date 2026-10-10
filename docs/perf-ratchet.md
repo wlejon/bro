@@ -6,13 +6,8 @@ median of several repetitions per number, and compares each median with the
 checked-in golden in `bench/goldens.<platform>.json`. A number fails only when
 it is worse than its golden by more than its margin; there are no aspiration
 targets. The script prints one table and an overall PASS/FAIL, and exits 1 on
-FAIL.
-
-It complements brass's micro-benchmark ratchet (`../brass`,
-`brass_benchmarks --check-ratchet`), which gates code-generation ratios; this
-one gates what a person running an app notices: compute throughput, GC
-pauses, how long a page takes to compile cold and warm, and how long a large
-app takes to get to its screens.
+FAIL. Code-generation ratios are brass's own ratchet
+(`brass_benchmarks --check-ratchet`).
 
 ## Running it
 
@@ -42,15 +37,10 @@ Every number is milliseconds, lower is better.
 | `boot_cold_ms`, `boot_warm_ms` | same launches | wall time from launching the process to its exit after a one-line driver |
 | `tats_boot_ms`, `tats_world_entry_ms`, `tats_mission_launch_ms`, `tats_lab_battle_ms` | `../tats/tools/startupprobe.js` via tats's `tats-headless` | the probe's own stage times: binary boot to `window.tats`, survey WORLD entry, mission launch, lab battle |
 
-The cold-compile probe never touches the user's code cache: every repetition
-gets a fresh directory under the work dir through `BRO_CODE_CACHE_DIR`, and
-that directory is deleted afterwards. The tats probes run warm from a cache
-of their own under the work dir (one untimed priming run first), without the
-`parity` argument, from the work dir as the working directory; nothing in
-`../tats` is written to. When `../tats` or its build is missing, or the
-scene-editor app is, those rows print `[SKIP]` and do not count. The tats
-numbers are tats's binary, which embeds `bro_engine` from the last time tats
-was built: rebuild tats to see a bro change there.
+The probes never touch the user's code cache. When `../tats` or its build is
+missing, or the scene-editor app is, those rows print `[SKIP]` and do not
+count. The tats numbers come from tats's own binary, which embeds `bro_engine`
+as of its last build: rebuild tats to see a bro change there.
 
 ## The pass rule and the margins
 
@@ -58,17 +48,13 @@ A key passes when `median <= golden * (1 + margin)`. The margin is 10% unless
 `margin_for()` in `bench/ratchet.sh` widens it for a key whose median moves
 more than that between quiet runs:
 
-| Keys | Margin | Why (quiet runs, 7950X3D, 2026-09-29) |
-|---|---|---|
-| `cpu_nbody_ms`, `cpu_toplevel_ms`, `cpu_total_ms`, `gc_*_avg_ms` | 10% | medians within ±3% between invocations |
-| `cpu_strings_ms` | 20% | ~46 ms at 1 ms resolution; one rep read 57 |
-| `gc_*_worst_ms` | 25% | a max over 200 batches, 6-13 ms at 1 ms resolution |
-| `page_compile_cold_ms`, `page_compile_warm_ms` | 15% | cold 180-215 ms, warm 40-44 ms across invocations |
-| `tats_*` | 15% | within ±6% across three invocations (a fourth, earlier one ran 20-30% faster on the three scene stages) |
-| `boot_cold_ms`, `boot_warm_ms` | 25% | launch-to-exit wall time; medians 870-1141 ms (warm) and 1034-1435 ms (cold) between invocations |
-
-So a 15% regression in a 10% key fails on every run; the 15%-margin keys
-catch it most of the time, and the 25% keys only catch large regressions.
+| Keys | Margin |
+|---|---|
+| `cpu_nbody_ms`, `cpu_toplevel_ms`, `cpu_total_ms`, `gc_*_avg_ms` | 10% |
+| `cpu_strings_ms` | 20% |
+| `gc_*_worst_ms` | 25% |
+| `page_compile_cold_ms`, `page_compile_warm_ms`, `tats_*` | 15% |
+| `boot_cold_ms`, `boot_warm_ms` | 25% |
 
 ## Machine load
 
@@ -92,14 +78,3 @@ machine, from a quiet machine:
 
 `--update` keeps goldens for probe groups the run skipped. Goldens are per
 platform; a platform with no file reports every key as `[NEW]` and passes.
-
-## Current goldens (Windows, this machine)
-
-`bench/goldens.windows.json`, from `--update --reps 3` on a quiet machine
-(5% busy), bro 2c2f50f4, tats as last built (2026-09-28 20:11). The two
-`boot_*` goldens are the median of four invocations rather than one run.
-cpu 239 / 117 / 46 / 403 ms (nbody / toplevel / strings / total); GC avg
-2.73-2.79 ms at every live size, worst 7 / 13 / 6 ms (20k / 500k / 1.5M);
-scene-editor page compile 215 ms cold, 42 ms warm; boot 1173 ms cold, 986 ms
-warm; tats boot 484, WORLD entry 4341, mission launch 5671, lab battle 3862
-ms.

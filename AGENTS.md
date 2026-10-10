@@ -8,7 +8,7 @@
 - **Capacity estimation**: A well-instructed subagent can write ~4k lines of clean code or ~2k lines equivalent in debugging.
 - **Orchestration**: Behave as an orchestrator and organize the work into sequential/parallel chunks of about the amount needed.
 - **Incremental verification & commits**: Validate the work between subagents, committing as you go.
-- **Concurrency limit**: Keep concurrent subagents to a maximum of 4 in parallel.
+- **Concurrency limit**: Keep concurrent subagents to a maximum of 3 in parallel.
 - **Stall checking**: When subagents run long tasks, check on them once every 20 minutes to ensure they have not stalled.
 
 ## 3. Code Decomposition & File Size Limits
@@ -18,7 +18,7 @@
 
 ## 4. Multi-Repo & Dependency Workflow
 - Every repo in the ecosystem is listed in `docs/ecosystem.md` (machine-readable: `scripts/repos.txt`); each is a standalone checkout at `../<name>`. `CLAUDE.md` is the engine guide and applies to every agent, not only Claude.
-- Standalone sibling repositories (`broaudio`, `broflora`, `brogameagent`, `brotensor`, `brolm`, `brosoundml`, `brodiffusion`, `brovisionml`, `bromesh`, `broimage`, etc.) own their native code and Bronze JavaScript APIs (`<sibling>_api`). The terminal libraries (`bropty`, `brosearch`, `brothemes`, `bromux`) have no JavaScript binding; bro wraps them in `src/terminal/`.
+- Standalone sibling repositories (`broaudio`, `broflora`, `brogameagent`, `brotensor`, `brolm`, `brosoundml`, `brodiffusion`, `brovisionml`, `bromesh`, `broimage`, etc.) own their native code and Bronze JavaScript APIs (`<sibling>_api`). `brosearch` and `brothemes` have bindings (`bro.search`, `bro.themes`); `bropty` and `bromux` have none, and bro wraps them in `src/terminal/`.
 - Edit a sibling in its standalone repo (`../<name>`), never under a build tree's `_deps/<name>-src` (that is a downloaded copy of the sibling's main).
 - **Dependencies track main**: there are no git submodules and no commit pins for ecosystem repos; without a `../<name>` working tree a build fetches the sibling's GitHub main as of that configure. There is nothing to bump: push siblings before the repos that use them (libraries, then bro, then apps; `scripts/repo-status.sh --push`). Only a release tag carries `cmake/bro_lock.cmake` (`scripts/lock-deps.sh`); never commit a lock to main. Third-party code (SDL, Jolt, ...) stays pinned to exact commits.
 

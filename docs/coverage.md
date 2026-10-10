@@ -29,30 +29,6 @@ pwsh scripts/coverage.ps1 -Filter dom        # only tests whose path contains "d
 pwsh scripts/coverage.ps1 -Output build/cov  # custom output dir
 ```
 
-## How it works
-
-OpenCppCoverage attaches to a running process via PDB symbols, so no recompile is needed. The pattern across all repos:
-
-```
-OpenCppCoverage.exe `
-  --sources <repo>\src `
-  --modules <exe-substring> `
-  --cover_children `
-  --export_type "html:build\coverage" `
-  -- <parent program that drives the tests>
-```
-
-`--cover_children` means OCC instruments every child process the parent spawns. For bro that's `bro-headless.exe` running JS tests; for the sibling libraries it's the native test exes invoked by `ctest`.
-
-| Repo | Driver under `--cover_children` |
-|---|---|
-| bro | `scripts/_coverage_run_all.ps1` loops over `tests/**/test_*.js` through `bro-headless.exe` |
-| brokit, htmlayout | the single test exe directly (no ctest registration) |
-| broaudio, brogameagent | `ctest --test-dir build` runs every registered test exe |
-| bromesh | `bromesh_test.exe` directly, Release config |
-
-## Bro-specific quirk
-
-bro has no native C++ unit tests; its tests are all JS-driven through `bro-headless`. So bro's coverage measures *engine code exercised by the JS test suite*. Uncovered C++ usually means "no JS test reaches this path," not "no test file exists." Adding coverage in bro means writing new headless JS tests under `tests/`, not C++ test exes.
+bro's report covers only engine code the JS suite exercises: the native C++ tests under `src/*/tests/` are not run by it.
 
 

@@ -1,6 +1,6 @@
 # CSS/Layout Inspection Tool
 
-Headless globals for inspecting element layout, computed styles, and DOM structure. Available in all headless invocation modes (REPL, script, `-e`).
+Headless globals for inspecting element layout, computed styles, and DOM structure. Available in both headless invocation modes (script and `-e`).
 
 ## Functions
 
@@ -152,23 +152,13 @@ console.log(inspectTree('body', 4));
 assert(computedStyle('#modal', 'display') === 'none', 'modal should be hidden');
 ```
 
-### Debugging from the REPL
+### Debugging from the command line
 
-In the REPL, return values are printed automatically, no `console.log` needed:
+An `-e` expression's value is printed to stdout, so no `console.log` is needed:
 
-```
-bro> inspect('#header')
-<HEADER#header>
-  Box Model: ...
-
-bro> inspectTree('body', 2)
-<BODY> ...
-
-bro> computedStyle('#btn', 'color')
-#ffffff
-
-bro> elements('.active')
-2 matches: ...
+```bash
+bro-headless myapp -e "inspect('#header')"
+bro-headless myapp -e "inspectTree('body', 2)" -e "computedStyle('#btn', 'color')"
 ```
 
 ### Visual regression + layout assertions

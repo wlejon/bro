@@ -98,7 +98,7 @@ std::vector<std::string> installedAppRoots();
 /// The installed app directory for `id`, or "" when none is installed.
 std::string findInstalledApp(const std::string& id);
 
-/// The user's own permission grants (docs/desktop-trust.md): the file
+/// The user's own permission grants (docs/apps.md, Permissions): the file
 /// $XDG_CONFIG_HOME/bro/permissions.json (%APPDATA%\bro\permissions.json,
 /// ~/Library/Application Support/bro/permissions.json), an object mapping app
 /// ids to the privileged namespaces granted to them:

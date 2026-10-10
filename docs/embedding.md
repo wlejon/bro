@@ -1,28 +1,22 @@
 # Embedding bro in your own executable
 
-bro builds as static libraries with three thin `main()`s on top. Nothing stops a
-fourth: link `bro_engine`, add your own custom subsystems, media backends, and UI
-controllers, and ship one binary. This is how [ffmpeg-bro](https://github.com/wlejon/ffmpeg-bro)
-links GPL libav\* without ffmpeg ever entering bro's MIT tree.
-
-## Why you would
-
-Two reasons, both licensing-shaped or dependency-shaped:
-
-- A library you want is under a license bro cannot take (ffmpeg's GPL encoders),
-  or is too heavy to ask every bro user to build.
-- You want a real application binary — its own name, icon, settings file and
-  command line — not `bro.exe path/to/app`.
+Link `bro_engine`, add your own subsystems, media backends and UI controllers,
+and ship one binary. [ffmpeg-bro](https://github.com/wlejon/ffmpeg-bro) is the
+worked example: it links GPL libav\* without ffmpeg entering bro's MIT tree.
 
 ## The CMake side
 
+Copy bro's `cmake/bro_deps.cmake` into your repo and resolve bro like any
+ecosystem dependency (`../bro` when checked out beside you, else bro's main;
+[multi-repo-workflow.md](multi-repo-workflow.md)):
+
 ```cmake
-set(BRO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../bro" CACHE PATH "bro engine source")
-add_subdirectory("${BRO_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/bro")
+include(cmake/bro_deps.cmake)
+bro_dependency(bro GITHUB wlejon/bro TARGET bro_engine)
 
 add_executable(myapp WIN32 src/main.cpp)
 target_link_libraries(myapp PRIVATE bro_engine)
-target_include_directories(myapp PRIVATE "${BRO_DIR}/src")
+target_include_directories(myapp PRIVATE "${bro_SOURCE_DIR}/src")
 
 if(MSVC)
     # Set stack size to 8 MB. Same reason bro.exe needs it.
@@ -45,16 +39,17 @@ you resolve an app directory the same way they do:
 ```cpp
 #include "engine/engine.h"
 #include "engine/launcher.h"
+#include "util/exe_dir.h"
 
 bro::engine::EngineConfig config;
 config.title = "myapp";
 config.displayMode = bro::engine::DisplayMode::Windowed;
-config.settingsPath = bro::engine::executableDir() + "/.bro_settings.json";
+config.settingsPath = bro::util::executableDir() + "/.bro_settings.json";
 
 // resolveLaunchTarget accepts an app directory, a project directory, or a
 // bro.json of either kind, and returns false when the path is neither — so
 // trying candidate locations in order actually works.
-const std::string exe = bro::engine::executableDir();
+const std::string exe = bro::util::executableDir();
 bool found = false;
 for (const char* rel : { "/ui", "/../../ui" }) {      // packaged, then build tree
     if (bro::engine::resolveLaunchTarget(exe + rel, config)) { found = true; break; }
@@ -67,23 +62,9 @@ bro::engine::Engine engine(config);
 engine.run();
 ```
 
-## Configuring the Engine
-
-`bro::engine::EngineConfig` lets you configure application attributes, window display mode,
-custom directories, and graphics/input parameters before construction:
-
-```cpp
-bro::engine::EngineConfig config;
-config.title = "myapp";
-config.displayMode = bro::engine::DisplayMode::Windowed;
-config.settingsPath = bro::engine::executableDir() + "/.bro_settings.json";
-config.compiledApp = true; // when running a compiled or C++-driven application
-
-bro::engine::Engine engine(config);
-```
-
-When building an embedded or native application, you have direct access to the `Engine`
-instance and its subsystems (document, layout, rendering, scene context, audio).
+`EngineConfig` (`engine/engine_config.h`) carries the rest: graphics and input
+parameters, and `compiledApp = true` for an application whose JS was compiled
+away or that is driven from C++.
 
 ## Building the page from C++
 
@@ -113,14 +94,9 @@ bro::scene::SceneGraph* scene = engine->createSceneContext(canvas);
 if (!scene) { /* no GPU, or BRO_WITH_3D off — same null getContext returns */ }
 ```
 
-This is the *same function* the `getContext('scene')` factory calls, so the two
-cannot drift, and it is idempotent per canvas — asking twice, or asking from
-both sides, yields the one SceneGraph.
-
-Do not build a `scene::SceneGraph` yourself. A graph created with `make_unique`
-is not registered with the engine, so the frame loop never renders it and the
-compositor never sees it; the symptom is a blank canvas that looks like a
-renderer bug. `createSceneContext` is what does the registration.
+It is idempotent per canvas: asking twice, or from both C++ and JS, yields the
+one SceneGraph. Do not `make_unique` a `scene::SceneGraph` yourself: it is not
+registered with the engine, so it never renders (a blank canvas).
 
 ## Listening for events from C++
 
@@ -252,18 +228,9 @@ doc->windowListeners().add("resize", cb, opts);   // dom::Document
 doc->windowListeners().remove(handle);
 ```
 
-Element listeners have no such question — they live on the element.
-
 Listeners are owned by the DOM object they are on and die with it. A
 location reload builds a new `Document`, so window listeners registered on
 the old one are gone; re-register when a new Document is loaded.
-
-### Native event dispatch
-
-Element and window dispatch both run their C++ listeners natively
-(`dom::dispatchDomEvent`, `dom::dispatchWindowEvent`): same path building,
-same phases, same retargeting. This drives element interactions directly from
-C++ callbacks.
 
 ## Playing formats bro doesn't ship
 
@@ -334,8 +301,8 @@ Rules worth knowing:
 ## Scripting it headlessly
 
 `engine/headless_driver.h` is bro-headless itself, callable. You get the same
-`screenshot()` / `advanceTime()` / `flush()` / `assert()` globals, the same REPL
-and the same exit-code behaviour, with your bindings and backends installed:
+`screenshot()` / `advanceTime()` / `flush()` / `assert()` globals and the same
+exit-code behaviour, with your bindings and backends installed:
 
 ```cpp
 #include "engine/headless_driver.h"
@@ -348,9 +315,6 @@ int main(int argc, char* argv[]) {
     return bro::engine::runHeadless(argc, argv, hooks);
 }
 ```
-
-This is usually how you test the app at all — a windowed binary has no way to
-tell you what it drew.
 
 ## Pitfalls
 

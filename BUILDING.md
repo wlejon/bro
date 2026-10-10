@@ -36,7 +36,7 @@ reports `{ available: false }`, so apps feature-detect instead of crashing.
 | **`app`** (default) | Full renderer (3D scene graph, Jolt physics, audio, core game-AI) + networking, video, Steam. No AI tower. | yes | no |
 | `full` | Everything, adding the on-device AI tower (tensor, LM, diffusion, vision, audio-ML). | yes | opt-in |
 
-- **`minimal`** (~16 MB) builds, links, and runs with no vcpkg, no CUDA, and no
+- **`minimal`** builds, links, and runs with no vcpkg, no CUDA, and no
   `brotensor`. It's the HTML/CSS/JS + Canvas2D + WebGL floor, plus audio (broaudio
   is self-contained and `<audio>`/Web Audio is core to HTML). `bro.scene`,
   `Physics`, `bro.net`, `VideoEncoder`, and the whole `bro.lm`/`bro.diffusion`/…
@@ -51,7 +51,7 @@ reports `{ available: false }`, so apps feature-detect instead of crashing.
 
   Most of `tests/` needs features this profile doesn't have, so the full suite
   is not the check here.
-- **`app`** (~22 MB, default) is a complete web/app/game runtime. It needs vcpkg
+- **`app`** (default) is a complete web/app/game runtime. It needs vcpkg
   only because networking (GameNetworkingSockets) and video decode (libvpx/webm)
   pull vcpkg ports. A runtime where `bro.net` and `<video>` silently didn't work
   would be surprising, so they're in the default.

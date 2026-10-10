@@ -38,9 +38,3 @@ unset, the system temp directory stands in for it.
 - While a fullscreen client buffer is scanned out directly (no composite), the
   composited slot is not what is on screen, so the capture fails and says so.
 - Scanout is XRGB: the PNG is opaque.
-
-## Where it lives
-
-`KmsDirectPresenter::readLastFrame` (`src/render/kms_direct_presenter.cpp`),
-`Engine::captureScreen` and the triggers (`src/engine/screen_capture.cpp`),
-the binding `bro_window_captureScreen` (`src/bronze_host/native_window.cpp`).

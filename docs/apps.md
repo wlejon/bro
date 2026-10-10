@@ -52,7 +52,7 @@ is [app-api.js](app-api.js) (`bro.app`).
 | `fileTypes` | What the app opens: the desktop entry's `MimeType=`, and `%F` in its `Exec=` so the opened files arrive as arguments. |
 | `actions` | Launcher actions: `[Desktop Action <id>]` entries that run the app with `args`. `id` is `[A-Za-z0-9-]`. |
 | `permissions` | Privileged namespaces the app asks for (below). `privileged` is the older spelling and still read. |
-| `shell` | A desktop shell component (panel, launcher, compositor host). See [desktop-trust.md](desktop-trust.md). |
+| `shell` | A desktop shell component (panel, launcher, compositor host): asks for every privileged namespace (below). |
 
 The engine reads bro.json with a real JSON parser for these keys. A key of the
 wrong type is skipped with a warning; it never fails the launch.
@@ -136,23 +136,36 @@ Privileged namespaces (`compositor`, `wl`, `displays`, `seat`, `sys`, `cred`,
 `portal`, `clip`, `pulse`, `remote`) are stubs for an ordinary app:
 `bro.remote.available === false`, `bro.remote.reason` says why, and any call
 throws that reason. An app gets the namespaces it lists in `permissions`, or
-shell status for `"shell": true`, only when one of these holds:
+all of them for `"shell": true`, when one of these holds:
 
-- it is installed in a trusted location (the system install roots, or
-  `<bro>/apps`, `<bro>/system`); or
-- the user's own permissions file grants them to its id:
+- it is installed in a trusted location (`isTrustedAppLocation`,
+  `src/engine/desktop_trust.cpp`): `apps/` and `system/` beside the executable
+  or in the resource dir; Linux `/usr/share/bro`, `/usr/local/share/bro`,
+  `/opt/bro/apps`; Windows `%ProgramFiles%\bro\{apps,system}`,
+  `%ProgramData%\bro\{apps,system}`; macOS `/Library/Application
+  Support/bro/{apps,system}`, `/Applications/bro.app/Contents/Resources/apps`,
+  `/usr/local/share/bro`, `/opt/bro/apps`;
+- `BRO_TRUSTED_APP_DIR=<dir>[:<dir>...]` names its directory (`;` on Windows);
+- the user's permissions file grants them to its id. The app gets the
+  intersection of what it asked for and what was granted:
 
 ```json
-// $XDG_CONFIG_HOME/bro/permissions.json  (%APPDATA%\bro\permissions.json)
+// ~/.config/bro/permissions.json, %APPDATA%\bro\permissions.json,
+// ~/Library/Application Support/bro/permissions.json
 {
     "org.example.ScreenShare": ["remote"],
-    "org.example.MyShell": ["shell"]
+    "org.example.MyShell": ["shell"],
+    "org.example.Settings": ["*"]
 }
 ```
 
-`"*"` grants everything the app asks for. A grant the app did not ask for
-grants nothing. `bro.app.permissions` reports `{requested, granted, shell}`.
-The model is in [desktop-trust.md](desktop-trust.md).
+`bro.app.permissions` reports `{requested, granted, shell}`.
+
+On a development machine, `{ "*": ["*"] }` in the permissions file, or
+`BRO_TRUST_ALL=1` for one process, grants every app what its manifest asks for;
+a namespace missing from the manifest is still refused.
+`BRO_PERMISSIONS_FILE=<path>` reads that file instead of the user's (the test
+suites point it at a file that does not exist).
 
 ## Installing, and how launchers find apps
 

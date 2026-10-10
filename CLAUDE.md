@@ -22,7 +22,7 @@ cmake -B build-release -DCMAKE_BUILD_TYPE=Release && cmake --build build-release
 ```
 `scripts/package-release.sh` on Linux/macOS needs `--build-dir build-release` (its `--config` default is the Windows-style selector, a no-op for Ninja).
 
-Headless: `bro-headless <appdir> test.js` or `bro-headless <appdir> -e "expr"`; the script is compiled in-process by bronze and run against the engine. There is no REPL. `--no-gpu` = Skia on the CPU, no WebGL/3D scene. No submodules: configure fetches every dependency at its pin in `cmake/bro_pins.cmake` unless `../<name>` exists.
+Headless: `bro-headless <appdir> test.js` or `bro-headless <appdir> -e "expr"`; the script is compiled in-process by bronze and run against the engine. There is no REPL. `--no-gpu` = Skia on the CPU, no WebGL/3D scene. No submodules: configure uses `../<name>` when it exists, else fetches the dependency (wlejon repos at main's head, third-party code at its pinned commit; see below).
 
 **Skia is pre-built.** Headers + Release lib auto-download at configure on Windows/Linux/arm64-macOS, pinned to one Skia commit (`chrome/m147`) so the lib always matches the headers; `-DBRO_FETCH_SKIA=OFF` disables. Hand-build only for Intel macOS, a Windows Debug lib, or a version change: `third_party/skia/build_skia_{linux,mac}.sh` / `build_skia_windows.ps1`, lib into `third_party/skia/lib/{Debug,Release}/`.
 
@@ -51,11 +51,11 @@ Key patterns:
 - **Renderer abstraction:** `bro::render::Renderer` is a CSS-shaped 2D interface implemented by `SkiaRenderer` (GPU or CPU surfaces, `--no-gpu` included), `RasterRenderer` (pure CPU: `bro-server` and layout-thread text metrics), and `RecordingRenderer`. Native font backends (DirectWrite on Windows, FreeType+fontconfig elsewhere). The 3D scene, WebGL, and compositing bypass it.
 - **Text shaping:** all text goes through HarfBuzz behind a byte-domain `ShapedRun` (`render/shaped_run.h`), recorded as an `SkTextBlob`; bidi levels resolve via Skia's UAX#9 subset (`render/bidi.h`) and runs reorder into visual order. The shaper's cluster map is what answers htmlayout's caret/selection queries, so carets snap to clusters. HarfBuzz and the ICU bidi subset compile from the Skia source bundle (`third_party/skia/skia_modules.cmake`), and `BRO_WITH_TEXT_SHAPING` defaults ON in *every* profile, minimal included, so there is one text path rather than two.
 - **Events:** SDL feeds `EventLoop`, which calls `Engine::handle*`, which runs `hitTest()` and then `dom::dispatchEvent()`: full three-phase dispatch with shadow retargeting.
-- **Settings:** three-layer (engine < app < user), persisted to `.bro_settings.json`. See [docs/settings.md](docs/settings.md).
+- **Settings:** three-layer (engine < app < user), persisted to `<bro.app.configDir>/bro_settings.json` for an app with an id, else `.bro_settings.json` beside the executable. See [docs/settings.md](docs/settings.md).
 
 ## Third-party dependencies (third_party/)
 
-Every repo in the ecosystem (these, the desktop substrate libraries, the apps) is indexed in [docs/ecosystem.md](docs/ecosystem.md); `scripts/repos.txt` is the machine-readable list tooling reads. There are no git submodules anywhere: every repo with dependencies carries the identical `cmake/bro_deps.cmake`, whose `bro_dependency(<name> ...)` resolves an existing target, else `../<name>` (or `-DFETCHCONTENT_SOURCE_DIR_<NAME>`), else a GitHub tarball: wlejon repos track main (heads read with `git ls-remote` at every configure, all at once; offline reuses the last resolved commit), third-party code is pinned with `REF <sha>`. bro declares everything up front in `cmake/bro_pins.cmake`. There are no pins to bump: push siblings first, then bro. A release tag carries `cmake/bro_lock.cmake` (`scripts/lock-deps.sh`; never on main); `scripts/sync-deps.sh` copies `bro_deps.cmake` to every repo ([docs/multi-repo-workflow.md](docs/multi-repo-workflow.md)). ML siblings depend on brotensor (plus broimage for preprocessing). Every bro-* library below except bromath, htmlayout and the terminal ones (bropty, brosearch, brothemes, bromux) also builds `<name>_api` from its `src/api/` (public header `include/<name>/api.h`; brokit and broflora differ), its bronze JS binding; those siblings depend on bronze + brass like any other dependency.
+Every repo in the ecosystem (these, the desktop substrate libraries, the apps) is indexed in [docs/ecosystem.md](docs/ecosystem.md); `scripts/repos.txt` is the machine-readable list tooling reads. There are no git submodules anywhere: every repo with dependencies carries the identical `cmake/bro_deps.cmake`, whose `bro_dependency(<name> ...)` resolves an existing target, else `../<name>` (or `-DFETCHCONTENT_SOURCE_DIR_<NAME>`), else a GitHub tarball: wlejon repos track main (heads read with `git ls-remote` at every configure, all at once; offline reuses the last resolved commit), third-party code is pinned with `REF <sha>`. bro declares everything up front in `cmake/bro_pins.cmake`. There are no pins to bump: push siblings first, then bro. A release tag carries `cmake/bro_lock.cmake` (`scripts/lock-deps.sh`; never on main); `scripts/sync-deps.sh` copies `bro_deps.cmake` to every repo ([docs/multi-repo-workflow.md](docs/multi-repo-workflow.md)). ML siblings depend on brotensor (plus broimage for preprocessing). Every bro-* library below except bromath, htmlayout, bropty and bromux also builds `<name>_api` from its `src/api/` (public header `include/<name>/api.h`; brokit and broflora differ), its bronze JS binding; those siblings depend on bronze + brass like any other dependency.
 
 | Library | Target | What |
 |---------|--------|------|
@@ -75,7 +75,7 @@ Every repo in the ecosystem (these, the desktop substrate libraries, the apps) i
 | bropty | `bropty` | VT emulator + PTY/ConPTY behind `<terminal>` (`BRO_WITH_TERMINAL`; `src/terminal/`) |
 | brosearch | `brosearch` | regex scrollback search (bropty's dependency) |
 | brothemes | `brothemes` | colour schemes + WCAG/APCA contrast (the terminal's minimum contrast) |
-| bromux | `bromux` | terminal multiplexer: the server behind persistent `<terminal>` sessions (optional; off when absent) |
+| bromux | `bromux` | terminal multiplexer: the server behind persistent `<terminal>` sessions (`BRO_WITH_TERMINAL`) |
 | broremote | `broremote` | remote sessions behind `bro.remote`: frames to a viewer (VA-API video), its input back (`BRO_WITH_REMOTE`; Windows/Linux) |
 | brass | `brass` | JIT / AOT native code generator backend for bronze |
 | bronze | `bronze` / `bronze-cli` / `bronze::runtime_shared` | JavaScript compiler + shared runtime (mandatory) |
@@ -152,7 +152,7 @@ Annotated `.js` files with JSDoc + examples. Read the file before using or chang
 | `terrain-api.js` | `scene.createTerrain`: chunked height-field terrain (one height per column, not voxels): noise, chunk streaming, edits, raycast |
 | `clipmap-api.js` | `scene.createClipmapTerrain`: camera-centred clipmap, fixed ring geometry, GPU displacement from a streamed height pyramid |
 | `tile-api.js` | `scene.createTileWorld`: tile-grid meshing, square + hex, elevation/cliffs/AO |
-| `dialogs-api.js` | native file/folder dialogs (blocking, so never trigger them in tests) |
+| `dialogs-api.js` | native file/folder dialogs + alert/confirm/prompt; headless answers them from `setPickedFiles` / `setDialogAnswer` |
 | `menu-api.js` | `bro.menu`: native menu bar |
 | `time-api.js` | `bro.time`: global pause + timescale over one engine-owned scaled clock |
 | `profiler-api.js` | `bro.profiler`: bronze's sampling profiler from script: `start({hz, threads})` / `stop({callers, report})` → per-function self/total + tier (interpreter / tier 1 / tier 2 / aot / native), caller edges, text; zero cost while stopped |

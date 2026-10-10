@@ -185,7 +185,7 @@ bro.app.oninstance;
 
 /**
  * The privileged namespaces bro.json asked for (`permissions`) and what was
- * granted (docs/desktop-trust.md): everything asked, for an app installed in a
+ * granted (docs/apps.md, Permissions): everything asked, for an app installed in a
  * trusted location; otherwise what the user's permissions file grants this id.
  * A namespace not granted is the unavailable stub: `bro.<ns>.available ===
  * false`, `bro.<ns>.reason` says why, and every call throws.
