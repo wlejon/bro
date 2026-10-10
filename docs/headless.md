@@ -387,13 +387,20 @@ responsiveness here rather than in a windowed run:
 - **Where a frame went.** The flight recorder fills the same phases as in a
   window (`js`, `style`, `layout`, `record`, and the forced layouts a script's
   geometry reads caused). Ask for it through the agent-control `trace`
-  command (`docs/agent-control.md`):
+  command (`docs/agent-control.md`). The trace looks back (`trace 20` is the
+  frames of the last 20 *seconds*), so bracket the work: `now` before it,
+  `trace --since=` after it.
 
   ```js
-  const id = controlCommand('trace', '20', '--worst=3');   // the next 20 ms of frames
-  let r = null;
-  while (r == null) { advanceTime(16); r = controlResult(id); }
-  console.log(r.payload);
+  const ask = (...argv) => {                 // a control command answers on a later frame
+    const id = controlCommand(...argv);
+    let r = null;
+    while (r == null) { advanceTime(16); r = controlResult(id); }
+    return r.payload;
+  };
+  const t0 = ask('now');                     // the trace's clock (real ms), before the work
+  doTheWork();
+  console.log(ask('trace', `--since=${t0}`, '--worst=3'));
   ```
 - **Which functions.** `bro.profiler` (`docs/profiler-api.js`) samples the
   thread between `start()` and `stop({ report: true })`.
