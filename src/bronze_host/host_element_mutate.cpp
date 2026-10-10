@@ -13,6 +13,7 @@
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/element_geometry.h"
+#include "dom/element_scroll.h"
 #include "dom/event.h"
 #include "dom/node.h"
 #include "engine/engine.h"
@@ -256,51 +257,65 @@ void decorateElementMutate(ObjectBuilder& b) {
         if (auto* eng = hostEngine()) {
             eng->flushLayoutForRead(st->el->document());
         }
-        int align = 0; // 0=start, 1=center, 2=end, 3=nearest
+        // 0=start, 1=center, 2=end, 3=nearest. CSSOM View: block defaults to
+        // start, inline to nearest; the boolean form sets block only.
+        auto parseAlign = [](const std::string& v, int fallback) {
+            if (v == "start") return 0;
+            if (v == "center") return 1;
+            if (v == "end") return 2;
+            if (v == "nearest") return 3;
+            return fallback;
+        };
+        int align = 0;
+        int alignInline = 3;
         if (!a.empty()) {
             if (ev::isBool(a[0])) {
                 align = ev::toBool(a[0]) ? 0 : 2;
             } else if (ev::isObject(a[0])) {
                 Value blockVal = ev::getProperty(a[0], "block");
-                if (!ev::isUndefined(blockVal)) {
-                    std::string block = ev::toUtf8(blockVal);
-                    if (block == "center") align = 1;
-                    else if (block == "end") align = 2;
-                    else if (block == "nearest") align = 3;
-                }
+                if (!ev::isUndefined(blockVal)) align = parseAlign(ev::toUtf8(blockVal), align);
+                Value inlineVal = ev::getProperty(a[0], "inline");
+                if (!ev::isUndefined(inlineVal))
+                    alignInline = parseAlign(ev::toUtf8(inlineVal), alignInline);
             }
         }
+        // How far the view [viewStart, +viewLen) must move to show the target
+        // [start, +len) aligned per `how`.
+        auto alignDelta = [](int how, float start, float len, float viewStart, float viewLen) {
+            switch (how) {
+                case 1: return (start + len * 0.5f) - (viewStart + viewLen * 0.5f);
+                case 2: return (start + len) - (viewStart + viewLen);
+                case 3:
+                    if (start < viewStart) return start - viewStart;
+                    if (start + len > viewStart + viewLen) return (start + len) - (viewStart + viewLen);
+                    return 0.0f;
+                default: return start - viewStart;
+            }
+        };
         dom::AbsoluteRect target = borderBoxOf(st->el);
         bool scrolled = false;
         for (auto* anc = st->el->parentElement(); anc; anc = anc->parentElement()) {
-            const auto& box = anc->layoutBox();
-            float maxScroll = std::max(0.0f, box.naturalHeight - box.contentRect.height);
-            if (maxScroll <= 0.0f) continue;
-            const auto& style = anc->computedStyle();
-            auto overflowOf = [&](const char* prop) -> std::string {
-                auto it = style.find(prop);
-                return it != style.end() ? it->second : std::string();
-            };
-            std::string ov = overflowOf("overflow-y");
-            if (ov.empty()) ov = overflowOf("overflow");
-            if (ov.empty() || ov == "visible") continue;
+            const float maxTop = dom::elementClipsOverflow(anc) ? dom::maxScrollTopOf(anc) : 0.0f;
+            const float maxLeft = dom::maxScrollLeftOf(anc);   // 0 unless it scrolls on x
+            if (maxTop <= 0.0f && maxLeft <= 0.0f) continue;
 
             dom::AbsoluteRect view = dom::absoluteContentBox(anc);
-            float delta = 0.0f;
-            switch (align) {
-                case 1: delta = (target.y + target.height * 0.5f) - (view.y + view.height * 0.5f); break;
-                case 2: delta = (target.y + target.height) - (view.y + view.height); break;
-                case 3:
-                    if (target.y < view.y) delta = target.y - view.y;
-                    else if (target.y + target.height > view.y + view.height)
-                        delta = (target.y + target.height) - (view.y + view.height);
-                    break;
-                default: delta = target.y - view.y; break;
+            bool moved = false;
+            if (maxTop > 0.0f) {
+                const float prev = anc->scrollTopValue();
+                const float next = std::clamp(
+                    prev + alignDelta(align, target.y, target.height, view.y, view.height),
+                    0.0f, maxTop);
+                if (next != prev) { anc->setScrollTopValue(next); moved = true; }
             }
-            float prev = anc->scrollTopValue();
-            float next = std::clamp(prev + delta, 0.0f, maxScroll);
-            if (next != prev) {
-                anc->setScrollTopValue(next);
+            if (maxLeft > 0.0f) {
+                const float prev = anc->scrollLeftValue();
+                const float next = std::clamp(
+                    prev + alignDelta(alignInline, target.x, target.width, view.x, view.width),
+                    0.0f, maxLeft);
+                if (next != prev) { anc->setScrollLeftValue(next); moved = true; }
+            }
+            if (moved) {
                 scrolled = true;
                 dom::Event evt("scroll", false, false);
                 evt.setIsTrusted(true);

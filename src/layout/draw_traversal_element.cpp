@@ -15,6 +15,7 @@
 #include "layout/line_clamp.h"
 #include "canvas/canvas_scene.h"
 #include "dom/element_geometry.h"
+#include "dom/element_scroll.h"
 #include "dom/node.h"
 
 #include <algorithm>
@@ -572,11 +573,10 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
 
     // Children's offset is the parent's absolute content position
     // (so child positions, which are relative to parent content area, become absolute)
-    float childOffsetX = x;
-    // Clamp scrollTop to valid range — JS may have set it before layout updated
-    float maxST = std::max(0.0f, box.naturalHeight - box.contentRect.height);
-    float scrollTop = std::clamp(elem->scrollTopValue(), 0.0f, maxST);
-    float childOffsetY = y - scrollTop;
+    // Scroll offsets clamped to the valid range — JS may have set them before
+    // layout updated.
+    float childOffsetX = x - dom::clampedScrollLeftOf(elem);
+    float childOffsetY = y - dom::clampedScrollTopOf(elem);
 
     // ::before pseudo content (drawn before children)
     if (visible) drawPseudo(elem, "before", childOffsetX, childOffsetY);

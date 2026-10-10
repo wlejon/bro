@@ -63,7 +63,7 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
                 for (auto* elem : pending) {
                     std::string ov = getOverflowY(elem->computedStyle());
                     if (overflowClips(ov)) {
-                        elem->setScrollTopValue(maxScrollTop(elem));
+                        elem->setScrollTopValue(dom::maxScrollTopOf(elem));
                     }
                     elem->setScrollToBottom(false);
                 }

@@ -220,21 +220,10 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
 
     if (elementScrollbar_.isDragging() && scrollbarDragTarget_) {
         auto* elem = scrollbarDragTarget_.get();
-        float viewH = elem->layoutBox().contentRect.height;
-        float maxST = maxScrollTop(elem);
-        float contentH = viewH + maxST;
-
-        auto& lbox = elem->layoutBox();
-        float bh = lbox.fullHeight();
-        auto m = elementScrollbar_.layout(0, 0, bh, contentH, viewH,
-            elem->scrollTopValue());
         float dragY = scrollbarDragSystemDoc_
             ? y : y - static_cast<float>(contentTop());
-        float newScroll = elementScrollbar_.updateDrag(dragY, contentH, viewH, m);
-        float prev = elem->scrollTopValue();
-        float clamped = std::clamp(newScroll, 0.0f, maxST);
-        elem->setScrollTopValue(clamped);
-        if (clamped != prev) {
+        const float along = elementScrollbar_.dragHorizontal() ? x : dragY;
+        if (dragElementScrollbar(elem, elementScrollbar_, along)) {
             if (scrollbarDragSystemDoc_) {
                 if (scrollbarDragSystemDoc_->document)
                     scrollbarDragSystemDoc_->document->markDirty();

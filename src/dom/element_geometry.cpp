@@ -1,5 +1,6 @@
 #include "dom/element_geometry.h"
 #include "dom/element.h"
+#include "dom/element_scroll.h"
 #include "dom/document.h"
 #include <algorithm>
 #include <vector>
@@ -39,6 +40,7 @@ struct Raw {
     float cx, cy;         // contentRect origin in parent's content-area coords
     float padL, padT, borL, borT;
     float fullW, fullH;
+    float scrollX;         // scrollLeft this element applies to its children
     float scrollY;         // scrollTop this element applies to its children
     bool fixed;            // position: fixed
     bool fixedCB;          // takes the containing-block job from the viewport
@@ -67,20 +69,20 @@ AbsoluteFrame computeAbsoluteFrame(const Element* el) {
     std::vector<Raw> raws;
     for (const Element* lp = el; lp; lp = lp->layoutParent()) {
         auto& lb = lp->layoutBox();
-        // Clamp the scroll offset to the current layout's scrollable extent, the
-        // same clamp the draw traversal applies when painting HTML. scrollTop_
-        // can outrun the max after content shrinks (e.g. a fold collapses) with
-        // no scroll interaction to re-clamp it; using the raw value here would
-        // shift separately-composited canvas/WebGL/iframe quads by more scroll
-        // than the HTML flow moved, leaving them stuck out of place until the
-        // next scroll. Clamping keeps quad geometry consistent with the paint.
-        float maxST = std::max(0.0f, lb.naturalHeight - lb.contentRect.height);
-        float st = std::clamp(lp->scrollTopValue(), 0.0f, maxST);
+        // Clamp the scroll offsets to the current layout's scrollable extent,
+        // the same clamp the draw traversal applies when painting HTML. A
+        // stored offset can outrun the max after content shrinks (e.g. a fold
+        // collapses) with no scroll interaction to re-clamp it; using the raw
+        // value here would shift separately-composited canvas/WebGL/iframe
+        // quads by more scroll than the HTML flow moved, leaving them stuck out
+        // of place until the next scroll. Clamping keeps quad geometry
+        // consistent with the paint.
         raws.push_back({lp, lb.contentRect.x, lb.contentRect.y,
                         lb.padding.left, lb.padding.top,
                         lb.border.left, lb.border.top,
                         lb.fullWidth(), lb.fullHeight(),
-                        st, isFixedPosition(lp),
+                        clampedScrollLeftOf(lp), clampedScrollTopOf(lp),
+                        isFixedPosition(lp),
                         establishesFixedContainingBlock(lp)});
     }
 
@@ -109,7 +111,7 @@ AbsoluteFrame computeAbsoluteFrame(const Element* el) {
             float bx = accX + r.cx - r.padL - r.borL;
             float by = accY + r.cy - r.padT - r.borT;
             chain[i] = {r.el, bx, by, r.fullW, r.fullH};
-            accX += r.cx;
+            accX += r.cx - r.scrollX;
             accY += r.cy - r.scrollY;
             plainX += r.cx;
             plainY += r.cy;

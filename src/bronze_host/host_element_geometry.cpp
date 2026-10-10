@@ -390,7 +390,12 @@ void decorateElementGeometry(ObjectBuilder& b) {
                    if (!st->el || isInlineDisplay(st->el)) return ev::fromDouble(0.0);
                    const auto& box = laidOutBox(st->el);
                    double clientW = box.contentRect.width + box.padding.left + box.padding.right;
-                   if (clientW > 0) return fromCssPixels(clientW);
+                   // naturalWidth is how far the content reaches right — the
+                   // horizontal scrollable overflow, including absolutely
+                   // positioned descendants whose containing block is inside.
+                   double scrollW = box.naturalWidth + box.padding.left + box.padding.right;
+                   double w = std::max(scrollW, clientW);
+                   if (w > 0) return fromCssPixels(w);
                    return fromCssPixels(borderBoxOf(st->el).width);
                },
                nullptr);
@@ -429,6 +434,8 @@ void decorateElementGeometry(ObjectBuilder& b) {
                        dom::setElementScrollTop(st->el, v);
                    return ev::undefined();
                });
+    // The viewport does not scroll horizontally, so <html> as the viewport's
+    // stand-in has no horizontal offset of its own to report.
     b.accessor("scrollLeft",
                [](Value self_, std::span<const Value>) {
                    HostNodeState* st = hostNodeStateOfValue(self_);
@@ -438,6 +445,10 @@ void decorateElementGeometry(ObjectBuilder& b) {
                [](Value self_, std::span<const Value> a) {
                    HostNodeState* st = hostNodeStateOfValue(self_);
                    if (!st || !st->el) return ev::undefined();
+                   // Lay out first (as Chromium does): the clamp needs the
+                   // content's real width, and content built in this same
+                   // turn has none yet.
+                   laidOutBox(st->el);
                    dom::setElementScrollLeft(st->el, ev::toDouble(argAt(a, 0)));
                    return ev::undefined();
                });
@@ -445,6 +456,7 @@ void decorateElementGeometry(ObjectBuilder& b) {
     b.def("scrollTo", 2, [](Value self_, std::span<const Value> a) {
         HostNodeState* st = hostNodeStateOfValue(self_);
         if (!st || !st->el) return ev::undefined();
+        laidOutBox(st->el);   // the horizontal clamp needs a current width
         double top = 0;
         if (readScrollTopArg(a, top)) {
             if (scrollsViewport(st->el))
@@ -459,6 +471,7 @@ void decorateElementGeometry(ObjectBuilder& b) {
     b.def("scrollBy", 2, [](Value self_, std::span<const Value> a) {
         HostNodeState* st = hostNodeStateOfValue(self_);
         if (!st || !st->el) return ev::undefined();
+        laidOutBox(st->el);   // the horizontal clamp needs a current width
         double top = 0;
         if (readScrollTopArg(a, top)) {
             if (scrollsViewport(st->el))

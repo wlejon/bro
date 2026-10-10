@@ -176,10 +176,13 @@ void installHeadlessInput(engine::Engine& engine) {
             double dx = a.size() > 3 && !ev::isUndefined(a[3]) ? ev::toDouble(a[3]) : 0.0;
             const uint64_t wid = argWindowId(a, 4);
             const float fy = toWindowY(&engine, y, wid);
+            // The engine takes the platform's sense: +dy away from the user
+            // (scroll up), +dx toward the right. The script's deltas are the
+            // DOM's (+deltaY down, +deltaX right), so only y flips.
             if (wid) engine.hostWheel(wid, static_cast<float>(x), fy,
-                                      static_cast<float>(-dx), static_cast<float>(-dy));
+                                      static_cast<float>(dx), static_cast<float>(-dy));
             else engine.handleWheel(static_cast<float>(x), fy,
-                                    static_cast<float>(-dx), static_cast<float>(-dy));
+                                    static_cast<float>(dx), static_cast<float>(-dy));
             engine.flush();
             return ev::undefined();
         }, 3, "wheel"));

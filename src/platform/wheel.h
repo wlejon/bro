@@ -41,4 +41,20 @@ inline float verticalWheelDelta(float dx, float dy) {
     return dy;
 }
 
+/// Shift + vertical wheel scrolls horizontally, as it does in Chromium on
+/// Windows and Linux: a purely vertical delta with Shift held becomes a
+/// horizontal one (wheel-down → toward the right). The wheel event the page
+/// sees carries it as deltaX too. macOS does this conversion itself before the
+/// event reaches us, so there it is left alone.
+inline void shiftWheelToHorizontal(float& dx, float& dy, bool shiftHeld) {
+#ifdef __APPLE__
+    (void)dx; (void)dy; (void)shiftHeld;
+#else
+    if (!shiftHeld || dx != 0.0f || dy == 0.0f) return;
+    // +dy is "away from the user" (scroll up/back); +dx is "toward the right".
+    dx = -dy;
+    dy = 0.0f;
+#endif
+}
+
 }  // namespace bro::platform

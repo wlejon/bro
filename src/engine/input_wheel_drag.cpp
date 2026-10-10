@@ -7,6 +7,7 @@
 #include "dom/element.h"
 #include "dom/event.h"
 #include "layout/el_textarea.h"
+#include "platform/keys.h"
 #include "platform/wheel.h"
 
 #include <algorithm>
@@ -76,11 +77,10 @@ void Engine::handleWheel(float x, float y, float dx, float dy) {
     float docX = x, docY = y - static_cast<float>(contentTop()) + scrollY_;
     dom::Element* target = hitTest(docX, docY);
 
+    platform::shiftWheelToHorizontal(dx, dy, (currentModState() & platform::kmod::Shift) != 0);
     const float pxPerTick = inputConfig_.scrollSpeed;
     const float pxX = platform::wheelDeltaToPixels(dx, pxPerTick);
     const float pxY = platform::wheelDeltaToPixels(dy, pxPerTick);
-    const float pxV = platform::wheelDeltaToPixels(
-        platform::verticalWheelDelta(dx, dy), pxPerTick);
 
     if (target) {
         dom::WheelEvent wheelEvt("wheel", true, true);
@@ -88,7 +88,9 @@ void Engine::handleWheel(float x, float y, float dx, float dy) {
         populateMouseEvent(wheelEvt, x, y, -1, pressedButtons_,
                            x - lastMouseX_, y - lastMouseY_, scrollY_, mod,
                            static_cast<float>(contentTop()));
-        wheelEvt.setDeltaX(static_cast<double>(-pxX));
+        // +dy is "scroll up", the DOM's +deltaY "toward the bottom": negate.
+        // +dx is already the DOM's "toward the right".
+        wheelEvt.setDeltaX(static_cast<double>(pxX));
         wheelEvt.setDeltaY(static_cast<double>(-pxY));
         wheelEvt.setDeltaZ(0.0);
         wheelEvt.setDeltaMode(dom::WheelEvent::DOM_DELTA_PIXEL);
@@ -104,6 +106,23 @@ void Engine::handleWheel(float x, float y, float dx, float dy) {
             return;
         }
     }
+
+    // A horizontal delta goes to the nearest horizontal scroller that can still
+    // take it (Chromium: a vertical-only wheel never scrolls sideways, but a
+    // horizontal one — tilt wheel, trackpad, Shift+wheel — does). The viewport
+    // does not scroll horizontally, so what nothing takes is dropped.
+    dom::Element* scrolledX = nullptr;
+    if (pxX != 0.0f) {
+        bool movedX = false;
+        scrolledX = wheelScrollChain(target, true, pxX, movedX);
+        if (movedX) dispatchScrollEvent(scrolledX);
+        if (scrolledX) markAppBaseDirty();
+    }
+    // A horizontal delta nothing took may still be a vertical swipe in
+    // disguise (platform::verticalWheelDelta); one that was taken is not.
+    const float pxV = scrolledX ? pxY
+        : platform::wheelDeltaToPixels(platform::verticalWheelDelta(dx, dy), pxPerTick);
+    if (scrolledX && pxV == 0.0f) return;
 
     auto* activeEl = document_->activeElement();
     auto* textarea = getElTextarea(activeEl);
@@ -125,27 +144,11 @@ void Engine::handleWheel(float x, float y, float dx, float dy) {
     }
 
     {
-        auto* el = target;
-        while (el) {
-            std::string ov = getOverflowY(el->computedStyle());
-            if (overflowScrollable(ov)) {
-                float maxST = maxScrollTop(el);
-                if (maxST > 0.0f) {
-                    float prevScroll = el->scrollTopValue();
-                    const bool canScroll = (pxV > 0.0f) ? (prevScroll > 0.5f)
-                                                        : (prevScroll < maxST - 0.5f);
-                    if (canScroll) {
-                        float newScroll = std::clamp(prevScroll - pxV, 0.0f, maxST);
-                        el->setScrollTopValue(newScroll);
-                        if (newScroll != prevScroll) {
-                            dispatchScrollEvent(el);
-                        }
-                        markAppBaseDirty();
-                        return;
-                    }
-                }
-            }
-            el = composedParent(el);
+        bool movedY = false;
+        if (dom::Element* el = wheelScrollChain(target, false, -pxV, movedY)) {
+            if (movedY) dispatchScrollEvent(el);
+            markAppBaseDirty();
+            return;
         }
     }
 

@@ -14,11 +14,20 @@
 // and not of who asked for it: scrollIntoView, a compiled program calling
 // through the host, and engine C++ all owe the same behaviour.
 
+#include "css/cascade.h"
+
 #include <string>
 
 namespace bro::dom {
 
 class Element;
+
+/// The used `overflow` on one axis: the longhand (falling back to the
+/// shorthand, then `visible`), with CSS Overflow 3's pairing rule applied — if
+/// the other axis scrolls, `visible` here computes to `auto` and `clip` to
+/// `hidden`. So `overflow-y: auto` alone makes a box scroll horizontally too,
+/// as it does in every browser.
+std::string usedOverflow(const htmlayout::css::ComputedStyle& style, bool horizontal);
 
 /// The largest scrollTop `el` can hold: its unclamped content height minus the
 /// height actually shown. 0 for an element that does not overflow.
@@ -28,10 +37,19 @@ float maxScrollTopOf(const Element* el);
 /// width actually shown. 0 for an element that does not overflow.
 float maxScrollLeftOf(const Element* el);
 
+/// The scrollTop / scrollLeft `el` actually applies: the stored offset clamped
+/// into [0, max]. The stored value can briefly run past the max (script wrote
+/// it before layout caught up, or the content shrank); paint, geometry and hit
+/// testing all read it through these so they agree on where the content is.
+float clampedScrollTopOf(const Element* el);
+float clampedScrollLeftOf(const Element* el);
+
 /// Is `el` a scroll container at all — does its resolved overflow clip?
 /// `visible` and `initial` spill rather than scroll, so moving them moves
-/// nothing.
+/// nothing. elementClipsOverflow reads the vertical axis (overflow-y),
+/// elementClipsOverflowX the horizontal one (overflow-x).
 bool elementClipsOverflow(const Element* el);
+bool elementClipsOverflowX(const Element* el);
 
 /// `el.scrollTop = v`, with the whole operation: clamp, the deferred
 /// scroll-to-bottom intent when the request asks for the end while a layout is

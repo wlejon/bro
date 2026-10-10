@@ -34,9 +34,41 @@ ScrollbarMetrics Scrollbar::layout(float trackX, float trackY, float trackH,
     m.thumbY = trackY + (scrollRange > 0.0f
         ? (scrollOffset / scrollRange) * thumbRange
         : 0.0f);
+    m.thumbX = m.trackX;
+    m.thumbW = m.trackW;
 
     return m;
 }
+
+ScrollbarMetrics Scrollbar::layoutHorizontal(float trackX, float trackY, float trackW,
+                                             float contentW, float viewW,
+                                             float scrollOffset) const {
+    // Lay the bar out as a vertical one along x, then turn it on its side.
+    ScrollbarMetrics v = layout(trackY, trackX, trackW, contentW, viewW, scrollOffset);
+    ScrollbarMetrics m;
+    m.horizontal = true;
+    m.visible = v.visible;
+    if (!v.visible) return m;
+    m.trackX = trackX;
+    m.trackY = trackY;
+    m.trackW = trackW;
+    m.trackH = style_.width;
+    m.thumbX = v.thumbY;
+    m.thumbW = v.thumbH;
+    m.thumbY = trackY;
+    m.thumbH = style_.width;
+    return m;
+}
+
+namespace {
+
+// Positions along the bar's own axis.
+float trackStart(const ScrollbarMetrics& m) { return m.horizontal ? m.trackX : m.trackY; }
+float trackLength(const ScrollbarMetrics& m) { return m.horizontal ? m.trackW : m.trackH; }
+float thumbStart(const ScrollbarMetrics& m) { return m.horizontal ? m.thumbX : m.thumbY; }
+float thumbLength(const ScrollbarMetrics& m) { return m.horizontal ? m.thumbW : m.thumbH; }
+
+}  // namespace
 
 Scrollbar::Colors Scrollbar::schemeColors(bool dark) {
     // Alpha is coverage (0..1). The palette used to be written as 0..255
@@ -107,7 +139,7 @@ void Scrollbar::drawWithState(render::Renderer* renderer, const ScrollbarMetrics
     } else if (hovered) {
         thumbColor = colors.thumbHover;
     }
-    renderer->fillRect(m.trackX, m.thumbY, m.trackW, m.thumbH, thumbColor);
+    renderer->fillRect(m.thumbX, m.thumbY, m.thumbW, m.thumbH, thumbColor);
 }
 
 bool Scrollbar::hitTest(float x, float y, const ScrollbarMetrics& m) const {
@@ -118,24 +150,25 @@ bool Scrollbar::hitTest(float x, float y, const ScrollbarMetrics& m) const {
 
 bool Scrollbar::thumbHitTest(float x, float y, const ScrollbarMetrics& m) const {
     if (!m.visible) return false;
-    return x >= m.trackX && x < m.trackX + m.trackW &&
+    return x >= m.thumbX && x < m.thumbX + m.thumbW &&
            y >= m.thumbY && y < m.thumbY + m.thumbH;
 }
 
-void Scrollbar::beginDrag(float mouseY, const ScrollbarMetrics& m) {
+void Scrollbar::beginDrag(float mouse, const ScrollbarMetrics& m) {
     dragging_ = true;
-    dragStartMouseY_ = mouseY;
-    dragStartThumbY_ = m.thumbY - m.trackY;
+    dragHorizontal_ = m.horizontal;
+    dragStartMouseY_ = mouse;
+    dragStartThumbY_ = thumbStart(m) - trackStart(m);
 }
 
-float Scrollbar::updateDrag(float mouseY, float contentH, float viewH,
+float Scrollbar::updateDrag(float mouse, float contentH, float viewH,
                             const ScrollbarMetrics& m) const {
     if (!dragging_ || contentH <= viewH) return 0.0f;
 
-    float thumbRange = m.trackH - m.thumbH;
+    float thumbRange = trackLength(m) - thumbLength(m);
     if (thumbRange <= 0) return 0.0f;
 
-    float deltaY = mouseY - dragStartMouseY_;
+    float deltaY = mouse - dragStartMouseY_;
     float newThumbPos = std::clamp(dragStartThumbY_ + deltaY, 0.0f, thumbRange);
 
     float scrollRange = contentH - viewH;
@@ -144,27 +177,28 @@ float Scrollbar::updateDrag(float mouseY, float contentH, float viewH,
 
 void Scrollbar::endDrag() {
     dragging_ = false;
+    dragHorizontal_ = false;
 }
 
-float Scrollbar::scrollToPosition(float mouseY, float contentH, float viewH,
+float Scrollbar::scrollToPosition(float mouse, float contentH, float viewH,
                                   const ScrollbarMetrics& m) const {
     if (!m.visible || contentH <= viewH) return 0.0f;
 
     float scrollRange = contentH - viewH;
+    const float thumbRange = trackLength(m) - thumbLength(m);
+    const float thumbOffset = thumbStart(m) - trackStart(m);
 
-    // Click above thumb → page up, below → page down
-    if (mouseY < m.thumbY) {
+    // Click before the thumb → page back, after → page forward
+    if (mouse < thumbStart(m)) {
         // Page up: scroll back by one view height
-        float thumbRange = m.trackH - m.thumbH;
         if (thumbRange <= 0) return 0.0f;
-        float currentRatio = (m.thumbY - m.trackY) / thumbRange;
+        float currentRatio = thumbOffset / thumbRange;
         float currentScroll = currentRatio * scrollRange;
         return std::max(0.0f, currentScroll - viewH);
     } else {
         // Page down: scroll forward by one view height
-        float thumbRange = m.trackH - m.thumbH;
         if (thumbRange <= 0) return 0.0f;
-        float currentRatio = (m.thumbY - m.trackY) / thumbRange;
+        float currentRatio = thumbOffset / thumbRange;
         float currentScroll = currentRatio * scrollRange;
         return std::min(scrollRange, currentScroll + viewH);
     }

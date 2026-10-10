@@ -174,19 +174,12 @@ void Engine::handleMouseDown(float x, float y, int button) {
             document_->documentElement(), x, cy,
             0.0f, -scrollY_, elementScrollbar_, em);
         if (hitElem) {
+            const float along = em.horizontal ? x : cy;
             if (elementScrollbar_.thumbHitTest(x, cy, em)) {
-                elementScrollbar_.beginDrag(cy, em);
+                elementScrollbar_.beginDrag(along, em);
                 scrollbarDragTarget_.assign(document_.get(), hitElem);
-            } else {
-                float viewH = hitElem->layoutBox().contentRect.height;
-                float maxST = maxScrollTop(hitElem);
-                float contentH = viewH + maxST;
-                float newScroll = elementScrollbar_.scrollToPosition(cy,
-                    contentH, viewH, em);
-                float prev = hitElem->scrollTopValue();
-                float clamped = std::clamp(newScroll, 0.0f, maxST);
-                hitElem->setScrollTopValue(clamped);
-                if (clamped != prev) dispatchScrollEvent(hitElem);
+            } else if (pageElementScrollbar(hitElem, elementScrollbar_, em, along)) {
+                dispatchScrollEvent(hitElem);
             }
             markAppBaseDirty();
             return;

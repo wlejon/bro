@@ -12,6 +12,7 @@
 #endif
 #include "dom/element.h"
 #include "dom/element_geometry.h"
+#include "dom/element_scroll.h"
 #include "dom/text_node.h"
 #include "dom/node.h"
 #include "dom/document.h"
@@ -74,9 +75,8 @@ void absolutePos(bro::dom::Element* el, float& ax, float& ay) {
     ay = box.contentRect.y - box.padding.top - box.border.top;
     for (auto* lp = el->layoutParent(); lp; lp = lp->layoutParent()) {
         auto& pb = lp->layoutBox();
-        ax += pb.contentRect.x;
-        ay += pb.contentRect.y;
-        ay -= lp->scrollTopValue();
+        ax += pb.contentRect.x - bro::dom::clampedScrollLeftOf(lp);
+        ay += pb.contentRect.y - bro::dom::clampedScrollTopOf(lp);
     }
 }
 
@@ -106,11 +106,20 @@ std::string buildInspectString(bro::dom::Element* el, bool verbose) {
 
     float scrollTop = el->scrollTopValue();
     float natH = box.naturalHeight;
-    if (scrollTop > 0 || natH > box.contentRect.height + 0.5f) {
-        out << "  Scroll:\n";
+    float scrollLeft = el->scrollLeftValue();
+    float natW = box.naturalWidth;
+    const bool overflowsY = scrollTop > 0 || natH > box.contentRect.height + 0.5f;
+    const bool overflowsX = scrollLeft > 0 || natW > box.contentRect.width + 0.5f;
+    if (overflowsY || overflowsX) out << "  Scroll:\n";
+    if (overflowsY) {
         out << "    scrollTop:    " << fmtF(scrollTop) << "\n";
         out << "    scrollHeight: " << fmtF(natH) << "\n";
         out << "    overflow:     " << fmtF(natH - box.contentRect.height) << "px hidden\n";
+    }
+    if (overflowsX) {
+        out << "    scrollLeft:   " << fmtF(scrollLeft) << "\n";
+        out << "    scrollWidth:  " << fmtF(natW) << "\n";
+        out << "    overflow-x:   " << fmtF(natW - box.contentRect.width) << "px hidden\n";
     }
 
     if (box.textTruncated)

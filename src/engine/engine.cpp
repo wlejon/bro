@@ -543,34 +543,20 @@ void Engine::drawElementScrollbars(render::Renderer* renderer,
         float absX = lbox.contentRect.x + ox;
         float absY = lbox.contentRect.y + oy;
 
-        // Clamped like the draw traversal clamps: an offset past the end would
-        // otherwise put the thumb outside its track and shift this element's
-        // scrollbar subtree away from the content it belongs to.
-        float scrollTop = std::clamp(elem->scrollTopValue(), 0.0f, maxScrollTop(elem));
-
-        std::string ov = getOverflowY(style);
-        if (overflowScrollable(ov)) {
-            float maxST = maxScrollTop(elem);
-            if (maxST > 0) {
-                float viewH = lbox.contentRect.height;
-                float contentH = viewH + maxST;
-                float bx = absX - lbox.padding.left - lbox.border.left;
-                float by = absY - lbox.padding.top - lbox.border.top;
-                float bw = lbox.fullWidth();
-                float bh = lbox.fullHeight();
-
-                auto& es = elementScrollbar_.style();
-                auto m = elementScrollbar_.layout(
-                    bx + bw - es.width - es.margin,
-                    by, bh, contentH, viewH,
-                    scrollTop);
-                elementScrollbar_.draw(renderer, m,
-                                       Scrollbar::colorsFor(style, preferDark));
-            }
+        // Both bars (right edge, bottom edge) by the same rules; the offsets
+        // are clamped like the draw traversal clamps, since an offset past the
+        // end would otherwise put the thumb outside its track and shift this
+        // element's scrollbar subtree away from the content it belongs to.
+        const ElementScrollbarLayout bars =
+            layoutElementScrollbars(elem, absX, absY, elementScrollbar_);
+        if (bars.v.visible || bars.h.visible) {
+            const auto colors = Scrollbar::colorsFor(style, preferDark);
+            if (bars.v.visible) elementScrollbar_.draw(renderer, bars.v, colors);
+            if (bars.h.visible) elementScrollbar_.draw(renderer, bars.h, colors);
         }
 
-        float childOx = absX;
-        float childOy = absY - scrollTop;
+        float childOx = absX - dom::clampedScrollLeftOf(elem);
+        float childOy = absY - dom::clampedScrollTopOf(elem);
         elem->forEachComposedChild([&](dom::Element* child) {
             walk(child, childOx, childOy);
         });

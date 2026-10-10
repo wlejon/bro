@@ -677,19 +677,19 @@ void Engine::hostWheel(uint64_t hostId, float x, float y, float dx, float dy) {
 
     dom::Element* target = windowHostHitTest(h, x, y);
 
+    platform::shiftWheelToHorizontal(dx, dy, (currentModState() & platform::kmod::Shift) != 0);
     const float pxPerTick = inputConfig_.scrollSpeed;
     const float pxX = platform::wheelDeltaToPixels(dx, pxPerTick);
     const float pxY = platform::wheelDeltaToPixels(dy, pxPerTick);
-    const float pxV = platform::wheelDeltaToPixels(platform::verticalWheelDelta(dx, dy),
-                                                   pxPerTick);
 
     if (target) {
         dom::WheelEvent wheelEvt("wheel", true, true);
         populateMouseEvent(wheelEvt, x, y, -1, h.pressedButtons, 0.0f, 0.0f,
                            0.0f, currentModState(), 0.0f);
         // The event loop's positive wheel y is "scroll up"; the DOM's positive deltaY is
-        // "toward the bottom of the content". Negate, as handleWheel does.
-        wheelEvt.setDeltaX(static_cast<double>(-pxX));
+        // "toward the bottom of the content". Negate, as handleWheel does. Its
+        // positive x is already the DOM's "toward the right".
+        wheelEvt.setDeltaX(static_cast<double>(pxX));
         wheelEvt.setDeltaY(static_cast<double>(-pxY));
         wheelEvt.setDeltaZ(0.0);
         wheelEvt.setDeltaMode(dom::WheelEvent::DOM_DELTA_PIXEL);
@@ -700,26 +700,24 @@ void Engine::hostWheel(uint64_t hostId, float x, float y, float dx, float dy) {
         }
     }
 
-    // Default scroll: the nearest scrollable overflow ancestor, with the same
-    // browser-style chaining the app document uses (fall through to the next
-    // scroller when this one is pinned at that edge).
-    for (auto* el = target; el; el = composedParent(el)) {
-        if (!overflowScrollable(getOverflowY(el->computedStyle()))) continue;
-        const float maxST = maxScrollTop(el);
-        if (maxST <= 0.0f) continue;
-        const float prevScroll = el->scrollTopValue();
-        const bool canScroll = (pxV > 0.0f) ? (prevScroll > 0.5f)
-                                            : (prevScroll < maxST - 0.5f);
-        if (!canScroll) continue;
-        const float next = std::clamp(prevScroll - pxV, 0.0f, maxST);
-        el->setScrollTopValue(next);
-        if (next != prevScroll) {
-            dom::Event scrollEvt("scroll", false, false);
-            scrollEvt.setIsTrusted(true);
-            windowHostDispatch(h, el, scrollEvt);
-        }
-        break;
-    }
+    // Default scroll: the nearest scrollable overflow ancestor on each axis,
+    // with the same browser-style chaining the app document uses (fall through
+    // to the next scroller when this one is pinned at that edge).
+    auto notify = [&](dom::Element* el, bool moved) {
+        if (!el || !moved) return;
+        dom::Event scrollEvt("scroll", false, false);
+        scrollEvt.setIsTrusted(true);
+        windowHostDispatch(h, el, scrollEvt);
+    };
+    bool movedX = false, movedY = false;
+    dom::Element* scrolledX = wheelScrollChain(target, true, pxX, movedX);
+    notify(scrolledX, movedX);
+    // A horizontal delta nothing took may still be a vertical swipe in
+    // disguise (platform::verticalWheelDelta); one that was taken is not.
+    const float pxV = scrolledX ? pxY
+        : platform::wheelDeltaToPixels(platform::verticalWheelDelta(dx, dy), pxPerTick);
+    dom::Element* scrolledY = wheelScrollChain(target, false, -pxV, movedY);
+    notify(scrolledY, movedY);
     windowHostRepaint(h);
 }
 

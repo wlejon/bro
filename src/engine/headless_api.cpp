@@ -115,7 +115,7 @@ void Engine::flush() {
             auto pending = document_->scrollToBottomElements();
             for (auto* elem : pending) {
                 if (overflowClips(getOverflowY(elem->computedStyle())))
-                    elem->setScrollTopValue(maxScrollTop(elem));
+                    elem->setScrollTopValue(dom::maxScrollTopOf(elem));
                 elem->setScrollToBottom(false);
             }
         }

@@ -686,23 +686,14 @@ bool Engine::systemHandleMouseDown(float x, float y, int button) {
             doc.document->documentElement(), x, y,
             0.0f, 0.0f, elementScrollbar_, em);
         if (!hitElem) continue;
+        const float along = em.horizontal ? x : y;
         if (elementScrollbar_.thumbHitTest(x, y, em)) {
-            elementScrollbar_.beginDrag(y, em);
+            elementScrollbar_.beginDrag(along, em);
             scrollbarDragTarget_.assign(doc.document.get(), hitElem);
             scrollbarDragSystemDoc_ = &doc;
-        } else {
-            float viewH = hitElem->layoutBox().contentRect.height;
-            float maxST = maxScrollTop(hitElem);
-            float contentH = viewH + maxST;
-            float newScroll = elementScrollbar_.scrollToPosition(y,
-                contentH, viewH, em);
-            float prev = hitElem->scrollTopValue();
-            float clamped = std::clamp(newScroll, 0.0f, maxST);
-            hitElem->setScrollTopValue(clamped);
-            if (clamped != prev) {
-                systemDirty_ = true;
-                doc.document->markDirty();
-            }
+        } else if (pageElementScrollbar(hitElem, elementScrollbar_, em, along)) {
+            systemDirty_ = true;
+            doc.document->markDirty();
         }
         systemDirty_ = true;
         return true;
@@ -869,17 +860,32 @@ bool Engine::systemHandleKeyDown(int keycode, int scancode, int mod, bool repeat
 
 bool Engine::systemHandleWheel(float x, float y, float dx, float dy) {
     if (!isSystemVisible()) return false;
+    platform::shiftWheelToHorizontal(dx, dy, (currentModState() & platform::kmod::Shift) != 0);
     for (int i = static_cast<int>(systemDocs_.size()) - 1; i >= 0; i--) {
         auto& doc = systemDocs_[i];
         if (!isSystemDocVisible(doc) || !doc.document) continue;
         dom::Element* target = systemHitTest(doc, x, y);
         if (!target) continue;
 
+        // A horizontal delta goes to the nearest horizontal scroller that can
+        // still take it, as in the app document.
+        if (dx != 0.0f) {
+            bool movedX = false;
+            const float pxX = platform::wheelDeltaToPixels(dx, inputConfig_.scrollSpeed);
+            if (wheelScrollChain(target, true, pxX, movedX)) {
+                if (movedX) {
+                    systemDirty_ = true;
+                    if (doc.document) doc.document->markDirty();
+                }
+                if (dy == 0.0f) return true;
+            }
+        }
+
         auto* el = target;
         while (el) {
             std::string ov = getOverflowY(el->computedStyle());
             if (overflowScrollable(ov)) {
-                float maxST = maxScrollTop(el);
+                float maxST = dom::maxScrollTopOf(el);
                 if (maxST > 0) {
                     float scrollPx = -platform::wheelDeltaToPixels(
                         platform::verticalWheelDelta(dx, dy), inputConfig_.scrollSpeed);

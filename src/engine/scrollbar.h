@@ -8,7 +8,10 @@ namespace bro::engine {
 /// Computed scrollbar geometry, reusable for drawing and hit testing.
 struct ScrollbarMetrics {
     float trackX = 0, trackY = 0, trackW = 0, trackH = 0;
-    float thumbY = 0, thumbH = 0;
+    // The thumb rect. A vertical bar's thumb spans the track's width, a
+    // horizontal bar's its height.
+    float thumbX = 0, thumbY = 0, thumbW = 0, thumbH = 0;
+    bool horizontal = false;  // laid out by layoutHorizontal()
     bool visible = false;  // false if content fits (no scrollbar needed)
 };
 
@@ -53,6 +56,13 @@ public:
                             float contentH, float viewH,
                             float scrollOffset) const;
 
+    /// The horizontal bar: the same geometry turned on its side. trackW is the
+    /// track's length (usually the border-box width), style().width its
+    /// thickness; contentW/viewW/scrollOffset are along x.
+    ScrollbarMetrics layoutHorizontal(float trackX, float trackY, float trackW,
+                                      float contentW, float viewW,
+                                      float scrollOffset) const;
+
     /// Draw the scrollbar (track + thumb) using the given metrics.
     void draw(render::Renderer* renderer, const ScrollbarMetrics& m,
               const Colors& colors) const;
@@ -67,17 +77,22 @@ public:
     /// Returns true if (x, y) is within the thumb specifically.
     bool thumbHitTest(float x, float y, const ScrollbarMetrics& m) const;
 
+    // The mouse coordinate the calls below take is the one along the bar's
+    // axis: y for a vertical bar, x for a horizontal one (m.horizontal).
+
     /// Begin a thumb drag. Call when mousedown hits the thumb.
-    void beginDrag(float mouseY, const ScrollbarMetrics& m);
+    void beginDrag(float mouse, const ScrollbarMetrics& m);
 
     /// Update during drag — returns the new scroll offset.
-    float updateDrag(float mouseY, float contentH, float viewH,
+    float updateDrag(float mouse, float contentH, float viewH,
                      const ScrollbarMetrics& m) const;
 
     /// End a drag.
     void endDrag();
 
     bool isDragging() const { return dragging_; }
+    /// Whether the drag in progress is on a horizontal bar.
+    bool dragHorizontal() const { return dragHorizontal_; }
 
     /// Set/get hover state for visual feedback.
     void setHovered(bool h) { hovered_ = h; }
@@ -85,7 +100,7 @@ public:
 
     /// Click on track (not on thumb): returns target scroll offset
     /// for a page-scroll toward the click position.
-    float scrollToPosition(float mouseY, float contentH, float viewH,
+    float scrollToPosition(float mouse, float contentH, float viewH,
                            const ScrollbarMetrics& m) const;
 
     const Style& style() const { return style_; }
@@ -93,6 +108,7 @@ public:
 private:
     Style style_;
     bool dragging_ = false;
+    bool dragHorizontal_ = false;
     bool hovered_ = false;
     float dragStartMouseY_ = 0.0f;
     float dragStartThumbY_ = 0.0f;

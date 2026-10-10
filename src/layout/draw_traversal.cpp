@@ -6,6 +6,7 @@
 #include "layout/draw_traversal_internal.h"
 #include "dom/document.h"
 #include "dom/element_geometry.h"
+#include "dom/element_scroll.h"
 #include "dom/node.h"
 
 #include <algorithm>
@@ -377,10 +378,8 @@ std::unique_ptr<StackingContext> DrawTraversal::buildStackingContextTree(
         auto& box = elem->layoutBox();
         float x = box.contentRect.x + offX;
         float y = box.contentRect.y + offY;
-        float maxST = std::max(0.0f, box.naturalHeight - box.contentRect.height);
-        float scrollTop = std::clamp(elem->scrollTopValue(), 0.0f, maxST);
-        float childOffX = x;
-        float childOffY = y - scrollTop;
+        float childOffX = x - dom::clampedScrollLeftOf(elem);
+        float childOffY = y - dom::clampedScrollTopOf(elem);
 
         bool isThisRoot = (elem == root);
         bool isSC = inTopLayer || isFrame || isOverlay || createsStackingContext(elem, isThisRoot);
@@ -476,10 +475,8 @@ std::unique_ptr<StackingContext> DrawTraversal::buildStackingContextTree(
     auto& rbox = root->layoutBox();
     float rx = rbox.contentRect.x + scrollX;
     float ry = rbox.contentRect.y + scrollY;
-    float rMaxST = std::max(0.0f, rbox.naturalHeight - rbox.contentRect.height);
-    float rScrollTop = std::clamp(root->scrollTopValue(), 0.0f, rMaxST);
-    float rChildOffX = rx;
-    float rChildOffY = ry - rScrollTop;
+    float rChildOffX = rx - dom::clampedScrollLeftOf(root);
+    float rChildOffY = ry - dom::clampedScrollTopOf(root);
     std::vector<ClipRect> rootClips;
     {
         ClipRect cr;
