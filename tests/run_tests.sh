@@ -51,6 +51,8 @@
 # still in progress — are reported as KNOWN warnings instead; delete a line
 # there once its errors are fixed. BRO_TEST_VK_VALIDATION=0 turns validation
 # off (faster runs); =1 insists on it (the run stops if the layer is missing).
+# BRO_VK_SYNC_VALIDATION=1 adds the layer's synchronization validation (hazards
+# within and between submissions; much slower, so timing asserts may trip).
 #
 # Parallelism: tests run serially (1 job at a time) by default to prevent OOM
 # on memory-constrained systems where multiple headless instances with Skia/Vulkan/Audio
