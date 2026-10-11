@@ -2,6 +2,7 @@
 
 #include "dom/element.h"
 #include "render/command_replayer.h"
+#include "render/damage.h"
 
 #include <algorithm>
 #include <cmath>
@@ -12,6 +13,16 @@ namespace {
 
 // A scroll by whole device pixels draws the same surface elsewhere.
 bool samePhase(float a, float b) { return std::abs(a - b) < 1.0f / 512.0f; }
+
+// A part about to be recorded again keeps the recording it had, to diff the
+// new one against, when that one was rastered (its generation has a
+// surface's pixels): what changed between them is what a raster draws.
+template <class P>
+void keepPrevious(P& p) {
+    p.prevValid = !p.recorded;
+    std::swap(p.prevCmd, p.cmd);
+    p.cmd.clear();
+}
 bool wholePixels(float d) { return std::abs(d - std::round(d)) < 1.0f / 512.0f; }
 
 }  // namespace
@@ -54,7 +65,7 @@ layout::ScrollLayerRecord ScrollLayerSet::beginScrollLayer(dom::Element* scrolle
     l.nestedScroller = false;
     l.seen = true;
     if (!reuse) {
-        content.cmd.clear();
+        keepPrevious(content);
         l.winX = place.viewX - kMargin;
         l.winY = place.viewY - kMargin;
         l.winW = winW;
@@ -89,7 +100,7 @@ layout::ScrollLayerRecord ScrollLayerSet::beginScrollPiece(dom::Element* scrolle
     // It stands with the layer's content, when it holds the same entries.
     const bool reuse = mayReuse && p.reusable && p.entries == entries;
     if (!reuse) {
-        p.cmd.clear();
+        keepPrevious(p);
         p.entries = entries;
         p.reusable = false;
         p.recorded = true;
@@ -196,6 +207,7 @@ void ScrollLayerSet::replay(render::SkiaRenderer* renderer) {
         for (size_t i = 0; i < l.parts.size(); ++i) {
             Part& p = *l.parts[i];
             if (!all && !p.recorded) continue;
+            const bool rerecorded = p.recorded;
             p.recorded = false;
             up.drawn[i] = true;
             // A part that paints nothing has no picture (a scroller whose
@@ -203,23 +215,39 @@ void ScrollLayerSet::replay(render::SkiaRenderer* renderer) {
             if (p.cmd.commandCount() == 0) {
                 p.surface.reset();
                 p.spare.reset();
+                p.holds = Part::Holds{};
                 p.surfW = p.surfH = 0;
                 continue;
             }
             if (p.surfW != w || p.surfH != h) {
+                p.surface.reset();
                 p.spare.reset();
+                p.holds = Part::Holds{};
                 p.surfW = w;
                 p.surfH = h;
             }
             renderer->fitLayerSurface(p.surface, w, h);
             if (!p.surface) continue;
-            auto prev = renderer->switchSurface(p.surface.surface);
-            renderer->translate(px / s - l.winX, py / s - l.winY);
-            render::CommandReplayer replayer(renderer);
-            replayer.setLayerBreakHandler([](const render::LayerSource&, const render::LayerQuad&) {});
-            replayer.replay(p.cmd);
-            renderer->switchSurface(prev);
-            rasters_.fetch_add(1, std::memory_order_relaxed);
+            // On the CPU, recorded again where its surface holds the last
+            // raster (the same window, phase and scale): only what changed
+            // drawn again, in place. A layer whose window moved is drawn
+            // whole: moving its pixels and drawing what the move brings in
+            // cost more than drawing it (a scroll of Music's list: 0.60 ms a
+            // pass for 0.51 whole). On the GPU every raster is whole (rasterPart).
+            const bool partial = !p.surface.isGpu() && rerecorded && p.prevValid && p.holds.valid &&
+                                 p.holds.winX == l.winX && p.holds.winY == l.winY && p.holds.scale == s &&
+                                 samePhase(p.holds.phaseX, px) && samePhase(p.holds.phaseY, py) &&
+                                 rasterPart(renderer, l, p, px, py, s, w, h);
+            if (!partial) {
+                auto prev = renderer->switchSurface(p.surface.surface);
+                renderer->translate(px / s - l.winX, py / s - l.winY);
+                render::CommandReplayer replayer(renderer);
+                replayer.setLayerBreakHandler([](const render::LayerSource&, const render::LayerQuad&) {});
+                replayer.replay(p.cmd);
+                renderer->switchSurface(prev);
+                rasters_.fetch_add(1, std::memory_order_relaxed);
+            }
+            p.holds = Part::Holds{true, l.winX, l.winY, px, py, s};
             // As an iframe's: a CPU snapshot, or the GPU image once submitted
             // (the next raster draws into the other surface).
             if (p.surface.isGpu()) {
@@ -312,6 +340,62 @@ void ScrollLayerSet::replay(render::SkiaRenderer* renderer) {
         if (gpu) renderer->afterSubmit([publish, up = std::move(up)]() mutable { publish(std::move(up)); });
         else publish(std::move(up));
     }
+}
+
+bool ScrollLayerSet::rasterPart(render::SkiaRenderer* renderer, const Layer& l, Part& p, float px, float py,
+                                float s, int w, int h) {
+    const SkIRect bounds = SkIRect::MakeWH(w, h);
+    // What changed in its recording (content space), in its device px.
+    const render::Damage d = render::diffDamage(p.prevCmd, p.cmd);
+    if (d.full) return false;
+    std::vector<SkIRect> rects;
+    for (const auto& r : d.rects) {
+        SkIRect ir = SkRect::MakeLTRB((r.x0 - l.winX) * s + px, (r.y0 - l.winY) * s + py,
+                                      (r.x1 - l.winX) * s + px, (r.y1 - l.winY) * s + py)
+                         .roundOut();
+        if (ir.intersect(bounds)) rects.push_back(ir);
+    }
+    // One replay, over their union: a replay walks the recording whatever
+    // it covers (culled, the rows it does not reach are not walked), more
+    // than the pixels between the rects cost. On a 16 px grid, as the page's
+    // partial raster puts its damage (a change that moves a pixel or two
+    // keeps the same rect). Most of the surface: draw it whole.
+    {
+        SkIRect all = SkIRect::MakeEmpty();
+        for (const SkIRect& r : rects) all.join(r);
+        constexpr int kGrid = 16;
+        all.setLTRB(all.fLeft & ~(kGrid - 1), all.fTop & ~(kGrid - 1), (all.fRight + kGrid - 1) & ~(kGrid - 1),
+                    (all.fBottom + kGrid - 1) & ~(kGrid - 1));
+        all.intersect(bounds);
+        if (static_cast<int64_t>(all.width()) * all.height() * 10 > static_cast<int64_t>(w) * h * 6) return false;
+        rects.clear();
+        if (!all.isEmpty()) rects.push_back(all);
+    }
+
+    // The rect drawn again in a scratch round it, then put back pixel for
+    // pixel: drawn under a clip in place, the pixels along its edge would
+    // antialias otherwise than a whole raster's (Engine::replayAppLayers).
+    if (!rects.empty()) {
+        const SkIRect& r = rects.front();
+        constexpr int kMarginPx = 32;
+        SkIRect around = r.makeOutset(kMarginPx, kMarginPx);
+        if (!around.intersect(bounds)) return false;
+        render::LayerSurface& scratch = p.scratch;
+        if (!scratch || scratch.surface->width() < around.width() || scratch.surface->height() < around.height())
+            scratch = renderer->createLayerSurface(std::max(around.width(), (around.width() + 255) & ~255),
+                                                   std::max(around.height(), (around.height() + 255) & ~255));
+        if (!scratch) return false;
+        auto prev = renderer->switchSurface(scratch.surface, nullptr, {around.fLeft, around.fTop});
+        renderer->translate(px / s - l.winX, py / s - l.winY);
+        render::CommandReplayer replayer(renderer);
+        replayer.setLayerBreakHandler([](const render::LayerSource&, const render::LayerQuad&) {});
+        replayer.setCullSpans(true);  // the rows it does not reach are not walked
+        replayer.replay(p.cmd);
+        renderer->switchSurface(prev);
+        renderer->putSurfaceRect(scratch.surface, {around.fLeft, around.fTop}, p.surface.surface, r);
+    }
+    partialRasters_.fetch_add(1, std::memory_order_relaxed);
+    return true;
 }
 
 bool ScrollLayerSet::shown(uint32_t elementId, Shown& out) const {

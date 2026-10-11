@@ -570,6 +570,10 @@ public:
     }
     // Scroll layer surfaces rastered (frame passes and captures), since startup.
     uint64_t scrollLayerRasters() const { return baseScrollLayers_.rasters() + captureScrollLayers_.rasters(); }
+    // Of those parts rastered from their last pixels (only what moved in or changed drawn).
+    uint64_t scrollLayerPartialRasters() const {
+        return baseScrollLayers_.partialRasters() + captureScrollLayers_.partialRasters();
+    }
 
     /// The frame flight recorder (frame_trace.h) and the agent control
     /// channel (control.h, docs/agent-control.md). startControl serves the

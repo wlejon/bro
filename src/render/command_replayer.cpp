@@ -1,4 +1,7 @@
 #include "render/command_replayer.h"
+#include "render/damage.h"
+
+#include <include/core/SkCanvas.h>
 
 #include <algorithm>
 #include <variant>
@@ -258,7 +261,14 @@ void CommandReplayer::replay(const CommandBuffer& buffer) {
                 }
             } else if constexpr (std::is_same_v<T, Cmd_ReplaySpan>) {
                 // In place: its saves, clips and breaks are this replay's.
-                if (const CommandBuffer* span = buffer.spanAt(c.index)) replay(*span);
+                if (const CommandBuffer* span = buffer.spanAt(c.index)) {
+                    if (cullSpans_) {
+                        SkRect b;
+                        SkCanvas* canvas = dst_->getCanvas();
+                        if (canvas && commandBufferBounds(*span, b) && canvas->quickReject(b)) return;
+                    }
+                    replay(*span);
+                }
             }
         }, cmd);
     }

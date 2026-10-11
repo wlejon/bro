@@ -384,9 +384,25 @@ void damageCommand(const CommandBuffer& buf, const DrawCommand& cmd, const Walke
     d.addRect(dev.fLeft - kPad, dev.fTop - kPad, dev.fRight + kPad, dev.fBottom + kPad);
 }
 
+// The same transform, to a thousandth of a unit: one reached through other
+// steps (a translate and its inverse round a moved span) is the same place.
+bool sameMatrix(const SkMatrix& a, const SkMatrix& b) {
+    for (int k = 0; k < 9; ++k)
+        if (std::fabs(a[k] - b[k]) > 1e-3f) return false;
+    return true;
+}
+
 bool sameState(const Walker& a, const Walker& b) {
-    return a.cur.m == b.cur.m && a.cur.perspective == b.cur.perspective && a.cur.inFilter == b.cur.inFilter &&
-           (!a.cur.inFilter || a.cur.filterBounds == b.cur.filterBounds);
+    return sameMatrix(a.cur.m, b.cur.m) && a.cur.perspective == b.cur.perspective &&
+           a.cur.inFilter == b.cur.inFilter && (!a.cur.inFilter || a.cur.filterBounds == b.cur.filterBounds);
+}
+
+// A transform step (no clip, no layer): two of one kind with other values
+// can be walked through side by side, what is drawn after compared by where
+// it lands.
+bool isTransformCommand(const DrawCommand& c) {
+    return std::holds_alternative<Cmd_Translate>(c) || std::holds_alternative<Cmd_Scale>(c) ||
+           std::holds_alternative<Cmd_Rotate>(c) || std::holds_alternative<Cmd_Concat>(c);
 }
 
 // Everything left of `buf` from `i` on, walked from `w`, is damage.
@@ -402,7 +418,7 @@ void diffLevel(const CommandBuffer& ob, Walker ow, const CommandBuffer& nb, Walk
     const auto& oc = ob.commands();
     const auto& nc = nb.commands();
     size_t i = 0, j = 0;
-    if (sameState(ow, nw)) {
+    {
         while (i < oc.size() && j < nc.size() && !d.full) {
             const DrawCommand& a = oc[i];
             const DrawCommand& b = nc[j];
@@ -410,7 +426,19 @@ void diffLevel(const CommandBuffer& ob, Walker ow, const CommandBuffer& nb, Walk
                 if (isStateCommand(a)) {
                     ow.apply(ob, a);
                     nw.apply(nb, b);
+                } else if (!sameState(ow, nw)) {
+                    // The same draw where the walk put it elsewhere: both places.
+                    damageCommand(ob, a, ow, d);
+                    damageCommand(nb, b, nw, d);
                 }
+                ++i, ++j;
+                continue;
+            }
+            // A transform step of one kind with other values (a span moved
+            // under a translate): walked through, side by side.
+            if (a.index() == b.index() && isTransformCommand(a)) {
+                ow.apply(ob, a);
+                nw.apply(nb, b);
                 ++i, ++j;
                 continue;
             }
@@ -420,6 +448,36 @@ void diffLevel(const CommandBuffer& ob, Walker ow, const CommandBuffer& nb, Walk
                 const CommandBuffer* sb = nb.spanAt(std::get<Cmd_ReplaySpan>(b).index);
                 if (sa && sb && sa->ownerId() != 0 && sa->ownerId() == sb->ownerId()) {
                     diffLevel(*sa, ow, *sb, nw, d);
+                    ++i, ++j;
+                    continue;
+                }
+                // Spans of two elements: one put in or taken out (a list's
+                // row), or one in place of the other. Find each side's
+                // element a little further on the other side, past spans
+                // only (no state between), and damage what lies between:
+                // the rest still lines up, rather than all of it damaged.
+                const uint32_t oa = sa ? sa->ownerId() : 0, onb = sb ? sb->ownerId() : 0;
+                if (oa != 0 && onb != 0) {
+                    constexpr size_t kLook = 16;
+                    auto ownerAt = [](const CommandBuffer& buf, const DrawCommand& c) -> uint32_t {
+                        if (!std::holds_alternative<Cmd_ReplaySpan>(c)) return 0;
+                        const CommandBuffer* s = buf.spanAt(std::get<Cmd_ReplaySpan>(c).index);
+                        return s ? s->ownerId() : 0;
+                    };
+                    size_t k = j + 1;
+                    while (k < nc.size() && k < j + kLook && ownerAt(nb, nc[k]) != 0 && ownerAt(nb, nc[k]) != oa) ++k;
+                    if (k < nc.size() && k < j + kLook && ownerAt(nb, nc[k]) == oa) {
+                        for (; j < k; ++j) damageCommand(nb, nc[j], nw, d);  // put in
+                        continue;
+                    }
+                    k = i + 1;
+                    while (k < oc.size() && k < i + kLook && ownerAt(ob, oc[k]) != 0 && ownerAt(ob, oc[k]) != onb) ++k;
+                    if (k < oc.size() && k < i + kLook && ownerAt(ob, oc[k]) == onb) {
+                        for (; i < k; ++i) damageCommand(ob, oc[i], ow, d);  // taken out
+                        continue;
+                    }
+                    damageCommand(ob, a, ow, d);  // one in place of the other
+                    damageCommand(nb, b, nw, d);
                     ++i, ++j;
                     continue;
                 }
@@ -444,6 +502,8 @@ void diffLevel(const CommandBuffer& ob, Walker ow, const CommandBuffer& nb, Walk
 }
 
 }  // namespace
+
+bool commandBufferBounds(const CommandBuffer& buf, SkRect& out) { return spanBounds(buf, out); }
 
 Damage diffDamage(const CommandBuffer& older, const CommandBuffer& newer) {
     Damage d;

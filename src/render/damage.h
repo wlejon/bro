@@ -18,6 +18,8 @@
 
 #include "render/command_buffer.h"
 
+#include <include/core/SkRect.h>
+
 #include <algorithm>
 #include <cstdint>
 #include <utility>
@@ -28,27 +30,62 @@ namespace bro::render {
 struct Damage {
     bool full = false;    // everywhere
     bool empty = true;    // nowhere (when not full)
-    float x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+    float x0 = 0, y0 = 0, x1 = 0, y1 = 0;  // the union
+    // The same, as a few rects (at most kMaxRects, each new one merged into
+    // the one it grows least once there are that many): a row taken out at
+    // the top of a list and one put in at the bottom are two strips, not the
+    // list. A scroll layer redraws these (engine/scroll_layers.h); the page's
+    // surfaces the union.
+    struct Rect { float x0, y0, x1, y1; };
+    static constexpr size_t kMaxRects = 8;
+    std::vector<Rect> rects;
 
     void addRect(float ax0, float ay0, float ax1, float ay1) {
         if (full || !(ax1 > ax0 && ay1 > ay0)) return;
         if (empty) {
             x0 = ax0; y0 = ay0; x1 = ax1; y1 = ay1;
             empty = false;
+        } else {
+            x0 = std::min(x0, ax0); y0 = std::min(y0, ay0);
+            x1 = std::max(x1, ax1); y1 = std::max(y1, ay1);
+        }
+        Rect r{ax0, ay0, ax1, ay1};
+        auto area = [](const Rect& a) { return (a.x1 - a.x0) * (a.y1 - a.y0); };
+        auto merged = [](const Rect& a, const Rect& b) {
+            return Rect{std::min(a.x0, b.x0), std::min(a.y0, b.y0), std::max(a.x1, b.x1), std::max(a.y1, b.y1)};
+        };
+        // One it touches takes it.
+        for (Rect& e : rects) {
+            if (r.x0 <= e.x1 && e.x0 <= r.x1 && r.y0 <= e.y1 && e.y0 <= r.y1) {
+                e = merged(e, r);
+                return;
+            }
+        }
+        if (rects.size() < kMaxRects) {
+            rects.push_back(r);
             return;
         }
-        x0 = std::min(x0, ax0); y0 = std::min(y0, ay0);
-        x1 = std::max(x1, ax1); y1 = std::max(y1, ay1);
+        size_t best = 0;
+        float bestGrowth = 0;
+        for (size_t k = 0; k < rects.size(); ++k) {
+            const float g = area(merged(rects[k], r)) - area(rects[k]);
+            if (k == 0 || g < bestGrowth) { best = k; bestGrowth = g; }
+        }
+        rects[best] = merged(rects[best], r);
     }
-    void setFull() { full = true; empty = false; }
+    void setFull() { full = true; empty = false; rects.clear(); }
     void unite(const Damage& o) {
         if (o.full) setFull();
-        else if (!o.empty) addRect(o.x0, o.y0, o.x1, o.y1);
+        else for (const Rect& r : o.rects) addRect(r.x0, r.y0, r.x1, r.y1);
     }
 };
 
 // What changed from `older` to `newer`, two recordings of the same pass.
 Damage diffDamage(const CommandBuffer& older, const CommandBuffer& newer);
+
+// The bounds of what `buf` draws, in its own space (cached on it). False:
+// unbounded, or not known.
+bool commandBufferBounds(const CommandBuffer& buf, SkRect& out);
 
 // The damage each recording of a pass brought (from the one before it), by
 // generation, for the last few: a surface that holds generation `held` needs

@@ -34,6 +34,11 @@ public:
         onBlitCanvasInline_ = std::move(h);
     }
 
+    // Leave out a span whose bounds (render::commandBufferBounds) the
+    // destination canvas would reject where it stands: a replay into a
+    // partial raster's scratch replays only the boxes it covers.
+    void setCullSpans(bool on) { cullSpans_ = on; }
+
     // Replay every command in the buffer in order against `dst`.
     void replay(const CommandBuffer& buffer);
     // How many commands that draw (anything but state, clips and markers)
@@ -42,6 +47,7 @@ public:
 
 private:
     uint64_t draws_ = 0;
+    bool cullSpans_ = false;
     // A layer-break hands `dst_` a brand-new surface (fresh matrix/clip
     // state) partway through replay — see openStack_ below.
     struct StackOp {

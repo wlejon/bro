@@ -130,19 +130,34 @@ public:
         return it != layers_.end() && it->second->seen;
     }
     size_t size() const { return layers_.size(); }
-    // Layer surfaces rastered (a part each), since startup.
+    // Layer surfaces rastered whole (a part each), and from the last one's
+    // pixels with only what moved in or changed drawn (rasterPart), since startup.
     uint64_t rasters() const { return rasters_.load(std::memory_order_relaxed); }
+    uint64_t partialRasters() const { return partialRasters_.load(std::memory_order_relaxed); }
 
 private:
     // One recording of a layer and the surfaces it is rastered into.
     struct Part {
         // Recorded by the main thread, read by the raster thread's replay.
         render::CommandBuffer cmd;  // content space
+        // The recording before it, when that was the one last rastered
+        // (prevValid): what changed between them is what a raster draws.
+        render::CommandBuffer prevCmd;
+        bool prevValid = false;
         std::vector<uint32_t> entries;  // a piece's: the elements whose paint it holds
         bool reusable = false;
         bool recorded = true;  // recorded since it was last rastered
-        // The raster thread's.
-        render::LayerSurface surface, spare;
+        // The raster thread's: its surfaces (on the GPU drawn in turn, the
+        // last raster in the spare once swapped; on the CPU one, the last
+        // raster in it), where the CPU one holds its last raster (window,
+        // phase, scale; valid false: nothing to keep), and the scratch a
+        // partial raster draws in.
+        struct Holds {
+            bool valid = false;
+            float winX = 0, winY = 0, phaseX = 0, phaseY = 0, scale = 0;
+        };
+        render::LayerSurface surface, spare, scratch;
+        Holds holds;
         int surfW = 0, surfH = 0;
     };
     struct Layer {
@@ -186,9 +201,18 @@ private:
         uint64_t shownPasses = 0;  // the pass Shown is of
         bool published = false;
     };
+    // A CPU part's raster in place: its surface holds the last raster where
+    // this one goes, and only what changed in its recording since is drawn
+    // again. False: draw it whole (too much changed, or what changed is not
+    // known). On the GPU a layer is rastered whole: a raster there costs a
+    // recording of its own per surface and a put-back, about what the whole
+    // layer does (scroll_layers.cpp, ScrollLayerSet::replay).
+    bool rasterPart(render::SkiaRenderer* renderer, const Layer& l, Part& p, float px, float py, float s, int w,
+                    int h);
     uint32_t pass_;
     std::unordered_map<uint32_t, std::unique_ptr<Layer>> layers_;
     std::atomic<uint64_t> rasters_{0};
+    std::atomic<uint64_t> partialRasters_{0};
 };
 
 }  // namespace bro::engine
