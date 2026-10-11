@@ -253,7 +253,7 @@ Element::~Element() {
     // memory is reclaimed. Without this, a scene whose Element is destroyed via
     // the deferred-free path (drainPendingFrees) — rather than the JS GC
     // finalizer — would dereference freed memory on the next frame's
-    // prepareAndSignal()/checkDetached(). The engine clears canvasScene_ when it
+    // prepareAndSignal()/checkElement(). The engine clears canvasScene_ when it
     // reclaims a scene first, so this never calls into a freed scene.
     if (canvasScene_ && canvasSceneOnDestroy_) {
         canvasSceneOnDestroy_(canvasScene_);

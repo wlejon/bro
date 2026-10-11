@@ -188,7 +188,11 @@ public:
     void ensureSurface(int w, int h);
 
     void setViewportScroll(float scrollY) { viewportScrollY_ = scrollY; }
-    bool isDetached() const { return detached_; }
+    /// The backing element is gone (destroyed, or its wrapper finalized): the
+    /// engine reclaims the scene. An element merely out of the document is
+    /// not gone: it may be put back (a virtual list's recycled cell), and its
+    /// bitmap and context go with it, as in a browser.
+    bool elementGone() const { return gone_; }
 
     // --- Canvas 2D state setters (called from JS bindings) ---
 
@@ -437,28 +441,22 @@ public:
     /// Changes whenever rasterize() changed what the compositor samples.
     uint64_t contentGeneration() const { return contentGeneration_; }
     void clearDirty() { dirty_ = false; }
-    void checkDetached() {
-        if (!detachedCb_) return;
-        // The Element backing detachedUd_ may have been freed out from under us
-        // (deferred-free / pointer reuse). Finalize instead of dereferencing a
-        // dead pointer.
-        if (!backingElementAlive()) { onElementFinalized(); return; }
-        bool orphaned = detachedCb_(detachedUd_);
-        // An offscreen canvas (document.createElement('canvas') with no
-        // appendChild) reads as orphaned from frame one, but the JS side is
-        // still using it as a sprite atlas / readback target. Only mark for
-        // cleanup once we've actually seen it attached to the document — that
-        // distinguishes "removed from the DOM" from "intentionally offscreen".
-        if (!orphaned) everAttached_ = true;
-        if (orphaned && everAttached_) detached_ = true;
+    /// The per-frame check: is the backing element still alive? The Element
+    /// behind detachedUd_ may have been freed out from under us
+    /// (deferred-free / pointer reuse); then the scene is finalized instead of
+    /// dereferencing a dead pointer. Out of the document is not dead: a
+    /// canvas removed and put back (or never put in: a sprite atlas, a
+    /// readback target) keeps its scene until its element goes.
+    void checkElement() {
+        if (detachedCb_ && !backingElementAlive()) onElementFinalized();
     }
 
     /// Called from the JS HTMLCanvasElement finalizer when its wrapper is
-    /// GC'd. The element it pointed at is about to be freed, so we drop the
-    /// callback userdata that aimed at it and mark the scene detached — the
-    /// engine's next per-frame cleanup pass collects it.
+    /// GC'd, and from ~Element. The element it pointed at is about to be
+    /// freed, so we drop the callback userdata that aimed at it and mark the
+    /// scene gone — the engine's next per-frame cleanup pass collects it.
     void onElementFinalized() {
-        detached_ = true;
+        gone_ = true;
         detachedCb_ = nullptr;
         detachedUd_ = nullptr;
         layoutCb_ = nullptr;
@@ -566,8 +564,7 @@ private:
     LiveCheckCallback liveCb_ = nullptr;
     void* liveUd_ = nullptr;
     float viewportScrollY_ = 0;
-    bool detached_ = false;
-    bool everAttached_ = false;
+    bool gone_ = false;
 
     // Skia surface (RGBA premul): GPU on the renderer's SkiaGpu, else raster.
     // On the GPU, unfinished_ marks a surface drawn (or read) since the last

@@ -358,30 +358,26 @@ void CanvasScene::flushCommands() {
 // ---------------------------------------------------------------------------
 
 void CanvasScene::rasterize(bool mayDefer) {
-    // Was the element removed from the DOM? An offscreen canvas (created and
-    // never appended, a sprite atlas say) reads as orphaned from frame one, so
-    // only one that has been seen attached counts as detached. The backing
-    // Element may have been freed since the scene was last touched;
-    // backingElementAlive() checks the pointer's value without dereferencing it.
+    // The backing Element may have been freed since the scene was last
+    // touched; backingElementAlive() checks the pointer's value without
+    // dereferencing it. An element out of the document (removed, or never
+    // put in: a sprite atlas) is still the page's canvas: its draws land in
+    // its bitmap, which shows again when it is put back. Only where it is on
+    // screen is unknown while it is out.
+    bool orphaned = false;
     if (detachedCb_) {
         if (!backingElementAlive()) { onElementFinalized(); return; }
-        bool orphaned = detachedCb_(detachedUd_);
-        if (!orphaned) everAttached_ = true;
-        if (orphaned && everAttached_) {
-            detached_ = true;
-            return;
-        }
+        orphaned = detachedCb_(detachedUd_);
     }
 
     // Query element layout position (display rect). Surface size comes from
     // queryLayoutWidth/Height so intrinsic canvas.width/height beats layout.
     float layoutX = 0, layoutY = 0, layoutW = 0, layoutH = 0;
-    if (layoutCb_) {
+    if (layoutCb_ && !orphaned) {
         layoutCb_(layoutUd_, layoutX, layoutY, layoutW, layoutH);
+        screenX_ = layoutX;
+        screenY_ = layoutY - viewportScrollY_;
     }
-
-    screenX_ = layoutX;
-    screenY_ = layoutY - viewportScrollY_;
 
     int canvasW = queryLayoutWidth();
     int canvasH = queryLayoutHeight();

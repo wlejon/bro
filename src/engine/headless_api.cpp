@@ -213,14 +213,14 @@ void Engine::flush() {
     // (render/gpu_image_upload.h); capturePixels and readbacks never defer.
     for (auto& cs : canvasScenes_) {
         cs->rasterize(/*mayDefer=*/true);
-        if (!cs->isDetached()) continue;
+        if (!cs->elementGone()) continue;
         canvasSceneRegistry_.erase(cs->sceneId());
         if (auto* el = static_cast<dom::Element*>(cs->backingElement()))
             el->setCanvasScene(nullptr);
     }
     canvasScenes_.erase(
         std::remove_if(canvasScenes_.begin(), canvasScenes_.end(),
-            [](auto& cs) { return cs->isDetached(); }),
+            [](auto& cs) { return cs->elementGone(); }),
         canvasScenes_.end());
 
     // Headless has no present: the first flush after the page loaded is its
@@ -400,7 +400,7 @@ std::vector<uint8_t> Engine::capturePixels() {
     }
     canvasScenes_.erase(
         std::remove_if(canvasScenes_.begin(), canvasScenes_.end(),
-            [](auto& cs) { return cs->isDetached(); }),
+            [](auto& cs) { return cs->elementGone(); }),
         canvasScenes_.end());
 
     if (isSystemVisible()) {

@@ -212,15 +212,15 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
 
     for (auto& cs : canvasScenes_) {
         cs->setViewportScroll(scrollY_);
-        cs->checkDetached();
+        cs->checkElement();
     }
     for (auto& cs : canvasScenes_) {
-        if (!cs->isDetached()) continue;
+        if (!cs->elementGone()) continue;
         if (auto* el = static_cast<dom::Element*>(cs->backingElement()))
             el->setCanvasScene(nullptr);
     }
     for (auto it = canvasScenes_.begin(); it != canvasScenes_.end(); ) {
-        if ((*it)->isDetached()) {
+        if ((*it)->elementGone()) {
             canvasSceneRegistry_.erase((*it)->sceneId());
             canvasScenesDetached_.push_back(std::move(*it));
             it = canvasScenes_.erase(it);
