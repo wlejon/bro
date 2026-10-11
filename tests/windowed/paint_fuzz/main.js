@@ -34,7 +34,7 @@
             await wait(30);
             await frames(2);
             const img = presentedFrame();
-            if (img && last && PaintFuzz.diff(img, last).count === 0) return img;
+            if (img && last && PaintFuzz.same(img, last)) return img;
             last = img;
             if (Date.now() > deadline) return img;
         }

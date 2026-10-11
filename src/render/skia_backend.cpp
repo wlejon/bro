@@ -572,7 +572,9 @@ void SkiaRenderer::save() {
 }
 
 void SkiaRenderer::restore() {
-    if (canvas_) canvas_->restore();
+    // Never below the level a partial raster's damage clip is held at
+    // (enterCanvas): drawing past it would blend over pixels kept as they were.
+    if (canvas_ && canvas_->getSaveCount() > minSaveCount_) canvas_->restore();
 }
 
 void SkiaRenderer::saveLayerAlpha(uint8_t alpha) {
@@ -703,7 +705,7 @@ void SkiaRenderer::setClip(float x, float y, float w, float h) {
 
 void SkiaRenderer::resetClip() {
     if (!canvas_) return;
-    canvas_->restore();
+    if (canvas_->getSaveCount() > minSaveCount_) canvas_->restore();
     canvas_->save();
 }
 

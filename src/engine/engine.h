@@ -29,6 +29,7 @@
 #include "layout/draw_traversal.h"
 #include "layout/skia_text_metrics.h"
 #include "render/skia_backend.h"
+#include "render/damage.h"
 #include "util/asset_mounts.h"
 
 #if BRO_WITH_3D
@@ -751,10 +752,17 @@ private:
         float scale = 0.0f;
         int htmlLayerIdx = 0;
         std::vector<UILayer> layers;
+        // A partial pass's scratch surfaces, one per HTML surface it redraws.
+        std::vector<render::SkiaRenderer::LayerSurface> scratch;
     };
 
+    // The damage a new base recording brings over the last (render/damage.h);
+    // everywhere with the paint cache off, so such a pass is a full raster.
+    render::Damage recordDamage(const render::CommandBuffer& older, const render::CommandBuffer& newer) const;
+
     // `held` (with `baseGen` and `scale`): skip the base replay when the pool
-    // already holds this recording, and note what it holds after one.
+    // already holds this recording, redraw only the damage since the one it
+    // holds when `history` has it, and note what it holds after.
     void replayAppLayers(render::SkiaRenderer* renderer,
                          const render::CommandBuffer& buffer,
                          std::vector<render::SkiaRenderer::LayerSurface>& pool,
@@ -762,7 +770,8 @@ private:
                          int surfW, int surfH,
                          std::vector<UILayer>& outLayers,
                          const render::CommandBuffer* promotedBuffer = nullptr,
-                         HtmlPoolState* held = nullptr, uint64_t baseGen = 0, float scale = 0.0f);
+                         HtmlPoolState* held = nullptr, uint64_t baseGen = 0, float scale = 0.0f,
+                         const render::DamageHistory* history = nullptr);
 
     void recordSystemPanelLayers(render::CommandBuffer& outBuffer,
                                  int vpW, int vpH);
@@ -934,6 +943,19 @@ private:
     // Bumped by every write of baseCommands_ (a record, a clear): a raster
     // pool copy replayed from an older one is stale (HtmlPoolState).
     uint64_t baseGeneration_ = 1;
+    // The recording before baseCommands_ (swapped in at each record), which
+    // the new one is diffed against, and the damage each generation brought:
+    // a pool copy holding an older generation redraws only their union
+    // (render/damage.h). Written by the main thread while the raster thread
+    // is idle, read by it at replay, like baseCommands_.
+    render::CommandBuffer prevBaseCommands_;
+    render::DamageHistory baseDamage_;
+    // Headless capture (capturePixels) keeps the same, over two pools it
+    // alternates between as the raster thread's double-buffered ones do.
+    render::CommandBuffer captureCommands_, capturePrevCommands_;
+    uint64_t captureGeneration_ = 1;
+    render::DamageHistory captureDamage_;
+    int captureNext_ = 0;
     std::unordered_set<dom::Element*> basePromotedSet_;
     bool baseValid_ = false;
     bool appBaseDirty_ = false;
@@ -995,6 +1017,9 @@ private:
 
     std::vector<render::SkiaRenderer::LayerSurface> screenshotHtmlPool_;
     int screenshotHtmlPoolW_ = 0, screenshotHtmlPoolH_ = 0;
+    std::vector<render::SkiaRenderer::LayerSurface> capturePool_[2];
+    int capturePoolW_[2] = {0, 0}, capturePoolH_[2] = {0, 0};
+    HtmlPoolState capturePoolState_[2];
     std::vector<render::SkiaRenderer::LayerSurface> screenshotSystemPool_;
     int screenshotSystemPoolW_ = 0, screenshotSystemPoolH_ = 0;
 

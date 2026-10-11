@@ -409,22 +409,43 @@ std::vector<uint8_t> Engine::capturePixels() {
     }
 
     std::vector<UILayer> appLayers, systemLayers;
-    render::CommandBuffer appCmds, sysCmds;
+    render::CommandBuffer scratchCmds, sysCmds;
     int insetTop = contentTop();
     int cw = std::max(1, w - contentRight());
     int ch = std::max(1, h - insetTop - contentBottom());
+
+    // With the paint cache on (always, but for a test's A/B) a capture is a
+    // windowed frame's pass: it records against the last capture and redraws
+    // only the damage since the recording the pool it lands in holds, the
+    // two pools alternating as the raster thread's do. Off, it records and
+    // rasters everything into a pool of its own and leaves those as they were.
+    const bool incremental = layout::DrawTraversal::paintCacheEnabled();
+    render::CommandBuffer& appCmds = incremental ? captureCommands_ : scratchCmds;
+    if (incremental) std::swap(captureCommands_, capturePrevCommands_);
 
     updateSelectionSnapshot();
     skia->beginFrame(w, h);
     recordAppLayers(appCmds, w, h,
                     insetTop, contentRight(), contentBottom(), scrollY_);
+    if (incremental) {
+        ++captureGeneration_;
+        captureDamage_.push(captureGeneration_, recordDamage(capturePrevCommands_, captureCommands_));
+    }
     recordSystemPanelLayers(sysCmds, w, h);
     recordIframeLayers();
     if (terminalLayers_) terminalLayers_->record(deviceScale_.render);
     skia->setDeviceScale(deviceScale_.render);
-    replayAppLayers(skia, appCmds,
-                    screenshotHtmlPool_, screenshotHtmlPoolW_, screenshotHtmlPoolH_,
-                    deviceScale_.toDevice(cw), deviceScale_.toDevice(ch), appLayers);
+    if (incremental) {
+        const int k = captureNext_;
+        captureNext_ ^= 1;
+        replayAppLayers(skia, appCmds, capturePool_[k], capturePoolW_[k], capturePoolH_[k],
+                        deviceScale_.toDevice(cw), deviceScale_.toDevice(ch), appLayers, nullptr,
+                        &capturePoolState_[k], captureGeneration_, deviceScale_.render, &captureDamage_);
+    } else {
+        replayAppLayers(skia, appCmds,
+                        screenshotHtmlPool_, screenshotHtmlPoolW_, screenshotHtmlPoolH_,
+                        deviceScale_.toDevice(cw), deviceScale_.toDevice(ch), appLayers);
+    }
     replaySystemPanelLayers(skia, sysCmds,
                             screenshotSystemPool_, screenshotSystemPoolW_,
                             screenshotSystemPoolH_,

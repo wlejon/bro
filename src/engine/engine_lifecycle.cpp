@@ -127,6 +127,10 @@ void Engine::teardown() {
 
     screenshotHtmlPool_.clear();
     screenshotSystemPool_.clear();
+    for (int i = 0; i < 2; ++i) {
+        capturePool_[i].clear();
+        capturePoolState_[i] = {};
+    }
     for (auto& d : iframeDocs_) {
         if (!d) continue;
         d->surface.reset();

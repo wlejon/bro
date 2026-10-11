@@ -154,6 +154,7 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     }
     render::CommandBuffer* outer = recorder_->buffer();
     const SpanMiss outerVolatile = std::exchange(spanVolatile_, SpanMiss::Count);
+    buf->setOwnerId(elem->nodeId());
     recorder_->setBuffer(buf.get());
     paintElement(elem, offsetX, offsetY);
     recorder_->setBuffer(outer);

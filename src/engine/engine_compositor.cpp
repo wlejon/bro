@@ -174,6 +174,16 @@ UILayer htmlLayerOf(const render::LayerSurface& s) {
 
 } // namespace
 
+render::Damage Engine::recordDamage(const render::CommandBuffer& older,
+                                    const render::CommandBuffer& newer) const {
+    if (!layout::DrawTraversal::paintCacheEnabled()) {
+        render::Damage all;
+        all.setFull();
+        return all;
+    }
+    return render::diffDamage(older, newer);
+}
+
 void Engine::replayAppLayers(render::SkiaRenderer* renderer,
                              const render::CommandBuffer& buffer,
                              std::vector<render::SkiaRenderer::LayerSurface>& pool,
@@ -181,7 +191,8 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
                              int surfW, int surfH,
                              std::vector<UILayer>& outLayers,
                              const render::CommandBuffer* promotedBuffer,
-                             HtmlPoolState* held, uint64_t baseGen, float scale) {
+                             HtmlPoolState* held, uint64_t baseGen, float scale,
+                             const render::DamageHistory* history) {
     if (!renderer) return;
 
     // surfW/surfH are the *content* dimensions (viewport minus engine-reserved
@@ -200,17 +211,68 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
 
     int htmlLayerIdx = 0;
     sk_sp<SkSurface> origSurface = sk_ref_sp(renderer->surface());
-    // This pool copy already holds this base recording at this scale (its
-    // surfaces are drawn only here): its HTML layers stand, and only the
-    // promoted layer above them is drawn again. A compositor-carried
-    // animation used to replay the whole document every frame.
-    if (held && held->baseGen == baseGen && held->scale == scale &&
+
+    // What of the base this pool copy has to draw again. Its surfaces are
+    // drawn only here, so when it holds an earlier recording at this scale,
+    // only what changed since (render/damage.h) is cleared and replayed, and
+    // when it holds this one, nothing: its HTML layers stand and only the
+    // promoted layer above them is drawn again.
+    render::Damage damage;
+    damage.setFull();
+    if (held && held->baseGen != 0 && held->scale == scale &&
         held->htmlLayerIdx < static_cast<int>(pool.size())) {
+        if (held->baseGen == baseGen) damage = render::Damage{};
+        else if (!history || !history->since(held->baseGen, baseGen, damage)) damage.setFull();
+    }
+    SkIRect clip = SkIRect::MakeEmpty();
+    if (!damage.full && !damage.empty) {
+        clip = SkRect::MakeLTRB(damage.x0 * scale, damage.y0 * scale, damage.x1 * scale, damage.y1 * scale)
+                   .roundOut();
+        // Rounded out to a 16 px grid, so a damage that moves by a pixel or
+        // two between passes keeps the same rect (and the same scratch size).
+        constexpr int kGrid = 16;
+        clip.setLTRB(clip.fLeft & ~(kGrid - 1), clip.fTop & ~(kGrid - 1),
+                     (clip.fRight + kGrid - 1) & ~(kGrid - 1), (clip.fBottom + kGrid - 1) & ~(kGrid - 1));
+        if (!clip.intersect(SkIRect::MakeWH(surfW, surfH))) damage = render::Damage{};    }
+    if (!damage.full && damage.empty) {
         outLayers = held->layers;
         htmlLayerIdx = held->htmlLayerIdx;
+        held->baseGen = baseGen;
     } else {
+    // A partial pass draws each HTML surface's damage, and a margin around
+    // it, into a scratch surface of its own, then puts the damage rect back
+    // into the pool's surface pixel for pixel. Drawn under a clip in place,
+    // the pixels along the clip's edge came out antialiased differently from
+    // a whole pass (Skia picks its coverage method with the clip in view) and
+    // stayed so, kept by every pass after; the scratch's own edges are where
+    // that happens now, a margin away from anything put back.
+    const bool partialPass = !damage.full;
+    constexpr int kMargin = 32;
+    SkIRect area = clip.makeOutset(kMargin, kMargin);
+    if (partialPass && !area.intersect(SkIRect::MakeWH(surfW, surfH))) area = clip;
     if (held) held->baseGen = 0;
-    renderer->switchSurface(pool[0].surface);
+    bool structureChanged = false;  // a surface new to the pool: the pass has to be whole
+    auto enterHtml = [&](int k) {
+        if (!partialPass) {
+            renderer->switchSurface(pool[k].surface);
+            return;
+        }
+        auto& temps = held->scratch;
+        if (static_cast<int>(temps.size()) <= k) temps.resize(k + 1);
+        auto& t = temps[k];
+        if (!t.surface || t.surface->width() < area.width() || t.surface->height() < area.height()) {
+            // Room to spare, so the next pass's damage fits as it moves.
+            const int w = std::min(surfW, (area.width() + 255) & ~255);
+            const int h = std::min(surfH, (area.height() + 255) & ~255);
+            t = renderer->createLayerSurface(std::max(w, area.width()), std::max(h, area.height()));
+        }
+        renderer->switchSurface(t.surface, nullptr, {area.fLeft, area.fTop});
+    };
+    auto leaveHtml = [&](int k) {
+        if (!partialPass) return;
+        renderer->putSurfaceRect(held->scratch[k].surface, {area.fLeft, area.fTop}, pool[k].surface, clip);
+    };
+    enterHtml(0);
 
     render::CommandReplayer replayer(renderer);
     // An HTML layer above a break that nothing drew into is left out: it
@@ -221,10 +283,15 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
     replayer.setLayerBreakHandler([&](const render::LayerSource& source, const render::LayerQuad& quad) {
         int prevIdx = htmlLayerIdx;
         htmlLayerIdx++;
+        // A partial pass splits at the same breaks as the recording its pool
+        // holds (damage is whole wherever the breaks differ): a surface new
+        // to the pool means this one did not, and is drawn again whole.
         while (htmlLayerIdx >= static_cast<int>(pool.size())) {
             pool.push_back(renderer->createLayerSurface(surfW, surfH));
+            if (partialPass) structureChanged = true;
         }
-        renderer->switchSurface(pool[htmlLayerIdx].surface);
+        leaveHtml(prevIdx);
+        enterHtml(htmlLayerIdx);
 
         if (prevIdx == 0 || replayer.draws() != drawsAtSwitch) outLayers.push_back(htmlLayerOf(pool[prevIdx]));
         drawsAtSwitch = replayer.draws();
@@ -232,9 +299,19 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
     });
 
     replayer.replay(buffer);
+    leaveHtml(htmlLayerIdx);
 
     // Capture the trailing HTML layer.
     renderer->switchSurface(origSurface);
+    if (structureChanged) {
+        // Not what a partial pass may do: the whole pass, from scratch.
+        outLayers.clear();
+        held->baseGen = 0;
+        held->scale = 0.0f;
+        replayAppLayers(renderer, buffer, pool, poolW, poolH, surfW, surfH, outLayers, promotedBuffer, held,
+                        baseGen, scale, nullptr);
+        return;
+    }
     if (htmlLayerIdx == 0 || replayer.draws() != drawsAtSwitch) outLayers.push_back(htmlLayerOf(pool[htmlLayerIdx]));
     if (held) {
         held->baseGen = baseGen;

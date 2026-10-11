@@ -30,7 +30,27 @@ public:
         blobs_.clear();
         pixels_.clear();
         spans_.clear();
+        ownerId_ = 0;
+        hasBackdrop_ = false;
+        boundsState_ = 0;
     }
+
+    // The element a span was recorded for (its node id; 0 for a buffer that
+    // is not a span): two recordings of one element are diffed against each
+    // other for the damage between them (render/damage.h).
+    void setOwnerId(uint64_t id) { ownerId_ = id; }
+    uint64_t ownerId() const { return ownerId_; }
+    // A backdrop filter was recorded here or in a span it holds: what it
+    // shows depends on pixels anywhere under it, so no damage rect can
+    // bound a change (render/damage.h).
+    void noteBackdrop() { hasBackdrop_ = true; }
+    bool hasBackdrop() const { return hasBackdrop_; }
+
+    // render/damage.cpp's memo of this buffer's bounds in its own space
+    // (main thread only, after the buffer is recorded): 0 not computed,
+    // 1 bounded (boundsLTRB), 2 unbounded.
+    mutable int boundsState_ = 0;
+    mutable float boundsLTRB_[4] = {0, 0, 0, 0};
 
     void reserve(size_t cmdHint, size_t arenaHint) {
         cmds_.reserve(cmdHint);
@@ -91,7 +111,7 @@ public:
     // reference like a text blob. A span is never written again once
     // recorded, so this buffer and the cache that made it can share it, and
     // a replay on another thread reads it however long it takes.
-    uint32_t pushSpan(std::shared_ptr<const CommandBuffer> span) {
+    uint32_t pushSpanBuffer(std::shared_ptr<const CommandBuffer> span) {
         spans_.push_back(std::move(span));
         return static_cast<uint32_t>(spans_.size() - 1);
     }
@@ -133,6 +153,8 @@ private:
     std::vector<sk_sp<SkTextBlob>> blobs_;
     std::vector<SharedPixels>      pixels_;
     std::vector<std::shared_ptr<const CommandBuffer>> spans_;
+    uint64_t ownerId_ = 0;
+    bool hasBackdrop_ = false;
 };
 
 } // namespace bro::render

@@ -271,7 +271,13 @@ void Engine::performAppReload() {
     promotedElements_.clear();
     basePromotedSet_.clear();
     baseCommands_.clear();
+    prevBaseCommands_.clear();
     ++baseGeneration_;
+    baseDamage_.clear();
+    captureCommands_.clear();
+    capturePrevCommands_.clear();
+    ++captureGeneration_;
+    captureDamage_.clear();
     baseValid_ = false;
     appBaseDirty_ = true;
     lastLayoutContentW_ = lastLayoutContentH_ = -1;

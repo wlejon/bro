@@ -212,32 +212,70 @@
         return { build, step };
     }
 
-    // Pixels apart between two RGBA frames: { count, first: [x, y, a, b] }.
+    // Whether two RGBA frames are the same, bit for bit.
+    function same(a, b) {
+        if (!a || !b || a.width !== b.width || a.height !== b.height) return false;
+        const wa = new Uint32Array(a.data.buffer, a.data.byteOffset, a.data.length >> 2);
+        const wb = new Uint32Array(b.data.buffer, b.data.byteOffset, b.data.length >> 2);
+        for (let p = 0; p < wa.length; ++p) if (wa[p] !== wb[p]) return false;
+        return true;
+    }
+
+    // A frame that redrew only its damage (cached) against one drawn whole
+    // (full). They are not bit-identical: Skia antialiases an edge a little
+    // differently under a clip (CPU and GPU both pick their coverage method
+    // with it in view), and what a pass keeps from the passes before carries
+    // that. That differs along edges, a pixel wide. A span reused when it had
+    // changed, or damage that missed something, leaves an area. So a pixel
+    // is apart when a channel differs by more than EDGE, and the frames
+    // differ (`count`) at every one with at least 5 apart in its 3x3
+    // neighbourhood; `edge` counts the rest. PAINT_FUZZ_EDGE tunes it.
+    const EDGE = Number((typeof process !== 'undefined' && process.env && process.env.PAINT_FUZZ_EDGE) || 16);
     function diff(a, b) {
-        if (!a || !b) return { count: -1, first: null };
+        if (!a || !b) return { count: -1, edge: 0, first: null };
         if (a.width !== b.width || a.height !== b.height)
-            return { count: -2, first: [a.width, a.height, b.width, b.height] };
+            return { count: -2, edge: 0, first: [a.width, a.height, b.width, b.height] };
         const da = a.data, db = b.data;
+        const W = a.width, H = a.height;
         // A pixel a word: a quarter of the compares.
         const wa = new Uint32Array(da.buffer, da.byteOffset, da.length >> 2);
         const wb = new Uint32Array(db.buffer, db.byteOffset, db.length >> 2);
-        let count = 0, firstAt = -1;
-        const n = wa.length;
-        for (let p = 0; p < n; ++p) {
-            if (wa[p] !== wb[p]) {
+        const apart = new Uint8Array(W * H);
+        const marked = [];
+        for (let p = 0; p < wa.length; ++p) {
+            if (wa[p] === wb[p]) continue;
+            const i = p * 4;
+            if (Math.abs(da[i] - db[i]) > EDGE || Math.abs(da[i + 1] - db[i + 1]) > EDGE ||
+                Math.abs(da[i + 2] - db[i + 2]) > EDGE || Math.abs(da[i + 3] - db[i + 3]) > EDGE) {
+                apart[p] = 1;
+                marked.push(p);
+            }
+        }
+        let count = 0, edge = 0, firstAt = -1;
+        for (const p of marked) {
+            const x = p % W, y = (p - x) / W;
+            let near = 0;
+            for (let dy = -1; dy <= 1; ++dy)
+                for (let dx = -1; dx <= 1; ++dx) {
+                    const xx = x + dx, yy = y + dy;
+                    if (xx >= 0 && yy >= 0 && xx < W && yy < H && apart[yy * W + xx]) ++near;
+                }
+            if (near >= 5) {
                 if (firstAt < 0) firstAt = p;
                 ++count;
+            } else {
+                ++edge;
             }
         }
         let first = null;
         if (firstAt >= 0) {
             const i = firstAt * 4;
-            first = [firstAt % a.width, Math.floor(firstAt / a.width),
+            first = [firstAt % W, Math.floor(firstAt / W),
                      [da[i], da[i + 1], da[i + 2], da[i + 3]].join(','),
                      [db[i], db[i + 1], db[i + 2], db[i + 3]].join(',')];
         }
-        return { count, first };
+        return { count, edge, first };
     }
 
-    globalThis.PaintFuzz = { create, diff };
+    globalThis.PaintFuzz = { create, diff, same };
 })();

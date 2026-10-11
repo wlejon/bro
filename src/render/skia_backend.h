@@ -150,8 +150,23 @@ public:
 
     /// Switch the active drawing surface mid-frame (for compositing layers).
     /// Returns the previous surface, with everything drawn on it applied (and,
-    /// outside a frame, finished). The new surface is cleared to transparent.
-    sk_sp<SkSurface> switchSurface(sk_sp<SkSurface> newSurface);
+    /// outside a frame, finished). The new surface is cleared to transparent;
+    /// with `damage` (device px), only that rect is cleared and everything
+    /// drawn until the next switch is clipped to it, so the rest of the
+    /// surface keeps what it held (a partial raster, render/damage.h).
+    /// `origin` (device px) is the point of the full layer the new surface's
+    /// top-left stands for: a surface holding part of a layer (a partial
+    /// raster's scratch, Engine::replayAppLayers) draws its part.
+    sk_sp<SkSurface> switchSurface(sk_sp<SkSurface> newSurface, const SkIRect* damage = nullptr,
+                                   SkIPoint origin = {0, 0});
+
+    /// Put `rect` (device px of `dst`) of what `src` holds into `dst`,
+    /// replacing those pixels, `src`'s top-left standing for `srcOrigin` of
+    /// `dst`. A partial raster's scratch going back into its layer surface
+    /// (Engine::replayAppLayers). Finishes `src` first if it is the surface
+    /// being drawn; drawn on `dst`'s own canvas, and submitted with the frame.
+    void putSurfaceRect(const sk_sp<SkSurface>& src, SkIPoint srcOrigin, const sk_sp<SkSurface>& dst,
+                        const SkIRect& rect);
 
     /// Device pixels per recorded (CSS) unit for the surfaces entered from
     /// here on: beginFrame() and switchSurface() install it as the canvas's
@@ -226,7 +241,9 @@ private:
     std::vector<std::function<void()>> afterSubmit_;
     // Clear the current canvas and set it up for a frame: base matrix at the
     // device scale, then the base save().
-    void enterCanvas();
+    void enterCanvas(const SkIRect* damage = nullptr, SkIPoint origin = {0, 0});
+    // The save count restore() stops at: 2 while a damage clip is held.
+    int minSaveCount_ = 1;
 
     struct FontEntry {
         sk_sp<SkTypeface> typeface;

@@ -60,7 +60,8 @@ void SkiaRenderer::afterSubmit(std::function<void()> fn) {
     afterSubmit_.push_back(std::move(fn));
 }
 
-sk_sp<SkSurface> SkiaRenderer::switchSurface(sk_sp<SkSurface> newSurface) {
+sk_sp<SkSurface> SkiaRenderer::switchSurface(sk_sp<SkSurface> newSurface, const SkIRect* damage,
+                                             SkIPoint origin) {
     if (canvas_) canvas_->restore();
     endRecording();
 
@@ -85,7 +86,7 @@ sk_sp<SkSurface> SkiaRenderer::switchSurface(sk_sp<SkSurface> newSurface) {
     } else if (surface_) {
         canvas_ = surface_->getCanvas();
     }
-    if (canvas_) enterCanvas();
+    if (canvas_) enterCanvas(damage, origin);
 
     return prev;
 }
@@ -180,10 +181,49 @@ void SkiaRenderer::evictGpuImages(bool all) {
     }
 }
 
-void SkiaRenderer::enterCanvas() {
+void SkiaRenderer::putSurfaceRect(const sk_sp<SkSurface>& src, SkIPoint srcOrigin, const sk_sp<SkSurface>& dst,
+                                  const SkIRect& rect) {
+    if (!src || !dst) return;
+    if (surface_ == src) {
+        if (canvas_) canvas_->restore();
+        endRecording();
+        canvas_ = nullptr;
+        surface_ = nullptr;
+    }
+    SkiaGpu::Lock lock;
+    if (gpu_) lock = gpu_->lock();
+    sk_sp<SkImage> picture = src->makeImageSnapshot();
+    SkCanvas* c = dst->getCanvas();
+    if (!picture || !c) return;
+    // Whatever an earlier entry left on this surface's canvas goes first.
+    c->restoreToCount(1);
+    c->save();
+    c->resetMatrix();
+    c->clipIRect(rect);
+    SkPaint put;
+    put.setBlendMode(SkBlendMode::kSrc);
+    c->drawImage(picture, static_cast<float>(srcOrigin.fX), static_cast<float>(srcOrigin.fY), SkSamplingOptions(),
+                 &put);
+    c->restore();
+    if (gpu_ && inFrame_ && std::find(touched_.begin(), touched_.end(), dst) == touched_.end())
+        touched_.push_back(dst);
+}
+
+void SkiaRenderer::enterCanvas(const SkIRect* damage, SkIPoint origin) {
     if (!canvas_) return;
     canvas_->restoreToCount(1);
     canvas_->resetMatrix();
+    if (origin.fX || origin.fY)
+        canvas_->translate(static_cast<float>(-origin.fX), static_cast<float>(-origin.fY));
+    minSaveCount_ = 1;
+    if (damage) {
+        // Its own save level, under the one switchSurface's restore pops and
+        // the one resetClip restores to: nothing drawn can lift the clip
+        // (restore() stops at it), and the next entry's restoreToCount(1) does.
+        canvas_->save();
+        canvas_->clipIRect(*damage);
+        minSaveCount_ = 2;
+    }
     canvas_->clear(SK_ColorTRANSPARENT);
     if (deviceScale_ != 1.0f) canvas_->scale(deviceScale_, deviceScale_);
     canvas_->save();

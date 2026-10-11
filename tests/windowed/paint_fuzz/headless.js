@@ -14,6 +14,7 @@ frameImage();   // the first frame records every span
 
 const history = [];
 let failed = false;
+let edgePixels = 0;  // apart along an edge only: antialiasing under a damage clip (steps.js)
 for (let i = 0; i < STEPS && !failed; ++i) {
     const s = fuzz.step();
     history.push(i + ':' + s.what);
@@ -26,6 +27,7 @@ for (let i = 0; i < STEPS && !failed; ++i) {
     const full = frameImage();
     setPaintCache(true);
     const d = PaintFuzz.diff(cached, full);
+    edgePixels += d.edge;
     if (d.count !== 0) {
         failed = true;
         assert(false, `paint cache fuzz seed=${seed}: step ${i} (${s.what}) — ${d.count} pixels differ from a full ` +
@@ -34,6 +36,6 @@ for (let i = 0; i < STEPS && !failed; ++i) {
     }
 }
 const ps = perf.stats().paint;
-console.log(`PAINT_FUZZ seed=${seed} steps=${history.length} ${failed ? 'FAILED' : 'ok'} reused=${ps.reused} ` +
+console.log(`PAINT_FUZZ seed=${seed} steps=${history.length} ${failed ? 'FAILED' : 'ok'} edgePixels=${edgePixels} reused=${ps.reused} ` +
             `recorded=${ps.recorded} misses=${JSON.stringify(ps.misses)}`);
 assert(failed || ps.reused > 0, `paint cache fuzz seed=${seed}: no span was ever reused, so nothing was tested`);

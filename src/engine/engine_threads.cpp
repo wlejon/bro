@@ -238,7 +238,7 @@ void Engine::rasterThreadFunc() {
                         contentW, contentH,
                         backBuf.appLayers,
                         &backBuf.promotedCommands,
-                        &htmlPoolState_[back], baseGeneration_, snap.scale);
+                        &htmlPoolState_[back], baseGeneration_, snap.scale, &baseDamage_);
         replaySystemPanelLayers(rasterRenderer.get(), backBuf.systemCommands,
                                 systemSurfacePool_[back], systemSurfacePoolW_[back],
                                 systemSurfacePoolH_[back],

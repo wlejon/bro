@@ -351,6 +351,7 @@ void RecordingRenderer::drawBackdropFilter(std::span<const CssFilterParams> filt
                                            float x, float y, float w, float h, const Radii& r,
                                            float opacity) {
     if (!buffer_) { measureRenderer_->drawBackdropFilter(filters, x, y, w, h, r, opacity); return; }
+    buffer_->noteBackdrop();
     Cmd_DrawBackdropFilter cmd{};
     auto [off, count] = buffer_->pushSpan(filters);
     cmd.filtersOffset = off;
@@ -450,7 +451,8 @@ void RecordingRenderer::recordSurfaceBreak() {
 
 void RecordingRenderer::recordSpan(std::shared_ptr<const CommandBuffer> span) {
     if (!span || span->commandCount() == 0) return;
-    buffer_->append(Cmd_ReplaySpan{buffer_->pushSpan(std::move(span))});
+    if (span->hasBackdrop()) buffer_->noteBackdrop();
+    buffer_->append(Cmd_ReplaySpan{buffer_->pushSpanBuffer(std::move(span))});
 }
 
 void RecordingRenderer::recordBlitCanvasInline(void* canvasScene,

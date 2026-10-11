@@ -67,6 +67,7 @@ add_library(bro_render STATIC
     filter_chain.cpp
     recording_renderer.cpp
     command_replayer.cpp
+    damage.cpp
     image_cache.cpp
     image_store.cpp
     image_source.cpp
