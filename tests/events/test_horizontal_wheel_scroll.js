@@ -59,10 +59,19 @@ assert(outer.scrollLeft === 0, `and at 0 (got ${outer.scrollLeft})`);
 wheel(cx, cy, 1, 0);
 assert(outer.scrollLeft === 0, `a vertical wheel leaves scrollLeft alone (got ${outer.scrollLeft})`);
 
-// Shift + vertical wheel scrolls horizontally; wheel-down goes right.
+// Shift + vertical wheel scrolls horizontally; wheel-down goes right. On
+// macOS the OS turns it horizontal before bro hears it (platform/wheel.h), so
+// what reaches bro there is already the horizontal delta, and a vertical one
+// that arrives with Shift held is left vertical.
 keyDown(SDLK_LSHIFT);
 wheelDeltaX = null;
-wheel(cx, cy, 1, 0);
+if (process.platform === 'darwin') {
+    wheel(cx, cy, 1, 0);
+    assert(outer.scrollLeft === 0, `macOS: a vertical delta with Shift held stays vertical (got ${outer.scrollLeft})`);
+    wheel(cx, cy, 0, 1);  // what AppKit hands over for shift+wheel-down
+} else {
+    wheel(cx, cy, 1, 0);
+}
 keyUp(SDLK_LSHIFT);
 assert(outer.scrollLeft === step, `shift+wheel-down scrolls right one step (got ${outer.scrollLeft})`);
 assert(wheelDeltaX > 0, `and reaches the page as deltaX (got ${wheelDeltaX})`);
