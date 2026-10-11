@@ -22,12 +22,14 @@ layout::ScrollLayerRecord ScrollLayerSet::beginScrollLayer(dom::Element* scrolle
     auto& slot = layers_[scroller->nodeId()];
     if (!slot) slot = std::make_unique<Layer>();
     Layer& l = *slot;
+    if (l.parts.empty()) l.parts.push_back(std::make_unique<Part>());
+    Part& content = *l.parts[0];
     const float winW = place.viewW + 2 * kMargin, winH = place.viewH + 2 * kMargin;
     // The recording stands while nothing under the scroller was stamped
     // since it was made and its window still holds the view.
     const bool holds = place.viewX >= l.winX && place.viewY >= l.winY &&
                        place.viewX + place.viewW <= l.winX + l.winW && place.viewY + place.viewH <= l.winY + l.winH;
-    const bool reuse = mayReuse && l.reusable && l.epoch != 0 && scroller->paintStamp() < l.epoch &&
+    const bool reuse = mayReuse && content.reusable && l.epoch != 0 && scroller->paintStamp() < l.epoch &&
                        l.winW == winW && l.winH == winH && holds;
     l.contentX = place.contentX;
     l.contentY = place.contentY;
@@ -40,27 +42,58 @@ layout::ScrollLayerRecord ScrollLayerSet::beginScrollLayer(dom::Element* scrolle
     l.liveX.store(place.scrollX, std::memory_order_relaxed);
     l.liveY.store(place.scrollY, std::memory_order_relaxed);
     ++l.passes;
+    l.partsThisPass = 1;
     // The pass's scrollbars say these again (setThumb, setHasNestedScroller).
     l.thumbs[0].on = l.thumbs[1].on = false;
     l.nestedScroller = false;
     l.seen = true;
     if (!reuse) {
-        l.cmd.clear();
+        content.cmd.clear();
         l.winX = place.viewX - kMargin;
         l.winY = place.viewY - kMargin;
         l.winW = winW;
         l.winH = winH;
         l.epoch = dom::Element::paintEpoch();
-        l.reusable = false;
-        l.recorded = true;
+        content.reusable = false;
+        content.recorded = true;
     }
-    return {&l.cmd, reuse, l.winX, l.winY, l.winW, l.winH};
+    return {&content.cmd, reuse, l.winX, l.winY, l.winW, l.winH};
 }
 
 void ScrollLayerSet::endScrollLayer(dom::Element* scroller, bool reusable) {
     if (!scroller) return;
     auto it = layers_.find(scroller->nodeId());
-    if (it != layers_.end()) it->second->reusable = reusable;
+    if (it != layers_.end() && !it->second->parts.empty()) it->second->parts[0]->reusable = reusable;
+}
+
+layout::ScrollLayerRecord ScrollLayerSet::beginScrollPiece(dom::Element* scroller, uint32_t index,
+                                                           const std::vector<uint32_t>& entries, bool mayReuse) {
+    if (!scroller) return {};
+    auto it = layers_.find(scroller->nodeId());
+    if (it == layers_.end() || !it->second->seen) return {};
+    Layer& l = *it->second;
+    const size_t at = static_cast<size_t>(index) + 1;
+    if (at != l.partsThisPass) return {};  // pieces come in order
+    if (l.parts.size() <= at) l.parts.push_back(std::make_unique<Part>());
+    Part& p = *l.parts[at];
+    ++l.partsThisPass;
+    // It stands with the layer's content, when it holds the same entries.
+    const bool reuse = mayReuse && p.reusable && p.entries == entries;
+    if (!reuse) {
+        p.cmd.clear();
+        p.entries = entries;
+        p.reusable = false;
+        p.recorded = true;
+    }
+    return {&p.cmd, reuse, l.winX, l.winY, l.winW, l.winH};
+}
+
+void ScrollLayerSet::endScrollPiece(dom::Element* scroller, uint32_t index, bool reusable) {
+    if (!scroller) return;
+    auto it = layers_.find(scroller->nodeId());
+    if (it == layers_.end()) return;
+    const size_t at = static_cast<size_t>(index) + 1;
+    if (at < it->second->parts.size()) it->second->parts[at]->reusable = reusable;
 }
 
 void ScrollLayerSet::setThumb(uint32_t elementId, int axis, float w, float h, float crossPos, float scrollRange,
@@ -87,7 +120,9 @@ bool ScrollLayerSet::scrollTo(dom::Element* scroller, float scrollX, float scrol
     auto it = layers_.find(scroller->nodeId());
     if (it == layers_.end()) return false;
     Layer& l = *it->second;
-    if (!l.reusable || l.nestedScroller || l.epoch == 0 || scroller->paintStamp() >= l.epoch) return false;
+    if (l.nestedScroller || l.epoch == 0 || scroller->paintStamp() >= l.epoch) return false;
+    for (size_t i = 0; i < l.partsThisPass && i < l.parts.size(); ++i)
+        if (!l.parts[i]->reusable) return false;
     const float vx = scrollX + l.viewOffX, vy = scrollY + l.viewOffY;
     if (vx < l.winX || vy < l.winY || vx + l.viewW > l.winX + l.winW || vy + l.viewH > l.winY + l.winH) return false;
     if (!wholePixels((scrollX - l.scrollX) * scale) || !wholePixels((scrollY - l.scrollY) * scale)) return false;
@@ -102,8 +137,14 @@ void ScrollLayerSet::beginPass() {
 
 void ScrollLayerSet::endPass() {
     for (auto it = layers_.begin(); it != layers_.end();) {
-        if (!it->second->seen) it = layers_.erase(it);
-        else ++it;
+        if (!it->second->seen) {
+            it = layers_.erase(it);
+            continue;
+        }
+        // Pieces past the ones this pass recorded are gone.
+        Layer& l = *it->second;
+        if (l.parts.size() > l.partsThisPass) l.parts.resize(l.partsThisPass);
+        ++it;
     }
 }
 
@@ -112,16 +153,22 @@ void ScrollLayerSet::replay(render::SkiaRenderer* renderer) {
     for (auto& [id, lp] : layers_) {
         Layer& l = *lp;
         const float s = renderer->deviceScale();
-        // What this pass publishes: the content's picture when it was drawn
-        // again, each thumb's when it was, and always the pass's scroll.
+        // What this pass publishes: the pictures of the parts drawn again,
+        // each thumb's when it was, and always the pass's scroll.
         struct Update {
-            bool content = false;
-            Shown pic;
+            size_t parts = 0;
+            std::vector<bool> drawn;
+            std::vector<Picture> pictures;
+            bool placed = false;  // the window and phase below are new
+            float winX = 0, winY = 0, phaseX = 0, phaseY = 0;
             bool thumbDrawn[2] = {false, false};
             ThumbShown thumb[2];
             float scrollX = 0, scrollY = 0;
             uint64_t passes = 0;
         } up;
+        up.parts = l.parts.size();
+        up.drawn.assign(up.parts, false);
+        up.pictures.resize(up.parts);
         up.scrollX = l.scrollX;
         up.scrollY = l.scrollY;
         up.passes = l.passes;
@@ -129,49 +176,62 @@ void ScrollLayerSet::replay(render::SkiaRenderer* renderer) {
 
         // The window in device px at the renderer's scale, its corner at the
         // sub-pixel phase where the pass's scroll puts it: the compositor
-        // draws the surface pixel for pixel at a whole device pixel, so what
-        // it holds is rastered exactly where painting in place would put it.
+        // draws a surface pixel for pixel at a whole device pixel, so what it
+        // holds is rastered exactly where painting in place would put it. A
+        // new window, phase or scale draws every part again.
         const float px = phase(l.contentX + l.winX - l.scrollX, s), py = phase(l.contentY + l.winY - l.scrollY, s);
-        const bool draw = l.recorded || s != l.rasterScale || l.winX != l.rasterWinX || l.winY != l.rasterWinY ||
-                          !samePhase(px, l.rasterPhaseX) || !samePhase(py, l.rasterPhaseY);
-        l.recorded = false;
-        if (draw) {
-            const int w = std::max(1, static_cast<int>(std::ceil(l.winW * s + px)));
-            const int h = std::max(1, static_cast<int>(std::ceil(l.winH * s + py)));
-            if (l.surfW != w || l.surfH != h) {
-                l.spare.reset();
-                l.surfW = w;
-                l.surfH = h;
+        const bool all = s != l.rasterScale || l.winX != l.rasterWinX || l.winY != l.rasterWinY ||
+                         !samePhase(px, l.rasterPhaseX) || !samePhase(py, l.rasterPhaseY);
+        const int w = std::max(1, static_cast<int>(std::ceil(l.winW * s + px)));
+        const int h = std::max(1, static_cast<int>(std::ceil(l.winH * s + py)));
+        for (size_t i = 0; i < l.parts.size(); ++i) {
+            Part& p = *l.parts[i];
+            if (!all && !p.recorded) continue;
+            p.recorded = false;
+            up.drawn[i] = true;
+            // A part that paints nothing has no picture (a scroller whose
+            // rows are all positioned: its content).
+            if (p.cmd.commandCount() == 0) {
+                p.surface.reset();
+                p.spare.reset();
+                p.surfW = p.surfH = 0;
+                continue;
             }
-            renderer->fitLayerSurface(l.surface, w, h);
-            if (l.surface) {
-                auto prev = renderer->switchSurface(l.surface.surface);
-                renderer->translate(px / s - l.winX, py / s - l.winY);
-                render::CommandReplayer replayer(renderer);
-                replayer.setLayerBreakHandler([](const render::LayerSource&, const render::LayerQuad&) {});
-                replayer.replay(l.cmd);
-                renderer->switchSurface(prev);
-                rasters_.fetch_add(1, std::memory_order_relaxed);
-                l.rasterScale = s;
-                l.rasterWinX = l.winX;
-                l.rasterWinY = l.winY;
-                l.rasterPhaseX = px;
-                l.rasterPhaseY = py;
-                up.content = true;
-                up.pic.winX = l.winX;
-                up.pic.winY = l.winY;
-                up.pic.phaseX = px;
-                up.pic.phaseY = py;
-                // As an iframe's: a CPU snapshot, or the GPU image once
-                // submitted (the next raster draws into the other surface).
-                if (l.surface.isGpu()) {
-                    up.pic.gpu = l.surface.image;
-                    std::swap(l.surface, l.spare);
-                    gpu = true;
-                } else {
-                    up.pic.image = l.surface.surface->makeImageSnapshot();
-                }
+            if (p.surfW != w || p.surfH != h) {
+                p.spare.reset();
+                p.surfW = w;
+                p.surfH = h;
             }
+            renderer->fitLayerSurface(p.surface, w, h);
+            if (!p.surface) continue;
+            auto prev = renderer->switchSurface(p.surface.surface);
+            renderer->translate(px / s - l.winX, py / s - l.winY);
+            render::CommandReplayer replayer(renderer);
+            replayer.setLayerBreakHandler([](const render::LayerSource&, const render::LayerQuad&) {});
+            replayer.replay(p.cmd);
+            renderer->switchSurface(prev);
+            rasters_.fetch_add(1, std::memory_order_relaxed);
+            // As an iframe's: a CPU snapshot, or the GPU image once submitted
+            // (the next raster draws into the other surface).
+            if (p.surface.isGpu()) {
+                up.pictures[i].gpu = p.surface.image;
+                std::swap(p.surface, p.spare);
+                gpu = true;
+            } else {
+                up.pictures[i].image = p.surface.surface->makeImageSnapshot();
+            }
+        }
+        if (all || std::find(up.drawn.begin(), up.drawn.end(), true) != up.drawn.end()) {
+            up.placed = true;
+            up.winX = l.winX;
+            up.winY = l.winY;
+            up.phaseX = px;
+            up.phaseY = py;
+            l.rasterScale = s;
+            l.rasterWinX = l.winX;
+            l.rasterWinY = l.winY;
+            l.rasterPhaseX = px;
+            l.rasterPhaseY = py;
         }
 
         // Each thumb: its rect in its colour, at the phase its place across
@@ -188,10 +248,10 @@ void ScrollLayerSet::replay(render::SkiaRenderer* renderer) {
                 continue;
             }
             if (t == l.rasterThumb[a] && s == l.rasterThumbScale[a]) continue;
-            const float w = a == 0 ? t.w * s + ts.phase : t.w * s, h = a == 0 ? t.h * s : t.h * s + ts.phase;
+            const float tw = a == 0 ? t.w * s + ts.phase : t.w * s, th = a == 0 ? t.h * s : t.h * s + ts.phase;
             render::LayerSurface& surf = l.thumbSurface[a];
-            renderer->fitLayerSurface(surf, std::max(1, static_cast<int>(std::ceil(w))),
-                                      std::max(1, static_cast<int>(std::ceil(h))));
+            renderer->fitLayerSurface(surf, std::max(1, static_cast<int>(std::ceil(tw))),
+                                      std::max(1, static_cast<int>(std::ceil(th))));
             if (!surf) continue;
             auto prev = renderer->switchSurface(surf.surface);
             renderer->fillRect(a == 0 ? ts.phase / s : 0.0f, a == 0 ? 0.0f : ts.phase / s, t.w, t.h, t.color);
@@ -200,39 +260,45 @@ void ScrollLayerSet::replay(render::SkiaRenderer* renderer) {
             l.rasterThumbScale[a] = s;
             up.thumbDrawn[a] = true;
             if (surf.isGpu()) {
-                ts.gpu = surf.image;
+                ts.picture.gpu = surf.image;
                 std::swap(l.thumbSurface[a], l.thumbSpare[a]);
                 gpu = true;
             } else {
-                ts.image = surf.surface->makeImageSnapshot();
+                ts.picture.image = surf.surface->makeImageSnapshot();
             }
         }
 
         auto publish = [&l](Update up) {
             std::lock_guard<std::mutex> lock(l.shownMutex);
-            if (up.content) {
-                const uint64_t generation = l.shown.generation + 1;
-                ThumbShown thumbs[2] = {l.shown.thumbs[0], l.shown.thumbs[1]};
-                l.shown = std::move(up.pic);
-                l.shown.generation = generation;
-                l.shown.thumbs[0] = thumbs[0];
-                l.shown.thumbs[1] = thumbs[1];
-                l.published = true;
+            Shown& sh = l.shown;
+            bool changed = false;
+            sh.parts.resize(up.parts);
+            for (size_t i = 0; i < up.parts; ++i) {
+                if (!up.drawn[i]) continue;
+                sh.parts[i] = std::move(up.pictures[i]);
+                changed = true;
+            }
+            if (up.placed) {
+                sh.winX = up.winX;
+                sh.winY = up.winY;
+                sh.phaseX = up.phaseX;
+                sh.phaseY = up.phaseY;
             }
             for (int a = 0; a < 2; ++a) {
-                ThumbShown& ts = l.shown.thumbs[a];
+                ThumbShown& ts = sh.thumbs[a];
                 ts.scrollRange = up.thumb[a].scrollRange;
                 ts.thumbRange = up.thumb[a].thumbRange;
                 ts.phase = up.thumb[a].phase;
                 if (up.thumbDrawn[a]) {
-                    ts.image = std::move(up.thumb[a].image);
-                    ts.gpu = std::move(up.thumb[a].gpu);
-                    ++l.shown.generation;
+                    ts.picture = std::move(up.thumb[a].picture);
+                    changed = true;
                 }
             }
-            l.shown.scrollX = up.scrollX;
-            l.shown.scrollY = up.scrollY;
+            if (changed) ++sh.generation;
+            sh.scrollX = up.scrollX;
+            sh.scrollY = up.scrollY;
             l.shownPasses = up.passes;
+            l.published = true;
         };
         if (gpu) renderer->afterSubmit([publish, up = std::move(up)]() mutable { publish(std::move(up)); });
         else publish(std::move(up));
@@ -246,7 +312,7 @@ bool ScrollLayerSet::shown(uint32_t elementId, Shown& out) const {
     std::lock_guard<std::mutex> lock(l.shownMutex);
     if (!l.published) return false;
     out = l.shown;
-    // The picture of the latest pass: where the main thread has scrolled it since.
+    // The pictures of the latest pass: where the main thread has scrolled them since.
     if (l.shownPasses == l.passes) {
         out.scrollX = l.liveX.load(std::memory_order_relaxed);
         out.scrollY = l.liveY.load(std::memory_order_relaxed);

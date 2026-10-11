@@ -58,7 +58,7 @@ bool eqLayerSource(const LayerSource& a, const LayerSource& b) {
             else if constexpr (std::is_same_v<T, TerminalLayerSource>) return x.layerId == y.layerId;
             else if constexpr (std::is_same_v<T, RemoteViewLayerSource>) return x.viewId == y.viewId;
             else if constexpr (std::is_same_v<T, ScrollLayerSource>)
-                return x.elementId == y.elementId && x.pass == y.pass && x.part == y.part;
+                return x.elementId == y.elementId && x.pass == y.pass && x.part == y.part && x.piece == y.piece;
             else if constexpr (std::is_same_v<T, ClientWindowsLayerSource>)
                 return x.list == y.list && x.first == y.first && x.count == y.count && x.parts == y.parts;
             else return false;  // a dmabuf: a new buffer every frame

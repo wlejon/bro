@@ -172,9 +172,19 @@ bool hasPaintEffect(const htmlayout::css::ComputedStyle& s) {
            set("mask", "none") || set("mask-image", "none");
 }
 
-// What in `root`'s content keeps it from being a scroll layer: a box the
-// stacking-context walk paints (positioned, or a stacking context), one that
-// is composited on its own, a control, a video.
+// Whether `e` is `root` or under it.
+bool withinElement(const dom::Element* e, const dom::Element* root) {
+    for (; e; e = e->parentElement())
+        if (e == root) return true;
+    return false;
+}
+
+// What in `root`'s content keeps it from being a scroll layer: a positioned
+// box its scroll does not move (fixed, sticky, absolute against a block
+// outside it) or one painted before it (a negative z-index), one that is
+// composited on its own, a control, a video. Positioned boxes and stacking
+// contexts it does move are pieces of its layer (ScrollLayerHost::
+// beginScrollPiece).
 ScrollLayerVeto scanScrollLayerContent(dom::Element* root) {
     ScrollLayerVeto found = ScrollLayerVeto::None;
     std::function<void(dom::Element*)> visit = [&](dom::Element* e) {
@@ -183,8 +193,19 @@ ScrollLayerVeto scanScrollLayerContent(dom::Element* root) {
         auto disp = s.find("display");
         if (disp != s.end() && disp->second == "none") return;
         auto pos = s.find("position");
-        if (pos != s.end() && pos->second == "sticky") { found = ScrollLayerVeto::Sticky; return; }
-        if (isPositioned(s) || createsStackingContext(e, false)) { found = ScrollLayerVeto::Positioned; return; }
+        const std::string_view position = pos != s.end() ? std::string_view(pos->second) : std::string_view();
+        if (position == "sticky") { found = ScrollLayerVeto::Sticky; return; }
+        if (position == "fixed") {
+            const dom::Element* cb = fixedContainingBlock(e);
+            if (!cb || !withinElement(cb, root)) { found = ScrollLayerVeto::Positioned; return; }
+        } else if (position == "absolute") {
+            const dom::Element* cb = absoluteContainingBlock(e);
+            if (!cb || !withinElement(cb, root)) { found = ScrollLayerVeto::Positioned; return; }
+        }
+        if (createsStackingContext(e, false)) {
+            int z = 0;
+            if (!getZIndex(s, z) && z < 0) { found = ScrollLayerVeto::Positioned; return; }
+        }
         if (e->canvasScene() || e->webglContext() || e->sceneGraph() || e->iframeDoc() || e->terminalControl() ||
             e->remoteViewControl()) {
             found = ScrollLayerVeto::LayerContent;
@@ -265,6 +286,16 @@ bool DrawTraversal::paintScrollLayer(dom::Element* elem, const htmlayout::css::C
     noteVolatile(SpanMiss::LayerBreak);
     layerBreakCb_(lb);
     ++scrollLayerStats_.layers;
+    PassScrollLayer& pl = passScrollLayers_[elem];
+    pl = PassScrollLayer{};
+    pl.quad = lb.quad;
+    pl.scrollX = place.scrollX;
+    pl.scrollY = place.scrollY;
+    pl.winX = rec.winX;
+    pl.winY = rec.winY;
+    pl.winW = rec.winW;
+    pl.winH = rec.winH;
+    pl.reused = rec.reuse;
     if (rec.reuse) {
         ++scrollLayerStats_.reused;
         return true;
@@ -287,6 +318,84 @@ bool DrawTraversal::paintScrollLayer(dom::Element* elem, const htmlayout::css::C
     inScrollLayer_ = wasIn;
     clipRectStack_ = std::move(clips);
     return true;
+}
+
+dom::Element* DrawTraversal::pieceScrollerOf(dom::Element* elem) const {
+    if (passScrollLayers_.empty() || inScrollLayer_ || !elem) return nullptr;
+    for (dom::Element* p = elem->layoutParent(); p; p = p->layoutParent())
+        if (passScrollLayers_.count(p)) return p;
+    return nullptr;
+}
+
+bool DrawTraversal::clipInPiece(const ClipRect& c) const {
+    if (!pieceScroller_) return true;
+    return c.owner && c.owner != pieceScroller_ && withinElement(c.owner, pieceScroller_);
+}
+
+void DrawTraversal::paintWalkItems(std::vector<WalkItem>& items) {
+    for (size_t i = 0; i < items.size();) {
+        dom::Element* scroller = pieceScrollerOf(items[i].elem);
+        size_t j = i + 1;
+        if (!scroller) {
+            items[i].paint();
+            i = j;
+            continue;
+        }
+        while (j < items.size() && pieceScrollerOf(items[j].elem) == scroller) ++j;
+        paintScrollPiece(scroller, items, i, j);
+        i = j;
+    }
+}
+
+void DrawTraversal::paintScrollPiece(dom::Element* scroller, std::vector<WalkItem>& items, size_t from, size_t to) {
+    PassScrollLayer& pl = passScrollLayers_[scroller];
+    std::vector<uint32_t> entries;
+    entries.reserve(to - from);
+    for (size_t k = from; k < to; ++k) entries.push_back(items[k].elem->nodeId());
+    const uint32_t index = pl.pieces;
+    const ScrollLayerRecord rec = scrollLayerHost_->beginScrollPiece(scroller, index, entries, pl.reused);
+    if (!rec.buffer) {
+        for (size_t k = from; k < to; ++k) items[k].paint();
+        return;
+    }
+    ++pl.pieces;
+    // The piece where the run is in the page, placed and clipped as the
+    // layer's content is.
+    LayerBreak lb;
+    lb.element = scroller;
+    lb.source = render::ScrollLayerSource{scroller->nodeId(), scrollLayerHost_->scrollLayerPass(),
+                                          render::ScrollLayerSource::Piece, static_cast<uint16_t>(index)};
+    lb.quad = pl.quad;
+    noteVolatile(SpanMiss::LayerBreak);
+    layerBreakCb_(lb);
+    ++scrollLayerStats_.pieces;
+    if (rec.reuse) {
+        ++scrollLayerStats_.piecesReused;
+        return;
+    }
+
+    // The walk's places are the pass's, where the scroll put the content: a
+    // translate takes them to the layer's content space (the content box at
+    // scroll 0 is the origin). Culled against the window, in the pass's terms.
+    const float dx = pl.scrollX - pl.quad.x, dy = pl.scrollY - pl.quad.y;
+    render::CommandBuffer* outer = recorder_->buffer();
+    std::vector<ClipBox> clips = std::move(clipRectStack_);
+    clipRectStack_.clear();
+    pushClipRect(rec.winX - dx, rec.winY - dy, rec.winW, rec.winH);
+    const bool wasIn = std::exchange(inScrollLayer_, true);
+    const dom::Element* wasPiece = std::exchange(pieceScroller_, scroller);
+    const SpanMiss outerVolatile = std::exchange(spanVolatile_, SpanMiss::Count);
+    recorder_->setBuffer(rec.buffer);
+    renderer_->save();
+    renderer_->translate(dx, dy);
+    for (size_t k = from; k < to; ++k) items[k].paint();
+    renderer_->restore();
+    recorder_->setBuffer(outer);
+    scrollLayerHost_->endScrollPiece(scroller, index, spanVolatile_ == SpanMiss::Count);
+    spanVolatile_ = outerVolatile;
+    pieceScroller_ = wasPiece;
+    inScrollLayer_ = wasIn;
+    clipRectStack_ = std::move(clips);
 }
 
 void DrawTraversal::pushClipRect(float x, float y, float w, float h) {
@@ -335,6 +444,8 @@ void DrawTraversal::draw(dom::Element* root, float scrollX, float scrollY,
     // though it's no longer in the SC tree — its content would vanish.
     skipSet_.clear();
     clipRectStack_.clear();
+    passScrollLayers_.clear();
+    pieceScroller_ = nullptr;
 
     // Build the stacking-context tree (CSS 2.1 Appendix E), then paint in the
     // seven-step order. Each SC root paints its own box first, then recurses
@@ -866,8 +977,11 @@ void DrawTraversal::paintStackingContext(StackingContext* sc, bool withinPromote
         if (a->zIndex != b->zIndex) return a->zIndex < b->zIndex;
         return a->treeOrder < b->treeOrder;
     });
+    // Inside a piece of a scroll layer, the clips of its scroller and those
+    // above it are the compositor's (clipInPiece).
     auto pushClips = [this](const std::vector<ClipRect>& clips) {
         for (auto& c : clips) {
+            if (!clipInPiece(c)) continue;
             renderer_->save();
             if (!c.radii.isZero())
                 renderer_->setClipRRect(c.bx, c.by, c.bw, c.bh, c.radii);
@@ -880,12 +994,18 @@ void DrawTraversal::paintStackingContext(StackingContext* sc, bool withinPromote
         }
     };
     auto popClips = [this](const std::vector<ClipRect>& clips) {
-        for (size_t i = 0; i < clips.size(); ++i) { renderer_->restore(); popClipRect(); }
+        for (auto& c : clips)
+            if (clipInPiece(c)) { renderer_->restore(); popClipRect(); }
     };
-    for (auto* c : negSCs) {
-        pushClips(c->ancestorClips);
-        paintStackingContext(c, withinPromoted);
-        popClips(c->ancestorClips);
+    {
+        std::vector<WalkItem> items;
+        for (auto* c : negSCs)
+            items.push_back({c->root, [this, c, withinPromoted, &pushClips, &popClips]() {
+                pushClips(c->ancestorClips);
+                paintStackingContext(c, withinPromoted);
+                popClips(c->ancestorClips);
+            }});
+        paintWalkItems(items);
     }
 
     // Steps 3-5 are folded into step 1 above (in-flow descendants paint via
@@ -897,6 +1017,7 @@ void DrawTraversal::paintStackingContext(StackingContext* sc, bool withinPromote
     // interleaved in tree order.
     struct Step6Item {
         int tieBreaker;
+        dom::Element* elem;
         std::function<void()> paint;
     };
     std::vector<Step6Item> step6;
@@ -906,7 +1027,7 @@ void DrawTraversal::paintStackingContext(StackingContext* sc, bool withinPromote
     // reached via the autoSCs/posSCs recursion below regardless.
     if (!suppressSelf) {
         for (auto& pe : sc->positionedNonSC) {
-            step6.push_back({pe.tieBreaker, [this, &pe, &pushClips, &popClips]() {
+            step6.push_back({pe.tieBreaker, pe.elem, [this, &pe, &pushClips, &popClips]() {
                 pushClips(pe.ancestorClips);
                 drawElementContent(pe.elem, pe.offsetX, pe.offsetY);
                 popClips(pe.ancestorClips);
@@ -914,7 +1035,7 @@ void DrawTraversal::paintStackingContext(StackingContext* sc, bool withinPromote
         }
     }
     for (auto* c : autoSCs) {
-        step6.push_back({c->treeOrder, [this, c, withinPromoted, &pushClips, &popClips]() {
+        step6.push_back({c->treeOrder, c->root, [this, c, withinPromoted, &pushClips, &popClips]() {
             pushClips(c->ancestorClips);
             paintStackingContext(c, withinPromoted);
             popClips(c->ancestorClips);
@@ -923,7 +1044,12 @@ void DrawTraversal::paintStackingContext(StackingContext* sc, bool withinPromote
     std::sort(step6.begin(), step6.end(), [](const Step6Item& a, const Step6Item& b) {
         return a.tieBreaker < b.tieBreaker;
     });
-    for (auto& item : step6) item.paint();
+    {
+        std::vector<WalkItem> items;
+        items.reserve(step6.size());
+        for (auto& item : step6) items.push_back({item.elem, std::move(item.paint)});
+        paintWalkItems(items);
+    }
 
     // Step 7: child SCs with positive z-index.
     std::sort(posSCs.begin(), posSCs.end(), [](auto* a, auto* b) {
@@ -931,14 +1057,23 @@ void DrawTraversal::paintStackingContext(StackingContext* sc, bool withinPromote
         return a->treeOrder < b->treeOrder;
     });
     bool emittedWindows = false;
-    for (auto* c : posSCs) {
-        if (isRoot && shellClientWindows_ && !emittedWindows && c->zIndex >= 1000) {
-            emittedWindows = true;
-            emitClientWindows();
+    {
+        std::vector<WalkItem> items;
+        for (auto* c : posSCs) {
+            if (isRoot && shellClientWindows_ && !emittedWindows && c->zIndex >= 1000) {
+                // The shell's client windows go here, below this one.
+                emittedWindows = true;
+                paintWalkItems(items);
+                items.clear();
+                emitClientWindows();
+            }
+            items.push_back({c->root, [this, c, withinPromoted, &pushClips, &popClips]() {
+                pushClips(c->ancestorClips);
+                paintStackingContext(c, withinPromoted);
+                popClips(c->ancestorClips);
+            }});
         }
-        pushClips(c->ancestorClips);
-        paintStackingContext(c, withinPromoted);
-        popClips(c->ancestorClips);
+        paintWalkItems(items);
     }
     if (isRoot && shellClientWindows_ && !emittedWindows) emitClientWindows();
 

@@ -9,7 +9,10 @@
 // surface of its own and the compositor draws it where the scroll puts it,
 // under the scroller's clip. Around the content the page is painted as
 // before, split at the layer (a layer break): the scroller's own background
-// and border below it, what comes after it above. A scroll the window still
+// and border below it, what comes after it above. Its positioned descendants
+// and stacking contexts keep their place in the stacking-context walk: each
+// run of them is a piece of the layer, recorded in its content space and
+// split into the page where the walk paints it. A scroll the window still
 // holds records nothing in the layer and rasters it again only when it moves
 // the layer by a fraction of a device pixel.
 //
@@ -22,6 +25,7 @@
 #include "render/layer_source.h"
 
 #include <cstdint>
+#include <vector>
 
 namespace bro::dom { class Element; }
 
@@ -34,8 +38,9 @@ enum class ScrollLayerVeto : uint8_t {
     RoundedClip,   // its clip has rounded corners (the compositor clips to rects)
     Effects,       // it or an ancestor has an opacity, transform, filter, blend,
                    // clip-path or perspective the compositor would not apply
-    Positioned,    // a positioned or stacking-context box inside it: painted by the
-                   // stacking-context walk, outside its content
+    Positioned,    // a positioned box inside it that its scroll does not move: fixed,
+                   // absolute against a block outside it, or a negative z-index (painted
+                   // before it is)
     Sticky,        // a sticky box inside it
     LayerContent,  // a canvas, WebGL, scene, iframe, terminal or remote view inside it
     Control,       // a form control inside it (it notes where it is drawn in the document)
@@ -79,6 +84,15 @@ public:
     // pass (false: something in it changes with no stamp, an animated or
     // decoding image).
     virtual void endScrollLayer(dom::Element* scroller, bool reusable) = 0;
+    // A piece of the layer of `scroller` (begun this pass): a run of its
+    // positioned descendants and stacking contexts (`entries`, by node id),
+    // painted where the stacking-context walk puts them, the `index`th this
+    // pass. Recorded in the layer's content space over its window; `mayReuse`
+    // (the layer's content stood this pass) lets a piece of the same entries
+    // stand too. Null buffer: none.
+    virtual ScrollLayerRecord beginScrollPiece(dom::Element* scroller, uint32_t index,
+                                               const std::vector<uint32_t>& entries, bool mayReuse) = 0;
+    virtual void endScrollPiece(dom::Element* scroller, uint32_t index, bool reusable) = 0;
 };
 
 }  // namespace bro::layout

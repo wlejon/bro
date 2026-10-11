@@ -116,7 +116,15 @@ check('a row in the layer changed');
 
 // Scrollers that stay painted in place, each with its reason.
 const cases = [
-    ['positioned', (sc) => { sc.children[3].style.position = 'relative'; sc.children[3].style.left = '10px'; }],
+    // Absolute against the body (the scroller is static here): its scroll
+    // does not move it.
+    ['positioned', (sc) => {
+        sc.style.position = 'static';
+        sc.style.marginLeft = sc.style.left;
+        sc.children[3].style.position = 'absolute';
+        sc.children[3].style.left = '600px';
+        sc.children[3].style.top = '300px';
+    }],
     ['sticky', (sc) => { sc.children[0].style.position = 'sticky'; sc.children[0].style.top = '0'; }],
     ['positioned', (sc) => { sc.children[2].style.position = 'fixed'; sc.children[2].style.top = '0'; }],
     ['effects', (sc) => { sc.style.opacity = '0.9'; }],
@@ -143,6 +151,69 @@ for (const [reason, make] of cases) {
     sc.scrollTop = 120;
     check(`a scroller with a ${reason} veto, scrolled`);
     sc.remove();
+}
+
+// Positioned boxes and stacking contexts its scroll moves are pieces of its
+// layer, each where the stacking-context walk paints it: a virtual list (a
+// relative spacer, absolute rows, rows taken out and put back as it
+// scrolls), a row with a z-index and one with opacity, between boxes outside
+// it, positioned before and after it, that overlap it.
+{
+    const before = document.createElement('div');
+    before.style.cssText = 'position: absolute; left: 300px; top: 420px; width: 120px; height: 300px; ' +
+                           'background: rgba(200, 0, 120, 0.45)';
+    document.body.appendChild(before);
+    const vl = document.createElement('div');
+    // Off half a device pixel: text crossing a clip edge there is clipped
+    // apart from rects painting in place (test_scroll_layers_composited.js).
+    vl.style.cssText = 'position: absolute; left: 280.25px; top: 400.25px; width: 240px; height: 260px; ' +
+                       'overflow: auto; border: 1px solid #333; font-size: 12px';
+    const spacer = document.createElement('div');
+    spacer.style.cssText = 'position: relative; height: 6000px';
+    vl.appendChild(spacer);
+    document.body.appendChild(vl);
+    const after = document.createElement('div');
+    after.style.cssText = 'position: absolute; left: 470px; top: 500px; width: 120px; height: 90px; ' +
+                          'background: rgba(0, 120, 200, 0.5)';
+    document.body.appendChild(after);
+    const rowH = 30;
+    const rows = new Map();
+    function render() {
+        const top = vl.scrollTop;
+        const first = Math.max(0, Math.floor(top / rowH) - 3), last = Math.ceil((top + 260) / rowH) + 3;
+        for (const [i, el] of rows) if (i < first || i > last) { el.remove(); rows.delete(i); }
+        for (let i = first; i <= last; ++i) {
+            if (rows.has(i)) continue;
+            const r = document.createElement('div');
+            r.style.cssText = `position: absolute; left: 0; right: 0; top: ${i * rowH}px; height: ${rowH - 2}px; ` +
+                              `background: ${colours[i % 5]}`;
+            if (i % 7 === 3) { r.style.zIndex = '2'; r.style.left = '20px'; }
+            if (i % 11 === 5) r.style.opacity = '0.6';
+            r.textContent = 'item ' + i;
+            spacer.appendChild(r);
+            rows.set(i, r);
+        }
+    }
+    render();
+    const p0 = layers();
+    check('a virtual list');
+    assert(layers().pieces > p0.pieces, 'its rows were pieces of its layer');
+    for (const y of [10, 13, 100, 700, 2000, 1990, 0]) {
+        vl.scrollTop = y;
+        render();
+        check(`a virtual list scrolled to ${y}`);
+    }
+    // Scrolled with no rows taken out or put back: the pieces stand.
+    vl.scrollTop = 50;
+    render();
+    check('a virtual list at 50');
+    const r0 = layers();
+    vl.scrollTop = 52;
+    check('a virtual list at 52');
+    assert(layers().piecesReused > r0.piecesReused, 'its pieces stood');
+    vl.remove();
+    before.remove();
+    after.remove();
 }
 
 // At a devicePixelRatio of 2.

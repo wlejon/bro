@@ -38,8 +38,11 @@ struct ScrollLayerSource {
     /// moves with the scroll (recorded after the page's scrollbars; its quad
     /// is the thumb at scroll 0). A thumb splits no HTML surface: it goes
     /// above the last one.
-    enum Part : uint8_t { Content = 0, ThumbV = 1, ThumbH = 2 };
+    /// A Piece is a run of its positioned descendants painted where the
+    /// stacking-context walk puts them (`piece` of them, this pass).
+    enum Part : uint8_t { Content = 0, ThumbV = 1, ThumbH = 2, Piece = 3 };
     uint8_t part = Content;
+    uint16_t piece = 0;
 };
 
 /// A DMA-BUF client buffer: foreign toplevel or client surface imported via brodmabuf

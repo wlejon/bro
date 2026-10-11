@@ -305,7 +305,7 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
     std::vector<UILayer> thumbs;
     replayer.setLayerBreakHandler([&](const render::LayerSource& source, const render::LayerQuad& quad) {
         if (const auto* sl = std::get_if<render::ScrollLayerSource>(&source);
-            sl && sl->part != render::ScrollLayerSource::Content) {
+            sl && (sl->part == render::ScrollLayerSource::ThumbV || sl->part == render::ScrollLayerSource::ThumbH)) {
             thumbs.push_back(UILayer::of(source, quad));
             return;
         }

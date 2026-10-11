@@ -151,4 +151,43 @@ scrollTo(sc, 2083, 'dpr 1.5, by 3 device pixels', false);
 setDeviceScaleFactor(1);
 settle('dpr 1 again');
 checkPresented('dpr 1 again');
+
+// A virtual list, as helm's VirtualList is: a relative spacer, absolute rows
+// put in and taken out on 'scroll'. Its rows are pieces of its layer; a
+// scroll that keeps the same rows is the compositor's, one that brings rows
+// in records them.
+{
+    sc.remove();
+    const vl = document.createElement('div');
+    vl.style.cssText = 'position: absolute; left: 20.25px; top: 30.25px; width: 260px; height: 220px; ' +
+                       'overflow: auto; border: 1px solid #333; font-size: 12px';
+    const spacer = document.createElement('div');
+    spacer.style.cssText = 'position: relative; height: 9000px';
+    vl.appendChild(spacer);
+    document.body.insertBefore(vl, over);
+    const rowH = 30;
+    const rows = new Map();
+    const render = () => {
+        const top = vl.scrollTop;
+        const first = Math.max(0, Math.floor(top / rowH) - 3), last = Math.ceil((top + 220) / rowH) + 3;
+        for (const [i, el] of rows) if (i < first || i > last) { el.remove(); rows.delete(i); }
+        for (let i = first; i <= last; ++i) {
+            if (rows.has(i)) continue;
+            const r = document.createElement('div');
+            r.style.cssText = `position: absolute; left: 0; right: 0; top: ${i * rowH}px; height: ${rowH - 2}px; ` +
+                              `background: ${colours[i % 5]}`;
+            r.textContent = 'item ' + i;
+            spacer.appendChild(r);
+            rows.set(i, r);
+        }
+    };
+    vl.addEventListener('scroll', render);
+    render();
+    settle('a virtual list');
+    checkPresented('a virtual list');
+    assert(perf.stats().paint.scrollLayers.pieces > 0, 'its rows are pieces of its layer');
+    scrollTo(vl, 12, 'a virtual list, the same rows', false);
+    scrollTo(vl, 140, 'a virtual list, rows put in', true);
+    scrollTo(vl, 134, 'a virtual list, the same rows again', false);  // rows 1..15, as at 140
+}
 console.log('compositor-only scrolls: checked');

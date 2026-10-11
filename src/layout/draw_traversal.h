@@ -194,6 +194,8 @@ public:
     struct ScrollLayerStats {
         uint64_t layers = 0;  // scrollers composited as a layer, pass by pass
         uint64_t reused = 0;  // of those, whose recording stood: nothing in them recorded
+        uint64_t pieces = 0;        // runs of their positioned descendants, pieces of them
+        uint64_t piecesReused = 0;  // of those, whose recording stood
         uint64_t vetoes[static_cast<size_t>(ScrollLayerVeto::Count)] = {};
     };
     const ScrollLayerStats& scrollLayerStats() const { return scrollLayerStats_; }
@@ -232,6 +234,33 @@ private:
     ScrollLayerHost* scrollLayerHost_ = nullptr;
     bool inScrollLayer_ = false;
     ScrollLayerStats scrollLayerStats_;
+    // The scrollers this pass made layers of, for their pieces: where the
+    // layer is (its break's quad), its scroll and window, whether its content
+    // stood, and how many pieces it has had so far.
+    struct PassScrollLayer {
+        render::LayerQuad quad;
+        float scrollX = 0, scrollY = 0;
+        float winX = 0, winY = 0, winW = 0, winH = 0;
+        bool reused = false;
+        uint32_t pieces = 0;
+    };
+    std::unordered_map<const dom::Element*, PassScrollLayer> passScrollLayers_;
+    // The layer a positioned box (or stacking context) of the walk is a piece
+    // of: the nearest scroller above it this pass made a layer (null: none,
+    // or the walk is already inside one).
+    dom::Element* pieceScrollerOf(dom::Element* elem) const;
+    // While a piece is recorded: its scroller, whose clips (and those above
+    // it) the compositor applies, so the walk leaves them out (clipInPiece).
+    const dom::Element* pieceScroller_ = nullptr;
+    bool clipInPiece(const ClipRect& c) const;
+    // Paint the walk's items in order; a run of them that is a piece of one
+    // scroll layer is recorded into it, its layer break where the run is.
+    struct WalkItem {
+        dom::Element* elem;
+        std::function<void()> paint;
+    };
+    void paintWalkItems(std::vector<WalkItem>& items);
+    void paintScrollPiece(dom::Element* scroller, std::vector<WalkItem>& items, size_t from, size_t to);
     bool paintScrollLayer(dom::Element* elem, const htmlayout::css::ComputedStyle& style,
                           const htmlayout::layout::LayoutBox& box, bool visible, float x, float y, float bw,
                           float bh);

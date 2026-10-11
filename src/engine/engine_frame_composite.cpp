@@ -181,7 +181,11 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, int offsetY) {
         SkRect clip;
         if (quad && at.clip(*quad, clip)) {
             // Aliased, Skia keeps a pixel whose centre is inside the clip: an
-            // edge at 280.5 keeps pixel 279, not 280 (round() would).
+            // edge at 280.5 keeps pixel 279, not 280 (round() would). That is
+            // how Ganesh clips an unantialiased rect painting in place; a
+            // scissored draw (text) it rounds half up instead, so at an edge
+            // on exactly half a device pixel a row or column of those can
+            // differ from painting in place.
             auto centre = [](float v) { return static_cast<int>(std::ceil(v - 0.5f)); };
             const SkIRect r = nearestClip ? SkIRect::MakeLTRB(centre(clip.left()), centre(clip.top()),
                                                               centre(clip.right()), centre(clip.bottom()))
@@ -239,7 +243,7 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, int offsetY) {
                 frameKeyAdd(s.generation);
                 frameKeyAdd(static_cast<uint64_t>(std::bit_cast<uint32_t>(s.scrollX)) << 32 |
                             std::bit_cast<uint32_t>(s.scrollY));
-                if (src.part != render::ScrollLayerSource::Content) {
+                if (src.part == render::ScrollLayerSource::ThumbV || src.part == render::ScrollLayerSource::ThumbH) {
                     // A thumb, where the scroll puts it along its bar (on a
                     // whole device pixel, as Scrollbar::snapThumb puts one
                     // painted in place), at its phase across it.
@@ -256,16 +260,22 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, int offsetY) {
                                                          std::round((quad.y + at.oy) * at.sy - t.phase), float(w),
                                                          float(h));
                     };
-                    if (t.gpu) {
-                        placeSkiaImage(t.gpu, thumbDst(int(t.gpu->width), int(t.gpu->height)), nullptr);
-                    } else if (t.image) {
+                    const ScrollLayerSet::Picture& pic = t.picture;
+                    if (pic.gpu) {
+                        placeSkiaImage(pic.gpu, thumbDst(int(pic.gpu->width), int(pic.gpu->height)), nullptr);
+                    } else if (pic.image) {
                         if (SkCanvas* canvas = frameSegmentCanvas()) {
-                            const SkRect d = thumbDst(t.image->width(), t.image->height());
-                            canvas->drawImage(t.image, d.left(), d.top());
+                            const SkRect d = thumbDst(pic.image->width(), pic.image->height());
+                            canvas->drawImage(pic.image, d.left(), d.top());
                         }
                     }
                     return;
                 }
+                // The content, or a piece: a run of its positioned
+                // descendants, where the stacking-context walk painted them.
+                const size_t part = src.part == render::ScrollLayerSource::Piece ? size_t(src.piece) + 1 : 0;
+                if (part >= s.parts.size()) return;
+                const ScrollLayerSet::Picture& pic = s.parts[part];
                 // Pixel for pixel: the surface holds the window rastered at
                 // the sub-pixel phase where the scroll puts its corner, so it
                 // lands a whole device pixel left of and above that. Its clip
@@ -275,15 +285,15 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, int offsetY) {
                         std::round((quad.x + s.winX - s.scrollX) * at.sx - s.phaseX),
                         std::round((quad.y + at.oy + s.winY - s.scrollY) * at.sy - s.phaseY), float(w), float(h));
                 };
-                if (s.gpu) {
-                    placeSkiaImage(s.gpu, dstFor(int(s.gpu->width), int(s.gpu->height)), &quad, true);
-                } else if (s.image) {
+                if (pic.gpu) {
+                    placeSkiaImage(pic.gpu, dstFor(int(pic.gpu->width), int(pic.gpu->height)), &quad, true);
+                } else if (pic.image) {
                     if (SkCanvas* canvas = frameSegmentCanvas()) {
                         canvas->save();
                         SkRect c;
                         if (at.clip(quad, c)) canvas->clipRect(c, SkClipOp::kIntersect, false);
-                        const SkRect d = dstFor(s.image->width(), s.image->height());
-                        canvas->drawImage(s.image, d.left(), d.top());
+                        const SkRect d = dstFor(pic.image->width(), pic.image->height());
+                        canvas->drawImage(pic.image, d.left(), d.top());
                         canvas->restore();
                     }
                 }

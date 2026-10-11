@@ -833,6 +833,10 @@ void installHeadlessFrame(engine::Engine& engine) {
                 slo.set(ev::setProperty(slo.get(), "layers", ev::fromDouble(static_cast<double>(sl.layers))));
                 // Of those, whose recording stood; and their surfaces rastered.
                 slo.set(ev::setProperty(slo.get(), "reused", ev::fromDouble(static_cast<double>(sl.reused))));
+                // Runs of their positioned descendants (pieces), and of those whose recording stood.
+                slo.set(ev::setProperty(slo.get(), "pieces", ev::fromDouble(static_cast<double>(sl.pieces))));
+                slo.set(ev::setProperty(slo.get(), "piecesReused",
+                                        ev::fromDouble(static_cast<double>(sl.piecesReused))));
                 slo.set(ev::setProperty(slo.get(), "rasters",
                                         ev::fromDouble(static_cast<double>(engine.scrollLayerRasters()))));
                 for (size_t i = 1; i < static_cast<size_t>(layout::ScrollLayerVeto::Count); ++i)
