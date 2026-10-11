@@ -138,6 +138,12 @@
  * @property {boolean} [runSemantic=true] - generate(): false stops after the plan
  * @property {boolean} [runSynthesize=true] - generate(): false stops after the semantic tokens
  * @property {boolean} [reusePrefixKv=true] - generate(): reuse the semantic stage's KV cache for synthesis instead of prefilling again
+ * @property {number} [abcDraftTokens=0] - Speculative ABC planning: 1..7 tokens drafted per forward by prompt lookup
+ *   (the score repeats itself) and checked with standard speculative acceptance, so the plan's distribution is
+ *   exactly that of no drafting; a given seed draws a different plan than at 0 (greedy gives the same one). 5 is a
+ *   good value: ~2.3-2.6 tokens per forward, the plan ~200 -> ~400 tok/s in BF16 (~540 with arWeights 'int8'), and
+ *   cot 'full' time to first audio streaming 10.1 s -> 6.7 s (5.0 s with int8) on a 4090. Ignored with cfgScale
+ *   (the plan has no CFG). timing.planForwards counts the forwards.
  * @property {YuE2Steer[]} [steer]
  * @property {YuE2Capture} [capture]
  * @property {YuE2Vae} [vae] - Decode the latents as they arrive (onAudio, result.audio)
@@ -174,6 +180,8 @@
  * @property {number} planTokens
  * @property {number} semanticTokens
  * @property {number} planTps - Tokens per second
+ * @property {number} planForwards - AR forwards the plan took; planTokens / planForwards is the tokens each
+ *   forward accepted (1 without abcDraftTokens)
  * @property {number} semanticTps
  * @property {number} firstLatentSeconds - generate(): wall time to the first final latent frame
  * @property {number} narSecondsPerAudioSecond - generate(): NAR cost per second of audio
