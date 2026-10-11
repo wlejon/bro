@@ -51,6 +51,7 @@ bool DrawTraversal::boxOnScreen(dom::Element* elem) const {
 std::shared_ptr<const render::DecodedImage> DrawTraversal::currentFrame(
         std::shared_ptr<const render::DecodedImage> img, dom::Element* elem) const {
     if (!img || !img->animation) return img;
+    noteVolatile(SpanMiss::AnimatedImage);
     auto frame = img->animation->frameAt(render::imageAnimationClock(), boxOnScreen(elem), paintWaitsForImages());
     return frame ? frame : img;
 }
@@ -67,7 +68,9 @@ std::shared_ptr<const render::DecodedImage> DrawTraversal::paintImage(const std:
         if (!req) return nullptr;  // nothing to read: broken
         imageRequests_[memoKey] = req;
     }
-    return currentFrame(readyImage(req), forElem);
+    auto img = readyImage(req);
+    if (!req->settled()) noteVolatile(SpanMiss::PendingImage);
+    return currentFrame(std::move(img), forElem);
 }
 
 std::shared_ptr<const render::DecodedImage> DrawTraversal::elementPaintImage(dom::Element* elem, bool oriented) {
@@ -78,6 +81,7 @@ std::shared_ptr<const render::DecodedImage> DrawTraversal::elementPaintImage(dom
         return paintImage(elem->getAttribute("src"), oriented, elem);
     }
     auto img = readyImage(req);
+    if (!req->settled()) noteVolatile(SpanMiss::PendingImage);
     // image-orientation: none on a photo that carries a turn: the pixels as
     // stored, a request of their own.
     if (img && !oriented && img->orientation != 1 && !img->isSvg)

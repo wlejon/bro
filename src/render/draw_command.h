@@ -124,6 +124,14 @@ struct Cmd_BlitCanvasInline {
     float x, y, w, h;
 };
 
+// A span of paint recorded once into a CommandBuffer of its own (the draw
+// traversal's paint cache, layout/paint_cache.h) and replayed here in place,
+// as if its commands stood in this buffer. `index` names it in the buffer's
+// span list (CommandBuffer::spanAt), which holds it alive.
+struct Cmd_ReplaySpan {
+    uint32_t index;
+};
+
 using DrawCommand = std::variant<
     Cmd_Clear,
     Cmd_FillRect,
@@ -169,7 +177,8 @@ using DrawCommand = std::variant<
     Cmd_EndFrame,
     Cmd_LayerBreak,
     Cmd_SurfaceBreak,
-    Cmd_BlitCanvasInline
+    Cmd_BlitCanvasInline,
+    Cmd_ReplaySpan
 >;
 
 } // namespace bro::render

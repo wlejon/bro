@@ -7,6 +7,8 @@
 #include "dom/style_share.h"
 #include "css/cascade.h"
 #include "layout/box.h"
+#include "dom/paint_geometry.h"
+#include <atomic>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -252,6 +254,21 @@ public:
     // with no layout node) may keep one set, which costs a descent, never a
     // miss.
     void notePathDirty(bool style, bool layout);
+
+    // Paint stamps, for the draw traversal's span cache (layout/paint_cache.h).
+    // Anything that can change what this element paints — a mark, a restyle,
+    // its box moving or resizing, its scroll offset — stamps it and every
+    // ancestor (through a shadow root to its host) with the current paint
+    // epoch; a span recorded in an earlier epoch than an element's stamp is
+    // stale. The walk stops at an ancestor already stamped this epoch, whose
+    // ancestors were stamped by the same walk. Atomic: the layout thread
+    // stamps restyles and box changes, the main thread marks.
+    void notePaintChanged();
+    uint64_t paintStamp() const { return paintStamp_.load(std::memory_order_relaxed); }
+    // The epoch a stamp written now carries. Each draw pass advances it first,
+    // so a span it records is older than any change made after it.
+    static uint64_t paintEpoch();
+    static uint64_t advancePaintEpoch();
     bool takeStyleDescendantDirty() { bool d = styleDescDirty_; styleDescDirty_ = false; return d; }
     bool takeLayoutDescendantDirty() { bool d = layoutDescDirty_; layoutDescDirty_ = false; return d; }
 
@@ -285,10 +302,12 @@ public:
     htmlayout::css::ComputedStyle& computedStyleMut() {
         styleShareKey_.reset();
         inheritToken_ = 0;
+        notePaintChanged();
         return computedStyle_;
     }
     void setComputedStyle(htmlayout::css::ComputedStyle style) {
         computedStyle_ = std::move(style);
+        notePaintChanged();
         styleShareKey_.reset();
         inheritToken_ = 0;
     }
@@ -322,7 +341,10 @@ public:
 
     // Layout box (set by htmlayout::layout::layoutTree)
     const htmlayout::layout::LayoutBox& layoutBox() const { return layoutBox_; }
-    void setLayoutBox(const htmlayout::layout::LayoutBox& box) { layoutBox_ = box; }
+    void setLayoutBox(const htmlayout::layout::LayoutBox& box) {
+        if (paintGeometryDiffers(layoutBox_, box)) notePaintChanged();
+        layoutBox_ = box;
+    }
 
     // Generated content for ::before / ::after. The cascade resolves these
     // in Document::resolveStyles when CSS rules target the pseudo-element.
@@ -377,6 +399,7 @@ public:
                    htmlayout::css::ComputedStyle style) {
         if (which != "before" && which != "after") return;
         ensurePseudo();
+        notePaintChanged();
         if (which == "before") {
             pseudo_->beforeContent = std::move(content);
             pseudo_->beforeStyle = std::move(style);
@@ -393,6 +416,7 @@ public:
     }
     void clearPseudo(const std::string& which) {
         if (!pseudo_) return;
+        notePaintChanged();
         if (which == "before") {
             pseudo_->beforeContent.clear();
             pseudo_->beforeStyle.clear();
@@ -680,6 +704,7 @@ private:
     bool focusScopeDirty_ = false;
     bool styleDescDirty_ = false;
     bool layoutDescDirty_ = false;
+    std::atomic<uint64_t> paintStamp_{0};
     StyledPlace styledPlace_;
     bool scrollToBottom_ = false;
     bool styleSheetAdded_ = false;

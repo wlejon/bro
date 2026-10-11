@@ -1,5 +1,6 @@
 #include "render/skia_backend.h"
 #include "render/filter_chain.h"
+#include "render/font_generation.h"
 #include "render/shadow_ninepatch.h"
 #include "render/shared_pixels_image.h"
 #include "render/system_font_mgr.h"
@@ -603,6 +604,7 @@ bool SkiaRenderer::registerCustomFont(const std::string& family,
     }
     if (!typeface) return false;
     customFonts_.push_back({family, weight, italic, typeface});
+    noteFontRegistered();
     // The same descriptor can now resolve to a different face, so every run
     // shaped against the old one is stale — and so is every cached SkFont
     // (runs hold SkFonts derived from fonts_, so they go first).

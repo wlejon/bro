@@ -47,6 +47,18 @@ TextNode::TextNode(const std::string& data)
 {
 }
 
+void TextNode::setLayoutBox(const htmlayout::layout::LayoutBox& box) {
+    if (paintGeometryDiffers(layoutBox_, box)) {
+        Node* p = parentNode();
+        if (p && p->nodeType() == NodeType::DocumentFragment) {
+            auto* sr = dynamic_cast<ShadowRoot*>(p);
+            p = sr ? static_cast<Node*>(sr->host()) : nullptr;
+        }
+        if (p && p->nodeType() == NodeType::Element) static_cast<Element*>(p)->notePaintChanged();
+    }
+    layoutBox_ = box;
+}
+
 void TextNode::setData(const std::string& text) {
     CharacterDataNoticeGuard notice(this, data_);
     int oldLen = static_cast<int>(data_.size());

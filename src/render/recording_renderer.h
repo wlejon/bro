@@ -146,6 +146,10 @@ public:
     // A boundary between HTML surfaces with no layer between them.
     void recordSurfaceBreak();
 
+    // A span recorded into a buffer of its own, replayed in place
+    // (Cmd_ReplaySpan). Nothing for an empty one.
+    void recordSpan(std::shared_ptr<const CommandBuffer> span);
+
     // Inline canvas blit — system panels composite their canvas scene onto
     // the current surface instead of breaking into a separate layer.
     void recordBlitCanvasInline(void* canvasScene, float x, float y, float w, float h);

@@ -30,7 +30,9 @@ public:
 
     // Layout box for text positioning (set during layout)
     const htmlayout::layout::LayoutBox& layoutBox() const { return layoutBox_; }
-    void setLayoutBox(const htmlayout::layout::LayoutBox& box) { layoutBox_ = box; }
+    // A box laid out to different geometry stamps the element it paints in
+    // (Element::notePaintChanged).
+    void setLayoutBox(const htmlayout::layout::LayoutBox& box);
 
 private:
     std::string data_;

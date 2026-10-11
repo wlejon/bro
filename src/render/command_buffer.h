@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <span>
 #include <string_view>
 #include <vector>
@@ -28,6 +29,7 @@ public:
         arena_.clear();
         blobs_.clear();
         pixels_.clear();
+        spans_.clear();
     }
 
     void reserve(size_t cmdHint, size_t arenaHint) {
@@ -85,7 +87,20 @@ public:
         return static_cast<uint32_t>(pixels_.size() - 1);
     }
 
+    // A span recorded into a buffer of its own (Cmd_ReplaySpan), held by
+    // reference like a text blob. A span is never written again once
+    // recorded, so this buffer and the cache that made it can share it, and
+    // a replay on another thread reads it however long it takes.
+    uint32_t pushSpan(std::shared_ptr<const CommandBuffer> span) {
+        spans_.push_back(std::move(span));
+        return static_cast<uint32_t>(spans_.size() - 1);
+    }
+
     // ---- read-side accessors (replayer) ----
+
+    const CommandBuffer* spanAt(uint32_t index) const {
+        return index < spans_.size() ? spans_[index].get() : nullptr;
+    }
 
     const SkTextBlob* textBlobAt(uint32_t index) const {
         return index < blobs_.size() ? blobs_[index].get() : nullptr;
@@ -117,6 +132,7 @@ private:
     std::vector<std::byte>         arena_;
     std::vector<sk_sp<SkTextBlob>> blobs_;
     std::vector<SharedPixels>      pixels_;
+    std::vector<std::shared_ptr<const CommandBuffer>> spans_;
 };
 
 } // namespace bro::render

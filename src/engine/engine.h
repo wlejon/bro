@@ -553,6 +553,10 @@ public:
     double perfGpuMs() const { return frameStats_.phaseGpuMs; }
     double perfDrawMs() const { return frameStats_.phaseDrawMs; }
     const FrameStats& frameStats() const { return frameStats_; }
+    // Lifetime span-cache counters of the document traversal (paint_cache.h).
+    layout::PaintCacheStats paintCacheStats() const {
+        return drawTraversal_ ? drawTraversal_->paintCacheStats() : layout::PaintCacheStats{};
+    }
 
     /// The frame flight recorder (frame_trace.h) and the agent control
     /// channel (control.h, docs/agent-control.md). startControl serves the

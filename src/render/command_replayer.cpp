@@ -50,7 +50,7 @@ void CommandReplayer::replay(const CommandBuffer& buffer) {
                             std::is_same_v<T, Cmd_ResetClip> || std::is_same_v<T, Cmd_SetClipPolygon> ||
                             std::is_same_v<T, Cmd_ClipSvgPath> || std::is_same_v<T, Cmd_BeginFrame> ||
                             std::is_same_v<T, Cmd_EndFrame> || std::is_same_v<T, Cmd_LayerBreak> ||
-                            std::is_same_v<T, Cmd_SurfaceBreak>))
+                            std::is_same_v<T, Cmd_SurfaceBreak> || std::is_same_v<T, Cmd_ReplaySpan>))
                 ++draws_;
 
             if constexpr (std::is_same_v<T, Cmd_Clear>) {
@@ -256,6 +256,9 @@ void CommandReplayer::replay(const CommandBuffer& buffer) {
                 if (onBlitCanvasInline_) {
                     onBlitCanvasInline_(c.canvasScene, c.x, c.y, c.w, c.h);
                 }
+            } else if constexpr (std::is_same_v<T, Cmd_ReplaySpan>) {
+                // In place: its saves, clips and breaks are this replay's.
+                if (const CommandBuffer* span = buffer.spanAt(c.index)) replay(*span);
             }
         }, cmd);
     }

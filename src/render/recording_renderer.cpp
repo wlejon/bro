@@ -448,6 +448,11 @@ void RecordingRenderer::recordSurfaceBreak() {
     buffer_->append(Cmd_SurfaceBreak{});
 }
 
+void RecordingRenderer::recordSpan(std::shared_ptr<const CommandBuffer> span) {
+    if (!span || span->commandCount() == 0) return;
+    buffer_->append(Cmd_ReplaySpan{buffer_->pushSpan(std::move(span))});
+}
+
 void RecordingRenderer::recordBlitCanvasInline(void* canvasScene,
                                                float x, float y, float w, float h) {
     buffer_->append(Cmd_BlitCanvasInline{canvasScene, x, y, w, h});

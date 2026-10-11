@@ -333,6 +333,31 @@ void installHeadlessFrame(engine::Engine& engine) {
             return res.get();
         }, 4, "getPixels"));
 
+    // frameImage() -> ImageData
+    //
+    // The whole composited frame, in device px (RGBA8): what screenshot()
+    // writes, for a test that compares frames rather than files. Headless
+    // only (it records and rasterizes the frame on the calling thread).
+    ev::registerGlobal("frameImage", ev::makeFunction(
+        [&engine](Value, std::span<const Value>) -> Value {
+            auto pixels = engine.capturePixels();
+            if (pixels.empty()) return ev::null();
+            return makeImageDataValue(engine.framePixelWidth(), engine.framePixelHeight(), pixels.data());
+        }, 0, "frameImage"));
+
+    // setPaintCache(on) -> the previous setting
+    //
+    // The paint span cache (layout/paint_cache.h) on or off for every pass
+    // from here on, overriding BRO_PAINT_CACHE: the A/B a pixel test compares
+    // a cached frame against a full re-record with. Off records everything and
+    // leaves the cache as it was.
+    ev::registerGlobal("setPaintCache", ev::makeFunction(
+        [](Value, std::span<const Value> a) -> Value {
+            const bool was = layout::DrawTraversal::paintCacheEnabled();
+            if (!a.empty()) layout::DrawTraversal::setPaintCacheEnabled(ev::toBool(a[0]));
+            return ev::fromBool(was);
+        }, 1, "setPaintCache"));
+
     // getFramePixel(x, y)
     ev::registerGlobal("getFramePixel", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
@@ -763,6 +788,22 @@ void installHeadlessFrame(engine::Engine& engine) {
                 dnum("queued", static_cast<double>(ss.queued));
                 o.set(ev::setProperty(o.get(), "dom", dm.get()));
                 num("processBytes", static_cast<double>(ss.processBytes));
+            }
+            {
+                // The paint span cache (layout/paint_cache.h): spans reused
+                // and recorded since startup, and why each was recorded.
+                const layout::PaintCacheStats pc = engine.paintCacheStats();
+                ev::Persistent pt(ev::createObject());
+                ev::Persistent why(ev::createObject());
+                pt.set(ev::setProperty(pt.get(), "enabled",
+                                       ev::fromBool(layout::DrawTraversal::paintCacheEnabled())));
+                pt.set(ev::setProperty(pt.get(), "reused", ev::fromDouble(static_cast<double>(pc.reused))));
+                pt.set(ev::setProperty(pt.get(), "recorded", ev::fromDouble(static_cast<double>(pc.recorded))));
+                for (size_t i = 0; i < static_cast<size_t>(layout::SpanMiss::Count); ++i)
+                    why.set(ev::setProperty(why.get(), layout::spanMissName(static_cast<layout::SpanMiss>(i)),
+                                            ev::fromDouble(static_cast<double>(pc.misses[i]))));
+                pt.set(ev::setProperty(pt.get(), "misses", why.get()));
+                o.set(ev::setProperty(o.get(), "paint", pt.get()));
             }
             return o.get();
         });

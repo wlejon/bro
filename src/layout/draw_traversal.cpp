@@ -8,6 +8,7 @@
 #include "dom/element_geometry.h"
 #include "dom/element_scroll.h"
 #include "dom/node.h"
+#include "render/recording_renderer.h"
 
 #include <algorithm>
 #include <functional>
@@ -16,7 +17,9 @@
 namespace bro::layout {
 
 DrawTraversal::DrawTraversal(render::Renderer* renderer)
-    : renderer_(renderer) {}
+    : renderer_(renderer) {
+    recorder_ = dynamic_cast<render::RecordingRenderer*>(renderer);
+}
 
 // ---------------------------------------------------------------------------
 // Stacking-context helpers (CSS 2.1 Appendix E)
@@ -190,9 +193,14 @@ void DrawTraversal::draw(dom::Element* root, float scrollX, float scrollY,
     // positioned-non-SC descendants and z:auto SC children in tree order,
     // then positive-z child SCs.
     auto rootSC = buildStackingContextTree(root, scrollX, scrollY);
+    // Each box through the span cache (paint_cache.h), when it is on.
+    activeCache_ = beginPaintCache(root);
+    spanVolatile_ = SpanMiss::Count;
     if (rootSC) paintStackingContext(rootSC.get(), false, true);
     // Then the top layer, above everything, each entry over its ::backdrop.
     if (rootSC) paintTopLayer(root);
+    if (activeCache_) prunePaintCache(*activeCache_);
+    activeCache_ = nullptr;
     topLayerSCs_.clear();
     frameSCs_.clear();
     frameOverlaySCs_.clear();

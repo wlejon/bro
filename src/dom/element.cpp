@@ -830,17 +830,44 @@ void Element::setScrollToBottom(bool v) {
     }
 }
 
+namespace {
+std::atomic<uint64_t> g_paintEpoch{1};
+}
+
+uint64_t Element::paintEpoch() { return g_paintEpoch.load(std::memory_order_relaxed); }
+uint64_t Element::advancePaintEpoch() { return g_paintEpoch.fetch_add(1, std::memory_order_relaxed) + 1; }
+
+void Element::notePaintChanged() {
+    const uint64_t epoch = paintEpoch();
+    for (Node* p = this; p; ) {
+        if (p->nodeType() == NodeType::Element) {
+            auto* e = static_cast<Element*>(p);
+            if (e->paintStamp_.load(std::memory_order_relaxed) == epoch) return;
+            e->paintStamp_.store(epoch, std::memory_order_relaxed);
+            p = p->parentNode();
+        } else if (p->nodeType() == NodeType::DocumentFragment) {
+            auto* sr = dynamic_cast<ShadowRoot*>(p);
+            p = sr ? static_cast<Node*>(sr->host()) : nullptr;
+        } else {
+            p = p->parentNode();
+        }
+    }
+}
+
 void Element::setScrollTopValue(float v) {
+    if (v != scrollTop_) notePaintChanged();
     scrollTop_ = v;
     if (document_) document_->noteScrollOffset(this, scrollTop_ != 0.0f || scrollLeft_ != 0.0f);
 }
 
 void Element::setScrollLeftValue(float v) {
+    if (v != scrollLeft_) notePaintChanged();
     scrollLeft_ = v;
     if (document_) document_->noteScrollOffset(this, scrollTop_ != 0.0f || scrollLeft_ != 0.0f);
 }
 
 void Element::notePathDirty(bool style, bool layout) {
+    notePaintChanged();
     for (Node* p = parent_; p; ) {
         if (p->nodeType() == NodeType::Element) {
             auto* e = static_cast<Element*>(p);

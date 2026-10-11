@@ -365,7 +365,17 @@ public:
             // The wrapper's contentRect is the pseudo's content origin;
             // its lone text child carries the placed text runs which are
             // copied in below after recursing.
-            pseudoHost_->pseudoBoxMut(pseudoWhich_) = box;
+            // The box as painted before, compared once the text child has
+            // copied its runs in: a change stamps the host for the paint cache.
+            auto& hostBox = pseudoHost_->pseudoBoxMut(pseudoWhich_);
+            htmlayout::layout::LayoutBox before = std::move(hostBox);
+            hostBox = box;
+            for (auto& child : children_) child->syncBoxToElement();
+            if (dom::paintGeometryDiffers(before, pseudoHost_->pseudoBox(pseudoWhich_)))
+                pseudoHost_->notePaintChanged();
+            if (pseudoBeforeAdapter_) pseudoBeforeAdapter_->syncBoxToElement();
+            if (pseudoAfterAdapter_)  pseudoAfterAdapter_->syncBoxToElement();
+            return;
         } else if (pseudoHost_ && pseudoIsText_) {
             // Pseudo-text: lift placed text runs onto the host's pseudoBox
             // so the draw traversal can render them without walking into

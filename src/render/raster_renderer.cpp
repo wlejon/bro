@@ -1,6 +1,7 @@
 #include "render/raster_renderer.h"
 #include "render/filter_chain.h"
 #include "render/font_family.h"
+#include "render/font_generation.h"
 #include "render/shared_pixels_image.h"
 #include "render/system_font_mgr.h"
 #include "svg/svg_renderer.h"
@@ -286,6 +287,7 @@ bool RasterRenderer::registerCustomFont(const std::string& family,
     if (!typeface) typeface = ensureFontMgr()->makeFromData(skData);
     if (!typeface) return false;
     customFonts_.push_back({family, weight, italic, typeface});
+    noteFontRegistered();
     // Runs hold SkFonts derived from fonts_, so they go first.
     shaper_.clear();
     fonts_.clear();

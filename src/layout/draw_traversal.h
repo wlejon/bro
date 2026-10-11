@@ -1,5 +1,6 @@
 #pragma once
 
+#include "layout/paint_cache.h"
 #include "render/layer_source.h"
 #include "render/renderer.h"
 #include <cstdint>
@@ -11,7 +12,7 @@
 #include <vector>
 
 namespace bro::canvas { class CanvasScene; }
-namespace bro::render { struct DecodedImage; class ImageRequest; }
+namespace bro::render { struct DecodedImage; class ImageRequest; class RecordingRenderer; }
 namespace bro::dom { class Element; class Node; }
 namespace htmlayout::css { class ComputedStyle; }
 namespace htmlayout::layout { struct LayoutBox; }
@@ -178,6 +179,14 @@ public:
         promotedElements_ = set;
     }
 
+    // The span cache (layout/paint_cache.h): on for draw() passes into a
+    // recording renderer unless BRO_PAINT_CACHE=0. setPaintCacheEnabled
+    // overrides that for every traversal (headless A/B: a pass with it off
+    // records everything and leaves the cache as it was).
+    static bool paintCacheEnabled();
+    static void setPaintCacheEnabled(bool on);
+    const PaintCacheStats& paintCacheStats() const { return cacheStats_; }
+
 private:
     // The box a decoration painter paints: an element's, or a ::before /
     // ::after pseudo-element's. A generated box is painted by the same
@@ -196,7 +205,27 @@ private:
     static PaintBox paintBoxOf(dom::Element* elem);
 
     void drawNode(dom::Node* node, float offsetX, float offsetY);
+    // Through the span cache when it is on for this pass, else paintElement.
     void drawElementContent(dom::Element* elem, float offsetX, float offsetY);
+    void paintElement(dom::Element* elem, float offsetX, float offsetY);
+
+    // Span cache state for the current draw() pass (null: off).
+    render::RecordingRenderer* recorder_ = nullptr;
+    PaintCache* activeCache_ = nullptr;
+    bool contextFlushed_ = false;
+    // Per paint mode, so the base and promoted passes over one document (which
+    // lift different boxes out of the walk) keep a cache each.
+    std::unordered_map<const dom::Element*, std::unique_ptr<PaintCache>> caches_[3];
+    PaintCacheStats cacheStats_;
+    // The first reason the span being recorded cannot be reused (Count: none
+    // yet). Painters note it (noteVolatile); it carries up to every span
+    // around the one it was noted in.
+    mutable SpanMiss spanVolatile_ = SpanMiss::Count;
+    void noteVolatile(SpanMiss why) const {
+        if (spanVolatile_ == SpanMiss::Count) spanVolatile_ = why;
+    }
+    PaintCache* beginPaintCache(dom::Element* root);
+    void prunePaintCache(PaintCache& cache);
     // Box shadows (outset, then inset over the background), background,
     // borders and outline of the border box (bx, by, bw, bh), in CSS paint
     // order. One painter for elements and pseudo-elements alike.

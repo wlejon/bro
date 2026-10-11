@@ -110,7 +110,7 @@ void DrawTraversal::paintBoxDecorations(const PaintBox& pb, float bx, float by, 
     }
 }
 
-void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float offsetY) {
+void DrawTraversal::paintElement(dom::Element* elem, float offsetX, float offsetY) {
     if (!elem) return;
 
     auto& style = elem->computedStyle();
@@ -423,6 +423,7 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
                 } else {
                     // Ordinal marker: position among list-item siblings,
                     // honoring <ol start> and <li value>.
+                    noteVolatile(SpanMiss::ListOrdinal);
                     auto isListItem = [](dom::Node* n) {
                         if (n->nodeType() != dom::NodeType::Element) return false;
                         auto* e = static_cast<dom::Element*>(n);
@@ -523,6 +524,7 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
 
     // SVG elements render their own children via the SVG pipeline — skip DOM traversal
     if (elem->svgControl()) {
+        noteVolatile(SpanMiss::Svg);
         // Draw the SVG control, then return (no child traversal)
         if (visible) {
             elem->svgControl()->draw(renderer_, elem, box, offsetX, offsetY);
@@ -548,6 +550,7 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     // the compositor shifts HTML and quads together by the engine inset), and
     // carries the active overflow/scroll clip for the compositor to re-apply.
     if ((elem->sceneGraph() || elem->canvasScene() || elem->webglContext() || elem->iframeDoc()) && visible) {
+        noteVolatile(SpanMiss::LayerBreak);
         LayerBreak lb;
         lb.element = elem;
         const auto box = dom::absoluteContentBox(elem);
@@ -645,6 +648,9 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     // Draw replaced element content (input, textarea, select, svg)
     if (visible) {
         auto* inputCtrl = elem->inputControl();
+        if (inputCtrl || elem->textareaControl() || elem->selectControl())
+            noteVolatile(SpanMiss::Control);
+        if (elem->videoControl()) noteVolatile(SpanMiss::Video);
         if (inputCtrl) {
             inputCtrl->draw(renderer_, box, style, offsetX, offsetY,
                             rootOffsetX_, rootOffsetY_);
@@ -674,6 +680,7 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
             // Its own layer in the app document, so a busy terminal redraws
             // only itself and the page around it is never re-recorded for it
             // (el_terminal_layer.cpp); inline everywhere else.
+            noteVolatile(terminalLayers_ && layerBreakCb_ ? SpanMiss::LayerBreak : SpanMiss::Terminal);
             if (terminalLayers_ && layerBreakCb_) {
                 LayerBreak lb;
                 lb.element = elem;
@@ -695,6 +702,7 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
             // A remote screen is its own layer, the decoded picture sampled
             // where it is (the engine's RemoteViewHost); a pass with no
             // compositor behind it shows only the element's background.
+            noteVolatile(SpanMiss::LayerBreak);
             if (layerBreakCb_) {
                 LayerBreak lb;
                 lb.element = elem;
