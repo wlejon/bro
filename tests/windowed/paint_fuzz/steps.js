@@ -396,6 +396,7 @@
             }
         }
         let count = 0, edge = 0, firstAt = -1;
+        let ex0 = W, ey0 = H, ex1 = -1, ey1 = -1;  // the edge pixels' bounds
         for (const p of marked) {
             const x = p % W, y = (p - x) / W;
             let near = 0;
@@ -409,6 +410,8 @@
                 ++count;
             } else {
                 ++edge;
+                ex0 = Math.min(ex0, x); ey0 = Math.min(ey0, y);
+                ex1 = Math.max(ex1, x); ey1 = Math.max(ey1, y);
             }
         }
         let first = null;
@@ -418,7 +421,7 @@
                      [da[i], da[i + 1], da[i + 2], da[i + 3]].join(','),
                      [db[i], db[i + 1], db[i + 2], db[i + 3]].join(',')];
         }
-        return { count, edge, first };
+        return { count, edge, first, edgeBounds: edge ? [ex0, ey0, ex1, ey1] : null };
     }
 
     globalThis.PaintFuzz = { create, diff, same };

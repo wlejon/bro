@@ -30,6 +30,7 @@ frameImage();
 const history = [];
 let failed = false;
 let edgePixels = 0;  // apart along an edge only: antialiasing under a partial raster (steps.js)
+const edgeSteps = [];  // the captures they were in, to name the most
 for (let i = 0; i < STEPS && !failed; ++i) {
     const s = fuzz.step();
     history.push(i + ':' + s.what);
@@ -44,6 +45,7 @@ for (let i = 0; i < STEPS && !failed; ++i) {
     for (let k = 0; k < 2 && !failed; ++k) {
         const d = PaintFuzz.diff(cached[k], full);
         edgePixels += d.edge;
+        if (d.edge) edgeSteps.push({ step: i, what: s.what, capture: k + 1, edge: d.edge, at: d.edgeBounds });
         if (d.count !== 0) {
             failed = true;
             assert(false, `paint cache fuzz seed=${seed}: step ${i} (${s.what}), capture ${k + 1} — ${d.count} pixels ` +
@@ -55,4 +57,11 @@ for (let i = 0; i < STEPS && !failed; ++i) {
 const ps = perf.stats().paint;
 console.log(`PAINT_FUZZ seed=${seed} steps=${history.length} ${failed ? 'FAILED' : 'ok'} edgePixels=${edgePixels} reused=${ps.reused} ` +
             `recorded=${ps.recorded} misses=${JSON.stringify(ps.misses)}`);
+// The captures with the most edge pixels, with where they were (x0,y0,x1,y1):
+// a count that creeps up has a step and a place to look at.
+edgeSteps.sort((a, b) => b.edge - a.edge);
+if (edgeSteps.length)
+    console.log(`PAINT_FUZZ_EDGES seed=${seed} captures=${edgeSteps.length} most: ` +
+                edgeSteps.slice(0, 3).map((e) => `step ${e.step} (${e.what}) capture ${e.capture}: ${e.edge} at ` +
+                                                 `[${e.at.join(',')}]`).join('; '));
 assert(failed || ps.reused > 0, `paint cache fuzz seed=${seed}: no span was ever reused, so nothing was tested`);

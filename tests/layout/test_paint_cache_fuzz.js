@@ -34,4 +34,6 @@ for (const seed of seeds) {
            out.split(/\r?\n/).filter((l) => /ASSERT|PAINT_FUZZ|ERROR/.test(l)).join('\n'));
     assert(line && line.includes(' ok '), `paint cache fuzz seed=${seed} ran to the end:\n${out}`);
     console.log(line.slice(line.indexOf('PAINT_FUZZ')));
+    const edges = out.split(/\r?\n/).find((l) => l.includes('PAINT_FUZZ_EDGES'));
+    if (edges) console.log(edges.slice(edges.indexOf('PAINT_FUZZ_EDGES')));
 }
