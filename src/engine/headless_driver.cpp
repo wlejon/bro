@@ -4,6 +4,7 @@
 #include "engine/config_loader.h"
 #include "engine/app_manifest.h"
 #include "engine/app_runtime.h"
+#include "engine/control.h"
 
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/eval.h"
@@ -118,7 +119,8 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
                 "  --audio         Enable real audio output\n"
                 "  --splash        Show splash screen during load\n"
                 "  --no-splash     Skip splash screen\n"
-                "  -e <expr>       Evaluate JavaScript expression\n"
+                "  -e <expr>       Evaluate JavaScript and print its value (a string as\n"
+                "                  itself, else JSON; a promise is awaited)\n"
                 "  --notification <args>\n"
                 "                  Start as a click on a notification would: the page\n"
                 "                  hears notificationclick after load (docs/sys-api.js)\n"
@@ -375,9 +377,37 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
                 if (i > 0) oss << ";\n";
                 oss << inlineExprs[i];
             }
-            std::string err = engine->eval(oss.str());
+            // The control eval (bro-ctl eval): the completion value comes back
+            // as text — a string as itself, anything else as JSON — and a
+            // promise is awaited, played out on virtual time. It prints on
+            // stdout; a throw or rejection prints its stack on stderr.
+            // A page without scripts has no realm yet, and the eval command
+            // registers with it.
+            if (!bro::bronze_host::isWebHostGlobalsInstalled()) {
+                bro::bronze_host::installWebHostGlobals(*engine);
+            }
+            bool done = false, ok = false;
+            std::string payload;
+            engine->control().dispatch({"eval", oss.str()}, [&](bool o, std::string p) {
+                ok = o;
+                payload = std::move(p);
+                done = true;
+            });
+            for (int step = 0; !done && step < 1000 && !bro::util::interrupted(); ++step) {
+                engine->advanceTime(16);
+            }
+            engine->flush();
             drainAppReloads();
-            if (!err.empty() || bro::bronze_host::hasTestFailure() || engine->hasTestFailure()) {
+            if (!done) {
+                std::cerr << "-e: the result did not settle\n";
+                exitCode = 1;
+            } else if (!ok) {
+                std::cerr << payload << "\n";
+                exitCode = 1;
+            } else if (payload != "undefined") {
+                std::cout << payload << std::endl;
+            }
+            if (bro::bronze_host::hasTestFailure() || engine->hasTestFailure()) {
                 exitCode = 1;
             }
         }

@@ -9,7 +9,7 @@ bro-headless [--no-gpu] [--width N] [--height N] <app-directory> [script.js | -e
 ```
 
 - With `.js` file = **script mode** (runs file, then exits)
-- With `-e` flags = **inline mode** (evaluates expressions, then exits)
+- With `-e` flags = **inline mode** (evaluates expressions, prints the last one's value on stdout, then exits). Several `-e` run as one program joined by `;`. The value prints as `bro-ctl eval` replies: a string as itself, anything else as JSON (elements as `<tag#id.class>`), nothing for `undefined`; a promise is awaited on virtual time (16 s at most). A throw or rejection prints its stack on stderr and exits 1.
 - No script and no `-e` = the app boots, runs its own scripts, and exits
 
 Scripts and `-e` expressions are compiled in-process by bronze and run against the live engine; there is no interpreter and no interactive REPL.
