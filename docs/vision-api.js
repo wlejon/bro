@@ -5,7 +5,8 @@
  * boxes: promptable segmentation (SAM), monocular depth (Depth-Anything-V2),
  * surface normals (DSINE), the ControlNet conditioning annotators — soft edges
  * (HED), line drawing (lineart), straight lines (MLSD), body pose (OpenPose),
- * semantic segmentation (SegFormer) — plus dichotomous matting (BiRefNet), the
+ * semantic segmentation (SegFormer) — plus dichotomous matting (BiRefNet),
+ * open-vocabulary object detection from text queries (OWLv2), the
  * two raw ViT backbones (DINOv2 / DINOv3), and one *generative* model that runs
  * the other way, latent → image: StyleGAN3 (loadStyleGAN3).
  *
@@ -645,6 +646,64 @@ cut.alpha[y * cut.width + x];          // per-pixel coverage in [0, 1]
  * not wait for the finalizer. Calling removeBackground() afterwards throws.
  */
 rembg.dispose();
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+// OWLv2 — open-vocabulary object detection (text queries -> boxes)
+// ═════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Load OWLv2 (google/owlv2-base-patch16-ensemble): CLIP ViT-B/16 at 960 px with
+ * class / box / objectness heads, and the CLIP text tower for the queries.
+ * `dir` is the HF release as-is: model.safetensors, vocab.json, merges.txt
+ * (brovisionml-data/owlv2; `bro.models.find('owlv2')`).
+ * On a GPU the vision tower runs FP16 (~75 ms an image on a Radeon 8060S); the
+ * CPU path is exact FP32 and takes about a minute (a parity reference, not a
+ * way to run it).
+ * @param {string} dir
+ * @param {Object} [opts]
+ * @param {string} [opts.device=best available]
+ * @returns {Owlv2}   props: `device`, `imageSize` (960)
+ */
+const owl = bro.vision.loadOwlv2(bro.models.find('owlv2'), { device: 'gpu' });
+
+/**
+ * Owlv2.detect(image, opts) — find what the queries name. Synchronous.
+ * The image is padded to a square (bottom/right, grey), resized to 960 and
+ * every one of the 3600 patches predicts a box; a box's score is the sigmoid
+ * of its best query's logit. Kept: score >= threshold, then greedy NMS across
+ * queries, best first.
+ * @param {{width,height,data|pixels,channels?}|string} image  8-bit RGB or
+ *   RGBA rows (ImageData, a bro.image.decodeScaled result) or a file path
+ * @param {Object} opts
+ * @param {string|string[]} opts.queries  "a bird", "a squirrel", ... — embedded
+ *   once per instance and cached by string, so repeating them costs nothing
+ * @param {number} [opts.threshold=0.1]    minimum score; OWLv2's scores run
+ *   low (0.1 to 0.3 is a typical cut for a real object)
+ * @param {number} [opts.nms=0.3]          IoU above which a lower-scored box
+ *   is dropped; 0 (or >= 1) keeps them all
+ * @param {number} [opts.maxDetections=100]
+ * @returns {Array<{ box: number[], score: number, label: number,
+ *                   query: string, objectness: number }>}
+ *   `box` is [x, y, w, h] in the image's pixels; `label` the index into
+ *   `queries`, `query` the string; `objectness` the query-free "is this an
+ *   object" probability. An empty array means nothing scored the threshold.
+ */
+const found = owl.detect(bro.image.decodeScaled(path, { width: 1280, height: 1280 }),
+                         { queries: ['a bird', 'a squirrel', 'a deer'], threshold: 0.2 });
+if (!found.length) console.log('no animal in frame');
+else console.log(found[0].query, found[0].score, found[0].box);
+
+/**
+ * Owlv2.embedQueries(queries) — the projected, L2-normalised CLIP text
+ * embeddings, (n, 512) row-major, as detect() uses them (and caches them).
+ * @param {string|string[]} queries
+ * @returns {Float32Array}
+ */
+const textEmb = owl.embedQueries(['a bird', 'a squirrel']);
+
+/** Owlv2.dispose() — free the weights now; detect() afterwards throws. */
+owl.dispose();
 
 
 // ═════════════════════════════════════════════════════════════════════════════

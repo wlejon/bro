@@ -23,7 +23,7 @@ if (bro.vision.available === false) {
 } else {
     const loaders = ['loadSam', 'loadDepth', 'loadNormal', 'loadBirefnet',
                      'loadHed', 'loadLineart', 'loadMlsd', 'loadOpenpose',
-                     'loadSegformer'];
+                     'loadSegformer', 'loadOwlv2'];
     assert(typeof bro.vision.init === 'function', 'bro.vision.init is a function');
     for (const f of loaders) {
         assert(typeof bro.vision[f] === 'function', 'bro.vision.' + f + ' is a function');
