@@ -79,4 +79,8 @@ void setWorkerServerControl(const WorkerServerControl* control) {
     t_workerControl = control;
 }
 
+bool onWorkerThread() {
+    return t_workerControl != nullptr;
+}
+
 }  // namespace bro::bronze_host

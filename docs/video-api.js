@@ -28,7 +28,11 @@
 // a different codec. When that becomes a bottleneck, expect a sibling
 // class (H264Encoder / AV1Encoder) sharing the same shape.
 //
-// Available in both windowed and headless. Output paths are taken as-is
+// Available in both windowed and headless, and in a Worker: a worker that
+// renders frames encodes them itself with addFrameRGBA, so the frames never
+// cross to the page (addCanvasFrame / addViewportFrame are the page's; a
+// worker has no canvas element or viewport, and they throw a TypeError
+// there). An encoder is used on the thread that made it. Output paths are taken as-is
 // (resolved against the engine's cwd), matching how `screenshot()` and
 // `screenshotCanvas()` treat paths, no implicit basePath prepending.
 //

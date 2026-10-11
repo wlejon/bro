@@ -99,9 +99,17 @@ struct WorkerServerControl {
 };
 // Per thread; null (the default) means "this thread's realm is the engine's".
 void setWorkerServerControl(const WorkerServerControl* control);
+// Whether the calling thread runs a Worker's realm (its control is set for the
+// life of the worker's script), so a binding can refuse what only the engine's
+// own thread may touch (the DOM, the composited viewport).
+bool onWorkerThread();
 bool registerWindowNatives(std::string* error);
 bool registerSettingsNatives(std::string* error);
 bool registerPathsNatives(std::string* error);
+// bro.models (native_models.cpp, natives/models/): where model weights live;
+// main realm only. js/models.js mounts it (installModelsModule).
+bool registerModelsNatives(std::string* error);
+void installModelsModule();
 bool registerDunderBroNatives(std::string* error);
 inline bool registerMeshNatives(std::string*) { return true; }
 bool registerNetNatives(std::string* error);

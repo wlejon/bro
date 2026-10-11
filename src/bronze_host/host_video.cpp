@@ -41,6 +41,7 @@
 #include "bronze_host/host_element.h"
 #include "bronze_host/host_web_globals.h"
 #include "bronze_host/host_builder.h"  // ObjectBuilder, argAt
+#include "bronze_host/host_natives.h"  // onWorkerThread
 
 #if BRO_WITH_VIDEO
 
@@ -185,6 +186,10 @@ Value throwRefusal(Refusal kind, const std::string& message) {
 std::vector<uint8_t> canvasPixels(Value elValue, int wantW, int wantH,
                                   std::string& err, Refusal& kind) {
     kind = Refusal::Type;
+    if (onWorkerThread()) {
+        err = "addCanvasFrame: a Worker has no canvas elements — use addFrameRGBA()";
+        return {};
+    }
     dom::Element* el = hostElementOf(elValue);
     if (!el) {
         err = "addCanvasFrame: argument is not an element";
@@ -230,6 +235,12 @@ std::vector<uint8_t> canvasPixels(Value elValue, int wantW, int wantH,
 std::vector<uint8_t> viewportPixels(int wantW, int wantH, std::string& err,
                                     Refusal& kind) {
     kind = Refusal::Internal;
+    if (onWorkerThread()) {
+        // The composited frame is the engine thread's; a worker reading it would race the renderer.
+        kind = Refusal::Type;
+        err = "addViewportFrame: a Worker has no viewport — use addFrameRGBA()";
+        return {};
+    }
     engine::Engine* engine = hostEngine();
     if (!engine) {
         err = "addViewportFrame: no engine";
@@ -303,8 +314,13 @@ Value addFrameFromTypedArray(std::span<const Value> a, int width, int height,
 // VideoEncoder
 // ---------------------------------------------------------------------------
 
-HostClass g_videoEncoderClass;
-HostClass g_gifEncoderClass;
+// Per thread, as ImageBitmap's (host_imagebitmap.cpp): the main realm and every
+// Worker realm install their own (installVideoGlobals), since a class's
+// prototype lives in one realm's heap. An encoder is used on the thread that
+// made it; the typed-array path needs nothing else, so a worker can render and
+// encode without the page.
+thread_local HostClass g_videoEncoderClass;
+thread_local HostClass g_gifEncoderClass;
 
 // Every member of both encoders is an accessor or a method that reads its
 // RECEIVER, so the whole surface moves to the prototype and an instance owns

@@ -11,6 +11,7 @@
 #include "bronze_host/host_natives.h"
 #include "bronze_host/host_headless.h"
 #include "bronze_host/host_rejection_events.h"
+#include "bronze_host/host_web_globals.h"
 #include "engine/engine.h"
 #include "util/asset_mounts.h"
 #include "util/log.h"
@@ -266,6 +267,9 @@ void WorkerInstance::threadFunc() {
     // aliases their constructors (host_math_funcs.cpp). Per thread, like
     // ImageBitmap's.
     installMathGlobals();
+    // VideoEncoder / GifEncoder over typed arrays: a worker renders frames and
+    // encodes them without handing every frame to the page (host_video.cpp).
+    installVideoGlobals();
 
     // bro.server on this thread names THIS loop (native_server.cpp): stop()
     // ends it the way close() does, and the tick rate is the cadence the
