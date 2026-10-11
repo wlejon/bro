@@ -261,6 +261,7 @@ const cp = require('child_process');
 
 cp.execSync(command, options?);                    // → stdout string. Throws on non-zero exit. BLOCKS
 cp.exec(command, options?, callback?);             // callback(err, stdout, stderr) or Promise<{ stdout, stderr }>
+                                                   // strings; options.encoding 'buffer' (or null) gives Buffers
 cp.execFileSync(file, args?, options?);            // like execSync but takes file + args array. BLOCKS
 cp.execFile(file, args?, options?, callback?);     // async version of execFileSync
 cp.spawnSync(command, args?, options?);            // → { stdout, stderr, status, ... }. BLOCKS
@@ -296,9 +297,12 @@ cp.spawn(file, args?, options?);                   // → ChildProcess (non-bloc
 //                 (no pipes at all) — this diverges from Node deliberately, so
 //                 an existing caller that never reads can't silently buffer,
 //                 and a GUI child keeps its own window. Opt in explicitly.
+//                 Node's array form ([stdin, stdout, stderr]) pipes all three
+//                 when any entry is 'pipe', else none.
 //   encoding      with stdio:'pipe', 'utf8' delivers decoded strings (UTF-8
-//                 safe across chunk boundaries). Default is binary Uint8Array,
-//                 which is what raw pixel/audio streams need.
+//                 safe across chunk boundaries). Default is binary: Buffers
+//                 (Uint8Arrays, which is what raw pixel/audio streams need,
+//                 whose toString() is the text), as in Node.
 //   highWaterMark per-stream buffer cap, default 8 MB. When full the reader
 //                 stops and the child blocks in write() — real backpressure.
 //                 Draining happens automatically on the poll tick. A single
@@ -342,7 +346,7 @@ enc.on('close', (code) => { if (code !== 0) showError(); });
 // Binary out (raw frames), and stdin in:
 const dec = cp.spawn('ffmpeg', ['-i', 'clip.mp4', '-f', 'rawvideo',
                                 '-pix_fmt', 'rgba', 'pipe:1'], { stdio: 'pipe' });
-dec.stdout.on('data', (bytes) => { /* bytes is a Uint8Array */ });
+dec.stdout.on('data', (bytes) => { /* bytes is a Buffer (a Uint8Array) */ });
 dec.stdin.end();                           // EOF — tools reading pipe:0 need this
 
 
