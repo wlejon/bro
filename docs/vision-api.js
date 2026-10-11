@@ -769,7 +769,8 @@ if (!bro.vision.wildlife.available()) hideIdentifyButton();
 /**
  * bro.vision.wildlife.locate(opts?) — the paths open() would use, and which
  * are missing ('detector' | 'classifier' | 'species'; a model directory
- * without model.safetensors, a list file that is not there). Throws in a
+ * without model.safetensors, a list file that is not there, or no
+ * `species` folder in bro.models when no list is given). Throws in a
  * Worker unless detector, classifier and species are all given.
  * @returns {{ detector: string|null, classifier: string|null,
  *             species: string|Object[]|null, model: string, missing: string[] }}

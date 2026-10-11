@@ -86,7 +86,8 @@
         if (!out.detector || !exists(out.detector + '/model.safetensors')) out.missing.push('detector');
         if (!out.classifier || !exists(out.classifier + '/model.safetensors') ||
             !exists(out.classifier + '/config.json')) out.missing.push('classifier');
-        if (typeof out.species === 'string' && !exists(out.species)) out.missing.push('species');
+        // No list given and no species folder found is missing too, not "no list".
+        if (out.species == null || (typeof out.species === 'string' && !exists(out.species))) out.missing.push('species');
         return out;
     };
 

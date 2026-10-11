@@ -40,6 +40,14 @@ same(wl.locate(none).missing, ['detector', 'classifier', 'species'], 'locate() n
 let err = expectThrows(() => wl.open(none), 'open() on an empty directory');
 assert(err.code === 'missing' && /not available/.test(err.message), 'open() error: ' + err.message);
 same(err.missing, ['detector', 'classifier', 'species'], 'the error carries the missing list');
+// No list given and no species folder in bro.models: the list is missing too
+// (it was left out, so available() answered true without one).
+if (bro.models.find('species') === null) {
+    same(wl.locate({ detector: empty, classifier: empty }).missing, ['detector', 'classifier', 'species'],
+         'locate() with no species folder names the list');
+} else {
+    console.log('(this machine has a species folder in bro.models: the no-folder case is not checked)');
+}
 
 // config() reads files, never weights: a list of two rows is counted.
 const list = path.join(root, 'two.json');
