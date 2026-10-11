@@ -1,5 +1,6 @@
 // native_models_register.cpp — registers every native of native_models_decl.h with
-// bronze (embed::registerNative) under __bro_native.models. Hand-maintained: each
+// bronze (embed::registerNative) under __bro_native.models. The fetch jobs are
+// util/model_fetch.h's. Hand-maintained: each
 // registration's signature matches its prototype there. Called from registerModelsNatives
 // (native_models.cpp), part of registerBroNatives (src/bronze_host/host_natives.h).
 
@@ -35,7 +36,11 @@ void* p(F* f) { return reinterpret_cast<void*>(f); }
 
 bool registerNatives_models(std::string* error) {
     return fn("__bro_native.models.dirs", p(&bro_models_dirs), "str", {}, error) &&
-           fn("__bro_native.models.find", p(&bro_models_find), "str", {"str"}, error);
+           fn("__bro_native.models.find", p(&bro_models_find), "str", {"str"}, error) &&
+           fn("__bro_native.models.sources", p(&bro_models_sources), "str", {}, error) &&
+           fn("__bro_native.models.fetchStart", p(&bro_models_fetchStart), "i32", {"str", "bool"}, error) &&
+           fn("__bro_native.models.fetchPoll", p(&bro_models_fetchPoll), "str", {"i32"}, error) &&
+           fn("__bro_native.models.fetchCancel", p(&bro_models_fetchCancel), "void", {"i32"}, error);
 }
 
 }  // namespace bro::bronze_host

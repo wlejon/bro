@@ -21,6 +21,26 @@ const char* bro_models_dirs(void);
 //   the first <dir>/<name> that is a directory, absolute; "" for none
 const char* bro_models_find(const char* name);
 
+// bro.models.sources
+//   registered at __bro_native.models.sources
+//   the `models.sources` entries in order, one per line (util/model_fetch.h)
+const char* bro_models_sources(void);
+
+// bro.models.fetch / bro.models.available
+//   registered at __bro_native.models.fetchStart
+//   starts a job on its own thread (listOnly: available); its id, 0 for a bad name
+int32_t bro_models_fetchStart(const char* name, bool listOnly);
+
+//   registered at __bro_native.models.fetchPoll
+//   JSON {state: "running"|"done"|"failed"|"cancelled", done, total, files, file,
+//   source, dir, error, code}; a settled job is forgotten once polled. An unknown
+//   id answers {state: "failed", code: "io"}
+const char* bro_models_fetchPoll(int32_t id);
+
+//   registered at __bro_native.models.fetchCancel
+//   asks the job to stop; it settles as "cancelled" (its partial files kept)
+void bro_models_fetchCancel(int32_t id);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif

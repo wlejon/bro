@@ -66,11 +66,19 @@ void addList(const std::string& list, std::vector<std::string>& out) {
 
 }  // namespace
 
+std::string userModelsDir() {
+    // A scratch profile (BRO_APP_HOME: an app's tests, a clean run) keeps its
+    // models too, so a fetch there never lands in the user's own folder.
+    const char* home = std::getenv("BRO_APP_HOME");
+    if (home && *home) return normalDir((fs::path(home) / "models").string());
+    return normalDir((fs::path(userDataDir()) / "models").string());
+}
+
 std::vector<std::string> modelDirs(const std::string& setting) {
     std::vector<std::string> all;
     if (const char* env = std::getenv("BRO_MODELS")) addList(env, all);
     addList(setting, all);
-    all.push_back(normalDir((fs::path(userDataDir()) / "models").string()));
+    all.push_back(userModelsDir());
 
     std::vector<std::string> out;
     std::vector<std::string> keys;
