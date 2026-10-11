@@ -141,7 +141,11 @@
  * @property {YuE2Steer[]} [steer]
  * @property {YuE2Capture} [capture]
  * @property {YuE2Vae} [vae] - Decode the latents as they arrive (onAudio, result.audio)
- * @property {number} [decodeCoreFrames=50] - With vae: frames per decoded tile (smaller = sooner audio, more halo recompute)
+ * @property {number} [decodeCoreFrames=50] - With vae: the largest decoded tile (smaller = more halo recompute)
+ * @property {number} [decodeFirstFrames=8] - With vae: the first tile. Tiles grow from it: the first is decoded as soon
+ *   as this many frames have their right context (halo frames past them), each later one waits until it can take twice
+ *   the previous tile, up to decodeCoreFrames. Streamed in 50-frame NAR windows, the first window gives a 38-frame
+ *   tile at once (~60 ms on a 4090), so audio starts right after the first latents. Output is exact for any tiling.
  * @property {number} [decodeHaloFrames] - With vae: context frames per side (at least vae.requiredHalo())
  * @property {function(string, Int32Array)} [onAbc] - ABC text as it is sampled, batched per tick, with its token ids (never split inside a UTF-8 character)
  * @property {function(Int32Array)} [onSemantic] - Codec ids (0..32767) as they are sampled, batched per tick
@@ -224,6 +228,8 @@
  * @typedef {Object} YuE2VaeDecodeOptions
  * @property {number} [coreFrames] - Tile the decode with this many frames per tile (exact); 0 = one pass (or 50 when streaming)
  * @property {number} [haloFrames] - Context per side; at least requiredHalo(coreFrames)
+ * @property {number} [firstFrames=8] - With onChunk: the first tile; tiles double from it up to coreFrames, so the
+ *   first chunk arrives after one small tile instead of a full core
  * @property {function(YuE2AudioChunk)} [onChunk] - Stream: chunks in order as tiles finish (async)
  * @property {function({done: number, total: number})} [onProgress] - Tiles done (async, without onChunk)
  * @property {function(YuE2Audio|undefined, {cancelled: boolean, error: string})} [onDone] - Async; the result is undefined when streaming

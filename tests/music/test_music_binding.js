@@ -101,10 +101,12 @@ function runVae(vae) {
 
     // Streamed decode: chunks in order, planar, concatenating to the full decode.
     const left = new Float32Array(N), right = new Float32Array(N);
-    let next = 0, chunks = 0, finished = null, contiguous = true;
+    let next = 0, chunks = 0, finished = null, contiguous = true, firstChunk = 0;
     const h = vae.decode(enc.latents, {
         coreFrames: 16,
+        firstFrames: 4,
         onChunk: (c) => {
+            if (!chunks) firstChunk = c.frames;
             contiguous = contiguous && c.sample0 === next && c.channels === 2;
             left.set(c.samples.subarray(0, c.frames), c.sample0);
             right.set(c.samples.subarray(c.frames, 2 * c.frames), c.sample0);
@@ -117,7 +119,9 @@ function runVae(vae) {
     pumpUntil('streamed decode', () => finished !== null, 60);
     assert(!finished.cancelled && !finished.error, 'streamed decode finished cleanly: ' + JSON.stringify(finished));
     assert(contiguous && next === N, 'chunks contiguous from 0 to N, ended at ' + next);
-    assert(chunks === Math.ceil(enc.frames / 16), 'one chunk per 16-frame core, got ' + chunks);
+    // Tiles grow 4, 8, 16, 16, ... (the last one takes the remainder).
+    assert(firstChunk === 4 * 1920, 'first chunk is the 4-frame first tile, got ' + firstChunk + ' samples');
+    assert(chunks > Math.ceil(enc.frames / 16), 'growing tiles: more chunks than 16-frame cores, got ' + chunks);
     const dStream = Math.max(maxDiff(left, full.samples.subarray(0, N)), maxDiff(right, full.samples.subarray(N)));
     assert(dStream < 1e-4, 'streamed decode matches full, max|d| ' + dStream);
 
