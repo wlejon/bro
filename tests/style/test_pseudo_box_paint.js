@@ -73,4 +73,3 @@ expectAt(470, 50, [255, 255, 255], '::after content inside the borders');
     assert(dark > 10 && light > 6, '::after dashed border has dashes and gaps, dark=' + dark + ' light=' + light);
 }
 
-console.log('test_pseudo_box_paint.js PASSED');

@@ -80,4 +80,3 @@ const denied = cp.execFileSync(headlessBin, [
 assert(denied.includes('sys-available=false'),
        `a shell app outside a trusted location is refused, got: ${denied}`);
 
-console.log('test_trust.js PASSED');

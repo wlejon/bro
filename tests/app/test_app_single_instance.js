@@ -88,4 +88,3 @@ if (process.platform !== 'win32') {
 }
 
 try { fs.rmSync(scratch, { recursive: true, force: true }); } catch (e) { /* best effort */ }
-console.log('test_app_single_instance.js PASSED');

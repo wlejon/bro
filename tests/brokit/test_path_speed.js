@@ -36,4 +36,3 @@ assert(join < 0.7, 'path.join costs ' + join.toFixed(2) + ' us a call (was ~7; l
 assert(normalize < 0.7, 'path.normalize costs ' + normalize.toFixed(2) + ' us (was ~4.5; limit 0.7)');
 assert(resolve < 2.2, 'path.resolve costs ' + resolve.toFixed(2) + ' us (was ~22; limit 2.2)');
 assert(dirname < 0.5 && basename < 0.5, 'dirname / basename under 0.5 us (were ~2)');
-console.log('test_path_speed.js PASSED');

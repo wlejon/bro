@@ -55,4 +55,3 @@ clickOn(field);
 assert(document.activeElement === field, 'the click focused the field');
 assert(field.matches(':focus-visible'), 'a clicked text field is :focus-visible');
 
-console.log('test_focus_visible PASSED');

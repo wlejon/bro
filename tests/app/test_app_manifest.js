@@ -231,4 +231,3 @@ if (!fs.existsSync(windowed)) {
 }
 
 try { fs.rmSync(scratch, { recursive: true, force: true }); } catch (e) { /* best effort */ }
-console.log('test_app_manifest.js PASSED');

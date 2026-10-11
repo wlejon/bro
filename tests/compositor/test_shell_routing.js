@@ -85,4 +85,3 @@ assert(shellClaimsKeyboard() === true, 'a focused contenteditable claims the key
 document.getElementById('editable').blur();
 assert(shellClaimsKeyboard() === false, 'and releases on blur');
 
-console.log('test_shell_routing.js PASSED');

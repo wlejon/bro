@@ -16,4 +16,3 @@ el.remove();
 assert(!document.contains(inner), 'a removed subtree is not in the document');
 assert(!document.contains(null), 'null is not in the document');
 
-console.log('test_document_contains PASSED');

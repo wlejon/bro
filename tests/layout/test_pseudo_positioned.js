@@ -50,4 +50,3 @@ assert(is(p, 255, 255, 0), 'a rule inside a positioned grip, outside its host, p
 p = at('f', 3, 10);
 assert(is(p, 0, 0, 255), 'an ::after in a flex container is a flex item with its own size: ' + show(p));
 
-console.log('test_pseudo_positioned PASSED');

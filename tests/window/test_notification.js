@@ -49,4 +49,3 @@ n2.close();
 
 notifications({ clear: true });
 assert(notifications().length === 0, 'cleared');
-console.log('test_notification.js PASSED');

@@ -52,4 +52,3 @@ const steps = 'keyDown(' + SDLK_F5 + ', ' + SDL_SCANCODE_F5 + ', 0); keyUp(' + S
 }
 
 fs.rmSync(scratch, { recursive: true, force: true });
-console.log('test_f5_unwatched.js PASSED');

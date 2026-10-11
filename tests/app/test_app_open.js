@@ -98,4 +98,3 @@ for (const k in saved) {
     else process.env[k] = saved[k];
 }
 try { fs.rmSync(scratch, { recursive: true, force: true }); } catch (e) { /* best effort */ }
-console.log('test_app_open.js PASSED');

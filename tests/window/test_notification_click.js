@@ -121,4 +121,3 @@ window.removeEventListener('notificationclick', onWinClick);
 window.removeEventListener('notificationclose', onWinClose);
 notifications({ clear: true });
 notificationActivations({ clear: true });
-console.log('test_notification_click.js PASSED');

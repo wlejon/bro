@@ -44,4 +44,3 @@ assert(err instanceof Error && err.code === 'ESRCH' && err.syscall === 'kill' &&
 assert(codeOf(() => process.kill('123')) === 'TypeError', 'a pid that is not a number');
 assert(codeOf(() => process.kill(process.pid, 'SIGNOPE')) === 'TypeError', 'an unknown signal name');
 if (isWin) assert(codeOf(() => process.kill(process.pid, 'SIGHUP')) === 'ENOSYS', 'Windows: SIGHUP is ENOSYS');
-console.log('test_process_kill.js PASSED');

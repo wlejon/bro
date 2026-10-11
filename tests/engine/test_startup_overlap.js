@@ -73,4 +73,3 @@ if (gpuMs < 0) {
         'and finished before the page ran: ' + p.compileEndMs + ' vs loaded ' + s.loadedMs);
     assert(p.codeCache === 'hit' || p.codeCache === 'miss' || p.codeCache === 'off', 'code cache: ' + p.codeCache);
 }
-console.log('test_startup_overlap.js PASSED');

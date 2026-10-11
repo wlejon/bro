@@ -84,4 +84,3 @@ click(x, y, 0);
 flush();
 assert(box.checked, 'a left click checks it');
 
-console.log('test_right_click PASSED');

@@ -35,4 +35,3 @@ const filter = lastFileDialogFilter();
 const exts = (filter.split('|')[1] || '').split(';');
 for (const e of ['wav', 'mp3', 'flac', 'ogg', 'opus', 'm4a', 'm4b'])
     assert(exts.includes(e), 'audio/* offers .' + e + ': ' + filter);
-console.log('test_media_can_decode.js PASSED');

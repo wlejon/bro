@@ -91,4 +91,3 @@ fired.length = 0;
 
 bro.window.unregisterAllGlobalHotkeys();
 __bro_native.window.resetHotkeyKeys();
-console.log('test_hotkey_routing.js PASSED');

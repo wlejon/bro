@@ -141,4 +141,3 @@ w.terminate();
 
 for (const f of fs.readdirSync(dir)) fs.unlinkSync(path.join(dir, f));
 fs.rmdirSync(dir);
-console.log('test_media_tags PASSED');

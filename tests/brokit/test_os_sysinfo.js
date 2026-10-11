@@ -60,4 +60,3 @@ assert(os.constants.signals.SIGTERM === 15 && os.constants.signals.SIGKILL === 9
 
 console.log('test_os_sysinfo: ' + cpus.length + ' x ' + c0.model + ', ' + (total / 2 ** 30).toFixed(1) +
     ' GiB, ' + ver + ' ' + os.release() + ' ' + os.machine());
-console.log('test_os_sysinfo.js PASSED');

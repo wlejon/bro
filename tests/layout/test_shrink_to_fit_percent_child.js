@@ -31,4 +31,3 @@ assert(w('ib') > 150, `an inline-block takes its width:100% child's content: ${w
 assert(Math.abs(w('ibc') - w('ib')) <= 1, 'and the child fills it');
 assert(w('fl') > 120, `a float takes its width:100% child's content: ${w('fl')}`);
 
-console.log('test_shrink_to_fit_percent_child PASSED');
