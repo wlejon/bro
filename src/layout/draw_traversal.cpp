@@ -228,7 +228,14 @@ void DrawTraversal::drawNode(dom::Node* node, float offsetX, float offsetY) {
         if (skipSet_.count(el)) return;
         drawElementContent(el, offsetX, offsetY);
     } else if (node->nodeType() == dom::NodeType::Text) {
+        // Painted in the element it is laid out in: its parent, or the host
+        // of the shadow root it is a direct child of (such text was laid out
+        // and never painted).
         auto* parent = node->parentNode();
+        if (parent && parent->nodeType() == dom::NodeType::DocumentFragment) {
+            auto* sr = dynamic_cast<dom::ShadowRoot*>(parent);
+            parent = sr ? static_cast<dom::Node*>(sr->host()) : nullptr;
+        }
         if (parent && parent->nodeType() == dom::NodeType::Element) {
             drawText(node, static_cast<dom::Element*>(parent), offsetX, offsetY);
         }

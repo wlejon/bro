@@ -47,25 +47,45 @@ TextNode::TextNode(const std::string& data)
 {
 }
 
-void TextNode::setLayoutBox(const htmlayout::layout::LayoutBox& box) {
-    if (paintGeometryDiffers(layoutBox_, box)) {
-        Node* p = parentNode();
-        if (p && p->nodeType() == NodeType::DocumentFragment) {
-            auto* sr = dynamic_cast<ShadowRoot*>(p);
-            p = sr ? static_cast<Node*>(sr->host()) : nullptr;
-        }
-        if (p && p->nodeType() == NodeType::Element) static_cast<Element*>(p)->notePaintChanged();
+// The element this text is laid out and painted in: its parent, or the host
+// of the shadow root it is a direct child of.
+static Element* paintingElement(Node* node) {
+    Node* p = node->parentNode();
+    if (p && p->nodeType() == NodeType::DocumentFragment) {
+        auto* sr = dynamic_cast<ShadowRoot*>(p);
+        p = sr ? static_cast<Node*>(sr->host()) : nullptr;
     }
+    return p && p->nodeType() == NodeType::Element ? static_cast<Element*>(p) : nullptr;
+}
+
+void TextNode::setLayoutBox(const htmlayout::layout::LayoutBox& box) {
+    if (paintGeometryDiffers(layoutBox_, box))
+        if (Element* e = paintingElement(this)) e->notePaintChanged();
     layoutBox_ = box;
+}
+
+// The text changed: the element it is in lays it out again (and paints it).
+// Going empty or not can also change what :empty matches, so that restyles.
+void TextNode::noteDataChanged(bool wasEmpty) {
+    Element* e = paintingElement(this);
+    if (!e) return;
+    if (wasEmpty != data_.empty()) {
+        e->markDirty();
+        return;
+    }
+    e->markLayoutDirty();
+    if (Document* doc = e->document()) doc->markElementDirty();
 }
 
 void TextNode::setData(const std::string& text) {
     CharacterDataNoticeGuard notice(this, data_);
     int oldLen = static_cast<int>(data_.size());
     int newLen = static_cast<int>(text.size());
+    const bool wasEmpty = data_.empty();
     data_ = text;
     if (auto* doc = ownerDoc(this))
         doc->notifyTextDataChanged(this, 0, oldLen, newLen);
+    noteDataChanged(wasEmpty);
 }
 
 std::string TextNode::substringData(size_t offset, size_t count) const {
@@ -76,18 +96,22 @@ std::string TextNode::substringData(size_t offset, size_t count) const {
 void TextNode::appendData(const std::string& data) {
     CharacterDataNoticeGuard notice(this, data_);
     int before = static_cast<int>(data_.size());
+    const bool wasEmpty = data_.empty();
     data_ += data;
     if (auto* doc = ownerDoc(this))
         doc->notifyTextDataChanged(this, before, 0, static_cast<int>(data.size()));
+    noteDataChanged(wasEmpty);
 }
 
 void TextNode::insertData(size_t offset, const std::string& data) {
     CharacterDataNoticeGuard notice(this, data_);
     if (offset > data_.size()) offset = data_.size();
+    const bool wasEmpty = data_.empty();
     data_.insert(offset, data);
     if (auto* doc = ownerDoc(this))
         doc->notifyTextDataChanged(this, static_cast<int>(offset), 0,
                                    static_cast<int>(data.size()));
+    noteDataChanged(wasEmpty);
 }
 
 void TextNode::deleteData(size_t offset, size_t count) {
@@ -96,10 +120,12 @@ void TextNode::deleteData(size_t offset, size_t count) {
     // report that it did.
     CharacterDataNoticeGuard notice(this, data_);
     size_t actual = std::min(count, data_.size() - offset);
+    const bool wasEmpty = data_.empty();
     data_.erase(offset, actual);
     if (auto* doc = ownerDoc(this))
         doc->notifyTextDataChanged(this, static_cast<int>(offset),
                                    static_cast<int>(actual), 0);
+    noteDataChanged(wasEmpty);
 }
 
 void TextNode::replaceData(size_t offset, size_t count, const std::string& data) {
@@ -108,18 +134,22 @@ void TextNode::replaceData(size_t offset, size_t count, const std::string& data)
     // report that it did.
     CharacterDataNoticeGuard notice(this, data_);
     size_t eraseCount = std::min(count, data_.size() - offset);
+    const bool wasEmpty = data_.empty();
     data_.erase(offset, eraseCount);
     data_.insert(offset, data);
     if (auto* doc = ownerDoc(this))
         doc->notifyTextDataChanged(this, static_cast<int>(offset),
                                    static_cast<int>(eraseCount),
                                    static_cast<int>(data.size()));
+    noteDataChanged(wasEmpty);
 }
 
 TextNode* TextNode::splitText(size_t offset) {
     if (offset > data_.size()) offset = data_.size();
     std::string tail = data_.substr(offset);
+    const bool wasEmpty = data_.empty();
     data_ = data_.substr(0, offset);
+    noteDataChanged(wasEmpty);
     auto* newNode = new TextNode(tail);
     if (auto* doc = ownerDoc(this))
         doc->notifyTextSplit(this, static_cast<int>(offset), newNode);

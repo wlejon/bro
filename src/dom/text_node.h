@@ -35,6 +35,8 @@ public:
     void setLayoutBox(const htmlayout::layout::LayoutBox& box);
 
 private:
+    void noteDataChanged(bool wasEmpty);
+
     std::string data_;
     htmlayout::layout::LayoutBox layoutBox_;
 };

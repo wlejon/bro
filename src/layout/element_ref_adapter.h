@@ -88,10 +88,14 @@ public:
         return std::span<ElementRef* const>{childrenView_.data(), childrenView_.size()};
     }
 
+    // What :empty asks. A text node with no data does not count (Selectors:
+    // "texts with data of zero length do not affect emptiness").
     bool hasTextChildren() const override {
         if (!elem_) return false;
         for (auto* node : elem_->childNodes()) {
-            if (node->nodeType() == dom::NodeType::Text) return true;
+            if (node->nodeType() == dom::NodeType::Text &&
+                !static_cast<const dom::TextNode*>(node)->data().empty())
+                return true;
         }
         return false;
     }
