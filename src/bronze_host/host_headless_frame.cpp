@@ -813,6 +813,18 @@ void installHeadlessFrame(engine::Engine& engine) {
                     why.set(ev::setProperty(why.get(), layout::spanMissName(static_cast<layout::SpanMiss>(i)),
                                             ev::fromDouble(static_cast<double>(pc.misses[i]))));
                 pt.set(ev::setProperty(pt.get(), "misses", why.get()));
+                // Scroll layers: scrollers composited as layers, and why the
+                // others were painted in place, pass by pass.
+                const auto sl = engine.scrollLayerStats();
+                ev::Persistent slo(ev::createObject());
+                ev::Persistent veto(ev::createObject());
+                slo.set(ev::setProperty(slo.get(), "layers", ev::fromDouble(static_cast<double>(sl.layers))));
+                for (size_t i = 1; i < static_cast<size_t>(layout::ScrollLayerVeto::Count); ++i)
+                    veto.set(ev::setProperty(veto.get(),
+                                             layout::scrollLayerVetoName(static_cast<layout::ScrollLayerVeto>(i)),
+                                             ev::fromDouble(static_cast<double>(sl.vetoes[i]))));
+                slo.set(ev::setProperty(slo.get(), "vetoes", veto.get()));
+                pt.set(ev::setProperty(pt.get(), "scrollLayers", slo.get()));
                 o.set(ev::setProperty(o.get(), "paint", pt.get()));
             }
             return o.get();

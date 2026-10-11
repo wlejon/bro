@@ -139,6 +139,27 @@
             field.appendChild(inp);
             stage.appendChild(field);
             theField = inp;
+            // A scroller of plain boxes, at a fractional place: one composited
+            // as a scroll layer (layout/scroll_layer.h) until the steps give
+            // it something that keeps it in place, as the random ones rarely
+            // are.
+            const sc = document.createElement('div');
+            sc.className = 'b c' + int(0, 4) + ' scroller';
+            sc.style.marginLeft = (int(0, 20) + 0.5) + 'px';
+            sc.style.width = int(90, 220) + 'px';
+            for (let i = int(6, 10); i > 0; --i) {
+                const row = document.createElement('div');
+                row.className = 'b c' + int(0, 4) + (r() < 0.4 ? ' hov' : '');
+                row.textContent = pick(WORDS) + ' ' + pick(WORDS);
+                if (r() < 0.3) {
+                    const inner = document.createElement('div');
+                    inner.className = 'b c' + int(0, 4);
+                    inner.textContent = pick(WORDS);
+                    row.appendChild(inner);
+                }
+                sc.appendChild(row);
+            }
+            stage.appendChild(sc);
         }
 
         // A random element of the stage (not the stage), optionally filtered.

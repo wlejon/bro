@@ -52,8 +52,14 @@ void Engine::recordAppLayers(render::CommandBuffer& outBuffer,
                              int insetTop, int insetRight, int insetBottom,
                              float scrollY,
                              const std::unordered_set<dom::Element*>* promotedSet,
-                             bool promotedOnly) {
+                             bool promotedOnly, ScrollLayerSet* scrollLayers) {
     if (!recordingRenderer_ || !drawTraversal_) return;
+    // Scroll layers for this pass (with the paint cache: off, a pass is the
+    // plain whole record a test compares against). Every layer the pass does
+    // not record again is dropped at its end.
+    if (scrollLayers && !layout::DrawTraversal::paintCacheEnabled()) scrollLayers = nullptr;
+    if (scrollLayers) scrollLayers->beginPass();
+    drawTraversal_->setScrollLayerHost(scrollLayers);
 
     int contentW = vpW - insetRight;
     int contentH = vpH - insetTop - insetBottom;
@@ -158,6 +164,8 @@ void Engine::recordAppLayers(render::CommandBuffer& outBuffer,
     // next full pass) aren't affected.
     drawTraversal_->setPaintMode(PaintMode::All);
     drawTraversal_->setPromotedElements(nullptr);
+    drawTraversal_->setScrollLayerHost(nullptr);
+    if (scrollLayers) scrollLayers->endPass();
 }
 
 namespace {

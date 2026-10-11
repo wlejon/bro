@@ -170,6 +170,8 @@ void Engine::teardown() {
         htmlPoolState_[i] = {};
         systemSurfacePool_[i].clear();
     }
+    baseScrollLayers_.clear();
+    captureScrollLayers_.clear();
     drawTraversal_.reset();
 
 #if BRO_WITH_3D

@@ -27,6 +27,15 @@ struct TerminalLayerSource { uint64_t layerId = 0; };
 /// resolved through the engine's RemoteViewHost.
 struct RemoteViewLayerSource { uint64_t viewId = 0; };
 
+/// A scroll container's content, composited as a layer of its own (a scroll
+/// layer): the scroller's node id, resolved through the scroll layer set of
+/// the pass that recorded it (`pass`: the engine's frame passes and its
+/// headless capture keep a set each).
+struct ScrollLayerSource {
+    uint32_t elementId = 0;
+    uint32_t pass = 0;
+};
+
 /// A DMA-BUF client buffer: foreign toplevel or client surface imported via brodmabuf
 struct DmabufLayerSource {
     uint64_t bufferId = 0;
@@ -76,7 +85,7 @@ struct ClientWindowRef {
 
 using LayerSource = std::variant<CanvasLayerSource, WebGLLayerSource, SceneLayerSource, IframeLayerSource,
                                  TerminalLayerSource, DmabufLayerSource, ClientWindowsLayerSource,
-                                 RemoteViewLayerSource>;
+                                 RemoteViewLayerSource, ScrollLayerSource>;
 
 /// Where a layer lands, in the surface space of the HTML painted around it
 /// (CSS px; content space for the app document), and the overflow/scroll

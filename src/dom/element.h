@@ -277,6 +277,15 @@ public:
     // one is a stacking context or positioned, as of the paint epoch it was
     // looked at in. While nothing under it is stamped since, a subtree with
     // none is not walked again (DrawTraversal::buildStackingContextTree).
+    // The draw traversal's scroll layer check (layout/scroll_layer.h): what in
+    // this scroller's subtree keeps it from being composited as a layer of
+    // its own (0: nothing), as of the paint epoch it was looked at in.
+    uint64_t scrollLayerScanEpoch() const { return scrollLayerScanEpoch_; }
+    uint8_t scrollLayerScanVeto() const { return scrollLayerScanVeto_; }
+    void setScrollLayerScan(uint64_t epoch, uint8_t veto) {
+        scrollLayerScanEpoch_ = epoch;
+        scrollLayerScanVeto_ = veto;
+    }
     uint64_t stackScanEpoch() const { return stackScanEpoch_; }
     bool stackScanFoundAny() const { return stackScanFoundAny_; }
     void setStackScan(uint64_t epoch, bool foundAny) {
@@ -722,6 +731,8 @@ private:
     std::atomic<uint64_t> paintStamp_{0};
     uint64_t stackScanEpoch_ = 0;
     bool stackScanFoundAny_ = false;
+    uint64_t scrollLayerScanEpoch_ = 0;
+    uint8_t scrollLayerScanVeto_ = 0;
     StyledPlace styledPlace_;
     bool scrollToBottom_ = false;
     bool styleSheetAdded_ = false;

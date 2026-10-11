@@ -239,6 +239,8 @@ void Engine::rasterThreadFunc() {
                         backBuf.appLayers,
                         &backBuf.promotedCommands,
                         &htmlPoolState_[back], baseGeneration_, snap.scale, &baseDamage_);
+        // The base's scroll layers, each window recorded since it was drawn.
+        baseScrollLayers_.replay(rasterRenderer.get());
         replaySystemPanelLayers(rasterRenderer.get(), backBuf.systemCommands,
                                 systemSurfacePool_[back], systemSurfacePoolW_[back],
                                 systemSurfacePoolH_[back],
@@ -276,6 +278,7 @@ void Engine::rasterThreadFunc() {
         htmlPoolState_[i] = {};
         systemSurfacePool_[i].clear();
     }
+    baseScrollLayers_.clear();
     for (auto& d : iframeDocs_) {
         if (!d) continue;
         d->surface.reset();

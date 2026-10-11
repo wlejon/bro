@@ -164,8 +164,11 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, int offsetY) {
 
     // A GPU layer's image goes to the presenter, placed and clipped where the
     // layer sits; the CPU layers after it composite into the next segment.
+    // A clip rounds out to whole pixels, or with `nearestClip` each edge to
+    // the nearest one, as an aliased Skia clip does (a scroll layer's: the
+    // scroller's clip, which clips what it paints in place that way).
     auto place = [&](VkImage image, VkImageLayout layout, uint32_t w, uint32_t h, const SkRect& dst,
-                     const render::LayerQuad* quad) -> render::PresentImage& {
+                     const render::LayerQuad* quad, bool nearestClip = false) -> render::PresentImage& {
         render::PresentImage& out = frameImages_.emplace_back();
         out.image = image;
         out.layout = layout;
@@ -177,7 +180,7 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, int offsetY) {
         out.dstH = dst.height();
         SkRect clip;
         if (quad && at.clip(*quad, clip)) {
-            const SkIRect r = clip.roundOut();
+            const SkIRect r = nearestClip ? clip.round() : clip.roundOut();
             out.clipped = true;
             out.clip = {{r.left(), r.top()},
                         {static_cast<uint32_t>(std::max(0, r.width())), static_cast<uint32_t>(std::max(0, r.height()))}};
@@ -199,9 +202,10 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, int offsetY) {
     };
     // A Skia GPU image, sampled where it is; kept alive until the frame has
     // been submitted.
-    auto placeSkiaImage = [&](const render::SkiaImageRef& image, const SkRect& dst, const render::LayerQuad* quad) {
-        place(image->image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, image->width, image->height, dst, quad).view =
-            image->view;
+    auto placeSkiaImage = [&](const render::SkiaImageRef& image, const SkRect& dst, const render::LayerQuad* quad,
+                              bool nearestClip = false) {
+        place(image->image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, image->width, image->height, dst, quad,
+              nearestClip).view = image->view;
         frameSkiaImages_.push_back(image);
     };
 
@@ -218,6 +222,35 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, int offsetY) {
                 } else if (html.surface) {
                     if (auto img = html.surface->makeImageSnapshot())
                         if (SkCanvas* canvas = frameSegmentCanvas()) canvas->drawImage(img, 0.0f, at.oy * at.sy);
+                }
+            },
+            [&](const render::ScrollLayerSource& src) {
+                // A scroller's content: its window's picture where the
+                // scroll put it (the quad), under the scroller's clip.
+                const ScrollLayerSet* set = scrollLayerSet(src.pass);
+                const PublishedFrame* p = set ? set->published(src.elementId) : nullptr;
+                if (!p) return;
+                frameKeyAdd(p->generation());
+                // Pixel for pixel: the surface holds the window rastered at
+                // the quad origin's sub-pixel phase (ScrollLayerSet::phase),
+                // so it lands at the device origin less that phase. Its clip
+                // is aliased, as painting in place clips.
+                auto dstFor = [&](int w, int h) {
+                    const SkRect d = at.dst(quad);
+                    return SkRect::MakeXYWH(d.left() - ScrollLayerSet::phase(quad.x, at.sx),
+                                            d.top() - ScrollLayerSet::phase(quad.y, at.sy), float(w), float(h));
+                };
+                if (render::SkiaImageRef image = p->gpu()) {
+                    placeSkiaImage(image, dstFor(int(image->width), int(image->height)), &quad, true);
+                } else if (sk_sp<SkImage> img = p->get()) {
+                    if (SkCanvas* canvas = frameSegmentCanvas()) {
+                        canvas->save();
+                        SkRect c;
+                        if (at.clip(quad, c)) canvas->clipRect(c, SkClipOp::kIntersect, false);
+                        const SkRect d = dstFor(img->width(), img->height());
+                        canvas->drawImage(img, d.left(), d.top());
+                        canvas->restore();
+                    }
                 }
             },
             [&](const render::IframeLayerSource& src) {

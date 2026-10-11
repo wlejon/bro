@@ -4,6 +4,7 @@
 #include "engine/css_transitions.h"
 #include "engine/desktop_trust.h"
 #include "engine/device_scale.h"
+#include "engine/scroll_layers.h"
 #include "engine/dom_undo.h"
 #include "engine/engine_config.h"
 #include "engine/engine_fwd.h"
@@ -558,6 +559,11 @@ public:
     layout::PaintCacheStats paintCacheStats() const {
         return drawTraversal_ ? drawTraversal_->paintCacheStats() : layout::PaintCacheStats{};
     }
+    // And its scroll layers: scrollers composited as layers, and why the
+    // others were painted in place, pass by pass (layout/scroll_layer.h).
+    layout::DrawTraversal::ScrollLayerStats scrollLayerStats() const {
+        return drawTraversal_ ? drawTraversal_->scrollLayerStats() : layout::DrawTraversal::ScrollLayerStats{};
+    }
 
     /// The frame flight recorder (frame_trace.h) and the agent control
     /// channel (control.h, docs/agent-control.md). startControl serves the
@@ -742,7 +748,14 @@ private:
                          int insetTop, int insetRight, int insetBottom,
                          float scrollY,
                          const std::unordered_set<dom::Element*>* promotedSet = nullptr,
-                         bool promotedOnly = false);
+                         bool promotedOnly = false,
+                         ScrollLayerSet* scrollLayers = nullptr);
+
+    // A pass's scroll layers (engine/scroll_layers.h): the frame passes'
+    // (pass 0) and the headless captures' (pass 1).
+    const ScrollLayerSet* scrollLayerSet(uint32_t pass) const {
+        return pass == 0 ? &baseScrollLayers_ : &captureScrollLayers_;
+    }
 
     // What a pool copy's HTML surfaces hold of the base: the recording it was
     // replayed from (baseGeneration_), at what scale, and the layers that
@@ -1012,6 +1025,8 @@ private:
     std::vector<render::SkiaRenderer::LayerSurface> htmlSurfacePool_[2];
     int htmlSurfacePoolW_[2] = {0, 0}, htmlSurfacePoolH_[2] = {0, 0};
     HtmlPoolState htmlPoolState_[2];
+    ScrollLayerSet baseScrollLayers_{0};
+    ScrollLayerSet captureScrollLayers_{1};
     std::vector<render::SkiaRenderer::LayerSurface> systemSurfacePool_[2];
     int systemSurfacePoolW_[2] = {0, 0}, systemSurfacePoolH_[2] = {0, 0};
 

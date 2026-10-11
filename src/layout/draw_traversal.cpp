@@ -139,6 +139,144 @@ bool createsStackingContext(dom::Element* elem, bool isRoot) {
 
 } // namespace
 
+const char* scrollLayerVetoName(ScrollLayerVeto v) {
+    switch (v) {
+        case ScrollLayerVeto::None:         return "none";
+        case ScrollLayerVeto::Nested:       return "nested";
+        case ScrollLayerVeto::RoundedClip:  return "roundedClip";
+        case ScrollLayerVeto::Effects:      return "effects";
+        case ScrollLayerVeto::Positioned:   return "positioned";
+        case ScrollLayerVeto::Sticky:       return "sticky";
+        case ScrollLayerVeto::LayerContent: return "layerContent";
+        case ScrollLayerVeto::Control:      return "control";
+        case ScrollLayerVeto::Video:        return "video";
+        case ScrollLayerVeto::Count:        break;
+    }
+    return "?";
+}
+
+namespace {
+
+// An opacity, transform, filter, blend, clip-path or perspective: what the
+// compositor, drawing a scroll layer's picture under a rectangular clip,
+// would not apply to it.
+bool hasPaintEffect(const htmlayout::css::ComputedStyle& s) {
+    auto set = [&](const char* name, const char* none) {
+        auto it = s.find(name);
+        return it != s.end() && !it->second.empty() && it->second != none;
+    };
+    auto opIt = s.find("opacity");
+    if (opIt != s.end() && !opIt->second.empty() && std::strtof(opIt->second.c_str(), nullptr) < 1.0f) return true;
+    return set("transform", "none") || set("filter", "none") || set("backdrop-filter", "none") ||
+           set("mix-blend-mode", "normal") || set("clip-path", "none") || set("perspective", "none") ||
+           set("mask", "none") || set("mask-image", "none");
+}
+
+// What in `root`'s content keeps it from being a scroll layer: a box the
+// stacking-context walk paints (positioned, or a stacking context), one that
+// is composited on its own, a control, a video.
+ScrollLayerVeto scanScrollLayerContent(dom::Element* root) {
+    ScrollLayerVeto found = ScrollLayerVeto::None;
+    std::function<void(dom::Element*)> visit = [&](dom::Element* e) {
+        if (found != ScrollLayerVeto::None) return;
+        const auto& s = e->computedStyle();
+        auto disp = s.find("display");
+        if (disp != s.end() && disp->second == "none") return;
+        auto pos = s.find("position");
+        if (pos != s.end() && pos->second == "sticky") { found = ScrollLayerVeto::Sticky; return; }
+        if (isPositioned(s) || createsStackingContext(e, false)) { found = ScrollLayerVeto::Positioned; return; }
+        if (e->canvasScene() || e->webglContext() || e->sceneGraph() || e->iframeDoc() || e->terminalControl() ||
+            e->remoteViewControl()) {
+            found = ScrollLayerVeto::LayerContent;
+            return;
+        }
+        if (e->inputControl() || e->textareaControl() || e->selectControl()) { found = ScrollLayerVeto::Control; return; }
+        if (e->videoControl()) { found = ScrollLayerVeto::Video; return; }
+        e->forEachComposedChild([&](dom::Element* c) { visit(c); });
+    };
+    root->forEachComposedChild([&](dom::Element* c) { visit(c); });
+    return found;
+}
+
+}  // namespace
+
+ScrollLayerVeto DrawTraversal::scrollLayerVeto(dom::Element* elem, const htmlayout::css::ComputedStyle& style,
+                                               float bw, float bh) {
+    if (inScrollLayer_) return ScrollLayerVeto::Nested;
+    if (!getRadii(style, bw, bh).isZero()) return ScrollLayerVeto::RoundedClip;
+    if (isCollapsedTable(elem)) return ScrollLayerVeto::Effects;
+    for (dom::Element* e = elem; e; e = e->layoutParent()) {
+        const auto& s = e->computedStyle();
+        if (hasPaintEffect(s)) return ScrollLayerVeto::Effects;
+        // A rounded clip round it: the compositor clips the layer to a
+        // rectangle, its bounds.
+        if (e != elem && (overflowAxisClips(getOverflowX(s)) || overflowAxisClips(getOverflowY(s))) &&
+            !getRadii(s, e->layoutBox().fullWidth(), e->layoutBox().fullHeight()).isZero())
+            return ScrollLayerVeto::RoundedClip;
+    }
+    if (parentPerspective(elem) > 0) return ScrollLayerVeto::Effects;
+    // The content's verdict, kept while nothing under the scroller changes.
+    if (elem->scrollLayerScanEpoch() != 0 && elem->paintStamp() < elem->scrollLayerScanEpoch())
+        return static_cast<ScrollLayerVeto>(elem->scrollLayerScanVeto());
+    const ScrollLayerVeto v = scanScrollLayerContent(elem);
+    elem->setScrollLayerScan(dom::Element::paintEpoch(), static_cast<uint8_t>(v));
+    return v;
+}
+
+bool DrawTraversal::paintScrollLayer(dom::Element* elem, const htmlayout::css::ComputedStyle& style,
+                                     const htmlayout::layout::LayoutBox& box, bool visible, float x, float y,
+                                     float bw, float bh) {
+    if (!scrollLayerHost_ || !recorder_ || !recorder_->buffer() || !layerBreakCb_) return false;
+    // A scroller: content past the box on an axis that scrolls.
+    auto scrolls = [](const std::string& ov) { return ov == "auto" || ov == "scroll"; };
+    const bool scrollY = scrolls(getOverflowY(style)) && dom::maxScrollTopOf(elem) > 0.0f;
+    const bool scrollX = scrolls(getOverflowX(style)) && dom::maxScrollLeftOf(elem) > 0.0f;
+    if (!scrollX && !scrollY) return false;
+    const ScrollLayerVeto veto = scrollLayerVeto(elem, style, bw, bh);
+    if (veto != ScrollLayerVeto::None) {
+        ++scrollLayerStats_.vetoes[static_cast<size_t>(veto)];
+        return false;
+    }
+
+    // The window, in content space (the content box at scroll 0 is the
+    // origin): the padding box where the scroll has it, and a margin round it.
+    constexpr float kMargin = 256.0f;
+    const float sx = dom::clampedScrollLeftOf(elem), sy = dom::clampedScrollTopOf(elem);
+    const float padW = box.contentRect.width + box.padding.left + box.padding.right;
+    const float padH = box.contentRect.height + box.padding.top + box.padding.bottom;
+    const float winX = sx - box.padding.left - kMargin, winY = sy - box.padding.top - kMargin;
+    const float winW = padW + 2 * kMargin, winH = padH + 2 * kMargin;
+    // The layer, where the scroll puts the window, under the scroller's clip.
+    LayerBreak lb;
+    lb.element = elem;
+    lb.source = render::ScrollLayerSource{elem->nodeId(), scrollLayerHost_->scrollLayerPass()};
+    lb.quad.x = x - sx + winX;
+    lb.quad.y = y - sy + winY;
+    render::CommandBuffer* buf =
+        scrollLayerHost_->beginScrollLayer(elem, winX, winY, winW, winH, lb.quad.x, lb.quad.y);
+    if (!buf) return false;
+    lb.quad.w = winW;
+    lb.quad.h = winH;
+    if (!currentClipRect(lb.quad.clipX, lb.quad.clipY, lb.quad.clipW, lb.quad.clipH))
+        lb.quad.clipW = lb.quad.clipH = -1.0f;
+    noteVolatile(SpanMiss::LayerBreak);
+    layerBreakCb_(lb);
+
+    // The content, into the layer, culled against the window.
+    render::CommandBuffer* outer = recorder_->buffer();
+    std::vector<ClipBox> clips = std::move(clipRectStack_);
+    clipRectStack_.clear();
+    pushClipRect(winX, winY, winW, winH);
+    const bool wasIn = std::exchange(inScrollLayer_, true);
+    recorder_->setBuffer(buf);
+    paintContent(elem, style, box, visible, 0.0f, 0.0f);
+    recorder_->setBuffer(outer);
+    inScrollLayer_ = wasIn;
+    clipRectStack_ = std::move(clips);
+    ++scrollLayerStats_.layers;
+    return true;
+}
+
 void DrawTraversal::pushClipRect(float x, float y, float w, float h) {
     // Intersect with the current effective clip so the new top stays the
     // running intersection (empty intersections collapse to zero area).

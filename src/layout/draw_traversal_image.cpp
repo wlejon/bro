@@ -30,7 +30,9 @@ std::shared_ptr<const render::DecodedImage> readyImage(const std::shared_ptr<ren
 }  // namespace
 
 bool DrawTraversal::boxOnScreen(dom::Element* elem) const {
-    if (!elem || viewportW_ <= 0 || viewportH_ <= 0) return true;
+    // Inside a scroll layer the walk is in the layer's content space, not the
+    // document's: take it as showing (an animation keeps its frames coming).
+    if (!elem || viewportW_ <= 0 || viewportH_ <= 0 || inScrollLayer_) return true;
     const dom::AbsoluteRect b = dom::absoluteBorderBox(elem);
     float x0 = b.x + rootOffsetX_, y0 = b.y + rootOffsetY_;
     float x1 = x0 + b.width, y1 = y0 + b.height;

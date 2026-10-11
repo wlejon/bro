@@ -590,64 +590,24 @@ void DrawTraversal::paintElement(dom::Element* elem, float offsetX, float offset
         return;
     }
 
+    // A scroll container composited as a scroll layer (layout/scroll_layer.h):
+    // its content is recorded into the layer, and what follows it here (its
+    // replaced content, a collapsed table's border) it cannot have.
+    if (needsClip && scrollLayerHost_ && paintScrollLayer(elem, style, box, visible, x, y, bw, bh)) {
+        renderer_->restore();
+        popClipRect();
+        if (hasClipPath) renderer_->restore();
+        if (hasFilter) renderer_->restore();
+        if (hasOpacity) renderer_->restore();
+        if (hasTransform) renderer_->restore();
+        return;
+    }
+
     // Children's offset is the parent's absolute content position
     // (so child positions, which are relative to parent content area, become absolute)
     // Scroll offsets clamped to the valid range — JS may have set them before
     // layout updated.
-    float childOffsetX = x - dom::clampedScrollLeftOf(elem);
-    float childOffsetY = y - dom::clampedScrollTopOf(elem);
-
-    // ::before pseudo content (drawn before children)
-    if (visible) drawPseudo(elem, "before", childOffsetX, childOffsetY);
-
-    // Draw composed children (shadow DOM + slot replacement).
-    // A <textarea> renders its value through ElTextarea (below); its DOM text
-    // children are the *source* of that value, not separate flow content.
-    // Painting them here too double-draws the text — once in the element's
-    // computed color via this walk, once again by the control — which reads
-    // as the placeholder/value "ghosting" behind the real text.
-    if (!elem->textareaControl()) {
-        // CSS2.1 Appendix E: non-positioned floats paint above the
-        // backgrounds/borders of in-flow block-level siblings. Defer floated
-        // children to a second pass so a later sibling's background can't
-        // cover a float that precedes it in the DOM.
-        std::vector<dom::Node*> floatedChildren;
-        for (auto* child : elem->composedChildNodes()) {
-            if (child && child->nodeType() == dom::NodeType::Element) {
-                auto& cs = static_cast<dom::Element*>(child)->computedStyle();
-                auto fIt = cs.find("float");
-                if (fIt != cs.end() && fIt->second != "none" &&
-                    !fIt->second.empty()) {
-                    floatedChildren.push_back(child);
-                    continue;
-                }
-            }
-            drawNode(child, childOffsetX, childOffsetY);
-        }
-        for (auto* child : floatedChildren)
-            drawNode(child, childOffsetX, childOffsetY);
-    }
-
-    // ::after pseudo content (drawn after children)
-    if (visible) drawPseudo(elem, "after", childOffsetX, childOffsetY);
-
-    // A line-clamp container whose kept lines hold no text node (images,
-    // inline-blocks, or an empty last line) carries the ellipsis as its own
-    // run, in its content coordinates and its font (htmlayout line_clamp.h).
-    if (visible && box.textTruncated) {
-        for (const auto& run : box.textRuns) {
-            if (run.srcStart != htmlayout::layout::kContainerEllipsisSrc ||
-                run.text.empty())
-                continue;
-            render::FontRef fontRef = getFontRef(elem);
-            float ascent = renderer_->measureText("", fontRef).ascent;
-            bromath::Color color = cfromColor8({0, 0, 0, 255});
-            auto cIt = style.find("color");
-            if (cIt != style.end()) tryParseColor(cIt->second, color);
-            renderer_->drawText(run.text, childOffsetX + run.x,
-                                childOffsetY + run.y + ascent, fontRef, color);
-        }
-    }
+    paintContent(elem, style, box, visible, x - dom::clampedScrollLeftOf(elem), y - dom::clampedScrollTopOf(elem));
 
     // Draw replaced element content (input, textarea, select, svg)
     if (visible) {
@@ -838,6 +798,62 @@ void DrawTraversal::paintElement(dom::Element* elem, float offsetX, float offset
     if (hasFilter) renderer_->restore();
     if (hasOpacity) renderer_->restore();
     if (hasTransform) renderer_->restore();
+}
+
+void DrawTraversal::paintContent(dom::Element* elem, const htmlayout::css::ComputedStyle& style,
+                                 const htmlayout::layout::LayoutBox& box, bool visible, float childOffsetX,
+                                 float childOffsetY) {
+    // ::before pseudo content (drawn before children)
+    if (visible) drawPseudo(elem, "before", childOffsetX, childOffsetY);
+
+    // Draw composed children (shadow DOM + slot replacement).
+    // A <textarea> renders its value through ElTextarea (below); its DOM text
+    // children are the *source* of that value, not separate flow content.
+    // Painting them here too double-draws the text — once in the element's
+    // computed color via this walk, once again by the control — which reads
+    // as the placeholder/value "ghosting" behind the real text.
+    if (!elem->textareaControl()) {
+        // CSS2.1 Appendix E: non-positioned floats paint above the
+        // backgrounds/borders of in-flow block-level siblings. Defer floated
+        // children to a second pass so a later sibling's background can't
+        // cover a float that precedes it in the DOM.
+        std::vector<dom::Node*> floatedChildren;
+        for (auto* child : elem->composedChildNodes()) {
+            if (child && child->nodeType() == dom::NodeType::Element) {
+                auto& cs = static_cast<dom::Element*>(child)->computedStyle();
+                auto fIt = cs.find("float");
+                if (fIt != cs.end() && fIt->second != "none" &&
+                    !fIt->second.empty()) {
+                    floatedChildren.push_back(child);
+                    continue;
+                }
+            }
+            drawNode(child, childOffsetX, childOffsetY);
+        }
+        for (auto* child : floatedChildren)
+            drawNode(child, childOffsetX, childOffsetY);
+    }
+
+    // ::after pseudo content (drawn after children)
+    if (visible) drawPseudo(elem, "after", childOffsetX, childOffsetY);
+
+    // A line-clamp container whose kept lines hold no text node (images,
+    // inline-blocks, or an empty last line) carries the ellipsis as its own
+    // run, in its content coordinates and its font (htmlayout line_clamp.h).
+    if (visible && box.textTruncated) {
+        for (const auto& run : box.textRuns) {
+            if (run.srcStart != htmlayout::layout::kContainerEllipsisSrc ||
+                run.text.empty())
+                continue;
+            render::FontRef fontRef = getFontRef(elem);
+            float ascent = renderer_->measureText("", fontRef).ascent;
+            bromath::Color color = cfromColor8({0, 0, 0, 255});
+            auto cIt = style.find("color");
+            if (cIt != style.end()) tryParseColor(cIt->second, color);
+            renderer_->drawText(run.text, childOffsetX + run.x,
+                                childOffsetY + run.y + ascent, fontRef, color);
+        }
+    }
 }
 
 } // namespace bro::layout

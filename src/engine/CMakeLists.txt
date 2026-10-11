@@ -69,6 +69,7 @@ add_library(bro_engine STATIC
     system_panels.cpp
     iframe.cpp
     sub_document.cpp
+    scroll_layers.cpp
     window_host.cpp
     window_host_input.cpp
     settings.cpp

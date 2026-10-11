@@ -135,7 +135,7 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
                 recordAppLayers(baseCommands_,
                                 rsnap.vpWidth, rsnap.vpHeight,
                                 rsnap.insetTop, rsnap.insetRight, rsnap.insetBottom,
-                                rsnap.scrollY, pset, /*promotedOnly=*/false);
+                                rsnap.scrollY, pset, /*promotedOnly=*/false, &baseScrollLayers_);
                 ++baseGeneration_;
                 baseDamage_.push(baseGeneration_, recordDamage(prevBaseCommands_, baseCommands_));
                 frameStats_.baseRecordMs += util::currentTimeMs() - tBase;

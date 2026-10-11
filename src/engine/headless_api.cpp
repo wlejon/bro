@@ -426,7 +426,8 @@ std::vector<uint8_t> Engine::capturePixels() {
     updateSelectionSnapshot();
     skia->beginFrame(w, h);
     recordAppLayers(appCmds, w, h,
-                    insetTop, contentRight(), contentBottom(), scrollY_);
+                    insetTop, contentRight(), contentBottom(), scrollY_, nullptr, false,
+                    incremental ? &captureScrollLayers_ : nullptr);
     if (incremental) {
         ++captureGeneration_;
         captureDamage_.push(captureGeneration_, recordDamage(capturePrevCommands_, captureCommands_));
@@ -441,6 +442,7 @@ std::vector<uint8_t> Engine::capturePixels() {
         replayAppLayers(skia, appCmds, capturePool_[k], capturePoolW_[k], capturePoolH_[k],
                         deviceScale_.toDevice(cw), deviceScale_.toDevice(ch), appLayers, nullptr,
                         &capturePoolState_[k], captureGeneration_, deviceScale_.render, &captureDamage_);
+        captureScrollLayers_.replay(skia);
     } else {
         replayAppLayers(skia, appCmds,
                         screenshotHtmlPool_, screenshotHtmlPoolW_, screenshotHtmlPoolH_,

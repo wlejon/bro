@@ -1,6 +1,7 @@
 #pragma once
 
 #include "layout/paint_cache.h"
+#include "layout/scroll_layer.h"
 #include "render/layer_source.h"
 #include "render/renderer.h"
 #include <cstdint>
@@ -187,6 +188,15 @@ public:
     static void setPaintCacheEnabled(bool on);
     const PaintCacheStats& paintCacheStats() const { return cacheStats_; }
 
+    // Scroll layers (layout/scroll_layer.h): the pass's host, null to paint
+    // every scroller in place. The engine sets it around a pass's draw().
+    void setScrollLayerHost(ScrollLayerHost* host) { scrollLayerHost_ = host; }
+    struct ScrollLayerStats {
+        uint64_t layers = 0;  // scrollers composited as a layer, pass by pass
+        uint64_t vetoes[static_cast<size_t>(ScrollLayerVeto::Count)] = {};
+    };
+    const ScrollLayerStats& scrollLayerStats() const { return scrollLayerStats_; }
+
 private:
     // The box a decoration painter paints: an element's, or a ::before /
     // ::after pseudo-element's. A generated box is painted by the same
@@ -208,6 +218,24 @@ private:
     // Through the span cache when it is on for this pass, else paintElement.
     void drawElementContent(dom::Element* elem, float offsetX, float offsetY);
     void paintElement(dom::Element* elem, float offsetX, float offsetY);
+    // An element's content: ::before, its children, ::after, a line-clamp
+    // ellipsis, drawn at the content origin (childOffsetX, childOffsetY).
+    void paintContent(dom::Element* elem, const htmlayout::css::ComputedStyle& style,
+                      const htmlayout::layout::LayoutBox& box, bool visible, float childOffsetX,
+                      float childOffsetY);
+
+    // Scroll layers. paintScrollLayer: if `elem` (whose box and clip the
+    // caller has drawn and pushed, its content box at (x, y)) is a scroller
+    // composited as a layer, records its content into the layer and the
+    // layer break into the pass, and is true; false: paint the content in place.
+    ScrollLayerHost* scrollLayerHost_ = nullptr;
+    bool inScrollLayer_ = false;
+    ScrollLayerStats scrollLayerStats_;
+    bool paintScrollLayer(dom::Element* elem, const htmlayout::css::ComputedStyle& style,
+                          const htmlayout::layout::LayoutBox& box, bool visible, float x, float y, float bw,
+                          float bh);
+    ScrollLayerVeto scrollLayerVeto(dom::Element* elem, const htmlayout::css::ComputedStyle& style, float bw,
+                                    float bh);
 
     // Span cache state for the current draw() pass (null: off).
     render::RecordingRenderer* recorder_ = nullptr;

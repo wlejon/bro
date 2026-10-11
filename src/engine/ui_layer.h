@@ -31,7 +31,8 @@ struct UILayer {
     using Content = std::variant<HtmlLayer, render::CanvasLayerSource, render::WebGLLayerSource,
                                  render::SceneLayerSource, render::IframeLayerSource,
                                  render::TerminalLayerSource, render::DmabufLayerSource,
-                                 render::ClientWindowsLayerSource, render::RemoteViewLayerSource>;
+                                 render::ClientWindowsLayerSource, render::RemoteViewLayerSource,
+                                 render::ScrollLayerSource>;
     Content content;
     render::LayerQuad quad;  // non-HTML layers
 
