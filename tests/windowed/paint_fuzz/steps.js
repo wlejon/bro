@@ -7,12 +7,13 @@
 // partial raster produced with the same frame recorded and rastered whole
 // (setPaintCache(false)). The rule (diff below): a pixel is apart when a
 // channel differs by more than 16, and the frames differ where an apart pixel
-// has at least 5 apart in its 3x3 neighbourhood. A partial raster draws its
-// damage on a scratch surface whose origin is not the layer's, and Skia's
-// antialiasing of an edge (CPU and GPU alike) moves with that, so an edge
-// pixel can flip: a thin line, reported as edgePixels, never an area. A span
-// reused when it had changed, or a damage that missed something, leaves an
-// area of stale pixels, which fails.
+// has its whole 3x3 neighbourhood apart. A partial raster draws its damage on
+// a scratch surface whose origin is not the layer's, and Skia's antialiasing
+// of an edge (CPU and GPU alike) moves with that, so edge pixels can flip: a
+// line a pixel or two wide along an edge (a rotated one's is a diagonal
+// band), reported as edgePixels, never a solid area. A span reused when it
+// had changed, or a damage that missed something, leaves a solid area of
+// stale pixels, which fails.
 
 (function () {
     function mulberry32(a) {
@@ -229,14 +230,10 @@
     }
 
     // A frame that redrew only its damage (cached) against one drawn whole
-    // (full). They are not bit-identical: Skia antialiases an edge a little
-    // differently under a clip (CPU and GPU both pick their coverage method
-    // with it in view), and what a pass keeps from the passes before carries
-    // that. That differs along edges, a pixel wide. A span reused when it had
-    // changed, or damage that missed something, leaves an area. So a pixel
-    // is apart when a channel differs by more than EDGE, and the frames
-    // differ (`count`) at every one with at least 5 apart in its 3x3
-    // neighbourhood; `edge` counts the rest. PAINT_FUZZ_EDGE tunes it.
+    // (full), by the rule in this file's header: a pixel is apart when a
+    // channel differs by more than EDGE, and the frames differ (`count`) at
+    // every apart pixel whose whole 3x3 neighbourhood is apart; `edge` counts
+    // the rest. PAINT_FUZZ_EDGE tunes EDGE.
     const EDGE = Number((typeof process !== 'undefined' && process.env && process.env.PAINT_FUZZ_EDGE) || 16);
     function diff(a, b) {
         if (!a || !b) return { count: -1, edge: 0, first: null };
@@ -267,7 +264,7 @@
                     const xx = x + dx, yy = y + dy;
                     if (xx >= 0 && yy >= 0 && xx < W && yy < H && apart[yy * W + xx]) ++near;
                 }
-            if (near >= 5) {
+            if (near === 9) {
                 if (firstAt < 0) firstAt = p;
                 ++count;
             } else {
