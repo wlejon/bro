@@ -239,6 +239,12 @@
  * @typedef {Object} YuE2LoadOptions
  * @property {string} [device] - 'cuda', 'vulkan', 'metal' or 'cpu'; defaults to the GPU
  * @property {boolean} [decoderOnly=false] - loadVae: skip the encoder
+ * @property {string} [arWeights='bf16'] - loadYuE2: the weights the one-token AR decode (plan + semantic sampling)
+ *   reads. 'int8' / 'fp8' keep per-output-row quantised copies of every layer's AR projections and lm_head (~1.9 GB
+ *   more VRAM) and roughly halve the bytes each token reads: the ABC plan goes from ~200 to ~314 tok/s on a 4090
+ *   (cot 'full' time to first latent ~10.1 s -> ~8.1 s). Prefill, synthesis and the VAE stay BF16. 'int8' is the
+ *   closer of the two (a sampled token differs from BF16's distribution ~0.3% of the time in the plan, ~1.5% in
+ *   semantic sampling; fp8 0.4% / 2.5%) at the same speed.
  * @property {Function} [onReady] - Load on a worker thread; called with the model
  * @property {Function} [onError]
  */
@@ -252,6 +258,7 @@ class YuE2 {
   /** @readonly @type {boolean} */ loaded;
   /** @readonly @type {string} */ device;
   /** True while an op runs on this model. @readonly @type {boolean} */ busy;
+  /** The AR decode weights it was loaded with: 'bf16' | 'int8' | 'fp8'. @readonly @type {string} */ arWeights;
   /** 64. @readonly @type {number} */ latentDim;
   /** Latent frames per second (25). @readonly @type {number} */ frameRate;
 

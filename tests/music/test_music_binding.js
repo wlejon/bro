@@ -36,6 +36,8 @@ if (bro.music.available === false) {
            'missing VAE dir is a runtime Error with the loader prefix: ' + err.message);
     err = expectThrows(() => bro.music.loadYuE2('tests/music/__none__'), 'loadYuE2(missing)');
     assert(String(err.message).includes('loadYuE2'), 'missing model dir names loadYuE2: ' + err.message);
+    err = expectThrows(() => bro.music.loadYuE2('tests/music', { arWeights: 'int4' }), 'loadYuE2 arWeights int4');
+    assert(String(err.message).includes('arWeights'), 'a bad arWeights names the option: ' + err.message);
 
     const fs = require('node:fs');
     const WEIGHTS = process.env.BRO_WEIGHTS || '../brosoundml/weights';
