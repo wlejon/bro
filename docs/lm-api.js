@@ -239,6 +239,14 @@
  * @property {string} [textPrefix="text_model."]
  * @property {string} [visionPrefix="vision_model."]
  * @property {string} [projectionPrefix=""]
+ * @property {string} [configPath] - HF CLIPModel config.json; default: a config.json beside
+ *   weightsPath (else textPath, else vocabPath). Its text_config / vision_config set the
+ *   architecture, projection_dim the shared width, and `hidden_act` the MLP activation
+ *   ('quick_gelu', OpenAI CLIP and the default when absent; 'gelu', exact, for open_clip
+ *   ViTs such as BioCLIP; 'gelu_new' / 'gelu_pytorch_tanh'). An unknown name throws.
+ * @property {Object} [config] - the same keys as an object, applied over the file
+ *   (camelCase accepted: { textConfig: { hiddenAct: 'gelu' } })
+ * @property {number} [projectionDim]
  * @property {string} [device] - 'cuda' | 'vulkan' | 'metal' | 'cpu'; default brotensor's default device when it is a GPU, else CPU
  */
 
@@ -1070,12 +1078,14 @@ class NllbModel {
 }
 
 /**
- * CLIP ViT-L/14 cross-modal text and image similarity scorer.
+ * CLIP cross-modal text and image similarity scorer (ViT-L/14 by default;
+ * the architecture comes from config.json, see bro.lm.loadClip).
  */
 class ClipModel {
 
   /**
-   * Dimension size of the shared cross-modal embedding space (768).
+   * Dimension size of the shared cross-modal embedding space (768 for
+   * ViT-L/14 and BioCLIP 2, 512 for BioCLIP).
    * @readonly
    * @type {number}
    */
@@ -1337,10 +1347,47 @@ bro.lm.loadModel = function(ggufPath, opts) {};
 bro.lm.loadClipModel = function(opts) {};
 
 /**
- * Load CLIP ViT-L/14 cross-modal scorer.
+ * Load a CLIP cross-modal scorer: OpenAI's ViT-L/14 by default, or any ViT
+ * CLIP whose config.json says otherwise (BioCLIP's ViT-B/16, BioCLIP 2's
+ * ViT-L/14 with exact GELU).
+ *
+ * encodeImage squashes its input to the vision tower's square size; frame
+ * the image first (centre-crop a square, or crop to the subject) to keep the
+ * aspect open_clip's resize-shortest-side + centre crop keeps.
  *
  * @param {LoadClipOptions} opts - Scorer options specifying weights and vocab
  * @returns {ClipModel} ClipModel handle
+ *
+ * @example
+ *   // --- BioCLIP zero-shot species ID ---------------------------------------
+ *   // Weights: an open_clip release converted by brolm's
+ *   // scripts/convert-openclip.py (imageomics/bioclip, imageomics/bioclip-2)
+ *   // into model.safetensors + config.json + vocab.json + merges.txt; built
+ *   // copies live in ../brovisionml-data/bioclip{,-2}. Labels are prompts in
+ *   // the BioCLIP recipe: full taxonomy, then the common name.
+ *   const dir = '../brovisionml-data/bioclip-2';
+ *   const clip = bro.lm.loadClip({ vocabPath: dir + '/vocab.json', mergesPath: dir + '/merges.txt',
+ *                                  weightsPath: dir + '/model.safetensors' });  // config.json beside it
+ *   const species = [
+ *     ['Animalia Chordata Aves Columbiformes Columbidae Zenaida macroura', 'Mourning Dove'],
+ *     ['Animalia Chordata Aves Pelecaniformes Ardeidae Ardea herodias', 'Great Blue Heron'],
+ *     ['Animalia Chordata Mammalia Rodentia Sciuridae Tamias striatus', 'Eastern Chipmunk'],
+ *   ];
+ *   const text = clip.encodeText(species.map(([taxa, common]) =>
+ *     `a photo of ${taxa} with common name ${common}.`));       // embed once, reuse
+ *   const photo = bro.image.decodeScaled('IMG_0001.JPG', { width: 448, height: 448, fit: 'cover' });
+ *   const side = Math.min(photo.width, photo.height);
+ *   const sq = new Uint8Array(side * side * 4);                    // decodeScaled is RGBA
+ *   bro.image.centerCropU8(sq, photo.pixels, { srcW: photo.width, srcH: photo.height,
+ *                                              cropW: side, cropH: side });
+ *   const img = new Uint8Array(224 * 224 * 4);
+ *   bro.image.resizeU8(img, sq, { srcW: side, srcH: side, dstW: 224, dstH: 224, filter: 'area' });
+ *   const emb = clip.encodeImage({ width: 224, height: 224, data: img });
+ *   const sims = text.map((t) => t.reduce((s, v, i) => s + v * emb[i], 0));
+ *   const best = sims.indexOf(Math.max(...sims));               // softmax(100 * sims) for odds
+ *   console.log(species[best][1]);
+ *   // broworkshop/ai/birds/species.js wraps this for a whole species list,
+ *   // with a disk cache of the text embeddings and a subject crop.
  */
 bro.lm.loadClip = function(opts) {};
 
