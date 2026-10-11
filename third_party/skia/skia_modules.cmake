@@ -349,9 +349,9 @@ if(BRO_WITH_WEBP)
             "  third_party/skia/src/third_party/externals/libwebp/src/demux\n\n"
             "Animated WebP decodes through libwebp's demux (demux.c, anim_decode.c), "
             "which the bundle for release tag '${BRO_SKIA_RELEASE_TAG}' does not "
-            "carry. Copy libwebp/src/demux from a Skia m147 checkout (after "
-            "tools/git-sync-deps) into that path, or configure with "
-            "-DBRO_WITH_WEBP=OFF to build without WebP.")
+            "carry. The current bundle does: delete "
+            "third_party/skia/src/.bundle-sha256 and configure again to refetch "
+            "it, or configure with -DBRO_WITH_WEBP=OFF to build without WebP.")
     endif()
 
     add_library(webp_decode STATIC

@@ -28,7 +28,7 @@ time naming the missing files.
 | `third_party/externals/harfbuzz/src/` | HarfBuzz. Built as the upstream unity TU `harfbuzz.cc`. |
 | `third_party/harfbuzz/` | `config-override.h` (the `std::mutex` shim Skia injects) + `LICENSE`. |
 | `third_party/externals/icu/source/common/` | ICU's UAX#9 bidi subset — 14 `.cpp` and their header closure. **Not** full ICU: `source/i18n/`, `source/data/`, and the 30 MB data blob are not needed and must not be shipped. |
-| `third_party/externals/libwebp/src/{dec,dsp,utils,webp}/` + `enc/*.h` | libwebp's decoder (`BRO_WITH_WEBP`, ON in every profile). Decode only — `enc/`, `mux/` and `demux/` sources are not shipped. The enc **headers** are, because `dsp/lossless.h` includes `enc/histogram_enc.h`; without them `dsp/lossless.c` will not compile. |
+| `third_party/externals/libwebp/src/{dec,dsp,utils,webp}/` + `enc/*.h` + `demux/{demux,anim_decode}.c` | libwebp's decoder (`BRO_WITH_WEBP`, ON in every profile), plus the demux container walk and animation compositor behind animated WebP. Decode only — `enc/` and `mux/` sources are not shipped. The enc **headers** are, because `dsp/lossless.h` includes `enc/histogram_enc.h`; without them `dsp/lossless.c` will not compile. |
 
 `modules/skshaper/src/SkShaper_harfbuzz.cpp` and `SkShaper_skunicode.cpp` are
 **already** in the existing bundle — `modules/` is shipped whole. So is the
@@ -74,9 +74,10 @@ cp -r "$SRC/third_party/externals/icu/source/common"    staging/third_party/exte
 cp    "$SRC/third_party/externals/icu/LICENSE"          staging/third_party/externals/icu/
 
 WEBP="$SRC/third_party/externals/libwebp"
-mkdir -p staging/third_party/externals/libwebp/src/enc
+mkdir -p staging/third_party/externals/libwebp/src/enc staging/third_party/externals/libwebp/src/demux
 cp -r "$WEBP"/src/{dec,dsp,utils,webp} staging/third_party/externals/libwebp/src/
 cp    "$WEBP"/src/enc/*.h              staging/third_party/externals/libwebp/src/enc/
+cp    "$WEBP"/src/demux/{demux,anim_decode}.c staging/third_party/externals/libwebp/src/demux/
 cp    "$WEBP"/{COPYING,PATENTS,AUTHORS} staging/third_party/externals/libwebp/
 
 find staging -type d \( -name test -o -name tests -o -name wasm \) -prune -exec rm -rf {} +
@@ -93,7 +94,11 @@ and extract straight into `third_party/skia/src/` (`skia.cmake` extracts with
 archive.
 
 Sizes: pre-shaping bundle 6,159,567 B; with shaping 9,132,917 B; with shaping +
-WebP **9,513,711 B** (~9.5 MB).
+WebP 9,513,711 B; with WebP demux (animated WebP) **9,525,161 B** (~9.5 MB).
+
+`skia.cmake` writes the extracted bundle's SHA-256 to `src/.bundle-sha256` and
+refetches when the pin differs, so a republished bundle reaches existing
+checkouts as well as fresh clones.
 
 ### `third_party/skia/src/` is gitignored — do not trust it
 

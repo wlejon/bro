@@ -61,16 +61,30 @@ endfunction()
 
 if(BRO_FETCH_SKIA)
     # (1) Headers + source bundle (platform-independent).
-    if(NOT EXISTS "${CMAKE_CURRENT_LIST_DIR}/src/include/core/SkCanvas.h")
+    # src/.bundle-sha256 names the bundle extracted there. A tree from an
+    # older bundle (or one extracted before the stamp existed) is refetched
+    # and extracted over, so republishing the bundle with more sources reaches
+    # existing checkouts too, not only fresh clones. A hand-built full Skia
+    # tree is a superset at the same commit; extracting over it is harmless.
+    set(_skia_src_sha "6b54fa6c28f60d7e839671ed0c683b6c59dd1589d5ad559b609e4c1979aff49f")
+    set(_skia_src_stamp "${CMAKE_CURRENT_LIST_DIR}/src/.bundle-sha256")
+    set(_skia_src_have "")
+    if(EXISTS "${_skia_src_stamp}")
+        file(READ "${_skia_src_stamp}" _skia_src_have)
+        string(STRIP "${_skia_src_have}" _skia_src_have)
+    endif()
+    if(NOT EXISTS "${CMAKE_CURRENT_LIST_DIR}/src/include/core/SkCanvas.h"
+       OR NOT _skia_src_have STREQUAL _skia_src_sha)
         set(_skia_bundle "${CMAKE_CURRENT_LIST_DIR}/skia-src.tar.gz")
         message(STATUS "Skia: fetching source bundle (headers + svg/expat/shaping/webp sources, ~9.5 MB)...")
         _bro_skia_download("${_skia_base}/skia-src-m147.tar.gz" "${_skia_bundle}"
-            "52edef59f65d0e7d252009e8a52b36ce8881938570e854147f89f3a33d501da6" _skia_src_ok)
+            "${_skia_src_sha}" _skia_src_ok)
         if(_skia_src_ok)
             file(MAKE_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/src")
             file(ARCHIVE_EXTRACT INPUT "${_skia_bundle}"
                  DESTINATION "${CMAKE_CURRENT_LIST_DIR}/src")
             file(REMOVE "${_skia_bundle}")
+            file(WRITE "${_skia_src_stamp}" "${_skia_src_sha}\n")
             message(STATUS "Skia: source bundle extracted to src/")
         endif()
     endif()
