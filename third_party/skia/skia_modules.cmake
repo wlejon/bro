@@ -340,6 +340,19 @@ if(BRO_WITH_WEBP)
             "(or was published without externals). Re-fetch the bundle, or "
             "configure with -DBRO_WITH_WEBP=OFF to build without WebP.")
     endif()
+    # Animated WebP needs demux/ too, which bundles before it was added lack
+    # even though they carry the decoder; check it separately so the failure
+    # says what is missing instead of CMake's bare "Cannot find source file".
+    if(NOT EXISTS "${_webp_src}/demux/demux.c" OR NOT EXISTS "${_webp_src}/demux/anim_decode.c")
+        message(FATAL_ERROR
+            "BRO_WITH_WEBP=ON but the Skia source bundle's libwebp has no demux/ at:\n"
+            "  third_party/skia/src/third_party/externals/libwebp/src/demux\n\n"
+            "Animated WebP decodes through libwebp's demux (demux.c, anim_decode.c), "
+            "which the bundle for release tag '${BRO_SKIA_RELEASE_TAG}' does not "
+            "carry. Copy libwebp/src/demux from a Skia m147 checkout (after "
+            "tools/git-sync-deps) into that path, or configure with "
+            "-DBRO_WITH_WEBP=OFF to build without WebP.")
+    endif()
 
     add_library(webp_decode STATIC
         # dec/ — the decoder proper
