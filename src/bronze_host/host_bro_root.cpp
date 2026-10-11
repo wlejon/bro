@@ -184,7 +184,7 @@ void installBroRoots(engine::Engine& engine) {
     // the life of the process (host_class.h, HostClass).
     auto* bro = new ev::Persistent(makeRoot({"time", "server", "window", "settings", "mesh", "net", "rigging", "gizmo",
                                              "scene", "terrain", "clipmap", "tile_world", "lighting", "animation", "lm",
-                                             "rave", "motion", "mic", "sense", "gesture", "wake", "kws", "listen",
+                                             "rave", "music", "motion", "mic", "sense", "gesture", "wake", "kws", "listen",
                                              "triposplat", "diffusion", "vision", "diar", "stt", "tts",
                                              "flora", "tensor", "impostor", "profiler", "apps", "vfs", "models"}));
     auto* dunder = new ev::Persistent(
@@ -193,7 +193,7 @@ void installBroRoots(engine::Engine& engine) {
         makeRoot({"time", "server", "window", "settings", "paths", "splash", "viewport", "perf", "bronze",
                    "menu", "settingsUI", "inspector", "mesh", "net", "rigging", "physics",
                    "animation", "terrain", "clipmap", "tile_world", "lighting", "gizmo", "scene", "lm",
-                   "rave", "motion", "mic", "sense", "gesture", "wake", "kws", "listen",
+                   "rave", "music", "motion", "mic", "sense", "gesture", "wake", "kws", "listen",
                    "triposplat", "diffusion", "vision", "diar", "stt", "tts",
                    "flora", "tensor", "profiler", "models"}));
     auto* physicsRoot = new ev::Persistent(ev::createObject());
@@ -312,6 +312,7 @@ void installBroRoots(engine::Engine& engine) {
     setUnavailable("tts", "BRO_WITH_SOUNDML");
     setUnavailable("diar", "BRO_WITH_SOUNDML");
     setUnavailable("rave", "BRO_WITH_SOUNDML");
+    setUnavailable("music", "BRO_WITH_SOUNDML");
     setUnavailable("wake", "BRO_WITH_SOUNDML");
     setUnavailable("kws", "BRO_WITH_SOUNDML");
     setUnavailable("sense", "BRO_WITH_SOUNDML");
@@ -435,7 +436,7 @@ void installBroRoots(engine::Engine& engine) {
 void markAvailableNamespaces() {
     static const char* const kGated[] = {
         "tts", "lm", "stt", "diar", "net", "ai", "gesture", "gizmo", "impostor", "kws",
-        "listen", "motion", "rave", "sense", "triposplat", "vision", "wake", "diffusion",
+        "listen", "motion", "rave", "music", "sense", "triposplat", "vision", "wake", "diffusion",
         "tensor", "flora", "media", "mesh", "rigging", "scene", "terrain", "clipmap",
         "tile_world", "lighting", "animation", "mic", "conf", "themes", "keys", "search",
         "apps", "vfs", "thumb", "a11y",
@@ -540,6 +541,7 @@ void installWorkerBroRoot() {
     setUnavailable("tts", "BRO_WITH_SOUNDML");
     setUnavailable("diar", "BRO_WITH_SOUNDML");
     setUnavailable("rave", "BRO_WITH_SOUNDML");
+    setUnavailable("music", "BRO_WITH_SOUNDML");
 #endif
 #if !BRO_WITH_VISION
     setUnavailable("vision", "BRO_WITH_VISION");

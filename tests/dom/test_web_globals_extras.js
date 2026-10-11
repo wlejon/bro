@@ -148,7 +148,7 @@ assert(screenLeft === 0 && screenTop === 0, 'screenLeft/screenTop aliases');
 
 // --- bro.<ns>.available ------------------------------------------------------------------
 const GATED = ['tts', 'lm', 'stt', 'diar', 'net', 'ai', 'gesture', 'gizmo', 'impostor', 'kws', 'listen',
-               'motion', 'rave', 'sense', 'triposplat', 'vision', 'wake', 'diffusion', 'tensor', 'mesh', 'scene'];
+               'motion', 'rave', 'music', 'sense', 'triposplat', 'vision', 'wake', 'diffusion', 'tensor', 'mesh', 'scene'];
 for (const ns of GATED) {
     const o = bro[ns];
     assert(o && typeof o === 'object', 'bro.' + ns + ' exists');

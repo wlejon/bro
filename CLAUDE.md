@@ -146,6 +146,7 @@ Annotated `.js` files with JSDoc + examples. Read the file before using or chang
 | `diar-api.js` | `bro.diar` diarization: streaming Sortformer (4 speakers) + ClusterDiarizer (similar voices, discovers count) |
 | `tts-api.js` | `bro.tts` text-to-speech: Kokoro (phoneme), Qwen3-TTS (text), OmniVoice (masked-diffusion, prompt clone / instruct, codes seam), to 24 kHz PCM |
 | `rave-api.js` | `bro.rave` RAVE neural audio autoencoder: encode, edit latents, decode |
+| `music-api.js` | `bro.music`: YuE2-3B song generation (lyrics + style → ABC plan → semantic tokens → NAR latents), stage-by-stage seams, residual steer/capture, and the YuE2 VAE (exact tiled + streaming decode to 48 kHz stereo, encode) |
 | `vision-api.js` | `bro.vision`: SAM, SAM 2.1 (image prompts + one-object tracking across frames), Depth-Anything-V2, DSINE normals, BiRefNet matting, ControlNet annotators |
 | `triposplat-api.js` | `bro.triposplat`: single image to a 3D Gaussian splat for `createGaussianSplat` |
 | `motion-api.js` | `bro.motion` text-to-motion (G1 skeleton, 25 fps); sync/blocking, so run it in a Worker |
