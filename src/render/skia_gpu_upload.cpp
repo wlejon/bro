@@ -28,6 +28,11 @@ constexpr VkImageUsageFlags kUploadUsage =
     VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 // A preloaded picture nobody painted for this long stops being held for one.
 constexpr uint64_t kUnclaimedHoldMs = 10000;
+// Without a queue apart from graphics, a copy bigger than this goes in bands
+// of rows no bigger, each its own submission: a frame submitted meanwhile
+// waits for one band, not the whole copy (MoltenVK, M2 Pro: a 24 MP copy and
+// its mips held the queue 6-7 ms).
+constexpr VkDeviceSize kCopyBandBytes = 16u << 20;
 
 std::mutex gTargetMutex;
 SkiaGpu* gTarget = nullptr;  // guarded by gTargetMutex
@@ -413,10 +418,38 @@ void SkiaGpu::runUpload(GpuImageUpload& up) {
         toDst.dstAccess = VK_ACCESS_TRANSFER_WRITE_BIT;
         cmdImageBarrier(cmd, toDst);
 
-        VkBufferImageCopy region{};
-        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        region.imageExtent = {w, h, 1};
-        vkCmdCopyBufferToImage(cmd, staging, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+        auto copyRows = [&](VkCommandBuffer c, uint32_t row0, uint32_t rows) {
+            VkBufferImageCopy region{};
+            region.bufferOffset = VkDeviceSize(row0) * w * 4;
+            region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            region.imageOffset = {0, static_cast<int32_t>(row0), 0};
+            region.imageExtent = {w, rows, 1};
+            vkCmdCopyBufferToImage(c, staging, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+        };
+        // On the graphics queue, all but the last band each go in a
+        // submission of their own, waited for here, so the frames submitted
+        // meanwhile run between them; the last goes with the mip chain. (On
+        // one queue, submission order orders the bands' writes before the
+        // blits' barrier.)
+        uint32_t row = 0;
+        if (!copyQueue && bytes > kCopyBandBytes) {
+            const uint32_t bandRows = std::max<uint32_t>(1, static_cast<uint32_t>(kCopyBandBytes / (VkDeviceSize(w) * 4)));
+            while (recorded && h - row > bandRows) {
+                copyRows(cmd, row, bandRows);
+                row += bandRows;
+                const uint64_t band = vkEndCommandBuffer(cmd) == VK_SUCCESS
+                                          ? gfxQueue.submit(QueueSubmit{{cmd}, {}, {}})
+                                          : 0;
+                const bool done = band != 0 && gfxQueue.wait(band);
+                if (band != 0 && !done) gfxQueue.waitIdle();  // the pool is reset below
+                VkCommandBufferBeginInfo begin{};
+                begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+                begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+                recorded = done && vkResetCommandPool(device, copyPool, 0) == VK_SUCCESS &&
+                           vkBeginCommandBuffer(cmd, &begin) == VK_SUCCESS;
+            }
+        }
+        if (recorded) copyRows(cmd, row, h - row);
         if (copyQueue) {
             ownership(cmd, /*release=*/true);
             recorded = vkEndCommandBuffer(cmd) == VK_SUCCESS;

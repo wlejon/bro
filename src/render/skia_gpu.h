@@ -184,7 +184,8 @@ public:
         size_t poolAllocations = 0, poolBlocks = 0, poolDedicated = 0;
         size_t uploadsLive = 0;
         // Uploads copy on a queue of their own, beside the frames
-        // (VulkanContext::uploadQueue); else on the graphics queue.
+        // (VulkanContext::uploadQueue); else on the graphics queue, a big
+        // copy in bands of rows between the frames.
         bool uploadCopyQueue = false;
         bool valid = false;
     };

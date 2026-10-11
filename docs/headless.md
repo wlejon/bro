@@ -456,7 +456,9 @@ device pool split by `poolHostVisibleBytes` (mapped: the process's own
 memory) and `poolDeviceOnlyBytes`; `uploadTexturesLive` counts the textures
 uploaded ahead of their draw, and `uploadCopyQueue` says whether their copies
 run on a queue of their own (a transfer family apart from graphics) or on the
-graphics queue, where a frame submitted after one waits for it.
+graphics queue, where a frame submitted after one waits for it; there a copy
+over 16 MB goes in bands of rows, each its own submission, so a frame waits
+for one band at most. `uploadCopyPath` names it: `'queue'` or `'bands'`.
 
 Collections the host starts are logged with `BRO_GC_LOG=1` (why: idle,
 periodic, memory pressure, the DOM sweep; and how long). Measure with an exe
