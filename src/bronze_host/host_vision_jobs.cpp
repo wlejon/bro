@@ -378,6 +378,7 @@ Value visionBitmapSegments(const std::vector<float>& x1, const std::vector<float
 void installVisionHostOps(engine::Engine* engine) {
     installVisionDepthOps();
     installVisionSamOps();
+    installVisionSam2Ops();
     installVisionGenerativeOps();
     installVisionAnnotatorOps();
 

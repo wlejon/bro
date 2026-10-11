@@ -251,6 +251,179 @@ sam.segmentEverything(photo, {
 
 
 // ═════════════════════════════════════════════════════════════════════════════
+// SAM 2.1 — segment an image, track an object through a sequence of frames
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// Meta's SAM 2.1 (Apache-2.0), all four sizes (tiny / small / base-plus /
+// large) from one implementation. One model serves both halves:
+//
+//   Sam2         the image predictor: setImage() once, segment() per prompt.
+//   Sam2Tracker  sam2.tracker(): follow ONE object through frames you add —
+//                a burst of photos, a clip's frames — prompt it on any frame,
+//                track or propagate it through the rest, click again on a
+//                tracked frame to correct it.
+//
+// Coordinates are input-image pixels. An image is resized to the model's
+// 1024x1024 input WITHOUT keeping its aspect ratio (as SAM 2 does), so a crop
+// around the subject is the best input. Masks come back at the input's
+// resolution. GPU by default (FP16 encoder + memory attention on a GPU whose
+// compute dtype is FP16); RTX 4090, base-plus, 640x480 frames: ~24 ms to add
+// a frame (the image encode), ~13 ms to track one.
+//
+// Everything that touches the GPU takes `onDone` (see "Sync vs async"), and a
+// tracker shares its model's busy guard: one op at a time across a model and
+// every tracker made from it.
+
+/**
+ * Load SAM 2.1. `path` is a directory holding the Hugging Face checkpoint
+ * (model.safetensors + config.json, e.g. facebook/sam2.1-hiera-base-plus);
+ * config.json picks the size.
+ * @param {string} path
+ * @param {Object} [opts]
+ * @param {string} [opts.device=best available]  'cuda' | 'vulkan' | 'gpu' | 'metal' | 'cpu'
+ * @returns {Sam2}
+ */
+const sam2 = bro.vision.loadSam2(bro.models.find('sam2.1-hiera-base-plus'));
+sam2.device;    // 'CUDA'
+sam2.hasImage;  // false until setImage() has run
+
+/**
+ * Sam2.setImage(image, opts?) — encode the image (the expensive half).
+ * @param {{width,height,data}|string} image
+ * @param {Object} [opts]
+ * @param {function} [opts.onDone]  run async: onDone(undefined, info)
+ * @returns {undefined|AsyncHandle}
+ */
+sam2.setImage(crop);
+
+/**
+ * Sam2.segment(opts) — decode masks for a prompt against the encoded image.
+ * Throws a TypeError without points or a box, an Error before setImage().
+ *
+ * @param {Object} opts
+ * @param {Array} [opts.points]    `[[x, y], ...]` or `[{ x, y, label? }, ...]`
+ * @param {number[]} [opts.labels] 1 = foreground, 0 = background (default 1);
+ *                                 an explicit array wins over per-point labels
+ * @param {number[]} [opts.box]    `[x0, y0, x1, y1]` (one box)
+ * @param {boolean} [opts.multimask=true]  three proposals vs one. With one,
+ *                                 SAM 2 swaps in its best proposal when the
+ *                                 single mask is unstable.
+ * @param {Float32Array} [opts.maskInput]  256*256 low-res logits from an
+ *                                 earlier result's `lowRes`, to refine it
+ * @param {function} [opts.onDone] run async: onDone(result, info)
+ * @returns {{ num: number, width: number, height: number, best: number,
+ *             objectScore: number,
+ *             masks: Array<{ iou: number, data: Uint8Array, logits: Float32Array,
+ *                            lowRes: Float32Array, box: number[]|null,
+ *                            image: ImageBitmap }> } | AsyncHandle}
+ *   `data` is the h*w 0/1 mask, `logits` the h*w FP32 logits behind it,
+ *   `lowRes` the 256*256 logits (feed back as maskInput), `box` the mask's
+ *   bounds `[x0, y0, x1, y1]` (x1/y1 exclusive; null for an empty mask),
+ *   `iou` the predicted IoU, `objectScore` the model's object-present logit
+ *   (> 0: there is an object at the prompt).
+ */
+const s = sam2.segment({ points: [[412, 300]] });
+ctx.drawImage(s.masks[s.best].image, 0, 0);
+// Box, single mask, then refine it with a background click:
+const one = sam2.segment({ box: [300, 180, 560, 420], multimask: false });
+sam2.segment({ points: [[420, 300], [330, 410]], labels: [1, 0], multimask: false,
+               maskInput: one.masks[0].lowRes });
+
+/**
+ * Sam2.tracker() — a new, empty tracker on this model. It keeps the model
+ * alive. Frames keep their encoded features (~16 MB of GPU memory each), so
+ * re-prompting and re-propagating never re-encode.
+ * @returns {Sam2Tracker}
+ */
+const trk = sam2.tracker();
+
+/**
+ * Sam2Tracker.addFrame(image, opts?) — encode the next frame. Frames are
+ * numbered in the order added, and that order is the sequence the memory's
+ * temporal encodings see: add a burst in capture order.
+ * @param {{width,height,data}|string} image   frames may differ in size
+ * @param {Object} [opts]
+ * @param {function} [opts.onDone]   run async: onDone(index, info)
+ * @returns {number|AsyncHandle}     the frame's index
+ */
+for (const photo of burst) trk.addFrame(photo);
+trk.numFrames;   // burst.length
+
+/**
+ * Sam2Tracker.prompt(frame, opts) — mark the object on `frame` with clicks
+ * and/or a box (as Sam2.segment). On a frame not yet tracked it is a fresh
+ * start; on a tracked frame it is a CORRECTION, conditioned on the memory and
+ * on that frame's previous mask. Either way the frame becomes a conditioning
+ * frame that every later track() remembers. Each call replaces that frame's
+ * earlier clicks, so send all of them. RangeError for a frame not added.
+ * @param {number} frame
+ * @param {Object} opts   { points, labels, box, onDone }
+ * @returns {Sam2Frame|AsyncHandle}
+ */
+const first = trk.prompt(0, { points: [[412, 300]] });
+
+/**
+ * Sam2Tracker.track(frame, opts?) — follow the object into `frame` from its
+ * memories: the prompted frames, the six frames before it (after it with
+ * `reverse`) and their object pointers. You choose the order; a typical
+ * forward pass is track(1), track(2), ... A conditioning frame returns its
+ * prompted result.
+ * @param {number} frame
+ * @param {Object} [opts]
+ * @param {boolean} [opts.reverse=false]  remember the frames AFTER this one
+ * @param {function} [opts.onDone]        run async
+ * @returns {Sam2Frame|AsyncHandle}
+ */
+const next = trk.track(1);
+
+/**
+ * Sam2Tracker.propagate(opts?) — track from the earliest prompted frame to
+ * the last, then backwards to frame 0 when the earliest prompt is past it,
+ * re-tracking every frame that is not a conditioning frame. Run it again
+ * after a correction.
+ * @param {Object} [opts]
+ * @param {function} [opts.onDone]   run async: onDone(frames, info)
+ * @returns {Sam2Frame[]|AsyncHandle}  one result per frame, in frame order
+ */
+trk.propagate({ onDone(frames, info) {
+    if (info.error) return;
+    for (const f of frames) if (f.present) drawOutline(f.frame, f.box);
+} });
+
+/**
+ * Sam2Tracker.result(frame, opts?) — the latest result for `frame` without
+ * recomputing it (`tracked: false` before any prompt or track reached it).
+ * Sam2Tracker.reset() — forget prompts and tracking, keep the frames.
+ *
+ * @typedef {Object} Sam2Frame
+ * @property {number} frame, width, height   the frame's input resolution
+ * @property {boolean} tracked       a result exists for this frame
+ * @property {boolean} present       objectScore > 0: the object is visible
+ *                                   (an occluded or departed object reads
+ *                                   false, with an empty mask)
+ * @property {number} objectScore    object-present logit
+ * @property {number} iou            predicted IoU of the mask
+ * @property {boolean} conditioning  a prompted frame
+ * @property {number[]|null} box     [x0, y0, x1, y1] of the mask (x1/y1 exclusive)
+ * @property {Uint8Array|null} data  h*w 0/1 mask
+ * @property {Float32Array|null} logits  h*w logits
+ * @property {ImageBitmap|null} image    drawable overlay
+ */
+trk.result(3).box;
+trk.reset();
+
+// Click the bird on the first photo, follow it through the burst, fix the
+// one frame it slipped on:
+trk.prompt(0, { points: [[x, y]] });
+let frames = trk.propagate();
+const bad = frames.findIndex(f => !f.present);
+if (bad >= 0) {
+  trk.prompt(bad, { points: [[bx, by]] });
+  frames = trk.propagate();
+}
+
+
+// ═════════════════════════════════════════════════════════════════════════════
 // Depth-Anything-V2, monocular depth
 // ═════════════════════════════════════════════════════════════════════════════
 

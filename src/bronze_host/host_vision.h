@@ -145,6 +145,7 @@ Value visionBitmapSegments(const std::vector<float>& x1, const std::vector<float
 
 void installVisionDepthOps();       // DepthEstimator, NormalEstimator
 void installVisionSamOps();         // Sam.segment / segmentEverything
+void installVisionSam2Ops();        // Sam2, Sam2Tracker
 void installVisionGenerativeOps();  // BiRefNet, StyleGAN3
 void installVisionAnnotatorOps();   // Hed, Lineart, Mlsd, Openpose, Segformer
 

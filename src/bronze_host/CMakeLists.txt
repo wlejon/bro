@@ -212,6 +212,7 @@ if(BRO_WITH_VISION)
         host_vision_jobs.cpp
         host_vision_ops.cpp
         host_vision_sam.cpp
+        host_vision_sam2.cpp
         host_vision_generative.cpp
         host_vision_annotators.cpp
     )
