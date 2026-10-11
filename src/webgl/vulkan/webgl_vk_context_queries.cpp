@@ -21,6 +21,27 @@ bool occlusionTarget(GLenum target) {
     return target == GL_ANY_SAMPLES_PASSED || target == GL_ANY_SAMPLES_PASSED_CONSERVATIVE;
 }
 
+// The samples the slots counted, added to `count`; false when one has no
+// result yet. A completed submission is not enough: MoltenVK copies Metal's
+// visibility results into the pool in the command buffer's completion
+// handler, which can run after the submission's ticket reads complete, and a
+// slot answers VK_NOT_READY in between (~2 runs in 100 of
+// tests/webgl/test_webgl_query.js read a fullscreen draw as 0 samples). With
+// `wait` the read waits that out, which takes no longer than the handler.
+bool readOcclusionSlots(VkDevice device, const std::vector<VkQueryPool>& pools,
+                        const std::vector<uint32_t>& slots, bool wait, uint64_t& count) {
+    VkQueryResultFlags flags = VK_QUERY_RESULT_64_BIT;
+    if (wait) flags |= VK_QUERY_RESULT_WAIT_BIT;
+    for (uint32_t slot : slots) {
+        uint64_t samples = 0;
+        if (vkGetQueryPoolResults(device, pools[slot / kSlotsPerPool], slot % kSlotsPerPool, 1, sizeof(samples),
+                                  &samples, sizeof(samples), flags) != VK_SUCCESS)
+            return false;
+        count += samples;
+    }
+    return true;
+}
+
 } // namespace
 
 GLuint WebGLVkContext::createQuery() {
@@ -143,17 +164,13 @@ bool WebGLVkContext::getQueryParameter(GLuint id, GLenum pname, GLuint& out) {
     }
     const bool done = q.ticket == 0 || context_.queue().isComplete(q.ticket);
     if (pname == GL_QUERY_RESULT_AVAILABLE) {
-        out = done ? GL_TRUE : GL_FALSE;
+        uint64_t probe = 0;
+        out = done && readOcclusionSlots(context_.device(), queryPools_, q.slots, false, probe) ? GL_TRUE : GL_FALSE;
         return true;
     }
     if (!done) context_.queue().wait(q.ticket);
     if (!q.slots.empty()) {
-        for (uint32_t slot : q.slots) {
-            uint64_t samples = 0;
-            vkGetQueryPoolResults(context_.device(), queryPools_[slot / kSlotsPerPool], slot % kSlotsPerPool, 1,
-                                  sizeof(samples), &samples, sizeof(samples), VK_QUERY_RESULT_64_BIT);
-            q.count += samples;
-        }
+        readOcclusionSlots(context_.device(), queryPools_, q.slots, true, q.count);
         retireQuerySlots(q);
     }
     out = occlusionTarget(q.target) ? (q.count > 0 ? 1u : 0u) : static_cast<GLuint>(q.count);
