@@ -124,6 +124,11 @@ void Document::adoptOne(Node* node, Document* src) {
             src->forgetScrolled(elem);
             if (elem->scrollTopValue() != 0.0f || elem->scrollLeftValue() != 0.0f)
                 noteScrollOffset(elem, true);
+            // So does being a scroll container.
+            if (src->scrollContainers().count(elem)) {
+                src->forgetScrollContainer(elem);
+                noteScrollContainer(elem, true);
+            }
         }
         // Live ranges in the source document can't span into another document.
         for (auto* r : src->liveRanges_) r->onNodeDestroyed(node);

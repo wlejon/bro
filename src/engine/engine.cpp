@@ -531,39 +531,80 @@ void Engine::drawSelectionHighlight(render::Renderer* renderer, float docOffsetY
 void Engine::drawElementScrollbars(render::Renderer* renderer,
                                    dom::Element* root,
                                    float offsetX, float offsetY) {
-    if (!renderer || !root) return;
-    const bool preferDark = root->document() &&
-        root->document()->mediaContext().colorScheme == "dark";
-    std::function<void(dom::Element*, float, float)> walk;
-    walk = [&](dom::Element* elem, float ox, float oy) {
-        if (!elem) return;
-        auto& style = elem->computedStyle();
-        auto dispIt = style.find("display");
-        if (dispIt != style.end() && dispIt->second == "none") return;
+    if (!renderer || !root || !root->document()) return;
+    dom::Document* doc = root->document();
+    const bool preferDark = doc->mediaContext().colorScheme == "dark";
+    auto displayNone = [](const dom::Element* el) {
+        const auto& style = el->computedStyle();
+        auto it = style.find("display");
+        return it != style.end() && it->second == "none";
+    };
 
-        auto& lbox = elem->layoutBox();
-        float absX = lbox.contentRect.x + ox;
-        float absY = lbox.contentRect.y + oy;
+    // Only a scroll container can show a bar, and the document keeps those
+    // (Document::scrollContainers): each one rendered under `root` is placed
+    // by its chain of composed ancestors and drawn in document order, as a
+    // walk of the whole tree would (which cost a 10,000-element document
+    // most of a record).
+    struct Bars {
+        std::vector<uint32_t> path;  // composed child indexes from `root`
+        dom::Element* elem;
+        float x, y;                  // its content box, in draw space
+    };
+    std::vector<Bars> found;
+    std::vector<dom::Element*> stale;
+    std::vector<dom::Element*> chain;
+    for (dom::Element* el : doc->scrollContainers()) {
+        if (!doc->ownsNode(el) || el->document() != doc) {
+            stale.push_back(el);
+            continue;
+        }
+        chain.clear();
+        bool under = false;
+        for (dom::Element* e = el; e; e = e->layoutParent()) {
+            if (displayNone(e)) break;
+            chain.push_back(e);
+            if (e == root) { under = true; break; }
+        }
+        if (!under) continue;
+        Bars b{{}, el, offsetX, offsetY};
+        bool rendered = true;
+        for (size_t i = chain.size() - 1; i > 0 && rendered; --i) {
+            dom::Element* parent = chain[i];
+            dom::Element* child = chain[i - 1];
+            // Its place among the composed children; not among them (a light
+            // child no slot takes) is not rendered.
+            uint32_t index = 0;
+            bool hit = false;
+            parent->forEachComposedChild([&](dom::Element* c) {
+                if (hit) return;
+                if (c == child) hit = true;
+                else ++index;
+            });
+            if (!hit) { rendered = false; break; }
+            b.path.push_back(index);
+            const auto& pbox = parent->layoutBox();
+            b.x += pbox.contentRect.x - dom::clampedScrollLeftOf(parent);
+            b.y += pbox.contentRect.y - dom::clampedScrollTopOf(parent);
+        }
+        if (!rendered) continue;
+        b.x += el->layoutBox().contentRect.x;
+        b.y += el->layoutBox().contentRect.y;
+        found.push_back(std::move(b));
+    }
+    for (dom::Element* el : stale) doc->forgetScrollContainer(el);
+    std::sort(found.begin(), found.end(), [](const Bars& a, const Bars& b) { return a.path < b.path; });
 
+    for (const Bars& b : found) {
         // Both bars (right edge, bottom edge) by the same rules; the offsets
         // are clamped like the draw traversal clamps, since an offset past the
-        // end would otherwise put the thumb outside its track and shift this
-        // element's scrollbar subtree away from the content it belongs to.
-        const ElementScrollbarLayout bars =
-            layoutElementScrollbars(elem, absX, absY, elementScrollbar_);
+        // end would otherwise put the thumb outside its track.
+        const ElementScrollbarLayout bars = layoutElementScrollbars(b.elem, b.x, b.y, elementScrollbar_);
         if (bars.v.visible || bars.h.visible) {
-            const auto colors = Scrollbar::colorsFor(style, preferDark);
+            const auto colors = Scrollbar::colorsFor(b.elem->computedStyle(), preferDark);
             if (bars.v.visible) elementScrollbar_.draw(renderer, bars.v, colors);
             if (bars.h.visible) elementScrollbar_.draw(renderer, bars.h, colors);
         }
-
-        float childOx = absX - dom::clampedScrollLeftOf(elem);
-        float childOy = absY - dom::clampedScrollTopOf(elem);
-        elem->forEachComposedChild([&](dom::Element* child) {
-            walk(child, childOx, childOy);
-        });
-    };
-    walk(root, offsetX, offsetY);
+    }
 }
 
 

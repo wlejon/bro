@@ -200,6 +200,18 @@ public:
     void forgetScrolled(Element* e) { scrolled_.erase(e); }
     const std::unordered_set<Element*>& scrolledElements() const { return scrolled_; }
 
+    // The elements whose computed overflow scrolls on an axis (auto / scroll),
+    // kept as each one's style is set (Element::setComputedStyle): the only
+    // ones that can show a scrollbar, so the bars are drawn from here rather
+    // than from a walk of the whole document. Raw pointers, read only after
+    // ownsNode says the element is still ours (as scrolledElements).
+    void noteScrollContainer(Element* e, bool scrolls) {
+        if (scrolls) scrollContainers_.insert(e);
+        else scrollContainers_.erase(e);
+    }
+    void forgetScrollContainer(Element* e) { scrollContainers_.erase(e); }
+    const std::unordered_set<Element*>& scrollContainers() const { return scrollContainers_; }
+
     // True if `n` points at a node whose memory is still alive — either owned
     // (in the tree / offscreen) or queued in pendingFrees_ but not yet drained.
     // Both checks are pointer-value lookups, so this is safe to call on a
@@ -674,6 +686,7 @@ private:
     // so the pointers never outlive it.
     std::unordered_map<size_t, std::vector<Element*>> styleDonors_;
     std::unordered_set<Element*> scrolled_;  // noteScrollOffset
+    std::unordered_set<Element*> scrollContainers_;  // noteScrollContainer
     struct InheritTokenEntry {
         uint64_t token;
         std::shared_ptr<const htmlayout::css::StyleMap> vars;  // keeps the address in the key unique

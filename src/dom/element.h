@@ -269,6 +269,20 @@ public:
     // so a span it records is older than any change made after it.
     static uint64_t paintEpoch();
     static uint64_t advancePaintEpoch();
+    // Tell the document whether this element's overflow now scrolls on an
+    // axis (Document::scrollContainers).
+    void noteScrollContainerStyle();
+
+    // The draw traversal's stacking-context walk: whether a box below this
+    // one is a stacking context or positioned, as of the paint epoch it was
+    // looked at in. While nothing under it is stamped since, a subtree with
+    // none is not walked again (DrawTraversal::buildStackingContextTree).
+    uint64_t stackScanEpoch() const { return stackScanEpoch_; }
+    bool stackScanFoundAny() const { return stackScanFoundAny_; }
+    void setStackScan(uint64_t epoch, bool foundAny) {
+        stackScanEpoch_ = epoch;
+        stackScanFoundAny_ = foundAny;
+    }
     bool takeStyleDescendantDirty() { bool d = styleDescDirty_; styleDescDirty_ = false; return d; }
     bool takeLayoutDescendantDirty() { bool d = layoutDescDirty_; layoutDescDirty_ = false; return d; }
 
@@ -308,6 +322,7 @@ public:
     void setComputedStyle(htmlayout::css::ComputedStyle style) {
         computedStyle_ = std::move(style);
         notePaintChanged();
+        noteScrollContainerStyle();
         styleShareKey_.reset();
         inheritToken_ = 0;
     }
@@ -705,6 +720,8 @@ private:
     bool styleDescDirty_ = false;
     bool layoutDescDirty_ = false;
     std::atomic<uint64_t> paintStamp_{0};
+    uint64_t stackScanEpoch_ = 0;
+    bool stackScanFoundAny_ = false;
     StyledPlace styledPlace_;
     bool scrollToBottom_ = false;
     bool styleSheetAdded_ = false;

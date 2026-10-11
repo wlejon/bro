@@ -80,7 +80,6 @@ void DrawTraversal::setPaintCacheEnabled(bool on) {
 PaintCache* DrawTraversal::beginPaintCache(dom::Element* root) {
     contextFlushed_ = false;
     if (!recorder_ || !recorder_->buffer() || !root || !paintCacheEnabled()) return nullptr;
-    dom::Element::advancePaintEpoch();
 
     PaintCacheContext ctx;
     ctx.viewportW = viewportW_;

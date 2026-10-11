@@ -192,8 +192,12 @@ void DrawTraversal::draw(dom::Element* root, float scrollX, float scrollY,
     // walker, with positioned/SC descendants skipped via skipSet_), then
     // positioned-non-SC descendants and z:auto SC children in tree order,
     // then positive-z child SCs.
+    // A pass's paint epoch: the stacking-context walk and the span cache
+    // (paint_cache.h) keep what they saw in it, and anything stamped from now
+    // on is newer than that.
+    dom::Element::advancePaintEpoch();
     auto rootSC = buildStackingContextTree(root, scrollX, scrollY);
-    // Each box through the span cache (paint_cache.h), when it is on.
+    // Each box through the span cache, when it is on.
     activeCache_ = beginPaintCache(root);
     spanVolatile_ = SpanMiss::Count;
     if (rootSC) paintStackingContext(rootSC.get(), false, true);
@@ -319,26 +323,35 @@ std::unique_ptr<StackingContext> DrawTraversal::buildStackingContextTree(
     // descendants populate. (offsetX, offsetY) is the absolute draw offset for
     // `elem`. `ancestorClips` is the clip chain accumulated from the current SC
     // root (exclusive) down to (but not including) `elem` — outermost-first.
-    std::function<void(dom::Element*, StackingContext*, float, float,
+    // A subtree with no stacking context and no positioned box in it adds
+    // nothing to the tree: once a walk has seen that, the next ones skip it
+    // until something under it is stamped (Element::stackScanEpoch). Not
+    // while a top layer or shell frames can lift a box out of it.
+    const uint64_t scanEpoch = dom::Element::paintEpoch();
+    const bool canSkipScanned = topLayerSet.empty() && frameSet.empty();
+
+    // Returns whether `elem` or a box under it is a stacking context or
+    // positioned (an entry somewhere in the tree).
+    std::function<bool(dom::Element*, StackingContext*, float, float,
                        const std::vector<ClipRect>&)> visit;
     visit = [&](dom::Element* elem, StackingContext* currentSC,
                 float offX, float offY,
-                const std::vector<ClipRect>& ancestorClips) {
-        if (!elem) return;
+                const std::vector<ClipRect>& ancestorClips) -> bool {
+        if (!elem) return false;
         auto& style = elem->computedStyle();
 
         // display:none → don't paint, don't descend
         auto dispIt = style.find("display");
-        if (dispIt != style.end() && dispIt->second == "none") return;
+        if (dispIt != style.end() && dispIt->second == "none") return false;
 
         // Flow-collapsed content (closed <details> body) never paints —
         // don't descend either, so positioned/SC descendants can't leak
         // into the stacking-context buckets.
         auto fcIt = style.find("-x-flow-collapse");
-        if (fcIt != style.end() && fcIt->second == "collapse") return;
+        if (fcIt != style.end() && fcIt->second == "collapse") return false;
         // Clamped away by an ancestor's line-clamp: the same, for the same
         // reason (a positioned descendant must not leak into an SC bucket).
-        if (elem->layoutBox().clampHidden) return;
+        if (elem->layoutBox().clampHidden) return false;
 
         // A top-layer element leaves every ancestor stacking context and clip:
         // it becomes a root-level SC of its own, collected into topLayerSCs_
@@ -427,6 +440,13 @@ std::unique_ptr<StackingContext> DrawTraversal::buildStackingContextTree(
             currentSC->positionedNonSC.push_back(std::move(pe));
             skipSet_.insert(elem);
         }
+        const bool selfEntry = !isThisRoot && (isSC || positioned);
+
+        // Nothing under it was an entry when last walked, and nothing under
+        // it has changed since.
+        if (canSkipScanned && elem->stackScanEpoch() != 0 && !elem->stackScanFoundAny() &&
+            elem->paintStamp() < elem->stackScanEpoch())
+            return selfEntry;
 
         // Build the clip chain to pass to descendants. At an SC boundary the
         // chain resets — descendants of a child SC paint inside that SC's own
@@ -455,12 +475,11 @@ std::unique_ptr<StackingContext> DrawTraversal::buildStackingContextTree(
         // same currentSC (positioning doesn't open a new SC), but we still
         // skip the element in the normal walker — the positioned-entry paint
         // path will descend into it through drawElementContent.
-        for (auto* child : elem->composedChildNodes()) {
-            if (child && child->nodeType() == dom::NodeType::Element) {
-                visit(static_cast<dom::Element*>(child),
-                      descendantSC, childOffX, childOffY, childClips);
-            }
-        }
+        bool foundAny = false;
+        elem->forEachComposedChild([&](dom::Element* child) {
+            if (visit(child, descendantSC, childOffX, childOffY, childClips)) foundAny = true;
+        });
+        elem->setStackScan(scanEpoch, foundAny);
 
         if (inTopLayer && !topHolder.children.empty()) {
             topLayerSCs_[elem] = std::move(topHolder.children.back());
@@ -471,6 +490,7 @@ std::unique_ptr<StackingContext> DrawTraversal::buildStackingContextTree(
         if (isOverlay && !overlayHolder.children.empty()) {
             frameOverlaySCs_[overlayFrame].push_back(std::move(overlayHolder.children.back()));
         }
+        return selfEntry || foundAny;
     };
 
     // Root: descendants belong to rootSC.

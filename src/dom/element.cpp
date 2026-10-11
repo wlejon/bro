@@ -5,6 +5,7 @@
 #include "dom/shadow_root.h"
 #include "dom/text_node.h"
 #include "dom/comment_node.h"
+#include "dom/element_scroll.h"
 #include "layout/el_input.h"
 #include "layout/el_textarea.h"
 #include "layout/el_select.h"
@@ -852,6 +853,18 @@ void Element::notePaintChanged() {
             p = p->parentNode();
         }
     }
+}
+
+void Element::noteScrollContainerStyle() {
+    if (!document_) return;
+    const auto& s = computedStyle_;
+    // Cheap first: no overflow declared at all is the common case.
+    if (s.find("overflow-x") == s.end() && s.find("overflow-y") == s.end() && s.find("overflow") == s.end()) {
+        document_->noteScrollContainer(this, false);
+        return;
+    }
+    auto scrolls = [](const std::string& ov) { return ov == "auto" || ov == "scroll"; };
+    document_->noteScrollContainer(this, scrolls(usedOverflow(s, false)) || scrolls(usedOverflow(s, true)));
 }
 
 void Element::setScrollTopValue(float v) {
