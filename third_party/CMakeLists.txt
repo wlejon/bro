@@ -89,6 +89,28 @@ endif()
 
 # --- broimage (image decode/encode + composable kernels) ---
 # Must be added before brokit, whose bro.image kernels delegate into broimage.
+#
+# One libjpeg per process. On macOS the prebuilt Skia carries its own
+# libjpeg-turbo (build_skia_mac.sh: skia_use_libjpeg_turbo_decode, the jpeg62
+# API), and its jpeg_* symbols, linked in with libskia.a, are what every
+# jpeg_* call in bro binds to. broimage compiled against another copy's
+# headers (Homebrew's 3.2.0, the jpeg8 API) then called Skia's:
+# jpeg_CreateDecompress refused the struct, and every DCT-scaled decode fell
+# back to a full one. So broimage uses the copy Skia carries, its headers and
+# its symbols (broimage's jpeg_turbo.cmake takes a broimage_jpeg_turbo target
+# that already exists). Linux's Skia uses the system libjpeg broimage finds
+# too, and Windows' carries none.
+set(_skia_jpeg_inc "${CMAKE_CURRENT_LIST_DIR}/skia/src/third_party/externals/libjpeg-turbo/src")
+if(APPLE AND NOT TARGET broimage_jpeg_turbo AND EXISTS "${_skia_jpeg_inc}/jpeglib.h"
+   AND NOT (DEFINED BROIMAGE_WITH_JPEG_TURBO AND NOT BROIMAGE_WITH_JPEG_TURBO))
+    add_library(broimage_jpeg_turbo INTERFACE)
+    target_include_directories(broimage_jpeg_turbo SYSTEM INTERFACE "${_skia_jpeg_inc}")
+    target_compile_definitions(broimage_jpeg_turbo INTERFACE BROIMAGE_HAS_JPEG_TURBO=1)
+    # A program that links broimage without drawing anything (bromux) still
+    # needs the symbols: only the jpeg objects come out of the archive.
+    target_link_libraries(broimage_jpeg_turbo INTERFACE skia)
+    message(STATUS "broimage: libjpeg-turbo from the prebuilt Skia (its headers and symbols)")
+endif()
 bro_dependency(broimage)
 
 # curl links whatever zstd it can find, and broimage's basisu transcoder
