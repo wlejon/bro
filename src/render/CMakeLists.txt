@@ -57,6 +57,7 @@ add_library(bro_render STATIC
     vulkan_presenter.cpp
     vulkan_presenter_blend.cpp
     vulkan_util.cpp
+    pci_link.cpp
     pixel_convert.cpp
     raster_renderer.cpp
     font_fallback.cpp
@@ -78,7 +79,7 @@ add_library(bro_render STATIC
 if(WIN32)
     # The remote viewer's zero-copy path: decoder D3D11 pictures into Vulkan.
     target_sources(bro_render PRIVATE remote_picture_d3d11.cpp)
-    target_link_libraries(bro_render PRIVATE d3d11 dxgi)
+    target_link_libraries(bro_render PRIVATE d3d11 dxgi setupapi)
 endif()
 target_include_directories(bro_render PUBLIC ${bro_SOURCE_DIR}/src)
 target_include_directories(bro_render PRIVATE ${RENDER_GEN_DIR})
@@ -149,6 +150,10 @@ if(BRO_BUILD_TESTS)
     add_executable(bro_shadow_ninepatch_test tests/test_shadow_ninepatch.cpp)
     target_link_libraries(bro_shadow_ninepatch_test PRIVATE bro_render bro_platform bro_util skia Vulkan::Vulkan)
     target_include_directories(bro_shadow_ninepatch_test PRIVATE ${bro_SOURCE_DIR}/src)
+
+    add_executable(bro_pci_link_test tests/test_pci_link.cpp)
+    target_link_libraries(bro_pci_link_test PRIVATE bro_render bro_platform bro_util skia Vulkan::Vulkan)
+    target_include_directories(bro_pci_link_test PRIVATE ${bro_SOURCE_DIR}/src)
 
     if(BRO_WITH_DMABUF)
         add_executable(bro_vulkan_dmabuf_test tests/test_dmabuf_presenter.cpp)

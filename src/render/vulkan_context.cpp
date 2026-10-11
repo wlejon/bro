@@ -1,5 +1,6 @@
 #include "render/vulkan_context.h"
 #include "render/vulkan_debug.h"
+#include "render/pci_link.h"
 #include "util/exe_dir.h"
 #include "platform/window.h"
 #include "platform/window_system.h"
@@ -428,9 +429,13 @@ bool VulkanContext::selectPhysicalDevice(VkSurfaceKHR compatibleSurface) {
     std::vector<VkPhysicalDevice> devices(deviceCount);
     vkEnumeratePhysicalDevices(instance_, &deviceCount, devices.data());
 
-    int bestScore = -1;
-    VkPhysicalDevice chosenDevice = VK_NULL_HANDLE;
-    VulkanQueueFamilyIndices chosenIndices;
+    struct CandidateEntry {
+        VkPhysicalDevice dev = VK_NULL_HANDLE;
+        VulkanQueueFamilyIndices indices;
+        VkPhysicalDeviceProperties props;
+        DeviceCandidate candidate;
+    };
+    std::vector<CandidateEntry> candidates;
 
     for (uint32_t i = 0; i < deviceCount; ++i) {
         VkPhysicalDevice dev = devices[i];
@@ -454,14 +459,56 @@ bool VulkanContext::selectPhysicalDevice(VkSurfaceKHR compatibleSurface) {
         else if (props.deviceType == VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU) score += 200;
         else score += 100;
 
-        if (score > bestScore) {
-            bestScore = score;
-            chosenDevice = dev;
-            chosenIndices = indices;
+        const auto exts = deviceExtensions(dev);
+        const bool hasPciBusInfo = hasExtension(exts, VK_EXT_PCI_BUS_INFO_EXTENSION_NAME);
+        PciLink link{};
+        uint32_t domain = 0, bus = 0, devNum = 0, func = 0;
+        if (hasPciBusInfo) {
+            VkPhysicalDevicePCIBusInfoPropertiesEXT pciBusProps{};
+            pciBusProps.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PCI_BUS_INFO_PROPERTIES_EXT;
+            VkPhysicalDeviceProperties2 props2{};
+            props2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+            props2.pNext = &pciBusProps;
+            vkGetPhysicalDeviceProperties2(dev, &props2);
+
+            domain = pciBusProps.pciDomain;
+            bus = pciBusProps.pciBus;
+            devNum = pciBusProps.pciDevice;
+            func = pciBusProps.pciFunction;
+            link = queryPciLink(domain, bus, devNum, func);
         }
+
+        VkPhysicalDeviceMemoryProperties memProps{};
+        vkGetPhysicalDeviceMemoryProperties(dev, &memProps);
+        uint64_t vramBytes = 0;
+        for (uint32_t h = 0; h < memProps.memoryHeapCount; ++h) {
+            if (memProps.memoryHeaps[h].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) {
+                vramBytes += memProps.memoryHeaps[h].size;
+            }
+        }
+        const uint64_t vramMB = vramBytes / (1024 * 1024);
+
+        char pciBuf[32];
+        if (hasPciBusInfo) {
+            std::snprintf(pciBuf, sizeof(pciBuf), "%04x:%02x:%02x.%x", domain, bus, devNum, func);
+        } else {
+            std::snprintf(pciBuf, sizeof(pciBuf), "unknown");
+        }
+
+        char linkBuf[32];
+        if (link.bandwidth() > 0.0) {
+            std::snprintf(linkBuf, sizeof(linkBuf), "x%d @ %g GT/s", link.width, link.gtPerSec);
+        } else {
+            std::snprintf(linkBuf, sizeof(linkBuf), "unknown");
+        }
+
+        LOG_INFO("Vulkan: candidate %u: %s, PCI %s, link %s, %llu MB VRAM",
+                 i, props.deviceName, pciBuf, linkBuf, static_cast<unsigned long long>(vramMB));
+
+        candidates.push_back({dev, indices, props, {score, link.bandwidth(), vramBytes, i}});
     }
 
-    if (chosenDevice == VK_NULL_HANDLE) {
+    if (candidates.empty()) {
         if (config_.preferredDeviceIndex >= 0)
             LOG_ERROR("Vulkan: device %d (BRO_VK_DEVICE) is missing or unsuitable",
                       config_.preferredDeviceIndex);
@@ -470,8 +517,35 @@ bool VulkanContext::selectPhysicalDevice(VkSurfaceKHR compatibleSurface) {
         return false;
     }
 
-    physicalDevice_ = chosenDevice;
-    queueIndices_ = chosenIndices;
+    size_t bestIdx = 0;
+    for (size_t c = 1; c < candidates.size(); ++c) {
+        if (isDeviceCandidateBetter(candidates[c].candidate, candidates[bestIdx].candidate)) {
+            bestIdx = c;
+        }
+    }
+    const CandidateEntry& chosen = candidates[bestIdx];
+
+    if (config_.preferredDeviceIndex >= 0) {
+        LOG_INFO("Vulkan: selected device %u (%s) (forced by BRO_VK_DEVICE)",
+                 chosen.candidate.index, chosen.props.deviceName);
+    } else if (candidates.size() == 1) {
+        LOG_INFO("Vulkan: selected device %u (%s): only suitable device",
+                 chosen.candidate.index, chosen.props.deviceName);
+    } else {
+        size_t runnerUpIdx = (bestIdx == 0) ? 1 : 0;
+        for (size_t c = 0; c < candidates.size(); ++c) {
+            if (c == bestIdx) continue;
+            if (runnerUpIdx == bestIdx || isDeviceCandidateBetter(candidates[c].candidate, candidates[runnerUpIdx].candidate)) {
+                runnerUpIdx = c;
+            }
+        }
+        const std::string reason = deviceCandidateSelectionReason(chosen.candidate, candidates[runnerUpIdx].candidate);
+        LOG_INFO("Vulkan: selected device %u (%s): %s",
+                 chosen.candidate.index, chosen.props.deviceName, reason.c_str());
+    }
+
+    physicalDevice_ = chosen.dev;
+    queueIndices_ = chosen.indices;
     vkGetPhysicalDeviceProperties(physicalDevice_, &deviceProperties_);
     vkGetPhysicalDeviceMemoryProperties(physicalDevice_, &memoryProperties_);
     vkGetPhysicalDeviceFeatures(physicalDevice_, &deviceFeatures_);
