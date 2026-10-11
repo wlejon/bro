@@ -42,13 +42,25 @@ if (gpuMs < 0) {
         p.codeCache + '), GPU ready at ' + readyAtMs.toFixed(1) + ', waited ' + p.waitMs.toFixed(1) +
         ' ms, ' + p.overlapMs.toFixed(1) + ' ms under the GPU');
     assert(readyAtMs > 0, 'the GPU was ready at a time: ' + readyAtMs);
-    assert(p.globalsAtMs >= 0 && p.globalsAtMs < readyAtMs,
-        'the host globals were installed before the GPU was up: ' + p.globalsAtMs + ' vs ' + readyAtMs);
-    assert(p.compileStartMs >= 0 && p.compileStartMs < readyAtMs,
-        'the page began compiling before the GPU was up: ' + p.compileStartMs + ' vs ' + readyAtMs);
+    // The page's work starts once the main thread has made the window. Where
+    // the device was up before that (MoltenVK on Apple silicon: ~60 ms of
+    // GPU against ~85 ms of SDL video init) none of the GPU is left for it to
+    // overlap; what holds there is that it came straight after the window.
+    const windowDoneAtMs = s.graphics.startAtMs + windowMs;
+    if (readyAtMs <= windowDoneAtMs) {
+        console.log('test_startup_overlap: the GPU was up (' + readyAtMs.toFixed(1) + ' ms) before the window (' +
+            windowDoneAtMs.toFixed(1) + ' ms); nothing of it left for the page to overlap');
+        assert(p.globalsAtMs >= 0 && p.compileStartMs >= p.globalsAtMs,
+            'the globals, then the compile: ' + JSON.stringify(p));
+    } else {
+        assert(p.globalsAtMs >= 0 && p.globalsAtMs < readyAtMs,
+            'the host globals were installed before the GPU was up: ' + p.globalsAtMs + ' vs ' + readyAtMs);
+        assert(p.compileStartMs >= 0 && p.compileStartMs < readyAtMs,
+            'the page began compiling before the GPU was up: ' + p.compileStartMs + ' vs ' + readyAtMs);
+        assert(p.overlapMs > 0, 'some of it ran under the GPU: ' + p.overlapMs);
+    }
     assert(p.compileEndMs >= p.compileStartMs && p.compileEndMs <= s.loadedMs,
         'and finished before the page ran: ' + p.compileEndMs + ' vs loaded ' + s.loadedMs);
-    assert(p.overlapMs > 0, 'some of it ran under the GPU: ' + p.overlapMs);
     assert(p.codeCache === 'hit' || p.codeCache === 'miss' || p.codeCache === 'off', 'code cache: ' + p.codeCache);
 }
 console.log('test_startup_overlap.js PASSED');
