@@ -28,10 +28,14 @@ if (gpuMs < 0) {
     const saved = serial - totalMs;
     const shorter = Math.min(windowMs, gpuMs);
     // One after the other, saved would be ~0. Running together saves about
-    // the shorter phase; half of it leaves room for a loaded machine.
-    assert(saved > 0.5 * shorter,
-        'the window and the GPU came up together: ' + totalMs.toFixed(1) + ' ms for ' + windowMs.toFixed(1) +
-        ' + ' + gpuMs.toFixed(1) + ' ms (saved ' + saved.toFixed(1) + ' of ' + shorter.toFixed(1) + ' possible)');
+    // the shorter phase; half of it leaves room for a loaded machine. A
+    // window SDL's dummy driver makes in under a millisecond (Linux with no
+    // display) leaves nothing measurable to save.
+    if (shorter >= 2) {
+        assert(saved > 0.5 * shorter,
+            'the window and the GPU came up together: ' + totalMs.toFixed(1) + ' ms for ' + windowMs.toFixed(1) +
+            ' + ' + gpuMs.toFixed(1) + ' ms (saved ' + saved.toFixed(1) + ' of ' + shorter.toFixed(1) + ' possible)');
+    }
 
     // The page (tests/test_app has a classic script) was compiled while the
     // device came up, not after it.
@@ -53,10 +57,16 @@ if (gpuMs < 0) {
         assert(p.globalsAtMs >= 0 && p.compileStartMs >= p.globalsAtMs,
             'the globals, then the compile: ' + JSON.stringify(p));
     } else {
+        // The page's work began under the GPU. Its compile does too only
+        // where the globals are shorter than what is left of the GPU (Windows:
+        // ~45 ms of them under ~160 ms of device); where they outlast it
+        // (RADV: 34 ms of globals, 22 ms of device) the compile follows.
         assert(p.globalsAtMs >= 0 && p.globalsAtMs < readyAtMs,
             'the host globals were installed before the GPU was up: ' + p.globalsAtMs + ' vs ' + readyAtMs);
-        assert(p.compileStartMs >= 0 && p.compileStartMs < readyAtMs,
-            'the page began compiling before the GPU was up: ' + p.compileStartMs + ' vs ' + readyAtMs);
+        assert(p.compileStartMs >= p.globalsAtMs, 'the globals, then the compile: ' + JSON.stringify(p));
+        if (p.globalsAtMs + p.globalsMs < readyAtMs)
+            assert(p.compileStartMs < readyAtMs,
+                'the globals done under the GPU, the compile began under it too: ' + p.compileStartMs + ' vs ' + readyAtMs);
         assert(p.overlapMs > 0, 'some of it ran under the GPU: ' + p.overlapMs);
     }
     assert(p.compileEndMs >= p.compileStartMs && p.compileEndMs <= s.loadedMs,

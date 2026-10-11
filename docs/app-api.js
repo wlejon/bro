@@ -222,7 +222,8 @@ bro.app.logFile;
  * `gpuMs` (the Vulkan device, the presenter and Skia's context) and `totalMs`
  * (both; -1 for a phase that did not run). Headless brings the GPU up on a
  * thread while it creates its window, so `totalMs` is about the longer of the
- * two rather than their sum. `startAtMs` / `readyAtMs` are when the GPU
+ * two rather than their sum (the page's host globals, installed meanwhile,
+ * are `page`'s, not part of it). `startAtMs` / `readyAtMs` are when the GPU
  * began and was up.
  *
  * While the GPU comes up (headless and windowed alike) bro installs the

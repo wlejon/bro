@@ -276,7 +276,7 @@ void Engine::construct(const EngineConfig& config) {
     render::SkiaGpu* headlessSkiaGpu = nullptr;
     std::string gpuInitError;
     std::thread gpuInit;
-    double gpuMs = -1.0, gpuReadyAt = -1.0;
+    double gpuMs = -1.0, gpuReadyAt = -1.0, windowDoneAt = -1.0;
     struct JoinOnExit {
         std::thread& t;
         ~JoinOnExit() { if (t.joinable()) t.join(); }
@@ -346,6 +346,7 @@ void Engine::construct(const EngineConfig& config) {
             window_.reset();
         }
         gfxTiming.windowMs = util::currentTimeMs() - gfxStart;
+        windowDoneAt = sinceStartMs();
     } else if (displayMode_ == DisplayMode::Windowed) {
         {
             const auto backend = config.graphics.useGPU ? platform::GraphicsBackend::Vulkan
@@ -470,7 +471,13 @@ void Engine::construct(const EngineConfig& config) {
     if (displayMode_ == DisplayMode::Headless || displayMode_ == DisplayMode::Windowed) {
         gfxTiming.gpuMs = gpuMs;
         gfxTiming.readyAtMs = gpuReadyAt;
-        gfxTiming.totalMs = util::currentTimeMs() - gfxStart;
+        // The window and the device only, not the audio and the page's host
+        // globals that run between them (beginPageCompile): headless, until
+        // the later of the two is done; windowed, one after the other.
+        if (displayMode_ == DisplayMode::Headless)
+            gfxTiming.totalMs = std::max(windowDoneAt, gpuReadyAt) - gfxTiming.startAtMs;
+        else
+            gfxTiming.totalMs = gfxTiming.windowMs + std::max(gpuMs, 0.0);
         noteGraphicsStartup(gfxTiming);
     }
     if (!overlapPage) initAudio();
