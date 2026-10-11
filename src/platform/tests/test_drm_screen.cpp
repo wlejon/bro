@@ -24,6 +24,7 @@
 #include <brodmabuf/kms.h>
 #include <brodmabuf/gbm.h>
 #include <brodmabuf/allocator.h>
+#include <xf86drm.h>
 #endif
 
 using namespace bro;
@@ -81,6 +82,14 @@ int main() {
 
     if (cardFd < 0) {
         std::cout << "SKIP (77): No accessible DRM card node found" << std::endl;
+        return 77;
+    }
+    // Opened directly while a display server (a running helm, a desktop
+    // session) owns the seat: the card opens, but every commit is refused
+    // with EACCES, so there is no screen here to own.
+    if (!seat.isSeatActive() && !drmIsMaster(cardFd)) {
+        std::cout << "SKIP (77): another display server holds DRM master on " << cardNode << std::endl;
+        ::close(cardFd);
         return 77;
     }
 
