@@ -12,13 +12,13 @@ Windows (VS multi-config generator; do not use MinGW, and use one build dir pick
 ```bash
 cmake -B build
 cmake --build build --config Release        # or Debug
-./build/Release/bro.exe ../broworkshop/demos/example    # bro-headless.exe alongside
+./build/Release/bro.exe ../broworkshop/demos/dom-lab    # bro-headless.exe alongside
 ```
 
 Linux/macOS (Ninja, single-config, so use a separate build dir per config):
 ```bash
 cmake -B build-release -DCMAKE_BUILD_TYPE=Release && cmake --build build-release
-./build-release/bro ../broworkshop/demos/example
+./build-release/bro ../broworkshop/demos/dom-lab
 ```
 `scripts/package-release.sh` on Linux/macOS needs `--build-dir build-release` (its `--config` default is the Windows-style selector, a no-op for Ninja).
 

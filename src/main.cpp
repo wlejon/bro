@@ -199,7 +199,7 @@ static void printUsage() {
         "next to the executable to run without arguments.\n"
         "\n"
         "Example:\n"
-        "  bro ../broworkshop/demos/example\n"
+        "  bro ../broworkshop/demos/dom-lab\n"
         "\n"
         "bro.json format:\n"
         "  {\"app\": \".\", \"title\": \"My App\", \"width\": 1200, \"height\": 800}\n"

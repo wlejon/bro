@@ -483,7 +483,7 @@ for (let i = 0; i < 10; i++) {
 ### Inline expressions
 
 ```bash
-bro-headless ../broworkshop/demos/example -e "advanceTime(2000)" -e "screenshot('out.png')"
+bro-headless ../broworkshop/demos/dom-lab -e "advanceTime(2000)" -e "screenshot('out.png')"
 ```
 
 Multiple `-e` flags are concatenated and evaluated together.
@@ -498,7 +498,7 @@ screenshot('after.png');
 ```
 
 ```bash
-bro-headless ../broworkshop/demos/example test.js
+bro-headless ../broworkshop/demos/dom-lab test.js
 ```
 
 Exit code is 0 on success, 1 if any assertion fails or an uncaught exception occurs, and 77 if the script called `skipTest()` (or `missingGpuContext()` without a GPU) and nothing failed.

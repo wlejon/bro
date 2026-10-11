@@ -4,7 +4,7 @@
  * =============================================================================
  *
  * A page starts a broremote server; a viewer (bro's `<remoteview>`, below,
- * e.g. helmapps' helmremote, on this machine or over ssh; or `broremote
+ * e.g. helmapps' remote app, on this machine or over ssh; or `broremote
  * probe` for scripted checks) attaches to it, sees what bro composites and drives
  * it with its own keyboard and mouse. helm uses it for `helm --remote`.
  * The binding is broremote's own (broremote_api, ../broremote/src/api); bro
@@ -133,7 +133,7 @@
  *
  * The other end: a page shows another machine's broremote server (helm
  * --remote, `broremote serve-test`, another bro hosting) and drives it.
- * helmremote (helmapps) is the app built on it. Needs the "remote"
+ * helmapps' remote app is built on it. Needs the "remote"
  * permission, like host().
  *
  *   bro.remote.connect(options?) -> session
@@ -248,7 +248,7 @@ if (bro.remote.available) {
     const status = bro.remote.host({ codecs: ['hevc', 'h264', 'raw'] });
     console.log(`hosting on ${status.socketPath}`);
     // On another machine:  bro.remote.connect({ ssh: 'this-host' }) in a
-    // <remoteview> (helmapps' helmremote), or `broremote probe --ssh this-host`
+    // <remoteview> (helmapps' remote app), or `broremote probe --ssh this-host`
 }
 
 // ---------------------------------------------------------------------------

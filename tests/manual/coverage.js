@@ -1,5 +1,5 @@
 // Test coverage analyzer for bro.
-// Runs via: bro-headless --no-gpu ../broworkshop/demos/example tests/coverage.js
+// Runs via: bro-headless --no-gpu ../broworkshop/demos/dom-lab tests/coverage.js
 //
 // Scans src/bronze_host/*.cpp for the host API surface (def/accessor/set/setStatic),
 // then scans all test files (tests/**/test_*.js + ../broworkshop/**/test*.js) for usage.

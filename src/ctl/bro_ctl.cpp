@@ -112,8 +112,8 @@ bool allDigits(const std::string& s) {
     return true;
 }
 
-// Does a socket's stem answer to `-s NAME`? The whole name (`helmterm-4242`),
-// the app (`helmterm`, matching `helmterm-<pid>`), or the pid (`4242`).
+// Does a socket's stem answer to `-s NAME`? The whole name (`term-4242`),
+// the app (`term`, matching `term-<pid>`), or the pid (`4242`).
 bool nameMatches(const std::string& stem, const std::string& name) {
     if (stem == name) return true;
     const size_t dash = stem.rfind('-');

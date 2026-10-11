@@ -46,8 +46,8 @@ Local IPC only, never a network listener; only the same user can connect
 
 A second bro asking for a live server's name is refused. Stale sockets from
 killed bros are removed when the next bro starts control. `bro-ctl list` shows the endpoints and which
-answer. `-s NAME` picks one: the whole name (`helmterm-4242`), the app alone
-(`helmterm`, when one process of it is running; with several, bro-ctl lists
+answer. `-s NAME` picks one: the whole name (`term-4242`), the app alone
+(`term`, when one process of it is running; with several, bro-ctl lists
 them and asks), or the pid (`4242`). Without `-s` the default is `display`,
 else the only live endpoint. `-S PATH` names an address directly (a socket
 path, or a pipe name on Windows), as does `$BRO_CONTROL_SOCKET`.

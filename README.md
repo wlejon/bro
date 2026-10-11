@@ -119,9 +119,9 @@ Loads the app's `index.html`, applies stylesheets, executes scripts, and opens a
 ### Headless mode
 
 ```bash
-bro-headless ../broworkshop/demos/example test.js                           # script file
-bro-headless ../broworkshop/demos/example -e "document.querySelector('#btn').click()"
-bro-headless --no-gpu ../broworkshop/demos/example                          # CPU-only (CI)
+bro-headless ../broworkshop/demos/dom-lab test.js                           # script file
+bro-headless ../broworkshop/demos/dom-lab -e "document.querySelector('#btn').click()"
+bro-headless --no-gpu ../broworkshop/demos/dom-lab                          # CPU-only (CI)
 ```
 
 Headless globals: `screenshot(path)`, `advanceTime(ms)`, `flush()`, `sleep(ms)`, `assert(cond, msg?)`.
