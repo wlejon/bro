@@ -16,9 +16,11 @@
 //     that element's style (twenty-five rows' identical cells).
 //
 // Elements whose style also reads their attributes (SVG presentation
-// attributes, table spans, <svg width>), and a sheet that forces `inherit` onto
-// a non-inherited property (which makes any parent value an input), never get
-// a key: they always resolve in full. See Document::resolveStylesRecursive.
+// attributes, table spans, <svg width>/<svg height>) carry those attributes in
+// the key, so a row's identical icons share and an icon put back unchanged
+// keeps its style. A sheet that forces `inherit` onto a non-inherited property
+// (which makes any parent value an input) gives no element a key: then every
+// element resolves in full. See Document::resolveStylesRecursive.
 
 #include <cstdint>
 #include <functional>
@@ -34,11 +36,13 @@ struct StyleShareKey {
     uint64_t parentToken = 0;         // the parent's handed-down values (0: no parent)
     std::string tag;
     std::string inlineStyle;
+    std::string attributes;           // the ones the style reads (Cascade::styleAttributes, <svg> size)
     std::vector<uint32_t> rules;      // Cascade::matchRules()
     size_t hash = 0;
 
     void computeHash() {
         size_t h = std::hash<std::string>{}(inlineStyle);
+        if (!attributes.empty()) h ^= std::hash<std::string>{}(attributes) + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
         auto mix = [&h](uint64_t v) { h ^= static_cast<size_t>(v) + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2); };
         mix(cascadeGeneration);
         mix(mediaGeneration);
@@ -53,7 +57,7 @@ struct StyleShareKey {
         return hash == o.hash && cascadeGeneration == o.cascadeGeneration &&
                mediaGeneration == o.mediaGeneration && rootFontSizeBits == o.rootFontSizeBits &&
                parentToken == o.parentToken && rules == o.rules && tag == o.tag &&
-               inlineStyle == o.inlineStyle;
+               inlineStyle == o.inlineStyle && attributes == o.attributes;
     }
 };
 

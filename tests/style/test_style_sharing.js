@@ -255,6 +255,64 @@ const row = (n, cls = '') => {
     svg.remove(); flush();
 }
 
+// ---- icons: the attributes the style reads are part of the key -----------------------
+{
+    const NS = 'http://www.w3.org/2000/svg';
+    const icon = (stroke, size = '16') => {
+        const s = document.createElementNS(NS, 'svg');
+        s.setAttribute('width', size);
+        s.setAttribute('height', size);
+        s.setAttribute('stroke', stroke);
+        const p = document.createElementNS(NS, 'path');
+        p.setAttribute('d', 'M0 0L8 8');
+        s.appendChild(p);
+        return s;
+    };
+    const holder = document.createElement('div');
+    for (let i = 0; i < 8; i++) holder.appendChild(icon('rgb(20, 20, 20)'));
+    const odd = icon('rgb(21, 21, 21)');
+    const big = icon('rgb(20, 20, 20)', '32');
+    holder.append(odd, big);
+    box.appendChild(holder);
+    perf.reset();
+    flush();
+    const p = perf.stats();
+    assert(p.stylesShared >= 10, `eight identical icons share their <svg> and <path> styles (${p.stylesShared} shared)`);
+    eq(cs(holder.children[3], 'stroke'), 'rgb(20,20,20)', 'a shared icon\'s stroke');
+    eq(cs(odd, 'stroke'), 'rgb(21,21,21)', 'an icon with another stroke attribute is not shared');
+    eq(cs(odd.firstChild, 'stroke'), 'rgb(21,21,21)', 'and its path inherits its own');
+    eq(cs(big, 'width'), '32px', 'nor one with another width attribute');
+    eq(cs(holder.children[0], 'width'), '16px', 'the shared ones keep theirs');
+    holder.remove(); flush();
+    perf.reset();
+    box.appendChild(holder);
+    flush();
+    const q = perf.stats();
+    assert(q.stylesKept >= 20, `icons put back unchanged keep their styles (${q.stylesKept} kept, ${q.stylesResolved} resolved)`);
+    holder.remove(); flush();
+    big.setAttribute('width', '24');
+    box.appendChild(holder);
+    flush();
+    eq(cs(big, 'width'), '24px', 'an icon whose width attribute changed while detached is not kept');
+    holder.remove(); flush();
+
+    // A table cell's span is style input too: cells alike but for colspan are not shared.
+    const t = document.createElement('table');
+    const head = document.createElement('tr'), body = document.createElement('tr');
+    const cell = (text) => { const c = document.createElement('td'); c.textContent = text; return c; };
+    head.append(cell('a'), cell('b'), cell('c'));
+    const wide = cell('wide'), after = cell('after');
+    wide.setAttribute('colspan', '2');
+    body.append(wide, after);
+    t.append(head, body);
+    box.appendChild(t);
+    flush();
+    const left = (el) => el.getBoundingClientRect().left;
+    eq(Math.abs(left(after) - left(head.children[2])) < 1, true,
+        'a cell after one spanning two columns sits in the third, not shared with a plain cell');
+    t.remove(); flush();
+}
+
 // ---- a sheet added later ------------------------------------------------------------
 {
     const r = row(2);

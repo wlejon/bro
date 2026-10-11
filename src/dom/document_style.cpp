@@ -544,11 +544,11 @@ void Document::resolveStylesRecursive(Element* elem,
         // itself changing (an ancestor's class, a sibling inserted before it).
         cascade_.matchRules(*adapter, parentStyle, /*startingStyle=*/false, matchScratch_);
 
-        // Style sharing (dom/style_share.h). The rest of the inputs, when they
-        // are all there is: not when the style also reads the element's
-        // attributes (presentation attributes, table spans, <svg width>), nor
-        // when the sheet forces `inherit` onto a non-inherited property, which
-        // makes every parent value an input.
+        // Style sharing (dom/style_share.h). The rest of the inputs, the
+        // attributes the style reads among them (presentation attributes,
+        // table spans, and the <svg> size finishComputedStyle reads); not when
+        // the sheet forces `inherit` onto a non-inherited property, which makes
+        // every parent value an input.
         // BRO_STYLE_SHARE=0 turns sharing off (every element resolves in full),
         // for comparing against it.
         static const bool kShareOn = [] {
@@ -556,10 +556,18 @@ void Document::resolveStylesRecursive(Element* elem,
             return !(v && std::strcmp(v, "0") == 0);
         }();
         const std::string& tag = elem->tagName();
-        const bool keyable = kShareOn && !cascade_.usesForcedInherit() && tag != "svg" && tag != "SVG" &&
-                             !cascade_.readsElementAttributes(*adapter);
+        const bool keyable = kShareOn && !cascade_.usesForcedInherit();
         StyleShareKey& key = keyScratch_;
         if (keyable) {
+            cascade_.styleAttributes(*adapter, key.attributes);
+            if (tag == "svg" || tag == "SVG") {
+                for (const char* attr : {"width", "height"}) {
+                    key.attributes += attr;
+                    key.attributes += '=';
+                    key.attributes += elem->getAttribute(attr);
+                    key.attributes += '\0';
+                }
+            }
             key.cascadeGeneration = cascade_.generation();
             key.mediaGeneration = mediaGeneration_;
             static_assert(sizeof(float) == sizeof(uint32_t));
