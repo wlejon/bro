@@ -1,5 +1,6 @@
 #include "engine/app_manifest.h"
 
+#include "util/json_in.h"
 #include "util/log.h"
 
 #include <cstdlib>
@@ -20,224 +21,40 @@ namespace fs = std::filesystem;
 
 namespace {
 
-// ---- a small JSON reader -----------------------------------------------------
-// bro.json is read before any JS realm exists, so the engine reads it itself.
-// Enough of RFC 8259 for a manifest: objects, arrays, strings (with \uXXXX and
-// surrogate pairs), numbers, true/false/null. Comments are not JSON and are
-// refused like any other syntax error.
-
-struct Json {
-    enum Kind { Null, Bool, Number, String, Array, Object } kind = Null;
-    bool b = false;
-    double n = 0;
-    std::string s;
-    std::vector<Json> items;
-    std::vector<std::pair<std::string, Json>> members;
-
-    const Json* get(const char* key) const {
-        if (kind != Object) return nullptr;
-        for (const auto& [k, v] : members)
-            if (k == key) return &v;
-        return nullptr;
-    }
-};
-
-class Reader {
-public:
-    explicit Reader(const std::string& text) : t_(text) {}
-
-    bool parse(Json& out, std::string& error) {
-        skipWs();
-        if (!value(out, 0)) { error = err_; return false; }
-        skipWs();
-        if (p_ != t_.size()) { error = at("trailing characters"); return false; }
-        return true;
-    }
-
-private:
-    const std::string& t_;
-    size_t p_ = 0;
-    std::string err_;
-
-    std::string at(const char* what) {
-        size_t line = 1, col = 1;
-        for (size_t i = 0; i < p_ && i < t_.size(); ++i) {
-            if (t_[i] == '\n') { ++line; col = 1; } else ++col;
-        }
-        return std::string(what) + " at line " + std::to_string(line) + ", column " + std::to_string(col);
-    }
-    bool fail(const char* what) { if (err_.empty()) err_ = at(what); return false; }
-
-    void skipWs() {
-        while (p_ < t_.size() && (t_[p_] == ' ' || t_[p_] == '\t' || t_[p_] == '\n' || t_[p_] == '\r')) ++p_;
-    }
-    bool lit(const char* word) {
-        size_t n = std::char_traits<char>::length(word);
-        if (t_.compare(p_, n, word) != 0) return false;
-        p_ += n;
-        return true;
-    }
-
-    bool value(Json& out, int depth) {
-        if (depth > 64) return fail("nesting too deep");
-        if (p_ >= t_.size()) return fail("unexpected end");
-        char c = t_[p_];
-        if (c == '{') return object(out, depth);
-        if (c == '[') return array(out, depth);
-        if (c == '"') { out.kind = Json::String; return string(out.s); }
-        if (lit("true")) { out.kind = Json::Bool; out.b = true; return true; }
-        if (lit("false")) { out.kind = Json::Bool; out.b = false; return true; }
-        if (lit("null")) { out.kind = Json::Null; return true; }
-        if (c == '-' || (c >= '0' && c <= '9')) return number(out);
-        return fail("unexpected character");
-    }
-
-    bool number(Json& out) {
-        size_t start = p_;
-        if (t_[p_] == '-') ++p_;
-        while (p_ < t_.size() && ((t_[p_] >= '0' && t_[p_] <= '9') || t_[p_] == '.' || t_[p_] == 'e' ||
-                                  t_[p_] == 'E' || t_[p_] == '+' || t_[p_] == '-'))
-            ++p_;
-        std::string num = t_.substr(start, p_ - start);
-        char* end = nullptr;
-        out.kind = Json::Number;
-        out.n = std::strtod(num.c_str(), &end);
-        if (!end || *end != '\0') return fail("bad number");
-        return true;
-    }
-
-    static void putUtf8(std::string& s, uint32_t cp) {
-        if (cp < 0x80) s += char(cp);
-        else if (cp < 0x800) { s += char(0xC0 | (cp >> 6)); s += char(0x80 | (cp & 0x3F)); }
-        else if (cp < 0x10000) {
-            s += char(0xE0 | (cp >> 12)); s += char(0x80 | ((cp >> 6) & 0x3F)); s += char(0x80 | (cp & 0x3F));
-        } else {
-            s += char(0xF0 | (cp >> 18)); s += char(0x80 | ((cp >> 12) & 0x3F));
-            s += char(0x80 | ((cp >> 6) & 0x3F)); s += char(0x80 | (cp & 0x3F));
-        }
-    }
-
-    bool hex4(uint32_t& v) {
-        if (p_ + 4 > t_.size()) return fail("short \\u escape");
-        v = 0;
-        for (int i = 0; i < 4; ++i) {
-            char h = t_[p_++];
-            v <<= 4;
-            if (h >= '0' && h <= '9') v |= uint32_t(h - '0');
-            else if (h >= 'a' && h <= 'f') v |= uint32_t(h - 'a' + 10);
-            else if (h >= 'A' && h <= 'F') v |= uint32_t(h - 'A' + 10);
-            else return fail("bad \\u escape");
-        }
-        return true;
-    }
-
-    bool string(std::string& out) {
-        ++p_;  // opening quote
-        while (p_ < t_.size()) {
-            char c = t_[p_++];
-            if (c == '"') return true;
-            if (static_cast<unsigned char>(c) < 0x20) return fail("control character in string");
-            if (c != '\\') { out += c; continue; }
-            if (p_ >= t_.size()) break;
-            char e = t_[p_++];
-            switch (e) {
-                case '"': out += '"'; break;
-                case '\\': out += '\\'; break;
-                case '/': out += '/'; break;
-                case 'b': out += '\b'; break;
-                case 'f': out += '\f'; break;
-                case 'n': out += '\n'; break;
-                case 'r': out += '\r'; break;
-                case 't': out += '\t'; break;
-                case 'u': {
-                    uint32_t cp = 0;
-                    if (!hex4(cp)) return false;
-                    if (cp >= 0xD800 && cp <= 0xDBFF && p_ + 1 < t_.size() && t_[p_] == '\\' && t_[p_ + 1] == 'u') {
-                        p_ += 2;
-                        uint32_t lo = 0;
-                        if (!hex4(lo)) return false;
-                        if (lo >= 0xDC00 && lo <= 0xDFFF) cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
-                    }
-                    putUtf8(out, cp);
-                    break;
-                }
-                default: return fail("bad escape");
-            }
-        }
-        return fail("unterminated string");
-    }
-
-    bool array(Json& out, int depth) {
-        out.kind = Json::Array;
-        ++p_;
-        skipWs();
-        if (p_ < t_.size() && t_[p_] == ']') { ++p_; return true; }
-        for (;;) {
-            Json item;
-            skipWs();
-            if (!value(item, depth + 1)) return false;
-            out.items.push_back(std::move(item));
-            skipWs();
-            if (p_ < t_.size() && t_[p_] == ',') { ++p_; continue; }
-            if (p_ < t_.size() && t_[p_] == ']') { ++p_; return true; }
-            return fail("expected , or ]");
-        }
-    }
-
-    bool object(Json& out, int depth) {
-        out.kind = Json::Object;
-        ++p_;
-        skipWs();
-        if (p_ < t_.size() && t_[p_] == '}') { ++p_; return true; }
-        for (;;) {
-            skipWs();
-            if (p_ >= t_.size() || t_[p_] != '"') return fail("expected a key");
-            std::string key;
-            if (!string(key)) return false;
-            skipWs();
-            if (p_ >= t_.size() || t_[p_] != ':') return fail("expected :");
-            ++p_;
-            skipWs();
-            Json v;
-            if (!value(v, depth + 1)) return false;
-            out.members.emplace_back(std::move(key), std::move(v));
-            skipWs();
-            if (p_ < t_.size() && t_[p_] == ',') { ++p_; continue; }
-            if (p_ < t_.size() && t_[p_] == '}') { ++p_; return true; }
-            return fail("expected , or }");
-        }
-    }
-};
+// bro.json is read before any JS realm exists, so the engine reads it itself
+// (util/json_in.h).
+using util::JsonValue;
+using JType = JsonValue::Type;
 
 // ---- typed reads ---------------------------------------------------------------
 
 struct Fields {
-    const Json& obj;
+    const JsonValue& obj;
     const std::string& where;
 
     void warn(const char* key, const char* want) const {
         LOG_WARN("%s: \"%s\" should be %s; ignored", where.c_str(), key, want);
     }
     void str(const char* key, std::string& out) const {
-        const Json* v = obj.get(key);
+        const JsonValue* v = obj.find(key);
         if (!v) return;
-        if (v->kind == Json::String) out = v->s;
+        if (v->type == JType::String) out = v->string;
         else warn(key, "a string");
     }
     void boolean(const char* key, bool& out) const {
-        const Json* v = obj.get(key);
+        const JsonValue* v = obj.find(key);
         if (!v) return;
-        if (v->kind == Json::Bool) out = v->b;
+        if (v->type == JType::Bool) out = v->boolean;
         else warn(key, "true or false");
     }
     // A list of strings; a single string reads as a list of one.
     void strings(const char* key, std::vector<std::string>& out) const {
-        const Json* v = obj.get(key);
+        const JsonValue* v = obj.find(key);
         if (!v) return;
-        if (v->kind == Json::String) { out.push_back(v->s); return; }
-        if (v->kind != Json::Array) { warn(key, "a list of strings"); return; }
-        for (const Json& item : v->items) {
-            if (item.kind == Json::String) out.push_back(item.s);
+        if (v->type == JType::String) { out.push_back(v->string); return; }
+        if (v->type != JType::Array) { warn(key, "a list of strings"); return; }
+        for (const JsonValue& item : v->array) {
+            if (item.type == JType::String) out.push_back(item.string);
             else { warn(key, "a list of strings"); return; }
         }
     }
@@ -299,13 +116,13 @@ bool parseAppManifest(const std::string& path, AppDescriptor& out, std::string* 
         static_cast<unsigned char>(text[1]) == 0xBB && static_cast<unsigned char>(text[2]) == 0xBF)
         text.erase(0, 3);  // a BOM, as some Windows editors write
 
-    Json root;
+    JsonValue root;
     std::string err;
-    if (!Reader(text).parse(root, err)) {
+    if (!util::parseJson(text, root, &err)) {
         if (error) *error = path + ": " + err;
         return false;
     }
-    if (root.kind != Json::Object) {
+    if (!root.isObject()) {
         if (error) *error = path + ": not a JSON object";
         return false;
     }
@@ -333,10 +150,10 @@ bool parseAppManifest(const std::string& path, AppDescriptor& out, std::string* 
         for (const auto& p : perms) addUnique(out.permissions, p);
     }
 
-    if (const Json* ft = root.get("fileTypes")) {
-        if (ft->kind != Json::Array) f.warn("fileTypes", "a list of {name, mimeTypes, extensions}");
-        else for (const Json& item : ft->items) {
-            if (item.kind != Json::Object) { f.warn("fileTypes", "a list of objects"); continue; }
+    if (const JsonValue* ft = root.find("fileTypes")) {
+        if (!ft->isArray()) f.warn("fileTypes", "a list of {name, mimeTypes, extensions}");
+        else for (const JsonValue& item : ft->array) {
+            if (!item.isObject()) { f.warn("fileTypes", "a list of objects"); continue; }
             Fields g{item, path};
             AppFileType t;
             g.str("name", t.name);
@@ -347,10 +164,10 @@ bool parseAppManifest(const std::string& path, AppDescriptor& out, std::string* 
         }
     }
 
-    if (const Json* acts = root.get("actions")) {
-        if (acts->kind != Json::Array) f.warn("actions", "a list of {id, name, args}");
-        else for (const Json& item : acts->items) {
-            if (item.kind != Json::Object) { f.warn("actions", "a list of objects"); continue; }
+    if (const JsonValue* acts = root.find("actions")) {
+        if (!acts->isArray()) f.warn("actions", "a list of {id, name, args}");
+        else for (const JsonValue& item : acts->array) {
+            if (!item.isObject()) { f.warn("actions", "a list of objects"); continue; }
             Fields g{item, path};
             AppAction a;
             g.str("id", a.id);
@@ -505,9 +322,9 @@ std::vector<std::string> userPermissionGrants(const std::string& id) {
     if (!file.is_open()) return out;
     std::ostringstream ss;
     ss << file.rdbuf();
-    Json root;
+    JsonValue root;
     std::string err;
-    if (!Reader(ss.str()).parse(root, err) || root.kind != Json::Object) {
+    if (!util::parseJson(ss.str(), root, &err) || !root.isObject()) {
         LOG_WARN("%s: %s; no permissions granted from it", path.c_str(), err.empty() ? "not a JSON object" : err.c_str());
         return out;
     }

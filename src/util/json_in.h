@@ -1,9 +1,12 @@
 #pragma once
 
-// A small JSON reader, the counterpart of json_out.h: enough to read a
-// service's reply (a Hugging Face tree listing, for util/model_fetch.h)
-// without a JSON library. Parses RFC 8259 JSON into a JsonValue tree; numbers
-// are doubles, strings are UTF-8 (\u escapes, surrogate pairs included).
+// bro's JSON reader, the counterpart of json_out.h, for what the engine reads
+// itself without a JSON library: bro.json and permissions.json before any JS
+// realm exists (engine/app_manifest.cpp), a service's reply (a Hugging Face
+// tree listing, util/model_fetch.h). Parses RFC 8259 JSON into a JsonValue
+// tree; numbers are doubles, strings are UTF-8 (\u escapes, surrogate pairs
+// included); a repeated key keeps its last value, as JSON.parse does.
+// Comments are not JSON and fail like any other syntax error.
 //
 //   bro::util::JsonValue v;
 //   std::string err;
@@ -33,10 +36,14 @@ struct JsonValue {
 
     /// The member `key` of an object, or a shared Null value.
     const JsonValue& get(const std::string& key) const;
+    /// The member `key` of an object, or null when it has none (an explicit
+    /// `null` member is found).
+    const JsonValue* find(const std::string& key) const;
 };
 
 /// Parse `text` (the whole of it, whitespace around allowed) into `out`.
-/// False with a message in `*error` on malformed input or nesting deeper than 256.
+/// False with a message ("expected ':' at line 3, column 9") in `*error` on
+/// malformed input or nesting deeper than 256.
 bool parseJson(std::string_view text, JsonValue& out, std::string* error = nullptr);
 
 } // namespace bro::util

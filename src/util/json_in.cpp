@@ -7,8 +7,14 @@ namespace bro::util {
 const JsonValue& JsonValue::get(const std::string& key) const {
     static const JsonValue kNull;
     if (type != Type::Object) return kNull;
+    const JsonValue* v = find(key);
+    return v ? *v : kNull;
+}
+
+const JsonValue* JsonValue::find(const std::string& key) const {
+    if (type != Type::Object) return nullptr;
     auto it = object.find(key);
-    return it == object.end() ? kNull : it->second;
+    return it == object.end() ? nullptr : &it->second;
 }
 
 namespace {
@@ -18,8 +24,16 @@ struct Parser {
     size_t i = 0;
     std::string err;
 
+    std::string at(const char* what) const {
+        size_t line = 1, col = 1;
+        for (size_t k = 0; k < i && k < s.size(); ++k) {
+            if (s[k] == '\n') { ++line; col = 1; } else ++col;
+        }
+        return std::string(what) + " at line " + std::to_string(line) + ", column " + std::to_string(col);
+    }
+
     bool fail(const char* what) {
-        if (err.empty()) err = std::string(what) + " at offset " + std::to_string(i);
+        if (err.empty()) err = at(what);
         return false;
     }
 
@@ -168,7 +182,7 @@ bool parseJson(std::string_view text, JsonValue& out, std::string* error) {
     }
     p.ws();
     if (p.i != text.size()) {
-        if (error) *error = "trailing characters at offset " + std::to_string(p.i);
+        if (error) *error = p.at("trailing characters");
         return false;
     }
     return true;
