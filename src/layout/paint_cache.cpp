@@ -132,18 +132,20 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
         else if (entry->readsParent && elem->parentElement() &&
                  elem->parentElement()->paintStamp() >= entry->epoch)
             miss = SpanMiss::Changed;
-        else if (!entry->key.sameOrigin(key)) miss = SpanMiss::Moved;
-        else if (!entry->key.sameClip(key)) miss = SpanMiss::Clip;
-        else if (!entry->key.sameRoot(key) && entry->pinned) miss = SpanMiss::Moved;
+        else if (!key.fitsIn(entry->key)) miss = SpanMiss::Clip;
+        else if (entry->pinned && (!key.sameOrigin(entry->key) || key.rootX != entry->key.rootX ||
+                                   key.rootY != entry->key.rootY))
+            miss = SpanMiss::Moved;
         else {
             entry->lastDraw = cache.draws;
-            if (entry->key.sameRoot(key)) {
+            if (key.sameOrigin(entry->key)) {
                 recorder_->recordSpan(entry->buffer);
             } else {
-                // Recorded at another document scroll: the same paint, moved
-                // as far as the root offset moved.
+                // Recorded where the box stood before a scroll (the
+                // document's or an ancestor scroller's) moved it: the same
+                // paint, moved as far as its origin moved.
                 recorder_->save();
-                recorder_->translate(key.rootX - entry->key.rootX, key.rootY - entry->key.rootY);
+                recorder_->translate(key.dx(entry->key), key.dy(entry->key));
                 recorder_->recordSpan(entry->buffer);
                 recorder_->restore();
                 ++cacheStats_.reusedScrolled;

@@ -175,7 +175,7 @@ void DrawTraversal::paintElement(dom::Element* elem, float offsetX, float offset
     //     box-shadow/outline spilling toward the viewport still records.
     if (!clipRectStack_.empty() && !skipWrap) {
         const ClipBox& clip = clipRectStack_.back();
-        constexpr float kCullSlack = 256.0f;  // covers typical shadow/outline spill
+        constexpr float kCullSlack = SpanKey::kCullSlack;  // covers typical shadow/outline spill
         bool outside = by + bh < clip.y - kCullSlack ||
                        by      > clip.y + clip.h + kCullSlack ||
                        bx + bw < clip.x - kCullSlack ||

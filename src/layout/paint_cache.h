@@ -31,8 +31,8 @@ namespace bro::layout {
 enum class SpanMiss : uint8_t {
     New,            // no span for this element yet (or it was pruned)
     Changed,        // something under it was stamped since it was recorded
-    Moved,          // drawn at another origin
-    Clip,           // under another clip, or wrapped differently
+    Moved,          // a pinned one (a viewport place, a control) drawn elsewhere
+    Clip,           // its clip moved past what it culled, or wrapped differently
     Context,        // the cache was emptied: viewport, fonts, top layer, ...
     // Volatile: recorded, never reused.
     LayerBreak,     // a canvas / WebGL / scene / iframe / remote view layer
@@ -47,7 +47,7 @@ const char* spanMissName(SpanMiss m);
 
 struct PaintCacheStats {
     uint64_t reused = 0;
-    uint64_t reusedScrolled = 0;  // of those, translated for a document scroll
+    uint64_t reusedScrolled = 0;  // of those, translated: a scroll moved them (document or a scroller)
     uint64_t recorded = 0;
     uint64_t misses[static_cast<size_t>(SpanMiss::Count)] = {};
 };
@@ -60,20 +60,30 @@ struct SpanKey {
     float clipX = 0, clipY = 0, clipW = 0, clipH = 0;
     bool clipped = false;
     bool skipWrap = false;
-    // Where `o` stands from this key once the pass's root offset is taken
-    // out: a document scroll moves the root offset and every origin and clip
-    // with it, and a span recorded before it is the same paint translated by
-    // the root offset's move (the comparison allows float rounding).
-    bool sameOrigin(const SpanKey& o) const {
-        return near(offX - rootX, o.offX - o.rootX) && near(offY - rootY, o.offY - o.rootY);
+    // How far a box drawn at this key stands from where `rec` recorded it.
+    float dx(const SpanKey& rec) const { return offX - rec.offX; }
+    float dy(const SpanKey& rec) const { return offY - rec.offY; }
+    bool sameOrigin(const SpanKey& rec) const { return near(offX, rec.offX) && near(offY, rec.offY); }
+    // Whether paint recorded at `rec`, moved to this key's origin, is what
+    // drawing here would record. A box paints relative to its origin (a
+    // document scroll, an ancestor scroller's scroll, moves the origin and
+    // nothing else), except for what the walk culled: boxes outside the clip
+    // it was recorded under, by more than kCullSlack. So the clip here, in the
+    // box's own terms, has to lie inside the recorded one grown by the slack:
+    // then nothing culled then can show now.
+    bool fitsIn(const SpanKey& rec) const {
+        if (clipped != rec.clipped || skipWrap != rec.skipWrap) return false;
+        if (!clipped) return true;
+        const float x0 = clipX - offX, y0 = clipY - offY;
+        const float rx0 = rec.clipX - rec.offX - kCullSlack, ry0 = rec.clipY - rec.offY - kCullSlack;
+        return x0 >= rx0 - 0.01f && y0 >= ry0 - 0.01f &&
+               x0 + clipW <= rx0 + rec.clipW + 2 * kCullSlack + 0.01f &&
+               y0 + clipH <= ry0 + rec.clipH + 2 * kCullSlack + 0.01f;
     }
-    bool sameClip(const SpanKey& o) const {
-        return clipped == o.clipped && skipWrap == o.skipWrap &&
-               (!clipped || (near(clipX - rootX, o.clipX - o.rootX) && near(clipY - rootY, o.clipY - o.rootY) &&
-                             clipW == o.clipW && clipH == o.clipH));
-    }
-    bool sameRoot(const SpanKey& o) const { return rootX == o.rootX && rootY == o.rootY; }
     static bool near(float a, float b) { return a - b < 0.01f && b - a < 0.01f; }
+    // Boxes this far outside the clip a walk draws under are culled
+    // (DrawTraversal::paintElement): their shadows and outlines spill less.
+    static constexpr float kCullSlack = 256.0f;
 };
 
 struct SpanEntry {
