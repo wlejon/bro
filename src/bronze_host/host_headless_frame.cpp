@@ -798,6 +798,8 @@ void installHeadlessFrame(engine::Engine& engine) {
                 pt.set(ev::setProperty(pt.get(), "enabled",
                                        ev::fromBool(layout::DrawTraversal::paintCacheEnabled())));
                 pt.set(ev::setProperty(pt.get(), "reused", ev::fromDouble(static_cast<double>(pc.reused))));
+                pt.set(ev::setProperty(pt.get(), "reusedScrolled",
+                                       ev::fromDouble(static_cast<double>(pc.reusedScrolled))));
                 pt.set(ev::setProperty(pt.get(), "recorded", ev::fromDouble(static_cast<double>(pc.recorded))));
                 for (size_t i = 0; i < static_cast<size_t>(layout::SpanMiss::Count); ++i)
                     why.set(ev::setProperty(why.get(), layout::spanMissName(static_cast<layout::SpanMiss>(i)),

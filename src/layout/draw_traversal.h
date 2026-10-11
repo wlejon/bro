@@ -224,6 +224,9 @@ private:
     void noteVolatile(SpanMiss why) const {
         if (spanVolatile_ == SpanMiss::Count) spanVolatile_ = why;
     }
+    // The span being recorded paints at a place of the viewport (SpanEntry::
+    // pinned); it carries up like spanVolatile_.
+    mutable bool spanPinned_ = false;
     PaintCache* beginPaintCache(dom::Element* root);
     void prunePaintCache(PaintCache& cache);
     // Box shadows (outset, then inset over the background), background,

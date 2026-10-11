@@ -200,6 +200,7 @@ void DrawTraversal::draw(dom::Element* root, float scrollX, float scrollY,
     // Each box through the span cache, when it is on.
     activeCache_ = beginPaintCache(root);
     spanVolatile_ = SpanMiss::Count;
+    spanPinned_ = false;
     if (rootSC) paintStackingContext(rootSC.get(), false, true);
     // Then the top layer, above everything, each entry over its ::backdrop.
     if (rootSC) paintTopLayer(root);

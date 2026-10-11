@@ -133,9 +133,20 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
         else if (elem->paintStamp() >= entry->epoch) miss = SpanMiss::Changed;
         else if (!entry->key.sameOrigin(key)) miss = SpanMiss::Moved;
         else if (!entry->key.sameClip(key)) miss = SpanMiss::Clip;
+        else if (!entry->key.sameRoot(key) && entry->pinned) miss = SpanMiss::Moved;
         else {
             entry->lastDraw = cache.draws;
-            recorder_->recordSpan(entry->buffer);
+            if (entry->key.sameRoot(key)) {
+                recorder_->recordSpan(entry->buffer);
+            } else {
+                // Recorded at another document scroll: the same paint, moved
+                // as far as the root offset moved.
+                recorder_->save();
+                recorder_->translate(key.rootX - entry->key.rootX, key.rootY - entry->key.rootY);
+                recorder_->recordSpan(entry->buffer);
+                recorder_->restore();
+                ++cacheStats_.reusedScrolled;
+            }
             ++cacheStats_.reused;
             return;
         }
@@ -154,12 +165,15 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     }
     render::CommandBuffer* outer = recorder_->buffer();
     const SpanMiss outerVolatile = std::exchange(spanVolatile_, SpanMiss::Count);
+    const bool outerPinned = std::exchange(spanPinned_, false);
     buf->setOwnerId(elem->nodeId());
     recorder_->setBuffer(buf.get());
     paintElement(elem, offsetX, offsetY);
     recorder_->setBuffer(outer);
     const SpanMiss ownVolatile = spanVolatile_;
     spanVolatile_ = outerVolatile != SpanMiss::Count ? outerVolatile : ownVolatile;
+    const bool ownPinned = spanPinned_;
+    spanPinned_ = outerPinned || ownPinned;
     recorder_->recordSpan(buf);
 
     if (!entry) entry = &cache.entries[elem];
@@ -168,6 +182,7 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     entry->epoch = dom::Element::paintEpoch();
     entry->lastDraw = cache.draws;
     entry->volatileReason = ownVolatile;
+    entry->pinned = ownPinned;
     entry->buffer = std::move(buf);
 }
 

@@ -47,6 +47,7 @@ const char* spanMissName(SpanMiss m);
 
 struct PaintCacheStats {
     uint64_t reused = 0;
+    uint64_t reusedScrolled = 0;  // of those, translated for a document scroll
     uint64_t recorded = 0;
     uint64_t misses[static_cast<size_t>(SpanMiss::Count)] = {};
 };
@@ -59,13 +60,20 @@ struct SpanKey {
     float clipX = 0, clipY = 0, clipW = 0, clipH = 0;
     bool clipped = false;
     bool skipWrap = false;
+    // Where `o` stands from this key once the pass's root offset is taken
+    // out: a document scroll moves the root offset and every origin and clip
+    // with it, and a span recorded before it is the same paint translated by
+    // the root offset's move (the comparison allows float rounding).
     bool sameOrigin(const SpanKey& o) const {
-        return offX == o.offX && offY == o.offY && rootX == o.rootX && rootY == o.rootY;
+        return near(offX - rootX, o.offX - o.rootX) && near(offY - rootY, o.offY - o.rootY);
     }
     bool sameClip(const SpanKey& o) const {
         return clipped == o.clipped && skipWrap == o.skipWrap &&
-               (!clipped || (clipX == o.clipX && clipY == o.clipY && clipW == o.clipW && clipH == o.clipH));
+               (!clipped || (near(clipX - rootX, o.clipX - o.rootX) && near(clipY - rootY, o.clipY - o.rootY) &&
+                             clipW == o.clipW && clipH == o.clipH));
     }
+    bool sameRoot(const SpanKey& o) const { return rootX == o.rootX && rootY == o.rootY; }
+    static bool near(float a, float b) { return a - b < 0.01f && b - a < 0.01f; }
 };
 
 struct SpanEntry {
@@ -74,6 +82,10 @@ struct SpanEntry {
     uint64_t epoch = 0;       // dom::Element::paintEpoch() it was recorded in
     uint64_t lastDraw = 0;    // the cache's draw count when last recorded or reused
     SpanMiss volatileReason = SpanMiss::Count;  // Count: reusable
+    // It paints something at a place of the viewport (the html/body
+    // background), not of the document: reused only at the root offset it
+    // was recorded at, never translated for a scroll.
+    bool pinned = false;
     std::shared_ptr<render::CommandBuffer> buffer;
 };
 

@@ -67,6 +67,7 @@ void DrawTraversal::paintBoxDecorations(const PaintBox& pb, float bx, float by, 
     std::string tag = elem ? elem->tagName() : std::string();
     if ((tag == "html" || tag == "HTML" || tag == "body" || tag == "BODY") &&
         viewportW_ > 0 && viewportH_ > 0) {
+        spanPinned_ = true;  // the viewport's rect, whatever the scroll
         drawBackground(pb, 0, static_cast<float>(viewportTop_),
                        static_cast<float>(viewportW_), static_cast<float>(viewportH_));
     } else {
