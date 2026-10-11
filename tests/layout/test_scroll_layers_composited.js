@@ -34,16 +34,33 @@ function checkPresented(what) {
     assert(n === 0, `${what}: the presented frame has ${n} pixels apart from a full record without layers`);
 }
 const records = () => perf.stats().paint.records;
-// Scroll, run two frames; whether the base was recorded for it.
+// Run the windowed loop until what it shows is current: until a run of
+// frames neither records nor rasters. runFrames returns with the raster idle
+// and its result taken, so the frames after it composite every raster there
+// was. A frame count would do only on a fast raster thread: the first raster
+// of this page can land after many frames were presented. Returns how many
+// frames were presented.
+function settle(what) {
+    let presented = 0;
+    for (let i = 0; i < 200; ++i) {
+        const s0 = perf.stats().paint;
+        presented += runFrames(2, { stepMs: 16 }).presented;
+        const s1 = perf.stats().paint;
+        if (s1.records === s0.records && s1.rasterPasses === s0.rasterPasses) return presented;
+    }
+    assert(false, `${what}: the frame loop settled`);
+    return presented;
+}
+// Scroll and settle; whether the base was recorded for it.
 function scrollTo(el, y, what, expectRecord) {
+    settle(`${what} (before)`);
     const r0 = records();
     el.scrollTop = y;
-    const run = runFrames(2, { stepMs: 16 });
+    const presented = settle(what);
     const recorded = records() - r0;
-    assert(run.presented >= 1, `${what}: a frame was presented`);
+    assert(presented >= 1, `${what}: a frame was presented`);
     if (expectRecord) assert(recorded > 0, `${what}: the page was recorded`);
     else assert(recorded === 0, `${what}: nothing was recorded (${recorded} records)`);
-    runFrames(3, { stepMs: 16 });  // a raster still out lands
     checkPresented(what);
 }
 
@@ -73,21 +90,21 @@ p.style.cssText = 'position: absolute; left: 320px; top: 40px';
 document.body.appendChild(p);
 
 setPaintCache(true);
-// The first frames present before the first raster is out.
-runFrames(20, { stepMs: 16 });
+settle('the first frame');
 assert(perf.stats().paint.scrollLayers.layers > 0, 'the scroller was composited as a layer');
 checkPresented('first frame');
 
 for (const y of [40, 41, 120, 237]) scrollTo(sc, y, `scrolled to ${y}`, false);
 sc.scrollLeft = 30;
-runFrames(5, { stepMs: 16 });
+settle('scrolled left by 30');
 checkPresented('scrolled left by 30');
 
 // The wheel, as a window gets it.
 {
+    settle('the wheel (before)');
     const r0 = records();
     wheel(100, 100, 1);
-    runFrames(2, { stepMs: 16 });
+    settle('a wheel scroll');
     assert(records() === r0, 'a wheel scroll the window holds records nothing');
     checkPresented('a wheel scroll');
 }
@@ -105,29 +122,29 @@ scrollTo(sc, 2050, 'then within it', false);
     mouseMove(400, 50);
     mouseMove(480, 52);
     mouseUp(480, 52);
-    runFrames(5, { stepMs: 16 });
+    settle('a selection');
     assert(getSelection().toString().length > 0, 'the drag selected text');
     checkPresented('a selection');
     scrollTo(sc, 2060, 'scrolled with a selection', true);
     getSelection().removeAllRanges();
-    runFrames(2, { stepMs: 16 });
+    settle('the selection gone');
     scrollTo(sc, 2070, 'the selection gone', false);
 }
 
 // A row changed, then scrolled: the change is recorded, then the scroll is not.
 sc.children[96].style.background = '#000';
-runFrames(5, { stepMs: 16 });
+settle('a row changed');
 checkPresented('a row changed');
 scrollTo(sc, 2080, 'scrolled after the change', false);
 
 // At devicePixelRatio 1.5 a scroll by 1 px is half a device pixel: recorded
 // (the layer is rastered at its new phase); by 2 px it is not.
 setDeviceScaleFactor(1.5);
-runFrames(4, { stepMs: 16 });
+settle('dpr 1.5');
 checkPresented('dpr 1.5');
 scrollTo(sc, 2081, 'dpr 1.5, by half a device pixel', true);
 scrollTo(sc, 2083, 'dpr 1.5, by 3 device pixels', false);
 setDeviceScaleFactor(1);
-runFrames(4, { stepMs: 16 });
+settle('dpr 1 again');
 checkPresented('dpr 1 again');
 console.log('compositor-only scrolls: checked');
