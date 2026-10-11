@@ -62,4 +62,15 @@ private:
     render::SkiaImageRef gpu_;
 };
 
+/// What a sub-document's command buffer was last recorded under, so a frame
+/// that changed nothing in it (its document clean, its canvases idle, the
+/// same box and hover) neither re-records nor re-replays it, and the frame
+/// it published stands. Written by the main thread at record time and read
+/// by the raster thread at replay, ordered by the frame handshake.
+struct SubDocRecord {
+    int boxW = -1, boxH = -1;
+    const void* hovered = nullptr;
+    bool needsReplay = true;
+};
+
 } // namespace bro::engine

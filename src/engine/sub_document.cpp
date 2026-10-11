@@ -41,13 +41,13 @@ namespace bro::engine {
 SubDocRef Engine::iframeSubDoc(IframeDoc& d) {
     return SubDocRef{d.canvasScenes, d.document,
                      d.hoveredElement, d.boxW, d.boxH, d.cmdBuffer,
-                     d.surface, d.spare, d.surfW, d.surfH, d.published};
+                     d.surface, d.spare, d.surfW, d.surfH, d.published, d.recorded};
 }
 
 SubDocRef Engine::windowHostSubDoc(WindowHost& h) {
     return SubDocRef{h.canvasScenes, h.document,
                      h.hoveredElement, h.boxW, h.boxH, h.cmdBuffer,
-                     h.surface, h.spare, h.surfW, h.surfH, h.published};
+                     h.surface, h.spare, h.surfW, h.surfH, h.published, h.recorded};
 }
 
 SubDocSource loadSubDocSource(const std::string& basePath, const std::string& srcAttr,
@@ -141,7 +141,20 @@ bool tickSubDoc(SubDocRef d, double /*nowMs*/) {
 
 void recordSubDoc(SubDocRef d, render::RecordingRenderer* rec,
                   layout::DrawTraversal* traversal, layout::SkiaTextMetrics& metrics) {
+    // Nothing in it changed since it was last recorded (its document is
+    // clean, no canvas in it drew, the same box and hover): the recording
+    // stands, and replaySubDoc keeps the frame it published. Every record
+    // block used to re-record and re-replay every sub-document whatever
+    // changed in it, and its document was never cleaned, so an idle iframe
+    // also kept the frame loop busy (tickSubDoc).
+    if (d.document && d.document->documentElement() && d.cmdBuffer.commandCount() > 0 &&
+        !d.document->isDirty() && d.recorded.boxW == d.boxW && d.recorded.boxH == d.boxH &&
+        d.recorded.hovered == d.hoveredElement &&
+        std::none_of(d.canvasScenes.begin(), d.canvasScenes.end(),
+                     [](const auto& s) { return s && s->isDirty(); }))
+        return;
     d.cmdBuffer.clear();
+    d.recorded.needsReplay = true;
     if (!d.document || !d.document->documentElement()) return;
     layout::ElementRefAdapter::setHoveredElement(d.hoveredElement);
     d.document->resolveStyles();
@@ -164,6 +177,10 @@ void recordSubDoc(SubDocRef d, render::RecordingRenderer* rec,
                     /*viewportTop=*/0);
     traversal->setLayerBreakCallback(nullptr);
     rec->setBuffer(nullptr);
+    d.document->clearDirty();
+    d.recorded.boxW = d.boxW;
+    d.recorded.boxH = d.boxH;
+    d.recorded.hovered = d.hoveredElement;
 }
 
 static void replayBufferWithInlineCanvas(render::SkiaRenderer* renderer,
@@ -198,7 +215,10 @@ void replaySubDoc(SubDocRef d, render::SkiaRenderer* renderer) {
     if (d.surfW != bw || d.surfH != bh) {
         d.spare.reset();
         d.surfW = bw; d.surfH = bh;
+    } else if (!d.recorded.needsReplay && d.published.generation() > 0) {
+        return;  // recorded as before and drawn at this size: what is published stands
     }
+    d.recorded.needsReplay = false;
     renderer->fitLayerSurface(d.surface, bw, bh);
     if (!d.surface) { d.published.clear(); return; }
     auto prev = renderer->switchSurface(d.surface.surface);

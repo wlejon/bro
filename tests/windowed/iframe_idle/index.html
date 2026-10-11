@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html>
+<head><style>
+  html, body { margin: 0; width: 100%; height: 100%; background: #203040; overflow: hidden; }
+  .abs { position: absolute; }
+</style></head>
+<body>
+  <!-- A parent element main.js repaints while the iframe stays idle. -->
+  <div id="outer" class="abs" style="left:200px; top:10px; width:40px; height:40px; background:#00ff00"></div>
+  <iframe id="frame" class="abs" src="child" style="left:10px; top:100px; width:120px; height:60px; border:0"></iframe>
+  <script src="main.js"></script>
+</body>
+</html>

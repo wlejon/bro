@@ -26,6 +26,7 @@ struct SubDocRef {
     int& surfW;
     int& surfH;
     PublishedFrame& published;
+    SubDocRecord& recorded;
 };
 
 /// A sub-app loaded off disk.

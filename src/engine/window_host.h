@@ -87,6 +87,7 @@ struct WindowHost {
     render::LayerSurface spare;
     int surfW = 0, surfH = 0;
     PublishedFrame published;                  // what compositeWindowHosts presents
+    SubDocRecord recorded;                     // recordSubDoc / replaySubDoc
 
     // Presentation (windowed with Vulkan): the window's own swapchain, and a
     // window-sized surface the published frame is drawn onto over clearColor.

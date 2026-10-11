@@ -34,6 +34,7 @@ struct IframeDoc {
     render::LayerSurface spare;
     int surfW = 0, surfH = 0;
     PublishedFrame published;                  // what the compositor draws
+    SubDocRecord recorded;                     // recordSubDoc / replaySubDoc
 };
 
 } // namespace bro::engine
