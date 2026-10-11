@@ -47,8 +47,11 @@ std::string currentWorkingDirectory();
 ///   Primary   this process now owns the channel: later launches hand off to it
 ///   HandedOff another instance is running and has this launch's argv and cwd;
 ///             the caller exits without starting an Engine
+/// `launchNotification`: this launch is a click on one of the app's
+/// notifications (`--notification <args>`); a running instance is handed the
+/// click with the launch, and hears it as its own.
 enum class InstanceClaim { Primary, HandedOff };
-InstanceClaim claimSingleInstance(const EngineConfig& config);
+InstanceClaim claimSingleInstance(const EngineConfig& config, const std::string& launchNotification = {});
 
 /// Give the channel up on the way out (both drivers call it after the Engine
 /// is gone): the socket is removed and the server thread joined, so the next

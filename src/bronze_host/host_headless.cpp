@@ -317,6 +317,23 @@ void installHeadlessGlobals(engine::Engine& engine) {
             const uint32_t id = a.empty() ? 0u : static_cast<uint32_t>(ev::toDouble(a[0]));
             return ev::fromBool(platform::desktop::simulateNotificationActivation(id, "", true));
         }, 1, "dismissNotification"));
+    // notificationResponse(appDir, args, action?, close?): a click (or with
+    // close, a dismissal) the desktop delivered to this process for a
+    // notification the app at appDir posted, `args` its activation text, as
+    // the macOS delegate hands it over (every bro app is one bundle there):
+    // 'queued' for this app's own, 'launched' when another app was started
+    // for it (openedApps(), from 'notification'), 'dropped'.
+    regBoth("notificationResponse", ev::makeFunction(
+        [](Value, std::span<const Value> a) -> Value {
+            auto str = [&](size_t i) { return a.size() > i && ev::isString(a[i]) ? ev::toUtf8(a[i]) : std::string(); };
+            const bool close = a.size() > 3 && ev::toBool(a[3]);
+            switch (platform::desktop::routeNotificationResponse(str(0), str(1), str(2), close)) {
+                case platform::desktop::NotificationRoute::Queued: return ev::fromUtf8("queued");
+                case platform::desktop::NotificationRoute::Launched: return ev::fromUtf8("launched");
+                case platform::desktop::NotificationRoute::Dropped: break;
+            }
+            return ev::fromUtf8("dropped");
+        }, 4, "notificationResponse"));
     regBoth("notificationActivations", ev::makeFunction(
         [](Value, std::span<const Value> a) -> Value {
             const bool clear = !a.empty() && ev::isObject(a[0]) && ev::toBool(ev::getProperty(a[0], "clear"));

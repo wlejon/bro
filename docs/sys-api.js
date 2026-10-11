@@ -107,7 +107,11 @@ for (const dev of btState.devices) {
 //
 // If the app has exited, a click starts it: the launch carries the
 // notification (`--notification <args>`), and the page gets a
-// `notificationclick` on window after load, as for an earlier run.
+// `notificationclick` on window after load, as for an earlier run. A
+// single-instance app that is running when such a launch comes is handed the
+// click with it, and hears it as its own (no `instance` event for a launch
+// that was only the click). Either way the click reaches the app that posted
+// it, never another app or the project manager.
 //   - Windows: the toast's launch/action arguments go to a COM activator
 //     (INotificationActivationCallback) registered per user under the
 //     AppUserModelID (HKCU\Software\Classes\CLSID\{...}\LocalServer32 runs
@@ -116,8 +120,12 @@ for (const dev of btState.devices) {
 //   - Linux: the server's ActionInvoked and NotificationClosed signals (a
 //     running app only; the server forgets a notification when its poster
 //     exits).
-//   - macOS: a UNUserNotificationCenter delegate (inside a bundle); a click
-//     launches the bundle, which gets the notification's userInfo.
+//   - macOS: a UNUserNotificationCenter delegate (inside a bundle). Every bro
+//     app is the one bundle, so the bro that hears a click is whichever is
+//     running, or a bare bro macOS starts for it when none is; the
+//     notification's userInfo names the app that posted it, and a click on
+//     another app's starts that app as above (the bare bro then quits). The
+//     user dismissing another app's notification is dropped.
 // Headless simulates both: clickNotification(id, action?) and
 // dismissNotification(id), with the ids from notifications(), and
 // notificationActivations() lists what reached the page (docs/headless.md).

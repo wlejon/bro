@@ -11,6 +11,7 @@
 #include "bronze_host/host_headless.h"
 #include "render/vulkan_debug.h"
 #include "platform/desktop_notifications.h"
+#include "platform/desktop_platform.h"
 
 using bro::engine::parseConfig;
 using bro::engine::findAncestorProjectRoot;
@@ -96,6 +97,7 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
     std::vector<std::string> scriptArgs;
     bool printHostGlobals = false;
     bool claimInstance = false;
+    std::string launchNotification;
     std::string nativeManifestOut;
 
     bool passThrough = false;
@@ -163,8 +165,10 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
         } else if (strcmp(argv[i], "--notification") == 0 && i + 1 < argc) {
             // This run was started by a click on one of the app's
             // notifications, as `bro --notification <args>` is: the page
-            // hears it after load (docs/sys-api.js 5a).
-            bro::platform::desktop::noteLaunchNotification(argv[++i]);
+            // hears it after load (docs/sys-api.js 5a), or a running single
+            // instance does.
+            launchNotification = argv[++i];
+            bro::platform::desktop::noteLaunchNotification(launchNotification);
         } else if (strcmp(argv[i], "--print-host-globals") == 0) {
             printHostGlobals = true;
         } else if (strcmp(argv[i], "--print-native-manifest") == 0 && i + 1 < argc) {
@@ -293,8 +297,12 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
         // follows `--` (the script's arguments, scriptArgs, are the same list).
         config.appArgs = scriptArgs;
         finalizeAppIdentity(config);
+        // Which app this is, for a notification click delivered here
+        // (routeNotificationResponse); headless installs no desktop hooks.
+        bro::platform::desktop::setHeadless(true);
+        bro::platform::desktop::initNotificationActivation(config.appId, "", config.appDir, false);
         if (claimInstance && config.manifest.singleInstance &&
-            claimSingleInstance(config) == InstanceClaim::HandedOff) {
+            claimSingleInstance(config, launchNotification) == InstanceClaim::HandedOff) {
             fprintf(stderr, "%s: handed off to the running instance of %s\n",
                     hooks.programName.c_str(), config.appId.c_str());
             return 0;

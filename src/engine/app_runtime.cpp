@@ -1,5 +1,6 @@
 #include "engine/app_runtime.h"
 
+#include "platform/desktop_notifications.h"
 #include "platform/desktop_single_instance.h"
 #include "platform/window_system.h"
 #include "svg/svg_renderer.h"
@@ -45,14 +46,20 @@ AppRuntimeInfo& info() {
 // the launch's working directory, then its argv. /2 puts the launch's
 // activation token (XDG_ACTIVATION_TOKEN, possibly empty) after the working
 // directory, so the running instance raises its window with the token the
-// launcher gave the second launch. /1 (no token) is still accepted.
-constexpr const char* kInstanceTag = "bro-app-instance/2";
+// launcher gave the second launch. /3 puts the launch's notification
+// activation text (`--notification <args>`, possibly empty) after the token:
+// a click on a notification that started a second launch of a running
+// single-instance app (macOS, where every app is one bundle) is the running
+// one's click. /2 and /1 are still accepted.
+constexpr const char* kInstanceTag = "bro-app-instance/3";
+constexpr const char* kInstanceTagV2 = "bro-app-instance/2";
 constexpr const char* kInstanceTagV1 = "bro-app-instance/1";
 
 struct Launch {
     std::vector<std::string> argv;
     std::string cwd;
     std::string activationToken;
+    std::string notification;
 };
 
 // Main thread only: the desktop pump and setAppInstanceHandler both run there.
@@ -81,17 +88,27 @@ void deliver(Launch launch) {
 }
 
 void onWire(const std::vector<std::string>& msg) {
-    const bool v2 = msg.size() >= 3 && msg[0] == kInstanceTag;
+    const bool v3 = msg.size() >= 4 && msg[0] == kInstanceTag;
+    const bool v2 = msg.size() >= 3 && msg[0] == kInstanceTagV2;
     const bool v1 = msg.size() >= 2 && msg[0] == kInstanceTagV1;
-    if (!v1 && !v2) {
+    if (!v1 && !v2 && !v3) {
         LOG_WARN("app: ignored a malformed single-instance message");
         return;
     }
     Launch l;
     l.cwd = msg[1];
-    if (v2) l.activationToken = msg[2];
-    l.argv.assign(msg.begin() + (v2 ? 3 : 2), msg.end());
-    LOG_INFO("app: another launch handed off %zu argument(s) from %s", l.argv.size(), l.cwd.c_str());
+    if (v2 || v3) l.activationToken = msg[2];
+    if (v3) l.notification = msg[3];
+    l.argv.assign(msg.begin() + (v3 ? 4 : v2 ? 3 : 2), msg.end());
+    LOG_INFO("app: another launch handed off %zu argument(s) from %s%s", l.argv.size(), l.cwd.c_str(),
+             l.notification.empty() ? "" : " with a notification click");
+    // The click is this instance's, heard as one that ended an earlier run
+    // (the page's notificationclick); it raises the window. A launch that
+    // was only the click (no arguments of its own) is no other launch.
+    if (!l.notification.empty()) {
+        platform::desktop::noteLaunchNotification(l.notification);
+        if (l.argv.empty()) return;
+    }
     deliver(std::move(l));
 }
 
@@ -131,12 +148,13 @@ const AppRuntimeInfo& currentApp() { return info(); }
 
 void setCurrentAppLogFile(const std::string& path) { info().logFile = path; }
 
-InstanceClaim claimSingleInstance(const EngineConfig& config) {
+InstanceClaim claimSingleInstance(const EngineConfig& config, const std::string& launchNotification) {
     std::vector<std::string> msg;
-    msg.reserve(config.appArgs.size() + 3);
+    msg.reserve(config.appArgs.size() + 4);
     msg.emplace_back(kInstanceTag);
     msg.push_back(config.launchCwd.empty() ? currentWorkingDirectory() : config.launchCwd);
     msg.push_back(platform::launchActivationToken());
+    msg.push_back(launchNotification);
     msg.insert(msg.end(), config.appArgs.begin(), config.appArgs.end());
 
     const std::string channel = "app-" + (config.appId.empty() ? std::string("app") : config.appId);

@@ -6,12 +6,20 @@
 
 #include "platform/desktop_notifications.h"
 
+#import <AppKit/AppKit.h>
 #import <Foundation/Foundation.h>
 #import <UserNotifications/UserNotifications.h>
+
+#include <SDL3/SDL_events.h>
 
 #include <functional>
 #include <mutex>
 #include <string>
+
+// AppKit's NSApplicationLaunchIsDefaultLaunchKey for this run: NO when macOS
+// started the app for something other than the user opening it, a click on
+// a notification among them.
+static bool g_defaultLaunch = true;
 
 // The notification center's delegate: a click on a notification (or one of
 // its actions) and its dismissal become activations for the page, from
@@ -26,22 +34,35 @@ API_AVAILABLE(macos(10.14))
 - (void)userNotificationCenter:(UNUserNotificationCenter*)center
     didReceiveNotificationResponse:(UNNotificationResponse*)response
              withCompletionHandler:(void (^)(void))completionHandler API_AVAILABLE(macos(10.14)) {
-    NSString* args = response.notification.request.content.userInfo[@"bro"];
-    bro::platform::desktop::NotificationActivation a;
-    if ([args isKindOfClass:[NSString class]] &&
-        bro::platform::desktop::decodeNotificationArgs(std::string([args UTF8String]), a)) {
-        NSString* actionId = response.actionIdentifier;
-        if ([actionId isEqualToString:UNNotificationDismissActionIdentifier]) {
-            a.close = true;
-            a.action.clear();
-        } else if ([actionId isEqualToString:UNNotificationDefaultActionIdentifier]) {
-            a.action.clear();
-        } else {
-            a.action = std::string([actionId UTF8String]);
-        }
-        bro::platform::desktop::queueNotificationActivation(std::move(a));
+    namespace desktop = bro::platform::desktop;
+    NSDictionary* info = response.notification.request.content.userInfo;
+    NSString* args = info[@"bro"];
+    NSString* appDir = info[@"broAppDir"];
+    if (![args isKindOfClass:[NSString class]]) {
+        completionHandler();
+        return;
     }
-    completionHandler();
+    NSString* actionId = response.actionIdentifier;
+    const bool close = [actionId isEqualToString:UNNotificationDismissActionIdentifier];
+    std::string action;
+    if (!close && ![actionId isEqualToString:UNNotificationDefaultActionIdentifier])
+        action = std::string([actionId UTF8String]);
+    std::string posted = [appDir isKindOfClass:[NSString class]] ? std::string([appDir UTF8String]) : std::string();
+    std::string text([args UTF8String]);
+    // On the main thread, where the activation queue and the launcher live
+    // (SDL's Cocoa loop drains the main queue).
+    dispatch_async(dispatch_get_main_queue(), ^{
+        // Every bro app is this one bundle: the click may be another app's.
+        const desktop::NotificationRoute route = desktop::routeNotificationResponse(posted, text, action, close);
+        // A bare bro that macOS started only to deliver this click (no bro
+        // was running) has handed it to its app and has nothing to show.
+        if (route == desktop::NotificationRoute::Launched && desktop::notificationBareLaunch() && !g_defaultLaunch) {
+            SDL_Event quit{};
+            quit.type = SDL_EVENT_QUIT;
+            SDL_PushEvent(&quit);
+        }
+        completionHandler();
+    });
 }
 
 // Shown while the app is in front too (the center hides them by default).
@@ -49,12 +70,11 @@ API_AVAILABLE(macos(10.14))
        willPresentNotification:(UNNotification*)notification
          withCompletionHandler:(void (^)(UNNotificationPresentationOptions))completionHandler
     API_AVAILABLE(macos(10.14)) {
+    // Banner and List are macOS 11's (the bundle's LSMinimumSystemVersion);
+    // the Alert they replaced is deprecated, and nothing older runs bro.
     UNNotificationPresentationOptions options = UNNotificationPresentationOptionSound;
-    if (@available(macOS 11.0, *)) {
+    if (@available(macOS 11.0, *))
         options |= UNNotificationPresentationOptionBanner | UNNotificationPresentationOptionList;
-    } else {
-        options |= UNNotificationPresentationOptionAlert;
-    }
     completionHandler(options);
 }
 @end
@@ -74,6 +94,14 @@ void initMacNotificationDelegate() {
             if (delegate) return;
             delegate = [[BroNotificationDelegate alloc] init];
             [UNUserNotificationCenter currentNotificationCenter].delegate = delegate;
+            // Before SDL finishes launching the app, as the delegate is.
+            [[NSNotificationCenter defaultCenter] addObserverForName:NSApplicationDidFinishLaunchingNotification
+                                                              object:nil
+                                                               queue:nil
+                                                          usingBlock:^(NSNotification* note) {
+                NSNumber* isDefault = note.userInfo[NSApplicationLaunchIsDefaultLaunchKey];
+                if ([isDefault isKindOfClass:[NSNumber class]]) g_defaultLaunch = [isDefault boolValue];
+            }];
         }
     }
 }
@@ -92,7 +120,11 @@ bool showMacUserNotification(const std::string& title, const std::string& body,
             if (!options.silent) content.sound = [UNNotificationSound defaultSound];
             // What the delegate hands back: this run, the id, the payload.
             NSString* args = [NSString stringWithUTF8String:encodeNotificationArgs(id, "", options.payload).c_str()];
-            content.userInfo = @{@"bro" : args ?: @""};
+            // And the app that posted it: every bro app is this one bundle,
+            // so the bro that hears the click may be another app, or a bare
+            // one macOS started for it (routeNotificationResponse).
+            NSString* appDir = [NSString stringWithUTF8String:notificationLaunchAppDir().c_str()];
+            content.userInfo = @{@"bro" : args ?: @"", @"broAppDir" : appDir ?: @""};
             // The buttons are a category of their own (one per distinct set),
             // with the dismissal reported (CustomDismissAction).
             std::string categoryKey = "bro";

@@ -24,6 +24,7 @@
 #include "engine/app_runtime.h"
 #include "engine/config_loader.h"
 #include "engine/engine.h"
+#include "platform/desktop_notifications.h"
 #include "platform/window.h"  // platform::Window::raise()
 #include "util/log.h"
 
@@ -356,9 +357,34 @@ void onInstance(const std::vector<std::string>& argv, const std::string& cwd) {
     }
 }
 
+// A click on another app's notification (platform/desktop_notifications.h):
+// that app started as a click that ended its run starts it, `bro
+// --notification <args> <dir>`, with bro.app.open's launcher, so a running
+// single-instance app is handed the click. Headless records it (openedApps(),
+// from 'notification') and starts nothing.
+bool launchForNotification(const std::string& appDir, const std::string& args) {
+    AppOpen rec;
+    rec.dir = appDir;
+    rec.from = "notification";
+    rec.command = {stockBro(), "--notification", args, appDir};
+    rec.cwd = engine::currentWorkingDirectory();
+    auto* eng = hostEngine();
+    if (!(eng && eng->displayMode() == engine::DisplayMode::Headless)) {
+        std::string err;
+        if (!spawnDetached(rec.command, rec.cwd, err)) {
+            LOG_WARN("notification click for %s: %s", appDir.c_str(), err.c_str());
+            return false;
+        }
+        rec.spawned = true;
+    }
+    appOpens().push_back(rec);
+    return true;
+}
+
 }  // namespace
 
 Value makeBroAppValue() {
+    platform::desktop::setNotificationLaunchHandler(launchForNotification);
     const engine::AppRuntimeInfo& app = engine::currentApp();
     const engine::AppDescriptor& m = app.manifest;
     ObjectBuilder o;

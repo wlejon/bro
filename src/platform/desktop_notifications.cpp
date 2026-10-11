@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <map>
 #include <mutex>
 #include <thread>
@@ -592,10 +593,51 @@ std::vector<NotificationActivation> takeNotificationActivations() {
     return out;
 }
 
+namespace {
+std::atomic<NotificationLaunchHandler> s_launchHandler{nullptr};
+bool s_bareLaunch = false;
+
+bool sameAppDir(const std::string& a, const std::string& b) {
+    if (a == b) return true;
+    auto canonical = [](const std::string& s, std::error_code& ec) {
+        return std::filesystem::weakly_canonical(std::filesystem::path(std::u8string(s.begin(), s.end())), ec);
+    };
+    std::error_code ec;
+    const auto ca = canonical(a, ec);
+    if (ec) return false;
+    const auto cb = canonical(b, ec);
+    return !ec && ca == cb;
+}
+}  // namespace
+
+void setNotificationLaunchHandler(NotificationLaunchHandler handler) { s_launchHandler.store(handler); }
+bool notificationBareLaunch() { return s_bareLaunch; }
+
+NotificationRoute routeNotificationResponse(const std::string& postedAppDir, const std::string& args,
+                                            const std::string& action, bool close) {
+    NotificationActivation a;
+    if (!decodeNotificationArgs(args, a)) return NotificationRoute::Dropped;
+    if (postedAppDir.empty() || s_appDir.empty() || sameAppDir(postedAppDir, s_appDir)) {
+        a.close = close;
+        a.action = close ? std::string() : action;
+        queueNotificationActivation(std::move(a));
+        return NotificationRoute::Queued;
+    }
+    // Another app's: a click starts it, carrying the click as a launch does
+    // (Windows' toast activator starts the posting app the same way); the
+    // user closing another app's notification concerns nobody running.
+    if (close) return NotificationRoute::Dropped;
+    const NotificationLaunchHandler launch = s_launchHandler.load();
+    if (!launch || !launch(postedAppDir, encodeNotificationArgs(0, action, a.payload)))
+        return NotificationRoute::Dropped;
+    return NotificationRoute::Launched;
+}
+
 void initNotificationActivation(const std::string& appId, const std::string& exePath, const std::string& appDir,
-                                bool comLaunch) {
+                                bool comLaunch, bool bareLaunch) {
     s_exePath = exePath;
     s_appDir = appDir;
+    s_bareLaunch = bareLaunch;
     if (isHeadless()) return;
 #ifdef _WIN32
     if (!appId.empty()) initWindowsToastActivation(appId, comLaunch, /*onlyIfRegistered=*/!comLaunch);

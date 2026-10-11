@@ -367,7 +367,7 @@ int main(int argc, char* argv[]) {
 #endif
         bro::platform::desktop::initNotificationActivation(bro::engine::currentApp().id, exePath,
                                                            bro::engine::absolutePath(config.appDir),
-                                                           cliNotificationCom);
+                                                           cliNotificationCom, /*bareLaunch=*/!haveTarget);
         if (!cliNotification.empty()) bro::platform::desktop::noteLaunchNotification(cliNotification);
     }
 
@@ -377,7 +377,8 @@ int main(int argc, char* argv[]) {
     // A DRM shell host is the session, never a second launch of something.
     if (config.manifest.singleInstance && !cliNewInstance &&
         config.displayMode != bro::engine::DisplayMode::Drm) {
-        if (bro::engine::claimSingleInstance(config) == bro::engine::InstanceClaim::HandedOff) return 0;
+        if (bro::engine::claimSingleInstance(config, cliNotification) == bro::engine::InstanceClaim::HandedOff)
+            return 0;
     }
 
     // Logs: an app with an id writes its own log in its state directory

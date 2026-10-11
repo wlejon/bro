@@ -98,8 +98,29 @@ void noteLaunchNotification(const std::string& args);
 /// `exePath` and `appDir` are what a click on a toast starts when the app is
 /// not running. `comLaunch`: this run was started by a toast (Windows,
 /// `bro --notification-activated`).
+/// `bareLaunch`: bro was started with no app named (the project manager),
+/// which is how macOS starts the bundle for a click when no bro is running.
 void initNotificationActivation(const std::string& appId, const std::string& exePath,
-                                const std::string& appDir, bool comLaunch);
+                                const std::string& appDir, bool comLaunch, bool bareLaunch = false);
+
+/// A click or dismissal the desktop delivered to this process for a
+/// notification posted by the app at `postedAppDir` ("" when it did not say),
+/// `args` its activation text (encodeNotificationArgs). On macOS every bro app
+/// is the one bundle, so whichever bro is running hears every app's clicks,
+/// and a click with none running starts a bare bro. This app's own (or an
+/// unnamed one) is queued as its activation; a click on another app's starts
+/// that app as a click that ended the posting run does (`bro <dir>
+/// --notification <args>`, through the launch handler: a running
+/// single-instance app is handed it); another app's dismissal is dropped.
+enum class NotificationRoute { Queued, Launched, Dropped };
+NotificationRoute routeNotificationResponse(const std::string& postedAppDir, const std::string& args,
+                                            const std::string& action, bool close);
+/// What starts another app for a click (bronze_host: bro.app.open's launcher,
+/// which headless records instead). True when it started.
+using NotificationLaunchHandler = bool (*)(const std::string& appDir, const std::string& args);
+void setNotificationLaunchHandler(NotificationLaunchHandler handler);
+/// Whether initNotificationActivation was told this is a bare launch.
+bool notificationBareLaunch();
 /// What initNotificationActivation was given ("" before).
 const std::string& notificationLaunchExe();
 const std::string& notificationLaunchAppDir();
