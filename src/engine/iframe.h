@@ -2,6 +2,7 @@
 
 #include "engine/published_frame.h"
 #include "engine/replaced_elements.h"
+#include "engine/sub_doc_animations.h"
 #include "dom/document.h"
 #include "canvas/canvas_scene.h"
 #include "render/command_buffer.h"
@@ -23,6 +24,7 @@ struct IframeDoc {
     uint64_t id = 0;                  // registry id for compositor texture resolve
     std::string src;                  // resolved src currently loaded (change detection)
     std::vector<std::unique_ptr<canvas::CanvasScene>> canvasScenes;
+    SubDocAnimations animations;      // its transitions and animations (before `document`: outlives it)
     std::unique_ptr<dom::Document> document;
     MouseDispatchState mouseState;    // per-doc click/dblclick tracking
     dom::Element* hoveredElement = nullptr; // sub-doc :hover target (non-owning)

@@ -74,7 +74,10 @@ bool WebAnimationManager::isLive(const WebAnimationManager* m) {
 // ---------------------------------------------------------------------------
 
 WebAnimation& WebAnimationManager::create(dom::Element* elem, double now) {
-    uint64_t id = nextId_++;
+    // Unique across managers (the app document's and each sub-document's):
+    // script wrappers are keyed by id alone.
+    static std::atomic<uint64_t> nextId{1};
+    uint64_t id = nextId.fetch_add(1, std::memory_order_relaxed);
     WebAnimation& a = records_[id];
     a.id = id;
     a.elem = elem;

@@ -170,7 +170,8 @@ void Engine::createIframeDoc(dom::Element* el, const std::string& srcAttr) {
     dp->boxH = lbox.contentRect.height > 0 ? static_cast<int>(lbox.contentRect.height) : 150;
 
     SubDocRef ref = iframeSubDoc(*dp);
-    buildSubDocDocument(ref, source, effectiveColorScheme(), deviceScale_.ratio);
+    buildSubDocDocument(ref, source, effectiveColorScheme(), deviceScale_.ratio,
+                        [this] { return engineNowMs_; });
 
     // Register before finishSubDocLoad so element hooks resolve.
     iframeDocs_.push_back(std::move(doc));

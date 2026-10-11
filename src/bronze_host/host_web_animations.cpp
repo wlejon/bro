@@ -63,7 +63,8 @@ void animationFinalizer(void* ptr) {
     strongPins().erase(st->id);
     engine::Engine* eng = hostEngine();
     if (eng && engine::WebAnimationManager::isLive(&eng->webAnimationManager())) {
-        eng->webAnimationManager().releaseFromWrapper(st->id);
+        if (engine::WebAnimationManager* mgr = eng->webAnimationManagerOf(st->id))
+            mgr->releaseFromWrapper(st->id);
     }
     delete st;
 }
@@ -106,7 +107,8 @@ void settleFinish(AnimationState* st, Value animObjIn) {
     engine::Engine* eng = hostEngine();
     Value ct = ev::null();
     if (eng) {
-        engine::WebAnimation* rec = eng->webAnimationManager().find(st->id);
+        engine::WebAnimationManager* mgr = eng->webAnimationManagerOf(st->id);
+        engine::WebAnimation* rec = mgr ? mgr->find(st->id) : nullptr;
         if (rec) {
             double now = eng->timeNowMs();
             auto cur = rec->currentTimeMs(now);
@@ -319,6 +321,9 @@ bool parseKeyframeObject(Value obj, std::vector<engine::WebAnimKeyframe>& frames
 struct Call {
     AnimationState* st = nullptr;
     engine::Engine* eng = nullptr;
+    // The manager holding it: the app document's, or an iframe's or a
+    // secondary window's (Engine::webAnimationManagerOf). Set with rec.
+    engine::WebAnimationManager* mgr = nullptr;
     engine::WebAnimation* rec = nullptr;
 };
 
@@ -326,13 +331,14 @@ Call callOf(Value self) {
     Call c;
     c.st = static_cast<AnimationState*>(ev::handleData(self));
     c.eng = hostEngine();
-    if (c.st && c.eng) c.rec = c.eng->webAnimationManager().find(c.st->id);
+    if (c.st && c.eng) c.mgr = c.eng->webAnimationManagerOf(c.st->id);
+    if (c.mgr) c.rec = c.mgr->find(c.st->id);
     return c;
 }
 
 void markTargetDirty(const Call& c) {
-    if (!c.rec || !c.eng) return;
-    if (auto* el = c.eng->webAnimationManager().resolveElement(*c.rec)) el->markDirty();
+    if (!c.rec || !c.mgr) return;
+    if (auto* el = c.mgr->resolveElement(*c.rec)) el->markDirty();
 }
 
 const char* replaceStateName(engine::WebAnimReplaceState s) {
@@ -351,7 +357,8 @@ Value wrapAnimation(uint64_t id, const std::string& name = "") {
         return it->second->self.get();
     }
     engine::Engine* eng = hostEngine();
-    engine::WebAnimation* rec = eng ? eng->webAnimationManager().find(id) : nullptr;
+    engine::WebAnimationManager* mgr = eng ? eng->webAnimationManagerOf(id) : nullptr;
+    engine::WebAnimation* rec = mgr ? mgr->find(id) : nullptr;
     auto* st = new AnimationState();
     st->id = id;
     st->name = name;
@@ -362,9 +369,9 @@ Value wrapAnimation(uint64_t id, const std::string& name = "") {
     Value obj = b.get();
     st->self = ev::Persistent(obj);
     liveStates()[id] = st;
-    if (eng) {
-        eng->webAnimationManager().noteWrapped(id);
-        rec = eng->webAnimationManager().find(id);
+    if (mgr) {
+        mgr->noteWrapped(id);
+        rec = mgr->find(id);
         if (rec && (rec->state == engine::WebAnimState::Running ||
                     rec->state == engine::WebAnimState::Paused)) {
             strongPins()[id] = ev::Persistent(obj);
@@ -390,7 +397,9 @@ Value animationConstructor(Value self, std::span<const Value> a) {
     engine::Engine* eng = hostEngine();
     uint64_t id = 0;
     if (eng) {
-        engine::WebAnimation& rec = eng->webAnimationManager().create(nullptr, eng->timeNowMs());
+        // Of the document whose script made it (an iframe's, a window's, the app's).
+        engine::WebAnimation& rec =
+            eng->webAnimationManagerFor(currentHostDocument()).create(nullptr, eng->timeNowMs());
         id = rec.id;
     }
     return wrapAnimation(id);
@@ -400,7 +409,7 @@ void decorateAnimationProto(ObjectBuilder& b) {
     b.def("play", 0, [](Value self_, std::span<const Value>) {
         Call c = callOf(self_);
         if (!c.rec) return ev::undefined();
-        c.eng->webAnimationManager().play(*c.rec, c.eng->timeNowMs());
+        c.mgr->play(*c.rec, c.eng->timeNowMs());
         c.rec->cssPlayOverride = true;  // animation-play-state no longer rules it
         if (c.st->promiseSettled) {
             c.st->finishedPromise.set(ev::undefined());
@@ -415,7 +424,7 @@ void decorateAnimationProto(ObjectBuilder& b) {
     b.def("pause", 0, [](Value self_, std::span<const Value>) {
         Call c = callOf(self_);
         if (!c.rec) return ev::undefined();
-        c.eng->webAnimationManager().pause(*c.rec, c.eng->timeNowMs());
+        c.mgr->pause(*c.rec, c.eng->timeNowMs());
         c.rec->cssPlayOverride = true;
         markTargetDirty(c);
         return ev::undefined();
@@ -428,7 +437,7 @@ void decorateAnimationProto(ObjectBuilder& b) {
             (c.rec->playbackRate > 0 && !std::isfinite(c.rec->endTimeMs()))) {
             return ev::throwValue(hostMakeDomError("InvalidStateError", "Animation cannot be finished if playbackRate is 0 or end time is infinite"));
         }
-        c.eng->webAnimationManager().finishOp(*c.rec);
+        c.mgr->finishOp(*c.rec);
         markTargetDirty(c);
         settleFinish(c.st, self_);
         return ev::undefined();
@@ -437,7 +446,7 @@ void decorateAnimationProto(ObjectBuilder& b) {
     b.def("cancel", 0, [](Value self_, std::span<const Value>) {
         Call c = callOf(self_);
         if (!c.rec || c.rec->state == engine::WebAnimState::Idle) return ev::undefined();
-        c.eng->webAnimationManager().cancelOp(*c.rec);
+        c.mgr->cancelOp(*c.rec);
         markTargetDirty(c);
         settleCancel(c.st, self_);
         return ev::undefined();
@@ -446,7 +455,7 @@ void decorateAnimationProto(ObjectBuilder& b) {
     b.def("reverse", 0, [](Value self_, std::span<const Value>) {
         Call c = callOf(self_);
         if (!c.rec) return ev::undefined();
-        c.eng->webAnimationManager().reverse(*c.rec, c.eng->timeNowMs());
+        c.mgr->reverse(*c.rec, c.eng->timeNowMs());
         c.rec->cssPlayOverride = true;
         markTargetDirty(c);
         return ev::undefined();
@@ -460,7 +469,7 @@ void decorateAnimationProto(ObjectBuilder& b) {
         if (!c.rec) return ev::undefined();
         double r = a.empty() ? 1.0 : ev::toDouble(a[0]);
         if (!std::isfinite(r)) return ev::throwTypeError("updatePlaybackRate: rate must be finite");
-        c.eng->webAnimationManager().setRate(*c.rec, r, c.eng->timeNowMs());
+        c.mgr->setRate(*c.rec, r, c.eng->timeNowMs());
         markTargetDirty(c);
         return ev::undefined();
     });
@@ -471,7 +480,7 @@ void decorateAnimationProto(ObjectBuilder& b) {
     b.def("commitStyles", 0, [](Value self_, std::span<const Value>) {
         Call c = callOf(self_);
         if (!c.rec) return ev::undefined();
-        engine::WebAnimationManager& mgr = c.eng->webAnimationManager();
+        engine::WebAnimationManager& mgr = *c.mgr;
         dom::Element* el = mgr.resolveElement(*c.rec);
         if (!el) {
             return ev::throwValue(hostMakeDomError(
@@ -507,7 +516,7 @@ void decorateAnimationProto(ObjectBuilder& b) {
     b.accessor("playState", [](Value self_, std::span<const Value>) {
         Call c = callOf(self_);
         if (!c.rec) return ev::fromUtf8("idle");
-        return ev::fromUtf8(c.eng->webAnimationManager().playState(*c.rec, c.eng->timeNowMs()));
+        return ev::fromUtf8(c.mgr->playState(*c.rec, c.eng->timeNowMs()));
     }, nullptr);
 
     b.accessor("playbackRate",
@@ -519,7 +528,7 @@ void decorateAnimationProto(ObjectBuilder& b) {
             Call c = callOf(self_);
             if (c.rec) {
                 double r = a.empty() ? 1.0 : ev::toDouble(a[0]);
-                c.eng->webAnimationManager().setRate(*c.rec, r, c.eng->timeNowMs());
+                c.mgr->setRate(*c.rec, r, c.eng->timeNowMs());
                 markTargetDirty(c);
             }
             return ev::undefined();
@@ -536,7 +545,7 @@ void decorateAnimationProto(ObjectBuilder& b) {
             Call c = callOf(self_);
             if (c.rec && !a.empty()) {
                 double ct = ev::toDouble(a[0]);
-                c.eng->webAnimationManager().setCurrentTime(*c.rec, ct, c.eng->timeNowMs());
+                c.mgr->setCurrentTime(*c.rec, ct, c.eng->timeNowMs());
                 markTargetDirty(c);
             }
             return ev::undefined();
@@ -556,7 +565,7 @@ void decorateAnimationProto(ObjectBuilder& b) {
         [](Value self_, std::span<const Value> a) {
             Call c = callOf(self_);
             if (!c.rec || a.empty() || !ev::isNumber(a[0])) return ev::undefined();
-            c.eng->webAnimationManager().setStartTime(*c.rec, ev::toDouble(a[0]), c.eng->timeNowMs());
+            c.mgr->setStartTime(*c.rec, ev::toDouble(a[0]), c.eng->timeNowMs());
             markTargetDirty(c);
             return ev::undefined();
         });
@@ -604,7 +613,7 @@ void decorateAnimationProto(ObjectBuilder& b) {
             st->promiseSettled = false;
             Call c = callOf(self_);
             if (c.rec) {
-                std::string ps = c.eng->webAnimationManager().playState(*c.rec, c.eng->timeNowMs());
+                std::string ps = c.mgr->playState(*c.rec, c.eng->timeNowMs());
                 if (ps == "finished") resolveFinishedPromise(st, self_);
             }
         }
@@ -733,7 +742,7 @@ void decorateElementWebAnimations(ObjectBuilder& b) {
         }
 
         double now = eng->timeNowMs();
-        engine::WebAnimation& rec = eng->webAnimationManager().create(nst->el, now);
+        engine::WebAnimation& rec = eng->webAnimationManagerFor(nst->el->document()).create(nst->el, now);
         rec.keyframes = std::move(frames);
         rec.duration = scratch.duration;
         rec.delay = scratch.delay;
@@ -755,7 +764,7 @@ void decorateElementWebAnimations(ObjectBuilder& b) {
         // Style first, as on the web: an animation a class change just
         // started is listed by the getAnimations() that follows it.
         eng->flushLayoutForRead(nst->el->document());
-        auto ids = eng->webAnimationManager().animationsFor(nst->el, eng->timeNowMs());
+        auto ids = eng->webAnimationManagerFor(nst->el->document()).animationsFor(nst->el, eng->timeNowMs());
         return hostArrayOf(ids.size(), [&ids](size_t i) {
             return wrapAnimation(ids[i]);
         });
@@ -770,8 +779,12 @@ void decorateDocumentWebAnimations(ObjectBuilder& b) {
     b.def("getAnimations", 0, [](Value, std::span<const Value>) {
         engine::Engine* eng = hostEngine();
         if (!eng) return makeEmptyArray();
-        if (eng->document()) eng->flushLayoutForRead(eng->document());
-        auto ids = eng->webAnimationManager().allAnimations(eng->timeNowMs());
+        // The animations of the document whose script asks (an iframe's, a
+        // window's, the app's).
+        dom::Document* doc = currentHostDocument();
+        if (!doc) doc = eng->document();
+        if (doc) eng->flushLayoutForRead(doc);
+        auto ids = eng->webAnimationManagerFor(doc).allAnimations(eng->timeNowMs());
         return hostArrayOf(ids.size(), [&ids](size_t i) {
             return wrapAnimation(ids[i]);
         });
@@ -781,8 +794,22 @@ void decorateDocumentWebAnimations(ObjectBuilder& b) {
 void deliverWebAnimationFinishEvents() {
     engine::Engine* eng = hostEngine();
     if (!eng) return;
-    auto& mgr = eng->webAnimationManager();
-    for (uint64_t id : mgr.takeFinishedEvents()) {
+    // Every manager's (the app document's, each iframe's and window's),
+    // taken before any is delivered: a handler may take an iframe away.
+    std::vector<uint64_t> finished, canceled;
+    struct Removed { uint64_t id; std::optional<double> currentTime; };
+    std::vector<Removed> removed;
+    const double now = eng->timeNowMs();
+    eng->forEachWebAnimationManager([&](engine::WebAnimationManager& mgr) {
+        for (uint64_t id : mgr.takeFinishedEvents()) finished.push_back(id);
+        for (uint64_t id : mgr.takeCanceledEvents()) canceled.push_back(id);
+        for (uint64_t id : mgr.takeRemovedEvents()) {
+            Removed r{id, std::nullopt};
+            if (engine::WebAnimation* rec = mgr.find(id)) r.currentTime = rec->currentTimeMs(now);
+            removed.push_back(r);
+        }
+    });
+    for (uint64_t id : finished) {
         auto it = liveStates().find(id);
         if (it != liveStates().end()) {
             AnimationState* st = it->second;
@@ -790,7 +817,7 @@ void deliverWebAnimationFinishEvents() {
         }
     }
     // A CSS animation its markup stopped naming, while script held it.
-    for (uint64_t id : mgr.takeCanceledEvents()) {
+    for (uint64_t id : canceled) {
         auto it = liveStates().find(id);
         if (it != liveStates().end()) {
             AnimationState* st = it->second;
@@ -798,15 +825,12 @@ void deliverWebAnimationFinishEvents() {
         }
     }
     // Replaced by later animations (Web Animations §5.5).
-    for (uint64_t id : mgr.takeRemovedEvents()) {
-        auto it = liveStates().find(id);
+    for (const Removed& r : removed) {
+        auto it = liveStates().find(r.id);
         if (it != liveStates().end()) {
             AnimationState* st = it->second;
             ev::Persistent selfP(st->self.get());
-            Value ct = ev::null();
-            if (engine::WebAnimation* rec = mgr.find(id)) {
-                if (auto cur = rec->currentTimeMs(eng->timeNowMs())) ct = ev::fromDouble(*cur);
-            }
+            Value ct = r.currentTime ? ev::fromDouble(*r.currentTime) : ev::null();
             fireHandler(st->onremove.get(), selfP.get(), "remove", ct);
         }
     }

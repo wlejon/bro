@@ -315,7 +315,6 @@ private:
     std::vector<uint64_t> pendingFinished_;
     std::vector<uint64_t> pendingCanceled_;
     std::vector<uint64_t> pendingRemoved_;
-    uint64_t nextId_ = 1;
 };
 
 // Composite order of two records on one element: CSS transitions the markup

@@ -420,6 +420,7 @@ bool Document::classChangeAffectsDescendants(const std::string& oldCls,
 
 void Document::resolveStyles() {
     if (!documentElement_) return;
+    if (animationClock_) transitionTime_ = animationClock_();
     // A top-layer entry whose element left the tree or lost its required
     // attribute (a dialog's `open` removed by hand) leaves before :modal is
     // matched again.

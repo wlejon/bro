@@ -24,6 +24,8 @@
 #include "dom/element.h"
 #include "dom/node.h"
 #include "dom/element_geometry.h"
+#include "dom/event.h"
+#include "dom/event_dispatch.h"
 #include "canvas/canvas_scene.h"
 
 #include <include/core/SkCanvas.h>
@@ -41,13 +43,70 @@ namespace bro::engine {
 SubDocRef Engine::iframeSubDoc(IframeDoc& d) {
     return SubDocRef{d.canvasScenes, d.document,
                      d.hoveredElement, d.boxW, d.boxH, d.cmdBuffer,
-                     d.surface, d.spare, d.surfW, d.surfH, d.published, d.recorded};
+                     d.surface, d.spare, d.surfW, d.surfH, d.published, d.recorded, d.animations};
 }
 
 SubDocRef Engine::windowHostSubDoc(WindowHost& h) {
     return SubDocRef{h.canvasScenes, h.document,
                      h.hoveredElement, h.boxW, h.boxH, h.cmdBuffer,
-                     h.surface, h.spare, h.surfW, h.surfH, h.published, h.recorded};
+                     h.surface, h.spare, h.surfW, h.surfH, h.published, h.recorded, h.animations};
+}
+
+WebAnimationManager& Engine::webAnimationManagerFor(const dom::Document* doc) {
+    if (doc && doc != document_.get()) {
+        for (auto& d : iframeDocs_)
+            if (d && d->document.get() == doc) return d->animations.web;
+        for (auto& h : windowHosts_)
+            if (h && h->document.get() == doc) return h->animations.web;
+    }
+    return webAnimationManager_;
+}
+
+WebAnimationManager* Engine::webAnimationManagerOf(uint64_t id) {
+    if (webAnimationManager_.find(id)) return &webAnimationManager_;
+    for (auto& d : iframeDocs_)
+        if (d && d->animations.web.find(id)) return &d->animations.web;
+    for (auto& h : windowHosts_)
+        if (h && h->animations.web.find(id)) return &h->animations.web;
+    return nullptr;
+}
+
+void Engine::forEachWebAnimationManager(const std::function<void(WebAnimationManager&)>& fn) {
+    fn(webAnimationManager_);
+    for (auto& d : iframeDocs_)
+        if (d) fn(d->animations.web);
+    for (auto& h : windowHosts_)
+        if (h) fn(h->animations.web);
+}
+
+void SubDocAnimations::attach(dom::Document* doc, std::function<double()> clock) {
+    if (!doc) return;
+    doc->setTransitionManager(&transitions, clock ? clock() : 0.0);
+    doc->setAnimationManager(&animations);
+    doc->setWebAnimationManager(&web);
+    animations.setKeyframes(&doc->cascade().keyframes());
+    doc->setAnimationClock(std::move(clock));
+}
+
+bool SubDocAnimations::tick(dom::Document* doc, double nowMs) {
+    if (doc) animations.setKeyframes(&doc->cascade().keyframes());
+    // Each of them, then: the CSS ones queue their events, the web one
+    // names what is animating and what finished.
+    const bool t = transitions.tick(nowMs);
+    const bool a = animations.tick(nowMs);
+    const bool w = web.tick(nowMs);
+    return t || a || w;
+}
+
+void SubDocAnimations::markForNextPass() {
+    for (dom::Element* e : web.activeThisTick()) e->markDirty();
+    for (dom::Element* e : web.finishedThisTick()) e->markDirty();
+}
+
+void SubDocAnimations::clear() {
+    web.clearAll();
+    animations.clearAll();
+    transitions.clearAll();
 }
 
 SubDocSource loadSubDocSource(const std::string& basePath, const std::string& srcAttr,
@@ -85,8 +144,10 @@ SubDocSource loadSubDocSource(const std::string& basePath, const std::string& sr
 }
 
 void buildSubDocDocument(SubDocRef d, const SubDocSource& src,
-                         const std::string& colorScheme, float resolution) {
+                         const std::string& colorScheme, float resolution, std::function<double()> clock) {
     d.document = std::make_unique<dom::Document>();
+    // Its transitions and animations, on the engine's clock.
+    d.animations.attach(d.document.get(), std::move(clock));
     d.document->setBasePath(src.manifest.basePath);
     d.document->setMediaColorScheme(colorScheme);
     d.document->setMediaResolution(resolution);
@@ -134,6 +195,32 @@ void warnNestedIframes(SubDocRef d, const char* what) {
 }
 
 bool tickSubDoc(SubDocRef d, double /*nowMs*/) {
+    if (d.document && d.document->documentElement() && d.document->isDirty()) {
+        // Its transitions and animations advance with the frame even when
+        // nothing records it (a headless advanceTime, a minimized window):
+        // what changed is resolved and they are ticked as the record would.
+        // The record resolves it again; the document stays dirty for it.
+        layout::ElementRefAdapter::setHoveredElement(d.hoveredElement);
+        d.document->resolveStyles();
+        d.animations.tick(d.document.get(), d.document->animationTime());
+        d.animations.markForNextPass();
+    }
+    // Their events, queued by the last tick: here, at the start of the frame
+    // and outside its record, where a listener may change anything.
+    for (auto& ev : d.animations.transitions.takePendingEvents()) {
+        dom::TransitionEvent tevt(ev.type, true, false);
+        tevt.setPropertyName(ev.name);
+        tevt.setElapsedTime(ev.elapsedTime);
+        tevt.setIsTrusted(true);
+        dom::dispatchDomEvent(ev.element, tevt);
+    }
+    for (auto& ev : d.animations.animations.takePendingEvents()) {
+        dom::AnimationEvent aevt(ev.type, true, false);
+        aevt.setAnimationName(ev.name);
+        aevt.setElapsedTime(ev.elapsedTime);
+        aevt.setIsTrusted(true);
+        dom::dispatchDomEvent(ev.element, aevt);
+    }
     if (d.cmdBuffer.commandCount() == 0) return true;
     if (d.document && d.document->isDirty()) return true;
     return false;
@@ -158,6 +245,9 @@ void recordSubDoc(SubDocRef d, render::RecordingRenderer* rec,
     if (!d.document || !d.document->documentElement()) return;
     layout::ElementRefAdapter::setHoveredElement(d.hoveredElement);
     d.document->resolveStyles();
+    // Its transitions and animations, after the resolve that starts them (as
+    // the app's layout pass ticks its own), at the time it resolved at.
+    d.animations.tick(d.document.get(), d.document->animationTime());
     d.document->performLayout(static_cast<float>(d.boxW),
                               static_cast<float>(d.boxH), metrics);
     for (auto& scene : d.canvasScenes) {
@@ -178,6 +268,9 @@ void recordSubDoc(SubDocRef d, render::RecordingRenderer* rec,
     traversal->setLayerBreakCallback(nullptr);
     rec->setBuffer(nullptr);
     d.document->clearDirty();
+    // What is animating records again next frame (its next value), and what
+    // just finished settles (tickSubDoc sees the document dirty).
+    d.animations.markForNextPass();
     d.recorded.boxW = d.boxW;
     d.recorded.boxH = d.boxH;
     d.recorded.hovered = d.hoveredElement;
@@ -279,6 +372,7 @@ void teardownSubDoc(SubDocRef d) {
         bro::bronze_host::clearRealmScope(bro::bronze_host::scopeIdForDocument(doc));
         bro::bronze_host::clearHostDocument(doc);
     }
+    d.animations.clear();  // their records name its elements
     d.document.reset();
 }
 

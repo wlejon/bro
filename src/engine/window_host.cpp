@@ -468,7 +468,7 @@ void Engine::applyChildManifestDefaults(WindowHost& h, const std::string& appDir
 void Engine::createWindowHostDoc(WindowHost& h, SubDocSource& source) {
     SubDocRef ref = windowHostSubDoc(h);
     buildSubDocDocument(ref, source, effectiveColorScheme(),
-                        static_cast<float>(h.displayScale));
+                        static_cast<float>(h.displayScale), [this] { return engineNowMs_; });
 
     runSubDocScripts(ref, source, this, /*isChild=*/true);
 

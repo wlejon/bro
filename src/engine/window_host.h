@@ -3,6 +3,7 @@
 #include "engine/engine_config.h"
 #include "engine/published_frame.h"
 #include "engine/replaced_elements.h"
+#include "engine/sub_doc_animations.h"
 #include "dom/node_handle.h"
 #include "render/command_buffer.h"
 #include "render/skia_backend.h"
@@ -64,6 +65,7 @@ struct WindowHost {
     double displayScale = 1.0;
     bool loadFired = false;
     std::vector<std::unique_ptr<canvas::CanvasScene>> canvasScenes;
+    SubDocAnimations animations;      // its transitions and animations (before `document`: outlives it)
     std::unique_ptr<dom::Document> document;
 
     // Per-window input state

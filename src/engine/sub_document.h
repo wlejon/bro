@@ -5,6 +5,7 @@
 
 #include "engine/engine.h"
 #include "engine/app_loader.h"
+#include "engine/sub_doc_animations.h"
 
 #include <cstdint>
 #include <memory>
@@ -27,6 +28,7 @@ struct SubDocRef {
     int& surfH;
     PublishedFrame& published;
     SubDocRecord& recorded;
+    SubDocAnimations& animations;
 };
 
 /// A sub-app loaded off disk.
@@ -44,9 +46,11 @@ struct SubDocSource {
 SubDocSource loadSubDocSource(const std::string& basePath, const std::string& srcAttr,
                               const util::AssetMounts* mounts, const char* what);
 
-/// Parse the loaded HTML into a fresh Document whose media context is the sub-doc's own box.
+/// Parse the loaded HTML into a fresh Document whose media context is the
+/// sub-doc's own box, its transitions and animations on `clock` (the engine's
+/// scaled clock).
 void buildSubDocDocument(SubDocRef d, const SubDocSource& src,
-                         const std::string& colorScheme, float resolution);
+                         const std::string& colorScheme, float resolution, std::function<double()> clock);
 
 /// Execute scripts for a sub-document.
 void runSubDocScripts(SubDocRef d, const SubDocSource& src, Engine* engine, bool isChild);

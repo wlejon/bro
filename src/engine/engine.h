@@ -601,6 +601,13 @@ public:
     void setTimePaused(bool paused);
     double timeNowMs() const { return engineNowMs_; }
     WebAnimationManager& webAnimationManager() { return webAnimationManager_; }
+    // The one that animates `doc`: an <iframe>'s or a secondary window's
+    // own (engine/sub_doc_animations.h), else the app document's.
+    WebAnimationManager& webAnimationManagerFor(const dom::Document* doc);
+    // The one holding animation `id` (ids are unique across them), or null.
+    WebAnimationManager* webAnimationManagerOf(uint64_t id);
+    // Each of them: the app document's, then every sub-document's.
+    void forEachWebAnimationManager(const std::function<void(WebAnimationManager&)>& fn);
     double effectiveTimeScale() const { return timePaused_ ? 0.0 : timeScale_; }
 
     void requestServerStop() { serverStopRequested_ = true; }

@@ -422,6 +422,14 @@ public:
     void setWebAnimationManager(engine::WebAnimationManager* wam) {
         webAnimationManager_ = wam;
     }
+    // The time a style resolve starts transitions and animations at and
+    // samples them at. With a clock it is read at the start of each resolve
+    // (a sub-document, styled on the main thread: the engine's scaled clock,
+    // whichever path resolves it); without one it is what
+    // setTransitionManager last gave (the app document: its pass's time).
+    void setAnimationClock(std::function<double()> clock) { animationClock_ = std::move(clock); }
+    // The time the last resolve sampled them at.
+    double animationTime() const { return transitionTime_; }
 
     // Perform layout on the tree using htmlayout
     void performLayout(float viewportWidth, htmlayout::layout::TextMetrics& metrics);
@@ -863,6 +871,7 @@ private:
     engine::AnimationManager* animationManager_ = nullptr;
     engine::WebAnimationManager* webAnimationManager_ = nullptr;
     double transitionTime_ = 0;
+    std::function<double()> animationClock_;
 
     // Root element (<html>) resolved font-size in px, captured while resolving
     // the document element's style so rem units in getComputedStyle track the

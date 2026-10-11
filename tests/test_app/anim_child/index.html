@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head><style>
+  html, body { margin: 0; width: 100%; height: 100%; background: #000000; }
+  /* A transition, a keyframe animation and an element.animate() target, side
+     by side; each ends on its own colour (red, red, white). */
+  #t { position: absolute; left: 0; top: 0; width: 40px; height: 40px; background-color: #0000ff;
+       transition: background-color 150ms linear; }
+  @keyframes tint { from { background-color: #0000ff; } to { background-color: #00ff00; } }
+  #k { position: absolute; left: 50px; top: 0; width: 40px; height: 40px; background-color: #ff0000; }
+  /* Long: it ends after everything else on the page has changed, idle. */
+  #k.on { animation: tint 800ms linear; }
+  #w { position: absolute; left: 100px; top: 0; width: 40px; height: 40px; background-color: #ffffff; }
+  /* The helmapps kit's tooltip: put in by a timer, faded in. */
+  @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+  .tip { position: fixed; left: 0; top: 50px; width: 60px; height: 20px; background-color: #ff00ff;
+         animation: fade-in 120ms ease; }
+</style></head>
+<body>
+  <!-- Animations in a sub-document (an <iframe>'s, a bro.window.open()
+       window's), for tests/engine/test_subdoc_animations.js: go() starts
+       them all, a few frames after load; results says what happened, and
+       report() posts it to the window's opener. -->
+  <div id="t"></div><div id="k"></div><div id="w"></div>
+  <script>
+    var results = { events: [], tipStart: null, finished: false, onfinish: false, done: false };
+    function report() {
+      results.done = true;
+      if (typeof bro !== 'undefined' && bro.window && bro.window.parent) bro.window.parent.postMessage(results);
+    }
+    function go() {
+      var t = document.getElementById('t'), k = document.getElementById('k'), w = document.getElementById('w');
+      t.addEventListener('transitionend', function (e) { results.events.push('transitionend:' + e.propertyName); });
+      k.addEventListener('animationstart', function (e) { results.events.push('animationstart:' + e.animationName); });
+      k.addEventListener('animationend', function (e) { results.events.push('animationend:' + e.animationName); });
+      t.style.backgroundColor = '#ff0000';
+      k.classList.add('on');
+      var a = w.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 100 });
+      a.onfinish = function () { results.onfinish = true; };
+      a.finished.then(function () { results.finished = true; });
+      // The tooltip, while nothing else happens: measured as it goes in.
+      setTimeout(function () {
+        var tip = document.createElement('div');
+        tip.className = 'tip';
+        document.body.appendChild(tip);
+        tip.getBoundingClientRect();
+        var as = tip.getAnimations();
+        results.tipStart = as.length ? as[0].currentTime : null;
+      }, 400);
+      setTimeout(report, 1300);
+    }
+    // Once the page has been shown, from its own realm (the transition has a
+    // style to start from).
+    setTimeout(go, 100);
+  </script>
+</body>
+</html>

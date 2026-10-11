@@ -52,7 +52,15 @@ engine::WebAnimation* effectRecord(Value self) {
     auto* es = static_cast<EffectState*>(ev::handleData(self));
     engine::Engine* eng = hostEngine();
     if (!es || es->tag != kEffectTag || !eng) return nullptr;
-    return eng->webAnimationManager().find(es->id);
+    engine::WebAnimationManager* mgr = eng->webAnimationManagerOf(es->id);
+    return mgr ? mgr->find(es->id) : nullptr;
+}
+
+// The manager holding animation `id` (the app document's, an iframe's, a
+// window's), or null.
+engine::WebAnimationManager* managerOf(uint64_t id) {
+    engine::Engine* eng = hostEngine();
+    return eng ? eng->webAnimationManagerOf(id) : nullptr;
 }
 
 const char* fillName(engine::WebAnimFill f) {
@@ -170,9 +178,9 @@ void decorateKeyframeEffectProto(ObjectBuilder& b) {
     b.accessor("target",
                [](Value self, std::span<const Value>) -> Value {
                    engine::WebAnimation* rec = effectRecord(self);
-                   engine::Engine* eng = hostEngine();
-                   if (!rec || !eng) return ev::null();
-                   dom::Element* el = eng->webAnimationManager().resolveElement(*rec);
+                   engine::WebAnimationManager* mgr = rec ? managerOf(rec->id) : nullptr;
+                   if (!rec || !mgr) return ev::null();
+                   dom::Element* el = mgr->resolveElement(*rec);
                    return el ? hostElementValue(el) : ev::null();
                },
                nullptr);
@@ -256,7 +264,8 @@ void decorateKeyframeEffectProto(ObjectBuilder& b) {
         if (!parseEffectTiming(arg, scratch, mask, error, nullptr))
             return ev::throwTypeError(("updateTiming: " + error).c_str());
         // Reading the members ran script getters: find the record again.
-        rec = eng->webAnimationManager().find(id);
+        engine::WebAnimationManager* mgr = eng->webAnimationManagerOf(id);
+        rec = mgr ? mgr->find(id) : nullptr;
         if (!rec) return ev::undefined();
         rec->duration = scratch.duration;
         rec->delay = scratch.delay;
@@ -266,8 +275,8 @@ void decorateKeyframeEffectProto(ObjectBuilder& b) {
         rec->fill = scratch.fill;
         rec->easing = scratch.easing;
         if (rec->isCssAnimation) rec->cssTimingOverride |= mask;
-        eng->webAnimationManager().timingChanged(*rec, eng->timeNowMs());
-        if (auto* el = eng->webAnimationManager().resolveElement(*rec)) el->markDirty();
+        mgr->timingChanged(*rec, eng->timeNowMs());
+        if (auto* el = mgr->resolveElement(*rec)) el->markDirty();
         return ev::undefined();
     });
 }
