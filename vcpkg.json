@@ -6,6 +6,11 @@
   "dependencies": [
     "dav1d",
     "gamenetworkingsockets",
+    {
+      "$comment": "broimage's JPEG decoder. Windows only: on Linux and macOS it is the system's (or Homebrew's) libjpeg-turbo, the one Skia links, so the process holds one libjpeg with one ABI (Arch's is jpeg8, vcpkg's jpeg62).",
+      "name": "libjpeg-turbo",
+      "platform": "windows"
+    },
     "libvpx",
     "libwebm",
     "opus",

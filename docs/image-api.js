@@ -526,6 +526,75 @@ bro.image.decodeF32 = function(src) {};
  */
 bro.image.decodeOriented = function(src) {};
 
+// ── Scaled decode ────────────────────────────────────────────────────────────
+//
+// A photo decoded for the size it will be shown at — a thumbnail, a viewer
+// fitting a 24 MP photo to the screen — costs what that size needs, not what
+// the file holds. JPEG decodes through libjpeg-turbo (SIMD; every JPEG decode
+// in bro does, `<img>` and `decodeOriented` included), and its IDCT decodes
+// at 1/8, 2/8 ... 8/8 of the stored size: `decodeScaled` takes the smallest
+// of those that covers the box, then an area resize takes it to the box.
+// When the box is no bigger than the camera's own thumbnail (a JPEG's EXIF
+// one, usually 160 x 120; a HEIF's thumbnail item) that is used, and from a
+// path only the head of the file is read.
+//
+// What it does not change: a JPEG's entropy-coded data is read serially
+// whatever the scale, so a 1/8 decode of a 10 MB camera JPEG still costs
+// ~50 ms of one core (full: ~75 ms; stb_image, before: ~100 ms). Many photos
+// are fast by running in parallel — bro.thumb's pool spans the machine's
+// cores — not by one decode being instant.
+//
+// Canon CR3 (RAW): never RAW-decoded. A CR3 carries a 160 x 120 THMB, a
+// 1620 x 1080 PRVW and a full-size JPEG; `decodeScaled` takes the smallest
+// that covers the box (a thumbnail or a screen-sized view reads only the
+// file's first ~0.5 MB), `decodeOriented` / `<img>` the full-size one, and
+// `readExif` its CMT1/CMT2/CMT4 blocks. Orientation is CMT1's.
+//
+//   numbers on halo (Ryzen AI Max+ 395), Canon R50 6000 x 4000 JPEGs, ms:
+//     full decode 76 (stb 100) · 1/8 53 · 256 px thumbnail 55 (was 197)
+//     2560 x 1440 screen fit 76 · EXIF thumbnail 0.1
+//     CR3: 256 px from PRVW 3.7 · screen fit from the full-size JPEG 45
+//     958-photo card, cold, bro.thumb 'large': 3.0 s (30 workers; 2 took 28 s)
+
+/**
+ * Decode for a box: upright (EXIF orientation applied), aspect kept, the
+ * box's size and never larger than the image.
+ *   width, height  the box in upright pixels; 0 leaves a side free; both 0 is
+ *                  the image's own size
+ *   fit            'contain' (default): the largest size inside the box —
+ *                  a thumbnail, a photo fitted to a screen; 'cover': the
+ *                  smallest size at least width x height
+ *   embedded       (default true) let the camera's thumbnail stand in when it
+ *                  is at least the target size
+ * Returns decodeOriented's shape plus how it got there:
+ *   path           'dct' (a JPEG at dctScale/8) | 'full' | 'exif-thumbnail' |
+ *                  'heif-thumbnail' | 'raw-preview' (a CR3's embedded JPEG)
+ *   dctScale       1..8
+ *   sourceWidth, sourceHeight     the image's own upright size
+ *   decodedWidth, decodedHeight   what the decoder produced before the resize
+ * A failed decode is `width`/`height` 0 with `error`, as decodeOriented's.
+ * @param {string|ArrayBufferView} src path or encoded bytes
+ * @param {{width?:number,height?:number,fit?:'contain'|'cover',embedded?:boolean}} [opts]
+ * @returns {{width:number,height:number,channels:number,pixels:Uint8Array,path:string,dctScale:number,
+ *   sourceWidth:number,sourceHeight:number,decodedWidth:number,decodedHeight:number,error?:string}}
+ * @example
+ *   // A viewer's first paint at the window's size, the full photo only on zoom.
+ *   const fit = bro.image.decodeScaled(path, { width: innerWidth * devicePixelRatio,
+ *                                              height: innerHeight * devicePixelRatio });
+ */
+bro.image.decodeScaled = function(src, opts) {};
+
+/**
+ * The camera's own small thumbnail, decoded in well under a millisecond: a
+ * JPEG's EXIF one (IFD1) or a CR3's THMB, upright by the photo's orientation
+ * and cropped to the photo's aspect ratio (cameras pad a 3:2 photo's to 4:3
+ * with black bars). From a path only the head of the file is read. For an
+ * instant placeholder while the real decode runs. Null when there is none.
+ * @param {string|ArrayBufferView} src path or encoded bytes
+ * @returns {?{width:number,height:number,channels:number,pixels:Uint8Array}}
+ */
+bro.image.decodeExifThumbnail = function(src) {};
+
 /**
  * Header-only probe: dimensions without decoding any pixels. Bytes only — no
  * path form.
@@ -696,8 +765,9 @@ bro.image.readExifOrientation = function(src) {};
  * Strings are the stored ASCII with trailing NULs / spaces trimmed.
  *
  * @param {string|ArrayBufferView} src path or encoded bytes. A path reads a
- *   JPEG's first 256 KB, any other file whole (a TIFF's directory, a WebP's
- *   EXIF chunk or a PNG's eXIf may follow the pixels).
+ *   JPEG's or a Canon CR3's first 256 KB (a CR3's CMT1/CMT2/CMT4 blocks are
+ *   its IFD0, Exif and GPS IFDs), any other file whole (a TIFF's directory, a
+ *   WebP's EXIF chunk or a PNG's eXIf may follow the pixels).
  * @returns {?{make?:string, model?:string, lensMake?:string, lensModel?:string,
  *   exposureTime?:number, exposureTimeText?:string, fNumber?:number,
  *   iso?:number, focalLength?:number, focalLength35mm?:number,

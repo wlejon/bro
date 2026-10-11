@@ -6,6 +6,10 @@
 bro_dependency(SDL GITHUB libsdl-org/SDL REF 1df279a04f604bc50b6f36c9e903b5e64c4fe2a3 THIRD_PARTY PIN_ONLY)
 bro_dependency(jolt GITHUB jrouwe/JoltPhysics REF 945d1d5ce29a8ccc8fa78c74059b187c2b67e7d9 THIRD_PARTY PIN_ONLY)
 bro_dependency(FastNoise2 GITHUB Auburn/FastNoise2 REF ba93f17ec40a9d09066c8d07b3e72b789e5b5657 THIRD_PARTY PIN_ONLY)
+# broimage's JPEG decoder, built from this source only where no installed one
+# (system package, Homebrew, vcpkg) is found: 3.2.0, as broimage's
+# cmake/jpeg_turbo.cmake pins it.
+bro_dependency(libjpeg-turbo GITHUB libjpeg-turbo/libjpeg-turbo REF c85e6b905bf237038faa936dab160ebfc5da0344 THIRD_PARTY PIN_ONLY)
 
 # The ecosystem (github.com/wlejon/<name>) tracks each repo's main: a working
 # tree at ../<name> builds as it is, anything else is fetched at its main head
