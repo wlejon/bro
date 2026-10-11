@@ -647,6 +647,11 @@ Value makeDocumentValue(dom::Document* fixed) {
     };
     defDocElement("body", &dom::Document::body);
     defDocElement("documentElement", &dom::Document::documentElement);
+    // The element whose scrollTop/scrollLeft scroll the viewport: in a
+    // standards-mode document (compatMode is always CSS1Compat) that is the
+    // root element (CSSOM View), whose scroll offsets bro maps to the
+    // viewport's (host_element_geometry.cpp).
+    defDocElement("scrollingElement", &dom::Document::documentElement);
     b.accessor("head",
                [fixed](Value, std::span<const Value>) {
                    dom::Document* doc = documentFor(fixed);

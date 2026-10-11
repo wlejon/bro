@@ -134,11 +134,11 @@
             [4, 'scroll', () => {
                 const e = anyEl((x) => x.classList.contains('scroller'));
                 if (e) { e.scrollTop = int(0, 120); return { what: 'scroll box' }; }
-                window.scrollTo(0, int(0, 200));
+                document.scrollingElement.scrollTop = int(0, 200);
                 return { what: 'scroll document' };
             }],
             [3, 'docscroll', () => {
-                window.scrollTo(0, int(0, 300));
+                document.scrollingElement.scrollTop = int(0, 300);
                 return { what: 'scroll document' };
             }],
             [4, 'transform', () => {
