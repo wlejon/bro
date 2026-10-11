@@ -163,6 +163,7 @@ void Engine::teardown() {
 
     for (int i = 0; i < 2; ++i) {
         htmlSurfacePool_[i].clear();
+        htmlPoolState_[i] = {};
         systemSurfacePool_[i].clear();
     }
     drawTraversal_.reset();

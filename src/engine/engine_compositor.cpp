@@ -180,7 +180,8 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
                              int& poolW, int& poolH,
                              int surfW, int surfH,
                              std::vector<UILayer>& outLayers,
-                             const render::CommandBuffer* promotedBuffer) {
+                             const render::CommandBuffer* promotedBuffer,
+                             HtmlPoolState* held, uint64_t baseGen, float scale) {
     if (!renderer) return;
 
     // surfW/surfH are the *content* dimensions (viewport minus engine-reserved
@@ -190,13 +191,26 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
         pool.clear();
         poolW = surfW;
         poolH = surfH;
+        if (held) held->baseGen = 0;
     }
     if (pool.empty()) {
         pool.push_back(renderer->createLayerSurface(surfW, surfH));
+        if (held) held->baseGen = 0;  // fresh surfaces hold nothing yet
     }
 
     int htmlLayerIdx = 0;
-    auto origSurface = renderer->switchSurface(pool[0].surface);
+    sk_sp<SkSurface> origSurface = sk_ref_sp(renderer->surface());
+    // This pool copy already holds this base recording at this scale (its
+    // surfaces are drawn only here): its HTML layers stand, and only the
+    // promoted layer above them is drawn again. A compositor-carried
+    // animation used to replay the whole document every frame.
+    if (held && held->baseGen == baseGen && held->scale == scale &&
+        held->htmlLayerIdx < static_cast<int>(pool.size())) {
+        outLayers = held->layers;
+        htmlLayerIdx = held->htmlLayerIdx;
+    } else {
+    if (held) held->baseGen = 0;
+    renderer->switchSurface(pool[0].surface);
 
     render::CommandReplayer replayer(renderer);
     // An HTML layer above a break that nothing drew into is left out: it
@@ -222,6 +236,13 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
     // Capture the trailing HTML layer.
     renderer->switchSurface(origSurface);
     if (htmlLayerIdx == 0 || replayer.draws() != drawsAtSwitch) outLayers.push_back(htmlLayerOf(pool[htmlLayerIdx]));
+    if (held) {
+        held->baseGen = baseGen;
+        held->scale = scale;
+        held->htmlLayerIdx = htmlLayerIdx;
+        held->layers = outLayers;
+    }
+    }
 
     // Compositor-promoted layer: replay the promoted subtrees into one extra
     // pool surface and append it as the topmost HTML layer, filling the holes

@@ -743,13 +743,26 @@ private:
                          const std::unordered_set<dom::Element*>* promotedSet = nullptr,
                          bool promotedOnly = false);
 
+    // What a pool copy's HTML surfaces hold of the base: the recording it was
+    // replayed from (baseGeneration_), at what scale, and the layers that
+    // replay produced. A raster pass whose base is unchanged keeps them.
+    struct HtmlPoolState {
+        uint64_t baseGen = 0;
+        float scale = 0.0f;
+        int htmlLayerIdx = 0;
+        std::vector<UILayer> layers;
+    };
+
+    // `held` (with `baseGen` and `scale`): skip the base replay when the pool
+    // already holds this recording, and note what it holds after one.
     void replayAppLayers(render::SkiaRenderer* renderer,
                          const render::CommandBuffer& buffer,
                          std::vector<render::SkiaRenderer::LayerSurface>& pool,
                          int& poolW, int& poolH,
                          int surfW, int surfH,
                          std::vector<UILayer>& outLayers,
-                         const render::CommandBuffer* promotedBuffer = nullptr);
+                         const render::CommandBuffer* promotedBuffer = nullptr,
+                         HtmlPoolState* held = nullptr, uint64_t baseGen = 0, float scale = 0.0f);
 
     void recordSystemPanelLayers(render::CommandBuffer& outBuffer,
                                  int vpW, int vpH);
@@ -918,6 +931,9 @@ private:
 
     std::unordered_set<dom::Element*> promotedElements_;
     render::CommandBuffer baseCommands_;
+    // Bumped by every write of baseCommands_ (a record, a clear): a raster
+    // pool copy replayed from an older one is stale (HtmlPoolState).
+    uint64_t baseGeneration_ = 1;
     std::unordered_set<dom::Element*> basePromotedSet_;
     bool baseValid_ = false;
     bool appBaseDirty_ = false;
@@ -973,6 +989,7 @@ private:
 
     std::vector<render::SkiaRenderer::LayerSurface> htmlSurfacePool_[2];
     int htmlSurfacePoolW_[2] = {0, 0}, htmlSurfacePoolH_[2] = {0, 0};
+    HtmlPoolState htmlPoolState_[2];
     std::vector<render::SkiaRenderer::LayerSurface> systemSurfacePool_[2];
     int systemSurfacePoolW_[2] = {0, 0}, systemSurfacePoolH_[2] = {0, 0};
 

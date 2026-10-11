@@ -132,6 +132,7 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
                                 rsnap.vpWidth, rsnap.vpHeight,
                                 rsnap.insetTop, rsnap.insetRight, rsnap.insetBottom,
                                 rsnap.scrollY, pset, /*promotedOnly=*/false);
+                ++baseGeneration_;
                 basePromotedSet_ = promotedElements_;
                 baseScrollY_ = rsnap.scrollY;
                 baseInsetTop_ = rsnap.insetTop;

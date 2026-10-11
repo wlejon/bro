@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html>
+<head><style>
+  html, body { margin: 0; width: 100%; height: 100%; background: #203040; overflow: hidden; }
+  #still { position: absolute; left: 10px; top: 10px; width: 60px; height: 60px; background: #ff0000; }
+  /* transform only: the compositor carries it, the base is not re-recorded */
+  @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  #spinner { position: absolute; left: 200px; top: 100px; width: 40px; height: 40px; background: #00ff00;
+             animation: spin 1500ms linear infinite; }
+</style></head>
+<body>
+  <div id="still"></div>
+  <div id="spinner"></div>
+  <script src="main.js"></script>
+</body>
+</html>

@@ -237,7 +237,8 @@ void Engine::rasterThreadFunc() {
                         htmlSurfacePoolH_[back],
                         contentW, contentH,
                         backBuf.appLayers,
-                        &backBuf.promotedCommands);
+                        &backBuf.promotedCommands,
+                        &htmlPoolState_[back], baseGeneration_, snap.scale);
         replaySystemPanelLayers(rasterRenderer.get(), backBuf.systemCommands,
                                 systemSurfacePool_[back], systemSurfacePoolW_[back],
                                 systemSurfacePoolH_[back],
@@ -270,6 +271,7 @@ void Engine::rasterThreadFunc() {
     // race-free: the main thread is blocked in rasterThread_.join().
     for (int i = 0; i < 2; ++i) {
         htmlSurfacePool_[i].clear();
+        htmlPoolState_[i] = {};
         systemSurfacePool_[i].clear();
     }
     for (auto& d : iframeDocs_) {
