@@ -830,10 +830,28 @@ void Element::setScrollToBottom(bool v) {
     }
 }
 
+void Element::notePathDirty(bool style, bool layout) {
+    for (Node* p = parent_; p; ) {
+        if (p->nodeType() == NodeType::Element) {
+            auto* e = static_cast<Element*>(p);
+            if (style) e->styleDescDirty_ = true;
+            if (layout) e->layoutDescDirty_ = true;
+            p = p->parentNode();
+        } else if (p->nodeType() == NodeType::DocumentFragment) {
+            // A shadow root: the walk reaches its children from the host.
+            auto* sr = dynamic_cast<ShadowRoot*>(p);
+            p = sr ? static_cast<Node*>(sr->host()) : nullptr;
+        } else {
+            p = p->parentNode();
+        }
+    }
+}
+
 void Element::markDirty() {
     dirty_ = true;
     layoutDirty_ = true;
     selectorDirty_ = true;
+    notePathDirty(true, true);
     if (document_) {
         // Attributed: the document knows *which* element changed, so the layout
         // pass can recompute this element's chain and reuse the rest of the
@@ -849,6 +867,7 @@ void Element::markPaintDirty() {
     // re-resolve turns up an actual geometry change (promoteLayoutDirty).
     dirty_ = true;
     selectorDirty_ = true;   // class / id — descendant rules may re-match
+    notePathDirty(true, false);
     if (document_) {
         document_->markPaintDirty();
     }
@@ -859,6 +878,7 @@ void Element::markHoverScopeDirty() {
     // element's own :hover (it was hovered before and after). It only opens the
     // subtree to the scoped hover re-match — see takeHoverScopeDirty.
     hoverScopeDirty_ = true;
+    notePathDirty(true, false);
     if (document_) {
         document_->markPaintDirty();
     }
@@ -869,6 +889,7 @@ void Element::markStyleDirty() {
     // descendant's rule set can change because of this write, and only the
     // inherited values this element hands down can reach them.
     dirty_ = true;
+    notePathDirty(true, false);
     if (document_) {
         document_->markPaintDirty();
     }
@@ -916,6 +937,7 @@ void Element::markStructureDirty() {
     // that ancestor's whole subtree, as a class change does.
     if (target == this) target->childListDirty_ = true;
     else target->selectorDirty_ = true;
+    target->notePathDirty(true, true);
     if (document_) document_->markElementStructureDirty();
 }
 

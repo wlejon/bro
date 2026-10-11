@@ -217,7 +217,7 @@ public:
     // element's layout node and the ancestor chain above it so layout
     // recomputes that chain and reuses everything else. Separate from dirty_:
     // a hover that only repainted a background sets dirty_ and not this.
-    void markLayoutDirty() { layoutDirty_ = true; }
+    void markLayoutDirty() { layoutDirty_ = true; notePathDirty(false, true); }
     bool takeLayoutDirty() { bool d = layoutDirty_; layoutDirty_ = false; return d; }
 
     // A selector *input* on this element changed — class, id or an attribute —
@@ -240,8 +240,20 @@ public:
     // the elements that can be such a rule's subject re-match (Cascade::
     // focusCanAffect), the rest keep their matches. Set by
     // Document::setActiveElement along with the element's own restyle.
-    void markFocusScopeDirty() { focusScopeDirty_ = true; }
+    void markFocusScopeDirty() { focusScopeDirty_ = true; notePathDirty(true, false); }
     bool takeFocusScopeDirty() { bool d = focusScopeDirty_; focusScopeDirty_ = false; return d; }
+
+    // Something under this element is marked: for the style walk (a dirty
+    // flag, a selector, hover or focus mark, a changed child list) or for the
+    // layout walk (a structure or geometry mark). The walks descend only where
+    // these are set, so a pass costs what changed rather than the document.
+    // Every mark sets them on all the element's ancestors (through a shadow
+    // root to its host), all the way up: an element a walk never visits (one
+    // with no layout node) may keep one set, which costs a descent, never a
+    // miss.
+    void notePathDirty(bool style, bool layout);
+    bool takeStyleDescendantDirty() { bool d = styleDescDirty_; styleDescDirty_ = false; return d; }
+    bool takeLayoutDescendantDirty() { bool d = layoutDescDirty_; layoutDescDirty_ = false; return d; }
 
     // This element's child list changed (markStructureDirty). Each child's
     // place among its siblings is a selector input for that child, so the
@@ -662,6 +674,8 @@ private:
     bool structureDirty_ = false;
     bool childListDirty_ = false;
     bool focusScopeDirty_ = false;
+    bool styleDescDirty_ = false;
+    bool layoutDescDirty_ = false;
     StyledPlace styledPlace_;
     bool scrollToBottom_ = false;
     bool styleSheetAdded_ = false;

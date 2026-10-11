@@ -310,7 +310,12 @@ public:
 
     uint64_t markDirtyFromElements(RebuildContext& ctx) {
         uint64_t rebuilds = 0;
+        // Nothing under this element is marked for layout (Element::
+        // notePathDirty): its subtree has no flags to consume. An anonymous
+        // node has no element to ask, and a subtree just rebuilt is walked.
+        bool descend = !elem_ || elem_->takeLayoutDescendantDirty();
         if (elem_ && elem_->takeStructureDirty()) {
+            descend = true;
             auto old = std::move(children_);
             children_.clear();
             buildChildren(this, elem_, &old, &ctx);   // clears the flag on everything it builds
@@ -329,6 +334,7 @@ public:
         // them takes their dirt.
         if (elem_ && widgetHidesChildren(elem_) && takeSubtreeDirty(elem_))
             htmlayout::layout::markDirty(this);
+        if (!descend) return rebuilds;
         for (auto& child : children_) rebuilds += child->markDirtyFromElements(ctx);
         return rebuilds;
     }

@@ -444,6 +444,10 @@ void Document::resolveStyles() {
     // A new sheet can change what matches anywhere, so it is a selector-level
     // invalidation, not just a re-resolve of the values already matched.
     styleDonors_.clear();
+    // A running animation re-resolves its element every frame without anyone
+    // marking it (animatingSelf below): put the walk's path to it back.
+    if (webAnimationManager_)
+        for (Element* e : webAnimationManager_->activeThisTick()) e->notePathDirty(true, false);
     resolveStylesRecursive(documentElement_, nullptr, /*force=*/sheetAdded,
                            /*selectorForce=*/sheetAdded);
     styleDonors_.clear();
@@ -820,6 +824,12 @@ children:
     // levels in between re-match nothing themselves.
     const bool childHoverForce = hoverDirty;
     const bool childFocusForce = focusDirty;
+
+    // Nothing below this element is marked (Element::notePathDirty) and
+    // nothing here reaches down: its subtree keeps its styles unvisited.
+    const bool markedBelow = elem->takeStyleDescendantDirty();
+    if (!markedBelow && !childForce && !selDirtyDown && !childHoverForce && !childFocusForce && !childListChanged)
+        return;
 
     ShadowRoot* sr = elem->hasShadow() ? elem->shadowRoot() : nullptr;
     if (!sr) {
