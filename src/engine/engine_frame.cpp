@@ -46,20 +46,42 @@
 
 namespace bro::engine {
 
+dom::Element* Engine::liveElementOf(const WebGLEntry& entry) const {
+    if (!entry.element || !entry.document) return nullptr;
+    if (!dom::Document::isLiveDocument(entry.document)) return nullptr;
+    auto* node = entry.document->resolveNode(entry.element, entry.elementId);
+    return node ? static_cast<dom::Element*>(node) : nullptr;
+}
+
+void Engine::pruneDeadWebGLContexts() {
+    webglEntries_.erase(
+        std::remove_if(webglEntries_.begin(), webglEntries_.end(),
+            [this](const WebGLEntry& e) { return e.element && !liveElementOf(e); }),
+        webglEntries_.end());
+}
+
 void Engine::syncWebGLCanvasSizes() {
     for (auto& entry : webglEntries_) {
-        if (!entry.element || !entry.context) continue;
-        auto& box = entry.element->layoutBox();
+        if (!entry.context) continue;
+        dom::Element* el = liveElementOf(entry);
+        // Out of the document a canvas has no box: its drawing buffer stays
+        // as it is (a resize would clear it) until it is laid out again.
+        if (!el) continue;
+        const dom::Node* root = el;
+        while (root->parentNode()) root = root->parentNode();
+        const auto* rootEl = static_cast<const dom::Element*>(root);
+        if (rootEl->tagName() != "html" && rootEl->tagName() != "HTML") continue;
+        auto& box = el->layoutBox();
         int elemW = static_cast<int>(box.contentRect.width);
         int elemH = static_cast<int>(box.contentRect.height);
 
         int cw = elemW > 0 ? elemW : 300;
         int ch = elemH > 0 ? elemH : 150;
-        if (entry.element->hasAttribute("width")) {
-            try { cw = std::stoi(entry.element->getAttribute("width")); } catch (...) {}
+        if (el->hasAttribute("width")) {
+            try { cw = std::stoi(el->getAttribute("width")); } catch (...) {}
         }
-        if (entry.element->hasAttribute("height")) {
-            try { ch = std::stoi(entry.element->getAttribute("height")); } catch (...) {}
+        if (el->hasAttribute("height")) {
+            try { ch = std::stoi(el->getAttribute("height")); } catch (...) {}
         }
         if (cw > 0 && ch > 0 &&
             (cw != entry.context->canvasWidth() || ch != entry.context->canvasHeight())) {
@@ -72,8 +94,8 @@ void Engine::pumpWebGLContextEvents() {
     // Indexed: a listener may create another context, growing the vector.
     for (size_t i = 0; i < webglEntries_.size(); ++i) {
         webgl::WebGL2RenderingContext* ctx = webglEntries_[i].context.get();
-        dom::Element* canvas = webglEntries_[i].element;
-        if (!ctx) continue;
+        dom::Element* canvas = liveElementOf(webglEntries_[i]);
+        if (!ctx || !canvas) continue;
         switch (ctx->takeContextEvent()) {
             case webgl::WebGL2RenderingContext::ContextEvent::Lost: {
                 // Only a cancelled lost event lets the page restore the context.
@@ -423,19 +445,10 @@ void Engine::windowedFrame() {
         }
 #endif
 
-        auto isDetached = [](dom::Element* el) {
-            if (!el) return false;
-            auto* n = el;
-            while (n->parentNode()) n = static_cast<dom::Element*>(n->parentNode());
-            return n->tagName() != "html" && n->tagName() != "HTML";
-        };
 #if BRO_WITH_3D
         pruneDetachedSceneGraphs();
 #endif
-        webglEntries_.erase(
-            std::remove_if(webglEntries_.begin(), webglEntries_.end(),
-                [&](auto& e) { return isDetached(e.element); }),
-            webglEntries_.end());
+        pruneDeadWebGLContexts();
 
 #if BRO_WITH_3D
 #if BRO_WITH_PHYSICS

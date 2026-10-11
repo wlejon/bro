@@ -198,15 +198,7 @@ void Engine::flush() {
     pruneDetachedSceneGraphs();
 #endif  // BRO_WITH_3D
 
-    webglEntries_.erase(
-        std::remove_if(webglEntries_.begin(), webglEntries_.end(),
-            [](auto& entry) {
-                if (!entry.element) return false;
-                auto* n = entry.element;
-                while (n->parentNode()) n = static_cast<dom::Element*>(n->parentNode());
-                return n->tagName() != "html" && n->tagName() != "HTML";
-            }),
-        webglEntries_.end());
+    pruneDeadWebGLContexts();
 
     // As in a windowed frame, a canvas drawing a texture whose upload is not
     // in yet keeps what it showed rather than wait for the copy

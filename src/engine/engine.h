@@ -1029,6 +1029,11 @@ private:
     canvas::CanvasScene* canvasSceneById(uint64_t id) const;
 
     std::vector<WebGLEntry> webglEntries_;
+    // The entry's canvas while it is alive (in the document or not), else null.
+    dom::Element* liveElementOf(const WebGLEntry& entry) const;
+    // Drops the contexts whose canvas is gone. A canvas out of the document
+    // keeps its context, as in a browser: put back, it shows what it drew.
+    void pruneDeadWebGLContexts();
     void syncWebGLCanvasSizes();
     // Fires the webglcontextlost / webglcontextrestored events a context owes
     // its canvas (WEBGL_lose_context), a task after the call that caused them.

@@ -38,10 +38,15 @@ struct SelectionSnapshot {
     bromath::Color compColor{0.0f, 0.0f, 0.0f, 1.0f};
 };
 
-/// WebGL contexts (owned by engine, associated with canvas elements)
+/// WebGL contexts (owned by engine, associated with canvas elements). A
+/// context lives as long as its canvas does, in the document or out of it:
+/// `element` may dangle once the canvas is freed, so it is reached only
+/// through Engine::liveElementOf (document + elementId resolve it safely).
 struct WebGLEntry {
     std::unique_ptr<webgl::WebGL2RenderingContext> context;
     dom::Element* element = nullptr;  // non-owning
+    dom::Document* document = nullptr;
+    uint32_t elementId = 0;
 };
 
 #if BRO_WITH_3D

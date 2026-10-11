@@ -357,18 +357,10 @@ double Engine::drmTickWorld(double scaledFrameDtMs) {
     if (physicsWorld_) physicsWorld_->consumeStep();
 #endif
 
-    auto isDetached = [](dom::Element* el) {
-        if (!el) return false;
-        auto* n = el;
-        while (n->parentNode()) n = static_cast<dom::Element*>(n->parentNode());
-        return n->tagName() != "html" && n->tagName() != "HTML";
-    };
 #if BRO_WITH_3D
     pruneDetachedSceneGraphs();
 #endif
-    webglEntries_.erase(std::remove_if(webglEntries_.begin(), webglEntries_.end(),
-                                       [&](auto& e) { return isDetached(e.element); }),
-                        webglEntries_.end());
+    pruneDeadWebGLContexts();
 #if BRO_WITH_3D
     for (auto& sg : sceneGraphs_) sg.graph->syncPhysics();
 #endif
