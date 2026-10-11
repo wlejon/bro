@@ -960,6 +960,82 @@ bro.image.flipVerticalU8 = function(dst, src, params) {};
  */
 bro.image.rotate90U8 = function(dst, src, params) {};
 
+// ── Alignment: hold a subject still across frames ────────────────────────────
+//
+// How did the subject (or the scene) move between two frames? alignSimilarity
+// answers with a similarity, scale, rotation and translation, refined to a
+// fraction of a pixel from the pixels under a mask (coarse-to-fine
+// Gauss-Newton on luma, with a gain and bias for an exposure change and Huber
+// weights so a wing or a splash that changed does not pull it off). A coarse
+// search of whole-pixel shifts first lets a rough start converge. Aligning a
+// burst works frame to the frame before, each starting from the last step's
+// motion, and the steps compose: a whole burst from its first frame drifts
+// out of reach once the camera pans.
+//
+// It is CPU work over every masked pixel at every level: decode or resize to
+// a crop of a few hundred px around the subject first (an 800 px square takes
+// ~0.3-0.6 s, a 512 px one about a third of that), off the page's thread.
+//
+//   Canon R50 burst, scene around a bathing robin, 800 px crops of 1600 px:
+//   consecutive frames NCC 0.87-0.97, all converged, rotation under 0.15 deg.
+
+/**
+ * Estimate the similarity mapping `ref` onto `mov`: a reference pixel centre p
+ * lands in `mov` at c + scale * R(rotation) * (p - c) + (tx, ty), with c the
+ * image centre (width / 2, height / 2). Same-size images, colour compared as luma.
+ * @param {Uint8Array} ref
+ * @param {Uint8Array} mov
+ * @param {{width:number, height:number, channels?:number,
+ *          mask?:Uint8Array, init?:{scale?:number, rotation?:number, tx?:number, ty?:number},
+ *          levels?:number, search?:number, iterations?:number,
+ *          similarity?:boolean, photometric?:boolean,
+ *          refStride?:number, movStride?:number}} params
+ *   channels  1, 3 or 4 (default 4)
+ *   mask      width*height bytes, nonzero = use that reference pixel (default all)
+ *   init      the starting estimate (default identity); a previous result works
+ *   levels    pyramid levels below full size (default 4; stops at 24 px)
+ *   search    whole-pixel shift search radius at the coarsest level (default 4;
+ *             0 = none), so a start that is off by up to search * 2^levels px converges
+ *   similarity  false: translation only (default true)
+ *   photometric false: compare pixel values as they are (default true: fit gain, bias)
+ * @returns {{scale:number, rotation:number, tx:number, ty:number,
+ *            gain:number, bias:number, rms:number, ncc:number, coverage:number,
+ *            iterations:number, converged:boolean, matrix:number[]}}
+ *   rotation in radians (y down); gain/bias: mov * gain + bias ~ ref (luma 0..1);
+ *   rms the residual after alignment, ncc the correlation under the mask (-1..1),
+ *   coverage the share of the mask that landed inside `mov`; matrix the 2x3
+ *   [a, b, c, d, e, f] of the mapping (x' = a x + b y + c, y' = d x + e y + f).
+ *   A mask under 16 pixels returns `init` with converged false.
+ * @example
+ *   const r = bro.image.alignSimilarity(prevCrop, crop, { width: 512, height: 512, mask });
+ *   if (r.converged && r.ncc > 0.8) cx += r.tx, cy += r.ty;
+ */
+bro.image.alignSimilarity = function(ref, mov, params) {};
+
+/**
+ * The 2x3 matrix of a similarity about (cx, cy), in alignSimilarity's form.
+ * @param {{scale?:number, rotation?:number, tx?:number, ty?:number}} s
+ * @param {number} cx
+ * @param {number} cy
+ * @returns {number[]} [a, b, c, d, e, f]
+ */
+bro.image.similarityMatrix = function(s, cx, cy) {};
+
+/**
+ * Affine warp: each destination pixel centre (x + 0.5, y + 0.5) maps through
+ * `matrix` to a source position, sampled nearest, bilinear or bicubic
+ * (Catmull-Rom); outside the source it takes `fill` (default zeros). To show
+ * frame k with the subject where it was in the reference, warp frame k with
+ * the reference -> frame-k matrix. No prefilter: resize first for a strong
+ * reduction.
+ * @param {Uint8Array} dst
+ * @param {Uint8Array} src
+ * @param {{srcW:number, srcH:number, dstW:number, dstH:number, channels?:number,
+ *          matrix:number[], filter?:'nearest'|'bilinear'|'bicubic', fill?:number[],
+ *          srcStride?:number, dstStride?:number}} params
+ */
+bro.image.warpAffineU8 = function(dst, src, params) {};
+
 // ── Geometric, untyped names ─────────────────────────────────────────────────
 //
 // The same broimage kernels under the shorter names, with the same option keys
