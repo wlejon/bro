@@ -716,27 +716,42 @@ owl.dispose();
 // card, as plain JS in bro (src/bronze_host/js/vision_wildlife.js) over
 // loadOwlv2, bro.lm.loadClip and bro.image:
 //
-//   1. OWLv2 asks for the animals of the list (`QUERIES`: 'a bird',
-//      'a squirrel', ... 'a mink', then 'a snake', 'a turtle', 'a frog',
-//      'a toad', 'a lizard', 'a salamander'). No box over the threshold (0.15) is the
+//   1. OWLv2 asks for the animals of the lists (`QUERIES`, 28: 'a bird',
+//      'a squirrel', ... 'a mink'; 'a snake', 'a turtle', 'a frog', 'a toad',
+//      'a lizard', 'a salamander'; 'a dog', 'a cat'; 'an insect',
+//      'a dragonfly', 'a butterfly', 'a moth', 'a bee', 'a beetle',
+//      'a spider'). No box over the threshold (0.15) is the
 //      answer "no animal" (an empty feeder, a branch, the lawn). Clear animals
 //      score 0.3 and up; between 0.1 and 0.3 sit both real ones (half hidden,
 //      distant) and look-alikes; empty frames score under 0.1.
-//   2. The best box, padded 15% a side and made square (subjectSquare), is
-//      cropped and classified zero-shot by BioCLIP 2 (imageomics/bioclip-2;
-//      or BioCLIP) over a species list: one prompt per species in the
-//      BioCLIP recipe ("a photo of <kingdom ... species> with common name
-//      <common>."), embedded once and cached on disk; the image's label is
-//      the prompt its embedding sits closest to. `score` is the softmax at
-//      the model's temperature (100) over the whole list, `similarity` the
-//      cosine.
+//   2. Every box after NMS, best first up to `maxClassify` (8), padded 15% a
+//      side and made square (subjectSquare), is cropped and classified
+//      zero-shot by BioCLIP 2 (imageomics/bioclip-2; or BioCLIP) over a
+//      species list: one prompt per species in the BioCLIP recipe ("a photo
+//      of <kingdom ... species> with common name <common>."), embedded once
+//      and cached on disk; a crop's label is the prompt its embedding sits
+//      closest to. `score` is the softmax at the model's temperature (100)
+//      over the candidates, `similarity` the cosine. A genus, family, order
+//      or class scores the sum of its species' probabilities (taxaScores).
+//      The candidates are every species (`candidates: 'all'`, the default),
+//      or with 'byQuery' the species of the classes that fit the box's query
+//      (queryClasses: 'a bird' Aves, the mammals, 'a dog' and 'a cat'
+//      Mammalia, the reptiles Squamata/Testudines/Reptilia, the amphibians
+//      Amphibia, the insects Insecta, 'a spider' Arachnida) so a long
+//      insect list does not thin a bird's softmax; when the best species
+//      there is under labelThreshold and the best over every species is at
+//      least that and of another class, that one is the answer.
+//      encodeImage takes one image, so crops are encoded one by one.
 //   3. Sharpness (bro.image.sharpness) of the subject and of the frame, and
-//      groupBursts: shots under 1.0 s apart are a burst, its species the
-//      score-weighted vote of every frame's top 5, its keeper the frame with
-//      the sharpest subject (Tenengrad).
-//   4. label(): the name to show, only at 0.85 or more (`labelThreshold`):
-//      a burst's consensus share, else the photo's top-1 score. Under it the
-//      animal is "found, not identified"; the records keep every score.
+//      groupBursts: shots under 1.0 s apart are a burst, its keeper the frame
+//      with the sharpest subject (Tenengrad); per taxon, every animal
+//      frame's score (the best of its crops) and their mean (`share`).
+//   4. labels(): the names to show, only at 0.85 or more (`labelThreshold`),
+//      each at the narrowest rank that clears it (species, else genus,
+//      family, order, class; "Darners (Aeshnidae)" via formatLabel), every
+//      animal of a photo or burst, with its boxes. A crop that clears no
+//      rank is "found, not identified"; the records keep every score, so
+//      the threshold can change without re-analysis.
 //
 // The input image is the DETECTION image: decode the photo to 1280 on the
 // long side (bro.image.decodeScaled, a scaled JPEG decode, ~10x cheaper than
@@ -751,19 +766,28 @@ owl.dispose();
 // (the open_clip releases converted by brolm's scripts/convert-openclip.py:
 // model.safetensors, config.json, vocab.json, merges.txt), and the species
 // lists (`SPECIES_LISTS`), merged: `species/upper-midwest.json` (birds and
-// 15 yard mammals, eBird names) and `species/upper-midwest-herps/species.json`
-// (78 reptiles and amphibians from GBIF, CC BY 4.0). bro.models finds
+// 15 yard mammals, eBird names), `species/upper-midwest-herps/species.json`
+// (78 reptiles and amphibians from GBIF, CC BY 4.0),
+// `species/upper-midwest-arthropods/species.json` (insects and spiders) and
+// `species/pets/species.json` (dogs and cats). bro.models finds
 // directories, so each list is found through its folder; fetching `species`
-// brings both, and `species/upper-midwest-herps` alone adds the herps to an
-// older species folder. A list is `{ species: [{ common, scientific,
-// kingdom?, phylum?, class, order, family }, ...] }` or the bare array.
+// brings them all, and each list folder of its own alone adds that list to
+// an older species folder. A list is `{ species: [{ common, scientific,
+// kingdom?, phylum?, class, order, family }, ...], taxa?: { "<scientific
+// name of a genus, family, order or class>": { rank: 'genus' | 'family' |
+// 'order' | 'class', common?: 'Darners' } } }` or the bare array. A
+// species' genus is the first word of its scientific name; a row without
+// a rank adds nothing at that rank. `taxa` only names labels (readTaxa,
+// first list wins): records hold scientific names, so a changed common
+// name needs no re-analysis and is not in config's hash.
 //
 // Realms: the same module is in the main realm and every Worker. bro.models
 // is main-realm only, so in a Worker every path must be given (open/locate
 // throw saying so); find them in the page and post them over.
 //
-// The behaviour is pinned to broworkshop's ai/birds batch (its RECORDS.md):
-// a change to any constant here changes its records.
+// broworkshop's ai/birds batch runs on this module and its record format
+// is RECORDS.md there: a change to a record (any constant here, a field)
+// goes together with that file.
 
 /**
  * bro.vision.wildlife.available(opts?) — can open() work: loadOwlv2 and
@@ -780,7 +804,8 @@ if (!bro.vision.wildlife.available()) hideIdentifyButton();
  * list is given, a default list whose bro.models folder is not found).
  * `fetch`: the bro.models.fetch names that would install what is missing of
  * the defaults ('owlv2', the model, 'species' when there is no species
- * folder, else 'species/upper-midwest-herps' when only that is missing);
+ * folder, else each list folder of its own that is missing, e.g.
+ * ['species/upper-midwest-arthropods', 'species/pets']);
  * empty when fetching would not help (a folder found without its files).
  * Throws in a Worker unless detector, classifier and species are all given.
  * @returns {{ detector: string|null, classifier: string|null,
@@ -803,11 +828,17 @@ for (const name of where.fetch) await bro.models.fetch(name);
  * @param {string} [opts.detector]    OWLv2 dir; default bro.models.find('owlv2')
  * @param {string} [opts.classifier]  BioCLIP dir; default bro.models.find(model)
  * @param {string|Array<string|Object>} [opts.species]  a list file, or an
- *   array of list files and rows, merged in order (a scientific name seen
- *   before, ignoring case, is left out); default SPECIES_LISTS:
- *   bro.models.find('species') + '/upper-midwest.json' and
- *   bro.models.find('species/upper-midwest-herps') + '/species.json'
- * @param {number} [opts.labelThreshold=0.85]  the analyzer's label()
+ *   array of list files, rows and { species, taxa } documents, merged in
+ *   order (a scientific name seen before, ignoring case, is left out);
+ *   default SPECIES_LISTS: bro.models.find('species') +
+ *   '/upper-midwest.json', then '/species.json' in
+ *   species/upper-midwest-herps, species/upper-midwest-arthropods and
+ *   species/pets
+ * @param {number} [opts.labelThreshold=0.85]  the analyzer's label() /
+ *   labels(), and byQuery's fallback threshold
+ * @param {number} [opts.maxClassify=8]   boxes classified a photo, best first
+ * @param {'all'|'byQuery'} [opts.candidates='all']  what a crop's softmax is
+ *   over: every species, or the classes of its box's query (see above)
  * @param {string} [opts.model='bioclip-2']  'bioclip-2' | 'bioclip': which
  *   classifier to find, and its name in `config`
  * @param {number} [opts.threshold=0.15]  OWLv2 score threshold
@@ -821,10 +852,11 @@ for (const name of where.fetch) await bro.models.fetch(name);
  * @param {Object} [opts.clipConfig]      loadClip's architecture overrides
  * @param {(done:number, total:number)=>void} [opts.onProgress]  list embedding
  * @returns {WildlifeAnalyzer}
- *   props: `config` (below), `species` (the merged rows), `prompts`, `cached`
- *   (the embeddings came from cacheDir), `dim`, `imageSize` (224), `device`,
- *   `paths` ({ detector, classifier, species: the list files }),
- *   `labelThreshold`, and label(record, burst) at it
+ *   props: `config` (below), `species` (the merged rows), `taxa` (the
+ *   merged taxa map), `prompts`, `cached` (the embeddings came from
+ *   cacheDir), `dim`, `imageSize` (224), `device`, `paths` ({ detector,
+ *   classifier, species: the list files }), `labelThreshold`, and
+ *   label(record, burst) / labels(record, burst) at it with its taxa names
  */
 const wild = bro.vision.wildlife.open({ model: 'bioclip-2' });
 
@@ -832,12 +864,15 @@ const wild = bro.vision.wildlife.open({ model: 'bioclip-2' });
  * WildlifeAnalyzer.config / bro.vision.wildlife.config(opts?) — every setting
  * a result depends on, in a fixed key order, so `JSON.stringify(config)`
  * hashes a run: { detector: { name, repo, revision, weightsBytes },
- * classifier: { ... }, threshold, queries, topK, margin, speciesList:
- * { files, count, hash } }. `revision` is read from the model dir's
- * ATTRIBUTION.md; `files` the list files by name ('upper-midwest.json',
- * 'upper-midwest-herps/species.json'), `count` the merged rows, `hash` an
- * FNV-1a of every prompt, so an edited list is another config.
- * labelThreshold is not in it: it changes what is shown, not a record.
+ * classifier: { ... }, threshold, queries, topK, margin, maxClassify,
+ * candidates: { mode: 'all' } | { mode: 'byQuery', fallback },
+ * speciesList: { files, count, hash } }. `revision` is read from the model
+ * dir's ATTRIBUTION.md; `files` the list files by name ('upper-midwest.json',
+ * 'upper-midwest-herps/species.json', ...), `count` the merged rows, `hash` an
+ * FNV-1a of every prompt, so an edited list is another config (the taxa
+ * maps' names are not in it).
+ * labelThreshold is not in it (except as byQuery's fallback): it changes
+ * what is shown, not a record.
  * The static form reads files only, never weights: a batch decides what to
  * re-run before it pays for a load.
  */
@@ -852,15 +887,31 @@ const runKey = JSON.stringify(wild.config);
  *   results are scaled to it (default: the image's own size)
  * @param {number} [opts.threshold]  this call only
  * @param {number} [opts.topK]       this call only
+ * @param {number} [opts.maxClassify]  this call only
+ * @param {'all'|'byQuery'} [opts.candidates]  this call only
  * @returns {{ animal: boolean,
  *             detections: Array<{ label: string, score: number, box: number[] }>,
  *             subject: { x, y, w, h } | null,
  *             species: Array<{ common, scientific, family, order, class,
  *                              score: number, similarity: number }>,
+ *             animals: Array<{ box: number[], score: number, label: string,
+ *                              subject: { x, y, w, h },
+ *                              species: (as `species`),
+ *                              taxa: { genus, family, order, class:
+ *                                Array<{ scientific, score, family?, order?, class? }> },
+ *                              candidates: 'all'|'query'|'fallback' }>,
+ *             animalsDropped: number,
  *             timing: { detect: number, classify: number|null } }}
  *   detections best first (NMS 0.3, at most 20), boxes [x, y, w, h] to 0.1 px
- *   and scores to 4 places; `subject` the classifier's square; `species`
- *   empty when there is no animal. timing in ms.
+ *   and scores to 4 places. `animals`: every non-empty detection, best
+ *   first, up to maxClassify, each with its subject square, species top K
+ *   and the top 3 genera, families, orders and classes (a taxon's score the
+ *   sum over its species, with its lineage above it); `candidates` what its
+ *   softmax was over ('query': its query's classes, 'fallback': every
+ *   species after a sure answer of another class). `animalsDropped`: the
+ *   boxes over the threshold not classified (show "+3 more"). `subject` and
+ *   `species` are the first animal's (the best box), as before animals;
+ *   both empty when there is no animal. timing in ms (classify: every crop).
  */
 const img = bro.image.decodeScaled(path, { width: 1280, height: 1280 });
 const rec = wild.analyze(img, { source: { width: img.sourceWidth, height: img.sourceHeight } });
@@ -907,41 +958,104 @@ const subjectSharp = bro.vision.wildlife.sharpness(big, { box: rec.detections[0]
  *   bro.image.alignSimilarity)
  * @returns {Array<{ id, first, start, durationS, count, animalCount,
  *                   species: { common, scientific, share, agree } | null,
+ *                   taxa: Array<{ rank, scientific, common?, genus?, family?,
+ *                                 order?, class?, share, scores: number[] }>,
  *                   keeper, keeperSharpness, startedBy: 'gap'|'scene',
  *                   maxGapS, minNcc, photos: string[] }>}
- *   `species`: the score-weighted vote over every animal frame's top K;
- *   `share` its mean score, `agree` the frames naming it first. `keeper`: the
- *   sharpest subject among the animal frames, else the sharpest frame.
+ *   `species`: the score-weighted vote over every animal frame's top K (of
+ *   its best box); `share` its mean score, `agree` the frames naming it
+ *   first. `taxa`: every species and higher taxon any animal frame scored
+ *   (its top K and top 3 a rank, over all its crops), with each frame's
+ *   score for it (the best of its crops; best first, frames without it
+ *   left out) and `share`, their sum over animalCount; labels() applies the
+ *   threshold to them, so it can change after grouping. Records from before
+ *   `animals` count their top K as one crop. `keeper`: the sharpest subject
+ *   among the animal frames, else the sharpest frame.
  */
 const time = bro.vision.wildlife.parseExifTime(bro.image.readExif(path).dateTaken);  // ms | null
 const bursts = bro.vision.wildlife.groupBursts(records, { gapS: 1.0 });
 
 /**
- * bro.vision.wildlife.label(record, burst?, opts?) — the species name to show
- * for a photo, or null. The ONE place the label threshold applies: a photo
- * in a burst with an animal consensus (`burst.species`; a single shot is a
- * burst of one, whose share is its top-1 score) is named by that consensus
- * when its `share` is at least `labelThreshold`; a photo without a burst
- * (or whose burst has none) by its own top-1 when that `score` is. Under
- * the threshold, or with no animal, null: show the animal as found but not
- * identified (record.animal || burst.species), and the top 5 as a guess at
- * most. `label(null, burst)` labels a burst.
+ * bro.vision.wildlife.labels(record, burst?, opts?) — every name to show for
+ * a photo (or a burst), best first; [] for none. The ONE place the label
+ * threshold applies.
+ *
+ * A crop (an entry of record.animals) is named at the narrowest rank whose
+ * best score is at least `labelThreshold`: its top species, else its top
+ * genus, family, order, class; none, and it adds nothing (found, not
+ * identified). A photo's crops of one taxon are one label (the best score,
+ * every box); a label with a narrower label of the answer inside it (by
+ * lineage: a species' genus, family, order and class) is left out, its
+ * boxes joining that one when it is the only one.
+ *
+ * A photo in a burst whose labels are not empty shows the BURST's labels
+ * (from 'burst'): every taxon in burst.taxa that one frame scores at least
+ * the threshold, or whose share is, narrowest kept as above; `score` its
+ * best frame's, `share` the consensus, `frames` the frames scoring it at
+ * the threshold; each with `boxes` the boxes of THIS photo's crops whose own
+ * best guess at that rank is it ([] when the frame does not show it). So an
+ * egret in 2 of 3 frames and a mallard in 1 are both on every frame, and a
+ * frame that alone reaches only "Ardea" shows the heron its burst is sure
+ * of. A burst with no labels, or no burst: the photo's own (from 'photo').
+ * `labels(null, burst)` is the burst's own (no boxes).
+ *
+ * Records from before `animals` are one crop of their top K (genus and up
+ * summed over it) on the best box; bursts from before `taxa` label their
+ * `species` consensus at its share.
  * @param {Object|null} record  analyze()'s record (or a records.jsonl line)
  * @param {Object|null} [burst] groupBursts' burst holding it
- * @param {{labelThreshold?: number}} [opts]  default DEFAULTS.labelThreshold (0.85)
- * @returns {{ common, scientific, score: number, from: 'burst'|'photo' } | null}
+ * @param {{ labelThreshold?: number, taxa?: Object }} [opts]  threshold
+ *   default DEFAULTS.labelThreshold (0.85); `taxa` the merged taxa map
+ *   (readTaxa / the analyzer's `taxa`) naming genera and up
+ * @returns {Array<{ common: string, scientific: string,
+ *                   rank: 'species'|'genus'|'family'|'order'|'class',
+ *                   score: number, from: 'burst'|'photo',
+ *                   boxes: number[][], frames?: number, share?: number }>}
+ *   `common`: a species' common name; above species the taxa map's, else
+ *   the scientific name. frames and share on burst labels only.
  */
-const named = bro.vision.wildlife.label(rec, bursts.find((b) => b.photos.includes(rec.path)));
-tile.tag = named ? `${named.common} ${Math.round(named.score * 100)}%` : (rec.animal ? 'Unidentified' : '');
+const names = bro.vision.wildlife.labels(rec, bursts.find((b) => b.photos.includes(rec.path)), { taxa: wild.taxa });
+tile.tag = names.length ? names.map(bro.vision.wildlife.formatLabel).join(', ')
+    : (rec.animal ? 'Unidentified' : '');
+for (const n of names) for (const box of n.boxes) drawBox(box, n.common);
+
+/**
+ * bro.vision.wildlife.label(record, burst?, opts?) — labels()[0] or null:
+ * the one name of a photo, same shape.
+ */
+const named = bro.vision.wildlife.label(rec, burst);
+
+/**
+ * bro.vision.wildlife.formatLabel(label) — the text of a label: a species'
+ * common name; above species "Darners (Aeshnidae)", or the scientific name
+ * alone when the taxa map has no common name for it.
+ */
+
+/**
+ * bro.vision.wildlife.classifyCrop(rows, sims, opts?) — one crop's ranking
+ * from its cosine similarity to each row's prompt, as analyze() does it
+ * (pure; a similarity of log(p) / 100 is a probability p). opts { topK (5),
+ * top (3), query, candidates: 'all' | 'byQuery', fallback (0.85) } ->
+ * { species: top K (unrounded), taxa: taxaScores, candidates: 'all' |
+ * 'query' | 'fallback' }.
+ *
+ * bro.vision.wildlife.taxaScores(rows, probs, { top }) — per genus, family,
+ * order and class the sum of probs over its rows, best first (top 3, or
+ * top: 0 for all): { genus: [{ scientific, score, family?, order?, class? }],
+ * family, order, class }. queryClasses(query) — byQuery's classes, or null.
+ * lineage(row) — { genus, family?, order?, class? }.
+ */
 
 // Also: subjectSquare(box, w, h, { margin }) (each side clamped to the frame,
 // so a subject bigger than the short side gets a clipped, non-square rect),
 // cropImage(image, rect) -> RGBA,
 // squareInput(image, size), speciesPrompt(row), readSpeciesList(path),
-// readSpecies(lists) (files and rows merged, as open() does),
-// keeperScore(record, metric), and the constants QUERIES, SPECIES_LISTS
-// ([{ folder, file }]) and DEFAULTS ({ model, threshold, topK, margin, nms,
-// maxDetections, gapS, labelThreshold }).
+// readSpecies(lists) (files, rows and documents merged, as open() does),
+// readTaxa(lists) (their taxa maps merged, the first of a name kept),
+// keeperScore(record, metric), and the constants QUERIES, QUERY_CLASSES,
+// RANKS, SPECIES_LISTS ([{ folder, file }]) and DEFAULTS ({ model,
+// threshold, topK, margin, nms, maxDetections, gapS, labelThreshold,
+// maxClassify, candidates, taxaTop }).
 
 
 // ═════════════════════════════════════════════════════════════════════════════

@@ -11,10 +11,19 @@ const os = require('os');
 const path = require('path');
 
 // skipTest() does not stop the script, so the checks run only without a reason to skip.
+// The default lists found: a machine without some of them (a list newer than its
+// species folder) runs on the ones it has, and says so.
 const wl = bro.vision && bro.vision.available !== false ? bro.vision.wildlife : null;
+const loc = wl ? wl.locate() : null;
+const foundLists = loc && Array.isArray(loc.species) ? loc.species.filter((s) => typeof s === 'string') : [];
+const allLists = !!loc && foundLists.length === wl.SPECIES_LISTS.length;
+const listOpts = allLists ? {} : { species: foundLists };
 const skipWhy = !wl ? 'bro.vision is the stub'
-    : !wl.available() ? 'wildlife models not found: missing ' + wl.locate().missing.join(', ')
+    : loc.missing.includes('detector') || loc.missing.includes('classifier') || !foundLists.length
+        ? 'wildlife models not found: missing ' + loc.missing.join(', ')
+    : !wl.available(listOpts) ? 'wildlife models not available'
     : !bro.gpu || !bro.gpu.available ? 'no GPU backend' : null;
+if (!skipWhy && !allLists) console.log('(default species lists not all found: running on ' + foundLists.length + ')');
 
 const same = (a, b, what) => assert(JSON.stringify(a) === JSON.stringify(b),
     what + ': ' + JSON.stringify(a) + ' vs ' + JSON.stringify(b));
@@ -34,19 +43,29 @@ function frame(blob) {
 
 function run() {
     const cacheDir = path.join(os.tmpdir(), `bro-wildlife-cache-${process.pid}-${Date.now()}`);
-    const an = wl.open({ cacheDir });
+    const an = wl.open(Object.assign({ cacheDir }, listOpts));
     assert(typeof an.device === 'string', 'device: ' + an.device);
-    same([an.config.detector.repo, an.config.classifier.repo, an.config.threshold],
-         ['google/owlv2-base-patch16-ensemble', 'imageomics/bioclip-2', 0.15], 'config');
-    same(an.config, wl.config(), 'open().config is config()');
+    same([an.config.detector.repo, an.config.classifier.repo, an.config.threshold, an.config.maxClassify, an.config.candidates],
+         ['google/owlv2-base-patch16-ensemble', 'imageomics/bioclip-2', 0.15, 8, { mode: 'all' }], 'config');
+    same(an.config, wl.config(listOpts), 'open().config is config()');
     assert(an.config.speciesList.count === an.species.length && an.species.length > 100, 'the species list');
-    // The default lists, merged: the birds and mammals, then the reptiles and amphibians.
-    same(an.config.speciesList.files, ['upper-midwest.json', 'upper-midwest-herps/species.json'], 'both default lists');
-    same(an.paths.species.length, 2, 'their files');
-    assert(an.species.some((s) => s.class === 'Aves') && an.species.some((s) => s.class === 'Amphibia') &&
-           an.species.some((s) => s.scientific === 'Thamnophis sirtalis'), 'birds, amphibians and the garter snake');
+    // The default lists, merged: the birds and mammals, then the reptiles and
+    // amphibians, the arthropods and the pets (those found).
+    const names = ['upper-midwest.json', 'upper-midwest-herps/species.json', 'upper-midwest-arthropods/species.json', 'pets/species.json'];
+    same(an.config.speciesList.files, loc.species.map((s, i) => s && names[i]).filter(Boolean), 'the default lists found');
+    same(an.paths.species.length, foundLists.length, 'their files');
+    assert(an.species.some((s) => s.class === 'Aves'), 'birds');
+    if (loc.species[1]) {
+        assert(an.species.some((s) => s.class === 'Amphibia') && an.species.some((s) => s.scientific === 'Thamnophis sirtalis'),
+               'amphibians and the garter snake');
+    }
+    if (loc.species[2]) assert(an.species.some((s) => s.class === 'Insecta'), 'insects');
     same(new Set(an.species.map((s) => s.scientific.toLowerCase())).size, an.species.length, 'no species twice');
+    assert(typeof an.taxa === 'object' && an.taxa !== null, 'the merged taxa map');
     assert(an.config.queries.includes('a snake') && an.config.queries.includes('a salamander'), 'the herp queries');
+    for (const q of ['a dog', 'a cat', 'an insect', 'a dragonfly', 'a butterfly', 'a moth', 'a bee', 'a beetle', 'a spider']) {
+        assert(an.config.queries.includes(q), 'the query ' + q);
+    }
     assert(an.labelThreshold === 0.85 && an.label({ animal: true, species: [{ common: 'X', scientific: 'x', score: 0.9 }] }).common === 'X',
            'the analyzer labels at 0.85');
     assert(an.cached === false, 'first open embeds the list');
@@ -70,6 +89,29 @@ function run() {
     assert(a.species.length === 5 && a.species.every((x) => x.common && x.scientific && x.score >= 0 && x.score <= 1), 'top 5');
     for (let i = 1; i < 5; i++) assert(a.species[i - 1].similarity >= a.species[i].similarity, 'ranked by similarity');
     assert(typeof a.timing.detect === 'number' && typeof a.timing.classify === 'number', 'timing');
+    // Every detection up to maxClassify is classified; the best one is the record's subject and species.
+    // (An empty box, one a pixel row thin at threshold 0, is no animal.)
+    const boxed = a.detections.filter((d) => d.box[2] > 0 && d.box[3] > 0);
+    same([a.animals.length, a.animalsDropped], [Math.min(8, boxed.length), Math.max(0, boxed.length - 8)],
+         'animals: up to 8, the rest counted');
+    same([a.animals[0].box, a.animals[0].subject, a.animals[0].species], [boxed[0].box, a.subject, a.species],
+         'the first animal is the best box');
+    for (let i = 0; i < a.animals.length; i++) {
+        const x = a.animals[i];
+        same([x.box, x.label, x.score], [boxed[i].box, boxed[i].label, boxed[i].score], 'animal ' + i + ' is its box');
+        assert(x.species.length === 5 && x.candidates === 'all', 'its top 5');
+        assert(wl.RANKS.slice(1).every((r) => Array.isArray(x.taxa[r]) && x.taxa[r].length <= 3), 'its taxa');
+        assert(x.taxa.class.length >= 1 && x.taxa.class[0].score >= x.species[0].score - 1e-4, 'a class scores at least its best species');
+    }
+    const few = an.analyze(frame(true), { source: src, threshold: 0, maxClassify: 2 });
+    same([few.animals.length, few.animalsDropped], [2, boxed.length - 2], 'maxClassify');
+    const bq = an.analyze(frame(true), { source: src, threshold: 0, maxClassify: 2, candidates: 'byQuery' });
+    assert(bq.animals.every((x) => x.candidates === 'query' || x.candidates === 'fallback' || x.candidates === 'all'), 'byQuery per call');
+    for (const x of bq.animals) {
+        const cls = wl.queryClasses(x.label);
+        if (x.candidates === 'query') assert(x.species.every((s) => cls.includes(s.class)), 'byQuery ranks the query\'s classes: ' + x.label);
+    }
+    assert(Array.isArray(an.labels(a)), 'analyzer labels()');
 
     // Deterministic: the same image, the same record.
     const b = an.analyze(frame(true), { source: src, threshold: 0 });
@@ -88,7 +130,7 @@ function run() {
     assert(top.length === 3, 'classify topK');
 
     // The text embeddings come back from the cache unchanged.
-    const again = wl.open({ cacheDir });
+    const again = wl.open(Object.assign({ cacheDir }, listOpts));
     assert(again.cached === true, 'second open reads the cache');
     const c = again.analyze(frame(true), { source: src, threshold: 0 });
     delete c.timing;

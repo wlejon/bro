@@ -14,7 +14,13 @@ self.onmessage = (e) => {
         r.count = wl.config({ detector: m.empty, classifier: m.empty, species: m.list }).speciesList.count;
         r.merged = wl.config({ detector: m.empty, classifier: m.empty, species: [m.list, m.list2] }).speciesList.count;
         const lbl = (t) => { const l = wl.label(null, r.bursts[0], { labelThreshold: t }); return l && l.common; };
-        r.labels = [lbl(0.65), lbl(0.85)];
+        r.labels = [lbl(0.65), lbl(0.85), lbl(0.95)];
+        // Animals, ranks and per-taxon bursts.
+        r.bBursts = wl.groupBursts(m.bRecs, { gapS: 1 });
+        const opts = { taxa: m.taxa };
+        r.bLabels = m.bRecs.map((rec) => wl.labels(rec, r.bBursts.find((b) => b.photos.includes(rec.path)), opts));
+        r.bAlone = m.bRecs.map((rec) => wl.labels(rec, null, opts));
+        r.crop = wl.classifyCrop(m.rows, m.cfSims, { candidates: 'byQuery', query: 'a moth' });
     } catch (err) {
         r.ok = false;
         r.error = String((err && err.message) || err);
