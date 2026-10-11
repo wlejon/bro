@@ -48,9 +48,20 @@
     // Clear animals score 0.3 and up; real ones half hidden and look-alikes
     // share 0.1-0.3; empty frames score under 0.1. A score under
     // labelThreshold is not shown as a name (labels()).
+    // A name also needs a box the detector is sure enough of (labels(), the
+    // box rule): a box other than the photo's best names nothing under
+    // minBoxScore; a family, order or class needs a box at broadMinBoxScore;
+    // a burst name only one frame reaches (under the consensus share) needs
+    // that frame's box at burstMinBoxScore; with queryMatch an order or class
+    // outside its box's query's classes ("a bird" box, a mammal order) is not
+    // named; with consensus, two frames or more naming one taxon on weaker
+    // boxes than their best are a burst name when their share reaches the
+    // threshold. Most of the order and class names weak boxes gave were wrong.
     const DEFAULTS = { model: 'bioclip-2', threshold: 0.15, topK: 5, margin: 0.15,
                        nms: 0.3, maxDetections: 20, gapS: 1.0, labelThreshold: 0.85,
-                       maxClassify: 8, candidates: 'all', taxaTop: 3 };
+                       maxClassify: 8, candidates: 'all', taxaTop: 3,
+                       minBoxScore: 0.3, broadMinBoxScore: 0.3, burstMinBoxScore: 0.4,
+                       queryMatch: true, consensus: true };
     const MODEL_REPO = { 'bioclip': 'imageomics/bioclip', 'bioclip-2': 'imageomics/bioclip-2',
                          'owlv2': 'google/owlv2-base-patch16-ensemble' };
     // The default species lists, merged: a file in a bro.models folder each.
@@ -62,6 +73,7 @@
         { folder: 'species/upper-midwest-arthropods', file: 'species.json' },
         { folder: 'species/pets', file: 'species.json' },
     ];
+    const LABEL_BOX_KEYS = ['minBoxScore', 'broadMinBoxScore', 'burstMinBoxScore', 'queryMatch', 'consensus'];
     // The ranks a label can be at, narrowest first.
     const RANKS = ['species', 'genus', 'family', 'order', 'class'];
     const IMAGE_SIZE = 224;
@@ -344,14 +356,54 @@
 
     // A record's crops: its `animals`, or for a record from before them, its
     // top K as the one crop (taxa summed over the top K), on the best box.
+    // Each with `primary` (the photo's best box) and its detector `score`
+    // and query `label` when the record has them.
     function cropsOf(rec) {
         if (!rec || rec.error || !rec.animal) return [];
-        if (Array.isArray(rec.animals)) return rec.animals.filter((a) => a && a.species && a.species.length);
+        if (Array.isArray(rec.animals)) {
+            return rec.animals.map((a, i) => (a && a.species && a.species.length
+                ? Object.assign({}, a, { primary: i === 0 }) : null)).filter(Boolean);
+        }
         if (!rec.species || !rec.species.length) return [];
         const d = rec.detections && rec.detections[0];
-        return [{ box: d ? d.box : null, species: rec.species,
+        return [{ box: d ? d.box : null, score: d ? d.score : undefined, label: d ? d.label : undefined,
+                  primary: true, species: rec.species,
                   taxa: wl.taxaScores(rec.species, rec.species.map((s) => s.score), { top: 0 }) }];
     }
+
+    // ── which boxes may name what ────────────────────────────────────────
+
+    // The box rule of labels(): opts over DEFAULTS.
+    function boxRule(o) {
+        const pick = (k) => (o[k] != null ? o[k] : DEFAULTS[k]);
+        return { minBox: pick('minBoxScore'), broadMin: pick('broadMinBoxScore'),
+                 burstMin: pick('burstMinBoxScore'), queryMatch: !!pick('queryMatch'),
+                 consensus: !!pick('consensus') };
+    }
+
+    // Is the taxon `e` (at `rank`, with its lineage) in one of a query's classes?
+    // A query without classes, or a box without a query, matches anything.
+    function queryMatches(query, rank, e) {
+        const classes = query ? QUERY_CLASSES[query] : null;
+        if (!classes) return true;
+        if (classes.includes(e.scientific)) return true;
+        const lin = e.lineage || lineageOf(e, rank);
+        return RANKS.some((r) => lin[r] && classes.includes(lin[r]));
+    }
+
+    // May a box (detector score `box`, missing = sure; `primary`: the photo's
+    // best; `match`: its query matches the taxon) name a taxon at `rank`?
+    function boxMayName(rule, rank, box, primary, match) {
+        const s = box == null ? 1 : box;
+        if (!primary && s < rule.minBox) return false;
+        if (rankIx(rank) >= rankIx('family') && s < rule.broadMin) return false;
+        if (rule.queryMatch && rankIx(rank) >= rankIx('order') && !match) return false;
+        return true;
+    }
+    // The rule for a burst consensus: any box of a frame, not only its best, may name it.
+    const looseRule = (rule) => Object.assign({}, rule, { minBox: 0 });
+    const cropMayName = (rule, crop, rank, e) =>
+        boxMayName(rule, rank, crop.score, crop.primary, queryMatches(crop.label, rank, e));
 
     // Every scored taxon of a crop, by rank: [{ rank, scientific, common?, score, lineage }].
     function cropEntries(crop) {
@@ -377,13 +429,13 @@
     }
 
     /**
-     * A crop's label: the narrowest rank whose best score is at least `t`,
-     * or null (found, not identified).
+     * A crop's label: the narrowest rank whose best score is at least `t`
+     * and which its box may name (boxMayName), or null (found, not identified).
      */
-    function cropLabel(crop, t) {
+    function cropLabel(crop, t, rule) {
         for (const r of RANKS) {
             const e = cropTop(crop, r);
-            if (e && e.score >= t) {
+            if (e && e.score >= t && cropMayName(rule, crop, r, e)) {
                 return { rank: r, scientific: e.scientific, common: r === 'species' ? e.common : undefined,
                          score: e.score, lineage: lineageOf(e, r) };
             }
@@ -435,10 +487,10 @@
             (a.scientific < b.scientific ? -1 : 1));
     }
 
-    function photoLabels(rec, t) {
+    function photoLabels(rec, t, rule) {
         const groups = new Map();
         for (const crop of cropsOf(rec)) {
-            const l = cropLabel(crop, t);
+            const l = cropLabel(crop, t, rule);
             if (!l) continue;
             const k = l.rank + '|' + l.scientific;
             const g = groups.get(k);
@@ -451,7 +503,34 @@
         return dropBroader(Array.from(groups.values()));
     }
 
-    function burstLabels(burst, t) {
+    // A taxon's evidence in one burst frame: its crops as flat
+    // [score, boxScore, flags] triples (flags: 1 the photo's best box, 2 the
+    // box's query matches the taxon), a crop another beats on all three left out.
+    const EV_PRIMARY = 1, EV_MATCH = 2;
+    function addEvidence(list, score, box, flags) {
+        const dominates = (s1, b1, f1, s2, b2, f2) => s1 >= s2 && b1 >= b2 && (f1 & f2) === f2;
+        for (let i = 0; i < list.length; i += 3) {
+            if (dominates(list[i], list[i + 1], list[i + 2], score, box, flags)) return;
+        }
+        for (let i = list.length - 3; i >= 0; i -= 3) {
+            if (dominates(score, box, flags, list[i], list[i + 1], list[i + 2])) list.splice(i, 3);
+        }
+        list.push(score, box, flags);
+    }
+
+    // One frame's score for a taxon under the box rule, and the best box
+    // among the crops that reach `t`.
+    function frameScore(rule, rank, ev, t) {
+        let score = 0, box = -1;
+        for (let i = 0; i < ev.length; i += 3) {
+            if (!boxMayName(rule, rank, ev[i + 1], (ev[i + 2] & EV_PRIMARY) !== 0, (ev[i + 2] & EV_MATCH) !== 0)) continue;
+            if (ev[i] > score) score = ev[i];
+            if (ev[i] >= t && ev[i + 1] > box) box = ev[i + 1];
+        }
+        return { score, box };
+    }
+
+    function burstLabels(burst, t, rule) {
         if (!Array.isArray(burst.taxa)) {
             // A burst from before per-taxon consensus: its one species.
             const s = burst.species;
@@ -460,24 +539,49 @@
         }
         const out = [];
         for (const T of burst.taxa) {
-            const frames = (T.scores || []).filter((s) => s >= t).length;
-            if (!(T.share >= t) && !frames) continue;
-            out.push({ rank: T.rank, scientific: T.scientific, common: T.common, share: T.share,
-                       score: Math.max(T.share, (T.scores && T.scores[0]) || 0), frames,
-                       lineage: lineageOf(T, T.rank), boxes: [] });
+            let scores = T.scores || [], share = T.share, box = 1, loose = false;
+            if (Array.isArray(T.evidence) && burst.animalCount > 0) {
+                // Each frame's score from the crops the box rule lets name it.
+                const fs = T.evidence.map((ev) => frameScore(rule, T.rank, ev, t));
+                scores = fs.map((f) => f.score).sort((a, b) => b - a);
+                share = round(scores.reduce((s, v) => s + v, 0) / burst.animalCount, 4);
+                box = Math.max(-1, ...fs.filter((f) => f.score >= t).map((f) => f.box));
+                if (rule.consensus && !(share >= t)) {
+                    // Frames agreeing on a box other than their best, too weak
+                    // alone: a consensus (share at t) with two frames or more at t.
+                    const ls = T.evidence.map((ev) => frameScore(looseRule(rule), T.rank, ev, t).score);
+                    const lshare = round(ls.reduce((s, v) => s + v, 0) / burst.animalCount, 4);
+                    if (lshare >= t && ls.filter((s) => s >= t).length >= 2) {
+                        share = lshare;
+                        scores = ls.sort((a, b) => b - a);
+                        loose = true;
+                    }
+                }
+            }
+            const frames = scores.filter((s) => s >= t).length;
+            if (!(share >= t) && !frames) continue;
+            // One frame's name, not the consensus: that frame's box must be sure.
+            if (!(share >= t) && frames === 1 && box < rule.burstMin) continue;
+            out.push({ rank: T.rank, scientific: T.scientific, common: T.common, share,
+                       score: Math.max(share, scores[0] || 0), frames,
+                       lineage: lineageOf(T, T.rank), boxes: [], loose });
         }
         return dropBroader(out);
     }
 
     // A frame's boxes for its burst's labels: each crop goes to the
-    // narrowest label that is its own best guess at that label's rank.
-    function frameBoxes(labels, rec) {
+    // narrowest label that is its own best guess at that label's rank and
+    // that its box may name.
+    function frameBoxes(labels, rec, rule) {
         const ordered = labels.slice().sort((a, b) => rankIx(a.rank) - rankIx(b.rank));
         for (const crop of cropsOf(rec)) {
             if (!crop.box) continue;
             for (const L of ordered) {
                 const e = cropTop(crop, L.rank);
-                if (e && e.scientific === L.scientific) { addBoxes(L.boxes, [crop.box]); break; }
+                if (e && e.scientific === L.scientific && cropMayName(L.loose ? looseRule(rule) : rule, crop, L.rank, e)) {
+                    addBoxes(L.boxes, [crop.box]);
+                    break;
+                }
             }
         }
     }
@@ -490,25 +594,33 @@
      * family, order, class) whose best score is at least `labelThreshold`;
      * crops of one taxon are one label (the best score, every box), and a
      * label with a narrower one inside it is left out. labels(null, burst)
-     * is the burst's own.
+     * is the burst's own. The box rule (DEFAULTS' comment) leaves out what
+     * weak boxes name: a box other than the photo's best under minBoxScore,
+     * a family and up under broadMinBoxScore, a burst name one frame
+     * reaches on a box under burstMinBoxScore, an order or class outside
+     * the box's query's classes (queryMatch); a burst without `evidence`
+     * (grouped before the rule) is weighed by its scores alone.
      * @param {Object|null} rec
      * @param {Object|null} [burst]
-     * @param {{ labelThreshold?: number, taxa?: Object }} [opts]  `taxa`:
-     *   readTaxa's map, the common names of genera and up
+     * @param {{ labelThreshold?: number, taxa?: Object, minBoxScore?: number,
+     *   broadMinBoxScore?: number, burstMinBoxScore?: number, queryMatch?: boolean,
+     *   consensus?: boolean }} [opts]  `taxa`: readTaxa's map, the common
+     *   names of genera and up; the box rule's options default to DEFAULTS'
      * @returns {Array<{ common, scientific, rank, score, from, boxes,
      *                   frames?, share? }>}
      */
     wl.labels = function labels(rec, burst, opts) {
         const o = opts || {};
         const t = o.labelThreshold != null ? o.labelThreshold : DEFAULTS.labelThreshold;
+        const rule = boxRule(o);
         if (burst) {
-            const bl = burstLabels(burst, t);
+            const bl = burstLabels(burst, t, rule);
             if (bl.length) {
-                if (rec) frameBoxes(bl, rec);
+                if (rec) frameBoxes(bl, rec, rule);
                 return finish(bl, 'burst', o.taxa);
             }
         }
-        return rec ? finish(photoLabels(rec, t), 'photo', o.taxa) : [];
+        return rec ? finish(photoLabels(rec, t, rule), 'photo', o.taxa) : [];
     };
 
     /**
@@ -759,11 +871,15 @@
                      species: (typeof loc.species === 'string' ? [loc.species] : loc.species)
                          .filter((l) => typeof l === 'string') },
             labelThreshold: o.labelThreshold == null ? DEFAULTS.labelThreshold : o.labelThreshold,
+            // open()'s box rule options (labels()), the defaults where not given.
+            boxRule: LABEL_BOX_KEYS.reduce((m, k) => { m[k] = o[k] == null ? DEFAULTS[k] : o[k]; return m; }, {}),
             get device() { return owl.device; },
-            /** label() at this analyzer's labelThreshold, with its taxa names. */
-            label(rec, burst) { return wl.label(rec, burst, { labelThreshold: an.labelThreshold, taxa }); },
-            /** labels() at this analyzer's labelThreshold, with its taxa names. */
-            labels(rec, burst) { return wl.labels(rec, burst, { labelThreshold: an.labelThreshold, taxa }); },
+            /** label() at this analyzer's labelThreshold and box rule, with its taxa names. */
+            label(rec, burst) { return wl.labels(rec, burst, an.labelOptions())[0] || null; },
+            /** labels() at this analyzer's labelThreshold and box rule, with its taxa names. */
+            labels(rec, burst) { return wl.labels(rec, burst, an.labelOptions()); },
+            /** The options labels() takes for this analyzer: { labelThreshold, taxa, ...boxRule }. */
+            labelOptions() { return Object.assign({ labelThreshold: an.labelThreshold, taxa }, an.boxRule); },
             /** OWLv2 boxes in `img`'s pixels, best first: [{ box, score, label }]. */
             detect(img, dopts) {
                 live('detect');
@@ -908,24 +1024,31 @@
         // Per taxon at every rank: each animal frame's score (the best of its
         // crops), and the share (their sum over the animal frames). labels()
         // applies the threshold.
+        // `evidence` per frame: its crops' [score, boxScore, flags] (addEvidence),
+        // which labels() weighs with its box rule.
         const taxa = new Map();
         for (const r of animals) {
             const frame = new Map();
             for (const c of cropsOf(r)) {
+                const box = c.score == null ? 1 : round(c.score, 4);
                 for (const e of cropEntries(c)) {
                     const k = e.rank + '|' + e.scientific;
-                    const f = frame.get(k);
-                    if (!f || e.score > f.score) frame.set(k, e);
+                    let f = frame.get(k);
+                    if (!f) { f = { e, ev: [] }; frame.set(k, f); }
+                    else if (e.score > f.e.score) f.e = e;
+                    const flags = (c.primary ? EV_PRIMARY : 0) | (queryMatches(c.label, e.rank, e) ? EV_MATCH : 0);
+                    addEvidence(f.ev, round(e.score, 4), box, flags);
                 }
             }
-            for (const [k, e] of frame) {
+            for (const [k, { e, ev }] of frame) {
                 let T = taxa.get(k);
                 if (!T) {
                     T = Object.assign({ rank: e.rank, scientific: e.scientific }, e.common ? { common: e.common } : {},
-                                      e.lineage, { share: 0, scores: [] });
+                                      e.lineage, { share: 0, scores: [], evidence: [] });
                     taxa.set(k, T);
                 }
                 T.scores.push(e.score);
+                T.evidence.push(ev);
             }
         }
         const taxaOut = Array.from(taxa.values()).map((T) => {

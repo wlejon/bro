@@ -751,7 +751,13 @@ owl.dispose();
 //      family, order, class; "Darners (Aeshnidae)" via formatLabel), every
 //      animal of a photo or burst, with its boxes. A crop that clears no
 //      rank is "found, not identified"; the records keep every score, so
-//      the threshold can change without re-analysis.
+//      the threshold can change without re-analysis. The box rule keeps
+//      weak detector boxes from naming things (most of the order and class
+//      names they gave were wrong): a box other than the photo's best
+//      under 0.3 names nothing, a family and up needs a box at 0.3, a burst
+//      name only one frame reaches needs that frame's box at 0.4, and an
+//      order or class outside the box's query's classes is not named
+//      (labels(), "The box rule").
 //
 // The input image is the DETECTION image: decode the photo to 1280 on the
 // long side (bro.image.decodeScaled, a scaled JPEG decode, ~10x cheaper than
@@ -836,6 +842,9 @@ for (const name of where.fetch) await bro.models.fetch(name);
  *   species/pets
  * @param {number} [opts.labelThreshold=0.85]  the analyzer's label() /
  *   labels(), and byQuery's fallback threshold
+ * @param {number} [opts.minBoxScore=0.3]  the analyzer's box rule (labels(),
+ *   "The box rule"); also broadMinBoxScore (0.3), burstMinBoxScore (0.4),
+ *   queryMatch (true), consensus (true)
  * @param {number} [opts.maxClassify=8]   boxes classified a photo, best first
  * @param {'all'|'byQuery'} [opts.candidates='all']  what a crop's softmax is
  *   over: every species, or the classes of its box's query (see above)
@@ -855,8 +864,10 @@ for (const name of where.fetch) await bro.models.fetch(name);
  *   props: `config` (below), `species` (the merged rows), `taxa` (the
  *   merged taxa map), `prompts`, `cached` (the embeddings came from
  *   cacheDir), `dim`, `imageSize` (224), `device`, `paths` ({ detector,
- *   classifier, species: the list files }), `labelThreshold`, and
- *   label(record, burst) / labels(record, burst) at it with its taxa names
+ *   classifier, species: the list files }), `labelThreshold`, `boxRule`
+ *   ({ minBoxScore, broadMinBoxScore, burstMinBoxScore, queryMatch,
+ *   consensus }), labelOptions() (labels()'s opts: { labelThreshold, taxa,
+ *   ...boxRule }), and label(record, burst) / labels(record, burst) with them
  */
 const wild = bro.vision.wildlife.open({ model: 'bioclip-2' });
 
@@ -871,8 +882,8 @@ const wild = bro.vision.wildlife.open({ model: 'bioclip-2' });
  * 'upper-midwest-herps/species.json', ...), `count` the merged rows, `hash` an
  * FNV-1a of every prompt, so an edited list is another config (the taxa
  * maps' names are not in it).
- * labelThreshold is not in it (except as byQuery's fallback): it changes
- * what is shown, not a record.
+ * labelThreshold is not in it (except as byQuery's fallback), nor the box
+ * rule: they change what is shown, not a record.
  * The static form reads files only, never weights: a batch decides what to
  * re-run before it pays for a load.
  */
@@ -959,7 +970,8 @@ const subjectSharp = bro.vision.wildlife.sharpness(big, { box: rec.detections[0]
  * @returns {Array<{ id, first, start, durationS, count, animalCount,
  *                   species: { common, scientific, share, agree } | null,
  *                   taxa: Array<{ rank, scientific, common?, genus?, family?,
- *                                 order?, class?, share, scores: number[] }>,
+ *                                 order?, class?, share, scores: number[],
+ *                                 evidence: number[][] }>,
  *                   keeper, keeperSharpness, startedBy: 'gap'|'scene',
  *                   maxGapS, minNcc, photos: string[] }>}
  *   `species`: the score-weighted vote over every animal frame's top K (of
@@ -968,7 +980,11 @@ const subjectSharp = bro.vision.wildlife.sharpness(big, { box: rec.detections[0]
  *   (its top K and top 3 a rank, over all its crops), with each frame's
  *   score for it (the best of its crops; best first, frames without it
  *   left out) and `share`, their sum over animalCount; labels() applies the
- *   threshold to them, so it can change after grouping. Records from before
+ *   threshold to them, so it can change after grouping. `evidence`, one
+ *   entry a frame showing the taxon (frame order, not sorted): its crops as
+ *   flat [score, boxScore, flags] triples (flags 1: the photo's best box,
+ *   2: the box's query matches the taxon; a crop another beats on all
+ *   three left out), which labels() weighs with its box rule. Records from before
  *   `animals` count their top K as one crop. `keeper`: the sharpest subject
  *   among the animal frames, else the sharpest frame.
  */
@@ -999,14 +1015,40 @@ const bursts = bro.vision.wildlife.groupBursts(records, { gapS: 1.0 });
  * of. A burst with no labels, or no burst: the photo's own (from 'photo').
  * `labels(null, burst)` is the burst's own (no boxes).
  *
+ * The box rule: what a weak OWLv2 box names is mostly wrong (on two cards,
+ * most order and class names came from boxes under 0.3: a rock a turtle, a
+ * "bird" box a mammal), so a crop names a rank only when its box (its
+ * detector `score`) may:
+ *   - a box other than the photo's best (animals[0]) under `minBoxScore`
+ *     (0.3) names nothing; the best box names at any score;
+ *   - a family, order or class needs a box at `broadMinBoxScore` (0.3); a
+ *     species or genus does not;
+ *   - `queryMatch` (true): an order or class outside its box's query's
+ *     classes (queryClasses: "a bird" box, a mammal or turtle order) is not
+ *     named; a species is, and a query without classes matches anything.
+ * A burst weighs each frame by the crops the rule lets name the taxon
+ * (burst.taxa[].evidence), so a weak box names nothing there either, and:
+ *   - a name only one frame reaches, under the consensus share, needs that
+ *     frame's box at `burstMinBoxScore` (0.4): one frame's doubtful box is
+ *     not put on every frame;
+ *   - `consensus` (true): two frames or more naming the taxon at the
+ *     threshold on boxes other than their best, under minBoxScore, are a
+ *     burst name when their share reaches the threshold (a mallard behind
+ *     the egret in every frame).
+ * Every option 0 / false is the rule off.
+ *
  * Records from before `animals` are one crop of their top K (genus and up
  * summed over it) on the best box; bursts from before `taxa` label their
- * `species` consensus at its share.
+ * `species` consensus at its share, and bursts from before `evidence` are
+ * weighed by their scores alone (group them again for the rule).
  * @param {Object|null} record  analyze()'s record (or a records.jsonl line)
  * @param {Object|null} [burst] groupBursts' burst holding it
- * @param {{ labelThreshold?: number, taxa?: Object }} [opts]  threshold
+ * @param {{ labelThreshold?: number, taxa?: Object, minBoxScore?: number,
+ *   broadMinBoxScore?: number, burstMinBoxScore?: number,
+ *   queryMatch?: boolean, consensus?: boolean }} [opts]  threshold
  *   default DEFAULTS.labelThreshold (0.85); `taxa` the merged taxa map
- *   (readTaxa / the analyzer's `taxa`) naming genera and up
+ *   (readTaxa / the analyzer's `taxa`) naming genera and up; the box rule's
+ *   defaults are DEFAULTS' (the analyzer: labelOptions())
  * @returns {Array<{ common: string, scientific: string,
  *                   rank: 'species'|'genus'|'family'|'order'|'class',
  *                   score: number, from: 'burst'|'photo',
@@ -1014,7 +1056,7 @@ const bursts = bro.vision.wildlife.groupBursts(records, { gapS: 1.0 });
  *   `common`: a species' common name; above species the taxa map's, else
  *   the scientific name. frames and share on burst labels only.
  */
-const names = bro.vision.wildlife.labels(rec, bursts.find((b) => b.photos.includes(rec.path)), { taxa: wild.taxa });
+const names = bro.vision.wildlife.labels(rec, bursts.find((b) => b.photos.includes(rec.path)), wild.labelOptions());
 tile.tag = names.length ? names.map(bro.vision.wildlife.formatLabel).join(', ')
     : (rec.animal ? 'Unidentified' : '');
 for (const n of names) for (const box of n.boxes) drawBox(box, n.common);
@@ -1055,7 +1097,8 @@ const named = bro.vision.wildlife.label(rec, burst);
 // keeperScore(record, metric), and the constants QUERIES, QUERY_CLASSES,
 // RANKS, SPECIES_LISTS ([{ folder, file }]) and DEFAULTS ({ model,
 // threshold, topK, margin, nms, maxDetections, gapS, labelThreshold,
-// maxClassify, candidates, taxaTop }).
+// maxClassify, candidates, taxaTop, minBoxScore, broadMinBoxScore,
+// burstMinBoxScore, queryMatch, consensus }).
 
 
 // ═════════════════════════════════════════════════════════════════════════════

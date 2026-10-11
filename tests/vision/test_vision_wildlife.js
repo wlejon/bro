@@ -43,6 +43,8 @@ same(wl.QUERIES.slice(19), ['a dog', 'a cat', 'an insect', 'a dragonfly', 'a but
 same([wl.DEFAULTS.threshold, wl.DEFAULTS.topK, wl.DEFAULTS.margin, wl.DEFAULTS.gapS, wl.DEFAULTS.model, wl.DEFAULTS.labelThreshold,
       wl.DEFAULTS.maxClassify, wl.DEFAULTS.candidates],
      [0.15, 5, 0.15, 1, 'bioclip-2', 0.85, 8, 'all'], 'defaults');
+same([wl.DEFAULTS.minBoxScore, wl.DEFAULTS.broadMinBoxScore, wl.DEFAULTS.burstMinBoxScore, wl.DEFAULTS.queryMatch,
+      wl.DEFAULTS.consensus], [0.3, 0.3, 0.4, true, true], 'the box rule defaults');
 same(wl.SPECIES_LISTS, [{ folder: 'species', file: 'upper-midwest.json' },
                         { folder: 'species/upper-midwest-herps', file: 'species.json' },
                         { folder: 'species/upper-midwest-arthropods', file: 'species.json' },
@@ -257,7 +259,8 @@ same([dl[0].rank, dl[0].common, dl[0].scientific, wl.formatLabel(dl[0])], ['fami
      'Darners (Aeshnidae)');
 same(wl.formatLabel(L(photo('x', 0, [animal({ Mallard: 0.3, 'American Black Duck': 0.15, 'Wood Duck': 0.45 })]))[0]), 'Anatidae',
      'a family with no common name: its scientific name');
-same(one({ 'Common Green Darner': 0.45, 'Twelve-spotted Skimmer': 0.45 }), [['order', 'Odonata', 1]], 'else the order');
+same(brief(L(photo('x', 0, [animal({ 'Common Green Darner': 0.45, 'Twelve-spotted Skimmer': 0.45 }, { query: 'a dragonfly' })]))),
+     [['order', 'Odonata', 1]], 'else the order');
 same(one({ Mallard: 0.3, 'Great Egret': 0.3, 'Great Blue Heron': 0.25 }), [['class', 'Aves', 1]], 'else the class');
 same(one({ Mallard: 0.3, Monarch: 0.3, 'Eastern Chipmunk': 0.3 }), [], 'else nothing: found, not identified');
 same(one({ Mallard: 0.5, 'American Black Duck': 0.4 }, 0.95), [], 'the threshold at every rank');
@@ -320,6 +323,66 @@ same(bb[2].taxa, [], 'and no taxa');
 const ob = wl.groupBursts([photoRec(0.9, { time: 0, path: 'o1' }), photoRec(0.8, { time: 100, path: 'o2' })]);
 same(L(photoRec(0.8, { path: 'o2' }), ob[0]).map((l) => [l.scientific, l.frames, l.from]), [['Turdus migratorius', 1, 'burst']],
      'old records group per taxon too');
+
+// ── the box rule: what weak detector boxes may name ──────────────────────
+const boxed = (p, score, query) => Object.assign(animal(p, query ? { query } : undefined), { score });
+const names = (ls) => ls.map((l) => l.scientific);
+// A box other than the photo's best names nothing under minBoxScore (0.3).
+const weak2 = photo('w', 0, [boxed({ 'Great Egret': 0.95 }, 0.5), boxed({ Mallard: 0.9 }, 0.2)]);
+same(names(L(weak2)), ['Ardea alba'], 'a weak secondary box names nothing');
+same(names(wl.labels(weak2, null, { minBoxScore: 0 })), ['Ardea alba', 'Anas platyrhynchos'], 'minBoxScore 0: it does');
+same(names(L(photo('w', 0, [boxed({ 'Great Egret': 0.95 }, 0.5), boxed({ Mallard: 0.9 }, 0.3)]))), ['Ardea alba', 'Anas platyrhynchos'],
+     'at minBoxScore it names');
+same(names(L(photo('w', 0, [boxed({ Mallard: 0.9 }, 0.16)]))), ['Anas platyrhynchos'], 'the photo\'s best box names at any score');
+// A family, order or class needs a box at broadMinBoxScore (0.3); a genus does not.
+const darner = (s) => photo('d', 0, [boxed({ 'Common Green Darner': 0.5, 'Canada Darner': 0.4 }, s, 'a dragonfly')]);
+same(brief(L(darner(0.2))), [], 'a family on a weak box: not named');
+same(brief(L(darner(0.35))), [['family', 'Aeshnidae', 1]], 'on a sure one: named');
+same(brief(wl.labels(darner(0.2), null, { broadMinBoxScore: 0 })), [['family', 'Aeshnidae', 1]], 'broadMinBoxScore 0: named');
+same(brief(L(photo('g', 0, [boxed({ Mallard: 0.5, 'American Black Duck': 0.4 }, 0.2)]))), [['genus', 'Anas', 1]],
+     'a genus on a weak box: named');
+// queryMatch: an order or class outside the box's query's classes is not named; a species is.
+const odo = (q) => photo('q', 0, [boxed({ 'Common Green Darner': 0.45, 'Twelve-spotted Skimmer': 0.45 }, 0.6, q)]);
+same(brief(L(odo('a bird'))), [], 'a "bird" box: no insect order');
+same(brief(L(odo('a dragonfly'))), [['order', 'Odonata', 1]], 'a "dragonfly" box: the order');
+same(brief(wl.labels(odo('a bird'), null, { queryMatch: false })), [['order', 'Odonata', 1]], 'queryMatch false: the order');
+same(brief(L(photo('q', 0, [boxed({ 'Common Green Darner': 0.9 }, 0.6, 'a bird')]))), [['species', 'Anax junius', 1]],
+     'a species of another class on a "bird" box: named');
+same(brief(L(photo('q', 0, [boxed({ Mallard: 0.3, 'Great Egret': 0.3, 'Great Blue Heron': 0.25 }, 0.6, 'a rock')]))), [['class', 'Aves', 1]],
+     'a query without classes matches any');
+// Bursts: a name one frame reaches needs that frame's box at burstMinBoxScore (0.4).
+const egretBurst = (mallardBox) => {
+    const recs = [0, 1, 2].map((i) => photo('e' + i, i * 300, [boxed({ 'Great Egret': 0.95 }, 0.6, null)]
+        .concat(i === 1 ? [boxed({ Mallard: 0.9 }, mallardBox)] : [])));
+    return { recs, burst: wl.groupBursts(recs, { gapS: 1 })[0] };
+};
+const wb = egretBurst(0.35);
+assert(wb.burst.taxa.every((T) => Array.isArray(T.evidence) && T.evidence.length === T.scores.length),
+       'a burst taxon keeps its evidence, one entry a frame');
+same(wb.burst.taxa.find((T) => T.scientific === 'Anas platyrhynchos').evidence[1], [0.0056, 0.6, 3, 0.9, 0.35, 2],
+     'evidence: [score, box score, flags] a crop (1: the best box, 2: its query matches)');
+same(names(L(null, wb.burst)), ['Ardea alba'], 'one frame\'s mallard on a weak box: not a burst name');
+same(wb.recs.map((r) => names(L(r, wb.burst))), [['Ardea alba'], ['Ardea alba'], ['Ardea alba']], 'on no frame');
+same(names(wl.labels(null, wb.burst, { burstMinBoxScore: 0 })), ['Ardea alba', 'Anas platyrhynchos'], 'burstMinBoxScore 0: it is');
+const sb = egretBurst(0.6);
+same(sb.recs.map((r) => names(L(r, sb.burst))), [['Ardea alba', 'Anas platyrhynchos'], ['Ardea alba', 'Anas platyrhynchos'],
+     ['Ardea alba', 'Anas platyrhynchos']], 'on a sure box: a burst name on every frame');
+same(L(sb.recs[1], sb.burst).find((l) => l.scientific === 'Anas platyrhynchos').boxes, [sb.recs[1].animals[1].box],
+     'with its frame\'s box');
+// Old bursts (no evidence) are weighed by their scores alone.
+const oldWb = Object.assign({}, wb.burst, { taxa: wb.burst.taxa.map((T) => { const c = Object.assign({}, T); delete c.evidence; return c; }) });
+same(names(L(null, oldWb)), ['Ardea alba', 'Anas platyrhynchos'], 'a burst grouped before the rule: its scores');
+// Consensus: two frames or more agreeing on boxes under minBoxScore, at the threshold.
+const consensus = (frames) => {
+    const recs = [0, 1, 2].map((i) => photo('c' + i, i * 300, [boxed({ 'Great Egret': 0.95 }, 0.6)]
+        .concat(i < frames ? [boxed({ Mallard: 0.95 }, 0.2)] : [])));
+    return { recs, burst: wl.groupBursts(recs, { gapS: 1 })[0] };
+};
+const cb = consensus(3);
+same(names(L(null, cb.burst)).sort(), ['Anas platyrhynchos', 'Ardea alba'], 'three frames agreeing on a weak box: a burst name');
+same(L(cb.recs[0], cb.burst).find((l) => l.scientific === 'Anas platyrhynchos').boxes, [cb.recs[0].animals[1].box], 'with its weak box');
+same(names(wl.labels(null, cb.burst, { consensus: false })), ['Ardea alba'], 'consensus false: not');
+same(names(L(null, consensus(1).burst)), ['Ardea alba'], 'one frame on a weak box: not');
 
 // ── taxa maps, merged across lists ───────────────────────────────────────
 const taxaA = path.join(root, 'taxa-a.json'), taxaB = path.join(root, 'taxa-b.json'), taxaA2 = path.join(root, 'taxa-a2.json');

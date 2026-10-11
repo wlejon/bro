@@ -68,6 +68,8 @@ function run() {
     }
     assert(an.labelThreshold === 0.85 && an.label({ animal: true, species: [{ common: 'X', scientific: 'x', score: 0.9 }] }).common === 'X',
            'the analyzer labels at 0.85');
+    same(an.labelOptions(), { labelThreshold: 0.85, taxa: an.taxa, minBoxScore: 0.3, broadMinBoxScore: 0.3, burstMinBoxScore: 0.4,
+                              queryMatch: true, consensus: true }, 'and with the default box rule');
     assert(an.cached === false, 'first open embeds the list');
 
     // Nothing in an empty frame at the default threshold.
@@ -130,8 +132,10 @@ function run() {
     assert(top.length === 3, 'classify topK');
 
     // The text embeddings come back from the cache unchanged.
-    const again = wl.open(Object.assign({ cacheDir }, listOpts));
+    const again = wl.open(Object.assign({ cacheDir, minBoxScore: 0.5, queryMatch: false }, listOpts));
     assert(again.cached === true, 'second open reads the cache');
+    same([again.labelOptions().minBoxScore, again.labelOptions().queryMatch, again.labelOptions().burstMinBoxScore],
+         [0.5, false, 0.4], 'open() takes the box rule');
     const c = again.analyze(frame(true), { source: src, threshold: 0 });
     delete c.timing;
     same(c, a, 'the cached list ranks the same');
