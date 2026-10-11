@@ -32,6 +32,7 @@
 #include "canvas/canvas_scene.h"
 #include "webgl/webgl2_context.h"
 #include "dom/document.h"
+#include "dom/composed_path.h"
 #include "dom/element.h"
 #include "dom/node.h"
 #include "dom/event.h"
@@ -283,20 +284,40 @@ bool Engine::hasPointerCapture(const dom::Element* target, int pointerId) const 
     return pointerCaptureFor(pointerId) == target;
 }
 
-// Walk the document + shadow trees and pump any pending HTMLMediaElement
-// events (loadedmetadata, timeupdate, ended) on each ElVideo. Called from
-// the main thread; ElVideo::draw() runs on the raster thread.
-static void pumpVideoEventsWalk(dom::Element* el, bool& anyPlaying,
-                                bool advancePicture, bool advanceClock) {
-    if (!el) return;
-    if (auto* v = el->videoControl()) {
+// Pump any pending HTMLMediaElement events (loadedmetadata, timeupdate,
+// ended) on each ElVideo in the document's composed tree, in document order.
+// The document keeps the elements with one (Document::videoElements), so a
+// frame does not walk every element to find the few videos. Called from the
+// main thread; ElVideo::draw() runs on the raster thread.
+static void pumpDocumentVideos(dom::Document* doc, bool& anyPlaying,
+                               bool advancePicture, bool advanceClock) {
+    dom::Element* root = doc->documentElement();
+    if (!root || doc->videoElements().empty()) return;
+    struct Found { std::vector<uint32_t> path; dom::Element* el; };
+    std::vector<Found> found;
+    std::vector<dom::Element*> stale, chain;
+    for (dom::Element* el : doc->videoElements()) {
+        if (!doc->ownsNode(el) || el->document() != doc || !el->videoControl()) {
+            stale.push_back(el);
+            continue;
+        }
+        Found f{{}, el};
+        if (dom::composedPathFrom(root, el, chain, f.path)) found.push_back(std::move(f));
+    }
+    for (dom::Element* el : stale) doc->noteVideoElement(el, false);
+    std::sort(found.begin(), found.end(), [](const Found& a, const Found& b) { return a.path < b.path; });
+    for (const Found& f : found) {
+        // An event handler before it may have freed it, taken its control or
+        // taken it out of the document.
+        if (!doc->ownsNode(f.el)) continue;
+        auto* v = f.el->videoControl();
+        if (!v) continue;
+        std::vector<uint32_t> path;
+        if (!dom::composedPathFrom(root, f.el, chain, path)) continue;
         if (advancePicture && v->isPlaying()) v->advancePipeline();
         v->pumpEvents(advanceClock);
         if (v->isPlaying()) anyPlaying = true;
     }
-    el->forEachComposedChild([&](dom::Element* c) {
-        pumpVideoEventsWalk(c, anyPlaying, advancePicture, advanceClock);
-    });
 }
 void Engine::pumpVideoEvents() {
     // The engine's initial layout flush runs BEFORE user script, so
@@ -321,7 +342,7 @@ void Engine::pumpVideoEvents() {
     // Headless frames run through the windowed pipeline (runPipelineFrames)
     // have the raster thread drawing the video, as a window does.
     const bool advanceHere = (displayMode_ == DisplayMode::Headless) && !headlessPipeline_ && !hold;
-    pumpVideoEventsWalk(document_->documentElement(), anyPlaying, advanceHere, !hold);
+    pumpDocumentVideos(document_.get(), anyPlaying, advanceHere, !hold);
     // Playing <video> elements don't mutate the DOM, so nothing else would
     // mark the document dirty. Force a re-raster each frame while any video
     // is advancing so ElVideo::draw() keeps calling pipeline_->advance() and
@@ -558,35 +579,14 @@ void Engine::drawElementScrollbars(render::Renderer* renderer,
             stale.push_back(el);
             continue;
         }
-        chain.clear();
-        bool under = false;
-        for (dom::Element* e = el; e; e = e->layoutParent()) {
-            if (displayNone(e)) break;
-            chain.push_back(e);
-            if (e == root) { under = true; break; }
-        }
-        if (!under) continue;
         Bars b{{}, el, offsetX, offsetY};
-        bool rendered = true;
-        for (size_t i = chain.size() - 1; i > 0 && rendered; --i) {
-            dom::Element* parent = chain[i];
-            dom::Element* child = chain[i - 1];
-            // Its place among the composed children; not among them (a light
-            // child no slot takes) is not rendered.
-            uint32_t index = 0;
-            bool hit = false;
-            parent->forEachComposedChild([&](dom::Element* c) {
-                if (hit) return;
-                if (c == child) hit = true;
-                else ++index;
-            });
-            if (!hit) { rendered = false; break; }
-            b.path.push_back(index);
-            const auto& pbox = parent->layoutBox();
-            b.x += pbox.contentRect.x - dom::clampedScrollLeftOf(parent);
-            b.y += pbox.contentRect.y - dom::clampedScrollTopOf(parent);
+        if (!dom::composedPathFrom(root, el, chain, b.path)) continue;
+        if (std::any_of(chain.begin(), chain.end(), displayNone)) continue;
+        for (size_t i = chain.size() - 1; i > 0; --i) {
+            const auto& pbox = chain[i]->layoutBox();
+            b.x += pbox.contentRect.x - dom::clampedScrollLeftOf(chain[i]);
+            b.y += pbox.contentRect.y - dom::clampedScrollTopOf(chain[i]);
         }
-        if (!rendered) continue;
         b.x += el->layoutBox().contentRect.x;
         b.y += el->layoutBox().contentRect.y;
         found.push_back(std::move(b));

@@ -1090,6 +1090,7 @@ void Element::setSvgControl(std::unique_ptr<layout::ElSvg> ctrl) {
 void Element::setVideoControl(std::unique_ptr<layout::ElVideo> ctrl) {
     videoControl_ = std::move(ctrl);
     if (videoControl_) noteReplacedControlInstalled();
+    if (document_) document_->noteVideoElement(this, videoControl_ != nullptr);
 }
 
 void Element::setTerminalControl(std::unique_ptr<layout::ElTerminal> ctrl) {

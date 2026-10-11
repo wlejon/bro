@@ -212,6 +212,15 @@ public:
     void forgetScrollContainer(Element* e) { scrollContainers_.erase(e); }
     const std::unordered_set<Element*>& scrollContainers() const { return scrollContainers_; }
 
+    // The elements holding a <video> control (Element::setVideoControl), the
+    // ones the frame loop pumps media events for; same discipline as
+    // scrollContainers.
+    void noteVideoElement(Element* e, bool has) {
+        if (has) videoElements_.insert(e);
+        else videoElements_.erase(e);
+    }
+    const std::unordered_set<Element*>& videoElements() const { return videoElements_; }
+
     // True if `n` points at a node whose memory is still alive — either owned
     // (in the tree / offscreen) or queued in pendingFrees_ but not yet drained.
     // Both checks are pointer-value lookups, so this is safe to call on a
@@ -687,6 +696,7 @@ private:
     std::unordered_map<size_t, std::vector<Element*>> styleDonors_;
     std::unordered_set<Element*> scrolled_;  // noteScrollOffset
     std::unordered_set<Element*> scrollContainers_;  // noteScrollContainer
+    std::unordered_set<Element*> videoElements_;     // noteVideoElement
     struct InheritTokenEntry {
         uint64_t token;
         std::shared_ptr<const htmlayout::css::StyleMap> vars;  // keeps the address in the key unique
