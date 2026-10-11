@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head><title>Realm child</title></head>
+<body>
+  <!-- For tests/dom/test_iframe_realm_call.js: functions the parent calls
+       through iframe.contentWindow, each of which must run against this
+       document and this realm, as a function does in a browser. -->
+  <div class="box"></div><div class="box"></div>
+  <script>
+    var secret = 'child';
+    function titleOf() { return document.title; }
+    function countBoxes() { return document.querySelectorAll('.box').length; }
+    function addBox() {
+      var d = document.createElement('div');
+      d.className = 'box';
+      document.body.appendChild(d);
+      return document.querySelectorAll('.box').length;
+    }
+    function readSecret() { return secret; }
+    function sum(a, b) { return a + b; }
+    function throwIt() { throw new Error('thrown in the child'); }
+    // A function handed back to the parent and called later runs here too.
+    function counter() { return function () { return document.querySelectorAll('.box').length; }; }
+  </script>
+</body>
+</html>

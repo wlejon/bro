@@ -21,6 +21,75 @@ namespace {
 
 static std::unordered_map<uint64_t, ev::Persistent> s_contentWindowProxies;
 
+// The global `document`, and globalThis.document, set to `docIn`.
+void setDocumentGlobal(Value docIn) {
+    ev::Persistent doc(docIn);
+    ev::registerGlobal("document", doc.get());
+    ev::GlobalValue gt = ev::globalValue("globalThis");
+    if (gt.found && ev::isObject(gt.value)) ev::setProperty(gt.value, "document", doc.get());
+}
+
+// The functions of a frame's realm its contentWindow handed out, each with
+// the wrapper that runs it there: one wrapper a function, so a function read
+// twice is the same one.
+static std::unordered_map<uint64_t, std::vector<std::pair<ev::Persistent, ev::Persistent>>> s_realmFunctions;
+
+Value wrapRealmFunction(uint64_t scopeId, dom::Document* doc, Value fnIn);
+
+// Call `fn` of a frame's realm in that realm, as a browser runs a function
+// in its own: its scope, its document as the global `document` and the
+// current one, the caller's back after it returns or throws. Sub-document
+// realms share one global object, entered by swapping these
+// (runHostSubDocScripts, a timer, an event); a call from the parent through
+// contentWindow entered nothing, so the child's function ran against the
+// parent's document.
+Value callInRealm(uint64_t scopeId, dom::Document* doc, Value fnIn, Value selfIn, std::span<const Value> argsIn) {
+    // Rooted: entering and leaving the realm moves expandos on and off
+    // globalThis, a chain of allocating calls.
+    ev::Persistent fn(fnIn), self(selfIn);
+    std::vector<ev::Persistent> args;
+    args.reserve(argsIn.size());
+    for (Value v : argsIn) args.emplace_back(v);
+    dom::Document* prevDoc = currentHostDocument();
+    const bool enter = doc && doc != prevDoc;
+    ev::GlobalValue docG = ev::globalValue("document");
+    ev::Persistent prevDocVal(docG.found ? docG.value : ev::null());
+    if (enter) {
+        enterRealmScope(scopeId);
+        setCurrentHostDocument(doc);
+        setDocumentGlobal(hostDocumentValue(doc));
+    }
+    std::vector<Value> argv;
+    argv.reserve(args.size());
+    for (auto& a : args) argv.push_back(a.get());
+    ev::CallResult r = ev::call(fn.get(), self.get(), std::span<const Value>(argv.data(), argv.size()));
+    ev::Persistent result(r.value);
+    if (enter) {
+        if (!ev::isNull(prevDocVal.get())) setDocumentGlobal(prevDocVal.get());
+        setCurrentHostDocument(prevDoc);
+        exitRealmScope();
+    }
+    if (r.thrown) return ev::throwValue(result.get());
+    // A function it returns is of its realm too.
+    if (ev::isFunction(result.get())) return wrapRealmFunction(scopeId, doc, result.get());
+    return result.get();
+}
+
+Value wrapRealmFunction(uint64_t scopeId, dom::Document* doc, Value fnIn) {
+    ev::Persistent fn(fnIn);
+    auto& wrapped = s_realmFunctions[scopeId];
+    for (auto& [f, w] : wrapped)
+        if (f.get().rawBits() == fn.get().rawBits()) return w.get();
+    auto held = std::make_shared<ev::Persistent>(fn.get());
+    ev::Persistent wrapper(ev::makeFunction(
+        [scopeId, doc, held](Value self, std::span<const Value> a) -> Value {
+            return callInRealm(scopeId, doc, held->get(), self, a);
+        },
+        0));
+    wrapped.emplace_back(ev::Persistent(fn.get()), ev::Persistent(wrapper.get()));
+    return wrapped.back().second.get();
+}
+
 Value makeContentWindowProxy(dom::Element* el, engine::IframeDoc* d) {
     if (!el || !d || !d->document) return ev::null();
     uint64_t scopeId = scopeIdForDocument(d->document.get());
@@ -64,7 +133,8 @@ Value makeContentWindowProxy(dom::Element* el, engine::IframeDoc* d) {
         }
         exitRealmScope();
         if (ev::isUndefined(value.get())) return false;
-        out = value.get();
+        // A function of the frame's realm runs there, whoever calls it.
+        out = ev::isFunction(value.get()) ? wrapRealmFunction(scopeId, docPtr, value.get()) : value.get();
         return true;
     };
 
@@ -135,8 +205,10 @@ Value makeContentWindowProxy(dom::Element* el, engine::IframeDoc* d) {
 void clearContentWindowProxy(uint64_t scopeId) {
     if (scopeId == 0) {
         s_contentWindowProxies.clear();
+        s_realmFunctions.clear();
     } else {
         s_contentWindowProxies.erase(scopeId);
+        s_realmFunctions.erase(scopeId);
     }
 }
 
@@ -252,14 +324,6 @@ void runHostSubDocScripts(engine::Engine& engine, dom::Document* subDoc,
     // previous document's CURRENT address; globalThis is re-read each time.
     ev::GlobalValue docG = ev::globalValue("document");
     ev::Persistent prevDoc(docG.found ? docG.value : ev::null());
-    auto setDocumentGlobal = [](Value docIn) {
-        ev::Persistent doc(docIn);
-        ev::registerGlobal("document", doc.get());
-        ev::GlobalValue gt = ev::globalValue("globalThis");
-        if (gt.found && ev::isObject(gt.value)) {
-            ev::setProperty(gt.value, "document", doc.get());
-        }
-    };
     setDocumentGlobal(hostDocumentValue(subDoc));
 
     // Module and classic scripts alike, in document order, as the main
