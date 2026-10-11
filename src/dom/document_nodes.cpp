@@ -120,6 +120,10 @@ void Document::adoptOne(Node* node, Document* src) {
             auto* elem = static_cast<Element*>(node);
             if (!elem->id().empty()) src->unregisterElementId(elem->id(), elem);
             if (elem == src->focusedElement_) src->focusedElement_ = nullptr;
+            // A scroll offset moves with it, into our registry.
+            src->forgetScrolled(elem);
+            if (elem->scrollTopValue() != 0.0f || elem->scrollLeftValue() != 0.0f)
+                noteScrollOffset(elem, true);
         }
         // Live ranges in the source document can't span into another document.
         for (auto* r : src->liveRanges_) r->onNodeDestroyed(node);

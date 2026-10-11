@@ -187,6 +187,19 @@ public:
     // hit-test results — before dereferencing them.
     bool ownsNode(const Node* n) const;
 
+    // The elements holding a non-zero scroll offset (Element::
+    // setScrollTopValue / setScrollLeftValue keep it), so re-clamping offsets
+    // after a layout (engine::clampScrollOffsets) looks at them rather than
+    // walking the document. Raw pointers that are never read before ownsNode
+    // says the node is still this document's: a freed or adopted-away element
+    // pins nothing and drops out when next visited.
+    void noteScrollOffset(Element* e, bool nonZero) {
+        if (nonZero) scrolled_.insert(e);
+        else scrolled_.erase(e);
+    }
+    void forgetScrolled(Element* e) { scrolled_.erase(e); }
+    const std::unordered_set<Element*>& scrolledElements() const { return scrolled_; }
+
     // True if `n` points at a node whose memory is still alive — either owned
     // (in the tree / offscreen) or queued in pendingFrees_ but not yet drained.
     // Both checks are pointer-value lookups, so this is safe to call on a
@@ -660,6 +673,7 @@ private:
     // element under an equal key copies its style. Cleared around every walk,
     // so the pointers never outlive it.
     std::unordered_map<size_t, std::vector<Element*>> styleDonors_;
+    std::unordered_set<Element*> scrolled_;  // noteScrollOffset
     struct InheritTokenEntry {
         uint64_t token;
         std::shared_ptr<const htmlayout::css::StyleMap> vars;  // keeps the address in the key unique

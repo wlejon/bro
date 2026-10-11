@@ -433,9 +433,13 @@ public:
 
     // Element-level scroll offset (for overflow:auto/scroll elements)
     float scrollTopValue() const { return scrollTop_; }
-    void setScrollTopValue(float v) { scrollTop_ = v; }
+    // Both setters keep the document's registry of scrolled elements
+    // (Document::noteScrollOffset), which the post-layout clamp reads; every
+    // write of an offset (scrollTop/scrollLeft, scrollTo, scrollIntoView, the
+    // wheel, restored state) goes through them.
+    void setScrollTopValue(float v);
     float scrollLeftValue() const { return scrollLeft_; }
-    void setScrollLeftValue(float v) { scrollLeft_ = v; }
+    void setScrollLeftValue(float v);
 
     // Auto-scroll flag: scroll to bottom after next layout
     bool needsScrollToBottom() const { return scrollToBottom_; }
@@ -741,6 +745,24 @@ private:
 // Template implementation — must be in header
 template<typename Fn>
 void Element::forEachComposedChild(Fn&& fn) const {
+    // No shadow tree and no <slot> child: the composed children are the
+    // children, read in place rather than copied (a per-frame walk of the whole
+    // document called this for every element). By index, so a callback that
+    // changes the list cannot step past its end.
+    if (!hasShadow()) {
+        const auto& kids = childNodes();
+        bool slot = false;
+        for (auto* n : kids)
+            if (n->nodeType() == NodeType::Element && static_cast<const Element*>(n)->tagName() == "SLOT") {
+                slot = true;
+                break;
+            }
+        if (!slot) {
+            for (size_t i = 0; i < kids.size(); ++i)
+                if (kids[i]->nodeType() == NodeType::Element) fn(static_cast<Element*>(kids[i]));
+            return;
+        }
+    }
     for (auto* node : composedChildNodes()) {
         if (node->nodeType() == NodeType::Element)
             fn(static_cast<Element*>(node));

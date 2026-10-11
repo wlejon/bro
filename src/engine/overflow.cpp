@@ -1,5 +1,6 @@
 #include "engine/overflow.h"
 #include "engine/scrollbar.h"
+#include "dom/document.h"
 #include "dom/element.h"
 #include "dom/element_scroll.h"
 #include "dom/shadow_root.h"
@@ -59,40 +60,70 @@ dom::Element* wheelScrollChain(dom::Element* target, bool horizontal, float delt
     return nullptr;
 }
 
-bool clampScrollOffsets(dom::Element* root, std::vector<dom::Element*>* changed) {
-    if (!root) return false;
-    auto& style = root->computedStyle();
-    {
-        auto it = style.find("display");
-        if (it != style.end() && it->second == "none") return false;
-    }
+namespace {
 
+bool isDisplayNone(const dom::Element* el) {
+    const auto& style = el->computedStyle();
+    auto it = style.find("display");
+    return it != style.end() && it->second == "none";
+}
+
+// One scroller's offsets, brought back within its content. True if either moved.
+bool clampOne(dom::Element* el) {
+    const auto& style = el->computedStyle();
     bool moved = false;
     // A scroller only holds an offset if it clips; overflow:visible never does.
-    bool selfMoved = false;
-    if (root->scrollTopValue() != 0.0f && overflowClips(getOverflowY(style))) {
-        float clamped = dom::clampedScrollTopOf(root);
-        if (clamped != root->scrollTopValue()) {
-            root->setScrollTopValue(clamped);
-            selfMoved = true;
+    if (el->scrollTopValue() != 0.0f && overflowClips(getOverflowY(style))) {
+        float clamped = dom::clampedScrollTopOf(el);
+        if (clamped != el->scrollTopValue()) {
+            el->setScrollTopValue(clamped);
+            moved = true;
         }
     }
-    if (root->scrollLeftValue() != 0.0f) {
+    if (el->scrollLeftValue() != 0.0f) {
         // maxScrollLeftOf is 0 for a box that does not scroll horizontally,
         // so a stale offset on a box that stopped being a scroller resets too.
-        float clamped = dom::clampedScrollLeftOf(root);
-        if (clamped != root->scrollLeftValue()) {
-            root->setScrollLeftValue(clamped);
-            selfMoved = true;
+        float clamped = dom::clampedScrollLeftOf(el);
+        if (clamped != el->scrollLeftValue()) {
+            el->setScrollLeftValue(clamped);
+            moved = true;
         }
     }
-    if (selfMoved) {
-        if (changed) changed->push_back(root);
-        moved = true;
+    return moved;
+}
+
+}  // namespace
+
+bool clampScrollOffsets(dom::Element* root, std::vector<dom::Element*>* changed) {
+    if (!root || !root->document()) return false;
+    dom::Document* doc = root->document();
+    // Only an element holding an offset can need clamping: the document keeps
+    // those (Document::scrolledElements), so this looks at a handful rather
+    // than walking every element (which cost a one-class change in a
+    // 10,000-element document most of its frame). A copy: clamping to 0 takes
+    // an element out of the set.
+    const std::vector<dom::Element*> scrolled(doc->scrolledElements().begin(), doc->scrolledElements().end());
+    bool moved = false;
+    for (dom::Element* el : scrolled) {
+        // Freed, or adopted into another document: not ours to touch.
+        if (!doc->ownsNode(el) || el->document() != doc) {
+            doc->forgetScrolled(el);
+            continue;
+        }
+        // Under `root` in the composed tree, and rendered: an offset under
+        // display:none is remembered, not clamped against a stale box; one
+        // in a detached tree waits for it to come back.
+        bool under = false, hidden = false;
+        for (dom::Element* e = el; e; e = composedParent(e)) {
+            if (isDisplayNone(e)) { hidden = true; break; }
+            if (e == root) { under = true; break; }
+        }
+        if (!under || hidden) continue;
+        if (clampOne(el)) {
+            if (changed) changed->push_back(el);
+            moved = true;
+        }
     }
-    root->forEachComposedChild([&](dom::Element* child) {
-        if (clampScrollOffsets(child, changed)) moved = true;
-    });
     return moved;
 }
 

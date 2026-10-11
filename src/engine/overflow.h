@@ -41,8 +41,10 @@ bool setScrollOffsetClamped(dom::Element* el, bool horizontal, float offset);
 dom::Element* wheelScrollChain(dom::Element* target, bool horizontal, float delta,
                                bool& moved);
 
-/// Re-clamp every scroller's stored scrollTop into its post-layout range,
-/// walking the composed tree from `root`. Call this after layout: content that
+/// Re-clamp every scroller's stored scrollTop into its post-layout range: the
+/// elements under `root` (in the composed tree) that hold an offset, which the
+/// document keeps (Document::scrolledElements), not a walk of every element.
+/// Call this after layout: content that
 /// shrank (a tab panel swapped for a shorter one, a collapsed fold, a filtered
 /// list) leaves the stored offset above the new max, and nothing else brings it
 /// back down — the wheel handler skips a scroller whose content now fits

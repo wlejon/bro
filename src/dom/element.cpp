@@ -830,6 +830,16 @@ void Element::setScrollToBottom(bool v) {
     }
 }
 
+void Element::setScrollTopValue(float v) {
+    scrollTop_ = v;
+    if (document_) document_->noteScrollOffset(this, scrollTop_ != 0.0f || scrollLeft_ != 0.0f);
+}
+
+void Element::setScrollLeftValue(float v) {
+    scrollLeft_ = v;
+    if (document_) document_->noteScrollOffset(this, scrollTop_ != 0.0f || scrollLeft_ != 0.0f);
+}
+
 void Element::notePathDirty(bool style, bool layout) {
     for (Node* p = parent_; p; ) {
         if (p->nodeType() == NodeType::Element) {
