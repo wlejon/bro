@@ -55,10 +55,12 @@
 // sweep does not ask for one on the frame path: it waits for the heap's own,
 // which a program that keeps rebuilding its DOM reaches by allocating. It
 // collects itself only once the host has been quiet for a second (no rAF,
-// microtask or brokit work pending — the idle GC's rule, which it also applies
-// inside a host eval, where a headless script steps time and the idle GC does
-// not run), or when tens of thousands of nodes have waited ten seconds, or any
-// a minute.
+// microtask or brokit work pending, and no trees detached — the idle GC's
+// rule, which it also applies inside a host eval, where a headless script
+// steps time and the idle GC does not run), so a view switch is not followed
+// by a collection in its next frame; when a host that never pauses has had
+// two thousand nodes waiting two seconds (at most every two seconds); or when
+// tens of thousands of nodes have waited ten seconds, or any a minute.
 //
 // ENTRY LIFETIME. A registry entry is freed once its node is gone and no JS
 // object reaches it natively: `jsRefs` counts the wrapper handles (released by

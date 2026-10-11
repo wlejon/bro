@@ -25,6 +25,8 @@
 #  include <psapi.h>
 #elif defined(__linux__)
 #  include <unistd.h>
+#elif defined(__APPLE__)
+#  include <mach/mach.h>
 #endif
 
 namespace bro::bronze_host {
@@ -159,6 +161,15 @@ uint64_t hostProcessPrivateBytes() {
     std::fclose(f);
     if (got != 2) return 0;
     return static_cast<uint64_t>(resident) * static_cast<uint64_t>(sysconf(_SC_PAGESIZE));
+#elif defined(__APPLE__)
+    // The task's physical footprint: what Activity Monitor calls its memory,
+    // and macOS's measure of what a process costs the machine (without it the
+    // memory-pressure collection never fired on macOS).
+    task_vm_info_data_t info{};
+    mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+    if (task_info(mach_task_self(), TASK_VM_INFO, reinterpret_cast<task_info_t>(&info), &count) != KERN_SUCCESS)
+        return 0;
+    return static_cast<uint64_t>(info.phys_footprint);
 #else
     return 0;
 #endif

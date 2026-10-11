@@ -97,12 +97,19 @@ constexpr double kLaterScanMs = 500.0;
 constexpr double kForceCollectAfterMs = 10000.0;
 constexpr size_t kForceCollectNodes = 50000;
 constexpr double kForceCollectAnywayMs = 60000.0;
-// A quiet host — no rAF, microtask or brokit work pending — is not drawing
-// anything, so a collection costs it nothing anyone sees. After this long
+// A quiet host — no rAF, microtask or brokit work pending, and no trees
+// detached — is not drawing anything, so a collection costs it nothing anyone
+// sees. After this long
 // quiet the sweep collects for trees demoted since its last quiet collection.
 // It is the idle GC's rule, and stands in for it where the idle GC cannot run:
 // inside a host eval, which is where a headless script steps time.
 constexpr double kQuietCollectMs = 1000.0;
+// A host that detaches trees without ever pausing (a timer rebuilding a panel
+// every frame, a list re-filled as it scrolls) is never quiet, and the heap may
+// not reach a full collection of its own for a long while: once this many
+// nodes have waited this long, the sweep collects, at most this often.
+constexpr double kBusyCollectMs = 2000.0;
+constexpr size_t kBusyCollectNodes = 2000;
 
 // ---------------------------------------------------------------------------
 // The pieces of JavaScript the sweep calls
@@ -195,6 +202,7 @@ struct SweepState {
     double clockMs = 0.0;
     double quietMs = 0.0;
     double quietCollectAtMs = -1.0;
+    double collectAtMs = -1e9;  // the sweep's last collection of its own
     uint64_t seenCollections = 0;
     uint64_t seenFull = 0;
     // A WeakRef was made or read since the kept list was last cleared.
@@ -689,16 +697,24 @@ void hostDomSweepFrame(double dtMs) {
 
     const double oldest = oldestYoungMs();
     const double waited = oldest >= 0.0 ? s.clockMs - oldest : 0.0;
-    const bool quiet = !ev::microtasksPending() && !hasPendingAnimationFrames() &&
-                       !brokitHasWorkInFlight();
+    // A frame that detached trees is not quiet either: an app with no rAF
+    // that rebuilds its DOM from input or a timer (a view switch) would
+    // otherwise collect in the very next frame, every time. The collection
+    // waits for a second without any; an app that detaches every frame is
+    // collected by the heap and the memory-pressure GC, as one with a rAF is.
+    const bool quiet = !hadWork && s.groups.size() == groupsBefore && !ev::microtasksPending() &&
+                       !hasPendingAnimationFrames() && !brokitHasWorkInFlight();
     s.quietMs = quiet ? s.quietMs + dt : 0.0;
     const bool quietDue = s.quietMs >= kQuietCollectMs && oldest > s.quietCollectAtMs;
+    const bool busyDue = waited >= kBusyCollectMs && s.demotedNodes >= kBusyCollectNodes &&
+                         s.clockMs - s.collectAtMs >= kBusyCollectMs;
     bool forced = false;
-    if (oldest >= 0.0 && (quietDue ||
+    if (oldest >= 0.0 && (quietDue || busyDue ||
                          (waited >= kForceCollectAfterMs && s.demotedNodes >= kForceCollectNodes) ||
                          waited >= kForceCollectAnywayMs)) {
         collectForSweep();
         s.quietCollectAtMs = s.clockMs;
+        s.collectAtMs = s.clockMs;
         forced = true;
     }
 
