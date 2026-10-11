@@ -144,9 +144,11 @@ bool sameCommand(const CommandBuffer& A, const DrawCommand& a, const CommandBuff
             } else if constexpr (std::is_same_v<T, Cmd_DrawBackdropFilter> ||
                                  std::is_same_v<T, Cmd_BlitCanvasInline>) {
                 return false;  // what they show is not in the recording
+            } else if constexpr (std::is_empty_v<T>) {
+                return true;  // a save, a restore, a marker: its one byte is not a value
             } else {
                 // The rest are floats, ints and colours with no padding
-                // (rects, radii, transforms, clips, markers).
+                // (rects, radii, transforms, clips).
                 return eqMem(&x, &y, sizeof(T));
             }
         },

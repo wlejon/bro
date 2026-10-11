@@ -3,9 +3,16 @@
 // windowed pass (main.js). Everything random comes from one seeded PRNG, so a
 // seed replays the same document and the same steps.
 //
-// After every step the driver compares the frame the span cache produced with
-// a full re-record of it (setPaintCache(false)): any pixel apart is a span
-// reused when what it painted had changed.
+// After every step the driver compares the frame the span cache and the
+// partial raster produced with the same frame recorded and rastered whole
+// (setPaintCache(false)). The rule (diff below): a pixel is apart when a
+// channel differs by more than 16, and the frames differ where an apart pixel
+// has at least 5 apart in its 3x3 neighbourhood. A partial raster draws its
+// damage on a scratch surface whose origin is not the layer's, and Skia's
+// antialiasing of an edge (CPU and GPU alike) moves with that, so an edge
+// pixel can flip: a thin line, reported as edgePixels, never an area. A span
+// reused when it had changed, or a damage that missed something, leaves an
+// area of stale pixels, which fails.
 
 (function () {
     function mulberry32(a) {
