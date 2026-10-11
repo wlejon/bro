@@ -138,10 +138,10 @@
  * @property {boolean} [runSemantic=true] - generate(): false stops after the plan
  * @property {boolean} [runSynthesize=true] - generate(): false stops after the semantic tokens
  * @property {boolean} [reusePrefixKv=true] - generate(): reuse the semantic stage's KV cache for synthesis instead of prefilling again
- * @property {number} [abcDraftTokens=0] - Speculative ABC planning: 1..7 tokens drafted per forward by prompt lookup
+ * @property {number} [abcDraftTokens=5] - Speculative ABC planning: 1..7 tokens drafted per forward by prompt lookup
  *   (the score repeats itself) and checked with standard speculative acceptance, so the plan's distribution is
- *   exactly that of no drafting; a given seed draws a different plan than at 0 (greedy gives the same one). 5 is a
- *   good value: ~2.3-2.6 tokens per forward, the plan ~200 -> ~400 tok/s in BF16 (~540 with arWeights 'int8'), and
+ *   exactly that of no drafting; a given seed draws a different plan than at 0 (0 = off, the one-token path; greedy
+ *   gives the same plan either way). The default 5: ~2.3-2.6 tokens per forward, the plan ~200 -> ~400 tok/s in BF16 (~540 with arWeights 'int8'), and
  *   cot 'full' time to first audio streaming 10.1 s -> 6.7 s (5.0 s with int8) on a 4090. Ignored with cfgScale
  *   (the plan has no CFG). timing.planForwards counts the forwards.
  * @property {YuE2Steer[]} [steer]
@@ -247,8 +247,8 @@
  * @typedef {Object} YuE2LoadOptions
  * @property {string} [device] - 'cuda', 'vulkan', 'metal' or 'cpu'; defaults to the GPU
  * @property {boolean} [decoderOnly=false] - loadVae: skip the encoder
- * @property {string} [arWeights='bf16'] - loadYuE2: the weights the one-token AR decode (plan + semantic sampling)
- *   reads. 'int8' / 'fp8' keep per-output-row quantised copies of every layer's AR projections and lm_head (~1.9 GB
+ * @property {string} [arWeights='int8'] - loadYuE2: the weights the one-token AR decode (plan + semantic sampling)
+ *   reads. 'bf16' is the checkpoint's own, the choice for parity with the reference model. 'int8' / 'fp8' keep per-output-row quantised copies of every layer's AR projections and lm_head (~1.9 GB
  *   more VRAM) and roughly halve the bytes each token reads: the ABC plan goes from ~200 to ~314 tok/s on a 4090
  *   (cot 'full' time to first latent ~10.1 s -> ~8.1 s). Prefill, synthesis and the VAE stay BF16. 'int8' is the
  *   closer of the two (a sampled token differs from BF16's distribution ~0.3% of the time in the plan, ~1.5% in
