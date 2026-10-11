@@ -1157,6 +1157,15 @@ private:
         bool layoutPerformed = false;
     };
     PassTimes layoutPassTimes_, rasterPassTimes_;
+    // Lifetime raster passes and their time in µs (the raster thread adds,
+    // perf.stats().paint reads).
+    std::atomic<uint64_t> rasterPasses_{0}, rasterUs_{0};
+
+public:
+    uint64_t rasterPassCount() const { return rasterPasses_.load(std::memory_order_relaxed); }
+    double rasterPassMsTotal() const { return rasterUs_.load(std::memory_order_relaxed) / 1000.0; }
+
+private:
     // The flight recorder's hooks into the frame loops (engine_frame_trace.cpp).
     void traceFrameBegin(double frameStart);
     void traceLayoutSignalled();

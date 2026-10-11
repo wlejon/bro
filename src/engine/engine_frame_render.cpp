@@ -130,6 +130,7 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
             if (baseNeedsRecord) {
                 // The last recording becomes the one this is diffed against
                 // (the raster thread is idle: nothing replays either).
+                const double tBase = util::currentTimeMs();
                 std::swap(baseCommands_, prevBaseCommands_);
                 recordAppLayers(baseCommands_,
                                 rsnap.vpWidth, rsnap.vpHeight,
@@ -137,6 +138,7 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
                                 rsnap.scrollY, pset, /*promotedOnly=*/false);
                 ++baseGeneration_;
                 baseDamage_.push(baseGeneration_, recordDamage(prevBaseCommands_, baseCommands_));
+                frameStats_.baseRecordMs += util::currentTimeMs() - tBase;
                 basePromotedSet_ = promotedElements_;
                 baseScrollY_ = rsnap.scrollY;
                 baseInsetTop_ = rsnap.insetTop;

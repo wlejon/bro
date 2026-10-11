@@ -36,6 +36,8 @@ struct FrameStats {
     // was invalidated and re-recorded (windowed; the <terminal> layer tests).
     uint64_t baseInvalidations = 0;
     uint64_t baseRecords = 0;
+    // And the main thread's time in them (perf.stats().paint.recordMs).
+    double baseRecordMs = 0.0;
 
     // Counts one frame of `frameMs` wall time. Returns true when that frame
     // closed a window and the means were refreshed.

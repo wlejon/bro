@@ -37,12 +37,20 @@
 
         function makeBox(depth) {
             const k = r();
-            if (depth > 0 && k < 0.02) {
+            if (depth > 0 && k < 0.05) {
                 const ol = document.createElement('ol');
                 ol.className = 'list';
-                for (let i = int(1, 3); i > 0; --i) {
+                for (let i = int(1, 4); i > 0; --i) {
                     const li = document.createElement('li');
-                    li.textContent = pick(WORDS);
+                    // An item with an element in it is a span of its own:
+                    // the one whose marker reads its parent.
+                    if (r() < 0.5) {
+                        const b = document.createElement('b');
+                        b.textContent = pick(WORDS);
+                        li.appendChild(b);
+                    } else {
+                        li.textContent = pick(WORDS);
+                    }
                     ol.appendChild(li);
                 }
                 return ol;
@@ -65,6 +73,21 @@
                 inp.value = pick(WORDS);
                 inp.style.width = int(30, 90) + 'px';
                 return inp;
+            }
+            if (depth > 0 && k < 0.21) {
+                const cb = document.createElement('input');
+                cb.type = 'checkbox';
+                cb.checked = r() < 0.5;
+                return cb;
+            }
+            if (depth > 0 && k < 0.22) {
+                const sel = document.createElement('select');
+                for (let i = int(2, 4); i > 0; --i) {
+                    const o = document.createElement('option');
+                    o.textContent = pick(WORDS);
+                    sel.appendChild(o);
+                }
+                return sel;
             }
             const el = document.createElement('div');
             let cls = 'b c' + int(0, 4);
@@ -89,8 +112,33 @@
             return el;
         }
 
+        let theField = null;  // build()'s text field, worked by the 'field' step
+
         function build() {
             for (let i = int(5, 8); i > 0; --i) stage.appendChild(makeBox(0));
+            // Always a numbered list whose items are spans of their own (their
+            // markers read their parent), and a text field to focus and select.
+            const ol = document.createElement('ol');
+            ol.className = 'list';
+            for (let i = 0; i < 4; ++i) {
+                const li = document.createElement('li');
+                const b = document.createElement('b');
+                b.textContent = pick(WORDS);
+                li.appendChild(b);
+                ol.appendChild(li);
+            }
+            stage.appendChild(ol);
+            // In a box of its own: a span the animations elsewhere on the
+            // stage do not record again every frame, so what the field paints
+            // is only ever as fresh as its own stamps make it.
+            const field = document.createElement('div');
+            field.className = 'b c3';
+            const inp = document.createElement('input');
+            inp.value = 'paint cache';
+            inp.style.width = '120px';
+            field.appendChild(inp);
+            stage.appendChild(field);
+            theField = inp;
         }
 
         // A random element of the stage (not the stage), optionally filtered.
@@ -194,6 +242,77 @@
                 const e = anyEl((x) => x.tagName === 'OL'); if (!e) return null;
                 e.setAttribute('start', String(int(1, 9)));
                 return { what: 'ordinal' };
+            }],
+            [5, 'listItem', () => {
+                // A numbered item's marker counts its siblings: one put in,
+                // taken out, or renumbered moves every number after it.
+                const ol = anyEl((x) => x.tagName === 'OL'); if (!ol) return null;
+                const items = ol.children;
+                const k = r();
+                if (k < 0.4 || !items.length) {
+                    const li = document.createElement('li');
+                    li.textContent = pick(WORDS);
+                    ol.insertBefore(li, items[int(0, items.length)] || null);
+                    return { what: 'list item in' };
+                }
+                if (k < 0.7) { items[int(0, items.length - 1)].remove(); return { what: 'list item out' }; }
+                items[int(0, items.length - 1)].setAttribute('value', String(int(1, 20)));
+                return { what: 'list item value' };
+            }],
+            [4, 'svg', () => {
+                const c = anyEl((x) => x.tagName.toLowerCase() === 'circle'); if (!c) return null;
+                const attr = pick(['fill', 'r', 'cx', 'stroke']);
+                c.setAttribute(attr, attr === 'fill' || attr === 'stroke' ? pick(COLORS) : String(int(2, 8)));
+                return { what: 'svg ' + attr };
+            }],
+            [5, 'field', () => {
+                // The text field build() made: focused, then its selection
+                // moved and text typed into it, which no restyle follows.
+                const e = theField;
+                if (!e || !e.isConnected) return null;
+                if (document.activeElement !== e) { e.focus(); return { what: 'field focus' }; }
+                const k = r();
+                if (k < 0.45) {
+                    const n = e.value.length;
+                    const a = int(0, n), b = int(0, n);
+                    e.setSelectionRange(Math.min(a, b), Math.max(a, b));
+                    return { what: 'field selection' };
+                }
+                if (k < 0.9 && typeof textInput === 'function') {
+                    textInput(pick(['a', 'Wq', ' ', 'xyz']));
+                    return { what: 'field typed' };
+                }
+                e.blur();
+                return { what: 'field blur' };
+            }],
+            [5, 'control', () => {
+                // Half the time the field that has focus, if one does: what
+                // it paints then (caret, selection, typed text) moves with no
+                // restyle.
+                const active = document.activeElement;
+                const focused = active && active.tagName === 'INPUT' && active.type !== 'checkbox' && stage.contains(active);
+                const e = focused && r() < 0.5 ? active
+                    : anyEl((x) => x.tagName === 'INPUT' || x.tagName === 'SELECT');
+                if (!e) return null;
+                const k = r();
+                if (document.activeElement === e && e.type !== 'checkbox' && k < 0.3 && typeof textInput === 'function') {
+                    textInput(pick(['a', 'Wq', ' ', 'xyz']));
+                    return { what: 'input typed' };
+                }
+                if (e.tagName === 'SELECT') { e.selectedIndex = int(0, e.options.length - 1); return { what: 'select index' }; }
+                if (e.type === 'checkbox') { e.checked = !e.checked; return { what: 'checkbox' }; }
+                if (document.activeElement === e && k < 0.6) {
+                    // Focused, it paints its selection: which moves with no
+                    // restyle at all.
+                    const n = e.value.length;
+                    const a = int(0, n), b = int(0, n);
+                    e.setSelectionRange(Math.min(a, b), Math.max(a, b));
+                    return { what: 'input selection' };
+                }
+                if (k < 0.4) { e.value = pick(WORDS); return { what: 'input value' }; }
+                if (k < 0.55) { e.disabled = !e.disabled; return { what: 'input disabled' }; }
+                if (document.activeElement === e) e.blur(); else e.focus();
+                return { what: 'input focus' };
             }],
             [2, 'animate', () => {
                 const e = anyEl(isBox); if (!e) return null;

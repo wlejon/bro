@@ -139,6 +139,7 @@ void Engine::handleWheel(float x, float y, float dx, float dy) {
         float scroll = hoverTa->scrollY() - pxV;
         scroll = std::max(scroll, 0.0f);
         hoverTa->setScrollY(scroll);
+        target->notePaintChanged();  // an unfocused textarea's paint is cached
         markAppBaseDirty();
         return;
     }

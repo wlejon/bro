@@ -263,6 +263,8 @@ void Engine::rasterThreadFunc() {
         rasterRenderer->endFrame();
 
         rasterPassTimes_.rasterMs = util::currentTimeMs() - tRaster;
+        rasterPasses_.fetch_add(1, std::memory_order_relaxed);
+        rasterUs_.fetch_add(static_cast<uint64_t>(rasterPassTimes_.rasterMs * 1000.0), std::memory_order_relaxed);
         framePresenter_->publishResult();
     }
 

@@ -423,8 +423,10 @@ void DrawTraversal::paintElement(dom::Element* elem, float offsetX, float offset
                     }
                 } else {
                     // Ordinal marker: position among list-item siblings,
-                    // honoring <ol start> and <li value>.
-                    noteVolatile(SpanMiss::ListOrdinal);
+                    // honoring <ol start> and <li value>. What it counts is
+                    // the parent's (its children, its start), so the span
+                    // stands only while the parent is unchanged too.
+                    spanReadsParent_ = true;
                     auto isListItem = [](dom::Node* n) {
                         if (n->nodeType() != dom::NodeType::Element) return false;
                         auto* e = static_cast<dom::Element*>(n);
@@ -525,8 +527,9 @@ void DrawTraversal::paintElement(dom::Element* elem, float offsetX, float offset
 
     // SVG elements render their own children via the SVG pipeline — skip DOM traversal
     if (elem->svgControl()) {
-        noteVolatile(SpanMiss::Svg);
-        // Draw the SVG control, then return (no child traversal)
+        // Its paint is its subtree's (references resolve inside it), styles
+        // and box: every change to those stamps it, so it is cached like any
+        // other box. Draw the SVG control, then return (no child traversal)
         if (visible) {
             elem->svgControl()->draw(renderer_, elem, box, offsetX, offsetY);
         }
@@ -649,8 +652,18 @@ void DrawTraversal::paintElement(dom::Element* elem, float offsetX, float offset
     // Draw replaced element content (input, textarea, select, svg)
     if (visible) {
         auto* inputCtrl = elem->inputControl();
-        if (inputCtrl || elem->textareaControl() || elem->selectControl())
-            noteVolatile(SpanMiss::Control);
+        // A form control paints its value, label and state, which reach it
+        // through attributes and restyles (stamped). While it has focus (or
+        // a range thumb is dragged) it also paints a caret, a selection and
+        // its own scroll, which move with no stamp: then it is recorded every
+        // pass. It notes where it was drawn in the document for its overlays
+        // (IME, popups), so it is never moved for a document scroll.
+        if (inputCtrl || elem->textareaControl() || elem->selectControl()) {
+            spanPinned_ = true;
+            const bool live = (inputCtrl && (inputCtrl->isFocused() || inputCtrl->isDragging())) ||
+                              (elem->textareaControl() && elem->textareaControl()->isFocused());
+            if (live) noteVolatile(SpanMiss::Control);
+        }
         if (elem->videoControl()) noteVolatile(SpanMiss::Video);
         if (inputCtrl) {
             inputCtrl->draw(renderer_, box, style, offsetX, offsetY,

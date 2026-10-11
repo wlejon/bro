@@ -170,6 +170,7 @@ void setSelectedIndex(dom::Element* el, int index) {
     if (!el) return;
     if (auto* sel = el->selectControl()) {
         sel->setSelectedIndex(index);
+        el->markPaintDirty();  // it shows the selected option's label
     } else if (tagIs(el, "select", "SELECT")) {
         // No layout control yet; remember the assignment so the control adopts
         // it on creation and the getter reflects it immediately.

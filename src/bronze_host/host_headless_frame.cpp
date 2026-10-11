@@ -800,6 +800,14 @@ void installHeadlessFrame(engine::Engine& engine) {
                 pt.set(ev::setProperty(pt.get(), "reused", ev::fromDouble(static_cast<double>(pc.reused))));
                 pt.set(ev::setProperty(pt.get(), "reusedScrolled",
                                        ev::fromDouble(static_cast<double>(pc.reusedScrolled))));
+                // The windowed frame loop's base records (record + diff, main
+                // thread) and raster passes, since startup.
+                pt.set(ev::setProperty(pt.get(), "records",
+                                       ev::fromDouble(static_cast<double>(engine.frameStats().baseRecords))));
+                pt.set(ev::setProperty(pt.get(), "recordMs", ev::fromDouble(engine.frameStats().baseRecordMs)));
+                pt.set(ev::setProperty(pt.get(), "rasterPasses",
+                                       ev::fromDouble(static_cast<double>(engine.rasterPassCount()))));
+                pt.set(ev::setProperty(pt.get(), "rasterMs", ev::fromDouble(engine.rasterPassMsTotal())));
                 pt.set(ev::setProperty(pt.get(), "recorded", ev::fromDouble(static_cast<double>(pc.recorded))));
                 for (size_t i = 0; i < static_cast<size_t>(layout::SpanMiss::Count); ++i)
                     why.set(ev::setProperty(why.get(), layout::spanMissName(static_cast<layout::SpanMiss>(i)),

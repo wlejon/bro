@@ -227,6 +227,10 @@ private:
     // The span being recorded paints at a place of the viewport (SpanEntry::
     // pinned); it carries up like spanVolatile_.
     mutable bool spanPinned_ = false;
+    // The span being recorded paints something its parent element decides
+    // (a numbered list marker counts its siblings: SpanEntry::readsParent).
+    // Not carried up: the spans around it are the parent's, stamped anyway.
+    bool spanReadsParent_ = false;
     PaintCache* beginPaintCache(dom::Element* root);
     void prunePaintCache(PaintCache& cache);
     // Box shadows (outset, then inset over the background), background,

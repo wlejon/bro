@@ -8,8 +8,10 @@
 // stamp (dom::Element::notePaintChanged — every mark, restyle, box change and
 // scroll offset under it) is older than the span, and the span is drawn at
 // the same place under the same clip. What a span cannot vouch for — a layer
-// break, a form control, a video, an animated or still-decoding image, ... —
-// makes it volatile: drawn, never reused (the reasons are counted).
+// break, a focused form control, a video, an animated or still-decoding
+// image, ... — makes it volatile: drawn, never reused (the reasons are
+// counted). Inline <svg> is cached (its paint is its own subtree's); a
+// numbered list marker's span also checks its parent (SpanEntry::readsParent).
 //
 // A test can turn it off (setPaintCache in headless) to record a pass from
 // scratch, the frame tests/layout/test_paint_cache_fuzz.js compares against.
@@ -34,13 +36,11 @@ enum class SpanMiss : uint8_t {
     Context,        // the cache was emptied: viewport, fonts, top layer, ...
     // Volatile: recorded, never reused.
     LayerBreak,     // a canvas / WebGL / scene / iframe / remote view layer
-    Control,        // <input>, <textarea>, <select>
+    Control,        // a focused <input> / <textarea> (caret, selection, scroll)
     Video,
     Terminal,       // an inline <terminal>
-    Svg,            // inline <svg> (its paint can read elements outside it)
     AnimatedImage,
     PendingImage,   // an image still decoding: the gap paints nothing
-    ListOrdinal,    // a numbered list marker counts its siblings
     Count
 };
 const char* spanMissName(SpanMiss m);
@@ -86,6 +86,9 @@ struct SpanEntry {
     // background), not of the document: reused only at the root offset it
     // was recorded at, never translated for a scroll.
     bool pinned = false;
+    // It paints something its parent element decides (a numbered marker's
+    // ordinal): reused only while the parent's stamp is older than it too.
+    bool readsParent = false;
     std::shared_ptr<render::CommandBuffer> buffer;
 };
 
