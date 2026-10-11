@@ -12,6 +12,9 @@ self.onmessage = (e) => {
         r.available = wl.available(none);
         r.bursts = wl.groupBursts(m.records, { gapS: 1 });
         r.count = wl.config({ detector: m.empty, classifier: m.empty, species: m.list }).speciesList.count;
+        r.merged = wl.config({ detector: m.empty, classifier: m.empty, species: [m.list, m.list2] }).speciesList.count;
+        const lbl = (t) => { const l = wl.label(null, r.bursts[0], { labelThreshold: t }); return l && l.common; };
+        r.labels = [lbl(0.65), lbl(0.85)];
     } catch (err) {
         r.ok = false;
         r.error = String((err && err.message) || err);

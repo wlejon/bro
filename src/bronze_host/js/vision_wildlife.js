@@ -23,24 +23,33 @@
 
     const wl = {};
 
-    /** OWLv2 queries: the animals of a yard species list. */
+    /** OWLv2 queries: the animals of a yard species list, then its reptiles and amphibians. */
     const QUERIES = [
         'a bird', 'a squirrel', 'a chipmunk', 'a rabbit', 'a deer', 'a raccoon', 'a fox',
         'a woodchuck', 'a skunk', 'a beaver', 'a muskrat', 'an otter', 'a mink',
+        'a snake', 'a turtle', 'a frog', 'a toad', 'a lizard', 'a salamander',
     ];
     // Clear animals score 0.3 and up; real ones half hidden and look-alikes
-    // share 0.1-0.3; empty frames score under 0.1.
+    // share 0.1-0.3; empty frames score under 0.1. A species score under
+    // labelThreshold is not shown as a name (label()).
     const DEFAULTS = { model: 'bioclip-2', threshold: 0.15, topK: 5, margin: 0.15,
-                       nms: 0.3, maxDetections: 20, gapS: 1.0 };
+                       nms: 0.3, maxDetections: 20, gapS: 1.0, labelThreshold: 0.85 };
     const MODEL_REPO = { 'bioclip': 'imageomics/bioclip', 'bioclip-2': 'imageomics/bioclip-2',
                          'owlv2': 'google/owlv2-base-patch16-ensemble' };
-    const SPECIES_LIST = 'upper-midwest.json';
+    // The default species lists, merged: a file in a bro.models folder each.
+    // The birds and yard mammals (eBird names), and the GBIF reptiles and
+    // amphibians in a folder of their own below species/.
+    const SPECIES_LISTS = [
+        { folder: 'species', file: 'upper-midwest.json' },
+        { folder: 'species/upper-midwest-herps', file: 'species.json' },
+    ];
     const IMAGE_SIZE = 224;
     // open_clip's trained temperature: exp(logit_scale) = 100 for both BioCLIPs.
     const LOGIT_SCALE = 100;
 
     wl.QUERIES = QUERIES;
     wl.DEFAULTS = DEFAULTS;
+    wl.SPECIES_LISTS = SPECIES_LISTS;
 
     const fsMod = () => globalThis.require('fs');
     const slashes = (p) => String(p).replace(/\\/g, '/').replace(/\/+$/, '');
@@ -64,7 +73,8 @@
     /**
      * The paths open() would use and what is missing, without loading.
      * bro.models.find answers the defaults in the main realm; a Worker has no
-     * bro.models, so every path must be given there.
+     * bro.models, so every path must be given there. `fetch` names the
+     * bro.models folders that would install what is missing of the defaults.
      */
     wl.locate = function locate(opts) {
         const o = opts || {};
@@ -72,22 +82,34 @@
         const find = models && typeof models.find === 'function' ? (n) => models.find(n) : null;
         const model = o.model || DEFAULTS.model;
         const out = { detector: o.detector || null, classifier: o.classifier || null,
-                      species: o.species || null, model, missing: [] };
+                      species: o.species || null, model, missing: [], fetch: [] };
         if (!find && (!o.detector || !o.classifier || !o.species)) {
             throw new Error('bro.vision.wildlife: bro.models is main-realm only; in a Worker pass ' +
                             'detector, classifier and species (paths)');
         }
         if (!out.detector) out.detector = find('owlv2');
         if (!out.classifier) out.classifier = find(model);
-        if (!out.species) {
-            const dir = find('species');
-            out.species = dir ? dir + '/' + SPECIES_LIST : null;
+        if (!out.detector || !exists(out.detector + '/model.safetensors')) {
+            out.missing.push('detector');
+            if (!o.detector && !out.detector) out.fetch.push('owlv2');
         }
-        if (!out.detector || !exists(out.detector + '/model.safetensors')) out.missing.push('detector');
         if (!out.classifier || !exists(out.classifier + '/model.safetensors') ||
-            !exists(out.classifier + '/config.json')) out.missing.push('classifier');
+            !exists(out.classifier + '/config.json')) {
+            out.missing.push('classifier');
+            if (!o.classifier && !out.classifier) out.fetch.push(model);
+        }
+        if (!out.species) {
+            // The default lists, each in its bro.models folder (null: not found).
+            out.species = SPECIES_LISTS.map((l) => { const d = find(l.folder); return d ? slashes(d) + '/' + l.file : null; });
+            // No species folder: fetching it brings every list (its subfolders too);
+            // with it, a list folder of its own that is not there is fetched alone.
+            if (!find('species')) out.fetch.push('species');
+            else SPECIES_LISTS.forEach((l, i) => { if (l.folder !== 'species' && !out.species[i]) out.fetch.push(l.folder); });
+        }
         // No list given and no species folder found is missing too, not "no list".
-        if (out.species == null || (typeof out.species === 'string' && !exists(out.species))) out.missing.push('species');
+        const files = typeof out.species === 'string' ? [out.species]
+            : Array.isArray(out.species) ? out.species.filter((s) => s === null || typeof s === 'string') : [];
+        if (out.species == null || files.some((f) => f === null || !exists(f))) out.missing.push('species');
         return out;
     };
 
@@ -115,6 +137,58 @@
         return doc.species || doc;
     };
 
+    // A list's name in `config`: the file's name, or for a list that is a
+    // folder's species.json (the generated lists), "<folder>/species.json".
+    function listName(p) {
+        const parts = slashes(p).split('/');
+        const base = parts.pop();
+        return base === 'species.json' && parts.length ? parts.pop() + '/' + base : base;
+    }
+
+    /**
+     * The rows of one list or several, merged: `lists` a file, rows, or an
+     * array of files and rows. A species (by scientific name, ignoring case
+     * and spacing) is kept where it first appears.
+     */
+    wl.readSpecies = function readSpecies(lists) {
+        const items = typeof lists === 'string' ? [lists] : Array.isArray(lists) ? lists : [];
+        const seen = new Set(), rows = [];
+        const add = (r) => {
+            const k = String(r.scientific || r.common || '').trim().replace(/\s+/g, ' ').toLowerCase();
+            if (!k || seen.has(k)) return;
+            seen.add(k);
+            rows.push(r);
+        };
+        for (const it of items) {
+            if (typeof it === 'string') wl.readSpeciesList(it).forEach(add);
+            else if (Array.isArray(it)) it.forEach(add);
+            else if (it && typeof it === 'object') add(it);
+        }
+        return rows;
+    };
+
+    /**
+     * The name a photo or burst is shown with, or null: a burst's consensus
+     * (groupBursts) when the photo is in a burst with an animal consensus,
+     * else the photo's own top-1 species. Null when there is no animal, or
+     * when that score (the consensus `share`, or the top-1 `score`) is under
+     * `labelThreshold` (DEFAULTS.labelThreshold, 0.85): an animal found but
+     * not identified. label(null, burst) is the burst's own.
+     * @returns {{ common, scientific, score, from: 'burst'|'photo' } | null}
+     */
+    wl.label = function label(rec, burst, opts) {
+        const t = opts && opts.labelThreshold != null ? opts.labelThreshold : DEFAULTS.labelThreshold;
+        let pick = null;
+        if (burst && burst.species) {
+            const s = burst.species;
+            pick = { common: s.common, scientific: s.scientific, score: s.share, from: 'burst' };
+        } else if (rec && !rec.error && rec.animal && rec.species && rec.species.length) {
+            const s = rec.species[0];
+            pick = { common: s.common, scientific: s.scientific, score: s.score, from: 'photo' };
+        }
+        return pick && pick.score >= t ? pick : null;
+    };
+
     // What a model directory is: upstream repo + revision (its ATTRIBUTION.md)
     // and the weights file's size.
     function modelInfo(name, dir) {
@@ -133,8 +207,9 @@
     function resolve(opts) {
         const o = opts || {};
         const loc = wl.locate(o);
-        const species = Array.isArray(loc.species) ? loc.species
-            : (loc.species && exists(loc.species) ? wl.readSpeciesList(loc.species) : []);
+        const lists = typeof loc.species === 'string' ? [loc.species] : Array.isArray(loc.species) ? loc.species : [];
+        // A list file not there leaves its rows out (locate() names it missing).
+        const species = wl.readSpecies(lists.filter((l) => typeof l !== 'string' || exists(l)));
         const config = {
             detector: modelInfo('owlv2', loc.detector),
             classifier: modelInfo(o.model || (o.classifier ? baseName(o.classifier) : DEFAULTS.model), loc.classifier),
@@ -142,8 +217,10 @@
             queries: o.queries || QUERIES,
             topK: o.topK || DEFAULTS.topK,
             margin: o.margin == null ? DEFAULTS.margin : o.margin,
-            speciesList: { file: typeof loc.species === 'string' ? baseName(loc.species) : null,
-                           count: species.length },
+            // The list files by name, the merged count, and a hash of every
+            // prompt (so an edited list is a new config).
+            speciesList: { files: lists.filter((l) => typeof l === 'string').map(listName),
+                           count: species.length, hash: fnv1a(species.map(speciesPrompt).join('\n')) },
         };
         return { loc, species, config };
     }
@@ -275,8 +352,11 @@
         }
         const { loc, species, config } = resolve(o);
         if (loc.missing.length) {
+            const where = (v) => (Array.isArray(v)
+                ? v.map((x) => (typeof x === 'string' ? x : x === null ? 'not found' : 'rows')).join(' + ')
+                : v || 'not found');
             const e = new Error('bro.vision.wildlife.open: not available, missing ' + loc.missing.map((k) =>
-                k + ' (' + (Array.isArray(loc[k]) ? 'rows' : loc[k] || 'not found') + ')').join(', '));
+                k + ' (' + where(loc[k]) + ')').join(', '));
             e.code = 'missing';
             e.missing = loc.missing;
             throw e;
@@ -335,8 +415,12 @@
         const an = {
             config, species, prompts, cached, dim, imageSize,
             paths: { detector: loc.detector, classifier: loc.classifier,
-                     species: typeof loc.species === 'string' ? loc.species : null },
+                     species: (typeof loc.species === 'string' ? [loc.species] : loc.species)
+                         .filter((l) => typeof l === 'string') },
+            labelThreshold: o.labelThreshold == null ? DEFAULTS.labelThreshold : o.labelThreshold,
             get device() { return owl.device; },
+            /** label() at this analyzer's labelThreshold. */
+            label(rec, burst) { return wl.label(rec, burst, { labelThreshold: an.labelThreshold }); },
             /** OWLv2 boxes in `img`'s pixels, best first: [{ box, score, label }]. */
             detect(img, dopts) {
                 live('detect');

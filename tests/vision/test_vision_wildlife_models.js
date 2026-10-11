@@ -40,6 +40,15 @@ function run() {
          ['google/owlv2-base-patch16-ensemble', 'imageomics/bioclip-2', 0.15], 'config');
     same(an.config, wl.config(), 'open().config is config()');
     assert(an.config.speciesList.count === an.species.length && an.species.length > 100, 'the species list');
+    // The default lists, merged: the birds and mammals, then the reptiles and amphibians.
+    same(an.config.speciesList.files, ['upper-midwest.json', 'upper-midwest-herps/species.json'], 'both default lists');
+    same(an.paths.species.length, 2, 'their files');
+    assert(an.species.some((s) => s.class === 'Aves') && an.species.some((s) => s.class === 'Amphibia') &&
+           an.species.some((s) => s.scientific === 'Thamnophis sirtalis'), 'birds, amphibians and the garter snake');
+    same(new Set(an.species.map((s) => s.scientific.toLowerCase())).size, an.species.length, 'no species twice');
+    assert(an.config.queries.includes('a snake') && an.config.queries.includes('a salamander'), 'the herp queries');
+    assert(an.labelThreshold === 0.85 && an.label({ animal: true, species: [{ common: 'X', scientific: 'x', score: 0.9 }] }).common === 'X',
+           'the analyzer labels at 0.85');
     assert(an.cached === false, 'first open embeds the list');
 
     // Nothing in an empty frame at the default threshold.

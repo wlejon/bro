@@ -717,7 +717,8 @@ owl.dispose();
 // loadOwlv2, bro.lm.loadClip and bro.image:
 //
 //   1. OWLv2 asks for the animals of the list (`QUERIES`: 'a bird',
-//      'a squirrel', ... 'a mink'). No box over the threshold (0.15) is the
+//      'a squirrel', ... 'a mink', then 'a snake', 'a turtle', 'a frog',
+//      'a toad', 'a lizard', 'a salamander'). No box over the threshold (0.15) is the
 //      answer "no animal" (an empty feeder, a branch, the lawn). Clear animals
 //      score 0.3 and up; between 0.1 and 0.3 sit both real ones (half hidden,
 //      distant) and look-alikes; empty frames score under 0.1.
@@ -733,6 +734,9 @@ owl.dispose();
 //      groupBursts: shots under 1.0 s apart are a burst, its species the
 //      score-weighted vote of every frame's top 5, its keeper the frame with
 //      the sharpest subject (Tenengrad).
+//   4. label(): the name to show, only at 0.85 or more (`labelThreshold`):
+//      a burst's consensus share, else the photo's top-1 score. Under it the
+//      animal is "found, not identified"; the records keep every score.
 //
 // The input image is the DETECTION image: decode the photo to 1280 on the
 // long side (bro.image.decodeScaled, a scaled JPEG decode, ~10x cheaper than
@@ -746,10 +750,13 @@ owl.dispose();
 // (google/owlv2-base-patch16-ensemble as released), `bioclip-2` / `bioclip`
 // (the open_clip releases converted by brolm's scripts/convert-openclip.py:
 // model.safetensors, config.json, vocab.json, merges.txt), and the species
-// list `species/upper-midwest.json` (bro.models finds directories, so the
-// list is found through `species/`). A list is `{ species: [{ common,
-// scientific, kingdom?, phylum?, class, order, family }, ...] }` or the bare
-// array.
+// lists (`SPECIES_LISTS`), merged: `species/upper-midwest.json` (birds and
+// 15 yard mammals, eBird names) and `species/upper-midwest-herps/species.json`
+// (78 reptiles and amphibians from GBIF, CC BY 4.0). bro.models finds
+// directories, so each list is found through its folder; fetching `species`
+// brings both, and `species/upper-midwest-herps` alone adds the herps to an
+// older species folder. A list is `{ species: [{ common, scientific,
+// kingdom?, phylum?, class, order, family }, ...] }` or the bare array.
 //
 // Realms: the same module is in the main realm and every Worker. bro.models
 // is main-realm only, so in a Worker every path must be given (open/locate
@@ -769,27 +776,38 @@ if (!bro.vision.wildlife.available()) hideIdentifyButton();
 /**
  * bro.vision.wildlife.locate(opts?) — the paths open() would use, and which
  * are missing ('detector' | 'classifier' | 'species'; a model directory
- * without model.safetensors, a list file that is not there, or no
- * `species` folder in bro.models when no list is given). Throws in a
- * Worker unless detector, classifier and species are all given.
+ * without model.safetensors, a list file that is not there, or, when no
+ * list is given, a default list whose bro.models folder is not found).
+ * `fetch`: the bro.models.fetch names that would install what is missing of
+ * the defaults ('owlv2', the model, 'species' when there is no species
+ * folder, else 'species/upper-midwest-herps' when only that is missing);
+ * empty when fetching would not help (a folder found without its files).
+ * Throws in a Worker unless detector, classifier and species are all given.
  * @returns {{ detector: string|null, classifier: string|null,
- *             species: string|Object[]|null, model: string, missing: string[] }}
+ *             species: string|Array<string|null|Object>|null, model: string,
+ *             missing: string[], fetch: string[] }}
+ *   `species` with no list given: the default list files, null where not found
  */
 const where = bro.vision.wildlife.locate({ model: 'bioclip' });
 if (where.missing.length) console.log('missing', where.missing.join(', '));
+for (const name of where.fetch) await bro.models.fetch(name);
 
 /**
  * bro.vision.wildlife.open(opts?) — load OWLv2 and the classifier and embed
  * the species list. Synchronous: ~0.5 s on a Radeon 8060S with the list's
- * embeddings cached, plus 573 text-encoder passes the first time for the
- * Upper-Midwest list.
+ * embeddings cached, plus 651 text-encoder passes the first time for the
+ * default lists.
  * Throws an Error with `code: 'missing'` and `missing` (locate's list) when
  * a file is not there, or when this build has no loadOwlv2 / loadClip.
  * @param {Object} [opts]
  * @param {string} [opts.detector]    OWLv2 dir; default bro.models.find('owlv2')
  * @param {string} [opts.classifier]  BioCLIP dir; default bro.models.find(model)
- * @param {string|Object[]} [opts.species]  list file, or the rows; default
- *   bro.models.find('species') + '/upper-midwest.json'
+ * @param {string|Array<string|Object>} [opts.species]  a list file, or an
+ *   array of list files and rows, merged in order (a scientific name seen
+ *   before, ignoring case, is left out); default SPECIES_LISTS:
+ *   bro.models.find('species') + '/upper-midwest.json' and
+ *   bro.models.find('species/upper-midwest-herps') + '/species.json'
+ * @param {number} [opts.labelThreshold=0.85]  the analyzer's label()
  * @param {string} [opts.model='bioclip-2']  'bioclip-2' | 'bioclip': which
  *   classifier to find, and its name in `config`
  * @param {number} [opts.threshold=0.15]  OWLv2 score threshold
@@ -803,9 +821,10 @@ if (where.missing.length) console.log('missing', where.missing.join(', '));
  * @param {Object} [opts.clipConfig]      loadClip's architecture overrides
  * @param {(done:number, total:number)=>void} [opts.onProgress]  list embedding
  * @returns {WildlifeAnalyzer}
- *   props: `config` (below), `species` (the rows), `prompts`, `cached` (the
- *   embeddings came from cacheDir), `dim`, `imageSize` (224), `device`,
- *   `paths` ({ detector, classifier, species })
+ *   props: `config` (below), `species` (the merged rows), `prompts`, `cached`
+ *   (the embeddings came from cacheDir), `dim`, `imageSize` (224), `device`,
+ *   `paths` ({ detector, classifier, species: the list files }),
+ *   `labelThreshold`, and label(record, burst) at it
  */
 const wild = bro.vision.wildlife.open({ model: 'bioclip-2' });
 
@@ -814,7 +833,11 @@ const wild = bro.vision.wildlife.open({ model: 'bioclip-2' });
  * a result depends on, in a fixed key order, so `JSON.stringify(config)`
  * hashes a run: { detector: { name, repo, revision, weightsBytes },
  * classifier: { ... }, threshold, queries, topK, margin, speciesList:
- * { file, count } }. `revision` is read from the model dir's ATTRIBUTION.md.
+ * { files, count, hash } }. `revision` is read from the model dir's
+ * ATTRIBUTION.md; `files` the list files by name ('upper-midwest.json',
+ * 'upper-midwest-herps/species.json'), `count` the merged rows, `hash` an
+ * FNV-1a of every prompt, so an edited list is another config.
+ * labelThreshold is not in it: it changes what is shown, not a record.
  * The static form reads files only, never weights: a batch decides what to
  * re-run before it pays for a load.
  */
@@ -893,12 +916,32 @@ const subjectSharp = bro.vision.wildlife.sharpness(big, { box: rec.detections[0]
 const time = bro.vision.wildlife.parseExifTime(bro.image.readExif(path).dateTaken);  // ms | null
 const bursts = bro.vision.wildlife.groupBursts(records, { gapS: 1.0 });
 
+/**
+ * bro.vision.wildlife.label(record, burst?, opts?) — the species name to show
+ * for a photo, or null. The ONE place the label threshold applies: a photo
+ * in a burst with an animal consensus (`burst.species`; a single shot is a
+ * burst of one, whose share is its top-1 score) is named by that consensus
+ * when its `share` is at least `labelThreshold`; a photo without a burst
+ * (or whose burst has none) by its own top-1 when that `score` is. Under
+ * the threshold, or with no animal, null: show the animal as found but not
+ * identified (record.animal || burst.species), and the top 5 as a guess at
+ * most. `label(null, burst)` labels a burst.
+ * @param {Object|null} record  analyze()'s record (or a records.jsonl line)
+ * @param {Object|null} [burst] groupBursts' burst holding it
+ * @param {{labelThreshold?: number}} [opts]  default DEFAULTS.labelThreshold (0.85)
+ * @returns {{ common, scientific, score: number, from: 'burst'|'photo' } | null}
+ */
+const named = bro.vision.wildlife.label(rec, bursts.find((b) => b.photos.includes(rec.path)));
+tile.tag = named ? `${named.common} ${Math.round(named.score * 100)}%` : (rec.animal ? 'Unidentified' : '');
+
 // Also: subjectSquare(box, w, h, { margin }) (each side clamped to the frame,
 // so a subject bigger than the short side gets a clipped, non-square rect),
 // cropImage(image, rect) -> RGBA,
 // squareInput(image, size), speciesPrompt(row), readSpeciesList(path),
-// keeperScore(record, metric), and the constants QUERIES and DEFAULTS
-// ({ model, threshold, topK, margin, nms, maxDetections, gapS }).
+// readSpecies(lists) (files and rows merged, as open() does),
+// keeperScore(record, metric), and the constants QUERIES, SPECIES_LISTS
+// ([{ folder, file }]) and DEFAULTS ({ model, threshold, topK, margin, nms,
+// maxDetections, gapS, labelThreshold }).
 
 
 // ═════════════════════════════════════════════════════════════════════════════
