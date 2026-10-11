@@ -51,12 +51,20 @@ function waitForStats(id, pred, timeoutMs) {
 }
 
 if (os.platform() === 'linux') {
-    let msg = '';
-    try {
-        const d = ctx.decodeAudioData(new Uint8Array(fs.readFileSync(FILE)));
-        msg = d ? 'decoded' : '';
-    } catch (e) { msg = String(e && e.message || e); }
-    assert(/platform AAC decoder/.test(msg), 'Linux: decodeAudioData says M4A needs a platform AAC decoder: ' + msg);
+    assert(bro.media.canDecode('audio/mp4') === '' && bro.media.canDecode('m4a') === '',
+        'Linux: bro.media.canDecode says no to M4A');
+    const bytes = new Uint8Array(fs.readFileSync(FILE));
+    // Without callbacks undecodable input is null (docs/audio-api.js); the
+    // reason comes with the error callback and the promise's EncodingError.
+    assert(ctx.decodeAudioData(bytes) === null, 'Linux: decodeAudioData without callbacks is null');
+    let cbErr = null, rejected = null;
+    const p = ctx.decodeAudioData(bytes, () => {}, (e) => { cbErr = e; });
+    p.then(() => {}, (e) => { rejected = e; });
+    for (let i = 0; i < 20 && !(cbErr && rejected); ++i) advanceTime(16);
+    assert(cbErr && cbErr.name === 'EncodingError' && /platform AAC decoder/.test(cbErr.message),
+        'Linux: decodeAudioData says M4A needs a platform AAC decoder: ' + (cbErr && cbErr.message));
+    assert(rejected && rejected.name === 'EncodingError' && /platform AAC decoder/.test(rejected.message),
+        'Linux: and its promise rejects with the same: ' + (rejected && rejected.message));
     let err = '';
     try { ctx.createStreamFromFile(FILE); } catch (e) { err = String(e && e.message || e); }
     assert(/platform AAC decoder/.test(err), 'Linux: createStreamFromFile says the same: ' + err);
