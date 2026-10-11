@@ -38,6 +38,7 @@ void bro_lm_main() {}
 void bro_rave_main() {}
 void bro_motion_main() {}
 void bro_profiler_main() {}
+void bro_models_main() {}
 void bro_server_main() {}
 void bro_gesture_main() {}
 void bro_sense_main() {}

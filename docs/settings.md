@@ -123,6 +123,12 @@ bro.settings.setDefault("appearance.colorScheme", "dark");
 bro.settings.set("appearance.colorScheme", "light");
 ```
 
+### Models (`models.*`)
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `models.dirs` | string | `""` | Directories holding model weights, a path list (`;` between entries on Windows, `:` elsewhere), searched by `bro.models.find` after `BRO_MODELS` and before the per-user models directory. See [models-api.js](models-api.js). |
+
 ## Action binding system
 
 Define named actions with default key bindings. Users can rebind them. Key presses dispatch `"action"` events on the document.

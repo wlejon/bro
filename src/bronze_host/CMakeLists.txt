@@ -116,6 +116,7 @@ set(BRO_BRONZE_HOST_SOURCES
     host_sibling_apis.cpp
     native_time.cpp
     native_paths.cpp
+    native_models.cpp
     native_window.cpp
     native_settings.cpp
     native_dunder_bro.cpp
@@ -123,6 +124,7 @@ set(BRO_BRONZE_HOST_SOURCES
     natives/net/native_net_register.cpp
     natives/time/native_time_register.cpp
     natives/paths/native_paths_register.cpp
+    natives/models/native_models_register.cpp
     natives/window/native_window_register.cpp
     natives/settings/native_settings_register.cpp
     natives/dunder_bro/native_dunder_bro_register.cpp
@@ -221,6 +223,7 @@ target_include_directories(bro_bronze_host PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/time
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/paths
+    ${CMAKE_CURRENT_SOURCE_DIR}/natives/models
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/window
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/settings
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/dunder_bro
@@ -588,6 +591,7 @@ else()
     bro_compile_js(server     bro_server_main     NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(impostor   bro_impostor_main)
     bro_compile_js(profiler   bro_profiler_main   NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
+    bro_compile_js(models     bro_models_main     NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
 
     add_library(bro_bronze_js STATIC ${BRO_COMPILED_JS_OBJECTS})
     # Nothing in it is C++; the archiver still has to be told which one to be.

@@ -46,6 +46,7 @@ extern "C" void bro_motion_main();
 extern "C" void bro_server_main();
 extern "C" void bro_impostor_main();
 extern "C" void bro_profiler_main();
+extern "C" void bro_models_main();
 
 namespace bro::bronze_host {
 
@@ -220,6 +221,12 @@ void installImpostorModule() {
 // only (installBroRoots).
 void installProfilerModule() {
     bronze::embed::runEntry(bro_profiler_main);
+}
+
+// js/models.js mounts bro.models over __bro_native.models; main realm only
+// (installBroRoots), since the setting it reads is the engine's.
+void installModelsModule() {
+    bronze::embed::runEntry(bro_models_main);
 }
 
 }  // namespace bro::bronze_host
