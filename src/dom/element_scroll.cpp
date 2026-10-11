@@ -106,8 +106,9 @@ void setElementScrollTop(Element* el, double v) {
         // (none of it is baked into a layout box), so moving it only repaints,
         // as a wheel scroll does. It used to mark the whole document for
         // layout: a list resetting `scrollTop = 0` on a view switch laid out
-        // every node in the window, even when it was at 0 already.
-        if (clamped != prev) doc->markPaintDirty();
+        // every node in the window, even when it was at 0 already. One the
+        // compositor took (a scroll layer's picture moved) not even that.
+        if (clamped != prev && !el->scrollAbsorbed()) doc->markPaintDirty();
     }
 
     if (requested != prev) {
@@ -125,7 +126,7 @@ void setElementScrollLeft(Element* el, double v) {
     el->setScrollLeftValue(clamped);
 
     // Paint only, as for scrollTop above.
-    if (clamped != prev) {
+    if (clamped != prev && !el->scrollAbsorbed()) {
         if (Document* doc = el->document()) doc->markPaintDirty();
     }
 

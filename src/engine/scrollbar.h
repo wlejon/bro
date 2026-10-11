@@ -71,6 +71,16 @@ public:
     void drawWithState(render::Renderer* renderer, const ScrollbarMetrics& m,
                        bool hovered, bool dragging, const Colors& colors) const;
 
+    /// The track alone, and the colour draw() gives the thumb: an element
+    /// scroller composited as a scroll layer has its thumb moved by the
+    /// compositor (engine/scroll_layers.h).
+    void drawTrack(render::Renderer* renderer, const ScrollbarMetrics& m, const Colors& colors) const;
+    bromath::Color thumbColor(const Colors& colors) const;
+
+    /// Put the thumb's start along its axis on a whole device pixel at
+    /// `scale`, where the compositor puts a thumb it moves.
+    static void snapThumb(ScrollbarMetrics& m, float scale);
+
     /// Returns true if (x, y) is within the scrollbar track.
     bool hitTest(float x, float y, const ScrollbarMetrics& m) const;
 

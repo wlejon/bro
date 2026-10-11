@@ -164,8 +164,8 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, int offsetY) {
 
     // A GPU layer's image goes to the presenter, placed and clipped where the
     // layer sits; the CPU layers after it composite into the next segment.
-    // A clip rounds out to whole pixels, or with `nearestClip` each edge to
-    // the nearest one, as an aliased Skia clip does (a scroll layer's: the
+    // A clip rounds out to whole pixels, or with `nearestClip` to the pixels
+    // whose centres it holds, as an aliased Skia clip does (a scroll layer's: the
     // scroller's clip, which clips what it paints in place that way).
     auto place = [&](VkImage image, VkImageLayout layout, uint32_t w, uint32_t h, const SkRect& dst,
                      const render::LayerQuad* quad, bool nearestClip = false) -> render::PresentImage& {
@@ -180,7 +180,12 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, int offsetY) {
         out.dstH = dst.height();
         SkRect clip;
         if (quad && at.clip(*quad, clip)) {
-            const SkIRect r = nearestClip ? clip.round() : clip.roundOut();
+            // Aliased, Skia keeps a pixel whose centre is inside the clip: an
+            // edge at 280.5 keeps pixel 279, not 280 (round() would).
+            auto centre = [](float v) { return static_cast<int>(std::ceil(v - 0.5f)); };
+            const SkIRect r = nearestClip ? SkIRect::MakeLTRB(centre(clip.left()), centre(clip.top()),
+                                                              centre(clip.right()), centre(clip.bottom()))
+                                          : clip.roundOut();
             out.clipped = true;
             out.clip = {{r.left(), r.top()},
                         {static_cast<uint32_t>(std::max(0, r.width())), static_cast<uint32_t>(std::max(0, r.height()))}};
@@ -234,6 +239,33 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, int offsetY) {
                 frameKeyAdd(s.generation);
                 frameKeyAdd(static_cast<uint64_t>(std::bit_cast<uint32_t>(s.scrollX)) << 32 |
                             std::bit_cast<uint32_t>(s.scrollY));
+                if (src.part != render::ScrollLayerSource::Content) {
+                    // A thumb, where the scroll puts it along its bar (on a
+                    // whole device pixel, as Scrollbar::snapThumb puts one
+                    // painted in place), at its phase across it.
+                    const int a = src.part == render::ScrollLayerSource::ThumbV ? 0 : 1;
+                    const ScrollLayerSet::ThumbShown& t = s.thumbs[a];
+                    const float scroll = a == 0 ? s.scrollY : s.scrollX;
+                    const float along = (a == 0 ? quad.y : quad.x) +
+                                        (t.scrollRange > 0.0f ? (scroll / t.scrollRange) * t.thumbRange : 0.0f);
+                    auto thumbDst = [&](int w, int h) {
+                        return a == 0 ? SkRect::MakeXYWH(std::round(quad.x * at.sx - t.phase),
+                                                         std::round(along * at.sy) + std::round(at.oy * at.sy),
+                                                         float(w), float(h))
+                                      : SkRect::MakeXYWH(std::round(along * at.sx),
+                                                         std::round((quad.y + at.oy) * at.sy - t.phase), float(w),
+                                                         float(h));
+                    };
+                    if (t.gpu) {
+                        placeSkiaImage(t.gpu, thumbDst(int(t.gpu->width), int(t.gpu->height)), nullptr);
+                    } else if (t.image) {
+                        if (SkCanvas* canvas = frameSegmentCanvas()) {
+                            const SkRect d = thumbDst(t.image->width(), t.image->height());
+                            canvas->drawImage(t.image, d.left(), d.top());
+                        }
+                    }
+                    return;
+                }
                 // Pixel for pixel: the surface holds the window rastered at
                 // the sub-pixel phase where the scroll puts its corner, so it
                 // lands a whole device pixel left of and above that. Its clip
@@ -565,6 +597,7 @@ bool Engine::presentCurrentFrame(bool mayHold) {
 // CPU composite is read straight from it; one with GPU layers is composited by
 // the presenter and read back, in one submission and one wait.
 std::vector<uint8_t> Engine::readCompositedFrame() {
+    pipelinePresentedLast_ = false;  // the presenter's readback (or the CPU frame) is this capture now
     const bool cpuOnly = frameImages_.empty();
     if (cpuOnly) frameSegmentCanvas();  // a frame nothing was drawn into is black
     const render::PresentFrame frame = describeCompositedFrame();
@@ -590,6 +623,22 @@ bool Engine::capturePresentsRequested() {
     // keeps one.
     const char* c = std::getenv("BRO_CONTROL");
     return c && *c && std::strcmp(c, "0") != 0 && std::strcmp(c, "off") != 0;
+}
+
+std::vector<uint8_t> Engine::headlessPresentedPixels() {
+    if (displayMode_ != DisplayMode::Headless) return {};
+    // A capture since (frameImage, a screenshot) composited a frame of its own.
+    if (!pipelinePresentedLast_) return {};
+    if (vulkanPresenter_ && vulkanPresenter_->isHeadless()) {
+        std::vector<uint8_t> pixels;
+        uint32_t w = 0, h = 0;
+        if (!vulkanPresenter_->readbackPixels(pixels, w, h)) return {};
+        return pixels;
+    }
+    // Composited on the CPU: the frame is the bottom segment.
+    SkPixmap pm;
+    if (frameSegments_.empty() || !frameSegments_[0] || !frameSegments_[0]->peekPixels(&pm)) return {};
+    return render::pixmapToRgba(pm);
 }
 
 std::vector<uint8_t> Engine::presentedPixels(uint64_t hostId, int& outW, int& outH) {

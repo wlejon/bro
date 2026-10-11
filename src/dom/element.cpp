@@ -873,14 +873,22 @@ void Element::noteScrollContainerStyle() {
 // stamps the scroller's ancestors, whose spans hold its content where the
 // scroll had it, and not the scroller, so its content's spans and its scroll
 // layer's recording stand (its own span keys its scroll: SpanKey::scrollY).
+// A scroll the document's absorber takes (a scroll layer's picture moved by
+// the compositor) stamps nothing.
 void Element::setScrollTopValue(float v) {
-    if (v != scrollTop_) stampPaint(parentNode());
+    if (v != scrollTop_) {
+        scrollAbsorbed_ = document_ && document_->absorbScroll(this, scrollLeft_, v);
+        if (!scrollAbsorbed_) stampPaint(parentNode());
+    }
     scrollTop_ = v;
     if (document_) document_->noteScrollOffset(this, scrollTop_ != 0.0f || scrollLeft_ != 0.0f);
 }
 
 void Element::setScrollLeftValue(float v) {
-    if (v != scrollLeft_) stampPaint(parentNode());
+    if (v != scrollLeft_) {
+        scrollAbsorbed_ = document_ && document_->absorbScroll(this, v, scrollTop_);
+        if (!scrollAbsorbed_) stampPaint(parentNode());
+    }
     scrollLeft_ = v;
     if (document_) document_->noteScrollOffset(this, scrollTop_ != 0.0f || scrollLeft_ != 0.0f);
 }

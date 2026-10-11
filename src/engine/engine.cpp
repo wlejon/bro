@@ -17,6 +17,7 @@
 #include "platform/event_loop.h"
 #include "render/renderer.h"
 #include "render/raster_renderer.h"
+#include "render/recording_renderer.h"
 #include "render/skia_backend.h"
 
 #if BRO_WITH_PHYSICS
@@ -551,7 +552,8 @@ void Engine::drawSelectionHighlight(render::Renderer* renderer, float docOffsetY
 
 void Engine::drawElementScrollbars(render::Renderer* renderer,
                                    dom::Element* root,
-                                   float offsetX, float offsetY) {
+                                   float offsetX, float offsetY, float scale,
+                                   ScrollLayerSet* layers, render::RecordingRenderer* recorder) {
     if (!renderer || !root || !root->document()) return;
     dom::Document* doc = root->document();
     const bool preferDark = doc->mediaContext().colorScheme == "dark";
@@ -582,6 +584,10 @@ void Engine::drawElementScrollbars(render::Renderer* renderer,
         Bars b{{}, el, offsetX, offsetY};
         if (!dom::composedPathFrom(root, el, chain, b.path)) continue;
         if (std::any_of(chain.begin(), chain.end(), displayNone)) continue;
+        // A scroll layer with a scroller under it: these bars are painted
+        // where its scroll puts them, so a scroll of it records the page.
+        if (layers)
+            for (size_t i = 1; i < chain.size(); ++i) layers->setHasNestedScroller(chain[i]->nodeId());
         for (size_t i = chain.size() - 1; i > 0; --i) {
             const auto& pbox = chain[i]->layoutBox();
             b.x += pbox.contentRect.x - dom::clampedScrollLeftOf(chain[i]);
@@ -594,17 +600,53 @@ void Engine::drawElementScrollbars(render::Renderer* renderer,
     for (dom::Element* el : stale) doc->forgetScrollContainer(el);
     std::sort(found.begin(), found.end(), [](const Bars& a, const Bars& b) { return a.path < b.path; });
 
+    // A scroll layer's thumbs are the compositor's: each is a layer break
+    // after every bar, its quad the thumb at scroll 0.
+    struct ThumbBreak {
+        render::ScrollLayerSource source;
+        render::LayerQuad quad;
+    };
+    std::vector<ThumbBreak> thumbs;
     for (const Bars& b : found) {
         // Both bars (right edge, bottom edge) by the same rules; the offsets
         // are clamped like the draw traversal clamps, since an offset past the
-        // end would otherwise put the thumb outside its track.
-        const ElementScrollbarLayout bars = layoutElementScrollbars(b.elem, b.x, b.y, elementScrollbar_);
-        if (bars.v.visible || bars.h.visible) {
-            const auto colors = Scrollbar::colorsFor(b.elem->computedStyle(), preferDark);
+        // end would otherwise put the thumb outside its track. The thumb
+        // starts on a whole device pixel, where the compositor puts one it
+        // moves.
+        ElementScrollbarLayout bars = layoutElementScrollbars(b.elem, b.x, b.y, elementScrollbar_);
+        if (!bars.v.visible && !bars.h.visible) continue;
+        Scrollbar::snapThumb(bars.v, scale);
+        Scrollbar::snapThumb(bars.h, scale);
+        const auto colors = Scrollbar::colorsFor(b.elem->computedStyle(), preferDark);
+        const uint32_t id = b.elem->nodeId();
+        if (!layers || !recorder || !layers->placed(id)) {
             if (bars.v.visible) elementScrollbar_.draw(renderer, bars.v, colors);
             if (bars.h.visible) elementScrollbar_.draw(renderer, bars.h, colors);
+            continue;
+        }
+        // Its scroll range and thumb travel as Scrollbar::layout has them.
+        const auto& lbox = b.elem->layoutBox();
+        for (int a = 0; a < 2; ++a) {
+            const ScrollbarMetrics& m = a == 0 ? bars.v : bars.h;
+            if (!m.visible) continue;
+            elementScrollbar_.drawTrack(renderer, m, colors);
+            const float view = a == 0 ? lbox.contentRect.height : lbox.contentRect.width;
+            const float content = view + (a == 0 ? dom::maxScrollTopOf(b.elem) : dom::maxScrollLeftOf(b.elem));
+            const float thumbRange = a == 0 ? m.trackH - m.thumbH : m.trackW - m.thumbW;
+            layers->setThumb(id, a, m.thumbW, m.thumbH, a == 0 ? m.thumbX : m.thumbY, content - view, thumbRange,
+                             elementScrollbar_.thumbColor(colors));
+            ThumbBreak t;
+            t.source = render::ScrollLayerSource{
+                id, layers->scrollLayerPass(),
+                a == 0 ? render::ScrollLayerSource::ThumbV : render::ScrollLayerSource::ThumbH};
+            t.quad.x = a == 0 ? m.thumbX : m.trackX;
+            t.quad.y = a == 0 ? m.trackY : m.thumbY;
+            t.quad.w = m.thumbW;
+            t.quad.h = m.thumbH;
+            thumbs.push_back(t);
         }
     }
+    for (const ThumbBreak& t : thumbs) recorder->recordLayerBreak(t.source, t.quad);
 }
 
 

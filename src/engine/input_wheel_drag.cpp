@@ -116,7 +116,8 @@ void Engine::handleWheel(float x, float y, float dx, float dy) {
         bool movedX = false;
         scrolledX = wheelScrollChain(target, true, pxX, movedX);
         if (movedX) dispatchScrollEvent(scrolledX);
-        if (scrolledX) markAppBaseDirty();
+        // A scroll the compositor took (Element::scrollAbsorbed) records nothing.
+        if (scrolledX && !(movedX && scrolledX->scrollAbsorbed())) markAppBaseDirty();
     }
     // A horizontal delta nothing took may still be a vertical swipe in
     // disguise (platform::verticalWheelDelta); one that was taken is not.
@@ -148,7 +149,7 @@ void Engine::handleWheel(float x, float y, float dx, float dy) {
         bool movedY = false;
         if (dom::Element* el = wheelScrollChain(target, false, -pxV, movedY)) {
             if (movedY) dispatchScrollEvent(el);
-            markAppBaseDirty();
+            if (!(movedY && el->scrollAbsorbed())) markAppBaseDirty();
             return;
         }
     }

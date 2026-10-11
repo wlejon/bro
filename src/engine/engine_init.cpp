@@ -647,6 +647,7 @@ void Engine::initAppRealm() {
     // builder puts their children in the inert content fragment
     // (Document::buildTreeFromGumbo), so the app document needs no pre-pass.
     document_ = std::make_unique<dom::Document>();
+    document_->setScrollAbsorber(&layerScrollAbsorber_);
     document_->setBasePath(manifest_.basePath);
     document_->setMediaViewport(static_cast<float>(contentWidth()),
                                 static_cast<float>(contentHeight()));

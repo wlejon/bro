@@ -142,6 +142,21 @@ void Scrollbar::drawWithState(render::Renderer* renderer, const ScrollbarMetrics
     renderer->fillRect(m.thumbX, m.thumbY, m.thumbW, m.thumbH, thumbColor);
 }
 
+void Scrollbar::drawTrack(render::Renderer* renderer, const ScrollbarMetrics& m, const Colors& colors) const {
+    if (!m.visible || !renderer) return;
+    renderer->fillRect(m.trackX, m.trackY, m.trackW, m.trackH, colors.track);
+}
+
+bromath::Color Scrollbar::thumbColor(const Colors& colors) const {
+    return dragging_ ? colors.thumbDrag : hovered_ ? colors.thumbHover : colors.thumb;
+}
+
+void Scrollbar::snapThumb(ScrollbarMetrics& m, float scale) {
+    if (!m.visible || scale <= 0.0f) return;
+    if (m.horizontal) m.thumbX = std::round(m.thumbX * scale) / scale;
+    else m.thumbY = std::round(m.thumbY * scale) / scale;
+}
+
 bool Scrollbar::hitTest(float x, float y, const ScrollbarMetrics& m) const {
     if (!m.visible) return false;
     return x >= m.trackX && x < m.trackX + m.trackW &&

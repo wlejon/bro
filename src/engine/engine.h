@@ -26,6 +26,7 @@
 #include "engine/engine_drm.h"
 #include "dom/event_target.h"
 #include "dom/node_handle.h"
+#include "dom/scroll_absorber.h"
 #include "engine/drag_drop.h"
 #include "layout/draw_traversal.h"
 #include "layout/skia_text_metrics.h"
@@ -234,6 +235,9 @@ public:
     /// BRO_CAPTURE_PRESENTS=1 only (every present is then also read back, for
     /// a test harness); empty otherwise.
     std::vector<uint8_t> presentedPixels(uint64_t hostId, int& outW, int& outH);
+    // Headless: the frame the windowed loop (runFrames) last presented, in
+    // device px (RGBA8), or empty when none was.
+    std::vector<uint8_t> headlessPresentedPixels();
     /// Draws and presents the page again at the next frame though nothing
     /// changed: for a reader that just turned on present readback
     /// (bro.remote), which otherwise waits for the page's next change.
@@ -877,9 +881,15 @@ private:
                                float movementX, float movementY, int mod);
     bool systemHandleMouseMove(float x, float y);
     bool systemHandleWheel(float x, float y, float dx, float dy);
+    // Every scroll container's bars under `root`, their thumbs on whole
+    // device pixels at `scale` (0: as laid out). With `layers`, the thumb of
+    // a scroller composited as a scroll layer is a layer break `recorder`
+    // records after all of them (ScrollLayerSet::setThumb); only its track
+    // is painted.
     void drawElementScrollbars(render::Renderer* renderer,
                                dom::Element* root,
-                               float offsetX, float offsetY);
+                               float offsetX, float offsetY, float scale = 0.0f,
+                               ScrollLayerSet* layers = nullptr, render::RecordingRenderer* recorder = nullptr);
     void updateSelectionSnapshot();
     void drawSelectionHighlight(render::Renderer* renderer, float docOffsetY);
     bool systemHandleKeyDown(int keycode, int scancode, int mod, bool repeat);
@@ -1029,6 +1039,21 @@ private:
     HtmlPoolState htmlPoolState_[2];
     ScrollLayerSet baseScrollLayers_{0};
     ScrollLayerSet captureScrollLayers_{1};
+    // The app document's scroll absorber: a scroll of a scroller the frame
+    // passes composite as a scroll layer moves its picture with no pass, when
+    // nothing else the page paints follows that scroll (absorbLayerScroll).
+    struct LayerScrollAbsorber final : dom::ScrollAbsorber {
+        Engine* engine;
+        explicit LayerScrollAbsorber(Engine* e) : engine(e) {}
+        bool absorbScroll(dom::Element* e, float scrollLeft, float scrollTop) override {
+            return engine->absorbLayerScroll(e, scrollLeft, scrollTop);
+        }
+    };
+    LayerScrollAbsorber layerScrollAbsorber_{this};
+    bool absorbLayerScroll(dom::Element* e, float scrollLeft, float scrollTop);
+    // Whether the presenter last presented a windowed-loop frame, not a
+    // capture's (headlessPresentedPixels).
+    bool pipelinePresentedLast_ = false;
     std::vector<render::SkiaRenderer::LayerSurface> systemSurfacePool_[2];
     int systemSurfacePoolW_[2] = {0, 0}, systemSurfacePoolH_[2] = {0, 0};
 

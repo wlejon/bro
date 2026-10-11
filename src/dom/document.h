@@ -5,6 +5,7 @@
 #include "dom/comment_node.h"
 #include "dom/document_fragment.h"
 #include "dom/shadow_root.h"
+#include "dom/scroll_absorber.h"
 #include "css/cascade.h"
 #include "layout/box.h"
 #include <gumbo.h>
@@ -198,6 +199,12 @@ public:
         else scrolled_.erase(e);
     }
     void forgetScrolled(Element* e) { scrolled_.erase(e); }
+
+    // Who may take an element's scroll with no paint (dom/scroll_absorber.h).
+    void setScrollAbsorber(ScrollAbsorber* a) { scrollAbsorber_ = a; }
+    bool absorbScroll(Element* e, float scrollLeft, float scrollTop) {
+        return scrollAbsorber_ && scrollAbsorber_->absorbScroll(e, scrollLeft, scrollTop);
+    }
     const std::unordered_set<Element*>& scrolledElements() const { return scrolled_; }
 
     // The elements whose computed overflow scrolls on an axis (auto / scroll),
@@ -695,6 +702,7 @@ private:
     // so the pointers never outlive it.
     std::unordered_map<size_t, std::vector<Element*>> styleDonors_;
     std::unordered_set<Element*> scrolled_;  // noteScrollOffset
+    ScrollAbsorber* scrollAbsorber_ = nullptr;
     std::unordered_set<Element*> scrollContainers_;  // noteScrollContainer
     std::unordered_set<Element*> videoElements_;     // noteVideoElement
     struct InheritTokenEntry {

@@ -345,6 +345,18 @@ void installHeadlessFrame(engine::Engine& engine) {
             return makeImageDataValue(engine.framePixelWidth(), engine.framePixelHeight(), pixels.data());
         }, 0, "frameImage"));
 
+    // presentedImage() -> ImageData | null
+    //
+    // The frame the windowed frame loop (runFrames) last presented, in
+    // device px (RGBA8): what a window would show, compositor-only frames
+    // included, where frameImage() records and rasters a frame of its own.
+    ev::registerGlobal("presentedImage", ev::makeFunction(
+        [&engine](Value, std::span<const Value>) -> Value {
+            auto pixels = engine.headlessPresentedPixels();
+            if (pixels.empty()) return ev::null();
+            return makeImageDataValue(engine.framePixelWidth(), engine.framePixelHeight(), pixels.data());
+        }, 0, "presentedImage"));
+
     // setPaintCache(on) -> the previous setting
     //
     // The paint span cache (layout/paint_cache.h) on or off for every pass

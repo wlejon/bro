@@ -11,7 +11,12 @@
 // scroller is stamped and its window still holds the view; its surface is
 // rastered again only when that recording changes or a scroll moves it by a
 // fraction of a device pixel (or the scale changes). The compositor places
-// the picture by the scroll of the pass it was published for.
+// the picture by the scroll of the pass it was published for, or, once the
+// picture of the latest pass is out, by the layer's live scroll: what the
+// main thread moved it to since (scrollTo), with no pass at all, when the
+// window holds the view there and the move is by whole device pixels. Its
+// scrollbar thumbs are pictures of their own the compositor moves the same
+// way (setThumb); the page paints only their tracks.
 //
 // Threads, as an iframe's sub-document: the main thread records into a layer
 // (beginPass / beginScrollLayer / endPass) while the raster thread is idle;
@@ -23,6 +28,8 @@
 #include "layout/scroll_layer.h"
 #include "render/command_buffer.h"
 #include "render/skia_backend.h"
+
+#include <bromath/color.h>
 
 #include <atomic>
 #include <cmath>
@@ -56,13 +63,37 @@ public:
     // in the pass is dropped at its end.
     void beginPass();
     void endPass();
+    // A scrollbar thumb of a layer's scroller, for the pass being recorded
+    // (main thread): `axis` 0 vertical, 1 horizontal. Its quad (the layer
+    // break the caller records) is the thumb at scroll 0; along its axis it
+    // starts at the track's start + scroll / scrollRange * thumbRange, at a
+    // whole device pixel (Scrollbar::snapThumb), as painting it in place puts it.
+    void setThumb(uint32_t elementId, int axis, float w, float h, float crossPos, float scrollRange,
+                  float thumbRange, bromath::Color color);
+    // Whether a layer's scroller has a scroll container under it (whose bars
+    // the page paints where this scroller's scroll puts them).
+    void setHasNestedScroller(uint32_t elementId);
+
+    // Move a layer's picture to a scroll with no pass (main thread): true
+    // when its latest recording stands there (nothing under the scroller
+    // stamped, nothing volatile in it, no scroller in it), its window holds
+    // the view there, and the move from the pass's scroll is by whole device
+    // pixels at `scale`. False: the page has to be recorded for it.
+    bool scrollTo(dom::Element* scroller, float scrollX, float scrollY, float scale);
+
     // Raster thread: each layer whose recording, phase or scale changed, its
-    // window into its surface; every layer's Shown published.
+    // window into its surface, and its thumbs; every layer's Shown published.
     void replay(render::SkiaRenderer* renderer);
 
     // What the compositor draws for a scroller: the picture, the window it
-    // holds (content space) and the phase it was rastered at, and the scroll
-    // to place it by.
+    // holds (content space) and the phase it was rastered at, the scroll to
+    // place it by, and its thumbs.
+    struct ThumbShown {
+        sk_sp<SkImage> image;
+        render::SkiaImageRef gpu;
+        float phase = 0;  // across its axis
+        float scrollRange = 0, thumbRange = 0;
+    };
     struct Shown {
         sk_sp<SkImage> image;              // a CPU picture
         render::SkiaImageRef gpu;          // or a GPU one
@@ -70,6 +101,7 @@ public:
         float winX = 0, winY = 0;
         float phaseX = 0, phaseY = 0;
         float scrollX = 0, scrollY = 0;
+        ThumbShown thumbs[2];
     };
     // Compositing (main thread): false when the scroller has no layer or
     // nothing was published for it yet.
@@ -77,6 +109,11 @@ public:
 
     // Every layer and its surfaces (the thread that draws them, or teardown).
     void clear() { layers_.clear(); }
+    // Whether the pass being recorded made the scroller a layer.
+    bool placed(uint32_t elementId) const {
+        auto it = layers_.find(elementId);
+        return it != layers_.end() && it->second->seen;
+    }
     size_t size() const { return layers_.size(); }
     // Layer surfaces rastered, since startup.
     uint64_t rasters() const { return rasters_.load(std::memory_order_relaxed); }
@@ -88,19 +125,39 @@ private:
         float winX = 0, winY = 0, winW = 0, winH = 0;
         float contentX = 0, contentY = 0;
         float scrollX = 0, scrollY = 0;  // the pass's scroll
+        float viewOffX = 0, viewOffY = 0, viewW = 0, viewH = 0;  // the view at scroll 0
         uint64_t epoch = 0;              // the paint epoch it was recorded in
         bool reusable = false;
+        bool nestedScroller = false;
         bool seen = false;
         bool recorded = true;            // recorded since it was last rastered
+        uint64_t passes = 0;             // passes that placed it
+        struct Thumb {
+            bool on = false;
+            float w = 0, h = 0, crossPos = 0, scrollRange = 0, thumbRange = 0;
+            bromath::Color color;
+            bool operator==(const Thumb& o) const {
+                return on == o.on && w == o.w && h == o.h && crossPos == o.crossPos &&
+                       color.r == o.color.r && color.g == o.color.g && color.b == o.color.b &&
+                       color.a == o.color.a;
+            }
+        };
+        Thumb thumbs[2];
+        // Where the main thread scrolled it: the pass's scroll, then scrollTo's.
+        std::atomic<float> liveX{0}, liveY{0};
 
         // The raster thread's: its surfaces and what it last drew in them.
         render::LayerSurface surface, spare;
         int surfW = 0, surfH = 0;
         float rasterWinX = 0, rasterWinY = 0, rasterPhaseX = -1, rasterPhaseY = -1, rasterScale = 0;
+        render::LayerSurface thumbSurface[2], thumbSpare[2];
+        Thumb rasterThumb[2];
+        float rasterThumbScale[2] = {0, 0};
 
         // Published by the raster thread, read by the compositor.
         mutable std::mutex shownMutex;
         Shown shown;
+        uint64_t shownPasses = 0;  // the pass Shown is of
         bool published = false;
     };
     uint32_t pass_;

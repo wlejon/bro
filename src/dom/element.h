@@ -489,6 +489,9 @@ public:
     void setScrollTopValue(float v);
     float scrollLeftValue() const { return scrollLeft_; }
     void setScrollLeftValue(float v);
+    // Whether the last write that changed the offset was taken with no
+    // paint (Document::ScrollAbsorber): the writer then marks nothing dirty.
+    bool scrollAbsorbed() const { return scrollAbsorbed_; }
 
     // Auto-scroll flag: scroll to bottom after next layout
     bool needsScrollToBottom() const { return scrollToBottom_; }
@@ -730,6 +733,7 @@ private:
     bool styleDescDirty_ = false;
     bool layoutDescDirty_ = false;
     std::atomic<uint64_t> paintStamp_{0};
+    bool scrollAbsorbed_ = false;
     // Stamps `from` and its ancestors (notePaintChanged).
     static void stampPaint(Node* from);
     uint64_t stackScanEpoch_ = 0;

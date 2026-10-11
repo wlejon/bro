@@ -103,6 +103,9 @@ check('a row in the layer changed');
     const before = layers().layers;
     const f = scroller(80, 270.5, 230.25);
     f.style.fontSize = '11px';
+    // Rows wider than it, cut by its clip at x = 490.5: an aliased clip
+    // keeps the pixels whose centres it holds (279 of an edge at 280.5).
+    for (const row of f.children) row.style.width = '400px';
     f.scrollTop = 37;
     check('a scroller at a fractional place');
     assert(layers().layers > before, 'the fractional scroller was composited as a layer');

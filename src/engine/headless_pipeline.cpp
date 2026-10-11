@@ -109,6 +109,7 @@ bool Engine::presentHeadlessPipelineFrame(const render::PresentFrame& frame) {
         presented = static_cast<bool>(frame.below);  // the CPU composite is the frame
     }
     if (presented) {
+        pipelinePresentedLast_ = true;
         noteFramePresented();
         ++pipelineRun_.presented;
     }

@@ -151,7 +151,7 @@ void Engine::recordAppLayers(render::CommandBuffer& outBuffer,
 
             drawElementScrollbars(recordingRenderer_.get(),
                                   document_->documentElement(),
-                                  0.0f, -scrollY);
+                                  0.0f, -scrollY, deviceScale_.render, scrollLayers, recordingRenderer_.get());
         }
     }
 
@@ -166,6 +166,18 @@ void Engine::recordAppLayers(render::CommandBuffer& outBuffer,
     drawTraversal_->setPromotedElements(nullptr);
     drawTraversal_->setScrollLayerHost(nullptr);
     if (scrollLayers) scrollLayers->endPass();
+}
+
+bool Engine::absorbLayerScroll(dom::Element* e, float scrollLeft, float scrollTop) {
+    if (!e || !document_ || e->document() != document_.get() || !baseValid_ ||
+        !layout::DrawTraversal::paintCacheEnabled())
+        return false;
+    // What the base paints where a scroll inside it puts it: a selection
+    // highlight or caret, the inspector's highlight, an overlay.
+    const auto& sel = selectionSnapshot_;
+    if (!sel.rects.empty() || sel.hasCaret || !sel.compUnderlines.empty()) return false;
+    if (inspector_.visible || overlayMgr_.hasActive()) return false;
+    return baseScrollLayers_.scrollTo(e, scrollLeft, scrollTop, deviceScale_.render);
 }
 
 namespace {
@@ -288,7 +300,15 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
     // client window with nothing over it can then be shown as that window's
     // buffer alone (direct scanout).
     uint64_t drawsAtSwitch = 0;
+    // A scroll layer's thumbs are recorded after everything the base draws:
+    // they go above its last HTML layer, splitting none.
+    std::vector<UILayer> thumbs;
     replayer.setLayerBreakHandler([&](const render::LayerSource& source, const render::LayerQuad& quad) {
+        if (const auto* sl = std::get_if<render::ScrollLayerSource>(&source);
+            sl && sl->part != render::ScrollLayerSource::Content) {
+            thumbs.push_back(UILayer::of(source, quad));
+            return;
+        }
         int prevIdx = htmlLayerIdx;
         htmlLayerIdx++;
         // A partial pass splits at the same breaks as the recording its pool
@@ -321,6 +341,7 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
         return;
     }
     if (htmlLayerIdx == 0 || replayer.draws() != drawsAtSwitch) outLayers.push_back(htmlLayerOf(pool[htmlLayerIdx]));
+    outLayers.insert(outLayers.end(), thumbs.begin(), thumbs.end());
     if (held) {
         held->baseGen = baseGen;
         held->scale = scale;

@@ -34,6 +34,12 @@ struct RemoteViewLayerSource { uint64_t viewId = 0; };
 struct ScrollLayerSource {
     uint32_t elementId = 0;
     uint32_t pass = 0;
+    /// What of the layer: its content, or a scrollbar thumb the compositor
+    /// moves with the scroll (recorded after the page's scrollbars; its quad
+    /// is the thumb at scroll 0). A thumb splits no HTML surface: it goes
+    /// above the last one.
+    enum Part : uint8_t { Content = 0, ThumbV = 1, ThumbH = 2 };
+    uint8_t part = Content;
 };
 
 /// A DMA-BUF client buffer: foreign toplevel or client surface imported via brodmabuf
