@@ -154,9 +154,10 @@ bool encodeCanvasBitmap(const std::vector<uint8_t>& px, int w, int h, const std:
 
 // ImageBitmapRenderingContext — getContext('bitmaprenderer'). The canvas gets
 // an ordinary CanvasScene, and transferFromImageBitmap replaces its whole
-// bitmap with the ImageBitmap's pixels (recorded as a putImageData, so it
-// travels through the same command stream to the canvas worker as any 2D
-// draw) and detaches the ImageBitmap, which is the "transfer".
+// bitmap with the ImageBitmap (recorded as a putImage, so it travels through
+// the same command stream to the canvas worker as any 2D draw; the scene
+// adopts the image rather than copying it into a surface of its size) and
+// detaches the ImageBitmap, which is the "transfer".
 HostClass g_bitmapRendererClass;
 
 Value makeBitmapRendererContextValue(const ev::Persistent& canvasRoot, dom::Element* el) {

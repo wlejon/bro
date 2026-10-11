@@ -202,14 +202,14 @@ std::vector<uint8_t> canvasPixels(Value elValue, int wantW, int wantH,
         return {};
     }
     cs->flush();
-    auto* surf = cs->surface();
-    if (!surf) {
+    // The canvas's bitmap: its surface, or the ImageBitmap it adopted.
+    if (!cs->surface() && !cs->displayImage()) {
         kind = Refusal::Internal;
         err = "addCanvasFrame: the canvas has no surface yet";
         return {};
     }
-    const int w = surf->width();
-    const int h = surf->height();
+    const int w = cs->width();
+    const int h = cs->height();
     if (w != wantW || h != wantH) {
         kind = Refusal::Range;
         err = "addCanvasFrame: canvas " + std::to_string(w) + "x" + std::to_string(h) +

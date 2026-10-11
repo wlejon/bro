@@ -115,6 +115,7 @@ void CanvasScene::replayOne(SkCanvas* c, CanvasCmd& cmd) {
                          SkCanvas::kStrict_SrcRectConstraint);
         break;
     case CanvasCmd::kPutImageData:
+    case CanvasCmd::kAdoptImage:
         c->save();
         c->resetMatrix();
         if (!cmd.src.isEmpty()) {
@@ -231,11 +232,85 @@ void CanvasScene::adoptUploads(std::vector<CanvasCmd>& cmds) {
     }
 }
 
+// An ImageBitmap shown through a bitmaprenderer (putImage after a reset) is
+// adopted as it is rather than drawn: the canvas's own surface would be the
+// bitmap's size (24 MP: 96 MB made and filled, 10-20 ms on an M2 Pro), only
+// to hold a copy of a texture the compositor can sample in place.
+bool CanvasScene::adoptsImage(const std::vector<CanvasCmd>& cmds) {
+    if (cmds.empty() || cmds.back().type != CanvasCmd::kAdoptImage) return false;
+    for (const CanvasCmd& cmd : cmds)
+        if (cmd.type != CanvasCmd::kReset && cmd.type != CanvasCmd::kAdoptImage) return false;
+    return true;
+}
+
+bool CanvasScene::adoptImage(std::vector<CanvasCmd>& cmds) {
+    if (!adoptsImage(cmds)) return false;
+    CanvasCmd& last = cmds.back();
+    if (render::SkiaGpu* g = gpu(); g && last.upload) {
+        if (sk_sp<SkImage> tex = last.upload->image(*g)) last.img = std::move(tex);
+    }
+    adopted_ = std::move(last.img);
+    cmds.clear();
+    surface_.reset();
+    surfWidth_ = surfHeight_ = 0;
+    unfinished_ = false;
+    dirty_ = true;
+    snapshotValid_ = false;
+    snapshotImageValid_ = false;
+    return adopted_ != nullptr;
+}
+
+void CanvasScene::releaseAdopted(const std::vector<CanvasCmd>& cmds) {
+    if (!adopted_) return;
+    sk_sp<SkImage> was = std::move(adopted_);
+    // surface_ was the image drawn at the size it showed at (showAdopted).
+    surface_.reset();
+    surfWidth_ = surfHeight_ = 0;
+    SkCanvas* c = skCanvas();
+    if (c && (cmds.empty() || cmds.front().type != CanvasCmd::kReset)) {
+        c->save();
+        c->resetMatrix();
+        SkPaint paint;
+        paint.setBlendMode(SkBlendMode::kSrc);
+        c->drawImage(was, 0, 0, SkSamplingOptions(), &paint);
+        c->restore();
+    }
+}
+
+void CanvasScene::showAdopted(float cssW, float cssH, bool fresh) {
+    render::SkiaGpu* g = gpu();
+    if (!adopted_ || !g) return;  // a CPU canvas composites the raster image itself
+    const float scale = renderer_ ? renderer_->deviceScale() : 1.0f;
+    auto fit = [scale](float css, int full) {
+        if (css <= 0.0f) return full;
+        return std::clamp(static_cast<int>(std::lround(css * scale)), 1, full);
+    };
+    const int w = fit(cssW, adopted_->width());
+    const int h = fit(cssH, adopted_->height());
+    if (!fresh && surface_ && surfWidth_ == w && surfHeight_ == h) return;
+    auto lock = g->lock();
+    if (!surface_ || surfWidth_ != w || surfHeight_ != h) {
+        surface_ = g->makeSurface(w, h);
+        surfWidth_ = w;
+        surfHeight_ = h;
+        if (!fresh) ++contentGeneration_;
+    }
+    if (!surface_) return;
+    SkCanvas* c = surface_.surface->getCanvas();
+    SkPaint paint;
+    paint.setBlendMode(SkBlendMode::kSrc);
+    c->drawImageRect(adopted_, SkRect::MakeIWH(w, h), SkSamplingOptions(SkFilterMode::kLinear, SkMipmapMode::kLinear),
+                     &paint);
+    g->finish(surface_.surface.get());
+}
+
 void CanvasScene::flushStagedCommands() {
     if (stagedCommands_.empty()) return;
 
     readyUploads(stagedCommands_);
     auto lock = lockGpu();
+    if (adoptImage(stagedCommands_)) return;
+    releaseAdopted(stagedCommands_);
     adoptUploads(stagedCommands_);
     unfinished_ = surface_.isGpu();
     if (tryStreamingPutImageDataFastPath(surface_.surface.get(), stagedCommands_)) {
@@ -259,6 +334,8 @@ void CanvasScene::flushCommands() {
 
     readyUploads(commands_);
     auto lock = lockGpu();
+    if (adoptImage(commands_)) return;
+    releaseAdopted(commands_);
     adoptUploads(commands_);
     unfinished_ = surface_.isGpu();
     if (tryStreamingPutImageDataFastPath(surface_.surface.get(), commands_)) {
@@ -324,6 +401,17 @@ void CanvasScene::rasterize(bool mayDefer) {
         }
     }
     uploadDeferSinceMs_ = 0;
+
+    // An adopted image needs no surface of the canvas's size, only one of
+    // the size it shows at.
+    if (adoptsImage(commands_) || (adopted_ && commands_.empty())) {
+        const bool fresh = dirty_ || !commands_.empty();
+        if (fresh) ++contentGeneration_;
+        flushCommands();
+        showAdopted(layoutW, layoutH, fresh);
+        dirty_ = false;
+        return;
+    }
     ensureSurface(canvasW, canvasH);
 
     if (dirty_ || !commands_.empty() || canvasW != rasterizedW_ || canvasH != rasterizedH_) ++contentGeneration_;

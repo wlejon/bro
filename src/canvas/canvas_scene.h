@@ -40,7 +40,10 @@ struct CanvasCmd {
         kSave, kRestore,
         kTranslate, kRotate, kScale,
         kSetTransform, kResetTransform, kConcatTransform,
-        kReset
+        kReset,
+        // The whole bitmap becomes `img` (putImage): adopted rather than
+        // drawn when nothing else follows a reset (see adoptImage).
+        kAdoptImage
     };
     Type type;
     SkPaint paint;
@@ -339,11 +342,18 @@ public:
                    float dx, float dy, float dw, float dh,
                    std::shared_ptr<render::GpuImageUpload> upload = nullptr);
 
-    /// The whole surface becomes `img` (w x h, the surface's size), as
+    /// The whole bitmap becomes `img` (w x h, the canvas's size), as
     /// putImageData at (0, 0) would make it, without reading its pixels on
     /// this thread: an ImageBitmap shown through a bitmaprenderer context.
-    /// With `upload` the replay copies from that texture on the GPU.
+    /// After a reset with nothing else drawn, the canvas adopts the image (its
+    /// texture, with `upload`) instead of making a surface and copying it in:
+    /// the compositor, the readbacks and drawImage(canvas) read it as it is.
     void putImage(sk_sp<SkImage> img, std::shared_ptr<render::GpuImageUpload> upload);
+
+    /// What the canvas shows, as an image: the adopted one (putImage), else a
+    /// snapshot of the surface; null with neither. The caller holds the Skia
+    /// lock.
+    sk_sp<SkImage> displayImage() const;
 
     // --- Pixel manipulation ---
 
@@ -489,6 +499,23 @@ private:
     /// texture in for the raster image.
     static void readyUploads(std::vector<CanvasCmd>& cmds);
     void adoptUploads(std::vector<CanvasCmd>& cmds);
+    /// `cmds` is resets and putImages, a putImage last: the canvas adopts
+    /// that image (its texture once uploaded), drops its surface and the
+    /// commands, and answers true. The caller holds the Skia lock.
+    bool adoptImage(std::vector<CanvasCmd>& cmds);
+    static bool adoptsImage(const std::vector<CanvasCmd>& cmds);
+    /// Before commands draw on the surface again: the surface made at the
+    /// canvas's size, the adopted image drawn into it unless `cmds` start
+    /// with a reset, and the adoption dropped. The caller holds the lock.
+    void releaseAdopted(const std::vector<CanvasCmd>& cmds);
+    /// On the GPU: surface_ becomes the adopted image drawn (mipmapped) at
+    /// the size it shows at, cssW x cssH at the device scale, no larger than
+    /// the image, for the compositor to sample as any canvas. Redrawn when
+    /// that size changes or a new image was adopted (`fresh`).
+    void showAdopted(float cssW, float cssH, bool fresh);
+    /// Read (x, y, info's size) of the canvas, unpremultiplied: the adopted
+    /// image or the surface. False with neither. The caller holds the lock.
+    bool readCanvasPixels(const SkImageInfo& info, void* dst, size_t rowBytes, int x, int y);
 
     int queryLayoutWidth() const;
     int queryLayoutHeight() const;
@@ -548,6 +575,9 @@ private:
     render::LayerSurface surface_;
     int surfWidth_ = 0, surfHeight_ = 0;
     bool unfinished_ = false;
+    // An ImageBitmap the canvas shows as it is, in place of surface_
+    // (putImage, adoptImage): the texture once uploaded, else the raster.
+    sk_sp<SkImage> adopted_;
     render::SkiaGpu* gpu() const { return renderer_ ? renderer_->skiaGpu() : nullptr; }
     render::SkiaGpu::Lock lockGpu() const {
         render::SkiaGpu* g = gpu();

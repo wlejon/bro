@@ -441,10 +441,10 @@ void installHeadlessFrame(engine::Engine& engine) {
             }
             engine.flush();
             cs->flush();
-            auto* surf = cs->surface();
-            if (!surf) return ev::throwError("screenshotCanvas: no surface");
-            int w = surf->width();
-            int h = surf->height();
+            // The canvas's bitmap: its surface, or the ImageBitmap it adopted.
+            if (!cs->surface() && !cs->displayImage()) return ev::throwError("screenshotCanvas: no surface");
+            int w = cs->width();
+            int h = cs->height();
             if (w <= 0 || h <= 0) return ev::throwError("screenshotCanvas: zero-size canvas");
             auto pixels = cs->getImageData(0, 0, w, h);
             if (pixels.empty()) return ev::throwError("screenshotCanvas: read failed");

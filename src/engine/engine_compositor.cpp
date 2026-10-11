@@ -317,9 +317,7 @@ void Engine::replaySystemPanelLayers(render::SkiaRenderer* renderer,
             render::SkiaGpu::Lock lock =
                 renderer->skiaGpu() ? renderer->skiaGpu()->lock() : render::SkiaGpu::Lock();
             scene->flushStaged();
-            auto* src = scene->surface();
-            if (!src) return;
-            auto img = src->makeImageSnapshot();
+            auto img = scene->displayImage();
             if (!img) return;
             auto* c = renderer->getCanvas();
             if (!c) return;

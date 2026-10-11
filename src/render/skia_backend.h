@@ -159,7 +159,7 @@ public:
     /// surface sized at scale × the CSS size is painted at full resolution
     /// (crisp text on a 2x display). 1 by default.
     void setDeviceScale(float scale) { deviceScale_ = scale > 0.0f ? scale : 1.0f; }
-    float deviceScale() const { return deviceScale_; }
+    float deviceScale() const override { return deviceScale_; }
 
     /// A compositing layer's surface (HTML layers, system panels, iframe
     /// documents), drawn through switchSurface(): GPU with a SkiaGpu.

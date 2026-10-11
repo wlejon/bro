@@ -215,6 +215,26 @@ function idleFrameMs() {
     console.log(`first frame showing it through bitmaprenderer: ${showMs.toFixed(2)} ms over an idle frame of ${idle.toFixed(2)} ms`);
     assert(bmp.width === 0, 'transferFromImageBitmap detaches the bitmap');
     checkQuadrants(pagePixel, BOX_W, BOX_H, 'shown through bitmaprenderer');
+
+    // The canvas shows the bitmap's own texture (no surface of its size), and
+    // reads back as the bitmap: drawImage(canvas), toDataURL.
+    assert(c.getContext('2d') === null, 'a bitmaprenderer canvas has no 2d context');
+    const reader = document.createElement('canvas');
+    reader.width = 60; reader.height = 40;
+    const rctx = reader.getContext('2d');
+    rctx.drawImage(c, 0, 0, 60, 40);
+    checkQuadrants(canvasPixel(rctx), 60, 40, 'drawImage(bitmaprenderer canvas)');
+    const url = c.toDataURL('image/png');
+    assert(url.startsWith('data:image/png;base64,') && url.length > 1000, 'toDataURL encodes it: ' + url.length + ' chars');
+
+    // null: transparent black at the canvas's own size, the bitmap gone.
+    brc.transferFromImageBitmap(null);
+    flush();
+    rctx.fillStyle = '#ff00ff';
+    rctx.fillRect(0, 0, 60, 40);
+    rctx.drawImage(c, 0, 0, 60, 40);
+    const after = canvasPixel(rctx)(15, 10);
+    assert(near(after, [255, 0, 255, 255]), 'after transferFromImageBitmap(null) it draws nothing, got ' + after);
     c.remove();
     // What is left is the canvas's own 24 MP surface, made and filled on the
     // GPU (~7 ms); the 96 MB upload in the frame is gone.

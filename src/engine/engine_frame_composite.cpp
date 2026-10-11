@@ -273,9 +273,8 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, int offsetY) {
                 if (!cs) return;
                 frameKeyAdd(cs->contentGeneration());
                 if (render::SkiaImageRef image = cs->gpuImage()) placeSkiaImage(image, at.dst(quad), &quad);
-                else if (cs->surface())
-                    if (SkCanvas* canvas = frameSegmentCanvas())
-                        at.draw(canvas, cs->surface()->makeImageSnapshot(), quad);
+                else if (sk_sp<SkImage> img = cs->displayImage())  // a CPU surface, or an adopted bitmap
+                    if (SkCanvas* canvas = frameSegmentCanvas()) at.draw(canvas, img, quad);
             },
             [&](const render::SceneLayerSource& src) {
 #if BRO_WITH_3D

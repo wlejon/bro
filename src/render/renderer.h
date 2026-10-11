@@ -468,6 +468,9 @@ public:
     /// The GPU Skia context this renderer draws with, if it draws on the GPU.
     /// Canvases created against the renderer draw on it too.
     virtual SkiaGpu* skiaGpu() const { return nullptr; }
+    /// Device pixels per CSS px of the surfaces it draws (HiDPI); 1 where it
+    /// has no such scale.
+    virtual float deviceScale() const { return 1.0f; }
     virtual bool saveScreenshot(const std::string& path) { return false; }
 
     /// Capture the surface as RGBA pixels (w x h x 4). Returns empty on failure.
