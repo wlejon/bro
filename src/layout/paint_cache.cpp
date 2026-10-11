@@ -18,6 +18,7 @@ const char* spanMissName(SpanMiss m) {
         case SpanMiss::Changed:       return "changed";
         case SpanMiss::Moved:         return "moved";
         case SpanMiss::Clip:          return "clip";
+        case SpanMiss::Scrolled:      return "scrolled";
         case SpanMiss::Context:       return "context";
         case SpanMiss::LayerBreak:    return "layerBreak";
         case SpanMiss::Control:       return "control";
@@ -121,6 +122,8 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     key.rootY = rootOffsetY_;
     key.clipped = currentClipRect(key.clipX, key.clipY, key.clipW, key.clipH);
     key.skipWrap = scRootSkipWrap_.count(elem) != 0;
+    key.scrollX = elem->scrollLeftValue();
+    key.scrollY = elem->scrollTopValue();
 
     SpanMiss miss = contextFlushed_ ? SpanMiss::Context : SpanMiss::New;
     auto it = cache.entries.find(elem);
@@ -132,6 +135,7 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
         else if (entry->readsParent && elem->parentElement() &&
                  elem->parentElement()->paintStamp() >= entry->epoch)
             miss = SpanMiss::Changed;
+        else if (key.scrollX != entry->key.scrollX || key.scrollY != entry->key.scrollY) miss = SpanMiss::Scrolled;
         else if (!key.fitsIn(entry->key)) miss = SpanMiss::Clip;
         else if (entry->pinned && (!key.sameOrigin(entry->key) || key.rootX != entry->key.rootX ||
                                    key.rootY != entry->key.rootY))

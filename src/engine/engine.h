@@ -564,6 +564,8 @@ public:
     layout::DrawTraversal::ScrollLayerStats scrollLayerStats() const {
         return drawTraversal_ ? drawTraversal_->scrollLayerStats() : layout::DrawTraversal::ScrollLayerStats{};
     }
+    // Scroll layer surfaces rastered (frame passes and captures), since startup.
+    uint64_t scrollLayerRasters() const { return baseScrollLayers_.rasters() + captureScrollLayers_.rasters(); }
 
     /// The frame flight recorder (frame_trace.h) and the agent control
     /// channel (control.h, docs/agent-control.md). startControl serves the

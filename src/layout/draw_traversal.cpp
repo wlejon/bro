@@ -238,42 +238,54 @@ bool DrawTraversal::paintScrollLayer(dom::Element* elem, const htmlayout::css::C
         return false;
     }
 
-    // The window, in content space (the content box at scroll 0 is the
-    // origin): the padding box where the scroll has it, and a margin round it.
-    constexpr float kMargin = 256.0f;
-    const float sx = dom::clampedScrollLeftOf(elem), sy = dom::clampedScrollTopOf(elem);
-    const float padW = box.contentRect.width + box.padding.left + box.padding.right;
-    const float padH = box.contentRect.height + box.padding.top + box.padding.bottom;
-    const float winX = sx - box.padding.left - kMargin, winY = sy - box.padding.top - kMargin;
-    const float winW = padW + 2 * kMargin, winH = padH + 2 * kMargin;
-    // The layer, where the scroll puts the window, under the scroller's clip.
+    // Content space: the content box at scroll 0 is the origin. What shows
+    // is the padding box where the scroll has it.
+    ScrollLayerPlace place;
+    place.contentX = x;
+    place.contentY = y;
+    place.scrollX = dom::clampedScrollLeftOf(elem);
+    place.scrollY = dom::clampedScrollTopOf(elem);
+    place.viewX = place.scrollX - box.padding.left;
+    place.viewY = place.scrollY - box.padding.top;
+    place.viewW = box.contentRect.width + box.padding.left + box.padding.right;
+    place.viewH = box.contentRect.height + box.padding.top + box.padding.bottom;
+    const ScrollLayerRecord rec = scrollLayerHost_->beginScrollLayer(elem, place, !contextFlushed_);
+    if (!rec.buffer) return false;
+    // The layer at the content origin, under the scroller's clip: the
+    // compositor adds the scroll, so this records the same whatever it is.
     LayerBreak lb;
     lb.element = elem;
     lb.source = render::ScrollLayerSource{elem->nodeId(), scrollLayerHost_->scrollLayerPass()};
-    lb.quad.x = x - sx + winX;
-    lb.quad.y = y - sy + winY;
-    render::CommandBuffer* buf =
-        scrollLayerHost_->beginScrollLayer(elem, winX, winY, winW, winH, lb.quad.x, lb.quad.y);
-    if (!buf) return false;
-    lb.quad.w = winW;
-    lb.quad.h = winH;
+    lb.quad.x = x;
+    lb.quad.y = y;
+    lb.quad.w = place.viewW;
+    lb.quad.h = place.viewH;
     if (!currentClipRect(lb.quad.clipX, lb.quad.clipY, lb.quad.clipW, lb.quad.clipH))
         lb.quad.clipW = lb.quad.clipH = -1.0f;
     noteVolatile(SpanMiss::LayerBreak);
     layerBreakCb_(lb);
+    ++scrollLayerStats_.layers;
+    if (rec.reuse) {
+        ++scrollLayerStats_.reused;
+        return true;
+    }
 
-    // The content, into the layer, culled against the window.
+    // The content, into the layer, culled against the window. What in it
+    // changes with no stamp (an animated or decoding image) keeps it from
+    // standing in a later pass.
     render::CommandBuffer* outer = recorder_->buffer();
     std::vector<ClipBox> clips = std::move(clipRectStack_);
     clipRectStack_.clear();
-    pushClipRect(winX, winY, winW, winH);
+    pushClipRect(rec.winX, rec.winY, rec.winW, rec.winH);
     const bool wasIn = std::exchange(inScrollLayer_, true);
-    recorder_->setBuffer(buf);
+    const SpanMiss outerVolatile = std::exchange(spanVolatile_, SpanMiss::Count);
+    recorder_->setBuffer(rec.buffer);
     paintContent(elem, style, box, visible, 0.0f, 0.0f);
     recorder_->setBuffer(outer);
+    scrollLayerHost_->endScrollLayer(elem, spanVolatile_ == SpanMiss::Count);
+    spanVolatile_ = outerVolatile;
     inScrollLayer_ = wasIn;
     clipRectStack_ = std::move(clips);
-    ++scrollLayerStats_.layers;
     return true;
 }
 

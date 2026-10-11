@@ -838,9 +838,11 @@ std::atomic<uint64_t> g_paintEpoch{1};
 uint64_t Element::paintEpoch() { return g_paintEpoch.load(std::memory_order_relaxed); }
 uint64_t Element::advancePaintEpoch() { return g_paintEpoch.fetch_add(1, std::memory_order_relaxed) + 1; }
 
-void Element::notePaintChanged() {
+void Element::notePaintChanged() { stampPaint(this); }
+
+void Element::stampPaint(Node* from) {
     const uint64_t epoch = paintEpoch();
-    for (Node* p = this; p; ) {
+    for (Node* p = from; p; ) {
         if (p->nodeType() == NodeType::Element) {
             auto* e = static_cast<Element*>(p);
             if (e->paintStamp_.load(std::memory_order_relaxed) == epoch) return;
@@ -867,14 +869,18 @@ void Element::noteScrollContainerStyle() {
     document_->noteScrollContainer(this, scrolls(usedOverflow(s, false)) || scrolls(usedOverflow(s, true)));
 }
 
+// A scroll moves what the scroller paints and nothing it paints changes: it
+// stamps the scroller's ancestors, whose spans hold its content where the
+// scroll had it, and not the scroller, so its content's spans and its scroll
+// layer's recording stand (its own span keys its scroll: SpanKey::scrollY).
 void Element::setScrollTopValue(float v) {
-    if (v != scrollTop_) notePaintChanged();
+    if (v != scrollTop_) stampPaint(parentNode());
     scrollTop_ = v;
     if (document_) document_->noteScrollOffset(this, scrollTop_ != 0.0f || scrollLeft_ != 0.0f);
 }
 
 void Element::setScrollLeftValue(float v) {
-    if (v != scrollLeft_) notePaintChanged();
+    if (v != scrollLeft_) stampPaint(parentNode());
     scrollLeft_ = v;
     if (document_) document_->noteScrollOffset(this, scrollTop_ != 0.0f || scrollLeft_ != 0.0f);
 }

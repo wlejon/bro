@@ -193,6 +193,7 @@ public:
     void setScrollLayerHost(ScrollLayerHost* host) { scrollLayerHost_ = host; }
     struct ScrollLayerStats {
         uint64_t layers = 0;  // scrollers composited as a layer, pass by pass
+        uint64_t reused = 0;  // of those, whose recording stood: nothing in them recorded
         uint64_t vetoes[static_cast<size_t>(ScrollLayerVeto::Count)] = {};
     };
     const ScrollLayerStats& scrollLayerStats() const { return scrollLayerStats_; }

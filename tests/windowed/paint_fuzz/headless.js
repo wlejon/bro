@@ -56,7 +56,8 @@ for (let i = 0; i < STEPS && !failed; ++i) {
 }
 const ps = perf.stats().paint;
 console.log(`PAINT_FUZZ seed=${seed} steps=${history.length} ${failed ? 'FAILED' : 'ok'} edgePixels=${edgePixels} reused=${ps.reused} ` +
-            `recorded=${ps.recorded} misses=${JSON.stringify(ps.misses)}`);
+            `recorded=${ps.recorded} layers=${ps.scrollLayers.layers} layersReused=${ps.scrollLayers.reused} ` +
+            `misses=${JSON.stringify(ps.misses)}`);
 // The captures with the most edge pixels, with where they were (x0,y0,x1,y1):
 // a count that creeps up has a step and a place to look at.
 edgeSteps.sort((a, b) => b.edge - a.edge);

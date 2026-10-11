@@ -226,29 +226,32 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, int offsetY) {
             },
             [&](const render::ScrollLayerSource& src) {
                 // A scroller's content: its window's picture where the
-                // scroll put it (the quad), under the scroller's clip.
+                // scroll puts it (the quad is the content origin at scroll
+                // 0), under the scroller's clip.
                 const ScrollLayerSet* set = scrollLayerSet(src.pass);
-                const PublishedFrame* p = set ? set->published(src.elementId) : nullptr;
-                if (!p) return;
-                frameKeyAdd(p->generation());
+                ScrollLayerSet::Shown s;
+                if (!set || !set->shown(src.elementId, s)) return;
+                frameKeyAdd(s.generation);
+                frameKeyAdd(static_cast<uint64_t>(std::bit_cast<uint32_t>(s.scrollX)) << 32 |
+                            std::bit_cast<uint32_t>(s.scrollY));
                 // Pixel for pixel: the surface holds the window rastered at
-                // the quad origin's sub-pixel phase (ScrollLayerSet::phase),
-                // so it lands at the device origin less that phase. Its clip
+                // the sub-pixel phase where the scroll puts its corner, so it
+                // lands a whole device pixel left of and above that. Its clip
                 // is aliased, as painting in place clips.
                 auto dstFor = [&](int w, int h) {
-                    const SkRect d = at.dst(quad);
-                    return SkRect::MakeXYWH(d.left() - ScrollLayerSet::phase(quad.x, at.sx),
-                                            d.top() - ScrollLayerSet::phase(quad.y, at.sy), float(w), float(h));
+                    return SkRect::MakeXYWH(
+                        std::round((quad.x + s.winX - s.scrollX) * at.sx - s.phaseX),
+                        std::round((quad.y + at.oy + s.winY - s.scrollY) * at.sy - s.phaseY), float(w), float(h));
                 };
-                if (render::SkiaImageRef image = p->gpu()) {
-                    placeSkiaImage(image, dstFor(int(image->width), int(image->height)), &quad, true);
-                } else if (sk_sp<SkImage> img = p->get()) {
+                if (s.gpu) {
+                    placeSkiaImage(s.gpu, dstFor(int(s.gpu->width), int(s.gpu->height)), &quad, true);
+                } else if (s.image) {
                     if (SkCanvas* canvas = frameSegmentCanvas()) {
                         canvas->save();
                         SkRect c;
                         if (at.clip(quad, c)) canvas->clipRect(c, SkClipOp::kIntersect, false);
-                        const SkRect d = dstFor(img->width(), img->height());
-                        canvas->drawImage(img, d.left(), d.top());
+                        const SkRect d = dstFor(s.image->width(), s.image->height());
+                        canvas->drawImage(s.image, d.left(), d.top());
                         canvas->restore();
                     }
                 }

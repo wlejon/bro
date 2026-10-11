@@ -76,6 +76,21 @@ for (const y of [5, 40, 41, 300, 1200, 4000, 3990, 0]) {
     a.scrollTop = y;
     check(`scrolled to ${y}`);
 }
+// A scroll the layer's window still holds records nothing in the layer, and
+// one by whole device pixels rasters nothing either: the compositor moves the
+// picture.
+a.scrollTop = 100;
+check('scrolled to 100');
+{
+    const r0 = layers();
+    for (const y of [104, 150, 230]) {
+        a.scrollTop = y;
+        check(`scrolled to ${y}, within the window`);
+    }
+    const r1 = layers();
+    assert(r1.reused - r0.reused >= 6, `the layer's recording stood (${r1.reused - r0.reused} reused)`);
+    assert(r1.rasters === r0.rasters, `nothing was rastered (${r1.rasters - r0.rasters})`);
+}
 inner.scrollTop = 30;
 check('the inner scroller scrolled');
 assert(layers().vetoes.nested > l0.vetoes.nested, 'the inner one is painted in the outer layer (nested)');
@@ -133,6 +148,22 @@ a.scrollTop = 333;
 check('dpr 2');
 a.scrollTop = 2500;
 check('dpr 2, scrolled far');
+// At 1.5 a scroll by an odd number of px moves the layer by half a device
+// pixel: it is rastered again at that phase (not resampled), and a scroll by
+// 2 px (3 device px) is not.
+setDeviceScaleFactor(1.5);
+a.scrollTop = 2400;
+check('dpr 1.5');
+{
+    const r0 = layers();
+    a.scrollTop = 2401;
+    check('dpr 1.5, scrolled by half a device pixel');
+    const r1 = layers();
+    assert(r1.rasters > r0.rasters, 'a scroll by a fraction of a device pixel rasters the layer again');
+    a.scrollTop = 2403;
+    check('dpr 1.5, scrolled by 3 device pixels');
+    assert(layers().rasters === r1.rasters, 'a scroll by whole device pixels does not');
+}
 setDeviceScaleFactor(1);
 check('dpr 1 again');
 console.log(`scroll layers: checked, ${layers().layers - l0.layers} layers composited`);

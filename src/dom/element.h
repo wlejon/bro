@@ -257,12 +257,13 @@ public:
 
     // Paint stamps, for the draw traversal's span cache (layout/paint_cache.h).
     // Anything that can change what this element paints — a mark, a restyle,
-    // its box moving or resizing, its scroll offset — stamps it and every
-    // ancestor (through a shadow root to its host) with the current paint
-    // epoch; a span recorded in an earlier epoch than an element's stamp is
-    // stale. The walk stops at an ancestor already stamped this epoch, whose
-    // ancestors were stamped by the same walk. Atomic: the layout thread
-    // stamps restyles and box changes, the main thread marks.
+    // its box moving or resizing — stamps it and every ancestor (through a
+    // shadow root to its host) with the current paint epoch; a span recorded
+    // in an earlier epoch than an element's stamp is stale. Its scroll offset
+    // stamps its ancestors only. The walk stops at an ancestor already
+    // stamped this epoch, whose ancestors were stamped by the same walk.
+    // Atomic: the layout thread stamps restyles and box changes, the main
+    // thread marks.
     void notePaintChanged();
     uint64_t paintStamp() const { return paintStamp_.load(std::memory_order_relaxed); }
     // The epoch a stamp written now carries. Each draw pass advances it first,
@@ -729,6 +730,8 @@ private:
     bool styleDescDirty_ = false;
     bool layoutDescDirty_ = false;
     std::atomic<uint64_t> paintStamp_{0};
+    // Stamps `from` and its ancestors (notePaintChanged).
+    static void stampPaint(Node* from);
     uint64_t stackScanEpoch_ = 0;
     bool stackScanFoundAny_ = false;
     uint64_t scrollLayerScanEpoch_ = 0;

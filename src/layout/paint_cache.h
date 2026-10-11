@@ -33,6 +33,7 @@ enum class SpanMiss : uint8_t {
     Changed,        // something under it was stamped since it was recorded
     Moved,          // a pinned one (a viewport place, a control) drawn elsewhere
     Clip,           // its clip moved past what it culled, or wrapped differently
+    Scrolled,       // a scroller, scrolled (a scroll stamps its parent, not it)
     Context,        // the cache was emptied: viewport, fonts, top layer, ...
     // Volatile: recorded, never reused.
     LayerBreak,     // a canvas / WebGL / scene / iframe / remote view layer
@@ -60,6 +61,11 @@ struct SpanKey {
     float clipX = 0, clipY = 0, clipW = 0, clipH = 0;
     bool clipped = false;
     bool skipWrap = false;
+    // The element's own scroll offset: a scroll stamps the scroller's parent
+    // and not the scroller (its content's spans, and a scroll layer's
+    // recording, stand), so a span of a scroller painted in place is only
+    // reused at the scroll it was recorded at.
+    float scrollX = 0, scrollY = 0;
     // How far a box drawn at this key stands from where `rec` recorded it.
     float dx(const SpanKey& rec) const { return offX - rec.offX; }
     float dy(const SpanKey& rec) const { return offY - rec.offY; }

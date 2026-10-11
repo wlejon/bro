@@ -819,6 +819,10 @@ void installHeadlessFrame(engine::Engine& engine) {
                 ev::Persistent slo(ev::createObject());
                 ev::Persistent veto(ev::createObject());
                 slo.set(ev::setProperty(slo.get(), "layers", ev::fromDouble(static_cast<double>(sl.layers))));
+                // Of those, whose recording stood; and their surfaces rastered.
+                slo.set(ev::setProperty(slo.get(), "reused", ev::fromDouble(static_cast<double>(sl.reused))));
+                slo.set(ev::setProperty(slo.get(), "rasters",
+                                        ev::fromDouble(static_cast<double>(engine.scrollLayerRasters()))));
                 for (size_t i = 1; i < static_cast<size_t>(layout::ScrollLayerVeto::Count); ++i)
                     veto.set(ev::setProperty(veto.get(),
                                              layout::scrollLayerVetoName(static_cast<layout::ScrollLayerVeto>(i)),
