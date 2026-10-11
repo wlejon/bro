@@ -441,6 +441,8 @@ void Element::setAttribute(const std::string& name, const std::string& val) {
 
     auto existing = attributes_.find(name);
     if (existing != attributes_.end() && existing->second == val) return;
+    // A :has() above (or beside) this element can read the attribute.
+    if (document_) document_->invalidateHasAround(this, /*includeSelf=*/false);
 
     // setAttribute has three exits from here on (the class branch, the src
     // branch's fallthrough, the plain one), so the notice is fired by a guard
@@ -513,6 +515,7 @@ void Element::removeAttribute(const std::string& name) {
         std::string oldId = getAttribute("id");
         if (!oldId.empty()) document_->unregisterElementId(oldId, this);
     }
+    if (document_ && hasAttribute(name)) document_->invalidateHasAround(this, /*includeSelf=*/false);
     {
         auto existing = attributes_.find(name);
         AttributeNoticeGuard notice(this, name,
@@ -884,6 +887,8 @@ static bool layoutOwnsChildren(const Element* e) {
 }
 
 void Element::markStructureDirty() {
+    // A :has() on this element or above (or beside) it can read its children.
+    if (document_) document_->invalidateHasAround(this, /*includeSelf=*/true);
     Element* target = this;
     // A <slot> is replaced by the nodes assigned to it, so it has no layout node
     // of its own. Its parent's children are what get rebuilt.

@@ -53,9 +53,36 @@ void Document::setActiveElement(Element* el) {
         mark(e);
         if (cascade_.usesFocusWithin())
             for (Element* a = e->parentElement(); a; a = a->parentElement()) mark(a);
+        invalidateHasAround(e, /*includeSelf=*/false);  // :has(:focus)
     }
     focusedElement_ = el;
     focusVisible_ = el && (s_keyboardModality || isTextEntry(el));
+}
+
+void Document::invalidateHasAround(Element* from, bool includeSelf) {
+    if (!from || !cascade_.usesHas()) return;
+    const bool siblings = cascade_.hasArgsReachSiblings();
+    auto check = [this](Element* a) {
+        const auto r = cascade_.hasReach(a->tagName(), a->getAttribute("id"), a->getAttribute("class"));
+        if (!r.self) return;
+        if (r.subtree) a->markPaintDirty();  // itself and what is below it re-match
+        else a->markStyleDirty();            // itself
+        if (r.siblings)
+            if (Element* p = a->parentElement()) p->markPaintDirty();
+    };
+    auto earlierSiblings = [&](Element* a) {
+        Node* p = a->parentNode();
+        if (!p) return;
+        for (Node* s : p->childNodes()) {
+            if (s == a) break;
+            if (s->nodeType() == NodeType::Element) check(static_cast<Element*>(s));
+        }
+    };
+    if (siblings && !includeSelf) earlierSiblings(from);
+    for (Element* a = includeSelf ? from : from->parentElement(); a; a = a->parentElement()) {
+        check(a);
+        if (siblings) earlierSiblings(a);
+    }
 }
 
 bool Document::isTextEntry(const Element* el) {

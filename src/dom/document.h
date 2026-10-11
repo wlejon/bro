@@ -221,6 +221,12 @@ public:
     // Focus tracking
     Element* activeElement() const { return focusedElement_ ? focusedElement_ : body_; }
     void setActiveElement(Element* el);
+    // Something under `from` (or at it, with `includeSelf`) changed that a
+    // :has() can read — a child added or removed, a class or attribute, focus,
+    // hover: re-match the ancestors (and, for a sibling-reading :has(), the
+    // earlier siblings) a :has() rule can be about, and below or beside them
+    // as far as the rule's combinators reach (Cascade::hasReach).
+    void invalidateHasAround(Element* from, bool includeSelf);
 
     // :focus-visible (Selectors 4 §9.4), with the browsers' heuristic: the
     // indicator shows when focus arrived by keyboard (or by script while the

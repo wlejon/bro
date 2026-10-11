@@ -217,6 +217,9 @@ void markHoverChainDirty(const htmlayout::css::Cascade& cascade,
         if (isAncestorOrSelf(e, prev)) { lca = e; break; }
     for (auto* e = target; e && e != lca; e = e->parentElement()) flipped(e);
     for (auto* e = prev; e && e != lca; e = e->parentElement()) flipped(e);
+    // A :has(:hover) above the flipped chains reads them too.
+    for (dom::Element* e : {target, prev})
+        if (e && e->document()) e->document()->invalidateHasAround(e, /*includeSelf=*/false);
 }
 
 void deleteRangeContents(dom::Document* doc,
