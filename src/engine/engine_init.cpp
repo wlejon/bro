@@ -320,20 +320,15 @@ void Engine::construct(const EngineConfig& config) {
         }
 
         try {
-            const auto backend = config.graphics.useGPU ? platform::GraphicsBackend::Vulkan
-                                                        : platform::GraphicsBackend::Software;
-            platform::WindowConfig wc = primaryWindowConfig(config, gfx, backend);
+            // Never a Vulkan window: headless renders offscreen and presents
+            // nothing, so its window needs no surface, and a Vulkan one has
+            // SDL load the Vulkan loader and driver, which waits on the GPU
+            // thread loading them (Linux RADV: 17 ms against 3; Windows,
+            // NVIDIA's ICD: ~105 against ~28), and the page's host globals
+            // wait on the window.
+            platform::WindowConfig wc = primaryWindowConfig(config, gfx, platform::GraphicsBackend::Software);
             wc.hidden = true;
-            try {
-                window_ = platform::createWindow(wc);
-            } catch (const std::exception& e) {
-                // When the video driver cannot create Vulkan windows (e.g. SDL's dummy driver
-                // on headless Linux), fall back to a software window so headless still has a primary window.
-                LOG_INFO("Headless window creation with %s backend failed (%s); falling back to Software backend",
-                         backend == platform::GraphicsBackend::Vulkan ? "Vulkan" : "Software", e.what());
-                wc.backend = platform::GraphicsBackend::Software;
-                window_ = platform::createWindow(wc);
-            }
+            window_ = platform::createWindow(wc);
 
             const auto& wcfg = config.graphics;
             if (wcfg.alwaysOnTop) window_->setAlwaysOnTop(true);

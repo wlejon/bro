@@ -511,7 +511,8 @@ bool Engine::presentCurrentFrame(bool mayHold) {
         // Headless frames of the windowed pipeline present to the offscreen
         // target, paced as a 60 Hz FIFO swapchain would pace them.
         presented = presentHeadlessPipelineFrame(frame);
-    } else if (window_ && window_->backend() == platform::GraphicsBackend::Software && frame.below) {
+    } else if (!vulkanPresenter_ && window_ && window_->backend() == platform::GraphicsBackend::Software &&
+               frame.below) {
         // No GPU, so no GPU layer: the CPU composite is the frame.
         const render::PresentPixels& p = frame.below;
         presented = window_->presentPixels(p.pixels, static_cast<int>(p.width), static_cast<int>(p.height),
