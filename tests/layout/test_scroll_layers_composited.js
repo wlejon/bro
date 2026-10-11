@@ -99,13 +99,17 @@ sc.scrollLeft = 30;
 settle('scrolled left by 30');
 checkPresented('scrolled left by 30');
 
-// The wheel, as a window gets it.
+// The wheel, as a window gets it: a notch up from 237, which the window
+// recorded at scroll 0 (its view and 256 px round it) holds whatever a
+// notch is on this platform (3 lines: 48 px on Windows).
 {
     settle('the wheel (before)');
     const r0 = records();
-    wheel(100, 100, 1);
+    const top0 = sc.scrollTop;
+    wheel(100, 100, -1);
     settle('a wheel scroll');
-    assert(records() === r0, 'a wheel scroll the window holds records nothing');
+    assert(sc.scrollTop < top0 && sc.scrollTop > 0, `the wheel scrolled up (${top0} -> ${sc.scrollTop})`);
+    assert(records() === r0, `a wheel scroll the window holds records nothing (${top0} -> ${sc.scrollTop})`);
     checkPresented('a wheel scroll');
 }
 
