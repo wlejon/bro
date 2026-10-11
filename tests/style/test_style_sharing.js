@@ -61,9 +61,23 @@ const row = (n, cls = '') => {
     box.appendChild(r);
     flush();
     const q = perf.stats();
-    assert(q.stylesKept >= 10, `put back unchanged, they keep their styles (${q.stylesKept} kept)`);
+    // Put back where it was, the row re-matches its place and what is inside
+    // it is not even looked at (document_style.cpp, the child-list place).
+    assert(q.elementsStyled <= 2 && q.stylesResolved === 0,
+        `put back unchanged, nothing is resolved (${q.elementsStyled} styled, ${q.stylesResolved} resolved)`);
     eq(cs(r.children[0], 'color'), 'rgb(1,1,1)', 'and the style is right');
-    r.remove();
+    // Moved under another parent, everything in it re-matches; with the same
+    // rules and handed-down values, each keeps the style it had.
+    const wrap = document.createElement('div');
+    box.appendChild(wrap);
+    flush();
+    perf.reset();
+    wrap.appendChild(r);
+    flush();
+    const m = perf.stats();
+    assert(m.stylesKept >= 10, `moved under an equal parent, they keep their styles (${m.stylesKept} kept)`);
+    eq(cs(r.children[0], 'color'), 'rgb(1,1,1)', 'and the style is right');
+    wrap.remove();
     flush();
 }
 
@@ -283,13 +297,18 @@ const row = (n, cls = '') => {
     eq(cs(odd.firstChild, 'stroke'), 'rgb(21,21,21)', 'and its path inherits its own');
     eq(cs(big, 'width'), '32px', 'nor one with another width attribute');
     eq(cs(holder.children[0], 'width'), '16px', 'the shared ones keep theirs');
+    // Moved under another parent, every icon re-matches; unchanged, each keeps
+    // its style.
     holder.remove(); flush();
+    const wrap = document.createElement('div');
+    box.appendChild(wrap);
+    flush();
     perf.reset();
-    box.appendChild(holder);
+    wrap.appendChild(holder);
     flush();
     const q = perf.stats();
-    assert(q.stylesKept >= 20, `icons put back unchanged keep their styles (${q.stylesKept} kept, ${q.stylesResolved} resolved)`);
-    holder.remove(); flush();
+    assert(q.stylesKept >= 20, `icons moved unchanged keep their styles (${q.stylesKept} kept, ${q.stylesResolved} resolved)`);
+    wrap.remove(); holder.remove(); flush();
     big.setAttribute('width', '24');
     box.appendChild(holder);
     flush();

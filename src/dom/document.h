@@ -638,9 +638,13 @@ private:
     void collectElements(Node* node, std::vector<Element*>& out);
     // `parentEl`: the element this one inherits from (its parent, or the slot
     // it is assigned to); null for the document element.
+    // `place`: where the element sits now, worked out by a parent whose child
+    // list changed (null otherwise): it re-matches, and its subtree too when it
+    // moved here or its place changed and the sheet can see that below it.
     void resolveStylesRecursive(Element* elem, Element* parentEl,
                                 bool force = false, bool selectorForce = false,
-                                bool hoverForce = false);
+                                bool hoverForce = false, bool focusForce = false,
+                                const Element::StyledPlace* place = nullptr);
 
     // Style sharing (dom/style_share.h). The token naming the values `el`'s
     // style hands its children: equal tokens, equal handed-down values. Worked

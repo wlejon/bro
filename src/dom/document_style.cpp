@@ -36,10 +36,24 @@ void Document::setActiveElement(Element* el) {
     // their styles re-resolve and the base is re-recorded; without this the
     // retained-base cache re-presents the stale frame and the focus change
     // doesn't paint until some unrelated restyle (e.g. a :hover) forces a
-    // rebuild. markDirty() propagates to the document, so this also drives the
-    // relayout the :focus rules may need.
-    if (focusedElement_) focusedElement_->markDirty();
-    if (el) el->markDirty();
+    // rebuild. The restyle's diff promotes to a relayout if the :focus rules
+    // moved geometry.
+    // Scoped as :hover is: focus re-matches the element itself, and below it
+    // only the elements a rule naming a focus pseudo-class in a qualifier
+    // that can name it could be the subject of (`.vlist:focus-visible
+    // .vlist-row.cursor`: the cursor row, not every row). :focus-within
+    // re-matches the ancestors, each scoped the same way.
+    auto mark = [this](Element* e) {
+        e->markStyleDirty();
+        if (cascade_.focusInvalidatesDescendants(e->tagName(), e->getAttribute("id"), e->getAttribute("class")))
+            e->markFocusScopeDirty();
+    };
+    for (Element* e : {focusedElement_, el}) {
+        if (!e) continue;
+        mark(e);
+        if (cascade_.usesFocusWithin())
+            for (Element* a = e->parentElement(); a; a = a->parentElement()) mark(a);
+    }
     focusedElement_ = el;
     focusVisible_ = el && (s_keyboardModality || isTextEntry(el));
 }
@@ -478,7 +492,9 @@ void Document::resolveStylesRecursive(Element* elem,
                                        Element* parentEl,
                                        bool force,
                                        bool selectorForce,
-                                       bool hoverForce) {
+                                       bool hoverForce,
+                                       bool focusForce,
+                                       const Element::StyledPlace* place) {
     const htmlayout::css::ComputedStyle* parentStyle =
         parentEl ? &parentEl->computedStyle() : nullptr;
     // Did a selector input change on this element (class/id/attribute/:hover),
@@ -490,7 +506,38 @@ void Document::resolveStylesRecursive(Element* elem,
     // what this element hands down. Then the inherited diff below decides, and a
     // paint-only write like `container.style.opacity = x` re-resolves exactly one
     // element instead of its entire subtree.
-    const bool selDirty = selectorForce | elem->takeSelectorDirty();
+    const bool ownSelDirty = selectorForce | elem->takeSelectorDirty();
+
+    // The child list this element sits in, or its own, changed
+    // (markStructureDirty). Its place among its siblings is a selector input
+    // for it (:first-child, `.a + .b`), so it re-matches; what matches below
+    // it can only change if it moved here from another parent, or its place
+    // changed and some selector reads places in a qualifier
+    // (`li:first-child .x`). A view put back where it was (the same parent,
+    // index and siblings) re-matches only itself, and its subtree keeps its
+    // matches: what is inside it is what it was. (A :has() reading the change
+    // sits on this list's parent or above, never below a child.)
+    bool placeReachesDown = false;
+    if (place) {
+        const Element::StyledPlace& was = elem->styledPlace();
+        const bool moved = was.parentId != place->parentId;
+        const bool replaced = was.index != place->index || was.siblingsHash != place->siblingsHash;
+        // And the document-wide inputs (the sheets, the media, the root font
+        // size): a subtree out of the document while one changed was styled
+        // under the old one, all of it alike, which its root's key records.
+        const auto& k = elem->styleShareKey();
+        uint32_t rootFontBits = 0;
+        std::memcpy(&rootFontBits, &rootFontSize_, sizeof(uint32_t));
+        const bool staleInputs = !k || k->cascadeGeneration != cascade_.generation() ||
+                                 k->mediaGeneration != mediaGeneration_ || k->rootFontSizeBits != rootFontBits;
+        placeReachesDown = moved || staleInputs || (replaced && cascade_.positionReachesDescendants());
+        elem->setStyledPlace(*place);
+    }
+    // Its own child list: it re-matches itself (:empty, :has()); a shadow
+    // host's subtree re-matches as before.
+    const bool childListChanged = elem->takeChildListDirty();
+    const bool selDirty = ownSelDirty || place != nullptr || childListChanged;
+    const bool selDirtyDown = ownSelDirty || placeReachesDown || (childListChanged && elem->hasShadow());
 
     // A :hover flipped at or under this element's scope (set on the hovered
     // chains' common ancestor, so siblings are covered too). Unlike selDirty
@@ -505,6 +552,12 @@ void Document::resolveStylesRecursive(Element* elem,
         hoverDirty && !selDirty &&
         cascade_.hoverCanAffect(elem->tagName(), elem->getAttribute("id"),
                                 elem->getAttribute("class"));
+    // Focus moved at or above this element (setActiveElement): the same
+    // question, of the rules naming a focus pseudo-class in a qualifier.
+    const bool focusDirty = focusForce | elem->takeFocusScopeDirty();
+    const bool focusResolve =
+        focusDirty && !selDirty &&
+        cascade_.focusCanAffect(elem->tagName(), elem->getAttribute("id"), elem->getAttribute("class"));
 
     // An element with an active CSS animation or transition must re-resolve
     // its style every frame so applyOverrides() below re-runs and advances the
@@ -518,7 +571,7 @@ void Document::resolveStylesRecursive(Element* elem,
     // manager answers for all three kinds.)
     bool animatingSelf = webAnimationManager_ && webAnimationManager_->hasActive(elem);
 
-    bool needsResolve = force || selDirty || hoverResolve || elem->isDirty() ||
+    bool needsResolve = force || selDirty || hoverResolve || focusResolve || elem->isDirty() ||
                         elem->computedStyle().empty() || animatingSelf;
 
     // Set below from the style diff: can this element's re-resolve have changed
@@ -728,7 +781,7 @@ children:
     // property the inherited-value diff above never looks at, so give up the
     // scoping and re-resolve the subtree the way we always did.
     const bool childForce =
-        needsResolve && (selDirty || passedDownChanged || forcedInherit_ || enteredRendering);
+        needsResolve && (selDirtyDown || passedDownChanged || forcedInherit_ || enteredRendering);
     struct EnteringScope {
         int& depth;
         bool on;
@@ -739,14 +792,32 @@ children:
     // a subject several levels below the element whose :hover flipped, and the
     // levels in between re-match nothing themselves.
     const bool childHoverForce = hoverDirty;
+    const bool childFocusForce = focusDirty;
 
     ShadowRoot* sr = elem->hasShadow() ? elem->shadowRoot() : nullptr;
     if (!sr) {
-        for (auto* child : elem->childNodes()) {
-            if (child->nodeType() == NodeType::Element) {
-                resolveStylesRecursive(static_cast<Element*>(child), elem,
-                                       childForce, selDirty, childHoverForce);
+        if (!childListChanged) {
+            for (auto* child : elem->childNodes()) {
+                if (child->nodeType() == NodeType::Element) {
+                    resolveStylesRecursive(static_cast<Element*>(child), elem,
+                                           childForce, selDirtyDown, childHoverForce, childFocusForce);
+                }
             }
+            return;
+        }
+        // The child list changed: each child's place now (see above).
+        Element::StyledPlace childPlace;
+        childPlace.parentId = elem->nodeId();
+        size_t h = 0x9e3779b97f4a7c15ull;
+        for (auto* child : elem->childNodes())
+            if (child->nodeType() == NodeType::Element)
+                h ^= static_cast<size_t>(child->nodeId()) + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
+        childPlace.siblingsHash = h;
+        for (auto* child : elem->childNodes()) {
+            if (child->nodeType() != NodeType::Element) continue;
+            resolveStylesRecursive(static_cast<Element*>(child), elem, childForce, selDirtyDown,
+                                   childHoverForce, childFocusForce, &childPlace);
+            ++childPlace.index;
         }
         return;
     }
@@ -761,7 +832,7 @@ children:
     for (auto* child : sr->childNodes()) {
         if (child->nodeType() == NodeType::Element) {
             resolveStylesRecursive(static_cast<Element*>(child), elem,
-                                   childForce, selDirty, childHoverForce);
+                                   childForce, selDirtyDown, childHoverForce, childFocusForce);
         }
     }
     std::unordered_set<const Element*> restyledSlots;
@@ -774,7 +845,7 @@ children:
         Element* slot = sr->assignedSlot(childEl);
         Element* inheritFrom = slot ? slot : elem;
         const bool force = childForce || (slot && restyledSlots.count(slot) != 0);
-        resolveStylesRecursive(childEl, inheritFrom, force, selDirty, childHoverForce);
+        resolveStylesRecursive(childEl, inheritFrom, force, selDirtyDown, childHoverForce, childFocusForce);
     }
 }
 

@@ -133,9 +133,11 @@ const small = only !== 'fresh' ? measure(25, iters) : null;
 const big = only !== 'fresh' ? measure(100, Math.max(5, iters >> 1)) : null;
 if (only) skipTest(`BRO_RESTYLE_COST_ONLY=${only}: a profiling run`);
 
-// Every element put back is styled, and laid out.
-assert(small.elements >= 25 * 11, `every re-inserted element is styled (${small.elements})`);
-assert(big.elements >= 100 * 11, `every re-inserted element is styled (${big.elements})`);
+// A row put back where it was re-matches its own place among its siblings;
+// what is inside it is what it was, so the ten elements under each row are
+// not styled at all (src/dom/document_style.cpp, the child-list place).
+assert(small.elements >= 25 && small.elements <= 25 + 2, `only the re-inserted rows are styled (${small.elements})`);
+assert(big.elements >= 100 && big.elements <= 100 + 2, `only the re-inserted rows are styled (${big.elements})`);
 
 // The guard. Before style sharing and layout retention a re-inserted element
 // cost ~11-12 us of style and ~5-6 us of layout here; now it is ~1.8 and

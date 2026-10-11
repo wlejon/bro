@@ -904,8 +904,13 @@ void Element::markStructureDirty() {
     target->structureDirty_ = true;
     // The child list is a selector input: inserting an <li> changes which
     // sibling matches :last-child, and :nth-child renumbers from the insertion
-    // point on. So the subtree re-matches, exactly as a class change does.
-    target->selectorDirty_ = true;
+    // point on. So the children re-match (childListDirty_), and the restyle
+    // walk carries it further down only where a child's move or new place can
+    // reach (Document::resolveStylesRecursive). A list whose change was pinned
+    // on an ancestor that owns layout (an <svg>'s, a <select>'s) re-matches
+    // that ancestor's whole subtree, as a class change does.
+    if (target == this) target->childListDirty_ = true;
+    else target->selectorDirty_ = true;
     if (document_) document_->markElementStructureDirty();
 }
 

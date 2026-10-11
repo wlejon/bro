@@ -235,6 +235,30 @@ public:
     // rule can reach a sibling (`.tab:hover + .panel`) as easily as a child.
     void markHoverScopeDirty();
     bool takeHoverScopeDirty() { bool d = hoverScopeDirty_; hoverScopeDirty_ = false; return d; }
+    // Focus moved onto or off this element (or into or out of it), and a rule
+    // names a focus pseudo-class in a qualifier that can name it: below it,
+    // the elements that can be such a rule's subject re-match (Cascade::
+    // focusCanAffect), the rest keep their matches. Set by
+    // Document::setActiveElement along with the element's own restyle.
+    void markFocusScopeDirty() { focusScopeDirty_ = true; }
+    bool takeFocusScopeDirty() { bool d = focusScopeDirty_; focusScopeDirty_ = false; return d; }
+
+    // This element's child list changed (markStructureDirty). Each child's
+    // place among its siblings is a selector input for that child, so the
+    // children re-match; below them only what a child moved here or re-placed
+    // requires (Document::resolveStylesRecursive), so a view put back where it
+    // was does not re-match its whole subtree.
+    bool takeChildListDirty() { bool d = childListDirty_; childListDirty_ = false; return d; }
+    // Where the element sat when its style was last resolved: its parent's
+    // node id, its index among the element children, and a hash of their
+    // node ids (0 when not known). Node ids are never reused.
+    struct StyledPlace {
+        uint32_t parentId = 0;
+        uint32_t index = 0;
+        size_t siblingsHash = 0;
+    };
+    const StyledPlace& styledPlace() const { return styledPlace_; }
+    void setStyledPlace(const StyledPlace& p) { styledPlace_ = p; }
 
     // Owner document — storage and accessors live on Node (see node.h).
 
@@ -636,6 +660,9 @@ private:
     bool selectorDirty_ = true;
     bool hoverScopeDirty_ = false;
     bool structureDirty_ = false;
+    bool childListDirty_ = false;
+    bool focusScopeDirty_ = false;
+    StyledPlace styledPlace_;
     bool scrollToBottom_ = false;
     bool styleSheetAdded_ = false;
     float scrollTop_ = 0.0f;
