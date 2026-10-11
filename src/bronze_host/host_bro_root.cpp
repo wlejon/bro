@@ -467,8 +467,9 @@ void markAvailableNamespaces() {
 // the natives a worker carries registered on THIS thread (bronze's registry
 // is per thread, and a wrapper module binds its import table against the
 // thread that enters it), the sibling libraries' compute APIs over them
-// (installWorkerSiblingApis), then the wrapper modules — js/net_sync.js,
-// js/net.js, js/motion.js, js/server.js — in the main realm's order.
+// (installWorkerSiblingApis), then the wrapper modules — js/vision_wildlife.js,
+// js/net_sync.js, js/net.js, js/motion.js, js/server.js — in the main
+// realm's order.
 // bro_core.js is not entered: it is compiled against every native and would
 // refuse to bind on a thread that registered only these. A feature this
 // build compiled out gets the same `available: false` stub the main realm
@@ -491,6 +492,11 @@ void installWorkerBroRoot() {
     }
 
     installWorkerSiblingApis();
+#if BRO_WITH_VISION
+    // Onto the worker's own bro.vision; paths come from the caller here
+    // (no bro.models in a worker).
+    installVisionWildlifeModule();
+#endif
     {
         ev::Persistent math(makeBroMathValue());
         ev::setProperty(bro->get(), "math", math.get());

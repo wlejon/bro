@@ -47,6 +47,10 @@ void installNotificationModule();
 void installGlobalPrototype(const char* ctorName);
 void installNetSyncModule();
 void installImageGpuModule();
+// js/vision_wildlife.js: `__bro_vision_wildlife` mounted as
+// bro.vision.wildlife. Main realm and Worker realms, after the sibling APIs
+// built `bro.vision`; BRO_WITH_VISION builds only.
+void installVisionWildlifeModule();
 // js/bro_core.js: the public bro.time / bro.window / bro.settings /
 // bro.appDir surface and the panels' __bro.*, assembled over the natives
 // under __bro_native. Entered by installBroRoots (host_bro_root.cpp) after

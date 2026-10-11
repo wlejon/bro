@@ -30,6 +30,7 @@ extern "C" void bro_clipboard_main();
 extern "C" void bro_notification_main();
 extern "C" void bro_net_sync_main();
 extern "C" void bro_image_gpu_main();
+extern "C" void bro_vision_wildlife_main();
 extern "C" void bro_core_main();
 extern "C" void bro_net_main();
 extern "C" void bro_physics_main();
@@ -52,17 +53,18 @@ namespace bro::bronze_host {
 
 namespace {
 
-void mountImageGpu() {
+// bro.<ns>.<member> = globalThis.<global>, when both exist.
+void mountOnNamespace(const char* ns, const char* member, const char* global) {
     ev::GlobalValue gt = ev::globalValue("globalThis");
     if (!gt.found || !ev::isObject(gt.value)) return;
-    // globalThis and bro.image are held across property reads, which allocate.
-    const ev::Persistent global(gt.value);
-    Value broVal = ev::getProperty(global.get(), "bro");
+    // globalThis and bro.<ns> are held across property reads, which allocate.
+    const ev::Persistent globalObj(gt.value);
+    Value broVal = ev::getProperty(globalObj.get(), "bro");
     if (!ev::isObject(broVal)) return;
-    const ev::Persistent imgVal(ev::getProperty(broVal, "image"));
-    Value gpuVal = ev::getProperty(global.get(), "__bro_image_gpu");
-    if (ev::isObject(imgVal.get()) && !ev::isUndefined(gpuVal)) {
-        ev::setProperty(imgVal.get(), "gpu", gpuVal);
+    const ev::Persistent nsVal(ev::getProperty(broVal, ns));
+    Value v = ev::getProperty(globalObj.get(), global);
+    if (ev::isObject(nsVal.get()) && !ev::isUndefined(v)) {
+        ev::setProperty(nsVal.get(), member, v);
     }
 }
 
@@ -130,7 +132,15 @@ void installNetSyncModule() {
 void installImageGpuModule() {
     bronze::embed::runEntry(bro_image_gpu_main);
     adoptGlobalProperty("__bro_image_gpu");
-    mountImageGpu();
+    mountOnNamespace("image", "gpu", "__bro_image_gpu");
+}
+
+// js/vision_wildlife.js reads bro.vision / bro.lm / bro.image / bro.models
+// only when called, so it needs nothing but the `bro.vision` it mounts on.
+void installVisionWildlifeModule() {
+    bronze::embed::runEntry(bro_vision_wildlife_main);
+    adoptGlobalProperty("__bro_vision_wildlife");
+    mountOnNamespace("vision", "wildlife", "__bro_vision_wildlife");
 }
 
 // Nothing to lift: bro_core.js defines members ON the three roots

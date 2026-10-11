@@ -566,6 +566,11 @@ void installWebHostGlobals(engine::Engine& engine) {
     // just built; it reads nothing else at load, so it goes here rather than
     // with the other compiled modules below.
     installImageGpuModule();
+    // bro.vision.wildlife (js/vision_wildlife.js) mounts onto the
+    // `bro.vision` the roots just built, the same way.
+#if BRO_WITH_VISION
+    installVisionWildlifeModule();
+#endif
     // bro's own compiled JavaScript (host_js_modules.cpp), after the roots
     // and the siblings: every name a module lists in js/module.globals must
     // already be registered when its entry runs (the roots, and the classes

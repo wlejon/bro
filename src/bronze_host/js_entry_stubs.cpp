@@ -22,6 +22,7 @@ void bro_clipboard_main() {}
 void bro_notification_main() {}
 void bro_net_sync_main() {}
 void bro_image_gpu_main() {}
+void bro_vision_wildlife_main() {}
 void bro_core_main() {}
 void bro_net_main() {}
 void bro_physics_main() {}

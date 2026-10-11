@@ -8,7 +8,9 @@
  * semantic segmentation (SegFormer) — plus dichotomous matting (BiRefNet),
  * open-vocabulary object detection from text queries (OWLv2), the
  * two raw ViT backbones (DINOv2 / DINOv3), and one *generative* model that runs
- * the other way, latent → image: StyleGAN3 (loadStyleGAN3).
+ * the other way, latent → image: StyleGAN3 (loadStyleGAN3). On top of OWLv2
+ * and bro.lm's CLIP sits `bro.vision.wildlife`: which animal is in a photo,
+ * its species zero-shot, and the keeper of a burst (section "Wildlife").
  *
  * Backed by brovisionml on top of brotensor + broimage. brovisionml ships code
  * only; you supply the weight directories (HF safetensors checkpoints).
@@ -704,6 +706,198 @@ const textEmb = owl.embedQueries(['a bird', 'a squirrel']);
 
 /** Owlv2.dispose() — free the weights now; detect() afterwards throws. */
 owl.dispose();
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Wildlife — what animal is in a photo, and which shot of a burst to keep
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// bro.vision.wildlife is the per-photo pipeline of a camera-trap / feeder
+// card, as plain JS in bro (src/bronze_host/js/vision_wildlife.js) over
+// loadOwlv2, bro.lm.loadClip and bro.image:
+//
+//   1. OWLv2 asks for the animals of the list (`QUERIES`: 'a bird',
+//      'a squirrel', ... 'a mink'). No box over the threshold (0.15) is the
+//      answer "no animal" (an empty feeder, a branch, the lawn). Clear animals
+//      score 0.3 and up; between 0.1 and 0.3 sit both real ones (half hidden,
+//      distant) and look-alikes; empty frames score under 0.1.
+//   2. The best box, padded 15% a side and made square (subjectSquare), is
+//      cropped and classified zero-shot by BioCLIP 2 (imageomics/bioclip-2;
+//      or BioCLIP) over a species list: one prompt per species in the
+//      BioCLIP recipe ("a photo of <kingdom ... species> with common name
+//      <common>."), embedded once and cached on disk; the image's label is
+//      the prompt its embedding sits closest to. `score` is the softmax at
+//      the model's temperature (100) over the whole list, `similarity` the
+//      cosine.
+//   3. Sharpness (bro.image.sharpness) of the subject and of the frame, and
+//      groupBursts: shots under 1.0 s apart are a burst, its species the
+//      score-weighted vote of every frame's top 5, its keeper the frame with
+//      the sharpest subject (Tenengrad).
+//
+// The input image is the DETECTION image: decode the photo to 1280 on the
+// long side (bro.image.decodeScaled, a scaled JPEG decode, ~10x cheaper than
+// full size). OWLv2 pads to a square and resamples to 960 itself, so 1280 is
+// the smallest size that loses nothing there, and it keeps ~1.3x the
+// detector's resolution for the subject crop the classifier sees (BioCLIP
+// takes 224 px). Results come back in the SOURCE photo's pixels when you
+// pass `source` (the full-size width/height), so they line up with the file.
+//
+// Models, by bro.models name (docs/models-api.js): `owlv2`
+// (google/owlv2-base-patch16-ensemble as released), `bioclip-2` / `bioclip`
+// (the open_clip releases converted by brolm's scripts/convert-openclip.py:
+// model.safetensors, config.json, vocab.json, merges.txt), and the species
+// list `species/upper-midwest.json` (bro.models finds directories, so the
+// list is found through `species/`). A list is `{ species: [{ common,
+// scientific, kingdom?, phylum?, class, order, family }, ...] }` or the bare
+// array.
+//
+// Realms: the same module is in the main realm and every Worker. bro.models
+// is main-realm only, so in a Worker every path must be given (open/locate
+// throw saying so); find them in the page and post them over.
+//
+// The behaviour is pinned to broworkshop's ai/birds batch (its RECORDS.md):
+// a change to any constant here changes its records.
+
+/**
+ * bro.vision.wildlife.available(opts?) — can open() work: loadOwlv2 and
+ * bro.lm.loadClip are compiled in and the files are there. Loads nothing;
+ * the probe an app hides the feature on. Takes open()'s path options.
+ * @returns {boolean}
+ */
+if (!bro.vision.wildlife.available()) hideIdentifyButton();
+
+/**
+ * bro.vision.wildlife.locate(opts?) — the paths open() would use, and which
+ * are missing ('detector' | 'classifier' | 'species'; a model directory
+ * without model.safetensors, a list file that is not there). Throws in a
+ * Worker unless detector, classifier and species are all given.
+ * @returns {{ detector: string|null, classifier: string|null,
+ *             species: string|Object[]|null, model: string, missing: string[] }}
+ */
+const where = bro.vision.wildlife.locate({ model: 'bioclip' });
+if (where.missing.length) console.log('missing', where.missing.join(', '));
+
+/**
+ * bro.vision.wildlife.open(opts?) — load OWLv2 and the classifier and embed
+ * the species list. Synchronous: ~0.5 s on a Radeon 8060S with the list's
+ * embeddings cached, plus 573 text-encoder passes the first time for the
+ * Upper-Midwest list.
+ * Throws an Error with `code: 'missing'` and `missing` (locate's list) when
+ * a file is not there, or when this build has no loadOwlv2 / loadClip.
+ * @param {Object} [opts]
+ * @param {string} [opts.detector]    OWLv2 dir; default bro.models.find('owlv2')
+ * @param {string} [opts.classifier]  BioCLIP dir; default bro.models.find(model)
+ * @param {string|Object[]} [opts.species]  list file, or the rows; default
+ *   bro.models.find('species') + '/upper-midwest.json'
+ * @param {string} [opts.model='bioclip-2']  'bioclip-2' | 'bioclip': which
+ *   classifier to find, and its name in `config`
+ * @param {number} [opts.threshold=0.15]  OWLv2 score threshold
+ * @param {number} [opts.topK=5]          species per photo
+ * @param {number} [opts.margin=0.15]     subject square padding, each side
+ * @param {string[]} [opts.queries=QUERIES]
+ * @param {string} [opts.device]          both models' device (see Devices)
+ * @param {string|false} [opts.cacheDir]  where the list's text embeddings are
+ *   cached (keyed by model + exact prompts); default
+ *   `bro.app.cacheDir + '/wildlife'`, false for none
+ * @param {Object} [opts.clipConfig]      loadClip's architecture overrides
+ * @param {(done:number, total:number)=>void} [opts.onProgress]  list embedding
+ * @returns {WildlifeAnalyzer}
+ *   props: `config` (below), `species` (the rows), `prompts`, `cached` (the
+ *   embeddings came from cacheDir), `dim`, `imageSize` (224), `device`,
+ *   `paths` ({ detector, classifier, species })
+ */
+const wild = bro.vision.wildlife.open({ model: 'bioclip-2' });
+
+/**
+ * WildlifeAnalyzer.config / bro.vision.wildlife.config(opts?) — every setting
+ * a result depends on, in a fixed key order, so `JSON.stringify(config)`
+ * hashes a run: { detector: { name, repo, revision, weightsBytes },
+ * classifier: { ... }, threshold, queries, topK, margin, speciesList:
+ * { file, count } }. `revision` is read from the model dir's ATTRIBUTION.md.
+ * The static form reads files only, never weights: a batch decides what to
+ * re-run before it pays for a load.
+ */
+const runKey = JSON.stringify(wild.config);
+
+/**
+ * WildlifeAnalyzer.analyze(image, opts?) — one photo.
+ * @param {{width,height,data|pixels,channels?}} image  8-bit RGB or RGBA
+ *   rows: the detection image (1280 long side, see above)
+ * @param {Object} [opts]
+ * @param {{width:number,height:number}} [opts.source]  the photo's full size;
+ *   results are scaled to it (default: the image's own size)
+ * @param {number} [opts.threshold]  this call only
+ * @param {number} [opts.topK]       this call only
+ * @returns {{ animal: boolean,
+ *             detections: Array<{ label: string, score: number, box: number[] }>,
+ *             subject: { x, y, w, h } | null,
+ *             species: Array<{ common, scientific, family, order, class,
+ *                              score: number, similarity: number }>,
+ *             timing: { detect: number, classify: number|null } }}
+ *   detections best first (NMS 0.3, at most 20), boxes [x, y, w, h] to 0.1 px
+ *   and scores to 4 places; `subject` the classifier's square; `species`
+ *   empty when there is no animal. timing in ms.
+ */
+const img = bro.image.decodeScaled(path, { width: 1280, height: 1280 });
+const rec = wild.analyze(img, { source: { width: img.sourceWidth, height: img.sourceHeight } });
+if (rec.animal) console.log(rec.species[0].common, rec.species[0].score);
+
+/**
+ * WildlifeAnalyzer.detect(image, opts?) / classify(image, opts?) — the two
+ * halves, unrounded, in the image's own pixels. detect: { threshold, queries,
+ * nms (0.3), maxDetections (20) } -> [{ box, score, label }]. classify: the
+ * species top K ({ topK }) of the image's centre square — crop first
+ * (subjectSquare + cropImage) for a small subject.
+ */
+const boxes = wild.detect(img, { threshold: 0.3 });
+const top = wild.classify(bro.vision.wildlife.cropImage(img,
+    bro.vision.wildlife.subjectSquare(boxes[0].box, img.width, img.height)));
+
+/** WildlifeAnalyzer.dispose() — free both models; analyze() afterwards throws. */
+wild.dispose();
+
+/**
+ * bro.vision.wildlife.sharpness(image, opts?) — bro.image.sharpness rounded
+ * to 2 places: { laplacianVar, tenengrad, lumaMean, lumaStd, pixels }.
+ * Region: `opts.rect` ({ x, y, w, h } in the image's pixels), or `opts.box`
+ * ([x, y, w, h], e.g. a detection) in the pixels of `opts.source` (the photo
+ * the image was scaled from). Measure on a bigger decode than the detection
+ * image (ai/birds uses 3000 px): focus lives in the finest detail.
+ */
+const big = bro.image.decodeScaled(path, { width: 3000, height: 3000 });
+const frameSharp = bro.vision.wildlife.sharpness(big);
+const subjectSharp = bro.vision.wildlife.sharpness(big, { box: rec.detections[0].box,
+    source: { width: big.sourceWidth, height: big.sourceHeight } });
+
+/**
+ * bro.vision.wildlife.groupBursts(records, opts?) — group photos into bursts.
+ * A record is { path, time (ms, or null), animal, species (analyze's),
+ * sharpness: { frame, subject }, exif?: { dateTaken }, error? }; records with
+ * an `error` are left out. Sorted by time, a shot joins the one before when
+ * at most `gapS` later.
+ * @param {Object} [opts]
+ * @param {number} [opts.gapS=1.0]
+ * @param {'tenengrad'|'laplacianVar'} [opts.metric='tenengrad']  keeper measure
+ * @param {(prev, cur) => ({ncc:number, split:boolean}|null)} [opts.sameScene]
+ *   split a burst where the frame changes (e.g. thumbnails aligned with
+ *   bro.image.alignSimilarity)
+ * @returns {Array<{ id, first, start, durationS, count, animalCount,
+ *                   species: { common, scientific, share, agree } | null,
+ *                   keeper, keeperSharpness, startedBy: 'gap'|'scene',
+ *                   maxGapS, minNcc, photos: string[] }>}
+ *   `species`: the score-weighted vote over every animal frame's top K;
+ *   `share` its mean score, `agree` the frames naming it first. `keeper`: the
+ *   sharpest subject among the animal frames, else the sharpest frame.
+ */
+const time = bro.vision.wildlife.parseExifTime(bro.image.readExif(path).dateTaken);  // ms | null
+const bursts = bro.vision.wildlife.groupBursts(records, { gapS: 1.0 });
+
+// Also: subjectSquare(box, w, h, { margin }) (each side clamped to the frame,
+// so a subject bigger than the short side gets a clipped, non-square rect),
+// cropImage(image, rect) -> RGBA,
+// squareInput(image, size), speciesPrompt(row), readSpeciesList(path),
+// keeperScore(record, metric), and the constants QUERIES and DEFAULTS
+// ({ model, threshold, topK, margin, nms, maxDetections, gapS }).
 
 
 // ═════════════════════════════════════════════════════════════════════════════
