@@ -66,7 +66,10 @@ function ink(el) {
   return sum;
 }
 const inkReg = ink(reg), inkSyn = ink(syn);
-assert(inkSyn > inkReg * 1.15,
+// Skia strokes the outline on every platform (1/32 em at this size); the ink
+// it adds depends on the platform's glyph raster, ~1.12x on macOS (CoreText)
+// against no emboldening's ~1.0x.
+assert(inkSyn > inkReg * 1.08,
        'weight 700 in a regular-only family is synthesized bold: ink ' + inkSyn +
        ' vs regular ' + inkReg);
 console.log('font-face matching: ok');
