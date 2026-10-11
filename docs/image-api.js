@@ -679,12 +679,14 @@ bro.image.readExifOrientation = function(src) {};
  *   focalLength            number   millimetres
  *   focalLength35mm        number   FocalLengthIn35mmFilm (absent when 0)
  *   dateTaken              string   DateTimeOriginal as ISO 8601,
- *                                   "2024-05-06T14:30:00", with the
- *                                   OffsetTimeOriginal appended when present
- *                                   ("2024-05-06T14:30:00+02:00"); without
- *                                   it the time is local to an unknown zone.
- *                                   Absent for the all-zero placeholder.
+ *                                   "2024-05-06T14:30:00", with
+ *                                   SubSecTimeOriginal fractional seconds
+ *                                   (".25") and OffsetTimeOriginal appended
+ *                                   when present ("...14:30:00.25+02:00");
+ *                                   without it the time is local to an unknown
+ *                                   zone. Absent for the all-zero placeholder.
  *   offsetTime             string   OffsetTimeOriginal as stored ("+02:00")
+ *   subSecTime             string   SubSecTimeOriginal as stored ("25")
  *   latitude, longitude    number   signed decimal degrees (south / west
  *                                   negative); each only with its N/S or
  *                                   E/W reference present
@@ -699,7 +701,7 @@ bro.image.readExifOrientation = function(src) {};
  * @returns {?{make?:string, model?:string, lensMake?:string, lensModel?:string,
  *   exposureTime?:number, exposureTimeText?:string, fNumber?:number,
  *   iso?:number, focalLength?:number, focalLength35mm?:number,
- *   dateTaken?:string, offsetTime?:string, latitude?:number,
+ *   dateTaken?:string, offsetTime?:string, subSecTime?:string, latitude?:number,
  *   longitude?:number, altitude?:number, orientation?:number}}
  *
  * @example
