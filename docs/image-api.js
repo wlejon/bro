@@ -1036,6 +1036,42 @@ bro.image.similarityMatrix = function(s, cx, cy) {};
  */
 bro.image.warpAffineU8 = function(dst, src, params) {};
 
+// ── Sharpness: which frame of a burst is in focus ────────────────────────────
+//
+// Two focus measures over a region's luma, in one pass: the variance of the
+// Laplacian (4-neighbour kernel) and Tenengrad (mean squared Sobel gradient).
+// A blurred region, missed focus or motion, scores low on both; Tenengrad is a
+// little less swayed by sensor noise. Both grow with contrast as well as with
+// focus, so they rank frames of one subject (a burst) rather than compare
+// unrelated photos; laplacianVar / lumaStd^2 takes the contrast out.
+// Integer luma and integer sums: the same numbers on every machine and for
+// any thread count. Measure at one scale throughout a comparison (the same
+// decode size): detail per pixel changes with scale.
+//
+//   halo (Ryzen AI Max+ 395), RGBA, up to 8 threads: 6000 x 4000 ~10 ms,
+//   3000 x 2000 ~3.5 ms, 1280 x 853 ~1 ms.
+
+/**
+ * Focus measures over `rect` (default the whole image) of an 8-bit image.
+ * Only pixels whose 3 x 3 neighbourhood is inside the rect count; the rect is
+ * clamped to the image, and an empty one (or one under 3 x 3) counts nothing
+ * and returns zeros.
+ * @param {Uint8Array|Uint8ClampedArray} src  HWC rows
+ * @param {{width:number, height:number, channels?:number, stride?:number,
+ *          rect?:{x:number, y:number, w:number, h:number}, threads?:number}} params
+ *   channels  1 (luma), 2 (luma + alpha), 3 or 4 (default 4); colour is BT.601 luma
+ *   stride    row pitch in bytes (default width * channels)
+ *   threads   0 (default) = one under a megapixel of rect, else up to 8
+ * @returns {{laplacianVar:number, tenengrad:number, lumaMean:number, lumaStd:number, pixels:number}}
+ *   luma in 0..255 units; pixels = the count measured, (w - 2) * (h - 2)
+ * @example
+ *   // The sharpest frame of a burst, measured on the subject's box.
+ *   const s = bro.image.sharpness(img.pixels, { width: img.width, height: img.height,
+ *                                               channels: img.channels, rect: { x, y, w, h } });
+ *   if (s.tenengrad > best.tenengrad) best = { path, ...s };
+ */
+bro.image.sharpness = function(src, params) {};
+
 // ── Geometric, untyped names ─────────────────────────────────────────────────
 //
 // The same broimage kernels under the shorter names, with the same option keys
