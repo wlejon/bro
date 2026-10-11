@@ -626,6 +626,13 @@ void Engine::flushLayoutForRead(dom::Document* doc) {
 
     dom::Element* previousHover = hoveredElement_.get();
     layout::ElementRefAdapter::setHoveredElement(hovered);
+    // A transition or animation this resolve starts starts now, on the
+    // scaled clock, as one the layout thread starts does (it hands the
+    // document its pass's time). The document still held the last pass's: a
+    // page idle for a while (a tooltip's timer) started a 120 ms fade-in
+    // hundreds of ms in the past, finished at its first tick, and left the
+    // frame it was recorded in (opacity 0) on screen until the next input.
+    if (doc == document_.get()) doc->setTransitionManager(&transitionManager_, engineNowMs_);
     doc->resolveStyles();
     if (doc->isLayoutDirty() || doc->isStructureDirty() || !doc->layoutRoot())
         doc->performLayout(width, height, *textMetrics_);

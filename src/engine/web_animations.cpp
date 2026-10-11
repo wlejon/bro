@@ -366,6 +366,7 @@ bool WebAnimationManager::tick(double now) {
     bool anyActive = false;
     bool anyCompleted = false;
     activeThisTick_.clear();
+    finishedThisTick_.clear();
 
     for (auto it = records_.begin(); it != records_.end(); ) {
         WebAnimation& a = it->second;
@@ -399,7 +400,10 @@ bool WebAnimationManager::tick(double now) {
                     // One more re-resolve so the override either settles on the
                     // fill-forwards value or (fill:none) drops back to base —
                     // same settling markDirty the CSS managers issue.
-                    if (elem) elem->markDirty();
+                    if (elem) {
+                        elem->markDirty();
+                        finishedThisTick_.push_back(elem);
+                    }
                     anyCompleted = true;
                 } else {
                     // (CSS animations and transitions under display:none do

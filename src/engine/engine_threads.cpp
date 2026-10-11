@@ -164,6 +164,11 @@ void Engine::layoutThreadFunc() {
             }
             layoutPassTimes_.layoutMs = util::currentTimeMs() - tLayout;
             document_->clearDirty();
+            // An animation that finished on this pass's tick marked its
+            // element for the pass that settles its value; the clear above
+            // dropped that, and an idle page never ran it (a background
+            // animation's last colour stayed on screen until input).
+            for (auto* e : webAnimationManager_.finishedThisTick()) e->markDirty();
         }
 
         layoutPipeline_->publishDone();
