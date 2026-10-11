@@ -87,11 +87,6 @@ fi
 # driver's DRM client fds (default 1024).
 ulimit -n 65536 2>/dev/null || ulimit -n 4096 2>/dev/null || true
 
-# On Linux without a display, use dummy SDL video driver for native headless Vulkan offscreen rendering.
-if [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" && "$(uname -s)" == "Linux" ]]; then
-    export SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-dummy}"
-fi
-
 to_win_path() {
     local p="$1"
     if [[ "${BRO:-}" == *.exe ]]; then

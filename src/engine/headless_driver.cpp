@@ -84,6 +84,16 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
     _CrtSetReportFile(_CRT_ERROR, _CRTDBG_FILE_STDERR);
 #endif
 #endif
+#if defined(__linux__) || defined(__FreeBSD__)
+    // Headless keeps a hidden window for bro.window's state (fullscreen,
+    // always-on-top, size limits round-trip against it). On a box with no X
+    // server or Wayland compositor SDL has no video device and there would be
+    // no window at all, so those calls silently did nothing; SDL's dummy
+    // driver stands in, since headless never presents. Set here, before any
+    // thread starts, because setenv races any thread reading the environment.
+    if (!std::getenv("SDL_VIDEODRIVER") && !std::getenv("DISPLAY") && !std::getenv("WAYLAND_DISPLAY"))
+        setenv("SDL_VIDEODRIVER", "dummy", 0);
+#endif
     bro::util::installSignalHandler();
 
     int width = 1920, height = 1080;
