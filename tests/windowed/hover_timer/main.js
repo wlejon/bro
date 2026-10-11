@@ -40,24 +40,23 @@ function frames(n) {
     });
 }
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 async function run() {
     await frames(10);
-    // Rest on the icon in the middle of the button, jittering by a pixel a
-    // frame for a second.
-    for (let i = 0; i < 60; ++i) {
+    // Onto the icon in the middle of the button, jittering by a pixel every
+    // 30 ms for 300 ms (less than the tip's delay), then still.
+    for (let i = 0; i < 10; ++i) {
         mouseMove(60 + (i % 3) - 1, 60 + ((i >> 1) % 3) - 1);
-        await frames(1);
+        await sleep(30);
     }
+    // Nothing more: no input, no requestAnimationFrame loop. The tip's timer
+    // and its fade-in alone have to bring it to the screen.
+    await sleep(1500);
     assert(document.querySelector('.tooltip'), `the tip shows while the pointer rests on the icon (pointerover targets: ${events.join(' ')})`);
-    let img = null;
-    const deadline = Date.now() + 2000;
-    for (;;) {
-        img = presentedFrame();
-        if (img && px(img, 60, 110)[0] > 200) break;
-        if (Date.now() > deadline) break;
-        await frames(1);
-    }
-    assert(img && px(img, 60, 110)[0] > 200, `the tip reached the screen (got ${img ? px(img, 60, 110) : 'no frame'})`);
+    const img = presentedFrame();
+    assert(img && px(img, 60, 110)[0] > 200,
+           `the tip reached the screen with no input after it (got ${img ? px(img, 60, 110) : 'no frame'})`);
     console.log(`hover timer: pointerover targets ${events.join(' ')}`);
 }
 
