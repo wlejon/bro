@@ -11,7 +11,8 @@
 // break, a form control, a video, an animated or still-decoding image, ... —
 // makes it volatile: drawn, never reused (the reasons are counted).
 //
-// BRO_PAINT_CACHE=0 turns it off: every pass records everything, as before.
+// A test can turn it off (setPaintCache in headless) to record a pass from
+// scratch, the frame tests/layout/test_paint_cache_fuzz.js compares against.
 
 #include "render/command_buffer.h"
 

@@ -180,9 +180,9 @@ public:
     }
 
     // The span cache (layout/paint_cache.h): on for draw() passes into a
-    // recording renderer unless BRO_PAINT_CACHE=0. setPaintCacheEnabled
-    // overrides that for every traversal (headless A/B: a pass with it off
-    // records everything and leaves the cache as it was).
+    // recording renderer. setPaintCacheEnabled(false) turns it off for every
+    // traversal (headless A/B: a pass with it off records everything and
+    // leaves the cache as it was).
     static bool paintCacheEnabled();
     static void setPaintCacheEnabled(bool on);
     const PaintCacheStats& paintCacheStats() const { return cacheStats_; }

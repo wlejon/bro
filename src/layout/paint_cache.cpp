@@ -8,8 +8,6 @@
 #include "render/recording_renderer.h"
 
 #include <atomic>
-#include <cstdlib>
-#include <cstring>
 #include <utility>
 
 namespace bro::layout {
@@ -36,16 +34,9 @@ const char* spanMissName(SpanMiss m) {
 
 namespace {
 
-// -1: BRO_PAINT_CACHE decides; 0/1: setPaintCacheEnabled.
-std::atomic<int> g_cacheOverride{-1};
-
-bool envEnabled() {
-    static const bool on = [] {
-        const char* v = std::getenv("BRO_PAINT_CACHE");
-        return !(v && std::strcmp(v, "0") == 0);
-    }();
-    return on;
-}
+// On unless a test turned it off (setPaintCacheEnabled) to record a pass
+// from scratch.
+std::atomic<bool> g_cacheEnabled{true};
 
 // An element whose paint holds another element's: a span of its own is
 // worth keeping. A leaf paints inline into the span around it.
@@ -69,12 +60,11 @@ constexpr uint64_t kPruneAge = 120;
 }  // namespace
 
 bool DrawTraversal::paintCacheEnabled() {
-    int o = g_cacheOverride.load(std::memory_order_relaxed);
-    return o < 0 ? envEnabled() : o != 0;
+    return g_cacheEnabled.load(std::memory_order_relaxed);
 }
 
 void DrawTraversal::setPaintCacheEnabled(bool on) {
-    g_cacheOverride.store(on ? 1 : 0, std::memory_order_relaxed);
+    g_cacheEnabled.store(on, std::memory_order_relaxed);
 }
 
 PaintCache* DrawTraversal::beginPaintCache(dom::Element* root) {

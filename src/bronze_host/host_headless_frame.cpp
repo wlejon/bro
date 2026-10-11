@@ -348,8 +348,8 @@ void installHeadlessFrame(engine::Engine& engine) {
     // setPaintCache(on) -> the previous setting
     //
     // The paint span cache (layout/paint_cache.h) on or off for every pass
-    // from here on, overriding BRO_PAINT_CACHE: the A/B a pixel test compares
-    // a cached frame against a full re-record with. Off records everything and
+    // from here on: the A/B a pixel test compares a cached frame against a
+    // full re-record with. Off records everything and
     // leaves the cache as it was.
     ev::registerGlobal("setPaintCache", ev::makeFunction(
         [](Value, std::span<const Value> a) -> Value {
