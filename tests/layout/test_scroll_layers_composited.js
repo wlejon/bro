@@ -66,12 +66,11 @@ function scrollTo(el, y, what, expectRecord) {
 
 const colours = ['#c33', '#3a3', '#36c', '#cc3', '#3cc'];
 const sc = document.createElement('div');
-// At a fractional place, transparent over the gradient, both bars showing.
-// Not on half a device pixel: a clip edge there is one Ganesh keeps a rect's
-// pixel at and a glyph's not, painting in place, so no picture clipped once
-// matches both (test_scroll_layers.js has a scroller at 270.5 whose text
-// stays off that edge).
-sc.style.cssText = 'position: absolute; left: 20.25px; top: 30.25px; width: 260px; height: 220px; ' +
+// At half a device pixel, transparent over the gradient, both bars showing:
+// its clip is snapped to device pixels in place and in the compositor alike
+// (unsnapped, Ganesh painting in place clips a rect and a glyph to different
+// pixels at an edge there, and no picture clipped once matches both).
+sc.style.cssText = 'position: absolute; left: 20.5px; top: 30.5px; width: 260px; height: 220px; ' +
                    'overflow: auto; border: 2px solid #333; font-size: 12px';
 for (let i = 0; i < 200; ++i) {
     const row = document.createElement('div');
@@ -159,7 +158,7 @@ checkPresented('dpr 1 again');
 {
     sc.remove();
     const vl = document.createElement('div');
-    vl.style.cssText = 'position: absolute; left: 20.25px; top: 30.25px; width: 260px; height: 220px; ' +
+    vl.style.cssText = 'position: absolute; left: 20.5px; top: 30.5px; width: 260px; height: 220px; ' +
                        'overflow: auto; border: 1px solid #333; font-size: 12px';
     const spacer = document.createElement('div');
     spacer.style.cssText = 'position: relative; height: 9000px';

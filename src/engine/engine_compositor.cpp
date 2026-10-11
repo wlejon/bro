@@ -60,6 +60,8 @@ void Engine::recordAppLayers(render::CommandBuffer& outBuffer,
     if (scrollLayers && !layout::DrawTraversal::paintCacheEnabled()) scrollLayers = nullptr;
     if (scrollLayers) scrollLayers->beginPass();
     drawTraversal_->setScrollLayerHost(scrollLayers);
+    // Overflow clips on whole device pixels of the app's surfaces.
+    drawTraversal_->setSnapScale(deviceScale_.render);
 
     int contentW = vpW - insetRight;
     int contentH = vpH - insetTop - insetBottom;
@@ -165,6 +167,7 @@ void Engine::recordAppLayers(render::CommandBuffer& outBuffer,
     drawTraversal_->setPaintMode(PaintMode::All);
     drawTraversal_->setPromotedElements(nullptr);
     drawTraversal_->setScrollLayerHost(nullptr);
+    drawTraversal_->setSnapScale(0.0f);
     if (scrollLayers) scrollLayers->endPass();
 }
 

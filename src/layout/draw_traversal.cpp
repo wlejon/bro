@@ -270,6 +270,7 @@ bool DrawTraversal::paintScrollLayer(dom::Element* elem, const htmlayout::css::C
     place.viewY = place.scrollY - box.padding.top;
     place.viewW = box.contentRect.width + box.padding.left + box.padding.right;
     place.viewH = box.contentRect.height + box.padding.top + box.padding.bottom;
+    place.snapScale = snapScale_;
     const ScrollLayerRecord rec = scrollLayerHost_->beginScrollLayer(elem, place, !contextFlushed_);
     if (!rec.buffer) return false;
     // The layer at the content origin, under the scroller's clip: the
@@ -310,9 +311,15 @@ bool DrawTraversal::paintScrollLayer(dom::Element* elem, const htmlayout::css::C
     pushClipRect(rec.winX, rec.winY, rec.winW, rec.winH);
     const bool wasIn = std::exchange(inScrollLayer_, true);
     const SpanMiss outerVolatile = std::exchange(spanVolatile_, SpanMiss::Count);
+    // Content space lands where the pass puts the content box less the
+    // scroll: its clips are snapped there (snapClip).
+    const float outerSnapX = std::exchange(snapOriginX_, x - place.scrollX);
+    const float outerSnapY = std::exchange(snapOriginY_, y - place.scrollY);
     recorder_->setBuffer(rec.buffer);
     paintContent(elem, style, box, visible, 0.0f, 0.0f);
     recorder_->setBuffer(outer);
+    snapOriginX_ = outerSnapX;
+    snapOriginY_ = outerSnapY;
     scrollLayerHost_->endScrollLayer(elem, spanVolatile_ == SpanMiss::Count);
     spanVolatile_ = outerVolatile;
     inScrollLayer_ = wasIn;
@@ -398,6 +405,18 @@ void DrawTraversal::paintScrollPiece(dom::Element* scroller, std::vector<WalkIte
     clipRectStack_ = std::move(clips);
 }
 
+void DrawTraversal::snapClip(float& x, float& y, float& w, float& h) const {
+    if (snapScale_ <= 0.0f || transformDepth_ > 0) return;
+    const float s = snapScale_;
+    const float l = std::round((x + snapOriginX_) * s), t = std::round((y + snapOriginY_) * s);
+    const float r = std::round((x + w + snapOriginX_) * s), b = std::round((y + h + snapOriginY_) * s);
+    x = l / s - snapOriginX_;
+    y = t / s - snapOriginY_;
+    w = (r - l) / s;
+    h = (b - t) / s;
+    spanSnapped_ = true;
+}
+
 void DrawTraversal::pushClipRect(float x, float y, float w, float h) {
     // Intersect with the current effective clip so the new top stays the
     // running intersection (empty intersections collapse to zero area).
@@ -462,6 +481,9 @@ void DrawTraversal::draw(dom::Element* root, float scrollX, float scrollY,
     activeCache_ = beginPaintCache(root);
     spanVolatile_ = SpanMiss::Count;
     spanPinned_ = false;
+    spanSnapped_ = false;
+    snapOriginX_ = snapOriginY_ = 0.0f;
+    transformDepth_ = 0;
     if (rootSC) paintStackingContext(rootSC.get(), false, true);
     // Then the top layer, above everything, each entry over its ::backdrop.
     if (rootSC) paintTopLayer(root);
@@ -954,6 +976,8 @@ void DrawTraversal::paintStackingContext(StackingContext* sc, bool withinPromote
         }
     }
     } // if (!suppressSelf)
+    // No clip under its transform is snapped to device pixels (snapClip).
+    const TransformScope transformScope(transformDepth_, wrappedTransform);
     bool didWrap = wrappedBlend || wrappedTransform || wrappedOpacity || wrappedFilter;
     if (didWrap) scRootSkipWrap_.insert(sc->root);
 
@@ -983,14 +1007,17 @@ void DrawTraversal::paintStackingContext(StackingContext* sc, bool withinPromote
         for (auto& c : clips) {
             if (!clipInPiece(c)) continue;
             renderer_->save();
-            if (!c.radii.isZero())
-                renderer_->setClipRRect(c.bx, c.by, c.bw, c.bh, c.radii);
-            else
-                renderer_->setClip(c.bx, c.by, c.bw, c.bh);
+            float x = c.bx, y = c.by, w = c.bw, h = c.bh;
+            if (!c.radii.isZero()) {
+                renderer_->setClipRRect(x, y, w, h, c.radii);
+            } else {
+                snapClip(x, y, w, h);  // as the element's own clip is (paintElement)
+                renderer_->setClip(x, y, w, h);
+            }
             // Mirror onto the layer-break clip stack so a canvas/WebGL break in
             // an out-of-line (positioned / nested-SC) subtree still scissors to
             // the ancestor overflow clip the compositor would otherwise ignore.
-            pushClipRect(c.bx, c.by, c.bw, c.bh);
+            pushClipRect(x, y, w, h);
         }
     };
     auto popClips = [this](const std::vector<ClipRect>& clips) {

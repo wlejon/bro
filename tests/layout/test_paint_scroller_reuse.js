@@ -65,6 +65,36 @@ for (const y of [3, 40, 700, 0]) {
     inner.scrollTop = y;
     check(`inner scrolled to ${y}`);
 }
+// At devicePixelRatio 1.5 a scroll by 1 px moves the boxes by half a device
+// pixel: a row whose span holds an overflow clip (put on whole device pixels)
+// is recorded again there, not moved, and one by 2 px is moved.
+setDeviceScaleFactor(1.5);
+// A quarter px down: its rows' edges between device pixels, not on them or
+// halfway (where a clip moved half a pixel cuts what a snapped one would).
+inner.style.paddingTop = '0.25px';
+for (let i = 0; i < 12; ++i) {
+    const row = inner.children[i];
+    row.style.overflow = 'hidden';
+    row.style.height = '13px';
+    // Square: a rounded clip's edge is antialiased by Ganesh a little
+    // differently in a scroll layer's surface than in the page's (the
+    // pixel under it, white on the CPU, takes 10% more of what it clips).
+    row.style.borderRadius = '0';
+    // Something for the clip to cut: a black label taller than the row.
+    const label = row.firstElementChild;
+    label.style.display = 'block';
+    label.style.height = '40px';
+    label.style.background = '#000';
+    label.style.color = '#fff';
+}
+inner.scrollTop = 0;
+check('dpr 1.5, rows that clip their text');
+inner.scrollTop = 1;
+check('dpr 1.5, inner scrolled by half a device pixel');
+inner.scrollTop = 3;
+check('dpr 1.5, inner scrolled by 3 device pixels');
+setDeviceScaleFactor(1);
+check('dpr 1 again');
 const after = perf.stats().paint;
 const translated = after.reusedScrolled - before.reusedScrolled;
 assert(translated > 50, `rows were reused under a translate as they scrolled (${translated})`);

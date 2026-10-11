@@ -57,6 +57,11 @@ struct ScrollLayerPlace {
     float scrollX = 0, scrollY = 0;
     // What shows, in content space: the padding box where the scroll has it.
     float viewX = 0, viewY = 0, viewW = 0, viewH = 0;
+    // The scale clips are snapped to device pixels at (0: none). A recording
+    // with snapped clips stands only where content space lands on the same
+    // device-pixel grid: its origin (contentX - scrollX) moved by whole
+    // device pixels.
+    float snapScale = 0;
 };
 
 // What the traversal does with a layer's content this pass.

@@ -246,6 +246,9 @@ void DrawTraversal::paintElement(dom::Element* elem, float offsetX, float offset
         }
     }
 
+    // No clip under it is snapped to device pixels (snapClip).
+    const TransformScope transformScope(transformDepth_, hasTransform);
+
     // Opacity: wrap entire element in a layer
     bool hasOpacity = false;
     if (!skipWrap) {
@@ -515,14 +518,19 @@ void DrawTraversal::paintElement(dom::Element* elem, float offsetX, float offset
         needsClip = true;
         renderer_->save();
         render::Radii clipRadii = getRadii(style, bw, bh);
-        if (!clipRadii.isZero())
-            renderer_->setClipRRect(bx, by, bw, bh, clipRadii);
-        else
-            renderer_->setClip(bx, by, bw, bh);
+        float cx = bx, cy = by, cw = bw, ch = bh;
+        if (!clipRadii.isZero()) {
+            renderer_->setClipRRect(cx, cy, cw, ch, clipRadii);
+        } else {
+            // On whole device pixels (snapClip), as a scroll layer's
+            // compositor clip is.
+            snapClip(cx, cy, cw, ch);
+            renderer_->setClip(cx, cy, cw, ch);
+        }
         // Track the rect so a canvas/WebGL layer break in this subtree can
         // report the clip the compositor must scissor to (rounded corners are
         // approximated by their bounding box).
-        pushClipRect(bx, by, bw, bh);
+        pushClipRect(cx, cy, cw, ch);
     }
 
     // SVG elements render their own children via the SVG pipeline — skip DOM traversal

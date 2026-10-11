@@ -191,6 +191,12 @@ public:
     // Scroll layers (layout/scroll_layer.h): the pass's host, null to paint
     // every scroller in place. The engine sets it around a pass's draw().
     void setScrollLayerHost(ScrollLayerHost* host) { scrollLayerHost_ = host; }
+    // The render scale the pass's surfaces are drawn at: an overflow clip
+    // (not a rounded one) is put on whole device pixels at it, where no
+    // transform is on, so painting in place and a scroll layer's compositor
+    // clip cut the same pixels (an edge on half a device pixel is one Skia
+    // cuts per primitive). 0: as laid out (system panels).
+    void setSnapScale(float scale) { snapScale_ = scale; }
     struct ScrollLayerStats {
         uint64_t layers = 0;  // scrollers composited as a layer, pass by pass
         uint64_t reused = 0;  // of those, whose recording stood: nothing in them recorded
@@ -249,6 +255,27 @@ private:
     // of: the nearest scroller above it this pass made a layer (null: none,
     // or the walk is already inside one).
     dom::Element* pieceScrollerOf(dom::Element* elem) const;
+    // Clip snapping (setSnapScale). The origin is what the recording's
+    // places are less the pass's: a scroll layer's content is recorded in its
+    // content space, which the pass puts at its content box less its scroll,
+    // and snapped where it lands. No snapping under a transform.
+    float snapScale_ = 0.0f;
+    float snapOriginX_ = 0.0f, snapOriginY_ = 0.0f;
+    int transformDepth_ = 0;
+    struct TransformScope {
+        int& depth;
+        bool on;
+        TransformScope(int& d, bool o) : depth(d), on(o) { if (on) ++depth; }
+        ~TransformScope() { if (on) --depth; }
+        TransformScope(const TransformScope&) = delete;
+        TransformScope& operator=(const TransformScope&) = delete;
+    };
+    // An overflow clip rect on whole device pixels (when snapping is on); a
+    // span recording one notes it (spanSnapped_).
+    void snapClip(float& x, float& y, float& w, float& h) const;
+    // The span being recorded holds a snapped clip: reused only where it
+    // lands on the same device-pixel grid (SpanKey::snapX). Carried up.
+    mutable bool spanSnapped_ = false;
     // While a piece is recorded: its scroller, whose clips (and those above
     // it) the compositor applies, so the walk leaves them out (clipInPiece).
     const dom::Element* pieceScroller_ = nullptr;

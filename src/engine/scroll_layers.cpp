@@ -29,8 +29,14 @@ layout::ScrollLayerRecord ScrollLayerSet::beginScrollLayer(dom::Element* scrolle
     // since it was made and its window still holds the view.
     const bool holds = place.viewX >= l.winX && place.viewY >= l.winY &&
                        place.viewX + place.viewW <= l.winX + l.winW && place.viewY + place.viewH <= l.winY + l.winH;
+    // And where its clips were snapped to device pixels: content space lands
+    // on the same grid (its origin moved by whole device pixels).
+    const float originX = place.contentX - place.scrollX, originY = place.contentY - place.scrollY;
+    const bool sameGrid = place.snapScale == l.recordSnapScale &&
+                          wholePixels((originX - l.recordOriginX) * place.snapScale) &&
+                          wholePixels((originY - l.recordOriginY) * place.snapScale);
     const bool reuse = mayReuse && content.reusable && l.epoch != 0 && scroller->paintStamp() < l.epoch &&
-                       l.winW == winW && l.winH == winH && holds;
+                       l.winW == winW && l.winH == winH && holds && sameGrid;
     l.contentX = place.contentX;
     l.contentY = place.contentY;
     l.scrollX = place.scrollX;
@@ -54,6 +60,9 @@ layout::ScrollLayerRecord ScrollLayerSet::beginScrollLayer(dom::Element* scrolle
         l.winW = winW;
         l.winH = winH;
         l.epoch = dom::Element::paintEpoch();
+        l.recordOriginX = originX;
+        l.recordOriginY = originY;
+        l.recordSnapScale = place.snapScale;
         content.reusable = false;
         content.recorded = true;
     }

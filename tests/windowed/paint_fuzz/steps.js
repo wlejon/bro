@@ -160,6 +160,20 @@
                 sc.appendChild(row);
             }
             stage.appendChild(sc);
+            // A clip under a transform: one not put on whole device pixels
+            // (DrawTraversal::snapClip), a box scaled by a fraction with a box
+            // in it, at fractional places, whose clip cuts its text.
+            const tf = document.createElement('div');
+            tf.className = 'b c' + int(0, 4);
+            tf.style.transform = `scale(${pick([0.9, 1.1, 1.25])})`;
+            const clip = document.createElement('div');
+            clip.className = 'b c' + int(0, 4);
+            clip.style.overflow = 'hidden';
+            clip.style.height = (int(10, 18) + 0.25) + 'px';
+            clip.style.marginLeft = (int(0, 10) + 0.5) + 'px';
+            clip.textContent = pick(WORDS) + ' ' + pick(WORDS) + ' ' + pick(WORDS);
+            tf.appendChild(clip);
+            stage.appendChild(tf);
         }
 
         // A random element of the stage (not the stage), optionally filtered.

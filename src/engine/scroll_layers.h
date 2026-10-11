@@ -154,6 +154,9 @@ private:
         float scrollX = 0, scrollY = 0;  // the pass's scroll
         float viewOffX = 0, viewOffY = 0, viewW = 0, viewH = 0;  // the view at scroll 0
         uint64_t epoch = 0;              // the paint epoch its content was recorded in
+        // Where content space landed (content box less scroll) and the snap
+        // scale when its content was recorded (ScrollLayerPlace::snapScale).
+        float recordOriginX = 0, recordOriginY = 0, recordSnapScale = 0;
         bool nestedScroller = false;
         bool seen = false;
         uint64_t passes = 0;             // passes that placed it

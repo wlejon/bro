@@ -164,9 +164,8 @@ for (const [reason, make] of cases) {
                            'background: rgba(200, 0, 120, 0.45)';
     document.body.appendChild(before);
     const vl = document.createElement('div');
-    // Off half a device pixel: text crossing a clip edge there is clipped
-    // apart from rects painting in place (test_scroll_layers_composited.js).
-    vl.style.cssText = 'position: absolute; left: 280.25px; top: 400.25px; width: 240px; height: 260px; ' +
+    // On half a device pixel: text crossing its snapped clip edge.
+    vl.style.cssText = 'position: absolute; left: 280.5px; top: 400.5px; width: 240px; height: 260px; ' +
                        'overflow: auto; border: 1px solid #333; font-size: 12px';
     const spacer = document.createElement('div');
     spacer.style.cssText = 'position: relative; height: 6000px';
@@ -237,6 +236,15 @@ check('dpr 1.5');
     a.scrollTop = 2403;
     check('dpr 1.5, scrolled by 3 device pixels');
     assert(layers().rasters === r1.rasters, 'a scroll by whole device pixels does not');
+    // The scroller in it clips its rows on whole device pixels where the
+    // layer's content lands: half a device pixel on, the layer's recording
+    // cannot stand (its snapped clip would be half a pixel out).
+    a.scrollTop = 100;
+    check('dpr 1.5, the inner scroller in view');
+    a.scrollTop = 101;
+    check('dpr 1.5, the inner scroller half a device pixel on');
+    a.scrollTop = 103;
+    check('dpr 1.5, the inner scroller 3 device pixels on');
 }
 setDeviceScaleFactor(1);
 check('dpr 1 again');

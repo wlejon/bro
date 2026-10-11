@@ -18,6 +18,7 @@
 
 #include "render/command_buffer.h"
 
+#include <cmath>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -66,6 +67,14 @@ struct SpanKey {
     // recording, stand), so a span of a scroller painted in place is only
     // reused at the scroll it was recorded at.
     float scrollX = 0, scrollY = 0;
+    // Where its origin lands in device px (DrawTraversal::snapClip's scale
+    // and origin): a span holding a clip snapped to device pixels is reused
+    // only a whole number of device pixels from where it was recorded.
+    float snapX = 0, snapY = 0, snapScale = 0;
+    bool sameSnapGrid(const SpanKey& rec) const {
+        auto whole = [](float d) { return std::abs(d - std::round(d)) < 1.0f / 512.0f; };
+        return snapScale == rec.snapScale && whole(snapX - rec.snapX) && whole(snapY - rec.snapY);
+    }
     // How far a box drawn at this key stands from where `rec` recorded it.
     float dx(const SpanKey& rec) const { return offX - rec.offX; }
     float dy(const SpanKey& rec) const { return offY - rec.offY; }
@@ -105,6 +114,8 @@ struct SpanEntry {
     // It paints something its parent element decides (a numbered marker's
     // ordinal): reused only while the parent's stamp is older than it too.
     bool readsParent = false;
+    // It holds a clip snapped to device pixels (SpanKey::sameSnapGrid).
+    bool snapped = false;
     std::shared_ptr<render::CommandBuffer> buffer;
 };
 

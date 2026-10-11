@@ -124,6 +124,9 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     key.skipWrap = scRootSkipWrap_.count(elem) != 0;
     key.scrollX = elem->scrollLeftValue();
     key.scrollY = elem->scrollTopValue();
+    key.snapX = (offsetX + snapOriginX_) * snapScale_;
+    key.snapY = (offsetY + snapOriginY_) * snapScale_;
+    key.snapScale = snapScale_;
 
     SpanMiss miss = contextFlushed_ ? SpanMiss::Context : SpanMiss::New;
     auto it = cache.entries.find(elem);
@@ -137,11 +140,13 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
             miss = SpanMiss::Changed;
         else if (key.scrollX != entry->key.scrollX || key.scrollY != entry->key.scrollY) miss = SpanMiss::Scrolled;
         else if (!key.fitsIn(entry->key)) miss = SpanMiss::Clip;
+        else if (entry->snapped && !key.sameSnapGrid(entry->key)) miss = SpanMiss::Clip;
         else if (entry->pinned && (!key.sameOrigin(entry->key) || key.rootX != entry->key.rootX ||
                                    key.rootY != entry->key.rootY))
             miss = SpanMiss::Moved;
         else {
             entry->lastDraw = cache.draws;
+            if (entry->snapped) spanSnapped_ = true;  // the span round it holds it too
             if (key.sameOrigin(entry->key)) {
                 recorder_->recordSpan(entry->buffer);
             } else {
@@ -173,6 +178,7 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     render::CommandBuffer* outer = recorder_->buffer();
     const SpanMiss outerVolatile = std::exchange(spanVolatile_, SpanMiss::Count);
     const bool outerPinned = std::exchange(spanPinned_, false);
+    const bool outerSnapped = std::exchange(spanSnapped_, false);
     const bool outerReadsParent = std::exchange(spanReadsParent_, false);
     buf->setOwnerId(elem->nodeId());
     recorder_->setBuffer(buf.get());
@@ -182,6 +188,8 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     spanVolatile_ = outerVolatile != SpanMiss::Count ? outerVolatile : ownVolatile;
     const bool ownPinned = spanPinned_;
     spanPinned_ = outerPinned || ownPinned;
+    const bool ownSnapped = spanSnapped_;
+    spanSnapped_ = outerSnapped || ownSnapped;
     const bool ownReadsParent = spanReadsParent_;
     spanReadsParent_ = outerReadsParent;
     recorder_->recordSpan(buf);
@@ -193,6 +201,7 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     entry->lastDraw = cache.draws;
     entry->volatileReason = ownVolatile;
     entry->pinned = ownPinned;
+    entry->snapped = ownSnapped;
     entry->readsParent = ownReadsParent;
     entry->buffer = std::move(buf);
 }
