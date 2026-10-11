@@ -5,21 +5,34 @@
 // without a monospace font.
 //
 // Needs an installed font with proportional default digits AND a `tnum`
-// feature. The candidates below all carry `tnum`; one qualifies when its plain
-// "111" and "000" measure differently, which does not depend on the feature
-// under test, so a broken feature fails rather than skips.
+// feature. The candidates below all carry `tnum`; one qualifies when it is
+// installed and its plain "111" and "000" measure differently with kerning
+// off, which does not depend on the feature under test, so a broken feature
+// fails rather than skips. (Installed: a missing family falls back to one
+// that need not qualify; on macOS that is Arial, whose digits are tabular but
+// whose "11" kerns.)
 
 const CANDIDATES = [
     'Bahnschrift', 'Segoe UI Variable Text', 'Candara', 'Constantia', 'Corbel',
     'Sitka Text',                                   // Windows
     'Inter', 'Cantarell', 'Source Sans 3', 'Source Sans Pro', 'Fira Sans',
     'Open Sans',                                    // Linux, if installed
-    'Avenir Next', 'Optima',                        // macOS
+    'Seravek', 'Skia', 'Kefa',                      // macOS
 ];
 
 const root = document.getElementById('root');
 const width = (id) => document.getElementById(id).getBoundingClientRect().width;
 const close = (a, b) => Math.abs(a - b) < 0.01;
+
+// Whether `family` is installed: text set in it, monospace behind it, does
+// not measure as monospace alone.
+function installed(family) {
+    root.innerHTML =
+        `<span id="f" style="font-family:'${family}', monospace;font-size:40px">Hamburgefonstiv</span><br>` +
+        '<span id="m" style="font-family:monospace;font-size:40px">Hamburgefonstiv</span>';
+    flush();
+    return Math.abs(width('f') - width('m')) > 0.5;
+}
 
 // Two spans, "111" and "000", in `family` with `style` on each span (or on
 // their parent when `onParent`).
@@ -35,7 +48,8 @@ function measure(family, style, onParent = false) {
 
 let family = null;
 for (const f of CANDIDATES) {
-    const m = measure(f, '');
+    if (!installed(f)) continue;
+    const m = measure(f, 'font-kerning:none');
     if (!close(m.ones, m.zeros)) { family = f; break; }
 }
 
