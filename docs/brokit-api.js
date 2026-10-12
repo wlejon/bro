@@ -100,8 +100,18 @@ fs.readSync(fd, buffer, offset, length, position);
                                          //   from, or null/undefined to continue where the last read stopped.
                                          //   Node's form readSync(fd, buffer, { offset, length, position }) works too.
 fs.writeSync(fd, buffer, offset, length, position);
-                                         // → bytes written; fd must be opened writable; position as for readSync
-fs.fstatSync(fd);                        // → { size, isFile(), isDirectory(), isSymbolicLink() } (size only:
+                                         // → bytes written; fd must be opened writable; position as for readSync.
+                                         //   offset defaults to 0, length to buffer.byteLength - offset.
+                                         //   writeSync(fd, buffer, { offset, length, position }) works too.
+fs.writeSync(fd, string, position, encoding);
+                                         // → bytes written. encoding: 'utf8' (default), 'latin1'/'binary',
+                                         //   'hex', 'base64', 'ascii', 'ucs2'/'utf16le'; position null = where
+                                         //   the last write stopped
+fs.fsyncSync(fd);                        // flush the fd's writes to the disk (fdatasyncSync: data only);
+fs.fdatasyncSync(fd);                    //   EBADF for an fd that is not open. A durable replace is
+                                         //   write temp, fsyncSync, closeSync, renameSync
+fs.mkdtempSync(prefix);                  // → prefix + six random characters, a new directory (mode 0700)
+fs.fstatSync(fd);                      // → { size, isFile(), isDirectory(), isSymbolicLink() } (size only:
                                          //   no times or mode; use statSync(path) for those)
 fs.closeSync(fd);                        // EBADF for an fd that is not open
 // e.g. the last 128 bytes (an ID3v1 tag) of an MP3:
@@ -118,8 +128,8 @@ fs.closeSync(fd);                        // EBADF for an fd that is not open
 // and the callback or promise settles on a later turn, never inside the call.
 // A page waiting on a slow disk keeps drawing. Use these, not the *Sync
 // forms, anywhere a window is on screen (startup included). Errors are Error
-// objects with Node's code / syscall / path. chmod is the exception: it runs
-// in place and settles later.
+// objects with Node's code / syscall / path. chmod and write are the
+// exceptions: they run in place and settle later.
 
 fs.readFile(path, encoding, callback?);  // callback(err, data) or returns Promise
 fs.writeFile(path, data, encoding, callback?);
@@ -135,6 +145,10 @@ fs.rename(oldPath, newPath, callback?);
 fs.copyFile(src, dest, callback?);
 fs.chmod(path, mode, callback?);
 fs.realpath(path, callback?);
+fs.write(fd, bufferOrString, ..., callback?);  // the writeSync forms; callback(err, bytesWritten, data)
+fs.fsync(fd, callback?);                 // the flush waits on the fs threads
+fs.fdatasync(fd, callback?);
+fs.mkdtemp(prefix, callback?);           // callback(err, path)
 
 // ── Promises ──
 
@@ -153,6 +167,7 @@ fs.promises.copyFile(src, dest);
 fs.promises.chmod(path, mode);
 fs.promises.realpath(path);
 fs.promises.access(path);               // resolves or rejects with ENOENT
+fs.promises.mkdtemp(prefix);
 
 // ── Constants ──
 
