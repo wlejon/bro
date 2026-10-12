@@ -91,7 +91,9 @@
  * 15 s into a 30 s preview, the continuation's first audio past the preview
  * is ready about 2 s later, 13 s before the playhead gets there, with no
  * step at the join (brosoundml test_yue2_stream_preview). The playing song's
- * continuation builds before anything else; then the previews ahead.
+ * continuation builds first until it is airMarginSeconds (20) past the audio
+ * handed out; then the previews ahead, then the rest of it, so a whole song
+ * never starves the songs a skip goes to.
  * autoFull (or setAutoFull) makes every song full as it goes on air: the
  * classic radio, with a skip still instant to a built preview.
  *
@@ -411,6 +413,7 @@
  * @property {number} [wantGraceSeconds=10] - Radio: how long a want waits for enqueue() before the radio fills it
  * @property {number} [previewSeconds=0] - 10..600: build each song as a preview of this length (makeFull continues it); 0 = whole songs
  * @property {boolean} [autoFull=false] - Previews: each song is made full as it goes on air
+ * @property {number} [airMarginSeconds=20] - The playing song builds first only until its audio is this far past the playhead; then the songs ahead. 0 = the playing song always first
  * @property {number[]} [windows=[250, 500]] - NAR window sizes in frames; the last repeats
  * @property {number} [left=25] - Inpainted left context frames
  * @property {number} [right=25] - Lookahead frames
