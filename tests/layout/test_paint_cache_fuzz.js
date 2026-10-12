@@ -6,7 +6,8 @@
 // @font-face, so it runs in a child bro-headless with its headless.js.
 //
 // Two fixed seeds, and one new one each run (printed): a failure names its
-// seed, and PAINT_FUZZ_SEED=<seed> replays just that one.
+// seed, and PAINT_FUZZ_SEED=<seed> replays just that one. The seeds that broke
+// a scroll layer's partial raster on the CPU are test_partial_raster_seed_*.js.
 
 const cp = require('child_process');
 const path = require('path');

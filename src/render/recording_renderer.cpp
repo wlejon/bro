@@ -273,10 +273,6 @@ void RecordingRenderer::drawSvgPath(std::string_view d, PathFillRule rule,
     auto [doff, dcnt] = buffer_->pushSpan(dash);
     cmd.dashArrOffset = doff; cmd.dashArrLen = dcnt;
     cmd.fill = fill; cmd.stroke = stroke; cmd.strokeStyle = strokeStyle; cmd.rule = rule;
-    auto gradient = [](const GradientPaint& p) {
-        return p.kind == GradientPaint::Kind::Linear || p.kind == GradientPaint::Kind::Radial;
-    };
-    if (gradient(fill) || gradient(stroke)) buffer_->noteDither();
     buffer_->append(cmd);
 }
 
@@ -404,7 +400,6 @@ void RecordingRenderer::fillLinearGradient(float x, float y, float w, float h,
     auto [off, count] = buffer_->pushSpan(stops);
     cmd.stopsOffset = off;
     cmd.stopsLen = count;
-    buffer_->noteDither();
     buffer_->append(cmd);
 }
 
@@ -421,7 +416,6 @@ void RecordingRenderer::fillRadialGradient(float x, float y, float w, float h,
     auto [off, count] = buffer_->pushSpan(stops);
     cmd.stopsOffset = off;
     cmd.stopsLen = count;
-    buffer_->noteDither();
     buffer_->append(cmd);
 }
 
@@ -438,7 +432,6 @@ void RecordingRenderer::fillConicGradient(float x, float y, float w, float h,
     auto [off, count] = buffer_->pushSpan(stops);
     cmd.stopsOffset = off;
     cmd.stopsLen = count;
-    buffer_->noteDither();
     buffer_->append(cmd);
 }
 
@@ -462,7 +455,6 @@ void RecordingRenderer::recordSurfaceBreak() {
 void RecordingRenderer::recordSpan(std::shared_ptr<const CommandBuffer> span) {
     if (!span || span->commandCount() == 0) return;
     if (span->hasBackdrop()) buffer_->noteBackdrop();
-    if (span->hasDither()) buffer_->noteDither();
     if (span->hasLayer()) buffer_->noteLayer();
     buffer_->append(Cmd_ReplaySpan{buffer_->pushSpanBuffer(std::move(span))});
 }
