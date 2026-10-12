@@ -85,6 +85,21 @@ const norm = (p) => real(p).replace(/\\/g, '/').toLowerCase();
     assert(norm(d.k) === norm(path.join(home, 'cache')), 'BRO_APP_HOME/cache: ' + d.k);
     for (const p of [d.c, d.d, d.k]) assert(fs.existsSync(p), 'created on first read: ' + p);
 
+    // A BRO_APP_HOME ending in a separator, with a doubled one and a '..' in
+    // it (macOS's TMPDIR ends in '/'): the directories are in normal form, so
+    // a path joined under one (path.join normalizes) starts with it.
+    const sep = isWin ? '\\' : '/';
+    const odd = scratch + sep + sep + 'x' + sep + '..' + sep + 'home3' + sep;
+    const n = probe(fixture, '({c: bro.app.configDir, d: bro.app.dataDir, k: bro.app.cacheDir, l: bro.app.logFile})',
+                    { BRO_APP_HOME: odd });
+    const clean = path.join(scratch, 'home3');
+    for (const [got, sub] of [[n.c, 'config'], [n.d, 'data'], [n.k, 'cache']]) {
+        assert(got === path.join(clean, sub), `BRO_APP_HOME '${odd}': ${sub} is ${path.join(clean, sub)}, got ${got}`);
+        assert(path.join(got, 'f.json').startsWith(got), `a file joined under ${got} starts with it`);
+    }
+    // (A headless run keeps no log file of its own: logFile is '' then.)
+    assert(!n.l || path.dirname(n.l) === path.join(clean, 'log'), 'and the log under it: ' + n.l);
+
     // Without BRO_APP_HOME: the platform's directories, keyed by the id.
     const base = path.join(scratch, 'platform');
     const env = isWin

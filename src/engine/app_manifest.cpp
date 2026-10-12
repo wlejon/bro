@@ -264,6 +264,21 @@ AppDirs appDirsFor(const std::string& idIn) {
         d.logDir = under("XDG_STATE_HOME", ".local/state");
 #endif
     }
+    // Normal form whatever the environment held (BRO_APP_HOME or a TMPDIR
+    // ending in a separator, '..', doubled separators): script joins onto
+    // these and compares (path.join normalizes), so a '.../T//x/data' would
+    // not be the start of a file joined under it.
+    auto normal = [](std::string& s) {
+        if (s.empty()) return;
+        s = u8str(u8path(s).lexically_normal());
+        while (s.size() > 1 && (s.back() == '/' || s.back() == '\\') &&
+               !(s.size() == 3 && s[1] == ':'))
+            s.pop_back();
+    };
+    normal(d.config);
+    normal(d.data);
+    normal(d.cache);
+    normal(d.logDir);
     d.logFile = u8str(u8path(d.logDir) / u8path(id + ".log"));
     return d;
 }
