@@ -44,6 +44,8 @@ runFrames(200, { stepMs: 16 });
 const p1 = perf.stats().paint;
 const partial = p1.pagePartialRasters - p0.pagePartialRasters;
 const apart = p1.pagePartialMismatch - p0.pagePartialMismatch;
-console.log(`PAGE_PARTIAL partial=${partial} apart=${apart} of ${p1.rasterPasses - p0.rasterPasses} passes`);
+const whole = (k) => p1[k] - p0[k];
+console.log(`PAGE_PARTIAL partial=${partial} apart=${apart} of ${p1.rasterPasses - p0.rasterPasses} passes; ` +
+            `whole: history=${whole('pageWholeHistory')} cover=${whole('pageWholeCover')} area=${whole('pageWholeArea')}`);
 assert(partial >= 20, `a cell toggled draws only what reaches it (${partial} partial passes)`);
 assert(apart === 0, `every partial pass of the page is its whole raster, pixel for pixel (${apart} apart)`);

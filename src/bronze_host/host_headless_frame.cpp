@@ -838,6 +838,12 @@ void installHeadlessFrame(engine::Engine& engine) {
                                        ev::fromDouble(static_cast<double>(engine.pagePartialMismatch()))));
                 pt.set(ev::setProperty(pt.get(), "pagePartialRasters",
                                        ev::fromDouble(static_cast<double>(engine.pagePartialRasters()))));
+                pt.set(ev::setProperty(pt.get(), "pageWholeHistory",
+                                       ev::fromDouble(static_cast<double>(engine.pageWholeHistory()))));
+                pt.set(ev::setProperty(pt.get(), "pageWholeCover",
+                                       ev::fromDouble(static_cast<double>(engine.pageWholeCover()))));
+                pt.set(ev::setProperty(pt.get(), "pageWholeArea",
+                                       ev::fromDouble(static_cast<double>(engine.pageWholeArea()))));
                 pt.set(ev::setProperty(pt.get(), "recorded", ev::fromDouble(static_cast<double>(pc.recorded))));
                 for (size_t i = 0; i < static_cast<size_t>(layout::SpanMiss::Count); ++i)
                     why.set(ev::setProperty(why.get(), layout::spanMissName(static_cast<layout::SpanMiss>(i)),

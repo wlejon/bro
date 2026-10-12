@@ -250,6 +250,7 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
         if (held->baseGen == baseGen) damage = render::Damage{};
         else if (!history || !history->since(held->baseGen, baseGen, damage)) damage.setFull();
     }
+    if (damage.full && held) pageWholeHistory_.fetch_add(1, std::memory_order_relaxed);
     SkIRect clip = SkIRect::MakeEmpty();
     if (!damage.full && !damage.empty) {
         clip = SkRect::MakeLTRB(damage.x0 * scale, damage.y0 * scale, damage.x1 * scale, damage.y1 * scale)
@@ -277,6 +278,7 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
         SkRect cover;
         if (!render::coveringBounds(buffer, cssClip, cover)) {
             damage.setFull();
+            pageWholeCover_.fetch_add(1, std::memory_order_relaxed);
         } else {
             area = SkRect::MakeLTRB(cover.fLeft * scale, cover.fTop * scale, cover.fRight * scale,
                                     cover.fBottom * scale)
@@ -287,8 +289,10 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
             area.setLTRB(area.fLeft & ~(kGrid - 1), area.fTop & ~(kGrid - 1), (area.fRight + kGrid - 1) & ~(kGrid - 1),
                          (area.fBottom + kGrid - 1) & ~(kGrid - 1));
             if (!area.intersect(SkIRect::MakeWH(surfW, surfH)) ||
-                static_cast<int64_t>(area.width()) * area.height() * 10 > static_cast<int64_t>(surfW) * surfH * 6)
+                static_cast<int64_t>(area.width()) * area.height() * 10 > static_cast<int64_t>(surfW) * surfH * 6) {
                 damage.setFull();
+                pageWholeArea_.fetch_add(1, std::memory_order_relaxed);
+            }
         }
     }
     if (!damage.full && damage.empty) {

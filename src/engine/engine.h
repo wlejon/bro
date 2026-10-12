@@ -583,6 +583,13 @@ public:
     uint64_t pagePartialMismatch() const { return pagePartialMismatch_.load(std::memory_order_relaxed); }
     // Passes that drew only the page's damage (and what reaches it), since startup.
     uint64_t pagePartialRasters() const { return pagePartialRasters_.load(std::memory_order_relaxed); }
+    // Why a pass of a changed page was whole instead: its pool copy held no
+    // recording the damage history reaches from (history), what reaches the
+    // damage could not be bounded (cover: a path clip, a layer), or it
+    // reached most of the surface (area).
+    uint64_t pageWholeHistory() const { return pageWholeHistory_.load(std::memory_order_relaxed); }
+    uint64_t pageWholeCover() const { return pageWholeCover_.load(std::memory_order_relaxed); }
+    uint64_t pageWholeArea() const { return pageWholeArea_.load(std::memory_order_relaxed); }
 
     /// The frame flight recorder (frame_trace.h) and the agent control
     /// channel (control.h, docs/agent-control.md). startControl serves the
@@ -1252,6 +1259,7 @@ private:
     // perf.stats().paint reads).
     std::atomic<uint64_t> rasterPasses_{0}, rasterUs_{0};
     std::atomic<uint64_t> pagePartialMismatch_{0}, pagePartialRasters_{0};
+    std::atomic<uint64_t> pageWholeHistory_{0}, pageWholeCover_{0}, pageWholeArea_{0};
 
 public:
     uint64_t rasterPassCount() const { return rasterPasses_.load(std::memory_order_relaxed); }
