@@ -80,6 +80,21 @@
  * next seed. drop(song) takes a queued song out (built or not), setPlan(song,
  * abc) rebuilds one from an edited score.
  *
+ * Previews (previewSeconds, e.g. 30): each song is built as its opening
+ * only, about 11 s of GPU on a 4090 (the plan is the whole song's; the
+ * semantic stage stops at the preview plus a second of lookahead). A preview
+ * nobody chooses plays that long and crossfades into the next built one,
+ * like scanning stations. makeFull() continues the playing preview into the
+ * whole song, seamlessly. Its semantic stage resumes after the preview's
+ * tokens, and its last 2 s not yet heard are re-solved with the
+ * continuation as their lookahead, inpainted against what precedes. Pressed
+ * 15 s into a 30 s preview, the continuation's first audio past the preview
+ * is ready about 2 s later, 13 s before the playhead gets there, with no
+ * step at the join (brosoundml test_yue2_stream_preview). The playing song's
+ * continuation builds before anything else; then the previews ahead.
+ * autoFull (or setAutoFull) makes every song full as it goes on air: the
+ * classic radio, with a skip still instant to a built preview.
+ *
  * Steering (setKnobs, each knob clamped below where the music broke in
  * yue2-research):
  *   - energy: a latent offset, heard within the emit lead;
@@ -394,6 +409,8 @@
  * @property {boolean} [radio=true] - A want left unanswered for wantGraceSeconds is filled from the last song's request, next seed
  * @property {number} [aheadSongs=1] - Songs kept built after the playing one (1..8), one built at a time
  * @property {number} [wantGraceSeconds=10] - Radio: how long a want waits for enqueue() before the radio fills it
+ * @property {number} [previewSeconds=0] - 10..600: build each song as a preview of this length (makeFull continues it); 0 = whole songs
+ * @property {boolean} [autoFull=false] - Previews: each song is made full as it goes on air
  * @property {number[]} [windows=[250, 500]] - NAR window sizes in frames; the last repeats
  * @property {number} [left=25] - Inpainted left context frames
  * @property {number} [right=25] - Lookahead frames
@@ -410,7 +427,7 @@
  * What a stream reports. `song` is the song's index in queue order from 0;
  * `sample` is a program sample.
  * @typedef {Object} YuE2StreamEvent
- * @property {'plan'|'songStart'|'semanticDone'|'window'|'interrupt'|'knobs'|'breakWarning'|'songEnd'|'firstAudio'|'error'|'idle'|'want'|'built'|'dropped'} kind
+ * @property {'plan'|'songStart'|'semanticDone'|'window'|'interrupt'|'knobs'|'breakWarning'|'songEnd'|'firstAudio'|'error'|'idle'|'want'|'built'|'dropped'|'full'} kind
  *   - plan: a song's score is ready, text = the ABC (a queued song's can be edited: setPlan / setNextPlan)
  *   - songStart: the song is placed on the program at `sample` (a skip re-places it, and the songs after it;
  *     after a skip, seconds = the skip request to the cut-over)
@@ -429,6 +446,8 @@
  *   - built: the song is built and waits as audio (frames = its length, seconds = its request to built);
  *     a skip to it is instant
  *   - dropped: drop() removed the song
+ *   - full: makeFull() (or autoFull) acted: value 1 = the preview continues into the whole song, re-solved from
+ *     frame0 (the join); 0 = too late (its successor is on air, or a skip cut it) or its song had ended
  * @property {number} song
  * @property {string} tag
  * @property {number} sample
@@ -447,7 +466,7 @@
  * @property {number} firstAudioSeconds
  * @property {number} interrupt1Seconds - The last interrupt's stage 1, request to audible
  * @property {number} interrupt2Seconds
- * @property {Array<{index: number, tag: string, planned: boolean, semanticDone: boolean, semanticFrames: number, latentFrames: number, decodedFrames: number, start: number, end: number, latentNorm: number, built: boolean, ready: boolean, onAir: boolean, hostBytes: number, knobs: YuE2Knobs}>} songs - Queued and playing, in order; start / end are program samples (-1 = not yet known); built = wholly decoded; ready = a skip to it is instant; knobs = what it carries (energy: its offset now)
+ * @property {Array<{index: number, tag: string, planned: boolean, semanticDone: boolean, semanticFrames: number, latentFrames: number, decodedFrames: number, start: number, end: number, latentNorm: number, built: boolean, ready: boolean, onAir: boolean, hostBytes: number, knobs: YuE2Knobs, preview: boolean, previewFrames: number, estimateFrames: number, ended: boolean}>} songs - Queued and playing, in order; start / end are program samples (-1 = not yet known); built = wholly decoded; ready = a skip to it is instant; knobs = what it carries (energy: its offset now); preview = still a preview of previewFrames; estimateFrames = the plan's length estimate from its score (0 = no score), for a full song's progress; ended = its semantic stage reached the song's own end
  * @property {number} ahead - Songs after the playing one
  * @property {number} readyAhead - Of those, ready for an instant skip
  * @property {number} hostBytes - Host memory the songs' audio, latents and tokens take
@@ -487,6 +506,14 @@ class YuE2Stream {
    * @param {number} song - its index
    */
   drop(song) {}
+  /**
+   * Continue a preview into the whole song (see Previews above); a 'full'
+   * event follows. A song not on air yet is built whole when its turn comes.
+   * @param {number} [song] - its index; omitted = the song on air
+   */
+  makeFull(song) {}
+  /** Previews: make each song full as it goes on air (true), or not. @param {boolean} on */
+  setAutoFull(on) {}
   /** End the stream; onDone follows. */
   stop() {}
   /** @readonly @type {YuE2StreamStats} */ stats;

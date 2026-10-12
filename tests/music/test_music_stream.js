@@ -15,6 +15,10 @@
 //   4. aheadSongs 2, every song supplied on 'want': the pool fills with
 //      built songs, skip() to one hands out its audio within 0.5 s, drop()
 //      removes one and want asks again.
+//   5. previewSeconds 10: previews are built ahead (rows say preview,
+//      previewFrames 250), one nobody chose ends at 10 s, makeFull() on the
+//      playing one gives a 'full' event and it goes on past its preview,
+//      and setAutoFull(true) makes the next one on air full by itself.
 
 const fs = require('node:fs');
 
@@ -56,6 +60,7 @@ if (!bro.music || bro.music.available === false) {
     unpaced(yue, vae, song(250, { tag: 'u' }));
     paced(yue, vae, song(600, { tag: 'p' }));
     ahead(yue, vae, (n) => song(400, { tag: 'a' + n, seed: 40 + n }));
+    previews(yue, vae, (n) => song(1000, { tag: 'v' + n, seed: 70 + n }));
 }
 
 function argumentErrors(yue, vae) {
@@ -69,6 +74,8 @@ function argumentErrors(yue, vae) {
     assert(err instanceof TypeError && String(err.message).includes('cot'), 'a bad cot is named: ' + err.message);
     err = expectThrows(() => yue.stream({ vae, aheadSongs: 9 }), 'aheadSongs 9');
     assert(err instanceof TypeError && String(err.message).includes('aheadSongs'), 'a bad aheadSongs is named: ' + err.message);
+    err = expectThrows(() => yue.stream({ vae, previewSeconds: 5 }), 'previewSeconds 5');
+    assert(err instanceof TypeError && String(err.message).includes('previewSeconds'), 'a bad previewSeconds is named: ' + err.message);
     assert(!yue.busy && !vae.busy, 'a refused stream claims nothing');
 }
 
@@ -222,6 +229,68 @@ function ahead(yue, vae, make) {
     pumpUntil('the drop', () => { play(); return events.some((e) => e.kind === 'dropped' && e.song === last); }, 30);
     pumpUntil('a want after the drop', () => { play(); return events.filter((e) => e.kind === 'want').length > before; }, 30);
     assert(!st.stats.songs.some((g) => g.index === last), 'the dropped song left the queue');
+    st.stop();
+    pumpUntil('onDone after stop()', () => done !== null, 30);
+    assert(!done.error, 'stop() ends cleanly: ' + JSON.stringify(done));
+}
+
+// Previews of 10 s (250 frames), two kept built ahead, each song a 40 s one
+// (1000 tokens) supplied on 'want'.
+function previews(yue, vae, make) {
+    const events = [];
+    let n = 0, emitted = 0, done = null, t0 = -1, st = null;
+    st = yue.stream({
+        vae, aheadSongs: 2, radio: false, previewSeconds: 10,
+        onAudio: (c) => { emitted = c.sample0 + c.frames; if (t0 < 0) t0 = Date.now(); },
+        onEvent: (e) => {
+            events.push(e);
+            if (e.kind === 'want') for (let i = 0; i < e.value; i++) st.enqueue(make(n++));
+        },
+        onDone: (info) => { done = info; },
+    });
+    const play = () => {
+        if (t0 < 0) return;
+        st.setPlayhead(Math.min(emitted, Math.floor((Date.now() - t0) * 48)));
+    };
+    const row = (i) => st.stats.songs.find((g) => g.index === i);
+    pumpUntil('two previews built ahead', () => {
+        play();
+        return st.stats.songs.filter((g) => !g.onAir && g.built && g.preview).length >= 2;
+    }, 180);
+    const waiting = st.stats.songs.filter((g) => !g.onAir);
+    for (const g of waiting.filter((x) => x.built))
+        assert(g.preview && g.previewFrames === 250 && g.decodedFrames === 250 && g.semanticFrames >= 250,
+               'a built preview: ' + JSON.stringify([g.index, g.preview, g.previewFrames, g.semanticFrames, g.decodedFrames]));
+
+    // Nobody chose song 0: it ends at its preview's 10 s.
+    pumpUntil('song 0 ends', () => { play(); return events.some((e) => e.kind === 'songEnd' && e.song === 0); }, 60);
+    const s0 = events.find((e) => e.kind === 'songStart' && e.song === 0);
+    const e0 = events.find((e) => e.kind === 'songEnd' && e.song === 0);
+    const len0 = (e0.sample - s0.sample) / 48000;
+    assert(len0 > 9.5 && len0 < 10.5, 'an unchosen preview plays its 10 s: ' + len0);
+
+    // Make the one on air full, 2 s into it.
+    const air = st.stats.songs.find((g) => g.onAir);
+    pumpUntil('2 s into song ' + air.index, () => { play(); return st.stats.playhead >= air.start + 2 * 48000; }, 30);
+    st.makeFull();
+    pumpUntil('the full event', () => { play(); return events.some((e) => e.kind === 'full' && e.song === air.index); }, 30);
+    const full = events.find((e) => e.kind === 'full' && e.song === air.index);
+    assert(full.value === 1 && full.frame0 > 0 && full.frame0 <= 250, 'made full, joined at frame ' + full.frame0);
+    pumpUntil('the song past its preview', () => {
+        play();
+        const g = row(air.index);
+        return g && !g.preview && g.latentFrames > 300;
+    }, 60);
+    console.log('previews: song 0 played ' + len0.toFixed(2) + ' s; song ' + air.index + ' made full, joined at ' +
+                (full.frame0 / 25).toFixed(2) + ' s');
+
+    // Auto full: the next song on air is made full by itself.
+    st.setAutoFull(true);
+    st.skip();
+    pumpUntil('an auto full', () => {
+        play();
+        return events.some((e) => e.kind === 'full' && e.song > air.index && e.value === 1);
+    }, 60);
     st.stop();
     pumpUntil('onDone after stop()', () => done !== null, 30);
     assert(!done.error, 'stop() ends cleanly: ' + JSON.stringify(done));
