@@ -378,6 +378,13 @@ public:
     // of the same set changes nothing.
     bool classChangeAffectsDescendants(const std::string& oldCls,
                                        const std::string& newCls) const;
+    // The same question sideways: did it touch a class some selector names
+    // before a sibling combinator (`.a.on + .b`)? Then the element's later
+    // siblings re-match. siblingQualifiers(): some selector has a compound a
+    // sibling combinator leads from (an id or attribute change asks this).
+    bool classChangeAffectsSiblings(const std::string& oldCls,
+                                    const std::string& newCls) const;
+    bool siblingQualifiers() const;
     void promoteLayoutDirty() { layoutDirty_ = true; }
     bool isDirty() const { return dirty_; }
     bool isLayoutDirty() const { return layoutDirty_; }

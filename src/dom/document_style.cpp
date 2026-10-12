@@ -403,20 +403,36 @@ void Document::finishComputedStyle(Element* elem, htmlayout::css::ComputedStyle&
     resolveColorSchemeValues(computed);
 }
 
-bool Document::classChangeAffectsDescendants(const std::string& oldCls,
-                                             const std::string& newCls) const {
+namespace {
+// Was a class some selector reads (`reads`) added or removed?
+template <class Reads>
+bool changedClassReads(const std::string& oldCls, const std::string& newCls, Reads reads) {
     auto before = classTokens(oldCls);
     auto after  = classTokens(newCls);
     auto changedOne = [&](const std::vector<std::string>& a,
                           const std::vector<std::string>& b) {
         for (const auto& t : a) {
             if (std::find(b.begin(), b.end(), t) != b.end()) continue;  // unchanged
-            if (cascade_.classAffectsDescendants(t)) return true;
+            if (reads(t)) return true;
         }
         return false;
     };
     return changedOne(before, after) || changedOne(after, before);
 }
+}  // namespace
+
+bool Document::classChangeAffectsDescendants(const std::string& oldCls,
+                                             const std::string& newCls) const {
+    return changedClassReads(oldCls, newCls, [this](const std::string& t) { return cascade_.classAffectsDescendants(t); });
+}
+
+bool Document::classChangeAffectsSiblings(const std::string& oldCls,
+                                          const std::string& newCls) const {
+    if (!cascade_.usesSiblingQualifiers()) return false;
+    return changedClassReads(oldCls, newCls, [this](const std::string& t) { return cascade_.classAffectsSiblings(t); });
+}
+
+bool Document::siblingQualifiers() const { return cascade_.usesSiblingQualifiers(); }
 
 void Document::resolveStyles() {
     if (!documentElement_) return;

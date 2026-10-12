@@ -201,6 +201,10 @@ public:
     // only if this element's *inherited* values actually changed — which is what
     // keeps `container.style.opacity = x` off the whole subtree's restyle bill.
     void markStyleDirty();
+    // A selector input of this element changed that a rule reads before a
+    // sibling combinator (`.a.on + .b`): its later siblings, and what is below
+    // them, re-match (markPaintDirty on each).
+    void markLaterSiblingsDirty();
     // This element's child list changed. Its layout node's children get rebuilt
     // from the DOM on the next pass; the rest of the tree keeps its geometry.
     void markStructureDirty();

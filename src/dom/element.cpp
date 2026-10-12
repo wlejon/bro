@@ -479,12 +479,15 @@ void Element::setAttribute(const std::string& name, const std::string& val) {
             markStyleDirty();
         else
             markPaintDirty();
+        // `.outline.focus + .tag`: the class decides a later sibling's match.
+        if (document_ && document_->classChangeAffectsSiblings(oldClass, val)) markLaterSiblingsDirty();
         return;
     }
 
     attributes_[name] = val;
     if (name == "id") {
         markPaintDirty();
+        if (document_ && document_->siblingQualifiers()) markLaterSiblingsDirty();
     } else if (name == "src" && (tag_ == "IMG" || tag_ == "img")) {
         // A new src means a new intrinsic size, and the size is only recovered
         // by re-probing the file — which happens in the structure pass
@@ -517,6 +520,9 @@ void Element::removeAttribute(const std::string& name) {
         if (!oldId.empty()) document_->unregisterElementId(oldId, this);
     }
     if (document_ && hasAttribute(name)) document_->invalidateHasAround(this, /*includeSelf=*/false);
+    const bool sideways = document_ && hasAttribute(name) &&
+        (name == "class" ? document_->classChangeAffectsSiblings(getAttribute("class"), "")
+                         : name == "id" && document_->siblingQualifiers());
     {
         auto existing = attributes_.find(name);
         AttributeNoticeGuard notice(this, name,
@@ -526,6 +532,7 @@ void Element::removeAttribute(const std::string& name) {
     }
     if (name == "class" || name == "id") markPaintDirty();  // see setAttribute
     else markDirty();
+    if (sideways) markLaterSiblingsDirty();
 }
 
 // textContent / innerHTML / outerHTML and the SVG serializer live in
@@ -936,6 +943,16 @@ void Element::markPaintDirty() {
     notePathDirty(true, false);
     if (document_) {
         document_->markPaintDirty();
+    }
+}
+
+void Element::markLaterSiblingsDirty() {
+    Node* p = parentNode();
+    if (!p) return;
+    bool after = false;
+    for (Node* s : p->childNodes()) {
+        if (s == this) { after = true; continue; }
+        if (after && s->nodeType() == NodeType::Element) static_cast<Element*>(s)->markPaintDirty();
     }
 }
 

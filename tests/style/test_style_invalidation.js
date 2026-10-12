@@ -189,4 +189,39 @@ const styled = perf.stats().elementsStyled;
 assert(styled < 12, 'hovering a container no hover rule names stays O(chain): ' +
                     styled + ' elements re-resolved');
 
+// A class or id named before a sibling combinator decides a LATER sibling's
+// match, which is not below the element: toggling it has to re-match the
+// siblings after it (and below them), not just its own subtree. A tag shown
+// beside its box by `.box.on + .tag` stayed hidden when the class came on.
+const sibSheet = document.createElement('style');
+sibSheet.textContent = `
+  .sb-tag { visibility: hidden; }
+  .sb-box.on + .sb-tag { visibility: visible; }
+  .sb-box.on ~ .sb-far b { color: rgb(21,21,21); }
+  #sb-lit + .sb-tag { color: rgb(22,22,22); }
+`;
+document.head.appendChild(sibSheet);
+root.innerHTML = `<div><div class="sb-box" id="sb-box">x</div><span class="sb-tag" id="sb-tag">t</span>` +
+    `<span class="sb-mid">m</span><div class="sb-far"><b id="sb-far">f</b></div></div>`;
+flush();
+const sbBox = document.getElementById('sb-box');
+const vis = () => getComputedStyle(document.getElementById('sb-tag')).visibility;
+assert(vis() === 'hidden', 'tag hidden at first: ' + vis());
+sbBox.classList.add('on');
+assert(vis() === 'visible', '.box.on + .tag: classList.add shows it: ' + vis());
+assert(color('sb-far') === 'rgb(21,21,21)', '.box.on ~ .far b: a later sibling\'s child re-matches: ' + color('sb-far'));
+flush();
+sbBox.classList.remove('on');
+assert(vis() === 'hidden', 'classList.remove hides it: ' + vis());
+assert(color('sb-far') !== 'rgb(21,21,21)', 'and the far child reverts: ' + color('sb-far'));
+sbBox.className = 'sb-box on';
+assert(vis() === 'visible', 'className shows it: ' + vis());
+sbBox.removeAttribute('class');
+assert(vis() === 'hidden', 'removeAttribute(class) hides it: ' + vis());
+sbBox.id = 'sb-lit';
+assert(color('sb-tag') === 'rgb(22,22,22)', '#id + .tag: an id change re-matches the next sibling: ' + color('sb-tag'));
+sbBox.removeAttribute('id');
+assert(color('sb-tag') !== 'rgb(22,22,22)', 'removeAttribute(id) reverts it: ' + color('sb-tag'));
+sibSheet.remove();
+
 root.innerHTML = '';
