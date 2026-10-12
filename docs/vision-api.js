@@ -604,7 +604,8 @@ const sem = segformer.detect(photo, {
 
 /**
  * Load a BiRefNet checkpoint — the Swin-L .safetensors file (the same one
- * bro.triposplat takes as its optional matting front-end), or a dir holding it.
+ * bro.triposplat takes as its optional matting front-end), or a dir holding it
+ * (its model.safetensors, else its one .safetensors file).
  * @param {string} path
  * @param {Object} [opts]
  * @param {number} [opts.modelSize=1024]  square inference resolution, a
