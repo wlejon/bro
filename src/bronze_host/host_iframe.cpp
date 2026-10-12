@@ -29,21 +29,28 @@ void setDocumentGlobal(Value docIn) {
     if (gt.found && ev::isObject(gt.value)) ev::setProperty(gt.value, "document", doc.get());
 }
 
-// The functions of a frame's realm its contentWindow handed out, each with
-// the wrapper that runs it there: one wrapper a function, so a function read
-// twice is the same one.
-static std::unordered_map<uint64_t, std::vector<std::pair<ev::Persistent, ev::Persistent>>> s_realmFunctions;
+// The functions crossing a frame's realm boundary, each with the wrapper that
+// runs it in its own realm (the document it runs against): the frame's
+// functions its contentWindow handed out, and the functions its caller passed
+// into them (a callback the child calls runs in the parent). One wrapper a
+// function and realm, so a function read twice is the same one; all of them
+// dropped with the frame.
+struct RealmFunction {
+    ev::Persistent fn, wrapper;
+    dom::Document* doc;
+};
+static std::unordered_map<uint64_t, std::vector<RealmFunction>> s_realmFunctions;
 
-Value wrapRealmFunction(uint64_t scopeId, dom::Document* doc, Value fnIn);
+Value wrapRealmFunction(uint64_t frameScope, dom::Document* doc, Value fnIn);
 
-// Call `fn` of a frame's realm in that realm, as a browser runs a function
-// in its own: its scope, its document as the global `document` and the
-// current one, the caller's back after it returns or throws. Sub-document
-// realms share one global object, entered by swapping these
-// (runHostSubDocScripts, a timer, an event); a call from the parent through
-// contentWindow entered nothing, so the child's function ran against the
-// parent's document.
-Value callInRealm(uint64_t scopeId, dom::Document* doc, Value fnIn, Value selfIn, std::span<const Value> argsIn) {
+// Call `fn` in the realm of `doc`, as a browser runs a function in its own:
+// its scope, its document as the global `document` and the current one, the
+// caller's back after it returns or throws. Sub-document realms share one
+// global object, entered by swapping these (runHostSubDocScripts, a timer, an
+// event); a call through contentWindow entered nothing, so the child's
+// function ran against the parent's document. A function passed in runs in
+// the caller's realm, and one returned in `doc`'s.
+Value callInRealm(uint64_t frameScope, dom::Document* doc, Value fnIn, Value selfIn, std::span<const Value> argsIn) {
     // Rooted: entering and leaving the realm moves expandos on and off
     // globalThis, a chain of allocating calls.
     ev::Persistent fn(fnIn), self(selfIn);
@@ -51,11 +58,15 @@ Value callInRealm(uint64_t scopeId, dom::Document* doc, Value fnIn, Value selfIn
     args.reserve(argsIn.size());
     for (Value v : argsIn) args.emplace_back(v);
     dom::Document* prevDoc = currentHostDocument();
-    const bool enter = doc && doc != prevDoc;
+    // A frame gone since (a wrapper kept past it) has no realm to enter.
+    const bool enter = doc && doc != prevDoc && dom::Document::isLiveDocument(doc);    if (enter && prevDoc) {
+        for (auto& a : args)
+            if (ev::isFunction(a.get())) a.set(wrapRealmFunction(frameScope, prevDoc, a.get()));
+    }
     ev::GlobalValue docG = ev::globalValue("document");
     ev::Persistent prevDocVal(docG.found ? docG.value : ev::null());
     if (enter) {
-        enterRealmScope(scopeId);
+        enterRealmScope(scopeIdForDocument(doc));
         setCurrentHostDocument(doc);
         setDocumentGlobal(hostDocumentValue(doc));
     }
@@ -71,23 +82,25 @@ Value callInRealm(uint64_t scopeId, dom::Document* doc, Value fnIn, Value selfIn
     }
     if (r.thrown) return ev::throwValue(result.get());
     // A function it returns is of its realm too.
-    if (ev::isFunction(result.get())) return wrapRealmFunction(scopeId, doc, result.get());
+    if (ev::isFunction(result.get())) return wrapRealmFunction(frameScope, doc, result.get());
     return result.get();
 }
 
-Value wrapRealmFunction(uint64_t scopeId, dom::Document* doc, Value fnIn) {
+Value wrapRealmFunction(uint64_t frameScope, dom::Document* doc, Value fnIn) {
     ev::Persistent fn(fnIn);
-    auto& wrapped = s_realmFunctions[scopeId];
-    for (auto& [f, w] : wrapped)
-        if (f.get().rawBits() == fn.get().rawBits()) return w.get();
+    auto& wrapped = s_realmFunctions[frameScope];
+    for (auto& r : wrapped)
+        if (r.doc == doc && (r.fn.get().rawBits() == fn.get().rawBits() ||
+                             r.wrapper.get().rawBits() == fn.get().rawBits()))
+            return r.wrapper.get();
     auto held = std::make_shared<ev::Persistent>(fn.get());
     ev::Persistent wrapper(ev::makeFunction(
-        [scopeId, doc, held](Value self, std::span<const Value> a) -> Value {
-            return callInRealm(scopeId, doc, held->get(), self, a);
+        [frameScope, doc, held](Value self, std::span<const Value> a) -> Value {
+            return callInRealm(frameScope, doc, held->get(), self, a);
         },
         0));
-    wrapped.emplace_back(ev::Persistent(fn.get()), ev::Persistent(wrapper.get()));
-    return wrapped.back().second.get();
+    wrapped.push_back({ev::Persistent(fn.get()), ev::Persistent(wrapper.get()), doc});
+    return wrapped.back().wrapper.get();
 }
 
 Value makeContentWindowProxy(dom::Element* el, engine::IframeDoc* d) {

@@ -577,6 +577,10 @@ dom::ListenerOptions readOptions(Value optV) {
 // The public seam
 // ---------------------------------------------------------------------------
 
+dom::Document* listenerRealm(const ListenerRef& ref) {
+    return ref.realm && dom::Document::isLiveDocument(ref.realm) ? ref.realm : nullptr;
+}
+
 void callBronzeListener(const ev::Persistent& fn, const ev::Persistent& thisObj,
                         dom::Event& evt, const char* origin,
                         dom::Document* docOverride) {
@@ -682,6 +686,7 @@ void installElementEventTarget(ObjectBuilder& b, ElementSource source,
         // allocates (embed.h's NativeFn contract).
         auto ref = std::make_shared<ListenerRef>();
         ref->self.set(thisValue);
+        ref->realm = currentHostDocument();
         dom::Element* el = targetElement(source, ref->self.get());
         const std::string who = targetName(source, name, el);
         Value typeV = argAt(a, 0);
@@ -747,7 +752,7 @@ void installElementEventTarget(ObjectBuilder& b, ElementSource source,
                         }
                     }
                 }
-                callBronzeListener(fn, self, evt, origin.c_str());
+                callBronzeListener(fn, self, evt, origin.c_str(), listenerRealm(*ref));
             },
             opts);
         if (!handle) {

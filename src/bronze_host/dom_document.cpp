@@ -744,9 +744,16 @@ namespace {
 std::unordered_map<dom::Document*, ev::Persistent> s_docWrappers;
 }
 
+// The app's document object (it follows the engine's document), as
+// registered: the global `document` is a sub-document's while one runs.
+static ev::Persistent s_appDocumentValue;
+
+void setAppDocumentValue(Value v) { s_appDocumentValue.set(v); }
+
 Value hostDocumentValue(dom::Document* doc) {
     if (!doc) return ev::null();
     if (hostEngine() && doc == hostEngine()->document()) {
+        if (ev::isObject(s_appDocumentValue.get())) return s_appDocumentValue.get();
         ev::GlobalValue g = ev::globalValue("document");
         if (g.found) return g.value;
     }

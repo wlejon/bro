@@ -115,6 +115,9 @@ void clearWindowListeners();
 // ---------------------------------------------------------------------------
 void fireElementCloned(dom::Document* doc, dom::Element* src, dom::Element* clone);
 Value hostDocumentValue(dom::Document* doc);
+// The app's document object, kept as registered (hostDocumentValue of the
+// app's document while a sub-document's is the global).
+void setAppDocumentValue(Value v);
 void clearHostDocument(dom::Document* doc);
 void clearHostTimersForDocument(dom::Document* doc);
 void clearHostAnimationFramesForDocument(dom::Document* doc);

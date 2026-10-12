@@ -155,11 +155,12 @@ void installInlineEventHandler(ObjectBuilder& b, const char* propName, const cha
                 auto ref = std::make_shared<ListenerRef>();
                 ref->fn.set(fn);
                 ref->self.set(self_);
+                ref->realm = currentHostDocument();
                 std::string origin = st->el->tagName() + " inline on" + type + " listener";
                 dom::ListenerHandle handle = st->el->addEventListener(
                     type,
                     [ref, origin](dom::Event& evt) {
-                        callBronzeListener(ref->fn, ref->self, evt, origin.c_str());
+                        callBronzeListener(ref->fn, ref->self, evt, origin.c_str(), listenerRealm(*ref));
                     });
                 if (handle) {
                     st->inlineHandles[type] = handle.id;

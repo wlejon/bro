@@ -4,8 +4,9 @@
 <body>
   <!-- For tests/dom/test_iframe_realm_call.js: functions the parent calls
        through iframe.contentWindow, each of which must run against this
-       document and this realm, as a function does in a browser. -->
-  <div class="box"></div><div class="box"></div>
+       document and this realm, as a function does in a browser; and for
+       test_iframe_realm_callback.js, the parent's functions they call back. -->
+  <div class="box"></div><div class="box"></div><button id="b">b</button>
   <script>
     var secret = 'child';
     function titleOf() { return document.title; }
@@ -21,6 +22,20 @@
     function throwIt() { throw new Error('thrown in the child'); }
     // A function handed back to the parent and called later runs here too.
     function counter() { return function () { return document.querySelectorAll('.box').length; }; }
+    // The other way: the parent's functions, called from here, run in the
+    // parent's realm (its document, its globals).
+    function callBack(fn, x) { return fn(x); }
+    function clickB() { document.getElementById('b').click(); return document.title; }
+    function listen(fn) { document.getElementById('b').addEventListener('click', fn); }
+    function unlisten(fn) { document.getElementById('b').removeEventListener('click', fn); }
+    // The child's own listener runs in the child, whoever clicks.
+    var ownHeard = null;
+    document.getElementById('b').addEventListener('click', function () { ownHeard = document.title; });
+    function readOwnHeard() { return ownHeard; }
+    function resolveLater() { return new Promise(function (resolve) { setTimeout(function () { resolve(document.title); }, 0); }); }
+    var thenSaw = null;
+    function thenHere() { Promise.resolve().then(function () { thenSaw = document.title; }); }
+    function readThenSaw() { return thenSaw; }
   </script>
 </body>
 </html>

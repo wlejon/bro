@@ -113,7 +113,66 @@ void switchScope(uint64_t targetScope) {
     if (haveGlobal) restoreScopeExpandos(targetScope, gt);
 }
 
+// ---- promise jobs (bronze's job-context hooks) ------------------------------
+// A promise job runs in the realm that subscribed it (a `then`, an `await` in
+// a frame's script runs against the frame's document), as NewPromiseReactionJob
+// runs in its handler's realm. The microtask checkpoint runs in the app's, so
+// a job subscribed in a sub-document carries that document (the context: its
+// pointer) and enters it; one subscribed in the app carries none and costs
+// nothing.
+
+struct JobEntry {
+    bool entered = false;
+    dom::Document* prevDoc = nullptr;
+    ev::Persistent prevDocVal;
+};
+static std::vector<JobEntry> s_jobEntries;
+
+void setDocumentGlobal(Value docIn) {
+    ev::Persistent doc(docIn);
+    ev::registerGlobal("document", doc.get());
+    ev::Persistent gt = rootedGlobalThis();
+    if (ev::isObject(gt.get())) ev::setProperty(gt.get(), "document", doc.get());
+}
+
+uint64_t captureJobContext() {
+    if (s_activeScope == 0) return 0;
+    return reinterpret_cast<uint64_t>(currentHostDocument());
+}
+
+void enterJobContext(uint64_t context) {
+    auto* doc = reinterpret_cast<dom::Document*>(context);
+    s_jobEntries.emplace_back();
+    dom::Document* prev = currentHostDocument();
+    // A frame gone since has no realm to enter: the job runs where it is.
+    if (doc == prev || !dom::Document::isLiveDocument(doc)) return;
+    ev::GlobalValue docG = ev::globalValue("document");
+    ev::Persistent prevDocVal(docG.found ? docG.value : ev::null());
+    enterRealmScope(scopeIdForDocument(doc));
+    setCurrentHostDocument(doc);
+    setDocumentGlobal(hostDocumentValue(doc));
+    JobEntry& e = s_jobEntries.back();
+    e.entered = true;
+    e.prevDoc = prev;
+    e.prevDocVal.set(prevDocVal.get());
+}
+
+void leaveJobContext(uint64_t) {
+    if (s_jobEntries.empty()) return;
+    JobEntry& e = s_jobEntries.back();
+    if (e.entered) {
+        if (!ev::isNull(e.prevDocVal.get())) setDocumentGlobal(e.prevDocVal.get());
+        setCurrentHostDocument(e.prevDoc);
+        exitRealmScope();
+    }
+    s_jobEntries.pop_back();
+}
+
 } // namespace
+
+void installJobRealmHooks() {
+    ev::setJobContextHooks(&captureJobContext, &enterJobContext, &leaveJobContext);
+}
 
 void initRealmScopeBaseline() {
     ev::Persistent gt = rootedGlobalThis();

@@ -25,6 +25,7 @@ using Value = bronze::Value;
 
 // host_builder.h owns it; a file that only names it needs nothing more.
 struct ObjectBuilder;
+struct ListenerRef;  // host_node.h
 
 // ---------------------------------------------------------------------------
 // Events (host_events.cpp)
@@ -92,6 +93,9 @@ dom::ListenerOptions readOptions(Value optV);
 void callBronzeListener(const ev::Persistent& fn, const ev::Persistent& thisObj,
                         dom::Event& evt, const char* origin,
                         dom::Document* docOverride = nullptr);
+// The document a listener runs in: the realm that registered it while that
+// document lives, else null (the target's).
+dom::Document* listenerRealm(const ListenerRef& ref);
 
 // `dispatchEvent(desc)` from compiled code, where `desc` is a plain
 // `{type, bubbles, cancelable, detail}` object rather than a `new

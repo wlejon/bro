@@ -45,6 +45,9 @@ struct SweepGroup;
 struct ListenerRef {
     ev::Persistent fn;
     ev::Persistent self;
+    // The document whose realm registered it, which it runs in (a parent's
+    // listener on its iframe's element runs in the parent), while it lives.
+    dom::Document* realm = nullptr;
 };
 
 struct HostNodeState {

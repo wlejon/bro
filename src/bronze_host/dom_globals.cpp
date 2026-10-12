@@ -490,6 +490,7 @@ void installWebHostGlobals(engine::Engine& engine) {
         // back from the registry, since the constructor lookup and each
         // setProperty may allocate.
         ev::registerGlobal("document", makeDocumentValue(nullptr));
+        setAppDocumentValue(ev::globalValue("document").value);
         ev::registerGlobal("Document", documentHostClass().constructor());
         ev::GlobalValue gt = ev::globalValue("globalThis");
         if (gt.found && ev::isObject(gt.value)) {
@@ -672,6 +673,7 @@ static void clearGlobalProp(const std::string& key) {
 
 static void snapshotBaselineGlobalProps() {
     initRealmScopeBaseline();
+    installJobRealmHooks();
     std::vector<std::string> names;
     if (globalOwnPropertyNames(names)) s_baselineGlobalProps = std::move(names);
 }

@@ -7,6 +7,8 @@ namespace bro::dom { class Document; }
 namespace bro::bronze_host {
 
 void initRealmScopeBaseline();
+// The main thread's promise jobs run in the realm that subscribed them.
+void installJobRealmHooks();
 void enterRealmScope(uint64_t scopeId);
 void exitRealmScope();
 uint64_t currentRealmScope();
