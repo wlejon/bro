@@ -105,7 +105,13 @@ void DrawTraversal::drawText(dom::Node* textNode, dom::Element* parent,
                     lastSpace = false;
                 }
             }
-            text = std::move(collapsed);
+            // Drawn without inline runs (below), the text is a line of its
+            // own (an anonymous flex item, or a parent's only text), so the
+            // line's leading and trailing collapsible spaces go, as layout
+            // measured it.
+            const size_t b = collapsed.find_first_not_of(' ');
+            const size_t e = collapsed.find_last_not_of(' ');
+            text = b == std::string::npos ? std::string() : collapsed.substr(b, e - b + 1);
             if (text.empty()) return;
         }
     }
