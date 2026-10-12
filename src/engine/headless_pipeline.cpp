@@ -75,6 +75,17 @@ Engine::PipelineRun Engine::runPipelineFrames(int frames, double stepMs) {
     while (n < frames && running_ && !bro::util::interrupted()) {
         windowedFrame();
         ++n;
+        // Stepped, each frame's work lands before the next frame: the layout
+        // pass it started and the raster it signalled, as on a machine that
+        // keeps up with every frame. Otherwise what a run of stepped frames
+        // records and rasters would be the machine's speed (a raster thread
+        // slower than the steps merged a change a frame into a few passes);
+        // a real-time run keeps a window's own timing, races and all.
+        if (pipelineStepMs_ > 0.0) {
+            if (layoutPipeline_ && layoutPipeline_->waitForIdle()) updateDocumentHeight();
+            if (framePresenter_)
+                while (framePresenter_->isRasterBusyOrRequested()) framePresenter_->waitForRaster(100.0);
+        }
     }
 
     // Leave the workers idle: what runs next (the script, advanceTime, a

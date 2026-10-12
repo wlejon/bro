@@ -435,7 +435,7 @@ presenter's offscreen target instead of a swapchain:
 | Call | Clock |
 |------|-------|
 | `runFrames(600)` | Real time: the frame clock is the wall clock, a frame with nothing new is held and the loop waits for work as a window's does (input, a wake, the next timer, at most 16 ms), and a presented frame is paced like a 60 Hz FIFO swapchain. 600 frames take about 10 s. |
-| `runFrames(3000, { stepMs: 16 })` | Stepped: the clock moves 16 ms a frame and nothing waits on the wall clock, so thousands of frames run in seconds. Held frames are still held; they just do not wait. |
+| `runFrames(3000, { stepMs: 16 })` | Stepped: the clock moves 16 ms a frame and nothing waits on the wall clock, so thousands of frames run in seconds. Held frames are still held; they just do not wait. Each frame's layout and raster land before the next frame starts, so what a run records and rasters is the same on a fast machine and a slow one. |
 
 It returns `{ frames, presented, held, wallMs }`: how many frames ran, were
 presented, and were held unchanged. The first call starts the pipeline (the
