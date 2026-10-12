@@ -21,8 +21,11 @@ self.onmessage = (e) => {
         r.bLabels = m.bRecs.map((rec) => wl.labels(rec, r.bBursts.find((b) => b.photos.includes(rec.path)), opts));
         r.bAlone = m.bRecs.map((rec) => wl.labels(rec, null, opts));
         r.crop = wl.classifyCrop(m.rows, m.cfSims, { candidates: 'byQuery', query: 'a moth' });
+        // The names a person picks from, read on the worker and posted as plain data.
+        r.names = wl.nameEntries([{ species: m.rows, taxa: m.taxa }]);
         // What open()'s similarities run on, registered on this thread too.
         r.dot = Array.from(__bro_native.vision.dotRows(new Float32Array([1, 2, 2, 4]), new Float32Array([3, 4, 5, 6]), 2));
+        r.near = wl.nearest(new Float32Array([1, 2]), [new Float32Array([3, 4]), new Float32Array([5, 6])], 2);
     } catch (err) {
         r.ok = false;
         r.error = String((err && err.message) || err);

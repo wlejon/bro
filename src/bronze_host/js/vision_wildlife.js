@@ -252,6 +252,213 @@
 
     const normName = (s) => String(s || '').trim().replace(/\s+/g, ' ').toLowerCase();
 
+    // ── names a person gives an animal ───────────────────────────────────
+
+    /**
+     * Every name the lists know, for a person to pick from (a correction of
+     * what labels() said): each species row and every taxon above species,
+     * from the taxa maps (their common names, "Darners") and from the rows'
+     * own lineage (the genus of a scientific name, family, order, class).
+     * Plain data, so a Worker can read the lists and post it; nameIndex()
+     * searches it. A taxon's lineage is the first of its rows' above it.
+     * @param lists  as readSpecies takes them: files, rows, { species, taxa } documents
+     * @param {{ taxa?: Object }} [opts]  a readTaxa map to use in place of the lists' own
+     * @returns {Array<{ common?: string, scientific: string, rank: string,
+     *                   lineage: { genus?, family?, order?, class? } }>}  species first, in list order
+     */
+    wl.nameEntries = function nameEntries(lists, opts) {
+        const o = opts || {};
+        const rows = wl.readSpecies(lists);
+        const taxa = o.taxa || wl.readTaxa(lists);
+        const species = [], higher = new Map();
+        for (const r of rows) {
+            const scientific = String(r.scientific || r.common || '').trim();
+            if (!scientific) continue;
+            const lineage = lineageOf(r, 'species');
+            species.push(r.common ? { common: String(r.common), scientific, rank: 'species', lineage }
+                                  : { scientific, rank: 'species', lineage });
+            for (let i = 1; i < RANKS.length; i++) {
+                const name = lineage[RANKS[i]];
+                if (!name || higher.has(normName(name))) continue;
+                const above = {};
+                for (let j = i + 1; j < RANKS.length; j++) if (lineage[RANKS[j]]) above[RANKS[j]] = lineage[RANKS[j]];
+                higher.set(normName(name), { scientific: name, rank: RANKS[i], lineage: above });
+            }
+        }
+        for (const name of Object.keys(taxa)) {
+            const t = taxa[name] || {};
+            const have = higher.get(normName(name));
+            if (have) { if (t.common) have.common = String(t.common); continue; }
+            if (RANKS.indexOf(t.rank) < 1) continue;
+            higher.set(normName(name), { scientific: name, rank: t.rank, lineage: {} });
+            if (t.common) higher.get(normName(name)).common = String(t.common);
+        }
+        const out = species.slice();
+        for (const e of higher.values()) {
+            out.push(e.common ? { common: e.common, scientific: e.scientific, rank: e.rank, lineage: e.lineage }
+                              : e);
+        }
+        return out;
+    };
+
+    // Text as names are matched: no case, no accents, no apostrophes, any
+    // other run of punctuation or space one space ("Cooper's Hawk" ->
+    // "coopers hawk", "Lance-tipped" -> "lance tipped").
+    function foldName(s) {
+        let t = String(s == null ? '' : s).toLowerCase();
+        if (typeof t.normalize === 'function') t = t.normalize('NFD').replace(/[̀-ͯ]/g, '');
+        return t.replace(/['’`]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+    }
+
+    // Edit distance of a and b, or limit + 1 once it is over `limit`.
+    function editDistance(a, b, limit) {
+        if (Math.abs(a.length - b.length) > limit) return limit + 1;
+        let prev = [];
+        for (let j = 0; j <= b.length; j++) prev.push(j);
+        for (let i = 1; i <= a.length; i++) {
+            const cur = [i];
+            let best = i;
+            for (let j = 1; j <= b.length; j++) {
+                const v = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+                cur.push(v);
+                if (v < best) best = v;
+            }
+            if (best > limit) return limit + 1;
+            prev = cur;
+        }
+        return prev[b.length];
+    }
+
+    // How well the folded query `q` (its words `qw`) matches a folded name
+    // `f` (its words `w`): 100 the name, 90 its start, 80 each word the
+    // start of a name's word in order, 70 in any order, 60 inside it (3
+    // letters or more), 50 each word of 4 letters or more one typo from a
+    // word's start (shorter ones exact); 0 no match.
+    function matchTier(q, qw, f, w) {
+        if (!q || !f) return 0;
+        if (f === q) return 100;
+        if (f.startsWith(q)) return 90;
+        let j = 0, inOrder = true;
+        for (const x of qw) {
+            while (j < w.length && !w[j].startsWith(x)) j++;
+            if (j >= w.length) { inOrder = false; break; }
+            j++;
+        }
+        if (inOrder) return 80;
+        const used = new Set();
+        const take = (fits) => {
+            for (let k = 0; k < w.length; k++) if (!used.has(k) && fits(w[k])) { used.add(k); return true; }
+            return false;
+        };
+        if (qw.every((x) => take((y) => y.startsWith(x)))) return 70;
+        if (q.length >= 3 && f.includes(q)) return 60;
+        used.clear();
+        const near = (x) => (y) => {
+            if (y.startsWith(x)) return true;
+            if (x.length < 4) return false;
+            for (let n = x.length - 1; n <= x.length + 1; n++) {
+                if (n <= y.length && editDistance(x, y.slice(0, n), 1) <= 1) return true;
+            }
+            return false;
+        };
+        if (qw.every((x) => take(near(x)))) return 50;
+        return 0;
+    }
+
+    /**
+     * A search over nameEntries(), for an input that suggests names as a
+     * person types: `search(text, { limit })` -> the best entries first,
+     * each { ...entry, label (formatLabel), score, on: 'common' |
+     * 'scientific' }, matched by common and scientific name, case, accents
+     * and punctuation aside: the whole name, its start, the start of each of
+     * its words (in order, then any order: "gr eg" finds Great Egret), inside
+     * it, then a typo a word ("malard"). Ties go to a common name, then a
+     * species, then the shorter. `find(text)` -> the entry whose common name,
+     * scientific name or label is the text, or null (a species first).
+     * @param {Array} entries  nameEntries()'
+     */
+    wl.nameIndex = function nameIndex(entries) {
+        const list = Array.isArray(entries) ? entries.filter((e) => e && e.scientific) : [];
+        const items = list.map((e, i) => {
+            const label = wl.formatLabel(e);
+            const keys = [];
+            if (e.common) keys.push({ on: 'common', f: foldName(e.common) });
+            keys.push({ on: 'scientific', f: foldName(e.scientific) });
+            for (const k of keys) k.w = k.f.split(' ').filter(Boolean);
+            return { e, i, label, keys };
+        });
+        const exact = new Map();
+        const put = (text, it) => { const k = foldName(text); if (k && !exact.has(k)) exact.set(k, it); };
+        for (const pass of [true, false]) {
+            for (const it of items) {
+                if ((it.e.rank === 'species') !== pass) continue;
+                if (it.e.common) put(it.e.common, it);
+                put(it.e.scientific, it);
+                put(it.label, it);
+            }
+        }
+        const result = (it, score, on) => Object.assign({}, it.e, { label: it.label, score, on });
+        return {
+            entries: list,
+            size: list.length,
+            find(text) {
+                const it = exact.get(foldName(text));
+                return it ? result(it, 100, it.e.common && foldName(it.e.common) === foldName(text) ? 'common' : 'scientific') : null;
+            },
+            search(text, opts) {
+                const limit = opts && opts.limit > 0 ? opts.limit : 12;
+                const q = foldName(text);
+                if (!q) return [];
+                const qw = q.split(' ');
+                const hits = [];
+                for (const it of items) {
+                    let best = 0, on = '';
+                    for (const k of it.keys) {
+                        const t = matchTier(q, qw, k.f, k.w);
+                        if (t > best) { best = t; on = k.on; }
+                    }
+                    if (best) hits.push({ it, best, on });
+                }
+                hits.sort((a, b) => b.best - a.best || (a.on === b.on ? 0 : a.on === 'common' ? -1 : 1) ||
+                    rankIx(a.it.e.rank) - rankIx(b.it.e.rank) || a.it.label.length - b.it.label.length ||
+                    (a.it.label < b.it.label ? -1 : a.it.label > b.it.label ? 1 : a.it.i - b.it.i));
+                return hits.slice(0, limit).map((h) => result(h.it, h.best, h.on));
+            },
+        };
+    };
+
+    /**
+     * The rows of `matrix` most like `query`: [{ index, similarity }] best
+     * first (ties by index), at most `n` (default 1), none under
+     * opts.minSimilarity. `query` is a Float32Array (or array) of dim
+     * numbers; `matrix` is the rows end to end (a Float32Array, length a
+     * multiple of dim) or an array of rows. The similarity is the dot product
+     * (cosine for unit vectors, as analyze()'s embeddings are), summed as
+     * classifyCrop's are (__bro_native.vision.dotRows). Bad shapes answer [].
+     */
+    wl.nearest = function nearest(query, matrix, n, opts) {
+        const o = opts || {};
+        const dim = query ? query.length : 0;
+        if (!dim) return [];
+        let rows = matrix;
+        if (Array.isArray(matrix)) {
+            rows = new Float32Array(matrix.length * dim);
+            for (let i = 0; i < matrix.length; i++) {
+                if (!matrix[i] || matrix[i].length !== dim) return [];
+                rows.set(matrix[i], i * dim);
+            }
+        } else if (!(matrix instanceof Float32Array)) rows = matrix ? Float32Array.from(matrix) : null;
+        if (!rows || !rows.length || rows.length % dim) return [];
+        const q = query instanceof Float32Array ? query : Float32Array.from(query);
+        const sims = __bro_native.vision.dotRows(q, rows, dim);
+        const min = o.minSimilarity == null ? -Infinity : o.minSimilarity;
+        const want = n == null ? 1 : Math.max(0, Math.floor(n));
+        const out = [];
+        for (let i = 0; i < sims.length; i++) if (sims[i] >= min) out.push({ index: i, similarity: sims[i] });
+        out.sort((a, b) => b.similarity - a.similarity || a.index - b.index);
+        return out.slice(0, want);
+    };
+
     // ── taxa, ranks and labels ───────────────────────────────────────────
 
     // A row's or entry's lineage above `rank`: { genus?, family?, order?, class? }
@@ -1152,6 +1359,10 @@
                     const animal = { box: out.detections[i].box, score: out.detections[i].score, label: h.label,
                                      subject, species: c.species.map(roundSp), taxa: roundTaxa(c.taxa),
                                      candidates: c.candidates };
+                    // The crop's image embedding (unit length) on request,
+                    // for "looks like the one you named": not record data,
+                    // so a caller keeps it out of what it stores as JSON.
+                    if (a.embeddings) animal.embedding = Float32Array.from(embs[k]);
                     // A pet box kept to its query's classes: the answer over
                     // every species too, its top K and each rank's best.
                     if (c.unrestricted) {

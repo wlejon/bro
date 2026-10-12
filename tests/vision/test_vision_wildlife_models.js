@@ -109,6 +109,17 @@ function run() {
         assert(wl.RANKS.slice(1).every((r) => Array.isArray(x.taxa[r]) && x.taxa[r].length <= 3), 'its taxa');
         assert(x.taxa.class.length >= 1 && x.taxa.class[0].score >= x.species[0].score - 1e-4, 'a class scores at least its best species');
     }
+    assert(a.animals.every((x) => !('embedding' in x)), 'no embedding unless asked');
+    // embeddings: true: each crop's unit embedding; the record otherwise the same, and nearest finds each crop itself.
+    const withEmb = an.analyze(frame(true), { source: src, threshold: 0, embeddings: true });
+    assert(withEmb.animals.length === a.animals.length && withEmb.animals.every((x) => x.embedding instanceof Float32Array &&
+           x.embedding.length === an.dim && Math.abs(Math.hypot(...x.embedding) - 1) < 1e-3), 'embeddings: unit, the projection dim');
+    same(withEmb.animals.map((x) => { const { embedding, ...rest } = x; return rest; }), a.animals, 'the same animals besides');
+    const embRows = withEmb.animals.map((x) => x.embedding);
+    withEmb.animals.forEach((x, i) => {
+        const hit = wl.nearest(x.embedding, embRows, 1)[0];
+        assert(hit && hit.similarity > 0.999 && embRows[hit.index].every((v, j) => v === embRows[i][j]), 'nearest: crop ' + i + ' finds itself');
+    });
     const few = an.analyze(frame(true), { source: src, threshold: 0, maxClassify: 2 });
     same([few.animals.length, few.animalsDropped], [2, boxed.length - 2], 'maxClassify');
     const bq = an.analyze(frame(true), { source: src, threshold: 0, maxClassify: 2, candidates: 'byQuery' });

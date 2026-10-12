@@ -946,6 +946,11 @@ const runKey = JSON.stringify(wild.config);
  * @param {number} [opts.maxClassify]  this call only
  * @param {'all'|'byQuery'} [opts.candidates]  this call only
  * @param {number|false} [opts.petMinBoxScore]  this call only
+ * @param {boolean} [opts.embeddings=false]  each animal also carries
+ *   `embedding`: its crop's image embedding (a unit-length Float32Array of
+ *   the classifier's projection dim), for wl.nearest ("looks like the one
+ *   you named"). Not record data: keep it out of what you store as JSON
+ *   (JSON.stringify would write it as an object of numbers).
  * @returns {{ animal: boolean,
  *             detections: Array<{ label: string, score: number, box: number[] }>,
  *             subject: { x, y, w, h } | null,
@@ -957,7 +962,8 @@ const runKey = JSON.stringify(wild.config);
  *                              taxa: { genus, family, order, class:
  *                                Array<{ scientific, score, family?, order?, class? }> },
  *                              candidates: 'all'|'query'|'fallback',
- *                              unrestricted?: { species, taxa } }>,
+ *                              unrestricted?: { species, taxa },
+ *                              embedding?: Float32Array }>,
  *             animalsDropped: number,
  *             timing: { detect: number, classify: number|null } }}
  *   detections best first (NMS 0.3, at most 20), boxes [x, y, w, h] to 0.1 px
@@ -1141,6 +1147,51 @@ const named = bro.vision.wildlife.label(rec, burst);
  * common name; above species "Darners (Aeshnidae)", or the scientific name
  * alone when the taxa map has no common name for it.
  */
+
+/**
+ * bro.vision.wildlife.nameEntries(lists, { taxa }?) — every name the lists
+ * know, for a person correcting what labels() said: each species row, then
+ * every taxon above species from the rows' lineage (a scientific name's
+ * genus, family, order, class) and the taxa maps (their common names; a map
+ * name no row holds is added at its rank). Plain data (read the lists on a
+ * Worker and post it): [{ common?, scientific, rank, lineage: { genus?,
+ * family?, order?, class? } }]. `lists` as readSpecies takes them; `taxa`
+ * (readTaxa's map) in place of the lists' own.
+ *
+ * bro.vision.wildlife.nameIndex(entries) — a search over them for an input
+ * that suggests names as she types:
+ *   search(text, { limit = 12 }) -> best first, each the entry plus
+ *     { label: formatLabel's, score, on: 'common' | 'scientific' }. Matched
+ *     by common and scientific name, case, accents and punctuation aside
+ *     ("Cooper's" = "coopers", a hyphen a space): 100 the whole name, 90 its
+ *     start, 80 the start of each of its words in order ("gr eg" -> Great
+ *     Egret), 70 in any order, 60 inside it (3 letters or more), 50 a word of
+ *     4 letters or more one typo off ("malard"). Ties: a common name, then a
+ *     species, then the shorter label.
+ *   find(text) -> the entry whose common name, scientific name or label is
+ *     the text (a species first), or null: free text ("freshwater mussel")
+ *     is no entry.
+ *   entries, size.
+ */
+const idx = bro.vision.wildlife.nameIndex(bro.vision.wildlife.nameEntries(speciesFiles));
+idx.search('darn', { limit: 5 }).map((e) => e.label);   // ['Darners (Aeshnidae)', 'Canada Darner', ...]
+idx.find('anas platyrhynchos').common;                  // 'Mallard'
+
+/**
+ * bro.vision.wildlife.nearest(query, matrix, n = 1, { minSimilarity }?) —
+ * the rows most like `query`, for "looks like your Mallard from June": the
+ * crops a person has named, their analyze({ embeddings: true }) embeddings,
+ * searched with a new crop's.
+ *   query   Float32Array (or array) of dim numbers
+ *   matrix  the rows end to end (Float32Array, length a multiple of dim) or
+ *           an array of rows
+ * -> [{ index, similarity }] best first (ties by index), at most n, none
+ * under minSimilarity. The dot product, summed as classifyCrop's
+ * similarities are (one native pass); cosine for unit vectors. A shape that
+ * does not fit answers []. Main thread and Workers.
+ */
+const near = bro.vision.wildlife.nearest(crop.embedding, namedRows, 1, { minSimilarity: 0.8 });
+// near[0] → { index: 12, similarity: 0.91 } → namedCrops[12] is the one it looks like
 
 /**
  * bro.vision.wildlife.classifyCrop(rows, sims, opts?) — one crop's ranking

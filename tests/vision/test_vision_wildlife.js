@@ -36,7 +36,7 @@ assert(typeof wl === 'object' && wl !== null, 'bro.vision.wildlife exists');
 for (const f of ['open', 'available', 'locate', 'config', 'subjectSquare', 'cropImage', 'squareInput',
                  'sharpness', 'speciesPrompt', 'readSpeciesList', 'readSpecies', 'readTaxa', 'label', 'labels',
                  'formatLabel', 'taxaScores', 'classifyCrop', 'candidatesFor', 'sureClasses', 'petAnswer', 'queryClasses',
-                 'lineage', 'parseExifTime',
+                 'lineage', 'nameEntries', 'nameIndex', 'nearest', 'parseExifTime',
                  'keeperScore', 'groupBursts']) {
     assert(typeof wl[f] === 'function', 'wildlife.' + f + ' is a function');
 }
@@ -627,6 +627,72 @@ same(wl.config({ detector: empty, classifier: empty, species: [taxaA, taxaB] }).
 same(wl.labels(photo('x', 0, [animal({ Mallard: 0.5, 'American Black Duck': 0.4 })]), null,
                { taxa: wl.readTaxa([taxaA2, taxaB]) })[0].common, 'Puddle Ducks', 'names come from the map at label time');
 
+// ── names a person gives an animal: nameEntries + nameIndex ─────────────
+const ne = wl.nameEntries([taxaA, taxaB, { species: [ROWS[3], ROWS[4], ROWS[9]] }]);
+same(ne.filter((e) => e.rank === 'species').map((e) => e.common),
+     ['Mallard', 'American Black Duck', 'Wood Duck', 'Common Green Darner', 'Canada Darner', 'Twelve-spotted Skimmer',
+      'Great Egret', 'Great Blue Heron', 'Eastern Chipmunk'], 'nameEntries: every species row first, in list order');
+same(ne[0], { common: 'Mallard', scientific: 'Anas platyrhynchos', rank: 'species',
+              lineage: { genus: 'Anas', family: 'Anatidae', order: 'Anseriformes', class: 'Aves' } }, 'a species with its lineage');
+const byName = (n) => ne.find((e) => e.scientific === n);
+same(byName('Anas'), { common: 'Dabbling Ducks', scientific: 'Anas', rank: 'genus',
+                       lineage: { family: 'Anatidae', order: 'Anseriformes', class: 'Aves' } }, 'a genus from the rows, named by the taxa map');
+same(byName('Aeshnidae'), { common: 'Darners', scientific: 'Aeshnidae', rank: 'family', lineage: { order: 'Odonata', class: 'Insecta' } },
+     'a family');
+same(byName('Aves'), { scientific: 'Aves', rank: 'class', lineage: {} }, 'a class without a common name');
+same(byName('Odonata').rank, 'order', 'an order');
+same(ne.filter((e) => e.scientific === 'Anas').length, 1, 'each taxon once');
+same(wl.nameEntries([{ species: [], taxa: { Unionidae: { rank: 'family', common: 'River Mussels' }, Odd: { rank: 'tribe' } } }]),
+     [{ common: 'River Mussels', scientific: 'Unionidae', rank: 'family', lineage: {} }], 'a taxa-map name no row has; no unknown rank');
+same(wl.nameEntries([taxaA], { taxa: { Anas: { rank: 'genus', common: 'Puddle Ducks' } } }).find((e) => e.scientific === 'Anas').common,
+     'Puddle Ducks', 'opts.taxa in place of the lists\' own');
+
+const ix = wl.nameIndex(ne);
+same(ix.size, ne.length, 'nameIndex: every entry');
+const top = (q, n) => ix.search(q, { limit: n || 3 }).map((r) => r.label);
+same(top('mallard'), ['Mallard'], 'the whole common name');
+same(ix.search('Mall')[0].on, 'common', 'matched on the common name');
+same(top('anas platy'), ['Mallard'], 'the scientific name\'s start');
+same(ix.search('anas platy')[0].on, 'scientific', 'matched on the scientific name');
+same(top('gr eg'), ['Great Egret'], 'the start of each word, in order');
+same(top('egret great'), ['Great Egret'], 'and in any order');
+same(top('darner', 4), ['Darners (Aeshnidae)', 'Canada Darner', 'Common Green Darner'], 'a group name above the species it holds');
+same(top('dabbling'), ['Dabbling Ducks (Anas)'], 'a genus by its common name');
+same(top('aeshnidae'), ['Darners (Aeshnidae)'], 'a family by its scientific name');
+same(top('twelve spotted'), ['Twelve-spotted Skimmer'], 'a hyphen is a space');
+same(top('malard'), ['Mallard'], 'one typo');
+same(top('heron'), ['Great Blue Heron'], 'a later word');
+same(top('ipmun'), ['Eastern Chipmunk'], 'inside a word');
+same(ix.search('zzz'), [], 'nothing');
+same(ix.search(''), [], 'no text, no suggestions');
+same(ix.search('a', { limit: 2 }).length, 2, 'limit');
+same(ix.find('MALLARD').scientific, 'Anas platyrhynchos', 'find: a common name, any case');
+same(ix.find('anas platyrhynchos').common, 'Mallard', 'a scientific name');
+same(ix.find('Darners (Aeshnidae)').rank, 'family', 'a label');
+same(ix.find('darners').scientific, 'Aeshnidae', 'a group\'s common name');
+same(ix.find('freshwater mussel'), null, 'free text is no entry');
+same(wl.nameIndex(null).search('x'), [], 'no entries');
+
+// ── nearest: the rows most like a query ──────────────────────────────────
+{
+    const unit = (v) => { const n = Math.hypot(...v); return v.map((x) => x / n); };
+    const rows = [unit([1, 0, 0, 0]), unit([0.9, 0.1, 0, 0]), unit([0, 1, 0, 0]), unit([0.9, 0.1, 0, 0]), unit([-1, 0, 0, 0])];
+    const flat = new Float32Array(rows.length * 4);
+    rows.forEach((r, i) => flat.set(r, i * 4));
+    const q = new Float32Array(unit([1, 0.05, 0, 0]));
+    const near = wl.nearest(q, flat, 3);
+    same(near.map((h) => h.index), [0, 1, 3], 'nearest: best first, ties by index');
+    assert(near[0].similarity > 0.99 && near[1].similarity === near[2].similarity, 'nearest: the similarities');
+    let d = 0;
+    for (let i = 0; i < 4; i++) d += q[i] * flat[4 + i];
+    assert(near[1].similarity === Math.fround(d), 'nearest: classifyCrop\'s sum (' + near[1].similarity + ' vs ' + d + ')');
+    same(wl.nearest(q, flat).map((h) => h.index), [0], 'one by default');
+    same(wl.nearest(q, rows, 5).map((h) => h.index), [0, 1, 3, 2, 4], 'an array of rows');
+    same(wl.nearest(Array.from(q), flat, 9, { minSimilarity: 0.5 }).map((h) => h.index), [0, 1, 3], 'minSimilarity');
+    same([wl.nearest(q, flat.subarray(1), 1), wl.nearest(q, [rows[0], [1, 0]], 1), wl.nearest(new Float32Array(0), flat, 1),
+          wl.nearest(q, new Float32Array(0), 1), wl.nearest(q, flat, 0)], [[], [], [], [], []], 'bad shapes, n 0: none');
+}
+
 // ── pixels ───────────────────────────────────────────────────────────────
 const sq = wl.subjectSquare([120, 40, 40, 20], 200, 100, { margin: 0.25 });
 same([sq.w, sq.h], [60, 60], 'square of 40 * 1.5');
@@ -707,7 +773,10 @@ same(reply.bBursts, bb, 'the worker groups bursts with taxa the same');
 same(reply.bLabels, bRecs.map((r) => L(r, bb.find((b) => b.photos.includes(r.path)))), 'worker labels() of every frame');
 same(reply.bAlone, bRecs.map((r) => L(r)), 'worker labels() of every photo alone');
 same(reply.crop, wl.classifyCrop(ROWS, cfSims, { candidates: 'byQuery', query: 'a moth' }), 'worker classifyCrop');
+same(reply.names, wl.nameEntries([{ species: ROWS, taxa: TAXA }]), 'worker nameEntries, posted as plain data');
+same(wl.nameIndex(reply.names).search('darn')[0].label, 'Darners (Aeshnidae)', 'and searched on this side');
 same(reply.dot, [11, 17, 22, 34], 'the similarities native on the worker\'s thread');
+same(reply.near, [{ index: 1, similarity: 17 }, { index: 0, similarity: 11 }], 'nearest on the worker');
 w.terminate();
 
 try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) {}
