@@ -742,7 +742,13 @@ owl.dispose();
 //      insect list does not thin a bird's softmax; when the best species
 //      there is under labelThreshold and the best over every species is at
 //      least that and of another class, that one is the answer.
-//      encodeImage takes one image, so crops are encoded one by one.
+//      A photo's crops go through BioCLIP in one batch (ClipModel.encodeImages):
+//      on a Radeon 8060S (Vulkan) the tower costs ~25 ms for one crop and
+//      ~11-13 ms a crop at 4-8; the rest of a crop's classify time is its
+//      cosine against every species prompt and the softmax, in JS (~25 ms
+//      a crop over the ~2000 default species). On a GPU a crop's embedding
+//      in a batch differs from its single encode by FP16 rounding (~3e-4),
+//      so a score can move in its 4th decimal; on the CPU it is identical.
 //   3. Sharpness (bro.image.sharpness) of the subject and of the frame, and
 //      groupBursts: shots under 1.0 s apart are a burst, its keeper the frame
 //      with the sharpest subject (Tenengrad); per taxon, every animal
@@ -923,7 +929,8 @@ const runKey = JSON.stringify(wild.config);
  *   species after a sure answer of another class). `animalsDropped`: the
  *   boxes over the threshold not classified (show "+3 more"). `subject` and
  *   `species` are the first animal's (the best box), as before animals;
- *   both empty when there is no animal. timing in ms (classify: every crop).
+ *   both empty when there is no animal. timing in ms (classify: every crop,
+ *   encoded in one batch).
  */
 const img = bro.image.decodeScaled(path, { width: 1280, height: 1280 });
 const rec = wild.analyze(img, { source: { width: img.sourceWidth, height: img.sourceHeight } });

@@ -946,15 +946,24 @@
                     return o2;
                 };
                 // Best first, up to maxClassify; an empty box is no animal.
+                // Every crop goes through the vision tower in one batch
+                // (encodeImages: element i is encodeImage of crop i).
+                const picked = [];
                 for (let i = 0; i < hits.length; i++) {
-                    const h = hits[i];
-                    const sq = wl.subjectSquare(h.box, img.width, img.height, { margin: config.margin });
+                    const sq = wl.subjectSquare(hits[i].box, img.width, img.height, { margin: config.margin });
                     if (!sq) continue;
-                    if (out.animals.length >= maxClassify) { out.animalsDropped++; continue; }
+                    if (picked.length >= maxClassify) { out.animalsDropped++; continue; }
+                    picked.push({ i, sq });
+                }
+                const embs = picked.length
+                    ? clip.encodeImages(picked.map((p) => wl.squareInput(wl.cropImage(img, p.sq), imageSize)))
+                    : [];
+                for (let k = 0; k < picked.length; k++) {
+                    const { i, sq } = picked[k];
+                    const h = hits[i];
                     const subject = { x: Math.round(sq.x * sx), y: Math.round(sq.y * sy),
                                       w: Math.round(sq.w * sx), h: Math.round(sq.h * sy) };
-                    const emb = clip.encodeImage(wl.squareInput(wl.cropImage(img, sq), imageSize));
-                    const c = crop(emb, Object.assign({ query: h.label }, copts));
+                    const c = crop(embs[k], Object.assign({ query: h.label }, copts));
                     out.animals.push({ box: out.detections[i].box, score: out.detections[i].score, label: h.label,
                                        subject, species: c.species.map(roundSp), taxa: roundTaxa(c.taxa),
                                        candidates: c.candidates });

@@ -1108,6 +1108,25 @@ class ClipModel {
   encodeImage(image) {}
 
   /**
+   * encodeImage over many images in one call: the vision tower runs them as
+   * one batch (up to 16 a forward pass; more are split), so N crops cost far
+   * less than N encodeImage calls on a GPU. Element i is encodeImage(images[i]):
+   * bit-identical on the CPU; on a GPU to FP16 rounding (Vulkan's GEMM rounds a
+   * row by where it sits in its tile: ~3e-4 max abs on BioCLIP 2's normalised
+   * embedding), enough to move a softmax score in its 4th decimal.
+   *
+   * Measured with BioCLIP 2 (ViT-L/14) on a Radeon 8060S (Vulkan), ms an
+   * image: 1 → 25, 2 → 15.7, 4 → 13.2, 8 → 10.8.
+   *
+   * @param {Array<Object>} images - ImageBitmaps or ImageData-shaped objects, any sizes
+   * @returns {Array<Float32Array>} one projected, L2-normalised embedding per image, in order
+   *
+   * @example
+   *   const embs = clip.encodeImages(crops.map((c) => ({ width: 224, height: 224, data: c })));
+   */
+  encodeImages(images) {}
+
+  /**
    * Compute cosine similarity in [-1, 1] between text and image.
    *
    * @param {(string|Array<string>)} text - Single prompt or array of candidate prompts
