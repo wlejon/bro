@@ -298,6 +298,35 @@ void Engine::hostMouseUp(uint64_t hostId, float x, float y, int sdlButton) {
     windowHostRepaint(h);
 }
 
+void Engine::hostSetHover(WindowHost& h, dom::Element* target, float x, float y, float xrel, float yrel) {
+    dom::Element* prevHover = h.hoveredElement;
+    if (target == prevHover) return;
+    const int mod = currentModState();
+    auto fire = [&](const char* type, dom::Element* el, bool bubbles,
+                    dom::Element* related) {
+        if (!el) return;
+        dom::MouseEvent evt(type, bubbles, bubbles);
+        populateMouseEvent(evt, x, y, -1, h.pressedButtons, xrel, yrel,
+                           0.0f, mod, 0.0f);
+        evt.setRelatedTarget(related);
+        applyMouseOffset(evt, el);
+        windowHostDispatch(h, el, evt);
+    };
+    fire("mouseout", prevHover, true, target);
+    fire("mouseleave", prevHover, false, target);
+    fire("mouseover", target, true, prevHover);
+    fire("mouseenter", target, false, prevHover);
+
+    // :hover restyle. recordSubDoc points ElementRefAdapter at
+    // h.hoveredElement before resolving this document, so the pseudo-class
+    // resolves per window with no cross-talk. Both endpoints are marked so
+    // the leaving element loses its highlight too.
+    if (prevHover) prevHover->markDirty();
+    if (target) target->markDirty();
+    h.hoveredElement = target;
+    windowHostRepaint(h);
+}
+
 void Engine::hostMouseMove(uint64_t hostId, float x, float y,
                            float xrel, float yrel) {
     WindowHost* hp = windowHostById(hostId);
@@ -322,33 +351,8 @@ void Engine::hostMouseMove(uint64_t hostId, float x, float y,
     }
 
     dom::Element* target = windowHostHitTest(h, x, y);
-    dom::Element* prevHover = h.hoveredElement;
-
-    if (target != prevHover) {
-        auto fire = [&](const char* type, dom::Element* el, bool bubbles,
-                        dom::Element* related) {
-            if (!el) return;
-            dom::MouseEvent evt(type, bubbles, bubbles);
-            populateMouseEvent(evt, x, y, -1, h.pressedButtons, xrel, yrel,
-                               0.0f, mod, 0.0f);
-            evt.setRelatedTarget(related);
-            applyMouseOffset(evt, el);
-            windowHostDispatch(h, el, evt);
-        };
-        fire("mouseout", prevHover, true, target);
-        fire("mouseleave", prevHover, false, target);
-        fire("mouseover", target, true, prevHover);
-        fire("mouseenter", target, false, prevHover);
-
-        // :hover restyle. recordSubDoc points ElementRefAdapter at
-        // h.hoveredElement before resolving this document, so the pseudo-class
-        // resolves per window with no cross-talk. Both endpoints are marked so
-        // the leaving element loses its highlight too.
-        if (prevHover) prevHover->markDirty();
-        if (target) target->markDirty();
-        h.hoveredElement = target;
-        windowHostRepaint(h);
-    }
+    h.pointerIn = true;
+    hostSetHover(h, target, x, y, xrel, yrel);
 
     // Per-window CSS cursor. Re-resolved on every move, not just hover
     // changes: a restyle can change the computed cursor with the hit target

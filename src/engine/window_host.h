@@ -74,6 +74,9 @@ struct WindowHost {
     dom::Element* activeElement = nullptr;
     float lastMouseX = 0.0f, lastMouseY = 0.0f;
     int pressedButtons = 0;
+    // The pointer is in this window (moved in, not left): its hover is hit
+    // tested again after its document changes (Engine::recheckHover).
+    bool pointerIn = false;
     dom::ElementHandle controlDragElement;
     std::string resolvedCursor = "default";
     int boxW = 0, boxH = 0;

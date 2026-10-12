@@ -584,6 +584,7 @@ void Engine::layoutSystemPanels(layout::SkiaTextMetrics& metrics) {
     for (auto& doc : systemDocs_) {
         if (!isSystemDocVisible(doc) || !doc.document) continue;
         if (!doc.document->isDirty()) continue;
+        noteHoverRecheck();  // laid out again: what is under a still pointer
         doc.document->resolveStyles();
         // Its transitions and animations, after the resolve that starts
         // them, at the time it resolved at (as a sub-document's record).
@@ -810,41 +811,46 @@ bool Engine::systemHandleMouseUp(float x, float y, int button) {
     return false;
 }
 
+dom::Element* Engine::systemHoverHit(float x, float y, SystemDocument*& doc) {
+    doc = nullptr;
+    for (int i = static_cast<int>(systemDocs_.size()) - 1; i >= 0; i--) {
+        auto& d = systemDocs_[i];
+        if (!isSystemDocVisible(d)) continue;
+        if (dom::Element* target = systemHitTest(d, x, y)) {
+            doc = &d;
+            return target;
+        }
+    }
+    return nullptr;
+}
+
+void Engine::systemSetHover(dom::Element* newTarget, SystemDocument* newDoc, float x, float y) {
+    dom::Element* prevSysHover = systemHoverTarget_.get();
+    if (newTarget == prevSysHover) return;
+    if (prevSysHover && systemHoverDoc_) {
+        dom::MouseEvent leaveEvt("mouseleave");
+        leaveEvt.setClientX(static_cast<double>(x));
+        leaveEvt.setClientY(static_cast<double>(y));
+        dom::dispatchDomEvent(prevSysHover, leaveEvt);
+    }
+    if (newTarget && newDoc) {
+        dom::MouseEvent enterEvt("mouseenter");
+        enterEvt.setClientX(static_cast<double>(x));
+        enterEvt.setClientY(static_cast<double>(y));
+        dom::dispatchDomEvent(newTarget, enterEvt);
+    }
+    systemHoverTarget_.assign(newDoc ? newDoc->document.get() : nullptr, newTarget);
+    systemHoverDoc_ = newDoc;
+    systemDirty_ = true;
+}
+
 bool Engine::systemHandleMouseMove(float x, float y) {
     if (!isSystemVisible()) return false;
 
-    dom::Element* newTarget = nullptr;
     SystemDocument* newDoc = nullptr;
+    dom::Element* newTarget = systemHoverHit(x, y, newDoc);
 
-    for (int i = static_cast<int>(systemDocs_.size()) - 1; i >= 0; i--) {
-        auto& doc = systemDocs_[i];
-        if (!isSystemDocVisible(doc)) continue;
-        dom::Element* target = systemHitTest(doc, x, y);
-        if (target) {
-            newTarget = target;
-            newDoc = &doc;
-            break;
-        }
-    }
-
-    dom::Element* prevSysHover = systemHoverTarget_.get();
-    if (newTarget != prevSysHover) {
-        if (prevSysHover && systemHoverDoc_) {
-            dom::MouseEvent leaveEvt("mouseleave");
-            leaveEvt.setClientX(static_cast<double>(x));
-            leaveEvt.setClientY(static_cast<double>(y));
-            dom::dispatchDomEvent(prevSysHover, leaveEvt);
-        }
-        if (newTarget && newDoc) {
-            dom::MouseEvent enterEvt("mouseenter");
-            enterEvt.setClientX(static_cast<double>(x));
-            enterEvt.setClientY(static_cast<double>(y));
-            dom::dispatchDomEvent(newTarget, enterEvt);
-        }
-        systemHoverTarget_.assign(newDoc ? newDoc->document.get() : nullptr, newTarget);
-        systemHoverDoc_ = newDoc;
-        systemDirty_ = true;
-    }
+    systemSetHover(newTarget, newDoc, x, y);
 
     if (newTarget && newDoc) {
         dom::MouseEvent moveEvt("mousemove");

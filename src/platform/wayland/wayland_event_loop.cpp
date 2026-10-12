@@ -245,6 +245,7 @@ void WaylandEventLoop::handle(const browl::ShellEvent& ev) {
             if (onMouseMove) onMouseMove(w->windowId(), lastX_, lastY_, 0.0f, 0.0f);
         } else if constexpr (std::is_same_v<T, browl::PointerLeaveEvent>) {
             if (c_.pointerSurface == e.surface_id) c_.pointerSurface = browl::kNoSurface;
+            if (WaylandWindow* w = win(e.surface_id); w && onPointerLeft) onPointerLeft(w->windowId());
         } else if constexpr (std::is_same_v<T, browl::PointerMotionEvent>) {
             WaylandWindow* w = win(e.surface_id);
             if (!w) return;

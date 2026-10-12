@@ -387,6 +387,10 @@ void SdlEventLoop::dispatch(const SDL_Event& event) {
                 if (onFocusLost) onFocusLost(event.window.windowID);
                 break;
 
+            case SDL_EVENT_WINDOW_MOUSE_LEAVE:
+                if (onPointerLeft) onPointerLeft(event.window.windowID);
+                break;
+
             case SDL_EVENT_WINDOW_MINIMIZED:
                 if (onMinimized) onMinimized(event.window.windowID);
                 break;

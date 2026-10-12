@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+<head><style>
+  html, body { margin: 0; background: #fff; }
+  .b { position: absolute; left: 20px; top: 20px; width: 80px; height: 40px; background: #00f; }
+  .b:hover { background: #f00; }
+</style></head>
+<body>
+  <!-- For tests/dom/test_hover_recheck.js, in an <iframe> and a
+       bro.window.open() window: a box under the pointer replaced by another
+       (replace(), or the message 'replace'); the box's colour says whether it
+       is :hover. -->
+  <div id="host"><div class="b" id="b1"></div></div>
+  <script>
+    var overs = [];
+    document.addEventListener('mouseover', function (e) { overs.push(e.target.id); });
+    function replace() { document.getElementById('host').innerHTML = '<div class="b" id="b2"></div>'; }
+    function color() { return getComputedStyle(document.querySelector('.b')).backgroundColor; }
+    function overTargets() { return overs.join(' '); }
+    window.addEventListener('message', function (e) { if (e.data === 'replace') replace(); });
+  </script>
+</body>
+</html>

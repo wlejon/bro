@@ -25,6 +25,7 @@ void Engine::dispatchScrollEvent(dom::Element* el) {
 }
 
 void Engine::setViewportScrollY(float y) {
+    if (document_ && y != scrollY_) document_->noteScrolled();
     scrollY_ = y;
     if (document_) document_->setViewportScroll(0.0f, y);
 }

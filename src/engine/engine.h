@@ -904,6 +904,21 @@ private:
     bool iframeHandleMouseMove(dom::Element* frameEl, float docX, float docY,
                                float movementX, float movementY, int mod);
     bool systemHandleMouseMove(float x, float y);
+    // The hover transitions (boundary events, :hover) to `target`, shared by a
+    // move and recheckHover: the app document's, an iframe's (the element
+    // under the pointer in it, returned), a window's, the system panels'.
+    void setAppHover(dom::Element* target, float x, float y, float xrel, float yrel);
+    dom::Element* iframeSetHover(dom::Element* frameEl, float docX, float docY);
+    void hostSetHover(WindowHost& h, dom::Element* target, float x, float y, float xrel, float yrel);
+    dom::Element* systemHoverHit(float x, float y, SystemDocument*& doc);
+    void systemSetHover(dom::Element* target, SystemDocument* doc, float x, float y);
+public:
+    // A still pointer hit tested again after layout, a DOM change or a
+    // scroll (input_mouse_move.cpp): due when one happened since the last.
+    bool hoverRecheckDue() const;
+    void recheckHover();
+    void noteHoverRecheck() { hoverRecheckPending_ = true; }
+private:
     bool systemHandleWheel(float x, float y, float dx, float dy);
     // Every scroll container's bars under `root`, their thumbs on whole
     // device pixels at `scale` (0: as laid out). With `layers`, the thumb of
@@ -1264,6 +1279,11 @@ private:
     bool mediaHeldForStep_ = false;
 
     dom::ElementHandle hoveredElement_;
+    // The pointer is in the main window (moved in, not left), and a layout,
+    // DOM change or scroll since its hover was last hit tested (recheckHover).
+    bool pointerInWindow_ = false;
+    bool hoverRecheckPending_ = false;
+    uint64_t hoverScrollGen_ = 0;
     scene::HtmlNode*   hoveredHtmlNode_ = nullptr;
     dom::ElementHandle hoveredHtmlElement_;
     scene::HtmlNode*   htmlNodeMouseDownNode_ = nullptr;

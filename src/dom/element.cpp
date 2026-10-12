@@ -879,6 +879,7 @@ void Element::setScrollTopValue(float v) {
     if (v != scrollTop_) {
         scrollAbsorbed_ = document_ && document_->absorbScroll(this, scrollLeft_, v);
         if (!scrollAbsorbed_) stampPaint(parentNode());
+        if (document_) document_->noteScrolled();
     }
     scrollTop_ = v;
     if (document_) document_->noteScrollOffset(this, scrollTop_ != 0.0f || scrollLeft_ != 0.0f);
@@ -888,6 +889,7 @@ void Element::setScrollLeftValue(float v) {
     if (v != scrollLeft_) {
         scrollAbsorbed_ = document_ && document_->absorbScroll(this, v, scrollTop_);
         if (!scrollAbsorbed_) stampPaint(parentNode());
+        if (document_) document_->noteScrolled();
     }
     scrollLeft_ = v;
     if (document_) document_->noteScrollOffset(this, scrollTop_ != 0.0f || scrollLeft_ != 0.0f);

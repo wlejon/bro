@@ -288,6 +288,10 @@ void Engine::installWindowEventHandlers() {
     eventLoop_->onGamepadRemoved = [this](uint32_t id) { handleGamepadRemoved(id); };
     eventLoop_->onGamepadButton = [this](uint32_t id, int b, bool down) { handleGamepadButton(id, b, down); };
     eventLoop_->onGamepadAxis = [this](uint32_t id, int a, float v) { handleGamepadAxis(id, a, v); };
+    eventLoop_->onPointerLeft = [this, mainWin](uint32_t id) {
+        if (mainWin(id)) pointerInWindow_ = false;
+        else if (WindowHost* h = windowHostBySdlId(id)) h->pointerIn = false;
+    };
     eventLoop_->onFocusLost = [this, mainWin](uint32_t id) {
         if (mainWin(id)) {
             windowFocused_ = false;
@@ -546,6 +550,9 @@ void Engine::windowedFrame() {
 
         bool layoutIdle = layoutPipeline_->isIdle();
         bool layoutSignaled = false;
+        // The last layout is in: what is under a still pointer now (a
+        // replaced element, one appearing, a scroll), before this frame's.
+        if (layoutIdle && hoverRecheckDue()) recheckHover();
         bool animActive = layoutPipeline_->animationsActive();
 
         bool sceneHtmlDirty = false;
@@ -575,6 +582,7 @@ void Engine::windowedFrame() {
             layoutPipeline_->signalLayout(ls);
             traceLayoutSignalled();
             layoutSignaled = true;
+            noteHoverRecheck();
         }
 
         renderAndPresentFrame(frameStart, now, wallFrameDtMs, layoutSignaled, baseWasDirty);

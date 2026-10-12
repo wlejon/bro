@@ -479,6 +479,7 @@ void Engine::recordIframeLayers() {
         // this used to set boxW/boxH directly and leave @media / matchMedia
         // pinned to the creation-time size.
         syncIframeBox(*d);
+        if (d->document && d->document->isDirty()) noteHoverRecheck();  // laid out again
         recordSubDoc(iframeSubDoc(*d), recordingRenderer_.get(), drawTraversal_.get(),
                      *textMetrics_);
     }
@@ -513,6 +514,7 @@ void Engine::recordWindowHostLayers() {
         if (h->window && displayMode_ == DisplayMode::Windowed)
             h->renderScale = h->window->getPixelDensity();
         syncWindowHostBox(*h);
+        if (h->document->isDirty()) noteHoverRecheck();  // laid out again
         recordSubDoc(windowHostSubDoc(*h), recordingRenderer_.get(),
                      drawTraversal_.get(), *textMetrics_);
     }

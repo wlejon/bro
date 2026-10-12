@@ -63,6 +63,8 @@ public:
     std::function<void(const std::string& action)> onOwnDragEnd;
     std::function<void(uint32_t windowId)> onFocusLost;
     std::function<void(uint32_t windowId)> onFocusGained;
+    // The pointer left a window (it comes back as a mouse move).
+    std::function<void(uint32_t windowId)> onPointerLeft;
     // Window state transitions. Restored fires on un-minimize AND
     // un-maximize; query the resulting state via Window::isMinimized() /
     // isMaximized().

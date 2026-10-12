@@ -198,6 +198,11 @@ public:
         if (nonZero) scrolled_.insert(e);
         else scrolled_.erase(e);
     }
+    // Bumped by every element scroll that moves (Element::setScrollTopValue /
+    // Left) and the viewport's: what is under a still pointer may have
+    // changed (engine recheckHover).
+    void noteScrolled() { ++scrollGeneration_; }
+    uint64_t scrollGeneration() const { return scrollGeneration_; }
     void forgetScrolled(Element* e) { scrolled_.erase(e); }
 
     // Who may take an element's scroll with no paint (dom/scroll_absorber.h).
@@ -710,6 +715,7 @@ private:
     // so the pointers never outlive it.
     std::unordered_map<size_t, std::vector<Element*>> styleDonors_;
     std::unordered_set<Element*> scrolled_;  // noteScrollOffset
+    uint64_t scrollGeneration_ = 0;
     ScrollAbsorber* scrollAbsorber_ = nullptr;
     std::unordered_set<Element*> scrollContainers_;  // noteScrollContainer
     std::unordered_set<Element*> videoElements_;     // noteVideoElement

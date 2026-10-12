@@ -91,6 +91,7 @@ void Engine::flush() {
         }
         // ... and the loads the markup just started.
         layout::settleImageLoads();
+        noteHoverRecheck();  // laid out again: what is under a still pointer
 
         dom::Element* previousHover = hoveredElement_.get();
         layout::ElementRefAdapter::setHoveredElement(previousHover);
@@ -174,6 +175,10 @@ void Engine::flush() {
     if (isSystemVisible()) {
         layoutSystemPanels(*textMetrics_);
     }
+
+    // Every layout of the step is in: the hover of a still pointer follows
+    // what changed under it (the windowed loop does it at its next frame).
+    if (hoverRecheckDue()) recheckHover();
 
 #if BRO_WITH_3D
     if (auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get())) {

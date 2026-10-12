@@ -8,6 +8,7 @@
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/element_geometry.h"
+#include "layout/element_ref_adapter.h"
 #include "dom/event.h"
 #include "dom/event_dispatch.h"
 #include "dom/range.h"
@@ -53,6 +54,21 @@ bool paintsBackground(dom::Element* el) {
 }  // namespace
 #endif
 
+dom::Element* Engine::iframeSetHover(dom::Element* frameEl, float docX, float docY) {
+    if (!frameEl || !frameEl->iframeDoc()) return nullptr;
+    auto* dp = static_cast<IframeDoc*>(frameEl->iframeDoc());
+    if (!dp->document) return nullptr;
+    dom::AbsoluteRect box = dom::absoluteContentBox(frameEl);
+    dom::Element* sub = iframeHitTest(dp, docX - box.x, docY - box.y);
+    if (sub != dp->hoveredElement) {
+        if (dp->hoveredElement) dp->hoveredElement->markDirty();
+        if (sub) sub->markDirty();
+        dp->hoveredElement = sub;
+        uiDirty_ = true;
+    }
+    return sub;
+}
+
 bool Engine::iframeHandleMouseMove(dom::Element* frameEl, float docX, float docY,
                                    float movementX, float movementY, int mod) {
     if (!frameEl || !frameEl->iframeDoc()) return false;
@@ -60,14 +76,7 @@ bool Engine::iframeHandleMouseMove(dom::Element* frameEl, float docX, float docY
     if (!dp->document) return false;
     dom::AbsoluteRect box = dom::absoluteContentBox(frameEl);
     float lx = docX - box.x, ly = docY - box.y;
-    dom::Element* sub = iframeHitTest(dp, lx, ly);
-
-    if (sub != dp->hoveredElement) {
-        if (dp->hoveredElement) dp->hoveredElement->markDirty();
-        if (sub) sub->markDirty();
-        dp->hoveredElement = sub;
-        uiDirty_ = true;
-    }
+    dom::Element* sub = iframeSetHover(frameEl, docX, docY);
     if (sub) {
         dom::MouseEvent moveEvt("mousemove");
         populateMouseEvent(moveEvt, lx, ly, 0, pressedButtons_, movementX, movementY,
@@ -78,8 +87,118 @@ bool Engine::iframeHandleMouseMove(dom::Element* frameEl, float docX, float docY
     return true;
 }
 
+void Engine::setAppHover(dom::Element* target, float x, float y, float xrel, float yrel) {
+    dom::Element* prevHover = hoveredElement_.get();
+    if (target == prevHover) return;
+    if (prevHover && prevHover->iframeDoc()) {
+        auto* pdp = static_cast<IframeDoc*>(prevHover->iframeDoc());
+        if (pdp->hoveredElement) {
+            pdp->hoveredElement->markDirty();
+            pdp->hoveredElement = nullptr;
+            uiDirty_ = true;
+        }
+    }
+    int mod = currentModState();
+    // The hover transition, as the UI Events and Pointer Events
+    // specs order it: out on the element left, leave on it and each
+    // ancestor the pointer is no longer inside (innermost first),
+    // over on the element entered, enter on each ancestor it is now
+    // inside that it was not (outermost first) and on the element.
+    // Each mouse event follows its pointer alias (pointerId 1).
+    auto fire = [&](const char* type, dom::Element* el, bool bubbles,
+                    dom::Element* related) {
+        dom::MouseEvent evt(type, bubbles, bubbles);
+        populateMouseEvent(evt, x, y, -1, pressedButtons_,
+                          xrel, yrel, scrollY_, mod, static_cast<float>(contentTop()));
+        evt.setRelatedTarget(related);
+        applyMouseOffset(evt, el);
+        dispatchEvent(el, evt);
+    };
+    std::vector<dom::Element*> left, entered;
+    for (dom::Element* e = prevHover; e; e = e->parentElement()) left.push_back(e);
+    for (dom::Element* e = target; e; e = e->parentElement()) entered.push_back(e);
+    // Drop the shared ancestors (the pointer is still inside them).
+    while (!left.empty() && !entered.empty() && left.back() == entered.back()) {
+        left.pop_back();
+        entered.pop_back();
+    }
+
+    if (prevHover) {
+        fire("pointerout", prevHover, true, target);
+        fire("mouseout", prevHover, true, target);
+    }
+    for (dom::Element* e : left) {
+        fire("pointerleave", e, false, target);
+        fire("mouseleave", e, false, target);
+    }
+    if (target) {
+        fire("pointerover", target, true, prevHover);
+        fire("mouseover", target, true, prevHover);
+    }
+    for (auto it = entered.rbegin(); it != entered.rend(); ++it) {
+        fire("pointerenter", *it, false, prevHover);
+        fire("mouseenter", *it, false, prevHover);
+    }
+
+    if (document_ && document_->cascade().usesHoverPseudo()) {
+        markHoverChainDirty(document_->cascade(), hoveredElement_.get(), target);
+        uiDirty_ = true;
+    }
+    hoveredElement_.assign(document_.get(), target);
+    // Script's selector queries (matches(':hover'), querySelector) run on
+    // this thread and read its hovered element; the layout thread has its own.
+    layout::ElementRefAdapter::setHoveredElement(target);
+}
+
+bool Engine::hoverRecheckDue() const {
+    return hoverRecheckPending_ || (document_ && document_->scrollGeneration() != hoverScrollGen_);
+}
+
+// Chrome's fake mouse move: what is under a pointer that has not moved
+// changes when the page does (an element replaced under it, one appearing,
+// a scroll), and the hover follows it as a move would, :hover and the
+// boundary events (over/out, enter/leave, pointer and mouse), with no
+// mousemove or pointermove. Once a frame after a layout, a DOM change or a
+// scroll, while no button is down, no pointer is captured or locked and no
+// drag holds the pointer; the main document and an iframe under the pointer,
+// each bro.window.open() window by its own pointer, system panels over the
+// page.
+void Engine::recheckHover() {
+    hoverRecheckPending_ = false;
+    if (document_) hoverScrollGen_ = document_->scrollGeneration();
+
+    for (auto& hp : windowHosts_) {
+        if (!hp || hp->pendingClose || !hp->document || !hp->pointerIn || hp->pressedButtons != 0 ||
+            hp->controlDragElement.get())
+            continue;
+        WindowHost& h = *hp;
+        hostSetHover(h, windowHostHitTest(h, h.lastMouseX, h.lastMouseY), h.lastMouseX, h.lastMouseY, 0.0f, 0.0f);
+        windowHostUpdateCursor(h, h.hoveredElement);
+    }
+
+    if (!pointerInWindow_ || pressedButtons_ != 0 || !pointerCaptures_.empty() || lockedElement_.held()) return;
+    if (controlDragElement_.get() || selectionDragging_ || viewportScrollbar_.isDragging() ||
+        elementScrollbar_.isDragging())
+        return;
+    if (inspector_.pickerMode && inspector_.visible) return;
+    const float x = lastMouseX_, y = lastMouseY_;
+    if (isSystemVisible()) {
+        SystemDocument* doc = nullptr;
+        dom::Element* t = systemHoverHit(x, y, doc);
+        systemSetHover(t, doc, x, y);
+        if (t) return;  // a panel over the page has the pointer, as a move gives it
+    }
+    if (!document_ || !document_->documentElement() || overlayMgr_.hasActive()) return;
+    const float docX = x, docY = y - static_cast<float>(contentTop()) + scrollY_;
+    dom::Element* target = hitTest(docX, docY);
+    if (target && target->iframeDoc()) iframeSetHover(target, docX, docY);
+    setAppHover(target, x, y, 0.0f, 0.0f);
+    updateCursorFromHover(hoveredElement_.get());
+}
+
 void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
     noteUserActivity();
+    pointerInWindow_ = true;
     if (lockedElement_.held() && !lockedElement_.get()) exitPointerLock();
 
     // Over a <remoteview> the motion goes to its screen too; while that
@@ -306,63 +425,7 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
         }
 
         dom::Element* prevHover = hoveredElement_.get();
-        if (target != prevHover) {
-            if (prevHover && prevHover->iframeDoc()) {
-                auto* pdp = static_cast<IframeDoc*>(prevHover->iframeDoc());
-                if (pdp->hoveredElement) {
-                    pdp->hoveredElement->markDirty();
-                    pdp->hoveredElement = nullptr;
-                    uiDirty_ = true;
-                }
-            }
-            int mod = currentModState();
-            // The hover transition, as the UI Events and Pointer Events
-            // specs order it: out on the element left, leave on it and each
-            // ancestor the pointer is no longer inside (innermost first),
-            // over on the element entered, enter on each ancestor it is now
-            // inside that it was not (outermost first) and on the element.
-            // Each mouse event follows its pointer alias (pointerId 1).
-            auto fire = [&](const char* type, dom::Element* el, bool bubbles,
-                            dom::Element* related) {
-                dom::MouseEvent evt(type, bubbles, bubbles);
-                populateMouseEvent(evt, x, y, -1, pressedButtons_,
-                                  xrel, yrel, scrollY_, mod, static_cast<float>(contentTop()));
-                evt.setRelatedTarget(related);
-                applyMouseOffset(evt, el);
-                dispatchEvent(el, evt);
-            };
-            std::vector<dom::Element*> left, entered;
-            for (dom::Element* e = prevHover; e; e = e->parentElement()) left.push_back(e);
-            for (dom::Element* e = target; e; e = e->parentElement()) entered.push_back(e);
-            // Drop the shared ancestors (the pointer is still inside them).
-            while (!left.empty() && !entered.empty() && left.back() == entered.back()) {
-                left.pop_back();
-                entered.pop_back();
-            }
-
-            if (prevHover) {
-                fire("pointerout", prevHover, true, target);
-                fire("mouseout", prevHover, true, target);
-            }
-            for (dom::Element* e : left) {
-                fire("pointerleave", e, false, target);
-                fire("mouseleave", e, false, target);
-            }
-            if (target) {
-                fire("pointerover", target, true, prevHover);
-                fire("mouseover", target, true, prevHover);
-            }
-            for (auto it = entered.rbegin(); it != entered.rend(); ++it) {
-                fire("pointerenter", *it, false, prevHover);
-                fire("mouseenter", *it, false, prevHover);
-            }
-
-            if (document_ && document_->cascade().usesHoverPseudo()) {
-                markHoverChainDirty(document_->cascade(), hoveredElement_.get(), target);
-                uiDirty_ = true;
-            }
-            hoveredElement_.assign(document_.get(), target);
-        }
+        setAppHover(target, x, y, xrel, yrel);
 
         // Selection drags, reports and link hover (before the cursor, which
         // follows the link under the pointer).
