@@ -136,6 +136,7 @@ bool Engine::handleGlobalHotkey(int keycode, int mod, bool repeat) {
 
 void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
     noteUserActivity();
+    dropTextAfterKeyDown_ = false;
     if (!modifierBitForKeycode(keycode)) dom::Document::noteInputModality(true);
     heldModifierMask_ |= modifierBitForKeycode(keycode);
     heldKeys_[keycode] = sdlKeycodeToWebKey(keycode, mod);
@@ -369,7 +370,10 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
         evt.setIsComposing(compositionActive());
         dispatchEvent(activeEl, evt);
         keydownDispatched = true;
-        if (evt.defaultPrevented()) return;
+        if (evt.defaultPrevented()) {
+            dropTextAfterKeyDown_ = true;
+            return;
+        }
         // A listener may have moved focus or removed the control.
         activeEl = handle.get();
         if (!activeEl || !document_ || activeEl != document_->activeElement()) return;
@@ -458,6 +462,7 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
         dom::Element* target = document_->activeElement();
         if (target) {
             dispatchEvent(target, evt);
+            if (evt.defaultPrevented()) dropTextAfterKeyDown_ = true;
         }
     }
 
@@ -466,6 +471,7 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
 
 void Engine::handleKeyUp(int keycode, int scancode, int mod, bool repeat) {
     noteUserActivity();
+    dropTextAfterKeyDown_ = false;
     heldModifierMask_ &= ~modifierBitForKeycode(keycode);
     heldKeys_.erase(keycode);
 

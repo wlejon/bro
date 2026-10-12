@@ -448,6 +448,7 @@ void Engine::hostKeyDown(uint64_t hostId, int keycode, int scancode, int mod,
     WindowHost* hp = windowHostById(hostId);
     if (!hp || !hp->document) return;
     WindowHost& h = *hp;
+    dropTextAfterKeyDown_ = false;
 
     // The physical keyboard is one device shared by every window: keep the
     // modifier/held-key bookkeeping that feeds simulated modifier state and
@@ -507,10 +508,11 @@ void Engine::hostKeyDown(uint64_t hostId, int keycode, int scancode, int mod,
         return;
     }
 
-    // Default: the focused element, else body.
+    // Default: the focused element, else body. Cancelled, its text is dropped (engine.h).
     auto evt = makeKeyboardEvent("keydown", keycode, scancode, mod, repeat);
     dom::Element* target = activeEl ? activeEl : h.document->body();
     if (target) windowHostDispatch(h, target, evt);
+    if (evt.defaultPrevented()) dropTextAfterKeyDown_ = true;
 }
 
 void Engine::hostKeyUp(uint64_t hostId, int keycode, int scancode, int mod,
@@ -518,6 +520,7 @@ void Engine::hostKeyUp(uint64_t hostId, int keycode, int scancode, int mod,
     WindowHost* hp = windowHostById(hostId);
     if (!hp || !hp->document) return;
     WindowHost& h = *hp;
+    dropTextAfterKeyDown_ = false;
 
     heldModifierMask_ &= ~modifierBitForKeycode(keycode);
     heldKeys_.erase(keycode);
@@ -536,6 +539,10 @@ void Engine::hostTextInput(uint64_t hostId, const std::string& text) {
     WindowHost* hp = windowHostById(hostId);
     if (!hp || !hp->document) return;
     WindowHost& h = *hp;
+    if (dropTextAfterKeyDown_) {
+        dropTextAfterKeyDown_ = false;
+        return;
+    }
     if (isControlChar(text)) return;
 
     auto* activeEl = h.document->activeElement();

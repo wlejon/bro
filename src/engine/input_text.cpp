@@ -370,6 +370,11 @@ void Engine::commitActiveComposition() {
 
 void Engine::handleTextInput(const std::string& text) {
     noteUserActivity();
+    // The text of a keydown the page cancelled: dropped (engine.h).
+    if (dropTextAfterKeyDown_) {
+        dropTextAfterKeyDown_ = false;
+        return;
+    }
     if (!document_) return;
     if (isControlChar(text)) return;
     if (capturedRemoteView()) return;  // its keys went to the remote screen

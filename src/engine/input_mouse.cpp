@@ -246,6 +246,8 @@ void Engine::handleMouseDown(float x, float y, int button) {
         dispatchPointerAlias("pointerdown", target, evt);
         dispatchDocMousePress(cctx, appMouseState_, target, evt,
                               focusX, focusY, intent);
+        // A cancelled press put no caret in a control, so it drags no selection there either.
+        if (evt.defaultPrevented()) controlDragElement_.reset();
         // A <terminal> acts on the press the page left alone.
         if (pressed.get() && !evt.defaultPrevented())
             terminalMouseDown(pressed.get(), docX, docY, button, mod, intent.ordinal);

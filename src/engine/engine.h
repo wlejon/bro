@@ -1241,6 +1241,13 @@ private:
     uint64_t contentGenSignalled_ = 0, contentGenShown_ = 0;
     double contentTimeSignalled_ = 0.0, contentTimeShown_ = 0.0, layoutSignalTimeMs_ = 0.0;
     bool uiDirty_ = true;
+    // The page cancelled the last keydown (preventDefault): the text the
+    // platform sends after it for the same key (SDL's TEXT_INPUT, the DRM and
+    // device paths' own) is dropped, as the web drops a cancelled keydown's
+    // keypress and input. A shortcut that moves focus into a field (N names
+    // an animal) must not type its own letter there. Cleared by the next
+    // keydown or keyup.
+    bool dropTextAfterKeyDown_ = false;
     bool hasRenderedOnce_ = false;
     bool mediaEventsArmed_ = false;
     // Set inside a headless advanceTime step once media is at its instant:

@@ -521,6 +521,38 @@ bool dispatchDocMousePress(
     if (!ctx.document) { state.mouseDownTarget.reset(); return false; }
     if (!target) { state.mouseDownTarget.reset(); return false; }
 
+    // The mousedown goes first, and the focus change is its default action
+    // (UI Events / HTML's focus fixup order: mousedown, then change and blur
+    // on the field left, then focus): a page that cancels the mousedown keeps
+    // the focus where it is. A suggestion list under a text field cancels it
+    // so a click on a suggestion leaves the field focused; focus used to move
+    // (blurring the field, closing its list) before the page saw the press.
+    {
+        const ElementPlace place = placeOf(target);
+        dom::ElementHandle keep(ctx.document, target);
+        dom::Element* before = ctx.document->activeElement();
+        dom::dispatchDomEvent(target, evt);
+        dom::Element* still = keep.get();
+        // A listener that moved the focus itself (focus() on a field it opened)
+        // has done the press's focus change: it stands, as in browsers.
+        const bool focusMoved = ctx.document->activeElement() != before;
+        if (evt.defaultPrevented() || focusMoved) {
+            if (still) state.mouseDownTarget.assign(ctx.document, still);
+            else state.mouseDownTarget.reset();
+            if (ctx.dirtyFlag) *ctx.dirtyFlag = true;
+            return false;
+        }
+        // A mousedown listener that redrew the element pressed: the press goes
+        // on with the one standing in its place (the same rule as a redraw off
+        // `change`, below), or with nothing.
+        target = still ? still : elementAt(ctx.document, place);
+        if (!target) {
+            state.mouseDownTarget.reset();
+            if (ctx.dirtyFlag) *ctx.dirtyFlag = true;
+            return false;
+        }
+    }
+
     auto* prevActive = ctx.document->activeElement();
 
     // Give the previously-active control a chance to consume (e.g. dropdown
@@ -528,7 +560,6 @@ bool dispatchDocMousePress(
     // should not treat the press as normal activation.
     auto disp = unfocusPreviousControl(ctx, prevActive);
     if (disp == ClickDisposition::Consumed) {
-        dom::dispatchDomEvent(target, evt);
         state.mouseDownTarget.assign(ctx.document, target);
         if (ctx.dirtyFlag) *ctx.dirtyFlag = true;
         return true;
@@ -595,7 +626,6 @@ bool dispatchDocMousePress(
     intent.primary = evt.button() == 0;
     focusNewControl(ctx, state, target, focusX, focusY, intent);
 
-    dom::dispatchDomEvent(target, evt);
     state.mouseDownTarget.assign(ctx.document, target);
     if (ctx.dirtyFlag) *ctx.dirtyFlag = true;
     return false;
