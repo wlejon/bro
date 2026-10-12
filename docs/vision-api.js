@@ -744,10 +744,22 @@ owl.dispose();
 //      least that and of another class, that one is the answer.
 //      Pets, in either mode: a box of 'a dog' or 'a cat' (PET_QUERIES) the
 //      detector scores `petMinBoxScore` (0.3) or more is ranked over its
-//      query's classes (Mammalia, the pets with them) with no fallback, so
-//      a dog is never named an insect (over every species a dog's crop
-//      could go to Eastern Cicada Killer or Chinese Mantis); its crop's
-//      `candidates` is 'query'. A weaker pet box is ranked as any other.
+//      query's classes (Mammalia, the pets with them), so a dog is not
+//      named an insect (over every species a dog's crop could go to Eastern
+//      Cicada Killer or Chinese Mantis); its crop's `candidates` is 'query'.
+//      The restriction gives way when the classifier is sure the box is
+//      something else (OWLv2 also calls a bird a dog), both ways:
+//      at analyze(), when the ranking over every species gives a class
+//      outside Mammalia labelThreshold (0.85) or more (its best species or
+//      its best class), that ranking is the answer ('fallback'); else the
+//      crop keeps it beside its own as `unrestricted` ({ species: top K,
+//      taxa: each rank's best }). At labels(), a kept pet crop whose best
+//      mammal is under labelThreshold is named by `unrestricted` when its
+//      best class there is not Mammalia and is a class the rest of the burst
+//      (or the photo, out of a burst) is sure of: another crop's best class
+//      at labelThreshold on a box at broadMinBoxScore (the burst's
+//      `sureClasses`). A dog box on a waxwing in a burst of waxwings is then
+//      the waxwing, not "Mammals". A weaker pet box is ranked as any other.
 //      A photo's crops go through BioCLIP in one batch (ClipModel.encodeImages):
 //      on a Radeon 8060S (Vulkan) the tower costs ~25 ms for one crop and
 //      ~11-13 ms a crop at 4-8. A crop's cosine against every species
@@ -855,7 +867,7 @@ for (const name of where.fetch) await bro.models.fetch(name);
  *   species/upper-midwest-herps, species/upper-midwest-arthropods and
  *   species/pets
  * @param {number} [opts.labelThreshold=0.85]  the analyzer's label() /
- *   labels(), and byQuery's fallback threshold
+ *   labels(), and byQuery's and the pet rule's fallback threshold
  * @param {number} [opts.minBoxScore=0.3]  the analyzer's box rule (labels(),
  *   "The box rule"); also broadMinBoxScore (0.3), burstMinBoxScore (0.4),
  *   queryMatch (true), consensus (true)
@@ -893,14 +905,16 @@ const wild = bro.vision.wildlife.open({ model: 'bioclip-2' });
  * a result depends on, in a fixed key order, so `JSON.stringify(config)`
  * hashes a run: { detector: { name, repo, revision, weightsBytes },
  * classifier: { ... }, threshold, queries, topK, margin, maxClassify,
- * candidates: { mode: 'all', petMinBoxScore } | { mode: 'byQuery', fallback,
- * petMinBoxScore } (petMinBoxScore null when the pet rule is off),
+ * candidates: { mode: 'all', petMinBoxScore, petFallback } | { mode:
+ * 'byQuery', fallback, petMinBoxScore, petFallback } (petFallback the
+ * labelThreshold a sure pet box's crop falls back at; both pet fields null
+ * when the pet rule is off),
  * speciesList: { files, count, hash } }. `revision` is read from the model
  * dir's ATTRIBUTION.md; `files` the list files by name ('upper-midwest.json',
  * 'upper-midwest-herps/species.json', ...), `count` the merged rows, `hash` an
  * FNV-1a of every prompt, so an edited list is another config (the taxa
  * maps' names are not in it).
- * labelThreshold is not in it (except as byQuery's fallback), nor the box
+ * labelThreshold is not in it (except as the fallbacks), nor the box
  * rule: they change what is shown, not a record.
  * The static form reads files only, never weights: a batch decides what to
  * re-run before it pays for a load.
@@ -929,7 +943,8 @@ const runKey = JSON.stringify(wild.config);
  *                              species: (as `species`),
  *                              taxa: { genus, family, order, class:
  *                                Array<{ scientific, score, family?, order?, class? }> },
- *                              candidates: 'all'|'query'|'fallback' }>,
+ *                              candidates: 'all'|'query'|'fallback',
+ *                              unrestricted?: { species, taxa } }>,
  *             animalsDropped: number,
  *             timing: { detect: number, classify: number|null } }}
  *   detections best first (NMS 0.3, at most 20), boxes [x, y, w, h] to 0.1 px
@@ -939,7 +954,11 @@ const runKey = JSON.stringify(wild.config);
  *   sum over its species, with its lineage above it); `candidates` what its
  *   softmax was over ('query': its query's classes, under byQuery or as a
  *   sure pet box (candidatesFor); 'fallback': every species after a sure
- *   answer of another class). `animalsDropped`: the
+ *   answer of another class, under byQuery or for a sure pet box). A sure
+ *   pet box kept to Mammalia carries `unrestricted`: its answer over every
+ *   species, the top K species and the best genus, family, order and class
+ *   (one entry each), rounded alike, which labels() may name it by (see
+ *   Pets above). `animalsDropped`: the
  *   boxes over the threshold not classified (show "+3 more"). `subject` and
  *   `species` are the first animal's (the best box), as before animals;
  *   both empty when there is no animal. timing in ms (classify: every crop,
@@ -988,11 +1007,14 @@ const subjectSharp = bro.vision.wildlife.sharpness(big, { box: rec.detections[0]
  * @param {(prev, cur) => ({ncc:number, split:boolean}|null)} [opts.sameScene]
  *   split a burst where the frame changes (e.g. thumbnails aligned with
  *   bro.image.alignSimilarity)
+ * @param {number} [opts.labelThreshold=0.85]  `sureClasses`' threshold (below)
+ * @param {number} [opts.broadMinBoxScore=0.3]  `sureClasses`' box score
  * @returns {Array<{ id, first, start, durationS, count, animalCount,
  *                   species: { common, scientific, share, agree } | null,
  *                   taxa: Array<{ rank, scientific, common?, genus?, family?,
  *                                 order?, class?, share, scores: number[],
  *                                 evidence: number[][] }>,
+ *                   sureClasses: string[],
  *                   keeper, keeperSharpness, startedBy: 'gap'|'scene',
  *                   maxGapS, minNcc, photos: string[] }>}
  *   `species`: the score-weighted vote over every animal frame's top K (of
@@ -1005,7 +1027,12 @@ const subjectSharp = bro.vision.wildlife.sharpness(big, { box: rec.detections[0]
  *   entry a frame showing the taxon (frame order, not sorted): its crops as
  *   flat [score, boxScore, flags] triples (flags 1: the photo's best box,
  *   2: the box's query matches the taxon; a crop another beats on all
- *   three left out), which labels() weighs with its box rule. Records from before
+ *   three left out), which labels() weighs with its box rule. `sureClasses`:
+ *   the classes the burst's crops are sure of (a crop's best class at
+ *   labelThreshold on a box at broadMinBoxScore; pet crops kept to Mammalia
+ *   left out), sorted; a kept pet crop counts in `taxa` by its answer over
+ *   every species when labels()' pet rule says so against them (Pets,
+ *   above). Records from before
  *   `animals` count their top K as one crop. `keeper`: the sharpest subject
  *   among the animal frames, else the sharpest frame.
  */
@@ -1058,6 +1085,14 @@ const bursts = bro.vision.wildlife.groupBursts(records, { gapS: 1.0 });
  *     the egret in every frame).
  * Every option 0 / false is the rule off.
  *
+ * Pets: a crop of a sure pet box kept to Mammalia (candidates 'query' with
+ * `unrestricted`) is named by its `unrestricted` answer when its best mammal
+ * is under the threshold and that answer's best class, not Mammalia, is one
+ * of the burst's `sureClasses` (out of a burst, or a burst grouped before
+ * them: the classes the photo's other crops are sure of, at the threshold
+ * on a box at broadMinBoxScore). petAnswer(crop, t?, classes) and
+ * sureClasses(crops, t?, broadMin?) are exported, pure.
+ *
  * Records from before `animals` are one crop of their top K (genus and up
  * summed over it) on the best box; bursts from before `taxa` label their
  * `species` consensus at its share, and bursts from before `evidence` are
@@ -1099,11 +1134,14 @@ const named = bro.vision.wildlife.label(rec, burst);
  * from its cosine similarity to each row's prompt, as analyze() does it
  * (pure; a similarity of log(p) / 100 is a probability p). opts { topK (5),
  * top (3), query, candidates: 'all' | 'byQuery' | 'query' (the query's
- * classes, no fallback), fallback (0.85) } -> { species: top K
- * (unrounded), taxa: taxaScores, candidates: 'all' | 'query' | 'fallback' }.
+ * classes, no fallback) | 'pet' (the query's classes, unless every species
+ * gives another class `fallback` or more), fallback (0.85) } -> { species:
+ * top K (unrounded), taxa: taxaScores, candidates: 'all' | 'query' |
+ * 'fallback', unrestricted?: { species, taxa } (a 'pet' crop kept to its
+ * query's classes: the ranking over every row) }.
  *
  * bro.vision.wildlife.candidatesFor(query, boxScore, configCandidates?) —
- * the candidates analyze() ranks a box with: 'query' for a PET_QUERIES box
+ * the candidates analyze() ranks a box with: 'pet' for a PET_QUERIES box
  * at petMinBoxScore or more, else the mode.
  *
  * bro.vision.wildlife.taxaScores(rows, probs, { top }) — per genus, family,

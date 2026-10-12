@@ -5,7 +5,9 @@
 // split); ranks (taxaScores, classifyCrop with 'all' and 'byQuery'), labels
 // at the narrowest sure rank, several animals in a photo, per-taxon burst
 // labels, old records and bursts, and taxa maps merged across lists; the pet
-// rule (a sure dog or cat box ranks over the mammals), and the fast paths
+// rule (a sure dog or cat box ranks over the mammals) and its two guards
+// (every species sure of another class at analyze; the rest of the photo or
+// burst sure of the class its unrestricted answer leans to at labels), and the fast paths
 // (top K, taxaScores, the dotRows native) against the plain code.
 // tests/vision/test_vision_wildlife_models.js runs the models.
 
@@ -33,7 +35,8 @@ function run() {
 assert(typeof wl === 'object' && wl !== null, 'bro.vision.wildlife exists');
 for (const f of ['open', 'available', 'locate', 'config', 'subjectSquare', 'cropImage', 'squareInput',
                  'sharpness', 'speciesPrompt', 'readSpeciesList', 'readSpecies', 'readTaxa', 'label', 'labels',
-                 'formatLabel', 'taxaScores', 'classifyCrop', 'candidatesFor', 'queryClasses', 'lineage', 'parseExifTime',
+                 'formatLabel', 'taxaScores', 'classifyCrop', 'candidatesFor', 'sureClasses', 'petAnswer', 'queryClasses',
+                 'lineage', 'parseExifTime',
                  'keeperScore', 'groupBursts']) {
     assert(typeof wl[f] === 'function', 'wildlife.' + f + ' is a function');
 }
@@ -108,16 +111,19 @@ same(Object.keys(cfg), ['detector', 'classifier', 'threshold', 'queries', 'topK'
                         'speciesList'], 'config keys, in order');
 same([cfg.detector.repo, cfg.classifier.repo, cfg.classifier.weightsBytes], ['google/owlv2-base-patch16-ensemble', 'imageomics/bioclip', null], 'model identity');
 same([cfg.threshold, cfg.topK, cfg.margin, cfg.maxClassify, cfg.candidates, cfg.speciesList.files, cfg.speciesList.count],
-     [0.2, 5, 0.15, 8, { mode: 'all', petMinBoxScore: 0.3 }, ['two.json'], 2], 'config values');
+     [0.2, 5, 0.15, 8, { mode: 'all', petMinBoxScore: 0.3, petFallback: 0.85 }, ['two.json'], 2], 'config values');
 same(wl.config({ detector: empty, classifier: empty, species: list, candidates: 'byQuery', maxClassify: 3 }).candidates,
-     { mode: 'byQuery', fallback: 0.85, petMinBoxScore: 0.3 }, 'byQuery is in the config, with its fallback threshold');
+     { mode: 'byQuery', fallback: 0.85, petMinBoxScore: 0.3, petFallback: 0.85 }, 'byQuery is in the config, with its fallback threshold');
 same(wl.config({ detector: empty, classifier: empty, species: list, candidates: 'byQuery', labelThreshold: 0.9 }).candidates,
-     { mode: 'byQuery', fallback: 0.9, petMinBoxScore: 0.3 }, 'the fallback is labelThreshold');
+     { mode: 'byQuery', fallback: 0.9, petMinBoxScore: 0.3, petFallback: 0.9 }, 'the fallbacks are labelThreshold');
+same(wl.config({ detector: empty, classifier: empty, species: list, labelThreshold: 0.8 }).candidates,
+     { mode: 'all', petMinBoxScore: 0.3, petFallback: 0.8 }, 'the pet fallback is labelThreshold under all too');
 expectThrows(() => wl.config({ detector: empty, classifier: empty, species: list, candidates: 'some' }), 'an unknown candidates mode');
 // The pet rule changes records, so it is in the config: its box score, or null when off.
 same([wl.config({ detector: empty, classifier: empty, species: list, petMinBoxScore: 0.5 }).candidates,
       wl.config({ detector: empty, classifier: empty, species: list, petMinBoxScore: false }).candidates],
-     [{ mode: 'all', petMinBoxScore: 0.5 }, { mode: 'all', petMinBoxScore: null }], 'petMinBoxScore in the config');
+     [{ mode: 'all', petMinBoxScore: 0.5, petFallback: 0.85 }, { mode: 'all', petMinBoxScore: null, petFallback: null }],
+     'petMinBoxScore in the config');
 expectThrows(() => wl.config({ detector: empty, classifier: empty, species: list, petMinBoxScore: 'high' }), 'a petMinBoxScore not a number');
 assert(/^[0-9a-f]{8}$/.test(cfg.speciesList.hash), 'the list hash: ' + cfg.speciesList.hash);
 same(wl.readSpeciesList(list).map((s) => s.common), ['Mourning Dove', 'Eastern Chipmunk'], 'readSpeciesList');
@@ -254,26 +260,124 @@ const simsOver = (rows, p) => {
     const other = Math.max(1e-9, 1 - named.reduce((s, k) => s + p[k], 0)) / (rows.length - named.length);
     return rows.map((r) => Math.log(p[r.common] != null ? p[r.common] : other) / 100);
 };
-const dogSims = simsOver(PET_ROWS, { 'Eastern Cicada Killer': 0.9, 'Domestic Dog': 0.04, 'Eastern Chipmunk': 0.02 });
+// Over every row the insect leads but is not sure (Insecta ~0.81, under 0.85).
+const dogSims = simsOver(PET_ROWS, { 'Eastern Cicada Killer': 0.7, 'Domestic Dog': 0.04, 'Eastern Chipmunk': 0.02 });
 same([wl.candidatesFor('a dog', 0.3), wl.candidatesFor('a cat', 0.62), wl.candidatesFor('a dog', 0.2999),
       wl.candidatesFor('a bird', 0.9), wl.candidatesFor('a squirrel', 0.9, { mode: 'byQuery', petMinBoxScore: 0.3 })],
-     ['query', 'query', 'all', 'all', 'byQuery'], 'candidatesFor: a pet query at petMinBoxScore or more, else the mode');
+     ['pet', 'pet', 'all', 'all', 'byQuery'], 'candidatesFor: a pet query at petMinBoxScore or more, else the mode');
 same([wl.candidatesFor('a dog', 0.9, { mode: 'all', petMinBoxScore: null }),
       wl.candidatesFor('a dog', 0.45, { mode: 'all', petMinBoxScore: 0.5 }),
       wl.candidatesFor('a dog', 0.9, { mode: 'byQuery', petMinBoxScore: 0.3 })],
-     ['all', 'all', 'query'], 'candidatesFor: off, a higher bar, and in byQuery mode');
+     ['all', 'all', 'pet'], 'candidatesFor: off, a higher bar, and in byQuery mode');
 const sureDog = wl.classifyCrop(PET_ROWS, dogSims, { query: 'a dog', candidates: wl.candidatesFor('a dog', 0.71) });
 same([sureDog.candidates, sureDog.species[0].common, sureDog.species.every((s) => s.class === 'Mammalia')],
      ['query', 'Domestic Dog', true], 'a sure dog box: the dog, over the mammals only');
 same([sureDog.taxa.class.map((t) => t.scientific), sureDog.taxa.family[0].scientific], [['Mammalia'], 'Canidae'],
      'its taxa are the mammals\'');
+// Kept to the mammals, it carries the ranking over every row.
+const allDog = wl.classifyCrop(PET_ROWS, dogSims, { query: 'a dog' });
+same([sureDog.unrestricted.species, sureDog.unrestricted.taxa], [allDog.species, allDog.taxa],
+     'unrestricted: the ranking over every row');
+assert(sureDog.unrestricted.taxa.class[0].scientific === 'Insecta' && sureDog.unrestricted.taxa.class[0].score < 0.85,
+       'which leans to the insect, unsure: ' + sureDog.unrestricted.taxa.class[0].score);
 const weakDog = wl.classifyCrop(PET_ROWS, dogSims, { query: 'a dog', candidates: wl.candidatesFor('a dog', 0.2) });
-same([weakDog.candidates, weakDog.species[0].common], ['all', 'Eastern Cicada Killer'], 'a weak dog box: every row, as before');
-// 'query' has no fallback where 'byQuery' would take the sure insect.
-same(wl.classifyCrop(PET_ROWS, dogSims, { query: 'a dog', candidates: 'byQuery' }).candidates, 'fallback',
+same([weakDog.candidates, weakDog.species[0].common, weakDog.unrestricted], ['all', 'Eastern Cicada Killer', undefined],
+     'a weak dog box: every row, as before');
+// 'query' has no fallback where 'byQuery' would take a sure insect.
+const sureInsectSims = simsOver(PET_ROWS, { 'Eastern Cicada Killer': 0.9, 'Domestic Dog': 0.04, 'Eastern Chipmunk': 0.02 });
+same(wl.classifyCrop(PET_ROWS, sureInsectSims, { query: 'a dog', candidates: 'byQuery' }).candidates, 'fallback',
      "byQuery falls back to the insect");
+same(wl.classifyCrop(PET_ROWS, sureInsectSims, { query: 'a dog', candidates: 'query' }).candidates, 'query',
+     "'query' does not");
 same(wl.classifyCrop(PET_ROWS, dogSims, { query: 'a rock', candidates: 'query' }).candidates, 'all',
      "'query' for a query without classes is every row");
+
+// Guard (a): over every row sure of another class, a sure pet box falls back.
+// A bird OWLv2 called a dog: the waxwing at 0.9 is the answer.
+const PET_BIRD_ROWS = PET_ROWS.concat([
+    { common: 'Cedar Waxwing', scientific: 'Bombycilla cedrorum', class: 'Aves', order: 'Passeriformes', family: 'Bombycillidae' },
+]);
+const birdDog = wl.classifyCrop(PET_BIRD_ROWS, simsOver(PET_BIRD_ROWS, { 'Cedar Waxwing': 0.9, 'Domestic Dog': 0.01 }),
+                                { query: 'a dog', candidates: 'pet' });
+same([birdDog.candidates, birdDog.species[0].common, birdDog.unrestricted], ['fallback', 'Cedar Waxwing', undefined],
+     'pet: a sure species of another class is the answer');
+// Sure of the class, no species sure: the class decides (Aves ~0.93 over three birds).
+const birdClass = wl.classifyCrop(PET_BIRD_ROWS, simsOver(PET_BIRD_ROWS, { 'Cedar Waxwing': 0.4, Mallard: 0.3, 'Great Egret': 0.2,
+                                                                           'Domestic Dog': 0.01 }),
+                                  { query: 'a dog', candidates: 'pet' });
+same([birdClass.candidates, birdClass.species[0].common], ['fallback', 'Cedar Waxwing'], 'pet: a sure class of another class too');
+assert(birdClass.taxa.class[0].scientific === 'Aves' && birdClass.taxa.class[0].score >= 0.85 && birdClass.species[0].score < 0.85,
+       'the class, not the species, was sure');
+same(wl.classifyCrop(PET_BIRD_ROWS, simsOver(PET_BIRD_ROWS, { 'Cedar Waxwing': 0.4, Mallard: 0.3, 'Great Egret': 0.2, 'Domestic Dog': 0.01 }),
+                     { query: 'a dog', candidates: 'pet', fallback: 0.95 }).candidates, 'query', 'pet: its fallback threshold');
+// Over every row sure of a mammal: kept (it is the query's class).
+same(wl.classifyCrop(PET_BIRD_ROWS, simsOver(PET_BIRD_ROWS, { 'Domestic Dog': 0.95 }), { query: 'a dog', candidates: 'pet' }).candidates,
+     'query', 'pet: sure of a mammal stays kept');
+
+// Guard (b): at labels(), a kept pet crop unsure of its mammal is named by its
+// unrestricted answer when the rest of the photo or burst is sure of that class.
+{
+    const rows = PET_BIRD_ROWS;
+    const petCrop = (p, o) => {
+        const c = wl.classifyCrop(rows, simsOver(rows, p), { query: 'a dog', candidates: 'pet' });
+        const out = { box: (o && o.box) || [500, 500, 80, 80], score: (o && o.score) || 0.56, label: 'a dog', subject: null,
+                      species: c.species, taxa: c.taxa, candidates: c.candidates };
+        if (c.unrestricted) {
+            const best = {};
+            for (const r of ['genus', 'family', 'order', 'class']) best[r] = c.unrestricted.taxa[r].slice(0, 1);
+            out.unrestricted = { species: c.unrestricted.species, taxa: best };
+        }
+        return out;
+    };
+    const birdCrop = (p, o) => {
+        const c = wl.classifyCrop(rows, simsOver(rows, p), { query: 'a bird' });
+        return { box: (o && o.box) || [100, 100, 60, 60], score: (o && o.score) || 0.63, label: 'a bird', subject: null,
+                 species: c.species, taxa: c.taxa, candidates: c.candidates };
+    };
+    // The dog box leans to the waxwing (0.8) but is not sure; restricted it is "Mammals" at 1.
+    const lean = { 'Cedar Waxwing': 0.7, 'Domestic Dog': 0.05, 'Eastern Chipmunk': 0.05 };
+    const dog = petCrop(lean);
+    same([dog.candidates, dog.taxa.class[0].scientific, dog.unrestricted.taxa.class[0].scientific], ['query', 'Mammalia', 'Aves'],
+         'the dog crop is kept, its unrestricted class Aves');
+    assert(dog.unrestricted.taxa.class[0].score < 0.85, 'unsure of Aves: ' + dog.unrestricted.taxa.class[0].score);
+    const bird = birdCrop({ 'Cedar Waxwing': 0.95 });
+    same(wl.sureClasses([dog, bird]), ['Aves'], 'sureClasses leaves the kept pet crop out');
+    same([wl.sureClasses([birdCrop({ 'Cedar Waxwing': 0.95 }, { score: 0.2 })]), wl.sureClasses([birdCrop({ 'Cedar Waxwing': 0.5, 'Common Green Darner': 0.4 })])],
+         [[], []], 'a weak box or an unsure class is not sure');
+    same(wl.petAnswer(dog, 0.85, ['Aves']).species[0].common, 'Cedar Waxwing', 'petAnswer: the rest is sure of Aves, the waxwing');
+    same(wl.petAnswer(dog, 0.85, ['Aves']).candidates, 'unrestricted', 'marked unrestricted');
+    assert(wl.petAnswer(dog, 0.85, ['Insecta']) === dog && wl.petAnswer(dog, 0.85, []) === dog, 'another class or none: kept');
+    const sureMammal = petCrop({ 'Domestic Dog': 0.6, 'Cedar Waxwing': 0.38 });
+    assert(sureMammal.species[0].score >= 0.85 && wl.petAnswer(sureMammal, 0.85, ['Aves']) === sureMammal,
+           'kept and sure of its species: the restriction stands');
+    assert(wl.petAnswer(bird, 0.85, ['Aves']) === bird, 'not a kept pet crop: as it is');
+
+    // A photo whose bird box is sure: the dog box is named by its unsure
+    // waxwing answer (so nothing at 0.85), not "Mammals".
+    const recAB = (crops, p, t) => ({ path: p || 'w', time: t || 0, animal: true, animals: crops,
+        detections: crops.map((c) => ({ label: c.label, score: c.score, box: c.box })), animalsDropped: 0, subject: null,
+        species: crops[0].species, sharpness: { frame: { tenengrad: 1 }, subject: null } });
+    const both = recAB([dog, bird]);
+    same(wl.labels(both).map((l) => [l.rank, l.scientific, l.boxes.length]), [['species', 'Bombycilla cedrorum', 1]],
+         'photo: the waxwing, no Mammals');
+    // Alone (nothing else sure), the restriction stands: the dog box names Mammalia.
+    same(wl.labels(recAB([dog])).map((l) => [l.rank, l.scientific]), [['class', 'Mammalia']], 'photo alone: Mammalia as before');
+    // A burst: frame 1 only the dog box, frame 2 a sure waxwing. Frame 1 shows the waxwing.
+    const f1 = recAB([dog], 'f1', 1000), f2 = recAB([bird], 'f2', 1300);
+    const [burst] = wl.groupBursts([f1, f2]);
+    same(burst.sureClasses, ['Aves'], 'the burst is sure of Aves');
+    const lab1 = wl.labels(f1, burst);
+    same(lab1.map((l) => [l.rank, l.scientific, l.from, l.boxes.length]), [['species', 'Bombycilla cedrorum', 'burst', 1]],
+         'burst: no Mammals next to the waxwing, the dog box is the waxwing\'s');
+    assert(!burst.taxa.some((T) => T.scientific === 'Mammalia' && T.share >= 0.85), 'the burst has no sure Mammalia');
+    // A burst of dogs: nothing else is sure of another class, Mammalia stands.
+    const [dogs] = wl.groupBursts([recAB([dog], 'd1', 1000), recAB([petCrop(lean)], 'd2', 1300)]);
+    same([dogs.sureClasses, wl.labels(null, dogs).map((l) => l.scientific)], [[], ['Mammalia']], 'a burst of dog boxes: Mammalia');
+    // A burst grouped before sureClasses: the photo's own crops decide.
+    const old = Object.assign({}, burst);
+    delete old.sureClasses;
+    same(wl.labels(both, old).map((l) => l.scientific).includes('Mammalia'), false, 'an older burst: the photo\'s own sure classes');
+}
 
 // ── the fast paths are the plain ones, number for number ─────────────────
 // classifyCrop's top K (no full sort) and taxaScores (taxon ids) against

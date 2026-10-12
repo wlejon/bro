@@ -47,9 +47,15 @@
     setClasses(['a spider'], ['Arachnida']);
     // The queries that name a domestic animal. A box of one the detector is
     // sure of (petMinBoxScore) is ranked over its query's classes whatever
-    // `candidates` says: over every row, a dog's crop could go to an insect
-    // (a dog named Eastern Cicada Killer), and a dog or cat is what such a
-    // box nearly always is.
+    // `candidates` says (classifyCrop's 'pet'): over every row, a dog's crop
+    // could go to an insect (a dog named Eastern Cicada Killer), and a dog or
+    // cat is what such a box nearly always is. Nearly: OWLv2 also calls a
+    // bird a dog, so the restriction gives way both ways. At analyze() the
+    // ranking over every row is the answer when it is sure (petFallback) of
+    // a class outside the query's; else it is kept in the crop
+    // (`unrestricted`), and labels() names the crop by it when the restricted
+    // answer is not sure of a species and the photo's or burst's other boxes
+    // are sure of the class the unrestricted answer leans to (petAnswer).
     const PET_QUERIES = ['a dog', 'a cat'];
     // Clear animals score 0.3 and up; real ones half hidden and look-alikes
     // share 0.1-0.3; empty frames score under 0.1. A score under
@@ -376,14 +382,18 @@
      * none or none is listed), except that when the best species there
      * scores under `fallback` while the best over every row scores at least
      * that and is of another class, the ranking over every row is the answer.
-     * 'query': over those rows with no fallback (analyze() ranks a sure
-     * pet box this way, petMinBoxScore).
+     * 'query': over those rows with no fallback. 'pet' (analyze() ranks a
+     * sure pet box this way, petMinBoxScore): over those rows, unless the
+     * ranking over every row gives a class outside them `fallback` or more
+     * (its best species there, or its best class), when that ranking is the
+     * answer ('fallback'); kept to the query's classes, the ranking over
+     * every row comes with it as `unrestricted` ({ species, taxa }).
      * @param {Object[]} rows   the species rows
      * @param {ArrayLike<number>} sims  cosine similarity per row
-     * @param {{ topK?, top?, query?, candidates?: 'all'|'byQuery'|'query', fallback? }} [opts]
+     * @param {{ topK?, top?, query?, candidates?: 'all'|'byQuery'|'query'|'pet', fallback? }} [opts]
      * @returns {{ species: Array<{ common, scientific, family, order, class,
-     *   score, similarity }>, taxa: (taxaScores), candidates: 'all'|'query'|'fallback' }}
-     *   unrounded
+     *   score, similarity }>, taxa: (taxaScores), candidates: 'all'|'query'|'fallback',
+     *   unrestricted?: { species, taxa } }}  unrounded
      */
     wl.classifyCrop = function classifyCrop(rows, sims, opts) {
         const o = opts || {};
@@ -411,11 +421,21 @@
             return { species, taxa: wl.taxaScores(idx.map((i) => rows[i]), p, { top: o.top }) };
         };
         const mode = o.candidates || DEFAULTS.candidates;
-        const classes = mode === 'byQuery' || mode === 'query' ? wl.queryClasses(o.query) : null;
+        const classes = mode === 'byQuery' || mode === 'query' || mode === 'pet' ? wl.queryClasses(o.query) : null;
         if (classes) {
             const sub = all.filter((i) => classes.includes(rows[i].class));
             if (sub.length && sub.length < all.length) {
                 const q = rankOver(sub);
+                if (mode === 'pet') {
+                    // Sure of something else over every row: that is the answer.
+                    const a = rankOver(all);
+                    const sp = a.species[0], cl = a.taxa.class[0];
+                    if ((sp && sp.score >= fallback && !classes.includes(sp.class)) ||
+                        (cl && cl.score >= fallback && !classes.includes(cl.scientific))) {
+                        return Object.assign(a, { candidates: 'fallback' });
+                    }
+                    return Object.assign(q, { candidates: 'query', unrestricted: { species: a.species, taxa: a.taxa } });
+                }
                 if (mode === 'query' || q.species[0].score >= fallback) return Object.assign(q, { candidates: 'query' });
                 const a = rankOver(all);
                 if (a.species[0].score >= fallback && !classes.includes(a.species[0].class)) {
@@ -428,7 +448,7 @@
     };
 
     /**
-     * The classifyCrop `candidates` analyze() ranks a box with: 'query' for
+     * The classifyCrop `candidates` analyze() ranks a box with: 'pet' for
      * a box of a pet query (PET_QUERIES) scoring petMinBoxScore or more,
      * else the analysis mode ('all' or 'byQuery'). Pure.
      * @param {string} query     the box's detector query ('a dog')
@@ -439,7 +459,7 @@
     wl.candidatesFor = function candidatesFor(query, boxScore, mode) {
         const m = mode || {};
         const pet = m.petMinBoxScore === undefined ? DEFAULTS.petMinBoxScore : m.petMinBoxScore;
-        if (pet != null && PET_QUERIES.includes(query) && boxScore >= pet) return 'query';
+        if (pet != null && PET_QUERIES.includes(query) && boxScore >= pet) return 'pet';
         return m.mode || DEFAULTS.candidates;
     };
 
@@ -447,11 +467,13 @@
     // top K as the one crop (taxa summed over the top K), on the best box.
     // Each with `primary` (the photo's best box) and its detector `score`
     // and query `label` when the record has them.
-    function cropsOf(rec) {
+    // With `pets` ({ t, classes }), a pet crop is labelled by petAnswer().
+    function cropsOf(rec, pets) {
         if (!rec || rec.error || !rec.animal) return [];
         if (Array.isArray(rec.animals)) {
-            return rec.animals.map((a, i) => (a && a.species && a.species.length
+            const crops = rec.animals.map((a, i) => (a && a.species && a.species.length
                 ? Object.assign({}, a, { primary: i === 0 }) : null)).filter(Boolean);
+            return pets ? crops.map((c) => petAnswer(c, pets.t, pets.classes)) : crops;
         }
         if (!rec.species || !rec.species.length) return [];
         const d = rec.detections && rec.detections[0];
@@ -532,6 +554,53 @@
         return null;
     }
 
+    // ── pet boxes the rest of the photo or burst says are something else ──
+
+    // A sure pet box's crop kept to its query's classes, with the answer
+    // over every species beside it (analyze()'s `unrestricted`).
+    const petKept = (c) => c.candidates === 'query' && !!c.unrestricted &&
+        Array.isArray(c.unrestricted.species) && c.unrestricted.species.length > 0;
+
+    /**
+     * The classes a photo's or burst's crops are sure of, leaving out the
+     * pet crops kept to their query's classes: a crop's best class scoring
+     * `t` or more on a box at `broadMin` or more (the bar a class name
+     * needs). Sorted. Pure.
+     */
+    function sureClasses(crops, t, broadMin) {
+        const out = [];
+        for (const c of crops) {
+            if (petKept(c) || (c.score == null ? 1 : c.score) < broadMin) continue;
+            const e = cropTop(c, 'class');
+            if (e && e.score >= t && !out.includes(e.scientific)) out.push(e.scientific);
+        }
+        return out.sort();
+    }
+
+    /**
+     * The answer a crop is labelled with: its own, except that a pet crop
+     * kept to its query's classes whose best species there scores under `t`
+     * is labelled by its answer over every species when that answer's best
+     * class is one `classes` (sureClasses of the rest of the photo or
+     * burst) holds and the query's classes do not. The restriction stands
+     * when it is sure of a species, or when nothing else in the photo or
+     * burst is sure of the class the box leans to.
+     */
+    function petAnswer(crop, t, classes) {
+        if (!petKept(crop) || !classes || !classes.length) return crop;
+        if (crop.species[0] && crop.species[0].score >= t) return crop;
+        const u = crop.unrestricted;
+        const uc = cropTop(u, 'class');
+        const own = QUERY_CLASSES[crop.label] || [];
+        if (!uc || own.includes(uc.scientific) || !classes.includes(uc.scientific)) return crop;
+        return Object.assign({}, crop, { species: u.species, taxa: u.taxa, candidates: 'unrestricted' });
+    }
+
+    /** sureClasses and petAnswer for tests: (crops, t, broadMin) and (crop, t, classes). */
+    wl.sureClasses = (crops, t, broadMin) => sureClasses(crops,
+        t == null ? DEFAULTS.labelThreshold : t, broadMin == null ? DEFAULTS.broadMinBoxScore : broadMin);
+    wl.petAnswer = (crop, t, classes) => petAnswer(crop, t == null ? DEFAULTS.labelThreshold : t, classes);
+
     const rankIx = (r) => RANKS.indexOf(r);
     const boxKey = (b) => JSON.stringify(b);
     function addBoxes(to, boxes) {
@@ -576,9 +645,9 @@
             (a.scientific < b.scientific ? -1 : 1));
     }
 
-    function photoLabels(rec, t, rule) {
+    function photoLabels(rec, t, rule, pets) {
         const groups = new Map();
-        for (const crop of cropsOf(rec)) {
+        for (const crop of cropsOf(rec, pets)) {
             const l = cropLabel(crop, t, rule);
             if (!l) continue;
             const k = l.rank + '|' + l.scientific;
@@ -677,9 +746,9 @@
     // A frame's boxes for its burst's labels: each crop goes to the
     // narrowest label that is its own best guess at that label's rank and
     // that its box may name.
-    function frameBoxes(labels, rec, rule) {
+    function frameBoxes(labels, rec, rule, pets) {
         const ordered = labels.slice().sort((a, b) => rankIx(a.rank) - rankIx(b.rank));
-        for (const crop of cropsOf(rec)) {
+        for (const crop of cropsOf(rec, pets)) {
             if (!crop.box) continue;
             for (const L of ordered) {
                 const e = cropTop(crop, L.rank);
@@ -704,7 +773,10 @@
      * a family and up under broadMinBoxScore, a burst name one frame
      * reaches on a box under burstMinBoxScore, an order or class outside
      * the box's query's classes (queryMatch); a burst without `evidence`
-     * (grouped before the rule) is weighed by its scores alone.
+     * (grouped before the rule) is weighed by its scores alone. A pet crop
+     * kept to its query's classes is named by its answer over every species
+     * when petAnswer says so against the burst's `sureClasses` (a burst
+     * grouped before them, or no burst: the photo's own crops').
      * @param {Object|null} rec
      * @param {Object|null} [burst]
      * @param {{ labelThreshold?: number, taxa?: Object, minBoxScore?: number,
@@ -718,14 +790,18 @@
         const o = opts || {};
         const t = o.labelThreshold != null ? o.labelThreshold : DEFAULTS.labelThreshold;
         const rule = boxRule(o);
+        // What a pet crop kept to its query's classes is weighed against:
+        // the burst's sure classes (groupBursts), else the photo's own.
+        const pets = { t, classes: burst && Array.isArray(burst.sureClasses) ? burst.sureClasses
+            : rec ? sureClasses(cropsOf(rec), t, rule.broadMin) : [] };
         if (burst) {
             const bl = burstLabels(burst, t, rule);
             if (bl.length) {
-                if (rec) frameBoxes(bl, rec, rule);
+                if (rec) frameBoxes(bl, rec, rule, pets);
                 return finish(bl, 'burst', o.taxa);
             }
         }
-        return rec ? finish(photoLabels(rec, t, rule), 'photo', o.taxa) : [];
+        return rec ? finish(photoLabels(rec, t, rule, pets), 'photo', o.taxa) : [];
     };
 
     /**
@@ -783,9 +859,12 @@
         return { loc, species, taxa: wl.readTaxa(present), config };
     }
 
-    // config.candidates: { mode: 'all', petMinBoxScore } or
-    // { mode: 'byQuery', fallback, petMinBoxScore }; petMinBoxScore null
-    // when the pet rule is off (petMinBoxScore: false).
+    // config.candidates: { mode: 'all', petMinBoxScore, petFallback } or
+    // { mode: 'byQuery', fallback, petMinBoxScore, petFallback };
+    // petMinBoxScore and petFallback null when the pet rule is off
+    // (petMinBoxScore: false). petFallback is labelThreshold: a sure pet
+    // box's crop is ranked over every species when that ranking gives
+    // another class this much (classifyCrop's 'pet').
     function candidatesConfig(mode, labelThreshold, petMinBoxScore) {
         const m = mode || DEFAULTS.candidates;
         if (m !== 'all' && m !== 'byQuery') throw new Error("bro.vision.wildlife: candidates is 'all' or 'byQuery', not " + m);
@@ -794,9 +873,10 @@
         if (pet !== null && !(typeof pet === 'number' && pet >= 0)) {
             throw new Error('bro.vision.wildlife: petMinBoxScore is a number >= 0 or false, not ' + petMinBoxScore);
         }
-        return m === 'all' ? { mode: m, petMinBoxScore: pet }
-            : { mode: m, fallback: labelThreshold == null ? DEFAULTS.labelThreshold : labelThreshold,
-                petMinBoxScore: pet };
+        const t = labelThreshold == null ? DEFAULTS.labelThreshold : labelThreshold;
+        const petFallback = pet === null ? null : t;
+        return m === 'all' ? { mode: m, petMinBoxScore: pet, petFallback }
+            : { mode: m, fallback: t, petMinBoxScore: pet, petFallback };
     }
 
     /** The settings an analysis depends on (open()'s `config`), without loading. */
@@ -1038,7 +1118,7 @@
                                        a.petMinBoxScore != null ? a.petMinBoxScore
                                            : config.candidates.petMinBoxScore === null ? false : config.candidates.petMinBoxScore)
                     : config.candidates;
-                const copts = { topK: a.topK || config.topK, fallback: mode.fallback };
+                const copts = { topK: a.topK || config.topK };
                 const roundSp = (s) => ({ common: s.common, scientific: s.scientific, family: s.family,
                     order: s.order, class: s.class, score: r4(s.score), similarity: r4(s.similarity) });
                 const roundTaxa = (taxa) => {
@@ -1065,11 +1145,20 @@
                     const h = hits[i];
                     const subject = { x: Math.round(sq.x * sx), y: Math.round(sq.y * sy),
                                       w: Math.round(sq.w * sx), h: Math.round(sq.h * sy) };
-                    const c = crop(sims[k], Object.assign({}, copts, { query: h.label,
-                        candidates: wl.candidatesFor(h.label, out.detections[i].score, mode) }));
-                    out.animals.push({ box: out.detections[i].box, score: out.detections[i].score, label: h.label,
-                                       subject, species: c.species.map(roundSp), taxa: roundTaxa(c.taxa),
-                                       candidates: c.candidates });
+                    const cand = wl.candidatesFor(h.label, out.detections[i].score, mode);
+                    const c = crop(sims[k], Object.assign({}, copts, { query: h.label, candidates: cand,
+                        fallback: cand === 'pet' ? mode.petFallback : mode.fallback }));
+                    const animal = { box: out.detections[i].box, score: out.detections[i].score, label: h.label,
+                                     subject, species: c.species.map(roundSp), taxa: roundTaxa(c.taxa),
+                                     candidates: c.candidates };
+                    // A pet box kept to its query's classes: the answer over
+                    // every species too, its top K and each rank's best.
+                    if (c.unrestricted) {
+                        const u = c.unrestricted, best = {};
+                        for (const r of RANKS.slice(1)) best[r] = u.taxa[r].slice(0, 1);
+                        animal.unrestricted = { species: u.species.map(roundSp), taxa: roundTaxa(best) };
+                    }
+                    out.animals.push(animal);
                 }
                 // The best box's, as before animals: subject and species.
                 if (out.animals.length) {
@@ -1136,9 +1225,13 @@
         return x == null ? null : Math.round(x * k) / k;
     };
 
-    function summarize(g, id, metric) {
+    function summarize(g, id, metric, pt) {
         const shots = g.shots;
         const animals = shots.filter((r) => r.animal);
+        // The classes the burst's crops are sure of (pet crops kept to their
+        // query's classes left out), which its pet crops are weighed against.
+        const classes = sureClasses(animals.reduce((all, r) => all.concat(cropsOf(r)), []), pt.t, pt.broadMin);
+        const pets = { t: pt.t, classes };
         const tally = new Map();
         for (const r of animals) vote(tally, r);
         let best = null;
@@ -1157,7 +1250,7 @@
         const taxa = new Map();
         for (const r of animals) {
             const frame = new Map();
-            for (const c of cropsOf(r)) {
+            for (const c of cropsOf(r, pets)) {
                 const box = c.score == null ? 1 : round(c.score, 4);
                 for (const e of cropEntries(c)) {
                     const k = e.rank + '|' + e.scientific;
@@ -1199,6 +1292,7 @@
                 agree: best.top1,
             } : null,
             taxa: taxaOut,
+            sureClasses: classes,
             keeper: keeper.path,
             keeperSharpness: round(keeperScoreV, 2),
             startedBy: g.splitBy || 'gap',
@@ -1211,7 +1305,11 @@
     /**
      * Group photo records into bursts: by capture time, a shot joins the one
      * before it when at most `gapS` seconds later (and `sameScene`, if given,
-     * does not split them). Records with an `error` are left out.
+     * does not split them). Records with an `error` are left out. A burst's
+     * `sureClasses` are the classes its crops (pet crops kept to their
+     * query's classes left out) are sure of at `labelThreshold` on boxes at
+     * `broadMinBoxScore` (opts, DEFAULTS'), and its pet crops count in its
+     * `taxa` by petAnswer against them.
      */
     wl.groupBursts = function groupBursts(records, opts) {
         const o = opts || {};
@@ -1238,7 +1336,9 @@
                 groups.push(cur);
             }
         }
-        return groups.map((g, i) => summarize(g, i + 1, o.metric));
+        const pt = { t: o.labelThreshold == null ? DEFAULTS.labelThreshold : o.labelThreshold,
+                     broadMin: o.broadMinBoxScore == null ? DEFAULTS.broadMinBoxScore : o.broadMinBoxScore };
+        return groups.map((g, i) => summarize(g, i + 1, o.metric, pt));
     };
 
     globalThis.__bro_vision_wildlife = wl;
