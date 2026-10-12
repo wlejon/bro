@@ -13,6 +13,8 @@
 #include "util/log.h"
 #include "util/user_dirs.h"
 
+#include "api/api.h"  // brokit::api::RequireDirGuard
+
 #include "eval/eval.h"
 #include "embed/embed.h"
 #include "modules/modules.h"
@@ -486,6 +488,10 @@ bool evalScriptFileJit(engine::Engine& engine, const std::string& filePath) {
     }
 
     auto absPath = std::filesystem::absolute(p, ec);
+    // require('./x') in the script resolves against the script's directory,
+    // as brokit's own runner and Node have it (docs/brokit-api.js), not the
+    // cwd: for the script's run and what it awaits to its end.
+    brokit::api::RequireDirGuard requireDir(absPath.parent_path());
 
     std::string content;
     {
