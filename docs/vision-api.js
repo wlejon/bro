@@ -727,7 +727,8 @@ owl.dispose();
 //      distant) and look-alikes; empty frames score under 0.1.
 //   2. Every box after NMS, best first up to `maxClassify` (8), padded 15% a
 //      side and made square (subjectSquare), is cropped and classified
-//      zero-shot by BioCLIP 2 (imageomics/bioclip-2; or BioCLIP) over a
+//      zero-shot by BioCLIP 2 (imageomics/bioclip-2; or BioCLIP, or
+//      BioCLIP 2.5 Huge) over a
 //      species list: one prompt per species in the BioCLIP recipe ("a photo
 //      of <kingdom ... species> with common name <common>."), embedded once
 //      and cached on disk; a crop's label is the prompt its embedding sits
@@ -768,6 +769,16 @@ owl.dispose();
 //      loop gives), and its softmax, top K and taxa ~1.5 ms. On a GPU a crop's embedding
 //      in a batch differs from its single encode by FP16 rounding (~3e-4),
 //      so a score can move in its 4th decimal; on the CPU it is identical.
+//      `model: 'bioclip-2.5'` is BioCLIP 2.5 Huge (imageomics/bioclip-2.5-
+//      vith14, ViT-H/14, 1024-dim embeddings; MIT), an option, not the
+//      default: 986M parameters, ~1.9 GB of FP16 weights on a GPU against
+//      BioCLIP 2's ~0.8 GB (2.7 GB of Vulkan memory beside OWLv2 and SAM 2.1
+//      base-plus), 3.9 GB to download. On the Radeon 8060S analyze()'s
+//      classify is ~27 ms a crop (BioCLIP 2: ~19), ~79 ms a photo (~54), and
+//      embedding the default species lists the first time ~22 s (~8.5 s).
+//      Its softmax is sharper (sure crops score ~1.000 where BioCLIP 2 gives
+//      ~0.99, and so do some wrong names on weak boxes), so the thresholds
+//      above, set on BioCLIP 2, are not tuned for it.
 //   3. Sharpness (bro.image.sharpness) of the subject and of the frame, and
 //      groupBursts: shots under 1.0 s apart are a burst, its keeper the frame
 //      with the sharpest subject (Tenengrad); per taxon, every animal
@@ -794,8 +805,9 @@ owl.dispose();
 // pass `source` (the full-size width/height), so they line up with the file.
 //
 // Models, by bro.models name (docs/models-api.js): `owlv2`
-// (google/owlv2-base-patch16-ensemble as released), `bioclip-2` / `bioclip`
-// (the open_clip releases converted by brolm's scripts/convert-openclip.py:
+// (google/owlv2-base-patch16-ensemble as released), `bioclip-2` / `bioclip` /
+// `bioclip-2.5` (the open_clip releases converted by brolm's
+// scripts/convert-openclip.py:
 // model.safetensors, config.json, vocab.json, merges.txt), and the species
 // lists (`SPECIES_LISTS`), merged: `species/upper-midwest.json` (birds and
 // 15 yard mammals, eBird names), `species/upper-midwest-herps/species.json`
@@ -877,7 +889,8 @@ for (const name of where.fetch) await bro.models.fetch(name);
  * @param {number|false} [opts.petMinBoxScore=0.3]  a dog or cat box at this
  *   detector score or more is ranked over its query's classes (see above);
  *   false for no pet rule
- * @param {string} [opts.model='bioclip-2']  'bioclip-2' | 'bioclip': which
+ * @param {string} [opts.model='bioclip-2']  'bioclip-2' | 'bioclip' |
+ *   'bioclip-2.5' (BioCLIP 2.5 Huge; larger and slower, see above): which
  *   classifier to find, and its name in `config`
  * @param {number} [opts.threshold=0.15]  OWLv2 score threshold
  * @param {number} [opts.topK=5]          species per photo

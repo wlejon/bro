@@ -75,6 +75,7 @@
                        minBoxScore: 0.3, broadMinBoxScore: 0.3, burstMinBoxScore: 0.4,
                        queryMatch: true, consensus: true };
     const MODEL_REPO = { 'bioclip': 'imageomics/bioclip', 'bioclip-2': 'imageomics/bioclip-2',
+                         'bioclip-2.5': 'imageomics/bioclip-2.5-vith14',
                          'owlv2': 'google/owlv2-base-patch16-ensemble' };
     // The default species lists, merged: a file in a bro.models folder each.
     // The birds and yard mammals (eBird names), and the GBIF reptiles and
