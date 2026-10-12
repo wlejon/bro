@@ -45,7 +45,8 @@ if (bro.music.available === false) {
     const kr = bro.music.knobRanges;
     assert(JSON.stringify(kr) === JSON.stringify({
         energy: { min: -2, max: 1 }, texture: { min: -2, max: 2 },
-        percussion: { min: -6, max: 6 }, arrangement: { min: -2, max: 1 } }),
+        percussion: { min: -6, max: 6 }, arrangement: { min: -2, max: 1 },
+        density: { min: -1.5, max: 1 }, timbre: { min: -1.5, max: 1 } }),
         'bro.music.knobRanges is the clamps Yue2Knobs applies: ' + JSON.stringify(kr));
     kr.energy.min = 99;
     assert(bro.music.knobRanges.energy.min === -2, 'each read is a fresh object');

@@ -61,25 +61,44 @@
  * playhead the player reports with setPlayhead(), so a knob can still
  * change what is not handed out. Audio is one program timeline from sample
  * 0, crossfades mixed in, and onAudio's chunks are contiguous: push them to
- * an append-only stream (ctx.createStream). With radio on (the default), an
- * empty queue continues with the last song's request and the next seed. The
- * next song is built whole while the current one plays and crossfades in at
- * the outro (equal power, 2-4 s). Built ahead, it is solved in one NAR chunk
- * once its tokens are done (when that fits before it is needed), so it is
- * exactly the whole-song render. Only the first song, and one a skip is
- * waiting for, pay the windows' small quality cost.
+ * an append-only stream (ctx.createStream). Songs crossfade at the outro
+ * (equal power, 2-4 s).
+ *
+ * Songs ahead: while one plays, the stream builds the songs queued after it,
+ * one at a time, up to aheadSongs of them (1 by default; a radio keeps 3 or
+ * so). Each is built whole: plan, tokens, latents, and its audio decoded, so
+ * a built song waits as finished audio in host memory (about 66 MB for a
+ * 170 s song) and its device memory is released; the GPU holds one build
+ * beside the playing song however many wait. skip() to a built song is the
+ * skip fade alone. Built ahead, a song is solved in one NAR chunk once its
+ * tokens are done (when that fits before it is needed), so it is exactly the
+ * whole-song render; only the first song, and one a skip is waiting for, pay
+ * the windows' small quality cost. A 'want' event asks for songs whenever
+ * fewer than aheadSongs wait after the playing one (value = how many), so
+ * the app can supply fresh requests; with radio on (the default), a want left
+ * unanswered for wantGraceSeconds is filled from the last request with the
+ * next seed. drop(song) takes a queued song out (built or not), setPlan(song,
+ * abc) rebuilds one from an edited score.
  *
  * Steering (setKnobs, each knob clamped below where the music broke in
  * yue2-research):
  *   - energy: a latent offset, heard within the emit lead;
  *   - texture and percussion: NAR steers, re-solved from about 1.5 s ahead;
- *   - arrangement: a semantic steer; the song continues from about 2.5 s
- *     ahead under it.
+ *   - the semantic steers (arrangement and the style axes in knobRanges):
+ *     the song continues from about 2.5 s ahead under them.
  * interrupt(+1) is "make it energetic now", in two stages:
  *   1. a latent offset, audible in about 0.75 s;
  *   2. an arrangement-steered continuation, audible in about 2.5 s, joined
- *      at a window edge; then the offset ramps back.
- * Knobs carry into the next song.
+ *      at a window edge; then the offset ramps back. The arrangement it
+ *      reached stays as the knob.
+ * Knobs carry into every song built after the change: a song being built or
+ * not started takes the change from its start. A song already built when a
+ * knob moves keeps what it was built with while it waits (so a skip to it
+ * stays instant), and catches up when it plays: energy from its first sample
+ * (re-decoded just before it starts), texture / percussion from about 1.5 s
+ * in, the semantic steers from about 2.5 s in, as for the playing song. Each
+ * song's stats row shows the knobs it carries. Interrupts act on the playing
+ * song only.
  *
  * A stream holds the model and the VAE (`busy`) until it ends. stop() ends
  * it, and onDone fires.
@@ -144,6 +163,20 @@
  *   energeticButton.onclick = () => st.interrupt(1);
  *   textureSlider.oninput = () => st.setKnobs({ texture: +textureSlider.value });
  *   skipButton.onclick = () => st.skip();
+ *
+ * @example
+ *   // Three songs kept built ahead, each a fresh request from the app.
+ *   const st = yue.stream({
+ *     vae, aheadSongs: 3, onAudio: push,
+ *     onEvent: (e) => {
+ *       if (e.kind === 'want') for (let i = 0; i < e.value; i++) st.enqueue(nextConcept());
+ *       if (e.kind === 'built') readyBadge.textContent = st.stats.readyAhead + ' ready';
+ *     },
+ *   });                                                    // the first want asks for 4
+ *   skipButton.onclick = () => st.skip();                  // instant once one is built
+ *   restyleButton.onclick = () => {                        // discard what waits, rebuild
+ *     for (const s of st.stats.songs) if (!s.onAir) st.drop(s.index);
+ *   };
  */
 
 // ── Dictionaries ─────────────────────────────────────────────────────────────
@@ -339,6 +372,14 @@
  * @property {number} [texture=0] - NAR steer after layer 21, [-2, 2]; re-solved from knobLatencySeconds ahead
  * @property {number} [percussion=0] - NAR steer after layer 9, [-6, 6]: onsets
  * @property {number} [arrangement=0] - Semantic steer after layer 21, [-2, 1]: a real arrangement change; the song continues under it from about 2.5 s ahead
+ * @property {number} [density=0] - Semantic style steer after layer 24, [-1.5, 1]: full band (+) or sparse (-); steered like arrangement
+ * @property {number} [timbre=0] - Semantic style steer after layer 24, [-1.5, 1]: bright (+) or warm and dark (-); steered like arrangement
+ * The style axes are yue2-research's paired-contrast directions (exp2c,
+ * exp3): both are clean to -1 and lose one clip in four at -2; at +1 the
+ * spectrum flattens about 6x, as arrangement's does at its cap. A tempo-feel
+ * direction did not change the onset rate, so tempo is not a knob: it is
+ * the plan's Q: header (setPlan, or a "N bpm" in the song's style).
+ * knobRanges lists the axes this build carries.
  */
 
 /**
@@ -350,7 +391,9 @@
  * @property {function({song: number, frame0: number, frames: number, latents: Float32Array})} [onLatents] - Each landed NAR window's latents (before the energy offset; a re-solve repeats frames)
  * @property {function({cancelled: boolean, error: string})} [onDone] - Once, after stop()
  * @property {boolean} [paced=true] - false: render as fast as possible, no playhead (ends when the queue is played out, radio off)
- * @property {boolean} [radio=true] - An empty queue continues with the last song's request, next seed
+ * @property {boolean} [radio=true] - A want left unanswered for wantGraceSeconds is filled from the last song's request, next seed
+ * @property {number} [aheadSongs=1] - Songs kept built after the playing one (1..8), one built at a time
+ * @property {number} [wantGraceSeconds=10] - Radio: how long a want waits for enqueue() before the radio fills it
  * @property {number[]} [windows=[250, 500]] - NAR window sizes in frames; the last repeats
  * @property {number} [left=25] - Inpainted left context frames
  * @property {number} [right=25] - Lookahead frames
@@ -367,18 +410,25 @@
  * What a stream reports. `song` is the song's index in queue order from 0;
  * `sample` is a program sample.
  * @typedef {Object} YuE2StreamEvent
- * @property {'plan'|'songStart'|'semanticDone'|'window'|'interrupt'|'knobs'|'breakWarning'|'songEnd'|'firstAudio'|'error'|'idle'} kind
- *   - plan: a song's score is ready, text = the ABC (the next song's can be edited: setNextPlan)
- *   - songStart: the song is placed on the program at `sample` (a skip re-places it)
+ * @property {'plan'|'songStart'|'semanticDone'|'window'|'interrupt'|'knobs'|'breakWarning'|'songEnd'|'firstAudio'|'error'|'idle'|'want'|'built'|'dropped'} kind
+ *   - plan: a song's score is ready, text = the ABC (a queued song's can be edited: setPlan / setNextPlan)
+ *   - songStart: the song is placed on the program at `sample` (a skip re-places it, and the songs after it;
+ *     after a skip, seconds = the skip request to the cut-over)
  *   - semanticDone: frames = the song's length in frames
  *   - window: a NAR window landed (frame0, frames); seconds = its solve time, value = its mean latent norm
  *   - interrupt: stage `value` (1 or 2) audible from `sample`; seconds = request to audible on the playhead
- *   - knobs: knobs applied (text = which), from `sample`
+ *   - knobs: knobs applied to `song` (text = which); sample = the emit frontier then, frame0 = the song frame
+ *     the change starts at (0 = the whole song, rebuilt; -1 = nothing to redo)
  *   - breakWarning: a window's latent norm left the corpus range 6.5..9.5 (value = the norm); a steer may be breaking the audio
  *   - songEnd: sample = one past the song's last program sample
  *   - firstAudio: seconds = the song's request (or skip) to its first audio handed out
  *   - error: text = the message; the song is dropped (one on air ends where its audio does)
  *   - idle: nothing queued and everything played out (radio off)
+ *   - want: fewer than aheadSongs wait after the playing one; value = how many more songs it wants (again
+ *     whenever the shortfall grows), frames = the songs it has
+ *   - built: the song is built and waits as audio (frames = its length, seconds = its request to built);
+ *     a skip to it is instant
+ *   - dropped: drop() removed the song
  * @property {number} song
  * @property {string} tag
  * @property {number} sample
@@ -397,7 +447,10 @@
  * @property {number} firstAudioSeconds
  * @property {number} interrupt1Seconds - The last interrupt's stage 1, request to audible
  * @property {number} interrupt2Seconds
- * @property {Array<{index: number, tag: string, planned: boolean, semanticDone: boolean, semanticFrames: number, latentFrames: number, decodedFrames: number, start: number, end: number, latentNorm: number}>} songs - Queued and playing, in order; start / end are program samples (-1 = not yet known)
+ * @property {Array<{index: number, tag: string, planned: boolean, semanticDone: boolean, semanticFrames: number, latentFrames: number, decodedFrames: number, start: number, end: number, latentNorm: number, built: boolean, ready: boolean, onAir: boolean, hostBytes: number, knobs: YuE2Knobs}>} songs - Queued and playing, in order; start / end are program samples (-1 = not yet known); built = wholly decoded; ready = a skip to it is instant; knobs = what it carries (energy: its offset now)
+ * @property {number} ahead - Songs after the playing one
+ * @property {number} readyAhead - Of those, ready for an instant skip
+ * @property {number} hostBytes - Host memory the songs' audio, latents and tokens take
  */
 
 /**
@@ -421,6 +474,19 @@ class YuE2Stream {
   skip() {}
   /** The next song's score (from its 'plan' event, edited); it is rebuilt from the plan on. @param {string} abc */
   setNextPlan(abc) {}
+  /**
+   * A queued song's score (from its 'plan' event, edited): rebuilt from the
+   * plan on, built or not; ignored once it is on air.
+   * @param {number} song - its index
+   * @param {string} abc
+   */
+  setPlan(song, abc) {}
+  /**
+   * Remove a queued song that is not on air, built or not; the songs after
+   * it move up, a 'dropped' event follows, and a 'want' if the pool is short.
+   * @param {number} song - its index
+   */
+  drop(song) {}
   /** End the stream; onDone follows. */
   stop() {}
   /** @readonly @type {YuE2StreamStats} */ stats;

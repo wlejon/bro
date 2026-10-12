@@ -12,6 +12,9 @@
 //   3. Paced, with a simulated player: interrupt(+1) is audible in both
 //      stages; setKnobs clamps and is applied; stats has its shape; stop()
 //      ends it.
+//   4. aheadSongs 2, every song supplied on 'want': the pool fills with
+//      built songs, skip() to one hands out its audio within 0.5 s, drop()
+//      removes one and want asks again.
 
 const fs = require('node:fs');
 
@@ -52,6 +55,7 @@ if (!bro.music || bro.music.available === false) {
     argumentErrors(yue, vae);
     unpaced(yue, vae, song(250, { tag: 'u' }));
     paced(yue, vae, song(600, { tag: 'p' }));
+    ahead(yue, vae, (n) => song(400, { tag: 'a' + n, seed: 40 + n }));
 }
 
 function argumentErrors(yue, vae) {
@@ -63,6 +67,8 @@ function argumentErrors(yue, vae) {
     assert(err instanceof TypeError && String(err.message).includes('songs[0]'), 'the bad song is named: ' + err.message);
     err = expectThrows(() => yue.stream({ vae, songs: [{ cot: 'sideways' }] }), 'a bad cot');
     assert(err instanceof TypeError && String(err.message).includes('cot'), 'a bad cot is named: ' + err.message);
+    err = expectThrows(() => yue.stream({ vae, aheadSongs: 9 }), 'aheadSongs 9');
+    assert(err instanceof TypeError && String(err.message).includes('aheadSongs'), 'a bad aheadSongs is named: ' + err.message);
     assert(!yue.busy && !vae.busy, 'a refused stream claims nothing');
 }
 
@@ -158,4 +164,65 @@ function paced(yue, vae, s) {
     pumpUntil('onDone after stop()', () => done !== null, 30);
     assert(!done.error, 'stop() ends cleanly: ' + JSON.stringify(done));
     assert(!yue.busy && !vae.busy, 'released after stop()');
+}
+
+// Two songs kept built ahead, every song supplied through 'want': the first
+// want asks for the playing song and two more; the pool fills with built
+// songs; skip() to a built one hands out its audio at once; drop() removes
+// one and want asks again; a song's stats row carries its knobs.
+function ahead(yue, vae, make) {
+    const events = [];
+    let n = 0, emitted = 0, done = null, t0 = -1, played = 0, st = null;
+    st = yue.stream({
+        vae, aheadSongs: 2, radio: false,
+        onAudio: (c) => { emitted = c.sample0 + c.frames; if (t0 < 0) t0 = Date.now(); },
+        onEvent: (e) => {
+            events.push(e);
+            if (e.kind === 'want') for (let i = 0; i < e.value; i++) st.enqueue(make(n++));
+        },
+        onDone: (info) => { done = info; },
+    });
+    const play = () => {
+        if (t0 < 0) return;
+        played = Math.min(emitted, Math.floor((Date.now() - t0) * 48));
+        st.setPlayhead(played);
+    };
+    // Ready (its opening decoded) comes before built (wholly decoded): wait for both.
+    pumpUntil('two songs built ahead', () => {
+        play();
+        const t = st.stats;
+        return t.readyAhead >= 2 && t.songs.filter((g) => !g.onAir && g.built).length >= 2;
+    }, 180);
+    const wants = events.filter((e) => e.kind === 'want');
+    assert(wants.length >= 1 && wants[0].value === 3, 'the first want asks for 3: ' + JSON.stringify(wants[0]));
+    let s = st.stats;
+    const waiting = s.songs.filter((g) => !g.onAir);
+    assert(s.ahead === 2 && waiting.length === 2 && waiting.every((g) => g.built && g.ready),
+           'two built songs wait: ' + JSON.stringify(s.songs.map((g) => [g.index, g.built, g.ready, g.onAir])));
+    assert(s.hostBytes > 0 && waiting.every((g) => g.hostBytes > 0), 'host memory reported: ' + s.hostBytes);
+    assert(events.filter((e) => e.kind === 'built').length >= 2, 'a built event per song built');
+    assert(typeof waiting[0].knobs.texture === 'number' && waiting[0].knobs.arrangement === 0, 'a row carries its knobs');
+
+    // Skip to the first waiting song: its audio is handed out at once.
+    const to = waiting[0].index, t = Date.now();
+    st.skip();
+    pumpUntil('the skip', () => { play(); return events.some((e) => e.kind === 'firstAudio' && e.song === to); }, 30);
+    const fa = events.find((e) => e.kind === 'firstAudio' && e.song === to);
+    const start = events.filter((e) => e.kind === 'songStart' && e.song === to).pop();
+    console.log('ahead: skip to built song ' + to + ': cut over ' + start.seconds.toFixed(3) + ' s, first audio ' +
+                fa.seconds.toFixed(3) + ' s after the request (JS saw it ' + ((Date.now() - t) / 1000).toFixed(2) + ' s later); host ' +
+                (s.hostBytes / 1e6).toFixed(1) + ' MB');
+    assert(fa.seconds < 0.5, 'skip to a built song: first audio ' + fa.seconds + ' s after the request');
+
+    // Drop the last song queued: 'dropped', then a want refills the pool.
+    s = st.stats;
+    const last = s.songs[s.songs.length - 1].index;
+    const before = events.filter((e) => e.kind === 'want').length;
+    st.drop(last);
+    pumpUntil('the drop', () => { play(); return events.some((e) => e.kind === 'dropped' && e.song === last); }, 30);
+    pumpUntil('a want after the drop', () => { play(); return events.filter((e) => e.kind === 'want').length > before; }, 30);
+    assert(!st.stats.songs.some((g) => g.index === last), 'the dropped song left the queue');
+    st.stop();
+    pumpUntil('onDone after stop()', () => done !== null, 30);
+    assert(!done.error, 'stop() ends cleanly: ' + JSON.stringify(done));
 }
