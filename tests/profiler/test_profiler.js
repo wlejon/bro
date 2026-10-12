@@ -37,13 +37,15 @@ function burn(ms) {
 }
 
 // ---- main thread -----------------------------------------------------------
-if (process.platform !== 'win32') {
+const supported = (process.platform === 'win32' && process.arch === 'x64') ||
+                  (process.platform === 'darwin' && process.arch === 'arm64');
+if (!supported) {
     let unsupported = false;
     try { bro.profiler.start({ hz: 2000 }); } catch (e) {
-        unsupported = /supported on Windows x64 only/.test(String(e.message));
+        unsupported = /supported on Windows x64 and arm64 macOS only/.test(String(e.message));
     }
-    assert(unsupported, 'start() on non-Windows reports unsupported');
-    console.log('bro.profiler: supported on Windows x64 only; non-Windows behaviour verified');
+    assert(unsupported, 'start() where there is no sampler reports unsupported');
+    console.log('bro.profiler: supported on Windows x64 and arm64 macOS only; behaviour elsewhere verified');
 } else {
 bro.profiler.start({ hz: 2000 });
 assert(bro.profiler.running === true, 'running after start');
