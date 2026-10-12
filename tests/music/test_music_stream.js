@@ -122,6 +122,8 @@ function paced(yue, vae, s) {
     });
     const r = st.knobRanges;
     assert(r.energy.min === -2 && r.energy.max === 1 && r.percussion.max === 6, 'knobRanges: ' + JSON.stringify(r));
+    assert(JSON.stringify(r) === JSON.stringify(bro.music.knobRanges),
+           'a stream\'s knobRanges is bro.music.knobRanges: ' + JSON.stringify(bro.music.knobRanges));
     const has = (kind, value) => events.some((e) => e.kind === kind && (value === undefined || e.value === value));
     pumpUntil('both interrupt stages', () => {
         if (t0 >= 0) {

@@ -331,7 +331,8 @@
  */
 
 /**
- * Steering knobs. Each is clamped to its range (stream.knobRanges), which
+ * Steering knobs. Each is clamped to its range (stream.knobRanges, and
+ * bro.music.knobRanges before a stream exists), which
  * stops short of where yue2-research found the music breaking.
  * @typedef {Object} YuE2Knobs
  * @property {number} [energy=0] - Latent offset along the energy direction, [-2, 1]: louder, brighter; heard within the emit lead
@@ -564,3 +565,13 @@ bro.music.loadYuE2 = function(modelDir, opts) {};
  * @returns {YuE2Vae|{cancel: function(), wait: function()}} the VAE, or an AsyncHandle with opts.onReady
  */
 bro.music.loadVae = function(vaeDir, opts) {};
+
+/**
+ * Each stream knob's clamp, with no model or stream: the object a stream's
+ * knobRanges gives (the same constants Yue2Knobs clamps with), a fresh one
+ * each read. For a UI's sliders before Start.
+ * @readonly @type {Object<string, {min: number, max: number}>}
+ * @example
+ *   bro.music.knobRanges.percussion;   // { min: -6, max: 6 }
+ */
+bro.music.knobRanges;

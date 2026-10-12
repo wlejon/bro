@@ -39,6 +39,17 @@ if (bro.music.available === false) {
     err = expectThrows(() => bro.music.loadYuE2('tests/music', { arWeights: 'int4' }), 'loadYuE2 arWeights int4');
     assert(String(err.message).includes('arWeights'), 'a bad arWeights names the option: ' + err.message);
 
+    // A stream's knob clamps with no model loaded (a stream's knobRanges is
+    // the same object: tests/music/test_music_stream.js), a fresh object each
+    // read.
+    const kr = bro.music.knobRanges;
+    assert(JSON.stringify(kr) === JSON.stringify({
+        energy: { min: -2, max: 1 }, texture: { min: -2, max: 2 },
+        percussion: { min: -6, max: 6 }, arrangement: { min: -2, max: 1 } }),
+        'bro.music.knobRanges is the clamps Yue2Knobs applies: ' + JSON.stringify(kr));
+    kr.energy.min = 99;
+    assert(bro.music.knobRanges.energy.min === -2, 'each read is a fresh object');
+
     const fs = require('node:fs');
     const WEIGHTS = process.env.BRO_WEIGHTS || '../brosoundml/weights';
     const VAE_DIR = WEIGHTS + '/yue2-vae';
