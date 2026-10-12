@@ -44,6 +44,46 @@
  * Audio is planar: samples holds channel 0's `frames` samples, then
  * channel 1's.
  *
+ * Streaming playback and the radio: yue.stream(opts) plays songs as they are
+ * built and steers them live (YuE2Stream). One worker interleaves each
+ * song's stages:
+ *   - a semantic session sampled a few tokens at a time, with the same
+ *     sampler as generate(), so a seed gives the same tokens;
+ *   - NAR windows of 250 then 500 frames, each solved over 25 inpainted
+ *     frames on the left and 25 of lookahead;
+ *   - a just-in-time VAE decode about 6 s ahead of the playhead.
+ * Quality matches the whole-song render (latent cosine about 0.88, mel L1
+ * within the render's seed-to-seed spread, no flux step at the seams). The
+ * first audio comes about 2 s after the plan; with cot 'full' that is 4-7 s
+ * from the request, depending on the plan's length.
+ *
+ * The stream hands out audio only emitLeadSeconds (0.75) ahead of the
+ * playhead the player reports with setPlayhead(), so a knob can still
+ * change what is not handed out. Audio is one program timeline from sample
+ * 0, crossfades mixed in, and onAudio's chunks are contiguous: push them to
+ * an append-only stream (ctx.createStream). With radio on (the default), an
+ * empty queue continues with the last song's request and the next seed. The
+ * next song is built whole while the current one plays and crossfades in at
+ * the outro (equal power, 2-4 s). Built ahead, it is solved in one NAR chunk
+ * once its tokens are done (when that fits before it is needed), so it is
+ * exactly the whole-song render. Only the first song, and one a skip is
+ * waiting for, pay the windows' small quality cost.
+ *
+ * Steering (setKnobs, each knob clamped below where the music broke in
+ * yue2-research):
+ *   - energy: a latent offset, heard within the emit lead;
+ *   - texture and percussion: NAR steers, re-solved from about 1.5 s ahead;
+ *   - arrangement: a semantic steer; the song continues from about 2.5 s
+ *     ahead under it.
+ * interrupt(+1) is "make it energetic now", in two stages:
+ *   1. a latent offset, audible in about 0.75 s;
+ *   2. an arrangement-steered continuation, audible in about 2.5 s, joined
+ *      at a window edge; then the offset ramps back.
+ * Knobs carry into the next song.
+ *
+ * A stream holds the model and the VAE (`busy`) until it ends. stop() ends
+ * it, and onDone fires.
+ *
  * @example
  *   // A whole song, played as it is decoded.
  *   const yue = bro.music.loadYuE2(bro.models.find('YuE2-3B'));
@@ -82,6 +122,28 @@
  * @example
  *   // Re-decode stored latents with streaming playback.
  *   vae.decode(latents, { coreFrames: 25, onChunk: play, onDone: () => {} });
+ *
+ * @example
+ *   // A radio, steered live.
+ *   const ctx = new AudioContext({ sampleRate: 48000 });   // the stream's rate
+ *   const pb = ctx.createStream(2, 4 * 48000);             // append-only (audio-engine-api.js)
+ *   const st = yue.stream({
+ *     vae,
+ *     songs: [{ style: 'synthpop, female vocal, 118 bpm', lyrics, seed: 1, tag: 'first' }],
+ *     onAudio: (c) => {                                    // planar -> interleaved
+ *       const il = new Float32Array(c.frames * 2);
+ *       for (let i = 0; i < c.frames; i++) { il[2 * i] = c.samples[i]; il[2 * i + 1] = c.samples[c.frames + i]; }
+ *       ctx.pushStreamSamples(pb, il);                     // 0.75 s ahead: fits the ring
+ *     },
+ *     onEvent: (e) => {
+ *       if (e.kind === 'plan') planView.textContent = e.text;          // edit, then st.setNextPlan(abc)
+ *       if (e.kind === 'breakWarning') meter.classList.add('warn');
+ *     },
+ *   });
+ *   setInterval(() => st.setPlayhead(ctx.getStreamStats(pb).playedFrames), 50);
+ *   energeticButton.onclick = () => st.interrupt(1);
+ *   textureSlider.oninput = () => st.setKnobs({ texture: +textureSlider.value });
+ *   skipButton.onclick = () => st.skip();
  */
 
 // ── Dictionaries ─────────────────────────────────────────────────────────────
@@ -257,6 +319,115 @@
  * @property {Function} [onError]
  */
 
+// ── Streaming ────────────────────────────────────────────────────────────────
+
+/**
+ * One song of a stream's queue: YuE2Options' request fields (style, lyrics,
+ * cot, abc, seed, cfgScale, abcSampling, semanticSampling, odeSteps;
+ * steer is ignored, the knobs steer), plus:
+ * @typedef {Object} YuE2Song
+ * @property {Int32Array} [semantic] - Codec ids (0..32767) to render instead of sampling (offline renders, tests)
+ * @property {string} [tag] - Your label, echoed in events and stats
+ */
+
+/**
+ * Steering knobs. Each is clamped to its range (stream.knobRanges), which
+ * stops short of where yue2-research found the music breaking.
+ * @typedef {Object} YuE2Knobs
+ * @property {number} [energy=0] - Latent offset along the energy direction, [-2, 1]: louder, brighter; heard within the emit lead
+ * @property {number} [texture=0] - NAR steer after layer 21, [-2, 2]; re-solved from knobLatencySeconds ahead
+ * @property {number} [percussion=0] - NAR steer after layer 9, [-6, 6]: onsets
+ * @property {number} [arrangement=0] - Semantic steer after layer 21, [-2, 1]: a real arrangement change; the song continues under it from about 2.5 s ahead
+ */
+
+/**
+ * @typedef {Object} YuE2StreamOptions
+ * @property {YuE2Vae} vae - Required
+ * @property {YuE2Song[]} [songs] - The initial queue (enqueue() adds more)
+ * @property {function(YuE2AudioChunk)} [onAudio] - The program audio, contiguous from sample 0 (chunk.sample0), planar stereo at 48 kHz
+ * @property {function(YuE2StreamEvent)} [onEvent]
+ * @property {function({song: number, frame0: number, frames: number, latents: Float32Array})} [onLatents] - Each landed NAR window's latents (before the energy offset; a re-solve repeats frames)
+ * @property {function({cancelled: boolean, error: string})} [onDone] - Once, after stop()
+ * @property {boolean} [paced=true] - false: render as fast as possible, no playhead (ends when the queue is played out, radio off)
+ * @property {boolean} [radio=true] - An empty queue continues with the last song's request, next seed
+ * @property {number[]} [windows=[250, 500]] - NAR window sizes in frames; the last repeats
+ * @property {number} [left=25] - Inpainted left context frames
+ * @property {number} [right=25] - Lookahead frames
+ * @property {number} [emitLeadSeconds=0.75] - Audio handed out ahead of the playhead
+ * @property {number} [decodeLeadSeconds=6] - Audio decoded ahead of the playhead
+ * @property {number} [crossfadeSeconds=3] - Song to song, equal power, clamped to 2..4
+ * @property {number} [skipFadeSeconds=0.5]
+ * @property {number} [interruptLatencySeconds=1.75] - Interrupt stage 2's starting estimate of its own latency (then measured)
+ * @property {number} [knobLatencySeconds=1.5] - Texture / percussion re-solve from this far ahead
+ * @property {YuE2Knobs} [knobs] - Initial knobs
+ */
+
+/**
+ * What a stream reports. `song` is the song's index in queue order from 0;
+ * `sample` is a program sample.
+ * @typedef {Object} YuE2StreamEvent
+ * @property {'plan'|'songStart'|'semanticDone'|'window'|'interrupt'|'knobs'|'breakWarning'|'songEnd'|'firstAudio'|'error'|'idle'} kind
+ *   - plan: a song's score is ready, text = the ABC (the next song's can be edited: setNextPlan)
+ *   - songStart: the song is placed on the program at `sample` (a skip re-places it)
+ *   - semanticDone: frames = the song's length in frames
+ *   - window: a NAR window landed (frame0, frames); seconds = its solve time, value = its mean latent norm
+ *   - interrupt: stage `value` (1 or 2) audible from `sample`; seconds = request to audible on the playhead
+ *   - knobs: knobs applied (text = which), from `sample`
+ *   - breakWarning: a window's latent norm left the corpus range 6.5..9.5 (value = the norm); a steer may be breaking the audio
+ *   - songEnd: sample = one past the song's last program sample
+ *   - firstAudio: seconds = the song's request (or skip) to its first audio handed out
+ *   - error: text = the message; the song is dropped (one on air ends where its audio does)
+ *   - idle: nothing queued and everything played out (radio off)
+ * @property {number} song
+ * @property {string} tag
+ * @property {number} sample
+ * @property {number} frame0
+ * @property {number} frames
+ * @property {number} seconds
+ * @property {number} value
+ * @property {string} text
+ */
+
+/**
+ * @typedef {Object} YuE2StreamStats
+ * @property {number} playhead - Program samples played (as last reported)
+ * @property {number} emitted - Program samples handed out
+ * @property {YuE2Knobs} knobs - As applied
+ * @property {number} firstAudioSeconds
+ * @property {number} interrupt1Seconds - The last interrupt's stage 1, request to audible
+ * @property {number} interrupt2Seconds
+ * @property {Array<{index: number, tag: string, planned: boolean, semanticDone: boolean, semanticFrames: number, latentFrames: number, decodedFrames: number, start: number, end: number, latentNorm: number}>} songs - Queued and playing, in order; start / end are program samples (-1 = not yet known)
+ */
+
+/**
+ * A running stream (yue.stream). Every control returns at once; the worker
+ * applies it between steps.
+ */
+class YuE2Stream {
+  /** @param {YuE2Song} song */
+  enqueue(song) {}
+  /** Program samples the player has played; paces the stream. @param {number} samples */
+  setPlayhead(samples) {}
+  /**
+   * Merge knobs in (fields left out keep their value).
+   * @param {YuE2Knobs} knobs
+   * @returns {YuE2Knobs} the knobs now, clamped
+   */
+  setKnobs(knobs) {}
+  /** Two-stage interrupt: +1 energetic, -1 calm (|amount| <= 1). @param {number} [amount=1] */
+  interrupt(amount) {}
+  /** To the next song (built, or as soon as it is), over skipFadeSeconds. */
+  skip() {}
+  /** The next song's score (from its 'plan' event, edited); it is rebuilt from the plan on. @param {string} abc */
+  setNextPlan(abc) {}
+  /** End the stream; onDone follows. */
+  stop() {}
+  /** @readonly @type {YuE2StreamStats} */ stats;
+  /** @readonly @type {YuE2Knobs} */ knobs;
+  /** @readonly @type {boolean} */ running;
+  /** Each knob's clamp. @readonly @type {Object<string, {min: number, max: number}>} */ knobRanges;
+}
+
 // ── Classes ──────────────────────────────────────────────────────────────────
 
 /**
@@ -302,6 +473,14 @@ class YuE2 {
    * @returns {{cancel: function(), wait: function()}} AsyncHandle
    */
   synthesize(plan, semantic, opts) {}
+
+  /**
+   * Streaming playback, the radio and live steering (see the top of this
+   * file). Holds the model and opts.vae until it stops.
+   * @param {YuE2StreamOptions} opts
+   * @returns {YuE2Stream}
+   */
+  stream(opts) {}
 
   /** @param {string} text @returns {Int32Array} */
   tokenize(text) {}
