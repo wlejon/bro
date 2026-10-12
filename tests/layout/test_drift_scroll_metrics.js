@@ -93,10 +93,11 @@ sc.scrollBy({ top: -5 });
 flush();
 assert(sc.scrollTop === 20, 'scrollBy({top}) is relative too: ' + sc.scrollTop);
 
-// --- sticky bottom on a textContent append --------------------------------
-// The classic transcript pattern: append and expect the view to follow. The
-// append is not laid out yet when it happens, so this only works if the
-// element remembers that it wants the end and the post-layout pass honours it.
+// --- a textContent write keeps the scroll offset ----------------------------
+// As in browsers, writing text into a scroll container does not move it: a
+// lyrics or details box filled at scrollTop 0 opens at its top. A log that
+// should follow its content says so (scrollTop = scrollHeight), and that
+// write, made before the new text is laid out, still lands at the end.
 root.innerHTML =
     '<div id="log" style="width:200px;height:100px;overflow-y:auto;' +
     'line-height:20px;">start</div>';
@@ -108,8 +109,13 @@ log.textContent = lines;
 flush();
 const logMax = log.scrollHeight - log.clientHeight;
 assert(logMax > 0, 'the log overflows after the append: ' + log.scrollHeight);
-assert(Math.abs(log.scrollTop - logMax) <= 1,
-       'a textContent append into an overflow container sticks to the bottom: ' +
-       log.scrollTop + ' vs ' + logMax);
+assert(log.scrollTop === 0,
+       'a textContent write into an overflow container stays at the top: ' + log.scrollTop);
+log.textContent = lines + 'line 40\n';
+log.scrollTop = log.scrollHeight;
+flush();
+assert(Math.abs(log.scrollTop - (log.scrollHeight - log.clientHeight)) <= 1,
+       'scrollTop = scrollHeight after an append follows to the end: ' +
+       log.scrollTop + ' vs ' + (log.scrollHeight - log.clientHeight));
 
 root.innerHTML = '';

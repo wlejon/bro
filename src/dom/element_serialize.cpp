@@ -49,7 +49,6 @@ void Element::setTextContent(const std::string& text) {
         if (!text.empty()) {
             existing->setData(text);
             markDirty();
-            stickToBottomOnAppend(text);
             return;
         }
     }
@@ -68,24 +67,6 @@ void Element::setTextContent(const std::string& text) {
 
     markDirty();
     markStructureDirty();
-    stickToBottomOnAppend(text);
-}
-
-// A scroll container follows its content when text is written into it — the
-// log / console / transcript pattern, which is the only reason
-// `setScrollToBottom` exists. Clearing the element (textContent = "") is the
-// OPPOSITE intent and must not stick, or a rebuild that empties and then
-// re-appends lands pinned to the bottom of the old content.
-void Element::stickToBottomOnAppend(const std::string& text) {
-    if (text.empty()) return;
-    auto it = computedStyle_.find("overflow-y");
-    std::string ov = (it != computedStyle_.end()) ? it->second : std::string();
-    if (ov.empty()) {
-        auto o = computedStyle_.find("overflow");
-        ov = (o != computedStyle_.end()) ? o->second : "visible";
-    }
-    if (ov == "visible" || ov == "initial") return;
-    setScrollToBottom(true);
 }
 
 std::string Element::innerHTML() const {
