@@ -45,6 +45,9 @@ function check(what) {
 }
 const layers = () => perf.stats().paint.scrollLayers;
 
+// Each partial raster is checked against the same recording rastered whole,
+// pixel for pixel.
+setScrollLayerVerify(true);
 setPaintCache(true);
 flush();
 frameImage();
@@ -65,3 +68,4 @@ console.log(`PARTIAL_CPU partial=${p1.partialRasters - p0.partialRasters} whole=
 assert(p1.partialRasters - p0.partialRasters >= 5,
        `a hover that changes a row rasters the layer in place (${p1.partialRasters - p0.partialRasters} partial, ` +
        `${p1.rasters - p0.rasters} whole)`);
+assert(p1.partialMismatch === 0, `every partial raster is the whole one, pixel for pixel (${p1.partialMismatch} apart)`);

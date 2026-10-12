@@ -163,6 +163,7 @@ struct State {
     SkMatrix m;               // identity
     bool perspective = false;
     bool inFilter = false;
+    bool inLayer = false;     // under a saveLayer of any kind
     SkRect filterBounds = SkRect::MakeEmpty();
 };
 
@@ -182,11 +183,15 @@ struct Walker {
         std::visit(
             [&](const auto& c) {
                 using T = std::decay_t<decltype(c)>;
-                if constexpr (std::is_same_v<T, Cmd_Save> || std::is_same_v<T, Cmd_SaveLayerAlpha> ||
-                              std::is_same_v<T, Cmd_SaveLayerWithBlend>) {
+                if constexpr (std::is_same_v<T, Cmd_Save>) {
                     save();
+                } else if constexpr (std::is_same_v<T, Cmd_SaveLayerAlpha> ||
+                                     std::is_same_v<T, Cmd_SaveLayerWithBlend>) {
+                    save();
+                    cur.inLayer = true;
                 } else if constexpr (std::is_same_v<T, Cmd_SaveLayerWithFilter>) {
                     save();
+                    cur.inLayer = true;
                     if (!cur.inFilter) {
                         cur.inFilter = true;
                         // A blur or a drop shadow's offset can reach past the
@@ -222,6 +227,20 @@ struct Walker {
             cmd);
     }
 };
+
+// A gradient (CommandBuffer::hasDither).
+bool dithers(const DrawCommand& c) {
+    if (std::holds_alternative<Cmd_FillLinearGradient>(c) || std::holds_alternative<Cmd_FillRadialGradient>(c) ||
+        std::holds_alternative<Cmd_FillConicGradient>(c))
+        return true;
+    if (const auto* p = std::get_if<Cmd_DrawSvgPath>(&c)) {
+        auto gradient = [](const GradientPaint& g) {
+            return g.kind == GradientPaint::Kind::Linear || g.kind == GradientPaint::Kind::Radial;
+        };
+        return gradient(p->fill) || gradient(p->stroke);
+    }
+    return false;
+}
 
 bool isStateCommand(const DrawCommand& c) {
     return std::holds_alternative<Cmd_Save>(c) || std::holds_alternative<Cmd_Restore>(c) ||
@@ -504,6 +523,28 @@ void diffLevel(const CommandBuffer& ob, Walker ow, const CommandBuffer& nb, Walk
 }  // namespace
 
 bool commandBufferBounds(const CommandBuffer& buf, SkRect& out) { return spanBounds(buf, out); }
+
+bool coveringBounds(const CommandBuffer& buf, const SkRect& area, SkRect& out) {
+    Walker w;
+    out = area;
+    for (const auto& cmd : buf.commands()) {
+        if (isStateCommand(cmd)) { w.apply(buf, cmd); continue; }
+        if (isBreak(cmd)) continue;
+        SkRect local, dev;
+        if (!commandBounds(buf, cmd, local) || !mapped(w, local, dev)) return false;
+        if (!SkRect::Intersects(dev, area)) continue;
+        // A gradient is dithered by where it lands in its device, and a
+        // layer's device starts where the clip it opens under does: drawn
+        // under another clip, a gradient in a layer dithers otherwise.
+        const CommandBuffer* span =
+            std::holds_alternative<Cmd_ReplaySpan>(cmd) ? buf.spanAt(std::get<Cmd_ReplaySpan>(cmd).index) : nullptr;
+        if (dithers(cmd) || (span && span->hasDither())) {
+            if (w.cur.inLayer || (span && span->hasLayer())) return false;
+        }
+        out.join(dev);
+    }
+    return true;
+}
 
 Damage diffDamage(const CommandBuffer& older, const CommandBuffer& newer) {
     Damage d;

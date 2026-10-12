@@ -134,6 +134,12 @@ public:
     // pixels with only what moved in or changed drawn (rasterPart), since startup.
     uint64_t rasters() const { return rasters_.load(std::memory_order_relaxed); }
     uint64_t partialRasters() const { return partialRasters_.load(std::memory_order_relaxed); }
+    // A check for tests (headless setScrollLayerVerify): after each partial
+    // raster, the same recording rastered whole beside it and compared pixel
+    // for pixel; the pixels that differ, since startup. Partial must be whole.
+    static void setVerifyPartial(bool on);
+    static bool verifyPartial();
+    uint64_t partialMismatch() const { return partialMismatch_.load(std::memory_order_relaxed); }
 
 private:
     // One recording of a layer and the surfaces it is rastered into.
@@ -213,6 +219,7 @@ private:
     std::unordered_map<uint32_t, std::unique_ptr<Layer>> layers_;
     std::atomic<uint64_t> rasters_{0};
     std::atomic<uint64_t> partialRasters_{0};
+    std::atomic<uint64_t> partialMismatch_{0};
 };
 
 }  // namespace bro::engine

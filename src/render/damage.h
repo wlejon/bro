@@ -87,6 +87,14 @@ Damage diffDamage(const CommandBuffer& older, const CommandBuffer& newer);
 // unbounded, or not known.
 bool commandBufferBounds(const CommandBuffer& buf, SkRect& out);
 
+// `area` grown by every draw of `buf`'s own (a span whole) that reaches into
+// it, in `buf`'s space: drawn clipped to that, nothing that touches `area`
+// crosses the clip (Skia's CPU rasterizer antialiases a path the clip cuts
+// otherwise than a whole one, inside the clip too). False: one is unbounded,
+// or one reaching it is a gradient in a layer (dithered by where it lands in
+// the layer, whose device starts where the clip does).
+bool coveringBounds(const CommandBuffer& buf, const SkRect& area, SkRect& out);
+
 // The damage each recording of a pass brought (from the one before it), by
 // generation, for the last few: a surface that holds generation `held` needs
 // the union over (held, now] redrawn. Surfaces are double-buffered, so one

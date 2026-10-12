@@ -4,6 +4,9 @@
 #include "render/command_replayer.h"
 #include "render/damage.h"
 
+#include <include/core/SkPixmap.h>
+#include <include/core/SkSurface.h>
+
 #include <algorithm>
 #include <cmath>
 
@@ -25,7 +28,12 @@ void keepPrevious(P& p) {
 }
 bool wholePixels(float d) { return std::abs(d - std::round(d)) < 1.0f / 512.0f; }
 
+std::atomic<bool> g_verifyPartial{false};
+
 }  // namespace
+
+void ScrollLayerSet::setVerifyPartial(bool on) { g_verifyPartial.store(on, std::memory_order_relaxed); }
+bool ScrollLayerSet::verifyPartial() { return g_verifyPartial.load(std::memory_order_relaxed); }
 
 layout::ScrollLayerRecord ScrollLayerSet::beginScrollLayer(dom::Element* scroller,
                                                            const layout::ScrollLayerPlace& place, bool mayReuse) {
@@ -234,10 +242,31 @@ void ScrollLayerSet::replay(render::SkiaRenderer* renderer) {
             // whole: moving its pixels and drawing what the move brings in
             // cost more than drawing it (a scroll of Music's list: 0.60 ms a
             // pass for 0.51 whole). On the GPU every raster is whole (rasterPart).
+            // Exactly the phase it holds: one a 512th of a pixel off (the same
+            // phase to place it by, samePhase) antialiases otherwise, and
+            // the pixels kept would not be the ones it draws.
             const bool partial = !p.surface.isGpu() && rerecorded && p.prevValid && p.holds.valid &&
                                  p.holds.winX == l.winX && p.holds.winY == l.winY && p.holds.scale == s &&
-                                 samePhase(p.holds.phaseX, px) && samePhase(p.holds.phaseY, py) &&
+                                 p.holds.phaseX == px && p.holds.phaseY == py &&
                                  rasterPart(renderer, l, p, px, py, s, w, h);
+            if (partial && verifyPartial()) {
+                // The same recording whole, beside it: every pixel the same.
+                sk_sp<SkSurface> whole = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(w, h));
+                auto prev = renderer->switchSurface(whole);
+                renderer->translate(px / s - l.winX, py / s - l.winY);
+                render::CommandReplayer replayer(renderer);
+                replayer.setLayerBreakHandler([](const render::LayerSource&, const render::LayerQuad&) {});
+                replayer.replay(p.cmd);
+                renderer->switchSurface(prev);
+                SkPixmap a, b;
+                if (p.surface.surface->peekPixels(&a) && whole->peekPixels(&b)) {
+                    uint64_t n = 0;
+                    for (int y = 0; y < h; ++y)
+                        for (int x = 0; x < w; ++x)
+                            if (*a.addr32(x, y) != *b.addr32(x, y)) ++n;
+                    partialMismatch_.fetch_add(n, std::memory_order_relaxed);
+                }
+            }
             if (!partial) {
                 auto prev = renderer->switchSurface(p.surface.surface);
                 renderer->translate(px / s - l.winX, py / s - l.winY);
@@ -372,27 +401,43 @@ bool ScrollLayerSet::rasterPart(render::SkiaRenderer* renderer, const Layer& l, 
         if (!all.isEmpty()) rects.push_back(all);
     }
 
-    // The rect drawn again in a scratch round it, then put back pixel for
-    // pixel: drawn under a clip in place, the pixels along its edge would
-    // antialias otherwise than a whole raster's (Engine::replayAppLayers).
+    // The rect drawn again in a scratch, then put back pixel for pixel: drawn
+    // in place under a clip at the rect, what crosses its edge would
+    // antialias otherwise than in a whole raster (Engine::replayAppLayers).
+    // Every pixel put back is the whole raster's (setVerifyPartial checks).
     if (!rects.empty()) {
         const SkIRect& r = rects.front();
-        constexpr int kMarginPx = 32;
-        SkIRect around = r.makeOutset(kMarginPx, kMarginPx);
+        // Drawn clipped to the rect and everything that reaches into it,
+        // whole (render::coveringBounds): nothing that touches the rect
+        // crosses the clip, so it rasters as the whole raster has it.
+        const SkRect area = SkRect::MakeLTRB((r.fLeft - px) / s + l.winX, (r.fTop - py) / s + l.winY,
+                                             (r.fRight - px) / s + l.winX, (r.fBottom - py) / s + l.winY);
+        SkRect cover;
+        if (!render::coveringBounds(p.cmd, area, cover)) return false;
+        SkIRect around = SkRect::MakeLTRB((cover.fLeft - l.winX) * s + px, (cover.fTop - l.winY) * s + py,
+                                          (cover.fRight - l.winX) * s + px, (cover.fBottom - l.winY) * s + py)
+                             .roundOut()
+                             .makeOutset(2, 2);
+        around.join(r);
         if (!around.intersect(bounds)) return false;
+        if (static_cast<int64_t>(around.width()) * around.height() * 10 > static_cast<int64_t>(w) * h * 6)
+            return false;
+        // The layer's own size, drawn under a clip to `around`: its device
+        // places are exactly the layer's. One standing for a corner of it
+        // (an origin) composes that origin into the content's translate,
+        // and an edge on a pixel boundary rounded to the other side of it:
+        // a pixel on that the whole raster leaves off.
         render::LayerSurface& scratch = p.scratch;
-        if (!scratch || scratch.surface->width() < around.width() || scratch.surface->height() < around.height())
-            scratch = renderer->createLayerSurface(std::max(around.width(), (around.width() + 255) & ~255),
-                                                   std::max(around.height(), (around.height() + 255) & ~255));
+        renderer->fitLayerSurface(scratch, w, h);
         if (!scratch) return false;
-        auto prev = renderer->switchSurface(scratch.surface, nullptr, {around.fLeft, around.fTop});
+        auto prev = renderer->switchSurface(scratch.surface, &around);
         renderer->translate(px / s - l.winX, py / s - l.winY);
         render::CommandReplayer replayer(renderer);
         replayer.setLayerBreakHandler([](const render::LayerSource&, const render::LayerQuad&) {});
         replayer.setCullSpans(true);  // the rows it does not reach are not walked
         replayer.replay(p.cmd);
         renderer->switchSurface(prev);
-        renderer->putSurfaceRect(scratch.surface, {around.fLeft, around.fTop}, p.surface.surface, r);
+        renderer->putSurfaceRect(scratch.surface, {0, 0}, p.surface.surface, r);
     }
     partialRasters_.fetch_add(1, std::memory_order_relaxed);
     return true;

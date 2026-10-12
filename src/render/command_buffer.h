@@ -32,6 +32,8 @@ public:
         spans_.clear();
         ownerId_ = 0;
         hasBackdrop_ = false;
+        hasDither_ = false;
+        hasLayer_ = false;
         boundsState_ = 0;
     }
 
@@ -45,6 +47,13 @@ public:
     // bound a change (render/damage.h).
     void noteBackdrop() { hasBackdrop_ = true; }
     bool hasBackdrop() const { return hasBackdrop_; }
+    // A gradient was recorded here or in a span it holds (dithered: its
+    // pixels depend on where in its device they land), and a layer (whose
+    // device starts where the clip it opens under does).
+    void noteDither() { hasDither_ = true; }
+    bool hasDither() const { return hasDither_; }
+    void noteLayer() { hasLayer_ = true; }
+    bool hasLayer() const { return hasLayer_; }
 
     // render/damage.cpp's memo of this buffer's bounds in its own space
     // (main thread only, after the buffer is recorded): 0 not computed,
@@ -155,6 +164,8 @@ private:
     std::vector<std::shared_ptr<const CommandBuffer>> spans_;
     uint64_t ownerId_ = 0;
     bool hasBackdrop_ = false;
+    bool hasDither_ = false;
+    bool hasLayer_ = false;
 };
 
 } // namespace bro::render

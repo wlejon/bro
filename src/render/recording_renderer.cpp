@@ -273,6 +273,10 @@ void RecordingRenderer::drawSvgPath(std::string_view d, PathFillRule rule,
     auto [doff, dcnt] = buffer_->pushSpan(dash);
     cmd.dashArrOffset = doff; cmd.dashArrLen = dcnt;
     cmd.fill = fill; cmd.stroke = stroke; cmd.strokeStyle = strokeStyle; cmd.rule = rule;
+    auto gradient = [](const GradientPaint& p) {
+        return p.kind == GradientPaint::Kind::Linear || p.kind == GradientPaint::Kind::Radial;
+    };
+    if (gradient(fill) || gradient(stroke)) buffer_->noteDither();
     buffer_->append(cmd);
 }
 
@@ -313,6 +317,7 @@ void RecordingRenderer::restore() {
 }
 void RecordingRenderer::saveLayerAlpha(uint8_t alpha) {
     if (!buffer_) { measureRenderer_->saveLayerAlpha(alpha); return; }
+    buffer_->noteLayer();
     buffer_->append(Cmd_SaveLayerAlpha{alpha});
 }
 void RecordingRenderer::translate(float dx, float dy) {
@@ -345,6 +350,7 @@ void RecordingRenderer::saveLayerWithFilter(std::span<const CssFilterParams> fil
     cmd.filtersOffset = off;
     cmd.filtersLen = count;
     cmd.x = x; cmd.y = y; cmd.w = w; cmd.h = h;
+    buffer_->noteLayer();
     buffer_->append(cmd);
 }
 void RecordingRenderer::drawBackdropFilter(std::span<const CssFilterParams> filters,
@@ -363,6 +369,7 @@ void RecordingRenderer::drawBackdropFilter(std::span<const CssFilterParams> filt
 }
 void RecordingRenderer::saveLayerWithBlend(BlendMode mode) {
     if (!buffer_) { measureRenderer_->saveLayerWithBlend(mode); return; }
+    buffer_->noteLayer();
     buffer_->append(Cmd_SaveLayerWithBlend{mode});
 }
 void RecordingRenderer::setClip(float x, float y, float w, float h) {
@@ -397,6 +404,7 @@ void RecordingRenderer::fillLinearGradient(float x, float y, float w, float h,
     auto [off, count] = buffer_->pushSpan(stops);
     cmd.stopsOffset = off;
     cmd.stopsLen = count;
+    buffer_->noteDither();
     buffer_->append(cmd);
 }
 
@@ -413,6 +421,7 @@ void RecordingRenderer::fillRadialGradient(float x, float y, float w, float h,
     auto [off, count] = buffer_->pushSpan(stops);
     cmd.stopsOffset = off;
     cmd.stopsLen = count;
+    buffer_->noteDither();
     buffer_->append(cmd);
 }
 
@@ -429,6 +438,7 @@ void RecordingRenderer::fillConicGradient(float x, float y, float w, float h,
     auto [off, count] = buffer_->pushSpan(stops);
     cmd.stopsOffset = off;
     cmd.stopsLen = count;
+    buffer_->noteDither();
     buffer_->append(cmd);
 }
 
@@ -452,6 +462,8 @@ void RecordingRenderer::recordSurfaceBreak() {
 void RecordingRenderer::recordSpan(std::shared_ptr<const CommandBuffer> span) {
     if (!span || span->commandCount() == 0) return;
     if (span->hasBackdrop()) buffer_->noteBackdrop();
+    if (span->hasDither()) buffer_->noteDither();
+    if (span->hasLayer()) buffer_->noteLayer();
     buffer_->append(Cmd_ReplaySpan{buffer_->pushSpanBuffer(std::move(span))});
 }
 

@@ -574,6 +574,10 @@ public:
     uint64_t scrollLayerPartialRasters() const {
         return baseScrollLayers_.partialRasters() + captureScrollLayers_.partialRasters();
     }
+    // Pixels a partial raster drew otherwise than a whole one (ScrollLayerSet::setVerifyPartial).
+    uint64_t scrollLayerPartialMismatch() const {
+        return baseScrollLayers_.partialMismatch() + captureScrollLayers_.partialMismatch();
+    }
 
     /// The frame flight recorder (frame_trace.h) and the agent control
     /// channel (control.h, docs/agent-control.md). startControl serves the

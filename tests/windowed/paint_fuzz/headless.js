@@ -20,6 +20,12 @@
 
 const seed = Number(process.env.PAINT_FUZZ_SEED || 1) >>> 0;
 const STEPS = Number(process.env.PAINT_FUZZ_STEPS || 150);
+// PAINT_FUZZ_VERIFY_PARTIAL=1 (with --no-gpu, where scroll layers are
+// rastered in part): each partial raster is also rastered whole and must
+// match it pixel for pixel, not only the oracle within its tolerance.
+const verifyPartial = process.env.PAINT_FUZZ_VERIFY_PARTIAL === '1';
+if (verifyPartial) setScrollLayerVerify(true);
+const mismatch = () => perf.stats().paint.scrollLayers.partialMismatch;
 const fuzz = PaintFuzz.create(seed);
 fuzz.build();
 flush();
@@ -38,7 +44,13 @@ for (let i = 0; i < STEPS && !failed; ++i) {
     if (s.dpr) setDeviceScaleFactor(s.dpr);
     if (s.advance) advanceTime(s.advance);
     flush();
+    const m0 = verifyPartial ? mismatch() : 0;
     const cached = [frameImage(), frameImage()];
+    if (verifyPartial && mismatch() !== m0) {
+        failed = true;
+        assert(false, `paint cache fuzz seed=${seed}: step ${i} (${s.what}): a partial raster of a scroll layer ` +
+                      `differs from a whole one in ${mismatch() - m0} pixels; last steps: ` + history.slice(-8).join(' | '));
+    }
     setPaintCache(false);
     const full = frameImage();
     setPaintCache(true);
