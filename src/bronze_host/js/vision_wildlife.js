@@ -45,6 +45,12 @@
     setClasses(['a frog', 'a toad', 'a salamander'], ['Amphibia']);
     setClasses(['an insect', 'a dragonfly', 'a butterfly', 'a moth', 'a bee', 'a beetle'], ['Insecta']);
     setClasses(['a spider'], ['Arachnida']);
+    // The queries that name a domestic animal. A box of one the detector is
+    // sure of (petMinBoxScore) is ranked over its query's classes whatever
+    // `candidates` says: over every row, a dog's crop could go to an insect
+    // (a dog named Eastern Cicada Killer), and a dog or cat is what such a
+    // box nearly always is.
+    const PET_QUERIES = ['a dog', 'a cat'];
     // Clear animals score 0.3 and up; real ones half hidden and look-alikes
     // share 0.1-0.3; empty frames score under 0.1. A score under
     // labelThreshold is not shown as a name (labels()).
@@ -59,7 +65,7 @@
     // threshold. Most of the order and class names weak boxes gave were wrong.
     const DEFAULTS = { model: 'bioclip-2', threshold: 0.15, topK: 5, margin: 0.15,
                        nms: 0.3, maxDetections: 20, gapS: 1.0, labelThreshold: 0.85,
-                       maxClassify: 8, candidates: 'all', taxaTop: 3,
+                       maxClassify: 8, candidates: 'all', petMinBoxScore: 0.3, taxaTop: 3,
                        minBoxScore: 0.3, broadMinBoxScore: 0.3, burstMinBoxScore: 0.4,
                        queryMatch: true, consensus: true };
     const MODEL_REPO = { 'bioclip': 'imageomics/bioclip', 'bioclip-2': 'imageomics/bioclip-2',
@@ -82,6 +88,7 @@
 
     wl.QUERIES = QUERIES;
     wl.QUERY_CLASSES = QUERY_CLASSES;
+    wl.PET_QUERIES = PET_QUERIES;
     wl.DEFAULTS = DEFAULTS;
     wl.SPECIES_LISTS = SPECIES_LISTS;
     wl.RANKS = RANKS;
@@ -254,6 +261,35 @@
         return out;
     }
     wl.lineage = (row) => lineageOf(row, 'species');
+    // A species row's lineage, worked out once a row (taxaScores runs over
+    // every row of the list for every crop): { lin, ids }, ids a number per
+    // rank above species (genus, family, order, class; -1 for none), each
+    // name's index in TAXON_NAMES[rank]. Keyed by the row object, keeping the
+    // field values it was worked out from, so an edited row is redone.
+    const LINEAGES = new WeakMap();
+    const TAXON_IDS = RANKS.slice(1).map(() => new Map());
+    const TAXON_NAMES = RANKS.slice(1).map(() => []);
+    function rowLineage(row) {
+        const c = LINEAGES.get(row);
+        if (c && c.scientific === row.scientific && c.genus === row.genus && c.family === row.family &&
+            c.order === row.order && c.class === row.class) return c;
+        const lin = lineageOf(row, 'species');
+        const ids = RANKS.slice(1).map((r, k) => {
+            const name = lin[r];
+            if (!name) return -1;
+            let id = TAXON_IDS[k].get(name);
+            if (id === undefined) {
+                id = TAXON_NAMES[k].length;
+                TAXON_IDS[k].set(name, id);
+                TAXON_NAMES[k].push(name);
+            }
+            return id;
+        });
+        const e = { scientific: row.scientific, genus: row.genus, family: row.family,
+                    order: row.order, class: row.class, lin, ids };
+        LINEAGES.set(row, e);
+        return e;
+    }
 
     /**
      * The probability of every genus, family, order and class: the sum of
@@ -267,27 +303,52 @@
      */
     wl.taxaScores = function taxaScores(rows, probs, opts) {
         const top = opts && opts.top != null ? opts.top : DEFAULTS.taxaTop;
-        const maps = { genus: new Map(), family: new Map(), order: new Map(), class: new Map() };
+        // Each taxon's score summed in row order, from 0 (a taxon no row with
+        // p > 0 is in has no entry), its lineage the first such row's.
+        const lins = new Array(rows.length);
         for (let i = 0; i < rows.length; i++) {
             const row = rows[i], p = probs[i];
-            if (!row || !(p > 0)) continue;
-            const lin = lineageOf(row, 'species');
-            for (let ri = 1; ri < RANKS.length; ri++) {
-                const r = RANKS[ri], name = lin[r];
-                if (!name) continue;
-                let t = maps[r].get(name);
-                if (!t) {
-                    t = Object.assign({ scientific: name, score: 0 }, lineageOf(lin, r));
-                    maps[r].set(name, t);
-                }
-                t.score += p;
+            if (row && p > 0) lins[i] = rowLineage(row);
+        }
+        const nRanks = RANKS.length - 1;
+        const score = [], first = [], touched = [];
+        for (let k = 0; k < nRanks; k++) {
+            score.push(new Float64Array(TAXON_NAMES[k].length));
+            first.push(new Int32Array(TAXON_NAMES[k].length).fill(-1));
+            touched.push([]);
+        }
+        for (let i = 0; i < rows.length; i++) {
+            const e = lins[i];
+            if (!e) continue;
+            const p = probs[i];
+            for (let k = 0; k < nRanks; k++) {
+                const id = e.ids[k];
+                if (id < 0) continue;
+                if (first[k][id] < 0) { first[k][id] = i; touched[k].push(id); }
+                score[k][id] += p;
             }
         }
         const out = {};
-        for (const r of RANKS.slice(1)) {
-            const list = Array.from(maps[r].values()).sort((a, b) => b.score - a.score ||
-                (a.scientific < b.scientific ? -1 : 1));
-            out[r] = top ? list.slice(0, top) : list;
+        for (let k = 0; k < nRanks; k++) {
+            const r = RANKS[k + 1], s = score[k], names = TAXON_NAMES[k];
+            // Best first, a tie to the name first in code-unit order.
+            const before = (a, b) => s[a] > s[b] || (s[a] === s[b] && names[a] < names[b]);
+            let ids = touched[k];
+            if (top && top > 0 && ids.length > top) {
+                const best = [];
+                for (const id of ids) {
+                    if (best.length >= top && !before(id, best[best.length - 1])) continue;
+                    let at = best.length;
+                    while (at > 0 && before(id, best[at - 1])) at--;
+                    best.splice(at, 0, id);
+                    if (best.length > top) best.pop();
+                }
+                ids = best;
+            } else {
+                ids = ids.slice().sort((a, b) => (before(a, b) ? -1 : before(b, a) ? 1 : 0));
+            }
+            out[r] = ids.map((id) => Object.assign({ scientific: names[id], score: s[id] },
+                                                   lineageOf(lins[first[k][id]].lin, r)));
         }
         return out;
     };
@@ -315,9 +376,11 @@
      * none or none is listed), except that when the best species there
      * scores under `fallback` while the best over every row scores at least
      * that and is of another class, the ranking over every row is the answer.
+     * 'query': over those rows with no fallback (analyze() ranks a sure
+     * pet box this way, petMinBoxScore).
      * @param {Object[]} rows   the species rows
      * @param {ArrayLike<number>} sims  cosine similarity per row
-     * @param {{ topK?, top?, query?, candidates?: 'all'|'byQuery', fallback? }} [opts]
+     * @param {{ topK?, top?, query?, candidates?: 'all'|'byQuery'|'query', fallback? }} [opts]
      * @returns {{ species: Array<{ common, scientific, family, order, class,
      *   score, similarity }>, taxa: (taxaScores), candidates: 'all'|'query'|'fallback' }}
      *   unrounded
@@ -329,21 +392,31 @@
         const all = Array.from({ length: rows.length }, (_, i) => i);
         const rankOver = (idx) => {
             const p = softmaxOver(sims, idx);
-            const order = Array.from({ length: idx.length }, (_, k) => k)
-                .sort((a, b) => sims[idx[b]] - sims[idx[a]] || a - b);
-            const species = order.slice(0, topK).map((k) => {
+            // The top K by similarity, ties to the earlier row: what sorting
+            // every row would put first, without sorting ~2000 of them.
+            const order = [];
+            for (let k = 0; k < idx.length; k++) {
+                const s = sims[idx[k]];
+                if (order.length >= topK && !(s > sims[idx[order[order.length - 1]]])) continue;
+                let at = order.length;
+                while (at > 0 && s > sims[idx[order[at - 1]]]) at--;
+                order.splice(at, 0, k);
+                if (order.length > topK) order.pop();
+            }
+            const species = order.map((k) => {
                 const sp = rows[idx[k]];
                 return { common: sp.common, scientific: sp.scientific, order: sp.order,
                          family: sp.family, class: sp.class, score: p[k], similarity: sims[idx[k]] };
             });
             return { species, taxa: wl.taxaScores(idx.map((i) => rows[i]), p, { top: o.top }) };
         };
-        const classes = (o.candidates || DEFAULTS.candidates) === 'byQuery' ? wl.queryClasses(o.query) : null;
+        const mode = o.candidates || DEFAULTS.candidates;
+        const classes = mode === 'byQuery' || mode === 'query' ? wl.queryClasses(o.query) : null;
         if (classes) {
             const sub = all.filter((i) => classes.includes(rows[i].class));
             if (sub.length && sub.length < all.length) {
                 const q = rankOver(sub);
-                if (q.species[0].score >= fallback) return Object.assign(q, { candidates: 'query' });
+                if (mode === 'query' || q.species[0].score >= fallback) return Object.assign(q, { candidates: 'query' });
                 const a = rankOver(all);
                 if (a.species[0].score >= fallback && !classes.includes(a.species[0].class)) {
                     return Object.assign(a, { candidates: 'fallback' });
@@ -352,6 +425,22 @@
             }
         }
         return Object.assign(rankOver(all), { candidates: 'all' });
+    };
+
+    /**
+     * The classifyCrop `candidates` analyze() ranks a box with: 'query' for
+     * a box of a pet query (PET_QUERIES) scoring petMinBoxScore or more,
+     * else the analysis mode ('all' or 'byQuery'). Pure.
+     * @param {string} query     the box's detector query ('a dog')
+     * @param {number} boxScore  its detector score (the record's, 4 places)
+     * @param {{ mode?: 'all'|'byQuery', petMinBoxScore?: number|null }} [mode]
+     *   a config().candidates; the defaults where not given, null for no pet rule
+     */
+    wl.candidatesFor = function candidatesFor(query, boxScore, mode) {
+        const m = mode || {};
+        const pet = m.petMinBoxScore === undefined ? DEFAULTS.petMinBoxScore : m.petMinBoxScore;
+        if (pet != null && PET_QUERIES.includes(query) && boxScore >= pet) return 'query';
+        return m.mode || DEFAULTS.candidates;
     };
 
     // A record's crops: its `animals`, or for a record from before them, its
@@ -684,7 +773,7 @@
             topK: o.topK || DEFAULTS.topK,
             margin: o.margin == null ? DEFAULTS.margin : o.margin,
             maxClassify: o.maxClassify || DEFAULTS.maxClassify,
-            candidates: candidatesConfig(o.candidates, o.labelThreshold),
+            candidates: candidatesConfig(o.candidates, o.labelThreshold, o.petMinBoxScore),
             // The list files by name, the merged count, and a hash of every
             // prompt (so an edited list is a new config). The taxa maps are
             // not in it: they name labels, records do not hold them.
@@ -694,12 +783,20 @@
         return { loc, species, taxa: wl.readTaxa(present), config };
     }
 
-    // config.candidates: { mode: 'all' } or { mode: 'byQuery', fallback }.
-    function candidatesConfig(mode, labelThreshold) {
+    // config.candidates: { mode: 'all', petMinBoxScore } or
+    // { mode: 'byQuery', fallback, petMinBoxScore }; petMinBoxScore null
+    // when the pet rule is off (petMinBoxScore: false).
+    function candidatesConfig(mode, labelThreshold, petMinBoxScore) {
         const m = mode || DEFAULTS.candidates;
         if (m !== 'all' && m !== 'byQuery') throw new Error("bro.vision.wildlife: candidates is 'all' or 'byQuery', not " + m);
-        return m === 'all' ? { mode: m }
-            : { mode: m, fallback: labelThreshold == null ? DEFAULTS.labelThreshold : labelThreshold };
+        const pet = petMinBoxScore === false ? null
+            : petMinBoxScore == null ? DEFAULTS.petMinBoxScore : petMinBoxScore;
+        if (pet !== null && !(typeof pet === 'number' && pet >= 0)) {
+            throw new Error('bro.vision.wildlife: petMinBoxScore is a number >= 0 or false, not ' + petMinBoxScore);
+        }
+        return m === 'all' ? { mode: m, petMinBoxScore: pet }
+            : { mode: m, fallback: labelThreshold == null ? DEFAULTS.labelThreshold : labelThreshold,
+                petMinBoxScore: pet };
     }
 
     /** The settings an analysis depends on (open()'s `config`), without loading. */
@@ -864,22 +961,22 @@
         let disposed = false;
         const live = (what) => { if (disposed) throw new Error('bro.vision.wildlife: ' + what + ' after dispose()'); };
 
-        // Cosine similarity against every species prompt.
-        function similarities(emb) {
+        // Cosine similarity of each embedding against every species prompt,
+        // a Float32Array a species each, in one native pass over the prompts
+        // (__bro_native.vision.dotRows): each a float64 sum from the first
+        // dimension up, stored as a float, the numbers a JS loop
+        // `d += emb[i] * text[off + i]` gives, ~30 times faster.
+        function similarities(embList) {
             const n = species.length;
-            const sims = new Float32Array(n);
-            for (let s = 0; s < n; s++) {
-                let d = 0;
-                const off = s * dim;
-                for (let i = 0; i < dim; i++) d += emb[i] * text[off + i];
-                sims[s] = d;
-            }
-            return sims;
+            const q = new Float32Array(embList.length * dim);
+            for (let k = 0; k < embList.length; k++) q.set(embList[k], k * dim);
+            const sims = __bro_native.vision.dotRows(q, text, dim);
+            return embList.map((_, k) => sims.subarray(k * n, (k + 1) * n));
         }
         // The softmax at the model's temperature: `score` is a probability
         // over the candidates (how much its best answer stands out), not "is
         // this any listed species".
-        const crop = (emb, c) => wl.classifyCrop(species, similarities(emb), c);
+        const crop = (sims, c) => wl.classifyCrop(species, sims, c);
 
         const an = {
             config, species, taxa, prompts, cached, dim, imageSize,
@@ -911,7 +1008,7 @@
             /** Species top K of a whole image (centre square), unrounded. */
             classify(img, copts) {
                 live('classify');
-                return crop(clip.encodeImage(wl.squareInput(img, imageSize)),
+                return crop(similarities([clip.encodeImage(wl.squareInput(img, imageSize))])[0],
                             { topK: (copts && copts.topK) || config.topK, candidates: 'all' }).species;
             },
             /**
@@ -936,8 +1033,12 @@
                 if (!out.animal) return out;
                 t = Date.now();
                 const maxClassify = a.maxClassify || config.maxClassify;
-                const mode = a.candidates ? candidatesConfig(a.candidates, an.labelThreshold) : config.candidates;
-                const copts = { topK: a.topK || config.topK, candidates: mode.mode, fallback: mode.fallback };
+                const mode = a.candidates || a.petMinBoxScore != null
+                    ? candidatesConfig(a.candidates || config.candidates.mode, an.labelThreshold,
+                                       a.petMinBoxScore != null ? a.petMinBoxScore
+                                           : config.candidates.petMinBoxScore === null ? false : config.candidates.petMinBoxScore)
+                    : config.candidates;
+                const copts = { topK: a.topK || config.topK, fallback: mode.fallback };
                 const roundSp = (s) => ({ common: s.common, scientific: s.scientific, family: s.family,
                     order: s.order, class: s.class, score: r4(s.score), similarity: r4(s.similarity) });
                 const roundTaxa = (taxa) => {
@@ -958,12 +1059,14 @@
                 const embs = picked.length
                     ? clip.encodeImages(picked.map((p) => wl.squareInput(wl.cropImage(img, p.sq), imageSize)))
                     : [];
+                const sims = embs.length ? similarities(embs) : [];
                 for (let k = 0; k < picked.length; k++) {
                     const { i, sq } = picked[k];
                     const h = hits[i];
                     const subject = { x: Math.round(sq.x * sx), y: Math.round(sq.y * sy),
                                       w: Math.round(sq.w * sx), h: Math.round(sq.h * sy) };
-                    const c = crop(embs[k], Object.assign({ query: h.label }, copts));
+                    const c = crop(sims[k], Object.assign({}, copts, { query: h.label,
+                        candidates: wl.candidatesFor(h.label, out.detections[i].score, mode) }));
                     out.animals.push({ box: out.detections[i].box, score: out.detections[i].score, label: h.label,
                                        subject, species: c.species.map(roundSp), taxa: roundTaxa(c.taxa),
                                        candidates: c.candidates });

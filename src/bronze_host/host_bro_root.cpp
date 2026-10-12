@@ -477,12 +477,12 @@ void markAvailableNamespaces() {
 // audio) are not here at all.
 void installWorkerBroRoot() {
     auto* bro = new ev::Persistent(makeRoot({"net", "server", "motion"}));
-    auto* native = new ev::Persistent(makeRoot({"net", "server", "motion"}));
+    auto* native = new ev::Persistent(makeRoot({"net", "server", "motion", "vision"}));
     publish("bro", *bro);
     publish("__bro_native", *native);
 
     std::string err;
-    bool ok = registerServerNatives(&err) && registerMotionNatives(&err);
+    bool ok = registerServerNatives(&err) && registerMotionNatives(&err) && registerVisionNatives(&err);
 #if BRO_WITH_NET
     ok = ok && registerNetNatives(&err);
 #endif

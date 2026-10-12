@@ -46,7 +46,7 @@ function run() {
     const an = wl.open(Object.assign({ cacheDir }, listOpts));
     assert(typeof an.device === 'string', 'device: ' + an.device);
     same([an.config.detector.repo, an.config.classifier.repo, an.config.threshold, an.config.maxClassify, an.config.candidates],
-         ['google/owlv2-base-patch16-ensemble', 'imageomics/bioclip-2', 0.15, 8, { mode: 'all' }], 'config');
+         ['google/owlv2-base-patch16-ensemble', 'imageomics/bioclip-2', 0.15, 8, { mode: 'all', petMinBoxScore: 0.3 }], 'config');
     same(an.config, wl.config(listOpts), 'open().config is config()');
     assert(an.config.speciesList.count === an.species.length && an.species.length > 100, 'the species list');
     // The default lists, merged: the birds and mammals, then the reptiles and
@@ -101,7 +101,7 @@ function run() {
     for (let i = 0; i < a.animals.length; i++) {
         const x = a.animals[i];
         same([x.box, x.label, x.score], [boxed[i].box, boxed[i].label, boxed[i].score], 'animal ' + i + ' is its box');
-        assert(x.species.length === 5 && x.candidates === 'all', 'its top 5');
+        assert(x.species.length === 5 && x.candidates === wl.candidatesFor(x.label, x.score), 'its top 5');
         assert(wl.RANKS.slice(1).every((r) => Array.isArray(x.taxa[r]) && x.taxa[r].length <= 3), 'its taxa');
         assert(x.taxa.class.length >= 1 && x.taxa.class[0].score >= x.species[0].score - 1e-4, 'a class scores at least its best species');
     }
@@ -113,6 +113,15 @@ function run() {
         const cls = wl.queryClasses(x.label);
         if (x.candidates === 'query') assert(x.species.every((s) => cls.includes(s.class)), 'byQuery ranks the query\'s classes: ' + x.label);
     }
+    // The pet rule per call: at petMinBoxScore 0 every dog or cat box ranks over the mammals.
+    const pets = an.analyze(frame(true), { source: src, threshold: 0, petMinBoxScore: 0 });
+    for (const x of pets.animals) {
+        const pet = wl.PET_QUERIES.includes(x.label);
+        assert(x.candidates === (pet ? 'query' : 'all'), 'petMinBoxScore 0: ' + x.label + ' ' + x.candidates);
+        if (pet) assert(x.species.every((s) => s.class === 'Mammalia'), 'a pet box names mammals');
+    }
+    const noPets = an.analyze(frame(true), { source: src, threshold: 0, petMinBoxScore: false });
+    assert(noPets.animals.every((x) => x.candidates === 'all'), 'petMinBoxScore false: every box over every row');
     assert(Array.isArray(an.labels(a)), 'analyzer labels()');
 
     // Deterministic: the same image, the same record.

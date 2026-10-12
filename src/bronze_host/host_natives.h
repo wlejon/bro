@@ -157,7 +157,9 @@ inline bool registerKwsNatives(std::string*) { return true; }
 inline bool registerListenNatives(std::string*) { return true; }
 inline bool registerTriposplatNatives(std::string*) { return true; }
 inline bool registerDiffusionNatives(std::string*) { return true; }
-inline bool registerVisionNatives(std::string*) { return true; }
+// __bro_native.vision (native_vision.cpp, natives/vision/): plain compute for
+// js/vision_wildlife.js; every build, main realm and Workers.
+bool registerVisionNatives(std::string* error);
 inline bool registerDiarNatives(std::string*) { return true; }
 inline bool registerSttNatives(std::string*) { return true; }
 inline bool registerTtsNatives(std::string*) { return true; }

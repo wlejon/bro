@@ -130,6 +130,8 @@ set(BRO_BRONZE_HOST_SOURCES
     natives/dunder_bro/native_dunder_bro_register.cpp
     native_motion.cpp
     natives/motion/native_motion_register.cpp
+    native_vision.cpp
+    natives/vision/native_vision_register.cpp
     native_profiler.cpp
     natives/profiler/native_profiler_register.cpp
     native_server.cpp
@@ -576,7 +578,7 @@ else()
     bro_compile_js(notification bro_notification_main)
     bro_compile_js(net_sync   bro_net_sync_main)
     bro_compile_js(image_gpu  bro_image_gpu_main)
-    bro_compile_js(vision_wildlife bro_vision_wildlife_main)
+    bro_compile_js(vision_wildlife bro_vision_wildlife_main NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(bro_core   bro_core_main  NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(net        bro_net_main      NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(physics    bro_physics_main  NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")

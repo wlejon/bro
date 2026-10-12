@@ -4,7 +4,9 @@
 // and burst grouping on synthetic records (gap, consensus, keeper, scene
 // split); ranks (taxaScores, classifyCrop with 'all' and 'byQuery'), labels
 // at the narrowest sure rank, several animals in a photo, per-taxon burst
-// labels, old records and bursts, and taxa maps merged across lists.
+// labels, old records and bursts, and taxa maps merged across lists; the pet
+// rule (a sure dog or cat box ranks over the mammals), and the fast paths
+// (top K, taxaScores, the dotRows native) against the plain code.
 // tests/vision/test_vision_wildlife_models.js runs the models.
 
 const fs = require('fs');
@@ -31,7 +33,7 @@ function run() {
 assert(typeof wl === 'object' && wl !== null, 'bro.vision.wildlife exists');
 for (const f of ['open', 'available', 'locate', 'config', 'subjectSquare', 'cropImage', 'squareInput',
                  'sharpness', 'speciesPrompt', 'readSpeciesList', 'readSpecies', 'readTaxa', 'label', 'labels',
-                 'formatLabel', 'taxaScores', 'classifyCrop', 'queryClasses', 'lineage', 'parseExifTime',
+                 'formatLabel', 'taxaScores', 'classifyCrop', 'candidatesFor', 'queryClasses', 'lineage', 'parseExifTime',
                  'keeperScore', 'groupBursts']) {
     assert(typeof wl[f] === 'function', 'wildlife.' + f + ' is a function');
 }
@@ -41,8 +43,9 @@ same(wl.QUERIES.slice(13, 19), ['a snake', 'a turtle', 'a frog', 'a toad', 'a li
 same(wl.QUERIES.slice(19), ['a dog', 'a cat', 'an insect', 'a dragonfly', 'a butterfly', 'a moth', 'a bee', 'a beetle', 'a spider'],
      'then pets and arthropods');
 same([wl.DEFAULTS.threshold, wl.DEFAULTS.topK, wl.DEFAULTS.margin, wl.DEFAULTS.gapS, wl.DEFAULTS.model, wl.DEFAULTS.labelThreshold,
-      wl.DEFAULTS.maxClassify, wl.DEFAULTS.candidates],
-     [0.15, 5, 0.15, 1, 'bioclip-2', 0.85, 8, 'all'], 'defaults');
+      wl.DEFAULTS.maxClassify, wl.DEFAULTS.candidates, wl.DEFAULTS.petMinBoxScore],
+     [0.15, 5, 0.15, 1, 'bioclip-2', 0.85, 8, 'all', 0.3], 'defaults');
+same(wl.PET_QUERIES, ['a dog', 'a cat'], 'the pet queries');
 same([wl.DEFAULTS.minBoxScore, wl.DEFAULTS.broadMinBoxScore, wl.DEFAULTS.burstMinBoxScore, wl.DEFAULTS.queryMatch,
       wl.DEFAULTS.consensus], [0.3, 0.3, 0.4, true, true], 'the box rule defaults');
 same(wl.SPECIES_LISTS, [{ folder: 'species', file: 'upper-midwest.json' },
@@ -105,12 +108,17 @@ same(Object.keys(cfg), ['detector', 'classifier', 'threshold', 'queries', 'topK'
                         'speciesList'], 'config keys, in order');
 same([cfg.detector.repo, cfg.classifier.repo, cfg.classifier.weightsBytes], ['google/owlv2-base-patch16-ensemble', 'imageomics/bioclip', null], 'model identity');
 same([cfg.threshold, cfg.topK, cfg.margin, cfg.maxClassify, cfg.candidates, cfg.speciesList.files, cfg.speciesList.count],
-     [0.2, 5, 0.15, 8, { mode: 'all' }, ['two.json'], 2], 'config values');
+     [0.2, 5, 0.15, 8, { mode: 'all', petMinBoxScore: 0.3 }, ['two.json'], 2], 'config values');
 same(wl.config({ detector: empty, classifier: empty, species: list, candidates: 'byQuery', maxClassify: 3 }).candidates,
-     { mode: 'byQuery', fallback: 0.85 }, 'byQuery is in the config, with its fallback threshold');
+     { mode: 'byQuery', fallback: 0.85, petMinBoxScore: 0.3 }, 'byQuery is in the config, with its fallback threshold');
 same(wl.config({ detector: empty, classifier: empty, species: list, candidates: 'byQuery', labelThreshold: 0.9 }).candidates,
-     { mode: 'byQuery', fallback: 0.9 }, 'the fallback is labelThreshold');
+     { mode: 'byQuery', fallback: 0.9, petMinBoxScore: 0.3 }, 'the fallback is labelThreshold');
 expectThrows(() => wl.config({ detector: empty, classifier: empty, species: list, candidates: 'some' }), 'an unknown candidates mode');
+// The pet rule changes records, so it is in the config: its box score, or null when off.
+same([wl.config({ detector: empty, classifier: empty, species: list, petMinBoxScore: 0.5 }).candidates,
+      wl.config({ detector: empty, classifier: empty, species: list, petMinBoxScore: false }).candidates],
+     [{ mode: 'all', petMinBoxScore: 0.5 }, { mode: 'all', petMinBoxScore: null }], 'petMinBoxScore in the config');
+expectThrows(() => wl.config({ detector: empty, classifier: empty, species: list, petMinBoxScore: 'high' }), 'a petMinBoxScore not a number');
 assert(/^[0-9a-f]{8}$/.test(cfg.speciesList.hash), 'the list hash: ' + cfg.speciesList.hash);
 same(wl.readSpeciesList(list).map((s) => s.common), ['Mourning Dove', 'Eastern Chipmunk'], 'readSpeciesList');
 assert(wl.speciesPrompt(wl.readSpeciesList(list)[1]) ===
@@ -233,6 +241,117 @@ const cn = wl.classifyCrop(ROWS, simsFor({ Mallard: 0.6, 'Common Green Darner': 
 same([cn.candidates, cn.species[0].class], ['query', 'Insecta'], 'not sure of the other class: the query\'s');
 same(wl.classifyCrop(ROWS, simsFor({ Mallard: 0.9, 'Common Green Darner': 0.04, Monarch: 0.04 }),
                      { candidates: 'byQuery', query: 'a moth', fallback: 0.95 }).candidates, 'query', 'fallback threshold');
+
+// ── pets: a sure dog or cat box ranks over its query's classes ──────────
+// A dog's crop over every row can go to an insect; the rule keeps a box the
+// detector is sure is a dog among the mammals, with no fallback.
+const PET_ROWS = ROWS.concat([
+    { common: 'Domestic Dog', scientific: 'Canis familiaris', class: 'Mammalia', order: 'Carnivora', family: 'Canidae' },
+    { common: 'Eastern Cicada Killer', scientific: 'Sphecius speciosus', class: 'Insecta', order: 'Hymenoptera', family: 'Bembicidae' },
+]);
+const simsOver = (rows, p) => {
+    const named = Object.keys(p);
+    const other = Math.max(1e-9, 1 - named.reduce((s, k) => s + p[k], 0)) / (rows.length - named.length);
+    return rows.map((r) => Math.log(p[r.common] != null ? p[r.common] : other) / 100);
+};
+const dogSims = simsOver(PET_ROWS, { 'Eastern Cicada Killer': 0.9, 'Domestic Dog': 0.04, 'Eastern Chipmunk': 0.02 });
+same([wl.candidatesFor('a dog', 0.3), wl.candidatesFor('a cat', 0.62), wl.candidatesFor('a dog', 0.2999),
+      wl.candidatesFor('a bird', 0.9), wl.candidatesFor('a squirrel', 0.9, { mode: 'byQuery', petMinBoxScore: 0.3 })],
+     ['query', 'query', 'all', 'all', 'byQuery'], 'candidatesFor: a pet query at petMinBoxScore or more, else the mode');
+same([wl.candidatesFor('a dog', 0.9, { mode: 'all', petMinBoxScore: null }),
+      wl.candidatesFor('a dog', 0.45, { mode: 'all', petMinBoxScore: 0.5 }),
+      wl.candidatesFor('a dog', 0.9, { mode: 'byQuery', petMinBoxScore: 0.3 })],
+     ['all', 'all', 'query'], 'candidatesFor: off, a higher bar, and in byQuery mode');
+const sureDog = wl.classifyCrop(PET_ROWS, dogSims, { query: 'a dog', candidates: wl.candidatesFor('a dog', 0.71) });
+same([sureDog.candidates, sureDog.species[0].common, sureDog.species.every((s) => s.class === 'Mammalia')],
+     ['query', 'Domestic Dog', true], 'a sure dog box: the dog, over the mammals only');
+same([sureDog.taxa.class.map((t) => t.scientific), sureDog.taxa.family[0].scientific], [['Mammalia'], 'Canidae'],
+     'its taxa are the mammals\'');
+const weakDog = wl.classifyCrop(PET_ROWS, dogSims, { query: 'a dog', candidates: wl.candidatesFor('a dog', 0.2) });
+same([weakDog.candidates, weakDog.species[0].common], ['all', 'Eastern Cicada Killer'], 'a weak dog box: every row, as before');
+// 'query' has no fallback where 'byQuery' would take the sure insect.
+same(wl.classifyCrop(PET_ROWS, dogSims, { query: 'a dog', candidates: 'byQuery' }).candidates, 'fallback',
+     "byQuery falls back to the insect");
+same(wl.classifyCrop(PET_ROWS, dogSims, { query: 'a rock', candidates: 'query' }).candidates, 'all',
+     "'query' for a query without classes is every row");
+
+// ── the fast paths are the plain ones, number for number ─────────────────
+// classifyCrop's top K (no full sort) and taxaScores (taxon ids) against
+// the straightforward code they replaced, on rows with tied similarities
+// and names; __bro_native.vision.dotRows against the JavaScript loop.
+{
+    let seed = 7;
+    const rnd = () => { seed = (Math.imul(seed, 1103515245) + 12345) >>> 0; return seed / 4294967296; };
+    const pick = (a) => a[Math.floor(rnd() * a.length)];
+    const rows = [];
+    for (let i = 0; i < 300; i++) {
+        const cls = pick(['Aves', 'Insecta', 'Mammalia']);
+        rows.push({ common: 'sp' + i, scientific: pick(['Ga', 'Gb', 'Gc', 'Gd', 'Ge', 'Gf']) + i + ' x' + i, class: cls,
+                    order: cls + pick(['O1', 'O2', 'O3']), family: i % 7 ? cls + pick(['F1', 'F2', 'F3', 'F4']) : undefined });
+    }
+    // Plain: sort every row, sum taxa in Maps.
+    const plainTaxa = (rs, probs, top) => {
+        const maps = { genus: new Map(), family: new Map(), order: new Map(), class: new Map() };
+        rs.forEach((row, i) => {
+            const p = probs[i];
+            if (!row || !(p > 0)) return;
+            const lin = wl.lineage(row);
+            for (const r of ['genus', 'family', 'order', 'class']) {
+                const name = lin[r];
+                if (!name) continue;
+                let t = maps[r].get(name);
+                if (!t) {
+                    const up = {};
+                    for (const u of wl.RANKS.slice(wl.RANKS.indexOf(r) + 1)) if (lin[u]) up[u] = lin[u];
+                    t = Object.assign({ scientific: name, score: 0 }, up);
+                    maps[r].set(name, t);
+                }
+                t.score += p;
+            }
+        });
+        const out = {};
+        for (const r of ['genus', 'family', 'order', 'class']) {
+            const l = Array.from(maps[r].values()).sort((a, b) => b.score - a.score || (a.scientific < b.scientific ? -1 : 1));
+            out[r] = top ? l.slice(0, top) : l;
+        }
+        return out;
+    };
+    for (let trial = 0; trial < 20; trial++) {
+        // Quantised similarities, so ties are common.
+        const sims = new Float32Array(rows.map(() => Math.round(rnd() * 20) / 400));
+        const c = wl.classifyCrop(rows, sims, { topK: 7, top: trial % 3 === 0 ? 0 : 3 });
+        const order = rows.map((_, i) => i).sort((a, b) => sims[b] - sims[a] || a - b).slice(0, 7);
+        same(c.species.map((s) => s.common), order.map((i) => rows[i].common), 'top K as a full sort, trial ' + trial);
+        const probs = rows.map((_, i) => (i % 5 === 0 ? 0 : Math.round(rnd() * 8) / 64));
+        for (const top of [3, 0]) {
+            same(wl.taxaScores(rows, probs, { top }), plainTaxa(rows, probs, top), 'taxaScores as the plain sum, top ' + top);
+        }
+    }
+    // A row edited in place is worked out again.
+    const r0 = { common: 'e', scientific: 'Alpha beta', class: 'Aves' };
+    same(wl.taxaScores([r0], [1]).genus[0].scientific, 'Alpha', 'a row');
+    r0.scientific = 'Gamma beta';
+    same(wl.taxaScores([r0], [1]).genus[0].scientific, 'Gamma', 'the same row edited');
+
+    const dim = 67, n = 45, nq = 3;   // rows not a multiple of the native block
+    const text = new Float32Array(n * dim).map(() => rnd() - 0.5);
+    const q = new Float32Array(nq * dim).map(() => rnd() - 0.5);
+    const got = __bro_native.vision.dotRows(q, text, dim);
+    assert(got instanceof Float32Array && got.length === nq * n, 'dotRows: a Float32Array, a row a query');
+    const want = new Float32Array(nq * n);
+    for (let k = 0; k < nq; k++) {
+        for (let s = 0; s < n; s++) {
+            let d = 0;
+            for (let i = 0; i < dim; i++) d += q[k * dim + i] * text[s * dim + i];
+            want[k * n + s] = d;
+        }
+    }
+    let diff = 0;
+    for (let i = 0; i < want.length; i++) if (got[i] !== want[i]) diff++;
+    assert(diff === 0, 'dotRows: the JavaScript loop\'s numbers bit for bit (' + diff + ' differ)');
+    same([__bro_native.vision.dotRows(q, text, 0).length, __bro_native.vision.dotRows(q.subarray(1), text, dim).length,
+          __bro_native.vision.dotRows(new Float32Array(0), text, dim).length], [0, 0, 0], 'dotRows: empty for a bad shape');
+}
 
 let boxN = 0;
 const animal = (p, o) => {
@@ -484,6 +603,7 @@ same(reply.bBursts, bb, 'the worker groups bursts with taxa the same');
 same(reply.bLabels, bRecs.map((r) => L(r, bb.find((b) => b.photos.includes(r.path)))), 'worker labels() of every frame');
 same(reply.bAlone, bRecs.map((r) => L(r)), 'worker labels() of every photo alone');
 same(reply.crop, wl.classifyCrop(ROWS, cfSims, { candidates: 'byQuery', query: 'a moth' }), 'worker classifyCrop');
+same(reply.dot, [11, 17, 22, 34], 'the similarities native on the worker\'s thread');
 w.terminate();
 
 try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) {}

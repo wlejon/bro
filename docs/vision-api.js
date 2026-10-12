@@ -742,11 +742,18 @@ owl.dispose();
 //      insect list does not thin a bird's softmax; when the best species
 //      there is under labelThreshold and the best over every species is at
 //      least that and of another class, that one is the answer.
+//      Pets, in either mode: a box of 'a dog' or 'a cat' (PET_QUERIES) the
+//      detector scores `petMinBoxScore` (0.3) or more is ranked over its
+//      query's classes (Mammalia, the pets with them) with no fallback, so
+//      a dog is never named an insect (over every species a dog's crop
+//      could go to Eastern Cicada Killer or Chinese Mantis); its crop's
+//      `candidates` is 'query'. A weaker pet box is ranked as any other.
 //      A photo's crops go through BioCLIP in one batch (ClipModel.encodeImages):
 //      on a Radeon 8060S (Vulkan) the tower costs ~25 ms for one crop and
-//      ~11-13 ms a crop at 4-8; the rest of a crop's classify time is its
-//      cosine against every species prompt and the softmax, in JS (~25 ms
-//      a crop over the ~2000 default species). On a GPU a crop's embedding
+//      ~11-13 ms a crop at 4-8. A crop's cosine against every species
+//      prompt is one native pass for all the photo's crops (~0.3 ms a crop
+//      over the ~2000 default species; float64 sums, the numbers a plain JS
+//      loop gives), and its softmax, top K and taxa ~1.5 ms. On a GPU a crop's embedding
 //      in a batch differs from its single encode by FP16 rounding (~3e-4),
 //      so a score can move in its 4th decimal; on the CPU it is identical.
 //   3. Sharpness (bro.image.sharpness) of the subject and of the frame, and
@@ -855,6 +862,9 @@ for (const name of where.fetch) await bro.models.fetch(name);
  * @param {number} [opts.maxClassify=8]   boxes classified a photo, best first
  * @param {'all'|'byQuery'} [opts.candidates='all']  what a crop's softmax is
  *   over: every species, or the classes of its box's query (see above)
+ * @param {number|false} [opts.petMinBoxScore=0.3]  a dog or cat box at this
+ *   detector score or more is ranked over its query's classes (see above);
+ *   false for no pet rule
  * @param {string} [opts.model='bioclip-2']  'bioclip-2' | 'bioclip': which
  *   classifier to find, and its name in `config`
  * @param {number} [opts.threshold=0.15]  OWLv2 score threshold
@@ -883,7 +893,8 @@ const wild = bro.vision.wildlife.open({ model: 'bioclip-2' });
  * a result depends on, in a fixed key order, so `JSON.stringify(config)`
  * hashes a run: { detector: { name, repo, revision, weightsBytes },
  * classifier: { ... }, threshold, queries, topK, margin, maxClassify,
- * candidates: { mode: 'all' } | { mode: 'byQuery', fallback },
+ * candidates: { mode: 'all', petMinBoxScore } | { mode: 'byQuery', fallback,
+ * petMinBoxScore } (petMinBoxScore null when the pet rule is off),
  * speciesList: { files, count, hash } }. `revision` is read from the model
  * dir's ATTRIBUTION.md; `files` the list files by name ('upper-midwest.json',
  * 'upper-midwest-herps/species.json', ...), `count` the merged rows, `hash` an
@@ -907,6 +918,7 @@ const runKey = JSON.stringify(wild.config);
  * @param {number} [opts.topK]       this call only
  * @param {number} [opts.maxClassify]  this call only
  * @param {'all'|'byQuery'} [opts.candidates]  this call only
+ * @param {number|false} [opts.petMinBoxScore]  this call only
  * @returns {{ animal: boolean,
  *             detections: Array<{ label: string, score: number, box: number[] }>,
  *             subject: { x, y, w, h } | null,
@@ -925,8 +937,9 @@ const runKey = JSON.stringify(wild.config);
  *   first, up to maxClassify, each with its subject square, species top K
  *   and the top 3 genera, families, orders and classes (a taxon's score the
  *   sum over its species, with its lineage above it); `candidates` what its
- *   softmax was over ('query': its query's classes, 'fallback': every
- *   species after a sure answer of another class). `animalsDropped`: the
+ *   softmax was over ('query': its query's classes, under byQuery or as a
+ *   sure pet box (candidatesFor); 'fallback': every species after a sure
+ *   answer of another class). `animalsDropped`: the
  *   boxes over the threshold not classified (show "+3 more"). `subject` and
  *   `species` are the first animal's (the best box), as before animals;
  *   both empty when there is no animal. timing in ms (classify: every crop,
@@ -1085,9 +1098,13 @@ const named = bro.vision.wildlife.label(rec, burst);
  * bro.vision.wildlife.classifyCrop(rows, sims, opts?) — one crop's ranking
  * from its cosine similarity to each row's prompt, as analyze() does it
  * (pure; a similarity of log(p) / 100 is a probability p). opts { topK (5),
- * top (3), query, candidates: 'all' | 'byQuery', fallback (0.85) } ->
- * { species: top K (unrounded), taxa: taxaScores, candidates: 'all' |
- * 'query' | 'fallback' }.
+ * top (3), query, candidates: 'all' | 'byQuery' | 'query' (the query's
+ * classes, no fallback), fallback (0.85) } -> { species: top K
+ * (unrounded), taxa: taxaScores, candidates: 'all' | 'query' | 'fallback' }.
+ *
+ * bro.vision.wildlife.candidatesFor(query, boxScore, configCandidates?) —
+ * the candidates analyze() ranks a box with: 'query' for a PET_QUERIES box
+ * at petMinBoxScore or more, else the mode.
  *
  * bro.vision.wildlife.taxaScores(rows, probs, { top }) — per genus, family,
  * order and class the sum of probs over its rows, best first (top 3, or
@@ -1103,9 +1120,9 @@ const named = bro.vision.wildlife.label(rec, burst);
 // readSpecies(lists) (files, rows and documents merged, as open() does),
 // readTaxa(lists) (their taxa maps merged, the first of a name kept),
 // keeperScore(record, metric), and the constants QUERIES, QUERY_CLASSES,
-// RANKS, SPECIES_LISTS ([{ folder, file }]) and DEFAULTS ({ model,
+// PET_QUERIES, RANKS, SPECIES_LISTS ([{ folder, file }]) and DEFAULTS ({ model,
 // threshold, topK, margin, nms, maxDetections, gapS, labelThreshold,
-// maxClassify, candidates, taxaTop, minBoxScore, broadMinBoxScore,
+// maxClassify, candidates, petMinBoxScore, taxaTop, minBoxScore, broadMinBoxScore,
 // burstMinBoxScore, queryMatch, consensus }).
 
 
