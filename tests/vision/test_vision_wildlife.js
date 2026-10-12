@@ -307,6 +307,7 @@ const l1 = L(bRecs[0], bb[0]), l3 = L(bRecs[2], bb[0]);
 same(l1.map((l) => [l.scientific, l.from, l.frames, l.boxes]), [['Ardea alba', 'burst', 2, [[1, 0, 2, 2]]], ['Anas platyrhynchos', 'burst', 1, []]],
      'an egret in 2 of 3 frames and a mallard in 1: both, on a frame with the egret');
 same(l3.map((l) => [l.scientific, l.boxes]), [['Ardea alba', []], ['Anas platyrhynchos', [[3, 0, 2, 2]]]], 'and on the mallard\'s frame');
+same(L(bRecs[0], bb[0]), l1, 'a burst\'s labels are weighed once and handed out as copies: a frame\'s boxes stay its own');
 near(l1[0].score, 0.95, 'a burst label scores its best frame');
 near(l1[0].share, (0.95 + 0.92 + egret.scores[2]) / 3, 'its share is the mean over the animal frames');
 same(brief(L(null, bb[0])), [['species', 'Ardea alba', 0], ['species', 'Anas platyrhynchos', 0]], 'labels(null, burst)');

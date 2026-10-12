@@ -530,7 +530,23 @@
         return { score, box };
     }
 
+    // A burst's labels depend only on the burst, `t` and the rule, and every
+    // frame of it asks for them (labels() once a photo): weighing its
+    // evidence is O(frames) a call, so a burst of N frames labelled frame by
+    // frame was O(N^2). Kept per burst object (groupBursts makes new ones)
+    // and handed out as copies, since frameBoxes fills in their boxes.
+    const burstLabelCache = new WeakMap();
     function burstLabels(burst, t, rule) {
+        const key = t + '|' + rule.minBox + '|' + rule.broadMin + '|' + rule.burstMin + '|' +
+            rule.queryMatch + '|' + rule.consensus;
+        let byKey = burstLabelCache.get(burst);
+        if (!byKey) { byKey = new Map(); burstLabelCache.set(burst, byKey); }
+        let ls = byKey.get(key);
+        if (!ls) { ls = weighBurst(burst, t, rule); byKey.set(key, ls); }
+        return ls.map((L) => Object.assign({}, L, { boxes: L.boxes.slice() }));
+    }
+
+    function weighBurst(burst, t, rule) {
         if (!Array.isArray(burst.taxa)) {
             // A burst from before per-taxon consensus: its one species.
             const s = burst.species;
