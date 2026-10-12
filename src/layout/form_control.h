@@ -44,8 +44,20 @@ std::string formValue(dom::Element* el);
 void setFormValue(dom::Element* el, std::string_view value);
 
 // A <select>'s <option> descendants in document order, descending through
-// <optgroup>. Empty for anything else.
+// <optgroup>; a <datalist>'s, at any depth. Empty for anything else.
 std::vector<dom::Element*> selectOptions(dom::Element* el);
+
+// input.list: the <datalist> an <input>'s list attribute names, or null.
+dom::Element* inputList(dom::Element* input);
+
+// A <datalist>'s suggestions: each enabled option with a non-empty value, and
+// the label shown beside it (its label attribute, else its text when a value
+// attribute gives the value; whitespace collapsed; empty when it says nothing).
+struct DatalistOption {
+    std::string value;
+    std::string label;
+};
+std::vector<DatalistOption> datalistOptions(dom::Element* datalist);
 
 // The selected index, from the laid-out control when there is one and from the
 // DOM (pending assignment, then `selected` attributes, then "first option")

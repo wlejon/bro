@@ -100,6 +100,7 @@ Value makeClassListObject(HostNodeState* st);
 void decorateElementDataset(ObjectBuilder& b);
 
 void decorateElementForms(ObjectBuilder& b);
+void decorateInputProto(ObjectBuilder& b);  // HTMLInputElement.prototype
 void decorateElementValidity(ObjectBuilder& b);
 void decorateElementMutate(ObjectBuilder& b);
 void decorateElementInteraction(ObjectBuilder& b);

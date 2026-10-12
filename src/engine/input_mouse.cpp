@@ -117,6 +117,7 @@ void Engine::handleMouseDown(float x, float y, int button) {
 
     button = sdlToDomButton(button);
 
+    syncDatalist();  // a field's suggestions go with its focus
     if (overlayMgr_.handleMouseDown(x, overlayMouseY(y), button)) {
         pressedButtons_ |= domButtonMask(button);
         markAppBaseDirty();

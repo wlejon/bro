@@ -22,7 +22,7 @@ html {
 
 /* ---------- Hidden elements ---------- */
 
-head, title, meta, link, style, script, noscript {
+head, title, meta, link, style, script, noscript, datalist {
     display: none;
 }
 

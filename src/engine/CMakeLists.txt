@@ -75,6 +75,8 @@ add_library(bro_engine STATIC
     settings.cpp
     overlay.cpp
     dropdown_overlay.cpp
+    datalist_overlay.cpp
+    input_datalist.cpp
     color_picker_overlay.cpp
     menu_bar.cpp
     inspector_highlight.cpp

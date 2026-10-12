@@ -18,6 +18,7 @@
 #include "layout/el_input.h"
 #include "layout/el_textarea.h"
 #include "layout/el_select.h"
+#include "layout/form_control.h"
 #include "layout/key_handle_result.h"
 
 #include <algorithm>
@@ -145,6 +146,7 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
     // own (input_remote.cpp).
     if (remoteKey(scancode, mod, true, repeat)) return;
 
+    syncDatalist();  // a field's suggestions go with its focus
     if (overlayMgr_.handleKeyDown(keycode, mod)) {
         uiDirty_ = true;
         return;
@@ -377,6 +379,12 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
         // A listener may have moved focus or removed the control.
         activeEl = handle.get();
         if (!activeEl || !document_ || activeEl != document_->activeElement()) return;
+        // Down (or Alt+Down) in a field with a list opens its suggestions.
+        if (keycode == platform::kc::Down && !overlayMgr_.hasActive() &&
+            !platform::hasPrimaryMod(mod) && layout::inputList(activeEl)) {
+            updateDatalist(activeEl, /*explicitOpen=*/true);
+            if (overlayMgr_.hasActive()) return;
+        }
         if (auto* input = getElInput(activeEl); input && input->isFocused()) {
             result = input->handleKeyDown(activeEl, keycode, mod);
         } else if (auto* textarea = getElTextarea(activeEl); textarea && textarea->isFocused()) {

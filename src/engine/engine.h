@@ -701,6 +701,15 @@ private:
 
     float overlayMouseY(float y) const;
     void applyKeyResult(dom::Element* el, const layout::KeyHandleResult& r);
+
+    // <datalist> suggestions (input_datalist.cpp). updateDatalist: after the
+    // user edits a field with a list (or presses Down / Alt+Down on it,
+    // explicitOpen), show its matching options, refresh the list already
+    // open, or close it when nothing matches. syncDatalist: once a frame,
+    // close the list of a field that lost the focus or left the document.
+    void updateDatalist(dom::Element* input, bool explicitOpen);
+    void syncDatalist();
+    bool datalistPicking_ = false;  // a pick's own `input` must not reopen the list
     void dispatchInputEvent(dom::Element* el, const std::string& data = "",
                             const std::string& inputType = "",
                             bool isComposing = false);

@@ -42,7 +42,13 @@ void Engine::applyKeyResult(dom::Element* el, const layout::KeyHandleResult& r) 
         dispatchEvent(el, changeEvt);
     }
     if (r.dispatchInput) {
+        dom::ElementHandle handle(document_.get(), el);
         dispatchInputEvent(el, r.inputData, r.inputType);
+        // An edit of a field with a list: its suggestions follow the text.
+        if (!r.unfocus) {
+            if (dom::Element* live = handle.get()) updateDatalist(live, /*explicitOpen=*/false);
+            else return;
+        }
     }
     if (r.unfocus) {
         if (takeValueChange(el)) {
@@ -265,7 +271,7 @@ void Engine::updateTextInputArea() {
 void Engine::handleTextEditing(const std::string& text, int start,
                                int /*length*/) {
     if (!document_) return;
-    if (overlayMgr_.hasActive()) return;
+    if (overlayMgr_.hasModal()) return;
     if (capturedRemoteView()) return;
     if (terminalTextEditing(text)) return;
 

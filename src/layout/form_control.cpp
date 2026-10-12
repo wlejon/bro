@@ -142,9 +142,54 @@ void setFormValue(dom::Element* el, std::string_view value) {
     if (auto* inp = el->inputControl()) { inp->clearHistory(); inp->armChange(el); }
 }
 
+namespace {
+void collectDescendantOptions(dom::Element* el, std::vector<dom::Element*>& out) {
+    for (auto* child : el->children()) {
+        if (tagIs(child, "option", "OPTION")) out.push_back(child);
+        else collectDescendantOptions(child, out);
+    }
+}
+}  // namespace
+
 std::vector<dom::Element*> selectOptions(dom::Element* el) {
     std::vector<dom::Element*> out;
-    if (el && tagIs(el, "select", "SELECT")) collectOptions(el, out);
+    if (!el) return out;
+    if (tagIs(el, "select", "SELECT")) collectOptions(el, out);
+    // A <datalist>'s options are every <option> under it, however deep: the
+    // fallback markup of old pages wraps them in a <select>.
+    else if (tagIs(el, "datalist", "DATALIST")) collectDescendantOptions(el, out);
+    return out;
+}
+
+dom::Element* inputList(dom::Element* input) {
+    if (!input || !tagIs(input, "input", "INPUT") || !input->hasAttribute("list")) return nullptr;
+    dom::Document* doc = input->document();
+    if (!doc) return nullptr;
+    const std::string& id = input->getAttribute("list");
+    if (id.empty()) return nullptr;
+    dom::Element* el = doc->getElementById(id);
+    return el && tagIs(el, "datalist", "DATALIST") ? el : nullptr;
+}
+
+std::vector<DatalistOption> datalistOptions(dom::Element* datalist) {
+    std::vector<DatalistOption> out;
+    for (dom::Element* o : selectOptions(datalist)) {
+        if (!tagIs(datalist, "datalist", "DATALIST")) break;
+        if (o->hasAttribute("disabled")) continue;
+        std::string value = optionValue(o);
+        if (value.empty()) continue;  // HTML: an option with no value is no suggestion
+        std::string label = o->hasAttribute("label") ? o->getAttribute("label")
+                          : (o->hasAttribute("value") ? o->textContent() : std::string());
+        // Whitespace in a label is collapsed and trimmed, as it is shown.
+        std::string tidy;
+        for (char c : label) {
+            const bool ws = c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f';
+            if (ws) { if (!tidy.empty() && tidy.back() != ' ') tidy.push_back(' '); }
+            else tidy.push_back(c);
+        }
+        if (!tidy.empty() && tidy.back() == ' ') tidy.pop_back();
+        out.push_back({std::move(value), std::move(tidy)});
+    }
     return out;
 }
 

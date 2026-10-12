@@ -111,6 +111,12 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
     if (overlayActive && overlayMgr_.handleMouseMove(x, overlayMouseY(y))) {
         markAppBaseDirty();
     }
+    // A passive overlay (datalist suggestions) holds the pointer only over
+    // itself; elsewhere the page keeps its hover.
+    if (overlayActive && !overlayMgr_.hasModal() && overlayMgr_.active() &&
+        !overlayMgr_.active()->pointInBounds(x, overlayMouseY(y))) {
+        overlayActive = false;
+    }
 
     if (auto* dragEl = controlDragElement_.get()) {
         float cx = x;

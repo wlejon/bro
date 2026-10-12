@@ -513,4 +513,18 @@ void decorateElementForms(ObjectBuilder& b) {
     });
 }
 
+// HTMLInputElement's own members. `list` is the <datalist> the list attribute
+// names (null when it names nothing, or something else); the engine shows its
+// options under the field as the user types (engine/input_datalist.cpp).
+void decorateInputProto(ObjectBuilder& b) {
+    b.accessor("list",
+               [](Value self_, std::span<const Value>) {
+                   HostNodeState* st = hostNodeStateOfValue(self_);
+                   if (!st || !st->el) return ev::null();
+                   dom::Element* list = layout::inputList(st->el);
+                   return list ? hostElementValue(list) : ev::null();
+               },
+               nullptr);
+}
+
 }  // namespace bro::bronze_host

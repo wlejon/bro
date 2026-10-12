@@ -59,6 +59,13 @@ bool OverlayManager::handleMouseDown(float x, float y, int button) {
         return true;
     }
 
+    // A passive overlay closes and lets the press through: the field it
+    // belongs to keeps working, and a press elsewhere means what it means.
+    if (active_->passive()) {
+        close();
+        return false;
+    }
+
     // Click outside: consume it too, so the element under the cursor doesn't
     // receive a spurious click from the dismissal gesture.
     if (active_->dismissesOnClickOutside()) {

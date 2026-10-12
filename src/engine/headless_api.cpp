@@ -415,6 +415,7 @@ std::vector<uint8_t> Engine::capturePixels() {
     render::CommandBuffer& appCmds = incremental ? captureCommands_ : scratchCmds;
     if (incremental) std::swap(captureCommands_, capturePrevCommands_);
 
+    syncDatalist();
     updateSelectionSnapshot();
     skia->beginFrame(w, h);
     recordAppLayers(appCmds, w, h,

@@ -303,7 +303,7 @@ void installHtmlInterfaces() {
     TagClassInit htmlTagClasses[] = {
         {g_htmlCanvasElementClass, "HTMLCanvasElement"},
         {g_htmlDivElementClass, "HTMLDivElement"},
-        {g_htmlInputElementClass, "HTMLInputElement"},
+        {g_htmlInputElementClass, "HTMLInputElement", decorateInputProto},
         {g_htmlSelectElementClass, "HTMLSelectElement"},
         {g_htmlTextAreaElementClass, "HTMLTextAreaElement"},
         {g_htmlButtonElementClass, "HTMLButtonElement"},

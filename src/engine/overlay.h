@@ -63,6 +63,12 @@ public:
     /// If true, pressing Escape dismisses the overlay.
     virtual bool dismissesOnEscape() const { return true; }
 
+    /// A passive overlay (a datalist's suggestions) leaves the page its
+    /// focus, typing, IME composition and hover: only presses inside its
+    /// bounds and the keys it takes are its own. A press outside dismisses it
+    /// and goes on to the page instead of being eaten.
+    virtual bool passive() const { return false; }
+
     /// The overlay should request dismissal from inside its own logic
     /// (e.g. after the user picks an option). The manager checks this
     /// after each event dispatch.
@@ -106,6 +112,8 @@ public:
     void close();
 
     bool hasActive() const { return active_ != nullptr; }
+    /// An active overlay that takes the page's input from it (not passive).
+    bool hasModal() const { return active_ && !active_->passive(); }
     Overlay* active() const { return active_.get(); }
 
     // --- Input dispatch. Each returns true if consumed.

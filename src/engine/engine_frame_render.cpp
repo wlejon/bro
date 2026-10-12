@@ -111,6 +111,7 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
         bool promotedActive = layoutPipeline_->promotedActive();
         if ((uiDirty_ || !hasRenderedOnce_ || promotedActive) && !uiThrottled) {
             stageSystemPanelCanvases();
+            syncDatalist();
             updateSelectionSnapshot();
 
             auto& backBuf = framePresenter_->backBuffer();
