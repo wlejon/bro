@@ -82,7 +82,9 @@ void Engine::initSystemPanels() {
 
 void Engine::destroySystemPanels() {
     for (auto& doc : systemDocs_) {
+        if (doc.animations) doc.animations->clear();  // their records name its elements
         doc.document.reset();
+        doc.animations.reset();
     }
     systemDocs_.clear();
 }
@@ -220,6 +222,10 @@ void Engine::loadSystemPanel(SystemDocument& liveDoc) {
 
         // Parse HTML — UA defaults at UserAgent origin, inline styles at Author
         liveDoc.document = std::make_unique<dom::Document>();
+        // Its transitions and animations, on the engine's clock, as a
+        // sub-document's (engine/sub_doc_animations.h).
+        liveDoc.animations = std::make_unique<SubDocAnimations>();
+        liveDoc.animations->attach(liveDoc.document.get(), [this] { return engineNowMs_; });
         liveDoc.document->setMediaViewport(static_cast<float>(viewportWidth_),
                                            static_cast<float>(viewportHeight_));
         liveDoc.document->setMediaColorScheme(effectiveColorScheme());
@@ -535,6 +541,21 @@ void Engine::tickSystemPanels(double nowMs) {
         }
     }
 
+    // Each panel's transitions and animations, as a sub-document's
+    // (tickSubDoc): a dirty shown one resolved and ticked with the frame even
+    // when nothing lays it out (a headless advanceTime), and their events
+    // delivered here, at the start of the frame.
+    for (auto& doc : systemDocs_) {
+        if (!doc.document || !doc.animations) continue;
+        if (isSystemVisible() && isSystemDocVisible(doc) && doc.document->documentElement() &&
+            doc.document->isDirty()) {
+            doc.document->resolveStyles();
+            doc.animations->tick(doc.document.get(), doc.document->animationTime());
+            doc.animations->markForNextPass();
+        }
+        doc.animations->deliverEvents();
+    }
+
     if (!isSystemVisible()) return;
 
     for (auto& doc : systemDocs_) {
@@ -564,10 +585,16 @@ void Engine::layoutSystemPanels(layout::SkiaTextMetrics& metrics) {
         if (!isSystemDocVisible(doc) || !doc.document) continue;
         if (!doc.document->isDirty()) continue;
         doc.document->resolveStyles();
+        // Its transitions and animations, after the resolve that starts
+        // them, at the time it resolved at (as a sub-document's record).
+        if (doc.animations) doc.animations->tick(doc.document.get(), doc.document->animationTime());
         doc.document->performLayout(static_cast<float>(viewportWidth_),
                                     static_cast<float>(viewportHeight_),
                                     metrics);
         doc.document->clearDirty();
+        // What is animating lays out again next frame, and what just
+        // finished settles.
+        if (doc.animations) doc.animations->markForNextPass();
     }
 }
 

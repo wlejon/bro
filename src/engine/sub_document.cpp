@@ -58,6 +58,8 @@ WebAnimationManager& Engine::webAnimationManagerFor(const dom::Document* doc) {
             if (d && d->document.get() == doc) return d->animations.web;
         for (auto& h : windowHosts_)
             if (h && h->document.get() == doc) return h->animations.web;
+        for (auto& s : systemDocs_)
+            if (s.animations && s.document.get() == doc) return s.animations->web;
     }
     return webAnimationManager_;
 }
@@ -68,6 +70,8 @@ WebAnimationManager* Engine::webAnimationManagerOf(uint64_t id) {
         if (d && d->animations.web.find(id)) return &d->animations.web;
     for (auto& h : windowHosts_)
         if (h && h->animations.web.find(id)) return &h->animations.web;
+    for (auto& s : systemDocs_)
+        if (s.animations && s.animations->web.find(id)) return &s.animations->web;
     return nullptr;
 }
 
@@ -77,6 +81,8 @@ void Engine::forEachWebAnimationManager(const std::function<void(WebAnimationMan
         if (d) fn(d->animations.web);
     for (auto& h : windowHosts_)
         if (h) fn(h->animations.web);
+    for (auto& s : systemDocs_)
+        if (s.animations) fn(s.animations->web);
 }
 
 void SubDocAnimations::attach(dom::Document* doc, std::function<double()> clock) {
@@ -101,6 +107,23 @@ bool SubDocAnimations::tick(dom::Document* doc, double nowMs) {
 void SubDocAnimations::markForNextPass() {
     for (dom::Element* e : web.activeThisTick()) e->markDirty();
     for (dom::Element* e : web.finishedThisTick()) e->markDirty();
+}
+
+void SubDocAnimations::deliverEvents() {
+    for (auto& ev : transitions.takePendingEvents()) {
+        dom::TransitionEvent tevt(ev.type, true, false);
+        tevt.setPropertyName(ev.name);
+        tevt.setElapsedTime(ev.elapsedTime);
+        tevt.setIsTrusted(true);
+        dom::dispatchDomEvent(ev.element, tevt);
+    }
+    for (auto& ev : animations.takePendingEvents()) {
+        dom::AnimationEvent aevt(ev.type, true, false);
+        aevt.setAnimationName(ev.name);
+        aevt.setElapsedTime(ev.elapsedTime);
+        aevt.setIsTrusted(true);
+        dom::dispatchDomEvent(ev.element, aevt);
+    }
 }
 
 void SubDocAnimations::clear() {
@@ -207,20 +230,7 @@ bool tickSubDoc(SubDocRef d, double /*nowMs*/) {
     }
     // Their events, queued by the last tick: here, at the start of the frame
     // and outside its record, where a listener may change anything.
-    for (auto& ev : d.animations.transitions.takePendingEvents()) {
-        dom::TransitionEvent tevt(ev.type, true, false);
-        tevt.setPropertyName(ev.name);
-        tevt.setElapsedTime(ev.elapsedTime);
-        tevt.setIsTrusted(true);
-        dom::dispatchDomEvent(ev.element, tevt);
-    }
-    for (auto& ev : d.animations.animations.takePendingEvents()) {
-        dom::AnimationEvent aevt(ev.type, true, false);
-        aevt.setAnimationName(ev.name);
-        aevt.setElapsedTime(ev.elapsedTime);
-        aevt.setIsTrusted(true);
-        dom::dispatchDomEvent(ev.element, aevt);
-    }
+    d.animations.deliverEvents();
     if (d.cmdBuffer.commandCount() == 0) return true;
     if (d.document && d.document->isDirty()) return true;
     return false;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/replaced_elements.h"
+#include "engine/sub_doc_animations.h"
 #include "dom/document.h"
 #include "canvas/canvas_scene.h"
 
@@ -28,6 +29,10 @@ struct SystemDocument {
     bool loaded = false;    // built (or tried to be: an unreadable file stays unloaded)
     bool active = true;
     std::vector<std::unique_ptr<canvas::CanvasScene>> canvasScenes;
+    // Its CSS transitions, animations and Web Animations, built with it.
+    // Before it: they outlive it (the document's teardown reaches them), and
+    // are cleared first (their records name its elements).
+    std::unique_ptr<SubDocAnimations> animations;
     std::unique_ptr<dom::Document> document;
     MouseDispatchState mouseState;  // per-doc click/dblclick tracking
 };

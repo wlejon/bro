@@ -1,7 +1,8 @@
 #pragma once
 
 // A sub-document's CSS transitions, CSS animations and Web Animations (an
-// <iframe>'s, a bro.window.open() window's). The app document's are the
+// <iframe>'s, a bro.window.open() window's, a system panel's, laid out in
+// layoutSystemPanels and ticked as a record does). The app document's are the
 // engine's own, ticked by the layout thread's pass; a sub-document is styled
 // and laid out on the main thread (recordSubDoc), which ticks these the same
 // way: the resolve starts and samples them at the scaled clock (attach), the
@@ -40,6 +41,9 @@ struct SubDocAnimations {
     // animating (their next value) and those whose animation just finished
     // (their settled value), so the next pass runs.
     void markForNextPass();
+    // The transition and animation events the last tick queued, dispatched
+    // (at the start of a frame, outside its record).
+    void deliverEvents();
     // Its document is going: every record and its events.
     void clear();
 };

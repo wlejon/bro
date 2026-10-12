@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html>
+<head><style>
+  html, body { margin: 0; width: 100%; height: 100%; }
+  /* A transition, a keyframe animation and an element.animate() target, side
+     by side; each ends on its own colour (red, red, white). */
+  #t { position: absolute; left: 0; top: 0; width: 40px; height: 40px; background-color: #0000ff;
+       transition: background-color 150ms linear; }
+  @keyframes tint { from { background-color: #0000ff; } to { background-color: #00ff00; } }
+  #k { position: absolute; left: 50px; top: 0; width: 40px; height: 40px; background-color: #ff0000; }
+  #k.on { animation: tint 800ms linear; }
+  #w { position: absolute; left: 100px; top: 0; width: 40px; height: 40px; background-color: #ffffff; }
+  /* A tooltip, put in by a timer and faded in. */
+  @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+  .tip { position: fixed; left: 0; top: 50px; width: 60px; height: 20px; background-color: #ff00ff;
+         animation: fade-in 120ms ease; }
+</style></head>
+<body>
+  <!-- A system panel that animates, for tests/engine/test_panel_animations.js
+       (it stands for the perf panel of tests/test_app/panel_anim_app): go()
+       starts them all once it is shown, and report() logs what happened. -->
+  <div id="t"></div><div id="k"></div><div id="w"></div>
+  <script>
+    var results = { events: [], tipStart: null, tipMid: null, finished: false, onfinish: false };
+    function report() { console.log('PANEL_ANIM ' + JSON.stringify(results)); }
+    function go() {
+      var t = document.getElementById('t'), k = document.getElementById('k'), w = document.getElementById('w');
+      t.addEventListener('transitionend', function (e) { results.events.push('transitionend:' + e.propertyName); });
+      k.addEventListener('animationstart', function (e) { results.events.push('animationstart:' + e.animationName); });
+      k.addEventListener('animationend', function (e) { results.events.push('animationend:' + e.animationName); });
+      t.style.backgroundColor = '#ff0000';
+      k.classList.add('on');
+      var a = w.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 100 });
+      a.onfinish = function () { results.onfinish = true; };
+      a.finished.then(function () { results.finished = true; });
+      // The tooltip, while nothing else happens: measured as it goes in, and
+      // its opacity read part way.
+      setTimeout(function () {
+        var tip = document.createElement('div');
+        tip.className = 'tip';
+        document.body.appendChild(tip);
+        tip.getBoundingClientRect();
+        var as = tip.getAnimations();
+        results.tipStart = as.length ? as[0].currentTime : null;
+        setTimeout(function () { results.tipMid = parseFloat(getComputedStyle(tip).opacity); }, 50);
+      }, 400);
+      setTimeout(report, 1300);
+    }
+    setTimeout(go, 100);
+  </script>
+</body>
+</html>
