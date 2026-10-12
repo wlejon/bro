@@ -62,6 +62,13 @@ struct ScrollLayerPlace {
     // device-pixel grid: its origin (contentX - scrollX) moved by whole
     // device pixels.
     float snapScale = 0;
+    // The axes it scrolls, and the clip the compositor puts the layer under
+    // (the pass's CSS px; clipW < 0: none). On an axis it does not scroll,
+    // that clip's edges stand still: the layer's content is rastered under
+    // them too, as painting it in place draws it under them (Ganesh treats a
+    // rounded clip the rect cuts otherwise than one alone).
+    bool scrollsX = true, scrollsY = true;
+    float clipX = 0, clipY = 0, clipW = -1, clipH = -1;
 };
 
 // What the traversal does with a layer's content this pass.

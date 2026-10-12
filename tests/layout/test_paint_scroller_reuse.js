@@ -72,14 +72,16 @@ setDeviceScaleFactor(1.5);
 // A quarter px down: its rows' edges between device pixels, not on them or
 // halfway (where a clip moved half a pixel cuts what a snapped one would).
 inner.style.paddingTop = '0.25px';
+outer.style.overflowX = 'hidden';
 for (let i = 0; i < 12; ++i) {
     const row = inner.children[i];
     row.style.overflow = 'hidden';
     row.style.height = '13px';
-    // Square: a rounded clip's edge is antialiased by Ganesh a little
-    // differently in a scroll layer's surface than in the page's (the
-    // pixel under it, white on the CPU, takes 10% more of what it clips).
-    row.style.borderRadius = '0';
+    // Rounded: on the GPU a rounded clip the outer scroller's clip cuts
+    // (its rows run past its right edge, which it clips and does not scroll
+    // to) is drawn as Ganesh draws it in place in the outer's scroll layer
+    // too, which rasters its content under that edge.
+    row.style.borderRadius = '4px';
     // Something for the clip to cut: a black label taller than the row.
     const label = row.firstElementChild;
     label.style.display = 'block';
@@ -95,6 +97,7 @@ inner.scrollTop = 3;
 check('dpr 1.5, inner scrolled by 3 device pixels');
 setDeviceScaleFactor(1);
 check('dpr 1 again');
+outer.style.overflowX = '';
 const after = perf.stats().paint;
 const translated = after.reusedScrolled - before.reusedScrolled;
 assert(translated > 50, `rows were reused under a translate as they scrolled (${translated})`);

@@ -29,7 +29,9 @@
     const WORDS = ['paint', 'span', 'cache', 'bro', 'fuzz', 'Wq', 'lorem ipsum', '12345', 'hover me', 'xyz'];
     const COLORS = ['#e33', '#3a3', '#33e', '#ee3', '#3ee', '#e3e', '#888', '#fff', '#222', '#f80'];
 
-    function create(seed) {
+    // opts.rounded: the scroller's rows clip under border radii (build()).
+    function create(seed, opts) {
+        const rounded = !!(opts && opts.rounded);
         const r = mulberry32(seed);
         const pick = (arr) => arr[Math.floor(r() * arr.length)];
         const int = (lo, hi) => lo + Math.floor(r() * (hi - lo + 1));
@@ -160,6 +162,29 @@
                 sc.appendChild(row);
             }
             stage.appendChild(sc);
+            // With opts.rounded, rounded clips in it at fractional places:
+            // rows that clip their text (and a box in one, made taller and
+            // solid) under a border radius, some wider than the scroller,
+            // which clips them on an axis it does not scroll (overflow-x
+            // hidden): on the GPU drawn in its scroll layer as in place. Their
+            // own random stream and no new elements, so the steps' draws stay
+            // as they were.
+            const r2 = mulberry32((seed ^ 0x5eed5) >>> 0);
+            const fixedX = rounded && r2() < 0.5;
+            if (fixedX) sc.style.overflowX = 'hidden';
+            for (const row of rounded ? sc.children : []) {
+                if (r2() < 0.5) continue;
+                row.style.overflow = 'hidden';
+                row.style.borderRadius = (2 + Math.floor(r2() * 6)) + 'px';
+                row.style.height = (12 + Math.floor(r2() * 6) + 0.25) + 'px';
+                // Wider than the scroller only where it does not scroll that
+                // way: an edge it scrolls cuts a rounded clip in place that
+                // its layer has whole (the compositor cuts it), which Ganesh
+                // draws with another op (a corner a level or two apart).
+                if (r2() < 0.4 && fixedX) row.style.width = '300px';
+                const box = row.firstElementChild;
+                if (box) box.style.cssText = 'height: 40px; background: #000; color: #fff';
+            }
             // A clip under a transform: one not put on whole device pixels
             // (DrawTraversal::snapClip), a box scaled by a fraction with a box
             // in it, at fractional places, whose clip cuts its text.

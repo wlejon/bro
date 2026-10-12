@@ -700,7 +700,24 @@ void SkiaRenderer::drawSvgMarkup(const char* data, size_t len,
 }
 
 void SkiaRenderer::setClip(float x, float y, float w, float h) {
-    if (canvas_) canvas_->clipRect(SkRect::MakeXYWH(x, y, w, h));
+    if (!canvas_) return;
+    const SkRect r = SkRect::MakeXYWH(x, y, w, h);
+    // A clip on whole device pixels (an overflow clip DrawTraversal::snapClip
+    // put there) cuts the same pixels antialiased or not; antialiased, Ganesh
+    // merges it with a rounded clip inside it into one rounded element, as a
+    // scroll layer's surface has that rounded clip alone (its scroller's clip
+    // is the compositor's). Two elements and one, it treats a solid fill
+    // under the rounded clip otherwise (analytic coverage, or the clip drawn
+    // as the fill's geometry) and the edge comes out a level apart. Off the
+    // grid (under a transform) it stays a hard edge.
+    const SkMatrix& m = canvas_->getTotalMatrix();
+    bool onGrid = false;
+    if (m.rectStaysRect()) {
+        const SkRect d = m.mapRect(r);
+        auto whole = [](float v) { return std::fabs(v - std::round(v)) < 1e-3f; };
+        onGrid = whole(d.fLeft) && whole(d.fTop) && whole(d.fRight) && whole(d.fBottom);
+    }
+    canvas_->clipRect(r, onGrid);
 }
 
 void SkiaRenderer::resetClip() {

@@ -578,6 +578,11 @@ public:
     uint64_t scrollLayerPartialMismatch() const {
         return baseScrollLayers_.partialMismatch() + captureScrollLayers_.partialMismatch();
     }
+    // The same of the page's own partial raster (replayAppLayers), checked
+    // under ScrollLayerSet::setVerifyPartial too.
+    uint64_t pagePartialMismatch() const { return pagePartialMismatch_.load(std::memory_order_relaxed); }
+    // Passes that drew only the page's damage (and what reaches it), since startup.
+    uint64_t pagePartialRasters() const { return pagePartialRasters_.load(std::memory_order_relaxed); }
 
     /// The frame flight recorder (frame_trace.h) and the agent control
     /// channel (control.h, docs/agent-control.md). startControl serves the
@@ -1246,6 +1251,7 @@ private:
     // Lifetime raster passes and their time in µs (the raster thread adds,
     // perf.stats().paint reads).
     std::atomic<uint64_t> rasterPasses_{0}, rasterUs_{0};
+    std::atomic<uint64_t> pagePartialMismatch_{0}, pagePartialRasters_{0};
 
 public:
     uint64_t rasterPassCount() const { return rasterPasses_.load(std::memory_order_relaxed); }

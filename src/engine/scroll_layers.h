@@ -66,8 +66,19 @@ public:
         const float d = originCss * scale;
         return d - std::floor(d);
     }
+    // The same on an even grid, [0, 2): on the GPU a surface sits an even
+    // number of device pixels from where painting in place puts its content.
+    // Ganesh antialiases a rounded corner (FillRRectOp) and more with
+    // hardware derivatives, taken over 2x2 pixel quads: at an odd offset its
+    // pixels come out a few levels apart from the page's.
+    static float evenPhase(float originCss, float scale) {
+        const float d = originCss * scale;
+        return d - 2.0f * std::floor(d * 0.5f);
+    }
     // How far round the view a recorded window reaches (CSS px).
     static constexpr float kMargin = 256.0f;
+    // An edge of a clip that does not cut (an axis the layer scrolls).
+    static constexpr float kOpen = 1e30f;
 
     // Around a pass's record (main thread, raster idle): a layer not recorded
     // in the pass is dropped at its end, and so is a piece past the ones it
@@ -89,8 +100,12 @@ public:
     // when its latest recordings stand there (nothing under the scroller
     // stamped, nothing volatile in them, no scroller in it), its window holds
     // the view there, and the move from the pass's scroll is by whole device
-    // pixels at `scale`. False: the page has to be recorded for it.
-    bool scrollTo(dom::Element* scroller, float scrollX, float scrollY, float scale);
+    // pixels at `scale`. False: the page has to be recorded for it. On the
+    // GPU a move by an odd number of device pixels leaves its surfaces off
+    // the even grid they were rastered on (evenPhase): placed right, but
+    // antialiased on the other parity; `rasterDue` then asks for a raster
+    // pass (no record), which rasters it at the phase of its live scroll.
+    bool scrollTo(dom::Element* scroller, float scrollX, float scrollY, float scale, bool* rasterDue = nullptr);
 
     // Raster thread: each part whose recording changed, or all of a layer's
     // when its phase or scale did, its window into its surface, and its
@@ -178,6 +193,10 @@ private:
         // Where content space landed (content box less scroll) and the snap
         // scale when its content was recorded (ScrollLayerPlace::snapScale).
         float recordOriginX = 0, recordOriginY = 0, recordSnapScale = 0;
+        // The compositor's clip on the axes it does not scroll, in content
+        // space (open on an axis that scrolls): the content part is rastered
+        // under it, as it is drawn under it in place (ScrollLayerPlace::clipX).
+        float fixX0 = -kOpen, fixY0 = -kOpen, fixX1 = kOpen, fixY1 = kOpen;
         bool nestedScroller = false;
         bool seen = false;
         uint64_t passes = 0;             // passes that placed it
@@ -194,9 +213,13 @@ private:
         Thumb thumbs[2];
         // Where the main thread scrolled it: the pass's scroll, then scrollTo's.
         std::atomic<float> liveX{0}, liveY{0};
+        // The live scroll its parts were last rastered at (the raster
+        // thread's, read by scrollTo).
+        std::atomic<float> rasterScrollX{0}, rasterScrollY{0};
 
         // The raster thread's: what it last drew the parts at, and the thumbs.
         float rasterWinX = 0, rasterWinY = 0, rasterPhaseX = -1, rasterPhaseY = -1, rasterScale = 0;
+        float rasterFix[4] = {0, 0, 0, 0};
         render::LayerSurface thumbSurface[2], thumbSpare[2];
         Thumb rasterThumb[2];
         float rasterThumbScale[2] = {0, 0};
@@ -220,6 +243,9 @@ private:
     std::atomic<uint64_t> rasters_{0};
     std::atomic<uint64_t> partialRasters_{0};
     std::atomic<uint64_t> partialMismatch_{0};
+    // Its surfaces are the GPU's, so placed on even device pixels (evenPhase):
+    // set by the raster thread, read by scrollTo (rasterDue).
+    std::atomic<bool> evenGrid_{false};
 };
 
 }  // namespace bro::engine

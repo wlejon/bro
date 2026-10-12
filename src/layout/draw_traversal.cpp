@@ -271,6 +271,9 @@ bool DrawTraversal::paintScrollLayer(dom::Element* elem, const htmlayout::css::C
     place.viewW = box.contentRect.width + box.padding.left + box.padding.right;
     place.viewH = box.contentRect.height + box.padding.top + box.padding.bottom;
     place.snapScale = snapScale_;
+    place.scrollsX = scrollX;
+    place.scrollsY = scrollY;
+    if (!currentClipRect(place.clipX, place.clipY, place.clipW, place.clipH)) place.clipW = place.clipH = -1.0f;
     const ScrollLayerRecord rec = scrollLayerHost_->beginScrollLayer(elem, place, !contextFlushed_);
     if (!rec.buffer) return false;
     // The layer at the content origin, under the scroller's clip: the

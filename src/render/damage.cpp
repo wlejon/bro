@@ -165,6 +165,10 @@ struct State {
     bool inFilter = false;
     bool inLayer = false;     // under a saveLayer of any kind
     SkRect filterBounds = SkRect::MakeEmpty();
+    // The clips in effect that are not rects (rounded, polygons), their
+    // bounds joined; a path clip's are not known (coveringBounds).
+    SkRect shapeClips = SkRect::MakeEmpty();
+    bool pathClip = false;
 };
 
 struct Walker {
@@ -206,6 +210,22 @@ struct Walker {
                         local.outset(reach, reach);
                         cur.filterBounds = cur.m.mapRect(local);
                     }
+                } else if constexpr (std::is_same_v<T, Cmd_SetClipRRect>) {
+                    cur.shapeClips.join(cur.m.mapRect(SkRect::MakeXYWH(c.x, c.y, c.w, c.h).makeSorted()));
+                } else if constexpr (std::is_same_v<T, Cmd_SetClipPolygon>) {
+                    const auto pts = buf.spanAt<PointF>(c.pointsOffset, c.pointsLen);
+                    if (!pts.empty()) {
+                        SkRect b = SkRect::MakeLTRB(pts[0].x, pts[0].y, pts[0].x, pts[0].y);
+                        for (const PointF& pt : pts) {
+                            b.fLeft = std::min(b.fLeft, pt.x);
+                            b.fTop = std::min(b.fTop, pt.y);
+                            b.fRight = std::max(b.fRight, pt.x);
+                            b.fBottom = std::max(b.fBottom, pt.y);
+                        }
+                        cur.shapeClips.join(cur.m.mapRect(b));
+                    }
+                } else if constexpr (std::is_same_v<T, Cmd_ClipSvgPath>) {
+                    cur.pathClip = true;
                 } else if constexpr (std::is_same_v<T, Cmd_Restore>) {
                     restore();
                 } else if constexpr (std::is_same_v<T, Cmd_Translate>) {
@@ -510,25 +530,49 @@ void diffLevel(const CommandBuffer& ob, Walker ow, const CommandBuffer& nb, Walk
 
 bool commandBufferBounds(const CommandBuffer& buf, SkRect& out) { return spanBounds(buf, out); }
 
-bool coveringBounds(const CommandBuffer& buf, const SkRect& area, SkRect& out) {
-    Walker w;
-    out = area;
+// coveringBounds over one level, from the walk's state at it: a span that
+// reaches the area is walked into, so what is joined is the draws that do.
+bool coverLevel(const CommandBuffer& buf, Walker w, const SkRect& area, SkRect& out) {
     for (const auto& cmd : buf.commands()) {
         if (isStateCommand(cmd)) { w.apply(buf, cmd); continue; }
         if (isBreak(cmd)) continue;
         SkRect local, dev;
         if (!commandBounds(buf, cmd, local) || !mapped(w, local, dev)) return false;
         if (!SkRect::Intersects(dev, area)) continue;
+        if (const auto* rs = std::get_if<Cmd_ReplaySpan>(&cmd)) {
+            const CommandBuffer* span = buf.spanAt(rs->index);
+            if (span && !coverLevel(*span, w, area, out)) return false;
+            continue;
+        }
         // A layer's device is the clip it opens under, and what is drawn in
         // it rasters against that device (a gradient's dither, a glyph's
         // and a rounded edge's antialiasing): under another clip, a pixel
         // or two comes out otherwise.
-        const CommandBuffer* span =
-            std::holds_alternative<Cmd_ReplaySpan>(cmd) ? buf.spanAt(std::get<Cmd_ReplaySpan>(cmd).index) : nullptr;
-        if (w.cur.inLayer || (span && span->hasLayer())) return false;
-        out.join(dev);
+        if (w.cur.inLayer) return false;
+        // A fill of an axis-aligned rect without antialiasing (a background,
+        // a gradient) covers the same pixels however a clip cuts it: the
+        // page's background reaches every damage and need not be drawn
+        // whole. Under a rotation or a skew it is a path, whose edges the
+        // CPU clips geometrically, stepping them otherwise.
+        const bool cutSafe = w.cur.m.rectStaysRect() &&
+                             (std::holds_alternative<Cmd_FillRect>(cmd) ||
+                              std::holds_alternative<Cmd_FillLinearGradient>(cmd) ||
+                              std::holds_alternative<Cmd_FillRadialGradient>(cmd) ||
+                              std::holds_alternative<Cmd_FillConicGradient>(cmd));
+        if (!cutSafe) out.join(dev);
+        // And the rounded clips it is drawn under, whole: Ganesh draws under
+        // one by what else the clip holds (a rect cutting it, or none) and
+        // the surface's edge, which a smaller surface or a clip cutting it
+        // would change.
+        if (w.cur.pathClip) return false;
+        out.join(w.cur.shapeClips);
     }
     return true;
+}
+
+bool coveringBounds(const CommandBuffer& buf, const SkRect& area, SkRect& out) {
+    out = area;
+    return coverLevel(buf, Walker{}, area, out);
 }
 
 Damage diffDamage(const CommandBuffer& older, const CommandBuffer& newer) {

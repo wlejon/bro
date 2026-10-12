@@ -180,7 +180,10 @@ bool Engine::absorbLayerScroll(dom::Element* e, float scrollLeft, float scrollTo
     const auto& sel = selectionSnapshot_;
     if (!sel.rects.empty() || sel.hasCaret || !sel.compUnderlines.empty()) return false;
     if (inspector_.visible || overlayMgr_.hasActive()) return false;
-    return baseScrollLayers_.scrollTo(e, scrollLeft, scrollTop, deviceScale_.render);
+    bool rasterDue = false;
+    if (!baseScrollLayers_.scrollTo(e, scrollLeft, scrollTop, deviceScale_.render, &rasterDue)) return false;
+    if (rasterDue) uiDirty_ = true;  // a raster pass, no record: the layer at its new phase
+    return true;
 }
 
 namespace {
@@ -256,23 +259,49 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
         constexpr int kGrid = 16;
         clip.setLTRB(clip.fLeft & ~(kGrid - 1), clip.fTop & ~(kGrid - 1),
                      (clip.fRight + kGrid - 1) & ~(kGrid - 1), (clip.fBottom + kGrid - 1) & ~(kGrid - 1));
-        if (!clip.intersect(SkIRect::MakeWH(surfW, surfH))) damage = render::Damage{};    }
+        if (!clip.intersect(SkIRect::MakeWH(surfW, surfH))) damage = render::Damage{};
+    }
+    // What a partial pass draws: the damage and everything that reaches it,
+    // whole, with the clips it is under that are not rects (render::
+    // coveringBounds), on the same 16 px grid. Drawn into a scratch that
+    // size, nothing that touches the damage is cut by the scratch's edge
+    // (the CPU antialiases a cut path otherwise), nor a rounded clip over
+    // it (Ganesh draws under one by what cuts it), and the scratch sits a
+    // multiple of 16 device px from the pool's corner (a gradient's dither
+    // and the GPU's 2x2-quad derivatives line up). What cannot be bounded,
+    // or most of the surface, is a whole pass.
+    SkIRect area = clip;
+    if (!damage.full && !damage.empty) {
+        const SkRect cssClip = SkRect::MakeLTRB(clip.fLeft / scale, clip.fTop / scale, clip.fRight / scale,
+                                                clip.fBottom / scale);
+        SkRect cover;
+        if (!render::coveringBounds(buffer, cssClip, cover)) {
+            damage.setFull();
+        } else {
+            area = SkRect::MakeLTRB(cover.fLeft * scale, cover.fTop * scale, cover.fRight * scale,
+                                    cover.fBottom * scale)
+                       .roundOut()
+                       .makeOutset(2, 2);
+            area.join(clip);
+            constexpr int kGrid = 16;
+            area.setLTRB(area.fLeft & ~(kGrid - 1), area.fTop & ~(kGrid - 1), (area.fRight + kGrid - 1) & ~(kGrid - 1),
+                         (area.fBottom + kGrid - 1) & ~(kGrid - 1));
+            if (!area.intersect(SkIRect::MakeWH(surfW, surfH)) ||
+                static_cast<int64_t>(area.width()) * area.height() * 10 > static_cast<int64_t>(surfW) * surfH * 6)
+                damage.setFull();
+        }
+    }
     if (!damage.full && damage.empty) {
         outLayers = held->layers;
         htmlLayerIdx = held->htmlLayerIdx;
         held->baseGen = baseGen;
     } else {
-    // A partial pass draws each HTML surface's damage, and a margin around
-    // it, into a scratch surface of its own, then puts the damage rect back
-    // into the pool's surface pixel for pixel. Drawn under a clip in place,
-    // the pixels along the clip's edge came out antialiased differently from
-    // a whole pass (Skia picks its coverage method with the clip in view) and
-    // stayed so, kept by every pass after; the scratch's own edges are where
-    // that happens now, a margin away from anything put back.
+    // A partial pass draws each HTML surface's area (above) into a scratch
+    // surface of its own, then puts the damage rect back into the pool's
+    // surface pixel for pixel. Drawn under a clip in place, the pixels along
+    // the clip's edge came out antialiased differently from a whole pass
+    // and stayed so, kept by every pass after.
     const bool partialPass = !damage.full;
-    constexpr int kMargin = 32;
-    SkIRect area = clip.makeOutset(kMargin, kMargin);
-    if (partialPass && !area.intersect(SkIRect::MakeWH(surfW, surfH))) area = clip;
     if (held) held->baseGen = 0;
     bool structureChanged = false;  // a surface new to the pool: the pass has to be whole
     auto enterHtml = [&](int k) {
@@ -280,20 +309,19 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
             renderer->switchSurface(pool[k].surface);
             return;
         }
+        // The pool surface's own size, drawn under a clip to the area: its
+        // device places, and the device it rasters against (the GPU maps
+        // positions through the target's size), are exactly the pool's.
         auto& temps = held->scratch;
         if (static_cast<int>(temps.size()) <= k) temps.resize(k + 1);
         auto& t = temps[k];
-        if (!t.surface || t.surface->width() < area.width() || t.surface->height() < area.height()) {
-            // Room to spare, so the next pass's damage fits as it moves.
-            const int w = std::min(surfW, (area.width() + 255) & ~255);
-            const int h = std::min(surfH, (area.height() + 255) & ~255);
-            t = renderer->createLayerSurface(std::max(w, area.width()), std::max(h, area.height()));
-        }
-        renderer->switchSurface(t.surface, nullptr, {area.fLeft, area.fTop});
+        if (!t.surface || t.surface->width() != surfW || t.surface->height() != surfH)
+            t = renderer->createLayerSurface(surfW, surfH);
+        renderer->switchSurface(t.surface, &area);
     };
     auto leaveHtml = [&](int k) {
         if (!partialPass) return;
-        renderer->putSurfaceRect(held->scratch[k].surface, {area.fLeft, area.fTop}, pool[k].surface, clip);
+        renderer->putSurfaceRect(held->scratch[k].surface, {0, 0}, pool[k].surface, clip);
     };
     enterHtml(0);
 
@@ -342,6 +370,36 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
         replayAppLayers(renderer, buffer, pool, poolW, poolH, surfW, surfH, outLayers, promotedBuffer, held,
                         baseGen, scale, nullptr);
         return;
+    }
+    if (partialPass) pagePartialRasters_.fetch_add(1, std::memory_order_relaxed);
+    if (partialPass && ScrollLayerSet::verifyPartial()) {
+        // A check for tests (setScrollLayerVerify): the same recording whole,
+        // split at the same breaks, beside the pool; every pixel the same.
+        std::vector<render::SkiaRenderer::LayerSurface> whole;
+        whole.push_back(renderer->createLayerSurface(surfW, surfH));
+        renderer->switchSurface(whole[0].surface);
+        render::CommandReplayer wr(renderer);
+        wr.setLayerBreakHandler([&](const render::LayerSource& source, const render::LayerQuad&) {
+            if (const auto* sl = std::get_if<render::ScrollLayerSource>(&source);
+                sl && (sl->part == render::ScrollLayerSource::ThumbV || sl->part == render::ScrollLayerSource::ThumbH))
+                return;
+            whole.push_back(renderer->createLayerSurface(surfW, surfH));
+            renderer->switchSurface(whole.back().surface);
+        });
+        wr.replay(buffer);
+        renderer->switchSurface(origSurface);
+        const SkImageInfo info = SkImageInfo::MakeN32Premul(surfW, surfH);
+        std::vector<uint32_t> a(static_cast<size_t>(surfW) * surfH), b(a.size());
+        render::SkiaGpu::Lock lock = renderer->skiaGpu() ? renderer->skiaGpu()->lock() : render::SkiaGpu::Lock();
+        for (size_t k = 0; k < whole.size() && k <= static_cast<size_t>(htmlLayerIdx); ++k) {
+            if (!whole[k].surface || !pool[k].surface) continue;
+            if (!pool[k].surface->readPixels(info, a.data(), surfW * 4, 0, 0) ||
+                !whole[k].surface->readPixels(info, b.data(), surfW * 4, 0, 0))
+                continue;
+            uint64_t n = 0;
+            for (size_t i = 0; i < a.size(); ++i) n += a[i] != b[i];
+            pagePartialMismatch_.fetch_add(n, std::memory_order_relaxed);
+        }
     }
     if (htmlLayerIdx == 0 || replayer.draws() != drawsAtSwitch) outLayers.push_back(htmlLayerOf(pool[htmlLayerIdx]));
     outLayers.insert(outLayers.end(), thumbs.begin(), thumbs.end());

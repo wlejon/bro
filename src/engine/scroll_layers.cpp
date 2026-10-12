@@ -30,6 +30,18 @@ bool wholePixels(float d) { return std::abs(d - std::round(d)) < 1.0f / 512.0f; 
 
 std::atomic<bool> g_verifyPartial{false};
 
+// The content part's clip in content space (after the window's translate):
+// the compositor's on the axes the layer does not scroll, open on the
+// others. Through Renderer::setClip, as an overflow clip is drawn in place
+// (on whole device pixels, antialiased). An open edge stays out past the
+// surface (not at the window, whose edge has the layer's phase): the clip
+// is cut to the surface's whole pixels.
+void clipToFixed(render::SkiaRenderer* r, float x0, float y0, float x1, float y1) {
+    const float open = ScrollLayerSet::kOpen;
+    if (x0 <= -open && y0 <= -open && x1 >= open && y1 >= open) return;
+    r->setClip(x0, y0, x1 - x0, y1 - y0);
+}
+
 }  // namespace
 
 void ScrollLayerSet::setVerifyPartial(bool on) { g_verifyPartial.store(on, std::memory_order_relaxed); }
@@ -64,6 +76,13 @@ layout::ScrollLayerRecord ScrollLayerSet::beginScrollLayer(dom::Element* scrolle
     l.viewOffY = place.viewY - place.scrollY;
     l.viewW = place.viewW;
     l.viewH = place.viewH;
+    // The compositor's clip in content space (content = the pass's place less
+    // the origin), on the axes that do not scroll.
+    const bool clipped = place.clipW >= 0.0f && place.clipH >= 0.0f;
+    l.fixX0 = clipped && !place.scrollsX ? place.clipX - originX : -kOpen;
+    l.fixX1 = clipped && !place.scrollsX ? place.clipX + place.clipW - originX : kOpen;
+    l.fixY0 = clipped && !place.scrollsY ? place.clipY - originY : -kOpen;
+    l.fixY1 = clipped && !place.scrollsY ? place.clipY + place.clipH - originY : kOpen;
     l.liveX.store(place.scrollX, std::memory_order_relaxed);
     l.liveY.store(place.scrollY, std::memory_order_relaxed);
     ++l.passes;
@@ -143,7 +162,7 @@ void ScrollLayerSet::setHasNestedScroller(uint32_t elementId) {
     if (it != layers_.end()) it->second->nestedScroller = true;
 }
 
-bool ScrollLayerSet::scrollTo(dom::Element* scroller, float scrollX, float scrollY, float scale) {
+bool ScrollLayerSet::scrollTo(dom::Element* scroller, float scrollX, float scrollY, float scale, bool* rasterDue) {
     if (!scroller) return false;
     auto it = layers_.find(scroller->nodeId());
     if (it == layers_.end()) return false;
@@ -154,6 +173,15 @@ bool ScrollLayerSet::scrollTo(dom::Element* scroller, float scrollX, float scrol
     const float vx = scrollX + l.viewOffX, vy = scrollY + l.viewOffY;
     if (vx < l.winX || vy < l.winY || vx + l.viewW > l.winX + l.winW || vy + l.viewH > l.winY + l.winH) return false;
     if (!wholePixels((scrollX - l.scrollX) * scale) || !wholePixels((scrollY - l.scrollY) * scale)) return false;
+    // On the GPU, by an odd number of them from where its surfaces were
+    // rastered: placed right, on the other parity of the even grid (evenPhase),
+    // until a raster at the live scroll.
+    if (rasterDue && evenGrid_.load(std::memory_order_relaxed)) {
+        const auto odd = [](float d) { return std::fmod(std::fabs(std::round(d)), 2.0f) != 0.0f; };
+        if (odd((scrollX - l.rasterScrollX.load(std::memory_order_relaxed)) * scale) ||
+            odd((scrollY - l.rasterScrollY.load(std::memory_order_relaxed)) * scale))
+            *rasterDue = true;
+    }
     l.liveX.store(scrollX, std::memory_order_relaxed);
     l.liveY.store(scrollY, std::memory_order_relaxed);
     return true;
@@ -207,9 +235,20 @@ void ScrollLayerSet::replay(render::SkiaRenderer* renderer) {
         // draws a surface pixel for pixel at a whole device pixel, so what it
         // holds is rastered exactly where painting in place would put it. A
         // new window, phase or scale draws every part again.
-        const float px = phase(l.contentX + l.winX - l.scrollX, s), py = phase(l.contentY + l.winY - l.scrollY, s);
+        // On the GPU at the live scroll (the pass's, or scrollTo's since): a
+        // move by whole device pixels keeps the phase, but an odd one moves
+        // it across the even grid.
+        const bool even = renderer->skiaGpu() != nullptr;
+        evenGrid_.store(even, std::memory_order_relaxed);
+        const float sx = even ? l.liveX.load(std::memory_order_relaxed) : l.scrollX;
+        const float sy = even ? l.liveY.load(std::memory_order_relaxed) : l.scrollY;
+        const float ox = l.contentX + l.winX - sx, oy = l.contentY + l.winY - sy;
+        const float px = even ? evenPhase(ox, s) : phase(ox, s), py = even ? evenPhase(oy, s) : phase(oy, s);
+        // And a new fixed clip (the content part is rastered under it).
+        const bool fixMoved = l.fixX0 != l.rasterFix[0] || l.fixY0 != l.rasterFix[1] || l.fixX1 != l.rasterFix[2] ||
+                              l.fixY1 != l.rasterFix[3];
         const bool all = s != l.rasterScale || l.winX != l.rasterWinX || l.winY != l.rasterWinY ||
-                         !samePhase(px, l.rasterPhaseX) || !samePhase(py, l.rasterPhaseY);
+                         !samePhase(px, l.rasterPhaseX) || !samePhase(py, l.rasterPhaseY) || fixMoved;
         const int w = std::max(1, static_cast<int>(std::ceil(l.winW * s + px)));
         const int h = std::max(1, static_cast<int>(std::ceil(l.winH * s + py)));
         for (size_t i = 0; i < l.parts.size(); ++i) {
@@ -245,7 +284,7 @@ void ScrollLayerSet::replay(render::SkiaRenderer* renderer) {
             // Exactly the phase it holds: one a 512th of a pixel off (the same
             // phase to place it by, samePhase) antialiases otherwise, and
             // the pixels kept would not be the ones it draws.
-            const bool partial = !p.surface.isGpu() && rerecorded && p.prevValid && p.holds.valid &&
+            const bool partial = !p.surface.isGpu() && rerecorded && !fixMoved && p.prevValid && p.holds.valid &&
                                  p.holds.winX == l.winX && p.holds.winY == l.winY && p.holds.scale == s &&
                                  p.holds.phaseX == px && p.holds.phaseY == py &&
                                  rasterPart(renderer, l, p, px, py, s, w, h);
@@ -254,6 +293,7 @@ void ScrollLayerSet::replay(render::SkiaRenderer* renderer) {
                 sk_sp<SkSurface> whole = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(w, h));
                 auto prev = renderer->switchSurface(whole);
                 renderer->translate(px / s - l.winX, py / s - l.winY);
+                if (i == 0) clipToFixed(renderer, l.fixX0, l.fixY0, l.fixX1, l.fixY1);
                 render::CommandReplayer replayer(renderer);
                 replayer.setLayerBreakHandler([](const render::LayerSource&, const render::LayerQuad&) {});
                 replayer.replay(p.cmd);
@@ -270,6 +310,7 @@ void ScrollLayerSet::replay(render::SkiaRenderer* renderer) {
             if (!partial) {
                 auto prev = renderer->switchSurface(p.surface.surface);
                 renderer->translate(px / s - l.winX, py / s - l.winY);
+                if (i == 0) clipToFixed(renderer, l.fixX0, l.fixY0, l.fixX1, l.fixY1);
                 render::CommandReplayer replayer(renderer);
                 replayer.setLayerBreakHandler([](const render::LayerSource&, const render::LayerQuad&) {});
                 replayer.replay(p.cmd);
@@ -298,6 +339,12 @@ void ScrollLayerSet::replay(render::SkiaRenderer* renderer) {
             l.rasterWinY = l.winY;
             l.rasterPhaseX = px;
             l.rasterPhaseY = py;
+            l.rasterScrollX.store(sx, std::memory_order_relaxed);
+            l.rasterScrollY.store(sy, std::memory_order_relaxed);
+            l.rasterFix[0] = l.fixX0;
+            l.rasterFix[1] = l.fixY0;
+            l.rasterFix[2] = l.fixX1;
+            l.rasterFix[3] = l.fixY1;
         }
 
         // Each thumb: its rect in its colour, at the phase its place across
@@ -432,6 +479,8 @@ bool ScrollLayerSet::rasterPart(render::SkiaRenderer* renderer, const Layer& l, 
         if (!scratch) return false;
         auto prev = renderer->switchSurface(scratch.surface, &around);
         renderer->translate(px / s - l.winX, py / s - l.winY);
+        if (&p == l.parts[0].get())
+            clipToFixed(renderer, l.fixX0, l.fixY0, l.fixX1, l.fixY1);
         render::CommandReplayer replayer(renderer);
         replayer.setLayerBreakHandler([](const render::LayerSource&, const render::LayerQuad&) {});
         replayer.setCullSpans(true);  // the rows it does not reach are not walked

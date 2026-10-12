@@ -832,6 +832,12 @@ void installHeadlessFrame(engine::Engine& engine) {
                 pt.set(ev::setProperty(pt.get(), "rasterPasses",
                                        ev::fromDouble(static_cast<double>(engine.rasterPassCount()))));
                 pt.set(ev::setProperty(pt.get(), "rasterMs", ev::fromDouble(engine.rasterPassMsTotal())));
+                // Pixels the page's partial raster drew otherwise than a whole
+                // one, under setScrollLayerVerify (Engine::replayAppLayers).
+                pt.set(ev::setProperty(pt.get(), "pagePartialMismatch",
+                                       ev::fromDouble(static_cast<double>(engine.pagePartialMismatch()))));
+                pt.set(ev::setProperty(pt.get(), "pagePartialRasters",
+                                       ev::fromDouble(static_cast<double>(engine.pagePartialRasters()))));
                 pt.set(ev::setProperty(pt.get(), "recorded", ev::fromDouble(static_cast<double>(pc.recorded))));
                 for (size_t i = 0; i < static_cast<size_t>(layout::SpanMiss::Count); ++i)
                     why.set(ev::setProperty(why.get(), layout::spanMissName(static_cast<layout::SpanMiss>(i)),

@@ -90,9 +90,11 @@ bool commandBufferBounds(const CommandBuffer& buf, SkRect& out);
 // `area` grown by every draw of `buf`'s own (a span whole) that reaches into
 // it, in `buf`'s space: drawn clipped to that, nothing that touches `area`
 // crosses the clip (Skia's CPU rasterizer antialiases a path the clip cuts
-// otherwise than a whole one, inside the clip too). False: one is unbounded,
-// or one reaching it is in a layer (whose device is the clip it opens under:
-// what it holds rasters otherwise under another clip).
+// otherwise than a whole one, inside the clip too), and every clip that is
+// not a rect such a draw is under (on the GPU, Ganesh draws under a rounded
+// clip by what cuts it, the surface's edge included). False: one is
+// unbounded, under a path clip, or in a layer (whose device is the clip it
+// opens under: what it holds rasters otherwise under another clip).
 bool coveringBounds(const CommandBuffer& buf, const SkRect& area, SkRect& out);
 
 // The damage each recording of a pass brought (from the one before it), by

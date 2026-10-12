@@ -20,13 +20,18 @@
 
 const seed = Number(process.env.PAINT_FUZZ_SEED || 1) >>> 0;
 const STEPS = Number(process.env.PAINT_FUZZ_STEPS || 150);
-// PAINT_FUZZ_VERIFY_PARTIAL=1 (with --no-gpu, where scroll layers are
-// rastered in part): each partial raster is also rastered whole and must
-// match it pixel for pixel, not only the oracle within its tolerance.
+// PAINT_FUZZ_VERIFY_PARTIAL=1: each partial raster (a scroll layer's, with
+// --no-gpu where they are rastered in part; the page's own, on either) is
+// also rastered whole and must match it pixel for pixel, not only the oracle
+// within its tolerance.
 const verifyPartial = process.env.PAINT_FUZZ_VERIFY_PARTIAL === '1';
 if (verifyPartial) setScrollLayerVerify(true);
-const mismatch = () => perf.stats().paint.scrollLayers.partialMismatch;
-const fuzz = PaintFuzz.create(seed);
+const mismatch = () => {
+    const p = perf.stats().paint;
+    return p.scrollLayers.partialMismatch + p.pagePartialMismatch;
+};
+// PAINT_FUZZ_ROUNDED=1: the scroller's rows clip under border radii (steps.js).
+const fuzz = PaintFuzz.create(seed, { rounded: process.env.PAINT_FUZZ_ROUNDED === '1' });
 fuzz.build();
 flush();
 setPaintCache(true);
@@ -45,11 +50,14 @@ for (let i = 0; i < STEPS && !failed; ++i) {
     if (s.advance) advanceTime(s.advance);
     flush();
     const m0 = verifyPartial ? mismatch() : 0;
+    const page0 = verifyPartial ? perf.stats().paint.pagePartialMismatch : 0;
     const cached = [frameImage(), frameImage()];
     if (verifyPartial && mismatch() !== m0) {
         failed = true;
-        assert(false, `paint cache fuzz seed=${seed}: step ${i} (${s.what}): a partial raster of a scroll layer ` +
-                      `differs from a whole one in ${mismatch() - m0} pixels; last steps: ` + history.slice(-8).join(' | '));
+        const page = perf.stats().paint.pagePartialMismatch - page0;
+        assert(false, `paint cache fuzz seed=${seed}: step ${i} (${s.what}): a partial raster ` +
+                      `(${page ? 'the page' : 'a scroll layer'}) differs from a whole one in ${mismatch() - m0} pixels; ` +
+                      `last steps: ` + history.slice(-8).join(' | '));
     }
     setPaintCache(false);
     const full = frameImage();
@@ -67,7 +75,8 @@ for (let i = 0; i < STEPS && !failed; ++i) {
     }
 }
 const ps = perf.stats().paint;
-console.log(`PAINT_FUZZ seed=${seed} steps=${history.length} ${failed ? 'FAILED' : 'ok'} edgePixels=${edgePixels} reused=${ps.reused} ` +
+console.log(`PAINT_FUZZ seed=${seed} steps=${history.length} ${failed ? 'FAILED' : 'ok'} edgePixels=${edgePixels} ` +
+            `pagePartial=${ps.pagePartialRasters} layerPartial=${ps.scrollLayers.partialRasters} reused=${ps.reused} ` +
             `recorded=${ps.recorded} layers=${ps.scrollLayers.layers} layersReused=${ps.scrollLayers.reused} ` +
             `pieces=${ps.scrollLayers.pieces} piecesReused=${ps.scrollLayers.piecesReused} ` +
             `misses=${JSON.stringify(ps.misses)}`);

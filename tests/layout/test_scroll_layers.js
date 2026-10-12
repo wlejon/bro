@@ -223,7 +223,8 @@ a.scrollTop = 2500;
 check('dpr 2, scrolled far');
 // At 1.5 a scroll by an odd number of px moves the layer by half a device
 // pixel: it is rastered again at that phase (not resampled), and a scroll by
-// 2 px (3 device px) is not.
+// 4 px (6 device px) is not. (By an odd number of device px it is on the GPU,
+// whose layers sit on an even grid: ScrollLayerSet::evenPhase.)
 setDeviceScaleFactor(1.5);
 a.scrollTop = 2400;
 check('dpr 1.5');
@@ -233,8 +234,8 @@ check('dpr 1.5');
     check('dpr 1.5, scrolled by half a device pixel');
     const r1 = layers();
     assert(r1.rasters > r0.rasters, 'a scroll by a fraction of a device pixel rasters the layer again');
-    a.scrollTop = 2403;
-    check('dpr 1.5, scrolled by 3 device pixels');
+    a.scrollTop = 2405;
+    check('dpr 1.5, scrolled by 6 device pixels');
     assert(layers().rasters === r1.rasters, 'a scroll by whole device pixels does not');
     // The scroller in it clips its rows on whole device pixels where the
     // layer's content lands: half a device pixel on, the layer's recording
