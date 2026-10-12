@@ -69,8 +69,12 @@
     // named; with consensus, two frames or more naming one taxon on weaker
     // boxes than their best are a burst name when their share reaches the
     // threshold. Most of the order and class names weak boxes gave were wrong.
+    // nms / nmsApart / nmsHold: which of the detector's boxes are kept
+    // (suppress()). queryTop: the species a crop's suggestions come from
+    // (analyze()'s `queryTop`, its top over its query's classes; 0 for none).
     const DEFAULTS = { model: 'bioclip-2', threshold: 0.15, topK: 5, margin: 0.15,
-                       nms: 0.3, maxDetections: 20, gapS: 1.0, labelThreshold: 0.85,
+                       nms: 0.3, nmsApart: 0.5, nmsHold: 0.85, queryTop: 5,
+                       maxDetections: 20, gapS: 1.0, labelThreshold: 0.85,
                        maxClassify: 8, candidates: 'all', petMinBoxScore: 0.3, taxaTop: 3,
                        minBoxScore: 0.3, broadMinBoxScore: 0.3, burstMinBoxScore: 0.4,
                        queryMatch: true, consensus: true };
@@ -671,6 +675,65 @@
         return m.mode || DEFAULTS.candidates;
     };
 
+    /**
+     * A crop's suggestions: its top `n` species over the rows of its query's
+     * classes (queryClasses; every row for a query without them or when no
+     * row is of them), the softmax over those rows alone (classifyCrop's
+     * 'query'), so a box the detector called a bird suggests only birds.
+     * analyze() keeps it as an animal's `queryTop`, rounded. Pure.
+     * @returns {Array<{ common, scientific, family, order, class, score, similarity }>}  best first, unrounded
+     */
+    wl.queryTop = function queryTop(rows, sims, query, n) {
+        return wl.classifyCrop(rows, sims, { topK: n || DEFAULTS.queryTop, query, candidates: 'query' }).species;
+    };
+
+    /**
+     * Greedy suppression of detector boxes, best first. A box is dropped
+     * against a better box kept before it (any query) when:
+     *  - their IoU is over `apart`: one animal boxed twice;
+     *  - their IoU is over `iou` and half of the box or more lies inside the
+     *    better one: a part of that animal, or the same one again;
+     *  - it is the bigger and holds `hold` or more of the better one: a box
+     *    over that animal and more (a group, its surroundings).
+     * Two animals that overlap (IoU over `iou`, up to `apart`) keep their
+     * boxes when the lower one reaches mostly outside the better one and
+     * does not hold it: a duck half behind another. With `apart` and `hold`
+     * null it is OWLv2's own NMS at `iou` (what detect() then runs natively).
+     * At most `max` kept. Pure.
+     * @param {Array<{ box: number[], score: number, label?: string }>} hits  best first, boxes [x, y, w, h]
+     * @param {{ iou?: number, apart?: number|null, hold?: number|null, max?: number }} [opts]
+     *   iou 0 or >= 1: no IoU test; the defaults DEFAULTS' nms, nmsApart, nmsHold
+     * @returns the hits kept, in order
+     */
+    wl.suppress = function suppress(hits, opts) {
+        const o = opts || {};
+        const iou = o.iou == null ? DEFAULTS.nms : o.iou;
+        const apart = o.apart === undefined ? DEFAULTS.nmsApart : o.apart;
+        const hold = o.hold === undefined ? DEFAULTS.nmsHold : o.hold;
+        const max = o.max == null ? Infinity : o.max;
+        const byIou = iou > 0 && iou < 1;
+        const hi = apart == null ? iou : Math.max(iou, apart);
+        const keep = [];
+        for (const d of hits) {
+            if (keep.length >= max) break;
+            const [x, y, w, h] = d.box, ad = w * h;
+            let drop = false;
+            for (const k of keep) {
+                const [kx, ky, kw, kh] = k.box;
+                const iw = Math.min(x + w, kx + kw) - Math.max(x, kx);
+                const ih = Math.min(y + h, ky + kh) - Math.max(y, ky);
+                if (iw <= 0 || ih <= 0) continue;
+                const inter = iw * ih, ak = kw * kh;
+                const uni = ad + ak - inter;
+                const ov = uni > 0 ? inter / uni : 0;
+                if (byIou && (ov > hi || (ov > iou && inter >= 0.5 * ad))) { drop = true; break; }
+                if (hold != null && ad > ak && inter >= hold * ak) { drop = true; break; }
+            }
+            if (!drop) keep.push(d);
+        }
+        return keep;
+    };
+
     // A record's crops: its `animals`, or for a record from before them, its
     // top K as the one crop (taxa summed over the top K), on the best box.
     // Each with `primary` (the photo's best box) and its detector `score`
@@ -1056,8 +1119,13 @@
             queries: o.queries || QUERIES,
             topK: o.topK || DEFAULTS.topK,
             margin: o.margin == null ? DEFAULTS.margin : o.margin,
+            // The boxes kept: suppress()'s { iou, apart, hold } (null: that rule off).
+            nms: nmsConfig(o.nms, o.nmsApart, o.nmsHold),
+            maxDetections: o.maxDetections || DEFAULTS.maxDetections,
             maxClassify: o.maxClassify || DEFAULTS.maxClassify,
             candidates: candidatesConfig(o.candidates, o.labelThreshold, o.petMinBoxScore),
+            // Species a crop's suggestions come from: its top N over its query's classes.
+            queryTop: o.queryTop == null ? DEFAULTS.queryTop : o.queryTop,
             // The list files by name, the merged count, and a hash of every
             // prompt (so an edited list is a new config). The taxa maps are
             // not in it: they name labels, records do not hold them.
@@ -1065,6 +1133,20 @@
                            count: species.length, hash: fnv1a(species.map(speciesPrompt).join('\n')) },
         };
         return { loc, species, taxa: wl.readTaxa(present), config };
+    }
+
+    // config.nms: { iou, apart, hold }; nmsApart / nmsHold false is that rule off (null).
+    function nmsConfig(iou, apart, hold) {
+        const i = iou == null ? DEFAULTS.nms : iou;
+        if (!(typeof i === 'number' && i >= 0)) throw new Error('bro.vision.wildlife: nms is a number >= 0, not ' + iou);
+        const rule = (v, name) => {
+            const x = v === false ? null : v == null ? DEFAULTS[name] : v;
+            if (x !== null && !(typeof x === 'number' && x > 0 && x <= 1)) {
+                throw new Error('bro.vision.wildlife: ' + name + ' is a number in (0, 1] or false, not ' + v);
+            }
+            return x;
+        };
+        return { iou: i, apart: rule(apart, 'nmsApart'), hold: rule(hold, 'nmsHold') };
     }
 
     // config.candidates: { mode: 'all', petMinBoxScore, petFallback } or
@@ -1281,17 +1363,26 @@
             labels(rec, burst) { return wl.labels(rec, burst, an.labelOptions()); },
             /** The options labels() takes for this analyzer: { labelThreshold, taxa, ...boxRule }. */
             labelOptions() { return Object.assign({ labelThreshold: an.labelThreshold, taxa }, an.boxRule); },
-            /** OWLv2 boxes in `img`'s pixels, best first: [{ box, score, label }]. */
+            /**
+             * OWLv2 boxes in `img`'s pixels, best first: [{ box, score, label }],
+             * kept by suppress() (dopts nms, nmsApart, nmsHold over config's).
+             */
             detect(img, dopts) {
                 live('detect');
                 const d = dopts || {};
+                const pick = (v, c) => (v === undefined ? c : v === false ? null : v);
+                const iou = d.nms == null ? config.nms.iou : d.nms;
+                const apart = pick(d.nmsApart, config.nms.apart), hold = pick(d.nmsHold, config.nms.hold);
+                const max = d.maxDetections || config.maxDetections;
+                // Plain NMS runs in OWLv2; the other rules over every box at the threshold here.
+                const plain = apart == null && hold == null;
                 const hits = owl.detect(img, {
                     queries: d.queries || config.queries,
                     threshold: d.threshold == null ? config.threshold : d.threshold,
-                    nms: d.nms == null ? DEFAULTS.nms : d.nms,
-                    maxDetections: d.maxDetections || DEFAULTS.maxDetections,
-                });
-                return hits.map((r) => ({ box: r.box, score: r.score, label: r.query }));
+                    nms: plain ? iou : 0,
+                    maxDetections: plain ? max : 3600,
+                }).map((r) => ({ box: r.box, score: r.score, label: r.query }));
+                return plain ? hits : wl.suppress(hits, { iou, apart, hold, max });
             },
             /** Species top K of a whole image (centre square), unrounded. */
             classify(img, copts) {
@@ -1363,6 +1454,12 @@
                     // for "looks like the one you named": not record data,
                     // so a caller keeps it out of what it stores as JSON.
                     if (a.embeddings) animal.embedding = Float32Array.from(embs[k]);
+                    // What to suggest for the crop: its top over its query's
+                    // classes, whatever it was ranked over (labels() never reads it).
+                    if (config.queryTop > 0) {
+                        animal.queryTop = wl.queryTop(species, sims[k], h.label, config.queryTop)
+                            .map((s) => ({ common: s.common, scientific: s.scientific, score: r4(s.score) }));
+                    }
                     // A pet box kept to its query's classes: the answer over
                     // every species too, its top K and each rank's best.
                     if (c.unrestricted) {

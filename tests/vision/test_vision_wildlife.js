@@ -36,6 +36,7 @@ assert(typeof wl === 'object' && wl !== null, 'bro.vision.wildlife exists');
 for (const f of ['open', 'available', 'locate', 'config', 'subjectSquare', 'cropImage', 'squareInput',
                  'sharpness', 'speciesPrompt', 'readSpeciesList', 'readSpecies', 'readTaxa', 'label', 'labels',
                  'formatLabel', 'taxaScores', 'classifyCrop', 'candidatesFor', 'sureClasses', 'petAnswer', 'queryClasses',
+                 'queryTop', 'suppress',
                  'lineage', 'nameEntries', 'nameIndex', 'nearest', 'parseExifTime',
                  'keeperScore', 'groupBursts']) {
     assert(typeof wl[f] === 'function', 'wildlife.' + f + ' is a function');
@@ -48,6 +49,8 @@ same(wl.QUERIES.slice(19), ['a dog', 'a cat', 'an insect', 'a dragonfly', 'a but
 same([wl.DEFAULTS.threshold, wl.DEFAULTS.topK, wl.DEFAULTS.margin, wl.DEFAULTS.gapS, wl.DEFAULTS.model, wl.DEFAULTS.labelThreshold,
       wl.DEFAULTS.maxClassify, wl.DEFAULTS.candidates, wl.DEFAULTS.petMinBoxScore],
      [0.15, 5, 0.15, 1, 'bioclip-2', 0.85, 8, 'all', 0.3], 'defaults');
+same([wl.DEFAULTS.nms, wl.DEFAULTS.nmsApart, wl.DEFAULTS.nmsHold, wl.DEFAULTS.maxDetections, wl.DEFAULTS.queryTop],
+     [0.3, 0.5, 0.85, 20, 5], 'the detection and suggestion defaults');
 same(wl.PET_QUERIES, ['a dog', 'a cat'], 'the pet queries');
 same([wl.DEFAULTS.minBoxScore, wl.DEFAULTS.broadMinBoxScore, wl.DEFAULTS.burstMinBoxScore, wl.DEFAULTS.queryMatch,
       wl.DEFAULTS.consensus], [0.3, 0.3, 0.4, true, true], 'the box rule defaults');
@@ -107,8 +110,15 @@ fs.writeFileSync(list, JSON.stringify({ species: [
     { common: 'Eastern Chipmunk', scientific: 'Tamias striatus', class: 'Mammalia', order: 'Rodentia', family: 'Sciuridae' },
 ] }));
 const cfg = wl.config({ detector: empty, classifier: empty, species: list, model: 'bioclip', threshold: 0.2 });
-same(Object.keys(cfg), ['detector', 'classifier', 'threshold', 'queries', 'topK', 'margin', 'maxClassify', 'candidates',
-                        'speciesList'], 'config keys, in order');
+same(Object.keys(cfg), ['detector', 'classifier', 'threshold', 'queries', 'topK', 'margin', 'nms', 'maxDetections',
+                        'maxClassify', 'candidates', 'queryTop', 'speciesList'], 'config keys, in order');
+// The boxes kept and the suggestions are record data, so they are in the config.
+same([cfg.nms, cfg.maxDetections, cfg.queryTop], [{ iou: 0.3, apart: 0.5, hold: 0.85 }, 20, 5], 'config: nms, maxDetections, queryTop');
+same(wl.config({ detector: empty, classifier: empty, species: list, nms: 0.4, nmsApart: false, nmsHold: 0.9, queryTop: 3 })
+         .nms, { iou: 0.4, apart: null, hold: 0.9 }, 'nms options: a rule off is null');
+assert(wl.config({ detector: empty, classifier: empty, species: list, queryTop: 3 }).queryTop === 3, 'queryTop option');
+expectThrows(() => wl.config({ detector: empty, classifier: empty, species: list, nmsHold: 2 }), 'an nmsHold over 1');
+expectThrows(() => wl.config({ detector: empty, classifier: empty, species: list, nms: 'x' }), 'an nms not a number');
 same([cfg.detector.repo, cfg.classifier.repo, cfg.classifier.weightsBytes], ['google/owlv2-base-patch16-ensemble', 'imageomics/bioclip', null], 'model identity');
 same([cfg.threshold, cfg.topK, cfg.margin, cfg.maxClassify, cfg.candidates, cfg.speciesList.files, cfg.speciesList.count],
      [0.2, 5, 0.15, 8, { mode: 'all', petMinBoxScore: 0.3, petFallback: 0.85 }, ['two.json'], 2], 'config values');
@@ -247,6 +257,37 @@ const cn = wl.classifyCrop(ROWS, simsFor({ Mallard: 0.6, 'Common Green Darner': 
 same([cn.candidates, cn.species[0].class], ['query', 'Insecta'], 'not sure of the other class: the query\'s');
 same(wl.classifyCrop(ROWS, simsFor({ Mallard: 0.9, 'Common Green Darner': 0.04, Monarch: 0.04 }),
                      { candidates: 'byQuery', query: 'a moth', fallback: 0.95 }).candidates, 'query', 'fallback threshold');
+
+// queryTop: a crop's suggestions, over its query's classes alone, whatever 'all' ranked first.
+const qsims = simsFor({ 'Common Green Darner': 0.5, 'Eastern Chipmunk': 0.25, Mallard: 0.15, 'Wood Duck': 0.05 });
+const qt = wl.queryTop(ROWS, qsims, 'a bird', 3);
+same(qt.map((s) => s.common), ['Mallard', 'Wood Duck', 'American Black Duck'], 'queryTop: the birds, best first');
+assert(qt.every((s) => s.class === 'Aves') && qt.length === 3, 'birds only, n of them');
+// The 6 rows not named share 0.05; 3 of them are birds.
+near(qt[0].score, 0.15 / (0.15 + 0.05 + 3 * (0.05 / 6)), 'renormalised over the birds');
+same(wl.classifyCrop(ROWS, qsims, { query: 'a bird' }).species[0].common, 'Common Green Darner', "while 'all' ranks the darner first");
+same(wl.queryTop(ROWS, qsims, 'a rock', 2).map((s) => s.common), ['Common Green Darner', 'Eastern Chipmunk'],
+     'a query without classes: over every row');
+assert(wl.queryTop(ROWS, qsims, 'a bird').length === 5, 'n defaults to DEFAULTS.queryTop');
+
+// suppress: the boxes kept, best first.
+const hit = (box, score, label = 'a bird') => ({ box, score, label });
+const best = hit([0, 0, 100, 100], 0.9);
+const kept = (hits, o) => wl.suppress(hits, o).map((h) => h.score);
+// A second animal overlapping (IoU 0.35), reaching mostly outside the best (44% of it inside, holding 63% of it).
+const other = hit([30, 10, 120, 120], 0.5);
+same(kept([best, other]), [0.9, 0.5], 'two overlapping animals keep their boxes');
+same(kept([best, other], { apart: null, hold: null }), [0.9], 'plain NMS at 0.3 drops the second');
+same(kept([best, hit([10, 10, 60, 60], 0.5)]), [0.9], 'a part inside the best box (IoU 0.36) goes');
+same(kept([best, hit([10, 10, 40, 40], 0.5)]), [0.9, 0.5], 'a small one inside (IoU 0.16) stays, as with plain NMS');
+same(kept([best, hit([5, 5, 100, 100], 0.5)]), [0.9], 'the same animal again (IoU 0.82) goes');
+same(kept([best, hit([5, 5, 100, 100], 0.5, 'a duck')]), [0.9], 'whatever its query');
+const around = hit([-50, -50, 250, 200], 0.5, 'a dog');
+same(kept([best, around]), [0.9], 'a bigger box holding the best (IoU 0.2) goes, any query');
+same(kept([best, around], { hold: null }), [0.9, 0.5], 'with hold off it stays');
+same(kept([around, best]), [0.5, 0.9], 'the better one the bigger: one inside it at IoU 0.2 stays (one of a group)');
+same(kept([best, other, hit([300, 300, 10, 10], 0.2)], { max: 2 }), [0.9, 0.5], 'at most max');
+same(kept([best, hit([30, 10, 120, 120], 0.5)], { iou: 0 }), [0.9, 0.5], 'iou 0: no IoU test');
 
 // ── pets: a sure dog or cat box ranks over its query's classes ──────────
 // A dog's crop over every row can go to an insect; the rule keeps a box the

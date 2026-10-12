@@ -110,6 +110,16 @@ function run() {
         assert(x.taxa.class.length >= 1 && x.taxa.class[0].score >= x.species[0].score - 1e-4, 'a class scores at least its best species');
     }
     assert(a.animals.every((x) => !('embedding' in x)), 'no embedding unless asked');
+    // queryTop: each crop's suggestions, the top 5 over its query's classes (renormalised there).
+    const classOf = new Map(an.species.map((r) => [r.scientific, r.class]));
+    for (const x of a.animals) {
+        const classes = wl.queryClasses(x.label);
+        assert(Array.isArray(x.queryTop) && x.queryTop.length === 5 &&
+               x.queryTop.every((s) => Object.keys(s).join() === 'common,scientific,score'), 'queryTop: 5 { common, scientific, score }');
+        assert(!classes || x.queryTop.every((s) => classes.includes(classOf.get(s.scientific))), 'of its query\'s classes: ' + x.label);
+        for (let i = 1; i < 5; i++) assert(x.queryTop[i - 1].score >= x.queryTop[i].score, 'best first');
+    }
+    assert(an.analyze(frame(true), { source: src, threshold: 0 }).animals.length === a.animals.length, 'same again');
     // embeddings: true: each crop's unit embedding; the record otherwise the same, and nearest finds each crop itself.
     const withEmb = an.analyze(frame(true), { source: src, threshold: 0, embeddings: true });
     assert(withEmb.animals.length === a.animals.length && withEmb.animals.every((x) => x.embedding instanceof Float32Array &&

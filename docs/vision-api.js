@@ -725,7 +725,11 @@ owl.dispose();
 //      answer "no animal" (an empty feeder, a branch, the lawn). Clear animals
 //      score 0.3 and up; between 0.1 and 0.3 sit both real ones (half hidden,
 //      distant) and look-alikes; empty frames score under 0.1.
-//   2. Every box after NMS, best first up to `maxClassify` (8), padded 15% a
+//      The boxes kept are suppress()'s (below): a box over IoU 0.5 with a
+//      better one, or over 0.3 with half of it or more inside it, or bigger
+//      and holding 85% of it, goes; two animals overlapping (a duck half
+//      behind another) keep their boxes, which plain NMS at 0.3 merged.
+//   2. Every box kept, best first up to `maxClassify` (8), padded 15% a
 //      side and made square (subjectSquare), is cropped and classified
 //      zero-shot by BioCLIP 2 (imageomics/bioclip-2; or BioCLIP, or
 //      BioCLIP 2.5 Huge) over a
@@ -917,12 +921,14 @@ const wild = bro.vision.wildlife.open({ model: 'bioclip-2' });
  * WildlifeAnalyzer.config / bro.vision.wildlife.config(opts?) — every setting
  * a result depends on, in a fixed key order, so `JSON.stringify(config)`
  * hashes a run: { detector: { name, repo, revision, weightsBytes },
- * classifier: { ... }, threshold, queries, topK, margin, maxClassify,
+ * classifier: { ... }, threshold, queries, topK, margin, nms: { iou, apart,
+ * hold } (suppress()'s; a rule off is null), maxDetections, maxClassify,
  * candidates: { mode: 'all', petMinBoxScore, petFallback } | { mode:
  * 'byQuery', fallback, petMinBoxScore, petFallback } (petFallback the
  * labelThreshold a sure pet box's crop falls back at; both pet fields null
- * when the pet rule is off),
- * speciesList: { files, count, hash } }. `revision` is read from the model
+ * when the pet rule is off), queryTop (the suggestions kept a crop),
+ * speciesList: { files, count, hash } }. open() takes nms, nmsApart,
+ * nmsHold (false: off), maxDetections and queryTop (0: none) too. `revision` is read from the model
  * dir's ATTRIBUTION.md; `files` the list files by name ('upper-midwest.json',
  * 'upper-midwest-herps/species.json', ...), `count` the merged rows, `hash` an
  * FNV-1a of every prompt, so an edited list is another config (the taxa
@@ -963,10 +969,11 @@ const runKey = JSON.stringify(wild.config);
  *                                Array<{ scientific, score, family?, order?, class? }> },
  *                              candidates: 'all'|'query'|'fallback',
  *                              unrestricted?: { species, taxa },
+ *                              queryTop?: Array<{ common, scientific, score }>,
  *                              embedding?: Float32Array }>,
  *             animalsDropped: number,
  *             timing: { detect: number, classify: number|null } }}
- *   detections best first (NMS 0.3, at most 20), boxes [x, y, w, h] to 0.1 px
+ *   detections best first (suppress(), at most 20), boxes [x, y, w, h] to 0.1 px
  *   and scores to 4 places. `animals`: every non-empty detection, best
  *   first, up to maxClassify, each with its subject square, species top K
  *   and the top 3 genera, families, orders and classes (a taxon's score the
@@ -977,7 +984,11 @@ const runKey = JSON.stringify(wild.config);
  *   pet box kept to Mammalia carries `unrestricted`: its answer over every
  *   species, the top K species and the best genus, family, order and class
  *   (one entry each), rounded alike, which labels() may name it by (see
- *   Pets above). `animalsDropped`: the
+ *   Pets above). `queryTop` (config.queryTop, 5; none when 0): what to
+ *   suggest for the crop, its top species over its query's classes alone
+ *   (queryTop(); 'a bird' -> birds), the softmax renormalised there, scores
+ *   to 4 places. labels() never reads it: a box the detector called a bird
+ *   is offered birds while its names stay what `species` says. `animalsDropped`: the
  *   boxes over the threshold not classified (show "+3 more"). `subject` and
  *   `species` are the first animal's (the best box), as before animals;
  *   both empty when there is no animal. timing in ms (classify: every crop,
@@ -990,7 +1001,8 @@ if (rec.animal) console.log(rec.species[0].common, rec.species[0].score);
 /**
  * WildlifeAnalyzer.detect(image, opts?) / classify(image, opts?) — the two
  * halves, unrounded, in the image's own pixels. detect: { threshold, queries,
- * nms (0.3), maxDetections (20) } -> [{ box, score, label }]. classify: the
+ * nms (0.3), nmsApart (0.5), nmsHold (0.85) (false: that rule off; both off
+ * is OWLv2's plain NMS at nms), maxDetections (20) } -> [{ box, score, label }]. classify: the
  * species top K ({ topK }) of the image's centre square — crop first
  * (subjectSquare + cropImage) for a small subject.
  */
@@ -1213,6 +1225,23 @@ const near = bro.vision.wildlife.nearest(crop.embedding, namedRows, 1, { minSimi
  * top: 0 for all): { genus: [{ scientific, score, family?, order?, class? }],
  * family, order, class }. queryClasses(query) — byQuery's classes, or null.
  * lineage(row) — { genus, family?, order?, class? }.
+ *
+ * bro.vision.wildlife.queryTop(rows, sims, query, n = 5) — a crop's top n
+ * species over its query's classes (classifyCrop's 'query'; every row for
+ * a query without classes), unrounded: what analyze() keeps as `queryTop`.
+ *
+ * bro.vision.wildlife.suppress(hits, { iou, apart, hold, max }) — the
+ * boxes detect() keeps, best first ([{ box, score, label }] in, the kept
+ * ones out, pure). Against each better box kept: dropped over IoU `apart`
+ * (0.5), over IoU `iou` (0.3) with half of the box or more inside the
+ * better one (a part, the same animal), or when bigger and holding `hold`
+ * (0.85) of it (a box over the animal and more), whatever the queries. A
+ * box overlapping a better one (IoU up to 0.5) and reaching mostly outside
+ * it stays: two animals. apart and hold null: plain NMS at iou. On a
+ * 171-photo check set against plain NMS at 0.3: the same animals boxed,
+ * 559 boxes against 568 (the ones gone: boxes around a group or around an
+ * animal and its surroundings); plain NMS at 0.5 boxed 3 more animals with
+ * 31 more boxes, most of them a second box on one animal.
  */
 
 // Also: subjectSquare(box, w, h, { margin }) (each side clamped to the frame,
@@ -1223,7 +1252,7 @@ const near = bro.vision.wildlife.nearest(crop.embedding, namedRows, 1, { minSimi
 // readTaxa(lists) (their taxa maps merged, the first of a name kept),
 // keeperScore(record, metric), and the constants QUERIES, QUERY_CLASSES,
 // PET_QUERIES, RANKS, SPECIES_LISTS ([{ folder, file }]) and DEFAULTS ({ model,
-// threshold, topK, margin, nms, maxDetections, gapS, labelThreshold,
+// threshold, topK, margin, nms, nmsApart, nmsHold, queryTop, maxDetections, gapS, labelThreshold,
 // maxClassify, candidates, petMinBoxScore, taxaTop, minBoxScore, broadMinBoxScore,
 // burstMinBoxScore, queryMatch, consensus }).
 
