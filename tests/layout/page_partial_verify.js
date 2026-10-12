@@ -23,6 +23,9 @@ for (let r = 0; r < 200; r++) {
         b.append(s);
         row.append(b);
     }
+    // No strut: a row is its cells' 8 px whatever the platform's font
+    // (Arial's line-height normal made it ~18, most rows below the fold).
+    row.style.fontSize = '0';
     for (let c = 0; c < 19; c++) {
         const s = document.createElement('span');
         s.className = 'cell';
@@ -32,9 +35,14 @@ for (let r = 0; r < 200; r++) {
     document.body.append(row);
 }
 flush();
-let i = 0;
+// Only cells in view change the page, and one toggled every fourth frame has
+// a pass of its own however long the platform's raster thread takes (toggles
+// a frame apart merged into a few passes on Windows).
+const shown = cells.filter((c) => c.getBoundingClientRect().bottom < innerHeight);
+assert(shown.length > 200, `cells in view: ${shown.length}`);
+let i = 0, frame = 0;
 function tick() {
-    cells[(i++ * 37) % cells.length].classList.toggle('on');
+    if (frame++ % 4 === 0) shown[(i++ * 37) % shown.length].classList.toggle('on');
     requestAnimationFrame(tick);
 }
 requestAnimationFrame(tick);
