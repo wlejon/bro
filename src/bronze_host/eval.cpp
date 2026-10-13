@@ -324,6 +324,8 @@ bool evalScriptImpl(engine::Engine& engine, const std::string& code, const std::
     const auto tempJs = tempDir / (stem + ".js");
     const auto outDll = tempDir / (stem + kModuleExt);
 
+    const std::string execCode =
+        (hasAwaitStmt(code) && !hasImportStmt(code)) ? wrapAsyncIife(code, filename) : code;
     {
         std::ofstream ofs(tempJs, std::ios::binary);
         if (!ofs.is_open()) {
@@ -332,7 +334,7 @@ bool evalScriptImpl(engine::Engine& engine, const std::string& code, const std::
             engine.setTestFailure(true);
             return false;
         }
-        ofs.write(code.data(), code.size());
+        ofs.write(execCode.data(), execCode.size());
     }
 
     // Globals BEFORE the compile, not just before the run: the manifest the
@@ -506,25 +508,9 @@ bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
         content.assign((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
     }
 
-    auto hasAwaitStmt = [](const std::string& code) {
-        size_t i = 0;
-        while (i < code.size()) {
-            while (i < code.size() && (code[i] == ' ' || code[i] == '\t')) i++;
-            if (i + 5 <= code.size() && code.compare(i, 5, "await") == 0) {
-                char next = (i + 5 < code.size()) ? code[i + 5] : '\0';
-                if (next == ' ' || next == '\t' || next == '(') {
-                    return true;
-                }
-            }
-            while (i < code.size() && code[i] != '\n') i++;
-            if (i < code.size() && code[i] == '\n') i++;
-        }
-        return false;
-    };
-
     std::filesystem::path wrapFile;
     std::string buildSrc = absSource.string();
-    if (hasAwaitStmt(content)) {
+    if (hasAwaitStmt(content) && !hasImportStmt(content)) {
         std::string wrapped = wrapAsyncIife(content, absSource.string());
         wrapFile = tempDir / (stem + "_wrap.js");
         std::ofstream ofs(wrapFile, std::ios::binary);

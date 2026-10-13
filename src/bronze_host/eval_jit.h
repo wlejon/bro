@@ -80,4 +80,15 @@ bool evalScriptFileJit(engine::Engine& engine, const std::string& filePath);
 /// position on an Error, so the file is the location the report can give.
 std::string wrapAsyncIife(const std::string& code, const std::string& filename = {});
 
+/// Whether `code` has a top-level `await` (function depth 0, outside comments,
+/// strings, template literals, regexes, and nested function/arrow/method/class
+/// bodies).
+bool hasAwaitStmt(const std::string& code);
+
+/// Whether `code` has a top-level ES module `import` or `export` declaration
+/// (outside comments/strings/templates/regexes, excluding dynamic `import(...)`
+/// calls and `import.meta`).
+bool hasImportStmt(const std::string& code);
+
 } // namespace bro::bronze_host
+
