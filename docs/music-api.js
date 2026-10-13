@@ -469,6 +469,23 @@
  * @property {number} seconds
  * @property {number} value
  * @property {string} text
+ * @property {YuE2StreamTake} [take] - saved (value >= 0): what the song was made of, for rendering it again or editing it
+ */
+
+/**
+ * A saved song's take: the frames written to the WAV (frames x 1920 samples
+ * at 48 kHz, within a hop of `frames` in the saved event).
+ * @typedef {Object} YuE2StreamTake
+ * @property {YuE2Plan} plan - the score it was sung from (abc, abcIds, prefix, truncated)
+ * @property {Int32Array} semantic - its semantic tokens, one per frame (25 fps)
+ * @property {Float32Array} latents - its VAE latents, frames x 64 (decode() renders them)
+ * @property {Float32Array} energy - the energy knob's offset per frame, as it was decoded (0 where never moved)
+ * @property {number} frames
+ * @property {number} seed
+ * @property {string} style
+ * @property {string} lyrics
+ * @property {'full'|'melody'|'off'} cot
+ * @property {number} cfgScale
  */
 
 /**
@@ -533,7 +550,7 @@ class YuE2Stream {
    * its latents are complete (the rest of it decoded for the save; a preview
    * is its preview, so makeFull first to save the whole song), one that plays
    * out first as it played; the last keepPlayed played songs too. A 'saved'
-   * event follows.
+   * event follows, carrying the song's take (its plan, tokens and latents).
    * @param {number} song - its index
    * @param {string} path
    */
@@ -591,6 +608,53 @@ class YuE2 {
    * @returns {{cancel: function(), wait: function()}} AsyncHandle
    */
   synthesize(plan, semantic, opts) {}
+
+  /**
+   * Edit a song's semantic tokens: the song becomes A + M + B (+ C). A
+   * (`before`) is kept and fed as the song's opening, M is sampled new for
+   * exactly `middleFrames`, B (`after`) is kept and must follow M, and with
+   * `continue` C is sampled on until the song ends (or the semantic token
+   * budget). `candidates` Ms are drawn (seeds seed, seed + 1, ...) and each is
+   * scored by the mean NLL of B's first `scoreFrames` after it, teacher-forced:
+   * the one B follows best is kept, and every M comes back for auditioning.
+   * Then inpaint() renders the frames that changed. The moves:
+   *   regenerate [a, b)    before = song[0, a), middleFrames = b - a, after = song[b, T)
+   *   cut [a, b) out       before = song[0, a), middleFrames = 0 (or a short bridge), after = song[b, T)
+   *                        (inpaint a seam around a: [a - 12, a + 12))
+   *   a song from a clip   before = the clip, continue: true
+   *   a clip in a new song before = [], middleFrames = where it goes, after = the clip, continue: true
+   * opts carries the request the plan was made from (style, lyrics, cot; the
+   * take's), plus seed, cfgScale, semanticSampling and AR steers. Holds the
+   * model until onDone.
+   * @param {YuE2Plan} plan
+   * @param {YuE2Options & {before?: Int32Array, after?: Int32Array, middleFrames?: number,
+   *   candidates?: number, scoreFrames?: number, continue?: boolean}} opts - candidates 4 (1..32;
+   *   1 with no B or no M), scoreFrames 125 (5 s)
+   * onDone(result, info): result = { semantic: Int32Array (A + M + B + C), frames, middle0, after0
+   * (M = [middle0, after0), B from after0), chosen, scores: Float32Array (per M, nats; lower = B
+   * follows better; with no M the join's), middles: Int32Array[] (every M drawn), truncated (C hit
+   * the budget) }; undefined when cancelled. onProgress({ stage, done, total }) per token.
+   * @returns {{cancel: function(), wait: function()}} AsyncHandle
+   */
+  splice(plan, opts) {}
+
+  /**
+   * Re-synthesize latent frames [a, b) of a song whose other frames are
+   * kept: each window is inpainted between the kept frames on both sides,
+   * with enough of them (windows up to 1000 frames) that a short span solves at
+   * the loudness of a whole song; a span over 975 frames is tiled. Noise is
+   * opts.seed's; opts carries the plan's request as for splice, plus odeSteps
+   * and NAR steers. onDone({ latents: Float32Array (all frames, [a, b) new),
+   * frames }, info); vae.decode renders it.
+   * @param {YuE2Plan} plan
+   * @param {Int32Array} semantic - the song's tokens (splice's result)
+   * @param {Float32Array} latents - semantic.length * 64, frame-major; values in [a, b) ignored
+   * @param {number} a
+   * @param {number} b
+   * @param {YuE2Options} opts
+   * @returns {{cancel: function(), wait: function()}} AsyncHandle
+   */
+  inpaint(plan, semantic, latents, a, b, opts) {}
 
   /**
    * Streaming playback, the radio and live steering (see the top of this
@@ -692,3 +756,12 @@ bro.music.loadVae = function(vaeDir, opts) {};
  *   bro.music.knobRanges.percussion;   // { min: -6, max: 6 }
  */
 bro.music.knobRanges;
+
+/**
+ * The energy knob's latent direction (64 floats). A stream decodes each
+ * frame as latents[f] + energy[f] * energyDirection, so a saved take
+ * (YuE2StreamTake) sounds as it played when decoded that way; inpaint() and
+ * splice() work on the raw latents.
+ * @readonly @type {Float32Array}
+ */
+bro.music.energyDirection;
