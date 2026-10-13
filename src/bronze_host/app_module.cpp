@@ -44,8 +44,7 @@ constexpr const char* kModuleName = "app.so";
 // with the DEFAULT entry, whose stamp keeps the historical spelling
 // `bronze_object_abi_fingerprint` rather than `bronze_main_abi_fingerprint`.
 // The third, `<entry>_host_globals`, is the manifest the module was compiled
-// against — read below only to report it, because bro registers its globals
-// across a dozen call sites and has no single list to diff against yet.
+// against — verified against the live runtime before `bronze_main` runs.
 constexpr const char* kFingerprintSymbol = "bronze_object_abi_fingerprint";
 constexpr const char* kEntrySymbol = "bronze_main";
 constexpr const char* kGlobalsSymbol = "bronze_main_host_globals";
@@ -99,35 +98,56 @@ void* moduleSymbol(ModuleHandle handle, const char* name) {
 #endif
 }
 
-namespace {
-
 // The `<entry>_host_globals` manifest: a uint32 count, then that many
 // NUL-terminated UTF-8 names back to back (bronze_abi.h, "the loadable-module
 // surface"). A module compiled with no manifest still exports the symbol with
-// count 0, so absence means "not a bronze module" and never "no globals".
+// count 0, so absence means "module predates the manifest symbol" and never
+// "no globals".
 //
-// Reported, not yet enforced. Enforcing it means diffing against the names bro
-// actually registered, and those go in from a dozen call sites in
-// dom_globals.cpp and host_platform.cpp with no list to consult; recording
-// them is a separate change. Until then this turns "the app died reading some
-// global" into a log line naming what the app was promised.
-std::string describeGlobals(ModuleHandle handle) {
+// Enforced after `installWebHostGlobals` and before `entry()` runs: each
+// required global name is checked against the runtime via
+// `bronze::embed::globalValue(name).found` (which checks the builtin ladder,
+// the host-global registry, and own properties of `globalThis`). Any missing
+// names refuse the module before its top level executes.
+bool verifyHostGlobals(ModuleHandle handle, std::string& errorOut, std::string* describedOut) {
+    errorOut.clear();
     const auto* base = static_cast<const unsigned char*>(moduleSymbol(handle, kGlobalsSymbol));
-    if (!base) return "none declared (module predates the manifest symbol)";
+    if (!base) {
+        if (describedOut) *describedOut = "none declared (module predates the manifest symbol)";
+        return true;
+    }
 
     uint32_t count = 0;
     std::memcpy(&count, base, sizeof(count));
-    if (count == 0) return "none";
+    if (count == 0) {
+        if (describedOut) *describedOut = "none";
+        return true;
+    }
 
-    std::string out;
+    std::string described;
+    std::string missing;
     const char* cursor = reinterpret_cast<const char*>(base + sizeof(count));
     for (uint32_t i = 0; i < count; ++i) {
-        if (i) out += ", ";
-        out += cursor;
-        cursor += std::strlen(cursor) + 1;
+        const std::string_view name(cursor);
+        if (describedOut) {
+            if (i) described += ", ";
+            described.append(name.data(), name.size());
+        }
+        if (name != "globalThis" && !bronze::embed::globalValue(name).found) {
+            if (!missing.empty()) missing += ", ";
+            missing.append(name.data(), name.size());
+        }
+        cursor += name.size() + 1;
     }
-    return out;
+    if (describedOut) *describedOut = std::move(described);
+    if (!missing.empty()) {
+        errorOut = "host globals missing from runtime: " + missing;
+        return false;
+    }
+    return true;
 }
+
+namespace {
 
 // --- Reporting ------------------------------------------------------------
 
@@ -204,12 +224,16 @@ AppModuleResult runAppModule(engine::Engine& engine, const std::string& modulePa
                           "than as an app entry point.");
     }
 
-    // Read before the program runs, so a failure inside it has the list above
-    // it in the log rather than below.
-    const std::string globals = describeGlobals(handle);
-
-    // Globals BEFORE the program: its top level reads them as it runs.
+    // Globals BEFORE the manifest check and the program: its top level reads
+    // them as it runs, and verifyHostGlobals checks what was actually installed.
     installWebHostGlobals(engine);
+
+    std::string globals;
+    std::string globalsError;
+    if (!verifyHostGlobals(handle, globalsError, &globals)) {
+        return refuse(&engine, AppModuleStatus::MissingHostGlobals,
+                      modulePath + ": " + globalsError);
+    }
 
     // The root frame around the top level and the microtask checkpoint after
     // it, which a program whose top level queued a job needs before it can be

@@ -184,10 +184,35 @@ cat > "$SRC/good.c" <<EOF
 MOD_EXPORT const unsigned int bronze_object_abi_fingerprint = 0x${FP}u;
 MOD_EXPORT void bronze_main(void) { printf("LOADER: bronze_main called\n"); fflush(stdout); }
 EOF
+# Manifest declares host globals that ARE installed on the runtime.
+cat > "$SRC/goodglobals.c" <<EOF
+#include "export.h"
+#include <stdint.h>
+#include <stdio.h>
+struct BronzeHostGlobals { uint32_t count; char names[128]; };
+MOD_EXPORT const unsigned int bronze_object_abi_fingerprint = 0x${FP}u;
+MOD_EXPORT const struct BronzeHostGlobals bronze_main_host_globals = {
+    2u, "document\0performance\0"
+};
+MOD_EXPORT void bronze_main(void) { printf("LOADER: good globals module ran\n"); fflush(stdout); }
+EOF
+# Manifest declares host globals that are NOT on the runtime: must be refused
+# before bronze_main is ever called.
+cat > "$SRC/missingglobals.c" <<EOF
+#include "export.h"
+#include <stdint.h>
+#include <stdio.h>
+struct BronzeHostGlobals { uint32_t count; char names[128]; };
+MOD_EXPORT const unsigned int bronze_object_abi_fingerprint = 0x${FP}u;
+MOD_EXPORT const struct BronzeHostGlobals bronze_main_host_globals = {
+    3u, "document\0__missing_host_global_1\0__missing_host_global_2\0"
+};
+MOD_EXPORT void bronze_main(void) { printf("LOADER: missing globals module ran\n"); fflush(stdout); }
+EOF
 cat > "$SRC/CMakeLists.txt" <<'EOF'
 cmake_minimum_required(VERSION 3.20)
 project(bro_loader_fixtures C)
-foreach(m unstamped wrongabi noentry good)
+foreach(m unstamped wrongabi noentry good goodglobals missingglobals)
     add_library(${m} SHARED ${m}.c)
     set_target_properties(${m} PROPERTIES
         PREFIX "" C_VISIBILITY_PRESET hidden
@@ -259,12 +284,88 @@ check "stale ABI" "$OUT/wrongabi$EXT" \
 
 check "no entry point" "$OUT/noentry$EXT" 'exports no bronze_main'
 
+# Host-globals manifest: missing globals are refused BEFORE bronze_main runs.
+check "missing host globals" "$OUT/missingglobals$EXT" \
+      'host globals missing from runtime: __missing_host_global_1, __missing_host_global_2' \
+      'LOADER: missing globals module ran'
+
+# Host-globals manifest: present globals succeed and run bronze_main.
+check "present host globals" "$OUT/goodglobals$EXT" \
+      'LOADER: good globals module ran'
+
 # Success: host globals installed, the compiled top level called.
 check "loads and runs" "$OUT/good$EXT" 'LOADER: bronze_main called'
 # Trailing comma, not a closing paren: the success line goes on to name the
 # host-globals manifest the module declared, and pinning the whole line would
 # make this check fail every time that list is worded differently.
 check "success is logged" "$OUT/good$EXT" "(bronze ABI $FP,"
+
+# --- Lexical scanner checks (hasAwaitStmt / hasImportStmt) ------------------
+SCAN_APP="$WORK/scan_app"; mkdir -p "$SCAN_APP"
+cat > "$SCAN_APP/index.html" <<'EOF'
+<!doctype html><html><body></body></html>
+EOF
+
+cat > "$SCAN_APP/driver.js" <<'EOF'
+// 1. False-positive check: `await` and `import` at line-start inside comments,
+// strings, template literals, and nested async functions/arrows must NOT trigger
+// wrapAsyncIife (which would turn synchronous eval's completion value into a
+// Promise resolving to undefined).
+const syncEvalRes = eval([
+  "/*",
+  "await not_top_level_in_comment",
+  "import fake from 'also_in_comment'",
+  "*/",
+  "const s = 'await in_string\\nimport fake2 from \"in_string\"';",
+  "const tpl = `",
+  "await not_top_level_in_template",
+  "import fake3 from 'in_template'",
+  "`;",
+  "async function nestedAsync() {",
+  "  await Promise.resolve(10);",
+  "}",
+  "const arrowAsync = async () => {",
+  "  await Promise.resolve(20);",
+  "};",
+  "const obj = { await: 1, import: 2 };",
+  "12345"
+].join("\n"));
+console.log("SCAN:sync-eval=" + typeof syncEvalRes + ":" + syncEvalRes);
+
+// 2. True-positive top-level await & false-positive import check:
+// Comments/strings/templates with line-leading `import` must NOT trigger
+// hasImportStmt, while mid-line, branch-interior, and `${...}` template
+// interpolation top-level `await` MUST trigger hasAwaitStmt.
+/*
+import broken from "./nonexistent_comment_module.js"
+*/
+const commentImportStr = "\nimport broken from './nonexistent_str_module.js'\n";
+const commentImportTpl = `
+import broken from "./nonexistent_tpl_module.js"
+`;
+const midLine = await Promise.resolve(42);
+let branchVal = 0;
+if (midLine === 42) {
+  branchVal = await Promise.resolve(7);
+}
+const interp = `sum=${await Promise.resolve(midLine + branchVal)}`;
+console.log("SCAN:driver=" + interp);
+EOF
+
+SCAN_APP_ARG="$(to_win_path "$SCAN_APP")"
+SCAN_DRIVER_ARG="$(to_win_path "$SCAN_APP/driver.js")"
+SCAN_ERR="$WORK/scan.err"
+SCAN_OUT="$("$BIN" "$SCAN_APP_ARG" "$SCAN_DRIVER_ARG" 2>"$SCAN_ERR" | tr -d '\r'; tr -d '\r' < "$SCAN_ERR")"
+rm -f "$SCAN_ERR"
+
+if ! printf '%s\n' "$SCAN_OUT" | grep -qF "SCAN:sync-eval=number:12345"; then
+    fail "scanner sync-eval: comments/templates/nested async falsely triggered async IIFE wrapper" \
+         "$(printf '%s\n' "$SCAN_OUT" | head -20)"
+fi
+if ! printf '%s\n' "$SCAN_OUT" | grep -qF "SCAN:driver=sum=49"; then
+    fail "scanner driver: mid-line/branch/template-interpolation top-level await or comment import failed" \
+         "$(printf '%s\n' "$SCAN_OUT" | head -20)"
+fi
 
 echo "  PASS  $NAME"
 exit 0
