@@ -630,6 +630,8 @@ private:
     std::unordered_map<uint32_t, std::unique_ptr<ClipPlayer>> clipPlayers_;
     uint32_t nextClipPlayerId_ = 1;
     std::vector<uint32_t> clipPlayerIdScratch_;
+    std::vector<uint32_t> nodeIdScratch_;
+    std::vector<uint32_t> tweenIdScratch_;
 
     canvas::CanvasScene* canvasScene_ = nullptr;
     CanvasRebinder rebinder_;

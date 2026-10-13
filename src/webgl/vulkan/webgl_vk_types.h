@@ -334,7 +334,8 @@ struct VkProgramResource {
     // sets and the uniform slice come from the segment, so they never
     // outlive it.
     uint64_t drawSegmentSerial = 0;
-    std::vector<uint8_t> drawUniformBytes;
+    uint64_t uniformVersion = 1;
+    uint64_t drawUniformVersion = 0;
     VkDescriptorBufferInfo drawUniforms{};
     std::vector<uint64_t> drawBindingKey;
     VkDescriptorSet drawSet = VK_NULL_HANDLE;

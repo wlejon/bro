@@ -236,6 +236,7 @@ void WebGLVkContext::beginRendering() {
     beginOcclusionSlot(cmd);
     pass_ = target;
     inRenderPass_ = true;
+    resetPassBindingState();
 }
 
 void WebGLVkContext::endRendering() {
@@ -244,6 +245,7 @@ void WebGLVkContext::endRendering() {
     endOcclusionSlot(cmd);
     vkCmdEndRendering(cmd);
     inRenderPass_ = false;
+    resetPassBindingState();
 
     // What the pass wrote is visible to whatever reads or writes the images
     // next — another pass over them, a copy, or sampling.

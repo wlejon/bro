@@ -42,7 +42,10 @@ SceneGraph::~SceneGraph() {
     // Invalidate the JS-wrapper liveness token first thing, so any wrapper
     // call that races teardown (there is none today — same thread — but the
     // ordering costs nothing) resolves to "graph gone" before nodes die.
-    if (liveToken_) liveToken_->graph = nullptr;
+    if (liveToken_) {
+        liveToken_->graph = nullptr;
+        ++liveToken_->destroyGeneration;
+    }
 
     nodes_.clear();
 }
@@ -249,9 +252,21 @@ void SceneGraph::tickAnimations(float dtSec) {
     // parented-but-hidden particles still expire). Iterate an id snapshot —
     // a Particles3D onFinished callback fired below may create or destroy
     // nodes (including its own) mid-pass, invalidating map iterators.
-    std::vector<uint32_t> nodeIds;
-    nodeIds.reserve(nodes_.size());
-    for (const auto& [id, _] : nodes_) nodeIds.push_back(id);
+    // Only snapshot node types with a non-trivial onTick (Particles,
+    // Particles3D, Sprite, SkinnedMesh) to avoid two hash lookups per static
+    // Mesh/Light/Camera/etc. node every frame.
+    auto& nodeIds = nodeIdScratch_;
+    nodeIds.clear();
+    for (const auto& [id, node] : nodes_) {
+        if (!node) continue;
+        const SceneNode::Type t = node->type();
+        if (t == SceneNode::Type::Particles ||
+            t == SceneNode::Type::Particles3D ||
+            t == SceneNode::Type::Sprite ||
+            (t == SceneNode::Type::Mesh && static_cast<MeshNode*>(node.get())->asSkinnedMesh() != nullptr)) {
+            nodeIds.push_back(id);
+        }
+    }
     for (uint32_t id : nodeIds) {
         auto it = nodes_.find(id);
         if (it == nodes_.end() || !it->second) continue;
@@ -281,7 +296,8 @@ void SceneGraph::tickAnimations(float dtSec) {
     // that marked themselves destroyed (destroyTween defers the erase so a
     // tween can destroy itself from its own callback).
     if (!tweens_.empty()) {
-        std::vector<uint32_t> ids;
+        auto& ids = tweenIdScratch_;
+        ids.clear();
         ids.reserve(tweens_.size());
         for (const auto& [id, _] : tweens_) ids.push_back(id);
         for (uint32_t id : ids) {
@@ -400,6 +416,7 @@ void SceneGraph::destroyNode(SceneNode* node) {
         agentBindings_.erase(id);
         nodes_.erase(id);
     }
+    if (liveToken_) ++liveToken_->destroyGeneration;
     // Their GPU copies go too (deferred past the frames still using them).
     renderer_.releaseNodes(ids);
 }
@@ -591,7 +608,7 @@ void SceneGraph::render() {
     // Only 2D node types draw here. A node type that renders in 3D belongs to
     // SceneRenderer::render3D() and must never be reached from this walk.
     {
-        std::function<void(SceneNode*)> walk2D = [&](SceneNode* n) {
+        auto walk2D = [&](auto& self, SceneNode* n) -> void {
             if (!n->renderVisible()) return;
             const SceneNode::Type t = n->type();
             const bool is2D = t == SceneNode::Type::Shape ||
@@ -600,9 +617,9 @@ void SceneGraph::render() {
             if (is2D && !n->hasWorldAnchor()) {
                 n->onRender(*this);
             }
-            for (auto* c : n->children()) walk2D(c);
+            for (auto* c : n->children()) self(self, c);
         };
-        walk2D(root_.get());
+        walk2D(walk2D, root_.get());
     }
 
     // Restore 2D camera

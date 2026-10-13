@@ -752,7 +752,29 @@ private:
     bool bindVertexInputs(const VkProgramResource& prog, const DrawShape& shape, PipelineKey& key,
                           std::vector<VkBuffer>& vbos, std::vector<VkDeviceSize>& offsets);
     bool vertexFormatSupported(VkFormat format);
-    std::unordered_map<VkFormat, bool> vertexFormatSupport_;
+    std::array<uint8_t, 256> vertexFormatSupport_{};  // 0: unqueried, 1: no, 2: yes
+    mutable std::array<VkFormatFeatureFlags, 256> formatFeaturesLow_{};
+    mutable std::array<uint8_t, 256> formatFeaturesValid_{};
+
+    // Reused scratch buffers and open-pass binding state for prepareDraw / bindProgramResources.
+    std::vector<VkBuffer> drawVbos_;
+    std::vector<VkDeviceSize> drawOffsets_;
+    std::vector<VkDescriptorBufferInfo> drawBlocks_;
+    std::vector<VkDescriptorBufferInfo> drawCaptures_;
+    std::vector<VkDescriptorImageInfo> drawImages_;
+    std::vector<uint64_t> drawKey_;
+    std::vector<VkWriteDescriptorSet> drawWrites_;
+    VkPipeline boundPipeline_ = VK_NULL_HANDLE;
+    VkDescriptorSet boundDescriptorSet_ = VK_NULL_HANDLE;
+    VkPipelineLayout boundPipelineLayout_ = VK_NULL_HANDLE;
+    FragmentPush lastFragmentPush_{};
+    bool fragmentPushInitialized_ = false;
+    void resetPassBindingState() {
+        boundPipeline_ = VK_NULL_HANDLE;
+        boundDescriptorSet_ = VK_NULL_HANDLE;
+        boundPipelineLayout_ = VK_NULL_HANDLE;
+        fragmentPushInitialized_ = false;
+    }
 
     render::VulkanContext& context_;
     WebGLVkStream stream_;
@@ -853,6 +875,8 @@ private:
     GLuint boundTransformFeedbackBuffer_ = 0;
     GLuint currentProgramId_ = 0;
     GLuint currentVaoId_ = 0;
+    VkProgramResource* currentProgram_ = nullptr;
+    VkVAOResource* currentVao_ = nullptr;
 
     UnpackState unpack_;  // UNPACK_* except the WebGL flags below
     PackState pack_;

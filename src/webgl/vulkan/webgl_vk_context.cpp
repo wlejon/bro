@@ -22,6 +22,7 @@ WebGLVkContext::WebGLVkContext(int width, int height, render::VulkanContext& con
     // Default VAO
     vaos_[0] = VkVAOResource{};
     currentVaoId_ = 0;
+    currentVao_ = &vaos_[0];
 }
 
 WebGLVkContext::~WebGLVkContext() {
@@ -74,6 +75,8 @@ void WebGLVkContext::cleanupVulkanResources() {
     for (auto& [id, prog] : programs_) releaseProgramExecutable(prog);
     programs_.clear();
     vaos_.clear();
+    currentProgram_ = nullptr;
+    currentVao_ = nullptr;
     framebuffers_.clear();
 
     pipelineCache_.clear();
@@ -379,7 +382,10 @@ WebGLVertexArrayObject WebGLVkContext::createVertexArray() {
 void WebGLVkContext::deleteVertexArray(WebGLVertexArrayObject vao) {
     if (vao.id != 0) {
         vaos_.erase(vao.id);
-        if (currentVaoId_ == vao.id) currentVaoId_ = 0;
+        if (currentVaoId_ == vao.id) {
+            currentVaoId_ = 0;
+            currentVao_ = &vaos_[0];
+        }
     }
 }
 
@@ -391,6 +397,7 @@ bool WebGLVkContext::bindVertexArray(WebGLVertexArrayObject vao) {
     }
     it->second.everBound = true;
     currentVaoId_ = vao.id;
+    currentVao_ = &it->second;
     boundElementArrayBuffer_ = it->second.elementArrayBufferId;
     return true;
 }

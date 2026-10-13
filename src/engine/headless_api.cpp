@@ -325,19 +325,6 @@ void Engine::advanceTime(double ms) {
             }
             SceneAudioSync::sync(aiDt);
         }
-
-        auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get());
-        if (skia) {
-            for (auto& sg : sceneGraphs_) {
-                if (sg.graph) {
-                    sg.graph->materializeHtmlNodes(skia);
-                }
-            }
-        }
-
-        for (auto& sg : sceneGraphs_) {
-            sg.graph->render();
-        }
 #endif
 
         const double tFlush = util::currentTimeMs();

@@ -9,7 +9,12 @@ namespace bro::webgl::vk {
 namespace {
 
 inline void hashCombine(size_t& seed, size_t value) {
-    seed ^= value + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    value ^= value >> 30;
+    value *= 0xbf58476d1ce4e5b9ULL;
+    value ^= value >> 27;
+    value *= 0x94d049bb133111ebULL;
+    value ^= value >> 31;
+    seed ^= value + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2);
 }
 
 } // namespace
@@ -62,43 +67,56 @@ bool PipelineKey::operator==(const PipelineKey& o) const {
 
 size_t PipelineKeyHasher::operator()(const PipelineKey& k) const {
     size_t seed = 0;
-    hashCombine(seed, std::hash<void*>()((void*)k.vertShader));
-    hashCombine(seed, std::hash<void*>()((void*)k.fragShader));
-    hashCombine(seed, std::hash<uint32_t>()(static_cast<uint32_t>(k.topology)));
-    hashCombine(seed, std::hash<uint32_t>()(k.primitiveRestartEnable |
-                                            k.depthBiasEnable << 2 | k.alphaToCoverageEnable << 3 |
-                                            static_cast<uint32_t>(k.alphaOneMask) << 4 |
-                                            static_cast<uint32_t>(k.unwrittenMask) << 12));
-    hashCombine(seed, std::hash<uint32_t>()(k.sampleMask));
-    hashCombine(seed, std::hash<uint32_t>()(static_cast<uint32_t>(k.cullMode)));
-    hashCombine(seed, std::hash<uint32_t>()(static_cast<uint32_t>(k.frontFace)));
-    hashCombine(seed, std::hash<uint32_t>()(k.cullFaceEnable));
-    hashCombine(seed, std::hash<uint32_t>()(k.depthTestEnable));
-    hashCombine(seed, std::hash<uint32_t>()(k.depthWriteEnable));
-    hashCombine(seed, std::hash<uint32_t>()(static_cast<uint32_t>(k.depthCompareOp)));
-    hashCombine(seed, std::hash<uint32_t>()(k.stencilTestEnable));
+    hashCombine(seed, reinterpret_cast<uintptr_t>(k.vertShader));
+    hashCombine(seed, reinterpret_cast<uintptr_t>(k.fragShader));
+    const uint64_t packedState =
+        static_cast<uint64_t>(k.topology) |
+        (static_cast<uint64_t>(k.primitiveRestartEnable & 1u) << 4) |
+        (static_cast<uint64_t>(k.depthBiasEnable & 1u) << 5) |
+        (static_cast<uint64_t>(k.alphaToCoverageEnable & 1u) << 6) |
+        (static_cast<uint64_t>(k.cullFaceEnable & 1u) << 7) |
+        (static_cast<uint64_t>(k.cullMode & 0xFu) << 8) |
+        (static_cast<uint64_t>(k.frontFace & 0x3u) << 12) |
+        (static_cast<uint64_t>(k.depthTestEnable & 1u) << 14) |
+        (static_cast<uint64_t>(k.depthWriteEnable & 1u) << 15) |
+        (static_cast<uint64_t>(k.depthCompareOp & 0xFu) << 16) |
+        (static_cast<uint64_t>(k.stencilTestEnable & 1u) << 20) |
+        (static_cast<uint64_t>(k.blendEnable & 1u) << 21) |
+        (static_cast<uint64_t>(k.colorWriteMask & 0xFu) << 22) |
+        (static_cast<uint64_t>(k.colorAttachmentCount & 0xFu) << 26) |
+        (static_cast<uint64_t>(k.samples & 0x7Fu) << 30) |
+        (static_cast<uint64_t>(k.alphaOneMask) << 40) |
+        (static_cast<uint64_t>(k.unwrittenMask) << 48) |
+        (static_cast<uint64_t>(k.attributeCount & 0x1Fu) << 56) |
+        (static_cast<uint64_t>(k.bindingCount & 0x1Fu) << 59);
+    hashCombine(seed, packedState);
+    hashCombine(seed, k.sampleMask);
+    if (k.blendEnable) {
+        const uint64_t blendPacked =
+            static_cast<uint64_t>(k.srcColorBlendFactor) |
+            (static_cast<uint64_t>(k.dstColorBlendFactor) << 8) |
+            (static_cast<uint64_t>(k.colorBlendOp) << 16) |
+            (static_cast<uint64_t>(k.srcAlphaBlendFactor) << 24) |
+            (static_cast<uint64_t>(k.dstAlphaBlendFactor) << 32) |
+            (static_cast<uint64_t>(k.alphaBlendOp) << 40);
+        hashCombine(seed, blendPacked);
+    }
     if (k.stencilTestEnable) {
-        hashCombine(seed, std::hash<uint32_t>()(static_cast<uint32_t>(k.stencilFront.compareOp)));
-        hashCombine(seed, std::hash<uint32_t>()(k.stencilFront.reference));
-        hashCombine(seed, std::hash<uint32_t>()(k.stencilFront.compareMask));
-        hashCombine(seed, std::hash<uint32_t>()(k.stencilFront.writeMask));
+        hashCombine(seed, (static_cast<uint64_t>(k.stencilFront.compareOp) << 32) | k.stencilFront.reference);
+        hashCombine(seed, (static_cast<uint64_t>(k.stencilFront.compareMask) << 32) | k.stencilFront.writeMask);
     }
-    hashCombine(seed, std::hash<uint32_t>()(k.blendEnable));
-    hashCombine(seed, std::hash<uint32_t>()(static_cast<uint32_t>(k.srcColorBlendFactor)));
-    hashCombine(seed, std::hash<uint32_t>()(static_cast<uint32_t>(k.dstColorBlendFactor)));
-    hashCombine(seed, std::hash<uint32_t>()(static_cast<uint32_t>(k.colorWriteMask)));
-    hashCombine(seed, std::hash<uint32_t>()(k.colorAttachmentCount));
+    hashCombine(seed, (static_cast<uint64_t>(k.depthAttachmentFormat) << 32) |
+                          static_cast<uint32_t>(k.stencilAttachmentFormat));
     for (uint32_t i = 0; i < k.colorAttachmentCount; ++i) {
-        hashCombine(seed, std::hash<uint32_t>()(static_cast<uint32_t>(k.colorAttachmentFormats[i])));
+        hashCombine(seed, static_cast<uint32_t>(k.colorAttachmentFormats[i]));
     }
-    hashCombine(seed, std::hash<uint32_t>()(static_cast<uint32_t>(k.depthAttachmentFormat)));
-    hashCombine(seed, std::hash<uint32_t>()(static_cast<uint32_t>(k.stencilAttachmentFormat)));
-    hashCombine(seed, std::hash<uint32_t>()(static_cast<uint32_t>(k.samples)));
-    hashCombine(seed, std::hash<uint32_t>()(k.attributeCount));
-    hashCombine(seed, std::hash<uint32_t>()(k.bindingCount));
     for (uint32_t i = 0; i < k.attributeCount; ++i) {
-        hashCombine(seed, std::hash<uint32_t>()(k.attributes[i].location));
-        hashCombine(seed, std::hash<uint32_t>()(static_cast<uint32_t>(k.attributes[i].format)));
+        hashCombine(seed, (static_cast<uint64_t>(k.attributes[i].location) << 32) |
+                              static_cast<uint32_t>(k.attributes[i].format));
+    }
+    for (uint32_t i = 0; i < k.bindingCount; ++i) {
+        hashCombine(seed, (static_cast<uint64_t>(k.bindings[i].stride) << 32) |
+                              (static_cast<uint32_t>(k.bindings[i].inputRate) << 16) | k.divisors[i]);
     }
     return seed;
 }
@@ -122,10 +140,16 @@ void WebGLVkPipelineCache::clear() {
         }
     }
     pipelines_.clear();
+    lastPipeline_ = VK_NULL_HANDLE;
+    lastLayout_ = VK_NULL_HANDLE;
 }
 
 void WebGLVkPipelineCache::evictShaders(VkShaderModule vert, VkShaderModule frag) {
     VkDevice dev = context_.device();
+    if (lastKey_.vertShader == vert || lastKey_.fragShader == frag) {
+        lastPipeline_ = VK_NULL_HANDLE;
+        lastLayout_ = VK_NULL_HANDLE;
+    }
     for (auto it = pipelines_.begin(); it != pipelines_.end();) {
         if (it->first.vertShader == vert || it->first.fragShader == frag) {
             VkPipeline pipeline = it->second;
@@ -138,14 +162,23 @@ void WebGLVkPipelineCache::evictShaders(VkShaderModule vert, VkShaderModule frag
 }
 
 VkPipeline WebGLVkPipelineCache::getOrCreatePipeline(const PipelineKey& key, VkPipelineLayout layout) {
+    if (lastPipeline_ != VK_NULL_HANDLE && lastLayout_ == layout && lastKey_ == key) {
+        return lastPipeline_;
+    }
     auto it = pipelines_.find(key);
     if (it != pipelines_.end()) {
+        lastKey_ = key;
+        lastLayout_ = layout;
+        lastPipeline_ = it->second;
         return it->second;
     }
 
     VkPipeline pipeline = createPipeline(key, layout);
     if (pipeline != VK_NULL_HANDLE) {
         pipelines_[key] = pipeline;
+        lastKey_ = key;
+        lastLayout_ = layout;
+        lastPipeline_ = pipeline;
     }
     return pipeline;
 }

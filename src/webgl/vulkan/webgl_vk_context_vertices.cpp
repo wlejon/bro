@@ -129,18 +129,24 @@ VkVertexInput::Kind arrayKind(const VkVertexAttribute& attr) {
 
 bool WebGLVkContext::vertexFormatSupported(VkFormat format) {
     if (format == VK_FORMAT_UNDEFINED) return false;
-    auto it = vertexFormatSupport_.find(format);
-    if (it != vertexFormatSupport_.end()) return it->second;
+    const auto idx = static_cast<uint32_t>(format);
+    if (idx < vertexFormatSupport_.size()) {
+        uint8_t s = vertexFormatSupport_[idx];
+        if (s != 0) return s == 2;
+        VkFormatProperties props{};
+        vkGetPhysicalDeviceFormatProperties(context_.physicalDevice(), format, &props);
+        const bool ok = (props.bufferFeatures & VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT) != 0;
+        vertexFormatSupport_[idx] = ok ? 2 : 1;
+        return ok;
+    }
     VkFormatProperties props{};
     vkGetPhysicalDeviceFormatProperties(context_.physicalDevice(), format, &props);
-    const bool ok = (props.bufferFeatures & VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT) != 0;
-    vertexFormatSupport_.emplace(format, ok);
-    return ok;
+    return (props.bufferFeatures & VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT) != 0;
 }
 
 bool WebGLVkContext::bindVertexInputs(const VkProgramResource& prog, const DrawShape& shape, PipelineKey& key,
                                       std::vector<VkBuffer>& vbos, std::vector<VkDeviceSize>& offsets) {
-    VkVAOResource& vao = vaos_[currentVaoId_];
+    VkVAOResource& vao = *currentVao_;
     uint32_t count = 0;
     for (const VkVertexInput& in : prog.iface.vertexInputs) {
         const uint32_t loc = in.location;
@@ -251,7 +257,7 @@ void WebGLVkContext::enableVertexAttribArray(GLuint index) {
         setSyntheticError(GL_INVALID_VALUE);
         return;
     }
-    vaos_[currentVaoId_].attributes[index].enabled = true;
+    currentVao_->attributes[index].enabled = true;
 }
 
 void WebGLVkContext::disableVertexAttribArray(GLuint index) {
@@ -259,7 +265,7 @@ void WebGLVkContext::disableVertexAttribArray(GLuint index) {
         setSyntheticError(GL_INVALID_VALUE);
         return;
     }
-    vaos_[currentVaoId_].attributes[index].enabled = false;
+    currentVao_->attributes[index].enabled = false;
 }
 
 namespace {
@@ -296,7 +302,7 @@ void WebGLVkContext::vertexAttribPointer(GLuint index, GLint size, GLenum type, 
         setSyntheticError(err);
         return;
     }
-    VkVertexAttribute& attr = vaos_[currentVaoId_].attributes[index];
+    VkVertexAttribute& attr = currentVao_->attributes[index];
     attr.size = size;
     attr.type = type;
     attr.normalized = normalized;
@@ -313,7 +319,7 @@ void WebGLVkContext::vertexAttribIPointer(GLuint index, GLint size, GLenum type,
         setSyntheticError(err);
         return;
     }
-    VkVertexAttribute& attr = vaos_[currentVaoId_].attributes[index];
+    VkVertexAttribute& attr = currentVao_->attributes[index];
     attr.size = size;
     attr.type = type;
     attr.normalized = GL_FALSE;
@@ -328,7 +334,7 @@ void WebGLVkContext::vertexAttribDivisor(GLuint index, GLuint divisor) {
         setSyntheticError(GL_INVALID_VALUE);
         return;
     }
-    vaos_[currentVaoId_].attributes[index].divisor = divisor;
+    currentVao_->attributes[index].divisor = divisor;
 }
 
 } // namespace bro::webgl::vk

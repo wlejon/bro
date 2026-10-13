@@ -119,12 +119,14 @@ void WebGLVkContext::releaseProgramExecutable(VkProgramResource& prog) {
     prog.setLayout = VK_NULL_HANDLE;
     prog.pipelineLayout = VK_NULL_HANDLE;
     prog.drawSegmentSerial = 0;
+    prog.drawUniformVersion = 0;
     prog.drawSet = VK_NULL_HANDLE;
 }
 
 void WebGLVkContext::destroyProgram(GLuint id) {
     auto it = programs_.find(id);
     if (it == programs_.end()) return;
+    if (currentProgram_ == &it->second) currentProgram_ = nullptr;
     releaseProgramExecutable(it->second);
     if (it->second.vertShaderId != 0) detachShader({id}, {it->second.vertShaderId});
     if (it->second.fragShaderId != 0) detachShader({id}, {it->second.fragShaderId});
@@ -309,6 +311,8 @@ void WebGLVkContext::linkProgram(WebGLProgram p) {
         return;
     }
     prog.uniformBytes.assign(prog.iface.defaultBlockSize, 0);
+    ++prog.uniformVersion;
+    prog.drawUniformVersion = 0;
     prog.samplerUnits.assign(prog.iface.samplerUnitCount, 0);
     prog.blockBindings.assign(prog.iface.uniformBlocks.size(), 0);
     prog.linkStatus = true;
@@ -320,15 +324,18 @@ void WebGLVkContext::useProgram(WebGLProgram p) {
         setSyntheticError(GL_INVALID_OPERATION);
         return;
     }
+    VkProgramResource* nextProg = nullptr;
     if (p.id != 0) {
         auto it = programs_.find(p.id);
         if (it == programs_.end() || !it->second.linkStatus) {
             setSyntheticError(GL_INVALID_OPERATION);
             return;
         }
+        nextProg = &it->second;
     }
     const GLuint previous = currentProgramId_;
     currentProgramId_ = p.id;
+    currentProgram_ = nextProg;
     if (previous != p.id) {
         auto it = programs_.find(previous);
         if (it != programs_.end() && it->second.deleteStatus) destroyProgram(previous);

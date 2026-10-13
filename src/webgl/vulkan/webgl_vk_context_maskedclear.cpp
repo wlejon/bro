@@ -162,6 +162,7 @@ void WebGLVkContext::clearMasked(uint32_t colorMask, const uint32_t color[4], bo
                         static_cast<float>(pass_.extent.height), 0.0f, 1.0f};
     vkCmdSetViewport(cmd, 0, 1, &vp);
     vkCmdDraw(cmd, 3, 1, 0, 0);
+    resetPassBindingState();
     if (suspend) endRendering();
 }
 

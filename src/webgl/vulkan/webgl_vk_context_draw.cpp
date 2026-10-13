@@ -65,13 +65,12 @@ int32_t WebGLVkContext::scissorTop(VkExtent2D extent) const {
 }
 
 VkProgramResource* WebGLVkContext::drawProgram(const char* what) {
-    auto itProg = programs_.find(currentProgramId_);
-    if (itProg == programs_.end() || !itProg->second.linkStatus) {
+    if (!currentProgram_ || !currentProgram_->linkStatus) {
         LOG_ERROR("WebGLVkContext: %s called with unlinked program (%u)", what, currentProgramId_);
         setSyntheticError(GL_INVALID_OPERATION);
         return nullptr;
     }
-    VkProgramResource& prog = itProg->second;
+    VkProgramResource& prog = *currentProgram_;
     if (prog.vertModule == VK_NULL_HANDLE || prog.fragModule == VK_NULL_HANDLE) {
         LOG_ERROR("WebGLVkContext: Program %u missing valid shader module", currentProgramId_);
         setSyntheticError(GL_INVALID_OPERATION);
@@ -254,25 +253,29 @@ bool WebGLVkContext::bindProgramResources(VkCommandBuffer cmd, VkProgramResource
     const uint64_t serial = stream_.segmentSerial();
     const bool sameSegment = prog.drawSegmentSerial == serial;
 
-    std::vector<VkDescriptorBufferInfo> blocks(iface.uniformBlocks.size());
+    auto& blocks = drawBlocks_;
+    blocks.resize(iface.uniformBlocks.size());
     for (size_t i = 0; i < blocks.size(); ++i)
         if (!uniformBlockRange(prog, i, blocks[i])) return false;
 
     if (iface.defaultBlockBinding >= 0 &&
-        (!sameSegment || prog.drawUniforms.buffer == VK_NULL_HANDLE || prog.drawUniformBytes != prog.uniformBytes)) {
+        (!sameSegment || prog.drawUniforms.buffer == VK_NULL_HANDLE || prog.drawUniformVersion != prog.uniformVersion)) {
         render::UploadSlice slice = stage(prog.uniformBytes.data(), prog.uniformBytes.size(),
                                           context_.deviceProperties().limits.minUniformBufferOffsetAlignment);
         if (!slice) return false;
         prog.drawUniforms = {slice.buffer, slice.offset, prog.uniformBytes.size()};
-        prog.drawUniformBytes = prog.uniformBytes;
+        prog.drawUniformVersion = prog.uniformVersion;
     }
 
-    std::vector<VkDescriptorBufferInfo> captures;
+    auto& captures = drawCaptures_;
+    captures.clear();
     if (iface.feedbackBuffers > 0) feedbackDescriptors(prog, shape, captures);
 
-    std::vector<VkDescriptorImageInfo> images(iface.samplerUnitCount);
-    std::vector<uint64_t> key;
-    key.reserve(images.size() * 2 + blocks.size() * 3 + 2);
+    auto& images = drawImages_;
+    images.resize(iface.samplerUnitCount);
+    auto& key = drawKey_;
+    key.clear();
+    key.reserve(images.size() * 2 + blocks.size() * 3 + 2 + captures.size() * 2);
     for (const VkSamplerBinding& s : iface.samplers) {
         const SamplerKind want = samplerKind(s.type);
         for (uint32_t e = 0; e < s.count; ++e) {
@@ -322,7 +325,8 @@ bool WebGLVkContext::bindProgramResources(VkCommandBuffer cmd, VkProgramResource
             setSyntheticError(GL_OUT_OF_MEMORY);
             return false;
         }
-        std::vector<VkWriteDescriptorSet> writes;
+        auto& writes = drawWrites_;
+        writes.clear();
         writes.reserve(iface.samplers.size() + blocks.size() + captures.size() + 1);
         for (const VkSamplerBinding& s : iface.samplers)
             writes.push_back({VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, s.binding, 0, s.count,
@@ -341,11 +345,14 @@ bool WebGLVkContext::bindProgramResources(VkCommandBuffer cmd, VkProgramResource
                               VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &captures[b], nullptr});
         vkUpdateDescriptorSets(context_.device(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
         prog.drawSet = set;
-        prog.drawBindingKey = std::move(key);
+        prog.drawBindingKey.assign(key.begin(), key.end());
     }
     prog.drawSegmentSerial = serial;
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, prog.pipelineLayout, 0, 1, &prog.drawSet, 0,
-                            nullptr);
+    if (boundDescriptorSet_ != prog.drawSet || boundPipelineLayout_ != prog.pipelineLayout) {
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, prog.pipelineLayout, 0, 1, &prog.drawSet, 0,
+                                nullptr);
+        boundDescriptorSet_ = prog.drawSet;
+    }
     return true;
 }
 
@@ -353,11 +360,13 @@ bool WebGLVkContext::bindProgramResources(VkCommandBuffer cmd, VkProgramResource
 // pipeline for the current state, dynamic state, descriptors and vertex
 // buffers. Returns false (with the GL error set) when the draw cannot happen.
 bool WebGLVkContext::prepareDraw(GLenum mode, VkProgramResource& prog, DrawShape& shape) {
+    auto& vbos = drawVbos_;
+    auto& offsets = drawOffsets_;
+    vbos.clear();
+    offsets.clear();
     if (rasterizerDiscardEnabled_ && !shape.feedback) {
         // Nothing reaches the framebuffer: the draw only has its errors.
         PipelineKey key{};
-        std::vector<VkBuffer> vbos;
-        std::vector<VkDeviceSize> offsets;
         bindVertexInputs(prog, shape, key, vbos, offsets);
         return false;
     }
@@ -368,8 +377,6 @@ bool WebGLVkContext::prepareDraw(GLenum mode, VkProgramResource& prog, DrawShape
     PipelineKey key{};
     VkExtent2D extent{};
     buildPipelineKey(mode, prog, shape, key, extent);
-    std::vector<VkBuffer> vbos;
-    std::vector<VkDeviceSize> offsets;
     if (!bindVertexInputs(prog, shape, key, vbos, offsets)) return false;
 
     VkPipeline pipeline = pipelineCache_.getOrCreatePipeline(key, prog.pipelineLayout);
@@ -379,10 +386,19 @@ bool WebGLVkContext::prepareDraw(GLenum mode, VkProgramResource& prog, DrawShape
         return false;
     }
     if (!bindProgramResources(cmd, prog, shape)) return false;
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    if (boundPipeline_ != pipeline) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+        boundPipeline_ = pipeline;
+    }
     const FragmentPush push =
         pass_.topDown ? FragmentPush{static_cast<float>(extent.height), -1.0f} : FragmentPush{};
-    vkCmdPushConstants(cmd, prog.pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
+    if (!fragmentPushInitialized_ || boundPipelineLayout_ != prog.pipelineLayout ||
+        std::memcmp(&lastFragmentPush_, &push, sizeof(push)) != 0) {
+        vkCmdPushConstants(cmd, prog.pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
+        lastFragmentPush_ = push;
+        fragmentPushInitialized_ = true;
+    }
+    boundPipelineLayout_ = prog.pipelineLayout;
     if (!prog.iface.feedbackVaryings.empty()) {
         const FeedbackPush capture = shape.feedback ? shape.feedbackPush : FeedbackPush{};
         vkCmdPushConstants(cmd, prog.pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, kFeedbackPushOffset,

@@ -120,7 +120,7 @@ bool WebGLVkContext::bindBuffer(GLenum target, WebGLBuffer buf) {
             break;
         case GL_ELEMENT_ARRAY_BUFFER:
             boundElementArrayBuffer_ = buf.id;
-            vaos_[currentVaoId_].elementArrayBufferId = buf.id;
+            currentVao_->elementArrayBufferId = buf.id;
             break;
         case GL_PIXEL_PACK_BUFFER:
             boundPixelPackBuffer_ = buf.id;

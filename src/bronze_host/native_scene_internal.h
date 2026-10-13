@@ -65,6 +65,8 @@ struct HostSceneNodeCell {
     uint32_t tag = kHostSceneNodeTag;
     std::weak_ptr<scene::SceneGraph::LivenessToken> token;
     uint32_t id = 0;
+    mutable scene::SceneNode* cachedNode = nullptr;
+    mutable uint64_t cachedDestroyGen = 0;
 
     scene::SceneGraph* graph() const {
         auto t = token.lock();
@@ -73,7 +75,11 @@ struct HostSceneNodeCell {
 
     scene::SceneNode* node() const {
         auto t = token.lock();
-        return (t && t->graph) ? t->graph->resolveNode(id) : nullptr;
+        if (!t || !t->graph) return nullptr;
+        if (cachedDestroyGen == t->destroyGeneration) return cachedNode;
+        cachedNode = t->graph->resolveNode(id);
+        cachedDestroyGen = t->destroyGeneration;
+        return cachedNode;
     }
 };
 
@@ -224,7 +230,7 @@ inline void* wrapNode(scene::SceneNode* node, scene::SceneGraph* graph) {
     if (!node || !graph) return nullptr;
     auto tok = graph->livenessToken();
     if (!tok) return nullptr;
-    return new HostSceneNodeCell{kHostSceneNodeTag, tok, node->id()};
+    return new HostSceneNodeCell{kHostSceneNodeTag, tok, node->id(), node, tok->destroyGeneration};
 }
 
 inline HostSceneGraphCell* sceneGraphCellOf(Value v) {

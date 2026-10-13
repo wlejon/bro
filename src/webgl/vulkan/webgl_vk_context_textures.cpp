@@ -6,6 +6,7 @@
 #include "webgl/vulkan/webgl_vk_formats.h"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 
 namespace bro::webgl::vk {
@@ -273,7 +274,7 @@ bool WebGLVkContext::textureComplete(const VkTextureResource& tex, const Sampler
     count = 1;
     if (state.mipmapped()) {
         const uint32_t extent = std::max({b.width, b.height, tex.is3D() ? b.depth : 1u});
-        const uint32_t last = std::min(base + static_cast<uint32_t>(std::floor(std::log2(extent))), maxLevel);
+        const uint32_t last = std::min(base + static_cast<uint32_t>(std::bit_width(extent) - 1), maxLevel);
         for (uint32_t l = base + 1; l <= last; ++l) {
             if (l >= tex.levels.size()) return false;
             const TexLevel& lv = tex.levels[l];

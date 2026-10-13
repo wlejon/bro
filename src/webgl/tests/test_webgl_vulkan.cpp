@@ -18,6 +18,7 @@
 #include <iostream>
 #include <vector>
 #include <cassert>
+#include <chrono>
 #include <cstring>
 
 using namespace bro;
@@ -348,6 +349,141 @@ int main() {
         assert(yellowPixels[3] == 255);
 
         std::cout << "PASSED" << std::endl;
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 7: Batched Textured + Matrix-Uniform Draws (pipeline & descriptor reuse)
+    // -------------------------------------------------------------------------
+    std::cout << "[Test 7] Batched textured + matrix-uniform draws... " << std::flush;
+    {
+        const int w = 64;
+        const int h = 64;
+        WebGLVkContext ctx(w, h, context);
+
+        const char* vsSrc = R"(#version 300 es
+            layout(location = 0) in vec2 aPos;
+            layout(location = 1) in vec2 aUv;
+            uniform mat4 uMvp;
+            out vec2 vUv;
+            void main() {
+                gl_Position = uMvp * vec4(aPos, 0.0, 1.0);
+                vUv = aUv;
+            }
+        )";
+        const char* fsSrc = R"(#version 300 es
+            precision mediump float;
+            in vec2 vUv;
+            uniform sampler2D uTex;
+            uniform vec4 uTint;
+            out vec4 fragColor;
+            void main() {
+                fragColor = texture(uTex, vUv) * uTint;
+            }
+        )";
+
+        WebGLShader vs = ctx.createShader(GL_VERTEX_SHADER);
+        ctx.shaderSource(vs, vsSrc);
+        ctx.compileShader(vs);
+        assert(ctx.getShaderParameter(vs, GL_COMPILE_STATUS) == GL_TRUE);
+
+        WebGLShader fs = ctx.createShader(GL_FRAGMENT_SHADER);
+        ctx.shaderSource(fs, fsSrc);
+        ctx.compileShader(fs);
+        assert(ctx.getShaderParameter(fs, GL_COMPILE_STATUS) == GL_TRUE);
+
+        WebGLProgram prog = ctx.createProgram();
+        ctx.attachShader(prog, vs);
+        ctx.attachShader(prog, fs);
+        ctx.linkProgram(prog);
+        assert(ctx.getProgramParameter(prog, GL_LINK_STATUS) == GL_TRUE);
+        ctx.useProgram(prog);
+
+        WebGLUniformLocation locMvp = ctx.getUniformLocation(prog, "uMvp");
+        WebGLUniformLocation locTex = ctx.getUniformLocation(prog, "uTex");
+        WebGLUniformLocation locTint = ctx.getUniformLocation(prog, "uTint");
+
+        // 2x2 white RGBA texture with mipmaps
+        WebGLTexture tex = ctx.createTexture();
+        ctx.activeTexture(GL_TEXTURE0);
+        ctx.bindTexture(GL_TEXTURE_2D, tex);
+        const uint8_t white[16] = {
+            255, 255, 255, 255,  255, 255, 255, 255,
+            255, 255, 255, 255,  255, 255, 255, 255
+        };
+        ctx.texImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, white, sizeof(white));
+        ctx.generateMipmap(GL_TEXTURE_2D);
+        ctx.texParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        ctx.texParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+        struct QuadVert { float x, y, u, v; };
+        const QuadVert quad[4] = {
+            {-0.9f, -0.9f, 0.0f, 0.0f},
+            { 0.9f, -0.9f, 1.0f, 0.0f},
+            {-0.9f,  0.9f, 0.0f, 1.0f},
+            { 0.9f,  0.9f, 1.0f, 1.0f},
+        };
+        const uint16_t indices[6] = {0, 1, 2, 2, 1, 3};
+
+        WebGLVertexArrayObject vao = ctx.createVertexArray();
+        ctx.bindVertexArray(vao);
+
+        WebGLBuffer vbo = ctx.createBuffer();
+        ctx.bindBuffer(GL_ARRAY_BUFFER, vbo);
+        ctx.bufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
+        ctx.enableVertexAttribArray(0);
+        ctx.vertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(QuadVert), 0);
+        ctx.enableVertexAttribArray(1);
+        ctx.vertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(QuadVert), 2 * sizeof(float));
+
+        WebGLBuffer ibo = ctx.createBuffer();
+        ctx.bindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
+        ctx.bufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
+
+        const float identity[16] = {
+            1, 0, 0, 0,
+            0, 1, 0, 0,
+            0, 0, 1, 0,
+            0, 0, 0, 1,
+        };
+        ctx.uniform1i(locTex, 0);
+        ctx.uniformMatrix4fv(locMvp, 1, GL_FALSE, identity);
+        ctx.uniform4f(locTint, 0.0f, 1.0f, 0.0f, 1.0f);
+
+        ctx.clearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        ctx.clear(GL_COLOR_BUFFER_BIT);
+
+        const auto t0 = std::chrono::steady_clock::now();
+        for (int i = 0; i < 500; ++i) {
+            // Repeated identical uniform writes should not re-stage uniform buffers or descriptors;
+            // final draw sets magenta tint to verify updated uniforms still take effect.
+            ctx.uniformMatrix4fv(locMvp, 1, GL_FALSE, identity);
+            if (i == 499) {
+                ctx.uniform4f(locTint, 1.0f, 0.0f, 1.0f, 1.0f);
+            } else {
+                ctx.uniform4f(locTint, 0.0f, 1.0f, 0.0f, 1.0f);
+            }
+            ctx.drawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, 0);
+        }
+        const auto t1 = std::chrono::steady_clock::now();
+        const double elapsedMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
+
+        std::vector<uint8_t> pixels;
+        assert(ctx.readCanvasPixels(pixels));
+        const size_t centerIdx = (32 * w + 32) * 4;
+        assert(pixels[centerIdx + 0] == 255);
+        assert(pixels[centerIdx + 1] == 0);
+        assert(pixels[centerIdx + 2] == 255);
+        assert(pixels[centerIdx + 3] == 255);
+
+        ctx.deleteBuffer(ibo);
+        ctx.deleteBuffer(vbo);
+        ctx.deleteVertexArray(vao);
+        ctx.deleteTexture(tex);
+        ctx.deleteShader(vs);
+        ctx.deleteShader(fs);
+        ctx.deleteProgram(prog);
+
+        std::cout << "PASSED (500 draws recorded in " << elapsedMs << " ms)" << std::endl;
     }
 
     if (const uint32_t errors = render::vulkanValidationErrorCount()) {

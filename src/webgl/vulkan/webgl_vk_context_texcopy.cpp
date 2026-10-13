@@ -292,15 +292,9 @@ void WebGLVkContext::copyFromReadBuffer(VkTextureResource& tex, uint32_t level, 
     // ALPHA / LUMINANCE_ALPHA keep alpha where no copy can put it (in R or
     // G): through the CPU, as readPixels then texSubImage would.
     const bool swizzled = tf.baseFormat == GL_ALPHA || tf.baseFormat == GL_LUMINANCE_ALPHA;
-    const VkPhysicalDevice device = context_.physicalDevice();
-    auto has = [&](VkFormat f, VkFormatFeatureFlags features) {
-        VkFormatProperties props;
-        vkGetPhysicalDeviceFormatProperties(device, f, &props);
-        return (props.optimalTilingFeatures & features) == features;
-    };
     const bool copy = src.format == tex.format && !swizzled;
-    const bool blit = !copy && !swizzled && has(src.format, VK_FORMAT_FEATURE_BLIT_SRC_BIT) &&
-                      has(tex.format, VK_FORMAT_FEATURE_BLIT_DST_BIT);
+    const bool blit = !copy && !swizzled && formatSupports(src.format, VK_FORMAT_FEATURE_BLIT_SRC_BIT) &&
+                      formatSupports(tex.format, VK_FORMAT_FEATURE_BLIT_DST_BIT);
     if (!copy && !blit) {
         std::vector<uint8_t> rgba(static_cast<size_t>(w) * h * 4);
         const PackState saved = pack_;

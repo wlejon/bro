@@ -64,18 +64,21 @@
             return Array.from(__bro_native.scene.SceneNode_position_get(this));
         },
         function (v) {
-            if (this.id === 0) return;
-            __bro_native.scene.SceneNode_position_set(this, toF64(v));
+            if (v && v.length >= 3) {
+                __bro_native.scene.SceneNode_setPosition(this, +v[0], +v[1], +v[2]);
+            } else {
+                __bro_native.scene.SceneNode_position_set(this, toF64(v));
+            }
         });
     accessor(SceneNode.prototype, "rotation",
         function () {
-            if (this.id === 0) return 0;
             return __bro_native.scene.SceneNode_rotationZ_get(this);
         },
         function (v) {
-            if (this.id === 0) return;
             if (typeof v === 'number') {
                 __bro_native.scene.SceneNode_rotationZ_set(this, +v);
+            } else if (v && v.length >= 4) {
+                __bro_native.scene.SceneNode_setRotation(this, +v[0], +v[1], +v[2], true, +v[3]);
             } else if (Array.isArray(v) || (v && typeof v.length === 'number')) {
                 __bro_native.scene.SceneNode_rotation_set(this, toF64(v));
             }
@@ -86,14 +89,14 @@
             return Array.from(__bro_native.scene.SceneNode_scale_get(this));
         },
         function (v) {
-            if (this.id === 0) return;
             if (typeof v === 'number') {
-                __bro_native.scene.SceneNode_scale_set(this, toF64([v, v, v]));
+                const s = +v;
+                __bro_native.scene.SceneNode_setScale(this, s, true, s, true, s);
             } else if (Array.isArray(v) || (v && typeof v.length === 'number')) {
                 const sx = v[0] !== undefined ? +v[0] : 1;
                 const sy = v[1] !== undefined ? +v[1] : 1;
                 const sz = v[2] !== undefined ? +v[2] : 1;
-                __bro_native.scene.SceneNode_scale_set(this, toF64([sx, sy, sz]));
+                __bro_native.scene.SceneNode_setScale(this, sx, true, sy, true, sz);
             } else {
                 __bro_native.scene.SceneNode_scale_set(this, toF64(v));
             }
@@ -291,19 +294,19 @@
         return c;
     }
 
-    accessor(SceneNode.prototype, "x", function () { return this.id === 0 ? 0 : __bro_native.scene.SceneNode_x_get(this); }, function (v) { if (this.id !== 0) __bro_native.scene.SceneNode_x_set(this, +v); });
-    accessor(SceneNode.prototype, "y", function () { return this.id === 0 ? 0 : __bro_native.scene.SceneNode_y_get(this); }, function (v) { if (this.id !== 0) __bro_native.scene.SceneNode_y_set(this, +v); });
-    accessor(SceneNode.prototype, "z", function () { return this.id === 0 ? 0 : __bro_native.scene.SceneNode_z_get(this); }, function (v) { if (this.id !== 0) __bro_native.scene.SceneNode_z_set(this, +v); });
-    accessor(SceneNode.prototype, "rotationX", function () { return this.id === 0 ? 0 : __bro_native.scene.SceneNode_rotationX_get(this); }, function (v) { if (this.id !== 0) __bro_native.scene.SceneNode_rotationX_set(this, +v); });
-    accessor(SceneNode.prototype, "rotationY", function () { return this.id === 0 ? 0 : __bro_native.scene.SceneNode_rotationY_get(this); }, function (v) { if (this.id !== 0) __bro_native.scene.SceneNode_rotationY_set(this, +v); });
-    accessor(SceneNode.prototype, "rotationZ", function () { return this.id === 0 ? 0 : __bro_native.scene.SceneNode_rotationZ_get(this); }, function (v) { if (this.id !== 0) __bro_native.scene.SceneNode_rotationZ_set(this, +v); });
+    accessor(SceneNode.prototype, "x", function () { return __bro_native.scene.SceneNode_x_get(this); }, function (v) { __bro_native.scene.SceneNode_x_set(this, +v); });
+    accessor(SceneNode.prototype, "y", function () { return __bro_native.scene.SceneNode_y_get(this); }, function (v) { __bro_native.scene.SceneNode_y_set(this, +v); });
+    accessor(SceneNode.prototype, "z", function () { return __bro_native.scene.SceneNode_z_get(this); }, function (v) { __bro_native.scene.SceneNode_z_set(this, +v); });
+    accessor(SceneNode.prototype, "rotationX", function () { return __bro_native.scene.SceneNode_rotationX_get(this); }, function (v) { __bro_native.scene.SceneNode_rotationX_set(this, +v); });
+    accessor(SceneNode.prototype, "rotationY", function () { return __bro_native.scene.SceneNode_rotationY_get(this); }, function (v) { __bro_native.scene.SceneNode_rotationY_set(this, +v); });
+    accessor(SceneNode.prototype, "rotationZ", function () { return __bro_native.scene.SceneNode_rotationZ_get(this); }, function (v) { __bro_native.scene.SceneNode_rotationZ_set(this, +v); });
     accessor(SceneNode.prototype, "rx", function () { return this.rotationX; }, function (v) { this.rotationX = v; });
     accessor(SceneNode.prototype, "ry", function () { return this.rotationY; }, function (v) { this.rotationY = v; });
     accessor(SceneNode.prototype, "rz", function () { return this.rotationZ; }, function (v) { this.rotationZ = v; });
-    accessor(SceneNode.prototype, "scaleX", function () { return this.id === 0 ? 1 : __bro_native.scene.SceneNode_scaleX_get(this); }, function (v) { if (this.id !== 0) __bro_native.scene.SceneNode_scaleX_set(this, +v); });
-    accessor(SceneNode.prototype, "scaleY", function () { return this.id === 0 ? 1 : __bro_native.scene.SceneNode_scaleY_get(this); }, function (v) { if (this.id !== 0) __bro_native.scene.SceneNode_scaleY_set(this, +v); });
-    accessor(SceneNode.prototype, "scaleZ", function () { return this.id === 0 ? 1 : __bro_native.scene.SceneNode_scaleZ_get(this); }, function (v) { if (this.id !== 0) __bro_native.scene.SceneNode_scaleZ_set(this, +v); });
-    accessor(SceneNode.prototype, "quaternion", function () { return this.id === 0 ? undefined : Array.from(__bro_native.scene.SceneNode_quaternion_get(this)); }, function (v) { if (this.id !== 0) __bro_native.scene.SceneNode_quaternion_set(this, toF64(v)); });
+    accessor(SceneNode.prototype, "scaleX", function () { return __bro_native.scene.SceneNode_scaleX_get(this); }, function (v) { __bro_native.scene.SceneNode_scaleX_set(this, +v); });
+    accessor(SceneNode.prototype, "scaleY", function () { return __bro_native.scene.SceneNode_scaleY_get(this); }, function (v) { __bro_native.scene.SceneNode_scaleY_set(this, +v); });
+    accessor(SceneNode.prototype, "scaleZ", function () { return __bro_native.scene.SceneNode_scaleZ_get(this); }, function (v) { __bro_native.scene.SceneNode_scaleZ_set(this, +v); });
+    accessor(SceneNode.prototype, "quaternion", function () { return this.id === 0 ? undefined : Array.from(__bro_native.scene.SceneNode_quaternion_get(this)); }, function (v) { if (v && v.length >= 4) __bro_native.scene.SceneNode_setRotation(this, +v[0], +v[1], +v[2], true, +v[3]); else __bro_native.scene.SceneNode_quaternion_set(this, toF64(v)); });
     fn(SceneNode.prototype, "localToWorld", function localToWorld(x, y, z) {
         if (this.id === 0) return { x: 0, y: 0, z: 0 };
         const m = __bro_native.scene.SceneNode_worldMatrix_get(this);

@@ -13,8 +13,9 @@ namespace {
 
 // The node's world bounds (the shadow pass and probe faces cull by them),
 // their centre (probe selection) and its view depth (translucent sorting).
-void placeDraw(const SceneFrame& frame, SceneNode* node, MeshDraw& draw) {
-    if (auto bounds = frame.renderer.nodeWorldBounds(node)) {
+void placeDraw(const SceneFrame& frame, SceneNode* node,
+               const std::optional<bromath::AABB3>& bounds, MeshDraw& draw) {
+    if (bounds) {
         draw.hasBounds = true;
         draw.bounds = *bounds;
         draw.center = (bounds->min + bounds->max) * 0.5f;
@@ -49,6 +50,9 @@ void buildDrawLists(SceneFrame& frame) {
     SceneMeshDrawer& drawer = frame.gpu.meshes;
     CullStats& stats = frame.stats;
 
+    const size_t approxNodes = frame.graph.nodes().size() + 1;
+    lists.nodes.reserve(approxNodes);
+
     // A hidden node hides its subtree; a node off the root is not drawn.
     auto walk = [&](auto& self, SceneNode* n) -> void {
         if (!n || !n->renderVisible()) return;
@@ -57,13 +61,23 @@ void buildDrawLists(SceneFrame& frame) {
     };
     walk(walk, frame.graph.root());
 
+    lists.meshes.reserve(lists.nodes.size());
+    lists.opaque.reserve(lists.nodes.size());
+    const bromath::Frustum* frustum = frame.renderer.cullingFrustum();
+
     for (SceneNode* node : lists.nodes) {
         if (drawsContent(frame, *node)) frame.drewContent = true;
 
-        const bool culled = frame.renderer.cameraCulled(node);
+        const SceneNode::Type type = node->type();
+        if (type != SceneNode::Type::Mesh && type != SceneNode::Type::InstancedMesh) {
+            continue;
+        }
+
+        const auto bounds = frame.renderer.nodeWorldBounds(node);
+        const bool culled = frustum && bounds && !bromath::fintersects(*frustum, *bounds);
         bool overlay = false;
         MeshDraw draw;
-        if (node->type() == SceneNode::Type::Mesh) {
+        if (type == SceneNode::Type::Mesh) {
             auto* mesh = static_cast<MeshNode*>(node);
             if (culled) {
                 stats.meshCulled++;
@@ -72,7 +86,7 @@ void buildDrawLists(SceneFrame& frame) {
             }
             if (!drawer.prepare(frame, *mesh, draw)) continue;
             overlay = mesh->effectiveUnlit();
-        } else if (node->type() == SceneNode::Type::InstancedMesh) {
+        } else {
             auto* inst = static_cast<InstancedMeshNode*>(node);
             if (culled) {
                 stats.instancedCulled++;
@@ -80,12 +94,10 @@ void buildDrawLists(SceneFrame& frame) {
                 stats.instancedDrawn++;
             }
             if (!drawer.prepare(frame, *inst, draw)) continue;
-        } else {
-            continue;
         }
 
         draw.cameraCulled = culled;
-        placeDraw(frame, node, draw);
+        placeDraw(frame, node, bounds, draw);
         const auto index = static_cast<uint32_t>(lists.meshes.size());
         lists.meshes.push_back(draw);
         if (culled) continue;

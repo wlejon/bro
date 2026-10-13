@@ -167,7 +167,7 @@ void WebGLVkContext::drawElementsInstanced(GLenum mode, GLsizei count, GLenum ty
     }
     VkProgramResource* prog = drawProgram("drawElements");
     if (!prog) return;
-    const GLuint iboId = vaos_[currentVaoId_].elementArrayBufferId;
+    const GLuint iboId = currentVao_->elementArrayBufferId;
     auto iboIt = iboId != 0 ? buffers_.find(iboId) : buffers_.end();
     if (iboIt == buffers_.end()) {
         LOG_ERROR("WebGLVkContext: drawElements called with no element array buffer bound");

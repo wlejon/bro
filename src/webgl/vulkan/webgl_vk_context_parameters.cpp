@@ -194,7 +194,17 @@ GLint WebGLVkContext::getParameterInt(GLenum pname) {
 }
 
 bool WebGLVkContext::formatSupports(VkFormat format, VkFormatFeatureFlags features) const {
-    VkFormatProperties props;
+    const auto idx = static_cast<uint32_t>(format);
+    if (idx < formatFeaturesLow_.size()) {
+        if (!formatFeaturesValid_[idx]) {
+            VkFormatProperties props{};
+            vkGetPhysicalDeviceFormatProperties(context_.physicalDevice(), format, &props);
+            formatFeaturesLow_[idx] = props.optimalTilingFeatures;
+            formatFeaturesValid_[idx] = 1;
+        }
+        return (formatFeaturesLow_[idx] & features) == features;
+    }
+    VkFormatProperties props{};
     vkGetPhysicalDeviceFormatProperties(context_.physicalDevice(), format, &props);
     return (props.optimalTilingFeatures & features) == features;
 }

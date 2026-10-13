@@ -15,12 +15,15 @@
 // SceneGraph::LivenessToken is an alias for this type, so the name the JS
 // binding layer already uses keeps working (see scene_bindings_internal.h).
 
+#include <cstdint>
+
 namespace bro::scene {
 
 class SceneGraph;
 
 struct GraphLivenessToken {
     SceneGraph* graph = nullptr;
+    uint64_t destroyGeneration = 1;
 };
 
 } // namespace bro::scene

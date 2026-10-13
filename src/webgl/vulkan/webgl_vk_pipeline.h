@@ -102,6 +102,9 @@ private:
 
     render::VulkanContext& context_;
     std::unordered_map<PipelineKey, VkPipeline, PipelineKeyHasher> pipelines_;
+    PipelineKey lastKey_{};
+    VkPipelineLayout lastLayout_ = VK_NULL_HANDLE;
+    VkPipeline lastPipeline_ = VK_NULL_HANDLE;
 };
 
 } // namespace bro::webgl::vk

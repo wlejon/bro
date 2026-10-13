@@ -77,8 +77,7 @@ void WebGLVkContext::vertexAttribI4uiv(GLuint index, const GLuint* v) {
 VkUniformInfo* WebGLVkContext::uniformTarget(WebGLUniformLocation loc, GLsizei count, VkProgramResource*& prog,
                                              uint32_t& element) {
     if (loc.location < 0) return nullptr;
-    auto it = programs_.find(currentProgramId_);
-    if (it == programs_.end() || !it->second.linkStatus || loc.program != currentProgramId_) {
+    if (!currentProgram_ || !currentProgram_->linkStatus || loc.program != currentProgramId_) {
         setSyntheticError(GL_INVALID_OPERATION);
         return nullptr;
     }
@@ -86,7 +85,7 @@ VkUniformInfo* WebGLVkContext::uniformTarget(WebGLUniformLocation loc, GLsizei c
         setSyntheticError(GL_INVALID_VALUE);
         return nullptr;
     }
-    prog = &it->second;
+    prog = currentProgram_;
     if (static_cast<size_t>(loc.location) >= prog->iface.locations.size()) {
         setSyntheticError(GL_INVALID_OPERATION);
         return nullptr;
@@ -138,19 +137,33 @@ void WebGLVkContext::setUniformValues(WebGLUniformLocation loc, GLsizei count, U
     }
     const bool isBool = t.kind == glsl::TypeInfo::Kind::Bool;
     const auto* words = static_cast<const uint32_t*>(data);
-    for (uint32_t i = 0; i < n; ++i) {
-        uint8_t* dst = prog->uniformBytes.data() + u->offset + (element + i) * u->arrayStride;
-        for (uint32_t c = 0; c < components; ++c) {
-            uint32_t word = words[i * components + c];
-            // GL's bool is true for any non-zero value; the shader reads 0 / 1.
-            if (isBool) {
+    bool changed = false;
+    const size_t elemBytes = static_cast<size_t>(components) * 4;
+    if (!isBool) {
+        for (uint32_t i = 0; i < n; ++i) {
+            uint8_t* dst = prog->uniformBytes.data() + u->offset + (element + i) * u->arrayStride;
+            const uint32_t* src = words + i * components;
+            if (std::memcmp(dst, src, elemBytes) != 0) {
+                std::memcpy(dst, src, elemBytes);
+                changed = true;
+            }
+        }
+    } else {
+        for (uint32_t i = 0; i < n; ++i) {
+            uint8_t* dst = prog->uniformBytes.data() + u->offset + (element + i) * u->arrayStride;
+            for (uint32_t c = 0; c < components; ++c) {
+                uint32_t word = words[i * components + c];
                 float f = 0.0f;
                 std::memcpy(&f, &word, 4);
                 word = (kind == UniformKind::Float ? f != 0.0f : word != 0) ? 1u : 0u;
+                if (std::memcmp(dst + c * 4, &word, 4) != 0) {
+                    std::memcpy(dst + c * 4, &word, 4);
+                    changed = true;
+                }
             }
-            std::memcpy(dst + c * 4, &word, 4);
         }
     }
+    if (changed) ++prog->uniformVersion;
 }
 
 void WebGLVkContext::setUniformMatrices(WebGLUniformLocation loc, GLsizei count, uint32_t columns, uint32_t rows,
@@ -166,17 +179,35 @@ void WebGLVkContext::setUniformMatrices(WebGLUniformLocation loc, GLsizei count,
     }
     const uint32_t n = std::min(static_cast<uint32_t>(count), static_cast<uint32_t>(u->size) - element);
     const uint32_t perMatrix = columns * rows;
-    for (uint32_t i = 0; i < n; ++i) {
-        const GLfloat* src = value + i * perMatrix;
-        uint8_t* dst = prog->uniformBytes.data() + u->offset + (element + i) * u->arrayStride;
-        // std140, column-major: each column a 16-byte-aligned vector.
-        for (uint32_t c = 0; c < columns; ++c) {
-            for (uint32_t r = 0; r < rows; ++r) {
-                const GLfloat v = transpose ? src[r * columns + c] : src[c * rows + r];
-                std::memcpy(dst + c * u->matrixStride + r * 4, &v, 4);
+    bool changed = false;
+    if (!transpose && u->matrixStride == rows * 4) {
+        const size_t matBytes = static_cast<size_t>(perMatrix) * 4;
+        for (uint32_t i = 0; i < n; ++i) {
+            const GLfloat* src = value + i * perMatrix;
+            uint8_t* dst = prog->uniformBytes.data() + u->offset + (element + i) * u->arrayStride;
+            if (std::memcmp(dst, src, matBytes) != 0) {
+                std::memcpy(dst, src, matBytes);
+                changed = true;
+            }
+        }
+    } else {
+        for (uint32_t i = 0; i < n; ++i) {
+            const GLfloat* src = value + i * perMatrix;
+            uint8_t* dst = prog->uniformBytes.data() + u->offset + (element + i) * u->arrayStride;
+            // std140, column-major: each column a 16-byte-aligned vector.
+            for (uint32_t c = 0; c < columns; ++c) {
+                for (uint32_t r = 0; r < rows; ++r) {
+                    const GLfloat v = transpose ? src[r * columns + c] : src[c * rows + r];
+                    uint8_t* cell = dst + c * u->matrixStride + r * 4;
+                    if (std::memcmp(cell, &v, 4) != 0) {
+                        std::memcpy(cell, &v, 4);
+                        changed = true;
+                    }
+                }
             }
         }
     }
+    if (changed) ++prog->uniformVersion;
 }
 
 void WebGLVkContext::uniform1f(WebGLUniformLocation loc, GLfloat v0) { uniform1fv(loc, 1, &v0); }
