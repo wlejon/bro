@@ -413,6 +413,7 @@
  * @property {number} [wantGraceSeconds=10] - Radio: how long a want waits for enqueue() before the radio fills it
  * @property {number} [previewSeconds=0] - 10..600: build each song as a preview of this length (makeFull continues it); 0 = whole songs
  * @property {boolean} [autoFull=false] - Previews: each song is made full as it goes on air
+ * @property {number} [keepPlayed=3] - Played songs whose audio is kept for saveSong (0..16; ~70 MB a 3-minute song)
  * @property {number} [airMarginSeconds=20] - The playing song builds first only until its audio is this far past the playhead; then the songs ahead. 0 = the playing song always first
  * @property {number[]} [windows=[250, 500]] - NAR window sizes in frames; the last repeats
  * @property {number} [left=25] - Inpainted left context frames
@@ -430,7 +431,7 @@
  * What a stream reports. `song` is the song's index in queue order from 0;
  * `sample` is a program sample.
  * @typedef {Object} YuE2StreamEvent
- * @property {'plan'|'songStart'|'semanticDone'|'window'|'interrupt'|'knobs'|'breakWarning'|'songEnd'|'firstAudio'|'error'|'idle'|'want'|'built'|'dropped'|'full'} kind
+ * @property {'plan'|'songStart'|'semanticDone'|'window'|'interrupt'|'knobs'|'breakWarning'|'songEnd'|'firstAudio'|'error'|'idle'|'want'|'built'|'dropped'|'full'|'saved'} kind
  *   - plan: a song's score is ready, text = the ABC (a queued song's can be edited: setPlan / setNextPlan)
  *   - songStart: the song is placed on the program at `sample` (a skip re-places it, and the songs after it;
  *     after a skip, seconds = the skip request to the cut-over)
@@ -451,6 +452,8 @@
  *   - dropped: drop() removed the song
  *   - full: makeFull() (or autoFull) acted: value 1 = the preview continues into the whole song, re-solved from
  *     frame0 (the join); 0 = too late (its successor is on air, or a skip cut it) or its song had ended
+ *   - saved: saveSong() acted: text = the path written, frames = its samples (48 kHz), value 1 = the whole
+ *     song (or a played one as it played), 0 = a preview; -1 = nothing written, text = why
  * @property {number} song
  * @property {string} tag
  * @property {number} sample
@@ -512,11 +515,22 @@ class YuE2Stream {
   /**
    * Continue a preview into the whole song (see Previews above); a 'full'
    * event follows. A song not on air yet is built whole when its turn comes.
-   * @param {number} [song] - its index; omitted = the song on air
+   * @param {number} [song] - its index; omitted = the song heard now (in a crossfade, the one coming in)
    */
   makeFull(song) {}
   /** Previews: make each song full as it goes on air (true), or not. @param {boolean} on */
   setAutoFull(on) {}
+  /**
+   * Write a song's own audio (no crossfade into its neighbours) to a 16-bit
+   * stereo 48 kHz WAV once it is whole: a song still building is written when
+   * its latents are complete (the rest of it decoded for the save; a preview
+   * is its preview, so makeFull first to save the whole song), one that plays
+   * out first as it played; the last keepPlayed played songs too. A 'saved'
+   * event follows.
+   * @param {number} song - its index
+   * @param {string} path
+   */
+  saveSong(song, path) {}
   /** End the stream; onDone follows. */
   stop() {}
   /** @readonly @type {YuE2StreamStats} */ stats;
