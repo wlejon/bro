@@ -50,7 +50,10 @@
  *   - a semantic session sampled a few tokens at a time, with the same
  *     sampler as generate(), so a seed gives the same tokens;
  *   - NAR windows of 250 then 500 frames, each solved over 25 inpainted
- *     frames on the left and 25 of lookahead;
+ *     frames on the left and 25 of lookahead; the short first window is only
+ *     for audio someone is waiting for (it solves louder than the whole
+ *     render), and a song's end is never a short window: the window before
+ *     runs to it, or the last one starts earlier over frames not heard yet;
  *   - a just-in-time VAE decode about 6 s ahead of the playhead.
  * Quality matches the whole-song render (latent cosine about 0.88, mel L1
  * within the render's seed-to-seed spread, no flux step at the seams). The
@@ -86,8 +89,12 @@
  * nobody chooses plays that long and crossfades into the next built one,
  * like scanning stations. makeFull() continues the playing preview into the
  * whole song, seamlessly. Its semantic stage resumes after the preview's
- * tokens, and its last 2 s not yet heard are re-solved with the
- * continuation as their lookahead, inpainted against what precedes. Pressed
+ * tokens (its session rebuilt token by token as they were sampled, ~2 s, so
+ * the whole song has the tokens generate() gives the same request and
+ * seed), and its last 2 s not yet heard are re-solved with the
+ * continuation as their lookahead, inpainted against what precedes, in
+ * long (500-frame) windows (brosoundml test_yue2_stream_continue). A
+ * preview built ahead waits for its tokens and is solved in one chunk. Pressed
  * 15 s into a 30 s preview, the continuation's first audio past the preview
  * is ready about 2 s later, 13 s before the playhead gets there, with no
  * step at the join (brosoundml test_yue2_stream_preview). The playing song's
