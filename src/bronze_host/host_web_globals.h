@@ -8,6 +8,7 @@
 
 namespace bro::engine {
 struct GamepadState;
+class Engine;
 }  // namespace bro::engine
 
 namespace bro::bronze_host {
@@ -43,6 +44,8 @@ Value makePerformanceValue();
 // libraries test for (`typeof Node !== "undefined"`,
 // `x instanceof HTMLInputElement`). No state, no frame seam.
 void installPlatformGlobals();
+// The frame pump that settles show*DialogAsync's promises.
+void installDialogPump(engine::Engine& engine);
 
 // The `CSS` namespace: supports() and escape() (host_css_namespace.cpp).
 void installCssNamespace();

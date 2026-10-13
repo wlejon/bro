@@ -52,40 +52,59 @@ void SDLCALL dialogCallback(void* userdata, const char* const* filelist, int /*f
 // arrives immediately; this is a bound, not a poll interval.
 constexpr Uint64 kExtraCallbackGraceMs = 500;
 
-// Block until the dialog has answered, keeping timers running while it is up.
+// One open SDL file dialog, polled until it has answered.
 //
 // An error answers once, and waiting for a second answer that is not coming is
 // a window that never comes back. SDL calls back with a null `filelist` when it
-// refuses the request, and on Windows this loop wants two callbacks before it
-// returns; one bad filter string therefore used to hang the application with
-// its last frame on the screen and no dialog to close. The second callback is
-// still waited for — `DialogResult` lives on the caller's stack, and a callback
-// arriving after this returns would write into a frame that is gone — but the
-// wait is bounded, and the reason is logged.
+// refuses the request, and on Windows the wait wants two callbacks; one bad
+// filter string therefore used to hang the application with its last frame on
+// the screen and no dialog to close. The second callback is still waited for,
+// but the wait is bounded, and the reason is logged.
 //
-// False when refused, which is NOT the same as cancelled: SDL hands over an
-// empty list for a cancel and a null one for a refusal.
-bool waitForDialog(DialogResult& result, const std::function<void()>& tick) {
-    Uint64 answeredAt = 0;
-    for (;;) {
-        const bool have = result.haveResult.load(std::memory_order_acquire);
-        const int count = result.callbackCount.load(std::memory_order_acquire);
-        if (have || count >= kMaxDialogCallbacks) break;
-        if (count > 0) {
+// A refusal is NOT a cancel: SDL hands over an empty list for a cancel and a
+// null one for a refusal.
+//
+// SDL holds the result's address until its last callback: an answer is the
+// last, a refusal on Windows may be followed by one more. A pending dialog
+// dropped before that (a refusal given up on after the grace) leaves its small
+// result behind rather than freeing memory SDL may yet write.
+class SdlPendingDialog final : public DialogBackend::PendingFileDialog {
+public:
+    DialogResult* result = new DialogResult();
+    ~SdlPendingDialog() override {
+        if (result->haveResult.load(std::memory_order_acquire) ||
+            result->callbackCount.load(std::memory_order_acquire) >= kMaxDialogCallbacks)
+            delete result;
+    }
+    bool poll(bool& ok, std::vector<std::string>& picked, std::string& refusal) override {
+        const bool have = result->haveResult.load(std::memory_order_acquire);
+        const int count = result->callbackCount.load(std::memory_order_acquire);
+        bool refused = !have && count >= kMaxDialogCallbacks;
+        if (!have && !refused && count > 0) {
             const Uint64 now = SDL_GetTicks();
             if (!answeredAt) {
                 answeredAt = now;
-                LOG_WARN("dialog: refused — %s", result.error.c_str());
+                LOG_WARN("dialog: refused — %s", result->error.c_str());
             } else if (now - answeredAt >= kExtraCallbackGraceMs) {
-                break;
+                refused = true;
             }
         }
-        SDL_PumpEvents();
-        if (tick) tick();
-        SDL_Delay(8);
+        if (have) {
+            ok = true;
+            picked = result->files;
+            return true;
+        }
+        if (refused) {
+            ok = false;
+            refusal = "file dialog refused: " + (result->error.empty() ? std::string("unknown reason") : result->error);
+            return true;
+        }
+        return false;
     }
-    return result.haveResult.load(std::memory_order_acquire);
-}
+
+private:
+    Uint64 answeredAt = 0;
+};
 
 enum : int { kBtnCancel = 0, kBtnOk = 1 };
 
@@ -119,6 +138,18 @@ public:
     bool fileDialog(Window* parent, const FileDialogRequest& request,
                     const std::function<void()>& tick,
                     std::vector<std::string>& picked, std::string& refusal) override {
+        // Block until it has answered, keeping timers running while it is up.
+        const std::unique_ptr<PendingFileDialog> pending = openFileDialog(parent, request);
+        bool ok = false;
+        while (!pending->poll(ok, picked, refusal)) {
+            SDL_PumpEvents();
+            if (tick) tick();
+            SDL_Delay(8);
+        }
+        return ok;
+    }
+
+    std::unique_ptr<PendingFileDialog> openFileDialog(Window* parent, const FileDialogRequest& request) override {
         std::vector<SDL_DialogFileFilter> filters;
         filters.reserve(request.filters.size());
         for (const auto& f : request.filters) filters.push_back({f.name.c_str(), f.pattern.c_str()});
@@ -128,28 +159,23 @@ public:
             request.defaultLocation.empty() ? nullptr : request.defaultLocation.c_str();
         SDL_Window* window = sdlWindowOf(parent);
 
-        DialogResult result;
+        auto pending = std::make_unique<SdlPendingDialog>();
+        DialogResult* result = pending->result;
         switch (request.kind) {
             case FileDialogKind::OpenFile:
-                SDL_ShowOpenFileDialog(dialogCallback, &result, window, filterData, filterCount,
+                SDL_ShowOpenFileDialog(dialogCallback, result, window, filterData, filterCount,
                                        nullptr, request.allowMultiple);
                 break;
             case FileDialogKind::OpenFolder:
-                SDL_ShowOpenFolderDialog(dialogCallback, &result, window, defaultLoc,
+                SDL_ShowOpenFolderDialog(dialogCallback, result, window, defaultLoc,
                                          request.allowMultiple);
                 break;
             case FileDialogKind::SaveFile:
-                SDL_ShowSaveFileDialog(dialogCallback, &result, window, filterData, filterCount,
+                SDL_ShowSaveFileDialog(dialogCallback, result, window, filterData, filterCount,
                                        defaultLoc);
                 break;
         }
-        if (!waitForDialog(result, tick)) {
-            refusal = "file dialog refused: " +
-                      (result.error.empty() ? std::string("unknown reason") : result.error);
-            return false;
-        }
-        picked = std::move(result.files);
-        return true;
+        return pending;
     }
 };
 

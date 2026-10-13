@@ -65,6 +65,34 @@ if (typeof setPickedFiles === "function") {
     assert(saved === "/path/to/saved.png", "saved returns queued file");
 }
 
+// 4b. The async dialogs: a Promise each, answered at the next frame (never
+// inside the call), so a page keeps running frames behind a native dialog.
+// A save is a path or null, an open a list, a refused filter a TypeError.
+assert(typeof showSaveFileDialogAsync === "function", "showSaveFileDialogAsync exists");
+assert(typeof showOpenFileDialogAsync === "function", "showOpenFileDialogAsync exists");
+assert(typeof showOpenFolderDialogAsync === "function", "showOpenFolderDialogAsync exists");
+if (typeof setPickedFiles === "function") {
+    const got = {};
+    setPickedFiles(["/path/to/async.wav"]);
+    const ps = showSaveFileDialogAsync("Audio|wav", "song.wav");
+    assert(ps instanceof Promise, "showSaveFileDialogAsync returns a Promise");
+    ps.then((v) => { got.save = v; });
+    setPickedFiles(["/a.png", "/b.png"]);
+    showOpenFileDialogAsync("Images|png", true).then((v) => { got.open = v; });
+    showSaveFileDialogAsync("Pictures|png*").then(() => { got.refused = "resolved"; },
+                                                  (e) => { got.refused = e; });
+    setDialogAnswer(false);
+    showSaveFileDialogAsync("Audio|wav", "x.wav").then((v) => { got.cancel = v; });
+    setDialogAnswer(true);
+    assert(got.save === undefined && got.open === undefined, "nothing answers inside the call");
+    advanceTime(16);
+    advanceTime(16);
+    assert(got.save === "/path/to/async.wav", "async save answers the queued path: " + got.save);
+    assert(Array.isArray(got.open) && got.open.length === 2 && got.open[1] === "/b.png", "async open answers the queued paths");
+    assert(got.refused instanceof TypeError && /refused/.test(got.refused.message), "a refused filter rejects with a TypeError");
+    assert(got.cancel === null, "a cancelled async save is null");
+}
+
 // 5. Various argument types stringify safely
 assert(confirm(12345) === true, "confirm with number argument");
 assert(confirm(null) === true, "confirm with null argument");

@@ -46,9 +46,22 @@ public:
     std::optional<bool> messageBox(Window*, const std::string&, bool) override { return std::nullopt; }
     bool fileDialog(Window*, const FileDialogRequest&, const std::function<void()>&,
                     std::vector<std::string>&, std::string& refusal) override {
-        refusal = "file dialog refused: no native dialogs on the DRM display";
+        refusal = kRefusal;
         return false;
     }
+    std::unique_ptr<PendingFileDialog> openFileDialog(Window*, const FileDialogRequest&) override {
+        struct Refused final : PendingFileDialog {
+            bool poll(bool& ok, std::vector<std::string>&, std::string& refusal) override {
+                ok = false;
+                refusal = kRefusal;
+                return true;
+            }
+        };
+        return std::make_unique<Refused>();
+    }
+
+private:
+    static constexpr const char* kRefusal = "file dialog refused: no native dialogs on the DRM display";
 };
 
 class DrmWindowSystem final : public WindowSystem {

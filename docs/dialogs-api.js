@@ -7,7 +7,8 @@
  * the browser's standard modal dialog trio (alert, confirm, prompt). All six are
  * globals (on `globalThis`), not members of `bro`.
  *
- * In a window every one of them blocks until the user answers. Headless never
+ * In a window every one of them blocks until the user answers (the frames
+ * stop behind it); the `*Async` file dialogs below do not. Headless never
  * blocks: the file dialogs answer with the paths queued by `setPickedFiles()`
  * (none queued is a cancelled pick), and alert/confirm/prompt follow
  * `setDialogAnswer()` (see docs/headless.md).
@@ -64,3 +65,36 @@ function showOpenFileDialog(filter, allowMultiple) {}
  * @returns {string[]} The chosen folders; empty when cancelled.
  */
 function showOpenFolderDialog(defaultLocation, allowMultiple) {}
+
+/**
+ * The three file dialogs without blocking: each returns at once with a
+ * Promise, and the page keeps running its frames, timers and script-fed
+ * audio while the dialog is up (a blocking dialog stops them: a player fed
+ * from requestAnimationFrame falls silent). The promise settles at a frame
+ * after the answer, never inside the call; headless answers from
+ * `setPickedFiles()` / `setDialogAnswer()` as the blocking dialogs do.
+ * A filter SDL refuses rejects with a TypeError.
+ *
+ * @example
+ *   const path = await showSaveFileDialogAsync('WAV|wav', 'song.wav');
+ *   if (path) save(path);
+ *
+ * @param {string} [filter]
+ * @param {string} [defaultName]
+ * @returns {Promise<string|null>} The chosen path, or null when cancelled.
+ */
+function showSaveFileDialogAsync(filter, defaultName) {}
+
+/**
+ * @param {string} [filter]
+ * @param {boolean} [allowMultiple]
+ * @returns {Promise<string[]>} The chosen paths; empty when cancelled.
+ */
+function showOpenFileDialogAsync(filter, allowMultiple) {}
+
+/**
+ * @param {string} [defaultLocation]
+ * @param {boolean} [allowMultiple]
+ * @returns {Promise<string[]>} The chosen folders; empty when cancelled.
+ */
+function showOpenFolderDialogAsync(defaultLocation, allowMultiple) {}

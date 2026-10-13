@@ -251,7 +251,76 @@ Value makeShowSaveFileDialog() {
         2);
 }
 
+// The async dialogs' promise: settled from the dialog pump (installDialogPump),
+// a path / paths, null / [] for a cancel, a TypeError for a refusal.
+Value typeErrorValue(const std::string& message) {
+    ev::Persistent text(ev::fromUtf8(message));
+    auto ctor = ev::globalValue("TypeError");
+    if (ctor.found && ev::isFunction(ctor.value)) {
+        ev::Persistent c(ctor.value);
+        const Value arg = text.get();
+        auto r = ev::construct(c.get(), std::span<const Value>(&arg, 1));
+        if (!r.thrown) return r.value;
+    }
+    return text.get();
+}
+
+platform::Dialogs::FileDialogDone settle(Value promise, bool single) {
+    auto p = std::make_shared<ev::Persistent>(promise);
+    return [p, single](bool ok, std::vector<std::string> picked, std::string refusal) {
+        if (!ok) {
+            ev::Persistent err(typeErrorValue(refusal));
+            ev::rejectPromise(p->get(), err.get());
+            return;
+        }
+        if (single) {
+            ev::Persistent v(picked.empty() ? ev::null() : ev::fromUtf8(picked[0]));
+            ev::resolvePromise(p->get(), v.get());
+            return;
+        }
+        ev::Persistent v(stringArray(picked));
+        ev::resolvePromise(p->get(), v.get());
+    };
+}
+
+Value makeShowOpenFileDialogAsync() {
+    return ev::makeFunction(
+        [](Value, std::span<const Value> a) {
+            ev::Persistent promise(ev::createPromise());
+            platform::Dialogs::openFileDialogAsync(stringArg(a, 0), boolArg(a, 1), settle(promise.get(), false));
+            return promise.get();
+        },
+        2);
+}
+
+Value makeShowOpenFolderDialogAsync() {
+    return ev::makeFunction(
+        [](Value, std::span<const Value> a) {
+            ev::Persistent promise(ev::createPromise());
+            platform::Dialogs::openFolderDialogAsync(stringArg(a, 0), boolArg(a, 1), settle(promise.get(), false));
+            return promise.get();
+        },
+        2);
+}
+
+Value makeShowSaveFileDialogAsync() {
+    return ev::makeFunction(
+        [](Value, std::span<const Value> a) {
+            ev::Persistent promise(ev::createPromise());
+            platform::Dialogs::saveFileDialogAsync(stringArg(a, 0), stringArg(a, 1), settle(promise.get(), true));
+            return promise.get();
+        },
+        2);
+}
+
 }  // namespace
+
+void installDialogPump(engine::Engine& engine) {
+    engine.addFramePump([] {
+        platform::Dialogs::pumpAsync();
+        if (ev::microtasksPending()) ev::drainMicrotasks();
+    });
+}
 
 void installPlatformGlobals() {
     // Each value is registered (which roots it) the moment it is made, and
@@ -267,6 +336,9 @@ void installPlatformGlobals() {
         {"showOpenFileDialog", makeShowOpenFileDialog},
         {"showOpenFolderDialog", makeShowOpenFolderDialog},
         {"showSaveFileDialog", makeShowSaveFileDialog},
+        {"showOpenFileDialogAsync", makeShowOpenFileDialogAsync},
+        {"showOpenFolderDialogAsync", makeShowOpenFolderDialogAsync},
+        {"showSaveFileDialogAsync", makeShowSaveFileDialogAsync},
     };
     for (const Entry& e : entries) ev::registerGlobal(e.name, e.make());
 

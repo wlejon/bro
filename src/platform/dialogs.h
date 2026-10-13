@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -33,6 +34,19 @@ public:
         std::string defaultLocation;      // folder, or the save name; "" = none
         bool allowMultiple = false;       // OpenFile / OpenFolder
     };
+
+    /// A file dialog that stays open while the app runs on.
+    class PendingFileDialog {
+    public:
+        virtual ~PendingFileDialog() = default;
+        /// Non-blocking, on the main thread: true once the dialog is
+        /// answered, then `ok` with the chosen paths (none for a cancel), or
+        /// !ok for a refusal with the reason in `refusal`.
+        virtual bool poll(bool& ok, std::vector<std::string>& picked, std::string& refusal) = 0;
+    };
+    /// Open a file dialog and return at once; the answer comes through poll().
+    virtual std::unique_ptr<PendingFileDialog> openFileDialog(Window* parent,
+                                                              const FileDialogRequest& request) = 0;
 
     /// Show a file dialog and block until it is answered, calling `tick`
     /// repeatedly meanwhile so the app's timers keep running behind it.
@@ -96,6 +110,19 @@ public:
     /// `saved` is nullopt for a cancel.
     static bool showSaveFileDialog(const std::string& filter, const std::string& defaultName,
                                    std::optional<std::string>& saved, std::string& refusal);
+
+    /// The same three dialogs without blocking: the app keeps running its
+    /// frames (animation, audio fed from script, timers) while the dialog is
+    /// up, and `done` is called on the main thread from pumpAsync() once it
+    /// is answered: (true, paths) — none for a cancel, a save's one path —
+    /// or (false, {}, refusal). Headless answers as the blocking ones do, at
+    /// the next pump, so a caller never sees its answer inside the call.
+    using FileDialogDone = std::function<void(bool ok, std::vector<std::string> picked, std::string refusal)>;
+    static void openFileDialogAsync(const std::string& filter, bool allowMultiple, FileDialogDone done);
+    static void openFolderDialogAsync(const std::string& defaultLocation, bool allowMultiple, FileDialogDone done);
+    static void saveFileDialogAsync(const std::string& filter, const std::string& defaultName, FileDialogDone done);
+    /// Settle the async dialogs answered since the last call; once a frame.
+    static void pumpAsync();
 
     /// `<input type=file>`'s picker: `accept` is the attribute's comma list of
     /// `.ext` / `image/*` tokens, turned into one filter. Empty on cancel or

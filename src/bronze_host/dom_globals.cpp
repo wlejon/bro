@@ -472,6 +472,9 @@ void installWebHostGlobals(engine::Engine& engine) {
     // Pictures decoded off the page thread (host_image.cpp): their loads
     // settle, and their decode() promises resolve, from a frame pump.
     installHostImagePump(engine);
+    // show*DialogAsync: answered dialogs settle their promises from a pump,
+    // while the frames (and audio fed from script) run on behind the dialog.
+    installDialogPump(engine);
 
     // Install HTML interfaces BEFORE document is created:
     installHtmlInterfaces();

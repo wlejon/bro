@@ -260,6 +260,97 @@ bool Dialogs::showSaveFileDialog(const std::string& filter, const std::string& d
     return true;
 }
 
+namespace {
+
+// An async dialog: open (pending) or answered and waiting for the next pump.
+struct AsyncDialog {
+    std::unique_ptr<DialogBackend::PendingFileDialog> pending;
+    bool answered = false, ok = false;
+    std::vector<std::string> picked;
+    std::string refusal;
+    Dialogs::FileDialogDone done;
+};
+std::vector<AsyncDialog> s_async;
+
+void answerLater(Dialogs::FileDialogDone done, bool ok, std::vector<std::string> picked, std::string refusal) {
+    AsyncDialog d;
+    d.answered = true;
+    d.ok = ok;
+    d.picked = std::move(picked);
+    d.refusal = std::move(refusal);
+    d.done = std::move(done);
+    s_async.push_back(std::move(d));
+}
+
+void openAsync(const DialogBackend::FileDialogRequest& request, Dialogs::FileDialogDone done) {
+    AsyncDialog d;
+    d.pending = windowSystem().dialogs().openFileDialog(s_window, request);
+    d.done = std::move(done);
+    s_async.push_back(std::move(d));
+}
+
+}  // namespace
+
+void Dialogs::openFileDialogAsync(const std::string& filter, bool allowMultiple, FileDialogDone done) {
+    s_lastFileFilter = filter;
+    DialogBackend::FileDialogRequest request;
+    request.kind = DialogBackend::FileDialogKind::OpenFile;
+    request.filters = filtersFrom(filter);
+    request.allowMultiple = allowMultiple;
+    std::string refusal;
+    if (refusedFilters(request.filters, refusal)) return answerLater(std::move(done), false, {}, refusal);
+    if (!s_interactive) return answerLater(std::move(done), true, takeQueuedPicks(), {});
+    openAsync(request, std::move(done));
+}
+
+void Dialogs::openFolderDialogAsync(const std::string& defaultLocation, bool allowMultiple, FileDialogDone done) {
+    if (!s_interactive) return answerLater(std::move(done), true, takeQueuedPicks(), {});
+    DialogBackend::FileDialogRequest request;
+    request.kind = DialogBackend::FileDialogKind::OpenFolder;
+    request.defaultLocation = normalizeSeparators(defaultLocation);
+    request.allowMultiple = allowMultiple;
+    openAsync(request, std::move(done));
+}
+
+void Dialogs::saveFileDialogAsync(const std::string& filter, const std::string& defaultName, FileDialogDone done) {
+    if (!s_interactive) {
+        // The blocking dialog's headless answer, taken now (the queue is
+        // consumed in call order) and delivered at the next pump.
+        std::optional<std::string> saved;
+        std::string refusal;
+        const bool ok = showSaveFileDialog(filter, defaultName, saved, refusal);
+        std::vector<std::string> picked;
+        if (saved) picked.push_back(*saved);
+        return answerLater(std::move(done), ok, std::move(picked), refusal);
+    }
+    s_lastFileFilter = filter;
+    DialogBackend::FileDialogRequest request;
+    request.kind = DialogBackend::FileDialogKind::SaveFile;
+    request.filters = filtersFrom(filter);
+    std::string refusal;
+    if (refusedFilters(request.filters, refusal)) return answerLater(std::move(done), false, {}, refusal);
+    request.defaultLocation = normalizeSeparators(defaultName);
+    openAsync(request, std::move(done));
+}
+
+void Dialogs::pumpAsync() {
+    if (s_async.empty()) return;
+    // Answered ones out first: a `done` may open another dialog.
+    std::vector<AsyncDialog> ready;
+    for (auto it = s_async.begin(); it != s_async.end();) {
+        if (!it->answered && it->pending)
+            it->answered = it->pending->poll(it->ok, it->picked, it->refusal);
+        if (it->answered) {
+            ready.push_back(std::move(*it));
+            it = s_async.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (auto& d : ready)
+        if (d.done) d.done(d.ok, std::move(d.picked), std::move(d.refusal));
+}
+
 std::vector<std::string> Dialogs::pickFiles(const std::string& accept, bool allowMultiple) {
     const std::string pattern = patternFromAccept(accept);
     std::vector<std::string> picked;
