@@ -496,6 +496,12 @@
  * @property {number} firstAudioSeconds
  * @property {number} interrupt1Seconds - The last interrupt's stage 1, request to audible
  * @property {number} interrupt2Seconds
+ * @property {Array<{seconds: number, what: string, song: number, emitted: number, lead: number}>} gaps - The last 16
+ *   stretches of 0.2 s or more in which the worker handed out no audio (it does so only between pieces of work, and
+ *   while it waits on the GPU); one longer than emitLeadSeconds is an audible dropout. what = the piece of work last
+ *   begun when it ended ('window: step', 'semantic (on air)', 'make_full', 'decode (due)', 'idle' ...), song its index
+ *   (-1 = none), emitted the program sample it ended at, lead the seconds handed out ahead when it began
+ * @property {number} worstGapSeconds - The longest gap since the stream started
  * @property {Array<{index: number, tag: string, planned: boolean, semanticDone: boolean, semanticFrames: number, latentFrames: number, decodedFrames: number, start: number, end: number, latentNorm: number, built: boolean, ready: boolean, onAir: boolean, hostBytes: number, knobs: YuE2Knobs, preview: boolean, previewFrames: number, estimateFrames: number, ended: boolean}>} songs - Queued and playing, in order; start / end are program samples (-1 = not yet known); built = wholly decoded; ready = a skip to it is instant; knobs = what it carries (energy: its offset now); preview = still a preview of previewFrames; estimateFrames = the plan's length estimate from its score (0 = no score), for a full song's progress; ended = its semantic stage reached the song's own end
  * @property {number} ahead - Songs after the playing one
  * @property {number} readyAhead - Of those, ready for an instant skip
