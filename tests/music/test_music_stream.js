@@ -1,5 +1,5 @@
-// yue.stream (YuE2Stream) through JS: streaming playback, the radio and live
-// steering (docs/music-api.js). The stream's quality, latency and bug-guard
+// yue.stream (YuE2Stream) through JS: streaming playback, the radio and
+// steering the songs to come (docs/music-api.js). The stream's quality, latency and bug-guard
 // oracles live in brosoundml's test_yue2_stream; this checks the binding.
 //
 // Weights-gated: the YuE2-3B folder ($YUE2_MODEL_DIR, else ../YuE2-3B) and
@@ -9,9 +9,9 @@
 //      contiguous from sample 0 and is the decoder's natural length; the
 //      events come in order; onLatents covers every frame; the model and
 //      the VAE are busy while it runs and free after onDone.
-//   3. Paced, with a simulated player: interrupt(+1) is audible in both
-//      stages; setKnobs clamps and is applied; stats has its shape; stop()
-//      ends it.
+//   3. Paced, with a simulated player: there is no interrupt(); setKnobs
+//      clamps, is for the songs queued after (the song on air keeps its
+//      own); stats has its shape (work included); stop() ends it.
 //   4. aheadSongs 2, every song supplied on 'want': the pool fills with
 //      built songs, skip() to one hands out its audio within 0.5 s, drop()
 //      removes one and want asks again.
@@ -126,7 +126,7 @@ function unpaced(yue, vae, s) {
 
 function paced(yue, vae, s) {
     const events = [];
-    let emitted = 0, done = null, t0 = -1, played = 0, interrupted = false, knobs = null;
+    let emitted = 0, done = null, t0 = -1, played = 0, moved = false, knobs = null;
     const st = yue.stream({
         vae, songs: [s], radio: false,
         onAudio: (c) => { emitted = c.sample0 + c.frames; if (t0 < 0) t0 = Date.now(); },
@@ -137,35 +137,28 @@ function paced(yue, vae, s) {
     assert(r.energy.min === -2 && r.energy.max === 1 && r.percussion.max === 6, 'knobRanges: ' + JSON.stringify(r));
     assert(JSON.stringify(r) === JSON.stringify(bro.music.knobRanges),
            'a stream\'s knobRanges is bro.music.knobRanges: ' + JSON.stringify(bro.music.knobRanges));
-    const has = (kind, value) => events.some((e) => e.kind === kind && (value === undefined || e.value === value));
-    pumpUntil('both interrupt stages', () => {
+    assert(typeof st.interrupt === 'undefined', 'no interrupt(): a song on air never changes');
+    pumpUntil('the knobs event', () => {
         if (t0 >= 0) {
             played = Math.min(emitted, Math.floor((Date.now() - t0) * 48));
             st.setPlayhead(played);
         }
-        if (!interrupted && played >= 4 * 48000) {
-            interrupted = true;
-            st.interrupt(1);
+        if (!moved && played >= 4 * 48000) {
+            moved = true;
             knobs = st.setKnobs({ texture: 9 });
         }
-        return has('interrupt', 1) && has('interrupt', 2);
+        return events.some((e) => e.kind === 'knobs');
     }, 120);
     assert(knobs && knobs.texture === 2 && knobs.energy === 0, 'setKnobs clamps and keeps the rest: ' + JSON.stringify(knobs));
-    const i1 = events.find((e) => e.kind === 'interrupt' && e.value === 1);
-    const i2 = events.find((e) => e.kind === 'interrupt' && e.value === 2);
-    console.log('paced: interrupt stage 1 ' + i1.seconds.toFixed(2) + ' s, stage 2 ' + i2.seconds.toFixed(2) + ' s');
-    assert(i1.seconds > 0 && i1.seconds < 1.5, 'stage 1 audible within 1.5 s: ' + i1.seconds);
-    assert(i2.seconds > i1.seconds && i2.seconds < 4, 'stage 2 audible within 4 s: ' + i2.seconds);
-    assert(i2.sample > i1.sample && i1.song === 0, 'stage 2 lands after stage 1, on song 0');
-    pumpUntil('the texture re-solve', () => {
-        played = Math.min(emitted, Math.floor((Date.now() - t0) * 48));
-        st.setPlayhead(played);
-        return events.some((e) => e.kind === 'knobs' && e.text.includes('texture'));
-    }, 30);
+    const kn = events.find((e) => e.kind === 'knobs');
+    assert(kn.text === 'texture' && kn.song === -1, 'the knobs event names what moved and no song: ' + JSON.stringify(kn));
     const stats = st.stats;
     assert(stats.songs.length === 1 && stats.songs[0].tag === 'p' && stats.songs[0].start === 0, 'stats.songs: ' + JSON.stringify(stats.songs));
-    assert(stats.knobs.texture === 2 && stats.emitted >= stats.playhead, 'stats knobs and frontier');
-    assert(Math.abs(stats.interrupt1Seconds - i1.seconds) < 1e-6, 'stats carries the interrupt timing');
+    assert(stats.knobs.texture === 2 && stats.songs[0].knobs.texture === 0,
+           'the next song takes the knob, the one on air keeps its own: ' + JSON.stringify(stats.songs[0].knobs));
+    assert(stats.emitted >= stats.playhead, 'stats frontier');
+    assert(stats.work && typeof stats.work === 'object' && Object.values(stats.work).every((v) => v >= 0),
+           'stats.work: seconds per piece of work: ' + JSON.stringify(stats.work));
     assert(stats.emitted - stats.playhead <= 0.9 * 48000, 'paced: at most the emit lead ahead (' + (stats.emitted - stats.playhead) + ')');
     st.stop();
     pumpUntil('onDone after stop()', () => done !== null, 30);
