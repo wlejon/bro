@@ -217,6 +217,11 @@
  * @property {number} [penaltyWindow=50] - How many recent tokens the penalty sees (1..100)
  * @property {number} [minTokens=200] - The end token is masked before this many
  * @property {number} [maxTokens=9000] - The stage stops here (result.semanticTruncated / plan.truncated)
+ * @property {number} [endBiasAfter=0] - Semantic only, not protocol: past this many tokens the end token's
+ *   logit gains endBiasPerToken per token, so the song ends near a length you choose (0 = off). Setting it
+ *   replaces the length guard drawn from the score's length (semanticLengthGuard), which a score that
+ *   repeats itself makes long
+ * @property {number} [endBiasPerToken=0] - The end token's gain per token past endBiasAfter (0.04 = +1 a second)
  */
 
 /**

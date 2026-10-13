@@ -79,6 +79,7 @@ fs.rmSync(path, options);               // options: { recursive: true, force: tr
 fs.unlinkSync(path);
 fs.renameSync(oldPath, newPath);
 fs.copyFileSync(src, dest);
+fs.cpSync(src, dest, options);           // a file (parents made) or, with { recursive: true }, a tree; force (default true), errorOnExist
 fs.chmodSync(path, mode);
 fs.realpathSync(path);
 
