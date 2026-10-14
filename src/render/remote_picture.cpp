@@ -115,12 +115,17 @@ LayerImage RemotePictureUploader::upload(const uint8_t* data, uint32_t stride, u
     uint32_t srcStride = stride;
     VkFormat fmt = VK_FORMAT_R8G8B8A8_UNORM;
     if (format == RemotePixels::NV12) {
+        const uint32_t nvStride = stride ? stride : ((w + 1u) & ~1u);
+        const uint32_t nvUvOffset = uvOffset ? uvOffset : (nvStride * h);
         impl_->converted.resize(size_t(w) * h * 4);
-        nv12ToRgba(data, stride, uvOffset, w, h, impl_->converted.data());
+        nv12ToRgba(data, nvStride, nvUvOffset, w, h, impl_->converted.data());
         src = impl_->converted.data();
         srcStride = w * 4;
     } else if (format == RemotePixels::BGRA8) {
         fmt = VK_FORMAT_B8G8R8A8_UNORM;
+        if (srcStride == 0) srcStride = w * 4;
+    } else if (srcStride == 0) {
+        srcStride = w * 4;
     }
     if (!impl_->ensure(w, h, fmt)) return {};
 

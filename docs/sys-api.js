@@ -11,6 +11,7 @@
  * - Bluetooth adapters, devices, pairing, and discovery (`bluetooth`)
  * - Freedesktop Notification Server host (`notifications`)
  * - StatusNotifierItem / System Tray host (`tray`)
+ * - Process table snapshot and signal/kill control (`processes`, `listProcesses`, `killProcess`)
  *
  * Privileged API: Mounted automatically in Bronze when `BRO_WITH_SYS` is enabled and
  * the app is verified as a trusted shell app declaring `"shell": true` or
@@ -165,3 +166,16 @@ const trayItems = bro.sys.tray.getItems();
 for (const item of trayItems) {
     console.log(`Tray item: ${item.id} (${item.title || item.tooltip || 'No title'})`);
 }
+
+// ============================================================================
+// 7. Process Table & Signal Control
+// ============================================================================
+
+const procs = bro.sys.listProcesses(); // or bro.sys.processes.list()
+for (const p of procs.slice(0, 5)) {
+    console.log(`${p.pid} ${p.name} (${p.user}) RSS=${p.rssBytes} CPU=${p.cpuTimeMs}ms`);
+}
+// Send SIGTERM (15) or SIGKILL (9 / true) to a process (pid > 1 on Linux, > 4 on Windows):
+// bro.sys.killProcess(targetPid, 'SIGTERM');
+// bro.sys.processes.kill(targetPid, true);
+

@@ -14,14 +14,10 @@
 //                       no copy through system memory: the picture goes from
 //                       the decoder to the compositor on the GPU.
 //   RemotePictureUploader  A CPU picture (RGBA8, BGRA8, NV12) copied into a
-//                       VkImage through the frame's upload arena: Raw, a
+//                       VkImage through the frame's upload arena: Raw, Linux
+//                       VA-API hardware decode (H.264, HEVC, AV1 -> NV12), a
 //                       software decoder, and the fallback when the bridge
 //                       cannot work (another adapter than Vulkan's).
-//
-// Linux: brovideo has no VA-API decode yet. When it does, a picture is a
-// dmabuf (brovideo::PictureMemory gains Dmabuf), and it goes to the
-// compositor the way a client window's buffer does: VulkanDmabufImporter,
-// with the decoder's sync fd as its acquire fence. Nothing else here changes.
 
 #include "render/layer_image.h"
 

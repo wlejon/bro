@@ -209,6 +209,7 @@ void unbind(View& v) {
 void ensureBridge() {
     if (g.bridgeTried) return;
     g.bridgeTried = true;
+#if defined(_WIN32)
     render::VulkanContext* ctx = g.engine ? g.engine->vulkanContext() : nullptr;
     if (!ctx || !ctx->isValid()) {
         g.bridgeError = "no Vulkan device";
@@ -217,13 +218,19 @@ void ensureBridge() {
     g.bridge = render::D3D11PictureBridge::create(*ctx, &g.bridgeError);
     if (g.bridge) LOG_INFO("remoteview: decoded pictures go to the compositor on the GPU (D3D11 -> Vulkan)");
     else LOG_INFO("remoteview: pictures are uploaded from the CPU (%s)", g.bridgeError.c_str());
+#else
+    LOG_INFO("remoteview: decoded pictures (VA-API NV12 / Raw RGBA) are uploaded to Vulkan");
+#endif
 }
 
 // ---- the session hooks (broremote_api) -------------------------------------
 
 void sessionStarting(broremote::ViewerSession*, broremote::ViewerOptions& options) {
     ensureBridge();
-    if (!g.bridge) return;  // Cpu pictures, the default
+    if (!g.bridge) {
+        options.output = brovideo::PictureMemory::Cpu;
+        return;
+    }
     std::weak_ptr<render::D3D11PictureBridge> weak = g.bridge;
     options.output = brovideo::PictureMemory::D3D11;
     options.prepare = [weak, failures = uint64_t(0)](broremote::DecodedFrame& pic) mutable {
@@ -281,6 +288,7 @@ void takePicture(View& v, layout::ElRemoteView& rv) {
         v.showUploaded = false;
         ++v.bridged;
     } else {
+        f.gpu = {};
         render::VulkanContext* ctx = g.engine->vulkanContext();
         if (!ctx || !ctx->isValid() || f.data.empty()) {
             ++v.unshown;
@@ -484,7 +492,7 @@ Value statsValue(View* v, layout::ElRemoteView& rv) {
     o.set("bridge", ev::fromBool(g.bridge != nullptr));
     o.set("bridgeImports", ev::fromDouble(g.bridge ? double(g.bridge->imports()) : 0.0));
     o.set("bridgeConversions", ev::fromDouble(g.bridge ? double(g.bridge->conversions()) : 0.0));
-    if (!g.bridge && g.bridgeTried) o.set("bridgeError", ev::fromUtf8(g.bridgeError));
+    if (!g.bridge && g.bridgeTried && !g.bridgeError.empty()) o.set("bridgeError", ev::fromUtf8(g.bridgeError));
     return o.get();
 }
 

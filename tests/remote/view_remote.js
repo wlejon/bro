@@ -87,3 +87,30 @@ assert(vs.decoded >= 3, 'session stats(): ' + JSON.stringify(vs));
 
 session.close();
 assert(view.session === null, 'a closed session leaves the view');
+
+// When hardware codecs (VA-API on Linux, Media Foundation on Windows) are
+// available, verify that <remoteview> negotiates a hardware codec (hevc /
+// h264 / av1), decodes in hardware, and uploads the NV12 picture to Vulkan.
+const hwCodecs = bro.remote.codecs().filter((c) => c !== 'raw');
+if (hwCodecs.length > 0) {
+    const hwSocket = socket + '-hw';
+    const prevUploads = view.stats().uploads;
+    const prevGpu = view.stats().gpuPictures;
+    const hosted = bro.remote.host({ socket: hwSocket, codecs: hwCodecs, fps: 30 });
+    assert(hosted.hosting === true, 'hosting hardware stream on ' + hwSocket);
+
+    const hwSession = bro.remote.connect({ socket: hwSocket, audio: false, name: 'view_remote_hw.js' });
+    view.session = hwSession;
+    assert(pump(20000, () => {
+        const s = hwSession.status();
+        const vs = view.stats();
+        return s.state === 'connected' && s.codec !== null && (vs.uploads > prevUploads || vs.gpuPictures > prevGpu);
+    }), 'hardware codec decoded and uploaded a picture: ' + JSON.stringify(hwSession.status()) + ' ' + JSON.stringify(view.stats()));
+
+    const hwSt = hwSession.status();
+    assert(hwCodecs.includes(hwSt.codec), 'negotiated hardware codec: ' + hwSt.codec);
+    assert(hwSt.hardware === true, 'decoder runs in hardware: ' + JSON.stringify(hwSt));
+    hwSession.close();
+    bro.remote.stop();
+}
+

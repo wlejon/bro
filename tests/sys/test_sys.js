@@ -44,5 +44,20 @@ if (!bro.sys.available) {
     const trayItems = bro.sys.tray.getItems();
     assert(Array.isArray(trayItems), 'tray.getItems returns array');
 
+    // 7. Processes
+    assert(typeof bro.sys.listProcesses === 'function', 'bro.sys.listProcesses is function');
+    assert(typeof bro.sys.killProcess === 'function', 'bro.sys.killProcess is function');
+    assert(typeof bro.sys.processes === 'object' && bro.sys.processes !== null, 'bro.sys.processes exists');
+    const procs = bro.sys.listProcesses();
+    assert(Array.isArray(procs) && procs.length > 0, 'listProcesses returns non-empty array');
+    assert(typeof procs[0].pid === 'number' && typeof procs[0].name === 'string', 'process entry has pid and name');
+    let refusedPid1 = false;
+    try {
+        bro.sys.killProcess(1, 'SIGTERM');
+    } catch (e) {
+        refusedPid1 = /refusing to signal pid 1/i.test(String(e));
+    }
+    assert(refusedPid1, 'killProcess refuses PID 1');
+
     console.log('test_sys.js PASSED');
 }

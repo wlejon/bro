@@ -200,10 +200,10 @@
  *   each picture on the GPU; the D3D11 video processor converts it into a
  *   texture Vulkan shares (VK_KHR_external_memory_win32), and the compositor
  *   samples that: no CPU readback, no copy through system memory
- *   (stats().zeroCopy). When that cannot work (the decoder on another
- *   adapter than bro's) and elsewhere, pictures are decoded to the CPU and
- *   uploaded. Linux decode in hardware (VA-API) will hand over dmabufs,
- *   imported as client windows' buffers are.
+ *   (stats().zeroCopy). On Linux, brovideo decodes H.264, HEVC and AV1 in
+ *   hardware via VA-API into NV12 frames uploaded to Vulkan through
+ *   RemotePictureUploader (as is the fallback when a Windows decoder is on
+ *   another adapter than bro's).
  *   Input. While captured (and focused), every key goes to the remote screen
  *   before anything of bro's own sees it: no DOM key events, no hotkeys, no
  *   text input, and the window grabs the keyboard so Alt+Tab and the Windows
