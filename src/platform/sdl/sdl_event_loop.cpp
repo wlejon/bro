@@ -13,6 +13,14 @@
 #include <atomic>
 #include <cmath>
 
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 namespace bro::platform {
 
 // bro's key model is SDL's numbering, so SDL key events pass through as they
@@ -145,33 +153,44 @@ private:
     std::vector<std::string> m_dropPaths;
 
     std::function<void()> m_modalHook;
-    bool m_watching = false;
+    bool m_hooked = false;
 
     void flushDropGroup();
     void dispatch(const SDL_Event& event);
-    static bool SDLCALL modalWatch(void* userdata, SDL_Event* event);
+#if defined(_WIN32)
+    static bool SDLCALL modalMessageHook(void* userdata, MSG* msg);
+#endif
 };
 
+#if defined(_WIN32)
 // Win32 runs its own message loop while the user drags a window edge or the
-// title bar, and SDL_PollEvent does not return until it ends; an event watch
-// is called from inside that loop.
-bool SDLCALL SdlEventLoop::modalWatch(void* userdata, SDL_Event* event) {
-    if (event->type >= SDL_EVENT_WINDOW_FIRST && event->type <= SDL_EVENT_WINDOW_LAST) {
+// title bar, and SDL_PollEvent does not return until it ends. SDL keeps a
+// window timer running for the length of that loop (WM_ENTERSIZEMOVE), and
+// hands its message hook every message the loop dispatches to a window. The
+// timer's WM_TIMER is the tick. Not an event watch: SDL calls those with
+// its watcher lock held, and a frame run there would hold up every thread
+// that pushes an event (wake()) until it finished — or for good, when the
+// frame waits on one of them.
+bool SDLCALL SdlEventLoop::modalMessageHook(void* userdata, MSG* msg) {
+    if (msg->message == WM_TIMER && msg->hwnd) {
         auto* self = static_cast<SdlEventLoop*>(userdata);
         if (self->m_modalHook) self->m_modalHook();
     }
     return true;
 }
+#endif
 
 void SdlEventLoop::setModalWindowEventHook(std::function<void()> hook) {
     m_modalHook = std::move(hook);
-    if (m_modalHook && !m_watching) {
-        SDL_AddEventWatch(modalWatch, this);
-        m_watching = true;
-    } else if (!m_modalHook && m_watching) {
-        SDL_RemoveEventWatch(modalWatch, this);
-        m_watching = false;
+#if defined(_WIN32)
+    if (m_modalHook && !m_hooked) {
+        SDL_SetWindowsMessageHook(modalMessageHook, this);
+        m_hooked = true;
+    } else if (!m_modalHook && m_hooked) {
+        SDL_SetWindowsMessageHook(nullptr, nullptr);
+        m_hooked = false;
     }
+#endif
 }
 
 void SdlEventLoop::pollEvents() {

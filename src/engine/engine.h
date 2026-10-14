@@ -1463,7 +1463,13 @@ private:
     // run the same frame (runPipelineFrames, headless_pipeline.cpp).
     void installWindowEventHandlers();
     void startFramePipeline();
-    void windowedFrame();
+    void windowedFrame(bool modal = false);
+    // A frame run from inside the OS's modal move/resize loop, which keeps
+    // the frame that polled from returning (setModalWindowEventHook).
+    void modalFrame();
+    bool pollingEvents_ = false;    // the frame is in eventLoop_->pollEvents()
+    bool inModalFrame_ = false;
+    bool modalFramesRan_ = false;   // during this frame's pollEvents()
     bool windowedPipeline() const { return displayMode_ == DisplayMode::Windowed || headlessPipeline_; }
     bool presentHeadlessPipelineFrame(const render::PresentFrame& frame);
     bool headlessPipeline_ = false;         // inside runPipelineFrames

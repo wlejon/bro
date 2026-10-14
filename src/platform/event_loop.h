@@ -101,10 +101,10 @@ public:
     /// Dispatch every pending event to the handlers. Call once per frame.
     virtual void pollEvents() = 0;
 
-    /// Called for every window event as the OS delivers it, from inside the
-    /// OS's own dispatch — including while a modal loop the OS runs (a Win32
-    /// live resize or move) keeps pollEvents from returning. Lets the engine
-    /// keep timers running through the modal loop. Empty to remove.
+    /// Called on a steady tick for as long as a modal loop the OS runs (a
+    /// Win32 live resize or move) keeps pollEvents from returning, from
+    /// inside that loop. Lets the engine keep running frames through it.
+    /// Empty to remove.
     virtual void setModalWindowEventHook(std::function<void()> hook) = 0;
 
     /// Whether waitEvents can block: the engine then stops presenting an

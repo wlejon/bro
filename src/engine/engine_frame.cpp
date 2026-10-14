@@ -191,7 +191,7 @@ void Engine::run() {
 
     startFramePipeline();
 
-    eventLoop_->setModalWindowEventHook([this]() { tickTimersOnly(); });
+    eventLoop_->setModalWindowEventHook([this]() { modalFrame(); });
     startControl();
     installMainLoopWaker();
 
@@ -345,7 +345,10 @@ void Engine::startFramePipeline() {
 
 // One frame of the windowed loop. Headless runs the same frame through
 // runPipelineFrames (headless_pipeline.cpp), presenting to an offscreen target.
-void Engine::windowedFrame() {
+// A modal frame (modalFrame) runs from inside the poll of the frame that
+// started the modal loop: it neither waits for the window system nor polls,
+// and is never held idle.
+void Engine::windowedFrame(bool modal) {
     // Stepped headless frames: the clock moves a fixed step per frame and
     // nothing waits on the wall clock.
     const bool stepped = headlessPipeline_ && pipelineStepMs_ > 0.0;
@@ -357,7 +360,7 @@ void Engine::windowedFrame() {
         // holds the finished frame until the compositor's next frame, and
         // everything it shows is a refresh older than it need be.
         const double frameWaitStart = util::currentTimeMs();
-        if (window_ && !headlessPipeline_) window_->waitForFrame(kFrameWaitMaxMs);
+        if (window_ && !headlessPipeline_ && !modal) window_->waitForFrame(kFrameWaitMaxMs);
         double frameStart = util::currentTimeMs();
 
         // Where the window system reports presentation (Wayland), the clock
@@ -435,11 +438,25 @@ void Engine::windowedFrame() {
 
         if (!canvasScenesDetached_.empty() && framePresenter_->isRasterIdle()) canvasScenesDetached_.clear();
 
-        if (eventLoop_) eventLoop_->pollEvents();
-        platform::desktop::pumpEvents();
-        if (eventLoop_ && eventLoop_->shouldQuit()) {
-            running_ = false;
-            return;
+        if (!modal) {
+            if (eventLoop_) {
+                modalFramesRan_ = false;
+                pollingEvents_ = true;
+                eventLoop_->pollEvents();
+                pollingEvents_ = false;
+            }
+            platform::desktop::pumpEvents();
+            if (eventLoop_ && eventLoop_->shouldQuit()) {
+                running_ = false;
+                return;
+            }
+            // The poll ran a window move or resize, and frames of their own
+            // through it (modalFrame): this one's clock and record are from
+            // before it. What the poll delivered goes to the next frame.
+            if (modalFramesRan_) {
+                modalFramesRan_ = false;
+                return;
+            }
         }
         beginGpuFrame();
 
@@ -593,9 +610,29 @@ void Engine::windowedFrame() {
         // idle stretch is not a frame.
         if (idleHeld_) {
             idleHeld_ = false;
-            if (!stepped) idleWait();
+            if (!stepped && !modal) idleWait();
         }
     }
+}
+
+// Win32 runs its own message loop for as long as the user drags the window
+// by its title bar or an edge, inside the frame's pollEvents, and calls this
+// on a timer from inside it. Frames go on there: timers, rAF, audio fed from
+// script, layout and paint, at the size the window has now. Only from that
+// poll, and one at a time: anything else that pumps the OS's messages is not
+// at a point between frames.
+void Engine::modalFrame() {
+    if (!pollingEvents_ || inModalFrame_ || !running_) return;
+    if (window_) {
+        int w = 0, h = 0;
+        window_->getSize(w, h);
+        // The resize events wait in SDL's queue until the drag ends.
+        if (w > 0 && h > 0 && (w != viewportWidth_ || h != viewportHeight_)) handleResize(w, h);
+    }
+    inModalFrame_ = true;
+    windowedFrame(/*modal=*/true);
+    inModalFrame_ = false;
+    modalFramesRan_ = true;
 }
 
 void Engine::removeModalEventWatch() {
