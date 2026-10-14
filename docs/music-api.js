@@ -668,6 +668,13 @@ class YuE2 {
    */
   stream(opts) {}
 
+  /**
+   * One endless piece of music steered by targets, paths and branches
+   * (music-endless-api.js).
+   * @returns {YuE2Endless}
+   */
+  endless(opts) {}
+
   /** @param {string} text @returns {Int32Array} */
   tokenize(text) {}
 

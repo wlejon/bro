@@ -18,6 +18,9 @@
  *                                         measurements, a scorer, CLAP prompts)
  *   bro.ear.loadClap(dir?)                the CLAP text-prompt scorer (ML builds
  *                                         only; see the section at the end)
+ *   bro.ear.beat(audio, opts)             the beat's phase at a known period, a
+ *                                         spectral- or energy-flux comb (ML builds
+ *                                         only; bro.music.beat, music-endless-api.js)
  *
  * measure / compare / spectrogram / fit live in broaudio
  * (include/broaudio/ear/ear.h and ear/fit.h hold the C++ contract) and are
