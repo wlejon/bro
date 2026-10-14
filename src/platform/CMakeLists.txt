@@ -41,6 +41,9 @@ elseif(APPLE)
     # NSDraggingSession (drags out of a window).
     target_sources(bro_platform PRIVATE sdl/sdl_drag_mac.mm)
     set_source_files_properties(sdl/sdl_drag_mac.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    # A live resize's tracking loop keeps running frames (sdl_event_loop.cpp).
+    target_sources(bro_platform PRIVATE sdl/sdl_live_resize_mac.mm)
+    set_source_files_properties(sdl/sdl_live_resize_mac.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
     # UNUserNotificationCenter (notifications from a bundled bro).
     target_sources(bro_platform PRIVATE desktop_notifications_mac.mm)
     set_source_files_properties(desktop_notifications_mac.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")

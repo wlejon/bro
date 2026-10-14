@@ -52,6 +52,11 @@ static_assert(static_cast<int>(GamepadAxis::LeftX) == SDL_GAMEPAD_AXIS_LEFTX &&
               static_cast<int>(GamepadAxis::RightY) == SDL_GAMEPAD_AXIS_RIGHTY &&
               static_cast<int>(GamepadAxis::RightTrigger) == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER);
 
+#if defined(__APPLE__)
+// A live resize's tracking loop (sdl_live_resize_mac.mm); null to remove.
+void sdlMacLiveResizeHook(const std::function<void()>* hook);
+#endif
+
 namespace {
 
 // SDL delivers finger coordinates normalized to 0-1 across the window;
@@ -182,15 +187,15 @@ bool SDLCALL SdlEventLoop::modalMessageHook(void* userdata, MSG* msg) {
 
 void SdlEventLoop::setModalWindowEventHook(std::function<void()> hook) {
     m_modalHook = std::move(hook);
+    const bool want = static_cast<bool>(m_modalHook);
+    if (want == m_hooked) return;
 #if defined(_WIN32)
-    if (m_modalHook && !m_hooked) {
-        SDL_SetWindowsMessageHook(modalMessageHook, this);
-        m_hooked = true;
-    } else if (!m_modalHook && m_hooked) {
-        SDL_SetWindowsMessageHook(nullptr, nullptr);
-        m_hooked = false;
-    }
+    if (want) SDL_SetWindowsMessageHook(modalMessageHook, this);
+    else SDL_SetWindowsMessageHook(nullptr, nullptr);
+#elif defined(__APPLE__)
+    sdlMacLiveResizeHook(want ? &m_modalHook : nullptr);
 #endif
+    m_hooked = want;
 }
 
 void SdlEventLoop::pollEvents() {
