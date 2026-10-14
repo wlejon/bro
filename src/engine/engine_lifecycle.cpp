@@ -110,8 +110,6 @@ Engine::~Engine() { teardown(); }
 void Engine::teardown() {
     // No command may arrive for an engine on its way out.
     if (control_) control_->stop();
-    // The dialog tick callback captures this engine.
-    platform::Dialogs::setTickCallback(nullptr);
     platform::Dialogs::setWindow(nullptr);
 
     appWatchers_.clear();

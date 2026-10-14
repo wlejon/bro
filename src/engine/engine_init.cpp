@@ -566,8 +566,6 @@ void Engine::construct(const EngineConfig& config) {
     // app's boot script reaches must already know there is no one to ask.
     platform::Dialogs::setWindow(window_.get());
     platform::Dialogs::setInteractive(displayMode_ == DisplayMode::Windowed);
-    platform::Dialogs::setTickCallback([this]() { tickTimersOnly(); });
-
     manifest_ = AppLoader::loadApp(appDir_, &assetMounts_);
     util::setAssetPathContext(manifest_.basePath, &assetMounts_);
     drawTraversal_->setViewport(viewportWidth_, viewportHeight_, 0);

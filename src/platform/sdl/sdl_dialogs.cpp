@@ -136,14 +136,14 @@ public:
     }
 
     bool fileDialog(Window* parent, const FileDialogRequest& request,
-                    const std::function<void()>& tick,
                     std::vector<std::string>& picked, std::string& refusal) override {
-        // Block until it has answered, keeping timers running while it is up.
+        // Block until it has answered. The script that asked is on the stack,
+        // so nothing of the page runs meanwhile; the next frame's clock step
+        // covers the wait (the *Async dialogs keep the frames going).
         const std::unique_ptr<PendingFileDialog> pending = openFileDialog(parent, request);
         bool ok = false;
         while (!pending->poll(ok, picked, refusal)) {
             SDL_PumpEvents();
-            if (tick) tick();
             SDL_Delay(8);
         }
         return ok;

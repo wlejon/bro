@@ -84,18 +84,6 @@ using bromath::cfromColor8;
 
 
 
-// ---------------------------------------------------------------------------
-// Lightweight tick for use during modal blocking (move/resize, dialogs)
-// ---------------------------------------------------------------------------
-
-void Engine::tickTimersOnly()
-{
-    // Advance the time scaled clock during modal blocking.
-    double wallNow = util::currentTimeMs();
-    if (lastWallTickMs_ > 0.0 && wallNow > lastWallTickMs_)
-        engineNowMs_ += (wallNow - lastWallTickMs_) * effectiveTimeScale();
-    lastWallTickMs_ = wallNow;
-}
 
 // ---------------------------------------------------------------------------
 // bro.time — global pause + timescale

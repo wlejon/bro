@@ -635,7 +635,6 @@ public:
     void setServerTickRate(double hz) { serverTickRate_ = hz; }
     double serverUptime() const;
 
-    void tickTimersOnly();
     layout::SkiaTextMetrics* textMetrics() const { return textMetrics_.get(); }
     float docContentOffsetY() const;
 

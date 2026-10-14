@@ -44,8 +44,8 @@ public:
 class NoDialogs final : public DialogBackend {
 public:
     std::optional<bool> messageBox(Window*, const std::string&, bool) override { return std::nullopt; }
-    bool fileDialog(Window*, const FileDialogRequest&, const std::function<void()>&,
-                    std::vector<std::string>&, std::string& refusal) override {
+    bool fileDialog(Window*, const FileDialogRequest&, std::vector<std::string>&,
+                    std::string& refusal) override {
         refusal = kRefusal;
         return false;
     }

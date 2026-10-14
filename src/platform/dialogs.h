@@ -48,12 +48,10 @@ public:
     virtual std::unique_ptr<PendingFileDialog> openFileDialog(Window* parent,
                                                               const FileDialogRequest& request) = 0;
 
-    /// Show a file dialog and block until it is answered, calling `tick`
-    /// repeatedly meanwhile so the app's timers keep running behind it.
-    /// True with the chosen paths (none for a cancel); false when the dialog
-    /// was refused, with the reason in `refusal`.
+    /// Show a file dialog and block until it is answered. True with the
+    /// chosen paths (none for a cancel); false when the dialog was refused,
+    /// with the reason in `refusal`.
     virtual bool fileDialog(Window* parent, const FileDialogRequest& request,
-                            const std::function<void()>& tick,
                             std::vector<std::string>& picked, std::string& refusal) = 0;
 };
 
@@ -68,14 +66,9 @@ public:
 /// queued, once. A dialog that blocks a window nobody is looking at is a hang.
 class Dialogs {
 public:
-    using TickCallback = std::function<void()>;
-
     /// The window dialogs are parented on (null for none).
     static void setWindow(Window* window);
     static void setInteractive(bool interactive);
-    /// Called repeatedly while a native dialog is open so timers and pending
-    /// jobs keep running behind it. Clear it before the object it captures dies.
-    static void setTickCallback(TickCallback cb);
 
     /// Queue what the next file/folder/save dialog (or `<input type=file>`
     /// pick) returns when there is no user to ask. Headless exposes this as

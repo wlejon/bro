@@ -16,7 +16,6 @@ namespace {
 Window* s_window = nullptr;
 bool s_interactive = true;
 bool s_autoAccept = true;
-Dialogs::TickCallback s_tickCb;
 std::vector<std::string> s_queuedPicks;
 std::string s_lastFileFilter;
 
@@ -99,7 +98,7 @@ bool showMessageBox(const std::string& message, bool withCancel) {
 
 bool showFileDialog(const DialogBackend::FileDialogRequest& request,
                     std::vector<std::string>& picked, std::string& refusal) {
-    return windowSystem().dialogs().fileDialog(s_window, request, s_tickCb, picked, refusal);
+    return windowSystem().dialogs().fileDialog(s_window, request, picked, refusal);
 }
 
 // `<input accept>`'s comma list of `.ext` and `type/*` tokens as one
@@ -149,10 +148,6 @@ void Dialogs::setWindow(Window* window) {
 
 void Dialogs::setInteractive(bool interactive) {
     s_interactive = interactive;
-}
-
-void Dialogs::setTickCallback(TickCallback cb) {
-    s_tickCb = std::move(cb);
 }
 
 void Dialogs::setPickedFiles(std::vector<std::string> paths) {
