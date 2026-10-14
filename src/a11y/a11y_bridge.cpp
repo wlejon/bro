@@ -3,6 +3,10 @@
 #include "dom/element.h"
 #include "dom/element_geometry.h"
 
+#if BRO_WITH_A11Y
+#include <broa11y/api.h>
+#endif
+
 #include <cctype>
 
 namespace bro::a11y {
@@ -13,26 +17,35 @@ AccessibilityBridge::~AccessibilityBridge() {
     shutdown();
 }
 
-bool AccessibilityBridge::initialize(dom::Document* document) {
+bool AccessibilityBridge::initialize(dom::Document* document, void* nativeWindow) {
     if (!document) return false;
     document_ = document;
 
 #if BRO_WITH_A11Y
-    tree_ = std::make_unique<broa11y::Tree>();
+    tree_ = std::make_shared<broa11y::Tree>();
 #if defined(__linux__)
-    bridge_ = std::make_unique<broa11y::LinuxBridge>();
+    (void)nativeWindow;
+    bridge_ = std::make_shared<broa11y::LinuxBridge>();
 #elif defined(_WIN32)
-    bridge_ = std::make_unique<broa11y::WinBridge>();
+    broa11y::WinBridgeConfig cfg;
+    cfg.hwnd = nativeWindow;
+    bridge_ = std::make_shared<broa11y::WinBridge>(cfg);
 #elif defined(__APPLE__)
-    bridge_ = std::make_unique<broa11y::MacBridge>();
+    (void)nativeWindow;
+    bridge_ = std::make_shared<broa11y::MacBridge>();
+#else
+    (void)nativeWindow;
 #endif
     if (bridge_) {
         bridge_->initialize(tree_.get());
     }
+    broa11y::api::setTree(tree_);
+    broa11y::api::setBridge(bridge_);
     initialized_ = true;
     updateTree();
     return true;
 #else
+    (void)nativeWindow;
     initialized_ = true;
     return true;
 #endif
@@ -40,6 +53,10 @@ bool AccessibilityBridge::initialize(dom::Document* document) {
 
 void AccessibilityBridge::shutdown() {
 #if BRO_WITH_A11Y
+    if (initialized_ || bridge_ || tree_) {
+        broa11y::api::setBridge(nullptr);
+        broa11y::api::setTree(nullptr);
+    }
     if (bridge_) {
         bridge_->shutdown();
         bridge_.reset();

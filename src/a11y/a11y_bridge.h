@@ -26,8 +26,8 @@ public:
     AccessibilityBridge(const AccessibilityBridge&) = delete;
     AccessibilityBridge& operator=(const AccessibilityBridge&) = delete;
 
-    /// Initialize accessibility subsystem with a document root
-    bool initialize(dom::Document* document);
+    /// Initialize accessibility subsystem with a document root and optional native window handle
+    bool initialize(dom::Document* document, void* nativeWindow = nullptr);
     void shutdown();
 
     /// Synchronize the DOM accessibility tree with broa11y
@@ -71,8 +71,8 @@ private:
     std::string computeAccessibleName(const dom::Element* el) const;
     void updateElementState(dom::Element* el, broa11y::Node* a11yNode);
 
-    std::unique_ptr<broa11y::Tree> tree_;
-    std::unique_ptr<broa11y::Bridge> bridge_;
+    std::shared_ptr<broa11y::Tree> tree_;
+    std::shared_ptr<broa11y::Bridge> bridge_;
     std::unordered_map<const dom::Element*, broa11y::NodeId> elementMap_;
 #endif
     dom::Document* document_ = nullptr;

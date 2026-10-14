@@ -677,6 +677,11 @@ void installSiblingApis(engine::Engine& engine) {
                             if (s_winShellBackend) return s_winShellBackend->execute(cmds);
                             return cmds.size();
                         });
+                    brocompositor::api::setWindowIconSource(
+                        [](brocompositor::WindowId id, int32_t size) -> std::optional<brocompositor::WindowIcon> {
+                            if (s_winShellBackend) return s_winShellBackend->window_icon(id, size);
+                            return std::nullopt;
+                        });
                 }
             }
 #endif
@@ -687,6 +692,7 @@ void installSiblingApis(engine::Engine& engine) {
             engine.addShutdownHook([] {
                 brocompositor::api::shutdownCompositorAsync();
 #if defined(_WIN32)
+                brocompositor::api::setWindowIconSource({});
                 s_winShellBackend.reset();
 #endif
             });
