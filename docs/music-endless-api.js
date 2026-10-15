@@ -24,10 +24,16 @@
  * (tokens, latents, audio; yue2-research native/endless_stream.js checks
  * constant streams, memory-drop tours and scored measured-bridge tours).
  *
+ * The stream is instrumental: every chunk's prompt carries YuE2's
+ * instrumental sheet ("[Intro]\n\n[Instrumental]\n\n[Interlude]\n\n
+ * [Instrumental]\n", what the research's non-lyric styles send), and a target
+ * has no lyrics. Setting lyrics, roll or lyricWindow (removed options) is a
+ * TypeError. For songs with lyrics, yue.stream / yue.generate (music-api.js).
+ *
  * Targets. A target is what chunks are made under: style text, an optional
- * score (ABC: under it the tempo is exact, its Q: sets it), a lyric sheet,
- * and knobs (music-api.js YuE2Knobs: the semantic ones act on a chunk's
- * splice, texture and percussion on its render, energy at decode).
+ * score (ABC: under it the tempo is exact, its Q: sets it), and knobs
+ * (music-api.js YuE2Knobs: the semantic ones act on a chunk's splice,
+ * texture and percussion on its render, energy at decode).
  *   - setTarget() now: from the first chunk whose tokens can still change.
  *     That is the first chunk not sampled yet, or the newest sampled one
  *     while it is only the previous chunk's lookahead and there is time to
@@ -55,25 +61,6 @@
  *     so it starts early; one set with no time left for that work is planned
  *     a chunk later (and the 'planned' event says so). Into the clip the beat
  *     is within 0.11 beats 15 times in 21 (median 0.05).
- *
- * Rolled lyrics (target.roll): each chunk's prefix carries lyricWindow lines
- * of the sheet (section tags kept, not counted), starting after the furthest
- * line the model reached in the chunks before it. Where the model is in the
- * lyrics is read off its own attention while the chunk is sampled: head
- * 14.10 (layer 14, query head 10) points at the lyric word being sung
- * (yue2-research FINDINGS 11; the right word on ~70% of frames, the right
- * line on ~84%, about 2 frames ahead of the voice). For every token the
- * stream reads that head's softmax mass on each word of the window; a line
- * is reached when the head pointed into 60% of its words, each for 2 frames
- * or more, on frames whose mass on the window's words is 0.2 or more. The
- * reading costs one head's dot products per token and is there as soon as
- * the chunk's tokens are, so the next window never waits on a render. The
- * head also walks through lines the model only hums, so those count as
- * passed. A 'lyrics' event per chunk, right after its 'sampled', carries
- * the reading (row.lyricWords, row.pointer: the word sung per frame,
- * row.pointerMass, row.linesReached): enough to show the words being sung,
- * 40 ms a frame, ahead of the audio. Without roll, the whole sheet in every
- * prefix loops the first verse and chorus.
  *
  * Branches: branch(target, path) builds an alternative continuation from the
  * open chunk beside the main line (at most maxBranches). commitBranch(id)
@@ -115,13 +102,11 @@
 
 /**
  * What chunks are made under. Fields left out of setTarget() keep their
- * current value; '' or null clears a string.
+ * current value; '' or null clears a string. No lyrics: lyrics, roll and
+ * lyricWindow are TypeErrors (removed; the stream is instrumental).
  * @typedef {Object} YuE2EndlessTarget
  * @property {string} [style] - "[Tags]" text
  * @property {string|null} [score] - ABC; none = cot off. Under a score its Q: is the tempo and changes bridge
- * @property {string} [lyrics] - The sheet (YuE2's format, [section] lines); '' = instrumental
- * @property {boolean} [roll=false] - Roll the sheet (see Rolled lyrics above)
- * @property {number} [lyricWindow=4] - Rolled: lines a chunk's prefix carries, 1..32
  * @property {YuE2Knobs} [knobs] - Clamped (music-api.js)
  * @property {string} [tag] - Your label, echoed in events, rows and stats
  * @property {number} [at] - Program seconds: on the path, from the first chunk boundary at or after it. Left out = now
@@ -182,13 +167,6 @@
  * @property {Float32Array} [bridgeScores] - Bridge: each candidate's NLL of the fresh clip's opening
  * @property {{P: number, streamPhase: number, freshPhase: number, cut: number, seconds: number}} [phaseFit] - Fresh clip: the beat fit (P in frames, phases in beats), the frames cut, the measurement's cost
  * @property {number} [trim] - Fresh clip: = phaseFit.cut
- * @property {string} lyrics - The sheet text its prefix carried
- * @property {number[]} [lyricLines] - Rolled: the window [from, to) of sung lines
- * @property {string[]} [lyricWords] - Rolled: the window's words in prompt order (lower case, runs of [a-z'])
- * @property {Int32Array} [lyricWordLines] - Rolled: each word's sheet line (counting sung lines, as lyricLines)
- * @property {Int32Array} [pointer] - Rolled: per frame (40 ms), the index into lyricWords of the word head 14.10 attends to most
- * @property {Float32Array} [pointerMass] - Rolled: per frame, the head's attention mass on all the window's words (0..1; under ~0.2 it is not on the lyrics)
- * @property {number[]} [linesReached] - Rolled: the sheet lines the head reached in this chunk
  * @property {YuE2Knobs} knobs
  */
 
@@ -200,9 +178,6 @@
  *   'built'        a chunk is rendered (row; latents + frame0 with chunkData), value = its latent norm
  *   'styleChange'  a change made at chunk: text = 'drop' | 'bridge' | 'plain'
  *   'phaseFit'     a bridge's beat fit (row of the fresh clip), value = the cut in frames
- *   'lyrics'       rolled lyrics: the lyric head's reading of a chunk, right after its 'sampled'
- *                  (row.lyricWords / pointer / pointerMass / linesReached); value = the furthest
- *                  sheet line reached so far
  *   'breakWarning' a chunk's latent norm left 6.5..9.5 (value)
  *   'chunkStart'   a chunk's first sample handed out (sample)
  *   'branch'       a branch opened: branch = its id, chunk = its fork
