@@ -396,6 +396,12 @@ public:
     const steam::SteamService* steamService() const { return steamService_.get(); }
     physics::PhysicsWorld* physicsWorld();
     const physics::PhysicsWorld* physicsWorld() const;
+    /// What this process costs and who holds it (engine_memory.cpp, `bro-ctl
+    /// mem`): private/shared memory by kind of mapping, threads by name, the C
+    /// heap, GPU memory, the JS heap, Skia's caches, the subsystems running.
+    std::string memoryReport(bool detail);
+    /// Hands the C heap's free pages back to the system; says how much.
+    std::string trimMemory();
     void dismissSplash() {
         if (splashVisible_) {
             splashVisible_ = false;

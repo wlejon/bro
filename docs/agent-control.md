@@ -92,6 +92,7 @@ first match's centre).
 | `rect <selector>` | client rects of every match (CSS px) |
 | `wait <selector> [--gone] [--timeout=5000]` | until a match has a box (or none does) |
 | `wait-idle [--timeout=5000] [--frames=3]` | until N frames in a row lay out, animate and render nothing |
+| `mem [--detail] [--trim]` | what the process costs: see below |
 
 Coordinates are window CSS px; a selector's point is its element's centre
 in the window (below a menu bar, if the app shows one).
@@ -118,6 +119,31 @@ events take (so global hotkeys, the pointer, and client windows all see it);
 elsewhere through the engine's input handlers. It is played out on a
 timeline (a click is a move, a press, 40 ms, a release) one frame at a time,
 and the command replies once it has all been delivered.
+
+## mem
+
+What this process costs and who holds it, so a footprint can be re-checked
+and every megabyte named:
+
+- `process`: resident, private (dirty) and shared memory (Linux:
+  `/proc/self/smaps_rollup`; Windows: working set and private bytes).
+- private dirty memory by kind of mapping (Linux): the C heap's main heap
+  and its thread arenas, file-backed private pages (relocations, `.data`),
+  GPU buffer mappings, and the anonymous rest (the JS heap, JIT code, thread
+  stacks, drivers' own allocations).
+- `threads`, grouped by name (`Worker x30` is one family).
+- `malloc` (glibc): bytes in use, free bytes held in arenas, arena count.
+- `gpu`: VRAM and GTT the kernel charges this process (DRM `fdinfo`).
+- `js`: bronze's heap, used / committed / reserved, and collections so far.
+- `skia` / `ganesh`: the glyph cache, Ganesh's resource cache against its
+  budget, the device memory pool.
+- `images`: the decoded-image store and its decoder threads.
+- `subsystems`: which of physics, audio, audio inference, net and Steam are
+  running; an app that never uses one should see it `off`.
+
+`--detail` adds private memory by file and the largest anonymous mappings;
+`--trim` first returns the C heap's free pages to the system (`malloc_trim`)
+and says how much that was, which separates fragmentation from live data.
 
 ## record
 

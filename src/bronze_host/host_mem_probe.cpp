@@ -13,6 +13,7 @@
 // it. It is a number to compare with itself across a run, not with
 // heapCommitted.
 
+#include "bronze_host/bronze_host.h"
 #include "bronze_host/host_runtime.h"
 #include "bronze_host/host_builder.h"
 #include "embed/embed.h"
@@ -58,6 +59,16 @@ Value num(uint64_t v) { return ev::fromDouble(static_cast<double>(v)); }
 constexpr uint64_t kLargeBlock = 508u * 1024u;
 
 }  // namespace
+
+JsMemoryStats jsMemoryStats() {
+    const bronze::embed::RuntimeTelemetry tel = bronze::embed::getRuntimeTelemetry();
+    JsMemoryStats s;
+    s.heapUsed = tel.heapUsedBytes;
+    s.heapCommitted = tel.heapCommittedBytes;
+    s.heapReserved = tel.heapReservedBytes;
+    s.collections = tel.gcCollections;
+    return s;
+}
 
 Value hostMemoryBreakdown(bool sizes) {
     ObjectBuilder out;

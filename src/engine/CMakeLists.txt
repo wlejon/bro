@@ -32,6 +32,7 @@ add_library(bro_engine STATIC
     engine_frame.cpp
     engine_frame_render.cpp
     engine_idle.cpp
+    engine_memory.cpp
     css_transitions.cpp
     css_animations.cpp
     css_easing.cpp

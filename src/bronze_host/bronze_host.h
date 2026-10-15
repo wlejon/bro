@@ -120,6 +120,15 @@ void clearMenuHandlers();
 /// Terminate and join all active worker threads on shutdown.
 void terminateAllWorkers();
 
+/// The JS heap as bronze accounts for it, for `bro-ctl mem`.
+struct JsMemoryStats {
+    size_t heapUsed = 0;
+    size_t heapCommitted = 0;
+    size_t heapReserved = 0;
+    uint64_t collections = 0;
+};
+JsMemoryStats jsMemoryStats();
+
 /// Run sub-document scripts within its document scope and realm gating.
 void runHostSubDocScripts(engine::Engine& engine, dom::Document* subDoc,
                           const std::vector<engine::ScriptEntry>& scripts,

@@ -497,6 +497,15 @@ void cmdWait(ControlServer& s, const ControlCallPtr& call) {
 void registerEngineControlCommands(ControlServer& s) {
     s.registerCommand("info", " what is running: mode, app, viewport, refresh, frame number, socket",
                       [&s](const ControlCallPtr& c) { cmdInfo(s, c); });
+    s.registerCommand("mem",
+                      "[--detail] [--trim]  what this process costs: private/shared memory by mapping kind, threads, "
+                      "C heap, GPU, JS heap, caches, running subsystems (--trim returns free C heap pages first)",
+                      [&s](const ControlCallPtr& c) {
+                          std::string out;
+                          if (c->flag("trim")) out += s.engine().trimMemory();
+                          out += s.engine().memoryReport(c->flag("detail"));
+                          c->ok(std::move(out));
+                      });
     s.registerCommand("now", " the clock the trace uses (CLOCK_MONOTONIC ms), for --since",
                       [](const ControlCallPtr& c) { c->ok(std::to_string(util::currentTimeMs())); });
     s.registerCommand("mark", "<label>  put a labelled mark in the frame trace",
