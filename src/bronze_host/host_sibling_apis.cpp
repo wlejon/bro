@@ -700,6 +700,7 @@ void installSiblingApis(engine::Engine& engine) {
     }
 #endif
 #if BRO_WITH_WL
+    browl::api::setAutoConnect(engine.displayMode() != engine::DisplayMode::Headless);
     browl::api::installWl();
     {
         static bool wlHooksInstalled = false;

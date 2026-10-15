@@ -49,9 +49,11 @@
  * Main realm only: a Worker has no bro.profiler (profile it from the page
  * with threads: 'workers'). One profile at a time per process.
  *
- * Windows x64 (SuspendThread and the x64 unwind tables) and arm64 macOS (mach
- * thread_suspend and the frame-pointer chain; a frameless leaf's caller is
- * read from its link register); elsewhere start() throws.
+ * Windows x64 (SuspendThread and the x64 unwind tables), Linux x64
+ * (pthread_kill with SIGPROF, .eh_frame DWARF CFI and frame-pointer chain),
+ * and arm64 macOS (mach thread_suspend and the frame-pointer chain; a
+ * frameless leaf's caller is read from its link register); elsewhere start()
+ * throws.
  *
  * @example
  *   bro.profiler.start({ hz: 2000 });

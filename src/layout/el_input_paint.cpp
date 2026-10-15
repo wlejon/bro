@@ -109,19 +109,23 @@ void ElInput::drawText_(float x, float y, float w, float h) {
     // edge clips the caret away and you lose your place. Only a focused field
     // scrolls; an unfocused one always shows its text from the start.
     const float availW = textWidth_(w);
-    if (!focused_ || isPlaceholder) {
+    if (isPlaceholder) {
         scrollX_ = 0.0f;
     } else {
         float fullW = text.empty() ? 0.0f
                                    : renderer_->measureText(text, fontRef).width;
-        // Leave a pixel for the caret itself so it isn't half-clipped at the edge.
-        if (caretOffset - scrollX_ < 0.0f) {
-            scrollX_ = caretOffset;
-        } else if (caretOffset - scrollX_ > availW - 1.0f) {
-            scrollX_ = caretOffset - availW + 1.0f;
+        if (focused_ || pendingCaretScroll_) {
+            // Leave a pixel for the caret itself so it isn't half-clipped at the edge.
+            if (caretOffset - scrollX_ < 0.0f) {
+                scrollX_ = caretOffset;
+            } else if (caretOffset - scrollX_ > availW - 1.0f) {
+                scrollX_ = caretOffset - availW + 1.0f;
+            }
+            pendingCaretScroll_ = false;
         }
         scrollX_ = std::clamp(scrollX_, 0.0f, std::max(0.0f, fullW - availW + 1.0f));
     }
+    if (elem_) elem_->setScrollLeftValue(scrollX_);
     float drawX = x - scrollX_;
 
     renderer_->save();

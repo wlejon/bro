@@ -9,6 +9,7 @@
 import { crunchInModule } from './hot_module.js';
 
 const supported = (process.platform === 'win32' && process.arch === 'x64') ||
+                  (process.platform === 'linux' && process.arch === 'x64') ||
                   (process.platform === 'darwin' && process.arch === 'arm64');
 if (!supported) {
     skipTest('no sampling profiler on this platform');

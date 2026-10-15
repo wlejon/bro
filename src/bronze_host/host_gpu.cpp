@@ -22,14 +22,168 @@
 #include <brotensor/runtime.h>
 #include <brotensor/tensor.h>
 
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdlib>
 #include <cstring>
+#include <map>
+#include <mutex>
 #include <string>
+#include <thread>
+#include <utility>
 #include <vector>
 
 namespace bro::bronze_host {
 
 namespace {
+
+using DeviceKey = std::pair<int, int>;
+
+DeviceKey keyFor(brotensor::Device d) {
+    return {static_cast<int>(d.type), d.index};
+}
+
+struct CachedMemInfo {
+    bool valid = false;
+    bool supported = false;
+    std::size_t freeBytes = 0;
+    std::size_t totalBytes = 0;
+    std::chrono::steady_clock::time_point updatedAt{};
+    bool refreshing = false;
+};
+
+constexpr auto kMemCacheTtl = std::chrono::milliseconds(500);
+
+class GpuProbeCache {
+public:
+    static GpuProbeCache& instance() {
+        static GpuProbeCache inst;
+        return inst;
+    }
+
+    ~GpuProbeCache() {
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            stop_ = true;
+        }
+        cv_.notify_all();
+        if (worker_.joinable()) {
+            worker_.join();
+        }
+    }
+
+    std::string deviceName(brotensor::Device d) {
+        const DeviceKey key = keyFor(d);
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            auto it = names_.find(key);
+            if (it != names_.end()) return it->second;
+        }
+        std::string queried = brotensor::device_product_name(d);
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            auto [it, inserted] = names_.emplace(key, std::move(queried));
+            return it->second;
+        }
+    }
+
+    bool memoryInfo(brotensor::Device d, std::size_t& outFree, std::size_t& outTotal) {
+        const DeviceKey key = keyFor(d);
+        const auto now = std::chrono::steady_clock::now();
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            auto it = mem_.find(key);
+            if (it != mem_.end() && it->second.valid) {
+                outFree = it->second.freeBytes;
+                outTotal = it->second.totalBytes;
+                const bool supported = it->second.supported;
+                if (now - it->second.updatedAt >= kMemCacheTtl && !it->second.refreshing) {
+                    it->second.refreshing = true;
+                    queueRefreshLocked(d);
+                }
+                return supported;
+            }
+        }
+
+        // First probe for this device: seed synchronously once so callers
+        // receive an immediate reading, then subsequent calls return from
+        // cache in <0.01 ms with background refreshes when stale.
+        std::size_t freeB = 0, totalB = 0;
+        const bool ok = brotensor::device_mem_info(d, freeB, totalB);
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            auto& entry = mem_[key];
+            entry.valid = true;
+            entry.supported = ok;
+            entry.freeBytes = freeB;
+            entry.totalBytes = totalB;
+            entry.updatedAt = std::chrono::steady_clock::now();
+        }
+        outFree = freeB;
+        outTotal = totalB;
+        return ok;
+    }
+
+    void requestRefresh(brotensor::Device d) {
+        std::lock_guard<std::mutex> lock(mu_);
+        auto& entry = mem_[keyFor(d)];
+        if (entry.valid && !entry.refreshing) {
+            entry.refreshing = true;
+            queueRefreshLocked(d);
+        }
+    }
+
+private:
+    GpuProbeCache() = default;
+
+    void queueRefreshLocked(brotensor::Device d) {
+        if (stop_) return;
+        if (!workerStarted_) {
+            workerStarted_ = true;
+            worker_ = std::thread([this]() { workerLoop(); });
+        }
+        pending_.push_back(d);
+        cv_.notify_one();
+    }
+
+    void workerLoop() {
+        for (;;) {
+            brotensor::Device d = brotensor::Device::cpu();
+            {
+                std::unique_lock<std::mutex> lock(mu_);
+                cv_.wait(lock, [this]() { return stop_ || !pending_.empty(); });
+                if (stop_) return;
+                d = pending_.back();
+                pending_.pop_back();
+            }
+            std::size_t freeB = 0, totalB = 0;
+            const bool ok = brotensor::device_mem_info(d, freeB, totalB);
+            const auto now = std::chrono::steady_clock::now();
+            {
+                std::lock_guard<std::mutex> lock(mu_);
+                auto& entry = mem_[keyFor(d)];
+                entry.valid = true;
+                entry.supported = ok;
+                if (ok) {
+                    entry.freeBytes = freeB;
+                    entry.totalBytes = totalB;
+                }
+                entry.updatedAt = now;
+                entry.refreshing = false;
+            }
+        }
+    }
+
+    std::mutex mu_;
+    std::condition_variable cv_;
+    std::map<DeviceKey, std::string> names_;
+    std::map<DeviceKey, CachedMemInfo> mem_;
+    std::vector<brotensor::Device> pending_;
+    std::thread worker_;
+    bool workerStarted_ = false;
+    bool stop_ = false;
+};
 
 const char* backendName(brotensor::Device d) {
     switch (d.type) {
@@ -136,7 +290,7 @@ Value makeBroGpuValue() {
         const brotensor::Device d = deviceArg(a, 0);
         if (!deviceExists(d)) return ev::null();
         std::size_t freeBytes = 0, totalBytes = 0;
-        if (!brotensor::device_mem_info(d, freeBytes, totalBytes)) return ev::null();
+        if (!GpuProbeCache::instance().memoryInfo(d, freeBytes, totalBytes)) return ev::null();
         ObjectBuilder o;
         o.set("freeBytes", ev::fromDouble(static_cast<double>(freeBytes)));
         o.set("totalBytes", ev::fromDouble(static_cast<double>(totalBytes)));
@@ -147,7 +301,7 @@ Value makeBroGpuValue() {
         brotensor::init();
         const brotensor::Device d = deviceArg(a, 0);
         if (!deviceExists(d)) return ev::null();
-        const std::string name = brotensor::device_product_name(d);
+        const std::string name = GpuProbeCache::instance().deviceName(d);
         if (name.empty()) return ev::null();
         return ev::fromUtf8(name);
     });
@@ -161,7 +315,9 @@ Value makeBroGpuValue() {
             const double v = ev::toDouble(a[1]);
             if (v > 0) keepBytes = static_cast<std::size_t>(v);
         }
-        return ev::fromBool(brotensor::device_mem_trim(d, keepBytes));
+        const bool ok = brotensor::device_mem_trim(d, keepBytes);
+        if (ok) GpuProbeCache::instance().requestRefresh(d);
+        return ev::fromBool(ok);
     });
 
     return gpu.get();

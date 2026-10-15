@@ -111,6 +111,15 @@ const KNOWN = ['cuda', 'metal', 'vulkan', 'cpu'];
     try { bro.gpu.memoryInfo(42); } catch (e) { threw = true; }
     assert(!threw, 'memoryInfo(non-string) does not throw');
 
+    // Cached reads must be non-blocking (< 1 ms per call).
+    const t0 = performance.now();
+    for (let i = 0; i < 10; i++) {
+        bro.gpu.deviceName();
+        bro.gpu.memoryInfo();
+    }
+    const avgMs = (performance.now() - t0) / 10;
+    assert(avgMs < 1.0, 'cached deviceName()/memoryInfo() < 1 ms per call, got ' + avgMs.toFixed(3) + ' ms');
+
     console.log('bro.gpu probe contract OK (backend=' + bro.gpu.backend +
                 ', devices=' + JSON.stringify(devices) + ')');
 }

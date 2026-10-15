@@ -85,18 +85,22 @@ void Engine::handleProgrammaticFocus(dom::Document* doc, dom::Element* oldEl,
     if (newInput) {
         newInput->setFocused(true);
         if (newInput->isTextType(newEl)) {
-            std::string v = newEl->getAttribute("value");
-            newInput->setCursorPos(static_cast<int>(v.size()));
+            if (newInput->selectionStart() == 0 && newInput->selectionEnd() == 0) {
+                std::string v = newEl->getAttribute("value");
+                newInput->setCursorPos(static_cast<int>(v.size()));
+            }
             safeStartTextInput(window_.get());
         } else {
             safeStopTextInput(window_.get());
         }
     } else if (newTa) {
         newTa->setFocused(true);
-        std::string v = newEl->hasAttribute("value")
-                            ? newEl->getAttribute("value")
-                            : newEl->textContent();
-        newTa->setCursorPos(static_cast<int>(v.size()));
+        if (newTa->selectionStart() == 0 && newTa->selectionEnd() == 0) {
+            std::string v = newEl->hasAttribute("value")
+                                ? newEl->getAttribute("value")
+                                : newEl->textContent();
+            newTa->setCursorPos(static_cast<int>(v.size()));
+        }
         safeStartTextInput(window_.get());
     } else if (newEl && (inEditableHost(newEl) || newEl->terminalControl())) {
         safeStartTextInput(window_.get());

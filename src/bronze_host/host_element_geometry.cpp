@@ -25,6 +25,8 @@
 #include "dom/shadow_root.h"
 #include "dom/text_node.h"
 #include "engine/engine.h"
+#include "layout/el_input.h"
+#include "layout/el_textarea.h"
 #include "layout/selection_geometry.h"
 
 #include <algorithm>
@@ -393,7 +395,11 @@ void decorateElementGeometry(ObjectBuilder& b) {
                    // naturalWidth is how far the content reaches right — the
                    // horizontal scrollable overflow, including absolutely
                    // positioned descendants whose containing block is inside.
-                   double scrollW = box.naturalWidth + box.padding.left + box.padding.right;
+                   double contentW = box.naturalWidth;
+                   if (auto* inp = st->el->inputControl()) {
+                       contentW = std::max<double>(contentW, inp->contentScrollWidth());
+                   }
+                   double scrollW = contentW + box.padding.left + box.padding.right;
                    double w = std::max(scrollW, clientW);
                    if (w > 0) return fromCssPixels(w);
                    return fromCssPixels(borderBoxOf(st->el).width);
@@ -409,7 +415,11 @@ void decorateElementGeometry(ObjectBuilder& b) {
                    // naturalHeight is the content height BEFORE min/max-height
                    // clamping — the number a scroll container has to know to
                    // scroll to the end of its content.
-                   double scrollH = box.naturalHeight + box.padding.top + box.padding.bottom;
+                   double contentH = box.naturalHeight;
+                   if (auto* ta = st->el->textareaControl()) {
+                       contentH = std::max<double>(contentH, ta->contentScrollHeight());
+                   }
+                   double scrollH = contentH + box.padding.top + box.padding.bottom;
                    double h = std::max(scrollH, clientH);
                    if (h > 0) return fromCssPixels(h);
                    return fromCssPixels(borderBoxOf(st->el).height);
@@ -422,16 +432,23 @@ void decorateElementGeometry(ObjectBuilder& b) {
                    if (!st) return ev::undefined();
                    if (scrollsViewport(st->el))
                        return ev::fromDouble(hostEngine()->viewportScrollY());
-                   return ev::fromDouble(st->el ? st->el->scrollTopValue() : 0.0);
+                   if (st->el) {
+                       if (auto* ta = st->el->textareaControl())
+                           return ev::fromDouble(ta->scrollY());
+                       return ev::fromDouble(st->el->scrollTopValue());
+                   }
+                   return ev::fromDouble(0.0);
                },
                [](Value self_, std::span<const Value> a) {
                    HostNodeState* st = hostNodeStateOfValue(self_);
                    if (!st || !st->el) return ev::undefined();
                    const double v = ev::toDouble(argAt(a, 0));
-                   if (scrollsViewport(st->el))
+                   if (scrollsViewport(st->el)) {
                        hostEngine()->scrollViewportTo(static_cast<float>(v));
-                   else
+                   } else {
+                       if (st->el->textareaControl()) laidOutBox(st->el);
                        dom::setElementScrollTop(st->el, v);
+                   }
                    return ev::undefined();
                });
     // The viewport does not scroll horizontally, so <html> as the viewport's
@@ -440,7 +457,12 @@ void decorateElementGeometry(ObjectBuilder& b) {
                [](Value self_, std::span<const Value>) {
                    HostNodeState* st = hostNodeStateOfValue(self_);
                    if (!st) return ev::undefined();
-                   return ev::fromDouble(st->el ? st->el->scrollLeftValue() : 0.0);
+                   if (st->el) {
+                       if (auto* inp = st->el->inputControl())
+                           return ev::fromDouble(inp->scrollX());
+                       return ev::fromDouble(st->el->scrollLeftValue());
+                   }
+                   return ev::fromDouble(0.0);
                },
                [](Value self_, std::span<const Value> a) {
                    HostNodeState* st = hostNodeStateOfValue(self_);

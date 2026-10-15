@@ -25,7 +25,7 @@ assert(bro.profiler.running === false, 'a refused start leaves nothing running')
 // A function hot enough to own most of the window's self time.
 function hotLoopForProfiler(n) {
     let acc = 0;
-    for (let i = 0; i < n; i++) acc = (acc + Math.sqrt(i * 3 + 1)) % 1000003;
+    for (let i = 0; i < n; i++) acc = (acc + (Math.sqrt(i * 3 + 1) | 0)) & 0xfffff;
     return acc;
 }
 
@@ -38,14 +38,15 @@ function burn(ms) {
 
 // ---- main thread -----------------------------------------------------------
 const supported = (process.platform === 'win32' && process.arch === 'x64') ||
+                  (process.platform === 'linux' && process.arch === 'x64') ||
                   (process.platform === 'darwin' && process.arch === 'arm64');
 if (!supported) {
     let unsupported = false;
     try { bro.profiler.start({ hz: 2000 }); } catch (e) {
-        unsupported = /supported on Windows x64 and arm64 macOS only/.test(String(e.message));
+        unsupported = /supported on Windows x64, Linux x64, and arm64 macOS only/.test(String(e.message));
     }
     assert(unsupported, 'start() where there is no sampler reports unsupported');
-    console.log('bro.profiler: supported on Windows x64 and arm64 macOS only; behaviour elsewhere verified');
+    console.log('bro.profiler: supported on Windows x64, Linux x64, and arm64 macOS only; behaviour elsewhere verified');
 } else {
 bro.profiler.start({ hz: 2000 });
 assert(bro.profiler.running === true, 'running after start');

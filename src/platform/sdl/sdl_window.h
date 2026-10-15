@@ -34,6 +34,7 @@ public:
     void getSizeInPixels(int& w, int& h) const override;
     float getPixelDensity() const override;
     float getDisplayScale() const override;
+    void refreshDisplayScale();
     void setWindowSize(uint32_t width, uint32_t height) override;
     void setPosition(int x, int y) override;
     void getPosition(int& x, int& y) const override;
@@ -91,6 +92,7 @@ private:
     uint32_t m_width = 0;
     uint32_t m_height = 0;
     float m_opacity = 1.0f;
+    float m_displayScale = 1.0f;
     bool m_fullscreen = false;
     bool m_flashing = false;
     bool m_vsyncPref = true;
@@ -104,5 +106,6 @@ private:
 
 /// The SDL window behind a platform Window, or null when it is not one.
 SDL_Window* sdlWindowOf(const Window* window);
+void sdlRefreshWindowDisplayScale(uint32_t windowId);
 
 } // namespace bro::platform

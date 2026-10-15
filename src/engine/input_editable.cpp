@@ -345,7 +345,61 @@ void selectionInsertText(dom::Document* doc, const std::string& text) {
     rebalanceAfterEdit(doc, tn, caret);
 }
 
+namespace {
+
+struct ActiveTextControl {
+    dom::Element* el = nullptr;
+    layout::ElInput* input = nullptr;
+    layout::ElTextarea* textarea = nullptr;
+    bool editable = false;
+    explicit operator bool() const { return input || textarea; }
+};
+
+ActiveTextControl activeTextControlOf(dom::Document* doc) {
+    ActiveTextControl out;
+    if (!doc) return out;
+    dom::Element* active = doc->activeElement();
+    if (!active) return out;
+    if (auto* in = getElInput(active); in && in->isFocused() && in->isTextType(active)) {
+        out.el = active;
+        out.input = in;
+    } else if (auto* ta = getElTextarea(active); ta && ta->isFocused()) {
+        out.el = active;
+        out.textarea = ta;
+    } else {
+        return out;
+    }
+    const bool disabled = active->hasAttribute("disabled") && active->getAttribute("disabled") != "false";
+    const bool readonly = active->hasAttribute("readonly") && active->getAttribute("readonly") != "false";
+    out.editable = !disabled && !readonly;
+    return out;
+}
+
+bool dispatchBeforeInput(dom::Element* el, const std::string& inputType,
+                         const std::string& data) {
+    if (!el) return false;
+    dom::InputEvent beforeEvt("beforeinput", /*bubbles=*/true, /*cancelable=*/true);
+    beforeEvt.setInputType(inputType);
+    beforeEvt.setData(data);
+    beforeEvt.setIsTrusted(true);
+    dom::dispatchDomEvent(el, beforeEvt);
+    return !beforeEvt.defaultPrevented();
+}
+
+} // namespace
+
 bool Engine::editDeleteAtCaret(bool backward) {
+    if (const auto tc = activeTextControlOf(document_.get())) {
+        if (!tc.editable) return false;
+        const std::string inputType =
+            backward ? "deleteContentBackward" : "deleteContentForward";
+        if (!dispatchBeforeInput(tc.el, inputType, "")) return true;
+        const int keycode = backward ? platform::kc::Backspace : platform::kc::Delete;
+        auto r = tc.input ? tc.input->handleKeyDown(tc.el, keycode, 0)
+                          : tc.textarea->handleKeyDown(tc.el, keycode, 0);
+        if (r.handled) applyKeyResult(tc.el, r);
+        return r.handled;
+    }
     const EditCaret c = editCaretOf(document_.get());
     if (!c) return false;
     const std::string inputType =
@@ -405,6 +459,13 @@ bool Engine::editDeleteAtCaret(bool backward) {
 }
 
 bool Engine::editInsertLineBreak() {
+    if (const auto tc = activeTextControlOf(document_.get())) {
+        if (!tc.editable || !tc.textarea) return false;
+        if (!dispatchBeforeInput(tc.el, "insertLineBreak", "\n")) return true;
+        auto r = tc.textarea->handleKeyDown(tc.el, platform::kc::Return, 0);
+        if (r.handled) applyKeyResult(tc.el, r);
+        return r.handled;
+    }
     const EditCaret c = editCaretOf(document_.get());
     if (!c) return false;
     runEditableMutation(document_.get(), c.node,
@@ -439,6 +500,14 @@ bool Engine::editInsertLineBreak() {
 }
 
 bool Engine::editInsertTextAtSelection(const std::string& text) {
+    if (const auto tc = activeTextControlOf(document_.get())) {
+        if (!tc.editable) return false;
+        if (!dispatchBeforeInput(tc.el, "insertText", text)) return true;
+        auto r = tc.input ? tc.input->handleTextInput(tc.el, text)
+                          : tc.textarea->handleTextInput(tc.el, text);
+        if (r.handled) applyKeyResult(tc.el, r);
+        return r.handled;
+    }
     const EditCaret c = editCaretOf(document_.get());
     if (!c) return false;
     runEditableMutation(document_.get(), c.node,
@@ -505,6 +574,13 @@ bool Engine::editHistoryStep(bool redo) {
 
 bool Engine::editSelectAll() {
     if (!document_) return false;
+    if (const auto tc = activeTextControlOf(document_.get())) {
+        if (tc.input) tc.input->selectAll();
+        else tc.textarea->selectAll();
+        markAppBaseDirty();
+        uiDirty_ = true;
+        return true;
+    }
     auto* sel = document_->selection();
     if (!sel) return false;
     dom::Node* host = (sel->rangeCount() > 0) ? sel->focusNode() : nullptr;
@@ -533,6 +609,16 @@ bool Engine::queryCommandSupported(const std::string& name) const {
 bool Engine::queryCommandEnabled(const std::string& name) {
     if (!queryCommandSupported(name)) return false;
     const std::string cmd = normalizeCommand(name);
+    if (const auto tc = activeTextControlOf(document_.get())) {
+        if (cmd == "selectall") return true;
+        if (cmd == "copy") return tc.input ? tc.input->hasSelection() : tc.textarea->hasSelection();
+        if (!tc.editable) return false;
+        if (cmd == "cut") return tc.input ? tc.input->hasSelection() : tc.textarea->hasSelection();
+        if (cmd == "undo") return tc.input ? tc.input->canUndo() : tc.textarea->canUndo();
+        if (cmd == "redo") return tc.input ? tc.input->canRedo() : tc.textarea->canRedo();
+        if (cmd == "insertlinebreak" || cmd == "insertparagraph") return tc.textarea != nullptr;
+        return true;
+    }
     if (cmd == "selectall") return document_ && document_->body() != nullptr;
     const EditCaret c = editCaretOf(document_.get());
     if (!c) return false;
@@ -559,7 +645,15 @@ bool Engine::execCommand(const std::string& name, bool /*showUI*/,
     const std::string cmd = normalizeCommand(name);
 
     if (cmd == "inserttext") {
-        if (value.empty()) return editCaretOf(document_.get()) ? true : false;
+        if (value.empty()) {
+            if (const auto tc = activeTextControlOf(document_.get())) {
+                if (!tc.editable) return false;
+                if (tc.input ? tc.input->hasSelection() : tc.textarea->hasSelection())
+                    return editDeleteAtCaret(/*backward=*/true);
+                return true;
+            }
+            return editCaretOf(document_.get()) ? true : false;
+        }
         return editInsertTextAtSelection(value);
     }
     if (cmd == "insertlinebreak" || cmd == "insertparagraph")
@@ -585,6 +679,11 @@ bool Engine::execCommand(const std::string& name, bool /*showUI*/,
     if (cmd == "paste") {
         const std::string text = platform::getClipboardText();
         if (text.empty()) return false;
+        if (const auto tc = activeTextControlOf(document_.get())) {
+            if (!tc.editable) return false;
+            simulatePaste(text);
+            return true;
+        }
         if (!editCaretOf(document_.get())) return false;
         simulatePaste(text);
         return true;

@@ -399,6 +399,79 @@ clipboardRoundTrip('cut did not reach the clipboard', () => {
     assert(ed.textContent === 'ab', 'one-arg delete applied: ' + ed.textContent);
 }
 
+// ---------------------------------------------------------------------------
+// <textarea> and <input>: execCommand + setSelectionRange caret auto-scroll
+// ---------------------------------------------------------------------------
+{
+    root.innerHTML =
+        '<textarea id="ta" style="width:200px;height:60px;font-size:16px;line-height:20px">hello</textarea>' +
+        '<input id="inp" type="text" style="width:120px;height:28px;font-size:16px" value="world">';
+    flush();
+    const ta = document.getElementById('ta');
+    const inp = document.getElementById('inp');
+
+    // Focus textarea with selection at [2, 4] ("ll"), replace via execCommand('insertText')
+    ta.setSelectionRange(2, 4);
+    ta.focus();
+    flush();
+    assert(ta.selectionStart === 2 && ta.selectionEnd === 4,
+           'textarea selection preserved on focus: ' + ta.selectionStart + '..' + ta.selectionEnd);
+    assert(document.queryCommandEnabled('insertText'), 'insertText enabled on focused textarea');
+    assert(document.execCommand('insertText', false, 'LL'), 'execCommand insertText on textarea');
+    assert(ta.value === 'heLLo', 'textarea value after insertText: ' + ta.value);
+    assert(ta.selectionStart === 4 && ta.selectionEnd === 4,
+           'textarea caret after insertText: ' + ta.selectionStart);
+
+    // Undo / redo on textarea
+    assert(document.queryCommandEnabled('undo'), 'undo enabled on textarea');
+    assert(document.execCommand('undo'), 'execCommand undo on textarea');
+    assert(ta.value === 'hello', 'textarea undo restored value: ' + ta.value);
+    assert(document.queryCommandEnabled('redo'), 'redo enabled on textarea');
+    assert(document.execCommand('redo'), 'execCommand redo on textarea');
+    assert(ta.value === 'heLLo', 'textarea redo reapplied value: ' + ta.value);
+
+    // insertLineBreak, delete, forwardDelete, selectAll on textarea
+    ta.setSelectionRange(5, 5);
+    assert(document.execCommand('insertLineBreak'), 'insertLineBreak on textarea');
+    assert(ta.value === 'heLLo\n', 'textarea newline inserted: ' + JSON.stringify(ta.value));
+    assert(document.execCommand('delete'), 'delete on textarea');
+    assert(ta.value === 'heLLo', 'textarea delete removed newline: ' + JSON.stringify(ta.value));
+    ta.setSelectionRange(0, 0);
+    assert(document.execCommand('forwardDelete'), 'forwardDelete on textarea');
+    assert(ta.value === 'eLLo', 'textarea forwardDelete removed first char: ' + ta.value);
+    assert(document.execCommand('selectAll'), 'selectAll on textarea');
+    assert(ta.selectionStart === 0 && ta.selectionEnd === 4, 'textarea selectAll range');
+
+    // <input> execCommand('insertText'), undo/redo, delete
+    inp.setSelectionRange(5, 5);
+    inp.focus();
+    flush();
+    assert(document.execCommand('insertText', false, '!'), 'insertText on input');
+    assert(inp.value === 'world!', 'input value after insertText: ' + inp.value);
+    assert(document.execCommand('undo'), 'undo on input');
+    assert(inp.value === 'world', 'input value after undo: ' + inp.value);
+    assert(document.execCommand('redo'), 'redo on input');
+    assert(inp.value === 'world!', 'input value after redo: ' + inp.value);
+    assert(!document.execCommand('insertLineBreak'), 'insertLineBreak rejected on single-line input');
+
+    // setSelectionRange auto-scrolls <textarea> vertically so the caret is in view
+    const lines = [];
+    for (let i = 1; i <= 30; i++) lines.push('Line ' + i + ' content');
+    ta.value = lines.join('\n');
+    flush();
+    assert(ta.scrollTop === 0, 'textarea starts at scrollTop 0');
+    assert(ta.scrollHeight > ta.clientHeight,
+           'textarea has scrollable overflow: ' + ta.scrollHeight + ' > ' + ta.clientHeight);
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+    flush();
+    assert(ta.scrollTop > 0,
+           'setSelectionRange to end scrolled textarea into view: scrollTop=' + ta.scrollTop);
+    ta.setSelectionRange(0, 0);
+    flush();
+    assert(ta.scrollTop === 0,
+           'setSelectionRange to start scrolled textarea back to top: scrollTop=' + ta.scrollTop);
+}
+
 navigator.clipboard.__write(clipboardBefore);
 
 console.log('PASS test_exec_command.js');

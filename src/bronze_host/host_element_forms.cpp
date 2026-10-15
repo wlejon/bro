@@ -2,6 +2,7 @@
 
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/host_builder.h"
+#include "bronze_host/host_runtime.h"
 #include "bronze_host/host_values.h"
 #include "bronze_host/host_node.h"
 #include "bronze_host/host_element.h"
@@ -14,6 +15,7 @@
 #include "dom/event_dispatch.h"
 #include "engine/element_activation.h"
 #include "engine/engine.h"
+#include "engine/replaced_elements.h"
 #include "layout/el_input.h"
 #include "layout/el_textarea.h"
 #include "layout/form_control.h"
@@ -345,17 +347,31 @@ void decorateElementForms(ObjectBuilder& b) {
                });
 
     // ---- Selection & Validity ---------------------------------------------
-    b.def("select", 0, [](Value self_, std::span<const Value>) {
+    auto ensureTextControl = [](dom::Element* el, bool flushLayout) {
+        if (!el) return;
+        if (auto* eng = hostEngine()) {
+            if (flushLayout && el->document()) {
+                eng->flushLayoutForRead(el->document());
+            }
+            if (!el->inputControl() && !el->textareaControl()) {
+                engine::ensureReplacedElements(el, eng->renderer());
+            }
+        }
+    };
+
+    b.def("select", 0, [ensureTextControl](Value self_, std::span<const Value>) {
         HostNodeState* st = hostNodeStateOfValue(self_);
         if (!st || !st->el) return ev::undefined();
+        ensureTextControl(st->el, false);
         if (auto* inp = st->el->inputControl()) inp->selectAll();
         else if (auto* ta = st->el->textareaControl()) ta->selectAll();
         return ev::undefined();
     });
 
-    b.def("setSelectionRange", 2, [](Value self_, std::span<const Value> a) {
+    b.def("setSelectionRange", 2, [ensureTextControl](Value self_, std::span<const Value> a) {
         HostNodeState* st = hostNodeStateOfValue(self_);
         if (!st || !st->el || a.size() < 2) return ev::undefined();
+        ensureTextControl(st->el, true);
         int start = satCast<int>(ev::toDouble(a[0]));
         int end = satCast<int>(ev::toDouble(a[1]));
         const std::string val = selectionValueOf(st->el);
@@ -373,10 +389,11 @@ void decorateElementForms(ObjectBuilder& b) {
     // `value =` (no input event), except that the control keeps its undo
     // history and records the splice as one step of it: an editor's
     // formatting commands undo with Ctrl+Z like the typing around them.
-    b.def("setRangeText", 4, [](Value self_, std::span<const Value> a) {
+    b.def("setRangeText", 4, [ensureTextControl](Value self_, std::span<const Value> a) {
         HostNodeState* st = hostNodeStateOfValue(self_);
         if (!st || !st->el) return ev::undefined();
         dom::Element* el = st->el;
+        ensureTextControl(el, true);
         auto* inp = el->inputControl();
         auto* ta = el->textareaControl();
         if (!inp && !ta) {
@@ -431,9 +448,10 @@ void decorateElementForms(ObjectBuilder& b) {
     });
 
     b.accessor("selectionStart",
-               [](Value self_, std::span<const Value>) {
+               [ensureTextControl](Value self_, std::span<const Value>) {
                    HostNodeState* st = hostNodeStateOfValue(self_);
                    if (!st || !st->el) return ev::null();
+                   ensureTextControl(st->el, false);
                    const std::string val = selectionValueOf(st->el);
                    if (auto* inp = st->el->inputControl())
                        return ev::fromDouble(dom::utf8ByteToUtf16(val, inp->selectionStart()));
@@ -441,9 +459,10 @@ void decorateElementForms(ObjectBuilder& b) {
                        return ev::fromDouble(dom::utf8ByteToUtf16(val, ta->selectionStart()));
                    return ev::null();
                },
-               [](Value self_, std::span<const Value> a) {
+               [ensureTextControl](Value self_, std::span<const Value> a) {
                    HostNodeState* st = hostNodeStateOfValue(self_);
                    if (!st || !st->el || a.empty()) return ev::undefined();
+                   ensureTextControl(st->el, true);
                    int start = satCast<int>(ev::toDouble(a[0]));
                    const std::string val = selectionValueOf(st->el);
                    const int b = dom::utf16ToUtf8Byte(val, start);
@@ -455,9 +474,10 @@ void decorateElementForms(ObjectBuilder& b) {
                });
 
     b.accessor("selectionEnd",
-               [](Value self_, std::span<const Value>) {
+               [ensureTextControl](Value self_, std::span<const Value>) {
                    HostNodeState* st = hostNodeStateOfValue(self_);
                    if (!st || !st->el) return ev::null();
+                   ensureTextControl(st->el, false);
                    const std::string val = selectionValueOf(st->el);
                    if (auto* inp = st->el->inputControl())
                        return ev::fromDouble(dom::utf8ByteToUtf16(val, inp->selectionEnd()));
@@ -465,9 +485,10 @@ void decorateElementForms(ObjectBuilder& b) {
                        return ev::fromDouble(dom::utf8ByteToUtf16(val, ta->selectionEnd()));
                    return ev::null();
                },
-               [](Value self_, std::span<const Value> a) {
+               [ensureTextControl](Value self_, std::span<const Value> a) {
                    HostNodeState* st = hostNodeStateOfValue(self_);
                    if (!st || !st->el || a.empty()) return ev::undefined();
+                   ensureTextControl(st->el, true);
                    int end = satCast<int>(ev::toDouble(a[0]));
                    const std::string val = selectionValueOf(st->el);
                    const int b = dom::utf16ToUtf8Byte(val, end);

@@ -1,35 +1,32 @@
-// Headless test for bro.wl
+// Headless test for bro.wl:
+// In headless mode, bro.wl must not auto-connect to the host Wayland display
+// unless a nested test compositor explicitly attaches a display.
 assert(typeof bro.wl === 'object', 'bro.wl namespace exists');
-if (!bro.wl.available) {
-    skipTest('bro.wl is unavailable in this environment');
-} else {
-    // 1. Outputs & Seats queries
-    const outputs = bro.wl.getOutputs();
-    assert(Array.isArray(outputs), 'getOutputs returns array');
+assert(typeof bro.wl.available === 'boolean', 'bro.wl.available is boolean');
 
-    const seats = bro.wl.getSeats();
-    assert(Array.isArray(seats), 'getSeats returns array');
+// 1. Outputs & Seats queries return empty arrays without host connection
+const outputs = bro.wl.getOutputs();
+assert(Array.isArray(outputs) && outputs.length === 0, 'getOutputs() returns empty array in headless');
 
-    // 2. Protocol capability checks
-    assert(typeof bro.wl.hasCompositor === 'function', 'hasCompositor is function');
-    assert(typeof bro.wl.hasLayerShell === 'function', 'hasLayerShell is function');
-    assert(typeof bro.wl.hasForeignToplevelManager === 'function', 'hasForeignToplevelManager is function');
-    assert(typeof bro.wl.hasSessionLock === 'function', 'hasSessionLock is function');
-    assert(typeof bro.wl.hasIdleInhibit === 'function', 'hasIdleInhibit is function');
-    assert(typeof bro.wl.hasScreencopy === 'function', 'hasScreencopy is function');
+const seats = bro.wl.getSeats();
+assert(Array.isArray(seats) && seats.length === 0, 'getSeats() returns empty array in headless');
 
-    // 3. Toplevels query
-    const toplevels = bro.wl.getToplevels();
-    assert(Array.isArray(toplevels), 'getToplevels returns array');
+// 2. Protocol capability checks return false without host connection
+assert(typeof bro.wl.hasCompositor === 'function' && bro.wl.hasCompositor() === false, 'hasCompositor is false in headless');
+assert(typeof bro.wl.hasLayerShell === 'function' && bro.wl.hasLayerShell() === false, 'hasLayerShell is false in headless');
+assert(typeof bro.wl.hasForeignToplevelManager === 'function' && bro.wl.hasForeignToplevelManager() === false, 'hasForeignToplevelManager is false in headless');
+assert(typeof bro.wl.hasSessionLock === 'function' && bro.wl.hasSessionLock() === false, 'hasSessionLock is false in headless');
+assert(typeof bro.wl.hasIdleInhibit === 'function' && bro.wl.hasIdleInhibit() === false, 'hasIdleInhibit is false in headless');
+assert(typeof bro.wl.hasScreencopy === 'function' && bro.wl.hasScreencopy() === false, 'hasScreencopy is false in headless');
 
-    // 4. Events subscription
-    let receivedToplevel = false;
-    const handle = bro.wl.on('toplevelAdded', (ev) => {
-        receivedToplevel = true;
-    });
-    assert(typeof handle === 'object' && handle !== null, 'on returns handle');
-    assert(typeof handle.remove === 'function', 'handle has remove method');
-    handle.remove();
+// 3. Toplevels query returns empty array
+const toplevels = bro.wl.getToplevels();
+assert(Array.isArray(toplevels) && toplevels.length === 0, 'getToplevels() returns empty array in headless');
 
-    console.log('test_wl.js PASSED');
-}
+// 4. Events subscription works cleanly without connecting
+const handle = bro.wl.on('toplevelAdded', () => {});
+assert(typeof handle === 'object' && handle !== null, 'on returns handle');
+assert(typeof handle.remove === 'function', 'handle has remove method');
+handle.remove();
+
+console.log('test_wl.js PASSED');

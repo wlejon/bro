@@ -100,10 +100,16 @@ const currentItems = model.entries();
 // ============================================================================
 // 5. Filesystem Watching (`bro.vfs.watch`)
 // ============================================================================
+//
+// Each event in `events` has shape:
+//   { kind, watch, path, oldPath?, error? }
+// where `kind` is 'created' | 'modified' | 'deleted' | 'renamed' | 'attributes' | 'overflow',
+// `watch` is the numeric watch descriptor ID, `path` is the UTF-8 path, and
+// `oldPath` is present when `kind === 'renamed'`.
 
 const watcher = bro.vfs.watch('/home/j/projects/bro', (events) => {
     for (const ev of events) {
-        console.log(`Watch event: ${ev.type} on ${ev.path}`);
+        console.log(`Watch event: ${ev.kind} on ${ev.path}${ev.oldPath ? ` (from ${ev.oldPath})` : ''}`);
     }
 }, { recursive: true });
 

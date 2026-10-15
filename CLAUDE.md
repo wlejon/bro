@@ -179,6 +179,7 @@ Annotated `.js` files with JSDoc + examples. Read the file before using or chang
 | `portal-api.js` | `bro.portal`: XDG Desktop Portal backends for file chooser, screenshot, screencast, and open URI |
 | `compositor-api.js` | `bro.compositor`: window-management policy, workspace switching, tiling/floating layout modes, and event hooks |
 | `wl-api.js` | `bro.wl`: Wayland client protocols: wlr-layer-shell panels/docks, foreign-toplevel, session lock, and screencopy |
+| `mpris-api.js` | `bro.mpris`: FreeDesktop MPRIS2 media controller (player discovery, metadata, transport controls, live events) and player service publisher (`createService`/`publish`) |
 | `a11y-api.js` | `bro.a11y`: accessibility tree inspection, node query/mutation, live-region announcements, and custom widget roles |
 | `remote-api.js` | `bro.remote`: host this screen for a remote viewer (local or over ssh): `host({socket, codecs, bitrateKbps, fps})` / `stop` / `status` (incl. audio status: PipeWire restarts are reconnected) / attach + detach events; frames from the presenter (KMS dmabuf under DRM), viewer input routed as local input; the viewer side: `connect({ssh, socket, audio})` sessions (status/stats/probes/sendInput) shown by `<remoteview>` (own layer, D3D11→Vulkan zero-copy on Windows, raw key capture + release chord, pointer/relative motion) |
 

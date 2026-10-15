@@ -1,5 +1,6 @@
 #include "platform/sdl/sdl_backend.h"
 #include "platform/sdl/sdl_drag.h"
+#include "platform/sdl/sdl_window.h"
 
 #include "platform/event_loop.h"
 #include "platform/gamepads.h"
@@ -443,8 +444,10 @@ void SdlEventLoop::dispatch(const SDL_Event& event) {
                 if (onSystemThemeChanged) onSystemThemeChanged();
                 break;
 
+            case SDL_EVENT_WINDOW_DISPLAY_CHANGED:
             case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
             case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+                sdlRefreshWindowDisplayScale(event.window.windowID);
                 if (onDisplayScaleChanged) onDisplayScaleChanged(event.window.windowID);
                 break;
 

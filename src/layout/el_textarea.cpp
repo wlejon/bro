@@ -222,6 +222,7 @@ KeyHandleResult ElTextarea::handleKeyDown(dom::Element* el, int keycode, int mod
             el->setAttribute("value", v);
             sel_.set(s.anchor, s.caret);
             sel_.clampTo(static_cast<int>(v.size()));
+            ensureCaretVisible();
             r.dispatchInput = true;
             r.inputType = isRedo ? "historyRedo" : "historyUndo";
         }
@@ -363,6 +364,9 @@ KeyHandleResult ElTextarea::handleKeyDown(dom::Element* el, int keycode, int mod
     } else if (r.handled) {
         undo_.breakCoalescing();
     }
+    if (r.handled && !(platform::hasPrimaryMod(mod) && keycode == platform::kc::A)) {
+        ensureCaretVisible();
+    }
 
     return r;
 }
@@ -394,6 +398,7 @@ KeyHandleResult ElTextarea::insertText_(dom::Element* el, const std::string& tex
     val.insert(pos, text);
     setCursorPos(pos + static_cast<int>(text.size()));
     el->setAttribute("value", val);
+    ensureCaretVisible();
 
     // A plain character insertion coalesces with the run before it; a paste
     // or a type-over-selection replace is a discrete history step.
@@ -442,6 +447,7 @@ KeyHandleResult ElTextarea::compositionUpdate(dom::Element* el,
     comp_.preedit = text;
     sel_.collapseTo(comp_.start + utf8ByteForCodepoint(text, cursorCp));
     el->setAttribute("value", val);
+    ensureCaretVisible();
 
     r.handled = true;
     r.dispatchInput = true;
@@ -465,6 +471,7 @@ KeyHandleResult ElTextarea::compositionCommit(dom::Element* el,
     val.insert(static_cast<size_t>(comp_.start), text);
     sel_.collapseTo(comp_.start + static_cast<int>(text.size()));
     el->setAttribute("value", val);
+    ensureCaretVisible();
 
     undo_.record(comp_.beforeVal, comp_.selBefore, val,
                  {sel_.anchor, sel_.caret},
@@ -626,6 +633,50 @@ void ElTextarea::selectWordAtPoint(float px, float py) {
     sel_.set(lo, hi);
 }
 
+void ElTextarea::setScrollY(float y) {
+    scrollY_ = std::max(0.0f, y);
+    pendingCaretScroll_ = false;
+    if (elem_) elem_->setScrollTopValue(scrollY_);
+}
+
+float ElTextarea::contentScrollHeight() const {
+    if (!renderer_ || !elem_) return 0.0f;
+    std::string val = readCurrentValue(elem_);
+    render::FontRef fr = getFontRef();
+    auto lm = render::LineMetrics::from(renderer_->measureText("M", fr));
+    float lineH = lm.lineHeight();
+    if (lineH <= 0.0f) return 0.0f;
+    float contentW = elem_->layoutBox().contentRect.width;
+    float wrapW = wrapWidth_ > 0.0f ? wrapWidth_ : contentW;
+    auto vls = buildVisualLines(val, wrapW, fr, renderer_);
+    return static_cast<float>(vls.size()) * lineH;
+}
+
+void ElTextarea::ensureCaretVisible() {
+    pendingCaretScroll_ = true;
+    if (!renderer_ || !elem_) return;
+    std::string val = readCurrentValue(elem_);
+    render::FontRef fr = getFontRef();
+    auto lm = render::LineMetrics::from(renderer_->measureText("M", fr));
+    float lineH = lm.lineHeight();
+    if (lineH <= 0.0f) return;
+    float contentW = elem_->layoutBox().contentRect.width;
+    float contentH = elem_->layoutBox().contentRect.height;
+    if (contentW <= 0.0f || contentH <= 0.0f) getContentSize(contentW, contentH);
+    if (contentH <= 0.0f) return;
+    float wrapW = wrapWidth_ > 0.0f ? wrapWidth_ : contentW;
+    auto vls = buildVisualLines(val, wrapW, fr, renderer_);
+    int cpos = std::clamp(sel_.caret, 0, static_cast<int>(val.size()));
+    int cursorLine = caretVisualLine(vls, cpos);
+    float cursorY = cursorLine * lineH;
+    if (cursorY < scrollY_) scrollY_ = cursorY;
+    else if (cursorY + lineH > scrollY_ + contentH)
+        scrollY_ = cursorY + lineH - contentH;
+    float maxScroll = std::max(0.0f, static_cast<float>(vls.size()) * lineH - contentH);
+    scrollY_ = std::clamp(scrollY_, 0.0f, maxScroll);
+    elem_->setScrollTopValue(scrollY_);
+}
+
 void ElTextarea::setSelectionRange(int start, int end) {
     undo_.breakCoalescing();   // programmatic selection change ends the run
     const std::string val = readCurrentValue(elem_);
@@ -637,6 +688,7 @@ void ElTextarea::setSelectionRange(int start, int end) {
     } else {
         sel_.set(utf8SnapBack(val, start), utf8SnapFwd(val, end));
     }
+    ensureCaretVisible();
 }
 
 void ElTextarea::selectAll() {
@@ -662,6 +714,7 @@ bool ElTextarea::cutSelection(dom::Element* el) {
     std::string removed;
     if (!deleteSelection_(val, removed)) return false;
     el->setAttribute("value", val);
+    ensureCaretVisible();
     // Cut is always its own history entry; undo restores the cut text AND
     // the selection that covered it.
     undo_.record(beforeVal, selBefore, val, {sel_.anchor, sel_.caret},
@@ -737,16 +790,18 @@ void ElTextarea::draw(render::Renderer* renderer,
     auto vls = buildVisualLines(text, w, fontRef, renderer_);
     auto lineStr = [&](const VisLine& v) { return text.substr(v.start, v.end - v.start); };
 
-    if (focused_) {
+    float maxScroll = std::max(0.0f, static_cast<float>(vls.size()) * lineHeight - contentH);
+    if (focused_ && pendingCaretScroll_) {
         int cpos = std::clamp(sel_.caret, 0, static_cast<int>(val.size()));
         int cursorLine = caretVisualLine(vls, cpos);
         float cursorY = cursorLine * lineHeight;
         if (cursorY < scrollY_) scrollY_ = cursorY;
         else if (cursorY + lineHeight > scrollY_ + contentH)
             scrollY_ = cursorY + lineHeight - contentH;
-        float maxScroll = std::max(0.0f, static_cast<float>(vls.size()) * lineHeight - contentH);
-        scrollY_ = std::clamp(scrollY_, 0.0f, maxScroll);
+        pendingCaretScroll_ = false;
     }
+    scrollY_ = std::clamp(scrollY_, 0.0f, maxScroll);
+    elem_->setScrollTopValue(scrollY_);
 
     renderer_->save();
     renderer_->setClip(x, y, w, h);

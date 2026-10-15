@@ -109,6 +109,7 @@ KeyHandleResult ElInput::handleKeyDown(dom::Element* el, int keycode, int mod) {
             el->setAttribute("value", v);
             sel_.set(s.anchor, s.caret);
             sel_.clampTo(static_cast<int>(v.size()));
+            ensureCaretVisible();
             r.dispatchInput = true;
             r.inputType = isRedo ? "historyRedo" : "historyUndo";
         }
@@ -223,6 +224,9 @@ KeyHandleResult ElInput::handleKeyDown(dom::Element* el, int keycode, int mod) {
     } else if (r.handled) {
         undo_.breakCoalescing();
     }
+    if (r.handled && !(platform::hasPrimaryMod(mod) && keycode == platform::kc::A)) {
+        ensureCaretVisible();
+    }
 
     return r;
 }
@@ -264,6 +268,7 @@ KeyHandleResult ElInput::insertText_(dom::Element* el, const std::string& text,
     val.insert(pos, text);
     setCursorPos(pos + static_cast<int>(text.size()));
     el->setAttribute("value", val);
+    ensureCaretVisible();
 
     // A plain character insertion coalesces with the run before it; a paste
     // or a type-over-selection replace is a discrete history step.
@@ -317,6 +322,7 @@ KeyHandleResult ElInput::compositionUpdate(dom::Element* el,
     // Caret at the IME's composition cursor within the preedit.
     sel_.collapseTo(comp_.start + utf8ByteForCodepoint(text, cursorCp));
     el->setAttribute("value", val);
+    ensureCaretVisible();
 
     r.handled = true;
     r.dispatchInput = true;
@@ -341,6 +347,7 @@ KeyHandleResult ElInput::compositionCommit(dom::Element* el,
     val.insert(static_cast<size_t>(comp_.start), text);
     sel_.collapseTo(comp_.start + static_cast<int>(text.size()));
     el->setAttribute("value", val);
+    ensureCaretVisible();
 
     // ONE discrete entry: pre-composition state → committed state. record()
     // no-ops when nothing actually changed (e.g. an empty commit over what
@@ -452,6 +459,45 @@ void ElInput::selectWordAtPoint(float px, float py) {
     sel_.set(lo, hi);
 }
 
+void ElInput::setScrollX(float x) {
+    scrollX_ = std::max(0.0f, x);
+    pendingCaretScroll_ = false;
+    if (elem_) elem_->setScrollLeftValue(scrollX_);
+}
+
+float ElInput::contentScrollWidth() const {
+    if (!renderer_ || !elem_ || !isTextType(nullptr)) return 0.0f;
+    std::string text = displayText_();
+    if (text.empty()) return 0.0f;
+    return renderer_->measureText(text, getFontRef()).width;
+}
+
+void ElInput::ensureCaretVisible() {
+    pendingCaretScroll_ = true;
+    if (!renderer_ || !elem_ || !isTextType(nullptr)) return;
+    std::string text = displayText_();
+    render::FontRef fontRef = getFontRef();
+    float w = elem_->layoutBox().contentRect.width;
+    float h = elem_->layoutBox().contentRect.height;
+    if (w <= 0.0f) getContentSize(w, h, 0.0f);
+    float availW = textWidth_(w);
+    if (availW <= 1.0f) return;
+    int cpos = std::clamp(sel_.caret, 0, static_cast<int>(text.size()));
+    float caretOffset = 0.0f;
+    if (cpos > 0) {
+        caretOffset = caretXInRun(text, 0, text.size(),
+                                  static_cast<size_t>(cpos), fontRef, renderer_);
+    }
+    float fullW = text.empty() ? 0.0f : renderer_->measureText(text, fontRef).width;
+    if (caretOffset - scrollX_ < 0.0f) {
+        scrollX_ = caretOffset;
+    } else if (caretOffset - scrollX_ > availW - 1.0f) {
+        scrollX_ = caretOffset - availW + 1.0f;
+    }
+    scrollX_ = std::clamp(scrollX_, 0.0f, std::max(0.0f, fullW - availW + 1.0f));
+    elem_->setScrollLeftValue(scrollX_);
+}
+
 void ElInput::setSelectionRange(int start, int end) {
     undo_.breakCoalescing();   // programmatic selection change ends the run
     const std::string val = getAttr("value");
@@ -464,6 +510,7 @@ void ElInput::setSelectionRange(int start, int end) {
     } else {
         sel_.set(utf8SnapBack(val, start), utf8SnapFwd(val, end));
     }
+    ensureCaretVisible();
 }
 
 void ElInput::selectAll() {
@@ -489,6 +536,7 @@ bool ElInput::cutSelection(dom::Element* el) {
     std::string removed;
     if (!deleteSelection_(val, removed)) return false;
     el->setAttribute("value", val);
+    ensureCaretVisible();
     // Cut is always its own history entry; undo restores the cut text AND
     // the selection that covered it.
     undo_.record(beforeVal, selBefore, val, {sel_.anchor, sel_.caret},

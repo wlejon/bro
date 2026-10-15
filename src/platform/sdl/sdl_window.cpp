@@ -133,6 +133,9 @@ SdlWindow::SdlWindow(const WindowConfig& cfg)
         }
     }
 
+    SDL_SetPointerProperty(SDL_GetWindowProperties(m_window), "bro.sdl_window", this);
+    refreshDisplayScale();
+
     LOG_INFO("Created window \"%s\" (%ux%u) with %s",
              cfg.title.c_str(), cfg.width, cfg.height,
              m_backend == GraphicsBackend::Vulkan ? "Vulkan" : "software presentation");
@@ -146,6 +149,7 @@ SdlWindow::~SdlWindow() {
         }
     }
     if (m_window) {
+        SDL_SetPointerProperty(SDL_GetWindowProperties(m_window), "bro.sdl_window", nullptr);
         SDL_DestroyWindow(m_window);
         m_window = nullptr;
     }
@@ -155,6 +159,14 @@ SdlWindow::~SdlWindow() {
 SDL_Window* sdlWindowOf(const Window* window) {
     auto* w = dynamic_cast<const SdlWindow*>(window);
     return w ? w->sdlWindow() : nullptr;
+}
+
+void sdlRefreshWindowDisplayScale(uint32_t windowId) {
+    if (SDL_Window* w = SDL_GetWindowFromID(windowId)) {
+        auto* self = static_cast<SdlWindow*>(
+            SDL_GetPointerProperty(SDL_GetWindowProperties(w), "bro.sdl_window", nullptr));
+        if (self) self->refreshDisplayScale();
+    }
 }
 
 uint32_t SdlWindow::windowId() const {
@@ -189,13 +201,17 @@ float SdlWindow::getPixelDensity() const {
     return density > 0.0f ? density : 1.0f;
 }
 
-float SdlWindow::getDisplayScale() const {
-    float scale = SDL_GetWindowDisplayScale(m_window);
-    if (scale <= 0.0f) {
+void SdlWindow::refreshDisplayScale() {
+    float scale = m_window ? SDL_GetWindowDisplayScale(m_window) : 0.0f;
+    if (scale <= 0.0f && m_window) {
         SDL_DisplayID disp = SDL_GetDisplayForWindow(m_window);
         if (disp) scale = SDL_GetDisplayContentScale(disp);
     }
-    return scale > 0.0f ? scale : 1.0f;
+    m_displayScale = scale > 0.0f ? scale : 1.0f;
+}
+
+float SdlWindow::getDisplayScale() const {
+    return m_displayScale > 0.0f ? m_displayScale : 1.0f;
 }
 
 void SdlWindow::raise() {
@@ -328,6 +344,7 @@ void SdlWindow::setPosition(int x, int y) {
     if (!SDL_SetWindowPosition(m_window, x, y)) {
         LOG_ERROR("Failed to set window position: %s", SDL_GetError());
     }
+    refreshDisplayScale();
 }
 
 void SdlWindow::getPosition(int& x, int& y) const {
@@ -400,6 +417,7 @@ bool SdlWindow::moveToDisplay(uint32_t displayId) {
         LOG_ERROR("Failed to move window to display %u: %s", displayId, SDL_GetError());
         return false;
     }
+    refreshDisplayScale();
     return true;
 }
 

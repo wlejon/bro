@@ -60,6 +60,9 @@ public:
     // which invalidate every recorded delta (browser behavior). Also drops
     // any in-progress composition state — the script owns the value now.
     void clearHistory() { undo_.clear(); comp_ = {}; }
+    void breakCoalescing() { undo_.breakCoalescing(); }
+    bool canUndo() const { return undo_.canUndo(); }
+    bool canRedo() const { return undo_.canRedo(); }
 
     // A script's splice of the value (setRangeText), leaving the selection at
     // [selStart, selEnd): written as a `.value =` write is, but recorded as
@@ -102,7 +105,9 @@ public:
     DrawPos contentBox() const;
 
     float scrollY() const { return scrollY_; }
-    void setScrollY(float y) { scrollY_ = y; }
+    void setScrollY(float y);
+    float contentScrollHeight() const;
+    void ensureCaretVisible();
 
     // Caret rectangle in the draw pass's surface space, computed live against
     // the same soft-wrapped visual lines the frame drew — feeds the window's
@@ -155,6 +160,7 @@ private:
     // The value this control last reported through a `change` event.
     ValueChange change_;
     bool focused_ = false;
+    bool pendingCaretScroll_ = false;
     float scrollY_ = 0.0f;
     // Content width the text last soft-wrapped against (set in draw()). Cursor
     // navigation (up/down/home/end) and click hit-testing need the same wrap

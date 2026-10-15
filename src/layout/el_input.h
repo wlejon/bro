@@ -77,6 +77,9 @@ public:
     // any in-progress composition state — the script owns the value now, so
     // the preedit's recorded position is meaningless.
     void clearHistory() { undo_.clear(); comp_ = {}; }
+    void breakCoalescing() { undo_.breakCoalescing(); }
+    bool canUndo() const { return undo_.canUndo(); }
+    bool canRedo() const { return undo_.canRedo(); }
 
     // A script's splice of the value (setRangeText), leaving the selection at
     // [selStart, selEnd): written as a `.value =` write is, but recorded as
@@ -159,6 +162,11 @@ public:
         return contentBox_();
     }
 
+    float scrollX() const { return scrollX_; }
+    void setScrollX(float x);
+    float contentScrollWidth() const;
+    void ensureCaretVisible();
+
     // Caret rectangle in the draw pass's surface space (content space for the
     // app document), computed live — feeds the window's text-input area so the
     // native IME candidate window tracks the caret. False for non-text types or when
@@ -235,6 +243,7 @@ private:
     // caretIndexFromPoint adds it back to undo the shift.
     float scrollX_ = 0.0f;
     bool focused_ = false;
+    bool pendingCaretScroll_ = false;
     bool dragging_ = false;
     mutable DrawPos lastDrawPos_ = {0, 0, 0, 0};
     // The draw pass's document→surface translation, captured in draw(). Zero

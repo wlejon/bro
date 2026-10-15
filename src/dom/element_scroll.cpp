@@ -4,6 +4,8 @@
 #include "dom/element.h"
 #include "dom/event.h"
 #include "dom/event_dispatch.h"
+#include "layout/el_input.h"
+#include "layout/el_textarea.h"
 
 #include <algorithm>
 
@@ -39,12 +41,19 @@ std::string usedOverflow(const htmlayout::css::ComputedStyle& style, bool horizo
 float maxScrollTopOf(const Element* el) {
     if (!el) return 0.0f;
     const auto& box = el->layoutBox();
-    return std::max(0.0f, box.naturalHeight - box.contentRect.height);
+    float contentH = box.naturalHeight;
+    if (auto* ta = el->textareaControl()) {
+        contentH = std::max(contentH, ta->contentScrollHeight());
+    }
+    return std::max(0.0f, contentH - box.contentRect.height);
 }
 
 float maxScrollLeftOf(const Element* el) {
     if (!el) return 0.0f;
     const auto& box = el->layoutBox();
+    if (auto* inp = el->inputControl()) {
+        return std::max(0.0f, inp->contentScrollWidth() - box.contentRect.width + 1.0f);
+    }
     const float overflow = box.naturalWidth - box.contentRect.width;
     if (overflow <= 0.0f) return 0.0f;
     // Only a scroll container scrolls. Content spilling out of an
@@ -86,6 +95,7 @@ void setElementScrollTop(Element* el, double v) {
     const float clamped = std::clamp(requested, 0.0f, maxScroll);
     const float prev = el->scrollTopValue();
     el->setScrollTopValue(clamped);
+    if (auto* ta = el->textareaControl()) ta->setScrollY(clamped);
 
     if (Document* doc = el->document()) {
         // Layout is async: when script appends content and then writes the
@@ -124,6 +134,7 @@ void setElementScrollLeft(Element* el, double v) {
     const float clamped = std::clamp(requested, 0.0f, maxScrollLeftOf(el));
     const float prev = el->scrollLeftValue();
     el->setScrollLeftValue(clamped);
+    if (auto* inp = el->inputControl()) inp->setScrollX(clamped);
 
     // Paint only, as for scrollTop above.
     if (clamped != prev && !el->scrollAbsorbed()) {
