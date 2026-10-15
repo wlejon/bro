@@ -14,6 +14,7 @@
 // walk is view_document.h.
 
 #include "engine/agent_view.h"
+#include "engine/app_runtime.h"
 #include "engine/control.h"
 #include "engine/control_helpers.h"
 #include "engine/engine.h"
@@ -97,7 +98,8 @@ ViewState& stateOf(ControlServer& s) {
 }
 
 std::string appName(Engine& e) {
-    std::string app = std::filesystem::path(e.appDir()).filename().string();
+    std::string app = currentApp().id;
+    if (app.empty()) app = std::filesystem::path(e.appDir()).filename().string();
     return app.empty() ? "bro" : app;
 }
 
