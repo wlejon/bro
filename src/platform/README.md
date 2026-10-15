@@ -39,3 +39,13 @@ the terminal encoder, hotkeys) exist once.
   window (minimized, another workspace) reads as minimized and stops presenting.
   Not emulated: `setPosition` is a no-op and positions read 0,0, opacity and
   always-on-top only read back, and the work area is the whole output.
+
+Transparent, click-through windows (`transparent` / `clickThrough` in
+bro.json, `bro.window.clickThrough`): the swapchain picks premultiplied
+composite alpha when the window is transparent, and the engine decides which
+points take input by its own hit test (`engine/click_through.cpp`). How a
+backend lets the rest through: Windows toggles `WS_EX_TRANSPARENT` to follow
+the pointer, which a low-level mouse hook reports, asking the engine per move
+(`sdl/sdl_click_through_win.cpp`); Wayland sets the surface's input region,
+X11 and macOS the SDL window shape, from the rects `engine/hit_region.cpp`
+computes whenever layout changes (`wantsInputRegion()`).

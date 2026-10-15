@@ -92,6 +92,14 @@ public:
     uint32_t currentDisplay() const override;
     bool moveToDisplay(uint32_t displayId) override;
 
+    // An ARGB swapchain (premultiplied composite alpha) and no opaque
+    // region; click-through is the surface's input region.
+    bool isTransparent() const override { return transparent_; }
+    bool setClickThrough(bool on) override;
+    bool isClickThrough() const override { return clickThrough_; }
+    bool wantsInputRegion() const override { return true; }
+    void setInputRegion(const std::vector<WindowRect>& rects) override;
+
     TextInput& textInput() override { return *this; }
     Cursor& cursor() override { return *this; }
     NativeHandle nativeHandle() const override;
@@ -131,6 +139,7 @@ private:
     void warp(float x, float y) override;
 
     void waitForConfigure();
+    void applyInputRegion();
     void updateLogicalSize();
     void applyResizable();
     void spendLaunchToken();
@@ -146,6 +155,9 @@ private:
     bool resizable_ = true;
     bool borderless_ = false;
     bool alwaysOnTop_ = false;
+    bool transparent_ = false;
+    bool clickThrough_ = false;
+    std::vector<WindowRect> inputRegion_;
     bool vsyncPref_ = true;
     bool focused_ = false;
     bool minimized_ = false;

@@ -52,6 +52,7 @@ browl::CursorShape toBrowlCursor(CursorShape s) { return browlCursor(s); }
 WaylandWindow::WaylandWindow(Connection& conn, const WindowConfig& cfg)
     : conn_(conn), title_(cfg.title), width_(cfg.width), height_(cfg.height),
       resizable_(cfg.resizable), borderless_(cfg.borderless), alwaysOnTop_(cfg.alwaysOnTop),
+      transparent_(cfg.transparent && cfg.backend == GraphicsBackend::Vulkan),
       vsyncPref_(cfg.vsync), backend_(cfg.backend) {
     browl::WindowConfig wc;
     wc.title = cfg.title;
@@ -517,6 +518,39 @@ uint32_t WaylandWindow::currentDisplay() const {
 bool WaylandWindow::moveToDisplay(uint32_t displayId) {
     // A Wayland client cannot place its window; report whether it exists.
     return conn_.display().output_by_id(displayId) != nullptr;
+}
+
+// --- Click-through ---
+
+bool WaylandWindow::setClickThrough(bool on) {
+    if (on && !transparent_) return false;
+    if (clickThrough_ == on) return true;
+    clickThrough_ = on;
+    applyInputRegion();
+    return true;
+}
+
+void WaylandWindow::setInputRegion(const std::vector<WindowRect>& rects) {
+    if (rects == inputRegion_) return;
+    inputRegion_ = rects;
+    if (clickThrough_) applyInputRegion();
+}
+
+void WaylandWindow::applyInputRegion() {
+    if (!window_) return;
+    if (clickThrough_) {
+        // Surface-local logical px, which are the engine's window coordinates.
+        std::vector<browl::Rect> wl;
+        wl.reserve(inputRegion_.size());
+        for (const WindowRect& r : inputRegion_) wl.push_back(browl::Rect{r.x, r.y, r.w, r.h});
+        window_->set_input_region(wl);
+    } else {
+        window_->reset_input_region();
+    }
+    // Surface state is double-buffered: a bare commit (as holdFrame makes)
+    // applies it now rather than with the next present.
+    window_->commit();
+    conn_.display().flush();
 }
 
 NativeHandle WaylandWindow::nativeHandle() const {
