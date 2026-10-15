@@ -5,6 +5,7 @@
 // close the record with the flip it presented on.
 
 #include "engine/engine.h"
+#include "engine/app_runtime.h"
 #include "engine/control.h"
 #include "engine/frame_trace.h"
 #include "engine/layout_pipeline.h"
@@ -137,7 +138,10 @@ void Engine::startControl() {
     } else if (display) {
         name = "display";
     } else {
-        std::string app = std::filesystem::path(appDir_).filename().string();
+        // The app's id (its manifest's, else its folder's name), so an
+        // embedder whose UI folder is a generic ui/ is still itself.
+        std::string app = currentApp().id;
+        if (app.empty()) app = std::filesystem::path(appDir_).filename().string();
         if (app.empty()) app = "bro";
 #if defined(_WIN32)
         const long long pid = ::_getpid();

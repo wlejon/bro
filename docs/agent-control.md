@@ -41,7 +41,8 @@ Local IPC only, never a network listener; only the same user can connect
 
 - `bro --drm` (bro as the display server) serves `display`, always.
 - Elsewhere (windowed, headless) only when asked: `BRO_CONTROL=1` serves
-  `<app>-<pid>`; `BRO_CONTROL=<name>` picks the name.
+  `<app>-<pid>` (`<app>` is the app's id: its manifest's, else its folder's
+  name); `BRO_CONTROL=<name>` picks the name.
 - The apps of a session whose display server runs its own compositor (helm
   under `bro --drm`) serve `<app>-<pid>` without asking: the display sets
   `BRO_CONTROL_SESSION=1` for the processes it starts, and finds an app's
