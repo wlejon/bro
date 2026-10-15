@@ -576,6 +576,12 @@ class YuE2 {
   /** @readonly @type {boolean} */ loaded;
   /** @readonly @type {string} */ device;
   /** True while an op runs on this model. @readonly @type {boolean} */ busy;
+  /**
+   * Frees the weights now rather than at a GC (several GB of VRAM); the
+   * model is unusable afterwards (loaded false, calls throw "not loaded").
+   * Throws while busy: stop the stream or job and wait for its onDone.
+   */
+  dispose() {}
   /** The AR decode weights it was loaded with: 'bf16' | 'int8' | 'fp8'. @readonly @type {string} */ arWeights;
   /** 64. @readonly @type {number} */ latentDim;
   /** Latent frames per second (25). @readonly @type {number} */ frameRate;
@@ -691,6 +697,8 @@ class YuE2Vae {
   /** @readonly @type {boolean} */ loaded;
   /** @readonly @type {string} */ device;
   /** @readonly @type {boolean} */ busy;
+  /** Frees the weights now; unusable afterwards. Throws while busy (a stream holds it). */
+  dispose() {}
   /** False when loaded decoderOnly. @readonly @type {boolean} */ hasEncoder;
   /** 48000. @readonly @type {number} */ sampleRate;
   /** 2. @readonly @type {number} */ channels;

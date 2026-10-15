@@ -262,4 +262,12 @@ function paced(yue, vae) {
     for (const e of events) if (e.row) noLyricFields(e.row, "a '" + e.kind + "' row");
     console.log('paced: ' + (emitted / SR).toFixed(1) + ' s handed out; worst gap ' + before.worstGapSeconds.toFixed(3) +
                 ' s; events ' + [...new Set(events.map((e) => e.kind))].join(' '));
+
+    // dispose(): the weights go now; the models are unusable afterwards.
+    yue.dispose();
+    vae.dispose();
+    assert(!yue.loaded && !vae.loaded, 'dispose() unloads the model and the VAE');
+    let threw = '';
+    try { yue.endless({ vae, target: { style: FOLK } }); } catch (e) { threw = String(e.message || e); }
+    assert(/not loaded/.test(threw), 'a disposed model refuses work: ' + threw);
 }
