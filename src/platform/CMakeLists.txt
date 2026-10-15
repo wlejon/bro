@@ -15,6 +15,7 @@ add_library(bro_platform STATIC
     # SDL window system
     sdl/sdl_window_system.cpp sdl/sdl_window.cpp sdl/sdl_runtime.cpp
     sdl/sdl_event_loop.cpp sdl/sdl_clipboard.cpp sdl/sdl_dialogs.cpp sdl/sdl_drag.cpp
+    sdl/sdl_click_through.cpp
     # DRM window system (the KMS/libinput halves are drm_seat / drm_input)
     drm_window_system.cpp
     # desktop integration
@@ -34,6 +35,8 @@ if(WIN32)
     # DoDragDrop and the shell's drag-image helper (sdl/sdl_drag_win.cpp).
     # The clipboard's multi-format write and image reads (sdl/win32_clipboard.cpp).
     target_sources(bro_platform PRIVATE sdl/sdl_drag_win.cpp sdl/win32_clipboard.cpp)
+    # Click-through: a low-level mouse hook steering WS_EX_TRANSPARENT.
+    target_sources(bro_platform PRIVATE sdl/sdl_click_through_win.cpp)
     # Toasts under the app's AppUserModelID (WinRT, runtimeobject).
     target_sources(bro_platform PRIVATE desktop_notifications_win.cpp)
     # The session's screen and input for a bro that is the OS shell (desktop_session.h).
@@ -48,6 +51,9 @@ elseif(APPLE)
     # A live resize's tracking loop keeps running frames (sdl_event_loop.cpp).
     target_sources(bro_platform PRIVATE sdl/sdl_live_resize_mac.mm)
     set_source_files_properties(sdl/sdl_live_resize_mac.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    # Click-through: a global pointer monitor and ignoresMouseEvents.
+    target_sources(bro_platform PRIVATE sdl/sdl_click_through_mac.mm)
+    set_source_files_properties(sdl/sdl_click_through_mac.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
     # UNUserNotificationCenter (notifications from a bundled bro).
     target_sources(bro_platform PRIVATE desktop_notifications_mac.mm)
     set_source_files_properties(desktop_notifications_mac.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")

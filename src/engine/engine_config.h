@@ -32,6 +32,8 @@ struct GraphicsConfig {
     // Startup window management
     bool borderless = false;   // no title bar / border (SDL_WINDOW_BORDERLESS)
     bool alwaysOnTop = false;  // keep above all normal windows
+    bool transparent = false;  // per-pixel alpha over the desktop (fixed at creation)
+    bool clickThrough = false; // pointer input the page would not hit passes beneath
     int minWidth = 0;          // min/max resize limits; 0 = unconstrained
     int minHeight = 0;
     int maxWidth = 0;

@@ -9,6 +9,7 @@ namespace bro::engine {
 ///   App manifest:  app, title, width, height, vsync, resizable, splash,
 ///                  maxFps, scrollSpeed, doubleClickThreshold,
 ///                  doubleClickDistance, borderless, alwaysOnTop,
+///                  transparent, clickThrough,
 ///                  minWidth, minHeight, maxWidth, maxHeight,
 ///                  windowX, windowY, display
 ///   Project root:  default_app, lib, system

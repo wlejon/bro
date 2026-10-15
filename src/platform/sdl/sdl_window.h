@@ -72,6 +72,17 @@ public:
     uint32_t currentDisplay() const override;
     bool moveToDisplay(uint32_t displayId) override;
 
+    bool isTransparent() const override { return m_transparent; }
+    bool setClickThrough(bool on) override;
+    bool isClickThrough() const override { return m_clickThroughOn; }
+    bool wantsInputRegion() const override;
+    void setInputRegion(const std::vector<WindowRect>& rects) override;
+    void setInputTest(std::function<bool(float x, float y)> takesInput) override;
+    void refreshInputTest() override;
+    /// Apply what the click-through tracker decided off the main thread
+    /// (Windows: the pointer crossed into or out of the input region).
+    void applyClickThrough();
+
     TextInput& textInput() override { return *this; }
     Cursor& cursor() override { return *this; }
     void setKeyboardGrab(bool on) override;
@@ -99,6 +110,11 @@ private:
     bool m_alwaysOnTop = false;
     bool m_borderless = false;
     bool m_keepHidden = false;  // standing in for the offscreen driver (SdlRuntime::offscreenFallback)
+    bool m_transparent = false;
+    bool m_clickThroughOn = false;
+    std::vector<WindowRect> m_inputRegion;
+    std::function<bool(float, float)> m_inputTest;
+    std::unique_ptr<class SdlClickThrough> m_clickThrough;
     GraphicsBackend m_backend = GraphicsBackend::Vulkan;
     SDL_Cursor* m_cursors[static_cast<int>(CursorShape::Count_)] = {};
     CursorShape m_cursorShape = CursorShape::Default;
@@ -107,5 +123,7 @@ private:
 /// The SDL window behind a platform Window, or null when it is not one.
 SDL_Window* sdlWindowOf(const Window* window);
 void sdlRefreshWindowDisplayScale(uint32_t windowId);
+/// Every click-through window's applyClickThrough (the event loop, on each pump).
+void sdlApplyClickThrough();
 
 } // namespace bro::platform

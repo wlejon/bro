@@ -131,6 +131,29 @@ void installHeadlessInput(engine::Engine& engine) {
             return ev::fromBool(engine.shellClaimsPointerAt(static_cast<float>(ev::toDouble(a[0])),
                                                             static_cast<float>(ev::toDouble(a[1]))));
         }, 2, "shellClaimsPointerAt"));
+    // takesPointerAt(x, y) / inputRegion(): where a click-through window
+    // (bro.window.clickThrough) takes pointer input, in window coordinates
+    // (engine/click_through.cpp, engine/hit_region.h). inputRegion() is
+    // computed from the current layout: [{x, y, width, height}, ...].
+    regBoth("takesPointerAt", ev::makeFunction(
+        [&engine](Value, std::span<const Value> a) -> Value {
+            if (a.size() < 2) return ev::throwTypeError("takesPointerAt(x, y) requires x and y");
+            engine.flush();
+            return ev::fromBool(engine.takesPointerAt(static_cast<float>(ev::toDouble(a[0])),
+                                                      static_cast<float>(ev::toDouble(a[1]))));
+        }, 2, "takesPointerAt"));
+    regBoth("inputRegion", ev::makeFunction(
+        [&engine](Value, std::span<const Value>) -> Value {
+            engine.flush();
+            std::string json = "[";
+            for (const auto& r : engine.computeInputRegion()) {
+                if (json.size() > 1) json += ',';
+                json += "{\"x\":" + std::to_string(r.x) + ",\"y\":" + std::to_string(r.y) +
+                        ",\"width\":" + std::to_string(r.w) + ",\"height\":" + std::to_string(r.h) + "}";
+            }
+            json += "]";
+            return ev::parseJson(json).value;
+        }, 0, "inputRegion"));
     regBoth("shellClaimsKeyboard", ev::makeFunction(
         [&engine](Value, std::span<const Value>) -> Value {
             return ev::fromBool(engine.shellClaimsKeyboard());

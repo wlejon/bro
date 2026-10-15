@@ -24,6 +24,7 @@
 #include "engine/web_animations.h"
 #include "engine/window_host.h"
 #include "engine/engine_drm.h"
+#include "platform/window.h"
 #include "dom/event_target.h"
 #include "dom/node_handle.h"
 #include "dom/scroll_absorber.h"
@@ -152,10 +153,10 @@ public:
         int32_t wheelY = 0;
     };
     void injectDeviceInput(const DeviceInput& in);
-    /// A key a hotkey grab holds for the desktop shell while another app has
     /// Present the next frame even if it is unchanged (an on-demand readback
     /// of a window that does not read back every present).
     void presentNextFrame() { presentedKeyValid_ = false; }
+    /// A key a hotkey grab holds for the desktop shell while another app has
     /// the foreground (Windows; platform/desktop_hotkeys.h ShellKeySink): to
     /// the document, with `mods` (hotkey_mod bits) as the modifiers held.
     void deliverShellGrabKey(uint32_t evdevCode, bool down, bool repeat, uint32_t mods);
@@ -500,6 +501,28 @@ public:
     /// — a hidden SDL window, which is what keeps the GPU path real).
     platform::Window* window() const { return window_.get(); }
 
+    // --- Transparent, click-through windows (click_through.cpp) ---
+
+    /// Whether the window composites with per-pixel alpha over the desktop
+    /// (bro.json `transparent`, where the window system and the swapchain
+    /// give it; headless: as declared, for its captures).
+    bool windowTransparent() const;
+    /// Click-through on or off (bro.window.clickThrough): pointer input
+    /// outside inputRegion() passes to whatever lies beneath the window.
+    /// False where the window system cannot route input past a window.
+    bool setClickThrough(bool on);
+    bool clickThrough() const { return clickThrough_; }
+    /// Whether the page takes a pointer event at window point (x, y): the
+    /// hit test lands on an element other than <html> and <body> (or on the
+    /// menu bar, an open dropdown, a system panel). Where it does not, a
+    /// click-through window lets the event through.
+    bool takesPointerAt(float x, float y);
+    /// The window rects where takesPointerAt holds (hit_region.h), from the
+    /// current layout.
+    std::vector<platform::WindowRect> computeInputRegion();
+    /// The region last handed to the window.
+    const std::vector<platform::WindowRect>& inputRegion() const { return inputRegion_; }
+
     /// The app directory this Engine was booted from, absolute. Exposed for
     /// the same reason as window() above: a host that has to act on the app's
     /// own files — loading the compiled module a folder carries
@@ -786,6 +809,21 @@ private:
     /// False when nothing was presented.
     bool presentCurrentFrame(bool mayHold = false);
     std::vector<uint8_t> readCompositedFrame();
+    /// Frames composite over nothing (a transparent window, or headless
+    /// declared so), not over opaque black.
+    bool transparentFrames() const {
+        return graphicsConfig_.transparent &&
+               (displayMode_ == DisplayMode::Windowed || displayMode_ == DisplayMode::Headless);
+    }
+    static void unpremultiplyRgba(std::vector<uint8_t>& rgba);
+    /// Recompute the input region and hand it to the window when it changed
+    /// (a click-through window, after a frame that laid out or painted).
+    void updateInputRegion();
+    bool clickThrough_ = false;
+    std::vector<platform::WindowRect> inputRegion_;
+    bool inputRegionStale_ = false;    // a change not yet in the region (its budget)
+    double inputRegionAtMs_ = 0.0;     // when, and how long, the last one took
+    double inputRegionCostMs_ = 0.0;
     render::PresentFrame describeCompositedFrame();
     // BRO_CAPTURE_PRESENTS=1: windowed presenters read back each frame they
     // present from the start (agent control turns that on only while it

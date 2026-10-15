@@ -54,6 +54,18 @@ bool bro_window_alwaysOnTop_get(void);
 //   registered as a namespace property (setter) at __bro_native.window.alwaysOnTop
 void bro_window_alwaysOnTop_set(bool v);
 
+// bro.window.transparent read
+//   registered as a namespace property (getter) at __bro_native.window.transparent
+bool bro_window_transparent_get(void);
+
+// bro.window.clickThrough read
+//   registered as a namespace property (getter) at __bro_native.window.clickThrough
+bool bro_window_clickThrough_get(void);
+
+// bro.window.clickThrough write
+//   registered as a namespace property (setter) at __bro_native.window.clickThrough
+void bro_window_clickThrough_set(bool v);
+
 // bro.window.minimize
 //   registered at __bro_native.window.minimize
 void bro_window_minimize(void);

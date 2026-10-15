@@ -184,6 +184,9 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
 
             framePresenter_->signalRender(rsnap);
             traceRasterSignalled();
+            // The page laid out or painted anew: where a click-through
+            // window takes input may have moved with it.
+            updateInputRegion();
             uiDirty_ = false;
             hasRenderedOnce_ = true;
             lastUIRenderMs_ = now;
@@ -202,6 +205,9 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
             }
         }
     }
+
+    // A click-through region held back by its budget catches up.
+    if (inputRegionStale_) updateInputRegion();
 
     auto layers = framePresenter_->currentLayers();
 

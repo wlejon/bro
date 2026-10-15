@@ -220,6 +220,8 @@ static void printUsage() {
         "  scrollSpeed (number), doubleClickThreshold (ms),\n"
         "  doubleClickDistance (px),\n"
         "  borderless (bool), alwaysOnTop (bool),\n"
+        "  transparent (bool: per-pixel alpha over the desktop),\n"
+        "  clickThrough (bool: input the page would not hit passes beneath),\n"
         "  minWidth/minHeight/maxWidth/maxHeight (px resize limits),\n"
         "  windowX/windowY (px startup position), display (index to center on)\n"
         "\n"

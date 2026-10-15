@@ -11,6 +11,7 @@
 
 #include <climits>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <utility>
@@ -92,6 +93,17 @@ struct WindowConfig {
     /// The application's identity for the desktop: Wayland app_id, X11
     /// WM_CLASS, Windows AppUserModelID. Empty leaves the backend's default.
     std::string appId;
+    /// Per-pixel transparency: the window's frames carry premultiplied alpha
+    /// and the desktop composites them over whatever is behind the window.
+    /// Fixed at creation (the surface's composite alpha follows it); see
+    /// Window::isTransparent for whether the window system gave it.
+    bool transparent = false;
+};
+
+/// A rectangle in window coordinates: one piece of an input region.
+struct WindowRect {
+    int x = 0, y = 0, w = 0, h = 0;
+    bool operator==(const WindowRect&) const = default;
 };
 
 /// The window's native handles, for desktop integration code (taskbar
@@ -307,6 +319,40 @@ public:
     /// for an icon decoded or rasterized above the platform layer (an app's
     /// SVG icon). Returns false when the window system refused it.
     virtual bool setIconPixels(int width, int height, const uint8_t* rgba) = 0;
+
+    // --- Transparency and click-through ---
+
+    /// Whether the window was made transparent (WindowConfig::transparent)
+    /// and the window system composites it with per-pixel alpha. The
+    /// swapchain presents it with premultiplied composite alpha; whether the
+    /// driver offers that is the swapchain's half of the answer.
+    virtual bool isTransparent() const { return false; }
+    /// Click-through: pointer input over the window outside its input region
+    /// (setInputRegion) goes to whatever lies beneath it, other applications'
+    /// windows included; inside the region the window takes it as usual.
+    /// False where the window system cannot route input past a window.
+    virtual bool setClickThrough(bool on) {
+        (void)on;
+        return false;
+    }
+    virtual bool isClickThrough() const { return false; }
+    /// How the window learns where the page takes input while click-through
+    /// is on. True: as rectangles (setInputRegion), which the window system
+    /// routes by (Wayland's input region, X11's input shape, macOS). False:
+    /// point by point (setInputTest), asked as the pointer moves over the
+    /// window (Windows, whose window takes or passes all input at once and
+    /// so follows the pointer).
+    virtual bool wantsInputRegion() const { return false; }
+    /// The part of the window that takes pointer input while click-through
+    /// is on, in window coordinates, replacing the last region whole. Empty:
+    /// every point passes through.
+    virtual void setInputRegion(const std::vector<WindowRect>& rects) { (void)rects; }
+    /// Whether the page takes pointer input at a window point; called on the
+    /// main thread. Set before click-through goes on.
+    virtual void setInputTest(std::function<bool(float x, float y)> takesInput) { (void)takesInput; }
+    /// The page changed under a pointer that may not have moved: ask the
+    /// input test again where the pointer is.
+    virtual void refreshInputTest() {}
 
     // --- Displays ---
 

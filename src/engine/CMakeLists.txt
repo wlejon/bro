@@ -23,6 +23,8 @@ add_library(bro_engine STATIC
     engine_drm_input.cpp
     engine_device_input.cpp
     shell_input_rules.cpp
+    click_through.cpp
+    hit_region.cpp
     engine_shell_compositor.cpp
     window_frames.cpp
     engine_lifecycle.cpp
@@ -99,10 +101,10 @@ target_link_libraries(bro_engine PUBLIC bro_platform bro_render bro_dom bro_layo
 # The source watcher behind the edit loop (app_reload.cpp) is brokit's
 # FsWatcher, the same one behind fs.watch.
 target_link_libraries(bro_engine PRIVATE brokit_api)
-# <img> intrinsic sizing probes WebP headers too, so the engine needs the same
-# decoder the two image paths use (render/webp_image.h).
 # The agent view asks the apps' control endpoints for their views (brolink IPC).
 target_link_libraries(bro_engine PRIVATE brolink)
+# <img> intrinsic sizing probes WebP headers too, so the engine needs the same
+# decoder the two image paths use (render/webp_image.h).
 if(BRO_WITH_WEBP)
     target_link_libraries(bro_engine PRIVATE bro_webp)
 endif()
@@ -133,13 +135,13 @@ if(BRO_BUILD_TESTS)
     target_include_directories(bro_source_preflight_test PRIVATE ${bro_SOURCE_DIR}/src)
     target_link_libraries(bro_source_preflight_test PRIVATE bro_util)
     target_compile_features(bro_source_preflight_test PRIVATE cxx_std_20)
-endif()
-
 
     # The agent view's text model: lines, revisions, diffs (pure).
     add_executable(bro_agent_view_test tests/test_agent_view.cpp agent_view.cpp)
     target_include_directories(bro_agent_view_test PRIVATE ${bro_SOURCE_DIR}/src)
     target_compile_features(bro_agent_view_test PRIVATE cxx_std_20)
+endif()
+
 # Stamp BRO_WITH_* compile definitions so engine_init.cpp can #if on features
 # whose install() takes an engine-owned service pointer (net/audio/physics).
 bro_apply_feature_defs(bro_engine)

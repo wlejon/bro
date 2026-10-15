@@ -138,7 +138,9 @@ void Engine::frameKeyAdd(uint64_t v) {
 // The segment the next CPU layer composites into: the one above the last GPU
 // image, cleared the first time it is drawn into this frame. The bottom one is
 // the frame's base and starts opaque black, so every frame (and every capture)
-// is opaque; the ones above GPU images start transparent.
+// is opaque; the ones above GPU images start transparent. A transparent
+// window's base starts transparent too: what the page leaves unpainted shows
+// the desktop.
 SkCanvas* Engine::frameSegmentCanvas() {
     const size_t index = frameImages_.size();
     while (frameSegments_.size() <= index)
@@ -147,7 +149,8 @@ SkCanvas* Engine::frameSegmentCanvas() {
     SkSurface* surface = frameSegments_[index].get();
     if (!surface) return nullptr;
     if (!frameSegmentUsed_[index]) {
-        surface->getCanvas()->clear(index == 0 ? SK_ColorBLACK : SK_ColorTRANSPARENT);
+        surface->getCanvas()->clear(index == 0 && !transparentFrames() ? SK_ColorBLACK
+                                                                                : SK_ColorTRANSPARENT);
         frameSegmentUsed_[index] = true;
     }
     return surface->getCanvas();
@@ -488,7 +491,9 @@ render::PresentFrame Engine::describeCompositedFrame() {
     for (size_t i = 0; i < frame.images.size(); ++i)
         if (segmentUsed(i + 1)) frame.images[i].above = layerOf(frameSegments_[i + 1].get());
     frame.clearColor[0] = frame.clearColor[1] = frame.clearColor[2] = 0.0f;
-    frame.clearColor[3] = 1.0f;   // opaque black under everything
+    // Opaque black under everything; nothing under a transparent window's
+    // page, whose premultiplied alpha the desktop composites.
+    frame.clearColor[3] = transparentFrames() ? 0.0f : 1.0f;
     frame.width = static_cast<uint32_t>(std::max(0, frameCompositeW_));
     frame.height = static_cast<uint32_t>(std::max(0, frameCompositeH_));
     frameImages_.clear();
@@ -616,16 +621,36 @@ std::vector<uint8_t> Engine::readCompositedFrame() {
         uint32_t w = 0, h = 0;
         const bool ok = vulkanPresenter_->present(frame) && vulkanPresenter_->readbackPixels(pixels, w, h);
         frameSkiaImages_.clear();
-        if (ok) return pixels;
+        if (ok) {
+            if (transparentFrames()) unpremultiplyRgba(pixels);
+            return pixels;
+        }
         LOG_ERROR("Engine: GPU frame composite/readback failed");
         return {};
     }
     SkPixmap pm;
     if (frameSegments_.empty() || !frameSegments_[0] || !frameSegments_[0]->peekPixels(&pm)) return {};
-    return render::pixmapToRgba(pm);
+    auto pixels = render::pixmapToRgba(pm);
+    if (transparentFrames()) unpremultiplyRgba(pixels);
+    return pixels;
+}
+
+// A transparent window's frame is premultiplied, as the desktop composites
+// it; a capture (screenshot's PNG, frameImage's ImageData, getPixel) is
+// straight alpha, as those formats are.
+void Engine::unpremultiplyRgba(std::vector<uint8_t>& rgba) {
+    for (size_t i = 0; i + 3 < rgba.size(); i += 4) {
+        const uint32_t a = rgba[i + 3];
+        if (a == 255 || a == 0) continue;
+        for (size_t c = 0; c < 3; ++c)
+            rgba[i + c] = static_cast<uint8_t>(std::min<uint32_t>(255, (rgba[i + c] * 255u + a / 2) / a));
+    }
 }
 
 bool Engine::capturePresentsRequested() {
+    // Agent control reads back only while it needs to (a screenshot turns
+    // capture on for one present, a recording for its length), so serving
+    // the control socket costs no frame a readback.
     const char* v = std::getenv("BRO_CAPTURE_PRESENTS");
     return v && std::strcmp(v, "1") == 0;
 }
@@ -638,15 +663,15 @@ std::vector<uint8_t> Engine::headlessPresentedPixels() {
         std::vector<uint8_t> pixels;
         uint32_t w = 0, h = 0;
         if (!vulkanPresenter_->readbackPixels(pixels, w, h)) return {};
+        if (transparentFrames()) unpremultiplyRgba(pixels);
         return pixels;
     }
     // Composited on the CPU: the frame is the bottom segment.
     SkPixmap pm;
     if (frameSegments_.empty() || !frameSegments_[0] || !frameSegments_[0]->peekPixels(&pm)) return {};
-    // Agent control reads back only while it needs to (a screenshot turns
-    // capture on for one present, a recording for its length), so serving
-    // the control socket costs no frame a readback.
-    return render::pixmapToRgba(pm);
+    auto pixels = render::pixmapToRgba(pm);
+    if (transparentFrames()) unpremultiplyRgba(pixels);
+    return pixels;
 }
 
 std::vector<uint8_t> Engine::presentedPixels(uint64_t hostId, int& outW, int& outH) {

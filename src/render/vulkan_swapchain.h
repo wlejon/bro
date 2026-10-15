@@ -81,6 +81,17 @@ public:
     bool readable() const { return readable_; }
     uint32_t imageCount() const { return static_cast<uint32_t>(images_.size()); }
     VkPresentModeKHR presentMode() const { return presentMode_; }
+    /// How the window system composites the images: OPAQUE for an ordinary
+    /// window; PRE_MULTIPLIED (or INHERIT) for a transparent one
+    /// (Window::isTransparent) whose surface offers it.
+    VkCompositeAlphaFlagBitsKHR compositeAlpha() const { return compositeAlpha_; }
+    /// Whether the frames' alpha reaches the desktop compositor.
+    bool transparent() const { return compositesWithAlpha(compositeAlpha_); }
+    static bool compositesWithAlpha(VkCompositeAlphaFlagBitsKHR a) {
+        return a == VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR || a == VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR;
+    }
+    /// The composite alpha for a surface that supports `supported`.
+    static VkCompositeAlphaFlagBitsKHR chooseCompositeAlpha(VkCompositeAlphaFlagsKHR supported, bool transparent);
 
     VkImage image(uint32_t index) const { return images_[index]; }
     VkImageView imageView(uint32_t index) const { return imageViews_[index]; }
@@ -115,6 +126,7 @@ private:
     VkFormat imageFormat_ = VK_FORMAT_UNDEFINED;
     bool readable_ = false;
     VkPresentModeKHR presentMode_ = VK_PRESENT_MODE_FIFO_KHR;
+    VkCompositeAlphaFlagBitsKHR compositeAlpha_ = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     VkExtent2D extent_{};
 
     std::vector<VkImage> images_;

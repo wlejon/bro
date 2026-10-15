@@ -190,6 +190,14 @@ bool parseConfig(const std::string& path, EngineConfig& config,
     int alwaysOnTop = getBool("alwaysOnTop");
     if (alwaysOnTop >= 0) config.graphics.alwaysOnTop = (alwaysOnTop == 1);
 
+    // A transparent window (fixed at creation) and click-through (also
+    // bro.window.clickThrough at run time): docs/apps.md.
+    int transparent = getBool("transparent");
+    if (transparent >= 0) config.graphics.transparent = (transparent == 1);
+
+    int clickThrough = getBool("clickThrough");
+    if (clickThrough >= 0) config.graphics.clickThrough = (clickThrough == 1);
+
     int minW = getInt("minWidth", 0);
     if (minW > 0) config.graphics.minWidth = minW;
 

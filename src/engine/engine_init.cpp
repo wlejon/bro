@@ -91,6 +91,7 @@ platform::WindowConfig primaryWindowConfig(const EngineConfig& config, const Gra
     wc.resizable = gfx.resizable;
     wc.vsync = gfx.vsync;
     wc.borderless = config.graphics.borderless;
+    wc.transparent = config.graphics.transparent;
     wc.backend = backend;
     wc.fitToWorkArea = true;
     wc.appId = config.appId;
@@ -349,6 +350,7 @@ void Engine::construct(const EngineConfig& config) {
                 window_->setMinimumSize(wcfg.minWidth, wcfg.minHeight);
             if (wcfg.maxWidth > 0 || wcfg.maxHeight > 0)
                 window_->setMaximumSize(wcfg.maxWidth, wcfg.maxHeight);
+            if (wcfg.clickThrough) setClickThrough(true);
         } catch (const std::exception& e) {
             LOG_INFO("Headless window creation skipped: %s", e.what());
             window_.reset();
@@ -386,6 +388,10 @@ void Engine::construct(const EngineConfig& config) {
                 viewportWidth_ = ww;
                 viewportHeight_ = wh;
             }
+            // Everything passes through until the first frame has laid the
+            // page out and given the window its input region.
+            if (wcfg.clickThrough && !setClickThrough(true))
+                LOG_WARN("bro.json clickThrough: this window system cannot pass input through a window");
         }
         gfxTiming.windowMs = util::currentTimeMs() - gfxStart;
     } else if (displayMode_ == DisplayMode::Drm) {

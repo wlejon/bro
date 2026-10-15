@@ -48,6 +48,9 @@
              (v) => { __bro_native.window.borderless = !!v; });
     accessor(bro.window, 'alwaysOnTop', () => __bro_native.window.alwaysOnTop,
              (v) => { __bro_native.window.alwaysOnTop = !!v; });
+    accessor(bro.window, 'transparent', () => __bro_native.window.transparent, undefined);
+    accessor(bro.window, 'clickThrough', () => __bro_native.window.clickThrough,
+             (v) => { __bro_native.window.clickThrough = !!v; });
     accessor(bro.window, 'title', () => __bro_native.window.title,
              (v) => { __bro_native.window.title = String(v ?? ''); });
     fn(bro.window, 'getTitle', function getTitle() { return __bro_native.window.title; });

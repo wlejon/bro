@@ -63,6 +63,37 @@ title: its `<title>` once it loads, and every later `document.title = ...`
 The window key `title` is a fixed title instead: it wins over both and the
 window ignores `document.title`. Without `name` or `title` the window is "Bro".
 
+**Transparent, click-through windows.** Two window keys make an overlay: a
+layer over other applications that draws annotations or widgets and lets the
+rest of the desktop be used through it.
+
+| Key | Meaning |
+|---|---|
+| `transparent` | The window composites with per-pixel alpha over whatever is behind it: where the page paints nothing (a transparent `html` and `body` background) the desktop shows through, and translucent CSS (rgba, `opacity`, shadows) blends with it. Fixed when the window is created. `bro.window.transparent` reads whether it took (it needs the GPU presentation and a window system that offers it). |
+| `clickThrough` | Pointer input over a point the page would not hit (no element there, or `pointer-events: none` all the way down; `<html>` and `<body>` never count) goes to whatever lies beneath the window, other applications included; over an element, the window takes it as usual. Steer it with CSS alone. `bro.window.clickThrough` turns it on and off at run time. |
+
+```json
+{
+    "name": "Pointer Notes", "width": 480, "height": 320,
+    "transparent": true, "clickThrough": true, "borderless": true, "alwaysOnTop": true
+}
+```
+
+```html
+<html style="background: transparent">
+<body style="margin: 0; background: transparent">
+  <!-- drawn over the desktop, never in the way -->
+  <div style="position: absolute; left: 20px; top: 20px; width: 200px; height: 120px;
+              border: 3px solid rgba(255, 64, 64, .9); border-radius: 12px; pointer-events: none"></div>
+  <!-- takes clicks -->
+  <button style="position: absolute; right: 16px; bottom: 16px" onclick="bro.quit()">Close</button>
+</body>
+</html>
+```
+
+How each window system does it, and what it costs, is in
+[window-api.js](window-api.js) under `bro.window.clickThrough`.
+
 ## The command line
 
 ```

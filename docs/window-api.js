@@ -91,6 +91,82 @@ bro.window.borderless;
 bro.window.alwaysOnTop;
 
 /**
+ * Whether the window composites with per-pixel alpha over the desktop: where
+ * the page paints nothing (a transparent `html` and `body` background) what is
+ * behind the window shows through, and translucent CSS (rgba, `opacity`,
+ * shadows) blends with it, premultiplied end to end. Declared in bro.json
+ * (`"transparent": true`, docs/apps.md) and fixed when the window is created;
+ * this reads whether it took. False for a secondary window (bro.window.open).
+ *
+ * - Windows: the Vulkan swapchain presents with premultiplied composite alpha
+ *   to a window SDL sets up for DWM's alpha (blur-behind with an empty blur
+ *   region). NVIDIA's driver offers it (measured: no change in present time
+ *   against an opaque window); a driver that offers only opaque composite
+ *   alpha leaves the window opaque, and this reads false.
+ * - Linux, Wayland (bro's own client): an ARGB buffer (premultiplied
+ *   composite alpha) and no opaque region. X11 (through SDL): an ARGB visual.
+ * - macOS: a non-opaque NSWindow over a non-opaque CAMetalLayer.
+ * - Headless: captures (`screenshot()`, `frameImage()`, `getPixel()`) carry
+ *   the real alpha, unpremultiplied as PNG and ImageData are; an ordinary
+ *   window's captures are opaque.
+ * @readonly
+ * @type {boolean}
+ */
+bro.window.transparent;
+
+/**
+ * Click-through: pointer input over a point where the page would hit nothing
+ * goes to whatever lies beneath the window, other applications' windows
+ * included; over an element the window takes it as usual. "Nothing" is the
+ * page's own hit test landing on `<html>` or `<body>` — no element there, or
+ * `pointer-events: none` all the way down — so CSS alone decides what is
+ * clickable. The menu bar, an open dropdown and a system panel take input.
+ * It follows the page as it changes (hover, animations, elements appearing):
+ * after each frame that laid out or painted, never while the page is still.
+ * Declared in bro.json (`"clickThrough": true`) or set here at run time;
+ * setting it where the window system cannot pass input through a window
+ * leaves it false. Main window only. Meant for a `transparent` window, though
+ * on Windows it works on an opaque one too.
+ *
+ * - Windows: a top-level window passes input to other processes only as
+ *   WS_EX_LAYERED | WS_EX_TRANSPARENT, and then all of it, so the window
+ *   follows the pointer: a low-level mouse hook (its own thread) notes where
+ *   the pointer is over the window, and the main thread asks the page's hit
+ *   test about that one point and flips WS_EX_TRANSPARENT when the answer
+ *   changes. Measured: ~17 µs of main-thread work per pointer move over the
+ *   window, ~0.6 ms for a flip (only when the pointer crosses an element's
+ *   edge), nothing while the pointer and the page are still. A press the
+ *   window took keeps it taking input until the release (drags).
+ * - Wayland: `wl_surface.set_input_region` from the rectangles where the hit
+ *   test takes input. X11: the same rectangles as the XShape input shape
+ *   (needs `transparent`). macOS: `ignoresMouseEvents` from the same
+ *   rectangles (needs `transparent`). Those rectangles cost a hit test per
+ *   cell of the page's box grid: well under a millisecond for an overlay;
+ *   a page whose region costs more than 2 ms has it redone at most every
+ *   eighth of the time while it keeps changing, and caught up once it stops.
+ * - Headless: `takesPointerAt(x, y)` and `inputRegion()` answer the same
+ *   questions (docs/headless.md).
+ * @type {boolean}
+ *
+ * @example
+ *   // bro.json: { "transparent": true, "clickThrough": true,
+ *   //             "borderless": true, "alwaysOnTop": true }
+ *   document.documentElement.style.background = 'transparent';
+ *   document.body.style.background = 'transparent';
+ *   const note = document.createElement('div');   // drawn, never in the way
+ *   note.style.cssText = 'position:absolute;left:20px;top:20px;width:200px;height:80px;' +
+ *       'background:rgba(255,220,0,.35);border-radius:10px;pointer-events:none';
+ *   const close = document.createElement('button'); // takes clicks
+ *   close.textContent = 'Close';
+ *   close.style.cssText = 'position:absolute;right:12px;bottom:12px';
+ *   close.onclick = () => bro.quit();
+ *   document.body.append(note, close);
+ *   // While the user edits the note, the whole window takes input:
+ *   function editing(on) { bro.window.clickThrough = !on; }
+ */
+bro.window.clickThrough;
+
+/**
  * Window title text.
  * @type {string}
  */

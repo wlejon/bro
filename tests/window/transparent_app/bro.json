@@ -1,0 +1,9 @@
+{
+    "title": "Transparent Window Test",
+    "width": 400,
+    "height": 300,
+    "transparent": true,
+    "clickThrough": true,
+    "borderless": true,
+    "alwaysOnTop": true
+}

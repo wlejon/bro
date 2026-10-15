@@ -76,6 +76,7 @@ bool Engine::windowIdle() const {
         return false;
     if (!framePresenter_ || !framePresenter_->isRasterIdle()) return false;
     if (wheelResidualY_ != 0.0f) return false;
+    if (inputRegionStale_) return false;  // a click-through region still to catch up
     if (control_ && control_->hasTickers()) return false;  // input timelines, recordings
 #if BRO_WITH_PHYSICS
     if (physicsWorld_ && physicsWorld_->hasActiveBodies()) return false;

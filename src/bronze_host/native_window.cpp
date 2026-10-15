@@ -93,6 +93,23 @@ void bro_window_borderless_set(bool v) { if (auto* w = getWindow()) w->setBorder
 bool bro_window_alwaysOnTop_get(void) { auto* w = getWindow(); return w && w->isAlwaysOnTop(); }
 void bro_window_alwaysOnTop_set(bool v) { if (auto* w = getWindow()) w->setAlwaysOnTop(v); }
 
+// The main window's only: a secondary window (bro.window.open) is opaque
+// and takes all of its input.
+bool bro_window_transparent_get(void) {
+    auto* eng = hostEngine();
+    return eng && !childHost() && eng->windowTransparent();
+}
+bool bro_window_clickThrough_get(void) {
+    auto* eng = hostEngine();
+    return eng && !childHost() && eng->clickThrough();
+}
+void bro_window_clickThrough_set(bool v) {
+    auto* eng = hostEngine();
+    if (!eng || childHost()) return;
+    if (!eng->setClickThrough(v) && v)
+        LOG_WARN("bro.window.clickThrough: this window system cannot pass input through a window");
+}
+
 void bro_window_minimize(void) { if (!isHeadless()) if (auto* w = getWindow()) w->minimize(); }
 void bro_window_maximize(void) { if (!isHeadless()) if (auto* w = getWindow()) w->maximize(); }
 void bro_window_restore(void) { if (!isHeadless()) if (auto* w = getWindow()) w->restore(); }

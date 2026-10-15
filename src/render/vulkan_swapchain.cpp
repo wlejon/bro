@@ -24,6 +24,28 @@ VkSemaphore createBinarySemaphore(VkDevice device) {
 
 } // namespace
 
+// Opaque windows take OPAQUE (or whatever a surface without it offers);
+// transparent ones take PRE_MULTIPLIED, the frames being premultiplied end
+// to end, else INHERIT, where the window system's own alpha setup (an ARGB
+// X11 visual) decides and premultiplied is what those compositors assume.
+// POST_MULTIPLIED would show premultiplied frames darkened at their edges.
+VkCompositeAlphaFlagBitsKHR VulkanSwapchain::chooseCompositeAlpha(VkCompositeAlphaFlagsKHR supported,
+                                                                  bool transparent) {
+    if (transparent) {
+        for (VkCompositeAlphaFlagBitsKHR a : {VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR,
+                                              VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR}) {
+            if (supported & a) return a;
+        }
+    }
+    if (supported & VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR) return VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    for (VkCompositeAlphaFlagBitsKHR a : {VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR,
+                                          VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR,
+                                          VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR}) {
+        if (supported & a) return a;
+    }
+    return VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+}
+
 VulkanSwapchain::VulkanSwapchain(VulkanContext& context, platform::Window* window, bool vsync)
     : context_(context), window_(window), wantVsync_(vsync), vsync_(vsync)
 {
@@ -222,13 +244,16 @@ bool VulkanSwapchain::recreate() {
     uint32_t imageCount = caps.minImageCount + 1;
     if (caps.maxImageCount > 0 && imageCount > caps.maxImageCount) imageCount = caps.maxImageCount;
 
-    VkCompositeAlphaFlagBitsKHR compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-    if (!(caps.supportedCompositeAlpha & compositeAlpha)) {
-        for (VkCompositeAlphaFlagBitsKHR a : {VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR,
-                                              VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR,
-                                              VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR}) {
-            if (caps.supportedCompositeAlpha & a) { compositeAlpha = a; break; }
-        }
+    const bool wantAlpha = window_ && window_->isTransparent();
+    const VkCompositeAlphaFlagBitsKHR compositeAlpha = chooseCompositeAlpha(caps.supportedCompositeAlpha, wantAlpha);
+    if (wantAlpha && swapchain_ == VK_NULL_HANDLE) {
+        if (compositesWithAlpha(compositeAlpha))
+            LOG_INFO("VulkanSwapchain: transparent window, composite alpha %s",
+                     compositeAlpha == VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR ? "premultiplied" : "inherited");
+        else
+            LOG_WARN("VulkanSwapchain: transparent window, but the surface offers no premultiplied "
+                     "composite alpha (supported 0x%x): it presents opaque",
+                     static_cast<unsigned>(caps.supportedCompositeAlpha));
     }
 
     VkSwapchainCreateInfoKHR createInfo{};
@@ -277,6 +302,7 @@ bool VulkanSwapchain::recreate() {
     imageFormat_ = surfaceFormat.format;
     readable_ = (createInfo.imageUsage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0;
     presentMode_ = presentMode;
+    compositeAlpha_ = compositeAlpha;
     extent_ = extent;
     vsync_ = wantVsync_;
     needsRecreate_ = false;

@@ -1,6 +1,7 @@
 #include "platform/sdl/sdl_window.h"
 #include "platform/sdl/sdl_runtime.h"
 #include "platform/sdl/sdl_drag.h"
+#include "platform/sdl/sdl_click_through.h"
 #include "platform/desktop_platform.h"
 #include "util/log.h"
 
@@ -76,6 +77,15 @@ SdlWindow::SdlWindow(const WindowConfig& cfg)
         flags |= SDL_WINDOW_BORDERLESS;
     }
     if (cfg.alwaysOnTop) flags |= SDL_WINDOW_ALWAYS_ON_TOP;
+    // Per-pixel alpha (Window::isTransparent): SDL makes the window one the
+    // desktop composites with its alpha (DWM blur-behind with an empty blur
+    // region on Windows, an ARGB visual on X11, a non-opaque NSWindow and
+    // CAMetalLayer on macOS); the swapchain then presents premultiplied.
+    // Vulkan only: the software present fills black under its frame.
+    m_transparent = cfg.transparent && m_backend == GraphicsBackend::Vulkan;
+    if (cfg.transparent && !m_transparent && !cfg.hidden)
+        LOG_WARN("Transparent window: needs the GPU (Vulkan) presentation; this one is opaque");
+    if (m_transparent) flags |= SDL_WINDOW_TRANSPARENT;
 
     m_window = SDL_CreateWindow(cfg.title.c_str(), static_cast<int>(cfg.width),
                                 static_cast<int>(cfg.height), flags);
@@ -142,6 +152,7 @@ SdlWindow::SdlWindow(const WindowConfig& cfg)
 }
 
 SdlWindow::~SdlWindow() {
+    m_clickThrough.reset();  // its tracker thread watches this window
     for (SDL_Cursor*& c : m_cursors) {
         if (c) {
             SDL_DestroyCursor(c);
@@ -263,6 +274,61 @@ float SdlWindow::getOpacity() const {
 void SdlWindow::setOpacity(float opacity) {
     m_opacity = std::max(0.0f, std::min(1.0f, opacity));
     SDL_SetWindowOpacity(m_window, m_opacity);
+    if (m_clickThrough) m_clickThrough->restyle();
+}
+
+bool SdlWindow::setClickThrough(bool on) {
+    if (on == m_clickThroughOn) return true;
+    if (on && !m_clickThrough) {
+        if (m_keepHidden || desktop::isHeadless()) {
+            // Never shown, so nothing beneath to pass input to: the flag
+            // reads back and the region is still kept.
+            m_clickThroughOn = true;
+            return true;
+        }
+        m_clickThrough = SdlClickThrough::create(m_window);
+        if (!m_clickThrough) return false;
+        if (m_clickThrough->wantsRegion()) m_clickThrough->setRegion(m_inputRegion);
+        else m_clickThrough->setTest(m_inputTest);
+    }
+    m_clickThroughOn = on;
+    if (m_clickThrough) m_clickThrough->setEnabled(on);
+    return true;
+}
+
+bool SdlWindow::wantsInputRegion() const {
+    return m_clickThrough && m_clickThrough->wantsRegion();
+}
+
+void SdlWindow::setInputRegion(const std::vector<WindowRect>& rects) {
+    if (rects == m_inputRegion) return;
+    m_inputRegion = rects;
+    if (m_clickThrough && m_clickThrough->wantsRegion()) m_clickThrough->setRegion(m_inputRegion);
+}
+
+void SdlWindow::setInputTest(std::function<bool(float x, float y)> takesInput) {
+    m_inputTest = std::move(takesInput);
+    if (m_clickThrough && !m_clickThrough->wantsRegion()) m_clickThrough->setTest(m_inputTest);
+}
+
+void SdlWindow::refreshInputTest() {
+    if (m_clickThrough && m_clickThroughOn) m_clickThrough->refresh();
+}
+
+void SdlWindow::applyClickThrough() {
+    if (m_clickThrough) m_clickThrough->apply();
+}
+
+void sdlApplyClickThrough() {
+    int count = 0;
+    SDL_Window** windows = SDL_GetWindows(&count);
+    if (!windows) return;
+    for (int i = 0; i < count; ++i) {
+        auto* self = static_cast<SdlWindow*>(
+            SDL_GetPointerProperty(SDL_GetWindowProperties(windows[i]), "bro.sdl_window", nullptr));
+        if (self && self->isClickThrough()) self->applyClickThrough();
+    }
+    SDL_free(windows);
 }
 
 bool SdlWindow::isFocused() const {

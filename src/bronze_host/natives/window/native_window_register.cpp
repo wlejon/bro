@@ -53,6 +53,9 @@ bool registerNatives_window(std::string* error) {
         setter("__bro_native.window.borderless", p(&bro_window_borderless_set), "bool", error) &&
         getter("__bro_native.window.alwaysOnTop", p(&bro_window_alwaysOnTop_get), "bool", error) &&
         setter("__bro_native.window.alwaysOnTop", p(&bro_window_alwaysOnTop_set), "bool", error) &&
+        getter("__bro_native.window.transparent", p(&bro_window_transparent_get), "bool", error) &&
+        getter("__bro_native.window.clickThrough", p(&bro_window_clickThrough_get), "bool", error) &&
+        setter("__bro_native.window.clickThrough", p(&bro_window_clickThrough_set), "bool", error) &&
         fn("__bro_native.window.minimize", p(&bro_window_minimize), "void", {}, error) &&
         fn("__bro_native.window.maximize", p(&bro_window_maximize), "void", {}, error) &&
         fn("__bro_native.window.restore", p(&bro_window_restore), "void", {}, error) &&

@@ -203,6 +203,9 @@ void SdlEventLoop::pollEvents() {
     // A drag begun by input that did not come through here (the control
     // socket's) starts now.
     sdlRunPendingDrag();
+    // A click-through window whose pointer tracker (another thread) saw the
+    // pointer cross its input region's edge flips how it takes input now.
+    sdlApplyClickThrough();
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
         // A drag the OS carries (sdl_drag.h): the pointer is its until it
