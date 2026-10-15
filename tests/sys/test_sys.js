@@ -55,7 +55,9 @@ if (!bro.sys.available) {
     try {
         bro.sys.killProcess(1, 'SIGTERM');
     } catch (e) {
-        refusedPid1 = /refusing to signal pid 1/i.test(String(e));
+        // "refusing to signal pid 1" (Linux, macOS); "refusing to terminate
+        // system pid 1" (Windows, which refuses every pid up to 4).
+        refusedPid1 = /refusing to (signal|terminate system) pid 1\b/i.test(String(e));
     }
     assert(refusedPid1, 'killProcess refuses PID 1');
 
