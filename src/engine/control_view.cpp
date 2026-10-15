@@ -735,21 +735,26 @@ void cmdClickHandle(ControlServer& s, const ControlCallPtr& call) {
     });
 }
 
+// Steps that give `it` the keyboard: its window focused, and an element not
+// focused yet clicked. (A focused field is not clicked again: a second click
+// there would read as a double click.)
+void focusSteps(const Item* it, const WinInfo* w, std::vector<std::vector<std::string>>& steps) {
+    if (it->isWindow()) {
+        if (w) steps.push_back(focusStep(w));
+    } else if (it->flags.find('@') != std::string::npos) {
+        if (w && !w->focused) steps.push_back(focusStep(w));
+    } else {
+        float x, y;
+        aimAt(*it, w ? std::vector<WinInfo>{*w} : std::vector<WinInfo>{}, x, y);
+        steps.push_back({"click", point(x, y)});
+    }
+}
+
 void cmdTypeHandle(ControlServer& s, const ControlCallPtr& call, bool replace) {
     const std::string target = call->arg(0);
     const std::string text = restText(call, 1);
     act(s, call, target, [text, replace](const Item* it, const WinInfo* w, auto& steps, std::string&) {
-        if (it->isWindow()) {
-            if (w) steps.push_back(focusStep(w));
-        } else if (it->flags.find('@') != std::string::npos) {
-            if (w && !w->focused) steps.push_back(focusStep(w));
-        } else {
-            // Not focused yet: click it. (A focused field is not clicked
-            // again: a second click there would read as a double click.)
-            float x, y;
-            aimAt(*it, w ? std::vector<WinInfo>{*w} : std::vector<WinInfo>{}, x, y);
-            steps.push_back({"click", point(x, y)});
-        }
+        focusSteps(it, w, steps);
         const bool field = it->role == "textbox" || it->role == "searchbox" || it->role == "spinbutton";
         if (replace) {
             steps.push_back({"key", "ctrl+a"});
@@ -764,13 +769,13 @@ void cmdTypeHandle(ControlServer& s, const ControlCallPtr& call, bool replace) {
 
 void cmdKeyHandle(ControlServer& s, const ControlCallPtr& call) {
     auto p = call->positional();
-    const bool toWindow = !p.empty() && view::isWindowHandle(p[0]);
-    const std::string target = toWindow ? p[0] : std::string();
-    std::vector<std::string> keys(p.begin() + (toWindow ? 1 : 0), p.end());
-    if (keys.empty()) return call->fail("usage: key [wN] <combo>...");
+    const bool toTarget = !p.empty() && (view::isWindowHandle(p[0]) || view::isElementHandle(p[0]));
+    const std::string target = toTarget ? p[0] : std::string();
+    std::vector<std::string> keys(p.begin() + (toTarget ? 1 : 0), p.end());
+    if (keys.empty()) return call->fail("usage: key [wN | N.M] <combo>...");
     auto opts = passOptions(call, {"hold", "gap"});
-    act(s, call, target, [keys, opts](const Item*, const WinInfo* w, auto& steps, std::string&) {
-        if (w) steps.push_back(focusStep(w));
+    act(s, call, target, [keys, opts](const Item* it, const WinInfo* w, auto& steps, std::string&) {
+        if (it) focusSteps(it, w, steps);
         std::vector<std::string> k{"key"};
         k.insert(k.end(), keys.begin(), keys.end());
         k.insert(k.end(), opts.begin(), opts.end());
@@ -952,7 +957,8 @@ void registerAgentViewCommands(ControlServer& s) {
              handleForm(c) ? cmdTypeHandle(s, c, false) : plainWithDiff(c);
          });
     s.handler("key", &usage);
-    wrap("key", "[wN] <combo>... | " + usage + "  (wN: focus it first; with wN or --diff the reply is the diff)",
+    wrap("key", "[wN | N.M] <combo>... | " + usage +
+                    "  (wN / N.M: give it the keyboard first; with a handle or --diff the reply is the diff)",
          [&s](const ControlCallPtr& c) { cmdKeyHandle(s, c); });
 
     s.registerCommand("view",

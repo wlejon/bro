@@ -152,6 +152,10 @@ assert(document.getElementById('user').value === 'hopper', 'set replaces: ' + do
 assert(new RegExp('^~ ' + user.replace('.', '\\.') + ' ="hopper"$', 'm').test(setReply), 'set answers with the new value: ' + setReply);
 ok('type', user, '!');
 assert(document.getElementById('user').value === 'hopper!', 'type appends: ' + document.getElementById('user').value);
+// key <handle>: the keys go to that element.
+var keyed = ok('key', user, 'backspace');
+assert(document.getElementById('user').value === 'hopper', 'key <handle> presses into it: ' + document.getElementById('user').value);
+assert(new RegExp('^~ ' + user.replace('.', '\\.') + ' ="hopper"$', 'm').test(keyed), 'key answers with the diff: ' + keyed);
 
 // A click that opens a dialog: the dialog is the answer.
 document.getElementById('save').addEventListener('click', function() {
