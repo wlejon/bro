@@ -15,10 +15,14 @@
 //      order with 250 tokens and 250 x 64 latents, rows with their tag and
 //      memory; contiguous planar audio from 0 that is exactly vae.decode()
 //      of the latents; 'done', onDone, the gates busy then free.
-//   4. Paced by a simulated player: stats has its shape; setTarget() is
-//      planned at stats.openChunk and returns the merged target; setKnobs()
-//      clamps; branch() returns 1 and a 'branch' event follows, discardBranch
-//      a 'discarded'; stop() ends it cleanly.
+//   4. Paced by a simulated player, rolled lyrics: stats has its shape;
+//      setTarget() is planned at stats.openChunk and returns the merged
+//      target; setKnobs() clamps; branch() returns 1 and a 'branch' event
+//      follows, discardBranch a 'discarded'; stop() ends it cleanly with no
+//      service gap of 0.2 s; a 'lyrics' event after each chunk's 'sampled'
+//      carries the lyric head's reading (words, a pointer and mass per
+//      frame, lines reached) and each window starts after the furthest line
+//      reached.
 
 const fs = require('node:fs');
 
@@ -44,6 +48,9 @@ const FOLK = 'folk, acoustic guitar, warm, intimate, male vocal, 90 bpm';
 const SYNTH = 'synthwave, analog synthesizer, drum machine, retro, 100 bpm';
 const MODEL_DIR = process.env.YUE2_MODEL_DIR || '../YuE2-3B';
 const VAE_DIR = (process.env.BRO_WEIGHTS || '../brosoundml/weights') + '/yue2-vae';
+const SHEET = '[Verse]\nThe river runs beneath the bridge\nI walk the road alone tonight\nThe lantern swings above the door\n' +
+              'And every window holds a light\n[Chorus]\nCarry me home across the water\nCarry me home before the dawn\n' +
+              'The morning finds me singing louder\nThe evening finds the singer gone\n';
 
 if (!bro.music || bro.music.available === false || typeof bro.music.beat !== 'function') {
     skipTest('bro.music is not in this build');
@@ -127,8 +134,6 @@ function argumentErrors(yue, vae) {
     assert(err instanceof TypeError && /changeMode/.test(err.message), 'changeMode is named: ' + err.message);
     err = expectThrows(() => yue.endless({ vae, path: [{ style: SYNTH }] }), 'a path entry without at');
     assert(err instanceof TypeError && /at/.test(err.message), 'the path\'s at is named: ' + err.message);
-    err = expectThrows(() => yue.endless({ vae, whisper: {} }), 'a whisper that is not one');
-    assert(err instanceof TypeError && /whisper/.test(err.message), 'whisper is named: ' + err.message);
     assert(!yue.busy && !vae.busy, 'a refused stream claims nothing');
 }
 
@@ -183,11 +188,42 @@ function unpaced(yue, vae) {
     console.log('unpaced: ' + (at / SR).toFixed(2) + ' s; the stream\'s beat at 90 bpm: contrast ' + fit.contrast.toFixed(2));
 }
 
+function checkLyrics(events) {
+    // The last reading per main-line chunk (a retargeted chunk is read again).
+    const last = new Map();
+    for (const e of events) if (e.kind === 'lyrics' && e.branch === 0) last.set(e.chunk, e);
+    const ly = [...last.keys()].sort((a, b) => a - b).map((k) => last.get(k));
+    assert(ly.length >= 2 && ly.every((e, i) => e.chunk === i), "a 'lyrics' event per sampled chunk (" + ly.length + ')');
+    let reached = -1;
+    for (const e of ly) {
+        const r = e.row, W = r.lyricWords.length;
+        const k = events.indexOf(e);
+        assert(events.slice(0, k).some((x) => x.kind === 'sampled' && x.chunk === e.chunk && x.branch === 0),
+               "chunk " + e.chunk + ": 'lyrics' follows its 'sampled'");
+        assert(Array.isArray(r.lyricWords) && W >= 4 && r.lyricWords.every((w) => /^[a-z']+$/.test(w)) &&
+               r.lyricWordLines instanceof Int32Array && r.lyricWordLines.length === W, 'chunk ' + e.chunk + ': the window\'s words');
+        assert(r.pointer instanceof Int32Array && r.pointer.length === 250 && r.pointer.every((p) => p >= 0 && p < W) &&
+               r.pointerMass instanceof Float32Array && r.pointerMass.length === 250 &&
+               r.pointerMass.every((m) => m >= 0 && m <= 1.0001), 'chunk ' + e.chunk + ': a pointer and a mass per frame');
+        assert(r.lyricLines[0] === Math.min(reached + 1, 7),   // SHEET has 8 sung lines
+               'chunk ' + e.chunk + ': the window starts after the furthest line reached (' + r.lyricLines[0] + ', ' + reached + ')');
+        for (const l of r.linesReached) {
+            assert(l >= r.lyricLines[0] && l < r.lyricLines[1], 'a line reached is in the window');
+            reached = Math.max(reached, l);
+        }
+        assert(e.value === reached, "the event's value is the furthest line reached");
+        const on = r.pointerMass.filter((m) => m >= 0.2).length;
+        console.log('lyrics: chunk ' + e.chunk + ' window [' + r.lyricLines.join(', ') + '), ' + on + '/250 frames on the lyrics, reached [' +
+                    r.linesReached.join(', ') + '], sung: ' + [...r.pointer].filter((p, f) => r.pointerMass[f] >= 0.2)
+                        .filter((p, i, a) => i === 0 || p !== a[i - 1]).map((p) => r.lyricWords[p]).join(' '));
+    }
+}
+
 function paced(yue, vae) {
     const events = [];
     let emitted = 0, t0 = -1, done = null;
     const st = yue.endless({
-        vae, seed: 5, target: { style: FOLK, tag: 'folk' },
+        vae, seed: 5, memory: 500, target: { style: FOLK, tag: 'folk', lyrics: SHEET, roll: true },
         onAudio: (a) => { emitted = a.sample0 + a.frames; if (t0 < 0) t0 = Date.now(); },
         onEvent: (e) => events.push(e),
         onDone: (i) => { done = i; },
@@ -200,11 +236,13 @@ function paced(yue, vae) {
     assert(typeof s.openChunk === 'number' && s.openSample === s.openChunk * 250 * 1920, 'openSample is openChunk\'s start');
     assert(s.target.tag === 'folk' && s.target.style === FOLK && s.target.score === null, 'stats.target: ' + JSON.stringify(s.target.tag));
     assert(Array.isArray(s.chunks) && Array.isArray(s.branches) && Array.isArray(s.gaps), 'stats lists');
-    assert(['splice', 'render', 'decode', 'listen'].every((k) => typeof s.costSeconds[k] === 'number'), 'costSeconds');
+    assert(['splice', 'render', 'decode'].every((k) => typeof s.costSeconds[k] === 'number') && !('listen' in s.costSeconds),
+           'costSeconds');
     assert(s.emitted - s.playhead <= 1.0 * SR, 'at most the emit lead ahead');
 
     const merged = st.setTarget({ style: SYNTH, tag: 'synth' });
-    assert(merged.style === SYNTH && merged.tag === 'synth' && merged.lyrics === '', 'setTarget returns the merged target');
+    assert(merged.style === SYNTH && merged.tag === 'synth' && merged.lyrics === SHEET && merged.roll,
+           'setTarget returns the merged target');
     pumpUntil("the 'planned' event", () => { play(); return events.some((e) => e.kind === 'planned'); }, 10);
     const pl = events.find((e) => e.kind === 'planned');
     assert(pl.tag === 'synth' && (pl.chunk === s.openChunk || pl.chunk === s.openChunk + 1) &&
@@ -226,7 +264,9 @@ function paced(yue, vae) {
     pumpUntil('onDone after stop()', () => done !== null, 60);
     assert(!done.error, 'stop() ends cleanly: ' + JSON.stringify(done));
     assert(!yue.busy && !vae.busy, 'released after stop()');
-    assert(!events.some((e) => e.kind === 'error'), 'no error events');
+    assert(!events.some((e) => e.kind === 'error' || e.kind === 'heard'), 'no error events (and no Whisper)');
+    assert(before.worstGapSeconds < 0.2, 'no service gap of 0.2 s with rolled lyrics (' + before.worstGapSeconds + ')');
+    checkLyrics(events);
     console.log('paced: ' + (emitted / SR).toFixed(1) + ' s handed out; worst gap ' + before.worstGapSeconds.toFixed(3) +
                 ' s; events ' + [...new Set(events.map((e) => e.kind))].join(' '));
 }

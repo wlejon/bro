@@ -22,8 +22,7 @@
  *
  * Unpaced with the same chunk schedule and seeds it is endless.js bit for bit
  * (tokens, latents, audio; yue2-research native/endless_stream.js checks
- * constant streams, memory-drop tours, scored measured-bridge tours and
- * rolled lyrics with Whisper listening).
+ * constant streams, memory-drop tours and scored measured-bridge tours).
  *
  * Targets. A target is what chunks are made under: style text, an optional
  * score (ABC: under it the tempo is exact, its Q: sets it), a lyric sheet,
@@ -58,13 +57,23 @@
  *     is within 0.11 beats 15 times in 21 (median 0.05).
  *
  * Rolled lyrics (target.roll): each chunk's prefix carries lyricWindow lines
- * of the sheet (section tags kept, not counted), starting after the last
- * line heard, moving one line on when nothing was heard for 3 chunks. With
- * opts.whisper (bro.stt.loadWhisper + loadTokenizer) the stream listens to
- * each chunk it renders and 'heard' events carry the text. Against a
- * 40-line sheet that sings twice as many distinct lines as the whole sheet
- * in every prefix does (which loops the first verse and chorus). Without a
- * listener the window moves one line every 3 chunks.
+ * of the sheet (section tags kept, not counted), starting after the furthest
+ * line the model reached in the chunks before it. Where the model is in the
+ * lyrics is read off its own attention while the chunk is sampled: head
+ * 14.10 (layer 14, query head 10) points at the lyric word being sung
+ * (yue2-research FINDINGS 11; the right word on ~70% of frames, the right
+ * line on ~84%, about 2 frames ahead of the voice). For every token the
+ * stream reads that head's softmax mass on each word of the window; a line
+ * is reached when the head pointed into 60% of its words, each for 2 frames
+ * or more, on frames whose mass on the window's words is 0.2 or more. The
+ * reading costs one head's dot products per token and is there as soon as
+ * the chunk's tokens are, so the next window never waits on a render. The
+ * head also walks through lines the model only hums, so those count as
+ * passed. A 'lyrics' event per chunk, right after its 'sampled', carries
+ * the reading (row.lyricWords, row.pointer: the word sung per frame,
+ * row.pointerMass, row.linesReached): enough to show the words being sung,
+ * 40 ms a frame, ahead of the audio. Without roll, the whole sheet in every
+ * prefix loops the first verse and chorus.
  *
  * Branches: branch(target, path) builds an alternative continuation from the
  * open chunk beside the main line (at most maxBranches). commitBranch(id)
@@ -78,14 +87,11 @@
  * emitLeadSeconds ahead of the playhead you report with setPlayhead()
  * (program samples played), so report what the player has really consumed.
  * The worker services the player inside every long operation (splice per
- * token, renders, decodes and Whisper while the device runs them);
- * stats.gaps records any 0.2 s without a service. On a 4090 a chunk costs a
- * splice of ~1 s, a render of ~2 s, a decode of ~0.7 s and a listen of
- * ~0.6 s: ~30% of the GPU per line. A 4-minute paced run with rolled lyrics,
- * changes, knobs and branches had no gap of 0.2 s and no underrun.
+ * token, renders and decodes while the device runs them); stats.gaps
+ * records any 0.2 s without a service. On a 4090 a chunk costs a splice of
+ * ~1 s, a render of ~2 s and a decode of ~0.7 s: ~30% of the GPU per line.
  *
- * The stream holds the model, opts.vae and opts.whisper (their `busy`)
- * until it stops.
+ * The stream holds the model and opts.vae (their `busy`) until it stops.
  *
  * @example
  *   const yue = bro.music.loadYuE2(modelDir);
@@ -128,8 +134,6 @@
  * @property {YuE2Vae} vae - A loaded VAE (decoderOnly is enough)
  * @property {YuE2EndlessTarget} [target] - The first chunk's (at ignored)
  * @property {YuE2EndlessTarget[]} [path] - Timed targets ahead (each needs at)
- * @property {Object} [whisper] - bro.stt.loadWhisper(): listens for rolled lyrics
- * @property {Object} [whisperTokenizer] - bro.stt.loadTokenizer() for it (required with whisper)
  * @property {function(YuE2AudioChunk)} onAudio - Program audio, planar, plus sample0 (contiguous from 0)
  * @property {function(YuE2EndlessEvent)} [onEvent]
  * @property {function({cancelled: boolean, error: string})} [onDone]
@@ -171,7 +175,6 @@
  * @property {number} spliceSeconds
  * @property {number} inpaintSeconds
  * @property {number} decodeSeconds
- * @property {number} listenSeconds
  * @property {number} narWindow - Frames its render solved
  * @property {boolean} probeRender - Rendered by its bridge's probe (kept)
  * @property {number} latentNorm - Mean frame norm (the corpus: 6.5..9.5; the opening chunk runs 9-10)
@@ -181,8 +184,11 @@
  * @property {number} [trim] - Fresh clip: = phaseFit.cut
  * @property {string} lyrics - The sheet text its prefix carried
  * @property {number[]} [lyricLines] - Rolled: the window [from, to) of sung lines
- * @property {string} [heardText] - Rolled + a listener: what was heard in it
- * @property {number[]} [heardLines] - Sung lines heard (60% of their words)
+ * @property {string[]} [lyricWords] - Rolled: the window's words in prompt order (lower case, runs of [a-z'])
+ * @property {Int32Array} [lyricWordLines] - Rolled: each word's sheet line (counting sung lines, as lyricLines)
+ * @property {Int32Array} [pointer] - Rolled: per frame (40 ms), the index into lyricWords of the word head 14.10 attends to most
+ * @property {Float32Array} [pointerMass] - Rolled: per frame, the head's attention mass on all the window's words (0..1; under ~0.2 it is not on the lyrics)
+ * @property {number[]} [linesReached] - Rolled: the sheet lines the head reached in this chunk
  * @property {YuE2Knobs} knobs
  */
 
@@ -194,7 +200,9 @@
  *   'built'        a chunk is rendered (row; latents + frame0 with chunkData), value = its latent norm
  *   'styleChange'  a change made at chunk: text = 'drop' | 'bridge' | 'plain'
  *   'phaseFit'     a bridge's beat fit (row of the fresh clip), value = the cut in frames
- *   'heard'        rolled lyrics: row.heardText / heardLines; value = the last line heard
+ *   'lyrics'       rolled lyrics: the lyric head's reading of a chunk, right after its 'sampled'
+ *                  (row.lyricWords / pointer / pointerMass / linesReached); value = the furthest
+ *                  sheet line reached so far
  *   'breakWarning' a chunk's latent norm left 6.5..9.5 (value)
  *   'chunkStart'   a chunk's first sample handed out (sample)
  *   'branch'       a branch opened: branch = its id, chunk = its fork
@@ -239,7 +247,7 @@
  * @property {{seconds: number, what: string, chunk: number, emitted: number, lead: number}[]} gaps - The last 16 of 0.2 s or more without a service
  * @property {number} worstGapSeconds
  * @property {Object<string, number>} work - The worker's seconds per kind of work
- * @property {{splice: number, render: number, decode: number, listen: number}} costSeconds - Per chunk, running means
+ * @property {{splice: number, render: number, decode: number}} costSeconds - Per chunk, running means
  */
 
 /**
@@ -305,10 +313,9 @@ class YuE2Endless {
 }
 
 /**
- * On a loaded YuE2 (music-api.js): the endless stream. Holds the model,
- * opts.vae and opts.whisper until it stops. TypeError on bad options (an
- * unpaced stream without maxChunks, whisper without its tokenizer, ...),
- * Error when one of them is busy.
+ * On a loaded YuE2 (music-api.js): the endless stream. Holds the model and
+ * opts.vae until it stops. TypeError on bad options (an unpaced stream
+ * without maxChunks, ...), Error when one of them is busy.
  * @param {YuE2EndlessOptions} opts
  * @returns {YuE2Endless}
  */
