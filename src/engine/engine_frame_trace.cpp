@@ -118,14 +118,15 @@ void Engine::startControl() {
     const bool off = env && (std::strcmp(env, "0") == 0 || std::strcmp(env, "off") == 0);
     const bool on = env && *env && !off;
     if (off) return;
-    if (displayMode_ != DisplayMode::Drm && !on) return;
-    // The display server is "display"; anything else is named after its app
-    // and pid, so several can run side by side. BRO_CONTROL=<name> (not 1)
-    // picks the name.
+    const bool display = displayMode_ == DisplayMode::Drm || desktopShell_;
+    if (!display && !on) return;
+    // The display server (or the session's desktop shell) is "display";
+    // anything else is named after its app and pid, so several can run side
+    // by side. BRO_CONTROL=<name> (not 1) picks the name.
     std::string name;
     if (on && std::strcmp(env, "1") != 0 && std::strcmp(env, "on") != 0) {
         name = env;
-    } else if (displayMode_ == DisplayMode::Drm) {
+    } else if (display) {
         name = "display";
     } else {
         std::string app = std::filesystem::path(appDir_).filename().string();

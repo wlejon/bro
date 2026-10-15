@@ -476,6 +476,8 @@ public:
     void onMenuChanged();
 
     DisplayMode displayMode() const { return displayMode_; }
+    /// The session's desktop shell over a system compositor (EngineConfig::desktopShell).
+    bool isDesktopShell() const { return desktopShell_; }
 
     /// The bronze module handles of the running app: its compiled `app.dll`
     /// and/or the program its `<script>` tags were compiled into. Both are
@@ -948,6 +950,7 @@ private:
     void rasterThreadFunc();
     void layoutThreadFunc();
     DisplayMode displayMode_;
+    bool desktopShell_ = false;
     std::unique_ptr<platform::Window> window_;
     std::unique_ptr<render::Renderer> renderer_;
     std::unique_ptr<render::VulkanContext> vulkanContext_;

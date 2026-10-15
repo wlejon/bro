@@ -13,6 +13,7 @@
 #include "dom/element.h"
 #include "dom/element_geometry.h"
 #include "platform/control_socket.h"
+#include "platform/desktop_session.h"
 #include "render/vulkan_presenter.h"
 #include "util/json_out.h"
 #include "util/time.h"
@@ -137,6 +138,21 @@ bool controlGrabScreen(Engine& engine, std::vector<uint8_t>& rgba, uint32_t& wid
             return false;
         }
         return kms->readLastFrame(rgba, width, height, why);
+    }
+#endif
+#if defined(_WIN32)
+    // The session's shell: the screen under its window, other apps' windows
+    // included, in the same frame pixels its own readback would have.
+    if (engine.isDesktopShell()) {
+        int x = 0, y = 0, cw = 0, ch = 0;
+        if (!platform::desktop::clientRectOnScreen(engine.window(), x, y, cw, ch)) {
+            if (why) *why = "the shell has no window on screen";
+            return false;
+        }
+        if (!platform::desktop::captureScreenRect(x, y, cw, ch, rgba, why)) return false;
+        width = static_cast<uint32_t>(cw);
+        height = static_cast<uint32_t>(ch);
+        return true;
     }
 #endif
     int w = 0, h = 0;

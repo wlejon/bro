@@ -76,6 +76,12 @@ struct EngineConfig {
     // (Scrollbar::colorsFor).
     Scrollbar::Style elementScrollbar{5.0f, 1.0f, 16.0f};
     bool isShellApp = false;
+    // This process is the session's desktop shell over a system compositor
+    // (helm as the Winlogon shell on Windows). Agent control then serves
+    // "display" without BRO_CONTROL, as a DRM bro does, and its screenshots
+    // and injected input are the whole session's (platform/desktop_session.h),
+    // so other apps' windows and global hotkeys are in reach. Implied by DRM.
+    bool desktopShell = false;
     std::vector<std::string> privilegedNamespaces;
     // The app manifest's identity and desktop keys (engine/app_manifest.h,
     // docs/apps.md), and the effective id finalizeAppIdentity() settles on:

@@ -3,9 +3,11 @@
 // pixels), and routed as local input is. Under DRM it becomes the libinput
 // path's own DrmInputEvent, built by the seat's DrmInputPlatform so the
 // modifiers and the pointer are the seat's, and goes through
-// dispatchDrmInput: global hotkeys, the shell or a client window. Elsewhere
-// (windowed, headless) it goes to the handle* entry points, with a key's
-// text derived as the DRM path derives it.
+// dispatchDrmInput: global hotkeys, the shell or a client window. A desktop
+// shell over a system compositor (Windows) sends it into the OS's input
+// stream instead (platform/desktop_session.h). Elsewhere (windowed, headless)
+// it goes to the handle* entry points, with a key's text derived as the DRM
+// path derives it.
 #include "engine/engine.h"
 #include "engine/engine_drm.h"
 #include "engine/key_mapping.h"
@@ -14,6 +16,11 @@
 #include "platform/keys.h"
 
 #include <algorithm>
+#include <cmath>
+
+#if defined(_WIN32)
+#include "platform/desktop_session.h"
+#endif
 
 #if defined(__linux__) && BRO_WITH_SEAT && BRO_WITH_DMABUF
 #include "platform/drm_input.h"
@@ -56,6 +63,29 @@ void Engine::injectDeviceInput(const DeviceInput& in) {
                 dispatchDrmInput(seat.wheelEvent(static_cast<float>(in.wheelX) * 15.0f / 120.0f,
                                                  static_cast<float>(in.wheelY) * 15.0f / 120.0f));
                 break;
+        }
+        return;
+    }
+#endif
+
+#if defined(_WIN32)
+    // The session's shell over DWM: into the OS's input stream, so global
+    // hotkeys and other apps' windows see it as the DRM seat's input is seen.
+    // Frame pixels are the window's client pixels.
+    if (desktopShell_) {
+        namespace pd = platform::desktop;
+        int ox = 0, oy = 0, cw = 0, ch = 0;
+        pd::clientRectOnScreen(window_.get(), ox, oy, cw, ch);
+        switch (in.kind) {
+            case Kind::Key: pd::sendKey(in.code, in.pressed); break;
+            case Kind::Motion:
+                pd::sendPointerTo(ox + static_cast<int>(std::lround(in.x)), oy + static_cast<int>(std::lround(in.y)));
+                break;
+            case Kind::RelativeMotion:
+                pd::sendPointerBy(static_cast<int>(std::lround(in.x)), static_cast<int>(std::lround(in.y)));
+                break;
+            case Kind::Button: pd::sendButton(in.code, in.pressed); break;
+            case Kind::Wheel: pd::sendWheel(in.wheelX, in.wheelY); break;
         }
         return;
     }
