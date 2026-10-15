@@ -153,6 +153,9 @@ public:
     };
     void injectDeviceInput(const DeviceInput& in);
     /// A key a hotkey grab holds for the desktop shell while another app has
+    /// Present the next frame even if it is unchanged (an on-demand readback
+    /// of a window that does not read back every present).
+    void presentNextFrame() { presentedKeyValid_ = false; }
     /// the foreground (Windows; platform/desktop_hotkeys.h ShellKeySink): to
     /// the document, with `mods` (hotkey_mod bits) as the modifiers held.
     void deliverShellGrabKey(uint32_t evdevCode, bool down, bool repeat, uint32_t mods);
@@ -784,9 +787,9 @@ private:
     bool presentCurrentFrame(bool mayHold = false);
     std::vector<uint8_t> readCompositedFrame();
     render::PresentFrame describeCompositedFrame();
-    // BRO_CAPTURE_PRESENTS=1, or the control socket asked for with
-    // BRO_CONTROL: windowed presenters also read back each frame they present
-    // (presentedPixels, the control socket's screenshot).
+    // BRO_CAPTURE_PRESENTS=1: windowed presenters read back each frame they
+    // present from the start (agent control turns that on only while it
+    // needs it: a screenshot's one present, a recording's length).
     static bool capturePresentsRequested();
     FramePresenter::Snapshot buildRasterSnapshot() const;
     void renderAndPresentFrame(double frameStart, double now, double wallFrameDtMs,

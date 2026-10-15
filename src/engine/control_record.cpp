@@ -387,8 +387,10 @@ void recordWindowed(ControlServer& s, Engine& e, const ControlCallPtr& call, dou
     render::VulkanPresenter* presenter = e.vulkanPresenter();
     if (!presenter || presenter->isHeadless() || e.displayMode() != DisplayMode::Windowed)
         return call->fail("record needs a windowed bro or bro --drm");
-    if (!presenter->capturePresents())
-        return call->fail("this window does not read back its presents (BRO_CONTROL turns that on at start)");
+    // Read back every present for the recording's length only.
+    const bool captureWas = presenter->capturePresents();
+    presenter->setCapturePresents(true);
+    e.presentNextFrame();
     auto r = std::make_shared<Recording>();
     r->dir = std::move(dir);
     r->durationMs = secs * 1000.0;
@@ -405,7 +407,7 @@ void recordWindowed(ControlServer& s, Engine& e, const ControlCallPtr& call, dou
     r->lastSerial = presenter->readbackSerial();
     r->startMs = util::currentTimeMs();
     g_active = r;
-    s.addTicker([&e, r]() {
+    s.addTicker([&e, r, captureWas]() {
         render::VulkanPresenter* p = e.vulkanPresenter();
         const uint64_t serial = p ? p->readbackSerial() : 0;
         if (p && serial != 0 && serial != r->lastSerial && r->frames.size() < r->maxFrames) {
@@ -432,6 +434,7 @@ void recordWindowed(ControlServer& s, Engine& e, const ControlCallPtr& call, dou
         }
         if (util::currentTimeMs() - r->startMs < r->durationMs && !r->overflow) return false;
         g_active.reset();
+        if (p) p->setCapturePresents(captureWas);
         const double from = r->startMs, to = util::currentTimeMs();
         FrameTrace& tr = e.frameTrace();
         std::thread(writeRecording, r, windowedRefreshMs(e, *r, tr.refreshPeriodMs()), tr.summaryJson(from, to),

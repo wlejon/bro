@@ -119,7 +119,12 @@ void Engine::startControl() {
     const bool on = env && *env && !off;
     if (off) return;
     const bool display = displayMode_ == DisplayMode::Drm || desktopShell_;
-    if (!display && !on) return;
+    // An app in a session whose display server serves the agent view
+    // (BRO_CONTROL_SESSION, set for the processes it starts) serves its own
+    // endpoint, so the display finds it by process id.
+    const char* session = std::getenv("BRO_CONTROL_SESSION");
+    const bool inSession = session && *session && std::strcmp(session, "0") != 0;
+    if (!display && !on && !inSession) return;
     // The display server (or the session's desktop shell) is "display";
     // anything else is named after its app and pid, so several can run side
     // by side. BRO_CONTROL=<name> (not 1) picks the name.

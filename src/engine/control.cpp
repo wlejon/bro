@@ -91,6 +91,13 @@ void ControlServer::registerCommand(const std::string& name, const std::string& 
     commands_[name] = Command{usage, std::move(handler)};
 }
 
+ControlServer::Handler ControlServer::handler(const std::string& name, std::string* usage) const {
+    auto it = commands_.find(name);
+    if (it == commands_.end()) return {};
+    if (usage) *usage = it->second.usage;
+    return it->second.handler;
+}
+
 std::string ControlServer::helpText() const {
     std::string out;
     for (const auto& [name, cmd] : commands_) out += name + " " + cmd.usage + "\n";

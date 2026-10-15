@@ -41,12 +41,16 @@ bool Engine::startShellCompositor(uint32_t width, uint32_t height, const std::st
     }
     auto* comp = drmCtx_->compositor.get();
     LOG_INFO("Engine: WaylandCompositor started on socket %s", comp->socketName().c_str());
+    // The apps this session starts serve agent control, so the display can
+    // fetch their views (docs/agent-view.md); BRO_CONTROL=0 still turns it off.
 #if defined(_WIN32)
     _putenv_s("WAYLAND_DISPLAY", comp->socketName().c_str());
     if (!comp->xwaylandDisplay().empty()) _putenv_s("DISPLAY", comp->xwaylandDisplay().c_str());
+    _putenv_s("BRO_CONTROL_SESSION", "1");
 #else
     ::setenv("WAYLAND_DISPLAY", comp->socketName().c_str(), 1);
     if (!comp->xwaylandDisplay().empty()) ::setenv("DISPLAY", comp->xwaylandDisplay().c_str(), 1);
+    ::setenv("BRO_CONTROL_SESSION", "1", 1);
 #endif
 #if BRO_HAVE_WAYLAND_SERVER
     if (comp->windowManager()) {

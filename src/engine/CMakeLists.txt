@@ -8,6 +8,9 @@ add_library(bro_engine STATIC
     control_commands.cpp
     control_input.cpp
     control_record.cpp
+    control_view.cpp
+    agent_view.cpp
+    view_document.cpp
     engine.cpp
     scene_audio_sync.cpp
     engine_compositor.cpp
@@ -98,6 +101,8 @@ target_link_libraries(bro_engine PUBLIC bro_platform bro_render bro_dom bro_layo
 target_link_libraries(bro_engine PRIVATE brokit_api)
 # <img> intrinsic sizing probes WebP headers too, so the engine needs the same
 # decoder the two image paths use (render/webp_image.h).
+# The agent view asks the apps' control endpoints for their views (brolink IPC).
+target_link_libraries(bro_engine PRIVATE brolink)
 if(BRO_WITH_WEBP)
     target_link_libraries(bro_engine PRIVATE bro_webp)
 endif()
@@ -130,6 +135,11 @@ if(BRO_BUILD_TESTS)
     target_compile_features(bro_source_preflight_test PRIVATE cxx_std_20)
 endif()
 
+
+    # The agent view's text model: lines, revisions, diffs (pure).
+    add_executable(bro_agent_view_test tests/test_agent_view.cpp agent_view.cpp)
+    target_include_directories(bro_agent_view_test PRIVATE ${bro_SOURCE_DIR}/src)
+    target_compile_features(bro_agent_view_test PRIVATE cxx_std_20)
 # Stamp BRO_WITH_* compile definitions so engine_init.cpp can #if on features
 # whose install() takes an engine-owned service pointer (net/audio/physics).
 bro_apply_feature_defs(bro_engine)

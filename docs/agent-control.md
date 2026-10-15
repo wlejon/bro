@@ -42,7 +42,16 @@ Local IPC only, never a network listener; only the same user can connect
 - `bro --drm` (bro as the display server) serves `display`, always.
 - Elsewhere (windowed, headless) only when asked: `BRO_CONTROL=1` serves
   `<app>-<pid>`; `BRO_CONTROL=<name>` picks the name.
+- The apps of a session whose display server runs its own compositor (helm
+  under `bro --drm`) serve `<app>-<pid>` without asking: the display sets
+  `BRO_CONTROL_SESSION=1` for the processes it starts, and finds an app's
+  endpoint by its process id ([agent-view.md](agent-view.md)).
 - `BRO_CONTROL=0` turns it off everywhere.
+
+Serving control costs nothing per frame. A windowed bro reads back none of
+its presents until a command needs one: a screenshot turns the readback on
+for the one present it waits for (an idle window presents again for it), a
+recording for its length.
 
 A second bro asking for a live server's name is refused. Stale sockets from
 killed bros are removed when the next bro starts control. `bro-ctl list` shows the endpoints and which
@@ -81,6 +90,14 @@ first match's centre).
 | `wait <selector> [--gone] [--timeout=5000]` | until a match has a box (or none does) |
 | `wait-idle [--timeout=5000] [--frames=3]` | until N frames in a row lay out, animate and render nothing |
 
+Coordinates are window CSS px; a selector's point is its element's centre
+in the window (below a menu bar, if the app shows one).
+
+The agent view's commands, which see and act through element handles
+instead of pixels (`view`, `windows`, `set`, `scroll`, `focus`, `close`,
+`launch`, `shot`, `who-has-keys`, `clipboard`, and the handle forms of
+`click`, `type` and `key`), are in [agent-view.md](agent-view.md).
+
 `bro-ctl` adds three of its own:
 
 - `batch` reads commands from stdin, one per line (shell-style quoting, `#`
@@ -88,9 +105,10 @@ first match's centre).
 - `profile <secs> [--top=40]` samples the process with `perf` (installed
   separately: `pacman -S perf`, `apt install linux-perf`) and prints the
   hottest symbols and threads. On Windows, `bro.profiler` profiles script.
-- `-o FILE` (or `-o -` for stdout) on `screenshot` and `record` writes the
-  result where bro-ctl runs; `eval -` / `eval -f FILE` read the script from
-  stdin or a file.
+- `-o FILE` (or `-o -` for stdout) on `screenshot`, `shot` and `record`
+  writes the result where bro-ctl runs. With `-o -`, stdout carries only
+  the file's bytes: every text reply goes to stderr, so a PNG stream stays
+  clean. `eval -` / `eval -f FILE` read the script from stdin or a file.
 
 Input goes in at the device level: under DRM through the same path libinput
 events take (so global hotkeys, the pointer, and client windows all see it);
@@ -107,8 +125,8 @@ bro-ctl record 3 /tmp/rec [--scale=0.5]
 Under DRM, every frame the display presents for 3 s is copied off the
 scanout image on the GPU (scaled), with the kernel's flip timestamp and
 vblank counter. A windowed bro (Windows, macOS, a Wayland or X11 client)
-records each frame its presenter read back from the swapchain (asking for
-the socket with `BRO_CONTROL` keeps that readback on), stamped with the time
+records each frame its presenter read back from the swapchain (the readback
+is on for the recording's length only), stamped with the time
 the frame loop saw the present: the system compositor owns the vblank there,
 so `seq` is 0 and gaps are measured against the refresh period (the window
 system's, else the display's mode, else the median frame interval). A

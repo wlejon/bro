@@ -85,6 +85,8 @@ public:
 
     /// `usage` is one line: the arguments, then what it does.
     void registerCommand(const std::string& name, const std::string& usage, Handler handler);
+    /// A registered command's handler and usage (to wrap it); a null handler when there is none.
+    Handler handler(const std::string& name, std::string* usage = nullptr) const;
     void addTicker(Ticker ticker) { tickers_.push_back(std::move(ticker)); }
     /// Whether a ticker is running: every frame is then needed.
     bool hasTickers() const { return !tickers_.empty(); }
@@ -118,5 +120,9 @@ private:
 void registerEngineControlCommands(ControlServer& server);
 void registerControlInputCommands(ControlServer& server);
 void registerControlRecordCommands(ControlServer& server);
+/// The agent view (control_view.cpp, docs/agent-view.md): view, windows,
+/// shot, the handle forms of the input commands. Registered after the input
+/// commands, which it wraps.
+void registerAgentViewCommands(ControlServer& server);
 
 }  // namespace bro::engine

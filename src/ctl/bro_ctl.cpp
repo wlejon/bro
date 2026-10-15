@@ -308,10 +308,10 @@ struct OutputPlan {
 int runOne(Conn& c, std::vector<std::string> argv, const std::string& out) {
     OutputPlan plan;
     const std::string& cmd = argv[0];
-    if (!out.empty() && (cmd == "screenshot" || cmd == "record")) {
-        plan.toStdout = (out == "-");
+    plan.toStdout = (out == "-");
+    if (!out.empty() && (cmd == "screenshot" || cmd == "record" || cmd == "shot")) {
         plan.path = plan.toStdout ? (std::filesystem::path(runtimeDir()) /
-                                     ("stdout-" + std::to_string(processId()) + (cmd == "screenshot" ? ".png" : "")))
+                                     ("stdout-" + std::to_string(processId()) + (cmd == "record" ? "" : ".png")))
                                         .string()
                                   : out;
         // Insert the path where the command reads it.
@@ -322,7 +322,20 @@ int runOne(Conn& c, std::vector<std::string> argv, const std::string& out) {
                 if (!nPos) firstPos = i;
                 ++nPos;
             }
-        if (cmd == "screenshot") {
+        auto isHandle = [](const std::string& s) {
+            const size_t dot = s.find('.');
+            const bool el = dot != std::string::npos && dot > 0 && dot + 1 < s.size() &&
+                            s.find_first_not_of("0123456789.") == std::string::npos;
+            const bool win = s.size() > 1 && s[0] == 'w' && s.find_first_not_of("0123456789", 1) == std::string::npos;
+            return el || win;
+        };
+        if (cmd == "shot" && nPos && isHandle(argv[firstPos])) {  // shot <handle> [path]
+            size_t second = 0;
+            for (size_t i = firstPos + 1; i < argv.size() && !second; ++i)
+                if (argv[i].rfind("--", 0) != 0) second = i;
+            if (second) argv[second] = plan.path;
+            else argv.insert(argv.begin() + firstPos + 1, plan.path);
+        } else if (cmd == "screenshot" || cmd == "shot") {
             if (nPos) argv[firstPos] = plan.path;
             else argv.push_back(plan.path);
         } else {  // record [seconds] [dir]
@@ -370,10 +383,17 @@ int runOne(Conn& c, std::vector<std::string> argv, const std::string& out) {
             return sent ? 0 : 1;
         }
     }
-    if (ok && plan.toStdout) {
+    if (ok && plan.toStdout && !plan.path.empty()) {
         const bool sent = catFile(plan.path);
         std::remove(plan.path.c_str());
         return sent ? 0 : 1;
+    }
+    // With -o - stdout carries only the file's bytes: text goes to stderr.
+    if (plan.toStdout) {
+        std::fwrite(payload.data(), 1, payload.size(), stderr);
+        if (!payload.empty() && payload.back() != '\n') std::fputc('\n', stderr);
+        if (!ok) return 1;
+        return 0;
     }
     return printReply(ok, payload);
 }

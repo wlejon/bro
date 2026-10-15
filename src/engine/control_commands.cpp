@@ -120,8 +120,9 @@ bool controlResolvePoint(Engine& engine, const std::vector<std::string>& args, s
     if (rects.empty()) return fail(err);
     for (auto& [el, r] : rects) {
         if (r.width <= 0 || r.height <= 0) continue;
-        x = r.x + r.width / 2;
-        y = r.y + r.height / 2;
+        // Input lands in window coordinates; the page starts below a menu bar.
+        x = r.x + r.width / 2 + static_cast<float>(engine.contentLeft());
+        y = r.y + r.height / 2 + static_cast<float>(engine.contentTop());
         if (used) *used = 1;
         return true;
     }
@@ -170,6 +171,30 @@ bool controlGrabScreen(Engine& engine, std::vector<uint8_t>& rgba, uint32_t& wid
     width = static_cast<uint32_t>(w);
     height = static_cast<uint32_t>(h);
     return true;
+}
+
+void controlWhenGrabbable(ControlServer& s, std::function<void()> then) {
+    Engine& e = s.engine();
+    render::VulkanPresenter* p = e.vulkanPresenter();
+    if (e.displayMode() != DisplayMode::Windowed || e.isDesktopShell() || !p || p->isHeadless() ||
+        p->capturePresents())
+        return then();
+    // Read back one present, then stop: an idle window presents again for it.
+    p->setCapturePresents(true);
+    e.presentNextFrame();
+    const uint64_t serial = p->readbackSerial();
+    const double start = s.clockMs();
+    ControlServer* server = &s;
+    s.addTicker([&e, server, serial, start, then]() {
+        render::VulkanPresenter* p = e.vulkanPresenter();
+        if (p && p->readbackSerial() == serial && server->clockMs() - start < 1000) {
+            e.presentNextFrame();
+            return false;
+        }
+        then();
+        if (p) p->setCapturePresents(false);
+        return true;
+    });
 }
 
 std::string controlRuntimePath(const std::string& file) {
@@ -271,7 +296,7 @@ void cmdRect(ControlServer& s, const ControlCallPtr& call) {
 // screenshot: a PNG of the screen, or of part of it
 // ---------------------------------------------------------------------------
 
-void cmdScreenshot(ControlServer& s, const ControlCallPtr& call) {
+void screenshotNow(ControlServer& s, const ControlCallPtr& call) {
     Engine& e = s.engine();
     std::string path = call->arg(0);
     if (path.empty()) path = controlRuntimePath("screenshot.png");
@@ -292,8 +317,8 @@ void cmdScreenshot(ControlServer& s, const ControlCallPtr& call) {
             if (rects.empty()) return call->fail(why);
             const ControlRect& r = rects.front().second;
             const float pad = static_cast<float>(call->number("pad", 8));
-            rx = r.x - pad;
-            ry = r.y - pad;
+            rx = r.x - pad + static_cast<float>(e.contentLeft());
+            ry = r.y - pad + static_cast<float>(e.contentTop());
             rw = r.width + 2 * pad;
             rh = r.height + 2 * pad;
         } else if (std::sscanf(region.c_str(), "%f,%f,%f,%f", &rx, &ry, &rw, &rh) != 4) {
@@ -336,6 +361,10 @@ void cmdScreenshot(ControlServer& s, const ControlCallPtr& call) {
         j.key("height").integer(ch).endObject().endObject();
         call->ok(j.take());
     }).detach();
+}
+
+void cmdScreenshot(ControlServer& s, const ControlCallPtr& call) {
+    controlWhenGrabbable(s, [&s, call]() { screenshotNow(s, call); });
 }
 
 // ---------------------------------------------------------------------------

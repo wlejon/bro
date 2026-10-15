@@ -2,6 +2,7 @@
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/element_geometry.h"
+#include "dom/accessibility.h"
 
 #if BRO_WITH_A11Y
 #include <broa11y/api.h>
@@ -78,69 +79,29 @@ static std::string lowerTag(const dom::Element* el) {
 
 broa11y::Role AccessibilityBridge::mapElementRole(const dom::Element* el) const {
     if (!el) return broa11y::Role::Unknown;
-
-    if (el->hasAttribute("role")) {
-        const std::string& roleStr = el->getAttribute("role");
-        if (roleStr == "textbox") return broa11y::Role::TextInput;
-        if (roleStr == "checkbox") return broa11y::Role::CheckBox;
-        if (roleStr == "main") return broa11y::Role::Section;
-        auto r = broa11y::string_to_role(roleStr);
-        if (r != broa11y::Role::Unknown) return r;
-    }
-
-    const std::string tag = lowerTag(el);
-    if (tag == "button") return broa11y::Role::Button;
-    if (tag == "a") return broa11y::Role::Link;
-    if (tag == "input") {
-        std::string type = el->getAttribute("type");
-        if (type == "checkbox") return broa11y::Role::CheckBox;
-        if (type == "radio") return broa11y::Role::RadioButton;
-        if (type == "range") return broa11y::Role::Slider;
-        return broa11y::Role::TextInput;
-    }
-    if (tag == "textarea") return broa11y::Role::TextInput;
-    if (tag == "select") return broa11y::Role::ComboBox;
-    if (tag == "option") return broa11y::Role::MenuItem;
-    if (tag == "dialog") return broa11y::Role::Dialog;
-    if (tag == "terminal") return broa11y::Role::Terminal;
-    if (tag == "h1" || tag == "h2" || tag == "h3" ||
-        tag == "h4" || tag == "h5" || tag == "h6") return broa11y::Role::Heading;
-    if (tag == "ul" || tag == "ol") return broa11y::Role::List;
-    if (tag == "li") return broa11y::Role::ListItem;
-    if (tag == "img") return broa11y::Role::Image;
-    if (tag == "canvas") return broa11y::Role::Canvas;
-    if (tag == "table") return broa11y::Role::Table;
-    if (tag == "tr") return broa11y::Role::TableRow;
-    if (tag == "td" || tag == "th") return broa11y::Role::TableCell;
-    if (tag == "nav" || tag == "aside") return broa11y::Role::Panel;
-    if (tag == "section" || tag == "main" || tag == "header" || tag == "footer") return broa11y::Role::Section;
-    if (tag == "html" || tag == "body") return broa11y::Role::Document;
-
-    return broa11y::Role::Group;
+    // The ARIA role (dom/accessibility.h, shared with the agent view), in
+    // broa11y's vocabulary.
+    const std::string r = dom::accessibleRole(el);
+    if (r.empty()) return broa11y::Role::Group;
+    if (r == "textbox" || r == "searchbox" || r == "spinbutton") return broa11y::Role::TextInput;
+    if (r == "radio") return broa11y::Role::RadioButton;
+    if (r == "option") return broa11y::Role::MenuItem;
+    if (r == "listitem") return broa11y::Role::ListItem;
+    if (r == "img") return broa11y::Role::Image;
+    if (r == "row") return broa11y::Role::TableRow;
+    if (r == "cell" || r == "columnheader" || r == "rowheader") return broa11y::Role::TableCell;
+    if (r == "navigation" || r == "complementary") return broa11y::Role::Panel;
+    if (r == "main" || r == "region" || r == "banner" || r == "contentinfo") return broa11y::Role::Section;
+    if (r == "progressbar" || r == "meter") return broa11y::Role::ProgressBar;
+    if (r == "status") return broa11y::Role::StatusBar;
+    if (r == "switch") return broa11y::Role::CheckBox;
+    if (r == "menuitemcheckbox" || r == "menuitemradio") return broa11y::Role::MenuItem;
+    auto role = broa11y::string_to_role(r);
+    return role != broa11y::Role::Unknown ? role : broa11y::Role::Group;
 }
 
 std::string AccessibilityBridge::computeAccessibleName(const dom::Element* el) const {
-    if (!el) return "";
-    if (el->hasAttribute("aria-label")) return el->getAttribute("aria-label");
-    if (el->hasAttribute("aria-labelledby")) {
-        const std::string& labelId = el->getAttribute("aria-labelledby");
-        if (document_) {
-            if (const auto* labelEl = document_->getElementById(labelId)) {
-                return labelEl->textContent();
-            }
-        }
-    }
-    if (el->hasAttribute("title")) return el->getAttribute("title");
-    if (el->hasAttribute("alt")) return el->getAttribute("alt");
-    if (el->hasAttribute("placeholder")) return el->getAttribute("placeholder");
-
-    const std::string tag = lowerTag(el);
-    if (tag == "button" || tag == "a" || tag == "label" ||
-        tag == "h1" || tag == "h2" || tag == "h3" ||
-        tag == "h4" || tag == "h5" || tag == "h6") {
-        return el->textContent();
-    }
-    return "";
+    return dom::accessibleName(el, document_);
 }
 
 void AccessibilityBridge::updateElementState(dom::Element* el, broa11y::Node* a11yNode) {

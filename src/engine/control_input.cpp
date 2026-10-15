@@ -375,6 +375,8 @@ void registerControlInputCommands(ControlServer& s) {
                       [&s](const ControlCallPtr& c) { cmdKey(s, c); });
     s.registerCommand("type", "<text>  [--delay=12]  type ASCII text (US layout)",
                       [&s](const ControlCallPtr& c) { cmdType(s, c); });
+    // The agent view's handle forms (click 3.4, type 3.1 "text") wrap these.
+    registerAgentViewCommands(s);
 }
 
 }  // namespace bro::engine

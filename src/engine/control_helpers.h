@@ -4,6 +4,7 @@
 // control_input.cpp, control_record.cpp).
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -12,6 +13,7 @@ namespace bro::dom { class Element; }
 namespace bro::engine {
 
 class Engine;
+class ControlServer;
 
 /// A rect in CSS px, client coordinates (what getBoundingClientRect says).
 struct ControlRect {
@@ -37,6 +39,11 @@ bool controlResolvePoint(Engine& engine, const std::vector<std::string>& args, s
 /// engine's own composite. Engine thread.
 bool controlGrabScreen(Engine& engine, std::vector<uint8_t>& rgba, uint32_t& width, uint32_t& height,
                        std::string* why);
+
+/// Runs `then` once controlGrabScreen can read the screen: at once, except
+/// in a window that reads back none of its presents (serving control costs
+/// no readback), whose capture is then on for the one present it waits for.
+void controlWhenGrabbable(ControlServer& s, std::function<void()> then);
 
 /// <file> in the control channel's private runtime directory
 /// (platform::ControlSocket::runtimeDir: $XDG_RUNTIME_DIR/bro-control).
