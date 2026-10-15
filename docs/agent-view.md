@@ -65,13 +65,18 @@ w3:
   expanded; `@` has the keyboard. Passwords show as dots. The state is read
   from standard semantics only: a control drawn from divs supplies its own
   `aria-*` (helmapps' `lib/controls.js` does).
+- **Runs:** three or more sibling lines of one role and the same flags, with
+  only a name each and handles numbered one after another, are one line:
+  `1.21-23 button "7" "8" "9"` is `1.21 button "7"`, `1.22 button "8"`,
+  `1.23 button "9"` (not with `--rects`, where each carries its own rect).
 - **What is shown:** interactive elements (an element with a click listener,
   `tabindex`, or its own `cursor: pointer` counts as a `button`), their
   containers (dialog, list, listbox, menu, tablist, tree, grid, table,
   radiogroup), named groups and regions, and meaningful text (headings,
   images, status, list items, cells, and loose text as `text`). Wrappers
   collapse away; a label is its control's name, and neither it nor any text
-  inside it is a line. A live region (status, alert, log, timer, marquee)
+  inside it is a line; likewise the title that names a dialog
+  (`aria-labelledby`) is the dialog's name, not a line inside it. A live region (status, alert, log, timer, marquee)
   holding controls, such as a toast with its Dismiss button, is named by its
   text, with only its controls under it. Anything not visible is left out:
   `display: none`, `visibility: hidden`, opacity 0, `hidden`, `inert`,
@@ -128,7 +133,7 @@ the default scope's next revision skip those numbers.
 $ bro-ctl set 3.6 snowman
 @view r10 +1 -19 ~26
 + 3.176 button "Clear search"
-- 3.59 3.60 3.61 3.62 3.63 3.64 3.65 3.66 3.67 3.68 3.69 3.70 3.71 3.72 3.73 3.74 3.75 3.76 3.77
+- 3.59-77
 ~ 3.6 textbox@ ="snowman"
 ~ 3.54 "1 character"
 ~ 3.56 listbox [none]
@@ -140,8 +145,9 @@ $ bro-ctl set 3.6 snowman
 
 - **Added** items are whole lines after `+ `, a run of them keeping its
   nesting (a dialog's fields indented under the dialog); **removed** handles
-  share one `- ` line, and a window none of whose elements are left (the
-  focus moved off it, or it closed) is the one entry `4.*`; a **changed**
+  share one `- ` line, handles numbered one after another as a range
+  (`2.56-67`), and a window none of whose elements are left (the focus moved
+  off it, or it closed) is the one entry `4.*`; a **changed**
   item is `~ ` with its handle and only the fields that changed: role with
   the flags it has now, then `-x` for each flag it lost (`~ 6.6 textbox -@`
   lost the keyboard, `~ w0 -*` lost the focus), name, value, notes (`[none]`

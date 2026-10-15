@@ -89,6 +89,8 @@ assert(v1.indexOf('User name"\n') < 0 || !/ text "User name"/.test(v1), 'a label
 });
 assert(/ list \[20 of 60\]$/m.test(v1), 'a long list shows 20 of its 60 items: ' + lineOf(v1, 'Item 1'));
 assert(v1.indexOf('"Item 20"') >= 0 && v1.indexOf('"Item 21"') < 0, 'the first 20 items');
+assert(/^  \d+\.\d+-\d+ listitem "Item 1" "Item 2" .* "Item 20"$/m.test(v1),
+       'sibling lines of one role, numbered in a row, are one run line');
 assert(v1.indexOf('"One"') >= 0 && v1.indexOf('"Five"') < 0, 'a scroll container shows what is scrolled into view');
 assert(/ button "Open tile"$/m.test(v1), 'a pointer-cursor div with a click listener is a button');
 assert(v1.split('\n').length < 80, 'the view is compact: ' + v1.split('\n').length + ' lines');
@@ -216,6 +218,7 @@ lab.innerHTML =
     '<div role="listbox" aria-label="Chars"><div role="option" aria-selected="true">A</div>' +
     '<div role="option">B</div></div>' +
     '<div data-window-frame="7"><span>Frame title</span><button aria-label="Close">x</button></div>' +
+    '<div role="dialog" aria-labelledby="dlgt"><div id="dlgt">Add Alarm</div><button>Add it</button></div>' +
     '<div id="blocks"></div>' +
     '<button id="later">Later</button>';
 rebuildRows(['07:30', '08:00']);
@@ -232,6 +235,9 @@ console.log(v3);
 // 5. A label that names its control is not a line of its own.
 assert(/ spinbutton "HOUR \(0-23\)" ="7"$/m.test(v3), 'the field takes its label as name');
 assert(!/ text "HOUR \(0-23\)"$/m.test(v3), 'the label text is not repeated as a line');
+
+// A dialog named by its title (aria-labelledby): the title is not a line again.
+assert(/ dialog "Add Alarm"$/m.test(v3) && !/ text "Add Alarm"$/m.test(v3), 'a dialog is named by its title');
 
 // 6. Checked and selected state.
 assert(/ switch\* "Enable 07:30"$/m.test(v3), 'a switch with aria-checked is *');

@@ -163,6 +163,28 @@ void testDiffs() {
               formatDiff(w1, w0, false, nullptr));
     }
 
+    // Runs of sibling lines of one role join into one line, and parse back.
+    {
+        Snapshot k{win("w0", "app", "T", true), el("0.4", 1, "button", "7"), el("0.5", 1, "button", "8"),
+                   el("0.6", 1, "button", "9"), el("0.7", 1, "button", "x", "!"), el("0.8", 1, "text", "a")};
+        const std::string body = formatBody(k, false);
+        check(body.find("\n  0.4-6 button \"7\" \"8\" \"9\"\n  0.7 button! \"x\"\n") != std::string::npos,
+              "a run of three is one line", body);
+        const Snapshot back = parseItems(body);
+        check(back.size() == k.size() && back[2].handle == "0.5" && back[2].name == "8" && back[2].depth == 1 &&
+                  back[3].role == "button",
+              "a run line parses back into its items");
+        check(formatBody(k, true).find("0.4-6") == std::string::npos, "no runs with rects");
+        Snapshot k0{k[0]};
+        const std::string kd = formatDiff(k0, k, false, nullptr);
+        check(kd.find("+ 0.4-6 button \"7\" \"8\" \"9\"\n") != std::string::npos, "added runs join too", kd);
+        const std::string kr = formatDiff(k, k0, false, nullptr);
+        check(kr == "- 0.*\n", "all gone", kr);
+        Snapshot k2{k[0], k[5]};
+        const std::string kr2 = formatDiff(k, k2, false, nullptr);
+        check(kr2 == "- 0.4-7\n", "removed handles in a row are a range", kr2);
+    }
+
     // An added subtree keeps its nesting, relative to its top.
     {
         Snapshot n0{el("0.1", 2, "button", "Open")};

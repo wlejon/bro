@@ -178,6 +178,8 @@ struct ViewWalk {
     // Inside a label that names its control, or a live region whose text is
     // its name: text gets no line of its own there, only controls do.
     bool muteText = false;
+    // Ids that name an enclosing container (aria-labelledby): not lines.
+    std::vector<std::string> nameIds;
     int lines = 0;
     bool cut = false;
 
@@ -360,6 +362,10 @@ struct ViewWalk {
         const std::string tag = dom::lowerTagName(el);
         if (hiddenElement(el, tag)) return;
         if (styleOf(el, "opacity") == "0") return;
+        if (!nameIds.empty() && el->hasAttribute("id") &&
+            std::find(nameIds.begin(), nameIds.end(), el->getAttribute("id")) != nameIds.end() &&
+            !below(el).interactive && !dom::isInteractiveRole(dom::accessibleRole(el)))
+            return;
         const bool selfShown = styleOf(el, "visibility") != "hidden" && styleOf(el, "visibility") != "collapse";
         dom::AbsoluteRect r = dom::absoluteBorderBox(el);
         r.x -= vp.scrollX;
@@ -433,6 +439,22 @@ struct ViewWalk {
                                                                    el->hasAttribute("aria-labelledby")))) {
             if (!shown) return children(depth);
             if (!admit(depth)) return;
+            // What names it (a dialog's title, by aria-labelledby) is its
+            // name, not a line inside it as well.
+            struct IdScope {
+                std::vector<std::string>& ids;
+                size_t mark;
+                ~IdScope() { ids.resize(mark); }
+            } idScope{nameIds, nameIds.size()};
+            if (el->hasAttribute("aria-labelledby")) {
+                const std::string& refs = el->getAttribute("aria-labelledby");
+                for (size_t p = 0; p < refs.size();) {
+                    size_t q = refs.find(' ', p);
+                    if (q == std::string::npos) q = refs.size();
+                    if (q > p) nameIds.push_back(refs.substr(p, q - p));
+                    p = q + 1;
+                }
+            }
             if (isListRole(role)) return asList(role, dom::accessibleName(el, doc, role), 20);
             emit(el, depth, role, dom::accessibleName(el, doc, role), r);
             return children(depth + 1);

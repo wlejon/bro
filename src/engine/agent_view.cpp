@@ -227,6 +227,81 @@ bool parseItem(std::string_view line, Item& out) {
     return true;
 }
 
+namespace {
+
+// Whether `b` continues a run after `a`: sibling lines of one role and the
+// same flags, nothing but a name each, numbered one after another.
+bool continuesRun(const Item& a, const Item& b) {
+    return !a.isWindow() && !b.isWindow() && windowOf(a.handle) == windowOf(b.handle) && a.depth == b.depth &&
+           a.role == b.role && a.flags == b.flags && !a.hasValue && !b.hasValue && a.extra.empty() &&
+           b.extra.empty() && elementOf(b.handle) == elementOf(a.handle) + 1;
+}
+
+// "3.21-23 button "7" "8" "9"": a run's line, after `indent`.
+std::string runLine(const std::vector<const Item*>& run) {
+    const Item& first = *run.front();
+    std::string out = first.handle + "-" + std::to_string(elementOf(run.back()->handle)) + " " +
+                      (first.role.empty() ? std::string("-") : first.role) + first.flags;
+    for (const Item* it : run) out += " " + quote(truncateUtf8(it->name, kMaxNameChars));
+    return out;
+}
+
+// A run "N.A-B" line back into its items (B - A + 1 of them, one name each).
+bool parseRunLine(std::string_view line, Snapshot& out) {
+    size_t i = 0;
+    while (i < line.size() && line[i] == ' ') ++i;
+    const int depth = std::max(0, static_cast<int>(i) - 1);
+    std::string_view handleTok = nextToken(line, i);
+    const size_t dash = handleTok.find('-');
+    if (dash == std::string_view::npos) return false;
+    const std::string_view first = handleTok.substr(0, dash);
+    long last = 0;
+    if (!isElementHandle(first) || !parseInt(handleTok.substr(dash + 1), last)) return false;
+    const long from = elementOf(first);
+    if (last < from) return false;
+    Item proto;
+    proto.depth = depth;
+    std::string_view role = nextToken(line, i);
+    size_t f = role.size();
+    while (f > 0 && kFlagChars.find(role[f - 1]) != std::string_view::npos) --f;
+    proto.role = std::string(role.substr(0, f));
+    proto.flags = std::string(role.substr(f));
+    if (proto.role == "-") proto.role.clear();
+    const std::string prefix = std::string(first.substr(0, first.find('.') + 1));
+    for (long n = from; n <= last; ++n) {
+        while (i < line.size() && line[i] == ' ') ++i;
+        Item it = proto;
+        it.handle = prefix + std::to_string(n);
+        if (!readQuoted(line, i, it.name)) return false;
+        out.push_back(std::move(it));
+    }
+    return true;
+}
+
+constexpr size_t kMinRun = 3;
+
+// The lines of `items` (each after its own indent), runs of kMinRun or more
+// joined into one line (not with rects: each line carries its own then).
+std::string joinLines(const std::vector<const Item*>& items, const std::vector<std::string>& indents, bool rects,
+                      const char* lead) {
+    std::string out;
+    for (size_t i = 0; i < items.size();) {
+        size_t j = i + 1;
+        if (!rects)
+            while (j < items.size() && indents[j] == indents[i] && continuesRun(*items[j - 1], *items[j])) ++j;
+        if (j - i >= kMinRun) {
+            out += lead + indents[i] + runLine(std::vector<const Item*>(items.begin() + i, items.begin() + j)) + "\n";
+            i = j;
+            continue;
+        }
+        out += lead + indents[i] + stripIndent(formatItem(*items[i], rects)) + "\n";
+        ++i;
+    }
+    return out;
+}
+
+}  // namespace
+
 Snapshot parseItems(std::string_view text) {
     Snapshot out;
     size_t i = 0;
@@ -234,7 +309,9 @@ Snapshot parseItems(std::string_view text) {
         size_t j = text.find('\n', i);
         if (j == std::string_view::npos) j = text.size();
         Item it;
-        if (parseItem(text.substr(i, j - i), it)) out.push_back(std::move(it));
+        const std::string_view line = text.substr(i, j - i);
+        if (parseItem(line, it)) out.push_back(std::move(it));
+        else parseRunLine(line, out);
         i = j + 1;
     }
     return out;
@@ -243,17 +320,26 @@ Snapshot parseItems(std::string_view text) {
 std::string formatBody(const Snapshot& snap, bool rects) {
     std::string out;
     int section = -1;
+    std::vector<const Item*> items;
+    std::vector<std::string> indents;
+    auto flush = [&]() {
+        out += joinLines(items, indents, rects, "");
+        items.clear();
+        indents.clear();
+    };
     for (const Item& it : snap) {
         if (!it.isWindow()) {
             const int w = windowOf(it.handle);
             if (w != section) {
+                flush();
                 out += 'w' + std::to_string(w) + ":\n";
                 section = w;
             }
         }
-        out += formatItem(it, rects);
-        out += '\n';
+        items.push_back(&it);
+        indents.push_back(it.isWindow() ? std::string() : std::string(static_cast<size_t>(1 + it.depth), ' '));
     }
+    flush();
     return out;
 }
 
@@ -276,17 +362,25 @@ std::string formatDiff(const Snapshot& from, const Snapshot& to, bool rects, Dif
     // shallowest line so far: a dialog's fields sit under the dialog.
     bool inRun = false;
     int runBase = 0;
+    std::vector<const Item*> run;
+    std::vector<std::string> runIndents;
+    auto flushRun = [&]() {
+        added += joinLines(run, runIndents, rects, "+ ");
+        run.clear();
+        runIndents.clear();
+    };
     for (const Item& it : to) {
         auto b = before.find(it.handle);
         if (b == before.end()) {
             const int depth = it.isWindow() ? 0 : it.depth;
             if (!inRun || depth < runBase) runBase = depth;
             inRun = true;
-            added += "+ " + std::string(static_cast<size_t>(depth - runBase), ' ') +
-                     stripIndent(formatItem(it, rects)) + "\n";
+            run.push_back(&it);
+            runIndents.push_back(std::string(static_cast<size_t>(depth - runBase), ' '));
             ++c.added;
             continue;
         }
+        if (inRun) flushRun();
         inRun = false;
         const Item& old = *b->second;
         if (sameItem(old, it, rects)) continue;
@@ -314,6 +408,7 @@ std::string formatDiff(const Snapshot& from, const Snapshot& to, bool rects, Dif
         changed += line + "\n";
         ++c.changed;
     }
+    flushRun();
     // Removed: by handle, except a window none of whose elements are left,
     // which is "N.*" (the focus moved away from it, or it closed).
     std::map<int, std::pair<int, bool>> perWindow;  // window -> (elements before, any left)
@@ -323,7 +418,16 @@ std::string formatDiff(const Snapshot& from, const Snapshot& to, bool rects, Dif
             ++pw.first;
             if (after.count(it.handle)) pw.second = true;
         }
+    // Handles numbered one after another in a window are one range, "2.56-67".
     std::set<int> collapsed;
+    int rangeWin = -1;
+    uint32_t rangeFrom = 0, rangeTo = 0;
+    auto flushRange = [&]() {
+        if (rangeWin < 0) return;
+        removed += (removed.empty() ? "- " : " ") + std::to_string(rangeWin) + "." + std::to_string(rangeFrom);
+        if (rangeTo > rangeFrom) removed += "-" + std::to_string(rangeTo);
+        rangeWin = -1;
+    };
     for (const Item& it : from) {
         if (after.count(it.handle)) continue;
         ++c.removed;
@@ -332,12 +436,24 @@ std::string formatDiff(const Snapshot& from, const Snapshot& to, bool rects, Dif
             const auto& pw = perWindow[w];
             if (pw.first > 1 && !pw.second) {
                 if (!collapsed.insert(w).second) continue;
+                flushRange();
                 removed += (removed.empty() ? "- " : " ") + std::to_string(w) + ".*";
                 continue;
             }
+            const uint32_t n = elementOf(it.handle);
+            if (rangeWin == w && n == rangeTo + 1) {
+                rangeTo = n;
+                continue;
+            }
+            flushRange();
+            rangeWin = w;
+            rangeFrom = rangeTo = n;
+            continue;
         }
+        flushRange();
         removed += (removed.empty() ? "- " : " ") + it.handle;
     }
+    flushRange();
     if (!removed.empty()) removed += "\n";
     if (counts) *counts = c;
     return added + removed + changed;
