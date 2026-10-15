@@ -130,11 +130,48 @@ void testDiffs() {
     check(h.reply("default", r2, false) == "@view r2 =\n", "no change since r2");
 
     // Several removals share one line.
+    Snapshot c2{a[0], b[1]};
+    h.commit("default", c2);
+    const std::string d2 = h.reply("default", r2, false);
+    check(d2.find("- 0.2 0.4\n") != std::string::npos, "removals on one line", d2);
+
+    // A window with none of its elements left is one "N.*".
     Snapshot c{a[0]};
     const uint64_t r3 = h.commit("default", c);
     const std::string d3 = h.reply("default", r2, false);
-    check(d3.find("- 0.1 0.2 0.4\n") != std::string::npos, "removals on one line", d3);
+    check(d3.find("- 0.*\n") != std::string::npos && d3.rfind("@view r", 0) == 0 && d3.find(" -3 ") != std::string::npos,
+          "a window's elements all gone collapse to N.*", d3);
     (void)r3;
+
+    // Flags turning off say so; cleared notes say so.
+    {
+        Snapshot f0{el("0.1", 0, "textbox", "Name", "@"), el("0.2", 0, "button", "Go", "!"),
+                    el("0.3", 0, "listbox", "L")};
+        f0[2].extra = "20 of 44";
+        Snapshot f1 = f0;
+        f1[0].flags = "";
+        f1[1].flags = "*";
+        f1[2].extra = "";
+        const std::string fd = formatDiff(f0, f1, false, nullptr);
+        check(fd.find("~ 0.1 textbox -@\n") != std::string::npos, "a lost flag is -x", fd);
+        check(fd.find("~ 0.2 button* -!\n") != std::string::npos, "gained and lost flags", fd);
+        check(fd.find("~ 0.3 [none]\n") != std::string::npos, "notes cleared are [none]", fd);
+        Snapshot w0{win("w0", "shell", "S", true)}, w1{win("w0", "shell", "S", false)};
+        check(formatDiff(w0, w1, false, nullptr) == "~ w0 -*\n", "a window losing focus",
+              formatDiff(w0, w1, false, nullptr));
+        check(formatDiff(w1, w0, false, nullptr) == "~ w0*\n", "a window gaining focus",
+              formatDiff(w1, w0, false, nullptr));
+    }
+
+    // An added subtree keeps its nesting, relative to its top.
+    {
+        Snapshot n0{el("0.1", 2, "button", "Open")};
+        Snapshot n1{el("0.1", 2, "button", "Open"), el("0.5", 2, "dialog", "Add"), el("0.6", 3, "textbox", "Hour"),
+                    el("0.7", 4, "text", "deep"), el("0.8", 3, "button", "OK")};
+        const std::string nd = formatDiff(n0, n1, false, nullptr);
+        check(nd == "+ 0.5 dialog \"Add\"\n+  0.6 textbox \"Hour\"\n+   0.7 text \"deep\"\n+  0.8 button \"OK\"\n",
+              "added lines keep their relative indent", nd);
+    }
 
     // Expired: older than the history keeps.
     History small(2);

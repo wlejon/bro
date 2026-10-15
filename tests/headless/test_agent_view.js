@@ -168,8 +168,10 @@ document.getElementById('save').addEventListener('click', function() {
 var opened = ok('click', save);
 console.log(opened);
 assert(/^\+ \d+\.\d+ dialog "Saved"$/m.test(opened), 'the dialog appears in the diff');
-assert(/^\+ \d+\.\d+ text "All saved."$/m.test(opened) && /^\+ \d+\.\d+ button "OK"$/m.test(opened),
-       'with its content');
+assert(/^\+  \d+\.\d+ text "All saved."$/m.test(opened) && /^\+  \d+\.\d+ button "OK"$/m.test(opened),
+       'with its content, indented under it');
+assert(new RegExp('^~ ' + user.replace('.', '\\.') + ' textbox -@$', 'm').test(opened),
+       'a flag turning off says so (-@): ' + opened);
 
 // Checkbox toggles show as a flag change.
 var remember = handleOf(opened.indexOf('Remember') >= 0 ? opened : ok('view'), 'Remember me');
@@ -190,6 +192,136 @@ assert(!bad.ok && /no 0\.99999/.test(bad.payload), 'a stale handle fails: ' + ba
 // The plain forms keep their JSON replies.
 var plain = JSON.parse(ok('click', '5,5'));
 assert(plain.pointer, 'click x,y still answers with the pointer');
+
+// ── what the operator run found ─────────────────────────────────────────────
+
+var lab = document.createElement('section');
+lab.id = 'lab';
+document.body.insertBefore(lab, document.body.firstChild);
+function rebuildRows(labels) {
+    var rows = document.getElementById('rows');
+    rows.replaceChildren.apply(rows, labels.map(function(l) {
+        var card = document.createElement('div');
+        card.innerHTML = '<span>' + l + '</span><button role="switch" aria-checked="true" aria-label="Enable ' + l +
+                         '"></button><button aria-label="Delete ' + l + '">x</button>';
+        return card;
+    }));
+}
+lab.innerHTML =
+    '<div id="rows"></div>' +
+    '<p id="count">2 alarms</p>' +
+    '<label><span>HOUR (0-23)</span><input type="number" value="7"></label>' +
+    '<div role="radiogroup" aria-label="Mode"><button role="radio" aria-checked="true">Basic</button>' +
+    '<button role="radio" aria-checked="false">Scientific</button></div>' +
+    '<div role="listbox" aria-label="Chars"><div role="option" aria-selected="true">A</div>' +
+    '<div role="option">B</div></div>' +
+    '<div data-window-frame="7"><span>Frame title</span><button aria-label="Close">x</button></div>' +
+    '<div id="blocks"></div>' +
+    '<button id="later">Later</button>';
+rebuildRows(['07:30', '08:00']);
+var blocks = document.getElementById('blocks');
+for (var b = 1; b <= 24; b++) {
+    var bb = document.createElement('button');
+    bb.textContent = 'Block ' + b;
+    blocks.appendChild(bb);
+}
+advanceTime(32);
+var v3 = ok('view');
+console.log(v3);
+
+// 5. A label that names its control is not a line of its own.
+assert(/ spinbutton "HOUR \(0-23\)" ="7"$/m.test(v3), 'the field takes its label as name');
+assert(!/ text "HOUR \(0-23\)"$/m.test(v3), 'the label text is not repeated as a line');
+
+// 6. Checked and selected state.
+assert(/ switch\* "Enable 07:30"$/m.test(v3), 'a switch with aria-checked is *');
+assert(/ radio\* "Basic"$/m.test(v3) && / radio "Scientific"$/m.test(v3), 'aria-checked radios');
+assert(/ option\* "A"$/m.test(v3) && / option "B"$/m.test(v3), 'an aria-selected option');
+
+// 10. A compositor window frame is the window's line, not elements.
+assert(v3.indexOf('Frame title') < 0 && !/ button "Close"$/m.test(v3), 'window frames are left out');
+
+// 9. A long run of same-role controls is paged like a list.
+var runLine = /^ *(\d+\.\d+) group \[12 of 24\]$/m.exec(v3);
+assert(runLine, 'a run of 24 buttons shows 12 and the count');
+assert(v3.indexOf('"Block 12"') >= 0 && v3.indexOf('"Block 13"') < 0, 'the first 12');
+var runPage = ok('view', runLine[1], '--from=12');
+assert(runPage.indexOf('"Block 24"') >= 0 && /group \[13-24 of 24\]/.test(runPage), 'and paged: ' + runPage);
+
+// 2. A re-render with equivalent nodes keeps every handle: no change.
+var del2 = handleOf(v3, 'Delete 08:00');
+var r3 = rev(v3);
+rebuildRows(['07:30', '08:00']);
+advanceTime(32);
+assert(ok('view', '--since=' + r3) === '@view ' + r3 + ' =\n', 'an equivalent re-render is no change');
+// A re-render that drops a row: only that row goes; the other row's handles stay.
+rebuildRows(['08:00']);
+advanceTime(32);
+var dropped = ok('view', '--since=' + r3);
+console.log(dropped);
+assert(/^@view r\d+ \+0 -3 ~0$/m.test(dropped), 'one row of three lines removed: ' + dropped);
+assert(handleOf(ok('view'), 'Delete 08:00') === del2, 'the surviving row keeps its handles');
+// A rebuilt row whose text changed is one changed line.
+var r4 = rev(ok('view'));
+rebuildRows(['09:15']);
+advanceTime(32);
+var renamed = ok('view', '--since=' + r4);
+assert(new RegExp('^~ ' + del2.replace('.', '\\.') + ' "Delete 09:15"$', 'm').test(renamed),
+       'a rebuilt row that changed is ~, by the same handle: ' + renamed);
+
+// 1. An action's reply waits for the follow-on work it scheduled; 8. and
+// its revision follows the last view without a skip.
+document.getElementById('later').addEventListener('click', function() {
+    setTimeout(function() { document.getElementById('count').textContent = '1 alarm'; }, 150);
+});
+var v4 = ok('view');
+var n4 = Number(rev(v4).slice(1));
+var later = ok('click', handleOf(v4, 'Later'));
+console.log(later);
+assert(/ "1 alarm"$/m.test(later), 'the click answers with what its timer changed: ' + later);
+assert(rev(later) === 'r' + (n4 + 1), 'the reply is the next revision after the last view: ' + rev(later));
+
+// 7. A status with text and controls is named by its text.
+var st = document.createElement('div');
+st.setAttribute('role', 'status');
+st.innerHTML = '<div class="toast"><span>Copied ☃ (U+2603)</span><button aria-label="Dismiss">x</button></div>';
+lab.appendChild(st);
+advanceTime(32);
+var v5 = ok('view', '--since=' + rev(later));
+console.log(v5);
+assert(/^\+ \d+\.\d+ status "Copied ☃ \(U\+2603\)"$/m.test(v5), 'the status is named by its text');
+assert(/^\+  \d+\.\d+ button "Dismiss"$/m.test(v5), 'its control under it');
+assert(!/ text "Copied/.test(v5), 'its text is not a line again');
+
+// A <terminal>: a line of its own, its screen's rows under it, diffed by row.
+if (bro.terminal && bro.terminal.available) {
+    var term = document.createElement('terminal');
+    term.setAttribute('rows', '6');
+    lab.appendChild(term);
+    var r6 = rev(ok('view'));
+    var waitScreen = function(text) {
+        for (var i = 0; i < 100 && term.screenText().indexOf(text) < 0; i++) {
+            advanceTime(16);
+            wallSleep(2);
+        }
+    };
+    term.feed('hello \x1b[1mworld\x1b[0m\r\nline two');
+    waitScreen('line two');
+    var tv = ok('view', '--since=' + r6);
+    console.log(tv);
+    assert(/^\+ \d+\.\d+ terminal/m.test(tv) || / terminal/.test(ok('view')), 'the terminal has a line: ' + tv);
+    var full = ok('view');
+    assert(/^ +\d+\.\d+ terminal/m.test(full), 'a terminal line in the view:\n' + full);
+    assert(/^  +\d+\.\d+ text "hello world"$/m.test(full) && /^  +\d+\.\d+ text "line two"$/m.test(full),
+           'its rows under it:\n' + full);
+    var r7 = rev(full);
+    term.feed('\r\nthird');
+    waitScreen('third');
+    var td = ok('view', '--since=' + r7);
+    console.log(td);
+    assert(/^@view r\d+ \+1 -0 ~0$/m.test(td) && /^\+ \d+\.\d+ text "third"$/m.test(td),
+           'new output is a new row, the old rows unchanged: ' + td);
+}
 
 // ── supporting commands ─────────────────────────────────────────────────────
 

@@ -80,6 +80,7 @@ struct ViewState {
         uint64_t epoch = 0;
         const void* focus = nullptr;
         float vw = 0, vh = 0, sx = 0, sy = 0;
+        uint64_t terminals = 0;  // DocumentView::terminalsSignature()
         std::string key;
         Snapshot items;
     } local;
@@ -321,8 +322,10 @@ bool localElements(ControlServer& s, int window, uint32_t root, int from, int co
     const std::string cacheKey = key + "@" + std::to_string(e.contentLeft()) + "," + std::to_string(e.contentTop());
     const float sx = doc->viewportScrollX(), sy = doc->viewportScrollY();
     const void* focus = doc->activeElement();
+    // A terminal's output changes no DOM; its screen is part of the key.
+    const uint64_t terminals = DocumentView::terminalsSignature();
     if (c.valid && c.epoch == doc->mutationEpoch() && c.focus == focus && c.vw == vw && c.vh == vh && c.sx == sx &&
-        c.sy == sy && c.key == cacheKey) {
+        c.sy == sy && c.terminals == terminals && c.key == cacheKey) {
         out.insert(out.end(), c.items.begin(), c.items.end());
         return true;
     }
@@ -345,6 +348,7 @@ bool localElements(ControlServer& s, int window, uint32_t root, int from, int co
     c.vh = vh;
     c.sx = sx;
     c.sy = sy;
+    c.terminals = terminals;
     c.key = cacheKey;
     c.items = items;
     out.insert(out.end(), items.begin(), items.end());
@@ -562,19 +566,26 @@ void runChain(ControlServer& s, std::shared_ptr<std::vector<std::vector<std::str
     runOriginal(s, name, std::move(argv), next);
 }
 
+// How long after an action its follow-on script work counts as its effect:
+// timers due within this long (a re-render the click scheduled, a periodic
+// tick that redraws a count) run before the reply is taken.
+constexpr int kSettleMs = 300;
+
 // Until this process and the apps on screen have drawn nothing for a few
-// frames (or the timeout): the apps' frames count, not only the shell's.
+// frames, and their timers due within kSettleMs have run (or the timeout):
+// the apps' frames count, not only the shell's.
 void settle(ControlServer& s, const std::vector<WinInfo>& wins, double timeoutMs, std::function<void()> then) {
     const std::string t = "--timeout=" + std::to_string(static_cast<int>(timeoutMs));
+    const std::string settleOpt = "--settle=" + std::to_string(kSettleMs);
     std::vector<FetchPtr> fetches;
     for (const auto& w : wins) {
         if (w.minimized) continue;
         const std::string ep = endpointForPid(w.pid);
-        if (!ep.empty()) fetches.push_back(startFetch(ep, {"wait-idle", "--frames=3", t}, w.n));
+        if (!ep.empty()) fetches.push_back(startFetch(ep, {"wait-idle", "--frames=3", settleOpt, t}, w.n));
     }
     auto localDone = std::make_shared<bool>(false);
     ControlServer* server = &s;
-    runOriginal(s, "wait-idle", {"--frames=3", t}, [localDone](bool, std::string) { *localDone = true; });
+    runOriginal(s, "wait-idle", {"--frames=3", settleOpt, t}, [localDone](bool, std::string) { *localDone = true; });
     const double start = s.clockMs();
     auto tick = [server, fetches, localDone, start, timeoutMs, then]() {
         bool all = *localDone;
@@ -646,7 +657,12 @@ void act(ControlServer& s, const ControlCallPtr& call, const std::string& target
         auto steps = std::make_shared<std::vector<std::vector<std::string>>>();
         std::string why;
         if (!plan(hit, win, *steps, why)) return call->fail(why);
-        const uint64_t rev0 = st.history.commit(def.key, filterTo(before, def));
+        // The reply is the diff since the last view of the default scope
+        // given out (the one the agent most likely holds), so whatever
+        // changed since then is in it too and no revision is spent on the
+        // view before the action. With none yet, the view before is the base.
+        uint64_t rev0 = 0;
+        if (!st.history.latest(def.key, &rev0)) rev0 = st.history.commit(def.key, filterTo(before, def));
         const size_t winCount = wins.size();
         runChain(*server, steps, 0, [server, call, since, rects, rev0, wins, winCount, waitWindowMs](bool ok,
                                                                                                    std::string payload) {

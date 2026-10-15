@@ -4,10 +4,12 @@
 // control_input.cpp, recording in control_record.cpp; the commands that need
 // the JS realm (eval, dom, inspect) are bronze_host's (host_control.cpp).
 
+#include "bronze_host/bronze_host.h"
 #include "engine/control.h"
 #include "engine/control_helpers.h"
 #include "engine/engine.h"
 #include "engine/frame_trace.h"
+#include "engine/view_document.h"
 #include "engine/web_animations.h"
 #include "dom/document.h"
 #include "dom/element.h"
@@ -420,18 +422,35 @@ void cmdWaitIdle(ControlServer& s, const ControlCallPtr& call) {
     const double start = s.clockMs();
     const double timeout = call->number("timeout", 5000);
     const int quietFrames = static_cast<int>(call->number("frames", 3));
+    // --settle=ms: the page's follow-on work counts too. A timer due within
+    // that long of the start (a re-render a click scheduled, a periodic tick
+    // that redraws a count) and pending promise jobs keep it busy until they
+    // have run, and their frames have gone quiet.
+    const double settleMs = call->number("settle", 0);
+    // ... and a terminal's output (no DOM changes for it) keeps it busy too.
     auto quiet = std::make_shared<int>(0);
     auto lastSeen = std::make_shared<uint64_t>(e.frameNumber());
-    s.addTicker([&e, server, call, start, timeout, quietFrames, quiet, lastSeen]() {
+    auto screens = std::make_shared<uint64_t>(settleMs > 0 ? DocumentView::terminalsSignature() : 0);
+    s.addTicker([&e, server, call, start, timeout, quietFrames, settleMs, quiet, lastSeen, screens]() {
         if (call->done()) return true;
+        const double elapsed = server->clockMs() - start;
         // Judge the frame that just finished (the ticker runs at the start of the next).
         const FrameRecord* last = e.frameTrace().last();
         if (last && last->frame != *lastSeen) {
             *lastSeen = last->frame;
-            const bool busy = last->animating || last->layoutRan || last->rasterSignalled || last->inputEvents;
+            bool busy = last->animating || last->layoutRan || last->rasterSignalled || last->inputEvents;
+            if (settleMs > 0) {
+                const uint64_t sig = DocumentView::terminalsSignature();
+                if (sig != *screens) busy = true;
+                *screens = sig;
+            }
             *quiet = busy ? 0 : *quiet + 1;
         }
-        const double elapsed = server->clockMs() - start;
+        if (settleMs > 0 && !e.timePaused()) {
+            const double scale = e.effectiveTimeScale();
+            const double dueIn = scale > 0 ? bronze_host::hostTimerDueInMs() / scale : 0;
+            if (elapsed + dueIn <= settleMs) *quiet = 0;  // script work still to come
+        }
         if (*quiet >= quietFrames) {
             call->ok("{\"idle\":true,\"waitedMs\":" + std::to_string(static_cast<int>(elapsed)) + "}");
             return true;
@@ -499,7 +518,8 @@ void registerEngineControlCommands(ControlServer& s) {
     s.registerCommand("animations", "[--all]  running animations and transitions: target, properties, time",
                       [&s](const ControlCallPtr& c) { cmdAnimations(s, c); });
     s.registerCommand("wait-idle",
-                      "[--timeout=5000] [--frames=3]  until N frames in a row lay out, animate and render nothing",
+                      "[--timeout=5000] [--frames=3] [--settle=ms]  until N frames in a row lay out, animate and "
+                      "render nothing (--settle: and every script timer due within ms of now has run)",
                       [&s](const ControlCallPtr& c) { cmdWaitIdle(s, c); });
     s.registerCommand("wait", "<selector> [--gone] [--timeout=5000]  until a match has a box (or none does)",
                       [&s](const ControlCallPtr& c) { cmdWait(s, c); });

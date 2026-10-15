@@ -70,6 +70,13 @@ bool writeNativeManifest(const std::string& path, std::string* error);
 /// with none. The windowed loop's idle wait ends there.
 double hostFrameDueInMs();
 
+/// The same without requestAnimationFrame: 0 while a promise job waits, else
+/// until the earliest timer (setTimeout, setInterval, requestIdleCallback);
+/// +infinity with none. An action's settle (wait-idle --settle) waits out the
+/// timers due soon after it, which a rAF loop that runs every frame does not
+/// say anything about.
+double hostTimerDueInMs();
+
 /// Clear active setTimeout and setInterval timers and tasks on reload.
 void clearHostTimers();
 

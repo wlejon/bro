@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <map>
+#include <set>
 #include <unordered_map>
 
 namespace bro::engine::view {
@@ -270,32 +272,71 @@ std::string formatDiff(const Snapshot& from, const Snapshot& to, bool rects, Dif
     for (const Item& it : from) before.emplace(it.handle, &it);
     for (const Item& it : to) after.emplace(it.handle, &it);
     std::string added, changed, removed;
+    // A run of added lines keeps its nesting, relative to the run's
+    // shallowest line so far: a dialog's fields sit under the dialog.
+    bool inRun = false;
+    int runBase = 0;
     for (const Item& it : to) {
         auto b = before.find(it.handle);
         if (b == before.end()) {
-            added += "+ " + stripIndent(formatItem(it, rects)) + "\n";
+            const int depth = it.isWindow() ? 0 : it.depth;
+            if (!inRun || depth < runBase) runBase = depth;
+            inRun = true;
+            added += "+ " + std::string(static_cast<size_t>(depth - runBase), ' ') +
+                     stripIndent(formatItem(it, rects)) + "\n";
             ++c.added;
             continue;
         }
+        inRun = false;
         const Item& old = *b->second;
         if (sameItem(old, it, rects)) continue;
         std::string line = "~ " + it.handle;
         if (old.role != it.role || old.flags != it.flags) {
-            const std::string role = it.role.empty() ? "-" : it.role;
-            line += it.isWindow() ? it.flags + " " + role : " " + role + it.flags;
+            // The flags it has now, then "-x" for each it lost: "~ 6.6
+            // textbox -@" is a field that lost the keyboard. A window's role
+            // (its app) does not change, so its line is "~ w3*" / "~ w0 -*".
+            std::string lost;
+            for (char f : old.flags)
+                if (it.flags.find(f) == std::string::npos) lost += f;
+            if (it.isWindow()) {
+                line += it.flags;
+                if (old.role != it.role) line += " " + (it.role.empty() ? std::string("-") : it.role);
+            } else {
+                line += " " + (it.role.empty() ? std::string("-") : it.role) + it.flags;
+            }
+            if (!lost.empty()) line += " -" + lost;
         }
         if (old.name != it.name) line += " " + quote(truncateUtf8(it.name, kMaxNameChars));
         if (old.hasValue != it.hasValue || old.value != it.value)
             line += " =" + quote(it.hasValue ? truncateUtf8(it.value, kMaxNameChars) : std::string());
-        if (old.extra != it.extra) line += " [" + it.extra + "]";
+        if (old.extra != it.extra) line += " [" + (it.extra.empty() ? std::string("none") : it.extra) + "]";
         if ((rects || it.isWindow()) && !sameRect(old, it) && it.hasRect) line += " " + rectText(it);
         changed += line + "\n";
         ++c.changed;
     }
+    // Removed: by handle, except a window none of whose elements are left,
+    // which is "N.*" (the focus moved away from it, or it closed).
+    std::map<int, std::pair<int, bool>> perWindow;  // window -> (elements before, any left)
+    for (const Item& it : from)
+        if (!it.isWindow()) {
+            auto& pw = perWindow[windowOf(it.handle)];
+            ++pw.first;
+            if (after.count(it.handle)) pw.second = true;
+        }
+    std::set<int> collapsed;
     for (const Item& it : from) {
         if (after.count(it.handle)) continue;
-        removed += (removed.empty() ? "- " : " ") + it.handle;
         ++c.removed;
+        if (!it.isWindow()) {
+            const int w = windowOf(it.handle);
+            const auto& pw = perWindow[w];
+            if (pw.first > 1 && !pw.second) {
+                if (!collapsed.insert(w).second) continue;
+                removed += (removed.empty() ? "- " : " ") + std::to_string(w) + ".*";
+                continue;
+            }
+        }
+        removed += (removed.empty() ? "- " : " ") + it.handle;
     }
     if (!removed.empty()) removed += "\n";
     if (counts) *counts = c;

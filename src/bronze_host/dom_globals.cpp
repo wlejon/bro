@@ -322,6 +322,12 @@ double hostFrameDueInMs() {
     return std::max(0.0, due);
 }
 
+double hostTimerDueInMs() {
+    if (!g_host) return std::numeric_limits<double>::infinity();
+    if (ev::microtasksPending()) return 0.0;
+    return std::max(0.0, nextHostTimerDueMs() - g_host->clockMs);
+}
+
 void clearHostAnimationFramesForDocument(dom::Document* doc) {
     if (!g_host || !doc) return;
     auto it = std::remove_if(g_host->rafPending.begin(), g_host->rafPending.end(),
