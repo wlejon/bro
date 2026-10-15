@@ -6,13 +6,13 @@
 /**
  * `bro.cred` provides authentication, biometrics, secret storage, and PolicyKit integration:
  * - PAM / OS user authentication (`authenticate`, `authenticateSync`)
- * - Biometric capabilities and fingerprint/face authentication (`getBiometrics`, `startBiometricAuth`, `cancelBiometricAuth`)
+ * - Biometric capabilities and fingerprint/face/iris authentication (`getBiometrics`, `startBiometricAuth`, `cancelBiometricAuth`)
  * - Secret service / credential storage (`getSecret`, `setSecret`, `deleteSecret`, `listSecrets`)
- * - PolicyKit authentication agent (`registerPolkitAgent`, `unregisterPolkitAgent`, `onPolkitRequest`)
+ * - PolicyKit authentication agent (`registerPolkitAgent`, `unregisterPolkitAgent`, `onPolkitRequest`, `submitResponse`, `cancelRequest`)
  *
  * Privileged API: Mounted automatically in Bronze when `BRO_WITH_CRED` is enabled and
  * the app is verified as a trusted shell app declaring `"shell": true` or
- * `"privileged": ["cred", ...]` in its `bro.json`.
+ * `"permissions": ["cred", ...]` in its `bro.json`.
  */
 
 // ============================================================================
@@ -38,15 +38,29 @@ if (bro.cred.available) {
 // ============================================================================
 
 const bioCaps = bro.cred.getBiometrics();
+// {
+//   supported: boolean,
+//   hasFingerprint: boolean,
+//   hasFace: boolean,
+//   hasIris: boolean,
+//   availability: string,
+//   primaryType: 'fingerprint' | 'face' | 'iris' | 'none' | 'unknown',
+//   sensorName: string,
+//   details: string
+// }
 console.log('Biometric hardware available:', {
+    supported: bioCaps.supported,
     hasFingerprint: bioCaps.hasFingerprint,
     hasFace: bioCaps.hasFace,
-    hasVoice: bioCaps.hasVoice
+    hasIris: bioCaps.hasIris,
+    primaryType: bioCaps.primaryType,
+    sensorName: bioCaps.sensorName
 });
 
-if (bioCaps.hasFingerprint || bioCaps.hasFace) {
+if (bioCaps.hasFingerprint || bioCaps.hasFace || bioCaps.hasIris) {
     // Start biometric authentication prompt
     bro.cred.startBiometricAuth().then(result => {
+        // { success: boolean, method: string, availability?: string, details?: string, cancelled?: boolean, error?: string }
         console.log(`Biometric auth result: ${result.success}, method: ${result.method}`);
     }).catch(err => {
         console.error('Biometric auth error:', err.message);
@@ -60,23 +74,24 @@ if (bioCaps.hasFingerprint || bioCaps.hasFace) {
 // 3. Secret Storage
 // ============================================================================
 
-// Store a secret credential
+// Store a secret credential (sync variant: setSecretSync)
 await bro.cred.setSecret('my_service', 'user@example.com', 'super_secret_token', {
-    created: Date.now(),
+    created: String(Date.now()),
     description: 'API access token'
 });
 
-// Retrieve secret credential
+// Retrieve secret credential (sync variant: getSecretSync)
 const secret = await bro.cred.getSecret('my_service', 'user@example.com');
 console.log('Retrieved secret token:', secret ? '[present]' : '[not found]');
 
-// List stored secrets
+// List stored secrets (sync variant: listSecretsSync)
+// Returns Array<{ service, account, meta, attributes, lastModified }>
 const secretsList = await bro.cred.listSecrets('my_service');
 for (const entry of secretsList) {
-    console.log(`Secret: ${entry.service} / ${entry.account}`);
+    console.log(`Secret: ${entry.service} / ${entry.account} (modified: ${entry.lastModified})`);
 }
 
-// Delete secret
+// Delete secret (sync variant: deleteSecretSync)
 await bro.cred.deleteSecret('my_service', 'user@example.com');
 
 // ============================================================================
@@ -84,18 +99,32 @@ await bro.cred.deleteSecret('my_service', 'user@example.com');
 // ============================================================================
 
 // Register as active session PolicyKit agent
-const agentRegistered = bro.cred.registerPolkitAgent();
+// Options: { registerWithAuthority?: boolean, objectPath?: string, busAddress?: string, fallbackPassword?: string }
+const agentRegistered = bro.cred.registerPolkitAgent({
+    registerWithAuthority: true
+});
 
 if (agentRegistered) {
     // Listen for privilege elevation requests
+    // Request shape:
+    // {
+    //   actionId, action_id, message, iconName, icon_name, cookie,
+    //   details: Object,
+    //   identities: [{ kind: 'user' | 'group', id: number, name: string }],
+    //   submitResponse(response),
+    //   cancel(reason?)
+    // }
     const polkitSub = bro.cred.onPolkitRequest((request) => {
         console.log(`Polkit auth request for action: ${request.actionId}, message: ${request.message}`);
-        // Prompt user and submit response:
-        // request.submitResponse('password');
+        // Authenticate and submit response via request helper or top-level method:
+        // request.submitResponse({ authenticated: true, selectedUser: 'j', password: '...' });
+        // or: bro.cred.submitResponse(request.cookie, true);
         // or cancel:
-        // request.cancel();
+        // request.cancel('User dismissed dialog');
+        // or: bro.cred.cancelRequest(request.cookie);
     });
 
-    // Unregister when done
+    // Unsubscribe listener or unregister agent when done:
+    // polkitSub.cancel(); // or polkitSub.dispose() / polkitSub.unregister()
     // bro.cred.unregisterPolkitAgent();
 }

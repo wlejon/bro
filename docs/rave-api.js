@@ -78,6 +78,13 @@ class Rave {
   loaded;
 
   /**
+   *  Active execution device ('CPU', 'CUDA', 'Vulkan', or 'Metal')
+   * @readonly
+   * @type {string}
+   */
+  device;
+
+  /**
    *  Native audio sample rate in Hz
    * @readonly
    * @type {number}
@@ -147,7 +154,7 @@ bro.rave.init = function() {};
  *
  * @param {string} modelDir - Directory containing config.json and model.safetensors
  * @param {RaveLoadOptions} [opts] - Optional load configuration and async callbacks
- * @returns {Rave} Rave model instance
+ * @returns {(Rave|AsyncHandle)} Rave model instance, or AsyncHandle when `opts.onReady` is given
  */
 bro.rave.loadRave = function(modelDir, opts) {};
 

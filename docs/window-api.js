@@ -179,6 +179,8 @@ bro.window.setProgress = function(state, value) {};
  * @param {number} [options.timeout]
  * @param {boolean} [options.silent]
  * @param {number} [options.replacesId]
+ * @param {Array<{action: string, title?: string}>} [options.actions]
+ * @param {string} [options.payload]
  * @returns {number}
  */
 bro.window.notify = function(title, body, options) {};
@@ -411,6 +413,7 @@ bro.window.open = function(src, opts) {};
  * @property {number} id        routes headless input: click(x, y, 0, win.id)
  * @property {boolean} closed   true once closed, by close(), the OS, or a src
  *                              that failed to load (it closes at the drain)
+ * @property {boolean} focused  whether this secondary window currently has focus
  * getSize() / setSize(w, h) / getPosition() / setPosition(x, y) (a no-op on a
  * hidden window) / getTitle() / setTitle(s) / getOpacity() / setOpacity(v) /
  * flash(on) / requestAttention(on) / focus() / close()

@@ -43,10 +43,31 @@ class DOMParser {
    * Parses a string containing either HTML or XML into a DOM Document.
    *
    * @param {string} str - Markup text to parse
-   * @param {string} type - MIME type ('text/html', 'text/xml', 'image/svg+xml')
+   * @param {'text/html'|'text/xml'|'application/xml'|'application/xhtml+xml'|'image/svg+xml'} type - MIME type
    * @returns {Document} Parsed DOM Document instance
    */
   parseFromString(str, type) {}
 
 }
+
+/**
+ * Serializes a DOM subtree into an XML/HTML markup string.
+ */
+class XMLSerializer {
+
+  /**
+   * Initializes a new XMLSerializer instance.
+   */
+  constructor() {}
+
+  /**
+   * Serializes the specified DOM node and its descendants to a string.
+   *
+   * @param {Node} node - Root node to serialize
+   * @returns {string} Serialized markup string
+   */
+  serializeToString(node) {}
+
+}
+
 

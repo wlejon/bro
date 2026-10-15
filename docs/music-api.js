@@ -784,3 +784,8 @@ bro.music.knobRanges;
  * @readonly @type {Float32Array}
  */
 bro.music.energyDirection;
+
+/** @type {Function} */
+bro.music.YuE2 = YuE2;
+/** @type {Function} */
+bro.music.YuE2Vae = YuE2Vae;

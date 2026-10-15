@@ -7,7 +7,7 @@
  * `bro.thumb` provides asynchronous and synchronous thumbnail generation,
  * caching according to Freedesktop Thumbnail Managing Standards, failure tracking,
  * and capability discovery:
- * - Asynchronous thumbnail requests (`get`) returning Promises with image pixel data
+ * - Asynchronous thumbnail requests (`get`) returning Promises with image pixel data and `.requestId`
  * - Synchronous thumbnail retrieval (`getSync`)
  * - Cache invalidation and purging (`invalidate`, `clearCache`)
  * - Expected cache path lookups (`getThumbnailPath`)
@@ -38,6 +38,8 @@ if (bro.thumb.available) {
         canExtractPdfs: caps.canExtractPdfs,
         canExtractText: caps.canExtractText,
         canExtractNative: caps.canExtractNative,
+        hasXdgCache: caps.hasXdgCache,
+        pdfBackend: caps.pdfBackend
     });
 }
 
@@ -45,17 +47,21 @@ if (bro.thumb.available) {
 // 2. Asynchronous Thumbnail Generation (`bro.thumb.get`)
 // ============================================================================
 
-// Request thumbnail asynchronously (returns a Promise)
-bro.thumb.get('/path/to/image.png', {
+// Request thumbnail asynchronously (returns a Promise with a numeric `.requestId` property)
+const thumbPromise = bro.thumb.get('/path/to/image.png', {
     size: 'normal',       // 'normal' (128), 'large' (256), 'x-large' (512), 'xx-large' (1024), or pixel number
     priority: 'normal',   // 'low', 'normal', 'high'
     cacheOnly: false,     // only return if already in cache
     force: false,         // regenerate even if cached
-    preferNative: false   // prefer native OS thumbnailer if available
-}).then(result => {
+    preferNative: false,  // prefer native OS thumbnailer if available
+    storeCache: true      // write generated thumbnail to XDG cache
+});
+
+thumbPromise.then(result => {
+    // { width, height, pixels: Uint8Array, source: 'cache' | 'generated' | 'native', path, sourcePath, thumbnailPath }
     console.log(`Thumbnail width: ${result.width}, height: ${result.height}`);
-    console.log(`Thumbnail source: ${result.source}`); // 'cache', 'generator', 'native', etc.
-    console.log(`Cached thumbnail path: ${result.path}`);
+    console.log(`Thumbnail source: ${result.source}`);
+    console.log(`Cached thumbnail path: ${result.thumbnailPath}`);
     console.log(`RGBA pixels Uint8Array: ${result.pixels.length} bytes`);
 }).catch(err => {
     console.error(`Failed to generate thumbnail: ${err.message}`);
@@ -92,5 +98,5 @@ if (!bro.thumb.hasFailed('/path/to/corrupt.pdf')) {
 // Clear recorded failure:
 bro.thumb.clearFailure('/path/to/corrupt.pdf');
 
-// Clear thumbnail cache:
-bro.thumb.clearCache(); // clears entire cache
+// Clear thumbnail cache (pass a file path to invalidate a single file, or omit to clear all):
+bro.thumb.clearCache();

@@ -190,10 +190,10 @@ bro.conf.unwatch = function(tokenOrHandle) {};
 /**
  * @typedef {Object} KeySchemaDefinition
  * @property {'bool'|'int'|'double'|'string'|'string_list'|'enum'|'color'|'rect'|'dictionary'} type - Value type
- * @property {*} [default] - Default value
- * @property {number} [min] - Minimum allowed value for numeric types
- * @property {number} [max] - Maximum allowed value for numeric types
- * @property {string[]} [enum] - Allowed values for enum types
+ * @property {*} [default] - Default value (alias: `defaultValue`)
+ * @property {number} [min] - Minimum allowed value for numeric types (alias: `minValue`)
+ * @property {number} [max] - Maximum allowed value for numeric types (alias: `maxValue`)
+ * @property {string[]} [enum] - Allowed values for enum types (alias: `allowedValues`)
  * @property {string} [summary] - One-line summary
  * @property {string} [description] - Detailed description
  */

@@ -38,8 +38,9 @@
  * Cost: while stopped, nothing — no sampler thread exists and nothing on any
  * call path checks for one. While running, each sample suspends a thread for
  * the length of one stack walk (a few microseconds). stop() symbolizes native
- * frames through the PDBs beside the binaries, which is slow the first time
- * (up to a second or two) and fast after.
+ * frames (`PDB` on Windows, `dladdr` + ELF `.symtab`/`.dynsym` on Linux,
+ * `dladdr` on macOS), which is slow the first time on Windows (up to a second
+ * or two) and fast after.
  *
  * Threads: 'main' samples the page's thread, 'workers' every Worker thread,
  * 'js' both, 'all' those plus every other thread of the process (compile
@@ -50,7 +51,7 @@
  * with threads: 'workers'). One profile at a time per process.
  *
  * Windows x64 (SuspendThread and the x64 unwind tables), Linux x64
- * (pthread_kill with SIGPROF, .eh_frame DWARF CFI and frame-pointer chain),
+ * (`syscall(SYS_tgkill, ..., SIGPROF)` walking the `%rbp` frame-pointer chain),
  * and arm64 macOS (mach thread_suspend and the frame-pointer chain; a
  * frameless leaf's caller is read from its link register); elsewhere start()
  * throws.

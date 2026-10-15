@@ -104,3 +104,13 @@ class MediaQueryList {
 
 }
 
+/**
+ * Evaluates a CSS media query string against the current document's media context
+ * and returns a live `MediaQueryList`. Also exposed as `window.matchMedia(query)`.
+ *
+ * @param {string} query - Media query string (e.g. `'(prefers-color-scheme: dark)'`)
+ * @returns {MediaQueryList}
+ */
+function matchMedia(query) {}
+
+

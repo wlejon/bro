@@ -33,7 +33,8 @@ reports `{ available: false }`, so apps feature-detect instead of crashing.
 | Profile | Contents | Needs vcpkg? | Needs CUDA? |
 |---|---|:--:|:--:|
 | `minimal` | HTML/CSS/JS + Canvas2D + WebGL + audio. 2D renderer only. | no | no |
-| **`app`** (default) | Full renderer (3D scene graph, Jolt physics, audio, core game-AI) + networking, video, Steam. No AI tower. | yes | no |
+| `desktop` | Full renderer (3D scene graph, Jolt physics, audio, core game-AI), terminal, desktop libraries, remote. No vcpkg services (net/video/AVIF/Steam) and no AI tower. | no | no |
+| **`app`** (default) | Full renderer (3D scene graph, Jolt physics, audio, core game-AI), terminal, desktop libraries, remote + networking, video, Steam. No AI tower. | yes | no |
 | `full` | Everything, adding the on-device AI tower (tensor, LM, diffusion, vision, audio-ML). | yes | opt-in |
 
 - **`minimal`** builds, links, and runs with no vcpkg, no CUDA, and no
@@ -51,6 +52,11 @@ reports `{ available: false }`, so apps feature-detect instead of crashing.
 
   Most of `tests/` needs features this profile doesn't have, so the full suite
   is not the check here.
+- **`desktop`** enables the full renderer, `<terminal>`, `bro.remote`, and all
+  desktop-environment libraries (`bro.vfs`, `bro.sys`, `bro.compositor`, …)
+  while leaving out the vcpkg-backed services (`BRO_WITH_NET`, `BRO_WITH_VIDEO`,
+  `BRO_WITH_AVIF`, `BRO_WITH_STEAM`) and the AI tower, so it builds with no
+  vcpkg and no CUDA.
 - **`app`** (default) is a complete web/app/game runtime. It needs vcpkg
   only because networking (GameNetworkingSockets) and video decode (libvpx/webm)
   pull vcpkg ports. A runtime where `bro.net` and `<video>` silently didn't work
@@ -69,6 +75,7 @@ dependency graph, and the stub mechanism.
 ```bash
 cmake -B build                                        # app (default)
 cmake -B build -DBRO_PROFILE=minimal                  # 2D/canvas/WebGL floor, no vcpkg
+cmake -B build -DBRO_PROFILE=desktop                  # full renderer + desktop substrate, no vcpkg
 cmake -B build -DBRO_PROFILE=full                     # + AI tower (CPU)
 cmake -B build -DBRO_PROFILE=full -DBRO_WITH_TENSOR_CUDA=ON   # + AI tower on CUDA
 cmake -B build -DBRO_PROFILE=full -DBRO_WITH_TENSOR_VULKAN=ON # + AI tower on Vulkan (any Vulkan 1.2+ GPU)
@@ -145,7 +152,7 @@ pipelines persist in `<user cache dir>/pipeline-cache/` beside the code cache
 - **vcpkg**, only for the `app`/`full` profiles (networking + video). Set
   `VCPKG_ROOT`, or pass `-DCMAKE_TOOLCHAIN_FILE=…`, or install it at a
   common location (`../vcpkg`, `%HOME%/vcpkg`) where CMake auto-detects it.
-  The `minimal` profile needs no vcpkg.
+  The `minimal` and `desktop` profiles need no vcpkg.
 
 **Linux (Debian/Ubuntu):**
 - **GCC 12+** or **Clang 15+**
@@ -187,7 +194,7 @@ class of problem.
 
 There are no git submodules; a plain `git clone` is the whole checkout.
 `cmake/bro_pins.cmake` declares every dependency: each ecosystem sibling with
-no commit, so it tracks its main, and SDL, Jolt and FastNoise2 pinned to exact
+no commit, so it tracks its main, and SDL, Jolt, FastNoise2 and libjpeg-turbo pinned to exact
 commits. `cmake/bro_deps.cmake`'s `bro_dependency()` resolves each one at
 configure time, in order:
 

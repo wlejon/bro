@@ -4,178 +4,233 @@
  */
 
 /**
- * `bro.sys` provides OS system service integration for desktop shells:
- * - Power / battery state and sleep inhibition (`power`)
- * - Audio device enumeration, volume control, mute, and default sink/source selection (`audio`)
- * - Network state, Wi-Fi scanning, connection, and VPN (`network`)
- * - Bluetooth adapters, devices, pairing, and discovery (`bluetooth`)
- * - Freedesktop Notification Server host (`notifications`)
- * - StatusNotifierItem / System Tray host (`tray`)
- * - Process table snapshot and signal/kill control (`processes`, `listProcesses`, `killProcess`)
+ * `bro.sys` provides desktop system daemon and hardware state integration across
+ * 7 sub-namespaces:
+ * - `bro.sys.power`: Battery/AC state, power actions (suspend/reboot/powerOff), and inhibitors
+ * - `bro.sys.audio`: PipeWire / PulseAudio device enumeration, volume, mute, and default routing
+ * - `bro.sys.network`: NetworkManager / OS interfaces, Wi-Fi scanning/connecting, and VPN control
+ * - `bro.sys.bluetooth`: BlueZ adapter control, discovery, pairing, and device connection
+ * - `bro.sys.notifications`: Desktop notification daemon (`org.freedesktop.Notifications`), history, and DND
+ * - `bro.sys.tray`: StatusNotifierWatcher / system tray host, item activation, and DBusMenu inspection
+ * - `bro.sys.processes`: Process table inspection and signaling (`list`, `kill`, plus top-level aliases)
  *
  * Privileged API: Mounted automatically in Bronze when `BRO_WITH_SYS` is enabled and
  * the app is verified as a trusted shell app declaring `"shell": true` or
- * `"privileged": ["sys", ...]` in its `bro.json`.
+ * `"permissions": ["sys", ...]` in its `bro.json`.
  */
 
 // ============================================================================
-// 1. Power & Battery
+// 1. Power Management (`bro.sys.power`)
 // ============================================================================
 
-if (bro.sys.available) {
-    const power = bro.sys.power.getState();
-    console.log('Power state:', {
-        onBattery: power.onBattery,
-        batteryPercent: power.batteryPercent,
-        charging: power.charging,
-        powerProfile: power.powerProfile
-    });
+const powerState = bro.sys.power.getState();
+// {
+//   source: 'ac' | 'battery' | 'ups' | 'unknown',
+//   percent: number,
+//   timeToEmptyS: number,
+//   timeToFullS: number,
+//   lidPresent: boolean,
+//   lidClosed: boolean,
+//   hasSystemBattery: boolean,
+//   devices: [{
+//     id, kind, powerSupply, state, technology, percent,
+//     timeToEmptyS, timeToFullS, energyWh, energyFullWh,
+//     energyFullDesignWh, energyRateW, vendor, model, serial
+//   }]
+// }
+console.log(`Power source: ${powerState.source} (${powerState.percent}%)`);
 
-    // Inhibit system sleep
-    const powerInhibitId = bro.sys.power.inhibit('Critical backup running');
-    // bro.sys.power.uninhibit(powerInhibitId);
-}
+const powerCaps = bro.sys.power.getCapabilities();
+// { suspend, hibernate, hybridSleep, reboot, powerOff, lock }
+
+// Request a power action ('suspend' | 'hibernate' | 'hybridSleep' | 'reboot' | 'powerOff' | 'lock'):
+// bro.sys.power.request('suspend');
+
+// Inhibit sleep/idle (returns numeric inhibitor ID):
+const inhibitId = bro.sys.power.inhibit('Playing video', 'MyPlayer', 'sleep:idle', 'block');
+console.log('Inhibited:', bro.sys.power.isInhibited());
+bro.sys.power.uninhibit(inhibitId);
+
+// Events: 'changed' (alias 'powerChanged'), 'capabilitiesChanged', 'sleepPrepare', 'shutdownPrepare'
+bro.sys.power.on('changed', (state) => {
+    console.log('Power state updated:', state.percent);
+});
 
 // ============================================================================
-// 2. Audio Devices & Volume
+// 2. Audio Routing & Volume (`bro.sys.audio`)
 // ============================================================================
 
 const audioState = bro.sys.audio.getState();
-console.log('Audio devices:', audioState.devices);
-// Set volume on default sink:
-bro.sys.audio.setVolume(audioState.defaultSinkId, 75);
+// { defaultOutput: string, defaultInput: string, devices: AudioDevice[] }
+
+const audioDevices = bro.sys.audio.getDevices();
+for (const dev of audioDevices) {
+    // {
+    //   id, description, deviceName, formFactor,
+    //   direction: 'output' | 'input', state, isDefault,
+    //   hasVolume, volume, muted, nativeId, channelVolumes
+    // }
+    console.log(`[${dev.direction}] ${dev.description}: ${Math.round(dev.volume * 100)}% (muted: ${dev.muted})`);
+}
+
+// Set volume (accepts 0.0..1.0 or 0..100), mute, and default devices:
+if (audioState.defaultOutput) {
+    bro.sys.audio.setVolume(audioState.defaultOutput, 0.75);
+    bro.sys.audio.setMute(audioState.defaultOutput, false);
+    bro.sys.audio.setDefaultSink(audioState.defaultOutput); // or setDefault(id), setDefaultSource(id)
+}
+
+// Events: 'deviceAdded', 'deviceRemoved', 'deviceChanged', 'defaultChanged'
+bro.sys.audio.on('deviceChanged', (dev) => {
+    console.log('Audio device changed:', dev.id, dev.volume);
+});
 
 // ============================================================================
-// 3. Network & Wi-Fi
+// 3. Network & Wi-Fi (`bro.sys.network`)
 // ============================================================================
 
 const netState = bro.sys.network.getState();
-console.log('Network connected:', netState.connected, 'type:', netState.primaryType);
+// {
+//   connectivity: 'none' | 'portal' | 'limited' | 'full' | 'unknown',
+//   networkingEnabled: boolean,
+//   wifiEnabled: boolean,
+//   wifiHardwareEnabled: boolean,
+//   primaryDevice: string,
+//   devices: [{
+//     id, interfaceName, description, type, state, mac,
+//     connection, speedMbps, ipv4: { addresses, gateways, dns },
+//     ipv6: { addresses, gateways, dns }, isPrimary, managed
+//   }],
+//   activeConnections: [{ id, name, uuid, type, state, deviceIds, default4, default6 }]
+// }
 
-// Scan for nearby Wi-Fi access points:
-bro.sys.network.scanWifi().then(accessPoints => {
-    for (const ap of accessPoints) {
-        console.log(`SSID: ${ap.ssid} (signal: ${ap.signalStrength}%, security: ${ap.security})`);
-    }
+// List or scan Wi-Fi access points:
+const accessPoints = bro.sys.network.getAccessPoints();
+// [{ deviceId, ssid, bssid, strengthPercent, rssiDbm, frequencyMhz, channel, security, active }]
+
+const scannedAps = await bro.sys.network.scanWifi();
+// Connect to a Wi-Fi network (returns Promise<boolean>):
+// await bro.sys.network.connectWifi('MySSID', 'MyPassphrase');
+
+// Disconnect interface / Wi-Fi / VPN:
+// bro.sys.network.disconnect(netState.primaryDevice);
+// bro.sys.network.disconnectWifi();
+// bro.sys.network.connectVpn('WorkVPN');
+// bro.sys.network.disconnectVpn('WorkVPN');
+
+// Events: 'changed' (alias 'networkChanged'), 'wifiScanCompleted'
+bro.sys.network.on('changed', (state) => {
+    console.log('Network connectivity:', state.connectivity);
 });
 
 // ============================================================================
-// 4. Bluetooth
+// 4. Bluetooth (`bro.sys.bluetooth`)
 // ============================================================================
 
 const btState = bro.sys.bluetooth.getState();
-console.log('Bluetooth powered:', btState.powered);
-for (const dev of btState.devices) {
-    console.log(`Device: ${dev.name} [${dev.address}] (connected: ${dev.connected})`);
-}
+// { adapters: BluetoothAdapter[], devices: BluetoothDevice[], defaultAdapter: string }
 
-// ============================================================================
-// 5a. Posting a notification: the web `Notification` API
-// ============================================================================
-//
-// Any app (not only a trusted shell) posts desktop notifications with the
-// web API, a global like a browser's. The desktop shows it under the app's
-// own identity (bro.json `id` and `name`):
-//   - Windows: a toast under the app's AppUserModelID, registered for the
-//     current user on first use (HKCU\Software\Classes\AppUserModelId\<id>,
-//     DisplayName + IconUri); an app with no id, or a system with toasts off,
-//     gets a tray balloon instead.
-//   - macOS: UNUserNotificationCenter inside a bundle; outside one, AppleScript's
-//     `display notification` (osascript).
-//   - Linux: org.freedesktop.Notifications over D-Bus (app name, icon,
-//     desktop-entry and suppress-sound hints), else notify-send.
-// Headless shows nothing and records each one: `notifications()` in
-// docs/headless.md.
-//
-// A desktop app needs no leave to notify: Notification.permission is
-// 'granted' and requestPermission() resolves 'granted'. `show` fires once the
-// desktop took it, `error` when nothing could show it, `close` after close().
-// A repeated `tag` replaces the earlier notification; requireInteraction keeps
-// it up until dismissed. bro.window.notify(title, body, { icon, silent,
-// timeout, replacesId, actions, payload }) is the same path with the native
-// id returned.
-//
-// Clicks and actions. `actions: [{ action, title }]` adds buttons (at most
-// Notification.maxActions, 4; the desktop may show fewer). A click on the
-// notification, or on a button, raises and focuses the app's window (restored
-// if minimized) and fires `click` with `event.action` ('' for the body, else
-// the button's `action`). The user dismissing it fires `close`. A
-// notification with no listener for the event — or one an earlier run
-// posted — fires `notificationclick` / `notificationclose` on window instead,
-// with `event.notification` rebuilt from what was posted (title, body, tag,
-// icon, data, actions) and `event.action`. Events are delivered once the page
-// has loaded.
-//
-// If the app has exited, a click starts it: the launch carries the
-// notification (`--notification <args>`), and the page gets a
-// `notificationclick` on window after load, as for an earlier run. A
-// single-instance app that is running when such a launch comes is handed the
-// click with it, and hears it as its own (no `instance` event for a launch
-// that was only the click). Either way the click reaches the app that posted
-// it, never another app or the project manager.
-//   - Windows: the toast's launch/action arguments go to a COM activator
-//     (INotificationActivationCallback) registered per user under the
-//     AppUserModelID (HKCU\Software\Classes\CLSID\{...}\LocalServer32 runs
-//     `bro --notification-activated <appDir>`); a running app takes the
-//     activation in process. Tray balloons have no click.
-//   - Linux: the server's ActionInvoked and NotificationClosed signals (a
-//     running app only; the server forgets a notification when its poster
-//     exits).
-//   - macOS: a UNUserNotificationCenter delegate (inside a bundle). Every bro
-//     app is the one bundle, so the bro that hears a click is whichever is
-//     running, or a bare bro macOS starts for it when none is; the
-//     notification's userInfo names the app that posted it, and a click on
-//     another app's starts that app as above (the bare bro then quits). The
-//     user dismissing another app's notification is dropped.
-// Headless simulates both: clickNotification(id, action?) and
-// dismissNotification(id), with the ids from notifications(), and
-// notificationActivations() lists what reached the page (docs/headless.md).
+const adapters = bro.sys.bluetooth.getAdapters();
+// [{ id, address, name, alias, powered, discovering, pairable, discoverable }]
 
-const done = new Notification('Download finished', {
-    body: 'report.pdf',
-    icon: 'assets/done.png',   // app-relative, absolute, or file://; default bro.app.icon
-    tag: 'download',
-    silent: true,
-    data: { path: 'report.pdf' },
-    actions: [{ action: 'open', title: 'Open' }, { action: 'folder', title: 'Show in folder' }],
-});
-done.onshow = () => console.log('shown');
-done.onerror = () => console.log('no notification service');
-done.onclick = (e) => console.log(e.action === 'folder' ? 'reveal' : 'open', done.data.path);
+const btDevices = bro.sys.bluetooth.getDevices();
+// [{ id, adapterId, mac, name, alias, icon, paired, connected, trusted, blocked, rssi }]
 
-// Clicks on notifications nothing listens to any more, or from before this run:
-window.addEventListener('notificationclick', (e) => {
-    console.log('clicked', e.notification.title, e.action, e.notification.data);
+// Control adapter power & discovery:
+// bro.sys.bluetooth.setPowered(true);
+// bro.sys.bluetooth.startDiscovery();
+// bro.sys.bluetooth.stopDiscovery();
+
+// Pair / connect / disconnect / remove by MAC address (each returns Promise<boolean>):
+// await bro.sys.bluetooth.pair('AA:BB:CC:DD:EE:FF');
+// await bro.sys.bluetooth.connect('AA:BB:CC:DD:EE:FF');
+// await bro.sys.bluetooth.disconnect('AA:BB:CC:DD:EE:FF');
+// await bro.sys.bluetooth.removeDevice('AA:BB:CC:DD:EE:FF');
+
+// Events: 'adapterChanged', 'deviceFound', 'deviceChanged', 'deviceRemoved'
+bro.sys.bluetooth.on('deviceChanged', (dev) => {
+    console.log(`Bluetooth device ${dev.name}: connected=${dev.connected}`);
 });
 
 // ============================================================================
-// 5. Notifications Server Host
+// 5. Desktop Notifications Daemon (`bro.sys.notifications`)
 // ============================================================================
 
-// Listen for incoming desktop notifications from other apps
-bro.sys.notifications.listen((notification) => {
-    console.log(`[Notification from ${notification.appName}]: ${notification.summary} - ${notification.body}`);
+// Start listening as the session notification server:
+bro.sys.notifications.listen({ replaceExisting: true, doNotDisturb: false });
+
+const notifCaps = bro.sys.notifications.getCapabilities();
+// { receivesForeign: boolean, source: string, detail: string }
+
+// Post a local notification (returns numeric notification ID):
+const notifId = bro.sys.notifications.post({
+    appName: 'System Shell',
+    summary: 'Battery Low',
+    body: '15% remaining',
+    urgency: 'normal', // 'low' | 'normal' | 'critical'
+    timeoutMs: 5000,
+    actions: [{ key: 'open-power', label: 'Power Settings' }]
+});
+
+// Inspect active and historical notifications:
+const activeNotifs = bro.sys.notifications.getActive();
+const historyNotifs = bro.sys.notifications.getHistory();
+
+// Invoke an action, dismiss, or manage Do Not Disturb:
+// bro.sys.notifications.invokeAction(notifId, 'open-power');
+// bro.sys.notifications.dismiss(notifId);
+// bro.sys.notifications.close(notifId, 'dismissed');
+// bro.sys.notifications.setDoNotDisturb(true);
+// bro.sys.notifications.removeFromHistory(notifId);
+// bro.sys.notifications.clearHistory();
+
+// Events: 'posted' (alias 'notificationPosted'), 'closed' ('notificationClosed'),
+//         'serverStatus', 'dndChanged'
+bro.sys.notifications.on('posted', ({ notification, replaced, popupSuppressed }) => {
+    console.log(`Notification [${notification.id}] ${notification.summary}: ${notification.body}`);
 });
 
 // ============================================================================
-// 6. System Tray / StatusNotifierItem Host
+// 6. StatusNotifier / System Tray Host (`bro.sys.tray`)
 // ============================================================================
 
-// Discover and track tray items
+bro.sys.tray.start({ becomeWatcher: true });
+const trayStatus = bro.sys.tray.getStatus(); // { role, detail }
+
 const trayItems = bro.sys.tray.getItems();
 for (const item of trayItems) {
-    console.log(`Tray item: ${item.id} (${item.title || item.tooltip || 'No title'})`);
+    // {
+    //   id, appId, title, status: 'passive' | 'active' | 'needsAttention',
+    //   category, icon: { name, themePath, hasPixmaps },
+    //   overlayIcon, attentionIcon, tooltip: { icon, title, body },
+    //   itemIsMenu, hasMenu, windowId, pid, hidden
+    // }
+    console.log(`Tray item: ${item.id} (${item.title}) status=${item.status}`);
 }
 
+// Interact with a tray item and its DBusMenu tree:
+// bro.sys.tray.activate(item.id, 100, 20);
+// bro.sys.tray.secondaryActivate(item.id, 100, 20);
+// bro.sys.tray.contextMenu(item.id, 100, 20);
+// bro.sys.tray.scroll(item.id, -1, 'vertical');
+// const menuRoot = bro.sys.tray.getMenu(item.id);
+// bro.sys.tray.menuAboutToShow(item.id, menuRoot.id);
+// bro.sys.tray.menuEvent(item.id, childMenuId, 'clicked');
+
+// Events: 'itemAdded', 'itemChanged', 'itemRemoved', 'itemDropped', 'menuChanged', 'hostStatus'
+bro.sys.tray.on('itemAdded', (item) => {
+    console.log('Tray item added:', item.id);
+});
+
 // ============================================================================
-// 7. Process Table & Signal Control
+// 7. Process Table (`bro.sys.processes`)
 // ============================================================================
 
-const procs = bro.sys.listProcesses(); // or bro.sys.processes.list()
+const procs = bro.sys.processes.list(); // or bro.sys.listProcesses()
 for (const p of procs.slice(0, 5)) {
-    console.log(`${p.pid} ${p.name} (${p.user}) RSS=${p.rssBytes} CPU=${p.cpuTimeMs}ms`);
+    // { pid, ppid, uid, name, exe, cmdline, state, cpuPercent, rssBytes, vsizeBytes, threads, startTimeMs }
+    console.log(`[${p.pid}] ${p.name} — CPU: ${p.cpuPercent.toFixed(1)}%, RSS: ${p.rssBytes} B`);
 }
-// Send SIGTERM (15) or SIGKILL (9 / true) to a process (pid > 1 on Linux, > 4 on Windows):
-// bro.sys.killProcess(targetPid, 'SIGTERM');
-// bro.sys.processes.kill(targetPid, true);
 
+// Send a signal to a process (default SIGTERM = 15):
+// bro.sys.processes.kill(pid, 15); // or bro.sys.killProcess(pid, 15)

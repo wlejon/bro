@@ -24,7 +24,7 @@ desktop libs  brovfs brosys brocas brocred broapps brothumb brodisplays
 
 | Repo | Role | Depends on | Platforms |
 |------|------|------------|-----------|
-| [bro](https://github.com/wlejon/bro) | The app runtime: HTML/CSS/JS apps on a GPU (Vulkan 1.3) engine with 3D, physics, audio, a native terminal element and on-device AI | every engine and terminal library, bronze, brass | Windows, Linux, macOS |
+| [bro](https://github.com/wlejon/bro) | The app runtime: HTML/CSS/JS apps on a GPU (Vulkan 1.3) engine with 3D, physics, audio, a native terminal element and on-device AI | every engine, terminal and desktop library (except brocas), bronze, brass | Windows, Linux, macOS |
 | [bronze](https://github.com/wlejon/bronze) | JavaScript compiler and shared runtime: AOT to native modules, plus in-process JIT. bro runs every app's script through it | brass | Windows x64, Linux x64, macOS arm64 |
 | [brass](https://github.com/wlejon/brass) | Code-generation backend and runtime for GC'd dynamic languages: MIR, JIT/AOT for x86-64 and AArch64, moving GC | none | Windows, Linux, macOS |
 
@@ -52,45 +52,45 @@ All of them build and test on Windows, Linux and macOS.
 
 ## Terminal libraries (linked by bro)
 
-bro links them under `BRO_WITH_TERMINAL` for the `<terminal>` element. bropty, bromux and brolink have no JavaScript binding and do not depend on bro or bronze; brosearch and brothemes also build a `<name>_api` binding, mounted as `bro.search` (`BRO_WITH_SEARCH`) and `bro.themes` (`BRO_WITH_THEMES`).
+`brolink` is always linked (Tier 0, backing `bro-ctl` as well as `bromux` and `broremote`). `bropty` and `bromux` link under `BRO_WITH_TERMINAL` for the `<terminal>` element; neither they nor `brolink` have a JavaScript binding or depend on bro or bronze. `brosearch` and `brothemes` link under `BRO_WITH_TERMINAL` and/or `BRO_WITH_SEARCH` (`bro.search`) and `BRO_WITH_THEMES` (`bro.themes`), and their `<name>_api` bindings need bronze and brass.
 
 | Repo | Role | Depends on | Platforms |
 |------|------|------------|-----------|
 | [bropty](https://github.com/wlejon/bropty) | Headless terminal: VT/xterm emulation, scrollback, reflow, inline images, Kitty keyboard protocol, PTY and ConPTY plumbing | brosearch | Windows, Linux, macOS |
-| [brosearch](https://github.com/wlejon/brosearch) | Search: fzf-compatible fuzzy matching, rg-compatible file walking with gitignore rules, a linear-time Unicode regex engine for grep | none | Windows, Linux, macOS |
-| [brothemes](https://github.com/wlejon/brothemes) | Colour schemes: import/export of terminal and editor theme formats, Oklab/Oklch, WCAG and APCA contrast. bro uses it for the terminal's minimum contrast | none | Windows, Linux, macOS |
-| [bromux](https://github.com/wlejon/bromux) | Terminal multiplexer as a library: a server owns PTY sessions and their emulators, clients attach locally or over ssh. Backs persistent terminal sessions; optional in bro | bropty, brosearch, brolink, broimage (optional) | Windows, Linux, macOS |
+| [brosearch](https://github.com/wlejon/brosearch) | Search: fzf-compatible fuzzy matching, rg-compatible file walking with gitignore rules, a linear-time Unicode regex engine for grep | bronze, brass | Windows, Linux, macOS |
+| [brothemes](https://github.com/wlejon/brothemes) | Colour schemes: import/export of terminal and editor theme formats, Oklab/Oklch, WCAG and APCA contrast. bro uses it for the terminal's minimum contrast | bronze, brass | Windows, Linux, macOS |
+| [bromux](https://github.com/wlejon/bromux) | Terminal multiplexer as a library: a server owns PTY sessions and their emulators, clients attach locally or over ssh. Backs persistent terminal sessions; optional in bro | bropty, brosearch, brolink, broimage (optional), bromath (optional) | Windows, Linux, macOS |
 | [brolink](https://github.com/wlejon/brolink) | Local IPC and ssh transport, platform APIs only: length-prefixed framing and LE/LEB128 wire helpers, a local listener and connector with peer-credential checks (AF_UNIX on Linux and macOS, named pipes with a user-only DACL on Windows), an event loop, byte streams over local connections, a spawned child's stdio (how ssh is run) and our own, the `proxy` relay (binary-clean `--pty` mode too), runtime paths, and lanes: a session as a bundle of connections joined with a one-time CSPRNG token. The transport under bromux, broremote and bro's agent control channel (`bro-ctl`) | none | Windows, Linux, macOS |
 
 ## Desktop-environment libraries (linked by bro)
 
-Standalone C++20 libraries for the desktop environment. bro mounts their JavaScript bindings (`<name>_api`) under feature flags. Each has its own CMake and ctest suite.
+Standalone C++20 libraries for the desktop environment. bro mounts their JavaScript bindings (`<name>_api`) under feature flags; each library with a `<name>_api` binding depends on bronze and brass for that binding (only `brocas`, `brodmabuf`, `brodbus`, and `brovideo` have no JS binding). Each has its own CMake and ctest suite.
 
 | Repo | Role | Depends on | Platforms | bro gate |
 |------|------|------------|-----------|----------|
-| [brovfs](https://github.com/wlejon/brovfs) | File operations for a file manager: scanning, copy/move with undo, trash, volumes, file watching, MIME types | none | Windows, Linux, macOS | `BRO_WITH_VFS` |
-| [brosys](https://github.com/wlejon/brosys) | System services: power, audio devices, network, notifications, the system tray | brodbus | Windows, Linux, macOS | `BRO_WITH_SYS` |
+| [brovfs](https://github.com/wlejon/brovfs) | File operations for a file manager: scanning, copy/move with undo, trash, volumes, file watching, MIME types | bronze, brass | Windows, Linux, macOS | `BRO_WITH_VFS` |
+| [brosys](https://github.com/wlejon/brosys) | System services: power, audio devices, network, notifications, the system tray | brodbus (Linux), bronze, brass | Windows, Linux, macOS | `BRO_WITH_SYS` |
 | [brocas](https://github.com/wlejon/brocas) | Content-addressed storage: BLAKE3, FastCDC chunking, Merkle DAG manifests, a sync wire protocol | none | Windows, Linux, macOS | — |
-| [brocred](https://github.com/wlejon/brocred) | Credentials: OS secret stores, lock-screen password verification, biometric capability detection | brodbus | Windows, Linux, macOS | `BRO_WITH_CRED` |
-| [broapps](https://github.com/wlejon/broapps) | Application catalog: installed apps, file associations, recent items, icons, scoped process launch | brovfs | Windows, Linux, macOS | `BRO_WITH_APPS` |
-| [brothumb](https://github.com/wlejon/brothumb) | Thumbnails: the freedesktop cache, native OS extractors, PDF first pages, built-in generators | brovfs, broimage, bromath | Windows, Linux, macOS | `BRO_WITH_THUMB` |
-| [brodisplays](https://github.com/wlejon/brodisplays) | Display configuration: enumeration, modes, scale, EDID, HDR, gamma and night light, hot-plug, test-then-revert | none | Windows, macOS, Linux (X11 and Wayland) | `BRO_WITH_DISPLAYS` |
-| [brocompositor](https://github.com/wlejon/brocompositor) | Window management and compositing: a portable WM core, a shell over DWM on Windows, window tracking on macOS, a wlroots Wayland compositor on Linux whose output the host renders | brodisplays | Windows, Linux, macOS | `BRO_WITH_COMPOSITOR` |
-| [brokeys](https://github.com/wlejon/brokeys) | Keybindings: chords and sequences, VS Code-style `when` clauses, layout-aware matching, VS Code import/export | brosearch | Windows, Linux, macOS | `BRO_WITH_KEYS` |
-| [broa11y](https://github.com/wlejon/broa11y) | Accessibility tree with AT-SPI 2, UI Automation and NSAccessibility bridges | none | Windows, Linux, macOS | `BRO_WITH_A11Y` |
-| [broconf](https://github.com/wlejon/broconf) | Desktop settings: a typed, schema'd store that notifies across processes | none | Windows, Linux, macOS | `BRO_WITH_CONF` |
-| [broseat](https://github.com/wlejon/broseat) | Session and seat management: libseat / logind device access, systemd user session, XDG autostart, inhibitors | brodbus | Linux | `BRO_WITH_SEAT` |
-| [brodmabuf](https://github.com/wlejon/brodmabuf) | GPU buffer sharing: DMA-BUF and DRM formats, GBM allocation, Vulkan external memory, DRM sync objects | none | Linux | — |
+| [brocred](https://github.com/wlejon/brocred) | Credentials: OS secret stores, lock-screen password verification, biometric capability detection | brodbus (Linux), bronze, brass | Windows, Linux, macOS | `BRO_WITH_CRED` |
+| [broapps](https://github.com/wlejon/broapps) | Application catalog: installed apps, file associations, recent items, icons, scoped process launch | brovfs, bronze, brass | Windows, Linux, macOS | `BRO_WITH_APPS` |
+| [brothumb](https://github.com/wlejon/brothumb) | Thumbnails: the freedesktop cache, native OS extractors, PDF first pages, built-in generators | brovfs, broimage, bromath, bronze, brass | Windows, Linux, macOS | `BRO_WITH_THUMB` |
+| [brodisplays](https://github.com/wlejon/brodisplays) | Display configuration: enumeration, modes, scale, EDID, HDR, gamma and night light, hot-plug, test-then-revert | bronze, brass | Windows, macOS, Linux (X11 and Wayland) | `BRO_WITH_DISPLAYS` |
+| [brocompositor](https://github.com/wlejon/brocompositor) | Window management and compositing: a portable WM core, a shell over DWM on Windows, window tracking on macOS, a wlroots Wayland compositor on Linux whose output the host renders | brodisplays, bronze, brass | Windows, Linux, macOS | `BRO_WITH_COMPOSITOR` |
+| [brokeys](https://github.com/wlejon/brokeys) | Keybindings: chords and sequences, VS Code-style `when` clauses, layout-aware matching, VS Code import/export | brosearch, bronze, brass | Windows, Linux, macOS | `BRO_WITH_KEYS` |
+| [broa11y](https://github.com/wlejon/broa11y) | Accessibility tree with AT-SPI 2, UI Automation and NSAccessibility bridges | bronze, brass | Windows, Linux, macOS | `BRO_WITH_A11Y` |
+| [broconf](https://github.com/wlejon/broconf) | Desktop settings: a typed, schema'd store that notifies across processes | bronze, brass | Windows, Linux, macOS | `BRO_WITH_CONF` |
+| [broseat](https://github.com/wlejon/broseat) | Session and seat management: libseat / logind device access, systemd user session, XDG autostart, inhibitors | brodbus, bronze, brass | Linux | `BRO_WITH_SEAT` |
+| [brodmabuf](https://github.com/wlejon/brodmabuf) | GPU buffer sharing: DMA-BUF and DRM formats, GBM allocation, Vulkan external memory, DRM sync objects | none | Linux | `BRO_WITH_DMABUF` |
 | [brodbus](https://github.com/wlejon/brodbus) | D-Bus layer: connection setup with private bus Hello, signal matching, property caching, message containers, and test fixtures | none | Linux (Windows and macOS build stubs that report unavailable) | — |
-| [browl](https://github.com/wlejon/browl) | Wayland shell-protocol client: layer shell, session lock, foreign toplevels, screencopy, idle inhibit | none | Linux | `BRO_WITH_WL` |
-| [broportal](https://github.com/wlejon/broportal) | xdg-desktop-portal backend: file chooser, screenshot, screencast, remote desktop, settings, global shortcuts | brodbus | Linux | `BRO_WITH_PORTAL` |
-| [brodecor](https://github.com/wlejon/brodecor) | Window decorations: SSD frames, captions, buttons, 9-slice blur drop shadows, and hit-testing | bromath | Windows, Linux, macOS | `BRO_WITH_DECOR` |
-| [broclip](https://github.com/wlejon/broclip) | Clipboard history and data control: ring store, MIME stream caching; Wayland data-control client, Win32 clipboard, macOS pasteboard | none | Windows, Linux, macOS | `BRO_WITH_CLIP` |
-| [brompris](https://github.com/wlejon/brompris) | Media player controller: MPRIS2 on Linux | brodbus | Linux (Windows and macOS build, with no backend yet: no players) | `BRO_WITH_MPRIS` |
-| [bropulse](https://github.com/wlejon/bropulse) | Audio routing and policy: native PipeWire 0.3 stream graph and PulseAudio fallback | none | Linux (Windows and macOS build the graph and policy, with no audio server) | `BRO_WITH_PULSE` |
-| [broime](https://github.com/wlejon/broime) | Input methods: compose key sequences, dead keys, candidate popup placement, dictionary prefix trie | brosearch | Windows, Linux, macOS | `BRO_WITH_IME` |
-| [brovideo](https://github.com/wlejon/brovideo) | Hardware video encode and decode through platform APIs only: a VA-API encoder (H.264, HEVC, AV1; dmabuf with its acquire fence, or CPU frames), a Media Foundation decoder (CPU NV12 or D3D11 textures), the Raw codec, and a capability probe. broremote's codec layer, with no remoting concepts, so `<video>`, `VideoEncoder` and screen recording can use it later | brodmabuf (Linux) | Linux (encode), Windows (decode) | `BRO_WITH_REMOTE` |
-| [broremote](https://github.com/wlejon/broremote) | Remote sessions: a server the host feeds composited frames (dmabuf or CPU) and drains input from, encoding through brovideo, and the viewer's session with no window (`ViewerSession`, shown by bro's `<remoteview>`; `broremote probe` for scripted checks) that reaches it locally or over ssh. Backs `bro.remote` and `helm --remote` | brovideo, brolink (its JS binding: bronze, brass) | Linux (hosting with VA-API), Windows (viewer; Raw-only hosting for development) | `BRO_WITH_REMOTE` |
+| [browl](https://github.com/wlejon/browl) | Wayland shell-protocol client: layer shell, session lock, foreign toplevels, screencopy, idle inhibit | bronze, brass | Linux | `BRO_WITH_WL` |
+| [broportal](https://github.com/wlejon/broportal) | xdg-desktop-portal backend: file chooser, screenshot, screencast, remote desktop, settings, global shortcuts | brodbus, bronze, brass | Linux | `BRO_WITH_PORTAL` |
+| [brodecor](https://github.com/wlejon/brodecor) | Window decorations: SSD frames, captions, buttons, 9-slice blur drop shadows, and hit-testing | bromath, bronze, brass | Windows, Linux, macOS | `BRO_WITH_DECOR` |
+| [broclip](https://github.com/wlejon/broclip) | Clipboard history and data control: ring store, MIME stream caching; Wayland data-control client, Win32 clipboard, macOS pasteboard | bronze, brass | Windows, Linux, macOS | `BRO_WITH_CLIP` |
+| [brompris](https://github.com/wlejon/brompris) | Media player controller and player service publisher: MPRIS2 on Linux, SMTC on Windows | brodbus (Linux), bronze, brass | Windows, Linux (macOS builds a stub) | `BRO_WITH_MPRIS` |
+| [bropulse](https://github.com/wlejon/bropulse) | Audio routing and policy: native PipeWire 0.3 stream graph and PulseAudio fallback | bronze, brass | Linux (Windows and macOS build the graph and policy, with no audio server) | `BRO_WITH_PULSE` |
+| [broime](https://github.com/wlejon/broime) | Input methods: compose key sequences, dead keys, candidate popup placement, dictionary prefix trie | brosearch, bronze, brass | Windows, Linux, macOS | `BRO_WITH_IME` |
+| [brovideo](https://github.com/wlejon/brovideo) | Hardware video encode and decode through platform APIs only: VA-API encode and decode on Linux (H.264, HEVC, AV1; dmabuf with its acquire fence, or CPU NV12), Media Foundation encode and decode on Windows (D3D11 textures or CPU NV12; H.264, HEVC, AV1), the Raw codec everywhere, and a capability probe. broremote's codec layer, with no remoting concepts, so `<video>`, `VideoEncoder` and screen recording can use it later | brodmabuf (Linux) | Linux (VA-API), Windows (Media Foundation) | `BRO_WITH_REMOTE` |
+| [broremote](https://github.com/wlejon/broremote) | Remote sessions: a server the host feeds composited frames (dmabuf or CPU) and drains input from, encoding through brovideo, and the viewer's session with no window (`ViewerSession`, shown by bro's `<remoteview>`; `broremote probe` for scripted checks) that reaches it locally or over ssh. Backs `bro.remote` and `helm --remote` | brovideo, brolink, bronze, brass | Linux (VA-API), Windows (Media Foundation and Raw) | `BRO_WITH_REMOTE` |
 
 ## Apps and tools
 

@@ -23,7 +23,7 @@
  * - Event listeners (`on`, `off`, `addEventListener`, `removeEventListener`)
  *
  * Privileged API: mounted when `BRO_WITH_COMPOSITOR` is enabled and the app is a trusted shell
- * app declaring `"shell": true` or `"privileged": ["compositor", ...]` in its `bro.json`.
+ * app declaring `"shell": true` or `"permissions": ["compositor", ...]` in its `bro.json`.
  *
  * Backends: under `bro --drm` (bro.window.displayMode === 'drm') the calls drive bro's own
  * Wayland server (brocompositor over wlroots), which honours everything here. Elsewhere the
@@ -64,6 +64,8 @@
  * @property {number} id
  * @property {string} title
  * @property {string} appId
+ * @property {string} iconName       XDG icon name when set by client (xdg-toplevel-icon-v1)
+ * @property {number} iconSerial     increments when the client's icon changes
  * @property {{x:number, y:number, width:number, height:number}} frame
  * @property {number} workspaceId
  * @property {number} monitor
@@ -75,6 +77,21 @@
  * @property {boolean} tiled
  * @property {boolean} shown   false while its workspace is hidden
  */
+
+/**
+ * Mints a one-shot xdg-activation-v1 token for launching a client app so it can request focus.
+ * @param {string} [appId]
+ * @returns {string|null}
+ */
+bro.compositor.activationToken = function (appId) {};
+
+/**
+ * Returns the client's xdg-toplevel-icon-v1 icon buffer (closest to `size` px) or icon name.
+ * @param {number} id
+ * @param {number} [size=0]
+ * @returns {{name: string, size: number, data: Uint8Array|null}|null}
+ */
+bro.compositor.getWindowIcon = function (id, size) {};
 
 if (bro.compositor.available) {
     const windows = bro.compositor.getWindows();

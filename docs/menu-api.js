@@ -35,14 +35,13 @@
  */
 
 /**
- * Mutable properties for updating an existing menu item.
+ * Mutable properties for updating an existing menu item via `bro.menu.updateItem`.
  * @typedef {Object} MenuItemUpdate
  * @property {string} [label] -  New display label text.
  * @property {string} [accel] -  New keyboard shortcut hint string.
  * @property {boolean} [enabled] -  Enabled status.
  * @property {boolean} [hidden] -  Visibility status.
  * @property {boolean} [checked] -  Checkmark status.
- * @property {Array<MenuItem>} [items] -  New submenu child items.
  */
 
 // ── Namespaces ───────────────────────────────────────────────────────────────
@@ -51,8 +50,7 @@
  * Top-level application menu bar management namespace.
  */
 /**
- * Whether the menu bar is currently visible.
- * @readonly
+ * Gets or sets whether the menu bar is currently visible.
  * @type {boolean}
  */
 bro.menu.visible;
@@ -75,6 +73,13 @@ bro.menu.hide = function() {};
 bro.menu.set = function(items) {};
 
 /**
+ * Returns a snapshot of the current menu bar tree.
+ *
+ * @returns {Array<MenuItem>}
+ */
+bro.menu.getMenu = function() {};
+
+/**
  * Adds an item to a submenu or root.
  *
  * @param {string} parentId - Parent submenu id, or empty string for root
@@ -85,7 +90,7 @@ bro.menu.set = function(items) {};
 bro.menu.addItem = function(parentId, item, index) {};
 
 /**
- * Updates mutable properties of an item by id.
+ * Updates mutable properties (`label`, `accel`, `enabled`, `hidden`, `checked`) of an item by id.
  *
  * @param {string} id - Target item identifier
  * @param {MenuItemUpdate} props - Properties to update
@@ -108,4 +113,3 @@ bro.menu.removeItem = function(id) {};
  * @param {Function} callback - Callback function executed on click
  */
 bro.menu.on = function(id, callback) {};
-

@@ -10,10 +10,10 @@
  * does not exist.
  *
  * Where the pieces live:
- *   - `Blob` / `File`         brokit (C++, bytes held natively)
- *   - `FileReader`            src/js/js/file_polyfills.js & bronze_host
- *   - `URL.createObjectURL`   src/js/js/file_polyfills.js + src/util/object_url.h
- *   - dropped-file payloads   src/js/event_dispatch_populate.cpp
+ *   - `Blob` / `File`         brokit/src/api/blob.cpp (C++, bytes held natively)
+ *   - `FileReader`            brokit/src/api/js/url_object.js & bronze_host
+ *   - `URL.createObjectURL`   brokit/src/api/js/url_object.js + src/util/object_url.h
+ *   - dropped-file payloads   src/bronze_host/host_dom_events.cpp
  *
  * @example
  *   // --- Blob / File Example ------------------------------------------------
@@ -124,6 +124,7 @@
  * Initialization dictionary for creating a File.
  * @typedef {Object} FilePropertyBag extends BlobPropertyBag
  * @property {number} [lastModified]
+ * @property {string} [webkitRelativePath]
  */
 
 // ── Classes & Interfaces ─────────────────────────────────────────────────────
@@ -426,6 +427,42 @@ class URLSearchParams {
   set(name, value) {}
 
   /**
+   * Sorts all key/value pairs in place by key name.
+   */
+  sort() {}
+
+  /**
+   * Calls callback for each value/key pair in the parameters.
+   * @param {Function} callback
+   * @param {*} [thisArg]
+   */
+  forEach(callback, thisArg) {}
+
+  /**
+   * Returns an iterator over all parameter keys.
+   * @returns {Iterator<string>}
+   */
+  keys() {}
+
+  /**
+   * Returns an iterator over all parameter values.
+   * @returns {Iterator<string>}
+   */
+  values() {}
+
+  /**
+   * Returns an iterator over all `[key, value]` pairs.
+   * @returns {Iterator<Array<string>>}
+   */
+  entries() {}
+
+  /**
+   * Default iterator yielding `[key, value]` pairs.
+   * @returns {Iterator<Array<string>>}
+   */
+  [Symbol.iterator]() {}
+
+  /**
    * Returns a query string suitable for use in a URL.
    * @returns {string}
    */
@@ -471,6 +508,15 @@ class URL {
   static parse(url, base) {}
 
   /**
+   * Check whether a URL string can be parsed (against an optional base URL).
+   *
+   * @param {string} url - URL string to test
+   * @param {string} [base] - Optional base URL
+   * @returns {boolean}
+   */
+  static canParse(url, base) {}
+
+  /**
    * Full serialized URL href string.
    * @type {string}
    */
@@ -488,6 +534,18 @@ class URL {
    * @type {string}
    */
   protocol;
+
+  /**
+   * Username specified before the domain name.
+   * @type {string}
+   */
+  username;
+
+  /**
+   * Password specified before the domain name.
+   * @type {string}
+   */
+  password;
 
   /**
    * Host (hostname and port) of the URL.
@@ -545,4 +603,5 @@ class URL {
   toString() {}
 
 }
+
 

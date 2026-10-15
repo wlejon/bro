@@ -60,7 +60,9 @@ target/up/mode: the 6DOF / FPS path that avoids target+up precision loss.
 
 /**
  * @typedef {Object} SceneRaycastResult
+ * @property {boolean} [hit]
  * @property {SceneNode} [node]
+ * @property {number} [instance]
  * @property {Array<number>} [point]
  * @property {Array<number>} [normal]
  * @property {number} [distance]
@@ -119,7 +121,8 @@ class SceneNode {
   position;
 
   /**
-   * @type {Array<number>}
+   * Getter returns `number` (`rotationZ` in radians); setter accepts `number` (sets `rotationZ`) or `Array<number>` (`[rx, ry, rz]` Euler radians or `[qx, qy, qz, qw]` quaternion).
+   * @type {number|Array<number>}
    */
   rotation;
 
@@ -706,9 +709,10 @@ class SceneGraph {
   /**
    * @param {Array<number>} origin
    * @param {Array<number>} direction
+   * @param {number} [maxDist]
    * @returns {SceneRaycastResult|null}
    */
-  raycast(origin, direction) {}
+  raycast(origin, direction, maxDist) {}
 
   /**
    * World-space pick ray through a canvas-local pixel. `x`/`y` are CSS
@@ -751,11 +755,11 @@ class SceneGraph {
   toImageData() {}
 
   /**
-   * @param {string} [format]
-   * @param {number} [quality]
+   * @param {number} [width]
+   * @param {number} [height]
    * @returns {ImageData}
    */
-  captureFrame(format, quality) {}
+  captureFrame(width, height) {}
 
   /**
    * @returns {Object}

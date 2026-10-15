@@ -170,8 +170,7 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
 
 /**
  * @typedef {Object} GaussianSplatNodeOptions
- * @property {string} [file]
- * @property {ArrayBuffer} [data]
+ * @property {string} [path]
  * @property {Object} [cloud]
  * @property {Array<number>} [position]
  * @property {Array<number>} [rotation]
@@ -347,6 +346,33 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
 // the node types its comment names.
 
 class SceneNode {
+
+  /** @type {number} */ rx;
+  /** @type {number} */ ry;
+  /** @type {number} */ rz;
+  /** @readonly @type {string} */ type;
+  /** @readonly @type {string} */ kind;
+  /** @readonly @type {number} */ childCount;
+  /** @readonly @type {number} */ splatCount;
+  /** @type {Array<number>|null} */ worldAnchor;
+  /** @type {number} */ cullMargin;
+  /** @type {number|Array<number>} */ size;
+  /** @type {Function|null} */ onFinished;
+  /** @type {Function|null} */ onAnimationEnd;
+  /** @type {Function|null} */ onAnimationFinished;
+  /** @type {Function|null} */ onStateChanged;
+  /** @type {number} */ alphaCutoff;
+  /** @type {boolean} */ doubleSided;
+  /** @type {number} */ nearClipDist;
+  /** @type {Array<number>|string} */ emissiveColor;
+  /** @type {boolean|string} */ billboard;
+  /** @type {boolean} */ autoSync;
+  /** @type {number} */ pixelsPerUnit;
+  /** @type {number} */ radius;
+  /** @type {string} */ fillColor;
+  /** @type {string} */ strokeColor;
+  /** @type {number} */ strokeWidth;
+  /** @type {number} */ frameIndex;
 
   /**
    *  Shape / Sprite: the anchor point in [0,1] (0.5, 0.5 = centred). Undefined on other nodes.
@@ -733,10 +759,9 @@ class SceneNode {
    *  layers: [{ slot, name, weight, phase }] }`. `pos` ([x] or [x, y]) is
    *  present only while a blend space is the base source; a plain clip has
    *  no `pos` at all.
-   * @param {string} [name]
    * @returns {Object|null}
    */
-  blendState(name) {}
+  blendState() {}
 
   /**
    * @param {number} layer
@@ -761,18 +786,16 @@ class SceneNode {
   setLayerWeight(layer, weight) {}
 
   /**
-   * @param {*} nameOrDef
-   * @param {AnimStateMachineDef} [def]
+   * @param {AnimStateMachineDef} def
    * @returns {SceneNode}
    */
-  addStateMachine(nameOrDef, def) {}
+  addStateMachine(def) {}
 
   /**
-   * @param {string} name
-   * @param {string} [targetState]
-   * @returns {boolean}
+   * @param {string} targetState
+   * @returns {SceneNode}
    */
-  travel(name, targetState) {}
+  travel(targetState) {}
 
   /**
    * @param {*} enabledOrOpts
@@ -905,6 +928,15 @@ class SceneNode {
   clear() {}
 
   probeCapture() {}
+
+  /** @returns {SceneNode} */ capture() {}
+  /** @param {number} cutoff @returns {SceneNode} */ setAlphaCutoff(cutoff) {}
+  /** @param {boolean} enabled @returns {SceneNode} */ setDoubleSided(enabled) {}
+  /** @returns {SceneNode} */ syncToPhysics() {}
+  /** @param {number} index @param {Object|Array<number>|Float32Array} data @returns {SceneNode} */ updateInstance(index, data) {}
+  /** @param {Array<Object>|Float32Array} instances @returns {SceneNode} */ updateInstances(instances) {}
+  /** @param {(MeshGeometry|Mesh)} mesh @returns {SceneNode} */ setInstancedMesh(mesh) {}
+  /** @param {number} cols @param {number} [rows] @returns {SceneNode} */ setAtlasGrid(cols, rows) {}
 
   /**
    *  Writes a Gaussian-splat node's cloud as a PLY file; false when the write fails.

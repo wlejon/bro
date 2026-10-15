@@ -54,25 +54,31 @@ class CustomElementRegistry {
    *
    * @param {string} name - Custom element tag name (must contain a hyphen)
    * @param {Function} constructor - Class constructor extending HTMLElement
-   * @param {CustomElementOptions} [options] - Optional customization options
    */
-  define(name, constructor, options) {}
+  define(name, constructor) {}
 
   /**
    * Retrieve constructor for a registered custom element.
    *
    * @param {string} name - Custom element tag name
-   * @returns {Function|null} Constructor function or undefined
+   * @returns {Function|undefined} Constructor function or undefined
    */
   get(name) {}
 
   /**
-   * Return a promise that resolves when the named custom element is defined.
+   * Return a promise that resolves with the constructor when the named custom element is defined.
    *
    * @param {string} name - Custom element tag name
-   * @returns {Promise<void>}
+   * @returns {Promise<Function>}
    */
   whenDefined(name) {}
+
+  /**
+   * Upgrade all custom elements within a DOM subtree.
+   *
+   * @param {Node} root - Root node of the subtree to upgrade
+   */
+  upgrade(root) {}
 
 }
 

@@ -17,7 +17,7 @@
  *
  * Privileged API: Mounted automatically in Bronze when `BRO_WITH_SEAT` is enabled and
  * the app is verified as a trusted shell app declaring `"shell": true` or
- * `"privileged": ["seat", ...]` in its `bro.json`.
+ * `"permissions": ["seat", ...]` in its `bro.json`.
  */
 
 // ============================================================================
@@ -59,7 +59,8 @@ console.log(`Acquired inhibitor ID: ${inhibitId}`);
 // List active inhibitors:
 const inhibitors = bro.seat.listInhibitors();
 for (const inh of inhibitors) {
-    console.log(`Inhibitor #${inh.id} [${inh.type}]: ${inh.reason}`);
+    // { id, type, reason, who, mode, uid, pid }
+    console.log(`Inhibitor #${inh.id} [${inh.type}] by ${inh.who}: ${inh.reason}`);
 }
 
 // Release inhibitor:
@@ -108,9 +109,10 @@ for (const entry of autostartEntries) {
     console.log(`Autostart: ${entry.name} (${entry.id}) - exec: ${entry.exec}, enabled: ${entry.enabled}`);
 }
 
-// Launch all enabled autostart entries asynchronously:
+// Launch all enabled autostart entries (or pass an optional `entryId` string to launch one):
 bro.seat.runAutostart().then(results => {
     for (const res of results) {
+        // { id, pid, success, error?, unitName? }
         console.log(`Launched ${res.id}: PID ${res.pid}, success=${res.success}`);
     }
 });

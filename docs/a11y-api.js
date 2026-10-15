@@ -7,9 +7,9 @@
  * `bro.a11y` provides accessibility tree inspection, node query/mutation, screen reader announcements,
  * and custom-role widget hooks:
  * - Live-region announcements (`announce(text, { priority: "polite" | "assertive" })`)
- * - Accessibility tree queries (`getRootNode`, `getNode`, `getFocusedNode`, `hitTest`, `findNodesByRole`)
- * - Tree transactions (`beginTransaction`, `commitTransaction`, `rollbackTransaction`)
- * - Custom role registrations (`registerCustomRole`, `getCustomRoles`)
+ * - Accessibility tree queries & mutations (`getRootNode`, `getNode`, `getFocusedNode`, `hitTest`, `findNodesByRole`, `createNode`, `removeNode`, `setRoot`, `setFocus`, `performAction`)
+ * - Tree transactions (`beginTransaction`, `commitTransaction`, `rollbackTransaction`, `inTransaction`)
+ * - Custom role registrations (`registerCustomRole`, `unregisterCustomRole`, `hasCustomRole`, `getCustomRoles`)
  * - Canvas / custom widget hooks (`registerWidgetHook`, `unregisterWidgetHook`)
  * - Accessibility event subscriptions (`on`, `off`, `addEventListener`, `removeEventListener`)
  *
@@ -29,12 +29,15 @@ if (bro.a11y.available) {
 }
 
 // ============================================================================
-// 2. Tree Inspection & Navigation
+// 2. Tree Inspection, Navigation & Node Mutation
 // ============================================================================
 
 if (bro.a11y.available) {
     const root = bro.a11y.getRootNode();
     if (root) {
+        // Node properties: id, role, name, description, text, caretOffset, bounds ({ x, y, width, height }),
+        //                  parentId, childIds (alias children), states, value ({ current, minimum, maximum, step }),
+        //                  selection ({ startOffset, endOffset }), attributes, actions
         console.log(`Root accessible node #${root.id}: role="${root.role}", name="${root.name}"`);
         console.log(`Children count: ${root.childIds.length}`);
     }
@@ -43,6 +46,25 @@ if (bro.a11y.available) {
     if (focused) {
         console.log(`Focused node: #${focused.id} (${focused.role})`);
     }
+
+    // Batch tree updates inside a transaction:
+    bro.a11y.beginTransaction();
+    const btn = bro.a11y.createNode({
+        role: 'button',
+        name: 'Run Task',
+        description: 'Starts the background build task',
+        bounds: { x: 20, y: 40, width: 120, height: 32 },
+        states: ['focusable', 'enabled']
+    });
+    btn.addAction('click', 'Activate button', 'Enter');
+    btn.onAction((actionName, params) => {
+        console.log(`Accessible action "${actionName}" triggered on node #${btn.id}`);
+        return true;
+    });
+    bro.a11y.commitTransaction();
+
+    // Trigger an accessible action programmatically:
+    bro.a11y.performAction(btn.id, 'click');
 }
 
 // ============================================================================
@@ -54,9 +76,13 @@ if (bro.a11y.available) {
     bro.a11y.registerCustomRole('colorPicker', {
         baseRole: 'slider',
         description: 'Interactive color selection palette',
+        supportedActions: ['increment', 'decrement', 'select'],
+        supportedStates: ['focusable', 'focused']
     });
 
-    // Subscribe to announcements
+    console.log('Registered custom roles:', bro.a11y.getCustomRoles().length);
+
+    // Subscribe to accessibility events ('announce', 'focusChanged', 'nodeUpdated', 'actionRequested', '*')
     const sub = bro.a11y.on('announce', (event) => {
         console.log(`Accessibility announcement: "${event.text}" (priority: ${event.priority})`);
     });

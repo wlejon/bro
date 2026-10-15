@@ -15,6 +15,13 @@
  * @property {number} [bytesRecv]
  */
 
+/**
+ * @typedef {Object} NetSendOptions
+ * @property {boolean} [reliable=true]
+ * @property {number} [channel=0]
+ * @property {boolean} [nodelay=false]
+ */
+
 // ── Namespaces ───────────────────────────────────────────────────────────────
 
 /**
@@ -25,12 +32,50 @@ bro.net.onconnect;
 /**
  * @type {EventHandler}
  */
+bro.net.onConnect;
+
+/**
+ * @type {EventHandler}
+ */
 bro.net.ondisconnect;
 
 /**
  * @type {EventHandler}
  */
+bro.net.onDisconnect;
+
+/**
+ * @type {EventHandler}
+ */
 bro.net.onmessage;
+
+/**
+ * @type {EventHandler}
+ */
+bro.net.onMessage;
+
+/**
+ * Initialize the GameNetworkingSockets subsystem explicitly (also initialized lazily on host/connect).
+ * @returns {boolean}
+ */
+bro.net.init = function() {};
+
+/**
+ * Shut down all connections, stop hosting, and close the networking subsystem.
+ */
+bro.net.close = function() {};
+
+/**
+ * @param {'connect'|'disconnect'|'message'} type
+ * @param {Function} listener
+ */
+bro.net.addEventListener = function(type, listener) {};
+
+/**
+ * @param {'connect'|'disconnect'|'message'} type
+ * @param {Function} listener
+ */
+bro.net.removeEventListener = function(type, listener) {};
 
 /**
  * @param {number} port
@@ -72,29 +117,29 @@ bro.net.disconnectAll = function() {};
 
 /**
  * @param {number} peerId
- * @param {(ArrayBuffer|ArrayBufferView)} data
- * @param {number} [channel=0]
+ * @param {(string|ArrayBuffer|ArrayBufferView)} data
+ * @param {(NetSendOptions|number|boolean)} [options]
  */
-bro.net.send = function(peerId, data, channel) {};
+bro.net.send = function(peerId, data, options) {};
 
 /**
- * @param {(ArrayBuffer|ArrayBufferView)} data
- * @param {number} [channel=0]
+ * @param {(string|ArrayBuffer|ArrayBufferView)} data
+ * @param {(NetSendOptions|number|boolean)} [options]
  */
-bro.net.broadcast = function(data, channel) {};
+bro.net.broadcast = function(data, options) {};
 
 /**
  * @param {number} peerId
  * @param {*} value
- * @param {number} [channel=0]
+ * @param {(NetSendOptions|number|boolean)} [options]
  */
-bro.net.sendClone = function(peerId, value, channel) {};
+bro.net.sendClone = function(peerId, value, options) {};
 
 /**
  * @param {*} value
- * @param {number} [channel=0]
+ * @param {(NetSendOptions|number|boolean)} [options]
  */
-bro.net.broadcastClone = function(value, channel) {};
+bro.net.broadcastClone = function(value, options) {};
 
 /**
  * The live connection ids, the same numbers onconnect / onmessage hand
@@ -105,6 +150,9 @@ bro.net.broadcastClone = function(value, channel) {};
  */
 bro.net.peers = function() {};
 
+/** Alias of `peers()`. @returns {Array<number>} */
+bro.net.connections = function() {};
+
 /**
  * @param {number} peerId
  * @returns {string}
@@ -112,9 +160,10 @@ bro.net.peers = function() {};
 bro.net.getPeerAddress = function(peerId) {};
 
 /**
+ * @param {number} [peerId]
  * @returns {NetStats}
  */
-bro.net.stats = function() {};
+bro.net.stats = function(peerId) {};
 
 /**
  * @param {number} peerId
@@ -129,4 +178,5 @@ bro.net.getPeerStats = function(peerId) {};
  * @param {number} latencyMax
  */
 bro.net.setPeerSimulatedLoss = function(peerId, chance, latencyMin, latencyMax) {};
+
 

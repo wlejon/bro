@@ -681,6 +681,32 @@ class GemmaTokenizer {
    */
   decode(ids) {}
 
+  /**
+   * True when `id` is a special token.
+   * @param {number} id
+   * @returns {boolean}
+   */
+  isSpecial(id) {}
+
+}
+
+/**
+ * Llama-3 BPE Tokenizer handle.
+ */
+class Llama3Tokenizer {
+  /** @readonly @type {number} */ bosId;
+  /** @readonly @type {number} */ eosId;
+  /** @readonly @type {number} */ endOfTextId;
+  /** @readonly @type {number} */ eotId;
+  /** @readonly @type {number} */ startHeaderId;
+  /** @readonly @type {number} */ endHeaderId;
+  /** @readonly @type {number} */ vocabCount;
+  /** @param {string} text @param {boolean} [addBos=true] @returns {Int32Array} */
+  encode(text, addBos) {}
+  /** @param {(Array<number>|Int32Array)} ids @returns {string} */
+  decode(ids) {}
+  /** @param {Array<ChatMessage>} messages @param {boolean} [addGenerationPrompt=true] @returns {string} */
+  applyChatTemplate(messages, addGenerationPrompt) {}
 }
 
 /**
@@ -1135,6 +1161,14 @@ class ClipModel {
    */
   score(text, image) {}
 
+  /**
+   * Alias of `score(text, image)`.
+   * @param {(string|Array<string>)} text
+   * @param {Object} image
+   * @returns {(number|Array<number>)}
+   */
+  similarity(text, image) {}
+
 }
 
 /**
@@ -1450,4 +1484,19 @@ bro.lm.generate = function(model, prompt, opts) {};
  * frame pump calls it every frame; a Worker calls it from its own loop.
  */
 bro.lm.tick = function() {};
+
+bro.lm.QwenTokenizer = QwenTokenizer;
+bro.lm.MistralTokenizer = MistralTokenizer;
+bro.lm.GemmaTokenizer = GemmaTokenizer;
+bro.lm.Llama3Tokenizer = Llama3Tokenizer;
+bro.lm.LMModel = LMModel;
+bro.lm.Qwen35Model = Qwen35Model;
+bro.lm.Qwen3VLModel = Qwen3VLModel;
+bro.lm.NllbModel = NllbModel;
+bro.lm.ClipModel = ClipModel;
+bro.lm.T5Model = T5Model;
+bro.lm.ModernBertModel = ModernBertModel;
+bro.lm.LayaModel;
+bro.lm.AsyncHandle = AsyncHandle;
+bro.lm.Grammar = Grammar;
 

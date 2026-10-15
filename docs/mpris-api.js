@@ -10,12 +10,12 @@
  *   inspect playback status, track metadata, position, volume, loop/shuffle
  *   state, and capabilities, send transport commands (`play`, `pause`,
  *   `playPause`, `stop`, `next`, `previous`, `seek`, `setPosition`,
- *   `setVolume`, `setLoopStatus`, `setShuffle`, `setRate`, `openUri`, `raise`,
- *   `quit`), and subscribe to live player events.
- * - **Player Service (`createService` / `publish`)**: export an MPRIS2 media
- *   player bus name (`org.mpris.MediaPlayer2.<name>`) from a bro app so
- *   desktop shells, lock screens, media keys, and `playerctl` can inspect and
- *   control playback.
+ *   `setVolume`, `setLoopStatus`, `setShuffle`, `setShuffleStatus`, `setRate`,
+ *   `openUri`, `raise`, `quit`), and subscribe to live player events.
+ * - **Player Service (`createService` / `publish` / `createPlayerService`)**:
+ *   export an MPRIS2 media player bus name (`org.mpris.MediaPlayer2.<name>`)
+ *   from a bro app so desktop shells, lock screens, media keys, and `playerctl`
+ *   can inspect and control playback.
  *
  * Mounted automatically in Bronze when `BRO_WITH_MPRIS` is enabled.
  */
@@ -28,10 +28,14 @@ const players = bro.mpris.getPlayers();
 for (const p of players) {
     // {
     //   id, name, busName, identity, desktopEntry,
-    //   playbackStatus, loopStatus, shuffle, rate, volume, position,
-    //   canControl, canPlay, canPause, canSeek, canGoNext, canGoPrevious,
+    //   playbackStatus, loopStatus, shuffle, shuffleStatus, rate, volume, position,
+    //   canControl, canPlay, canPause, canSeek, canGoNext, canGoPrevious, canRaise, canQuit,
     //   capabilities: { canControl, canPlay, canPause, canSeek, canGoNext, canGoPrevious, canRaise, canQuit, canSetFullscreen },
-    //   metadata: { trackId, title, artist, artists, album, albumArtist, artUrl, albumArtUrl, url, length, duration, trackNumber, discNumber, genre }
+    //   metadata: {
+    //     trackId, title, artist, artists, album, albumArtist, albumArtists,
+    //     artUrl, albumArtUrl, url, length, lengthUs, duration,
+    //     trackNumber, discNumber, genre, genres, userRating
+    //   }
     // }
     console.log(`${p.identity} (${p.id}): ${p.playbackStatus}`);
     console.log(`  Track: ${p.metadata.title} — ${p.metadata.artist} (${p.metadata.album})`);
@@ -65,7 +69,7 @@ bro.mpris.seek('vlc', -10_000_000);     // seek -10s on specific player
 bro.mpris.setPosition(30_000_000);      // jump to 30s (in microseconds)
 bro.mpris.setVolume(0.8);               // set volume (0.0 .. 1.0+)
 bro.mpris.setLoopStatus('Playlist');    // 'None' | 'Track' | 'Playlist'
-bro.mpris.setShuffle(true);             // boolean or 'On' | 'Off'
+bro.mpris.setShuffle(true);             // boolean or 'On' | 'Off' (alias: setShuffleStatus)
 bro.mpris.setRate(1.25);                // playback rate multiplier
 
 // Player objects returned by getPlayers() / getActivePlayer() / findPlayer()
@@ -145,7 +149,7 @@ service.on('previous', () => {
 service.on('seek', (ev, offsetUsec) => {
     const nextPos = Math.max(0, service.getPosition() + offsetUsec);
     service.setPosition(nextPos);
-    service.emitSeeked(nextPos);
+    service.emitSeeked(nextPos); // alias: service.seeked(nextPos)
 });
 service.on('setPosition', (ev, posUsec, trackId) => {
     service.setPosition(posUsec);
@@ -173,5 +177,5 @@ service.setMetadata({
 service.setPlaybackStatus('Playing');
 service.setPosition(12_000_000);
 
-// Unpublish and release D-Bus name when done:
+// Unpublish and release D-Bus name when done (aliases: stop(), destroy()):
 // service.close();

@@ -1010,6 +1010,15 @@ const boxes = wild.detect(img, { threshold: 0.3 });
 const top = wild.classify(bro.vision.wildlife.cropImage(img,
     bro.vision.wildlife.subjectSquare(boxes[0].box, img.width, img.height)));
 
+/**
+ * WildlifeAnalyzer.label(record, burst?) / labels(record, burst?) / labelOptions() —
+ * convenience wrappers calling `bro.vision.wildlife.label` / `labels` with this
+ * analyzer's `labelOptions()` (`{ labelThreshold, taxa, ...boxRule }`).
+ */
+const optsForLabels = wild.labelOptions();
+const photoLabels = wild.labels(rec, null);
+const photoPrimaryLabel = wild.label(rec, null);
+
 /** WildlifeAnalyzer.dispose() — free both models; analyze() afterwards throws. */
 wild.dispose();
 
@@ -1574,9 +1583,10 @@ generic.depth(photo);   // the DepthEstimator result
 // ═════════════════════════════════════════════════════════════════════════════
 //
 // Each class is also exported on the namespace for `instanceof` checks and for
-// prototype inspection: `bro.vision.DepthEstimator`, `.Sam`,
-// `.NormalEstimator`, `.Hed`, `.Lineart`, `.Mlsd`, `.Openpose`, `.Segformer`,
-// `.Birefnet`, `.StyleGAN3`, `.Dinov2`, `.Dinov3`, `.VisionModel`.
+// prototype inspection: `bro.vision.DepthEstimator`, `.Sam`, `.Sam2`,
+// `.Sam2Tracker`, `.NormalEstimator`, `.Hed`, `.Lineart`, `.Mlsd`, `.Openpose`,
+// `.Segformer`, `.Birefnet`, `.Owlv2`, `.StyleGAN3`, `.Dinov2`, `.Dinov3`,
+// `.VisionModel`.
 //
 //   sam instanceof bro.vision.Sam;   // true
 //

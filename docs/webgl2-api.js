@@ -8,6 +8,10 @@
  * OpenGL ES 3.0 compatible 3D hardware-accelerated rendering interface for WebGL2.
  * Includes buffer objects, textures, shaders, programs, framebuffers, renderbuffers,
  * vertex array objects, samplers, queries, and sync primitives.
+ *
+ * Note: `WebGL2RenderingContext` and `WebGLRenderingContext` are global constructors,
+ * while handle types (`WebGLBuffer`, `WebGLTexture`, `WebGLProgram`, etc.) are
+ * interface types returned by context methods (`createBuffer()`, `createTexture()`, etc.).
  * @example
  * const gl = canvas.getContext('webgl2');
  *   gl.clearColor(0.0, 0.0, 0.0, 1.0);
@@ -65,15 +69,21 @@ class WebGL2RenderingContext {
 
   /**
    * @readonly
-   * @type {number}
+   * @type {HTMLCanvasElement}
    */
-  canvasWidth;
+  canvas;
 
   /**
    * @readonly
    * @type {number}
    */
-  canvasHeight;
+  drawingBufferWidth;
+
+  /**
+   * @readonly
+   * @type {number}
+   */
+  drawingBufferHeight;
 
   /**
    * @param {number} r

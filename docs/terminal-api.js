@@ -394,6 +394,9 @@ class HTMLTerminalElement extends HTMLElement {
   metrics;
   /** How often this terminal's layer was recorded (see Performance). @type {number} */
   layerRecords;
+  /** Inline images currently placed on the screen or in scrollback.
+   *  @type {Array<{id: number, width: number, height: number, row: number, col: number, rows: number, cols: number}>} */
+  images;
 
   /** Text into the process as a paste: bracketed (ESC[200~ ... ESC[201~)
    *  when the program set mode 2004, with control characters (ESC among them)

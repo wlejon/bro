@@ -227,8 +227,10 @@ class SpriteNode {
   size;
 
   /**
+   * No-op stub retained for compatibility; returns `this`.
    * @param {string} name
    * @param {Object} animSpec
+   * @returns {SpriteNode}
    */
   addAnimation(name, animSpec) {}
 
@@ -301,5 +303,9 @@ class ReflectionProbeNode {
 
   probeCapture() {}
 
+  /** Alias for `probeCapture()`. */
+  capture() {}
+
 }
+
 

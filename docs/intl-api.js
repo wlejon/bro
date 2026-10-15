@@ -32,15 +32,6 @@ class NumberFormat {
   constructor(locales, options) {}
 
   /**
-   *  Returns subset of provided locales supported by implementation.
-   *
-   * @param {*} locales
-   * @param {Object} [options]
-   * @returns {Array<string>}
-   */
-  static supportedLocalesOf(locales, options) {}
-
-  /**
    *  Formats a number to a localized string.
    *
    * @param {number} value
@@ -74,15 +65,6 @@ class DateTimeFormat {
    * @param {Object} [options]
    */
   constructor(locales, options) {}
-
-  /**
-   *  Returns subset of provided locales supported by implementation.
-   *
-   * @param {*} locales
-   * @param {Object} [options]
-   * @returns {Array<string>}
-   */
-  static supportedLocalesOf(locales, options) {}
 
   /**
    *  Formats a Date or timestamp to a localized string.
@@ -120,15 +102,6 @@ class PluralRules {
   constructor(locales, options) {}
 
   /**
-   *  Returns subset of provided locales supported by implementation.
-   *
-   * @param {*} locales
-   * @param {Object} [options]
-   * @returns {Array<string>}
-   */
-  static supportedLocalesOf(locales, options) {}
-
-  /**
    *  Selects plural category ('zero' | 'one' | 'two' | 'few' | 'many' | 'other').
    *
    * @param {number} value
@@ -154,15 +127,6 @@ class Collator {
    * @param {Object} [options]
    */
   constructor(locales, options) {}
-
-  /**
-   *  Returns subset of provided locales supported by implementation.
-   *
-   * @param {*} locales
-   * @param {Object} [options]
-   * @returns {Array<string>}
-   */
-  static supportedLocalesOf(locales, options) {}
 
   /**
    *  Compares two strings returning negative, zero, or positive integer.
@@ -191,15 +155,6 @@ class ListFormat {
    * @param {Object} [options]
    */
   constructor(locales, options) {}
-
-  /**
-   *  Returns subset of provided locales supported by implementation.
-   *
-   * @param {*} locales
-   * @param {Object} [options]
-   * @returns {Array<string>}
-   */
-  static supportedLocalesOf(locales, options) {}
 
   /**
    *  Formats a list of strings into a localized sentence fragment.
@@ -237,15 +192,6 @@ class RelativeTimeFormat {
   constructor(locales, options) {}
 
   /**
-   *  Returns subset of provided locales supported by implementation.
-   *
-   * @param {*} locales
-   * @param {Object} [options]
-   * @returns {Array<string>}
-   */
-  static supportedLocalesOf(locales, options) {}
-
-  /**
    *  Formats a value and time unit into relative time string.
    *
    * @param {number} value
@@ -281,15 +227,6 @@ class DisplayNames {
    * @param {Object} [options]
    */
   constructor(locales, options) {}
-
-  /**
-   *  Returns subset of provided locales supported by implementation.
-   *
-   * @param {*} locales
-   * @param {Object} [options]
-   * @returns {Array<string>}
-   */
-  static supportedLocalesOf(locales, options) {}
 
   /**
    *  Returns localized display name for given language/region code.

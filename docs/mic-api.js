@@ -138,3 +138,9 @@ bro.mic.levels = function(maxCount) {};
  */
 bro.mic.feed = function(samples, sampleRate) {};
 
+/**
+ * Drain queued microphone chunks and invoke `onChunk` synchronously.
+ * @returns {number} Chunks drained
+ */
+bro.mic.drain = function() {};
+

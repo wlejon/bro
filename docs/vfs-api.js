@@ -15,7 +15,8 @@
  * - MIME type detection and volume listing (`getMime`, `volumes`, `listVolumes`)
  * - Disk usage of a whole tree, live while it is counted (`usage`)
  *
- * Mounted automatically in Bronze when `BRO_WITH_VFS` is enabled.
+ * General API: Mounted automatically in Bronze when `BRO_WITH_VFS` is enabled
+ * (no special `"permissions"` entry in `bro.json` is required).
  */
 
 // ============================================================================
@@ -56,8 +57,8 @@ if (bro.vfs.canRedo()) {
     console.log(`Redo succeeded: ${redone}`);
 }
 
-// Remove:
-await bro.vfs.remove('/path/to/temp_dir', { recursive: true });
+// Permanently remove a file, directory tree, or array of paths (always recursive):
+await bro.vfs.remove('/path/to/temp_dir');
 
 // ============================================================================
 // 3. Trash Management (`trash`, `restoreTrash`, `listTrash`, `emptyTrash`)
@@ -65,12 +66,13 @@ await bro.vfs.remove('/path/to/temp_dir', { recursive: true });
 
 // Send file to XDG / OS trash:
 const trashItem = await bro.vfs.trash('/path/to/unwanted.txt');
+// { id, originalPath, storedPath, name, deletionTime, size, isDirectory }
 console.log(`Trashed to ID: ${trashItem.id} (original path: ${trashItem.originalPath})`);
 
 // List trash contents:
 const trashList = await bro.vfs.listTrash();
 for (const item of trashList) {
-    console.log(`Trash item: ${item.id} -> ${item.originalPath} (deleted at: ${item.deletionDate})`);
+    console.log(`Trash item: ${item.id} -> ${item.originalPath} (deleted at: ${item.deletionTime})`);
 }
 
 // Restore an item from trash:
@@ -85,14 +87,15 @@ const restored = await bro.vfs.restoreTrash(trashItem.id);
 
 const model = new bro.vfs.DirectoryModel('/home/j/projects/bro');
 
-// Listen for updates:
-model.on('change', () => {
-    console.log(`Directory updated, count: ${model.entries().length}`);
+// Listen for updates (callback receives the updated entries array):
+model.on('change', (items) => {
+    console.log(`Directory updated, count: ${items.length}`);
 });
 
-// Configure sorting and filtering:
+// Configure sorting ('name' | 'size' | 'mtime' | 'type' | 'kind' | 'ext' | 'extension')
+// and case-insensitive substring filter on entry name:
 model.setSort('name', true);       // sort by name ascending
-model.setFilter('*.cpp');          // filter by glob or substring
+model.setFilter('.cpp');           // case-insensitive substring filter (pass '' to clear)
 model.refresh();
 
 const currentItems = model.entries();

@@ -5,15 +5,15 @@
 
 /**
  * `bro.displays` provides display output management, modes, scaling, and night light:
- * - Display snapshot enumeration with modes, geometry, scale, EDID (`getSnapshot`)
- * - Display configuration changes with test-then-revert semantics (`applyConfig`, `testConfig`, `confirmConfig`, `revertConfig`)
+ * - Display snapshot enumeration with modes, geometry, scale, HDR, EDID (`getSnapshot`)
+ * - Display configuration changes with test-then-revert semantics (`applyConfig`, `testConfig`, `confirmConfig`, `revertConfig`, `isRevertPending`)
  * - Night light color temperature, schedule, and state (`setNightLight`, `getNightLight`)
  * - Backlight device brightness querying and modification (`setBrightness`, `getBrightness`, `getBacklightDevices`)
  * - Display change event listening (`on`, `off`, `addEventListener`, `removeEventListener`)
  *
  * Privileged API: Mounted automatically in Bronze when `BRO_WITH_DISPLAYS` is enabled and
  * the app is verified as a trusted shell app declaring `"shell": true` or
- * `"privileged": ["displays", ...]` in its `bro.json`.
+ * `"permissions": ["displays", ...]` in its `bro.json`.
  */
 
 // ============================================================================
@@ -22,10 +22,12 @@
 
 if (bro.displays.available) {
     const snapshot = bro.displays.getSnapshot();
-    console.log(`Connected displays: ${snapshot.displays.length}`);
+    console.log(`Connected displays: ${snapshot.displays.length} (backend: ${snapshot.backend})`);
     for (const d of snapshot.displays) {
-        console.log(`Display: ${d.name} (${d.model || 'Unknown'}), scale: ${d.scale}, primary: ${d.isPrimary}`);
+        // d.scale is { factor: number, dpi: number }; d.scaleFactor is number
+        console.log(`Display: ${d.name} (${d.model || 'Unknown'}), scale: ${d.scaleFactor} (${d.scale.dpi} DPI), primary: ${d.isPrimary}`);
         console.log(`  Current mode: ${d.currentMode.width}x${d.currentMode.height} @ ${d.currentMode.refreshRate}Hz`);
+        console.log(`  Orientation: ${d.orientation} (${d.rotation} deg), HDR: ${d.hdr.enabled}`);
     }
 
     // Subscribe to display layout changes
@@ -38,17 +40,31 @@ if (bro.displays.available) {
 // 2. Test-Then-Revert Display Configuration
 // ============================================================================
 
-// Test a resolution change with automatic rollback after 10 seconds:
-const testPromise = bro.displays.testConfig({
-    displayId: 'eDP-1',
-    mode: { width: 1920, height: 1080, refreshRate: 60 },
-    scale: 1.25
-}, { revertAfterMs: 10000 });
+// Apply a configuration immediately without a revert timer:
+// bro.displays.applyConfig({
+//     displayId: 'eDP-1',
+//     width: 1920,
+//     height: 1080,
+//     refreshRate: 60,
+//     scaleFactor: 1.25,
+//     orientation: 'landscape'
+// });
 
-// If user confirms:
-// bro.displays.confirmConfig();
-// Or user immediately reverts:
-// bro.displays.revertConfig();
+// Test a configuration change with automatic rollback after timeoutMs (default 15000ms):
+const testOk = bro.displays.testConfig({
+    displayId: 'eDP-1',
+    width: 1920,
+    height: 1080,
+    refreshRate: 60,
+    scaleFactor: 1.25
+}, { timeoutMs: 10000 });
+
+if (bro.displays.isRevertPending()) {
+    // If user confirms within the timeout window:
+    // bro.displays.confirmConfig();
+    // Or user immediately reverts:
+    // bro.displays.revertConfig();
+}
 
 // ============================================================================
 // 3. Night Light
@@ -57,7 +73,7 @@ const testPromise = bro.displays.testConfig({
 // Configure night light color temperature
 bro.displays.setNightLight({
     enabled: true,
-    temperature: 4500, // Kelvin
+    temperature: 4500, // Kelvin (1000..10000)
     schedule: {
         startHour: 20,
         startMinute: 0,
@@ -67,13 +83,18 @@ bro.displays.setNightLight({
 });
 
 const nightLight = bro.displays.getNightLight();
+// { supported, enabled, temperature, temperatureKelvin, schedule: { startHour, startMinute, endHour, endMinute } }
 console.log('Night light active:', nightLight.enabled, 'temp:', nightLight.temperature);
 
 // ============================================================================
 // 4. Backlight & Brightness
 // ============================================================================
 
-// Set brightness on primary or named display
+// Inspect available backlight hardware devices:
+const backlights = bro.displays.getBacklightDevices();
+// [{ name, sysfsPath, type, currentBrightness, maxBrightness, minBrightness, normalizedBrightness, percent, associatedConnector, connector }]
+
+// Set brightness on primary or named backlight device (0..100% or 0.0..1.0):
 bro.displays.setBrightness(80); // 80%
 
 const currentBrightness = bro.displays.getBrightness();

@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Apps live in `../broworkshop/`** (launcher + starter apps: `games/`, `tools/`, `demos/`, `ai/`). bro is the runtime only; run any app by passing its directory to `bro` or `bro-headless`. Naked `bro` opens the project manager (`system/projects/`); new projects seed from `system/skeletons/<name>/`; registry persists in the OS user-data dir. See [docs/projects.md](docs/projects.md). A folder with `bro.json` + a page is a desktop app (helm's core apps are folders in `../helmapps/`): manifest identity/single-instance/permissions, `bro.app`, and `bro --install` (desktop entries) are in [docs/apps.md](docs/apps.md); app capabilities go into bro, never into the app.
 
-**Modular build:** `-DBRO_PROFILE=<minimal|app|full>`, individual `-DBRO_WITH_*` flags override. Default `app` = full renderer + net/video/steam (needs vcpkg), no AI tower. `minimal` = 2D/canvas/WebGL/audio floor, no vcpkg. `full` adds the AI tower (CUDA opt-in via `-DBRO_WITH_TENSOR_CUDA=ON`). Compiled-out features install `{ available: false }` JS stubs. See [BUILDING.md](BUILDING.md), [docs/build-options.md](docs/build-options.md).
+**Modular build:** `-DBRO_PROFILE=<minimal|app|desktop|full>`, individual `-DBRO_WITH_*` flags override. Default `app` = full renderer + net/video/steam (needs vcpkg), no AI tower. `desktop` = full renderer + desktop substrate, no vcpkg/AI. `minimal` = 2D/canvas/WebGL/audio floor, no vcpkg. `full` adds the AI tower (CUDA opt-in via `-DBRO_WITH_TENSOR_CUDA=ON`). Compiled-out features install `{ available: false }` JS stubs. See [BUILDING.md](BUILDING.md), [docs/build-options.md](docs/build-options.md).
 
 Windows (VS multi-config generator; do not use MinGW, and use one build dir picking the config at build time):
 ```bash
@@ -36,7 +36,7 @@ Three executables, one `Engine` (via `EngineConfig.displayMode`): `bro` (windowe
 
 Module layering (each names only layers left of it):
 ```
-util → platform (SDL3, event loop) → render (Renderer iface) → svg → layout (htmlayout adapters, DrawTraversal) → dom → canvas | webgl | scene | physics → engine (main loop)
+util → platform (SDL3, event loop) → render (Renderer iface) → svg → layout (htmlayout adapters, DrawTraversal) → dom → canvas | webgl | scene | tile | physics | audio_inference | terminal | a11y | compositor | net | steam | video → engine (main loop) → bronze_host | ctl | headless | server
 ```
 `src/svg` is only the `<img src="*.svg">` rasterizer (SkSVGDOM into an RGBA buffer); *inline* `<svg>` is painted by `src/layout/svg_*` — a native traversal emitting `Renderer` primitives with cascaded SVG paint, so SVG children have real `getBoundingClientRect` geometry, falling back to SkSVGDOM only for text/filters/masks/patterns/markers.
 
@@ -55,7 +55,7 @@ Key patterns:
 
 ## Third-party dependencies (third_party/)
 
-Every repo in the ecosystem (these, the desktop substrate libraries, the apps) is indexed in [docs/ecosystem.md](docs/ecosystem.md); `scripts/repos.txt` is the machine-readable list tooling reads. There are no git submodules anywhere: every repo with dependencies carries the identical `cmake/bro_deps.cmake`, whose `bro_dependency(<name> ...)` resolves an existing target, else `../<name>` (or `-DFETCHCONTENT_SOURCE_DIR_<NAME>`), else a GitHub tarball: wlejon repos track main (heads read with `git ls-remote` at every configure, all at once; offline reuses the last resolved commit), third-party code is pinned with `REF <sha>`. bro declares everything up front in `cmake/bro_pins.cmake`. There are no pins to bump: push siblings first, then bro. A release tag carries `cmake/bro_lock.cmake` (`scripts/lock-deps.sh`; never on main); `scripts/sync-deps.sh` copies `bro_deps.cmake` to every repo ([docs/multi-repo-workflow.md](docs/multi-repo-workflow.md)). ML siblings depend on brotensor (plus broimage for preprocessing). Every bro-* library below except bromath, htmlayout, bropty and bromux also builds `<name>_api` from its `src/api/` (public header `include/<name>/api.h`; brokit and broflora differ), its bronze JS binding; those siblings depend on bronze + brass like any other dependency.
+Every repo in the ecosystem (these, the desktop substrate libraries, the apps) is indexed in [docs/ecosystem.md](docs/ecosystem.md); `scripts/repos.txt` is the machine-readable list tooling reads. There are no git submodules anywhere: every repo with dependencies carries the identical `cmake/bro_deps.cmake`, whose `bro_dependency(<name> ...)` resolves an existing target, else `../<name>` (or `-DFETCHCONTENT_SOURCE_DIR_<NAME>`), else a GitHub tarball: wlejon repos track main (heads read with `git ls-remote` at every configure, all at once; offline reuses the last resolved commit), third-party code is pinned with `REF <sha>`. bro declares everything up front in `cmake/bro_pins.cmake`. There are no pins to bump: push siblings first, then bro. A release tag carries `cmake/bro_lock.cmake` (`scripts/lock-deps.sh`; never on main); `scripts/sync-deps.sh` copies `bro_deps.cmake` to every repo ([docs/multi-repo-workflow.md](docs/multi-repo-workflow.md)). ML siblings depend on brotensor (plus broimage for preprocessing). Every bro-* library below except `bromath`, `htmlayout`, `bropty`, `bromux`, `brolink`, `brovideo`, `brodmabuf` and `brodbus` also builds `<name>_api` from its `src/api/` (public header `include/<name>/api.h`; brokit and broflora differ), its bronze JS binding; those siblings depend on bronze + brass like any other dependency.
 
 | Library | Target | What |
 |---------|--------|------|
@@ -73,17 +73,20 @@ Every repo in the ecosystem (these, the desktop substrate libraries, the apps) i
 | brosoundml | `brosoundml` | audio-ML inference: TTS/STT/diarization/codec/wake |
 | brovisionml | `brovisionml::brovisionml` | vision-ML inference: SAM, depth, normals, matting, ControlNet annotators |
 | bropty | `bropty` | VT emulator + PTY/ConPTY behind `<terminal>` (`BRO_WITH_TERMINAL`; `src/terminal/`) |
-| brosearch | `brosearch` | regex scrollback search (bropty's dependency) |
-| brothemes | `brothemes` | colour schemes + WCAG/APCA contrast (the terminal's minimum contrast) |
+| brosearch | `brosearch` | fzf fuzzy matching, rg file walking, and linear-time regex grep (`bro.search`, plus bropty's scrollback search) |
+| brothemes | `brothemes` | colour schemes + Oklab/Oklch + WCAG/APCA contrast (`bro.themes`, plus the terminal's minimum contrast) |
 | bromux | `bromux` | terminal multiplexer: the server behind persistent `<terminal>` sessions (`BRO_WITH_TERMINAL`) |
-| broremote | `broremote` | remote sessions behind `bro.remote`: frames to a viewer (VA-API video), its input back (`BRO_WITH_REMOTE`; Windows/Linux) |
+| brolink | `brolink` | local IPC and ssh transport backing `bro-ctl` (`src/platform/control_socket.cpp`, `src/ctl/`), `bromux` and `broremote` |
+| brovideo | `brovideo` | hardware video encode/decode (Linux VA-API, Windows Media Foundation, Raw) behind `broremote` (`BRO_WITH_REMOTE`) |
+| broremote | `broremote` | remote sessions behind `bro.remote` and `<remoteview>`: frames to a viewer (VA-API / Media Foundation / Raw), its input back (`BRO_WITH_REMOTE`; Windows/Linux) |
+| broconf · brokeys · broapps · brovfs · brothumb · broseat · brocred · brosys · brodisplays · broportal · brocompositor · browl · broa11y · brodmabuf · brodbus · brodecor · broclip · brompris · bropulse · broime | `<name>` / `<name>_api` | desktop substrate libraries (`bro.conf`, `bro.keys`, `bro.apps`, `bro.vfs`, `bro.thumb`, `bro.seat`, `bro.cred`, `bro.sys`, `bro.displays`, `bro.portal`, `bro.compositor`, `bro.wl`, `bro.a11y`, `bro.decor`, `bro.clip`, `bro.mpris`, `bro.pulse`, `bro.ime`; `brodmabuf` and `brodbus` are C++-only under Linux) |
 | brass | `brass` | JIT / AOT native code generator backend for bronze |
 | bronze | `bronze` / `bronze-cli` / `bronze::runtime_shared` | JavaScript compiler + shared runtime (mandatory) |
 | Jolt Physics | `Jolt::Jolt` | rigid-body physics |
 | SDL3 | `SDL3::SDL3` | windowing, input (static) |
 | Skia | `skia` (imported) | pre-built 2D rasterization |
 | Vulkan SDK | `Vulkan::Vulkan` | Vulkan 1.3 Core graphics & compute loader |
-| stb_image / FastNoise2 | `stb_image` / `FastNoise` | image IO / SIMD noise |
+| stb_image / FastNoise2 / libjpeg-turbo | `stb_image` / `FastNoise` / `turbojpeg-static` | image IO / SIMD noise / JPEG codec |
 
 ## JS API Documentation (docs/)
 
@@ -107,12 +110,22 @@ Annotated `.js` files with JSDoc + examples. Read the file before using or chang
 | `imagebitmap-api.js` | `ImageBitmap` / `createImageBitmap`: drawImage + texImage2D source, Blob decode, Worker transfer |
 | `file-api.js` | `Blob`/`File`, `FileReader`, `URL.createObjectURL` (resolves in `<img>` and `fetch`), dropped-file `dataTransfer` |
 | `clipboard-api.js` | `navigator.clipboard` readText/writeText/read/write + `ClipboardItem` (text/plain, image/png; text + image in one write), what other apps see per platform (Windows PNG + CF_DIB/CF_DIBV5), pasted images as `clipboardData.files`, headless's in-process clipboard |
+| `abort-api.js` | `AbortController` & `AbortSignal` (`timeout`, `any`, `abort`): cancellation primitives for `fetch`, streams, and async tasks |
+| `canvas-api.js` | `HTMLCanvasElement` & `CanvasRenderingContext2D`, `CanvasGradient`, `CanvasPattern`, `ImageData`, `Path2D` |
+| `webgl2-api.js` | `WebGL2RenderingContext`: OpenGL ES 3.0 hardware-accelerated rendering over Vulkan |
+| `custom_elements-api.js` | `customElements` & `HTMLElement`: Web Components custom element registry, lifecycle callbacks, and DOM upgrading |
+| `domparser-api.js` | `DOMParser`: HTML / SVG string parsing into a detached DOM `Document` tree |
+| `events-api.js` | `Event`, `CustomEvent`, `UIEvent`, `MouseEvent`, `PointerEvent`, `TouchEvent`, `GestureEvent`: DOM event dispatch |
+| `intl-api.js` | `Intl` (ECMA-402): `NumberFormat`, `DateTimeFormat`, `PluralRules`, `Collator`, `ListFormat`, `RelativeTimeFormat`, `DisplayNames` |
+| `text-api.js` | `bro.text`: render-layer text shaping (`shape`, `byteOffsetToX`, `xToByteOffset`, `clusterRange`, `cacheStats`) and UAX #9 bidi diagnostics |
 | `scene-api.js` | `bro.scene`: `SceneGraph` + `SceneNode` core: hierarchy, transforms, cameras, render settings, raycast/project, capture, `attachTo` |
 | `scene-nodes-api.js` | `bro.scene` node types: create* options (mesh/skinned/instanced, splats, shapes, sprites, HTML, lights, particles, decals, probes), `bro.impostor`, per-type SceneNode members (shaders, LOD, instances, skeletal playback) |
 | `animation-api.js` | `scene.createAnimationPlayer()`: data-driven keyframe clips for node properties, plus skeletal blend spaces, layered blending, and an authored state machine |
 | `lighting-api.js` | PBR lighting: LightNode, materials, tonemap, ambient |
 | `net-api.js` | `bro.net`: game networking (host/connect/send) via GNS |
 | `net-sync-api.js` | `bro.net.sync`: high-level replication + RPCs (pure JS module, host-star) |
+| `server-api.js` | `bro.server`: dedicated game server and worker host runtime control (`tickrate`, `uptime`, `stop`) |
+| `steam-api.js` | `bro.steam`: Steamworks integration (identity, overlay, friends, rich presence, lobbies, voice chat) |
 | `gamepad-api.js` | Gamepad API: W3C snapshots, rumble, settings action bindings, headless injection |
 | `pointer-api.js` | Pointer + Touch Events: capture, compat mouse synthesis, headless touch injection |
 | `web-animations-api.js` | `element.animate()`, a WAAPI subset on the CSS-transition interpolator |
@@ -163,6 +176,7 @@ Annotated `.js` files with JSDoc + examples. Read the file before using or chang
 | `profiler-api.js` | `bro.profiler`: bronze's sampling profiler from script: `start({hz, threads})` / `stop({callers, report})` → per-function self/total + tier (interpreter / tier 1 / tier 2 / aot / native), caller edges, text; zero cost while stopped |
 | `gizmo-api.js` | `bro.gizmo`: 3D transform handles |
 | `video-api.js` | `<video>` playback (HTMLMediaElement subset, WebM/VP9+Opus) incl. `stepFrame`/`frameRate`, `bro.media` waveform + filmstrip analysis + `tags` (ID3/Vorbis/FLAC/WAV/MP4 tags, cover, length; worker-callable), `VideoEncoder` (WebM/VP9) / `GifEncoder`: RGBA in, file out |
+| `media-api.js` | `VideoEncoder` (WebM/VP9 + Opus), `GifEncoder` (GIF89a), and `bro.media` (`peaks`, `thumbnails`, `probe`, `tags`, `canDecode`) class & method signatures |
 | `iframe-api.js` | `<iframe src=dir>`: isolated sub-document (own realm/DOM/timers), input routed in |
 | `terminal-api.js` | `<terminal>` (HTMLTerminalElement) + `bro.terminal`: native terminal element over bropty; spawn/write/feed/kill, screen/scrollback/frame text, key/IME/paste routing; mouse selection + reporting, scrollback view, search, links, OSC events (title/cwd/bell/notification/progress/OSC 52/OSC 133 commands), options + theme (CSS `--terminal-*`), own compositor layer |
 | `conf-api.js` | `bro.conf`: layered desktop settings store with schemas, defaults, validation, and watcher handles |
@@ -179,11 +193,15 @@ Annotated `.js` files with JSDoc + examples. Read the file before using or chang
 | `portal-api.js` | `bro.portal`: XDG Desktop Portal backends for file chooser, screenshot, screencast, and open URI |
 | `compositor-api.js` | `bro.compositor`: window-management policy, workspace switching, tiling/floating layout modes, and event hooks |
 | `wl-api.js` | `bro.wl`: Wayland client protocols: wlr-layer-shell panels/docks, foreign-toplevel, session lock, and screencopy |
+| `decor-api.js` | `bro.decor`: SSD window frame metrics, titlebar layout, button hit-testing, RGBA rendering, and 9-slice drop shadows |
+| `clip-api.js` | `bro.clip`: clipboard history ring store, MIME content-addressed blobs, pins, and OS clipboard watcher |
 | `mpris-api.js` | `bro.mpris`: FreeDesktop MPRIS2 media controller (player discovery, metadata, transport controls, live events) and player service publisher (`createService`/`publish`) |
+| `pulse-api.js` | `bro.pulse`: PipeWire / PulseAudio audio routing graph, default sink/source, per-stream volume/mute, and role policy |
+| `ime-api.js` | `bro.ime`: input method compose sequences, dead keys, candidate popup placement, and dictionary prefix trie |
 | `a11y-api.js` | `bro.a11y`: accessibility tree inspection, node query/mutation, live-region announcements, and custom widget roles |
 | `remote-api.js` | `bro.remote`: host this screen for a remote viewer (local or over ssh): `host({socket, codecs, bitrateKbps, fps})` / `stop` / `status` (incl. audio status: PipeWire restarts are reconnected) / attach + detach events; frames from the presenter (KMS dmabuf under DRM), viewer input routed as local input; the viewer side: `connect({ssh, socket, audio})` sessions (status/stats/probes/sendInput) shown by `<remoteview>` (own layer, D3D11→Vulkan zero-copy on Windows, raw key capture + release chord, pointer/relative motion) |
 
-Other docs: `docs/headless.md` (headless reference including input/IME injection and the WebGL2 support matrix), `docs/settings.md`, `docs/inspect.md` (DOM inspector, great in headless), `docs/agent-control.md` (`bro-ctl`: the local control socket — screenshots, vblank-stamped recordings, input, eval, DOM, the frame-pacing flight recorder, perf profiles; on by default under `--drm`), `docs/system-panels.md`, `docs/embedding.md` (linking bro_engine into your own executable: media backends, the headless driver), `docs/hot-reload.md` (the edit loop: source watcher, F5, `BRO_JIT_TIER` override), `docs/code-cache.md` (on-disk compiled-IL cache: key, location, `BRO_CODE_CACHE*`), `docs/compile-progress.md` (window stays live during a compile; `bro-compiling` / `--bro-compile-progress` on `<html>`), `docs/multi-repo-workflow.md`, `docs/coverage.md` (Windows-only line coverage), `docs/perf-ratchet.md` (end-to-end perf ratchet: `bench/ratchet.sh`, CPU/GC/page-compile/tats-startup goldens, load guard, `--update`).
+Other docs: `docs/headless.md` (headless reference including input/IME injection and the WebGL2 support matrix), `docs/settings.md`, `docs/inspect.md` (DOM inspector, great in headless), `docs/agent-control.md` (`bro-ctl`: the local control socket — screenshots, vblank-stamped recordings, input, eval, DOM, the frame-pacing flight recorder, perf profiles; on by default under `--drm`), `docs/screen-capture.md` (capturing the KMS scanout buffer under `bro --drm` via `bro.window.captureScreen` or `SIGUSR2`), `docs/system-panels.md`, `docs/embedding.md` (linking bro_engine into your own executable: media backends, the headless driver), `docs/hot-reload.md` (the edit loop: source watcher, F5, `BRO_JIT_TIER` override), `docs/code-cache.md` (on-disk compiled-IL cache: key, location, `BRO_CODE_CACHE*`), `docs/compile-progress.md` (window stays live during a compile; `bro-compiling` / `--bro-compile-progress` on `<html>`), `docs/multi-repo-workflow.md`, `docs/coverage.md` (Windows-only line coverage), `docs/perf-ratchet.md` (end-to-end perf ratchet: `bench/ratchet.sh`, CPU/GC/page-compile/tats-startup goldens, load guard, `--update`).
 
 ## Namespace
 

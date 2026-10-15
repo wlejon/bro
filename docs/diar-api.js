@@ -9,6 +9,13 @@ class Sortformer {
    */
   device;
 
+  /** @readonly @type {boolean} */ loaded;
+  /** @readonly @type {number} */ sampleRate;
+  /** @readonly @type {number} */ numSpeakers;
+  /** @readonly @type {number} */ frameSeconds;
+  /** @readonly @type {number} */ fcDModel;
+  /** @readonly @type {number} */ tfDModel;
+
   /**
    * True if an asynchronous inference job is active on this model.
    * @readonly
@@ -41,6 +48,8 @@ class SortformerSession {
    */
   device;
 
+  /** @readonly @type {boolean} */ loaded;
+
   /**
    * True if an asynchronous inference job is active.
    * @readonly
@@ -72,6 +81,9 @@ class ClusterDiarizer {
    * @type {string}
    */
   device;
+
+  /** @readonly @type {boolean} */ loaded;
+  /** @readonly @type {number} */ sampleRate;
 
   /**
    * True if an asynchronous inference job is active.
@@ -115,11 +127,12 @@ class ClusterDiarizer {
 bro.diar.init = function() {};
 
 /**
- * Asynchronously load Sortformer neural diarization model from directory.
+ * Load Sortformer neural diarization model from directory (synchronously, or
+ * asynchronously when `opts.onReady` is given).
  *
  * @param {string} modelDir
  * @param {Object} [opts]
- * @returns {AsyncHandle}
+ * @returns {(Sortformer|AsyncHandle)}
  */
 bro.diar.loadSortformer = function(modelDir, opts) {};
 

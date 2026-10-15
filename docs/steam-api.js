@@ -161,9 +161,20 @@ bro.steam.storeStats = function() {};
 bro.steam.activateOverlay = function(dialog) {};
 
 /**
+ * @param {string} dialog
+ * @param {string} steamId
+ */
+bro.steam.activateOverlayToUser = function(dialog, steamId) {};
+
+/**
  * @param {string} url
  */
 bro.steam.activateOverlayToWebPage = function(url) {};
+
+/**
+ * @param {string} lobbyId
+ */
+bro.steam.activateInviteDialog = function(lobbyId) {};
 
 /**
  * @returns {Array<Object>}
@@ -189,7 +200,7 @@ bro.steam.clearRichPresence = function() {};
 /**
  * @param {string} type
  * @param {number} maxMembers
- * @returns {Promise<Object>}
+ * @returns {Promise<string|null>}
  */
 bro.steam.createLobby = function(type, maxMembers) {};
 
@@ -214,6 +225,34 @@ bro.steam.setLobbyData = function(lobbyId, key, value) {};
 
 /**
  * @param {string} lobbyId
+ * @param {string} key
+ * @param {string} value
+ */
+bro.steam.setLobbyMemberData = function(lobbyId, key, value) {};
+
+/**
+ * @param {string} lobbyId
+ * @param {boolean} joinable
+ * @returns {boolean}
+ */
+bro.steam.setLobbyJoinable = function(lobbyId, joinable) {};
+
+/**
+ * @param {string} lobbyId
+ * @param {string} type
+ * @returns {boolean}
+ */
+bro.steam.setLobbyType = function(lobbyId, type) {};
+
+/**
+ * @param {string} lobbyId
+ * @param {number} maxMembers
+ * @returns {boolean}
+ */
+bro.steam.setLobbyMemberLimit = function(lobbyId, maxMembers) {};
+
+/**
+ * @param {string} lobbyId
  * @returns {Array<Object>}
  */
 bro.steam.getLobbyMembers = function(lobbyId) {};
@@ -233,6 +272,7 @@ bro.steam.getLobbyData = function(lobbyId, key) {};
 
 /**
  * @param {Object} [filter]
+ * @returns {Promise<Array<Object>>}
  */
 bro.steam.requestLobbyList = function(filter) {};
 
@@ -250,7 +290,8 @@ bro.steam.stopVoiceRecording = function() {};
 /**
  * @param {Uint8Array} data
  * @param {number} [sampleRate]
- * @returns {Promise<Float32Array>}
+ * @returns {Promise<{pcm: Float32Array, sampleRate: number}>}
  */
 bro.steam.decodeVoice = function(data, sampleRate) {};
+
 

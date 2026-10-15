@@ -6,14 +6,15 @@
 /**
  * `bro.apps` provides application discovery, .desktop execution, icon lookup,
  * MIME type associations, and recent files management:
- * - Application catalog enumeration and searching (`list`, `get`, `search`)
+ * - Application catalog enumeration and searching (`list`, `get`, `search`, `findByCategory`, `findByMimeType`)
  * - Scoped process launching with sandboxing/environment control (`launch`)
  * - FreeDesktop icon resolution with size/theme options (`resolveIcon`)
- * - MIME association querying (`getDefaultApp`, `getAppsForMime`)
+ * - MIME association querying and setting (`getDefaultApp`, `getAppsForMime`, `setDefaultAppForMime`)
  * - Recent files management (`getRecent`, `addRecent`, `clearRecent`)
- * - Live catalog watching (`watch`, `unwatch`)
+ * - Live catalog watching and platform capability inspection (`watch`, `unwatch`, `getCapabilities`)
  *
- * Mounted automatically in Bronze when `BRO_WITH_APPS` is enabled.
+ * General API: Mounted automatically in Bronze when `BRO_WITH_APPS` is enabled
+ * (no special `"permissions"` entry in `bro.json` is required).
  *
  * THE CATALOG IS BUILT OFF THE PAGE THREAD. Reading every installed app's
  * desktop entry (Start-menu shortcuts on Windows, .desktop files on Linux,
@@ -64,6 +65,13 @@ const devTools = bro.apps.findByCategory('Development');
 // Filter applications by MIME type:
 const pdfViewers = bro.apps.findByMimeType('application/pdf');
 
+// Inspect launcher and catalog capabilities on the current OS:
+const caps = bro.apps.getCapabilities();
+// {
+//   launcher: { hasScopedIsolation, hasPackagedAppLaunch, hasTerminalLaunch, hasJobObjectKill, hasSystemdCgroup },
+//   catalog: { supportsCategories, supportsKeywords, supportsMimeTypes, supportsActions, supportsPackagedApps }
+// }
+
 // ============================================================================
 // 2. Application Launching (`bro.apps.launch`)
 // ============================================================================
@@ -76,13 +84,15 @@ const processHandle = await bro.apps.launch('org.gnome.TextEditor.desktop', {
     env: { 'CUSTOM_VAR': '1' }
 });
 
-console.log(`Launched process PID: ${processHandle.pid()}`);
+console.log(`Launched process PID: ${processHandle.pid()} (or ${processHandle.processId})`);
+console.log(`Scope ID: ${processHandle.scopeId()}, Launch ID: ${processHandle.launchId()}`);
 console.log(`Is running: ${processHandle.isRunning()}`);
 
 // Monitor or control process lifecycle:
-// processHandle.terminate(); // Graceful SIGTERM / WM_CLOSE
-// processHandle.kill();      // SIGKILL / TerminateProcess
-// const exitCode = await processHandle.wait();
+// processHandle.terminate();               // Graceful SIGTERM / WM_CLOSE
+// processHandle.kill();                    // SIGKILL / TerminateProcess
+// const exited = processHandle.wait(5000); // Synchronous wait up to timeoutMs (returns boolean)
+// const code = processHandle.exitCode();   // Exit status number, or null if still running
 
 // ============================================================================
 // 3. Icon Resolution (`bro.apps.resolveIcon`)
@@ -105,7 +115,7 @@ const iconPath = bro.apps.resolveIcon('text-editor', {
 console.log(`Resolved icon path: ${iconPath}`);
 
 // ============================================================================
-// 4. MIME Associations (`getDefaultApp`, `getAppsForMime`)
+// 4. MIME Associations (`getDefaultApp`, `getAppsForMime`, `setDefaultAppForMime`)
 // ============================================================================
 
 const defaultApp = bro.apps.getDefaultApp('text/plain');
@@ -114,6 +124,9 @@ if (defaultApp) {
 }
 
 const allImageViewers = bro.apps.getAppsForMime('image/png');
+
+// Set the default application for a MIME type (alias `setDefaultApp`):
+// bro.apps.setDefaultAppForMime('text/plain', 'org.gnome.TextEditor.desktop');
 
 // ============================================================================
 // 5. Recent Items (`getRecent`, `addRecent`, `clearRecent`)
@@ -136,8 +149,9 @@ bro.apps.addRecent('/path/to/project/main.cpp', 'org.gnome.TextEditor.desktop');
 // ============================================================================
 
 // Watch for desktop file additions, removals, and modifications:
+// Event shape: { type: 'added' | 'removed' | 'modified' | 'refreshed', appId, app_id, timestamp }
 const watcher = bro.apps.watch((event) => {
-    console.log(`Catalog change: ${event.type} -> ${event.appId || event.path}`);
+    console.log(`Catalog change: ${event.type} -> ${event.appId} (at ${event.timestamp})`);
 });
 
 // Explicitly unwatch:

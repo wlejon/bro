@@ -184,6 +184,9 @@ class TripoSplatPipeline {
 
   /** Alias of exportSplat(path). @param {string} path @returns {true} */
   saveSplat(path) {}
+
+  /** Cancel an in-flight generate() on this pipeline. */
+  cancel() {}
 }
 
 // ── Namespaces ───────────────────────────────────────────────────────────────

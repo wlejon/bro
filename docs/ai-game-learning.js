@@ -586,7 +586,7 @@ const pid = bro.ai.game.spawnProjectile(world, {
 const live = bro.ai.game.worldProjectiles(world);   // alive projectiles only
 
 /** VecSimulation, N batched 1v1 envs for self-play training. Both spellings
- *  create the same thing. */
+ *  (`createVecSimulation(opts)` and `createVecSim(opts)`) create the same thing. */
 const vec = bro.ai.game.createVecSimulation({
     numEnvs: 64, arenaHalfSize: 12, dt: 0.016, maxStepsPerEpisode: 600,
     minSpawnDist: 4, maxSpawnDist: 10,
@@ -596,6 +596,7 @@ const vec = bro.ai.game.createVecSimulation({
     rewardDamageDealt: 1.0, rewardDamageTakenMul: 1.0,
     rewardKill: 100, rewardDeath: -100, rewardStep: 0, rewardTimeout: 0,
 });
+// Alias: const vec = bro.ai.game.createVecSim(opts);
 // numEnvs must be an integer in 1..65536 (RangeError otherwise); it sizes
 // every per-env buffer up front.
 vec.numEnvs;                              // read-only

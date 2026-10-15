@@ -695,17 +695,19 @@ class ClapModel {
 
   /**
    * @param {string|Array<string>} prompts
-   * @returns {Float32Array|Array<Float32Array>} one embedding, or one per prompt
+   * @param {{onDone?: Function}} [opts]
+   * @returns {Float32Array|Array<Float32Array>|AsyncHandle} one embedding, or one per prompt
    */
-  embedText(prompts) {}
+  embedText(prompts, opts) {}
 
   /**
    * score() for an audio embedding already in hand.
    * @param {Float32Array} embedding
    * @param {ClapPrompt|Array<ClapPrompt>} prompts
-   * @returns {ClapScore}
+   * @param {{onDone?: Function}} [opts]
+   * @returns {ClapScore|AsyncHandle}
    */
-  scoreEmbedding(embedding, prompts) {}
+  scoreEmbedding(embedding, prompts, opts) {}
 
   /** Frees the weights; the model is unusable afterwards. */
   dispose() {}
@@ -719,6 +721,14 @@ class ClapModel {
  * @param {string} [dir] -  A converted checkpoint directory (model.safetensors +
  *   tokenizer files); defaults as described above.
  * @param {{device?: 'cuda'|'vulkan'|'metal'|'cpu', onReady?: function(ClapModel), onError?: function(string)}} [opts]
- * @returns {ClapModel}
+ * @returns {ClapModel|AsyncHandle}
  */
 bro.ear.loadClap = function(dir, opts) {};
+
+/**
+ * Estimate the beat's phase at a known period (same function as `bro.music.beat`, see docs/music-endless-api.js).
+ * @param {Float32Array|{samples: Float32Array, sampleRate?: number}} audio
+ * @param {Object} opts
+ * @returns {Object}
+ */
+bro.ear.beat = function(audio, opts) {};

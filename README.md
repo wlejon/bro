@@ -96,7 +96,7 @@ The rest lives in sibling libraries; [docs/ecosystem.md](docs/ecosystem.md) list
 
 ## Building
 
-See [BUILDING.md](BUILDING.md) for prerequisites, Skia setup, and build commands across Windows, Linux, and macOS. The build is modular: `-DBRO_PROFILE=minimal|app|full` picks a feature tier and individual `-DBRO_WITH_*` flags override it, with compiled-out features installing `{ available: false }` JS stubs. See [docs/build-options.md](docs/build-options.md).
+See [BUILDING.md](BUILDING.md) for prerequisites, Skia setup, and build commands across Windows, Linux, and macOS. The build is modular: `-DBRO_PROFILE=minimal|app|desktop|full` picks a feature tier and individual `-DBRO_WITH_*` flags override it, with compiled-out features installing `{ available: false }` JS stubs. See [docs/build-options.md](docs/build-options.md).
 
 ## Usage
 

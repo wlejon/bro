@@ -872,6 +872,14 @@ class SpeakerEncoder {
    */
   embedSpeaker(audio, opts) {}
 
+  /**
+   * Alias of `embedSpeaker(audio, opts)`.
+   * @param {(Float32Array|SttAudioBuffer)} audio
+   * @param {(number|SpeakerEncoderEmbedOptions)} [opts]
+   * @returns {(Float32Array|AsyncHandle)}
+   */
+  embed(audio, opts) {}
+
 }
 
 // ── Namespaces ───────────────────────────────────────────────────────────────

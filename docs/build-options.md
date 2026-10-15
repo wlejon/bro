@@ -16,11 +16,13 @@ toolkit.
 | Profile | What it is | Needs vcpkg? | Needs CUDA? |
 |---|---|---|---|
 | `minimal` | HTML/CSS + Canvas2D + WebGL + audio. 2D renderer only. | no | no |
+| `desktop` | Full renderer (3D scene graph, physics, audio, core game-AI), terminal, desktop libraries, remote. No vcpkg services (net/video/AVIF/steam) and no AI tower. | no | no |
 | **`app`** (default) | Full renderer (3D scene graph, physics, audio, core game-AI), terminal, desktop libraries, remote + net/video/steam. No AI tower. | yes | no |
 | `full` | Everything except the CUDA sub-lever (still opt-in). | yes | no (opt-in) |
 
 ```bash
 cmake -B build                                 # app profile (default), needs vcpkg for net/video
+cmake -B build -DBRO_PROFILE=desktop           # full renderer + desktop substrate, no vcpkg
 cmake -B build -DBRO_PROFILE=full              # everything (adds the AI tower)
 cmake -B build -DBRO_PROFILE=app -DBRO_WITH_LM=ON   # app + language models (adds brolm+brotensor)
 ```
@@ -38,25 +40,25 @@ HTML/CSS + Canvas2D + WebGL runtime with working screenshots and native Vulkan p
 
 ### Tier 1: feature groups (brotensor-free)
 
-| Flag | Pulls in | `minimal` | `app` | `full` | Notes |
-|---|:--|:--:|:--:|:--:|---|
-| `BRO_WITH_3D` | bromesh + scene graph + mesh/rigging/terrain/tile/gizmo subsystems | off | on | on | 3D node types embed `bromesh` by value |
-| `BRO_WITH_PHYSICS` | Jolt | off | on | on | header-isolated behind `physics::PhysicsWorld` |
-| `BRO_WITH_AUDIO` | broaudio + audio_inference | **on** | on | on | self-contained, no vcpkg; on in every profile because `<audio>`/Web Audio is core HTML |
-| `BRO_WITH_GAMEAI` | brogameagent **core** (nav/path/steer/MCTS) | off | on | on | brotensor-free |
-| `BRO_WITH_FLORA` | broflora | off | on | on | needs `3D` (bromesh) |
-| `BRO_WITH_TEXT_SHAPING` | HarfBuzz + Skia's UAX#9 ICU bidi subset + `modules/skunicode` | **on** | on | on | no vcpkg, no Skia rebuild: compiled from the Skia source bundle. On in *every* profile so there is one text path, not two. Off = 1:1 codepoint→glyph (no ligatures, kerning or Arabic joining). See [third_party/skia/BUNDLE.md](../third_party/skia/BUNDLE.md) |
-| `BRO_WITH_WEBP` | libwebp decoder | **on** | on | on | compiled from the Skia source bundle alongside HarfBuzz, so `.webp` decodes the same on every platform. Off = `.webp` does not decode anywhere |
-| `BRO_WITH_NET` | GameNetworkingSockets | off | on | on | **needs vcpkg** |
-| `BRO_WITH_VIDEO` | libvpx/webm/Opus | off | on | on | **needs vcpkg** |
-| `BRO_WITH_AVIF` | dav1d (BSD-2) | off | on | on | **needs vcpkg** (or a system libdav1d). The AV1 decoder behind AVIF; broimage reads the HEIF container and converts YUV→RGBA itself. Off = AVIF still probes and reports its size, but does not decode (`bro.image.canDecode('image/avif') === ''`). HEIC never needs a flag: it uses the OS decoder (WIC / ImageIO), see [image-api.js](image-api.js) |
-| `BRO_WITH_STEAM` | none (runtime dlopen) | off | on | on | the stub template |
-| `BRO_WITH_TERMINAL` | bropty + brosearch + brothemes + bromux (persistent sessions, over brolink) | off | on | on | no vcpkg; the native `<terminal>` element ([terminal-api.js](terminal-api.js)). Off = `bro.terminal.available === false` and `<terminal>` is an inert box |
-| `BRO_WITH_REMOTE` | broremote + brovideo + brolink | off | on | on | `bro.remote` ([remote-api.js](remote-api.js)). Windows and Linux only (off by default on macOS). brovideo's VA-API encoders on Linux when libva is present (with brodmabuf). Off = `bro.remote.available === false` |
+| Flag | Pulls in | `minimal` | `desktop` | `app` | `full` | Notes |
+|---|:--|:--:|:--:|:--:|:--:|---|
+| `BRO_WITH_3D` | bromesh + scene graph + mesh/rigging/terrain/tile/gizmo subsystems | off | on | on | on | 3D node types embed `bromesh` by value |
+| `BRO_WITH_PHYSICS` | Jolt | off | on | on | on | header-isolated behind `physics::PhysicsWorld` |
+| `BRO_WITH_AUDIO` | broaudio + audio_inference | **on** | on | on | on | self-contained, no vcpkg; on in every profile because `<audio>`/Web Audio is core HTML |
+| `BRO_WITH_GAMEAI` | brogameagent **core** (nav/path/steer/MCTS) | off | on | on | on | brotensor-free |
+| `BRO_WITH_FLORA` | broflora | off | on | on | on | needs `3D` (bromesh) |
+| `BRO_WITH_TEXT_SHAPING` | HarfBuzz + Skia's UAX#9 ICU bidi subset + `modules/skunicode` | **on** | on | on | on | no vcpkg, no Skia rebuild: compiled from the Skia source bundle. On in *every* profile so there is one text path, not two. Off = 1:1 codepoint→glyph (no ligatures, kerning or Arabic joining). See [third_party/skia/BUNDLE.md](../third_party/skia/BUNDLE.md) |
+| `BRO_WITH_WEBP` | libwebp decoder | **on** | **on** | on | on | compiled from the Skia source bundle alongside HarfBuzz, so `.webp` decodes the same on every platform. Off = `.webp` does not decode anywhere |
+| `BRO_WITH_NET` | GameNetworkingSockets | off | off | on | on | **needs vcpkg** |
+| `BRO_WITH_VIDEO` | libvpx/webm/Opus | off | off | on | on | **needs vcpkg** |
+| `BRO_WITH_AVIF` | dav1d (BSD-2) | off | off | on | on | **needs vcpkg** (or a system libdav1d). The AV1 decoder behind AVIF; broimage reads the HEIF container and converts YUV→RGBA itself. Off = AVIF still probes and reports its size, but does not decode (`bro.image.canDecode('image/avif') === ''`). HEIC never needs a flag: it uses the OS decoder (WIC / ImageIO), see [image-api.js](image-api.js) |
+| `BRO_WITH_STEAM` | none (runtime dlopen) | off | off | on | on | the stub template |
+| `BRO_WITH_TERMINAL` | bropty + brosearch + brothemes + bromux (persistent sessions, over brolink) | off | on | on | on | no vcpkg; the native `<terminal>` element ([terminal-api.js](terminal-api.js)). Off = `bro.terminal.available === false` and `<terminal>` is an inert box |
+| `BRO_WITH_REMOTE` | broremote + brovideo + brolink | off | on | on | on | `bro.remote` ([remote-api.js](remote-api.js)). Windows and Linux only (off by default on macOS). brovideo provides VA-API encode/decode on Linux when libva is present (with brodmabuf) and Media Foundation encode/decode on Windows, plus the Raw codec. Off = `bro.remote.available === false` |
 
 ### Desktop libraries
 
-Each desktop sibling has its own flag, on in `app` and `full`, off in
+Each desktop sibling has its own flag, on in `desktop`, `app` and `full`, off in
 `minimal`; off, its namespace is the `{ available: false }` stub. The
 privileged ones are further gated at run time ([apps.md](apps.md#permissions)).
 

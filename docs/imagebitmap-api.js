@@ -178,3 +178,19 @@ class ImageBitmapRenderingContext {
 
 }
 
+/**
+ * Asynchronously creates an ImageBitmap from an image source (Blob, HTMLImageElement,
+ * HTMLCanvasElement, HTMLVideoElement, ImageBitmap, ImageData, or `{width, height, data}`),
+ * optionally cropped to `(sx, sy, sw, sh)`.
+ *
+ * @param {Blob|HTMLImageElement|HTMLCanvasElement|HTMLVideoElement|ImageBitmap|ImageData|{width:number,height:number,data:ArrayBufferView}} source
+ * @param {number|{imageOrientation?:'from-image'|'none'}} [sx]
+ * @param {number} [sy]
+ * @param {number} [sw]
+ * @param {number} [sh]
+ * @param {{imageOrientation?:'from-image'|'none'}} [options]
+ * @returns {Promise<ImageBitmap>}
+ */
+function createImageBitmap(source, sx, sy, sw, sh, options) {}
+
+

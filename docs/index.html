@@ -291,7 +291,7 @@ footer { padding: 40px 0 56px; }
       <div class="cap">
         <h3><span class="ic">◆</span> Graphics &amp; 3D</h3>
         <p>A 3D scene graph with mesh rendering, skinned characters, height-field and clipmap terrain, tile grids, PBR lighting, procedural mesh generation and CSG, SIMD noise, an ecosystem sim, and transform gizmos for editing.</p>
-        <div class="chips"><span class="chip accent">bro.scene</span><span class="chip accent">bro.mesh</span><span class="chip accent">bro.noise</span><span class="chip accent">bro.flora</span><span class="chip accent">bro.gizmo</span></div>
+        <div class="chips"><span class="chip accent">bro.scene</span><span class="chip accent">bro.mesh</span><span class="chip accent">FastNoise</span><span class="chip accent">bro.flora</span><span class="chip accent">bro.gizmo</span></div>
       </div>
 
       <div class="cap">
@@ -308,7 +308,7 @@ footer { padding: 40px 0 56px; }
 
       <div class="cap feat">
         <h3><span class="ic">✦</span> On-device AI/ML inference</h3>
-        <p>GPU-accelerated model inference wired into JS: CUDA or Metal with a CPU fallback (<code style="font-family:var(--mono);color:var(--text)">bro.gpu</code> probes the live backend). A unified tensor type and op set underpins text generation, diffusion, speech, and vision, all running locally, no server.</p>
+        <p>GPU-accelerated model inference wired into JS: Vulkan, CUDA, or Metal with a CPU fallback (<code style="font-family:var(--mono);color:var(--text)">bro.gpu</code> probes the live backend). A unified tensor type and op set underpins text generation, diffusion, speech, and vision, all running locally, no server.</p>
         <div class="chips">
           <span class="chip accent">bro.tensor</span>
           <span class="chip accent">bro.lm: Qwen3</span>
@@ -356,7 +356,7 @@ footer { padding: 40px 0 56px; }
 <span class="ar">         ↑</span>
 <span class="ar">  </span><span class="l">svg → layout → dom</span>  <span class="ar">htmlayout adapters · draw traversal · tree</span>
 <span class="ar">         ↑</span>
-<span class="a">canvas</span>  <span class="a">webgl</span>  <span class="a">scene</span>  <span class="a">physics</span>  <span class="a">tensor</span>   <span class="ar">2D · WebGL2 · 3D · Jolt · ML</span>
+<span class="a">canvas</span>  <span class="a">webgl</span>  <span class="a">scene</span>  <span class="a">physics</span>   <span class="ar">2D · WebGL2 · 3D · Jolt</span>
 <span class="ar">         ↑</span>
 <span class="ar">     </span><span class="l">engine</span>  <span class="ar">orchestrates every subsystem · main loop</span></div>
 

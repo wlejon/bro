@@ -677,6 +677,9 @@ class PipelineState {
    * @returns {PipelineState}
    */
   clone() {}
+
+  /** Cancel the owning pipeline's active generation. */
+  cancel() {}
 }
 
 // ── Namespaces ───────────────────────────────────────────────────────────────

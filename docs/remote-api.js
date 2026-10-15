@@ -163,9 +163,12 @@
  *       latency: { frames, rtt, age, maxAge, queue, encode, wait, net, dwait,
  *                  decode, present, kbytes } }   (ms, the mean per frame)
  *   session.audio() -> null, or the audio lane: { connected, closed, playback,
- *       mic, micNode, rttMs, micLatencyMs, playbackLatencyMs, notes,
- *       hostStatus (protocol 1.5: what is wrong with the host's audio now,
- *       e.g. its PipeWire restarting; '' when nothing; also in notes), ... }
+ *       mic, micNode, micDevice, speakerDevice, echoCancel, rttMs,
+ *       micLatencyMs, playbackLatencyMs, hostMicBufferMs, playbackBufferMs,
+ *       playbackUnderruns, hostMicUnderruns, micPackets, playbackPackets,
+ *       micMuted, playbackMuted, notes, hostStatus (protocol 1.5: what is
+ *       wrong with the host's audio now, e.g. its PipeWire restarting; '' when
+ *       nothing; also in notes) }
  *   session.probe() -> bool    a latency probe (a press and release of
  *                              KEY_F13) against `serve-test --latency`; false
  *                              while one is open
@@ -173,8 +176,8 @@
  *       decoded: {...}, parts: { uplink, queue, encode, wait, net, dwait,
  *       decode, present, rtt } }   key press to the answering picture (ms)
  *   session.sendInput({ kind: 'key' | 'button' | 'motion' | 'relative' |
- *       'wheel', code, pressed, x, y, wheelX, wheelY })   (evdev codes,
- *       stream pixels; a <remoteview> sends the user's input itself)
+ *       'wheel', code, pressed, x, y })   (evdev codes, stream pixels, or
+ *       wheel ticks in x/y; a <remoteview> sends the user's input itself)
  *   session.setMicMuted(b), session.setPlaybackMuted(b)
  *   session.close()           ends it; the 'state' event says 'closed'
  *   session.on('state' | 'config', fn) / off, onstate / onconfig

@@ -8,7 +8,7 @@
  * - Chords and multi-chord key sequences (e.g. "Ctrl+K Ctrl+S", "Ctrl+Shift+P")
  * - VS Code-compatible `when` clause context expressions with boolean algebra, comparisons, and regex matching
  * - VS Code keybindings.json import and export
- * - Layout-aware chord parsing and event matching
+ * - Layout-aware chord parsing and event matching (`qwerty`, `azerty`, `dvorak`, `colemak`)
  *
  * Mounted automatically in Bronze when `BRO_WITH_KEYS` is enabled.
  */
@@ -36,7 +36,9 @@ const isValid = bro.keys.validateWhen('editorTextFocus && !editorReadonly && lin
 // ============================================================================
 
 const engine = new bro.keys.Engine({
-    chordTimeoutMs: 5000 // timeout for multi-chord sequences
+    layout: 'qwerty',      // 'qwerty' | 'azerty' | 'dvorak' | 'colemak'
+    chordTimeoutMs: 5000,  // timeout for multi-chord sequences (aliases: timeoutMs, timeout)
+    context: { editorFocus: true, editorReadonly: false }
 });
 
 // Add keybindings
@@ -51,7 +53,7 @@ engine.addBinding({
     command: 'workbench.action.openGlobalKeybindings'
 });
 
-// Import keybindings from JSON string
+// Import and export keybindings JSON
 engine.loadJson(`[
     {
         "key": "ctrl+f",
@@ -59,12 +61,20 @@ engine.loadJson(`[
         "when": "editorFocus"
     }
 ]`);
+const exportedJson = engine.exportJson(true); // pretty = true
 
-// Set context state for `when` expressions
+// Manage context state for `when` expressions
 engine.setContext('editorFocus', true);
-engine.setContext('editorReadonly', false);
+engine.setContext({ editorReadonly: false, lineCount: 42 });
+const hasFocus = engine.getContext('editorFocus');
+// engine.removeContext('lineCount');
+// engine.clearContext();
 
-// Feed DOM-style KeyboardEvent to the engine
+// Inspect bindings and conflict diagnostics
+const allBindings = engine.getBindings();
+const conflicts = engine.detectConflicts();
+
+// Feed DOM-style KeyboardEvent to the engine (alias: dispatch)
 const result = engine.feed({
     key: 'f',
     code: 'KeyF',

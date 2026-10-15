@@ -76,17 +76,148 @@ class ImageBitmapRenderingContext {
 
 }
 
-class TextMetrics {
+class Path2D {
 
   /**
-   * @readonly
-   * @type {number}
+   * @param {Path2D|string} [pathOrSvgD]
    */
+  constructor(pathOrSvgD) {}
+
+  closePath() {}
+
+  /**
+   * @param {number} x
+   * @param {number} y
+   */
+  moveTo(x, y) {}
+
+  /**
+   * @param {number} x
+   * @param {number} y
+   */
+  lineTo(x, y) {}
+
+  /**
+   * @param {number} cpx
+   * @param {number} cpy
+   * @param {number} x
+   * @param {number} y
+   */
+  quadraticCurveTo(cpx, cpy, x, y) {}
+
+  /**
+   * @param {number} cp1x
+   * @param {number} cp1y
+   * @param {number} cp2x
+   * @param {number} cp2y
+   * @param {number} x
+   * @param {number} y
+   */
+  bezierCurveTo(cp1x, cp1y, cp2x, cp2y, x, y) {}
+
+  /**
+   * @param {number} x
+   * @param {number} y
+   * @param {number} radius
+   * @param {number} startAngle
+   * @param {number} endAngle
+   * @param {boolean} [counterclockwise=false]
+   */
+  arc(x, y, radius, startAngle, endAngle, counterclockwise) {}
+
+  /**
+   * @param {number} x1
+   * @param {number} y1
+   * @param {number} x2
+   * @param {number} y2
+   * @param {number} radius
+   */
+  arcTo(x1, y1, x2, y2, radius) {}
+
+  /**
+   * @param {number} x
+   * @param {number} y
+   * @param {number} radiusX
+   * @param {number} radiusY
+   * @param {number} rotation
+   * @param {number} startAngle
+   * @param {number} endAngle
+   * @param {boolean} [counterclockwise=false]
+   */
+  ellipse(x, y, radiusX, radiusY, rotation, startAngle, endAngle, counterclockwise) {}
+
+  /**
+   * @param {number} x
+   * @param {number} y
+   * @param {number} w
+   * @param {number} h
+   */
+  rect(x, y, w, h) {}
+
+  /**
+   * @param {number} x
+   * @param {number} y
+   * @param {number} w
+   * @param {number} h
+   * @param {number|Array<number|{x:number,y:number}>} [radii]
+   */
+  roundRect(x, y, w, h, radii) {}
+
+  /**
+   * @param {Path2D} path
+   * @param {{a?:number,b?:number,c?:number,d?:number,e?:number,f?:number}} [transform]
+   */
+  addPath(path, transform) {}
+
+}
+
+class TextMetrics {
+
+  /** @readonly @type {number} */
   width;
+
+  /** @readonly @type {number} */
+  actualBoundingBoxLeft;
+
+  /** @readonly @type {number} */
+  actualBoundingBoxRight;
+
+  /** @readonly @type {number} */
+  actualBoundingBoxAscent;
+
+  /** @readonly @type {number} */
+  actualBoundingBoxDescent;
+
+  /** @readonly @type {number} */
+  fontBoundingBoxAscent;
+
+  /** @readonly @type {number} */
+  fontBoundingBoxDescent;
+
+  /** @readonly @type {number} */
+  emHeightAscent;
+
+  /** @readonly @type {number} */
+  emHeightDescent;
+
+  /** @readonly @type {number} */
+  hangingBaseline;
+
+  /** @readonly @type {number} */
+  alphabeticBaseline;
+
+  /** @readonly @type {number} */
+  ideographicBaseline;
 
 }
 
 class CanvasRenderingContext2D {
+
+  /**
+   * @readonly
+   * @type {HTMLCanvasElement}
+   */
+  canvas;
 
   /**
    * @readonly
@@ -263,13 +394,29 @@ class CanvasRenderingContext2D {
 
   closePath() {}
 
-  stroke() {}
+  /**
+   * @param {Path2D} [path]
+   */
+  stroke(path) {}
 
-  fill() {}
+  /**
+   * @param {Path2D|'nonzero'|'evenodd'} [pathOrRule]
+   * @param {'nonzero'|'evenodd'} [fillRule]
+   */
+  fill(pathOrRule, fillRule) {}
 
-  clip() {}
+  /**
+   * @param {Path2D|'nonzero'|'evenodd'} [pathOrRule]
+   * @param {'nonzero'|'evenodd'} [fillRule]
+   */
+  clip(pathOrRule, fillRule) {}
 
   resetTransform() {}
+
+  /**
+   * @returns {{a:number,b:number,c:number,d:number,e:number,f:number,m11:number,m12:number,m21:number,m22:number,m41:number,m42:number,is2D:boolean,isIdentity:boolean}}
+   */
+  getTransform() {}
 
   /**
    * @param {number} x
@@ -329,14 +476,15 @@ class CanvasRenderingContext2D {
   scale(x, y) {}
 
   /**
-   * @param {number} a
-   * @param {number} b
-   * @param {number} c
-   * @param {number} d
-   * @param {number} e
-   * @param {number} f
+   * Accepts either 6 numbers `(a, b, c, d, e, f)` or a single matrix object `{a, b, c, d, e, f}` (or `m11..m42`).
+   * @param {number|{a?:number,b?:number,c?:number,d?:number,e?:number,f?:number}} aOrMatrix
+   * @param {number} [b]
+   * @param {number} [c]
+   * @param {number} [d]
+   * @param {number} [e]
+   * @param {number} [f]
    */
-  setTransform(a, b, c, d, e, f) {}
+  setTransform(aOrMatrix, b, c, d, e, f) {}
 
   /**
    * @param {number} a
@@ -420,9 +568,26 @@ class CanvasRenderingContext2D {
   /**
    * @param {number} x
    * @param {number} y
+   * @param {number} w
+   * @param {number} h
+   * @param {number|Array<number|{x:number,y:number}>} [radii]
+   */
+  roundRect(x, y, w, h, radii) {}
+
+  /**
+   * Append a polyline from a flat `[x0, y0, x1, y1, ...]` coordinate array or TypedArray.
+   * @param {Array<number>|Float32Array|Float64Array} points
+   */
+  polyline(points) {}
+
+  /**
+   * @param {Path2D|number} pathOrX
+   * @param {number} xOrY
+   * @param {number|'nonzero'|'evenodd'} [yOrRule]
+   * @param {'nonzero'|'evenodd'} [fillRule]
    * @returns {boolean}
    */
-  isPointInPath(x, y) {}
+  isPointInPath(pathOrX, xOrY, yOrRule, fillRule) {}
 
   /**
    * @param {*} image

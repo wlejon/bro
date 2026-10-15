@@ -12,6 +12,11 @@
 //     const cp = require('child_process'); // or require('node:child_process')
 //     const net = require('net');         // raw TCP client + server
 //     const dgram = require('dgram');     // raw UDP sockets
+//     const events = require('events');   // EventEmitter
+//     const util = require('util');       // format, inspect, promisify, types, ...
+//     const url = require('url');         // URL, URLSearchParams, fileURLToPath, ...
+//     const buffer = require('buffer');   // Buffer
+//     const crypto = require('crypto');   // randomBytes, randomUUID, createHash, ...
 //
 //   These are not globals, in any kind of script: a page <script>, a
 //   headless classic script, a headless ES module script (one with a
@@ -467,8 +472,9 @@ fetch(url, options?);    // → Promise<Response>
 //   method, 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | ...   (default 'GET')
 //   headers, plain object { 'Content-Type': 'application/json', ... } or Headers
 //   body, string, ArrayBuffer, or TypedArray (Blob/FormData not yet supported)
-// Note: brokit's fetch does NOT yet implement signal/AbortSignal, keepalive, redirect,
-// credentials, mode, cache, referrer, or integrity. Pass only the keys above.
+//   signal, AbortSignal (aborts an in-flight request with AbortError)
+//   mode, credentials, cache, redirect, referrer
+// Note: brokit's fetch does NOT implement keepalive or integrity.
 //
 // Response: {
 //   ok, status, statusText, url,
@@ -481,7 +487,7 @@ fetch(url, options?);    // → Promise<Response>
 //   blob()       → Promise<Blob>,
 //   clone()      → Response,
 // }
-// file:// and data: URLs are also supported (no network).
+// file://, data:, and blob: object URLs are also supported (no network).
 
 // Example, POST JSON
 const res = await fetch('https://api.example.com/users', {
@@ -667,6 +673,7 @@ new Blob(parts?, options?);              // parts: array of (string | ArrayBuffe
 // Methods:
 //   text()             → Promise<string>            // UTF-8 decode
 //   arrayBuffer()      → Promise<ArrayBuffer>       // raw bytes copy
+//   bytes()            → Promise<Uint8Array>        // raw bytes as Uint8Array
 //   slice(start?, end?, contentType?) → Blob        // byte range; contentType overrides .type
 // Note: brokit Blob does NOT implement .stream(). Use arrayBuffer() and wrap manually
 // in a ReadableStream if you need a stream.
@@ -904,12 +911,20 @@ noise.genSingle2D(x, y, seed);                                  // → number
 noise.genSingle3D(x, y, z, seed);                               // → number
 noise.genUniformGrid2D(xOffset, yOffset, xSize, ySize,
                        frequency, seed);                        // → Float32Array(xSize*ySize)
+noise.genUniformGrid2DInto(dest,                                // pre-allocated Float32Array
+                           xOffset, yOffset,
+                           xSize, ySize,
+                           frequency, seed);                    // → undefined (writes in place)
 noise.genUniformGrid3D(xOff, yOff, zOff, xSize, ySize, zSize,
                        frequency, seed);                        // → Float32Array(xSize*ySize*zSize)
 noise.genUniformGrid3DInto(dest,                                // pre-allocated Float32Array
                            xOff, yOff, zOff,
                            xSize, ySize, zSize,
                            frequency, seed);                    // → undefined (writes in place)
+noise.genPositionArray2D(xPosArray, yPosArray,
+                         xOffset, yOffset, seed);               // → Float32Array(N)
+noise.genPositionArray3D(xPosArray, yPosArray, zPosArray,
+                         xOffset, yOffset, zOffset, seed);      // → Float32Array(N)
 noise.genTileable2D(xSize, ySize, frequency, seed);             // → Float32Array, seamless wrap
 
 // ── Configuration (metadata-driven) ──

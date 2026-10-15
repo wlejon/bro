@@ -4,89 +4,158 @@
  */
 
 /**
- * `bro.search` provides high-performance search primitives:
- * - Fzf-compatible fuzzy matching and incremental fuzzy indexing
- * - Ripgrep-style directory walking with .gitignore support
- * - Fast multi-threaded regex/literal text search (grep)
- * - Linear-time DFA/PikeVM regular expressions
+ * `bro.search` provides fzf-style fuzzy matching, persistent fuzzy indices,
+ * gitignore-aware parallel file walking, ripgrep-style content search, and
+ * linear-time regular expressions:
+ * - One-shot fuzzy matching and scoring (`fuzzy`, `fuzzyMatch`)
+ * - Persistent in-memory fuzzy index (`FuzzyIndex`)
+ * - Parallel gitignore-aware file discovery (`files`, `filesSync`, `GitignoreMatcher`)
+ * - Parallel regex/literal file and buffer search (`grep`, `grepSync`, `grepBuffer`)
+ * - Linear-time regex engine (`Regex`, `regex`) and cooperative cancellation (`CancellationToken`)
  *
  * Mounted automatically in Bronze when `BRO_WITH_SEARCH` is enabled.
  */
 
-// ============================================================================
-// 1. Fuzzy Matching
-// ============================================================================
-
-// One-shot fuzzy filter on array of candidate strings or objects
-const matches = bro.search.fuzzy('bld', [
-    'build/Release/bro',
-    'src/render/vulkan.cpp',
-    'build.ninja',
-    'docs/build-options.md'
-]);
-// returns array sorted by score descending:
-// [
-//   { item: 'build.ninja', score: 142, positions: [0, 1, 2] },
-//   ...
-// ]
-
-// Fuzzy match with key selector on objects:
-const objMatches = bro.search.fuzzy('term', [
-    { title: 'Terminal', path: '/apps/term' },
-    { title: 'Settings', path: '/apps/settings' }
-], { key: item => item.title });
-
-// Pre-indexed fuzzy search for repeated queries:
-const index = new bro.search.FuzzyIndex([
-    'file1.txt',
-    'file2.cpp',
-    'header.h'
-]);
-index.add('another_file.ts');
-const results = index.search('file', { maxResults: 10 });
+console.log('bro.search version:', bro.search.version);
 
 // ============================================================================
-// 2. Directory File Walking (`bro.search.files`)
+// 1. One-Shot Fuzzy Matching (`fuzzy`, `fuzzyMatch`)
 // ============================================================================
 
-// Asynchronous directory walk respecting .gitignore rules:
+const candidates = [
+    'src/core/engine.cpp',
+    'src/core/renderer.cpp',
+    'src/ui/window.cpp',
+    'docs/search-api.js'
+];
+
+// Rank and filter candidates (returns [{ item, score, index, positions? }]):
+const results = bro.search.fuzzy('srcrend', candidates, {
+    limit: 10,
+    withPositions: true,
+    case: 'smart',       // 'ignore' | 'respect' | 'smart' (or `caseSensitive: boolean`)
+    scheme: 'path',      // 'default' | 'path' | 'history'
+    algo: 'v2',          // 'v1' | 'v2'
+    extended: true,      // fzf extended-search syntax (`'exact`, `^prefix`, `suffix$`, `!neg`)
+    normalize: true,     // fold diacritics
+    sort: true
+});
+
+for (const r of results) {
+    console.log(`${r.item} (score: ${r.score}, matched indices: ${r.positions?.join(',')})`);
+}
+
+// Score a single candidate against a query (returns `{ score, positions } | null`):
+const singleMatch = bro.search.fuzzyMatch('win', 'src/ui/window.cpp', { scheme: 'path' });
+
+// ============================================================================
+// 2. Persistent Fuzzy Index (`bro.search.FuzzyIndex`)
+// ============================================================================
+
+const index = new bro.search.FuzzyIndex(candidates, {
+    scheme: 'path',
+    case: 'smart',
+    algo: 'v2'
+});
+
+index.add('src/ui/widget.cpp');
+index.add(['src/audio/mixer.cpp', 'src/audio/synth.cpp']);
+console.log('Indexed item count:', index.size, 'item[0]:', index.item(0));
+
+const hits = index.search('audio', { limit: 5, withPositions: true });
+for (const hit of hits) {
+    console.log(`Index hit: ${hit.item} (score: ${hit.score})`);
+}
+
+// Manage query cache or reset index:
+index.setCacheEnabled(true);
+index.clearCache();
+// index.clear();
+
+// ============================================================================
+// 3. Parallel File Walking (`files`, `filesSync`, `GitignoreMatcher`)
+// ============================================================================
+
+const token = new bro.search.CancellationToken();
+
+// Asynchronously walk a directory tree respecting .gitignore:
 const files = await bro.search.files('/home/j/projects/bro', {
-    ignore: true,         // respect .gitignore
-    hidden: false,        // skip hidden files
-    maxDepth: 5,
-    query: 'test'         // optional substring/pattern filter on path
-});
-
-// Synchronous directory walk:
-const syncFiles = bro.search.filesSync('/home/j/projects/bro/tests', {
-    maxDepth: 2
-});
-
-// Native Gitignore Matcher:
-const gitignore = new bro.search.GitignoreMatcher('/home/j/projects/bro');
-gitignore.addRules(['node_modules/', '*.o', 'build*/']);
-const isIgnored = gitignore.isIgnored('build-release/bro'); // true
-
-// ============================================================================
-// 3. Grep (`bro.search.grep`)
-// ============================================================================
-
-// Search file contents across a directory tree:
-const hits = await bro.search.grep('/home/j/projects/bro/src', 'installSiblingApis', {
-    caseSensitive: true,
-    maxResults: 50
-});
-// hits: [
-//   { path: '/home/j/projects/bro/src/bronze_host/host_sibling_apis.cpp', line: 40, column: 5, text: 'void installSiblingApis(...)' }
-// ]
-
-// Streaming search with callback:
-await bro.search.grep('/home/j/projects/bro/src', 'Engine', {
-    onMatch: (hit) => {
-        console.log(`${hit.path}:${hit.line} -> ${hit.text}`);
+    ignore: true,           // respect .gitignore / .ignore
+    requireGit: false,      // apply .gitignore even outside a git repo
+    hidden: false,          // skip dot-files/directories
+    followSymlinks: false,
+    yieldDirectories: false,
+    maxDepth: 8,
+    globs: ['*.cpp', '*.h', '!build/**'],
+    query: 'window',        // optional fuzzy filter applied during walk
+    maxResults: 200,
+    cancellationToken: token,
+    onFile: (path) => {
+        // Optional streaming callback invoked as files are discovered
     }
 });
+console.log(`Found ${files.length} matching files`);
 
-// Linear-time Regex:
-const regex = new bro.search.Regex('^bro_[a-z]+');
-assert(regex.test('bro_vulkan_test')); // true
+// Synchronous variant:
+const syncFiles = bro.search.filesSync('/home/j/projects/bro/docs', {
+    globs: ['*-api.js']
+});
+
+// Standalone .gitignore rule matcher (`GitignoreMatcher`, alias `Gitignore`):
+const matcher = new bro.search.GitignoreMatcher('/home/j/projects/bro', {
+    caseMode: 'auto' // 'auto' | 'sensitive' | 'insensitive'
+});
+matcher.addRules('*.log\n!important.log\nbuild/\n');
+console.log('ignored:', matcher.isIgnored('debug.log'));       // true
+console.log('match kind:', matcher.match('important.log'));    // 'whitelist' | 'ignore' | 'none'
+
+// ============================================================================
+// 4. Content Search (`grep`, `grepSync`, `grepBuffer`)
+// ============================================================================
+
+// Asynchronous parallel grep across a directory tree:
+const grepHits = await bro.search.grep('/home/j/projects/bro/src', 'registerModule', {
+    fixedStrings: true,     // literal string search (false = regex)
+    smartCase: true,
+    caseSensitive: false,
+    word: false,
+    wholeLine: false,
+    invert: false,
+    multiline: false,
+    maxFilesize: 10 * 1024 * 1024,
+    ignore: true,
+    hidden: false,
+    globs: ['*.cpp', '*.h'],
+    maxResults: 500
+});
+
+for (const hit of grepHits) {
+    // { path, line, column, text } (line and column are 1-based)
+    console.log(`${hit.path}:${hit.line}:${hit.column}: ${hit.text}`);
+}
+
+// Synchronous directory grep:
+const syncHits = bro.search.grepSync('/home/j/projects/bro/docs', 'bro\\.search', {
+    globs: ['search-api.js']
+});
+
+// In-memory buffer grep (accepts string, ArrayBuffer, or Uint8Array):
+const bufHits = bro.search.grepBuffer('first line\nsecond match line\nthird line', 'match', {
+    fixedStrings: true
+});
+// [{ line: 2, column: 8, text: 'second match line' }]
+
+// ============================================================================
+// 5. Linear-Time Regular Expressions (`Regex`, `regex`)
+// ============================================================================
+
+const re = new bro.search.Regex('\\b[A-Za-z_][A-Za-z0-9_]*\\b', {
+    caseInsensitive: false,
+    smartCase: false,
+    multiline: true,
+    dotMatchesNewline: false
+});
+
+console.log('Matches identifier:', re.test('my_var_1')); // or re.isMatch(...)
+const first = re.find('   hello_world = 42;');           // { start: 3, end: 14, match: 'hello_world' }
+const all = re.findAll('foo + bar_2');                   // [{ start, end, match }, ...]

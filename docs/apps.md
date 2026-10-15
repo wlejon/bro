@@ -71,7 +71,8 @@ bro [bro flags] <app-dir | app-id> [app arguments...]
 
 Everything after the app directory is the app's: `bro.app.argv`. bro takes
 out only its own flags (`--no-gpu`, `--no-splash`, `--splash`, `--drm`,
-`--new-instance`), and only before a `--`. The `--` itself is passed through,
+`--new-instance`, `--notification <args>`, `--notification-activated`), and
+only before a `--`. The `--` itself is passed through,
 so `bro ~/apps/term -- vim notes.txt` gives the app `["--", "vim",
 "notes.txt"]`. `bro.app.cwd` is the directory the app was started from.
 

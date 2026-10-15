@@ -6,14 +6,19 @@
  * =============================================================================
  *
  * Data-driven animation clips, blend spaces, state machines, and property tweening.
+ * Also mounted at `bro.animation.{Tween, AnimationPlayer}`.
  * @typedef {Object} AnimationKeyDef
  * @property {number} [time]
  * @property {*} [value]
  * @property {string} [easing]
+ * @property {string} [ease]
+ * @property {string} [interp]
+ * @property {string} [event]
  */
 
 /**
  * @typedef {Object} AnimationTrackDef
+ * @property {'property'|'event'} [type]
  * @property {string} [target]
  * @property {string} [property]
  * @property {Array<AnimationKeyDef>} [keys]
@@ -24,7 +29,7 @@
  * @typedef {Object} AnimationClipDef
  * @property {string} [name]
  * @property {number} [duration]
- * @property {boolean} [loop]
+ * @property {boolean|'none'|'loop'|'pingpong'} [loop]
  * @property {Array<AnimationTrackDef>} [tracks]
  */
 
@@ -32,21 +37,17 @@
  * @typedef {Object} TweenPropertyTargets
  * @property {Array<number>} [position]
  * @property {Array<number>} [rotation]
+ * @property {Array<number>} [quaternion]
  * @property {Array<number>} [scale]
- * @property {Array<number>} [color]
  * @property {number} [opacity]
- * @property {number} [intensity]
- * @property {number} [fov]
- * @property {number} [custom]
+ * @property {Array<number>} [color]
  */
 
 /**
  * @typedef {Object} TweenOptions
- * @property {number} [duration]
  * @property {string} [easing]
- * @property {number} [loop]
- * @property {boolean} [yoyo]
  * @property {number} [delay]
+ * @property {Function} [onUpdate]
  */
 
 /**
@@ -86,19 +87,41 @@
 class Tween {
 
   /**
+   * @readonly
+   * @type {boolean}
+   */
+  isRunning;
+
+  /**
+   * @readonly
+   * @type {boolean}
+   */
+  isPaused;
+
+  /**
+   * @readonly
+   * @type {boolean}
+   */
+  isFinished;
+
+  /**
+   * @type {Function|null}
+   */
+  onFinished;
+
+  /**
    * @param {Object} target
    * @param {TweenPropertyTargets} props
    * @param {number} duration
-   * @param {string} [easing]
+   * @param {TweenOptions} [opts]
    * @returns {Tween}
    */
-  to(target, props, duration, easing) {}
+  to(target, props, duration, opts) {}
 
   /**
-   * @param {Array<Tween>} tweens
    * @returns {Tween}
    */
-  parallel(tweens) {}
+  parallel() {}
 
   /**
    * @param {Function} callback
@@ -139,6 +162,39 @@ class Tween {
 class AnimationPlayer {
 
   /**
+   * @readonly
+   * @type {boolean}
+   */
+  playing;
+
+  /**
+   * @readonly
+   * @type {string}
+   */
+  currentClip;
+
+  /**
+   * @readonly
+   * @type {number}
+   */
+  currentTime;
+
+  /**
+   * @type {number}
+   */
+  speed;
+
+  /**
+   * @type {Function|null}
+   */
+  onFinished;
+
+  /**
+   * @type {Function|null}
+   */
+  onEvent;
+
+  /**
    * @param {string} name
    * @param {*} clip
    */
@@ -146,9 +202,9 @@ class AnimationPlayer {
 
   /**
    * @param {string} name
-   * @param {AnimationClipDef} def
+   * @returns {{duration: number, loop: string, trackCount: number}|null}
    */
-  clipDef(name, def) {}
+  clipDef(name) {}
 
   /**
    * @param {string} clipName
@@ -170,4 +226,5 @@ class AnimationPlayer {
   destroy() {}
 
 }
+
 

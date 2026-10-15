@@ -22,7 +22,7 @@
  *
  * @example
  *   // Extract waveform peaks
- *   const peaks = bro.media.peaks('audio.wav', { buckets: 1024 });
+ *   const peaks = bro.media.peaks('audio.wav', { buckets: 2048 });
  *   console.log('Sample rate:', peaks.sampleRate, 'Duration:', peaks.duration);
  */
 
@@ -192,8 +192,8 @@ bro.media.available;
  *  Extract waveform min/max/rms peaks from audio/video file.
  *
  * @param {string} path
- * @param {Object} [options]
- * @returns {Object|null}
+ * @param {{buckets?: number, from?: number, to?: number}} [options] - `buckets` defaults to 2048; `from`/`to` in seconds (0 = start/end)
+ * @returns {{sampleRate: number, channels: number, duration: number, from: number, to: number, buckets: number, min: Float32Array, max: Float32Array, rms: Float32Array}|null}
  */
 bro.media.peaks = function(path, options) {};
 
@@ -201,8 +201,25 @@ bro.media.peaks = function(path, options) {};
  *  Extract thumbnail strip image from video file.
  *
  * @param {string} path
- * @param {Object} [options]
- * @returns {Object|null}
+ * @param {{count?: number, height?: number, from?: number, to?: number}} [options] - `count` defaults to 24, `height` to 72; `from`/`to` in seconds
+ * @returns {{width: number, height: number, count: number, rotation: number, times: Float64Array|Array<number>, data: Uint8ClampedArray}|null}
  */
 bro.media.thumbnails = function(path, options) {};
+
+/**
+ *  Read audio container metadata tags and duration without decoding audio samples.
+ *
+ * @param {string} path
+ * @returns {{title: string, artist: string, album: string, albumArtist: string, track: number, trackTotal: number, disc: number, discTotal: number, year: number, genre: string, duration: number, sampleRate: number, channels: number, bitrate: number, codec: string, container: string, picture: {mime: string, bytes: Uint8Array}|null}|null}
+ */
+bro.media.tags = function(path) {};
+
+/**
+ *  Check whether this build/platform can decode an audio MIME type or file extension.
+ *
+ * @param {string} type
+ * @returns {''|'maybe'|'probably'}
+ */
+bro.media.canDecode = function(type) {};
+
 

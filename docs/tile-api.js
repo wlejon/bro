@@ -335,7 +335,7 @@ class TileWorld {
 
   /**
    * Build a fresh bro.ai.game nav grid sized to this world (bounds = the grid's
-   * world extent, cellSize = the tile cellSize, so cells map 1:1) with every
+   * world extent, `cellSize: 1.0` in grid cell coordinates so cells map 1:1) with every
    * non-walkable cell stamped as a blocked obstacle. Returns the AINavGrid, so
    * steering agents and findPath() route over the tiles immediately:
    *
@@ -374,8 +374,9 @@ class TileWorld {
 
   /**
    * A* shortest path from (x0,y0) to (x1,y1), endpoints inclusive. Returns an
-   * array of {x, y} cells, or [] when no path exists / the goal is impassable.
-   * The start may be impassable (you can path OUT of a blocked cell).
+   * array of {x, y} cells, or [] when no path exists / the goal is impassable,
+   * with `.reachable` (boolean) and `.totalCost` (number) attached to the
+   * returned array. The start may be impassable (you can path OUT of a blocked cell).
    *
    *     const path = world.findPath(ux, uy, tx, ty,
    *         { blockMask: WATER, costs: [0, 1, 2, 4] });  // forest 2, hills 4
@@ -612,11 +613,16 @@ class TileWorld {
   /** Destroy all nodes and release the grid. */
   destroy() {}
 
-  // --- Stats (read-only) -----------------------------------------------------
+  // --- Stats & scene nodes (read-only) ---------------------------------------
 
+  /** Root SceneNode parenting all chunk and object nodes. @type {SceneNode} */
+  get node() {}
+  /** Array of chunk MeshNodes. @type {Array<SceneNode>} */
+  get chunks() {}
   get width() {}
   get height() {}
   get chunkCount() {}
   get vertexCount() {}
   get triangleCount() {}
 }
+

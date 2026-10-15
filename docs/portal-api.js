@@ -4,32 +4,38 @@
  */
 
 /**
- * `bro.portal` provides an implementation of XDG Desktop Portal backends for desktop shells:
- * - File chooser portal handler (`onFileChooser`, `offFileChooser`)
- * - Screenshot & Pick Color portal handler (`onScreenshot`, `offScreenshot`, `onPickColor`, `offPickColor`)
+ * `bro.portal` provides an implementation of XDG Desktop Portal backends
+ * (`org.freedesktop.impl.portal.*`) for desktop shells:
+ * - Backend service lifecycle & interfaces (`start`, `stop`, `isRunning`, `interfaces`, `reason`)
+ * - File chooser & OpenURI portal handlers (`onFileChooser`, `offFileChooser`, `onOpenUri`, `offOpenUri`)
+ * - Screenshot & Pick Color portal handlers (`onScreenshot`, `offScreenshot`, `onPickColor`, `offPickColor`)
  * - Screencast & PipeWire screen/window sharing portal handler (`onScreencast`, `offScreencast`)
- * - Open URI portal handler (`onOpenUri`, `offOpenUri`)
- * - Backend service lifecycle (`start`, `stop`, `isRunning`)
+ * - Settings portal (`getSetting`, `setSetting`, `readAllSettings`, `getColorScheme`, `getAccentColor`, `getContrast`, `getReducedMotion`, `onSettingChanged`, `offSettingChanged`)
+ * - Inhibit & Session state (`onInhibit`, `offInhibit`, `getActiveInhibitions`, `isInhibited`, `onQueryEndResponse`, `queryEndResponse`, `onStateChanged`, `notifyStateChanged`)
+ * - Global Shortcuts & Remote Desktop (`onBindShortcuts`, `onListShortcuts`, `onConfigureShortcuts`, `triggerShortcut`, `releaseShortcut`, `onRemoteDesktop`, `onRemoteDesktopStart`, `onRemoteDesktopInput`)
  *
  * Privileged API: Mounted automatically in Bronze when `BRO_WITH_PORTAL` is enabled and
  * the app is verified as a trusted shell app declaring `"shell": true` or
- * `"privileged": ["portal", ...]` in its `bro.json`.
+ * `"permissions": ["portal", ...]` in its `bro.json`.
  */
 
 // ============================================================================
-// 1. Service Lifecycle
+// 1. Service Lifecycle & Supported Interfaces
 // ============================================================================
 
 if (bro.portal.available) {
     console.log(`Portal service available, running: ${bro.portal.isRunning()}`);
+    console.log('Supported D-Bus portal interfaces:', bro.portal.interfaces);
 
     // Start or stop portal backend server on D-Bus
     // bro.portal.start();
     // bro.portal.stop();
+} else {
+    console.log('Portal unavailable:', bro.portal.reason);
 }
 
 // ============================================================================
-// 2. File Chooser Handler
+// 2. File Chooser & Open URI Handlers
 // ============================================================================
 
 if (bro.portal.available) {
@@ -44,18 +50,21 @@ if (bro.portal.available) {
         };
     });
 
-    // To unregister the handler later:
-    // handle.dispose();
+    bro.portal.onOpenUri(async (request) => {
+        console.log(`Open URI requested: uri=${request.uri}`);
+        return { cancelled: false };
+    });
+
+    // Unregister handlers with handle.dispose() or bro.portal.offFileChooser() / offOpenUri()
 }
 
 // ============================================================================
-// 3. Screenshot & Color Picker Handlers
+// 3. Screenshot, Color Picker & Screencast Handlers
 // ============================================================================
 
 if (bro.portal.available) {
     bro.portal.onScreenshot(async (request) => {
         console.log(`Screenshot requested, interactive: ${request.interactive}`);
-        // Return screenshot image URI or cancelled status
         return {
             uri: 'file:///tmp/screenshot-001.png',
             cancelled: false,
@@ -63,39 +72,70 @@ if (bro.portal.available) {
     });
 
     bro.portal.onPickColor(async (request) => {
-        console.log('Color picker requested');
         return {
-            color: [0.2, 0.4, 0.8], // RGB float array
+            color: [0.2, 0.4, 0.8], // RGB float array [0..1]
             cancelled: false,
         };
     });
-}
 
-// ============================================================================
-// 4. Screencast Handler
-// ============================================================================
-
-if (bro.portal.available) {
     bro.portal.onScreencast(async (request) => {
         console.log(`Screencast requested, multiple: ${request.multiple}`);
         return {
-            streams: [
-                { node: 42, source_type: 1 }
-            ],
+            streams: [{ node: 42, source_type: 1 }],
             cancelled: false,
         };
     });
 }
 
 // ============================================================================
-// 5. Open URI Handler
+// 4. Settings Portal (`org.freedesktop.impl.portal.Settings`)
 // ============================================================================
 
 if (bro.portal.available) {
-    bro.portal.onOpenUri(async (request) => {
-        console.log(`Open URI requested: uri=${request.uri}`);
-        return {
-            cancelled: false,
-        };
+    // Publish desktop appearance settings to sandboxed/portal clients:
+    bro.portal.setSetting('org.freedesktop.appearance', 'color-scheme', 1); // 0=default, 1=dark, 2=light
+    bro.portal.setSetting('org.freedesktop.appearance', 'accent-color', [0.21, 0.52, 0.89]);
+
+    const scheme = bro.portal.getColorScheme();     // 'default' | 'prefer-dark' | 'prefer-light'
+    const accent = bro.portal.getAccentColor();     // { r, g, b }
+    const contrast = bro.portal.getContrast();      // 'normal' | 'high'
+    const reduced = bro.portal.getReducedMotion();  // 'no-preference' | 'reduce'
+    const allSettings = bro.portal.readAllSettings(['org.freedesktop.appearance']);
+
+    bro.portal.onSettingChanged((ev) => {
+        console.log(`Setting changed: ${ev.namespace}.${ev.key} =`, ev.value);
+    });
+}
+
+// ============================================================================
+// 5. Inhibit, Global Shortcuts & Remote Desktop Portals
+// ============================================================================
+
+if (bro.portal.available) {
+    // Track client inhibit requests (flags: 1=logout, 2=user-switch, 4=suspend, 8=idle):
+    bro.portal.onInhibit((req) => {
+        console.log(`App ${req.appId} inhibited flags=${req.flags}: ${req.reason}`);
+        return true;
+    });
+    console.log('Active inhibitions:', bro.portal.getActiveInhibitions());
+    console.log('Is idle inhibited:', bro.portal.isInhibited('idle'));
+
+    // Broadcast session screensaver / state changes ('running' | 'query-end' | 'ending'):
+    // bro.portal.notifyStateChanged(false, 'running');
+
+    // Global shortcuts portal:
+    bro.portal.onBindShortcuts(async (req) => {
+        // req.shortcuts: [{ id, description, preferredTrigger }]
+        return { shortcuts: req.shortcuts, cancelled: false };
+    });
+    // Trigger or release a bound shortcut id for an app:
+    // bro.portal.triggerShortcut('org.example.App', 'toggle-recording');
+    // bro.portal.releaseShortcut('org.example.App', 'toggle-recording');
+
+    // Remote desktop portal:
+    bro.portal.onRemoteDesktop(async (req) => ({ devices: req.devices || 7, cancelled: false }));
+    bro.portal.onRemoteDesktopStart(async (req) => ({ streams: [], devices: 7, cancelled: false }));
+    bro.portal.onRemoteDesktopInput((ev) => {
+        console.log(`Remote desktop input (${ev.type}) on session ${ev.sessionHandle}`);
     });
 }

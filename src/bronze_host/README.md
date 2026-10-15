@@ -85,7 +85,8 @@ A `Worker` is its own thread and realm with brokit, `ImageBitmap`,
 `FastNoise`, and a cut-down `bro` (`installWorkerBroRoot`): `bro.net` +
 `bro.net.sync`, `bro.server`, `bro.motion`, `bro.math`, `bro.gpu`,
 `bro.media`, and the sibling compute APIs (ear, `SynthGraph`, gameagent, mesh,
-rigging, tensor, lm, soundml compute, diffusion, vision, flora). No
+rigging, tensor, lm, soundml compute, diffusion, vision, flora, image, themes,
+keys, search). No
 `bro.time`, `bro.window`, `bro.settings`, scene, physics, `AudioContext` or
 `bro.mic`, and `document` is a `ReferenceError`.
 

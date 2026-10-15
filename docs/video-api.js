@@ -35,14 +35,6 @@
 // there). An encoder is used on the thread that made it. Output paths are taken as-is
 // (resolved against the engine's cwd), matching how `screenshot()` and
 // `screenshotCanvas()` treat paths, no implicit basePath prepending.
-//
-// Both encoders exist for compiled apps too, with the same names and the same
-// methods (src/bronze_host/host_video.cpp). Two differences worth knowing if
-// you write one: `finish()` is mandatory there rather than merely advisable —
-// bronze has no teardown sweep, so a dropped encoder may never flush — and
-// `addCanvasFrame` is close to unusable, because that host's canvas has no 2D
-// context and a WebGL one is refused. Compiled apps record with
-// `addViewportFrame`.
 // =============================================================================
 
 

@@ -320,6 +320,8 @@
  * @typedef {Object} PhysicsSoftBodyTopology
  * @property {number} [gridX]
  * @property {number} [gridZ]
+ * @property {Float32Array} [positions]
+ * @property {Uint32Array} [indices]
  */
 
 /**
@@ -681,9 +683,10 @@ class PhysicsRagdoll {
   deactivate() {}
 
   /**
-   * @returns {boolean}
+   * @readonly
+   * @type {boolean}
    */
-  isActive() {}
+  isActive;
 
   /**
    *  Body tag of part `index`, or -1.
@@ -995,121 +998,8 @@ Physics.addEventListener = function() {};
 Physics.removeEventListener = function() {};
 
 /**
- * @param {number} ox
- * @param {number} oy
- * @param {number} oz
- * @param {number} dx
- * @param {number} dy
- * @param {number} dz
- * @param {number} maxDist
- * @param {number} [mask=0]
- * @returns {PhysicsRayHit}
- */
-Physics.raycastClosestRaw = function(ox, oy, oz, dx, dy, dz, maxDist, mask) {};
-
-/**
- * @param {number} ox
- * @param {number} oy
- * @param {number} oz
- * @param {number} dx
- * @param {number} dy
- * @param {number} dz
- * @param {number} maxDist
- * @param {number} [mask=0]
- * @returns {Array<PhysicsRayHit>}
- */
-Physics.raycastRaw = function(ox, oy, oz, dx, dy, dz, maxDist, mask) {};
-
-/**
- * @param {PhysicsShapeCastOptions} config
- * @returns {Array<PhysicsShapeCastHit>}
- */
-Physics.castShapeRaw = function(config) {};
-
-/**
- * @param {PhysicsShapeCastOptions} config
- * @returns {PhysicsShapeCastHit}
- */
-Physics.castShapeClosestRaw = function(config) {};
-
-/**
- * @param {PhysicsOverlapShapeOptions} config
- * @returns {Array<number>}
- */
-Physics.overlapShapeRaw = function(config) {};
-
-/**
- * @param {number} x
- * @param {number} y
- * @param {number} z
- * @param {number} radius
- * @returns {Array<number>}
- */
-Physics.overlapSphereRaw = function(x, y, z, radius) {};
-
-/**
- * @param {number} cx
- * @param {number} cy
- * @param {number} cz
- * @param {number} hx
- * @param {number} hy
- * @param {number} hz
- * @returns {Array<number>}
- */
-Physics.overlapBoxRaw = function(cx, cy, cz, hx, hy, hz) {};
-
-/**
- * @param {number} x
- * @param {number} y
- * @param {number} z
- * @param {number} [mask=0]
- * @returns {Array<number>}
- */
-Physics.overlapPointRaw = function(x, y, z, mask) {};
-
-/**
- * @param {number} ox
- * @param {number} oy
- * @param {number} oz
- * @param {number} dx
- * @param {number} dy
- * @param {number} dz
- * @param {number} maxDist
- * @param {PhysicsQueryFilter} [filter]
- * @returns {PhysicsRayHit}
- */
-Physics.raycastClosestJsonRaw = function(ox, oy, oz, dx, dy, dz, maxDist, filter) {};
-
-/**
- * @param {number} ox
- * @param {number} oy
- * @param {number} oz
- * @param {number} dx
- * @param {number} dy
- * @param {number} dz
- * @param {number} maxDist
- * @param {PhysicsQueryFilter} [filter]
- * @returns {Array<PhysicsRayHit>}
- */
-Physics.raycastJsonRaw = function(ox, oy, oz, dx, dy, dz, maxDist, filter) {};
-
-/**
- * @param {PhysicsOverlapShapeOptions} config
- * @returns {Array<PhysicsOverlapHit>}
- */
-Physics.overlapShapeJsonRaw = function(config) {};
-
-/**
- * @param {number} x
- * @param {number} y
- * @param {number} z
- * @param {PhysicsQueryFilter} [filter]
- * @returns {Array<PhysicsOverlapHit>}
- */
-Physics.overlapPointJsonRaw = function(x, y, z, filter) {};
-
-/**
- * @returns {Array<PhysicsContact>}
+ * Returns active contact points; the returned array also carries `.overflow` (`boolean`).
+ * @returns {Array<PhysicsContact> & {overflow?: boolean}}
  */
 Physics.getContacts = function() {};
 

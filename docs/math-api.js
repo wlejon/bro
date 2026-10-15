@@ -96,6 +96,17 @@ class SpatialHash3D {
   queryRadius(x, y, z, radius) {}
 
   /**
+   * Alias of `queryRadius(x, y, z, radius)`.
+   *
+   * @param {number} x
+   * @param {number} y
+   * @param {number} z
+   * @param {number} radius
+   * @returns {Array<number>}
+   */
+  radiusQuery(x, y, z, radius) {}
+
+  /**
    * Find all ids whose point lies in, or whose sphere touches, the box.
    *
    * @param {number} minX
@@ -182,7 +193,7 @@ class Rng {
    * @param {number} hi
    * @returns {number}
    */
-  _int(lo, hi) {}
+  int(lo, hi) {}
 
   /**
    * 32-bit unsigned random integer.

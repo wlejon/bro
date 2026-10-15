@@ -135,6 +135,7 @@ gpu.GpuTensor;
 
 t.rows;          // 3
 t.cols;          // 4
+t.shape;         // [3, 4] (getter/setter: `[rows, cols]`; setting `t.shape = [r, c]` reshapes in place when `r * c === t.size`)
 t.size;          // 12   (rows * cols)
 t.bytes;         // 48   (size * sizeof(dtype))
 t.dtype();       // "fp32" | "fp16" | "bf16" | "int8" | "int32" | "f64"

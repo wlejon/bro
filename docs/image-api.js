@@ -126,7 +126,7 @@
  * Optional width/height constructor arguments are accepted and ignored: they
  * set a layout box, and a detached image has none.
  */
-class HTMLImageElement {
+class HTMLImageElement extends HTMLElement {
 
   constructor() {}
 
