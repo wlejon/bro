@@ -124,5 +124,9 @@ void registerControlRecordCommands(ControlServer& server);
 /// shot, the handle forms of the input commands. Registered after the input
 /// commands, which it wraps.
 void registerAgentViewCommands(ControlServer& server);
+/// Whether this user's session has a display serving agent control (the
+/// "display" endpoint exists): an app then serves its own, for the display
+/// to find by process id, however it was started.
+bool controlDisplayServes();
 
 }  // namespace bro::engine

@@ -30,7 +30,7 @@ public:
         int window = 0;       // the handle prefix: <window>.<n>
         uint32_t root = 0;    // an element handle: only its subtree, unclipped (paging)
         int from = 0;         // items of a list to skip
-        int count = 40;       // items of a list to show
+        int count = 20;       // items of a list to show
         int maxLines = 400;   // the whole view
     };
     /// The client area: size, and the page's scroll (element boxes are in

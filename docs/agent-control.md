@@ -45,7 +45,9 @@ Local IPC only, never a network listener; only the same user can connect
 - The apps of a session whose display server runs its own compositor (helm
   under `bro --drm`) serve `<app>-<pid>` without asking: the display sets
   `BRO_CONTROL_SESSION=1` for the processes it starts, and finds an app's
-  endpoint by its process id ([agent-view.md](agent-view.md)).
+  endpoint by its process id ([agent-view.md](agent-view.md)). A windowed
+  app started some other way (a systemd unit) serves too when the
+  `display` endpoint is up as it starts.
 - `BRO_CONTROL=0` turns it off everywhere.
 
 Serving control costs nothing per frame. A windowed bro reads back none of

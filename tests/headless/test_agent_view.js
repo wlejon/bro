@@ -87,15 +87,15 @@ assert(v1.indexOf('User name"\n') < 0 || !/ text "User name"/.test(v1), 'a label
 ['Hidden by display', 'Hidden by visibility', 'Hidden by opacity', 'Hidden from assistive tech'].forEach(function(n) {
     assert(v1.indexOf(n) < 0, 'not shown: ' + n);
 });
-assert(/ list \[40 of 60\]$/m.test(v1), 'a long list shows 40 of its 60 items: ' + lineOf(v1, 'Item 1'));
-assert(v1.indexOf('"Item 40"') >= 0 && v1.indexOf('"Item 41"') < 0, 'the first 40 items');
+assert(/ list \[20 of 60\]$/m.test(v1), 'a long list shows 20 of its 60 items: ' + lineOf(v1, 'Item 1'));
+assert(v1.indexOf('"Item 20"') >= 0 && v1.indexOf('"Item 21"') < 0, 'the first 20 items');
 assert(v1.indexOf('"One"') >= 0 && v1.indexOf('"Five"') < 0, 'a scroll container shows what is scrolled into view');
 assert(/ button "Open tile"$/m.test(v1), 'a pointer-cursor div with a click listener is a button');
 assert(v1.split('\n').length < 80, 'the view is compact: ' + v1.split('\n').length + ' lines');
 
 // ── paging a list ───────────────────────────────────────────────────────────
 
-var listHandle = /^ *(\d+\.\d+) list \[40 of 60\]$/m.exec(v1)[1];
+var listHandle = /^ *(\d+\.\d+) list \[20 of 60\]$/m.exec(v1)[1];
 var page = ok('view', listHandle, '--from=40');
 assert(page.indexOf('"Item 41"') >= 0 && page.indexOf('"Item 60"') >= 0 && page.indexOf('"Item 40"') < 0,
        'view N.M --from=40 pages the list:\n' + page);

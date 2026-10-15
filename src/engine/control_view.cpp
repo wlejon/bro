@@ -299,7 +299,7 @@ struct Scope {
     std::set<int> windows;   // 0: this document
     int pageWindow = -1;
     uint32_t pageRoot = 0;
-    int from = 0, count = 40;
+    int from = 0, count = 20;
 };
 
 // This document's elements as `window`'s, from the cache while nothing changed.
@@ -386,7 +386,7 @@ void collectView(ControlServer& s, const Scope& sc, ViewDone done) {
     for (const auto& w : wins) snap->push_back(windowLine(w));
     if (sc.windows.count(0)) {
         const bool paged = sc.pageWindow == 0;
-        if (!localElements(s, 0, paged ? sc.pageRoot : 0, paged ? sc.from : 0, paged ? sc.count : 40, *snap))
+        if (!localElements(s, 0, paged ? sc.pageRoot : 0, paged ? sc.from : 0, paged ? sc.count : 20, *snap))
             return done({}, {}, "no " + std::to_string(sc.pageWindow) + "." + std::to_string(sc.pageRoot) +
                                     " (gone, or never shown)");
     }
@@ -483,11 +483,11 @@ bool scopeFor(ControlServer& s, const ControlCallPtr& call, Scope& sc, std::stri
         sc.pageWindow = view::windowOf(t);
         sc.pageRoot = view::elementOf(t);
         sc.from = std::max(0, static_cast<int>(call->number("from", 0)));
-        sc.count = std::clamp(static_cast<int>(call->number("count", 40)), 1, 400);
+        sc.count = std::clamp(static_cast<int>(call->number("count", 20)), 1, 400);
         sc.key = t + ":" + std::to_string(sc.from) + ":" + std::to_string(sc.count);
         return true;
     }
-    why = "view [wN | N.M] [--since=rN] [--from=K] [--count=40] [--rects]: '" + t + "' is not a handle";
+    why = "view [wN | N.M] [--since=rN] [--from=K] [--count=20] [--rects]: '" + t + "' is not a handle";
     return false;
 }
 
@@ -912,6 +912,12 @@ void cmdClipboard(ControlServer& s, const ControlCallPtr& call) {
 
 }  // namespace
 
+bool controlDisplayServes() {
+    for (const auto& n : brolink::list_local(control::kApp))
+        if (n == "display") return true;
+    return false;
+}
+
 void registerAgentViewCommands(ControlServer& s) {
     ViewState& st = stateOf(s);
     // The input commands' own forms stay; a handle (or --diff) takes the agent path.
@@ -950,7 +956,7 @@ void registerAgentViewCommands(ControlServer& s) {
          [&s](const ControlCallPtr& c) { cmdKeyHandle(s, c); });
 
     s.registerCommand("view",
-                      "[wN | N.M] [--since=rN] [--from=K] [--count=40] [--rects]  the agent view: windows, and the "
+                      "[wN | N.M] [--since=rN] [--from=K] [--count=20] [--rects]  the agent view: windows, and the "
                       "focused window's elements with handles; --since: the diff since a revision; N.M: one list, "
                       "paged",
                       [&s](const ControlCallPtr& c) { cmdView(s, c); });
