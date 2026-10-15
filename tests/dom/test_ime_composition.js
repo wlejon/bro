@@ -261,8 +261,8 @@ function freshInput(id) {
     flush();
     imeCommit('X');
     // The stale composition was dropped with the history; the commit falls
-    // through to a plain insert at the caret (still at byte 3 from the
-    // preedit — a script value write does not move the control caret).
-    assert(el.value === 'scrXipt',
+    // through to a plain insert at the caret, which the value write moved to
+    // the end of the new text (HTML's value setter, as Chromium does).
+    assert(el.value === 'scriptX',
            'script value kept, commit degraded to plain insert, got: ' + JSON.stringify(el.value));
 }

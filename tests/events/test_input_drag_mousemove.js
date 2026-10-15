@@ -30,10 +30,11 @@ document.addEventListener('mousemove', function (e) {
 let value = 0;
 let dragging = false;
 let lastX = 0;
-input.addEventListener('mousedown', function (e) {
+function onScrubDown(e) {
     dragging = true;
     lastX = e.clientX;
-});
+}
+input.addEventListener('mousedown', onScrubDown);
 document.addEventListener('mousemove', function (e) {
     if (!dragging) return;
     value += (e.clientX - lastX) / 10;
@@ -64,7 +65,11 @@ mouseMove(x0 + 70, y0);
 assert(moves.length === afterUp + 1, 'moves continue after mouseup');
 
 // The other half: dragging inside the text still selects text. Give the field
-// real content, press at the left edge and drag right.
+// real content, press at the left edge and drag right. The scrub comes off
+// first: left on, it rewrites the value at every move, and a script's value
+// write puts the caret at the end of the new text (HTML's value setter), which
+// collapses the very selection this half is about.
+input.removeEventListener('mousedown', onScrubDown);
 input.value = 'abcdefghij';
 flush();
 click(x0, y0);                       // focus it

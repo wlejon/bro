@@ -129,17 +129,31 @@ void setFormValue(dom::Element* el, std::string_view value) {
     // <textarea>: write to the "value" attribute, which is the storage shared
     // with the typing pipeline (handleKeyDown / handleTextInput). textContent
     // stays as the initial HTML content (defaultValue).
+    // HTML's value setter: when the write changes the value, the cursor moves
+    // to the end of the new text with nothing selected. Left where it was, the
+    // caret sits at an offset into text it never belonged to, and the next
+    // keystroke lands mid-word.
+    const bool changed = formValue(el) != s;
+    const int end = static_cast<int>(s.size());
     if (tagIs(el, "textarea", "TEXTAREA")) {
         el->setAttribute("value", s);
         // A programmatic value write invalidates the control's undo history
         // (browser behavior — Ctrl+Z can't cross a script's rewrite). It also
         // re-arms `change`: the value moved, but nobody *changed* it in the
         // sense that event is about, so the next click away must be silent.
-        if (auto* ta = el->textareaControl()) { ta->clearHistory(); ta->armChange(el); }
+        if (auto* ta = el->textareaControl()) {
+            ta->clearHistory();
+            ta->armChange(el);
+            if (changed) ta->setCursorPos(end);
+        }
         return;
     }
     el->setAttribute("value", s);
-    if (auto* inp = el->inputControl()) { inp->clearHistory(); inp->armChange(el); }
+    if (auto* inp = el->inputControl()) {
+        inp->clearHistory();
+        inp->armChange(el);
+        if (changed) inp->setCursorPos(end);
+    }
 }
 
 namespace {
