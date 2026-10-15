@@ -272,8 +272,9 @@ var r4 = rev(ok('view'));
 rebuildRows(['09:15']);
 advanceTime(32);
 var renamed = ok('view', '--since=' + r4);
-assert(new RegExp('^~ ' + del2.replace('.', '\\.') + ' "Delete 09:15"$', 'm').test(renamed),
-       'a rebuilt row that changed is ~, by the same handle: ' + renamed);
+assert(/^@view r\d+ \+0 -0 ~3$/m.test(renamed) && /^~ \d+\.\d+-\d+ "09:15" "Enable 09:15" "Delete 09:15"$/m.test(renamed),
+       'a rebuilt row that changed is ~ (its three renamed lines in a row as one): ' + renamed);
+assert(handleOf(ok('view'), 'Delete 09:15') === del2, 'by the same handles');
 
 // 1. An action's reply waits for the follow-on work it scheduled; 8. and
 // its revision follows the last view without a skip.

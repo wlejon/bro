@@ -183,6 +183,13 @@ void testDiffs() {
         Snapshot k2{k[0], k[5]};
         const std::string kr2 = formatDiff(k, k2, false, nullptr);
         check(kr2 == "- 0.4-7\n", "removed handles in a row are a range", kr2);
+        Snapshot k3 = k;
+        k3[1].name = "a";
+        k3[2].name = "b";
+        k3[3].name = "c";
+        k3[5].name = "z";
+        const std::string kc = formatDiff(k, k3, false, nullptr);
+        check(kc == "~ 0.4-6 \"a\" \"b\" \"c\"\n~ 0.8 \"z\"\n", "renamed lines in a row are one ~ line", kc);
     }
 
     // An added subtree keeps its nesting, relative to its top.

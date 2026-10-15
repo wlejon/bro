@@ -369,6 +369,19 @@ std::string formatDiff(const Snapshot& from, const Snapshot& to, bool rects, Dif
         run.clear();
         runIndents.clear();
     };
+    std::vector<const Item*> nameRun;
+    std::vector<std::string> nameLines;
+    auto flushNames = [&]() {
+        if (nameRun.size() >= kMinRun) {
+            std::string line = "~ " + nameRun.front()->handle + "-" + std::to_string(elementOf(nameRun.back()->handle));
+            for (const Item* it : nameRun) line += " " + quote(truncateUtf8(it->name, kMaxNameChars));
+            changed += line + "\n";
+        } else {
+            for (const std::string& l : nameLines) changed += l + "\n";
+        }
+        nameRun.clear();
+        nameLines.clear();
+    };
     for (const Item& it : to) {
         auto b = before.find(it.handle);
         if (b == before.end()) {
@@ -405,9 +418,27 @@ std::string formatDiff(const Snapshot& from, const Snapshot& to, bool rects, Dif
             line += " =" + quote(it.hasValue ? truncateUtf8(it.value, kMaxNameChars) : std::string());
         if (old.extra != it.extra) line += " [" + (it.extra.empty() ? std::string("none") : it.extra) + "]";
         if ((rects || it.isWindow()) && !sameRect(old, it) && it.hasRect) line += " " + rectText(it);
-        changed += line + "\n";
         ++c.changed;
+        // Only the name changed: a run of such lines numbered one after
+        // another is one line, "~ 3.73-79 "a" "b" ...".
+        const bool nameOnly = !it.isWindow() && old.role == it.role && old.flags == it.flags &&
+                              old.hasValue == it.hasValue && old.value == it.value && old.extra == it.extra &&
+                              (!rects || sameRect(old, it));
+        if (nameOnly && !nameRun.empty() && windowOf(nameRun.back()->handle) == windowOf(it.handle) &&
+            elementOf(it.handle) == elementOf(nameRun.back()->handle) + 1) {
+            nameRun.push_back(&it);
+            nameLines.push_back(line);
+            continue;
+        }
+        flushNames();
+        if (nameOnly) {
+            nameRun.push_back(&it);
+            nameLines.push_back(line);
+            continue;
+        }
+        changed += line + "\n";
     }
+    flushNames();
     flushRun();
     // Removed: by handle, except a window none of whose elements are left,
     // which is "N.*" (the focus moved away from it, or it closed).

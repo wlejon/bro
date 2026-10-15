@@ -36,7 +36,7 @@ element exists, so diffs and actions can name it.
 @view r9
 w0 shell "Helm Desktop" 0,0 1920x1080
 w3* helm.charmap "Character Map" 420,180 1080x720
-w1 broterm "bash" 410,190 1100x700
+w1 helm.term "Terminal" 410,190 1100x700
 w0:
  0.26 button "Applications (Super)"
  0.29 button "Character Map"
@@ -151,7 +151,8 @@ $ bro-ctl set 3.6 snowman
   item is `~ ` with its handle and only the fields that changed: role with
   the flags it has now, then `-x` for each flag it lost (`~ 6.6 textbox -@`
   lost the keyboard, `~ w0 -*` lost the focus), name, value, notes (`[none]`
-  is notes cleared).
+  is notes cleared). Three or more lines in a row whose names alone changed
+  are one line: `~ 3.73-79 "☄" "☂" "★" "☁" "☆" "☀" "☇"`.
 - **No change:** `view --since=r10` answers the single line `@view r10 =`.
 - **Expired revision:** a revision too old to diff against gets the full
   view, headed `@view r12 full`.
