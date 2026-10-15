@@ -118,6 +118,7 @@
 #include <brocompositor/api.h>
 #if defined(_WIN32)
 #include <brocompositor/win/shell_backend.h>
+#include "platform/window.h"
 #endif
 #endif
 #if BRO_WITH_WL
@@ -682,16 +683,53 @@ void installSiblingApis(engine::Engine& engine) {
                             if (s_winShellBackend) return s_winShellBackend->window_icon(id, size);
                             return std::nullopt;
                         });
+                    // The session's shell in place of Explorer (helm as the
+                    // Winlogon shell): its window is the shell window, kept
+                    // beneath the applications until an overlay raises it,
+                    // and its panels reserve the work area every application
+                    // sees (bro.compositor.setShellOverlay / reserveEdge).
+                    if (engine.isDesktopShell()) {
+                        brocompositor::api::ShellRole role;
+                        role.is_desktop_shell = [] { return s_winShellBackend && s_winShellBackend->is_desktop_shell(); };
+                        role.set_overlay = [](bool on) {
+                            return s_winShellBackend && s_winShellBackend->set_shell_raised(on);
+                        };
+                        role.reserve_edge = [](brocompositor::MonitorId monitor, brocompositor::Edge edge,
+                                               int32_t thickness) {
+                            return s_winShellBackend ? s_winShellBackend->reserve_edge(monitor, edge, thickness)
+                                                     : brocompositor::kNoReservation;
+                        };
+                        role.release_edge = [](brocompositor::ReservationId id) {
+                            return s_winShellBackend && s_winShellBackend->release_edge(id);
+                        };
+                        brocompositor::api::setShellRole(std::move(role));
+                    }
                 }
             }
 #endif
-            engine.addFramePump([] {
+            engine.addFramePump([&engine] {
+#if defined(_WIN32)
+                // Attached on the window's own thread (this one), once it exists.
+                static bool s_shellAttached = false;
+                if (!s_shellAttached && s_winShellBackend && engine.isDesktopShell() && engine.window()) {
+                    if (void* hwnd = engine.window()->nativeHandle().hwnd) {
+                        s_shellAttached = true;
+                        const bool ok = s_winShellBackend->attach_desktop_shell(
+                            static_cast<uint64_t>(reinterpret_cast<uintptr_t>(hwnd)));
+                        LOG_INFO("brocompositor: desktop shell window %p attached=%d registered=%d", hwnd, ok ? 1 : 0,
+                                 s_winShellBackend->is_desktop_shell() ? 1 : 0);
+                    }
+                }
+#else
+                (void)engine;
+#endif
                 brocompositor::api::tickCompositorAsync();
                 if (ev::microtasksPending()) ev::drainMicrotasks();
             });
             engine.addShutdownHook([] {
                 brocompositor::api::shutdownCompositorAsync();
 #if defined(_WIN32)
+                brocompositor::api::setShellRole({});
                 brocompositor::api::setWindowIconSource({});
                 s_winShellBackend.reset();
 #endif

@@ -15,6 +15,7 @@
  * - Monitors and the work area (`getMonitors`, `getWorkArea`) and the shell's edge reservations
  *   (`reserveEdge`, `releaseEdge`, `getReservations`)
  * - Pointer-interaction policy for windows the host routes itself (`getInteraction`, `setInteraction`)
+ * - The desktop-shell role (`isDesktopShell`, `setShellOverlay`; section 5b)
  * - Stacking (`getStacking`, `raiseWindow`) and shell-drawn window frames (`setDecorations`,
  *   `getDecorations`, the `data-window-frame` attribute)
  * - Interactive move / resize from script (`beginMove`, `beginResize`, `dragTo`, `endDrag`,
@@ -27,8 +28,18 @@
  *
  * Backends: under `bro --drm` (bro.window.displayMode === 'drm') the calls drive bro's own
  * Wayland server (brocompositor over wlroots), which honours everything here. Elsewhere the
- * binding answers from a stand-in window manager with no windows. A call whose command the
- * backend refuses returns false (the Windows / macOS shell backends refuse window states).
+ * binding answers from a stand-in window manager with no windows, except on Windows, where a
+ * windowed bro manages the session's other top-level windows through brocompositor's shell
+ * backend (DWM; WinEvent hooks and the shell hook track them, the process's own windows never
+ * included). A call whose command the backend refuses returns false (the macOS shell backend
+ * refuses window states).
+ *
+ * The Windows desktop shell (a bro started with EngineConfig::desktopShell: helm as the
+ * Winlogon shell in place of Explorer): its window is registered as the session's shell window
+ * (SetShellWindow) and kept beneath every application window, never activated by a click,
+ * until `setShellOverlay(true)`; `reserveEdge` reserves the band in the OS work area every
+ * application sees; and global hotkeys see every key first (docs/window-api.js,
+ * `bro.window.hotkeyRouting === 'keyboard'`). The tray (`Shell_TrayWnd`) is bro.sys's.
  *
  * The DRM shell host: client windows are drawn between the shell document's desktop level
  * and its overlays, bottom to top in the window manager's stacking order (`getStacking`), each
@@ -164,6 +175,12 @@ if (bro.compositor.available) {
  * not auto-hide). The band comes off the work area after the platform's reservations and the
  * shell's earlier ones, so maximize and tiling layouts avoid it; tiled workspaces and
  * maximized windows are re-placed at once.
+ *
+ * As the Windows desktop shell the band is reserved with the platform instead (the OS work
+ * area, as an appbar would): every application's maximized windows keep clear of it. The id is
+ * the platform's; the grant arrives as 'reservationChanged' with `shell: false`, the smaller
+ * work area as 'monitorsChanged', and getReservations() does not list it. Releasing it (or the
+ * page going away) gives the work area back.
  * @param {'top'|'bottom'|'left'|'right'} edge
  * @param {number} thickness  pixels (> 0)
  * @param {number} [monitor]  monitor id; omitted: the primary monitor, following it when monitors change
@@ -243,6 +260,44 @@ if (bro.compositor.available) {
 }
 
 // ============================================================================
+// 5b. The desktop-shell role
+// ============================================================================
+
+/**
+ * Whether this process is the session's desktop shell as the platform sees it (Windows: its
+ * window is GetShellWindow(), which Explorer holds whenever it runs). False for an ordinary app.
+ * @returns {boolean}
+ */
+bro.compositor.isDesktopShell = function () {};
+
+/**
+ * The shell has an overlay up that must sit above the applications' windows and take the
+ * keyboard (a launcher, a panel, a dialog), or no longer has one. Call it whenever the answer
+ * changes; the shell decides what counts.
+ * - Windows desktop shell: true raises the shell window over the applications and activates
+ *   it; false pins it back beneath them and lets any application take the foreground.
+ * - DRM (bro as the Wayland server): the shell's overlays already composite over the clients
+ *   and its keyboard claim is `data-shell-keyboard` (the overview at the top), so nothing to do: false.
+ * - A shell that is a Wayland client of another compositor would map it to its layer-shell
+ *   surface (overlay layer, exclusive keyboard); not implemented: false.
+ * A page going away drops its overlay.
+ * @param {boolean} active
+ * @returns {boolean} whether the host acted on it
+ */
+bro.compositor.setShellOverlay = function (active) {};
+
+if (bro.compositor.available) {
+    const overlays = new Set();
+    function overlay(source, open) {
+        if (open) overlays.add(source);
+        else overlays.delete(source);
+        bro.compositor.setShellOverlay(overlays.size > 0);
+    }
+    overlay('launcher', true);
+    overlay('launcher', false);
+}
+
+// ============================================================================
 // 6. Event Subscriptions
 // ============================================================================
 
@@ -254,7 +309,8 @@ if (bro.compositor.available) {
  * for each shell reservation), 'stackingChanged' ({ stacking }: window ids bottom to top),
  * 'snapPreview' ({ windowId, zone, rect }: while a drag has a snap armed, the zone and the rect
  * the window's frame, decoration included, will take; zone 'none' and rect null when it is
- * disarmed or the drag ends), '*' for all.
+ * disarmed or the drag ends), 'windowAttention' ({ id, windowId }: a window asks for the
+ * user's attention without taking focus; Windows: FlashWindow), '*' for all.
  */
 if (bro.compositor.available) {
     const sub = bro.compositor.on('windowCreated', (event) => {
