@@ -910,9 +910,21 @@ void cmdWhoHasKeys(ControlServer& s, const ControlCallPtr& call) {
 }
 
 void cmdClipboard(ControlServer& s, const ControlCallPtr& call) {
-    s.dispatch({"eval", "navigator.clipboard.readText()"}, [call](bool ok, std::string p) {
-        ok ? call->ok(p) : call->fail(p);
-    });
+    auto local = [&s, call]() {
+        s.dispatch({"eval", "navigator.clipboard.readText()"}, [call](bool ok, std::string p) {
+            ok ? call->ok(p) : call->fail(p);
+        });
+    };
+    // A display's own clipboard is not its clients' selection (the
+    // compositor hands that only to the focused client): ask the focused
+    // app, which reads it as any app would.
+    if (!aggregates(s) || call->flag("local")) return local();
+    std::string ep;
+    for (const auto& w : desktopWindows(s))
+        if (w.focused) ep = endpointForPid(w.pid);
+    if (ep.empty()) return local();
+    auto f = startFetch(ep, {"clipboard", "--local"}, 0);
+    whenAll(s, {f}, 2000, [f, call]() { f->ok ? call->ok(f->payload) : call->fail(f->payload); });
 }
 
 }  // namespace
@@ -983,7 +995,7 @@ void registerAgentViewCommands(ControlServer& s) {
                       [&s](const ControlCallPtr& c) { cmdShot(s, c); });
     s.registerCommand("who-has-keys", " the focused window and the element with keyboard focus",
                       [&s](const ControlCallPtr& c) { cmdWhoHasKeys(s, c); });
-    s.registerCommand("clipboard", " the clipboard's text, as the apps see it",
+    s.registerCommand("clipboard", "[--local]  the clipboard's text, as the apps see it (a display asks the focused app)",
                       [&s](const ControlCallPtr& c) { cmdClipboard(s, c); });
 }
 
