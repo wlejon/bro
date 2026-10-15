@@ -14,7 +14,8 @@ struct HotkeyOptions {
     /// until every modifier of the chord is released, that release included
     /// (hotkeyGrabActive()). An Alt+Tab switcher uses it to see the Tab
     /// presses and the Alt release that follow its chord. Hosts that route
-    /// the keyboard themselves (DRM) honour it; elsewhere it is ignored.
+    /// the keyboard themselves (DRM, the Windows desktop shell's keyboard
+    /// hook) honour it; elsewhere it is ignored.
     bool grab = false;
 };
 
@@ -106,5 +107,50 @@ bool hotkeyGrabActive();
 
 /// Forgets the key-routing state (held modifiers, consumed keys, grab).
 void resetHotkeyKeyState();
+
+// ---- the desktop shell over a system compositor (Windows) -----------------
+//
+// A process that is the session's shell (helm as the Winlogon shell) sees
+// every key before the focused application does, through a low-level
+// keyboard hook (WH_KEYBOARD_LL) on a thread of its own, running only while
+// the shell is on and at least one hotkey is registered. Each key goes
+// through routeHotkeyKey's state machine: a lone Super tap fires its binding,
+// a registered chord is swallowed (the system and the focused application
+// never see its key) and its callback is queued for pumpHotkeyEvents, and
+// everything else passes untouched. RegisterHotKey is not used then. While a
+// grab holds the keyboard and another application has the foreground, the
+// keys go to the shell's document (setShellKeySink) instead. Win+L cannot be
+// had: the secure desktop takes it before any hook. Ordinary apps (the shell
+// off) keep RegisterHotKey and install no hook.
+
+/// Turns the shell's keyboard routing on or off (a no-op off Windows).
+void setDesktopShellKeyboard(bool on);
+/// Whether the shell's keyboard routing is on.
+bool desktopShellKeyboard();
+
+/// Receives the keys a grab holds for the shell while another application
+/// has the foreground: the key's evdev code, press or release, auto-repeat,
+/// and the hotkey_mod bits held after it. Runs from pumpHotkeyEvents.
+using ShellKeySink = std::function<void(uint32_t evdevCode, bool down, bool repeat, uint32_t mods)>;
+void setShellKeySink(ShellKeySink sink);
+
+/// What the shell's keyboard hook does with one key event, given what
+/// routeHotkeyKey made of it, whether the shell's own window has the
+/// foreground (its keys then reach it the ordinary way), and whether a key
+/// was swallowed since Win or Alt went down (`masked`, the hook's state,
+/// which `mask` sets). Pure.
+///
+/// Windows reads a Win or Alt release with no other key since its press as
+/// a lone tap (the Start menu, the focused window's menu bar). When the
+/// shell took the keys between, or the tap itself, that release is
+/// swallowed and replayed behind a key that means nothing (`replayRelease`).
+struct ShellHookAction {
+    bool suppress = false;       // no application sees the event
+    bool mask = false;           // a key was swallowed with Win or Alt held
+    bool replayRelease = false;  // this Win/Alt release is swallowed, then injected after a meaningless key
+    bool forward = false;        // the shell's document gets it (setShellKeySink)
+};
+ShellHookAction shellHookAction(const HotkeyKey& key, const HotkeyKeyResult& routed, bool shellForeground,
+                                bool masked);
 
 } // namespace bro::platform::desktop

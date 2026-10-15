@@ -1,4 +1,5 @@
 #include "platform/desktop_hotkeys.h"
+#include "platform/desktop_hotkeys_internal.h"
 #include "platform/desktop_platform.h"
 #include "platform/keys.h"
 
@@ -36,6 +37,7 @@ std::mutex s_hotkeyMutex;
 std::unordered_map<uint32_t, HotkeyEntry> s_hotkeys;
 std::atomic<uint32_t> s_nextHotkeyId{1};
 std::deque<std::function<void()>> s_pendingCallbacks;
+ShellKeySink s_shellKeySink;
 
 // Key-routing state (routeHotkeyKey), guarded by s_hotkeyMutex.
 struct KeyState {
@@ -194,7 +196,8 @@ uint32_t registerGlobalHotkey(
     entry.callback = std::move(callback);
 
 #ifdef _WIN32
-    if (!isHeadless() && window) {
+    // The desktop shell's keyboard hook matches every key itself.
+    if (!isHeadless() && window && !desktopShellKeyboard()) {
         HWND hwnd = hwndOf(window);
         entry.hwnd = hwnd;
         UINT fsModifiers = 0, vk = 0;
@@ -210,34 +213,91 @@ uint32_t registerGlobalHotkey(
         std::lock_guard<std::mutex> lock(s_hotkeyMutex);
         s_hotkeys[id] = std::move(entry);
     }
+    updateShellKeyboardHook();
     return id;
 }
 
 bool unregisterGlobalHotkey(uint32_t id) {
-    std::lock_guard<std::mutex> lock(s_hotkeyMutex);
-    auto it = s_hotkeys.find(id);
-    if (it == s_hotkeys.end()) return false;
+    {
+        std::lock_guard<std::mutex> lock(s_hotkeyMutex);
+        auto it = s_hotkeys.find(id);
+        if (it == s_hotkeys.end()) return false;
 
 #ifdef _WIN32
-    if (it->second.hwnd) {
-        UnregisterHotKey(it->second.hwnd, static_cast<int>(id));
-    }
+        if (it->second.hwnd) {
+            UnregisterHotKey(it->second.hwnd, static_cast<int>(id));
+        }
 #endif
 
-    s_hotkeys.erase(it);
+        s_hotkeys.erase(it);
+    }
+    updateShellKeyboardHook();
     return true;
 }
 
 void unregisterAllGlobalHotkeys() {
-    std::lock_guard<std::mutex> lock(s_hotkeyMutex);
+    {
+        std::lock_guard<std::mutex> lock(s_hotkeyMutex);
 #ifdef _WIN32
-    for (const auto& [id, entry] : s_hotkeys) {
-        if (entry.hwnd) {
-            UnregisterHotKey(entry.hwnd, static_cast<int>(id));
+        for (const auto& [id, entry] : s_hotkeys) {
+            if (entry.hwnd) {
+                UnregisterHotKey(entry.hwnd, static_cast<int>(id));
+            }
+        }
+#endif
+        s_hotkeys.clear();
+    }
+    updateShellKeyboardHook();
+}
+
+size_t registeredHotkeyCount() {
+    std::lock_guard<std::mutex> lock(s_hotkeyMutex);
+    return s_hotkeys.size();
+}
+
+void queueHotkeyTask(std::function<void()> task) {
+    std::lock_guard<std::mutex> lock(s_hotkeyMutex);
+    s_pendingCallbacks.push_back(std::move(task));
+}
+
+void setShellKeySink(ShellKeySink sink) {
+    std::lock_guard<std::mutex> lock(s_hotkeyMutex);
+    s_shellKeySink = std::move(sink);
+}
+
+ShellKeySink shellKeySink() {
+    std::lock_guard<std::mutex> lock(s_hotkeyMutex);
+    return s_shellKeySink;
+}
+
+ShellHookAction shellHookAction(const HotkeyKey& key, const HotkeyKeyResult& routed, bool shellForeground,
+                                bool masked) {
+    ShellHookAction a;
+    constexpr uint32_t kMenuMods = hotkey_mod::Alt | hotkey_mod::Meta;
+    if (routed.consumed) {
+        // A chord's key: nobody's.
+        a.suppress = true;
+        a.mask = key.down && (key.mods & kMenuMods) != 0;
+        return a;
+    }
+    if ((key.modifierKey & kMenuMods) && !key.down && (masked || routed.fired)) {
+        // The keys since its press, or the tap itself, were the shell's:
+        // not a tap for the system, though the key still comes up for
+        // everyone.
+        a.suppress = true;
+        a.replayRelease = true;
+    }
+    if (routed.grabbed && !shellForeground) {
+        // The keyboard is the shell's until the chord's modifiers are up.
+        // Modifiers still pass, so every application keeps a true picture
+        // of what is held.
+        a.forward = true;
+        if (!key.modifierKey) {
+            a.suppress = true;
+            a.mask = key.down && (key.mods & kMenuMods) != 0;
         }
     }
-#endif
-    s_hotkeys.clear();
+    return a;
 }
 
 bool simulateGlobalHotkey(const std::string& accelerator) {
@@ -361,10 +421,12 @@ HotkeyKey hotkeyKeyFromNames(const std::string& key, const std::string& mods, ui
     return k;
 }
 
-HotkeyKeyResult routeHotkeyKey(const HotkeyKey& k) {
+namespace {
+
+// The state machine behind routeHotkeyKey: updates s_keys and names the
+// callback to run (cb, firedId) without running it.
+HotkeyKeyResult routeKey(const HotkeyKey& k, HotkeyCallback& cb, uint32_t& firedId) {
     HotkeyKeyResult res;
-    HotkeyCallback cb;
-    uint32_t firedId = 0;
     {
         std::lock_guard<std::mutex> lock(s_hotkeyMutex);
         KeyState& st = s_keys;
@@ -417,10 +479,25 @@ HotkeyKeyResult routeHotkeyKey(const HotkeyKey& k) {
             res.grabbed = st.grab;
         }
     }
-    if (cb) {
-        res.fired = true;
-        cb(firedId);
-    }
+    res.fired = static_cast<bool>(cb);
+    return res;
+}
+
+}  // namespace
+
+HotkeyKeyResult routeHotkeyKey(const HotkeyKey& k) {
+    HotkeyCallback cb;
+    uint32_t firedId = 0;
+    HotkeyKeyResult res = routeKey(k, cb, firedId);
+    if (cb) cb(firedId);
+    return res;
+}
+
+HotkeyKeyResult routeHotkeyKeyDeferred(const HotkeyKey& k) {
+    HotkeyCallback cb;
+    uint32_t firedId = 0;
+    HotkeyKeyResult res = routeKey(k, cb, firedId);
+    if (cb) queueHotkeyTask([cb = std::move(cb), firedId] { cb(firedId); });
     return res;
 }
 
@@ -452,5 +529,13 @@ void pumpHotkeyEvents() {
         if (fn) fn();
     }
 }
+
+#ifndef _WIN32
+// The shell's keyboard hook is Windows' (desktop_shell_keyboard_win.cpp);
+// DRM routes keys itself.
+void setDesktopShellKeyboard(bool) {}
+bool desktopShellKeyboard() { return false; }
+void updateShellKeyboardHook() {}
+#endif
 
 } // namespace bro::platform::desktop

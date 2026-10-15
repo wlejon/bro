@@ -152,6 +152,12 @@ public:
         int32_t wheelY = 0;
     };
     void injectDeviceInput(const DeviceInput& in);
+    /// A key a hotkey grab holds for the desktop shell while another app has
+    /// the foreground (Windows; platform/desktop_hotkeys.h ShellKeySink): to
+    /// the document, with `mods` (hotkey_mod bits) as the modifiers held.
+    void deliverShellGrabKey(uint32_t evdevCode, bool down, bool repeat, uint32_t mods);
+    /// A key (platform Scancode) to the document with deviceInputMods_ held.
+    void deliverDocumentKey(int32_t scancode, bool pressed, bool repeat);
     /// Where the pointer last was, CSS px.
     float pointerX() const { return lastMouseX_; }
     float pointerY() const { return lastMouseY_; }

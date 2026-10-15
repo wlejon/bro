@@ -27,6 +27,7 @@
 #include "platform/window.h"
 #include "platform/window_system.h"
 #include "platform/desktop_platform.h"
+#include "platform/desktop_hotkeys.h"
 #include "platform/dialogs.h"
 #include "platform/event_loop.h"
 #include "render/renderer.h"
@@ -271,6 +272,17 @@ void Engine::construct(const EngineConfig& config) {
     // the realm's host globals are installed and its first script compiled
     // while the device comes up rather than after.
     platform::desktop::setHeadless(displayMode_ == DisplayMode::Headless);
+#if defined(_WIN32)
+    // The session's shell sees every key first (desktop_hotkeys.h): a Super
+    // tap and the Win chords the system keeps reach its hotkeys, and a
+    // grab's keys reach its document while another app has the foreground.
+    if (desktopShell_ && displayMode_ == DisplayMode::Windowed) {
+        platform::desktop::setShellKeySink([this](uint32_t evdev, bool down, bool repeat, uint32_t mods) {
+            deliverShellGrabKey(evdev, down, repeat, mods);
+        });
+        platform::desktop::setDesktopShellKeyboard(true);
+    }
+#endif
     GraphicsStartup gfxTiming;
     gfxTiming.startAtMs = sinceStartMs();
     const double gfxStart = util::currentTimeMs();

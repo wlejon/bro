@@ -39,6 +39,7 @@
 #endif
 #include "steam/steam_service.h"
 #include "webgl/webgl2_context.h"
+#include "platform/desktop_hotkeys.h"
 #include "platform/dialogs.h"
 #include "platform/event_loop.h"
 #include "platform/system_info.h"
@@ -111,6 +112,10 @@ void Engine::teardown() {
     // No command may arrive for an engine on its way out.
     if (control_) control_->stop();
     platform::Dialogs::setWindow(nullptr);
+    if (platform::desktop::desktopShellKeyboard()) {
+        platform::desktop::setDesktopShellKeyboard(false);
+        platform::desktop::setShellKeySink({});
+    }
 
     appWatchers_.clear();
     // A launch that failed between starting the page's compile and running

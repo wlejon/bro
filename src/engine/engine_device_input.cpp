@@ -11,6 +11,7 @@
 #include "engine/engine.h"
 #include "engine/engine_drm.h"
 #include "engine/key_mapping.h"
+#include "platform/desktop_hotkeys.h"
 #include "platform/evdev_keymap.h"
 #include "platform/keyboard.h"
 #include "platform/keys.h"
@@ -97,7 +98,6 @@ void Engine::injectDeviceInput(const DeviceInput& in) {
             namespace kmod = platform::kmod;
             const platform::Scancode scancode = platform::evdevKeyToScancode(in.code);
             if (scancode == psc::Unknown) return;
-            const platform::Keycode keycode = platform::keyboard().eventKeycode(scancode);
             auto track = [&](platform::KeyMods bit) {
                 if (in.pressed) deviceInputMods_ |= bit;
                 else deviceInputMods_ &= ~bit;
@@ -106,16 +106,7 @@ void Engine::injectDeviceInput(const DeviceInput& in) {
             else if (scancode == psc::LCtrl || scancode == psc::RCtrl) track(kmod::Ctrl);
             else if (scancode == psc::LAlt || scancode == psc::RAlt) track(kmod::Alt);
             else if (scancode == psc::LGui || scancode == psc::RGui) track(kmod::Gui);
-            const int code = static_cast<int>(keycode), sc = static_cast<int>(scancode);
-            if (!in.pressed) {
-                handleKeyUp(code, sc, deviceInputMods_, false);
-                break;
-            }
-            handleKeyDown(code, sc, deviceInputMods_, false);
-            if (!platform::hasPrimaryMod(deviceInputMods_)) {
-                const std::string webKey = sdlKeycodeToWebKey(code, deviceInputMods_);
-                if (webKey.size() == 1) handleTextInput(webKey);
-            }
+            deliverDocumentKey(scancode, in.pressed, false);
             break;
         }
         case Kind::Motion:
@@ -168,6 +159,33 @@ bool Engine::screenPointerLocked() const {
         return true;
 #endif
     return lockedElement_.get() != nullptr;
+}
+
+// A key to the document with deviceInputMods_ held, its text derived as the
+// DRM path derives it.
+void Engine::deliverDocumentKey(int32_t scancode, bool pressed, bool repeat) {
+    const platform::Keycode keycode = platform::keyboard().eventKeycode(scancode);
+    const int code = static_cast<int>(keycode), sc = static_cast<int>(scancode);
+    if (!pressed) {
+        handleKeyUp(code, sc, deviceInputMods_, false);
+        return;
+    }
+    handleKeyDown(code, sc, deviceInputMods_, repeat);
+    if (!platform::hasPrimaryMod(deviceInputMods_)) {
+        const std::string webKey = sdlKeycodeToWebKey(code, deviceInputMods_);
+        if (webKey.size() == 1) handleTextInput(webKey);
+    }
+}
+
+void Engine::deliverShellGrabKey(uint32_t evdevCode, bool down, bool repeat, uint32_t mods) {
+    namespace kmod = platform::kmod;
+    namespace hm = platform::desktop::hotkey_mod;
+    const platform::Scancode scancode = platform::evdevKeyToScancode(evdevCode);
+    if (scancode == platform::sc::Unknown) return;
+    noteUserActivity();
+    deviceInputMods_ = ((mods & hm::Ctrl) ? kmod::Ctrl : 0) | ((mods & hm::Alt) ? kmod::Alt : 0) |
+                       ((mods & hm::Shift) ? kmod::Shift : 0) | ((mods & hm::Meta) ? kmod::Gui : 0);
+    deliverDocumentKey(scancode, down, repeat);
 }
 
 }  // namespace bro::engine

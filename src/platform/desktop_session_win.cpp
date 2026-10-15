@@ -134,6 +134,13 @@ bool sendKey(uint32_t evdevCode, bool pressed) {
     return send(in);
 }
 
+uint32_t scanToEvdev(uint16_t scan) {
+    if (scan == 0) return 0;
+    for (uint32_t code = 1; code < 256; ++code)
+        if (evdevToScan(code) == scan) return code;
+    return 0;
+}
+
 bool sendPointerTo(int screenX, int screenY) {
     const int vx = GetSystemMetrics(SM_XVIRTUALSCREEN), vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
     const int vw = GetSystemMetrics(SM_CXVIRTUALSCREEN), vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);

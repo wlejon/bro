@@ -118,7 +118,9 @@ bool registerNatives_window(std::string* error) {
         fn("__bro_native.window.unregisterAllGlobalHotkeys", p(&bro_window_unregisterAllGlobalHotkeys), "void", {}, error) &&
         fn("__bro_native.window.simulateGlobalHotkey", p(&bro_window_simulateGlobalHotkey), "bool", {"str"}, error) &&
         fn("__bro_native.window.simulateHotkeyKey", p(&bro_window_simulateHotkeyKey), "i32", {"str", "str", "i32", "bool", "bool"}, error) &&
+        fn("__bro_native.window.simulateShellHookKey", p(&bro_window_simulateShellHookKey), "i32", {"str", "str", "i32", "bool", "bool", "bool"}, error) &&
         fn("__bro_native.window.resetHotkeyKeys", p(&bro_window_resetHotkeyKeys), "void", {}, error) &&
+        getter("__bro_native.window.hotkeyRouting", p(&bro_window_hotkeyRouting_get), "str", error) &&
         getter("__bro_native.window.displayMode", p(&bro_window_displayMode_get), "str", error) &&
         fn("__bro_native.window.captureScreen", p(&bro_window_captureScreen), "str", {"str"}, error) &&
         fn("__bro_native.window.requestSingleInstance", p(&bro_window_requestSingleInstance), "bool", {"str", "str"}, error) &&

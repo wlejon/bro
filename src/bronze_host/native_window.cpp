@@ -492,8 +492,39 @@ int32_t bro_window_simulateHotkeyKey(const char* key, const char* mods, int32_t 
     return (r.consumed ? 1 : 0) | (r.fired ? 2 : 0) | (r.grabbed ? 4 : 0);
 }
 
+namespace {
+bool g_simulatedHookMasked = false;  // the simulated hook's mask state
+}
+
+int32_t bro_window_simulateShellHookKey(const char* key, const char* mods, int32_t code, bool down, bool repeat,
+                                        bool shellForeground) {
+    namespace pd = platform::desktop;
+    auto k = pd::hotkeyKeyFromNames(key ? key : "", mods ? mods : "", static_cast<uint32_t>(code), down, repeat);
+    auto r = pd::routeHotkeyKey(k);
+    auto a = pd::shellHookAction(k, r, shellForeground, g_simulatedHookMasked);
+    if (a.mask) g_simulatedHookMasked = true;
+    if (!(k.mods & (pd::hotkey_mod::Alt | pd::hotkey_mod::Meta))) g_simulatedHookMasked = false;
+    return (r.consumed ? 1 : 0) | (r.fired ? 2 : 0) | (r.grabbed ? 4 : 0) | (a.suppress ? 8 : 0) |
+           (a.mask ? 16 : 0) | (a.replayRelease ? 32 : 0) | (a.forward ? 64 : 0);
+}
+
 void bro_window_resetHotkeyKeys(void) {
     platform::desktop::resetHotkeyKeyState();
+    g_simulatedHookMasked = false;
+}
+
+const char* bro_window_hotkeyRouting_get(void) {
+    auto* eng = hostEngine();
+    if (!eng || eng->displayMode() == engine::DisplayMode::Headless ||
+        eng->displayMode() == engine::DisplayMode::Server)
+        return "none";
+    if (eng->displayMode() == engine::DisplayMode::Drm || platform::desktop::desktopShellKeyboard())
+        return "keyboard";
+#if defined(_WIN32)
+    return "system";
+#else
+    return "none";
+#endif
 }
 
 const char* bro_window_displayMode_get(void) {

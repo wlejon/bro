@@ -245,7 +245,17 @@ bool bro_window_simulateGlobalHotkey(const char* accelerator);
 // key is a key or modifier name, mods the held modifiers ("alt+shift").
 // Returns bits: 1 consumed, 2 fired, 4 grabbed.
 int32_t bro_window_simulateHotkeyKey(const char* key, const char* mods, int32_t code, bool down, bool repeat);
+// The same through the Windows desktop shell's keyboard hook decision
+// (platform::desktop::shellHookAction), with the hook's mask state kept here
+// across calls. Returns the routing bits plus 8 suppressed, 16 mask armed,
+// 32 release replayed behind the mask, 64 forwarded to the document.
+int32_t bro_window_simulateShellHookKey(const char* key, const char* mods, int32_t code, bool down, bool repeat,
+                                        bool shellForeground);
 void bro_window_resetHotkeyKeys(void);
+// How registered hotkeys reach the app: "keyboard" (the host sees every key
+// first: DRM, the Windows desktop shell), "system" (chords reserved with
+// the OS), "none" (headless).
+const char* bro_window_hotkeyRouting_get(void);
 // "windowed" | "headless" | "server" | "drm"
 const char* bro_window_displayMode_get(void);
 // Captures what is on screen to a PNG at `path` (empty: the default path in

@@ -38,6 +38,8 @@ if(WIN32)
     target_sources(bro_platform PRIVATE desktop_notifications_win.cpp)
     # The session's screen and input for a bro that is the OS shell (desktop_session.h).
     target_sources(bro_platform PRIVATE desktop_session_win.cpp)
+    # Its keyboard: hotkeys through a low-level hook (desktop_hotkeys.h).
+    target_sources(bro_platform PRIVATE desktop_shell_keyboard_win.cpp)
     target_link_libraries(bro_platform PRIVATE shell32 ole32 uuid runtimeobject)
 elseif(APPLE)
     # NSDraggingSession (drags out of a window).

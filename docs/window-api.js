@@ -223,6 +223,17 @@ bro.window.isTrayAvailable = function() {};
 bro.window.displayMode;
 
 /**
+ * How registered global hotkeys reach the app (registerGlobalHotkey below): 'keyboard' when
+ * the host sees every key first and taps, grabs and every chord work (DRM; the Windows desktop
+ * shell's keyboard hook), 'system' when chords are only reserved with the OS (an ordinary
+ * Windows app), 'none' otherwise (headless: simulate them). A shell registers its whole table
+ * under 'keyboard', and only chords the desktop around it will not take otherwise.
+ * @type {'keyboard'|'system'|'none'}
+ * @readonly
+ */
+bro.window.hotkeyRouting;
+
+/**
  * Captures what is on screen to a PNG (docs/screen-capture.md). Under DRM it is the frame bro
  * last handed to KMS scanout, read back from the scanout buffer: client windows, the shell and
  * its overlays exactly as the display shows them. Elsewhere it is the app's own composite.
@@ -246,9 +257,17 @@ bro.window.captureScreen('/tmp/desktop.png');
  * Delivery: under DRM (bro.window.displayMode === 'drm') every key is matched before it is
  * routed: a matched chord's key reaches neither the focused client nor the app's DOM (its
  * repeats and release included), and the callback runs before the next key is routed.
- * Modifier keys themselves are never swallowed. Other hosts accept the registration (Windows
- * also reserves the chord with RegisterHotKey) but do not deliver it yet, and headless only
- * through __bro_native.window.simulateGlobalHotkey; keep a keydown handler for those.
+ * Modifier keys themselves are never swallowed. The Windows desktop shell (helm as the
+ * Winlogon shell; EngineConfig::desktopShell) is routed the same way, by a low-level keyboard
+ * hook that runs only while a hotkey is registered: a lone Super tap fires its binding, a
+ * registered chord's key reaches neither the system nor the focused application (Win+V and
+ * the other chords Windows keeps for itself included), unregistered Win combinations pass
+ * untouched, and a Win or Alt release after a swallowed key is not taken for a tap (no Start
+ * menu, no menu bar). Win+L cannot be had: the secure desktop takes it before any hook.
+ * `bro.window.hotkeyRouting` says which delivery a host gives: 'keyboard' for both of these.
+ * Other hosts accept the registration (an ordinary Windows app also reserves the chord with
+ * RegisterHotKey; no hook) but do not deliver it yet ('system'), and headless only through
+ * __bro_native.window.simulateGlobalHotkey ('none'); keep a keydown handler for those.
  *
  * @param {string} accelerator e.g. "Super+L", "CommandOrControl+Shift+T", "Alt+Tab", "Super"
  * @param {function({id:number, accelerator:string})} callback runs only for this registration
@@ -257,7 +276,9 @@ bro.window.captureScreen('/tmp/desktop.png');
  *   every modifier of the chord has been released, the release included, so its DOM sees the
  *   keys that follow (arrows, Escape, the Alt keyup). For an Alt+Tab switcher: register
  *   'Alt+Tab' and 'Alt+Shift+Tab' with grab (each further Tab fires the callback again) and
- *   commit on the Alt keyup. DRM only.
+ *   commit on the Alt keyup. DRM and the Windows desktop shell (there, while another
+ *   application has the foreground, the held keys are swallowed and delivered to the
+ *   document instead).
  * @returns {number} hotkey ID (> 0) on success, 0 on failure
  */
 bro.window.registerGlobalHotkey = function(accelerator, callback, options) {};

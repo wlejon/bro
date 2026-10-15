@@ -196,6 +196,12 @@
     // input as a desktop shell host).
     accessor(bro.window, 'displayMode', () => __bro_native.window.displayMode, undefined);
 
+    // How registered global hotkeys reach the app: 'keyboard' (the host sees
+    // every key first: DRM, or the Windows desktop shell's keyboard hook;
+    // taps, grabs and every chord work), 'system' (chords reserved with the
+    // OS), 'none' (headless: simulate them).
+    accessor(bro.window, 'hotkeyRouting', () => __bro_native.window.hotkeyRouting, undefined);
+
     // A PNG of what is on screen (docs/screen-capture.md): under DRM the frame
     // KMS scans out (client windows + shell), elsewhere the app's composite.
     // Returns the path written, or null (the reason is logged).

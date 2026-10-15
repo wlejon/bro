@@ -26,6 +26,8 @@ bool captureScreenRect(int x, int y, int width, int height, std::vector<uint8_t>
 
 /// A key by its Linux evdev code (KEY_*), sent as the keyboard's scan code.
 bool sendKey(uint32_t evdevCode, bool pressed);
+/// The evdev code of a PC/AT set-1 scan code (0xE0xx: extended), 0 if none.
+uint32_t scanToEvdev(uint16_t scan);
 /// The pointer to a point of the virtual screen, physical pixels.
 bool sendPointerTo(int screenX, int screenY);
 /// The pointer by a delta, physical pixels.
