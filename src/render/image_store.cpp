@@ -19,6 +19,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <list>
 #include <thread>
 #include <unordered_map>
 
@@ -231,7 +232,14 @@ struct ImageStore::Impl {
     std::unordered_map<std::string, Entry> entries;
     std::deque<Job> queue;
     std::deque<std::function<void()>> tasks;  // post(): after the queued requests
-    std::vector<std::thread> threads;
+    struct Worker {
+        std::thread thread;
+        bool done = false;  // its loop has returned: join it
+    };
+    std::list<Worker> workers;
+    size_t maxWorkers = 2;
+    size_t liveWorkers = 0;
+    size_t idleWorkers = 0;
     size_t inFlight = 0;  // queued + running
     size_t budget = size_t(512) << 20;
     size_t cached = 0;
@@ -263,43 +271,75 @@ ImageStore::ImageStore() : impl_(std::make_unique<Impl>()) {
         if (v >= 0) impl_->budget = static_cast<size_t>(v) << 20;
     }
     const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
-    const unsigned n = std::clamp(hw / 2, 2u, 4u);
-    for (unsigned i = 0; i < n; ++i) {
-        impl_->threads.emplace_back([this] {
-            for (;;) {
-                Impl::Job job;
-                std::function<void()> task;
-                {
-                    std::unique_lock<std::mutex> lk(impl_->mu);
-                    impl_->workCv.wait(lk, [this] {
-                        return impl_->stopping || !impl_->queue.empty() || !impl_->tasks.empty();
-                    });
-                    if (impl_->stopping) return;
-                    if (!impl_->queue.empty()) {
-                        job = std::move(impl_->queue.front());
-                        impl_->queue.pop_front();
-                    } else {
-                        task = std::move(impl_->tasks.front());
-                        impl_->tasks.pop_front();
-                    }
-                }
-                if (task) task();
-                else run(job.req, std::move(job.work));
-            }
-        });
+    impl_->maxWorkers = std::clamp(hw / 2, 2u, 4u);
+}
+
+void ImageStore::ensureDecoderLocked() {
+    const size_t waiting = impl_->queue.size() + impl_->tasks.size();
+    if (impl_->stopping || waiting <= impl_->idleWorkers || impl_->liveWorkers >= impl_->maxWorkers) return;
+    // Join the decoders that went idle and ended; they hold no lock on the
+    // way out, so joining under this one cannot wait on it.
+    for (auto it = impl_->workers.begin(); it != impl_->workers.end();) {
+        if (!it->done) { ++it; continue; }
+        if (it->thread.joinable()) it->thread.join();
+        it = impl_->workers.erase(it);
     }
+    impl_->workers.emplace_back();
+    Impl::Worker* w = &impl_->workers.back();
+    ++impl_->liveWorkers;
+    w->thread = std::thread([this, w] { decoderLoop(w); });
+}
+
+void ImageStore::decoderLoop(void* worker) {
+    // An idle decoder ends after this long; a page that stops asking for
+    // images keeps none of their threads.
+    constexpr auto kIdleExit = std::chrono::seconds(10);
+    auto* self = static_cast<Impl::Worker*>(worker);
+    std::unique_lock<std::mutex> lk(impl_->mu);
+    for (;;) {
+        ++impl_->idleWorkers;
+        const bool woke = impl_->workCv.wait_for(lk, kIdleExit, [this] {
+            return impl_->stopping || !impl_->queue.empty() || !impl_->tasks.empty();
+        });
+        --impl_->idleWorkers;
+        if (impl_->stopping || !woke) break;
+        Impl::Job job;
+        std::function<void()> task;
+        if (!impl_->queue.empty()) {
+            job = std::move(impl_->queue.front());
+            impl_->queue.pop_front();
+        } else {
+            task = std::move(impl_->tasks.front());
+            impl_->tasks.pop_front();
+        }
+        lk.unlock();
+        if (task) task();
+        else run(job.req, std::move(job.work));
+        task = nullptr;
+        job = {};
+        lk.lock();
+    }
+    --impl_->liveWorkers;
+    self->done = true;
+}
+
+size_t ImageStore::decoderThreads() const {
+    std::lock_guard<std::mutex> lk(impl_->mu);
+    return impl_->liveWorkers;
 }
 
 ImageStore::~ImageStore() {
+    std::list<Impl::Worker> workers;
     {
         std::lock_guard<std::mutex> lk(impl_->mu);
         impl_->stopping = true;
         impl_->queue.clear();
         impl_->tasks.clear();
+        workers.swap(impl_->workers);
     }
     impl_->workCv.notify_all();
-    for (auto& t : impl_->threads)
-        if (t.joinable()) t.join();
+    for (auto& w : workers)
+        if (w.thread.joinable()) w.thread.join();
 }
 
 void ImageStore::run(const std::shared_ptr<ImageRequest>& req, ImageWork work) {
@@ -365,6 +405,7 @@ std::shared_ptr<ImageRequest> ImageStore::request(const std::string& key, ImageW
         e.lastUse = ++impl_->clock;
         impl_->entries.emplace(key, std::move(e));
         impl_->queue.push_back(Impl::Job{req, std::move(work)});
+        ensureDecoderLocked();
         ++impl_->inFlight;
     }
     impl_->workCv.notify_one();
@@ -384,6 +425,7 @@ std::shared_ptr<ImageRequest> ImageStore::submit(ImageWork work) {
     {
         std::lock_guard<std::mutex> lk(impl_->mu);
         impl_->queue.push_back(Impl::Job{req, std::move(work)});
+        ensureDecoderLocked();
         ++impl_->inFlight;
     }
     impl_->workCv.notify_one();
@@ -396,6 +438,7 @@ void ImageStore::post(std::function<void()> task) {
         std::lock_guard<std::mutex> lk(impl_->mu);
         if (impl_->stopping) return;
         impl_->tasks.push_back(std::move(task));
+        ensureDecoderLocked();
     }
     impl_->workCv.notify_one();
 }

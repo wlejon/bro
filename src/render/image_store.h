@@ -154,6 +154,10 @@ public:
     void setBudgetBytes(size_t bytes);
     size_t cachedBytes() const;
     size_t cachedCount() const;
+    // Decoder threads alive now. They start when work arrives and none is
+    // free (up to a few), and end after a while with nothing to do, so a
+    // page with no images has none.
+    size_t decoderThreads() const;
 
     ~ImageStore();
 
@@ -163,6 +167,9 @@ private:
     std::unique_ptr<Impl> impl_;
     std::atomic<uint64_t> settled_{0};
     void run(const std::shared_ptr<ImageRequest>& req, ImageWork work);
+    // Under impl_->mu, with work just queued: a decoder for it if none is free.
+    void ensureDecoderLocked();
+    void decoderLoop(void* worker);
 };
 
 }  // namespace bro::render
