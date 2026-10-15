@@ -49,8 +49,18 @@ public:
     /// Remember that `face` should be used for `cp` under `primaryId`.
     void store(uint32_t primaryId, int32_t cp, sk_sp<SkTypeface> face);
 
+    /// Check already-resolved fallback typefaces for one that covers `cp`.
+    sk_sp<SkTypeface> findCoveringFallback(uint32_t primaryId, int32_t cp);
+
+    /// Record a newly-resolved fallback typeface for reuse across codepoints.
+    void rememberFallback(uint32_t primaryId, const sk_sp<SkTypeface>& face);
+
     /// Drop everything. Call when fonts are released.
-    void clear() { map_.clear(); }
+    void clear() {
+        map_.clear();
+        fallbacksByPrimary_.clear();
+        sharedFallbacks_.clear();
+    }
 
 private:
     struct Key {
@@ -68,6 +78,8 @@ private:
         }
     };
     std::unordered_map<Key, sk_sp<SkTypeface>, KeyHash> map_;
+    std::unordered_map<uint32_t, std::vector<sk_sp<SkTypeface>>> fallbacksByPrimary_;
+    std::vector<sk_sp<SkTypeface>> sharedFallbacks_;
 };
 
 /// Split `utf8` into runs of same-typeface codepoints, using `fontMgr` to

@@ -110,14 +110,28 @@ static std::vector<VisLine> buildVisualLines(const std::string& text, float maxW
     std::vector<VisLine> out;
     auto measure = [&](size_t a, size_t b) -> float {
         if (b <= a || !r) return 0.0f;
-        return r->measureText(text.substr(a, b - a), fr).width;
+        return r->measureText(std::string_view(text).substr(a, b - a), fr).width;
+    };
+    float asciiSafeWidth = 0.0f;
+    if (maxWidth > 0.0f && r) {
+        float wAdv = r->measureText("W", fr).width;
+        if (wAdv > 0.0f) asciiSafeWidth = wAdv * 1.25f;
+    }
+    auto fitsWithoutShaping = [&](size_t a, size_t b) -> bool {
+        if (asciiSafeWidth <= 0.0f) return false;
+        if (static_cast<float>(b - a) * asciiSafeWidth > maxWidth) return false;
+        for (size_t k = a; k < b; ++k) {
+            unsigned char c = static_cast<unsigned char>(text[k]);
+            if (c < 0x20 || c > 0x7E) return false;
+        }
+        return true;
     };
     const size_t n = text.size();
     size_t lineStart = 0;
     for (size_t p = 0; p <= n; ++p) {
         if (p != n && text[p] != '\n') continue;
         // Logical line [lineStart, p).
-        if (maxWidth <= 0 || measure(lineStart, p) <= maxWidth) {
+        if (maxWidth <= 0 || fitsWithoutShaping(lineStart, p) || measure(lineStart, p) <= maxWidth) {
             out.push_back({lineStart, p});
         } else {
             size_t segStart = lineStart;
@@ -151,6 +165,18 @@ static std::vector<VisLine> buildVisualLines(const std::string& text, float maxW
     }
     if (out.empty()) out.push_back({0, 0});
     return out;
+}
+
+static bool shouldSoftWrap(dom::Element* el) {
+    if (!el) return true;
+    const std::string& wrap = el->getAttribute("wrap");
+    if (wrap == "off") return false;
+    auto& style = el->computedStyle();
+    auto it = style.find("white-space");
+    if (it != style.end() && (it->second == "pre" || it->second == "nowrap")) {
+        return false;
+    }
+    return true;
 }
 
 // Visual line the caret sits on. Last matching line wins, which naturally puts
@@ -512,7 +538,7 @@ bool ElTextarea::caretRect(float& x, float& y, float& w, float& h) {
     float lineH = lm.lineHeight();
     if (lineH <= 0.0f) return false;
 
-    float wrapW = wrapWidth_ > 0.0f ? wrapWidth_ : box.w;
+    float wrapW = shouldSoftWrap(elem_) ? (wrapWidth_ > 0.0f ? wrapWidth_ : box.w) : 0.0f;
     auto vls = buildVisualLines(val, wrapW, fr, renderer_);
     const int cpos = std::clamp(sel_.caret, 0, static_cast<int>(val.size()));
     const int li = caretVisualLine(vls, cpos);
@@ -607,7 +633,7 @@ int ElTextarea::caretIndexFromPoint(float px, float py) {
 
     // Wrap against exactly what the frame drew. Before the first paint there is
     // no recorded wrap width — the content width is what draw() will use.
-    float wrapW = wrapWidth_ > 0.0f ? wrapWidth_ : box.w;
+    float wrapW = shouldSoftWrap(elem_) ? (wrapWidth_ > 0.0f ? wrapWidth_ : box.w) : 0.0f;
     auto vls = buildVisualLines(val, wrapW, fr, renderer_);
 
     float relY = (py - box.y) + scrollY_;
@@ -647,7 +673,11 @@ float ElTextarea::contentScrollHeight() const {
     float lineH = lm.lineHeight();
     if (lineH <= 0.0f) return 0.0f;
     float contentW = elem_->layoutBox().contentRect.width;
-    float wrapW = wrapWidth_ > 0.0f ? wrapWidth_ : contentW;
+    float wrapW = shouldSoftWrap(elem_) ? (wrapWidth_ > 0.0f ? wrapWidth_ : contentW) : 0.0f;
+    if (wrapW <= 0.0f) {
+        size_t lines = 1 + static_cast<size_t>(std::count(val.begin(), val.end(), '\n'));
+        return static_cast<float>(lines) * lineH;
+    }
     auto vls = buildVisualLines(val, wrapW, fr, renderer_);
     return static_cast<float>(vls.size()) * lineH;
 }
@@ -664,15 +694,27 @@ void ElTextarea::ensureCaretVisible() {
     float contentH = elem_->layoutBox().contentRect.height;
     if (contentW <= 0.0f || contentH <= 0.0f) getContentSize(contentW, contentH);
     if (contentH <= 0.0f) return;
-    float wrapW = wrapWidth_ > 0.0f ? wrapWidth_ : contentW;
-    auto vls = buildVisualLines(val, wrapW, fr, renderer_);
+    float wrapW = shouldSoftWrap(elem_) ? (wrapWidth_ > 0.0f ? wrapWidth_ : contentW) : 0.0f;
     int cpos = std::clamp(sel_.caret, 0, static_cast<int>(val.size()));
-    int cursorLine = caretVisualLine(vls, cpos);
+    int cursorLine = 0;
+    int totalLines = 1;
+    if (wrapW <= 0.0f) {
+        for (int i = 0; i < static_cast<int>(val.size()); ++i) {
+            if (val[i] == '\n') {
+                if (i < cpos) ++cursorLine;
+                ++totalLines;
+            }
+        }
+    } else {
+        auto vls = buildVisualLines(val, wrapW, fr, renderer_);
+        cursorLine = caretVisualLine(vls, cpos);
+        totalLines = static_cast<int>(vls.size());
+    }
     float cursorY = cursorLine * lineH;
     if (cursorY < scrollY_) scrollY_ = cursorY;
     else if (cursorY + lineH > scrollY_ + contentH)
         scrollY_ = cursorY + lineH - contentH;
-    float maxScroll = std::max(0.0f, static_cast<float>(vls.size()) * lineH - contentH);
+    float maxScroll = std::max(0.0f, static_cast<float>(totalLines) * lineH - contentH);
     scrollY_ = std::clamp(scrollY_, 0.0f, maxScroll);
     elem_->setScrollTopValue(scrollY_);
 }
@@ -786,8 +828,8 @@ void ElTextarea::draw(render::Renderer* renderer,
 
     // Soft-wrap to the content width, and remember that width so cursor
     // navigation (up/down/home/end) wraps against exactly what this frame drew.
-    wrapWidth_ = w;
-    auto vls = buildVisualLines(text, w, fontRef, renderer_);
+    wrapWidth_ = shouldSoftWrap(elem_) ? w : 0.0f;
+    auto vls = buildVisualLines(text, wrapWidth_, fontRef, renderer_);
     auto lineStr = [&](const VisLine& v) { return text.substr(v.start, v.end - v.start); };
 
     float maxScroll = std::max(0.0f, static_cast<float>(vls.size()) * lineHeight - contentH);

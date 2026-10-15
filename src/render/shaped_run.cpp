@@ -638,6 +638,35 @@ bool TextShapingEngine::ensureShaper() {
     }
     return true;
 }
+
+class CachedFontRunIterator final : public SkShaper::FontRunIterator {
+public:
+    CachedFontRunIterator(std::vector<TextRun> runs, const SkFont& primary, std::size_t utf8Bytes)
+        : runs_(std::move(runs)), fallbackPrimary_(primary), utf8Bytes_(utf8Bytes) {}
+
+    void consume() override {
+        if (nextIdx_ < runs_.size()) {
+            currentFont_ = &runs_[nextIdx_].font;
+            currentEnd_ = runs_[nextIdx_].start + runs_[nextIdx_].length;
+            ++nextIdx_;
+        } else {
+            currentFont_ = &fallbackPrimary_;
+            currentEnd_ = utf8Bytes_;
+        }
+    }
+
+    std::size_t endOfCurrentRun() const override { return currentEnd_; }
+    bool atEnd() const override { return currentEnd_ >= utf8Bytes_; }
+    const SkFont& currentFont() const override { return *currentFont_; }
+
+private:
+    std::vector<TextRun> runs_;
+    SkFont fallbackPrimary_;
+    const SkFont* currentFont_ = &fallbackPrimary_;
+    std::size_t nextIdx_ = 0;
+    std::size_t currentEnd_ = 0;
+    std::size_t utf8Bytes_ = 0;
+};
 #endif
 
 const ShapedRun* TextShapingEngine::shape(std::string_view utf8,
@@ -671,16 +700,13 @@ const ShapedRun* TextShapingEngine::shape(std::string_view utf8,
     bool shaped = false;
 #if BRO_WITH_TEXT_SHAPING
     if (ensureShaper()) {
-        // MakeFontMgrRunIterator does the font fallback the shaper needs —
-        // it splits on coverage the same way splitTextForFallback does, but
-        // per shaping run rather than per codepoint span, and it hands each
-        // sub-run's real typeface to HarfBuzz so kerning and ligatures come
-        // from the face that actually draws them.
-        std::string familyZ(family);
+        // Split on font coverage using the renderer-wide FontFallbackCache so
+        // repeated glyph fallbacks across DOM nodes (e.g. a Unicode grid) hit
+        // cached typefaces instead of re-querying the system font manager per run.
         auto language = SkShaper::MakeStdLanguageRunIterator(utf8.data(), utf8.size());
-        auto fontRuns = SkShaper::MakeFontMgrRunIterator(
-            utf8.data(), utf8.size(), primary, sk_ref_sp(fontMgr),
-            familyZ.c_str(), style, language.get());
+        CachedFontRunIterator fontRuns(
+            splitTextForFallback(utf8, primary, fontMgr, style, fallback),
+            primary, utf8.size());
         auto scriptRuns = SkShapers::HB::ScriptRunIterator(utf8.data(), utf8.size());
         auto bidiRuns = SkShapers::unicode::BidiRunIterator(
             unicode_, utf8.data(), utf8.size(),
@@ -706,9 +732,9 @@ const ShapedRun* TextShapingEngine::shape(std::string_view utf8,
         // last, so an explicit setting of a tag above wins as later features
         // do in HarfBuzz.
         appendCssFeatures(cssFeatures, utf8.size(), features);
-        if (fontRuns && language && scriptRuns && bidiRuns) {
+        if (language && scriptRuns && bidiRuns) {
             ShapedRunHandler handler(b);
-            shaper_->shape(utf8.data(), utf8.size(), *fontRuns, *bidiRuns, *scriptRuns,
+            shaper_->shape(utf8.data(), utf8.size(), fontRuns, *bidiRuns, *scriptRuns,
                            *language, features.empty() ? nullptr : features.data(),
                            features.size(), std::numeric_limits<SkScalar>::max(), &handler);
             b.setNaturalWidth(handler.pen().fX);

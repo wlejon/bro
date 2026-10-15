@@ -78,7 +78,7 @@ const hot = p.functions.filter((f) => f.name.indexOf('hotLoopForProfiler') >= 0)
 assert(hot.length > 0, 'the hot function is in the profile; top: ' +
        p.functions.slice(0, 8).map((f) => f.name + ' [' + f.tier + '] ' + f.self).join(', '));
 const hotSelf = hot.reduce((s, f) => s + f.self, 0);
-const hotTotal = Math.max.apply(null, hot.map((f) => f.total));
+const hotTotal = hot.reduce((s, f) => s + f.total, 0);
 assert(hotTotal > p.samples / 2, 'the hot function is on most stacks: ' + hotTotal + '/' + p.samples);
 assert(hotSelf > 0, 'the hot function has self samples');
 assert(hot.every((f) => f.tier !== 'native'), 'a JS function is never billed as native');

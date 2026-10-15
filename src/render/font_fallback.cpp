@@ -105,6 +105,35 @@ void FontFallbackCache::store(uint32_t primaryId, int32_t cp, sk_sp<SkTypeface> 
     map_[Key{primaryId, cp}] = std::move(face);
 }
 
+sk_sp<SkTypeface> FontFallbackCache::findCoveringFallback(uint32_t primaryId, int32_t cp) {
+    if (auto it = fallbacksByPrimary_.find(primaryId); it != fallbacksByPrimary_.end()) {
+        for (const auto& fb : it->second) {
+            if (fb && fb->unicharToGlyph(cp) != 0) return fb;
+        }
+    }
+    for (const auto& fb : sharedFallbacks_) {
+        if (fb && fb->unicharToGlyph(cp) != 0) {
+            rememberFallback(primaryId, fb);
+            return fb;
+        }
+    }
+    return nullptr;
+}
+
+void FontFallbackCache::rememberFallback(uint32_t primaryId, const sk_sp<SkTypeface>& face) {
+    if (!face) return;
+    const uint32_t faceId = face->uniqueID();
+    auto& perPrimary = fallbacksByPrimary_[primaryId];
+    for (const auto& existing : perPrimary) {
+        if (existing && existing->uniqueID() == faceId) return;
+    }
+    perPrimary.push_back(face);
+    for (const auto& existing : sharedFallbacks_) {
+        if (existing && existing->uniqueID() == faceId) return;
+    }
+    sharedFallbacks_.push_back(face);
+}
+
 // -----------------------------------------------------------------------------
 // splitTextForFallback
 // -----------------------------------------------------------------------------
@@ -151,6 +180,8 @@ std::vector<TextRun> splitTextForFallback(std::string_view utf8,
             // the primary is a full-coverage font.
             if (primaryTypeface->unicharToGlyph(cp) != 0) {
                 face = primaryTypeface;
+            } else if (auto existing = cache.findCoveringFallback(primaryId, cp)) {
+                face = std::move(existing);
             } else if (fontMgr) {
                 const auto t0 = std::chrono::steady_clock::now();
                 face = sk_sp<SkTypeface>(fontMgr->matchFamilyStyleCharacter(
@@ -158,7 +189,11 @@ std::vector<TextRun> splitTextForFallback(std::string_view utf8,
                 noteFontLookup("fallback", hintFamily.c_str(), cp,
                                std::chrono::duration<double, std::milli>(
                                    std::chrono::steady_clock::now() - t0).count());
-                if (!face) face = primaryTypeface;  // no system coverage → tofu
+                if (face && face->unicharToGlyph(cp) != 0) {
+                    cache.rememberFallback(primaryId, face);
+                } else {
+                    face = primaryTypeface;  // no system coverage → tofu
+                }
             } else {
                 face = primaryTypeface;
             }
