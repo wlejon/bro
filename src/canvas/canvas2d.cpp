@@ -2,6 +2,7 @@
 #include "render/renderer.h"
 
 #include <bromath/color.h>
+#include "css/color.h"
 
 #include <algorithm>
 #include <cctype>
@@ -184,7 +185,15 @@ bool parseCSSColor(const std::string& str, uint8_t& r, uint8_t& g, uint8_t& b, u
             return true;
         }
     }
-    return false;
+
+    // Everything else CSS Color 4 has (oklch(), lab(), hwb(), color(),
+    // color-mix(), the rest of the named colours, ...) is htmlayout's parser,
+    // the one stylesheets go through, so a token read with getComputedStyle
+    // paints on a canvas exactly as it does on an element.
+    htmlayout::css::Color c;
+    if (!htmlayout::css::tryParseColor(str, c)) return false;
+    r = c.r; g = c.g; b = c.b; a = c.a;
+    return true;
 }
 
 ParsedFont parseCSSFont(const std::string& font) {

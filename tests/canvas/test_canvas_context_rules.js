@@ -71,6 +71,18 @@
     assert(ctx.fillStyle === '#123456', 'lowercase hex, zero-padded, got ' + ctx.fillStyle);
     ctx.fillStyle = 'hsl(0, 0%, 100%)';
     assert(ctx.fillStyle === '#ffffff', 'hsl serializes as hex too, got ' + ctx.fillStyle);
+    // CSS Color 4 beyond rgb/hsl goes through the stylesheet parser: a token
+    // read with getComputedStyle paints on a canvas as it does on an element.
+    ctx.fillStyle = 'oklch(0.628 0.2577 29.23)';
+    assert(ctx.fillStyle === '#ff0000', 'oklch() parses (CSS red), got ' + ctx.fillStyle);
+    ctx.fillStyle = '#123456';
+    ctx.fillStyle = 'oklch(0.5 0.1 200 / 0.5)';
+    assert(/^rgba\(/.test(ctx.fillStyle), 'oklch() with alpha reads back rgba(), got ' + ctx.fillStyle);
+    ctx.fillStyle = 'color-mix(in srgb, white 50%, black)';
+    assert(ctx.fillStyle === '#808080', 'color-mix() parses, got ' + ctx.fillStyle);
+    ctx.fillStyle = '#123456';
+    ctx.fillStyle = 'not-a-colour';
+    assert(ctx.fillStyle === '#123456', 'an invalid colour is still ignored, got ' + ctx.fillStyle);
     ctx.strokeStyle = 'rgba(0, 128, 255, 0.5)';
     assert(ctx.strokeStyle === 'rgba(0, 128, 255, 0.5)', 'a translucent strokeStyle reads back rgba(), got ' + ctx.strokeStyle);
     ctx.strokeStyle = 'rgba(1, 2, 3, 0.3)';
