@@ -104,7 +104,9 @@ public:
     static constexpr size_t kCapacity = 8192;
     static constexpr size_t kMarkCapacity = 256;
 
-    FrameTrace() : ring_(kCapacity) {}
+    // The ring grows as frames commit, up to kCapacity (~2 MB): an app that
+    // draws a frame now and then never pays for all of it.
+    FrameTrace() = default;
 
     /// The record being filled for the frame now running.
     FrameRecord& current() { return cur_; }
@@ -114,7 +116,10 @@ public:
         cur_.startMs = startMs;
     }
     void commit() {
-        ring_[head_ % kCapacity] = cur_;
+        if (ring_.size() < kCapacity)
+            ring_.push_back(cur_);  // head_ == ring_.size() until the ring is full
+        else
+            ring_[head_ % kCapacity] = cur_;
         ++head_;
     }
 

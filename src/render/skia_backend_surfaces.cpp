@@ -24,6 +24,11 @@
 namespace bro::render {
 
 void SkiaRenderer::beginFrame(int width, int height) {
+    // On the GPU every layer is drawn into a surface of its own
+    // (switchSurface) and the presenter samples those: the frame's own
+    // surface is only the canvas between them and is never read, so there it
+    // is one pixel rather than a window-sized bitmap cleared every frame.
+    if (gpu_) width = height = 1;
     if (!surface_ || surface_->width() != width || surface_->height() != height) {
         surface_ = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(width, height));
     }
