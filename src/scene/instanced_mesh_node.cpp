@@ -133,6 +133,43 @@ void InstancedMeshNode::setScatterSegments(const float* segData, size_t segCount
     bumpChangeGeneration();
 }
 
+const bromesh::MeshData& InstancedMeshNode::scatterBatchMesh() const {
+    if (scatterBatchGeneration_ == geometryGeneration_) return scatterBatch_;
+    scatterBatchGeneration_ = geometryGeneration_;
+    scatterBatch_.clear();
+    scatterCopies_ = 1;
+    const size_t vc = mesh_.vertexCount();
+    if (vc == 0) return scatterBatch_;
+    // About a thousand vertices an instance: past that the per-instance cost
+    // is noise, and the copies stay a few hundred KB.
+    const int copies = static_cast<int>(std::clamp<size_t>(1024 / vc, 1, 256));
+    scatterCopies_ = copies;
+    if (copies == 1) {
+        scatterBatch_ = mesh_;
+        return scatterBatch_;
+    }
+    const auto repeat = [&](const std::vector<float>& src, std::vector<float>& dst) {
+        dst.reserve(src.size() * copies);
+        for (int c = 0; c < copies; ++c) dst.insert(dst.end(), src.begin(), src.end());
+    };
+    repeat(mesh_.positions, scatterBatch_.positions);
+    repeat(mesh_.normals, scatterBatch_.normals);
+    repeat(mesh_.uvs, scatterBatch_.uvs);
+    repeat(mesh_.colors, scatterBatch_.colors);
+    repeat(mesh_.tangents, scatterBatch_.tangents);
+    std::vector<uint32_t> idx = mesh_.indices;
+    if (idx.empty()) {
+        idx.resize(vc);
+        for (uint32_t i = 0; i < vc; ++i) idx[i] = i;
+    }
+    scatterBatch_.indices.reserve(idx.size() * copies);
+    for (int c = 0; c < copies; ++c) {
+        const uint32_t base = static_cast<uint32_t>(c * vc);
+        for (uint32_t i : idx) scatterBatch_.indices.push_back(base + i);
+    }
+    return scatterBatch_;
+}
+
 namespace {
 
 // A unit vector in two floats (octahedral), the encoding mesh_tube.vert

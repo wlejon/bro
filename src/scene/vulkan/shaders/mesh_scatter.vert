@@ -1,5 +1,6 @@
 #version 450
-// Foliage scatter: one instance per leaf, its transform synthesised from the
+// Foliage scatter: a leaf per copy of the leaf mesh, several copies an
+// instance (scatterLeafIndex), its transform synthesised from the
 // node's branch-segment records (scene_procedural.glsl scatterLeaf) rather
 // than read from an instance stream. shadow_scatter.vert is the caster. When
 // the node carries vegetation records the leaf sways in the wind field
@@ -30,7 +31,8 @@ void main() {
     mat3 R;
     int seg;
     float along;
-    if (!scatterLeaf(gl_InstanceIndex, P, R, F, seg, along)) {
+    int leaf;
+    if (!scatterLeafIndex(gl_InstanceIndex, gl_VertexIndex, leaf) || !scatterLeaf(leaf, P, R, F, seg, along)) {
         gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
         outVegShade = vec4(0.0, 0.0, 0.0, 1.0);
         return;

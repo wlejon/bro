@@ -4,15 +4,26 @@
 //
 //   header[0..2]   the mode's parameters (see each shader); header[2].z is the
 //                  first vegetation record (0: the node carries none)
+//   header[3]      scatter: leaves an instance, the leaf mesh's vertex count,
+//                  the leaf count (scatterLeafIndex)
 //   records[]      2 per segment, then (scatter) the per-leaf segment indices
 //                  packed four to a record, then (with vegetation) 3 per
 //                  segment: (root.xyz, height), (crown.xyz, crownRadius),
 //                  (weightFrom, weightTo, phase, 0) — scene_vegetation.glsl
 
 layout(std430, set = 3, binding = 1) readonly buffer ProceduralSegments {
-    vec4 header[3];
+    vec4 header[4];
     vec4 records[];
 } procedural;
+
+// The leaf a scatter vertex belongs to: each instance draws header[3].x
+// copies of the leaf mesh end to end (InstancedMeshNode::scatterBatchMesh).
+// False past the last leaf.
+bool scatterLeafIndex(int instanceIndex, int vertexIndex, out int leaf) {
+    vec4 h = procedural.header[3];
+    leaf = instanceIndex * int(h.x + 0.5) + vertexIndex / max(int(h.y + 0.5), 1);
+    return leaf < int(h.z + 0.5);
+}
 
 const float PROC_TWO_PI = 6.28318530718;
 

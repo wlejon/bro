@@ -267,29 +267,30 @@ VkDescriptorSet SceneMeshDrawer::boneSet(SceneFrame& frame, const std::vector<fl
     return set;
 }
 
-VkDescriptorSet SceneMeshDrawer::segmentSet(SceneFrame& frame, float (&header)[12],
+VkDescriptorSet SceneMeshDrawer::segmentSet(SceneFrame& frame, float (&header)[16],
                                             const std::vector<float>& records,
                                             const std::vector<float>* leafSegments,
                                             const std::vector<float>* vegetation) {
+    constexpr size_t kHeader = 16;   // scene_procedural.glsl's header[4]
     const size_t leafFloats = leafSegments ? (leafSegments->size() + 3) / 4 * 4 : 0;
     // Records are whole vec4s, so the vegetation starts on one.
     const size_t recordFloats = (records.size() + 3) / 4 * 4;
     const size_t vegStart = recordFloats + leafFloats;
     const size_t vegFloats = vegetation ? vegetation->size() : 0;
     header[10] = vegetation ? static_cast<float>(vegStart / 4) : 0.0f;
-    const size_t bytes = (12 + vegStart + vegFloats) * sizeof(float);
+    const size_t bytes = (kHeader + vegStart + vegFloats) * sizeof(float);
     const render::UploadSlice slice = frame.gpu.device.frameUpload(bytes);
     if (!slice) return VK_NULL_HANDLE;
     auto* dst = static_cast<float*>(slice.mapped);
     std::memcpy(dst, header, sizeof(header));
-    std::memcpy(dst + 12, records.data(), records.size() * sizeof(float));
-    std::fill(dst + 12 + records.size(), dst + 12 + recordFloats, 0.0f);
+    std::memcpy(dst + kHeader, records.data(), records.size() * sizeof(float));
+    std::fill(dst + kHeader + records.size(), dst + kHeader + recordFloats, 0.0f);
     if (leafSegments) {
-        float* leaves = dst + 12 + recordFloats;
+        float* leaves = dst + kHeader + recordFloats;
         std::memcpy(leaves, leafSegments->data(), leafSegments->size() * sizeof(float));
         std::fill(leaves + leafSegments->size(), leaves + leafFloats, 0.0f);
     }
-    if (vegetation) std::memcpy(dst + 12 + vegStart, vegetation->data(), vegFloats * sizeof(float));
+    if (vegetation) std::memcpy(dst + kHeader + vegStart, vegetation->data(), vegFloats * sizeof(float));
     VkDescriptorSet set = frame.gpu.device.frameSet(defaults_->boneLayout);
     SceneVkDescriptorWriter writer;
     writer.writeBuffer(1, slice.buffer, bytes, slice.offset, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
@@ -500,12 +501,19 @@ bool SceneMeshDrawer::prepare(SceneFrame& frame, MeshNode& node, MeshDraw& out) 
 }
 
 bool SceneMeshDrawer::prepareProcedural(SceneFrame& frame, InstancedMeshNode& node, MeshDraw& out) {
-    float header[12] = {};
+    float header[16] = {};
     if (node.isScatter()) {
         const size_t leaves = node.scatterInstanceCount();
         if (node.mesh().empty() || node.scatterSegCount() == 0 || leaves == 0) return false;
-        const GpuMesh* gm = frame.gpu.resources.mesh(node.id(), 0, node.geometryGeneration(), node.mesh());
+        // Several leaves an instance (scatterBatchMesh), in a slot of its own.
+        constexpr uint32_t kScatterBatchSlot = 0x7fff;
+        const GpuMesh* gm = frame.gpu.resources.mesh(node.id(), kScatterBatchSlot, node.geometryGeneration(),
+                                                     node.scatterBatchMesh());
         if (!gm) return false;
+        const int copies = node.scatterCopies();
+        header[12] = static_cast<float>(copies);
+        header[13] = static_cast<float>(node.mesh().vertexCount());
+        header[14] = static_cast<float>(leaves);
         const InstancedMeshNode::ScatterParams& p = node.scatterParams();
         std::memcpy(&header[0], &p.seed, sizeof(float));
         header[1] = p.upBias;
@@ -528,7 +536,7 @@ bool SceneMeshDrawer::prepareProcedural(SceneFrame& frame, InstancedMeshNode& no
         out.vertices = gm->vertices.buffer;
         out.indices = gm->indices.buffer;
         out.indexCount = gm->indexCount;
-        out.instanceCount = static_cast<uint32_t>(leaves);
+        out.instanceCount = static_cast<uint32_t>((leaves + copies - 1) / copies);
     } else {
         if (node.tubeSegCount() == 0) return false;
         header[0] = static_cast<float>(node.tubeSides());

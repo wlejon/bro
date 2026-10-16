@@ -14,7 +14,8 @@ void main() {
     mat3 R;
     int seg;
     float along;
-    if (!scatterLeaf(gl_InstanceIndex, P, R, F, seg, along)) {
+    int leaf;
+    if (!scatterLeafIndex(gl_InstanceIndex, gl_VertexIndex, leaf) || !scatterLeaf(leaf, P, R, F, seg, along)) {
         gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
         return;
     }

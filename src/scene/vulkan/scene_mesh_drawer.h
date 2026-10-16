@@ -187,7 +187,7 @@ private:
     /// Set 3 holding a procedural draw's header and records, then its
     /// vegetation records (3 vec4s a segment; header[10] says where); null
     /// when the frame's upload memory runs out.
-    VkDescriptorSet segmentSet(SceneFrame& frame, float (&header)[12], const std::vector<float>& records,
+    VkDescriptorSet segmentSet(SceneFrame& frame, float (&header)[16], const std::vector<float>& records,
                                const std::vector<float>* leafSegments, const std::vector<float>* vegetation);
     bool prepareProcedural(SceneFrame& frame, InstancedMeshNode& node, MeshDraw& out);
     /// The pipeline state a draw selects beyond its shaders.

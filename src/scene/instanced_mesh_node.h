@@ -206,8 +206,9 @@ public:
     // Mirrors bromesh::placeLeavesOnBranches; obstacle avoidance / dedup are not
     // modelled (use the CPU path for those). Sets the node into scatter mode —
     // setInstances() and scatter are mutually exclusive. The draw issues one
-    // instance per leaf; `instSeg` (instCount entries) maps each leaf to its
-    // segment index, so there are no wasted/degenerate instances.
+    // leaf per copy of the mesh, several copies an instance
+    // (scatterBatchMesh); `instSeg` (instCount entries) maps each leaf to its
+    // segment index, so only the last instance has spare (degenerate) copies.
     //
     // Clump mode (`clumps`): the records are leaf clumps instead of segments,
     // [centre.xyz, radius] then [twig dir.xyz, 0], and each leaf sits in its
@@ -226,6 +227,14 @@ public:
                             const ScatterParams& params,
                             const float boundsMin[3], const float boundsMax[3]);
     bool isScatter() const { return scatterMode_; }
+    /// The geometry a scatter draw binds: `scatterCopies()` copies of mesh()
+    /// end to end, so one instance draws that many leaves (leaf = instance *
+    /// copies + vertex / mesh vertex count). A GPU pays a fixed front-end cost
+    /// per instance, and a leaf card is a few dozen vertices: one instance
+    /// per leaf made the scatter cost track its leaf count rather than its
+    /// vertices. Rebuilt when the mesh changes (keyed by geometryGeneration()).
+    const bromesh::MeshData& scatterBatchMesh() const;
+    int scatterCopies() const { scatterBatchMesh(); return scatterCopies_; }
     size_t scatterSegCount() const { return scatterSegCount_; }
     size_t scatterInstanceCount() const { return scatterInstCount_; }
     const ScatterParams& scatterParams() const { return scatterParams_; }
@@ -408,6 +417,9 @@ private:
     std::vector<float> scatterInstSeg_;  // instCount floats (leaf → segment idx)
     size_t scatterSegCount_ = 0;
     size_t scatterInstCount_ = 0;
+    mutable bromesh::MeshData scatterBatch_;      // scatterBatchMesh()
+    mutable uint64_t scatterBatchGeneration_ = 0;
+    mutable int scatterCopies_ = 1;
     ScatterParams scatterParams_;
     bromath::AABB3 scatterBounds_;
 
