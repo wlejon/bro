@@ -28,6 +28,12 @@
 //              headless  the frame is composited on demand (capturePixels),
 //                        on the virtual clock, at most `fps` a second.
 //              server    no frames (bro-server renders nothing).
+//            Each frame carries its damage, what changed since the frame
+//            before it (render/frame_damage.h): under DRM the presenter's
+//            GPU comparison of the two scanout buffers, elsewhere a CPU
+//            comparison of the two read-back frames. The encoder codes a
+//            small damage finer, so a line of text rewritten over and over
+//            lands sharp instead of as soft as a big change.
 //
 // With no server the pump is one branch, and no presenter state is touched.
 #include "bronze_host/host_remote.h"
@@ -35,6 +41,7 @@
 
 #include "engine/control.h"
 #include "engine/engine.h"
+#include "render/frame_damage.h"
 #include "render/vulkan_presenter.h"
 #if BRO_WITH_DMABUF && defined(__linux__)
 #include "render/kms_direct_presenter.h"
@@ -69,6 +76,13 @@ struct RemoteHost {
     bool captureWas = false;
     bool captureSet = false;
     bool loggedNoFrames = false;
+    // A composited frame went unsubmitted, so the next one's damage (against
+    // the frame before it) is not what changed since the last frame sent.
+    bool damageGap = true;
+    // Windowed and headless: the last CPU frame submitted, which the next is
+    // diffed against for its damage (render/frame_damage.h).
+    std::shared_ptr<std::vector<uint8_t>> lastCpuPixels;
+    int lastCpuW = 0, lastCpuH = 0;
 #if BRO_WITH_DMABUF && defined(__linux__)
     render::KmsDirectPresenter* kms = nullptr;  // the presenter whose listener is ours
 #endif
@@ -81,11 +95,25 @@ float cssToFrame(float css, int cssExtent, int frameExtent) {
     return css * static_cast<float>(frameExtent) / static_cast<float>(cssExtent);
 }
 
+// The frame's damage, from the compositor's comparison of the frame with the
+// one before it: brovideo codes a small damage finer, so a line rewritten
+// lands sharp at once rather than as soft as the encoder leaves a big change.
+void setDamage(broremote::Frame& frame, bool known, const std::vector<render::DamageRect>& damage) {
+    frame.damage_known = known && !g_host.damageGap;
+    g_host.damageGap = false;
+    if (!frame.damage_known) return;
+    frame.damage.reserve(damage.size());
+    for (const render::DamageRect& r : damage) frame.damage.push_back({r.x, r.y, r.width, r.height});
+}
+
 #if BRO_WITH_DMABUF && defined(__linux__)
 void onScanout(const render::KmsScanoutFrame& f) {
     broremote::Server* server = g_host.server;
     render::KmsDirectPresenter* kms = g_host.kms;
-    if (!server || !kms || !server->wants_frames() || f.planeCount == 0) return;
+    if (!server || !kms || !server->wants_frames() || f.planeCount == 0) {
+        g_host.damageGap = true;
+        return;
+    }
     broremote::Frame frame;
     frame.width = f.width;
     frame.height = f.height;
@@ -99,6 +127,7 @@ void onScanout(const render::KmsScanoutFrame& f) {
     }
     // presentComposited waited for the slot's GPU work before the flip.
     frame.acquire_fence_fd = -1;
+    setDamage(frame, f.damageKnown, f.damage);
     std::function<void()> release = kms->holdSlot(f.slot);
     server->submit(frame, std::move(release));
 }
@@ -108,6 +137,8 @@ void onScanout(const render::KmsScanoutFrame& f) {
 void setFeeding(bool on) {
     if (on == g_host.feeding) return;
     g_host.feeding = on;
+    g_host.damageGap = true;
+    g_host.lastCpuPixels.reset();
     engine::Engine& e = *g_host.engine;
     render::VulkanPresenter* presenter = e.vulkanPresenter();
     g_host.lastCpuFrameMs = -std::numeric_limits<double>::infinity();
@@ -186,6 +217,19 @@ void submitCpuFrame() {
     frame.width = static_cast<uint32_t>(w);
     frame.height = static_cast<uint32_t>(h);
     frame.cpu = pixels->data();
+    const auto& last = g_host.lastCpuPixels;
+    if (last && g_host.lastCpuW == w && g_host.lastCpuH == h) {
+        std::vector<render::DamageRect> damage;
+        render::diffFrames(last->data(), pixels->data(), static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                           static_cast<size_t>(w) * 4, damage);
+        setDamage(frame, true, damage);
+    } else {
+        setDamage(frame, false, {});
+    }
+    // The server only reads it, so the next frame can be diffed against it.
+    g_host.lastCpuPixels = pixels;
+    g_host.lastCpuW = w;
+    g_host.lastCpuH = h;
     // The buffer lives until the server is done with it.
     g_host.server->submit(frame, [pixels] {});
 }

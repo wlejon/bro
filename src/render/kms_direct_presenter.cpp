@@ -300,6 +300,7 @@ bool KmsDirectPresenter::initScanoutBuffers(VulkanContext& ctx, uint32_t count) 
     }
 
     currentSlot_ = 0;
+    damagePrevSlot_ = SIZE_MAX;
     return true;
 #else
     (void)ctx;
@@ -445,6 +446,20 @@ bool KmsDirectPresenter::presentComposited(
     cmdTransitionImage(cmd, target.image, colorRange(), layout, VK_IMAGE_LAYOUT_GENERAL);
     if (frameTap_) frameTap_->record(cmd, target.image, slot.width, slot.height);
 
+    // The damage, for the scanout listener: this composite against the last
+    // one, which its slot still holds (slots rest in GENERAL).
+    bool damageRecorded = false;
+    if (scanoutListener_) {
+        if (!damageDiff_) damageDiff_ = std::make_unique<GpuFrameDiff>(ctx);
+        if (damageDiff_->valid() && damagePrevSlot_ < scanoutSlots_.size() && damagePrevSlot_ != currentSlot_) {
+            auto& prev = scanoutSlots_[damagePrevSlot_];
+            if (prev.width == slot.width && prev.height == slot.height && prev.vkImage) {
+                damageRecorded = damageDiff_->record(cmd, target.image, slot.vkView, prev.vkImage->handle(),
+                                                     prev.vkView, VK_IMAGE_LAYOUT_GENERAL, slot.width, slot.height);
+            }
+        }
+    }
+
     uint64_t ticket = frames.submit(cmd, {});
     const double tWait = nowMs();
     ctx.queue().wait(ticket);
@@ -472,8 +487,10 @@ bool KmsDirectPresenter::presentComposited(
             out.offsets[i] = slot.dmabuf.planes[i].offset;
             out.strides[i] = slot.dmabuf.planes[i].stride;
         }
+        if (damageRecorded) out.damageKnown = damageDiff_->result(out.damage);
         scanoutListener_(out);
     }
+    damagePrevSlot_ = currentSlot_;
 
     stageCursor();
     auto flipRes = presenter_->present(*slot.fb, inFenceFd, true);
@@ -751,6 +768,8 @@ void KmsDirectPresenter::close() {
         if (!waitForSlotRelease(i))
             LOG_WARN("KmsDirectPresenter: closing with scanout slot %zu still held", i);
     }
+    damageDiff_.reset();
+    damagePrevSlot_ = SIZE_MAX;
     for (auto& s : scanoutSlots_) {
         if (s.vkView != VK_NULL_HANDLE && vkDevice_ != VK_NULL_HANDLE) {
             vkDestroyImageView(vkDevice_, s.vkView, nullptr);

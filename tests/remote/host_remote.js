@@ -32,6 +32,11 @@ assert(events.join() === 'attach:1,detach:0', 'attach, then detach: ' + events.j
 assert(stream && stream.codec === 'raw' && stream.width === 320 && stream.height === 240,
        'status() reports the stream: ' + JSON.stringify(stream));
 assert(stream && stream.stats.encoded >= 1, 'frames were encoded');
+// Every frame but the first carries its damage, from the CPU diff against
+// the frame before it.
+const final = bro.remote.status().stats;
+assert(final.damaged >= 1 && final.damaged < final.encoded,
+       'frames after the first carry their damage: ' + JSON.stringify(final));
 assert(seen.keys.join() === 'a', 'the viewer\'s key arrived as keydown "a": ' + JSON.stringify(seen.keys));
 assert(seen.clicks.length === 1 && seen.clicks[0][0] === 100 && seen.clicks[0][1] === 60 &&
        seen.clicks[0][2] === 0, 'the viewer\'s click arrived at (100, 60): ' + JSON.stringify(seen.clicks));

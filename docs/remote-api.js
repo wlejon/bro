@@ -115,6 +115,9 @@
  *       stats: { submitted, encoded, keyframes, replaced, unwatched, failed, streams,
  *                repeats,            the last picture encoded again with no new frame: sharpening a
  *                                    still screen, or the keyframe a viewer asked for
+ *                damaged,            frames encoded with their damage known (what changed since the
+ *                                    frame before: the encoder codes a small damage finer, so a
+ *                                    line rewritten lands sharp; bro finds it from the pixels)
  *                windowWaits,        frames submitted while a viewer was at its ack window
  *                lanes,              input lanes joined
  *                audioLanes,         audio lanes joined

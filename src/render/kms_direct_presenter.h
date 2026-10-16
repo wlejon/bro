@@ -1,5 +1,6 @@
 #pragma once
 
+#include "render/frame_damage.h"
 #include "render/layer_source.h"
 
 #include <cstdint>
@@ -52,6 +53,11 @@ struct KmsScanoutFrame {
     int fds[4] = {-1, -1, -1, -1};
     uint32_t offsets[4] = {};
     uint32_t strides[4] = {};
+    // What changed since the composited frame before it (render/frame_damage.h),
+    // found by comparing the two scanout buffers on the GPU. Unknown for the
+    // first frame and after the output was reconfigured.
+    bool damageKnown = false;
+    std::vector<DamageRect> damage;
 };
 
 class KmsDirectPresenter {
@@ -157,9 +163,15 @@ public:
     /// Called on the presenting thread for each composited frame as soon as
     /// its GPU work is done, just before it is flipped to the screen (the
     /// content is complete: no acquire fence is needed; a reader that keeps
-    /// it past the call holds the slot, holdSlot). Empty to stop.
+    /// it past the call holds the slot, holdSlot). Empty to stop. While one
+    /// is set, each composite is also compared with the one before it on the
+    /// GPU (a compute pass in the frame's own command buffer), which gives
+    /// the frame's damage.
     using ScanoutListener = std::function<void(const KmsScanoutFrame&)>;
-    void setScanoutListener(ScanoutListener listener) { scanoutListener_ = std::move(listener); }
+    void setScanoutListener(ScanoutListener listener) {
+        scanoutListener_ = std::move(listener);
+        damagePrevSlot_ = SIZE_MAX;
+    }
 
     /// Keeps `slot` from being rendered into until the returned release is
     /// called (exactly once, from any thread; it stays safe to call after the
@@ -230,6 +242,10 @@ private:
     FrameTap* frameTap_ = nullptr;
     ScanoutListener scanoutListener_;
     bool directScanoutInhibited_ = false;
+    // While a scanout listener is set: each composite compared with the one
+    // before it (the slot `damagePrevSlot_`, SIZE_MAX when there is none).
+    std::unique_ptr<GpuFrameDiff> damageDiff_;
+    size_t damagePrevSlot_ = SIZE_MAX;
 
     bool active_ = false;
     bool paused_ = false;
