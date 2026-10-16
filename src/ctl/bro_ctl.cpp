@@ -23,6 +23,7 @@
 // open between commands by a local agent; an output file comes back in the
 // reply (the request's outArg) rather than being written on the host.
 
+#include "ctl/bro_ctl_inbox.h"
 #include "platform/control_protocol.h"
 #if BRO_CTL_REMOTE
 #include "ctl/bro_ctl_remote.h"
@@ -165,22 +166,23 @@ std::string resolveSocket(const std::string& path, const std::string& name, std:
 // One connection: requests out, replies back by id (control_protocol.h). To
 // a local engine, to the agent of a remote session (which speaks the same
 // protocol), or with --remote --direct over a text-only session of its own.
-struct Conn {
+struct Conn final : broctl::Caller {
     std::unique_ptr<brolink::Stream> stream;
     brolink::wire::MessageSplitter split{control::kMaxMessage};
     uint64_t nextId = 1;
     uint64_t sent = 0;
     // The engine is on another machine: an output file comes back in the
     // reply (outArg) instead of being written where the engine runs.
-    bool remote = false;
+    bool remote_ = false;
 #if BRO_CTL_REMOTE
     std::unique_ptr<broctl::DirectLink> direct;
 #endif
 
     // One command and its reply: ok, payload and the outArg file's bytes.
     // False when the connection died or spoke something else.
+    bool remote() const override { return remote_; }
     bool call(const std::vector<std::string>& argv, size_t outArg, bool& ok, std::string& payload,
-              std::string& file) {
+              std::string& file) override {
 #if BRO_CTL_REMOTE
         if (direct) return direct->call(argv, outArg, ok, payload, file);
 #endif
@@ -320,7 +322,10 @@ void usage() {
                  "           a remote session's engine over broremote's text lane ($BRO_CTL_REMOTE sets HOST;\n"
                  "           --local ignores it). A local agent holds the session between commands\n"
                  "           (--idle SECS, default 1800); --direct uses one ssh per command.\n"
-                 "       bro-ctl --remote HOST connect | disconnect   (start / stop that agent)\n");
+                 "       bro-ctl --remote HOST connect | disconnect   (start / stop that agent)\n"
+                 "       bro-ctl agents | ask NAME TEXT... [--file PATH]... [--wait SECS] [--async]\n"
+                 "       bro-ctl inbox serve NAME [--about TEXT] [--exec CMD] | result ID | status ID [--follow] | log\n"
+                 "           the session's agent inbox (docs/agent-inbox.md)\n");
 }
 
 // A command's file output: screenshot takes its path as the first argument,
@@ -336,7 +341,7 @@ int runOne(Conn& c, std::vector<std::string> argv, const std::string& out) {
     const std::string cmd = argv[0];
     plan.toStdout = (out == "-");
     size_t outArg = 0;  // remote: where the output path went (its file comes back in the reply)
-    if (!out.empty() && c.remote && cmd == "record") {
+    if (!out.empty() && c.remote_ && cmd == "record") {
         std::fprintf(stderr, "bro-ctl: record -o does not cross --remote (the frames stay on the host; "
                              "record there and copy the directory)\n");
         return 1;
@@ -344,7 +349,7 @@ int runOne(Conn& c, std::vector<std::string> argv, const std::string& out) {
     if (!out.empty() && (cmd == "screenshot" || cmd == "record" || cmd == "shot")) {
         // Remote, the engine writes a file of its own and returns it: the
         // argument only carries the extension (and names the file in the reply).
-        if (c.remote) plan.path = plan.toStdout ? std::string("stdout.png") : out;
+        if (c.remote_) plan.path = plan.toStdout ? std::string("stdout.png") : out;
         else plan.path = plan.toStdout ? (std::filesystem::path(runtimeDir()) /
                                           ("stdout-" + std::to_string(processId()) + (cmd == "record" ? "" : ".png")))
                                              .string()
@@ -379,7 +384,7 @@ int runOne(Conn& c, std::vector<std::string> argv, const std::string& out) {
             else outArg = firstPos + 1;
         }
         argv[outArg] = plan.path;
-        if (!c.remote) outArg = 0;
+        if (!c.remote_) outArg = 0;
     }
     if (cmd == "eval") {
         // eval -  : the script from stdin;  eval -f FILE : from a file.
@@ -466,7 +471,7 @@ int runProfile(Conn& c, const std::vector<std::string>& argv) {
     int top = 40;
     for (const auto& a : argv)
         if (a.rfind("--top=", 0) == 0) top = std::atoi(a.c_str() + 6);
-    if (c.remote) {
+    if (c.remote_) {
         std::fprintf(stderr, "bro-ctl: profile runs perf on the host: ssh there and run it\n");
         return 1;
     }
@@ -496,9 +501,14 @@ int runProfile(Conn& c, const std::vector<std::string>& argv) {
     return std::system(cmd) == 0 ? 0 : 1;
 }
 
-// profile, batch, or one command, on an open connection.
+// A fresh connection to the same engine c talks to (the inbox's serve keeps
+// one to poll and one to answer). Set in main().
+broctl::CallerFactory g_open;
+
+// profile, batch, the inbox's own, or one command, on an open connection.
 int runCommands(Conn& c, const std::vector<std::string>& args, const std::string& out) {
     if (args[0] == "profile") return runProfile(c, args);
+    if (broctl::isInboxCommand(args)) return broctl::runInbox(args, c, g_open, runtimeDir());
     if (args[0] == "batch") {
         int status = 0;
         std::string line;
@@ -562,7 +572,7 @@ int main(int argc, char** argv) {
         t.idleSeconds = idle;
         if (agent) return broctl::runAgent(t);
         Conn c;
-        c.remote = true;
+        c.remote_ = true;
         std::string err;
         if (args[0] == "disconnect") {
             // The agent, if one is up; nothing to do otherwise.
@@ -574,6 +584,14 @@ int main(int argc, char** argv) {
             if (!c.call({"@agent", "stop"}, ok, payload)) return 0;
             return printReply(ok, payload);
         }
+        g_open = [t, direct](std::string& e) -> std::unique_ptr<broctl::Caller> {
+            auto n = std::make_unique<Conn>();
+            n->remote_ = true;
+            if (direct) n->direct = broctl::DirectLink::open(t, e);
+            else n->stream = broctl::connectAgent(t, e);
+            if (!n->direct && !n->stream) return nullptr;
+            return n;
+        };
         if (direct) {
             c.direct = broctl::DirectLink::open(t, err);
             if (!c.direct) return std::fprintf(stderr, "bro-ctl: %s\n", err.c_str()), 2;
@@ -610,6 +628,12 @@ int main(int argc, char** argv) {
     std::string err;
     c.stream = brolink::connect_local(sock, &err);
     if (!c.stream) return std::fprintf(stderr, "bro-ctl: %s\n", err.c_str()), 2;
+    g_open = [sock](std::string& e) -> std::unique_ptr<broctl::Caller> {
+        auto n = std::make_unique<Conn>();
+        n->stream = brolink::connect_local(sock, &e);
+        if (!n->stream) return nullptr;
+        return n;
+    };
 
     return runCommands(c, args, out);
 }

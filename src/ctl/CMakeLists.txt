@@ -3,7 +3,9 @@
 # it builds in any tree that builds bro, including a host that embeds
 # bro_engine (helm) and turns the stock executables off. Its transport is
 # brolink's local IPC: a Unix socket on POSIX, a named pipe on Windows.
-add_executable(bro-ctl bro_ctl.cpp)
+# The agent inbox's client commands (bro_ctl_inbox.cpp) read JSON with bro's
+# own reader, a standalone file.
+add_executable(bro-ctl bro_ctl.cpp bro_ctl_inbox.cpp ${bro_SOURCE_DIR}/src/util/json_in.cpp)
 set_target_properties(bro-ctl PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 target_include_directories(bro-ctl PRIVATE ${bro_SOURCE_DIR}/src)
 target_link_libraries(bro-ctl PRIVATE brolink)
