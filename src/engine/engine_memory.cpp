@@ -375,6 +375,11 @@ std::string Engine::memoryReport(bool detail) {
     out += " scenes:" + std::to_string(sceneGraphs_.size());
 #endif
     out += "\n";
+    // The wrapper modules entered when a program first touches them.
+    const std::string loaded = bronze_host::loadedModuleGroups();
+    const std::string deferred = bronze_host::deferredModuleGroups();
+    out += "modules   loaded: " + (loaded.empty() ? std::string("-") : loaded) +
+           "  deferred: " + (deferred.empty() ? std::string("-") : deferred) + "\n";
     return out;
 }
 

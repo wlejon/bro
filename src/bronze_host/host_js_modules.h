@@ -75,4 +75,20 @@ void installSceneModule();
 void installMotionModule();
 void installImpostorModule();
 
+// The main realm's wrapper modules that most apps never touch, deferred
+// until a program first does: the 3D family (physics ... impostor), net
+// (net_sync + net), motion, bro.image.gpu and bro.vision.wildlife. Each group
+// registers its globals as lazy host globals (bronze registerLazyGlobal: the
+// manifest lists them, the first read runs the group) and turns its `bro.<ns>`
+// members into accessors that run the group and then read back the member it
+// mounted. Worker realms still enter their modules eagerly
+// (installWorkerBroRoot).
+void installDeferredModules();
+// Run the 3D group now: a SceneGraph made by getContext('scene') needs the
+// prototypes js/scene*.js install.
+void ensure3DModules();
+// Whether `name` (a `bro.<ns>` member or a global) belongs to a group that
+// has not run: markAvailableNamespaces skips it rather than run the group.
+bool isDeferredName(const char* name);
+
 }  // namespace bro::bronze_host

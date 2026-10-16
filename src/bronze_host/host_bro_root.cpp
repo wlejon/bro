@@ -196,7 +196,11 @@ void installBroRoots(engine::Engine& engine) {
                    "rave", "music", "motion", "mic", "sense", "gesture", "wake", "kws", "listen",
                    "triposplat", "diffusion", "vision", "diar", "stt", "tts",
                    "flora", "tensor", "profiler", "models"}));
+#if !BRO_WITH_3D
+    // With the 3D family, js/physics.js makes `Physics` when a program first
+    // reads it (installDeferredModules).
     auto* physicsRoot = new ev::Persistent(ev::createObject());
+#endif
 #if BRO_WITH_3D
     {
         ev::Persistent scene(ev::createObject());
@@ -207,7 +211,9 @@ void installBroRoots(engine::Engine& engine) {
     publish("bro", *bro);
     publish("__bro", *dunder);
     publish("__bro_native", *native);
+#if !BRO_WITH_3D
     publish("Physics", *physicsRoot);
+#endif
 
     // Every sibling's JS API, once (host_sibling_apis.cpp): they mount onto
     // the roots just published and register the natives bro_core.js and the
@@ -451,15 +457,21 @@ void markAvailableNamespaces() {
         if (!ev::isUndefined(cur)) return;
         ev::setProperty(ns.get(), "available", ev::fromBool(true));
     };
+    // A namespace whose module has not run yet (installDeferredModules) is
+    // skipped: reading it would run the module. Its group calls this again
+    // once it has.
     ev::GlobalValue broG = ev::globalValue("bro");
     if (broG.found && ev::isObject(broG.value)) {
+        ev::Persistent root(broG.value);
         for (const char* name : kGated) {
-            ev::Persistent root(broG.value);
+            if (isDeferredName(name)) continue;
             decorate(ev::getProperty(root.get(), name));
         }
     }
-    ev::GlobalValue phys = ev::globalValue("Physics");
-    if (phys.found) decorate(phys.value);
+    if (!isDeferredName("Physics")) {
+        ev::GlobalValue phys = ev::globalValue("Physics");
+        if (phys.found) decorate(phys.value);
+    }
 }
 
 // The worker realm's roots, the same shape as the main realm's cut down to

@@ -22,7 +22,12 @@
 // installer nine times.
 
 #include "bronze_host/host_js_modules.h"
+#include "bronze_host/host_natives.h"
 #include "embed/embed.h"
+
+#include <span>
+#include <string>
+#include <vector>
 
 extern "C" void bro_observers_main();
 extern "C" void bro_events_main();
@@ -237,6 +242,233 @@ void installProfilerModule() {
 // (installBroRoots), since the setting it reads is the engine's.
 void installModelsModule() {
     bronze::embed::runEntry(bro_models_main);
+}
+
+// ---- deferred groups ---------------------------------------------------------
+//
+// installDeferredModules (host_js_modules.h). A group runs once, from
+// whichever trigger a program reaches first: one of its globals (bronze
+// forces a lazy global on its first read), one of its `bro.<ns>` accessors,
+// or a host path that needs it (ensure3DModules). Its install is the same
+// sequence of entries the eager boot ran, in the same order.
+
+namespace {
+
+// A `bro.<ns>` (or `bro.image.gpu`, ...) member standing in as an accessor
+// until its group runs, and what the member held before (the empty
+// placeholder makeRoot made, or nothing).
+struct DeferredMember {
+    ev::Persistent parent;
+    std::string member;
+    bool hadValue = false;
+    ev::Persistent previous;
+};
+
+struct ModuleGroup {
+    const char* label = "";
+    bool started = false;
+    void (*install)() = nullptr;
+    std::vector<DeferredMember> members;
+    // The group's members and globals, for isDeferredName; emptied when it runs.
+    std::vector<std::string> names;
+};
+
+// Never freed, like every root this layer keeps for the process: their
+// Persistents must not be destroyed by static teardown after the heap.
+std::vector<ModuleGroup*>& groups() {
+    static auto* all = new std::vector<ModuleGroup*>();
+    return *all;
+}
+
+ModuleGroup* g3d = nullptr;
+
+void runGroup(ModuleGroup& g) {
+    if (g.started) return;
+    g.started = true;
+    ev::runAsLazyInit([&g] {
+        // The members as data properties again, before any module reads them:
+        // a module mounts onto `bro.<ns>` (makeRoot's placeholder) the way it
+        // did at boot.
+        for (DeferredMember& m : g.members) {
+            ev::deleteProperty(m.parent.get(), m.member);
+            if (m.hadValue) m.parent.set(ev::setProperty(m.parent.get(), m.member, m.previous.get()));
+        }
+        g.install();
+        g.names.clear();
+        // `available: true` on what the group mounted.
+        markAvailableNamespaces();
+    });
+}
+
+void deferMember(ModuleGroup& g, Value parentIn, const char* member) {
+    if (!ev::isObject(parentIn)) return;
+    DeferredMember m;
+    m.parent.set(parentIn);
+    m.member = member;
+    {
+        Value cur = ev::getProperty(m.parent.get(), member);
+        if (!ev::isUndefined(cur)) {
+            m.hadValue = true;
+            m.previous.set(cur);
+        }
+    }
+    ModuleGroup* gp = &g;
+    const std::string name(member);
+    // The parent is read back through its own Persistent in the group, which
+    // outlives these functions.
+    const size_t index = g.members.size();
+    // Each callback copies its captures first: running the group deletes the
+    // accessor, after which a collection may free the function object and
+    // this closure with it while the callback is still running.
+    const ev::Persistent getter(ev::makeFunction(
+        [gp, index](Value, std::span<const Value>) -> Value {
+            ModuleGroup* group = gp;
+            const size_t at = index;
+            runGroup(*group);
+            const DeferredMember& dm = group->members[at];
+            return ev::getProperty(dm.parent.get(), dm.member);
+        },
+        0));
+    const ev::Persistent setter(ev::makeFunction(
+        [gp, index](Value, std::span<const Value> a) -> Value {
+            ModuleGroup* group = gp;
+            const size_t at = index;
+            const ev::Persistent v(a.empty() ? ev::undefined() : a[0]);
+            runGroup(*group);
+            DeferredMember& dm = group->members[at];
+            dm.parent.set(ev::setProperty(dm.parent.get(), dm.member, v.get()));
+            return ev::undefined();
+        },
+        1));
+    ev::deleteProperty(m.parent.get(), member);
+    m.parent.set(ev::defineAccessor(m.parent.get(), member, getter.get(), setter.get(), /*enumerable=*/true));
+    g.names.push_back(name);
+    g.members.push_back(std::move(m));
+}
+
+void deferGlobal(ModuleGroup& g, const char* name) {
+    ModuleGroup* gp = &g;
+    g.names.emplace_back(name);
+    ev::registerLazyGlobal(name, [gp] { runGroup(*gp); });
+}
+
+ModuleGroup& newGroup(const char* label, void (*install)()) {
+    auto* g = new ModuleGroup();
+    g->label = label;
+    g->install = install;
+    groups().push_back(g);
+    return *g;
+}
+
+// bro.<sub>, or undefined.
+Value broMember(const char* sub) {
+    ev::GlobalValue broG = ev::globalValue("bro");
+    if (!broG.found || !ev::isObject(broG.value)) return ev::undefined();
+    return ev::getProperty(broG.value, sub);
+}
+
+}  // namespace
+
+bool isDeferredName(const char* name) {
+    for (const ModuleGroup* g : groups()) {
+        if (g->started) continue;
+        for (const std::string& n : g->names) {
+            if (n == name) return true;
+        }
+    }
+    return false;
+}
+
+void ensure3DModules() {
+    if (g3d) runGroup(*g3d);
+}
+
+std::string deferredModuleGroups() {
+    std::string out;
+    for (const ModuleGroup* g : groups()) {
+        if (g->started) continue;
+        if (!out.empty()) out += ' ';
+        out += g->label;
+    }
+    return out;
+}
+
+std::string loadedModuleGroups() {
+    std::string out;
+    for (const ModuleGroup* g : groups()) {
+        if (!g->started) continue;
+        if (!out.empty()) out += ' ';
+        out += g->label;
+    }
+    return out;
+}
+
+void installDeferredModules() {
+    // bro.image.gpu (js/image_gpu.js) on the `bro.image` the roots built.
+    {
+        ModuleGroup& g = newGroup("image.gpu", &installImageGpuModule);
+        deferGlobal(g, "__bro_image_gpu");
+        const ev::Persistent image(broMember("image"));
+        deferMember(g, image.get(), "gpu");
+    }
+#if BRO_WITH_VISION
+    // bro.vision.wildlife (js/vision_wildlife.js) on the `bro.vision` the
+    // roots built.
+    {
+        ModuleGroup& g = newGroup("vision.wildlife", &installVisionWildlifeModule);
+        deferGlobal(g, "__bro_vision_wildlife");
+        const ev::Persistent vision(broMember("vision"));
+        deferMember(g, vision.get(), "wildlife");
+    }
+#endif
+#if BRO_WITH_3D
+    // Every module of the family, in the boot order: each lists the classes an
+    // earlier one lifted in js/module.globals.
+    {
+        ModuleGroup& g = newGroup("3d", [] {
+            installPhysicsModule();
+            installTerrainModule();
+            installClipmapModule();
+            installTileWorldModule();
+            installLightingModule();
+            installGizmoModule();
+            installAnimationModule();
+            installSceneModule();
+            installImpostorModule();
+        });
+        g3d = &g;
+        for (const char* name : {"Physics", "PhysicsCharacter", "PhysicsSoftBody", "PhysicsVehicle",
+                                 "PhysicsRagdoll", "PhysicsWorldHandle", "Terrain", "ClipmapTerrain",
+                                 "TileWorld", "Tween", "AnimationPlayer", "SceneNode", "SceneGraph"}) {
+            deferGlobal(g, name);
+        }
+        const ev::Persistent bro(ev::globalValue("bro").value);
+        for (const char* ns : {"scene", "terrain", "clipmap", "tile_world", "lighting", "animation",
+                               "gizmo", "impostor"}) {
+            deferMember(g, bro.get(), ns);
+        }
+    }
+#endif
+#if BRO_WITH_NET
+    // The sync factory before js/net.js, which mounts `bro.net.sync` from
+    // `globalThis.__bro_net_sync` at its own load.
+    {
+        ModuleGroup& g = newGroup("net", [] {
+            installNetSyncModule();
+            installNetModule();
+        });
+        deferGlobal(g, "__bro_net_sync");
+        const ev::Persistent bro(ev::globalValue("bro").value);
+        deferMember(g, bro.get(), "net");
+    }
+#endif
+#if BRO_WITH_DIFFUSION && BRO_WITH_LM
+    {
+        ModuleGroup& g = newGroup("motion", &installMotionModule);
+        const ev::Persistent bro(ev::globalValue("bro").value);
+        deferMember(g, bro.get(), "motion");
+    }
+#endif
 }
 
 }  // namespace bro::bronze_host

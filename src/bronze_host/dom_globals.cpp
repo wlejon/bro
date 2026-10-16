@@ -572,41 +572,17 @@ void installWebHostGlobals(engine::Engine& engine) {
     // registers `bro`; a later `bro.*` namespace mounts onto the object this
     // creates, and nothing after this point may call a sibling's install*().
     installBroRoots(engine);
-    // bro.image.gpu (js/image_gpu.js) mounts onto the `bro.image` the roots
-    // just built; it reads nothing else at load, so it goes here rather than
-    // with the other compiled modules below.
-    installImageGpuModule();
-    // bro.vision.wildlife (js/vision_wildlife.js) mounts onto the
-    // `bro.vision` the roots just built, the same way.
-#if BRO_WITH_VISION
-    installVisionWildlifeModule();
-#endif
-    // bro's own compiled JavaScript (host_js_modules.cpp), after the roots
-    // and the siblings: every name a module lists in js/module.globals must
-    // already be registered when its entry runs (the roots, and the classes
-    // an earlier module of this family lifted), and a sibling class such as
-    // `Mesh` is read off globalThis at the point of use, never at load.
-#if BRO_WITH_3D
-    installPhysicsModule();
-    installTerrainModule();
-    installClipmapModule();
-    installTileWorldModule();
-    installLightingModule();
-    installGizmoModule();
-    installAnimationModule();
-    installSceneModule();
-    installImpostorModule();
-#endif
-    // The sync factory BEFORE js/net.js, which mounts `bro.net.sync` from
-    // `globalThis.__bro_net_sync` at its own load; the factory reads nothing
-    // at load and binds to the primitives only when called.
-#if BRO_WITH_NET
-    installNetSyncModule();
-    installNetModule();
-#endif
-#if BRO_WITH_DIFFUSION && BRO_WITH_LM
-    installMotionModule();
-#endif
+    // bro's own compiled JavaScript that most apps never touch
+    // (host_js_modules.cpp): bro.image.gpu and bro.vision.wildlife on the
+    // namespaces the roots just built, the 3D family, net and motion. Each
+    // group enters its modules, in the order they were written against, when
+    // a program first reads one of its globals or `bro.<ns>` members: a
+    // calculator does not pay for a physics wrapper. Every name a module
+    // lists in js/module.globals is registered by then (the roots, and the
+    // classes an earlier module of its group lifted), and a sibling class
+    // such as `Mesh` is read off globalThis at the point of use, never at
+    // load.
+    installDeferredModules();
     // bro.server in every mode: bro-server's loop, and in a windowed bro the
     // members a script that also runs as a hosted server reads.
     installServerModule();

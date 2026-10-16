@@ -2,6 +2,7 @@
 
 #include "bronze_host/native_scene_internal.h"
 #include "bronze_host/host_natives.h"
+#include "bronze_host/host_js_modules.h"
 #include "natives/scene/native_scene_decl.h"
 #include "util/asset_path.h"
 #include <bromesh/analysis/raycast.h>
@@ -19,6 +20,9 @@ bool registerNatives_scene(std::string* error);
 
 Value createSceneGraphValue(scene::SceneGraph* sg, dom::Element* canvas) {
     if (!sg) return ev::null();
+    // The prototype chain js/scene*.js give SceneGraph objects, which may
+    // not have run yet (installDeferredModules).
+    ensure3DModules();
     auto* cell = new HostSceneGraphCell();
     cell->token = sg->livenessToken();
     cell->canvas = canvas;

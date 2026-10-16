@@ -201,6 +201,9 @@ and every megabyte named:
 - `images`: the decoded-image store and its decoder threads.
 - `subsystems`: which of physics, audio, audio inference, net and Steam are
   running; an app that never uses one should see it `off`.
+- `modules`: bro's own wrapper modules entered when a program first reads
+  one of their globals or `bro.<ns>` members (the 3D family, net, motion,
+  `bro.image.gpu`, `bro.vision.wildlife`), loaded and still deferred.
 
 `--detail` adds private memory by file and the largest anonymous mappings;
 `--trim` first releases the idle MIR bodies and returns the C heap's free

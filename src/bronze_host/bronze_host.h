@@ -143,6 +143,11 @@ struct CompiledBodyStats {
     size_t liveBytes = 0;
 };
 CompiledBodyStats compiledBodyStats();
+/// The main realm's deferred wrapper-module groups (host_js_modules.h,
+/// installDeferredModules) not yet entered, and those a program has touched,
+/// as space-separated labels ("3d net motion ...").
+std::string deferredModuleGroups();
+std::string loadedModuleGroups();
 
 /// Run sub-document scripts within its document scope and realm gating.
 void runHostSubDocScripts(engine::Engine& engine, dom::Document* subDoc,
