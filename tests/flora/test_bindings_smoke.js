@@ -195,6 +195,17 @@ assert(qOpen !== null && qOpen > 0.95, 'open cell reads ~full sun after step');
 assert(qCanopy !== null && qCanopy < qOpen, 'under-canopy cell darker than open sky');
 assert(qOut === null, 'sampleShadow OOB returns null');
 
+// groundCover: grass density among the plants, thin in their shade and at
+// the trunks, full in the open; `scale` maps world metres to plant space.
+const cover = world.groundCover({ floor: 0.3 });
+const cTrunk = cover(-2, -2, 0), cOpen = cover(-5.5, 5.5, 0), cNear = cover(-1.2, -2, 0);
+console.log('groundCover trunk=' + cTrunk.toFixed(3) + ' near=' + cNear.toFixed(3) + ' open=' + cOpen.toFixed(3));
+assert(Math.abs(cTrunk - 0.3) < 1e-6, 'groundCover clears to the floor at a trunk');
+assert(cOpen > 0.9 && cOpen <= 1, 'groundCover is full in the open');
+assert(cNear > cTrunk && cNear < cOpen, 'groundCover thins toward a trunk and in its shade');
+const coverScaled = world.groundCover({ floor: 0.3, scale: 2 });
+assert(Math.abs(coverScaled(-4, -4, 0) - 0.3) < 1e-6, 'groundCover scale: the trunk at twice the distance');
+
 // Climate test
 const info0Before = world.plantInfo(0);
 const vigorBefore = info0Before.rootVigor;
