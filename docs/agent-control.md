@@ -69,6 +69,15 @@ export BRO_CTL_REMOTE=halo                  # then plain `bro-ctl view` goes the
   entirely, input, `eval` and `launch` included, exactly as they could with
   a shell running `bro-ctl` there; there is no second check, so grant ssh
   access to the host user accordingly.
+- **What it costs** (Windows to halo on a LAN with sub-millisecond ping,
+  helm under DRM, Release builds): over the agent a round trip is about
+  1 ms (40 commands in one `bro-ctl batch`: 92 ms), so a single command
+  costs bro-ctl's own process start, about 45 ms on Windows. `--direct`
+  adds an ssh login to each command, about 200 ms (`windows` 240 ms
+  against 45 ms). Commands that wait for the UI cost the same either way
+  plus that overhead: `launch helm.calculator` 0.5 s, `set` 0.32 s, `key`
+  0.23 s, `close` 0.18 s, `shot w1 -o` 0.13 s for a 53 KB PNG. With a person's
+  hevc viewer attached the numbers are the same, within a few ms.
 
 ## Security
 
