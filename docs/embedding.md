@@ -24,6 +24,17 @@ if(MSVC)
 endif()
 ```
 
+That is the static route: one self-contained binary, the engine linked into
+it. On Linux and macOS you can link the engine library instead, `libbro`
+(BUILDING.md, "The engine library"), so your process maps the same engine
+code as every other bro process on the machine. In-tree, link `bro::libbro`
+(the library plus the engine's headers and feature definitions); against a
+bro build tree built separately, `find_package(bro CONFIG)` with
+`-Dbro_DIR=<that build>` gives the same `bro::libbro` target, and your
+process then maps that tree's `libbro.so`, the one its installed apps run on.
+helm does this. On Windows libbro.dll exports only bro's C entry points
+(`src/runtime/bro_entry.h`), so a C++ embedder links the static libraries.
+
 `BRO_BUILD_EXECUTABLES` defaults OFF when bro is not the top-level project, so
 this does not also produce a `bro.exe` you did not ask for. Pass
 `-DBRO_BUILD_EXECUTABLES=ON` if you want them anyway. `BRO_BUILD_TESTS` follows

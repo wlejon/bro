@@ -12,6 +12,7 @@
 #include "engine/engine.h"
 #include "render/image_store.h"
 #include "render/skia_gpu.h"
+#include "util/exe_dir.h"
 
 #include <include/core/SkGraphics.h>
 
@@ -66,7 +67,8 @@ constexpr uint64_t kArenaAlign = uint64_t{64} << 20;
 
 struct MapEntry {
     std::string name;
-    uint64_t start = 0, sizeKb = 0, rssKb = 0, privDirtyKb = 0;
+    uint64_t start = 0, sizeKb = 0, rssKb = 0, privDirtyKb = 0, privCleanKb = 0, sharedCleanKb = 0,
+             sharedDirtyKb = 0;
     std::string perms;
 };
 
@@ -98,8 +100,36 @@ std::vector<MapEntry> readSmaps() {
         if (std::sscanf(line.c_str(), "Size: %" SCNu64, &v) == 1) out.back().sizeKb = v;
         else if (std::sscanf(line.c_str(), "Rss: %" SCNu64, &v) == 1) out.back().rssKb = v;
         else if (std::sscanf(line.c_str(), "Private_Dirty: %" SCNu64, &v) == 1) out.back().privDirtyKb = v;
+        else if (std::sscanf(line.c_str(), "Private_Clean: %" SCNu64, &v) == 1) out.back().privCleanKb = v;
+        else if (std::sscanf(line.c_str(), "Shared_Clean: %" SCNu64, &v) == 1) out.back().sharedCleanKb = v;
+        else if (std::sscanf(line.c_str(), "Shared_Dirty: %" SCNu64, &v) == 1) out.back().sharedDirtyKb = v;
     }
     return out;
+}
+
+// The file holding the engine's code (libbro.so, or the executable when it is
+// linked in statically): what of it is resident, and how much of that other
+// processes share. Code pages of one file are shared clean across every
+// process that maps it; relocated data (.data.rel.ro, the GOT) is private.
+void appendEngineImage(std::string& out, const std::vector<MapEntry>& maps) {
+    const std::string image = util::engineImagePath();
+    uint64_t rss = 0, sharedClean = 0, privClean = 0, privDirty = 0, sharedDirty = 0, codeRss = 0, codeShared = 0;
+    for (const auto& e : maps) {
+        if (e.name != image) continue;
+        rss += e.rssKb;
+        sharedClean += e.sharedCleanKb;
+        sharedDirty += e.sharedDirtyKb;
+        privClean += e.privCleanKb;
+        privDirty += e.privDirtyKb;
+        if (e.perms.size() > 2 && e.perms[2] == 'x') {
+            codeRss += e.rssKb;
+            codeShared += e.sharedCleanKb;
+        }
+    }
+    out += "engine image  " + image + "\n";
+    out += "  resident " + mbKb(rss) + "  shared clean " + mbKb(sharedClean) + "  private clean " + mbKb(privClean) +
+           "  private dirty " + mbKb(privDirty) + (sharedDirty ? "  shared dirty " + mbKb(sharedDirty) : "") + "\n";
+    out += "  code: resident " + mbKb(codeRss) + ", shared with other processes " + mbKb(codeShared) + "\n";
 }
 
 std::map<std::string, uint64_t> readRollup() {
@@ -136,6 +166,7 @@ void appendLinuxProcess(std::string& out, bool detail) {
            "  pss " + mbKb(r["Pss"]) + "  swap " + mbKb(r["Swap"]) + "\n";
 
     const auto maps = readSmaps();
+    appendEngineImage(out, maps);
     std::map<std::string, std::pair<uint64_t, uint64_t>> byClass;  // private dirty, count
     std::map<std::string, uint64_t> byFile;
     for (const auto& e : maps) {

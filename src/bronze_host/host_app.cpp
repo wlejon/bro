@@ -26,7 +26,9 @@
 #include "engine/engine.h"
 #include "platform/desktop_notifications.h"
 #include "platform/window.h"  // platform::Window::raise()
+#include "engine/app_exe.h"
 #include "util/log.h"
+#include "util/process_spawn.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -143,79 +145,7 @@ std::string jsonString(const std::string& s) {
 
 // ---- spawn -------------------------------------------------------------------
 
-#ifdef _WIN32
-std::wstring widen(const std::string& s) {
-    if (s.empty()) return {};
-    int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), int(s.size()), nullptr, 0);
-    std::wstring w(size_t(n), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, s.data(), int(s.size()), w.data(), n);
-    return w;
-}
-
-// One argument as CommandLineToArgvW reads it back.
-std::wstring quoteArg(const std::wstring& a) {
-    if (!a.empty() && a.find_first_of(L" \t\n\v\"") == std::wstring::npos) return a;
-    std::wstring out = L"\"";
-    size_t backslashes = 0;
-    for (wchar_t c : a) {
-        if (c == L'\\') { ++backslashes; continue; }
-        if (c == L'"') out.append(backslashes * 2 + 1, L'\\');
-        else out.append(backslashes, L'\\');
-        backslashes = 0;
-        out += c;
-    }
-    out.append(backslashes * 2, L'\\');
-    return out + L"\"";
-}
-
-bool spawnDetached(const std::vector<std::string>& argv, const std::string& cwd, std::string& err) {
-    std::wstring cmd;
-    for (const auto& a : argv) {
-        if (!cmd.empty()) cmd += L' ';
-        cmd += quoteArg(widen(a));
-    }
-    STARTUPINFOW si{};
-    si.cb = sizeof(si);
-    PROCESS_INFORMATION pi{};
-    std::wstring wcwd = widen(cwd);
-    if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE,
-                        CREATE_NEW_PROCESS_GROUP | CREATE_UNICODE_ENVIRONMENT, nullptr,
-                        wcwd.empty() ? nullptr : wcwd.c_str(), &si, &pi)) {
-        err = "CreateProcess failed (" + std::to_string(GetLastError()) + ")";
-        return false;
-    }
-    CloseHandle(pi.hThread);
-    CloseHandle(pi.hProcess);
-    return true;
-}
-#else
-bool spawnDetached(const std::vector<std::string>& argv, const std::string& cwd, std::string& err) {
-    // Everything the child touches is built before fork: between fork and
-    // exec only async-signal-safe calls are allowed in a threaded process.
-    std::vector<char*> av;
-    for (const auto& a : argv) av.push_back(const_cast<char*>(a.c_str()));
-    av.push_back(nullptr);
-    const char* dir = cwd.empty() ? nullptr : cwd.c_str();
-    pid_t pid = fork();
-    if (pid < 0) { err = "fork failed"; return false; }
-    if (pid == 0) {
-        // The grandchild is reparented to init: no zombie for us to reap, and
-        // its own session so closing this app does not take it down.
-        setsid();
-        pid_t again = fork();
-        if (again == 0) {
-            if (dir && chdir(dir) != 0) { /* keep the inherited cwd */ }
-            execv(av[0], av.data());
-            _exit(127);
-        }
-        _exit(again < 0 ? 1 : 0);
-    }
-    int status = 0;
-    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
-    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) { err = "fork failed"; return false; }
-    return true;
-}
-#endif
+using util::spawnDetached;
 
 // ---- open: another app by id ---------------------------------------------------
 
@@ -269,22 +199,36 @@ AppTarget resolveAppId(const std::string& id) {
     return {};
 }
 
-// The stock bro beside this executable: bro-headless and a host that embeds
-// the engine open apps with the `bro` they ship with, which is what runs a
-// folder app on its own.
+// The stock bro beside the engine: bro-headless, an app's own executable and
+// a host that embeds the engine open apps with the `bro` they ship with,
+// which is what runs a folder app on its own. Beside the engine library
+// rather than this executable: an app's executable lives with the app.
 std::string stockBro() {
     const std::string self = exePath();
     if (self.empty()) return self;
     fs::path p = u8path(self);
     std::string stem = u8str(p.stem());
     if (stem == "bro") return self;
-#ifdef _WIN32
-    fs::path bro = p.parent_path() / "bro.exe";
-#else
-    fs::path bro = p.parent_path() / "bro";
-#endif
+    const std::string bro = engine::stockBroPath();
     std::error_code ec;
-    return fs::is_regular_file(bro, ec) ? native(u8str(bro)) : self;
+    return fs::is_regular_file(u8path(bro), ec) ? native(bro) : self;
+}
+
+// How to start installed app `dir` (id `id`): its own executable when it has
+// one built against this engine, else the stock bro with the folder.
+std::vector<std::string> launchCommand(const std::string& id, const std::string& dir, bool newInstance,
+                                       const std::vector<std::string>& extra) {
+    std::vector<std::string> cmd;
+    if (std::string exe = engine::currentAppExecutable(id, dir); !exe.empty()) {
+        cmd.push_back(native(exe));
+        if (newInstance) cmd.push_back("--new-instance");
+    } else {
+        cmd.push_back(stockBro());
+        if (newInstance) cmd.push_back("--new-instance");
+        cmd.push_back(dir);
+    }
+    cmd.insert(cmd.end(), extra.begin(), extra.end());
+    return cmd;
 }
 
 struct AppOpen {
@@ -406,6 +350,7 @@ Value makeBroAppValue() {
     }
     o.set("dir", ev::fromUtf8(native(app.dir)));
     o.set("exePath", ev::fromUtf8(exePath()));
+    o.set("executable", ev::fromUtf8(app.executable.empty() ? std::string() : native(app.executable)));
     {
         ev::Persistent argv(strings(app.argv));
         o.set("argv", argv.get());
@@ -531,7 +476,8 @@ Value makeBroAppValue() {
         bool newInstance = false;
         if (hasArg(a, 1) && ev::isObject(a[1])) newInstance = ev::toBool(ev::getProperty(a[1], "newInstance"));
         if (newInstance) argv.push_back("--new-instance");
-        argv.push_back(app.dir);
+        // An app's own executable has its folder built in; bro takes it.
+        if (app.executable.empty()) argv.push_back(app.dir);
         std::vector<std::string> extra = hasArg(a, 0) ? readStrings(a[0]) : std::vector<std::string>{};
         // The app's own arguments follow the directory (docs/apps.md: bro
         // takes only its own few flags out of them).
@@ -587,10 +533,7 @@ Value makeBroAppValue() {
         rec.id = id;
         rec.dir = t.dir;
         rec.from = t.from;
-        rec.command.push_back(stockBro());
-        if (newInstance) rec.command.push_back("--new-instance");
-        rec.command.push_back(t.dir);
-        rec.command.insert(rec.command.end(), extra.begin(), extra.end());
+        rec.command = launchCommand(id, t.dir, newInstance, extra);
         rec.cwd = engine::currentWorkingDirectory();
 
         auto* eng = hostEngine();

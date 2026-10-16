@@ -148,6 +148,8 @@ const AppRuntimeInfo& currentApp() { return info(); }
 
 void setCurrentAppLogFile(const std::string& path) { info().logFile = path; }
 
+void setCurrentAppExecutable(const std::string& path) { info().executable = path; }
+
 InstanceClaim claimSingleInstance(const EngineConfig& config, const std::string& launchNotification) {
     std::vector<std::string> msg;
     msg.reserve(config.appArgs.size() + 4);

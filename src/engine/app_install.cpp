@@ -1,21 +1,28 @@
 // `bro --install` and friends: folder apps as installed desktop applications
 // (docs/apps.md).
 //
-//   bro --install <dir> [--link] [--system] [--exec <bro>]
-//       copy the app (or with --link, symlink it) to <root>/<id> and write its
-//       desktop entry, <applications>/<id>.desktop, so launchers (bro.apps,
-//       helm, any FreeDesktop menu) list it with no special case
+//   bro --install <dir> [--link] [--system] [--exec <bro>] [--no-exe]
+//       copy the app (or with --link, symlink it) to <root>/<id>, build its
+//       own executable (app_exe.h) in <root>/../bin, and register it: a
+//       desktop entry, <applications>/<id>.desktop, running that executable,
+//       so launchers (bro.apps, helm, any FreeDesktop menu) list it with no
+//       special case; on Windows a Start menu shortcut under its
+//       AppUserModelID
+//   bro --build-exe <dir | id> [--out <exe>] [--force] [--system] [--quiet]
+//       (re)build an app's executable when it is out of date (the engine
+//       changed, or its bro.json or icon); what a stale executable runs
 //   bro --uninstall <id> [--system]
 //   bro --list-apps
 //   bro --desktop-entry <dir> [--exec <bro>]   print the entry, write nothing
 //
-// The roots are app_manifest.h's installedAppRoots(): the user's
+// The roots are app_manifest.h's installRoot(): the user's
 // ($XDG_DATA_HOME/bro/apps, %LOCALAPPDATA%\bro\apps, ~/Library/Application
 // Support/bro/apps) unless --system (/usr/local/share/bro/apps,
 // %ProgramFiles%\bro\apps, /Library/Application Support/bro/apps). Desktop entries go to
 // $XDG_DATA_HOME/applications (--system: /usr/local/share/applications);
 // Windows and macOS keep the copy and skip the entry.
 
+#include "engine/app_exe.h"
 #include "engine/app_manifest.h"
 #include "engine/config_loader.h"
 #include "engine/launcher.h"
@@ -154,7 +161,13 @@ bool readManifest(const std::string& dir, AppDescriptor& m, std::string& err) {
     return parseAppManifest(u8str(json), m, &err);
 }
 
-Entry desktopEntry(const std::string& appDir, const AppDescriptor& m, const std::string& exec) {
+// `exec` is the bro that runs the folder; `appExe`, when not empty, the app's
+// own executable, which then runs it instead (its folder is built in).
+Entry desktopEntry(const std::string& appDir, const AppDescriptor& m, const std::string& exec,
+                   const std::string& appExe = {}) {
+    const std::vector<std::string> launch =
+        appExe.empty() ? std::vector<std::string>{exec, appDir} : std::vector<std::string>{appExe};
+    const std::string& tryExec = appExe.empty() ? exec : appExe;
     Entry e;
     e.id = appIdFor(m, appDir);
     std::ostringstream o;
@@ -172,8 +185,8 @@ Entry desktopEntry(const std::string& appDir, const AppDescriptor& m, const std:
     std::vector<std::string> mimes;
     for (const auto& t : m.fileTypes)
         for (const auto& mt : t.mimeTypes) mimes.push_back(mt);
-    o << "Exec=" << execLine({exec, appDir}, m.fileTypes.empty() ? nullptr : "%F") << "\n";
-    o << "TryExec=" << deString(exec) << "\n";
+    o << "Exec=" << execLine(launch, m.fileTypes.empty() ? nullptr : "%F") << "\n";
+    o << "TryExec=" << deString(tryExec) << "\n";
     o << "Terminal=false\n";
     o << "StartupNotify=true\n";
     o << "StartupWMClass=" << deString(e.id) << "\n";
@@ -192,7 +205,7 @@ Entry desktopEntry(const std::string& appDir, const AppDescriptor& m, const std:
     for (const auto& a : m.actions) {
         o << "\n[Desktop Action " << a.id << "]\n";
         o << "Name=" << deString(a.name) << "\n";
-        std::vector<std::string> argv{exec, appDir};
+        std::vector<std::string> argv = launch;
         argv.insert(argv.end(), a.args.begin(), a.args.end());
         o << "Exec=" << execLine(argv, nullptr) << "\n";
         if (!a.icon.empty()) o << "Icon=" << deString(a.icon) << "\n";
@@ -203,21 +216,7 @@ Entry desktopEntry(const std::string& appDir, const AppDescriptor& m, const std:
 
 // ---- roots ------------------------------------------------------------------------
 
-std::string appsRoot(bool system) {
-#ifdef _WIN32
-    if (system) return u8str(u8path(envOr("ProgramFiles", "C:/Program Files")) / "bro" / "apps");
-    return u8str(u8path(envOr("LOCALAPPDATA", envOr("APPDATA", "."))) / "bro" / "apps");
-#elif defined(__APPLE__)
-    // installedAppRoots()' macOS roots: the user's Library, then the machine's.
-    if (system) return "/Library/Application Support/bro/apps";
-    return u8str(u8path(envOr("HOME", ".")) / "Library" / "Application Support" / "bro" / "apps");
-#else
-    if (system) return "/usr/local/share/bro/apps";
-    std::string dataHome = envOr("XDG_DATA_HOME", "");
-    if (dataHome.empty() || dataHome[0] != '/') dataHome = u8str(u8path(envOr("HOME", ".")) / ".local" / "share");
-    return u8str(u8path(dataHome) / "bro" / "apps");
-#endif
-}
+std::string appsRoot(bool system) { return installRoot(system); }
 
 // "" where this platform has no desktop entries.
 std::string applicationsDir(bool system) {
@@ -313,11 +312,35 @@ fs::path bundledLib(const fs::path& app) {
 
 int usage() {
     std::fprintf(stderr,
-        "usage: bro --install <app-dir> [--link] [--system] [--exec <bro>]\n"
+        "usage: bro --install <app-dir> [--link] [--system] [--exec <bro>] [--no-exe]\n"
+        "       bro --build-exe <app-dir | id> [--out <exe>] [--force] [--system] [--quiet]\n"
+        "       bro --exe-info <exe> [--icon-png <file>]\n"
         "       bro --uninstall <id> [--system]\n"
         "       bro --list-apps\n"
         "       bro --desktop-entry <app-dir> [--exec <bro>]\n");
     return 2;
+}
+
+// Build the app's executable for an install; "" (with a note) when this
+// platform or build makes none, so the install still registers the folder.
+std::string installExe(const std::string& appDir, const AppDescriptor& m, bool system, bool quiet) {
+#if defined(__APPLE__)
+    // A macOS app is a bundle (Contents/MacOS + Info.plist, re-signed after
+    // stamping); until bro builds one, the folder runs under bro.
+    (void)appDir; (void)m; (void)system; (void)quiet;
+    return {};
+#else
+    const std::string exe = appExePath(appIdFor(m, appDir), system);
+    bool rebuilt = false;
+    std::string err;
+    if (!buildAppExe(appDir, m, exe, /*force=*/false, &rebuilt, err)) {
+        std::fprintf(stderr, "bro: no executable for %s (%s); it runs as a folder under bro\n",
+                     appIdFor(m, appDir).c_str(), err.c_str());
+        return {};
+    }
+    if (!quiet) std::printf("executable %s%s\n", exe.c_str(), rebuilt ? "" : " (up to date)");
+    return exe;
+#endif
 }
 
 }  // namespace
@@ -325,19 +348,35 @@ int usage() {
 int runAppCommand(const std::vector<std::string>& args) {
     if (args.empty()) return -1;
     const std::string& cmd = args[0];
-    if (cmd != "--install" && cmd != "--uninstall" && cmd != "--list-apps" && cmd != "--desktop-entry") return -1;
+    if (cmd != "--install" && cmd != "--uninstall" && cmd != "--list-apps" && cmd != "--desktop-entry" &&
+        cmd != "--build-exe" && cmd != "--exe-info")
+        return -1;
     attachConsole();
 
-    bool link = false, system = false;
-    std::string exec, target;
+    bool link = false, system = false, noExe = false, force = false, quiet = false;
+    std::string exec, target, out, stampEngine, iconPng;
     for (size_t i = 1; i < args.size(); ++i) {
         if (args[i] == "--link") link = true;
         else if (args[i] == "--system") system = true;
+        else if (args[i] == "--no-exe") noExe = true;
+        else if (args[i] == "--force") force = true;
+        else if (args[i] == "--quiet") quiet = true;
         else if (args[i] == "--exec" && i + 1 < args.size()) exec = args[++i];
+        else if (args[i] == "--out" && i + 1 < args.size()) out = args[++i];
+        else if (args[i] == "--stamp-engine" && i + 1 < args.size()) stampEngine = args[++i];
+        else if (args[i] == "--icon-png" && i + 1 < args.size()) iconPng = args[++i];
         else if (target.empty()) target = args[i];
         else return usage();
     }
     if (exec.empty()) exec = defaultExec();
+
+    // bro --exe-info <exe> [--icon-png <file>]: what an app executable holds.
+    if (cmd == "--exe-info") {
+        if (target.empty()) return usage();
+        const std::string report = describeAppExe(target, iconPng);
+        std::fputs(report.c_str(), stdout);
+        return report.find("\nstate=") != std::string::npos ? 0 : 1;
+    }
 
     if (cmd == "--list-apps") {
         for (const std::string& root : installedAppRoots()) {
@@ -359,6 +398,16 @@ int runAppCommand(const std::vector<std::string>& args) {
         bool any = false;
         fs::path dir = u8path(appsRoot(system)) / u8path(target);
         std::error_code ec;
+        // The executable and the Start menu shortcut, named from the copy's
+        // manifest, go first.
+        {
+            AppDescriptor installed;
+            std::string ignored;
+            if (fs::exists(dir, ec)) readManifest(u8str(dir), installed, ignored);
+            const std::string exe = appExePath(target, system);
+            if (fs::exists(u8path(exe), ec)) { removeAppExe(exe); any = true; }
+            removeStartMenuShortcut(installed.name.empty() ? target : installed.name, system);
+        }
         if (fs::exists(fs::symlink_status(dir, ec))) { removeAll(dir); any = true; }
         const std::string apps = applicationsDir(system);
         if (!apps.empty()) {
@@ -371,6 +420,12 @@ int runAppCommand(const std::vector<std::string>& args) {
     }
 
     std::error_code ec;
+    // --build-exe takes an installed app's id as well as a folder.
+    if (cmd == "--build-exe" && isValidAppId(target) && !fs::exists(u8path(target), ec)) {
+        const std::string dir = findInstalledApp(target);
+        if (dir.empty()) { std::fprintf(stderr, "bro: no installed app '%s'\n", target.c_str()); return 1; }
+        target = dir;
+    }
     fs::path src = fs::absolute(u8path(target), ec);
     src = src.lexically_normal();
     if (!src.has_filename()) src = src.parent_path();
@@ -381,6 +436,21 @@ int runAppCommand(const std::vector<std::string>& args) {
 
     if (cmd == "--desktop-entry") {
         std::fputs(desktopEntry(u8str(src), m, exec).text.c_str(), stdout);
+        return 0;
+    }
+
+    if (cmd == "--build-exe") {
+        const std::string exe = out.empty() ? appExePath(id, system) : u8str(fs::absolute(u8path(out), ec));
+        const AppExeState before = appExeState(exe, u8str(src));
+        bool rebuilt = false;
+        if (!buildAppExe(u8str(src), m, exe, force, &rebuilt, err, stampEngine)) {
+            std::fprintf(stderr, "bro: cannot build %s: %s\n", exe.c_str(), err.c_str());
+            return 1;
+        }
+        if (!quiet) {
+            if (rebuilt) std::printf("built %s (was: %s)\n", exe.c_str(), appExeStateName(before));
+            else std::printf("%s is up to date\n", exe.c_str());
+        }
         return 0;
     }
 
@@ -398,17 +468,28 @@ int runAppCommand(const std::vector<std::string>& args) {
         return 1;
     }
 
+    // The app's own executable, stamped with the installed folder.
+    const std::string appExe = noExe ? std::string() : installExe(u8str(dest), m, system, /*quiet=*/false);
+
+    std::printf("installed %s at %s\n", id.c_str(), u8str(dest).c_str());
     const std::string apps = applicationsDir(system);
     if (!apps.empty()) {
         // The entry names the installed path, so it keeps working when the
         // source tree moves (a --link follows the source, by design).
-        Entry e = desktopEntry(u8str(dest), m, exec);
+        Entry e = desktopEntry(u8str(dest), m, exec, appExe);
         fs::path entryPath = u8path(apps) / u8path(id + ".desktop");
         if (!writeFileAtomic(entryPath, e.text, err)) { std::fprintf(stderr, "bro: %s\n", err.c_str()); return 1; }
-        std::printf("installed %s at %s\ndesktop entry %s\n", id.c_str(), u8str(dest).c_str(), u8str(entryPath).c_str());
-    } else {
-        std::printf("installed %s at %s\n", id.c_str(), u8str(dest).c_str());
+        std::printf("desktop entry %s\n", u8str(entryPath).c_str());
     }
+#ifdef _WIN32
+    if (!appExe.empty()) {
+        const std::string name = m.name.empty() ? id : m.name;
+        if (writeStartMenuShortcut(id, name, m.description, appExe, system, err))
+            std::printf("start menu %s\n", startMenuShortcutPath(name, system).c_str());
+        else
+            std::fprintf(stderr, "bro: no Start menu shortcut: %s\n", err.c_str());
+    }
+#endif
     return 0;
 }
 

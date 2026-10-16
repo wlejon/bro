@@ -1,3 +1,9 @@
+// The windowed bro: `bro <app>` and an installed app's own executable
+// (runtime_mains.h). Compiled into libbro; the executables are entry.cpp's
+// one-line callers.
+
+#include "runtime/runtime_mains.h"
+
 #include "engine/engine.h"
 #include "engine/config_loader.h"
 #include "engine/launcher.h"
@@ -185,7 +191,9 @@ static void printUsage() {
         "bro -- lightweight HTML/CSS/JS app runtime\n"
         "\n"
         "Usage: bro [flags] <app-directory | app-id> [app arguments...]\n"
-        "       bro --install <app-directory> [--link] [--system] [--exec <bro>]\n"
+        "       bro --install <app-directory> [--link] [--system] [--exec <bro>] [--no-exe]\n"
+        "       bro --build-exe <app-directory | app-id> [--out <exe>] [--force]\n"
+        "       bro --exe-info <exe>\n"
         "       bro --uninstall <app-id> [--system]\n"
         "       bro --list-apps\n"
         "       bro --desktop-entry <app-directory>\n"
@@ -270,14 +278,18 @@ static void attachParentConsole() {
 #endif
 }
 
-int main(int argc, char* argv[]) {
+namespace bro::runtime {
+
+int runWindowed(int argc, char* argv[], const AppExeLaunch* exe) {
     const std::vector<std::string> args = utf8Args(argc, argv);
 
     // App management (`bro --install <dir>`, docs/apps.md) prints and exits,
-    // and never starts an engine.
-    if (int status = bro::engine::runAppCommand(args); status >= 0) return status;
+    // and never starts an engine. An app's own executable is never a bro
+    // command line: all of its arguments are the app's.
+    if (!exe)
+        if (int status = bro::engine::runAppCommand(args); status >= 0) return status;
 
-    if (!args.empty() && (args[0] == "--help" || args[0] == "-h")) {
+    if (!exe && !args.empty() && (args[0] == "--help" || args[0] == "-h")) {
         attachParentConsole();
         printUsage();
         return 0;
@@ -299,12 +311,26 @@ int main(int argc, char* argv[]) {
     std::string cliNotification;
     bool cliNotificationCom = false;
     bool expectNotificationArgs = false;
-    std::string target;
-    bool haveTarget = false;
+    // An app's own executable has its target built in: every positional
+    // argument is the app's. The one exception is the app folder a Windows
+    // toast's activator command names after --notification-activated (it is
+    // the same command line for both kinds of launcher), which is dropped.
+    std::string target = exe ? exe->appDir : std::string();
+    bool haveTarget = exe != nullptr;
+    bool dropActivatorFolder = false;
     std::vector<std::string> appArgs;
     bool dashDash = false;
     for (const std::string& a : args) {
         if (expectNotificationArgs) { cliNotification = a; expectNotificationArgs = false; continue; }
+        if (dropActivatorFolder) {
+            dropActivatorFolder = false;
+            if (a.empty() || a[0] != '-') continue;
+        }
+        if (exe && !dashDash && a == "--notification-activated") {
+            cliNotificationCom = true;
+            dropActivatorFolder = true;
+            continue;
+        }
         if (!dashDash) {
             if (a == "--no-splash")    { cliNoSplash = true; continue; }
             if (a == "--splash")       { cliSplash = true; continue; }
@@ -349,6 +375,16 @@ int main(int argc, char* argv[]) {
     // JS and spawned children can locate themselves without guessing from cwd,
     // and settle the app's id (bro.app, BRO_APP_ID).
     bro::engine::publishLaunchEnv(config);
+    if (exe) {
+        bro::engine::setCurrentAppExecutable(exe->exePath);
+        // BRO_EXE_DIR is where an app finds bro's other executables: bro's
+        // directory, not the one its own executable was installed into.
+#ifdef _WIN32
+        _putenv_s("BRO_EXE_DIR", bro::util::engineDir().c_str());
+#else
+        setenv("BRO_EXE_DIR", bro::util::engineDir().c_str(), 1);
+#endif
+    }
     const bool appHasId = !config.manifest.id.empty();
 
     // Notification clicks (docs/sys-api.js 5a): set up before anything else
@@ -369,7 +405,8 @@ int main(int argc, char* argv[]) {
 #endif
         bro::platform::desktop::initNotificationActivation(bro::engine::currentApp().id, exePath,
                                                            bro::engine::absolutePath(config.appDir),
-                                                           cliNotificationCom, /*bareLaunch=*/!haveTarget);
+                                                           cliNotificationCom,
+                                                           /*bareLaunch=*/!haveTarget && !exe);
         if (!cliNotification.empty()) bro::platform::desktop::noteLaunchNotification(cliNotification);
     }
 
@@ -472,3 +509,5 @@ int main(int argc, char* argv[]) {
     }
     return exitCode;
 }
+
+}  // namespace bro::runtime

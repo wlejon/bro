@@ -1,3 +1,8 @@
+// bro-server (runtime_mains.h): compiled into libbro, entered through
+// bro_run_server.
+
+#include "runtime/runtime_mains.h"
+
 #include "engine/engine.h"
 #include "engine/launcher.h"
 #include "bronze_host/app_module.h"
@@ -16,7 +21,7 @@
 #include <string>
 #include <vector>
 
-int main(int argc, char* argv[]) {
+int bro::runtime::runServerMain(int argc, char* argv[]) {
     bro::util::installSignalHandler();
 
     bool showHelp = false;

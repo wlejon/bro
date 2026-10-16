@@ -1,0 +1,9 @@
+{
+    "id": "org.bro.test.ExeApp",
+    "name": "Exe App",
+    "version": "2.3.4",
+    "description": "The app tests/app builds its own executable for",
+    "icon": "icon.svg",
+    "width": 320,
+    "height": 240
+}

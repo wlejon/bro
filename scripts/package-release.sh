@@ -108,6 +108,10 @@ bin_path() {
 BRO_EXE="$(bin_path bro)"
 BRO_HEADLESS_EXE="$(bin_path bro-headless)"
 BRO_SERVER_EXE="$(bin_path bro-server)"
+# The template installed apps' own executables are stamped from
+# (docs/apps.md, "The app's executable"); the engine itself is libbro, which
+# the shared-library glob below picks up beside the executables.
+BRO_APP_STUB_EXE="$(bin_path bro-app-stub)"
 
 if [[ ! -x "$BRO_EXE" ]]; then
     echo "error: $BRO_EXE not found. Build first:" >&2
@@ -123,7 +127,7 @@ rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
 
 # --- Executables -----------------------------------------------------------
-for src in "$BRO_EXE" "$BRO_HEADLESS_EXE" "$BRO_SERVER_EXE"; do
+for src in "$BRO_EXE" "$BRO_HEADLESS_EXE" "$BRO_SERVER_EXE" "$BRO_APP_STUB_EXE"; do
     if [[ -x "$src" ]]; then
         cp "$src" "$OUT_DIR/"
     else
@@ -152,9 +156,17 @@ shopt -u nullglob
 if [[ "$PLATFORM" != "win" ]]; then
     STRIP_FLAGS=()
     [[ "$PLATFORM" == "macos" ]] && STRIP_FLAGS=(-x)
-    for t in bro bro-headless bro-server; do
+    for t in bro bro-headless bro-server bro-app-stub; do
         if [[ -f "$OUT_DIR/$t" ]]; then
             strip "${STRIP_FLAGS[@]}" "$OUT_DIR/$t" 2>/dev/null \
+                || echo "warning: strip failed for $t, shipping unstripped" >&2
+        fi
+    done
+    # The engine library: its exported (dynamic) symbols stay, the static
+    # symbol table and debug info go.
+    for t in libbro.so libbro.dylib; do
+        if [[ -f "$OUT_DIR/$t" ]]; then
+            if [[ "$PLATFORM" == "macos" ]]; then strip -x "$OUT_DIR/$t" 2>/dev/null; else strip --strip-unneeded "$OUT_DIR/$t" 2>/dev/null; fi \
                 || echo "warning: strip failed for $t, shipping unstripped" >&2
         fi
     done
@@ -172,9 +184,10 @@ fi
 # signature install_name_tool invalidated). MoltenVK comes from
 # $MOLTENVK_DYLIB, else the Vulkan SDK ($VULKAN_SDK), else Homebrew.
 if [[ "$PLATFORM" == "macos" ]]; then
-    VK_REF="$(otool -L "$OUT_DIR/bro" | awk '/libvulkan[.0-9]*dylib/ {print $1; exit}')"
+    # The engine library is what links the loader; the executables only link it.
+    VK_REF="$(otool -L "$OUT_DIR/libbro.dylib" | awk '/libvulkan[.0-9]*dylib/ {print $1; exit}')"
     if [[ -z "$VK_REF" ]]; then
-        echo "error: $OUT_DIR/bro is not linked against a Vulkan loader" >&2
+        echo "error: $OUT_DIR/libbro.dylib is not linked against a Vulkan loader" >&2
         exit 1
     fi
     MVK="${MOLTENVK_DYLIB:-}"
@@ -205,9 +218,10 @@ if [[ "$PLATFORM" == "macos" ]]; then
     }
 }
 ICD
-    for t in bro bro-headless bro-server; do
+    for t in libbro.dylib bro bro-headless bro-server bro-app-stub; do
         [[ -f "$OUT_DIR/$t" ]] || continue
-        install_name_tool -change "$VK_REF" "@executable_path/libvulkan.1.dylib" "$OUT_DIR/$t" 2>/dev/null
+        # @loader_path: the loader beside libbro, here and in Bro.app's Frameworks.
+        install_name_tool -change "$VK_REF" "@loader_path/libvulkan.1.dylib" "$OUT_DIR/$t" 2>/dev/null
         # Drop the build tree's absolute rpaths: a shipped binary resolves
         # its dylibs beside itself (@loader_path) or, in Bro.app, in Frameworks.
         otool -l "$OUT_DIR/$t" | awk '/cmd LC_RPATH/ {r=1} r && $1=="path" {print $2; r=0}' |
@@ -408,8 +422,6 @@ if [[ "$PLATFORM" == "macos" ]]; then
     sed 's#"./libMoltenVK.dylib"#"../../../Frameworks/libMoltenVK.dylib"#' \
         "$OUT_DIR/vulkan/icd.d/MoltenVK_icd.json" > "$APP/Contents/Resources/vulkan/icd.d/MoltenVK_icd.json"
     BIN="$APP/Contents/MacOS/bro"
-    install_name_tool -change "@executable_path/libvulkan.1.dylib" \
-        "@executable_path/../Frameworks/libvulkan.1.dylib" "$BIN"
     install_name_tool -add_rpath "@executable_path/../Frameworks" "$BIN"
     cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

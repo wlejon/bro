@@ -79,8 +79,18 @@ bro.app.icon;
 /** The app directory, absolute (the same as bro.appDir). @readonly @type {string} */
 bro.app.dir;
 
-/** The executable running the app (bro, bro-headless, or a host linking bro_engine). @readonly @type {string} */
+/** The executable running the app (bro, bro-headless, the app's own executable, or a host linking the engine). @readonly @type {string} */
 bro.app.exePath;
+
+/**
+ * The app's own executable when it was launched through one (an installed
+ * app's `helm-calculator`, docs/apps.md "The app's executable"), "" when it
+ * runs as a folder under bro. `bro.app.spawn()` starts that executable again;
+ * `bro.app.open(id)` starts another installed app through its own when it is
+ * up to date.
+ * @readonly @type {string}
+ */
+bro.app.executable;
 
 /**
  * The declared desktop keys of bro.json, as parsed.

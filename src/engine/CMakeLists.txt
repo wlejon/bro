@@ -64,6 +64,8 @@ add_library(bro_engine STATIC
     overflow.cpp
     scrollbar.cpp
     app_loader.cpp
+    app_exe.cpp
+    app_exe_win.cpp
     app_install.cpp
     app_manifest.cpp
     app_runtime.cpp
@@ -98,6 +100,13 @@ if(BRO_WITH_3D)
     target_sources(bro_engine PRIVATE gizmo.cpp gizmo_mesh.cpp gizmo_routing.cpp)
 endif()
 target_include_directories(bro_engine PUBLIC ${bro_SOURCE_DIR}/src)
+# engineVersion() (app_exe.cpp) leads with bro's own version.
+set_source_files_properties(app_exe.cpp PROPERTIES COMPILE_DEFINITIONS "BRO_VERSION_STRING=\"${PROJECT_VERSION}\"")
+# An app executable's Windows half: the Start menu shortcut (COM, the shell's
+# property store) in app_exe_win.cpp.
+if(WIN32)
+    target_link_libraries(bro_engine PRIVATE ole32 shell32 shlwapi propsys version)
+endif()
 target_link_libraries(bro_engine PUBLIC bro_platform bro_render bro_dom bro_layout bro_canvas bro_webgl bro_audio_inference bro_steam broaudio bro_util)
 # The source watcher behind the edit loop (app_reload.cpp) is brokit's
 # FsWatcher, the same one behind fs.watch.

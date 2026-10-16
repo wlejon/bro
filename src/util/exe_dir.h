@@ -4,6 +4,19 @@
 
 namespace bro::util {
 
+/// The file holding the engine's code, absolute and UTF-8: libbro
+/// (libbro.so, libbro.dll, libbro.dylib) for the stock executables and an
+/// app's own, or the executable itself when the engine is linked into it
+/// statically.
+std::string engineImagePath();
+
+/// The directory holding the engine image: where bro, bro-headless,
+/// bro-app-stub and libbro are installed. For bro and bro-headless it is
+/// executableDir(); an installed app's own executable (engine/app_exe.h) or
+/// an embedder that links libbro from another tree runs somewhere else, and
+/// this is still bro's.
+std::string engineDir();
+
 /// Absolute path of the directory containing the running executable. Falls
 /// back to "." if the platform query fails.
 std::string executableDir();

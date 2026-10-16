@@ -283,6 +283,29 @@ AppDirs appDirsFor(const std::string& idIn) {
     return d;
 }
 
+std::string installRoot(bool system) {
+#ifdef _WIN32
+    const std::string pf = getEnv("ProgramFiles");
+    if (system) return u8str(u8path(pf.empty() ? std::string("C:/Program Files") : pf) / "bro" / "apps");
+    std::string local = getEnv("LOCALAPPDATA");
+    if (local.empty()) local = getEnv("APPDATA");
+    if (local.empty()) local = ".";
+    return u8str(u8path(local) / "bro" / "apps");
+#elif defined(__APPLE__)
+    if (system) return "/Library/Application Support/bro/apps";
+    const std::string h = getEnv("HOME");
+    return u8str(u8path(h.empty() ? std::string(".") : h) / "Library" / "Application Support" / "bro" / "apps");
+#else
+    if (system) return "/usr/local/share/bro/apps";
+    std::string dataHome = getEnv("XDG_DATA_HOME");
+    if (dataHome.empty() || dataHome[0] != '/') {
+        const std::string h = getEnv("HOME");
+        dataHome = u8str(u8path(h.empty() ? std::string(".") : h) / ".local" / "share");
+    }
+    return u8str(u8path(dataHome) / "bro" / "apps");
+#endif
+}
+
 std::vector<std::string> installedAppRoots() {
     std::vector<std::string> roots;
 #if defined(_WIN32)

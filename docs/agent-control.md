@@ -181,6 +181,10 @@ and every megabyte named:
 
 - `process`: resident, private (dirty) and shared memory (Linux:
   `/proc/self/smaps_rollup`; Windows: working set and private bytes).
+- `engine image` (Linux): the file holding the engine's code (libbro.so, or
+  the executable when the engine is linked in statically), what of it is
+  resident and how much is shared clean with other processes mapping the same
+  file; its code pages are shared by every bro process and helm on one libbro.
 - private dirty memory by kind of mapping (Linux): the C heap's main heap
   and its thread arenas, file-backed private pages (relocations, `.data`),
   GPU buffer mappings, and the anonymous rest (the JS heap, JIT code, thread

@@ -1,3 +1,8 @@
+// bro-headless (runtime_mains.h): compiled into libbro, entered through
+// bro_run_headless.
+
+#include "runtime/runtime_mains.h"
+
 #include "engine/headless_driver.h"
 #include "engine/engine.h"
 #include "dom/document.h"
@@ -8,7 +13,7 @@
 #include "bronze_host/host_storage.h"
 #include "util/crash_handler.h"
 
-int main(int argc, char* argv[]) {
+int bro::runtime::runHeadlessMain(int argc, char* argv[]) {
     // First thing, before anything can print or fault: unbuffer the standard
     // streams and arm the crash handlers. A headless run is usually redirected
     // to a file, which is exactly when the CRT starts buffering, and a run

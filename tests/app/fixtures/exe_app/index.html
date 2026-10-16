@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head><title>Exe App</title></head>
+<body>
+<p>exe app</p>
+<script>
+// test_app_exe.js: report how this launch ran to $BRO_TEST_EXE_OUT, then quit.
+const fs = require('fs');
+const out = process.env.BRO_TEST_EXE_OUT;
+if (out) {
+    fs.writeFileSync(out, JSON.stringify({
+        id: bro.app.id,
+        dir: bro.app.dir,
+        executable: bro.app.executable,
+        exePath: bro.app.exePath,
+        argv: bro.app.argv,
+    }));
+}
+bro.quit();
+</script>
+</body>
+</html>

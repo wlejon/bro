@@ -27,6 +27,9 @@ struct AppRuntimeInfo {
     AppDirs dirs;
     std::string logFile;             // the file stdout/stderr go to, "" for none
     bool singleInstance = false;     // this process holds the app's instance channel
+    /// The app's own executable when it was launched through one (app_exe.h),
+    /// "" when it runs as a folder under bro.
+    std::string executable;
 };
 
 /// Settle `config.appId` (appIdFor: the declared id, else the folder name),
@@ -39,6 +42,9 @@ const AppRuntimeInfo& currentApp();
 
 /// Record where stdout/stderr were sent (bro.app.logFile).
 void setCurrentAppLogFile(const std::string& path);
+
+/// Record that the app was launched through its own executable.
+void setCurrentAppExecutable(const std::string& path);
 
 /// The working directory, as UTF-8 ("" when it cannot be read).
 std::string currentWorkingDirectory();

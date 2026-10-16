@@ -7,7 +7,10 @@ capability goes into bro (or into a sibling library exposed as `bro.<x>`),
 never into the app. An ahead-of-time `app.dll` beside `index.html` is an
 optional packaging speed-up, not a requirement.
 
-Each app runs as its own bro process. On Linux under helm it is an ordinary
+Each app runs as its own bro process. An installed app's process is named for
+the app (`helm-calculator`), started by its own small executable, and every
+bro process maps the one engine library, libbro ([The app's
+executable](#the-apps-executable)). On Linux under helm it is an ordinary
 Wayland client of the compositor.
 
 This page covers the manifest keys that make a folder an application. The
@@ -220,7 +223,8 @@ Installed folder apps live in one directory per app, named by id:
 | macOS | `~/Library/Application Support/bro/apps/<id>` | `/Library/Application Support/bro/apps/<id>` |
 
 ```
-bro --install <app-dir> [--link] [--system] [--exec <bro>]
+bro --install <app-dir> [--link] [--system] [--exec <bro>] [--no-exe]
+bro --build-exe <app-dir | id> [--out <exe>] [--force] [--system] [--quiet]
 bro --uninstall <id> [--system]
 bro --list-apps
 bro --desktop-entry <app-dir> [--exec <bro>]
@@ -232,32 +236,100 @@ copy atomically. An app inside a project (see
 `lib` copied in as `<id>/lib`, so `/lib/...` imports keep resolving; an app
 with its own `lib/` keeps it. `--link` symlinks the folder instead, which suits
 a checkout you are working in, and the linked app finds its project through
-the link. On Linux it also writes a FreeDesktop desktop entry,
-`$XDG_DATA_HOME/applications/<id>.desktop` (`--system`:
-`/usr/local/share/applications`). Any launcher reading the standard
-directories lists the app: `bro.apps`, helm's launcher, a GNOME or KDE menu.
-None needs a special case. The entry looks like this:
+the link. Then it builds the app's own executable (next section) and
+registers it with the system:
+
+- **Linux:** a FreeDesktop desktop entry,
+  `$XDG_DATA_HOME/applications/<id>.desktop` (`--system`:
+  `/usr/local/share/applications`), whose `Exec=` is the executable. Any
+  launcher reading the standard directories lists the app: `bro.apps`, helm's
+  launcher, a GNOME or KDE menu. None needs a special case.
+- **Windows:** a Start menu shortcut,
+  `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Bro Apps\<name>.lnk`
+  (`--system`: the machine's Programs folder), that starts the executable
+  under the app's AppUserModelID (the id). The running window carries the
+  same id, so the shortcut, a pinned taskbar button and the window are one
+  taskbar group, with the app's icon.
+
+The entry looks like this:
 
 ```ini
 [Desktop Entry]
 Type=Application
 Name=Notes
-Exec=/usr/bin/bro /home/j/.local/share/bro/apps/org.example.Notes %F
-TryExec=/usr/bin/bro
+Exec=/home/j/.local/share/bro/bin/org-example-Notes %F
+TryExec=/home/j/.local/share/bro/bin/org-example-Notes
 StartupWMClass=org.example.Notes
 Categories=Utility;TextEditor;
 MimeType=text/plain;text/markdown;
 SingleMainWindow=true
+X-Bro-App=/home/j/.local/share/bro/apps/org.example.Notes
 Actions=new-window;
 
 [Desktop Action new-window]
 Name=New Window
-Exec=/usr/bin/bro /home/j/.local/share/bro/apps/org.example.Notes --new-window
+Exec=/home/j/.local/share/bro/bin/org-example-Notes --new-window
 ```
 
-`--exec` names the bro to put in `Exec=`. The default is the bro running the
-command. `StartupWMClass` is the id, which is also the window's app_id, so a
-launcher matches running windows to their entry.
+`StartupWMClass` is the id, which is also the window's app_id, so a launcher
+matches running windows to their entry. With `--no-exe`, or where no
+executable can be built (macOS for now, or a bro without `bro-app-stub`),
+`Exec=` runs the folder under bro instead: `Exec=/usr/bin/bro
+/home/j/.local/share/bro/apps/org.example.Notes %F`. `--exec` names that bro;
+the default is the bro running the command. `--desktop-entry` prints this
+folder form and writes nothing.
+
+## The app's executable
+
+Every installed app gets a small executable named for it: the id with its dots
+made dashes (`helm.calculator` → `helm-calculator`, `helm-calculator.exe`),
+in `bin/` beside the install root (`~/.local/share/bro/bin`,
+`%LOCALAPPDATA%\bro\bin`). It is what makes the app itself to the system:
+
+| | |
+|---|---|
+| process name | the executable's name (`ps`, `top`, Task Manager, `pgrep helm-calculator`) |
+| window class / app_id | the id (Wayland `app_id`, X11 `WM_CLASS`, Windows AppUserModelID), as for any app with an id |
+| icon | Windows: embedded in the executable (every size, from the manifest's icon); Linux: the desktop entry's `Icon=` |
+| name and version | Windows: the executable's version resource (`FileDescription`, `ProductVersion`) |
+| control endpoint | `<id>-<pid>` ([agent-control.md](agent-control.md)) |
+
+It holds no engine. It loads libbro, the one engine library every bro process
+maps (BUILDING.md, "The engine library"), and runs the app in its own
+process. `bro.app.executable` is its path (`""` when the app runs as a folder
+under bro). Its arguments are all the app's (`bro.app.argv`), apart from
+bro's own few flags before a `--`; the folder is built in.
+
+It refers to the installed folder rather than holding the app, so editing the
+installed copy needs no rebuild. What it is built from is the app's identity:
+`bro.json` and the icon. Its cache key is a hash of those and the engine
+build (`bro_engine_version`), and `bro --install` / `bro --build-exe` rebuild
+it only when either changed (`--force` rebuilds anyway).
+
+**When it is out of date it still starts.** An executable built against
+another engine build (bro was rebuilt or upgraded), or whose app's `bro.json`
+or icon changed since, does not run as itself: it starts `bro --build-exe` in
+the background to replace itself, and hands this launch to the stock bro
+beside the engine as a folder (`bro <app-dir> <args>`), so the app opens
+either way. The next launch runs the fresh executable. If the engine library
+itself is gone or speaks another entry ABI, the executable runs the folder
+under the stock bro its identity names. It never fails to start for want of a
+matching engine.
+
+**Development stays a folder.** `bro <dir>` is the edit loop: hot reload, no
+build, no install. The executable is for what is installed.
+
+Built on the machine the app is installed on, with no compiler: the
+executable is a copy of `bro-app-stub` (shipped beside libbro) with the
+app's identity stamped into it, and on Windows its icon and version
+resources written with the system's own resource updater. BUILDING.md has how
+and why.
+
+What it is a seam for, later: the app's ahead-of-time compiled script
+(today an `app.dll` beside `index.html`), the natives modules the app uses,
+a startup heap snapshot, packed assets, and per-app release downloads. Each
+is another input to the cache key and another part of the executable; none of
+them changes how it is named, registered or launched.
 
 ## Startup cost
 

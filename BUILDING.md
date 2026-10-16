@@ -287,9 +287,100 @@ cmake -B build-release -DCMAKE_BUILD_TYPE=Release
 cmake --build build-release
 ```
 
-All three executables are produced: `bro` (windowed), `bro-headless` (JS
-scripting/testing), and `bro-server`. On Windows they land in `build/Debug/` and
-`build/Release/`; on Linux/macOS directly in the build dir.
+The build produces the engine library, `libbro` (`libbro.so`, `libbro.dll`,
+`libbro.dylib`), and the executables that run it: `bro` (windowed),
+`bro-headless` (JS scripting/testing), `bro-server`, and `bro-app-stub` (the
+template installed apps' own executables are made from). On Windows they land
+in `build/Debug/` and `build/Release/`; on Linux/macOS directly in the build
+dir. They belong together: copy or package the directory, not one file of it.
+
+## The engine library
+
+All of bro (the static libraries under `src/`, and the sibling libraries
+linked into them) is one shared library, `libbro`. `bro`, `bro-headless`,
+`bro-server` and every installed app's own executable are a few lines that
+call into it (`src/runtime/bro_entry.h`). The point is memory: a desktop runs
+many bro processes (helm and every app it launches), and they all map the one
+file, so the engine's code (well over 100 MB of it) is in memory once,
+shared clean, rather than once per distinct executable. `bro-ctl mem`
+reports it as the `engine image` line ([docs/agent-control.md](docs/agent-control.md#mem)).
+
+**What crosses the boundary.** A C ABI is the contract everywhere:
+`bro_run_windowed`, `bro_run_headless`, `bro_run_server`, `bro_run_app`,
+`bro_entry_abi` and `bro_engine_version`. Beyond it:
+
+- **Linux and macOS** export the whole C++ surface too. libbro is linked from
+  whole archives (`--whole-archive` / `-force_load`) with default visibility,
+  so an embedder that drives the `Engine` from C++ links it like any shared
+  library: helm does (`find_package(bro)` against a bro build tree, which
+  writes `bro-config.cmake`, or `bro::libbro` in-tree). Calls inside the
+  library bind inside it (`-Bsymbolic-functions`), so the exported surface
+  costs no PLT hop on the engine's own calls.
+- **Windows** exports the C functions and nothing else. The engine's C++
+  surface, with eleven sibling libraries inside it, is never annotated for
+  export: a DLL's export table cannot hold it (65,535 entries; the engine has
+  several times that), `WINDOWS_EXPORT_ALL_SYMBOLS` therefore fails outright,
+  and hand-annotating every class in every repository with an export macro
+  would be a tax on every header forever. A Windows embedder that needs the
+  C++ API links the static libraries, which are still built
+  ([docs/embedding.md](docs/embedding.md)). On Windows that is only helm, and
+  helm is Linux-first.
+
+The static libraries remain the build's unit: bro's C++ tests,
+`bro-native-manifest` and any embedder that wants a single binary link them
+directly. libbro is built from them, not instead of them.
+
+**bronze's runtime** is already its own shared library
+(`bronze::runtime_shared`: `bronze_runtime_shared.dll`,
+`libbronze_runtime_shared.so`), and stays one. libbro links it, and an app's
+ahead-of-time module (`app.dll` / `app.so` beside `index.html`) links it too
+and nothing of libbro's: the module reaches the host's globals at run time
+through the realm, not through link-time symbols. So when an app's
+executable carries its compiled module (the next step after the executable
+itself), the module still imports only from the bronze runtime, which the
+executable's process already has loaded through libbro, and there is still
+exactly one runtime, one heap and one key registry per process. The engine
+build an executable was made against (`bro_engine_version`) is part of its
+cache key, so a module compiled against one engine build is never run on
+another.
+
+**An app's own executable is made without a compiler.** `bro --install`
+copies `bro-app-stub` (built with bro, shipped beside libbro), names the copy
+for the app (`helm.calculator` → `helm-calculator`) and stamps it:
+
+- An identity block, found by its marker and overwritten in place: the
+  app's id, name, version and folder, the engine build and content hash it
+  was made against, and where libbro and the stock bro are. This is
+  format-agnostic (the same bytes in an ELF `.rodata` and a PE `.rdata`), and
+  needs no section editing, relinking or tooling.
+- On Windows, an icon (every size from 16 to 256 px, rendered from the app's
+  icon) and a version resource (`FileDescription` is the app's name, which is
+  what Task Manager shows), written with the system's own resource updater
+  (`BeginUpdateResource`, in kernel32 on every Windows). No `rc.exe`, no SDK.
+- On Linux there is nothing more to stamp: the process name is the file name,
+  and the icon and window class belong to the desktop entry, which `--install`
+  writes with `Exec=` the executable and `StartupWMClass=` the app's id.
+
+The stub loads libbro at run time from the path in its block (`dlopen` /
+`LoadLibraryEx`) rather than linking it, so the copy can live anywhere (with
+the app, not beside bro) and still map the one engine every bro process
+maps; and when libbro is missing or speaks another entry ABI, the stub runs
+the app as a folder under the stock bro instead of failing. Nothing about it
+depends on a toolchain being present on the machine the app is installed on.
+Alternatives considered: generating a linker script or object and invoking
+the system linker (needs a toolchain, which a user's machine does not have);
+rewriting ELF dynamic sections or PE import tables (format surgery with many
+edge cases, for no gain over a run-time load); a shell script or `.lnk` that
+runs `bro <dir>` (the process is still named `bro`, and Windows groups and
+labels by executable). macOS needs an app bundle (Info.plist, re-signing
+after stamping); until bro builds one, a macOS install runs the folder under
+bro.
+
+**The engine version** (`bro_engine_version()`, `engineVersion()` in
+`src/engine/app_exe.h`) is bro's version plus the entry ABI plus the size and
+modification time of the engine image. Any relink of libbro changes it, with
+no build-time stamping step to keep correct, and an executable built against
+another engine build rebuilds itself on its next launch (docs/apps.md).
 
 ## Running
 

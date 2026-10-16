@@ -203,7 +203,8 @@ if (!fs.existsSync(windowed)) {
     // XDG_DATA_DIRS stays: the Vulkan loader finds its drivers through it.
     // macOS keeps apps in ~/Library/Application Support/bro/apps.
     const isMac = process.platform === 'darwin';
-    const env = isWin ? { LOCALAPPDATA: data } : isMac ? { HOME: data } : { XDG_DATA_HOME: data };
+    // APPDATA too: on Windows --install writes the app's Start menu shortcut.
+    const env = isWin ? { LOCALAPPDATA: data, APPDATA: path.join(data, 'Roaming') } : isMac ? { HOME: data } : { XDG_DATA_HOME: data };
     cp.execFileSync(windowed, ['--install', fixture, '--exec', '/opt/bro/bin/bro'], { env: scratchEnv(env), encoding: 'utf8' });
     const installed = isMac ? path.join(data, 'Library', 'Application Support', 'bro', 'apps', 'org.bro.test.ManifestApp')
                             : path.join(data, 'bro', 'apps', 'org.bro.test.ManifestApp');
