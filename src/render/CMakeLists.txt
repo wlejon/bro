@@ -57,6 +57,7 @@ add_library(bro_render STATIC
     vulkan_presenter.cpp
     vulkan_presenter_blend.cpp
     vulkan_util.cpp
+    frame_damage.cpp
     pci_link.cpp
     pixel_convert.cpp
     raster_renderer.cpp
@@ -151,6 +152,10 @@ if(BRO_BUILD_TESTS)
     add_executable(bro_shadow_ninepatch_test tests/test_shadow_ninepatch.cpp)
     target_link_libraries(bro_shadow_ninepatch_test PRIVATE bro_render bro_platform bro_util skia Vulkan::Vulkan)
     target_include_directories(bro_shadow_ninepatch_test PRIVATE ${bro_SOURCE_DIR}/src)
+
+    add_executable(bro_frame_damage_test tests/test_frame_damage.cpp)
+    target_link_libraries(bro_frame_damage_test PRIVATE bro_render bro_platform bro_util skia Vulkan::Vulkan)
+    target_include_directories(bro_frame_damage_test PRIVATE ${bro_SOURCE_DIR}/src)
 
     add_executable(bro_pci_link_test tests/test_pci_link.cpp)
     target_link_libraries(bro_pci_link_test PRIVATE bro_render bro_platform bro_util skia Vulkan::Vulkan)
