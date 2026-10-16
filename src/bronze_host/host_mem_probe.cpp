@@ -72,6 +72,13 @@ JsMemoryStats jsMemoryStats() {
 
 size_t releaseIdleJsHeap() { return bronze::embed::releaseIdleHeapMemory(); }
 
+size_t releaseIdleCompiledBodies() { return bronze::embed::releaseIdleCompiledBodies(); }
+
+CompiledBodyStats compiledBodyStats() {
+    const bronze::embed::CompiledBodyStats b = bronze::embed::getCompiledBodyStats();
+    return {b.built, b.released, b.liveBytes};
+}
+
 Value hostMemoryBreakdown(bool sizes) {
     ObjectBuilder out;
 #if defined(_WIN32)

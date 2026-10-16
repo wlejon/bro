@@ -131,6 +131,18 @@ JsMemoryStats jsMemoryStats();
 /// Gone idle (main thread, no script running): a minor collection, then the
 /// JS heap's unused young pages handed back. Returns the bytes released.
 size_t releaseIdleJsHeap();
+/// Gone idle: the MIR bodies of every compiled script function whose code
+/// exists are dropped; bronze builds one again when a tier-up or a deopt
+/// needs it. Returns the bytes released (0 while a compile is reading).
+size_t releaseIdleCompiledBodies();
+/// Script function bodies built (first builds and builds again), released,
+/// and the bytes the ones held now keep. Walks every function: for `mem`.
+struct CompiledBodyStats {
+    uint64_t built = 0;
+    uint64_t released = 0;
+    size_t liveBytes = 0;
+};
+CompiledBodyStats compiledBodyStats();
 
 /// Run sub-document scripts within its document scope and realm gating.
 void runHostSubDocScripts(engine::Engine& engine, dom::Document* subDoc,

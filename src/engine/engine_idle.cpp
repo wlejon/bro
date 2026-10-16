@@ -103,8 +103,10 @@ void Engine::releaseHeapOnHeldFrame() {
     lastTrimMs_ = sinceStart;
     drawnSinceTrim_ = false;
     // The JS heap's young generation first (a minor collection empties its
-    // eden, whose pages then go), then the C heap's free pages.
+    // eden, whose pages then go), the compiled functions' MIR bodies (their
+    // bytecode or native code is what runs), then the C heap's free pages.
     bronze_host::releaseIdleJsHeap();
+    bronze_host::releaseIdleCompiledBodies();
     releaseFreeHeapPages();
 }
 

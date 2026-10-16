@@ -193,6 +193,9 @@ and every megabyte named:
 - `malloc` (glibc): bytes in use, free bytes held in arenas, arena count.
 - `gpu`: VRAM and GTT the kernel charges this process (DRM `fdinfo`).
 - `js`: bronze's heap, used / committed / reserved, and collections so far.
+- `mir`: the compiled script functions' MIR bodies still held, and how many
+  were built and released. An idle window releases every body whose code
+  exists; a tier-up or a deopt builds one again.
 - `skia` / `ganesh`: the glyph cache, Ganesh's resource cache against its
   budget, the device memory pool.
 - `images`: the decoded-image store and its decoder threads.
@@ -200,7 +203,8 @@ and every megabyte named:
   running; an app that never uses one should see it `off`.
 
 `--detail` adds private memory by file and the largest anonymous mappings;
-`--trim` first returns the C heap's free pages to the system (`malloc_trim`)
+`--trim` first releases the idle MIR bodies and returns the C heap's free
+pages to the system (`malloc_trim`)
 and says how much that was, which separates fragmentation from live data.
 
 ## record

@@ -339,6 +339,9 @@ std::string Engine::memoryReport(bool detail) {
     out += "js        heap used " + mb(static_cast<double>(js.heapUsed)) + "  committed " +
            mb(static_cast<double>(js.heapCommitted)) + "  reserved " + mb(static_cast<double>(js.heapReserved)) +
            "  collections " + std::to_string(js.collections) + "\n";
+    const bronze_host::CompiledBodyStats bodies = bronze_host::compiledBodyStats();
+    out += "mir       function bodies held " + mb(static_cast<double>(bodies.liveBytes)) + "  built " +
+           std::to_string(bodies.built) + "  released " + std::to_string(bodies.released) + "\n";
 
     out += "skia      glyph cache " + mb(static_cast<double>(SkGraphics::GetFontCacheUsed())) + " of " +
            mb(static_cast<double>(SkGraphics::GetFontCacheLimit())) + "  cpu resource cache " +
@@ -393,8 +396,10 @@ void Engine::configureHeap() {
 }
 
 std::string Engine::trimMemory() {
-    const std::string js = "js heap released " + mb(static_cast<double>(bronze_host::releaseIdleJsHeap())) +
-                           " of young pages\n";
+    std::string js = "js heap released " + mb(static_cast<double>(bronze_host::releaseIdleJsHeap())) +
+                     " of young pages\n";
+    js += "script function bodies released " +
+          mb(static_cast<double>(bronze_host::releaseIdleCompiledBodies())) + "\n";
 #if defined(__linux__) && defined(__GLIBC__)
     auto before = readRollup()["Private_Dirty"];
     malloc_trim(0);
