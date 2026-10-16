@@ -121,6 +121,9 @@ void main() {
     if (forestSprite) {
         float sheen = clamp((inColor.y - 0.12) * 1.6, 0.0, 1.0);
         baseColor = mix(baseColor, baseColor * vec3(1.25, 1.3, 1.05) + vec3(0.015, 0.02, 0.0), 0.4 * sheen);
+        // A clump (inColor.z 1) shows its leaves; a crown is too small on
+        // screen for them.
+        if (inColor.z > 0.5) baseColor *= forestSpriteLeafShade(inUV, inColor.x);
     }
 #endif
 

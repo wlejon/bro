@@ -18,6 +18,15 @@ float forestSpriteNoise(vec2 p) {
     return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
+// The light inside a clump's disc at leaf scale: the leaves its lobe holds
+// (about ten across), each a little lighter or darker, darker where they
+// part. A multiplier on the colour, 0.7 .. 1.1.
+float forestSpriteLeafShade(vec2 uv, float seed) {
+    vec2 o = vec2(seed * 61.0, seed * 29.0);
+    float n = forestSpriteNoise(uv * 5.5 + o) * 0.6 + forestSpriteNoise(uv * 11.0 + o.yx) * 0.4;
+    return 0.7 + 0.4 * n;
+}
+
 bool forestSpriteCovers(vec2 uv, float seed) {
     float r = length(uv);
     vec2 o = vec2(seed * 97.0, seed * 53.0);

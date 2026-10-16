@@ -50,7 +50,7 @@ void main() {
     outTangent = right * s.radius;
     outBitangent = up * ry;
     outUV = s.corner;
-    outColor = vec4(s.seed, s.gust, 0.0, 1.0);
+    outColor = vec4(s.seed, s.gust, push.extra.z < 0.5 ? 1.0 : 0.0, 1.0);
     outInstColor = vec4(s.tint, s.fade);
     outVegShade = s.shade;
 }
