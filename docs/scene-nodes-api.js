@@ -3,7 +3,7 @@
 // The per-type half of the scene graph: the option dictionaries the
 // `SceneGraph.create*` factories read (meshes, skinned and instanced meshes,
 // Gaussian splats, HTML / shape / sprite billboards, lights, 2D and 3D
-// particles, decals, reflection probes), octahedral impostors
+// particles, decals, reflection probes, grass), octahedral impostors
 // (`bro.impostor`), and the `SceneNode` members that apply only to some node
 // types: custom shaders, LOD and distance gating, instances, textures from
 // pixels, splat clouds, spatial-audio emitters and skeletal playback.
@@ -338,6 +338,86 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  * @property {Array<number>} [size]
  * @property {number} [resolution]
  * @property {Array<number>} [position]
+ */
+
+/**
+ * Grass: a meadow of procedural blades over a ground, from
+ * `scene.createGrass(opts)`. No blade carries data: rings of cells around the
+ * camera are drawn as instanced blades (fine and close near, coarser and
+ * wider further out, cross-faded), each placed, culled, bent and coloured in
+ * the vertex shader from its cell. They sway in the scene's wind field
+ * (`setWind`: the steady lean, each blade's flutter and the travelling gust
+ * bands, which lift the sheen of the blades they bend), are lit mostly as the
+ * ground they cover, and are parted and flattened by movers (`addMover`,
+ * `push`). The node is left out of raycasts and bounds; its transform is
+ * ignored.
+ *
+ * What the node draws over is a FIELD baked once from these options: a grid
+ * over `area` every `cell` metres of (ground height, density, dryness, height
+ * multiplier). `density`, `dry` and `tall` are numbers or functions
+ * `(x, z, y) => value`, called once per field texel at bake time, so they can
+ * read the same noise an app colours its ground with. Re-bake with
+ * `node.setGround(opts)` (a moved or edited ground, a new season).
+ *
+ * @example
+ *   const ground = scene.createMesh({ data: Mesh.heightmapGrid(h, N, N, cell) });
+ *   const grass = scene.createGrass({
+ *     ground,                                  // the blades stand on it
+ *     dry: (x, z) => patches(x, z),            // 0 lush .. 1 straw
+ *     density: (x, z) => nearTrunk(x, z) ? 0.3 : 1,
+ *     tall: (x, z) => 1.2 - 0.4 * patches(x, z),
+ *   });
+ *   grass.addMover(player, { radius: 0.5, trample: 1 });   // parts it, leaves a lane
+ *
+ * @typedef {Object} GrassNodeOptions
+ * @property {SceneNode|Object|Function} [ground] - what the blades stand on:
+ *   a mesh node (its top surface on the field's grid, `sampleHeights`;
+ *   texels off the mesh grow nothing), a terrain
+ *   (`heightAt`), a clipmap terrain (`renderedElevationAt`), or a function
+ *   `(x, z) => y`. Default: flat ground at y = 0.
+ * @property {Array<number>} [area] - `[x0, z0, x1, z1]` the field covers;
+ *   default the mesh's world bounds, else `[-50, -50, 50, 50]`.
+ * @property {number} [cell=0.5] - field texel spacing (m): the detail of
+ *   the ground's shape and of the masks.
+ * @property {number|Function} [density=1] - where grass grows, 0..1.
+ * @property {number|Function} [dry=0] - 0 lush .. 1 sun-dried.
+ * @property {number|Function} [tall=1] - height multiplier.
+ * @property {number} [height=0.4] - mean blade height (m); clumps run
+ *   from about half to one and a half times it, and lush tall patches higher.
+ * @property {number} [width=0.005] - blade width (m) on top of each ring's
+ *   own (near blades are about 2 cm wide).
+ * @property {number} [bladeDensity=1] - blades per area, x the default
+ *   (one per 6 cm square near the camera, before the clumps thin them).
+ * @property {number} [range=150] - the far edge of the outermost ring (m).
+ * @property {number} [minNormalY=0.62] - no grass on ground steeper than
+ *   this (the ground normal's y); or `maxSlope` in degrees.
+ * @property {Array<number>|string} [lush] - lush blade colour, linear
+ *   `[r, g, b]` or `'#rrggbb'` (default `[0.12, 0.17, 0.03]`).
+ * @property {Array<number>|string} [dryColor] - sun-dried colour (default
+ *   `[0.42, 0.31, 0.09]`).
+ * @property {number} [bulk=0.72] - how much of a blade's shading follows
+ *   the ground's normal (1 = lit exactly as the ground).
+ * @property {number} [clump=0.21] - clump noise frequency (1/m).
+ * @property {number} [rootShade=0.45] - the root's colour, x the blade's.
+ * @property {number} [sheen=0.35] - how much a gust lightens the blades it bends.
+ * @property {number} [variety=1] - large-scale height variation, 0..1.
+ * @property {number} [wind=1] - response to the wind, x.
+ * @property {Array<number>|string} [color] - the node colour, multiplied in (default white).
+ * @property {number} [roughness=0.7]
+ * @property {boolean} [castsShadow=false] - the near ring's blades cast (a
+ *   cost: the shadow map then re-renders every frame).
+ * @property {boolean} [receivesShadow=true]
+ */
+
+/**
+ * A grass mover's push: `radius` (m, default 0.6), `strength` (default 1:
+ * how hard blades lean away and along its motion; they spring back in about
+ * half a second) and `trample` (0..1, default 0: how flat it leaves the grass
+ * it crosses, which rises again over about 1 / 0.05 = 20 s).
+ * @typedef {Object} GrassMoverOptions
+ * @property {number} [radius]
+ * @property {number} [strength]
+ * @property {number} [trample]
  */
 
 // ── SceneNode: per-type members ──────────────────────────────────────────────
@@ -1024,6 +1104,95 @@ class SceneNode {
   /** @param {Array<Object>|Float32Array} instances @returns {SceneNode} */ updateInstances(instances) {}
   /** @param {(MeshGeometry|Mesh)} mesh @returns {SceneNode} */ setInstancedMesh(mesh) {}
   /** @param {number} cols @param {number} [rows] @returns {SceneNode} */ setAtlasGrid(cols, rows) {}
+
+  // ── Grass (scene.createGrass) ──
+
+  /**
+   * Grass: change the look (any of GrassNodeOptions' blade and colour
+   * keys; what it leaves out keeps its value). The field is not re-baked.
+   * @example grass.setGrass({ height: 0.6, dryColor: '#b89a52', wind: 1.4 });
+   * @param {GrassNodeOptions} opts
+   * @returns {SceneNode}
+   */
+  setGrass(opts) {}
+
+  /**
+   * Grass: re-bake the field (`ground`, `area`, `cell`, `density`, `dry`,
+   * `tall`) and replace it whole.
+   * @param {GrassNodeOptions} opts
+   * @returns {SceneNode}
+   */
+  setGround(opts) {}
+
+  /**
+   * Grass: the look as set: `{height, width, bladeDensity, range, minNormalY,
+   * lush, dryColor, bulk, clump, rootShade, sheen, variety, wind}`.
+   * Undefined on any other node.
+   * @returns {Object|undefined}
+   */
+  grassParams() {}
+
+  /**
+   * Grass: track `node` as a mover. Every frame its path through the grass
+   * since the last frame (sampled along the way, so a fast mover leaves no
+   * gaps) pushes the blades within `radius` away from it and along its
+   * motion, and with `trample` flattens them the way it pushed. Removed
+   * nodes are dropped by themselves.
+   * @example grass.addMover(walker, { radius: 0.45, strength: 1, trample: 0.6 });
+   * @param {SceneNode} node
+   * @param {GrassMoverOptions} [opts]
+   * @returns {SceneNode}
+   */
+  addMover(node, opts) {}
+
+  /**
+   * Grass: stop tracking `node` (the grass it bent recovers as usual).
+   * @param {SceneNode} node
+   * @returns {SceneNode}
+   */
+  removeMover(node) {}
+
+  /**
+   * Grass: a one-off push this frame at world (x, z): a landing, an
+   * explosion, a gust from a rotor. `vx`, `vz` (m/s) bend the blades along
+   * a motion as well as away from the point.
+   * @example grass.push(p[0], p[2], { radius: 3, strength: 1.5, trample: 0.4 });
+   * @param {number} x
+   * @param {number} z
+   * @param {{radius?: number, vx?: number, vz?: number, strength?: number, trample?: number}} [opts]
+   * @returns {SceneNode}
+   */
+  push(x, z, opts) {}
+
+  /**
+   * Grass: what the last frame drew: `{instances: [near, mid, far], movers,
+   * fieldCols, fieldRows}`. `instances` counts the cells of each ring's
+   * visible rectangle; the blades that survive culling are fewer.
+   * @returns {{instances: Array<number>, movers: number, fieldCols: number, fieldRows: number}|undefined}
+   */
+  grassStats() {}
+
+  /**
+   * Grass: the baked ground height at world (x, z), bilinear as the GPU
+   * samples it (so a mover set on it sits where the blades root).
+   * @param {number} x
+   * @param {number} z
+   * @returns {number|undefined}
+   */
+  grassHeightAt(x, z) {}
+
+  /**
+   * Mesh: the node's top surface (world y) on a grid, NaN where it has none:
+   * texel (i, j) at world (x0 + i * cell, z0 + j * cell), row-major
+   * (`cols` per row). What createGrass bakes a mesh ground with.
+   * @param {number} x0
+   * @param {number} z0
+   * @param {number} cell
+   * @param {number} cols
+   * @param {number} rows
+   * @returns {Float32Array}
+   */
+  sampleHeights(x0, z0, cell, cols, rows) {}
 
   /**
    *  Writes a Gaussian-splat node's cloud as a PLY file; false when the write fails.

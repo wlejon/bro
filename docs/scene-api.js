@@ -57,8 +57,8 @@ target/up/mode: the 6DOF / FPS path that avoids target+up precision loss.
  * @property {number} [strength] -  Displacement amplitude in world units (default 0: no sway).
  * @property {number} [frequency] -  Oscillation frequency in rad/s (default 1.5).
  *
- * The wind field (what vegetation bends with; see scene-nodes-api.js
- * "Vegetation"). It blows along `direction`. Every field is optional and a
+ * The wind field (what vegetation and grass bend with; see scene-nodes-api.js
+ * "Vegetation" and GrassNodeOptions). It blows along `direction`. Every field is optional and a
  * field left out keeps its value; strength / frequency above do not touch it.
  * @property {number} [speed] -  Steady wind in m/s (default 2.5, a breeze; 0 with gust 0 is a calm). It breathes ±28 % over a few minutes.
  * @property {number} [gust] -  Gust amount: 0 none, 1 a gusty day (default), 2 a gale's.
@@ -522,6 +522,18 @@ class SceneGraph {
   createDecal(opts) {}
 
   /**
+   * A meadow of procedural blades over a ground (a mesh node, a terrain, a
+   * clipmap or a height function), with density, dryness and height from
+   * numbers or functions of (x, z, y); swaying in the wind field, parted by
+   * movers. See GrassNodeOptions and the grass members in
+   * docs/scene-nodes-api.js.
+   * @example scene.createGrass({ ground, dry: (x, z) => patches(x, z) });
+   * @param {GrassNodeOptions} [opts]
+   * @returns {SceneNode}
+   */
+  createGrass(opts) {}
+
+  /**
    * @param {ReflectionProbeNodeOptions} [opts]
    * @returns {SceneNode}
    */
@@ -616,7 +628,8 @@ class SceneGraph {
    * The same call sets the wind field plants carrying vegetation records
    * sway in (`speed`, `gust`, `gustSpeed`, `gustScale`, `drift`): a steady
    * wind whose direction drifts slowly, with gusts that travel downwind as
-   * bands, so a gust visibly crosses a grove tree by tree. Until set it is a
+   * bands, so a gust visibly crosses a grove tree by tree (and a meadow of
+   * `createGrass` blade by blade, lightening what it bends). Until set it is a
    * light breeze (2.5 m/s, gusty) along +x; `setWind({speed: 0, gust: 0})`
    * stills it.
    *
