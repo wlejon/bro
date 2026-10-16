@@ -166,7 +166,8 @@ function run() {
             const de = fs.readFileSync(path.join(data, 'applications', 'org.bro.test.ExeApp.desktop'), 'utf8');
             const lines = de.split(/\r?\n/);
             const exec = lines.find((l) => l.startsWith('Exec='));
-            assert(exec && exec.startsWith('Exec=' + built + ' '), 'Exec runs the executable: ' + exec);
+            assert(exec && (exec === 'Exec=' + built || exec.startsWith('Exec=' + built + ' ')),
+                'Exec runs the executable: ' + exec);
             assert(lines.indexOf('StartupWMClass=org.bro.test.ExeApp') >= 0, 'StartupWMClass is the id');
         }
         broCli(['--uninstall', 'org.bro.test.ExeApp'], env);

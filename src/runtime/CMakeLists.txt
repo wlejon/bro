@@ -14,7 +14,7 @@
 #     the Engine from C++ (helm) links it like any shared library;
 #   * on Windows, the C functions only. The engine's C++ surface (and the
 #     siblings inside it) is never annotated for export: a DLL's export table
-#     cannot hold it (65535 entries), and an annotated surface is a
+#     cannot hold it (65535 entries; the Linux library defines ~69k), and an annotated surface is a
 #     maintenance burden for every header in eleven repositories. A Windows
 #     embedder links the static libraries instead (docs/embedding.md).
 

@@ -318,8 +318,9 @@ reports it as the `engine image` line ([docs/agent-control.md](docs/agent-contro
   costs no PLT hop on the engine's own calls.
 - **Windows** exports the C functions and nothing else. The engine's C++
   surface, with eleven sibling libraries inside it, is never annotated for
-  export: a DLL's export table cannot hold it (65,535 entries; the engine has
-  several times that), `WINDOWS_EXPORT_ALL_SYMBOLS` therefore fails outright,
+  export: a DLL's export table cannot hold it (65,535 entries; the full-profile
+  libbro.so on Linux defines 68,767 dynamic symbols, and `WINDOWS_EXPORT_ALL_SYMBOLS`
+  would add every data symbol on top), so exporting everything fails outright,
   and hand-annotating every class in every repository with an export macro
   would be a tax on every header forever. A Windows embedder that needs the
   C++ API links the static libraries, which are still built
