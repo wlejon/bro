@@ -179,7 +179,7 @@ void Engine::createIframeDoc(dom::Element* el, const std::string& srcAttr) {
 
     runSubDocScripts(ref, source, this, /*isChild=*/true);
 
-    finishSubDocLoad(ref, source, renderer_.get(), audioEngine_.get(), *textMetrics_);
+    finishSubDocLoad(ref, source, renderer_.get(), audioEngineSource(), *textMetrics_);
 
     LOG_INFO("iframe: loaded sub-document '%s' (%dx%d, id=%llu)",
              source.appDir.c_str(), dp->boxW, dp->boxH,

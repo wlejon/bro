@@ -19,6 +19,10 @@ namespace bro::bronze_host {
 namespace {
 
 struct SteamCtxState {
+    // The engine's Steam service is a thread and the Steamworks client; it
+    // is asked for on bro.steam's first use (getSteamState), not when the
+    // namespace is installed.
+    bool bound = false;
     steam::SteamService* service = nullptr;
     steam::SteamSubscriber* subscriber = nullptr;
 
@@ -48,8 +52,18 @@ struct SteamCtxState {
 
 static thread_local SteamCtxState* s_steamState = nullptr;
 
+static void initSubscriberCallbacks(SteamCtxState* state);
+
 static SteamCtxState* getSteamState() {
-    return s_steamState;
+    SteamCtxState* s = s_steamState;
+    if (s && !s->bound) {
+        s->bound = true;
+        auto* eng = hostEngine();
+        s->service = eng ? eng->steamService() : nullptr;
+        s->subscriber = s->service ? s->service->createSubscriber() : nullptr;
+        initSubscriberCallbacks(s);
+    }
+    return s;
 }
 
 static uint64_t parseSteamId(Value v) {
@@ -322,15 +336,7 @@ void cleanupSteamBindings() {
 }
 
 Value makeBroSteamValue() {
-    auto* eng = hostEngine();
-    steam::SteamService* service = eng ? eng->steamService() : nullptr;
-
-    if (!s_steamState) {
-        s_steamState = new SteamCtxState();
-        s_steamState->service = service;
-        s_steamState->subscriber = service ? service->createSubscriber() : nullptr;
-        initSubscriberCallbacks(s_steamState);
-    }
+    if (!s_steamState) s_steamState = new SteamCtxState();
 
     ObjectBuilder st;
 

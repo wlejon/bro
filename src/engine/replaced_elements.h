@@ -21,11 +21,15 @@ namespace bro::engine {
 // Shared replaced-element initialization
 // ---------------------------------------------------------------------------
 
+/// The audio engine, made on first ask: a <video> is given it, and a page
+/// with none never opens the audio device.
+using AudioEngineSource = std::function<broaudio::Engine*()>;
+
 /// Walk a DOM subtree and attach ElSelect / ElInput / ElTextarea / ElSvg
 /// controllers to any replaced elements that don't already have one.
 /// Used by the Engine for both the app document and system panels.
 void ensureReplacedElements(dom::Element* elem, render::Renderer* renderer,
-                            broaudio::Engine* audioEngine = nullptr);
+                            const AudioEngineSource& audioEngine = {});
 
 // ---------------------------------------------------------------------------
 // Shared replaced-element interaction context

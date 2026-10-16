@@ -325,7 +325,9 @@ void installSiblingApis(engine::Engine& engine) {
 #if BRO_WITH_AUDIO
     // AudioContext and the node classes need no root; bro.mic mounts onto
     // the `bro` root and re-sets the global to the object it found.
-    broaudio::api::setAudioEngine(engine.audioEngine());
+    // The engine's audio is opened on a script's first use of it, so a page
+    // that never plays a sound never opens the audio device.
+    broaudio::api::setAudioEngineProvider([&engine] { return engine.audioEngine(); });
     // Its file loaders, savers and preset IO take paths the way fs.* does.
     broaudio::api::setPathResolver(&brokit::api::resolveAssetPath);
     broaudio::api::installAudio();
@@ -396,17 +398,23 @@ void installSiblingApis(engine::Engine& engine) {
     // the host relies on to mutate a stream's models after a detach.
     brosoundml::api::setPathResolver(&brokit::api::resolveAssetPath);
     brosoundml::api::setLogHook([](const std::string& line) { LOG_INFO("%s", line.c_str()); });
-    brosoundml::api::setAudioEngine(engine.audioEngine());
+    brosoundml::api::setAudioEngineProvider([&engine] { return engine.audioEngine(); });
     {
-        engine::AudioInference* inference = engine.audioInference();
+        // The AudioInference worker is made when the first stream asks for
+        // a pump, not for every page.
+        engine::Engine* eng = &engine;
         brosoundml::api::InferenceScheduler sched;
-        if (inference) {
-            sched.addPump = [inference](std::function<void()> pump) {
-                return inference->addPump(std::move(pump));
-            };
-            sched.removePump = [inference](std::uint32_t id) { inference->removeTask(id); };
-            sched.threaded = [inference] { return inference->threaded(); };
-        }
+        sched.addPump = [eng](std::function<void()> pump) -> std::uint32_t {
+            engine::AudioInference* inference = eng->audioInference();
+            return inference ? inference->addPump(std::move(pump)) : 0;
+        };
+        sched.removePump = [eng](std::uint32_t id) {
+            if (auto* inference = eng->existingAudioInference()) inference->removeTask(id);
+        };
+        sched.threaded = [eng] {
+            engine::AudioInference* inference = eng->audioInference();
+            return inference && inference->threaded();
+        };
         brosoundml::api::setInferenceScheduler(std::move(sched));
     }
     brosoundml::api::installSoundML();

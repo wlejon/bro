@@ -557,6 +557,7 @@ bool Engine::holdUnchangedFrame() {
     frameImages_.clear();
     frameSegmentUsed_.clear();
     frameSkiaImages_.clear();
+    releaseHeapOnHeldFrame();
     heldFrame_ = frameNumber_;
     if (headlessPipeline_) ++pipelineRun_.held;
     return true;

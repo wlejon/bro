@@ -388,11 +388,17 @@ public:
         shutdownHooks_.push_back(std::move(hook));
     }
 
-    broaudio::Engine* audioEngine() { return audioEngine_.get(); }
+    // Optional subsystems are made on first use (engine.cpp): the non-const
+    // accessors make one, the const ones and existing*() only report it.
+    broaudio::Engine* audioEngine();
     const broaudio::Engine* audioEngine() const { return audioEngine_.get(); }
-    AudioInference* audioInference() { return audioInference_.get(); }
+    broaudio::Engine* existingAudioEngine() const { return audioEngine_.get(); }
+    /// audioEngine() as a callable, for a consumer that may never need it.
+    AudioEngineSource audioEngineSource();
+    AudioInference* audioInference();
     const AudioInference* audioInference() const { return audioInference_.get(); }
-    steam::SteamService* steamService() { return steamService_.get(); }
+    AudioInference* existingAudioInference() const { return audioInference_.get(); }
+    steam::SteamService* steamService();
     const steam::SteamService* steamService() const { return steamService_.get(); }
     physics::PhysicsWorld* physicsWorld();
     const physics::PhysicsWorld* physicsWorld() const;
@@ -402,6 +408,16 @@ public:
     std::string memoryReport(bool detail);
     /// Hands the C heap's free pages back to the system; says how much.
     std::string trimMemory();
+    /// The same, silently (engine_memory.cpp).
+    static void releaseFreeHeapPages();
+    /// A held frame (nothing changed on screen) in a window: hands the heap's
+    /// free pages back when frames were drawn since the last time, on a
+    /// backing-off schedule (engine_idle.cpp).
+    void releaseHeapOnHeldFrame();
+    /// Caps the C heap's arenas (engine_memory.cpp): glibc otherwise makes
+    /// up to eight per core as threads contend, each holding its own free
+    /// memory. BRO_MALLOC_ARENAS overrides; 0 leaves glibc's default.
+    static void configureHeap();
     void dismissSplash() {
         if (splashVisible_) {
             splashVisible_ = false;
@@ -1188,6 +1204,11 @@ private:
     std::unique_ptr<Settings> settings_;
     std::unique_ptr<broaudio::Engine> audioEngine_;
     std::unique_ptr<AudioInference> audioInference_;
+    // What audioEngine() opens the device with, kept from the config.
+    struct AudioStartup {
+        std::string appId, appName;
+        bool realAudio = false;
+    } audioStartup_;
 
     std::vector<std::function<void()>> framePumps_;
     std::vector<std::function<void()>> shutdownHooks_;
@@ -1300,6 +1321,10 @@ private:
     std::unique_ptr<FrameTrace> frameTrace_;
     std::unique_ptr<ControlServer> control_;
     uint64_t frameNumber_ = 0;
+    // The last free-page release on a held frame (releaseHeapOnHeldFrame),
+    // and whether frames were drawn since.
+    double lastTrimMs_ = -1.0;
+    bool drawnSinceTrim_ = true;
     // What the layout and raster threads measured for the pass the main
     // thread last claimed / consumed (written by those threads before they
     // publish, read by the main thread after it claims), and the content

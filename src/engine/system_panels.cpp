@@ -244,7 +244,7 @@ void Engine::loadSystemPanel(SystemDocument& liveDoc) {
         // Initialize replaced elements
         bro::engine::ensureReplacedElements(liveDoc.document->documentElement(),
                                             renderer_.get(),
-                                            audioEngine_.get());
+                                            audioEngineSource());
 
         // Stash base path on the document so drawSystemPanels and script resolution
         // can use it.
@@ -286,7 +286,7 @@ void Engine::loadSystemPanel(SystemDocument& liveDoc) {
                                                    scripts, dirPath, savedBasePath, false);
             bro::engine::ensureReplacedElements(liveDoc.document->documentElement(),
                                                 renderer_.get(),
-                                                audioEngine_.get());
+                                                audioEngineSource());
         }
 
         // Re-layout after replaced elements attach and scripts run

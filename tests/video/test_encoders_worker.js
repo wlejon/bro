@@ -19,7 +19,8 @@ let got = null;
 const w = new Worker('../video/worker_encoders.js');
 w.onmessage = (e) => { got = e.data; };
 w.postMessage({ gifPath, webmPath, w: 32, h: 24, frames: delays.length, delays });
-for (let i = 0; i < 1000 && !got; i++) { advanceTime(16); sleep(10); }
+// The worker runs on the wall clock; sleep() only moves virtual time.
+for (let i = 0; i < 1000 && !got; i++) { advanceTime(16); wallSleep(10); }
 assert(got, 'the worker answered');
 assert(!got.error, `the worker encoded: ${got.error}`);
 assert(got.gifType === 'function' && got.webmType === 'function', `both encoders exist in a worker (${got.gifType}, ${got.webmType})`);

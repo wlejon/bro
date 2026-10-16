@@ -472,7 +472,7 @@ void Engine::createWindowHostDoc(WindowHost& h, SubDocSource& source) {
 
     runSubDocScripts(ref, source, this, /*isChild=*/true);
 
-    finishSubDocLoad(ref, source, renderer_.get(), audioEngine_.get(), *textMetrics_);
+    finishSubDocLoad(ref, source, renderer_.get(), audioEngineSource(), *textMetrics_);
     warnNestedIframes(ref, "bro.window");
 
     LOG_INFO("bro.window: loaded document '%s' (%dx%d, id=%llu)",

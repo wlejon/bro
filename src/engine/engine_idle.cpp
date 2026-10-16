@@ -7,6 +7,7 @@
 // requestAnimationFrame loop, a playing video, a 3D scene or WebGL canvas)
 // keeps every frame presented, paced by the swapchain as before.
 #include "engine/engine.h"
+#include "engine/app_runtime.h"
 #include "engine/control.h"
 #include "engine/frame_presenter.h"
 #include "engine/layout_pipeline.h"
@@ -85,6 +86,26 @@ bool Engine::windowIdle() const {
     // callback, promise jobs, a host task, a timer already due.
     if (!timePaused_ && bronze_host::hostFrameDueInMs() <= 0.0) return false;
     return true;
+}
+
+void Engine::releaseHeapOnHeldFrame() {
+    // Gone idle: hand the heaps' free pages back. The start leaves tens of
+    // MB free in the heap (the page's compile, its tier-ups, the first
+    // layouts and rasters), so the first releases come soon after it (2 s,
+    // then 10 s); later ones at most once a minute. Only after frames were
+    // drawn since the last: an idle window frees nothing new.
+    if (heldFrame_ + 1 != frameNumber_) drawnSinceTrim_ = true;  // the frame before this one was drawn
+    if (!drawnSinceTrim_ || displayMode_ != DisplayMode::Windowed) return;
+    const double sinceStart = sinceStartMs();
+    if (sinceStart < 2000.0) return;
+    const double gap = lastTrimMs_ < 10000.0 ? 8000.0 : 60000.0;
+    if (lastTrimMs_ >= 0.0 && sinceStart - lastTrimMs_ < gap) return;
+    lastTrimMs_ = sinceStart;
+    drawnSinceTrim_ = false;
+    // The JS heap's young generation first (a minor collection empties its
+    // eden, whose pages then go), then the C heap's free pages.
+    bronze_host::releaseIdleJsHeap();
+    releaseFreeHeapPages();
 }
 
 void Engine::idleWait() {

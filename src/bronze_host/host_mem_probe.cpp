@@ -70,6 +70,8 @@ JsMemoryStats jsMemoryStats() {
     return s;
 }
 
+size_t releaseIdleJsHeap() { return bronze::embed::releaseIdleHeapMemory(); }
+
 Value hostMemoryBreakdown(bool sizes) {
     ObjectBuilder out;
 #if defined(_WIN32)

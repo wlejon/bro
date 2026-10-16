@@ -37,7 +37,7 @@ namespace bro::engine {
 // ---------------------------------------------------------------------------
 
 void ensureReplacedElements(dom::Element* elem, render::Renderer* renderer,
-                            broaudio::Engine* audioEngine) {
+                            const AudioEngineSource& audioEngine) {
     if (!elem) return;
 
     const auto& tag = elem->tagName();
@@ -80,7 +80,7 @@ void ensureReplacedElements(dom::Element* elem, render::Renderer* renderer,
     } else if ((tag == "VIDEO" || tag == "video") && !elem->videoControl()) {
         auto ctrl = std::make_unique<layout::ElVideo>(renderer);
         ctrl->setElement(elem);
-        ctrl->setAudioEngine(audioEngine);
+        ctrl->setAudioEngine(audioEngine ? audioEngine() : nullptr);
         // If the element already has a src attribute, load it now.
         // Otherwise the binding will trigger load when src is set.
         std::string src = elem->getAttribute("src");

@@ -26,6 +26,9 @@
 #if BRO_WITH_NET
 #include "net/net_service.h"
 #endif
+#include "audio_inference/audio_inference.h"
+#include "steam/steam_service.h"
+#include "engine/scene_audio_sync.h"
 #if BRO_WITH_3D
 #include "scene/scene_graph.h"
 #endif
@@ -643,12 +646,73 @@ void Engine::drawElementScrollbars(render::Renderer* renderer,
 // ---------------------------------------------------------------------------
 
 void Engine::ensureReplacedElements(dom::Element* elem) {
-    bro::engine::ensureReplacedElements(elem, renderer_.get(),
-                                         audioEngine_.get());
+    bro::engine::ensureReplacedElements(elem, renderer_.get(), audioEngineSource());
+}
+
+// ---------------------------------------------------------------------------
+// Subsystems made on first use. A page pays for audio, audio inference,
+// networking and Steam only once it asks for them: each is a thread or
+// several, and the audio device besides.
+// ---------------------------------------------------------------------------
+
+broaudio::Engine* Engine::audioEngine() {
+    if (!audioEngine_ && !shutdownDone_) {
+        audioEngine_ = std::make_unique<broaudio::Engine>();
+        if (displayMode_ == DisplayMode::Windowed || audioStartup_.realAudio) {
+            // The app's identity names its streams in the system mixer (the
+            // PipeWire node, SDL's app name), as it names the window.
+            broaudio::AudioDeviceConfig audioCfg;
+            audioCfg.appId = audioStartup_.appId;
+            audioCfg.appName = audioStartup_.appName;
+            if (!audioEngine_->init(audioCfg)) audioEngine_->initHeadless();
+        } else {
+            audioEngine_->initHeadless();
+        }
+        SceneAudioSync::install(audioEngine_.get());
+        if (settings_) {
+            const auto& audio = settings_->audio();
+            audioEngine_->setMasterGain(audio.muted ? 0.0f : audio.masterVolume);
+        }
+        if (timePaused_) audioEngine_->setMasterPaused(true);
+    }
+    return audioEngine_.get();
+}
+
+AudioEngineSource Engine::audioEngineSource() {
+    return [this] { return audioEngine(); };
+}
+
+AudioInference* Engine::audioInference() {
+    if (!audioInference_ && !shutdownDone_) {
+        audioInference_ = std::make_unique<AudioInference>();
+        // Headless runs it inline from advanceTime until the windowed
+        // pipeline is running.
+        if (displayMode_ == DisplayMode::Windowed || headlessPipelineStarted_)
+            audioInference_->startThread();
+    }
+    return audioInference_.get();
+}
+
+steam::SteamService* Engine::steamService() {
+    if (!steamService_ && !shutdownDone_) steamService_ = std::make_unique<steam::SteamService>();
+    return steamService_.get();
 }
 
 physics::PhysicsWorld* Engine::physicsWorld() {
 #if BRO_WITH_PHYSICS
+    // Made on first use: a Jolt world is ~14 MB and a job pool of a thread
+    // per core, which a page that never asks for physics should not pay.
+    if (!physicsWorld_ && !shutdownDone_) {
+        physicsWorld_ = std::make_unique<physics::PhysicsWorld>();
+        physicsWorld_->init();
+        // Headless steps it inline until the windowed pipeline is running.
+        if (displayMode_ != DisplayMode::Headless || headlessPipelineStarted_)
+            physicsWorld_->startThread();
+#if BRO_WITH_3D
+        for (auto& entry : sceneGraphs_)
+            if (entry.graph) entry.graph->setPhysicsWorld(physicsWorld_.get());
+#endif
+    }
     return physicsWorld_.get();
 #else
     return nullptr;
@@ -665,6 +729,7 @@ const physics::PhysicsWorld* Engine::physicsWorld() const {
 
 net::NetService* Engine::netService() {
 #if BRO_WITH_NET
+    if (!netService_ && !shutdownDone_) netService_ = std::make_unique<net::NetService>();
     return netService_.get();
 #else
     return nullptr;

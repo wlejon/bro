@@ -57,7 +57,7 @@ void runSubDocScripts(SubDocRef d, const SubDocSource& src, Engine* engine, bool
 
 /// Replaced elements + the first style/layout pass at the box size.
 void finishSubDocLoad(SubDocRef d, const SubDocSource& src,
-                      render::Renderer* renderer, broaudio::Engine* audio,
+                      render::Renderer* renderer, const std::function<broaudio::Engine*()>& audio,
                       layout::SkiaTextMetrics& metrics);
 
 /// Log a clear warning for each <iframe> in a sub-document that cannot host one.

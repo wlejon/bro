@@ -128,6 +128,9 @@ struct JsMemoryStats {
     uint64_t collections = 0;
 };
 JsMemoryStats jsMemoryStats();
+/// Gone idle (main thread, no script running): a minor collection, then the
+/// JS heap's unused young pages handed back. Returns the bytes released.
+size_t releaseIdleJsHeap();
 
 /// Run sub-document scripts within its document scope and realm gating.
 void runHostSubDocScripts(engine::Engine& engine, dom::Document* subDoc,

@@ -143,6 +143,8 @@ Engine::Engine(const EngineConfig& config)
 }
 
 void Engine::construct(const EngineConfig& config) {
+    // Before the engine's threads exist, so they share a few arenas.
+    configureHeap();
     // Under DRM bro is the display server: no desktop window system, and so
     // no SDL video. Chosen before anything asks the platform layer a question.
     if (displayMode_ == DisplayMode::Drm)
@@ -239,18 +241,11 @@ void Engine::construct(const EngineConfig& config) {
     engineNowMs_ = displayMode_ == DisplayMode::Headless ? virtualTime_
                                                          : util::currentTimeMs();
 
-#if BRO_WITH_PHYSICS
-    physicsWorld_ = std::make_unique<physics::PhysicsWorld>();
-    physicsWorld_->init();
-    if (displayMode_ != DisplayMode::Headless)
-        physicsWorld_->startThread();
-#endif
-
-#if BRO_WITH_NET
-    netService_ = std::make_unique<net::NetService>();
-#endif
-
-    steamService_ = std::make_unique<steam::SteamService>();
+    // Physics, networking, Steam, audio and audio inference are made on
+    // first use (engine.cpp: physicsWorld(), netService(), ...).
+    audioStartup_.appId = config.appId;
+    audioStartup_.appName = config.manifest.name.empty() ? config.appId : config.manifest.name;
+    audioStartup_.realAudio = config.realAudio;
     serverStartTime_ = util::currentTimeMs();
 
     if (displayMode_ == DisplayMode::Server) {
@@ -400,35 +395,16 @@ void Engine::construct(const EngineConfig& config) {
         renderer_ = std::make_unique<render::RasterRenderer>();
     }
 
-    auto initAudio = [&] {
-        audioEngine_ = std::make_unique<broaudio::Engine>();
-        if (displayMode_ == DisplayMode::Windowed || config.realAudio) {
-            // The app's identity names its streams in the system mixer (the
-            // PipeWire node, SDL's app name), as it names the window.
-            broaudio::AudioDeviceConfig audioCfg;
-            audioCfg.appId = config.appId;
-            audioCfg.appName = config.manifest.name.empty() ? config.appId : config.manifest.name;
-            if (!audioEngine_->init(audioCfg)) audioEngine_->initHeadless();
-        } else {
-            audioEngine_->initHeadless();
-        }
-        SceneAudioSync::install(audioEngine_.get());
-    };
-
     // The page's first script compiles on its own thread from here; its run
     // (initAppRealm) takes the program. Windowed, the device below comes up
     // on this thread meanwhile; headless, it is already coming up on its own.
-    // Audio first: AudioContext binds the engine's audio engine when the host
-    // globals are installed. BRO_STARTUP_OVERLAP=0 keeps the order bro had
-    // (device, audio, then the page compiled when it runs), to measure what
-    // the overlap is worth or to rule it out.
+    // BRO_STARTUP_OVERLAP=0 keeps the order bro had (device, then the page
+    // compiled when it runs), to measure what the overlap is worth or to
+    // rule it out.
     const char* overlapEnv = std::getenv("BRO_STARTUP_OVERLAP");
     const bool overlapPage = (displayMode_ == DisplayMode::Headless || displayMode_ == DisplayMode::Windowed) &&
                              !(overlapEnv && std::string(overlapEnv) == "0");
-    if (overlapPage) {
-        initAudio();
-        beginPageCompile();
-    }
+    if (overlapPage) beginPageCompile();
 
     if (displayMode_ == DisplayMode::Headless) {
         if (gpuInit.joinable()) gpuInit.join();
@@ -494,8 +470,6 @@ void Engine::construct(const EngineConfig& config) {
             gfxTiming.totalMs = gfxTiming.windowMs + std::max(gpuMs, 0.0);
         noteGraphicsStartup(gfxTiming);
     }
-    if (!overlapPage) initAudio();
-
     deviceScale_.configured = config.deviceScaleFactor;
     updateDeviceScale();
     if (deviceScale_.render != 1.0f || deviceScale_.ratio != 1.0f)
@@ -511,16 +485,6 @@ void Engine::construct(const EngineConfig& config) {
         const char* hostComp = std::getenv("BRO_HEADLESS_COMPOSITOR");
         if (hostComp && std::string(hostComp) == "1" && isShellApp())
             startShellCompositor(viewportWidth_, viewportHeight_, "", /*xwayland=*/false);
-    }
-
-    audioInference_ = std::make_unique<AudioInference>();
-    if (displayMode_ == DisplayMode::Windowed)
-        audioInference_->startThread();
-
-    {
-        auto& audio = settings_->audio();
-        float vol = audio.muted ? 0.0f : audio.masterVolume;
-        audioEngine_->setMasterGain(vol);
     }
 
     settings_->setChangeCallback([this](const std::string& category,
@@ -545,7 +509,7 @@ void Engine::construct(const EngineConfig& config) {
             if (key == "maxFps" || key == "*")
                 frameCapIntervalMs_ = g.maxFps > 0.0 ? 1000.0 / g.maxFps : 0.0;
         }
-        if (category == "audio" || category == "*") {
+        if ((category == "audio" || category == "*") && audioEngine_) {
             auto& a = settings_->audio();
             float vol = a.muted ? 0.0f : a.masterVolume;
             audioEngine_->setMasterGain(vol);

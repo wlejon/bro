@@ -187,7 +187,7 @@ void runSubDocScripts(SubDocRef d, const SubDocSource& src, Engine* engine, bool
 }
 
 void finishSubDocLoad(SubDocRef d, const SubDocSource& src,
-                      render::Renderer* renderer, broaudio::Engine* audio,
+                      render::Renderer* renderer, const std::function<broaudio::Engine*()>& audio,
                       layout::SkiaTextMetrics& metrics) {
     bro::engine::ensureReplacedElements(d.document->documentElement(), renderer, audio);
     d.document->resolveStyles();

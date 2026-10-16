@@ -19,6 +19,7 @@
 #include <cctype>
 #include <cinttypes>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <set>
@@ -343,17 +344,36 @@ std::string Engine::memoryReport(bool detail) {
     return out;
 }
 
+void Engine::releaseFreeHeapPages() {
+#if defined(__linux__) && defined(__GLIBC__)
+    malloc_trim(0);
+#endif
+}
+
+void Engine::configureHeap() {
+#if defined(__linux__) && defined(__GLIBC__)
+    static bool done = false;
+    if (done) return;
+    done = true;
+    int arenas = 4;
+    if (const char* env = std::getenv("BRO_MALLOC_ARENAS")) arenas = std::atoi(env);
+    if (arenas > 0) mallopt(M_ARENA_MAX, arenas);
+#endif
+}
+
 std::string Engine::trimMemory() {
+    const std::string js = "js heap released " + mb(static_cast<double>(bronze_host::releaseIdleJsHeap())) +
+                           " of young pages\n";
 #if defined(__linux__) && defined(__GLIBC__)
     auto before = readRollup()["Private_Dirty"];
     malloc_trim(0);
     auto after = readRollup()["Private_Dirty"];
-    return "malloc_trim released " + mbKb(before > after ? before - after : 0) + "\n";
+    return js + "malloc_trim released " + mbKb(before > after ? before - after : 0) + "\n";
 #elif defined(_WIN32)
     HeapCompact(GetProcessHeap(), 0);
-    return "HeapCompact on the process heap\n";
+    return js + "HeapCompact on the process heap\n";
 #else
-    return "nothing to trim on this platform\n";
+    return js;
 #endif
 }
 
