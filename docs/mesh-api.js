@@ -281,7 +281,9 @@ class Mesh {
   /**
    * Vegetation sway data, 16 floats per vertex, or empty: four vec4s in mesh
    * space, (root.xyz, height), (crown.xyz, crownRadius), (anchor.xyz,
-   * branchWeight), (axis.xyz, phase). bro.flora's emitters write it and a
+   * branchWeight), (axis, twig, limb, trunk), the last four packed words (a
+   * leaf's stem direction, 0 on wood, and the cantilevers it hangs from; see
+   * flora-api.js "Vegetation records"). bro.flora's emitters write it and a
    * mesh node that carries it sways in the scene's wind; the layout is in
    * scene-nodes-api.js "Vegetation". Operations that rebuild the vertex set
    * (weld, simplify, merge) drop it.

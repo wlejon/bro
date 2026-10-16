@@ -77,12 +77,46 @@
  *                                 farthest leafy branch end from it; radius 0 on wood
  *   8-11  anchor.xyz, weight      a leaf's (or bloom's) attachment point on its segment, a bark
  *                                 vertex's skeleton point; the branch weight there
- *   12-15 axis.xyz, phase         a leaf's stem (tip) direction, zero on wood; its limb's phase
+ *   12-15 axis, twig, limb, trunk four packed words (below): a leaf's stem direction (0 on
+ *                                 wood), its limb's phase and twigs, its limb, its plant's trunk
  *
  * Per segment (emitBranchTubes, emitScatterSegments: `.vegetation`, index
- * aligned with `segments`) it is 12 floats: root.xyz, height, crown.xyz,
- * crownRadius, weightFrom, weightTo, phase, 0; the shader interpolates the
- * weight along the segment and anchors each scattered leaf where it hangs.
+ * aligned with `segments`) it is 16 floats too: root.xyz, height,
+ * crown.xyz, crownRadius, weightFrom, weightTo, 0, 0, then 0, twig, limb,
+ * trunk; the shader interpolates the weight along the segment and anchors
+ * each scattered leaf where it hangs (the leaf's own axis comes from its
+ * placement).
+ *
+ * The motion model. A plant is three levels of cantilever — the trunk (root
+ * to height), each limb (where it leaves the trunk to its farthest tip) and
+ * the limb's leafy sprays — each a beam fixed at its base, in its first
+ * bending mode, with two terms from the simulation's own geometry (the
+ * pipe model's diameters, the foliage):
+ *
+ *   freq  natural frequency (Hz), sqrt(k / m) / 2 pi: the tip stiffness
+ *         k = 3 E I / L^3 at the base diameter, over the mass the mode
+ *         moves (every piece of wood and leaf it carries times the mode
+ *         shape squared where it sits). Euler-Bernoulli's f ~ d / L^2 for a
+ *         bare beam; a stem slows for what it holds far out. The trunk is
+ *         the slowest (a ~10 m tree sways at ~0.5-1 Hz), sprays the quickest.
+ *   sway  static tip deflection over the length at 10 m/s: the drag on the
+ *         leaves it carries (the crown's face, half its disc, shared among
+ *         segments by foliage) over k. Twice as thick at one length and
+ *         load deflects 16x less; twice as long, 4x more.
+ *
+ * (broflora/sway.h has the constants: green hardwood E 9 GPa, 800 kg/m^3;
+ * Cd 0.3; gains for the trunk's taper and root plate.) bro.scene drives
+ * each level with the drag at the plant, (U / 10)^1.3, as a damped
+ * oscillator (scene-nodes-api.js "Vegetation").
+ *
+ * The packed words are integers below 2^24, exact in a float; each number
+ * is log-quantised (code 0 is zero) over freq 0.05-50 Hz, sway 1e-5-1,
+ * length 0.005-200:
+ *
+ *   axis   a leaf's stem direction, octahedral, 12 bits a component, plus one
+ *   twig   phase (6 bits, top), spray freq, sway, length (6 bits each)
+ *   limb   freq, sway, length (8 bits each)
+ *   trunk  freq, sway (12 bits each)
  *
  * The branch weight is 0 on the trunk — the leader chain up from the
  * thickest root segment, while each child keeps at least 80 % of its
@@ -480,7 +514,7 @@ class FloraWorld {
    * so tubes taper), to xyz, to radius. Zero-length segments and ones with
    * radius below `opts.minRadius` are dropped. Bounds are [x, y, z] arrays
    * padded by the largest radius ([0,0,0] when empty). `vegetation` holds
-   * 12 floats per kept segment (see "Vegetation records"); pass the whole
+   * 16 floats per kept segment (see "Vegetation records"); pass the whole
    * object to `setTubeSegments` / createInstancedMesh's `tube` and it sways.
    * A segment continuing its parent (the parent's thickest child) starts at
    * the parent's radius, so bark runs on unbroken; a side shoot starts at
@@ -565,7 +599,7 @@ class FloraWorld {
    * capped at 4096, with the filters of `opts` (maxRadius, minDepth,
    * terminalOnly, densityWeight) applied; the jitter / scale fields are left
    * to the shader. Bounds are unpadded ([0,0,0] when empty). `vegetation`
-   * holds 12 floats per kept segment (see "Vegetation records").
+   * holds 16 floats per kept segment (see "Vegetation records").
    *
    * That is the spray (`clumps: false`). By default (crown clumps) each entry
    * of `segments` is a clump instead — center xyz, radius, dir xyz, 0 — with

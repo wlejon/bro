@@ -7,9 +7,10 @@
 //   header[3]      scatter: leaves an instance, the leaf mesh's vertex count,
 //                  the leaf count (scatterLeafIndex)
 //   records[]      2 per segment, then (scatter) the per-leaf segment indices
-//                  packed four to a record, then (with vegetation) 3 per
+//                  packed four to a record, then (with vegetation) 4 per
 //                  segment: (root.xyz, height), (crown.xyz, crownRadius),
-//                  (weightFrom, weightTo, phase, 0) — scene_vegetation.glsl
+//                  (weightFrom, weightTo, 0, 0), (0, twig, limb, trunk) —
+//                  scene_vegetation.glsl
 
 layout(std430, set = 3, binding = 1) readonly buffer ProceduralSegments {
     vec4 header[4];
@@ -50,9 +51,28 @@ vec3 procOctDecode(vec2 e) {
 // the vertex sits. False for a degenerate segment.
 //
 // A mitred end ring lies in the plane across the bark's direction there (the
-// bisector of the two segments meeting), not across this segment: the ring
-// slides along the segment's axis to that plane, so two segments meeting at
-// an angle share one elliptical ring and the bark closes around the bend.
+// bisector of the two segments meeting), not across this segment, and its
+// radial directions come from that direction alone (tubeRingFrame): two
+// segments meeting at an angle build the very same ring, so the bark closes
+// around the bend with no crack, and its normals there are shared, so the
+// kink shades as a bend in the wood rather than a crease.
+//
+// The ring frame at a tube end: radial directions in the plane across unit
+// `t`, the least rotation taking up (+Y) to `t` applied to +X. Neighbouring
+// rings with nearly the same `t` get nearly the same frame, so a near-vertical
+// trunk does not twist from segment to segment (a frame from cross(t, up)
+// spins freely there). Degenerate only for `t` straight down.
+void tubeRingFrame(vec3 t, out vec3 e1, out vec3 e2) {
+    float c = t.y;
+    if (c < -0.9999) {
+        e1 = vec3(1.0, 0.0, 0.0);
+    } else {
+        float k = 1.0 / (1.0 + c);
+        e1 = normalize(vec3(c + t.z * t.z * k, -t.x, -t.x * t.z * k));
+    }
+    e2 = cross(t, e1);
+}
+
 bool tubeVertex(int vertexIndex, out vec3 pos, out vec3 radial, out vec3 axisDir, out vec2 uv,
                 out int seg, out float endT) {
     int sides = int(procedural.header[0].x);
@@ -79,18 +99,18 @@ bool tubeVertex(int vertexIndex, out vec3 pos, out vec3 radial, out vec3 axisDir
     uv = vec2(0.0);
     if (len < 1e-6) return false;
     axisDir = axis / len;
-    vec3 e1 = perpendicularUnit(axisDir);
-    vec3 e2 = cross(axisDir, e1);
-    radial = cos(ang) * e1 + sin(ang) * e2;
-    float r = mix(s0.w, s1.w, endT) * procedural.header[0].y;
-    pos = mix(s0.xyz, s1.xyz, endT) + r * radial;
+    // The ring's plane: across the joint's direction where one is given (and
+    // not too far from this segment's own), else across the segment.
     if (stride == 3) {
         vec4 j = procedural.records[seg * stride + 2];
         vec3 T = procOctDecode(top ? j.zw : j.xy);
-        float c = dot(axisDir, T);
-        // Slide to the mitre plane; never past the segment's own length.
-        if (c > 0.2) pos += axisDir * clamp(-r * dot(radial, T) / c, -0.45 * len, 0.45 * len);
+        if (dot(axisDir, T) > 0.2) axisDir = T;
     }
+    vec3 e1, e2;
+    tubeRingFrame(axisDir, e1, e2);
+    radial = cos(ang) * e1 + sin(ang) * e2;
+    float r = mix(s0.w, s1.w, endT) * procedural.header[0].y;
+    pos = (top ? s1.xyz : s0.xyz) + r * radial;
     uv = vec2(ang / PROC_TWO_PI, endT);
     return true;
 }
@@ -269,13 +289,14 @@ bool scatterClumpLeaf(int leaf, int clump, out vec3 P, out mat3 R, out vec3 F) {
 bool proceduralHasVegetation() { return procedural.header[2].z > 0.5; }
 
 // Segment `seg`'s vegetation record at `along` (0 at from, 1 at to) for a
-// point `anchor` on it, with stem `axis` (zero for wood), all node space.
-void proceduralVegetation(int seg, float along, vec3 anchor, vec3 axis,
+// point `anchor` on it (node space). v3.x is left zero: a leaf passes its
+// stem axis to vegetationSwayAxis itself.
+void proceduralVegetation(int seg, float along, vec3 anchor,
                           out vec4 v0, out vec4 v1, out vec4 v2, out vec4 v3) {
-    int b = int(procedural.header[2].z + 0.5) + seg * 3;
+    int b = int(procedural.header[2].z + 0.5) + seg * 4;
     vec4 r2 = procedural.records[b + 2];
     v0 = procedural.records[b];
     v1 = procedural.records[b + 1];
     v2 = vec4(anchor, mix(r2.x, r2.y, along));
-    v3 = vec4(axis, r2.z);
+    v3 = procedural.records[b + 3];
 }

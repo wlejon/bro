@@ -20,9 +20,9 @@ void main() {
     vec4 worldPos = model * vec4(pos, 1.0);
     if (proceduralHasVegetation()) {
         vec4 v0, v1, v2, v3;
-        proceduralVegetation(seg, endT, pos, vec3(0.0), v0, v1, v2, v3);
+        proceduralVegetation(seg, endT, pos, v0, v1, v2, v3);
         mat3 rot;
-        vegetationSway(model, v0, v1, v2, v3, worldPos.xyz, rot);
+        vegetationSwayAxis(model, v0, v1, v2, v3, vec3(0.0), vec3(0.0, 1.0, 0.0), worldPos.xyz, rot);
     }
     gl_Position = push.lightViewProj * worldPos;
 }

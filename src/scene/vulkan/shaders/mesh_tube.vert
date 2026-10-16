@@ -31,19 +31,23 @@ void main() {
     }
     vec4 worldPos = push.model * vec4(pos, 1.0);
     outInstColor = vec4(1.0);
+    mat3 M3 = mat3(push.model);
+    vec3 N = normalize(M3 * radial);
+    vec3 T = normalize(M3 * axisDir);
     if (proceduralHasVegetation()) {
         vec4 v0, v1, v2, v3;
-        proceduralVegetation(seg, endT, pos, vec3(0.0), v0, v1, v2, v3);
+        proceduralVegetation(seg, endT, pos, v0, v1, v2, v3);
         mat3 rot;
-        outVegShade = vegetationSway(push.model, v0, v1, v2, v3, worldPos.xyz, rot);
-        outInstColor.rgb = vegetationTint(push.model, v0, v1, v2, v3);
+        outVegShade = vegetationSwayAxis(push.model, v0, v1, v2, v3, vec3(0.0), N, worldPos.xyz, rot);
+        outInstColor.rgb = vegetationTint(push.model, v0, v1, v2, v3, false);
+        N = rot * N;
+        T = rot * T;
     }
     outWorldPos = worldPos.xyz;
     gl_Position = camera.viewProj * worldPos;
 
-    mat3 M3 = mat3(push.model);
-    outNormal = normalize(M3 * radial);
-    outTangent = normalize(M3 * axisDir);
+    outNormal = N;
+    outTangent = T;
     outBitangent = cross(outNormal, outTangent);
     outUV = uv;
     outColor = vec4(1.0);

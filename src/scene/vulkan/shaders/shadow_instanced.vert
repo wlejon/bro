@@ -4,6 +4,9 @@
 // pass (mesh_instanced.vert), so the shadows move with them.
 
 layout(location = 0) in vec3 inPos;
+#ifdef SCENE_VEGETATION
+layout(location = 1) in vec3 inNormal;   // a leaf folds about its card's normal
+#endif
 layout(location = 8)  in vec4 inInstRow0;
 layout(location = 9)  in vec4 inInstRow1;
 layout(location = 10) in vec4 inInstRow2;
@@ -28,7 +31,8 @@ void main() {
     vec4 worldPos = casterModel() * vec4(R * inPos + trans, 1.0);
 #ifdef SCENE_VEGETATION
     mat3 rot;
-    vegetationSway(casterModel(), inVeg0, inVeg1, inVeg2, inVeg3, worldPos.xyz, rot);
+    vegetationSway(casterModel(), inVeg0, inVeg1, inVeg2, inVeg3, normalize(mat3(casterModel()) * (R * inNormal)),
+                   worldPos.xyz, rot);
 #endif
     gl_Position = push.lightViewProj * worldPos;
 }

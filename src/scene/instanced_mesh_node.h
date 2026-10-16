@@ -341,11 +341,12 @@ public:
     // --- Vegetation (wind sway) ---
     // Per-instance or per-segment records that bend the node in the scene's
     // wind field (scene/wind_field.h; layout in docs/scene-nodes-api.js
-    // "Vegetation"): 16 floats an instance, (root.xyz, height) (crown.xyz,
-    // crownRadius) (anchor.xyz, weight) (axis.xyz, phase); or, for a scatter
-    // or tube node, 12 floats a segment, (root.xyz, height) (crown.xyz,
-    // crownRadius) (weightFrom, weightTo, phase, 0). Records that do not
-    // match the node's instances / segments are kept but not drawn.
+    // "Vegetation", vulkan/shaders/scene_vegetation.glsl): 16 floats an
+    // instance, (root.xyz, height) (crown.xyz, crownRadius) (anchor.xyz,
+    // weight) (axis, twig, limb, trunk); or, for a scatter or tube node, 16
+    // floats a segment, (root.xyz, height) (crown.xyz, crownRadius)
+    // (weightFrom, weightTo, 0, 0) (0, twig, limb, trunk). Records that do
+    // not match the node's instances / segments are kept but not drawn.
     void setVegetation(const float* data, size_t floats);
     const std::vector<float>& vegetation() const { return vegetation_; }
     bool hasVegetation() const;

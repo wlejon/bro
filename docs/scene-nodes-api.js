@@ -747,7 +747,9 @@ class SceneNode {
   //   0-3   root.xyz, height        the plant's base and height
   //   4-7   crown.xyz, crownRadius  its leafy volume; radius 0: no bulk normal
   //   8-11  anchor.xyz, weight      where a leaf hangs; branch weight 0 at the trunk .. 1 at a twig tip
-  //   12-15 axis.xyz, phase         a leaf's stem direction (zero on wood); its limb's phase in [0, 1)
+  //   12-15 axis, twig, limb, trunk packed words: a leaf's stem direction (0 on wood); its limb's
+  //                                 phase and leafy sprays; its limb; its plant's trunk
+  //                                 (flora-api.js "Vegetation records" has the bits)
   //
   // A wood record for a whole segment (one instanced cylinder per segment,
   // flora's emitSegmentVegetation) is the same 16 floats with the crown
@@ -757,23 +759,51 @@ class SceneNode {
   // exactly as its child's base and the joint holds.
   //
   // Branch tubes and foliage scatter (setTubeSegments / setScatterSegments)
-  // take 12 floats per segment instead — root.xyz, height, crown.xyz,
-  // crownRadius, weightFrom, weightTo, phase, 0 — and the shader interpolates
-  // the weight along the segment and anchors each leaf where it hangs.
+  // take 16 floats per segment — root.xyz, height, crown.xyz, crownRadius,
+  // weightFrom, weightTo, 0, 0, 0, twig, limb, trunk — and the shader
+  // interpolates the weight along the segment and anchors each leaf where it
+  // hangs. Tube rings sit in the plane between a joint's two segments, framed
+  // by a minimal rotation from +Y, so a bent branch has no seam or twist.
   //
-  // The motion: the trunk leans into the gust and sways slowly, growing with
-  // (height above the root / height)²; each limb bobs and swings on its own
-  // phase, scaled by weight² and reaching further on a taller plant (longer
-  // limbs), so twigs move most and a limb never tears from the trunk; a leaf
-  // rides its twig, then flutters about its stem (showing its paler
-  // underside) and pitches, harder in a gust. The gust is the band over the
-  // plant's root, so a gust crosses a grove tree by tree. The shadow pass
-  // runs the same displacement.
+  // The motion. A plant is three cantilevers — its trunk, each limb, each
+  // limb's leafy sprays — with a natural frequency and a deflection at 10
+  // m/s each, from the plant's geometry (flora-api.js "Vegetation records").
+  // Each is driven by the drag at the plant, (U / 10 m/s)^1.3, U the wind
+  // there (the gust band over its root, so a gust crosses a grove tree by
+  // tree), and answers as a forced, damped oscillator: its static bend under
+  // the drag a quarter period back (a heavy trunk lags the gust), plus
+  // ringing at its own frequency from the turbulence too fine for the gust
+  // field (narrow-band resonance: mean drag x f^-1/3 / sqrt(damping)) and
+  // from the gusts' own change over its last half period, with damping
+  // ratios 0.15 (trunk: its limbs take its energy), 0.08 (limb), 0.05
+  // (spray). Over a minute of the grove's wind the deflection's RMS and
+  // speed at each level are within ~15% of an integrated oscillator under
+  // the same drag (broworkshop's demos/grove/sway_check.js). A level bends
+  // in a loaded cantilever's shape, s² (3 - s) / 2 along it, the levels add
+  // down the hierarchy, and the wood turns with its slope, so bark normals
+  // follow the bend. A leaf turns with the wood it hangs from (its shading
+  // follows its limb), flutters about its petiole (a twist about its stem
+  // and a smaller pitch at 3-9 Hz on its own phase, growing with the drag,
+  // in bursts) and in a gust turns part way downwind and folds along its
+  // midrib. A calm is still. The shadow pass runs the same pose.
+  //
+  // Two layers, so a level-of-detail chain shares one pose: vegPose (the
+  // wood's offset and rotation at a rest point, from the plant's root,
+  // height and trunk word, the limb's twig and limb words, and the point's
+  // branch weight) and, on top, vegLeaf (the near tier's own leaf motion).
+  // A far tier calling vegPose with the same records moves exactly as the
+  // near one (scene_vegetation.glsl).
   //
   // The look: a leaf's normal leans toward its crown's centre-out direction
   // so the crown lights as one form, leaves deep inside the crown take less
   // sky, bark darkens toward the ground, and the sun glows through leaves
-  // seen against it (stronger with `subsurface`). The records also vary the
+  // seen against it (stronger with `subsurface`). A leaf's light wraps past
+  // its terminator (a thin blade scatters) and its shadow lookup is one
+  // wider, softer filter shared by its direct and through-leaf light, never
+  // fully black, so a leaf does not flip between lit and dark. A cupped card
+  // (bromesh leafCard `cup`) varies its normal across the blade. Leaves are
+  // cut-out geometry, so the scene's MSAA (setMSAA) is what smooths their
+  // edges. The records also vary the
   // colour, multiplying the node's (and an instance's) colour: each plant
   // leans warm or cool (hashed from its root), each limb (its phase) and each
   // leaf is a little lighter or darker, leaves deep in the crown go darker and
@@ -1010,7 +1040,7 @@ class SceneNode {
    * its branch segment in the vertex shader — up bias, tilt / roll / scale
    * jitter as bromesh's placeLeavesOnBranches, from a hash of the leaf index,
    * so placement is deterministic. Replaces the instance rows. Leaves cast no
-   * shadow unless they carry `vegetation` records (12 floats per segment,
+   * shadow unless they carry `vegetation` records (16 floats per segment,
    * "Vegetation"), which also sway them. The object
    * `world.emitScatterSegments()` (flora-api.js) returns.
    *
@@ -1042,7 +1072,7 @@ class SceneNode {
    * radiusFrom, to.xyz, radiusTo) draws a tapered `sides`-sided tube wall
    * with no end caps, built in the vertex shader — no mesh, no instance rows.
    * Lit with the node's material; casts and receives shadows; sways with
-   * `vegetation` records (12 floats per segment, "Vegetation"). The object
+   * `vegetation` records (16 floats per segment, "Vegetation"). The object
    * `world.emitBranchTubes()` (flora-api.js) returns.
    *
    * `tangents` (6 floats per segment: the unit tube direction at its base and

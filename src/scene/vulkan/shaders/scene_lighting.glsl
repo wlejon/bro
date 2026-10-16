@@ -127,9 +127,9 @@ float distanceAttenuation(float dist, float range) {
 
 // One atlas tile: 1 lit, 0 shadowed, 1 outside the tile's frustum. The filter
 // is a grid of hardware-bilinear compares, params.y taps on a side at
-// one-texel spacing (3x3 is a 4-texel tent), clamped inside the tile so a
-// neighbour never bleeds in.
-float sampleShadow(int slot, vec3 pos, float biasWorld) {
+// `spread`-texel spacing (3x3 at 1 is a 4-texel tent), clamped inside the
+// tile so a neighbour never bleeds in.
+float sampleShadow(int slot, vec3 pos, float biasWorld, float spread) {
     ShadowTile tile = lighting.shadows[slot];
     vec4 sc = tile.matrix * vec4(pos, 1.0);
     if (sc.w <= 0.0) return 1.0;
@@ -147,9 +147,10 @@ float sampleShadow(int slot, vec3 pos, float biasWorld) {
     vec2 maxUV = tile.rect.xy + tile.rect.zw - texel * (float(hk) + 1.0);
     if (hk <= 0) return texture(shadowAtlas, vec3(clamp(base, minUV, maxUV), ref));
     float s = 0.0;
+    vec2 step = texel * spread;
     for (int y = -hk; y <= hk; ++y) {
         for (int x = -hk; x <= hk; ++x) {
-            s += texture(shadowAtlas, vec3(clamp(base + vec2(x, y) * texel, minUV, maxUV), ref));
+            s += texture(shadowAtlas, vec3(clamp(base + vec2(x, y) * step, minUV, maxUV), ref));
         }
     }
     float side = float(2 * hk + 1);
@@ -160,19 +161,20 @@ float sampleShadow(int slot, vec3 pos, float biasWorld) {
 // along the normal and a slope-scaled depth bias, both sized in shadow texels
 // (about half a texel head-on, more at grazing incidence). The caster pass
 // culls light-facing faces and applies a slope offset; this is the remainder.
-float shadowFromTile(int slot, vec3 pos, float lightDist, vec3 N, float NdotL) {
+float shadowFromTile(int slot, vec3 pos, float lightDist, vec3 N, float NdotL, float spread) {
     ShadowTile tile = lighting.shadows[slot];
     float texelW = tile.bias.z + tile.bias.w * lightDist;
     float sinT = sqrt(max(1.0 - NdotL * NdotL, 0.0));
     float nOff = tile.bias.y + texelW * (0.5 + sinT);
     float bWorld = texelW * (0.3 + 0.5 * sinT);
-    return sampleShadow(slot, pos + N * nOff, bWorld);
+    return sampleShadow(slot, pos + N * nOff, bWorld, spread);
 }
 
 // Light `i`'s shadow at `pos`: the cube face of a point light, the cascade of
 // a directional one (blended into the next across the last 15% of each), or
-// the single tile of anything else.
-float lightShadow(int i, vec3 pos, float camDist, float lightDist, vec3 N, float NdotL) {
+// the single tile of anything else. `spread` widens the filter (1: a 4-texel
+// tent at pcf 3).
+float lightShadow(int i, vec3 pos, float camDist, float lightDist, vec3 N, float NdotL, float spread) {
     SceneLight light = lighting.lights[i];
     int slot = int(light.shadow.z);
     if (slot < 0) return 1.0;
@@ -185,7 +187,7 @@ float lightShadow(int i, vec3 pos, float camDist, float lightDist, vec3 N, float
         if (a.x >= a.y && a.x >= a.z) face = toFrag.x > 0.0 ? 0 : 1;
         else if (a.y >= a.z)          face = toFrag.y > 0.0 ? 2 : 3;
         else                          face = toFrag.z > 0.0 ? 4 : 5;
-        return shadowFromTile(slot + face, pos, lightDist, N, NdotL);
+        return shadowFromTile(slot + face, pos, lightDist, N, NdotL, spread);
     }
     if (type == 0 && count > 1) {
         vec4 splits = light.cascadeSplit;
@@ -195,15 +197,15 @@ float lightShadow(int i, vec3 pos, float camDist, float lightDist, vec3 N, float
         if (count >= 4 && camDist > splits.z) c = 3;
         float thisFar = splits[c];
         float prevFar = c == 0 ? 0.0 : splits[c - 1];
-        float shadow = shadowFromTile(slot + c, pos, lightDist, N, NdotL);
+        float shadow = shadowFromTile(slot + c, pos, lightDist, N, NdotL, spread);
         if (c < count - 1) {
             float blendStart = thisFar - max(thisFar - prevFar, 1e-4) * 0.15;
             float tb = clamp((camDist - blendStart) / max(thisFar - blendStart, 1e-4), 0.0, 1.0);
-            if (tb > 0.0) shadow = mix(shadow, shadowFromTile(slot + c + 1, pos, lightDist, N, NdotL), tb);
+            if (tb > 0.0) shadow = mix(shadow, shadowFromTile(slot + c + 1, pos, lightDist, N, NdotL, spread), tb);
         }
         return shadow;
     }
-    return shadowFromTile(slot, pos, lightDist, N, NdotL);
+    return shadowFromTile(slot, pos, lightDist, N, NdotL, spread);
 }
 
 // A lit surface, as every lit shader hands it to sceneDirectLight/sceneAmbient.
@@ -259,25 +261,34 @@ vec3 sceneDirectLight(SceneSurface s) {
             float wrap = max(0.0, dot(-N, L) + s.subsurface) * s.subsurface;
             Lo += s.baseColor * radiance * wrap * 0.6;
         }
+        // A leaf: one shadow lookup serves the light through it and on it,
+        // taken on the side facing the light with a filter twice as wide (a
+        // leaf's shadow on the next one is soft: the sun's disc blurs it by
+        // about 1 cm a metre between them), and never quite black (a leaf
+        // passes on about a tenth of what reaches it).
+        bool leafy = s.translucency > 0.0;
+        float NL = dot(N, L);
+        float leafShadow = 1.0;
+        if (leafy && s.receivesShadow) {
+            vec3 tN = NL < 0.0 ? -N : N;
+            leafShadow = 0.1 + 0.9 * lightShadow(i, s.position, s.camDist, lightDist, tN, max(abs(NL), 0.2), 2.0);
+        }
         // Leaf translucency: light passing through a leaf lit from behind,
         // strongest looking toward the light, a warm yellow-green, and
         // shadowed by the leaves between it and the light.
-        if (s.translucency > 0.0) {
-            float NL = dot(N, L);
+        if (leafy) {
             float through = smoothstep(-0.3, 0.4, 0.3 - NL);
             float back = pow(max(dot(-V, L), 0.0), 3.0);
             float amount = s.translucency * through * (0.1 + 0.9 * back);
-            if (amount > 1e-3) {
-                vec3 tN = NL < 0.0 ? -N : N;
-                float sh = s.receivesShadow
-                    ? lightShadow(i, s.position, s.camDist, lightDist, tN, max(abs(NL), 0.2)) : 1.0;
-                vec3 tcol = sqrt(max(s.baseColor, vec3(0.0))) * vec3(0.75, 0.95, 0.35) * 0.55;
-                Lo += tcol * radiance * amount * sh;
-            }
+            vec3 tcol = sqrt(max(s.baseColor, vec3(0.0))) * vec3(0.75, 0.95, 0.35) * 0.55;
+            Lo += tcol * radiance * amount * leafShadow;
         }
 
-        float NdotL = max(dot(N, L), 0.0);
-        if (NdotL <= 0.0) continue;
+        // A leaf's diffuse light wraps a little past its edge-on angle, so a
+        // leaf turning away from the sun dims rather than switching off.
+        float NdotL = max(NL, 0.0);
+        float diffNL = leafy ? clamp((NL + 0.3) / 1.3, 0.0, 1.0) : NdotL;
+        if (diffNL <= 0.0) continue;
         vec3 H = normalize(V + L);
         float D = distributionGGX(max(dot(N, H), 0.0), s.roughness);
         float G = geometrySmith(NdotV, NdotL, s.roughness);
@@ -285,8 +296,9 @@ vec3 sceneDirectLight(SceneSurface s) {
         vec3 specular = (D * G * F) / max(4.0 * NdotV * NdotL, 1e-4);
         vec3 diffuse = (vec3(1.0) - F) * (1.0 - s.metallic) * s.baseColor / PI;
 
-        float shadow = s.receivesShadow ? lightShadow(i, s.position, s.camDist, lightDist, N, NdotL) : 1.0;
-        Lo += shadow * (diffuse + specular) * radiance * NdotL;
+        float shadow = leafy ? leafShadow
+                     : s.receivesShadow ? lightShadow(i, s.position, s.camDist, lightDist, N, NdotL, 1.0) : 1.0;
+        Lo += shadow * (diffuse * diffNL + specular * NdotL) * radiance;
     }
     return Lo;
 }

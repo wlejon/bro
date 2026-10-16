@@ -39,8 +39,11 @@ void shadowVertexInput(MeshKind kind, bool custom, std::vector<VkVertexInputBind
         if (!custom) {
             switch (kind) {
             case MeshKind::Instanced:
+                keep = a.location == 0 || (a.location >= 8 && a.location <= 10);
+                break;
             case MeshKind::InstancedVegetation:
-                keep = a.location == 0 || (a.location >= 8 && a.location <= 10) || veg;
+                // The normal too: a leaf folds about its card's normal.
+                keep = a.location <= 1 || (a.location >= 8 && a.location <= 10) || veg;
                 break;
             case MeshKind::Scatter: keep = a.location == 0; break;
             case MeshKind::Grass: keep = a.location <= 1; break;

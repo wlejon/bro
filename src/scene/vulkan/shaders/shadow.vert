@@ -41,7 +41,7 @@ void main() {
     vec4 worldPos = model * vec4(pos, 1.0);
 #ifdef SCENE_VEGETATION
     mat3 rot;
-    vegetationSway(model, inVeg0, inVeg1, inVeg2, inVeg3, worldPos.xyz, rot);
+    vegetationSway(model, inVeg0, inVeg1, inVeg2, inVeg3, normalize(mat3(model) * normal), worldPos.xyz, rot);
 #endif
     gl_Position = push.lightViewProj * worldPos;
 }

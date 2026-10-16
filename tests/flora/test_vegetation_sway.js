@@ -6,7 +6,9 @@
 // Contract under test:
 //   - every emitter carries records of the documented size: emitMesh /
 //     emitFoliageMesh per vertex (16 floats), emitBranchTubes /
-//     emitScatterSegments per segment (12), emitFoliageVegetation per leaf;
+//     emitScatterSegments per segment (16), emitFoliageVegetation per leaf;
+//   - wood carries no stem axis (word 12 is 0), leaves do; every record
+//     carries its plant's trunk cantilever (word 15);
 //   - scene.windAt is the field the shaders evaluate: zero in a calm, the
 //     set speed and direction with gusts off, gust bands that travel
 //     downwind at gustSpeed;
@@ -72,26 +74,29 @@ function run(scene) {
     assert(leaves.vertexCount > 0, 'the tree has leaves');
     assert(leaves.vegetation.length === leaves.vertexCount * 16, 'emitFoliageMesh writes 16 floats a vertex');
     const tubes = world.emitBranchTubes();
-    assert(tubes.vegetation.length === tubes.segCount * 12, 'emitBranchTubes writes 12 floats a segment');
+    assert(tubes.vegetation.length === tubes.segCount * 16, 'emitBranchTubes writes 16 floats a segment');
     const scatter = world.emitScatterSegments(FOLIAGE);
-    assert(scatter.vegetation.length === scatter.segCount * 12, 'emitScatterSegments writes 12 floats a segment');
+    assert(scatter.vegetation.length === scatter.segCount * 16, 'emitScatterSegments writes 16 floats a segment');
     const perLeaf = world.emitFoliageVegetation(FOLIAGE);
     const xforms = world.emitFoliageTransforms(FOLIAGE);
     assert(perLeaf.length === xforms.length, 'emitFoliageVegetation: one 16-float record per leaf transform');
 
-    // Bark is wood (zero stem axis), leaves are not; the branch weight runs 0..1.
-    let wood = 0, leafy = 0, wMin = 1, wMax = 0;
+    // Bark is wood (no stem axis word), leaves are not; every record carries
+    // its trunk; the branch weight runs 0..1.
+    // (Each read of a mesh's `vegetation` copies it out: read it once.)
+    let wood = 0, leafy = 0, trunks = 0, wMin = 1, wMax = 0;
+    const bv = bark.vegetation, lv = leaves.vegetation;
     for (let i = 0; i < bark.vertexCount; i++) {
-        const v = bark.vegetation;
-        if (v[i * 16 + 12] === 0 && v[i * 16 + 13] === 0 && v[i * 16 + 14] === 0) wood++;
-        wMin = Math.min(wMin, v[i * 16 + 11]);
-        wMax = Math.max(wMax, v[i * 16 + 11]);
+        if (bv[i * 16 + 12] === 0) wood++;
+        if (bv[i * 16 + 15] > 0) trunks++;
+        wMin = Math.min(wMin, bv[i * 16 + 11]);
+        wMax = Math.max(wMax, bv[i * 16 + 11]);
     }
     for (let i = 0; i < leaves.vertexCount; i++) {
-        const v = leaves.vegetation;
-        if (Math.hypot(v[i * 16 + 12], v[i * 16 + 13], v[i * 16 + 14]) > 0.5) leafy++;
+        if (lv[i * 16 + 12] > 0 && Number.isInteger(lv[i * 16 + 12])) leafy++;
     }
     assert(wood === bark.vertexCount, 'every bark vertex is wood');
+    assert(trunks === bark.vertexCount, 'every bark vertex carries its trunk');
     assert(leafy === leaves.vertexCount, 'every leaf vertex has a stem axis');
     assert(wMin === 0 && wMax > 0.9 && wMax <= 1, 'branch weight spans trunk to tip: ' + wMin + '..' + wMax);
     assert(bark.vegetation[3] > 1, 'the plant height is recorded: ' + bark.vegetation[3]);

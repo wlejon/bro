@@ -61,18 +61,23 @@ float sceneWindNoise(vec2 p) {
     return mix(mix(a, b, u.x), mix(c, d, u.x), u.y) * 2.0 - 1.0;
 }
 
-// The gust at absolute world xz: 0 between the bands, up to ~2 x the gust
-// amount inside one. The bands travel downwind at windField.w.
-float sceneWindGustAt(vec2 xz) {
+// The gust at absolute world xz at time t: 0 between the bands, up to ~2 x
+// the gust amount inside one. The bands travel downwind at windField.w.
+// `fine` adds the second octave; without it the gust is its slow part (a
+// plant's lagged drag reads the past through it, scene_vegetation.glsl).
+float sceneWindGustAtTime(vec2 xz, float t, bool fine) {
     if (camera.windGust.x <= 0.0) return 0.0;
     vec2 d = camera.windField.xy;
-    float along = dot(xz, d) - camera.windParams.x * camera.windField.w;
+    float along = dot(xz, d) - t * camera.windField.w;
     float across = dot(xz, vec2(-d.y, d.x));
     vec2 k = camera.windGust.yz;
-    float g = sceneWindNoise(vec2(along * k.x, across * k.y)) * 0.5 + 0.5 +
-              0.35 * sceneWindNoise(vec2(along * k.x * 3.18 + 5.3, across * k.y * 4.17));
+    float g = sceneWindNoise(vec2(along * k.x, across * k.y)) * 0.5 + 0.5;
+    if (fine) g += 0.35 * sceneWindNoise(vec2(along * k.x * 3.18 + 5.3, across * k.y * 4.17));
     return max(g - 0.45, 0.0) * 2.4 * camera.windGust.x;
 }
+
+// The gust at absolute world xz now (wind_field.h's gustAt).
+float sceneWindGustAt(vec2 xz) { return sceneWindGustAtTime(xz, camera.windParams.x, true); }
 
 // The wind at camera-relative `pos`: xyz the velocity (m/s, horizontal), w
 // the gust there.

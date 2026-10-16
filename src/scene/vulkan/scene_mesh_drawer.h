@@ -185,7 +185,7 @@ private:
                               const CustomProgram& prog, std::vector<MeshNode::UserTexture>* textures);
     VkDescriptorSet boneSet(SceneFrame& frame, const std::vector<float>& palette);
     /// Set 3 holding a procedural draw's header and records, then its
-    /// vegetation records (3 vec4s a segment; header[10] says where); null
+    /// vegetation records (4 vec4s a segment; header[10] says where); null
     /// when the frame's upload memory runs out.
     VkDescriptorSet segmentSet(SceneFrame& frame, float (&header)[16], const std::vector<float>& records,
                                const std::vector<float>* leafSegments, const std::vector<float>* vegetation);

@@ -61,7 +61,7 @@ void main() {
     vec3 T = normalize(M3 * inTangent.xyz);
 #ifdef SCENE_VEGETATION
     mat3 rot;
-    outVegShade = vegetationSway(push.model, inVeg0, inVeg1, inVeg2, inVeg3, worldPos.xyz, rot);
+    outVegShade = vegetationSway(push.model, inVeg0, inVeg1, inVeg2, inVeg3, N, worldPos.xyz, rot);
     N = rot * N;
     T = rot * T;
 #endif
@@ -75,6 +75,6 @@ void main() {
     outColor = meshVertexColorMode() != 0u ? inColor : vec4(1.0);
     outInstColor = inInstColor;
 #ifdef SCENE_VEGETATION
-    outInstColor.rgb *= vegetationTint(push.model, inVeg0, inVeg1, inVeg2, inVeg3);
+    outInstColor.rgb *= vegetationTint(push.model, inVeg0, inVeg1, inVeg2, inVeg3, inVeg3.x > 0.5);
 #endif
 }

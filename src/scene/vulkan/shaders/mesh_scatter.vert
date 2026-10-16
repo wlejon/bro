@@ -46,10 +46,11 @@ void main() {
     outInstColor = vec4(1.0);
     if (proceduralHasVegetation()) {
         vec4 v0, v1, v2, v3;
-        proceduralVegetation(seg, along, P, F, v0, v1, v2, v3);
+        proceduralVegetation(seg, along, P, v0, v1, v2, v3);
         mat3 rot;
-        outVegShade = vegetationSway(push.model, v0, v1, v2, v3, worldPos.xyz, rot);
-        outInstColor.rgb = vegetationTint(push.model, v0, v1, v2, v3);
+        outVegShade = vegetationSwayAxis(push.model, v0, v1, v2, v3, F, normalize(mat3(push.model) * R[1]),
+                                         worldPos.xyz, rot);
+        outInstColor.rgb = vegetationTint(push.model, v0, v1, v2, v3, true);
         Nw = rot * Nw;
         Tw = rot * Tw;
     }
