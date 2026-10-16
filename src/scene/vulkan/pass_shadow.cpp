@@ -33,9 +33,19 @@ void shadowVertexInput(MeshKind kind, bool custom, std::vector<VkVertexInputBind
     for (const auto& a : attributes) {
         // A custom chunk sees every attribute the colour pass has; the
         // built-in casters read position, wind colour and skin only.
-        const bool keep = custom ? true
-                        : kind == MeshKind::Instanced ? (a.location == 0 || (a.location >= 8 && a.location <= 10))
-                                                      : (a.location <= 3 || a.location == 5 || a.location == 6);
+        // Vegetation casters read their sway records at 12-15 as well.
+        const bool veg = a.location >= 12 && a.location <= 15;
+        bool keep = custom;
+        if (!custom) {
+            switch (kind) {
+            case MeshKind::Instanced:
+            case MeshKind::InstancedVegetation:
+                keep = a.location == 0 || (a.location >= 8 && a.location <= 10) || veg;
+                break;
+            case MeshKind::Scatter: keep = a.location == 0; break;
+            default: keep = a.location <= 3 || a.location == 5 || a.location == 6 || veg; break;
+            }
+        }
         if (keep) used.push_back(a);
     }
     attributes = std::move(used);
@@ -77,10 +87,15 @@ bool PassShadow::setup(SceneGpu& gpu) {
         SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowSkinnedVert);
     vs_[static_cast<int>(MeshKind::Tube)] =
         SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowTubeVert);
+    vs_[static_cast<int>(MeshKind::Scatter)] =
+        SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowScatterVert);
+    vs_[static_cast<int>(MeshKind::Vegetation)] =
+        SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowVegVert);
+    vs_[static_cast<int>(MeshKind::InstancedVegetation)] =
+        SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowInstancedVegVert);
     fs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowFrag);
-    // Scatter leaves cast no shadow, so that kind has no caster stage.
-    for (MeshKind k : {MeshKind::Static, MeshKind::Instanced, MeshKind::Skinned, MeshKind::Tube}) {
-        if (!vs_[static_cast<int>(k)]) return false;
+    for (VkShaderModule m : vs_) {
+        if (!m) return false;
     }
     return fs_ != VK_NULL_HANDLE;
 }

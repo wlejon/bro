@@ -94,6 +94,14 @@ SceneCameraUniforms SceneView::uniforms(const SceneRenderer* fog) const {
         // reduced in double so a far eye does not round the phase away.
         const double phase = 0.3 * static_cast<double>(eye.x) + 0.5 * static_cast<double>(eye.z);
         cam.windParams[2] = static_cast<float>(std::fmod(phase, 2.0 * 3.14159265358979323846));
+        const WindFieldState wf = fog->windField();
+        cam.windField[0] = wf.dirX;
+        cam.windField[1] = wf.dirZ;
+        cam.windField[2] = wf.base;
+        cam.windField[3] = wf.gustSpeed;
+        cam.windGust[0] = wf.gust;
+        cam.windGust[1] = wf.invAlong;
+        cam.windGust[2] = wf.invAcross;
     }
     return cam;
 }

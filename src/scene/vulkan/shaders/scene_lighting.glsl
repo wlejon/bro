@@ -218,6 +218,7 @@ struct SceneSurface {
     bool receivesShadow;
     bool twoSided;
     float subsurface;  // wrap-light translucency, two-sided surfaces only
+    float translucency; // leaf light transport: the sun glowing through a leaf seen against it (0: none)
 };
 
 // The direct light of every scene light on `s`.
@@ -254,9 +255,25 @@ vec3 sceneDirectLight(SceneSurface s) {
         vec3 radiance = light.color.rgb * light.color.a * atten;
         // Wrap light through thin two-sided surfaces (leaves): lights the back
         // relative to L whether or not the front faces the light.
-        if (s.twoSided && s.subsurface > 0.0) {
+        if (s.twoSided && s.subsurface > 0.0 && s.translucency <= 0.0) {
             float wrap = max(0.0, dot(-N, L) + s.subsurface) * s.subsurface;
             Lo += s.baseColor * radiance * wrap * 0.6;
+        }
+        // Leaf translucency: light passing through a leaf lit from behind,
+        // strongest looking toward the light, a warm yellow-green, and
+        // shadowed by the leaves between it and the light.
+        if (s.translucency > 0.0) {
+            float NL = dot(N, L);
+            float through = smoothstep(-0.3, 0.4, 0.3 - NL);
+            float back = pow(max(dot(-V, L), 0.0), 3.0);
+            float amount = s.translucency * through * (0.1 + 0.9 * back);
+            if (amount > 1e-3) {
+                vec3 tN = NL < 0.0 ? -N : N;
+                float sh = s.receivesShadow
+                    ? lightShadow(i, s.position, s.camDist, lightDist, tN, max(abs(NL), 0.2)) : 1.0;
+                vec3 tcol = sqrt(max(s.baseColor, vec3(0.0))) * vec3(0.75, 0.95, 0.35) * 0.55;
+                Lo += tcol * radiance * amount * sh;
+            }
         }
 
         float NdotL = max(dot(N, L), 0.0);

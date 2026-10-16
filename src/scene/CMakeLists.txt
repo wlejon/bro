@@ -11,7 +11,7 @@ set(VK_GENERATED_HEADERS "")
 # The GLSL the shaders #include (expanded by bro_spirv_embed at build time and
 # by SceneVkShaderCompiler at run time).
 set(VK_SHADER_INCLUDES scene_camera.glsl scene_lighting.glsl scene_atmosphere.glsl scene_mesh_push.glsl
-    scene_shadow_push.glsl scene_procedural.glsl sky_common.glsl ibl_common.glsl)
+    scene_shadow_push.glsl scene_procedural.glsl scene_vegetation.glsl sky_common.glsl ibl_common.glsl)
 list(TRANSFORM VK_SHADER_INCLUDES PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/"
      OUTPUT_VARIABLE VK_SHADER_INCLUDE_PATHS)
 foreach(_shader
@@ -25,6 +25,7 @@ foreach(_shader
         shadow_instanced.vert
         shadow_skinned.vert
         shadow_tube.vert
+        shadow_scatter.vert
         shadow.frag
         sky.vert
         sky_atmosphere.frag
@@ -66,6 +67,18 @@ endforeach()
 bro_spirv_header(VK_GENERATED_HEADERS "${VK_GEN_DIR}"
                  "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/mesh.frag" frag
                  NAME mesh_indirect.frag DEFINES SCENE_INDIRECT_OUTPUT DEPENDS ${VK_SHADER_INCLUDE_PATHS})
+# Vegetation: meshes carrying wind-sway records (scene_vegetation.glsl).
+foreach(_veg mesh.vert mesh_instanced.vert shadow.vert shadow_instanced.vert mesh.frag)
+    string(REGEX REPLACE "\\.(vert|frag)$" "_veg.\\1" _vegName "${_veg}")
+    string(REGEX MATCH "(vert|frag)$" _vegStage "${_veg}")
+    bro_spirv_header(VK_GENERATED_HEADERS "${VK_GEN_DIR}"
+                     "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/${_veg}" ${_vegStage}
+                     NAME ${_vegName} DEFINES SCENE_VEGETATION DEPENDS ${VK_SHADER_INCLUDE_PATHS})
+endforeach()
+bro_spirv_header(VK_GENERATED_HEADERS "${VK_GEN_DIR}"
+                 "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/mesh.frag" frag
+                 NAME mesh_veg_indirect.frag DEFINES SCENE_VEGETATION SCENE_INDIRECT_OUTPUT
+                 DEPENDS ${VK_SHADER_INCLUDE_PATHS})
 
 function(embed_vk_shader SHADER_FILE VAR_NAME)
     set(INPUT  "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/${SHADER_FILE}")
@@ -95,6 +108,7 @@ embed_vk_shader(scene_lighting.glsl   kVkSceneLightingSrc)
 embed_vk_shader(scene_atmosphere.glsl kVkSceneAtmosphereSrc)
 embed_vk_shader(scene_mesh_push.glsl  kVkSceneMeshPushSrc)
 embed_vk_shader(scene_shadow_push.glsl kVkSceneShadowPushSrc)
+embed_vk_shader(scene_vegetation.glsl kVkSceneVegetationSrc)
 embed_vk_shader(clipmap_common.glsl       kClipmapCommonSrc)
 embed_vk_shader(clipmap_detail.glsl       kClipmapDetailSrc)
 embed_vk_shader(clipmap_material.glsl     kClipmapMaterialSrc)

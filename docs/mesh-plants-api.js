@@ -248,6 +248,7 @@
  * @property {Float32Array} [transforms]
  * @property {Float32Array} [branchRadius] -  one per leaf, for shading variation.
  * @property {Int32Array} [branchDepth]
+ * @property {Int32Array} [segment] -  one per leaf: the index of the input segment the leaf grows on.
  */
 
 /**

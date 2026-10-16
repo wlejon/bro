@@ -245,6 +245,7 @@ void* bro_scene_SceneGraph_createMesh(void* self, uint64_t optsBits, uint64_t me
                 readFloatVector(ev::getProperty(opts, "colors"), meshData.colors);
                 readFloatVector(ev::getProperty(opts, "uvs"), meshData.uvs);
                 readFloatVector(ev::getProperty(opts, "tangents"), meshData.tangents);
+                readFloatVector(ev::getProperty(opts, "vegetation"), meshData.vegetation);
                 hasRaw = true;
             }
         }
@@ -369,6 +370,7 @@ void* bro_scene_SceneGraph_createSkinnedMesh(void* self, uint64_t optsBits, uint
             readFloatVector(ev::getProperty(opts, "colors"), meshData.colors);
             readFloatVector(ev::getProperty(opts, "uvs"), meshData.uvs);
             readFloatVector(ev::getProperty(opts, "tangents"), meshData.tangents);
+            readFloatVector(ev::getProperty(opts, "vegetation"), meshData.vegetation);
             hasRaw = true;
         }
     }

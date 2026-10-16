@@ -56,6 +56,22 @@ target/up/mode: the 6DOF / FPS path that avoids target+up precision loss.
  * @property {Array<number>} [direction] -  Sway direction [x,y,z] (default [1,0,0]).
  * @property {number} [strength] -  Displacement amplitude in world units (default 0: no sway).
  * @property {number} [frequency] -  Oscillation frequency in rad/s (default 1.5).
+ *
+ * The wind field (what vegetation bends with; see scene-nodes-api.js
+ * "Vegetation"). It blows along `direction`. Every field is optional and a
+ * field left out keeps its value; strength / frequency above do not touch it.
+ * @property {number} [speed] -  Steady wind in m/s (default 2.5, a breeze; 0 with gust 0 is a calm). It breathes ±28 % over a few minutes.
+ * @property {number} [gust] -  Gust amount: 0 none, 1 a gusty day (default), 2 a gale's.
+ * @property {number} [gustSpeed] -  How fast the gust bands travel downwind, m/s (default 9).
+ * @property {number} [gustScale] -  A gust band's length along the wind in m (default 45; 1.85× that across it).
+ * @property {number} [drift] -  Radians the direction wanders either side of `direction`, slowly (default 0.5).
+ */
+
+/**
+ * @typedef {Object} WindSample
+ * @property {Array<number>} velocity -  The wind [x, 0, z] in m/s at the point now: the steady speed plus 4 m/s per unit of gust, along the drifting direction with a little cross-wind wobble.
+ * @property {number} gust -  The gust band over the point now (0 between bands, up to ~2.2 × the gust amount inside one).
+ * @property {number} speed -  |velocity|.
  */
 
 /**
@@ -597,9 +613,45 @@ class SceneGraph {
    * The engine advances the wind clock from the per-frame virtual delta so
    * offline captures stay deterministic.
    *
+   * The same call sets the wind field plants carrying vegetation records
+   * sway in (`speed`, `gust`, `gustSpeed`, `gustScale`, `drift`): a steady
+   * wind whose direction drifts slowly, with gusts that travel downwind as
+   * bands, so a gust visibly crosses a grove tree by tree. Until set it is a
+   * light breeze (2.5 m/s, gusty) along +x; `setWind({speed: 0, gust: 0})`
+   * stills it.
+   *
+   * @example
+   *   scene.setWind({ direction: [1, 0, 0.4], speed: 4, gust: 1.5 });   // a gusty afternoon
+   *   scene.setWind({ speed: 0, gust: 0 });                             // dead calm
    * @param {WindConfig} [opts]
    */
   setWind(opts) {}
+
+  /**
+   * The wind field at a world point now, exactly as the vegetation shaders
+   * evaluate it (the same noise and formulas in float), so a script can make
+   * particles, flags or sounds follow the gust that is bending the trees.
+   * `windAt(x, y, z)`, `windAt([x, y, z])` or `windAt(x, z)`; the height is
+   * ignored.
+   *
+   * @example
+   *   const w = scene.windAt(tree.position);
+   *   if (w.gust > 0.5) rustle.play();
+   * @param {number|Array<number>} x
+   * @param {number} [y]
+   * @param {number} [z]
+   * @returns {WindSample}
+   */
+  windAt(x, y, z) {}
+
+  /**
+   * Everything setWind has set, plus the field now: `{direction, strength,
+   * frequency, speed, gust, gustSpeed, gustScale, drift, time, now:
+   * {direction, speed}}`. `now.direction` is the drifted direction and
+   * `now.speed` the breathing steady speed at the wind clock's `time`.
+   * @returns {Object}
+   */
+  wind() {}
 
   /**
    * Shadow atlas size and filter. `setShadowQuality(atlasSize, pcfTaps)`

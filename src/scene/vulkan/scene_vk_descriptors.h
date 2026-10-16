@@ -20,6 +20,8 @@ struct alignas(16) SceneCameraUniforms {
     alignas(16) float fogColor[4];   // rgb = color, a = heightFalloff
     alignas(16) float wind[4];       // xyz = direction, w = strength
     alignas(16) float windParams[4]; // x = time (s), y = frequency, z = the eye's phase offset
+    alignas(16) float windField[4];  // xy = horizontal direction (x, z), z = steady speed, w = gust travel speed
+    alignas(16) float windGust[4];   // x = gust amount, y = 1 / along scale, z = 1 / across scale
 };
 
 /// The light and shadow-tile capacity of the lighting block (SceneRenderer's

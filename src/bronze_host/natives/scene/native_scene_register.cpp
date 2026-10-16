@@ -183,6 +183,9 @@ bool registerNatives_scene(std::string* error) {
         fn("__bro_native.scene.SceneGraph_setToneMap", p(&bro_scene_SceneGraph_setToneMap), "void", {"__bro_native.scene.SceneGraph", "bool", "str", "bool", "f64", "bool", "f64"}, error) &&
         fn("__bro_native.scene.SceneGraph_setAmbient", p(&bro_scene_SceneGraph_setAmbient), "void", {"__bro_native.scene.SceneGraph", "f64[]", "bool", "f64"}, error) &&
         fn("__bro_native.scene.SceneGraph_setWind", p(&bro_scene_SceneGraph_setWind), "void", {"__bro_native.scene.SceneGraph", "f64[]", "bool", "f64", "bool", "f64"}, error) &&
+        fn("__bro_native.scene.SceneGraph_setWindField", p(&bro_scene_SceneGraph_setWindField), "void", {"__bro_native.scene.SceneGraph", "f64[]"}, error) &&
+        fn("__bro_native.scene.SceneGraph_windAt", p(&bro_scene_SceneGraph_windAt), "f64[]", {"__bro_native.scene.SceneGraph", "f64", "f64"}, error) &&
+        fn("__bro_native.scene.SceneGraph_windState", p(&bro_scene_SceneGraph_windState), "f64[]", {"__bro_native.scene.SceneGraph"}, error) &&
         fn("__bro_native.scene.SceneGraph_setShadowQuality", p(&bro_scene_SceneGraph_setShadowQuality), "void", {"__bro_native.scene.SceneGraph", "bool", "i32", "bool", "i32"}, error) &&
         fn("__bro_native.scene.SceneGraph_setShadowCache", p(&bro_scene_SceneGraph_setShadowCache), "void", {"__bro_native.scene.SceneGraph", "bool", "bool", "bool", "i32"}, error) &&
         fn("__bro_native.scene.SceneGraph_setFog", p(&bro_scene_SceneGraph_setFog), "void", {"__bro_native.scene.SceneGraph", "bool", "str", "f64[]", "bool", "f64", "bool", "f64", "bool", "f64", "bool", "f64", "bool", "f64"}, error) &&

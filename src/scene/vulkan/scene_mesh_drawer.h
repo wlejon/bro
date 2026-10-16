@@ -69,9 +69,18 @@ constexpr uint32_t vertexColor(int mode) { return static_cast<uint32_t>(mode & 3
 
 /// Scatter: the leaf mesh, one instance per leaf placed by the vertex shader
 /// from segment records. Tube: no vertex streams at all, the walls built from
-/// the vertex index and segment records (scene_procedural.glsl).
-enum class MeshKind : uint8_t { Static, Instanced, Skinned, Scatter, Tube };
-constexpr int kMeshKindCount = 5;
+/// the vertex index and segment records (scene_procedural.glsl). Vegetation
+/// and InstancedVegetation are Static and Instanced carrying wind-sway
+/// records (scene_vegetation.glsl): a per-vertex or per-instance stream at
+/// locations 12-15. Scatter and Tube sway from records in their segment set.
+enum class MeshKind : uint8_t { Static, Instanced, Skinned, Scatter, Tube, Vegetation, InstancedVegetation };
+constexpr int kMeshKindCount = 7;
+
+/// The kinds the vegetation shading (mesh.frag's SCENE_VEGETATION variant) draws.
+constexpr bool vegetationShading(MeshKind k) {
+    return k == MeshKind::Vegetation || k == MeshKind::InstancedVegetation || k == MeshKind::Scatter ||
+           k == MeshKind::Tube;
+}
 
 struct MeshDraw {
     /// Move the draw to positions relative to an eye `offset` from the one it
@@ -89,8 +98,10 @@ struct MeshDraw {
     VkBuffer vertices = VK_NULL_HANDLE;
     VkBuffer indices = VK_NULL_HANDLE;
     uint32_t indexCount = 0;   // Tube: the vertex count of the unindexed draw
-    VkBuffer instances = VK_NULL_HANDLE;         // Instanced
+    VkBuffer instances = VK_NULL_HANDLE;         // Instanced, InstancedVegetation
     VkDeviceSize instanceOffset = 0;
+    VkBuffer vegetation = VK_NULL_HANDLE;        // Vegetation (per vertex), InstancedVegetation (per instance)
+    VkDeviceSize vegetationOffset = 0;
     uint32_t instanceCount = 1;
     VkBuffer skin = VK_NULL_HANDLE;              // Skinned
     VkDescriptorSet vertexSet = VK_NULL_HANDLE;  // set 3: Skinned bones, Scatter/Tube segments
@@ -141,7 +152,8 @@ public:
     static void bindGeometryAndDraw(VkCommandBuffer cmd, const MeshDraw& draw);
 
     /// The vertex input of a mesh kind (binding 0 = packed vertices, binding 1
-    /// = instance rows or skin attributes).
+    /// = instance rows, skin attributes or per-vertex vegetation, binding 2 =
+    /// per-instance vegetation).
     static void vertexInput(MeshKind kind, std::vector<VkVertexInputBindingDescription>& bindings,
                             std::vector<VkVertexInputAttributeDescription>& attributes);
 
@@ -165,10 +177,11 @@ private:
     VkDescriptorSet customSet(SceneFrame& frame, uint32_t nodeId, const CustomShaderState& cs,
                               const CustomProgram& prog, std::vector<MeshNode::UserTexture>* textures);
     VkDescriptorSet boneSet(SceneFrame& frame, const std::vector<float>& palette);
-    /// Set 3 holding a procedural draw's header and records; null when the
-    /// frame's upload memory runs out.
-    VkDescriptorSet segmentSet(SceneFrame& frame, const float (&header)[12], const std::vector<float>& records,
-                               const std::vector<float>* leafSegments);
+    /// Set 3 holding a procedural draw's header and records, then its
+    /// vegetation records (3 vec4s a segment; header[10] says where); null
+    /// when the frame's upload memory runs out.
+    VkDescriptorSet segmentSet(SceneFrame& frame, float (&header)[12], const std::vector<float>& records,
+                               const std::vector<float>* leafSegments, const std::vector<float>* vegetation);
     bool prepareProcedural(SceneFrame& frame, InstancedMeshNode& node, MeshDraw& out);
     /// The pipeline state a draw selects beyond its shaders.
     static uint32_t rasterVariant(const MeshDraw& draw);
@@ -184,6 +197,8 @@ private:
     VkShaderModule vs_[kMeshKindCount] = {};
     VkShaderModule fs_ = VK_NULL_HANDLE;
     VkShaderModule fsIndirect_ = VK_NULL_HANDLE;
+    VkShaderModule fsVeg_ = VK_NULL_HANDLE;
+    VkShaderModule fsVegIndirect_ = VK_NULL_HANDLE;
     PipelineVariants builtin_;
     std::unordered_map<std::string, std::unique_ptr<CustomProgram>> custom_;
 };

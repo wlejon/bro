@@ -40,7 +40,7 @@ void SceneRenderer::computeShadowBounds(bromath::AABB3& casters,
                 // geometry along the light direction past the bind-pose
                 // AABB, and the directional depth range is fit from these
                 // bounds.
-                const float cm = m->cullMargin();
+                const float cm = m->cullMargin() + vegetationReach(m->vegetationHeight(), m->worldMatrix());
                 bromath::AABB3 wb = bromath::atransform(m->localBounds(), m->worldMatrix());
                 wb.min -= Vec3{cm, cm, cm};
                 wb.max += Vec3{cm, cm, cm};
@@ -52,7 +52,8 @@ void SceneRenderer::computeShadowBounds(bromath::AABB3& casters,
             auto* m = static_cast<InstancedMeshNode*>(n);
             float wlo[3], whi[3];
             if (!m->effectiveUnlit() && m->computeWorldInstanceBounds(wlo, whi)) {
-                const float cm = m->cullMargin();
+                const float cm = m->cullMargin() +
+                                 (m->hasVegetation() ? vegetationReach(m->vegetationHeight(), m->worldMatrix()) : 0.0f);
                 bromath::AABB3 wb{{wlo[0] - cm, wlo[1] - cm, wlo[2] - cm},
                                   {whi[0] + cm, whi[1] + cm, whi[2] + cm}};
                 if (m->castsShadow()) casters = bromath::amerge(casters, wb);
@@ -227,7 +228,9 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
             }
         } else if (n->type() == SceneNode::Type::InstancedMesh) {
             auto* m = static_cast<InstancedMeshNode*>(n);
-            if (m->castsShadow() && m->isTube() && m->tubeSegCount() > 0)
+            // Procedural casters: branch tubes, and scatter leaves that sway.
+            if (m->castsShadow() && ((m->isTube() && m->tubeSegCount() > 0) ||
+                                     (m->isScatter() && m->hasVegetation() && m->scatterSegCount() > 0)))
                 shadowTubeCasters_.push_back(m);
             else if (!m->effectiveUnlit() && m->castsShadow() && !m->mesh().empty() && m->instanceCount() > 0)
                 shadowInstancedCasters_.push_back(m);
@@ -611,6 +614,8 @@ void SceneRenderer::planShadowTiles() {
     // tiles are camera-independent and cache across any camera movement.
     cullStats_.shadowTilesTotal += plan.tileCount;
     const bool windy = windStrength_ > 0.0f;
+    // Vegetation sways whenever the wind field moves at all.
+    const bool swaying = !windFieldCalm(windField());
     std::vector<std::pair<uint32_t, uint64_t>> sig;
     for (int slot = 0; slot < plan.tileCount; ++slot) {
         ShadowTilePlan& tile = plan.tiles[slot];
@@ -632,7 +637,13 @@ void SceneRenderer::planShadowTiles() {
                 sig.emplace_back(casters[i]->id(), casters[i]->changeGeneration());
                 if (listDynamic) dynamic = true;
                 if constexpr (std::is_same_v<std::decay_t<decltype(*casters[i])>, MeshNode>) {
-                    if (windy && casters[i]->windMask() > 0.0f) dynamic = true;
+                    if (casters[i]->vegetationHeight() > 0.0f) {
+                        if (swaying) dynamic = true;
+                    } else if (windy && casters[i]->windMask() > 0.0f) {
+                        dynamic = true;
+                    }
+                } else {
+                    if (swaying && casters[i]->hasVegetation()) dynamic = true;
                 }
             }
         };

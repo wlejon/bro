@@ -54,6 +54,46 @@
  * the SDF meshes are never bent.
  * The global density (default 1) multiplies the leaf placement
  * `perUnitLength` of every foliage emit.
+ * That baked bend is the old model and is off by default (strength 0). The
+ * motion plants should have comes from the vegetation records below, which
+ * bro.scene sways on the GPU in its wind field.
+ *
+ * ── Vegetation records ──
+ * Every geometry emitter also writes what bro.scene needs to move a plant
+ * like a plant (docs/scene-nodes-api.js "Vegetation"); emit, create the
+ * nodes, and the trees sway in `scene.setWind`'s field:
+ *
+ *   const bark = scene.createMesh({ data: world.emitMesh(7) });              // mesh.vegetation
+ *   const tubes = scene.createInstancedMesh({ tube: world.emitBranchTubes() });   // .vegetation
+ *   const leaves = scene.createInstancedMesh({ mesh: card, doubleSided: true,
+ *       scatter: Object.assign({}, opts, world.emitScatterSegments(opts)) });     // .vegetation
+ *
+ * Per vertex (emitMesh, emitPlantMesh, emitFoliageMesh, emitPlantFoliageMesh,
+ * emitBloomMesh: `mesh.vegetation`) and per instance (emitFoliageVegetation,
+ * emitSegmentVegetation) a record is 16 floats, in the emit's space:
+ *
+ *   0-3   root.xyz, height        the plant's origin and its height (tallest segment end above it)
+ *   4-7   crown.xyz, crownRadius  the leaf-mass weighted centre of the plant's branches and the
+ *                                 farthest leafy branch end from it; radius 0 on wood
+ *   8-11  anchor.xyz, weight      a leaf's (or bloom's) attachment point on its segment, a bark
+ *                                 vertex's skeleton point; the branch weight there
+ *   12-15 axis.xyz, phase         a leaf's stem (tip) direction, zero on wood; its limb's phase
+ *
+ * Per segment (emitBranchTubes, emitScatterSegments: `.vegetation`, index
+ * aligned with `segments`) it is 12 floats: root.xyz, height, crown.xyz,
+ * crownRadius, weightFrom, weightTo, phase, 0; the shader interpolates the
+ * weight along the segment and anchors each scattered leaf where it hangs.
+ *
+ * The branch weight is 0 on the trunk — the leader chain up from the
+ * thickest root segment, while each child keeps at least 80 % of its
+ * parent's radius and 35 % of the base's — and climbs to 1 at every twig
+ * tip along each limb, continuously (a child starts at its parent's end
+ * weight), so bending by weight² never tears a joint. The phase is a hash
+ * of the limb (the chain leaving the trunk); all its sub-branches share it,
+ * so a limb moves as one piece.
+ *
+ * Bloom anchors carry `segment`, the world segment index they grow on, so
+ * a bloom can take its segment's record.
  *
  * ── Instance matrices ──
  * emitFoliageTransforms, emitSegmentTransforms and the placement batches
@@ -192,6 +232,7 @@
  * @property {Array<number>} position - World-space [x, y, z] of the twig tip.
  * @property {Array<number>} normal - Unit direction along the twig, outward (+Y if degenerate).
  * @property {number} age01 @property {number} vigor01 @property {number} lightExposure01 @property {number} senescence01
+ * @property {number} segment - The world segment (emitSegments index) the bloom grows on; -1 if none.
  */
 
 /**
@@ -331,7 +372,7 @@ class FloraWorld {
 
   /**
    * Bark mesh of every plant: one tapered open cylinder per segment,
-   * `sides` facets around. Wind-bent.
+   * `sides` facets around. Wind-bent. Carries `vegetation` and tangents.
    * @param {number} [sides=6] - An integer in [3, 256]: TypeError for a
    *   non-number, RangeError for NaN, a fraction or a value out of range.
    * @returns {Mesh}
@@ -339,7 +380,7 @@ class FloraWorld {
   emitMesh(sides) {}
 
   /**
-   * Bark mesh of one plant. Wind-bent.
+   * Bark mesh of one plant. Wind-bent. Carries `vegetation`.
    * @param {number} plantIdx
    * @param {number} [sides=6] - An integer in [3, 256], as for emitMesh.
    * @returns {Mesh|null}
@@ -374,9 +415,12 @@ class FloraWorld {
    * floats per segment: from xyz, from radius (the parent segment's radius,
    * so tubes taper), to xyz, to radius. Zero-length segments and ones with
    * radius below `opts.minRadius` are dropped. Bounds are [x, y, z] arrays
-   * padded by the largest radius ([0,0,0] when empty).
+   * padded by the largest radius ([0,0,0] when empty). `vegetation` holds
+   * 12 floats per kept segment (see "Vegetation records"); pass the whole
+   * object to `setTubeSegments` / createInstancedMesh's `tube` and it sways.
    * @param {{minRadius?: number}} [opts] - minRadius defaults to 0.
-   * @returns {{segments: Float32Array, segCount: number, boundsMin: Array<number>, boundsMax: Array<number>}}
+   * @returns {{segments: Float32Array, segCount: number, boundsMin: Array<number>, boundsMax: Array<number>,
+   *   vegetation: Float32Array}}
    */
   emitBranchTubes(opts) {}
 
@@ -450,11 +494,30 @@ class FloraWorld {
    * count per segment is `floor(length * perUnitLength * weight + hash)`,
    * capped at 4096, with the filters of `opts` (maxRadius, minDepth,
    * terminalOnly, densityWeight) applied; the jitter / scale fields are left
-   * to the shader. Bounds are unpadded ([0,0,0] when empty).
+   * to the shader. Bounds are unpadded ([0,0,0] when empty). `vegetation`
+   * holds 12 floats per kept segment (see "Vegetation records").
    * @param {FloraLeafPlacementOptions} [opts]
-   * @returns {{segments: Float32Array, segCount: number, instSeg: Float32Array, instanceCount: number, boundsMin: Array<number>, boundsMax: Array<number>}}
+   * @returns {{segments: Float32Array, segCount: number, instSeg: Float32Array, instanceCount: number, boundsMin: Array<number>, boundsMax: Array<number>, vegetation: Float32Array}}
    */
   emitScatterSegments(opts) {}
+
+  /**
+   * One 16-float vegetation record per leaf, in lockstep with
+   * `emitFoliageTransforms(opts)` (same options, same leaves): pass both to
+   * createInstancedMesh (`instances`, `vegetation`) and the leaves sway.
+   * @param {FloraLeafPlacementOptions} [opts]
+   * @returns {Float32Array} 16 floats per leaf.
+   */
+  emitFoliageVegetation(opts) {}
+
+  /**
+   * One 16-float vegetation record per world segment, in lockstep with
+   * `emitSegmentTransforms()`: wood, weighted at the segment's base (an
+   * instance is rigid, so a segment's tip does not take the extra bend its
+   * child's base does).
+   * @returns {Float32Array} 16 floats per segment.
+   */
+  emitSegmentVegetation() {}
 
   // ── Blooms ──
 

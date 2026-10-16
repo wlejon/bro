@@ -7,6 +7,7 @@
 #include <bromesh/manipulation/transform.h>
 #include <bromesh/analysis/bbox.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 
@@ -144,6 +145,26 @@ void InstancedMeshNode::setTubeSegments(const float* segData, size_t segCount,
     tubeBounds_.min = {boundsMin[0], boundsMin[1], boundsMin[2]};
     tubeBounds_.max = {boundsMax[0], boundsMax[1], boundsMax[2]};
     bumpChangeGeneration();
+}
+
+void InstancedMeshNode::setVegetation(const float* data, size_t floats) {
+    if (data && floats) vegetation_.assign(data, data + floats);
+    else vegetation_.clear();
+    // Every record starts (root.xyz, height): the height is float 3 at either
+    // stride.
+    const size_t stride = (scatterMode_ || tubeMode_) ? 12 : 16;
+    vegetationHeight_ = 0.0f;
+    for (size_t i = 3; i < vegetation_.size(); i += stride) {
+        if (std::isfinite(vegetation_[i])) vegetationHeight_ = std::max(vegetationHeight_, vegetation_[i]);
+    }
+    bumpChangeGeneration();
+}
+
+bool InstancedMeshNode::hasVegetation() const {
+    if (vegetation_.empty()) return false;
+    if (scatterMode_) return vegetation_.size() == scatterSegCount_ * 12;
+    if (tubeMode_) return vegetation_.size() == tubeSegCount_ * 12;
+    return vegetation_.size() == instanceCount_ * 16;
 }
 
 void InstancedMeshNode::setBaseColorTexture(int w, int h, const uint8_t* rgba) { baseColorTex_.set(w, h, rgba); }

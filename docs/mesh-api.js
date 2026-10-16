@@ -71,6 +71,8 @@
  * @property {Uint32Array} [indices] -  triangle indices; length must be a multiple of 3
  *   (TypeError otherwise), and every index must name a vertex of `positions`
  *   (RangeError otherwise).
+ * @property {Float32Array} [tangents] -  xyz + handedness w, stride 4; one per vertex.
+ * @property {Float32Array} [vegetation] -  wind-sway records, 16 floats per vertex (Mesh#vegetation).
  */
 
 /**
@@ -275,6 +277,17 @@ class Mesh {
 
   /** @type {Float32Array} rgba, stride 4; one per vertex. */
   colors;
+
+  /**
+   * Vegetation sway data, 16 floats per vertex, or empty: four vec4s in mesh
+   * space, (root.xyz, height), (crown.xyz, crownRadius), (anchor.xyz,
+   * branchWeight), (axis.xyz, phase). bro.flora's emitters write it and a
+   * mesh node that carries it sways in the scene's wind; the layout is in
+   * scene-nodes-api.js "Vegetation". Operations that rebuild the vertex set
+   * (weld, simplify, merge) drop it.
+   * @type {Float32Array}
+   */
+  vegetation;
 
   /** @type {Uint32Array} triangle indices; setting one out of range throws. */
   indices;

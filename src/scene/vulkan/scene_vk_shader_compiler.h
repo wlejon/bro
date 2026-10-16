@@ -46,7 +46,16 @@ enum class BuiltinSceneShader {
     TiltCompositeFrag,
     MeshScatterVert,
     MeshTubeVert,
-    ShadowTubeVert
+    ShadowTubeVert,
+    // Vegetation (scene_vegetation.glsl): the SCENE_VEGETATION builds of the
+    // mesh / shadow vertex stages and of mesh.frag, plus the scatter caster.
+    MeshVegVert,
+    MeshInstancedVegVert,
+    MeshVegFrag,
+    MeshVegIndirectFrag,
+    ShadowVegVert,
+    ShadowInstancedVegVert,
+    ShadowScatterVert
 };
 
 /// The scene's shader modules: the built-in shaders (compiled at build time)

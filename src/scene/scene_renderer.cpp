@@ -41,6 +41,14 @@ int SceneRenderer::targetHeight() const {
     return h < 1 ? 1 : h;
 }
 
+float SceneRenderer::vegetationReach(float height, const bromath::Mat4& world) const {
+    if (windFieldCalm(windField())) return 0.0f;
+    // The node's vertical scale takes the record's height into the world.
+    const float sy = std::sqrt(world.data[4] * world.data[4] + world.data[5] * world.data[5] +
+                               world.data[6] * world.data[6]);
+    return windSwayReach(windField_, height * sy);
+}
+
 // Conservative world-space bounds per cullable node type. The contract is
 // strict — the box must contain everything the node can rasterize this frame,
 // so culling can never pop visible content: skinned meshes use palette-posed
@@ -60,8 +68,12 @@ std::optional<bromath::AABB3> SceneRenderer::nodeWorldBounds(SceneNode* n) const
         // |windDir| * strength * windMask (per-vertex bend <= 1). cullMargin
         // is the user's promise about custom-vertex-shader displacement —
         // the engine can't infer it from GLSL (see setCullMargin).
-        const float pad = m->windMask() * windStrength_ * bromath::vlen(Vec3{windDir_[0], windDir_[1], windDir_[2]}) +
-                          m->cullMargin();
+        // Vegetation sways in the wind field instead, by at most its reach.
+        const float pad = m->vegetationHeight() > 0.0f
+                              ? vegetationReach(m->vegetationHeight(), m->worldMatrix()) + m->cullMargin()
+                              : m->windMask() * windStrength_ *
+                                        bromath::vlen(Vec3{windDir_[0], windDir_[1], windDir_[2]}) +
+                                    m->cullMargin();
         if (pad > 0.0f) {
             out.min = out.min - Vec3{pad, pad, pad};
             out.max = out.max + Vec3{pad, pad, pad};
@@ -72,7 +84,8 @@ std::optional<bromath::AABB3> SceneRenderer::nodeWorldBounds(SceneNode* n) const
         auto* m = static_cast<InstancedMeshNode*>(n);
         float lo[3], hi[3];
         if (!m->computeWorldInstanceBounds(lo, hi)) return std::nullopt;
-        const float pad = m->cullMargin();
+        const float pad = m->cullMargin() +
+                          (m->hasVegetation() ? vegetationReach(m->vegetationHeight(), m->worldMatrix()) : 0.0f);
         out.min = {lo[0] - pad, lo[1] - pad, lo[2] - pad};
         out.max = {hi[0] + pad, hi[1] + pad, hi[2] + pad};
         return out;

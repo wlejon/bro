@@ -54,6 +54,7 @@ enum class TextureSlot : uint32_t {
 struct GpuMesh {
     SceneVkBuffer vertices;   // PackedVertex (64 bytes)
     SceneVkBuffer indices;    // uint32
+    SceneVkBuffer vegetation; // MeshData::vegetation (64 bytes a vertex), when the mesh has it
     uint32_t indexCount = 0;
     uint64_t generation = 0;
 };

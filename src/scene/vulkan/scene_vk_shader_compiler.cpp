@@ -8,6 +8,7 @@
 #include "scene_atmosphere.glsl.src.h"
 #include "scene_mesh_push.glsl.src.h"
 #include "scene_shadow_push.glsl.src.h"
+#include "scene_vegetation.glsl.src.h"
 
 #include <cstring>
 #include <sstream>
@@ -24,6 +25,7 @@ const char* includedSource(const std::string& name) {
         {"scene_atmosphere.glsl", kVkSceneAtmosphereSrc},
         {"scene_mesh_push.glsl", kVkSceneMeshPushSrc},
         {"scene_shadow_push.glsl", kVkSceneShadowPushSrc},
+        {"scene_vegetation.glsl", kVkSceneVegetationSrc},
     };
     for (const auto& inc : kIncludes) {
         if (name == inc.name) return inc.source;
@@ -169,6 +171,27 @@ static const uint32_t kSpvMeshTubeVert[] =
 static const uint32_t kSpvShadowTubeVert[] =
 #include "shadow_tube.vert.spv.h"
 ;
+static const uint32_t kSpvMeshVegVert[] =
+#include "mesh_veg.vert.spv.h"
+;
+static const uint32_t kSpvMeshInstancedVegVert[] =
+#include "mesh_instanced_veg.vert.spv.h"
+;
+static const uint32_t kSpvMeshVegFrag[] =
+#include "mesh_veg.frag.spv.h"
+;
+static const uint32_t kSpvMeshVegIndirectFrag[] =
+#include "mesh_veg_indirect.frag.spv.h"
+;
+static const uint32_t kSpvShadowVegVert[] =
+#include "shadow_veg.vert.spv.h"
+;
+static const uint32_t kSpvShadowInstancedVegVert[] =
+#include "shadow_instanced_veg.vert.spv.h"
+;
+static const uint32_t kSpvShadowScatterVert[] =
+#include "shadow_scatter.vert.spv.h"
+;
 
 template<size_t N>
 std::vector<uint32_t> arrayToVector(const uint32_t (&arr)[N]) {
@@ -242,6 +265,13 @@ const std::vector<uint32_t>& SceneVkShaderCompiler::getBuiltinSpirv(BuiltinScene
     static const std::vector<uint32_t> s_meshScatterVert = arrayToVector(kSpvMeshScatterVert);
     static const std::vector<uint32_t> s_meshTubeVert = arrayToVector(kSpvMeshTubeVert);
     static const std::vector<uint32_t> s_shadowTubeVert = arrayToVector(kSpvShadowTubeVert);
+    static const std::vector<uint32_t> s_meshVegVert = arrayToVector(kSpvMeshVegVert);
+    static const std::vector<uint32_t> s_meshInstancedVegVert = arrayToVector(kSpvMeshInstancedVegVert);
+    static const std::vector<uint32_t> s_meshVegFrag = arrayToVector(kSpvMeshVegFrag);
+    static const std::vector<uint32_t> s_meshVegIndirectFrag = arrayToVector(kSpvMeshVegIndirectFrag);
+    static const std::vector<uint32_t> s_shadowVegVert = arrayToVector(kSpvShadowVegVert);
+    static const std::vector<uint32_t> s_shadowInstancedVegVert = arrayToVector(kSpvShadowInstancedVegVert);
+    static const std::vector<uint32_t> s_shadowScatterVert = arrayToVector(kSpvShadowScatterVert);
     static const std::vector<uint32_t> s_empty;
 
     switch (shader) {
@@ -283,6 +313,13 @@ const std::vector<uint32_t>& SceneVkShaderCompiler::getBuiltinSpirv(BuiltinScene
         case BuiltinSceneShader::MeshScatterVert: return s_meshScatterVert;
         case BuiltinSceneShader::MeshTubeVert: return s_meshTubeVert;
         case BuiltinSceneShader::ShadowTubeVert: return s_shadowTubeVert;
+        case BuiltinSceneShader::MeshVegVert: return s_meshVegVert;
+        case BuiltinSceneShader::MeshInstancedVegVert: return s_meshInstancedVegVert;
+        case BuiltinSceneShader::MeshVegFrag: return s_meshVegFrag;
+        case BuiltinSceneShader::MeshVegIndirectFrag: return s_meshVegIndirectFrag;
+        case BuiltinSceneShader::ShadowVegVert: return s_shadowVegVert;
+        case BuiltinSceneShader::ShadowInstancedVegVert: return s_shadowInstancedVegVert;
+        case BuiltinSceneShader::ShadowScatterVert: return s_shadowScatterVert;
         default: return s_empty;
     }
 }

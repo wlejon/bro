@@ -243,6 +243,29 @@
         let d_opts = opts === undefined || opts === null ? {} : opts;
         if (Array.isArray(opts) || ArrayBuffer.isView(opts)) d_opts = { direction: opts, strength: speed };
         __bro_native.scene.SceneGraph_setWind(this, d_opts.direction === undefined ? EMPTY_F64 : toF64(d_opts.direction), d_opts.strength !== undefined, d_opts.strength === undefined ? 0 : d_opts.strength, d_opts.frequency !== undefined, d_opts.frequency === undefined ? 0 : d_opts.frequency);
+        // The wind field vegetation bends with; a field left out keeps its
+        // value (NaN tells the native to).
+        const num = (v) => (v === undefined || v === null) ? NaN : +v;
+        __bro_native.scene.SceneGraph_setWindField(this, toF64([num(d_opts.speed), num(d_opts.gust), num(d_opts.gustSpeed), num(d_opts.gustScale), num(d_opts.drift)]));
+    });
+    fn(SceneGraph.prototype, "windAt", function windAt(x, y, z) {
+        // windAt(x, y, z) / windAt([x, y, z]) / windAt(x, z): the wind field
+        // at an absolute world point now, as the vegetation shaders see it.
+        if (Array.isArray(x) || ArrayBuffer.isView(x)) { z = x.length > 2 ? x[2] : x[1]; x = x[0]; }
+        else if (z === undefined) z = y;
+        if (x === undefined || z === undefined) throw new TypeError("bro.scene.SceneGraph.prototype.windAt: x and z are required");
+        const r = __bro_native.scene.SceneGraph_windAt(this, +x, +z);
+        if (r.length < 5) return null;
+        return { velocity: [r[0], r[1], r[2]], gust: r[3], speed: r[4] };
+    });
+    fn(SceneGraph.prototype, "wind", function wind() {
+        const r = __bro_native.scene.SceneGraph_windState(this);
+        if (r.length < 14) return null;
+        return {
+            direction: [r[0], r[1], r[2]], strength: r[3], frequency: r[4],
+            speed: r[5], gust: r[6], gustSpeed: r[7], gustScale: r[8], drift: r[9],
+            time: r[10], now: { direction: [r[11], 0, r[12]], speed: r[13] },
+        };
     });
     fn(SceneGraph.prototype, "setShadowQuality", function setShadowQuality(opts, pcfTaps) {
         // setShadowQuality({ atlasSize, pcfTaps }) or the positional

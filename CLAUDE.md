@@ -102,7 +102,7 @@ Annotated `.js` files with JSDoc + examples. Read the file before using or chang
 | `mesh-io-api.js` | `bro.mesh` IO half: loaders/savers, Draco, splat clouds, isosurface + voxel statics, `PolyMesh`, `SDFGraph` |
 | `mesh-plants-api.js` | `bro.mesh` procedural half: sweeps, leaf/flower cards, branch trees, scattering, `CapsuleField`, `LSystem` |
 | `rigging-api.js` | `bro.rigging`: skins, skeletons, poses, clips, IK, `Rig.autoRig`, glTF rigged assets |
-| `flora-api.js` | `bro.flora` ecosystem sim: prototypes, step, mesh/foliage/bloom emit |
+| `flora-api.js` | `bro.flora` ecosystem sim: prototypes, step, mesh/foliage/bloom emit, the vegetation records bro.scene sways |
 | `math-api.js` | `bro.math`, bromath types in JS (`SpatialHash3D`) |
 | `noise-api.js` | global `FastNoise`, FastNoise2 SIMD noise |
 | `image-api.js` | `bro.image` typed-array kernels (CPU, broimage): decode/EXIF, encode/KTX2, geometry, color, preproc, presets |
@@ -119,7 +119,7 @@ Annotated `.js` files with JSDoc + examples. Read the file before using or chang
 | `intl-api.js` | `Intl` (ECMA-402): `NumberFormat`, `DateTimeFormat`, `PluralRules`, `Collator`, `ListFormat`, `RelativeTimeFormat`, `DisplayNames` |
 | `text-api.js` | `bro.text`: render-layer text shaping (`shape`, `byteOffsetToX`, `xToByteOffset`, `clusterRange`, `cacheStats`) and UAX #9 bidi diagnostics |
 | `scene-api.js` | `bro.scene`: `SceneGraph` + `SceneNode` core: hierarchy, transforms, cameras, render settings, raycast/project, capture, `attachTo` |
-| `scene-nodes-api.js` | `bro.scene` node types: create* options (mesh/skinned/instanced, splats, shapes, sprites, HTML, lights, particles, decals, probes), `bro.impostor`, per-type SceneNode members (shaders, LOD, instances, skeletal playback) |
+| `scene-nodes-api.js` | `bro.scene` node types: create* options (mesh/skinned/instanced, splats, shapes, sprites, HTML, lights, particles, decals, probes), `bro.impostor`, per-type SceneNode members (shaders, LOD, instances, vegetation wind sway, skeletal playback) |
 | `animation-api.js` | `scene.createAnimationPlayer()`: data-driven keyframe clips for node properties, plus skeletal blend spaces, layered blending, and an authored state machine |
 | `lighting-api.js` | PBR lighting: LightNode, materials, tonemap, ambient |
 | `net-api.js` | `bro.net`: game networking (host/connect/send) via GNS |

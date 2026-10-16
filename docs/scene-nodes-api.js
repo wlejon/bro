@@ -162,6 +162,7 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  * @property {number} [atlasCols] - atlas grid columns (the other defaults to 1)
  * @property {number} [atlasRows] - atlas grid rows
  * @property {boolean} [staticBatch] - merge all instances into one draw
+ * @property {Float32Array} [vegetation] - wind-sway records, 16 floats per instance (see "Vegetation")
  * @property {Array<number>} [position]
  * @property {Array<number>} [rotation]
  * @property {Array<number>} [scale]
@@ -652,6 +653,59 @@ class SceneNode {
    */
   instanceCount;
 
+  // ── Vegetation (MeshNode, InstancedMeshNode) ────────────────────────────
+  //
+  // Plants that move like plants in the scene's wind field (scene-api.js
+  // setWind / windAt), all on the GPU, from records bro.flora's emitters
+  // write (flora-api.js "Vegetation records"): emit, create the nodes, and
+  // the trees sway with no further code.
+  //
+  // A record is 16 floats in node space — per vertex in a Mesh
+  // (`mesh.vegetation`, vertexCount * 16), per instance on an instanced mesh
+  // (the `vegetation` option or setVegetation):
+  //
+  //   0-3   root.xyz, height        the plant's base and height
+  //   4-7   crown.xyz, crownRadius  its leafy volume; radius 0: no bulk normal
+  //   8-11  anchor.xyz, weight      where a leaf hangs; branch weight 0 at the trunk .. 1 at a twig tip
+  //   12-15 axis.xyz, phase         a leaf's stem direction (zero on wood); its limb's phase in [0, 1)
+  //
+  // Branch tubes and foliage scatter (setTubeSegments / setScatterSegments)
+  // take 12 floats per segment instead — root.xyz, height, crown.xyz,
+  // crownRadius, weightFrom, weightTo, phase, 0 — and the shader interpolates
+  // the weight along the segment and anchors each leaf where it hangs.
+  //
+  // The motion: the trunk leans into the gust and sways slowly, growing with
+  // (height above the root / height)²; each limb bobs and swings on its own
+  // phase, scaled by weight², so twigs move most and a limb never tears from
+  // the trunk; a leaf rides its twig, then flutters about its stem (showing
+  // its paler underside) and pitches, harder in a gust. The gust is the
+  // band over the plant's root, so a gust crosses a grove tree by tree. The
+  // shadow pass runs the same displacement.
+  //
+  // The look: a leaf's normal leans toward its crown's centre-out direction
+  // so the crown lights as one form, leaves deep inside the crown take less
+  // sky, bark darkens toward the ground, and the sun glows through leaves
+  // seen against it (stronger with `subsurface`).
+  //
+  // A node with a custom shader, a static batch or line drawing ignores its
+  // records; scatter leaves with records cast shadows when castsShadow is on.
+  // Records replace the legacy `wind` vertex-colour sway on that node.
+
+  /**
+   * InstancedMeshNode: the vegetation records — 16 floats per instance, or
+   * 12 per segment after setTubeSegments / setScatterSegments (which also
+   * take them as `vegetation`). A length that does not match the instances
+   * or segments leaves the node still. An empty array clears them.
+   *
+   * @example
+   *   const tubes = world.emitBranchTubes();          // carries .vegetation
+   *   const bark = scene.createInstancedMesh({ color: '#5a4636' });
+   *   bark.setTubeSegments(tubes);                    // sways in the wind field
+   * @param {Float32Array} data
+   * @returns {SceneNode}
+   */
+  setVegetation(data) {}
+
   // ── Textures from pixels ────────────────────────────────────────────────
 
   /**
@@ -863,7 +917,9 @@ class SceneNode {
    * its branch segment in the vertex shader — up bias, tilt / roll / scale
    * jitter as bromesh's placeLeavesOnBranches, from a hash of the leaf index,
    * so placement is deterministic. Replaces the instance rows. Leaves cast no
-   * shadow. The object `world.emitScatterSegments()` (flora-api.js) returns.
+   * shadow unless they carry `vegetation` records (12 floats per segment,
+   * "Vegetation"), which also sway them. The object
+   * `world.emitScatterSegments()` (flora-api.js) returns.
    *
    * @example
    *   const leaves = scene.createInstancedMesh({ mesh: Mesh.plane(0.08, 0.15), color: '#3a7', doubleSided: true });
@@ -875,7 +931,7 @@ class SceneNode {
    * @param {{segments: Float32Array, instSeg: Float32Array, seed?: number, upBias?: number,
    *   tiltJitter?: number, rollJitter?: number, baseScale?: number, scaleJitter?: number,
    *   scaleByRadius?: number, maxRadius?: number, densityFalloff?: number,
-   *   boundsMin?: Array<number>, boundsMax?: Array<number>}} opts
+   *   boundsMin?: Array<number>, boundsMax?: Array<number>, vegetation?: Float32Array}} opts
    */
   setScatterSegments(opts) {}
 
@@ -883,11 +939,12 @@ class SceneNode {
    * InstancedMesh: GPU branch tubes. Each segment (8 floats: from.xyz,
    * radiusFrom, to.xyz, radiusTo) draws a tapered `sides`-sided tube wall
    * with no end caps, built in the vertex shader — no mesh, no instance rows.
-   * Lit with the node's material; casts and receives shadows. The object
+   * Lit with the node's material; casts and receives shadows; sways with
+   * `vegetation` records (12 floats per segment, "Vegetation"). The object
    * `world.emitBranchTubes()` (flora-api.js) returns.
    *
    * @param {{segments: Float32Array, sides?: number, radiusScale?: number,
-   *   boundsMin?: Array<number>, boundsMax?: Array<number>}} opts
+   *   boundsMin?: Array<number>, boundsMax?: Array<number>, vegetation?: Float32Array}} opts
    */
   setTubeSegments(opts) {}
 

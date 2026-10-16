@@ -312,6 +312,20 @@ public:
         }
     }
 
+    // --- Vegetation (wind sway) ---
+    // Per-instance or per-segment records that bend the node in the scene's
+    // wind field (scene/wind_field.h; layout in docs/scene-nodes-api.js
+    // "Vegetation"): 16 floats an instance, (root.xyz, height) (crown.xyz,
+    // crownRadius) (anchor.xyz, weight) (axis.xyz, phase); or, for a scatter
+    // or tube node, 12 floats a segment, (root.xyz, height) (crown.xyz,
+    // crownRadius) (weightFrom, weightTo, phase, 0). Records that do not
+    // match the node's instances / segments are kept but not drawn.
+    void setVegetation(const float* data, size_t floats);
+    const std::vector<float>& vegetation() const { return vegetation_; }
+    bool hasVegetation() const;
+    /// The tallest record's height (node space): how far the sway can reach.
+    float vegetationHeight() const { return vegetationHeight_; }
+
     // --- Culling margin ---
     // Extra world-space padding added to the whole-node culling bounds —
     // same contract as MeshNode::setCullMargin (vertex displacement doesn't
@@ -343,6 +357,8 @@ private:
     void instancesChanged();
 
     bromesh::MeshData mesh_;
+    std::vector<float> vegetation_;
+    float vegetationHeight_ = 0.0f;
     uint64_t geometryGeneration_ = nextResourceGeneration();
     bromath::AABB3 bounds_;
 

@@ -302,6 +302,10 @@ public:
     /// vertex-coloured meshes don't ripple. Flora meshes set this to 1.
     void setWindMask(float m) { windMask_ = m; }
     float windMask() const { return windMask_; }
+    /// A mesh carrying MeshData::vegetation bends in the scene's wind field
+    /// (docs/scene-nodes-api.js "Vegetation"); this is its tallest record's
+    /// height (node space), how far the sway can reach.
+    float vegetationHeight() const { return vegetationHeight_; }
 
     // --- Shade map ---
     // A per-cell scalar sampled after lighting (see shade_map.h). Set by a
@@ -531,6 +535,7 @@ private:
     float subsurface_ = 0.0f;
     float alphaCutoff_ = 0.0f;
     float windMask_ = 0.0f;
+    float vegetationHeight_ = 0.0f;
 
     DrawMode drawMode_ = DrawMode::Triangles;
     float lineWidth_ = 1.0f;

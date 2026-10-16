@@ -74,6 +74,7 @@ const GpuMesh* SceneGpuResources::mesh(uint32_t id, uint32_t slot, uint64_t gene
 
     allocator_.destroyBuffer(entry.vertices);
     allocator_.destroyBuffer(entry.indices);
+    allocator_.destroyBuffer(entry.vegetation);
     entry = GpuMesh{};
 
     const size_t vc = data.vertexCount();
@@ -85,17 +86,20 @@ const GpuMesh* SceneGpuResources::mesh(uint32_t id, uint32_t slot, uint64_t gene
         for (uint32_t i = 0; i < vc; ++i) sequential[i] = i;
         indices = &sequential;
     }
+    const size_t vegBytes = data.hasVegetation() ? data.vegetation.size() * sizeof(float) : 0;
     if (!allocator_.createVertexBuffer(vc * sizeof(PackedVertex), vertices.data(), entry.vertices) ||
-        !allocator_.createIndexBuffer(indices->size() * sizeof(uint32_t), indices->data(), entry.indices)) {
+        !allocator_.createIndexBuffer(indices->size() * sizeof(uint32_t), indices->data(), entry.indices) ||
+        (vegBytes && !allocator_.createVertexBuffer(vegBytes, data.vegetation.data(), entry.vegetation))) {
         LOG_ERROR("SceneGpuResources: Failed uploading mesh of node %u (%zu vertices)", id, vc);
         allocator_.destroyBuffer(entry.vertices);
         allocator_.destroyBuffer(entry.indices);
+        allocator_.destroyBuffer(entry.vegetation);
         meshes_.erase(key(id, slot));
         return nullptr;
     }
     entry.indexCount = static_cast<uint32_t>(indices->size());
     entry.generation = generation;
-    noteMeshUpload(vc * sizeof(PackedVertex) + indices->size() * sizeof(uint32_t));
+    noteMeshUpload(vc * sizeof(PackedVertex) + indices->size() * sizeof(uint32_t) + vegBytes);
     return &entry;
 }
 
@@ -346,6 +350,7 @@ void SceneGpuResources::releaseNodes(std::span<const uint32_t> ids) {
         eraseNode(meshes_, id, [&](GpuMesh& m) {
             allocator_.destroyBuffer(m.vertices);
             allocator_.destroyBuffer(m.indices);
+            allocator_.destroyBuffer(m.vegetation);
         });
         eraseNode(textures_, id, [&](Texture& t) { allocator_.destroyImage(t.image); });
         if (auto it = skins_.find(id); it != skins_.end()) {
@@ -363,6 +368,7 @@ void SceneGpuResources::cleanup() {
     for (auto& [k, m] : meshes_) {
         allocator_.destroyBuffer(m.vertices);
         allocator_.destroyBuffer(m.indices);
+        allocator_.destroyBuffer(m.vegetation);
     }
     meshes_.clear();
     for (auto& [k, t] : textures_) allocator_.destroyImage(t.image);

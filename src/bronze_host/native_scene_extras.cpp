@@ -104,6 +104,7 @@ bool meshDataOf(uint64_t meshBits, bromesh::MeshData& out, const char* who) {
     readFloatVector(ev::getProperty(meshVal, "uvs"), out.uvs);
     readFloatVector(ev::getProperty(meshVal, "colors"), out.colors);
     readFloatVector(ev::getProperty(meshVal, "tangents"), out.tangents);
+    readFloatVector(ev::getProperty(meshVal, "vegetation"), out.vegetation);
     if (out.normals.empty() && !out.positions.empty()) bromesh::computeNormals(out);
     return true;
 }
@@ -438,6 +439,15 @@ void bro_scene_SceneNode_setTubeSegments(void* self, const float* seg, uint32_t 
     im->setTubeSegments(seg, segCount, sides, rs, bmin, bmax);
 }
 
+// setVegetation(Float32Array): the wind-sway records of an instanced node —
+// 16 floats per instance, or 12 per segment of a scatter / tube node
+// (docs/scene-nodes-api.js "Vegetation"). An empty array clears them.
+void bro_scene_SceneNode_setVegetation(void* self, const float* data, uint32_t len) {
+    auto* im = instancedOf(self);
+    if (!im) { ev::throwTypeError("setVegetation: node is not an InstancedMesh"); return; }
+    im->setVegetation(data, len);
+}
+
 bool bro_scene_SceneNode_isScatter(void* self) {
     auto* im = instancedOf(self);
     return im ? im->isScatter() : false;
@@ -492,6 +502,7 @@ bool registerSceneExtraNatives(std::string* error) {
            fn("__bro_native.scene.SceneNode_setAtlasGrid", (void*)&bro_scene_SceneNode_setAtlasGrid, "void", {N, "i32", "i32"}, error) &&
            fn("__bro_native.scene.SceneNode_setScatterSegments", (void*)&bro_scene_SceneNode_setScatterSegments, "void", {N, "f32[]", "f32[]", "f64[]", "f32[]"}, error) &&
            fn("__bro_native.scene.SceneNode_setTubeSegments", (void*)&bro_scene_SceneNode_setTubeSegments, "void", {N, "f32[]", "i32", "f64", "f32[]"}, error) &&
+           fn("__bro_native.scene.SceneNode_setVegetation", (void*)&bro_scene_SceneNode_setVegetation, "void", {N, "f32[]"}, error) &&
            fn("__bro_native.scene.SceneNode_isScatter", (void*)&bro_scene_SceneNode_isScatter, "bool", {N}, error) &&
            fn("__bro_native.scene.SceneNode_isTube", (void*)&bro_scene_SceneNode_isTube, "bool", {N}, error) &&
            fn("__bro_native.scene.SceneNode_anchorX_get", (void*)&bro_scene_SceneNode_anchorX_get, "f64", {N}, error) &&

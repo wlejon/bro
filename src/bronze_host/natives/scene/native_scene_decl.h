@@ -537,6 +537,21 @@ void bro_scene_SceneGraph_setAmbient(void* self, const double* opts_color, uint3
 //   opts_strength_given, opts_frequency_given: false when the value was not passed (no declared default)
 void bro_scene_SceneGraph_setWind(void* self, const double* opts_direction, uint32_t opts_direction_len, bool opts_strength_given, double opts_strength, bool opts_frequency_given, double opts_frequency);
 
+// bro.scene.SceneGraph.prototype.setWind (the wind-field half)
+//   registered at __bro_native.scene.SceneGraph_setWindField
+//   params: [speed, gust, gustSpeed, gustScale, drift]
+void bro_scene_SceneGraph_setWindField(void* self, const double* params, uint32_t params_len);
+
+// bro.scene.SceneGraph.prototype.windAt
+//   registered at __bro_native.scene.SceneGraph_windAt
+//   result: f64[] in *out; out->release == NULL, the runtime copies
+void bro_scene_SceneGraph_windAt(void* self, double x, double z, bronze_native_buffer* out);
+
+// bro.scene.SceneGraph.prototype.wind
+//   registered at __bro_native.scene.SceneGraph_windState
+//   result: f64[] in *out; out->release == NULL, the runtime copies
+void bro_scene_SceneGraph_windState(void* self, bronze_native_buffer* out);
+
 // bro.scene.SceneGraph.prototype.setShadowQuality
 //   registered at __bro_native.scene.SceneGraph_setShadowQuality
 //   opts_atlasSize_given, opts_pcfTaps_given: false when the value was not passed (no declared default)

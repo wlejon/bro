@@ -10,6 +10,7 @@
 #include "scene/atmosphere.h"
 #include "scene/light_node.h"
 #include "scene/shadow_plan.h"
+#include "scene/wind_field.h"
 
 #include <bromath/aabb.h>
 #include <bromath/frustum.h>
@@ -266,6 +267,15 @@ public:
     void resetWindTime() { windTime_ = 0.0f; }
     float windTime() const { return windTime_; }
 
+    /// The wind field vegetation bends with (wind_field.h). It blows along
+    /// setWind's direction; a light breeze until set.
+    void setWindField(const WindFieldParams& p) { windField_ = p; }
+    const WindFieldParams& windFieldParams() const { return windField_; }
+    WindFieldState windField() const { return windFieldState(windDir_, windField_, windTime_); }
+    /// How far a plant `height` tall (node units) under `world` can sway:
+    /// the culling pad of a node carrying vegetation records (0 in a calm).
+    float vegetationReach(float height, const bromath::Mat4& world) const;
+
     /// `atlasSize` is the side of the square depth atlas (default 4096).
     /// `pcfTaps` is the side of the receiver's PCF grid: 1 (one hardware-
     /// bilinear tap), 3 (3x3 taps, a 4-texel tent — default) or 5 (5x5 taps,
@@ -482,6 +492,7 @@ private:
     float windStrength_ = 0.0f;
     float windFreq_ = 1.5f;
     float windTime_ = 0.0f;
+    WindFieldParams windField_;
 
     // Editor affordance: render a marker icon per LightNode and include
     // them in raycast results.

@@ -25,9 +25,11 @@ constexpr uint32_t kBonePaletteSize = 256;
 
 SceneRenderer::CustomShaderTarget shaderTarget(MeshKind kind) {
     switch (kind) {
-    case MeshKind::Instanced: return SceneRenderer::CustomShaderTarget::Instanced;
+    case MeshKind::Instanced:
+    case MeshKind::InstancedVegetation: return SceneRenderer::CustomShaderTarget::Instanced;
     case MeshKind::Skinned: return SceneRenderer::CustomShaderTarget::Skinned;
     case MeshKind::Static:
+    case MeshKind::Vegetation:
     case MeshKind::Scatter:
     case MeshKind::Tube: break;
     }
@@ -51,12 +53,21 @@ void SceneMeshDrawer::vertexInput(MeshKind kind, std::vector<VkVertexInputBindin
         {3, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 32},   // colour
         {4, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 48},   // tangent
     };
-    if (kind == MeshKind::Instanced) {
+    // The vegetation record: four vec4s at locations 12-15 (scene_vegetation.glsl).
+    const auto vegetation = [&](uint32_t binding, VkVertexInputRate rate) {
+        bindings.push_back({binding, 64, rate});
+        for (uint32_t i = 0; i < 4; ++i)
+            attributes.push_back({12 + i, binding, VK_FORMAT_R32G32B32A32_SFLOAT, 16 * i});
+    };
+    if (kind == MeshKind::Instanced || kind == MeshKind::InstancedVegetation) {
         bindings.push_back({1, 64, VK_VERTEX_INPUT_RATE_INSTANCE});
         attributes.push_back({8, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 0});    // row 0
         attributes.push_back({9, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 16});   // row 1
         attributes.push_back({10, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 32});  // row 2
         attributes.push_back({11, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 48});  // colour
+        if (kind == MeshKind::InstancedVegetation) vegetation(2, VK_VERTEX_INPUT_RATE_INSTANCE);
+    } else if (kind == MeshKind::Vegetation) {
+        vegetation(1, VK_VERTEX_INPUT_RATE_VERTEX);
     } else if (kind == MeshKind::Skinned) {
         bindings.push_back({1, SceneGpuResources::kSkinStride, VK_VERTEX_INPUT_RATE_VERTEX});
         attributes.push_back({5, 1, VK_FORMAT_R16G16B16A16_UINT, 0});      // joints
@@ -94,9 +105,16 @@ bool SceneMeshDrawer::setup(SceneGpu& gpu) {
         SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshScatterVert);
     vs_[static_cast<int>(MeshKind::Tube)] =
         SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshTubeVert);
+    vs_[static_cast<int>(MeshKind::Vegetation)] =
+        SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshVegVert);
+    vs_[static_cast<int>(MeshKind::InstancedVegetation)] =
+        SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshInstancedVegVert);
     fs_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshFrag);
     fsIndirect_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshIndirectFrag);
-    if (std::find(std::begin(vs_), std::end(vs_), VK_NULL_HANDLE) != std::end(vs_) || !fs_ || !fsIndirect_) {
+    fsVeg_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshVegFrag);
+    fsVegIndirect_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshVegIndirectFrag);
+    if (std::find(std::begin(vs_), std::end(vs_), VK_NULL_HANDLE) != std::end(vs_) || !fs_ || !fsIndirect_ ||
+        !fsVeg_ || !fsVegIndirect_) {
         LOG_ERROR("SceneMeshDrawer: Failed creating the mesh shader modules");
         return false;
     }
@@ -116,7 +134,9 @@ void SceneMeshDrawer::cleanup(SceneGpu& gpu) {
     }
     SceneVkShaderModule::destroy(device_, fs_);
     SceneVkShaderModule::destroy(device_, fsIndirect_);
-    fs_ = fsIndirect_ = VK_NULL_HANDLE;
+    SceneVkShaderModule::destroy(device_, fsVeg_);
+    SceneVkShaderModule::destroy(device_, fsVegIndirect_);
+    fs_ = fsIndirect_ = fsVeg_ = fsVegIndirect_ = VK_NULL_HANDLE;
     if (layout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(device_, layout_, nullptr);
     layout_ = VK_NULL_HANDLE;
 }
@@ -177,7 +197,8 @@ VkPipeline SceneMeshDrawer::builtinPipeline(const MeshDraw& draw, const TargetFo
     const uint32_t rasterBits = rasterVariant(draw);
     const uint32_t variant = static_cast<uint32_t>(draw.kind) * raster::kCount + rasterBits;
     return builtin_.get(variant, target, [&] {
-        VkShaderModule fs = target.colorCount > 1 ? fsIndirect_ : fs_;
+        const bool veg = vegetationShading(draw.kind);
+        VkShaderModule fs = target.colorCount > 1 ? (veg ? fsVegIndirect_ : fsIndirect_) : (veg ? fsVeg_ : fs_);
         return buildPipeline(vs_[static_cast<int>(draw.kind)], fs, draw.kind, rasterBits, target);
     });
 }
@@ -243,21 +264,29 @@ VkDescriptorSet SceneMeshDrawer::boneSet(SceneFrame& frame, const std::vector<fl
     return set;
 }
 
-VkDescriptorSet SceneMeshDrawer::segmentSet(SceneFrame& frame, const float (&header)[12],
+VkDescriptorSet SceneMeshDrawer::segmentSet(SceneFrame& frame, float (&header)[12],
                                             const std::vector<float>& records,
-                                            const std::vector<float>* leafSegments) {
+                                            const std::vector<float>* leafSegments,
+                                            const std::vector<float>* vegetation) {
     const size_t leafFloats = leafSegments ? (leafSegments->size() + 3) / 4 * 4 : 0;
-    const size_t bytes = (12 + records.size() + leafFloats) * sizeof(float);
+    // Records are whole vec4s, so the vegetation starts on one.
+    const size_t recordFloats = (records.size() + 3) / 4 * 4;
+    const size_t vegStart = recordFloats + leafFloats;
+    const size_t vegFloats = vegetation ? vegetation->size() : 0;
+    header[10] = vegetation ? static_cast<float>(vegStart / 4) : 0.0f;
+    const size_t bytes = (12 + vegStart + vegFloats) * sizeof(float);
     const render::UploadSlice slice = frame.gpu.device.frameUpload(bytes);
     if (!slice) return VK_NULL_HANDLE;
     auto* dst = static_cast<float*>(slice.mapped);
     std::memcpy(dst, header, sizeof(header));
     std::memcpy(dst + 12, records.data(), records.size() * sizeof(float));
+    std::fill(dst + 12 + records.size(), dst + 12 + recordFloats, 0.0f);
     if (leafSegments) {
-        float* leaves = dst + 12 + records.size();
+        float* leaves = dst + 12 + recordFloats;
         std::memcpy(leaves, leafSegments->data(), leafSegments->size() * sizeof(float));
         std::fill(leaves + leafSegments->size(), leaves + leafFloats, 0.0f);
     }
+    if (vegetation) std::memcpy(dst + 12 + vegStart, vegetation->data(), vegFloats * sizeof(float));
     VkDescriptorSet set = frame.gpu.device.frameSet(defaults_->boneLayout);
     SceneVkDescriptorWriter writer;
     writer.writeBuffer(1, slice.buffer, bytes, slice.offset, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
@@ -408,7 +437,12 @@ bool SceneMeshDrawer::prepare(SceneFrame& frame, MeshNode& node, MeshDraw& out) 
     // do not cover the mesh) draws its bind pose through the static path.
     SkinnedMeshNode* skinned = node.asSkinnedMesh();
     if (skinned && !skinned->skinReady()) skinned = nullptr;
-    out.kind = skinned ? MeshKind::Skinned : MeshKind::Static;
+    // Vegetation sways in the wind field; a custom shader or line drawing
+    // keeps the plain path (the custom splice owns locations 7 and up).
+    const bool vegetation = !skinned && !node.customShader() && node.drawMode() != MeshNode::DrawMode::Lines &&
+                            gm->vegetation.buffer != VK_NULL_HANDLE;
+    out.kind = skinned ? MeshKind::Skinned : vegetation ? MeshKind::Vegetation : MeshKind::Static;
+    if (vegetation) out.vegetation = gm->vegetation.buffer;
     out.nodeId = node.id();
     out.vertices = gm->vertices.buffer;
     out.indices = gm->indices.buffer;
@@ -480,7 +514,8 @@ bool SceneMeshDrawer::prepareProcedural(SceneFrame& frame, InstancedMeshNode& no
         header[7] = p.refRadius;
         header[8] = p.densityFalloff;
         header[9] = static_cast<float>(node.scatterSegments().size() / 4);   // first leaf-index record
-        out.vertexSet = segmentSet(frame, header, node.scatterSegments(), &node.scatterInstanceSegments());
+        out.vertexSet = segmentSet(frame, header, node.scatterSegments(), &node.scatterInstanceSegments(),
+                                   node.hasVegetation() ? &node.vegetation() : nullptr);
         out.kind = MeshKind::Scatter;
         out.vertices = gm->vertices.buffer;
         out.indices = gm->indices.buffer;
@@ -490,14 +525,17 @@ bool SceneMeshDrawer::prepareProcedural(SceneFrame& frame, InstancedMeshNode& no
         if (node.tubeSegCount() == 0) return false;
         header[0] = static_cast<float>(node.tubeSides());
         header[1] = node.tubeRadiusScale();
-        out.vertexSet = segmentSet(frame, header, node.tubeSegments(), nullptr);
+        out.vertexSet = segmentSet(frame, header, node.tubeSegments(), nullptr,
+                                   node.hasVegetation() ? &node.vegetation() : nullptr);
         out.kind = MeshKind::Tube;
         out.indexCount = static_cast<uint32_t>(node.tubeVertexCount());
     }
     if (!out.vertexSet) return false;
     out.nodeId = node.id();
     fillMaterial(frame, node, out);
-    if (out.kind == MeshKind::Scatter) out.castsShadow = false;   // leaves never cast, as on GL
+    // Plain scatter leaves never cast, as on GL; swaying ones do when asked,
+    // so the dappled light moves with the crown.
+    if (out.kind == MeshKind::Scatter && !node.hasVegetation()) out.castsShadow = false;
     out.twoSided = node.doubleSided();
     out.push.extra[3] = static_cast<float>(std::clamp(node.atlasCols(), 1, 255)) +
                         256.0f * static_cast<float>(std::clamp(node.atlasRows(), 1, 255));
@@ -538,7 +576,19 @@ bool SceneMeshDrawer::prepare(SceneFrame& frame, InstancedMeshNode& node, MeshDr
     if (!rows) return false;
     std::memcpy(rows.mapped, batched ? kIdentityRow : node.instanceData().data(), bytes);
 
+    // Per-instance vegetation records sway each instance (a static batch has
+    // merged them away; a custom shader keeps the plain path).
     out.kind = MeshKind::Instanced;
+    if (!batched && !node.customShader() && node.hasVegetation()) {
+        const size_t vegBytes = count * 16 * sizeof(float);
+        const render::UploadSlice veg = frame.gpu.device.frameUpload(vegBytes);
+        if (veg) {
+            std::memcpy(veg.mapped, node.vegetation().data(), vegBytes);
+            out.kind = MeshKind::InstancedVegetation;
+            out.vegetation = veg.buffer;
+            out.vegetationOffset = veg.offset;
+        }
+    }
     out.nodeId = node.id();
     out.vertices = gm->vertices.buffer;
     out.indices = gm->indices.buffer;
@@ -606,10 +656,35 @@ void SceneMeshDrawer::bindGeometryAndDraw(VkCommandBuffer cmd, const MeshDraw& d
         vkCmdDraw(cmd, draw.indexCount, 1, 0, 0);
         return;
     }
-    const bool second = draw.kind == MeshKind::Instanced || draw.kind == MeshKind::Skinned;
-    const VkBuffer buffers[2] = {draw.vertices, draw.kind == MeshKind::Instanced ? draw.instances : draw.skin};
-    const VkDeviceSize offsets[2] = {0, draw.kind == MeshKind::Instanced ? draw.instanceOffset : 0};
-    vkCmdBindVertexBuffers(cmd, 0, second ? 2 : 1, buffers, offsets);
+    VkBuffer buffers[3] = {draw.vertices, VK_NULL_HANDLE, VK_NULL_HANDLE};
+    VkDeviceSize offsets[3] = {0, 0, 0};
+    uint32_t count = 1;
+    switch (draw.kind) {
+    case MeshKind::Instanced:
+    case MeshKind::InstancedVegetation:
+        buffers[1] = draw.instances;
+        offsets[1] = draw.instanceOffset;
+        count = 2;
+        if (draw.kind == MeshKind::InstancedVegetation) {
+            buffers[2] = draw.vegetation;
+            offsets[2] = draw.vegetationOffset;
+            count = 3;
+        }
+        break;
+    case MeshKind::Skinned:
+        buffers[1] = draw.skin;
+        count = 2;
+        break;
+    case MeshKind::Vegetation:
+        buffers[1] = draw.vegetation;
+        offsets[1] = draw.vegetationOffset;
+        count = 2;
+        break;
+    case MeshKind::Static:
+    case MeshKind::Scatter:
+    case MeshKind::Tube: break;
+    }
+    vkCmdBindVertexBuffers(cmd, 0, count, buffers, offsets);
     vkCmdBindIndexBuffer(cmd, draw.indices, 0, VK_INDEX_TYPE_UINT32);
     vkCmdDrawIndexed(cmd, draw.indexCount, draw.instanceCount, 0, 0, 0);
 }

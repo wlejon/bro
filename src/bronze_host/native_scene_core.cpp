@@ -507,6 +507,63 @@ void bro_scene_SceneGraph_setWind(void* self, const double* opts_direction, uint
     g->setWind(dx, dy, dz, strength, frequency);
 }
 
+// setWind's wind-field half: [speed, gust, gustSpeed, gustScale, drift]
+// (scene/wind_field.h), defaults filled in by the JS wrapper. Non-finite
+// entries keep the default.
+void bro_scene_SceneGraph_setWindField(void* self, const double* params, uint32_t params_len) {
+    auto* g = graphOf(self);
+    if (!g) return;
+    // A field left out (NaN) keeps what it was, as setWind's legacy fields do.
+    scene::WindFieldParams p = g->windFieldParams();
+    auto at = [&](uint32_t i, float& field, float lo, float hi) {
+        if (params && i < params_len && std::isfinite(params[i])) {
+            field = std::clamp(static_cast<float>(params[i]), lo, hi);
+        }
+    };
+    at(0, p.speed, 0.0f, 100.0f);
+    at(1, p.gust, 0.0f, 10.0f);
+    at(2, p.gustSpeed, 0.0f, 200.0f);
+    at(3, p.gustScale, 1.0f, 10000.0f);
+    at(4, p.drift, 0.0f, 3.14159265f);
+    g->setWindField(p);
+}
+
+namespace {
+thread_local double tl_windBuf[16];
+}
+
+// windAt(x, z) -> [vx, vy, vz, gust, speed]: the wind field at absolute
+// world (x, z) now, as the vegetation shaders see it.
+void bro_scene_SceneGraph_windAt(void* self, double x, double z, bronze_native_buffer* out) {
+    auto* g = graphOf(self);
+    if (!out) return;
+    if (!g || !std::isfinite(x) || !std::isfinite(z)) { copyBuffer<double>(nullptr, 0, out); return; }
+    const scene::WindSample w = scene::windAt(g->windField(), static_cast<float>(x), static_cast<float>(z));
+    tl_windBuf[0] = w.velocity[0];
+    tl_windBuf[1] = w.velocity[1];
+    tl_windBuf[2] = w.velocity[2];
+    tl_windBuf[3] = w.gust;
+    tl_windBuf[4] = w.speed;
+    copyBuffer(tl_windBuf, 5, out);
+}
+
+// wind() -> [dirX, dirY, dirZ, strength, frequency, speed, gust, gustSpeed,
+// gustScale, drift, time, nowDirX, nowDirZ, nowSpeed]: what setWind set and
+// the field's drifting state now.
+void bro_scene_SceneGraph_windState(void* self, bronze_native_buffer* out) {
+    auto* g = graphOf(self);
+    if (!out) return;
+    if (!g) { copyBuffer<double>(nullptr, 0, out); return; }
+    const float* d = g->windDirection();
+    const scene::WindFieldParams& p = g->windFieldParams();
+    const scene::WindFieldState s = g->windField();
+    const double v[14] = { d[0], d[1], d[2], g->windStrength(), g->windFrequency(),
+                           p.speed, p.gust, p.gustSpeed, p.gustScale, p.drift,
+                           g->windTime(), s.dirX, s.dirZ, s.base };
+    std::copy(v, v + 14, tl_windBuf);
+    copyBuffer(tl_windBuf, 14, out);
+}
+
 // setShadowQuality({atlasSize, pcfTaps}) — atlas side length and PCF grid
 // side (1, 3 or 5). A non-positive value keeps the default.
 void bro_scene_SceneGraph_setShadowQuality(void* self, bool opts_atlasSize_given, int32_t opts_atlasSize,

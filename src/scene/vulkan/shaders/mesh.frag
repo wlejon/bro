@@ -5,7 +5,10 @@
 // shade map. Unlit meshes skip the
 // lighting. inWorldPos is camera-relative (scene_camera.glsl): the eye is the
 // origin. Built twice: as is, and with SCENE_INDIRECT_OUTPUT for the opaque
-// pass while SSAO is on.
+// pass while SSAO is on; and both again with SCENE_VEGETATION for plants
+// (scene_vegetation.glsl): a leaf's normal leans toward its crown's bulk
+// normal so the crown lights as one form, its underside reads paler, the
+// sun glows through it from behind, and the crown's depth occludes the sky.
 
 layout(location = 0) in vec3 inWorldPos;
 layout(location = 1) in vec3 inNormal;
@@ -14,6 +17,11 @@ layout(location = 3) in vec4 inColor;      // vertex colour, white when the mode
 layout(location = 4) in vec3 inTangent;
 layout(location = 5) in vec3 inBitangent;
 layout(location = 6) in vec4 inInstColor;  // rgb tint, a atlas cell / 256 (white off instancing)
+#ifdef SCENE_VEGETATION
+// xyz the crown's bulk normal times its weight, w the ambient occlusion,
+// negative on a leaf (vegetationSway).
+layout(location = 7) in vec4 inVegShade;
+#endif
 
 layout(location = 0) out vec4 outColor;
 #ifdef SCENE_INDIRECT_OUTPUT
@@ -78,6 +86,13 @@ void main() {
     }
     baseColor *= inInstColor.rgb;
     if (push.pbrParams.z > 0.0 && alpha < push.pbrParams.z) discard;
+#ifdef SCENE_VEGETATION
+    bool vegLeaf = inVegShade.w < 0.0;
+    float vegAO = abs(inVegShade.w);
+    // A leaf's underside is paler and yellower than its top.
+    if (vegLeaf && !gl_FrontFacing)
+        baseColor = mix(baseColor, baseColor * vec3(1.25, 1.3, 1.05) + vec3(0.015, 0.02, 0.0), 0.6);
+#endif
 
     vec3 emissive = push.emissive.rgb * push.emissive.a;
     vec3 geomN = normalize(inNormal);
@@ -103,6 +118,11 @@ void main() {
         vec3 nTS = texture(texNormal, inUV).xyz * 2.0 - 1.0;
         N = normalize(mat3(normalize(inTangent), normalize(inBitangent), N) * nTS);
     }
+#ifdef SCENE_VEGETATION
+    // The crown as one form: the leaf's own normal blended toward the bulk.
+    float bulkWeight = length(inVegShade.xyz);
+    if (bulkWeight > 1e-4) N = normalize(N * (1.0 - bulkWeight) + inVegShade.xyz);
+#endif
 
     float metallic = push.pbrParams.x;
     float roughness = push.pbrParams.y;
@@ -129,9 +149,16 @@ void main() {
     s.receivesShadow = (flags & MESH_RECEIVES_SHADOW) != 0u;
     s.twoSided = (flags & MESH_TWO_SIDED) != 0u;
     s.subsurface = push.extra.y;
+    s.translucency = 0.0;
+#ifdef SCENE_VEGETATION
+    if (vegLeaf) s.translucency = push.extra.y > 0.0 ? min(1.4 * push.extra.y, 1.0) : 0.6;
+#endif
 
     vec3 indirect = sceneAmbient(s);
     if ((flags & MESH_OCCLUSION_MAP) != 0u) indirect *= texture(texOcclusion, inUV).r;
+#ifdef SCENE_VEGETATION
+    indirect *= vegAO;
+#endif
     vec3 color = sceneDirectLight(s) + indirect + emissive;
 
     // SSR mask phase: alpha carries the reflectance the SSR pass weights its

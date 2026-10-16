@@ -168,6 +168,9 @@
             params[i] = typeof v === 'number' ? v : SCATTER_DEFAULTS[i];
         }
         __bro_native.scene.SceneNode_setScatterSegments(this, toF32(o.segments), toF32(o.instSeg), params, boundsOf(o));
+        // The emitter's per-segment sway records ride along: with them the
+        // leaves bend in the scene's wind.
+        __bro_native.scene.SceneNode_setVegetation(this, o.vegetation ? toF32(o.vegetation) : EMPTY_F32);
     });
     // setTubeSegments({ segments, sides = 6, radiusScale = 1, boundsMin?, boundsMax? })
     // — the object world.emitBranchTubes(opts) produces.
@@ -176,6 +179,14 @@
         const sides = typeof o.sides === 'number' ? o.sides | 0 : 6;
         const radiusScale = typeof o.radiusScale === 'number' ? o.radiusScale : 1.0;
         __bro_native.scene.SceneNode_setTubeSegments(this, toF32(o.segments), sides, radiusScale, boundsOf(o));
+        __bro_native.scene.SceneNode_setVegetation(this, o.vegetation ? toF32(o.vegetation) : EMPTY_F32);
+    });
+    // setVegetation(Float32Array | null): wind-sway records, 16 floats per
+    // instance (world.emitFoliageVegetation / emitSegmentVegetation) or 12
+    // per scatter / tube segment (set by setScatterSegments / setTubeSegments
+    // from the emitter's object). docs/scene-nodes-api.js "Vegetation".
+    fn(SceneNode.prototype, 'setVegetation', function setVegetation(data) {
+        __bro_native.scene.SceneNode_setVegetation(this, data ? toF32(data) : EMPTY_F32);
     });
     accessor(SceneNode.prototype, 'isScatter', function () { return __bro_native.scene.SceneNode_isScatter(this); }, undefined);
     accessor(SceneNode.prototype, 'isTube', function () { return __bro_native.scene.SceneNode_isTube(this); }, undefined);
@@ -209,6 +220,7 @@
             }
             if (opts.scatter && typeof opts.scatter === 'object') node.setScatterSegments(opts.scatter);
             if (opts.tube && typeof opts.tube === 'object') node.setTubeSegments(opts.tube);
+            if (opts.vegetation) node.setVegetation(opts.vegetation);
         }
         return node;
     };

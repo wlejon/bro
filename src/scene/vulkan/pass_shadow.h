@@ -5,8 +5,9 @@
 // shadow_plan.h) gets its casters drawn depth-only into its rect of
 // SceneTargets::shadowAtlas. Cached tiles keep the depth an earlier frame
 // drew. Static, instanced (batched too), skinned and branch-tube casters
-// (scatter leaves cast none), with the colour pass's wind sway and custom
-// vertex chunks so the silhouette matches what is drawn.
+// (scatter leaves only when they carry vegetation records), with the colour
+// pass's wind sway, vegetation sway and custom vertex chunks so the
+// silhouette matches what is drawn.
 // Casters are tested against each tile's light volume, never the camera's:
 // an off-screen caster still shadows what is on screen.
 

@@ -6,6 +6,7 @@
 #include <bromesh/manipulation/normals.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 namespace bro::scene {
@@ -45,6 +46,14 @@ void MeshNode::setMesh(bromesh::MeshData&& mesh) {
 }
 
 void MeshNode::recomputeBounds() {
+    // The tallest vegetation record (float 3 of every 16): how far the
+    // wind sway can carry a vertex.
+    vegetationHeight_ = 0.0f;
+    if (mesh_.hasVegetation()) {
+        for (size_t i = 3; i < mesh_.vegetation.size(); i += 16) {
+            if (std::isfinite(mesh_.vegetation[i])) vegetationHeight_ = std::max(vegetationHeight_, mesh_.vegetation[i]);
+        }
+    }
     // Union of the base mesh and every LOD level, so frustum/shadow culling
     // is conservative for whichever level is selected on any given frame.
     bool any = false;
