@@ -17,6 +17,7 @@ namespace bro::scene {
 
 class SkinnedMeshNode;
 class GrassNode;
+class ForestNode;
 
 /// A renderable 3D mesh node: bromesh::MeshData plus a PBR material. The node
 /// holds CPU data only; the scene renderer keeps the GPU copies keyed by node
@@ -43,6 +44,11 @@ public:
     /// Type::Mesh for the material setters but draws through the grass path
     /// and stays out of raycasts and bounds.
     virtual GrassNode* asGrass() { return nullptr; }
+
+    /// Downcast hook: non-null when this node is a ForestNode, which keeps
+    /// Type::Mesh for the material setters but draws through the forest path
+    /// and stays out of raycasts (its mesh is one leaf).
+    virtual ForestNode* asForest() { return nullptr; }
 
     // --- Draw mode ---
 

@@ -221,8 +221,9 @@ void PassReflectionProbe::renderFace(SceneFrame& frame, const ReflectionProbeNod
     const bool cull = frame.renderer.frustumCullingEnabled();
     for (const MeshDraw& draw : frame.lists.meshes) {
         if (draw.translucent) continue;   // no sorted translucent pass in a capture
-        // Grass rings are cut to the camera's view and placed around its eye.
-        if (draw.kind == MeshKind::Grass) continue;
+        // Grass rings and forest tiers are cut to the camera's view and level
+        // of detail; shadow-only draws are casters.
+        if (cameraCut(draw.kind) || draw.shadowOnly) continue;
         if (cull && draw.hasBounds && !bromath::fintersects(view.frustum, draw.bounds)) continue;
         MeshDraw faceDraw = draw;
         faceDraw.mirrored = true;

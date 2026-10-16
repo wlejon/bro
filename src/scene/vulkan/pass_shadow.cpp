@@ -45,7 +45,8 @@ void shadowVertexInput(MeshKind kind, bool custom, std::vector<VkVertexInputBind
                 // The normal too: a leaf folds about its card's normal.
                 keep = a.location <= 1 || (a.location >= 8 && a.location <= 10) || veg;
                 break;
-            case MeshKind::Scatter: keep = a.location == 0; break;
+            case MeshKind::Scatter:
+            case MeshKind::ForestLeaf: keep = a.location == 0; break;
             case MeshKind::Grass: keep = a.location <= 1; break;
             default: keep = a.location <= 3 || a.location == 5 || a.location == 6 || veg; break;
             }
@@ -99,11 +100,18 @@ bool PassShadow::setup(SceneGpu& gpu) {
         SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowInstancedVegVert);
     vs_[static_cast<int>(MeshKind::Grass)] =
         SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowGrassVert);
+    vs_[static_cast<int>(MeshKind::ForestLeaf)] =
+        SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowForestLeafVert);
+    vs_[static_cast<int>(MeshKind::ForestTube)] =
+        SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowForestTubeVert);
+    vs_[static_cast<int>(MeshKind::ForestSprite)] =
+        SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowForestSpriteVert);
     fs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowFrag);
+    fsForest_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowForestFrag);
     for (VkShaderModule m : vs_) {
         if (!m) return false;
     }
-    return fs_ != VK_NULL_HANDLE;
+    return fs_ != VK_NULL_HANDLE && fsForest_ != VK_NULL_HANDLE;
 }
 
 void PassShadow::cleanup(SceneGpu& gpu) {
@@ -123,7 +131,8 @@ void PassShadow::cleanup(SceneGpu& gpu) {
         m = VK_NULL_HANDLE;
     }
     SceneVkShaderModule::destroy(dev, fs_);
-    fs_ = VK_NULL_HANDLE;
+    SceneVkShaderModule::destroy(dev, fsForest_);
+    fs_ = fsForest_ = VK_NULL_HANDLE;
     if (layout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(dev, layout_, nullptr);
     layout_ = VK_NULL_HANDLE;
 }
@@ -140,7 +149,7 @@ VkPipeline PassShadow::buildPipeline(VkShaderModule vs, MeshKind kind, bool cust
     // side and closed meshes do not shadow themselves; two-sided surfaces
     // (leaves, cards) have no far side and draw both.
     SceneVkPipelineBuilder b;
-    b.setShaderStages(vs, fs_)
+    b.setShaderStages(vs, kind == MeshKind::ForestSprite ? fsForest_ : fs_)
      .setVertexInput(bindings, attributes)
      .setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
      .setPolygonMode(VK_POLYGON_MODE_FILL)
@@ -277,6 +286,7 @@ void PassShadow::record(SceneFrame& frame) {
         const bromath::Mat4 lightViewProj = toVulkanClip(rebased(tile.relViewProj, frame.view.eye - plan.origin));
         for (const MeshDraw& draw : frame.lists.meshes) {
             if (!draw.castsShadow) continue;
+            if (slot < 32 && !(draw.shadowTileMask & (1u << slot))) continue;
             if (culling && draw.hasBounds && !bromath::fintersects(tile.frustum, draw.bounds)) {
                 frame.stats.shadowCulled++;
                 continue;

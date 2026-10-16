@@ -190,6 +190,23 @@ VkBuffer SceneGpuResources::skinAttributes(const SkinnedMeshNode& node, size_t v
     return entry.buffer.buffer;
 }
 
+const SceneVkBuffer* SceneGpuResources::storage(uint32_t id, uint64_t generation, const void* data, size_t bytes) {
+    Storage& entry = storages_[id];
+    if (entry.buffer.isValid() && entry.generation == generation) return &entry.buffer;
+    allocator_.destroyBuffer(entry.buffer);
+    const VkDeviceSize size = std::max<VkDeviceSize>(bytes, 16);
+    if (!allocator_.createBuffer(size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, entry.buffer) ||
+        !allocator_.stageAndUploadBuffer(entry.buffer.buffer, data, bytes)) {
+        LOG_ERROR("SceneGpuResources: Failed uploading the storage of node %u (%zu bytes)", id, bytes);
+        allocator_.destroyBuffer(entry.buffer);
+        storages_.erase(id);
+        return nullptr;
+    }
+    entry.generation = generation;
+    return &entry.buffer;
+}
+
 bool SceneGpuResources::createUserTexture(MeshNode::UserTexture& tex, UserTexture& out) {
     const uint32_t layers = tex.layers > 0 ? static_cast<uint32_t>(tex.layers) : 1;
     const VkFormat format = tex.channels == 1   ? VK_FORMAT_R32_SFLOAT
@@ -357,6 +374,10 @@ void SceneGpuResources::releaseNodes(std::span<const uint32_t> ids) {
             allocator_.destroyBuffer(it->second.buffer);
             skins_.erase(it);
         }
+        if (auto it = storages_.find(id); it != storages_.end()) {
+            allocator_.destroyBuffer(it->second.buffer);
+            storages_.erase(it);
+        }
         if (auto it = userTextures_.find(id); it != userTextures_.end()) {
             for (auto& [name, t] : it->second) allocator_.destroyImage(t.image);
             userTextures_.erase(it);
@@ -375,6 +396,8 @@ void SceneGpuResources::cleanup() {
     textures_.clear();
     for (auto& [k, s] : skins_) allocator_.destroyBuffer(s.buffer);
     skins_.clear();
+    for (auto& [k, s] : storages_) allocator_.destroyBuffer(s.buffer);
+    storages_.clear();
     for (auto& [id, slots] : userTextures_) {
         for (auto& [name, t] : slots) allocator_.destroyImage(t.image);
     }

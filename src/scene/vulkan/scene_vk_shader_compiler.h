@@ -58,7 +58,16 @@ enum class BuiltinSceneShader {
     ShadowScatterVert,
     // Grass blades (scene_grass.glsl), drawn with MeshVegFrag.
     MeshGrassVert,
-    ShadowGrassVert
+    ShadowGrassVert,
+    // The forest node's tiers (scene_forest.glsl), drawn with MeshVegFrag;
+    // the sprite casters cut out by ShadowForestFrag.
+    MeshForestLeafVert,
+    MeshForestTubeVert,
+    MeshForestSpriteVert,
+    ShadowForestLeafVert,
+    ShadowForestTubeVert,
+    ShadowForestSpriteVert,
+    ShadowForestFrag
 };
 
 /// The scene's shader modules: the built-in shaders (compiled at build time)

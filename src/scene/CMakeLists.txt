@@ -12,7 +12,8 @@ set(VK_GENERATED_HEADERS "")
 # by SceneVkShaderCompiler at run time).
 set(VK_SHADER_INCLUDES scene_camera.glsl scene_lighting.glsl scene_atmosphere.glsl scene_mesh_push.glsl
     scene_shadow_push.glsl scene_procedural.glsl scene_vegetation.glsl scene_grass.glsl sky_common.glsl
-    ibl_common.glsl)
+    ibl_common.glsl scene_forest.glsl scene_forest_tube.glsl scene_forest_sprite.glsl
+    scene_forest_sprite_vertex.glsl)
 list(TRANSFORM VK_SHADER_INCLUDES PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/"
      OUTPUT_VARIABLE VK_SHADER_INCLUDE_PATHS)
 foreach(_shader
@@ -22,6 +23,9 @@ foreach(_shader
         mesh_scatter.vert
         mesh_tube.vert
         mesh_grass.vert
+        mesh_forest_leaf.vert
+        mesh_forest_tube.vert
+        mesh_forest_sprite.vert
         mesh.frag
         shadow.vert
         shadow_instanced.vert
@@ -29,6 +33,10 @@ foreach(_shader
         shadow_tube.vert
         shadow_scatter.vert
         shadow_grass.vert
+        shadow_forest_leaf.vert
+        shadow_forest_tube.vert
+        shadow_forest_sprite.vert
+        shadow_forest.frag
         shadow.frag
         sky.vert
         sky_atmosphere.frag
@@ -112,6 +120,7 @@ embed_vk_shader(scene_atmosphere.glsl kVkSceneAtmosphereSrc)
 embed_vk_shader(scene_mesh_push.glsl  kVkSceneMeshPushSrc)
 embed_vk_shader(scene_shadow_push.glsl kVkSceneShadowPushSrc)
 embed_vk_shader(scene_vegetation.glsl kVkSceneVegetationSrc)
+embed_vk_shader(scene_forest_sprite.glsl kVkSceneForestSpriteSrc)
 embed_vk_shader(clipmap_common.glsl       kClipmapCommonSrc)
 embed_vk_shader(clipmap_detail.glsl       kClipmapDetailSrc)
 embed_vk_shader(clipmap_material.glsl     kClipmapMaterialSrc)
@@ -148,6 +157,7 @@ add_library(bro_scene STATIC
     particles3d_node.cpp
     decal_node.cpp
     grass_node.cpp
+    forest_node.cpp
     reflection_probe_node.cpp
     terrain_manager.cpp
     terrain_manager_mesh.cpp
@@ -172,6 +182,7 @@ add_library(bro_scene STATIC
     vulkan/scene_gpu_resources.cpp
     vulkan/scene_mesh_drawer.cpp
     vulkan/scene_mesh_drawer_grass.cpp
+    vulkan/scene_mesh_drawer_forest.cpp
     vulkan/scene_draw_list.cpp
     vulkan/scene_frame_graph.cpp
     vulkan/scene_fullscreen.cpp

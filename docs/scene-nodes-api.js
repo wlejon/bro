@@ -429,6 +429,104 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  * @property {number} [trample]
  */
 
+/**
+ * Forest: many trees drawn from a few SPECIMENS, from
+ * `scene.createForest(opts)`. The specimens are bro.flora's
+ * `world.emitForest()` (every grown plant's bark segments, crown clumps and
+ * leaves, relative to where it stood); the trees are rows of `instances`
+ * (`bro.flora.plantForest`, or the emit's own: every plant where it grew),
+ * each a specimen stood somewhere, turned and scaled. Nothing per tree is
+ * built: every leaf, clump and limb is placed and swayed in the vertex
+ * shaders from the specimen's records, so ten thousand trees cost the
+ * memory of two dozen.
+ *
+ * Each frame every tree in view picks its LEVEL OF DETAIL by its size on
+ * screen (pixels, so the choice follows the resolution and field of view,
+ * not metres):
+ *   - LEAVES: up close, every leaf the plant grew, swaying with its limb and
+ *     fluttering on its own. Once a leaf is shorter on screen than
+ *     `leafPixels` the crown thins: a prefix of the tree's shuffled leaves
+ *     is kept, 1 / w^2 of them for a widening w, each w times larger, so its
+ *     cover holds while the work falls by w^2 (the last of the kept run
+ *     shrink away, so nothing pops). The leaves' own flutter fades out by
+ *     `flutterFade`; past `cardWidening` a leaf is a 6-vertex card.
+ *   - CLUMPS: from `clumpFrom` to `clumpTo` (a widening) the leaves hand
+ *     over, dithered, to the crown's clumps drawn as the lobes their leaves
+ *     fill: leafy discs lit as spheres of leaves.
+ *   - CROWNS: once a clump is under `crownFrom` .. `crownTo` pixels across,
+ *     one disc a tree, the canopy surface; a gust's paler sheen rolls
+ *     across it as it does over the leaves.
+ *   - BARK at every tier: the segments wider on screen than `barkPixels`
+ *     times the leaves' widening, a connected run from the trunk out, so
+ *     limbs go tip first as the crown thins; 10 sides while the trunk is
+ *     wider than `barkSidesPixels`, else 5.
+ * Every tier is posed by the same sway from the same records (a clump as
+ * its leaves, a crown on its central limb at its clumps' mean weight), so a
+ * hand-over does not swim. The leaves measure their distance to the crown
+ * (a crown overhead is as near as its underside), the bark to the tree.
+ *
+ * A vertex BUDGET (millions, the leaves' and bark's) holds the cost of any
+ * view: when the trees in view would send more, the pixel thresholds scale
+ * up together (`forestStats().detail`) until they fit, so every tree thins
+ * alike and the furthest hand over first. Shadows choose the same way per
+ * shadow tile by its texel size, against their own budget, as silhouettes
+ * (leaves as cards, kept to `shadowKeep`, bark of 5 sides, crowns at twice
+ * the size).
+ *
+ * The node's material (colour, roughness, subsurface, maps, shadows) is the
+ * leaves'; `barkColor` and `barkRoughness` the bark's; its mesh the leaf
+ * (any leaf card; its length sets the leaf's size on screen). Its transform
+ * places the whole forest. It is left out of raycasts.
+ *
+ * @example
+ *   const forest = world.emitForest({ perArea: 90 });
+ *   const trees = bro.flora.plantForest(forest, {
+ *     area: [-200, -200, 200, 200], spacing: 6.5, ground: heightAt, scale: [1.3, 1.8],
+ *   });
+ *   const node = scene.createForest({
+ *     forest, instances: trees, leaf: Mesh.leafCard('oval', { width: 0.07, length: 0.12 }),
+ *     color: [0.2, 0.36, 0.11], subsurface: 0.5, doubleSided: true, castsShadow: true,
+ *     barkColor: [0.2, 0.17, 0.14],
+ *   });
+ *   scene.createGrass({ ground, density: bro.flora.forestCover(forest, { instances: trees }) });
+ *
+ * @typedef {Object} ForestNodeOptions
+ * @property {Object} forest - `world.emitForest()`'s result: the specimens.
+ * @property {Float32Array|Array<number>} [instances] - the trees, 8 numbers
+ *   each: x, y, z, scale, yaw (radians about +Y; local (x, z) turns to
+ *   (x cos + z sin, -x sin + z cos)), specimen, 0, 0, in the node's space.
+ *   Default `forest.instances` (every plant where it grew).
+ * @property {Mesh|MeshGeometry} [leaf] - the leaf card (also `mesh`).
+ * @property {ForestLod} [lod] - level-of-detail settings.
+ * @property {Array<number>|string} [barkColor] - default `[0.2, 0.17, 0.14]`.
+ * @property {number} [barkRoughness=0.9]
+ * @property {string|number} [tier] - `'auto'` (default), or draw every tree
+ *   at one tier: `'leaves'`, `'clumps'`, `'crowns'` (full size, no thinning:
+ *   for comparisons and tests).
+ * @property {Array<number>|string} [color] - the leaves' colour; and the
+ *   other material keys of createMesh (roughness, subsurface, doubleSided,
+ *   castsShadow, receivesShadow, map, normalMap ...).
+ */
+
+/**
+ * A forest's level of detail. Pixels are the view's (CSS px of the canvas
+ * times its device scale).
+ * @typedef {Object} ForestLod
+ * @property {number} [leafPixels=8] - a leaf shorter than this on screen thins its crown.
+ * @property {number} [flutterFade=2] - the widening by which a leaf's own flutter is gone.
+ * @property {number} [cardWidening=1.6] - the widening past which leaves are 6-vertex cards.
+ * @property {number} [clumpFrom=3] - the widening at which leaves start handing over to clumps...
+ * @property {number} [clumpTo=4.5] - ...and are gone.
+ * @property {number} [crownFrom=5] - a clump's radius (px) at which clumps start handing over to crowns...
+ * @property {number} [crownTo=3] - ...and are gone.
+ * @property {number} [barkPixels=0.7] - bark narrower than this (times the widening) is left out.
+ * @property {number} [barkSidesPixels=24] - a trunk wider than this on screen has 10 sides, else 5.
+ * @property {number} [shadowKeep=0.35] - the share of its drawn leaves a tree's shadow keeps.
+ * @property {number} [range=0] - trees further than this (m) are not drawn; 0: no limit.
+ * @property {number} [budget=14] - millions of leaf and bark vertices the view may send; 0: no budget.
+ * @property {number} [shadowBudget=6] - the same for every shadow tile together.
+ */
+
 // ── SceneNode: per-type members ──────────────────────────────────────────────
 //
 // Continues `class SceneNode` from docs/scene-api.js (identity, hierarchy,
@@ -1220,6 +1318,71 @@ class SceneNode {
    * @returns {number|undefined}
    */
   grassHeightAt(x, z) {}
+
+  // ── Forest (scene.createForest) ──
+
+  /**
+   * Forest: replace any of ForestNodeOptions (`forest`, `instances`, `lod`,
+   * `barkColor`, `barkRoughness`, `tier`). New specimens re-upload the
+   * node's data once.
+   * @param {ForestNodeOptions} opts
+   * @returns {SceneNode}
+   */
+  setForest(opts) {}
+
+  /**
+   * Forest: the trees (8 numbers each, as ForestNodeOptions.instances).
+   * @example node.setTrees(bro.flora.plantForest(forest, { area, density: (x, z) => 1 - cleared(x, z) }));
+   * @param {Float32Array|Array<number>} instances
+   * @returns {SceneNode}
+   */
+  setTrees(instances) {}
+
+  /**
+   * Forest: the level-of-detail settings as set (ForestLod's keys).
+   * Undefined on any other node.
+   * @returns {ForestLod|undefined}
+   */
+  forestLod() {}
+
+  /**
+   * Forest: change any of the level-of-detail settings.
+   * @example node.setForestLod({ budget: 8, leafPixels: 10 });   // a slower GPU
+   * @param {ForestLod} lod
+   * @returns {SceneNode}
+   */
+  setForestLod(lod) {}
+
+  /**
+   * Forest: `'auto'` (by size on screen), or every tree at `'leaves'`,
+   * `'clumps'` or `'crowns'`.
+   * @param {string|number} tier
+   * @returns {SceneNode}
+   */
+  setForestTier(tier) {}
+
+  /**
+   * Forest: what the last frame drew: `trees` per tier (a tree handing
+   * over counts in both), `culled`, `leaves` issued, `vertices` and
+   * `shadowVertices` sent, `entries` and `draws`, `treeCount`,
+   * `specimenCount`, and `detail` / `shadowDetail`, the budget's scale on
+   * the pixel thresholds (1: within budget at full detail).
+   * @returns {{trees: {leaves: number, clumps: number, crowns: number}, culled: number, leaves: number,
+   *            vertices: number, shadowVertices: number, entries: number, draws: number, treeCount: number,
+   *            specimenCount: number, detail: number, shadowDetail: number}|undefined}
+   */
+  forestStats() {}
+
+  /**
+   * Forest: what specimen `specimen` draws at `pxPerUnit` pixels per
+   * specimen unit (the view's pixels per metre at the tree times its scale),
+   * at full detail: `{widening, keep, card, leaves, clumps, crowns,
+   * barkRadius, barkSides}`, the three tier weights summing to 1.
+   * @param {number} specimen
+   * @param {number} pxPerUnit
+   * @returns {Object|undefined}
+   */
+  forestTreeLod(specimen, pxPerUnit) {}
 
   /**
    * Mesh: the node's top surface (world y) on a grid, NaN where it has none:

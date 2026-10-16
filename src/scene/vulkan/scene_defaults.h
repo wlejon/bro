@@ -21,7 +21,8 @@ public:
     // set 0: camera UBO; set 1: lighting UBO + shadow atlas, then the probe
     // cube, shade map and IBL as bare images under one shared sampler; set 2: material (albedo, normal, metallic-roughness,
     // emissive, occlusion); set 3: per-draw vertex data, the bone palette UBO
-    // (binding 0) or a procedural draw's segment records (binding 1, storage);
+    // (binding 0) or a procedural draw's segment records (binding 1, storage)
+    // and a forest's draw entries this frame (binding 2, storage);
     // set 4: custom shader UBO + MeshNode::kMaxUserTextures samplers.
     VkDescriptorSetLayout cameraLayout = VK_NULL_HANDLE;
     VkDescriptorSetLayout lightingLayout = VK_NULL_HANDLE;

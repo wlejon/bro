@@ -54,6 +54,8 @@ bool SceneDefaults::setup(SceneVkDevice& device, SceneVkAllocator& allocator) {
     SceneVkDescriptorLayoutBuilder bone;
     bone.addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT);
     bone.addBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT);
+    // A forest's draw entries this frame (scene_forest.glsl).
+    bone.addBinding(2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT);
     boneLayout = bone.build(dev);
 
     SceneVkDescriptorLayoutBuilder custom;

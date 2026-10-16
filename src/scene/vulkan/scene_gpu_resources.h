@@ -74,6 +74,10 @@ public:
     /// A node's RGBA8 image as a mipmapped, repeating texture; null when empty.
     const SceneVkImage* texture(uint32_t id, TextureSlot slot, const NodeTexture& tex);
 
+    /// A device-local storage buffer holding `bytes` of `data` for node `id`,
+    /// re-uploaded when `generation` moves (a forest's records).
+    const SceneVkBuffer* storage(uint32_t id, uint64_t generation, const void* data, size_t bytes);
+
     /// The skinned node's joint/weight vertex stream.
     VkBuffer skinAttributes(const SkinnedMeshNode& node, size_t vertexCount);
 
@@ -120,6 +124,11 @@ private:
     std::map<uint64_t, GpuMesh> meshes_;
     std::map<uint64_t, Texture> textures_;
     std::unordered_map<uint32_t, Skin> skins_;
+    struct Storage {
+        SceneVkBuffer buffer;
+        uint64_t generation = 0;
+    };
+    std::unordered_map<uint32_t, Storage> storages_;
     std::unordered_map<uint32_t, std::unordered_map<std::string, UserTexture>> userTextures_;
     std::unordered_map<const uint8_t*, Texture> shadeMaps_;
 };

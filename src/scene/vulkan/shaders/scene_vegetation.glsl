@@ -254,8 +254,13 @@ mat3 vegRotation(vec3 omega) {
 //     at 3-9 Hz on its own phase, larger in stronger wind, in bursts;
 //   - in a gust (drag past a light breeze's), turned part of the way
 //     downwind and folded along its midrib, both halves rising.
-mat3 vegLeaf(VegPose pose, VegWind w, vec3 axis, vec3 normal, vec3 local, float seed) {
-    float gust = clamp((w.p0 - 0.12) * 1.6, 0.0, 1.0);
+//
+// vegLeafAmount scales the leaf's own motion (the downwind turn, flutter and
+// fold) by `amount`, so a tier that hands leaves over to coarser ones fades
+// it out rather than dropping it; vegLeaf is amount 1.
+mat3 vegLeafAmount(VegPose pose, VegWind w, vec3 axis, vec3 normal, vec3 local, float seed, float amount) {
+    if (amount <= 0.0) return vegRotation(pose.omega);
+    float gust = clamp((w.p0 - 0.12) * 1.6, 0.0, 1.0) * amount;
     vec3 omega = pose.omega;
     vec3 turn = cross(axis, w.dir);
     float tl = length(turn);
@@ -265,7 +270,7 @@ mat3 vegLeaf(VegPose pose, VegWind w, vec3 axis, vec3 normal, vec3 local, float 
     float sl = length(side);
     side = sl > 1e-4 ? side / sl : vec3(1.0, 0.0, 0.0);
     float f = 3.0 + 4.0 * fract(seed * 7.13) + 2.5 * min(w.p0, 1.0);
-    float a = 0.35 * sqrt(w.p0) * (0.55 + 0.45 * sin(VEG_TWO_PI * (0.6 * w.t + seed)));
+    float a = amount * 0.35 * sqrt(w.p0) * (0.55 + 0.45 * sin(VEG_TWO_PI * (0.6 * w.t + seed)));
     float th = VEG_TWO_PI * (f * w.t + seed);
     omega += axis * (a * sin(th)) + side * (0.45 * a * sin(1.37 * th + 2.0));
 
@@ -273,6 +278,25 @@ mat3 vegLeaf(VegPose pose, VegWind w, vec3 axis, vec3 normal, vec3 local, float 
     float x = dot(local, side);
     if (gust > 0.0 && abs(x) > 1e-6) R = R * vegAxisAngle(axis, sign(x) * 0.8 * gust);
     return R;
+}
+
+mat3 vegLeaf(VegPose pose, VegWind w, vec3 axis, vec3 normal, vec3 local, float seed) {
+    return vegLeafAmount(pose, w, axis, normal, local, seed, 1.0);
+}
+
+// The crown as one form, for a leaf hanging at camera-relative `anchor`:
+// the shading varying's bulk normal (toward the crown's centre-out
+// direction) and its ambient occlusion (leaves deep inside take less sky),
+// negative as a leaf's. v1 is the record's crown; radius 0: no bulk normal.
+vec4 vegCrownShade(mat4 model, vec4 v1, vec3 anchor) {
+    if (v1.w <= 0.0) return vec4(0.0, 0.0, 0.0, -1.0);
+    float scale = vegScale(model);
+    vec3 crown = (model * vec4(v1.xyz, 1.0)).xyz;
+    vec3 rc = (anchor - crown) / max(v1.w * scale, 0.5);
+    vec3 bulk = normalize(rc + vec3(0.0, 0.25, 0.0));
+    float depth = clamp(length(rc), 0.0, 1.2);
+    float ao = clamp(0.25 + 0.85 * depth * depth, 0.25, 1.0) * mix(0.75, 1.0, clamp(rc.y * 0.5 + 0.6, 0.0, 1.0));
+    return vec4(bulk * 0.6, -ao);
 }
 
 // Sway one vertex: the wood's pose, and on a leaf the leaf's own layer.
@@ -319,14 +343,7 @@ vec4 vegetationSwayAxis(mat4 model, vec4 v0, vec4 v1, vec4 v2, vec4 v3, vec3 axi
 
     // The crown as one form: the leaf's normal leans toward the crown's
     // centre-out direction, and leaves deep inside take less sky.
-    if (v1.w <= 0.0) return vec4(0.0, 0.0, 0.0, -1.0);
-    float scale = vegScale(model);
-    vec3 crown = (model * vec4(v1.xyz, 1.0)).xyz;
-    vec3 rc = (anchor - crown) / max(v1.w * scale, 0.5);
-    vec3 bulk = normalize(rc + vec3(0.0, 0.25, 0.0));
-    float depth = clamp(length(rc), 0.0, 1.2);
-    float ao = clamp(0.25 + 0.85 * depth * depth, 0.25, 1.0) * mix(0.75, 1.0, clamp(rc.y * 0.5 + 0.6, 0.0, 1.0));
-    return vec4(bulk * 0.6, -ao);
+    return vegCrownShade(model, v1, anchor);
 }
 
 // The same with the stem axis from the record's packed word (v3.x).

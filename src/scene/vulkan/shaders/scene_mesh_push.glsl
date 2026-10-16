@@ -26,6 +26,11 @@ const uint MESH_OCCLUSION_MAP       = 128u;
 const uint MESH_RECEIVES_SHADOW     = 256u;
 const uint MESH_TWO_SIDED           = 512u;
 const uint MESH_HAS_TANGENTS        = 4096u;
+// A forest draw (scene_forest.glsl): inInstColor.a is its tier's dithered
+// cross-fade code, not an atlas cell.
+const uint MESH_FOREST              = 8192u;
+// A forest sprite: a leafy disc with a sphere's normal (scene_forest_sprite.glsl).
+const uint MESH_FOREST_SPRITE       = 16384u;
 // Bits 10-11: the vertex colour mode — 0 none, 1 replaces the albedo, 2 tints it.
 const uint MESH_VERTEX_COLOR_SHIFT  = 10u;
 

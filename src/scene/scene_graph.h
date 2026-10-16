@@ -16,6 +16,7 @@
 #include "scene/particles3d_node.h"
 #include "scene/decal_node.h"
 #include "scene/grass_node.h"
+#include "scene/forest_node.h"
 #include "scene/reflection_probe_node.h"
 #include "scene/agent_binding.h"
 #include "scene/ai_world_ticker.h"
@@ -63,6 +64,7 @@ public:
     CameraNode* createCamera(const std::string& name = "");
     DecalNode* createDecal(const std::string& name = "");
     GrassNode* createGrass(const std::string& name = "");
+    ForestNode* createForest(const std::string& name = "");
     ReflectionProbeNode* createReflectionProbe(const std::string& name = "");
 
     /// Destroy a node and remove it from the tree. Also destroys children.

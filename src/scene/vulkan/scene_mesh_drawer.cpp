@@ -32,7 +32,10 @@ SceneRenderer::CustomShaderTarget shaderTarget(MeshKind kind) {
     case MeshKind::Vegetation:
     case MeshKind::Scatter:
     case MeshKind::Tube:
-    case MeshKind::Grass: break;
+    case MeshKind::Grass:
+    case MeshKind::ForestLeaf:
+    case MeshKind::ForestTube:
+    case MeshKind::ForestSprite: break;
     }
     return SceneRenderer::CustomShaderTarget::Static;
 }
@@ -41,7 +44,7 @@ SceneRenderer::CustomShaderTarget shaderTarget(MeshKind kind) {
 
 void SceneMeshDrawer::vertexInput(MeshKind kind, std::vector<VkVertexInputBindingDescription>& bindings,
                                   std::vector<VkVertexInputAttributeDescription>& attributes) {
-    if (kind == MeshKind::Tube) {
+    if (streamless(kind)) {
         bindings.clear();
         attributes.clear();
         return;
@@ -112,6 +115,12 @@ bool SceneMeshDrawer::setup(SceneGpu& gpu) {
         SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshInstancedVegVert);
     vs_[static_cast<int>(MeshKind::Grass)] =
         SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshGrassVert);
+    vs_[static_cast<int>(MeshKind::ForestLeaf)] =
+        SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshForestLeafVert);
+    vs_[static_cast<int>(MeshKind::ForestTube)] =
+        SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshForestTubeVert);
+    vs_[static_cast<int>(MeshKind::ForestSprite)] =
+        SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshForestSpriteVert);
     fs_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshFrag);
     fsIndirect_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshIndirectFrag);
     fsVeg_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshVegFrag);
@@ -673,6 +682,10 @@ void SceneMeshDrawer::bindGeometryAndDraw(VkCommandBuffer cmd, const MeshDraw& d
         vkCmdDraw(cmd, draw.indexCount, 1, 0, 0);
         return;
     }
+    if (draw.kind == MeshKind::ForestTube || draw.kind == MeshKind::ForestSprite) {
+        vkCmdDraw(cmd, draw.indexCount, draw.instanceCount, draw.firstVertex, draw.firstInstance);
+        return;
+    }
     VkBuffer buffers[3] = {draw.vertices, VK_NULL_HANDLE, VK_NULL_HANDLE};
     VkDeviceSize offsets[3] = {0, 0, 0};
     uint32_t count = 1;
@@ -700,11 +713,14 @@ void SceneMeshDrawer::bindGeometryAndDraw(VkCommandBuffer cmd, const MeshDraw& d
     case MeshKind::Static:
     case MeshKind::Scatter:
     case MeshKind::Tube:
-    case MeshKind::Grass: break;
+    case MeshKind::Grass:
+    case MeshKind::ForestLeaf:
+    case MeshKind::ForestTube:
+    case MeshKind::ForestSprite: break;
     }
     vkCmdBindVertexBuffers(cmd, 0, count, buffers, offsets);
     vkCmdBindIndexBuffer(cmd, draw.indices, 0, VK_INDEX_TYPE_UINT32);
-    vkCmdDrawIndexed(cmd, draw.indexCount, draw.instanceCount, 0, 0, 0);
+    vkCmdDrawIndexed(cmd, draw.indexCount, draw.instanceCount, 0, 0, draw.firstInstance);
 }
 
 }  // namespace bro::scene::vk

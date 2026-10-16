@@ -7,6 +7,7 @@
 #include "scene/vulkan/scene_mesh_drawer.h"
 
 #include "scene/grass_node.h"
+#include "scene/light_node.h"
 #include "scene/scene_graph.h"
 #include "scene/vulkan/scene_defaults.h"
 #include "scene/vulkan/scene_frame.h"
@@ -165,6 +166,20 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
     if (node.receivesShadow()) flags |= mesh_flags::kReceivesShadow;
     flags |= mesh_flags::kTwoSided;
 
+    // The shadow tiles the near ring casts into: a directional light's first
+    // cascade, every tile of any other light.
+    uint32_t shadowMask = 0;
+    {
+        const ShadowPlan& plan = frame.renderer.shadowPlan();
+        for (int i = 0; i < ShadowPlan::kMaxLights; ++i) {
+            const int slot = plan.lightSlot[i];
+            if (slot < 0 || slot >= plan.tileCount) continue;
+            const LightNode* light = plan.tiles[slot].light;
+            const int count = light && light->kind() == LightNode::Kind::Directional ? 1 : plan.lightSlotCount[i];
+            for (int k = 0; k < count && slot + k < 32; ++k) shadowMask |= 1u << (slot + k);
+        }
+    }
+
     for (int r = 0; r < GrassNode::kRings; ++r) {
         const GrassNode::Ring ring = node.ring(r);
         // Blades lean and stand up to ~2x the mean height: pad the box by
@@ -269,7 +284,10 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
         draw.push.extra[3] = 1.0f + 256.0f;   // no atlas
         draw.twoSided = true;
         // Only the near ring casts: its blades are the ones whose shadows read.
+        // And only into a sun's nearest cascade: a blade is narrower than a
+        // far cascade's texel, and the near ring lies inside the first.
         draw.castsShadow = r == 0 && node.castsShadow();
+        draw.shadowTileMask = shadowMask;
         // A draw a run of tiles: its cell rectangle rides in the model
         // matrix's first row (column, row, columns), which grass has no use
         // for (its blades stand on the field, the node's transform ignored);

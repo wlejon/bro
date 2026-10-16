@@ -49,6 +49,7 @@ extern "C" void bro_scene_main();
 extern "C" void bro_scene_graph_main();
 extern "C" void bro_scene_extras_main();
 extern "C" void bro_scene_grass_main();
+extern "C" void bro_scene_forest_main();
 extern "C" void bro_motion_main();
 extern "C" void bro_server_main();
 extern "C" void bro_impostor_main();
@@ -216,6 +217,8 @@ void installSceneModule() {
     bronze::embed::runEntry(bro_scene_extras_main);
     // js/scene_grass.js: createGrass and the grass node's members.
     bronze::embed::runEntry(bro_scene_grass_main);
+    // js/scene_forest.js: createForest and the forest node's members.
+    bronze::embed::runEntry(bro_scene_forest_main);
 }
 
 void installMotionModule() {

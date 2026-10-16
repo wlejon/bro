@@ -471,6 +471,7 @@ void bro_scene_SceneGraph_readTonemapPixels(void* self, bronze_native_buffer* ou
 int32_t bro_scene_SceneGraph_readTonemapWidth(void);
 int32_t bro_scene_SceneGraph_readTonemapHeight(void);
 void* bro_scene_SceneGraph_createMesh(void* self, uint64_t optsBits, uint64_t meshHandle);
+void* bro_scene_SceneGraph_createForest(void* self, uint64_t optsBits, uint64_t meshHandle);
 void* bro_scene_SceneGraph_createSkinnedMesh(void* self, uint64_t optsBits, uint64_t meshHandle);
 void* bro_scene_SceneGraph_createInstancedMesh(void* self, uint64_t optsBits, uint64_t meshHandle);
 void* bro_scene_SceneGraph_createShape(void* self, const char* jsonOpts);

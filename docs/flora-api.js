@@ -640,6 +640,42 @@ class FloraWorld {
    */
   emitSegmentVegetation() {}
 
+  // ── Forests ──
+
+  /**
+   * Every plant as a SPECIMEN for bro.scene's forest node
+   * (`scene.createForest`, docs/scene-nodes-api.js "Forest"): its bark
+   * segments, crown clumps and leaves relative to where it stands, so a few
+   * grown plants can be stood thousands of times. Plants in order; each
+   * specimen's runs follow on from the last. Arrays:
+   *   - `specimens`: 16 floats each: segStart, segCount, clumpStart,
+   *     clumpCount, leafStart, leafCount, height, crownRadius, crown xyz
+   *     (relative), plant index, origin xyz (where it grew), 0;
+   *   - `segments` (8 each: from xyz, rFrom, to xyz, rTo), `tangents` (6:
+   *     the bark's direction at from and at to), `segmentVegetation` (16, the
+   *     segment records of "Vegetation records") and `keepRadius` (1: the
+   *     thickest tip at or beyond the segment), in an order where the keep
+   *     radius never grows down a specimen's run, so "every segment at least
+   *     r thick" is a prefix;
+   *   - `clumps` (8 each: centre xyz, radius, twig dir xyz, leaf count) and
+   *     `clumpVegetation` (16 each, the clump's twig record);
+   *   - `leaves`: a Uint32Array of (clump, placement key) pairs, shuffled
+   *     within each specimen (`shuffleSeed`) so any prefix is an even
+   *     thinning of the crown; the scene places each leaf from its key
+   *     exactly as the clump-mode scatter does;
+   *   - `instances`: 8 floats a plant, x, y, z, 1, 0, specimen, 0, 0: every
+   *     plant where it grew (createForest's default trees).
+   * Plus `specimenCount`, `leafCount` and the leaf placement fields (seed,
+   * upBias, tiltJitter, shell, baseScale, scaleJitter).
+   * @example
+   *   const forest = world.emitForest({ perArea: 90 });
+   *   scene.createForest({ forest, instances: bro.flora.plantForest(forest, { area }), leaf });
+   * @param {FloraLeafPlacementOptions & {minRadius?: number, shuffleSeed?: number}} [opts] - the
+   *   clump and leaf options of the foliage emits; `minRadius` leaves out thinner bark.
+   * @returns {Object}
+   */
+  emitForest(opts) {}
+
   // ── Blooms ──
 
   /**
@@ -693,6 +729,46 @@ bro.flora.createWorld = function(opts) {};
 
 /** @type {typeof FloraWorld} Not constructible; for `instanceof`. */
 bro.flora.FloraWorld = FloraWorld;
+
+/**
+ * Trees for a forest: `forest`'s specimens (world.emitForest) stood over an
+ * area, one to a cell of a jittered grid, the rows createForest's
+ * `instances` takes (x, y, z, scale, yaw, specimen, 0, 0). Deterministic
+ * for a seed.
+ * @example
+ *   const trees = bro.flora.plantForest(forest, {
+ *     area: [-200, -200, 200, 200], spacing: 6.5, ground: heightAt,
+ *     density: (x, z) => clearing(x, z) ? 0 : 1, scale: [1.3, 1.8],
+ *   });
+ * @param {Object} forest - world.emitForest()'s result.
+ * @param {Object} [opts]
+ * @param {Array<number>} [opts.area=[-50, -50, 50, 50]] - [x0, z0, x1, z1], metres.
+ * @param {number} [opts.spacing=7] - mean distance between neighbours.
+ * @param {number} [opts.jitter=0.42] - how far a tree strays from its cell's centre, in spacings.
+ * @param {Function} [opts.ground] - (x, z) => y the trees stand on (default 0).
+ * @param {number|Function} [opts.density=1] - the chance a cell holds a tree, or (x, z) => 0..1.
+ * @param {number|Array<number>} [opts.scale=1] - the scale, or [min, max].
+ * @param {number} [opts.sink=0.1] - how far a root sits below the ground.
+ * @param {Array<number>} [opts.specimens] - which specimens (indices), or a weight per specimen.
+ * @param {number} [opts.seed=1]
+ * @returns {Float32Array} 8 floats a tree.
+ */
+bro.flora.plantForest = function(forest, opts) {};
+
+/**
+ * Where ground cover grows under a forest, for scene.createGrass's
+ * `density`: a function (x, z) => 0..1, clear at each trunk, thinner the
+ * more crowns overlap overhead, nothing where they close, full in the open.
+ * @example scene.createGrass({ ground, density: bro.flora.forestCover(forest, { instances: trees }) });
+ * @param {Object} forest - world.emitForest()'s result.
+ * @param {Object} [opts]
+ * @param {Float32Array} [opts.instances] - the trees (default `forest.instances`).
+ * @param {number} [opts.floor=0.35] - the cover left in a crown's shade before the canopy closes.
+ * @param {number} [opts.closed=1.6] - the crown overlap at which nothing grows.
+ * @param {number} [opts.trunkClear=0.7] - the bare radius round a trunk (m).
+ * @returns {function(number, number): number}
+ */
+bro.flora.forestCover = function(forest, opts) {};
 
 /**
  * Leaf arrangement enum. Also exposed as `bro.flora.phyllotaxy`, and each

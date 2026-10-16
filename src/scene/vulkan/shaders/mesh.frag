@@ -33,6 +33,9 @@ layout(location = 1) out vec4 outIndirect;
 #include "scene_camera.glsl"
 #include "scene_lighting.glsl"
 #include "scene_mesh_push.glsl"
+#ifdef SCENE_VEGETATION
+#include "scene_forest_sprite.glsl"
+#endif
 
 layout(set = 2, binding = 0) uniform sampler2D texAlbedo;
 layout(set = 2, binding = 1) uniform sampler2D texNormal;
@@ -64,6 +67,20 @@ void main() {
     uint flags = meshFlags();
     float camDist = length(inWorldPos);
     if (push.extra.x > 0.0 && camDist < push.extra.x) discard;
+#ifdef SCENE_VEGETATION
+    // A forest tree crossing between tiers (ForestNode::fadeCode): a pixel
+    // dither h, each tier drawing where h is in its [lo, hi), the tiers of a
+    // tree splitting [0, 1) between them, so they cover each pixel once.
+    // The code is 2 * round(lo * 4096) + hi; 1 is solid.
+    if ((flags & MESH_FOREST) != 0u) {
+        float h = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+        float code = inInstColor.a;
+        float k = floor(code * 0.5);
+        if (h < k * (1.0 / 4096.0) || h >= code - 2.0 * k) discard;
+    }
+    bool forestSprite = (flags & MESH_FOREST_SPRITE) != 0u;
+    if (forestSprite && !forestSpriteCovers(inUV, inColor.x)) discard;
+#endif
 
     // Base colour: the texture composes with the colour and the vertex tint
     // (white when off); without one the vertex colour replaces or tints it.
@@ -96,8 +113,15 @@ void main() {
     float vegFade = vegBlade ? floor(vegBladeT * 0.5) : 0.0;
     float vegAO = vegBlade ? vegBladeT - 2.0 * vegFade : abs(inVegShade.w);
     // A leaf's underside is paler and yellower than its top.
-    if (vegLeaf && !vegBlade && !gl_FrontFacing)
+    if (vegLeaf && !vegBlade && !forestSprite && !gl_FrontFacing)
         baseColor = mix(baseColor, baseColor * vec3(1.25, 1.3, 1.05) + vec3(0.015, 0.02, 0.0), 0.6);
+    // A sprite stands in for many leaves: in a gust (inColor.y, the drag at
+    // its tree) some turn their undersides up, so the crown lightens as the
+    // gust passes over it.
+    if (forestSprite) {
+        float sheen = clamp((inColor.y - 0.12) * 1.6, 0.0, 1.0);
+        baseColor = mix(baseColor, baseColor * vec3(1.25, 1.3, 1.05) + vec3(0.015, 0.02, 0.0), 0.4 * sheen);
+    }
 #endif
 
     vec3 emissive = push.emissive.rgb * push.emissive.a;
@@ -124,7 +148,17 @@ void main() {
         vec3 nTS = texture(texNormal, inUV).xyz * 2.0 - 1.0;
         N = normalize(mat3(normalize(inTangent), normalize(inBitangent), N) * nTS);
     }
+    vec3 shadePos = inWorldPos;
 #ifdef SCENE_VEGETATION
+    // A sprite is lit as the sphere of leaves it stands in for, at the
+    // sphere's surface (its tangent's length is the radius): the flat disc
+    // would cut the light-facing disc it casts with in a hard line.
+    if (forestSprite) {
+        float r2 = min(dot(inUV, inUV), 1.0);
+        float rise = sqrt(1.0 - r2);
+        N = normalize(normalize(inTangent) * inUV.x + normalize(inBitangent) * inUV.y + geomN * rise);
+        shadePos = inWorldPos + geomN * (rise * length(inTangent));
+    }
     // The crown as one form: the leaf's own normal blended toward the bulk.
     float bulkWeight = length(inVegShade.xyz);
     if (bulkWeight > 1e-4) N = normalize(N * (1.0 - bulkWeight) + inVegShade.xyz);
@@ -145,7 +179,7 @@ void main() {
 #endif
 
     SceneSurface s;
-    s.position = inWorldPos;
+    s.position = shadePos;
     s.normal = N;
     s.view = normalize(-inWorldPos);
     s.camDist = camDist;

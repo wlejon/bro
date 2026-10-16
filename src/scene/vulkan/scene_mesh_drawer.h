@@ -32,6 +32,7 @@
 namespace bro::scene {
 class InstancedMeshNode;
 class GrassNode;
+class ForestNode;
 }
 
 namespace bro::scene::vk {
@@ -64,6 +65,8 @@ constexpr uint32_t kOcclusionMap = 128;
 constexpr uint32_t kReceivesShadow = 256;
 constexpr uint32_t kTwoSided = 512;
 constexpr uint32_t kHasTangents = 4096;
+constexpr uint32_t kForest = 8192;          // inInstColor.a is a forest tier's fade code
+constexpr uint32_t kForestSprite = 16384;   // a forest sprite: leafy disc, sphere normal
 /// The vertex colour mode (0 none, 1 replaces the albedo, 2 tints it) in bits 10-11.
 constexpr uint32_t vertexColor(int mode) { return static_cast<uint32_t>(mode & 3) << 10; }
 }
@@ -76,14 +79,33 @@ constexpr uint32_t vertexColor(int mode) { return static_cast<uint32_t>(mode & 3
 /// locations 12-15. Scatter and Tube sway from records in their segment set.
 /// Grass is a blade mesh drawn once per cell of a ring around the camera,
 /// placed and bent by the vertex shader from the node's field and influence
-/// map (set 4, scene_grass.glsl).
-enum class MeshKind : uint8_t { Static, Instanced, Skinned, Scatter, Tube, Vegetation, InstancedVegetation, Grass };
-constexpr int kMeshKindCount = 8;
+/// map (set 4, scene_grass.glsl). The Forest kinds are a ForestNode's tiers
+/// (scene_forest.glsl): leaves (the leaf mesh, copies an instance), bark
+/// (no streams) and sprites (no streams), each instance or sprite one of
+/// this frame's draw entries (set 3 binding 2).
+enum class MeshKind : uint8_t {
+    Static, Instanced, Skinned, Scatter, Tube, Vegetation, InstancedVegetation, Grass,
+    ForestLeaf, ForestTube, ForestSprite,
+};
+constexpr int kMeshKindCount = 11;
 
 /// The kinds the vegetation shading (mesh.frag's SCENE_VEGETATION variant) draws.
 constexpr bool vegetationShading(MeshKind k) {
     return k == MeshKind::Vegetation || k == MeshKind::InstancedVegetation || k == MeshKind::Scatter ||
-           k == MeshKind::Tube || k == MeshKind::Grass;
+           k == MeshKind::Tube || k == MeshKind::Grass || k == MeshKind::ForestLeaf ||
+           k == MeshKind::ForestTube || k == MeshKind::ForestSprite;
+}
+
+/// Kinds with no vertex streams: the vertex shader builds everything.
+constexpr bool streamless(MeshKind k) {
+    return k == MeshKind::Tube || k == MeshKind::ForestTube || k == MeshKind::ForestSprite;
+}
+
+/// Kinds cut to the camera's view and level of detail this frame (a
+/// reflection probe's faces would see them wrong).
+constexpr bool cameraCut(MeshKind k) {
+    return k == MeshKind::Grass || k == MeshKind::ForestLeaf || k == MeshKind::ForestTube ||
+           k == MeshKind::ForestSprite;
 }
 
 struct MeshDraw {
@@ -101,7 +123,9 @@ struct MeshDraw {
 
     VkBuffer vertices = VK_NULL_HANDLE;
     VkBuffer indices = VK_NULL_HANDLE;
-    uint32_t indexCount = 0;   // Tube: the vertex count of the unindexed draw
+    uint32_t indexCount = 0;   // Tube, ForestTube, ForestSprite: the vertex count of the unindexed draw
+    uint32_t firstInstance = 0;  // Forest kinds: the first draw entry (instanced)
+    uint32_t firstVertex = 0;    // ForestSprite crowns: the first entry times 6 (not instanced)
     VkBuffer instances = VK_NULL_HANDLE;         // Instanced, InstancedVegetation
     VkDeviceSize instanceOffset = 0;
     VkBuffer vegetation = VK_NULL_HANDLE;        // Vegetation (per vertex), InstancedVegetation (per instance)
@@ -115,6 +139,8 @@ struct MeshDraw {
     MeshPushConstants push{};
     bool translucent = false;
     bool castsShadow = false;
+    bool shadowOnly = false;     // a caster only (a forest's shadow tiers): never in the colour lists
+    uint32_t shadowTileMask = ~0u;   // the shadow plan's tiles it casts into (bit per slot)
     bool twoSided = false;       // no back-face culling (and no front-face culling as a caster)
     bool lines = false;          // indices are line pairs; drawn unlit
     float lineWidth = 1.0f;
@@ -146,6 +172,10 @@ public:
     /// A grass node's draws, one per ring with visible cells, nearest first
     /// (scene_mesh_drawer_grass.cpp). Also stamps its movers for the frame.
     void prepareGrass(SceneFrame& frame, GrassNode& node, std::vector<MeshDraw>& out);
+    /// A forest node's draws (scene_mesh_drawer_forest.cpp): a draw per tier
+    /// and shape for the camera, and the shadow tiers per shadow tile
+    /// (shadowOnly, each with its tile's bit).
+    void prepareForest(SceneFrame& frame, ForestNode& node, std::vector<MeshDraw>& out);
 
     /// Bind and draw into the open target described by `target`, lit by
     /// the draw's probe lighting set when it has one, else `lightingSet`.

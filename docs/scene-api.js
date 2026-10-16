@@ -534,6 +534,21 @@ class SceneGraph {
   createGrass(opts) {}
 
   /**
+   * A forest: many trees from a few grown plants (bro.flora's
+   * `world.emitForest()`), each drawn at the detail its size on screen asks
+   * for, from every leaf up close to one disc a tree at the horizon, all
+   * posed by the same sway. See ForestNodeOptions and the forest members in
+   * docs/scene-nodes-api.js.
+   * @example
+   *   const forest = world.emitForest({ perArea: 90 });
+   *   const trees = bro.flora.plantForest(forest, { area: [-200, -200, 200, 200], ground: heightAt });
+   *   scene.createForest({ forest, instances: trees, leaf: Mesh.leafCard('oval'), color: [0.2, 0.36, 0.11] });
+   * @param {ForestNodeOptions} opts
+   * @returns {SceneNode}
+   */
+  createForest(opts) {}
+
+  /**
    * @param {ReflectionProbeNodeOptions} [opts]
    * @returns {SceneNode}
    */

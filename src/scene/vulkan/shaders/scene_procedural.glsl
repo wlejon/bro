@@ -246,17 +246,17 @@ void procClumpLobe(vec4 c, int clump, int lobe, uint seed, out vec3 center, out 
     radius = c.w * (0.5 + 0.2 * procDraw(b, 2u));
 }
 
-bool scatterClumpLeaf(int leaf, int clump, out vec3 P, out mat3 R, out vec3 F) {
+// The core of it, for clump record `c` (centre.xyz, radius): leaf `leaf` (its
+// placement key) of clump `clump`, and the lobe it sits in. The header's [0]
+// and [1] are the scatter's (the forest node keeps the same two).
+bool clumpLeafFrame(vec4 c, int leaf, int clump, out vec3 P, out mat3 R, out vec3 F, out vec3 lc, out float lr) {
     vec4 h0 = procedural.header[0];
     vec4 h1 = procedural.header[1];
     uint seed = floatBitsToUint(h0.x);
     float upBias = h0.y, tiltJitter = h0.z, shell = h0.w;
-    vec4 c = procedural.records[clump * 2];
 
     uint base = procHash(seed ^ procHash(uint(leaf) + 1u));
     int lobe = min(2, int(procDraw(base, 0u) * 3.0));
-    vec3 lc;
-    float lr;
     procClumpLobe(c, clump, lobe, seed, lc, lr);
 
     float z = procDraw(base, 1u) * 2.0 - 1.0;
@@ -283,6 +283,12 @@ bool scatterClumpLeaf(int leaf, int clump, out vec3 P, out mat3 R, out vec3 F) {
     if (scale < 1e-6) return false;
     R = mat3(X * scale, N * scale, F * scale);
     return true;
+}
+
+bool scatterClumpLeaf(int leaf, int clump, out vec3 P, out mat3 R, out vec3 F) {
+    vec3 lc;
+    float lr;
+    return clumpLeafFrame(procedural.records[clump * 2], leaf, clump, P, R, F, lc, lr);
 }
 
 // Whether the draw carries vegetation records (scene_vegetation.glsl).

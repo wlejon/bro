@@ -217,6 +217,14 @@ bool registerNatives_scene(std::string* error) {
         fn("__bro_native.scene.SceneGraph_projectLocal", p(&bro_scene_SceneGraph_projectLocal), "f64[]", {"__bro_native.scene.SceneGraph", "f64", "f64", "f64"}, error) &&
         fn("__bro_native.scene.SceneGraph_bindAudioListenerToCamera", p(&bro_scene_SceneGraph_bindAudioListenerToCamera), "void", {"__bro_native.scene.SceneGraph", "bool"}, error) &&
         fn("__bro_native.scene.SceneGraph_detachAIWorld", p(&bro_scene_SceneGraph_detachAIWorld), "void", {"__bro_native.scene.SceneGraph"}, error) &&
+        fn("__bro_native.scene.SceneNode_setForestSpecimens", p(&bro_scene_SceneNode_setForestSpecimens), "bool", {"__bro_native.scene.SceneNode", "f32[]", "f32[]", "f32[]", "f32[]", "f32[]", "f32[]", "f32[]", "i32[]", "f64[]"}, error) &&
+        fn("__bro_native.scene.SceneNode_setForestInstances", p(&bro_scene_SceneNode_setForestInstances), "void", {"__bro_native.scene.SceneNode", "f32[]"}, error) &&
+        fn("__bro_native.scene.SceneNode_setForestLod", p(&bro_scene_SceneNode_setForestLod), "void", {"__bro_native.scene.SceneNode", "f64[]"}, error) &&
+        fn("__bro_native.scene.SceneNode_forestLod", p(&bro_scene_SceneNode_forestLod), "f64[]", {"__bro_native.scene.SceneNode"}, error) &&
+        fn("__bro_native.scene.SceneNode_setForestBark", p(&bro_scene_SceneNode_setForestBark), "void", {"__bro_native.scene.SceneNode", "f64", "f64", "f64", "f64"}, error) &&
+        fn("__bro_native.scene.SceneNode_setForestTier", p(&bro_scene_SceneNode_setForestTier), "void", {"__bro_native.scene.SceneNode", "i32"}, error) &&
+        fn("__bro_native.scene.SceneNode_forestStats", p(&bro_scene_SceneNode_forestStats), "f64[]", {"__bro_native.scene.SceneNode"}, error) &&
+        fn("__bro_native.scene.SceneNode_forestTreeLod", p(&bro_scene_SceneNode_forestTreeLod), "f64[]", {"__bro_native.scene.SceneNode", "i32", "f64"}, error) &&
         fn("__bro_native.scene.SceneGraph_createGrass", p(&bro_scene_SceneGraph_createGrass), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph"}, error) &&
         fn("__bro_native.scene.SceneNode_setGrassField", p(&bro_scene_SceneNode_setGrassField), "void", {"__bro_native.scene.SceneNode", "f32[]", "i32", "i32", "f64", "f64", "f64"}, error) &&
         fn("__bro_native.scene.SceneNode_setGrassParams", p(&bro_scene_SceneNode_setGrassParams), "void", {"__bro_native.scene.SceneNode", "f64[]"}, error) &&
