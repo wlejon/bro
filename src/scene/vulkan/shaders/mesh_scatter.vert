@@ -41,11 +41,13 @@ void main() {
     vec3 Nw = normalize(transpose(inverse(M3)) * inNormal);
     vec3 Tw = normalize(M3 * inTangent.xyz);
     outVegShade = vec4(0.0, 0.0, 0.0, 1.0);
+    outInstColor = vec4(1.0);
     if (proceduralHasVegetation()) {
         vec4 v0, v1, v2, v3;
         proceduralVegetation(seg, along, P, F, v0, v1, v2, v3);
         mat3 rot;
         outVegShade = vegetationSway(push.model, v0, v1, v2, v3, worldPos.xyz, rot);
+        outInstColor.rgb = vegetationTint(push.model, v0, v1, v2, v3);
         Nw = rot * Nw;
         Tw = rot * Tw;
     }
@@ -57,5 +59,4 @@ void main() {
     outBitangent = cross(Nw, Tw) * inTangent.w;
     outUV = inUV;
     outColor = meshVertexColorMode() != 0u ? inColor : vec4(1.0);
-    outInstColor = vec4(1.0);
 }

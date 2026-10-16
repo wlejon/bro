@@ -208,11 +208,18 @@ public:
     // setInstances() and scatter are mutually exclusive. The draw issues one
     // instance per leaf; `instSeg` (instCount entries) maps each leaf to its
     // segment index, so there are no wasted/degenerate instances.
+    //
+    // Clump mode (`clumps`): the records are leaf clumps instead of segments,
+    // [centre.xyz, radius] then [twig dir.xyz, 0], and each leaf sits in its
+    // clump's shell as bromesh::placeLeavesInClumps places it (upBias,
+    // tiltJitter, shell, baseScale, scaleJitter, seed; the others unused).
     struct ScatterParams {
         uint32_t seed = 0;
         float    upBias = 0.5f, tiltJitter = 0.3f, rollJitter = 0.2f;
         float    baseScale = 1.0f, scaleJitter = 0.2f, scaleByRadius = 0.0f;
         float    refRadius = 0.05f, densityFalloff = 0.0f;
+        bool     clumps = false;
+        float    shell = 0.4f;
     };
     void setScatterSegments(const float* segData, size_t segCount,
                             const float* instSeg, size_t instCount,
@@ -236,13 +243,23 @@ public:
     // reads the vertex index + the segment records). Mutually exclusive with
     // mesh instances and with scatter mode. Casts shadows through
     // shadow_tube.vert and receives them like any lit mesh.
+    //
+    // `tangents` (optional, segCount*6 floats: the bark's direction at
+    // `from`, then at `to`) mitres the joints: each end ring lies in the
+    // plane across that direction rather than across the segment, so where a
+    // limb bends from one segment into the next both rings are the same
+    // ellipse and the bark closes. Stored as a third record per segment,
+    // [oct(tangentFrom), oct(tangentTo)] (octahedral unit vectors).
     void setTubeSegments(const float* segData, size_t segCount, int sides,
                          float radiusScale,
-                         const float boundsMin[3], const float boundsMax[3]);
+                         const float boundsMin[3], const float boundsMax[3],
+                         const float* tangents = nullptr);
     bool isTube() const { return tubeMode_; }
     size_t tubeSegCount() const { return tubeSegCount_; }
     int tubeSides() const { return tubeSides_; }
     float tubeRadiusScale() const { return tubeRadiusScale_; }
+    /// Records per segment: 3 with mitred joints, else 2.
+    int tubeRecordStride() const { return tubeJoints_ ? 3 : 2; }
     const std::vector<float>& tubeSegments() const { return tubeData_; }
     /// Vertices a full tube draw issues (segCount * sides * 6).
     size_t tubeVertexCount() const { return tubeSegCount_ * (size_t)tubeSides_ * 6; }
@@ -397,7 +414,8 @@ private:
     // Procedural branch-tube mode (see setTubeSegments): the packed segment
     // records.
     bool tubeMode_ = false;
-    std::vector<float> tubeData_;   // segCount*8 floats (2 RGBA32F texels each)
+    std::vector<float> tubeData_;   // segCount*8 (or *12 with joints) floats
+    bool   tubeJoints_ = false;
     size_t tubeSegCount_ = 0;
     int    tubeSides_ = 6;
     float  tubeRadiusScale_ = 1.0f;

@@ -359,7 +359,7 @@ void bro_scene_SceneNode_setAtlasGrid(void* self, int32_t cols, int32_t rows) {
 }
 
 // params: [seed, upBias, tiltJitter, rollJitter, baseScale, scaleJitter,
-// scaleByRadius, maxRadius, densityFalloff]; bounds: [minX,minY,minZ,
+// scaleByRadius, maxRadius, densityFalloff, clumps, shell]; bounds: [minX,minY,minZ,
 // maxX,maxY,maxZ] or empty to derive from the segment endpoints, padded for
 // leaf reach — the rule the old applyScatter used.
 void bro_scene_SceneNode_setScatterSegments(void* self, const float* seg, uint32_t segLen,
@@ -382,6 +382,8 @@ void bro_scene_SceneNode_setScatterSegments(void* self, const float* seg, uint32
     p.scaleByRadius  = static_cast<float>(at(6, 0.0));
     p.refRadius      = static_cast<float>(at(7, 0.05));
     p.densityFalloff = static_cast<float>(at(8, 0.0));
+    p.clumps         = at(9, 0.0) != 0.0;
+    p.shell          = static_cast<float>(at(10, 0.4));
 
     float bmin[3], bmax[3];
     if (boundsLen >= 6) {
@@ -405,10 +407,13 @@ void bro_scene_SceneNode_setScatterSegments(void* self, const float* seg, uint32
 }
 
 // seg: segCount*8 floats [from.xyz, rFrom, to.xyz, rTo]; bounds as above or
-// empty to derive from the endpoints padded by the widest ring.
+// empty to derive from the endpoints padded by the widest ring; tangents:
+// segCount*6 floats (the bark's direction at from, at to) to mitre the
+// joints, or empty.
 void bro_scene_SceneNode_setTubeSegments(void* self, const float* seg, uint32_t segLen,
                                          int32_t sides, double radiusScale,
-                                         const float* bounds, uint32_t boundsLen) {
+                                         const float* bounds, uint32_t boundsLen,
+                                         const float* tangents, uint32_t tanLen) {
     auto* im = instancedOf(self);
     if (!im) { ev::throwTypeError("setTubeSegments: node is not an InstancedMesh"); return; }
     const size_t segCount = segLen / 8;
@@ -436,7 +441,7 @@ void bro_scene_SceneNode_setTubeSegments(void* self, const float* seg, uint32_t 
         const float pad = maxR * rs;
         for (int i = 0; i < 3; ++i) { bmin[i] -= pad; bmax[i] += pad; }
     }
-    im->setTubeSegments(seg, segCount, sides, rs, bmin, bmax);
+    im->setTubeSegments(seg, segCount, sides, rs, bmin, bmax, tanLen >= segCount * 6 ? tangents : nullptr);
 }
 
 // setVegetation(Float32Array): the wind-sway records of an instanced node —
@@ -501,7 +506,7 @@ bool registerSceneExtraNatives(std::string* error) {
            fn("__bro_native.scene.SceneNode_setInstancedMesh", (void*)&bro_scene_SceneNode_setInstancedMesh, "void", {N, "dynamic"}, error) &&
            fn("__bro_native.scene.SceneNode_setAtlasGrid", (void*)&bro_scene_SceneNode_setAtlasGrid, "void", {N, "i32", "i32"}, error) &&
            fn("__bro_native.scene.SceneNode_setScatterSegments", (void*)&bro_scene_SceneNode_setScatterSegments, "void", {N, "f32[]", "f32[]", "f64[]", "f32[]"}, error) &&
-           fn("__bro_native.scene.SceneNode_setTubeSegments", (void*)&bro_scene_SceneNode_setTubeSegments, "void", {N, "f32[]", "i32", "f64", "f32[]"}, error) &&
+           fn("__bro_native.scene.SceneNode_setTubeSegments", (void*)&bro_scene_SceneNode_setTubeSegments, "void", {N, "f32[]", "i32", "f64", "f32[]", "f32[]"}, error) &&
            fn("__bro_native.scene.SceneNode_setVegetation", (void*)&bro_scene_SceneNode_setVegetation, "void", {N, "f32[]"}, error) &&
            fn("__bro_native.scene.SceneNode_isScatter", (void*)&bro_scene_SceneNode_isScatter, "bool", {N}, error) &&
            fn("__bro_native.scene.SceneNode_isTube", (void*)&bro_scene_SceneNode_isTube, "bool", {N}, error) &&

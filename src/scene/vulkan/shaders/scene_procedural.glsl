@@ -24,14 +24,28 @@ vec3 perpendicularUnit(vec3 t) {
     return normalize(c);
 }
 
+// A unit vector from two floats (octahedral; InstancedMeshNode's octEncode).
+vec3 procOctDecode(vec2 e) {
+    vec3 v = vec3(e, 1.0 - abs(e.x) - abs(e.y));
+    if (v.z < 0.0) v.xy = (1.0 - abs(v.yx)) * vec2(v.x >= 0.0 ? 1.0 : -1.0, v.y >= 0.0 ? 1.0 : -1.0);
+    return normalize(v);
+}
+
 // The vertex of a tube draw: segment from the vertex index, `sides` quads a
 // segment as two triangles across its rings. Records: (from.xyz, radiusFrom),
-// (to.xyz, radiusTo). Header: x sides, y radius scale. `seg` and `endT` (0 at
-// from, 1 at to) say where on the skeleton the vertex sits. False for a
-// degenerate segment.
+// (to.xyz, radiusTo), and with mitred joints a third, (oct(tangentFrom),
+// oct(tangentTo)). Header: x sides, y radius scale, z records per segment (3:
+// mitred). `seg` and `endT` (0 at from, 1 at to) say where on the skeleton
+// the vertex sits. False for a degenerate segment.
+//
+// A mitred end ring lies in the plane across the bark's direction there (the
+// bisector of the two segments meeting), not across this segment: the ring
+// slides along the segment's axis to that plane, so two segments meeting at
+// an angle share one elliptical ring and the bark closes around the bend.
 bool tubeVertex(int vertexIndex, out vec3 pos, out vec3 radial, out vec3 axisDir, out vec2 uv,
                 out int seg, out float endT) {
     int sides = int(procedural.header[0].x);
+    int stride = procedural.header[0].z > 2.5 ? 3 : 2;
     int perSeg = sides * 6;
     seg = vertexIndex / perSeg;
     int local = vertexIndex - seg * perSeg;
@@ -44,8 +58,8 @@ bool tubeVertex(int vertexIndex, out vec3 pos, out vec3 radial, out vec3 axisDir
     float ang = float(nextSide ? side + 1 : side) / float(sides) * PROC_TWO_PI;
     endT = top ? 1.0 : 0.0;
 
-    vec4 s0 = procedural.records[seg * 2];
-    vec4 s1 = procedural.records[seg * 2 + 1];
+    vec4 s0 = procedural.records[seg * stride];
+    vec4 s1 = procedural.records[seg * stride + 1];
     vec3 axis = s1.xyz - s0.xyz;
     float len = length(axis);
     pos = vec3(0.0);
@@ -59,6 +73,13 @@ bool tubeVertex(int vertexIndex, out vec3 pos, out vec3 radial, out vec3 axisDir
     radial = cos(ang) * e1 + sin(ang) * e2;
     float r = mix(s0.w, s1.w, endT) * procedural.header[0].y;
     pos = mix(s0.xyz, s1.xyz, endT) + r * radial;
+    if (stride == 3) {
+        vec4 j = procedural.records[seg * stride + 2];
+        vec3 T = procOctDecode(top ? j.zw : j.xy);
+        float c = dot(axisDir, T);
+        // Slide to the mitre plane; never past the segment's own length.
+        if (c > 0.2) pos += axisDir * clamp(-r * dot(radial, T) / c, -0.45 * len, 0.45 * len);
+    }
     uv = vec2(ang / PROC_TWO_PI, endT);
     return true;
 }
@@ -95,6 +116,11 @@ vec3 procRotAxis(vec3 v, vec3 axis, float ang) {
 // `R` takes the leaf mesh (scaled) into node space at `P`, the point on the
 // segment it hangs from; `F` is its unit tip direction. False for a leaf with
 // no extent.
+//
+// Clump mode (header[2].w = 1, scatterClumpLeaf below) reads the records as
+// leaf clumps instead.
+bool scatterClumpLeaf(int leaf, int clump, out vec3 P, out mat3 R, out vec3 F);
+
 bool scatterLeaf(int leaf, out vec3 P, out mat3 R, out vec3 F, out int seg, out float along) {
     vec4 h0 = procedural.header[0];
     vec4 h1 = procedural.header[1];
@@ -108,6 +134,10 @@ bool scatterLeaf(int leaf, out vec3 P, out mat3 R, out vec3 F, out int seg, out 
     F = vec3(0.0, 0.0, 1.0);
     seg = int(procedural.records[int(h2.y) + leaf / 4][leaf % 4] + 0.5);
     along = 0.0;
+    if (h2.w > 0.5) {
+        along = 1.0;
+        return scatterClumpLeaf(leaf, seg, P, R, F);
+    }
     vec4 t0 = procedural.records[seg * 2];
     vec4 t1 = procedural.records[seg * 2 + 1];
     vec3 from = t0.xyz;
@@ -159,6 +189,68 @@ bool scatterLeaf(int leaf, out vec3 P, out mat3 R, out vec3 F, out int seg, out 
 
     // Leaf frame columns: X side, Y normal, Z forward, each scaled.
     R = mat3(sideAxis * scale, N * scale, F * scale);
+    return true;
+}
+
+// Clump mode: leaf `leaf` of clump `clump`, as bromesh::leafInClump places it
+// (bromesh/procedural/leaf_clumps.h), step for step on the same hash.
+// Records: (centre.xyz, radius), (twig dir.xyz, 0). Header: [0] seed, up
+// bias, tilt jitter, shell; [1] base scale, scale jitter.
+float procDraw(uint base, uint k) {
+    return float(procHash(base + k * 0x9e3779b9u) >> 8) * (1.0 / 16777216.0);
+}
+
+void procClumpLobe(vec4 c, int clump, int lobe, uint seed, out vec3 center, out float radius) {
+    if (lobe <= 0) {
+        center = c.xyz;
+        radius = c.w * 0.72;
+        return;
+    }
+    uint cb = procHash(seed ^ procHash(uint(clump) * 0x632be5abu + 0x51ed27u));
+    uint b = procHash(cb + uint(lobe) * 0x9e3779b9u);
+    float z = procDraw(b, 0u) * 1.2 - 0.4;
+    float phi = procDraw(b, 1u) * PROC_TWO_PI;
+    float s = sqrt(max(0.0, 1.0 - z * z));
+    center = c.xyz + vec3(s * cos(phi), z, s * sin(phi)) * (c.w * 0.42);
+    radius = c.w * (0.5 + 0.2 * procDraw(b, 2u));
+}
+
+bool scatterClumpLeaf(int leaf, int clump, out vec3 P, out mat3 R, out vec3 F) {
+    vec4 h0 = procedural.header[0];
+    vec4 h1 = procedural.header[1];
+    uint seed = floatBitsToUint(h0.x);
+    float upBias = h0.y, tiltJitter = h0.z, shell = h0.w;
+    vec4 c = procedural.records[clump * 2];
+
+    uint base = procHash(seed ^ procHash(uint(leaf) + 1u));
+    int lobe = min(2, int(procDraw(base, 0u) * 3.0));
+    vec3 lc;
+    float lr;
+    procClumpLobe(c, clump, lobe, seed, lc, lr);
+
+    float z = procDraw(base, 1u) * 2.0 - 1.0;
+    float phi = procDraw(base, 2u) * PROC_TWO_PI;
+    float s = sqrt(max(0.0, 1.0 - z * z));
+    vec3 u = vec3(s * cos(phi), z, s * sin(phi));
+    vec3 off = u * (lr * (1.0 - shell * procDraw(base, 3u)));
+    off.y *= u.y < 0.0 ? 0.7 : 0.9;
+    P = lc + off;
+
+    vec3 N = normalize(u * (1.0 - upBias) + vec3(0.0, upBias, 0.0));
+    vec3 jit = vec3(procDraw(base, 4u), procDraw(base, 5u), procDraw(base, 6u)) * 2.0 - 1.0;
+    N = N + jit * tiltJitter;
+    N = dot(N, N) < 1e-8 ? u : normalize(N);
+
+    float theta = procDraw(base, 7u) * PROC_TWO_PI;
+    vec3 t0 = perpendicularUnit(N);
+    vec3 t1 = cross(N, t0);
+    F = normalize(t0 * cos(theta) + t1 * sin(theta));
+    vec3 X = cross(F, N);
+
+    float scale = h1.x * (1.0 + (procDraw(base, 8u) * 2.0 - 1.0) * h1.y);
+    R = mat3(1.0);
+    if (scale < 1e-6) return false;
+    R = mat3(X * scale, N * scale, F * scale);
     return true;
 }
 

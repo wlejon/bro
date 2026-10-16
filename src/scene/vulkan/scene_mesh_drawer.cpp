@@ -514,6 +514,11 @@ bool SceneMeshDrawer::prepareProcedural(SceneFrame& frame, InstancedMeshNode& no
         header[7] = p.refRadius;
         header[8] = p.densityFalloff;
         header[9] = static_cast<float>(node.scatterSegments().size() / 4);   // first leaf-index record
+        if (p.clumps) {
+            // Clump mode: the roll slot carries the shell depth.
+            header[3] = p.shell;
+            header[11] = 1.0f;
+        }
         out.vertexSet = segmentSet(frame, header, node.scatterSegments(), &node.scatterInstanceSegments(),
                                    node.hasVegetation() ? &node.vegetation() : nullptr);
         out.kind = MeshKind::Scatter;
@@ -525,6 +530,7 @@ bool SceneMeshDrawer::prepareProcedural(SceneFrame& frame, InstancedMeshNode& no
         if (node.tubeSegCount() == 0) return false;
         header[0] = static_cast<float>(node.tubeSides());
         header[1] = node.tubeRadiusScale();
+        header[2] = static_cast<float>(node.tubeRecordStride());
         out.vertexSet = segmentSet(frame, header, node.tubeSegments(), nullptr,
                                    node.hasVegetation() ? &node.vegetation() : nullptr);
         out.kind = MeshKind::Tube;

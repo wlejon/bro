@@ -669,6 +669,13 @@ class SceneNode {
   //   8-11  anchor.xyz, weight      where a leaf hangs; branch weight 0 at the trunk .. 1 at a twig tip
   //   12-15 axis.xyz, phase         a leaf's stem direction (zero on wood); its limb's phase in [0, 1)
   //
+  // A wood record for a whole segment (one instanced cylinder per segment,
+  // flora's emitSegmentVegetation) is the same 16 floats with the crown
+  // floats holding the segment's tip instead: 4-7 = tip.xyz, -(1 + weightTo)
+  // (a negative w marks the form), 8-11 = base.xyz, weightFrom. Each vertex
+  // takes the weight at its own point along the segment, so the tip bends
+  // exactly as its child's base and the joint holds.
+  //
   // Branch tubes and foliage scatter (setTubeSegments / setScatterSegments)
   // take 12 floats per segment instead — root.xyz, height, crown.xyz,
   // crownRadius, weightFrom, weightTo, phase, 0 — and the shader interpolates
@@ -676,16 +683,22 @@ class SceneNode {
   //
   // The motion: the trunk leans into the gust and sways slowly, growing with
   // (height above the root / height)²; each limb bobs and swings on its own
-  // phase, scaled by weight², so twigs move most and a limb never tears from
-  // the trunk; a leaf rides its twig, then flutters about its stem (showing
-  // its paler underside) and pitches, harder in a gust. The gust is the
-  // band over the plant's root, so a gust crosses a grove tree by tree. The
-  // shadow pass runs the same displacement.
+  // phase, scaled by weight² and reaching further on a taller plant (longer
+  // limbs), so twigs move most and a limb never tears from the trunk; a leaf
+  // rides its twig, then flutters about its stem (showing its paler
+  // underside) and pitches, harder in a gust. The gust is the band over the
+  // plant's root, so a gust crosses a grove tree by tree. The shadow pass
+  // runs the same displacement.
   //
   // The look: a leaf's normal leans toward its crown's centre-out direction
   // so the crown lights as one form, leaves deep inside the crown take less
   // sky, bark darkens toward the ground, and the sun glows through leaves
-  // seen against it (stronger with `subsurface`).
+  // seen against it (stronger with `subsurface`). The records also vary the
+  // colour, multiplying the node's (and an instance's) colour: each plant
+  // leans warm or cool (hashed from its root), each limb (its phase) and each
+  // leaf is a little lighter or darker, leaves deep in the crown go darker and
+  // cooler and the rim lighter, and bark varies by plant. Set the node's
+  // colour to the species' mean and the crowns come out varied around it.
   //
   // A node with a custom shader, a static batch or line drawing ignores its
   // records; scatter leaves with records cast shadows when castsShadow is on.
@@ -921,6 +934,14 @@ class SceneNode {
    * "Vegetation"), which also sway them. The object
    * `world.emitScatterSegments()` (flora-api.js) returns.
    *
+   * With `clumps: true` (what emitScatterSegments returns by default) each
+   * "segment" is a crown clump instead — centre.xyz, radius, dir.xyz, 0 — and
+   * its leaves fill three overlapping lobes of it (bromesh's
+   * placeLeavesInClumps, bit for bit: the same hash draws), packed toward
+   * the surface: in a shell `shell` of the lobe radius deep (default 0.4; 0
+   * puts every leaf on the skin, 1 spreads them to the centre), facing outward with `upBias`, tilt and scale jitter. A clump's
+   * vegetation record is its twig's, so a clump rides the twig it hangs on.
+   *
    * @example
    *   const leaves = scene.createInstancedMesh({ mesh: Mesh.plane(0.08, 0.15), color: '#3a7', doubleSided: true });
    *   leaves.setScatterSegments({
@@ -931,6 +952,7 @@ class SceneNode {
    * @param {{segments: Float32Array, instSeg: Float32Array, seed?: number, upBias?: number,
    *   tiltJitter?: number, rollJitter?: number, baseScale?: number, scaleJitter?: number,
    *   scaleByRadius?: number, maxRadius?: number, densityFalloff?: number,
+   *   clumps?: boolean, shell?: number,
    *   boundsMin?: Array<number>, boundsMax?: Array<number>, vegetation?: Float32Array}} opts
    */
   setScatterSegments(opts) {}
@@ -943,7 +965,15 @@ class SceneNode {
    * `vegetation` records (12 floats per segment, "Vegetation"). The object
    * `world.emitBranchTubes()` (flora-api.js) returns.
    *
-   * @param {{segments: Float32Array, sides?: number, radiusScale?: number,
+   * `tangents` (6 floats per segment: the unit tube direction at its base and
+   * at its tip) mitres the joints: each end ring is cut on the plane with
+   * that normal instead of square to the segment, so a branch continuing
+   * into its next segment at an angle bends without a crack on the outside
+   * or an overlap on the inside (the ring slides at most 0.45 of the
+   * segment's length). emitBranchTubes writes the bisector of each segment
+   * and its thickest child. Without them every joint is square.
+   *
+   * @param {{segments: Float32Array, sides?: number, radiusScale?: number, tangents?: Float32Array,
    *   boundsMin?: Array<number>, boundsMax?: Array<number>, vegetation?: Float32Array}} opts
    */
   setTubeSegments(opts) {}

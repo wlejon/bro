@@ -149,8 +149,9 @@
     });
 
     const SCATTER_KEYS = ['seed', 'upBias', 'tiltJitter', 'rollJitter', 'baseScale',
-                          'scaleJitter', 'scaleByRadius', 'maxRadius', 'densityFalloff'];
-    const SCATTER_DEFAULTS = [0, 0.5, 0.3, 0.2, 1.0, 0.2, 0.0, 0.05, 0.0];
+                          'scaleJitter', 'scaleByRadius', 'maxRadius', 'densityFalloff',
+                          'clumps', 'shell'];
+    const SCATTER_DEFAULTS = [0, 0.5, 0.3, 0.2, 1.0, 0.2, 0.0, 0.05, 0.0, 0, 0.4];
     const boundsOf = (o) => {
         const mn = o.boundsMin, mx = o.boundsMax;
         if (mn && mx && mn.length >= 3 && mx.length >= 3) {
@@ -165,7 +166,7 @@
         const params = new Float64Array(SCATTER_KEYS.length);
         for (let i = 0; i < SCATTER_KEYS.length; i++) {
             const v = o[SCATTER_KEYS[i]];
-            params[i] = typeof v === 'number' ? v : SCATTER_DEFAULTS[i];
+            params[i] = typeof v === 'number' ? v : typeof v === 'boolean' ? (v ? 1 : 0) : SCATTER_DEFAULTS[i];
         }
         __bro_native.scene.SceneNode_setScatterSegments(this, toF32(o.segments), toF32(o.instSeg), params, boundsOf(o));
         // The emitter's per-segment sway records ride along: with them the
@@ -178,7 +179,8 @@
         if (!o || typeof o !== 'object') throw new TypeError('setTubeSegments: expected { segments, ... }');
         const sides = typeof o.sides === 'number' ? o.sides | 0 : 6;
         const radiusScale = typeof o.radiusScale === 'number' ? o.radiusScale : 1.0;
-        __bro_native.scene.SceneNode_setTubeSegments(this, toF32(o.segments), sides, radiusScale, boundsOf(o));
+        __bro_native.scene.SceneNode_setTubeSegments(this, toF32(o.segments), sides, radiusScale, boundsOf(o),
+                                                     o.tangents ? toF32(o.tangents) : EMPTY_F32);
         __bro_native.scene.SceneNode_setVegetation(this, o.vegetation ? toF32(o.vegetation) : EMPTY_F32);
     });
     // setVegetation(Float32Array | null): wind-sway records, 16 floats per

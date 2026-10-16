@@ -74,4 +74,7 @@ void main() {
     outUV = uv;
     outColor = meshVertexColorMode() != 0u ? inColor : vec4(1.0);
     outInstColor = inInstColor;
+#ifdef SCENE_VEGETATION
+    outInstColor.rgb *= vegetationTint(push.model, inVeg0, inVeg1, inVeg2, inVeg3);
+#endif
 }

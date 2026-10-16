@@ -30,11 +30,13 @@ void main() {
         return;
     }
     vec4 worldPos = push.model * vec4(pos, 1.0);
+    outInstColor = vec4(1.0);
     if (proceduralHasVegetation()) {
         vec4 v0, v1, v2, v3;
         proceduralVegetation(seg, endT, pos, vec3(0.0), v0, v1, v2, v3);
         mat3 rot;
         outVegShade = vegetationSway(push.model, v0, v1, v2, v3, worldPos.xyz, rot);
+        outInstColor.rgb = vegetationTint(push.model, v0, v1, v2, v3);
     }
     outWorldPos = worldPos.xyz;
     gl_Position = camera.viewProj * worldPos;
@@ -45,5 +47,4 @@ void main() {
     outBitangent = cross(outNormal, outTangent);
     outUV = uv;
     outColor = vec4(1.0);
-    outInstColor = vec4(1.0);
 }

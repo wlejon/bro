@@ -69,12 +69,24 @@ vec4 vegetationSway(mat4 model, vec4 v0, vec4 v1, vec4 v2, vec4 v3, inout vec3 p
     // The limb: pushed downwind, bobbing and swinging on its own phase,
     // weighted by branch weight squared. A small plant's limbs reach less.
     float ph = v3.w, bw = clamp(v2.w, 0.0, 1.0);
+    if (!leaf && v1.w < 0.0) {
+        // A wood segment record (one record over a whole segment, an
+        // instanced cylinder): v2 holds its base and the weight there, v1 its
+        // tip and -(1 + the weight there); each vertex takes the weight at
+        // its own point along it, so the tip bends as its child's base does.
+        vec3 tip = (model * vec4(v1.xyz, 1.0)).xyz;
+        vec3 d = tip - anchor;
+        float dd = dot(d, d);
+        float along = dd > 1e-12 ? clamp(dot(pos - anchor, d) / dd, 0.0, 1.0) : 1.0;
+        bw = mix(bw, clamp(-v1.w - 1.0, 0.0, 1.0), along);
+    }
     float bo = sin(t * (1.6 + ph * 1.1) + ph * 40.0);
     float bs = sin(t * (1.1 + ph * 0.7) + ph * 23.0);
-    vec3 limb = vec3(wd.x, 0.0, wd.y) * (0.05 * calm + 0.16 * gu + 0.04 * bs * calm) +
-                vec3(0.0, 0.07, 0.0) * bo * (0.35 * calm + gu) +
-                vec3(-wd.y, 0.0, wd.x) * bs * 0.05 * (0.4 * calm + gu);
-    limb *= bw * bw * (0.5 + 0.06 * H) * clamp(H / 3.0, 0.15, 1.0);
+    // A tall tree's limbs are long, and a long limb's tip sweeps further.
+    vec3 limb = vec3(wd.x, 0.0, wd.y) * (0.05 * calm + 0.16 * gu + 0.06 * bs * calm) +
+                vec3(0.0, 0.07, 0.0) * bo * (0.4 * calm + gu) +
+                vec3(-wd.y, 0.0, wd.x) * bs * 0.05 * (0.6 * calm + gu);
+    limb *= bw * bw * (0.5 + 0.11 * H) * clamp(H / 3.0, 0.15, 1.0);
 
     vec3 bend = vec3(trunk.x, -dot(trunk, trunk) * 0.1 / max(H, 1.0), trunk.y) + limb;
 
@@ -104,4 +116,36 @@ vec4 vegetationSway(mat4 model, vec4 v0, vec4 v1, vec4 v2, vec4 v3, inout vec3 p
     float depth = clamp(length(rc), 0.0, 1.2);
     float ao = clamp(0.25 + 0.85 * depth * depth, 0.25, 1.0) * mix(0.75, 1.0, clamp(rc.y * 0.5 + 0.6, 0.0, 1.0));
     return vec4(bulk * 0.6, -ao);
+}
+
+// The colour a plant's part takes on top of its material, from the same
+// records: rgb multiplies the base colour (the vertex shaders fold it into
+// the instance tint). A tree is never one flat hue:
+//   - each plant leans warm (yellow-green) or cool (blue-green), hashed from
+//     its root;
+//   - each limb is lighter or darker (its phase), and each leaf a little;
+//   - leaves deep in the crown are darker and cooler, the rim lighter, so a
+//     crown is dark inside and lit at its edge.
+// Bark varies by plant, and darkens toward the ground.
+vec3 vegetationTint(mat4 model, vec4 v0, vec4 v1, vec4 v2, vec4 v3) {
+    float scale = length(mat3(model)[1]);
+    vec3 root = (model * vec4(v0.xyz, 1.0)).xyz;
+    vec3 rootAbs = root + camera.eyeWorld.xyz;
+    float tree = sceneWindHash(ivec2(floor(rootAbs.xz * 8.0)) + ivec2(17, 3));
+    float limb = fract(v3.w * 7.31 + tree * 3.7);
+    bool leaf = dot(v3.xyz, v3.xyz) > 0.25;
+    if (!leaf) return vec3(0.82 + 0.3 * tree, 0.8 + 0.28 * tree, 0.78 + 0.24 * tree);
+
+    float each = fract(sin(dot(v2.xyz, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
+    vec3 c = mix(vec3(0.84, 0.97, 1.08), vec3(1.12, 1.04, 0.76), tree);
+    c *= 0.8 + 0.4 * limb;
+    c *= 0.9 + 0.2 * each;
+    if (v1.w > 0.0) {
+        vec3 crown = (model * vec4(v1.xyz, 1.0)).xyz;
+        vec3 anchor = (model * vec4(v2.xyz, 1.0)).xyz;
+        float depth = length(anchor - crown) / max(v1.w * scale, 0.5);
+        c *= mix(vec3(0.5, 0.62, 0.68), vec3(1.0), smoothstep(0.25, 1.0, depth));
+        c *= 1.0 + 0.15 * smoothstep(0.85, 1.15, depth);
+    }
+    return c;
 }

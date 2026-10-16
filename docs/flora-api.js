@@ -112,6 +112,30 @@
  *     * twigGrade01^2 * (isTerminal ? 1 : 0.1)
  * so shaded, young, dying or thick segments go bare.
  *
+ * ── Crown clumps (the default) ──
+ * By default a foliage emit hangs its leaves in crown clumps rather than
+ * spraying them along every twig: emitClumps picks clumps greedily from the
+ * tips of the leafy twigs (the ones the density above gives leaves to),
+ * outermost first, each kept only if it stands `clumpSpacing` clear of those
+ * already taken, so the silhouette fills first and sky shows between the
+ * clumps. A clump's radius follows its plant's crown (`clumpRadiusOfCrown`
+ * times the crown radius, unless `clumpRadius` is given), its leaf density
+ * the twig's light and health; bromesh's placeLeavesInClumps fills three
+ * overlapping lobes of each, `perArea` leaves per unit² of clump surface.
+ * The GPU scatter node draws the very same leaves (scene-nodes-api.js
+ * setScatterSegments, `clumps`). Every clump leaf's vegetation record is its
+ * twig tip's, so a clump rides its twig. Pass `clumps: false` for the
+ * per-twig spray (perUnitLength, rollJitter, densityFalloff, dedupRadius and
+ * scaleByRadius apply only there). The global density multiplies perArea as
+ * it does perUnitLength.
+ *
+ * ── Kinks ──
+ * Bark is drawn with a species' `kink` (default 0.2): each node of each
+ * module steps sideways by a hashed fraction of its incoming edge, the steps
+ * accumulating down the module tree, so branches zig-zag like grown wood
+ * while every segment still starts exactly where its parent ends. Emit only:
+ * the simulation never sees them, and `kink: 0` gives the grown skeleton.
+ *
  * ── Lists, counts and seeds ──
  * Every list an option reads element by element (a prototype's `nodes`,
  * `edges` and `terminalNodes`, `densityWeight`) is capped at 2^24
@@ -185,6 +209,7 @@
  * @property {number} [climateSigT=10] @property {number} [climateSigP=500]
  * @property {number} [maxAge=100] @property {number} [floweringAge=10] @property {number} [seedingRadius=5]
  * @property {number} [moduleMatureAge=1] @property {number} [pipeExp=2.5] @property {number} [leafDiameter=0.02]
+ * @property {number} [kink=0.2] - Sideways step per node, a fraction of its edge (see "Kinks"); emit only.
  * @property {number} [terrainAnchorWeight=0] @property {number} [maxSeedingSlope=1.5707963]
  * @property {number} [distributionWeightCollisions=1] @property {number} [distributionWeightTropism=0.5]
  * @property {number} [orthotropy=0.3] @property {number} [individualVariation=0]
@@ -253,7 +278,30 @@
  * @property {number} [scaleByRadius=0] - 1 = scale leaves with radius / maxRadius.
  * @property {number} [dedupRadius=0] - Minimum spacing between leaf origins; 0 = off.
  * @property {number} [seed=0] - An integer in [0, 2^53 - 1] (TypeError for a
- *   non-number, RangeError otherwise).
+ *   non-number, RangeError otherwise). Clump leaves use its low 32 bits.
+ *
+ * Crown clumps (see "Crown clumps"; maxRadius, minDepth, densityWeight,
+ * upBias, tiltJitter, baseScale, scaleJitter and seed apply to them too, with
+ * the clump defaults below where they differ):
+ * @property {boolean} [clumps=true] - false: the per-twig spray.
+ * @property {number} [clumpRadius=0] - Fixed clump radius; 0 sizes clumps from the crown.
+ * @property {number} [clumpRadiusOfCrown=0.26] - Clump radius as a fraction of its plant's crown radius.
+ * @property {number} [clumpJitter=0.3] - +/- fraction of the radius per clump.
+ * @property {number} [clumpSpacing=1.4] - Least centre distance, in mean radii: under 2 clumps overlap.
+ * @property {number} [minDensity=0.08] - The leaf density a twig needs to carry a clump.
+ * @property {number} [perArea=40] - Leaves per unit² of clump surface (times the global density).
+ * @property {number} [shell=0.4] - Depth of the shell the leaves sit in, as a fraction of the lobe radius.
+ * (Clump defaults: upBias 0.3, tiltJitter 0.6, scaleJitter 0.25.)
+ */
+
+/**
+ * A crown clump (bromesh's LeafClump).
+ * @typedef {Object} FloraClump
+ * @property {Array<number>} center - [x, y, z], just past its twig's tip along it.
+ * @property {number} radius
+ * @property {Array<number>} dir - Unit direction of its twig.
+ * @property {number} density - Leaf density in (0, 1].
+ * @property {number} segment - The segment it hangs on (emitSegments index).
  */
 
 /**
@@ -418,9 +466,15 @@ class FloraWorld {
    * padded by the largest radius ([0,0,0] when empty). `vegetation` holds
    * 12 floats per kept segment (see "Vegetation records"); pass the whole
    * object to `setTubeSegments` / createInstancedMesh's `tube` and it sways.
+   * A segment continuing its parent (the parent's thickest child) starts at
+   * the parent's radius, so bark runs on unbroken; a side shoot starts at
+   * most 1.5x its own radius, a collar inside the parent's wood. `tangents`
+   * holds 6 floats per kept segment, the joint directions at its base and
+   * tip (the bisector with the parent / thickest child it continues), which
+   * the tube node mitres its joints on.
    * @param {{minRadius?: number}} [opts] - minRadius defaults to 0.
    * @returns {{segments: Float32Array, segCount: number, boundsMin: Array<number>, boundsMax: Array<number>,
-   *   vegetation: Float32Array}}
+   *   vegetation: Float32Array, tangents: Float32Array}}
    */
   emitBranchTubes(opts) {}
 
@@ -496,10 +550,26 @@ class FloraWorld {
    * terminalOnly, densityWeight) applied; the jitter / scale fields are left
    * to the shader. Bounds are unpadded ([0,0,0] when empty). `vegetation`
    * holds 12 floats per kept segment (see "Vegetation records").
+   *
+   * That is the spray (`clumps: false`). By default (crown clumps) each entry
+   * of `segments` is a clump instead — center xyz, radius, dir xyz, 0 — with
+   * `instSeg` the leaf's clump, `vegetation` the clump's twig record, and
+   * `clumps: true` plus the placement fields (seed, upBias, tiltJitter,
+   * shell, baseScale, scaleJitter) on the object, so passing it whole to
+   * createInstancedMesh's `scatter` draws exactly emitFoliageTransforms'
+   * leaves.
    * @param {FloraLeafPlacementOptions} [opts]
-   * @returns {{segments: Float32Array, segCount: number, instSeg: Float32Array, instanceCount: number, boundsMin: Array<number>, boundsMax: Array<number>, vegetation: Float32Array}}
+   * @returns {{segments: Float32Array, segCount: number, instSeg: Float32Array, instanceCount: number, boundsMin: Array<number>, boundsMax: Array<number>, vegetation: Float32Array, clumps?: boolean}}
    */
   emitScatterSegments(opts) {}
+
+  /**
+   * The world's crown clumps (see "Crown clumps"), in plant order; what
+   * every clump-mode foliage emit fills.
+   * @param {FloraLeafPlacementOptions} [opts] - The clump fields, maxRadius, minDepth, densityWeight, seed.
+   * @returns {Array<FloraClump>}
+   */
+  emitClumps(opts) {}
 
   /**
    * One 16-float vegetation record per leaf, in lockstep with
@@ -512,9 +582,10 @@ class FloraWorld {
 
   /**
    * One 16-float vegetation record per world segment, in lockstep with
-   * `emitSegmentTransforms()`: wood, weighted at the segment's base (an
-   * instance is rigid, so a segment's tip does not take the extra bend its
-   * child's base does).
+   * `emitSegmentTransforms()`: wood, in the segment form (scene-nodes-api.js
+   * "Vegetation"): the crown floats carry the segment's tip and its weight,
+   * so each vertex of the instanced cylinder bends by the weight at its own
+   * point and the tip moves exactly as its child's base.
    * @returns {Float32Array} 16 floats per segment.
    */
   emitSegmentVegetation() {}

@@ -133,12 +133,43 @@ void InstancedMeshNode::setScatterSegments(const float* segData, size_t segCount
     bumpChangeGeneration();
 }
 
+namespace {
+
+// A unit vector in two floats (octahedral), the encoding mesh_tube.vert
+// decodes (scene_procedural.glsl procOctDecode).
+void octEncode(const float* v, float* out) {
+    float x = v[0], y = v[1], z = v[2];
+    const float l1 = std::fabs(x) + std::fabs(y) + std::fabs(z);
+    if (!(l1 > 1e-12f)) { out[0] = 0.0f; out[1] = 0.0f; return; }
+    x /= l1; y /= l1; z /= l1;
+    if (z < 0.0f) {
+        const float ox = (1.0f - std::fabs(y)) * (x >= 0.0f ? 1.0f : -1.0f);
+        const float oy = (1.0f - std::fabs(x)) * (y >= 0.0f ? 1.0f : -1.0f);
+        x = ox; y = oy;
+    }
+    out[0] = x; out[1] = y;
+}
+
+}  // namespace
+
 void InstancedMeshNode::setTubeSegments(const float* segData, size_t segCount,
                                         int sides, float radiusScale,
                                         const float boundsMin[3],
-                                        const float boundsMax[3]) {
+                                        const float boundsMax[3],
+                                        const float* tangents) {
     tubeMode_ = true;
-    tubeData_.assign(segData, segData + segCount * 8);
+    tubeJoints_ = tangents != nullptr;
+    if (tubeJoints_) {
+        tubeData_.resize(segCount * 12);
+        for (size_t s = 0; s < segCount; ++s) {
+            float* r = tubeData_.data() + s * 12;
+            std::copy_n(segData + s * 8, 8, r);
+            octEncode(tangents + s * 6, r + 8);
+            octEncode(tangents + s * 6 + 3, r + 10);
+        }
+    } else {
+        tubeData_.assign(segData, segData + segCount * 8);
+    }
     tubeSegCount_ = segCount;
     tubeSides_ = sides < 3 ? 3 : sides;
     tubeRadiusScale_ = radiusScale;
