@@ -48,6 +48,7 @@ extern "C" void bro_animation_main();
 extern "C" void bro_scene_main();
 extern "C" void bro_scene_graph_main();
 extern "C" void bro_scene_extras_main();
+extern "C" void bro_scene_grass_main();
 extern "C" void bro_motion_main();
 extern "C" void bro_server_main();
 extern "C" void bro_impostor_main();
@@ -213,6 +214,8 @@ void installSceneModule() {
     // native_scene_extras.cpp, and wraps the create* factories scene_graph.js
     // has just installed — so it runs last.
     bronze::embed::runEntry(bro_scene_extras_main);
+    // js/scene_grass.js: createGrass and the grass node's members.
+    bronze::embed::runEntry(bro_scene_grass_main);
 }
 
 void installMotionModule() {

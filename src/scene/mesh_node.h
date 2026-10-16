@@ -16,6 +16,7 @@
 namespace bro::scene {
 
 class SkinnedMeshNode;
+class GrassNode;
 
 /// A renderable 3D mesh node: bromesh::MeshData plus a PBR material. The node
 /// holds CPU data only; the scene renderer keeps the GPU copies keyed by node
@@ -37,6 +38,11 @@ public:
     /// renderer routes them to the skinned program via this hook instead of
     /// a separate Type.
     virtual SkinnedMeshNode* asSkinnedMesh() { return nullptr; }
+
+    /// Downcast hook: non-null when this node is a GrassNode, which keeps
+    /// Type::Mesh for the material setters but draws through the grass path
+    /// and stays out of raycasts and bounds.
+    virtual GrassNode* asGrass() { return nullptr; }
 
     // --- Draw mode ---
 

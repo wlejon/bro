@@ -192,6 +192,12 @@ static const uint32_t kSpvShadowInstancedVegVert[] =
 static const uint32_t kSpvShadowScatterVert[] =
 #include "shadow_scatter.vert.spv.h"
 ;
+static const uint32_t kSpvMeshGrassVert[] =
+#include "mesh_grass.vert.spv.h"
+;
+static const uint32_t kSpvShadowGrassVert[] =
+#include "shadow_grass.vert.spv.h"
+;
 
 template<size_t N>
 std::vector<uint32_t> arrayToVector(const uint32_t (&arr)[N]) {
@@ -272,6 +278,8 @@ const std::vector<uint32_t>& SceneVkShaderCompiler::getBuiltinSpirv(BuiltinScene
     static const std::vector<uint32_t> s_shadowVegVert = arrayToVector(kSpvShadowVegVert);
     static const std::vector<uint32_t> s_shadowInstancedVegVert = arrayToVector(kSpvShadowInstancedVegVert);
     static const std::vector<uint32_t> s_shadowScatterVert = arrayToVector(kSpvShadowScatterVert);
+    static const std::vector<uint32_t> s_meshGrassVert = arrayToVector(kSpvMeshGrassVert);
+    static const std::vector<uint32_t> s_shadowGrassVert = arrayToVector(kSpvShadowGrassVert);
     static const std::vector<uint32_t> s_empty;
 
     switch (shader) {
@@ -320,6 +328,8 @@ const std::vector<uint32_t>& SceneVkShaderCompiler::getBuiltinSpirv(BuiltinScene
         case BuiltinSceneShader::ShadowVegVert: return s_shadowVegVert;
         case BuiltinSceneShader::ShadowInstancedVegVert: return s_shadowInstancedVegVert;
         case BuiltinSceneShader::ShadowScatterVert: return s_shadowScatterVert;
+        case BuiltinSceneShader::MeshGrassVert: return s_meshGrassVert;
+        case BuiltinSceneShader::ShadowGrassVert: return s_shadowGrassVert;
         default: return s_empty;
     }
 }

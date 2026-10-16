@@ -354,6 +354,7 @@ bool bro_scene_SceneGraph_raycast(void* self, const double* origin, uint32_t ori
         if (!node || !node->visible()) return;
         if (node->type() == scene::SceneNode::Type::Mesh) {
             auto* mn = static_cast<scene::MeshNode*>(node);
+            if (mn->asGrass()) return;   // its mesh is one blade, not where the grass is
             const bromesh::MeshData& md = mn->mesh();
             if (md.positions.empty() || md.indices.empty()) return;
             auto bvhOf = [&]() -> const bromesh::MeshBVH& { return mn->bvh(); };

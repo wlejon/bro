@@ -19,7 +19,7 @@ layout(location = 5) in vec3 inBitangent;
 layout(location = 6) in vec4 inInstColor;  // rgb tint, a atlas cell / 256 (white off instancing)
 #ifdef SCENE_VEGETATION
 // xyz the crown's bulk normal times its weight, w the ambient occlusion,
-// negative on a leaf (vegetationSway).
+// negative on a leaf (vegetationSway), -(2 + ao) on a grass blade.
 layout(location = 7) in vec4 inVegShade;
 #endif
 
@@ -87,10 +87,13 @@ void main() {
     baseColor *= inInstColor.rgb;
     if (push.pbrParams.z > 0.0 && alpha < push.pbrParams.z) discard;
 #ifdef SCENE_VEGETATION
+    // A grass blade (mesh_grass.vert) marks its ao with w <= -2: translucent
+    // like a leaf, with no paler underside.
     bool vegLeaf = inVegShade.w < 0.0;
-    float vegAO = abs(inVegShade.w);
+    bool vegBlade = inVegShade.w < -1.5;
+    float vegAO = vegBlade ? -inVegShade.w - 2.0 : abs(inVegShade.w);
     // A leaf's underside is paler and yellower than its top.
-    if (vegLeaf && !gl_FrontFacing)
+    if (vegLeaf && !vegBlade && !gl_FrontFacing)
         baseColor = mix(baseColor, baseColor * vec3(1.25, 1.3, 1.05) + vec3(0.015, 0.02, 0.0), 0.6);
 #endif
 

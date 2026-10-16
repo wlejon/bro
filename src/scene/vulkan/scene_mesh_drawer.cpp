@@ -31,7 +31,8 @@ SceneRenderer::CustomShaderTarget shaderTarget(MeshKind kind) {
     case MeshKind::Static:
     case MeshKind::Vegetation:
     case MeshKind::Scatter:
-    case MeshKind::Tube: break;
+    case MeshKind::Tube:
+    case MeshKind::Grass: break;
     }
     return SceneRenderer::CustomShaderTarget::Static;
 }
@@ -109,6 +110,8 @@ bool SceneMeshDrawer::setup(SceneGpu& gpu) {
         SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshVegVert);
     vs_[static_cast<int>(MeshKind::InstancedVegetation)] =
         SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshInstancedVegVert);
+    vs_[static_cast<int>(MeshKind::Grass)] =
+        SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshGrassVert);
     fs_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshFrag);
     fsIndirect_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshIndirectFrag);
     fsVeg_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshVegFrag);
@@ -644,7 +647,7 @@ void SceneMeshDrawer::record(VkCommandBuffer cmd, const TargetFormat& target, Vk
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 3, sets, 0, nullptr);
     if (draw.vertexSet)
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 3, 1, &draw.vertexSet, 0, nullptr);
-    if (custom)
+    if (custom || (draw.kind == MeshKind::Grass && draw.customSet))
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 4, 1, &draw.customSet, 0, nullptr);
     vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                        sizeof(MeshPushConstants), &draw.push);
@@ -688,7 +691,8 @@ void SceneMeshDrawer::bindGeometryAndDraw(VkCommandBuffer cmd, const MeshDraw& d
         break;
     case MeshKind::Static:
     case MeshKind::Scatter:
-    case MeshKind::Tube: break;
+    case MeshKind::Tube:
+    case MeshKind::Grass: break;
     }
     vkCmdBindVertexBuffers(cmd, 0, count, buffers, offsets);
     vkCmdBindIndexBuffer(cmd, draw.indices, 0, VK_INDEX_TYPE_UINT32);

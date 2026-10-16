@@ -692,6 +692,52 @@ void bro_scene_SceneGraph_bindAudioListenerToCamera(void* self, bool bind);
 //   registered at __bro_native.scene.SceneGraph_detachAIWorld
 void bro_scene_SceneGraph_detachAIWorld(void* self);
 
+// ---- Grass (native_scene_grass.cpp, js/scene_grass.js) ----
+
+// bro.scene.SceneGraph.prototype.createGrass
+//   registered at __bro_native.scene.SceneGraph_createGrass
+void* bro_scene_SceneGraph_createGrass(void* self);
+
+// grass.setField: cols x rows texels of (height, density, dry, height multiplier),
+// texel (i, j) centred at world (x0 + i * cell, z0 + j * cell)
+//   registered at __bro_native.scene.SceneNode_setGrassField
+void bro_scene_SceneNode_setGrassField(void* self, const float* data, uint32_t data_len, int32_t cols, int32_t rows,
+                                       double x0, double z0, double cell);
+
+// grass params, GrassNode::paramsFromArray's order (a NaN keeps a value)
+//   registered at __bro_native.scene.SceneNode_setGrassParams
+void bro_scene_SceneNode_setGrassParams(void* self, const double* params, uint32_t params_len);
+
+//   registered at __bro_native.scene.SceneNode_grassParams
+//   result: f64[] in *out; out->release == NULL, the runtime copies
+void bro_scene_SceneNode_grassParams(void* self, bronze_native_buffer* out);
+
+// grass.addMover / removeMover (radius <= 0 removes)
+//   registered at __bro_native.scene.SceneNode_setGrassMover
+void bro_scene_SceneNode_setGrassMover(void* self, void* target, double radius, double strength, double trample);
+
+// grass.push: a one-off push this frame
+//   registered at __bro_native.scene.SceneNode_grassPush
+void bro_scene_SceneNode_grassPush(void* self, double x, double z, double radius, double vx, double vz,
+                                   double strength, double trample);
+
+// grass.stats: [ring 0 instances, ring 1, ring 2, movers, field cols, field rows]
+//   registered at __bro_native.scene.SceneNode_grassStats
+//   result: f64[] in *out; out->release == NULL, the runtime copies
+void bro_scene_SceneNode_grassStats(void* self, bronze_native_buffer* out);
+
+// node.sampleHeights: a mesh node's top surface (world y) on a grid, NaN where
+// it has none; texel (i, j) at world (x0 + i * cell, z0 + j * cell)
+//   registered at __bro_native.scene.SceneNode_sampleHeights
+//   result: f32[] in *out; out->release set, the array is a view over it
+void bro_scene_SceneNode_sampleHeights(void* self, double x0, double z0, double cell, int32_t cols, int32_t rows,
+                                       bronze_native_buffer* out);
+
+// node.worldBounds for a mesh node: [minX, minY, minZ, maxX, maxY, maxZ], empty when none
+//   registered at __bro_native.scene.SceneNode_meshWorldBounds
+//   result: f64[] in *out; out->release == NULL, the runtime copies
+void bro_scene_SceneNode_meshWorldBounds(void* self, bronze_native_buffer* out);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif

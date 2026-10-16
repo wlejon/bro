@@ -11,7 +11,8 @@ set(VK_GENERATED_HEADERS "")
 # The GLSL the shaders #include (expanded by bro_spirv_embed at build time and
 # by SceneVkShaderCompiler at run time).
 set(VK_SHADER_INCLUDES scene_camera.glsl scene_lighting.glsl scene_atmosphere.glsl scene_mesh_push.glsl
-    scene_shadow_push.glsl scene_procedural.glsl scene_vegetation.glsl sky_common.glsl ibl_common.glsl)
+    scene_shadow_push.glsl scene_procedural.glsl scene_vegetation.glsl scene_grass.glsl sky_common.glsl
+    ibl_common.glsl)
 list(TRANSFORM VK_SHADER_INCLUDES PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/"
      OUTPUT_VARIABLE VK_SHADER_INCLUDE_PATHS)
 foreach(_shader
@@ -20,12 +21,14 @@ foreach(_shader
         mesh_skinned.vert
         mesh_scatter.vert
         mesh_tube.vert
+        mesh_grass.vert
         mesh.frag
         shadow.vert
         shadow_instanced.vert
         shadow_skinned.vert
         shadow_tube.vert
         shadow_scatter.vert
+        shadow_grass.vert
         shadow.frag
         sky.vert
         sky_atmosphere.frag
@@ -144,6 +147,7 @@ add_library(bro_scene STATIC
     particle_node.cpp
     particles3d_node.cpp
     decal_node.cpp
+    grass_node.cpp
     reflection_probe_node.cpp
     terrain_manager.cpp
     terrain_manager_mesh.cpp
@@ -167,6 +171,7 @@ add_library(bro_scene STATIC
     vulkan/scene_gpu_timer.cpp
     vulkan/scene_gpu_resources.cpp
     vulkan/scene_mesh_drawer.cpp
+    vulkan/scene_mesh_drawer_grass.cpp
     vulkan/scene_draw_list.cpp
     vulkan/scene_frame_graph.cpp
     vulkan/scene_fullscreen.cpp

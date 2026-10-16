@@ -31,6 +31,7 @@
 
 namespace bro::scene {
 class InstancedMeshNode;
+class GrassNode;
 }
 
 namespace bro::scene::vk {
@@ -73,13 +74,16 @@ constexpr uint32_t vertexColor(int mode) { return static_cast<uint32_t>(mode & 3
 /// and InstancedVegetation are Static and Instanced carrying wind-sway
 /// records (scene_vegetation.glsl): a per-vertex or per-instance stream at
 /// locations 12-15. Scatter and Tube sway from records in their segment set.
-enum class MeshKind : uint8_t { Static, Instanced, Skinned, Scatter, Tube, Vegetation, InstancedVegetation };
-constexpr int kMeshKindCount = 7;
+/// Grass is a blade mesh drawn once per cell of a ring around the camera,
+/// placed and bent by the vertex shader from the node's field and influence
+/// map (set 4, scene_grass.glsl).
+enum class MeshKind : uint8_t { Static, Instanced, Skinned, Scatter, Tube, Vegetation, InstancedVegetation, Grass };
+constexpr int kMeshKindCount = 8;
 
 /// The kinds the vegetation shading (mesh.frag's SCENE_VEGETATION variant) draws.
 constexpr bool vegetationShading(MeshKind k) {
     return k == MeshKind::Vegetation || k == MeshKind::InstancedVegetation || k == MeshKind::Scatter ||
-           k == MeshKind::Tube;
+           k == MeshKind::Tube || k == MeshKind::Grass;
 }
 
 struct MeshDraw {
@@ -106,7 +110,7 @@ struct MeshDraw {
     VkBuffer skin = VK_NULL_HANDLE;              // Skinned
     VkDescriptorSet vertexSet = VK_NULL_HANDLE;  // set 3: Skinned bones, Scatter/Tube segments
     VkDescriptorSet materialSet = VK_NULL_HANDLE;// null: the default material
-    VkDescriptorSet customSet = VK_NULL_HANDLE;  // set 4 when `custom`
+    VkDescriptorSet customSet = VK_NULL_HANDLE;  // set 4 when `custom`; Grass: its ring and textures
 
     MeshPushConstants push{};
     bool translucent = false;
@@ -139,6 +143,9 @@ public:
     /// Fill `out` for this frame. False when the node has nothing to draw.
     bool prepare(SceneFrame& frame, MeshNode& node, MeshDraw& out);
     bool prepare(SceneFrame& frame, InstancedMeshNode& node, MeshDraw& out);
+    /// A grass node's draws, one per ring with visible cells, nearest first
+    /// (scene_mesh_drawer_grass.cpp). Also stamps its movers for the frame.
+    void prepareGrass(SceneFrame& frame, GrassNode& node, std::vector<MeshDraw>& out);
 
     /// Bind and draw into the open target described by `target`, lit by
     /// the draw's probe lighting set when it has one, else `lightingSet`.

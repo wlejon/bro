@@ -1,5 +1,6 @@
 #include "scene/vulkan/scene_draw_list.h"
 
+#include "scene/grass_node.h"
 #include "scene/instanced_mesh_node.h"
 #include "scene/mesh_node.h"
 #include "scene/scene_graph.h"
@@ -71,6 +72,21 @@ void buildDrawLists(SceneFrame& frame) {
         const SceneNode::Type type = node->type();
         if (type != SceneNode::Type::Mesh && type != SceneNode::Type::InstancedMesh) {
             continue;
+        }
+
+        if (type == SceneNode::Type::Mesh) {
+            if (GrassNode* grass = static_cast<MeshNode*>(node)->asGrass()) {
+                // Grass: a draw per ring, each cut to the cells in view.
+                std::vector<MeshDraw> rings;
+                drawer.prepareGrass(frame, *grass, rings);
+                for (MeshDraw& draw : rings) {
+                    placeDraw(frame, node, std::nullopt, draw);
+                    stats.meshDrawn++;
+                    lists.opaque.push_back(static_cast<uint32_t>(lists.meshes.size()));
+                    lists.meshes.push_back(draw);
+                }
+                continue;
+            }
         }
 
         const auto bounds = frame.renderer.nodeWorldBounds(node);

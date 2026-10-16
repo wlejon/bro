@@ -59,7 +59,8 @@ std::optional<bromath::AABB3> SceneRenderer::nodeWorldBounds(SceneNode* n) const
     switch (n->type()) {
     case SceneNode::Type::Mesh: {
         auto* m = static_cast<MeshNode*>(n);
-        if (!m->hasDrawableMesh()) return std::nullopt;
+        // Grass stands around the camera wherever its field is: never culled.
+        if (!m->hasDrawableMesh() || m->asGrass()) return std::nullopt;
         bromath::AABB3 local = m->localBounds();
         auto* sm = m->asSkinnedMesh();
         if (sm && sm->skinReady()) local = sm->posedLocalBounds();

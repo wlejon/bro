@@ -150,6 +150,13 @@ CameraNode* SceneGraph::createCamera(const std::string& name) {
     return ptr;
 }
 
+GrassNode* SceneGraph::createGrass(const std::string& name) {
+    auto node = std::make_unique<GrassNode>(name);
+    auto* ptr = node.get();
+    nodes_[ptr->id()] = std::move(node);
+    return ptr;
+}
+
 DecalNode* SceneGraph::createDecal(const std::string& name) {
     auto node = std::make_unique<DecalNode>(name);
     auto* ptr = node.get();

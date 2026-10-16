@@ -43,6 +43,7 @@ void shadowVertexInput(MeshKind kind, bool custom, std::vector<VkVertexInputBind
                 keep = a.location == 0 || (a.location >= 8 && a.location <= 10) || veg;
                 break;
             case MeshKind::Scatter: keep = a.location == 0; break;
+            case MeshKind::Grass: keep = a.location <= 1; break;
             default: keep = a.location <= 3 || a.location == 5 || a.location == 6 || veg; break;
             }
         }
@@ -93,6 +94,8 @@ bool PassShadow::setup(SceneGpu& gpu) {
         SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowVegVert);
     vs_[static_cast<int>(MeshKind::InstancedVegetation)] =
         SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowInstancedVegVert);
+    vs_[static_cast<int>(MeshKind::Grass)] =
+        SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowGrassVert);
     fs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowFrag);
     for (VkShaderModule m : vs_) {
         if (!m) return false;
@@ -207,7 +210,7 @@ void PassShadow::drawCaster(SceneFrame& frame, const bromath::Mat4& lightViewPro
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 1, &frame.cameraSet, 0, nullptr);
     if (draw.vertexSet)
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 3, 1, &draw.vertexSet, 0, nullptr);
-    if (customBound)
+    if (customBound || (draw.kind == MeshKind::Grass && draw.customSet))
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 4, 1, &draw.customSet, 0, nullptr);
 
     Push push{};

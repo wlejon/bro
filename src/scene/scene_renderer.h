@@ -599,6 +599,7 @@ private:
     std::vector<MeshNode*> shadowSkinnedCustomCasters_;
     std::vector<InstancedMeshNode*> shadowInstancedCasters_;
     std::vector<InstancedMeshNode*> shadowTubeCasters_;
+    bool grassCasts_ = false;   // a GrassNode casts: every tile re-renders
 
     // --- Environment state ---
     std::string envPath_;

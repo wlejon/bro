@@ -216,7 +216,16 @@ bool registerNatives_scene(std::string* error) {
         fn("__bro_native.scene.SceneGraph_unprojectLocal", p(&bro_scene_SceneGraph_unprojectLocal), "f64[]", {"__bro_native.scene.SceneGraph", "f64", "f64"}, error) &&
         fn("__bro_native.scene.SceneGraph_projectLocal", p(&bro_scene_SceneGraph_projectLocal), "f64[]", {"__bro_native.scene.SceneGraph", "f64", "f64", "f64"}, error) &&
         fn("__bro_native.scene.SceneGraph_bindAudioListenerToCamera", p(&bro_scene_SceneGraph_bindAudioListenerToCamera), "void", {"__bro_native.scene.SceneGraph", "bool"}, error) &&
-        fn("__bro_native.scene.SceneGraph_detachAIWorld", p(&bro_scene_SceneGraph_detachAIWorld), "void", {"__bro_native.scene.SceneGraph"}, error);
+        fn("__bro_native.scene.SceneGraph_detachAIWorld", p(&bro_scene_SceneGraph_detachAIWorld), "void", {"__bro_native.scene.SceneGraph"}, error) &&
+        fn("__bro_native.scene.SceneGraph_createGrass", p(&bro_scene_SceneGraph_createGrass), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph"}, error) &&
+        fn("__bro_native.scene.SceneNode_setGrassField", p(&bro_scene_SceneNode_setGrassField), "void", {"__bro_native.scene.SceneNode", "f32[]", "i32", "i32", "f64", "f64", "f64"}, error) &&
+        fn("__bro_native.scene.SceneNode_setGrassParams", p(&bro_scene_SceneNode_setGrassParams), "void", {"__bro_native.scene.SceneNode", "f64[]"}, error) &&
+        fn("__bro_native.scene.SceneNode_grassParams", p(&bro_scene_SceneNode_grassParams), "f64[]", {"__bro_native.scene.SceneNode"}, error) &&
+        fn("__bro_native.scene.SceneNode_setGrassMover", p(&bro_scene_SceneNode_setGrassMover), "void", {"__bro_native.scene.SceneNode", "__bro_native.scene.SceneNode", "f64", "f64", "f64"}, error) &&
+        fn("__bro_native.scene.SceneNode_grassPush", p(&bro_scene_SceneNode_grassPush), "void", {"__bro_native.scene.SceneNode", "f64", "f64", "f64", "f64", "f64", "f64", "f64"}, error) &&
+        fn("__bro_native.scene.SceneNode_grassStats", p(&bro_scene_SceneNode_grassStats), "f64[]", {"__bro_native.scene.SceneNode"}, error) &&
+        fn("__bro_native.scene.SceneNode_sampleHeights", p(&bro_scene_SceneNode_sampleHeights), "f32[]", {"__bro_native.scene.SceneNode", "f64", "f64", "f64", "i32", "i32"}, error) &&
+        fn("__bro_native.scene.SceneNode_meshWorldBounds", p(&bro_scene_SceneNode_meshWorldBounds), "f64[]", {"__bro_native.scene.SceneNode"}, error);
     if (!ok) return false;
     publishPrototype("scene", "__bro_native.scene.SceneNode", "SceneNodeProto");
     publishPrototype("scene", "__bro_native.scene.SceneGraph", "SceneGraphProto");

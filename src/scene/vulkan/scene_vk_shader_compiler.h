@@ -55,7 +55,10 @@ enum class BuiltinSceneShader {
     MeshVegIndirectFrag,
     ShadowVegVert,
     ShadowInstancedVegVert,
-    ShadowScatterVert
+    ShadowScatterVert,
+    // Grass blades (scene_grass.glsl), drawn with MeshVegFrag.
+    MeshGrassVert,
+    ShadowGrassVert
 };
 
 /// The scene's shader modules: the built-in shaders (compiled at build time)

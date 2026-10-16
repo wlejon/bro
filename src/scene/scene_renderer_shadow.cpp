@@ -34,7 +34,8 @@ void SceneRenderer::computeShadowBounds(bromath::AABB3& casters,
             // custom shader suppresses unlit, so such meshes count here too.
             // hasDrawableMesh: LOD-chain-only nodes fit too (localBounds is
             // the chain union, so every level's silhouette is covered).
-            if (!m->effectiveUnlit() && m->hasDrawableMesh()) {
+            // Grass lies on a ground that is itself a receiver.
+            if (!m->effectiveUnlit() && m->hasDrawableMesh() && !m->asGrass()) {
                 // cullMargin pads the fit the same way it pads culling
                 // bounds (world units) — a custom vertex shader can displace
                 // geometry along the light direction past the bind-pose
@@ -216,7 +217,10 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
         if (!n || !n->renderVisible()) return;
         if (n->type() == SceneNode::Type::Mesh) {
             auto* m = static_cast<MeshNode*>(n);
-            if (!m->effectiveUnlit() && m->castsShadow() && m->hasDrawableMesh()) {
+            // Casting grass draws through the mesh drawer's grass path; its
+            // blades move with the wind and the camera, so its tiles never cache.
+            if (m->asGrass() && m->castsShadow() && !m->effectiveUnlit()) grassCasts_ = true;
+            if (!m->effectiveUnlit() && m->castsShadow() && m->hasDrawableMesh() && !m->asGrass()) {
                 auto* sm = m->asSkinnedMesh();
                 if (sm && sm->skinReady()) {
                     (hasVertexChunk(m) ? shadowSkinnedCustomCasters_
@@ -237,6 +241,7 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
         }
         for (auto* c : n->children()) self(self, c);
     };
+    grassCasts_ = false;
     gather(gather, graph_.root_.get());
     // Group the custom casters by chunk source so the per-tile loop binds
     // each shadow variant once per group.
@@ -625,7 +630,7 @@ void SceneRenderer::planShadowTiles() {
             continue;
         }
         sig.clear();
-        bool dynamic = false;
+        bool dynamic = grassCasts_;
         auto addList = [&](const auto& casters,
                            const std::vector<CasterBounds>& bounds,
                            uint64_t listTag, bool listDynamic) {
