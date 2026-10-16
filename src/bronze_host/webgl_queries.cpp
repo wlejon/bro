@@ -95,6 +95,15 @@ Value makeExtension(webgl::WebGL2RenderingContext* c, const std::string& name) {
     } else if (name == "EXT_texture_filter_anisotropic") {
         def("TEXTURE_MAX_ANISOTROPY_EXT", 0x84FE);
         def("MAX_TEXTURE_MAX_ANISOTROPY_EXT", 0x84FF);
+    } else if (name == "EXT_disjoint_timer_query_webgl2") {
+        def("QUERY_COUNTER_BITS_EXT", 0x8864);
+        def("TIME_ELAPSED_EXT", 0x88BF);
+        def("TIMESTAMP_EXT", 0x8E28);
+        def("GPU_DISJOINT_EXT", 0x8FBB);
+        o.def("queryCounterEXT", 2, [c](Value, std::span<const Value> a) {
+            if (auto* gl = live(c)) gl->queryCounter(idOf(argAt(a, 0), WebGLCell::Query), u32At(a, 1));
+            return ev::undefined();
+        });
     } else if (name == "BRO_buffer_map") {
         def("MAP_READ_BIT", 0x0001);
         def("MAP_WRITE_BIT", 0x0002);
@@ -176,6 +185,12 @@ void installWebGLQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
             case 0x2A00:  // GL_POLYGON_OFFSET_UNITS
             case 0x84FF:  // MAX_TEXTURE_MAX_ANISOTROPY_EXT
                 return ev::fromDouble(gl->getParameterFloat(pname));
+
+            // EXT_disjoint_timer_query_webgl2
+            case 0x8FBB:  // GPU_DISJOINT_EXT
+                return ev::fromBool(gl->gpuDisjoint());
+            case 0x8E28:  // TIMESTAMP_EXT
+                return ev::fromDouble(static_cast<double>(gl->gpuTimestamp()));
 
             // Int[4]
             case 0x0BA2:    // GL_VIEWPORT
@@ -434,6 +449,8 @@ void installWebGLQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
     b.def("getQuery", 2, [c](Value, std::span<const Value> a) {
         auto* gl = live(c);
         if (!gl) return ev::null();
+        if (u32At(a, 1) == 0x8864 /* QUERY_COUNTER_BITS_EXT */)
+            return ev::fromDouble(gl->queryCounterBits(u32At(a, 0)));
         if (u32At(a, 1) != 0x8865 /* CURRENT_QUERY */) {
             gl->setSyntheticError(GL_INVALID_ENUM);
             return ev::null();
@@ -443,10 +460,10 @@ void installWebGLQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
     b.def("getQueryParameter", 2, [c](Value, std::span<const Value> a) {
         auto* gl = live(c);
         const GLenum pname = u32At(a, 1);
-        GLuint v = 0;
+        uint64_t v = 0;
         if (!gl || !gl->getQueryParameter(idOf(argAt(a, 0), WebGLCell::Query), pname, v)) return ev::null();
         if (pname == 0x8867 /* QUERY_RESULT_AVAILABLE */) return ev::fromBool(v != 0);
-        return ev::fromDouble(v);
+        return ev::fromDouble(static_cast<double>(v));
     });
     b.def("isQuery", 1, [c](Value, std::span<const Value> a) {
         auto* gl = live(c);

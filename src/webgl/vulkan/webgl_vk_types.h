@@ -55,6 +55,26 @@ inline constexpr VkAccessFlags kBufferReadAccess =
     VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_INDEX_READ_BIT | VK_ACCESS_UNIFORM_READ_BIT |
     VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;  // transform feedback stores
 
+/// The ticket of GPU work recorded into the open command buffer, not yet
+/// submitted.
+inline constexpr uint64_t kUnsubmittedTicket = ~0ull;
+
+/// A host-readable copy of a buffer's GPU-written bytes, recorded at a
+/// fenceSync so that a getBufferSubData once the fence has signalled is a
+/// memcpy with nothing to wait for. Byte `i` of the mirror is byte `i` of the
+/// buffer; [begin, end) holds what the buffer had after GPU write `writes`.
+struct BufferDownload {
+    VkBuffer buffer = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    VkDeviceSize memoryOffset = 0;
+    uint64_t allocId = 0;
+    void* mapped = nullptr;
+    VkDeviceSize capacity = 0;
+    uint64_t ticket = 0;           // the submission holding the copy
+    VkDeviceSize begin = 0, end = 0;
+    uint64_t writes = ~0ull;       // VkBufferResource::deviceWrites it is current for
+};
+
 struct VkBufferResource {
     VkBuffer buffer = VK_NULL_HANDLE;
     VkDeviceMemory memory = VK_NULL_HANDLE;
@@ -67,6 +87,15 @@ struct VkBufferResource {
     // them (an index range scan) knows when it is stale.
     uint64_t version = 0;
     bool deviceNewer = false;  // the GPU wrote it (transform feedback) since shadowData was
+    // What the GPU wrote that shadowData does not have yet: [dirtyBegin,
+    // dirtyEnd), the count of GPU writes so far, and the submission holding
+    // the last one (kUnsubmittedTicket while it is in the open command buffer).
+    VkDeviceSize dirtyBegin = 0, dirtyEnd = 0;
+    uint64_t deviceWrites = 0;
+    uint64_t writeTicket = 0;
+    bool cpuReader = false;      // getBufferSubData has read GPU writes back from it
+    bool downloadListed = false; // in the context's list for the next fenceSync
+    BufferDownload download;
     std::array<IndexRange, 4> indexRanges{};
     uint32_t nextIndexRange = 0;
     bool isMapped = false;

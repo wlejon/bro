@@ -1,4 +1,5 @@
 #include "webgl/vulkan/webgl_vk_context.h"
+#include "render/vulkan_util.h"
 #include "util/log.h"
 #include <algorithm>
 #include <cstring>
@@ -257,6 +258,10 @@ void WebGLVkContext::bufferData(GLenum target, GLsizeiptr size, const void* data
     if (data && size > 0) std::memcpy(contents.data(), data, static_cast<size_t>(size));
     res.shadowData.swap(contents);
     ++res.version;
+    // The new contents are the CPU's: nothing the GPU wrote before is newer.
+    res.deviceNewer = false;
+    res.dirtyBegin = res.dirtyEnd = 0;
+    res.download.writes = ~0ull;
     if (size == 0) return;
 
     if (!res.isValid()) {
@@ -313,9 +318,141 @@ void WebGLVkContext::getBufferSubData(GLenum target, GLintptr srcByteOffset, voi
         return;
     }
     if (dstData && length > 0) {
-        syncShadow(res);
+        // A buffer read back once is likely read back again: later fences
+        // copy its GPU writes out ahead (recordBufferDownloads).
+        if (res.deviceNewer) res.cpuReader = true;
+        const auto begin = static_cast<VkDeviceSize>(srcByteOffset);
+        syncShadow(res, begin, begin + static_cast<VkDeviceSize>(length));
         std::memcpy(dstData, res.shadowData.data() + srcByteOffset, length);
     }
+}
+
+void WebGLVkContext::bufferWrittenByGpu(GLuint id, VkBufferResource& res, VkDeviceSize begin, VkDeviceSize end) {
+    end = std::min(end, res.size);
+    ++res.version;
+    if (begin >= end) return;
+    if (res.deviceNewer) {
+        res.dirtyBegin = std::min(res.dirtyBegin, begin);
+        res.dirtyEnd = std::max(res.dirtyEnd, end);
+    } else {
+        res.dirtyBegin = begin;
+        res.dirtyEnd = end;
+        res.deviceNewer = true;
+    }
+    ++res.deviceWrites;
+    if (res.writeTicket != kUnsubmittedTicket) {
+        res.writeTicket = kUnsubmittedTicket;
+        unsubmittedBufferWrites_.push_back(id);
+    }
+    // STREAM_READ / STATIC_READ / DYNAMIC_READ, or read back before.
+    const bool readHint = (res.usage & 3) == 1;
+    if ((readHint || res.cpuReader) && !res.downloadListed) {
+        res.downloadListed = true;
+        downloadCandidates_.push_back(id);
+    }
+}
+
+void WebGLVkContext::bufferWritesSubmitted() {
+    for (GLuint id : unsubmittedBufferWrites_) {
+        auto it = buffers_.find(id);
+        if (it == buffers_.end()) continue;
+        if (it->second.writeTicket == kUnsubmittedTicket) it->second.writeTicket = stream_.lastTicket();
+        if (it->second.download.ticket == kUnsubmittedTicket) it->second.download.ticket = stream_.lastTicket();
+    }
+    unsubmittedBufferWrites_.clear();
+}
+
+// Recorded just before fenceSync submits: the fence then covers the copies,
+// so once the app sees it signalled, getBufferSubData has nothing to wait for.
+void WebGLVkContext::recordBufferDownloads() {
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    for (GLuint id : downloadCandidates_) {
+        auto it = buffers_.find(id);
+        if (it == buffers_.end()) continue;
+        VkBufferResource& res = it->second;
+        res.downloadListed = false;
+        if (!res.deviceNewer || !res.isValid() || res.download.writes == res.deviceWrites) continue;
+        BufferDownload& d = res.download;
+        if (d.capacity < res.size) {
+            if (d.buffer != VK_NULL_HANDLE) {
+                render::VulkanContext* ctx = &context_;
+                VkBuffer dead = d.buffer;
+                uint64_t allocId = d.allocId;
+                stream_.defer([ctx, dead, allocId] { ctx->destroyBuffer(dead, allocId); });
+            }
+            d = BufferDownload{};
+            if (!createHostReadable(res.size, d.buffer, d.memory, d.memoryOffset, d.allocId, d.mapped)) {
+                d = BufferDownload{};
+                continue;
+            }
+            d.capacity = res.size;
+        }
+        if (cmd == VK_NULL_HANDLE) cmd = transferCommands();
+        const VkDeviceSize size = res.dirtyEnd - res.dirtyBegin;
+        render::cmdBufferBarrier(cmd, res.buffer, res.dirtyBegin, size,
+                                 VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+        const VkBufferCopy region{res.dirtyBegin, res.dirtyBegin, size};
+        vkCmdCopyBuffer(cmd, res.buffer, d.buffer, 1, &region);
+        d.begin = res.dirtyBegin;
+        d.end = res.dirtyEnd;
+        d.writes = res.deviceWrites;
+        d.ticket = kUnsubmittedTicket;
+        unsubmittedBufferWrites_.push_back(id);
+    }
+    downloadCandidates_.clear();
+    if (cmd != VK_NULL_HANDLE)
+        render::cmdMemoryBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                                 VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_HOST_READ_BIT);
+}
+
+bool WebGLVkContext::syncShadow(VkBufferResource& res, VkDeviceSize begin, VkDeviceSize end) {
+    if (!res.deviceNewer) return true;
+    if (!res.isValid() || res.size == 0) {
+        res.deviceNewer = false;
+        return true;
+    }
+    // Only bytes the GPU wrote need reading; the rest of the request is current.
+    begin = std::max(begin, res.dirtyBegin);
+    end = std::min(end, res.dirtyEnd);
+    const bool whole = begin <= res.dirtyBegin && end >= res.dirtyEnd;
+    if (begin < end) {
+        const VkDeviceSize size = end - begin;
+        auto& queue = context_.queue();
+        const BufferDownload& d = res.download;
+        if (d.buffer != VK_NULL_HANDLE && d.writes == res.deviceWrites && d.begin <= begin && d.end >= end) {
+            // Copied out at a fenceSync: wait for that copy alone, which the
+            // usual caller has already seen complete through its fence.
+            if (d.ticket == kUnsubmittedTicket) flushCommands();
+            if (!queue.isComplete(res.download.ticket) && !queue.wait(res.download.ticket)) return false;
+            std::memcpy(res.shadowData.data() + begin, static_cast<const uint8_t*>(d.mapped) + begin,
+                        static_cast<size_t>(size));
+        } else {
+            void* mapped = readbackMemory(size);
+            if (!mapped) return false;
+            auto record = [&](VkCommandBuffer cmd) {
+                const VkBufferCopy region{begin, 0, size};
+                vkCmdCopyBuffer(cmd, res.buffer, readback_.buffer, 1, &region);
+                render::cmdMemoryBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                                         VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_HOST_READ_BIT);
+            };
+            if (res.writeTicket != kUnsubmittedTicket && queue.isComplete(res.writeTicket)) {
+                // The last write is done: copy on a submission of its own and
+                // wait for just that, not for the work recorded since.
+                if (!queue.submitImmediate(record)) return false;
+            } else {
+                record(transferCommands());
+                if (!waitForCommands()) return false;
+            }
+            std::memcpy(res.shadowData.data() + begin, mapped, static_cast<size_t>(size));
+        }
+    }
+    if (whole) {
+        res.deviceNewer = false;
+        res.dirtyBegin = res.dirtyEnd = 0;
+    }
+    return true;
 }
 
 void WebGLVkContext::copyBufferSubData(GLenum readTarget, GLenum writeTarget,

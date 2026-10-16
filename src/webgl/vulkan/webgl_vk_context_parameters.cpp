@@ -219,12 +219,19 @@ std::vector<std::string> WebGLVkContext::supportedExtensions() const {
         exts.emplace_back("EXT_float_blend");
     if (formatSupports(VK_FORMAT_R32G32B32A32_SFLOAT, VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT))
         exts.emplace_back("OES_texture_float_linear");
+    // GPU timer queries, on Vulkan timestamps.
+    if (timerQueriesSupported()) exts.emplace_back("EXT_disjoint_timer_query_webgl2");
     return exts;
 }
 
 bool WebGLVkContext::enableExtension(const std::string& name) {
     // A compressed-texture extension's formats are accepted once enabled.
     if (enableCompressedExtension(name)) return true;
+    // TIME_ELAPSED_EXT, TIMESTAMP_EXT and the rest are enums from now on.
+    if (name == "EXT_disjoint_timer_query_webgl2" && timerQueriesSupported()) {
+        timerQueriesEnabled_ = true;
+        return true;
+    }
     const std::vector<std::string> exts = supportedExtensions();
     return std::find(exts.begin(), exts.end(), name) != exts.end();
 }

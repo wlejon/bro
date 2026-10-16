@@ -24,6 +24,7 @@ void WebGLVkContext::flushCommands() {
     endRendering();
     stream_.submit();
     queriesSubmitted();
+    bufferWritesSubmitted();
 }
 
 void WebGLVkContext::flushIfOverBudget() {
@@ -135,6 +136,15 @@ void WebGLVkContext::releaseBuffer(VkBufferResource& res) {
         uint64_t allocId = res.allocId;
         stream_.defer([ctx, buffer, allocId] { ctx->destroyBuffer(buffer, allocId); });
     }
+    if (res.download.buffer != VK_NULL_HANDLE) {
+        render::VulkanContext* ctx = &context_;
+        VkBuffer buffer = res.download.buffer;
+        uint64_t allocId = res.download.allocId;
+        stream_.defer([ctx, buffer, allocId] { ctx->destroyBuffer(buffer, allocId); });
+    }
+    res.download = BufferDownload{};
+    res.deviceNewer = false;
+    res.dirtyBegin = res.dirtyEnd = 0;
     res.buffer = VK_NULL_HANDLE;
     res.memory = VK_NULL_HANDLE;
     res.allocId = 0;
@@ -172,26 +182,40 @@ void* WebGLVkContext::readbackMemory(VkDeviceSize size) {
         stream_.defer([ctx, dead] { ctx->destroyBuffer(dead.buffer, dead.allocId); });
         readback_ = Readback{};
     }
+    if (!createHostReadable(size, readback_.buffer, readback_.memory, readback_.offset, readback_.allocId,
+                            readback_.mapped)) {
+        readback_ = Readback{};
+        return nullptr;
+    }
+    readback_.size = size;
+    return readback_.mapped;
+}
+
+bool WebGLVkContext::createHostReadable(VkDeviceSize size, VkBuffer& buffer, VkDeviceMemory& memory,
+                                        VkDeviceSize& offset, uint64_t& allocId, void*& mapped) {
     // Cached memory makes the CPU read fast; coherent keeps it simple.
     for (VkMemoryPropertyFlags flags : {VkMemoryPropertyFlags(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                                                               VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
                                                               VK_MEMORY_PROPERTY_HOST_CACHED_BIT),
                                         VkMemoryPropertyFlags(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                                                               VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)}) {
+        buffer = VK_NULL_HANDLE;
+        allocId = 0;
+        mapped = nullptr;
         if (render::findMemoryType(context_.memoryProperties(), ~0u, flags) &&
-            context_.createBuffer(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT, flags, readback_.buffer,
-                                  readback_.memory, readback_.offset, readback_.allocId, readback_.mapped) &&
-            readback_.mapped) {
-            readback_.size = size;
-            return readback_.mapped;
-        }
-        if (readback_.buffer != VK_NULL_HANDLE) context_.destroyBuffer(readback_.buffer, readback_.allocId);
-        readback_ = Readback{};
+            context_.createBuffer(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT, flags, buffer, memory, offset, allocId,
+                                  mapped) &&
+            mapped)
+            return true;
+        if (buffer != VK_NULL_HANDLE) context_.destroyBuffer(buffer, allocId);
     }
+    buffer = VK_NULL_HANDLE;
+    allocId = 0;
+    mapped = nullptr;
     LOG_ERROR("WebGLVkContext: failed to allocate %llu bytes of readback memory",
               static_cast<unsigned long long>(size));
     setSyntheticError(GL_OUT_OF_MEMORY);
-    return nullptr;
+    return false;
 }
 
 // Open a pass over the draw framebuffer: its attachments move to attachment

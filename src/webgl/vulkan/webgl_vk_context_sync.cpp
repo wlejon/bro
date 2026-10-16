@@ -2,6 +2,9 @@
 // the submission that holds everything recorded before it: fenceSync submits
 // the open command buffer, and the fence is signaled once that ticket has
 // completed. Client waits wait on that one ticket, never on the device.
+// fenceSync also copies what the GPU wrote into READ-hinted buffers out to
+// host memory first, so a getBufferSubData after the fence signals is a
+// memcpy (recordBufferDownloads).
 
 #include "webgl/vulkan/webgl_vk_context.h"
 
@@ -34,6 +37,7 @@ GLuint WebGLVkContext::fenceSync(GLenum condition, GLbitfield flags) {
         setSyntheticError(GL_INVALID_VALUE);
         return 0;
     }
+    recordBufferDownloads();
     flushCommands();
     const GLuint id = nextObjectId_++;
     syncs_[id] = stream_.lastTicket();

@@ -1,6 +1,7 @@
 // readPixels: the read framebuffer's read buffer, copied region-only into
 // readback memory, then converted to the format/type WebGL 2 lets that
-// buffer be read as, laid out by the PACK_* state. Pixels outside the
+// buffer be read as (a plain row copy when that is the buffer's own bytes),
+// laid out by the PACK_* state. Pixels outside the
 // framebuffer leave the destination untouched. Into a pack buffer, a read of
 // the buffer's own bytes is a GPU copy nothing waits for.
 
@@ -152,6 +153,8 @@ void WebGLVkContext::readPixelsInto(GLint x, GLint y, GLsizei width, GLsizei hei
 
     const PackLayout layout = packLayout(pack_, format, type, static_cast<uint32_t>(width));
     const auto* texels = static_cast<const uint8_t*>(mapped);
+    // format/type are the read buffer's own bytes: rows copy as they are.
+    const bool identity = packIsIdentity(src.format, src.alphaOne, format, type) && layout.pixelSize == texelSize;
     for (uint32_t row = 0; row < h; ++row) {
         // GL row y0 + row of the framebuffer; its place in the copy.
         const uint32_t copyRow = src.topDown() ? h - 1 - row : row;
@@ -159,6 +162,10 @@ void WebGLVkContext::readPixelsInto(GLint x, GLint y, GLsizei width, GLsizei hei
         uint8_t* out = static_cast<uint8_t*>(pixels) + layout.offset +
                        static_cast<size_t>(y0 + static_cast<int32_t>(row) - y) * layout.rowStride +
                        static_cast<size_t>(x0 - x) * layout.pixelSize;
+        if (identity) {
+            std::memcpy(out, in, static_cast<size_t>(w) * texelSize);
+            continue;
+        }
         for (uint32_t col = 0; col < w; ++col, in += texelSize, out += layout.pixelSize)
             packTexel(src.format, in, format, type, out, src.alphaOne);
     }
@@ -243,8 +250,7 @@ bool WebGLVkContext::readPixelsCopyToBuffer(GLint x, GLint y, GLsizei width, GLs
                              VK_ACCESS_TRANSFER_WRITE_BIT, kBufferReadStages, kBufferReadAccess);
     // The GPU copy is now newer than bro's CPU one; whoever reads the CPU
     // copy (getBufferSubData, a mapping) brings it up to date first.
-    pbo.deviceNewer = true;
-    ++pbo.version;
+    bufferWrittenByGpu(boundPixelPackBuffer_, pbo, base, base + span);
     return true;
 }
 

@@ -620,8 +620,9 @@ LOD bias, subpixel bits, the point-size range (1 without the device's
 on MoltenVK) and the transform feedback limits. `RED_BITS` ...
 `STENCIL_BITS`, `SAMPLES` / `SAMPLE_BUFFERS`, `DRAW_BUFFERi`, `READ_BUFFER`
 and `IMPLEMENTATION_COLOR_READ_FORMAT/TYPE` describe the bound framebuffers.
-`EXT_float_blend` and `OES_texture_float_linear` are offered only when the
-device supports them.
+`EXT_float_blend`, `OES_texture_float_linear` and
+`EXT_disjoint_timer_query_webgl2` are offered only when the device supports
+them.
 
 **Framebuffers.** Color (up to `MAX_COLOR_ATTACHMENTS`), depth, stencil
 and `DEPTH_STENCIL` attachments, from texture levels, cube faces,
@@ -654,7 +655,20 @@ and can target a `PIXEL_PACK_BUFFER`. Into a pack buffer, a read of the
 buffer's own bytes (RGBA8 as RGBA/`UNSIGNED_BYTE`, RGBA32F as RGBA/`FLOAT`,
 ...) is a GPU copy nothing waits for until the buffer is read on the CPU
 (`getBufferSubData`, a mapping); one that converts formats reads back and
-packs on the CPU.
+packs on the CPU. Into client memory, a read of the buffer's own bytes is a
+plain row copy of the readback, with no per-texel conversion.
+
+**Asynchronous readback.** The WebGL 2 pattern — `readPixels` into a pack
+buffer (or a GPU write by transform feedback), `fenceSync`, poll
+`clientWaitSync(sync, 0, 0)` on later frames, then `getBufferSubData` — never
+blocks: `fenceSync` copies what the GPU wrote into a buffer hinted
+`*_READ` (or one `getBufferSubData` has read GPU writes from before) out to
+host memory ahead of the fence, so once the fence has signalled the read is a
+`memcpy` that does not submit or wait for anything recorded since. Without a
+fence, `getBufferSubData` copies only the bytes it asks for that the GPU
+wrote; when the buffer's last GPU write has already completed it copies on a
+submission of its own and waits for that alone; while the write is still
+unsubmitted it submits the context's open work and waits for it.
 
 **Textures.** 2D, cube, 2D array and real 3D images in every ES 3.0
 sized and unsized format (normalized, `SNORM`, integer, sRGB, packed,
@@ -701,7 +715,18 @@ upload stream). Samplers of different types on one texture unit make a draw
 **Queries and sync.** `ANY_SAMPLES_PASSED` and `_CONSERVATIVE` are GPU
 occlusion queries, available once the frame that recorded them has finished
 on the GPU; `TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN` counts what the
-captured draws wrote. Sync objects: `fenceSync` / `clientWaitSync` /
+captured draws wrote. `EXT_disjoint_timer_query_webgl2` is offered where the
+graphics queue has timestamps (`timestampValidBits` > 0; every desktop GPU
+and MoltenVK): `TIME_ELAPSED_EXT` through `beginQuery` / `endQuery` is a pair
+of Vulkan timestamps, each written once the work recorded before it has
+finished, so consecutive queries split the GPU's time between them;
+`queryCounterEXT(q, TIMESTAMP_EXT)` writes one; results are nanoseconds.
+`QUERY_RESULT_AVAILABLE` turns true a frame or so later without anything
+waiting (only `QUERY_RESULT` on an unfinished query waits, on that query's own
+submission). `QUERY_COUNTER_BITS_EXT` is the queue's valid timestamp bits,
+`getParameter(TIMESTAMP_EXT)` is the GPU clock now (a lone timestamp
+submitted and waited for), and `GPU_DISJOINT_EXT` is always false (Vulkan
+reports no clock disruptions). Sync objects: `fenceSync` / `clientWaitSync` /
 `getSyncParameter`, waits capped at `MAX_CLIENT_WAIT_TIMEOUT_WEBGL` = 1 s;
 `waitSync` returns at once (all work is on one queue, so it is already
 ordered) and `MAX_SERVER_WAIT_TIMEOUT` is 0.

@@ -263,8 +263,10 @@ void WebGLVkContext::feedbackDrawn(GLenum mode, const DrawShape& shape) {
     for (uint32_t b = 0; b < prog.iface.feedbackBuffers; ++b) {
         auto bIt = buffers_.find(f.buffers[b].buffer);
         if (bIt == buffers_.end()) continue;
-        bIt->second.deviceNewer = true;
-        ++bIt->second.version;
+        const auto begin = static_cast<VkDeviceSize>(f.buffers[b].offset);
+        const VkDeviceSize end = f.buffers[b].size > 0 ? begin + static_cast<VkDeviceSize>(f.buffers[b].size)
+                                                       : bIt->second.size;
+        bufferWrittenByGpu(bIt->first, bIt->second, begin, end);
     }
     if (activeFeedbackQuery_ != 0) {
         QueryObject& q = queries_[activeFeedbackQuery_];
@@ -304,23 +306,6 @@ void WebGLVkContext::destroyFeedback() {
     if (feedbackPlaceholder_.buffer != VK_NULL_HANDLE)
         context_.destroyBuffer(feedbackPlaceholder_.buffer, feedbackPlaceholder_.allocId);
     feedbackPlaceholder_ = VkBufferResource{};
-}
-
-// Bring a buffer's CPU copy up to what the GPU wrote into it.
-bool WebGLVkContext::syncShadow(VkBufferResource& res) {
-    if (!res.deviceNewer) return true;
-    res.deviceNewer = false;
-    if (!res.isValid() || res.size == 0) return true;
-    void* mapped = readbackMemory(res.size);
-    if (!mapped) return false;
-    VkCommandBuffer cmd = transferCommands();
-    const VkBufferCopy region{0, 0, res.size};
-    vkCmdCopyBuffer(cmd, res.buffer, readback_.buffer, 1, &region);
-    render::cmdMemoryBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
-                             VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_HOST_READ_BIT);
-    if (!waitForCommands()) return false;
-    std::memcpy(res.shadowData.data(), mapped, static_cast<size_t>(res.size));
-    return true;
 }
 
 } // namespace bro::webgl::vk

@@ -34,6 +34,17 @@ void WebGLVkContext::initVulkanResources() {
 
     createPlaceholders();
 
+    // EXT_disjoint_timer_query_webgl2 needs the graphics queue to timestamp.
+    uint32_t familyCount = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(context_.physicalDevice(), &familyCount, nullptr);
+    std::vector<VkQueueFamilyProperties> families(familyCount);
+    vkGetPhysicalDeviceQueueFamilyProperties(context_.physicalDevice(), &familyCount, families.data());
+    const int family = context_.queueFamilies().graphicsFamily;
+    if (family >= 0 && static_cast<uint32_t>(family) < familyCount) {
+        timestampBits_ = families[static_cast<uint32_t>(family)].timestampValidBits;
+        timestampPeriodNs_ = context_.deviceProperties().limits.timestampPeriod;
+    }
+
     for (uint32_t i = 0; i < 16; ++i) {
         float* f = reinterpret_cast<float*>(genericAttribs_[i].data());
         f[0] = 0.0f; f[1] = 0.0f; f[2] = 0.0f; f[3] = 1.0f;

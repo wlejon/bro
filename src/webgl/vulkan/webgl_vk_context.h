@@ -419,8 +419,15 @@ public:
     void endQuery(GLenum target);
     GLuint currentQuery(GLenum target);  // getQuery(target, CURRENT_QUERY)
     /// QUERY_RESULT (waiting for the GPU if need be) or QUERY_RESULT_AVAILABLE;
-    /// false with the GL error.
-    bool getQueryParameter(GLuint id, GLenum pname, GLuint& out);
+    /// false with the GL error. A timer query's result is nanoseconds.
+    bool getQueryParameter(GLuint id, GLenum pname, uint64_t& out);
+    /// EXT_disjoint_timer_query_webgl2: queryCounterEXT(query, TIMESTAMP_EXT),
+    /// getQuery(target, QUERY_COUNTER_BITS_EXT), and getParameter's
+    /// GPU_DISJOINT_EXT / TIMESTAMP_EXT.
+    void queryCounter(GLuint id, GLenum target);
+    GLint queryCounterBits(GLenum target);
+    bool gpuDisjoint();
+    int64_t gpuTimestamp();
 
     // --- Sync objects (webgl_vk_context_sync.cpp) ---
     /// MAX_CLIENT_WAIT_TIMEOUT_WEBGL: longer client waits are refused.
@@ -594,8 +601,25 @@ private:
     void feedbackDescriptors(const VkProgramResource& prog, DrawShape& shape,
                              std::vector<VkDescriptorBufferInfo>& out);
     void destroyFeedback();
-    /// Read back a buffer the GPU wrote before its CPU copy is read.
-    bool syncShadow(VkBufferResource& res);
+    /// Bring bytes [begin, end) of a buffer's CPU copy up to what the GPU
+    /// wrote there (webgl_vk_context_buffers.cpp): from its fenceSync
+    /// download when that is current, else by copying just those bytes,
+    /// waiting only on the copy when the buffer's last GPU write is done.
+    bool syncShadow(VkBufferResource& res, VkDeviceSize begin = 0, VkDeviceSize end = ~VkDeviceSize{0});
+    /// Note a GPU write (a pack-buffer readPixels, a transform feedback
+    /// capture) into bytes [begin, end) of buffer `id`.
+    void bufferWrittenByGpu(GLuint id, VkBufferResource& res, VkDeviceSize begin, VkDeviceSize end);
+    /// fenceSync: copy what the GPU wrote into READ-hinted (or already read
+    /// back) buffers out to host memory, ahead of the fence.
+    void recordBufferDownloads();
+    /// The open command buffer was submitted: GPU writes and downloads
+    /// recorded in it now have its ticket.
+    void bufferWritesSubmitted();
+    /// Host-visible (cached where possible) memory a transfer can write.
+    bool createHostReadable(VkDeviceSize size, VkBuffer& buffer, VkDeviceMemory& memory, VkDeviceSize& offset,
+                            uint64_t& allocId, void*& mapped);
+    std::vector<GLuint> unsubmittedBufferWrites_;
+    std::vector<GLuint> downloadCandidates_;
 
     // Queries (webgl_vk_context_queries.cpp)
     struct QueryObject {
@@ -604,20 +628,40 @@ private:
         uint64_t ticket = 0;            // the submission its last use is in
         bool pending = false;           // used in the open command buffer
         uint64_t count = 0;             // samples (summed) or primitives written
+        std::vector<uint32_t> stamps;   // timer queries: their timestamp slots
     };
+    /// Vulkan query slots of one type, handed out from 64-slot pools and
+    /// retired with the ticket of their last use.
+    struct QuerySlots {
+        VkQueryType type = VK_QUERY_TYPE_OCCLUSION;
+        std::vector<VkQueryPool> pools;
+        std::vector<uint32_t> free;
+        std::vector<std::pair<uint64_t, std::vector<uint32_t>>> retired;
+        VkQueryPool pool(uint32_t slot) const { return pools[slot / 64]; }
+        static uint32_t index(uint32_t slot) { return slot % 64; }
+    };
+    QuerySlots timestampSlots_{VK_QUERY_TYPE_TIMESTAMP, {}, {}, {}};
+    GLuint activeTimerQuery_ = 0;
+    bool timerQueriesEnabled_ = false;   // EXT_disjoint_timer_query_webgl2 was enabled
+    uint32_t timestampBits_ = 0;         // 0: the queue cannot time
+    float timestampPeriodNs_ = 0.0f;
+    bool timerQueriesSupported() const;
+    bool allocSlot(QuerySlots& slots, VkCommandBuffer cmd, uint32_t& slot);
+    void retireSlots(QuerySlots& slots, uint64_t ticket, std::vector<uint32_t>& taken);
+    void destroySlots(QuerySlots& slots);
+    bool writeTimestamp(QueryObject& q, GLuint id);
+    /// A timer query's result in nanoseconds; false when not available yet.
+    bool readTimerResult(const QueryObject& q, bool wait, uint64_t& ns);
     std::unordered_map<GLuint, QueryObject> queries_;
     GLuint activeOcclusionQuery_ = 0;
     GLuint activeFeedbackQuery_ = 0;
-    std::vector<VkQueryPool> queryPools_;
-    std::vector<uint32_t> freeQuerySlots_;
-    std::vector<std::pair<uint64_t, std::vector<uint32_t>>> retiredQuerySlots_;
+    QuerySlots occlusionSlots_;
     std::vector<GLuint> unsubmittedQueries_;
     int32_t openQuerySlot_ = -1;        // the slot open in the current pass
     bool occlusionSuspended_ = false;   // a pass that must not count (an internal clear's)
     void retireQuerySlots(QueryObject& q);
     void queriesSubmitted();
     void queryUsed(QueryObject& q, GLuint id);
-    bool allocQuerySlot(VkCommandBuffer cmd, uint32_t& slot);
     void prepareOcclusionSlot(VkCommandBuffer cmd);
     void beginOcclusionSlot(VkCommandBuffer cmd);
     void endOcclusionSlot(VkCommandBuffer cmd);
