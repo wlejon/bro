@@ -9,6 +9,8 @@ add_library(bro_engine STATIC
     control_input.cpp
     control_record.cpp
     control_view.cpp
+    control_inbox.cpp
+    agent_inbox.cpp
     agent_view.cpp
     view_document.cpp
     engine.cpp

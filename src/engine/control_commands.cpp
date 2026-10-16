@@ -532,6 +532,8 @@ void registerEngineControlCommands(ControlServer& s) {
                       [&s](const ControlCallPtr& c) { cmdWaitIdle(s, c); });
     s.registerCommand("wait", "<selector> [--gone] [--timeout=5000]  until a match has a box (or none does)",
                       [&s](const ControlCallPtr& c) { cmdWait(s, c); });
+    // The agent inbox's (control_inbox.cpp): agents, ask, inbox.
+    registerInboxCommands(s);
 }
 
 }  // namespace bro::engine

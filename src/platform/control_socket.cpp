@@ -5,6 +5,7 @@
 
 #include <brolink/loop.h>
 #include <brolink/paths.h>
+#include <brolink/peer.h>
 #include <brolink/wire.h>
 
 #include <atomic>
@@ -33,8 +34,12 @@ struct ControlSocket::Impl final : brolink::LoopHandler {
     std::thread thread;
     std::atomic<bool> running{false};
 
-    // Loop thread only: each connection's frame splitter.
-    std::map<brolink::ConnId, brolink::wire::MessageSplitter> conns;
+    // Loop thread only: each connection's frame splitter, and who connected.
+    struct Conn {
+        brolink::wire::MessageSplitter split{control::kMaxMessage};
+        brolink::ProcessOrigin origin;
+    };
+    std::map<brolink::ConnId, Conn> conns;
 
     std::mutex mu;  // guards the two queues below and the ready pipe
     std::vector<Request> requests;
@@ -46,18 +51,24 @@ struct ControlSocket::Impl final : brolink::LoopHandler {
     // POSIX: readable while requests wait for take(), for a caller asleep in poll().
     int readyRead = -1, readyWrite = -1;
 
-    void on_accept(brolink::ConnId id) override { conns.emplace(id, brolink::wire::MessageSplitter(control::kMaxMessage)); }
+    void on_accept(brolink::ConnId id) override {
+        conns[id].origin = brolink::describe_process(loop->peer_pid(id));
+    }
 
     void on_data(brolink::ConnId id, const char* data, size_t n) override {
         auto it = conns.find(id);
         if (it == conns.end()) return;
-        brolink::wire::MessageSplitter& split = it->second;
+        brolink::wire::MessageSplitter& split = it->second.split;
+        const brolink::ProcessOrigin& origin = it->second.origin;
         split.feed(data, n);
         brolink::wire::MessageSplitter::Message m;
         std::vector<Request> got;
         while (split.next(m)) {
             Request req;
             req.conn = id;
+            req.peerPid = origin.pid;
+            req.peerUser = origin.user;
+            req.peerSshClient = origin.ssh_client;
             if (m.type != control::kRequest || !control::decodeRequest(m.payload, req.id, req.argv, req.outArg))
                 req.parseError = "bad request (message type " + std::to_string(m.type) + ")";
             got.push_back(std::move(req));

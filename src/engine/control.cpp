@@ -1,5 +1,6 @@
 #include "engine/control.h"
 
+#include "engine/agent_inbox.h"
 #include "engine/control_helpers.h"
 #include "engine/engine.h"
 #include "platform/control_socket.h"
@@ -7,6 +8,7 @@
 #include "util/time.h"
 
 #include <brolink/paths.h>
+#include <brolink/peer.h>
 
 #include <atomic>
 #include <cstdlib>
@@ -65,7 +67,8 @@ double ControlCall::number(const std::string& name, double fallback) const {
 // ---------------------------------------------------------------------------
 
 ControlServer::ControlServer(Engine& engine)
-    : engine_(engine), socket_(std::make_unique<platform::ControlSocket>()) {
+    : engine_(engine), socket_(std::make_unique<platform::ControlSocket>()),
+      inbox_(std::make_unique<AgentInbox>([this] { return clockMs(); }, AgentInbox::defaultLogPath(engine))) {
     registerCommand("help", "[command]  list the commands, or one command's usage",
                     [this](const ControlCallPtr& call) {
                         const std::string which = call->arg(0);
@@ -111,7 +114,16 @@ std::string ControlServer::helpText() const {
     return out;
 }
 
-void ControlServer::dispatch(std::vector<std::string> argv, std::function<void(bool, std::string)> sink) {
+ControlOrigin ControlServer::inProcess() {
+    ControlOrigin o;
+    o.via = "app";
+    o.pid = brolink::current_pid();
+    o.user = brolink::current_user();
+    return o;
+}
+
+void ControlServer::dispatch(std::vector<std::string> argv, std::function<void(bool, std::string)> sink,
+                             ControlOrigin origin) {
     if (argv.empty()) {
         sink(false, "empty command (try: help)");
         return;
@@ -121,7 +133,7 @@ void ControlServer::dispatch(std::vector<std::string> argv, std::function<void(b
         sink(false, "no command '" + argv[0] + "' (try: help)");
         return;
     }
-    auto call = std::make_shared<ControlCall>(std::move(argv), std::move(sink));
+    auto call = std::make_shared<ControlCall>(std::move(argv), std::move(sink), std::move(origin));
     try {
         it->second.handler(call);
     } catch (const std::exception& e) {
@@ -162,11 +174,12 @@ std::string jsonEscaped(const std::string& s) {
 
 }  // namespace
 
-void ControlServer::dispatchWithFile(std::vector<std::string> argv, size_t outArg, FileSink sink) {
+void ControlServer::dispatchWithFile(std::vector<std::string> argv, size_t outArg, FileSink sink,
+                                     ControlOrigin origin) {
     if (outArg == 0 || outArg >= argv.size()) {
-        return dispatch(std::move(argv), [sink = std::move(sink)](bool ok, std::string payload) {
-            sink(ok, std::move(payload), {});
-        });
+        return dispatch(
+            std::move(argv), [sink = std::move(sink)](bool ok, std::string payload) { sink(ok, std::move(payload), {}); },
+            std::move(origin));
     }
     static std::atomic<uint64_t> serial{0};
     const std::string asked = argv[outArg];
@@ -187,13 +200,13 @@ void ControlServer::dispatchWithFile(std::vector<std::string> argv, size_t outAr
             replaceAll(payload, path, asked);
         }
         sink(ok, std::move(payload), std::move(file));
-    });
+    }, std::move(origin));
 }
 
-void ControlServer::post(std::vector<std::string> argv, size_t outArg, FileSink sink) {
+void ControlServer::post(std::vector<std::string> argv, size_t outArg, FileSink sink, ControlOrigin origin) {
     {
         std::lock_guard<std::mutex> lk(postedMutex_);
-        posted_.push_back({std::move(argv), outArg, std::move(sink)});
+        posted_.push_back({std::move(argv), outArg, std::move(sink), std::move(origin)});
     }
     socket_->poke();
 }
@@ -209,7 +222,12 @@ void ControlServer::pump() {
                 reply(false, req.parseError, {});
                 continue;
             }
-            dispatchWithFile(std::move(req.argv), static_cast<size_t>(req.outArg), reply);
+            ControlOrigin origin;
+            origin.via = "local";
+            origin.pid = req.peerPid;
+            origin.user = std::move(req.peerUser);
+            origin.sshClient = std::move(req.peerSshClient);
+            dispatchWithFile(std::move(req.argv), static_cast<size_t>(req.outArg), reply, std::move(origin));
         }
     }
     std::vector<Posted> posted;
@@ -217,7 +235,8 @@ void ControlServer::pump() {
         std::lock_guard<std::mutex> lk(postedMutex_);
         posted.swap(posted_);
     }
-    for (Posted& p : posted) dispatchWithFile(std::move(p.argv), p.outArg, std::move(p.sink));
+    for (Posted& p : posted) dispatchWithFile(std::move(p.argv), p.outArg, std::move(p.sink), std::move(p.origin));
+    inbox_->tick();
     if (tickers_.empty()) return;
     // A ticker may add tickers (a command built from others): run the ones
     // present at the start, keep the unfinished and the new.

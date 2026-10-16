@@ -29,16 +29,33 @@ namespace bro::platform { class ControlSocket; }
 namespace bro::engine {
 
 class Engine;
+class AgentInbox;
+
+/// Where a command came from, as the transport tells it (not as the client
+/// says): what the agent inbox stamps on a request and logs. Facts to
+/// report, not a credential: authorization is reaching the endpoint at all.
+struct ControlOrigin {
+    /// "local": this user's control socket (bro-ctl, an app's bro.inbox);
+    /// "remote": a broremote session's text lane (bro-ctl --remote, a
+    /// viewer's session.request()); "app": in-process (this page's JS, a
+    /// headless test). Empty: not known.
+    std::string via;
+    uint64_t pid = 0;       // the process at the other end (the remote: its `broremote proxy`); 0 unknown
+    std::string user;       // the login it runs as (the host's own user, always)
+    std::string sshClient;  // the ssh client address whose login started that process; empty: none
+    std::string client;     // remote: the session's name (its Hello)
+};
 
 /// One invocation of a command. Reply exactly once — now, or on a later
 /// frame from a ticker that holds the shared_ptr.
 class ControlCall {
 public:
-    ControlCall(std::vector<std::string> argv, std::function<void(bool, std::string)> sink)
-        : argv_(std::move(argv)), sink_(std::move(sink)) {}
+    ControlCall(std::vector<std::string> argv, std::function<void(bool, std::string)> sink, ControlOrigin origin = {})
+        : argv_(std::move(argv)), sink_(std::move(sink)), origin_(std::move(origin)) {}
 
     /// argv[0] is the command name.
     const std::vector<std::string>& argv() const { return argv_; }
+    const ControlOrigin& origin() const { return origin_; }
 
     /// Arguments that are not --options, after the command name.
     std::vector<std::string> positional() const;
@@ -60,6 +77,7 @@ private:
     }
     std::vector<std::string> argv_;
     std::function<void(bool, std::string)> sink_;
+    ControlOrigin origin_;
     bool done_ = false;
 };
 
@@ -98,7 +116,10 @@ public:
 
     /// Runs one command line in-process (tests, and a command built from
     /// others); the reply arrives through `sink`, possibly frames later.
-    void dispatch(std::vector<std::string> argv, std::function<void(bool, std::string)> sink);
+    /// `origin` defaults to in-process ("app").
+    void dispatch(std::vector<std::string> argv, std::function<void(bool, std::string)> sink,
+                  ControlOrigin origin = inProcess());
+    static ControlOrigin inProcess();
 
     /// A reply with the bytes of the command's output file (empty when none).
     using FileSink = std::function<void(bool ok, std::string payload, std::string file)>;
@@ -108,12 +129,18 @@ public:
     /// extension), whose bytes come back to `sink` (then it is removed), and
     /// the reply text names the client's argument rather than that file.
     /// Engine thread. Every command works this way with no code of its own.
-    void dispatchWithFile(std::vector<std::string> argv, size_t outArg, FileSink sink);
+    void dispatchWithFile(std::vector<std::string> argv, size_t outArg, FileSink sink,
+                          ControlOrigin origin = inProcess());
     /// Any thread: dispatchWithFile on the engine thread, at the next pump()
     /// (which it wakes the frame loop for). `sink` is called once, from
     /// whatever thread finishes the command. How a remote session's text
     /// lane (broremote) reaches the same commands a local bro-ctl does.
-    void post(std::vector<std::string> argv, size_t outArg, FileSink sink);
+    void post(std::vector<std::string> argv, size_t outArg, FileSink sink, ControlOrigin origin);
+
+    /// The agent inbox (agent_inbox.h, docs/agent-inbox.md): agents of the
+    /// session registered by name, and the requests other agents send them.
+    /// Every engine has one; the session's is the display's.
+    AgentInbox& inbox() { return *inbox_; }
 
     std::string helpText() const;
     Engine& engine() { return engine_; }
@@ -130,9 +157,11 @@ private:
         std::vector<std::string> argv;
         size_t outArg = 0;
         FileSink sink;
+        ControlOrigin origin;
     };
     Engine& engine_;
     std::unique_ptr<platform::ControlSocket> socket_;
+    std::unique_ptr<AgentInbox> inbox_;
     std::map<std::string, Command> commands_;
     std::vector<Ticker> tickers_;
     std::mutex postedMutex_;
@@ -147,6 +176,8 @@ void registerControlRecordCommands(ControlServer& server);
 /// shot, the handle forms of the input commands. Registered after the input
 /// commands, which it wraps.
 void registerAgentViewCommands(ControlServer& server);
+/// The agent inbox's commands (control_inbox.cpp): agents, ask, inbox.
+void registerInboxCommands(ControlServer& server);
 /// Whether this user's session has a display serving agent control (the
 /// "display" endpoint exists): an app then serves its own, for the display
 /// to find by process id, however it was started.

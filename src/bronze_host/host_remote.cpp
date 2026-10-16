@@ -300,10 +300,19 @@ void serverChanged(broremote::Server* server, const broremote::ServerConfig& con
         // own. The reply goes back from whatever thread finishes it.
         engine::ControlServer* control = &g_host.engine->control();
         server->set_text_handler([control](broremote::TextRequest req) {
-            control->post(std::move(req.argv), req.out_arg,
-                          [reply = std::move(req.reply)](bool ok, std::string payload, std::string file) {
-                              reply(ok, std::move(payload), std::move(file));
-                          });
+            // Who sent it, for the agent inbox to stamp and log.
+            engine::ControlOrigin origin;
+            origin.via = "remote";
+            origin.pid = req.peer_pid;
+            origin.user = std::move(req.peer_user);
+            origin.sshClient = std::move(req.peer_ssh_client);
+            origin.client = std::move(req.client);
+            control->post(
+                std::move(req.argv), req.out_arg,
+                [reply = std::move(req.reply)](bool ok, std::string payload, std::string file) {
+                    reply(ok, std::move(payload), std::move(file));
+                },
+                std::move(origin));
         });
         LOG_INFO("bro.remote: hosting on %s", server->socket_path().c_str());
         return;

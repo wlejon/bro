@@ -29,6 +29,11 @@ public:
         std::vector<std::string> argv;
         uint64_t outArg = 0;     // an output-path argument whose file goes back in the reply (0: none)
         std::string parseError;  // set when the message was not a request
+        // Who connected (brolink/peer.h): the process, its user, and the ssh
+        // client whose login started it (empty: a program of the local session).
+        uint64_t peerPid = 0;
+        std::string peerUser;
+        std::string peerSshClient;
     };
 
     ControlSocket();
