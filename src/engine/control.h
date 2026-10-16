@@ -20,6 +20,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -99,6 +100,21 @@ public:
     /// others); the reply arrives through `sink`, possibly frames later.
     void dispatch(std::vector<std::string> argv, std::function<void(bool, std::string)> sink);
 
+    /// A reply with the bytes of the command's output file (empty when none).
+    using FileSink = std::function<void(bool ok, std::string payload, std::string file)>;
+    /// dispatch(), where argv[outArg] (when outArg is nonzero) names an
+    /// output file the client cannot read where the engine writes it: the
+    /// command writes a private file of the engine's instead (same
+    /// extension), whose bytes come back to `sink` (then it is removed), and
+    /// the reply text names the client's argument rather than that file.
+    /// Engine thread. Every command works this way with no code of its own.
+    void dispatchWithFile(std::vector<std::string> argv, size_t outArg, FileSink sink);
+    /// Any thread: dispatchWithFile on the engine thread, at the next pump()
+    /// (which it wakes the frame loop for). `sink` is called once, from
+    /// whatever thread finishes the command. How a remote session's text
+    /// lane (broremote) reaches the same commands a local bro-ctl does.
+    void post(std::vector<std::string> argv, size_t outArg, FileSink sink);
+
     std::string helpText() const;
     Engine& engine() { return engine_; }
     /// The clock input timelines play out on: the wall clock, or headless
@@ -110,10 +126,17 @@ private:
         std::string usage;
         Handler handler;
     };
+    struct Posted {
+        std::vector<std::string> argv;
+        size_t outArg = 0;
+        FileSink sink;
+    };
     Engine& engine_;
     std::unique_ptr<platform::ControlSocket> socket_;
     std::map<std::string, Command> commands_;
     std::vector<Ticker> tickers_;
+    std::mutex postedMutex_;
+    std::vector<Posted> posted_;  // under postedMutex_
 };
 
 /// The engine's built-in commands (control_commands.cpp and friends).

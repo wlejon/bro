@@ -59,6 +59,19 @@
  *            to this machine, 35-42 ms this machine to the viewer's speakers.
  *            The viewer chooses (`--no-audio-lane`, `--no-mic`, mute keys);
  *            losing audio never touches frames or input.
+ *   text     (protocol 1.6) The agent control commands (docs/agent-control.md,
+ *            docs/agent-view.md: view, windows, launch, set, key, shot,
+ *            eval, ...) and their replies, exactly as a local bro-ctl
+ *            gets them: every request goes to this engine's control
+ *            dispatcher (the display's, under DRM), so every command works,
+ *            including ones added later. Two ways in: a text-only session
+ *            (an agent: `bro-ctl --remote HOST ...`, which is not a viewer,
+ *            fires no attach and starts no encoder, so it can sit beside a
+ *            person's live viewer or run alone), or a viewer's own text lane
+ *            (session.request(), below). A screenshot's PNG comes back in the
+ *            reply. There is no separate authorization: whoever reaches the
+ *            server (this user's socket, or ssh as this user) can run any
+ *            command, input, eval and launch included, as with bro-ctl.
  *
  * SECURITY: the socket is local and private to the user (a 0600 socket in a
  * 0700 directory under $XDG_RUNTIME_DIR, the peer's uid checked); a viewer on
@@ -92,7 +105,10 @@
  *     server already owns the socket).
  *   bro.remote.stop() -> bool        whether a server was running
  *   bro.remote.status() -> {
- *       hosting, socket, socketPath, clients,
+ *       hosting, socket, socketPath, clients,   (viewers: sessions taking video)
+ *       textSessions,                 text-only sessions attached (agents,
+ *                                     e.g. `bro-ctl --remote`; not viewers:
+ *                                     no attach event, no encoder for them)
  *       codec, width, height,         the stream being sent (null / 0 before
  *                                     the first frame is encoded)
  *       bitrateKbps, fps, codecs,     (while hosting) the configuration
@@ -102,7 +118,8 @@
  *                windowWaits,        frames submitted while a viewer was at its ack window
  *                lanes,              input lanes joined
  *                audioLanes,         audio lanes joined
- *                audioUp, audioDown }  audio packets from viewers' mics / to viewers
+ *                audioUp, audioDown,  audio packets from viewers' mics / to viewers
+ *                textRequests, textReplies }  text lane commands run / answered
  *       audio: {                      (while hosting)
  *           enabled, micAsDefault,    as configured
  *           status,                   what is wrong with this machine's audio
@@ -154,7 +171,7 @@
  *                            audioBufferMs (the playback jitter target, 20)
  *   session.id, session.target
  *   session.status() -> { state: 'connecting' | 'connected' | 'closed',
- *       message, failed, server, protocol ("1.5"), codec, width, height, fps,
+ *       message, failed, server, protocol ("1.6"), codec, width, height, fps,
  *       stream, decoder, hardware, inputLane, inputLaneError, micMuted,
  *       playbackMuted, cursor: { visible, x, y, shape, locked } | null }
  *   session.stats() -> { packets, decoded, failed, keyframeRequests,
@@ -179,6 +196,18 @@
  *       'wheel', code, pressed, x, y })   (evdev codes, stream pixels, or
  *       wheel ticks in x/y; a <remoteview> sends the user's input itself)
  *   session.setMicMuted(b), session.setPlaybackMuted(b)
+ *   session.request(command, { outArg }?) -> Promise<{ ok, text, file }>
+ *       an agent control command (docs/agent-control.md, docs/agent-view.md)
+ *       run by the host's engine, over the session's text lane (protocol
+ *       1.6; the first request opens it). command: a string, split like a
+ *       shell line ('view --since=4'), or an array of words. The reply is
+ *       what `bro-ctl` would print: text = the payload, ok = false when the
+ *       command failed (text says why; the promise itself never rejects).
+ *       outArg: the index of an argument that is an output path (a
+ *       screenshot): the host writes its own file and file is its bytes
+ *       (a Uint8Array; null otherwise), e.g.
+ *         const r = await session.request(['shot', 'w3', 'w3.png'], { outArg: 2 });
+ *       A text lane joins a session once: if it drops, later requests fail.
  *   session.close()           ends it; the 'state' event says 'closed'
  *   session.on('state' | 'config', fn) / off, onstate / onconfig
  *

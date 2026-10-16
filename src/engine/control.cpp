@@ -1,12 +1,19 @@
 #include "engine/control.h"
 
+#include "engine/control_helpers.h"
 #include "engine/engine.h"
 #include "platform/control_socket.h"
 #include "util/log.h"
 #include "util/time.h"
 
+#include <brolink/paths.h>
+
+#include <atomic>
 #include <cstdlib>
 #include <exception>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 
 namespace bro::engine {
 
@@ -122,20 +129,95 @@ void ControlServer::dispatch(std::vector<std::string> argv, std::function<void(b
     }
 }
 
+namespace {
+
+std::filesystem::path fsPath(const std::string& utf8) {
+    return std::filesystem::path(std::u8string(utf8.begin(), utf8.end()));
+}
+
+// The file's extension (".png"), or none: the part after the last '.' of the
+// last path component.
+std::string extensionOf(const std::string& path) {
+    const size_t slash = path.find_last_of("/\\");
+    const size_t dot = path.rfind('.');
+    if (dot == std::string::npos || (slash != std::string::npos && dot < slash)) return {};
+    const std::string ext = path.substr(dot);
+    return ext.size() <= 16 ? ext : std::string();
+}
+
+void replaceAll(std::string& s, const std::string& from, const std::string& to) {
+    if (from.empty()) return;
+    for (size_t at = s.find(from); at != std::string::npos; at = s.find(from, at + to.size())) s.replace(at, from.size(), to);
+}
+
+// A string as it appears inside a JSON string literal (a reply's "path").
+std::string jsonEscaped(const std::string& s) {
+    std::string out;
+    for (char c : s) {
+        if (c == '\\' || c == '"') out += '\\';
+        out += c;
+    }
+    return out;
+}
+
+}  // namespace
+
+void ControlServer::dispatchWithFile(std::vector<std::string> argv, size_t outArg, FileSink sink) {
+    if (outArg == 0 || outArg >= argv.size()) {
+        return dispatch(std::move(argv), [sink = std::move(sink)](bool ok, std::string payload) {
+            sink(ok, std::move(payload), {});
+        });
+    }
+    static std::atomic<uint64_t> serial{0};
+    const std::string asked = argv[outArg];
+    const std::string path = controlRuntimePath("out-" + std::to_string(brolink::current_pid()) + "-" +
+                                                std::to_string(++serial) + extensionOf(asked));
+    argv[outArg] = path;
+    dispatch(std::move(argv), [sink = std::move(sink), path, asked](bool ok, std::string payload) {
+        std::string file;
+        std::error_code ec;
+        if (ok) {
+            std::ifstream in(fsPath(path), std::ios::binary);
+            if (in) file.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+            else ok = false, payload = "the command wrote no file at " + path + " (" + payload + ")";
+        }
+        std::filesystem::remove(fsPath(path), ec);
+        if (ok) {
+            replaceAll(payload, jsonEscaped(path), jsonEscaped(asked));
+            replaceAll(payload, path, asked);
+        }
+        sink(ok, std::move(payload), std::move(file));
+    });
+}
+
+void ControlServer::post(std::vector<std::string> argv, size_t outArg, FileSink sink) {
+    {
+        std::lock_guard<std::mutex> lk(postedMutex_);
+        posted_.push_back({std::move(argv), outArg, std::move(sink)});
+    }
+    socket_->poke();
+}
+
 void ControlServer::pump() {
     if (socket_->running()) {
         for (auto& req : socket_->take()) {
             const uint64_t conn = req.conn, id = req.id;
-            auto reply = [this, conn, id](bool ok, std::string payload) {
-                socket_->reply(conn, id, ok, std::move(payload));
+            auto reply = [this, conn, id](bool ok, std::string payload, std::string file) {
+                socket_->reply(conn, id, ok, std::move(payload), std::move(file));
             };
             if (!req.parseError.empty()) {
-                reply(false, req.parseError);
+                reply(false, req.parseError, {});
                 continue;
             }
-            dispatch(std::move(req.argv), reply);
+            dispatchWithFile(std::move(req.argv), static_cast<size_t>(req.outArg), reply);
         }
     }
+    std::vector<Posted> posted;
+    {
+        std::lock_guard<std::mutex> lk(postedMutex_);
+        posted.swap(posted_);
+    }
+    for (Posted& p : posted) dispatchWithFile(std::move(p.argv), p.outArg, std::move(p.sink));
     if (tickers_.empty()) return;
     // A ticker may add tickers (a command built from others): run the ones
     // present at the start, keep the unfinished and the new.

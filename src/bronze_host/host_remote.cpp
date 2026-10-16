@@ -8,6 +8,9 @@
 //            input: under DRM through the libinput path (hotkeys, the shell
 //            or a client window), elsewhere through the handle* entry points.
 //   cursor   The screen's pointer shape and position, for the viewer.
+//   text     The text lane's requests (protocol 1.6) go to the engine's
+//            agent control dispatcher (ControlServer::post, from the
+//            server's I/O thread) and their replies back to the session.
 //   frames   Only while Server::wants_frames() (a viewer is attached):
 //              DRM       every composited frame, as the KMS scanout buffer it
 //                        is: a dmabuf the encoder imports, no copy. The
@@ -30,6 +33,7 @@
 #include "bronze_host/host_remote.h"
 #include "bronze_host/host_remote_view.h"
 
+#include "engine/control.h"
 #include "engine/engine.h"
 #include "render/vulkan_presenter.h"
 #if BRO_WITH_DMABUF && defined(__linux__)
@@ -246,10 +250,22 @@ void serverChanged(broremote::Server* server, const broremote::ServerConfig& con
         g_host.server = server;
         g_host.config = config;
         g_host.loggedNoFrames = false;
+        // The text lane: each request is an agent control command line, run
+        // by the same dispatcher a local bro-ctl reaches (the display's,
+        // under DRM), so every command works remotely with no code of its
+        // own. The reply goes back from whatever thread finishes it.
+        engine::ControlServer* control = &g_host.engine->control();
+        server->set_text_handler([control](broremote::TextRequest req) {
+            control->post(std::move(req.argv), req.out_arg,
+                          [reply = std::move(req.reply)](bool ok, std::string payload, std::string file) {
+                              reply(ok, std::move(payload), std::move(file));
+                          });
+        });
         LOG_INFO("bro.remote: hosting on %s", server->socket_path().c_str());
         return;
     }
     // The server is about to go: nothing may reach it after this returns.
+    if (g_host.server) g_host.server->set_text_handler({});
     setFeeding(false);
     g_host.server = nullptr;
     LOG_INFO("bro.remote: stopped hosting");

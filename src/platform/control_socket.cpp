@@ -58,7 +58,7 @@ struct ControlSocket::Impl final : brolink::LoopHandler {
         while (split.next(m)) {
             Request req;
             req.conn = id;
-            if (m.type != control::kRequest || !control::decodeRequest(m.payload, req.id, req.argv))
+            if (m.type != control::kRequest || !control::decodeRequest(m.payload, req.id, req.argv, req.outArg))
                 req.parseError = "bad request (message type " + std::to_string(m.type) + ")";
             got.push_back(std::move(req));
         }
@@ -179,8 +179,16 @@ std::vector<ControlSocket::Request> ControlSocket::take() {
 
 int ControlSocket::readyFd() const { return impl_ ? impl_->readyRead : -1; }
 
-void ControlSocket::reply(uint64_t conn, uint64_t id, bool ok, std::string payload) {
-    std::string message = control::encodeReply(id, ok, payload);
+void ControlSocket::poke() {
+    {
+        std::lock_guard<std::mutex> lk(impl_->mu);
+        impl_->signalReady();
+    }
+    util::wakeMainLoop();
+}
+
+void ControlSocket::reply(uint64_t conn, uint64_t id, bool ok, std::string payload, std::string file) {
+    std::string message = control::encodeReply(id, ok, payload, file);
     // A reply after stop() (from a command's worker thread) has nowhere to go.
     std::lock_guard<std::mutex> lk(impl_->mu);
     if (!impl_->loop) return;

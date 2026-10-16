@@ -15,6 +15,7 @@
 #include <broremote/client.h>
 #include <broremote/codec.h>
 #include <broremote/stream.h>
+#include <broremote/text_client.h>
 
 #include <chrono>
 #include <condition_variable>
@@ -213,6 +214,40 @@ void runSession(const std::string& label, const std::vector<std::string>& argv, 
         if (!v.waitFor(5s, [&] { return v.cursor.x == 100 && v.cursor.y == 60; })) {
             fail("cursor at (" + std::to_string(v.cursor.x) + ", " + std::to_string(v.cursor.y) +
                  "), want (100, 60)");
+        }
+    }
+
+    // The text lane (protocol 1.6): agent control commands, answered by the
+    // engine's dispatcher. A text-only session first (an agent beside the
+    // viewer: the page must see no attach for it, which host_remote.js
+    // checks), then the viewer's own text lane.
+    if (ok && scripted) {
+        auto agent = TextClient::open(connect_local(socket, &err), {}, &err);
+        if (!agent) {
+            fail("text-only session: " + err);
+        } else {
+            TextReply r = agent->request_sync({"info"});
+            check(r.ok && r.payload.find("\"mode\"") != std::string::npos, label + ": text info: " + r.payload);
+            r = agent->request_sync({"eval", "document.title + ' ' + document.body.className"});
+            check(r.ok && r.payload.find("remote host test click") != std::string::npos,
+                  label + ": text eval: " + r.payload);
+            r = agent->request_sync({"screenshot", "shot.png"}, 1);
+            check(r.ok && r.file.size() > 8 && r.file.compare(1, 3, "PNG") == 0,
+                  label + ": text screenshot came back as a PNG (" + std::to_string(r.file.size()) + " bytes): " +
+                      r.payload);
+            check(r.payload.find("shot.png") != std::string::npos, label + ": the reply names our file: " + r.payload);
+            r = agent->request_sync({"no-such-command"});
+            check(!r.ok, label + ": an unknown command fails");
+        }
+        if (client->welcome().grant) {
+            auto lane = TextClient::join(connect_local(socket, &err), *client->welcome().grant, {}, &err);
+            if (!lane) fail("text lane: " + err);
+            else {
+                TextReply r = lane->request_sync({"help", "view"});
+                check(r.ok && r.payload.find("view") != std::string::npos, label + ": text lane help: " + r.payload);
+            }
+        } else {
+            fail("no lane grant in Welcome");
         }
     }
 

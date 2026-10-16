@@ -27,6 +27,7 @@ public:
         uint64_t conn = 0;  // which connection to reply on
         uint64_t id = 0;    // the request's id, echoed in its reply
         std::vector<std::string> argv;
+        uint64_t outArg = 0;     // an output-path argument whose file goes back in the reply (0: none)
         std::string parseError;  // set when the message was not a request
     };
 
@@ -51,7 +52,11 @@ public:
     int readyFd() const;
     /// Queues the reply to request `id` on `conn` (dropped if it has gone).
     /// Any thread.
-    void reply(uint64_t conn, uint64_t id, bool ok, std::string payload);
+    void reply(uint64_t conn, uint64_t id, bool ok, std::string payload, std::string file = {});
+    /// Any thread: makes readyFd() readable and wakes a windowed frame loop,
+    /// as a request arriving does (for work handed to the engine some other
+    /// way: a remote session's text lane).
+    void poke();
 
     /// A private per-user directory for the files commands write for their
     /// client (bro-ctl -o -): the socket directory on POSIX.
