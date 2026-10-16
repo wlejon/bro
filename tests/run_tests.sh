@@ -175,10 +175,17 @@ for SIB in "${SIBLING_LIBS[@]}"; do
     [[ -d "$PROJECT_DIR/../$SIB/include" ]] && SOURCE_ROOTS+=("$PROJECT_DIR/../$SIB/include")
 done
 
+# The engine is libbro beside the executable, and an engine-only change relinks
+# just the library, so the newer of the two is what the sources must predate.
+BUILT_STAMP="$BRO"
+for LIB in "$(dirname "$BRO")"/libbro.{dll,so,dylib}; do
+    [[ -f "$LIB" && "$LIB" -nt "$BUILT_STAMP" ]] && BUILT_STAMP="$LIB"
+done
+
 NEWER=$(find "${SOURCE_ROOTS[@]}" \
             \( -name '*.cpp' -o -name '*.cc' -o -name '*.h' -o -name '*.hpp' \
                -o -name '*.c' -o -name '*.cu' -o -name '*.cuh' \) \
-            -newer "$BRO" -print 2>/dev/null | head -5)
+            -newer "$BUILT_STAMP" -print 2>/dev/null | head -5)
 
 BRO_AGE_S=""
 if command -v stat >/dev/null 2>&1; then
