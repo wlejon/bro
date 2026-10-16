@@ -87,6 +87,10 @@ fs.copyFileSync(src, dest);
 fs.cpSync(src, dest, options);           // a file (parents made) or, with { recursive: true }, a tree; force (default true), errorOnExist
 fs.chmodSync(path, mode);
 fs.realpathSync(path);
+fs.utimesSync(path, atime, mtime);       // set access/modify times: a Date or seconds since the epoch (as Node)
+fs.lutimesSync(path, atime, mtime);      //   the same on a symlink itself, not its target
+fs.truncateSync(path, len);              // cut or zero-extend to len bytes (default 0)
+fs.symlinkSync(target, path, type);      // path becomes a link to target; type 'file' | 'dir' | 'junction' (Windows)
 
 // ── File descriptors (sync) ──
 //
@@ -119,6 +123,8 @@ fs.fdatasyncSync(fd);                    //   EBADF for an fd that is not open. 
 fs.mkdtempSync(prefix);                  // → prefix + six random characters, a new directory (mode 0700)
 fs.fstatSync(fd);                      // → { size, isFile(), isDirectory(), isSymbolicLink() } (size only:
                                          //   no times or mode; use statSync(path) for those)
+fs.ftruncateSync(fd, len);               // truncateSync on an fd opened writable
+fs.futimesSync(fd, atime, mtime);        // utimesSync on an fd
 fs.closeSync(fd);                        // EBADF for an fd that is not open
 // e.g. the last 128 bytes (an ID3v1 tag) of an MP3:
 //   const fd = fs.openSync(file);
