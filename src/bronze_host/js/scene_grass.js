@@ -204,7 +204,8 @@
     fn(P, 'grassStats', function grassStats() {
         const s = __bro_native.scene.SceneNode_grassStats(this);
         if (s.length < 6) return undefined;
-        return { instances: [s[0], s[1], s[2]], movers: s[3], fieldCols: s[4], fieldRows: s[5] };
+        const n = s.length - 3;   // one count a ring, then movers and the field's size
+        return { instances: Array.from(s.slice(0, n)), movers: s[n], fieldCols: s[n + 1], fieldRows: s[n + 2] };
     });
     // The ground height the grass stands on at (x, z): the field, bilinear.
     fn(P, 'grassHeightAt', function grassHeightAt(x, z) {

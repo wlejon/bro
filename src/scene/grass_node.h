@@ -17,10 +17,14 @@
 //     (blades spring back in a fraction of a second, flattened grass rises
 //     over tens of seconds) with no per-frame pass over the map.
 //
-// Drawn as three rings around the camera (fine blades near, coarser and
-// wider ones further out, cross-fading through a dithered band), each one
-// instanced draw over only the cells the view can see
-// (vulkan/scene_mesh_drawer_grass.cpp).
+// Drawn as four rings around the camera, each one instanced draw over only
+// the cells the view can see (vulkan/scene_mesh_drawer_grass.cpp). An
+// instance is a cell's several blades (its ring mesh is that many copies of
+// the blade end to end), since the GPU pays a fixed cost per instance: near,
+// a tuft of fine blades fanning from one root; further out, fewer and wider
+// blades scattered over a bigger cell, so blade count x width (the cover)
+// stays about level across the rings while the vertex count falls. Rings
+// cross-fade through a dithered band.
 //
 // A GrassNode is a MeshNode so the material setters (colour, roughness,
 // subsurface, receivesShadow, castsShadow) apply; its own mesh is the blade
@@ -45,7 +49,7 @@ public:
 
     struct Params {
         float height = 0.4f;        // mean blade height (m)
-        float width = 0.005f;       // blade width near the camera (m); each ring adds 0.2 x its cell
+        float width = 0.004f;       // blade width near the camera (m); the outer rings' are multiples of it
         float density = 1.0f;       // blades per area, x the default (cells shrink by sqrt)
         float range = 150.0f;       // the far edge of the outermost ring (m)
         float minNormalY = 0.62f;   // no grass where the ground is steeper than this
@@ -78,9 +82,12 @@ public:
     /// The field's ground height at world (x, z) (bilinear, as the GPU
     /// samples it); `fallback` outside it.
     float fieldHeight(float x, float z, float fallback = 0.0f) const;
+    /// The ground's height range over world rect [x0, x1] x [z0, z1] and the
+    /// largest height multiplier there, from coarse blocks of the field
+    /// (conservative). False when nothing grows there (off the field, or
+    /// density or height 0 throughout): the drawer skips the cells.
+    bool fieldRange(float x0, float z0, float x1, float z1, float& lo, float& hi, float& tall) const;
 
-    /// The far blade (two segments) the outer rings draw.
-    const bromesh::MeshData& farBlade() const { return farBlade_; }
 
     // --- Movers ---
     /// Track node `nodeId`: every frame its path through the grass stamps a
@@ -109,17 +116,33 @@ public:
     static constexpr const char* kPushTexture = "u_grassPush";
 
     // --- Rings ---
-    static constexpr int kRings = 3;
+    static constexpr int kRings = 4;
     struct Ring {
-        float cell = 0.08f;   // m
-        float inner = 0.0f;   // m
-        float outer = 26.0f;  // m
-        float bandIn = 0.0f;  // cross-fade band at the inner edge
-        float bandOut = 3.0f; // and at the outer edge
-        float width = 0.02f;  // blade width (m)
+        float cell = 0.1f;     // m: one instance a cell
+        float inner = 0.0f;    // m
+        float outer = 7.0f;    // m
+        float bandIn = 0.0f;   // cross-fade band at the inner edge
+        float bandOut = 1.5f;  // and at the outer edge
+        float width = 0.004f;  // blade width (m) at the eye; it grows with distance
+        int blades = 14;       // blades an instance draws (copies in the ring mesh)
+        int segments = 4;      // a blade's segments
+        float spread = 0.035f; // how far an instance's blades stand from its root (m)
+        float fan = 0.35f;     // how far a tuft's outer blades lean out (rad)
+        // Thinning: past `thinFrom` m an instance keeps thinFrom / d of its
+        // blades (never under `minKeep`), each widened by the inverse, so
+        // the cover holds while the vertex work falls toward the next ring.
+        float thinFrom = 3.5f;
+        float minKeep = 0.5f;
     };
+    /// The share of a ring's blades its shadow casters keep (widened by the
+    /// inverse): a shadow map texel is wider than a fine blade.
+    static constexpr float kShadowKeep = 0.35f;
     /// The rings the current params give.
     Ring ring(int i) const;
+    /// Ring `i`'s mesh: `ring(i).blades` copies of its blade end to end.
+    const bromesh::MeshData& ringMesh(int i) const;
+    /// Vertices one blade of ring `i`'s mesh has.
+    static int bladeVertices(int segments) { return segments * 2 + 1; }
 
     /// What the last frame drew, per ring: instances issued (the cells of
     /// the visible rectangle). The blades that survive culling are fewer.
@@ -142,9 +165,14 @@ private:
     void recentre(float eyeX, float eyeZ);
 
     Params params_;
-    bromesh::MeshData farBlade_;
+    bromesh::MeshData ringMeshes_[kRings];
     std::vector<float> field_;
     int fieldCols_ = 0, fieldRows_ = 0;
+    // Blocks of kFieldBlock x kFieldBlock texels: min height, max height, and
+    // the largest height multiplier where anything grows (0: nothing does).
+    static constexpr int kFieldBlock = 8;
+    std::vector<float> blocks_;
+    int blockCols_ = 0, blockRows_ = 0;
     float fieldX0_ = 0.0f, fieldZ0_ = 0.0f, fieldCell_ = 1.0f;
 
     std::vector<Mover> movers_;

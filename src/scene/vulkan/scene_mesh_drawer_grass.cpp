@@ -1,6 +1,6 @@
-// SceneMeshDrawer's grass path: a GrassNode becomes up to three draws, one
-// per ring around the camera, each instancing the blade mesh over only the
-// cells of its ring the view can see. The shader (shaders/scene_grass.glsl)
+// SceneMeshDrawer's grass path: a GrassNode becomes up to four draws, one
+// per ring around the camera, each instancing its ring mesh (a cell's
+// blades) over only the cells of its ring the view can see. The shader (shaders/scene_grass.glsl)
 // places, culls, bends and colours every blade; this file picks the cells,
 // stamps the movers and binds the node's field and influence map.
 
@@ -35,11 +35,14 @@ struct GrassUBO {
     float look[4];
     float push[4];
     float pushRate[4];
+    float shape[4];
+    float lod[4];
 };
 
 constexpr float kPi = 3.14159265358979f;
 constexpr float kWidthGrowth = 0.03f;            // a far blade is wider, so a ring keeps its cover
 constexpr uint32_t kMaxRingInstances = 1u << 22;  // a guard, far above any view's need
+constexpr int kTile = 16;                         // cells a side of the tiles the view culls
 
 /// The x/z box around the eye holding everything of a disc of `radius` the
 /// view can see (the view's cone flattened onto the ground), padded by
@@ -127,9 +130,11 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
     res.pruneUserTextures(node.id(), node.customShaderTextures());
     if (!field || !push) return;
 
-    const GpuMesh* nearBlade = res.mesh(node.id(), 0, node.geometryGeneration(), node.mesh());
-    const GpuMesh* farBlade = res.mesh(node.id(), 1, node.geometryGeneration(), node.farBlade());
-    if (!nearBlade || !farBlade) return;
+    const GpuMesh* ringMeshes[GrassNode::kRings];
+    for (int r = 0; r < GrassNode::kRings; ++r) {
+        ringMeshes[r] = res.mesh(node.id(), static_cast<uint32_t>(r), node.geometryGeneration(), node.ringMesh(r));
+        if (!ringMeshes[r]) return;
+    }
 
     const GrassNode::Params& p = node.params();
     GrassUBO u{};
@@ -174,9 +179,51 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
         const uint64_t h = static_cast<uint64_t>(std::max(j1 - j0 + 1, 0));
         if (w == 0 || h == 0 || w * h > kMaxRingInstances) continue;
 
-        u.cells[0] = static_cast<float>(i0);
-        u.cells[1] = static_cast<float>(j0);
-        u.cells[2] = static_cast<float>(w);
+        // The box in tiles of kTile x kTile cells, each kept only when it can
+        // hold a drawn blade: it reaches the ring (its dithered bands
+        // included), something grows on it, and its box (ground to the
+        // tallest blade, padded by a blade's lean and its spread) is in the
+        // view. Every vertex of an instance runs whether its blades are drawn
+        // or not, so cells the shader would only cull are not issued at all.
+        // A blade stands at most about 3.9 x the mean height times the
+        // field's multiplier (clump 1.4, tuft 1.15, blade 1.4, tall patch 1.7).
+        const float reach = ring.cell + ring.spread + p.height * 1.5f;
+        const float top = p.height * 4.0f;
+        const float ex = view.eye.x, ez = view.eye.z;
+        const float rIn = std::max(ring.inner - ring.bandIn - reach, 0.0f), rOut = ring.outer + reach;
+        std::vector<std::array<int, 4>> runs;   // first cell column, row, columns, rows
+        for (int tj = j0; tj <= j1; tj += kTile) {
+            const int cj1 = std::min(tj + kTile - 1, j1);
+            bool inRun = false;   // (cells are signed: no sentinel column)
+            int runStart = 0, runEnd = 0;
+            const auto flush = [&]() {
+                if (inRun) runs.push_back({runStart, tj, runEnd - runStart + 1, cj1 - tj + 1});
+                inRun = false;
+            };
+            for (int ti = i0; ti <= i1; ti += kTile) {
+                const int ci1 = std::min(ti + kTile - 1, i1);
+                const float x0 = static_cast<float>(ti) * ring.cell, x1 = static_cast<float>(ci1 + 1) * ring.cell;
+                const float z0 = static_cast<float>(tj) * ring.cell, z1 = static_cast<float>(cj1 + 1) * ring.cell;
+                const float nx = std::clamp(ex, x0, x1) - ex, nz = std::clamp(ez, z0, z1) - ez;
+                const float fx = std::max(std::fabs(x0 - ex), std::fabs(x1 - ex));
+                const float fz = std::max(std::fabs(z0 - ez), std::fabs(z1 - ez));
+                float lo = 0.0f, hi = 0.0f, tall = 0.0f;
+                const bool keep = nx * nx + nz * nz <= rOut * rOut && fx * fx + fz * fz >= rIn * rIn &&
+                                  node.fieldRange(x0 - reach, z0 - reach, x1 + reach, z1 + reach, lo, hi, tall) &&
+                                  bromath::fintersects(view.frustum, bromath::AABB3{{x0 - reach, lo, z0 - reach},
+                                                                                    {x1 + reach, hi + top * tall, z1 + reach}});
+                if (!keep) {
+                    flush();
+                    continue;
+                }
+                if (!inRun) runStart = ti;
+                inRun = true;
+                runEnd = ci1;
+            }
+            flush();
+        }
+        if (runs.empty()) continue;
+
         u.cells[3] = ring.cell;
         u.ring[0] = ring.inner;
         u.ring[1] = ring.outer;
@@ -186,6 +233,13 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
         u.blade[1] = ring.width;
         u.blade[2] = p.minNormalY;
         u.blade[3] = p.wind;
+        u.shape[0] = static_cast<float>(ring.blades);
+        u.shape[1] = static_cast<float>(GrassNode::bladeVertices(ring.segments));
+        u.shape[2] = ring.spread;
+        u.shape[3] = ring.fan;
+        u.lod[0] = ring.thinFrom;
+        u.lod[1] = ring.minKeep;
+        u.lod[2] = GrassNode::kShadowKeep;
 
         const VkDescriptorBufferInfo ubo = frame.gpu.device.frameUniform(&u, sizeof(u));
         VkDescriptorSet set = frame.gpu.device.frameSet(defaults_->customLayout);
@@ -198,16 +252,14 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
             writer.writeImage(b, defaults_->white.view, defaults_->sampler);
         writer.updateSet(device_, set);
 
-        const GpuMesh* blade = r == 0 ? nearBlade : farBlade;
+        const GpuMesh* blade = ringMeshes[r];
         MeshDraw draw;
         draw.kind = MeshKind::Grass;
         draw.nodeId = node.id();
         draw.vertices = blade->vertices.buffer;
         draw.indices = blade->indices.buffer;
         draw.indexCount = blade->indexCount;
-        draw.instanceCount = static_cast<uint32_t>(w * h);
         draw.customSet = set;
-        std::memcpy(draw.push.model, view.relative(node.worldMatrix()).data, sizeof(draw.push.model));
         std::memcpy(draw.push.baseColor, node.color(), sizeof(draw.push.baseColor));
         draw.push.baseColor[3] = 1.0f;
         draw.push.pbrParams[0] = node.metallic();
@@ -218,8 +270,23 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
         draw.twoSided = true;
         // Only the near ring casts: its blades are the ones whose shadows read.
         draw.castsShadow = r == 0 && node.castsShadow();
-        out.push_back(draw);
-        node.setDrawnInstances(r, draw.instanceCount);
+        // A draw a run of tiles: its cell rectangle rides in the model
+        // matrix's first row (column, row, columns), which grass has no use
+        // for (its blades stand on the field, the node's transform ignored);
+        // the shadow pass passes that row on as modelRows[0].
+        uint32_t drawn = 0;
+        for (const auto& run : runs) {
+            MeshDraw d = draw;
+            std::memset(d.push.model, 0, sizeof(d.push.model));
+            d.push.model[0] = static_cast<float>(run[0]);
+            d.push.model[4] = static_cast<float>(run[1]);
+            d.push.model[8] = static_cast<float>(run[2]);
+            d.push.model[15] = 1.0f;
+            d.instanceCount = static_cast<uint32_t>(run[2]) * static_cast<uint32_t>(run[3]);
+            drawn += d.instanceCount;
+            out.push_back(d);
+        }
+        node.setDrawnInstances(r, drawn);
     }
 }
 

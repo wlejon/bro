@@ -36,14 +36,50 @@ bromesh::MeshData bladeMesh(int seg) {
     return m;
 }
 
-constexpr float kRingCell[GrassNode::kRings] = {0.06f, 0.2f, 0.55f};
-constexpr float kRingEdge[GrassNode::kRings + 1] = {0.0f, 26.0f, 70.0f, 190.0f};   // at range 190
+// `copies` of `blade` end to end: one instance draws them all, copy k being
+// the instance's blade k (the shader finds k from the vertex index).
+bromesh::MeshData repeatBlade(const bromesh::MeshData& blade, int copies) {
+    bromesh::MeshData m;
+    const uint32_t vc = static_cast<uint32_t>(blade.vertexCount());
+    for (int c = 0; c < copies; ++c) {
+        m.positions.insert(m.positions.end(), blade.positions.begin(), blade.positions.end());
+        m.normals.insert(m.normals.end(), blade.normals.begin(), blade.normals.end());
+        m.uvs.insert(m.uvs.end(), blade.uvs.begin(), blade.uvs.end());
+        for (uint32_t i : blade.indices) m.indices.push_back(static_cast<uint32_t>(c) * vc + i);
+    }
+    return m;
+}
+
+// The rings at the default range (150 m; edges scale with `range`, cells
+// with 1 / sqrt(density)). Blades a square metre x width is the cover: about
+// 1400 x 4 mm near, 310 x 1.6 cm, 55 x 4 cm, 9 x 10 cm (before the width's
+// growth with distance), so the sward stays as covered as it recedes while a
+// ring's vertices a square metre fall about tenfold each step.
+struct RingSpec {
+    float cell;       // m
+    float edge;       // outer edge (m)
+    int blades;       // an instance
+    int segments;
+    float spread;     // x the cell
+    float fan;        // rad
+    float widthMul;   // x params.width
+    float thinFrom;   // x the edge
+    float minKeep;
+};
+constexpr RingSpec kRingSpec[GrassNode::kRings] = {
+    {0.10f, 7.0f, 14, 4, 0.5f, 0.5f, 1.0f, 0.5f, 0.5f},       // tufts of fine blades
+    {0.16f, 20.0f, 8, 3, 0.5f, 0.35f, 4.0f, 0.5f, 0.5f},      // smaller tufts
+    {0.30f, 55.0f, 5, 2, 0.6f, 0.0f, 10.0f, 1.0f, 1.0f},      // blades over the cell
+    {0.75f, 150.0f, 5, 2, 0.6f, 0.0f, 25.0f, 1.0f, 1.0f},
+};
+constexpr float kRangeRef = 150.0f;
 
 }  // namespace
 
 GrassNode::GrassNode(const std::string& name) : MeshNode(name) {
     setMesh(bladeMesh(4));
-    farBlade_ = bladeMesh(2);
+    for (int i = 0; i < kRings; ++i)
+        ringMeshes_[i] = repeatBlade(bladeMesh(kRingSpec[i].segments), kRingSpec[i].blades);
     setTwoSided(true);
     setRoughness(0.7f);
     setMetallic(0.0f);
@@ -102,22 +138,32 @@ void GrassNode::paramsFromArray(const double* v, size_t n) {
 GrassNode::Ring GrassNode::ring(int i) const {
     Ring r;
     i = std::clamp(i, 0, kRings - 1);
-    const float scale = params_.range / kRingEdge[kRings];
+    const RingSpec& s = kRingSpec[i];
+    const float scale = params_.range / kRangeRef;
     const float cellScale = 1.0f / std::sqrt(params_.density);
-    r.cell = kRingCell[i] * cellScale;
-    r.inner = kRingEdge[i] * scale;
-    r.outer = kRingEdge[i + 1] * scale;
-    const auto band = [](float edge) { return std::max(3.0f, edge * 0.12f); };
+    r.cell = s.cell * cellScale;
+    r.inner = i == 0 ? 0.0f : kRingSpec[i - 1].edge * scale;
+    r.outer = s.edge * scale;
+    const auto band = [](float edge) { return std::max(1.5f, edge * 0.12f); };
     r.bandIn = i == 0 ? 0.0f : band(r.inner);
     r.bandOut = band(r.outer);
-    r.width = params_.width + (i == 0 ? 0.016f : kRingCell[i] * 0.2f);
+    r.width = params_.width * s.widthMul;
+    r.blades = s.blades;
+    r.segments = s.segments;
+    r.spread = s.spread * r.cell;
+    r.fan = s.fan;
+    r.thinFrom = s.thinFrom * r.outer;
+    r.minKeep = s.minKeep;
     return r;
 }
+
+const bromesh::MeshData& GrassNode::ringMesh(int i) const { return ringMeshes_[std::clamp(i, 0, kRings - 1)]; }
 
 void GrassNode::setField(const float* rgba, int cols, int rows, float x0, float z0, float cell) {
     if (!rgba || cols < 2 || rows < 2 || !(cell > 0.0f)) {
         field_.clear();
-        fieldCols_ = fieldRows_ = 0;
+        blocks_.clear();
+        fieldCols_ = fieldRows_ = blockCols_ = blockRows_ = 0;
         setCustomShaderTexture(kFieldTexture, 0, 0, nullptr);
         return;
     }
@@ -127,7 +173,57 @@ void GrassNode::setField(const float* rgba, int cols, int rows, float x0, float 
     fieldX0_ = x0;
     fieldZ0_ = z0;
     fieldCell_ = cell;
+    // Block (bi, bj) covers texels bi * B .. bi * B + B inclusive, one past
+    // its own, so the bilinear ground between two blocks is inside both.
+    blockCols_ = (cols - 2) / kFieldBlock + 1;
+    blockRows_ = (rows - 2) / kFieldBlock + 1;
+    blocks_.assign(static_cast<size_t>(blockCols_) * blockRows_ * 3, 0.0f);
+    for (int bj = 0; bj < blockRows_; ++bj) {
+        for (int bi = 0; bi < blockCols_; ++bi) {
+            float lo = 1e30f, hi = -1e30f, grows = 0.0f;
+            for (int j = bj * kFieldBlock; j <= std::min(bj * kFieldBlock + kFieldBlock, rows - 1); ++j) {
+                for (int i = bi * kFieldBlock; i <= std::min(bi * kFieldBlock + kFieldBlock, cols - 1); ++i) {
+                    const float* t = &field_[(static_cast<size_t>(j) * cols + i) * 4];
+                    lo = std::min(lo, t[0]);
+                    hi = std::max(hi, t[0]);
+                    if (t[1] > 0.0f && t[3] > 0.0f) grows = std::max(grows, t[3]);
+                }
+            }
+            float* b = &blocks_[(static_cast<size_t>(bj) * blockCols_ + bi) * 3];
+            b[0] = lo;
+            b[1] = hi;
+            b[2] = grows;
+        }
+    }
     setCustomShaderTexture(kFieldTexture, cols, rows, field_.data(), false, false, false, 4);
+}
+
+bool GrassNode::fieldRange(float x0, float z0, float x1, float z1, float& lo, float& hi, float& tall) const {
+    if (!hasField()) return false;
+    const float maxX = static_cast<float>(fieldCols_ - 1), maxZ = static_cast<float>(fieldRows_ - 1);
+    const float fx0 = (x0 - fieldX0_) / fieldCell_, fx1 = (x1 - fieldX0_) / fieldCell_;
+    const float fz0 = (z0 - fieldZ0_) / fieldCell_, fz1 = (z1 - fieldZ0_) / fieldCell_;
+    if (fx1 < 0.0f || fz1 < 0.0f || fx0 > maxX || fz0 > maxZ) return false;
+    const auto blockOf = [](float f, float maxF, int n) {
+        return std::clamp(static_cast<int>(std::clamp(f, 0.0f, maxF)) / kFieldBlock, 0, n - 1);
+    };
+    const int bi0 = blockOf(fx0, maxX, blockCols_), bi1 = blockOf(fx1, maxX, blockCols_);
+    const int bj0 = blockOf(fz0, maxZ, blockRows_), bj1 = blockOf(fz1, maxZ, blockRows_);
+    lo = 1e30f;
+    hi = -1e30f;
+    tall = 0.0f;
+    bool grows = false;
+    for (int bj = bj0; bj <= bj1; ++bj) {
+        for (int bi = bi0; bi <= bi1; ++bi) {
+            const float* b = &blocks_[(static_cast<size_t>(bj) * blockCols_ + bi) * 3];
+            if (b[2] <= 0.0f) continue;
+            grows = true;
+            lo = std::min(lo, b[0]);
+            hi = std::max(hi, b[1]);
+            tall = std::max(tall, b[2]);
+        }
+    }
+    return grows;
 }
 
 float GrassNode::fieldHeight(float x, float z, float fallback) const {

@@ -342,10 +342,16 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
 
 /**
  * Grass: a meadow of procedural blades over a ground, from
- * `scene.createGrass(opts)`. No blade carries data: rings of cells around the
- * camera are drawn as instanced blades (fine and close near, coarser and
- * wider further out, cross-faded), each placed, culled, bent and coloured in
- * the vertex shader from its cell. They sway in the scene's wind field
+ * `scene.createGrass(opts)`. No blade carries data: four rings of cells
+ * around the camera, each cell an instance of several blades. Near (to 7 m at
+ * the default range) a cell is a tuft of 14 fine blades (4 mm) fanning from
+ * one root, about 1400 blades a square metre; further out, fewer and wider
+ * blades over bigger cells, so blade count x width (the cover) stays about
+ * level while the work falls. Within a ring the far half keeps fewer blades,
+ * widened to match the next ring, and rings cross-fade through a dithered
+ * band. Only tiles of cells the view can see, inside the ring and where
+ * something grows are issued. Each blade is placed, culled, bent and coloured
+ * in the vertex shader from its cell. They sway in the scene's wind field
  * (`setWind`: the steady lean, each blade's flutter and the travelling gust
  * bands, which lift the sheen of the blades they bend), are lit mostly as the
  * ground they cover, and are parted and flattened by movers (`addMover`,
@@ -384,10 +390,12 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  * @property {number|Function} [tall=1] - height multiplier.
  * @property {number} [height=0.4] - mean blade height (m); clumps run
  *   from about half to one and a half times it, and lush tall patches higher.
- * @property {number} [width=0.005] - blade width (m) on top of each ring's
- *   own (near blades are about 2 cm wide).
+ * @property {number} [width=0.004] - the near blades' width (m); the outer
+ *   rings' are 4, 10 and 25 times it, and every blade widens with distance
+ *   (never under about two thirds of a pixel).
  * @property {number} [bladeDensity=1] - blades per area, x the default
- *   (one per 6 cm square near the camera, before the clumps thin them).
+ *   (a 14-blade tuft per 10 cm square near the camera, before the clumps
+ *   thin them).
  * @property {number} [range=150] - the far edge of the outermost ring (m).
  * @property {number} [minNormalY=0.62] - no grass on ground steeper than
  *   this (the ground normal's y); or `maxSlope` in degrees.
@@ -404,8 +412,9 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  * @property {number} [wind=1] - response to the wind, x.
  * @property {Array<number>|string} [color] - the node colour, multiplied in (default white).
  * @property {number} [roughness=0.7]
- * @property {boolean} [castsShadow=false] - the near ring's blades cast (a
- *   cost: the shadow map then re-renders every frame).
+ * @property {boolean} [castsShadow=false] - the near ring's blades cast, a
+ *   third of them widened to keep the cover (a cost: the shadow map then
+ *   re-renders every frame, every caster in it).
  * @property {boolean} [receivesShadow=true]
  */
 
@@ -1195,9 +1204,10 @@ class SceneNode {
   push(x, z, opts) {}
 
   /**
-   * Grass: what the last frame drew: `{instances: [near, mid, far], movers,
-   * fieldCols, fieldRows}`. `instances` counts the cells of each ring's
-   * visible rectangle; the blades that survive culling are fewer.
+   * Grass: what the last frame drew: `{instances: [r0, r1, r2, r3], movers,
+   * fieldCols, fieldRows}`, near ring first. `instances` counts the cells
+   * issued in each ring (the tiles in view, in the ring, where grass grows);
+   * each cell draws several blades, of which the culling keeps fewer.
    * @returns {{instances: Array<number>, movers: number, fieldCols: number, fieldRows: number}|undefined}
    */
   grassStats() {}

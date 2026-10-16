@@ -1,6 +1,7 @@
 #version 450
 // Grass blades (scene_grass.glsl): one instance per cell of the draw's ring
-// rectangle, the blade mesh bent into place by the wind and the movers. Drawn
+// rectangle, each copy of the blade in the ring mesh one of the cell's
+// blades, bent into place by the wind and the movers. Drawn
 // with mesh.frag's vegetation shading: the blade's normal leans toward the
 // ground's, the sun glows through it from behind, and the root is in shade.
 // shadow_grass.vert is the caster.
@@ -26,7 +27,7 @@ layout(location = 7) out vec4 outVegShade;
 
 void main() {
     GrassBlade b;
-    if (!grassBlade(gl_InstanceIndex, inPos, inNormal, b)) {
+    if (!grassBlade(gl_InstanceIndex, gl_VertexIndex, inPos, inNormal, b)) {
         gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
         outVegShade = vec4(0.0, 0.0, 0.0, 1.0);
         return;

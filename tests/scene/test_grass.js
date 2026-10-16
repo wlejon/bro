@@ -66,8 +66,16 @@ if (!s.scene) {
     // ---- Drawn ----
     const lush = scn.captureFrame();
     const st = grass.grassStats();
-    assert(st && st.instances[0] > 1000 && st.fieldCols === 81,
+    assert(st && st.instances.length === 4 && st.instances[0] > 1000 && st.fieldCols === 81,
         `rings issue instances (${st && st.instances.join('/')}), field ${st && st.fieldCols}`);
+    // Only cells the view can see are issued: looking up at the sky, next to
+    // none (the box test is conservative at the frustum's corners).
+    scn.setCamera({ position: [0, 2.2, 6], target: [0, 40, -2] });
+    scn.captureFrame();
+    const sky = grass.grassStats().instances;
+    const sum = (a) => a.reduce((s, n) => s + n, 0);
+    assert(sum(sky) < sum(st.instances) * 0.05, `looking at the sky issues next to no cells (${sky.join('/')} vs ${st.instances.join('/')})`);
+    scn.setCamera({ fov: 55, near: 0.05, far: 200, position: [0, 2.2, 6], target: [0, 0.5, -2] });
     // Left half lush, right half sun-dried: more green on the left than the bare floor.
     const gBare = patchAvg(bare, 10, 120, 80, 180, 1) - patchAvg(bare, 10, 120, 80, 180, 2);
     const gLush = patchAvg(lush, 10, 120, 80, 180, 1) - patchAvg(lush, 10, 120, 80, 180, 2);
