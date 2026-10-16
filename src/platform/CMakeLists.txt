@@ -59,8 +59,8 @@ elseif(APPLE)
     set_source_files_properties(desktop_notifications_mac.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
     target_link_libraries(bro_platform PRIVATE "-framework AppKit" "-framework UserNotifications")
 endif()
-# The agent control channel's transport (control_socket.cpp).
-target_link_libraries(bro_platform PRIVATE brolink)
+# The agent control channel's transport (control_socket.cpp, control_protocol.h).
+target_link_libraries(bro_platform PUBLIC brolink)
 
 find_package(Vulkan REQUIRED)
 target_link_libraries(bro_platform PUBLIC bro_util Vulkan::Headers)
