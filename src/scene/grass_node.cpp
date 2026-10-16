@@ -168,6 +168,11 @@ void GrassNode::setField(const float* rgba, int cols, int rows, float x0, float 
         return;
     }
     field_.assign(rgba, rgba + static_cast<size_t>(cols) * rows * 4);
+    // A density floor: a texel thinner than this grows nothing (a few
+    // blades in a closed wood's shade are not seen), so the blocks under a
+    // canopy read as bare and their tiles are never issued.
+    for (size_t k = 1; k < field_.size(); k += 4)
+        if (field_[k] < kDensityFloor) field_[k] = 0.0f;
     fieldCols_ = cols;
     fieldRows_ = rows;
     fieldX0_ = x0;

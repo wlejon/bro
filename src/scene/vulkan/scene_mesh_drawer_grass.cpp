@@ -180,6 +180,15 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
         }
     }
 
+    // The rings scale with the eye's height over the ground: a blade's ring
+    // distance is its distance across the ground and the eye's LIFT (its
+    // height past a standing eye's) together, so seen from above the
+    // canopy the near rings, all sub-pixel there, are not issued at all.
+    // A standing or crouching eye has no lift: the rings are as on foot.
+    constexpr float kStandingEye = 2.0f;
+    const float lift =
+        std::max(0.0f, view.eye.y - node.fieldHeight(view.eye.x, view.eye.z, view.eye.y) - kStandingEye);
+
     for (int r = 0; r < GrassNode::kRings; ++r) {
         const GrassNode::Ring ring = node.ring(r);
         // Blades lean and stand up to ~2x the mean height: pad the box by
@@ -223,7 +232,8 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
                 const float fx = std::max(std::fabs(x0 - ex), std::fabs(x1 - ex));
                 const float fz = std::max(std::fabs(z0 - ez), std::fabs(z1 - ez));
                 float lo = 0.0f, hi = 0.0f, tall = 0.0f;
-                const bool keep = nx * nx + nz * nz <= rOut * rOut && fx * fx + fz * fz >= rIn * rIn &&
+                const bool keep = nx * nx + nz * nz + lift * lift <= rOut * rOut &&
+                                  fx * fx + fz * fz + lift * lift >= rIn * rIn &&
                                   node.fieldRange(x0 - reach, z0 - reach, x1 + reach, z1 + reach, lo, hi, tall) &&
                                   bromath::fintersects(view.frustum, bromath::AABB3{{x0 - reach, lo, z0 - reach},
                                                                                     {x1 + reach, hi + top * tall, z1 + reach}});
@@ -255,6 +265,7 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
         u.lod[0] = ring.thinFrom;
         u.lod[1] = ring.minKeep;
         u.lod[2] = GrassNode::kShadowKeep;
+        u.lod[3] = lift;
 
         const VkDescriptorBufferInfo ubo = frame.gpu.device.frameUniform(&u, sizeof(u));
         VkDescriptorSet set = frame.gpu.device.frameSet(defaults_->customLayout);

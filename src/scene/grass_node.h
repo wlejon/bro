@@ -171,6 +171,8 @@ private:
     // Blocks of kFieldBlock x kFieldBlock texels: min height, max height, and
     // the largest height multiplier where anything grows (0: nothing does).
     static constexpr int kFieldBlock = 8;
+    // Field density under which nothing grows (setField).
+    static constexpr float kDensityFloor = 0.06f;
     std::vector<float> blocks_;
     int blockCols_ = 0, blockRows_ = 0;
     float fieldX0_ = 0.0f, fieldZ0_ = 0.0f, fieldCell_ = 1.0f;

@@ -34,7 +34,7 @@ layout(set = 4, binding = 0) uniform GrassUBO {
     vec4 push;       // xy: world x, z of the influence map's corner; z: its cell (m); w: cells across
     vec4 pushRate;   // x: bend recovery (1/s), y: trample recovery (1/s), zw: unused
     vec4 shape;      // x: blades an instance, y: vertices a blade, z: spread from the root (m), w: a tuft's fan (rad)
-    vec4 lod;        // x: thinning starts (m), y: the fewest blades kept (share), z: the share shadow casters keep, w: unused
+    vec4 lod;        // x: thinning starts (m), y: the fewest blades kept (share), z: the share shadow casters keep, w: the eye's lift (m)
 } grass;
 
 const float GRASS_REFERENCE_SPEED = 2.5;   // m/s: the steady wind blades flutter in as authored
@@ -129,7 +129,9 @@ bool grassBlade(int id, int vid, vec3 v, vec3 vn, out GrassBlade b) {
     float cell = grass.cells.w;
     vec2 root = (vec2(c) + h.xy) * cell;
     vec3 eye = camera.eyeWorld.xyz;
-    float d = length(root - eye.xz);
+    // Across the ground and the eye's lift over it (lod.w): the rings scale
+    // with the eye's height.
+    float d = length(vec2(length(root - eye.xz), grass.lod.w));
 
     // Thinning, first since it is the cheapest test: past lod.x the instance
     // keeps fewer of its blades, widened to keep the cover; shadow casters
