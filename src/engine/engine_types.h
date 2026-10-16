@@ -3,6 +3,7 @@
 #include "dom/node_handle.h"
 #include "engine/dom_undo.h"
 #include <bromath/color.h>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -20,7 +21,11 @@ struct ContentInsets { int top = 0, right = 0, bottom = 0, left = 0; };
 /// Loaded custom font data for registering on layout thread's renderer
 struct LoadedFont {
     std::string family;
-    std::vector<char> data;
+    // The file's bytes, one copy shared by every renderer the face is
+    // registered on (render::Renderer::FontBytes).
+    std::shared_ptr<const void> keep;
+    const void* data = nullptr;
+    size_t size = 0;
     int weight;
     bool italic;
 };

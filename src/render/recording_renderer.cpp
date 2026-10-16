@@ -133,10 +133,9 @@ TextMetrics RecordingRenderer::measureText(std::string_view text, FontRef font,
     return measureRenderer_->measureText(text, font, direction);
 }
 
-bool RecordingRenderer::registerCustomFont(const std::string& family,
-                                           const void* data, size_t len,
+bool RecordingRenderer::registerCustomFont(const std::string& family, const FontBytes& bytes,
                                            int weight, bool italic) {
-    bool ok = measureRenderer_->registerCustomFont(family, data, len, weight, italic);
+    bool ok = measureRenderer_->registerCustomFont(family, bytes, weight, italic);
     if (ok) noteFontRegistered();
     return ok;
 }

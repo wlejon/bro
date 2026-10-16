@@ -276,12 +276,24 @@ public:
         drawText(text, x, y, font, color, direction);
     }
 
+    // A font file's bytes, shared rather than copied: every renderer that
+    // registers the face (the UI, layout and raster renderers) holds `keep`,
+    // which owns the memory `data` points into (typically a read-only file
+    // mapping, so the pages are shared with the page cache and other processes).
+    struct FontBytes {
+        std::shared_ptr<const void> keep;
+        const void* data = nullptr;
+        size_t size = 0;
+    };
+
     // Register a custom font from file data (for @font-face support).
     // Returns true on success. The font will be used when a FontRef matches
     // the given family name, weight, and style.
-    virtual bool registerCustomFont(const std::string& family,
-                                    const void* data, size_t len,
-                                    int weight, bool italic) { return false; }
+    virtual bool registerCustomFont(const std::string& family, const FontBytes& bytes,
+                                    int weight, bool italic) {
+        (void)family; (void)bytes; (void)weight; (void)italic;
+        return false;
+    }
 
     // Bumped whenever a custom font is registered. The same FontRef can resolve
     // to a different face across that event, so anything holding on to a

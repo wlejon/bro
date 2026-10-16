@@ -171,8 +171,7 @@ public:
                       bromath::Color color, float blur) override;
     // @font-face faces, so layout-thread measurement picks the same face
     // (by CSS font matching) as the drawing renderer.
-    bool registerCustomFont(const std::string& family,
-                            const void* data, size_t len,
+    bool registerCustomFont(const std::string& family, const FontBytes& bytes,
                             int weight, bool italic) override;
 
 private:

@@ -53,8 +53,8 @@ void Engine::layoutThreadFunc() {
 
     // Register custom fonts on the layout renderer so text measurement uses them
     for (auto& font : loadedFonts_) {
-        layoutRenderer->registerCustomFont(font.family, font.data.data(),
-                                           font.data.size(), font.weight, font.italic);
+        layoutRenderer->registerCustomFont(font.family, {font.keep, font.data, font.size}, font.weight,
+                                           font.italic);
     }
 
     layout::SkiaTextMetrics layoutTextMetrics(layoutRenderer.get());
@@ -196,8 +196,8 @@ void Engine::rasterThreadFunc() {
     render::SkiaGpu* gpu = skiaGpu_.get();
     rasterRenderer->setGpu(gpu);
     for (auto& font : loadedFonts_) {
-        rasterRenderer->registerCustomFont(font.family, font.data.data(),
-                                           font.data.size(), font.weight, font.italic);
+        rasterRenderer->registerCustomFont(font.family, {font.keep, font.data, font.size}, font.weight,
+                                           font.italic);
     }
 
     LOG_INFO("Raster thread started");

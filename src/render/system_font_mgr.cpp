@@ -2,6 +2,7 @@
 
 #include "util/log.h"
 
+#include <include/core/SkData.h>
 #include <include/core/SkFont.h>
 #include <include/core/SkFontMetrics.h>
 #include <include/core/SkFontStyle.h>
@@ -145,6 +146,22 @@ SkFontMgr* systemFontMgr() {
     const double waited = msSince(t0);
     if (waited >= 1.0) LOG_INFO("First text use waited %.1f ms for system fonts", waited);
     return s.mgr.get();
+}
+
+sk_sp<SkTypeface> makeTypefaceFromBytes(std::shared_ptr<const void> keep, const void* data, size_t size) {
+    if (!data || size == 0) return nullptr;
+    sk_sp<SkData> skData;
+    if (keep) {
+        auto* owner = new std::shared_ptr<const void>(std::move(keep));
+        skData = SkData::MakeWithProc(
+            data, size, [](const void*, void* ctx) { delete static_cast<std::shared_ptr<const void>*>(ctx); },
+            owner);
+    } else {
+        skData = SkData::MakeWithCopy(data, size);
+    }
+    auto typeface = SkFontMgr::RefEmpty()->makeFromData(skData);
+    if (!typeface) typeface = systemFontMgr()->makeFromData(skData);
+    return typeface;
 }
 
 } // namespace bro::render

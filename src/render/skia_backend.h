@@ -115,8 +115,7 @@ public:
     void drawBackdropFilter(std::span<const CssFilterParams> filters,
                             float x, float y, float w, float h, const Radii& r,
                             float opacity) override;
-    bool registerCustomFont(const std::string& family,
-                            const void* data, size_t len,
+    bool registerCustomFont(const std::string& family, const FontBytes& bytes,
                             int weight, bool italic) override;
 
     void setClip(float x, float y, float w, float h) override;

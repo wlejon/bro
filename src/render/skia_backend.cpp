@@ -596,14 +596,9 @@ void SkiaRenderer::rotate(float degrees) {
     if (canvas_) canvas_->rotate(degrees);
 }
 
-bool SkiaRenderer::registerCustomFont(const std::string& family,
-                                       const void* data, size_t len,
+bool SkiaRenderer::registerCustomFont(const std::string& family, const FontBytes& bytes,
                                        int weight, bool italic) {
-    auto skData = SkData::MakeWithCopy(data, len);
-    auto typeface = SkFontMgr::RefEmpty()->makeFromData(skData);
-    if (!typeface) {
-        typeface = ensureFontMgr()->makeFromData(skData);
-    }
+    auto typeface = makeTypefaceFromBytes(bytes.keep, bytes.data, bytes.size);
     if (!typeface) return false;
     customFonts_.push_back({family, weight, italic, typeface});
     noteFontRegistered();

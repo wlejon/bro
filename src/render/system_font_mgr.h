@@ -3,7 +3,9 @@
 #include <include/core/SkFontMgr.h>
 #include <include/core/SkRefCnt.h>
 
+#include <cstddef>
 #include <cstdint>
+#include <memory>
 
 namespace bro::render {
 
@@ -20,6 +22,11 @@ namespace bro::render {
 // manager, waiting only for whatever of the warm-up is still in flight.
 void prewarmSystemFontMgr();
 SkFontMgr* systemFontMgr();
+
+// A typeface over a font file's bytes without copying them: the SkData wraps
+// `data` and holds `keep` (which owns it) until the typeface lets go. With no
+// `keep` the bytes are copied. Null when the bytes are not a font.
+sk_sp<SkTypeface> makeTypefaceFromBytes(std::shared_ptr<const void> keep, const void* data, size_t size);
 
 // Logs one platform font lookup that took long enough to cost a frame (a
 // family match, a per-character fallback), with what it looked up: a stall

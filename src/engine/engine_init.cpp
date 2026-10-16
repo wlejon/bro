@@ -34,6 +34,7 @@
 #include "render/raster_renderer.h"
 #include "render/recording_renderer.h"
 #include "render/skia_backend.h"
+#include <include/core/SkData.h>
 #include "render/bidi.h"
 #include "render/system_font_mgr.h"
 
@@ -1144,21 +1145,36 @@ void Engine::loadCustomFonts() {
         std::string path = AppLoader::resolvePath(
             ff.baseUrl.empty() ? basePath : ff.baseUrl, ff.src, &assetMounts_);
 
-        std::ifstream file(path, std::ios::binary | std::ios::ate);
-        if (!file.is_open()) {
+        // One copy of the bytes, shared by the UI, layout and raster
+        // renderers. Mapped read-only where a mapping does not lock the file
+        // (it would block saving the font during hot reload on Windows), so
+        // its pages are page cache, shared with every process using the font.
+#ifdef _WIN32
+        sk_sp<SkData> bytes;
+        {
+            std::ifstream file(path, std::ios::binary | std::ios::ate);
+            if (file.is_open()) {
+                const auto size = static_cast<size_t>(file.tellg());
+                file.seekg(0, std::ios::beg);
+                auto owned = SkData::MakeUninitialized(size);
+                if (file.read(static_cast<char*>(owned->writable_data()), static_cast<std::streamsize>(size)))
+                    bytes = std::move(owned);
+            }
+        }
+#else
+        sk_sp<SkData> bytes = SkData::MakeFromFileName(path.c_str());
+#endif
+        if (!bytes || bytes->size() == 0) {
             LOG_WARN("Failed to load @font-face '%s' from '%s'", ff.family.c_str(), path.c_str());
             continue;
         }
-        auto size = file.tellg();
-        file.seekg(0, std::ios::beg);
-        std::vector<char> data(size);
-        file.read(data.data(), size);
-        file.close();
+        const void* data = bytes->data();
+        const size_t size = bytes->size();
+        std::shared_ptr<const void> keep(data, [bytes](const void*) mutable { bytes.reset(); });
 
-        if (renderer_->registerCustomFont(ff.family, data.data(), data.size(),
-                                          ff.weight, ff.italic)) {
+        if (renderer_->registerCustomFont(ff.family, {keep, data, size}, ff.weight, ff.italic)) {
             LOG_INFO("Loaded @font-face '%s' from '%s'", ff.family.c_str(), path.c_str());
-            loadedFonts_.push_back({ff.family, data, ff.weight, ff.italic});
+            loadedFonts_.push_back({ff.family, std::move(keep), data, size, ff.weight, ff.italic});
         }
     }
 }

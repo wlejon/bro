@@ -70,8 +70,7 @@ public:
                     float wordSpacing = 0.0f,
                     TextDirection direction = TextDirection::LTR) override;
 
-    bool registerCustomFont(const std::string& family,
-                            const void* data, size_t len,
+    bool registerCustomFont(const std::string& family, const FontBytes& bytes,
                             int weight, bool italic) override;
 
     void drawLine(float x1, float y1, float x2, float y2, bromath::Color color, float thickness) override;
