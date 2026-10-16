@@ -321,6 +321,16 @@ int usage() {
     return 2;
 }
 
+// The executable's scripts, compiled ahead of time beside it. A failure only
+// costs the launch a JIT compile, so it is a note, never the build's failure.
+void buildExeAot(const std::string& appDir, const std::string& exe, bool quiet) {
+    if (!appExeAotEnabled()) return;
+    std::string summary, err;
+    const bool ok = buildAppExeAot(appDir, exe, summary, err);
+    if (!ok) std::fprintf(stderr, "bro: scripts of %s not compiled ahead of time: %s\n", exe.c_str(), err.c_str());
+    if (!quiet && !summary.empty()) std::printf("ahead-of-time scripts %s (%s)\n", appExeAotDir(exe).c_str(), summary.c_str());
+}
+
 // Build the app's executable for an install; "" (with a note) when this
 // platform or build makes none, so the install still registers the folder.
 std::string installExe(const std::string& appDir, const AppDescriptor& m, bool system, bool quiet) {
@@ -339,6 +349,7 @@ std::string installExe(const std::string& appDir, const AppDescriptor& m, bool s
         return {};
     }
     if (!quiet) std::printf("executable %s%s\n", exe.c_str(), rebuilt ? "" : " (up to date)");
+    buildExeAot(appDir, exe, quiet);
     return exe;
 #endif
 }
@@ -451,6 +462,8 @@ int runAppCommand(const std::vector<std::string>& args) {
             if (rebuilt) std::printf("built %s (was: %s)\n", exe.c_str(), appExeStateName(before));
             else std::printf("%s is up to date\n", exe.c_str());
         }
+        // An executable stamped as another engine's (a test's) gets none.
+        if (stampEngine.empty()) buildExeAot(u8str(src), exe, quiet);
         return 0;
     }
 

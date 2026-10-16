@@ -551,6 +551,20 @@ public:
     /// (bronze_host/app_module.h) — is handed the Engine, not the config that
     /// built it.
     const std::string& appDir() const { return appDir_; }
+    /// EngineConfig::aotDir / aotBuildDir (empty when not set).
+    const std::string& aotDir() const { return aotDir_; }
+    const std::string& aotBuildDir() const { return aotBuildDir_; }
+    /// The page's script units, in the order the page runs them: every classic
+    /// script as ONE unit named for the page (they share one global scope),
+    /// then each module script — an external one named for its file, once per
+    /// file; an inline one named for the page. Empty when bro-server skips
+    /// the page.
+    struct PageScriptUnit {
+        std::string code;
+        std::string name;
+        bool moduleFile = false;
+    };
+    std::vector<PageScriptUnit> pageScriptUnits() const;
     const DesktopTrustInfo& desktopTrust() const { return desktopTrust_; }
     bool isShellApp() const { return desktopTrust_.isShell; }
     bool hasPrivilege(const std::string& ns) const { return desktopTrust_.hasPrivilege(ns); }
@@ -911,14 +925,6 @@ private:
 
     // App-realm lifecycle (engine_init.cpp + app_reload.cpp)
     void initAppRealm();
-    // The page's first script unit — every classic script as one, else the
-    // first module script — as initAppRealm runs it; false when there is none.
-    struct PageScriptUnit {
-        std::string code;
-        std::string name;
-        bool moduleFile = false;
-    };
-    bool firstPageScriptUnit(PageScriptUnit& out) const;
     std::string combinedClassicScripts() const;
     // At launch, while the GPU comes up: the realm's host globals installed
     // and the page's first script compiling on its own thread, for
@@ -1297,6 +1303,8 @@ private:
     bool splashEnabled_ = true;
     bool compiledApp_ = false;
     bool hostProvidesCompiledApp_ = false;
+    std::string aotDir_;
+    std::string aotBuildDir_;
     std::vector<uint64_t> appModuleHandles_;
     bool splashDismissTriggered_ = false;
     double splashStartMs_ = 0.0;

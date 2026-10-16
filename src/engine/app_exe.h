@@ -23,11 +23,17 @@
 // when either changed, and an executable that finds itself out of date runs
 // the app as a folder under the stock bro while a fresh one is built.
 //
-// Seams for what the executable will carry later (an AOT-compiled app module,
-// a startup heap snapshot, packed assets, the list of natives modules the app
-// uses): each is another input to appContentHash() and another key in the
-// identity block or another section appended to the stub copy; the stub and
-// bro_run_app already treat unknown keys as data for the engine to read.
+// Beside the executable sits its AOT directory (appExeAotDir): the page's
+// scripts compiled ahead of time into loadable modules (bronze_host/app_aot.h).
+// It is not part of the cache key: each module carries its own record of what
+// it was compiled from and is checked at every launch, so a page edit costs
+// that unit a JIT compile and a background rebuild, never a wrong program.
+//
+// Seams for what the executable will carry later (a startup heap snapshot,
+// packed assets, the list of natives modules the app uses): each is another
+// input to appContentHash() and another key in the identity block or another
+// section appended to the stub copy; the stub and bro_run_app already treat
+// unknown keys as data for the engine to read.
 
 #include "engine/app_manifest.h"
 
@@ -112,6 +118,21 @@ AppExeState appExeState(const std::string& exePath, const std::string& appDir, A
 bool buildAppExe(const std::string& appDir, const AppDescriptor& manifest, const std::string& exePath,
                  bool force, bool* rebuilt, std::string& err, const std::string& stampEngine = {});
 
+/// The directory an executable's ahead-of-time compiled page scripts live in
+/// (bronze_host/app_aot.h): `<exe without extension>.aot` beside it.
+std::string appExeAotDir(const std::string& exePath);
+
+/// Whether app executables carry AOT-compiled scripts: unless BRO_APP_AOT=0.
+bool appExeAotEnabled();
+
+/// Compile the app's page scripts ahead of time into appExeAotDir(exePath),
+/// by running `bro-headless <appDir> --aot-build <dir>` (its output goes to
+/// `<dir>/build.log`). Units whose module is still current are kept. `summary`
+/// gets a one-line account ("3 units: 1 built, 2 current"). False with `err`
+/// when the build could not run or a unit failed to compile; the executable
+/// works either way, a unit without a module compiling in process.
+bool buildAppExeAot(const std::string& appDir, const std::string& exePath, std::string& summary, std::string& err);
+
 /// What `bro --exe-info <exe>` prints: the identity stamped in an executable
 /// and whether it is current for its folder; on Windows also what the system
 /// reads from the file (its version strings and icon sizes, the AppUserModelID
@@ -122,7 +143,8 @@ std::string describeAppExe(const std::string& exePath, const std::string& iconPn
 /// The Windows half of describeAppExe (app_exe_win.cpp); "" elsewhere.
 std::string describeWindowsExe(const std::string& exePath, const AppExeIdentity& id, const std::string& iconPng);
 
-/// Remove an executable this machine built (and anything it left beside it).
+/// Remove an executable this machine built (and anything it left beside it,
+/// its AOT directory included).
 void removeAppExe(const std::string& exePath);
 
 /// The executable to start installed app `id` in folder `dir` with: its own,

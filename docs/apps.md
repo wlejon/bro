@@ -325,18 +325,75 @@ app's identity stamped into it, and on Windows its icon and version
 resources written with the system's own resource updater. BUILDING.md has how
 and why.
 
-What it is a seam for, later: the app's ahead-of-time compiled script
-(today an `app.dll` beside `index.html`), the natives modules the app uses,
-a startup heap snapshot, packed assets, and per-app release downloads. Each
-is another input to the cache key and another part of the executable; none of
-them changes how it is named, registered or launched.
+What it is a seam for, later: the natives modules the app uses, a startup
+heap snapshot, packed assets, and per-app release downloads. Each is another
+input to the cache key and another part of the executable; none of them
+changes how it is named, registered or launched.
+
+## Ahead-of-time scripts
+
+Beside the executable sits its AOT directory, `<executable>.aot`
+(`helm-calculator.aot`): the page's scripts compiled ahead of time into
+shared libraries the executable loads, so a launch runs machine code from a
+file mapped like any other library instead of compiling the page.
+
+**Built at install.** `bro --install` and `bro --build-exe` run
+`bro-headless <app> --aot-build <dir>` after stamping the executable. That
+headless engine sets up the page's realm exactly as a launch does (host
+globals, natives, module roots) and, instead of running each script unit (the
+classic scripts together, then each module script), compiles it through
+bronze's evaluator, the same front end and IL the JIT compiles, to a module.
+The module image is written by brass's own PE / ELF writer: **no compiler or
+linker is needed on the machine**, on Windows or Linux. A unit whose module is
+still current is kept; the build's own log is `build.log` in the directory, and
+`bro --exe-info` prints its summary as `aot.*` lines. A unit that fails to
+compile is reported and simply runs on the JIT. `BRO_APP_AOT=0` skips the
+build, and makes a launch ignore the directory (for comparing the two).
+
+**Checked at every launch.** Each unit has a record (`<unit>.bzm`) beside its
+module (`<unit>-<stamp>.dll` / `.so`) naming everything the compile read: the
+unit's text and compile options (the key the [code cache](code-cache.md)
+uses: host globals, natives manifest, module registry, environment), the
+digest of every source file and how each import resolved, and the bronze
+runtime ABI. Before a unit runs, the record is checked against the unit as it
+is now and the module's own ABI stamp against the engine's. Any difference
+(an edited script or import, another engine build, another host-global list)
+and the unit compiles in process as a folder launch would, the log says why
+(`aot: the ahead-of-time module for ... is out of date (...)`), and a
+`bro --build-exe` starts in the background, so the next launch has a current
+module. A module never runs a program other than the one the JIT would
+compile.
+
+Compiled code is a first-class citizen of the runtime: each module registers
+its code ranges and stack maps when it loads, so stack traces name its
+functions and lines, the GC walks its frames, and `bro.profiler` reports its
+functions with tier `aot`. `eval`, `new Function` and `import()` of code not in
+a module still compile in process. `bro.app.startup.page.codeCache` is `'aot'`
+when the page's first unit ran from its module.
+
+**The folder is unaffected.** `bro <dir>` never looks at an AOT directory: the
+edit loop, hot reload and the code cache work as before.
+
+**Where it can move.** The images are position-independent and name only the
+engine's runtime library and `$ORIGIN` (Windows: the loader's own search), so
+they carry no build-machine paths of their own. They do name the app folder:
+module URLs, `import.meta.url` and stack-trace file names are the absolute
+paths the page had at build time, and the record checks them. An AOT
+directory therefore belongs with an app folder at the path it was built for
+(the installed copy, which is what `--install` builds against); a release
+artifact that ships one prebuilt needs app-relative names first.
+
+macOS app executables are not built yet (apps are bundles there), so no AOT
+directory is either; the writer handles Mach-O, and the plan is the same.
 
 ## Startup cost
 
 `bro <dir>` compiles the page's scripts in process at boot (bronze, tiered
 JIT). The compiled code is cached on disk ([code-cache.md](code-cache.md)), so
-the second and later launches skip the compile. Shipping an `app.dll` beside
-`index.html` skips it on the first launch too.
+the second and later launches skip the compile. An installed app's executable
+runs its page from modules compiled at install ("Ahead-of-time scripts",
+above), and shipping an `app.dll` beside `index.html` skips the compile for a
+folder too.
 
 Every launch logs its time to the first presented frame, measured from just
 before `main()`: `app <id>: first frame N ms after start` (in the app's log

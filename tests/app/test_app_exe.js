@@ -71,8 +71,13 @@ function run() {
         assert(r.status === 0, exe + ' exited ' + r.status + (r.error ? ' (' + r.error.message + ')' : '') +
             ': ' + String(r.stderr || '').slice(-2000));
         assert(fs.existsSync(out), 'the page reported to ' + out + '; stderr: ' + String(r.stderr || '').slice(-2000));
-        return { report: JSON.parse(fs.readFileSync(out, 'utf8')), stderr: String(r.stderr || '') };
+        // What the run logged: a windowed app's log goes to its log file
+        // (Windows has no console for it), the stub's own notes to stderr.
+        let appLog = '';
+        try { appLog = fs.readFileSync(path.join(baseEnv.BRO_APP_HOME, 'log', 'org.bro.test.ExeApp.log'), 'utf8'); } catch (e) { /* none */ }
+        return { report: JSON.parse(fs.readFileSync(out, 'utf8')), stderr: String(r.stderr || '') + appLog };
     };
+    const readLog = (e) => { try { return fs.readFileSync(path.join(aotDirOf(e), 'build.log'), 'utf8').slice(-3000); } catch (err) { return ''; } };
     const until = (pred, ms, what) => {
         const end = Date.now() + ms;
         while (Date.now() < end && !pred()) wallSleep(100);
@@ -80,11 +85,16 @@ function run() {
     };
 
     const exe = path.join(scratch, 'bin', isWin ? 'org-bro-test-ExeApp.exe' : 'org-bro-test-ExeApp');
+    const aotDirOf = (e) => e.replace(/\.exe$/i, '') + '.aot';
 
     // ---- build ------------------------------------------------------------------
     broCli(['--build-exe', app, '--out', exe]);
     assert(fs.existsSync(exe), 'built ' + exe);
     let id = info(exe);
+    // The page's script, compiled ahead of time beside the executable.
+    assert(norm(id['aot.dir']) === norm(aotDirOf(exe)), 'the AOT directory is beside it: ' + JSON.stringify(id));
+    assert(id['aot.units'] === '1' && id['aot.built'] === '1' && / built /.test(id['aot.unit0'] || ''),
+        'its one script unit was compiled: ' + JSON.stringify(id) + '\n' + readLog(exe));
     assert(id.id === 'org.bro.test.ExeApp' && id.name === 'Exe App' && id.version === '2.3.4',
         'the identity is stamped: ' + JSON.stringify(id));
     assert(norm(id.app) === norm(app), 'it names the app folder: ' + id.app);
@@ -100,6 +110,8 @@ function run() {
     const mtime = fs.statSync(exe).mtimeMs;
     const again = broCli(['--build-exe', app, '--out', exe]);
     assert(fs.statSync(exe).mtimeMs === mtime, 'a current executable is not rebuilt: ' + again);
+    id = info(exe);
+    assert(id['aot.current'] === '1' && id['aot.built'] === '0', 'nor is a current module: ' + JSON.stringify(id));
 
     // ---- a current executable runs the app as itself ------------------------------
     {
@@ -110,6 +122,49 @@ function run() {
             'bro.app.executable is the app executable: ' + JSON.stringify(report));
         assert(norm(report.exePath) === norm(exe), 'and so is the process image: ' + report.exePath);
         assert(JSON.stringify(report.argv) === '["arg one"]', 'arguments pass through: ' + JSON.stringify(report.argv));
+        assert(report.codeCache === 'aot', 'the page ran its ahead-of-time module: ' + report.codeCache);
+        assert(/where/.test(report.stack) && /index\.html/.test(report.stack),
+            'a stack trace from compiled code names its function and file: ' + report.stack);
+    }
+
+    // ---- ahead-of-time scripts: checked at each launch -----------------------------
+    {
+        const page = path.join(app, 'index.html');
+        // Edited: the module is no longer that program, so the launch compiles
+        // the page in process and rebuilds the directory behind it.
+        fs.writeFileSync(page, fs.readFileSync(page, 'utf8').replace("marker: 'first'", "marker: 'second'"));
+        assert(info(exe).state === 'current', 'a page edit leaves the executable current');
+        let { report, stderr } = launch(exe);
+        assert(report.marker === 'second', 'the edited page ran: ' + JSON.stringify(report));
+        assert(report.codeCache !== 'aot', 'not from the stale module: ' + report.codeCache);
+        assert(stderr.indexOf('out of date') >= 0, 'it says why: ' + stderr.slice(-1000));
+        until(() => { try { return info(exe)['aot.built'] === '1'; } catch (e) { return false; } }, 60000,
+            'the background rebuild of the AOT directory');
+        report = launch(exe).report;
+        assert(report.marker === 'second' && report.codeCache === 'aot',
+            'the next launch runs the rebuilt module: ' + JSON.stringify(report));
+
+        // A record this engine cannot read (another format or ABI): the same.
+        broCli(['--build-exe', app, '--out', exe]);
+        assert(info(exe)['aot.current'] === '1', 'current again');
+        const records = fs.readdirSync(aotDirOf(exe)).filter((f) => f.endsWith('.bzm'));
+        assert(records.length === 1, 'one record: ' + records);
+        fs.writeFileSync(path.join(aotDirOf(exe), records[0]), 'not a record from this engine');
+        ({ report, stderr } = launch(exe));
+        assert(report.marker === 'second' && report.codeCache !== 'aot',
+            'an unreadable record falls back to the JIT: ' + JSON.stringify(report));
+        assert(stderr.indexOf('out of date') >= 0, 'and says so: ' + stderr.slice(-1000));
+        until(() => { try { return info(exe)['aot.built'] === '1'; } catch (e) { return false; } }, 60000,
+            'the rebuild after an unreadable record');
+        assert(launch(exe).report.codeCache === 'aot', 'and the rebuilt module runs');
+
+        // BRO_APP_AOT=0 runs without it (for comparing the two).
+        const off = cp.spawnSync(exe, ['--no-splash'], {
+            env: { ...baseEnv, BRO_APP_AOT: '0', BRO_TEST_EXE_OUT: path.join(scratch, 'off.json') },
+            cwd: scratch, timeout: 90000, encoding: 'utf8' });
+        assert(off.status === 0, 'BRO_APP_AOT=0 launch exited ' + off.status);
+        const offReport = JSON.parse(fs.readFileSync(path.join(scratch, 'off.json'), 'utf8'));
+        assert(offReport.codeCache !== 'aot', 'BRO_APP_AOT=0 compiles the page: ' + offReport.codeCache);
     }
 
     // ---- the app changed: run under bro, rebuild behind --------------------------
@@ -172,6 +227,7 @@ function run() {
         }
         broCli(['--uninstall', 'org.bro.test.ExeApp'], env);
         assert(!fs.existsSync(built), '--uninstall removed the executable');
+        assert(!fs.existsSync(aotDirOf(built)), 'and its AOT directory');
         if (isWin) {
             assert(!fs.existsSync(path.join(scratch, 'roaming', 'Microsoft', 'Windows', 'Start Menu', 'Programs',
                 'Bro Apps', 'Exe App.lnk')), 'and the shortcut');

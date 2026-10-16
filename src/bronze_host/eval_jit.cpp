@@ -1,4 +1,5 @@
 #include "bronze_host/eval_jit.h"
+#include "bronze_host/app_aot.h"
 #include "bronze_host/eval.h"
 #include "bronze_host/host_gc.h"
 #include "bronze_host/bronze_host.h"
@@ -735,8 +736,8 @@ std::unique_ptr<bronze::eval::CompiledScript> compileWithPumping(engine::Engine&
     return compiled;
 }
 
-// The options a script of the page (or a string evaluated as one) compiles
-// and runs with. Host globals must be installed: the list is read off them.
+}  // namespace
+
 bronze::eval::EvalOptions scriptEvalOptions(engine::Engine& engine, const std::string& filename,
                                             bool moduleFile) {
     bronze::eval::EvalOptions opts;
@@ -764,14 +765,10 @@ bronze::eval::EvalOptions scriptEvalOptions(engine::Engine& engine, const std::s
     return opts;
 }
 
-// What is compiled for `code`: a script with a top-level `await` and no
-// `import` becomes an async IIFE.
 std::string scriptExecCode(const std::string& code, const std::string& filename) {
     if (hasAwaitStmt(code) && !hasImportStmt(code)) return wrapAsyncIife(code, filename);
     return code;
 }
-
-} // namespace
 
 bool startAppScriptCompile(engine::Engine& engine, const std::string& code, const std::string& filename,
                            bool moduleFile) {
@@ -789,6 +786,8 @@ bool startAppScriptCompile(engine::Engine& engine, const std::string& code, cons
     ahead->filename = filename.empty() ? "<eval>" : filename;
     ahead->moduleFile = moduleFile && !filename.empty();
     ahead->opts = scriptEvalOptions(engine, filename, moduleFile);
+    // A current ahead-of-time module is the compile, already done.
+    if (loadAheadAotUnit(engine, ahead->code, ahead->opts)) return false;
     // Everything the compile reads from this thread's runtime, captured here:
     // the compile itself then runs on its own thread (bronze compileScript).
     bronze::eval::captureThreadInputs(ahead->opts);
@@ -811,6 +810,7 @@ bool startAppScriptCompile(engine::Engine& engine, const std::string& code, cons
 }
 
 void discardAppScriptCompile() {
+    discardAheadAotUnit();
     if (!s_ahead) return;
     if (s_ahead->future.valid()) s_ahead->future.wait();
     s_ahead.reset();
@@ -852,8 +852,15 @@ bronze::embed::CallResult evalScriptJitResult(engine::Engine& engine, const std:
     opts.moduleHandleOut = moduleHandleOut;
     const std::string execCode = scriptExecCode(code, filename);
 
-    auto compiled = compileWithPumping(engine, opts, execCode);
-    auto res = bronze::eval::runCompiledScript(std::move(compiled), opts);
+    // An installed app's executable runs the unit's ahead-of-time module
+    // while it is current (app_aot.h); anything else compiles here.
+    bronze::embed::CallResult res;
+    if (auto aot = takeAotUnit(engine, execCode, opts)) {
+        res = bronze::eval::runModule(*aot, opts);
+    } else {
+        auto compiled = compileWithPumping(engine, opts, execCode);
+        res = bronze::eval::runCompiledScript(std::move(compiled), opts);
+    }
 
     if (res.thrown && execCode == code && !hasImportStmt(code)) {
         // toUtf8 allocates, so the thrown value is rooted across it and read

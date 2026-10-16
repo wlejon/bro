@@ -336,14 +336,19 @@ directly. libbro is built from them, not instead of them.
 `libbronze_runtime_shared.so`), and stays one. libbro links it, and an app's
 ahead-of-time module (`app.dll` / `app.so` beside `index.html`) links it too
 and nothing of libbro's: the module reaches the host's globals at run time
-through the realm, not through link-time symbols. So when an app's
-executable carries its compiled module (the next step after the executable
-itself), the module still imports only from the bronze runtime, which the
-executable's process already has loaded through libbro, and there is still
-exactly one runtime, one heap and one key registry per process. The engine
-build an executable was made against (`bro_engine_version`) is part of its
-cache key, so a module compiled against one engine build is never run on
-another.
+through the realm, not through link-time symbols. An installed app's
+executable carries its page's scripts compiled the same way (its AOT
+directory, docs/apps.md "Ahead-of-time scripts"): each module imports only
+from the bronze runtime, which the executable's process already has loaded
+through libbro, and there is still exactly one runtime, one heap and one key
+registry per process. Those modules are written at install by brass's own
+image writer, in process, so installing needs no compiler or linker on any
+platform that builds app executables. Each one is checked before it runs
+against a record of what it was compiled from, including the bronze runtime
+ABI, the realm's host globals and the natives manifest, rather than against
+`bro_engine_version`: a relink of libbro that changes none of those keeps
+them, and one that changes any of them runs the page on the JIT while the
+directory is rebuilt.
 
 **An app's own executable is made without a compiler.** `bro --install`
 copies `bro-app-stub` (built with bro, shipped beside libbro), names the copy

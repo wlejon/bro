@@ -7,6 +7,7 @@
 // test_app_exe.js: report how this launch ran to $BRO_TEST_EXE_OUT, then quit.
 const fs = require('fs');
 const out = process.env.BRO_TEST_EXE_OUT;
+function where() { return new Error('here').stack; }
 if (out) {
     fs.writeFileSync(out, JSON.stringify({
         id: bro.app.id,
@@ -14,6 +15,10 @@ if (out) {
         executable: bro.app.executable,
         exePath: bro.app.exePath,
         argv: bro.app.argv,
+        // 'aot' when this script ran from the executable's compiled module.
+        codeCache: bro.app.startup.page.codeCache,
+        stack: where(),
+        marker: 'first',
     }));
 }
 bro.quit();

@@ -109,6 +109,7 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
     bool claimInstance = false;
     std::string launchNotification;
     std::string nativeManifestOut;
+    std::string aotBuildDir;
 
     bool passThrough = false;
     for (int i = 1; i < argc; ++i) {
@@ -148,7 +149,11 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
                 "                  Write the native manifest this binary registers (the\n"
                 "                  __bro_native.* entry points and signatures) to <path>\n"
                 "                  and exit: the --native-manifest for the same build.\n"
-                "                  Combines with --print-host-globals in one run\n",
+                "                  Combines with --print-host-globals in one run\n"
+                "  --aot-build <dir>\n"
+                "                  Compile the page's scripts ahead of time into <dir>\n"
+                "                  instead of running them, and exit (an app executable's\n"
+                "                  AOT directory; `bro --build-exe` runs this)\n",
                 hooks.programName.c_str(), hooks.tagline.c_str(), hooks.programName.c_str());
             return 0;
         } else if (strcmp(argv[i], "--") == 0) {
@@ -183,6 +188,8 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
             printHostGlobals = true;
         } else if (strcmp(argv[i], "--print-native-manifest") == 0 && i + 1 < argc) {
             nativeManifestOut = argv[++i];
+        } else if (strcmp(argv[i], "--aot-build") == 0 && i + 1 < argc) {
+            aotBuildDir = argv[++i];
         } else if (appDir.empty()) {
             appDir = argv[i];
         } else if (scriptPath.empty() && argv[i][0] != '-') {
@@ -329,11 +336,25 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
             hooks.providesCompiledApp && hooks.providesCompiledApp(config.appDir);
         config.installHostBindings = hooks.installHostBindings;
         config.installWorkerHostBindings = hooks.installWorkerHostBindings;
+        config.aotBuildDir = aotBuildDir;
+        if (!aotBuildDir.empty()) config.showSplash = false;
 
         if (hooks.beforeEngine) hooks.beforeEngine();
 
         auto* engine = new bro::engine::Engine(config);
         engine->run();
+
+        // --aot-build: the engine's page load compiled the units instead of
+        // running them (bronze_host/app_aot.h). Nothing else is to happen in
+        // this realm, so the run ends here, with the build's verdict.
+        if (!aotBuildDir.empty()) {
+            const int status = (bro::bronze_host::hasTestFailure() || engine->hasTestFailure()) ? 1 : 0;
+            delete engine;
+            if (hooks.beforeExit) hooks.beforeExit();
+            fflush(stdout);
+            fflush(stderr);
+            _exit(status);
+        }
 
         // The compile-time half of the host-globals contract, read off the
         // run-time half: install exactly what an app would find registered

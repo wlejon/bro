@@ -6,6 +6,7 @@
 
 #include "engine/app_runtime.h"
 #include "util/exe_dir.h"
+#include "util/process_spawn.h"
 #include "util/sha.h"
 
 #include <algorithm>
@@ -387,6 +388,77 @@ bool buildAppExe(const std::string& appDir, const AppDescriptor& manifest, const
     return true;
 }
 
+// ---- the AOT directory -------------------------------------------------------------------------
+
+std::string appExeAotDir(const std::string& exePath) {
+    fs::path p = u8path(exePath);
+#ifdef _WIN32
+    if (p.extension() == ".exe" || p.extension() == ".EXE") p.replace_extension();
+#endif
+    p += ".aot";
+    return u8str(p);
+}
+
+bool appExeAotEnabled() {
+    const char* v = std::getenv("BRO_APP_AOT");
+    return !(v && std::string(v) == "0");
+}
+
+namespace {
+
+// aot.txt (bronze_host/app_aot.cpp writes it): key=value lines.
+std::vector<std::pair<std::string, std::string>> readAotSummary(const std::string& dir) {
+    std::vector<std::pair<std::string, std::string>> out;
+    std::string text;
+    if (!readFile(u8path(dir) / "aot.txt", text)) return out;
+    std::istringstream in(text);
+    std::string line;
+    while (std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        const size_t eq = line.find('=');
+        if (eq != std::string::npos) out.emplace_back(line.substr(0, eq), line.substr(eq + 1));
+    }
+    return out;
+}
+
+}  // namespace
+
+bool buildAppExeAot(const std::string& appDir, const std::string& exePath, std::string& summary, std::string& err) {
+    summary.clear();
+#ifdef _WIN32
+    const fs::path headless = u8path(engineDir()) / "bro-headless.exe";
+#else
+    const fs::path headless = u8path(engineDir()) / "bro-headless";
+#endif
+    std::error_code ec;
+    if (!fs::is_regular_file(headless, ec)) {
+        err = "this bro ships no bro-headless (" + u8str(headless) + ") to compile with";
+        return false;
+    }
+    const std::string dir = appExeAotDir(exePath);
+    fs::create_directories(u8path(dir), ec);
+    const std::string log = u8str(u8path(dir) / "build.log");
+    const int status = util::runAndWait({u8str(headless), appDir, "--aot-build", dir}, err, log);
+    if (status < 0) return false;
+
+    int units = 0, built = 0, current = 0, failed = 0;
+    for (const auto& [k, v] : readAotSummary(dir)) {
+        if (k == "units") units = std::atoi(v.c_str());
+        else if (k == "built") built = std::atoi(v.c_str());
+        else if (k == "current") current = std::atoi(v.c_str());
+        else if (k.rfind("unit", 0) == 0 && v.find(" failed: ") != std::string::npos) ++failed;
+    }
+    summary = std::to_string(units) + (units == 1 ? " unit: " : " units: ") + std::to_string(built) + " built, " +
+              std::to_string(current) + " current";
+    if (failed) summary += ", " + std::to_string(failed) + " failed";
+    if (status != 0) {
+        err = "the ahead-of-time compile " + std::string(failed ? "left units to the JIT" : "failed") + " (exit " +
+              std::to_string(status) + "; see " + log + ")";
+        return false;
+    }
+    return true;
+}
+
 std::string describeAppExe(const std::string& exePath, const std::string& iconPng) {
     std::string out;
     AppExeIdentity id;
@@ -396,6 +468,12 @@ std::string describeAppExe(const std::string& exePath, const std::string& iconPn
     const AppExeState s = appExeState(exePath, id.app);
     out += std::string("state=") + (s == AppExeState::Current ? "current" : appExeStateName(s)) + "\n";
     if (s == AppExeState::StaleEngine) out += "this-engine=" + engineVersion() + "\n";
+    const std::string aotDir = appExeAotDir(exePath);
+    const auto aot = readAotSummary(aotDir);
+    if (!aot.empty()) {
+        out += "aot.dir=" + aotDir + "\n";
+        for (const auto& [k, v] : aot) out += "aot." + k + "=" + v + "\n";
+    }
     out += describeWindowsExe(exePath, id, iconPng);
     return out;
 }
@@ -411,6 +489,9 @@ void removeAppExe(const std::string& exePath) {
         fs::rename(exe, aside, ec);
     }
     removeLeftovers(exe);
+    // A module a running copy has mapped refuses removal on Windows; the
+    // rest goes, and the next build of this executable rewrites the record.
+    fs::remove_all(u8path(appExeAotDir(exePath)), ec);
 }
 
 #ifndef _WIN32

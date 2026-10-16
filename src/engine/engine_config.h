@@ -63,6 +63,15 @@ struct EngineConfig {
     bool showSplash = true;
     bool compiledApp = false;
     bool hostProvidesCompiledApp = false;
+    // An installed app's executable: the directory holding its page scripts
+    // compiled ahead of time (engine/app_exe.h, appExeAotDir). Each script unit
+    // runs its module there while the module is still the program a compile
+    // would build, and compiles in process otherwise. Empty: every unit compiles.
+    std::string aotDir;
+    // `bro-headless <app> --aot-build <dir>`: compile the page's script units
+    // into `aotDir`'s layout at <dir> instead of running them
+    // (bronze_host/app_aot.h), then stop.
+    std::string aotBuildDir;
     // bro.json `"watch"`: reload the app when a source file under its dir
     // changes. Only ever active for a windowed app whose scripts compile
     // in-process (docs/hot-reload.md); BRO_WATCH=0|1 overrides.

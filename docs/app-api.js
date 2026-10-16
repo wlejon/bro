@@ -242,7 +242,9 @@ bro.app.logFile;
  * the script runs once the device is up. `page` times that: `globalsAtMs` /
  * `globalsMs` (the host globals), `compileStartMs` / `compileEndMs` /
  * `compileMs`, `waitMs` (how long the run waited for the compile to finish),
- * `codeCache` (`'hit'`, `'miss'`, `'off'`, ...) and `overlapMs` (how much of
+ * `codeCache` (`'hit'`, `'miss'`, `'off'`, ..., or `'aot'` when an app
+ * executable ran the unit from its ahead-of-time module, docs/apps.md, so
+ * the compile times are the module's load) and `overlapMs` (how much of
  * that work ran before `readyAtMs`). Every field is -1 (and `codeCache` '')
  * when nothing compiled ahead: a page with no script, or
  * `BRO_STARTUP_OVERLAP=0`, which keeps the old order (the device, then the

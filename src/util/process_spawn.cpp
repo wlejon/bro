@@ -10,6 +10,7 @@
 #include <windows.h>
 #else
 #include <cerrno>
+#include <fcntl.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
@@ -71,14 +72,36 @@ bool spawnDetached(const std::vector<std::string>& argv, const std::string& cwd,
     return true;
 }
 
-int runAndWait(const std::vector<std::string>& argv, std::string& err) {
+int runAndWait(const std::vector<std::string>& argv, std::string& err, const std::string& outputFile) {
     std::wstring cmd = windowsCommandLine(argv);
     STARTUPINFOW si{};
     si.cb = sizeof(si);
     PROCESS_INFORMATION pi{};
-    if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE, CREATE_UNICODE_ENVIRONMENT, nullptr,
-                        nullptr, &si, &pi)) {
-        err = "CreateProcess failed (" + std::to_string(GetLastError()) + ")";
+    HANDLE out = INVALID_HANDLE_VALUE;
+    HANDLE in = INVALID_HANDLE_VALUE;
+    if (!outputFile.empty()) {
+        SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};
+        out = CreateFileW(widen(outputFile).c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa,
+                          CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        in = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, 0, nullptr);
+        if (out == INVALID_HANDLE_VALUE || in == INVALID_HANDLE_VALUE) {
+            err = "cannot open " + outputFile + " (" + std::to_string(GetLastError()) + ")";
+            if (out != INVALID_HANDLE_VALUE) CloseHandle(out);
+            if (in != INVALID_HANDLE_VALUE) CloseHandle(in);
+            return -1;
+        }
+        si.dwFlags = STARTF_USESTDHANDLES;
+        si.hStdOutput = out;
+        si.hStdError = out;
+        si.hStdInput = in;
+    }
+    const BOOL started = CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE, CREATE_UNICODE_ENVIRONMENT,
+                                        nullptr, nullptr, &si, &pi);
+    const DWORD startError = GetLastError();
+    if (out != INVALID_HANDLE_VALUE) CloseHandle(out);
+    if (in != INVALID_HANDLE_VALUE) CloseHandle(in);
+    if (!started) {
+        err = "CreateProcess failed (" + std::to_string(startError) + ")";
         return -1;
     }
     CloseHandle(pi.hThread);
@@ -117,17 +140,41 @@ bool spawnDetached(const std::vector<std::string>& argv, const std::string& cwd,
     return true;
 }
 
-int runAndWait(const std::vector<std::string>& argv, std::string& err) {
+int runAndWait(const std::vector<std::string>& argv, std::string& err, const std::string& outputFile) {
     if (argv.empty()) { err = "nothing to run"; return -1; }
     std::vector<char*> av;
     for (const auto& a : argv) av.push_back(const_cast<char*>(a.c_str()));
     av.push_back(nullptr);
+    // Opened before fork, for the reason spawnDetached gives.
+    int out = -1, in = -1;
+    if (!outputFile.empty()) {
+        out = ::open(outputFile.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+        in = ::open("/dev/null", O_RDONLY | O_CLOEXEC);
+        if (out < 0 || in < 0) {
+            err = "cannot open " + outputFile;
+            if (out >= 0) ::close(out);
+            if (in >= 0) ::close(in);
+            return -1;
+        }
+    }
     pid_t pid = fork();
-    if (pid < 0) { err = "fork failed"; return -1; }
+    if (pid < 0) {
+        if (out >= 0) ::close(out);
+        if (in >= 0) ::close(in);
+        err = "fork failed";
+        return -1;
+    }
     if (pid == 0) {
+        if (out >= 0) {
+            ::dup2(out, 1);
+            ::dup2(out, 2);
+            ::dup2(in, 0);
+        }
         execv(av[0], av.data());
         _exit(127);
     }
+    if (out >= 0) ::close(out);
+    if (in >= 0) ::close(in);
     int status = 0;
     while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
     if (WIFEXITED(status)) return WEXITSTATUS(status);

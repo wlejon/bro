@@ -29,6 +29,7 @@ Scripts and `-e` expressions are compiled in-process by bronze and run against t
 | `--single-instance` | Honour the app's `"singleInstance"`: claim its channel, or hand `-- args` to the instance holding it and exit 0 (headless runs otherwise never claim it). |
 | `--print-host-globals` | Install the host globals exactly as a run would, print bronze's host-global registry to stdout one name per line, and exit: the `--host-globals` manifest for `bronze build` of an app that will run on this binary. |
 | `--print-native-manifest <path>` | The other half of the same contract: write the native registry — the `__bro_native.*` entry points and signatures behind `bro.time`, `bro.settings`, `bro.window` and the panels' `__bro.*` — as the JSON `--native-manifest` for the same compile, and exit. Combines with `--print-host-globals` in one run; `tests/bronze_host/lib.sh` asks for both that way. |
+| `--aot-build <dir>` | Set up the app's realm as a launch would, compile each of the page's script units ahead of time into a loadable module in `<dir>` instead of running it (keeping modules still current), write `<dir>/aot.txt`, and exit (1 when a unit failed to compile). An app executable's AOT directory; `bro --build-exe` runs this ([apps.md](apps.md), "Ahead-of-time scripts"). |
 
 By default headless renders offscreen on a Vulkan device through the same pipeline as windowed mode; no display is needed.
 

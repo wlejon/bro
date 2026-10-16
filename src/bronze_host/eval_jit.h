@@ -58,6 +58,15 @@ bronze::embed::CallResult evalScriptJitResult(engine::Engine& engine, const std:
 bool startAppScriptCompile(engine::Engine& engine, const std::string& code, const std::string& filename,
                            bool moduleFile);
 
+/// The options a script of the page (or a string evaluated as one) compiles
+/// and runs with, and the text compiled for it (a script with a top-level
+/// `await` and no `import` becomes an async IIFE). Shared with the
+/// ahead-of-time build (app_aot.h), whose modules must be exactly the program
+/// this compile would build. Host globals must be installed: the list is read
+/// off them.
+bronze::eval::EvalOptions scriptEvalOptions(engine::Engine& engine, const std::string& filename, bool moduleFile);
+std::string scriptExecCode(const std::string& code, const std::string& filename);
+
 /// Waits out and drops a compile startAppScriptCompile began that no run took.
 void discardAppScriptCompile();
 

@@ -33,6 +33,7 @@ set(BRO_BRONZE_HOST_SOURCES
     host_profile.cpp
     host_telemetry.cpp
     app_module.cpp
+    app_aot.cpp
     dom_globals.cpp
     dom_window.cpp
     dom_globals_webgl.cpp

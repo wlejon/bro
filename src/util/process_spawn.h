@@ -15,8 +15,10 @@ namespace bro::util {
 bool spawnDetached(const std::vector<std::string>& argv, const std::string& cwd, std::string& err);
 
 /// Run argv to completion and return its exit status, -1 when it could not
-/// be started (`err` set). Inherits our standard handles and working directory.
-int runAndWait(const std::vector<std::string>& argv, std::string& err);
+/// be started (`err` set). Inherits our working directory, and our standard
+/// handles unless `outputFile` names a file its stdout and stderr go to
+/// instead (truncated first; stdin is then the null device).
+int runAndWait(const std::vector<std::string>& argv, std::string& err, const std::string& outputFile = std::string());
 
 #ifdef _WIN32
 /// The command line CreateProcessW wants for `argv`, each argument quoted the

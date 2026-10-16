@@ -41,6 +41,7 @@
 #if BRO_WITH_PHYSICS
 #include "physics/physics_world.h"
 #endif
+#include "bronze_host/app_aot.h"
 #include "bronze_host/eval.h"
 #include "bronze_host/eval_jit.h"
 #include "api/fs_watch.h"  // Engine owns unique_ptr<FsWatcher>s; the ctor's unwind deletes them
@@ -173,6 +174,8 @@ void Engine::construct(const EngineConfig& config) {
     splashEnabled_ = config.showSplash;
     compiledApp_ = config.compiledApp;
     hostProvidesCompiledApp_ = config.hostProvidesCompiledApp;
+    aotDir_ = config.aotDir;
+    aotBuildDir_ = config.aotBuildDir;
     appDir_ = config.appDir;
     titleOverride_ = config.title;
     fallbackTitle_ = initialWindowTitle(config);
@@ -699,41 +702,16 @@ void Engine::initAppRealm() {
                  manifest_.scripts.size(), manifest_.htmlPath.c_str());
     }
     if (!manifest_.scripts.empty() && !serverSkipsPage) {
-        // Classic scripts share one global scope, so they stay ONE unit, in
-        // document order, named for the page. Module scripts are deferred on
-        // the web — they run after the classic ones, in document order — and
-        // each is its own module with its own URL: an external one is named
-        // for its file, so import.meta.url and its relative imports resolve
-        // from where it lives rather than from index.html; an inline one is
-        // named for the page, whose URL is its base. The realm's module
-        // registry evaluates a module two scripts import once.
-        const std::string combinedScripts = combinedClassicScripts();
-        if (!combinedScripts.empty()) {
-            if (!bro::bronze_host::evalAppScript(*this, combinedScripts, manifest_.htmlPath)) {
-                setTestFailure(true);
-            }
-        }
-        // An external module script IS the module instance for its file: it is
-        // published under its path, so a later `import` of that file — from a
-        // headless driver script, or another module script — binds the
-        // instance that ran rather than running the file again. Two tags with
-        // one src are one module, evaluated once (HTML's module map).
-        std::vector<std::string> ranModuleFiles;
-        for (const auto& script : manifest_.scripts) {
-            if (!script.isModule) continue;
-            if (!script.isInline()) {
-                if (std::find(ranModuleFiles.begin(), ranModuleFiles.end(), script.path) !=
-                    ranModuleFiles.end()) {
-                    continue;
+        const std::vector<PageScriptUnit> units = pageScriptUnits();
+        if (!aotBuildDir_.empty()) {
+            // `bro-headless --aot-build`: this realm is the one the units are
+            // compiled against, and none of them runs.
+            if (!bro::bronze_host::buildAppAot(*this, units, aotBuildDir_)) setTestFailure(true);
+        } else {
+            for (const auto& unit : units) {
+                if (!bro::bronze_host::evalAppScript(*this, unit.code, unit.name, unit.moduleFile)) {
+                    setTestFailure(true);
                 }
-                ranModuleFiles.push_back(script.path);
-            }
-            std::string code = script.isInline() ? script.code : AppLoader::loadFile(script.path);
-            if (code.empty()) continue;
-            const std::string& name = script.isInline() ? manifest_.htmlPath : script.path;
-            if (!bro::bronze_host::evalAppScript(*this, code, name,
-                                                 /*moduleFile=*/!script.isInline())) {
-                setTestFailure(true);
             }
         }
     }
@@ -759,21 +737,32 @@ std::string Engine::combinedClassicScripts() const {
     return combined;
 }
 
-bool Engine::firstPageScriptUnit(PageScriptUnit& out) const {
-    if (displayMode_ == DisplayMode::Server && !manifest_.htmlPath.empty()) return false;
+// Module scripts are deferred on the web — they run after the classic ones, in
+// document order — and each is its own module with its own URL: an external
+// one is named for its file, so import.meta.url and its relative imports
+// resolve from where it lives rather than from index.html; an inline one is
+// named for the page, whose URL is its base. An external module script IS the
+// module instance for its file: it is published under its path, so a later
+// `import` of that file — from a headless driver script, or another module
+// script — binds the instance that ran rather than running the file again. Two
+// tags with one src are one module, evaluated once (HTML's module map).
+std::vector<Engine::PageScriptUnit> Engine::pageScriptUnits() const {
+    std::vector<PageScriptUnit> units;
+    if (displayMode_ == DisplayMode::Server && !manifest_.htmlPath.empty()) return units;
     std::string classic = combinedClassicScripts();
-    if (!classic.empty()) {
-        out = {std::move(classic), manifest_.htmlPath, false};
-        return true;
-    }
+    if (!classic.empty()) units.push_back({std::move(classic), manifest_.htmlPath, false});
+    std::vector<std::string> moduleFiles;
     for (const auto& script : manifest_.scripts) {
         if (!script.isModule) continue;
+        if (!script.isInline()) {
+            if (std::find(moduleFiles.begin(), moduleFiles.end(), script.path) != moduleFiles.end()) continue;
+            moduleFiles.push_back(script.path);
+        }
         std::string code = script.isInline() ? script.code : AppLoader::loadFile(script.path);
         if (code.empty()) continue;
-        out = {std::move(code), script.isInline() ? manifest_.htmlPath : script.path, !script.isInline()};
-        return true;
+        units.push_back({std::move(code), script.isInline() ? manifest_.htmlPath : script.path, !script.isInline()});
     }
-    return false;
+    return units;
 }
 
 // Only the FIRST unit compiles ahead: it is compiled against the realm as it
@@ -784,9 +773,10 @@ void Engine::beginPageCompile() {
     if (!appHtmlOverride_.empty()) return;
     manifest_ = AppLoader::loadApp(appDir_, &assetMounts_);
     util::setAssetPathContext(manifest_.basePath, &assetMounts_);
-    PageScriptUnit unit;
-    if (!firstPageScriptUnit(unit)) return;
-    bronze_host::startAppScriptCompile(*this, unit.code, unit.name, unit.moduleFile);
+    if (!aotBuildDir_.empty()) return;
+    const std::vector<PageScriptUnit> units = pageScriptUnits();
+    if (units.empty()) return;
+    bronze_host::startAppScriptCompile(*this, units[0].code, units[0].name, units[0].moduleFile);
 }
 
 void Engine::dispatchDocumentReadyEvents() {
