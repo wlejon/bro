@@ -38,7 +38,7 @@ struct GrassUBO {
 };
 
 constexpr float kPi = 3.14159265358979f;
-constexpr float kWidthGrowth = 0.012f;           // a far blade is wider, so a ring keeps its cover
+constexpr float kWidthGrowth = 0.03f;            // a far blade is wider, so a ring keeps its cover
 constexpr uint32_t kMaxRingInstances = 1u << 22;  // a guard, far above any view's need
 
 /// The x/z box around the eye holding everything of a disc of `radius` the

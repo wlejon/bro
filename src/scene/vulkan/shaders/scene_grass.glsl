@@ -56,16 +56,19 @@ vec3 grassGroundNormal(vec2 xz) {
     return normalize(vec3(-hx, 2.0 * e, -hz));
 }
 
-// The movers' push at xz: the bend now (decayed since it was stamped) and,
-// in `trample`, how flat the grass there is.
-vec2 grassInfluence(vec2 xz, out float trample) {
+// The movers' push at xz: the bend now (decayed since it was stamped); in
+// `trample`, how flat the grass there is, and in `lie`, the way flattened
+// blades lie (the push's direction when it was stamped).
+vec2 grassInfluence(vec2 xz, out float trample, out vec2 lie) {
     trample = 0.0;
+    lie = vec2(0.0);
     vec2 q = (xz - grass.push.xy) / (grass.push.z * grass.push.w);
     if (q.x <= 0.0 || q.y <= 0.0 || q.x >= 1.0 || q.y >= 1.0) return vec2(0.0);
     vec4 p = textureLod(grassPush, q, 0.0);
     float age = camera.windParams.x - p.a;   // the stamps are on the wind clock
     if (p.a <= 0.0 || age < 0.0) return vec2(0.0);
     trample = max(p.b - age * grass.pushRate.y, 0.0);
+    lie = p.rg;
     return p.rg * exp(-age * grass.pushRate.x);
 }
 
@@ -76,6 +79,8 @@ struct GrassBlade {
     vec3 ground;   // the ground's normal under it
     vec3 color;    // linear, before the node colour
     float ao;      // 0.5 at the root .. 1 at the tip
+    float bulk;    // how much of its shading follows the ground's normal
+    float far;     // 0 near .. 1: how far its translucency has faded
 };
 
 // Blade `id` of the draw at blade-space vertex `v` (x across -0.5..0.5, y 0
@@ -88,6 +93,8 @@ bool grassBlade(int id, vec3 v, vec3 vn, out GrassBlade b) {
     b.ground = vec3(0.0, 1.0, 0.0);
     b.color = vec3(0.0);
     b.ao = 1.0;
+    b.bulk = grass.lush.w;
+    b.far = 0.0;
 
     int W = max(int(grass.cells.z), 1);
     ivec2 c = ivec2(int(grass.cells.x) + id % W, int(grass.cells.y) + id / W);
@@ -124,10 +131,12 @@ bool grassBlade(int id, vec3 v, vec3 vn, out GrassBlade b) {
     float lush = 1.0 - clamp(f.b, 0.0, 1.0);
     float tall = smoothstep(0.35, 0.8, sceneWindNoise(xz * 0.045 + 3.0) * 0.5 + 0.5);
     float trample;
-    vec2 pb = grassInfluence(xz, trample);
+    vec2 lie;
+    vec2 pb = grassInfluence(xz, trample, lie);
+    trample = min(trample, 1.0);
     float ht = H * mix(0.5, 1.4, clump * clump) * (0.6 + 0.8 * h.z) *
                mix(1.0, mix(0.8, 1.7, tall * lush), grass.look.z) * f.a;
-    ht *= 1.0 - trample * 0.5;
+    ht *= 1.0 - trample * 0.25;
     float wd = grass.blade.y * (1.0 + d * grass.look.w);
     float yaw = h.x * 6.2831853 + h.y;
     vec3 side = vec3(cos(yaw), 0.0, sin(yaw));
@@ -144,16 +153,23 @@ bool grassBlade(int id, vec3 v, vec3 vn, out GrassBlade b) {
              vec2(-side.z, side.x) * flut * grass.blade.w +
              vec2(cos(yaw * 3.0), sin(yaw * 3.0)) * 0.18 * (h.y - 0.3);
     B += pb * 1.6;
-    float th = min(length(B), 1.35) + trample * 1.1 * h.z;
-    th = min(th, 1.5);
+    // Flattened grass lies the way it was pushed, most blades nearly flat,
+    // a few springing back first.
+    vec2 lieDir = length(lie) > 1e-3 ? normalize(lie) : normalize(B + 1e-4);
+    float flattened = trample * mix(0.75, 1.0, h.z);
+    B = mix(B, lieDir * length(B), flattened);
+    float r0 = flattened * 1.2;   // a flattened blade leaves the ground leaning
+    float th = min(length(B), 1.5 - r0);
     vec2 bd = normalize(B + 1e-4);
 
-    // The arc: curvature grows toward the tip.
+    // The arc: a lean r0 at the root, curvature growing toward the tip; the
+    // blade's angle from vertical at height fraction s is r0 + a(s).
     float y = v.y;
     float a = th * y * (0.6 + 0.4 * y);
-    float sa = sin(a), ca = cos(a);
-    float along = th > 1e-3 ? (1.0 - ca) * y / max(a, 1e-3) : 0.0;
-    float up = th > 1e-3 ? sa * y / max(a, 1e-3) : y;
+    float ang = r0 + a;
+    float sa = sin(ang), ca = cos(ang);
+    float along = a > 1e-3 ? y * (cos(r0) - ca) / a : y * sin(r0);
+    float up = a > 1e-3 ? y * (sa - sin(r0)) / a : y * cos(r0);
     vec3 dir3 = vec3(bd.x, 0.0, bd.y);
     vec3 root = vec3(xz.x - eye.x, f.r - eye.y, xz.y - eye.z);
     b.pos = root + side * v.x * wd + (vec3(0.0, up, 0.0) + dir3 * along) * ht;
@@ -164,12 +180,21 @@ bool grassBlade(int id, vec3 v, vec3 vn, out GrassBlade b) {
 
     // Colour: lush to dry by the mask and the clump, dark at the root, and
     // a gust lifts the sheen of the blades it bends.
-    vec3 green = grass.lush.rgb * mix(0.85, 1.15, h.y);
-    vec3 dryc = grass.dry.rgb * mix(0.88, 1.12, h.x);
+    // Each blade its own value and a little hue: the streaks that make a
+    // sward read as blades rather than as a painted surface.
+    float tone = mix(0.7, 1.25, fract(h.y * 7.31 + h.x));
+    vec3 green = grass.lush.rgb * mix(vec3(0.85, 0.95, 1.1), vec3(1.15, 1.05, 0.8), h.y) * tone;
+    vec3 dryc = grass.dry.rgb * mix(0.85, 1.15, h.x) * tone;
     vec3 col = mix(dryc, green, clamp(lush * 1.3 - 0.15 + clump * 0.2, 0.0, 1.0));
-    col = mix(col * grass.look.x, col * (1.0 + 0.2 * y), y);
+    // Far off, a blade is a pixel or two: its dark root would leave only the
+    // tips showing (a field of dots), so the root shade fades with distance
+    // and a far blade reads as the colour of the turf it stands for.
+    float far = smoothstep(12.0, 70.0, d) * 0.75;
+    col = mix(col * mix(grass.look.x, 1.0, far), col * (1.0 + 0.2 * y), y);
     col *= 1.0 + gu * grass.look.y * y;
-    b.color = col;
-    b.ao = mix(0.5, 1.0, y);
+    col *= 1.0 + 0.6 * flattened;   // a flattened lane shows the blades' paler length
+    b.color = col;    b.ao = mix(mix(0.5, 1.0, y), 1.0, far);
+    b.bulk = mix(grass.lush.w, 0.95, far);   // and is lit as the ground,
+    b.far = smoothstep(8.0, 40.0, d);         // not glowing against the light
     return true;
 }

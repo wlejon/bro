@@ -53,7 +53,7 @@ public:
         float dry[3] = {0.42f, 0.31f, 0.09f};
         float bulk = 0.72f;         // how much of a blade's shading follows the ground's normal
         float clumpFreq = 0.21f;    // clump noise frequency (1/m)
-        float rootShade = 0.6f;     // the root's colour, x the blade's
+        float rootShade = 0.45f;    // the root's colour, x the blade's
         float sheen = 0.35f;        // a gust's lift of the bent blades
         float variety = 1.0f;       // large-scale height variation, 0 .. 1
         float wind = 1.0f;          // wind response, x

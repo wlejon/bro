@@ -41,5 +41,5 @@ void main() {
     outInstColor = vec4(b.color, 0.0);
     // A blade: its ao, marked (w <= -2) so the fragment stage takes it for a
     // translucent blade with no paler underside; and the ground's normal.
-    outVegShade = vec4(b.ground * grass.lush.w, -(2.0 + b.ao));
+    outVegShade = vec4(b.ground * b.bulk, -(2.0 + b.ao + 2.0 * floor(b.far * 15.0 + 0.5)));
 }

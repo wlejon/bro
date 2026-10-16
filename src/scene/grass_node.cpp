@@ -36,7 +36,7 @@ bromesh::MeshData bladeMesh(int seg) {
     return m;
 }
 
-constexpr float kRingCell[GrassNode::kRings] = {0.08f, 0.2f, 0.55f};
+constexpr float kRingCell[GrassNode::kRings] = {0.06f, 0.2f, 0.55f};
 constexpr float kRingEdge[GrassNode::kRings + 1] = {0.0f, 26.0f, 70.0f, 190.0f};   // at range 190
 
 }  // namespace
@@ -110,7 +110,7 @@ GrassNode::Ring GrassNode::ring(int i) const {
     const auto band = [](float edge) { return std::max(3.0f, edge * 0.12f); };
     r.bandIn = i == 0 ? 0.0f : band(r.inner);
     r.bandOut = band(r.outer);
-    r.width = params_.width + kRingCell[i] * 0.2f;
+    r.width = params_.width + (i == 0 ? 0.016f : kRingCell[i] * 0.2f);
     return r;
 }
 

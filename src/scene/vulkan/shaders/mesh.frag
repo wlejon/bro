@@ -87,11 +87,14 @@ void main() {
     baseColor *= inInstColor.rgb;
     if (push.pbrParams.z > 0.0 && alpha < push.pbrParams.z) discard;
 #ifdef SCENE_VEGETATION
-    // A grass blade (mesh_grass.vert) marks its ao with w <= -2: translucent
-    // like a leaf, with no paler underside.
+    // A grass blade (mesh_grass.vert) marks itself with w <= -2: w = -(2 +
+    // ao + 2k), k (0..15) how far its translucency has faded with distance.
+    // Translucent like a leaf, with no paler underside.
     bool vegLeaf = inVegShade.w < 0.0;
     bool vegBlade = inVegShade.w < -1.5;
-    float vegAO = vegBlade ? -inVegShade.w - 2.0 : abs(inVegShade.w);
+    float vegBladeT = -inVegShade.w - 2.0;
+    float vegFade = vegBlade ? floor(vegBladeT * 0.5) : 0.0;
+    float vegAO = vegBlade ? vegBladeT - 2.0 * vegFade : abs(inVegShade.w);
     // A leaf's underside is paler and yellower than its top.
     if (vegLeaf && !vegBlade && !gl_FrontFacing)
         baseColor = mix(baseColor, baseColor * vec3(1.25, 1.3, 1.05) + vec3(0.015, 0.02, 0.0), 0.6);
@@ -154,7 +157,7 @@ void main() {
     s.subsurface = push.extra.y;
     s.translucency = 0.0;
 #ifdef SCENE_VEGETATION
-    if (vegLeaf) s.translucency = push.extra.y > 0.0 ? min(1.4 * push.extra.y, 1.0) : 0.6;
+    if (vegLeaf) s.translucency = (push.extra.y > 0.0 ? min(1.4 * push.extra.y, 1.0) : 0.6) * (1.0 - vegFade / 15.0);
 #endif
 
     vec3 indirect = sceneAmbient(s);
