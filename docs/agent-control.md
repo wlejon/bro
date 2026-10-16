@@ -151,6 +151,10 @@ first match's centre).
 Coordinates are window CSS px; a selector's point is its element's centre
 in the window (below a menu bar, if the app shows one).
 
+The agent inbox's commands (`agents`, `ask`, `inbox serve|status|result|cancel|log`),
+through which agents running in the session take requests from other agents
+(here or over `--remote`), are in [agent-inbox.md](agent-inbox.md).
+
 The agent view's commands, which see and act through element handles
 instead of pixels (`view`, `windows`, `set`, `scroll`, `focus`, `close`,
 `launch`, `shot`, `who-has-keys`, `clipboard`, and the handle forms of
