@@ -106,7 +106,9 @@ add_library(bro::libbro ALIAS bro_libbro)
 # bro-config.cmake in the build tree: the same target for an embedder built
 # OUTSIDE this tree (helm with -Dbro_DIR=<this build>), so it maps the very
 # libbro.so the apps of this build map. Include directories and definitions
-# are read off the engine's targets, transitively, at generate time.
+# are read off the engine's targets, transitively, at generate time, and
+# written as bracket arguments: a definition may carry quotes
+# (FASTNOISE2_VERSION="1.1.1").
 set(_bro_cfg_dir "${CMAKE_BINARY_DIR}")
 set(_bro_features "")
 foreach(_f IN LISTS BRO_FEATURE_FLAGS)
@@ -129,8 +131,8 @@ if(NOT TARGET bro::libbro)
     set_target_properties(bro::libbro PROPERTIES
         IMPORTED_LOCATION \"$<TARGET_FILE:libbro>\"
         IMPORTED_IMPLIB \"$<TARGET_LINKER_FILE:libbro>\"
-        INTERFACE_INCLUDE_DIRECTORIES \"$<TARGET_PROPERTY:bro_runtime_usage,INTERFACE_INCLUDE_DIRECTORIES>\"
-        INTERFACE_COMPILE_DEFINITIONS \"$<TARGET_PROPERTY:bro_runtime_usage,INTERFACE_COMPILE_DEFINITIONS>\"
+        INTERFACE_INCLUDE_DIRECTORIES [==[$<TARGET_PROPERTY:bro_runtime_usage,INTERFACE_INCLUDE_DIRECTORIES>]==]
+        INTERFACE_COMPILE_DEFINITIONS [==[$<TARGET_PROPERTY:bro_runtime_usage,INTERFACE_COMPILE_DEFINITIONS>]==]
         INTERFACE_LINK_LIBRARIES \"$<TARGET_FILE:bronze_runtime_shared>\")
 endif()
 set(BRO_SOURCE_DIR \"${bro_SOURCE_DIR}\")
