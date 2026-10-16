@@ -5,7 +5,10 @@ app) through text: what it sees, how it acts, and how little context that
 costs. The person uses the same session through helm's remote viewer (video,
 input, audio); an agent uses its text side. Locally the commands are
 `bro-ctl` commands ([agent-control.md](agent-control.md)); over a remote
-session they are meant to travel on broremote's text lane (not built yet).
+session they travel on broremote's text lane (`bro-ctl --remote HOST`,
+[agent-control.md](agent-control.md#remote-a-sessions-engine-over-broremote)),
+in the same session the person views and without an ssh shell of the
+agent's own.
 
 ## Why: the baseline
 
@@ -203,7 +206,8 @@ shot 3.120 [path] [--scale=0.5] | shot w3 | shot [path]
 
 A PNG of an element, a window, or the screen. An app's window and elements
 come from the app's own screenshot, so a covered window still shows. With
-`bro-ctl -o FILE` (or `-o -`) the PNG is written where bro-ctl runs.
+`bro-ctl -o FILE` (or `-o -`) the PNG is written where bro-ctl runs, also
+with `--remote` (it comes back in the reply).
 
 ## Supporting commands
 
@@ -237,8 +241,10 @@ come from the app's own screenshot, so a covered window still shows. With
 - **Elsewhere** (a plain windowed bro, `bro-headless`) the same commands
   serve the one document as `w0`; the menu bar's inset is accounted for, so
   rects and clicks are window coordinates.
-- **Remote sessions:** broremote's text lane is to carry these commands, so
-  an agent in a remote session needs no ssh login of its own.
+- **Remote sessions:** broremote's text lane carries these commands to the
+  session's engine (its control dispatcher, the same one a local `bro-ctl`
+  reaches), so an agent in a remote session needs no ssh shell of its own;
+  `bro-ctl --remote` keeps the lane open in a local agent between commands.
 
 ## Costs
 

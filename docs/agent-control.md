@@ -25,10 +25,55 @@ ssh box bro-ctl eval 'document.title'
 printf 'key super+s\nsleep 1\nkey escape\n' | ssh box bro-ctl batch
 ```
 
+## Remote: a session's engine over broremote
+
+`--remote HOST` sends the same commands to the engine of a remote session
+(helm under `helm --drm --remote`, or any bro hosting with `bro.remote.host`)
+through broremote's text lane (protocol 1.6), not a shell on that machine.
+The replies are the same text, and the remote engine's dispatcher runs every
+command, so nothing below is local-only except `profile` and `record -o`.
+
+```bash
+bro-ctl --remote halo windows
+bro-ctl --remote halo view
+bro-ctl --remote halo launch helm.calculator
+bro-ctl --remote halo -o w4.png shot w4     # the PNG comes back in the reply
+export BRO_CTL_REMOTE=halo                  # then plain `bro-ctl view` goes there (--local: here)
+```
+
+- **The agent.** The first command starts a local agent (a `bro-ctl` in the
+  background) that holds one broremote session to the host: one ssh login,
+  then every command is a local connection to the agent and one round trip
+  on the open lane. It serves this user only (brolink application
+  `bro-ctl-remote`, an endpoint named for the host), ends after 30 minutes
+  with nothing asked (`--idle SECS`) or when its session ends, and
+  `bro-ctl --remote HOST disconnect` stops it (`connect` starts it and says
+  how it is). `--direct` skips it: one ssh per command, nothing left
+  running. `--remote-socket NAME` names the host's broremote socket
+  (default `default`, what helm uses).
+- **Beside a person's viewer.** The agent's session is text-only: it is sent
+  no video, is not counted as a viewer (no `attach` event, no encoder, no
+  frames captured for it), and changes nothing for a person watching through
+  `remote` / `<remoteview>`: their video and input lanes stay theirs, and
+  what the agent does (launching, typing) they see happen. With no viewer at
+  all, nothing is encoded. A viewer app can send the same commands over its
+  own session's text lane (`session.request()`, docs/remote-api.js).
+- **Files.** With `-o FILE` (or `-o -`), `screenshot` and `shot` write on
+  the host into a private file of the engine's, whose bytes come back in the
+  reply and land in FILE here; the reply text names FILE. Without `-o` the
+  file stays on the host (the reply says where). `record` writes on the host
+  only.
+- **Authorization** is the session: reaching the host's broremote server
+  takes an ssh login as the host's user (or that user's local socket), and
+  that is all. Whoever can log in as that user can drive the session
+  entirely, input, `eval` and `launch` included, exactly as they could with
+  a shell running `bro-ctl` there; there is no second check, so grant ssh
+  access to the host user accordingly.
+
 ## Security
 
 Local IPC only, never a network listener; only the same user can connect
-(reach another machine's over ssh).
+(reach another machine's over ssh, or through broremote's text lane above).
 
 - Linux/macOS: `$XDG_RUNTIME_DIR/bro-control/<name>.sock` (without
   `XDG_RUNTIME_DIR`, `${TMPDIR:-/tmp}/bro-control-<uid>/`); the directory must

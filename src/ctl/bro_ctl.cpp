@@ -17,8 +17,16 @@
 // to stdout — `ssh host bro-ctl -o - screenshot > shot.png` — and `-o FILE`
 // names where it goes. `record` also makes video.mp4 from its frames when
 // ffmpeg is on the PATH.
+//
+// Remote (bro_ctl_remote.h): `bro-ctl --remote HOST <command>` runs the
+// command in a remote session's engine through broremote's text lane, held
+// open between commands by a local agent; an output file comes back in the
+// reply (the request's outArg) rather than being written on the host.
 
 #include "platform/control_protocol.h"
+#if BRO_CTL_REMOTE
+#include "ctl/bro_ctl_remote.h"
+#endif
 
 #include <brolink/paths.h>
 #include <brolink/stream.h>
@@ -154,26 +162,35 @@ std::string resolveSocket(const std::string& path, const std::string& name, std:
     return pickOne(liveNames(), "", why);
 }
 
-// One connection: requests out, replies back by id (control_protocol.h).
+// One connection: requests out, replies back by id (control_protocol.h). To
+// a local engine, to the agent of a remote session (which speaks the same
+// protocol), or with --remote --direct over a text-only session of its own.
 struct Conn {
     std::unique_ptr<brolink::Stream> stream;
     brolink::wire::MessageSplitter split{control::kMaxMessage};
     uint64_t nextId = 1;
     uint64_t sent = 0;
+    // The engine is on another machine: an output file comes back in the
+    // reply (outArg) instead of being written where the engine runs.
+    bool remote = false;
+#if BRO_CTL_REMOTE
+    std::unique_ptr<broctl::DirectLink> direct;
+#endif
 
-    bool send(const std::vector<std::string>& argv) {
+    // One command and its reply: ok, payload and the outArg file's bytes.
+    // False when the connection died or spoke something else.
+    bool call(const std::vector<std::string>& argv, size_t outArg, bool& ok, std::string& payload,
+              std::string& file) {
+#if BRO_CTL_REMOTE
+        if (direct) return direct->call(argv, outArg, ok, payload, file);
+#endif
         sent = nextId++;
-        return stream->write(control::encodeRequest(sent, argv));
-    }
-
-    // The reply to the last request sent: ok, payload. False when the
-    // connection died or spoke something else.
-    bool receive(bool& ok, std::string& payload) {
+        if (!stream->write(control::encodeRequest(sent, argv, outArg))) return false;
         brolink::wire::MessageSplitter::Message m;
         for (;;) {
             while (split.next(m)) {
                 uint64_t id = 0;
-                if (m.type != control::kReply || !control::decodeReply(m.payload, id, ok, payload)) return false;
+                if (m.type != control::kReply || !control::decodeReply(m.payload, id, ok, payload, file)) return false;
                 if (id == sent) return true;
             }
             if (split.error()) return false;
@@ -182,6 +199,10 @@ struct Conn {
             if (r == 0) return false;
             split.feed(tmp, r);
         }
+    }
+    bool call(const std::vector<std::string>& argv, bool& ok, std::string& payload) {
+        std::string file;
+        return call(argv, 0, ok, payload, file);
     }
 };
 
@@ -294,7 +315,12 @@ void usage() {
                  "usage: bro-ctl [-s NAME | -S PATH] [-o OUT|-] <command> [args...]\n"
                  "       bro-ctl batch < commands      (one command per line)\n"
                  "       bro-ctl list | profile <seconds> [--top=40]\n"
-                 "       bro-ctl help                  (the running engine's commands)\n");
+                 "       bro-ctl help                  (the running engine's commands)\n"
+                 "       bro-ctl --remote HOST [--remote-socket NAME] [--direct] [-o OUT|-] <command> [args...]\n"
+                 "           a remote session's engine over broremote's text lane ($BRO_CTL_REMOTE sets HOST;\n"
+                 "           --local ignores it). A local agent holds the session between commands\n"
+                 "           (--idle SECS, default 1800); --direct uses one ssh per command.\n"
+                 "       bro-ctl --remote HOST connect | disconnect   (start / stop that agent)\n");
 }
 
 // A command's file output: screenshot takes its path as the first argument,
@@ -307,13 +333,22 @@ struct OutputPlan {
 
 int runOne(Conn& c, std::vector<std::string> argv, const std::string& out) {
     OutputPlan plan;
-    const std::string& cmd = argv[0];
+    const std::string cmd = argv[0];
     plan.toStdout = (out == "-");
+    size_t outArg = 0;  // remote: where the output path went (its file comes back in the reply)
+    if (!out.empty() && c.remote && cmd == "record") {
+        std::fprintf(stderr, "bro-ctl: record -o does not cross --remote (the frames stay on the host; "
+                             "record there and copy the directory)\n");
+        return 1;
+    }
     if (!out.empty() && (cmd == "screenshot" || cmd == "record" || cmd == "shot")) {
-        plan.path = plan.toStdout ? (std::filesystem::path(runtimeDir()) /
-                                     ("stdout-" + std::to_string(processId()) + (cmd == "record" ? "" : ".png")))
-                                        .string()
-                                  : out;
+        // Remote, the engine writes a file of its own and returns it: the
+        // argument only carries the extension (and names the file in the reply).
+        if (c.remote) plan.path = plan.toStdout ? std::string("stdout.png") : out;
+        else plan.path = plan.toStdout ? (std::filesystem::path(runtimeDir()) /
+                                          ("stdout-" + std::to_string(processId()) + (cmd == "record" ? "" : ".png")))
+                                             .string()
+                                       : out;
         // Insert the path where the command reads it.
         std::vector<std::string> pos;
         size_t firstPos = 0, nPos = 0;
@@ -333,16 +368,18 @@ int runOne(Conn& c, std::vector<std::string> argv, const std::string& out) {
             size_t second = 0;
             for (size_t i = firstPos + 1; i < argv.size() && !second; ++i)
                 if (argv[i].rfind("--", 0) != 0) second = i;
-            if (second) argv[second] = plan.path;
-            else argv.insert(argv.begin() + firstPos + 1, plan.path);
+            if (second) outArg = second;
+            else argv.insert(argv.begin() + (outArg = firstPos + 1), plan.path);
         } else if (cmd == "screenshot" || cmd == "shot") {
-            if (nPos) argv[firstPos] = plan.path;
-            else argv.push_back(plan.path);
+            if (nPos) outArg = firstPos;
+            else outArg = argv.size(), argv.push_back(plan.path);
         } else {  // record [seconds] [dir]
-            if (nPos == 0) argv.insert(argv.begin() + 1, {"3", plan.path});
-            else if (nPos == 1) argv.insert(argv.begin() + firstPos + 1, plan.path);
-            else argv[firstPos + 1] = plan.path;
+            if (nPos == 0) argv.insert(argv.begin() + 1, {"3", plan.path}), outArg = 2;
+            else if (nPos == 1) argv.insert(argv.begin() + (outArg = firstPos + 1), plan.path);
+            else outArg = firstPos + 1;
         }
+        argv[outArg] = plan.path;
+        if (!c.remote) outArg = 0;
     }
     if (cmd == "eval") {
         // eval -  : the script from stdin;  eval -f FILE : from a file.
@@ -361,10 +398,35 @@ int runOne(Conn& c, std::vector<std::string> argv, const std::string& out) {
         }
     }
     bool ok = false;
-    std::string payload;
-    if (!c.send(argv) || !c.receive(ok, payload)) {
-        std::fprintf(stderr, "bro-ctl: the connection closed before a reply\n");
+    std::string payload, file;
+    if (!c.call(argv, outArg, ok, payload, file)) {
+        std::fprintf(stderr, "bro-ctl: the connection closed before a reply%s%s\n", payload.empty() ? "" : ": ",
+                     payload.c_str());
         return 2;
+    }
+    if (outArg) {
+        // Remote: the file came back in the reply; it goes where -o said.
+        if (ok && file.empty()) {
+            std::fprintf(stderr, "bro-ctl: the reply carried no file (%s)\n", payload.c_str());
+            return 1;
+        }
+        if (ok && plan.toStdout) {
+            std::fwrite(file.data(), 1, file.size(), stdout);
+            std::fflush(stdout);
+        } else if (ok) {
+            std::ofstream o(std::filesystem::path(std::u8string(plan.path.begin(), plan.path.end())), std::ios::binary);
+            o.write(file.data(), static_cast<std::streamsize>(file.size()));
+            if (!o) {
+                std::fprintf(stderr, "bro-ctl: cannot write %s\n", plan.path.c_str());
+                return 1;
+            }
+        }
+        if (plan.toStdout) {
+            std::fwrite(payload.data(), 1, payload.size(), stderr);
+            if (!payload.empty() && payload.back() != '\n') std::fputc('\n', stderr);
+            return ok ? 0 : 1;
+        }
+        return printReply(ok, payload);
     }
     if (ok && cmd == "record" && !argv.empty()) {
         const std::string dir = jsonString(payload, "dir");
@@ -404,9 +466,13 @@ int runProfile(Conn& c, const std::vector<std::string>& argv) {
     int top = 40;
     for (const auto& a : argv)
         if (a.rfind("--top=", 0) == 0) top = std::atoi(a.c_str() + 6);
+    if (c.remote) {
+        std::fprintf(stderr, "bro-ctl: profile runs perf on the host: ssh there and run it\n");
+        return 1;
+    }
     bool ok = false;
     std::string info;
-    if (!c.send({"info"}) || !c.receive(ok, info) || !ok) {
+    if (!c.call({"info"}, ok, info) || !ok) {
         std::fprintf(stderr, "bro-ctl: info failed\n");
         return 2;
     }
@@ -430,43 +496,8 @@ int runProfile(Conn& c, const std::vector<std::string>& argv) {
     return std::system(cmd) == 0 ? 0 : 1;
 }
 
-}  // namespace
-
-int main(int argc, char** argv) {
-    std::string name, path, out;
-    int i = 1;
-    for (; i < argc; ++i) {
-        std::string a = argv[i];
-        if ((a == "-s" || a == "--name") && i + 1 < argc) name = argv[++i];
-        else if ((a == "-S" || a == "--socket") && i + 1 < argc) path = argv[++i];
-        else if ((a == "-o" || a == "--out") && i + 1 < argc) out = argv[++i];
-        else if (a == "-h" || a == "--help") return usage(), 0;
-        else break;
-    }
-    if (i >= argc) return usage(), 2;
-    std::vector<std::string> args(argv + i, argv + argc);
-
-#if defined(_WIN32)
-    // Replies (a PNG to stdout with -o -) are bytes, not text.
-    ::_setmode(::_fileno(stdout), _O_BINARY);
-#endif
-
-    if (args[0] == "list") {
-        for (const auto& n : brolink::list_local(control::kApp)) {
-            const std::string address = addressOf(n);
-            std::printf("%s%s\n", address.c_str(), answers(address) ? "" : "  (stale)");
-        }
-        return 0;
-    }
-
-    std::string why;
-    const std::string sock = resolveSocket(path, name, why);
-    if (sock.empty()) return std::fprintf(stderr, "bro-ctl: %s\n", why.c_str()), 2;
-    Conn c;
-    std::string err;
-    c.stream = brolink::connect_local(sock, &err);
-    if (!c.stream) return std::fprintf(stderr, "bro-ctl: %s\n", err.c_str()), 2;
-
+// profile, batch, or one command, on an open connection.
+int runCommands(Conn& c, const std::vector<std::string>& args, const std::string& out) {
     if (args[0] == "profile") return runProfile(c, args);
     if (args[0] == "batch") {
         int status = 0;
@@ -488,4 +519,97 @@ int main(int argc, char** argv) {
         return status;
     }
     return runOne(c, args, out);
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    std::string name, path, out;
+    std::string remote, remoteSocket, sshCommand;
+    bool direct = false, agent = false;
+    int idle = 1800;
+    if (const char* env = std::getenv("BRO_CTL_REMOTE"); env && *env) remote = env;
+    int i = 1;
+    for (; i < argc; ++i) {
+        std::string a = argv[i];
+        if ((a == "-s" || a == "--name") && i + 1 < argc) name = argv[++i];
+        else if ((a == "-S" || a == "--socket") && i + 1 < argc) path = argv[++i];
+        else if ((a == "-o" || a == "--out") && i + 1 < argc) out = argv[++i];
+        else if ((a == "-r" || a == "--remote") && i + 1 < argc) remote = argv[++i];
+        else if (a == "--local") remote.clear();
+        else if (a == "--remote-socket" && i + 1 < argc) remoteSocket = argv[++i];
+        else if (a == "--ssh-command" && i + 1 < argc) sshCommand = argv[++i];
+        else if (a == "--direct") direct = true;
+        else if (a == "--agent") agent = true;
+        else if (a == "--idle" && i + 1 < argc) idle = std::max(10, std::atoi(argv[++i]));
+        else if (a == "-h" || a == "--help") return usage(), 0;
+        else break;
+    }
+    if ((i >= argc && !agent) || (agent && remote.empty())) return usage(), 2;
+    std::vector<std::string> args(argv + i, argv + argc);
+
+#if defined(_WIN32)
+    // Replies (a PNG to stdout with -o -) are bytes, not text.
+    ::_setmode(::_fileno(stdout), _O_BINARY);
+#endif
+
+    if (!remote.empty()) {
+#if BRO_CTL_REMOTE
+        broctl::RemoteTarget t;
+        t.host = remote;
+        if (!remoteSocket.empty()) t.socket = remoteSocket, t.socketGiven = true;
+        t.sshCommand = sshCommand;
+        t.idleSeconds = idle;
+        if (agent) return broctl::runAgent(t);
+        Conn c;
+        c.remote = true;
+        std::string err;
+        if (args[0] == "disconnect") {
+            // The agent, if one is up; nothing to do otherwise.
+            const std::string address = brolink::local_address("bro-ctl-remote", broctl::agentEndpoint(t));
+            c.stream = brolink::connect_local(address);
+            if (!c.stream) return std::printf("no agent for %s\n", remote.c_str()), 0;
+            bool ok = false;
+            std::string payload;
+            if (!c.call({"@agent", "stop"}, ok, payload)) return 0;
+            return printReply(ok, payload);
+        }
+        if (direct) {
+            c.direct = broctl::DirectLink::open(t, err);
+            if (!c.direct) return std::fprintf(stderr, "bro-ctl: %s\n", err.c_str()), 2;
+        } else {
+            c.stream = broctl::connectAgent(t, err);
+            if (!c.stream) return std::fprintf(stderr, "bro-ctl: %s\n", err.c_str()), 2;
+        }
+        if (args[0] == "connect") {
+            if (direct) return std::printf("connected to %s (direct)\n", remote.c_str()), 0;
+            bool ok = false;
+            std::string payload;
+            if (!c.call({"@agent", "status"}, ok, payload)) return 2;
+            return printReply(ok, payload);
+        }
+        return runCommands(c, args, out);
+#else
+        std::fprintf(stderr, "bro-ctl: --remote needs a build with BRO_WITH_REMOTE (broremote)\n");
+        return 2;
+#endif
+    }
+
+    if (args[0] == "list") {
+        for (const auto& n : brolink::list_local(control::kApp)) {
+            const std::string address = addressOf(n);
+            std::printf("%s%s\n", address.c_str(), answers(address) ? "" : "  (stale)");
+        }
+        return 0;
+    }
+
+    std::string why;
+    const std::string sock = resolveSocket(path, name, why);
+    if (sock.empty()) return std::fprintf(stderr, "bro-ctl: %s\n", why.c_str()), 2;
+    Conn c;
+    std::string err;
+    c.stream = brolink::connect_local(sock, &err);
+    if (!c.stream) return std::fprintf(stderr, "bro-ctl: %s\n", err.c_str()), 2;
+
+    return runCommands(c, args, out);
 }

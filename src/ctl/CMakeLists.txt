@@ -7,3 +7,11 @@ add_executable(bro-ctl bro_ctl.cpp)
 set_target_properties(bro-ctl PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 target_include_directories(bro-ctl PRIVATE ${bro_SOURCE_DIR}/src)
 target_link_libraries(bro-ctl PRIVATE brolink)
+# --remote: a remote session's engine over broremote's text lane, so with
+# remote hosting built in, bro-ctl links broremote (its TextClient and the
+# ssh connect; nothing of bro's still).
+if(BRO_WITH_REMOTE)
+    target_sources(bro-ctl PRIVATE bro_ctl_remote.cpp)
+    target_link_libraries(bro-ctl PRIVATE broremote)
+    target_compile_definitions(bro-ctl PRIVATE BRO_CTL_REMOTE=1)
+endif()
