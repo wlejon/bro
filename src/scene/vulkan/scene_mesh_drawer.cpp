@@ -139,9 +139,14 @@ bool SceneMeshDrawer::setup(SceneGpu& gpu) {
     fsSpray_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshForestSprayFrag);
     fsSprayIndirect_ =
         SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshForestSprayIndirectFrag);
+    vsBloom_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshForestBloomVert);
+    fsBloom_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshForestBloomFrag);
+    fsBloomIndirect_ =
+        SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshForestBloomIndirectFrag);
     if (std::find(std::begin(vs_), std::end(vs_), VK_NULL_HANDLE) != std::end(vs_) || !fs_ || !fsIndirect_ ||
         !fsVeg_ || !fsVegIndirect_ || !fsSprite_ || !fsSpriteIndirect_ || !fsCluster_ || !fsClusterIndirect_ ||
-        !fsBark_ || !fsBarkIndirect_ || !fsGround_ || !fsGroundIndirect_ || !fsSpray_ || !fsSprayIndirect_) {
+        !fsBark_ || !fsBarkIndirect_ || !fsGround_ || !fsGroundIndirect_ || !fsSpray_ || !fsSprayIndirect_ ||
+        !vsBloom_ || !fsBloom_ || !fsBloomIndirect_) {
         LOG_ERROR("SceneMeshDrawer: Failed creating the mesh shader modules");
         return false;
     }
@@ -173,7 +178,10 @@ void SceneMeshDrawer::cleanup(SceneGpu& gpu) {
     SceneVkShaderModule::destroy(device_, fsGroundIndirect_);
     SceneVkShaderModule::destroy(device_, fsSpray_);
     SceneVkShaderModule::destroy(device_, fsSprayIndirect_);
-    fsSpray_ = fsSprayIndirect_ = VK_NULL_HANDLE;
+    SceneVkShaderModule::destroy(device_, vsBloom_);
+    SceneVkShaderModule::destroy(device_, fsBloom_);
+    SceneVkShaderModule::destroy(device_, fsBloomIndirect_);
+    fsSpray_ = fsSprayIndirect_ = vsBloom_ = fsBloom_ = fsBloomIndirect_ = VK_NULL_HANDLE;
     fs_ = fsIndirect_ = fsVeg_ = fsVegIndirect_ = fsSprite_ = fsSpriteIndirect_ = VK_NULL_HANDLE;
     fsCluster_ = fsClusterIndirect_ = fsBark_ = fsBarkIndirect_ = fsGround_ = fsGroundIndirect_ = VK_NULL_HANDLE;
     if (layout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(device_, layout_, nullptr);
@@ -244,11 +252,18 @@ VkPipeline SceneMeshDrawer::builtinPipeline(const MeshDraw& draw, const TargetFo
     // So do a needle or scale-leaf forest's leaves (SCENE_FOREST_SPRAY).
     const bool spray = draw.kind == MeshKind::ForestLeaf && !cluster &&
                        (static_cast<uint32_t>(draw.push.pbrParams[3]) & mesh_flags::kForestSpray) != 0u;
+    // And a forest's blooms, a sprite draw with its own vertex stage too.
+    const bool bloom = draw.kind == MeshKind::ForestSprite &&
+                       (static_cast<uint32_t>(draw.push.pbrParams[3]) & mesh_flags::kForestBloom) != 0u;
     const uint32_t variant = static_cast<uint32_t>(draw.kind) * raster::kCount + rasterBits +
                              (cluster ? static_cast<uint32_t>(kMeshKindCount) * raster::kCount : 0u) +
                              (ground ? 2u * static_cast<uint32_t>(kMeshKindCount) * raster::kCount : 0u) +
-                             (spray ? 3u * static_cast<uint32_t>(kMeshKindCount) * raster::kCount : 0u);
+                             (spray ? 3u * static_cast<uint32_t>(kMeshKindCount) * raster::kCount : 0u) +
+                             (bloom ? 4u * static_cast<uint32_t>(kMeshKindCount) * raster::kCount : 0u);
     return builtin_.get(variant, target, [&] {
+        if (bloom)
+            return buildPipeline(vsBloom_, target.colorCount > 1 ? fsBloomIndirect_ : fsBloom_, draw.kind,
+                                 rasterBits, target);
         const bool veg = vegetationShading(draw.kind);
         VkShaderModule fs = target.colorCount > 1 ? (veg ? fsVegIndirect_ : fsIndirect_) : (veg ? fsVeg_ : fs_);
         if (draw.kind == MeshKind::ForestSprite) fs = target.colorCount > 1 ? fsSpriteIndirect_ : fsSprite_;

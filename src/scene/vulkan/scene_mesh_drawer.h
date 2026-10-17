@@ -71,6 +71,7 @@ constexpr uint32_t kForestMsaa = 32768;     // a forest draw into a 4x MSAA targ
 constexpr uint32_t kForestCluster = 65536;  // forest leaf clusters: a card of leaves drawn by mesh.frag
 constexpr uint32_t kGround = 131072;        // turf: a static mesh shaded as its grass node's ground (set 4)
 constexpr uint32_t kForestSpray = 262144;   // a needle or scale-leaf forest's leaves: mesh.frag's SCENE_FOREST_SPRAY build
+constexpr uint32_t kForestBloom = 524288;   // a forest's blooms (a ForestSprite draw): mesh_forest_bloom.vert, SCENE_FOREST_BLOOM
 /// The vertex colour mode (0 none, 1 replaces the albedo, 2 tints it) in bits 10-11.
 constexpr uint32_t vertexColor(int mode) { return static_cast<uint32_t>(mode & 3) << 10; }
 }
@@ -88,7 +89,10 @@ constexpr uint32_t vertexColor(int mode) { return static_cast<uint32_t>(mode & 3
 /// (no streams) and sprites (no streams), each instance or sprite one of
 /// this frame's draw entries (set 3 binding 2). A sprite (a clump's lobe or
 /// a crown) draws with its own build of mesh.frag (SCENE_FOREST_SPRITE),
-/// which places its leaves and writes their depth.
+/// which places its leaves and writes their depth. A forest's blooms are a
+/// ForestSprite draw flagged mesh_flags::kForestBloom, which takes its own
+/// vertex stage (mesh_forest_bloom.vert) and mesh.frag build
+/// (SCENE_FOREST_BLOOM).
 enum class MeshKind : uint8_t {
     Static, Instanced, Skinned, Scatter, Tube, Vegetation, InstancedVegetation, Grass,
     ForestLeaf, ForestTube, ForestSprite,
@@ -264,6 +268,9 @@ private:
     VkShaderModule fsClusterIndirect_ = VK_NULL_HANDLE;
     VkShaderModule fsSpray_ = VK_NULL_HANDLE;          // needle / scale-leaf forest leaves: SCENE_FOREST_SPRAY
     VkShaderModule fsSprayIndirect_ = VK_NULL_HANDLE;
+    VkShaderModule vsBloom_ = VK_NULL_HANDLE;          // forest blooms: mesh_forest_bloom.vert
+    VkShaderModule fsBloom_ = VK_NULL_HANDLE;          // and mesh.frag's SCENE_FOREST_BLOOM
+    VkShaderModule fsBloomIndirect_ = VK_NULL_HANDLE;
     VkShaderModule fsBark_ = VK_NULL_HANDLE;          // Tube, ForestTube: mesh.frag's SCENE_BARK build
     VkShaderModule fsBarkIndirect_ = VK_NULL_HANDLE;
     VkShaderModule fsGround_ = VK_NULL_HANDLE;         // turf: mesh.frag's SCENE_GROUND build

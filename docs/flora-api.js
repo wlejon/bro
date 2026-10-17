@@ -697,7 +697,8 @@ class FloraWorld {
    * specimen's runs follow on from the last. Arrays:
    *   - `specimens`: 16 floats each: segStart, segCount, clumpStart,
    *     clumpCount, leafStart, leafCount, height, crownRadius, crown xyz
-   *     (relative), plant index, origin xyz (where it grew), 0;
+   *     (relative), plant index, origin xyz (where it grew), its clumps'
+   *     height over their width (the species' clumpFlat);
    *   - `segments` (8 each: from xyz, rFrom, to xyz, rTo), `tangents` (6:
    *     the bark's direction at from and at to), `segmentVegetation` (16, the
    *     segment records of "Vegetation records") and `keepRadius` (1: the
@@ -715,7 +716,19 @@ class FloraWorld {
    *   - `specimenLooks`: 8 floats a specimen, its species' leafColor rgb,
    *     leafForm (0 broad, 1 needle, 2 scale), barkColor rgb and leafSize
    *     (createForest takes them as the node's per-specimen look).
-   * Plus `specimenCount`, `leafCount` and the leaf placement fields (seed,
+   *   - `blooms`: 8 floats a bloom, position xyz (relative: its twig's tip),
+   *     size (m: a flower's or a head's across, a spike's length; the
+   *     species' bloomSize, smaller on a young, weak or shaded shoot and as
+   *     the plant senesces), its twig's outward direction xyz, and its
+   *     segment (an index into its specimen's run of `segments`: the twig
+   *     it sways with). Only a flowering plant whose species has a
+   *     bloomForm bears them, one per terminal shoot tip, thinned so none
+   *     stands nearer another than about its size (a spike a third of its
+   *     length), in a shuffled order (`shuffleSeed`);
+   *   - `specimenBlooms`: 8 floats a specimen, bloomStart, bloomCount (into
+   *     `blooms`), bloomForm (0 none, 1 flower, 2 head, 3 spike), bloomSize,
+   *     bloomColor rgb, 0 (createForest draws them: docs/scene-nodes-api.js).
+   * Plus `specimenCount`, `leafCount`, `bloomCount` and the leaf placement fields (seed,
    * upBias, tiltJitter, shell, baseScale, scaleJitter), and `leafForm`
    * (the form's name) when the emit was filtered to one.
    *

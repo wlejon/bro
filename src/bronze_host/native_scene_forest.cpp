@@ -1,5 +1,5 @@
 // Forest natives: SceneGraph.createForest and the ForestNode members behind
-// js/scene_forest.js (specimens, trees, level of detail, bark, stats).
+// js/scene_forest.js (specimens, blooms, trees, level of detail, bark, stats).
 
 #include "bronze_host/native_scene_internal.h"
 #include "bronze_host/host_natives.h"
@@ -52,6 +52,13 @@ bool bro_scene_SceneNode_setForestSpecimens(void* self, const float* specimens, 
     a.leaf.baseScale = static_cast<float>(at(4, 1.0));
     a.leaf.scaleJitter = static_cast<float>(at(5, 0.0));
     return f->setSpecimens(std::move(a));
+}
+
+bool bro_scene_SceneNode_setForestBlooms(void* self, const float* blooms, uint32_t blooms_len,
+                                         const float* specimenBlooms, uint32_t specimenBlooms_len) {
+    auto* f = forestOf(self);
+    if (!f) return false;
+    return f->setBlooms(copyOf(blooms, blooms_len), copyOf(specimenBlooms, specimenBlooms_len));
 }
 
 void bro_scene_SceneNode_setForestInstances(void* self, const float* rows, uint32_t rows_len) {
@@ -109,7 +116,7 @@ void bro_scene_SceneNode_forestStats(void* self, bronze_native_buffer* out) {
                                        static_cast<double>(s.shadowVertices), static_cast<double>(s.entries),
                                        static_cast<double>(s.draws), static_cast<double>(f->instanceCount()),
                                        static_cast<double>(f->specimenCount()), static_cast<double>(s.detail),
-                                       static_cast<double>(s.shadowDetail)},
+                                       static_cast<double>(s.shadowDetail), static_cast<double>(s.blooms)},
                    out);
 }
 

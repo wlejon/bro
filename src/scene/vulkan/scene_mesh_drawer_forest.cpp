@@ -1,6 +1,6 @@
 // SceneMeshDrawer's forest path: a ForestNode becomes a handful of draws a
 // frame, one per tier and shape (near leaves, leaf clusters or cards, bark of
-// 10 and of 5 sides, clump lobes, crowns), each instancing this frame's draw
+// 10 and of 5 sides, blooms, clump lobes, crowns), each instancing this frame's draw
 // entries for that shape (scene_forest.glsl). Every tree in view picks its
 // tiers by its size on screen (ForestNode::treeLod); every shadow tile picks
 // again for the trees in its light volume by its texel size. The node's
@@ -42,12 +42,22 @@ constexpr uint32_t kClusterSlot = 0x7ff2;
 constexpr uint32_t kSegmentsPerEntry = 16;   // bark: segments an instance
 constexpr uint32_t kClumpsPerEntry = 16;     // sprites: clumps an instance
 constexpr uint32_t kVertsPerClump = 18;      // three lobes of two triangles
+constexpr uint32_t kBloomsPerEntry = 16;     // blooms: a card (6 vertices) each
+constexpr uint32_t kVertsPerBloom = 6;
+// A tree's blooms are drawn while the largest (ForestNode::bloomExtent of
+// it) is at least this wide on screen at the crown's nearest point (px): the
+// vertex stage culls each bloom under a quarter pixel by its own distance
+// (mesh_forest_bloom.vert's FOREST_BLOOM_CULL_PX), so a tree whose largest
+// bloom is under this even there has nothing left to draw.
+constexpr float kBloomMinPixels = 0.2f;
 constexpr int kNearSides = 10;
 constexpr int kFarSides = 5;
 
 // The shapes a forest draws, each one draw, in this order: a needle or
-// scale node's lobe CORES first, so the leaves they hide fail the depth test.
-enum Group { Cores, LeafNear, LeafCard, Bark10, Bark5, Clumps, Crowns, kGroups };
+// scale node's lobe CORES first, so the leaves they hide fail the depth test;
+// the blooms before the clumps and crowns, so the pixels they cover cost
+// those nothing.
+enum Group { Cores, LeafNear, LeafCard, Bark10, Bark5, Blooms, Clumps, Crowns, kGroups };
 
 struct Entry {
     uint32_t instance, first, end, param;
@@ -105,6 +115,7 @@ struct SceneMeshDrawer::ForestPlan {
     int leafVerts = 0, leafCopies = 1, cardVerts = ForestNode::kCardVertices, force = -1;
     bool cores = false;   // the leaves tier draws its lobes' cores (a spray node's)
     bool clusters = false;   // past the card widening a kept leaf is a cluster (Lod::clusters, a broad node's)
+    uint32_t bloomBase = 0;  // the blooms' first record in the node's data (ForestNode::bloomRecordBase)
     std::vector<bromath::AABB3> bounds;   // every tree's, world, padded by the sway's reach
     std::vector<Seen> seen;               // the camera's trees
     std::vector<Seen> cast;               // each shadow tile's
@@ -132,7 +143,7 @@ struct SceneMeshDrawer::ForestPlan {
     // What one tree at level of detail `t` adds to `G` (or, with no `G`, only
     // the vertices it would).
     void addTree(Groups* G, uint32_t inst, const ForestNode::Specimen& sp, const ForestNode::TreeLod& t,
-                 bool shadow, uint64_t& vertices) {
+                 bool shadow, uint64_t& vertices, float px = 0.0f) {
         const auto& keepRadius = node->keepRadius();
         float lo[ForestNode::kTiers], hi[ForestNode::kTiers];
         ForestNode::fadeRanges(t, lo, hi);
@@ -216,6 +227,20 @@ struct SceneMeshDrawer::ForestPlan {
         if (hi[2] > lo[2] && sp.clumpCount > 0 && G) {
             vertices += 6;
             G->g[Crowns].push_back({inst, 0u, 1u, 0u, 1.0f, 0.0f, 1.0f, ForestNode::fadeCode(lo[2], hi[2])});
+        }
+        // Blooms: whatever the tier, while the largest is wide enough to
+        // leave a trace; solid (each dwindles into a dot by its own size on
+        // screen, mesh_forest_bloom.vert, so there is nothing to cross-fade).
+        // Counted when drawn, as the sprites are. They cast no shadow.
+        if (G && !shadow && sp.bloomCount > 0 &&
+            sp.bloomSize * ForestNode::bloomExtent(sp.bloomForm) * px >= kBloomMinPixels) {
+            vertices += uint64_t{(sp.bloomCount + kBloomsPerEntry - 1) / kBloomsPerEntry} * kBloomsPerEntry *
+                        kVertsPerBloom;
+            for (uint32_t c = 0; c < sp.bloomCount; c += kBloomsPerEntry)
+                G->g[Blooms].push_back({inst, sp.bloomStart + c,
+                                        sp.bloomStart + std::min(c + kBloomsPerEntry, sp.bloomCount), bloomBase,
+                                        1.0f, 0.0f, 1.0f, 1.0f});
+            stats.blooms += sp.bloomCount;
         }
     }
 
@@ -417,6 +442,7 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
     Groups colour;
     uint64_t colourVerts = 0;
     stats.detail = detail;
+    P.bloomBase = node.bloomRecordBase();
     {
         const ForestNode::Lod L = ForestNode::scaled(lod, detail);
         for (const Seen& s : P.seen) {
@@ -425,7 +451,7 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
             if (t.leaves > 0.0f) stats.trees[0]++;
             if (t.clumps > 0.0f) stats.trees[1]++;
             if (t.crowns > 0.0f) stats.trees[2]++;
-            P.addTree(&colour, s.instance, sp, t, false, colourVerts);
+            P.addTree(&colour, s.instance, sp, t, false, colourVerts, s.px);
         }
     }
     stats.vertices = colourVerts;
@@ -447,6 +473,7 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
     // rather than being shaded first and covered.
     nearestFirst(colour.g[LeafNear]);
     nearestFirst(colour.g[LeafCard]);
+    nearestFirst(colour.g[Blooms]);
     nearestFirst(colour.g[Clumps]);
     nearestFirst(colour.g[Crowns]);
 
@@ -614,6 +641,23 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
                 d.firstInstance = first;
                 d.twoSided = true;   // no culling; lit from its front
                 d.push.pbrParams[3] = static_cast<float>(spriteFlags);
+                break;
+            case Blooms:
+                // A card a bloom (mesh_forest_bloom.vert), shaped and lit by
+                // mesh.frag's SCENE_FOREST_BLOOM build: white times the
+                // instance colour, which is the bloom's own; petals matte.
+                d.kind = MeshKind::ForestSprite;
+                d.indexCount = kBloomsPerEntry * kVertsPerBloom;
+                d.instanceCount = static_cast<uint32_t>(g.size());
+                d.firstInstance = first;
+                d.twoSided = true;
+                d.push.baseColor[0] = d.push.baseColor[1] = d.push.baseColor[2] = d.push.baseColor[3] = 1.0f;
+                d.push.pbrParams[0] = 0.0f;
+                d.push.pbrParams[1] = 0.8f;
+                d.push.pbrParams[2] = 0.0f;
+                d.push.extra[1] = 0.0f;
+                d.push.pbrParams[3] =
+                    static_cast<float>(barkFlags | mesh_flags::kTwoSided | mesh_flags::kForestBloom);
                 break;
             case Crowns:
                 d.kind = MeshKind::ForestSprite;

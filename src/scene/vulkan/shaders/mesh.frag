@@ -32,10 +32,19 @@ layout(location = 9) flat in vec4 inMass1;
 layout(location = 10) flat in vec4 inMass2;
 layout(location = 11) flat in vec4 inMass3;
 layout(location = 12) flat in vec4 inMass4;
-// The card stands at the sphere's front, so the depth written only ever
-// moves away from the eye: less under reversed-Z (the default), where the
-// early depth test keeps working. Under the conventional mapping the card's
-// own depth is written instead, which keeps the promise.
+#endif
+#ifdef SCENE_FOREST_BLOOM
+// A forest bloom (mesh_forest_bloom.vert): its centre and radius, and its
+// form, dot widening, seed and a spike's stalk share (scene_forest_bloom.glsl).
+layout(location = 8) flat in vec4 inBloom0;
+layout(location = 9) flat in vec4 inBloom1;
+#endif
+#if defined(SCENE_FOREST_SPRITE) || defined(SCENE_FOREST_BLOOM)
+// The card stands at the sphere's front (a sprite's, a bloom's head), so the
+// depth written only ever moves away from the eye: less under reversed-Z
+// (the default), where the early depth test keeps working. Under the
+// conventional mapping the card's own depth is written instead, which keeps
+// the promise.
 layout(constant_id = 0) const bool REVERSED_Z = true;
 layout(depth_less) out float gl_FragDepth;
 #endif
@@ -73,6 +82,9 @@ layout(location = 1) out vec4 outIndirect;
 #ifdef SCENE_FOREST_SPRAY
 #include "scene_procedural.glsl"
 #include "scene_forest_spray.glsl"
+#endif
+#ifdef SCENE_FOREST_BLOOM
+#include "scene_forest_bloom.glsl"
 #endif
 #ifdef SCENE_BARK
 #include "scene_bark.glsl"
@@ -343,6 +355,20 @@ void main() {
         massDensity = inLobeDensity * 0.5;
         massFlat = inLobeFlat;
     }
+#elif defined(SCENE_FOREST_BLOOM)
+    // A bloom (scene_forest_bloom.glsl): its form shaped on its card, its
+    // colour the instance colour; lit through its own normal below.
+    ForestBloomSurface bloom = forestBloomSurface(inWorldPos, inUV, normalize(inNormal), normalize(inTangent),
+                                                  normalize(inBitangent), inBloom0, inBloom1, inInstColor.rgb);
+    gl_FragDepth = gl_FragCoord.z;
+    if (bloom.cover < 1.0 / 255.0) discard;
+    massCover = bloom.cover;
+    massSalt = uint(inBloom1.z * 16777216.0);
+    worldPos = bloom.at;
+    if (bloom.traced) {
+        vec4 clip = camera.viewProj * vec4(bloom.at, 1.0);
+        gl_FragDepth = REVERSED_Z ? min(clip.z / clip.w, gl_FragCoord.z) : gl_FragCoord.z;
+    }
 #endif
     float camDist = length(worldPos);
     if (push.extra.x > 0.0 && camDist < push.extra.x) discard;
@@ -429,6 +455,13 @@ void main() {
         baseColor = mix(baseColor, baseColor * vec3(1.25, 1.3, 1.05) + vec3(0.015, 0.02, 0.0), 0.4 * sheen);
     }
 #endif
+#ifdef SCENE_FOREST_BLOOM
+    // A bloom's colour is its form's (petals, centre, florets, stalk), and
+    // a head is darker toward its underside.
+    baseColor = bloom.albedo;
+    alpha = 1.0;
+    vegAO *= bloom.ao;
+#endif
 
     vec3 emissive = push.emissive.rgb * push.emissive.a;
     vec3 geomN = normalize(inNormal);
@@ -466,6 +499,9 @@ void main() {
         float bulkWeight = length(inVegShade.xyz);
         if (bulkWeight > 1e-4) N = normalize(N * (1.0 - bulkWeight) + inVegShade.xyz);
     }
+#endif
+#ifdef SCENE_FOREST_BLOOM
+    N = bloom.normal;
 #endif
 
     float metallic = push.pbrParams.x;
@@ -508,6 +544,10 @@ void main() {
     s.translucency = 0.0;
 #ifdef SCENE_VEGETATION
     if (vegLeaf) s.translucency = (push.extra.y > 0.0 ? min(1.4 * push.extra.y, 1.0) : 0.6) * (1.0 - vegFade / 15.0);
+#endif
+#ifdef SCENE_FOREST_BLOOM
+    // Thin petals let the light through; a head's florets and a spike less.
+    s.translucency = bloom.translucency;
 #endif
     s.leafSphere = vec4(0.0);
     s.leafDensity = 0.0;

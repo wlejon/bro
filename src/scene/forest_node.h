@@ -39,6 +39,14 @@
 // A hand-over splits each pixel between the two tiers, and under MSAA each
 // pixel's samples, so it covers once and blends in quarters rather than
 // stippling.
+//   BLOOMS   a flowering specimen's flowers, mophead heads or spikes
+//            (setBlooms, emitForest's `blooms`), at its twigs' tips: a card
+//            a bloom whose fragment shader shapes the form, posed by its
+//            twig's sway. Drawn whatever the tree's tier while a bloom is
+//            more than a fraction of a pixel across; under
+//            FOREST_BLOOM_DOT_PX (mesh_forest_bloom.vert) a bloom is a dot
+//            that size, its cover cut to the bloom's share of it, so the
+//            blooms dwindle with distance rather than pop.
 // Every tier is posed by the same vegPose from the same records, so a
 // cross-fade does not swim. Switch points are in pixels, so they follow the
 // view's resolution and field of view, not metres.
@@ -85,8 +93,25 @@ public:
         std::vector<float> specimens, segments, tangents, segmentVegetation, keepRadius, clumps, clumpVegetation;
         std::vector<uint32_t> leaves;
         LeafParams leaf;
+        std::vector<float> blooms;   // setBlooms's (setSpecimens leaves them empty)
     };
     bool setSpecimens(SpecimenArrays&& a);
+
+    /// The specimens' blooms (emitForest's `blooms`, 8 floats each: position
+    /// xyz relative, size, direction xyz, segment within its specimen's;
+    /// and `specimenBlooms`, 8 floats a specimen: bloomStart, bloomCount,
+    /// form (broflora's BloomForm: 0 none, 1 flower, 2 head, 3 spike), size,
+    /// colour rgb, 0). Both empty: no blooms. False, changing nothing, when
+    /// they do not fit the specimens. setSpecimens clears them.
+    bool setBlooms(std::vector<float> blooms, std::vector<float> specimenBlooms);
+    static constexpr int kBloomForms = 4;
+    /// How far a bloom of `size` reaches past its twig's tip (a spike's stalk
+    /// and spike, a head set past the tip; mesh_forest_bloom.vert), and the
+    /// side of a square of its area (a flower's or a head's across; a
+    /// spike's, the root of its length times its width), both in multiples
+    /// of its size: the vertex stage culls a bloom by the latter.
+    static float bloomReach(int form) { return form == 3 ? 1.9f : 1.0f; }
+    static float bloomExtent(int form) { return form == 3 ? 0.42f : 1.0f; }
 
     /// The trees: 8 floats each, x, y, z, scale, yaw (radians; local (x, z)
     /// turns to (x cos + z sin, -x sin + z cos)), specimen, 0, 0, in the
@@ -205,7 +230,13 @@ public:
         uint32_t crownClump = 0;
         float trunkRadius = 0.0f;    // the thickest bark
         float clumpFlat = 1.0f;      // its clumps' height over their width (emitForest's specimens[15])
-        bromath::AABB3 bounds;       // relative
+        // Its blooms (setBlooms): their run, form, colour and the largest's size.
+        uint32_t bloomStart = 0, bloomCount = 0;
+        int bloomForm = 0;
+        float bloomColor[3] = {0.0f, 0.0f, 0.0f};
+        float bloomSize = 0.0f;
+        bromath::AABB3 bounds;       // relative: its bark, clumps and blooms
+        bromath::AABB3 bareBounds;   // its bark and clumps
     };
     const std::vector<Specimen>& specimens() const { return specimens_; }
     /// Segment keep radii, thickest first within each specimen.
@@ -229,6 +260,11 @@ public:
     /// leaf or level of detail moves it as well.
     const std::vector<float>& gpuData() const;
     uint64_t dataGeneration() const;
+    /// The blooms' first record in gpuData (the bloom draw entries' param).
+    uint32_t bloomRecordBase() const {
+        gpuData();
+        return gpuBloomBase_;
+    }
 
     /// The leaf, length of: the leaf mesh's extent along its tip, times the
     /// placement's base scale (specimen space).
@@ -289,6 +325,7 @@ public:
         uint32_t trees[kTiers] = {};   // trees drawing each tier (a cross-fading tree counts in both)
         uint32_t culled = 0;       // trees outside the view
         uint64_t leaves = 0;       // leaves issued
+        uint64_t blooms = 0;       // blooms issued
         uint64_t vertices = 0;     // vertices issued (all tiers, bark included)
         uint64_t shadowVertices = 0;
         uint32_t entries = 0;      // draw entries written
@@ -324,6 +361,7 @@ private:
     mutable uint64_t dataGeneration_ = nextResourceGeneration();
     mutable uint64_t gpuMeshGeneration_ = 0;   // the leaf mesh and flutter fade gpu_ was built with
     mutable float gpuFlutter_ = 0.0f;
+    mutable uint32_t gpuBloomBase_ = 0;
 
     mutable bromesh::MeshData leafBatch_, cardBatch_, clusterBatch_;
     mutable uint64_t batchGeneration_ = 0;

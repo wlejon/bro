@@ -11,7 +11,8 @@ namespace {
 
 constexpr size_t kSpecimenFloats = 16;   // emitForest's binding: see setSpecimens
 constexpr size_t kHeaderFloats = 16;
-constexpr size_t kSpecimenRecords = 6;   // scene_forest.glsl's FOREST_SPECIMEN_RECORDS
+constexpr size_t kSpecimenRecords = 7;   // scene_forest.glsl's FOREST_SPECIMEN_RECORDS
+constexpr size_t kBloomFloats = 8;       // emitForest's blooms and specimenBlooms: see setBlooms
 
 float smooth(float a, float b, float x) {
     if (a == b) return x < a ? 0.0f : 1.0f;
@@ -136,6 +137,7 @@ bool ForestNode::setSpecimens(SpecimenArrays&& a) {
             s.trunkRadius = std::max(s.trunkRadius, r[3]);
         }
         if (bromath::aisEmpty(s.bounds)) s.bounds = bromath::AABB3{{0.0f, 0.0f, 0.0f}, {0.0f, s.height, 0.0f}};
+        s.bareBounds = s.bounds;
         if (s.clumpCount > 0) {
             s.crown = (crown.min + crown.max) * 0.5f;
             const bromath::Vec3 h = (crown.max - crown.min) * 0.5f;
@@ -162,6 +164,8 @@ bool ForestNode::setSpecimens(SpecimenArrays&& a) {
     if (looks_.size() != specimens_.size() * 8) looks_.clear();
     keepRadius_ = a.keepRadius;
     data_ = std::move(a);
+    // The blooms were the old specimens' (setBlooms gives the new ones').
+    data_.blooms.clear();
     // Rows naming a specimen that no longer exists go.
     instances_.erase(std::remove_if(instances_.begin(), instances_.end(),
                                     [&](const Instance& i) { return i.specimen >= specimens_.size(); }),
@@ -192,6 +196,51 @@ void ForestNode::setInstances(const float* rows, size_t count) {
     rebuildBounds();
     gpuDirty_ = true;
     dataGeneration_ = nextResourceGeneration();
+}
+
+bool ForestNode::setBlooms(std::vector<float> blooms, std::vector<float> specimenBlooms) {
+    const size_t nSpec = specimens_.size();
+    const size_t nBloom = blooms.size() / kBloomFloats;
+    const bool none = blooms.empty() && specimenBlooms.empty();
+    if (!none && (blooms.size() % kBloomFloats || specimenBlooms.size() != nSpec * kBloomFloats)) return false;
+    // Every specimen's run inside the blooms, every bloom's segment its
+    // specimen's own.
+    for (size_t k = 0; k < nSpec && !none; ++k) {
+        const float* f = &specimenBlooms[k * kBloomFloats];
+        const uint64_t start = static_cast<uint64_t>(std::max(0.0f, f[0]));
+        const uint64_t count = static_cast<uint64_t>(std::max(0.0f, f[1]));
+        if (start + count > nBloom) return false;
+        for (uint64_t b = start; b < start + count; ++b)
+            if (!(blooms[b * kBloomFloats + 7] >= 0.0f) ||
+                blooms[b * kBloomFloats + 7] >= static_cast<float>(specimens_[k].segCount))
+                return false;
+    }
+    for (size_t k = 0; k < nSpec; ++k) {
+        Specimen& s = specimens_[k];
+        s.bloomStart = s.bloomCount = 0;
+        s.bloomForm = 0;
+        s.bloomSize = 0.0f;
+        s.bounds = s.bareBounds;
+        if (none) continue;
+        const float* f = &specimenBlooms[k * kBloomFloats];
+        const int form = static_cast<int>(std::lround(f[2]));
+        if (form <= 0 || form >= kBloomForms) continue;
+        s.bloomStart = static_cast<uint32_t>(std::max(0.0f, f[0]));
+        s.bloomCount = static_cast<uint32_t>(std::max(0.0f, f[1]));
+        s.bloomForm = form;
+        for (int i = 0; i < 3; ++i) s.bloomColor[i] = std::max(f[4 + i], 0.0f);
+        // Its blooms in its bounds, each as far as its form reaches.
+        for (uint32_t b = s.bloomStart; b < s.bloomStart + s.bloomCount; ++b) {
+            const float* r = &blooms[b * kBloomFloats];
+            s.bloomSize = std::max(s.bloomSize, r[3]);
+            s.bounds = grow(s.bounds, {r[0], r[1], r[2]}, r[3] * bloomReach(form));
+        }
+    }
+    data_.blooms = none ? std::vector<float>{} : std::move(blooms);
+    rebuildBounds();
+    gpuDirty_ = true;
+    dataGeneration_ = nextResourceGeneration();
+    return true;
 }
 
 void ForestNode::rebuildBounds() {
@@ -510,7 +559,12 @@ const std::vector<float>& ForestNode::gpuData() const {
     }
     const uint32_t leafBase = blockBase + nBlock * kBlockRecords;
     const uint32_t instBase = leafBase + static_cast<uint32_t>((nLeaf + 1) / 2);
-    const size_t records = instBase + instances_.size() * 2;
+    // The blooms after the instances, 2 records each (the bloom entries
+    // carry their base: the header is full).
+    const uint32_t bloomBase = instBase + static_cast<uint32_t>(instances_.size() * 2);
+    const size_t nBloom = a.blooms.size() / kBloomFloats;
+    gpuBloomBase_ = bloomBase;
+    const size_t records = bloomBase + nBloom * 2;
 
     gpu_.assign(kHeaderFloats + records * 4, 0.0f);
     float* h = gpu_.data();
@@ -550,6 +604,9 @@ const std::vector<float>& ForestNode::gpuData() const {
         // has none, or the node is black).
         // Record 4's w: its clumps' flatness (scene_forest.glsl's forestClumpFlat).
         d[19] = s.clumpFlat;
+        // Record 6: its blooms' colour (absolute) and form.
+        d[24] = s.bloomColor[0]; d[25] = s.bloomColor[1]; d[26] = s.bloomColor[2];
+        d[27] = bitsOf(static_cast<uint32_t>(s.bloomForm));
         for (int part = 0; part < 2; ++part) {
             float* t = d + 16 + part * 4;
             t[0] = t[1] = t[2] = 1.0f;
@@ -614,6 +671,16 @@ const std::vector<float>& ForestNode::gpuData() const {
         float* d = r + (instBase + i * 2) * 4;
         d[0] = in.position.x; d[1] = in.position.y; d[2] = in.position.z; d[3] = in.scale;
         d[4] = in.cosYaw; d[5] = in.sinYaw; d[6] = bitsOf(in.specimen); d[7] = in.seed;
+    }
+    // Each bloom's segment made global (its specimen's run of segments).
+    for (size_t k = 0; k < nSpec; ++k) {
+        const Specimen& s = specimens_[k];
+        for (uint32_t b = s.bloomStart; b < s.bloomStart + s.bloomCount; ++b) {
+            const float* src = &a.blooms[b * kBloomFloats];
+            float* d = r + (bloomBase + b * 2) * 4;
+            std::memcpy(d, src, 7 * sizeof(float));
+            d[7] = bitsOf(s.segStart + static_cast<uint32_t>(src[7]));
+        }
     }
     return gpu_;
 }

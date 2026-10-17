@@ -12,12 +12,14 @@
 //              over its length (a spray's: its needles' cover, as an
 //              ellipse); the leaves' flutter; the look as uint bits: leaf
 //              form (bits 0-3), limb bob and twig bob in 64ths (8 bits each)
-//   specimens  6 records: (segStart, segCount, clumpStart, clumpCount) and
+//   specimens  7 records: (segStart, segCount, clumpStart, clumpCount) and
 //              (leafStart, leafCount, crown clump, mean clump weight) as
 //              uint bits but the last; (crown.xyz, crown radius across);
 //              (crown radius up, mean clump radius, height, first clump
 //              block's record as uint bits); its leaves' tint (rgb, its
-//              clumps' flatness); its bark's tint (rgb, -)
+//              clumps' flatness); its bark's tint (rgb, -); its blooms'
+//              colour (rgb, linear, absolute: not a tint) and form (uint
+//              bits: 0 none, 1 flower, 2 head, 3 spike; broflora's BloomForm)
 //   segments   7 records: (from.xyz, rFrom), (to.xyz, rTo), (oct tangent at
 //              from, at to), then its vegetation record (4)
 //   clumps     6 records: (centre.xyz, radius), (twig dir.xyz, leaf count),
@@ -29,13 +31,19 @@
 //   leaves     2 a record: (clump, placement key) as uint bits
 //   instances  2 records: (position.xyz, scale), (cos yaw, sin yaw,
 //              specimen as uint bits, seed)
+//   blooms     2 records: (position.xyz: its twig's tip, size), (its twig's
+//              outward direction.xyz, its twig's segment, an index into the
+//              segments above, as uint bits); a specimen's in a run. The
+//              header has no room for their first record: a bloom draw
+//              entry carries it as its `param`
 // All of a specimen's records are relative to where it stands.
 //
 // Set 3 binding 2 holds this frame's draw entries (the drawer's choice of
 // what to draw of which tree), 2 records each:
 //   e0  (instance, first, end, param) as uint bits: the run of leaves,
-//       segments or clumps the entry draws [first, end), and the leaf
-//       mesh's vertex count (leaves) or the tube's sides (bark)
+//       segments, clumps or blooms the entry draws [first, end), and the
+//       leaf mesh's vertex count (leaves), the tube's sides (bark) or the
+//       blooms' first record (blooms)
 //   e1  (widening, keep end, tail, fade): leaves are drawn `widening` times
 //       their size, shrinking to nothing over the `tail` leaves before
 //       `keep end` (so the count thins without popping); `fade` is the
@@ -67,6 +75,13 @@ int forestSpecimenRecord(int s) { return forestBase(0) + s * FOREST_SPECIMEN_REC
 
 // Specimen `s`'s tint on the node's colour: its leaves' or its bark's.
 vec3 forestSpecimenTint(int s, bool bark) { return procedural.records[forestSpecimenRecord(s) + (bark ? 5 : 4)].xyz; }
+
+// Specimen `s`'s blooms: their colour (rgb, linear) and form (w: 0 none, 1
+// flower, 2 head, 3 spike).
+vec4 forestSpecimenBloom(int s) {
+    vec4 r = procedural.records[forestSpecimenRecord(s) + 6];
+    return vec4(r.xyz, float(floatBitsToUint(r.w)));
+}
 
 // The node's leaf form (header[3].w bits 0-3): 0 broad, 1 needle sprays, 2
 // scale-leaf sprays; and the share of its card a spray covers

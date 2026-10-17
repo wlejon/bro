@@ -3,7 +3,7 @@
 //
 // The node (scene/forest_node.h) draws many trees from a few grown plants:
 // bro.flora's world.emitForest() gives the specimens (each plant's bark,
-// clumps and leaves relative to where it stands), bro.flora.plantForest()
+// clumps, leaves and blooms relative to where it stands), bro.flora.plantForest()
 // or the emit's own `instances` say where each tree stands. The node picks
 // every tree's level of detail each frame from its size on screen.
 //
@@ -122,9 +122,14 @@
         const leaf = new Float64Array([+forest.seed || 0, +forest.upBias || 0, +forest.tiltJitter || 0,
                                        +forest.shell || 0, forest.baseScale === undefined ? 1 : +forest.baseScale,
                                        +forest.scaleJitter || 0]);
-        return __bro_native.scene.SceneNode_setForestSpecimens(node, f32(forest.specimens), f32(forest.segments),
+        if (!__bro_native.scene.SceneNode_setForestSpecimens(node, f32(forest.specimens), f32(forest.segments),
             f32(forest.tangents), f32(forest.segmentVegetation), f32(forest.keepRadius), f32(forest.clumps),
-            f32(forest.clumpVegetation), leaves, leaf);
+            f32(forest.clumpVegetation), leaves, leaf))
+            return false;
+        // A flowering specimen's blooms (an emit from before them has none).
+        const withBlooms = forest.blooms && forest.specimenBlooms;
+        return __bro_native.scene.SceneNode_setForestBlooms(node, withBlooms ? f32(forest.blooms) : new Float32Array(0),
+            withBlooms ? f32(forest.specimenBlooms) : new Float32Array(0));
     }
 
     function setLod(node, lod) {
@@ -199,7 +204,7 @@
         return { trees: { leaves: s[0], clumps: s[1], crowns: s[2] }, culled: s[3], leaves: s[4],
                  vertices: s[5],
                  shadowVertices: s[6], entries: s[7], draws: s[8], treeCount: s[9], specimenCount: s[10],
-                 detail: s[11], shadowDetail: s[12] };
+                 detail: s[11], shadowDetail: s[12], blooms: s.length > 13 ? s[13] : 0 };
     });
     // What specimen `specimen` draws at `pxPerUnit` pixels per specimen unit
     // (the view's pixels per metre at the tree, times its scale).

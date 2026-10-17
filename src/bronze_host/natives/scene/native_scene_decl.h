@@ -708,6 +708,13 @@ bool bro_scene_SceneNode_setForestSpecimens(void* self, const float* specimens, 
                                             const int32_t* leaves, uint32_t leaves_len, const double* leaf,
                                             uint32_t leaf_len);
 
+// forest blooms: bro.flora's emitForest `blooms` (8 floats a bloom) and
+// `specimenBlooms` (8 floats a specimen); both empty: none. False when they
+// do not fit the specimens.
+//   registered at __bro_native.scene.SceneNode_setForestBlooms
+bool bro_scene_SceneNode_setForestBlooms(void* self, const float* blooms, uint32_t blooms_len,
+                                         const float* specimenBlooms, uint32_t specimenBlooms_len);
+
 // forest trees: 8 floats each (x, y, z, scale, yaw, specimen, 0, 0)
 //   registered at __bro_native.scene.SceneNode_setForestInstances
 void bro_scene_SceneNode_setForestInstances(void* self, const float* rows, uint32_t rows_len);
@@ -736,7 +743,8 @@ bool bro_scene_SceneNode_setForestLook(void* self, const float* looks, uint32_t 
 void bro_scene_SceneNode_setForestTier(void* self, int32_t tier);
 
 // forest stats: [trees leaves, clumps, crowns, culled, leaves, vertices,
-// shadow vertices, entries, draws, trees, specimens]
+// shadow vertices, entries, draws, trees, specimens, detail, shadow detail,
+// blooms]
 //   registered at __bro_native.scene.SceneNode_forestStats
 void bro_scene_SceneNode_forestStats(void* self, bronze_native_buffer* out);
 

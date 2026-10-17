@@ -218,7 +218,8 @@ bool registerNatives_scene(std::string* error) {
         fn("__bro_native.scene.SceneGraph_bindAudioListenerToCamera", p(&bro_scene_SceneGraph_bindAudioListenerToCamera), "void", {"__bro_native.scene.SceneGraph", "bool"}, error) &&
         fn("__bro_native.scene.SceneGraph_detachAIWorld", p(&bro_scene_SceneGraph_detachAIWorld), "void", {"__bro_native.scene.SceneGraph"}, error) &&
         fn("__bro_native.scene.SceneNode_setForestSpecimens", p(&bro_scene_SceneNode_setForestSpecimens), "bool", {"__bro_native.scene.SceneNode", "f32[]", "f32[]", "f32[]", "f32[]", "f32[]", "f32[]", "f32[]", "i32[]", "f64[]"}, error) &&
-        fn("__bro_native.scene.SceneNode_setForestInstances", p(&bro_scene_SceneNode_setForestInstances), "void", {"__bro_native.scene.SceneNode", "f32[]"}, error) &&
+        fn("__bro_native.scene.SceneNode_setForestBlooms", p(&bro_scene_SceneNode_setForestBlooms), "bool", {"__bro_native.scene.SceneNode", "f32[]", "f32[]"}, error) &&
+        fn("__bro_native.scene.SceneNode_setForestInstances",p(&bro_scene_SceneNode_setForestInstances), "void", {"__bro_native.scene.SceneNode", "f32[]"}, error) &&
         fn("__bro_native.scene.SceneNode_setForestLod", p(&bro_scene_SceneNode_setForestLod), "void", {"__bro_native.scene.SceneNode", "f64[]"}, error) &&
         fn("__bro_native.scene.SceneNode_forestLod", p(&bro_scene_SceneNode_forestLod), "f64[]", {"__bro_native.scene.SceneNode"}, error) &&
         fn("__bro_native.scene.SceneNode_setForestBark", p(&bro_scene_SceneNode_setForestBark), "void", {"__bro_native.scene.SceneNode", "f64", "f64", "f64", "f64"}, error) &&

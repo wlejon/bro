@@ -482,6 +482,19 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  *     than `barkPixels` times the leaves' widening, a connected run from
  *     the trunk out, so limbs go tip first as the crown thins; 10 sides
  *     while the trunk is wider than `barkSidesPixels`, else 5.
+ *   - BLOOMS at every tier: a flowering specimen's blooms (the emit's
+ *     `blooms` / `specimenBlooms`: its species' bloomForm, colour and size
+ *     at its twigs' tips), a card each whose fragment shader shapes the
+ *     form with nothing baked: a 'flower' is five broad petals round a
+ *     yellow centre, cupped, facing its twig's way tilted up (a hibiscus);
+ *     a 'head' a ball of four-petalled florets shaded as a ball, its depth
+ *     traced (a hydrangea's mophead); a 'spike' a bare stalk held upright
+ *     with whorls of florets tapering above it (lavender). Each is posed by
+ *     its twig's sway and lit as any surface. A bloom under 1.5 px across
+ *     is drawn as a dot that size, its cover cut to its share of it, so the
+ *     blooms dwindle into the crown tier's distances without popping, and
+ *     go once under a quarter pixel. They cast no shadow and are outside
+ *     the budget.
  * A hand-over is a dither that splits each pixel between the tiers; in a
  * 4x MSAA view each sample draws its own share, so the pixel blends in
  * quarters rather than stippling. Every tier is posed by the same sway from
@@ -1454,13 +1467,13 @@ class SceneNode {
 
   /**
    * Forest: what the last frame drew: `trees` per tier (a tree handing
-   * over counts in both), `culled`, `leaves` issued, `vertices` and
+   * over counts in both), `culled`, `leaves` and `blooms` issued, `vertices` and
    * `shadowVertices` sent, `entries` and `draws`, `treeCount`,
    * `specimenCount`, and `detail` / `shadowDetail`, the budget's scale on
    * the pixel thresholds (1: within budget at full detail).
    * @returns {{trees: {leaves: number, clumps: number, crowns: number}, culled: number, leaves: number,
    *            vertices: number, shadowVertices: number, entries: number, draws: number, treeCount: number,
-   *            specimenCount: number, detail: number, shadowDetail: number}|undefined}
+   *            specimenCount: number, detail: number, shadowDetail: number, blooms: number}|undefined}
    */
   forestStats() {}
 
