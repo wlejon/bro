@@ -95,7 +95,8 @@ jobs:
             libxi-dev libxfixes-dev libxss-dev libxtst-dev libwayland-dev libxkbcommon-dev \
             libasound2-dev libpulse-dev libpipewire-0.3-dev libudev-dev \
             libfreetype-dev libfontconfig1-dev libpng-dev libjpeg-dev libwebp-dev \
-            libsystemd-dev libseat-dev libxcb-randr0-dev libxau-dev
+            libsystemd-dev libseat-dev libxcb-randr0-dev libxau-dev libinput-dev \
+            libdrm-dev libgbm-dev
 
       # MoltenVK + the Khronos loader: linked at build time, and bundled into
       # the package by package-release.sh (macOS has no system Vulkan).
@@ -286,7 +287,7 @@ jobs:
       - name: Smoke test (packaged bronze compiler + host)
         shell: bash
         run: |
-          d=$(ls -d dist/bro-${VERSION}-* | head -1)
+          d=$(ls -d dist/bro-${VERSION}-*/ | sed 's:/$::' | head -1)
           PKG="$(pwd)/$d"
           if [ "$RUNNER_OS" = "Windows" ]; then EXE=".exe"; MOD=".dll";
           elif [ "$RUNNER_OS" = "macOS" ]; then EXE=""; MOD=".dylib";
@@ -327,9 +328,9 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         run: |
-          d=$(ls -d dist/bro-${VERSION}-* | head -1)
+          d=$(ls -d dist/bro-${VERSION}-*/ | sed 's:/$::' | head -1)
           cd "$d"
-          grep -q '@executable_path/libvulkan.1.dylib' <<<"$(otool -L bro-headless)"
+          grep -qE '@(loader|executable)_path/libvulkan.1.dylib' <<<"$(otool -L libbro.dylib bro-headless)"
           [ -f vulkan/icd.d/MoltenVK_icd.json ] && [ -f vulkan/icd.d/libMoltenVK.dylib ]
           BREW_ICD="$(brew --prefix)/etc/vulkan/icd.d"
           [ -d "$BREW_ICD" ] && sudo mv "$BREW_ICD" "$BREW_ICD.off"
@@ -366,7 +367,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          d=$(ls -d dist/bro-${VERSION}-* | head -1)
+          d=$(ls -d dist/bro-${VERSION}-*/ | sed 's:/$::' | head -1)
           # Absolute Windows path — the signing action is .NET and does not
           # understand MSYS-style /d/... paths.
           echo "PKG_DIR=$(cygpath -w "$(pwd)/$d")" >> "$GITHUB_ENV"
@@ -426,7 +427,7 @@ jobs:
         shell: bash
         run: |
           cd dist
-          d=$(ls -d bro-${VERSION}-* | head -1)
+          d=$(ls -d bro-${VERSION}-*/ | sed 's:/$::' | head -1)
           if [ "${{ runner.os }}" = "Windows" ]; then
             7z a "../${d}.zip" "$d" >/dev/null
           else
