@@ -531,6 +531,13 @@ else()
     endif()
     target_include_directories(bro-native-manifest PRIVATE ${bro_SOURCE_DIR}/src)
     bro_bronze_stage_runtime(bro-native-manifest)
+    # It relinks after every engine change, ahead of libbro (whose modules
+    # wait on its output), so its link is on every C++ rebuild's critical
+    # path: a build tool needs no PDB and no reference/COMDAT pruning.
+    if(MSVC)
+        target_link_options(bro-native-manifest PRIVATE
+            $<$<NOT:$<CONFIG:Debug>>:/DEBUG:NONE /OPT:NOREF /OPT:NOICF>)
+    endif()
 
     # generated/natives.json: written to a scratch name and copied over only
     # when its content changed, so bro_core.o is recompiled when a native's
