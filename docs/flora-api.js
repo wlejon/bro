@@ -283,6 +283,7 @@
  * @property {number} [clumpReach=0] - A clump reaches no further across than this x its distance from the plant's axis, plus a quarter of its size (0 no limit): a conifer's short top boughs carry small clumps, so its crown narrows to a spire.
  * @property {number} [clumpFill=0] - 0 (a broadleaf tree's): foliage on the crown's outermost shoots, its interior thinly leaved; 1: every shoot tip carries foliage however its module has branched on (a conifer's clothed boughs, a shrub's mound).
  * @property {number} [clumpInner=0] - 0: a shoot that has branched on carries a tenth of a tip's foliage, thinned further by its shade; 1: as much as a tip in half light, and the clumps packed up to 40% closer (a shrub's mound leaved inside and to the ground, its stems hidden; a juniper's bushy cone).
+ * @property {number} [clumpGap=1] - the clumps' spacing along a shoot, times the emit's (0.5 .. 4): above 1 they stand apart as separate tufts with sky between them (a pine's needle brushes at its boughs' ends).
  * @property {string|number} [bloomForm='none'] - What it flowers as once past floweringAge: 'none' (0), 'flower' (1, one open flower at a shoot's tip), 'head' (2, a round head of florets), 'spike' (3, florets up an upright stalk). Emitted per specimen (emitForest's `blooms` / `specimenBlooms`) and drawn by bro.scene's forest node (setForestBlooms).
  * @property {Array<number>} [bloomColor=[0,0,0]] - The blooms' albedo (linear).
  * @property {number} [bloomSize=0] - A bloom's size (m): a flower's or a head's across, a spike's length.

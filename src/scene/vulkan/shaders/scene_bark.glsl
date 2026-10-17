@@ -208,8 +208,12 @@ void barkSurface(vec4 coords, float hb, float word, vec3 pos, vec3 geomN, vec3 a
         : 0.5;
     color *= 0.7 + 0.6 * streak;
     float fleck = seenFine > 0.0 ? mix(0.5, barkNoise(q * vec3(6.0, 6.0, 2.0) + 9.2), seenFine) : 0.5;
+    // A bark of strong colour (a pine's red-orange plates) keeps it on its
+    // plates' faces; a dull one weathers them grey.
     float grey = dot(color, vec3(0.3, 0.5, 0.2));
-    vec3 face = mix(color, vec3(grey) * vec3(1.05, 1.02, 0.97), 0.65) * 1.3;
+    float hiC = max(color.r, max(color.g, color.b));
+    float sat = (hiC - min(color.r, min(color.g, color.b))) / max(hiC, 1e-4);
+    vec3 face = mix(color, vec3(grey) * vec3(1.05, 1.02, 0.97), 0.65 * (1.0 - smoothstep(0.5, 0.8, sat))) * 1.3;
     vec3 c = mix(color * mix(1.0, 0.22, relief) * vec3(1.0, 0.85, 0.7), face, h);
     c *= 0.78 + 0.44 * cell * h + 0.22 * (1.0 - h);
     // Patches: some greyer and paler (weathered), some darker and warmer.

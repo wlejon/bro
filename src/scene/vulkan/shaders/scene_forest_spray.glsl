@@ -23,7 +23,7 @@ struct ForestSprayShape {
 ForestSprayShape forestSprayShape(int form) {
     // Needles: fine and close; scale leaves: broad ropes of overlapping
     // scales, scalloped.
-    if (form == 2) return ForestSprayShape(0.07, 0.6, 0.016, 0.3);
+    if (form == 2) return ForestSprayShape(0.08, 0.55, 0.018, 0.35);
     return ForestSprayShape(0.035, 0.9, 0.009, 0.0);
 }
 
@@ -78,11 +78,17 @@ float forestSprayCover(vec2 uv, int form, float aspect) {
     float sharp = on ? clamp((halfW - d) / fp + 0.5, 0.0, 1.0) * clamp((len - t) / fp + 0.5, 0.0, 1.0) : 0.0;
 
     // Their mean once a pixel spans a few: the family's share of the band
-    // they fill, inside the spray's reach (itself softened by the pixel).
-    float reach = forestSprayReach(p.y, halfWidth) * 0.92;
-    float inside = clamp((reach - ax) / fp + 0.5, 0.0, 1.0);
+    // they fill, thinning out to the spray's edge as the needles do (each
+    // reaches 0.8 .. 1.05 of the reach, so the share still out there falls
+    // across that span): a spray's edge is its needles' ragged tips, not a
+    // leaf's clean outline.
+    float reach = forestSprayReach(p.y, halfWidth);
+    float inside = clamp((1.02 * reach - ax) / max(0.3 * reach + fp, 1e-5), 0.0, 1.0);
     float band = min(2.0 * sh.needleHalf * (1.0 - 0.5 * sh.scallop) / (sh.spacing * sa), 1.0);
     float mean = inside * band;
-    float needles = mix(sharp, mean, smoothstep(0.25 * sh.spacing, 0.9 * sh.spacing, fp));
+    // Sharp while two pixels or more part one needle from the next (each is
+    // already cut to the share of the pixel it covers), their mean by the
+    // time one pixel does.
+    float needles = mix(sharp, mean, smoothstep(0.45 * sh.spacing, sh.spacing, fp));
     return max(needles, twig);
 }
