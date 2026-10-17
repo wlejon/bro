@@ -145,7 +145,8 @@ float sampleShadow(int slot, vec3 pos, float biasWorld, float spread) {
     int hk = (int(lighting.params.y) - 1) / 2;
     vec2 minUV = tile.rect.xy + texel * (float(hk) + 1.0);
     vec2 maxUV = tile.rect.xy + tile.rect.zw - texel * (float(hk) + 1.0);
-    if (hk <= 0) return texture(shadowAtlas, vec3(clamp(base, minUV, maxUV), ref));
+    // spread <= 0: the one hardware-filtered tap.
+    if (hk <= 0 || spread <= 0.0) return texture(shadowAtlas, vec3(clamp(base, minUV, maxUV), ref));
     float s = 0.0;
     vec2 step = texel * spread;
     for (int y = -hk; y <= hk; ++y) {
@@ -173,7 +174,7 @@ float shadowFromTile(int slot, vec3 pos, float lightDist, vec3 N, float NdotL, f
 // Light `i`'s shadow at `pos`: the cube face of a point light, the cascade of
 // a directional one (blended into the next across the last 15% of each), or
 // the single tile of anything else. `spread` widens the filter (1: a 4-texel
-// tent at pcf 3).
+// tent at pcf 3; 0: one hardware-filtered tap).
 float lightShadow(int i, vec3 pos, float camDist, float lightDist, vec3 N, float NdotL, float spread) {
     SceneLight light = lighting.lights[i];
     int slot = int(light.shadow.z);
@@ -221,6 +222,17 @@ struct SceneSurface {
     bool twoSided;
     float subsurface;  // wrap-light translucency, two-sided surfaces only
     float translucency; // leaf light transport: the sun glowing through a leaf seen against it (0: none)
+    // Leaves placed in a sphere (a forest lobe or crown, scene_forest_mass.glsl):
+    // its centre (camera-relative) and radius, w 0 for none, and the leaves'
+    // optical depth a unit length through it. Such a leaf is shadowed by its
+    // own sphere's leaves analytically, and by everything else from the
+    // shadow map where the light enters the sphere (past the sphere's own
+    // caster, shadow_forest_sprite.vert).
+    // leafPath: the light's path through those leaves, times (how many lie
+    // in it wanders from pixel to pixel).
+    vec4 leafSphere;
+    float leafDensity;
+    float leafPath;
 };
 
 // The direct light of every scene light on `s`.
@@ -271,7 +283,26 @@ vec3 sceneDirectLight(SceneSurface s) {
         float leafShadow = 1.0;
         if (leafy && s.receivesShadow) {
             vec3 tN = NL < 0.0 ? -N : N;
-            leafShadow = 0.1 + 0.9 * lightShadow(i, s.position, s.camDist, lightDist, tN, max(abs(NL), 0.2), 2.0);
+            vec3 at = s.position;
+            float self = 1.0, spread = 2.0;
+            if (s.leafSphere.w > 0.0) {
+                // Out of the sphere toward the light, through its leaves;
+                // what falls on it from outside is coarse (the sphere's own
+                // leaves are the fine part), so one tap.
+                vec3 oc = at - s.leafSphere.xyz;
+                float b = dot(oc, L);
+                float out_ = max(-b + sqrt(max(b * b - dot(oc, oc) + s.leafSphere.w * s.leafSphere.w, 0.0)), 0.0);
+                at += L * out_;
+                self = exp(-s.leafDensity * s.leafPath * out_);
+                // The leaf seen is not the sphere's surface but one about a
+                // free path in (the depth seen through is exponential), and
+                // looking down the light that adds its depth to the light's
+                // path: the mean of exp(-c t) over it is 1 / (1 + c), c the
+                // cosine between view and light (half, sun behind the eye).
+                self /= 1.0 + max(dot(V, L), 0.0) * s.leafPath;
+                spread = 0.0;
+            }
+            leafShadow = 0.1 + 0.9 * self * lightShadow(i, at, s.camDist, lightDist, tN, max(abs(NL), 0.2), spread);
         }
         // Leaf translucency: light passing through a leaf lit from behind,
         // strongest looking toward the light, a warm yellow-green, and

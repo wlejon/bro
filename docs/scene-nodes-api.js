@@ -449,28 +449,26 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  *     is kept, 1 / w^2 of them for a widening w, each w times larger, so its
  *     cover holds while the work falls by w^2 (the last of the kept run
  *     shrink away, so nothing pops). The leaves' own flutter fades out by
- *     `flutterFade`; past `cardWidening` a leaf is a 6-vertex card.
- *   - IMPOSTORS (the default far tier, `impostors: 1`): from `clumpFrom` to
- *     `clumpTo` (a widening) the leaves hand over to one card a tree
- *     showing its specimen's own picture, baked on the CPU on first use
- *     from the very leaves and bark the leaves tier draws: colour, normal,
- *     depth and coverage from `impostorViews` x `impostorViews` directions
- *     over the upper hemisphere (hemi-octahedral), `impostorTexels` a side
- *     each. Each pixel traces its ray into the three views round the
- *     direction it is seen from and is lit at the leaf it finds (written
- *     to the depth buffer there), the leaves' way: their tint, crown
- *     shade, translucency and shadows, a leaf-sized cell of the picture
- *     turned and toned its own way. The picture is warped by the trunk's
- *     and limbs' sway while its light stays put, so the crown's masses of
- *     light and shade hold in a gust. A tree hands over only once its
- *     picture is no larger on screen than it was baked. Its shadow is the
- *     same picture seen from the light, at its leaves' depth, letting
- *     light through where they are sparse. The bark goes with the leaves.
- *   - CLUMPS and CROWNS (`impostors: 0`): the leaves hand over over the
- *     same widening to the crown's clumps drawn as the lobes their leaves
- *     fill (leafy discs lit as spheres of leaves), then, once a clump is
- *     under `crownFrom` .. `crownTo` pixels across, to one disc a tree; a
- *     gust's paler sheen rolls across them.
+ *     `flutterFade`; past `cardWidening` a kept leaf is a CLUSTER (`clusters:
+ *     1`, the default): its widened outline drawn as the widening^2 leaves
+ *     it stands for, each of its own size, placed in the fragment shader
+ *     (`clusters: 0`: the one widened leaf, a 6-vertex card).
+ *   - CLUMPS: from `clumpFrom` to `clumpTo` (a widening) the leaves hand
+ *     over to the crown's clumps, each drawn as the three lobes its leaves
+ *     fill: a camera-facing card a lobe whose pixels place the leaves of
+ *     the lobe's shell, one to a jittered cell, each its own size, turn and
+ *     tone, with the far half seen through the near one's gaps. Once a
+ *     pixel holds several leaves it takes their mean, with the wander a
+ *     pixel's few leaves have from it (count, facing, how many lie toward
+ *     the light). They are lit the leaves' way (tint, crown shade and
+ *     depth, translucency), shadowed by their own lobe's leaves
+ *     analytically and by everything else from the shadow map, and write
+ *     the depth of the leaves they show.
+ *   - CROWNS: once a clump is under `crownFrom` .. `crownTo` pixels across,
+ *     one such card a tree over the crown's extent. A gust's paler sheen
+ *     rolls across clumps and crowns.
+ *   Every tier past the leaves is drawn from the tree's own records at run
+ *   time: nothing is baked or rendered ahead, so every tree may be unique.
  *   - BARK at the leaves' and sprites' tiers: the segments wider on screen
  *     than `barkPixels` times the leaves' widening, a connected run from
  *     the trunk out, so limbs go tip first as the crown thins; 10 sides
@@ -478,8 +476,8 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  * A hand-over is a dither that splits each pixel between the tiers; in a
  * 4x MSAA view each sample draws its own share, so the pixel blends in
  * quarters rather than stippling. Every tier is posed by the same sway from
- * the same records (a clump as its leaves, a crown or an impostor on its
- * central limb at its clumps' mean weight), so a hand-over does not swim.
+ * the same records (a clump as its leaves, a crown on its central limb at
+ * its clumps' mean weight), so a hand-over does not swim.
  * The leaves measure their distance to the crown (a crown overhead is as
  * near as its underside), the bark to the tree.
  *
@@ -489,7 +487,9 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  * alike and the furthest hand over first. Shadows choose the same way per
  * shadow tile by its texel size, against their own budget, as silhouettes
  * (leaves as cards, kept to `shadowKeep`, bark of 5 sides, crowns at twice
- * the size); an impostor costs a card, so it is outside both budgets.
+ * the size; clumps and crowns cast discs as dense as their leaves). Clumps
+ * and crowns cost a few hundred vertices a tree and are outside both
+ * budgets; clusters and sprites cost fragments the budget does not see.
  *
  * The node's material (colour, roughness, subsurface, maps, shadows) is the
  * leaves'; `barkColor` and `barkRoughness` the bark's; its mesh the leaf
@@ -519,8 +519,8 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  * @property {Array<number>|string} [barkColor] - default `[0.2, 0.17, 0.14]`.
  * @property {number} [barkRoughness=0.9]
  * @property {string|number} [tier] - `'auto'` (default), or draw every tree
- *   at one tier: `'leaves'`, `'clumps'`, `'crowns'`, `'impostors'` (full
- *   size, no thinning: for comparisons and tests).
+ *   at one tier: `'leaves'`, `'clumps'`, `'crowns'` (full size, no
+ *   thinning: for comparisons and tests).
  * @property {Array<number>|string} [color] - the leaves' colour; and the
  *   other material keys of createMesh (roughness, subsurface, doubleSided,
  *   castsShadow, receivesShadow, map, normalMap ...).
@@ -532,8 +532,8 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  * @typedef {Object} ForestLod
  * @property {number} [leafPixels=8] - a leaf shorter than this on screen thins its crown.
  * @property {number} [flutterFade=2] - the widening by which a leaf's own flutter is gone.
- * @property {number} [cardWidening=1.6] - the widening past which leaves are 6-vertex cards.
- * @property {number} [clumpFrom=3] - the widening at which leaves start handing over to the far tier (impostors or clumps)...
+ * @property {number} [cardWidening=1.6] - the widening past which leaves are clusters (or 6-vertex cards).
+ * @property {number} [clumpFrom=3] - the widening at which leaves start handing over to clumps...
  * @property {number} [clumpTo=4.5] - ...and are gone.
  * @property {number} [crownFrom=5] - a clump's radius (px) at which clumps start handing over to crowns...
  * @property {number} [crownTo=3] - ...and are gone.
@@ -541,12 +541,10 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  * @property {number} [barkSidesPixels=24] - a trunk wider than this on screen has 10 sides, else 5.
  * @property {number} [shadowKeep=0.35] - the share of its drawn leaves a tree's shadow keeps.
  * @property {number} [range=0] - trees further than this (m) are not drawn; 0: no limit.
- * @property {number} [budget=18] - millions of leaf and bark vertices the view may send; 0: no budget.
+ * @property {number} [budget=14] - millions of leaf and bark vertices the view may send; 0: no budget.
  * @property {number} [shadowBudget=6] - the same for every shadow tile together.
- * @property {number} [impostors=1] - the far tier: 1 impostors, 0 the clump and crown sprites.
- * @property {number} [impostorViews=8] - an impostor's directions a side (2..16; the bake is views^2 pictures a specimen).
- * @property {number} [impostorTexels=128] - a picture's side in texels (16..512, a multiple of 4). Two RGBA8
- *   atlases of specimens x views^2 pictures, mipmapped: 24 specimens at 8 x 128 take 2 x 5120^2.
+ * @property {number} [clusters=1] - past `cardWidening` a kept leaf is drawn as the leaves it stands for (1),
+ *   or as the one widened leaf (0).
  */
 
 // ── SceneNode: per-type members ──────────────────────────────────────────────
@@ -1377,7 +1375,7 @@ class SceneNode {
 
   /**
    * Forest: `'auto'` (by size on screen), or every tree at `'leaves'`,
-   * `'clumps'`, `'crowns'` or `'impostors'`.
+   * `'clumps'` or `'crowns'`.
    * @param {string|number} tier
    * @returns {SceneNode}
    */
@@ -1389,7 +1387,7 @@ class SceneNode {
    * `shadowVertices` sent, `entries` and `draws`, `treeCount`,
    * `specimenCount`, and `detail` / `shadowDetail`, the budget's scale on
    * the pixel thresholds (1: within budget at full detail).
-   * @returns {{trees: {leaves: number, clumps: number, crowns: number, impostors: number}, culled: number, leaves: number,
+   * @returns {{trees: {leaves: number, clumps: number, crowns: number}, culled: number, leaves: number,
    *            vertices: number, shadowVertices: number, entries: number, draws: number, treeCount: number,
    *            specimenCount: number, detail: number, shadowDetail: number}|undefined}
    */
@@ -1399,8 +1397,7 @@ class SceneNode {
    * Forest: what specimen `specimen` draws at `pxPerUnit` pixels per
    * specimen unit (the view's pixels per metre at the tree times its scale),
    * at full detail: `{widening, keep, card, leaves, clumps, crowns,
-   * impostors, barkRadius, barkSides, bark}`, the four tier weights summing
-   * to 1 (`bark` false once an impostor stands in alone).
+   * barkRadius, barkSides}`, the three tier weights summing to 1.
    * @param {number} specimen
    * @param {number} pxPerUnit
    * @returns {Object|undefined}

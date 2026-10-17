@@ -91,7 +91,7 @@ void bro_scene_SceneNode_forestStats(void* self, bronze_native_buffer* out) {
                                        static_cast<double>(s.shadowVertices), static_cast<double>(s.entries),
                                        static_cast<double>(s.draws), static_cast<double>(f->instanceCount()),
                                        static_cast<double>(f->specimenCount()), static_cast<double>(s.detail),
-                                       static_cast<double>(s.shadowDetail), static_cast<double>(s.trees[3])},
+                                       static_cast<double>(s.shadowDetail)},
                    out);
 }
 
@@ -104,7 +104,6 @@ void bro_scene_SceneNode_forestTreeLod(void* self, int32_t specimen, double pxPe
     const auto t = scene::ForestNode::treeLod(f->lod(), f->specimens()[static_cast<size_t>(specimen)],
                                               static_cast<float>(pxPerUnit), f->leafLength(), f->forceTier());
     transferBuffer(std::vector<double>{t.widening, t.keep, t.card ? 1.0 : 0.0, t.leaves, t.clumps, t.crowns,
-                                       t.barkRadius, static_cast<double>(t.barkSides), t.impostors,
-                                       t.bark ? 1.0 : 0.0},
+                                       t.barkRadius, static_cast<double>(t.barkSides)},
                    out);
 }

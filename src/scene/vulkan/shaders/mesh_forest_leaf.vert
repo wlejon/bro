@@ -47,24 +47,41 @@ void main() {
         gl_Position = FOREST_CULLED;
         return;
     }
-    // A widened leaf stands in for several: it moves in toward its lobe's
-    // centre by the length it grew, so it stays inside the crown.
-    float grown = (k - 1.0) * procedural.header[1].z;
-    if (grown > 0.0) P = lc + (P - lc) * clamp(1.0 - 0.5 * grown / max(lr, 1e-3), 0.55, 1.0);
-    R *= k;
-
     int specimen;
     float treeSeed;
     mat4 model = push.model * forestInstance(e.instance, specimen, treeSeed);
+
+    // A widened leaf stands in for several: it moves in toward its lobe's
+    // centre by the length it grew, so it stays inside the crown.
+    // Its light (depth in the crown, occlusion, tint) stays the leaf's own,
+    // from where it hangs.
+    vec3 rest = P;
+    float grown = (k - 1.0) * procedural.header[1].z;
+    if (grown > 0.0) P = lc + (P - lc) * clamp(1.0 - 0.5 * grown / max(lr, 1e-3), 0.55, 1.0);
+    // A CLUSTER (mesh.frag's SCENE_FOREST_CLUSTER) draws the leaves the
+    // widened one stands for, each of its own size, in its plane: a hexagon
+    // round the widened outline and half a leaf more (inPos the leaf's
+    // middle, inUV a corner of the unit hexagon), outUV in leaf lengths.
+    bool cluster = (meshFlags() & MESH_FOREST_CLUSTER) != 0u;
+    vec3 local = inPos;
+    vec2 span = vec2(0.0);
+    if (cluster) {
+        float aspect = procedural.header[3].y;
+        span = 1.1547 * vec2(0.5 * k * aspect + 0.55, 0.5 * k + 0.55);
+        float len = procedural.header[1].z / max(procedural.header[1].x, 1e-6);   // the mesh's own
+        local += vec3(inUV.x * span.x, 0.0, inUV.y * span.y) * len;
+    } else {
+        R *= k;
+    }
     mat3 M3 = mat3(model) * R;
-    vec3 pos = (model * vec4(R * inPos + P, 1.0)).xyz;
+    vec3 pos = (model * vec4(R * local + P, 1.0)).xyz;
     // R and the instance are rotations times a uniform scale, so normals
     // take the same matrix.
     vec3 Nw = normalize(M3 * inNormal);
     vec3 Tw = normalize(M3 * inTangent.xyz);
 
     vec4 v0, v1, v2, v3;
-    forestVegetation(forestClumpRecord(lf.x) + 2, P, 1.0, v0, v1, v2, v3);
+    forestVegetation(forestClumpRecord(lf.x) + 2, rest, 1.0, v0, v1, v2, v3);
     mat3 rot;
     outVegShade = forestLeafSway(model, v0, v1, v2, v3, F, normalize(mat3(model) * R[1]), forestFlutter(e.widening),
                                  treeSeed, pos, rot);
@@ -79,4 +96,10 @@ void main() {
     outBitangent = cross(Nw, Tw) * inTangent.w;
     outUV = inUV;
     outColor = meshVertexColorMode() != 0u ? inColor : vec4(1.0);
+    // A cluster's point in leaf lengths, the widening, a seed and the leaf's
+    // width over its length.
+    if (cluster) {
+        outUV = inUV * span;
+        outColor = vec4(k, fract(float(leaf) * 0.618034 + treeSeed), procedural.header[3].y, 1.0);
+    }
 }

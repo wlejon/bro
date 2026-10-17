@@ -35,8 +35,7 @@ SceneRenderer::CustomShaderTarget shaderTarget(MeshKind kind) {
     case MeshKind::Grass:
     case MeshKind::ForestLeaf:
     case MeshKind::ForestTube:
-    case MeshKind::ForestSprite:
-    case MeshKind::ForestImpostor: break;
+    case MeshKind::ForestSprite: break;
     }
     return SceneRenderer::CustomShaderTarget::Static;
 }
@@ -126,13 +125,14 @@ bool SceneMeshDrawer::setup(SceneGpu& gpu) {
     fsIndirect_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshIndirectFrag);
     fsVeg_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshVegFrag);
     fsVegIndirect_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshVegIndirectFrag);
-    vs_[static_cast<int>(MeshKind::ForestImpostor)] =
-        SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshForestImpostorVert);
-    fsImpostor_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshImpostorFrag);
-    fsImpostorIndirect_ =
-        SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshImpostorIndirectFrag);
+    fsSprite_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshForestSpriteFrag);
+    fsSpriteIndirect_ =
+        SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshForestSpriteIndirectFrag);
+    fsCluster_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshForestClusterFrag);
+    fsClusterIndirect_ =
+        SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshForestClusterIndirectFrag);
     if (std::find(std::begin(vs_), std::end(vs_), VK_NULL_HANDLE) != std::end(vs_) || !fs_ || !fsIndirect_ ||
-        !fsVeg_ || !fsVegIndirect_ || !fsImpostor_ || !fsImpostorIndirect_) {
+        !fsVeg_ || !fsVegIndirect_ || !fsSprite_ || !fsSpriteIndirect_ || !fsCluster_ || !fsClusterIndirect_) {
         LOG_ERROR("SceneMeshDrawer: Failed creating the mesh shader modules");
         return false;
     }
@@ -154,9 +154,12 @@ void SceneMeshDrawer::cleanup(SceneGpu& gpu) {
     SceneVkShaderModule::destroy(device_, fsIndirect_);
     SceneVkShaderModule::destroy(device_, fsVeg_);
     SceneVkShaderModule::destroy(device_, fsVegIndirect_);
-    SceneVkShaderModule::destroy(device_, fsImpostor_);
-    SceneVkShaderModule::destroy(device_, fsImpostorIndirect_);
-    fs_ = fsIndirect_ = fsVeg_ = fsVegIndirect_ = fsImpostor_ = fsImpostorIndirect_ = VK_NULL_HANDLE;
+    SceneVkShaderModule::destroy(device_, fsSprite_);
+    SceneVkShaderModule::destroy(device_, fsSpriteIndirect_);
+    SceneVkShaderModule::destroy(device_, fsCluster_);
+    SceneVkShaderModule::destroy(device_, fsClusterIndirect_);
+    fs_ = fsIndirect_ = fsVeg_ = fsVegIndirect_ = fsSprite_ = fsSpriteIndirect_ = VK_NULL_HANDLE;
+    fsCluster_ = fsClusterIndirect_ = VK_NULL_HANDLE;
     if (layout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(device_, layout_, nullptr);
     layout_ = VK_NULL_HANDLE;
 }
@@ -215,11 +218,17 @@ VkPipeline SceneMeshDrawer::buildPipeline(VkShaderModule vs, VkShaderModule fs, 
 
 VkPipeline SceneMeshDrawer::builtinPipeline(const MeshDraw& draw, const TargetFormat& target) {
     const uint32_t rasterBits = rasterVariant(draw);
-    const uint32_t variant = static_cast<uint32_t>(draw.kind) * raster::kCount + rasterBits;
+    // Forest leaf clusters have their own build of mesh.frag, so the leaves'
+    // and grass's carries none of their work.
+    const bool cluster = draw.kind == MeshKind::ForestLeaf &&
+                         (static_cast<uint32_t>(draw.push.pbrParams[3]) & mesh_flags::kForestCluster) != 0u;
+    const uint32_t variant = static_cast<uint32_t>(draw.kind) * raster::kCount + rasterBits +
+                             (cluster ? static_cast<uint32_t>(kMeshKindCount) * raster::kCount : 0u);
     return builtin_.get(variant, target, [&] {
         const bool veg = vegetationShading(draw.kind);
         VkShaderModule fs = target.colorCount > 1 ? (veg ? fsVegIndirect_ : fsIndirect_) : (veg ? fsVeg_ : fs_);
-        if (draw.kind == MeshKind::ForestImpostor) fs = target.colorCount > 1 ? fsImpostorIndirect_ : fsImpostor_;
+        if (draw.kind == MeshKind::ForestSprite) fs = target.colorCount > 1 ? fsSpriteIndirect_ : fsSprite_;
+        if (cluster) fs = target.colorCount > 1 ? fsClusterIndirect_ : fsCluster_;
         return buildPipeline(vs_[static_cast<int>(draw.kind)], fs, draw.kind, rasterBits, target);
     });
 }
@@ -691,8 +700,7 @@ void SceneMeshDrawer::bindGeometryAndDraw(VkCommandBuffer cmd, const MeshDraw& d
         vkCmdDraw(cmd, draw.indexCount, 1, 0, 0);
         return;
     }
-    if (draw.kind == MeshKind::ForestTube || draw.kind == MeshKind::ForestSprite ||
-        draw.kind == MeshKind::ForestImpostor) {
+    if (draw.kind == MeshKind::ForestTube || draw.kind == MeshKind::ForestSprite) {
         vkCmdDraw(cmd, draw.indexCount, draw.instanceCount, draw.firstVertex, draw.firstInstance);
         return;
     }
@@ -726,8 +734,7 @@ void SceneMeshDrawer::bindGeometryAndDraw(VkCommandBuffer cmd, const MeshDraw& d
     case MeshKind::Grass:
     case MeshKind::ForestLeaf:
     case MeshKind::ForestTube:
-    case MeshKind::ForestSprite:
-    case MeshKind::ForestImpostor: break;
+    case MeshKind::ForestSprite: break;
     }
     vkCmdBindVertexBuffers(cmd, 0, count, buffers, offsets);
     vkCmdBindIndexBuffer(cmd, draw.indices, 0, VK_INDEX_TYPE_UINT32);

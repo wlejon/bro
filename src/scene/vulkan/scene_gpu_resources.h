@@ -49,8 +49,6 @@ enum class TextureSlot : uint32_t {
     DecalAlbedo,
     DecalEmission,
     Occlusion,
-    ImpostorColor,   // forest impostor atlas: sRGB albedo + coverage, mipmapped, clamped, no anisotropy
-    ImpostorData,    // and its normal / depth / leafiness: linear, mipmapped, clamped, no anisotropy
 };
 
 struct GpuMesh {

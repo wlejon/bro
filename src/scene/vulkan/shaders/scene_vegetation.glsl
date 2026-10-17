@@ -44,7 +44,7 @@
 // Two layers, so a level-of-detail chain can share one pose:
 //   vegPose   the trunk, limb and twig bend at a rest point: the offset and
 //             the rotation of the wood there. Every tier (leaves, clump
-//             cards, impostors) calls it with the same per-plant data
+//             cards, clump lobes) calls it with the same per-plant data
 //             (VegPlant: root, height, trunk cantilever) and per-limb data
 //             (VegLimb: limb and twig cantilevers, phase) and the same rest
 //             point and weight, and gets the same pose, so crossfades between
@@ -363,10 +363,8 @@ vec4 vegetationSway(mat4 model, vec4 v0, vec4 v1, vec4 v2, vec4 v3, vec3 leafNor
 // Bark varies by plant, and darkens toward the ground.
 //
 // The per-tree part (vegTreeTone: a hash of where the plant stands, and the
-// leaf and bark tints from it) is split out so a forest impostor, whose
-// picture holds the rest (forest_impostor.cpp's leafTint, which follows
-// this line for line), takes the same: everything else about a leaf's
-// colour belongs to its specimen.
+// leaf and bark tints from it) is split out so a forest's clump lobes, which
+// place their own leaves (scene_forest_mass.glsl), take the same.
 float vegTreeTone(mat4 model, vec4 v0) {
     vec3 rootAbs = (model * vec4(v0.xyz, 1.0)).xyz + camera.eyeWorld.xyz;
     return sceneWindHash(ivec2(floor(rootAbs.xz * 8.0)) + ivec2(17, 3));
@@ -378,16 +376,20 @@ vec3 vegTreeLeafTint(float tree) {
 }
 vec3 vegTreeBarkTint(float tree) { return vec3(0.82 + 0.3 * tree, 0.8 + 0.28 * tree, 0.78 + 0.24 * tree); }
 
-vec3 vegetationTint(mat4 model, vec4 v0, vec4 v1, vec4 v2, vec4 v3, bool leaf) {
-    float scale = vegScale(model);
-    float tree = vegTreeTone(model, v0);
+// A leaf's tint before its own and its depth in the crown: the tree's, and
+// its limb's (a forest lobe adds the rest leaf by leaf, scene_forest_mass.glsl).
+vec3 vegLimbLeafTint(mat4 model, vec4 v0, vec4 v3) {
     float phase = float(uint(max(v3.y, 0.0) + 0.5) >> 18) / 64.0;
     float limb = fract(phase * 7.31 + 0.37);
-    if (!leaf) return vegTreeBarkTint(tree);
+    return vegTreeLeafTint(vegTreeTone(model, v0)) * (0.8 + 0.4 * limb);
+}
+
+vec3 vegetationTint(mat4 model, vec4 v0, vec4 v1, vec4 v2, vec4 v3, bool leaf) {
+    float scale = vegScale(model);
+    if (!leaf) return vegTreeBarkTint(vegTreeTone(model, v0));
 
     float each = fract(sin(dot(v2.xyz, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
-    vec3 c = vegTreeLeafTint(tree);
-    c *= 0.8 + 0.4 * limb;
+    vec3 c = vegLimbLeafTint(model, v0, v3);
     c *= 0.9 + 0.2 * each;
     if (v1.w > 0.0) {
         vec3 crown = (model * vec4(v1.xyz, 1.0)).xyz;

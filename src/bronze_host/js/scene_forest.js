@@ -21,9 +21,8 @@
 
     // ForestNode::lodFromArray's order.
     const LOD = ['leafPixels', 'flutterFade', 'cardWidening', 'clumpFrom', 'clumpTo', 'crownFrom', 'crownTo',
-                 'barkPixels', 'barkSidesPixels', 'shadowKeep', 'range', 'budget', 'shadowBudget',
-                 'impostors', 'impostorViews', 'impostorTexels'];
-    const TIERS = { auto: -1, leaves: 0, clumps: 1, crowns: 2, impostors: 3 };
+                 'barkPixels', 'barkSidesPixels', 'shadowKeep', 'range', 'budget', 'shadowBudget', 'clusters'];
+    const TIERS = { auto: -1, leaves: 0, clumps: 1, crowns: 2 };
 
     const isForest = (node) => node instanceof SceneNode && __bro_native.scene.SceneNode_forestLod(node).length === LOD.length;
 
@@ -107,8 +106,8 @@
     });
     fn(P, 'forestStats', function forestStats() {
         const s = __bro_native.scene.SceneNode_forestStats(this);
-        if (s.length < 14) return undefined;
-        return { trees: { leaves: s[0], clumps: s[1], crowns: s[2], impostors: s[13] }, culled: s[3], leaves: s[4],
+        if (s.length < 13) return undefined;
+        return { trees: { leaves: s[0], clumps: s[1], crowns: s[2] }, culled: s[3], leaves: s[4],
                  vertices: s[5],
                  shadowVertices: s[6], entries: s[7], draws: s[8], treeCount: s[9], specimenCount: s[10],
                  detail: s[11], shadowDetail: s[12] };
@@ -117,8 +116,8 @@
     // (the view's pixels per metre at the tree, times its scale).
     fn(P, 'forestTreeLod', function forestTreeLod(specimen, pxPerUnit) {
         const a = __bro_native.scene.SceneNode_forestTreeLod(this, specimen | 0, +pxPerUnit);
-        if (a.length < 10) return undefined;
+        if (a.length < 8) return undefined;
         return { widening: a[0], keep: a[1], card: a[2] > 0, leaves: a[3], clumps: a[4], crowns: a[5],
-                 impostors: a[8], barkRadius: a[6], barkSides: a[7], bark: a[9] > 0 };
+                 barkRadius: a[6], barkSides: a[7] };
     });
 })();

@@ -119,17 +119,10 @@ static TextureDesc textureDesc(TextureSlot slot) {
     case TextureSlot::DecalEmission:
         desc.addressModeU = desc.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         break;
-    case TextureSlot::ImpostorColor:
-    case TextureSlot::ImpostorData:
-        // An atlas of views: anisotropic taps would reach across into the
-        // neighbouring view.
-        desc.enableAnisotropy = false;
-        desc.addressModeU = desc.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        break;
     default:
         break;
     }
-    if (slot == TextureSlot::Particle || slot == TextureSlot::ImpostorColor) desc.format = VK_FORMAT_R8G8B8A8_SRGB;
+    if (slot == TextureSlot::Particle) desc.format = VK_FORMAT_R8G8B8A8_SRGB;
     return desc;
 }
 

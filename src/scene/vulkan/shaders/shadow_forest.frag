@@ -1,11 +1,21 @@
 #version 450
-// A forest sprite's shadow: its leafy cutout (scene_forest_sprite.glsl).
+// A forest sprite's shadow (shadow_forest_sprite.vert): the light its
+// sphere's leaves stop, 1 - exp(-depth * chord), kept by a dither over
+// leaf-patch cells of the sprite (fixed to it, so the shadow does not crawl
+// as it sways). The sphere's own leaves shade it analytically (mesh.frag's
+// leafSphere), the cast falls on everything else.
 
 layout(location = 0) in vec2 inUV;
 layout(location = 1) in float inSeed;
+layout(location = 2) flat in float inDepth;
 
 #include "scene_forest_sprite.glsl"
 
 void main() {
-    if (!forestSpriteCovers(inUV, inSeed)) discard;
+    float r2 = dot(inUV, inUV);
+    if (r2 >= 1.0) discard;
+    float cover = 1.0 - exp(-inDepth * sqrt(1.0 - r2));
+    vec2 o = vec2(inSeed * 97.0, inSeed * 53.0);
+    float h = forestSpriteHash(floor(inUV * 9.0 + o));
+    if (h >= cover) discard;
 }

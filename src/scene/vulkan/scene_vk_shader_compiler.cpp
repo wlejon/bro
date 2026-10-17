@@ -10,7 +10,7 @@
 #include "scene_shadow_push.glsl.src.h"
 #include "scene_vegetation.glsl.src.h"
 #include "scene_forest_sprite.glsl.src.h"
-#include "scene_forest_impostor.glsl.src.h"
+#include "scene_forest_mass.glsl.src.h"
 
 #include <array>
 #include <cstdlib>
@@ -89,7 +89,7 @@ const char* embeddedInclude(const std::string& name) {
         {"scene_shadow_push.glsl", kVkSceneShadowPushSrc},
         {"scene_vegetation.glsl", kVkSceneVegetationSrc},
         {"scene_forest_sprite.glsl", kVkSceneForestSpriteSrc},
-        {"scene_forest_impostor.glsl", kVkSceneForestImpostorSrc},
+        {"scene_forest_mass.glsl", kVkSceneForestMassSrc},
     };
     for (const auto& inc : kIncludes) {
         if (name == inc.name) return inc.source;

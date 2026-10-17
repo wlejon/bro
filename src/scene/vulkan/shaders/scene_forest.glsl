@@ -8,15 +8,12 @@
 //   header[0]  seed (uint bits), up bias, tilt jitter, shell   (the scatter's)
 //   header[1]  base scale, scale jitter, leaf length, flutter fade (widening)
 //   header[2]  first record of: specimens, segments, clumps, leaves (uint bits)
-//   header[3]  first record of the instances (uint bits); the impostor
-//              atlas's views a side, texels a view, blocks a row (0 without)
-//   specimens  6 records: (segStart, segCount, clumpStart, clumpCount) and
+//   header[3]  first record of the instances (uint bits); the leaf's width
+//              over its length; -, -
+//   specimens  4 records: (segStart, segCount, clumpStart, clumpCount) and
 //              (leafStart, leafCount, crown clump, mean clump weight) as
 //              uint bits but the last; (crown.xyz, crown radius across);
-//              (crown radius up, mean clump radius, height, -); the impostor
-//              picture's centre and half size, and the upright cylinder
-//              round that centre holding it (radius, half height, -, -)
-//              (forest_impostor.h)
+//              (crown radius up, mean clump radius, height, -)
 //   segments   7 records: (from.xyz, rFrom), (to.xyz, rTo), (oct tangent at
 //              from, at to), then its vegetation record (4)
 //   clumps     6 records: (centre.xyz, radius), (twig dir.xyz, leaf count),
@@ -58,7 +55,7 @@ ForestEntry forestEntry(int i) {
 }
 
 int forestBase(int k) { return int(floatBitsToUint(procedural.header[2][k])); }
-int forestSpecimenRecord(int s) { return forestBase(0) + s * 6; }
+int forestSpecimenRecord(int s) { return forestBase(0) + s * 4; }
 int forestSegmentRecord(int g) { return forestBase(1) + g * 7; }
 int forestClumpRecord(int c) { return forestBase(2) + c * 6; }
 

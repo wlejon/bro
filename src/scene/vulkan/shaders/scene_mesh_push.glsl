@@ -29,11 +29,15 @@ const uint MESH_HAS_TANGENTS        = 4096u;
 // A forest draw (scene_forest.glsl): inInstColor.a is its tier's dithered
 // cross-fade code, not an atlas cell.
 const uint MESH_FOREST              = 8192u;
-// A forest sprite: a leafy disc with a sphere's normal (scene_forest_sprite.glsl).
+// A forest sprite: a lobe or crown card whose leaves mesh.frag places
+// (scene_forest_mass.glsl).
 const uint MESH_FOREST_SPRITE       = 16384u;
 // A forest draw into a 4x MSAA target: its cross-fades split samples
 // (mesh.frag's forestSampleMask).
 const uint MESH_FOREST_MSAA         = 32768u;
+// Forest leaf clusters: a thinned crown's kept leaf drawn as the leaves of
+// its patch (mesh_forest_leaf.vert, scene_forest_mass.glsl).
+const uint MESH_FOREST_CLUSTER      = 65536u;
 // Bits 10-11: the vertex colour mode — 0 none, 1 replaces the albedo, 2 tints it.
 const uint MESH_VERTEX_COLOR_SHIFT  = 10u;
 

@@ -1,26 +1,35 @@
 #version 450
-// Forest sprites (scene_forest.glsl), the far tiers: camera-facing discs
-// with a leafy cutout (scene_forest_sprite.glsl) and a sphere's normal.
+// Forest sprites (scene_forest.glsl), the far tiers: cards facing the eye on
+// which mesh.frag (SCENE_FOREST_SPRITE, scene_forest_mass.glsl) places the
+// leaves of a sphere's shell, lights them as the leaves tier lights its
+// leaves and writes their depth.
 //   mode 0 (push.extra.z), CLUMPS: each instance an entry, a run of its
 //          tree's crown clumps, each drawn as the three lobes its leaves
 //          fill (procClumpLobe), so the far crown keeps the near crown's
-//          masses, outline and colour;
-//   mode 1, CROWNS: one sprite a tree, the whole crown, entry
+//          masses, outline, gaps and leaves;
+//   mode 1, CROWNS: one card a tree over the whole crown, entry
 //          gl_VertexIndex / 6 (the draw is not instanced).
 // Every sprite is posed by vegPose at its centre (a clump with its weight on
 // its limb, a crown by its trunk), so it moves as the leaves it stands in
 // for, and carries the gust at its tree (outColor.y) for mesh.frag's sheen:
 // a gust turns leaves to show their paler undersides, so gusts roll across
 // a distant canopy as lighter bands. shadow_forest_sprite.vert is the caster.
+//
+// The card stands at the sphere's front, facing the eye from its centre, so
+// every depth mesh.frag writes lies behind it (its conservative depth test).
 
 layout(location = 0) out vec3 outWorldPos;
-layout(location = 1) out vec3 outNormal;
-layout(location = 2) out vec2 outUV;
-layout(location = 3) out vec4 outColor;
-layout(location = 4) out vec3 outTangent;
-layout(location = 5) out vec3 outBitangent;
-layout(location = 6) out vec4 outInstColor;
+layout(location = 1) out vec3 outNormal;      // toward the eye from the centre (unit)
+layout(location = 2) out vec2 outUV;          // the card point, in sphere radii from the centre
+layout(location = 3) out vec4 outColor;       // seed, gust, mode, -
+layout(location = 4) out vec3 outTangent;     // the card's right (unit)
+layout(location = 5) out vec3 outBitangent;   // the card's up (unit)
+layout(location = 6) out vec4 outInstColor;   // tint, fade
 layout(location = 7) out vec4 outVegShade;
+layout(location = 8) flat out vec4 outMass0;  // centre (posed, camera-relative), radius (world)
+layout(location = 9) flat out vec4 outMass1;  // the crown's centre (posed), radius
+layout(location = 10) flat out vec4 outMass2; // cell, leaf length (both in radii), leaf aspect, shell
+layout(location = 11) flat out vec4 outMass3; // up bias, tilt jitter, height over width, leaf length (world)
 
 #include "scene_camera.glsl"
 #include "scene_mesh_push.glsl"
@@ -33,24 +42,41 @@ void main() {
     ForestSprite s;
     if (!forestSprite(int(push.extra.z + 0.5), gl_InstanceIndex, gl_VertexIndex, push.model, s)) {
         gl_Position = FOREST_CULLED;
-        outVegShade = vec4(0.0, 0.0, 0.0, 1.0);
+        outVegShade = vec4(0.0, 0.0, 0.0, -1.0);
         return;
     }
-    vec3 right = camera.invView[0].xyz;
-    vec3 up = camera.invView[1].xyz;
-    vec3 toEye = normalize(-s.center);
-    // A crown is wider than tall; seen from above it is round.
-    float ry = mix(s.radiusUp, s.radius, abs(toEye.y));
-    vec3 pos = s.center + right * (s.corner.x * s.radius) + up * (s.corner.y * ry);
+    float D = length(s.center);
+    vec3 f = D > 1e-5 ? s.center / -D : vec3(0.0, 0.0, 1.0);
+    vec3 right = cross(vec3(0.0, 1.0, 0.0), f);
+    right = dot(right, right) < 1e-6 ? camera.invView[0].xyz : normalize(right);
+    vec3 up = cross(f, right);
+    // An upright ellipsoid (a crown) seen from the side is taller or flatter
+    // than it is wide; from above it is round.
+    float ry = mix(s.radiusUp, s.radius, abs(f.y));
+    float yScale = ry / max(s.radius, 1e-6);
+    // The leaves reach past the sphere by about half a leaf.
+    float margin = 1.0 + 0.6 * s.leafLen / max(s.radius, 1e-6);
+    vec2 q = s.corner * margin;
+    // Never nearer the eye than the eye's own near plane.
+    vec3 front = s.center + f * min(s.radius, max(D - 0.05, 0.0));
+    vec3 pos = front + right * (q.x * s.radius) + up * (q.y * s.radius * yScale);
 
     outWorldPos = pos;
     gl_Position = camera.viewProj * vec4(pos, 1.0);
-    outNormal = toEye;
-    // Lengths are the radii: mesh.frag lights the sphere's surface.
-    outTangent = right * s.radius;
-    outBitangent = up * ry;
-    outUV = s.corner;
-    outColor = vec4(s.seed, s.gust, push.extra.z < 0.5 ? 1.0 : 0.0, 1.0);
+    outNormal = f;
+    outTangent = right;
+    outBitangent = up;
+    outUV = q;
+    outColor = vec4(s.seed, s.gust, push.extra.z, 1.0);
     outInstColor = vec4(s.tint, s.fade);
-    outVegShade = s.shade;
+    outVegShade = vec4(0.0, 0.0, 0.0, -1.0);
+
+    // The leaves' cells: the near half of the shell holds half the leaves,
+    // seen over the disc (pi in radii squared).
+    float len = s.leafLen / max(s.radius, 1e-6);
+    float cell = sqrt(6.2831853 / s.leaves);
+    outMass0 = vec4(s.center, s.radius);
+    outMass1 = s.crown;
+    outMass2 = vec4(cell, len, procedural.header[3].y, procedural.header[0].w);
+    outMass3 = vec4(procedural.header[0].y, procedural.header[0].z, yScale, s.leafLen);
 }

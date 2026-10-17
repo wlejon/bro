@@ -65,7 +65,7 @@ embed_vk_shader(scene_mesh_push.glsl  kVkSceneMeshPushSrc)
 embed_vk_shader(scene_shadow_push.glsl kVkSceneShadowPushSrc)
 embed_vk_shader(scene_vegetation.glsl kVkSceneVegetationSrc)
 embed_vk_shader(scene_forest_sprite.glsl kVkSceneForestSpriteSrc)
-embed_vk_shader(scene_forest_impostor.glsl kVkSceneForestImpostorSrc)
+embed_vk_shader(scene_forest_mass.glsl kVkSceneForestMassSrc)
 embed_vk_shader(clipmap_common.glsl       kClipmapCommonSrc)
 embed_vk_shader(clipmap_detail.glsl       kClipmapDetailSrc)
 embed_vk_shader(clipmap_material.glsl     kClipmapMaterialSrc)
@@ -102,7 +102,6 @@ add_library(bro_scene STATIC
     particles3d_node.cpp
     decal_node.cpp
     grass_node.cpp
-    forest_impostor.cpp
     forest_node.cpp
     reflection_probe_node.cpp
     terrain_manager.cpp
