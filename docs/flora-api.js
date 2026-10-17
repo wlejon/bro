@@ -421,6 +421,23 @@ class FloraWorld {
   step(dt) {}
 
   /**
+   * `ticks` steps of `dt` in one call, the same world as that many `step(dt)`
+   * calls. With `opts.cache` (a directory, e.g. `bro.app.cacheDir`) the grown
+   * world is read from a cache of grown worlds when one is there and written
+   * to it when not. The key is everything the result depends on: the world as
+   * it stands (environment, prototypes, plants, rng), `ticks`, `dt`, the
+   * build, and a hash of broflora's step source, so an edit to the sim (but
+   * not to emit or clumps) or to the world grows afresh. A cache that cannot
+   * be read or written is skipped and named in `error`.
+   * @param {number} ticks integer >= 0
+   * @param {number} dt
+   * @param {{cache?: string}} [opts]
+   * @returns {{cached: boolean, ms: number, key?: string, error?: string}} `ms` is wall time
+   * @example const g = world.grow(2500, 0.02, { cache: bro.app.cacheDir });  // g.cached on the second run
+   */
+  grow(ticks, dt, opts) {}
+
+  /**
    * Runtime snapshot of one plant: `{origin, age, flowering, senescing,
    * moduleCount, effectiveRootVigorMax, rootVigor?, rootLight?, species}`,
    * where `rootVigor` / `rootLight` exist only when the plant has modules and
