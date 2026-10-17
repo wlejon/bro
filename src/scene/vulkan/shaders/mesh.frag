@@ -247,7 +247,7 @@ void main() {
             // A pixel's size (world) on the card, at the crown.
             float pixel = max(length(dFdx(inWorldPos)), length(dFdy(inWorldPos)));
             ForestCrownHit h = forestCrownTrace(d, int(floatBitsToUint(inMass4.w)), inMass4.xyz, inMass3.w,
-                                                inMass2.z, grain, pixel);
+                                                inMass2.z, grain, pixel, draws.x);
             massCover = h.cover;
             if (massCover < 1.0 / 255.0) discard;
             // The leaves face out of their clump, leaning up, each its own
@@ -262,6 +262,21 @@ void main() {
             massSphere = h.sphere;
             massDensity = h.density;
             massFlat = h.flatness;
+            if ((floatBitsToUint(procedural.header[3].w) & 15u) == 0u) {
+                // A broadleaf's crown is shaded through the whole crown's
+                // leaves toward the light (its mean density), not its one
+                // clump's: the crown's caster is one disc past its middle,
+                // which leaves its near half unshaded, where the clumps
+                // tier's lobes shade each other through their own casters
+                // (its crowns were 12 units brighter than its clumps and
+                // leaves). The shadow map is read where the light leaves the
+                // crown's sphere, past that disc. (A spray node's crown, a
+                // shell of sprays over dark cores, is as its leaves lit
+                // through its one clump.)
+                massSphere = vec4(inMass1.xyz, max(inMass1.w, length(h.at - inMass1.xyz) * 1.02));
+                massFlat = 1.0;
+                massDensity = FOREST_CROWN_SHADE * h.crownSigma;
+            }
             worldPos = h.at;
             vec4 clip = camera.viewProj * vec4(h.at, 1.0);
             gl_FragDepth = REVERSED_Z ? min(clip.z / clip.w, gl_FragCoord.z) : gl_FragCoord.z;
@@ -497,7 +512,25 @@ void main() {
         N = normalize(N * 0.4 + massBulk * 0.6);
     } else {
         float bulkWeight = length(inVegShade.xyz);
-        if (bulkWeight > 1e-4) N = normalize(N * (1.0 - bulkWeight) + inVegShade.xyz);
+        float bulkKeep = 1.0;
+#ifndef SCENE_FOREST_SPRAY
+        if (vegLeaf && !vegBlade && !massLeaves) {
+            // Near, a leaf is its own face, not the crown's: folded along
+            // its midrib (the halves tilt apart, so one takes more light than
+            // the other) and turned its own way more than the bulk's, so the
+            // leaves of a sunlit side differ leaf by leaf rather than lying
+            // as one flat sheet. Gone by the distance a leaf is a few pixels.
+            float near = 1.0 - smoothstep(6.0, 25.0, camDist);
+            if (near > 0.0) {
+                float across = clamp(inUV.x * 2.0 - 1.0, -1.0, 1.0);
+                vec3 T = normalize(inTangent);
+                N = normalize(N - (frontFacing ? 1.0 : -1.0) * 0.4 * near * across * T);
+                bulkKeep = 1.0 - 0.5 * near;
+            }
+        }
+#endif
+        if (bulkWeight > 1e-4)
+            N = normalize(N * (1.0 - bulkWeight * bulkKeep) + inVegShade.xyz * bulkKeep);
     }
 #endif
 #ifdef SCENE_FOREST_BLOOM

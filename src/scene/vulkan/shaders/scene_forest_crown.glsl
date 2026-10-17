@@ -33,7 +33,22 @@ struct ForestCrownHit {
     float density;   // its leaves' optical depth a unit length
     float near;      // the share of the cover the nearest clump gives (the rest: the second's)
     float flatness;  // that clump's height over its width (SceneSurface::leafFlat)
+    // The whole crown's leaves over its ellipsoid's volume (its records'
+    // crown radius across and up): their optical depth a unit length, which
+    // shades the leaves seen by the crown's other clumps between them and
+    // the sun, as the clumps tier's lobes are by each other's casters.
+    float crownSigma;
 };
+
+// A broadleaf clump's leaves fill its lobes (bromesh leafClumpLobe), which
+// leave its ellipsoid's rim open: traced as the ellipsoid, as many leaves in
+// this fraction of its radius (at the full radius its far crowns covered a
+// fifth more than its leaves).
+const float FOREST_CROWN_FILL = 0.8;
+
+// The share of a broadleaf crown's mean density (ForestCrownHit::crownSigma)
+// its leaves are shaded through: as a lobe takes half its own.
+const float FOREST_CROWN_SHADE = 0.5;
 
 // A crown is traced a run of clumps at a time (coarse) once its mean clump
 // is under this many pixels in radius.
@@ -46,9 +61,11 @@ const float FOREST_COARSE_PIXELS = 3.0;
 // each under about a pixel, each run of them is traced as the one
 // ellipsoid it fills (the block's second and third records), not clump by
 // clump, the crown's outline and mass the same at a fraction of the cost.
+// `pick` the pixel's own draw in [0, 1).
 ForestCrownHit forestCrownTrace(vec3 d, int instance, vec3 offset, float len, float aspect, vec4 grain,
-                                float pixel) {
+                                float pixel, float pick) {
     ForestCrownHit h;
+    h.crownSigma = 0.0;
     h.cover = 0.0;
     h.at = vec3(0.0);
     h.normal = -d;
@@ -69,13 +86,28 @@ ForestCrownHit forestCrownTrace(vec3 d, int instance, vec3 offset, float len, fl
     float leafArea = 3.14159265 * a * a * aspect * 0.55;
     // Its clumps' height over their width (scene_forest.glsl's forestClumpFlat).
     float flatness = procedural.records[sr + 4].w > 0.0 ? procedural.records[sr + 4].w : 1.0;
+    // (A spray node's clumps are its sprays' pads, filled to their rims.)
+    float fill = (floatBitsToUint(procedural.header[3].w) & 15u) != 0u ? 1.0 : FOREST_CROWN_FILL;
+    {
+        float leaves = float(floatBitsToUint(procedural.records[sr + 1].y));
+        float cr = max(procedural.records[sr + 2].w, 1e-3) * scale;
+        float cu = max(procedural.records[sr + 3].x, 1e-3) * scale;
+        h.crownSigma = leaves * leafArea / (4.18879 * cr * cr * cu);
+    }
 
     // The two nearest clumps the ray enters (each its centre, radius across
     // and up), and the optical depth of all.
     float t1 = 1e30, t2 = 1e30, tau1 = 0.0, tau2 = 0.0, tauAll = 0.0;
     vec4 s1 = vec4(0.0, 0.0, 0.0, 1.0), s2 = s1;
     float d1 = 0.0, d2 = 0.0, y1 = 1.0, y2 = 1.0;
-    float wander = max(1.0 + 1.7 * grain.w, 0.0);
+    // The leaves' count along the ray wanders pixel to pixel; the grain
+    // fades as a pixel takes in more leaves, but a clump's leaves lie in its
+    // lobes' shells, not evenly through it, so the count still wanders at
+    // the lobes' scale however far off: the pixel's own draw keeps it (with
+    // the crown even, its far pixels were all but solid, 10 units brighter
+    // than its leaves, whose gaps let the ground through).
+    float u = fract(pick * 7.13 + 0.31) * 2.0 - 1.0;
+    float wander = max(1.0 + 1.7 * mix(grain.w, u, clamp(1.0 - length(grain) / 0.9, 0.0, 1.0)), 0.0);
     // Density follows what a pixel can show: once a mean clump is a few
     // pixels across or less, every second clump (then every fourth) stands
     // for its run's neighbours, as many leaves in a ball of as much volume
@@ -120,7 +152,7 @@ ForestCrownHit forestCrownTrace(vec3 d, int instance, vec3 offset, float len, fl
             float leaves = procedural.records[r + 1].w * float(stride);
             // 0.9 of the radius up and 0.7 down about the clump's centre:
             // 0.8 up about a point 0.1 above it, times the flatness.
-            float rr = c.w * grow, ry = 0.8 * flatness * rr;
+            float rr = c.w * grow * fill, ry = 0.8 * flatness * rr;
             vec3 cs = c.xyz + vec3(0.0, 0.1 * rr * flatness, 0.0);
             // The chord, the ellipsoid scaled to a sphere.
             float sy = rr / ry;
@@ -153,7 +185,10 @@ ForestCrownHit forestCrownTrace(vec3 d, int instance, vec3 offset, float len, fl
     float w1 = 1.0 - exp(-tau1), w2 = exp(-tau1) * (1.0 - exp(-tau2));
     float wSum = max(w1 + w2, 1e-6);
     h.near = w1 / wSum;
-    bool first1 = h.near >= 0.5;
+    // Which is seen is drawn by its share (`pick`, the pixel's own draw in
+    // [0, 1)), so the second, deeper and darker, shows in its share of the
+    // pixels however far off, as the leaves behind the first's gaps do.
+    bool first1 = pick < h.near;
     float tSeen = first1 ? t1 : t2;
     vec4 S = first1 ? s1 : s2;
     S.xyz = (model * vec4(S.xyz, 1.0)).xyz + offset;   // to camera-relative, R already world

@@ -126,8 +126,8 @@ public:
         float cardWidening = 1.6f;    // widening past which a leaf is a cluster (or a 6-vertex card)
         float clumpFrom = 3.0f;       // widening over which leaves hand over to clumps
         float clumpTo = 4.5f;
-        float crownFrom = 5.0f;       // mean clump radius (px) over which clumps hand over to crowns
-        float crownTo = 3.0f;
+        float crownFrom = 7.0f;       // mean clump radius (px) over which clumps hand over to crowns
+        float crownTo = 4.5f;
         float barkPixels = 0.7f;      // bark narrower than this on screen is left out
         float barkSidesPixels = 24.0f;// a trunk wider than this (px) has 10 sides, else 5
         float shadowKeep = 0.35f;     // the share of a tree's drawn leaves its shadow keeps

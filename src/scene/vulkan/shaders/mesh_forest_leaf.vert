@@ -108,7 +108,14 @@ void main() {
     Tw = rot * Tw;
     outInstColor = vec4(vegetationTint(model, v0, v1, v2, v3, true) * forestSpecimenTint(specimen, false), e.fade);
     // A spray's (mesh.frag's SCENE_FOREST_SPRAY): its seed, its own dither.
-    if (!cluster) outLobeDensity = fract(float(leaf) * 0.618034 + treeSeed);
+    if (!cluster) {
+        float seed = fract(float(leaf) * 0.618034 + treeSeed);
+        outLobeDensity = seed;
+        // Each leaf its own lightness about the tree's (as a cluster's and a
+        // lobe's leaves are, forestMassGrain): a sunlit side is leaves, not
+        // one sheet. The mean is the tree's.
+        outInstColor.rgb *= 0.85 + 0.3 * fract(seed * 7.31 + 0.137);
+    }
     if (cluster) {
         vec3 outward = rest - lc;
         float upBias = procedural.header[0].y;
