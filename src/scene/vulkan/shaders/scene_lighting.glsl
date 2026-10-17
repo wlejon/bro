@@ -145,9 +145,19 @@ float sampleShadow(int slot, vec3 pos, float biasWorld, float spread) {
     int hk = (int(lighting.params.y) - 1) / 2;
     vec2 minUV = tile.rect.xy + texel * (float(hk) + 1.0);
     vec2 maxUV = tile.rect.xy + tile.rect.zw - texel * (float(hk) + 1.0);
-    // spread <= 0: the one hardware-filtered tap.
-    if (hk <= 0 || spread <= 0.0) return texture(shadowAtlas, vec3(clamp(base, minUV, maxUV), ref));
+    // spread 0: the one hardware-filtered tap.
+    if (hk <= 0 || spread == 0.0) return texture(shadowAtlas, vec3(clamp(base, minUV, maxUV), ref));
     float s = 0.0;
+    // spread < 0: four hardware-filtered taps spanning about what the grid
+    // at -spread does, at under half its cost.
+    if (spread < 0.0) {
+        vec2 o = texel * (-spread * 0.5 * float(hk));
+        s = texture(shadowAtlas, vec3(clamp(base + vec2(-o.x, -o.y), minUV, maxUV), ref)) +
+            texture(shadowAtlas, vec3(clamp(base + vec2(o.x, -o.y), minUV, maxUV), ref)) +
+            texture(shadowAtlas, vec3(clamp(base + vec2(-o.x, o.y), minUV, maxUV), ref)) +
+            texture(shadowAtlas, vec3(clamp(base + vec2(o.x, o.y), minUV, maxUV), ref));
+        return s * 0.25;
+    }
     vec2 step = texel * spread;
     for (int y = -hk; y <= hk; ++y) {
         for (int x = -hk; x <= hk; ++x) {
@@ -315,6 +325,10 @@ vec3 sceneDirectLight(SceneSurface s) {
                 float out_ = max(-b + sqrt(max(b * b - dot(oc, oc) + s.leafSphere.w * s.leafSphere.w, 0.0)), 0.0);
                 at += L * out_;
                 self = exp(-s.leafDensity * s.leafPath * out_);
+                // Four filtered taps as wide as the leaf's nine: a sphere's
+                // leaves are most of the frame's lit pixels, and the light
+                // falling into it from outside is coarse.
+                spread = -spread;
                 // The exit tap is as soft as a leaf's (twice the filter):
                 // sharp, the discs' cells and the wider casters' edges read
                 // as hard blotches on the lobes they fall on.

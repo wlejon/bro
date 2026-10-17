@@ -247,6 +247,14 @@
  * @property {number} [terrainAnchorWeight=0] @property {number} [maxSeedingSlope=1.5707963]
  * @property {number} [distributionWeightCollisions=1] @property {number} [distributionWeightTropism=0.5]
  * @property {number} [orthotropy=0.3] @property {number} [individualVariation=0]
+ * Bark (emit only: the simulation never reads it). The first three ride in
+ * every bark record (emitBranchTubes, a forest's tubes) and are drawn by
+ * bro.scene's bark shading; the last two shape the tubes.
+ * @property {number} [barkFurrow=0.55] - 0 smooth (beech) .. 1 deep furrows between plates (oak).
+ * @property {number} [barkScale=1] - The plates' spacing, x the default (which already widens with the girth); 0.25..4.
+ * @property {number} [barkMoss=0.5] - Moss and lichen, 0 none .. 1 lush (the shaded side, a limb's top, the foot).
+ * @property {number} [rootFlare=0.6] - The trunk's swell where it meets the ground, x its radius.
+ * @property {number} [branchCollar=0.5] - A side branch's swell where it leaves its parent, x its radius.
  */
 
 /**
@@ -776,7 +784,12 @@ bro.flora.plantForest = function(forest, opts) {};
  * Where ground cover grows under a forest, for scene.createGrass's
  * `density`: a function (x, z) => 0..1, clear at each trunk, thinner the
  * more crowns overlap overhead, nothing where they close, full in the open.
- * @example scene.createGrass({ ground, density: bro.flora.forestCover(forest, { instances: trees }) });
+ * The function also carries `canopy`, (x, z) => 0..1: how closed the crowns
+ * are overhead (0 in the open, 1 under a crown's middle or where crowns
+ * overlap), for createGrass's `floor` (the litter and low leafy plants
+ * under trees).
+ * @example const cover = bro.flora.forestCover(forest, { instances: trees });
+ * scene.createGrass({ ground, density: cover, floor: cover.canopy, turf: true });
  * @param {Object} forest - world.emitForest()'s result.
  * @param {Object} [opts]
  * @param {Float32Array} [opts.instances] - the trees (default `forest.instances`).

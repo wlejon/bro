@@ -202,10 +202,12 @@ void barkSurface(vec4 coords, float hb, float word, vec3 pos, vec3 geomN, vec3 a
     float patchSize = 0.12 + 0.6 * r;
     float blotch = barkNoise(vec3(coords.xy, coords.z * 0.4) / patchSize + 3.1) * 0.7 +
                    barkNoise(vec3(coords.xy, coords.z * 0.4) * (2.7 / patchSize) + 13.7) * 0.3;
-    float streak = mix(0.5, barkNoise(vec3(coords.xy / (3.0 * lambda), coords.z / (30.0 * lambda)) + 7.7),
-                       seenCoarse);
+    // (Each pattern is only worked out where it can be seen.)
+    float streak = seenCoarse > 0.0
+        ? mix(0.5, barkNoise(vec3(coords.xy / (3.0 * lambda), coords.z / (30.0 * lambda)) + 7.7), seenCoarse)
+        : 0.5;
     color *= 0.7 + 0.6 * streak;
-    float fleck = mix(0.5, barkNoise(q * vec3(6.0, 6.0, 2.0) + 9.2), seenFine);
+    float fleck = seenFine > 0.0 ? mix(0.5, barkNoise(q * vec3(6.0, 6.0, 2.0) + 9.2), seenFine) : 0.5;
     float grey = dot(color, vec3(0.3, 0.5, 0.2));
     vec3 face = mix(color, vec3(grey) * vec3(1.05, 1.02, 0.97), 0.65) * 1.3;
     vec3 c = mix(color * mix(1.0, 0.22, relief) * vec3(1.0, 0.85, 0.7), face, h);
@@ -223,11 +225,13 @@ void barkSurface(vec4 coords, float hb, float word, vec3 pos, vec3 geomN, vec3 a
     float grow = 0.55 * smoothstep(-0.2, 0.9, dot(side, BARK_MOSS_SIDE)) + 0.7 * smoothstep(0.25, 0.85, geomN.y) +
                  0.9 * exp(-max(hb, 0.0) / 0.6);
     float patchy = barkNoise(vec3(coords.xy, coords.z * 0.5) / (0.7 * patchSize) + 41.0) * 0.7 +
-                   mix(0.5, barkNoise(q * vec3(1.7, 1.7, 2.5) + 63.0), seen) * 0.3;
+                   (seen > 0.0 ? mix(0.5, barkNoise(q * vec3(1.7, 1.7, 2.5) + 63.0), seen) : 0.5) * 0.3;
     float m = smoothstep(0.45, 0.8, moss * grow + 0.45 * patchy + 0.15 * (1.0 - h) - 0.2);
     vec3 mossC = vec3(0.075, 0.12, 0.025) * (0.75 + 0.5 * fleck);
     c = mix(c, mossC, m);
-    float lichen = smoothstep(0.72, 0.8, barkNoise(q * vec3(1.3, 1.3, 4.0) + 87.0)) * h * (0.3 + 0.7 * moss);
+    // Lichen crusts, their mean (about a tenth of the bark) far off.
+    float lichen = seen > 0.0 ? mix(0.1, smoothstep(0.72, 0.8, barkNoise(q * vec3(1.3, 1.3, 4.0) + 87.0)), seen) : 0.1;
+    lichen *= h * (0.3 + 0.7 * moss);
     c = mix(c, vec3(0.34, 0.37, 0.3), 0.55 * lichen * (1.0 - m));
     N = normalize(mix(N, geomN, 0.6 * m));
     roughness = mix(roughness, 1.0, m);
