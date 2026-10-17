@@ -143,7 +143,10 @@ bool SceneMeshDrawer::setup(SceneGpu& gpu) {
     fsBloom_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshForestBloomFrag);
     fsBloomIndirect_ =
         SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshForestBloomIndirectFrag);
-    if (std::find(std::begin(vs_), std::end(vs_), VK_NULL_HANDLE) != std::end(vs_) || !fs_ || !fsIndirect_ ||
+    vsHerb_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshHerbVert);
+    fsHerb_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshHerbFrag);
+    fsHerbIndirect_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshHerbIndirectFrag);
+    if (!vsHerb_ || !fsHerb_ || !fsHerbIndirect_ ||std::find(std::begin(vs_), std::end(vs_), VK_NULL_HANDLE) != std::end(vs_) || !fs_ || !fsIndirect_ ||
         !fsVeg_ || !fsVegIndirect_ || !fsSprite_ || !fsSpriteIndirect_ || !fsCluster_ || !fsClusterIndirect_ ||
         !fsBark_ || !fsBarkIndirect_ || !fsGround_ || !fsGroundIndirect_ || !fsSpray_ || !fsSprayIndirect_ ||
         !vsBloom_ || !fsBloom_ || !fsBloomIndirect_) {
@@ -181,6 +184,10 @@ void SceneMeshDrawer::cleanup(SceneGpu& gpu) {
     SceneVkShaderModule::destroy(device_, vsBloom_);
     SceneVkShaderModule::destroy(device_, fsBloom_);
     SceneVkShaderModule::destroy(device_, fsBloomIndirect_);
+    SceneVkShaderModule::destroy(device_, vsHerb_);
+    SceneVkShaderModule::destroy(device_, fsHerb_);
+    SceneVkShaderModule::destroy(device_, fsHerbIndirect_);
+    vsHerb_ = fsHerb_ = fsHerbIndirect_ = VK_NULL_HANDLE;
     fsSpray_ = fsSprayIndirect_ = vsBloom_ = fsBloom_ = fsBloomIndirect_ = VK_NULL_HANDLE;
     fs_ = fsIndirect_ = fsVeg_ = fsVegIndirect_ = fsSprite_ = fsSpriteIndirect_ = VK_NULL_HANDLE;
     fsCluster_ = fsClusterIndirect_ = fsBark_ = fsBarkIndirect_ = fsGround_ = fsGroundIndirect_ = VK_NULL_HANDLE;
@@ -255,12 +262,19 @@ VkPipeline SceneMeshDrawer::builtinPipeline(const MeshDraw& draw, const TargetFo
     // And a forest's blooms, a sprite draw with its own vertex stage too.
     const bool bloom = draw.kind == MeshKind::ForestSprite &&
                        (static_cast<uint32_t>(draw.push.pbrParams[3]) & mesh_flags::kForestBloom) != 0u;
+    // And a grass node's herb plants, a grass draw with its own stages.
+    const bool herb = draw.kind == MeshKind::Grass &&
+                      (static_cast<uint32_t>(draw.push.pbrParams[3]) & mesh_flags::kHerb) != 0u;
     const uint32_t variant = static_cast<uint32_t>(draw.kind) * raster::kCount + rasterBits +
                              (cluster ? static_cast<uint32_t>(kMeshKindCount) * raster::kCount : 0u) +
                              (ground ? 2u * static_cast<uint32_t>(kMeshKindCount) * raster::kCount : 0u) +
                              (spray ? 3u * static_cast<uint32_t>(kMeshKindCount) * raster::kCount : 0u) +
-                             (bloom ? 4u * static_cast<uint32_t>(kMeshKindCount) * raster::kCount : 0u);
+                             (bloom ? 4u * static_cast<uint32_t>(kMeshKindCount) * raster::kCount : 0u) +
+                             (herb ? 5u * static_cast<uint32_t>(kMeshKindCount) * raster::kCount : 0u);
     return builtin_.get(variant, target, [&] {
+        if (herb)
+            return buildPipeline(vsHerb_, target.colorCount > 1 ? fsHerbIndirect_ : fsHerb_, draw.kind, rasterBits,
+                                 target);
         if (bloom)
             return buildPipeline(vsBloom_, target.colorCount > 1 ? fsBloomIndirect_ : fsBloom_, draw.kind,
                                  rasterBits, target);

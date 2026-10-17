@@ -12,6 +12,7 @@
 #include "scene/vulkan/scene_defaults.h"
 #include "scene/vulkan/scene_frame.h"
 #include "scene/vulkan/scene_gpu_resources.h"
+#include "scene/vulkan/scene_targets.h"
 #include "scene/vulkan/scene_vk_descriptors.h"
 #include "scene/vulkan/scene_vk_device.h"
 
@@ -38,7 +39,14 @@ struct GrassUBO {
     float pushRate[4];
     float shape[4];
     float lod[4];
+    float herbInfo[4];
+    float herbRing[4];
+    float herbShape[4];
+    float herbs[GrassNode::kHerbMax * GrassNode::kHerbRecordFloats];
+    float herbMean[GrassNode::kHerbMeanSteps * 8];
 };
+static_assert(sizeof(GrassUBO) == (15 + GrassNode::kHerbMax * GrassNode::kHerbRecordFloats / 4
+                                   + GrassNode::kHerbMeanSteps * 2) * 16);
 
 constexpr float kPi = 3.14159265358979f;
 constexpr float kWidthGrowth = 0.03f;            // a far blade is wider, so a ring keeps its cover
@@ -108,6 +116,54 @@ void visibleBox(const SceneView& view, float radius, float margin, float (&box)[
     box[3] = hi[1] + margin;
 }
 
+/// The box's cells (`cell` m) in tiles of kTile x kTile, as runs along each
+/// row of tiles of the ones `keep(x0, z0, x1, z1)` accepts: the first cell
+/// column, row, columns and rows of each.
+using TileRuns = std::vector<std::array<int, 4>>;
+template <class Keep>
+bool tileRuns(const float (&box)[4], float cell, Keep&& keep, TileRuns& runs) {
+    runs.clear();
+    const int i0 = static_cast<int>(std::floor(box[0] / cell));
+    const int j0 = static_cast<int>(std::floor(box[1] / cell));
+    const int i1 = static_cast<int>(std::floor(box[2] / cell));
+    const int j1 = static_cast<int>(std::floor(box[3] / cell));
+    const uint64_t w = static_cast<uint64_t>(std::max(i1 - i0 + 1, 0));
+    const uint64_t h = static_cast<uint64_t>(std::max(j1 - j0 + 1, 0));
+    if (w == 0 || h == 0 || w * h > kMaxRingInstances) return false;
+    for (int tj = j0; tj <= j1; tj += kTile) {
+        const int cj1 = std::min(tj + kTile - 1, j1);
+        bool inRun = false;   // (cells are signed: no sentinel column)
+        int runStart = 0, runEnd = 0;
+        const auto flush = [&]() {
+            if (inRun) runs.push_back({runStart, tj, runEnd - runStart + 1, cj1 - tj + 1});
+            inRun = false;
+        };
+        for (int ti = i0; ti <= i1; ti += kTile) {
+            const int ci1 = std::min(ti + kTile - 1, i1);
+            const float x0 = static_cast<float>(ti) * cell, x1 = static_cast<float>(ci1 + 1) * cell;
+            const float z0 = static_cast<float>(tj) * cell, z1 = static_cast<float>(cj1 + 1) * cell;
+            if (!keep(x0, z0, x1, z1)) {
+                flush();
+                continue;
+            }
+            if (!inRun) runStart = ti;
+            inRun = true;
+            runEnd = ci1;
+        }
+        flush();
+    }
+    return !runs.empty();
+}
+
+/// Whether a tile [x0, x1] x [z0, z1] reaches the ring [rIn, rOut] (padded
+/// already) around the eye lifted `lift` over the ground.
+bool tileInRing(float ex, float ez, float lift, float rIn, float rOut, float x0, float z0, float x1, float z1) {
+    const float nx = std::clamp(ex, x0, x1) - ex, nz = std::clamp(ez, z0, z1) - ez;
+    const float fx = std::max(std::fabs(x0 - ex), std::fabs(x1 - ex));
+    const float fz = std::max(std::fabs(z0 - ez), std::fabs(z1 - ez));
+    return nx * nx + nz * nz + lift * lift <= rOut * rOut && fx * fx + fz * fz + lift * lift >= rIn * rIn;
+}
+
 MeshNode::UserTexture* slot(GrassNode& node, const char* name) {
     for (auto& t : node.customShaderTextures())
         if (t.name == name && t.w > 0 && t.h > 0) return &t;
@@ -157,6 +213,18 @@ void fillShared(const GrassNode& node, GrassUBO& u) {
     u.pushRate[0] = GrassNode::kBendRecovery;
     u.pushRate[1] = GrassNode::kTrampleRecovery;
     u.pushRate[2] = node.hasFloor() ? 1.0f : 0.0f;
+    // The herbs, which every grass shader reads: the plants, and past them
+    // the blades and the turf that stand in.
+    if (node.hasHerbs()) {
+        const std::vector<float>& rec = node.herbRecords();
+        std::copy(rec.begin(), rec.end(), u.herbs);
+        std::copy(node.herbMean(), node.herbMean() + GrassNode::kHerbMeanSteps * 8, u.herbMean);
+        u.herbInfo[0] = static_cast<float>(node.herbCount());
+        u.herbInfo[1] = GrassNode::kHerbCell;
+        const GrassNode::HerbRing last = node.herbRing(GrassNode::kHerbRings - 1);
+        u.herbInfo[2] = last.outer;
+        u.herbInfo[3] = last.bandOut;
+    }
 }
 
 /// The eye's lift: its height over the ground past a standing eye's. The
@@ -249,6 +317,7 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
     }
 
     const float lift = eyeLift(node, view);
+    TileRuns runs;
 
     for (int r = 0; r < GrassNode::kRings; ++r) {
         const GrassNode::Ring ring = node.ring(r);
@@ -256,13 +325,6 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
         // that, a cell and a margin.
         float box[4];
         visibleBox(view, ring.outer, ring.cell * 2.0f + p.height * 3.0f + 1.0f, box);
-        const int i0 = static_cast<int>(std::floor(box[0] / ring.cell));
-        const int j0 = static_cast<int>(std::floor(box[1] / ring.cell));
-        const int i1 = static_cast<int>(std::floor(box[2] / ring.cell));
-        const int j1 = static_cast<int>(std::floor(box[3] / ring.cell));
-        const uint64_t w = static_cast<uint64_t>(std::max(i1 - i0 + 1, 0));
-        const uint64_t h = static_cast<uint64_t>(std::max(j1 - j0 + 1, 0));
-        if (w == 0 || h == 0 || w * h > kMaxRingInstances) continue;
 
         // The box in tiles of kTile x kTile cells, each kept only when it can
         // hold a drawn blade: it reaches the ring (its dithered bands
@@ -276,39 +338,14 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
         const float top = p.height * 4.0f;
         const float ex = view.eye.x, ez = view.eye.z;
         const float rIn = std::max(ring.inner - ring.bandIn - reach, 0.0f), rOut = ring.outer + reach;
-        std::vector<std::array<int, 4>> runs;   // first cell column, row, columns, rows
-        for (int tj = j0; tj <= j1; tj += kTile) {
-            const int cj1 = std::min(tj + kTile - 1, j1);
-            bool inRun = false;   // (cells are signed: no sentinel column)
-            int runStart = 0, runEnd = 0;
-            const auto flush = [&]() {
-                if (inRun) runs.push_back({runStart, tj, runEnd - runStart + 1, cj1 - tj + 1});
-                inRun = false;
-            };
-            for (int ti = i0; ti <= i1; ti += kTile) {
-                const int ci1 = std::min(ti + kTile - 1, i1);
-                const float x0 = static_cast<float>(ti) * ring.cell, x1 = static_cast<float>(ci1 + 1) * ring.cell;
-                const float z0 = static_cast<float>(tj) * ring.cell, z1 = static_cast<float>(cj1 + 1) * ring.cell;
-                const float nx = std::clamp(ex, x0, x1) - ex, nz = std::clamp(ez, z0, z1) - ez;
-                const float fx = std::max(std::fabs(x0 - ex), std::fabs(x1 - ex));
-                const float fz = std::max(std::fabs(z0 - ez), std::fabs(z1 - ez));
-                float lo = 0.0f, hi = 0.0f, tall = 0.0f;
-                const bool keep = nx * nx + nz * nz + lift * lift <= rOut * rOut &&
-                                  fx * fx + fz * fz + lift * lift >= rIn * rIn &&
-                                  node.fieldRange(x0 - reach, z0 - reach, x1 + reach, z1 + reach, lo, hi, tall) &&
-                                  bromath::fintersects(view.frustum, bromath::AABB3{{x0 - reach, lo, z0 - reach},
-                                                                                    {x1 + reach, hi + top * tall, z1 + reach}});
-                if (!keep) {
-                    flush();
-                    continue;
-                }
-                if (!inRun) runStart = ti;
-                inRun = true;
-                runEnd = ci1;
-            }
-            flush();
-        }
-        if (runs.empty()) continue;
+        const auto keep = [&](float x0, float z0, float x1, float z1) {
+            float lo = 0.0f, hi = 0.0f, tall = 0.0f;
+            return tileInRing(ex, ez, lift, rIn, rOut, x0, z0, x1, z1) &&
+                   node.fieldRange(x0 - reach, z0 - reach, x1 + reach, z1 + reach, lo, hi, tall) &&
+                   bromath::fintersects(view.frustum, bromath::AABB3{{x0 - reach, lo, z0 - reach},
+                                                                     {x1 + reach, hi + top * tall, z1 + reach}});
+        };
+        if (!tileRuns(box, ring.cell, keep, runs)) continue;
 
         u.cells[3] = ring.cell;
         u.ring[0] = ring.inner;
@@ -369,6 +406,80 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
             out.push_back(d);
         }
         node.setDrawnInstances(r, drawn);
+    }
+
+    // The herbs: a draw a run of tiles of the herbs' cells in each of their
+    // rings, mesh_herb.vert building each cell's plant (if any) from its
+    // card strips, mesh.frag's SCENE_HERB build cutting them. They cast no
+    // shadow (yet): they lie in the grass's and the trees'.
+    for (int r = 0; r < GrassNode::kHerbRings; ++r) node.setDrawnHerbs(r, 0);
+    if (!node.hasHerbs()) return;
+    const uint32_t msaa = frame.gpu.targets.samples() == VK_SAMPLE_COUNT_4_BIT ? mesh_flags::kForestMsaa : 0u;
+    const float herbTop = node.herbHeight() * 1.4f + 0.2f;
+    for (int r = 0; r < GrassNode::kHerbRings; ++r) {
+        const GrassNode::HerbRing ring = node.herbRing(r);
+        const GpuMesh* cards = res.mesh(node.id(), static_cast<uint32_t>(GrassNode::kRings + r),
+                                        node.geometryGeneration(), node.herbRingMesh(r));
+        if (!cards) return;
+        const float cell = GrassNode::kHerbCell;
+        // A plant reaches out about its spread and leans with the wind.
+        const float reach = cell + 0.8f + node.herbHeight() * 0.5f;
+        float box[4];
+        visibleBox(view, ring.outer, reach + 1.0f, box);
+        const float ex = view.eye.x, ez = view.eye.z;
+        const float rIn = std::max(ring.inner - ring.bandIn - reach, 0.0f), rOut = ring.outer + reach;
+        const auto keep = [&](float x0, float z0, float x1, float z1) {
+            float lo = 0.0f, hi = 0.0f;
+            return tileInRing(ex, ez, lift, rIn, rOut, x0, z0, x1, z1) &&
+                   node.herbRangeAt(x0 - reach, z0 - reach, x1 + reach, z1 + reach, lo, hi) &&
+                   bromath::fintersects(view.frustum, bromath::AABB3{{x0 - reach, lo, z0 - reach},
+                                                                     {x1 + reach, hi + herbTop, z1 + reach}});
+        };
+        if (!tileRuns(box, cell, keep, runs)) continue;
+
+        u.cells[3] = cell;
+        u.herbRing[0] = ring.inner;
+        u.herbRing[1] = ring.outer;
+        u.herbRing[2] = ring.bandIn;
+        u.herbRing[3] = ring.bandOut;
+        u.herbShape[0] = static_cast<float>(ring.cards);
+        u.herbShape[1] = static_cast<float>(GrassNode::cardVertices(ring.segments));
+        u.herbShape[2] = r == GrassNode::kHerbRings - 1 ? 1.0f : 0.0f;
+        u.blade[2] = p.minNormalY;
+        u.blade[3] = p.wind;
+        u.lod[3] = lift;
+        VkDescriptorSet set = writeSet(frame, device_, *defaults_, u, img);
+        if (set == VK_NULL_HANDLE) return;
+
+        MeshDraw draw;
+        draw.kind = MeshKind::Grass;
+        draw.nodeId = node.id();
+        draw.vertices = cards->vertices.buffer;
+        draw.indices = cards->indices.buffer;
+        draw.indexCount = cards->indexCount;
+        draw.customSet = set;
+        std::memcpy(draw.push.baseColor, node.color(), sizeof(draw.push.baseColor));
+        draw.push.baseColor[3] = 1.0f;
+        draw.push.pbrParams[0] = 0.0f;
+        draw.push.pbrParams[1] = 0.62f;
+        draw.push.pbrParams[3] = static_cast<float>(flags | mesh_flags::kHerb | msaa);
+        draw.push.extra[1] = node.subsurface();
+        draw.push.extra[3] = 1.0f + 256.0f;   // no atlas
+        draw.twoSided = true;
+        draw.castsShadow = false;
+        uint32_t drawn = 0;
+        for (const auto& run : runs) {
+            MeshDraw d = draw;
+            std::memset(d.push.model, 0, sizeof(d.push.model));
+            d.push.model[0] = static_cast<float>(run[0]);
+            d.push.model[4] = static_cast<float>(run[1]);
+            d.push.model[8] = static_cast<float>(run[2]);
+            d.push.model[15] = 1.0f;
+            d.instanceCount = static_cast<uint32_t>(run[2]) * static_cast<uint32_t>(run[3]);
+            drawn += d.instanceCount;
+            out.push_back(d);
+        }
+        node.setDrawnHerbs(r, drawn);
     }
 }
 

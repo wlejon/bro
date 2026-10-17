@@ -61,6 +61,13 @@ layout(location = 11) flat in float inLobeFlat;
 // The spray's seed (mesh_forest_leaf.vert): its own dither.
 layout(location = 10) flat in float inSpraySeed;
 #endif
+#ifdef SCENE_HERB
+// A herb plant's card (mesh_herb.vert): its role (leaf, stem, bloom),
+// species and seed, and its size (scene_herb.glsl's HerbVertex); inColor.x
+// a stem's cover of its card or a leaf's stalk share.
+layout(location = 8) flat in vec4 inHerbInfo;
+layout(location = 9) in vec4 inHerbSize;
+#endif
 
 layout(location = 0) out vec4 outColor;
 #ifdef SCENE_INDIRECT_OUTPUT
@@ -89,6 +96,10 @@ layout(location = 1) out vec4 outIndirect;
 #endif
 #ifdef SCENE_BARK
 #include "scene_bark.glsl"
+#endif
+#ifdef SCENE_HERB
+#include "scene_grass.glsl"
+#include "scene_herb_surface.glsl"
 #endif
 #ifdef SCENE_GROUND
 #include "scene_grass.glsl"
@@ -389,6 +400,17 @@ void main() {
         vec4 clip = camera.viewProj * vec4(bloom.at, 1.0);
         gl_FragDepth = REVERSED_Z ? min(clip.z / clip.w, gl_FragCoord.z) : gl_FragCoord.z;
     }
+#elif defined(SCENE_HERB)
+    // A herb's card cut to its leaf, stem or bloom (scene_herb_surface.glsl),
+    // its cover kept as that share of the samples, each card its own dither.
+    HerbSurface herb = herbSurface(inHerbInfo, inUV, inHerbSize, inColor.x, inColor.zw);
+    if (herb.cover < 1.0 / 255.0) discard;
+    {
+        int mask = forestSampleMask(1.0, herb.cover, (flags & MESH_FOREST_MSAA) != 0u,
+                                    uint(inHerbInfo.z * 16777216.0));
+        if (mask == 0) discard;
+        gl_SampleMask[0] = mask;
+    }
 #endif
     float camDist = length(worldPos);
     if (push.extra.x > 0.0 && camDist < push.extra.x) discard;
@@ -446,6 +468,13 @@ void main() {
     }
     baseColor *= inInstColor.rgb;
     if (push.pbrParams.z > 0.0 && alpha < push.pbrParams.z) discard;
+#ifdef SCENE_HERB
+    // A herb's colours are its species' (and the plant's own tone), its
+    // veins paler and yellower than the blade between.
+    baseColor = herb.albedo * inInstColor.rgb;
+    baseColor = mix(baseColor, baseColor * vec3(1.35, 1.45, 1.05) + vec3(0.01, 0.015, 0.0), herb.vein);
+    alpha = 1.0;
+#endif
 #ifdef SCENE_VEGETATION
     // A grass blade (mesh_grass.vert) marks itself with w <= -2: w = -(2 +
     // ao + 2k), k (0..15) how far its translucency has faded with distance.
@@ -560,6 +589,20 @@ void main() {
 #ifdef SCENE_FOREST_BLOOM
     N = bloom.normal;
 #endif
+#ifdef SCENE_HERB
+    {
+        // The card's face toward the eye, leaned as its surface says (a
+        // leaf's halves, a stem's round, a cup's petals), then partly toward
+        // the ground's normal (the plant lit as one low form).
+        vec3 face = normalize(inNormal);
+        if (dot(face, -inWorldPos) < 0.0) face = -face;
+        vec3 across = normalize(inTangent), along = normalize(inBitangent);
+        N = normalize(across * herb.normal.x + along * herb.normal.y + face * herb.normal.z);
+        float bulkWeight = length(inVegShade.xyz);
+        if (bulkWeight > 1e-4) N = normalize(N * (1.0 - bulkWeight) + inVegShade.xyz);
+        vegAO *= herb.ao;
+    }
+#endif
 
     float metallic = push.pbrParams.x;
     float roughness = push.pbrParams.y;
@@ -572,6 +615,9 @@ void main() {
 #ifdef SCENE_VEGETATION
     // A waxy leaf (a holly's) has a tight, bright highlight.
     if (leafCut) roughness = mix(roughness, 0.26, leafCutGloss);
+#endif
+#ifdef SCENE_HERB
+    roughness = mix(roughness, 0.3, herb.gloss);
 #endif
 #ifdef SCENE_BARK
     // A plant's wood (scene_bark.glsl): inColor where on the stem, inUV its
@@ -611,6 +657,10 @@ void main() {
 #ifdef SCENE_FOREST_BLOOM
     // Thin petals let the light through; a head's florets and a spike less.
     s.translucency = bloom.translucency;
+#endif
+#ifdef SCENE_HERB
+    if (herb.translucency >= 0.0) s.translucency = herb.translucency;
+    else s.translucency *= 1.0 - 0.5 * herb.gloss;
 #endif
     s.leafSphere = vec4(0.0);
     s.leafDensity = 0.0;

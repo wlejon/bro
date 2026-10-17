@@ -1,8 +1,8 @@
 // The grass node's forest floor and turf (scene/grass_node.h setFloor,
 // vulkan/shaders/scene_ground.glsl). Verifies:
-//   - createGrass's `floor` grows low leafy plants among (and without) the
-//     grass: with no grass anywhere, a floor of 1 still issues ring cells and
-//     draws green leaves; a floor of 0 grows nothing
+//   - createGrass's `herbs` grow low plants among (and without) the grass:
+//     with no grass anywhere, a closed floor's wood sorrel still issues herb
+//     cells and draws green leaves; a herb density of 0 grows nothing
 //   - `turf` / shadeGround shade a ground mesh as the grass's ground: the
 //     sward where the grass grows (green, textured), the litter where the
 //     floor is closed (brown, textured), and shadeGround(mesh, false) gives
@@ -46,10 +46,12 @@ if (!scn) {
     const bare = scn.captureFrame();
 
     // ---- Low plants on the floor, no grass ----
-    const grass = scn.createGrass({ ground: floor, cell: 0.5, density: 0, floor: 1 });
+    const grass = scn.createGrass({ ground: floor, cell: 0.5, density: 0, floor: 1,
+                                    herbs: { species: ['woodsorrel'], density: 1 } });
     const plants = scn.captureFrame();
     const st = grass.grassStats();
-    assert(st.instances[0] > 100, `a closed floor issues the near ring's cells with no grass (${st.instances.join('/')})`);
+    const herbCells = (st.herbInstances || []).reduce((a, b) => a + b, 0);
+    assert(herbCells > 100, `a closed floor's herbs issue cells with no grass (${(st.herbInstances || []).join('/')})`);
     // (They grow in patches: judge the pixels they cover.)
     let gb = 0, gbBare = 0, covered = 0;
     for (let i = 0; i < plants.data.length; i += 4) {
@@ -62,9 +64,9 @@ if (!scn) {
     }
     assert(covered > 200, `low plants are drawn (${covered} px)`);
     assert(gb / covered > gbBare / covered + 3, `they are green (g-b ${(gb / covered).toFixed(1)} vs ${(gbBare / covered).toFixed(1)})`);
-    grass.setGround({ ground: floor, cell: 0.5, density: 0, floor: 0 });
+    grass.setGround({ ground: floor, cell: 0.5, density: 0, floor: 0, herbs: { species: ['woodsorrel'], density: 0 } });
     const none = scn.captureFrame();
-    assert(diffCount(none, bare) < 40, `an open floor and no grass grows nothing (${diffCount(none, bare)} px)`);
+    assert(diffCount(none, bare) < 40, `no herb density and no grass grows nothing (${diffCount(none, bare)} px)`);
 
     // ---- Turf ----
     // Grass to the left, a closed canopy's floor to the right, shaded on the

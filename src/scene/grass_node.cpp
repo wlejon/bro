@@ -74,12 +74,45 @@ constexpr RingSpec kRingSpec[GrassNode::kRings] = {
 };
 constexpr float kRangeRef = 150.0f;
 
+// A herb card: a strip of `seg` segments, x across (-0.5..0.5), y along (0
+// .. 1), two vertices a row (scene_herb.glsl bends it into a leaf, a stem or
+// a bloom's strip, or folds it into a bloom's disc).
+bromesh::MeshData cardMesh(int seg) {
+    bromesh::MeshData m;
+    for (int k = 0; k <= seg; ++k) {
+        const float y = static_cast<float>(k) / static_cast<float>(seg);
+        m.positions.insert(m.positions.end(), {-0.5f, y, 0.0f, 0.5f, y, 0.0f});
+        m.normals.insert(m.normals.end(), {0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f});
+        m.uvs.insert(m.uvs.end(), {0.0f, y, 1.0f, y});
+    }
+    for (int k = 0; k < seg; ++k) {
+        const uint32_t a = static_cast<uint32_t>(k * 2);
+        m.indices.insert(m.indices.end(), {a, a + 1, a + 3, a, a + 3, a + 2});
+    }
+    return m;
+}
+
+// The herb rings: near, every card of a plant in five segments; out to the
+// plants' range, half its cards (blooms and stems first, a share of the
+// leaves widened) in two.
+struct HerbRingSpec {
+    float edge;   // the outer edge, x the herbs' range
+    int cards;
+    int segments;
+};
+constexpr HerbRingSpec kHerbRingSpec[GrassNode::kHerbRings] = {
+    {0.34f, 14, 5},
+    {1.0f, 7, 2},
+};
+
 }  // namespace
 
 GrassNode::GrassNode(const std::string& name) : MeshNode(name) {
     setMesh(bladeMesh(4));
     for (int i = 0; i < kRings; ++i)
         ringMeshes_[i] = repeatBlade(bladeMesh(kRingSpec[i].segments), kRingSpec[i].blades);
+    for (int i = 0; i < kHerbRings; ++i)
+        herbMeshes_[i] = repeatBlade(cardMesh(kHerbRingSpec[i].segments), kHerbRingSpec[i].cards);
     setTwoSided(true);
     setRoughness(0.7f);
     setMetallic(0.0f);
@@ -159,6 +192,134 @@ GrassNode::Ring GrassNode::ring(int i) const {
 
 const bromesh::MeshData& GrassNode::ringMesh(int i) const { return ringMeshes_[std::clamp(i, 0, kRings - 1)]; }
 
+GrassNode::HerbRing GrassNode::herbRing(int i) const {
+    HerbRing r;
+    i = std::clamp(i, 0, kHerbRings - 1);
+    const auto band = [](float edge) { return std::max(1.0f, edge * 0.15f); };
+    r.outer = kHerbRingSpec[i].edge * herbRange_;
+    r.inner = i == 0 ? 0.0f : kHerbRingSpec[i - 1].edge * herbRange_;
+    r.bandIn = i == 0 ? 0.0f : band(r.inner);
+    // The last ring hands over to the blades and the turf through the last
+    // quarter of the range (herbPlantsDrawn: the same band).
+    r.bandOut = i == kHerbRings - 1 ? 0.25f * herbRange_ : band(r.outer);
+    r.cards = kHerbRingSpec[i].cards;
+    r.segments = kHerbRingSpec[i].segments;
+    return r;
+}
+
+void GrassNode::setHerbs(const float* records, int count, float range) {
+    herbs_.clear();
+    herbHeight_ = 0.0f;
+    count = std::clamp(count, 0, kHerbMax);
+    if (records && count > 0) {
+        herbs_.assign(records, records + static_cast<size_t>(count) * kHerbRecordFloats);
+        for (float& v : herbs_)
+            if (!std::isfinite(v)) v = 0.0f;
+        for (int s = 0; s < count; ++s) herbHeight_ = std::max(herbHeight_, herbs_[s * kHerbRecordFloats + 1]);
+    }
+    computeHerbMean();
+    if (range > 0.0f) herbRange_ = std::clamp(range, 4.0f, 200.0f);
+    bumpChangeGeneration();
+}
+
+// scene_herb_mix.glsl's herbMixAt, averaged over every combination of the
+// species' colonies (each species inside one with its patchCover's chance)
+// rather than read from the noise at a point.
+void GrassNode::computeHerbMean() {
+    std::fill(std::begin(herbMean_), std::end(herbMean_), 0.0f);
+    const int n = herbCount();
+    if (n <= 0) return;
+    const float cellArea = kHerbCell * kHerbCell;
+    for (int step = 0; step < kHerbMeanSteps; ++step) {
+        const float canopy = static_cast<float>(step) / (kHerbMeanSteps - 1);
+        // A species' weight inside a colony, its ground per plant, its
+        // chance of being inside one.
+        float w[kHerbMax], a[kHerbMax], bs[kHerbMax], p[kHerbMax];
+        for (int i = 0; i < n; ++i) {
+            const float* r = &herbs_[static_cast<size_t>(i) * kHerbRecordFloats];
+            const float dl = (canopy - r[36]) / std::max(r[37], 0.05f);
+            float light = std::exp(-dl * dl);
+            if (light < 0.03f) light = 0.0f;
+            const float spacing = 1.6f * std::max(r[2], 0.02f);
+            const float occupy = std::min(1.0f, (kHerbCell / spacing) * (kHerbCell / spacing));
+            w[i] = r[38] > 0.0f ? r[38] * light * occupy : 0.0f;
+            a[i] = w[i] * r[42] * 3.14159265f * r[2] * r[2] / cellArea;
+            bs[i] = std::clamp(r[41], 0.0f, 1.0f);
+            p[i] = std::clamp(r[40], 0.0f, 1.0f);
+        }
+        double expo = 0.0, coverW = 0.0, bloomW = 0.0;
+        double leaf[3] = {}, bloom[3] = {}, leafW = 0.0;
+        for (uint32_t set = 0; set < (1u << n); ++set) {
+            double prob = 1.0;
+            float sum = 0.0f, area = 0.0f, leafA = 0.0f, bloomA = 0.0f;
+            float lc[3] = {}, bc[3] = {};
+            for (int i = 0; i < n; ++i) {
+                const bool in = (set >> i) & 1u;
+                prob *= in ? p[i] : 1.0f - p[i];
+                if (!in || w[i] <= 0.0f) continue;
+                const float* r = &herbs_[static_cast<size_t>(i) * kHerbRecordFloats];
+                sum += w[i];
+                area += a[i];
+                leafA += a[i] * (1.0f - bs[i]);
+                bloomA += a[i] * bs[i];
+                for (int c = 0; c < 3; ++c) {
+                    lc[c] += a[i] * (1.0f - bs[i]) * r[16 + c];
+                    bc[c] += a[i] * bs[i] * r[28 + c];
+                }
+            }
+            if (prob <= 0.0) continue;
+            if (sum <= 0.0f) { expo += prob; continue; }
+            // The cover at full density (exp of minus it, averaged: the
+            // exponent stands for the mean cover, not the mean exponent).
+            const float x = std::min(sum, 1.0f) / sum * area;
+            const double cover = 1.0 - std::exp(-static_cast<double>(x));
+            expo += prob * std::exp(-static_cast<double>(x));
+            coverW += prob * cover;
+            if (area <= 0.0f) continue;
+            const double share = bloomA / area;
+            bloomW += prob * cover * share;
+            leafW += prob * cover * (1.0 - share);
+            for (int c = 0; c < 3; ++c) {
+                if (leafA > 0.0f) leaf[c] += prob * cover * (1.0 - share) * lc[c] / leafA;
+                if (bloomA > 0.0f) bloom[c] += prob * cover * share * bc[c] / bloomA;
+            }
+        }
+        float* o = &herbMean_[step * 8];
+        o[0] = static_cast<float>(-std::log(std::max(expo, 1e-6)));
+        for (int c = 0; c < 3; ++c) {
+            o[1 + c] = leafW > 0.0 ? static_cast<float>(leaf[c] / leafW) : 0.0f;
+            o[5 + c] = bloomW > 0.0 ? static_cast<float>(bloom[c] / bloomW) : 0.0f;
+        }
+        o[4] = coverW > 0.0 ? static_cast<float>(bloomW / coverW) : 0.0f;
+    }
+}
+
+bool GrassNode::herbRangeAt(float x0, float z0, float x1, float z1, float& lo, float& hi) const {
+    if (!hasField() || !hasHerbs()) return false;
+    const float maxX = static_cast<float>(fieldCols_ - 1), maxZ = static_cast<float>(fieldRows_ - 1);
+    const float fx0 = (x0 - fieldX0_) / fieldCell_, fx1 = (x1 - fieldX0_) / fieldCell_;
+    const float fz0 = (z0 - fieldZ0_) / fieldCell_, fz1 = (z1 - fieldZ0_) / fieldCell_;
+    if (fx1 < 0.0f || fz1 < 0.0f || fx0 > maxX || fz0 > maxZ) return false;
+    const auto blockOf = [](float f, float maxF, int n) {
+        return std::clamp(static_cast<int>(std::clamp(f, 0.0f, maxF)) / kFieldBlock, 0, n - 1);
+    };
+    const int bi0 = blockOf(fx0, maxX, blockCols_), bi1 = blockOf(fx1, maxX, blockCols_);
+    const int bj0 = blockOf(fz0, maxZ, blockRows_), bj1 = blockOf(fz1, maxZ, blockRows_);
+    lo = 1e30f;
+    hi = -1e30f;
+    bool grows = false;
+    for (int bj = bj0; bj <= bj1; ++bj) {
+        for (int bi = bi0; bi <= bi1; ++bi) {
+            const float* b = &blocks_[(static_cast<size_t>(bj) * blockCols_ + bi) * kBlockFloats];
+            if (b[3] <= 0.0f) continue;
+            grows = true;
+            lo = std::min(lo, b[0]);
+            hi = std::max(hi, b[1]);
+        }
+    }
+    return grows;
+}
+
 void GrassNode::setField(const float* rgba, int cols, int rows, float x0, float z0, float cell) {
     if (!rgba || cols < 2 || rows < 2 || !(cell > 0.0f)) {
         field_.clear();
@@ -178,20 +339,28 @@ void GrassNode::setField(const float* rgba, int cols, int rows, float x0, float 
     fieldX0_ = x0;
     fieldZ0_ = z0;
     fieldCell_ = cell;
-    if (floor_.size() != static_cast<size_t>(cols) * rows) setFloor(nullptr, 0, 0);
+    if (floor_.size() != static_cast<size_t>(cols) * rows * 2) setFloor(nullptr, 0, 0);
     rebuildBlocks();
     setCustomShaderTexture(kFieldTexture, cols, rows, field_.data(), false, false, false, 4);
 }
 
-void GrassNode::setFloor(const float* floor, int cols, int rows) {
-    if (!floor || cols != fieldCols_ || rows != fieldRows_ || cols < 2 || rows < 2) {
+void GrassNode::setFloor(const float* floor, int cols, int rows, int channels) {
+    if (!floor || cols != fieldCols_ || rows != fieldRows_ || cols < 2 || rows < 2 || channels < 1 || channels > 2) {
         if (floor_.empty()) return;
         floor_.clear();
+        herbFloor_ = false;
         setCustomShaderTexture(kFloorTexture, 0, 0, nullptr);
     } else {
-        floor_.assign(floor, floor + static_cast<size_t>(cols) * rows);
-        for (float& f : floor_) f = std::isfinite(f) ? std::clamp(f, 0.0f, 1.0f) : 0.0f;
-        setCustomShaderTexture(kFloorTexture, cols, rows, floor_.data(), false, false, false, 1);
+        const size_t n = static_cast<size_t>(cols) * rows;
+        floor_.assign(n * 2, 0.0f);
+        for (size_t k = 0; k < n; ++k) {
+            for (int c = 0; c < channels; ++c) {
+                const float f = floor[k * channels + c];
+                floor_[k * 2 + c] = std::isfinite(f) ? std::clamp(f, 0.0f, 1.0f) : 0.0f;
+            }
+        }
+        herbFloor_ = channels == 2;
+        setCustomShaderTexture(kFloorTexture, cols, rows, floor_.data(), false, false, false, 2);
     }
     rebuildBlocks();
 }
@@ -201,14 +370,15 @@ void GrassNode::rebuildBlocks() {
     if (cols < 2 || rows < 2) return;
     // Block (bi, bj) covers texels bi * B .. bi * B + B inclusive, one past
     // its own, so the bilinear ground between two blocks is inside both.
-    // Something grows in it where the grass does, or low plants on a floor.
+    // Something grows in it where the grass does, or herbs on the floor (the
+    // blades stand in for them far off, so the grass rings draw there too).
     blockCols_ = (cols - 2) / kFieldBlock + 1;
     blockRows_ = (rows - 2) / kFieldBlock + 1;
-    blocks_.assign(static_cast<size_t>(blockCols_) * blockRows_ * 3, 0.0f);
-    const bool floor = !floor_.empty();
+    blocks_.assign(static_cast<size_t>(blockCols_) * blockRows_ * kBlockFloats, 0.0f);
+    const bool herbs = herbFloor_ && !floor_.empty();
     for (int bj = 0; bj < blockRows_; ++bj) {
         for (int bi = 0; bi < blockCols_; ++bi) {
-            float lo = 1e30f, hi = -1e30f, grows = 0.0f;
+            float lo = 1e30f, hi = -1e30f, grows = 0.0f, herb = 0.0f;
             for (int j = bj * kFieldBlock; j <= std::min(bj * kFieldBlock + kFieldBlock, rows - 1); ++j) {
                 for (int i = bi * kFieldBlock; i <= std::min(bi * kFieldBlock + kFieldBlock, cols - 1); ++i) {
                     const size_t k = static_cast<size_t>(j) * cols + i;
@@ -216,13 +386,15 @@ void GrassNode::rebuildBlocks() {
                     lo = std::min(lo, t[0]);
                     hi = std::max(hi, t[0]);
                     if (t[1] > 0.0f && t[3] > 0.0f) grows = std::max(grows, t[3]);
-                    if (floor && floor_[k] >= kFloorMin) grows = std::max(grows, 0.5f);
+                    if (herbs) herb = std::max(herb, floor_[k * 2 + 1]);
                 }
             }
-            float* b = &blocks_[(static_cast<size_t>(bj) * blockCols_ + bi) * 3];
+            if (herb > 0.0f) grows = std::max(grows, 0.5f);
+            float* b = &blocks_[(static_cast<size_t>(bj) * blockCols_ + bi) * kBlockFloats];
             b[0] = lo;
             b[1] = hi;
             b[2] = grows;
+            b[3] = herb;
         }
     }
 }
@@ -244,7 +416,7 @@ bool GrassNode::fieldRange(float x0, float z0, float x1, float z1, float& lo, fl
     bool grows = false;
     for (int bj = bj0; bj <= bj1; ++bj) {
         for (int bi = bi0; bi <= bi1; ++bi) {
-            const float* b = &blocks_[(static_cast<size_t>(bj) * blockCols_ + bi) * 3];
+            const float* b = &blocks_[(static_cast<size_t>(bj) * blockCols_ + bi) * kBlockFloats];
             if (b[2] <= 0.0f) continue;
             grows = true;
             lo = std::min(lo, b[0]);

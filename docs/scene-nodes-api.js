@@ -341,6 +341,37 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  */
 
 /**
+ * The grass node's herbs (createGrass / setGround `herbs`, `node.setHerbs`):
+ * low plants built where they stand, nothing stored per plant. The node
+ * keeps a table of up to 12 species (bro.flora.herbRecords) and a grid of
+ * 0.35 m cells, each holding at most one plant: which (if any) is picked
+ * per cell from each species' abundance, how well the light there suits it
+ * (the `floor` canopy against its shade preference), its colonies (noise of
+ * its own period) and the floor's herb density. Near the eye (two rings,
+ * to `range`) each plant is a few cards built in the vertex shader (its
+ * leaves or fronds, stems, blooms) and cut per pixel to its leaf outline,
+ * pinnae, petals or bells; they sway as cantilevers worked out from their
+ * build (broflora herbSway) and cast no shadows. Through the last quarter
+ * of `range` they hand over to the grass: past it some blades stand in for
+ * them (as many as the herbs cover of the ground, in their leaves' and
+ * blooms' colours, at their leaves' and flowers' heights) and the turf
+ * takes their mean colour, so a meadow keeps its flowers' speckle far off.
+ * @example
+ *   scene.createGrass({ ground, floor: cover.canopy, turf: true, herbs: {
+ *     species: ['bracken', 'woodsorrel', { preset: 'daisy', abundance: 2 }],
+ *     density: (x, z, y, canopy) => 0.8 * patchy(x, z),
+ *     range: 24,
+ *   } });
+ * @typedef {Object} GrassHerbOptions
+ * @property {Array<string|Object>|Float32Array} species - preset names,
+ *   `{preset, ...HerbSpecies fields}` specs (bro.flora.herbPreset), or a
+ *   table from bro.flora.herbRecords; more than 12 are dropped.
+ * @property {number|Function} [density=1] - how thickly herbs grow, 0..1: a
+ *   number or `(x, z, y, canopy) => value`, baked into the field with it.
+ * @property {number} [range=30] - how far the plants are drawn (m, 4..200).
+ */
+
+/**
  * Grass: a meadow of procedural blades over a ground, from
  * `scene.createGrass(opts)`. No blade carries data: four rings of cells
  * around the camera, each cell an instance of several blades. Near (to 7 m at
@@ -390,11 +421,12 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  * @property {number|Function} [tall=1] - height multiplier.
  * @property {number|Function} [floor] - the forest floor, 0 open .. 1 under
  *   a closed canopy (e.g. `bro.flora.forestCover(...).canopy`), on the same
- *   grid. Where it is over about 0.1, some of the near rings' tufts are low
- *   leafy plants instead (broad leaves in a rosette, a shade-plant green, in
- *   patches), growing there whether grass does or not; and a turf ground
- *   (`turf`) lays leaf litter, twigs, damp soil and moss there. Default: no
- *   floor (open everywhere).
+ *   grid. A turf ground (`turf`) lays leaf litter, twigs, damp soil and moss
+ *   where it closes, and the herbs (`herbs`) choose their places by the light
+ *   it leaves. Default: no floor (open everywhere).
+ * @property {GrassHerbOptions} [herbs] - low plants among (and without) the
+ *   grass: ferns, wildflowers, forbs, ground cover, from broflora's species
+ *   (see GrassHerbOptions).
  * @property {boolean|SceneNode|Array<SceneNode>} [turf] - mesh nodes to shade
  *   as this grass's ground (`true`: the `ground` node), see `shadeGround`.
  * @property {number} [height=0.4] - mean blade height (m); clumps run
@@ -1348,11 +1380,21 @@ class SceneNode {
 
   /**
    * Grass: re-bake the field (`ground`, `area`, `cell`, `density`, `dry`,
-   * `tall`, `floor`) and replace it whole; `turf` as in createGrass.
+   * `tall`, `floor`, `herbs`) and replace it whole; `turf` as in createGrass.
    * @param {GrassNodeOptions} opts
    * @returns {SceneNode}
    */
   setGround(opts) {}
+
+  /**
+   * Grass: replace the herbs' species (and with `range`, how far they are
+   * drawn) without re-baking the field; their density stays as baked.
+   * `species: []` draws none.
+   * @example grass.setHerbs({ species: ['poppy', 'daisy'] });
+   * @param {GrassHerbOptions} herbs
+   * @returns {SceneNode}
+   */
+  setHerbs(herbs) {}
 
   /**
    * Grass: shade mesh node `mesh` as this grass's ground (turf), or with
@@ -1417,10 +1459,12 @@ class SceneNode {
 
   /**
    * Grass: what the last frame drew: `{instances: [r0, r1, r2, r3], movers,
-   * fieldCols, fieldRows}`, near ring first. `instances` counts the cells
-   * issued in each ring (the tiles in view, in the ring, where grass grows);
-   * each cell draws several blades, of which the culling keeps fewer.
-   * @returns {{instances: Array<number>, movers: number, fieldCols: number, fieldRows: number}|undefined}
+   * fieldCols, fieldRows, herbInstances: [h0, h1]}`, near ring first.
+   * `instances` counts the cells issued in each ring (the tiles in view, in
+   * the ring, where grass grows); each cell draws several blades, of which
+   * the culling keeps fewer. `herbInstances` the herb cells issued in each
+   * herb ring (most hold no plant).
+   * @returns {{instances: Array<number>, movers: number, fieldCols: number, fieldRows: number, herbInstances: Array<number>}|undefined}
    */
   grassStats() {}
 

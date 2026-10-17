@@ -144,17 +144,42 @@
         }
         __bro_native.scene.SceneNode_setGrassField(node, data, cols, rows, x0, z0, cell);
         fields.set(node, { data, cols, rows, x0, z0, cell });
-        // The forest floor, on the same grid: how closed the canopy is.
-        if (opts.floor !== undefined && opts.floor !== null) {
-            const floorAt = valueAt(opts.floor, 0);
-            const fl = new Float32Array(cols * rows);
+        // The forest floor, on the same grid: how closed the canopy is, and
+        // with herbs how thickly they grow (a function of x, z, y and that
+        // canopy, or a number).
+        const herbs = opts.herbs;
+        const hasFloor = opts.floor !== undefined && opts.floor !== null;
+        if (hasFloor || herbs) {
+            const floorAt = valueAt(hasFloor ? opts.floor : 0, 0);
+            const herbAt = herbs ? valueAt(herbs.density, 1) : null;
+            const ch = herbs ? 2 : 1;
+            const fl = new Float32Array(cols * rows * ch);
             for (let j = 0; j < rows; j++)
                 for (let i = 0; i < cols; i++) {
                     const k = j * cols + i;
-                    fl[k] = Math.min(Math.max(+floorAt(x0 + i * cell, z0 + j * cell, data[k * 4]), 0), 1) || 0;
+                    const x = x0 + i * cell, z = z0 + j * cell, y = data[k * 4];
+                    const c = Math.min(Math.max(+floorAt(x, z, y), 0), 1) || 0;
+                    fl[k * ch] = c;
+                    if (herbAt) fl[k * ch + 1] = Math.min(Math.max(+herbAt(x, z, y, c), 0), 1) || 0;
                 }
             __bro_native.scene.SceneNode_setGrassFloor(node, fl);
         }
+        if (herbs) setHerbs(node, herbs);
+    }
+
+    // The herb species: broflora's records (a Float32Array of
+    // bro.flora.herbRecords), or preset names / species objects turned into
+    // them by bro.flora when it is there.
+    function herbRecords(species) {
+        if (species instanceof Float32Array) return species;
+        const list = Array.isArray(species) ? species : species ? [species] : [];
+        const flora = globalThis.bro && globalThis.bro.flora;
+        if (list.length && flora && typeof flora.herbRecords === 'function') return flora.herbRecords(list);
+        return new Float32Array(0);
+    }
+    function setHerbs(node, herbs) {
+        const rec = herbRecords(herbs.species);
+        __bro_native.scene.SceneNode_setGrassHerbs(node, rec, typeof herbs.range === 'number' ? herbs.range : 0);
     }
 
     // The meshes shaded as the grass's ground (turf: true is the ground
@@ -206,6 +231,11 @@
         if (isGrass(this) && opts) applyOpts(this, opts);
         return this;
     });
+    // Swap the herb species (and their range) without rebaking the floor.
+    fn(P, 'setHerbs', function setHerbsMember(herbs) {
+        if (isGrass(this) && herbs) setHerbs(this, herbs);
+        return this;
+    });
     fn(P, 'grassParams', function grassParams() {
         const a = __bro_native.scene.SceneNode_grassParams(this);
         if (a.length !== PARAM_COUNT) return undefined;
@@ -234,9 +264,14 @@
     });
     fn(P, 'grassStats', function grassStats() {
         const s = __bro_native.scene.SceneNode_grassStats(this);
-        if (s.length < 6) return undefined;
-        const n = s.length - 3;   // one count a ring, then movers and the field's size
-        return { instances: Array.from(s.slice(0, n)), movers: s[n], fieldCols: s[n + 1], fieldRows: s[n + 2] };
+        if (s.length < 9) return undefined;
+        // One count a blade ring, then movers and the field's size, then one
+        // count a herb ring.
+        const n = s.length - 5;
+        return {
+            instances: Array.from(s.slice(0, n)), movers: s[n], fieldCols: s[n + 1], fieldRows: s[n + 2],
+            herbInstances: Array.from(s.slice(n + 3)),
+        };
     });
     // The ground height the grass stands on at (x, z): the field, bilinear.
     fn(P, 'grassHeightAt', function grassHeightAt(x, z) {

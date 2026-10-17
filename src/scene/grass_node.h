@@ -17,6 +17,9 @@
 //     (blades spring back in a fraction of a second, flattened grass rises
 //     over tens of seconds) with no per-frame pass over the map.
 //
+// With a table of herb species and a floor giving their density, it also
+// draws the low plants among the grass (setHerbs, scene_herb.glsl).
+//
 // Drawn as four rings around the camera, each one instanced draw over only
 // the cells the view can see (vulkan/scene_mesh_drawer_grass.cpp). An
 // instance is a cell's several blades (its ring mesh is that many copies of
@@ -87,13 +90,62 @@ public:
     /// (conservative). False when nothing grows there (off the field, or
     /// density or height 0 throughout): the drawer skips the cells.
     bool fieldRange(float x0, float z0, float x1, float z1, float& lo, float& hi, float& tall) const;
-    /// The forest floor on the field's grid (cols x rows floats, 0 open ..
-    /// 1 under a closed canopy): litter on the turf (scene_ground.glsl) and
-    /// low leafy plants among the blades, which grow there even where the
-    /// grass does not. Null clears it. A floor of another size than the
-    /// field is ignored.
-    void setFloor(const float* floor, int cols, int rows);
+    /// The floor on the field's grid, `channels` floats a texel (1 or 2):
+    /// how closed the canopy overhead is (0 open .. 1 closed: litter on the
+    /// turf, scene_ground.glsl, and the light the herbs choose their places
+    /// by) and, with 2, how thickly herbs grow there (0 none .. 1 as their
+    /// abundance has it; they grow there whether the grass does or not).
+    /// Null clears it. A floor of another size than the field is ignored.
+    void setFloor(const float* floor, int cols, int rows, int channels = 1);
     bool hasFloor() const { return !floor_.empty(); }
+
+    // --- Herbs ---
+    // The low plants among the grass (ferns, wildflowers, forbs, ground
+    // cover), built where they stand from a table of species (broflora's
+    // herbRecord, kHerbRecordFloats floats each): scene_herb_mix.glsl picks
+    // one plant a cell of their own grid (the floor's canopy against each
+    // species' shade, its colonies, the floor's herb density), scene_herb.glsl
+    // builds it near the eye in two rings, and past `range` the grass's
+    // blades and the turf take its colours.
+    static constexpr int kHerbMax = 12;
+    static constexpr int kHerbRecordFloats = 48;
+    /// `count` species' records end to end (more than kHerbMax are dropped);
+    /// the plants drawn to `range` m (0 keeps the current), handing over to
+    /// the blades and the turf through the last 25 % of it.
+    void setHerbs(const float* records, int count, float range = 0.0f);
+    int herbCount() const { return static_cast<int>(herbs_.size() / kHerbRecordFloats); }
+    const std::vector<float>& herbRecords() const { return herbs_; }
+    /// Herbs are drawn: species, and a floor with their density.
+    bool hasHerbs() const { return herbCount() > 0 && herbFloor_; }
+    /// The tallest species' height (m).
+    float herbHeight() const { return herbHeight_; }
+    /// What the turf takes from the herbs far off: their look averaged over
+    /// the species' colonies (each in or out of one, by its patchCover), at
+    /// a canopy of 0, 1/4 .. 1. Eight floats a step: the cover exponent at
+    /// full density (cover = 1 - exp(-density x it)), the leaves' mean rgb,
+    /// the blooms' share of that cover, the blooms' mean rgb.
+    static constexpr int kHerbMeanSteps = 5;
+    const float* herbMean() const { return herbMean_; }
+    /// The herbs' grid: one plant at most a cell.
+    static constexpr float kHerbCell = 0.35f;
+    static constexpr int kHerbRings = 2;
+    struct HerbRing {
+        float inner = 0.0f, outer = 10.0f, bandIn = 0.0f, bandOut = 1.5f;
+        int cards = 14;      // cards an instance (a plant's blooms, stems, leaves)
+        int segments = 5;    // a card's segments
+    };
+    HerbRing herbRing(int i) const;
+    /// Where the plants end, past which the blades and turf stand in, and
+    /// the band they hand over through.
+    float herbRange() const { return herbRange_; }
+    /// Ring `i`'s mesh: `herbRing(i).cards` strips end to end.
+    const bromesh::MeshData& herbRingMesh(int i) const { return herbMeshes_[i < 0 ? 0 : i >= kHerbRings ? kHerbRings - 1 : i]; }
+    static int cardVertices(int segments) { return (segments + 1) * 2; }
+    /// The ground's height range over a world rect where herbs grow (false:
+    /// none there), from the field's blocks.
+    bool herbRangeAt(float x0, float z0, float x1, float z1, float& lo, float& hi) const;
+    void setDrawnHerbs(int ring, uint32_t n) { if (ring >= 0 && ring < kHerbRings) herbDrawn_[ring] = n; }
+    uint32_t drawnHerbs(int ring) const { return ring >= 0 && ring < kHerbRings ? herbDrawn_[ring] : 0; }
 
 
     // --- Movers ---
@@ -122,8 +174,6 @@ public:
     static constexpr const char* kFieldTexture = "u_grassField";
     static constexpr const char* kPushTexture = "u_grassPush";
     static constexpr const char* kFloorTexture = "u_grassFloor";
-    /// The floor under which no low plants grow.
-    static constexpr float kFloorMin = 0.08f;
 
     // --- Rings ---
     static constexpr int kRings = 4;
@@ -178,11 +228,21 @@ private:
     Params params_;
     bromesh::MeshData ringMeshes_[kRings];
     std::vector<float> field_;
-    std::vector<float> floor_;
+    std::vector<float> floor_;     // 2 a texel: canopy, herb density
+    bool herbFloor_ = false;       // the floor was given a herb density
+    std::vector<float> herbs_;
+    float herbHeight_ = 0.0f;
+    float herbMean_[kHerbMeanSteps * 8] = {};
+    void computeHerbMean();
+    float herbRange_ = 30.0f;
+    bromesh::MeshData herbMeshes_[kHerbRings];
+    uint32_t herbDrawn_[kHerbRings] = {};
     int fieldCols_ = 0, fieldRows_ = 0;
-    // Blocks of kFieldBlock x kFieldBlock texels: min height, max height, and
-    // the largest height multiplier where anything grows (0: nothing does).
+    // Blocks of kFieldBlock x kFieldBlock texels: min height, max height,
+    // the largest height multiplier where anything grows (0: nothing does)
+    // and the largest herb density.
     static constexpr int kFieldBlock = 8;
+    static constexpr int kBlockFloats = 4;
     // Field density under which nothing grows (setField).
     static constexpr float kDensityFloor = 0.06f;
     std::vector<float> blocks_;

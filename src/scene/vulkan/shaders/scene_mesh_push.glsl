@@ -41,6 +41,8 @@ const uint MESH_FOREST_CLUSTER      = 65536u;
 // A broad forest leaf near (mesh_forest_leaf.vert): outUV.x is across its
 // card from its own position, and mesh.frag cuts its outline per pixel.
 const uint MESH_FOREST_LEAF_CUT     = 1048576u;
+// A grass node's herb plants (mesh_herb.vert, mesh.frag's SCENE_HERB build).
+const uint MESH_HERB                = 2097152u;
 // Bits 10-11: the vertex colour mode — 0 none, 1 replaces the albedo, 2 tints it.
 const uint MESH_VERTEX_COLOR_SHIFT  = 10u;
 

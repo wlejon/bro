@@ -790,15 +790,21 @@ void bro_scene_SceneNode_setGrassMover(void* self, void* target, double radius, 
 void bro_scene_SceneNode_grassPush(void* self, double x, double z, double radius, double vx, double vz,
                                    double strength, double trample);
 
-// grass.stats: [ring 0 instances, ring 1, ring 2, movers, field cols, field rows]
+// grass.stats: [ring 0 instances, ring 1, ring 2, ring 3, movers, field cols, field rows,
+//               herb ring 0 instances, herb ring 1]
 //   registered at __bro_native.scene.SceneNode_grassStats
 //   result: f64[] in *out; out->release == NULL, the runtime copies
 void bro_scene_SceneNode_grassStats(void* self, bronze_native_buffer* out);
 
-// grass floor: one float a field texel (0 open .. 1 a closed canopy); fewer than
-// the field's texels clears it
+// grass floor: one float a field texel (0 open .. 1 a closed canopy), or two
+// (that, and the herbs' density 0..1); fewer than the field's texels clears it
 //   registered at __bro_native.scene.SceneNode_setGrassFloor
 void bro_scene_SceneNode_setGrassFloor(void* self, const float* data, uint32_t data_len);
+
+// grass herbs: broflora herbRecords (48 floats a species, at most 12), and
+// the range the plants are drawn to (m; 0 keeps it)
+//   registered at __bro_native.scene.SceneNode_setGrassHerbs
+void bro_scene_SceneNode_setGrassHerbs(void* self, const float* data, uint32_t data_len, double range);
 
 // mesh.turf: shade a mesh node as grass node `grass`'s ground (on 0: as itself)
 //   registered at __bro_native.scene.SceneNode_setTurfGrass

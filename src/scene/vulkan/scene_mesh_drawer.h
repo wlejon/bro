@@ -73,6 +73,7 @@ constexpr uint32_t kGround = 131072;        // turf: a static mesh shaded as its
 constexpr uint32_t kForestSpray = 262144;   // a needle or scale-leaf forest's leaves: mesh.frag's SCENE_FOREST_SPRAY build
 constexpr uint32_t kForestBloom = 524288;   // a forest's blooms (a ForestSprite draw): mesh_forest_bloom.vert, SCENE_FOREST_BLOOM
 constexpr uint32_t kForestLeafCut = 1048576;   // a broad forest leaf's outline cut per pixel (mesh.frag)
+constexpr uint32_t kHerb = 2097152;            // a grass node's herb plants (a Grass draw): mesh_herb.vert, SCENE_HERB
 /// The vertex colour mode (0 none, 1 replaces the albedo, 2 tints it) in bits 10-11.
 constexpr uint32_t vertexColor(int mode) { return static_cast<uint32_t>(mode & 3) << 10; }
 }
@@ -272,6 +273,9 @@ private:
     VkShaderModule vsBloom_ = VK_NULL_HANDLE;          // forest blooms: mesh_forest_bloom.vert
     VkShaderModule fsBloom_ = VK_NULL_HANDLE;          // and mesh.frag's SCENE_FOREST_BLOOM
     VkShaderModule fsBloomIndirect_ = VK_NULL_HANDLE;
+    VkShaderModule vsHerb_ = VK_NULL_HANDLE;           // a grass node's herbs: mesh_herb.vert
+    VkShaderModule fsHerb_ = VK_NULL_HANDLE;           // and mesh.frag's SCENE_HERB
+    VkShaderModule fsHerbIndirect_ = VK_NULL_HANDLE;
     VkShaderModule fsBark_ = VK_NULL_HANDLE;          // Tube, ForestTube: mesh.frag's SCENE_BARK build
     VkShaderModule fsBarkIndirect_ = VK_NULL_HANDLE;
     VkShaderModule fsGround_ = VK_NULL_HANDLE;         // turf: mesh.frag's SCENE_GROUND build

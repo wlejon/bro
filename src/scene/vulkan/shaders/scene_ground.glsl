@@ -126,16 +126,17 @@ void groundSurface(vec3 rel, vec4 vdata, inout vec3 color, inout float roughness
 
     // The ground's data: the field where it reaches (faded out over its last
     // few metres), the mesh's own beyond.
-    vec3 data = clamp(vdata.rgb, 0.0, 1.0);
+    vec4 data = clamp(vdata, 0.0, 1.0);
     if (grassInField(xz)) {
         vec2 q = (xz - grass.field.xy) / grass.field.z;
         vec2 toEdge = min(q, grass.fieldSize.xy - 1.0 - q) * grass.field.z;
         float inside = smoothstep(0.0, 12.0, min(toEdge.x, toEdge.y));
         vec4 f = grassFieldAt(xz);
-        vec3 fd = vec3(f.g, f.b, grassFloorAt(xz));
+        vec2 fl = grassFloorHerbsAt(xz);
+        vec4 fd = vec4(f.g, f.b, fl.x, grass.pushRate.z > 0.5 ? fl.y : 0.0);
         data = mix(data, fd, inside);
     }
-    float density = data.r, dry = data.g, under = data.b;
+    float density = data.r, dry = data.g, under = data.b, herbs = data.a;
 
     // The sward: the blades' mean colour (scene_grass.glsl's), its clumps
     // and its large patches of taller, lusher grass.
@@ -202,4 +203,20 @@ void groundSurface(vec3 rel, vec4 vdata, inout vec3 color, inout float roughness
     color = mix(floorC, turf, cover);
     ao *= mix(litterAo, 1.0, cover);
     roughness = 1.0;
+
+    // The herbs past their plants (scene_herb_mix.glsl): their leaves' and
+    // blooms' mean over the share of the ground they cover, seen as the
+    // blades' tops are, so the turf carries a meadow's flowers and a forest
+    // floor's ferns to the horizon.
+    // (Their mean over the colonies, from the node's table by the canopy:
+    // weighing every species here per pixel cost the turf's whole pass a
+    // tenth of a millisecond, even where no herbs grow.)
+    if (grass.herbInfo.x > 0.5 && herbs > 0.0) {
+        float stand = 1.0 - herbPlantsDrawn(d);
+        if (stand > 0.0) {
+            HerbMix hm = herbMixMean(under, herbs);
+            vec3 hc = mix(hm.leaf, hm.bloom, hm.bloomShare) * (0.8 + 0.4 * tuft);
+            color = mix(color, hc, hm.cover * stand * mix(0.35, 1.0, topSeen));
+        }
+    }
 }

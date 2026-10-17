@@ -908,6 +908,53 @@ bro.flora.plantForest = function(forest, opts) {};
 bro.flora.speciesPresets = function() {};
 
 /**
+ * Herbs (broflora/herbs.h): ferns, wildflowers, forbs and ground cover,
+ * nothing grown — a species table bro.scene's grass node builds every plant
+ * from where it stands (scene.createGrass({herbs}), scene-nodes-api.js
+ * GrassHerbOptions). The presets:
+ *   - ferns: bracken (tall fronds, deltoid, deeply lobed pinnae), ladyfern
+ *     (a shuttlecock of lanceolate fronds; shade);
+ *   - wildflowers: daisy (rays over a low rosette), poppy (red cups, lobed
+ *     leaves), foxglove (a tall raceme of pink bells; part shade), bluebell
+ *     (strap leaves, a nodding raceme of blue bells; shade);
+ *   - forbs and ground cover: yarrow (white umbels, feathery leaves), nettle
+ *     (leafy stems, toothed leaves in pairs), plantain (ribbed rosette, brown
+ *     spikes), clover (a carpet of trifoliate leaves, white heads), woodsorrel
+ *     (a carpet of notched leaflets, small white cups; deep shade).
+ * @returns {Array<string>}
+ */
+bro.flora.herbPresets = function() {};
+
+/**
+ * A herb species as a plain object: a preset's name, or `{preset, ...fields}`
+ * overriding any HerbSpecies field (herbs.h: habit 'rosette' | 'leafy' |
+ * 'carpet'; height, spread, leaves, stems; leafShape 'frond' | 'simple' |
+ * 'strap' | 'trifoliate' | 'lobed' | 'ribbed', leafLength, leafWidth,
+ * leafTip, teeth, toothDepth, pinnae, lobes, stalk, rise, arch, leafColor,
+ * gloss; stemColor, stemDiameter, ribDiameter; bloomForm 'none' | 'ray' |
+ * 'cup' | 'head' | 'spike' | 'umbel' | 'bell', bloomSize, bloomCount,
+ * petals, bloomColor, centreColor, nod; where it grows: shade, shadeRange,
+ * abundance, patch, patchCover). Comes back with its sway worked out from
+ * its build (`stemSway`, `leafSway`: {freq, sway, length}) and what it shows
+ * from above (`meanColor`, `bloomShare`, `cover`). Null for an unknown name.
+ * @example
+ *   const tall = bro.flora.herbPreset({ preset: 'foxglove', height: 1.6, bloomColor: [0.8, 0.8, 0.75] });
+ * @param {string|Object} spec
+ * @returns {Object|null}
+ */
+bro.flora.herbPreset = function(spec) {};
+
+/**
+ * The table the grass node reads (48 floats a species), from names or
+ * specs as herbPreset takes them (unknown ones are skipped). createGrass's
+ * `herbs.species` takes the names and specs directly; this is for building
+ * the table once and sharing it.
+ * @param {Array<string|Object>} list
+ * @returns {Float32Array}
+ */
+bro.flora.herbRecords = function(list) {};
+
+/**
  * Where ground cover grows under a forest, for scene.createGrass's
  * `density`: a function (x, z) => 0..1, clear at each trunk, thinner the
  * more crowns overlap overhead, nothing where they close, full in the open.

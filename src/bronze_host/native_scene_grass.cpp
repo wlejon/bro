@@ -57,7 +57,14 @@ void bro_scene_SceneNode_setGrassFloor(void* self, const float* data, uint32_t d
     if (!gr) return;
     const uint64_t need = static_cast<uint64_t>(gr->fieldCols()) * static_cast<uint64_t>(gr->fieldRows());
     if (!data || need == 0 || static_cast<uint64_t>(data_len) < need) gr->setFloor(nullptr, 0, 0);
-    else gr->setFloor(data, gr->fieldCols(), gr->fieldRows());
+    else gr->setFloor(data, gr->fieldCols(), gr->fieldRows(), static_cast<uint64_t>(data_len) >= need * 2 ? 2 : 1);
+}
+
+void bro_scene_SceneNode_setGrassHerbs(void* self, const float* data, uint32_t data_len, double range) {
+    auto* gr = grassOf(self);
+    if (!gr) return;
+    const int count = static_cast<int>(data_len / scene::GrassNode::kHerbRecordFloats);
+    gr->setHerbs(data, count, std::isfinite(range) ? static_cast<float>(range) : 0.0f);
 }
 
 void bro_scene_SceneNode_setTurfGrass(void* self, void* grass, int32_t on) {
@@ -101,6 +108,7 @@ void bro_scene_SceneNode_grassStats(void* self, bronze_native_buffer* out) {
     v.push_back(static_cast<double>(gr->moverCount()));
     v.push_back(gr->fieldCols());
     v.push_back(gr->fieldRows());
+    for (int i = 0; i < scene::GrassNode::kHerbRings; ++i) v.push_back(gr->drawnHerbs(i));
     transferBuffer(std::move(v), out);
 }
 

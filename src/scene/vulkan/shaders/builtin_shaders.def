@@ -86,6 +86,12 @@ BRO_SCENE_SHADER(MeshForestSprayIndirectFrag,  "mesh_forest_spray_indirect.frag"
 BRO_SCENE_SHADER(MeshForestBloomVert,          "mesh_forest_bloom.vert",           "mesh_forest_bloom.vert", "vert", "")
 BRO_SCENE_SHADER(MeshForestBloomFrag,          "mesh_forest_bloom.frag",           "mesh.frag", "frag", "SCENE_VEGETATION SCENE_FOREST_BLOOM")
 BRO_SCENE_SHADER(MeshForestBloomIndirectFrag,  "mesh_forest_bloom_indirect.frag",  "mesh.frag", "frag", "SCENE_VEGETATION SCENE_FOREST_BLOOM SCENE_INDIRECT_OUTPUT")
+// Herb plants (scene_herb.glsl): a grass node's ferns, wildflowers and forbs,
+// a card strip a leaf, stem or bloom, cut by mesh.frag's SCENE_HERB build
+// (scene_herb_surface.glsl). A Grass draw flagged mesh_flags::kHerb.
+BRO_SCENE_SHADER(MeshHerbVert,                 "mesh_herb.vert",                   "mesh_herb.vert", "vert", "")
+BRO_SCENE_SHADER(MeshHerbFrag,                 "mesh_herb.frag",                   "mesh.frag", "frag", "SCENE_VEGETATION SCENE_HERB")
+BRO_SCENE_SHADER(MeshHerbIndirectFrag,         "mesh_herb_indirect.frag",          "mesh.frag", "frag", "SCENE_VEGETATION SCENE_HERB SCENE_INDIRECT_OUTPUT")
 // A plant's wood (Tube and ForestTube): mesh.frag built with SCENE_BARK
 // (scene_bark.glsl), ridges, furrows, moss and lichen from the tube's records.
 BRO_SCENE_SHADER(MeshBarkFrag,                 "mesh_bark.frag",                   "mesh.frag", "frag", "SCENE_VEGETATION SCENE_BARK")
