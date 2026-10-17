@@ -90,6 +90,16 @@ if(CMAKE_GENERATOR STREQUAL "Ninja")
     set(CMAKE_JOB_POOL_LINK link_job_pool)
 endif()
 
+# Visual Studio: MSBuild builds one project at a time unless it is given -m,
+# which `cmake --build` passes only with --parallel; the ~210 projects' up-to-
+# date checks alone then take ~27 s, and independent links queue behind each
+# other. MSBuild reads a Directory.Build.rsp beside the project it builds, so
+# every build in this tree is parallel (a no-op build 27 s to 8 s, a one-.glsl
+# touch 64 s to 36 s).
+if(CMAKE_GENERATOR MATCHES "^Visual Studio")
+    file(CONFIGURE OUTPUT "${CMAKE_BINARY_DIR}/Directory.Build.rsp" CONTENT "-m\n")
+endif()
+
 if(EXISTS "${CMAKE_BINARY_DIR}/compile_commands.json")
     file(COPY "${CMAKE_BINARY_DIR}/compile_commands.json" DESTINATION "${CMAKE_SOURCE_DIR}")
 endif()
