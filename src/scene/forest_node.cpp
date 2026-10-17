@@ -11,7 +11,7 @@ namespace {
 
 constexpr size_t kSpecimenFloats = 16;   // emitForest's binding: see setSpecimens
 constexpr size_t kHeaderFloats = 16;
-constexpr size_t kSpecimenRecords = 4;   // scene_forest.glsl
+constexpr size_t kSpecimenRecords = 6;   // scene_forest.glsl's FOREST_SPECIMEN_RECORDS
 
 float smooth(float a, float b, float x) {
     if (a == b) return x < a ? 0.0f : 1.0f;
@@ -116,6 +116,7 @@ bool ForestNode::setSpecimens(SpecimenArrays&& a) {
     }
 
     specimens_ = std::move(specs);
+    if (looks_.size() != specimens_.size() * 8) looks_.clear();
     keepRadius_ = a.keepRadius;
     data_ = std::move(a);
     // Rows naming a specimen that no longer exists go.
@@ -389,10 +390,36 @@ uint64_t ForestNode::dataGeneration() const {
     return dataGeneration_;
 }
 
+void ForestNode::setLook(const Look& l) {
+    Look n = l;
+    n.leafForm = std::clamp(n.leafForm, 0, kLeafForms - 1);
+    n.flutter = std::clamp(std::isfinite(n.flutter) ? n.flutter : 1.0f, 0.0f, 4.0f);
+    n.limbBob = std::clamp(std::isfinite(n.limbBob) ? n.limbBob : 0.6f, 0.0f, 3.9f);
+    n.twigBob = std::clamp(std::isfinite(n.twigBob) ? n.twigBob : 0.8f, 0.0f, 3.9f);
+    if (n.leafForm == look_.leafForm && n.flutter == look_.flutter && n.limbBob == look_.limbBob &&
+        n.twigBob == look_.twigBob)
+        return;
+    look_ = n;
+    gpuDirty_ = true;
+    dataGeneration_ = nextResourceGeneration();
+}
+
+bool ForestNode::setSpecimenLooks(std::vector<float> looks) {
+    if (!looks.empty() && looks.size() != specimens_.size() * 8) return false;
+    looks_ = std::move(looks);
+    gpuDirty_ = true;
+    dataGeneration_ = nextResourceGeneration();
+    return true;
+}
+
 void ForestNode::refreshGpu() const {
-    if (gpuMeshGeneration_ != geometryGeneration() || gpuFlutter_ != lod_.flutterFade) {
+    const float* c = color();
+    const float colors[6] = {c[0], c[1], c[2], barkColor_[0], barkColor_[1], barkColor_[2]};
+    if (gpuMeshGeneration_ != geometryGeneration() || gpuFlutter_ != lod_.flutterFade ||
+        (!looks_.empty() && !std::equal(std::begin(colors), std::end(colors), gpuColors_))) {
         gpuMeshGeneration_ = geometryGeneration();
         gpuFlutter_ = lod_.flutterFade;
+        std::copy(std::begin(colors), std::end(colors), gpuColors_);
         gpuDirty_ = true;
         dataGeneration_ = nextResourceGeneration();
     }
@@ -429,7 +456,15 @@ const std::vector<float>& ForestNode::gpuData() const {
     h[10] = bitsOf(clumpBase);
     h[11] = bitsOf(leafBase);
     h[12] = bitsOf(instBase);
-    h[13] = leafAspect();
+    // A spray's leaves cover kSprayFill of its card: the far tiers take them
+    // as leaves of that area (an ellipse a card's length long; a broad leaf's
+    // ellipse is its card's outline already).
+    const float fill = sprayFill(look_.leafForm);
+    h[13] = look_.leafForm == 0 ? leafAspect() : leafAspect() * fill * (4.0f / 3.14159265f);
+    h[14] = look_.flutter;
+    // Leaf form (bits 0-3), limb and twig bob in 64ths (8 bits each).
+    const auto q = [](float v) { return static_cast<uint32_t>(std::clamp(std::lround(v * 64.0f), 0L, 255L)); };
+    h[15] = bitsOf(static_cast<uint32_t>(look_.leafForm) | (q(look_.limbBob) << 8) | (q(look_.twigBob) << 16));
 
     float* r = gpu_.data() + kHeaderFloats;
     for (size_t k = 0; k < nSpec; ++k) {
@@ -440,6 +475,19 @@ const std::vector<float>& ForestNode::gpuData() const {
         d[7] = s.meanClumpWeight;
         d[8] = s.crown.x; d[9] = s.crown.y; d[10] = s.crown.z; d[11] = s.crownRadius;
         d[12] = s.crownRadiusUp; d[13] = s.meanClumpRadius; d[14] = s.height;
+        // Its leaves' and bark's tint: its colour over the node's (1 where it
+        // has none, or the node is black).
+        for (int part = 0; part < 2; ++part) {
+            float* t = d + 16 + part * 4;
+            t[0] = t[1] = t[2] = 1.0f;
+            if (looks_.size() != nSpec * 8) continue;
+            const float* look = &looks_[k * 8 + part * 4];
+            if (look[0] + look[1] + look[2] <= 0.0f) continue;
+            for (int i = 0; i < 3; ++i) {
+                const float base = gpuColors_[part * 3 + i];
+                t[i] = base > 1e-4f ? std::clamp(look[i] / base, 0.05f, 8.0f) : 1.0f;
+            }
+        }
     }
     for (size_t g = 0; g < nSeg; ++g) {
         float* d = r + (segBase + g * 7) * 4;

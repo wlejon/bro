@@ -145,6 +145,37 @@ public:
     void setForceTier(int t) { forceTier_ = t < -1 || t > 2 ? -1 : t; }
     int forceTier() const { return forceTier_; }
 
+    /// What the node's leaves are and how its plants move (scene_forest.glsl's
+    /// header[3].zw):
+    ///   leafForm  0 broad leaves (the leaf mesh drawn as it is), 1 needle
+    ///             sprays, 2 scale-leaf sprays: the leaf mesh is the spray's
+    ///             card and mesh.frag cuts the needles or scale-leaf
+    ///             branchlets out of it (forestSprayCover), the far tiers
+    ///             taking its leaves as covering kSprayFill of the card
+    ///   flutter   the leaves' own motion, times (needles barely flutter)
+    ///   limbBob   how much a limb rises and falls as it rings (0.6 a
+    ///             broadleaf's; a conifer's long boughs bounce, ~1.6)
+    ///   twigBob   the same for its twigs (0.8; a shrub's springy sprays more)
+    /// Each specimen's leaves and bark take its own colour (setSpecimenLooks)
+    /// against the node's: a tint, the colour over the node's mean.
+    struct Look {
+        int leafForm = 0;
+        float flutter = 1.0f;
+        float limbBob = 0.6f;
+        float twigBob = 0.8f;
+    };
+    static constexpr int kLeafForms = 3;
+    /// The share of a spray's card its needles or scales cover (mesh.frag's
+    /// forestSprayCover averages to it), by leaf form.
+    static float sprayFill(int leafForm) { return leafForm == 1 ? 0.45f : leafForm == 2 ? 0.47f : 1.0f; }
+    void setLook(const Look& l);
+    const Look& look() const { return look_; }
+    /// Per specimen, 8 floats (emitForest's `specimenLooks`): leaf colour,
+    /// leaf form, bark colour, 0; a colour of 0, 0, 0 takes the node's.
+    /// Empty: every specimen the node's colours. False, changing nothing, when
+    /// the count does not match the specimens.
+    bool setSpecimenLooks(std::vector<float> looks);
+
     /// Bark material (the leaves take the node's).
     void setBarkColor(float r, float g, float b) { barkColor_[0] = r; barkColor_[1] = g; barkColor_[2] = b; }
     const float* barkColor() const { return barkColor_; }
@@ -265,6 +296,9 @@ private:
     bromath::AABB3 forestBounds_;
     Lod lod_;
     int forceTier_ = -1;
+    Look look_;
+    std::vector<float> looks_;
+    mutable float gpuColors_[6] = {};   // the node's leaf and bark colour gpu_'s tints were taken against
     float barkColor_[3] = {0.2f, 0.17f, 0.14f};
     float barkRoughness_ = 0.9f;
     Stats stats_;

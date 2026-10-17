@@ -6,6 +6,11 @@
 // again for the trees in its light volume by its texel size. The node's
 // specimens and trees live in one storage buffer uploaded once; only the
 // entries are written each frame.
+//
+// Three phases: a node's PLAN (the trees the camera and each shadow tile
+// see, at what size), the DETAIL factor that fits the budget (one node's, or
+// several nodes' together, prepareForests, so a mixed forest of a node per
+// leaf form thins alike), and its DRAWS at that detail.
 
 #include "scene/vulkan/scene_mesh_drawer.h"
 
@@ -23,6 +28,7 @@
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <functional>
 
 namespace bro::scene::vk {
 
@@ -58,63 +64,54 @@ struct Groups {
     std::vector<Entry> g[kGroups];
 };
 
+// A tree in view of the camera or of a shadow tile: its pixels per specimen
+// unit there.
+struct Seen {
+    uint32_t instance;
+    float px;           // at the crown (the leaves and sprites)
+    int tile;           // index into the plan's tiles, -1 for the camera
+    float barkPx = 0;   // at the whole tree (0: px)
+};
+
+// The detail factor that keeps `cost`'s vertices within `budget` millions: 1
+// when they fit, else the least (to about 3%) that does.
+float fitDetail(const std::function<double(float)>& cost, float budget) {
+    if (budget <= 0.0f) return 1.0f;
+    const double limit = static_cast<double>(budget) * 1e6;
+    if (cost(1.0f) <= limit) return 1.0f;
+    // At most kMaxDetail: past it the trees are sprites and trunks, and a
+    // budget still unmet is the view's floor, not a reason to strip the
+    // nearest tree bare.
+    constexpr float kMaxDetail = 8.0f;
+    if (cost(kMaxDetail) > limit) return kMaxDetail;
+    float lo = 1.0f, hi = 2.0f;
+    while (hi < kMaxDetail && cost(hi) > limit) { lo = hi; hi *= 2.0f; }
+    hi = std::min(hi, kMaxDetail);
+    for (int it = 0; it < 6; ++it) {
+        const float mid = std::sqrt(lo * hi);
+        if (cost(mid) > limit) lo = mid; else hi = mid;
+    }
+    return hi;
+}
+
 }  // namespace
 
-void SceneMeshDrawer::prepareForest(SceneFrame& frame, ForestNode& node, std::vector<MeshDraw>& out) {
-    out.clear();
+struct SceneMeshDrawer::ForestPlan {
+    ForestNode* node = nullptr;
     ForestNode::Stats stats;
-    if (node.instanceCount() == 0 || node.specimenCount() == 0 || node.mesh().empty() || node.effectiveUnlit()) {
-        node.setStats(stats);
-        return;
-    }
-    SceneGpuResources& res = frame.gpu.resources;
-    const std::vector<float>& data = node.gpuData();
-    const SceneVkBuffer* store = res.storage(node.id(), node.dataGeneration(), data.data(), data.size() * sizeof(float));
-    const GpuMesh* leafMesh = res.mesh(node.id(), kLeafSlot, node.geometryGeneration(), node.leafBatch());
-    const GpuMesh* cardMesh = res.mesh(node.id(), kCardSlot, node.geometryGeneration(), node.cardBatch());
-    const GpuMesh* clusterMesh = res.mesh(node.id(), kClusterSlot, node.geometryGeneration(), node.clusterBatch());
-    if (!store || !leafMesh || !cardMesh || !clusterMesh) {
-        node.setStats(stats);
-        return;
-    }
+    ForestNode::Lod lod, shadowLod;
+    float leafLength = 0.0f;
+    int leafVerts = 0, leafCopies = 1, force = -1;
+    std::vector<bromath::AABB3> bounds;   // every tree's, world, padded by the sway's reach
+    std::vector<Seen> seen;               // the camera's trees
+    std::vector<Seen> cast;               // each shadow tile's
+    std::vector<int> tileSlots;           // per tile: its slot in the shadow plan
 
-    const SceneView& view = frame.view;
-    const bromath::Mat4& world = node.worldMatrix();
-    const float nodeScale = std::sqrt(world.data[4] * world.data[4] + world.data[5] * world.data[5] +
-                                      world.data[6] * world.data[6]);
-    // Pixels per metre at a metre's distance (perspective), or flat (ortho).
-    const float pxAtMetre = std::fabs(view.proj.at(1, 1)) * static_cast<float>(view.height) * 0.5f;    const ForestNode::Lod& lod = node.lod();
-    // A shadow is a silhouette: its crowns take over from the clumps at
-    // twice the size (in texels) the camera's do.
-    ForestNode::Lod shadowLod = lod;
-    shadowLod.crownFrom *= 2.0f;
-    shadowLod.crownTo *= 2.0f;
-    const float leafLength = node.leafLength();
-    const int leafVerts = static_cast<int>(node.mesh().vertexCount());
-    const int leafCopies = node.leafCopies();
-    const int force = node.forceTier();
-    const auto& specimens = node.specimens();
-    const auto& keepRadius = node.keepRadius();
-    const auto& instances = node.instances();
-
-    float maxHeight = 0.0f;
-    for (const auto& s : specimens) maxHeight = std::max(maxHeight, s.height);
-    float maxScale = 0.0f;
-    for (const auto& in : instances) maxScale = std::max(maxScale, in.scale);
-    const float reach = frame.renderer.vegetationReach(maxHeight * maxScale, world);
-
-    // Every tree's world bounds once.
-    std::vector<bromath::AABB3> bounds(instances.size());
-    for (size_t i = 0; i < instances.size(); ++i) {
-        bounds[i] = bromath::atransform(instances[i].bounds, world);
-        bounds[i].min -= bromath::Vec3{reach, reach, reach};
-        bounds[i].max += bromath::Vec3{reach, reach, reach};
-    }
-
-    // What one tree at level of detail `t` adds to `G` (or, with no `G`,
-    // only the vertices it would).
-    const auto addTree = [&](Groups* G, uint32_t inst, const ForestNode::Specimen& sp, const ForestNode::TreeLod& t,
-                             bool shadow, uint64_t& vertices) {
+    // What one tree at level of detail `t` adds to `G` (or, with no `G`, only
+    // the vertices it would).
+    void addTree(Groups* G, uint32_t inst, const ForestNode::Specimen& sp, const ForestNode::TreeLod& t,
+                 bool shadow, uint64_t& vertices) {
+        const auto& keepRadius = node->keepRadius();
         float lo[ForestNode::kTiers], hi[ForestNode::kTiers];
         ForestNode::fadeRanges(t, lo, hi);
         if (shadow) {
@@ -173,67 +170,81 @@ void SceneMeshDrawer::prepareForest(SceneFrame& frame, ForestNode& node, std::ve
         if (hi[1] > lo[1] && sp.clumpCount > 0 && G) {
             vertices += uint64_t{(sp.clumpCount + kClumpsPerEntry - 1) / kClumpsPerEntry} * kClumpsPerEntry *
                         kVertsPerClump;
-            {
-                const float fade = ForestNode::fadeCode(lo[1], hi[1]);
-                for (uint32_t c = 0; c < sp.clumpCount; c += kClumpsPerEntry)
-                    G->g[Clumps].push_back({inst, sp.clumpStart + c,
-                                            sp.clumpStart + std::min(c + kClumpsPerEntry, sp.clumpCount), 0u, 1.0f,
-                                            0.0f, 1.0f, fade});
-            }
+            const float fade = ForestNode::fadeCode(lo[1], hi[1]);
+            for (uint32_t c = 0; c < sp.clumpCount; c += kClumpsPerEntry)
+                G->g[Clumps].push_back({inst, sp.clumpStart + c,
+                                        sp.clumpStart + std::min(c + kClumpsPerEntry, sp.clumpCount), 0u, 1.0f, 0.0f,
+                                        1.0f, fade});
         }
         if (hi[2] > lo[2] && sp.clumpCount > 0 && G) {
             vertices += 6;
             G->g[Crowns].push_back({inst, 0u, 1u, 0u, 1.0f, 0.0f, 1.0f, ForestNode::fadeCode(lo[2], hi[2])});
         }
-    };
+    }
 
-    // A tree in view of the camera or of a shadow tile: its pixels per
-    // specimen unit there.
-    struct Seen {
-        uint32_t instance;
-        float px;           // at the crown (the leaves and sprites)
-        int tile;           // index into `tiles` below, -1 for the camera
-        float barkPx = 0;   // at the whole tree (0: px)
-    };
-
-    // The detail factor that keeps `seen`'s vertices within `budget`
-    // millions: 1 when they fit, else the least (to about 3%) that does.
-    const auto fit = [&](const std::vector<Seen>& seen, float budget, bool shadow) {
-        if (budget <= 0.0f || force >= 0 || seen.empty()) return 1.0f;
-        const double limit = static_cast<double>(budget) * 1e6;
-        const auto cost = [&](float detail) {
-            const ForestNode::Lod L = ForestNode::scaled(shadow ? shadowLod : lod, detail);
-            uint64_t v = 0;
-            for (const Seen& s : seen) {
-                const ForestNode::Specimen& sp = specimens[instances[s.instance].specimen];
-                addTree(nullptr, s.instance, sp, ForestNode::treeLod(L, sp, s.px, leafLength, force, s.barkPx), shadow, v);
-            }
-            return static_cast<double>(v);
-        };
-        if (cost(1.0f) <= limit) return 1.0f;
-        // At most kMaxDetail: past it the trees are sprites and trunks, and
-        // a budget still unmet is the view's floor, not a reason to strip
-        // the nearest tree bare.
-        constexpr float kMaxDetail = 8.0f;
-        if (cost(kMaxDetail) > limit) return kMaxDetail;
-        float lo = 1.0f, hi = 2.0f;
-        while (hi < kMaxDetail && cost(hi) > limit) { lo = hi; hi *= 2.0f; }
-        hi = std::min(hi, kMaxDetail);
-        for (int it = 0; it < 6; ++it) {
-            const float mid = std::sqrt(lo * hi);
-            if (cost(mid) > limit) lo = mid; else hi = mid;
+    // The vertices the camera's (or the shadow tiles') trees send at `detail`.
+    double cost(float detail, bool shadow) {
+        if (force >= 0) return 0.0;
+        const ForestNode::Lod L = ForestNode::scaled(shadow ? shadowLod : lod, detail);
+        const auto& specimens = node->specimens();
+        const auto& instances = node->instances();
+        uint64_t v = 0;
+        for (const Seen& s : shadow ? cast : seen) {
+            const ForestNode::Specimen& sp = specimens[instances[s.instance].specimen];
+            addTree(nullptr, s.instance, sp, ForestNode::treeLod(L, sp, s.px, leafLength, force, s.barkPx), shadow,
+                    v);
         }
-        return hi;
-    };
+        return static_cast<double>(v);
+    }
+};
+
+std::unique_ptr<SceneMeshDrawer::ForestPlan> SceneMeshDrawer::planForest(SceneFrame& frame, ForestNode& node) {
+    if (node.instanceCount() == 0 || node.specimenCount() == 0 || node.mesh().empty() || node.effectiveUnlit()) {
+        node.setStats({});
+        return nullptr;
+    }
+    auto plan = std::make_unique<ForestPlan>();
+    ForestPlan& P = *plan;
+    P.node = &node;
+    const SceneView& view = frame.view;
+    const bromath::Mat4& world = node.worldMatrix();
+    const float nodeScale = std::sqrt(world.data[4] * world.data[4] + world.data[5] * world.data[5] +
+                                      world.data[6] * world.data[6]);
+    // Pixels per metre at a metre's distance (perspective), or flat (ortho).
+    const float pxAtMetre = std::fabs(view.proj.at(1, 1)) * static_cast<float>(view.height) * 0.5f;
+    P.lod = node.lod();
+    // A shadow is a silhouette: its crowns take over from the clumps at
+    // twice the size (in texels) the camera's do.
+    P.shadowLod = P.lod;
+    P.shadowLod.crownFrom *= 2.0f;
+    P.shadowLod.crownTo *= 2.0f;
+    P.leafLength = node.leafLength();
+    P.leafVerts = static_cast<int>(node.mesh().vertexCount());
+    P.leafCopies = node.leafCopies();
+    P.force = node.forceTier();
+    const auto& specimens = node.specimens();
+    const auto& instances = node.instances();
+
+    float maxHeight = 0.0f;
+    for (const auto& s : specimens) maxHeight = std::max(maxHeight, s.height);
+    float maxScale = 0.0f;
+    for (const auto& in : instances) maxScale = std::max(maxScale, in.scale);
+    const float reach = frame.renderer.vegetationReach(maxHeight * maxScale, world);
+
+    // Every tree's world bounds once.
+    P.bounds.resize(instances.size());
+    for (size_t i = 0; i < instances.size(); ++i) {
+        P.bounds[i] = bromath::atransform(instances[i].bounds, world);
+        P.bounds[i].min -= bromath::Vec3{reach, reach, reach};
+        P.bounds[i].max += bromath::Vec3{reach, reach, reach};
+    }
 
     // The camera's trees.
-    Groups colour;
-    uint64_t colourVerts = 0;
-    std::vector<Seen> seen;
-    seen.reserve(instances.size());
+    P.seen.reserve(instances.size());
     for (uint32_t i = 0; i < instances.size(); ++i) {
-        if (!bromath::fintersects(view.frustum, bounds[i])) {
-            stats.culled++;
+        const bromath::AABB3& b = P.bounds[i];
+        if (!bromath::fintersects(view.frustum, b)) {
+            P.stats.culled++;
             continue;
         }
         const ForestNode::Instance& in = instances[i];
@@ -241,12 +252,12 @@ void SceneMeshDrawer::prepareForest(SceneFrame& frame, ForestNode& node, std::ve
         // The bark's distance: to the nearest point of the tree's box at
         // rest (the wind's strength does not move the choice).
         const bromath::Vec3 e = view.eye;
-        const bromath::Vec3 q{std::clamp(e.x, bounds[i].min.x + reach, bounds[i].max.x - reach),
-                              std::clamp(e.y, bounds[i].min.y + reach, bounds[i].max.y - reach),
-                              std::clamp(e.z, bounds[i].min.z + reach, bounds[i].max.z - reach)};
+        const bromath::Vec3 q{std::clamp(e.x, b.min.x + reach, b.max.x - reach),
+                              std::clamp(e.y, b.min.y + reach, b.max.y - reach),
+                              std::clamp(e.z, b.min.z + reach, b.max.z - reach)};
         const float d = std::max(bromath::vlen(q - e), 0.25f);
-        if (lod.range > 0.0f && d > lod.range) {
-            stats.culled++;
+        if (P.lod.range > 0.0f && d > P.lod.range) {
+            P.stats.culled++;
             continue;
         }
         // The leaves': to the crown, an upright cylinder round its clumps,
@@ -263,19 +274,111 @@ void SceneMeshDrawer::prepareForest(SceneFrame& frame, ForestNode& node, std::ve
             dl = std::max(std::hypot(dh, dv), d);
         }
         const float unit = in.scale * nodeScale;
-        seen.push_back({i, (view.perspective ? pxAtMetre / dl : pxAtMetre) * unit, -1,
-                        (view.perspective ? pxAtMetre / d : pxAtMetre) * unit});
+        P.seen.push_back({i, (view.perspective ? pxAtMetre / dl : pxAtMetre) * unit, -1,
+                          (view.perspective ? pxAtMetre / d : pxAtMetre) * unit});
     }
-    stats.detail = fit(seen, lod.budget, false);
+
+    // Each shadow tile's trees, at its texel size.
+    const ShadowPlan& shadows = frame.renderer.shadowPlan();
+    if (node.castsShadow() && frame.gpu.targets.shadowAtlas.width == static_cast<uint32_t>(shadows.atlasSize)) {
+        for (int slot = 0; slot < shadows.tileCount && slot < 32; ++slot) {
+            const ShadowTilePlan& tile = shadows.tiles[slot];
+            if (!tile.render) continue;
+            const int ti = static_cast<int>(P.tileSlots.size());
+            P.tileSlots.push_back(slot);
+            for (uint32_t i = 0; i < instances.size(); ++i) {
+                if (!bromath::fintersects(tile.frustum, P.bounds[i])) continue;
+                float texel = tile.texelConst;
+                if (!tile.ortho) {
+                    const bromath::Vec3 c = (P.bounds[i].min + P.bounds[i].max) * 0.5f;
+                    texel += tile.texelPerMetre * bromath::vlen(c - view.eye);
+                }
+                P.cast.push_back({i, instances[i].scale * nodeScale / std::max(texel, 1e-5f), ti});
+            }
+        }
+    }
+    return plan;
+}
+
+void SceneMeshDrawer::prepareForest(SceneFrame& frame, ForestNode& node, std::vector<MeshDraw>& out) {
+    out.clear();
+    auto plan = planForest(frame, node);
+    if (!plan) return;
+    ForestPlan& P = *plan;
+    const float detail = P.force >= 0 || P.seen.empty()
+                             ? 1.0f : fitDetail([&](float d) { return P.cost(d, false); }, P.lod.budget);
+    const float shadowDetail = P.force >= 0 || P.cast.empty()
+                                   ? 1.0f : fitDetail([&](float d) { return P.cost(d, true); }, P.lod.shadowBudget);
+    finishForest(frame, P, detail, shadowDetail, out);
+}
+
+void SceneMeshDrawer::prepareForests(SceneFrame& frame, const std::vector<ForestNode*>& nodes,
+                                     std::vector<std::vector<MeshDraw>>& out) {
+    out.assign(nodes.size(), {});
+    std::vector<std::unique_ptr<ForestPlan>> plans(nodes.size());
+    float budget = 0.0f, shadowBudget = 0.0f;
+    bool forced = false, anySeen = false, anyCast = false;
+    for (size_t i = 0; i < nodes.size(); ++i) {
+        plans[i] = planForest(frame, *nodes[i]);
+        if (!plans[i]) continue;
+        const ForestPlan& P = *plans[i];
+        // One budget for them all: the largest any asks for (0, none, if
+        // any asks for none).
+        budget = P.lod.budget <= 0.0f || budget < 0.0f ? -1.0f : std::max(budget, P.lod.budget);
+        shadowBudget = P.lod.shadowBudget <= 0.0f || shadowBudget < 0.0f ? -1.0f
+                                                                          : std::max(shadowBudget, P.lod.shadowBudget);
+        forced = forced || P.force >= 0;
+        anySeen = anySeen || !P.seen.empty();
+        anyCast = anyCast || !P.cast.empty();
+    }
+    const auto total = [&](float d, bool shadow) {
+        double v = 0.0;
+        for (auto& p : plans)
+            if (p) v += p->cost(d, shadow);
+        return v;
+    };
+    const float detail = forced || !anySeen || budget <= 0.0f
+                             ? 1.0f : fitDetail([&](float d) { return total(d, false); }, budget);
+    const float shadowDetail = forced || !anyCast || shadowBudget <= 0.0f
+                                   ? 1.0f : fitDetail([&](float d) { return total(d, true); }, shadowBudget);
+    for (size_t i = 0; i < nodes.size(); ++i)
+        if (plans[i]) finishForest(frame, *plans[i], detail, shadowDetail, out[i]);
+}
+
+void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detail, float shadowDetail,
+                                   std::vector<MeshDraw>& out) {
+    out.clear();
+    ForestNode& node = *P.node;
+    ForestNode::Stats& stats = P.stats;
+    const SceneView& view = frame.view;
+    const bromath::Mat4& world = node.worldMatrix();
+    const ForestNode::Lod& lod = P.lod;
+    const auto& specimens = node.specimens();
+    const auto& instances = node.instances();
+    SceneGpuResources& res = frame.gpu.resources;
+    const std::vector<float>& data = node.gpuData();
+    const SceneVkBuffer* store = res.storage(node.id(), node.dataGeneration(), data.data(), data.size() * sizeof(float));
+    const GpuMesh* leafMesh = res.mesh(node.id(), kLeafSlot, node.geometryGeneration(), node.leafBatch());
+    const GpuMesh* cardMesh = res.mesh(node.id(), kCardSlot, node.geometryGeneration(), node.cardBatch());
+    const GpuMesh* clusterMesh = res.mesh(node.id(), kClusterSlot, node.geometryGeneration(), node.clusterBatch());
+    if (!store || !leafMesh || !cardMesh || !clusterMesh) {
+        node.setStats({});
+        return;
+    }
+
+    // The camera's trees at the detail.
+    Groups colour;
+    uint64_t colourVerts = 0;
+    stats.detail = detail;
     {
-        const ForestNode::Lod L = ForestNode::scaled(lod, stats.detail);
-        for (const Seen& s : seen) {
+        const ForestNode::Lod L = ForestNode::scaled(lod, detail);
+        for (const Seen& s : P.seen) {
             const ForestNode::Specimen& sp = specimens[instances[s.instance].specimen];
-            const ForestNode::TreeLod t = ForestNode::treeLod(L, sp, s.px, leafLength, force, s.barkPx);
+            const ForestNode::TreeLod t = ForestNode::treeLod(L, sp, s.px, P.leafLength, P.force, s.barkPx);
             if (t.leaves > 0.0f) stats.trees[0]++;
             if (t.clumps > 0.0f) stats.trees[1]++;
             if (t.crowns > 0.0f) stats.trees[2]++;
-            addTree(&colour, s.instance, sp, t, false, colourVerts);
+            P.addTree(&colour, s.instance, sp, t, false, colourVerts);
         }
     }
     stats.vertices = colourVerts;
@@ -286,43 +389,23 @@ void SceneMeshDrawer::prepareForest(SceneFrame& frame, ForestNode& node, std::ve
         std::vector<std::pair<float, Entry>> keyed;
         keyed.reserve(g.size());
         for (const Entry& e : g)
-            keyed.push_back({bromath::vlen((bounds[e.instance].min + bounds[e.instance].max) * 0.5f - view.eye), e});
+            keyed.push_back({bromath::vlen((P.bounds[e.instance].min + P.bounds[e.instance].max) * 0.5f - view.eye),
+                             e});
         std::stable_sort(keyed.begin(), keyed.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
         for (size_t i = 0; i < g.size(); ++i) g[i] = keyed[i].second;
     };
     nearestFirst(colour.g[Clumps]);
     nearestFirst(colour.g[Crowns]);
 
-    // Each shadow tile's trees, at its texel size.
-    struct TileGroups {
-        int slot;
-        Groups groups;
-    };
-    std::vector<TileGroups> tiles;
-    const ShadowPlan& plan = frame.renderer.shadowPlan();
-    if (node.castsShadow() && frame.gpu.targets.shadowAtlas.width == static_cast<uint32_t>(plan.atlasSize)) {
-        std::vector<Seen> cast;
-        for (int slot = 0; slot < plan.tileCount && slot < 32; ++slot) {
-            const ShadowTilePlan& tile = plan.tiles[slot];
-            if (!tile.render) continue;
-            const int ti = static_cast<int>(tiles.size());
-            tiles.push_back({slot, {}});
-            for (uint32_t i = 0; i < instances.size(); ++i) {
-                if (!bromath::fintersects(tile.frustum, bounds[i])) continue;
-                float texel = tile.texelConst;
-                if (!tile.ortho) {
-                    const bromath::Vec3 c = (bounds[i].min + bounds[i].max) * 0.5f;
-                    texel += tile.texelPerMetre * bromath::vlen(c - view.eye);
-                }
-                cast.push_back({i, instances[i].scale * nodeScale / std::max(texel, 1e-5f), ti});
-            }
-        }
-        stats.shadowDetail = fit(cast, lod.shadowBudget, true);
-        const ForestNode::Lod L = ForestNode::scaled(shadowLod, stats.shadowDetail);
-        for (const Seen& s : cast) {
+    // Each shadow tile's trees at the shadow detail.
+    std::vector<Groups> tiles(P.tileSlots.size());
+    stats.shadowDetail = shadowDetail;
+    {
+        const ForestNode::Lod L = ForestNode::scaled(P.shadowLod, shadowDetail);
+        for (const Seen& s : P.cast) {
             const ForestNode::Specimen& sp = specimens[instances[s.instance].specimen];
-            addTree(&tiles[static_cast<size_t>(s.tile)].groups, s.instance, sp,
-                    ForestNode::treeLod(L, sp, s.px, leafLength, force, s.barkPx), true, stats.shadowVertices);
+            P.addTree(&tiles[static_cast<size_t>(s.tile)], s.instance, sp,
+                      ForestNode::treeLod(L, sp, s.px, P.leafLength, P.force, s.barkPx), true, stats.shadowVertices);
         }
     }
 
@@ -330,7 +413,7 @@ void SceneMeshDrawer::prepareForest(SceneFrame& frame, ForestNode& node, std::ve
     size_t total = 0;
     for (const auto& g : colour.g) total += g.size();
     for (const auto& t : tiles)
-        for (const auto& g : t.groups.g) total += g.size();
+        for (const auto& g : t.g) total += g.size();
     stats.entries = static_cast<uint32_t>(total);
     if (total == 0) {
         node.setStats(stats);
@@ -445,7 +528,11 @@ void SceneMeshDrawer::prepareForest(SceneFrame& frame, ForestNode& node, std::ve
                 d.firstInstance = first;
                 d.twoSided = true;
                 d.materialSet = leafMaterial;
-                d.push.pbrParams[3] = static_cast<float>(leafFlags | (cluster ? mesh_flags::kForestCluster : 0u));
+                // A needle or scale-leaf node's leaf is its spray's card, its
+                // needles cut out by mesh.frag's SCENE_FOREST_SPRAY build.
+                const bool spray = !cluster && node.look().leafForm != 0;
+                d.push.pbrParams[3] = static_cast<float>(leafFlags | (cluster ? mesh_flags::kForestCluster : 0u) |
+                                                         (spray ? mesh_flags::kForestSpray : 0u));
                 break;
             }
             case Bark10:
@@ -490,7 +577,7 @@ void SceneMeshDrawer::prepareForest(SceneFrame& frame, ForestNode& node, std::ve
         }
     };
     emit(colour, false, 0);
-    for (const TileGroups& t : tiles) emit(t.groups, true, t.slot);
+    for (size_t t = 0; t < tiles.size(); ++t) emit(tiles[t], true, P.tileSlots[t]);
     node.setStats(stats);
 }
 

@@ -70,6 +70,7 @@ constexpr uint32_t kForestSprite = 16384;   // a forest sprite: leafy disc, sphe
 constexpr uint32_t kForestMsaa = 32768;     // a forest draw into a 4x MSAA target: fades split samples
 constexpr uint32_t kForestCluster = 65536;  // forest leaf clusters: a card of leaves drawn by mesh.frag
 constexpr uint32_t kGround = 131072;        // turf: a static mesh shaded as its grass node's ground (set 4)
+constexpr uint32_t kForestSpray = 262144;   // a needle or scale-leaf forest's leaves: mesh.frag's SCENE_FOREST_SPRAY build
 /// The vertex colour mode (0 none, 1 replaces the albedo, 2 tints it) in bits 10-11.
 constexpr uint32_t vertexColor(int mode) { return static_cast<uint32_t>(mode & 3) << 10; }
 }
@@ -181,6 +182,11 @@ public:
     /// and shape for the camera, and the shadow tiers per shadow tile
     /// (shadowOnly, each with its tile's bit).
     void prepareForest(SceneFrame& frame, ForestNode& node, std::vector<MeshDraw>& out);
+    /// Several forest nodes' draws under one budget: the trees of every node
+    /// thin alike (one detail factor for all, fitting the largest of their
+    /// budgets), as one node's trees do. `out[i]` is `nodes[i]`'s.
+    void prepareForests(SceneFrame& frame, const std::vector<ForestNode*>& nodes,
+                        std::vector<std::vector<MeshDraw>>& out);
 
     /// Bind and draw into the open target described by `target`, lit by
     /// the draw's probe lighting set when it has one, else `lightingSet`.
@@ -200,6 +206,14 @@ public:
                             std::vector<VkVertexInputAttributeDescription>& attributes);
 
 private:
+    // The forest path's phases (scene_mesh_drawer_forest.cpp): which trees
+    // a node shows the camera and the shadow tiles, then, at a detail
+    // factor, its draws.
+    struct ForestPlan;
+    static std::unique_ptr<ForestPlan> planForest(SceneFrame& frame, ForestNode& node);
+    void finishForest(SceneFrame& frame, ForestPlan& plan, float detail, float shadowDetail,
+                      std::vector<MeshDraw>& out);
+
     struct CustomProgram {
         bool failed = false;
         bool indirectFailed = false;
@@ -248,7 +262,9 @@ private:
     VkShaderModule fsSprite_ = VK_NULL_HANDLE;
     VkShaderModule fsCluster_ = VK_NULL_HANDLE;
     VkShaderModule fsClusterIndirect_ = VK_NULL_HANDLE;
-    VkShaderModule fsBark_ = VK_NULL_HANDLE;           // Tube, ForestTube: mesh.frag's SCENE_BARK build
+    VkShaderModule fsSpray_ = VK_NULL_HANDLE;          // needle / scale-leaf forest leaves: SCENE_FOREST_SPRAY
+    VkShaderModule fsSprayIndirect_ = VK_NULL_HANDLE;
+    VkShaderModule fsBark_ = VK_NULL_HANDLE;          // Tube, ForestTube: mesh.frag's SCENE_BARK build
     VkShaderModule fsBarkIndirect_ = VK_NULL_HANDLE;
     VkShaderModule fsGround_ = VK_NULL_HANDLE;         // turf: mesh.frag's SCENE_GROUND build
     VkShaderModule fsGroundIndirect_ = VK_NULL_HANDLE;

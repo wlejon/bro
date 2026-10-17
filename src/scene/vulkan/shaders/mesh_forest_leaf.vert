@@ -43,6 +43,7 @@ void main() {
     outLobeOut = vec4(0.0, 1.0, 0.0, 0.0);
     outLobeSphere = vec4(0.0);
     outLobeDensity = 0.0;
+    forestApplyLook();
     ForestEntry e = forestEntry(gl_InstanceIndex);
     int leaf = e.first + gl_VertexIndex / max(e.param, 1);
     if (leaf >= e.end) {
@@ -102,7 +103,9 @@ void main() {
                                  treeSeed, pos, rot);
     Nw = rot * Nw;
     Tw = rot * Tw;
-    outInstColor = vec4(vegetationTint(model, v0, v1, v2, v3, true), e.fade);
+    outInstColor = vec4(vegetationTint(model, v0, v1, v2, v3, true) * forestSpecimenTint(specimen, false), e.fade);
+    // A spray's (mesh.frag's SCENE_FOREST_SPRAY): its seed, its own dither.
+    if (!cluster) outLobeDensity = fract(float(leaf) * 0.618034 + treeSeed);
     if (cluster) {
         vec3 outward = rest - lc;
         float upBias = procedural.header[0].y;

@@ -77,6 +77,10 @@ BRO_SCENE_SHADER(MeshForestSpriteFrag,         "mesh_forest_sprite.frag",       
 BRO_SCENE_SHADER(MeshForestSpriteIndirectFrag, "mesh_forest_sprite_indirect.frag", "mesh.frag", "frag", "SCENE_VEGETATION SCENE_FOREST_SPRITE SCENE_INDIRECT_OUTPUT")
 BRO_SCENE_SHADER(MeshForestClusterFrag,        "mesh_forest_cluster.frag",         "mesh.frag", "frag", "SCENE_VEGETATION SCENE_FOREST_CLUSTER")
 BRO_SCENE_SHADER(MeshForestClusterIndirectFrag, "mesh_forest_cluster_indirect.frag", "mesh.frag", "frag", "SCENE_VEGETATION SCENE_FOREST_CLUSTER SCENE_INDIRECT_OUTPUT")
+// A needle or scale-leaf forest's leaves (scene_forest_spray.glsl): the
+// spray's needles cut out of its card.
+BRO_SCENE_SHADER(MeshForestSprayFrag,          "mesh_forest_spray.frag",           "mesh.frag", "frag", "SCENE_VEGETATION SCENE_FOREST_SPRAY")
+BRO_SCENE_SHADER(MeshForestSprayIndirectFrag,  "mesh_forest_spray_indirect.frag",  "mesh.frag", "frag", "SCENE_VEGETATION SCENE_FOREST_SPRAY SCENE_INDIRECT_OUTPUT")
 // A plant's wood (Tube and ForestTube): mesh.frag built with SCENE_BARK
 // (scene_bark.glsl), ridges, furrows, moss and lichen from the tube's records.
 BRO_SCENE_SHADER(MeshBarkFrag,                 "mesh_bark.frag",                   "mesh.frag", "frag", "SCENE_VEGETATION SCENE_BARK")

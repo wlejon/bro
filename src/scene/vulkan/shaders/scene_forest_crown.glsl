@@ -64,7 +64,7 @@ ForestCrownHit forestCrownTrace(vec3 d, int instance, vec3 offset, float len, fl
     int specimen;
     mat4 model = push.model * forestCrownInstance(instance, specimen);
     float scale = length(model[1].xyz);
-    int sr = int(floatBitsToUint(procedural.header[2].x)) + specimen * 4;
+    int sr = int(floatBitsToUint(procedural.header[2].x)) + specimen * FOREST_SPECIMEN_RECORDS;
     uvec4 counts = floatBitsToUint(procedural.records[sr]);
     int first = int(counts.z), count = int(counts.w);
     int clumpBase = int(floatBitsToUint(procedural.header[2].z));

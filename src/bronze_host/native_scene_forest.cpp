@@ -77,6 +77,24 @@ void bro_scene_SceneNode_setForestBark(void* self, double r, double g, double b,
     }
 }
 
+bool bro_scene_SceneNode_setForestLook(void* self, const float* looks, uint32_t looks_len, const double* look,
+                                       uint32_t look_len) {
+    auto* f = forestOf(self);
+    if (!f) return false;
+    scene::ForestNode::Look l = f->look();
+    const auto at = [&](uint32_t i, float d) {
+        return i < look_len && std::isfinite(look[i]) ? static_cast<float>(look[i]) : d;
+    };
+    l.leafForm = static_cast<int>(std::lround(at(0, static_cast<float>(l.leafForm))));
+    l.flutter = at(1, l.flutter);
+    l.limbBob = at(2, l.limbBob);
+    l.twigBob = at(3, l.twigBob);
+    f->setLook(l);
+    // look[4]: whether `looks` is given (else the specimens keep theirs).
+    if (at(4, 0.0f) == 0.0f) return true;
+    return f->setSpecimenLooks(copyOf(looks, looks_len));
+}
+
 void bro_scene_SceneNode_setForestTier(void* self, int32_t tier) {
     if (auto* f = forestOf(self)) f->setForceTier(tier);
 }

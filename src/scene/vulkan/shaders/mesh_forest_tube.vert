@@ -25,6 +25,7 @@ layout(location = 7) out vec4 outVegShade;
 
 void main() {
     outVegShade = vec4(0.0, 0.0, 0.0, 1.0);
+    forestApplyLook();
     ForestEntry e = forestEntry(gl_InstanceIndex);
     vec3 pos, radial, axisDir;
     vec2 uv;
@@ -59,7 +60,7 @@ void main() {
     vec3 T = normalize(M3 * axisDir);
     mat3 rot;
     outVegShade = vegetationSwayAxis(model, v0, v1, v2, v3, vec3(0.0), N, world.xyz, rot);
-    outInstColor = vec4(vegetationTint(model, v0, v1, v2, v3, false), e.fade);
+    outInstColor = vec4(vegetationTint(model, v0, v1, v2, v3, false) * forestSpecimenTint(specimen, true), e.fade);
     N = rot * N;
     T = rot * T;
 

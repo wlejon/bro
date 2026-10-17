@@ -47,6 +47,10 @@ layout(location = 8) flat in vec4 inLobeOut;
 layout(location = 9) flat in vec4 inLobeSphere;
 layout(location = 10) flat in float inLobeDensity;
 #endif
+#ifdef SCENE_FOREST_SPRAY
+// The spray's seed (mesh_forest_leaf.vert): its own dither.
+layout(location = 10) flat in float inSpraySeed;
+#endif
 
 layout(location = 0) out vec4 outColor;
 #ifdef SCENE_INDIRECT_OUTPUT
@@ -64,6 +68,10 @@ layout(location = 1) out vec4 outIndirect;
 #ifdef SCENE_FOREST_SPRITE
 #include "scene_procedural.glsl"
 #include "scene_forest_crown.glsl"
+#endif
+#ifdef SCENE_FOREST_SPRAY
+#include "scene_procedural.glsl"
+#include "scene_forest_spray.glsl"
 #endif
 #ifdef SCENE_BARK
 #include "scene_bark.glsl"
@@ -285,6 +293,18 @@ void main() {
     if (push.extra.x > 0.0 && camDist < push.extra.x) discard;
 #ifdef SCENE_VEGETATION
     if ((flags & MESH_FOREST) != 0u) {
+#ifdef SCENE_FOREST_SPRAY
+        // A conifer's spray (the drawer's build for a needle or scale-leaf
+        // node's leaves): its needles cut out of the card.
+        {
+            int form = forestSprayForm();
+            massCover = forestSprayCover(inUV, form, forestSprayCardAspect(form));
+            if (massCover < 1.0 / 255.0) discard;
+            // Each spray its own dither (two sprays over a pixel keep
+            // different samples, so their cover adds up).
+            massSalt = uint(inSpraySeed * 16777216.0);
+        }
+#endif
         int mask = forestSampleMask(inInstColor.a, massCover, (flags & MESH_FOREST_MSAA) != 0u, massSalt);
         if (mask == 0) discard;
         gl_SampleMask[0] = mask;

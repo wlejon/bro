@@ -76,6 +76,12 @@ const float VEG_TWIG_DAMPING = 0.05;
 const float VEG_TURBULENCE = 0.051;
 const float VEG_GUST_KICK = 0.4;
 
+// How much a limb and a twig rise and fall as they ring, against their
+// sway (vegLevel's `bob`). A broadleaf's; a forest node sets its own
+// (scene_forest.glsl's forestApplyLook: a conifer's long boughs bounce).
+float vegLimbBob = 0.6;
+float vegTwigBob = 0.8;
+
 // A cantilever: natural frequency (Hz), tip deflection over length at
 // VEG_REFERENCE_WIND (0: it does not bend), length (world metres).
 struct VegCantilever { float freq; float sway; float len; };
@@ -209,7 +215,7 @@ VegPose vegPose(VegPlant plant, VegLimb limb, VegWind w, vec3 rest, float weight
     float out2 = dot(rel.xz, rel.xz);
     vec3 dir = out2 > 1e-6 ? normalize(vec3(rel.x, 0.75 * sqrt(out2), rel.z)) : vec3(0.0, 1.0, 0.0);
     float s = clamp(weight, 0.0, 1.0);
-    vec3 xl = vegLevel(limb.limb, VEG_LIMB_DAMPING, limb.phase, w, 0.6);
+    vec3 xl = vegLevel(limb.limb, VEG_LIMB_DAMPING, limb.phase, w, vegLimbBob);
     o.offset += xl * vegBend(s);
     o.omega += cross(dir, xl) * (vegBendSlope(s) / max(limb.limb.len, 0.05));
 
@@ -223,7 +229,7 @@ VegPose vegPose(VegPlant plant, VegLimb limb, VegWind w, vec3 rest, float weight
     vec3 ra = rest + camera.eyeWorld.xyz;
     float ph = limb.phase + 0.12 * (sin(dot(ra, vec3(3.1, 1.7, 2.3))) + sin(dot(ra, vec3(-1.9, 2.9, 3.7))) +
                                     sin(dot(ra, vec3(2.7, -3.3, 1.3))));
-    vec3 xw = vegLevel(limb.twig, VEG_TWIG_DAMPING, ph, w, 0.8);
+    vec3 xw = vegLevel(limb.twig, VEG_TWIG_DAMPING, ph, w, vegTwigBob);
     o.offset += xw * vegBend(u);
     o.omega += cross(dir, xw) * (vegBendSlope(u) / max(limb.twig.len, 0.02));
     return o;

@@ -136,9 +136,12 @@ bool SceneMeshDrawer::setup(SceneGpu& gpu) {
     fsBarkIndirect_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshBarkIndirectFrag);
     fsGround_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshGroundFrag);
     fsGroundIndirect_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshGroundIndirectFrag);
+    fsSpray_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshForestSprayFrag);
+    fsSprayIndirect_ =
+        SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshForestSprayIndirectFrag);
     if (std::find(std::begin(vs_), std::end(vs_), VK_NULL_HANDLE) != std::end(vs_) || !fs_ || !fsIndirect_ ||
         !fsVeg_ || !fsVegIndirect_ || !fsSprite_ || !fsSpriteIndirect_ || !fsCluster_ || !fsClusterIndirect_ ||
-        !fsBark_ || !fsBarkIndirect_ || !fsGround_ || !fsGroundIndirect_) {
+        !fsBark_ || !fsBarkIndirect_ || !fsGround_ || !fsGroundIndirect_ || !fsSpray_ || !fsSprayIndirect_) {
         LOG_ERROR("SceneMeshDrawer: Failed creating the mesh shader modules");
         return false;
     }
@@ -168,6 +171,9 @@ void SceneMeshDrawer::cleanup(SceneGpu& gpu) {
     SceneVkShaderModule::destroy(device_, fsBarkIndirect_);
     SceneVkShaderModule::destroy(device_, fsGround_);
     SceneVkShaderModule::destroy(device_, fsGroundIndirect_);
+    SceneVkShaderModule::destroy(device_, fsSpray_);
+    SceneVkShaderModule::destroy(device_, fsSprayIndirect_);
+    fsSpray_ = fsSprayIndirect_ = VK_NULL_HANDLE;
     fs_ = fsIndirect_ = fsVeg_ = fsVegIndirect_ = fsSprite_ = fsSpriteIndirect_ = VK_NULL_HANDLE;
     fsCluster_ = fsClusterIndirect_ = fsBark_ = fsBarkIndirect_ = fsGround_ = fsGroundIndirect_ = VK_NULL_HANDLE;
     if (layout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(device_, layout_, nullptr);
@@ -235,14 +241,19 @@ VkPipeline SceneMeshDrawer::builtinPipeline(const MeshDraw& draw, const TargetFo
     // Turf has its own build too (a static mesh's: SCENE_GROUND).
     const bool ground = draw.kind == MeshKind::Static &&
                         (static_cast<uint32_t>(draw.push.pbrParams[3]) & mesh_flags::kGround) != 0u;
+    // So do a needle or scale-leaf forest's leaves (SCENE_FOREST_SPRAY).
+    const bool spray = draw.kind == MeshKind::ForestLeaf && !cluster &&
+                       (static_cast<uint32_t>(draw.push.pbrParams[3]) & mesh_flags::kForestSpray) != 0u;
     const uint32_t variant = static_cast<uint32_t>(draw.kind) * raster::kCount + rasterBits +
                              (cluster ? static_cast<uint32_t>(kMeshKindCount) * raster::kCount : 0u) +
-                             (ground ? 2u * static_cast<uint32_t>(kMeshKindCount) * raster::kCount : 0u);
+                             (ground ? 2u * static_cast<uint32_t>(kMeshKindCount) * raster::kCount : 0u) +
+                             (spray ? 3u * static_cast<uint32_t>(kMeshKindCount) * raster::kCount : 0u);
     return builtin_.get(variant, target, [&] {
         const bool veg = vegetationShading(draw.kind);
         VkShaderModule fs = target.colorCount > 1 ? (veg ? fsVegIndirect_ : fsIndirect_) : (veg ? fsVeg_ : fs_);
         if (draw.kind == MeshKind::ForestSprite) fs = target.colorCount > 1 ? fsSpriteIndirect_ : fsSprite_;
         if (cluster) fs = target.colorCount > 1 ? fsClusterIndirect_ : fsCluster_;
+        if (spray) fs = target.colorCount > 1 ? fsSprayIndirect_ : fsSpray_;
         if (draw.kind == MeshKind::Tube || draw.kind == MeshKind::ForestTube)
             fs = target.colorCount > 1 ? fsBarkIndirect_ : fsBark_;
         if (ground) fs = target.colorCount > 1 ? fsGroundIndirect_ : fsGround_;

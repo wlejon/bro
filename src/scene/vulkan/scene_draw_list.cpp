@@ -67,6 +67,21 @@ void buildDrawLists(SceneFrame& frame) {
     lists.opaque.reserve(lists.nodes.size());
     const bromath::Frustum* frustum = frame.renderer.cullingFrustum();
 
+    // The forests first, all at once: their trees share one budget (a mixed
+    // forest is a node per leaf form, and they thin alike).
+    std::vector<ForestNode*> forests;
+    for (SceneNode* node : lists.nodes)
+        if (node->type() == SceneNode::Type::Mesh)
+            if (ForestNode* forest = static_cast<MeshNode*>(node)->asForest()) forests.push_back(forest);
+    std::vector<std::vector<MeshDraw>> forestDraws;
+    if (forests.size() == 1) {
+        forestDraws.resize(1);
+        drawer.prepareForest(frame, *forests[0], forestDraws[0]);
+    } else if (!forests.empty()) {
+        drawer.prepareForests(frame, forests, forestDraws);
+    }
+    size_t forestAt = 0;
+
     for (SceneNode* node : lists.nodes) {
         if (drawsContent(frame, *node)) frame.drewContent = true;
 
@@ -88,12 +103,11 @@ void buildDrawLists(SceneFrame& frame) {
                 }
                 continue;
             }
-            if (ForestNode* forest = static_cast<MeshNode*>(node)->asForest()) {
+            if (static_cast<MeshNode*>(node)->asForest()) {
                 // A forest: a draw per tier and shape for the camera, and
-                // the shadow tiles' casters (never in the colour lists).
-                std::vector<MeshDraw> draws;
-                drawer.prepareForest(frame, *forest, draws);
-                for (MeshDraw& draw : draws) {
+                // the shadow tiles' casters (never in the colour lists),
+                // prepared above in the same order as this walk.
+                for (MeshDraw& draw : forestDraws[forestAt++]) {
                     placeDraw(frame, node, std::nullopt, draw);
                     const auto index = static_cast<uint32_t>(lists.meshes.size());
                     lists.meshes.push_back(draw);

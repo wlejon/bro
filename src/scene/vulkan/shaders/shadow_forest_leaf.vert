@@ -12,6 +12,7 @@ layout(location = 0) in vec3 inPos;
 #include "scene_forest.glsl"
 
 void main() {
+    forestApplyLook();
     ForestEntry e = forestEntry(gl_InstanceIndex);
     int leaf = e.first + gl_VertexIndex / max(e.param, 1);
     if (leaf >= e.end) {
@@ -33,6 +34,9 @@ void main() {
     float grown = (k - 1.0) * procedural.header[1].z;
     if (grown > 0.0) P = lc + (P - lc) * clamp(1.0 - 0.5 * grown / max(lr, 1e-3), 0.55, 1.0);
     R *= k;
+    // A spray's caster is its card narrowed to the share its needles or
+    // scales cover (the casters have no fragment stage to cut them).
+    R[0] *= forestSprayFill();
 
     int specimen;
     float treeSeed;

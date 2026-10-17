@@ -85,6 +85,7 @@ bool forestSprite(int mode, int instanceIndex, int vertexIndex, mat4 base, out F
         s.seed = treeSeed;
     }
 
+    forestApplyLook();
     VegPlant plant = vegPlant(model, v0, v3);
     VegLimb limb = vegLimb(model, v3);
     VegWind w = vegWind(plant);
@@ -95,7 +96,7 @@ bool forestSprite(int mode, int instanceIndex, int vertexIndex, mat4 base, out F
     s.instance = e.instance;
     s.gust = w.p0;
     s.fade = e.fade;
-    s.tint = vegLimbLeafTint(model, v0, v3);
+    s.tint = vegLimbLeafTint(model, v0, v3) * forestSpecimenTint(specimen, false);
     // The crown's centre moves with the sprite, so a leaf's depth in it (its
     // light) is the rest pose's.
     s.crown = vec4((model * vec4(v1.xyz, 1.0)).xyz + pose.offset, max(v1.w * scale, 0.5));

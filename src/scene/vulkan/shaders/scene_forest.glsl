@@ -9,11 +9,14 @@
 //   header[1]  base scale, scale jitter, leaf length, flutter fade (widening)
 //   header[2]  first record of: specimens, segments, clumps, leaves (uint bits)
 //   header[3]  first record of the instances (uint bits); the leaf's width
-//              over its length; -, -
-//   specimens  4 records: (segStart, segCount, clumpStart, clumpCount) and
+//              over its length (a spray's: its needles' cover, as an
+//              ellipse); the leaves' flutter; the look as uint bits: leaf
+//              form (bits 0-3), limb bob and twig bob in 64ths (8 bits each)
+//   specimens  6 records: (segStart, segCount, clumpStart, clumpCount) and
 //              (leafStart, leafCount, crown clump, mean clump weight) as
 //              uint bits but the last; (crown.xyz, crown radius across);
-//              (crown radius up, mean clump radius, height, -)
+//              (crown radius up, mean clump radius, height, -); its leaves'
+//              tint (rgb, -); its bark's tint (rgb, -)
 //   segments   7 records: (from.xyz, rFrom), (to.xyz, rTo), (oct tangent at
 //              from, at to), then its vegetation record (4)
 //   clumps     6 records: (centre.xyz, radius), (twig dir.xyz, leaf count),
@@ -55,7 +58,28 @@ ForestEntry forestEntry(int i) {
 }
 
 int forestBase(int k) { return int(floatBitsToUint(procedural.header[2][k])); }
-int forestSpecimenRecord(int s) { return forestBase(0) + s * 4; }
+int forestSpecimenRecord(int s) { return forestBase(0) + s * FOREST_SPECIMEN_RECORDS; }
+
+// Specimen `s`'s tint on the node's colour: its leaves' or its bark's.
+vec3 forestSpecimenTint(int s, bool bark) { return procedural.records[forestSpecimenRecord(s) + (bark ? 5 : 4)].xyz; }
+
+// The node's leaf form (header[3].w bits 0-3): 0 broad, 1 needle sprays, 2
+// scale-leaf sprays; and the share of its card a spray covers
+// (ForestNode::sprayFill).
+int forestLeafForm() { return int(floatBitsToUint(procedural.header[3].w) & 15u); }
+float forestSprayFill() {
+    int f = forestLeafForm();
+    return f == 1 ? 0.45 : f == 2 ? 0.47 : 1.0;
+}
+
+// The node's look (header[3].w): its plants' limbs and twigs bounce as they
+// ring (scene_vegetation.glsl's vegLimbBob / vegTwigBob, which every
+// forest vertex stage sets first, so every tier is posed alike).
+void forestApplyLook() {
+    uint w = floatBitsToUint(procedural.header[3].w);
+    vegLimbBob = float((w >> 8) & 255u) / 64.0;
+    vegTwigBob = float((w >> 16) & 255u) / 64.0;
+}
 int forestSegmentRecord(int g) { return forestBase(1) + g * 7; }
 int forestClumpRecord(int c) { return forestBase(2) + c * 6; }
 
@@ -111,7 +135,7 @@ vec4 forestLeafSway(mat4 model, vec4 v0, vec4 v1, vec4 v2, vec4 v3, vec3 axisNod
 // header's flutter fade.
 float forestFlutter(float widening) {
     float to = max(procedural.header[1].w, 1.01);
-    return 1.0 - smoothstep(1.0, to, widening);
+    return (1.0 - smoothstep(1.0, to, widening)) * procedural.header[3].z;
 }
 
 const vec4 FOREST_CULLED = vec4(2.0, 2.0, 2.0, 1.0);

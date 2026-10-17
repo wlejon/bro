@@ -722,6 +722,15 @@ void bro_scene_SceneNode_forestLod(void* self, bronze_native_buffer* out);
 //   registered at __bro_native.scene.SceneNode_setForestBark
 void bro_scene_SceneNode_setForestBark(void* self, double r, double g, double b, double roughness);
 
+// forest look: per specimen 8 floats (emitForest's specimenLooks: leaf rgb,
+// leaf form, bark rgb, 0; empty: the node's colours), and [leafForm, flutter,
+// limbBob, twigBob, looks given] (ForestNode::Look; a NaN keeps a value; the
+// specimens keep their looks unless the last is 1). False when the looks do
+// not match the specimens.
+//   registered at __bro_native.scene.SceneNode_setForestLook
+bool bro_scene_SceneNode_setForestLook(void* self, const float* looks, uint32_t looks_len, const double* look,
+                                       uint32_t look_len);
+
 // forest forced tier (-1 by size, 0 leaves, 1 clumps, 2 crowns)
 //   registered at __bro_native.scene.SceneNode_setForestTier
 void bro_scene_SceneNode_setForestTier(void* self, int32_t tier);

@@ -38,6 +38,64 @@
 
     const f32 = (a) => a instanceof Float32Array ? a : new Float32Array(a || []);
 
+    // What a node draws its leaves as (ForestNode::Look), by leaf form: the
+    // leaf card it takes when given none, how much the leaves flutter, and
+    // how much its limbs and twigs bounce. A conifer's needles hardly
+    // flutter and its long boughs bounce; its leaf is a whole spray's card,
+    // the needles or scale leaves cut out of it on the GPU.
+    const FORMS = {
+        broad: { form: 0, shape: 'oval',
+                 card: { width: 0.07, length: 0.12, bend: 0.4, fullUV: true, shapedSilhouette: true, cup: 0.55,
+                         widthSegments: 2, lengthSegments: 3 },
+                 flutter: 1, limbBob: 0.6, twigBob: 0.8 },
+        needle: { form: 1, shape: 'frond',
+                  card: { width: 0.1, length: 0.18, bend: 0.3, fullUV: true, widthSegments: 1, lengthSegments: 2 },
+                  flutter: 0.15, limbBob: 1.6, twigBob: 1.0 },
+        scale: { form: 2, shape: 'frond',
+                 card: { width: 0.11, length: 0.16, bend: 0.25, fullUV: true, widthSegments: 1, lengthSegments: 2 },
+                 flutter: 0.1, limbBob: 1.3, twigBob: 0.9 },
+    };
+    const FORM_NAMES = ['broad', 'needle', 'scale'];
+    function formOf(v) {
+        const name = typeof v === 'number' ? FORM_NAMES[v | 0] : v;
+        return typeof name === 'string' && Object.prototype.hasOwnProperty.call(FORMS, name) ? FORMS[name] : null;
+    }
+
+    // The leaf card a form draws when the forest is given none.
+    function defaultLeaf(form) {
+        const MeshCtor = globalThis.Mesh || (globalThis.bro && bro.mesh && bro.mesh.Mesh);
+        if (!MeshCtor || typeof MeshCtor.leafCard !== 'function') return null;
+        const m = MeshCtor.leafCard(form.shape, form.card);
+        m.colors = new Float32Array(0);
+        return m;
+    }
+
+    // The forest's leaf form: `leafForm`, else the one its emit was filtered
+    // to, else the form all its specimens share.
+    function leafFormOf(o) {
+        if (o.leafForm !== undefined) return formOf(o.leafForm);
+        const f = o.forest;
+        if (f && f.leafForm !== undefined) return formOf(f.leafForm);
+        const looks = f && f.specimenLooks;
+        if (looks && looks.length >= 8) {
+            const first = looks[3];
+            for (let i = 3; i < looks.length; i += 8) if (looks[i] !== first) return null;
+            return formOf(first);
+        }
+        return null;
+    }
+
+    function setLook(node, o, form) {
+        const looks = o.specimenLooks || (o.forest && o.forest.specimenLooks) || null;
+        const num = (v, d) => (typeof v === 'number' ? v : d);
+        const a = new Float64Array([form ? form.form : NaN,
+                                    num(o.flutter, form ? form.flutter : NaN),
+                                    num(o.limbBob, form ? form.limbBob : NaN),
+                                    num(o.twigBob, form ? form.twigBob : NaN),
+                                    looks || o.forest ? 1 : 0]);
+        return __bro_native.scene.SceneNode_setForestLook(node, looks ? f32(looks) : new Float32Array(0), a);
+    }
+
     function setSpecimens(node, forest) {
         if (!forest) return false;
         const l = forest.leaves;
@@ -59,6 +117,10 @@
 
     function applyOpts(node, o) {
         if (o.forest && !setSpecimens(node, o.forest)) throw new TypeError('createForest: the forest arrays do not fit together');
+        if (o.forest || o.leafForm !== undefined || o.specimenLooks || o.flutter !== undefined ||
+            o.limbBob !== undefined || o.twigBob !== undefined) {
+            if (!setLook(node, o, leafFormOf(o))) throw new TypeError('createForest: specimenLooks do not match the specimens');
+        }
         const inst = o.instances || (o.forest && o.instances === undefined ? o.forest.instances : null);
         if (inst) __bro_native.scene.SceneNode_setForestInstances(node, f32(inst));
         if (o.lod) setLod(node, o.lod);
@@ -73,7 +135,13 @@
 
     fn(SceneGraph.prototype, 'createForest', function createForest(opts) {
         const o = opts || {};
-        const leaf = o.leaf && typeof o.leaf !== 'string' ? o.leaf : (o.mesh && typeof o.mesh !== 'string' ? o.mesh : null);
+        let leaf = o.leaf && typeof o.leaf !== 'string' ? o.leaf : (o.mesh && typeof o.mesh !== 'string' ? o.mesh : null);
+        // No leaf given: the card its leaf form draws (a broadleaf's leaf, a
+        // conifer's spray).
+        if (!leaf) {
+            const form = leafFormOf(o) || FORMS.broad;
+            leaf = defaultLeaf(form);
+        }
         const node = canon(__bro_native.scene.SceneGraph_createForest(this, o, leaf));
         if (!node) return node;
         applyOpts(node, o);

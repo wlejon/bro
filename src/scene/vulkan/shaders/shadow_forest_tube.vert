@@ -10,6 +10,7 @@
 #include "scene_forest_tube.glsl"
 
 void main() {
+    forestApplyLook();
     ForestEntry e = forestEntry(gl_InstanceIndex);
     vec3 pos, radial, axisDir;
     vec2 uv;
