@@ -243,6 +243,8 @@ private:
     VkShaderModule fsSprite_ = VK_NULL_HANDLE;
     VkShaderModule fsCluster_ = VK_NULL_HANDLE;
     VkShaderModule fsClusterIndirect_ = VK_NULL_HANDLE;
+    VkShaderModule fsBark_ = VK_NULL_HANDLE;           // Tube, ForestTube: mesh.frag's SCENE_BARK build
+    VkShaderModule fsBarkIndirect_ = VK_NULL_HANDLE;
     VkShaderModule fsSpriteIndirect_ = VK_NULL_HANDLE;
     PipelineVariants builtin_;
     std::unordered_map<std::string, std::unique_ptr<CustomProgram>> custom_;

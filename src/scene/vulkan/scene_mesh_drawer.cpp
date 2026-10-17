@@ -131,8 +131,11 @@ bool SceneMeshDrawer::setup(SceneGpu& gpu) {
     fsCluster_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshForestClusterFrag);
     fsClusterIndirect_ =
         SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshForestClusterIndirectFrag);
+    fsBark_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshBarkFrag);
+    fsBarkIndirect_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshBarkIndirectFrag);
     if (std::find(std::begin(vs_), std::end(vs_), VK_NULL_HANDLE) != std::end(vs_) || !fs_ || !fsIndirect_ ||
-        !fsVeg_ || !fsVegIndirect_ || !fsSprite_ || !fsSpriteIndirect_ || !fsCluster_ || !fsClusterIndirect_) {
+        !fsVeg_ || !fsVegIndirect_ || !fsSprite_ || !fsSpriteIndirect_ || !fsCluster_ || !fsClusterIndirect_ ||
+        !fsBark_ || !fsBarkIndirect_) {
         LOG_ERROR("SceneMeshDrawer: Failed creating the mesh shader modules");
         return false;
     }
@@ -158,8 +161,10 @@ void SceneMeshDrawer::cleanup(SceneGpu& gpu) {
     SceneVkShaderModule::destroy(device_, fsSpriteIndirect_);
     SceneVkShaderModule::destroy(device_, fsCluster_);
     SceneVkShaderModule::destroy(device_, fsClusterIndirect_);
+    SceneVkShaderModule::destroy(device_, fsBark_);
+    SceneVkShaderModule::destroy(device_, fsBarkIndirect_);
     fs_ = fsIndirect_ = fsVeg_ = fsVegIndirect_ = fsSprite_ = fsSpriteIndirect_ = VK_NULL_HANDLE;
-    fsCluster_ = fsClusterIndirect_ = VK_NULL_HANDLE;
+    fsCluster_ = fsClusterIndirect_ = fsBark_ = fsBarkIndirect_ = VK_NULL_HANDLE;
     if (layout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(device_, layout_, nullptr);
     layout_ = VK_NULL_HANDLE;
 }
@@ -229,6 +234,8 @@ VkPipeline SceneMeshDrawer::builtinPipeline(const MeshDraw& draw, const TargetFo
         VkShaderModule fs = target.colorCount > 1 ? (veg ? fsVegIndirect_ : fsIndirect_) : (veg ? fsVeg_ : fs_);
         if (draw.kind == MeshKind::ForestSprite) fs = target.colorCount > 1 ? fsSpriteIndirect_ : fsSprite_;
         if (cluster) fs = target.colorCount > 1 ? fsClusterIndirect_ : fsCluster_;
+        if (draw.kind == MeshKind::Tube || draw.kind == MeshKind::ForestTube)
+            fs = target.colorCount > 1 ? fsBarkIndirect_ : fsBark_;
         return buildPipeline(vs_[static_cast<int>(draw.kind)], fs, draw.kind, rasterBits, target);
     });
 }
