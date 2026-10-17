@@ -2,6 +2,7 @@
 
 #include "render/vulkan_util.h"
 #include "scene/vulkan/scene_frame.h"
+#include "scene/vulkan/scene_gpu_timer.h"
 #include "scene/vulkan/scene_targets.h"
 #include "scene/vulkan/scene_vk_depth.h"
 #include "scene/vulkan/scene_vk_device.h"
@@ -95,6 +96,7 @@ void SceneFrameGraph::run(SceneFrame& frame) {
         if (io.drawsHdr() && !scopeOpen_) openScope(frame, io.scope());
 
         pass->record(frame);
+        if (frame.timer) frame.timer->mark(frame.cmd, pass->name());
     }
     if (scopeOpen_) closeScope(frame);
 }

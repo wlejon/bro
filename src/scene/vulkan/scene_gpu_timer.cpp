@@ -2,10 +2,16 @@
 
 #include "render/vulkan_frames.h"
 #include "render/vulkan_queue.h"
+#include "util/log.h"
 
+#include <cstdio>
+#include <cstdlib>
+#include <string>
 #include <vector>
 
 namespace bro::scene::vk {
+
+static_assert(render::VulkanFrames::kFramesInFlight <= 8, "SceneGpuTimer keeps marks for at most 8 slots");
 
 SceneGpuTimer::~SceneGpuTimer() {
     if (pool_ == VK_NULL_HANDLE) return;
@@ -28,10 +34,11 @@ bool SceneGpuTimer::init() {
     const uint32_t bits = families[family].timestampValidBits;
     validMask_ = bits >= 64 ? ~0ull : ((1ull << bits) - 1);
     periodNs_ = props.limits.timestampPeriod;
+    if (const char* env = std::getenv("BRO_SCENE_GPU_PASSES"); env && *env) passLogMs_ = std::atof(env);
 
     VkQueryPoolCreateInfo info{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
     info.queryType = VK_QUERY_TYPE_TIMESTAMP;
-    info.queryCount = 2 * render::VulkanFrames::kFramesInFlight;
+    info.queryCount = kPerSlot * render::VulkanFrames::kFramesInFlight;
     return vkCreateQueryPool(context_.device(), &info, nullptr, &pool_) == VK_SUCCESS;
 }
 
@@ -39,19 +46,28 @@ void SceneGpuTimer::begin(VkCommandBuffer cmd) {
     recordingPair_ = UINT32_MAX;
     if (pool_ == VK_NULL_HANDLE) return;
     const uint32_t pair = context_.frames().frameIndex();
-    // A second render in the same frame slot would reset a pair the first may
-    // still be writing; it goes untimed and the first keeps its result.
+    // A second render in the same frame slot would reset queries the first
+    // may still be writing; it goes untimed and the first keeps its result.
     if (pair == pendingPair_ && pendingTicket_ != 0 &&
         !context_.queue().isComplete(pendingTicket_))
         return;
-    vkCmdResetQueryPool(cmd, pool_, 2 * pair, 2);
-    vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, pool_, 2 * pair);
+    vkCmdResetQueryPool(cmd, pool_, kPerSlot * pair, kPerSlot);
+    vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, pool_, kPerSlot * pair);
     recordingPair_ = pair;
+    markCount_[pair] = 0;
+}
+
+void SceneGpuTimer::mark(VkCommandBuffer cmd, const char* name) {
+    if (passLogMs_ < 0.0 || recordingPair_ == UINT32_MAX) return;
+    uint32_t& n = markCount_[recordingPair_];
+    if (n >= kMaxMarks) return;
+    vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, pool_, kPerSlot * recordingPair_ + 2 + n);
+    markNames_[recordingPair_][n++] = name;
 }
 
 void SceneGpuTimer::end(VkCommandBuffer cmd) {
     if (recordingPair_ == UINT32_MAX) return;
-    vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, pool_, 2 * recordingPair_ + 1);
+    vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, pool_, kPerSlot * recordingPair_ + 1);
 }
 
 void SceneGpuTimer::submitted(uint64_t ticket) {
@@ -66,12 +82,32 @@ double SceneGpuTimer::takeMs() {
     const uint64_t ticket = pendingTicket_;
     pendingTicket_ = 0;
     if (!context_.queue().wait(ticket)) return -1.0;
-    uint64_t stamps[2] = {};
-    if (vkGetQueryPoolResults(context_.device(), pool_, 2 * pendingPair_, 2, sizeof(stamps),
+    const uint32_t marks = markCount_[pendingPair_];
+    uint64_t stamps[kPerSlot] = {};
+    if (vkGetQueryPoolResults(context_.device(), pool_, kPerSlot * pendingPair_, 2 + marks, sizeof(stamps),
                               stamps, sizeof(uint64_t), VK_QUERY_RESULT_64_BIT) != VK_SUCCESS)
         return -1.0;
-    const uint64_t ticks = ((stamps[1] & validMask_) - (stamps[0] & validMask_)) & validMask_;
-    return static_cast<double>(ticks) * periodNs_ / 1.0e6;
+    const auto ms = [&](uint64_t from, uint64_t to) {
+        const uint64_t ticks = ((to & validMask_) - (from & validMask_)) & validMask_;
+        return static_cast<double>(ticks) * periodNs_ / 1.0e6;
+    };
+    const double total = ms(stamps[0], stamps[1]);
+    if (passLogMs_ >= 0.0 && marks > 0 && total > passLogMs_) {
+        std::string line;
+        uint64_t prev = stamps[0];
+        char buf[96];
+        for (uint32_t i = 0; i < marks; ++i) {
+            const double d = ms(prev, stamps[2 + i]);
+            prev = stamps[2 + i];
+            if (d < 0.01) continue;
+            std::snprintf(buf, sizeof(buf), " %s %.2f", markNames_[pendingPair_][i], d);
+            line += buf;
+        }
+        std::snprintf(buf, sizeof(buf), " rest %.2f", ms(prev, stamps[1]));
+        line += buf;
+        LOG_INFO("scene GPU %.2f ms:%s", total, line.c_str());
+    }
+    return total;
 }
 
 }  // namespace bro::scene::vk

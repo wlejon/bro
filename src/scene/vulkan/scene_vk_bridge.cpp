@@ -101,6 +101,7 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
     timer_.begin(cmd);
     SceneFrame frame(cmd, gpu_, graph, renderer);
     frame.stats = stats;
+    frame.timer = &timer_;
     frame.view = SceneView::fromCamera(graph, width, height);
     if (renderer.shadowPlan().tileCount > 0 &&
         !targets_.ensureShadowAtlas(allocator_, static_cast<uint32_t>(renderer.shadowPlan().atlasSize))) {
@@ -115,6 +116,7 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
     frame.tilt = renderer.tiltShiftEnabled();
     frame.fxaa = renderer.fxaaEnabled();
     buildDrawLists(frame);
+    timer_.mark(cmd, "setup");
 
     graph_.run(frame);
 

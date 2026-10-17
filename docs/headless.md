@@ -316,6 +316,8 @@ console.log(`${(sum/200).toFixed(2)} ms/frame (${(200000/sum).toFixed(0)} fps)`)
 
 Toggle a subsystem's scene nodes `.visible` on/off across two such runs and subtract to attribute GPU cost to it. The absolute numbers track real windowed framerate.
 
+Where a slow frame's GPU time went: run with `BRO_SCENE_GPU_PASSES=<ms>` and every `perf.gpuFrameMs()` read of a render over `<ms>` (`0`: every render) logs it pass by pass, and draw by draw inside the opaque pass (`scene GPU 6.84 ms: setup 0.02 shadow 0.81 opaque:forestSprite 2.93 opaque:forestLeaf 1.40 ... rest 0.11`). Each pass end writes one timestamp; with the variable unset nothing is written. A GPU number read while the CPU is slow is inflated by the GPU clocking down between frames, so compare passes within one log line, not across runs with different CPU loads.
+
 `perf.stats()` returns, accumulated over every style/layout pass since the reset:
 
 | Field | Meaning |

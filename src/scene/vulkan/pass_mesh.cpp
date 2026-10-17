@@ -5,6 +5,7 @@
 #include "scene/vulkan/scene_defaults.h"
 #include "scene/vulkan/scene_frame.h"
 #include "scene/vulkan/scene_gpu_resources.h"
+#include "scene/vulkan/scene_gpu_timer.h"
 #include "scene/vulkan/scene_mesh_drawer.h"
 #include "scene/vulkan/scene_targets.h"
 #include "scene/vulkan/scene_vk_device.h"
@@ -21,9 +22,15 @@ void PassOpaque::declare(const SceneFrame& frame, PassIO& io) const {
 }
 
 void PassOpaque::record(SceneFrame& frame) {
+    // Each draw's own time when the passes are timed (SceneGpuTimer), by kind.
+    static constexpr const char* kKind[kMeshKindCount] = {
+        "opaque:static", "opaque:instanced", "opaque:skinned", "opaque:scatter", "opaque:tube",
+        "opaque:vegetation", "opaque:instancedVegetation", "opaque:grass", "opaque:forestLeaf",
+        "opaque:forestTube", "opaque:forestSprite"};
     for (uint32_t i : frame.lists.opaque) {
-        frame.gpu.meshes.record(frame.cmd, frame.hdrTarget, frame.cameraSet, frame.lightingSet,
-                                frame.lists.meshes[i]);
+        const MeshDraw& draw = frame.lists.meshes[i];
+        frame.gpu.meshes.record(frame.cmd, frame.hdrTarget, frame.cameraSet, frame.lightingSet, draw);
+        if (frame.timer) frame.timer->mark(frame.cmd, kKind[static_cast<int>(draw.kind)]);
     }
 }
 

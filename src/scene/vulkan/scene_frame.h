@@ -33,6 +33,7 @@ class SceneTargets;
 class SceneGpuResources;
 class SceneMeshDrawer;
 class SceneEnvironment;
+class SceneGpuTimer;
 struct SceneVkImage;
 
 struct SceneGpu {
@@ -59,6 +60,8 @@ struct SceneFrame {
     CullStats stats;
     /// Anything visible was drawn (the compositor shows the layer).
     bool drewContent = false;
+    /// Stamps the end of each pass (SceneGpuTimer::mark); null: untimed.
+    SceneGpuTimer* timer = nullptr;
 
     // Effects that change the pass structure, decided once per frame.
     bool ssao = false;   // opaque scope carries the indirect attachment; AO applies
