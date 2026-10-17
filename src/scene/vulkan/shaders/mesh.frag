@@ -68,6 +68,10 @@ layout(location = 1) out vec4 outIndirect;
 #ifdef SCENE_BARK
 #include "scene_bark.glsl"
 #endif
+#ifdef SCENE_GROUND
+#include "scene_grass.glsl"
+#include "scene_ground.glsl"
+#endif
 
 layout(set = 2, binding = 0) uniform sampler2D texAlbedo;
 layout(set = 2, binding = 1) uniform sampler2D texNormal;
@@ -402,6 +406,13 @@ void main() {
     // height over the root and the bark word (negative: not a plant's).
     if (inUV.y >= 0.0) barkSurface(inColor, inUV.x, inUV.y, worldPos, N, inTangent, baseColor, N, roughness, vegAO);
 #endif
+#ifdef SCENE_GROUND
+    // Turf (scene_ground.glsl): the vertex colour is the ground's data
+    // (density, dryness, floor) where the grass node's field does not reach.
+    float groundAO = 1.0;
+    groundSurface(worldPos, inColor, baseColor, roughness, groundAO);
+    baseColor *= push.baseColor.rgb;
+#endif
 
 #ifdef CUSTOM_FRAGMENT
     userFragment(baseColor, N, metallic, roughness, emissive, alpha);
@@ -442,6 +453,9 @@ void main() {
     if ((flags & MESH_OCCLUSION_MAP) != 0u) indirect *= texture(texOcclusion, inUV).r;
 #ifdef SCENE_VEGETATION
     indirect *= vegAO;
+#endif
+#ifdef SCENE_GROUND
+    indirect *= groundAO;
 #endif
     vec3 color = sceneDirectLight(s) + indirect + emissive;
 

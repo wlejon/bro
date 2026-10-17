@@ -770,6 +770,15 @@ void bro_scene_SceneNode_grassPush(void* self, double x, double z, double radius
 //   result: f64[] in *out; out->release == NULL, the runtime copies
 void bro_scene_SceneNode_grassStats(void* self, bronze_native_buffer* out);
 
+// grass floor: one float a field texel (0 open .. 1 a closed canopy); fewer than
+// the field's texels clears it
+//   registered at __bro_native.scene.SceneNode_setGrassFloor
+void bro_scene_SceneNode_setGrassFloor(void* self, const float* data, uint32_t data_len);
+
+// mesh.turf: shade a mesh node as grass node `grass`'s ground (on 0: as itself)
+//   registered at __bro_native.scene.SceneNode_setTurfGrass
+void bro_scene_SceneNode_setTurfGrass(void* self, void* grass, int32_t on);
+
 // node.sampleHeights: a mesh node's top surface (world y) on a grid, NaN where
 // it has none; texel (i, j) at world (x0 + i * cell, z0 + j * cell)
 //   registered at __bro_native.scene.SceneNode_sampleHeights

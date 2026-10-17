@@ -1,6 +1,7 @@
 #include "scene/vulkan/scene_mesh_drawer.h"
 
 #include "scene/depth_policy.h"
+#include "scene/grass_node.h"
 #include "scene/instanced_mesh_node.h"
 #include "scene/scene_graph.h"
 #include "scene/skinned_mesh_node.h"
@@ -133,9 +134,11 @@ bool SceneMeshDrawer::setup(SceneGpu& gpu) {
         SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshForestClusterIndirectFrag);
     fsBark_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshBarkFrag);
     fsBarkIndirect_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshBarkIndirectFrag);
+    fsGround_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshGroundFrag);
+    fsGroundIndirect_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshGroundIndirectFrag);
     if (std::find(std::begin(vs_), std::end(vs_), VK_NULL_HANDLE) != std::end(vs_) || !fs_ || !fsIndirect_ ||
         !fsVeg_ || !fsVegIndirect_ || !fsSprite_ || !fsSpriteIndirect_ || !fsCluster_ || !fsClusterIndirect_ ||
-        !fsBark_ || !fsBarkIndirect_) {
+        !fsBark_ || !fsBarkIndirect_ || !fsGround_ || !fsGroundIndirect_) {
         LOG_ERROR("SceneMeshDrawer: Failed creating the mesh shader modules");
         return false;
     }
@@ -163,8 +166,10 @@ void SceneMeshDrawer::cleanup(SceneGpu& gpu) {
     SceneVkShaderModule::destroy(device_, fsClusterIndirect_);
     SceneVkShaderModule::destroy(device_, fsBark_);
     SceneVkShaderModule::destroy(device_, fsBarkIndirect_);
+    SceneVkShaderModule::destroy(device_, fsGround_);
+    SceneVkShaderModule::destroy(device_, fsGroundIndirect_);
     fs_ = fsIndirect_ = fsVeg_ = fsVegIndirect_ = fsSprite_ = fsSpriteIndirect_ = VK_NULL_HANDLE;
-    fsCluster_ = fsClusterIndirect_ = fsBark_ = fsBarkIndirect_ = VK_NULL_HANDLE;
+    fsCluster_ = fsClusterIndirect_ = fsBark_ = fsBarkIndirect_ = fsGround_ = fsGroundIndirect_ = VK_NULL_HANDLE;
     if (layout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(device_, layout_, nullptr);
     layout_ = VK_NULL_HANDLE;
 }
@@ -227,8 +232,12 @@ VkPipeline SceneMeshDrawer::builtinPipeline(const MeshDraw& draw, const TargetFo
     // and grass's carries none of their work.
     const bool cluster = draw.kind == MeshKind::ForestLeaf &&
                          (static_cast<uint32_t>(draw.push.pbrParams[3]) & mesh_flags::kForestCluster) != 0u;
+    // Turf has its own build too (a static mesh's: SCENE_GROUND).
+    const bool ground = draw.kind == MeshKind::Static &&
+                        (static_cast<uint32_t>(draw.push.pbrParams[3]) & mesh_flags::kGround) != 0u;
     const uint32_t variant = static_cast<uint32_t>(draw.kind) * raster::kCount + rasterBits +
-                             (cluster ? static_cast<uint32_t>(kMeshKindCount) * raster::kCount : 0u);
+                             (cluster ? static_cast<uint32_t>(kMeshKindCount) * raster::kCount : 0u) +
+                             (ground ? 2u * static_cast<uint32_t>(kMeshKindCount) * raster::kCount : 0u);
     return builtin_.get(variant, target, [&] {
         const bool veg = vegetationShading(draw.kind);
         VkShaderModule fs = target.colorCount > 1 ? (veg ? fsVegIndirect_ : fsIndirect_) : (veg ? fsVeg_ : fs_);
@@ -236,6 +245,7 @@ VkPipeline SceneMeshDrawer::builtinPipeline(const MeshDraw& draw, const TargetFo
         if (cluster) fs = target.colorCount > 1 ? fsClusterIndirect_ : fsCluster_;
         if (draw.kind == MeshKind::Tube || draw.kind == MeshKind::ForestTube)
             fs = target.colorCount > 1 ? fsBarkIndirect_ : fsBark_;
+        if (ground) fs = target.colorCount > 1 ? fsGroundIndirect_ : fsGround_;
         return buildPipeline(vs_[static_cast<int>(draw.kind)], fs, draw.kind, rasterBits, target);
     });
 }
@@ -514,6 +524,14 @@ bool SceneMeshDrawer::prepare(SceneFrame& frame, MeshNode& node, MeshDraw& out) 
             out.customSet = customSet(frame, node.id(), *cs, *prog, &node.customShaderTextures());
     } else if (node.effectiveUnlit()) {
         flags |= mesh_flags::kUnlit;
+    } else if (node.turfGrass() != 0u && out.kind == MeshKind::Static && !out.lines) {
+        // Turf: shaded as its grass node's ground, from that node's field.
+        SceneNode* g = frame.graph.findById(node.turfGrass());
+        MeshNode* gm = g && g->type() == SceneNode::Type::Mesh ? static_cast<MeshNode*>(g) : nullptr;
+        if (GrassNode* grass = gm ? gm->asGrass() : nullptr) {
+            out.customSet = groundSet(frame, *grass);
+            if (out.customSet) flags |= mesh_flags::kGround;
+        }
     }
 
     MaterialImages images = materialImages(frame.gpu.resources, node);
@@ -689,7 +707,8 @@ void SceneMeshDrawer::record(VkCommandBuffer cmd, const TargetFormat& target, Vk
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 3, sets, 0, nullptr);
     if (draw.vertexSet)
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 3, 1, &draw.vertexSet, 0, nullptr);
-    if (custom || (draw.kind == MeshKind::Grass && draw.customSet))
+    const bool ground = (static_cast<uint32_t>(draw.push.pbrParams[3]) & mesh_flags::kGround) != 0u;
+    if (custom || ((draw.kind == MeshKind::Grass || ground) && draw.customSet))
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 4, 1, &draw.customSet, 0, nullptr);
     vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                        sizeof(MeshPushConstants), &draw.push);

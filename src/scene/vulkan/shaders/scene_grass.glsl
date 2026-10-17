@@ -32,21 +32,31 @@ layout(set = 4, binding = 0) uniform GrassUBO {
     vec4 dry;        // rgb sun-dried colour, w: clump frequency (1/m)
     vec4 look;       // x: root shade, y: gust sheen, z: height variety, w: width growth per metre of distance
     vec4 push;       // xy: world x, z of the influence map's corner; z: its cell (m); w: cells across
-    vec4 pushRate;   // x: bend recovery (1/s), y: trample recovery (1/s), zw: unused
+    vec4 pushRate;   // x: bend recovery (1/s), y: trample recovery (1/s), z: 1 with a floor texture, w: unused
     vec4 shape;      // x: blades an instance, y: vertices a blade, z: spread from the root (m), w: a tuft's fan (rad)
     vec4 lod;        // x: thinning starts (m), y: the fewest blades kept (share), z: the share shadow casters keep, w: the eye's lift (m)
 } grass;
 
 const float GRASS_REFERENCE_SPEED = 2.5;   // m/s: the steady wind blades flutter in as authored
+const float GRASS_FLOOR_MIN = 0.08;        // GrassNode::kFloorMin: no low plants under this floor
+const int GRASS_FORB_LEAVES = 6;           // a low plant's leaves
 
 // r: ground height, g: density (0..1), b: dryness (0 lush .. 1 dry), a: height multiplier.
 layout(set = 4, binding = 1) uniform sampler2D grassField;
 // rg: the bend (x, z) at stamp time, b: the trample then, a: the stamp time.
 layout(set = 4, binding = 2) uniform sampler2D grassPush;
+// The forest floor on the field's grid: how closed the canopy overhead is,
+// 0 open .. 1 closed (litter, low leafy plants among the grass).
+layout(set = 4, binding = 3) uniform sampler2D grassFloor;
 
 vec4 grassFieldAt(vec2 xz) {
     vec2 uv = ((xz - grass.field.xy) / grass.field.z + 0.5) * grass.fieldSize.zw;
     return textureLod(grassField, uv, 0.0);
+}
+
+float grassFloorAt(vec2 xz) {
+    vec2 uv = ((xz - grass.field.xy) / grass.field.z + 0.5) * grass.fieldSize.zw;
+    return textureLod(grassFloor, uv, 0.0).r;
 }
 
 bool grassInField(vec2 xz) {
@@ -151,7 +161,18 @@ bool grassBlade(int id, int vid, vec3 v, vec3 vn, out GrassBlade b) {
     if (h.w > fin || h.w > fout) return false;
     if (!grassInField(root)) return false;
     vec4 f = grassFieldAt(root);
-    if (f.g <= 0.0 || f.a <= 0.0) return false;
+    // Low leafy plants on the forest floor: in the near rings (whose
+    // instances are tufts), some tufts where the canopy closes are a plant
+    // of broad leaves instead, in patches, also where no grass grows.
+    float fl = grass.pushRate.z > 0.5 ? grassFloorAt(root) : 0.0;
+    bool forb = false;
+    if (grass.shape.w > 0.0 && fl >= GRASS_FLOOR_MIN) {
+        float patchF = sceneWindNoise(root * 0.3 + 41.0) * 0.5 + 0.5;
+        float chance = smoothstep(GRASS_FLOOR_MIN, 0.5, fl) * smoothstep(0.5, 0.85, patchF) * 0.45;
+        forb = grassHash(c, 9001) < chance;
+    }
+    if (forb && j >= GRASS_FORB_LEAVES) return false;
+    if (!forb && (f.g <= 0.0 || f.a <= 0.0)) return false;
 
     // Off screen: a generous box around the cell's middle.
     float H = grass.blade.x;
@@ -167,13 +188,14 @@ bool grassBlade(int id, int vid, vec3 v, vec3 vn, out GrassBlade b) {
                         0.0, 1.0);
     float minY = grass.blade.z;
     float dens = (0.35 + 0.9 * clump) * f.g * smoothstep(minY - 0.05, minY + 0.05, gn.y);
-    vec4 hb =vec4(grassHash(c, j * 4), grassHash(c, j * 4 + 1), grassHash(c, j * 4 + 2), grassHash(c, j * 4 + 3));
-    if (hb.w > dens) return false;
+    vec4 hb = vec4(grassHash(c, j * 4), grassHash(c, j * 4 + 1), grassHash(c, j * 4 + 2), grassHash(c, j * 4 + 3));
+    if (!forb && hb.w > dens) return false;
 
     // The blade's spot: a step from the root, uniform over a disc of the
-    // ring's spread (a tuft near, the cell further off).
-    float rr = sqrt(hb.x);
-    float ra = hb.y * 6.2831853;
+    // ring's spread (a tuft near, the cell further off). A low plant's
+    // leaves stand round its root in a rosette.
+    float rr = forb ? 0.12 + 0.2 * hb.x : sqrt(hb.x);
+    float ra = forb ? float(j) * 2.3999632 + h.z * 6.2831853 + (hb.y - 0.5) * 0.6 : hb.y * 6.2831853;
     vec2 out2 = vec2(cos(ra), sin(ra));
     vec2 xz = root + out2 * (rr * grass.shape.z);
     float y0 = grassInField(xz) ? grassFieldAt(xz).r : f.r;
@@ -186,15 +208,29 @@ bool grassBlade(int id, int vid, vec3 v, vec3 vn, out GrassBlade b) {
     trample = min(trample, 1.0);
     float ht = H * mix(0.5, 1.4, clump * clump) * (0.85 + 0.3 * h.z) * (0.6 + 0.8 * hb.z) *
                mix(1.0, mix(0.8, 1.7, tall * lush), grass.look.z) * f.a;
+    // A low plant's leaves: short, broad, each a leaf's outline.
+    if (forb) ht = (0.09 + 0.14 * h.z) * (0.75 + 0.5 * hb.z) * (1.0 - trample * 0.5);
     ht *= 1.0 - trample * 0.25;
     // Width grows with distance, and never falls under about two thirds of a
     // pixel: a thinner blade only flickers in and out of the samples.
     float px = 2.0 / max(abs(camera.proj[1][1]) * camera.viewport.y, 1.0);
     float dv = length(vec3(xz.x, y0, xz.y) - eye);
     float wd = max(grass.blade.y * (1.0 + d * grass.look.w) * (grass.shape.x / kept), dv * px * 0.65);
+    float vx = v.x;
+    if (forb) {
+        wd = max((0.04 + 0.05 * h.x) * (0.8 + 0.4 * hb.x), dv * px * 0.65);
+        // The blade mesh's taper, reshaped into a leaf: narrow at the
+        // stalk, broadest a third of the way out, to a point.
+        float blade = 0.5 * pow(max(1.0 - v.y, 0.0), 0.7) + 0.02;
+        float leaf = 0.5 * pow(sin(3.14159265 * clamp(0.08 + 0.92 * v.y, 0.0, 1.0)), 0.75) *
+                         (1.0 - 0.3 * v.y) + 0.01;
+        vx *= leaf / blade;
+    }
     // In a tuft a blade's face turns out from the root; elsewhere at random.
+    // A leaf lies flat across the way it reaches.
     float hr = fract(hb.x * 13.73 + hb.z * 5.17);
     float yaw = grass.shape.w > 0.0 ? ra + 1.5707963 + (hr - 0.5) * 1.2 : hr * 6.2831853 + hb.y;
+    if (forb) yaw = ra + 1.5707963;
     vec3 side = vec3(cos(yaw), 0.0, sin(yaw));
 
     // The wind: a lean downwind, the travelling gusts, each blade's flutter
@@ -210,6 +246,9 @@ bool grassBlade(int id, int vid, vec3 v, vec3 vn, out GrassBlade b) {
              vec2(-side.z, side.x) * flut * grass.blade.w +
              vec2(cos(yaw * 3.0), sin(yaw * 3.0)) * 0.18 * (hb.z - 0.3) * (1.0 - min(grass.shape.w * 2.0, 0.6)) +
              out2 * grass.shape.w * (0.3 + 0.7 * rr) * (1.3 - 0.6 * hb.z);
+    // A leaf arches out from its plant's root and droops at the tip; the
+    // wind only stirs it.
+    if (forb) B = out2 * (0.9 + 0.6 * hb.z) + B * 0.25;
     B += pb * 1.6;
     // Flattened grass lies the way it was pushed, most blades nearly flat,
     // a few springing back first.
@@ -217,6 +256,7 @@ bool grassBlade(int id, int vid, vec3 v, vec3 vn, out GrassBlade b) {
     float flattened = trample * mix(0.75, 1.0, hb.z);
     B = mix(B, lieDir * length(B), flattened);
     float r0 = flattened * 1.2;   // a flattened blade leaves the ground leaning
+    if (forb) r0 = max(r0, 0.3 + 0.35 * hb.y);
     float th = min(length(B), 1.5 - r0);
     vec2 bd = normalize(B + 1e-4);
 
@@ -230,7 +270,7 @@ bool grassBlade(int id, int vid, vec3 v, vec3 vn, out GrassBlade b) {
     float up = a > 1e-3 ? y * (sa - sin(r0)) / a : y * cos(r0);
     vec3 dir3 = vec3(bd.x, 0.0, bd.y);
     vec3 base = vec3(xz.x - eye.x, y0 - eye.y, xz.y - eye.z);
-    b.pos = base + side * v.x * wd + (vec3(0.0, up, 0.0) + dir3 * along) * ht;
+    b.pos = base + side * vx * wd + (vec3(0.0, up, 0.0) + dir3 * along) * ht;
     vec3 tang = normalize(vec3(0.0, ca, 0.0) + dir3 * sa);
     b.normal = normalize(cross(side, tang) + side * vn.x * 0.6);
     b.side = side;
@@ -255,5 +295,16 @@ bool grassBlade(int id, int vid, vec3 v, vec3 vn, out GrassBlade b) {
     b.color = col;    b.ao = mix(mix(0.5, 1.0, y), 1.0, far);
     b.bulk = mix(grass.lush.w, 0.95, far);   // and is lit as the ground,
     b.far = smoothstep(8.0, 40.0, d);         // not glowing against the light
+    if (forb) {
+        // A deep shade-plant green, a little different plant to plant, the
+        // leaf paler toward its tip and dark at its stalk; lit by its own
+        // face more than a blade is.
+        float kind = h.y;
+        vec3 leafC = kind < 0.4 ? vec3(0.06, 0.12, 0.025) : kind < 0.75 ? vec3(0.085, 0.13, 0.025)
+                                                                          : vec3(0.05, 0.105, 0.05);
+        b.color = leafC * mix(0.6, 1.15, y) * mix(0.85, 1.15, hb.w);
+        b.ao = mix(0.55, 1.0, y);
+        b.bulk = 0.35;
+    }
     return true;
 }

@@ -144,6 +144,27 @@
         }
         __bro_native.scene.SceneNode_setGrassField(node, data, cols, rows, x0, z0, cell);
         fields.set(node, { data, cols, rows, x0, z0, cell });
+        // The forest floor, on the same grid: how closed the canopy is.
+        if (opts.floor !== undefined && opts.floor !== null) {
+            const floorAt = valueAt(opts.floor, 0);
+            const fl = new Float32Array(cols * rows);
+            for (let j = 0; j < rows; j++)
+                for (let i = 0; i < cols; i++) {
+                    const k = j * cols + i;
+                    fl[k] = Math.min(Math.max(+floorAt(x0 + i * cell, z0 + j * cell, data[k * 4]), 0), 1) || 0;
+                }
+            __bro_native.scene.SceneNode_setGrassFloor(node, fl);
+        }
+    }
+
+    // The meshes shaded as the grass's ground (turf: true is the ground
+    // node itself).
+    function applyTurf(node, opts) {
+        let t = opts.turf;
+        if (t === undefined || t === null || t === false) return;
+        if (t === true) t = opts.ground;
+        const list = Array.isArray(t) ? t : [t];
+        for (const m of list) if (m instanceof SceneNode) __bro_native.scene.SceneNode_setTurfGrass(m, node, 1);
     }
 
     // The look and the material. `density` in the options is the field's
@@ -163,12 +184,22 @@
         if (!node) return node;
         applyOpts(node, o);
         bake(node, o);
+        applyTurf(node, o);
         return node;
     });
 
     const P = SceneNode.prototype;
     fn(P, 'setGround', function setGround(opts) {
-        if (isGrass(this)) bake(this, opts || {});
+        if (isGrass(this)) {
+            bake(this, opts || {});
+            applyTurf(this, opts || {});
+        }
+        return this;
+    });
+    // Shade mesh node `mesh` as this grass's ground (on false: as itself).
+    fn(P, 'shadeGround', function shadeGround(mesh, on) {
+        if (isGrass(this) && mesh instanceof SceneNode)
+            __bro_native.scene.SceneNode_setTurfGrass(mesh, this, on === false ? 0 : 1);
         return this;
     });
     fn(P, 'setGrass', function setGrass(opts) {

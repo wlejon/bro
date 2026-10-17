@@ -178,20 +178,45 @@ void GrassNode::setField(const float* rgba, int cols, int rows, float x0, float 
     fieldX0_ = x0;
     fieldZ0_ = z0;
     fieldCell_ = cell;
+    if (floor_.size() != static_cast<size_t>(cols) * rows) setFloor(nullptr, 0, 0);
+    rebuildBlocks();
+    setCustomShaderTexture(kFieldTexture, cols, rows, field_.data(), false, false, false, 4);
+}
+
+void GrassNode::setFloor(const float* floor, int cols, int rows) {
+    if (!floor || cols != fieldCols_ || rows != fieldRows_ || cols < 2 || rows < 2) {
+        if (floor_.empty()) return;
+        floor_.clear();
+        setCustomShaderTexture(kFloorTexture, 0, 0, nullptr);
+    } else {
+        floor_.assign(floor, floor + static_cast<size_t>(cols) * rows);
+        for (float& f : floor_) f = std::isfinite(f) ? std::clamp(f, 0.0f, 1.0f) : 0.0f;
+        setCustomShaderTexture(kFloorTexture, cols, rows, floor_.data(), false, false, false, 1);
+    }
+    rebuildBlocks();
+}
+
+void GrassNode::rebuildBlocks() {
+    const int cols = fieldCols_, rows = fieldRows_;
+    if (cols < 2 || rows < 2) return;
     // Block (bi, bj) covers texels bi * B .. bi * B + B inclusive, one past
     // its own, so the bilinear ground between two blocks is inside both.
+    // Something grows in it where the grass does, or low plants on a floor.
     blockCols_ = (cols - 2) / kFieldBlock + 1;
     blockRows_ = (rows - 2) / kFieldBlock + 1;
     blocks_.assign(static_cast<size_t>(blockCols_) * blockRows_ * 3, 0.0f);
+    const bool floor = !floor_.empty();
     for (int bj = 0; bj < blockRows_; ++bj) {
         for (int bi = 0; bi < blockCols_; ++bi) {
             float lo = 1e30f, hi = -1e30f, grows = 0.0f;
             for (int j = bj * kFieldBlock; j <= std::min(bj * kFieldBlock + kFieldBlock, rows - 1); ++j) {
                 for (int i = bi * kFieldBlock; i <= std::min(bi * kFieldBlock + kFieldBlock, cols - 1); ++i) {
-                    const float* t = &field_[(static_cast<size_t>(j) * cols + i) * 4];
+                    const size_t k = static_cast<size_t>(j) * cols + i;
+                    const float* t = &field_[k * 4];
                     lo = std::min(lo, t[0]);
                     hi = std::max(hi, t[0]);
                     if (t[1] > 0.0f && t[3] > 0.0f) grows = std::max(grows, t[3]);
+                    if (floor && floor_[k] >= kFloorMin) grows = std::max(grows, 0.5f);
                 }
             }
             float* b = &blocks_[(static_cast<size_t>(bj) * blockCols_ + bi) * 3];
@@ -200,7 +225,6 @@ void GrassNode::setField(const float* rgba, int cols, int rows, float x0, float 
             b[2] = grows;
         }
     }
-    setCustomShaderTexture(kFieldTexture, cols, rows, field_.data(), false, false, false, 4);
 }
 
 bool GrassNode::fieldRange(float x0, float z0, float x1, float z1, float& lo, float& hi, float& tall) const {

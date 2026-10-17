@@ -110,35 +110,31 @@ void visibleBox(const SceneView& view, float radius, float margin, float (&box)[
 
 MeshNode::UserTexture* slot(GrassNode& node, const char* name) {
     for (auto& t : node.customShaderTextures())
-        if (t.name == name) return &t;
+        if (t.name == name && t.w > 0 && t.h > 0) return &t;
     return nullptr;
 }
 
-}  // namespace
-
-void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vector<MeshDraw>& out) {
-    out.clear();
-    const SceneView& view = frame.view;
-    node.stamp(frame.graph, frame.renderer.windTime(), view.eye.x, view.eye.z);
-    for (int i = 0; i < GrassNode::kRings; ++i) node.setDrawnInstances(i, 0);
-    if (!node.hasField() || node.effectiveUnlit()) return;
-
-    SceneGpuResources& res = frame.gpu.resources;
+/// The node's textures this frame: its field, influence map and floor (the
+/// floor may be absent). False when the field or the map is not up yet.
+struct GrassImages {
+    const SceneVkImage* field = nullptr;
+    const SceneVkImage* push = nullptr;
+    const SceneVkImage* floor = nullptr;
+};
+bool grassImages(SceneGpuResources& res, GrassNode& node, GrassImages& out) {
     MeshNode::UserTexture* fieldTex = slot(node, GrassNode::kFieldTexture);
     MeshNode::UserTexture* pushTex = slot(node, GrassNode::kPushTexture);
-    const SceneVkImage* field = fieldTex ? res.userTexture(node.id(), *fieldTex) : nullptr;
-    const SceneVkImage* push = pushTex ? res.userTexture(node.id(), *pushTex) : nullptr;
-    res.pruneUserTextures(node.id(), node.customShaderTextures());
-    if (!field || !push) return;
+    MeshNode::UserTexture* floorTex = slot(node, GrassNode::kFloorTexture);
+    out.field = fieldTex ? res.userTexture(node.id(), *fieldTex) : nullptr;
+    out.push = pushTex ? res.userTexture(node.id(), *pushTex) : nullptr;
+    out.floor = floorTex ? res.userTexture(node.id(), *floorTex) : nullptr;
+    return out.field && out.push;
+}
 
-    const GpuMesh* ringMeshes[GrassNode::kRings];
-    for (int r = 0; r < GrassNode::kRings; ++r) {
-        ringMeshes[r] = res.mesh(node.id(), static_cast<uint32_t>(r), node.geometryGeneration(), node.ringMesh(r));
-        if (!ringMeshes[r]) return;
-    }
-
+/// The UBO's fields every draw of the node shares (the field, the colours,
+/// the look, the influence map).
+void fillShared(const GrassNode& node, GrassUBO& u) {
     const GrassNode::Params& p = node.params();
-    GrassUBO u{};
     u.field[0] = node.fieldX0();
     u.field[1] = node.fieldZ0();
     u.field[2] = node.fieldCell();
@@ -160,6 +156,78 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
     u.push[3] = static_cast<float>(GrassNode::kPushCells);
     u.pushRate[0] = GrassNode::kBendRecovery;
     u.pushRate[1] = GrassNode::kTrampleRecovery;
+    u.pushRate[2] = node.hasFloor() ? 1.0f : 0.0f;
+}
+
+/// The eye's lift: its height over the ground past a standing eye's. The
+/// rings scale with it (a blade's ring distance is its distance across the
+/// ground and the lift together), so seen from above the canopy the near
+/// rings, all sub-pixel there, are not issued at all; a standing or
+/// crouching eye has none.
+float eyeLift(const GrassNode& node, const SceneView& view) {
+    constexpr float kStandingEye = 2.0f;
+    return std::max(0.0f, view.eye.y - node.fieldHeight(view.eye.x, view.eye.z, view.eye.y) - kStandingEye);
+}
+
+VkDescriptorSet writeSet(SceneFrame& frame, VkDevice device, const SceneDefaults& defaults, const GrassUBO& u,
+                         const GrassImages& img) {
+    const VkDescriptorBufferInfo ubo = frame.gpu.device.frameUniform(&u, sizeof(u));
+    VkDescriptorSet set = frame.gpu.device.frameSet(defaults.customLayout);
+    if (set == VK_NULL_HANDLE) return VK_NULL_HANDLE;
+    SceneVkDescriptorWriter writer;
+    writer.writeBuffer(0, ubo.buffer, ubo.range, ubo.offset);
+    writer.writeImage(1, img.field->view, img.field->sampler);
+    writer.writeImage(2, img.push->view, img.push->sampler);
+    // No floor: black (an open sky everywhere).
+    writer.writeImage(3, img.floor ? img.floor->view : defaults.black.view,
+                      img.floor ? img.floor->sampler : defaults.sampler);
+    for (uint32_t b = 4; b <= static_cast<uint32_t>(MeshNode::kMaxUserTextures); ++b)
+        writer.writeImage(b, defaults.white.view, defaults.sampler);
+    writer.updateSet(device, set);
+    return set;
+}
+
+}  // namespace
+
+VkDescriptorSet SceneMeshDrawer::groundSet(SceneFrame& frame, GrassNode& node) {
+    if (!node.hasField()) return VK_NULL_HANDLE;
+    GrassImages img;
+    if (!grassImages(frame.gpu.resources, node, img)) return VK_NULL_HANDLE;
+    GrassUBO u{};
+    fillShared(node, u);
+    // The ring the turf continues: the whole of the blades' range.
+    const GrassNode::Ring outer = node.ring(GrassNode::kRings - 1);
+    u.ring[0] = 0.0f;
+    u.ring[1] = outer.outer;
+    u.ring[3] = outer.bandOut;
+    u.blade[0] = node.params().height;
+    u.blade[2] = node.params().minNormalY;
+    u.lod[3] = eyeLift(node, frame.view);
+    return writeSet(frame, device_, *defaults_, u, img);
+}
+
+void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vector<MeshDraw>& out) {
+    out.clear();
+    const SceneView& view = frame.view;
+    node.stamp(frame.graph, frame.renderer.windTime(), view.eye.x, view.eye.z);
+    for (int i = 0; i < GrassNode::kRings; ++i) node.setDrawnInstances(i, 0);
+    if (!node.hasField() || node.effectiveUnlit()) return;
+
+    SceneGpuResources& res = frame.gpu.resources;
+    GrassImages img;
+    const bool ready = grassImages(res, node, img);
+    res.pruneUserTextures(node.id(), node.customShaderTextures());
+    if (!ready) return;
+
+    const GpuMesh* ringMeshes[GrassNode::kRings];
+    for (int r = 0; r < GrassNode::kRings; ++r) {
+        ringMeshes[r] = res.mesh(node.id(), static_cast<uint32_t>(r), node.geometryGeneration(), node.ringMesh(r));
+        if (!ringMeshes[r]) return;
+    }
+
+    const GrassNode::Params& p = node.params();
+    GrassUBO u{};
+    fillShared(node, u);
 
     uint32_t flags = 0;
     if (frame.ssr) flags |= mesh_flags::kReflectance;
@@ -180,14 +248,7 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
         }
     }
 
-    // The rings scale with the eye's height over the ground: a blade's ring
-    // distance is its distance across the ground and the eye's LIFT (its
-    // height past a standing eye's) together, so seen from above the
-    // canopy the near rings, all sub-pixel there, are not issued at all.
-    // A standing or crouching eye has no lift: the rings are as on foot.
-    constexpr float kStandingEye = 2.0f;
-    const float lift =
-        std::max(0.0f, view.eye.y - node.fieldHeight(view.eye.x, view.eye.z, view.eye.y) - kStandingEye);
+    const float lift = eyeLift(node, view);
 
     for (int r = 0; r < GrassNode::kRings; ++r) {
         const GrassNode::Ring ring = node.ring(r);
@@ -267,16 +328,8 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
         u.lod[2] = GrassNode::kShadowKeep;
         u.lod[3] = lift;
 
-        const VkDescriptorBufferInfo ubo = frame.gpu.device.frameUniform(&u, sizeof(u));
-        VkDescriptorSet set = frame.gpu.device.frameSet(defaults_->customLayout);
+        VkDescriptorSet set = writeSet(frame, device_, *defaults_, u, img);
         if (set == VK_NULL_HANDLE) return;
-        SceneVkDescriptorWriter writer;
-        writer.writeBuffer(0, ubo.buffer, ubo.range, ubo.offset);
-        writer.writeImage(1, field->view, field->sampler);
-        writer.writeImage(2, push->view, push->sampler);
-        for (uint32_t b = 3; b <= static_cast<uint32_t>(MeshNode::kMaxUserTextures); ++b)
-            writer.writeImage(b, defaults_->white.view, defaults_->sampler);
-        writer.updateSet(device_, set);
 
         const GpuMesh* blade = ringMeshes[r];
         MeshDraw draw;

@@ -388,6 +388,15 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  * @property {number|Function} [density=1] - where grass grows, 0..1.
  * @property {number|Function} [dry=0] - 0 lush .. 1 sun-dried.
  * @property {number|Function} [tall=1] - height multiplier.
+ * @property {number|Function} [floor] - the forest floor, 0 open .. 1 under
+ *   a closed canopy (e.g. `bro.flora.forestCover(...).canopy`), on the same
+ *   grid. Where it is over about 0.1, some of the near rings' tufts are low
+ *   leafy plants instead (broad leaves in a rosette, a shade-plant green, in
+ *   patches), growing there whether grass does or not; and a turf ground
+ *   (`turf`) lays leaf litter, twigs, damp soil and moss there. Default: no
+ *   floor (open everywhere).
+ * @property {boolean|SceneNode|Array<SceneNode>} [turf] - mesh nodes to shade
+ *   as this grass's ground (`true`: the `ground` node), see `shadeGround`.
  * @property {number} [height=0.4] - mean blade height (m); clumps run
  *   from about half to one and a half times it, and lush tall patches higher.
  * @property {number} [width=0.004] - the near blades' width (m); the outer
@@ -1277,11 +1286,32 @@ class SceneNode {
 
   /**
    * Grass: re-bake the field (`ground`, `area`, `cell`, `density`, `dry`,
-   * `tall`) and replace it whole.
+   * `tall`, `floor`) and replace it whole; `turf` as in createGrass.
    * @param {GrassNodeOptions} opts
    * @returns {SceneNode}
    */
   setGround(opts) {}
+
+  /**
+   * Grass: shade mesh node `mesh` as this grass's ground (turf), or with
+   * `on` false as itself again. Turf is shaded from the grass's field where
+   * it reaches: the sward the blades stand for (their mean colour, the
+   * dryness, the clumps; near the eye the dark roots and soil between the
+   * blades, rising to the blade tops with distance), bare soil where nothing
+   * grows, and under a closed `floor` the leaf litter, twigs, damp soil and
+   * moss. Past the field it takes the same data from the mesh's vertex
+   * colour: r the grass density, g the dryness, b the floor. Every pattern
+   * is band-limited (finer than about two pixels fades to its mean), so it
+   * reads from standing height to far above. Nothing is baked: it works on
+   * any ground the field covers, streamed in or not.
+   * @example
+   *   const cover = bro.flora.forestCover(emit, { instances: trees });
+   *   scene.createGrass({ ground, density: cover, floor: cover.canopy, turf: [ground, farGround] });
+   * @param {SceneNode} mesh
+   * @param {boolean} [on=true]
+   * @returns {SceneNode}
+   */
+  shadeGround(mesh, on) {}
 
   /**
    * Grass: the look as set: `{height, width, bladeDensity, range, minNormalY,

@@ -14,6 +14,8 @@
 #include "scene_procedural.glsl.src.h"
 #include "scene_forest_crown.glsl.src.h"
 #include "scene_bark.glsl.src.h"
+#include "scene_grass.glsl.src.h"
+#include "scene_ground.glsl.src.h"
 
 #include <array>
 #include <cstdlib>
@@ -97,6 +99,8 @@ const char* embeddedInclude(const std::string& name) {
         {"scene_procedural.glsl", kVkSceneProceduralSrc},
         {"scene_forest_crown.glsl", kVkSceneForestCrownSrc},
         {"scene_bark.glsl", kVkSceneBarkSrc},
+        {"scene_grass.glsl", kVkSceneGrassSrc},
+        {"scene_ground.glsl", kVkSceneGroundSrc},
     };
     for (const auto& inc : kIncludes) {
         if (name == inc.name) return inc.source;

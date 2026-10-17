@@ -314,6 +314,12 @@ public:
     /// vertex-coloured meshes don't ripple. Flora meshes set this to 1.
     void setWindMask(float m) { windMask_ = m; }
     float windMask() const { return windMask_; }
+    /// Turf: this mesh is the ground under grass node `grassId` and shades as
+    /// its sward and forest floor (scene_ground.glsl), its vertex colour the
+    /// ground's data (density, dryness, floor) where the grass field does not
+    /// reach. 0 (the default) shades it as any mesh.
+    void setTurfGrass(uint32_t grassId) { turfGrass_ = grassId; }
+    uint32_t turfGrass() const { return turfGrass_; }
     /// A mesh carrying MeshData::vegetation bends in the scene's wind field
     /// (docs/scene-nodes-api.js "Vegetation"); this is its tallest record's
     /// height (node space), how far the sway can reach.
@@ -547,6 +553,7 @@ private:
     float subsurface_ = 0.0f;
     float alphaCutoff_ = 0.0f;
     float windMask_ = 0.0f;
+    uint32_t turfGrass_ = 0;
     float vegetationHeight_ = 0.0f;
 
     DrawMode drawMode_ = DrawMode::Triangles;

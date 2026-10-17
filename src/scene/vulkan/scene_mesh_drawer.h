@@ -69,6 +69,7 @@ constexpr uint32_t kForest = 8192;          // inInstColor.a is a forest tier's 
 constexpr uint32_t kForestSprite = 16384;   // a forest sprite: leafy disc, sphere normal
 constexpr uint32_t kForestMsaa = 32768;     // a forest draw into a 4x MSAA target: fades split samples
 constexpr uint32_t kForestCluster = 65536;  // forest leaf clusters: a card of leaves drawn by mesh.frag
+constexpr uint32_t kGround = 131072;        // turf: a static mesh shaded as its grass node's ground (set 4)
 /// The vertex colour mode (0 none, 1 replaces the albedo, 2 tints it) in bits 10-11.
 constexpr uint32_t vertexColor(int mode) { return static_cast<uint32_t>(mode & 3) << 10; }
 }
@@ -218,6 +219,10 @@ private:
     VkDescriptorSet customSet(SceneFrame& frame, uint32_t nodeId, const CustomShaderState& cs,
                               const CustomProgram& prog, std::vector<MeshNode::UserTexture>* textures);
     VkDescriptorSet boneSet(SceneFrame& frame, const std::vector<float>& palette);
+    /// Set 4 for a turf mesh: grass node `grass`'s field, influence map and
+    /// floor, with its outermost ring (scene_mesh_drawer_grass.cpp). Null
+    /// when the node has no field.
+    VkDescriptorSet groundSet(SceneFrame& frame, GrassNode& grass);
     /// Set 3 holding a procedural draw's header and records, then its
     /// vegetation records (4 vec4s a segment; header[10] says where); null
     /// when the frame's upload memory runs out.
@@ -245,6 +250,8 @@ private:
     VkShaderModule fsClusterIndirect_ = VK_NULL_HANDLE;
     VkShaderModule fsBark_ = VK_NULL_HANDLE;           // Tube, ForestTube: mesh.frag's SCENE_BARK build
     VkShaderModule fsBarkIndirect_ = VK_NULL_HANDLE;
+    VkShaderModule fsGround_ = VK_NULL_HANDLE;         // turf: mesh.frag's SCENE_GROUND build
+    VkShaderModule fsGroundIndirect_ = VK_NULL_HANDLE;
     VkShaderModule fsSpriteIndirect_ = VK_NULL_HANDLE;
     PipelineVariants builtin_;
     std::unordered_map<std::string, std::unique_ptr<CustomProgram>> custom_;

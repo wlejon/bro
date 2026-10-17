@@ -52,6 +52,21 @@ void bro_scene_SceneNode_setGrassField(void* self, const float* data, uint32_t d
     gr->setField(data, cols, rows, static_cast<float>(x0), static_cast<float>(z0), static_cast<float>(cell));
 }
 
+void bro_scene_SceneNode_setGrassFloor(void* self, const float* data, uint32_t data_len) {
+    auto* gr = grassOf(self);
+    if (!gr) return;
+    const uint64_t need = static_cast<uint64_t>(gr->fieldCols()) * static_cast<uint64_t>(gr->fieldRows());
+    if (!data || need == 0 || static_cast<uint64_t>(data_len) < need) gr->setFloor(nullptr, 0, 0);
+    else gr->setFloor(data, gr->fieldCols(), gr->fieldRows());
+}
+
+void bro_scene_SceneNode_setTurfGrass(void* self, void* grass, int32_t on) {
+    auto* m = meshOf(self);
+    if (!m) return;
+    auto* gr = on ? grassOf(grass) : nullptr;
+    m->setTurfGrass(gr ? gr->id() : 0u);
+}
+
 void bro_scene_SceneNode_setGrassParams(void* self, const double* params, uint32_t params_len) {
     if (auto* gr = grassOf(self)) gr->paramsFromArray(params, params_len);
 }

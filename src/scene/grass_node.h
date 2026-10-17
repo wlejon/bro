@@ -87,6 +87,13 @@ public:
     /// (conservative). False when nothing grows there (off the field, or
     /// density or height 0 throughout): the drawer skips the cells.
     bool fieldRange(float x0, float z0, float x1, float z1, float& lo, float& hi, float& tall) const;
+    /// The forest floor on the field's grid (cols x rows floats, 0 open ..
+    /// 1 under a closed canopy): litter on the turf (scene_ground.glsl) and
+    /// low leafy plants among the blades, which grow there even where the
+    /// grass does not. Null clears it. A floor of another size than the
+    /// field is ignored.
+    void setFloor(const float* floor, int cols, int rows);
+    bool hasFloor() const { return !floor_.empty(); }
 
 
     // --- Movers ---
@@ -114,6 +121,9 @@ public:
     // User-texture slot names (MeshNode::setCustomShaderTexture).
     static constexpr const char* kFieldTexture = "u_grassField";
     static constexpr const char* kPushTexture = "u_grassPush";
+    static constexpr const char* kFloorTexture = "u_grassFloor";
+    /// The floor under which no low plants grow.
+    static constexpr float kFloorMin = 0.08f;
 
     // --- Rings ---
     static constexpr int kRings = 4;
@@ -163,10 +173,12 @@ private:
     void stampDisc(float x, float z, float radius, float vx, float vz, float strength, float trample, float dt,
                    float now, int& minI, int& minJ, int& maxI, int& maxJ);
     void recentre(float eyeX, float eyeZ);
+    void rebuildBlocks();
 
     Params params_;
     bromesh::MeshData ringMeshes_[kRings];
     std::vector<float> field_;
+    std::vector<float> floor_;
     int fieldCols_ = 0, fieldRows_ = 0;
     // Blocks of kFieldBlock x kFieldBlock texels: min height, max height, and
     // the largest height multiplier where anything grows (0: nothing does).
