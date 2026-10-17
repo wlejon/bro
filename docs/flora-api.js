@@ -265,6 +265,8 @@
  * @property {number} [crownSlope=0] - The crown envelope: a lateral reaches no further from the axis than this x its depth below the top (0.35 a fir's cone; 0 none) ...
  * @property {number} [crownBase=0] - ... plus this at the top (a blunt spire or a rounded top) ...
  * @property {number} [crownRadiusMax=0] - ... and never past this (a column, a flat-topped pine; 0 no cap).
+ * @property {number} [crownLift=0] - Self-pruning: a bough leaving the leader below this fraction of the plant's height is shed, and the short shoots the leader keeps along that bare trunk carry no foliage (0.5 a pine's crown on the top half of its trunk; 0 boughs to the ground).
+ * @property {number} [heightMax=0] - No shoot buds above this height (m): the leader stops and the upper boughs fill in under it, a mature pine's flat top (0 no limit).
  * @property {number} [prototypeGroup=0] - The prototype sites the leader grows from.
  * @property {number} [lateralGroup] - The sites a lateral grows from (default: the leader's group).
  * @property {number} [lateralElevation=0] - A lateral's set-point elevation, radians from the horizon: 0 level boughs (fir), negative drooping or weeping (spruce), positive rising (pine), near pi/2 turned up (a columnar cypress).
@@ -277,6 +279,13 @@
  * @property {Array<number>} [barkColor=[0,0,0]] - The bark's; 0,0,0 the renderer's own.
  * @property {number} [clumpScale=1] - The crown clumps' size, x what the emit's options give (a conifer's small dense tufts 0.3).
  * @property {number} [leafSize=1] - A leaf's size, x the renderer's card (a boxwood 0.3): its clumps carry 1/leafSize² the leaves, so they cover as much.
+ * @property {number} [clumpFlat=1] - A clump's height over its width: 1 a broadleaf's round lobes, ~0.4 the flat pads of a fir's level sprays (the clumps pack closer up and down by as much).
+ * @property {number} [clumpReach=0] - A clump reaches no further across than this x its distance from the plant's axis, plus a quarter of its size (0 no limit): a conifer's short top boughs carry small clumps, so its crown narrows to a spire.
+ * @property {number} [clumpFill=0] - 0 (a broadleaf tree's): foliage on the crown's outermost shoots, its interior thinly leaved; 1: every shoot tip carries foliage however its module has branched on (a conifer's clothed boughs, a shrub's mound).
+ * @property {number} [clumpInner=0] - 0: a shoot that has branched on carries a tenth of a tip's foliage, thinned further by its shade; 1: as much as a tip in half light, and the clumps packed up to 40% closer (a shrub's mound leaved inside and to the ground, its stems hidden; a juniper's bushy cone).
+ * @property {string|number} [bloomForm='none'] - What it flowers as once past floweringAge: 'none' (0), 'flower' (1, one open flower at a shoot's tip), 'head' (2, a round head of florets), 'spike' (3, florets up an upright stalk). Emitted per specimen (emitForest's `blooms` / `specimenBlooms`) and drawn by bro.scene's forest node (setForestBlooms).
+ * @property {Array<number>} [bloomColor=[0,0,0]] - The blooms' albedo (linear).
+ * @property {number} [bloomSize=0] - A bloom's size (m): a flower's or a head's across, a spike's length.
  */
 
 /**
@@ -868,16 +877,21 @@ bro.flora.plantForest = function(forest, opts) {};
 /**
  * The species presets plantSpecies / addSpecies know, each a habit with
  * its leaf form, colours and bark:
- *   - broadleaf: oak (spreading, round), elm (vase), beech (tall, smooth grey bark);
- *   - needle conifers: pine (rising boughs in open whorls, plated red-brown
- *     bark), spruce (a narrow spire, drooping boughs and hanging sprays),
- *     fir (a regular cone of level boughs), cedar (flat shelves), redwood
- *     (tall and narrow, a long clear trunk, fibrous red bark);
+ *   - broadleaf: oak (spreading, round), elm (vase), beech (tall, smooth grey
+ *     bark), birch (slender and narrow, a light open crown of small bright
+ *     leaves, white bark);
+ *   - needle conifers: pine (an open crown widest near its flat top, on a
+ *     bare red-brown trunk), spruce (a narrow spire, drooping boughs and
+ *     hanging sprays), fir (a regular cone of level boughs), cedar (flat
+ *     shelves), redwood (a tall narrow column of near-level short boughs on
+ *     a long clear massive trunk, fibrous red bark);
  *   - scale-leaf conifers: cypress (a dark column, boughs turned up against
- *     the leader), juniper (several stems, blue-grey);
- *   - shrubs, multi-stemmed: boxwood (a dense mound of tiny dark leaves),
- *     holly (upright, glossy), hydrangea (a broad mound of arching stems,
- *     big pale leaves), hibiscus (upright, open), lavender (a low cushion).
+ *     the leader), juniper (a bushy blue-grey cone filled to the core);
+ *   - shrubs, multi-stemmed, leaved inside and to the ground (clumpInner):
+ *     boxwood (a dense mound of tiny dark leaves), holly (upright, glossy),
+ *     hydrangea (a broad mound of arching stems, big pale leaves, round
+ *     flower heads), hibiscus (upright, open, large flowers), lavender (a
+ *     low grey-green cushion under purple spikes).
  * @returns {Array<string>}
  */
 bro.flora.speciesPresets = function() {};
