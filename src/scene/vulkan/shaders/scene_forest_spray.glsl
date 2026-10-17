@@ -62,6 +62,12 @@ float forestSprayCover(vec2 uv, int form, float aspect) {
     float side = p.x >= 0.0 ? 1.0 : -1.0;
     float ax = abs(p.x);
     float sa = sin(sh.angle), ca = cos(sh.angle);
+    // Sharp while two pixels or more part one needle from the next (each is
+    // already cut to the share of the pixel it covers), their mean by the
+    // time one pixel does; each worked out only where it counts.
+    float blend = smoothstep(0.45 * sh.spacing, sh.spacing, fp);
+    float sharp = 0.0;
+    if (blend < 1.0) {
     float t = ax / sa;                    // along the needle
     float y0 = p.y - t * ca;
     float off = side > 0.0 ? 0.0 : 0.5 * sh.spacing;
@@ -75,20 +81,21 @@ float forestSprayCover(vec2 uv, int form, float aspect) {
     // A needle tapers to its tip.
     halfW *= clamp((len - t) / max(4.0 * sh.needleHalf, 1e-4), 0.25, 1.0);
     bool on = yi > 0.03 && yi < 0.96 && t <= len;
-    float sharp = on ? clamp((halfW - d) / fp + 0.5, 0.0, 1.0) * clamp((len - t) / fp + 0.5, 0.0, 1.0) : 0.0;
+    sharp = on ? clamp((halfW - d) / fp + 0.5, 0.0, 1.0) * clamp((len - t) / fp + 0.5, 0.0, 1.0) : 0.0;
+    }
 
     // Their mean once a pixel spans a few: the family's share of the band
     // they fill, thinning out to the spray's edge as the needles do (each
     // reaches 0.8 .. 1.05 of the reach, so the share still out there falls
     // across that span): a spray's edge is its needles' ragged tips, not a
     // leaf's clean outline.
-    float reach = forestSprayReach(p.y, halfWidth);
-    float inside = clamp((1.02 * reach - ax) / max(0.3 * reach + fp, 1e-5), 0.0, 1.0);
-    float band = min(2.0 * sh.needleHalf * (1.0 - 0.5 * sh.scallop) / (sh.spacing * sa), 1.0);
-    float mean = inside * band;
-    // Sharp while two pixels or more part one needle from the next (each is
-    // already cut to the share of the pixel it covers), their mean by the
-    // time one pixel does.
-    float needles = mix(sharp, mean, smoothstep(0.45 * sh.spacing, sh.spacing, fp));
+    float mean = 0.0;
+    if (blend > 0.0) {
+        float reach = forestSprayReach(p.y, halfWidth);
+        float inside = clamp((1.02 * reach - ax) / max(0.3 * reach + fp, 1e-5), 0.0, 1.0);
+        float band = min(2.0 * sh.needleHalf * (1.0 - 0.5 * sh.scallop) / (sh.spacing * sa), 1.0);
+        mean = inside * band;
+    }
+    float needles = mix(sharp, mean, blend);
     return max(needles, twig);
 }

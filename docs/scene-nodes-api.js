@@ -564,7 +564,10 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  *   (x cos + z sin, -x sin + z cos)), specimen, 0, 0, in the node's space.
  *   Default `forest.instances` (every plant where it grew).
  * @property {Mesh|MeshGeometry} [leaf] - the leaf card (also `mesh`).
- *   Default: the leaf form's own card at the specimens' leaf size.
+ *   Default: the leaf form's own card at the specimens' leaf size (a broad
+ *   leaf's is nine vertices, its rounded, pointed outline cut per pixel up
+ *   close; a spray's four, its needles or scales cut per pixel). A leaf
+ *   given is drawn as it is.
  * @property {string|number} [leafForm] - 'broad' (0), 'needle' (1) or 'scale'
  *   (2). Default: the emit's `leafForm`, else the one all its specimens share,
  *   else broad.
@@ -601,7 +604,7 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  * @property {number} [barkSidesPixels=24] - a trunk wider than this on screen has 10 sides, else 5.
  * @property {number} [shadowKeep=0.35] - the share of its drawn leaves a tree's shadow keeps.
  * @property {number} [range=0] - trees further than this (m) are not drawn; 0: no limit.
- * @property {number} [budget=14] - millions of leaf and bark vertices the view may send; 0: no budget.
+ * @property {number} [budget=12.5] - millions of leaf and bark vertices the view may send; 0: no budget.
  * @property {number} [shadowBudget=6] - the same for every shadow tile together.
  * @property {number} [clusters=1] - past `cardWidening` a kept leaf is drawn as the leaves it stands for (1),
  *   or as the one widened leaf (0).

@@ -139,7 +139,9 @@ public:
         // shadow budget is every tile's together. 0: no budget. (A cluster
         // fills its widened outline with leaves, a sprite places its own:
         // both cost fragments the vertex count does not see.)
-        float budget = 14.0f;
+        // (12.5: the leaf cards' vertices since a broad leaf took 9, a spray
+        // 4, hold more leaves than 14 did at 12 and 6.)
+        float budget = 12.5f;
         float shadowBudget = 6.0f;
         // Past `cardWidening` a kept leaf is drawn as a cluster: its widened
         // card holds the widening^2 leaves it stands for, each of its own
@@ -188,6 +190,10 @@ public:
         float flutter = 1.0f;
         float limbBob = 0.6f;
         float twigBob = 0.8f;
+        // The leaf is a broad form's own card (scene_forest.js's), whose
+        // outline mesh.frag cuts per pixel near (MESH_FOREST_LEAF_CUT); a
+        // leaf mesh an app gives is drawn as it is.
+        bool leafCut = false;
     };
     static constexpr int kLeafForms = 3;
     /// A crown traces its clumps in runs of this many that lie together, each

@@ -50,15 +50,19 @@
     // is twice a broad leaf's length: at 8 px each tree near the eye drew
     // all of its twenty thousand).
     const FORMS = {
-        broad: { form: 0, shape: 'oval',
-                 card: { width: 0.07, length: 0.12, bend: 0.4, fullUV: true, shapedSilhouette: true, cup: 0.55,
-                         widthSegments: 2, lengthSegments: 3 },
+        // A broad leaf's card is three rows (base, middle, tip) wide enough
+        // to hold the outline mesh.frag cuts from it per pixel
+        // (MESH_FOREST_LEAF_CUT): nine vertices, where a card that was its
+        // own outline took twelve and still showed its corners.
+        broad: { form: 0, shape: 'oval', rows: [0.52, 0.866, 0.26],
+                 card: { width: 0.07, length: 0.12, bend: 0.4, fullUV: true, cup: 0.55,
+                         widthSegments: 2, lengthSegments: 2 },
                  flutter: 1, limbBob: 0.6, twigBob: 0.8 },
         needle: { form: 1, shape: 'frond',
-                  card: { width: 0.14, length: 0.26, bend: 0.3, fullUV: true, widthSegments: 1, lengthSegments: 2 },
+                  card: { width: 0.14, length: 0.26, bend: 0.3, fullUV: true, widthSegments: 1, lengthSegments: 1 },
                   flutter: 0.15, limbBob: 1.6, twigBob: 1.0, lod: { crownFrom: 8, crownTo: 5, leafPixels: 11 } },
         scale: { form: 2, shape: 'frond',
-                 card: { width: 0.11, length: 0.16, bend: 0.25, fullUV: true, widthSegments: 1, lengthSegments: 2 },
+                 card: { width: 0.11, length: 0.16, bend: 0.25, fullUV: true, widthSegments: 1, lengthSegments: 1 },
                  flutter: 0.1, limbBob: 1.3, twigBob: 0.9, lod: { crownFrom: 8, crownTo: 5, leafPixels: 10 } },
     };
     const FORM_NAMES = ['broad', 'needle', 'scale'];
@@ -75,6 +79,13 @@
         const card = Object.assign({}, form.card, { width: form.card.width * size, length: form.card.length * size });
         const m = MeshCtor.leafCard(form.shape, card);
         m.colors = new Float32Array(0);
+        if (form.rows) {
+            // Each row of the card its own width (of the card's).
+            const p = m.positions, per = card.widthSegments + 1;
+            for (let v = 0; v * 3 < p.length; v++) p[v * 3] *= form.rows[Math.min((v / per) | 0, form.rows.length - 1)];
+            m.positions = p;
+            m.computeNormals();
+        }
         return m;
     }
 
@@ -161,12 +172,17 @@
         let leaf = o.leaf && typeof o.leaf !== 'string' ? o.leaf : (o.mesh && typeof o.mesh !== 'string' ? o.mesh : null);
         // No leaf given: the card its leaf form draws (a broadleaf's leaf, a
         // conifer's spray).
+        let cut = false;
         if (!leaf) {
             const form = leafFormOf(o) || FORMS.broad;
             leaf = defaultLeaf(form, leafSizeOf(o));
+            cut = !!(leaf && form.rows);
         }
         const node = canon(__bro_native.scene.SceneGraph_createForest(this, o, leaf));
         if (!node) return node;
+        // A broad form's own card: its outline cut per pixel (Look::leafCut).
+        if (cut) __bro_native.scene.SceneNode_setForestLook(node, new Float32Array(0),
+                                                           new Float64Array([NaN, NaN, NaN, NaN, 0, 1]));
         // The form's level of detail under the one given.
         const form = leafFormOf(o);
         applyOpts(node, form && form.lod ? Object.assign({}, o, { lod: Object.assign({}, form.lod, o.lod) }) : o);

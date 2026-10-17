@@ -319,7 +319,10 @@ vec3 sceneDirectLight(SceneSurface s) {
         if (leafy && s.receivesShadow) {
             vec3 tN = NL < 0.0 ? -N : N;
             vec3 at = s.position;
-            float self = 1.0, spread = 2.0;
+            // Four hardware-filtered taps as wide as nine point taps: leaves
+            // are most of the frame's lit pixels, and a leaf's shadow is
+            // soft (the sun's disc) whichever way it is filtered.
+            float self = 1.0, spread = -2.0;
             if (s.leafSphere.w > 0.0) {
                 // Out of the sphere toward the light, through its leaves;
                 // what falls on it from outside is coarse (the sphere's own
@@ -332,10 +335,6 @@ vec3 sceneDirectLight(SceneSurface s) {
                 float out_ = max((-b + sqrt(max(b * b - la * (dot(oc, oc) - s.leafSphere.w * s.leafSphere.w), 0.0))) / la, 0.0);
                 at += L * out_;
                 self = exp(-s.leafDensity * s.leafPath * out_);
-                // Four filtered taps as wide as the leaf's nine: a sphere's
-                // leaves are most of the frame's lit pixels, and the light
-                // falling into it from outside is coarse.
-                spread = -spread;
                 // The exit tap is as soft as a leaf's (twice the filter):
                 // sharp, the discs' cells and the wider casters' edges read
                 // as hard blotches on the lobes they fall on.

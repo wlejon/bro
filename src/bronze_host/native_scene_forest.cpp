@@ -96,6 +96,7 @@ bool bro_scene_SceneNode_setForestLook(void* self, const float* looks, uint32_t 
     l.flutter = at(1, l.flutter);
     l.limbBob = at(2, l.limbBob);
     l.twigBob = at(3, l.twigBob);
+    l.leafCut = at(5, l.leafCut ? 1.0f : 0.0f) != 0.0f;
     f->setLook(l);
     // look[4]: whether `looks` is given (else the specimens keep theirs).
     if (at(4, 0.0f) == 0.0f) return true;

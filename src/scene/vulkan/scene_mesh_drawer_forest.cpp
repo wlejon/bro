@@ -611,10 +611,10 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
                 // A needle or scale-leaf node's leaf is its spray's card, its
                 // needles cut out by mesh.frag's SCENE_FOREST_SPRAY build.
                 const bool spray = !cluster && node.look().leafForm != 0;
-                // A broad leaf near: its outline cut per pixel, rounded and
-                // pointed, not the mesh's few straight edges (an untextured
-                // leaf: a texture's alpha is its outline).
-                const bool cut = k == LeafNear && node.look().leafForm == 0 &&
+                // A broad form's own card near: its outline cut per pixel,
+                // rounded and pointed (Look::leafCut; untextured: a
+                // texture's alpha is its outline).
+                const bool cut = k == LeafNear && node.look().leafForm == 0 && node.look().leafCut &&
                                  (leafFlags & mesh_flags::kAlbedoMap) == 0u;
                 d.push.pbrParams[3] = static_cast<float>(leafFlags | (cluster ? mesh_flags::kForestCluster : 0u) |
                                                          (spray ? mesh_flags::kForestSpray : 0u) |
