@@ -19,6 +19,8 @@ layout(std430, set = 3, binding = 1) readonly buffer ProceduralSegments {
 
 // A forest specimen's records (scene_forest.glsl; ForestNode's kSpecimenRecords).
 const int FOREST_SPECIMEN_RECORDS = 6;
+// A crown's clumps in runs this long, each bounded (ForestNode::kClumpBlock).
+const int FOREST_CLUMP_BLOCK = 8;
 
 // The leaf a scatter vertex belongs to: each instance draws header[3].x
 // copies of the leaf mesh end to end (InstancedMeshNode::scatterBatchMesh).

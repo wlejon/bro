@@ -76,24 +76,35 @@ ForestCrownHit forestCrownTrace(vec3 d, int instance, vec3 offset, float len, fl
     float t1 = 1e30, t2 = 1e30, tau1 = 0.0, tau2 = 0.0, tauAll = 0.0;
     vec4 s1 = vec4(0.0, 0.0, 0.0, 1.0), s2 = s1;
     float d1 = 0.0, d2 = 0.0;
-    for (int i = 0; i < count; ++i) {
-        if (procClumpBare(instance, first + i)) continue;
-        int r = clumpBase + (first + i) * 6;
-        vec4 c = procedural.records[r];
-        float leaves = procedural.records[r + 1].w;
-        vec3 C = (model * vec4(c.xyz, 1.0)).xyz + offset;
-        float R = c.w * scale;
-        vec2 t = forestCrownChord(d, C, R);
-        if (t.x >= t.y || t.y <= 0.0) continue;
-        // Its leaves over its ellipsoid's volume (4/3 pi r^3 0.8).
-        float sigma = leaves * leafArea / (3.351 * R * R * R);
-        float tau = sigma * (t.y - max(t.x, 0.0)) * max(1.0 + 1.7 * grain.w, 0.0);
-        tauAll += tau;
-        if (t.x < t1) {
-            t2 = t1; tau2 = tau1; s2 = s1; d2 = d1;
-            t1 = t.x; tau1 = tau; s1 = vec4(C, R); d1 = sigma;
-        } else if (t.x < t2) {
-            t2 = t.x; tau2 = tau; s2 = vec4(C, R); d2 = sigma;
+    // The clumps in runs of FOREST_CLUMP_BLOCK (ForestNode::kClumpBlock),
+    // each run's bounding sphere a record from the specimen's first
+    // (specimen record 3's w): a run the ray misses is skipped whole.
+    int blocks = floatBitsToInt(procedural.records[sr + 3].w);
+    for (int b = 0; b * FOREST_CLUMP_BLOCK < count; ++b) {
+        vec4 bs = procedural.records[blocks + b];
+        vec3 B = (model * vec4(bs.xyz, 1.0)).xyz + offset;
+        float BR = bs.w * scale;
+        float tc = dot(B, d);
+        if (dot(B, B) - tc * tc >= BR * BR || tc + BR <= 0.0) continue;
+        for (int i = b * FOREST_CLUMP_BLOCK; i < min(count, (b + 1) * FOREST_CLUMP_BLOCK); ++i) {
+            if (procClumpBare(instance, first + i)) continue;
+            int r = clumpBase + (first + i) * 6;
+            vec4 c = procedural.records[r];
+            float leaves = procedural.records[r + 1].w;
+            vec3 C = (model * vec4(c.xyz, 1.0)).xyz + offset;
+            float R = c.w * scale;
+            vec2 t = forestCrownChord(d, C, R);
+            if (t.x >= t.y || t.y <= 0.0) continue;
+            // Its leaves over its ellipsoid's volume (4/3 pi r^3 0.8).
+            float sigma = leaves * leafArea / (3.351 * R * R * R);
+            float tau = sigma * (t.y - max(t.x, 0.0)) * max(1.0 + 1.7 * grain.w, 0.0);
+            tauAll += tau;
+            if (t.x < t1) {
+                t2 = t1; tau2 = tau1; s2 = s1; d2 = d1;
+                t1 = t.x; tau1 = tau; s1 = vec4(C, R); d1 = sigma;
+            } else if (t.x < t2) {
+                t2 = t.x; tau2 = tau; s2 = vec4(C, R); d2 = sigma;
+            }
         }
     }
     if (tauAll <= 0.0) return h;

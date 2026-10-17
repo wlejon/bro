@@ -165,6 +165,9 @@ public:
         float twigBob = 0.8f;
     };
     static constexpr int kLeafForms = 3;
+    /// A crown traces its clumps in runs of this many, each run bounded by a
+    /// sphere its ray can skip (gpuData's block records).
+    static constexpr uint32_t kClumpBlock = 8;
     /// The share of a spray's card its needles or scales cover (mesh.frag's
     /// forestSprayCover averages to it), by leaf form.
     static float sprayFill(int leafForm) { return leafForm == 1 ? 0.45f : leafForm == 2 ? 0.47f : 1.0f; }

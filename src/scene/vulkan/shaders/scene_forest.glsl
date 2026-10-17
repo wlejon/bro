@@ -15,12 +15,15 @@
 //   specimens  6 records: (segStart, segCount, clumpStart, clumpCount) and
 //              (leafStart, leafCount, crown clump, mean clump weight) as
 //              uint bits but the last; (crown.xyz, crown radius across);
-//              (crown radius up, mean clump radius, height, -); its leaves'
-//              tint (rgb, -); its bark's tint (rgb, -)
+//              (crown radius up, mean clump radius, height, first clump
+//              block's record as uint bits); its leaves' tint (rgb, -); its
+//              bark's tint (rgb, -)
 //   segments   7 records: (from.xyz, rFrom), (to.xyz, rTo), (oct tangent at
 //              from, at to), then its vegetation record (4)
 //   clumps     6 records: (centre.xyz, radius), (twig dir.xyz, leaf count),
 //              then its vegetation record (4)
+//   blocks     a record per run of FOREST_CLUMP_BLOCK of a specimen's
+//              clumps: the sphere round their ellipsoids (centre.xyz, radius)
 //   leaves     2 a record: (clump, placement key) as uint bits
 //   instances  2 records: (position.xyz, scale), (cos yaw, sin yaw,
 //              specimen as uint bits, seed)

@@ -437,7 +437,18 @@ const std::vector<float>& ForestNode::gpuData() const {
     const uint32_t specBase = 0;
     const uint32_t segBase = specBase + static_cast<uint32_t>(nSpec * kSpecimenRecords);
     const uint32_t clumpBase = segBase + static_cast<uint32_t>(nSeg * 7);
-    const uint32_t leafBase = clumpBase + static_cast<uint32_t>(nClump * 6);
+    // A crown traces its tree's clumps a block of kClumpBlock at a time
+    // (scene_forest_crown.glsl), skipping a block whose bounding sphere its
+    // ray misses: each specimen's clumps in runs of kClumpBlock, a record a
+    // run (the sphere round the run's ellipsoids), after the clumps.
+    const uint32_t blockBase = clumpBase + static_cast<uint32_t>(nClump * 6);
+    std::vector<uint32_t> specBlock(nSpec);
+    uint32_t nBlock = 0;
+    for (size_t k = 0; k < nSpec; ++k) {
+        specBlock[k] = blockBase + nBlock;
+        nBlock += (specimens_[k].clumpCount + kClumpBlock - 1) / kClumpBlock;
+    }
+    const uint32_t leafBase = blockBase + nBlock;
     const uint32_t instBase = leafBase + static_cast<uint32_t>((nLeaf + 1) / 2);
     const size_t records = instBase + instances_.size() * 2;
 
@@ -474,7 +485,7 @@ const std::vector<float>& ForestNode::gpuData() const {
         d[4] = bitsOf(s.leafStart); d[5] = bitsOf(s.leafCount); d[6] = bitsOf(s.crownClump);
         d[7] = s.meanClumpWeight;
         d[8] = s.crown.x; d[9] = s.crown.y; d[10] = s.crown.z; d[11] = s.crownRadius;
-        d[12] = s.crownRadiusUp; d[13] = s.meanClumpRadius; d[14] = s.height;
+        d[12] = s.crownRadiusUp; d[13] = s.meanClumpRadius; d[14] = s.height; d[15] = bitsOf(specBlock[k]);
         // Its leaves' and bark's tint: its colour over the node's (1 where it
         // has none, or the node is black).
         for (int part = 0; part < 2; ++part) {
@@ -501,6 +512,27 @@ const std::vector<float>& ForestNode::gpuData() const {
         float* d = r + (clumpBase + c * 6) * 4;
         std::memcpy(d, &a.clumps[c * 8], 8 * sizeof(float));
         std::memcpy(d + 8, &a.clumpVegetation[c * 16], 16 * sizeof(float));
+    }
+    for (size_t k = 0; k < nSpec; ++k) {
+        const Specimen& s = specimens_[k];
+        for (uint32_t b = 0; b * kClumpBlock < s.clumpCount; ++b) {
+            const uint32_t c0 = s.clumpStart + b * kClumpBlock;
+            const uint32_t c1 = std::min(c0 + kClumpBlock, s.clumpStart + s.clumpCount);
+            // Each clump's ellipsoid (0.9 of its radius up, 0.7 down, its
+            // radius across) lies in the sphere of its radius about a point
+            // 0.1 of it above the centre.
+            const auto centre = [&](uint32_t c) {
+                const float* p = &a.clumps[c * 8];
+                return bromath::Vec3{p[0], p[1] + 0.1f * p[3], p[2]};
+            };
+            bromath::Vec3 m{0.0f, 0.0f, 0.0f};
+            for (uint32_t c = c0; c < c1; ++c) m = m + centre(c);
+            m = m * (1.0f / static_cast<float>(c1 - c0));
+            float rad = 0.0f;
+            for (uint32_t c = c0; c < c1; ++c) rad = std::max(rad, bromath::vdist(centre(c), m) + a.clumps[c * 8 + 3]);
+            float* d = r + (specBlock[k] + b) * 4;
+            d[0] = m.x; d[1] = m.y; d[2] = m.z; d[3] = rad;
+        }
     }
     for (size_t i = 0; i < nLeaf; ++i) {
         float* d = r + leafBase * 4 + i * 2;

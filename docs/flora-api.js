@@ -722,9 +722,9 @@ class FloraWorld {
    * A forest node draws one leaf form, so a mixed world is emitted a form at
    * a time: `leafForm` keeps only the plants of that form, `plants` (plant
    * indices) only those. A needle or scale emit fills in the options it is
-   * not given with the conifer's (perArea 80 / 140, upBias 0.65 / 0.6,
-   * tiltJitter 0.3, clumpSpacing 0.8: fewer, flatter spray cards in small
-   * overlapping tufts, the dark, dense, layered crown).
+   * not given with the conifer's (needle / scale: perArea 50 / 140, upBias
+   * 0.65 / 0.6, tiltJitter 0.3, clumpSpacing 1 / 0.8: flatter spray cards
+   * in small tufts that touch, the dark, dense, layered crown).
    * @example
    *   const forest = world.emitForest({ perArea: 90 });
    *   scene.createForest({ forest, instances: bro.flora.plantForest(forest, { area }), leaf });

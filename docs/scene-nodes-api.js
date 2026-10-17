@@ -512,7 +512,10 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  * card narrowed by the spray's fill. The form also sets how the trees move
  * through the same sway: how much the leaves flutter (`flutter`) and how
  * much limbs and twigs bounce (`limbBob`, `twigBob`): a conifer's long
- * boughs bob while its needles hardly flutter. With no leaf given, the node
+ * boughs bob while its needles hardly flutter. A needle or scale node's
+ * crowns take over from its clumps earlier (`lod` crownFrom 8, crownTo 5
+ * unless given): a conifer's crown is many small clumps, each a few lobes
+ * to draw, and the crown traces them as one card. With no leaf given, the node
  * draws its form's own card (an oval leaf, a needle spray, a scale-leaf
  * spray) at its specimens' mean leaf size (the species' leafSize: a
  * boxwood's small leaves). An emit filtered to a form

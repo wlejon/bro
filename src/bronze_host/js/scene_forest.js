@@ -42,7 +42,9 @@
     // leaf card it takes when given none, how much the leaves flutter, and
     // how much its limbs and twigs bounce. A conifer's needles hardly
     // flutter and its long boughs bounce; its leaf is a whole spray's card,
-    // the needles or scale leaves cut out of it on the GPU.
+    // the needles or scale leaves cut out of it on the GPU. `lod`: a
+    // conifer's crown is many small clumps (each a few lobes to draw), so
+    // its crown takes over while they are still larger on screen.
     const FORMS = {
         broad: { form: 0, shape: 'oval',
                  card: { width: 0.07, length: 0.12, bend: 0.4, fullUV: true, shapedSilhouette: true, cup: 0.55,
@@ -50,10 +52,10 @@
                  flutter: 1, limbBob: 0.6, twigBob: 0.8 },
         needle: { form: 1, shape: 'frond',
                   card: { width: 0.1, length: 0.18, bend: 0.3, fullUV: true, widthSegments: 1, lengthSegments: 2 },
-                  flutter: 0.15, limbBob: 1.6, twigBob: 1.0 },
+                  flutter: 0.15, limbBob: 1.6, twigBob: 1.0, lod: { crownFrom: 8, crownTo: 5 } },
         scale: { form: 2, shape: 'frond',
                  card: { width: 0.11, length: 0.16, bend: 0.25, fullUV: true, widthSegments: 1, lengthSegments: 2 },
-                 flutter: 0.1, limbBob: 1.3, twigBob: 0.9 },
+                 flutter: 0.1, limbBob: 1.3, twigBob: 0.9, lod: { crownFrom: 8, crownTo: 5 } },
     };
     const FORM_NAMES = ['broad', 'needle', 'scale'];
     function formOf(v) {
@@ -156,7 +158,9 @@
         }
         const node = canon(__bro_native.scene.SceneGraph_createForest(this, o, leaf));
         if (!node) return node;
-        applyOpts(node, o);
+        // The form's level of detail under the one given.
+        const form = leafFormOf(o);
+        applyOpts(node, form && form.lod ? Object.assign({}, o, { lod: Object.assign({}, form.lod, o.lod) }) : o);
         return node;
     });
 
