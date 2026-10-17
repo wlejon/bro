@@ -222,7 +222,8 @@ struct SceneSurface {
     bool twoSided;
     float subsurface;  // wrap-light translucency, two-sided surfaces only
     float translucency; // leaf light transport: the sun glowing through a leaf seen against it (0: none)
-    // Leaves placed in a sphere (a forest lobe or crown, scene_forest_mass.glsl):
+    // Leaves placed in a sphere (a forest lobe, a crown's clump, or the lobe
+    // a cluster of thinned leaves belongs to; scene_forest_mass.glsl):
     // its centre (camera-relative) and radius, w 0 for none, and the leaves'
     // optical depth a unit length through it. Such a leaf is shadowed by its
     // own sphere's leaves analytically, and by everything else from the
@@ -233,7 +234,27 @@ struct SceneSurface {
     vec4 leafSphere;
     float leafDensity;
     float leafPath;
+    // Placed leaves (forest lobes, crowns and clusters) know the share of
+    // the sun reaching where they lie, not which of their leaves it reaches:
+    // a leaf is lit or in another's shadow, so the leaves of a crown are
+    // sunflecks among shade, which the leaves tier shows leaf by leaf and,
+    // under MSAA, a pixel as the mean of its samples' leaves. leafSun holds a
+    // draw in [0, 1) for each of up to four leaves seen in the pixel, each lit
+    // when its draw is under the share; leafSunN is how many of them the
+    // pixel averages (1 to 4, fractional between; 0 keeps the share as is).
+    vec4 leafSun;
+    float leafSunN;
 };
+
+// The sun on a pixel of placed leaves (SceneSurface::leafSun): each of its
+// leaves lit or not by its draw, the share `vis` on average.
+float leafSunflecks(vec4 draw, float n, float vis) {
+    if (n <= 0.0) return vis;
+    vec4 lit = smoothstep(draw - 0.08, draw + 0.08, vec4(vis));
+    vec4 w = clamp(vec4(n) - vec4(0.0, 1.0, 2.0, 3.0), 0.0, 1.0);
+    float flecks = dot(lit, w) / max(dot(w, vec4(1.0)), 1e-4);
+    return mix(vis, flecks, min(n, 1.0));
+}
 
 // The direct light of every scene light on `s`.
 vec3 sceneDirectLight(SceneSurface s) {
@@ -294,15 +315,12 @@ vec3 sceneDirectLight(SceneSurface s) {
                 float out_ = max(-b + sqrt(max(b * b - dot(oc, oc) + s.leafSphere.w * s.leafSphere.w, 0.0)), 0.0);
                 at += L * out_;
                 self = exp(-s.leafDensity * s.leafPath * out_);
-                // The leaf seen is not the sphere's surface but one about a
-                // free path in (the depth seen through is exponential), and
-                // looking down the light that adds its depth to the light's
-                // path: the mean of exp(-c t) over it is 1 / (1 + c), c the
-                // cosine between view and light (half, sun behind the eye).
-                self /= 1.0 + max(dot(V, L), 0.0) * s.leafPath;
-                spread = 0.0;
+                // The exit tap is as soft as a leaf's (twice the filter):
+                // sharp, the discs' cells and the wider casters' edges read
+                // as hard blotches on the lobes they fall on.
             }
-            leafShadow = 0.1 + 0.9 * self * lightShadow(i, at, s.camDist, lightDist, tN, max(abs(NL), 0.2), spread);
+            float vis = self * lightShadow(i, at, s.camDist, lightDist, tN, max(abs(NL), 0.2), spread);
+            leafShadow = 0.1 + 0.9 * (type == 0 ? leafSunflecks(s.leafSun, s.leafSunN, vis) : vis);
         }
         // Leaf translucency: light passing through a leaf lit from behind,
         // strongest looking toward the light, a warm yellow-green, and

@@ -231,6 +231,17 @@ float procDraw(uint base, uint k) {
     return float(procHash(base + k * 0x9e3779b9u) >> 8) * (1.0 / 16777216.0);
 }
 
+// Whether a forest tree (`tree`, its instance) leaves clump `clump` bare:
+// each tree drops its own few (up to a fifth, by a hash of the tree), so
+// trees of one specimen part their crowns differently. Every tier asks the
+// same (the leaves, their casters, the lobes, the crown's trace), so a tree
+// keeps its gaps from near to far.
+bool procClumpBare(int tree, int clump) {
+    uint h = procHash(uint(tree) * 0x9e3779b9u ^ 0x7f4a7c15u);
+    float share = 0.2 * float(h >> 8) * (1.0 / 16777216.0);
+    return float(procHash(h ^ (uint(clump) * 0x632be5abu)) >> 8) * (1.0 / 16777216.0) < share;
+}
+
 void procClumpLobe(vec4 c, int clump, int lobe, uint seed, out vec3 center, out float radius) {
     if (lobe <= 0) {
         center = c.xyz;

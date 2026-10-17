@@ -120,8 +120,12 @@ public:
         // card holds the widening^2 leaves it stands for, each of its own
         // size (1); or as the one widened leaf (0).
         float clusters = 1.0f;
+        // Bark at least this wide on screen (px) is drawn whatever the
+        // widening and the budget ask, so a mid tree keeps its trunk and
+        // scaffold limbs under its crown.
+        float barkKeepPixels = 2.0f;
     };
-    static constexpr int kLodCount = 14;
+    static constexpr int kLodCount = 15;
     /// `lod` with its pixel thresholds scaled by a detail factor (>= 1).
     static Lod scaled(const Lod& lod, float detail) {
         Lod l = lod;

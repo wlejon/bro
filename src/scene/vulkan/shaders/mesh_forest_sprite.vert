@@ -30,6 +30,7 @@ layout(location = 8) flat out vec4 outMass0;  // centre (posed, camera-relative)
 layout(location = 9) flat out vec4 outMass1;  // the crown's centre (posed), radius
 layout(location = 10) flat out vec4 outMass2; // cell, leaf length (both in radii), leaf aspect, shell
 layout(location = 11) flat out vec4 outMass3; // up bias, tilt jitter, height over width, leaf length (world)
+layout(location = 12) flat out vec4 outMass4; // the pose's offset, the tree (uint bits): a crown's clumps (scene_forest_crown.glsl)
 
 #include "scene_camera.glsl"
 #include "scene_mesh_push.glsl"
@@ -79,4 +80,5 @@ void main() {
     outMass1 = s.crown;
     outMass2 = vec4(cell, len, procedural.header[3].y, procedural.header[0].w);
     outMass3 = vec4(procedural.header[0].y, procedural.header[0].z, yScale, s.leafLen);
+    outMass4 = vec4(s.offset, uintBitsToFloat(uint(s.instance)));
 }

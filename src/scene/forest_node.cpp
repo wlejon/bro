@@ -172,7 +172,7 @@ void ForestNode::lodToArray(float (&out)[kLodCount]) const {
     const Lod& l = lod_;
     const float v[kLodCount] = {l.leafPixels, l.flutterFade, l.cardWidening, l.clumpFrom, l.clumpTo, l.crownFrom,
                                 l.crownTo, l.barkPixels, l.barkSidesPixels, l.shadowKeep, l.range,
-                                l.budget, l.shadowBudget, l.clusters};
+                                l.budget, l.shadowBudget, l.clusters, l.barkKeepPixels};
     std::copy(std::begin(v), std::end(v), out);
 }
 
@@ -180,7 +180,7 @@ void ForestNode::lodFromArray(const double* v, size_t n) {
     float* dst[kLodCount] = {&lod_.leafPixels, &lod_.flutterFade, &lod_.cardWidening, &lod_.clumpFrom,
                              &lod_.clumpTo, &lod_.crownFrom, &lod_.crownTo, &lod_.barkPixels,
                              &lod_.barkSidesPixels, &lod_.shadowKeep, &lod_.range, &lod_.budget,
-                             &lod_.shadowBudget, &lod_.clusters};
+                             &lod_.shadowBudget, &lod_.clusters, &lod_.barkKeepPixels};
     for (size_t i = 0; i < n && i < static_cast<size_t>(kLodCount); ++i)
         if (!std::isnan(v[i])) *dst[i] = static_cast<float>(v[i]);
     lod_.leafPixels = std::max(lod_.leafPixels, 0.01f);
@@ -195,6 +195,7 @@ void ForestNode::lodFromArray(const double* v, size_t n) {
     lod_.budget = std::max(lod_.budget, 0.0f);
     lod_.shadowBudget = std::max(lod_.shadowBudget, 0.0f);
     lod_.clusters = lod_.clusters > 0.5f ? 1.0f : 0.0f;
+    lod_.barkKeepPixels = std::max(lod_.barkKeepPixels, 0.0f);
 }
 
 float ForestNode::fadeCode(float lo, float hi) {
@@ -249,6 +250,9 @@ ForestNode::TreeLod ForestNode::treeLod(const Lod& lod, const Specimen& s, float
     // leaves, in the clumps and crowns), so bark falls away as fast as the
     // leaves thin, down to the trunk and scaffold limbs.
     t.barkRadius *= t.widening;
+    // ... but never past what anyone would see go: bark wider than
+    // `barkKeepPixels` stays.
+    if (lod.barkKeepPixels > 0.0f) t.barkRadius = std::min(t.barkRadius, lod.barkKeepPixels / (2.0f * barkPx));
     t.card = t.widening > lod.cardWidening;
     const float toClumps = smooth(lod.clumpFrom, lod.clumpTo, t.widening);
     // Crowns take over as a clump shrinks on screen (crownFrom > crownTo).

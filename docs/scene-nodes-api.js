@@ -545,6 +545,8 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  * @property {number} [shadowBudget=6] - the same for every shadow tile together.
  * @property {number} [clusters=1] - past `cardWidening` a kept leaf is drawn as the leaves it stands for (1),
  *   or as the one widened leaf (0).
+ * @property {number} [barkKeepPixels=2] - bark at least this wide on screen is drawn whatever the widening and
+ *   the budget ask, so a mid tree keeps its trunk and scaffold limbs; 0: no floor.
  */
 
 // ── SceneNode: per-type members ──────────────────────────────────────────────

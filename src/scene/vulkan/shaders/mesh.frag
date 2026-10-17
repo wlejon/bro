@@ -31,12 +31,21 @@ layout(location = 8) flat in vec4 inMass0;
 layout(location = 9) flat in vec4 inMass1;
 layout(location = 10) flat in vec4 inMass2;
 layout(location = 11) flat in vec4 inMass3;
+layout(location = 12) flat in vec4 inMass4;
 // The card stands at the sphere's front, so the depth written only ever
 // moves away from the eye: less under reversed-Z (the default), where the
 // early depth test keeps working. Under the conventional mapping the card's
 // own depth is written instead, which keeps the promise.
 layout(constant_id = 0) const bool REVERSED_Z = true;
 layout(depth_less) out float gl_FragDepth;
+#endif
+#ifdef SCENE_FOREST_CLUSTER
+// The way the leaves round it face before their tilt, and the tilt; the lobe
+// they lie in and its leaves' optical depth a unit length
+// (mesh_forest_leaf.vert).
+layout(location = 8) flat in vec4 inLobeOut;
+layout(location = 9) flat in vec4 inLobeSphere;
+layout(location = 10) flat in float inLobeDensity;
 #endif
 
 layout(location = 0) out vec4 outColor;
@@ -51,6 +60,10 @@ layout(location = 1) out vec4 outIndirect;
 #include "scene_mesh_push.glsl"
 #ifdef SCENE_VEGETATION
 #include "scene_forest_mass.glsl"
+#endif
+#ifdef SCENE_FOREST_SPRITE
+#include "scene_procedural.glsl"
+#include "scene_forest_crown.glsl"
 #endif
 
 layout(set = 2, binding = 0) uniform sampler2D texAlbedo;
@@ -120,6 +133,7 @@ int forestSampleMask(float code, float coverage, bool msaa, uint salt) {
 void main() {
     uint flags = meshFlags();
     vec3 worldPos = inWorldPos;
+    bool frontFacing = gl_FrontFacing;
 #ifdef SCENE_VEGETATION
     gl_SampleMask[0] = -1;
     // Leaves placed here rather than drawn (scene_forest_mass.glsl): a
@@ -132,9 +146,15 @@ void main() {
     vec3 massN = vec3(0.0, 1.0, 0.0);
     float massUnder = 0.0, massTone = 1.0;
     uint massSalt = 0u;
+    // The sphere the leaves seen lie in (none: radius 0), and their optical
+    // depth a unit length (SceneSurface::leafSphere / leafDensity).
+    vec4 massSphere = vec4(0.0);
+    float massDensity = 0.0;
 #endif
 #ifdef SCENE_FOREST_SPRITE
     float massPath = 1.0;   // the light's path through the sphere's own leaves, times
+    vec4 massSun = vec4(0.5);   // SceneSurface::leafSun
+    float massSunN = 0.0;
     {
         vec3 right = normalize(inTangent), up = normalize(inBitangent), view = normalize(inNormal);
         vec2 q = inUV;
@@ -147,36 +167,74 @@ void main() {
         // How the pixel's few leaves stray from the mean (one draw serves
         // both halves: the far half's turned round, so they differ).
         vec4 grain = forestMassGrain(q, fp, inMass2.x, massSalt ^ 0x2c1b3c6du);
-        // The near half of the shell, and the far half through its gaps.
-        ForestLeafLayer nearL = forestLobeLayerAt(q, fp, 1.0, inMass2.x, inMass2.y, inMass2.z, inMass2.w, upC,
-                                                  inMass3.x, inMass3.y, massSalt, grain);
-        // The far half, seen only through the near one's gaps (darker, and
-        // softened by the leaves between), as its leaves' mean.
-        ForestLeafLayer farL = forestLobeMean(q, -1.0, inMass2.x, inMass2.y, inMass2.z, inMass2.w, upC, inMass3.x,
-                                              grain.zwxy);
-        float wn = 1.0 - nearL.clear, wf = nearL.clear * (1.0 - farL.clear);
-        massCover = wn + wf;
-        if (massCover < 1.0 / 255.0) discard;
-        float an = wn / massCover, af = wf / massCover;
-        float kn = an / max(nearL.weight, 1e-6), kf = af / max(farL.weight, 1e-6);
-        vec3 nc = nearL.normal * kn + farL.normal * kf;
-        nc = dot(nc, nc) > 1e-10 ? normalize(nc) : vec3(0.0, 0.0, 1.0);
-        massN = normalize(right * nc.x + up * nc.y + view * nc.z);
-        massUnder = nearL.under * kn + farL.under * kf;
-        massTone = nearL.tone * kn + farL.tone * kf;
-        // Once a pixel holds several leaves, how many lie between them and
-        // the light wanders with their count (sun flecks among shade, the
-        // denser patches darker); a leaf drawn as itself takes its sphere's
-        // mean.
-        massPath = max(1.0 + 1.5 * grain.w * forestLobeMeanShare(fp, inMass2.x), 0.05);
-        // Where the leaves lie: mid-shell on the near half, or the far half's
-        // seen through it.
-        float z = sqrt(max(1.0 - dot(q, q), 0.0)) * (1.0 - 0.5 * inMass2.w);
-        vec3 at = inMass0.xyz + inMass0.w * (right * q.x + up * (q.y * inMass3.z));
-        worldPos = at + view * (inMass0.w * z * (an - af));
-        vec4 clip = camera.viewProj * vec4(at + view * (inMass0.w * (an >= 0.5 ? z : -z)), 1.0);
-        gl_FragDepth = REVERSED_Z ? min(clip.z / clip.w, gl_FragCoord.z) : gl_FragCoord.z;
+        float lv = max(log2(fp / inMass2.x), 0.0);
+        float perPixel = (flags & MESH_FOREST_MSAA) != 0u ? clamp(exp2(2.0 * lv), 1.0, 4.0) : 1.0;
+        vec4 draws = forestMassHash(ivec2(floor(q / (inMass2.x * exp2(floor(lv + 0.5))))), massSalt ^ 0x1b873593u);
         massLeaves = true;
+        if (inColor.z > 0.5) {
+            // A crown: its own clumps along the pixel's ray
+            // (scene_forest_crown.glsl), each lit as a lobe is: through its
+            // own leaves to where the light leaves it.
+            vec3 d = normalize(inWorldPos);
+            ForestCrownHit h = forestCrownTrace(d, int(floatBitsToUint(inMass4.w)), inMass4.xyz, inMass3.w,
+                                                inMass2.z, grain);
+            massCover = h.cover;
+            if (massCover < 1.0 / 255.0) discard;
+            // The leaves face out of their clump, leaning up, each its own
+            // way about that (the pixel's few, the grain).
+            vec3 n = normalize(h.normal * (1.0 - inMass3.x) + vec3(0.0, inMass3.x, 0.0) +
+                               (right * grain.x + up * grain.y + view * grain.z) * 0.85);
+            float facing = dot(n, -d);
+            massUnder = smoothstep(0.1, -0.1, facing);
+            massN = facing < 0.0 ? -n : n;
+            massTone = 1.0 + 0.1 * grain.x * grain.y;
+            massPath = max(1.0 + 1.5 * grain.w, 0.05);
+            massSphere = h.sphere;
+            massDensity = h.density;
+            worldPos = h.at;
+            vec4 clip = camera.viewProj * vec4(h.at, 1.0);
+            gl_FragDepth = REVERSED_Z ? min(clip.z / clip.w, gl_FragCoord.z) : gl_FragCoord.z;
+        } else {
+            // The near half of the shell, and the far half through its gaps.
+            ForestLeafLayer nearL = forestLobeLayerAt(q, fp, 1.0, inMass2.x, inMass2.y, inMass2.z, inMass2.w, upC,
+                                                      inMass3.x, inMass3.y, massSalt, grain);
+            // The far half, seen only through the near one's gaps (darker,
+            // and softened by the leaves between), as its leaves' mean.
+            ForestLeafLayer farL = forestLobeMean(q, -1.0, inMass2.x, inMass2.y, inMass2.z, inMass2.w, upC,
+                                                  inMass3.x, grain.zwxy);
+            float wn = 1.0 - nearL.clear, wf = nearL.clear * (1.0 - farL.clear);
+            massCover = wn + wf;
+            if (massCover < 1.0 / 255.0) discard;
+            float an = wn / massCover, af = wf / massCover;
+            float kn = an / max(nearL.weight, 1e-6), kf = af / max(farL.weight, 1e-6);
+            vec3 nc = nearL.normal * kn + farL.normal * kf;
+            nc = dot(nc, nc) > 1e-10 ? normalize(nc) : vec3(0.0, 0.0, 1.0);
+            massN = normalize(right * nc.x + up * nc.y + view * nc.z);
+            massUnder = nearL.under * kn + farL.under * kf;
+            massTone = nearL.tone * kn + farL.tone * kf;
+            // Once a pixel holds several leaves, how many lie between them
+            // and the light wanders with their count (sun flecks among
+            // shade, the denser patches darker); a leaf drawn as itself
+            // takes its sphere's mean.
+            float meanShare = forestLobeMeanShare(fp, inMass2.x);
+            massPath = max(1.0 + 1.5 * grain.w * meanShare, 0.05);
+            // Which of them the sun reaches: the leaf seen while leaves are
+            // drawn one by one, else the pixel's few (its MSAA samples'
+            // leaves, as many as it holds up to four) on the grain's grid.
+            // A quarter of the way from the mean to the flecks: all the way,
+            // a pixel's few lit or not read as noise at this size.
+            massSun = meanShare < 0.5 ? vec4(nearL.sun) : draws;
+            massSunN = 0.25 * mix(1.0, perPixel, meanShare);
+            // Lit where the leaves lie (the near half's seen, or the far
+            // half's through them); the depth is the sphere's there.
+            float z = sqrt(max(1.0 - dot(q, q), 0.0)) * (1.0 - 0.5 * inMass2.w);
+            vec3 at = inMass0.xyz + inMass0.w * (right * q.x + up * (q.y * inMass3.z));
+            worldPos = at + view * (inMass0.w * (nearL.z * kn + farL.z * kf));
+            vec4 clip = camera.viewProj * vec4(at + view * (inMass0.w * (an >= 0.5 ? z : -z)), 1.0);
+            gl_FragDepth = REVERSED_Z ? min(clip.z / clip.w, gl_FragCoord.z) : gl_FragCoord.z;
+            massSphere = inMass0;
+            massDensity = forestMassDepth(inMass2.x, inMass2.y, inMass2.z) * 0.5 / max(inMass0.w, 1e-3);
+        }
     }
 #elif defined(SCENE_FOREST_CLUSTER)
     {
@@ -189,18 +247,31 @@ void main() {
         vec2 p = inUV;
         float fp = max(max(length(dFdx(p)), length(dFdy(p))), 1e-5);
         massSalt = uint(inColor.y * 16777216.0);
-        ForestLeafLayer L = forestClusterLayer(p, fp, k, inColor.z, massSalt);
+        // The card's basis turned to the eye (z toward it), so a leaf whose
+        // normal there points away shows its underside.
+        vec3 n = normalize(inNormal), across = normalize(inTangent);
+        bool facing = dot(n, -inWorldPos) > 0.0;
+        vec3 ne = facing ? n : -n;
+        vec3 along = cross(ne, across);
+        vec3 lobe = vec3(dot(inLobeOut.xyz, across), dot(inLobeOut.xyz, along), dot(inLobeOut.xyz, ne));
+        ForestLeafLayer L = forestClusterLayer(p, fp, k, inColor.z, facing ? 1.0 : -1.0, lobe, inLobeOut.w, massSalt);
         massCover = 1.0 - L.clear;
         if (massCover < 1.0 / 255.0) discard;
-        vec3 n = normalize(inNormal), across = normalize(inTangent);
-        vec3 along = cross(n, across);
         vec3 m = dot(L.normal, L.normal) > 1e-10 ? normalize(L.normal) : vec3(0.0, 0.0, 1.0);
-        massN = normalize(across * m.x + along * m.y + n * m.z);
-        // The face the eye sees, its underside paler (as the leaves').
-        if (!gl_FrontFacing) massN = -massN;
-        massUnder = gl_FrontFacing ? 0.0 : 1.0;
+        massN = normalize(across * m.x + along * m.y + ne * m.z);
+        // The undersides paler (as the leaves').
+        massUnder = L.weight > 0.0 ? L.under / L.weight : 0.0;
         massTone = L.weight > 0.0 ? L.tone / L.weight : 1.0;
         massLeaves = true;
+        // Lit as the lobe sprite that takes over from it is: through its
+        // lobe's own leaves analytically, and by one shadow tap where the
+        // light leaves the lobe (the casters there are the lobes' discs or
+        // fewer, wider leaves, too coarse to shade a leaf among its own).
+        // Half the lobe's density: a cluster stands for the leaves nearest
+        // its outline, and the full depth through the lobe left the mid
+        // range darker than the leaves it hands over from.
+        massSphere = inLobeSphere;
+        massDensity = inLobeDensity * 0.5;
     }
 #endif
     float camDist = length(worldPos);
@@ -244,6 +315,13 @@ void main() {
     float vegBladeT = -inVegShade.w - 2.0;
     float vegFade = vegBlade ? floor(vegBladeT * 0.5) : 0.0;
     float vegAO = vegBlade ? vegBladeT - 2.0 * vegFade : abs(inVegShade.w);
+    // A leaf's face is the one its normal points to. Its frame (the clump
+    // and scatter placements, clumpLeafFrame, bromesh's leaf scatter) is a
+    // mirror image (across, normal, tip are left-handed), so its triangles
+    // wind the other way and gl_FrontFacing names the wrong face: the eye
+    // would see a sunlit top lit as its own underside, and a leaf against
+    // the sun lit on the side away from it.
+    if (vegLeaf && !vegBlade) frontFacing = dot(inNormal, -inWorldPos) >= 0.0;
     // Placed leaves take the leaf's colour, their tree's and limb's tint
     // and their own lightness (the vertex colour carries their data).
     vec3 massBulk = vec3(0.0, 1.0, 0.0);
@@ -261,7 +339,7 @@ void main() {
     // A leaf's underside is paler and yellower than its top.
     vec3 vegUnder = baseColor * vec3(1.25, 1.3, 1.05) + vec3(0.015, 0.02, 0.0);
     if (massLeaves) baseColor = mix(baseColor, vegUnder, 0.6 * massUnder);
-    else if (vegLeaf && !vegBlade && !forestSprite && !gl_FrontFacing) baseColor = mix(baseColor, vegUnder, 0.6);
+    else if (vegLeaf && !vegBlade && !forestSprite && !frontFacing) baseColor = mix(baseColor, vegUnder, 0.6);
     // In a gust (inColor.y, the drag at its tree) some of a sprite's leaves
     // turn their undersides up, so the crown lightens as it passes over.
     if (forestSprite) {
@@ -289,7 +367,7 @@ void main() {
 
     // Two-sided thin surfaces shade the face the camera sees.
     vec3 N = geomN;
-    if ((flags & MESH_TWO_SIDED) != 0u && !gl_FrontFacing) N = -N;
+    if ((flags & MESH_TWO_SIDED) != 0u && !frontFacing) N = -N;
     if ((flags & (MESH_NORMAL_MAP | MESH_HAS_TANGENTS)) == (MESH_NORMAL_MAP | MESH_HAS_TANGENTS)) {
         vec3 nTS = texture(texNormal, inUV).xyz * 2.0 - 1.0;
         N = normalize(mat3(normalize(inTangent), normalize(inBitangent), N) * nTS);
@@ -340,10 +418,16 @@ void main() {
     s.leafSphere = vec4(0.0);
     s.leafDensity = 0.0;
     s.leafPath = 1.0;
+    s.leafSun = vec4(0.5);
+    s.leafSunN = 0.0;
 #ifdef SCENE_FOREST_SPRITE
     s.leafPath = massPath;
-    s.leafSphere = inMass0;
-    s.leafDensity = forestMassDepth(inMass2.x, inMass2.y, inMass2.z) * 0.5 / max(inMass0.w, 1e-3);
+    s.leafSun = massSun;
+    s.leafSunN = massSunN;
+#endif
+#ifdef SCENE_VEGETATION
+    s.leafSphere = massSphere;
+    s.leafDensity = massDensity;
 #endif
 
     vec3 indirect = sceneAmbient(s);

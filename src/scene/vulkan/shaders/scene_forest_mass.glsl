@@ -72,26 +72,38 @@ struct ForestLeafLayer {
     vec3 normal;    // the visible leaves' mean normal, card basis (z toward the eye), not normalised
     float under;    // their share showing their undersides (weighted as normal)
     float tone;     // their own lightness, weighted
+    float z;        // their depth toward the eye (sphere radii from the centre), weighted
     float weight;   // the sum of the weights
+    // The leaf that shows most: its own draw in [0, 1) for whether the sun
+    // reaches it (SceneSurface::leafSun), and its weight.
+    float sun;
+    float sunWeight;
 };
 
-// Takes a leaf of normal `n` (toward the eye), cover `cov` and weight `w`
-// into the layer.
-void forestLeafAdd(inout ForestLeafLayer o, vec3 n, float cov, float w, float tone) {
+// Takes a leaf of normal `n` (toward the eye), cover `cov`, weight `w`, depth
+// `z` and sun draw `sun` into the layer.
+void forestLeafAdd(inout ForestLeafLayer o, vec3 n, float cov, float w, float tone, float z, float sun) {
     o.clear *= 1.0 - cov;
     bool under = n.z < 0.0;
     vec3 f = under ? -n : n;
     o.normal += f * w;
     o.under += under ? w : 0.0;
     o.tone += tone * w;
+    o.z += z * w;
     o.weight += w;
+    if (w > o.sunWeight) {
+        o.sunWeight = w;
+        o.sun = sun;
+    }
 }
 
 ForestLeafLayer forestLeafLayerNone() {
     ForestLeafLayer o;
     o.clear = 1.0;
     o.normal = vec3(0.0);
-    o.under = o.tone = o.weight = 0.0;
+    o.under = o.tone = o.z = o.weight = 0.0;
+    o.sun = 0.5;
+    o.sunWeight = 0.0;
     return o;
 }
 
@@ -129,7 +141,8 @@ ForestLeafLayer forestLobeLayer(vec2 q, float fp, float side, float cell, float 
             float cov = forestLeafCover(q, at, t.xy * size, b.xy * (size * aspect), fp);
             if (cov <= 0.0) continue;
             // The nearer leaves of the layer show over the further.
-            forestLeafAdd(o, n, cov, cov * exp2(4.0 * side * u.z), 0.9 + 0.2 * fract(g.w * 7.31 + h.z));
+            float sun = forestMassHash(c, salt ^ 0x68e31da4u).x;
+            forestLeafAdd(o, n, cov, cov * exp2(4.0 * side * u.z), 0.9 + 0.2 * fract(g.w * 7.31 + h.z), rr * u.z, sun);
         }
     }
     return o;
@@ -172,7 +185,7 @@ ForestLeafLayer forestLobeMean(vec2 q, float side, float cell, float len, float 
     float cov = 1.0 - exp(-tau);
     vec3 u = vec3(q / rr, side * sqrt(1.0 - r2));
     vec3 n = normalize(u * (1.0 - upBias) + upC * upBias + g.xyz * 0.85);
-    forestLeafAdd(o, n, cov, cov * exp2(4.0 * side * u.z), 1.0 + 0.1 * g.x * g.y);
+    forestLeafAdd(o, n, cov, cov * exp2(4.0 * side * u.z), 1.0 + 0.1 * g.x * g.y, rr * u.z, 0.5);
     return o;
 }
 
@@ -194,6 +207,7 @@ ForestLeafLayer forestLobeLayerAt(vec2 q, float fp, float side, float cell, floa
     e.normal = mix(e.normal, m.normal, t);
     e.under = mix(e.under, m.under, t);
     e.tone = mix(e.tone, m.tone, t);
+    e.z = mix(e.z, m.z, t);
     e.weight = mix(e.weight, m.weight, t);
     return e;
 }
@@ -204,9 +218,12 @@ ForestLeafLayer forestLobeLayerAt(vec2 q, float fp, float side, float cell, floa
 // in its plane, each turned and tipped a little from it. `p` the point in
 // leaf lengths from the outline's middle (x across, y along), `k` the
 // widening (under 1 the kept leaf shrinking away), `aspect` the leaf's
-// width over its length. The normal it returns is in the card's terms (x
-// across, y along, z its normal).
-ForestLeafLayer forestClusterLayer(vec2 p, float fp, float k, float aspect, uint salt) {
+// width over its length. The card's terms are x across, y along, z toward
+// the eye: `keptZ` the kept leaf's normal there (1 facing the eye, -1 away),
+// `lobe` the way the leaves round it face before their tilt (unit), `tilt`
+// that tilt (clumpLeafFrame's). The normal it returns is in those terms.
+ForestLeafLayer forestClusterLayer(vec2 p, float fp, float k, float aspect, float keptZ, vec3 lobe, float tilt,
+                                   uint salt) {
     ForestLeafLayer o = forestLeafLayerNone();
     // A leaf's area of outline to each (a leaf is about an ellipse).
     float cell = sqrt(0.785 * aspect);
@@ -232,8 +249,15 @@ ForestLeafLayer forestClusterLayer(vec2 p, float fp, float k, float aspect, uint
             size *= 0.5 * (kept ? 1.0 : 0.9 + 0.2 * g.w);
             float cov = forestLeafCover(p, at, along * size, vec2(along.y, -along.x) * (size * aspect), fp);
             if (cov <= 0.0) continue;
-            vec3 n = kept ? vec3(0.0, 0.0, 1.0) : normalize(vec3((g.xy - 0.5) * 0.8, 1.0));
-            forestLeafAdd(o, n, cov, cov * (kept ? 1.5 : 0.5 + h.z), kept ? 1.0 : 0.9 + 0.2 * g.z);
+            // Each of the others faces its own way, as the leaves it stands
+            // for: out of the lobe, leaning up, tilted.
+            vec4 g2 = forestMassHash(c, salt ^ 0x27d4eb2fu);
+            vec3 n = kept ? vec3(0.0, 0.0, keptZ) : lobe + (g2.xyz * 2.0 - 1.0) * tilt;
+            n = dot(n, n) > 1e-8 ? normalize(n) : vec3(0.0, 0.0, keptZ);
+            // Each a little before or behind the kept leaf (leaf lengths).
+            float z = kept ? 0.0 : (fract(g.z * 3.7 + h.w * 1.9) - 0.5) * 0.6 * k;
+            forestLeafAdd(o, n, cov, cov * (kept ? 1.5 : 0.5 + h.z), kept ? 1.0 : 0.9 + 0.2 * g.z, z,
+                          fract(g.w * 5.77 + h.z * 3.13));
         }
     }
     return o;

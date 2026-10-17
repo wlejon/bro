@@ -13,6 +13,8 @@ struct ForestSprite {
     vec4 crown;      // the crown's centre (posed, camera-relative) and radius (world)
     float leaves;    // the leaves it holds
     float leafLen;   // a leaf's length (world)
+    vec3 offset;     // the pose's offset from rest
+    int instance;    // the tree
 };
 
 bool forestSprite(int mode, int instanceIndex, int vertexIndex, mat4 base, out ForestSprite s) {
@@ -24,6 +26,8 @@ bool forestSprite(int mode, int instanceIndex, int vertexIndex, mat4 base, out F
     s.crown = vec4(0.0, 0.0, 0.0, 1.0);
     s.leaves = 1.0;
     s.leafLen = 0.0;
+    s.offset = vec3(0.0);
+    s.instance = 0;
 
     // corner 0..5: two triangles of the quad.
     int corner = vertexIndex % 6;
@@ -36,7 +40,7 @@ bool forestSprite(int mode, int instanceIndex, int vertexIndex, mat4 base, out F
     if (mode == 0) {
         e = forestEntry(instanceIndex);
         clump = e.first + vertexIndex / 18;
-        if (clump >= e.end) return false;
+        if (clump >= e.end || procClumpBare(e.instance, clump)) return false;
     } else {
         e = forestEntry(vertexIndex / 6);
     }
@@ -55,8 +59,11 @@ bool forestSprite(int mode, int instanceIndex, int vertexIndex, mat4 base, out F
         vec4 rec = procedural.records[forestClumpRecord(clump)];
         float lr;
         procClumpLobe(rec, clump, lobe, floatBitsToUint(procedural.header[0].x), c, lr);
+        // The lobe's leaves fill an ellipsoid: flattened underneath, 0.9 of
+        // the radius up and 0.7 down (clumpLeafFrame).
+        c.y += 0.1 * lr;
         s.radius = lr * scale;
-        s.radiusUp = s.radius;
+        s.radiusUp = 0.8 * s.radius;
         // A lobe holds about a third of its clump's leaves (clumpLeafFrame).
         s.leaves = max(procedural.records[forestClumpRecord(clump) + 1].w / 3.0, 1.0);
         forestVegetation(forestClumpRecord(clump) + 2, c, 1.0, v0, v1, v2, v3);
@@ -84,6 +91,8 @@ bool forestSprite(int mode, int instanceIndex, int vertexIndex, mat4 base, out F
     vec3 rest = (model * vec4(c, 1.0)).xyz;
     VegPose pose = vegPose(plant, limb, w, rest, clamp(weight, 0.0, 1.0));
     s.center = rest + pose.offset;
+    s.offset = pose.offset;
+    s.instance = e.instance;
     s.gust = w.p0;
     s.fade = e.fade;
     s.tint = vegLimbLeafTint(model, v0, v3);

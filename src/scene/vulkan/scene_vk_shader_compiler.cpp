@@ -11,6 +11,8 @@
 #include "scene_vegetation.glsl.src.h"
 #include "scene_forest_sprite.glsl.src.h"
 #include "scene_forest_mass.glsl.src.h"
+#include "scene_procedural.glsl.src.h"
+#include "scene_forest_crown.glsl.src.h"
 
 #include <array>
 #include <cstdlib>
@@ -90,6 +92,9 @@ const char* embeddedInclude(const std::string& name) {
         {"scene_vegetation.glsl", kVkSceneVegetationSrc},
         {"scene_forest_sprite.glsl", kVkSceneForestSpriteSrc},
         {"scene_forest_mass.glsl", kVkSceneForestMassSrc},
+        // mesh.frag's forest-sprite half; spliced in whole, compiled out.
+        {"scene_procedural.glsl", kVkSceneProceduralSrc},
+        {"scene_forest_crown.glsl", kVkSceneForestCrownSrc},
     };
     for (const auto& inc : kIncludes) {
         if (name == inc.name) return inc.source;

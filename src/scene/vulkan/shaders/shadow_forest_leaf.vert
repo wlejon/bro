@@ -23,7 +23,8 @@ void main() {
     vec3 P, F, lc;
     mat3 R;
     float lr;
-    if (k <= 0.0 || !clumpLeafFrame(procedural.records[forestClumpRecord(lf.x)], lf.y, lf.x, P, R, F, lc, lr)) {
+    if (k <= 0.0 || procClumpBare(e.instance, lf.x) ||
+        !clumpLeafFrame(procedural.records[forestClumpRecord(lf.x)], lf.y, lf.x, P, R, F, lc, lr)) {
         gl_Position = FOREST_CULLED;
         return;
     }
