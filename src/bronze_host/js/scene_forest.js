@@ -44,7 +44,11 @@
     // flutter and its long boughs bounce; its leaf is a whole spray's card,
     // the needles or scale leaves cut out of it on the GPU. `lod`: a
     // conifer's crown is many small clumps (each a few lobes to draw), so
-    // its crown takes over while they are still larger on screen.
+    // its crown takes over while they are still larger on screen; and its
+    // sprays thin from a larger size (leafPixels), as by then a spray's
+    // needles are under a pixel and it shows only its mean cover (a spray
+    // is twice a broad leaf's length: at 8 px each tree near the eye drew
+    // all of its twenty thousand).
     const FORMS = {
         broad: { form: 0, shape: 'oval',
                  card: { width: 0.07, length: 0.12, bend: 0.4, fullUV: true, shapedSilhouette: true, cup: 0.55,
@@ -52,10 +56,10 @@
                  flutter: 1, limbBob: 0.6, twigBob: 0.8 },
         needle: { form: 1, shape: 'frond',
                   card: { width: 0.14, length: 0.26, bend: 0.3, fullUV: true, widthSegments: 1, lengthSegments: 2 },
-                  flutter: 0.15, limbBob: 1.6, twigBob: 1.0, lod: { crownFrom: 8, crownTo: 5 } },
+                  flutter: 0.15, limbBob: 1.6, twigBob: 1.0, lod: { crownFrom: 8, crownTo: 5, leafPixels: 11 } },
         scale: { form: 2, shape: 'frond',
                  card: { width: 0.11, length: 0.16, bend: 0.25, fullUV: true, widthSegments: 1, lengthSegments: 2 },
-                 flutter: 0.1, limbBob: 1.3, twigBob: 0.9, lod: { crownFrom: 8, crownTo: 5 } },
+                 flutter: 0.1, limbBob: 1.3, twigBob: 0.9, lod: { crownFrom: 8, crownTo: 5, leafPixels: 10 } },
     };
     const FORM_NAMES = ['broad', 'needle', 'scale'];
     function formOf(v) {

@@ -24,7 +24,7 @@
 layout(location = 0) out vec3 outWorldPos;
 layout(location = 1) out vec3 outNormal;      // toward the eye from the centre (unit)
 layout(location = 2) out vec2 outUV;          // the card point, in sphere radii from the centre
-layout(location = 3) out vec4 outColor;       // seed, gust, mode, -
+layout(location = 3) out vec4 outColor;       // seed, gust, mode + 0.4 x clumps' flatness, -
 layout(location = 4) out vec3 outTangent;     // the card's right (unit)
 layout(location = 5) out vec3 outBitangent;   // the card's up (unit)
 layout(location = 6) out vec4 outInstColor;   // tint, fade
@@ -71,7 +71,9 @@ void main() {
     outTangent = right;
     outBitangent = up;
     outUV = q;
-    outColor = vec4(s.seed, s.gust, push.extra.z, 1.0);
+    // z: the mode, plus 0.4 times its clumps' height over width (mesh.frag
+    // takes it back as the fraction).
+    outColor = vec4(s.seed, s.gust, push.extra.z + 0.4 * clamp(s.lightFlat, 0.05, 1.0), 1.0);
     outInstColor = vec4(s.tint, s.fade);
     outVegShade = vec4(0.0, 0.0, 0.0, -1.0);
 

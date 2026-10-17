@@ -46,6 +46,7 @@ layout(depth_less) out float gl_FragDepth;
 layout(location = 8) flat in vec4 inLobeOut;
 layout(location = 9) flat in vec4 inLobeSphere;
 layout(location = 10) flat in float inLobeDensity;
+layout(location = 11) flat in float inLobeFlat;
 #endif
 #ifdef SCENE_FOREST_SPRAY
 // The spray's seed (mesh_forest_leaf.vert): its own dither.
@@ -165,6 +166,7 @@ void main() {
     // depth a unit length (SceneSurface::leafSphere / leafDensity).
     vec4 massSphere = vec4(0.0);
     float massDensity = 0.0;
+    float massFlat = 1.0;   // the sphere's height over its width (SceneSurface::leafFlat)
 #endif
 #ifdef SCENE_FOREST_SPRITE
     float massPath = 1.0;   // the light's path through the sphere's own leaves, times
@@ -195,11 +197,18 @@ void main() {
         float fp = max(length(dFdx(p)), length(dFdy(p)));
         vec4 g = forestMassHash(ivec2(floor(p.xz + vec2(0.37, 0.71) * floor(p.y))), uint(floor(p.y)) + 0x3c6ef372u);
         float keep = 1.0 - smoothstep(0.6, 2.0, fp);
+        // Its outline ragged, leaf by leaf: the ray's nearest approach over
+        // the radius, the outer fifth giving way where a leaf's draw is
+        // under it (a hard disc reads as a dark spot among the sprays).
+        float rim = sqrt(max(1.0 - disc / (a * inMass0.w * inMass0.w), 0.0));
+        if (smoothstep(0.75, 1.0, rim) > mix(0.5, g.z, keep)) discard;
         massLeaves = true;
         massN = normalize(n * 0.6 + vec3(0.0, 0.4, 0.0) + (g.xyz * 2.0 - 1.0) * 0.8 * keep);
         massTone = 0.85 + 0.3 * (g.w - 0.5) * keep;
         massSphere = vec4(inMass0.xyz, inMass2.y);
-        massDensity = inMass2.z;
+        // As a lobe's leaves are lit (half the lobe's density, below).
+        massDensity = inMass2.z * 0.5;
+        massFlat = ky;
         vec4 clip = camera.viewProj * vec4(worldPos, 1.0);
         gl_FragDepth = REVERSED_Z ? min(clip.z / clip.w, gl_FragCoord.z) : gl_FragCoord.z;
     } else {
@@ -223,8 +232,10 @@ void main() {
             // (scene_forest_crown.glsl), each lit as a lobe is: through its
             // own leaves to where the light leaves it.
             vec3 d = normalize(inWorldPos);
+            // A pixel's size (world) on the card, at the crown.
+            float pixel = max(length(dFdx(inWorldPos)), length(dFdy(inWorldPos)));
             ForestCrownHit h = forestCrownTrace(d, int(floatBitsToUint(inMass4.w)), inMass4.xyz, inMass3.w,
-                                                inMass2.z, grain);
+                                                inMass2.z, grain, pixel);
             massCover = h.cover;
             if (massCover < 1.0 / 255.0) discard;
             // The leaves face out of their clump, leaning up, each its own
@@ -238,6 +249,7 @@ void main() {
             massPath = max(1.0 + 1.5 * grain.w, 0.05);
             massSphere = h.sphere;
             massDensity = h.density;
+            massFlat = h.flatness;
             worldPos = h.at;
             vec4 clip = camera.viewProj * vec4(h.at, 1.0);
             gl_FragDepth = REVERSED_Z ? min(clip.z / clip.w, gl_FragCoord.z) : gl_FragCoord.z;
@@ -280,7 +292,17 @@ void main() {
             vec4 clip = camera.viewProj * vec4(at + view * (inMass0.w * (an >= 0.5 ? z : -z)), 1.0);
             gl_FragDepth = REVERSED_Z ? min(clip.z / clip.w, gl_FragCoord.z) : gl_FragCoord.z;
             massSphere = inMass0;
-            massDensity = forestMassDepth(inMass2.x, inMass2.y, inMass2.z) * 0.5 / max(inMass0.w, 1e-3);
+            // A spray node's lobe (a needle or scale-leaf form, the
+            // header's look) takes no shade of its own leaves: its leaves
+            // are a shell over an opaque core, and the lobes' disc casters
+            // already shade it lobe by lobe as its sprays' casters do
+            // theirs. With both, its clumps were 4 to 12 units darker than
+            // its leaves.
+            bool sprayLobe = (floatBitsToUint(procedural.header[3].w) & 15u) != 0u;
+            massDensity = sprayLobe ? 0.0 : forestMassDepth(inMass2.x, inMass2.y, inMass2.z) * 0.5 / max(inMass0.w, 1e-3);
+            // The lobe's height over its width, carried over its mode
+            // (mesh_forest_sprite.vert).
+            massFlat = fract(inColor.z) > 1e-3 ? fract(inColor.z) / 0.4 : 1.0;
         }
     }
 #elif defined(SCENE_FOREST_CLUSTER)
@@ -319,6 +341,7 @@ void main() {
         // range darker than the leaves it hands over from.
         massSphere = inLobeSphere;
         massDensity = inLobeDensity * 0.5;
+        massFlat = inLobeFlat;
     }
 #endif
     float camDist = length(worldPos);
@@ -489,6 +512,7 @@ void main() {
     s.leafSphere = vec4(0.0);
     s.leafDensity = 0.0;
     s.leafPath = 1.0;
+    s.leafFlat = 1.0;
     s.leafSun = vec4(0.5);
     s.leafSunN = 0.0;
 #ifdef SCENE_FOREST_SPRITE
@@ -499,6 +523,7 @@ void main() {
 #ifdef SCENE_VEGETATION
     s.leafSphere = massSphere;
     s.leafDensity = massDensity;
+    s.leafFlat = massFlat;
 #endif
 
     vec3 indirect = sceneAmbient(s);

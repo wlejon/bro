@@ -102,12 +102,32 @@ struct SceneMeshDrawer::ForestPlan {
     ForestNode::Stats stats;
     ForestNode::Lod lod, shadowLod;
     float leafLength = 0.0f;
-    int leafVerts = 0, leafCopies = 1, force = -1;
+    int leafVerts = 0, leafCopies = 1, cardVerts = ForestNode::kCardVertices, force = -1;
     bool cores = false;   // the leaves tier draws its lobes' cores (a spray node's)
+    bool clusters = false;   // past the card widening a kept leaf is a cluster (Lod::clusters, a broad node's)
     std::vector<bromath::AABB3> bounds;   // every tree's, world, padded by the sway's reach
     std::vector<Seen> seen;               // the camera's trees
     std::vector<Seen> cast;               // each shadow tile's
     std::vector<int> tileSlots;           // per tile: its slot in the shadow plan
+    std::vector<float> seenPx;            // per tree: the camera's px (Seen::px), 0 when unseen
+
+    // A tree's caster in a shadow tile: at the tile's texel size, but never
+    // a crown while the camera draws the tree's leaves. A crown caster's disc
+    // stands past the crown's middle, shading only its far half: a crown
+    // drawn as a crown shades its near half itself (the trace's own
+    // leaves), but leaves take their shade from the casters alone, so the
+    // near half of the crown went unshaded (a conifer's leaves 30 units
+    // brighter than with leaf casters). Clump casters shade lobe by lobe.
+    ForestNode::TreeLod casterLod(const ForestNode::Lod& L, const ForestNode::Specimen& sp, const Seen& s) const {
+        ForestNode::TreeLod t = ForestNode::treeLod(L, sp, s.px, leafLength, force, s.barkPx);
+        if (force >= 0 || t.crowns <= 0.0f || s.instance >= seenPx.size() || seenPx[s.instance] <= 0.0f) return t;
+        const ForestNode::TreeLod c = ForestNode::treeLod(lod, sp, seenPx[s.instance], leafLength);
+        if (c.leaves < std::max(c.clumps, c.crowns)) return t;
+        // (A caster draws its heaviest tier, solid.)
+        t.clumps = std::max(t.clumps, 1.0f - t.leaves);
+        t.crowns = 0.0f;
+        return t;
+    }
 
     // What one tree at level of detail `t` adds to `G` (or, with no `G`, only
     // the vertices it would).
@@ -137,7 +157,11 @@ struct SceneMeshDrawer::ForestPlan {
             const float tail = std::max(1.0f, 0.25f * keepF);
             const float keepEnd = static_cast<float>(sp.leafStart) + keepF;
             const uint32_t K = static_cast<uint32_t>(card ? ForestNode::kCardCopies : leafCopies);
-            const uint32_t V = static_cast<uint32_t>(card ? ForestNode::kCardVertices : leafVerts);
+            // (A cluster, the card in colour with Lod::clusters, is a hexagon.)
+            const bool cluster = card && !shadow && clusters;
+            const uint32_t V = static_cast<uint32_t>(!card ? leafVerts
+                                                     : cluster ? ForestNode::kCardVertices
+                                                               : cardVerts);
             // An entry is K leaves' vertices whether all are kept or not.
             vertices += uint64_t{(n + K - 1) / K} * K * V;
             if (G) {
@@ -204,8 +228,9 @@ struct SceneMeshDrawer::ForestPlan {
         uint64_t v = 0;
         for (const Seen& s : shadow ? cast : seen) {
             const ForestNode::Specimen& sp = specimens[instances[s.instance].specimen];
-            addTree(nullptr, s.instance, sp, ForestNode::treeLod(L, sp, s.px, leafLength, force, s.barkPx), shadow,
-                    v);
+            addTree(nullptr, s.instance, sp,
+                    shadow ? casterLod(L, sp, s) : ForestNode::treeLod(L, sp, s.px, leafLength, force, s.barkPx),
+                    shadow, v);
         }
         return static_cast<double>(v);
     }
@@ -234,8 +259,12 @@ std::unique_ptr<SceneMeshDrawer::ForestPlan> SceneMeshDrawer::planForest(SceneFr
     P.leafLength = node.leafLength();
     P.leafVerts = static_cast<int>(node.mesh().vertexCount());
     P.leafCopies = node.leafCopies();
+    P.cardVerts = node.cardVertices();
     P.force = node.forceTier();
     P.cores = node.look().leafForm != 0;
+    // A spray node's thinned leaves stay sprays, each widened (its needles
+    // cut out as the near ones'), not clusters of broad leaves.
+    P.clusters = P.lod.clusters > 0.5f && node.look().leafForm == 0;
     const auto& specimens = node.specimens();
     const auto& instances = node.instances();
 
@@ -291,6 +320,9 @@ std::unique_ptr<SceneMeshDrawer::ForestPlan> SceneMeshDrawer::planForest(SceneFr
         P.seen.push_back({i, (view.perspective ? pxAtMetre / dl : pxAtMetre) * unit, -1,
                           (view.perspective ? pxAtMetre / d : pxAtMetre) * unit});
     }
+
+    P.seenPx.assign(instances.size(), 0.0f);
+    for (const Seen& s : P.seen) P.seenPx[s.instance] = s.px;
 
     // Each shadow tile's trees, at its texel size.
     const ShadowPlan& shadows = frame.renderer.shadowPlan();
@@ -373,7 +405,8 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
     const std::vector<float>& data = node.gpuData();
     const SceneVkBuffer* store = res.storage(node.id(), node.dataGeneration(), data.data(), data.size() * sizeof(float));
     const GpuMesh* leafMesh = res.mesh(node.id(), kLeafSlot, node.geometryGeneration(), node.leafBatch());
-    const GpuMesh* cardMesh = res.mesh(node.id(), kCardSlot, node.geometryGeneration(), node.cardBatch());
+    const uint64_t cardGen = node.cardGeneration();
+    const GpuMesh* cardMesh = res.mesh(node.id(), kCardSlot, cardGen, node.cardBatch());
     const GpuMesh* clusterMesh = res.mesh(node.id(), kClusterSlot, node.geometryGeneration(), node.clusterBatch());
     if (!store || !leafMesh || !cardMesh || !clusterMesh) {
         node.setStats({});
@@ -409,6 +442,11 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
         for (size_t i = 0; i < g.size(); ++i) g[i] = keyed[i].second;
     };
     nearestFirst(colour.g[Cores]);
+    // So do the leaves, tree by tree (a tree's run of entries stays in its
+    // order): the sprays of a crown behind a nearer one fail the depth test
+    // rather than being shaded first and covered.
+    nearestFirst(colour.g[LeafNear]);
+    nearestFirst(colour.g[LeafCard]);
     nearestFirst(colour.g[Clumps]);
     nearestFirst(colour.g[Crowns]);
 
@@ -419,8 +457,8 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
         const ForestNode::Lod L = ForestNode::scaled(P.shadowLod, shadowDetail);
         for (const Seen& s : P.cast) {
             const ForestNode::Specimen& sp = specimens[instances[s.instance].specimen];
-            P.addTree(&tiles[static_cast<size_t>(s.tile)], s.instance, sp,
-                      ForestNode::treeLod(L, sp, s.px, P.leafLength, P.force, s.barkPx), true, stats.shadowVertices);
+            P.addTree(&tiles[static_cast<size_t>(s.tile)], s.instance, sp, P.casterLod(L, sp, s), true,
+                      stats.shadowVertices);
         }
     }
 
@@ -533,7 +571,7 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
             case LeafCard: {
                 // In colour, past the card widening, each kept leaf is a
                 // cluster of leaves (Lod::clusters); a caster stays a card.
-                const bool cluster = k == LeafCard && !shadow && lod.clusters > 0.5f;
+                const bool cluster = k == LeafCard && !shadow && P.clusters;
                 const GpuMesh* m = k == LeafNear ? leafMesh : cluster ? clusterMesh : cardMesh;
                 d.kind = MeshKind::ForestLeaf;
                 d.vertices = m->vertices.buffer;

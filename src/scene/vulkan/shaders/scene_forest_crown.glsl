@@ -32,29 +32,22 @@ struct ForestCrownHit {
     vec4 sphere;     // that clump: centre (camera-relative), radius
     float density;   // its leaves' optical depth a unit length
     float near;      // the share of the cover the nearest clump gives (the rest: the second's)
+    float flatness;  // that clump's height over its width (SceneSurface::leafFlat)
 };
 
-// One clump on the ray from the eye (the origin) along unit `d`: the entry
-// and exit distances of its ellipsoid (t.x > t.y when missed).
-vec2 forestCrownChord(vec3 d, vec3 c, float r, float flatness) {
-    // The ellipsoid: radius r across, 0.8 r up, its middle 0.1 r above the
-    // clump's centre (0.9 up, 0.7 down), the heights times `flatness` (the
-    // specimen's, forestClumpFlat). Scaled to a sphere.
-    float sy = 1.25 / flatness;
-    vec3 o = -(c + vec3(0.0, 0.1 * r * flatness, 0.0));
-    o.y *= sy;
-    vec3 e = vec3(d.x, d.y * sy, d.z);
-    float a = dot(e, e), b = dot(o, e), k = dot(o, o) - r * r;
-    float disc = b * b - a * k;
-    if (disc <= 0.0) return vec2(1.0, 0.0);
-    float s = sqrt(disc);
-    return vec2((-b - s) / a, (-b + s) / a);
-}
+// A crown is traced a run of clumps at a time (coarse) once its mean clump
+// is under this many pixels in radius.
+const float FOREST_COARSE_PIXELS = 3.0;
 
 // The crown of instance `instance` along unit `d`, its clumps moved by
 // `offset` (the crown's pose). `len` and `aspect` a leaf's length (world)
 // and width over length; `grain` the pixel's wander (forestMassGrain).
-ForestCrownHit forestCrownTrace(vec3 d, int instance, vec3 offset, float len, float aspect, vec4 grain) {
+// `pixel` the size of a pixel (world) at the crown: where its clumps are
+// each under about a pixel, each run of them is traced as the one
+// ellipsoid it fills (the block's second and third records), not clump by
+// clump, the crown's outline and mass the same at a fraction of the cost.
+ForestCrownHit forestCrownTrace(vec3 d, int instance, vec3 offset, float len, float aspect, vec4 grain,
+                                float pixel) {
     ForestCrownHit h;
     h.cover = 0.0;
     h.at = vec3(0.0);
@@ -62,6 +55,7 @@ ForestCrownHit forestCrownTrace(vec3 d, int instance, vec3 offset, float len, fl
     h.sphere = vec4(0.0, 0.0, 0.0, 1.0);
     h.density = 0.0;
     h.near = 1.0;
+    h.flatness = 1.0;
 
     int specimen;
     mat4 model = push.model * forestCrownInstance(instance, specimen);
@@ -76,38 +70,80 @@ ForestCrownHit forestCrownTrace(vec3 d, int instance, vec3 offset, float len, fl
     // Its clumps' height over their width (scene_forest.glsl's forestClumpFlat).
     float flatness = procedural.records[sr + 4].w > 0.0 ? procedural.records[sr + 4].w : 1.0;
 
-    // The two nearest clumps the ray enters, and the optical depth of all.
+    // The two nearest clumps the ray enters (each its centre, radius across
+    // and up), and the optical depth of all.
     float t1 = 1e30, t2 = 1e30, tau1 = 0.0, tau2 = 0.0, tauAll = 0.0;
     vec4 s1 = vec4(0.0, 0.0, 0.0, 1.0), s2 = s1;
-    float d1 = 0.0, d2 = 0.0;
-    // The clumps in runs of FOREST_CLUMP_BLOCK (ForestNode::kClumpBlock),
-    // each run's bounding sphere a record from the specimen's first
-    // (specimen record 3's w): a run the ray misses is skipped whole.
+    float d1 = 0.0, d2 = 0.0, y1 = 1.0, y2 = 1.0;
+    float wander = max(1.0 + 1.7 * grain.w, 0.0);
+    // Density follows what a pixel can show: once a mean clump is a few
+    // pixels across or less, every second clump (then every fourth) stands
+    // for its run's neighbours, as many leaves in a ball of as much volume
+    // (radius times the cube root of the stride), so the crown keeps its
+    // outline and mass at a half or a quarter of the chords. The steps are
+    // dithered by the pixel's wander so a switch never draws a line.
+    float px = procedural.records[sr + 3].y * scale / max(pixel, 1e-6) * (0.8 + 0.4 * grain.z);
+    int stride = px < FOREST_COARSE_PIXELS * 0.5 ? 4 : px < FOREST_COARSE_PIXELS ? 2 : 1;
+    float grow = stride == 4 ? 1.587 : stride == 2 ? 1.26 : 1.0;
+    // The clumps in runs of FOREST_CLUMP_BLOCK that lie together
+    // (ForestNode::kClumpBlock), two records a run from the specimen's first
+    // (specimen record 3's w): its bounding sphere, which a ray that misses
+    // skips the run by, and its clumps.
     int blocks = floatBitsToInt(procedural.records[sr + 3].w);
+    // The ray in the specimen's own space (the instance is a turn about +Y
+    // and a uniform scale, so its clumps stay upright there): o + e t, t
+    // still the distance from the eye. The runs and clumps are tested where
+    // their records are, no transform each.
+    mat3 At = transpose(mat3(model));
+    float inv2 = 1.0 / max(scale * scale, 1e-12);
+    vec3 o = At * (-(model[3].xyz + offset)) * inv2;
+    vec3 e = At * d * inv2;
+    float ee = dot(e, e);
     for (int b = 0; b * FOREST_CLUMP_BLOCK < count; ++b) {
-        vec4 bs = procedural.records[blocks + b];
-        vec3 B = (model * vec4(bs.xyz, 1.0)).xyz + offset;
-        float BR = bs.w * scale;
-        float tc = dot(B, d);
-        if (dot(B, B) - tc * tc >= BR * BR || tc + BR <= 0.0) continue;
-        for (int i = b * FOREST_CLUMP_BLOCK; i < min(count, (b + 1) * FOREST_CLUMP_BLOCK); ++i) {
+        vec4 bs = procedural.records[blocks + b * 2];
+        vec3 v = bs.xyz - o;
+        // The grown balls reach a little past the run's sphere.
+        float br = bs.w * grow, BR = br * scale;
+        float tc = dot(v, e) / ee;
+        if (dot(v, v) - tc * tc * ee >= br * br || tc + BR <= 0.0) continue;
+        // Once the pixel is covered and its two nearest clumps found, a run
+        // wholly behind the second changes neither.
+        if (tauAll > 6.0 && tc - BR > t2) continue;
+        // The run's clumps, two 16-bit specimen indices to a float.
+        uvec4 run = floatBitsToUint(procedural.records[blocks + b * 2 + 1]);
+        for (int j = 0; j < FOREST_CLUMP_BLOCK; j += stride) {
+            int i = int((run[j >> 1] >> uint((j & 1) * 16)) & 0xffffu);
+            if (i == 0xffff) break;
             if (procClumpBare(instance, first + i)) continue;
             int r = clumpBase + (first + i) * 6;
             vec4 c = procedural.records[r];
-            float leaves = procedural.records[r + 1].w;
-            vec3 C = (model * vec4(c.xyz, 1.0)).xyz + offset;
-            float R = c.w * scale;
-            vec2 t = forestCrownChord(d, C, R, flatness);
-            if (t.x >= t.y || t.y <= 0.0) continue;
-            // Its leaves over its ellipsoid's volume (4/3 pi r^3 0.8 flatness).
-            float sigma = leaves * leafArea / (3.351 * flatness * R * R * R);
-            float tau = sigma * (t.y - max(t.x, 0.0)) * max(1.0 + 1.7 * grain.w, 0.0);
+            float leaves = procedural.records[r + 1].w * float(stride);
+            // 0.9 of the radius up and 0.7 down about the clump's centre:
+            // 0.8 up about a point 0.1 above it, times the flatness.
+            float rr = c.w * grow, ry = 0.8 * flatness * rr;
+            vec3 cs = c.xyz + vec3(0.0, 0.1 * rr * flatness, 0.0);
+            // The chord, the ellipsoid scaled to a sphere.
+            float sy = rr / ry;
+            vec3 oc = o - cs;
+            oc.y *= sy;
+            vec3 es = vec3(e.x, e.y * sy, e.z);
+            float qa = dot(es, es), qb = dot(oc, es), qk = dot(oc, oc) - rr * rr;
+            float disc = qb * qb - qa * qk;
+            if (disc <= 0.0) continue;
+            float sq = sqrt(disc);
+            vec2 t = vec2(-qb - sq, -qb + sq) / qa;
+            if (t.y <= 0.0) continue;
+            float R = rr * scale, RY = ry * scale;
+            vec3 C = cs;   // (specimen space: the seen one is placed below)
+            // Its leaves over its ellipsoid's volume (4/3 pi r^2 ry).
+            float sigma = leaves * leafArea / (4.18879 * R * R * RY);
+            float tau = sigma * (t.y - max(t.x, 0.0)) * wander;
             tauAll += tau;
             if (t.x < t1) {
-                t2 = t1; tau2 = tau1; s2 = s1; d2 = d1;
-                t1 = t.x; tau1 = tau; s1 = vec4(C, R); d1 = sigma;
+                t2 = t1; tau2 = tau1; s2 = s1; d2 = d1; y2 = y1;
+                t1 = t.x; tau1 = tau; s1 = vec4(C, R); d1 = sigma; y1 = RY / R;
             } else if (t.x < t2) {
-                t2 = t.x; tau2 = tau; s2 = vec4(C, R); d2 = sigma;
+                t2 = t.x; tau2 = tau; s2 = vec4(C, R); d2 = sigma; y2 = RY / R;
             }
         }
     }
@@ -120,14 +156,17 @@ ForestCrownHit forestCrownTrace(vec3 d, int instance, vec3 offset, float len, fl
     bool first1 = h.near >= 0.5;
     float tSeen = first1 ? t1 : t2;
     vec4 S = first1 ? s1 : s2;
+    S.xyz = (model * vec4(S.xyz, 1.0)).xyz + offset;   // to camera-relative, R already world
     float sig = first1 ? d1 : d2;
+    float ky = first1 ? y1 : y2;
     // The leaf seen lies about a free path in.
     float tIn = max(tSeen, 0.0) + min(1.0 / max(sig, 1e-4), S.w);
     h.at = d * tIn;
-    vec3 rel = h.at - (S.xyz + vec3(0.0, 0.1 * S.w * flatness, 0.0));
-    rel.y *= 1.5625 / (flatness * flatness);   // the ellipsoid's normal
+    vec3 rel = h.at - S.xyz;
+    rel.y /= ky * ky;   // the ellipsoid's normal
     h.normal = normalize(rel);
     h.sphere = S;
     h.density = sig;
+    h.flatness = ky;
     return h;
 }

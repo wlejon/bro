@@ -165,9 +165,11 @@ public:
         float twigBob = 0.8f;
     };
     static constexpr int kLeafForms = 3;
-    /// A crown traces its clumps in runs of this many, each run bounded by a
-    /// sphere its ray can skip (gpuData's block records).
+    /// A crown traces its clumps in runs of this many that lie together, each
+    /// run bounded by a sphere its ray can skip (gpuData's block records: the
+    /// sphere, then the run's clumps as 16-bit specimen indices).
     static constexpr uint32_t kClumpBlock = 8;
+    static constexpr uint32_t kBlockRecords = 2;
     /// The share of a spray's card its needles or scales cover (mesh.frag's
     /// forestSprayCover averages to it), by leaf form.
     static float sprayFill(int leafForm) { return leafForm == 1 ? 0.45f : leafForm == 2 ? 0.47f : 1.0f; }
@@ -243,6 +245,13 @@ public:
     const bromesh::MeshData& clusterBatch() const;
     int leafCopies() const;
     int cardCopies() const { return kCardCopies; }
+    /// The far card's vertices: kCardVertices round a broad leaf's outline,
+    /// 4 for a spray's (a quad: its needles are cut out per pixel, so the
+    /// outline costs nothing, and a spray node's cards are its heaviest
+    /// draw). A cluster is always a kCardVertices hexagon.
+    int cardVertices() const;
+    /// Moves when the card batch is rebuilt (its mesh or the leaf form).
+    uint64_t cardGeneration() const;
     static constexpr int kCardVertices = 6;
     static constexpr int kCardCopies = 160;
 
@@ -318,6 +327,9 @@ private:
 
     mutable bromesh::MeshData leafBatch_, cardBatch_, clusterBatch_;
     mutable uint64_t batchGeneration_ = 0;
+    mutable int batchForm_ = -1;                 // the leaf form the batches were built for
+    mutable int cardVertices_ = kCardVertices;
+    mutable uint64_t cardGeneration_ = 0;
     mutable float leafLength_ = 0.0f;
     mutable float leafAspect_ = 0.5f;
     mutable int leafCopies_ = 1;

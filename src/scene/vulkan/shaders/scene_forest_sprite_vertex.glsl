@@ -19,6 +19,9 @@ struct ForestSprite {
     // its leaves' optical depth a unit length (world, forestLobeCore's) and
     // a leaf's length (world).
     vec4 core;
+    // Its clumps' height over their width (0.8 times the specimen's
+    // flatness): the ellipsoid the light leaves a lobe or clump through.
+    float lightFlat;
 };
 
 bool forestSprite(int mode, int instanceIndex, int vertexIndex, mat4 base, out ForestSprite s) {
@@ -32,6 +35,7 @@ bool forestSprite(int mode, int instanceIndex, int vertexIndex, mat4 base, out F
     s.leafLen = 0.0;
     s.offset = vec3(0.0);
     s.instance = 0;
+    s.lightFlat = 1.0;
 
     // corner 0..5: two triangles of the quad.
     int corner = vertexIndex % 6;
@@ -55,6 +59,7 @@ bool forestSprite(int mode, int instanceIndex, int vertexIndex, mat4 base, out F
     float scale = vegScale(model);
     int sr = forestSpecimenRecord(specimen);
     s.leafLen = procedural.header[1].z * scale;
+    s.lightFlat = 0.8 * forestClumpFlat(specimen);
 
     vec3 c;           // specimen space
     float weight;

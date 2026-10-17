@@ -31,6 +31,7 @@ layout(location = 7) out vec4 outVegShade;
 layout(location = 8) flat out vec4 outLobeOut;
 layout(location = 9) flat out vec4 outLobeSphere;
 layout(location = 10) flat out float outLobeDensity;
+layout(location = 11) flat out float outLobeFlat;   // the lobe's height over its width
 
 #include "scene_camera.glsl"
 #include "scene_mesh_push.glsl"
@@ -43,6 +44,7 @@ void main() {
     outLobeOut = vec4(0.0, 1.0, 0.0, 0.0);
     outLobeSphere = vec4(0.0);
     outLobeDensity = 0.0;
+    outLobeFlat = 1.0;
     forestApplyLook();
     ForestEntry e = forestEntry(gl_InstanceIndex);
     int leaf = e.first + gl_VertexIndex / max(e.param, 1);
@@ -124,6 +126,7 @@ void main() {
         float leaves = max(procedural.records[forestClumpRecord(lf.x) + 1].w / 3.0, 1.0);
         float a = 0.5 * procedural.header[1].z * scale / r;
         outLobeDensity = leaves * a * a * procedural.header[3].y * 0.55 * 0.5 / r;
+        outLobeFlat = 0.8 * procClumpFlat;
     }
 
     outWorldPos = pos;

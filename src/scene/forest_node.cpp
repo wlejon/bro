@@ -25,6 +25,44 @@ float bitsOf(uint32_t u) {
     return f;
 }
 
+// A specimen's `count` clumps (centre(i) each) ordered so that every run of
+// ForestNode::kClumpBlock lies together: the whole split along its widest
+// axis at the run boundary nearest its middle, each half again, until a
+// part is one run. A crown's ray skips a run whose sphere it misses, and
+// the clumps as grown (outermost first) made every run's sphere most of
+// the crown, so a ray met nearly every clump.
+template <typename Centre>
+std::vector<uint32_t> groupClumps(uint32_t count, const Centre& centre) {
+    constexpr uint32_t B = ForestNode::kClumpBlock;
+    std::vector<uint32_t> order(count);
+    for (uint32_t i = 0; i < count; ++i) order[i] = i;
+    std::vector<bromath::Vec3> at(count);
+    for (uint32_t i = 0; i < count; ++i) at[i] = centre(i);
+    std::vector<std::pair<uint32_t, uint32_t>> parts{{0u, count}};
+    while (!parts.empty()) {
+        const auto [lo, hi] = parts.back();
+        parts.pop_back();
+        if (hi - lo <= B) continue;
+        bromath::Vec3 mn = at[order[lo]], mx = mn;
+        for (uint32_t i = lo; i < hi; ++i) {
+            const bromath::Vec3& p = at[order[i]];
+            mn = {std::min(mn.x, p.x), std::min(mn.y, p.y), std::min(mn.z, p.z)};
+            mx = {std::max(mx.x, p.x), std::max(mx.y, p.y), std::max(mx.z, p.z)};
+        }
+        const float ex = mx.x - mn.x, ey = mx.y - mn.y, ez = mx.z - mn.z;
+        const int axis = ex >= ey && ex >= ez ? 0 : ey >= ez ? 1 : 2;
+        const auto key = [&](uint32_t i) { const bromath::Vec3& p = at[i]; return axis == 0 ? p.x : axis == 1 ? p.y : p.z; };
+        // The run boundary nearest the middle (lo is on one).
+        const uint32_t runs = (hi - lo + B - 1) / B;
+        const uint32_t mid = lo + std::max(1u, runs / 2) * B;
+        std::nth_element(order.begin() + lo, order.begin() + mid, order.begin() + hi,
+                         [&](uint32_t a, uint32_t b) { return key(a) < key(b); });
+        parts.push_back({lo, mid});
+        parts.push_back({mid, hi});
+    }
+    return order;
+}
+
 // A unit vector in two floats (octahedral): scene_procedural.glsl's
 // procOctDecode reads it.
 void octEncode(float x, float y, float z, float& u, float& v) {
@@ -299,9 +337,22 @@ float ForestNode::leafAspect() const {
     return leafAspect_;
 }
 
+int ForestNode::cardVertices() const {
+    ensureBatches();
+    return cardVertices_;
+}
+
+uint64_t ForestNode::cardGeneration() const {
+    ensureBatches();
+    return cardGeneration_;
+}
+
 void ForestNode::ensureBatches() const {
-    if (batchGeneration_ == geometryGeneration()) return;
+    if (batchGeneration_ == geometryGeneration() && batchForm_ == look_.leafForm) return;
     batchGeneration_ = geometryGeneration();
+    batchForm_ = look_.leafForm;
+    cardGeneration_ = nextResourceGeneration();
+    cardVertices_ = look_.leafForm != 0 ? 4 : kCardVertices;
     leafBatch_.clear();
     cardBatch_.clear();
     clusterBatch_.clear();
@@ -346,11 +397,14 @@ void ForestNode::ensureBatches() const {
         for (uint32_t i : idx) leafBatch_.indices.push_back(static_cast<uint32_t>(c * vc) + i);
 
     // The far card: six vertices in the leaf's outline (base, two a side,
-    // tip), its mean colour.
+    // tip), its mean colour; a spray's, the four corners of its card.
     const float x0 = lo[0], x1 = hi[0], xc = 0.5f * (lo[0] + hi[0]);
     const float z0 = lo[2], L = leafLength_;
-    const float card[kCardVertices][2] = {{xc, z0}, {x1, z0 + 0.3f * L}, {xc + 0.4f * (x1 - xc), z0 + 0.78f * L},
-                                          {xc, z0 + L}, {xc - 0.4f * (xc - x0), z0 + 0.78f * L}, {x0, z0 + 0.3f * L}};
+    const float leafCard[kCardVertices][2] = {{xc, z0}, {x1, z0 + 0.3f * L}, {xc + 0.4f * (x1 - xc), z0 + 0.78f * L},
+                                              {xc, z0 + L}, {xc - 0.4f * (xc - x0), z0 + 0.78f * L}, {x0, z0 + 0.3f * L}};
+    const float sprayCard[4][2] = {{x0, z0}, {x1, z0}, {x1, z0 + L}, {x0, z0 + L}};
+    const int cardVerts = cardVertices_;
+    const float (*card)[2] = cardVerts == 4 ? sprayCard : leafCard;
     float color[4] = {1.0f, 1.0f, 1.0f, 1.0f};
     if (m.colors.size() >= vc * 4) {
         for (int k = 0; k < 4; ++k) color[k] = 0.0f;
@@ -360,7 +414,7 @@ void ForestNode::ensureBatches() const {
     }
     const bool colored = !m.colors.empty();
     for (int c = 0; c < kCardCopies; ++c) {
-        for (int v = 0; v < kCardVertices; ++v) {
+        for (int v = 0; v < cardVerts; ++v) {
             cardBatch_.positions.insert(cardBatch_.positions.end(), {card[v][0], meanY, card[v][1]});
             cardBatch_.normals.insert(cardBatch_.normals.end(), {0.0f, 1.0f, 0.0f});
             cardBatch_.uvs.insert(cardBatch_.uvs.end(), {(card[v][0] - x0) / std::max(x1 - x0, 1e-6f),
@@ -368,8 +422,8 @@ void ForestNode::ensureBatches() const {
             cardBatch_.tangents.insert(cardBatch_.tangents.end(), {1.0f, 0.0f, 0.0f, 1.0f});
             if (colored) cardBatch_.colors.insert(cardBatch_.colors.end(), std::begin(color), std::end(color));
         }
-        const uint32_t b = static_cast<uint32_t>(c * kCardVertices);
-        for (uint32_t t = 1; t + 1 < static_cast<uint32_t>(kCardVertices); ++t)
+        const uint32_t b = static_cast<uint32_t>(c * cardVerts);
+        for (uint32_t t = 1; t + 1 < static_cast<uint32_t>(cardVerts); ++t)
             cardBatch_.indices.insert(cardBatch_.indices.end(), {b, b + t, b + t + 1});
     }
 
@@ -385,8 +439,9 @@ void ForestNode::ensureBatches() const {
             clusterBatch_.uvs.insert(clusterBatch_.uvs.end(), {std::cos(a), std::sin(a)});
             clusterBatch_.tangents.insert(clusterBatch_.tangents.end(), {1.0f, 0.0f, 0.0f, 1.0f});
         }
-        clusterBatch_.indices.insert(clusterBatch_.indices.end(), cardBatch_.indices.begin() + c * 12,
-                                     cardBatch_.indices.begin() + c * 12 + 12);
+        const uint32_t b = static_cast<uint32_t>(c * kCardVertices);
+        for (uint32_t t = 1; t + 1 < static_cast<uint32_t>(kCardVertices); ++t)
+            clusterBatch_.indices.insert(clusterBatch_.indices.end(), {b, b + t, b + t + 1});
     }
 }
 
@@ -450,10 +505,10 @@ const std::vector<float>& ForestNode::gpuData() const {
     std::vector<uint32_t> specBlock(nSpec);
     uint32_t nBlock = 0;
     for (size_t k = 0; k < nSpec; ++k) {
-        specBlock[k] = blockBase + nBlock;
+        specBlock[k] = blockBase + nBlock * kBlockRecords;
         nBlock += (specimens_[k].clumpCount + kClumpBlock - 1) / kClumpBlock;
     }
-    const uint32_t leafBase = blockBase + nBlock;
+    const uint32_t leafBase = blockBase + nBlock * kBlockRecords;
     const uint32_t instBase = leafBase + static_cast<uint32_t>((nLeaf + 1) / 2);
     const size_t records = instBase + instances_.size() * 2;
 
@@ -522,23 +577,31 @@ const std::vector<float>& ForestNode::gpuData() const {
     }
     for (size_t k = 0; k < nSpec; ++k) {
         const Specimen& s = specimens_[k];
+        // Each clump's ellipsoid (0.9 of its radius up, 0.7 down, its
+        // radius across) lies in the sphere of its radius about a point 0.1
+        // of it above the centre.
+        const auto centre = [&](uint32_t local) {
+            const float* p = &a.clumps[(s.clumpStart + local) * 8];
+            return bromath::Vec3{p[0], p[1] + 0.1f * p[3], p[2]};
+        };
+        const std::vector<uint32_t> order = groupClumps(s.clumpCount, centre);
         for (uint32_t b = 0; b * kClumpBlock < s.clumpCount; ++b) {
-            const uint32_t c0 = s.clumpStart + b * kClumpBlock;
-            const uint32_t c1 = std::min(c0 + kClumpBlock, s.clumpStart + s.clumpCount);
-            // Each clump's ellipsoid (0.9 of its radius up, 0.7 down, its
-            // radius across) lies in the sphere of its radius about a point
-            // 0.1 of it above the centre.
-            const auto centre = [&](uint32_t c) {
-                const float* p = &a.clumps[c * 8];
-                return bromath::Vec3{p[0], p[1] + 0.1f * p[3], p[2]};
-            };
+            const uint32_t i0 = b * kClumpBlock, i1 = std::min(i0 + kClumpBlock, s.clumpCount);
             bromath::Vec3 m{0.0f, 0.0f, 0.0f};
-            for (uint32_t c = c0; c < c1; ++c) m = m + centre(c);
-            m = m * (1.0f / static_cast<float>(c1 - c0));
+            for (uint32_t i = i0; i < i1; ++i) m = m + centre(order[i]);
+            m = m * (1.0f / static_cast<float>(i1 - i0));
             float rad = 0.0f;
-            for (uint32_t c = c0; c < c1; ++c) rad = std::max(rad, bromath::vdist(centre(c), m) + a.clumps[c * 8 + 3]);
-            float* d = r + (specBlock[k] + b) * 4;
+            for (uint32_t i = i0; i < i1; ++i)
+                rad = std::max(rad, bromath::vdist(centre(order[i]), m) + a.clumps[(s.clumpStart + order[i]) * 8 + 3]);
+            float* d = r + (specBlock[k] + b * kBlockRecords) * 4;
             d[0] = m.x; d[1] = m.y; d[2] = m.z; d[3] = rad;
+            // Its clumps (the specimen's own indices), two to a float, 0xffff
+            // past the last.
+            for (uint32_t j = 0; j < kClumpBlock; j += 2) {
+                const uint32_t lo = i0 + j < i1 ? order[i0 + j] : 0xffffu;
+                const uint32_t hi = i0 + j + 1 < i1 ? order[i0 + j + 1] : 0xffffu;
+                d[4 + j / 2] = bitsOf(lo | (hi << 16));
+            }
         }
     }
     for (size_t i = 0; i < nLeaf; ++i) {

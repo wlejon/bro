@@ -244,6 +244,10 @@ struct SceneSurface {
     vec4 leafSphere;
     float leafDensity;
     float leafPath;
+    // The sphere's height over its width (a conifer's flat lobes): the light
+    // leaves an ellipsoid, so a flat pad lit from above is lit through its
+    // thickness, not its breadth. 1: a sphere.
+    float leafFlat;
     // Placed leaves (forest lobes, crowns and clusters) know the share of
     // the sun reaching where they lie, not which of their leaves it reaches:
     // a leaf is lit or in another's shadow, so the leaves of a crown are
@@ -321,8 +325,11 @@ vec3 sceneDirectLight(SceneSurface s) {
                 // what falls on it from outside is coarse (the sphere's own
                 // leaves are the fine part), so one tap.
                 vec3 oc = at - s.leafSphere.xyz;
-                float b = dot(oc, L);
-                float out_ = max(-b + sqrt(max(b * b - dot(oc, oc) + s.leafSphere.w * s.leafSphere.w, 0.0)), 0.0);
+                float ky = clamp(s.leafFlat, 0.1, 1.0);
+                oc.y /= ky;
+                vec3 Ls = vec3(L.x, L.y / ky, L.z);
+                float la = dot(Ls, Ls), b = dot(oc, Ls);
+                float out_ = max((-b + sqrt(max(b * b - la * (dot(oc, oc) - s.leafSphere.w * s.leafSphere.w), 0.0))) / la, 0.0);
                 at += L * out_;
                 self = exp(-s.leafDensity * s.leafPath * out_);
                 // Four filtered taps as wide as the leaf's nine: a sphere's
@@ -396,7 +403,11 @@ vec3 probeRadiance(vec3 pos, vec3 R, float rough, out float w) {
 // one the flat ambient on the diffuse part. A bound reflection probe replaces
 // the global specular by its weight at the surface (probes are specular-only).
 vec3 sceneAmbient(SceneSurface s) {
-    float NdotV = max(dot(s.normal, s.view), 1e-4);
+    // Leaves are lit through their crown's bulk normal, which turns edge-on
+    // at the crown's outline; their own faces lie every way, so the sky they
+    // mirror is a mean over angles, never the grazing sheen a solid's rim
+    // takes (which paled a dark conifer against the sky).
+    float NdotV = max(dot(s.normal, s.view), s.translucency > 0.0 ? 0.6 : 1e-4);
     vec3 F0 = mix(vec3(0.04), s.baseColor, s.metallic);
     vec3 F = fresnelSchlickRoughness(NdotV, F0, s.roughness);
     vec3 R = reflect(-s.view, s.normal);
