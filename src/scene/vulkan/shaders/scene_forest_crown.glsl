@@ -36,12 +36,14 @@ struct ForestCrownHit {
 
 // One clump on the ray from the eye (the origin) along unit `d`: the entry
 // and exit distances of its ellipsoid (t.x > t.y when missed).
-vec2 forestCrownChord(vec3 d, vec3 c, float r) {
+vec2 forestCrownChord(vec3 d, vec3 c, float r, float flatness) {
     // The ellipsoid: radius r across, 0.8 r up, its middle 0.1 r above the
-    // clump's centre (0.9 up, 0.7 down). Scaled to a sphere.
-    vec3 o = -(c + vec3(0.0, 0.1 * r, 0.0));
-    o.y *= 1.25;
-    vec3 e = vec3(d.x, d.y * 1.25, d.z);
+    // clump's centre (0.9 up, 0.7 down), the heights times `flatness` (the
+    // specimen's, forestClumpFlat). Scaled to a sphere.
+    float sy = 1.25 / flatness;
+    vec3 o = -(c + vec3(0.0, 0.1 * r * flatness, 0.0));
+    o.y *= sy;
+    vec3 e = vec3(d.x, d.y * sy, d.z);
     float a = dot(e, e), b = dot(o, e), k = dot(o, o) - r * r;
     float disc = b * b - a * k;
     if (disc <= 0.0) return vec2(1.0, 0.0);
@@ -71,6 +73,8 @@ ForestCrownHit forestCrownTrace(vec3 d, int instance, vec3 offset, float len, fl
     // A leaf's area facing any way (forestMassDepth's 0.55 of its ellipse).
     float a = 0.5 * len;
     float leafArea = 3.14159265 * a * a * aspect * 0.55;
+    // Its clumps' height over their width (scene_forest.glsl's forestClumpFlat).
+    float flatness = procedural.records[sr + 4].w > 0.0 ? procedural.records[sr + 4].w : 1.0;
 
     // The two nearest clumps the ray enters, and the optical depth of all.
     float t1 = 1e30, t2 = 1e30, tau1 = 0.0, tau2 = 0.0, tauAll = 0.0;
@@ -93,10 +97,10 @@ ForestCrownHit forestCrownTrace(vec3 d, int instance, vec3 offset, float len, fl
             float leaves = procedural.records[r + 1].w;
             vec3 C = (model * vec4(c.xyz, 1.0)).xyz + offset;
             float R = c.w * scale;
-            vec2 t = forestCrownChord(d, C, R);
+            vec2 t = forestCrownChord(d, C, R, flatness);
             if (t.x >= t.y || t.y <= 0.0) continue;
-            // Its leaves over its ellipsoid's volume (4/3 pi r^3 0.8).
-            float sigma = leaves * leafArea / (3.351 * R * R * R);
+            // Its leaves over its ellipsoid's volume (4/3 pi r^3 0.8 flatness).
+            float sigma = leaves * leafArea / (3.351 * flatness * R * R * R);
             float tau = sigma * (t.y - max(t.x, 0.0)) * max(1.0 + 1.7 * grain.w, 0.0);
             tauAll += tau;
             if (t.x < t1) {
@@ -120,8 +124,8 @@ ForestCrownHit forestCrownTrace(vec3 d, int instance, vec3 offset, float len, fl
     // The leaf seen lies about a free path in.
     float tIn = max(tSeen, 0.0) + min(1.0 / max(sig, 1e-4), S.w);
     h.at = d * tIn;
-    vec3 rel = h.at - (S.xyz + vec3(0.0, 0.1 * S.w, 0.0));
-    rel.y *= 1.5625;   // the ellipsoid's normal
+    vec3 rel = h.at - (S.xyz + vec3(0.0, 0.1 * S.w * flatness, 0.0));
+    rel.y *= 1.5625 / (flatness * flatness);   // the ellipsoid's normal
     h.normal = normalize(rel);
     h.sphere = S;
     h.density = sig;

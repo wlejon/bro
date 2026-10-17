@@ -51,7 +51,7 @@
                          widthSegments: 2, lengthSegments: 3 },
                  flutter: 1, limbBob: 0.6, twigBob: 0.8 },
         needle: { form: 1, shape: 'frond',
-                  card: { width: 0.1, length: 0.18, bend: 0.3, fullUV: true, widthSegments: 1, lengthSegments: 2 },
+                  card: { width: 0.14, length: 0.26, bend: 0.3, fullUV: true, widthSegments: 1, lengthSegments: 2 },
                   flutter: 0.15, limbBob: 1.6, twigBob: 1.0, lod: { crownFrom: 8, crownTo: 5 } },
         scale: { form: 2, shape: 'frond',
                  card: { width: 0.11, length: 0.16, bend: 0.25, fullUV: true, widthSegments: 1, lengthSegments: 2 },

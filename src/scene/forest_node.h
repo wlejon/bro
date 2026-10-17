@@ -202,6 +202,7 @@ public:
         float meanClumpWeight = 0.0f;
         uint32_t crownClump = 0;
         float trunkRadius = 0.0f;    // the thickest bark
+        float clumpFlat = 1.0f;      // its clumps' height over their width (emitForest's specimens[15])
         bromath::AABB3 bounds;       // relative
     };
     const std::vector<Specimen>& specimens() const { return specimens_; }

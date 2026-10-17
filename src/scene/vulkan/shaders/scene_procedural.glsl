@@ -247,6 +247,11 @@ bool procClumpBare(int tree, int clump) {
     return float(procHash(h ^ (uint(clump) * 0x632be5abu)) >> 8) * (1.0 / 16777216.0) < share;
 }
 
+// A clump's height over its width: its lobes and their leaves are
+// flattened by this (1 round; the forest node sets a specimen's, as
+// forestApplyClumpFlat). bromesh's CPU placement is the round one.
+float procClumpFlat = 1.0;
+
 void procClumpLobe(vec4 c, int clump, int lobe, uint seed, out vec3 center, out float radius) {
     if (lobe <= 0) {
         center = c.xyz;
@@ -258,7 +263,7 @@ void procClumpLobe(vec4 c, int clump, int lobe, uint seed, out vec3 center, out 
     float z = procDraw(b, 0u) * 1.2 - 0.4;
     float phi = procDraw(b, 1u) * PROC_TWO_PI;
     float s = sqrt(max(0.0, 1.0 - z * z));
-    center = c.xyz + vec3(s * cos(phi), z, s * sin(phi)) * (c.w * 0.42);
+    center = c.xyz + vec3(s * cos(phi), z * procClumpFlat, s * sin(phi)) * (c.w * 0.42);
     radius = c.w * (0.5 + 0.2 * procDraw(b, 2u));
 }
 
@@ -280,7 +285,7 @@ bool clumpLeafFrame(vec4 c, int leaf, int clump, out vec3 P, out mat3 R, out vec
     float s = sqrt(max(0.0, 1.0 - z * z));
     vec3 u = vec3(s * cos(phi), z, s * sin(phi));
     vec3 off = u * (lr * (1.0 - shell * procDraw(base, 3u)));
-    off.y *= u.y < 0.0 ? 0.7 : 0.9;
+    off.y *= (u.y < 0.0 ? 0.7 : 0.9) * procClumpFlat;
     P = lc + off;
 
     vec3 N = normalize(u * (1.0 - upBias) + vec3(0.0, upBias, 0.0));

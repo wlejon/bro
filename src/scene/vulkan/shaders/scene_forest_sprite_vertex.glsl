@@ -15,6 +15,10 @@ struct ForestSprite {
     float leafLen;   // a leaf's length (world)
     vec3 offset;     // the pose's offset from rest
     int instance;    // the tree
+    // A core (mode 2): the lobe's radius (world), its height over its width,
+    // its leaves' optical depth a unit length (world, forestLobeCore's) and
+    // a leaf's length (world).
+    vec4 core;
 };
 
 bool forestSprite(int mode, int instanceIndex, int vertexIndex, mat4 base, out ForestSprite s) {
@@ -37,7 +41,8 @@ bool forestSprite(int mode, int instanceIndex, int vertexIndex, mat4 base, out F
 
     ForestEntry e;
     int clump = -1;
-    if (mode == 0) {
+    bool core = mode == 2;
+    if (mode == 0 || core) {
         e = forestEntry(instanceIndex);
         clump = e.first + vertexIndex / 18;
         if (clump >= e.end || procClumpBare(e.instance, clump)) return false;
@@ -54,21 +59,35 @@ bool forestSprite(int mode, int instanceIndex, int vertexIndex, mat4 base, out F
     vec3 c;           // specimen space
     float weight;
     vec4 v0, v1, v2, v3;
-    if (mode == 0) {
+    s.core = vec4(0.0);
+    if (mode == 0 || core) {
         int lobe = (vertexIndex / 6) % 3;
         vec4 rec = procedural.records[forestClumpRecord(clump)];
         float lr;
+        procClumpFlat = forestClumpFlat(specimen);
         procClumpLobe(rec, clump, lobe, floatBitsToUint(procedural.header[0].x), c, lr);
         // The lobe's leaves fill an ellipsoid: flattened underneath, 0.9 of
-        // the radius up and 0.7 down (clumpLeafFrame).
-        c.y += 0.1 * lr;
+        // the radius up and 0.7 down (clumpLeafFrame), times the specimen's
+        // flatness.
+        c.y += 0.1 * lr * procClumpFlat;
         s.radius = lr * scale;
-        s.radiusUp = 0.8 * s.radius;
+        s.radiusUp = 0.8 * procClumpFlat * s.radius;
         // A lobe holds about a third of its clump's leaves (clumpLeafFrame).
         s.leaves = max(procedural.records[forestClumpRecord(clump) + 1].w / 3.0, 1.0);
         forestVegetation(forestClumpRecord(clump) + 2, c, 1.0, v0, v1, v2, v3);
         weight = v2.w;
         s.seed = fract(float(clump * 3 + lobe) * 0.618034 + treeSeed);
+        if (core) {
+            // The lobe's CORE (forestLobeCore): its depth past which its own
+            // leaves hide everything, drawn solid in their place.
+            float sigma;
+            float rc = forestLobeCore(lr, s.leaves, sigma);
+            if (rc <= 0.0) return false;
+            s.core = vec4(lr * scale, 0.8 * procClumpFlat, sigma / scale, s.leafLen);
+            s.radius = rc * scale;
+            s.radiusUp = 0.8 * procClumpFlat * s.radius;
+            s.leafLen = 0.0;
+        }
     } else {
         vec4 crown = procedural.records[sr + 2];
         vec4 more = procedural.records[sr + 3];

@@ -8,7 +8,10 @@
 //          fill (procClumpLobe), so the far crown keeps the near crown's
 //          masses, outline, gaps and leaves;
 //   mode 1, CROWNS: one card a tree over the whole crown, entry
-//          gl_VertexIndex / 6 (the draw is not instanced).
+//          gl_VertexIndex / 6 (the draw is not instanced);
+//   mode 2, CORES: the leaves tier's lobes' solid cores (forestLobeCore),
+//          entries as the clumps', drawn before the leaves so the leaves
+//          they hide fail the depth test.
 // Every sprite is posed by vegPose at its centre (a clump with its weight on
 // its limb, a crown by its trunk), so it moves as the leaves it stands in
 // for, and carries the gust at its tree (outColor.y) for mesh.frag's sheen:
@@ -81,4 +84,7 @@ void main() {
     outMass2 = vec4(cell, len, procedural.header[3].y, procedural.header[0].w);
     outMass3 = vec4(procedural.header[0].y, procedural.header[0].z, yScale, s.leafLen);
     outMass4 = vec4(s.offset, uintBitsToFloat(uint(s.instance)));
+    // A core: its height over its width, its lobe's radius, the lobe's
+    // leaves' optical depth a unit length and a leaf's length (world).
+    if (push.extra.z > 1.5) outMass2 = vec4(s.core.y, s.core.x, s.core.z, s.core.w);
 }

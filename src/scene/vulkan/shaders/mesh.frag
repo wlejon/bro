@@ -170,7 +170,39 @@ void main() {
     float massPath = 1.0;   // the light's path through the sphere's own leaves, times
     vec4 massSun = vec4(0.5);   // SceneSurface::leafSun
     float massSunN = 0.0;
-    {
+    if (inColor.z > 1.5) {
+        // A lobe's CORE (forestLobeCore): the solid ellipsoid deep enough in
+        // its leaves that nothing behind shows, its true depth written so the
+        // leaves it hides fail the depth test. Its surface is where the
+        // lobe's leaves are that deep: lit through them (the lobe's sphere
+        // and density) as a leaf there would be, facing out of it.
+        vec3 d = normalize(inWorldPos);
+        float ky = inMass2.x;
+        vec3 o = -inMass0.xyz;
+        o.y /= ky;
+        vec3 e = vec3(d.x, d.y / ky, d.z);
+        float a = dot(e, e), b = dot(o, e), k = dot(o, o) - inMass0.w * inMass0.w;
+        float disc = b * b - a * k;
+        if (disc <= 0.0) discard;
+        float t = (-b - sqrt(disc)) / a;
+        if (t <= 0.0) discard;
+        worldPos = d * t;
+        vec3 rel = worldPos - inMass0.xyz;
+        vec3 n = normalize(vec3(rel.x, rel.y / (ky * ky), rel.z));
+        // The leaves there, a leaf's length apart: each its own turn and
+        // lightness, their mean once a pixel holds several.
+        vec3 p = rel / max(inMass2.w, 1e-4);
+        float fp = max(length(dFdx(p)), length(dFdy(p)));
+        vec4 g = forestMassHash(ivec2(floor(p.xz + vec2(0.37, 0.71) * floor(p.y))), uint(floor(p.y)) + 0x3c6ef372u);
+        float keep = 1.0 - smoothstep(0.6, 2.0, fp);
+        massLeaves = true;
+        massN = normalize(n * 0.6 + vec3(0.0, 0.4, 0.0) + (g.xyz * 2.0 - 1.0) * 0.8 * keep);
+        massTone = 0.85 + 0.3 * (g.w - 0.5) * keep;
+        massSphere = vec4(inMass0.xyz, inMass2.y);
+        massDensity = inMass2.z;
+        vec4 clip = camera.viewProj * vec4(worldPos, 1.0);
+        gl_FragDepth = REVERSED_Z ? min(clip.z / clip.w, gl_FragCoord.z) : gl_FragCoord.z;
+    } else {
         vec3 right = normalize(inTangent), up = normalize(inBitangent), view = normalize(inNormal);
         vec2 q = inUV;
         float fp = max(max(length(dFdx(q)), length(dFdy(q))), 1e-5);

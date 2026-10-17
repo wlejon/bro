@@ -73,6 +73,8 @@ bool ForestNode::setSpecimens(SpecimenArrays&& a) {
         s.clumpStart = u(2); s.clumpCount = u(3);
         s.leafStart = u(4); s.leafCount = u(5);
         s.height = f[6];
+        // Its clumps' height over their width (0: emitted before it existed).
+        s.clumpFlat = f[15] > 0.0f ? std::clamp(f[15], 0.2f, 1.0f) : 1.0f;
         if (uint64_t{s.segStart} + s.segCount > nSeg || uint64_t{s.clumpStart} + s.clumpCount > nClump ||
             uint64_t{s.leafStart} + s.leafCount > nLeaf)
             return false;
@@ -82,7 +84,10 @@ bool ForestNode::setSpecimens(SpecimenArrays&& a) {
         float sumR = 0.0f;
         for (uint32_t c = s.clumpStart; c < s.clumpStart + s.clumpCount; ++c) {
             const float* r = &a.clumps[c * 8];
-            crown = grow(crown, {r[0], r[1], r[2]}, r[3]);
+            // Its ellipsoid: r across, 0.9 r up and 0.7 r down times the flatness.
+            const float up = r[3] * s.clumpFlat;
+            crown = bromath::amerge(crown, bromath::AABB3{{r[0] - r[3], r[1] - 0.7f * up, r[2] - r[3]},
+                                                          {r[0] + r[3], r[1] + 0.9f * up, r[2] + r[3]}});
             sumR += r[3];
         }
         s.bounds = crown;
@@ -488,6 +493,8 @@ const std::vector<float>& ForestNode::gpuData() const {
         d[12] = s.crownRadiusUp; d[13] = s.meanClumpRadius; d[14] = s.height; d[15] = bitsOf(specBlock[k]);
         // Its leaves' and bark's tint: its colour over the node's (1 where it
         // has none, or the node is black).
+        // Record 4's w: its clumps' flatness (scene_forest.glsl's forestClumpFlat).
+        d[19] = s.clumpFlat;
         for (int part = 0; part < 2; ++part) {
             float* t = d + 16 + part * 4;
             t[0] = t[1] = t[2] = 1.0f;

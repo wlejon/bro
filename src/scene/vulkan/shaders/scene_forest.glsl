@@ -83,6 +83,44 @@ void forestApplyLook() {
     vegLimbBob = float((w >> 8) & 255u) / 64.0;
     vegTwigBob = float((w >> 16) & 255u) / 64.0;
 }
+
+// Specimen `s`'s clumps' height over their width (specimen record 4's w,
+// broflora's Species::clumpFlat: a fir's flat pads of level sprays).
+float forestClumpFlat(int s) {
+    float f = procedural.records[forestSpecimenRecord(s) + 4].w;
+    return f > 0.0 ? f : 1.0;
+}
+// The specimen instance `i` draws.
+int forestInstanceSpecimen(int i) {
+    return int(floatBitsToUint(procedural.records[int(floatBitsToUint(procedural.header[3].x)) + i * 2 + 1].z));
+}
+// Every clump placement (clumpLeafFrame, procClumpLobe) flattened as
+// instance `i`'s specimen's clumps are.
+void forestApplyClumpFlat(int i) { procClumpFlat = forestClumpFlat(forestInstanceSpecimen(i)); }
+
+// A lobe's CORE (specimen units): its leaves fill the shell under its
+// surface (clumpLeafFrame: `shell` of the radius deep, flattened by
+// procClumpFlat), `leaves` of them, each turned every way. Where the shell's
+// optical depth from the surface in reaches FOREST_CORE_DEPTH nothing behind
+// shows: the core is the ellipsoid from there in, drawn solid (the drawer's
+// cores, mesh.frag's core sprite) so the leaves and sprays it hides fail the
+// depth test rather than being shaded: the core's radius, the lobe's shrunk
+// by that depth. 0 when the shell is thinner than that (a lobe the eye sees
+// through). `sigma` the leaves' optical depth a unit length.
+const float FOREST_CORE_DEPTH = 1.5;
+float forestLobeCore(float lr, float leaves, out float sigma) {
+    float shell = clamp(procedural.header[0].w, 0.05, 1.0);
+    float a = 0.5 * procedural.header[1].z;
+    float area = 3.14159265 * a * a * procedural.header[3].y * 0.55;
+    float inner = 1.0 - shell;
+    float volume = 4.18879 * lr * lr * lr * 0.8 * procClumpFlat * (1.0 - inner * inner * inner);
+    sigma = leaves * area / max(volume, 1e-9);
+    // Measured across, the way a crown is mostly seen (a flat pad's shell
+    // is thinner up and down, but the pads stack).
+    float depth = FOREST_CORE_DEPTH / max(sigma, 1e-6);
+    if (depth >= shell * lr) return 0.0;
+    return lr - depth;
+}
 int forestSegmentRecord(int g) { return forestBase(1) + g * 7; }
 int forestClumpRecord(int c) { return forestBase(2) + c * 6; }
 

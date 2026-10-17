@@ -56,6 +56,7 @@ void main() {
     vec3 P, F, lc;
     mat3 R;
     float lr;
+    forestApplyClumpFlat(e.instance);
     if (k <= 0.0 || procClumpBare(e.instance, lf.x) ||
         !clumpLeafFrame(procedural.records[forestClumpRecord(lf.x)], lf.y, lf.x, P, R, F, lc, lr)) {
         gl_Position = FOREST_CULLED;
@@ -114,10 +115,10 @@ void main() {
         B = mat3(model) * B;
         outLobeOut = vec4(dot(B, B) > 1e-10 ? normalize(rot * B) : vec3(0.0, 1.0, 0.0), procedural.header[0].z);
         // The lobe moves with its leaves (as a lobe sprite's sphere does),
-        // flattened as clumpLeafFrame's: centred a tenth of its radius up.
+        // flattened as clumpLeafFrame's: centred a tenth of its height up.
         float scale = vegScale(model);
         float r = max(lr * scale, 1e-3);
-        outLobeSphere = vec4((model * vec4(lc + vec3(0.0, 0.1 * lr, 0.0), 1.0)).xyz + (pos - unswayed), r);
+        outLobeSphere = vec4((model * vec4(lc + vec3(0.0, 0.1 * lr * procClumpFlat, 0.0), 1.0)).xyz + (pos - unswayed), r);
         // forestMassDepth's: its leaves (a third of the clump's), each
         // turned every way, over the disc, through the middle, a unit length.
         float leaves = max(procedural.records[forestClumpRecord(lf.x) + 1].w / 3.0, 1.0);

@@ -45,8 +45,9 @@ constexpr uint32_t kVertsPerClump = 18;      // three lobes of two triangles
 constexpr int kNearSides = 10;
 constexpr int kFarSides = 5;
 
-// The shapes a forest draws, each one draw.
-enum Group { LeafNear, LeafCard, Bark10, Bark5, Clumps, Crowns, kGroups };
+// The shapes a forest draws, each one draw, in this order: a needle or
+// scale node's lobe CORES first, so the leaves they hide fail the depth test.
+enum Group { Cores, LeafNear, LeafCard, Bark10, Bark5, Clumps, Crowns, kGroups };
 
 struct Entry {
     uint32_t instance, first, end, param;
@@ -102,6 +103,7 @@ struct SceneMeshDrawer::ForestPlan {
     ForestNode::Lod lod, shadowLod;
     float leafLength = 0.0f;
     int leafVerts = 0, leafCopies = 1, force = -1;
+    bool cores = false;   // the leaves tier draws its lobes' cores (a spray node's)
     std::vector<bromath::AABB3> bounds;   // every tree's, world, padded by the sway's reach
     std::vector<Seen> seen;               // the camera's trees
     std::vector<Seen> cast;               // each shadow tile's
@@ -145,6 +147,17 @@ struct SceneMeshDrawer::ForestPlan {
                     g.push_back({inst, sp.leafStart + c, sp.leafStart + std::min(c + K, n), V, widening, keepEnd,
                                  tail, fade});
                 if (!shadow) stats.leaves += n;
+            }
+            // A spray node's leaves hide their lobes' depths: each lobe's
+            // core drawn solid first (forestLobeCore), at the leaves' fade.
+            if (G && !shadow && cores && sp.clumpCount > 0) {
+                const float fade = ForestNode::fadeCode(lo[0], hi[0]);
+                vertices += uint64_t{(sp.clumpCount + kClumpsPerEntry - 1) / kClumpsPerEntry} * kClumpsPerEntry *
+                            kVertsPerClump;
+                for (uint32_t c = 0; c < sp.clumpCount; c += kClumpsPerEntry)
+                    G->g[Cores].push_back({inst, sp.clumpStart + c,
+                                           sp.clumpStart + std::min(c + kClumpsPerEntry, sp.clumpCount), 0u, 1.0f,
+                                           0.0f, 1.0f, fade});
             }
         }
         // Bark: the segments whose keep radius is wide enough, a connected
@@ -222,6 +235,7 @@ std::unique_ptr<SceneMeshDrawer::ForestPlan> SceneMeshDrawer::planForest(SceneFr
     P.leafVerts = static_cast<int>(node.mesh().vertexCount());
     P.leafCopies = node.leafCopies();
     P.force = node.forceTier();
+    P.cores = node.look().leafForm != 0;
     const auto& specimens = node.specimens();
     const auto& instances = node.instances();
 
@@ -394,6 +408,7 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
         std::stable_sort(keyed.begin(), keyed.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
         for (size_t i = 0; i < g.size(); ++i) g[i] = keyed[i].second;
     };
+    nearestFirst(colour.g[Cores]);
     nearestFirst(colour.g[Clumps]);
     nearestFirst(colour.g[Crowns]);
 
@@ -552,9 +567,10 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
                 d.push.pbrParams[3] = static_cast<float>(barkFlags);
                 break;
             }
+            case Cores:
             case Clumps:
                 d.kind = MeshKind::ForestSprite;
-                d.push.extra[2] = 0.0f;
+                d.push.extra[2] = k == Cores ? 2.0f : 0.0f;
                 d.indexCount = kClumpsPerEntry * kVertsPerClump;
                 d.instanceCount = static_cast<uint32_t>(g.size());
                 d.firstInstance = first;
