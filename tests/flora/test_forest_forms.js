@@ -100,7 +100,9 @@ function run(scene) {
         for (const t of ['leaves', 'clumps', 'crowns']) {
             node.setForestTier(t);
             const c = covered(scene.captureFrame(), bg);
-            assert(c.n > 60, name + ' ' + t + ' draws: ' + c.n + ' px');
+            // The boxwood is a metre and a quarter high here, a dozen pixels
+            // a metre: its clumps are a few pixels each.
+            assert(c.n > 40, name + ' ' + t + ' draws: ' + c.n + ' px');
         }
         node.setForestTier('auto');
         other.visible = true;

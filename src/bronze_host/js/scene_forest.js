@@ -61,13 +61,25 @@
         return typeof name === 'string' && Object.prototype.hasOwnProperty.call(FORMS, name) ? FORMS[name] : null;
     }
 
-    // The leaf card a form draws when the forest is given none.
-    function defaultLeaf(form) {
+    // The leaf card a form draws when the forest is given none, `size` times
+    // the form's own (the specimens' leaf size: a boxwood's small leaves).
+    function defaultLeaf(form, size) {
         const MeshCtor = globalThis.Mesh || (globalThis.bro && bro.mesh && bro.mesh.Mesh);
         if (!MeshCtor || typeof MeshCtor.leafCard !== 'function') return null;
-        const m = MeshCtor.leafCard(form.shape, form.card);
+        const card = Object.assign({}, form.card, { width: form.card.width * size, length: form.card.length * size });
+        const m = MeshCtor.leafCard(form.shape, card);
         m.colors = new Float32Array(0);
         return m;
+    }
+
+    // The specimens' mean leaf size (specimenLooks' last float per specimen;
+    // emitForest writes the species' leafSize), 1 when they carry none.
+    function leafSizeOf(o) {
+        const looks = o.specimenLooks || (o.forest && o.forest.specimenLooks);
+        if (!looks || looks.length < 8) return 1;
+        let sum = 0, n = 0;
+        for (let i = 7; i < looks.length; i += 8) if (looks[i] > 0) { sum += looks[i]; n++; }
+        return n ? Math.min(3, Math.max(0.2, sum / n)) : 1;
     }
 
     // The forest's leaf form: `leafForm`, else the one its emit was filtered
@@ -140,7 +152,7 @@
         // conifer's spray).
         if (!leaf) {
             const form = leafFormOf(o) || FORMS.broad;
-            leaf = defaultLeaf(form);
+            leaf = defaultLeaf(form, leafSizeOf(o));
         }
         const node = canon(__bro_native.scene.SceneGraph_createForest(this, o, leaf));
         if (!node) return node;

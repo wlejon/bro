@@ -171,7 +171,8 @@ public:
     void setLook(const Look& l);
     const Look& look() const { return look_; }
     /// Per specimen, 8 floats (emitForest's `specimenLooks`): leaf colour,
-    /// leaf form, bark colour, 0; a colour of 0, 0, 0 takes the node's.
+    /// leaf form, bark colour, leaf size (read by createForest for its
+    /// default card, not here); a colour of 0, 0, 0 takes the node's.
     /// Empty: every specimen the node's colours. False, changing nothing, when
     /// the count does not match the specimens.
     bool setSpecimenLooks(std::vector<float> looks);
