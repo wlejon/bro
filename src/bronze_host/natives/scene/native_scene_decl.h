@@ -790,8 +790,8 @@ void bro_scene_SceneNode_setGrassMover(void* self, void* target, double radius, 
 void bro_scene_SceneNode_grassPush(void* self, double x, double z, double radius, double vx, double vz,
                                    double strength, double trample);
 
-// grass.stats: [ring 0 instances, ring 1, ring 2, ring 3, movers, field cols, field rows,
-//               herb ring 0 instances, herb ring 1]
+// grass.stats: [blade rings n, ring 0 instances .. ring n-1, movers, field cols, field rows,
+//               herb ring 0 instances, herb ring 1, ...]
 //   registered at __bro_native.scene.SceneNode_grassStats
 //   result: f64[] in *out; out->release == NULL, the runtime copies
 void bro_scene_SceneNode_grassStats(void* self, bronze_native_buffer* out);
@@ -801,10 +801,16 @@ void bro_scene_SceneNode_grassStats(void* self, bronze_native_buffer* out);
 //   registered at __bro_native.scene.SceneNode_setGrassFloor
 void bro_scene_SceneNode_setGrassFloor(void* self, const float* data, uint32_t data_len);
 
-// grass herbs: broflora herbRecords (48 floats a species, at most 12), and
-// the range the plants are drawn to (m; 0 keeps it)
+// grass herbs: broflora herbRecords (52 floats a species, at most 12), the
+// range the whole plants are drawn to and the far plants' (m; 0 keeps it)
 //   registered at __bro_native.scene.SceneNode_setGrassHerbs
-void bro_scene_SceneNode_setGrassHerbs(void* self, const float* data, uint32_t data_len, double range);
+void bro_scene_SceneNode_setGrassHerbs(void* self, const float* data, uint32_t data_len, double range, double far);
+
+// grass herbs at a place: the plants (x, y, z, species index) whose roots
+// lie within `radius` of world (x, z), nearest first (at most 256)
+//   registered at __bro_native.scene.SceneNode_grassHerbPlants
+//   result: f64[] in *out; out->release == NULL, the runtime copies
+void bro_scene_SceneNode_grassHerbPlants(void* self, double x, double z, double radius, bronze_native_buffer* out);
 
 // mesh.turf: shade a mesh node as grass node `grass`'s ground (on 0: as itself)
 //   registered at __bro_native.scene.SceneNode_setTurfGrass

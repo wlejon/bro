@@ -162,6 +162,12 @@ struct MeshDraw {
     float depthBiasUnits = 0.0f;
     bool cameraCulled = false;   // outside the camera frustum this frame
     float viewDepth = 0.0f;      // along the view direction, for sorting
+    /// Where the opaque pass draws it (stable, low first): what is near and
+    /// solid first, so the far tiers behind it fail the early depth test
+    /// (kOrderMid for anything not ranked).
+    static constexpr uint8_t kOrderMid = 10;
+    static constexpr uint8_t kOrderFar = 20;   // a forest's clumps and crowns
+    uint8_t order = kOrderMid;
     bool hasBounds = false;      // world bounds, for the shadow tiles' and probe faces' culling
     bromath::AABB3 bounds;
     bromath::Vec3 center{0.0f, 0.0f, 0.0f};   // bounds centre (else the origin): probe selection

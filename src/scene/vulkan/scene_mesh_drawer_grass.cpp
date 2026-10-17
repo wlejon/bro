@@ -43,10 +43,10 @@ struct GrassUBO {
     float herbRing[4];
     float herbShape[4];
     float herbs[GrassNode::kHerbMax * GrassNode::kHerbRecordFloats];
-    float herbMean[GrassNode::kHerbMeanSteps * 8];
+    float herbMean[GrassNode::kHerbMeanSteps * GrassNode::kHerbMeanFloats];
 };
 static_assert(sizeof(GrassUBO) == (15 + GrassNode::kHerbMax * GrassNode::kHerbRecordFloats / 4
-                                   + GrassNode::kHerbMeanSteps * 2) * 16);
+                                   + GrassNode::kHerbMeanSteps * GrassNode::kHerbMeanFloats / 4) * 16);
 
 constexpr float kPi = 3.14159265358979f;
 constexpr float kWidthGrowth = 0.03f;            // a far blade is wider, so a ring keeps its cover
@@ -214,16 +214,20 @@ void fillShared(const GrassNode& node, GrassUBO& u) {
     u.pushRate[1] = GrassNode::kTrampleRecovery;
     u.pushRate[2] = node.hasFloor() ? 1.0f : 0.0f;
     // The herbs, which every grass shader reads: the plants, and past them
-    // the blades and the turf that stand in.
+    // the turf that stands in.
     if (node.hasHerbs()) {
         const std::vector<float>& rec = node.herbRecords();
         std::copy(rec.begin(), rec.end(), u.herbs);
-        std::copy(node.herbMean(), node.herbMean() + GrassNode::kHerbMeanSteps * 8, u.herbMean);
+        std::copy(node.herbMean(), node.herbMean() + GrassNode::kHerbMeanSteps * GrassNode::kHerbMeanFloats,
+                  u.herbMean);
         u.herbInfo[0] = static_cast<float>(node.herbCount());
         u.herbInfo[1] = GrassNode::kHerbCell;
         const GrassNode::HerbRing last = node.herbRing(GrassNode::kHerbRings - 1);
         u.herbInfo[2] = last.outer;
         u.herbInfo[3] = last.bandOut;
+        // (The whole plants' range: the herb draws set the rest of herbShape,
+        // the turf reads only this.)
+        u.herbShape[3] = node.herbRange();
     }
 }
 
@@ -418,12 +422,16 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
     const float herbTop = node.herbHeight() * 1.4f + 0.2f;
     for (int r = 0; r < GrassNode::kHerbRings; ++r) {
         const GrassNode::HerbRing ring = node.herbRing(r);
+        // Seen from this high, all of the far ring is left to the turf
+        // (scene_herb_mix.glsl's herbFarSteep): not issued at all.
+        if (r == GrassNode::kHerbRings - 1 && lift > 0.5f * ring.outer) continue;
         const GpuMesh* cards = res.mesh(node.id(), static_cast<uint32_t>(GrassNode::kRings + r),
                                         node.geometryGeneration(), node.herbRingMesh(r));
         if (!cards) return;
         const float cell = GrassNode::kHerbCell;
-        // A plant reaches out about its spread and leans with the wind.
-        const float reach = cell + 0.8f + node.herbHeight() * 0.5f;
+        // A plant reaches out about its spread and leans with the wind (a far
+        // plant widened up to twice).
+        const float reach = cell + (0.8f + node.herbHeight() * 0.5f) * (r == GrassNode::kHerbRings - 1 ? 2.0f : 1.0f);
         float box[4];
         visibleBox(view, ring.outer, reach + 1.0f, box);
         const float ex = view.eye.x, ez = view.eye.z;
@@ -444,7 +452,9 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
         u.herbRing[3] = ring.bandOut;
         u.herbShape[0] = static_cast<float>(ring.cards);
         u.herbShape[1] = static_cast<float>(GrassNode::cardVertices(ring.segments));
-        u.herbShape[2] = r == GrassNode::kHerbRings - 1 ? 1.0f : 0.0f;
+        // Which ring (2: the far one, thinned past the whole plants' range).
+        u.herbShape[2] = static_cast<float>(r);
+        u.herbShape[3] = node.herbRange();
         u.blade[2] = p.minNormalY;
         u.blade[3] = p.wind;
         u.lod[3] = lift;

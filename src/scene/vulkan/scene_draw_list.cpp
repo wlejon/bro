@@ -150,6 +150,11 @@ void buildDrawLists(SceneFrame& frame) {
         (overlay ? lists.overlay : draw.translucent ? lists.translucent : lists.opaque).push_back(index);
     }
 
+    // Near and solid first (MeshDraw::order), so what is behind it fails the
+    // early depth test rather than shading and being overdrawn.
+    std::stable_sort(lists.opaque.begin(), lists.opaque.end(), [&](uint32_t a, uint32_t b) {
+        return lists.meshes[a].order < lists.meshes[b].order;
+    });
     std::stable_sort(lists.translucent.begin(), lists.translucent.end(), [&](uint32_t a, uint32_t b) {
         return lists.meshes[a].viewDepth > lists.meshes[b].viewDepth;
     });

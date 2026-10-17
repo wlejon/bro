@@ -23,8 +23,8 @@
 // no triangle of it survives.
 
 #define GRASS_HERB_MAX 12      // GrassNode::kHerbMax
-#define GRASS_HERB_RECORD 12   // vec4s a species (broflora::kHerbRecordFloats / 4)
-#define GRASS_HERB_MEAN 5      // GrassNode::kHerbMeanSteps
+#define GRASS_HERB_RECORD 13   // vec4s a species (broflora::kHerbRecordFloats / 4)
+#define GRASS_HERB_MEAN 5      // GrassNode::kHerbMeanSteps (kHerbMeanFloats / 4 vec4s each)
 
 layout(set = 4, binding = 0) uniform GrassUBO {
     vec4 cells;      // xyz: unused (the draw's cells are grassRect()); w: cell size (m)
@@ -40,28 +40,18 @@ layout(set = 4, binding = 0) uniform GrassUBO {
     vec4 shape;      // x: blades an instance, y: vertices a blade, z: spread from the root (m), w: a tuft's fan (rad)
     vec4 lod;        // x: thinning starts (m), y: the fewest blades kept (share), z: the share shadow casters keep, w: the eye's lift (m)
     // The herbs (scene_herb_mix.glsl): the low plants among the grass.
-    vec4 herbInfo;   // x: species, y: the herbs' cell (m), z: where the plants end (m: blades and turf stand in past it), w: that hand-over's band (m)
+    vec4 herbInfo;   // x: species, y: the herbs' cell (m), z: where the far plants end (m: the turf stands in past it), w: that hand-over's band (m)
     vec4 herbRing;   // a herb draw's ring: inner, outer, the band at the inner edge, at the outer
-    vec4 herbShape;  // x: cards an instance, y: vertices a card, z: 1 in the far herb ring (fewer, wider leaves), w: unused
+    vec4 herbShape;  // x: cards an instance, y: vertices a card, z: the ring (0 near, 1 mid, 2 far), w: where the whole plants end (m)
     vec4 herbs[GRASS_HERB_MAX * GRASS_HERB_RECORD];   // GrassNode::kHerbMax species of broflora's herbRecord
     // The herbs' mean over their colonies under a canopy of 0, 1/4 .. 1
-    // (GrassNode::herbMean): (cover exponent at full density, leaf rgb),
-    // (the blooms' share, bloom rgb).
-    vec4 herbMean[GRASS_HERB_MEAN * 2];
+    // (GrassNode::herbMean): (cover exponent from above, leaf rgb), (the
+    // blooms' share, bloom rgb), (exponent from the side, the blooms' share
+    // of that, the colonies' share of the ground, the leaves' top).
+    vec4 herbMean[GRASS_HERB_MEAN * 3];
 } grass;
 
 const float GRASS_REFERENCE_SPEED = 2.5;   // m/s: the steady wind blades flutter in as authored
-// The blades that stand in for herbs past their plants (grassBlade): the
-// share of a cell's blades a herb's for each unit of the herbs' cover, and
-// their height (of the leaves' top, and the blooms') and width (of a
-// blade's).
-const float GRASS_HERB_BLADES = 0.6;
-const float GRASS_HERB_HEIGHT = 0.9;
-const float GRASS_HERB_BLOOM_HEIGHT = 0.7;
-const float GRASS_HERB_WIDTH = 2.5;
-// Bloom dabs for each unit of the blooms' share of the herbs' cover (a dab
-// is a third of a blade's height, so more of them carry the same colour).
-const float GRASS_HERB_BLOOM_DABS = 1.6;
 
 // r: ground height, g: density (0..1), b: dryness (0 lush .. 1 dry), a: height multiplier.
 layout(set = 4, binding = 1) uniform sampler2D grassField;
@@ -199,24 +189,7 @@ bool grassBlade(int id, int vid, vec3 v, vec3 vn, out GrassBlade b) {
     float m = cp.w * 0.15 + 2.0 * H + 0.5 + grass.shape.z;
     if (cp.w < -2.0 || cp.x < -cp.w - m || cp.x > cp.w + m || cp.y < -cp.w - m || cp.y > cp.w + m) return false;
 
-    // Past the herb plants' range (scene_herb_mix.glsl) some blades stand in
-    // for them: as many as the herbs there cover of the ground, short and
-    // broad, in their leaves' or their blooms' colours, so a meadow keeps its
-    // flowers' speckle and a forest floor its ferns' green. They grow also
-    // where no grass does.
-    bool herb = false;
-    HerbMix hm;
-    if (grass.herbInfo.x > 0.5 && grass.pushRate.z > 0.5) {
-        float stand = 1.0 - herbPlantsDrawn(d);
-        if (stand > 0.0) {
-            vec2 fh = grassFloorHerbsAt(root);
-            if (fh.y > 0.0) {
-                hm = herbMixAt(root, fh.x, fh.y);
-                herb = grassHash(c, 7001 + j) < hm.cover * stand * GRASS_HERB_BLADES;
-            }
-        }
-    }
-    if (!herb && (f.g <= 0.0 || f.a <= 0.0)) return false;
+    if (f.g <= 0.0 || f.a <= 0.0) return false;
 
     // Clumps: thick and tall in some places, thin and short between. The
     // density thins blade by blade, so a thin patch is sparse tufts.
@@ -227,7 +200,7 @@ bool grassBlade(int id, int vid, vec3 v, vec3 vn, out GrassBlade b) {
     float minY = grass.blade.z;
     float dens = (0.35 + 0.9 * clump) * f.g * smoothstep(minY - 0.05, minY + 0.05, gn.y);
     vec4 hb = vec4(grassHash(c, j * 4), grassHash(c, j * 4 + 1), grassHash(c, j * 4 + 2), grassHash(c, j * 4 + 3));
-    if (!herb && hb.w > dens) return false;
+    if (hb.w > dens) return false;
 
     // The blade's spot: a step from the root, uniform over a disc of the
     // ring's spread (a tuft near, the cell further off).
@@ -245,40 +218,13 @@ bool grassBlade(int id, int vid, vec3 v, vec3 vn, out GrassBlade b) {
     trample = min(trample, 1.0);
     float ht = H * mix(0.5, 1.4, clump * clump) * (0.85 + 0.3 * h.z) * (0.6 + 0.8 * hb.z) *
                mix(1.0, mix(0.8, 1.7, tall * lush), grass.look.z) * f.a;
-    // A herb's blade: as tall as its plants' leaves stand (a rosette's low,
-    // under the grass, giving the sward their green). One of their blooms is a short dab of its colour held at the flowers'
-    // height (its stalk is under a pixel this far off): a meadow's speckle.
-    bool herbBloom = false;
-    float lift = 0.0;
-    if (herb) {
-        float var = 0.6 + 0.8 * hb.z;
-        ht = hm.height * GRASS_HERB_HEIGHT * var;
-        herbBloom = grassHash(c, 7301 + j) < min(hm.bloomShare * GRASS_HERB_BLOOM_DABS, 0.9);
-        if (herbBloom) {
-            float bh = hm.bloomHeight * GRASS_HERB_BLOOM_HEIGHT * var;
-            lift = bh * 0.8;
-            ht = bh * 0.3;
-        }
-    }
     ht *= 1.0 - trample * 0.25;
     // Width grows with distance, and never falls under about two thirds of a
     // pixel: a thinner blade only flickers in and out of the samples.
     float px = 2.0 / max(abs(camera.proj[1][1]) * camera.viewport.y, 1.0);
     float dv = length(vec3(xz.x, y0, xz.y) - eye);
     float wd = max(grass.blade.y * (1.0 + d * grass.look.w) * (grass.shape.x / kept), dv * px * 0.65);
-    // A herb's is broader: a leaf, a frond, a flower seen from afar.
-    // A tall herb's (a stand of bracken's) are broad for their height, not
-    // spikes over the sward.
-    if (herb) wd = max(wd * GRASS_HERB_WIDTH, herbBloom ? 0.0 : ht * 0.8);
     float vx = v.x, vy = v.y;
-    // A herb's blade is blunt (a leaf, a frond's mass, a flower), not drawn
-    // to the blade mesh's point (GrassNode bladeMesh: rows of two, a single
-    // vertex at the tip): its rows rise to three quarters of its height,
-    // narrowing a little, and the tip above them is a low gable.
-    if (herb && v.y < 0.999) {
-        vy = min(v.y * 1.5, 0.75);
-        vx = sign(v.x) * (0.5 * (1.0 - 0.6 * vy * vy) + 0.02);
-    }
     // In a tuft a blade's face turns out from the root; elsewhere at random.
     float hr = fract(hb.x * 13.73 + hb.z * 5.17);
     float yaw = grass.shape.w > 0.0 ? ra + 1.5707963 + (hr - 0.5) * 1.2 : hr * 6.2831853 + hb.y;
@@ -297,8 +243,6 @@ bool grassBlade(int id, int vid, vec3 v, vec3 vn, out GrassBlade b) {
              vec2(-side.z, side.x) * flut * grass.blade.w +
              vec2(cos(yaw * 3.0), sin(yaw * 3.0)) * 0.18 * (hb.z - 0.3) * (1.0 - min(grass.shape.w * 2.0, 0.6)) +
              out2 * grass.shape.w * (0.3 + 0.7 * rr) * (1.3 - 0.6 * hb.z);
-    // A herb's stands stiffer than a blade of grass.
-    if (herb) B *= 0.5;
     B += pb * 1.6;
     // Flattened grass lies the way it was pushed, most blades nearly flat,
     // a few springing back first.
@@ -319,8 +263,7 @@ bool grassBlade(int id, int vid, vec3 v, vec3 vn, out GrassBlade b) {
     float up = a > 1e-3 ? y * (sa - sin(r0)) / a : y * cos(r0);
     vec3 dir3 = vec3(bd.x, 0.0, bd.y);
     vec3 base = vec3(xz.x - eye.x, y0 - eye.y, xz.y - eye.z);
-    b.pos = base + side * vx * wd + (vec3(0.0, up, 0.0) + dir3 * along) * ht +
-            (vec3(0.0, 1.0, 0.0) + dir3 * th * 0.5) * lift;
+    b.pos = base + side * vx * wd + (vec3(0.0, up, 0.0) + dir3 * along) * ht;
     vec3 tang = normalize(vec3(0.0, ca, 0.0) + dir3 * sa);
     b.normal = normalize(cross(side, tang) + side * vn.x * 0.6);
     b.side = side;
@@ -345,14 +288,5 @@ bool grassBlade(int id, int vid, vec3 v, vec3 vn, out GrassBlade b) {
     b.color = col;    b.ao = mix(mix(0.5, 1.0, y), 1.0, far);
     b.bulk = mix(grass.lush.w, 0.95, far);   // and is lit as the ground,
     b.far = smoothstep(8.0, 40.0, d);         // not glowing against the light
-    if (herb) {
-        // The herbs' leaves, or (by their share of the cover) their blooms,
-        // each blade its own value about their mean.
-        vec3 hc = herbBloom ? hm.bloom : hm.leaf;
-        // A stand of leaves shades its own lower parts at any distance (the
-        // plants it stands for are darker within than at their tops).
-        b.color = hc * mix(0.8, 1.2, fract(hb.y * 7.31 + hb.x)) * (herbBloom ? 1.0 : mix(mix(0.7, 0.75, far), 1.0, y));
-        b.ao = herbBloom ? 1.0 : mix(mix(0.6, 1.0, y), 0.65, far);
-    }
     return true;
 }

@@ -179,7 +179,8 @@
     }
     function setHerbs(node, herbs) {
         const rec = herbRecords(herbs.species);
-        __bro_native.scene.SceneNode_setGrassHerbs(node, rec, typeof herbs.range === 'number' ? herbs.range : 0);
+        __bro_native.scene.SceneNode_setGrassHerbs(node, rec, typeof herbs.range === 'number' ? herbs.range : 0,
+            typeof herbs.far === 'number' ? herbs.far : 0);
     }
 
     // The meshes shaded as the grass's ground (turf: true is the ground
@@ -264,14 +265,23 @@
     });
     fn(P, 'grassStats', function grassStats() {
         const s = __bro_native.scene.SceneNode_grassStats(this);
-        if (s.length < 9) return undefined;
-        // One count a blade ring, then movers and the field's size, then one
-        // count a herb ring.
-        const n = s.length - 5;
+        if (s.length < 5) return undefined;
+        // The blade rings' count and one count each, then movers and the
+        // field's size, then one count a herb ring.
+        const n = s[0] + 1;
         return {
-            instances: Array.from(s.slice(0, n)), movers: s[n], fieldCols: s[n + 1], fieldRows: s[n + 2],
+            instances: Array.from(s.slice(1, n)), movers: s[n], fieldCols: s[n + 1], fieldRows: s[n + 2],
             herbInstances: Array.from(s.slice(n + 3)),
         };
+    });
+    // The herb plants whose roots lie within `radius` m of (x, z), nearest
+    // first: [{ x, y, z, species }] (species: its index in the herbs given).
+    fn(P, 'herbPlants', function herbPlants(x, z, radius) {
+        if (!isGrass(this)) return [];
+        const s = __bro_native.scene.SceneNode_grassHerbPlants(this, +x, +z, radius > 0 ? +radius : 1);
+        const out = [];
+        for (let i = 0; i + 3 < s.length; i += 4) out.push({ x: s[i], y: s[i + 1], z: s[i + 2], species: s[i + 3] });
+        return out;
     });
     // The ground height the grass stands on at (x, z): the field, bilinear.
     fn(P, 'grassHeightAt', function grassHeightAt(x, z) {

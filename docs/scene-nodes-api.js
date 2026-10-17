@@ -347,15 +347,23 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  * 0.35 m cells, each holding at most one plant: which (if any) is picked
  * per cell from each species' abundance, how well the light there suits it
  * (the `floor` canopy against its shade preference), its colonies (noise of
- * its own period) and the floor's herb density. Near the eye (two rings,
+ * its own period, a cell holding one of its plants as often as its
+ * `spacing` allows) and the floor's herb density. Near the eye (two rings,
  * to `range`) each plant is a few cards built in the vertex shader (its
  * leaves or fronds, stems, blooms) and cut per pixel to its leaf outline,
- * pinnae, petals or bells; they sway as cantilevers worked out from their
- * build (broflora herbSway) and cast no shadows. Through the last quarter
- * of `range` they hand over to the grass: past it some blades stand in for
- * them (as many as the herbs cover of the ground, in their leaves' and
- * blooms' colours, at their leaves' and flowers' heights) and the turf
- * takes their mean colour, so a meadow keeps its flowers' speckle far off.
+ * pinnae, petals, cups seen at their angle, spikes or bells; they sway as
+ * cantilevers worked out from their build (broflora herbSway) and cast no
+ * shadows. A stand shades itself: the leaves above a point (its species'
+ * leaf area at this density) take the sun on its slant path and part of
+ * the sky, so a fern stand is dark within and lit at its top. Past `range`
+ * to `far` the same plants are drawn with fewer cards, fewer of them with
+ * distance (each widened to keep the cover); seen from well above (the
+ * eye's lift over a third of the distance across the ground) they are left
+ * to the turf. Past them the turf takes the herbs' mean over their colonies:
+ * the share of the ground they cover as the eye sees it (more seen across
+ * than from above: their sides), in their leaves' and blooms' colours, so a
+ * meadow keeps its colour far off. Where herbs grow thick the grass gives
+ * them room, sparser and shorter with the floor's herb density.
  * @example
  *   scene.createGrass({ ground, floor: cover.canopy, turf: true, herbs: {
  *     species: ['bracken', 'woodsorrel', { preset: 'daisy', abundance: 2 }],
@@ -368,7 +376,9 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  *   table from bro.flora.herbRecords; more than 12 are dropped.
  * @property {number|Function} [density=1] - how thickly herbs grow, 0..1: a
  *   number or `(x, z, y, canopy) => value`, baked into the field with it.
- * @property {number} [range=30] - how far the plants are drawn (m, 4..200).
+ * @property {number} [range=30] - how far the whole plants are drawn (m, 4..200).
+ * @property {number} [far=3*range] - where the far plants end and the turf
+ *   alone stands in (m, 1.4 x range .. 800).
  */
 
 /**
@@ -1387,14 +1397,31 @@ class SceneNode {
   setGround(opts) {}
 
   /**
-   * Grass: replace the herbs' species (and with `range`, how far they are
-   * drawn) without re-baking the field; their density stays as baked.
+   * Grass: replace the herbs' species (and with `range` and `far`, how far
+   * they are drawn) without re-baking the field; their density stays as
+   * baked.
    * `species: []` draws none.
    * @example grass.setHerbs({ species: ['poppy', 'daisy'] });
    * @param {GrassHerbOptions} herbs
    * @returns {SceneNode}
    */
   setHerbs(herbs) {}
+
+  /**
+   * Grass: the herb plants whose roots lie within `radius` m (at most 20) of
+   * world (x, z), nearest first, worked out on the CPU as the shaders pick
+   * them (nothing is stored): `[{x, y, z, species}]`, `y` the ground under
+   * the root, `species` its index in the herbs given. At most 256. To frame a
+   * plant, to place something beside one, to answer what grows here.
+   * @example
+   *   const [p] = grass.herbPlants(x, z, 5);
+   *   if (p) vp.reframe([p.x, p.y + 0.3, p.z], 1);
+   * @param {number} x
+   * @param {number} z
+   * @param {number} [radius=1]
+   * @returns {Array<{x: number, y: number, z: number, species: number}>}
+   */
+  herbPlants(x, z, radius) {}
 
   /**
    * Grass: shade mesh node `mesh` as this grass's ground (turf), or with
@@ -1459,7 +1486,8 @@ class SceneNode {
 
   /**
    * Grass: what the last frame drew: `{instances: [r0, r1, r2, r3], movers,
-   * fieldCols, fieldRows, herbInstances: [h0, h1]}`, near ring first.
+   * fieldCols, fieldRows, herbInstances: [h0, h1, h2]}`, near ring first
+   * (h2 the far plants).
    * `instances` counts the cells issued in each ring (the tiles in view, in
    * the ring, where grass grows); each cell draws several blades, of which
    * the culling keeps fewer. `herbInstances` the herb cells issued in each

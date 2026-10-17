@@ -67,6 +67,9 @@ layout(location = 10) flat in float inSpraySeed;
 // a stem's cover of its card or a leaf's stalk share.
 layout(location = 8) flat in vec4 inHerbInfo;
 layout(location = 9) in vec4 inHerbSize;
+// The stand it grows in (HerbVertex.stand): its leaf area index and the
+// share of the stand's leaves above this point.
+layout(location = 10) in vec2 inHerbStand;
 #endif
 
 layout(location = 0) out vec4 outColor;
@@ -602,6 +605,12 @@ void main() {
         if (bulkWeight > 1e-4) N = normalize(N * (1.0 - bulkWeight) + inVegShade.xyz);
         vegAO *= herb.ao;
     }
+    // The stand shades itself: the leaves above a point take the sun on its
+    // slant path through them (a fern stand is dark within, lit at its top)
+    // and part of the sky.
+    float standLeaves = inHerbStand.x * inHerbStand.y;
+    float standSun = exp(-0.6 * standLeaves / max(-lighting.sunDirection.y, 0.2));
+    vegAO *= exp(-0.35 * standLeaves);
 #endif
 
     float metallic = push.pbrParams.x;
@@ -687,7 +696,11 @@ void main() {
 #ifdef SCENE_GROUND
     indirect *= groundAO;
 #endif
+#ifdef SCENE_HERB
+    vec3 color = sceneDirectLight(s) * standSun + indirect + emissive;
+#else
     vec3 color = sceneDirectLight(s) + indirect + emissive;
+#endif
 
     // SSR mask phase: alpha carries the reflectance the SSR pass weights its
     // reflections by (normal-incidence Fresnel luminance times smoothness^2);

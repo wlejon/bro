@@ -121,6 +121,7 @@ struct SceneMeshDrawer::ForestPlan {
     std::vector<Seen> cast;               // each shadow tile's
     std::vector<int> tileSlots;           // per tile: its slot in the shadow plan
     std::vector<float> seenPx;            // per tree: the camera's px (Seen::px), 0 when unseen
+    float canopyTop = -1e30f;             // the highest tree top within 40 m of the eye (across the ground)
 
     // A tree's caster in a shadow tile: at the tile's texel size, but never
     // a crown while the camera draws the tree's leaves. A crown caster's disc
@@ -324,6 +325,7 @@ std::unique_ptr<SceneMeshDrawer::ForestPlan> SceneMeshDrawer::planForest(SceneFr
                               std::clamp(e.y, b.min.y + reach, b.max.y - reach),
                               std::clamp(e.z, b.min.z + reach, b.max.z - reach)};
         const float d = std::max(bromath::vlen(q - e), 0.25f);
+        if (std::hypot(q.x - e.x, q.z - e.z) < 40.0f) P.canopyTop = std::max(P.canopyTop, b.max.y - reach);
         if (P.lod.range > 0.0f && d > P.lod.range) {
             P.stats.culled++;
             continue;
@@ -592,6 +594,15 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
             MeshDraw d = base;
             d.shadowOnly = shadow;
             d.castsShadow = shadow;
+            // Across every forest node: cores, leaves and bark (near, solid)
+            // first, then the rest of the scene, then the far tiers, so the
+            // clumps and crowns behind near trees and ground are rejected
+            // before they shade. Seen from over the canopy the crowns are
+            // what hides the rest (the floor, the leaves under them), so
+            // there they keep their place before it.
+            const bool farLast = P.canopyTop > -1e29f && view.eye.y < P.canopyTop;
+            d.order = farLast && (k == Clumps || k == Crowns) ? static_cast<uint8_t>(MeshDraw::kOrderFar + k)
+                                                              : static_cast<uint8_t>(k);
             if (shadow) d.shadowTileMask = 1u << slot;
             switch (k) {
             case LeafNear:

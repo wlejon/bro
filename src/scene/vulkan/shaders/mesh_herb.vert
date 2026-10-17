@@ -21,6 +21,7 @@ layout(location = 6) out vec4 outInstColor;
 layout(location = 7) out vec4 outVegShade;
 layout(location = 8) flat out vec4 outHerbInfo;
 layout(location = 9) out vec4 outHerbSize;
+layout(location = 10) out vec2 outHerbStand;
 
 #include "scene_camera.glsl"
 #include "scene_mesh_push.glsl"
@@ -34,6 +35,7 @@ void main() {
         gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
         outVegShade = vec4(0.0, 0.0, 0.0, -1.0);
         outHerbInfo = vec4(0.0);
+        outHerbStand = vec2(0.0);
         return;
     }
     outWorldPos = h.pos;
@@ -49,4 +51,5 @@ void main() {
     outVegShade = vec4(h.ground * h.bulk, -clamp(h.ao, 0.02, 1.0));
     outHerbInfo = vec4(h.info.xyz, 0.0);
     outHerbSize = h.size;
+    outHerbStand = h.stand;
 }

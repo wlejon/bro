@@ -60,11 +60,24 @@ void bro_scene_SceneNode_setGrassFloor(void* self, const float* data, uint32_t d
     else gr->setFloor(data, gr->fieldCols(), gr->fieldRows(), static_cast<uint64_t>(data_len) >= need * 2 ? 2 : 1);
 }
 
-void bro_scene_SceneNode_setGrassHerbs(void* self, const float* data, uint32_t data_len, double range) {
+void bro_scene_SceneNode_setGrassHerbs(void* self, const float* data, uint32_t data_len, double range, double far) {
     auto* gr = grassOf(self);
     if (!gr) return;
     const int count = static_cast<int>(data_len / scene::GrassNode::kHerbRecordFloats);
-    gr->setHerbs(data, count, std::isfinite(range) ? static_cast<float>(range) : 0.0f);
+    gr->setHerbs(data, count, std::isfinite(range) ? static_cast<float>(range) : 0.0f,
+                 std::isfinite(far) ? static_cast<float>(far) : 0.0f);
+}
+
+void bro_scene_SceneNode_grassHerbPlants(void* self, double x, double z, double radius, bronze_native_buffer* out) {
+    auto* gr = grassOf(self);
+    std::vector<double> v;
+    if (gr && std::isfinite(x) && std::isfinite(z) && radius > 0.0) {
+        for (const scene::GrassNode::HerbPlant& p :
+             gr->herbPlants(static_cast<float>(x), static_cast<float>(z), static_cast<float>(std::min(radius, 20.0)), 256)) {
+            v.insert(v.end(), {p.x, p.y, p.z, static_cast<double>(p.species)});
+        }
+    }
+    transferBuffer(std::move(v), out);
 }
 
 void bro_scene_SceneNode_setTurfGrass(void* self, void* grass, int32_t on) {
@@ -104,6 +117,7 @@ void bro_scene_SceneNode_grassStats(void* self, bronze_native_buffer* out) {
     auto* gr = grassOf(self);
     if (!gr) { transferBuffer(std::vector<double>{}, out); return; }
     std::vector<double> v;
+    v.push_back(scene::GrassNode::kRings);
     for (int i = 0; i < scene::GrassNode::kRings; ++i) v.push_back(gr->drawnInstances(i));
     v.push_back(static_cast<double>(gr->moverCount()));
     v.push_back(gr->fieldCols());

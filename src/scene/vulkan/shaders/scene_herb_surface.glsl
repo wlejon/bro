@@ -278,25 +278,43 @@ HerbSurface herbBloomSurface(int sp, vec2 uv, vec4 size, float seed, vec2 down) 
         if (form == 4) {
             // A spike: a dense cylinder of florets, rounded at its top, a
             // ring of pale anthers where it is in flower.
+            // The core: a slim cylinder of tight florets (the card is 2.2
+            // of its widths, room for the anthers), its top rounded.
             float v = uv.y;
-            float hw = (0.62 + 0.38 * (1.0 - v)) * sqrt(max(1.0 - pow(max(v - 0.86, 0.0) / 0.14, 2.0), 0.0));
-            float ring = smoothstep(0.18, 0.28, v) * (1.0 - smoothstep(0.42, 0.52, v));
+            float core = 0.45 * (0.85 + 0.15 * (1.0 - v)) * sqrt(max(1.0 - pow(max(v - 0.9, 0.0) / 0.1, 2.0), 0.0));
             float x = abs(uv.x);
-            vec2 cell = vec2(P.x / (0.25 * wd + 1e-5), P.y / (0.12 * wd + 1e-5));
-            vec2 h = herbHash2(floor(cell) + seed * 17.0);
+            float hwm = 0.5 * wd;
+            float cc = herbAA((core - x) * hwm, fp);
+            // The florets: little scales up the core, dark brown.
+            vec2 fc = vec2(P.x / (0.3 * wd + 1e-5), P.y / (0.12 * wd + 1e-5));
+            vec2 h = herbHash2(floor(fc) + seed * 17.0);
             float show = 1.0 - smoothstep(0.4, 1.0, fp / (0.12 * wd + 1e-5));
-            float anther = ring * step(0.45, h.x) * show;
-            float edge = hw * (1.0 + 0.45 * anther);
-            o.cover = herbAA((edge - x) * 0.5 * wd, fp);
-            o.albedo = mix(r7.rgb * (0.8 + 0.4 * h.y * show), r8.rgb, max(anther, ring * 0.4 * (1.0 - show)));
-            float xn = clamp(uv.x / max(hw, 1e-3), -1.0, 1.0);
-            o.normal = vec3(xn * 0.85, 0.0, sqrt(max(1.0 - 0.72 * xn * xn, 0.0)));
-            o.translucency = 0.15;
+            // The band in flower (it climbs the spike as the season goes):
+            // fine filaments out of the core, each tipped by a pale anther.
+            float band0 = 0.2 + 0.3 * seed;
+            float band = smoothstep(band0, band0 + 0.06, v) * (1.0 - smoothstep(band0 + 0.22, band0 + 0.3, v));
+            float rowH = 0.09 * wd;
+            float row = floor(P.y / rowH);
+            vec2 ha = herbHash2(vec2(row, sign(uv.x)) + seed * 23.0);
+            float reach = mix(0.7, 0.98, ha.x);
+            vec2 tipA = vec2(reach, (row + 0.5) * rowH);
+            float ant = herbAA(0.07 * wd - length(vec2((x - reach) * hwm, P.y - tipA.y)), fp);
+            float fil = herbLine(P.y - tipA.y, 0.0002, fp) * step(core, x) * step(x, reach);
+            float anthers = band * step(0.3, ha.y) * max(ant, 0.6 * fil);
+            // Under a pixel the band is a pale haze round the core.
+            anthers = mix(band * 0.35 * (1.0 - smoothstep(0.75, 0.95, x)), anthers, show);
+            o.cover = max(cc, anthers);
+            o.albedo = cc >= anthers ? r7.rgb * (0.75 + 0.5 * h.y * show) : r8.rgb;
+            float xn = clamp(uv.x / max(core, 1e-3), -1.0, 1.0);
+            o.normal = cc >= anthers ? vec3(xn * 0.85, 0.0, sqrt(max(1.0 - 0.72 * xn * xn, 0.0))) : vec3(0.0, 0.3, 1.0);
+            o.translucency = cc >= anthers ? 0.15 : 0.5;
             return o;
         }
-        // A raceme of bells hanging from the stalk: one side (secund, a
-        // bluebell's) when it nods, else round it (a foxglove's, here on
-        // alternate sides); the top ones buds, smaller.
+        // A raceme of bells hanging from the stalk to one side (+x on the
+        // card): a nodding one's (a bluebell's) hang nearly straight down
+        // off its arched tip, narrow, their lobes curled back; an upright
+        // spike's (a foxglove's) droop out and down, fat tubes with a lip;
+        // the top ones buds, smaller.
         float n = max(r6.z, 1.0);
         float bell = size.z;
         bool secund = r7.w >= 0.5;
@@ -305,39 +323,50 @@ HerbSurface herbBloomSurface(int sp, vec2 uv, vec4 size, float seed, vec2 down) 
         vec3 col = r7.rgb;
         vec3 nb = vec3(0.0, 0.0, 1.0);
         // (A bell hangs up to two spacings from where it is held, down the
-        // card or, on a stalk arched over, up it.)
-        for (int k = -3; k <= 3; ++k) {
+        // card or, on a stalk arched over, up it; the higher bells hang over
+        // the lower ones' tops, so they are tried first.)
+        for (int k = 3; k >= -3; --k) {
             float i = ic + float(k);
             if (i < 0.0 || i >= n) continue;
             float f = i / n;
-            float bi = bell * mix(1.0, 0.5, f * f);
-            float side = secund ? 1.0 : (mod(i, 2.0) < 0.5 ? 1.0 : -1.0);
+            float bud = smoothstep(0.7, 1.0, f);
+            float bi = bell * mix(1.0, 0.45, f * f);
             float yi = (i + 0.5) / n * len;
-            // It hangs down (the world's, on the card) and out to its side.
-            vec2 A = vec2(side * 0.3 * bi, yi) + down * (0.08 * bi);
-            // (A one-sided raceme's bells hang nearly straight down, a
-            // foxglove's out and down.)
-            vec2 d = normalize(down + vec2(side * (secund ? 0.25 : 0.75), 0.0));
+            float jit = herbHash1(i * 3.1 + seed * 19.0) - 0.5;
+            // Its pedicel out to the side, then the bell hangs down (the
+            // world's, on the card) and out.
+            vec2 A = vec2((secund ? 0.25 : 0.35) * bi, yi) + down * (0.1 * bi);
+            vec2 d = normalize(down + vec2(secund ? 0.2 + 0.2 * jit : 0.6 + 0.3 * jit, 0.0));
             vec2 q = P - A;
-            float a = dot(q, d) / (1.35 * bi);
+            float a = dot(q, d) / ((secund ? 1.2 : 1.35) * bi * mix(1.0, 0.6, bud));
             float b = (d.x * q.y - d.y * q.x) / bi;
-            // A bell: a narrow tube flaring at its mouth, its lobes turned
-            // back; the stalk to it.
-            float hw = 0.17 + 0.1 * a + 0.15 * smoothstep(0.75, 1.0, a);
-            float mouth = 1.0 - 0.07 * (1.0 - abs(cos(b * HERB_PI * 2.2)));
+            float hw;
+            if (secund) {
+                // Narrow, its six lobes flaring and curling back at the mouth.
+                hw = 0.13 + 0.07 * a + 0.2 * smoothstep(0.78, 1.0, a);
+            } else {
+                // A fat tube swelling to its mouth, the lower lip longer.
+                hw = 0.2 + 0.16 * sqrt(max(a, 0.0)) + 0.04 * smoothstep(0.85, 1.0, a);
+            }
+            // Rounded where it is held, like the closed end of a tube.
+            hw *= mix(1.0, 0.75, bud) * sqrt(clamp(a / 0.2 + 0.15, 0.0, 1.0));
+            float lip = secund ? 0.07 * (1.0 - abs(cos(b * HERB_PI * 3.0))) : -0.12 * clamp(-b * d.x * 4.0, -1.0, 1.0);
+            float mouth = 1.0 - lip;
             float dist = min(hw - abs(b), min(a, mouth - a)) * bi;
             float c = herbAA(dist, fp);
-            float ped = herbLine(dot(P - vec2(0.0, yi), vec2(-d.y, d.x) * side), 0.0007, fp) *
-                        step(0.0, side * P.x) * step(side * P.x, 0.3 * bi);
+            float ped = herbLine(dot(P - vec2(0.0, yi), vec2(-d.y, d.x)), 0.0006, fp) * step(0.0, P.x) *
+                        step(P.x, A.x);
             if (c > best) {
                 best = c;
-                // Its mouth darker inside, a foxglove's throat spotted.
-                float throat = smoothstep(0.7, 0.95, a) * (1.0 - smoothstep(0.4, 0.8, abs(b) / max(hw, 1e-3)));
-                vec2 hs = herbHash2(floor(vec2(a * 9.0, b * 7.0)) + i);
-                col = r7.rgb * (0.85 + 0.2 * a) * (1.0 - 0.35 * throat);
-                if (!secund) col = mix(col, r8.rgb, throat * step(0.6, hs.x));
+                // A tube is round: darker at its sides; its mouth darker
+                // inside, a foxglove's throat pale and spotted.
                 float xb = clamp(b / max(hw, 1e-3), -1.0, 1.0);
-                nb = vec3(xb * 0.8 * side, 0.2, sqrt(max(1.0 - 0.64 * xb * xb, 0.0)));
+                float throat = smoothstep(0.86, 0.98, a) * (1.0 - smoothstep(0.3, 0.7, abs(xb)));
+                vec2 hs = herbHash2(floor(vec2(a * 24.0, xb * 6.0)) + i);
+                col = r7.rgb * (0.8 + 0.25 * a) * (1.0 - 0.45 * xb * xb) * (1.0 - 0.35 * throat);
+                if (!secund) col = mix(col, mix(r8.rgb * 0.8, r7.rgb * 0.35, step(0.6, hs.y)), throat * 0.6);
+                col = mix(col, r7.rgb * vec3(0.7, 0.9, 0.6), bud * 0.5);
+                nb = vec3(xb * 0.85, 0.15, sqrt(max(1.0 - 0.72 * xb * xb, 0.0)));
             }
             best = max(best, ped * 0.8);
         }
@@ -372,17 +401,47 @@ HerbSurface herbBloomSurface(int sp, vec2 uv, vec4 size, float seed, vec2 down) 
         return o;
     }
     if (form == 2) {
-        // A cup of broad petals, notched where they meet, round a dark eye.
-        float seg = ang * petals / 6.2831853;
-        float R = 0.84 + 0.16 * sqrt(max(sin(HERB_PI * fract(seg)), 0.0));
-        float rc = 0.2;
-        o.cover = herbAA(R - r, fq);
-        float eye = 1.0 - smoothstep(rc * 0.8, rc * 1.25, r);
-        float crinkle = 0.9 + 0.1 * sin(ang * petals * 7.0 + r * 30.0);
-        o.albedo = mix(r7.rgb * crinkle * mix(0.8, 1.05, smoothstep(0.2, 0.8, r)), r8.rgb, eye);
-        // Cupped: the inner faces lean in toward the middle.
-        o.normal = vec3(-q * 0.55, 1.0);
-        o.translucency = 0.6;
+        // A cup of broad papery petals seen at the angle it is (size.w, its
+        // axis on the eye; the card faces the eye, its axis up the card):
+        // the rim an ellipse, the bowl below it, and looking in, the
+        // petals' inner faces round the dark eye at the bottom.
+        float cv = size.w, s = sqrt(max(1.0 - cv * cv, 0.0));
+        const float R = 0.75, H = 0.7, yc = 0.25;
+        float ry = max(R * abs(cv), 0.03);
+        vec2 qr = vec2(q.x / R, (q.y - yc) / ry);
+        float a2 = atan(qr.y, qr.x);
+        // The rim scalloped by the petals, notched where they meet.
+        float wav = 1.0 + 0.07 * (sqrt(max(sin(HERB_PI * fract(a2 * petals / 6.2831853 + seed)), 0.0)) - 0.7);
+        float eR = length(qr) / wav;
+        float D = max(H * s + ry, 0.03);
+        float eB = q.y <= yc ? length(vec2(q.x / (R * wav), (q.y - yc) / D)) : 2.0;
+        float rim = clamp(0.5 + (1.0 - eR) / max(fwidth(eR), 1e-4), 0.0, 1.0);
+        float bowl = clamp(0.5 + (1.0 - eB) / max(fwidth(eB), 1e-4), 0.0, 1.0);
+        o.cover = max(rim, bowl);
+        float crinkle = 0.88 + 0.12 * sin(a2 * petals * 5.0 + length(q) * 26.0 + seed * 9.0);
+        bool inside = cv > 0.0 && rim > 0.5;
+        if (inside) {
+            // Into the cup: the eye at its bottom, the petals' faces darker
+            // toward it (a poppy's black blotches at their bases).
+            vec2 eyeC = vec2(0.0, yc - 0.55 * H * s);
+            float eyeR = 0.2 * R;
+            float de = length(vec2(q.x, (q.y - eyeC.y) / max(abs(cv), 0.15)));
+            float eye = 1.0 - smoothstep(eyeR * 0.8, eyeR * 1.2, de);
+            float blotch = (1.0 - smoothstep(eyeR * 1.2, eyeR * 2.0, de)) * 0.7;
+            o.albedo = mix(r7.rgb * crinkle * mix(0.7, 1.05, smoothstep(0.0, 1.0, eR)), r8.rgb, max(eye, blotch));
+            o.normal = vec3(-qr.x * 0.35, -0.2, 0.9);
+            o.translucency = 0.4;
+        } else {
+            // Its outside: round, the petals' seams running up it, paler and
+            // lit through toward the rim, greener at its base.
+            float xb = clamp(q.x / (R * wav), -1.0, 1.0);
+            float seam = 1.0 - 0.15 * (1.0 - smoothstep(0.0, 0.08, abs(fract(asin(xb) / HERB_PI * petals * 0.5 + seed) - 0.5) - 0.42));
+            float up = clamp((q.y - (yc - D)) / max(D, 1e-3), 0.0, 1.0);
+            o.albedo = r7.rgb * crinkle * seam * mix(0.65, 1.0, up);
+            o.albedo = mix(o.albedo, herbRec(sp, 5).rgb, 0.4 * (1.0 - smoothstep(0.0, 0.2, up)));
+            o.normal = vec3(xb * 0.8, -0.25, sqrt(max(1.0 - 0.7 * xb * xb, 0.05)));
+            o.translucency = 0.75;
+        }
         return o;
     }
     if (form == 5) {

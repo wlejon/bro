@@ -37,7 +37,7 @@ public:
     double takeMs();
 
 private:
-    static constexpr uint32_t kMaxMarks = 62;
+    static constexpr uint32_t kMaxMarks = 190;   // (a forest's grass alone is a few dozen draws)
     static constexpr uint32_t kPerSlot = 2 + kMaxMarks;   // start, end, the marks
 
     render::VulkanContext& context_;

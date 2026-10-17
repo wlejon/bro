@@ -41,6 +41,12 @@ struct HerbVertex {
     float ao;
     float bulk;
     vec2 down;     // the world's down on the card (x across, y along): where a raceme's bells hang
+    // The stand it grows in: x its leaf area over a square metre of ground
+    // (the leaf area index of a stand of its species at this density), y
+    // the share of the stand's leaves above the vertex. The fragment stage
+    // darkens it by the leaves between it and the sun and the sky, so a
+    // stand of ferns is dark within and lit at its top.
+    vec2 stand;
 };
 
 const float HERB_GOLDEN = 2.3999632;
@@ -124,6 +130,7 @@ bool herbVertex(int id, int vid, vec3 v, out HerbVertex o) {
     o.ao = 1.0;
     o.bulk = 0.3;
     o.down = vec2(0.0, -1.0);
+    o.stand = vec2(0.0);
 
     vec3 rect = grassRect();
     int W = max(int(rect.z), 1);
@@ -138,6 +145,21 @@ bool herbVertex(int id, int vid, vec3 v, out HerbVertex o) {
     float fin = grass.herbRing.x <= 0.0 ? 1.0 : smoothstep(grass.herbRing.x - grass.herbRing.z, grass.herbRing.x, d);
     float fout = 1.0 - smoothstep(grass.herbRing.y - grass.herbRing.w, grass.herbRing.y, d);
     if (h.w > fin || h.w > fout) return false;
+    // The far ring keeps fewer plants with distance (as many as the whole
+    // plants' range over the distance), each widened to keep their cover:
+    // past the range a plant is a few pixels, and a stand reads by its mass.
+    float farWiden = 1.0;
+    if (grass.herbShape.z > 1.5) {
+        float keep = clamp(grass.herbShape.w / max(d, 1e-3), 0.2, 1.0);
+        float hk = grassHash(c, 107);
+        if (hk >= keep) return false;
+        // (Seen from well above, the turf takes them: herbFarSteep. Its
+        // ground height from the eye's lift: a field read here, before most
+        // cells are let go, cost more than the plants.)
+        float horiz = max(length(rootXZ - eye.xz), 1e-3);
+        if (hk >= keep * herbFarSteep(d, grass.lod.w / horiz)) return false;
+        farWiden = inversesqrt(keep);
+    }
     if (!grassInField(rootXZ)) return false;
 
     // Which card of the instance this is, and whether the far ring keeps it.
@@ -204,6 +226,13 @@ bool herbVertex(int id, int vid, vec3 v, out HerbVertex o) {
     vec3 push = vec3(pb.x, 0.0, pb.y) * 1.2 + vec3(lie.x, 0.0, lie.y) * (min(trample, 1.0) * 1.5);
     vec3 toEye = normalize(-root);
     o.info = vec4(float(role), float(sp), fract(h.x * 31.7 + h.z * 7.3 + float(j) * 0.137), 0.0);
+    // The stand: its leaves' face over the ground (a plant's leaves seen
+    // from above, times its plants a square metre at this density) and the
+    // height they reach.
+    vec4 r12 = herbRec(sp, 12);
+    float spc = max(r12.x, cell);
+    float lai = min(herbRec(sp, 10).z * 3.14159265 * r0.z * r0.z * size * size * fh.y / (spc * spc), 4.0);
+    float leafTop = max(r12.w * size, 0.03);
 
     if (role == 1) {
         // A stem: a thin strip turned to the eye, its width never under
@@ -222,6 +251,7 @@ bool herbVertex(int id, int vid, vec3 v, out HerbVertex o) {
         o.uv = vec2(v.x * 2.0, v.y);
         o.info.w = dia / wd;
         o.size = vec4(s.len, wd, s.len, v.y);
+        o.stand = vec2(lai, clamp(1.0 - (p.y - root.y) / leafTop, 0.0, 1.0));
         o.ao = mix(0.55, 1.0, v.y);
         // A thin stem is lit mostly as the plant it holds up, not as the
         // narrow cylinder it is (which a high sun leaves dark).
@@ -233,10 +263,11 @@ bool herbVertex(int id, int vid, vec3 v, out HerbVertex o) {
         HerbStalk s = herbStem(sp, k, root, h, size, w, shelter, push);
         vec3 tg;
         vec3 tip = herbPoint(s, 1.0, tg);
-        float bs = r6.y * (0.85 + 0.3 * fract(h.w * 9.1 + float(k) * 0.37)) * bloomWiden;
+        float bs = r6.y * (0.85 + 0.3 * fract(h.w * 9.1 + float(k) * 0.37)) * bloomWiden * farWiden;
         float nod = herbRec(sp, 7).w;
         o.bulk = 0.0;
         o.ao = 1.0;
+        o.stand = vec2(lai, clamp(1.0 - (tip.y - root.y) / leafTop, 0.0, 1.0));
         if (form == 4 || form == 6) {
             // A spike or a raceme: a strip up the stem's top, turned to the
             // eye about the stem, from bloomSize below the tip to the tip.
@@ -251,11 +282,15 @@ bool herbVertex(int id, int vid, vec3 v, out HerbVertex o) {
                            vec3(0.0, 0.5, 0.0);
             if (dot(side, outward) < 0.0) side = -side;
             float bell = clamp(bs * 1.8 / max(r6.z, 1.0), 0.012, 0.05);
-            float wd = form == 4 ? bs * 0.26 : bell * 2.6;
-            o.pos = p + side * (v.x * wd);
+            // A spike is slim (a plantain's a finger's width at most, its
+            // anthers standing out of it); a raceme's card holds its bells
+            // hanging out to their side, so it stands mostly to that side.
+            float wd = form == 4 ? max(bs * 0.075, 0.004) * 2.2 : bell * 3.4;
+            float shift = form == 4 ? 0.0 : 0.3;
+            o.pos = p + side * ((v.x + shift) * wd);
             o.side = side;
             o.normal = normalize(cross(side, tgv));
-            o.uv = vec2(v.x * 2.0, v.y);
+            o.uv = vec2((v.x + shift) * 2.0, v.y);
             o.size = vec4((1.0 - t0) * s.len, wd, bell, 1.0);
             vec2 dn = vec2(-side.y, -tgv.y);
             o.down = dot(dn, dn) > 1e-6 ? normalize(dn) : vec2(1.0, 0.0);
@@ -263,21 +298,40 @@ bool herbVertex(int id, int vid, vec3 v, out HerbVertex o) {
         }
         // A disc facing along the stem (dipping as it nods), or for a head a
         // ball, its card facing the eye.
-        vec3 n = normalize(tg * (1.0 - nod) - vec3(0.0, nod, 0.0) + vec3(0.0, 1e-3, 0.0));
+        // A flower's face turns out from its plant as well as up (a daisy's
+        // heads look about, an umbel stays near level).
+        vec3 o3 = normalize(vec3(tip.x - root.x, 0.0, tip.z - root.z) + vec3(1e-4, 0.0, 0.0));
+        float tilt = (form == 1 ? 0.75 : form == 2 ? 0.45 : form == 5 ? 0.12 : 0.0) * (0.6 + 0.8 * fract(h.w * 5.3 + float(k) * 0.71));
+        vec3 n = normalize((tg + o3 * tilt) * (1.0 - nod) - vec3(0.0, nod, 0.0) + vec3(0.0, 1e-3, 0.0));
         vec3 e1, e2;
         vec3 centre = tip + tg * (0.12 * bs);
-        if (form == 3) {
-            n = toEye;
-            centre = tip + tg * (0.45 * bs);
-        }
-        e1 = normalize(cross(n, abs(n.y) < 0.95 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
-        e2 = cross(n, e1);
         vec2 q = vec2(v.x * 2.0, v.y * 2.0 - 1.0);
-        o.pos = centre + (e1 * q.x + e2 * q.y) * (0.5 * bs * (form == 3 ? 1.15 : 1.0));
+        float scale = 0.5 * bs;
+        o.size = vec4(bs, bs, bs, 1.0);
+        if (form == 2) {
+            // A cup is drawn as seen: its card faces the eye, up it the
+            // cup's axis, and the fragment draws the bowl and the rim's
+            // ellipse at the angle it is seen (size.w, the axis on the eye).
+            float cv = dot(n, toEye);
+            vec3 up2 = n - toEye * cv;
+            e2 = dot(up2, up2) > 1e-6 ? normalize(up2) : normalize(cross(toEye, vec3(1.0, 0.0, 0.0)));
+            e1 = normalize(cross(e2, toEye));
+            centre = tip + n * (0.7 * scale) - e2 * (0.25 * scale);
+            n = toEye;
+            o.size.w = cv;
+        } else {
+            if (form == 3) {
+                n = toEye;
+                centre = tip + tg * (0.45 * bs);
+                scale *= 1.15;
+            }
+            e1 = normalize(cross(n, abs(n.y) < 0.95 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
+            e2 = cross(n, e1);
+        }
+        o.pos = centre + (e1 * q.x + e2 * q.y) * scale;
         o.side = e1;
         o.normal = n;
         o.uv = q;
-        o.size = vec4(bs, bs, bs, 1.0);
         return true;
     }
 
@@ -285,7 +339,9 @@ bool herbVertex(int id, int vid, vec3 v, out HerbVertex o) {
     vec4 r2 = herbRec(sp, 2);
     float hk = fract(h.y * 11.3 + float(k) * 0.618034);
     float hk2 = fract(h.x * 17.9 + float(k) * 0.414214);
-    float L = r1.z * size * (0.85 + 0.3 * hk) * widen;
+    // (A far plant's leaves widened more than lengthened: their area grows
+    // as the plants thin, their height little.)
+    float L = r1.z * size * (0.85 + 0.3 * hk) * widen * pow(farWiden, 0.7);
     float stalk = r3.y;
     vec3 base;
     float a;
@@ -332,7 +388,9 @@ bool herbVertex(int id, int vid, vec3 v, out HerbVertex o) {
     // The card's rows: the first is the stalk, the rest the blade.
     float S = float(max(vpc / 2 - 1, 1));
     float row = v.y * S;
-    float t = stalk > 0.03 ? (row < 1.0 ? row * stalk : stalk + (row - 1.0) / max(S - 1.0, 1.0) * (1.0 - stalk)) : v.y;
+    // (A one-quad card, a far plant's, runs root to tip, its stalk cut per
+    // pixel.)
+    float t = stalk > 0.03 && vpc > 4 ? (row < 1.0 ? row * stalk : stalk + (row - 1.0) / max(S - 1.0, 1.0) * (1.0 - stalk)) : v.y;
     vec3 tg;
     vec3 p = herbPoint(s, t, tg);
     // Across: level, square to the leaf; a fern's frond rolls a little
@@ -348,7 +406,7 @@ bool herbVertex(int id, int vid, vec3 v, out HerbVertex o) {
     nrm = normalize(cross(sideR, tg));
     // The card's width: the leaf's (a carpet's card holds several leaves).
     float blade = (1.0 - stalk) * L;
-    float wd = r1.w * L * widen * (habit == 2 ? 2.6 : 1.0);
+    float wd = r1.w * L * widen * pow(farWiden, 0.6) * (habit == 2 ? 2.6 : 1.0);
     if (habit == 2) blade *= 2.6;
     float halfW = 0.5 * wd;
     o.pos = p + sideR * (v.x * wd);
@@ -363,6 +421,7 @@ bool herbVertex(int id, int vid, vec3 v, out HerbVertex o) {
     o.uv = vec2(v.x * 2.0, t);
     o.info.w = stalk;
     o.size = vec4(L, wd, blade, clamp((p.y - root.y) / max(r0.y * size, 0.05), 0.0, 1.0));
+    o.stand = vec2(lai, clamp(1.0 - (p.y - root.y) / leafTop, 0.0, 1.0));
     // Low in the plant it is darker (its own leaves over it), and a fern's
     // frond is lit partly as the ground under it.
     o.ao = mix(0.5, 1.0, smoothstep(0.0, 0.8, o.size.w)) * mix(0.75, 1.0, t);

@@ -155,6 +155,19 @@ void groundSurface(vec3 rel, vec4 vdata, inout vec3 color, inout float roughness
     float topSeen = smoothstep(grass.ring.y * 0.15, grass.ring.y * 0.85, d);
     vec3 soil = vec3(0.065, 0.048, 0.03);
     vec3 roots = mix(soil, sward * grass.look.x, 0.6);
+    // Close by, what lies between the blades: thatch (dead blades, pale
+    // straws lying every way), crumbs of soil, and the green of the bases.
+    float nearSeen = clamp(0.012 / fp - 0.6, 0.0, 1.0) * (1.0 - topSeen);
+    if (nearSeen > 0.0) {
+        float crumb = groundFbm(xz + 13.0, 45.0, fp, 2);
+        float base = groundFbm(xz + 41.0, 14.0, fp, 2);
+        vec3 nearRoots = mix(soil * (0.55 + 0.9 * crumb), sward * grass.look.x * 0.8, smoothstep(0.35, 0.75, base) * 0.7);
+        float straw = max(groundTwigs(xz + vec2(3.7, 1.3), 0.07, fp),
+                          groundTwigs(vec2(xz.x * 0.8 - xz.y * 0.6, xz.x * 0.6 + xz.y * 0.8) + 9.1, 0.05, fp));
+        vec3 strawC = mix(grass.dry.rgb * 0.75, vec3(0.13, 0.11, 0.075), crumb);
+        nearRoots = mix(nearRoots, strawC, straw * 0.85);
+        roots = mix(roots, nearRoots, nearSeen);
+    }
     vec3 turf = mix(roots, sward, topSeen);
 
     // Mottling at every scale: big patches (a few metres to tens), tussocks
@@ -205,17 +218,20 @@ void groundSurface(vec3 rel, vec4 vdata, inout vec3 color, inout float roughness
     roughness = 1.0;
 
     // The herbs past their plants (scene_herb_mix.glsl): their leaves' and
-    // blooms' mean over the share of the ground they cover, seen as the
-    // blades' tops are, so the turf carries a meadow's flowers and a forest
-    // floor's ferns to the horizon.
+    // blooms' mean over the share of the ground they cover as the eye sees
+    // it (more of them seen across than from above), so the turf carries a
+    // meadow's flowers and a forest floor's ferns to the horizon.
     // (Their mean over the colonies, from the node's table by the canopy:
     // weighing every species here per pixel cost the turf's whole pass a
     // tenth of a millisecond, even where no herbs grow.)
     if (grass.herbInfo.x > 0.5 && herbs > 0.0) {
-        float stand = 1.0 - herbPlantsDrawn(d);
+        float tanView = -rel.y / max(length(rel.xz), 1e-3);
+        float stand = 1.0 - herbPlantsDrawn(d, grass.lod.w / max(length(rel.xz), 1e-3));
         if (stand > 0.0) {
-            HerbMix hm = herbMixMean(under, herbs);
-            vec3 hc = mix(hm.leaf, hm.bloom, hm.bloomShare) * (0.8 + 0.4 * tuft);
+            HerbMix hm = herbMixMean(under, herbs, tanView);
+            // Their mass mottled as the sward's is (tussocks, patches),
+            // their tops lit over their shaded depths.
+            vec3 hc = mix(hm.leaf, hm.bloom, hm.bloomShare) * (0.75 + 0.5 * tuft) * (0.8 + 0.4 * tuss);
             color = mix(color, hc, hm.cover * stand * mix(0.35, 1.0, topSeen));
         }
     }

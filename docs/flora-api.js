@@ -934,7 +934,9 @@ bro.flora.herbPresets = function() {};
  * gloss; stemColor, stemDiameter, ribDiameter; bloomForm 'none' | 'ray' |
  * 'cup' | 'head' | 'spike' | 'umbel' | 'bell', bloomSize, bloomCount,
  * petals, bloomColor, centreColor, nod; where it grows: shade, shadeRange,
- * abundance, patch, patchCover). Comes back with its sway worked out from
+ * abundance, patch, patchCover, spacing — the distance between its plants
+ * inside a colony, 0 for 1.6 x spread; a bracken's fronds stand 0.45 m
+ * apart). Comes back with its sway worked out from
  * its build (`stemSway`, `leafSway`: {freq, sway, length}) and what it shows
  * from above (`meanColor`, `bloomShare`, `cover`). Null for an unknown name.
  * @example
@@ -945,7 +947,9 @@ bro.flora.herbPresets = function() {};
 bro.flora.herbPreset = function(spec) {};
 
 /**
- * The table the grass node reads (48 floats a species), from names or
+ * The table the grass node reads (52 floats a species: the build, then its
+ * spacing, its side cover and its blooms' share of it, its leaves' top),
+ * from names or
  * specs as herbPreset takes them (unknown ones are skipped). createGrass's
  * `herbs.species` takes the names and specs directly; this is for building
  * the table once and sharing it.
