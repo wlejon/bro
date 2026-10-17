@@ -44,6 +44,8 @@
 #  if defined(__GLIBC__)
 #    include <malloc.h>
 #  endif
+#elif defined(__APPLE__)
+#  include <mach/mach.h>
 #endif
 
 namespace bro::engine {
@@ -317,6 +319,26 @@ void appendWindowsProcess(std::string& out) {
     out += "threads   " + std::to_string(threads) + "\n";
 }
 
+#elif defined(__APPLE__)
+
+void appendAppleProcess(std::string& out) {
+    mach_task_basic_info_data_t info{};
+    mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
+    if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, reinterpret_cast<task_info_t>(&info), &count) ==
+        KERN_SUCCESS) {
+        out += "process   rss " + mb(static_cast<double>(info.resident_size)) + "  virtual " +
+               mb(static_cast<double>(info.virtual_size)) + "  peak rss " +
+               mb(static_cast<double>(info.resident_size_max)) + "\n";
+    }
+    thread_act_array_t list = nullptr;
+    mach_msg_type_number_t nthreads = 0;
+    if (task_threads(mach_task_self(), &list, &nthreads) == KERN_SUCCESS) {
+        for (mach_msg_type_number_t i = 0; i < nthreads; ++i) mach_port_deallocate(mach_task_self(), list[i]);
+        vm_deallocate(mach_task_self(), reinterpret_cast<vm_address_t>(list), nthreads * sizeof(thread_act_t));
+    }
+    out += "threads   " + std::to_string(nthreads) + "\n";
+}
+
 #endif
 
 }  // namespace
@@ -331,6 +353,9 @@ std::string Engine::memoryReport(bool detail) {
 #elif defined(_WIN32)
     (void)detail;
     appendWindowsProcess(out);
+#elif defined(__APPLE__)
+    (void)detail;
+    appendAppleProcess(out);
 #else
     (void)detail;
 #endif

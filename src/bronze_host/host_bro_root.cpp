@@ -255,7 +255,7 @@ void installBroRoots(engine::Engine& engine) {
         ev::setProperty(bro->get(), name, stub.get());
     };
 
-#if !BRO_WITH_VIDEO
+#if !BRO_WITH_VIDEO && !BRO_WITH_AUDIO
     setUnavailable("media", "BRO_WITH_VIDEO");
 #endif
 #if !BRO_WITH_NET
@@ -538,7 +538,7 @@ void installWorkerBroRoot() {
     setUnavailable("motion", "BRO_WITH_DIFFUSION+BRO_WITH_LM");
 #endif
     installServerModule();
-#if !BRO_WITH_VIDEO
+#if !BRO_WITH_VIDEO && !BRO_WITH_AUDIO
     setUnavailable("media", "BRO_WITH_VIDEO");
 #endif
 #if !BRO_WITH_FLORA

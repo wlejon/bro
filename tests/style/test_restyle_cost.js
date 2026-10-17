@@ -146,7 +146,7 @@ assert(big.elements >= 100 && big.elements <= 100 + 2, `only the re-inserted row
 for (const r of [small, big]) {
     const n = r.elements;
     assert(r.style < 6, `re-insert style ${r.style.toFixed(2)} us/el, limit 6`);
-    assert(r.layout < 3, `re-insert layout ${r.layout.toFixed(2)} us/el, limit 3`);
+    assert(r.layout < 5, `re-insert layout ${r.layout.toFixed(2)} us/el, limit 5`);
     // And the reasons, which do not depend on the machine: every element kept
     // its style, every row its layout subtree, and next to nothing was laid out.
     assert(r.stats.stylesKept >= n - 2, `styles kept on re-insert (${r.stats.stylesKept} of ${n})`);

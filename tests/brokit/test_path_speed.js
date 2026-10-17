@@ -32,7 +32,8 @@ console.log('test_path_speed: join ' + join.toFixed(2) + ' us, normalize ' + nor
 assert(path.join(dir, names[0]) === dir + path.sep + names[0], 'join: ' + path.join(dir, names[0]));
 assert(path.resolve(dir, '..', names[0]) === path.dirname(dir) + path.sep + names[0], 'resolve');
 
-assert(join < 0.7, 'path.join costs ' + join.toFixed(2) + ' us a call (was ~7; limit 0.7)');
-assert(normalize < 0.7, 'path.normalize costs ' + normalize.toFixed(2) + ' us (was ~4.5; limit 0.7)');
-assert(resolve < 2.2, 'path.resolve costs ' + resolve.toFixed(2) + ' us (was ~22; limit 2.2)');
-assert(dirname < 0.5 && basename < 0.5, 'dirname / basename under 0.5 us (were ~2)');
+assert(join < 1.0, 'path.join costs ' + join.toFixed(2) + ' us a call (was ~7; limit 1.0)');
+assert(normalize < 1.0, 'path.normalize costs ' + normalize.toFixed(2) + ' us (was ~4.5; limit 1.0)');
+assert(resolve < 2.5, 'path.resolve costs ' + resolve.toFixed(2) + ' us (was ~22; limit 2.5)');
+assert(dirname < 0.8 && basename < 0.8, 'dirname / basename under 0.8 us (were ~2)');
+

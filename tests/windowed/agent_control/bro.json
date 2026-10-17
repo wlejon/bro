@@ -1,1 +1,2 @@
-{ "title": "windowed agent control", "width": 320, "height": 120, "resizable": false, "splash": false }
+{ "title": "windowed agent control", "width": 320, "height": 120, "resizable": false, "splash": false, "maxFps": 60 }
+

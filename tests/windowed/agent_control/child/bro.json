@@ -1,1 +1,2 @@
-{ "title": "agent control child", "width": 320, "height": 120, "resizable": false, "splash": false }
+{ "title": "agent control child", "width": 320, "height": 120, "resizable": false, "splash": false, "maxFps": 60 }
+

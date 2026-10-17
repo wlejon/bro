@@ -111,7 +111,8 @@ if (!gl) {
         const elapsed = gl.getQueryParameter(q, gl.QUERY_RESULT);
         const none = gl.getQueryParameter(empty, gl.QUERY_RESULT);
         const s0 = gl.getQueryParameter(t0, gl.QUERY_RESULT), s1 = gl.getQueryParameter(t1, gl.QUERY_RESULT);
-        assert(typeof elapsed === 'number' && elapsed > 0 && elapsed < 5e9,
+        const minElapsed = s1 > s0 ? 1 : 0;
+        assert(typeof elapsed === 'number' && elapsed >= minElapsed && elapsed < 5e9,
                'TIME_ELAPSED_EXT measured the draws: ' + elapsed + ' ns');
         assert(none >= 0 && none <= elapsed, 'an empty query takes no longer than the draws: ' + none + ' ns');
         assert(s0 > 0 && s1 >= s0, 'timestamps increase: ' + s0 + ' -> ' + s1);

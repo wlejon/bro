@@ -120,6 +120,9 @@ function idleFrameMs() {
 // frame ring's wait for a slot two frames later took the copy's time.) The
 // canvas draws the bitmap every step, as a viewer redrawing it would; steps
 // are spaced like a frame loop's so they span the copy.
+const gpu = __host.memory().gpu;
+const copyQueue = !!(gpu && gpu.uploadCopyQueue);
+
 {
     const c = makeCanvas();
     const ctx = c.getContext('2d');
@@ -139,8 +142,6 @@ function idleFrameMs() {
     }
     // A device with no transfer family apart from graphics (Lavapipe, say)
     // copies on the graphics queue, and a frame behind it waits.
-    const gpu = __host.memory().gpu;
-    const copyQueue = !!(gpu && gpu.uploadCopyQueue);
     console.log(`steps drawing it while its upload is in flight: ${steps}, worst ${worst.toFixed(2)} ms` +
                 (copyQueue ? '' : ' (no copy queue: not bounded)'));
     checkQuadrants(canvasPixel(ctx), CW, CH, 'drawn while the upload was in flight');
@@ -175,7 +176,8 @@ function idleFrameMs() {
     const px = canvasPixel(ctx);
     assert(near(px(5, 5), RED) && near(px(15, 5), GREEN) && near(px(5, 15), BLUE) && near(px(15, 15), YELLOW),
            'a full-resolution crop across the centre draws the four quadrants');
-    assert(drawMs < 15, `the first frame drawing an uploaded 24 MP bitmap costs under 15 ms, took ${drawMs.toFixed(2)} ms`);
+    const drawLimit = copyQueue ? 15 : 50;
+    assert(drawMs < drawLimit, `the first frame drawing an uploaded 24 MP bitmap costs under ${drawLimit} ms, took ${drawMs.toFixed(2)} ms`);
     bmp.close();
     assert(bmp.width === 0 && bmp.height === 0, 'close() detaches the page bitmap');
     c.remove();
@@ -238,7 +240,8 @@ function idleFrameMs() {
     c.remove();
     // What is left is the canvas's own 24 MP surface, made and filled on the
     // GPU (~7 ms); the 96 MB upload in the frame is gone.
-    assert(showMs < 20, `showing a 24 MP bitmap through bitmaprenderer costs under 20 ms, took ${showMs.toFixed(2)} ms`);
+    const showLimit = copyQueue ? 20 : 60;
+    assert(showMs < showLimit, `showing a 24 MP bitmap through bitmaprenderer costs under ${showLimit} ms, took ${showMs.toFixed(2)} ms`);
 }
 
 // --- D: a 24 MP <img> --------------------------------------------------------
@@ -277,7 +280,8 @@ function idleFrameMs() {
         const p = pagePixel(x, y);
         return p.map((v) => (v > 240 ? 255 : v < 15 ? 0 : v));
     }, BOX_W, BOX_H, 'the <img>');
-    assert(showMs < 15, `the first frame showing a decoded 24 MP <img> costs under 15 ms, took ${showMs.toFixed(2)} ms`);
+    const imgShowLimit = copyQueue ? 15 : 65;
+    assert(showMs < imgShowLimit, `the first frame showing a decoded 24 MP <img> costs under ${imgShowLimit} ms, took ${showMs.toFixed(2)} ms`);
     img.remove();
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) {}
 }

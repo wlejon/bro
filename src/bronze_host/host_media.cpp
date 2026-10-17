@@ -4,12 +4,14 @@
 #include "bronze_host/host_bro_namespaces.h"
 #include "util/asset_path.h"
 
-#if BRO_WITH_VIDEO
-#include "video/media_analysis.h"
+#if BRO_WITH_VIDEO || BRO_WITH_AUDIO
 #include <cctype>
 #include <cmath>
 #include <string>
 #include <vector>
+#if BRO_WITH_VIDEO
+#include "video/media_analysis.h"
+#endif
 #if BRO_WITH_AUDIO
 #include "broaudio/io/audio_tags.h"
 #endif
@@ -17,7 +19,7 @@
 
 namespace bro::bronze_host {
 
-#if BRO_WITH_VIDEO
+#if BRO_WITH_VIDEO || BRO_WITH_AUDIO
 
 namespace {
 
@@ -37,6 +39,7 @@ static std::string resolveMediaPath(const std::string& src) {
     return util::resolveAssetPath(src);
 }
 
+#if BRO_WITH_VIDEO
 static int intOption(Value opts, const char* name, int fallback) {
     if (!ev::isObject(opts)) return fallback;
     Value v = ev::getProperty(opts, name);
@@ -122,6 +125,7 @@ static Value js_media_thumbnails(Value, std::span<const Value> a) {
     out.set("data", data);
     return out.get();
 }
+#endif
 
 #if BRO_WITH_AUDIO
 #ifndef BROAUDIO_HAS_AAC
@@ -250,8 +254,10 @@ static Value js_media_tags(Value, std::span<const Value> a) {
 Value makeBroMediaValue() {
     ObjectBuilder media;
     media.set("available", ev::fromBool(true));
+#if BRO_WITH_VIDEO
     media.def("peaks", 2, js_media_peaks);
     media.def("thumbnails", 2, js_media_thumbnails);
+#endif
 #if BRO_WITH_AUDIO
     media.def("tags", 1, js_media_tags);
     media.def("canDecode", 1, js_media_canDecode);

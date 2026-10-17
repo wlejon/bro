@@ -142,12 +142,15 @@ void WebGLVkContext::endQuery(GLenum target) {
     }
     if (occlusionTarget(target)) endRendering();  // closes the open slot
     if (timer) {
-        // The end stamp's slot was reset with the begin one, so it may be
-        // written inside a pass: ending a query does not split the pass.
+        // Write the end stamp outside the render pass (transferCommands ends
+        // an open pass first), matching writeTimestamp, so backends that
+        // sample timestamps only at pass boundaries (Metal/MoltenVK without
+        // stage counter sampling) record the end of the pass rather than its
+        // start.
         QueryObject& q = it->second;
         if (q.stamps.size() == 2) {
-            vkCmdWriteTimestamp(commands(), VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, timestampSlots_.pool(q.stamps[1]),
-                                QuerySlots::index(q.stamps[1]));
+            vkCmdWriteTimestamp(transferCommands(), VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                                timestampSlots_.pool(q.stamps[1]), QuerySlots::index(q.stamps[1]));
             queryUsed(q, active);
         }
     }
