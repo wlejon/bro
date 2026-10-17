@@ -15,6 +15,7 @@
 #include <bromath/aabb.h>
 #include <bromath/frustum.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -125,6 +126,17 @@ public:
     void setAmbient(float r, float g, float b) {
         ambientColor_[0] = r; ambientColor_[1] = g; ambientColor_[2] = b;
     }
+
+    /// The light the ground throws back up: the albedo of a level ground lit
+    /// by the sun and the sky, which lights every surface's lower hemisphere
+    /// on top of the environment's (a panorama's ground is rarely the scene's,
+    /// and a sky-only one has none). Under a high sun this is most of the
+    /// light in the shade on anything upright: a trunk, a wall, a leaf's
+    /// underside. 0, 0, 0 (the default): none.
+    void setGroundBounce(float r, float g, float b) {
+        groundBounce_[0] = std::max(r, 0.0f); groundBounce_[1] = std::max(g, 0.0f); groundBounce_[2] = std::max(b, 0.0f);
+    }
+    const float* groundBounce() const { return groundBounce_; }
 
     /// The solar irradiance the atmosphere integrates with: the explicit
     /// atmosphere sun colour, else the brightest directional light.
@@ -256,6 +268,13 @@ public:
     /// aliasing on the LDR result; both can be enabled together.
     void setFXAA(bool enabled) { fxaaEnabled_ = enabled; }
     bool fxaaEnabled() const { return fxaaEnabled_; }
+
+    /// Dither the tonemapped image as it is written at 8 bits a channel (on
+    /// by default): a triangular noise of one level, fixed per pixel, so a
+    /// slow gradient (a sky, haze) does not band into plateaus. Off gives
+    /// the exact quantised values, for tests that read single pixels.
+    void setDither(bool enabled) { ditherEnabled_ = enabled; }
+    bool ditherEnabled() const { return ditherEnabled_; }
 
     void setWind(float dirX, float dirY, float dirZ,
                  float strength, float frequency) {
@@ -486,6 +505,7 @@ private:
     float exposure_ = 1.0f;
     float gamma_ = 2.2f;
     float ambientColor_[3] = {0.03f, 0.03f, 0.03f};
+    float groundBounce_[3] = {0.0f, 0.0f, 0.0f};
 
     // Wind sway (vertex shader displacement)
     float windDir_[3] = {1.0f, 0.0f, 0.0f};
@@ -537,6 +557,7 @@ private:
 
     // --- FXAA ---
     bool  fxaaEnabled_ = false;
+    bool  ditherEnabled_ = true;
 
     // --- Tilt-shift ---
     bool  tiltEnabled_     = false;

@@ -195,6 +195,16 @@ void bro_scene_SceneGraph_setFXAA(void* self, bool enabled) {
     if (g) g->setFXAA(enabled);
 }
 
+void bro_scene_SceneGraph_setGroundBounce(void* self, double r, double g, double b) {
+    auto* gr = graphOf(self);
+    if (gr) gr->setGroundBounce(static_cast<float>(r), static_cast<float>(g), static_cast<float>(b));
+}
+
+void bro_scene_SceneGraph_setDither(void* self, bool enabled) {
+    auto* g = graphOf(self);
+    if (g) g->setDither(enabled);
+}
+
 void bro_scene_SceneGraph_setRenderScale(void* self, double scale) {
     auto* g = graphOf(self);
     if (g) g->setRenderScale(static_cast<float>(scale));

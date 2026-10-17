@@ -48,7 +48,7 @@ private:
         float lutAmount;
         float lutScale;
         float lutOffset;
-        float pad;
+        float dither;          // 1: dither the 8-bit result (SceneRenderer::setDither)
     };
 
     static SceneVkImage& source(const SceneFrame& frame);

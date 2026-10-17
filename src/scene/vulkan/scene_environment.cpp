@@ -29,6 +29,39 @@ constexpr VkFormat kBrdfFormat = VK_FORMAT_R16G16_SFLOAT;
 
 enum SkyVariant : uint32_t { kSkyAtmosphere, kSkybox, kSkyStars };
 
+float halfToFloat(uint16_t h) {
+    const uint32_t sign = (h >> 15) & 1u, exp = (h >> 10) & 31u, man = h & 1023u;
+    float v;
+    if (exp == 0) v = std::ldexp(static_cast<float>(man), -24);
+    else if (exp == 31) v = man ? 0.0f : INFINITY;
+    else v = std::ldexp(static_cast<float>(man | 1024u), static_cast<int>(exp) - 25);
+    return sign ? -v : v;
+}
+
+// The irradiance over pi on a surface facing +Y from an RGBA16F panorama
+// (row 0 the +Y pole, env_convert.frag's), as the irradiance cube holds it:
+// (1/pi) * the integral of L cos over the upper hemisphere, sampled on a
+// grid of at most 512 x 256 texels. Texels env_convert.frag's sanitize()
+// would zero (negative, NaN, infinite) count as it does.
+void skyIrradianceUp(const std::vector<uint16_t>& px, uint32_t w, uint32_t h, float out[3]) {
+    out[0] = out[1] = out[2] = 0.0f;
+    if (w == 0 || h == 0) return;
+    const uint32_t sx = std::max(1u, w / 512), sy = std::max(1u, h / 256);
+    double sum[3] = {0.0, 0.0, 0.0};
+    for (uint32_t y = 0; y < h / 2; y += sy) {
+        const double theta = 3.14159265358979 * (0.5 - (y + 0.5 * sy) / h);   // elevation
+        const double weight = std::sin(theta) * std::cos(theta) * (3.14159265358979 * sy / h) *
+                              (2.0 * 3.14159265358979 * sx / w);
+        for (uint32_t x = 0; x < w; x += sx) {
+            const uint16_t* p = &px[(static_cast<size_t>(y) * w + x) * 4];
+            float c[3] = {halfToFloat(p[0]), halfToFloat(p[1]), halfToFloat(p[2])};
+            if (!(std::isfinite(c[0]) && std::isfinite(c[1]) && std::isfinite(c[2]))) continue;
+            for (int k = 0; k < 3; ++k) sum[k] += std::max(c[k], 0.0f) * weight;
+        }
+    }
+    for (int k = 0; k < 3; ++k) out[k] = static_cast<float>(sum[k] / 3.14159265358979);
+}
+
 uint32_t mipCount(uint32_t size) {
     return static_cast<uint32_t>(std::floor(std::log2(static_cast<float>(size)))) + 1;
 }
@@ -186,6 +219,7 @@ bool SceneEnvironment::bake(SceneGpu& gpu, VkCommandBuffer cmd, SceneRenderer& r
         return false;
     }
     std::memcpy(staging.mappedData, pixels.data(), bytes);
+    skyIrradianceUp(pixels, width, height, skyUp_);
     SceneVkImage equirect;
     const bool ok = alloc.createImage(width, height, kCubeFormat,
                                       VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
@@ -286,6 +320,27 @@ void SceneEnvironment::fillLighting(SceneLightingUniforms& out, const SceneRende
     out.iblParams[1] = renderer.environmentIntensity();
     out.iblParams[2] = renderer.environmentRotation();
     out.iblParams[3] = ibl ? static_cast<float>(prefiltered_.mipLevels - 1) : 0.0f;
+    // The ground's bounce (SceneRenderer::setGroundBounce), worked out here
+    // once a frame: a level ground of that albedo lit by the sun (over pi
+    // for the light it sends back) and by the sky over it, as irradiance
+    // over pi and the environment's intensity, so scene_lighting.glsl's
+    // sceneAmbient adds it times the share of a surface's lower hemisphere
+    // that is ground. Needs the sun filled in first (scene_lighting.cpp).
+    const float* gb = renderer.groundBounce();
+    const float intensity = renderer.environmentIntensity();
+    for (int k = 0; k < 4; ++k) out.groundBounce[k] = 0.0f;
+    if (ibl && intensity > 1e-4f && gb[0] + gb[1] + gb[2] > 0.0f) {
+        float sunUp = 0.0f;
+        if (out.sunDirection[3] > 0.5f) {
+            const float* d = out.sunDirection;
+            const float len = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+            sunUp = len > 1e-6f ? std::max(-d[1] / len, 0.0f) : 0.0f;
+        }
+        for (int k = 0; k < 3; ++k) {
+            const float onGround = out.sunColor[k] * out.sunColor[3] * sunUp / 3.14159265f + skyUp_[k] * intensity;
+            out.groundBounce[k] = gb[k] * onGround / intensity;
+        }
+    }
 
     const AtmosphereParams& a = renderer.atmosphere();
     if (!a.enabled) return;

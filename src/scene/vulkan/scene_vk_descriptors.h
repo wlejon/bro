@@ -70,6 +70,7 @@ struct alignas(16) SceneLightingUniforms {
     alignas(16) float atmParams[4];     // x = Mie scattering, y = Mie g, z = Rayleigh / w = Mie scale height
     alignas(16) float atmParams2[4];    // x = sea level, y = spherical, z = multi-scatter, w = sun angular radius
     alignas(16) float atmCenter[4];     // xyz = planet centre, w = sun disk intensity
+    alignas(16) float groundBounce[4];  // rgb = the ground's bounce, irradiance over pi and intensity (0: none)
 };
 static_assert(sizeof(SceneLightUniform) == 80 && sizeof(SceneShadowTileUniform) == 112);
 

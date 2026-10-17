@@ -60,6 +60,7 @@ layout(set = 1, binding = 0) uniform LightingUBO {
     vec4 atmParams;     // x = Mie scattering, y = Mie g, z/w = Rayleigh/Mie scale height
     vec4 atmParams2;    // x = sea level, y = spherical, z = multi-scatter, w = sun angular radius
     vec4 atmCenter;     // xyz = planet centre, w = sun disk intensity
+    vec4 groundBounce;  // rgb = the ground's bounce, as irradiance over pi and intensity (0: none)
 } lighting;
 
 layout(set = 1, binding = 1) uniform sampler2DShadow shadowAtlas;
@@ -423,6 +424,11 @@ vec3 sceneAmbient(SceneSurface s) {
         float intensity = lighting.iblParams.y;
         vec3 kD = (1.0 - F) * (1.0 - s.metallic);
         vec3 irradiance = texture(texIrradiance, rotateY(s.normal, rotation)).rgb;
+        // The ground's bounce (SceneRenderer::setGroundBounce): the light a
+        // level ground sends back, sun and sky on it (worked out once a frame,
+        // SceneEnvironment::fillLighting), seen by the surface's lower
+        // hemisphere ((1 - n.y) / 2 of it is ground).
+        irradiance += lighting.groundBounce.rgb * (0.5 - 0.5 * s.normal.y);
         vec3 prefiltered = textureLod(texPrefilter, rotateY(R, rotation), s.roughness * lighting.iblParams.w).rgb;
         vec3 specular = prefiltered * (F * brdf.x + brdf.y);
         return kD * irradiance * s.baseColor * intensity + mix(specular * intensity, probeSpec, probeW);

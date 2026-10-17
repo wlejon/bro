@@ -24,6 +24,9 @@ document.body.appendChild(canvas);
 flush();
 
 const scene = canvas.getContext('scene');
+// The kink statistics are second differences of the shading: the output
+// dither's per-pixel noise would drown them.
+if (scene) scene.setDither(false);
 
 // Count pixels the renderer never touched. The scene clears to a transparent
 // background, so alpha is an exact coverage mask — no colour heuristics.

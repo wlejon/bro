@@ -185,6 +185,7 @@ void PassPostFx::record(SceneFrame& frame) {
     push.gamma = r.gamma();
     push.bloomIntensity = bloomOn ? r.bloomIntensity() : 0.0f;
     push.tonemapMode = static_cast<int32_t>(r.toneMap());
+    push.dither = r.ditherEnabled() ? 1.0f : 0.0f;
     if (lut) {
         const auto size = static_cast<float>(lutSize_);
         push.lutAmount = r.colorLUTAmount();

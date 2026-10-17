@@ -750,6 +750,31 @@ class SceneGraph {
   setFXAA(enabled) {}
 
   /**
+   * The light the ground throws back up: `color` is the albedo of a level
+   * ground (linear rgb, e.g. a meadow's `[0.12, 0.16, 0.07]`), lit by the
+   * dominant directional light and the environment's sky, and it lights
+   * every surface's lower hemisphere on top of the environment. A panorama's
+   * ground is rarely the scene's (a sky-only one has none), and under a high
+   * sun this bounce is most of the light in the shade on anything upright:
+   * a trunk under its crown, a wall, a leaf's underside. Null or `[0, 0, 0]`
+   * (the default): none. Needs an environment (setEnvironment).
+   *
+   * @param {number[]|null} color
+   */
+  setGroundBounce(color) {}
+
+  /**
+   * Dither the tonemapped image as it is written at 8 bits a channel. On by
+   * default: a triangular noise of one level, fixed per pixel, so slow
+   * gradients (a sky, haze over far hills) do not band into plateaus one
+   * level apart. Off gives the exact quantised values, for a test that reads
+   * single pixels (`captureFrame`).
+   *
+   * @param {boolean} enabled
+   */
+  setDither(enabled) {}
+
+  /**
    * @param {number} scale
    */
   setRenderScale(scale) {}

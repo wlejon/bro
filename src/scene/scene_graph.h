@@ -389,6 +389,9 @@ public:
     /// Used as the flat fallback when IBL is disabled (IBL replaces it with
     /// split-sum env lighting when enabled). RGB in linear 0-1.
     void setAmbient(float r, float g, float b) { renderer_.setAmbient(r, g, b); }
+    /// The ground's albedo lighting the lower hemisphere — see
+    /// SceneRenderer::setGroundBounce.
+    void setGroundBounce(float r, float g, float b) { renderer_.setGroundBounce(r, g, b); }
 
     /// Screen-space tilt-shift depth-of-field, applied after tonemap on the
     /// LDR result. A horizontal band stays sharp; the scene blurs toward the
@@ -458,6 +461,10 @@ public:
     /// MSAA — see SceneRenderer::setFXAA.
     void setFXAA(bool enabled) { renderer_.setFXAA(enabled); }
     bool fxaaEnabled() const { return renderer_.fxaaEnabled(); }
+
+    /// Dither the 8-bit result (on by default) — see SceneRenderer::setDither.
+    void setDither(bool enabled) { renderer_.setDither(enabled); }
+    bool ditherEnabled() const { return renderer_.ditherEnabled(); }
 
     /// Wind sway parameters consumed by the mesh vertex shader. Per-vertex
     /// `windBend` (vertex color R, 0..1) modulates the global displacement

@@ -109,6 +109,10 @@ private:
     PipelineVariants skyPipelines_;
 
     uint64_t generation_ = 0;
+    // The environment's irradiance (over pi, as the irradiance cube holds
+    // it) on a surface facing straight up, from the panorama at bake: the
+    // sky's share of the light a level ground sends back (setGroundBounce).
+    float skyUp_[3] = {0.0f, 0.0f, 0.0f};
     SceneVkImage radiance_;     // 1024², mipmapped
     SceneVkImage irradiance_;   // 32²
     SceneVkImage prefiltered_;  // 256², 6 mips

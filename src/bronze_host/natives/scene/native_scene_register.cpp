@@ -198,6 +198,8 @@ bool registerNatives_scene(std::string* error) {
         fn("__bro_native.scene.SceneGraph_setDepthOfField", p(&bro_scene_SceneGraph_setDepthOfField), "void", {"__bro_native.scene.SceneGraph", "bool", "f64", "bool", "f64", "bool", "f64", "bool", "f64"}, error) &&
         fn("__bro_native.scene.SceneGraph_setColorLUT", p(&bro_scene_SceneGraph_setColorLUT), "bool", {"__bro_native.scene.SceneGraph", "str", "i32", "f64"}, error) &&
         fn("__bro_native.scene.SceneGraph_setFXAA", p(&bro_scene_SceneGraph_setFXAA), "void", {"__bro_native.scene.SceneGraph", "bool"}, error) &&
+        fn("__bro_native.scene.SceneGraph_setGroundBounce", p(&bro_scene_SceneGraph_setGroundBounce), "void", {"__bro_native.scene.SceneGraph", "f64", "f64", "f64"}, error) &&
+        fn("__bro_native.scene.SceneGraph_setDither", p(&bro_scene_SceneGraph_setDither), "void", {"__bro_native.scene.SceneGraph", "bool"}, error) &&
         fn("__bro_native.scene.SceneGraph_setRenderScale", p(&bro_scene_SceneGraph_setRenderScale), "void", {"__bro_native.scene.SceneGraph", "f64"}, error) &&
         fn("__bro_native.scene.SceneGraph_setMSAA", p(&bro_scene_SceneGraph_setMSAA), "void", {"__bro_native.scene.SceneGraph", "i32"}, error) &&
         fn("__bro_native.scene.SceneGraph_setEnvironment", p(&bro_scene_SceneGraph_setEnvironment), "bool", {"__bro_native.scene.SceneGraph", "bool", "str", "bool", "str", "f64[]", "bool", "f64", "bool", "f64", "bool", "bool"}, error) &&
