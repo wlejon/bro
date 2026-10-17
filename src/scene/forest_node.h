@@ -16,28 +16,42 @@
 //            while the work falls by w^2; the last of the kept run shrink
 //            away, so the count never pops. Flutter fades out by
 //            `flutterFade`; past `cardWidening` a leaf is a 6-vertex card.
-//   CLUMPS   past `clumpFrom` .. `clumpTo` (a widening) the leaves hand over,
-//            dithered, to the crown's clumps drawn as the three lobes their
+//   IMPOSTORS  (the default far tier, `impostors` 1) past `clumpFrom` ..
+//            `clumpTo` (a widening) the leaves hand over to one card a tree
+//            showing the leaves tier's own picture of its specimen
+//            (forest_impostor.h: colour, normal, depth and coverage baked
+//            from `impostorViews` x `impostorViews` directions), lit at run
+//            time as the leaves are, so the crown's colour, value, texture,
+//            extent and gaps carry on from the leaves. The bark is in the
+//            picture. The card is posed by the trunk and mean limb; its
+//            shading does not move with it.
+//   CLUMPS   (`impostors` 0) past `clumpFrom` .. `clumpTo` the leaves hand
+//            over to the crown's clumps drawn as the three lobes their
 //            leaves fill: leafy discs lit as spheres, posed like the leaves.
-//   CROWNS   once a clump is smaller than `crownFrom` .. `crownTo` pixels,
-//            one disc a tree, posed by its trunk; together they are the
-//            canopy surface, a gust's sheen rolling across it.
-//   BARK     at every tier, the segments whose keep radius (the thickest
-//            tip at or beyond them) is at least `barkPixels` wide on
-//            screen: a connected prefix, so limbs drop out tip first.
+//   CROWNS   (`impostors` 0) once a clump is smaller than `crownFrom` ..
+//            `crownTo` pixels, one disc a tree, posed by its trunk.
+//   BARK     at the leaves, clumps and crowns tiers, the segments whose keep
+//            radius (the thickest tip at or beyond them) is at least
+//            `barkPixels` wide on screen: a connected prefix, so limbs drop
+//            out tip first.
+// A hand-over splits each pixel between the two tiers, and under MSAA each
+// pixel's samples, so it covers once and blends in quarters rather than
+// stippling.
 // Every tier is posed by the same vegPose from the same records, so a
 // cross-fade does not swim. Switch points are in pixels, so they follow the
 // view's resolution and field of view, not metres.
 //
 // Shadows: each tile of the shadow plan gets the trees in its light volume
 // at the tier its texel size asks for (texels are pixels there), leaves
-// thinned to `shadowKeep` more. Grass casts into each light's first tile.
+// thinned to `shadowKeep` more; an impostor casts its picture from the
+// light's side, at its baked depth. Grass casts into each light's first tile.
 //
 // A ForestNode is a MeshNode so the material setters apply to the leaves
 // (colour, roughness, subsurface, shadows) and its mesh is the leaf (the
 // leaf card the scatter would draw); `barkColor` / `barkRoughness` are the
 // bark's. Its transform places the whole forest. It is left out of raycasts.
 
+#include "scene/forest_impostor.h"
 #include "scene/mesh_node.h"
 
 #include <bromath/aabb.h>
@@ -97,10 +111,15 @@ public:
         // together (the DETAIL factor, Stats) until they fit, so every tree
         // thins alike, the furthest handing over to clumps first. The
         // shadow budget is every tile's together. 0: no budget.
-        float budget = 14.0f;
+        float budget = 18.0f;
         float shadowBudget = 6.0f;
+        // The far tier: 1 impostors (one card a tree, its specimen's baked
+        // picture), 0 the clumps and crowns sprites.
+        float impostors = 1.0f;
+        float impostorViews = 8.0f;    // directions a side of the hemi-octahedral grid
+        float impostorTexels = 128.0f; // a direction's image a side
     };
-    static constexpr int kLodCount = 13;
+    static constexpr int kLodCount = 16;
     /// `lod` with its pixel thresholds scaled by a detail factor (>= 1).
     static Lod scaled(const Lod& lod, float detail) {
         Lod l = lod;
@@ -114,10 +133,10 @@ public:
     /// From the flat list (lodToArray's order); a NaN keeps the current value.
     void lodFromArray(const double* v, size_t n);
 
-    /// Draw every tree at one tier (0 leaves, 1 clumps, 2 crowns, at full
-    /// size and no thinning), or -1 to choose by size on screen. For tests
-    /// and comparisons.
-    void setForceTier(int t) { forceTier_ = t < -1 || t > 2 ? -1 : t; }
+    /// Draw every tree at one tier (0 leaves, 1 clumps, 2 crowns, 3
+    /// impostors, at full size and no thinning), or -1 to choose by size on
+    /// screen. For tests and comparisons.
+    void setForceTier(int t) { forceTier_ = t < -1 || t > 3 ? -1 : t; }
     int forceTier() const { return forceTier_; }
 
     /// Bark material (the leaves take the node's).
@@ -188,9 +207,12 @@ public:
         float leaves = 1.0f;       // the leaf tier's weight (1 solid, 0 none)
         float clumps = 0.0f;       // the clump tier's
         float crowns = 0.0f;       // the crown tier's
+        float impostors = 0.0f;    // the impostor tier's
         float barkRadius = 0.0f;   // segments whose keep radius is at least this (specimen units) are drawn
         int barkSides = 10;
+        bool bark = true;          // bark segments drawn (an impostor carries its own)
     };
+    static constexpr int kTiers = 4;   // leaves, clumps, crowns, impostors
     /// What a tree of `s` at `pxPerUnit` pixels per specimen unit (the view's
     /// pixels per metre at the tree times its scale) draws. `leafLength` in
     /// specimen units. `forceTier` as setForceTier. The drawer measures the
@@ -201,14 +223,27 @@ public:
 
     /// The dithered fade code mesh.frag reads: the tier draws the pixels
     /// whose dither value h is in [lo, hi). The tiers of a tree split [0, 1)
-    /// between them (crowns, then clumps, then leaves), so a cross-fade
-    /// covers every pixel exactly once. 1 is solid.
+    /// between them (crowns, clumps, impostors, then leaves), so a
+    /// cross-fade covers every pixel exactly once. 1 is solid.
     static float fadeCode(float lo, float hi);
-    /// A tree's tiers' [lo, hi) ranges, in TreeLod order (leaves, clumps, crowns).
-    static void fadeRanges(const TreeLod& t, float (&lo)[3], float (&hi)[3]);
+    /// A tree's tiers' [lo, hi) ranges, in TreeLod order (leaves, clumps,
+    /// crowns, impostors).
+    static void fadeRanges(const TreeLod& t, float (&lo)[kTiers], float (&hi)[kTiers]);
+
+    // --- Impostors ---
+
+    /// The baked pictures (forest_impostor.h), baked on first use and again
+    /// when the specimens, the leaf mesh, the leaf or bark colour or the
+    /// lod's view count or size change. Empty without specimens.
+    const ForestImpostorAtlas& impostorAtlas() const;
+    /// Its colour and data images, as textures the renderer uploads.
+    const NodeTexture& impostorColor() const;
+    const NodeTexture& impostorData() const;
+    /// emitForest's arrays as set.
+    const SpecimenArrays& arrays() const { return data_; }
 
     struct Stats {
-        uint32_t trees[3] = {};    // trees drawing each tier (a cross-fading tree counts in both)
+        uint32_t trees[kTiers] = {};   // trees drawing each tier (a cross-fading tree counts in both)
         uint32_t culled = 0;       // trees outside the view
         uint64_t leaves = 0;       // leaves issued
         uint64_t vertices = 0;     // vertices issued (all tiers, bark included)
@@ -243,6 +278,14 @@ private:
     mutable uint64_t dataGeneration_ = nextResourceGeneration();
     mutable uint64_t gpuMeshGeneration_ = 0;   // the leaf mesh and flutter fade gpu_ was built with
     mutable float gpuFlutter_ = 0.0f;
+    mutable bool gpuImpostors_ = false;        // gpu_ carries the impostor spheres
+
+    // The impostor bake and what it was baked from.
+    mutable ForestImpostorAtlas impostor_;
+    mutable NodeTexture impostorColor_, impostorData_;
+    mutable uint64_t impostorSpecimens_ = 0, impostorMesh_ = 0;
+    mutable float impostorKey_[8] = {};
+    uint64_t specimensGeneration_ = nextResourceGeneration();
 
     mutable bromesh::MeshData leafBatch_, cardBatch_;
     mutable uint64_t batchGeneration_ = 0;

@@ -8,9 +8,11 @@
 //     ground function, thinned by density; forestCover is clear at a trunk
 //     and full in the open;
 //   - TIER SELECTION (forestTreeLod): as a tree shrinks on screen its leaves
-//     widen and thin (keep = 1 / widening^2), turn to cards, hand over to
-//     clumps and then to crowns, the weights summing to 1 and never turning
-//     back; bark drops its thinnest segments;
+//     widen and thin (keep = 1 / widening^2), turn to cards and hand over to
+//     the far tier, the weights summing to 1 and never turning back; bark
+//     drops its thinnest segments. The far tier is the impostor (bark goes
+//     with the leaves; never before the picture is as sharp as the screen),
+//     or with impostors: 0 the clumps and then the crowns;
 //   - the choice follows the size on screen, not metres: twice the distance
 //     through half the field of view draws the same;
 //   - the vertex budget scales the detail to fit;
@@ -155,30 +157,63 @@ function run(scene) {
     assert(lod.leafPixels === 9 && lod.clumpFrom === 3 && lod.budget === 0, 'lod round trips: ' + JSON.stringify(lod));
 
     // ── Tier selection ───────────────────────────────────────────────────
-    let prev = null, monotone = true, sums = true, keeps = true, cards = true;
-    let sawThin = false, sawCard = false, sawClumps = false, sawCrowns = false, sawBlend = false;
-    for (let px = 4000; px > 0.3; px *= 0.93) {
-        const t = node.forestTreeLod(0, px);
-        if (Math.abs(t.leaves + t.clumps + t.crowns - 1) > 1e-5) sums = false;
-        if (Math.abs(t.keep - 1 / (t.widening * t.widening)) > 1e-5) keeps = false;
-        if (t.card !== t.widening > lod.cardWidening) cards = false;
-        if (prev && (t.widening < prev.widening - 1e-6 || t.leaves > prev.leaves + 1e-6 ||
-                     t.crowns < prev.crowns - 1e-6 || t.barkRadius < prev.barkRadius - 1e-9)) monotone = false;
-        if (t.widening > 1.01) sawThin = true;
-        if (t.card) sawCard = true;
-        if (t.clumps > 0.99) sawClumps = true;
-        if (t.crowns > 0.99) sawCrowns = true;
-        if (t.leaves > 0.05 && t.clumps > 0.05) sawBlend = true;
-        prev = t;
+    // Both far tiers: impostors (the default), and the clump and crown
+    // sprites (impostors: 0).
+    assert(lod.impostors === 1 && lod.impostorViews === 8 && lod.impostorTexels === 128,
+           'impostors are the default far tier: ' + JSON.stringify(lod));
+    for (const impostors of [1, 0]) {
+        node.setForestLod({ impostors });
+        const what = impostors ? 'impostors: ' : 'sprites: ';
+        let prev = null, monotone = true, sums = true, keeps = true, cards = true, barkFollows = true;
+        let sawThin = false, sawCard = false, sawClumps = false, sawCrowns = false, sawImpostors = false;
+        let sawBlend = false, others = false;
+        for (let px = 4000; px > 0.3; px *= 0.93) {
+            const t = node.forestTreeLod(0, px);
+            if (Math.abs(t.leaves + t.clumps + t.crowns + t.impostors - 1) > 1e-5) sums = false;
+            if (Math.abs(t.keep - 1 / (t.widening * t.widening)) > 1e-5) keeps = false;
+            if (t.card !== t.widening > lod.cardWidening) cards = false;
+            // An impostor carries its own bark: the segments go with the leaves.
+            if (t.bark !== (impostors ? t.leaves > 0 : true)) barkFollows = false;
+            if (prev && (t.widening < prev.widening - 1e-6 || t.leaves > prev.leaves + 1e-6 ||
+                         t.crowns < prev.crowns - 1e-6 || t.impostors < prev.impostors - 1e-6 ||
+                         t.barkRadius < prev.barkRadius - 1e-9)) monotone = false;
+            if (t.widening > 1.01) sawThin = true;
+            if (t.card) sawCard = true;
+            if (t.clumps > 0.99) sawClumps = true;
+            if (t.crowns > 0.99) sawCrowns = true;
+            if (t.impostors > 0.99) sawImpostors = true;
+            if (t.leaves > 0.05 && (t.clumps > 0.05 || t.impostors > 0.05)) sawBlend = true;
+            if (impostors ? t.clumps + t.crowns > 0 : t.impostors > 0) others = true;
+            prev = t;
+        }
+        const near = node.forestTreeLod(0, 4000), far = node.forestTreeLod(0, 0.3);
+        assert(near.leaves === 1 && near.widening === 1 && near.barkSides === 10 && near.bark,
+               what + 'close up: every leaf, full bark');
+        if (impostors) assert(far.impostors === 1 && !far.bark, 'impostors: far off, the picture alone');
+        else assert(far.crowns === 1 && far.barkSides === 5 && far.bark, 'sprites: far off, a crown');
+        assert(sums, what + 'the tier weights sum to 1');
+        assert(keeps, what + 'keep = 1 / widening^2');
+        assert(cards, what + 'leaves turn to cards past cardWidening');
+        assert(barkFollows, what + 'bark is drawn while the leaves are');
+        assert(monotone, what + 'shrinking on screen never brings detail back');
+        assert(!others, what + 'the other far tier never draws');
+        assert(sawThin && sawCard && sawBlend, what + 'the leaves thin, turn to cards and hand over');
+        assert(impostors ? sawImpostors : sawClumps && sawCrowns, what + 'every stage is passed through');
     }
-    const near = node.forestTreeLod(0, 4000), far = node.forestTreeLod(0, 0.3);
-    assert(near.leaves === 1 && near.widening === 1 && near.barkSides === 10, 'close up: every leaf, full bark');
-    assert(far.crowns === 1 && far.barkSides === 5, 'far off: a crown');
-    assert(sums, 'the tier weights sum to 1');
-    assert(keeps, 'keep = 1 / widening^2');
-    assert(cards, 'leaves turn to cards past cardWidening');
-    assert(monotone, 'shrinking on screen never brings detail back');
-    assert(sawThin && sawCard && sawBlend && sawClumps && sawCrowns, 'every stage is passed through');
+    // An impostor never stands in larger than it was baked: with a coarse
+    // picture the leaves hold on, thinned, where a fine one takes over.
+    {
+        node.setForestLod({ impostors: 1 });
+        let px = 4000;
+        while (px > 0.3 && node.forestTreeLod(0, px).impostors < 0.999) px *= 0.97;
+        const fine = node.forestTreeLod(0, px * 1.05);
+        node.setForestLod({ impostorTexels: 16 });
+        const coarse = node.forestTreeLod(0, px * 1.05);
+        assert(fine.impostors > 0.9 && coarse.impostors < fine.impostors - 0.5 && coarse.leaves > 0.5,
+               'a coarse picture waits until it is small on screen: ' + fine.impostors.toFixed(2) + ' vs ' +
+               coarse.impostors.toFixed(2));
+        node.setForestLod({ impostorTexels: 128 });
+    }
 
     // ── Screen size, not metres ──────────────────────────────────────────
     // The same tree from the same spot in a view twice as tall is twice the
@@ -224,24 +259,32 @@ function run(scene) {
     node.visible = false;
     const bg = scene.captureFrame();
     node.visible = true;
-    const TIERS = ['leaves', 'clumps', 'crowns'];
+    const TIERS = ['leaves', 'clumps', 'crowns', 'impostors'];
     const rest = {}, bent = {};
     for (const t of TIERS) {
+        // The sprite tiers draw with the sprites as the far tier.
+        node.setForestLod({ impostors: t === 'clumps' || t === 'crowns' ? 0 : 1 });
         node.setForestTier(t);
         const c0 = scene.captureFrame();
         rest[t] = silhouette(c0, bg);
         assert(rest[t].n > 500, t + ': the tier draws (' + rest[t].n + ' px)');
+        const s = node.forestStats();
+        assert(s.trees[t] === 2 && TIERS.every((o) => o === t || s.trees[o] === 0),
+               t + ': the stats count the tier alone: ' + JSON.stringify(s.trees));
         advanceTime(500);
         assert(diffCount(c0, scene.captureFrame(), 0) === 0, t + ': still in a calm');
     }
     scene.setWind({ direction: [1, 0, 0], speed: 9, gust: 0, drift: 0 });
     advanceTime(6000);
     for (const t of TIERS) {
+        node.setForestLod({ impostors: t === 'clumps' || t === 'crowns' ? 0 : 1 });
         node.setForestTier(t);
         bent[t] = silhouette(scene.captureFrame(), bg);
     }
+    node.setForestLod({ impostors: 1 });
     const dx = TIERS.map((t) => bent[t].x - rest[t].x);
-    console.log('pose: each tier\'s silhouette moved ' + dx.map((v) => v.toFixed(2)).join(' / ') + ' px (leaves / clumps / crowns)');
+    console.log('pose: each tier\'s silhouette moved ' + dx.map((v) => v.toFixed(2)).join(' / ') +
+                ' px (leaves / clumps / crowns / impostors)');
     const lo = Math.min(...dx), hi = Math.max(...dx);
     assert(lo > 0.5, 'every tier bends downwind: ' + dx.map((v) => v.toFixed(2)).join(' / ') + ' px');
     assert(hi < 2.2 * lo, 'and about as far: ' + dx.map((v) => v.toFixed(2)).join(' / ') + ' px');

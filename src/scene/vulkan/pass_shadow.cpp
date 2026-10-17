@@ -73,8 +73,9 @@ bool PassShadow::setup(SceneGpu& gpu) {
 
     // The mesh pipelines' set numbering, so a custom vertex chunk written for
     // the colour pass (camera at 0, bones at 3, its own set at 4) compiles here.
-    const std::array<VkDescriptorSetLayout, 5> sets = {d.cameraLayout, d.emptyLayout, d.emptyLayout, d.boneLayout,
-                                                       d.customLayout};
+    // Set 2 is the material's, read only by the forest impostors' cut-out.
+    const std::array<VkDescriptorSetLayout, 5> sets = {d.cameraLayout, d.emptyLayout, d.materialLayout,
+                                                       d.boneLayout, d.customLayout};
     VkPushConstantRange push{VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(Push)};
     VkPipelineLayoutCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -106,12 +107,15 @@ bool PassShadow::setup(SceneGpu& gpu) {
         SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowForestTubeVert);
     vs_[static_cast<int>(MeshKind::ForestSprite)] =
         SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowForestSpriteVert);
+    vs_[static_cast<int>(MeshKind::ForestImpostor)] =
+        SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowForestImpostorVert);
     fs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowFrag);
     fsForest_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowForestFrag);
+    fsImpostor_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowForestImpostorFrag);
     for (VkShaderModule m : vs_) {
         if (!m) return false;
     }
-    return fs_ != VK_NULL_HANDLE && fsForest_ != VK_NULL_HANDLE;
+    return fs_ != VK_NULL_HANDLE && fsForest_ != VK_NULL_HANDLE && fsImpostor_ != VK_NULL_HANDLE;
 }
 
 void PassShadow::cleanup(SceneGpu& gpu) {
@@ -132,7 +136,8 @@ void PassShadow::cleanup(SceneGpu& gpu) {
     }
     SceneVkShaderModule::destroy(dev, fs_);
     SceneVkShaderModule::destroy(dev, fsForest_);
-    fs_ = fsForest_ = VK_NULL_HANDLE;
+    SceneVkShaderModule::destroy(dev, fsImpostor_);
+    fs_ = fsForest_ = fsImpostor_ = VK_NULL_HANDLE;
     if (layout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(dev, layout_, nullptr);
     layout_ = VK_NULL_HANDLE;
 }
@@ -149,7 +154,8 @@ VkPipeline PassShadow::buildPipeline(VkShaderModule vs, MeshKind kind, bool cust
     // side and closed meshes do not shadow themselves; two-sided surfaces
     // (leaves, cards) have no far side and draw both.
     SceneVkPipelineBuilder b;
-    b.setShaderStages(vs, kind == MeshKind::ForestSprite ? fsForest_ : fs_)
+    VkShaderModule fs = kind == MeshKind::ForestSprite ? fsForest_ : kind == MeshKind::ForestImpostor ? fsImpostor_ : fs_;
+    b.setShaderStages(vs, fs)
      .setVertexInput(bindings, attributes)
      .setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
      .setPolygonMode(VK_POLYGON_MODE_FILL)
@@ -220,6 +226,10 @@ void PassShadow::drawCaster(SceneFrame& frame, const bromath::Mat4& lightViewPro
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
     if (draw.kind != MeshKind::Instanced)
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 1, &frame.cameraSet, 0, nullptr);
+    if (draw.kind == MeshKind::ForestImpostor) {
+        if (!draw.materialSet) return;
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 2, 1, &draw.materialSet, 0, nullptr);
+    }
     if (draw.vertexSet)
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 3, 1, &draw.vertexSet, 0, nullptr);
     if (customBound || (draw.kind == MeshKind::Grass && draw.customSet))

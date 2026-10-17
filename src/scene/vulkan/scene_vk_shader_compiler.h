@@ -67,7 +67,15 @@ enum class BuiltinSceneShader {
     ShadowForestLeafVert,
     ShadowForestTubeVert,
     ShadowForestSpriteVert,
-    ShadowForestFrag
+    ShadowForestFrag,
+    // Forest impostors (scene_forest_impostor.glsl): the card, mesh.frag
+    // built with SCENE_FOREST_IMPOSTOR (and SCENE_INDIRECT_OUTPUT), and the
+    // caster with its cut-out at the baked depth.
+    MeshForestImpostorVert,
+    MeshImpostorFrag,
+    MeshImpostorIndirectFrag,
+    ShadowForestImpostorVert,
+    ShadowForestImpostorFrag
 };
 
 /// The scene's shader modules: the built-in shaders (compiled at build time)

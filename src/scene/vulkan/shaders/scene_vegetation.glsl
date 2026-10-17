@@ -361,17 +361,32 @@ vec4 vegetationSway(mat4 model, vec4 v0, vec4 v1, vec4 v2, vec4 v3, vec3 leafNor
 //   - leaves deep in the crown are darker and cooler, the rim lighter, so a
 //     crown is dark inside and lit at its edge.
 // Bark varies by plant, and darkens toward the ground.
+//
+// The per-tree part (vegTreeTone: a hash of where the plant stands, and the
+// leaf and bark tints from it) is split out so a forest impostor, whose
+// picture holds the rest (forest_impostor.cpp's leafTint, which follows
+// this line for line), takes the same: everything else about a leaf's
+// colour belongs to its specimen.
+float vegTreeTone(mat4 model, vec4 v0) {
+    vec3 rootAbs = (model * vec4(v0.xyz, 1.0)).xyz + camera.eyeWorld.xyz;
+    return sceneWindHash(ivec2(floor(rootAbs.xz * 8.0)) + ivec2(17, 3));
+}
+vec3 vegTreeLeafTint(float tree) {
+    // Warm or cool, and a little lighter or darker.
+    float value = 0.9 + 0.2 * fract(tree * 13.7);
+    return mix(vec3(0.84, 0.97, 1.08), vec3(1.12, 1.04, 0.76), tree) * value;
+}
+vec3 vegTreeBarkTint(float tree) { return vec3(0.82 + 0.3 * tree, 0.8 + 0.28 * tree, 0.78 + 0.24 * tree); }
+
 vec3 vegetationTint(mat4 model, vec4 v0, vec4 v1, vec4 v2, vec4 v3, bool leaf) {
     float scale = vegScale(model);
-    vec3 root = (model * vec4(v0.xyz, 1.0)).xyz;
-    vec3 rootAbs = root + camera.eyeWorld.xyz;
-    float tree = sceneWindHash(ivec2(floor(rootAbs.xz * 8.0)) + ivec2(17, 3));
+    float tree = vegTreeTone(model, v0);
     float phase = float(uint(max(v3.y, 0.0) + 0.5) >> 18) / 64.0;
-    float limb = fract(phase * 7.31 + tree * 3.7);
-    if (!leaf) return vec3(0.82 + 0.3 * tree, 0.8 + 0.28 * tree, 0.78 + 0.24 * tree);
+    float limb = fract(phase * 7.31 + 0.37);
+    if (!leaf) return vegTreeBarkTint(tree);
 
     float each = fract(sin(dot(v2.xyz, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
-    vec3 c = mix(vec3(0.84, 0.97, 1.08), vec3(1.12, 1.04, 0.76), tree);
+    vec3 c = vegTreeLeafTint(tree);
     c *= 0.8 + 0.4 * limb;
     c *= 0.9 + 0.2 * each;
     if (v1.w > 0.0) {

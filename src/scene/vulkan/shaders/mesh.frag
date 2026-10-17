@@ -22,6 +22,25 @@ layout(location = 6) in vec4 inInstColor;  // rgb tint, a atlas cell / 256 (whit
 // negative on a leaf (vegetationSway), -(2 + ao) on a grass blade.
 layout(location = 7) in vec4 inVegShade;
 #endif
+#ifdef SCENE_FOREST_IMPOSTOR
+// A forest impostor (mesh_forest_impostor.vert has what each carries; the
+// common inputs above are re-purposed there too). The fragment traces its
+// ray into the specimen's picture and lights the leaves it finds, writing
+// their depth.
+layout(location = 8) flat in vec4 inInv0;
+layout(location = 9) flat in vec4 inInv1;
+layout(location = 10) flat in vec4 inInv2;
+layout(location = 11) flat in ivec4 inCells;
+layout(location = 12) flat in vec4 inWeights;
+layout(location = 13) flat in vec4 inSphere;
+layout(location = 14) flat in vec4 inTrunk;
+// The card stands at the front of the picture's sphere, so the depth written
+// only ever moves away from the eye: less under reversed-Z (the default),
+// where the early depth test keeps working. Under the conventional mapping
+// the card's own depth is written instead, which keeps the promise.
+layout(constant_id = 0) const bool REVERSED_Z = true;
+layout(depth_less) out float gl_FragDepth;
+#endif
 
 layout(location = 0) out vec4 outColor;
 #ifdef SCENE_INDIRECT_OUTPUT
@@ -35,6 +54,9 @@ layout(location = 1) out vec4 outIndirect;
 #include "scene_mesh_push.glsl"
 #ifdef SCENE_VEGETATION
 #include "scene_forest_sprite.glsl"
+#endif
+#ifdef SCENE_FOREST_IMPOSTOR
+#include "scene_forest_impostor.glsl"
 #endif
 
 layout(set = 2, binding = 0) uniform sampler2D texAlbedo;
@@ -63,20 +85,86 @@ vec2 albedoUV() {
 // gathered and before the lights, so standard lighting applies to its result.
 //__USER_CHUNK__
 
+#ifdef SCENE_VEGETATION
+// The samples of this pixel a forest tier draws (ForestNode::fadeCode): a
+// pixel dither h, each tier drawing where h is in its [lo, hi), the tiers of
+// a tree splitting [0, 1) between them, so they cover each pixel once. The
+// code is 2 * round(lo * 4096) + hi; 1 is solid. Under 4x MSAA each sample
+// takes its own quarter-step of h, so a pixel is split between the tiers in
+// quarters and resolves to a blend rather than a stipple; `coverage` (an
+// impostor's) keeps that share of the samples by a second, independent
+// dither. Without MSAA a pixel is all or nothing (the mask is all bits).
+int forestSampleMask(float code, float coverage, bool msaa) {
+    // Two independent white-noise values a pixel (an integer hash): a
+    // gradient noise lines up into visible diagonal hatching at part fades.
+    uvec2 q = uvec2(gl_FragCoord.xy);
+    uint v = q.x * 1973u + q.y * 9277u + 0x9e3779b9u;
+    v = (v ^ (v >> 16u)) * 0x7feb352du;
+    v = (v ^ (v >> 15u)) * 0x846ca68bu;
+    v ^= v >> 16u;
+    float h = float(v & 0xffffu) * (1.0 / 65536.0);
+    float h2 = float(v >> 16u) * (1.0 / 65536.0);
+    float k = floor(code * 0.5);
+    float lo = k * (1.0 / 4096.0), hi = code - 2.0 * k;
+    if (!msaa) return h >= lo && h < hi && h2 < coverage ? -1 : 0;
+    int mask = 0;
+    for (int s = 0; s < 4; ++s) {
+        float hs = fract(h + 0.25 * float(s));
+        float cs = fract(h2 + 0.25 * float(s));
+        if (hs >= lo && hs < hi && cs < coverage) mask |= 1 << s;
+    }
+    return mask;
+}
+#endif
+
 void main() {
     uint flags = meshFlags();
-    float camDist = length(inWorldPos);
+    vec3 worldPos = inWorldPos;
+#ifdef SCENE_VEGETATION
+    gl_SampleMask[0] = -1;
+#endif
+#ifdef SCENE_FOREST_IMPOSTOR
+    // The picture first (its reads need every pixel of the quad): the ray
+    // from the eye through this point of the card, moved back by the sway
+    // here so the picture moves and its light stays, into specimen space.
+    mat4 impInv = transpose(mat4(inInv0, inInv1, inInv2, vec4(0.0, 0.0, 0.0, 1.0)));
+    vec3 impOff = forestImpostorOffset(inTrunk.xyz, inVegShade.xyz, inTrunk.w,
+                                       (inWorldPos.y - inUV.y) / max(inTrunk.w, 0.05));
+    ForestImpostorAtlas impAtlas;
+    impAtlas.views = int(mod(inSphere.w, 256.0) + 0.5);
+    impAtlas.texels = int(inSphere.w / 256.0);
+    impAtlas.block = ivec2(inCells.w & 65535, inCells.w >> 16);
+    ForestImpostorHit imp = forestImpostorTrace(texAlbedo, texNormal, impAtlas, inCells.xyz, inWeights.xyz,
+                                                inSphere.xyz, inWeights.w, (impInv * vec4(-impOff, 1.0)).xyz,
+                                                mat3(impInv) * inWorldPos, false);
+    // A pixel's width in specimen units, for the flutter below.
+    float impFoot = length(fwidth(mat3(impInv) * inWorldPos));
+    // The picture's edge sharpened to a pixel: where its views disagree the
+    // blended coverage is a fraction across whole patches, which a dither
+    // would stipple; a solid / clear cut at half with a pixel of ramp
+    // (split between samples under MSAA) keeps the gaps and the outline.
+    {
+        float c = imp.coverage;
+        imp.coverage = clamp((c - 0.5) / max(fwidth(c), 1e-3) + 0.5, 0.0, 1.0);
+    }
+    if (imp.coverage < 1.0 / 255.0) discard;
+    worldPos = inWorldPos * imp.t;
+    {
+        vec4 clip = camera.viewProj * vec4(worldPos, 1.0);
+        gl_FragDepth = REVERSED_Z ? min(clip.z / clip.w, gl_FragCoord.z) : gl_FragCoord.z;
+    }
+#endif
+    float camDist = length(worldPos);
     if (push.extra.x > 0.0 && camDist < push.extra.x) discard;
 #ifdef SCENE_VEGETATION
-    // A forest tree crossing between tiers (ForestNode::fadeCode): a pixel
-    // dither h, each tier drawing where h is in its [lo, hi), the tiers of a
-    // tree splitting [0, 1) between them, so they cover each pixel once.
-    // The code is 2 * round(lo * 4096) + hi; 1 is solid.
     if ((flags & MESH_FOREST) != 0u) {
-        float h = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
-        float code = inInstColor.a;
-        float k = floor(code * 0.5);
-        if (h < k * (1.0 / 4096.0) || h >= code - 2.0 * k) discard;
+        float coverage = 1.0;
+#ifdef SCENE_FOREST_IMPOSTOR
+        coverage = imp.coverage;
+#endif
+        int mask = forestSampleMask(inInstColor.a, coverage, (flags & MESH_FOREST_MSAA) != 0u);
+        if (mask == 0) discard;
+        gl_SampleMask[0] = mask;
     }
     bool forestSprite = (flags & MESH_FOREST_SPRITE) != 0u;
     if (forestSprite && !forestSpriteCovers(inUV, inColor.x)) discard;
@@ -126,16 +214,53 @@ void main() {
         if (inColor.z > 0.5) baseColor *= forestSpriteLeafShade(inUV, inColor.x);
     }
 #endif
+#ifdef SCENE_FOREST_IMPOSTOR
+    // The picture's albedo (the leaf colour and its specimen tint, the
+    // underside where it shows one, bark) times this tree's own tint; the
+    // crown's ambient occlusion from where the leaf really is, as
+    // vegCrownShade has it (bark's from its height).
+    baseColor = imp.albedo * mix(inTangent, inInstColor.rgb, imp.leafy);
+    alpha = 1.0;
+    // The leaves the picture is too coarse to hold: a leaf-sized cell of
+    // specimen space round the surface found (fixed to the tree, so it
+    // sways with it and does not crawl) each a little lighter or darker and
+    // tipped its own way, down to a leaf about a third of a pixel (the
+    // leaves tier sparkles as finely); their mean is the picture's.
+    vec3 impPs = (impInv * vec4(worldPos - impOff, 1.0)).xyz;
+    float impLeaf = max(push.extra.z, 1e-3);
+    vec4 impCell;
+    {
+        vec3 cell = floor(impPs / impLeaf);
+        uvec3 u = uvec3(ivec3(cell) + 32768);
+        uint v = u.x * 73856093u ^ u.y * 19349663u ^ u.z * 83492791u;
+        v = (v ^ (v >> 16u)) * 0x7feb352du;
+        v = (v ^ (v >> 15u)) * 0x846ca68bu;
+        v ^= v >> 16u;
+        impCell = vec4(uvec4(v & 255u, (v >> 8u) & 255u, (v >> 16u) & 255u, v >> 24u)) / 255.0;
+    }
+    float impDetail = imp.leafy * smoothstep(4.0, 1.5, impFoot / impLeaf);
+    baseColor *= 1.0 + (0.45 * impCell.x - 0.225) * impDetail;
+    vec3 impRc = (worldPos - inNormal) / max(inUV.x, 0.5);
+    {
+        float d = clamp(length(impRc), 0.0, 1.2);
+        float leafAO = clamp(0.25 + 0.85 * d * d, 0.25, 1.0) * mix(0.75, 1.0, clamp(impRc.y * 0.5 + 0.6, 0.0, 1.0));
+        float barkAO = mix(0.6, 1.0, clamp((worldPos.y - inUV.y) / max(inTrunk.w, 0.05), 0.0, 1.0));
+        vegAO = mix(barkAO, leafAO, imp.leafy);
+    }
+#endif
 
     vec3 emissive = push.emissive.rgb * push.emissive.a;
     vec3 geomN = normalize(inNormal);
-    SceneAir air = sceneAir(inWorldPos, camDist);
+#ifdef SCENE_FOREST_IMPOSTOR
+    geomN = normalize(-inWorldPos);
+#endif
+    SceneAir air = sceneAir(worldPos, camDist);
 
     // Unlit is the authored base colour as is: no lights and no emissive
     // (GL's unlit branch), only the air in front of it.
     if ((flags & MESH_UNLIT) != 0u) {
         vec3 color = baseColor * air.transmittance + air.inscatter;
-        if ((flags & MESH_SHADE_MAP) != 0u && lighting.shadeOrigin.w > 0.5) color *= cellShade(inWorldPos, geomN);
+        if ((flags & MESH_SHADE_MAP) != 0u && lighting.shadeOrigin.w > 0.5) color *= cellShade(worldPos, geomN);
         // Unlit surfaces reflect nothing in the SSR mask phase.
         outColor = vec4(color, (flags & MESH_REFLECTANCE) != 0u ? 0.0 : mix(alpha, 0.0, air.fade));
 #ifdef SCENE_INDIRECT_OUTPUT
@@ -151,7 +276,7 @@ void main() {
         vec3 nTS = texture(texNormal, inUV).xyz * 2.0 - 1.0;
         N = normalize(mat3(normalize(inTangent), normalize(inBitangent), N) * nTS);
     }
-    vec3 shadePos = inWorldPos;
+    vec3 shadePos = worldPos;
 #ifdef SCENE_VEGETATION
     // A sprite is lit as the sphere of leaves it stands in for, at the
     // sphere's surface (its tangent's length is the radius): the flat disc
@@ -165,6 +290,32 @@ void main() {
     // The crown as one form: the leaf's own normal blended toward the bulk.
     float bulkWeight = length(inVegShade.xyz);
     if (bulkWeight > 1e-4) N = normalize(N * (1.0 - bulkWeight) + inVegShade.xyz);
+#endif
+#ifdef SCENE_FOREST_IMPOSTOR
+    // The leaf's own normal from the picture, into the world (the inverse
+    // transpose of the tree's transform), and the crown as one form as the
+    // leaves have it: blended toward the bulk normal by 0.6.
+    N = normalize(transpose(mat3(impInv)) * imp.normal);
+    {
+        // Each leaf cell (above) turned its own way, and fluttering on its
+        // own phase, more in wind, so the crown's fine light stirs while its
+        // masses of light and shade stay. Both gone once a leaf is under a
+        // pixel, where they would sparkle.
+        // The turn stays however small the leaves: lit through their
+        // spread of normals (some turned from the sun, glowing through)
+        // the crown takes the leaves' light, where a mean normal alone
+        // would light it as a smooth form.
+        vec3 own = impCell.yzw * 2.0 - 1.0;
+        N = normalize(N + own * imp.leafy);
+        float ph = impCell.w;
+        float amp = 0.3 * sqrt(max(inColor.x, 0.0)) * impDetail;
+        float th = 6.2831853 * ((3.0 + 4.0 * ph) * camera.windParams.x + ph);
+        vec3 axis = normalize(vec3(impCell.y - 0.5, 0.4, impCell.z - 0.5));
+        vec3 tip = cross(N, axis);
+        if (amp > 0.0 && dot(tip, tip) > 1e-6) N = normalize(N + normalize(tip) * (amp * sin(th)));
+    }
+    vec3 impBulk = normalize(impRc + vec3(0.0, 0.25, 0.0));
+    N = normalize(N * (1.0 - 0.6 * imp.leafy) + impBulk * (0.6 * imp.leafy));
 #endif
 
     float metallic = push.pbrParams.x;
@@ -184,7 +335,7 @@ void main() {
     SceneSurface s;
     s.position = shadePos;
     s.normal = N;
-    s.view = normalize(-inWorldPos);
+    s.view = normalize(-worldPos);
     s.camDist = camDist;
     s.baseColor = baseColor;
     s.metallic = clamp(metallic, 0.0, 1.0);
@@ -195,6 +346,9 @@ void main() {
     s.translucency = 0.0;
 #ifdef SCENE_VEGETATION
     if (vegLeaf) s.translucency = (push.extra.y > 0.0 ? min(1.4 * push.extra.y, 1.0) : 0.6) * (1.0 - vegFade / 15.0);
+#endif
+#ifdef SCENE_FOREST_IMPOSTOR
+    s.translucency = (push.extra.y > 0.0 ? min(1.4 * push.extra.y, 1.0) : 0.6) * imp.leafy;
 #endif
 
     vec3 indirect = sceneAmbient(s);
@@ -217,7 +371,7 @@ void main() {
     alpha = mix(alpha, 0.0, air.fade);
 
     if ((flags & MESH_SHADE_MAP) != 0u && lighting.shadeOrigin.w > 0.5) {
-        float shade = cellShade(inWorldPos, geomN);
+        float shade = cellShade(worldPos, geomN);
         color *= shade;
         indirect *= shade;
     }

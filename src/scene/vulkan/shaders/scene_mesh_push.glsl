@@ -31,6 +31,9 @@ const uint MESH_HAS_TANGENTS        = 4096u;
 const uint MESH_FOREST              = 8192u;
 // A forest sprite: a leafy disc with a sphere's normal (scene_forest_sprite.glsl).
 const uint MESH_FOREST_SPRITE       = 16384u;
+// A forest draw into a 4x MSAA target: its cross-fades split samples
+// (mesh.frag's forestSampleMask).
+const uint MESH_FOREST_MSAA         = 32768u;
 // Bits 10-11: the vertex colour mode — 0 none, 1 replaces the albedo, 2 tints it.
 const uint MESH_VERTEX_COLOR_SHIFT  = 10u;
 

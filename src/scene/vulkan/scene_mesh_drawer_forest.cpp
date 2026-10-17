@@ -1,7 +1,8 @@
 // SceneMeshDrawer's forest path: a ForestNode becomes a handful of draws a
 // frame, one per tier and shape (near leaves, leaf cards, bark of 10 and of
-// 5 sides, clump sprites, crown sprites), each instancing this frame's draw
-// entries for that shape (scene_forest.glsl). Every tree in view picks its
+// 5 sides, clump sprites, crown sprites, impostor cards), each instancing
+// this frame's draw entries for that shape (scene_forest.glsl; the impostors'
+// pictures, forest_impostor.h, bound as their material). Every tree in view picks its
 // tiers by its size on screen (ForestNode::treeLod); every shadow tile picks
 // again for the trees in its light volume by its texel size. The node's
 // specimens and trees live in one storage buffer uploaded once; only the
@@ -39,7 +40,7 @@ constexpr int kNearSides = 10;
 constexpr int kFarSides = 5;
 
 // The shapes a forest draws, each one draw.
-enum Group { LeafNear, LeafCard, Bark10, Bark5, Clumps, Crowns, kGroups };
+enum Group { LeafNear, LeafCard, Bark10, Bark5, Clumps, Crowns, Impostors, kGroups };
 
 struct Entry {
     uint32_t instance, first, end, param;
@@ -113,12 +114,15 @@ void SceneMeshDrawer::prepareForest(SceneFrame& frame, ForestNode& node, std::ve
     // only the vertices it would).
     const auto addTree = [&](Groups* G, uint32_t inst, const ForestNode::Specimen& sp, const ForestNode::TreeLod& t,
                              bool shadow, uint64_t& vertices) {
-        float lo[3], hi[3];
+        float lo[ForestNode::kTiers], hi[ForestNode::kTiers];
         ForestNode::fadeRanges(t, lo, hi);
         if (shadow) {
             // A caster draws one tier, the heaviest, solid.
-            const int tier = t.leaves >= t.clumps && t.leaves >= t.crowns ? 0 : t.clumps >= t.crowns ? 1 : 2;
-            for (int k = 0; k < 3; ++k) { lo[k] = 0.0f; hi[k] = k == tier ? 1.0f : 0.0f; }
+            const float w[ForestNode::kTiers] = {t.leaves, t.clumps, t.crowns, t.impostors};
+            int tier = 0;
+            for (int k = 1; k < ForestNode::kTiers; ++k)
+                if (w[k] > w[tier]) tier = k;
+            for (int k = 0; k < ForestNode::kTiers; ++k) { lo[k] = 0.0f; hi[k] = k == tier ? 1.0f : 0.0f; }
         }
         // Leaves: a prefix of the shuffled run, widened.
         if (hi[0] > lo[0] && sp.leafCount > 0) {
@@ -146,8 +150,10 @@ void SceneMeshDrawer::prepareForest(SceneFrame& frame, ForestNode& node, std::ve
             }
         }
         // Bark: the segments whose keep radius is wide enough, a connected
-        // prefix (thickest first).
-        if (sp.segCount > 0) {
+        // prefix (thickest first). A caster drawing its impostor casts its
+        // trunk from the picture.
+        const bool bark = t.bark && !(shadow && hi[3] > lo[3]);
+        if (bark && sp.segCount > 0) {
             const float* k0 = keepRadius.data() + sp.segStart;
             const float* k1 = k0 + sp.segCount;
             const uint32_t n = static_cast<uint32_t>(
@@ -179,6 +185,10 @@ void SceneMeshDrawer::prepareForest(SceneFrame& frame, ForestNode& node, std::ve
         if (hi[2] > lo[2] && sp.clumpCount > 0 && G) {
             vertices += 6;
             G->g[Crowns].push_back({inst, 0u, 1u, 0u, 1.0f, 0.0f, 1.0f, ForestNode::fadeCode(lo[2], hi[2])});
+        }
+        if (hi[3] > lo[3] && G) {
+            vertices += 6;
+            G->g[Impostors].push_back({inst, 0u, 1u, 0u, 1.0f, 0.0f, 1.0f, ForestNode::fadeCode(lo[3], hi[3])});
         }
     };
 
@@ -270,10 +280,22 @@ void SceneMeshDrawer::prepareForest(SceneFrame& frame, ForestNode& node, std::ve
             if (t.leaves > 0.0f) stats.trees[0]++;
             if (t.clumps > 0.0f) stats.trees[1]++;
             if (t.crowns > 0.0f) stats.trees[2]++;
+            if (t.impostors > 0.0f) stats.trees[3]++;
             addTree(&colour, s.instance, sp, t, false, colourVerts);
         }
     }
     stats.vertices = colourVerts;
+    // Impostors nearest first (to the eye, or to a tile's light): each writes
+    // the depth of what it shows, so a crown behind one already drawn fails
+    // the early depth test rather than tracing its picture for nothing.
+    const auto nearestFirst = [&](std::vector<Entry>& g, const auto& depthOf) {
+        std::vector<std::pair<float, Entry>> keyed;
+        keyed.reserve(g.size());
+        for (const Entry& e : g) keyed.push_back({depthOf((bounds[e.instance].min + bounds[e.instance].max) * 0.5f), e});
+        std::sort(keyed.begin(), keyed.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+        for (size_t i = 0; i < g.size(); ++i) g[i] = keyed[i].second;
+    };
+    nearestFirst(colour.g[Impostors], [&](const bromath::Vec3& c) { return bromath::vlen(c - view.eye); });
 
     // Each shadow tile's trees, at its texel size.
     struct TileGroups {
@@ -305,6 +327,14 @@ void SceneMeshDrawer::prepareForest(SceneFrame& frame, ForestNode& node, std::ve
             const ForestNode::Specimen& sp = specimens[instances[s.instance].specimen];
             addTree(&tiles[static_cast<size_t>(s.tile)].groups, s.instance, sp,
                     ForestNode::treeLod(L, sp, s.px, leafLength, force, s.barkPx), true, stats.shadowVertices);
+        }
+        for (TileGroups& t : tiles) {
+            const float* m = plan.tiles[t.slot].viewProj.data;
+            nearestFirst(t.groups.g[Impostors], [m](const bromath::Vec3& c) {
+                const float z = m[2] * c.x + m[6] * c.y + m[10] * c.z + m[14];
+                const float w = m[3] * c.x + m[7] * c.y + m[11] * c.z + m[15];
+                return z / (std::fabs(w) > 1e-12f ? w : 1e-12f);
+            });
         }
     }
 
@@ -369,11 +399,16 @@ void SceneMeshDrawer::prepareForest(SceneFrame& frame, ForestNode& node, std::ve
     base.push.extra[2] = 0.0f;
     base.push.extra[3] = 1.0f + 256.0f;   // no atlas
     uint32_t flags = mesh_flags::kForest | mesh_flags::vertexColor(node.vertexColorMode());
+    // In a 4x target a hand-over splits each pixel's samples, a blend in
+    // quarters rather than a stipple of whole pixels.
+    const uint32_t msaa = frame.gpu.targets.samples() == VK_SAMPLE_COUNT_4_BIT ? mesh_flags::kForestMsaa : 0u;
+    flags |= msaa;
     if (frame.ssr) flags |= mesh_flags::kReflectance;
     if (node.receivesShadow()) flags |= mesh_flags::kReceivesShadow;
     uint32_t leafFlags = flags | mesh_flags::kTwoSided;
     if (node.mesh().hasTangents()) leafFlags |= mesh_flags::kHasTangents;
-    const uint32_t barkFlags = mesh_flags::kForest | (flags & (mesh_flags::kReflectance | mesh_flags::kReceivesShadow));
+    const uint32_t barkFlags =
+        mesh_flags::kForest | msaa | (flags & (mesh_flags::kReflectance | mesh_flags::kReceivesShadow));
     const uint32_t spriteFlags = barkFlags | mesh_flags::kForestSprite;
     // The leaves' maps (an albedo with alpha is the usual leaf); sprites and
     // bark take the plain colour.
@@ -395,6 +430,23 @@ void SceneMeshDrawer::prepareForest(SceneFrame& frame, ForestNode& node, std::ve
             w.updateSet(device_, leafMaterial);
             if (im.albedo) leafFlags |= mesh_flags::kAlbedoMap;
             if (im.normal) leafFlags |= mesh_flags::kNormalMap;
+        }
+    }
+
+    // The impostors' pictures: colour at 0, normal / depth / leafiness at 1.
+    VkDescriptorSet impostorMaterial = VK_NULL_HANDLE;
+    if (lod.impostors) {
+        const SceneVkImage* color = res.texture(node.id(), TextureSlot::ImpostorColor, node.impostorColor());
+        const SceneVkImage* data = res.texture(node.id(), TextureSlot::ImpostorData, node.impostorData());
+        if (color && data) {
+            impostorMaterial = frame.gpu.device.frameSet(defaults_->materialLayout);
+            SceneVkDescriptorWriter w;
+            w.writeImage(0, color->view, color->sampler);
+            w.writeImage(1, data->view, data->sampler);
+            w.writeImage(2, defaults_->white.view, defaults_->sampler);
+            w.writeImage(3, defaults_->black.view, defaults_->sampler);
+            w.writeImage(4, defaults_->white.view, defaults_->sampler);
+            w.updateSet(device_, impostorMaterial);
         }
     }
 
@@ -456,6 +508,17 @@ void SceneMeshDrawer::prepareForest(SceneFrame& frame, ForestNode& node, std::ve
                 d.firstVertex = first * 6u;
                 d.twoSided = true;
                 d.push.pbrParams[3] = static_cast<float>(spriteFlags);
+                break;
+            case Impostors:
+                if (!impostorMaterial) continue;
+                d.kind = MeshKind::ForestImpostor;
+                d.indexCount = static_cast<uint32_t>(g.size()) * 6u;
+                d.instanceCount = 1;
+                d.firstVertex = first * 6u;
+                d.twoSided = true;   // the card faces the eye (or the light) either way
+                d.materialSet = impostorMaterial;
+                d.push.extra[2] = leafLength;   // the leaf cells mesh.frag adds to the picture
+                d.push.pbrParams[3] = static_cast<float>(barkFlags);
                 break;
             default: break;
             }

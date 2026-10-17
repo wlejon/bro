@@ -1,6 +1,9 @@
 #include "scene/forest_node.h"
 
+#include "util/log.h"
+
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -11,6 +14,7 @@ namespace {
 
 constexpr size_t kSpecimenFloats = 16;   // emitForest's binding: see setSpecimens
 constexpr size_t kHeaderFloats = 16;
+constexpr size_t kSpecimenRecords = 6;   // scene_forest.glsl: the last two are the impostor's sphere and cylinder
 
 float smooth(float a, float b, float x) {
     if (a == b) return x < a ? 0.0f : 1.0f;
@@ -124,6 +128,7 @@ bool ForestNode::setSpecimens(SpecimenArrays&& a) {
     rebuildBounds();
     gpuDirty_ = true;
     dataGeneration_ = nextResourceGeneration();
+    specimensGeneration_ = nextResourceGeneration();
     return true;
 }
 
@@ -171,7 +176,7 @@ void ForestNode::lodToArray(float (&out)[kLodCount]) const {
     const Lod& l = lod_;
     const float v[kLodCount] = {l.leafPixels, l.flutterFade, l.cardWidening, l.clumpFrom, l.clumpTo, l.crownFrom,
                                 l.crownTo, l.barkPixels, l.barkSidesPixels, l.shadowKeep, l.range,
-                                l.budget, l.shadowBudget};
+                                l.budget, l.shadowBudget, l.impostors, l.impostorViews, l.impostorTexels};
     std::copy(std::begin(v), std::end(v), out);
 }
 
@@ -179,7 +184,7 @@ void ForestNode::lodFromArray(const double* v, size_t n) {
     float* dst[kLodCount] = {&lod_.leafPixels, &lod_.flutterFade, &lod_.cardWidening, &lod_.clumpFrom,
                              &lod_.clumpTo, &lod_.crownFrom, &lod_.crownTo, &lod_.barkPixels,
                              &lod_.barkSidesPixels, &lod_.shadowKeep, &lod_.range, &lod_.budget,
-                             &lod_.shadowBudget};
+                             &lod_.shadowBudget, &lod_.impostors, &lod_.impostorViews, &lod_.impostorTexels};
     for (size_t i = 0; i < n && i < static_cast<size_t>(kLodCount); ++i)
         if (!std::isnan(v[i])) *dst[i] = static_cast<float>(v[i]);
     lod_.leafPixels = std::max(lod_.leafPixels, 0.01f);
@@ -193,6 +198,9 @@ void ForestNode::lodFromArray(const double* v, size_t n) {
     lod_.range = std::max(lod_.range, 0.0f);
     lod_.budget = std::max(lod_.budget, 0.0f);
     lod_.shadowBudget = std::max(lod_.shadowBudget, 0.0f);
+    lod_.impostors = lod_.impostors > 0.5f ? 1.0f : 0.0f;
+    lod_.impostorViews = std::clamp(std::round(lod_.impostorViews), 2.0f, 16.0f);
+    lod_.impostorTexels = std::clamp(std::round(lod_.impostorTexels / 4.0f) * 4.0f, 16.0f, 512.0f);
 }
 
 float ForestNode::fadeCode(float lo, float hi) {
@@ -202,18 +210,27 @@ float ForestNode::fadeCode(float lo, float hi) {
     return 2.0f * std::round(lo * 4096.0f) + hi;
 }
 
-void ForestNode::fadeRanges(const TreeLod& t, float (&lo)[3], float (&hi)[3]) {
-    // Crowns first, then clumps, then leaves.
-    lo[2] = 0.0f;
-    hi[2] = t.crowns;
-    lo[1] = hi[2];
-    hi[1] = hi[2] + t.clumps;
-    lo[0] = hi[1];
-    hi[0] = 1.0f;
-    if (t.leaves <= 0.0f) hi[0] = lo[0];
-    if (t.leaves > 0.0f && t.clumps <= 0.0f && t.crowns <= 0.0f) lo[0] = 0.0f;
-    if (t.clumps >= 1.0f) { lo[1] = 0.0f; hi[1] = 1.0f; }
-    if (t.crowns >= 1.0f) hi[2] = 1.0f;
+void ForestNode::fadeRanges(const TreeLod& t, float (&lo)[kTiers], float (&hi)[kTiers]) {
+    // Crowns first, then clumps, then impostors, then leaves to the top.
+    const int order[kTiers] = {2, 1, 3, 0};
+    const float w[kTiers] = {t.leaves, t.clumps, t.crowns, t.impostors};
+    float at = 0.0f;
+    int last = -1;
+    for (int k : order) {
+        lo[k] = at;
+        hi[k] = k == 0 ? (w[0] > 0.0f ? 1.0f : at) : at + std::max(w[k], 0.0f);
+        at = hi[k];
+        if (w[k] > 0.0f) last = k;
+    }
+    // A tier drawn alone covers everything; so does the top one (rounding).
+    for (int k = 0; k < kTiers; ++k)
+        if (w[k] >= 1.0f) { lo[k] = 0.0f; hi[k] = 1.0f; }
+    if (last >= 0 && w[last] > 0.0f) hi[last] = 1.0f;
+    int drawn = 0;
+    for (int k = 0; k < kTiers; ++k) drawn += w[k] > 0.0f ? 1 : 0;
+    if (drawn == 1)
+        for (int k = 0; k < kTiers; ++k)
+            if (w[k] > 0.0f) lo[k] = 0.0f;
 }
 
 ForestNode::TreeLod ForestNode::treeLod(const Lod& lod, const Specimen& s, float px, float leafLength,
@@ -227,7 +244,9 @@ ForestNode::TreeLod ForestNode::treeLod(const Lod& lod, const Specimen& s, float
         t.leaves = forceTier == 0 ? 1.0f : 0.0f;
         t.clumps = forceTier == 1 ? 1.0f : 0.0f;
         t.crowns = forceTier == 2 ? 1.0f : 0.0f;
+        t.impostors = forceTier == 3 ? 1.0f : 0.0f;
         if (forceTier == 0) t.barkRadius = 0.0f;
+        t.bark = forceTier != 3;
         return t;
     }
     const float leafPx = std::max(leafLength * px, 1e-6f);
@@ -240,6 +259,19 @@ ForestNode::TreeLod ForestNode::treeLod(const Lod& lod, const Specimen& s, float
     t.barkRadius *= t.widening;
     t.card = t.widening > lod.cardWidening;
     const float toClumps = smooth(lod.clumpFrom, lod.clumpTo, t.widening);
+    if (lod.impostors > 0.5f) {
+        // The far tier is the impostor, all the way out: it is the leaves'
+        // own picture, so it needs no further hand-over. It takes over as
+        // the leaves thin, but never while its picture would show larger
+        // than it was baked (a texel over a pixel), where it would blur.
+        const float half = std::sqrt(s.crownRadius * s.crownRadius + 0.25f * s.height * s.height);
+        const float magnified = px * 2.0f * half / std::max(lod.impostorTexels, 1.0f);
+        const float sharp = 1.0f - smooth(1.2f, 1.8f, magnified);
+        t.impostors = s.clumpCount > 0 ? toClumps * sharp : 0.0f;
+        t.leaves = 1.0f - t.impostors;
+        t.bark = t.leaves > 0.0f;
+        return t;
+    }
     // Crowns take over as a clump shrinks on screen (crownFrom > crownTo).
     const float toCrowns = s.clumpCount > 0 ? 1.0f - smooth(lod.crownTo, lod.crownFrom, s.meanClumpRadius * px) : 0.0f;
     t.crowns = toCrowns;
@@ -345,10 +377,56 @@ uint64_t ForestNode::dataGeneration() const {
     return dataGeneration_;
 }
 
+const ForestImpostorAtlas& ForestNode::impostorAtlas() const {
+    const float* c = color();
+    const float key[8] = {c[0], c[1], c[2], barkColor_[0], barkColor_[1], barkColor_[2], lod_.impostorViews,
+                          lod_.impostorTexels};
+    if (impostorSpecimens_ == specimensGeneration_ && impostorMesh_ == geometryGeneration() &&
+        std::equal(std::begin(key), std::end(key), std::begin(impostorKey_)))
+        return impostor_;
+    impostorSpecimens_ = specimensGeneration_;
+    impostorMesh_ = geometryGeneration();
+    std::copy(std::begin(key), std::end(key), std::begin(impostorKey_));
+    const auto t0 = std::chrono::steady_clock::now();
+    impostor_ = specimens_.empty() || mesh().empty()
+                    ? ForestImpostorAtlas{}
+                    : bakeForestImpostors(*this, static_cast<int>(lod_.impostorViews),
+                                          static_cast<int>(lod_.impostorTexels));
+    if (!impostor_.empty()) {
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        LOG_INFO("ForestNode: baked %zu impostors (%d x %d views of %d texels, a %d x %d atlas) in %.0f ms",
+                 specimens_.size(), impostor_.views, impostor_.views, impostor_.texels, impostor_.width,
+                 impostor_.height, ms);
+    }
+    if (impostor_.empty()) {
+        impostorColor_.clear();
+        impostorData_.clear();
+    } else {
+        impostorColor_.set(impostor_.width, impostor_.height, impostor_.color.data());
+        impostorData_.set(impostor_.width, impostor_.height, impostor_.data.data());
+    }
+    // The records carry the cards' spheres and the atlas layout.
+    gpuDirty_ = true;
+    dataGeneration_ = nextResourceGeneration();
+    return impostor_;
+}
+
+const NodeTexture& ForestNode::impostorColor() const {
+    impostorAtlas();
+    return impostorColor_;
+}
+
+const NodeTexture& ForestNode::impostorData() const {
+    impostorAtlas();
+    return impostorData_;
+}
+
 void ForestNode::refreshGpu() const {
-    if (gpuMeshGeneration_ != geometryGeneration() || gpuFlutter_ != lod_.flutterFade) {
+    const bool imp = lod_.impostors > 0.5f;
+    if (gpuMeshGeneration_ != geometryGeneration() || gpuFlutter_ != lod_.flutterFade || gpuImpostors_ != imp) {
         gpuMeshGeneration_ = geometryGeneration();
         gpuFlutter_ = lod_.flutterFade;
+        gpuImpostors_ = imp;
         gpuDirty_ = true;
         dataGeneration_ = nextResourceGeneration();
     }
@@ -356,6 +434,8 @@ void ForestNode::refreshGpu() const {
 
 const std::vector<float>& ForestNode::gpuData() const {
     refreshGpu();
+    const ForestImpostorAtlas* imp = gpuImpostors_ ? &impostorAtlas() : nullptr;
+    if (imp && imp->empty()) imp = nullptr;
     if (!gpuDirty_) return gpu_;
     gpuDirty_ = false;
     const SpecimenArrays& a = data_;
@@ -364,7 +444,7 @@ const std::vector<float>& ForestNode::gpuData() const {
 
     // Record offsets (vec4s) of each array.
     const uint32_t specBase = 0;
-    const uint32_t segBase = specBase + static_cast<uint32_t>(nSpec * 4);
+    const uint32_t segBase = specBase + static_cast<uint32_t>(nSpec * kSpecimenRecords);
     const uint32_t clumpBase = segBase + static_cast<uint32_t>(nSeg * 7);
     const uint32_t leafBase = clumpBase + static_cast<uint32_t>(nClump * 6);
     const uint32_t instBase = leafBase + static_cast<uint32_t>((nLeaf + 1) / 2);
@@ -385,11 +465,20 @@ const std::vector<float>& ForestNode::gpuData() const {
     h[10] = bitsOf(clumpBase);
     h[11] = bitsOf(leafBase);
     h[12] = bitsOf(instBase);
+    if (imp) {
+        h[13] = static_cast<float>(imp->views);
+        h[14] = static_cast<float>(imp->texels);
+        h[15] = static_cast<float>(imp->blocksX);
+    }
 
     float* r = gpu_.data() + kHeaderFloats;
     for (size_t k = 0; k < nSpec; ++k) {
         const Specimen& s = specimens_[k];
-        float* d = r + (specBase + k * 4) * 4;
+        float* d = r + (specBase + k * kSpecimenRecords) * 4;
+        if (imp) {
+            std::memcpy(d + 16, &imp->spheres[k * 4], 4 * sizeof(float));
+            std::memcpy(d + 20, &imp->shapes[k * 4], 4 * sizeof(float));
+        }
         d[0] = bitsOf(s.segStart); d[1] = bitsOf(s.segCount); d[2] = bitsOf(s.clumpStart); d[3] = bitsOf(s.clumpCount);
         d[4] = bitsOf(s.leafStart); d[5] = bitsOf(s.leafCount); d[6] = bitsOf(s.crownClump);
         d[7] = s.meanClumpWeight;

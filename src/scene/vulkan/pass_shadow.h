@@ -49,6 +49,7 @@ private:
     VkShaderModule vs_[kMeshKindCount] = {};
     VkShaderModule fs_ = VK_NULL_HANDLE;
     VkShaderModule fsForest_ = VK_NULL_HANDLE;   // forest sprites' leafy cutout
+    VkShaderModule fsImpostor_ = VK_NULL_HANDLE; // forest impostors' cut-out at the baked depth
     VkPipeline builtin_[kMeshKindCount][2] = {};   // [kind][two-sided]
     // Custom-vertex casters by (chunk key, kind, sidedness); VK_NULL_HANDLE
     // remembers a failed compile, so it is reported once and the caster

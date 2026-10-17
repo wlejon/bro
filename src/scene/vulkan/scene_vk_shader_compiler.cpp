@@ -10,6 +10,7 @@
 #include "scene_shadow_push.glsl.src.h"
 #include "scene_vegetation.glsl.src.h"
 #include "scene_forest_sprite.glsl.src.h"
+#include "scene_forest_impostor.glsl.src.h"
 
 #include <cstring>
 #include <sstream>
@@ -28,6 +29,7 @@ const char* includedSource(const std::string& name) {
         {"scene_shadow_push.glsl", kVkSceneShadowPushSrc},
         {"scene_vegetation.glsl", kVkSceneVegetationSrc},
         {"scene_forest_sprite.glsl", kVkSceneForestSpriteSrc},
+        {"scene_forest_impostor.glsl", kVkSceneForestImpostorSrc},
     };
     for (const auto& inc : kIncludes) {
         if (name == inc.name) return inc.source;
@@ -221,6 +223,21 @@ static const uint32_t kSpvShadowForestSpriteVert[] =
 static const uint32_t kSpvShadowForestFrag[] =
 #include "shadow_forest.frag.spv.h"
 ;
+static const uint32_t kSpvMeshForestImpostorVert[] =
+#include "mesh_forest_impostor.vert.spv.h"
+;
+static const uint32_t kSpvMeshImpostorFrag[] =
+#include "mesh_impostor.frag.spv.h"
+;
+static const uint32_t kSpvMeshImpostorIndirectFrag[] =
+#include "mesh_impostor_indirect.frag.spv.h"
+;
+static const uint32_t kSpvShadowForestImpostorVert[] =
+#include "shadow_forest_impostor.vert.spv.h"
+;
+static const uint32_t kSpvShadowForestImpostorFrag[] =
+#include "shadow_forest_impostor.frag.spv.h"
+;
 
 template<size_t N>
 std::vector<uint32_t> arrayToVector(const uint32_t (&arr)[N]) {
@@ -310,6 +327,11 @@ const std::vector<uint32_t>& SceneVkShaderCompiler::getBuiltinSpirv(BuiltinScene
     static const std::vector<uint32_t> s_shadowForestTubeVert = arrayToVector(kSpvShadowForestTubeVert);
     static const std::vector<uint32_t> s_shadowForestSpriteVert = arrayToVector(kSpvShadowForestSpriteVert);
     static const std::vector<uint32_t> s_shadowForestFrag = arrayToVector(kSpvShadowForestFrag);
+    static const std::vector<uint32_t> s_meshForestImpostorVert = arrayToVector(kSpvMeshForestImpostorVert);
+    static const std::vector<uint32_t> s_meshImpostorFrag = arrayToVector(kSpvMeshImpostorFrag);
+    static const std::vector<uint32_t> s_meshImpostorIndirectFrag = arrayToVector(kSpvMeshImpostorIndirectFrag);
+    static const std::vector<uint32_t> s_shadowForestImpostorVert = arrayToVector(kSpvShadowForestImpostorVert);
+    static const std::vector<uint32_t> s_shadowForestImpostorFrag = arrayToVector(kSpvShadowForestImpostorFrag);
     static const std::vector<uint32_t> s_empty;
 
     switch (shader) {
@@ -367,6 +389,11 @@ const std::vector<uint32_t>& SceneVkShaderCompiler::getBuiltinSpirv(BuiltinScene
         case BuiltinSceneShader::ShadowForestTubeVert: return s_shadowForestTubeVert;
         case BuiltinSceneShader::ShadowForestSpriteVert: return s_shadowForestSpriteVert;
         case BuiltinSceneShader::ShadowForestFrag: return s_shadowForestFrag;
+        case BuiltinSceneShader::MeshForestImpostorVert: return s_meshForestImpostorVert;
+        case BuiltinSceneShader::MeshImpostorFrag: return s_meshImpostorFrag;
+        case BuiltinSceneShader::MeshImpostorIndirectFrag: return s_meshImpostorIndirectFrag;
+        case BuiltinSceneShader::ShadowForestImpostorVert: return s_shadowForestImpostorVert;
+        case BuiltinSceneShader::ShadowForestImpostorFrag: return s_shadowForestImpostorFrag;
         default: return s_empty;
     }
 }

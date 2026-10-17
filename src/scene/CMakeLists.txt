@@ -13,7 +13,7 @@ set(VK_GENERATED_HEADERS "")
 set(VK_SHADER_INCLUDES scene_camera.glsl scene_lighting.glsl scene_atmosphere.glsl scene_mesh_push.glsl
     scene_shadow_push.glsl scene_procedural.glsl scene_vegetation.glsl scene_grass.glsl sky_common.glsl
     ibl_common.glsl scene_forest.glsl scene_forest_tube.glsl scene_forest_sprite.glsl
-    scene_forest_sprite_vertex.glsl)
+    scene_forest_sprite_vertex.glsl scene_forest_impostor.glsl scene_forest_impostor_vertex.glsl)
 list(TRANSFORM VK_SHADER_INCLUDES PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/"
      OUTPUT_VARIABLE VK_SHADER_INCLUDE_PATHS)
 foreach(_shader
@@ -26,6 +26,7 @@ foreach(_shader
         mesh_forest_leaf.vert
         mesh_forest_tube.vert
         mesh_forest_sprite.vert
+        mesh_forest_impostor.vert
         mesh.frag
         shadow.vert
         shadow_instanced.vert
@@ -37,6 +38,8 @@ foreach(_shader
         shadow_forest_tube.vert
         shadow_forest_sprite.vert
         shadow_forest.frag
+        shadow_forest_impostor.vert
+        shadow_forest_impostor.frag
         shadow.frag
         sky.vert
         sky_atmosphere.frag
@@ -90,6 +93,17 @@ bro_spirv_header(VK_GENERATED_HEADERS "${VK_GEN_DIR}"
                  "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/mesh.frag" frag
                  NAME mesh_veg_indirect.frag DEFINES SCENE_VEGETATION SCENE_INDIRECT_OUTPUT
                  DEPENDS ${VK_SHADER_INCLUDE_PATHS})
+# Forest impostors (scene_forest_impostor.glsl): vegetation shading of the
+# leaves a card's picture holds, at their depth.
+bro_spirv_header(VK_GENERATED_HEADERS "${VK_GEN_DIR}"
+                 "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/mesh.frag" frag
+                 NAME mesh_impostor.frag DEFINES SCENE_VEGETATION SCENE_FOREST_IMPOSTOR
+                 DEPENDS ${VK_SHADER_INCLUDE_PATHS})
+bro_spirv_header(VK_GENERATED_HEADERS "${VK_GEN_DIR}"
+                 "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/mesh.frag" frag
+                 NAME mesh_impostor_indirect.frag
+                 DEFINES SCENE_VEGETATION SCENE_FOREST_IMPOSTOR SCENE_INDIRECT_OUTPUT
+                 DEPENDS ${VK_SHADER_INCLUDE_PATHS})
 
 function(embed_vk_shader SHADER_FILE VAR_NAME)
     set(INPUT  "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/${SHADER_FILE}")
@@ -121,6 +135,7 @@ embed_vk_shader(scene_mesh_push.glsl  kVkSceneMeshPushSrc)
 embed_vk_shader(scene_shadow_push.glsl kVkSceneShadowPushSrc)
 embed_vk_shader(scene_vegetation.glsl kVkSceneVegetationSrc)
 embed_vk_shader(scene_forest_sprite.glsl kVkSceneForestSpriteSrc)
+embed_vk_shader(scene_forest_impostor.glsl kVkSceneForestImpostorSrc)
 embed_vk_shader(clipmap_common.glsl       kClipmapCommonSrc)
 embed_vk_shader(clipmap_detail.glsl       kClipmapDetailSrc)
 embed_vk_shader(clipmap_material.glsl     kClipmapMaterialSrc)
@@ -157,6 +172,7 @@ add_library(bro_scene STATIC
     particles3d_node.cpp
     decal_node.cpp
     grass_node.cpp
+    forest_impostor.cpp
     forest_node.cpp
     reflection_probe_node.cpp
     terrain_manager.cpp

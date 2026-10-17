@@ -67,6 +67,7 @@ constexpr uint32_t kTwoSided = 512;
 constexpr uint32_t kHasTangents = 4096;
 constexpr uint32_t kForest = 8192;          // inInstColor.a is a forest tier's fade code
 constexpr uint32_t kForestSprite = 16384;   // a forest sprite: leafy disc, sphere normal
+constexpr uint32_t kForestMsaa = 32768;     // a forest draw into a 4x MSAA target: fades split samples
 /// The vertex colour mode (0 none, 1 replaces the albedo, 2 tints it) in bits 10-11.
 constexpr uint32_t vertexColor(int mode) { return static_cast<uint32_t>(mode & 3) << 10; }
 }
@@ -81,31 +82,34 @@ constexpr uint32_t vertexColor(int mode) { return static_cast<uint32_t>(mode & 3
 /// placed and bent by the vertex shader from the node's field and influence
 /// map (set 4, scene_grass.glsl). The Forest kinds are a ForestNode's tiers
 /// (scene_forest.glsl): leaves (the leaf mesh, copies an instance), bark
-/// (no streams) and sprites (no streams), each instance or sprite one of
-/// this frame's draw entries (set 3 binding 2).
+/// (no streams), sprites and impostor cards (no streams), each instance or
+/// sprite one of this frame's draw entries (set 3 binding 2). An impostor
+/// draws with its own build of mesh.frag (SCENE_FOREST_IMPOSTOR), its
+/// material set holding the node's impostor atlas.
 enum class MeshKind : uint8_t {
     Static, Instanced, Skinned, Scatter, Tube, Vegetation, InstancedVegetation, Grass,
-    ForestLeaf, ForestTube, ForestSprite,
+    ForestLeaf, ForestTube, ForestSprite, ForestImpostor,
 };
-constexpr int kMeshKindCount = 11;
+constexpr int kMeshKindCount = 12;
 
 /// The kinds the vegetation shading (mesh.frag's SCENE_VEGETATION variant) draws.
 constexpr bool vegetationShading(MeshKind k) {
     return k == MeshKind::Vegetation || k == MeshKind::InstancedVegetation || k == MeshKind::Scatter ||
            k == MeshKind::Tube || k == MeshKind::Grass || k == MeshKind::ForestLeaf ||
-           k == MeshKind::ForestTube || k == MeshKind::ForestSprite;
+           k == MeshKind::ForestTube || k == MeshKind::ForestSprite || k == MeshKind::ForestImpostor;
 }
 
 /// Kinds with no vertex streams: the vertex shader builds everything.
 constexpr bool streamless(MeshKind k) {
-    return k == MeshKind::Tube || k == MeshKind::ForestTube || k == MeshKind::ForestSprite;
+    return k == MeshKind::Tube || k == MeshKind::ForestTube || k == MeshKind::ForestSprite ||
+           k == MeshKind::ForestImpostor;
 }
 
 /// Kinds cut to the camera's view and level of detail this frame (a
 /// reflection probe's faces would see them wrong).
 constexpr bool cameraCut(MeshKind k) {
     return k == MeshKind::Grass || k == MeshKind::ForestLeaf || k == MeshKind::ForestTube ||
-           k == MeshKind::ForestSprite;
+           k == MeshKind::ForestSprite || k == MeshKind::ForestImpostor;
 }
 
 struct MeshDraw {
@@ -125,7 +129,7 @@ struct MeshDraw {
     VkBuffer indices = VK_NULL_HANDLE;
     uint32_t indexCount = 0;   // Tube, ForestTube, ForestSprite: the vertex count of the unindexed draw
     uint32_t firstInstance = 0;  // Forest kinds: the first draw entry (instanced)
-    uint32_t firstVertex = 0;    // ForestSprite crowns: the first entry times 6 (not instanced)
+    uint32_t firstVertex = 0;    // ForestSprite crowns, ForestImpostor: the first entry times 6 (not instanced)
     VkBuffer instances = VK_NULL_HANDLE;         // Instanced, InstancedVegetation
     VkDeviceSize instanceOffset = 0;
     VkBuffer vegetation = VK_NULL_HANDLE;        // Vegetation (per vertex), InstancedVegetation (per instance)
@@ -236,6 +240,8 @@ private:
     VkShaderModule fsIndirect_ = VK_NULL_HANDLE;
     VkShaderModule fsVeg_ = VK_NULL_HANDLE;
     VkShaderModule fsVegIndirect_ = VK_NULL_HANDLE;
+    VkShaderModule fsImpostor_ = VK_NULL_HANDLE;
+    VkShaderModule fsImpostorIndirect_ = VK_NULL_HANDLE;
     PipelineVariants builtin_;
     std::unordered_map<std::string, std::unique_ptr<CustomProgram>> custom_;
 };
