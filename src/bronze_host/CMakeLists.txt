@@ -535,16 +535,38 @@ else()
     # generated/natives.json: written to a scratch name and copied over only
     # when its content changed, so bro_core.o is recompiled when a native's
     # path or signature moved and not every time the tool relinked.
+    #
+    # Under Visual Studio the rule lives in a target of its own and names a
+    # stamp as its output, the manifest not at all: MSBuild runs every custom
+    # build of a project that depends on one it just ran, whatever their
+    # timestamps, so a manifest rule in bro_bronze_js that re-ran because the
+    # tool relinked (and copied nothing) recompiled every module and relinked
+    # libbro on each build, a no-op one included. Ninja and Make restat the
+    # output and need it declared, so they keep the plain rule.
     set(BRO_NATIVE_MANIFEST "${BRO_JS_GEN_DIR}/natives.json")
-    add_custom_command(
-        OUTPUT  "${BRO_NATIVE_MANIFEST}"
-        COMMAND $<TARGET_FILE:bro-native-manifest> "${BRO_NATIVE_MANIFEST}.new"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${BRO_NATIVE_MANIFEST}.new" "${BRO_NATIVE_MANIFEST}"
-        DEPENDS bro-native-manifest "${_bro_bronze_stage_stamp}"
-        COMMENT "bro-native-manifest -> generated/natives.json"
-        VERBATIM
-    )
+    if(CMAKE_GENERATOR MATCHES "^Visual Studio")
+        add_custom_command(
+            OUTPUT  "${BRO_NATIVE_MANIFEST}.stamp"
+            COMMAND $<TARGET_FILE:bro-native-manifest> "${BRO_NATIVE_MANIFEST}.new"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${BRO_NATIVE_MANIFEST}.new" "${BRO_NATIVE_MANIFEST}"
+            COMMAND ${CMAKE_COMMAND} -E touch "${BRO_NATIVE_MANIFEST}.stamp"
+            DEPENDS bro-native-manifest "${_bro_bronze_stage_stamp}"
+            COMMENT "bro-native-manifest -> generated/natives.json"
+            VERBATIM
+        )
+        add_custom_target(bro_native_manifest_json DEPENDS "${BRO_NATIVE_MANIFEST}.stamp")
+    else()
+        add_custom_command(
+            OUTPUT  "${BRO_NATIVE_MANIFEST}"
+            COMMAND $<TARGET_FILE:bro-native-manifest> "${BRO_NATIVE_MANIFEST}.new"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${BRO_NATIVE_MANIFEST}.new" "${BRO_NATIVE_MANIFEST}"
+            DEPENDS bro-native-manifest "${_bro_bronze_stage_stamp}"
+            COMMENT "bro-native-manifest -> generated/natives.json"
+            VERBATIM
+        )
+    endif()
 
     # bro_compile_js(<name> <entry_symbol> [NATIVE_MANIFEST <file>]):
     # js/<name>.js -> generated/<name>.o, entered through <entry_symbol>. The
@@ -606,6 +628,9 @@ else()
     # Nothing in it is C++; the archiver still has to be told which one to be.
     set_target_properties(bro_bronze_js PROPERTIES LINKER_LANGUAGE CXX)
     target_link_libraries(bro_bronze_js INTERFACE bronze::runtime_shared)
+    if(TARGET bro_native_manifest_json)
+        add_dependencies(bro_bronze_js bro_native_manifest_json)
+    endif()
 endif()
 
 # --- No app targets here, deliberately ---
