@@ -14,6 +14,7 @@
 #include "scene/vulkan/scene_frame_graph.h"
 #include "scene/vulkan/scene_targets.h"
 #include "scene/vulkan/scene_vk_target_format.h"
+#include "scene/vulkan/scene_vk_shader_compiler.h"
 #include "render/vulkan_context.h"
 #include "render/vulkan_debug.h"
 #include "util/log.h"
@@ -465,6 +466,32 @@ int main() {
     assert(targets.hdrTarget(false).key() != hdr.key());
     targets.cleanup(allocator);
     std::cout << "PASSED" << std::endl;
+
+    // Every built-in shader compiled from the source tree (what
+    // BRO_SCENE_SHADER_SOURCE does at run time) is word for word the SPIR-V
+    // the build embedded, variants and their DEFINES included, and makes a
+    // module the device (and the validation layer) accepts.
+    std::cout << "[Test] Built-in shaders from source match the embedded SPIR-V... " << std::flush;
+    {
+        const std::string dir = SceneVkShaderCompiler::buildShaderSourceDir();
+        assert(!dir.empty());
+        for (int i = 0; i < static_cast<int>(BuiltinSceneShader::Count); ++i) {
+            const auto shader = static_cast<BuiltinSceneShader>(i);
+            const auto& embedded = SceneVkShaderCompiler::embeddedSpirv(shader);
+            std::string err;
+            const auto fromSource = SceneVkShaderCompiler::compileBuiltinFromSource(shader, dir, &err);
+            if (fromSource != embedded) {
+                std::cerr << "\nFAILED: " << SceneVkShaderCompiler::builtinName(shader) << ": "
+                          << (fromSource.empty() ? "did not compile: " + err : "differs from the embedded SPIR-V")
+                          << " (" << fromSource.size() << " vs " << embedded.size() << " words)" << std::endl;
+                return 1;
+            }
+            VkShaderModule module = SceneVkShaderCompiler::createModule(device.device(), embedded);
+            assert(module != VK_NULL_HANDLE);
+            SceneVkShaderCompiler::destroyModule(device.device(), module);
+        }
+    }
+    std::cout << "PASSED (" << static_cast<int>(BuiltinSceneShader::Count) << " shaders)" << std::endl;
 
     // Clean up
     allocator.destroyImage(color);

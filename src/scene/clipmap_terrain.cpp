@@ -2,6 +2,7 @@
 
 #include "scene/mesh_node.h"
 #include "scene/scene_graph.h"
+#include "scene/vulkan/scene_vk_shader_compiler.h"
 #include "util/log.h"
 
 #include <bromesh/mesh_data.h>
@@ -128,12 +129,17 @@ ClipmapTerrain::ClipmapTerrain(SceneGraph& graph, const ClipmapConfig& cfg)
 // whole bit-identity argument — not a uniform the compiler might branch on,
 // and not a dead block that could shift codegen, but source that is not there.
 std::string ClipmapTerrain::shaderSource(const std::string& stage) const {
-    std::string shared = std::string(kClipmapCommonSrc) + kClipmapDetailSrc;
-    if (cfg_.cubicHeight) shared += kClipmapCubicHeightSrc;
-    if (stage == "vertex") return shared + kClipmapVertSrc;
+    // Each piece from the source tree under BRO_SCENE_SHADER_SOURCE.
+    auto src = [](const char* file, const char* embedded) {
+        return vk::SceneVkShaderCompiler::shaderSource(file, embedded);
+    };
+    std::string shared = src("clipmap_common.glsl", kClipmapCommonSrc) + src("clipmap_detail.glsl", kClipmapDetailSrc);
+    if (cfg_.cubicHeight) shared += src("clipmap_cubic_height.glsl", kClipmapCubicHeightSrc);
+    if (stage == "vertex") return shared + src("clipmap.vert.glsl", kClipmapVertSrc);
     if (stage != "fragment") return std::string();
-    if (!cfg_.cubicSurface) return shared + kClipmapMaterialSrc + kClipmapFragSrc;
-    return shared + kClipmapCubicSrc + kClipmapMaterialSrc + kClipmapFragSrc;
+    const std::string material = src("clipmap_material.glsl", kClipmapMaterialSrc) + src("clipmap.frag.glsl", kClipmapFragSrc);
+    if (!cfg_.cubicSurface) return shared + material;
+    return shared + src("clipmap_cubic.glsl", kClipmapCubicSrc) + material;
 }
 
 ClipmapTerrain::~ClipmapTerrain() { destroy(); }

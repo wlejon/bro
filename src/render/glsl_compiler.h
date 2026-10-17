@@ -24,6 +24,19 @@ enum class ShaderStage { Vertex, Fragment, Compute };
 std::vector<uint32_t> compileGlslToSpirv(std::string_view source, ShaderStage stage,
                                          std::string* log = nullptr);
 
+/// The source bro compiles for a GLSL file on disk: the file with each line
+/// `#include "name"` replaced by the file `name` beside it (recursively), and
+/// each of `defines` made `#define NAME 1` right after the #version line, so
+/// one file builds several variants. bro_spirv_embed compiles the scene's
+/// built-in shaders from exactly this text at build time, and the scene does
+/// at run time under BRO_SCENE_SHADER_SOURCE, so the two agree word for word.
+/// `deps`, when given, receives every file read (the input first). False,
+/// with the reason in `*err`, when a file cannot be read or the text has no
+/// #version line to define after.
+bool preprocessGlslFile(const std::string& path, const std::vector<std::string>& defines,
+                        std::string& out, std::vector<std::string>* deps = nullptr,
+                        std::string* err = nullptr);
+
 /// For code that drives glslang's C++ API itself (WebGL's program linker
 /// needs its reflection): the lock compileGlslToSpirv holds, taken with the
 /// process initialised. glslang may be used for as long as the returned lock

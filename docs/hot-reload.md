@@ -29,6 +29,19 @@ An app that is not watched also gets **F5** for itself: `system_reload_app` is d
 
 It is never on for `bro-headless`, `bro-server`, or an app with an `app.dll`.
 
+## Scene shaders without a rebuild
+
+The 3D scene's built-in shaders (`src/scene/vulkan/shaders/`, listed with their variants in `builtin_shaders.def`) are compiled to SPIR-V at build time and embedded. For a shader edit loop, compile them from the source tree at start-up instead:
+
+```
+BRO_SCENE_SHADER_SOURCE=1 bro-headless ../broworkshop/demos/forest capture.js -- still above
+BRO_SCENE_SHADER_SOURCE=D:/work/shaders bro ...     # a directory other than the build's tree
+```
+
+`1` reads the tree this binary was built from; any other value is a directory. Each shader compiles at its first use with the same text and the same DEFINES the build uses (`render::preprocessGlslFile`), so the result is word for word the embedded SPIR-V until something is edited (`bro_vulkan_scene_test` checks every shader). The GLSL the run-time shaders splice or include (custom shader bases, the shared includes, clipmap terrain) is read from the same directory. A shader that does not compile logs glslang's error and falls back to its embedded build. It is read once per process: edit, then run again. The persistent pipeline cache is keyed by the driver on the SPIR-V itself, so an edited shader never picks up a stale pipeline.
+
+A rebuild after a `.glsl` edit recompiles only the shaders that include it (each writes a depfile), in parallel, each into its own `<name>.spv.cpp`.
+
 ## JIT tier
 
 `BRO_JIT_TIER` pins one tier for the whole process, for debugging: `0` interpreter only, `1` every function baseline-compiled up front, `2` the whole program optimized before it runs, `auto` (default) tiered.

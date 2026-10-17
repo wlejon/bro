@@ -44,25 +44,38 @@ if(NOT TARGET glslang::glslang OR NOT TARGET glslang::glslang-default-resource-l
 endif()
 
 # bro_spirv_header(<out_var> <gen_dir> <glsl_file> <vert|frag|comp>
-#                  [NAME <variant>] [DEFINES <define>...] [DEPENDS <file>...])
+#                  [NAME <variant>] [SYMBOL <ns::symbol>] [DEFINES <define>...]
+#                  [DEPENDS <file>...])
 #
 # Compiles <glsl_file> at build time with bro_spirv_embed (src/render/tools)
 # into <gen_dir>/<name>.spv.h and appends that header to <out_var>, for a
 # target to list among its sources and #include. DEFINES are #defined (to 1)
 # after the #version line; a variant built that way names its header with
 # NAME (<variant>.spv.h) so it does not collide with the plain build.
-# DEPENDS lists the files the shader #includes, so editing one rebuilds it.
+#
+# With SYMBOL the output is instead <name>.spv.cpp, a translation unit of its
+# own defining `extern const uint32_t <symbol>[]` and `<symbol>Words`, so a
+# shader edit recompiles that one small file.
+#
+# The tool writes a depfile of the files the shader actually #includes, so
+# editing one reruns only the shaders that pull it in; DEPENDS adds others.
 #
 # A cross build cannot run a tool it built for the target, so it names a
 # host build of the tool with -DBRO_SPIRV_EMBED=<path>.
 set(BRO_SPIRV_EMBED "" CACHE FILEPATH "Host bro_spirv_embed, for cross builds")
 function(bro_spirv_header out_var gen_dir glsl_file stage)
-    cmake_parse_arguments(_spv "" "NAME" "DEFINES;DEPENDS" ${ARGN})
+    cmake_parse_arguments(_spv "" "NAME;SYMBOL" "DEFINES;DEPENDS" ${ARGN})
     get_filename_component(_name "${glsl_file}" NAME)
     if(_spv_NAME)
         set(_name "${_spv_NAME}")
     endif()
-    set(_out "${gen_dir}/${_name}.spv.h")
+    if(_spv_SYMBOL)
+        set(_out "${gen_dir}/${_name}.spv.cpp")
+        set(_mode --cpp "${_spv_SYMBOL}")
+    else()
+        set(_out "${gen_dir}/${_name}.spv.h")
+        set(_mode "")
+    endif()
     if(BRO_SPIRV_EMBED)
         set(_tool "${BRO_SPIRV_EMBED}")
         set(_tool_dep "${BRO_SPIRV_EMBED}")
@@ -73,11 +86,14 @@ function(bro_spirv_header out_var gen_dir glsl_file stage)
         set(_tool "$<TARGET_FILE:bro_spirv_embed>")
         set(_tool_dep bro_spirv_embed)
     endif()
+    get_filename_component(_outName "${_out}" NAME)
     add_custom_command(
         OUTPUT  "${_out}"
-        COMMAND "${_tool}" ${stage} "${glsl_file}" "${_out}" ${_spv_DEFINES}
+        COMMAND "${_tool}" ${stage} "${glsl_file}" "${_out}" ${_mode}
+                --depfile "${_out}.d" ${_spv_DEFINES}
         DEPENDS "${glsl_file}" ${_spv_DEPENDS} ${_tool_dep}
-        COMMENT "SPIR-V ${_name} -> ${_name}.spv.h"
+        DEPFILE "${_out}.d"
+        COMMENT "SPIR-V ${_name} -> ${_outName}"
         VERBATIM
     )
     set(${out_var} ${${out_var}} "${_out}" PARENT_SCOPE)

@@ -1,86 +1,35 @@
 #pragma once
 
 #include <vulkan/vulkan.h>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
 
 namespace bro::scene::vk {
 
-/// Built-in shader identifier enum for standard scene passes.
+/// The built-in scene shaders, one per line of
+/// scene/vulkan/shaders/builtin_shaders.def (the source file, stage and
+/// DEFINES of each are there).
 enum class BuiltinSceneShader {
-    MeshVert,
-    MeshInstancedVert,
-    MeshSkinnedVert,
-    MeshFrag,
-    MeshIndirectFrag,   // mesh.frag with SCENE_INDIRECT_OUTPUT (the SSAO opaque pass)
-    ShadowVert,
-    ShadowInstancedVert,
-    ShadowSkinnedVert,
-    ShadowFrag,
-    PostFxVert,
-    TonemapFrag,
-    FxaaFrag,
-    BillboardVert,
-    BillboardFrag,
-    ParticlesVert,
-    ParticlesFrag,
-    DecalVert,
-    DecalFrag,
-    BlurFrag,
-    SsaoFrag,
-    SsrFrag,
-    DofFrag,
-    ApplyAoFrag,
-    GaussianSplatVert,
-    GaussianSplatFrag,
-    SkyVert,
-    SkyAtmosphereFrag,
-    SkyboxFrag,
-    StarfieldFrag,
-    EnvConvertFrag,
-    IrradianceFrag,
-    PrefilterFrag,
-    BrdfLutFrag,
-    BloomBrightFrag,
-    TiltCompositeFrag,
-    MeshScatterVert,
-    MeshTubeVert,
-    ShadowTubeVert,
-    // Vegetation (scene_vegetation.glsl): the SCENE_VEGETATION builds of the
-    // mesh / shadow vertex stages and of mesh.frag, plus the scatter caster.
-    MeshVegVert,
-    MeshInstancedVegVert,
-    MeshVegFrag,
-    MeshVegIndirectFrag,
-    ShadowVegVert,
-    ShadowInstancedVegVert,
-    ShadowScatterVert,
-    // Grass blades (scene_grass.glsl), drawn with MeshVegFrag.
-    MeshGrassVert,
-    ShadowGrassVert,
-    // The forest node's tiers (scene_forest.glsl), drawn with MeshVegFrag;
-    // the sprite casters cut out by ShadowForestFrag.
-    MeshForestLeafVert,
-    MeshForestTubeVert,
-    MeshForestSpriteVert,
-    ShadowForestLeafVert,
-    ShadowForestTubeVert,
-    ShadowForestSpriteVert,
-    ShadowForestFrag,
-    // Forest impostors (scene_forest_impostor.glsl): the card, mesh.frag
-    // built with SCENE_FOREST_IMPOSTOR (and SCENE_INDIRECT_OUTPUT), and the
-    // caster with its cut-out at the baked depth.
-    MeshForestImpostorVert,
-    MeshImpostorFrag,
-    MeshImpostorIndirectFrag,
-    ShadowForestImpostorVert,
-    ShadowForestImpostorFrag
+#define BRO_SCENE_SHADER(name, out, source, stage, defines) name,
+#include "scene/vulkan/shaders/builtin_shaders.def"
+#undef BRO_SCENE_SHADER
+    Count
 };
 
 /// The scene's shader modules: the built-in shaders (compiled at build time)
 /// and run-time GLSL (clipmap terrain, custom shaders) through the engine's
 /// one in-process compiler, render/glsl_compiler.h.
+///
+/// BRO_SCENE_SHADER_SOURCE is the developer's switch for editing shaders
+/// without a rebuild (docs/hot-reload.md): `1` compiles the built-in shaders,
+/// and reads the GLSL the run-time shaders include or are built from, from
+/// the source tree this binary was built from; any other non-empty value is
+/// a directory to read instead. Each built-in shader compiles at its first
+/// use, from the same text with the same DEFINES as the build-time compile,
+/// and falls back to the embedded SPIR-V (with the error logged) when it
+/// does not compile. Unset, `0` or empty: the embedded SPIR-V.
 class SceneVkShaderCompiler {
 public:
     SceneVkShaderCompiler() = default;
@@ -94,8 +43,32 @@ public:
                                              VkShaderStageFlagBits stage,
                                              std::string* errOut = nullptr);
 
-    /// Retrieve the precompiled SPIR-V bytecode for a built-in shader.
+    /// The SPIR-V of a built-in shader: the embedded words, or under
+    /// BRO_SCENE_SHADER_SOURCE the words compiled from source.
     static const std::vector<uint32_t>& getBuiltinSpirv(BuiltinSceneShader shader);
+
+    /// The SPIR-V embedded at build time, whatever the switch says.
+    static const std::vector<uint32_t>& embeddedSpirv(BuiltinSceneShader shader);
+
+    /// Compile a built-in shader from the sources in `dir` exactly as the
+    /// build does (bro_spirv_embed). Empty, with the reason in *errOut, on
+    /// failure.
+    static std::vector<uint32_t> compileBuiltinFromSource(BuiltinSceneShader shader,
+                                                          const std::string& dir,
+                                                          std::string* errOut = nullptr);
+
+    /// The built-in shader's enum name ("MeshVegFrag"), for logs and tests.
+    static const char* builtinName(BuiltinSceneShader shader);
+
+    /// The directory BRO_SCENE_SHADER_SOURCE names ("" when it is off), with
+    /// a trailing slash.
+    static const std::string& shaderSourceDir();
+    /// The source tree's shader directory this binary was built from.
+    static const char* buildShaderSourceDir();
+
+    /// A scene GLSL file by name: read from shaderSourceDir() when the switch
+    /// is on and the file is there, else `embedded`.
+    static std::string shaderSource(const char* fileName, const char* embedded);
 
     /// Convenience: Create a VkShaderModule for a built-in scene shader.
     static VkShaderModule createBuiltinModule(VkDevice device, BuiltinSceneShader shader);

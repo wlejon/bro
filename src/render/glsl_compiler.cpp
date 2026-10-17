@@ -3,7 +3,9 @@
 #include <glslang/Include/glslang_c_interface.h>
 #include <glslang/Public/resource_limits_c.h>
 
+#include <fstream>
 #include <mutex>
+#include <sstream>
 #include <string>
 #include <unordered_map>
 
@@ -41,7 +43,80 @@ bool initializeOnce() {
     return s_initialized;
 }
 
+bool readTextFile(const std::string& path, std::string& out) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return false;
+    std::stringstream text;
+    text << in.rdbuf();
+    out = text.str();
+    return true;
+}
+
+// Replace every `#include "name"` line of `text` with the file `name` from `dir`.
+bool expandIncludes(std::string& text, const std::string& dir, int depth,
+                    std::vector<std::string>* deps, std::string* err) {
+    if (depth > 8) {
+        if (err) *err = "#include nested too deeply";
+        return false;
+    }
+    std::string out;
+    std::istringstream lines(text);
+    std::string line;
+    while (std::getline(lines, line)) {
+        const size_t hash = line.find_first_not_of(" \t");
+        if (hash != std::string::npos && line.compare(hash, 8, "#include") == 0) {
+            const size_t open = line.find('"', hash);
+            const size_t close = open == std::string::npos ? open : line.find('"', open + 1);
+            if (close == std::string::npos) {
+                if (err) *err = "malformed include: " + line;
+                return false;
+            }
+            const std::string path = dir + line.substr(open + 1, close - open - 1);
+            std::string included;
+            if (!readTextFile(path, included)) {
+                if (err) *err = "cannot read included " + path;
+                return false;
+            }
+            if (deps) deps->push_back(path);
+            if (!expandIncludes(included, dir, depth + 1, deps, err)) return false;
+            out += included;
+            out += '\n';
+            continue;
+        }
+        out += line;
+        out += '\n';
+    }
+    text = std::move(out);
+    return true;
+}
+
 } // namespace
+
+bool preprocessGlslFile(const std::string& path, const std::vector<std::string>& defines,
+                        std::string& out, std::vector<std::string>* deps, std::string* err) {
+    std::string text;
+    if (!readTextFile(path, text)) {
+        if (err) *err = "cannot read " + path;
+        return false;
+    }
+    if (deps) deps->push_back(path);
+    const size_t slash = path.find_last_of("/\\");
+    const std::string dir = slash == std::string::npos ? std::string() : path.substr(0, slash + 1);
+    if (!expandIncludes(text, dir, 0, deps, err)) return false;
+    if (!defines.empty()) {
+        std::string lines;
+        for (const auto& d : defines) lines += "#define " + d + " 1\n";
+        const size_t version = text.find("#version");
+        const size_t lineEnd = version == std::string::npos ? std::string::npos : text.find('\n', version);
+        if (lineEnd == std::string::npos) {
+            if (err) *err = path + " has no #version line to define after";
+            return false;
+        }
+        text.insert(lineEnd + 1, lines);
+    }
+    out = std::move(text);
+    return true;
+}
 
 std::unique_lock<std::mutex> acquireGlslang() {
     std::unique_lock<std::mutex> lock(s_mutex);

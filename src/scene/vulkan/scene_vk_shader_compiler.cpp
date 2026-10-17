@@ -12,15 +12,75 @@
 #include "scene_forest_sprite.glsl.src.h"
 #include "scene_forest_impostor.glsl.src.h"
 
+#include <array>
+#include <cstdlib>
 #include <cstring>
+#include <fstream>
+#include <memory>
+#include <mutex>
 #include <sstream>
+
+#ifndef BRO_SCENE_SHADER_SOURCE_DIR
+#define BRO_SCENE_SHADER_SOURCE_DIR ""
+#endif
+
+// The build's SPIR-V, one generated translation unit a shader
+// (bro_spirv_embed --cpp, from builtin_shaders.def).
+namespace bro::scene::vk::spv {
+#define BRO_SCENE_SHADER(name, out, source, stage, defines) \
+    extern const uint32_t kSpv##name[];                     \
+    extern const size_t kSpv##name##Words;
+#include "scene/vulkan/shaders/builtin_shaders.def"
+#undef BRO_SCENE_SHADER
+} // namespace bro::scene::vk::spv
 
 namespace bro::scene::vk {
 
 namespace {
 
-// The GLSL a scene shader may #include, by name.
-const char* includedSource(const std::string& name) {
+constexpr size_t kBuiltinCount = static_cast<size_t>(BuiltinSceneShader::Count);
+
+struct BuiltinInfo {
+    const char* name;
+    const char* source;
+    const char* stage;
+    const char* defines;
+    const uint32_t* words;
+    const size_t* count;
+};
+
+const BuiltinInfo kBuiltins[] = {
+#define BRO_SCENE_SHADER(name, out, source, stage, defines) \
+    {#name, source, stage, defines, spv::kSpv##name, &spv::kSpv##name##Words},
+#include "scene/vulkan/shaders/builtin_shaders.def"
+#undef BRO_SCENE_SHADER
+};
+static_assert(sizeof(kBuiltins) / sizeof(kBuiltins[0]) == kBuiltinCount);
+
+const BuiltinInfo* infoOf(BuiltinSceneShader shader) {
+    const size_t i = static_cast<size_t>(shader);
+    return i < kBuiltinCount ? &kBuiltins[i] : nullptr;
+}
+
+std::string resolveSourceDir() {
+    const char* env = std::getenv("BRO_SCENE_SHADER_SOURCE");
+    if (!env || !*env || std::strcmp(env, "0") == 0) return {};
+    std::string dir = std::strcmp(env, "1") == 0 ? std::string(BRO_SCENE_SHADER_SOURCE_DIR) : std::string(env);
+    if (dir.empty()) {
+        LOG_ERROR("BRO_SCENE_SHADER_SOURCE=1, but this build does not know its shader source tree");
+        return {};
+    }
+    if (dir.back() != '/' && dir.back() != '\\') dir += '/';
+    if (!std::ifstream(dir + "builtin_shaders.def")) {
+        LOG_ERROR("BRO_SCENE_SHADER_SOURCE: %s holds no builtin_shaders.def; using the embedded shaders", dir.c_str());
+        return {};
+    }
+    LOG_INFO("Scene shaders: compiling from %s (BRO_SCENE_SHADER_SOURCE)", dir.c_str());
+    return dir;
+}
+
+// The GLSL a run-time scene shader may #include, by name.
+const char* embeddedInclude(const std::string& name) {
     static const struct { const char* name; const char* source; } kIncludes[] = {
         {"scene_camera.glsl", kVkSceneCameraSrc},
         {"scene_lighting.glsl", kVkSceneLightingSrc},
@@ -47,9 +107,10 @@ bool expandIncludes(const std::string& source, std::string& out, std::string* er
         if (hash != std::string::npos && line.compare(hash, 8, "#include") == 0) {
             const size_t open = line.find('"', hash);
             const size_t close = open == std::string::npos ? open : line.find('"', open + 1);
-            const char* included =
-                close == std::string::npos ? nullptr : includedSource(line.substr(open + 1, close - open - 1));
-            if (!included || depth > 8 || !expandIncludes(included, out, errOut, depth + 1)) {
+            const std::string name = close == std::string::npos ? std::string() : line.substr(open + 1, close - open - 1);
+            const char* embedded = name.empty() ? nullptr : embeddedInclude(name);
+            const std::string included = embedded ? SceneVkShaderCompiler::shaderSource(name.c_str(), embedded) : std::string();
+            if (!embedded || depth > 8 || !expandIncludes(included, out, errOut, depth + 1)) {
                 if (errOut && errOut->empty()) *errOut = "unknown or recursive include: " + line;
                 return false;
             }
@@ -59,189 +120,6 @@ bool expandIncludes(const std::string& source, std::string& out, std::string* er
         out += '\n';
     }
     return true;
-}
-
-static const uint32_t kSpvMeshVert[] =
-#include "mesh.vert.spv.h"
-;
-static const uint32_t kSpvMeshInstancedVert[] =
-#include "mesh_instanced.vert.spv.h"
-;
-static const uint32_t kSpvMeshSkinnedVert[] =
-#include "mesh_skinned.vert.spv.h"
-;
-static const uint32_t kSpvMeshFrag[] =
-#include "mesh.frag.spv.h"
-;
-static const uint32_t kSpvMeshIndirectFrag[] =
-#include "mesh_indirect.frag.spv.h"
-;
-static const uint32_t kSpvShadowVert[] =
-#include "shadow.vert.spv.h"
-;
-static const uint32_t kSpvShadowInstancedVert[] =
-#include "shadow_instanced.vert.spv.h"
-;
-static const uint32_t kSpvShadowSkinnedVert[] =
-#include "shadow_skinned.vert.spv.h"
-;
-static const uint32_t kSpvShadowFrag[] =
-#include "shadow.frag.spv.h"
-;
-static const uint32_t kSpvPostFxVert[] =
-#include "postfx.vert.spv.h"
-;
-static const uint32_t kSpvTonemapFrag[] =
-#include "tonemap.frag.spv.h"
-;
-static const uint32_t kSpvFxaaFrag[] =
-#include "fxaa.frag.spv.h"
-;
-static const uint32_t kSpvBillboardVert[] =
-#include "billboard.vert.spv.h"
-;
-static const uint32_t kSpvBillboardFrag[] =
-#include "billboard.frag.spv.h"
-;
-static const uint32_t kSpvParticlesVert[] =
-#include "particles.vert.spv.h"
-;
-static const uint32_t kSpvParticlesFrag[] =
-#include "particles.frag.spv.h"
-;
-static const uint32_t kSpvDecalVert[] =
-#include "decal.vert.spv.h"
-;
-static const uint32_t kSpvDecalFrag[] =
-#include "decal.frag.spv.h"
-;
-static const uint32_t kSpvBlurFrag[] =
-#include "blur.frag.spv.h"
-;
-static const uint32_t kSpvSsaoFrag[] =
-#include "ssao.frag.spv.h"
-;
-static const uint32_t kSpvSsrFrag[] =
-#include "ssr.frag.spv.h"
-;
-static const uint32_t kSpvDofFrag[] =
-#include "dof.frag.spv.h"
-;
-static const uint32_t kSpvApplyAoFrag[] =
-#include "apply_ao.frag.spv.h"
-;
-static const uint32_t kSpvGaussianSplatVert[] =
-#include "gaussian_splat.vert.spv.h"
-;
-static const uint32_t kSpvGaussianSplatFrag[] =
-#include "gaussian_splat.frag.spv.h"
-;
-static const uint32_t kSpvSkyVert[] =
-#include "sky.vert.spv.h"
-;
-static const uint32_t kSpvSkyAtmosphereFrag[] =
-#include "sky_atmosphere.frag.spv.h"
-;
-static const uint32_t kSpvSkyboxFrag[] =
-#include "skybox.frag.spv.h"
-;
-static const uint32_t kSpvStarfieldFrag[] =
-#include "starfield.frag.spv.h"
-;
-static const uint32_t kSpvEnvConvertFrag[] =
-#include "env_convert.frag.spv.h"
-;
-static const uint32_t kSpvIrradianceFrag[] =
-#include "irradiance.frag.spv.h"
-;
-static const uint32_t kSpvPrefilterFrag[] =
-#include "prefilter.frag.spv.h"
-;
-static const uint32_t kSpvBrdfLutFrag[] =
-#include "brdf_lut.frag.spv.h"
-;
-static const uint32_t kSpvBloomBrightFrag[] =
-#include "bloom_bright.frag.spv.h"
-;
-static const uint32_t kSpvTiltCompositeFrag[] =
-#include "tilt_composite.frag.spv.h"
-;
-static const uint32_t kSpvMeshScatterVert[] =
-#include "mesh_scatter.vert.spv.h"
-;
-static const uint32_t kSpvMeshTubeVert[] =
-#include "mesh_tube.vert.spv.h"
-;
-static const uint32_t kSpvShadowTubeVert[] =
-#include "shadow_tube.vert.spv.h"
-;
-static const uint32_t kSpvMeshVegVert[] =
-#include "mesh_veg.vert.spv.h"
-;
-static const uint32_t kSpvMeshInstancedVegVert[] =
-#include "mesh_instanced_veg.vert.spv.h"
-;
-static const uint32_t kSpvMeshVegFrag[] =
-#include "mesh_veg.frag.spv.h"
-;
-static const uint32_t kSpvMeshVegIndirectFrag[] =
-#include "mesh_veg_indirect.frag.spv.h"
-;
-static const uint32_t kSpvShadowVegVert[] =
-#include "shadow_veg.vert.spv.h"
-;
-static const uint32_t kSpvShadowInstancedVegVert[] =
-#include "shadow_instanced_veg.vert.spv.h"
-;
-static const uint32_t kSpvShadowScatterVert[] =
-#include "shadow_scatter.vert.spv.h"
-;
-static const uint32_t kSpvMeshGrassVert[] =
-#include "mesh_grass.vert.spv.h"
-;
-static const uint32_t kSpvShadowGrassVert[] =
-#include "shadow_grass.vert.spv.h"
-;
-static const uint32_t kSpvMeshForestLeafVert[] =
-#include "mesh_forest_leaf.vert.spv.h"
-;
-static const uint32_t kSpvMeshForestTubeVert[] =
-#include "mesh_forest_tube.vert.spv.h"
-;
-static const uint32_t kSpvMeshForestSpriteVert[] =
-#include "mesh_forest_sprite.vert.spv.h"
-;
-static const uint32_t kSpvShadowForestLeafVert[] =
-#include "shadow_forest_leaf.vert.spv.h"
-;
-static const uint32_t kSpvShadowForestTubeVert[] =
-#include "shadow_forest_tube.vert.spv.h"
-;
-static const uint32_t kSpvShadowForestSpriteVert[] =
-#include "shadow_forest_sprite.vert.spv.h"
-;
-static const uint32_t kSpvShadowForestFrag[] =
-#include "shadow_forest.frag.spv.h"
-;
-static const uint32_t kSpvMeshForestImpostorVert[] =
-#include "mesh_forest_impostor.vert.spv.h"
-;
-static const uint32_t kSpvMeshImpostorFrag[] =
-#include "mesh_impostor.frag.spv.h"
-;
-static const uint32_t kSpvMeshImpostorIndirectFrag[] =
-#include "mesh_impostor_indirect.frag.spv.h"
-;
-static const uint32_t kSpvShadowForestImpostorVert[] =
-#include "shadow_forest_impostor.vert.spv.h"
-;
-static const uint32_t kSpvShadowForestImpostorFrag[] =
-#include "shadow_forest_impostor.frag.spv.h"
-;
-
-template<size_t N>
-std::vector<uint32_t> arrayToVector(const uint32_t (&arr)[N]) {
-    return std::vector<uint32_t>(arr, arr + N);
 }
 
 } // namespace
@@ -272,130 +150,93 @@ std::vector<uint32_t> SceneVkShaderCompiler::compileGlsl(const std::string& glsl
     return spirv;
 }
 
-const std::vector<uint32_t>& SceneVkShaderCompiler::getBuiltinSpirv(BuiltinSceneShader shader) {
-    static const std::vector<uint32_t> s_meshVert = arrayToVector(kSpvMeshVert);
-    static const std::vector<uint32_t> s_meshInstVert = arrayToVector(kSpvMeshInstancedVert);
-    static const std::vector<uint32_t> s_meshSkinnedVert = arrayToVector(kSpvMeshSkinnedVert);
-    static const std::vector<uint32_t> s_meshFrag = arrayToVector(kSpvMeshFrag);
-    static const std::vector<uint32_t> s_meshIndirectFrag = arrayToVector(kSpvMeshIndirectFrag);
-    static const std::vector<uint32_t> s_shadowVert = arrayToVector(kSpvShadowVert);
-    static const std::vector<uint32_t> s_shadowInstVert = arrayToVector(kSpvShadowInstancedVert);
-    static const std::vector<uint32_t> s_shadowSkinnedVert = arrayToVector(kSpvShadowSkinnedVert);
-    static const std::vector<uint32_t> s_shadowFrag = arrayToVector(kSpvShadowFrag);
-    static const std::vector<uint32_t> s_postFxVert = arrayToVector(kSpvPostFxVert);
-    static const std::vector<uint32_t> s_tonemapFrag = arrayToVector(kSpvTonemapFrag);
-    static const std::vector<uint32_t> s_fxaaFrag = arrayToVector(kSpvFxaaFrag);
-    static const std::vector<uint32_t> s_billboardVert = arrayToVector(kSpvBillboardVert);
-    static const std::vector<uint32_t> s_billboardFrag = arrayToVector(kSpvBillboardFrag);
-    static const std::vector<uint32_t> s_particlesVert = arrayToVector(kSpvParticlesVert);
-    static const std::vector<uint32_t> s_particlesFrag = arrayToVector(kSpvParticlesFrag);
-    static const std::vector<uint32_t> s_decalVert = arrayToVector(kSpvDecalVert);
-    static const std::vector<uint32_t> s_decalFrag = arrayToVector(kSpvDecalFrag);
-    static const std::vector<uint32_t> s_blurFrag = arrayToVector(kSpvBlurFrag);
-    static const std::vector<uint32_t> s_ssaoFrag = arrayToVector(kSpvSsaoFrag);
-    static const std::vector<uint32_t> s_ssrFrag = arrayToVector(kSpvSsrFrag);
-    static const std::vector<uint32_t> s_dofFrag = arrayToVector(kSpvDofFrag);
-    static const std::vector<uint32_t> s_applyAoFrag = arrayToVector(kSpvApplyAoFrag);
-    static const std::vector<uint32_t> s_gaussianSplatVert = arrayToVector(kSpvGaussianSplatVert);
-    static const std::vector<uint32_t> s_gaussianSplatFrag = arrayToVector(kSpvGaussianSplatFrag);
-    static const std::vector<uint32_t> s_skyVert = arrayToVector(kSpvSkyVert);
-    static const std::vector<uint32_t> s_skyAtmosphereFrag = arrayToVector(kSpvSkyAtmosphereFrag);
-    static const std::vector<uint32_t> s_skyboxFrag = arrayToVector(kSpvSkyboxFrag);
-    static const std::vector<uint32_t> s_starfieldFrag = arrayToVector(kSpvStarfieldFrag);
-    static const std::vector<uint32_t> s_envConvertFrag = arrayToVector(kSpvEnvConvertFrag);
-    static const std::vector<uint32_t> s_irradianceFrag = arrayToVector(kSpvIrradianceFrag);
-    static const std::vector<uint32_t> s_prefilterFrag = arrayToVector(kSpvPrefilterFrag);
-    static const std::vector<uint32_t> s_brdfLutFrag = arrayToVector(kSpvBrdfLutFrag);
-    static const std::vector<uint32_t> s_bloomBrightFrag = arrayToVector(kSpvBloomBrightFrag);
-    static const std::vector<uint32_t> s_tiltCompositeFrag = arrayToVector(kSpvTiltCompositeFrag);
-    static const std::vector<uint32_t> s_meshScatterVert = arrayToVector(kSpvMeshScatterVert);
-    static const std::vector<uint32_t> s_meshTubeVert = arrayToVector(kSpvMeshTubeVert);
-    static const std::vector<uint32_t> s_shadowTubeVert = arrayToVector(kSpvShadowTubeVert);
-    static const std::vector<uint32_t> s_meshVegVert = arrayToVector(kSpvMeshVegVert);
-    static const std::vector<uint32_t> s_meshInstancedVegVert = arrayToVector(kSpvMeshInstancedVegVert);
-    static const std::vector<uint32_t> s_meshVegFrag = arrayToVector(kSpvMeshVegFrag);
-    static const std::vector<uint32_t> s_meshVegIndirectFrag = arrayToVector(kSpvMeshVegIndirectFrag);
-    static const std::vector<uint32_t> s_shadowVegVert = arrayToVector(kSpvShadowVegVert);
-    static const std::vector<uint32_t> s_shadowInstancedVegVert = arrayToVector(kSpvShadowInstancedVegVert);
-    static const std::vector<uint32_t> s_shadowScatterVert = arrayToVector(kSpvShadowScatterVert);
-    static const std::vector<uint32_t> s_meshGrassVert = arrayToVector(kSpvMeshGrassVert);
-    static const std::vector<uint32_t> s_shadowGrassVert = arrayToVector(kSpvShadowGrassVert);
-    static const std::vector<uint32_t> s_meshForestLeafVert = arrayToVector(kSpvMeshForestLeafVert);
-    static const std::vector<uint32_t> s_meshForestTubeVert = arrayToVector(kSpvMeshForestTubeVert);
-    static const std::vector<uint32_t> s_meshForestSpriteVert = arrayToVector(kSpvMeshForestSpriteVert);
-    static const std::vector<uint32_t> s_shadowForestLeafVert = arrayToVector(kSpvShadowForestLeafVert);
-    static const std::vector<uint32_t> s_shadowForestTubeVert = arrayToVector(kSpvShadowForestTubeVert);
-    static const std::vector<uint32_t> s_shadowForestSpriteVert = arrayToVector(kSpvShadowForestSpriteVert);
-    static const std::vector<uint32_t> s_shadowForestFrag = arrayToVector(kSpvShadowForestFrag);
-    static const std::vector<uint32_t> s_meshForestImpostorVert = arrayToVector(kSpvMeshForestImpostorVert);
-    static const std::vector<uint32_t> s_meshImpostorFrag = arrayToVector(kSpvMeshImpostorFrag);
-    static const std::vector<uint32_t> s_meshImpostorIndirectFrag = arrayToVector(kSpvMeshImpostorIndirectFrag);
-    static const std::vector<uint32_t> s_shadowForestImpostorVert = arrayToVector(kSpvShadowForestImpostorVert);
-    static const std::vector<uint32_t> s_shadowForestImpostorFrag = arrayToVector(kSpvShadowForestImpostorFrag);
-    static const std::vector<uint32_t> s_empty;
+const std::string& SceneVkShaderCompiler::shaderSourceDir() {
+    static const std::string s_dir = resolveSourceDir();
+    return s_dir;
+}
 
-    switch (shader) {
-        case BuiltinSceneShader::MeshVert:          return s_meshVert;
-        case BuiltinSceneShader::MeshInstancedVert: return s_meshInstVert;
-        case BuiltinSceneShader::MeshSkinnedVert:   return s_meshSkinnedVert;
-        case BuiltinSceneShader::MeshFrag:          return s_meshFrag;
-        case BuiltinSceneShader::MeshIndirectFrag:  return s_meshIndirectFrag;
-        case BuiltinSceneShader::ShadowVert:        return s_shadowVert;
-        case BuiltinSceneShader::ShadowInstancedVert: return s_shadowInstVert;
-        case BuiltinSceneShader::ShadowSkinnedVert: return s_shadowSkinnedVert;
-        case BuiltinSceneShader::ShadowFrag:        return s_shadowFrag;
-        case BuiltinSceneShader::PostFxVert:        return s_postFxVert;
-        case BuiltinSceneShader::TonemapFrag:       return s_tonemapFrag;
-        case BuiltinSceneShader::FxaaFrag:          return s_fxaaFrag;
-        case BuiltinSceneShader::BillboardVert:     return s_billboardVert;
-        case BuiltinSceneShader::BillboardFrag:     return s_billboardFrag;
-        case BuiltinSceneShader::ParticlesVert:     return s_particlesVert;
-        case BuiltinSceneShader::ParticlesFrag:     return s_particlesFrag;
-        case BuiltinSceneShader::DecalVert:         return s_decalVert;
-        case BuiltinSceneShader::DecalFrag:         return s_decalFrag;
-        case BuiltinSceneShader::BlurFrag:          return s_blurFrag;
-        case BuiltinSceneShader::SsaoFrag:          return s_ssaoFrag;
-        case BuiltinSceneShader::SsrFrag:           return s_ssrFrag;
-        case BuiltinSceneShader::DofFrag:           return s_dofFrag;
-        case BuiltinSceneShader::ApplyAoFrag:       return s_applyAoFrag;
-        case BuiltinSceneShader::GaussianSplatVert: return s_gaussianSplatVert;
-        case BuiltinSceneShader::GaussianSplatFrag: return s_gaussianSplatFrag;
-        case BuiltinSceneShader::SkyVert: return s_skyVert;
-        case BuiltinSceneShader::SkyAtmosphereFrag: return s_skyAtmosphereFrag;
-        case BuiltinSceneShader::SkyboxFrag: return s_skyboxFrag;
-        case BuiltinSceneShader::StarfieldFrag: return s_starfieldFrag;
-        case BuiltinSceneShader::EnvConvertFrag: return s_envConvertFrag;
-        case BuiltinSceneShader::IrradianceFrag: return s_irradianceFrag;
-        case BuiltinSceneShader::PrefilterFrag: return s_prefilterFrag;
-        case BuiltinSceneShader::BrdfLutFrag: return s_brdfLutFrag;
-        case BuiltinSceneShader::BloomBrightFrag: return s_bloomBrightFrag;
-        case BuiltinSceneShader::TiltCompositeFrag: return s_tiltCompositeFrag;
-        case BuiltinSceneShader::MeshScatterVert: return s_meshScatterVert;
-        case BuiltinSceneShader::MeshTubeVert: return s_meshTubeVert;
-        case BuiltinSceneShader::ShadowTubeVert: return s_shadowTubeVert;
-        case BuiltinSceneShader::MeshVegVert: return s_meshVegVert;
-        case BuiltinSceneShader::MeshInstancedVegVert: return s_meshInstancedVegVert;
-        case BuiltinSceneShader::MeshVegFrag: return s_meshVegFrag;
-        case BuiltinSceneShader::MeshVegIndirectFrag: return s_meshVegIndirectFrag;
-        case BuiltinSceneShader::ShadowVegVert: return s_shadowVegVert;
-        case BuiltinSceneShader::ShadowInstancedVegVert: return s_shadowInstancedVegVert;
-        case BuiltinSceneShader::ShadowScatterVert: return s_shadowScatterVert;
-        case BuiltinSceneShader::MeshGrassVert: return s_meshGrassVert;
-        case BuiltinSceneShader::ShadowGrassVert: return s_shadowGrassVert;
-        case BuiltinSceneShader::MeshForestLeafVert: return s_meshForestLeafVert;
-        case BuiltinSceneShader::MeshForestTubeVert: return s_meshForestTubeVert;
-        case BuiltinSceneShader::MeshForestSpriteVert: return s_meshForestSpriteVert;
-        case BuiltinSceneShader::ShadowForestLeafVert: return s_shadowForestLeafVert;
-        case BuiltinSceneShader::ShadowForestTubeVert: return s_shadowForestTubeVert;
-        case BuiltinSceneShader::ShadowForestSpriteVert: return s_shadowForestSpriteVert;
-        case BuiltinSceneShader::ShadowForestFrag: return s_shadowForestFrag;
-        case BuiltinSceneShader::MeshForestImpostorVert: return s_meshForestImpostorVert;
-        case BuiltinSceneShader::MeshImpostorFrag: return s_meshImpostorFrag;
-        case BuiltinSceneShader::MeshImpostorIndirectFrag: return s_meshImpostorIndirectFrag;
-        case BuiltinSceneShader::ShadowForestImpostorVert: return s_shadowForestImpostorVert;
-        case BuiltinSceneShader::ShadowForestImpostorFrag: return s_shadowForestImpostorFrag;
-        default: return s_empty;
+const char* SceneVkShaderCompiler::buildShaderSourceDir() {
+    return BRO_SCENE_SHADER_SOURCE_DIR;
+}
+
+std::string SceneVkShaderCompiler::shaderSource(const char* fileName, const char* embedded) {
+    const std::string& dir = shaderSourceDir();
+    if (!dir.empty()) {
+        std::ifstream in(dir + fileName, std::ios::binary);
+        if (in) {
+            std::stringstream text;
+            text << in.rdbuf();
+            return text.str();
+        }
     }
+    return embedded ? std::string(embedded) : std::string();
+}
+
+const char* SceneVkShaderCompiler::builtinName(BuiltinSceneShader shader) {
+    const BuiltinInfo* info = infoOf(shader);
+    return info ? info->name : "";
+}
+
+const std::vector<uint32_t>& SceneVkShaderCompiler::embeddedSpirv(BuiltinSceneShader shader) {
+    static const auto s_table = [] {
+        std::array<std::vector<uint32_t>, kBuiltinCount> table;
+        for (size_t i = 0; i < kBuiltinCount; ++i)
+            table[i].assign(kBuiltins[i].words, kBuiltins[i].words + *kBuiltins[i].count);
+        return table;
+    }();
+    static const std::vector<uint32_t> s_empty;
+    const size_t i = static_cast<size_t>(shader);
+    return i < kBuiltinCount ? s_table[i] : s_empty;
+}
+
+std::vector<uint32_t> SceneVkShaderCompiler::compileBuiltinFromSource(BuiltinSceneShader shader,
+                                                                      const std::string& dir,
+                                                                      std::string* errOut) {
+    const BuiltinInfo* info = infoOf(shader);
+    if (!info) {
+        if (errOut) *errOut = "not a built-in shader";
+        return {};
+    }
+    std::string path = dir;
+    if (!path.empty() && path.back() != '/' && path.back() != '\\') path += '/';
+    path += info->source;
+    std::vector<std::string> defines;
+    std::istringstream words(info->defines);
+    for (std::string d; words >> d;) defines.push_back(d);
+    std::string text, err;
+    if (!render::preprocessGlslFile(path, defines, text, nullptr, &err)) {
+        if (errOut) *errOut = std::move(err);
+        return {};
+    }
+    const render::ShaderStage stage = std::strcmp(info->stage, "vert") == 0   ? render::ShaderStage::Vertex
+                                      : std::strcmp(info->stage, "frag") == 0 ? render::ShaderStage::Fragment
+                                                                              : render::ShaderStage::Compute;
+    std::vector<uint32_t> spirv = render::compileGlslToSpirv(text, stage, &err);
+    if (spirv.empty() && errOut) *errOut = std::move(err);
+    return spirv;
+}
+
+const std::vector<uint32_t>& SceneVkShaderCompiler::getBuiltinSpirv(BuiltinSceneShader shader) {
+    const std::string& dir = shaderSourceDir();
+    if (dir.empty() || !infoOf(shader)) return embeddedSpirv(shader);
+
+    // Compiled at first use, kept for the life of the process.
+    static std::mutex s_mutex;
+    static std::array<std::unique_ptr<std::vector<uint32_t>>, kBuiltinCount> s_compiled;
+    std::lock_guard<std::mutex> lock(s_mutex);
+    auto& slot = s_compiled[static_cast<size_t>(shader)];
+    if (!slot) {
+        std::string err;
+        auto spirv = compileBuiltinFromSource(shader, dir, &err);
+        if (spirv.empty()) {
+            LOG_ERROR("Scene shader %s (%s) did not compile from %s; using the embedded SPIR-V:\n%s",
+                      builtinName(shader), infoOf(shader)->source, dir.c_str(), err.c_str());
+            slot = std::make_unique<std::vector<uint32_t>>(embeddedSpirv(shader));
+        } else {
+            slot = std::make_unique<std::vector<uint32_t>>(std::move(spirv));
+        }
+    }
+    return *slot;
 }
 
 VkShaderModule SceneVkShaderCompiler::createBuiltinModule(VkDevice device, BuiltinSceneShader shader) {

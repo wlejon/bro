@@ -4,106 +4,36 @@ set(EMBED_SCRIPT "${bro_SOURCE_DIR}/cmake/embed_js.cmake")
 ## ── Vulkan SPIR-V shader compilation ──────────────────────────────────────────
 # The built-in scene shaders, compiled at build time by the same in-process
 # glslang the engine uses at run time (bro_spirv_header, cmake/glslang.cmake).
+# vulkan/shaders/builtin_shaders.def lists them, with their variants' DEFINES;
+# each becomes a <name>.spv.cpp of its own, rebuilt only when the files it
+# actually #includes change (the tool's depfile), and the Visual Studio build
+# runs them in parallel (CMP0147). BRO_SCENE_SHADER_SOURCE compiles them from
+# this tree at run time instead, with no rebuild (docs/hot-reload.md).
+if(POLICY CMP0147)
+    cmake_policy(SET CMP0147 NEW)
+endif()
 set(VK_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated_vk")
 file(MAKE_DIRECTORY "${VK_GEN_DIR}")
+set(VK_SHADER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders")
 
 set(VK_GENERATED_HEADERS "")
-# The GLSL the shaders #include (expanded by bro_spirv_embed at build time and
-# by SceneVkShaderCompiler at run time).
-set(VK_SHADER_INCLUDES scene_camera.glsl scene_lighting.glsl scene_atmosphere.glsl scene_mesh_push.glsl
-    scene_shadow_push.glsl scene_procedural.glsl scene_vegetation.glsl scene_grass.glsl sky_common.glsl
-    ibl_common.glsl scene_forest.glsl scene_forest_tube.glsl scene_forest_sprite.glsl
-    scene_forest_sprite_vertex.glsl scene_forest_impostor.glsl scene_forest_impostor_vertex.glsl)
-list(TRANSFORM VK_SHADER_INCLUDES PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/"
-     OUTPUT_VARIABLE VK_SHADER_INCLUDE_PATHS)
-foreach(_shader
-        mesh.vert
-        mesh_instanced.vert
-        mesh_skinned.vert
-        mesh_scatter.vert
-        mesh_tube.vert
-        mesh_grass.vert
-        mesh_forest_leaf.vert
-        mesh_forest_tube.vert
-        mesh_forest_sprite.vert
-        mesh_forest_impostor.vert
-        mesh.frag
-        shadow.vert
-        shadow_instanced.vert
-        shadow_skinned.vert
-        shadow_tube.vert
-        shadow_scatter.vert
-        shadow_grass.vert
-        shadow_forest_leaf.vert
-        shadow_forest_tube.vert
-        shadow_forest_sprite.vert
-        shadow_forest.frag
-        shadow_forest_impostor.vert
-        shadow_forest_impostor.frag
-        shadow.frag
-        sky.vert
-        sky_atmosphere.frag
-        skybox.frag
-        starfield.frag
-        env_convert.frag
-        irradiance.frag
-        prefilter.frag
-        brdf_lut.frag
-        postfx.vert
-        tonemap.frag
-        bloom_bright.frag
-        tilt_composite.frag
-        fxaa.frag
-        billboard.vert
-        billboard.frag
-        particles.vert
-        particles.frag
-        decal.vert
-        decal.frag
-        blur.frag
-        ssao.frag
-        ssr.frag
-        dof.frag
-        apply_ao.frag
-        gaussian_splat.vert
-        gaussian_splat.frag
-    )
-    if(_shader MATCHES "\\.vert$")
-        set(_stage vert)
-    else()
-        set(_stage frag)
+set(VK_SHADER_LIST "${VK_SHADER_DIR}/builtin_shaders.def")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${VK_SHADER_LIST}")
+file(STRINGS "${VK_SHADER_LIST}" _vkShaderLines REGEX "^BRO_SCENE_SHADER\\(")
+foreach(_line IN LISTS _vkShaderLines)
+    if(NOT _line MATCHES "^BRO_SCENE_SHADER\\(([A-Za-z0-9_]+), *\"([^\"]+)\", *\"([^\"]+)\", *\"(vert|frag|comp)\", *\"([^\"]*)\"\\)")
+        message(FATAL_ERROR "builtin_shaders.def: cannot read the line: ${_line}")
     endif()
-    bro_spirv_header(VK_GENERATED_HEADERS "${VK_GEN_DIR}"
-                     "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/${_shader}" ${_stage}
-                     DEPENDS ${VK_SHADER_INCLUDE_PATHS})
+    set(_vkEnum "${CMAKE_MATCH_1}")
+    set(_vkName "${CMAKE_MATCH_2}")
+    set(_vkSource "${CMAKE_MATCH_3}")
+    set(_vkStage "${CMAKE_MATCH_4}")
+    string(REPLACE " " ";" _vkDefines "${CMAKE_MATCH_5}")
+    bro_spirv_header(VK_GENERATED_HEADERS "${VK_GEN_DIR}" "${VK_SHADER_DIR}/${_vkSource}" ${_vkStage}
+                     NAME "${_vkName}" SYMBOL "bro::scene::vk::spv::kSpv${_vkEnum}" DEFINES ${_vkDefines})
 endforeach()
-# The opaque mesh shader that also writes the indirect light for SSAO.
-bro_spirv_header(VK_GENERATED_HEADERS "${VK_GEN_DIR}"
-                 "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/mesh.frag" frag
-                 NAME mesh_indirect.frag DEFINES SCENE_INDIRECT_OUTPUT DEPENDS ${VK_SHADER_INCLUDE_PATHS})
-# Vegetation: meshes carrying wind-sway records (scene_vegetation.glsl).
-foreach(_veg mesh.vert mesh_instanced.vert shadow.vert shadow_instanced.vert mesh.frag)
-    string(REGEX REPLACE "\\.(vert|frag)$" "_veg.\\1" _vegName "${_veg}")
-    string(REGEX MATCH "(vert|frag)$" _vegStage "${_veg}")
-    bro_spirv_header(VK_GENERATED_HEADERS "${VK_GEN_DIR}"
-                     "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/${_veg}" ${_vegStage}
-                     NAME ${_vegName} DEFINES SCENE_VEGETATION DEPENDS ${VK_SHADER_INCLUDE_PATHS})
-endforeach()
-bro_spirv_header(VK_GENERATED_HEADERS "${VK_GEN_DIR}"
-                 "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/mesh.frag" frag
-                 NAME mesh_veg_indirect.frag DEFINES SCENE_VEGETATION SCENE_INDIRECT_OUTPUT
-                 DEPENDS ${VK_SHADER_INCLUDE_PATHS})
-# Forest impostors (scene_forest_impostor.glsl): vegetation shading of the
-# leaves a card's picture holds, at their depth.
-bro_spirv_header(VK_GENERATED_HEADERS "${VK_GEN_DIR}"
-                 "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/mesh.frag" frag
-                 NAME mesh_impostor.frag DEFINES SCENE_VEGETATION SCENE_FOREST_IMPOSTOR
-                 DEPENDS ${VK_SHADER_INCLUDE_PATHS})
-bro_spirv_header(VK_GENERATED_HEADERS "${VK_GEN_DIR}"
-                 "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/mesh.frag" frag
-                 NAME mesh_impostor_indirect.frag
-                 DEFINES SCENE_VEGETATION SCENE_FOREST_IMPOSTOR SCENE_INDIRECT_OUTPUT
-                 DEPENDS ${VK_SHADER_INCLUDE_PATHS})
+set_source_files_properties(vulkan/scene_vk_shader_compiler.cpp PROPERTIES
+    COMPILE_DEFINITIONS "BRO_SCENE_SHADER_SOURCE_DIR=\"${VK_SHADER_DIR}\"")
 
 function(embed_vk_shader SHADER_FILE VAR_NAME)
     set(INPUT  "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/${SHADER_FILE}")

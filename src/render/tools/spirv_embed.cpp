@@ -1,20 +1,27 @@
 // bro_spirv_embed — the build-time half of render/glsl_compiler.h.
 //
-//   bro_spirv_embed <vert|frag|comp> <input.glsl> <output.h> [DEFINE...]
+//   bro_spirv_embed <vert|frag|comp> <input.glsl> <output> [--cpp <ns::symbol>]
+//                   [--depfile <file>] [DEFINE...]
 //
 // Compiles one GLSL file with the same in-process glslang the engine uses at
-// run time and writes its SPIR-V as a brace-enclosed list of 32-bit words, so
-// a source file can embed it with
+// run time. By default it writes the SPIR-V as a brace-enclosed list of
+// 32-bit words, so a source file can embed it with
 //
 //   static const uint32_t kSpv[] =
 //   #include "name.vert.spv.h"
 //   ;
 //
-// Each DEFINE becomes `#define DEFINE 1` right after the #version line, so
-// one source can build several variants. A line `#include "name"` is replaced
-// by the file `name` beside the input (recursively), the same textual
-// include the scene expands for its run-time compiles
-// (scene/vulkan/scene_vk_shader_compiler.h).
+// With --cpp it writes a translation unit of its own instead, defining
+// `extern const uint32_t <symbol>[]` and `extern const size_t <symbol>Words`
+// in the given namespace: a shader edit then recompiles that one small file,
+// not the file that holds every shader.
+//
+// The text compiled is render::preprocessGlslFile's: each `#include "name"`
+// line replaced by the file beside the input (recursively), and each DEFINE
+// made `#define DEFINE 1` right after the #version line, so one source can
+// build several variants. --depfile writes the files read as a Makefile
+// depfile, so the build reruns a shader only when something it includes
+// changed.
 //
 // Exits nonzero, with glslang's diagnostics on stderr, if the shader does not
 // compile; the output is written only on success, so a failed build leaves no
@@ -27,52 +34,26 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <vector>
 
 namespace {
 
-bool readFile(const std::string& path, std::string& out) {
-    std::ifstream in(path, std::ios::binary);
-    if (!in) return false;
-    std::stringstream text;
-    text << in.rdbuf();
-    out = text.str();
-    return true;
+// A depfile path: spaces, '#' and '$' escaped as Make reads them.
+std::string depPath(const std::string& p) {
+    std::string out;
+    for (char c : p) {
+        if (c == '\\') c = '/';
+        if (c == ' ' || c == '#') out += '\\';
+        if (c == '$') out += '$';
+        out += c;
+    }
+    return out;
 }
 
-// Replace every `#include "name"` line with the file `name` from `dir`.
-bool expandIncludes(std::string& text, const std::string& dir, int depth) {
-    if (depth > 8) {
-        std::fprintf(stderr, "bro_spirv_embed: #include nested too deeply\n");
-        return false;
-    }
-    std::string out;
-    std::istringstream lines(text);
-    std::string line;
-    while (std::getline(lines, line)) {
-        const size_t hash = line.find_first_not_of(" \t");
-        if (hash != std::string::npos && line.compare(hash, 8, "#include") == 0) {
-            const size_t open = line.find('"', hash);
-            const size_t close = open == std::string::npos ? open : line.find('"', open + 1);
-            if (close == std::string::npos) {
-                std::fprintf(stderr, "bro_spirv_embed: malformed include: %s\n", line.c_str());
-                return false;
-            }
-            const std::string path = dir + line.substr(open + 1, close - open - 1);
-            std::string included;
-            if (!readFile(path, included)) {
-                std::fprintf(stderr, "bro_spirv_embed: cannot read included %s\n", path.c_str());
-                return false;
-            }
-            if (!expandIncludes(included, dir, depth + 1)) return false;
-            out += included;
-            out += '\n';
-            continue;
-        }
-        out += line;
-        out += '\n';
-    }
-    text = std::move(out);
-    return true;
+bool writeFile(const std::string& path, const std::string& text) {
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    out << text;
+    return static_cast<bool>(out);
 }
 
 }  // namespace
@@ -80,7 +61,8 @@ bool expandIncludes(std::string& text, const std::string& dir, int depth) {
 int main(int argc, char** argv) {
     using bro::render::ShaderStage;
     if (argc < 4) {
-        std::fprintf(stderr, "usage: bro_spirv_embed <vert|frag|comp> <input.glsl> <output.h> [DEFINE...]\n");
+        std::fprintf(stderr, "usage: bro_spirv_embed <vert|frag|comp> <input.glsl> <output> "
+                             "[--cpp <ns::symbol>] [--depfile <file>] [DEFINE...]\n");
         return 2;
     }
     ShaderStage stage;
@@ -91,48 +73,68 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "bro_spirv_embed: unknown stage '%s'\n", argv[1]);
         return 2;
     }
-
-    std::string text;
-    if (!readFile(argv[2], text)) {
-        std::fprintf(stderr, "bro_spirv_embed: cannot read %s\n", argv[2]);
-        return 1;
+    const std::string input = argv[2], output = argv[3];
+    std::string cppSymbol, depfile;
+    std::vector<std::string> defines;
+    for (int i = 4; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--cpp") == 0 && i + 1 < argc) cppSymbol = argv[++i];
+        else if (std::strcmp(argv[i], "--depfile") == 0 && i + 1 < argc) depfile = argv[++i];
+        else defines.emplace_back(argv[i]);
     }
-    const std::string input = argv[2];
-    const size_t slash = input.find_last_of("/\\");
-    if (!expandIncludes(text, slash == std::string::npos ? std::string() : input.substr(0, slash + 1), 0)) return 1;
-    if (argc > 4) {
-        std::string defines;
-        for (int i = 4; i < argc; ++i) defines += std::string("#define ") + argv[i] + " 1\n";
-        const size_t version = text.find("#version");
-        const size_t lineEnd = version == std::string::npos ? std::string::npos : text.find('\n', version);
-        if (lineEnd == std::string::npos) {
-            std::fprintf(stderr, "bro_spirv_embed: %s has no #version line to define after\n", argv[2]);
-            return 1;
-        }
-        text.insert(lineEnd + 1, defines);
+
+    std::string text, err;
+    std::vector<std::string> deps;
+    if (!bro::render::preprocessGlslFile(input, defines, text, &deps, &err)) {
+        std::fprintf(stderr, "bro_spirv_embed: %s\n", err.c_str());
+        return 1;
     }
 
     std::string log;
     const auto spirv = bro::render::compileGlslToSpirv(text, stage, &log);
     if (spirv.empty()) {
-        std::fprintf(stderr, "%s: shader compilation failed\n%s\n", argv[2], log.c_str());
+        std::fprintf(stderr, "%s: shader compilation failed\n%s\n", input.c_str(), log.c_str());
         return 1;
     }
 
-    std::ostringstream outText;
-    outText << "{";
+    std::ostringstream words;
+    words << "{";
     char word[16];
     for (size_t i = 0; i < spirv.size(); ++i) {
         std::snprintf(word, sizeof(word), "0x%08x", spirv[i]);
-        outText << (i ? "," : "") << ((i % 8) == 0 ? "\n" : "") << word;
+        words << (i ? "," : "") << ((i % 8) == 0 ? "\n" : "") << word;
     }
-    outText << "\n}\n";
+    words << "\n}";
 
-    std::ofstream out(argv[3], std::ios::binary | std::ios::trunc);
-    out << outText.str();
-    if (!out) {
-        std::fprintf(stderr, "bro_spirv_embed: cannot write %s\n", argv[3]);
+    std::string outText;
+    if (cppSymbol.empty()) {
+        outText = words.str() + "\n";
+    } else {
+        const size_t sep = cppSymbol.rfind("::");
+        const std::string ns = sep == std::string::npos ? std::string() : cppSymbol.substr(0, sep);
+        const std::string sym = sep == std::string::npos ? cppSymbol : cppSymbol.substr(sep + 2);
+        std::string defs;
+        for (const auto& d : defines) defs += " " + d;
+        std::ostringstream cpp;
+        cpp << "// Generated by bro_spirv_embed from " << input << (defs.empty() ? "" : " with") << defs
+            << ". Do not edit.\n#include <cstddef>\n#include <cstdint>\n";
+        if (!ns.empty()) cpp << "namespace " << ns << " {\n";
+        cpp << "extern const uint32_t " << sym << "[] = " << words.str() << ";\n"
+            << "extern const size_t " << sym << "Words = sizeof(" << sym << ") / sizeof(" << sym << "[0]);\n";
+        if (!ns.empty()) cpp << "}\n";
+        outText = cpp.str();
+    }
+    if (!writeFile(output, outText)) {
+        std::fprintf(stderr, "bro_spirv_embed: cannot write %s\n", output.c_str());
         return 1;
+    }
+    if (!depfile.empty()) {
+        std::string d = depPath(output) + ":";
+        for (const auto& p : deps) d += " \\\n  " + depPath(p);
+        d += "\n";
+        if (!writeFile(depfile, d)) {
+            std::fprintf(stderr, "bro_spirv_embed: cannot write %s\n", depfile.c_str());
+            return 1;
+        }
     }
     return 0;
 }

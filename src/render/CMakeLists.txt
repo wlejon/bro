@@ -28,6 +28,9 @@ target_compile_features(bro_glsl PUBLIC cxx_std_20)
 add_executable(bro_spirv_embed tools/spirv_embed.cpp)
 target_link_libraries(bro_spirv_embed PRIVATE bro_glsl)
 
+if(POLICY CMP0147)
+    cmake_policy(SET CMP0147 NEW)   # Visual Studio: custom commands in parallel
+endif()
 set(RENDER_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated_spv")
 file(MAKE_DIRECTORY "${RENDER_GEN_DIR}")
 set(RENDER_SPV_HEADERS "")

@@ -1,0 +1,81 @@
+// The scene's built-in shaders: one line each, read by the build and by C++.
+//
+//   BRO_SCENE_SHADER(Enum, "generated name", "source file", "stage", "DEFINES")
+//
+// src/scene/CMakeLists.txt reads the lines (a regex per line, so keep each on
+// one line) and compiles each source with bro_spirv_embed into
+// <generated name>.spv.cpp, the DEFINES (space separated) #defined to 1 after
+// the #version line. scene_vk_shader_compiler.h makes the Enum names into
+// BuiltinSceneShader, and under BRO_SCENE_SHADER_SOURCE the scene compiles
+// the same source with the same DEFINES at run time (docs/hot-reload.md).
+// Adding a shader is adding a line here.
+
+BRO_SCENE_SHADER(MeshVert,                 "mesh.vert",                   "mesh.vert",                   "vert", "")
+BRO_SCENE_SHADER(MeshInstancedVert,        "mesh_instanced.vert",         "mesh_instanced.vert",         "vert", "")
+BRO_SCENE_SHADER(MeshSkinnedVert,          "mesh_skinned.vert",           "mesh_skinned.vert",           "vert", "")
+BRO_SCENE_SHADER(MeshFrag,                 "mesh.frag",                   "mesh.frag",                   "frag", "")
+// mesh.frag that also writes the indirect light, for the SSAO opaque pass.
+BRO_SCENE_SHADER(MeshIndirectFrag,         "mesh_indirect.frag",          "mesh.frag",                   "frag", "SCENE_INDIRECT_OUTPUT")
+BRO_SCENE_SHADER(ShadowVert,               "shadow.vert",                 "shadow.vert",                 "vert", "")
+BRO_SCENE_SHADER(ShadowInstancedVert,      "shadow_instanced.vert",       "shadow_instanced.vert",       "vert", "")
+BRO_SCENE_SHADER(ShadowSkinnedVert,        "shadow_skinned.vert",         "shadow_skinned.vert",         "vert", "")
+BRO_SCENE_SHADER(ShadowFrag,               "shadow.frag",                 "shadow.frag",                 "frag", "")
+BRO_SCENE_SHADER(PostFxVert,               "postfx.vert",                 "postfx.vert",                 "vert", "")
+BRO_SCENE_SHADER(TonemapFrag,              "tonemap.frag",                "tonemap.frag",                "frag", "")
+BRO_SCENE_SHADER(FxaaFrag,                 "fxaa.frag",                   "fxaa.frag",                   "frag", "")
+BRO_SCENE_SHADER(BillboardVert,            "billboard.vert",              "billboard.vert",              "vert", "")
+BRO_SCENE_SHADER(BillboardFrag,            "billboard.frag",              "billboard.frag",              "frag", "")
+BRO_SCENE_SHADER(ParticlesVert,            "particles.vert",              "particles.vert",              "vert", "")
+BRO_SCENE_SHADER(ParticlesFrag,            "particles.frag",              "particles.frag",              "frag", "")
+BRO_SCENE_SHADER(DecalVert,                "decal.vert",                  "decal.vert",                  "vert", "")
+BRO_SCENE_SHADER(DecalFrag,                "decal.frag",                  "decal.frag",                  "frag", "")
+BRO_SCENE_SHADER(BlurFrag,                 "blur.frag",                   "blur.frag",                   "frag", "")
+BRO_SCENE_SHADER(SsaoFrag,                 "ssao.frag",                   "ssao.frag",                   "frag", "")
+BRO_SCENE_SHADER(SsrFrag,                  "ssr.frag",                    "ssr.frag",                    "frag", "")
+BRO_SCENE_SHADER(DofFrag,                  "dof.frag",                    "dof.frag",                    "frag", "")
+BRO_SCENE_SHADER(ApplyAoFrag,              "apply_ao.frag",               "apply_ao.frag",               "frag", "")
+BRO_SCENE_SHADER(GaussianSplatVert,        "gaussian_splat.vert",         "gaussian_splat.vert",         "vert", "")
+BRO_SCENE_SHADER(GaussianSplatFrag,        "gaussian_splat.frag",         "gaussian_splat.frag",         "frag", "")
+BRO_SCENE_SHADER(SkyVert,                  "sky.vert",                    "sky.vert",                    "vert", "")
+BRO_SCENE_SHADER(SkyAtmosphereFrag,        "sky_atmosphere.frag",         "sky_atmosphere.frag",         "frag", "")
+BRO_SCENE_SHADER(SkyboxFrag,               "skybox.frag",                 "skybox.frag",                 "frag", "")
+BRO_SCENE_SHADER(StarfieldFrag,            "starfield.frag",              "starfield.frag",              "frag", "")
+BRO_SCENE_SHADER(EnvConvertFrag,           "env_convert.frag",            "env_convert.frag",            "frag", "")
+BRO_SCENE_SHADER(IrradianceFrag,           "irradiance.frag",             "irradiance.frag",             "frag", "")
+BRO_SCENE_SHADER(PrefilterFrag,            "prefilter.frag",              "prefilter.frag",              "frag", "")
+BRO_SCENE_SHADER(BrdfLutFrag,              "brdf_lut.frag",               "brdf_lut.frag",               "frag", "")
+BRO_SCENE_SHADER(BloomBrightFrag,          "bloom_bright.frag",           "bloom_bright.frag",           "frag", "")
+BRO_SCENE_SHADER(TiltCompositeFrag,        "tilt_composite.frag",         "tilt_composite.frag",         "frag", "")
+BRO_SCENE_SHADER(MeshScatterVert,          "mesh_scatter.vert",           "mesh_scatter.vert",           "vert", "")
+BRO_SCENE_SHADER(MeshTubeVert,             "mesh_tube.vert",              "mesh_tube.vert",              "vert", "")
+BRO_SCENE_SHADER(ShadowTubeVert,           "shadow_tube.vert",            "shadow_tube.vert",            "vert", "")
+// Vegetation (scene_vegetation.glsl): the SCENE_VEGETATION builds of the mesh
+// and shadow vertex stages and of mesh.frag, plus the scatter caster.
+BRO_SCENE_SHADER(MeshVegVert,              "mesh_veg.vert",               "mesh.vert",                   "vert", "SCENE_VEGETATION")
+BRO_SCENE_SHADER(MeshInstancedVegVert,     "mesh_instanced_veg.vert",     "mesh_instanced.vert",         "vert", "SCENE_VEGETATION")
+BRO_SCENE_SHADER(MeshVegFrag,              "mesh_veg.frag",               "mesh.frag",                   "frag", "SCENE_VEGETATION")
+BRO_SCENE_SHADER(MeshVegIndirectFrag,      "mesh_veg_indirect.frag",      "mesh.frag",                   "frag", "SCENE_VEGETATION SCENE_INDIRECT_OUTPUT")
+BRO_SCENE_SHADER(ShadowVegVert,            "shadow_veg.vert",             "shadow.vert",                 "vert", "SCENE_VEGETATION")
+BRO_SCENE_SHADER(ShadowInstancedVegVert,   "shadow_instanced_veg.vert",   "shadow_instanced.vert",       "vert", "SCENE_VEGETATION")
+BRO_SCENE_SHADER(ShadowScatterVert,        "shadow_scatter.vert",         "shadow_scatter.vert",         "vert", "")
+// Grass blades (scene_grass.glsl), drawn with MeshVegFrag.
+BRO_SCENE_SHADER(MeshGrassVert,            "mesh_grass.vert",             "mesh_grass.vert",             "vert", "")
+BRO_SCENE_SHADER(ShadowGrassVert,          "shadow_grass.vert",           "shadow_grass.vert",           "vert", "")
+// The forest node's tiers (scene_forest.glsl), drawn with MeshVegFrag; the
+// sprite casters cut out by ShadowForestFrag.
+BRO_SCENE_SHADER(MeshForestLeafVert,       "mesh_forest_leaf.vert",       "mesh_forest_leaf.vert",       "vert", "")
+BRO_SCENE_SHADER(MeshForestTubeVert,       "mesh_forest_tube.vert",       "mesh_forest_tube.vert",       "vert", "")
+BRO_SCENE_SHADER(MeshForestSpriteVert,     "mesh_forest_sprite.vert",     "mesh_forest_sprite.vert",     "vert", "")
+BRO_SCENE_SHADER(ShadowForestLeafVert,     "shadow_forest_leaf.vert",     "shadow_forest_leaf.vert",     "vert", "")
+BRO_SCENE_SHADER(ShadowForestTubeVert,     "shadow_forest_tube.vert",     "shadow_forest_tube.vert",     "vert", "")
+BRO_SCENE_SHADER(ShadowForestSpriteVert,   "shadow_forest_sprite.vert",   "shadow_forest_sprite.vert",   "vert", "")
+BRO_SCENE_SHADER(ShadowForestFrag,         "shadow_forest.frag",          "shadow_forest.frag",          "frag", "")
+// Forest impostors (scene_forest_impostor.glsl): the card, mesh.frag built
+// with SCENE_FOREST_IMPOSTOR (and SCENE_INDIRECT_OUTPUT) for the vegetation
+// shading of the leaves a card's picture holds at their depth, and the
+// caster with its cut-out at the baked depth.
+BRO_SCENE_SHADER(MeshForestImpostorVert,   "mesh_forest_impostor.vert",   "mesh_forest_impostor.vert",   "vert", "")
+BRO_SCENE_SHADER(MeshImpostorFrag,         "mesh_impostor.frag",          "mesh.frag",                   "frag", "SCENE_VEGETATION SCENE_FOREST_IMPOSTOR")
+BRO_SCENE_SHADER(MeshImpostorIndirectFrag, "mesh_impostor_indirect.frag", "mesh.frag",                   "frag", "SCENE_VEGETATION SCENE_FOREST_IMPOSTOR SCENE_INDIRECT_OUTPUT")
+BRO_SCENE_SHADER(ShadowForestImpostorVert, "shadow_forest_impostor.vert", "shadow_forest_impostor.vert", "vert", "")
+BRO_SCENE_SHADER(ShadowForestImpostorFrag, "shadow_forest_impostor.frag", "shadow_forest_impostor.frag", "frag", "")

@@ -43,8 +43,8 @@ constexpr const char* kVertexAliases =
     "#define aTangent inTangent\n";
 
 // The marker line the chunk replaces, with `define` set for the hook.
-std::string splice(const char* base, const std::string& chunk, const char* define) {
-    std::string s(base ? base : "");
+std::string splice(const std::string& base, const std::string& chunk, const char* define) {
+    std::string s(base);
     if (chunk.empty()) return s;
     const char* marker = "//__USER_CHUNK__";
     const size_t pos = s.find(marker);
@@ -81,11 +81,17 @@ void std140(const std::string& type, uint32_t& size, uint32_t& align) {
     align = n == 2 ? 8 : 16;
 }
 
-const char* vertexBase(SceneRenderer::CustomShaderTarget target) {
+// The engine's own shader a chunk is spliced into (from the source tree under
+// BRO_SCENE_SHADER_SOURCE).
+std::string base(const char* file, const char* embedded) {
+    return SceneVkShaderCompiler::shaderSource(file, embedded);
+}
+
+std::string vertexBase(SceneRenderer::CustomShaderTarget target) {
     switch (target) {
-    case SceneRenderer::CustomShaderTarget::Instanced: return kVkMeshInstancedVertSrc;
-    case SceneRenderer::CustomShaderTarget::Skinned: return kVkMeshSkinnedVertSrc;
-    default: return kVkMeshVertSrc;
+    case SceneRenderer::CustomShaderTarget::Instanced: return base("mesh_instanced.vert", kVkMeshInstancedVertSrc);
+    case SceneRenderer::CustomShaderTarget::Skinned: return base("mesh_skinned.vert", kVkMeshSkinnedVertSrc);
+    default: return base("mesh.vert", kVkMeshVertSrc);
     }
 }
 
@@ -249,7 +255,7 @@ bool SceneVkCustomShader::validateCustomShader(SceneRenderer::CustomShaderTarget
         if (SceneVkShaderCompiler::compileGlsl(vs, VK_SHADER_STAGE_VERTEX_BIT, &errOut).empty()) return false;
     }
     if (!fragmentChunk.empty()) {
-        const std::string fs = splice(kVkMeshFragSrc, iface.fragmentSource(), "CUSTOM_FRAGMENT");
+        const std::string fs = splice(base("mesh.frag", kVkMeshFragSrc), iface.fragmentSource(), "CUSTOM_FRAGMENT");
         if (SceneVkShaderCompiler::compileGlsl(fs, VK_SHADER_STAGE_FRAGMENT_BIT, &errOut).empty()) return false;
     }
     return true;
@@ -265,7 +271,7 @@ bool SceneVkCustomShader::compileCustomShaderModules(VkDevice device,
     // A custom varying needs the vertex stage to write it even when only the
     // fragment chunk reads it, so both stages always splice their chunk.
     const std::string vsSrc = splice(vertexBase(target), iface.vertexSource(), "CUSTOM_VERTEX");
-    std::string fsSrc = splice(kVkMeshFragSrc, iface.fragmentSource(), "CUSTOM_FRAGMENT");
+    std::string fsSrc = splice(base("mesh.frag", kVkMeshFragSrc), iface.fragmentSource(), "CUSTOM_FRAGMENT");
     if (indirectOutput) fsSrc = defineAfterVersion(std::move(fsSrc), "SCENE_INDIRECT_OUTPUT");
 
     const auto vsSpirv = SceneVkShaderCompiler::compileGlsl(vsSrc, VK_SHADER_STAGE_VERTEX_BIT, &errOut);
@@ -294,7 +300,7 @@ bool SceneVkCustomShader::compileCustomShadowShaderModule(VkDevice device,
     if (chunk.empty()) return false;
     // CUSTOM_CASTER declares the inputs only a custom caster's pipeline feeds.
     const std::string vsSrc = defineAfterVersion(
-        splice(isSkinned ? kVkShadowSkinnedVertSrc : kVkShadowVertSrc, chunk, "CUSTOM_VERTEX"), "CUSTOM_CASTER");
+        splice(isSkinned ? base("shadow_skinned.vert", kVkShadowSkinnedVertSrc) : base("shadow.vert", kVkShadowVertSrc), chunk, "CUSTOM_VERTEX"), "CUSTOM_CASTER");
     const auto spirv = SceneVkShaderCompiler::compileGlsl(vsSrc, VK_SHADER_STAGE_VERTEX_BIT, &errOut);
     if (spirv.empty()) return false;
     outVs = SceneVkShaderModule::create(device, spirv);
