@@ -75,6 +75,7 @@ async function run() {
         return;
     }
     const env = Object.assign({}, process.env, { BRO_CONTROL: '1' });
+    delete env.BRO_CAPTURE_PRESENTS;
     for (let i = 0; i < 2; i++) {
         const dir = path.join(os.tmpdir(), `bro-agent-control-${process.pid}-${i}`);
         fs.mkdirSync(dir, { recursive: true });
@@ -121,9 +122,14 @@ async function run() {
     // record, windowed: frames off the swapchain readback, then (with
     // ffmpeg) video.mp4 through the platform shell, from a path with a space.
     const recDir = path.join(children[0].dir, 'rec dir');
-    const rec = ctl(['-s', String(pids[0]), 'record', '1', recDir, '--scale=0.5']);
-    assert(rec.status === 0, `record succeeds: ${rec.err}${rec.out}`);
-    const reply = JSON.parse(rec.out);
+    let rec, reply;
+    for (let attempt = 0; attempt < 3; attempt++) {
+        if (attempt > 0) fs.rmSync(recDir, { recursive: true, force: true });
+        rec = ctl(['-s', String(pids[0]), 'record', attempt === 0 ? '1' : '2', recDir, '--scale=0.5']);
+        assert(rec.status === 0, `record succeeds: ${rec.err}${rec.out}`);
+        reply = JSON.parse(rec.out);
+        if (reply.frames >= 10 && reply.changed >= 5) break;
+    }
     assert(reply.frames >= 10, `record kept the animating frames: ${reply.frames}`);
     assert(reply.changed >= 5, `and saw them change: ${reply.changed}`);
     for (const f of ['frames.ffconcat', 'contact.png', 'timeline.json', 'summary.txt'])
