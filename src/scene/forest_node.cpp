@@ -11,7 +11,7 @@ namespace {
 
 constexpr size_t kSpecimenFloats = 16;   // emitForest's binding: see setSpecimens
 constexpr size_t kHeaderFloats = 16;
-constexpr size_t kSpecimenRecords = 7;   // scene_forest.glsl's FOREST_SPECIMEN_RECORDS
+constexpr size_t kSpecimenRecords = 9;   // scene_forest.glsl's FOREST_SPECIMEN_RECORDS
 constexpr size_t kBloomFloats = 8;       // emitForest's blooms and specimenBlooms: see setBlooms
 
 float smooth(float a, float b, float x) {
@@ -162,6 +162,7 @@ bool ForestNode::setSpecimens(SpecimenArrays&& a) {
 
     specimens_ = std::move(specs);
     if (looks_.size() != specimens_.size() * 8) looks_.clear();
+    if (leafLooks_.size() != specimens_.size() * 8) leafLooks_.clear();
     keepRadius_ = a.keepRadius;
     data_ = std::move(a);
     // The blooms were the old specimens' (setBlooms gives the new ones').
@@ -506,7 +507,7 @@ void ForestNode::setLook(const Look& l) {
     n.limbBob = std::clamp(std::isfinite(n.limbBob) ? n.limbBob : 0.6f, 0.0f, 3.9f);
     n.twigBob = std::clamp(std::isfinite(n.twigBob) ? n.twigBob : 0.8f, 0.0f, 3.9f);
     if (n.leafForm == look_.leafForm && n.flutter == look_.flutter && n.limbBob == look_.limbBob &&
-        n.twigBob == look_.twigBob)
+        n.twigBob == look_.twigBob && n.leafCut == look_.leafCut)
         return;
     look_ = n;
     gpuDirty_ = true;
@@ -514,7 +515,15 @@ void ForestNode::setLook(const Look& l) {
 }
 
 bool ForestNode::setSpecimenLooks(std::vector<float> looks) {
-    if (!looks.empty() && looks.size() != specimens_.size() * 8) return false;
+    const size_t n = specimens_.size();
+    if (!looks.empty() && looks.size() != n * 8 && looks.size() != n * 16) return false;
+    // Past the looks, each specimen's broad leaf (emitForest's specimenLeaves).
+    if (looks.size() == n * 16) {
+        leafLooks_.assign(looks.begin() + static_cast<std::ptrdiff_t>(n * 8), looks.end());
+        looks.resize(n * 8);
+    } else {
+        leafLooks_.clear();
+    }
     looks_ = std::move(looks);
     gpuDirty_ = true;
     dataGeneration_ = nextResourceGeneration();
@@ -607,6 +616,15 @@ const std::vector<float>& ForestNode::gpuData() const {
         // Record 6: its blooms' colour (absolute) and form.
         d[24] = s.bloomColor[0]; d[25] = s.bloomColor[1]; d[26] = s.bloomColor[2];
         d[27] = bitsOf(static_cast<uint32_t>(s.bloomForm));
+        // Record 7: its broad leaf (width over length, tip, teeth a side,
+        // tooth depth); record 5's w its gloss. All 0: the node's own leaf.
+        if (leafLooks_.size() == nSpec * 8) {
+            const float* L = &leafLooks_[k * 8];
+            d[28] = L[0]; d[29] = L[1]; d[30] = L[2]; d[31] = L[3];
+            d[23] = L[4];
+            // Record 8: its sprays' brush (Species::sprayBrush), 0, 0, 0.
+            d[32] = L[5];
+        }
         for (int part = 0; part < 2; ++part) {
             float* t = d + 16 + part * 4;
             t[0] = t[1] = t[2] = 1.0f;

@@ -279,6 +279,12 @@
  * @property {Array<number>} [barkColor=[0,0,0]] - The bark's; 0,0,0 the renderer's own.
  * @property {number} [clumpScale=1] - The crown clumps' size, x what the emit's options give (a conifer's small dense tufts 0.3).
  * @property {number} [leafSize=1] - A leaf's size, x the renderer's card (a boxwood 0.3): its clumps carry 1/leafSize² the leaves, so they cover as much.
+ * @property {number} [leafWidth=0] - A broad leaf's width over its length (0 the renderer's card, ~0.5): its outline, cut per pixel near (emitForest's `specimenLeaves`).
+ * @property {number} [leafTip=0] - 0 a pointed (acuminate) tip, 1 a rounded one (a boxwood's).
+ * @property {number} [leafTeeth=0] - Teeth along each side of the margin (0 entire).
+ * @property {number} [leafToothDepth=0] - Their depth as a share of the half-width: under ~0.15 a serration (hydrangea 0.06), deeper spines between concave scallops whose margin waves up and down (holly 0.32).
+ * @property {number} [leafGloss=0] - 0 a matte leaf (the renderer's roughness), 1 a waxy, glossy one (holly 0.9): sharper sheen, less light through.
+ * @property {number} [sprayBrush=0] - Needle and scale forms: 0 the sprays lie round the clump facing out (a fir's), 1 each turns up and out along its twig, gathered toward the clump's end: a pine's upswept brushes at the branch tips.
  * @property {number} [clumpFlat=1] - A clump's height over its width: 1 a broadleaf's round lobes, ~0.4 the flat pads of a fir's level sprays (the clumps pack closer up and down by as much).
  * @property {number} [clumpReach=0] - A clump reaches no further across than this x its distance from the plant's axis, plus a quarter of its size (0 no limit): a conifer's short top boughs carry small clumps, so its crown narrows to a spire.
  * @property {number} [clumpFill=0] - 0 (a broadleaf tree's): foliage on the crown's outermost shoots, its interior thinly leaved; 1: every shoot tip carries foliage however its module has branched on (a conifer's clothed boughs, a shrub's mound).
@@ -726,6 +732,10 @@ class FloraWorld {
    *   - `specimenLooks`: 8 floats a specimen, its species' leafColor rgb,
    *     leafForm (0 broad, 1 needle, 2 scale), barkColor rgb and leafSize
    *     (createForest takes them as the node's per-specimen look).
+   *   - `specimenLeaves`: 8 floats a specimen, its species' leafWidth,
+   *     leafTip, leafTeeth, leafToothDepth, leafGloss, sprayBrush, 0, 0
+   *     (createForest's `setLook` hands them on after `specimenLooks`: each
+   *     specimen's own leaf outline, gloss and spray brush).
    *   - `blooms`: 8 floats a bloom, position xyz (relative: its twig's tip),
    *     size (m: a flower's or a head's across, a spike's length; the
    *     species' bloomSize, smaller on a young, weak or shaded shoot and as

@@ -30,6 +30,7 @@ void main() {
         gl_Position = FOREST_CULLED;
         return;
     }
+    forestSprayBrush(e.instance, lf.x, lc, lr, P, R, F);
     // Swayed about where it hangs, as mesh_forest_leaf.vert sways it.
     vec3 rest = P;
     float grown = (k - 1.0) * procedural.header[1].z;

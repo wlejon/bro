@@ -210,7 +210,13 @@ public:
     /// leaf form, bark colour, leaf size (read by createForest for its
     /// default card, not here); a colour of 0, 0, 0 takes the node's.
     /// Empty: every specimen the node's colours. False, changing nothing, when
-    /// the count does not match the specimens.
+    /// the count does not match the specimens. Twice as long: after the
+    /// looks, 8 floats a specimen of its broad leaf (emitForest's
+    /// `specimenLeaves`): width over length (0 the card's), tip (0 pointed,
+    /// 1 rounded), teeth a side, tooth depth (of the half-width; deep teeth
+    /// are spines), gloss (0..1) — mesh.frag cuts the outline and shades
+    /// the leaf from them — then a needle or scale-leaf spray's brush (0
+    /// lying round its clump, 1 radiating from the shoot, swept up), 0, 0.
     bool setSpecimenLooks(std::vector<float> looks);
 
     /// Bark material (the leaves take the node's).
@@ -355,6 +361,7 @@ private:
     int forceTier_ = -1;
     Look look_;
     std::vector<float> looks_;
+    std::vector<float> leafLooks_;   // 8 a specimen (setSpecimenLooks), or empty
     mutable float gpuColors_[6] = {};   // the node's leaf and bark colour gpu_'s tints were taken against
     float barkColor_[3] = {0.2f, 0.17f, 0.14f};
     float barkRoughness_ = 0.9f;

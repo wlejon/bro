@@ -115,7 +115,15 @@
     }
 
     function setLook(node, o, form) {
-        const looks = o.specimenLooks || (o.forest && o.forest.specimenLooks) || null;
+        let looks = o.specimenLooks || (o.forest && o.forest.specimenLooks) || null;
+        // Each specimen's broad leaf (outline, teeth, gloss) after its looks.
+        const leaves = o.specimenLeaves || (o.forest && o.forest.specimenLeaves) || null;
+        if (looks && leaves && leaves.length === looks.length) {
+            const both = new Float32Array(looks.length * 2);
+            both.set(looks);
+            both.set(leaves, looks.length);
+            looks = both;
+        }
         const num = (v, d) => (typeof v === 'number' ? v : d);
         const a = new Float64Array([form ? form.form : NaN,
                                     num(o.flutter, form ? form.flutter : NaN),

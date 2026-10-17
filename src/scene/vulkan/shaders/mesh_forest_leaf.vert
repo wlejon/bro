@@ -64,6 +64,7 @@ void main() {
         gl_Position = FOREST_CULLED;
         return;
     }
+    forestSprayBrush(e.instance, lf.x, lc, lr, P, R, F);
     int specimen;
     float treeSeed;
     mat4 model = push.model * forestInstance(e.instance, specimen, treeSeed);
@@ -82,6 +83,24 @@ void main() {
     float grown = (k - 1.0) * procedural.header[1].z;
     if (grown > 0.0 && !cluster) P = lc + (P - lc) * clamp(1.0 - 0.5 * grown / max(lr, 1e-3), 0.55, 1.0);
     vec3 local = inPos;
+    // A cut leaf (MESH_FOREST_LEAF_CUT) takes its species' leaf
+    // (scene_forest.glsl's forestSpecimenLeaf): its width as a share of
+    // the card's widest (`cutWidth`), and the card's three rows set out to
+    // hold that outline (mesh.frag's forestLeafCut: widest a little below
+    // the middle, a pointed or rounded tip), so a broad ovate leaf is not
+    // clipped by a card cut for a narrower one.
+    bool cut = (meshFlags() & MESH_FOREST_LEAF_CUT) != 0u;
+    vec4 cutLeaf = vec4(0.0);
+    float cutWidth = 1.0;
+    float len = procedural.header[1].z / max(procedural.header[1].x, 1e-6);   // the mesh's own
+    float halfCard = 0.5 * procedural.header[3].y * len;                      // its widest, half
+    if (cut) {
+        cutLeaf = forestSpecimenLeaf(specimen);
+        cutWidth = cutLeaf.x > 0.0 ? clamp(cutLeaf.x / max(procedural.header[3].y, 1e-3), 0.4, 1.6) : 1.0;
+        float t = 1.0 - inUV.y;   // 0 the stalk's row, 0.5 the middle's, 1 the tip's
+        float row = t < 0.25 ? 0.72 : t < 0.75 ? 0.95 : mix(0.3, 0.58, clamp(cutLeaf.y, 0.0, 1.0));
+        local.x = sign(inPos.x) * row * cutWidth * halfCard;
+    }
     vec2 span = vec2(0.0);
     if (cluster) {
         float aspect = procedural.header[3].y;
@@ -142,14 +161,17 @@ void main() {
     outTangent = Tw;
     outBitangent = cross(Nw, Tw) * inTangent.w;
     outUV = inUV;
-    // A cut leaf (MESH_FOREST_LEAF_CUT): across its card from where the
-    // point lies (0.5 the midrib, 0 and 1 the card's widest), so the cut
-    // runs true over each triangle.
-    if ((meshFlags() & MESH_FOREST_LEAF_CUT) != 0u) {
-        float len = procedural.header[1].z / max(procedural.header[1].x, 1e-6);   // the mesh's own
-        outUV.x = inPos.x / max(procedural.header[3].y * len, 1e-6) + 0.5;
-    }
     outColor = meshVertexColorMode() != 0u ? inColor : vec4(1.0);
+    // A cut leaf: across its card from where the point lies (0.5 the
+    // midrib, 0 and 1 the card's widest at its species' width 1), so the
+    // cut runs true over each triangle.
+    if (cut) {
+        outUV.x = 0.5 * local.x / max(halfCard, 1e-6) + 0.5;
+        // For mesh.frag to cut and shade: its width, its tip, its teeth a
+        // side plus their depth (under 1), its gloss.
+        outColor = vec4(cutWidth, cutLeaf.y, floor(cutLeaf.z + 0.5) + min(cutLeaf.w, 0.95),
+                        forestSpecimenGloss(specimen));
+    }
     // A cluster's point in leaf lengths, the widening, a seed and the leaf's
     // width over its length.
     if (cluster) {

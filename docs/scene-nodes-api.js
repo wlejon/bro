@@ -538,7 +538,13 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  * a specimen, leafColor rgb, form, barkColor rgb, leafSize): its leaves and
  * bark take its colours in place of the node's (a tint over the node's
  * colour, so the node's maps still apply), so a spruce is darker than a fir
- * in the same node. A zero colour keeps the node's.
+ * in the same node. A zero colour keeps the node's. 16 floats a specimen
+ * add its LEAF (the emit's `specimenLeaves`, which createForest appends
+ * when the emit carries them): width, tip, teeth, tooth depth, gloss and
+ * spray brush. A broad leaf the node's own card is cut to that outline per
+ * pixel near (pointed or rounded, serrated or spiny, veined; a leaf a few
+ * pixels across is drawn as its whole card), glossy as its species is;
+ * a spray with a brush turns up and out along its twig (a pine's).
  *
  * The node's material (colour, roughness, subsurface, maps, shadows) is the
  * leaves'; `barkColor` and `barkRoughness` the bark's; its mesh the leaf
@@ -576,7 +582,9 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  * @property {number} [limbBob] - how much limbs bounce (broad 0.6, needle 1.6, scale 1.3).
  * @property {number} [twigBob] - how much twigs and sprays bounce (broad 0.8, needle 1, scale 0.9).
  * @property {Float32Array|Array<number>} [specimenLooks] - 8 floats a specimen
- *   (leafColor rgb, form, barkColor rgb, leafSize); default the emit's.
+ *   (leafColor rgb, form, barkColor rgb, leafSize), or 16 with each
+ *   specimen's leaf after them all (8 a specimen: width, tip, teeth, tooth
+ *   depth, gloss, spray brush, 0, 0); default the emit's.
  *   All zeros: the node's own colours.
  * @property {ForestLod} [lod] - level-of-detail settings.
  * @property {Array<number>|string} [barkColor] - default `[0.2, 0.17, 0.14]`.

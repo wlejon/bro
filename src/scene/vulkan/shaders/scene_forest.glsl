@@ -12,14 +12,17 @@
 //              over its length (a spray's: its needles' cover, as an
 //              ellipse); the leaves' flutter; the look as uint bits: leaf
 //              form (bits 0-3), limb bob and twig bob in 64ths (8 bits each)
-//   specimens  7 records: (segStart, segCount, clumpStart, clumpCount) and
+//   specimens  8 records: (segStart, segCount, clumpStart, clumpCount) and
 //              (leafStart, leafCount, crown clump, mean clump weight) as
 //              uint bits but the last; (crown.xyz, crown radius across);
 //              (crown radius up, mean clump radius, height, first clump
 //              block's record as uint bits); its leaves' tint (rgb, its
-//              clumps' flatness); its bark's tint (rgb, -); its blooms'
-//              colour (rgb, linear, absolute: not a tint) and form (uint
-//              bits: 0 none, 1 flower, 2 head, 3 spike; broflora's BloomForm)
+//              clumps' flatness); its bark's tint (rgb, its leaves' gloss);
+//              its blooms' colour (rgb, linear, absolute: not a tint) and
+//              form (uint bits: 0 none, 1 flower, 2 head, 3 spike;
+//              broflora's BloomForm); its broad leaf (width over length, 0
+//              the card's; tip, 0 pointed, 1 rounded; teeth a side; tooth
+//              depth, of the half-width); its sprays' brush (x; yzw 0)
 //   segments   7 records: (from.xyz, rFrom), (to.xyz, rTo), (oct tangent at
 //              from, at to), then its vegetation record (4)
 //   clumps     6 records: (centre.xyz, radius), (twig dir.xyz, leaf count),
@@ -75,6 +78,13 @@ int forestSpecimenRecord(int s) { return forestBase(0) + s * FOREST_SPECIMEN_REC
 
 // Specimen `s`'s tint on the node's colour: its leaves' or its bark's.
 vec3 forestSpecimenTint(int s, bool bark) { return procedural.records[forestSpecimenRecord(s) + (bark ? 5 : 4)].xyz; }
+
+// Specimen `s`'s broad leaf: (width over length, tip, teeth a side, tooth
+// depth), all 0 for the node's own; and its gloss (0..1).
+vec4 forestSpecimenLeaf(int s) { return procedural.records[forestSpecimenRecord(s) + 7]; }
+float forestSpecimenGloss(int s) { return procedural.records[forestSpecimenRecord(s) + 5].w; }
+// Specimen `s`'s sprays' brush (broflora's Species::sprayBrush).
+float forestSpecimenBrush(int s) { return procedural.records[forestSpecimenRecord(s) + 8].x; }
 
 // Specimen `s`'s blooms: their colour (rgb, linear) and form (w: 0 none, 1
 // flower, 2 head, 3 spike).
@@ -146,6 +156,34 @@ ivec2 forestLeaf(int i) {
     vec4 r = procedural.records[forestBase(3) + i / 2];
     uvec2 u = floatBitsToUint((i & 1) == 0 ? r.xy : r.zw);
     return ivec2(u);
+}
+
+// A needle or scale-leaf spray of instance `i`'s specimen, placed by
+// clumpLeafFrame in clump `clump` (global) about its lobe's centre `lc`
+// (radius `lr`), turned by the specimen's brush (forestSpecimenBrush): at 1
+// its length runs out from the lobe's middle along its shoot and swept up,
+// so the clump is a brush of needles radiating from the shoot's end, not
+// sprays lying round a ball; and it is drawn in toward the lobe's middle,
+// so the brush reaches about as far as the lobe the clump tier draws. The
+// leaf mesh is centred, its length +Z (R's third column), across +X, its
+// normal +Y.
+void forestSprayBrush(int i, int clump, vec3 lc, float lr, inout vec3 P, inout mat3 R, inout vec3 F) {
+    if (forestLeafForm() == 0) return;
+    float b = clamp(forestSpecimenBrush(forestInstanceSpecimen(i)), 0.0, 1.0);
+    if (b <= 0.0) return;
+    float scale = length(R[2]);
+    vec3 N = R[1] / max(length(R[1]), 1e-9);
+    vec3 o = P - lc;
+    vec3 out1 = dot(o, o) > 1e-12 ? normalize(o) : vec3(0.0, 1.0, 0.0);
+    vec3 tw = procedural.records[forestClumpRecord(clump) + 1].xyz;
+    tw = dot(tw, tw) > 1e-12 ? normalize(tw) : out1;
+    vec3 Fb = normalize(out1 + 0.6 * tw + vec3(0.0, 0.9, 0.0));
+    vec3 Fn = normalize(mix(F, Fb, b));
+    vec3 Nn = N - Fn * dot(N, Fn);
+    Nn = dot(Nn, Nn) > 1e-10 ? normalize(Nn) : perpendicularUnit(Fn);
+    R = mat3(cross(Fn, Nn) * scale, Nn * scale, Fn * scale);
+    F = Fn;
+    P = lc + o * (1.0 - 0.45 * b);
 }
 
 // Instance `i`: its specimen, its transform (specimen space to node space:

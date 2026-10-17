@@ -73,6 +73,7 @@ layout(location = 1) out vec4 outIndirect;
 #include "scene_lighting.glsl"
 #include "scene_mesh_push.glsl"
 #ifdef SCENE_VEGETATION
+#define FOREST_MASS_FRAGMENT 1
 #include "scene_forest_mass.glsl"
 #endif
 #ifdef SCENE_FOREST_SPRITE
@@ -179,6 +180,10 @@ void main() {
     vec4 massSphere = vec4(0.0);
     float massDensity = 0.0;
     float massFlat = 1.0;   // the sphere's height over its width (SceneSurface::leafFlat)
+    // A broad forest leaf cut per pixel (forestLeafCut): its veins, its
+    // margin's wave and its gloss.
+    bool leafCut = false;
+    float leafCutVein = 0.0, leafCutTilt = 0.0, leafCutGloss = 0.0;
 #endif
 #ifdef SCENE_FOREST_SPRITE
     float massPath = 1.0;   // the light's path through the sphere's own leaves, times
@@ -402,18 +407,13 @@ void main() {
         }
 #else
         if ((flags & MESH_FOREST_LEAF_CUT) != 0u) {
-            // A broad leaf's outline (mesh_forest_leaf.vert's outUV.x across
-            // it, 1 the card's widest; 1 - v along it from its stalk):
-            // widest a little below its middle, rounded there and drawn to
-            // a point at its tip, inside the card's six straight edges
-            // (which still give its wedge of a base). The share of the
-            // pixel it covers, so the outline holds its shape at any size.
-            float across = abs(inUV.x * 2.0 - 1.0);
-            float t = clamp(1.0 - inUV.y, 0.0, 1.0);
-            float edge = 0.92 * pow(max(sin(3.14159265 * pow(t, 0.85)), 0.0), 0.75);
-            float fpx = max(fwidth(across) + 0.5 * fwidth(edge), 1e-5);
-            massCover = clamp((edge - across) / fpx + 0.5, 0.0, 1.0);
+            ForestLeafCut cut = forestLeafCut(inUV, inColor);
+            massCover = cut.cover;
             if (massCover < 1.0 / 255.0) discard;
+            leafCutGloss = cut.gloss;
+            leafCutVein = cut.vein;
+            leafCutTilt = cut.tilt;
+            leafCut = true;
         }
 #endif
         int mask = forestSampleMask(inInstColor.a, massCover, (flags & MESH_FOREST_MSAA) != 0u, massSalt);
@@ -428,6 +428,8 @@ void main() {
     vec3 baseColor;
     float alpha;
     uint vertexColor = meshVertexColorMode();
+    // A cut leaf's vertex colour carries its species' leaf, not a colour.
+    if ((flags & MESH_FOREST_LEAF_CUT) != 0u) vertexColor = 0u;
     if ((flags & MESH_ALBEDO_MAP) != 0u) {
         vec4 tex = texture(texAlbedo, albedoUV());
         baseColor = tex.rgb * push.baseColor.rgb * inColor.rgb;
@@ -478,6 +480,8 @@ void main() {
     vec3 vegUnder = baseColor * vec3(1.25, 1.3, 1.05) + vec3(0.015, 0.02, 0.0);
     if (massLeaves) baseColor = mix(baseColor, vegUnder, 0.6 * massUnder);
     else if (vegLeaf && !vegBlade && !forestSprite && !frontFacing) baseColor = mix(baseColor, vegUnder, 0.6);
+    // A cut leaf's veins are paler and yellower than the blade between.
+    if (leafCut) baseColor = mix(baseColor, baseColor * vec3(1.35, 1.45, 1.05) + vec3(0.01, 0.015, 0.0), leafCutVein);
     // In a gust (inColor.y, the drag at its tree) some of a sprite's leaves
     // turn their undersides up, so the crown lightens as it passes over.
     if (forestSprite) {
@@ -543,6 +547,8 @@ void main() {
                 float across = clamp(inUV.x * 2.0 - 1.0, -1.0, 1.0);
                 vec3 T = normalize(inTangent);
                 N = normalize(N - (frontFacing ? 1.0 : -1.0) * 0.55 * near * across * abs(across) * T);
+                // A spiny leaf's margin waves up and down between its spines.
+                if (leafCut) N = normalize(N + near * leafCutTilt * normalize(inBitangent));
                 bulkKeep = 1.0 - 0.5 * near;
             }
         }
@@ -563,6 +569,10 @@ void main() {
         metallic *= mr.b;
     }
     if ((flags & MESH_EMISSIVE_MAP) != 0u) emissive *= texture(texEmissive, inUV).rgb;
+#ifdef SCENE_VEGETATION
+    // A waxy leaf (a holly's) has a tight, bright highlight.
+    if (leafCut) roughness = mix(roughness, 0.26, leafCutGloss);
+#endif
 #ifdef SCENE_BARK
     // A plant's wood (scene_bark.glsl): inColor where on the stem, inUV its
     // height over the root and the bark word (negative: not a plant's).
@@ -595,6 +605,8 @@ void main() {
     s.translucency = 0.0;
 #ifdef SCENE_VEGETATION
     if (vegLeaf) s.translucency = (push.extra.y > 0.0 ? min(1.4 * push.extra.y, 1.0) : 0.6) * (1.0 - vegFade / 15.0);
+    // A waxy leaf is thick: less light comes through it.
+    if (leafCut) s.translucency *= 1.0 - 0.5 * leafCutGloss;
 #endif
 #ifdef SCENE_FOREST_BLOOM
     // Thin petals let the light through; a head's florets and a spike less.

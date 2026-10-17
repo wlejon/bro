@@ -273,3 +273,78 @@ void forestCrownTerms(vec3 rc, out vec3 bulk, out float ao, out vec3 deep) {
     deep = mix(vec3(0.5, 0.62, 0.68), vec3(1.0), smoothstep(0.25, 1.0, depth)) *
            (1.0 + 0.15 * smoothstep(0.85, 1.15, depth));
 }
+
+// A broad forest leaf cut from its card per pixel (MESH_FOREST_LEAF_CUT,
+// mesh_forest_leaf.vert): `uv` x across the card (0.5 the midrib, 0 and 1
+// its widest), y along it (1 at the stalk, 0 the tip); `shape` its species'
+// leaf (broflora's Species::leafWidth .. leafGloss): its width as a share of
+// the card's, its tip (0 drawn to a point, 1 rounded), its teeth a side plus
+// their depth (the fraction, of the half-width) and its gloss. Everything is
+// worked out from where the pixel lies, so it costs no geometry, and each
+// detail fades out as it shrinks under a couple of pixels. Fragment stages
+// only (it takes derivatives): mesh.frag defines FOREST_MASS_FRAGMENT.
+#ifdef FOREST_MASS_FRAGMENT
+struct ForestLeafCut {
+    float cover;   // the share of the pixel the leaf covers
+    float vein;    // 0..1: on the midrib or a lateral vein
+    float tilt;    // a wavy margin's lean of the normal along the leaf
+    float gloss;   // 0 matte .. 1 waxy
+};
+
+ForestLeafCut forestLeafCut(vec2 uv, vec4 shape) {
+    ForestLeafCut c;
+    float across = abs(uv.x * 2.0 - 1.0);
+    c.gloss = clamp(shape.w, 0.0, 1.0);
+    // A leaf a few pixels across shows no outline, only its area: it hands
+    // over to the whole card, the area the far tiers (clusters, lobes,
+    // crowns) stand in for, so a crown seen past the cut holds its cover.
+    // (Coarse: one answer a quad, so the far leaves skip the cut whole.)
+    float far = smoothstep(0.25, 0.5, fwidthCoarse(across));
+    if (far >= 1.0) {
+        c.cover = 1.0;
+        c.vein = 0.0;
+        c.tilt = 0.0;
+        return c;
+    }
+    float t = clamp(1.0 - uv.y, 0.0, 1.0);
+    float width = shape.x > 0.0 ? shape.x : 1.0;
+    float tip = clamp(shape.y, 0.0, 1.0);
+    float teeth = floor(shape.z);
+    float depth = shape.z - teeth;
+    // The outline: widest a little below the middle, and toward the tip
+    // drawn to a point (acuminate) or rounded (obtuse).
+    float s = max(sin(3.14159265 * pow(t, 0.85)), 0.0);
+    float k = mix(0.75, mix(1.15, 0.45, tip), smoothstep(0.45, 0.95, t));
+    float edge = 0.92 * width * pow(s, k);
+    // Teeth along each side, from just above the base to the tip: a
+    // serration (each tooth's long edge rising toward the tip, its short
+    // one dropping back) or, deep, spines (sharp points between concave
+    // scallops, one at the tip), whose margin waves up and down.
+    c.tilt = 0.0;
+    if (teeth > 0.5 && depth > 0.0) {
+        float m = clamp((t - 0.12) / 0.86, 0.0, 1.0);
+        float ph = fract(m * teeth);
+        float spiny = smoothstep(0.15, 0.3, depth);
+        float g = mix(1.0 - ph, pow(sin(3.14159265 * ph), 0.6), spiny);
+        float fade = smoothstep(0.0, 0.1, m) * mix(1.0 - smoothstep(0.85, 1.0, m), 1.0, spiny);
+        edge *= 1.0 - depth * g * fade;
+        c.tilt = 0.9 * spiny * depth * sin(6.2831853 * m * teeth) * smoothstep(0.3, 0.9, across / max(edge, 1e-3));
+    }
+    float fpx = max(fwidth(across) + 0.5 * fwidth(edge), 1e-5);
+    c.cover = clamp((edge - across) / fpx + 0.5, 0.0, 1.0);
+    c.cover = mix(c.cover, 1.0, far);
+    // Venation: the midrib, tapering to the tip, and pinnate laterals
+    // leaving it for the margin at a slant toward the tip, curving up
+    // along it as they near it.
+    float fa = fwidth(across);
+    float rib = 0.035 * (1.0 - 0.6 * t);
+    float mid = (1.0 - smoothstep(rib, rib + fa, across)) * clamp((0.05 - fa) / 0.03, 0.0, 1.0);
+    float u = 7.0 * (t - 0.18 * across - 0.22 * across * across);
+    float f = fract(u);
+    float fu = fwidth(u);
+    float lat = (1.0 - smoothstep(0.05, 0.05 + fu, min(f, 1.0 - f))) * (1.0 - smoothstep(0.1, 0.25, fu)) *
+                smoothstep(0.08, 0.25, t) * (1.0 - smoothstep(0.75, 0.95, across / max(edge, 1e-3)));
+    c.vein = max(mid, 0.45 * lat);
+    return c;
+}
+#endif
