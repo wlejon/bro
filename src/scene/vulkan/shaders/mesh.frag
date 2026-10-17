@@ -400,6 +400,21 @@ void main() {
             // different samples, so their cover adds up).
             massSalt = uint(inSpraySeed * 16777216.0);
         }
+#else
+        if ((flags & MESH_FOREST_LEAF_CUT) != 0u) {
+            // A broad leaf's outline (mesh_forest_leaf.vert's outUV.x across
+            // it, 1 the card's widest; 1 - v along it from its stalk):
+            // widest a little below its middle, rounded there and drawn to
+            // a point at its tip, inside the card's six straight edges
+            // (which still give its wedge of a base). The share of the
+            // pixel it covers, so the outline holds its shape at any size.
+            float across = abs(inUV.x * 2.0 - 1.0);
+            float t = clamp(1.0 - inUV.y, 0.0, 1.0);
+            float edge = 0.92 * pow(max(sin(3.14159265 * pow(t, 0.85)), 0.0), 0.75);
+            float fpx = max(fwidth(across) + 0.5 * fwidth(edge), 1e-5);
+            massCover = clamp((edge - across) / fpx + 0.5, 0.0, 1.0);
+            if (massCover < 1.0 / 255.0) discard;
+        }
 #endif
         int mask = forestSampleMask(inInstColor.a, massCover, (flags & MESH_FOREST_MSAA) != 0u, massSalt);
         if (mask == 0) discard;
@@ -519,12 +534,15 @@ void main() {
             // its midrib (the halves tilt apart, so one takes more light than
             // the other) and turned its own way more than the bulk's, so the
             // leaves of a sunlit side differ leaf by leaf rather than lying
-            // as one flat sheet. Gone by the distance a leaf is a few pixels.
+            // as one flat sheet. The halves curve away from a midrib that
+            // is level (the tilt grows as the square of the way out), so a
+            // leaf shades round, not as two flat facets. Gone by the
+            // distance a leaf is a few pixels.
             float near = 1.0 - smoothstep(6.0, 25.0, camDist);
             if (near > 0.0) {
                 float across = clamp(inUV.x * 2.0 - 1.0, -1.0, 1.0);
                 vec3 T = normalize(inTangent);
-                N = normalize(N - (frontFacing ? 1.0 : -1.0) * 0.4 * near * across * T);
+                N = normalize(N - (frontFacing ? 1.0 : -1.0) * 0.55 * near * across * abs(across) * T);
                 bulkKeep = 1.0 - 0.5 * near;
             }
         }

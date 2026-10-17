@@ -142,6 +142,13 @@ void main() {
     outTangent = Tw;
     outBitangent = cross(Nw, Tw) * inTangent.w;
     outUV = inUV;
+    // A cut leaf (MESH_FOREST_LEAF_CUT): across its card from where the
+    // point lies (0.5 the midrib, 0 and 1 the card's widest), so the cut
+    // runs true over each triangle.
+    if ((meshFlags() & MESH_FOREST_LEAF_CUT) != 0u) {
+        float len = procedural.header[1].z / max(procedural.header[1].x, 1e-6);   // the mesh's own
+        outUV.x = inPos.x / max(procedural.header[3].y * len, 1e-6) + 0.5;
+    }
     outColor = meshVertexColorMode() != 0u ? inColor : vec4(1.0);
     // A cluster's point in leaf lengths, the widening, a seed and the leaf's
     // width over its length.

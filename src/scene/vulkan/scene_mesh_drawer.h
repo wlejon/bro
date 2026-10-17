@@ -72,6 +72,7 @@ constexpr uint32_t kForestCluster = 65536;  // forest leaf clusters: a card of l
 constexpr uint32_t kGround = 131072;        // turf: a static mesh shaded as its grass node's ground (set 4)
 constexpr uint32_t kForestSpray = 262144;   // a needle or scale-leaf forest's leaves: mesh.frag's SCENE_FOREST_SPRAY build
 constexpr uint32_t kForestBloom = 524288;   // a forest's blooms (a ForestSprite draw): mesh_forest_bloom.vert, SCENE_FOREST_BLOOM
+constexpr uint32_t kForestLeafCut = 1048576;   // a broad forest leaf's outline cut per pixel (mesh.frag)
 /// The vertex colour mode (0 none, 1 replaces the albedo, 2 tints it) in bits 10-11.
 constexpr uint32_t vertexColor(int mode) { return static_cast<uint32_t>(mode & 3) << 10; }
 }
