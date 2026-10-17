@@ -14,10 +14,10 @@ layout(location = 2) flat in float inDepth;
 void main() {
     float r2 = dot(inUV, inUV);
     if (r2 >= 1.0) discard;
-    // Three quarters of the chord's depth: calibrated against the leaf
-    // casters it hands over from, which on the same receivers stop less (a
-    // binary cell over a whole lobe overshades the gaps the leaves leave).
-    float cover = 1.0 - exp(-inDepth * 0.75 * sqrt(1.0 - r2));
+    // Half the chord's depth: calibrated against the leaf casters it hands
+    // over from, which on the same receivers stop less (a binary cell over a
+    // whole lobe overshades the gaps the leaves leave).
+    float cover = 1.0 - exp(-inDepth * 0.47 * sqrt(1.0 - r2));
     vec2 o = vec2(inSeed * 97.0, inSeed * 53.0);
     float h = forestSpriteHash(floor(inUV * 9.0 + o));
     if (h >= cover) discard;

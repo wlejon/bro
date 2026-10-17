@@ -34,6 +34,13 @@ void main() {
     // sphere's far part and what lies beyond, not its lit side. (A sprite
     // takes its own leaves' shade analytically, mesh.frag's leafSphere.)
     vec3 away = normalize(vec3(L[0][2], L[1][2], L[2][2]));
+    // The leaves lean up (the emit's upBias), so they stop less of a low sun
+    // than of a high one: the area they turn to the light (Ross's G, 0.5 for
+    // leaves facing every way) is about (1 - b) / 2 + b |L.y|, over the 0.5
+    // forestMassDepth takes. (As one depth for every sun, the far tiers'
+    // casters shaded a golden canopy 8 to 12 units under its leaves'.)
+    float b = clamp(1.4 * procedural.header[0].y, 0.0, 1.0);
+    outDepth *= (1.0 - b) + 2.0 * b * abs(away.y);
     vec4 clip = L * vec4(s.center + away * (0.5 * s.radius), 1.0);
     // How far a world metre moves the tile's x and y: the lengths of its
     // first two rows.
