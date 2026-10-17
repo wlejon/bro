@@ -255,6 +255,28 @@
  * @property {number} [barkMoss=0.5] - Moss and lichen, 0 none .. 1 lush (the shaded side, a limb's top, the foot).
  * @property {number} [rootFlare=0.6] - The trunk's swell where it meets the ground, x its radius.
  * @property {number} [branchCollar=0.5] - A side branch's swell where it leaves its parent, x its radius.
+ * Habit (a plant's LEADER is its root module and every main child down from
+ * it; its LATERALS are every other module): what makes a conifer's whorled
+ * spire, a weeping or columnar crown, a multi-stemmed shrub. The species
+ * presets (`bro.flora.speciesPresets()`) set these; the defaults grow as
+ * the paper's trees do.
+ * @property {number} [apicalDominance=0] - 0: a main child's vigor is shared against its siblings by light; 1: it keeps that share of its parent's outright (a conifer's excurrent leader).
+ * @property {number} [maxBranchOrder=0] - The deepest axis order that still branches (leader 0, boughs 1, ...); 0 no limit.
+ * @property {number} [crownSlope=0] - The crown envelope: a lateral reaches no further from the axis than this x its depth below the top (0.35 a fir's cone; 0 none) ...
+ * @property {number} [crownBase=0] - ... plus this at the top (a blunt spire or a rounded top) ...
+ * @property {number} [crownRadiusMax=0] - ... and never past this (a column, a flat-topped pine; 0 no cap).
+ * @property {number} [prototypeGroup=0] - The prototype sites the leader grows from.
+ * @property {number} [lateralGroup] - The sites a lateral grows from (default: the leader's group).
+ * @property {number} [lateralElevation=0] - A lateral's set-point elevation, radians from the horizon: 0 level boughs (fir), negative drooping or weeping (spruce), positive rising (pine), near pi/2 turned up (a columnar cypress).
+ * @property {number} [lateralOrthotropy=NaN] - How strongly a lateral's new growth returns to that angle (0 goes on along the arm, 1 aims at it); NaN grows laterals as the leader.
+ * Foliage and colour (emit only): what a renderer draws the leaves as.
+ * emitForest carries them per specimen (`specimenLooks`), and bro.scene's
+ * forest node draws them.
+ * @property {string|number} [leafForm='broad'] - 'broad' (0), 'needle' (1) or 'scale' (2): a conifer's leaf is a whole spray, its needles or scale leaves cut out per pixel.
+ * @property {Array<number>} [leafColor=[0,0,0]] - The leaves' mean albedo (linear); 0,0,0 the renderer's own.
+ * @property {Array<number>} [barkColor=[0,0,0]] - The bark's; 0,0,0 the renderer's own.
+ * @property {number} [clumpScale=1] - The crown clumps' size, x what the emit's options give (a conifer's small dense tufts 0.3).
+ * @property {number} [leafSize=1] - A leaf's size, x the renderer's card (a boxwood 0.3): its clumps carry 1/leafSize² the leaves, so they cover as much.
  */
 
 /**
@@ -690,16 +712,56 @@ class FloraWorld {
    *     exactly as the clump-mode scatter does;
    *   - `instances`: 8 floats a plant, x, y, z, 1, 0, specimen, 0, 0: every
    *     plant where it grew (createForest's default trees).
+   *   - `specimenLooks`: 8 floats a specimen, its species' leafColor rgb,
+   *     leafForm (0 broad, 1 needle, 2 scale), barkColor rgb and leafSize
+   *     (createForest takes them as the node's per-specimen look).
    * Plus `specimenCount`, `leafCount` and the leaf placement fields (seed,
-   * upBias, tiltJitter, shell, baseScale, scaleJitter).
+   * upBias, tiltJitter, shell, baseScale, scaleJitter), and `leafForm`
+   * (the form's name) when the emit was filtered to one.
+   *
+   * A forest node draws one leaf form, so a mixed world is emitted a form at
+   * a time: `leafForm` keeps only the plants of that form, `plants` (plant
+   * indices) only those. A needle or scale emit fills in the options it is
+   * not given with the conifer's (perArea 80 / 140, upBias 0.65 / 0.6,
+   * tiltJitter 0.3, clumpSpacing 0.8: fewer, flatter spray cards in small
+   * overlapping tufts, the dark, dense, layered crown).
    * @example
    *   const forest = world.emitForest({ perArea: 90 });
    *   scene.createForest({ forest, instances: bro.flora.plantForest(forest, { area }), leaf });
-   * @param {FloraLeafPlacementOptions & {minRadius?: number, shuffleSeed?: number}} [opts] - the
-   *   clump and leaf options of the foliage emits; `minRadius` leaves out thinner bark.
+   * @example
+   *   // A mixed world, a node per form; with no leaf each draws its form's card.
+   *   for (const leafForm of ['broad', 'needle', 'scale'])
+   *     scene.createForest({ forest: world.emitForest({ leafForm }) });
+   * @param {FloraLeafPlacementOptions & {minRadius?: number, shuffleSeed?: number,
+   *   leafForm?: string|number, plants?: Array<number>}} [opts] - the clump and leaf
+   *   options of the foliage emits; `minRadius` leaves out thinner bark.
    * @returns {Object}
    */
   emitForest(opts) {}
+
+  // ── Species presets ──
+
+  /**
+   * Register a species preset (see bro.flora.speciesPresets) in this world:
+   * its prototypes (the module shapes it grows from) and its Species.
+   * @param {string} name
+   * @returns {{prototypeStart: number, prototypeCount: number, rootPrototype: number,
+   *   species: FloraSpecies}|null} null for an unknown name.
+   */
+  addSpecies(name) {}
+
+  /**
+   * Plant a species preset: registers it on first use (addSpecies) and
+   * plants one at `spec.origin`. `spec.species` is a partial Species over the
+   * preset's (a bluer spruce, a taller cypress).
+   * @example
+   *   world.plantSpecies('fir', { origin: [-6, 0, 0] });
+   *   world.plantSpecies('boxwood', { origin: [4, 0, 2], species: { leafSize: 0.25 } });
+   * @param {string} name
+   * @param {FloraPlantSpec} [spec]
+   * @returns {number} the plant index, -1 for an unknown name.
+   */
+  plantSpecies(name, spec) {}
 
   // ── Blooms ──
 
@@ -776,9 +838,36 @@ bro.flora.FloraWorld = FloraWorld;
  * @param {number} [opts.sink=0.1] - how far a root sits below the ground.
  * @param {Array<number>} [opts.specimens] - which specimens (indices), or a weight per specimen.
  * @param {number} [opts.seed=1]
- * @returns {Float32Array} 8 floats a tree.
+ * @param {Function} [opts.mix] - a mixed forest: with `forest` an array of
+ *   emits (a node's each), (x, z, y) => a weight per emit, or the index of
+ *   one, at that point (conifers by elevation, shrubs at a glade's rim).
+ *   `specimens` and `scale` may then hold an entry per emit.
+ * @returns {Float32Array|Array<Float32Array>} 8 floats a tree; mixed, an
+ *   array a forest.
+ * @example
+ *   const [broad, conifer] = bro.flora.plantForest([broadEmit, needleEmit], {
+ *     area, ground: heightAt, mix: (x, z, y) => [1 - high(y), high(y)],
+ *     scale: [[1.3, 1.8], [0.7, 0.95]],
+ *   });
  */
 bro.flora.plantForest = function(forest, opts) {};
+
+/**
+ * The species presets plantSpecies / addSpecies know, each a habit with
+ * its leaf form, colours and bark:
+ *   - broadleaf: oak (spreading, round), elm (vase), beech (tall, smooth grey bark);
+ *   - needle conifers: pine (rising boughs in open whorls, plated red-brown
+ *     bark), spruce (a narrow spire, drooping boughs and hanging sprays),
+ *     fir (a regular cone of level boughs), cedar (flat shelves), redwood
+ *     (tall and narrow, a long clear trunk, fibrous red bark);
+ *   - scale-leaf conifers: cypress (a dark column, boughs turned up against
+ *     the leader), juniper (several stems, blue-grey);
+ *   - shrubs, multi-stemmed: boxwood (a dense mound of tiny dark leaves),
+ *     holly (upright, glossy), hydrangea (a broad mound of arching stems,
+ *     big pale leaves), hibiscus (upright, open), lavender (a low cushion).
+ * @returns {Array<string>}
+ */
+bro.flora.speciesPresets = function() {};
 
 /**
  * Where ground cover grows under a forest, for scene.createGrass's

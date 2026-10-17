@@ -499,6 +499,30 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  * the size; clumps and crowns cast discs as dense as their leaves). Clumps
  * and crowns cost a few hundred vertices a tree and are outside both
  * budgets; clusters and sprites cost fragments the budget does not see.
+ * Several forest nodes in one scene share ONE budget (the largest any of
+ * them sets; none if any sets 0): the trees of every node in view thin by
+ * the same detail factor, so a mixed forest drawn a node per leaf form
+ * costs what one forest of its trees would.
+ *
+ * LEAF FORM (`leafForm`; a node draws one): 'broad' leaves are the card
+ * itself. A 'needle' or 'scale' node's leaf is a whole spray's card: the
+ * needles along a twig (or the overlapping scale leaves) are cut out of it
+ * per pixel into the sample mask, an analytic family that fades to its
+ * mean cover once a needle is under a pixel, and its shadow caster is the
+ * card narrowed by the spray's fill. The form also sets how the trees move
+ * through the same sway: how much the leaves flutter (`flutter`) and how
+ * much limbs and twigs bounce (`limbBob`, `twigBob`): a conifer's long
+ * boughs bob while its needles hardly flutter. With no leaf given, the node
+ * draws its form's own card (an oval leaf, a needle spray, a scale-leaf
+ * spray) at its specimens' mean leaf size (the species' leafSize: a
+ * boxwood's small leaves). An emit filtered to a form
+ * (`world.emitForest({ leafForm })`) names it, and the node takes it.
+ *
+ * Each specimen carries its own LOOK (`specimenLooks`, the emit's: 8 floats
+ * a specimen, leafColor rgb, form, barkColor rgb, leafSize): its leaves and
+ * bark take its colours in place of the node's (a tint over the node's
+ * colour, so the node's maps still apply), so a spruce is darker than a fir
+ * in the same node. A zero colour keeps the node's.
  *
  * The node's material (colour, roughness, subsurface, maps, shadows) is the
  * leaves'; `barkColor` and `barkRoughness` the bark's; its mesh the leaf
@@ -524,6 +548,17 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  *   (x cos + z sin, -x sin + z cos)), specimen, 0, 0, in the node's space.
  *   Default `forest.instances` (every plant where it grew).
  * @property {Mesh|MeshGeometry} [leaf] - the leaf card (also `mesh`).
+ *   Default: the leaf form's own card at the specimens' leaf size.
+ * @property {string|number} [leafForm] - 'broad' (0), 'needle' (1) or 'scale'
+ *   (2). Default: the emit's `leafForm`, else the one all its specimens share,
+ *   else broad.
+ * @property {number} [flutter] - how much the leaves flutter, x a broadleaf's
+ *   (default by form: broad 1, needle 0.15, scale 0.1).
+ * @property {number} [limbBob] - how much limbs bounce (broad 0.6, needle 1.6, scale 1.3).
+ * @property {number} [twigBob] - how much twigs and sprays bounce (broad 0.8, needle 1, scale 0.9).
+ * @property {Float32Array|Array<number>} [specimenLooks] - 8 floats a specimen
+ *   (leafColor rgb, form, barkColor rgb, leafSize); default the emit's.
+ *   All zeros: the node's own colours.
  * @property {ForestLod} [lod] - level-of-detail settings.
  * @property {Array<number>|string} [barkColor] - default `[0.2, 0.17, 0.14]`.
  * @property {number} [barkRoughness=0.9]
@@ -1375,7 +1410,8 @@ class SceneNode {
 
   /**
    * Forest: replace any of ForestNodeOptions (`forest`, `instances`, `lod`,
-   * `barkColor`, `barkRoughness`, `tier`). New specimens re-upload the
+   * `barkColor`, `barkRoughness`, `tier`, `leafForm`, `flutter`, `limbBob`,
+   * `twigBob`, `specimenLooks`). New specimens re-upload the
    * node's data once.
    * @param {ForestNodeOptions} opts
    * @returns {SceneNode}
