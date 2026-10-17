@@ -218,15 +218,15 @@ if [[ "$PLATFORM" == "macos" ]]; then
     }
 }
 ICD
-    for t in libbro.dylib bro bro-headless bro-server bro-app-stub; do
+    for t in libbro.dylib libbronze_runtime_shared.dylib bro bro-headless bro-server bro-app-stub; do
         [[ -f "$OUT_DIR/$t" ]] || continue
         # @loader_path: the loader beside libbro, here and in Bro.app's Frameworks.
         install_name_tool -change "$VK_REF" "@loader_path/libvulkan.1.dylib" "$OUT_DIR/$t" 2>/dev/null
         # Drop the build tree's absolute rpaths: a shipped binary resolves
         # its dylibs beside itself (@loader_path) or, in Bro.app, in Frameworks.
-        otool -l "$OUT_DIR/$t" | awk '/cmd LC_RPATH/ {r=1} r && $1=="path" {print $2; r=0}' |
-            grep '^/' | while read -r rp; do
-                install_name_tool -delete_rpath "$rp" "$OUT_DIR/$t"
+        otool -l "$OUT_DIR/$t" | awk '/cmd LC_RPATH/ {r=1} r && $1=="path" {if ($2 ~ /^\//) print $2; r=0}' |
+            while read -r rp; do
+                install_name_tool -delete_rpath "$rp" "$OUT_DIR/$t" 2>/dev/null || true
             done
         codesign --force --sign - "$OUT_DIR/$t"
     done
