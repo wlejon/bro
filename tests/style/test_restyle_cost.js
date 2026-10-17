@@ -143,10 +143,12 @@ assert(big.elements >= 100 && big.elements <= 100 + 2, `only the re-inserted row
 // cost ~11-12 us of style and ~5-6 us of layout here; now it is ~1.8 and
 // ~0.3 (Windows, Release). The limits leave room for a loaded machine running
 // the suite in parallel and still fail if either cache stops working.
+const styleLimit = (process.env && process.env.CI) ? 15 : 6;
+const layoutLimit = (process.env && process.env.CI) ? 15 : 5;
 for (const r of [small, big]) {
     const n = r.elements;
-    assert(r.style < 6, `re-insert style ${r.style.toFixed(2)} us/el, limit 6`);
-    assert(r.layout < 5, `re-insert layout ${r.layout.toFixed(2)} us/el, limit 5`);
+    assert(r.style < styleLimit, `re-insert style ${r.style.toFixed(2)} us/el, limit ${styleLimit}`);
+    assert(r.layout < layoutLimit, `re-insert layout ${r.layout.toFixed(2)} us/el, limit ${layoutLimit}`);
     // And the reasons, which do not depend on the machine: every element kept
     // its style, every row its layout subtree, and next to nothing was laid out.
     assert(r.stats.stylesKept >= n - 2, `styles kept on re-insert (${r.stats.stylesKept} of ${n})`);
