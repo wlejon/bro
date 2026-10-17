@@ -247,6 +247,7 @@ bool SkiaGpu::init() {
 
 LayerSurface SkiaGpu::makeSurface(int width, int height) {
     if (!context_ || width <= 0 || height <= 0) return {};
+    Lock lock(*this);
 
     auto img = std::make_shared<SkiaImage>();
     VkDeviceMemory memory = VK_NULL_HANDLE;
@@ -286,7 +287,6 @@ LayerSurface SkiaGpu::makeSurface(int width, int height) {
     info.fLevelCount = 1;
     const GrBackendTexture texture = GrBackendTextures::MakeVk(width, height, info);
 
-    Lock lock(*this);
     const SkSurfaceProps props(0, kUnknown_SkPixelGeometry);
     // Skia holds its own reference until its last use of the image is over.
     sk_sp<SkSurface> surface = SkSurfaces::WrapBackendTexture(

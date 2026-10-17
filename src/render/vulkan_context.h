@@ -234,6 +234,7 @@ private:
 
     VkCommandPool commandPool_ = VK_NULL_HANDLE;  // single-time commands, guarded below
     mutable std::mutex commandPoolMutex_;
+    mutable std::mutex resourceMutex_;
     mutable VulkanMemoryPool memoryPool_;
     // Declared after the memory pool: destroyed before it (frames free their
     // upload chunks back into the pool).

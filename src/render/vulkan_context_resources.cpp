@@ -58,6 +58,7 @@ bool VulkanContext::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
                                  VkDeviceSize& outOffset, uint64_t& outAllocId,
                                  void*& outMappedData) {
     if (size == 0) return false;
+    std::lock_guard<std::mutex> lock(resourceMutex_);
 
     VkBufferCreateInfo bufferInfo{};
     bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -105,6 +106,7 @@ bool VulkanContext::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
 }
 
 void VulkanContext::destroyBuffer(VkBuffer buffer, uint64_t allocId) {
+    std::lock_guard<std::mutex> lock(resourceMutex_);
     if (buffer != VK_NULL_HANDLE) {
         vkDestroyBuffer(device_, buffer, nullptr);
     }
@@ -143,6 +145,7 @@ bool VulkanContext::createImage(uint32_t width, uint32_t height, VkFormat format
 bool VulkanContext::createImage(const VkImageCreateInfo& imageInfo, VkMemoryPropertyFlags properties,
                                 VkImage& image, VkDeviceMemory& memory, VkDeviceSize& outOffset,
                                 uint64_t& outAllocId) {
+    std::lock_guard<std::mutex> lock(resourceMutex_);
     if (vkCreateImage(device_, &imageInfo, nullptr, &image) != VK_SUCCESS) {
         LOG_ERROR("VulkanContext: Failed to create image (%ux%ux%u)", imageInfo.extent.width,
                   imageInfo.extent.height, imageInfo.extent.depth);
@@ -184,6 +187,7 @@ bool VulkanContext::createImage(const VkImageCreateInfo& imageInfo, VkMemoryProp
 }
 
 void VulkanContext::destroyImage(VkImage image, uint64_t allocId) {
+    std::lock_guard<std::mutex> lock(resourceMutex_);
     if (image != VK_NULL_HANDLE) {
         vkDestroyImage(device_, image, nullptr);
     }
@@ -196,6 +200,7 @@ bool VulkanContext::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
                                  VkMemoryPropertyFlags properties,
                                  VkBuffer& buffer, VkDeviceMemory& bufferMemory) const
 {
+    std::lock_guard<std::mutex> lock(resourceMutex_);
     VkBufferCreateInfo bufferInfo{};
     bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     bufferInfo.size = size;
@@ -232,6 +237,7 @@ bool VulkanContext::createImage(uint32_t width, uint32_t height, VkFormat format
                                 uint32_t mipLevels, uint32_t arrayLayers,
                                 VkImageCreateFlags flags) const
 {
+    std::lock_guard<std::mutex> lock(resourceMutex_);
     VkImageCreateInfo imageInfo{};
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imageInfo.flags = flags;
