@@ -164,6 +164,9 @@ bool ForestNode::setSpecimens(SpecimenArrays&& a) {
     if (looks_.size() != specimens_.size() * 8) looks_.clear();
     if (leafLooks_.size() != specimens_.size() * 8) leafLooks_.clear();
     keepRadius_ = a.keepRadius;
+    clumpTwigs_.resize(nClump);
+    for (size_t c = 0; c < nClump; ++c)
+        clumpTwigs_[c] = twigPieces(static_cast<uint32_t>(std::max(0.0f, a.clumps[c * 8 + 7]) + 0.5f));
     data_ = std::move(a);
     // The blooms were the old specimens' (setBlooms gives the new ones').
     data_.blooms.clear();
@@ -290,6 +293,14 @@ void ForestNode::lodFromArray(const double* v, size_t n) {
     lod_.shadowBudget = std::max(lod_.shadowBudget, 0.0f);
     lod_.clusters = lod_.clusters > 0.5f ? 1.0f : 0.0f;
     lod_.barkKeepPixels = std::max(lod_.barkKeepPixels, 0.0f);
+}
+
+ForestNode::ClumpTwigs ForestNode::twigPieces(uint32_t leaves) {
+    // scene_forest_shoot.glsl's forestShootCounts and forestTwigPieces.
+    if (leaves == 0) return {};
+    const uint32_t S = std::max(1u, (leaves + 4u) / 8u);
+    const uint32_t NB = S < 3u ? S : std::max(3u, (S + 2u) / 5u);
+    return {6u + 5u * NB, 6u + 5u * NB + 3u * S};
 }
 
 float ForestNode::fadeCode(float lo, float hi) {
@@ -625,8 +636,13 @@ const std::vector<float>& ForestNode::gpuData() const {
             const float* L = &leafLooks_[k * 8];
             d[28] = L[0]; d[29] = L[1]; d[30] = L[2]; d[31] = L[3];
             d[23] = L[4];
-            // Record 8: its sprays' brush (Species::sprayBrush), 0, 0, 0.
+            // Record 8: its sprays' brush (Species::sprayBrush), its broad
+            // leaf's petiole (of the blade's length) and phyllotaxis
+            // (Species::petiole, Species::phyllotaxis: 0 alternate, 1
+            // opposite, 2 spiral; scene_forest_shoot.glsl), 0.
             d[32] = L[5];
+            d[33] = L[6];
+            d[34] = L[7];
         }
         for (int part = 0; part < 2; ++part) {
             float* t = d + 16 + part * 4;
@@ -648,10 +664,20 @@ const std::vector<float>& ForestNode::gpuData() const {
         octEncode(t[3], t[4], t[5], d[10], d[11]);
         std::memcpy(d + 12, &a.segmentVegetation[g * 16], 16 * sizeof(float));
     }
+    // Each clump's leaves are keyed from its first (emitForest keys a
+    // clump's leaves in one run): the shoot model numbers them from there.
+    std::vector<uint32_t> keyBase(nClump, ~0u);
+    for (size_t i = 0; i < nLeaf; ++i) {
+        const uint32_t c = a.leaves[2 * i];
+        if (c < nClump) keyBase[c] = std::min(keyBase[c], a.leaves[2 * i + 1]);
+    }
     for (size_t c = 0; c < nClump; ++c) {
         float* d = r + (clumpBase + c * 6) * 4;
         std::memcpy(d, &a.clumps[c * 8], 8 * sizeof(float));
         std::memcpy(d + 8, &a.clumpVegetation[c * 16], 16 * sizeof(float));
+        // Its vegetation record's r2.z (the path, which no clump stage
+        // reads): its placement-key base (scene_forest_shoot.glsl).
+        d[18] = bitsOf(keyBase[c] == ~0u ? 0u : keyBase[c]);
     }
     for (size_t k = 0; k < nSpec; ++k) {
         const Specimen& s = specimens_[k];

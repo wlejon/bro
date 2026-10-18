@@ -1,14 +1,15 @@
 #version 450
 // Forest leaves (scene_forest.glsl): each instance is a draw entry, several
 // copies of the leaf mesh end to end, copy k drawing leaf `first + k` of the
-// entry's tree. Each leaf was posed once by forest_leaf_pose.comp (placed as
-// the clump-mode scatter places it, widened, swayed: scene_forest.glsl's
-// ForestPose); a vertex takes its point through that pose, folding its half
-// of the leaf about the stem. A tree at full detail has exactly the grown
-// plant's leaves; further off the drawer keeps a prefix of the tree's
-// shuffled leaves, each widened (and pulled into its lobe, so the crown's
-// outline holds), with the last few shrinking away. shadow_forest_leaf.vert
-// is the caster.
+// entry's tree. Each leaf was posed once by forest_leaf_pose.comp (a broad
+// leaf on its shoot, scene_forest_shoot.glsl; a spray as the clump-mode
+// scatter places it; widened, swayed: scene_forest.glsl's ForestPose); a
+// vertex takes its point through that pose, folding its half of the leaf
+// about the stem, a broad leaf's blade out past its petiole. A tree at full
+// detail has exactly the grown plant's leaves; further off the drawer keeps
+// a prefix of the tree's shuffled leaves, each widened (a spray's pulled
+// into its lobe, so the crown's outline holds), with the last few shrinking
+// away. shadow_forest_leaf.vert is the caster.
 
 layout(location = 0) in vec3 inPos;
 layout(location = 1) in vec3 inNormal;
@@ -43,6 +44,7 @@ layout(location = 11) flat out float outLobeFlat;   // the lobe's height over it
 #ifdef FOREST_LEAF_INLINE
 // The leaves past the pose buffer's room (the drawer's kForestLeafInline
 // draws): each vertex poses its leaf itself.
+#include "scene_forest_shoot.glsl"
 #include "scene_forest_leaf_pose.glsl"
 #endif
 
@@ -88,12 +90,29 @@ void main() {
     float cutWidth = 1.0;
     float len = procedural.header[1].z / max(procedural.header[1].x, 1e-6);   // the mesh's own
     float halfCard = 0.5 * procedural.header[3].y * len;                      // its widest, half
+    // Its petiole (forestSpecimenShoot: of the blade's length): the card's
+    // stalk row stays at the node and the blade's rows move out by it, the
+    // stalk cut per pixel along the first pf / (1 + pf) of the card.
+    float petiole = 0.0;
+    float cardT = 1.0 - inUV.y;
     if (cut) {
         cutLeaf = forestSpecimenLeaf(specimen);
         cutWidth = cutLeaf.x > 0.0 ? clamp(cutLeaf.x / max(procedural.header[3].y, 1e-3), 0.4, 1.6) : 1.0;
         float t = 1.0 - inUV.y;   // 0 the stalk's row, 0.5 the middle's, 1 the tip's
-        float row = t < 0.25 ? 0.72 : t < 0.75 ? 0.95 : mix(0.3, 0.58, clamp(cutLeaf.y, 0.0, 1.0));
+        petiole = forestLeafForm() == 0 ? clamp(forestSpecimenShoot(specimen).x, 0.0, 0.6) : 0.0;
+        // A stalk under a pixel or so is not seen, and its card would only
+        // cover less of the blade's (the far tiers have none): it shrinks
+        // away as the leaf falls from 16 to 8 pixels long.
+        if (petiole > 0.0) {
+            bool ortho = abs(camera.proj[3][3]) > 0.5;
+            float pxPerM = abs(camera.proj[1][1]) * camera.viewport.y * 0.5 / (ortho ? 1.0 : max(length(p.at), 1e-3));
+            petiole *= smoothstep(8.0, 16.0, length(p.M[2]) * len * pxPerM);
+        }
+        float row = t < 0.25 ? 0.72 * clamp(1.0 - 1.2 * petiole, 0.4, 1.0)
+                  : t < 0.75 ? 0.95 : mix(0.3, 0.58, clamp(cutLeaf.y, 0.0, 1.0));
         local.x = sign(inPos.x) * row * cutWidth * halfCard;
+        if (t > 0.125) local.z += petiole * len;
+        cardT = (t > 0.125 ? t + petiole : 0.0) / (1.0 + petiole);
     }
     // A cluster draws the leaves round the kept one, each of its own size,
     // in its plane: a hexagon round the widened outline and half a leaf more
@@ -150,10 +169,12 @@ void main() {
     // cut runs true over each triangle.
     if (cut) {
         outUV.x = 0.5 * local.x / max(halfCard, 1e-6) + 0.5;
+        outUV.y = 1.0 - cardT;
         // For mesh.frag to cut and shade: its width, its tip, its teeth a
-        // side plus their depth (under 1), its gloss.
+        // side plus their depth (under 1), its petiole in 64ths of the
+        // blade plus its gloss (under 1).
         outColor = vec4(cutWidth, cutLeaf.y, floor(cutLeaf.z + 0.5) + min(cutLeaf.w, 0.95),
-                        forestSpecimenGloss(specimen));
+                        floor(petiole * 64.0 + 0.5) + min(forestSpecimenGloss(specimen), 0.99));
     }
     // A cluster's point in leaf lengths, the widening, a seed and the leaf's
     // width over its length.

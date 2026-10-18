@@ -13,6 +13,7 @@ layout(local_size_x = 64) in;
 #include "scene_vegetation.glsl"
 #define FOREST_POSE_WRITE 1
 #include "scene_forest.glsl"
+#include "scene_forest_shoot.glsl"
 #include "scene_forest_leaf_pose.glsl"
 
 void main() {

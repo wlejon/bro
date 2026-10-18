@@ -253,6 +253,13 @@ public:
     const std::vector<Specimen>& specimens() const { return specimens_; }
     /// Segment keep radii, thickest first within each specimen.
     const std::vector<float>& keepRadius() const { return keepRadius_; }
+    /// A broad node's twigs (scene_forest_shoot.glsl): each clump's pieces,
+    /// its lobe stems and sprays first (`stems`), then its shoots
+    /// (`pieces`); 0 for a clump with no leaves.
+    struct ClumpTwigs { uint32_t stems = 0, pieces = 0; };
+    const std::vector<ClumpTwigs>& clumpTwigs() const { return clumpTwigs_; }
+    /// The pieces a clump of `leaves` leaves draws (forestTwigPieces).
+    static ClumpTwigs twigPieces(uint32_t leaves);
 
     struct Instance {
         bromath::Vec3 position{};
@@ -356,6 +363,7 @@ private:
     std::vector<Specimen> specimens_;
     SpecimenArrays data_;
     std::vector<float> keepRadius_;
+    std::vector<ClumpTwigs> clumpTwigs_;
     std::vector<Instance> instances_;
     bromath::AABB3 forestBounds_;
     Lod lod_;

@@ -22,11 +22,15 @@
 //              form (uint bits: 0 none, 1 flower, 2 head, 3 spike;
 //              broflora's BloomForm); its broad leaf (width over length, 0
 //              the card's; tip, 0 pointed, 1 rounded; teeth a side; tooth
-//              depth, of the half-width); its sprays' brush (x; yzw 0)
+//              depth, of the half-width); its sprays' brush, its broad
+//              leaf's petiole (of its blade's length) and phyllotaxis
+//              (0 alternate, 1 opposite, 2 spiral), 0
 //   segments   7 records: (from.xyz, rFrom), (to.xyz, rTo), (oct tangent at
 //              from, at to), then its vegetation record (4)
 //   clumps     6 records: (centre.xyz, radius), (twig dir.xyz, leaf count),
-//              then its vegetation record (4)
+//              then its vegetation record (4), whose third's z is the
+//              first placement key of its leaves (uint bits: a broad
+//              leaf's place on its shoot, scene_forest_shoot.glsl)
 //   blocks     2 records per run of FOREST_CLUMP_BLOCK of a specimen's
 //              clumps that lie together: the sphere round their ellipsoids
 //              (centre.xyz, radius), and the clumps (the specimen's own
@@ -174,6 +178,11 @@ vec4 forestSpecimenLeaf(int s) { return procedural.records[forestSpecimenRecord(
 float forestSpecimenGloss(int s) { return procedural.records[forestSpecimenRecord(s) + 5].w; }
 // Specimen `s`'s sprays' brush (broflora's Species::sprayBrush).
 float forestSpecimenBrush(int s) { return procedural.records[forestSpecimenRecord(s) + 8].x; }
+// Specimen `s`'s broad leaf on its shoot (scene_forest_shoot.glsl): its
+// petiole's length over its blade's (0: sessile) and its phyllotaxis (0
+// alternate, 1 opposite, 2 spiral; broflora's Species::petiole and
+// Species::phyllotaxis).
+vec2 forestSpecimenShoot(int s) { return procedural.records[forestSpecimenRecord(s) + 8].yz; }
 
 // Specimen `s`'s blooms: their colour (rgb, linear) and form (w: 0 none, 1
 // flower, 2 head, 3 spike).

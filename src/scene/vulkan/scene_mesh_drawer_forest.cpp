@@ -53,12 +53,26 @@ constexpr uint32_t kVertsPerBloom = 6;
 constexpr float kBloomMinPixels = 0.2f;
 constexpr int kNearSides = 10;
 constexpr int kFarSides = 5;
+// Twigs (a broad node's, scene_forest_shoot.glsl): pieces an instance, each
+// a ribbon of 6 vertices; a clump's pieces take as many entries as they
+// need. A tree draws its lobe stems and sprays while their twigs are at
+// least kTwigPixels wide at the crown's nearest point, and its shoots while
+// theirs are (the vertex stage fades each piece out by its own width,
+// mesh_forest_tube.vert's FOREST_TWIG_PX, so nothing pops there); and only
+// while its leaves are leaves, not clusters: they fade out over
+// kTwigWidening times the card widening.
+constexpr uint32_t kTwigPiecesPerEntry = 64;
+constexpr uint32_t kVertsPerTwig = 6;
+constexpr float kTwigPixels = 0.15f;
+constexpr float kTwigStemRadius = 0.045f;   // leaf lengths (forestTwigEnd's thickest stem)
+constexpr float kTwigShootRadius = 0.014f;  // a shoot's at its base
+constexpr float kTwigWidening[2] = {0.95f, 1.3f};
 
 // The shapes a forest draws, each one draw, in this order: a needle or
 // scale node's lobe CORES first, so the leaves they hide fail the depth test;
 // the blooms before the clumps and crowns, so the pixels they cover cost
 // those nothing.
-enum Group { Cores, LeafNear, LeafCard, Bark10, Bark5, Blooms, Clumps, Crowns, kGroups };
+enum Group { Cores, LeafNear, LeafCard, Bark10, Bark5, Twigs, Blooms, Clumps, Crowns, kGroups };
 
 struct Entry {
     uint32_t instance, first, end, param;
@@ -122,6 +136,7 @@ struct SceneMeshDrawer::ForestPlan {
     int leafVerts = 0, leafCopies = 1, cardVerts = ForestNode::kCardVertices, force = -1;
     bool cores = false;   // the leaves tier draws its lobes' cores (a spray node's)
     bool clusters = false;   // past the card widening a kept leaf is a cluster (Lod::clusters, a broad node's)
+    bool twigs = false;      // its leaves hang from twigs drawn as such (a broad node's)
     uint32_t bloomBase = 0;  // the blooms' first record in the node's data (ForestNode::bloomRecordBase)
     std::vector<bromath::AABB3> bounds;   // every tree's, world, padded by the sway's reach
     std::vector<Seen> seen;               // the camera's trees
@@ -208,6 +223,32 @@ struct SceneMeshDrawer::ForestPlan {
                     if (!shadow) stats.leaves += to - from;
                 }
             }
+            // A broad node's twigs, which its leaves hang from, at the
+            // leaves' fade (colour only: a twig is under a shadow texel).
+            if (!shadow && twigs && sp.clumpCount > 0) {
+                const float stemPx = 2.0f * kTwigStemRadius * leafLength * px;
+                const float shootPx = 2.0f * kTwigShootRadius * leafLength * px;
+                const float w0 = lod.cardWidening * kTwigWidening[0], w1 = lod.cardWidening * kTwigWidening[1];
+                // By the widening the tree's size asks for, forced tier or
+                // not, so a forced Leaves tier draws the twigs By size does.
+                const float wide = std::max(t.widening, lod.leafPixels / std::max(leafLength * px, 1e-6f));
+                const float q = std::clamp((wide - w0) / std::max(w1 - w0, 1e-3f), 0.0f, 1.0f);
+                const float keep = 1.0f - q * q * (3.0f - 2.0f * q);
+                if (stemPx >= kTwigPixels && keep > 0.0f) {
+                    const bool shoots = shootPx >= kTwigPixels;
+                    const auto& twigsOf = node->clumpTwigs();
+                    const float fade = ForestNode::fadeCode(lo[0], hi[0]);
+                    for (uint32_t c = sp.clumpStart; c < sp.clumpStart + sp.clumpCount && c < twigsOf.size(); ++c) {
+                        const uint32_t n = shoots ? twigsOf[c].pieces : twigsOf[c].stems;
+                        vertices += uint64_t{(n + kTwigPiecesPerEntry - 1) / kTwigPiecesPerEntry} *
+                                    kTwigPiecesPerEntry * kVertsPerTwig;
+                        if (!G) continue;
+                        for (uint32_t p = 0; p < n; p += kTwigPiecesPerEntry)
+                            G->g[Twigs].push_back({inst, p, std::min(p + kTwigPiecesPerEntry, n), c, t.widening,
+                                                   keep, 1.0f, fade});
+                    }
+                }
+            }
             // A spray node's leaves hide their lobes' depths: each lobe's
             // core drawn solid first (forestLobeCore), at the leaves' fade.
             if (G && !shadow && cores && sp.clumpCount > 0) {
@@ -282,7 +323,7 @@ struct SceneMeshDrawer::ForestPlan {
             const ForestNode::Specimen& sp = specimens[instances[s.instance].specimen];
             addTree(nullptr, s.instance, sp,
                     shadow ? casterLod(L, sp, s) : ForestNode::treeLod(L, sp, s.px, leafLength, force, s.barkPx),
-                    shadow, v);
+                    shadow, v, s.px);
         }
         return static_cast<double>(v);
     }
@@ -317,6 +358,7 @@ std::unique_ptr<SceneMeshDrawer::ForestPlan> SceneMeshDrawer::planForest(SceneFr
     // A spray node's thinned leaves stay sprays, each widened (its needles
     // cut out as the near ones'), not clusters of broad leaves.
     P.clusters = P.lod.clusters > 0.5f && node.look().leafForm == 0;
+    P.twigs = node.look().leafForm == 0 && !node.clumpTwigs().empty();
     const auto& specimens = node.specimens();
     const auto& instances = node.instances();
 
@@ -578,6 +620,7 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
     // rather than being shaded first and covered.
     nearestFirst(colour.g[LeafNear]);
     nearestFirst(colour.g[LeafCard]);
+    nearestFirst(colour.g[Twigs]);
     nearestFirst(colour.g[Blooms]);
     nearestFirst(colour.g[Clumps]);
     nearestFirst(colour.g[Crowns]);
@@ -737,12 +780,14 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
                 {"forest:leafCard:broad", "forest:leafCard:needle", "forest:leafCard:scale"},
                 {"forest:bark10:broad", "forest:bark10:needle", "forest:bark10:scale"},
                 {"forest:bark5:broad", "forest:bark5:needle", "forest:bark5:scale"},
+                {"forest:twigs:broad", "forest:twigs:needle", "forest:twigs:scale"},
                 {"forest:blooms:broad", "forest:blooms:needle", "forest:blooms:scale"},
                 {"forest:clumps:broad", "forest:clumps:needle", "forest:clumps:scale"},
                 {"forest:crowns:broad", "forest:crowns:needle", "forest:crowns:scale"}};
             static constexpr const char* kShadowLabel[kGroups] = {
                 "shadow:forest:cores", "shadow:forest:leafNear", "shadow:forest:leafCard", "shadow:forest:bark10",
-                "shadow:forest:bark5", "shadow:forest:blooms", "shadow:forest:clumps", "shadow:forest:crowns"};
+                "shadow:forest:bark5", "shadow:forest:twigs", "shadow:forest:blooms", "shadow:forest:clumps",
+                "shadow:forest:crowns"};
             d.timerLabel = kLabel[k][std::clamp(static_cast<int>(node.look().leafForm), 0, 2)];
             if (shadow) d.shadowTimerLabel = kShadowLabel[k];
             switch (k) {
@@ -788,6 +833,25 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
                 d.push.baseColor[3] = 1.0f;
                 d.push.pbrParams[1] = node.barkRoughness();
                 d.push.extra[1] = 0.0f;
+                d.push.pbrParams[3] = static_cast<float>(barkFlags);
+                break;
+            }
+            case Twigs: {
+                // Ribbons facing the eye (mesh_forest_tube.vert's twig
+                // build, push.extra.z 3) in the bark's colour.
+                d.kind = MeshKind::ForestTube;
+                d.indexCount = kTwigPiecesPerEntry * kVertsPerTwig;
+                d.instanceCount = static_cast<uint32_t>(g.size());
+                d.firstInstance = first;
+                d.twoSided = true;
+                const float* bc = node.barkColor();
+                d.push.baseColor[0] = bc[0];
+                d.push.baseColor[1] = bc[1];
+                d.push.baseColor[2] = bc[2];
+                d.push.baseColor[3] = 1.0f;
+                d.push.pbrParams[1] = node.barkRoughness();
+                d.push.extra[1] = 0.0f;
+                d.push.extra[2] = 3.0f;
                 d.push.pbrParams[3] = static_cast<float>(barkFlags);
                 break;
             }

@@ -289,7 +289,9 @@ void forestCrownTerms(vec3 rc, out vec3 bulk, out float ao, out vec3 deep) {
 // its widest), y along it (1 at the stalk, 0 the tip); `shape` its species'
 // leaf (broflora's Species::leafWidth .. leafGloss): its width as a share of
 // the card's, its tip (0 drawn to a point, 1 rounded), its teeth a side plus
-// their depth (the fraction, of the half-width) and its gloss. Everything is
+// their depth (the fraction, of the half-width) and its petiole (of the
+// blade's length, in 64ths: the card's first petiole / (1 + petiole) is the
+// stalk) plus its gloss. Everything is
 // worked out from where the pixel lies, so it costs no geometry, and each
 // detail fades out as it shrinks under a couple of pixels. Fragment stages
 // only (it takes derivatives): mesh.frag defines FOREST_MASS_FRAGMENT.
@@ -304,19 +306,38 @@ struct ForestLeafCut {
 ForestLeafCut forestLeafCut(vec2 uv, vec4 shape) {
     ForestLeafCut c;
     float across = abs(uv.x * 2.0 - 1.0);
-    c.gloss = clamp(shape.w, 0.0, 1.0);
+    // shape.w: its petiole (of the blade's length) in 64ths, plus its gloss.
+    float petiole = floor(shape.w) / 64.0;
+    c.gloss = clamp(fract(shape.w), 0.0, 1.0);
+    // Along the card from the node: the petiole's share first, then the blade.
+    float tc = clamp(1.0 - uv.y, 0.0, 1.0);
+    float q = petiole / (1.0 + petiole);
     // A leaf a few pixels across shows no outline, only its area: it hands
-    // over to the whole card, the area the far tiers (clusters, lobes,
+    // over to the whole blade, the area the far tiers (clusters, lobes,
     // crowns) stand in for, so a crown seen past the cut holds its cover.
     // (Coarse: one answer a quad, so the far leaves skip the cut whole.)
+    // A petiole's card is longer than its blade: the far card covers the
+    // blade's share of it, spread evenly (a hole where the stalk is would be
+    // a hard edge the far tiers do not have).
+    float farCover = 1.0 / (1.0 + petiole);
     float far = smoothstep(0.25, 0.5, fwidthCoarse(across));
     if (far >= 1.0) {
-        c.cover = 1.0;
+        c.cover = farCover;
         c.vein = 0.0;
         c.tilt = 0.0;
         return c;
     }
-    float t = clamp(1.0 - uv.y, 0.0, 1.0);
+    if (tc < q) {
+        // The petiole: a stalk along the midrib, a little thicker at the
+        // blade, its cover its width where that is under a pixel.
+        float hw = 0.03 * (0.8 + 0.4 * tc / max(q, 1e-4));
+        float fs = max(fwidth(across), 1e-5);
+        c.cover = mix(clamp((hw - across) / fs + 0.5, 0.0, 1.0) * min(1.0, 2.0 * hw / fs), farCover, far);
+        c.vein = 1.0;
+        c.tilt = 0.0;
+        return c;
+    }
+    float t = clamp((tc - q) / max(1.0 - q, 1e-4), 0.0, 1.0);
     float width = shape.x > 0.0 ? shape.x : 1.0;
     float tip = clamp(shape.y, 0.0, 1.0);
     float teeth = floor(shape.z);
@@ -342,7 +363,7 @@ ForestLeafCut forestLeafCut(vec2 uv, vec4 shape) {
     }
     float fpx = max(fwidth(across) + 0.5 * fwidth(edge), 1e-5);
     c.cover = clamp((edge - across) / fpx + 0.5, 0.0, 1.0);
-    c.cover = mix(c.cover, 1.0, far);
+    c.cover = mix(c.cover, farCover, far);
     // Venation: the midrib, tapering to the tip, and pinnate laterals
     // leaving it for the margin at a slant toward the tip, curving up
     // along it as they near it.

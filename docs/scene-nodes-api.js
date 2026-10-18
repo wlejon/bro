@@ -584,17 +584,38 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  * boxwood's small leaves). An emit filtered to a form
  * (`world.emitForest({ leafForm })`) names it, and the node takes it.
  *
+ * A broad node's leaves grow ON TWIGS: each clump's leaves hang from the
+ * nodes of current-year shoots (about 8 leaves a shoot, alternate in two
+ * ranks, opposite and decussate, or a 2/5 spiral, as the specimen's
+ * phyllotaxis says), the shoots branch off sprays (about five a spray: a
+ * terminal one and laterals left and right), and each spray's twig leaves
+ * a stem through its lobe from where the clump grows on its branch; the
+ * sprays lie along the lobes' outer shell, so the foliage forms layers.
+ * Each blade leaves its node on a petiole (the specimen's, a share of the
+ * blade's length; cut per pixel and gone once a leaf is under 8 px),
+ * turned out and up toward the light, drooping. All of it is derived per
+ * clump at run time from the clump's own record and leaf count, nothing
+ * stored per leaf or twig. Near trees draw the TWIGS too: camera-facing
+ * ribbons at least a pixel wide (their cover their width under it),
+ * posed through the same functions as the leaves' nodes and bent with
+ * their spray and shoot, so a leaf never leaves its twig; the shoots go
+ * once under 0.15 px, the stems and sprays likewise, and every twig fades
+ * out as the leaves widen past `cardWidening`. Twigs count toward the
+ * budget, draw in colour only (no shadow), and a 'needle' or 'scale' node
+ * has none (its spray card is the twig).
+ *
  * Each specimen carries its own LOOK (`specimenLooks`, the emit's: 8 floats
  * a specimen, leafColor rgb, form, barkColor rgb, leafSize): its leaves and
  * bark take its colours in place of the node's (a tint over the node's
  * colour, so the node's maps still apply), so a spruce is darker than a fir
  * in the same node. A zero colour keeps the node's. 16 floats a specimen
  * add its LEAF (the emit's `specimenLeaves`, which createForest appends
- * when the emit carries them): width, tip, teeth, tooth depth, gloss and
- * spray brush. A broad leaf the node's own card is cut to that outline per
- * pixel near (pointed or rounded, serrated or spiny, veined; a leaf a few
- * pixels across is drawn as its whole card), glossy as its species is;
- * a spray with a brush turns up and out along its twig (a pine's).
+ * when the emit carries them): width, tip, teeth, tooth depth, gloss,
+ * spray brush, petiole and phyllotaxis. A broad leaf the node's own card
+ * is cut to that outline per pixel near (pointed or rounded, serrated or
+ * spiny, veined; a leaf a few pixels across is drawn as its whole card),
+ * glossy as its species is; a spray with a brush turns up and out along
+ * its twig (a pine's).
  *
  * The node's material (colour, roughness, subsurface, maps, shadows) is the
  * leaves'; `barkColor` and `barkRoughness` the bark's; its mesh the leaf
@@ -634,7 +655,8 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  * @property {Float32Array|Array<number>} [specimenLooks] - 8 floats a specimen
  *   (leafColor rgb, form, barkColor rgb, leafSize), or 16 with each
  *   specimen's leaf after them all (8 a specimen: width, tip, teeth, tooth
- *   depth, gloss, spray brush, 0, 0); default the emit's.
+ *   depth, gloss, spray brush, petiole (a share of the blade's length),
+ *   phyllotaxis (0 alternate, 1 opposite, 2 spiral)); default the emit's.
  *   All zeros: the node's own colours.
  * @property {ForestLod} [lod] - level-of-detail settings.
  * @property {Array<number>|string} [barkColor] - default `[0.2, 0.17, 0.14]`.

@@ -2,12 +2,14 @@
 // vertices share, worked out once a leaf by forest_leaf_pose.comp, or by
 // each vertex in mesh_forest_leaf.vert's FOREST_LEAF_INLINE build (the
 // leaves past the pose buffer's room: a forced Leaves tier over a whole
-// forest). Where clumpLeafFrame places it, its widening, its sway (the
-// wood's pose where it hangs, its own turn and flutter; its fold is the
-// vertex's, by the side of the stem it is on), its crown shading and tint,
-// a cluster's lobe. Needs scene_camera.glsl, scene_mesh_push.glsl (the
-// draw's flags say cluster), scene_procedural.glsl, scene_vegetation.glsl
-// and scene_forest.glsl, with forestApplyLook() called first.
+// forest). Where forestLeafFrame places it (a broad leaf at its node on its
+// shoot, scene_forest_shoot.glsl), its widening, its sway (the wood's pose
+// where it hangs, its spray's and shoot's bending, its own turn and
+// flutter about its petiole; its fold is the vertex's, by the side of the
+// stem it is on), its crown shading and tint, a cluster's lobe. Needs
+// scene_camera.glsl, scene_mesh_push.glsl (the draw's flags say cluster),
+// scene_procedural.glsl, scene_vegetation.glsl, scene_forest.glsl and
+// scene_forest_shoot.glsl, with forestApplyLook() called first.
 
 ForestPose forestPoseLeaf(ForestEntry e, int leaf) {
     ForestPose p;
@@ -18,25 +20,28 @@ ForestPose forestPoseLeaf(ForestEntry e, int leaf) {
     vec3 P, F, lc;
     mat3 R;
     float lr;
+    bool onShoot;
+    ForestLeafAt at;
     forestApplyClumpFlat(e.instance);
-    if (k <= 0.0 || procClumpBare(e.instance, lf.x) ||
-        !clumpLeafFrame(procedural.records[forestClumpRecord(lf.x)], lf.y, lf.x, P, R, F, lc, lr))
+    if (k <= 0.0 || procClumpBare(e.instance, lf.x) || !forestLeafFrame(e.instance, lf, P, R, F, lc, lr, onShoot, at))
         return p;
     forestSprayBrush(e.instance, lf.x, lc, lr, P, R, F);
     int specimen;
     float treeSeed;
     mat4 model = push.model * forestInstance(e.instance, specimen, treeSeed);
 
-    // A widened card stands in for several leaves: it moves in toward its
-    // lobe's centre by the length it grew, so it stays inside the crown.
-    // Its light (depth in the crown, occlusion, tint) stays the leaf's own,
-    // from where it hangs. A cluster (mesh.frag's SCENE_FOREST_CLUSTER)
-    // stays where the kept leaf hangs and is not scaled: the vertex sets out
-    // its hexagon by the widening.
+    // A widened card stands in for several leaves. A spray's moves in
+    // toward its lobe's centre by the length it grew, so it stays inside
+    // the crown; a broad leaf stays on its node and grows from its petiole
+    // (its twig is drawn: it must not leave it). Its light (depth in the
+    // crown, occlusion, tint) stays the leaf's own, from where it hangs. A
+    // cluster (mesh.frag's SCENE_FOREST_CLUSTER) stays where the kept leaf
+    // hangs and is not scaled: the vertex sets out its hexagon by the
+    // widening.
     bool cluster = (meshFlags() & MESH_FOREST_CLUSTER) != 0u;
     vec3 rest = P;
     float grown = (k - 1.0) * procedural.header[1].z;
-    if (grown > 0.0 && !cluster) P = lc + (P - lc) * clamp(1.0 - 0.5 * grown / max(lr, 1e-3), 0.55, 1.0);
+    if (grown > 0.0 && !cluster && !onShoot) P = lc + (P - lc) * clamp(1.0 - 0.5 * grown / max(lr, 1e-3), 0.55, 1.0);
     if (!cluster) R *= k;
     mat3 M3 = mat3(model) * R;
     vec3 center = (model * vec4(P, 1.0)).xyz;
@@ -50,11 +55,20 @@ ForestPose forestPoseLeaf(ForestEntry e, int leaf) {
     VegWind w = vegWind(plant);
     vec3 anchor = (model * vec4(v2.xyz, 1.0)).xyz;
     VegPose pose = vegPose(plant, limb, w, anchor, clamp(v2.w, 0.0, 1.0));
+    float amount = forestFlutter(e.widening);
+    if (onShoot) {
+        // Its spray's and shoot's bending (the twig it hangs from moves
+        // the same, mesh_forest_tube.vert's twig build).
+        vec3 off, om;
+        forestLeafShootSway(at, model, pose.drag, amount, off, om);
+        pose.offset += off;
+        pose.omega += om;
+    }
     float seed = fract(sin(dot(v2.xyz, vec3(12.9898, 78.233, 37.719)) + treeSeed * 61.7) * 43758.5453);
     vec3 side;
     float fold;
-    mat3 rot = vegLeafTurn(pose, w, normalize(mat3(model) * F), normalize(mat3(model) * R[1]), seed,
-                           forestFlutter(e.widening), side, fold);
+    mat3 rot = vegLeafTurn(pose, w, normalize(mat3(model) * F), normalize(mat3(model) * R[1]), seed, amount, side,
+                           fold);
 
     p.alive = true;
     p.at = anchor + pose.offset + rot * (center - anchor);

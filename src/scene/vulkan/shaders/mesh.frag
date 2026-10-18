@@ -441,6 +441,11 @@ void main() {
             leafCut = true;
         }
 #endif
+#ifdef SCENE_BARK
+        // A twig (mesh_forest_tube.vert's twig build): under a pixel wide,
+        // its cover is its width.
+        if (inUV.y < -0.5) massCover = clamp(inColor.w, 0.0, 1.0);
+#endif
         int mask = forestSampleMask(inInstColor.a, massCover, (flags & MESH_FOREST_MSAA) != 0u, massSalt);
         if (mask == 0) discard;
         gl_SampleMask[0] = mask;

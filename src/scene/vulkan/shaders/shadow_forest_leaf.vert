@@ -10,6 +10,7 @@ layout(location = 0) in vec3 inPos;
 #include "scene_procedural.glsl"
 #include "scene_vegetation.glsl"
 #include "scene_forest.glsl"
+#include "scene_forest_shoot.glsl"
 
 void main() {
     forestApplyLook();
@@ -24,17 +25,22 @@ void main() {
     vec3 P, F, lc;
     mat3 R;
     float lr;
+    bool onShoot;
+    ForestLeafAt at;
     forestApplyClumpFlat(e.instance);
-    if (k <= 0.0 || procClumpBare(e.instance, lf.x) ||
-        !clumpLeafFrame(procedural.records[forestClumpRecord(lf.x)], lf.y, lf.x, P, R, F, lc, lr)) {
+    if (k <= 0.0 || procClumpBare(e.instance, lf.x) || !forestLeafFrame(e.instance, lf, P, R, F, lc, lr, onShoot, at)) {
         gl_Position = FOREST_CULLED;
         return;
     }
     forestSprayBrush(e.instance, lf.x, lc, lr, P, R, F);
-    // Swayed about where it hangs, as mesh_forest_leaf.vert sways it.
+    // Swayed about where it hangs, as mesh_forest_leaf.vert sways it (a
+    // caster leaves out its spray's and shoot's own bending: a few
+    // centimetres, under a shadow texel).
     vec3 rest = P;
     float grown = (k - 1.0) * procedural.header[1].z;
-    if (grown > 0.0) P = lc + (P - lc) * clamp(1.0 - 0.5 * grown / max(lr, 1e-3), 0.55, 1.0);
+    // A widened broad caster grows from its node as its leaf does
+    // (forestPoseLeaf).
+    if (grown > 0.0 && !onShoot) P = lc + (P - lc) * clamp(1.0 - 0.5 * grown / max(lr, 1e-3), 0.55, 1.0);
     R *= k;
     // A spray's caster is its card narrowed to the share its needles or
     // scales cover (the casters have no fragment stage to cut them).
