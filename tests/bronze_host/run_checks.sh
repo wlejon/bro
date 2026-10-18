@@ -28,8 +28,11 @@ check_loader() { bash "$SCRIPT_DIR/run_loader_test.sh"; }
 # bro-native-manifest prints the manifest bro's own JavaScript is compiled
 # against from the tables alone, built with no entry points in them; this
 # asks the stock bro-headless what it registers at run time and requires
-# the two to be the same file. A native registered outside a table, or a
-# table that registers differently in the runtime build, fails here.
+# the registry's entries in the tables' namespaces to be the file's, line for
+# line. A native registered outside a table, or a table that registers
+# differently in the runtime build, fails here. Namespaces a sibling's own
+# API registers (__bro_native.tensor in a tensor build) are not bro's tables
+# and not in the manifest, so they are left out of the comparison.
 check_natives() {
     local bin built got
     bin="$(bh_find_bro_headless "$PROJECT_DIR")" || return 77
@@ -48,14 +51,23 @@ check_natives() {
         rm -f "$got"
         return 1
     fi
-    if cmp -s "$built" "$got"; then
+    # The entries of a manifest in the namespaces the build's file has (one
+    # entry a line; the namespace is the second component of its path).
+    bh_bro_natives() {
+        awk '{ sub(/,$/, ""); ns = "" }
+             /"path": "__bro_native\./ {
+                 ns = $0; sub(/.*"path": "__bro_native\./, "", ns); sub(/[."].*/, "", ns) }
+             FNR == NR { if (ns != "") mine[ns] = 1; next }
+             ns in mine' "$built" "$1"
+    }
+    if diff <(bh_bro_natives "$built") <(bh_bro_natives "$got") > "$got.diff"; then
         echo "  PASS  bronze_host natives"
-        rm -f "$got"
+        rm -f "$got" "$got.diff"
         return 0
     fi
-    echo "  FAIL  bronze_host natives: the registry differs from $built"
-    diff "$built" "$got" | head -20
-    rm -f "$got"
+    echo "  FAIL  bronze_host natives: the registry differs from $built (< file, > registry)"
+    head -20 "$got.diff"
+    rm -f "$got" "$got.diff"
     return 1
 }
 
