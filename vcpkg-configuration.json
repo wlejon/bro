@@ -1,0 +1,4 @@
+{
+  "$comment": "cmake/vcpkg-ports holds bro's changes to upstream ports at the builtin-baseline's version: libvpx built without /GL, so no link that takes vpx.lib is a link-time-codegen link (see its portfile).",
+  "overlay-ports": [ "./cmake/vcpkg-ports" ]
+}

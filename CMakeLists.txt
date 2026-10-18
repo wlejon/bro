@@ -121,11 +121,29 @@ if(MSVC)
         # turns off.
         $<$<AND:$<COMPILE_LANGUAGE:C,CXX>,$<CONFIG:Release>>:/Z7>
     )
-    add_link_options(
-        $<$<CONFIG:Release>:/DEBUG>
-        $<$<CONFIG:Release>:/OPT:REF>
-        $<$<CONFIG:Release>:/OPT:ICF>
-    )
+    # BRO_FAST_LINK (default ON outside CI): a Release link writes a
+    # /DEBUG:FASTLINK PDB that points into the objects, with no reference or
+    # COMDAT pruning, so a one-.cpp edit relinks libbro and the tools in a few
+    # seconds. Not /INCREMENTAL: an incremental link routes functions through
+    # jump thunks and pads them, and the stack maps bronze's compiled modules
+    # register by code address then overlap ("stack maps registered for ...
+    # overlap the registered code of ..."). Release artifacts (CI, nightly,
+    # packaging) are built with it OFF: pruned, with a full PDB.
+    if(DEFINED ENV{CI})
+        set(_bro_fast_link_default OFF)
+    else()
+        set(_bro_fast_link_default ON)
+    endif()
+    option(BRO_FAST_LINK "Release links with a FASTLINK PDB and no pruning (local iteration)" ${_bro_fast_link_default})
+    if(BRO_FAST_LINK)
+        add_link_options($<$<CONFIG:Release>:/DEBUG:FASTLINK> $<$<CONFIG:Release>:/OPT:NOREF> $<$<CONFIG:Release>:/OPT:NOICF>)
+    else()
+        add_link_options(
+            $<$<CONFIG:Release>:/DEBUG>
+            $<$<CONFIG:Release>:/OPT:REF>
+            $<$<CONFIG:Release>:/OPT:ICF>
+        )
+    endif()
 else()
     # String literals with UTF-8 bytes > 127 require unsigned char so they
     # don't trip narrowing-conversion errors on platforms where `char` is

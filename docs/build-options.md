@@ -56,6 +56,16 @@ HTML/CSS + Canvas2D + WebGL runtime with working screenshots and native Vulkan p
 | `BRO_WITH_TERMINAL` | bropty + brosearch + brothemes + bromux (persistent sessions, over brolink) | off | on | on | on | no vcpkg; the native `<terminal>` element ([terminal-api.js](terminal-api.js)). Off = `bro.terminal.available === false` and `<terminal>` is an inert box |
 | `BRO_WITH_REMOTE` | broremote + brovideo + brolink | off | on | on | on | `bro.remote` ([remote-api.js](remote-api.js)). Windows and Linux only (off by default on macOS). brovideo provides VA-API encode/decode on Linux when libva is present (with brodmabuf) and Media Foundation encode/decode on Windows, plus the Raw codec. Off = `bro.remote.available === false` |
 
+### Link speed (Windows)
+
+`BRO_FAST_LINK` (default on, off when `CI` is set): a Release link writes a
+`/DEBUG:FASTLINK` PDB and skips `/OPT:REF` / `/OPT:ICF`, so a one-.cpp edit
+relinks libbro in seconds. The release workflows build with it off. It is
+not `/INCREMENTAL`: incremental links put jump thunks between bronze's
+compiled modules and their stack maps. libvpx comes from bro's overlay port
+(`cmake/vcpkg-ports/libvpx`, `vcpkg-configuration.json`) built without `/GL`,
+so no link is a link-time-codegen one.
+
 ### Desktop libraries
 
 Each desktop sibling has its own flag, on in `desktop`, `app` and `full`, off in

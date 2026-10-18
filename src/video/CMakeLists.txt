@@ -43,15 +43,10 @@ if(_webm_inc)
     endforeach()
 endif()
 
-# vcpkg's libvpx is compiled with /GL, so every executable that links
-# bro_video is a link-time-codegen link. Without /LTCG on the link line MSVC
-# starts the link, discovers the /GL objects, and restarts it under /LTCG,
-# printing "restarting link with /LTCG" and paying for the link twice. Saying
-# it up front is the same link done once. Release-shaped configurations only:
-# Debug links /INCREMENTAL, which /LTCG would override with a warning.
-if(MSVC)
-    target_link_options(bro_video INTERFACE $<$<NOT:$<CONFIG:Debug>>:/LTCG>)
-endif()
+# libvpx comes from bro's overlay port (cmake/vcpkg-ports/libvpx), built
+# without /GL: upstream's /GL made every link that took vpx.lib a
+# link-time-codegen link, never incremental and seconds longer on each C++
+# rebuild.
 
 # The smoke tests and tools below are bro's own and none is linked into bro.
 # Gated on BRO_BUILD_TESTS so an embedding application does not build them.
