@@ -17,6 +17,13 @@
 // points take the wood's pose and its spray's and shoot's bending exactly as
 // the leaves on it do. Shaded as bark (mesh.frag's barkSurface, the
 // specimen's bark word in outUV.y), darker into the crown.
+//
+// The BARK RIBBON build (a twig entry whose param is -1): an entry is a run
+// of the tree's segments the round bark leaves out or thins (past its cut,
+// the entry's `widening`, specimen units), each a ribbon along it facing the
+// eye as a twig's is, its cover its width in pixels less the share the round
+// bark still draws there. Left out, a far tree's fine branches went whole:
+// from above an open crown's grey haze of them, a quarter of what it covers.
 
 layout(location = 0) out vec3 outWorldPos;
 layout(location = 1) out vec3 outNormal;
@@ -205,12 +212,74 @@ void twigMain(ForestEntry e) {
     outBitangent = cross(N, T);
 }
 
+void barkRibbonMain(ForestEntry e) {
+    // Two rows (its ends) of its two sides a segment, as a plain twig piece.
+    int seg = e.first + gl_VertexIndex / 4;
+    int local = gl_VertexIndex & 3;
+    int r = forestSegmentRecord(seg);
+    vec4 s0 = procedural.records[r], s1 = procedural.records[r + 1];
+    vec3 axis = s1.xyz - s0.xyz;
+    if (seg >= e.end || dot(axis, axis) < 1e-12) {
+        gl_Position = FOREST_CULLED;
+        return;
+    }
+    int specimen;
+    float treeSeed;
+    mat4 model = push.model * forestInstance(e.instance, specimen, treeSeed);
+    float endT = float(local >> 1);
+    float sideSign = (local & 1) != 0 ? 1.0 : -1.0;
+    vec3 centre = endT > 0.5 ? s1.xyz : s0.xyz;
+    // (A tip's end radius is negative: it closes to a point.)
+    float rad = endT > 0.5 ? max(s1.w, 0.0) : s0.w;
+    vec4 v0, v1, v2, v3;
+    forestVegetation(r + 3, centre, endT, v0, v1, v2, v3);
+    vec3 pos = (model * vec4(centre, 1.0)).xyz;
+    mat3 rot;
+    outVegShade = vegetationSwayAxis(model, v0, v1, v2, v3, vec3(0.0), vec3(0.0, 1.0, 0.0), pos, rot);
+    vec3 T = normalize(rot * (mat3(model) * axis));
+
+    float dist = max(length(pos), 1e-3);
+    bool ortho = abs(camera.proj[3][3]) > 0.5;
+    float pxPerM = abs(camera.proj[1][1]) * camera.viewport.y * 0.5 / (ortho ? 1.0 : dist);
+    float sc = vegScale(model);
+    float rw = rad * sc;
+    float widthPx = 2.0 * rw * pxPerM;
+    // The share of its width the round bark leaves (scene_forest_tube.glsl
+    // thins it from 1.6 times the cut to nothing at it).
+    // The drawer stops at half the cut (kBarkRibbonCut): they fade in to
+    // three quarters of it, so none blinks out as the eye backs off.
+    float left = e.widening > 0.0 ? (1.0 - smoothstep(e.widening, 1.6 * e.widening, rad)) *
+                                        smoothstep(0.5 * e.widening, 0.75 * e.widening, rad)
+                                  : 0.0;
+    float cover = clamp(widthPx * left, 0.0, 1.0);
+    vec3 toEye = ortho ? normalize(vec3(camera.view[0][2], camera.view[1][2], camera.view[2][2])) : -pos / dist;
+    vec3 across = cross(T, toEye);
+    float al = length(across);
+    across = al > 1e-5 ? across / al : perpendicularUnit(T);
+    pos += across * (sideSign * max(rw, 0.5 / pxPerM));
+
+    vec3 N = across * sideSign + toEye * 0.02;
+    outInstColor = vec4(vegetationTint(model, v0, v1, v2, v3, false) * forestSpecimenTint(specimen, true), e.fade);
+    vec4 barkRec = procedural.records[r + 5];   // (weightFrom, weightTo, path, bark word)
+    float ang = sideSign * 1.3;
+    outColor = vec4(vec2(cos(ang), sin(ang)) * rw, (barkRec.z + endT * length(axis)) * sc, rw);
+    outUV = vec2(cover, -2.0 - max(barkRec.w, 0.0));
+    outWorldPos = pos;
+    gl_Position = camera.viewProj * vec4(pos, 1.0);
+    outNormal = N;
+    outTangent = T;
+    outBitangent = cross(N, T);
+}
+
 void main() {
     outVegShade = vec4(0.0, 0.0, 0.0, 1.0);
     forestApplyLook();
     ForestEntry e = forestEntry(gl_InstanceIndex);
     if (push.extra.z > 2.5) {
-        twigMain(e);
+        if (e.param < 0)
+            barkRibbonMain(e);
+        else
+            twigMain(e);
         return;
     }
     int specimen;

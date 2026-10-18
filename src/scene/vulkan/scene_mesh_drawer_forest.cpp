@@ -80,6 +80,11 @@ constexpr float kBarkCurvePixels = 6.0f;
 // kTwigWidening times the card widening.
 constexpr uint32_t kTwigPiecesPerEntry = 64;
 constexpr uint32_t kVertsPerTwig = 6;
+// Bark down to this share of the round bark's cut (Lod::barkPixels, 0.7 px:
+// 0.35 px) is drawn as ribbons covering their width. Down to 0.1 px took
+// the flight's twigs 0.35 -> 2.5 ms a frame; at 0.35 px 0.6 ms, keeping
+// most of the canopy's edges (40-80 m hard, noon 7.2 -> 6.9).
+constexpr float kBarkRibbonCut = 0.5f;
 // A clump at least kTwigFinePixels across (its radius) on screen at its
 // nearest point draws its twigs FINE: each piece kTwigFineRows quads along
 // the curve through its joints (forestHermite), with a collar where a twig
@@ -382,6 +387,28 @@ struct SceneMeshDrawer::ForestPlan {
                 for (uint32_t c = nc; c < n; c += kSegmentsPerEntry)
                     g.push_back({inst, sp.segStart + c, sp.segStart + std::min(c + kSegmentsPerEntry, n),
                                  static_cast<uint32_t>(sides) + 256u, t.barkRadius, 0.0f, 1.0f, 1.0f});
+            }
+            // What the round bark leaves out or thins (keep radius under
+            // twice the cut) down to kBarkRibbonCut of the cut, as ribbons
+            // covering their width (mesh_forest_tube.vert's bark ribbon
+            // build, in the twigs' draw; colour only). Counted when drawn,
+            // not against the budget, as the sprites: four vertices a
+            // segment, but counted as the round bark's they thinned the
+            // canopy's leaves to pay for them (detail 1.07 -> 1.74).
+            if (!shadow && t.barkRadius > 0.0f && G) {
+                const auto upTo = [&](float r) {
+                    return static_cast<uint32_t>(
+                        std::upper_bound(k0, k1, r, [](float a, float v) { return a > v; }) - k0);
+                };
+                const uint32_t r0 = upTo(2.0f * t.barkRadius), r1 = upTo(kBarkRibbonCut * t.barkRadius);
+                if (r1 > r0) {
+                    vertices += uint64_t{(r1 - r0 + kTwigPiecesPerEntry - 1) / kTwigPiecesPerEntry} *
+                                kTwigPiecesPerEntry * kVertsPerTwig;
+                    for (uint32_t c = r0; c < r1; c += kTwigPiecesPerEntry)
+                            G->g[Twigs].push_back({inst, sp.segStart + c,
+                                                   sp.segStart + std::min(c + kTwigPiecesPerEntry, r1), ~0u,
+                                                   t.barkRadius, 1.0f, 1.0f, 1.0f});
+                }
             }
         }
         // Sprites: counted when drawn, not against the budget, which buys
