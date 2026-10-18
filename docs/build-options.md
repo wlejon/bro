@@ -66,6 +66,27 @@ compiled modules and their stack maps. libvpx comes from bro's overlay port
 (`cmake/vcpkg-ports/libvpx`, `vcpkg-configuration.json`) built without `/GL`,
 so no link is a link-time-codegen one.
 
+### Compiler cache (Ninja, Makefiles)
+
+`BRO_COMPILER_CACHE` (default on): with `ccache` (else `sccache`) on the
+PATH, every target in the tree compiles through it; the Visual Studio
+generator ignores a launcher, and one set with
+`-DCMAKE_CXX_COMPILER_LAUNCHER` is kept. ccache's `base_dir` is the projects
+root, so build dirs side by side share hits. It pays where sources did not
+change: a fresh build dir (on the Mac 507 s -> 51 s on a warm cache), a
+header touched and put back, a branch switched and back. Raise ccache's
+5 GB default (`ccache -M 20G`) if you keep several build dirs.
+
+### Native manifest
+
+`bro-native-manifest` prints the manifest bro's own JavaScript is compiled
+against. It links only the native tables (`natives/<ns>/native_<ns>_register.cpp`
+and `native_tables.cpp`, compiled with `BRO_NATIVE_TABLE_ONLY`; see
+`src/bronze_host/native_table.h`) and bronze, so an engine edit does not
+relink or rerun it. A new native's registration goes in its register file,
+never inline in a body `.cpp`; `tests/bronze_host/run_checks.sh natives`
+fails otherwise.
+
 ### Desktop libraries
 
 Each desktop sibling has its own flag, on in `desktop`, `app` and `full`, off in
