@@ -35,9 +35,6 @@
 #include "render/damage.h"
 #include "util/asset_mounts.h"
 
-#if BRO_WITH_3D
-#include "engine/gizmo.h"
-#endif
 
 #include <atomic>
 #include <climits>
@@ -62,6 +59,7 @@ namespace bro::layout { class ElRemoteView; }
 namespace bro::engine {
 
 class RemoteViewHost;
+class GizmoManager;  // engine/gizmo.h
 
 class Engine {
 public:

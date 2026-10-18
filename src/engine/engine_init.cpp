@@ -3,6 +3,7 @@
 #include "engine/control.h"
 #include "engine/frame_trace.h"
 #include "engine/frame_presenter.h"
+#include "engine/gizmo.h"
 #include "engine/layout_pipeline.h"
 #include "engine/inspector_highlight.h"
 #include "engine/key_mapping.h"
