@@ -79,7 +79,7 @@ constexpr RingSpec kRingSpec[GrassNode::kRings] = {
     // over the same ground once the turf there read as the sward's depth),
     // in wider fans rather than more of them (every blade costs its vertices
     // whatever it covers).
-    {0.7f, 150.0f, 5, 2, 0.6f, 0.0f, 50.0f, 1.0f, 1.0f},
+    {0.7f, 150.0f, 4, 2, 0.6f, 0.0f, 62.0f, 1.0f, 1.0f},
 };
 constexpr float kRangeRef = 150.0f;
 

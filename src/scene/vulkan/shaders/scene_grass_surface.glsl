@@ -152,3 +152,23 @@ float grassFanSurface(vec2 uv, vec4 info, out float tone) {
     }
     return min(cover, 1.0);
 }
+
+// scene_grass.glsl's grassPackColor, undone.
+vec3 grassUnpackColor(float p) {
+    float q = floor(p + 0.5);
+    vec3 c = vec3(floor(q / 16384.0), mod(floor(q / 128.0), 128.0), mod(q, 128.0)) / 127.0;
+    return c * c;
+}
+
+// A far herb's bloom over a fan (info.z 1, its colour in info.w): a round
+// head at the fan's top, as wide as about half the fan and never under
+// about a pixel across, cut per pixel (a fan's leaves are tall and thin, so
+// a bloom drawn as the whole fan was a dash). Returns the share of the
+// pixel it covers.
+float grassFanBloom(vec2 uv, vec4 info, out vec3 color) {
+    color = grassUnpackColor(info.w);
+    vec2 fw = max(fwidth(uv), vec2(1e-5));
+    float r = max(0.25 / fw.x, 0.6);   // its radius in pixels
+    vec2 q = vec2(uv.x / fw.x, (1.0 - uv.y) / fw.y - r);
+    return clamp(r + 0.5 - length(q), 0.0, 1.0);
+}

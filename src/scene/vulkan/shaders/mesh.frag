@@ -497,10 +497,17 @@ void main() {
         // A far fan of leaves, cut into them.
         float tone;
         float cover = grassFanSurface(inUV, inColor, tone);
+        // A far herb's bloom over it (scene_grass_surface.glsl's
+        // grassFanBloom), in place of the blade's colour.
+        float fanBloom = 0.0;
+        vec3 bloomColor = vec3(0.0);
+        if (inColor.z > 0.5) fanBloom = grassFanBloom(inUV, inColor, bloomColor);
+        vec3 plain = baseColor / max(inInstColor.rgb, vec3(1e-4));
+        baseColor = mix(baseColor * mix(0.84, 1.16, tone), plain * bloomColor, fanBloom);
+        cover = max(cover, fanBloom);
         int mask = forestSampleMask(1.0, cover, (flags & MESH_FOREST_MSAA) != 0u, uint(fract(inColor.x) * 131072.0));
         if (mask == 0) discard;
         gl_SampleMask[0] = mask;
-        baseColor *= mix(0.84, 1.16, tone);
     }
     if (grassCulm) {
         vec3 culmColor;
@@ -595,6 +602,9 @@ void main() {
         N = normalize(mat3(normalize(inTangent), normalize(inBitangent), N) * nTS);
     }
     vec3 shadePos = worldPos;
+#ifdef SCENE_GRASS
+    vec3 grassUp = vec3(0.0, 1.0, 0.0);   // the way the sward's blades stand
+#endif
 #ifdef SCENE_VEGETATION
     // Placed leaves are lit through their mean normal, which faces the eye.
     if (massLeaves) N = massN;
@@ -605,6 +615,7 @@ void main() {
     } else {
         float bulkWeight = length(inVegShade.xyz);
         float bulkKeep = 1.0;
+        vec3 vegShadeN = inVegShade.xyz;
 #ifndef SCENE_FOREST_SPRAY
         if (vegLeaf && !vegBlade && !massLeaves) {
             // Near, a leaf is its own face, not the crown's: folded along
@@ -634,9 +645,19 @@ void main() {
             float near = 1.0 - smoothstep(3.0, 12.0, camDist);
             if (near > 0.0) N = normalize(N - sign(inUV.x) * 0.55 * near * normalize(inTangent));
         }
+        // Further off the bulk is the sward's: the vertex sends the way its
+        // blades stand (scene_grass.glsl's grassSwardUp); its faces' mean
+        // facet is the way to the eye bent up toward it (grassCanopyNormal,
+        // GRASS_CANOPY_UP 0.5), what the sky lights and it mirrors. The sun
+        // on it is its blades' mean (sceneSwardLight, below).
+        grassUp = bulkWeight > 1e-4 ? inVegShade.xyz / bulkWeight : vec3(0.0, 1.0, 0.0);
+        if (bulkWeight > 1e-4) {
+            vec3 facet = normalize(normalize(-worldPos) + 0.5 * grassUp);
+            vegShadeN = normalize(mix(grassUp, facet, smoothstep(2.0, 14.0, camDist))) * bulkWeight;
+        }
 #endif
         if (bulkWeight > 1e-4)
-            N = normalize(N * (1.0 - bulkWeight * bulkKeep) + inVegShade.xyz * bulkKeep);
+            N = normalize(N * (1.0 - bulkWeight * bulkKeep) + vegShadeN * bulkKeep);
     }
 #endif
 #ifdef SCENE_FOREST_BLOOM
@@ -699,8 +720,8 @@ void main() {
     // Turf (scene_ground.glsl): the vertex colour is the ground's data
     // (density, dryness, floor) where the grass node's field does not reach.
     float groundAO = 1.0;
-    vec4 groundThin;
-    groundSurface(worldPos, inColor, baseColor, N, roughness, groundAO, groundThin);
+    vec4 groundThin, groundSward;
+    groundSurface(worldPos, inColor, baseColor, N, roughness, groundAO, groundThin, groundSward);
     baseColor *= push.baseColor.rgb;
 #endif
 
@@ -735,6 +756,18 @@ void main() {
     else s.translucency *= 1.0 - 0.5 * herb.gloss;
 #endif
     s.thinNormal = vec3(0.0);
+    s.sward = vec4(0.0);
+#ifdef SCENE_HERB
+    // A herb's leaves and stems stand among the blades, and further off are
+    // lit as the sward is, their leaves' mean (a stand of fronds seen across
+    // shows their sides and shadows as the grass round it does, not a sheet
+    // of faces to the sun); its blooms sit on top, lit as themselves.
+    if (int(inHerbInfo.x + 0.5) != 2) {
+        float herbBulk = length(inVegShade.xyz);
+        s.sward = vec4(herbBulk > 1e-4 ? inVegShade.xyz / herbBulk : vec3(0.0, 1.0, 0.0),
+                       smoothstep(8.0, 30.0, camDist));
+    }
+#endif
 #ifdef SCENE_GRASS
     // A blade is thin: the light comes through it by its own face, not by
     // the ground's normal it is lit through further off (which faces a high
@@ -742,10 +775,14 @@ void main() {
     s.thinNormal = dot(geomN, -worldPos) >= 0.0 ? geomN : -geomN;
     s.translucency = min(s.translucency * (grassDead ? 0.5 : 1.35), 1.0);
     if (grassTrans >= 0.0) s.translucency = grassTrans * (1.0 - vegFade / 15.0);
+    // Once a blade is a pixel or so wide (from about 6 m), the sun on the
+    // blades a pixel holds is their mean.
+    s.sward = vec4(grassUp, smoothstep(2.0, 12.0, camDist));
 #endif
 #ifdef SCENE_GROUND
-    // Where the turf stands for far blades, the light comes through them
-    // as through theirs.
+    // Where the turf stands for far blades, it is lit as they are, the
+    // light coming through them as through theirs.
+    s.sward = groundSward;
     if (groundThin.w > 0.0) {
         s.translucency = groundThin.w;
         s.thinNormal = groundThin.xyz;

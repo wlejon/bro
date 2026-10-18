@@ -268,7 +268,115 @@ struct SceneSurface {
     // mean over normals whose cosine to the light spreads this far either
     // side of the one given (0: as given).
     float leafSpread;
+    // A sward too fine to resolve (far grass, the turf standing for it):
+    // xyz the way its blades stand on average (the ground's normal tipped
+    // by the wind's lay), w how much of the direct light is the sward's
+    // (sceneSwardLight) rather than the shading normal's (0: none).
+    vec4 sward;
 };
+
+// The direct light on a sward seen from afar, as a canopy of thin blades
+// lit by a distant light: what the eye sees is the blades nearest it along
+// its line, and of those the ones the light reaches.
+//
+//   - The blades it sees: at two tilts from `up` (an upright young leaf, an
+//     arching old one) and every way round, each weighted by how much of
+//     it the eye sees (the cosine of its face to the eye). A face turned to
+//     the light reflects by its cosine to it (Lambert); a face turned away
+//     lets through the light falling on its other side, by that cosine
+//     (a blade transmits about as diffusely as it reflects). Under a high
+//     sun the eye looking across sees blade sides lit at a slant and the
+//     undersides of those leaning away: a far meadow is darker than the
+//     level ground it covers. Under a low sun behind the eye it sees faces
+//     turned to it; looking toward the sun, the shaded sides with the light
+//     through them, a dim glow, not a sheet of lit faces.
+//   - The share of them the light reaches (a turbid canopy: both lines run
+//     through blades of the same density, extinction G / cos each way, the
+//     eye's line short across the sward): the eye along a low line sees the
+//     tops, mostly lit; from higher it sees deeper in, among the blades'
+//     shadows. Where the two lines run together the blades the eye sees are
+//     the ones the light reaches (the hot spot, Kuusk's correlation over a
+//     few blade-lengths' slope).
+//
+// No shadow map resolves a blade's shadow on its neighbour, so this is the
+// sward's self-shadowing; the shadows of what stands over it come from the
+// map as for anything else. Returns x the mean cosine of the lit faces the
+// eye sees (for the diffuse), y the mean cosine through the faces turned
+// away, z the mean of their cuticles' sheen (the specular term, cosine
+// included), all times the lit share.
+const float SWARD_TILT_A = 0.35;   // rad from upright
+const float SWARD_TILT_B = 1.0;
+const float SWARD_G = 0.6;         // the blades' projection (between upright, 0.64, and a spherical spread, 0.5)
+const float SWARD_HOTSPOT = 0.12;  // the hot spot's width in slope (a blade's breadth over the sward's depth, and its tufts)
+// Blinn's exponent for a blade's cuticle (roughness about 0.42 gives 2 /
+// r^4 - 2 = 60), widened a little for the curl along a blade.
+const float SWARD_SHEEN_POWER = 40.0;   // sceneSwardLight raises to it by squaring (keep in step)
+// How far a lay of `up` (its sine) gathers the blades' leans downwind.
+const float SWARD_COMB = 0.7;
+vec3 sceneSwardLight(vec3 up, vec3 V, vec3 L) {
+    // A frame about `up`, its first axis toward the eye (the set is
+    // symmetric across the view, so the mean is steady as the eye turns).
+    vec3 e1 = V - up * dot(V, up);
+    float l1 = dot(e1, e1);
+    e1 = l1 > 1e-8 ? e1 * inversesqrt(l1) : normalize(cross(up, vec3(0.0, 0.0, 1.0)) + vec3(1e-4, 0.0, 0.0));
+    vec3 e2 = cross(up, e1);
+    float vu = dot(V, up), v1 = dot(V, e1);
+    float lu = dot(L, up), l1L = dot(L, e1), l2 = dot(L, e2);
+    vec3 H = normalize(V + L);
+    float hu = dot(H, up), h1 = dot(H, e1), h2 = dot(H, e2);
+    // The comb: where the wind lays the sward (`up` tipped off the vertical)
+    // its blades no longer lean every way round but mostly downwind, and
+    // further; a gust running across the view swings the faces the eye sees
+    // between those turned to the light and those turned from it.
+    vec2 comb = vec2(dot(vec3(up.x, 0.0, up.z), e1), dot(vec3(up.x, 0.0, up.z), e2));
+    float combK = clamp(length(comb) * SWARD_COMB, 0.0, 0.85);
+    comb = length(comb) > 1e-5 ? normalize(comb) : vec2(1.0, 0.0);
+    float sumW = 0.0, sumD = 0.0, sumT = 0.0, sumS = 0.0;
+    for (int k = 0; k < 8; ++k) {
+        // Four ways at each tilt, the second set turned half a step.
+        float a = (k < 4) ? SWARD_TILT_A : SWARD_TILT_B;
+        float psi = (float(k & 3) + ((k < 4) ? 0.125 : 0.625)) * 1.5707963;
+        vec2 dir = normalize(mix(vec2(cos(psi), sin(psi)), comb, combK) + vec2(1e-5, 0.0));
+        a = min(a + combK * 0.5, 1.4);
+        float ca = cos(a), sa = sin(a), cp = dir.x, sp = dir.y;
+        // A blade leaning `a` toward psi: its face's normal lies in the
+        // plane of its lean, square to it (the upper face: up and back).
+        // In the frame: n = up sa - (e1 cp + e2 sp) ca.
+        float nv = vu * sa - v1 * cp * ca;
+        float nl = lu * sa - (l1L * cp + l2 * sp) * ca;
+        // The face the eye sees.
+        float s = nv < 0.0 ? -1.0 : 1.0;
+        float w = abs(nv);
+        float NL = nl * s;
+        sumW += w;
+        sumD += w * max(NL, 0.0);
+        sumT += w * max(-NL, 0.0);
+        // Its cuticle's sheen (a Blinn lobe as wide as a near blade's,
+        // roughness about 0.42): where a gust bends the blades, the faces
+        // that catch the sun change, and the wave shows whichever way it
+        // runs across the view.
+        // (nh^40 by squaring: x^32 x^8.)
+        float nh = max((hu * sa - (h1 * cp + h2 * sp) * ca) * s, 0.0);
+        float n2 = nh * nh, n8 = n2 * n2; n8 *= n8;
+        float n32 = n8 * n8; n32 *= n32;
+        sumS += w * max(NL, 0.0) * n32 * n8;
+    }
+    // The lit share of the blades seen.
+    float mv = max(vu, 0.01), ms = max(lu, 0.01);
+    float kv = SWARD_G / mv, ks = SWARD_G / ms;
+    vec3 pv = (V - up * vu) / mv, ps = (L - up * lu) / ms;
+    float hot = exp(-length(pv - ps) / SWARD_HOTSPOT);
+    float lit = lu > 0.0 ? kv / (kv + ks - sqrt(kv * ks) * hot) : 0.0;
+    // The sheen: normalised Blinn, Schlick's Fresnel from a cuticle's 0.04.
+    float vh = max(dot(V, H), 0.0);
+    float F = 0.04 + 0.96 * pow(1.0 - vh, 5.0);
+    float sheen = sumS * F * (SWARD_SHEEN_POWER + 8.0) / (8.0 * PI);
+    return vec3(sumD, sumT, sheen) * (lit / max(sumW, 1e-5));
+}
+// The colour of the light through a blade over its reflectance's: a thin
+// leaf lets through about as much as it reflects in the green (PROSPECT's
+// R ~ T), less in the blue, which the chlorophyll takes twice: yellower.
+const vec3 SWARD_TRANSMIT = vec3(0.95, 1.0, 0.45);
 
 // A leaf's wrapped diffuse, clamp((c + 0.3) / 1.3, 0, 1), averaged over
 // cosines c spread evenly `k` either side of `c` (k 0: the wrap itself).
@@ -365,11 +473,15 @@ vec3 sceneDirectLight(SceneSurface s) {
         // Leaf translucency: light passing through a leaf lit from behind,
         // strongest looking toward the light, a warm yellow-green, and
         // shadowed by the leaves between it and the light.
-        if (leafy) {
+        // A sward too fine to resolve: its blades' mean (sceneSwardLight),
+        // the light through them as diffuse as off them.
+        vec3 sward = s.sward.w > 0.0 ? sceneSwardLight(s.sward.xyz, V, L) : vec3(0.0);
+        vec3 swardThrough = s.baseColor * SWARD_TRANSMIT * (s.sward.w * sward.y / PI);
+        if (leafy && s.sward.w < 1.0) {
             float NLt = dot(s.thinNormal, s.thinNormal) > 0.25 ? dot(s.thinNormal, L) : NL;
             float through = smoothstep(-0.3, 0.4, 0.3 - NLt);
             float back = pow(max(dot(-V, L), 0.0), 3.0);
-            float amount = s.translucency * through * (0.1 + 0.9 * back);
+            float amount = s.translucency * through * (0.1 + 0.9 * back) * (1.0 - s.sward.w);
             vec3 tcol = sqrt(max(s.baseColor, vec3(0.0))) * vec3(0.75, 0.95, 0.35) * 0.55;
             Lo += tcol * radiance * amount * leafShadow;
         }
@@ -378,7 +490,8 @@ vec3 sceneDirectLight(SceneSurface s) {
         // leaf turning away from the sun dims rather than switching off.
         float NdotL = max(NL, 0.0);
         float diffNL = leafy ? leafWrapMean(NL, s.leafSpread) : NdotL;
-        if (diffNL <= 0.0) continue;
+        diffNL = mix(diffNL, sward.x, s.sward.w);
+        if (diffNL <= 0.0 && sward.y <= 0.0) continue;
         vec3 H = normalize(V + L);
         float D = distributionGGX(max(dot(N, H), 0.0), s.roughness);
         float G = geometrySmith(NdotV, NdotL, s.roughness);
@@ -387,8 +500,9 @@ vec3 sceneDirectLight(SceneSurface s) {
         vec3 diffuse = (vec3(1.0) - F) * (1.0 - s.metallic) * s.baseColor / PI;
 
         float shadow = leafy ? leafShadow
-                     : s.receivesShadow ? lightShadow(i, s.position, s.camDist, lightDist, N, NdotL, 1.0) : 1.0;
-        Lo += shadow * (diffuse * diffNL + specular * NdotL) * radiance;
+                     : s.receivesShadow ? lightShadow(i, s.position, s.camDist, lightDist, N, max(NdotL, 0.3 * s.sward.w), 1.0) : 1.0;
+        vec3 spec = mix(specular * NdotL, vec3(sward.z), s.sward.w);
+        Lo += shadow * (diffuse * diffNL + swardThrough + spec) * radiance;
     }
     return Lo;
 }
@@ -443,12 +557,18 @@ vec3 sceneAmbient(SceneSurface s) {
         float rotation = lighting.iblParams.z;
         float intensity = lighting.iblParams.y;
         vec3 kD = (1.0 - F) * (1.0 - s.metallic);
-        vec3 irradiance = texture(texIrradiance, rotateY(s.normal, rotation)).rgb;
+        // A sward's blades see the sky only over the blades around them:
+        // the low sky and the ground beyond are hidden, so its sky light is
+        // what comes in at its top, the sky about the way its blades stand,
+        // however its faces turn (a far meadow lit by the horizon's glow
+        // behind the eye shone a half brighter than the grass at one's feet).
+        vec3 nI = s.sward.w > 0.0 ? normalize(mix(s.normal, s.sward.xyz, s.sward.w)) : s.normal;
+        vec3 irradiance = texture(texIrradiance, rotateY(nI, rotation)).rgb;
         // The ground's bounce (SceneRenderer::setGroundBounce): the light a
         // level ground sends back, sun and sky on it (worked out once a frame,
         // SceneEnvironment::fillLighting), seen by the surface's lower
         // hemisphere ((1 - n.y) / 2 of it is ground).
-        irradiance += lighting.groundBounce.rgb * (0.5 - 0.5 * s.normal.y);
+        irradiance += lighting.groundBounce.rgb * (0.5 - 0.5 * nI.y);
         vec3 prefiltered = textureLod(texPrefilter, rotateY(R, rotation), s.roughness * lighting.iblParams.w).rgb;
         vec3 specular = prefiltered * (F * brdf.x + brdf.y);
         return kD * irradiance * s.baseColor * intensity + mix(specular * intensity, probeSpec, probeW);

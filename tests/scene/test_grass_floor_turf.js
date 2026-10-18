@@ -39,7 +39,7 @@ if (!scn) {
     missingGpuContext('scene');
 } else {
     scn.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
-    scn.createLight({ type: 'directional', direction: [0.3, -1, 0.2], color: [1, 1, 1], intensity: 3 });
+    scn.createLight({ type: 'directional', direction: [0.3, -1, 0.2], color: [1, 1, 1], intensity: 8 });
     const floor = scn.createMesh({ mesh: 'plane', halfW: 30, halfD: 30, color: [0.45, 0.45, 0.45] });
     scn.setCamera({ fov: 55, near: 0.05, far: 200, position: [0, 1.6, 5], target: [0, 0, -1] });
     scn.setWind({ speed: 0, gust: 0 });
@@ -76,7 +76,9 @@ if (!scn) {
     const turf = scn.captureFrame();
     const sward = patchStats(turf, 10, 90, 80, 150), litter = patchStats(turf, 112, 90, 182, 150);
     assert(sward.g > sward.b + 8 && sward.g > sward.r * 0.9, `the turf under grass is green (${sward.r.toFixed(0)}, ${sward.g.toFixed(0)}, ${sward.b.toFixed(0)})`);
-    assert(litter.r > litter.b * 1.3 && litter.lum < sward.lum * 1.2, `the floor under a canopy is brown litter (${litter.r.toFixed(0)}, ${litter.g.toFixed(0)}, ${litter.b.toFixed(0)})`);
+    // (Seen from above under a high sun the sward shows its blades' shaded
+    // depths, sceneSwardLight; the litter lies level in the sun.)
+    assert(litter.r > litter.b * 1.3 && litter.lum < sward.lum * 1.6, `the floor under a canopy is brown litter (${litter.r.toFixed(0)}, ${litter.g.toFixed(0)}, ${litter.b.toFixed(0)})`);
     assert(sward.sd > 0.08 * sward.lum && litter.sd > 0.08 * litter.lum,
         `both are textured (sd ${sward.sd.toFixed(2)} of ${sward.lum.toFixed(1)}, ${litter.sd.toFixed(2)} of ${litter.lum.toFixed(1)})`);
     grass.shadeGround(floor, false);

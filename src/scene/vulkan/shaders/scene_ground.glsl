@@ -26,6 +26,16 @@ const float GRASS_TURF_DEPTH = 0.75;
 // How much light comes through the far blades the turf stands for (half a
 // far blade's: they stand over one another, the lower ones in shade).
 const float GRASS_TURF_TRANSLUCENCY = 0.3;
+// Past the blades, the sward's tops as the far fans show them: their
+// leaves over the deeper ones between (GRASS_TURF_DEPTH where they part).
+const float GRASS_TURF_TOPS = 0.85;
+// The herbs' blooms in the turf, against the share the far fans' dots
+// show (scene_grass.glsl's grassFanBloom; the two meet at the blades' end).
+const float GRASS_TURF_BLOOMS = 0.6;
+// A blade's colour over its lush or dry colour on average: its hue's
+// spread (scene_grass.glsl's `hue`, the blue cut a little more than it is
+// lifted) and its paler, yellower sheath over its foot.
+const vec3 GRASS_BLADE_MEAN_TINT = vec3(1.03, 1.025, 0.88);
 
 float groundHash(ivec2 p, int k) {
     uint h = uint(p.x) * 0x8da6b343u ^ uint(p.y) * 0xd8163841u ^ uint(k) * 0xcb1ab31fu;
@@ -156,7 +166,7 @@ float groundTwigs(vec2 xz, float size, float fp) {
 // vertex colour (density, dryness, floor) for where the field does not
 // reach. Sets the colour, the roughness and the occlusion.
 void groundSurface(vec3 rel, vec4 vdata, inout vec3 color, inout vec3 N, inout float roughness, inout float ao,
-                   out vec4 thin) {
+                   out vec4 thin, out vec4 swardLight) {
     vec3 eye = camera.eyeWorld.xyz;
     vec2 xz = rel.xz + eye.xz;
     float fp = max(length(fwidth(rel)), 1e-4);
@@ -185,7 +195,10 @@ void groundSurface(vec3 rel, vec4 vdata, inout vec3 color, inout vec3 N, inout f
     vec3 dryc = grass.dry.rgb;
     // (Their shade along them as the eye sees it on average: the far
     // blades' grassMeanShade.)
-    vec3 sward = mix(dryc, green, clamp(lush * 1.3 - 0.15 + clump * 0.2, 0.0, 1.0)) * grassMeanShade();
+    // (And their hue's spread and paler, yellower sheaths, on average a
+    // little warmer: scene_grass.glsl's blade colour.)
+    vec3 sward = mix(dryc, green, clamp(lush * 1.3 - 0.15 + clump * 0.2, 0.0, 1.0)) * grassMeanShade() *
+                 GRASS_BLADE_MEAN_TINT;
     // With its dead leaves and its flowering heads, as the blades have them
     // there (scene_grass.glsl's grassKinds).
     float tallN = smoothstep(0.35, 0.8, sceneWindNoise(xz * 0.045 + 3.0) * 0.5 + 0.5);
@@ -233,7 +246,7 @@ void groundSurface(vec3 rel, vec4 vdata, inout vec3 color, inout vec3 N, inout f
         nearRoots = mix(nearRoots, strawC, straw * 0.8);
         roots = mix(roots, nearRoots, nearSeen);
     }
-    vec3 turf = mix(roots, sward, topSeen);
+    vec3 turf = mix(roots, sward * GRASS_TURF_TOPS, topSeen);
 
     // Mottling at every scale: big patches (a few metres to tens), tussocks
     // (a metre or so), the grain of blades (centimetres).
@@ -288,13 +301,17 @@ void groundSurface(vec3 rel, vec4 vdata, inout vec3 color, inout vec3 N, inout f
     cover = mix(cover, clamp(density * 1.4, 0.0, 1.0), 0.7 * deep);
     color = mix(floorC, turf, cover);
     // Where it stands for the blades' tops it is lit as they are from afar
-    // (scene_grass.glsl's grassCanopyNormal), not as level ground.
+    // (scene_grass.glsl's grassSwardUp, SceneSurface::sward), not as level
+    // ground.
     float asBlades = cover * max(topSeen, deep);
+    swardLight = vec4(0.0);
     if (asBlades > 0.0) {
         // Tipped by the sward's lay and its gusts as the far blades are,
         // and a gust lifts the sheen of what it bends (scene_grass.glsl).
         float gu = sceneWindGustAt(xz);
-        N = normalize(mix(N, grassCanopyNormal(N, normalize(-rel), grassCombLean(xz, gu)), asBlades));
+        vec3 up = grassSwardUp(N, grassCombLean(xz, gu));
+        N = normalize(mix(N, grassCanopyNormal(up, normalize(-rel)), asBlades));
+        swardLight = vec4(up, asBlades);
         color *= 1.0 + gu * grassGustStir() * grass.look.y * 0.7 * asBlades;
     }
     ao *= mix(litterAo, 1.0, cover) * mix(1.0, 0.8, asBlades);   // (a far blade's ao)
@@ -326,7 +343,7 @@ void groundSurface(vec3 rel, vec4 vdata, inout vec3 color, inout vec3 N, inout f
             float more = herbBloomLocal(xz, under, -1.0, bloom, pick);
             float share = min(hm.bloomShare * more, 0.95);
             float leaves = hm.cover * (1.0 - hm.bloomShare) * GRASS_HERB_LEAF_SEEN;
-            float blooms = min(hm.cover * share, 1.0) * GRASS_HERB_BLOOM_SEEN;
+            float blooms = min(hm.cover * share, 1.0) * GRASS_HERB_BLOOM_SEEN * GRASS_TURF_BLOOMS;
             // Their mass mottled as the sward's is (tussocks, patches),
             // their tops lit over their shaded depths.
             float mott = (0.75 + 0.5 * tuft) * (0.8 + 0.4 * tuss);
