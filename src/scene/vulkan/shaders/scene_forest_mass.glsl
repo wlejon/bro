@@ -303,12 +303,24 @@ struct ForestLeafCut {
     float gloss;   // 0 matte .. 1 waxy
 };
 
+// An integer plus a fraction under 1 (`packed`, mesh_forest_leaf.vert's
+// teeth plus depth, petiole plus gloss), split again: interpolated across a
+// triangle, a whole number comes back a hair under itself, and floor() then
+// read it as one less with a fraction near 1 (deep spines, full gloss), a
+// scatter of single pixels over the blade. The fractions packed are at most
+// 0.99, so the nudge never reaches the next whole number.
+void forestUnpack(float packed, out float whole, out float part) {
+    whole = floor(packed + 0.004);
+    part = clamp(packed - whole, 0.0, 1.0);
+}
+
 ForestLeafCut forestLeafCut(vec2 uv, vec4 shape) {
     ForestLeafCut c;
     float across = abs(uv.x * 2.0 - 1.0);
     // shape.w: its petiole (of the blade's length) in 64ths, plus its gloss.
-    float petiole = floor(shape.w) / 64.0;
-    c.gloss = clamp(fract(shape.w), 0.0, 1.0);
+    float petiole64;
+    forestUnpack(shape.w, petiole64, c.gloss);
+    float petiole = petiole64 / 64.0;
     // Along the card from the node: the petiole's share first, then the blade.
     float tc = clamp(1.0 - uv.y, 0.0, 1.0);
     float q = petiole / (1.0 + petiole);
@@ -340,8 +352,8 @@ ForestLeafCut forestLeafCut(vec2 uv, vec4 shape) {
     float t = clamp((tc - q) / max(1.0 - q, 1e-4), 0.0, 1.0);
     float width = shape.x > 0.0 ? shape.x : 1.0;
     float tip = clamp(shape.y, 0.0, 1.0);
-    float teeth = floor(shape.z);
-    float depth = shape.z - teeth;
+    float teeth, depth;
+    forestUnpack(shape.z, teeth, depth);
     // The outline: widest a little below the middle, and toward the tip
     // drawn to a point (acuminate) or rounded (obtuse).
     float s = max(sin(3.14159265 * pow(t, 0.85)), 0.0);
