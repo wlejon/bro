@@ -359,10 +359,12 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  * to `far` the same plants are drawn with fewer cards, fewer of them with
  * distance (each widened to keep the cover); seen from well above (the
  * eye's lift over a third of the distance across the ground) they are left
- * to the turf. Past them the turf takes the herbs' mean over their colonies:
+ * to the turf. Past them the far blades and the turf stand in for them:
  * the share of the ground they cover as the eye sees it (more seen across
- * than from above: their sides), in their leaves' and blooms' colours, so a
- * meadow keeps its colour far off. Where herbs grow thick the grass gives
+ * than from above: their sides, as far as they rise over the grass), their
+ * leaves mostly hidden among the blades, their blooms coloured patch by
+ * patch by each species' colonies there, so a meadow's poppies and daisies
+ * go on to the horizon as specks of their colour. Where herbs grow thick the grass gives
  * them room, sparser and shorter with the floor's herb density.
  * @example
  *   scene.createGrass({ ground, floor: cover.canopy, turf: true, herbs: {
@@ -392,9 +394,13 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  * lodged flat), folds along its midrib and twists a little; some are dead
  * brown leaves low at the base (`dead`) and some are flowering culms, a bare
  * stem carrying a panicle or a spike of spikelets well above the leaves
- * (`flowering`). Sunlit blades seen against the light glow through.
+ * (`flowering`); far off, seen across, the heads give a meadow in flower a
+ * pinkish-buff haze. Sunlit blades seen against the light glow through.
  * Further out, fewer and wider
- * blades over bigger cells, so blade count x width (the cover) stays about
+ * blades over bigger cells (the far rings' leaves fans of four strands cut
+ * per pixel, lit as the sward's mean face, combed by the wind and leaning
+ * with its gusts, so a far meadow shows the wind's sheen and its travelling
+ * waves), so blade count x width (the cover) stays about
  * level while the work falls. Within a ring the far half keeps fewer blades,
  * widened to match the next ring, and rings cross-fade through a dithered
  * band. Only tiles of cells the view can see, inside the ring and where

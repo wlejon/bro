@@ -20,6 +20,13 @@
 //
 // Needs scene_camera.glsl and scene_grass.glsl.
 
+// A far gap among the blades: the sward seen deeper in, this much of its
+// tops' light.
+const float GRASS_TURF_DEPTH = 0.75;
+// How much light comes through the far blades the turf stands for (half a
+// far blade's: they stand over one another, the lower ones in shade).
+const float GRASS_TURF_TRANSLUCENCY = 0.3;
+
 float groundHash(ivec2 p, int k) {
     uint h = uint(p.x) * 0x8da6b343u ^ uint(p.y) * 0xd8163841u ^ uint(k) * 0xcb1ab31fu;
     h = (h ^ (h >> 16u)) * 0x7feb352du;
@@ -148,7 +155,8 @@ float groundTwigs(vec2 xz, float size, float fp) {
 // The ground at a fragment: `rel` its camera-relative position, `vdata` the
 // vertex colour (density, dryness, floor) for where the field does not
 // reach. Sets the colour, the roughness and the occlusion.
-void groundSurface(vec3 rel, vec4 vdata, inout vec3 color, inout float roughness, inout float ao) {
+void groundSurface(vec3 rel, vec4 vdata, inout vec3 color, inout vec3 N, inout float roughness, inout float ao,
+                   out vec4 thin) {
     vec3 eye = camera.eyeWorld.xyz;
     vec2 xz = rel.xz + eye.xz;
     float fp = max(length(fwidth(rel)), 1e-4);
@@ -175,21 +183,30 @@ void groundSurface(vec3 rel, vec4 vdata, inout vec3 color, inout float roughness
     float lush = 1.0 - dry;
     vec3 green = grass.lush.rgb;
     vec3 dryc = grass.dry.rgb;
-    vec3 sward = mix(dryc, green, clamp(lush * 1.3 - 0.15 + clump * 0.2, 0.0, 1.0)) * 0.95;
+    // (Their shade along them as the eye sees it on average: the far
+    // blades' grassMeanShade.)
+    vec3 sward = mix(dryc, green, clamp(lush * 1.3 - 0.15 + clump * 0.2, 0.0, 1.0)) * grassMeanShade();
     // With its dead leaves and its flowering heads, as the blades have them
     // there (scene_grass.glsl's grassKinds).
     float tallN = smoothstep(0.35, 0.8, sceneWindNoise(xz * 0.045 + 3.0) * 0.5 + 0.5);
     vec2 kinds = grassKinds(xz, lush, tallN);
     sward = mix(sward, grassDeadColor(0.5), kinds.y * 0.45);
-    sward = mix(sward, grassHeadColor(clamp(1.1 - lush, 0.0, 1.0)), min(kinds.x * 0.35, 0.3));
+    // (Seen across, their haze: scene_grass_surface.glsl's far heads.)
+    float ripe = clamp(1.1 - lush, 0.0, 1.0);
+    float graze = 1.0 - smoothstep(0.05, 0.4, -rel.y / max(length(rel.xz), 1e-3));
+    sward = mix(sward, mix(grassHeadColor(ripe), grassHeadFarColor(ripe), graze), min(kinds.x * 0.35, 0.3));
     // How much of the ground the blades cover, seen from above.
     float cover = clamp(density * (0.35 + 0.9 * clump) * 1.4, 0.0, 1.0);
-    // Near the eye the ground shows between the blades: their dark roots and
-    // the soil. Toward the blades' range only their tops are seen.
+    // Between the blades the ground shows: their dark roots and the soil
+    // near the eye; further off, where a gap is a few blades' depth of the
+    // sward rather than the ground under it, the blades seen deeper in, in
+    // their shade (a gap among far blades is more grass, not a paler
+    // ground). Where the blades end only their tops are seen.
     float d = length(vec2(length(rel.xz), grass.lod.w));   // as the rings measure it
-    float topSeen = smoothstep(grass.ring.y * 0.15, grass.ring.y * 0.85, d);
+    float topSeen = smoothstep(grass.ring.y - 2.5 * grass.ring.w, grass.ring.y - 0.2 * grass.ring.w, d);
     vec3 soil = vec3(0.065, 0.048, 0.03);
-    vec3 roots = mix(soil, sward * grass.look.x, 0.6);
+    float deep = smoothstep(10.0, 40.0, d);
+    vec3 roots = mix(mix(soil, sward * grass.look.x, 0.6), sward * GRASS_TURF_DEPTH, deep);
     // Close by, what lies between the blades: thatch (dead blades, pale
     // straws lying every way), crumbs of soil, and the green of the bases.
     float nearSeen = clamp(0.012 / fp - 0.6, 0.0, 1.0) * (1.0 - topSeen);
@@ -224,11 +241,16 @@ void groundSurface(vec3 rel, vec4 vdata, inout vec3 color, inout float roughness
     float tuss = groundFbm(xz + 31.0, 0.6, fp, 3);
     float tuft = groundFbm(xz + 57.0, 3.1, fp, 2);
     float grain = groundFbm(xz * vec2(1.0, 1.6) + 77.0, 9.0, fp, 2);
-    turf *= 0.72 + 0.56 * big;
-    turf = mix(turf, turf * vec3(1.15, 1.08, 0.75), smoothstep(0.55, 0.8, big) * 0.6);   // sun-bleached
-    turf *= 0.6 + 0.8 * tuss;
-    turf = mix(turf, turf * vec3(1.1, 1.05, 0.8), smoothstep(0.6, 0.8, tuss) * 0.5);    // drier tussock tops
-    turf *= 0.75 + 0.5 * tuft;
+    // Seen between drawn blades (past the near ground) the turf is their
+    // shaded depth: the blades carry the sward's own patches, so it is
+    // mottled less and not bleached (pale patches under far blades read as
+    // a different, sun-dried ground).
+    float mot = mix(1.0, 0.35, (1.0 - topSeen) * smoothstep(8.0, 25.0, d));
+    turf *= mix(1.0, 0.72 + 0.56 * big, mot);
+    turf = mix(turf, turf * vec3(1.15, 1.08, 0.75), smoothstep(0.55, 0.8, big) * 0.35 * mot * mot);   // sun-bleached
+    turf *= mix(1.0, 0.6 + 0.8 * tuss, mot);
+    turf = mix(turf, turf * vec3(1.1, 1.05, 0.8), smoothstep(0.6, 0.8, tuss) * 0.5 * mot * mot);    // drier tussock tops
+    turf *= mix(1.0, 0.75 + 0.5 * tuft, mot);
     turf *= 0.85 + 0.3 * grain;
 
     // The forest floor: litter where the canopy closes, soil where nothing
@@ -261,9 +283,27 @@ void groundSurface(vec3 rel, vec4 vdata, inout vec3 color, inout float roughness
     vec3 bare = soil * (0.75 + 0.5 * drift) * (0.85 + 0.3 * grain);
     vec3 floorC = mix(bare, litter, smoothstep(0.0, 0.3, under));
 
+    // Far off, a thin clump's ground is hidden by the blades around it (they
+    // lean over it, and the eye sees across): only thin grass leaves soil.
+    cover = mix(cover, clamp(density * 1.4, 0.0, 1.0), 0.7 * deep);
     color = mix(floorC, turf, cover);
-    ao *= mix(litterAo, 1.0, cover);
-    roughness = 1.0;
+    // Where it stands for the blades' tops it is lit as they are from afar
+    // (scene_grass.glsl's grassCanopyNormal), not as level ground.
+    float asBlades = cover * max(topSeen, deep);
+    if (asBlades > 0.0) {
+        // Tipped by the sward's lay and its gusts as the far blades are,
+        // and a gust lifts the sheen of what it bends (scene_grass.glsl).
+        float gu = sceneWindGustAt(xz);
+        N = normalize(mix(N, grassCanopyNormal(N, normalize(-rel), grassCombLean(xz, gu)), asBlades));
+        color *= 1.0 + gu * grassGustStir() * grass.look.y * 0.7 * asBlades;
+    }
+    ao *= mix(litterAo, 1.0, cover) * mix(1.0, 0.8, asBlades);   // (a far blade's ao)
+    roughness = mix(1.0, 0.9, asBlades);
+    // Past the blades the low sun glows through the tops it stands for as
+    // through the far blades (their faces turned to the eye; mesh.frag's
+    // translucency, as theirs); a gap among drawn blades is in their shade.
+    vec3 faceEye = normalize(vec3(-rel.x, 0.3 * length(rel.xz), -rel.z));
+    thin = vec4(faceEye, GRASS_TURF_TRANSLUCENCY * cover * topSeen);
 
     // The herbs past their plants (scene_herb_mix.glsl): their leaves' and
     // blooms' mean over the share of the ground they cover as the eye sees
@@ -277,10 +317,21 @@ void groundSurface(vec3 rel, vec4 vdata, inout vec3 color, inout float roughness
         float stand = 1.0 - herbPlantsDrawn(d, grass.lod.w / max(length(rel.xz), 1e-3));
         if (stand > 0.0) {
             HerbMix hm = herbMixMean(under, herbs, tanView);
+            // The blooms patch by patch (herbBloomLocal): a colony's colour
+            // where it grows, more of them inside it, none between. As much
+            // of them as of the far blades (scene_grass.glsl), between and
+            // past them; their leaves mostly down among the grass, as the
+            // plants' are (GRASS_HERB_LEAF_SEEN).
+            vec3 bloom, pick;
+            float more = herbBloomLocal(xz, under, -1.0, bloom, pick);
+            float share = min(hm.bloomShare * more, 0.95);
+            float leaves = hm.cover * (1.0 - hm.bloomShare) * GRASS_HERB_LEAF_SEEN;
+            float blooms = min(hm.cover * share, 1.0) * GRASS_HERB_BLOOM_SEEN;
             // Their mass mottled as the sward's is (tussocks, patches),
             // their tops lit over their shaded depths.
-            vec3 hc = mix(hm.leaf, hm.bloom, hm.bloomShare) * (0.75 + 0.5 * tuft) * (0.8 + 0.4 * tuss);
-            color = mix(color, hc, hm.cover * stand * mix(0.35, 1.0, topSeen));
+            float mott = (0.75 + 0.5 * tuft) * (0.8 + 0.4 * tuss);
+            color = mix(color, hm.leaf * mott, leaves * stand);
+            color = mix(color, bloom * mott, blooms * stand);
         }
     }
 }

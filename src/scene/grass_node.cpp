@@ -52,9 +52,10 @@ bromesh::MeshData repeatBlade(const bromesh::MeshData& blade, int copies) {
 
 // The rings at the default range (150 m; edges scale with `range`, cells
 // with 1 / sqrt(density)). Blades a square metre x width is the cover: about
-// 1400 x 4 mm near, 310 x 1.6 cm, 55 x 4 cm, 9 x 10 cm (before the width's
-// growth with distance), so the sward stays as covered as it recedes while a
-// ring's vertices a square metre fall about tenfold each step.
+// 1400 x 4 mm near, 310 x 1.6 cm, 67 x 7.6 cm, 10 x 20 cm (before the width's
+// growth with distance), so the sward stays about as covered as it recedes
+// (the far ring half as much: its leaves are fans, scene_grass.glsl) while a
+// ring's vertices a square metre fall four- to tenfold each step.
 struct RingSpec {
     float cell;       // m
     float edge;       // outer edge (m)
@@ -73,7 +74,12 @@ constexpr RingSpec kRingSpec[GrassNode::kRings] = {
     // the ring inside keeps at its outer edge, there thinned to half: half
     // as many again, twice as wide.
     {0.30f, 55.0f, 6, 2, 0.6f, 0.0f, 19.0f, 1.0f, 1.0f},
-    {0.75f, 150.0f, 5, 2, 0.6f, 0.0f, 25.0f, 1.0f, 1.0f},
+    // Far fans of leaves (scene_grass.glsl's fan cards): more cover than the
+    // 9 x 10 cm it had (its gaps showed the turf, 4-5% darker than ring 2
+    // over the same ground once the turf there read as the sward's depth),
+    // in wider fans rather than more of them (every blade costs its vertices
+    // whatever it covers).
+    {0.7f, 150.0f, 5, 2, 0.6f, 0.0f, 50.0f, 1.0f, 1.0f},
 };
 constexpr float kRangeRef = 150.0f;
 
@@ -143,6 +149,7 @@ void GrassNode::setParams(const Params& p) {
     params_.tufts = std::clamp(p.tufts, 0.0f, 1.0f);
     params_.flowering = std::clamp(p.flowering, 0.0f, 1.0f);
     params_.dead = std::clamp(p.dead, 0.0f, 1.0f);
+    computeHerbMean();   // (what of the herbs shows over the grass: its height)
     bumpChangeGeneration();
 }
 
@@ -250,6 +257,11 @@ void GrassNode::computeHerbMean() {
     const int n = herbCount();
     if (n <= 0) return;
     const float cellArea = kHerbCell * kHerbCell;
+    // Seen across, the grass hides what of the herbs stands lower than its
+    // top (its blades arch: about 0.7 of their length up): a leaf's side as
+    // far as its leaves' top rises over it, a bloom as it stands over it,
+    // as the plants drawn among the blades are hidden.
+    const float sward = 0.7f * params_.height;
     for (int step = 0; step < kHerbMeanSteps; ++step) {
         const float canopy = static_cast<float>(step) / (kHerbMeanSteps - 1);
         // A species' weight inside a colony, its ground per plant, its
@@ -267,9 +279,13 @@ void GrassNode::computeHerbMean() {
             w[i] = r[38] > 0.0f ? r[38] * light * occupy : 0.0f;
             const float foot = 3.14159265f * r[2] * r[2] / cellArea;
             a[i] = w[i] * r[42] * foot;
-            sa[i] = w[i] * std::max(r[49], 0.0f) * foot;
+            const float side = w[i] * std::max(r[49], 0.0f) * foot;
+            const float sideBloom = side * std::clamp(r[50], 0.0f, 1.0f);
+            const float leafOver = std::clamp(1.0f - sward / std::max(r[51], 0.01f), 0.0f, 1.0f);
+            const float bloomOver = std::clamp((r[1] - 0.6f * sward) / (0.8f * sward), 0.0f, 1.0f);
+            sa[i] = (side - sideBloom) * leafOver + sideBloom * bloomOver;
             bs[i] = std::clamp(r[41], 0.0f, 1.0f);
-            sbs[i] = std::clamp(r[50], 0.0f, 1.0f);
+            sbs[i] = sa[i] > 0.0f ? sideBloom * bloomOver / sa[i] : 0.0f;
             p[i] = std::clamp(r[40], 0.0f, 1.0f);
         }
         double expo = 0.0, coverW = 0.0, bloomW = 0.0, present = 0.0, sideX = 0.0, sideBloom = 0.0, top = 0.0;

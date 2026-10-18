@@ -8,6 +8,9 @@ const float GRASS_SURF_CULM_HEAD = 0.76;   // scene_grass.glsl's GRASS_CULM_HEAD
 // scene_grass.glsl's grassHeadColor (keep in step): fresh, green flushed
 // with purple; ripe, straw.
 vec3 grassSurfHeadColor(float ripe) { return mix(vec3(0.105, 0.11, 0.065), vec3(0.40, 0.33, 0.18), ripe); }
+// scene_grass.glsl's grassHeadFarColor (keep in step): a whole head's mean
+// once its spikelets are under a pixel.
+vec3 grassSurfHeadFarColor(float ripe) { return mix(vec3(0.25, 0.2, 0.19), vec3(0.42, 0.35, 0.21), ripe); }
 
 float grassSurfHash(vec2 p) {
     uvec2 q = uvec2(ivec2(floor(p)) + ivec2(4096));
@@ -32,7 +35,7 @@ float grassHeadHalf(float t, float form) {
 // scene_grass.glsl's GrassBlade.info. Returns the share of the pixel the
 // culm covers, and its colour (`stem` the stem's) and how much light it lets
 // through.
-float grassCulmSurface(vec2 uv, vec4 info, vec3 stem, out vec3 albedo, out float translucency) {
+float grassCulmSurface(vec2 uv, vec4 info, vec3 stem, float graze, out vec3 albedo, out float translucency) {
     vec2 fw = max(fwidth(uv), vec2(1e-5));
     float X = uv.x, Y = uv.y;
     float seed = fract(info.x) * 97.0;
@@ -105,7 +108,47 @@ float grassCulmSurface(vec2 uv, vec4 info, vec3 stem, out vec3 albedo, out float
     vec3 head = grassSurfHeadColor(ripe) * mix(0.8, 1.2, mix(0.5, tone, show));
     head = mix(head, head * vec3(1.3, 0.85, 1.25), (1.0 - ripe) * 0.35 * smoothstep(0.3, 1.0, t + tone * 0.4));
     head = mix(head, vec3(0.6, 0.55, 0.28), anther * (1.0 - ripe) * show * 0.7);
+    // Under a pixel a head is its spikelets' mean with their pale anthers;
+    // seen across (`graze`, 0 from above .. 1 along the ground) the light
+    // caught on their glumes too: a meadow in flower seen across takes a
+    // pinkish-buff haze from its heads.
+    vec3 headMean = mix(grassSurfHeadColor(ripe) * vec3(1.15, 1.0, 1.15), vec3(0.6, 0.55, 0.28), 0.08 * (1.0 - ripe));
+    head = mix(head, mix(headMean, grassSurfHeadFarColor(ripe), graze), 1.0 - show);
     albedo = mix(stem, head, step(rachis, spk) * show + (1.0 - show));
     translucency = mix(0.42, 0.25, ripe);
     return cover;
+}
+
+// A far fan of leaves (scene_grass.glsl's fan card): four leaves from the
+// card's foot, fanning out to tips spread across it, the outer ones
+// shorter (each ends inside the card's pointed top), each tapering to its
+// point. uv as the culm's (across in the card's width at its middle);
+// info.y a leaf's width there. Each leaf is box-filtered over the pixel's
+// width, so one under a pixel covers its true share and a far sward keeps
+// its cover however fine its leaves. Returns the share of the pixel they
+// cover; `tone` the leaf's own lightness (0..1) where they do.
+float grassFanSurface(vec2 uv, vec4 info, out float tone) {
+    float fw = max(fwidth(uv.x), 1e-5);
+    float X = uv.x, Y = uv.y;
+    float seed = fract(info.x) * 97.0;
+    float hw0 = 0.5 * fract(info.y);
+    float cover = 0.0, best = 0.0;
+    tone = 0.5;
+    for (int k = 0; k < 4; ++k) {
+        float hk = grassSurfHash(vec2(float(k) * 3.0 + 11.0, seed));
+        float tipX = ((float(k) + 0.5) * 0.25 - 0.5) + (hk - 0.5) * 0.1;
+        float len = min(0.75 + 0.25 * grassSurfHash(vec2(float(k) * 3.0 + 12.0, seed)), 0.97 - abs(tipX));
+        if (Y > len) continue;
+        float s = Y / len;
+        // Bowing out a little from the foot.
+        float cx = mix(0.3 * tipX, tipX, s * (1.25 - 0.25 * s));
+        float w = hw0 * pow(max(1.0 - pow(s, 2.2), 0.0), 0.8) * (0.8 + 0.2 * smoothstep(0.0, 0.2, s));
+        float c = max(min(cx + w, X + 0.5 * fw) - max(cx - w, X - 0.5 * fw), 0.0) / fw;
+        if (c > best) {
+            best = c;
+            tone = grassSurfHash(vec2(float(k) * 3.0 + 13.0, seed));
+        }
+        cover += c * (1.0 - cover);
+    }
+    return min(cover, 1.0);
 }

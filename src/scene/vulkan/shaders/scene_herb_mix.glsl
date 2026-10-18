@@ -33,25 +33,36 @@ vec4 herbRec(int i, int k) { return grass.herbs[i * GRASS_HERB_RECORD + k]; }
 const float HERB_STEM_HAIR_ROOM = 0.6;
 int herbCount() { return min(int(grass.herbInfo.x + 0.5), GRASS_HERB_MAX); }
 
-// Species `i`'s weight at absolute `xz` under canopy `canopy`.
-float herbWeight(int i, vec2 xz, float canopy) {
+// Species `i`'s weight inside its colonies under canopy `canopy`: its
+// abundance, how well the light suits it and how many of its plants a cell
+// holds (one a cell where they stand closer than a cell, fewer where they
+// stand further apart). 0 where it does not grow.
+float herbWeightInside(int i, float canopy) {
     vec4 h9 = herbRec(i, 9);
     if (h9.z <= 0.0) return 0.0;
     float dl = (canopy - h9.x) / max(h9.y, 0.05);
     float light = exp(-dl * dl);
     if (light < 0.03) return 0.0;
-    // Its colonies: two octaves of value noise at its own period, offset
-    // species by species; the threshold leaves about patchCover inside.
-    vec2 p = xz / max(h9.w, 0.5) + vec2(float(i) * 37.13 + 11.0, float(i) * -19.71 + 3.0);
-    float n = 0.5 + 0.33 * sceneWindNoise(p) + 0.17 * sceneWindNoise(p * 2.7 + 5.1);
-    float t = mix(0.7, 0.3, clamp(herbRec(i, 10).x, 0.0, 1.0));
-    float colony = smoothstep(t - 0.07, t + 0.07, n);
-    // How many of its plants a cell holds: one a cell where they stand
-    // closer than a cell, fewer where they stand further apart.
     float s = herbRec(i, 12).x;
     float spacing = s > 0.0 ? s : 1.6 * max(herbRec(i, 0).z, 0.02);
     float occupy = min(1.0, pow(grass.herbInfo.y / spacing, 2.0));
-    return h9.z * light * colony * occupy;
+    return h9.z * light * occupy;
+}
+
+// Species `i`'s colonies at absolute `xz`: 0 outside .. 1 inside. Two
+// octaves of value noise at its own period, offset species by species; the
+// threshold leaves about patchCover inside.
+float herbColony(int i, vec2 xz) {
+    vec2 p = xz / max(herbRec(i, 9).w, 0.5) + vec2(float(i) * 37.13 + 11.0, float(i) * -19.71 + 3.0);
+    float n = 0.5 + 0.33 * sceneWindNoise(p) + 0.17 * sceneWindNoise(p * 2.7 + 5.1);
+    float t = mix(0.7, 0.3, clamp(herbRec(i, 10).x, 0.0, 1.0));
+    return smoothstep(t - 0.07, t + 0.07, n);
+}
+
+// Species `i`'s weight at absolute `xz` under canopy `canopy`.
+float herbWeight(int i, vec2 xz, float canopy) {
+    float w = herbWeightInside(i, canopy);
+    return w > 0.0 ? w * herbColony(i, xz) : 0.0;
 }
 
 // The plant in a cell at `xz` (canopy `canopy`, herb density `density`),
@@ -105,6 +116,54 @@ HerbMix herbMixMean(float canopy, float density, float tanView) {
     m.bloom = a1.yzw;
     m.bloomShare = (a0.x * a1.x + side * a2.y) / max(a0.x + side, 1e-5);
     return m;
+}
+
+// The blooms past the plants, patch by patch: herbMixMean is the herbs'
+// mean over every colony, so far off a meadow's poppies, daisies and
+// foxgloves would blend into one muddy tint everywhere. This weighs each
+// blooming species by its colonies at `xz` (as herbPick does for a plant)
+// against its mean over them (its patchCover inside), so a stretch of
+// poppies reads red and one of daisies white, and the blooms' mean over the
+// land is the table's. Returns the local blooms over their mean (0 where
+// none bloom, 1 the mean, more inside a colony); `bloom` their colour
+// there; `pick` the colour of one bloom drawn by `u` (0..1) among them.
+// (A loop over the species with two noises each: only where the turf or a
+// far blade stands for the herbs' blooms.)
+float herbBloomLocal(vec2 xz, float canopy, float u, out vec3 bloom, out vec3 pick) {
+    int n = herbCount();
+    float B[GRASS_HERB_MAX];
+    float local = 0.0, mean = 0.0;
+    vec3 col = vec3(0.0);
+    for (int i = 0; i < GRASS_HERB_MAX; ++i) {
+        B[i] = 0.0;
+        if (i >= n) continue;
+        vec4 h10 = herbRec(i, 10), h12 = herbRec(i, 12);
+        // Its blooms' cover from above and from the side, as far as they
+        // stand over the grass (GrassNode::computeHerbMean).
+        float sward = 0.7 * grass.blade.x;
+        float over = clamp((herbRec(i, 0).y - 0.6 * sward) / (0.8 * sward), 0.0, 1.0);
+        float shown = h10.z * h10.y + h12.y * h12.z * over;
+        if (shown <= 0.0) continue;
+        float w = herbWeightInside(i, canopy);
+        if (w <= 0.0) continue;
+        float spread = herbRec(i, 0).z;
+        float b = w * shown * spread * spread;
+        mean += b * clamp(h10.x, 0.05, 1.0);
+        B[i] = b * herbColony(i, xz);
+        local += B[i];
+        col += B[i] * herbRec(i, 7).rgb;
+    }
+    bloom = local > 0.0 ? col / local : vec3(0.0);
+    pick = bloom;
+    if (u >= 0.0 && local > 0.0) {
+        float k = u * local;
+        for (int i = 0; i < GRASS_HERB_MAX; ++i) {
+            if (i >= n) break;
+            k -= B[i];
+            if (k < 0.0) { pick = herbRec(i, 7).rgb; break; }
+        }
+    }
+    return mean > 0.0 ? local / mean : 0.0;
 }
 
 // The share of the far plants drawn at ring distance `d` seen at an

@@ -168,11 +168,70 @@ vec2 grassKinds(vec2 xz, float lush, float tall) {
 vec3 grassDeadColor(float t) { return mix(vec3(0.30, 0.255, 0.16), vec3(0.15, 0.13, 0.095), t); }
 // A culm's head: fresh, green flushed with purple; ripe, straw (r 0..1).
 vec3 grassHeadColor(float ripe) { return mix(vec3(0.105, 0.11, 0.065), vec3(0.40, 0.33, 0.18), ripe); }
+// A whole head's mean colour once its spikelets are under a pixel: their
+// green and purple with their pale anthers and the light on their glumes
+// (scene_grass_surface.glsl's far heads; the turf's flowering).
+vec3 grassHeadFarColor(float ripe) { return mix(vec3(0.25, 0.2, 0.19), vec3(0.42, 0.35, 0.21), ripe); }
+// The sward as one surface, as the eye sees it from afar (a far blade's
+// shading normal and the turf's where it stands for the blades): its leaves
+// stand more than they lie, so across a meadow the faces seen are mostly
+// those turned toward the eye, from above mostly their tops. Their mean
+// facet is the way to the eye `toEye` bent up toward the ground's normal
+// `gn`; `lean` (the wind's comb and its gusts, across the ground) tips it
+// downwind, the way the bent blades' faces turn. Lit so, a far meadow under
+// a high sun takes as much light as the near blades' own faces do, not a
+// level ground's (it was a quarter brighter at noon), and a gust's wave
+// changes how the blades it bends face the sun and the eye.
+const float GRASS_CANOPY_UP = 0.5;
+vec3 grassCanopyNormal(vec3 gn, vec3 toEye, vec2 lean) {
+    vec3 n = toEye + GRASS_CANOPY_UP * gn + vec3(lean.x, 0.0, lean.y);
+    return normalize(n);
+}
+// The lay of the sward seen from afar: how its blades lean across the
+// ground past the wind's mean lean, as a tilt for grassCanopyNormal. Streaks
+// combed along the wind (tens of metres long, a few across: the rest lay a
+// steady wind leaves) and each gust `gust` travelling through it, bending
+// the blades it crosses, so a far meadow shows the wind's sheen and its
+// waves where single blades are too fine to see bend.
+// How much of the herbs' leaves and blooms past their plants shows among
+// the grass (scene_herb_mix.glsl's herbMixMean counts them as if nothing
+// stood round them; among the blades most leaves are hidden, as the
+// plants' are, and some blooms): as much as the plants drawn up to their
+// range show, so they hand over to the far blades and the turf unseen.
+const float GRASS_HERB_LEAF_SEEN = 0.1;
+const float GRASS_HERB_BLOOM_SEEN = 0.5;
+const float GRASS_COMB = 0.3;
+const float GRASS_GUST_LEAN = 0.6;
+// How far the wind's lay and its gusts show in the sward's sheen: none in
+// still air (the gust field and the wind's way run on whatever the steady
+// wind), all from half the reference wind.
+float grassGustStir() { return clamp(2.0 * camera.windField.z / GRASS_REFERENCE_SPEED, 0.0, 1.0); }
+vec2 grassCombLean(vec2 xz, float gust) {
+    vec2 d = camera.windField.xy;
+    float along = dot(xz, d), across = dot(xz, vec2(-d.y, d.x));
+    float comb = sceneWindNoise(vec2(along * 0.035, across * 0.3)) +
+                 0.5 * sceneWindNoise(vec2(along * 0.09 + 7.1, across * 0.8 - 3.3));
+    float calm = clamp(camera.windField.z / GRASS_REFERENCE_SPEED, 0.0, 1.0);
+    return d * (GRASS_COMB * comb * (0.4 + 0.6 * calm) + GRASS_GUST_LEAN * gust) * grassGustStir() * grass.blade.w;
+}
+
+// The share of a blade's shade along it that the eye sees on average from
+// afar (the dark root and lit tip, weighted to the upper part that shows
+// over the blades in front): a far blade takes this once along its length.
+float grassMeanShade() { return mix(grass.look.x, 1.0, 0.62); }
+
 // A culm's head runs from GRASS_CULM_HEAD up its card (the top fifth or so
 // of the culm); the first row of the card ends its bare stem at
 // GRASS_CULM_STEM.
 const float GRASS_CULM_STEM = 0.7;
 const float GRASS_CULM_HEAD = 0.76;
+// A far ring's live leaf is a fan card (grassFanSurface): this many leaves,
+// the card this many times the leaf's width at its middle, their widths
+// together GRASS_FAN_COVER of it (the leaf's cover: they are shorter than
+// the card).
+const float GRASS_FAN_STRANDS = 4.0;   // scene_grass_surface.glsl's loop
+const float GRASS_FAN_WIDTH = 2.2;
+const float GRASS_FAN_COVER = 1.8;
 
 // --- A blade -------------------------------------------------------------------
 
@@ -186,9 +245,10 @@ struct GrassBlade {
     float bulk;    // how much of its shading follows the ground's normal
     float far;     // 0 near .. 1: how far its translucency has faded
     vec2 uv;       // x: across, in the blade's base width (a culm's: its head's), 0 its middle; y: along, 0 .. 1
-    // x: kind (0 a leaf, 1 a flowering culm, 2 a dead leaf) plus under 0.5
-    // a draw of its own; y: a culm's head, 0 a loose panicle .. 15 a dense
-    // spike, plus the share of its card it truly covers; z: its ripeness; w:
+    // x: kind (0 a leaf, 1 a flowering culm, 2 a dead leaf, 3 a far fan of
+    // leaves) plus under 0.5 a draw of its own; y: a culm's head, 0 a loose
+    // panicle .. 15 a dense spike, plus the share of its card it truly
+    // covers (a fan's: a leaf's width in the card's); z: its ripeness; w:
     // its stem's width over its head's in 1/1000s, plus the share of its
     // card the stem truly covers.
     vec4 info;
@@ -433,6 +493,7 @@ bool grassBlade(int id, int vid, vec3 v, vec3 vn, out GrassBlade b) {
     float wd = max(wdRaw, dv * px * 0.65);
     float across = v.x > 1e-4 ? 0.5 : v.x < -1e-4 ? -0.5 : 0.0;
     float wv, ref;
+    bool fan = !tufted && !culm && !dead;
     if (culm) {
         // The stem a third of a leaf's width; a loose panicle spreads some
         // eight leaf widths, a dense spike three (of the ring's leaves, as a
@@ -452,6 +513,17 @@ bool grassBlade(int id, int vid, vec3 v, vec3 vn, out GrassBlade b) {
         b.info.w = floor(stemW / headW * 1000.0 + 0.5) + 0.99 * (stemP / stemW);
         b.info.y = floor(form * 15.0 + 0.5) + 0.99 * (headP / headW);
         b.info.z = clamp(0.9 - lush + 0.4 * (he.z - 0.5), 0.0, 1.0);
+    } else if (fan) {
+        // A far live leaf stands for a few: a card fanning out from a narrow
+        // foot (GRASS_FAN_WIDTH of its width at the middle), cut per pixel
+        // into GRASS_FAN_STRANDS tapering leaves (scene_grass_surface.glsl's
+        // grassFanSurface), so a far sward reads as fine blades, not broad
+        // leaves. Their width keeps the leaf's cover (a strand is shorter
+        // than the card and tapers).
+        float Wm = wd * GRASS_FAN_WIDTH;
+        wv = Wm * mix(0.35, 1.0, clamp(2.0 * y, 0.0, 1.0));
+        ref = Wm;
+        b.info.y = GRASS_FAN_COVER / GRASS_FAN_STRANDS / GRASS_FAN_WIDTH * mix(0.75, 1.35, age);
     } else {
         float sharp = smoothstep(0.9, 2.5, wdRaw / max(dv * px, 1e-6));
         float taper = pow(max(1.0 - pow(y, 2.2), 0.0), 0.8) * (0.8 + 0.2 * smoothstep(0.0, 0.2, y));
@@ -459,7 +531,7 @@ bool grassBlade(int id, int vid, vec3 v, vec3 vn, out GrassBlade b) {
         wv = wd * mix(pow(max(1.0 - y, 0.0), 0.7), taper, sharp) * (dead ? 0.8 : mix(0.75, 1.35, age));
         ref = wd;
     }
-    b.info.x = (culm ? 1.0 : dead ? 2.0 : 0.0) + 0.49 * fract(he.w * 17.3 + hb.x);
+    b.info.x = (culm ? 1.0 : dead ? 2.0 : fan ? 3.0 : 0.0) + 0.49 * fract(he.w * 17.3 + hb.x);
     b.pos = base + side * (across * wv) + P;
     b.normal = normalize(cross(side, tang));
     b.side = side;
@@ -485,18 +557,54 @@ bool grassBlade(int id, int vid, vec3 v, vec3 vn, out GrassBlade b) {
     // Shade: dark low in the sward (its depth by how high the point stands,
     // so a drooping tip low down is shaded too). Far off a blade is a pixel
     // or two: its dark root would leave only the tips showing (a field of
-    // dots), so the root shade fades with distance and a far blade reads as
-    // the colour of the turf it stands for.
+    // dots), so with distance the blade takes the mean of that shade along
+    // its whole length and reads as the sward it stands for, as dark as the
+    // near blades are on average.
     float sh = clamp(max(P.y / max(0.7 * ht, 1e-3), 0.5 * y), 0.0, 1.0);
     float far = smoothstep(12.0, 70.0, d) * 0.75;
-    col = mix(col * mix(grass.look.x, 1.0, far), col * (1.0 + 0.2 * sh), sh);
+    col *= mix(mix(grass.look.x, 1.0 + 0.2 * sh, sh), grassMeanShade(), far);
     col *= 1.0 + gu * grass.look.y * sh * 1.2;
     col *= 1.0 + 0.4 * flattened;   // a flattened lane shows the blades' paler length
+    // Past the herbs' plants a far fan stands for the herbs among the grass
+    // as often as their cover seen from here has them (herbMixMean; the
+    // turf, between the fans and past them, does the same): their leaves'
+    // mean colour, or one of their blooms by the colonies there
+    // (herbBloomLocal), so the flowers the plants drew up to their range go
+    // on as specks of their colour, patch by patch.
+#ifndef GRASS_SHADOW
+    if (fan && grass.herbInfo.x > 0.5) {
+        float tanView = grass.lod.w / max(length(root - eye.xz), 1e-3);
+        float stand = 1.0 - herbPlantsDrawn(d, tanView);
+        float u = grassHash(c, 6144 + j);
+        if (u < stand) {
+            vec2 fh = grassFloorHerbsAt(root);
+            HerbMix hm = herbMixMean(fh.x, fh.y, tanView);
+            if (fh.y > 0.0 && u < stand * hm.cover) {
+                vec3 bloom, pick;
+                float u2 = fract(u * 61.7 + hb.x);
+                float more = herbBloomLocal(root, fh.x, fract(u2 * 37.3), bloom, pick);
+                float share = min(hm.bloomShare * more, 0.95);
+                float blooms = share * GRASS_HERB_BLOOM_SEEN;
+                if (u2 < blooms) col = pick;
+                else if (u2 < blooms + (1.0 - hm.bloomShare) * GRASS_HERB_LEAF_SEEN) col = hm.leaf;
+            }
+        }
+    }
+#endif
     b.color = col;
-    b.ao = mix(mix(0.5, 1.0, sh), 1.0, far);
+    b.ao = mix(mix(0.5, 1.0, sh), 0.8, far);
     // Near the eye a blade is lit as its own face; further off more and more
-    // as the ground (a hillside reads as turf, not a field of bright tips).
+    // as the sward it stands in (a hillside reads as turf, not a field of
+    // bright tips): its faces' mean as the eye sees them.
     b.bulk = mix(mix(0.3, grass.lush.w, smoothstep(2.0, 14.0, d)), 0.95, far);
-    b.far = smoothstep(8.0, 40.0, d);   // and does not glow against the light
+    // (The way to the eye from its root: the sward's, steady while the
+    // blade stirs.)
+    vec3 toEye = normalize(-base);
+    // (Far off, tipped by the sward's lay and its gusts: grassCombLean.)
+    vec2 lay = grassCombLean(root, gu) * smoothstep(10.0, 40.0, d);
+    b.ground = normalize(mix(gn, grassCanopyNormal(gn, toEye, lay), smoothstep(2.0, 14.0, d)));
+    // Seen against a low sun a far meadow still glows through its blades,
+    // less than a near blade held to the light.
+    b.far = smoothstep(8.0, 40.0, d) * 0.25;
     return true;
 }

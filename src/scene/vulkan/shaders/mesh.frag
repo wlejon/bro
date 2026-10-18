@@ -486,11 +486,21 @@ void main() {
     // along it. A culm's card is cut into its stem and its head.
     float grassKind = floor(inColor.x + 1e-3);
     bool grassCulm = grassKind > 0.5 && grassKind < 1.5;
-    bool grassDead = grassKind > 1.5;
+    bool grassDead = grassKind > 1.5 && grassKind < 2.5;
     float grassTrans = -1.0;
+    if (grassKind > 2.5) {
+        // A far fan of leaves, cut into them.
+        float tone;
+        float cover = grassFanSurface(inUV, inColor, tone);
+        int mask = forestSampleMask(1.0, cover, (flags & MESH_FOREST_MSAA) != 0u, uint(fract(inColor.x) * 131072.0));
+        if (mask == 0) discard;
+        gl_SampleMask[0] = mask;
+        baseColor *= mix(0.84, 1.16, tone);
+    }
     if (grassCulm) {
         vec3 culmColor;
-        float cover = grassCulmSurface(inUV, inColor, baseColor, culmColor, grassTrans);
+        float graze = 1.0 - smoothstep(0.05, 0.4, -worldPos.y / max(length(worldPos.xz), 1e-3));
+        float cover = grassCulmSurface(inUV, inColor, baseColor, graze, culmColor, grassTrans);
         int mask = forestSampleMask(1.0, cover, (flags & MESH_FOREST_MSAA) != 0u, uint(fract(inColor.x) * 131072.0));
         if (mask == 0) discard;
         gl_SampleMask[0] = mask;
@@ -666,7 +676,10 @@ void main() {
 #ifdef SCENE_GRASS
     // A live leaf's cuticle has a sheen (what a gust's wave across a meadow
     // is lit by); a dead leaf and a head are matt.
-    roughness = grassDead || grassCulm ? 0.85 : mix(0.42, roughness, smoothstep(6.0, 40.0, camDist));
+    // Far off a blade is lit through its sward's mean face (turned to the
+    // eye, scene_grass.glsl's grassCanopyNormal), which would mirror a sun
+    // behind the eye back at it: the sward's sheen is broad and faint.
+    roughness = grassDead || grassCulm ? 0.85 : mix(0.42, max(roughness, 0.9), smoothstep(6.0, 40.0, camDist));
 #endif
 #ifdef SCENE_BARK
     // A plant's wood (scene_bark.glsl): inColor where on the stem, inUV its
@@ -681,7 +694,8 @@ void main() {
     // Turf (scene_ground.glsl): the vertex colour is the ground's data
     // (density, dryness, floor) where the grass node's field does not reach.
     float groundAO = 1.0;
-    groundSurface(worldPos, inColor, baseColor, roughness, groundAO);
+    vec4 groundThin;
+    groundSurface(worldPos, inColor, baseColor, N, roughness, groundAO, groundThin);
     baseColor *= push.baseColor.rgb;
 #endif
 
@@ -723,6 +737,14 @@ void main() {
     s.thinNormal = dot(geomN, -worldPos) >= 0.0 ? geomN : -geomN;
     s.translucency = min(s.translucency * (grassDead ? 0.5 : 1.35), 1.0);
     if (grassTrans >= 0.0) s.translucency = grassTrans * (1.0 - vegFade / 15.0);
+#endif
+#ifdef SCENE_GROUND
+    // Where the turf stands for far blades, the light comes through them
+    // as through theirs.
+    if (groundThin.w > 0.0) {
+        s.translucency = groundThin.w;
+        s.thinNormal = groundThin.xyz;
+    }
 #endif
     s.leafSphere = vec4(0.0);
     s.leafDensity = 0.0;
