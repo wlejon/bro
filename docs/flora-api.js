@@ -278,7 +278,7 @@
  * @property {string|number} [leafForm='broad'] - 'broad' (0), 'needle' (1) or 'scale' (2): a conifer's leaf is a whole spray, its needles or scale leaves cut out per pixel.
  * @property {Array<number>} [leafColor=[0,0,0]] - The leaves' mean albedo (linear); 0,0,0 the renderer's own.
  * @property {Array<number>} [barkColor=[0,0,0]] - The bark's; 0,0,0 the renderer's own.
- * @property {number} [clumpScale=1] - The crown clumps' size, x what the emit's options give (a conifer's small dense tufts 0.3).
+ * @property {number} [clumpScale=1] - The crown clumps' size, x what the emit's options give (a conifer's small dense tufts 0.3); 0 none, leafless (a succulent, whose leaves are drawn as its wood).
  * @property {number} [leafSize=1] - A leaf's size, x the renderer's card (a boxwood 0.3): its clumps carry 1/leafSize² the leaves, so they cover as much.
  * @property {number} [leafWidth=0] - A broad leaf's width over its length (0 the renderer's card, ~0.5): its outline, cut per pixel near (emitForest's `specimenLeaves`).
  * @property {number} [leafTip=0] - 0 a pointed (acuminate) tip, 1 a rounded one (a boxwood's).
