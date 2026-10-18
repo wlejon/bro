@@ -1,4 +1,7 @@
 #include "scene/tween.h"
+#include "scene/mesh_node.h"
+#include "scene/shape_node.h"
+#include "scene/sprite_node.h"
 #include "scene/scene_graph.h"
 
 #include <bromath/easing.h>

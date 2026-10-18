@@ -8,6 +8,7 @@
 #undef NDEBUG
 
 #include "scene/particles3d_node.h"
+#include "scene/mesh_node.h"
 #include "scene/scene_graph.h"
 #include "scene/scene_renderer.h"
 #include "scene/vulkan/scene_vk_device.h"

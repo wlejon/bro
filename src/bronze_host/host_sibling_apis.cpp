@@ -42,6 +42,7 @@
 #endif
 #if BRO_WITH_GAMEAI
 #include <brogameagent/api.h>
+#include <brogameagent/types.h>
 #include "engine/navmesh_subsystem.h"
 #endif
 #if BRO_WITH_TENSOR

@@ -2,27 +2,7 @@
 
 #include "scene/graph_liveness.h"
 #include "scene/scene_node.h"
-#include "scene/camera_node.h"
-#include "scene/shape_node.h"
-#include "scene/sprite_node.h"
-#include "scene/physics_node.h"
-#include "scene/mesh_node.h"
-#include "scene/skinned_mesh_node.h"
-#include "scene/instanced_mesh_node.h"
-#include "scene/gaussian_splat_node.h"
-#include "scene/html_node.h"
-#include "scene/light_node.h"
-#include "scene/particle_node.h"
-#include "scene/particles3d_node.h"
-#include "scene/decal_node.h"
-#include "scene/grass_node.h"
-#include "scene/forest_node.h"
-#include "scene/reflection_probe_node.h"
-#include "scene/agent_binding.h"
-#include "scene/ai_world_ticker.h"
 #include "scene/scene_renderer.h"
-#include "scene/tween.h"
-#include "scene/clip_player.h"
 
 #include <functional>
 #include <memory>
@@ -35,6 +15,30 @@ namespace bro::render { class SkiaRenderer; }
 namespace brogameagent { class World; }
 
 namespace bro::scene {
+
+// The node types the factory hands out and the graph keeps by pointer; their
+// headers are included where a node is used, so a change to one does not
+// rebuild every user of the graph.
+class CameraNode;
+class ShapeNode;
+class SpriteNode;
+class PhysicsNode;
+class MeshNode;
+class SkinnedMeshNode;
+class InstancedMeshNode;
+class GaussianSplatNode;
+class HtmlNode;
+class LightNode;
+class ParticleNode;
+class Particles3DNode;
+class DecalNode;
+class GrassNode;
+class ForestNode;
+class ReflectionProbeNode;
+class AgentBinding;
+class AIWorldTicker;
+class Tween;
+class ClipPlayer;
 
 /// Per-canvas scene graph. Owns all nodes and manages update/render traversal.
 /// Rendering lives in the SceneRenderer this graph owns; the render-config

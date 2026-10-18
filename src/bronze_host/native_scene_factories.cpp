@@ -1,6 +1,7 @@
 // native_scene_factories.cpp — SceneGraph node creation factories.
 
 #include "bronze_host/native_scene_internal.h"
+#include "scene/forest_node.h"
 #include "bronze_host/host_natives.h"
 #include "bronze_host/native_physics_internal.h"
 #include "natives/scene/native_scene_decl.h"

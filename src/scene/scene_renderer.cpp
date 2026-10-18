@@ -1,4 +1,7 @@
 #include "scene/scene_renderer.h"
+#include "scene/gaussian_splat_node.h"
+#include "scene/instanced_mesh_node.h"
+#include "scene/particles3d_node.h"
 
 #include "scene/atmosphere_irradiance.h"
 #include "scene/decal_node.h"
