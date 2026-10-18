@@ -259,7 +259,23 @@ struct SceneSurface {
     // pixel averages (1 to 4, fractional between; 0 keeps the share as is).
     vec4 leafSun;
     float leafSunN;
+    // Placed leaves are lit through one normal a pixel, but the leaves it
+    // stands for face many ways about it: their diffuse light is the wrap's
+    // mean over normals whose cosine to the light spreads this far either
+    // side of the one given (0: as given).
+    float leafSpread;
 };
+
+// A leaf's wrapped diffuse, clamp((c + 0.3) / 1.3, 0, 1), averaged over
+// cosines c spread evenly `k` either side of `c` (k 0: the wrap itself).
+float leafWrapIntegral(float x) {
+    float t = clamp(x + 0.3, 0.0, 1.3);
+    return t * t / 2.6 + max(x - 1.0, 0.0);
+}
+float leafWrapMean(float c, float k) {
+    if (k < 1e-3) return clamp((c + 0.3) / 1.3, 0.0, 1.0);
+    return (leafWrapIntegral(c + k) - leafWrapIntegral(c - k)) / (2.0 * k);
+}
 
 // The sun on a pixel of placed leaves (SceneSurface::leafSun): each of its
 // leaves lit or not by its draw, the share `vis` on average.
@@ -341,8 +357,7 @@ vec3 sceneDirectLight(SceneSurface s) {
                 // as hard blotches on the lobes they fall on.
             }
             float vis = self * lightShadow(i, at, s.camDist, lightDist, tN, max(abs(NL), 0.2), spread);
-            leafShadow = 0.1 + 0.9 * (type == 0 ? leafSunflecks(s.leafSun, s.leafSunN, vis) : vis);
-        }
+            leafShadow = 0.1 + 0.9 * (type == 0 ? leafSunflecks(s.leafSun, s.leafSunN, vis) : vis);        }
         // Leaf translucency: light passing through a leaf lit from behind,
         // strongest looking toward the light, a warm yellow-green, and
         // shadowed by the leaves between it and the light.
@@ -357,7 +372,7 @@ vec3 sceneDirectLight(SceneSurface s) {
         // A leaf's diffuse light wraps a little past its edge-on angle, so a
         // leaf turning away from the sun dims rather than switching off.
         float NdotL = max(NL, 0.0);
-        float diffNL = leafy ? clamp((NL + 0.3) / 1.3, 0.0, 1.0) : NdotL;
+        float diffNL = leafy ? leafWrapMean(NL, s.leafSpread) : NdotL;
         if (diffNL <= 0.0) continue;
         vec3 H = normalize(V + L);
         float D = distributionGGX(max(dot(N, H), 0.0), s.roughness);

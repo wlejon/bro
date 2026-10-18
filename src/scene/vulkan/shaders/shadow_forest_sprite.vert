@@ -41,6 +41,13 @@ void main() {
     // casters shaded a golden canopy 8 to 12 units under its leaves'.)
     float b = clamp(1.4 * procedural.header[0].y, 0.0, 1.0);
     outDepth *= (1.0 - b) + 2.0 * b * abs(away.y);
+    // A crown's leaves lie in its clumps, with gaps between them, not spread
+    // evenly through its sphere: the light through it meets them unevenly,
+    // and the mean that passes is more than through as many leaves spread
+    // evenly (forestry's clumping index, about half for a crown of clumps).
+    // As an even disc, a low sun's long shadows across a far canopy shaded
+    // its crowns 7 units under its leaves'.
+    if (int(push.params.x + 0.5) == 1) outDepth *= FOREST_CROWN_CLUMPING;
     vec4 clip = L * vec4(s.center + away * (0.5 * s.radius), 1.0);
     // How far a world metre moves the tile's x and y: the lengths of its
     // first two rows.

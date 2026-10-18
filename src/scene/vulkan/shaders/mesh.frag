@@ -677,7 +677,9 @@ void main() {
     s.leafFlat = 1.0;
     s.leafSun = vec4(0.5);
     s.leafSunN = 0.0;
+    s.leafSpread = 0.0;
 #ifdef SCENE_FOREST_SPRITE
+    s.leafSpread = FOREST_MASS_SPREAD;
     s.leafPath = massPath;
     s.leafSun = massSun;
     s.leafSunN = massSunN;

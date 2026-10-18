@@ -31,6 +31,16 @@ float forestMassDepth(float cell, float len, float aspect) {
     return leaves * a * a * aspect * 0.55;
 }
 
+// The share of a whole crown's optical depth its one-disc caster stops
+// (shadow_forest_sprite.vert): its leaves lie in clumps with gaps between.
+const float FOREST_CROWN_CLUMPING = 0.4;
+
+// How far either side of a placed leaf's one normal the cosines to the
+// light of the leaves it stands for spread (SceneSurface::leafSpread): a
+// far tier lit through one normal a pixel took more of a high sun than its
+// leaves, which face every way about it.
+const float FOREST_MASS_SPREAD = 0.6;
+
 // Four values in [0, 1] from a cell and a salt (an integer hash).
 vec4 forestMassHash(ivec2 c, uint salt) {
     uint v = uint(c.x + 32768) * 73856093u ^ uint(c.y + 32768) * 19349663u ^ salt * 83492791u;
