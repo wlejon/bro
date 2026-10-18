@@ -445,9 +445,9 @@ void main() {
         }
 #endif
 #ifdef SCENE_BARK
-        // A twig (mesh_forest_tube.vert's twig build): under a pixel wide,
-        // its cover is its width.
-        if (inUV.y < -0.5) massCover = clamp(inColor.w, 0.0, 1.0);
+        // A twig (mesh_forest_tube.vert's twig build, inUV.y under -1.5):
+        // under a pixel wide, its cover (inUV.x) is its width.
+        if (inUV.y < -1.5) massCover = clamp(inUV.x, 0.0, 1.0);
 #endif
         int mask = forestSampleMask(inInstColor.a, massCover, (flags & MESH_FOREST_MSAA) != 0u, massSalt);
         if (mask == 0) discard;
@@ -672,6 +672,10 @@ void main() {
     // A plant's wood (scene_bark.glsl): inColor where on the stem, inUV its
     // height over the root and the bark word (negative: not a plant's).
     if (inUV.y >= 0.0) barkSurface(inColor, inUV.x, inUV.y, worldPos, N, inTangent, baseColor, N, roughness, vegAO);
+    // A twig (mesh_forest_tube.vert's twig build): its bark word in -2 - y,
+    // well over the root.
+    else if (inUV.y < -1.5)
+        barkSurface(inColor, 10.0, -2.0 - inUV.y, worldPos, N, inTangent, baseColor, N, roughness, vegAO);
 #endif
 #ifdef SCENE_GROUND
     // Turf (scene_ground.glsl): the vertex colour is the ground's data

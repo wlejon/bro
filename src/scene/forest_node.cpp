@@ -300,7 +300,14 @@ ForestNode::ClumpTwigs ForestNode::twigPieces(uint32_t leaves) {
     if (leaves == 0) return {};
     const uint32_t S = std::max(1u, (leaves + 4u) / 8u);
     const uint32_t NB = S < 3u ? S : std::max(3u, (S + 2u) / 5u);
-    return {6u + 5u * NB, 6u + 5u * NB + 3u * S};
+    // FOREST_STEMS (three lobes' stems of FOREST_STEM_PIECES), each lobe's
+    // limb slots (forestLimbSlots: lobe 0's limbs, one a FOREST_LIMB_SPRAYS
+    // of its sprays, none under 3) of FOREST_LIMB_PIECES, then
+    // FOREST_SPRAY_PIECES a spray and FOREST_SHOOT_PIECES a shoot.
+    const uint32_t lobeSprays = (NB + 2u) / 3u;
+    const uint32_t limbs = lobeSprays < 3u ? 0u : (lobeSprays + 2u) / 3u;
+    const uint32_t stems = 12u + 3u * 3u * limbs + 7u * NB;
+    return {stems, stems + 4u * S};
 }
 
 float ForestNode::fadeCode(float lo, float hi) {

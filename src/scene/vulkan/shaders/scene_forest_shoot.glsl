@@ -1,7 +1,7 @@
 // A broad forest's leaves on their twigs (scene_forest.glsl's leaf form 0):
 // every leaf hangs from a node of a current-year SHOOT, the shoots branch
 // off a SPRAY's axis, each spray's axis is reached by a twig from its
-// LOBE's hub, and the hubs by stems from the clump's base, the end of the
+// LOBE's stem, and the stems run from the clump's base, the end of the
 // branch segment the clump grows on. All of it is derived from the clump's
 // own record (centre, radius, twig direction, leaf count), its placement-key
 // base (clump vegetation record r2.z, ForestNode::gpuData) and the
@@ -25,22 +25,34 @@
 // shoot, is turned toward the light (flattened into the spray's plane,
 // facing out of the crown and up by the scatter's up bias) and droops.
 //
-// The twigs (mesh_forest_tube.vert's twig build) are the same curves drawn
-// as camera-facing ribbons, a PIECE at a time: 6 lobe stems (two a lobe),
-// 5 a spray (two from its hub, three along its axis), 3 a shoot. A twig's
-// point and a leaf's node go through the same functions, so the two meet
-// exactly, and move together: both take the wood's pose (vegPose) of the
-// clump's record where they are, then the spray's and the shoot's own
-// bending (forestShootSway), which only adds to the motion the leaf's
-// flutter about its petiole rides on.
+// Wood is not straight: every twig is a polyline of a few PIECES whose
+// joints step aside. A lobe's stem and a spray's twig from it are crooked
+// (each joint a step of FOREST_CROOK of its piece's length, any way across
+// it); a spray's axis and a shoot zigzag (each joint a step to alternate
+// sides in the plane its leaves spread in, FOREST_ZIGZAG leaf lengths: more
+// for alternate leaves, whose shoots zigzag node to node). What hangs from
+// a twig hangs from the polyline as drawn: a spray's twig leaves its lobe's
+// stem, a shoot its spray's axis and a leaf its shoot at the point of the
+// polyline, so they meet exactly. A twig's radius tapers from the stem to
+// the shoot's tip, thicker where it carries more (forestPipe).
+//
+// The twigs (mesh_forest_tube.vert's twig build) are the same polylines
+// drawn as camera-facing ribbons, a piece at a time: FOREST_STEM_PIECES a
+// lobe's stem, FOREST_SPRAY_PIECES a spray (its twig from the stem, then
+// its axis), FOREST_SHOOT_PIECES a shoot. A twig's point and a leaf's node
+// go through the same functions, so the two meet exactly, and move
+// together: both take the wood's pose (vegPose) of the clump's record where
+// they are, then the spray's and the shoot's own bending (forestShootSway),
+// which only adds to the motion the leaf's flutter about its petiole rides
+// on.
 //
 // Needs scene_procedural.glsl, scene_vegetation.glsl (sceneWindCycles) and
 // scene_forest.glsl.
 
 const int FOREST_SHOOT_LEAVES = 8;
 const int FOREST_SPRAY_SHOOTS = 5;
-const float FOREST_SHOOT_INTERNODE = 0.6;    // leaf lengths between a shoot's nodes
-const float FOREST_SPRAY_LATERAL = 1.1;      // leaf lengths along a spray's axis between its shoots
+const float FOREST_SHOOT_INTERNODE = 0.35;   // leaf lengths between a shoot's nodes
+const float FOREST_SPRAY_LATERAL = 0.75;     // leaf lengths along a spray's axis between its shoots
 const float FOREST_SHOOT_ANGLE = 1.0;        // radians a lateral shoot leaves its axis at
 const float FOREST_LEAF_ANGLE = 0.95;        // radians a blade leaves its shoot at
 // How far a blade turns into its spray's plane (1 flat in it), how far it
@@ -49,19 +61,48 @@ const float FOREST_LEAF_FLATTEN = 0.6;
 const float FOREST_LEAF_DROOP = 0.12;
 const float FOREST_LEAF_TILT = 1.0;
 
+// The pieces of each twig, and so of a clump.
+const int FOREST_STEM_PIECES = 4;     // a lobe's stem
+const int FOREST_LIMB_PIECES = 3;     // a limb from it
+const int FOREST_LIMB_SPRAYS = 3;     // sprays a limb carries (a lobe of 3 or more sprays has limbs)
+const int FOREST_HUB_PIECES = 3;      // a spray's twig from its limb or its lobe's stem
+const int FOREST_AXIS_PIECES = 4;     // a spray's axis
+const int FOREST_SPRAY_PIECES = FOREST_HUB_PIECES + FOREST_AXIS_PIECES;
+const int FOREST_SHOOT_PIECES = 4;
+const int FOREST_STEMS = 3 * FOREST_STEM_PIECES;
+// A crooked twig's joint steps this share of its piece's length aside; a
+// zigzag's (a spray's axis, a shoot) this many leaf lengths, alternate
+// leaves' (x) and the others' (y).
+const float FOREST_CROOK = 0.2;
+const vec2 FOREST_ZIGZAG = vec2(0.1, 0.045);
+// A twig's radius in leaf lengths: a shoot's at its base and tip; wood
+// carrying more shoots is thicker by their square root (the pipe model:
+// its section is the sum of theirs), forestPipe.
+const vec2 FOREST_SHOOT_RADIUS = vec2(0.011, 0.005);
+float forestPipe(float shoots) { return FOREST_SHOOT_RADIUS.x * sqrt(max(shoots, 1.0)); }
+
 // The shoots and sprays a clump of `n` leaves carries.
 void forestShootCounts(int n, out int S, out int NB) {
     S = max(1, (n + 4) / FOREST_SHOOT_LEAVES);
     NB = S < 3 ? S : max(3, (S + 2) / FOREST_SPRAY_SHOOTS);
 }
 
-// A clump's twig pieces: its lobe stems and sprays (`withShoots` false), or
-// all of them. ForestNode::twigPieces counts the same.
+// The sprays lobe `lobe` of a clump of NB sprays carries (spray b is on
+// lobe b % 3), and its limbs: none under 3 sprays (they leave the stem),
+// else one for every FOREST_LIMB_SPRAYS. `forestLimbSlots` the most any of
+// its lobes has (lobe 0's), each lobe's slots in the pieces.
+int forestLobeSprays(int NB, int lobe) { return NB / 3 + (lobe < NB % 3 ? 1 : 0); }
+int forestLobeLimbs(int L) { return L < 3 ? 0 : (L + FOREST_LIMB_SPRAYS - 1) / FOREST_LIMB_SPRAYS; }
+int forestLimbSlots(int NB) { return forestLobeLimbs(forestLobeSprays(NB, 0)); }
+
+// A clump's twig pieces: its lobe stems, limbs and sprays (`withShoots`
+// false), or all of them. ForestNode::twigPieces counts the same.
 int forestTwigPieces(int n, bool withShoots) {
     if (n <= 0) return 0;
     int S, NB;
     forestShootCounts(n, S, NB);
-    return 6 + 5 * NB + (withShoots ? 3 * S : 0);
+    return FOREST_STEMS + 3 * FOREST_LIMB_PIECES * forestLimbSlots(NB) + FOREST_SPRAY_PIECES * NB +
+           (withShoots ? FOREST_SHOOT_PIECES * S : 0);
 }
 
 // What a clump's shoots are built from (specimen units).
@@ -108,6 +149,24 @@ vec3 forestShootFlat(vec3 v) {
     return v;
 }
 
+// A joint's step aside of a crooked twig heading `T`: `amp` long (0.5 to
+// 1 of it), any way across T, drawn from stream `h` at `k`.
+vec3 forestCrook(uint h, int k, vec3 T, float amp) {
+    vec3 a = perpendicularUnit(T);
+    vec3 b = cross(T, a);
+    float ang = PROC_TWO_PI * procDraw(h, uint(2 * k + 11));
+    return (a * cos(ang) + b * sin(ang)) * (amp * (0.5 + 0.5 * procDraw(h, uint(2 * k + 12))));
+}
+
+// Where a polyline of `K` pieces is at `u` (0..1 along it): the chord of
+// its piece, between its joints `a` (piece k0's start) and `b`. The piece
+// (k0) and the share along it (f).
+void forestPieceAt(float u, int K, out int k0, out float f) {
+    float x = clamp(u, 0.0, 1.0) * float(K);
+    k0 = min(int(floor(x)), K - 1);
+    f = x - float(k0);
+}
+
 // Spray `b`: its lobe, its hub (where its twig leaves the lobe's stem), its
 // axis' start on the lobe's shell (E, outward u, heading h, across sd), its
 // length and the sphere its shoots follow (radius rho about the lobe's
@@ -115,11 +174,14 @@ vec3 forestShootFlat(vec3 v) {
 struct ForestSpray {
     vec3 lc;
     float lr;
-    vec3 hub;
+    vec3 hub;       // (forestSprayHub's: only its twig needs it)
+    vec3 hubWay;    // its parent's way there (forestSprayHub's)
     vec3 u, h, sd;
     float rho, lam;
     int Q;          // its shoots
     uint hb;
+    int lobe;
+    float z;        // its place on the lobe's lattice: 1 facing out, -1 back toward the base
 };
 
 // The great circle of radius `rho` through `rho * u` heading `h`, `x` along
@@ -138,40 +200,67 @@ vec3 forestQuadBezier(vec3 a, vec3 c, vec3 b, float t, out vec3 tangent) {
     return mix(mix(a, c, t), mix(c, b, t), t);
 }
 
-// A lobe's own twig: from the clump's base out through the lobe, leaving
+// A lobe's own stem: from the clump's base out through the lobe, leaving
 // along the clump's twig and ending past the lobe's centre; its sprays'
 // twigs leave it along its length (those facing back toward the base
-// low down, those facing out near its end), a branchlet, not a star.
-vec3 forestLobeAxis(ForestClumpShoots c, vec3 lc, float lr, float t, out vec3 tangent) {
+// low down, those facing out near its end), a branchlet, not a star. Its
+// joint `k` (of FOREST_STEM_PIECES), crooked; `lk` the lobe's stream.
+uint forestLobeStream(ForestClumpShoots c, int lobe) {
+    return procHash(c.sb ^ uint(lobe + 31) * 0x85ebca6bu);
+}
+
+vec3 forestLobeStemJoint(ForestClumpShoots c, vec3 lc, float lr, uint lk, int k, out vec3 tangent) {
     vec3 o = lc - c.B;
     o = dot(o, o) > 1e-10 ? normalize(o) : c.D;
-    vec3 Z = lc + o * (0.45 * lr);
-    vec3 ctrl = c.B + c.D * (0.5 * length(Z - c.B));
-    return forestQuadBezier(c.B, ctrl, Z, t, tangent);
+    vec3 Z = lc + o * (0.3 * lr);
+    float len = length(Z - c.B);
+    vec3 ctrl = c.B + c.D * (0.5 * len);
+    vec3 p = forestQuadBezier(c.B, ctrl, Z, float(k) / float(FOREST_STEM_PIECES), tangent);
+    if (k > 0) p += forestCrook(lk, k, tangent, FOREST_CROOK * len / float(FOREST_STEM_PIECES));
+    return p;
+}
+
+// The point `t` (0..1) along a lobe's stem as drawn.
+vec3 forestLobeStemAt(ForestClumpShoots c, vec3 lc, float lr, uint lk, float t) {
+    int k0;
+    float f;
+    forestPieceAt(t, FOREST_STEM_PIECES, k0, f);
+    vec3 ta, tb;
+    return mix(forestLobeStemJoint(c, lc, lr, lk, k0, ta), forestLobeStemJoint(c, lc, lr, lk, k0 + 1, tb), f);
+}
+
+// A lobe's lattice: its way out from the clump's base (`o`), two ways
+// across it, and the lattice's turn (its stream).
+void forestLobeFrame(ForestClumpShoots c, int lobe, vec3 lc, out vec3 o, out vec3 e1, out vec3 e2, out uint lh) {
+    o = lc - c.B;
+    o = dot(o, o) > 1e-10 ? normalize(o) : c.D;
+    e1 = perpendicularUnit(o);
+    e2 = cross(o, e1);
+    lh = procHash(c.sb ^ uint(lobe + 7) * 0x85ebca6bu);
 }
 
 ForestSpray forestSpray(ForestClumpShoots c, int b) {
     ForestSpray s;
     int lobe = b % 3;
     int i = b / 3;
-    int L = c.NB / 3 + (lobe < c.NB % 3 ? 1 : 0);
+    int L = forestLobeSprays(c.NB, lobe);
     procClumpLobe(vec4(c.C, c.r), c.clump, lobe, c.seed, s.lc, s.lr);
     s.hb = procHash(c.sb + uint(b + 1) * 0x9e3779b9u);
-    uint lh = procHash(c.sb ^ uint(lobe + 7) * 0x85ebca6bu);
+    s.lobe = lobe;
 
     // A Fibonacci lattice over the lobe's sphere about its way out from the
     // clump's base, each point jittered within its cell.
-    vec3 o = s.lc - c.B;
-    o = dot(o, o) > 1e-10 ? normalize(o) : c.D;
-    vec3 e1 = perpendicularUnit(o);
-    vec3 e2 = cross(o, e1);
+    vec3 o, e1, e2;
+    uint lh;
+    forestLobeFrame(c, lobe, s.lc, o, e1, e2, lh);
     float fl = float(max(L, 1));
     float z = clamp(1.0 - 2.0 * (float(i) + 0.5) / fl + (procDraw(s.hb, 0u) - 0.5) * 1.2 / fl, -1.0, 1.0);
     float phi = float(i) * 2.39996323 + PROC_TWO_PI * procDraw(lh, 0u) + (procDraw(s.hb, 1u) - 0.5) * 0.6;
     float sz = sqrt(max(0.0, 1.0 - z * z));
     s.u = normalize(o * z + (e1 * cos(phi) + e2 * sin(phi)) * sz);
-    vec3 at;
-    s.hub = forestLobeAxis(c, s.lc, s.lr, 0.4 + 0.27 * (z + 1.0), at);
+    s.z = z;
+    s.hub = vec3(0.0);
+    s.hubWay = o;
     float shell = procedural.header[0].w;
     s.rho = s.lr * (1.0 - shell * (0.2 + 0.6 * procDraw(s.hb, 2u)));
 
@@ -187,15 +276,142 @@ ForestSpray forestSpray(ForestClumpShoots c, int b) {
     return s;
 }
 
+// A lobe's LIMBS: a lobe of many sprays (a large clump's) does not reach
+// each from its stem, a twig across the whole lobe; its stem divides into
+// limbs (a Fibonacci lattice of their own over the lobe's sphere, one for
+// every FOREST_LIMB_SPRAYS sprays), each from the stem out to just under
+// the shell its sprays lie in, and each spray's twig leaves the limb
+// nearest it where it passes closest: a short twig across to the spray.
+// Limb `g` of `G`: its way out (unit) and its place on the lattice (`z`).
+vec3 forestLimbDir(ForestClumpShoots c, int lobe, vec3 lc, int g, int G, out float z) {
+    vec3 o, e1, e2;
+    uint lh;
+    forestLobeFrame(c, lobe, lc, o, e1, e2, lh);
+    z = 1.0 - 2.0 * (float(g) + 0.5) / float(G);
+    float phi = float(g) * 2.39996323 + PROC_TWO_PI * procDraw(lh, 1u);
+    float sz = sqrt(max(0.0, 1.0 - z * z));
+    return normalize(o * z + (e1 * cos(phi) + e2 * sin(phi)) * sz);
+}
+
+// Limb `g` of a lobe's `G`: its joint `k` of FOREST_LIMB_PIECES, from its
+// stem (where a spray's twig facing its way would leave it) to within the
+// shell, crooked.
+vec3 forestLimbJoint(ForestClumpShoots c, int lobe, int g, int G, int k, out vec3 tangent) {
+    vec3 lc;
+    float lr;
+    procClumpLobe(vec4(c.C, c.r), c.clump, lobe, c.seed, lc, lr);
+    float z;
+    vec3 d = forestLimbDir(c, lobe, lc, g, G, z);
+    uint lk = forestLobeStream(c, lobe);
+    float t0 = 0.4 + 0.27 * (z + 1.0);
+    vec3 a = forestLobeStemAt(c, lc, lr, lk, t0);
+    vec3 b = lc + forestShootFlat(d * (lr * 0.95 * (1.0 - 0.8 * procedural.header[0].w)));
+    float L = length(b - a);
+    // It forks off its stem at an acute angle (halfway between the stem's
+    // way and its own) and bends out to its end.
+    vec3 st;
+    forestLobeStemJoint(c, lc, lr, lk, int(t0 * float(FOREST_STEM_PIECES)), st);
+    vec3 w = normalize(st + normalize(b - a + d * 1e-4));
+    vec3 p = forestQuadBezier(a, a + w * (0.5 * L), b, float(k) / float(FOREST_LIMB_PIECES), tangent);
+    if (k > 0 && k < FOREST_LIMB_PIECES)
+        p += forestCrook(procHash(lk + uint(g + 1) * 0x9e3779b9u), k, tangent, FOREST_CROOK * L / float(FOREST_LIMB_PIECES));
+    return p;
+}
+
+// Where spray `s`'s twig leaves: the end of its lobe's limb nearest it, or
+// (a lobe of few sprays) its stem.
+vec3 forestSprayHub(ForestClumpShoots c, ForestSpray s, out vec3 way) {
+    int G = forestLobeLimbs(forestLobeSprays(c.NB, s.lobe));
+    if (G == 0) {
+        float ts = 0.4 + 0.27 * (s.z + 1.0);
+        forestLobeStemJoint(c, s.lc, s.lr, forestLobeStream(c, s.lobe), int(ts * float(FOREST_STEM_PIECES)), way);
+        return forestLobeStemAt(c, s.lc, s.lr, forestLobeStream(c, s.lobe), ts);
+    }
+    int best = 0;
+    float bd = -2.0;
+    for (int g = 0; g < G; ++g) {
+        float z;
+        float k = dot(forestLimbDir(c, s.lobe, s.lc, g, G, z), s.u);
+        if (k > bd) {
+            bd = k;
+            best = g;
+        }
+    }
+    // Off the limb where it passes nearest the spray's start, a short
+    // twig across to it, not along the whole lobe (beyond its first piece).
+    vec3 t;
+    vec3 a = forestLimbJoint(c, s.lobe, best, G, 0, t);
+    vec3 b = forestLimbJoint(c, s.lobe, best, G, FOREST_LIMB_PIECES, t);
+    vec3 E = s.lc + forestShootFlat(s.u * s.rho);
+    vec3 ab = b - a;
+    float u = clamp(dot(E - a, ab) / max(dot(ab, ab), 1e-10), 1.0 / float(FOREST_LIMB_PIECES), 1.0);
+    int k0;
+    float f;
+    forestPieceAt(u, FOREST_LIMB_PIECES, k0, f);
+    vec3 p0 = forestLimbJoint(c, s.lobe, best, G, k0, t), p1 = forestLimbJoint(c, s.lobe, best, G, k0 + 1, t);
+    way = normalize(p1 - p0 + vec3(1e-7));
+    return mix(p0, p1, f);
+}
+
+// The zigzag's step at joint `k` of a twig heading `T` with leaves spreading
+// toward `side`: to alternate sides, a little out of the plane too.
+vec3 forestZigzag(ForestClumpShoots c, uint h, int k, vec3 T, vec3 side) {
+    float amp = (c.phyllotaxis == 0 ? FOREST_ZIGZAG.x : FOREST_ZIGZAG.y) * c.Lf;
+    float sgn = (k & 1) != 0 ? 1.0 : -1.0;
+    return side * (sgn * amp * (0.6 + 0.8 * procDraw(h, uint(2 * k + 21)))) +
+           cross(T, side) * (amp * 0.6 * (procDraw(h, uint(2 * k + 22)) - 0.5));
+}
+
+// A spray's twig from its hub (s.hub, forestSprayHub) to its axis' start:
+// joint `k` of FOREST_HUB_PIECES, the middle ones crooked.
+// It forks off its parent at an acute angle (halfway between the parent's
+// way there, s.hubWay, and the spray's start) and comes in along the
+// spray's heading: a cubic curve, crooked at its joints.
+vec3 forestSprayTwigJoint(ForestSpray s, int k, out vec3 tangent) {
+    vec3 E = s.lc + forestShootFlat(s.u * s.rho);
+    vec3 he = E - s.hub;
+    float len = length(he);
+    vec3 w = normalize(s.hubWay + he / max(len, 1e-6));
+    vec3 p1 = s.hub + w * (0.35 * len), p2 = E - s.h * (0.35 * len);
+    float t = float(k) / float(FOREST_HUB_PIECES), r = 1.0 - t;
+    vec3 d = 3.0 * (r * r * (p1 - s.hub) + 2.0 * r * t * (p2 - p1) + t * t * (E - p2));
+    tangent = dot(d, d) > 1e-12 ? normalize(d) : normalize(he + vec3(1e-6));
+    vec3 p = r * r * r * s.hub + 3.0 * r * t * (r * p1 + t * p2) + t * t * t * E;
+    if (k > 0 && k < FOREST_HUB_PIECES) p += forestCrook(s.hb, k, tangent, FOREST_CROOK * len / float(FOREST_HUB_PIECES));
+    return p;
+}
+
+// A spray's axis: joint `k` of FOREST_AXIS_PIECES (y = k / pieces of its
+// length along it), zigzag; its tangent (flattened).
+vec3 forestSprayAxisJoint(ForestClumpShoots c, ForestSpray s, int k, out vec3 tangent) {
+    float y = s.lam * float(k) / float(FOREST_AXIS_PIECES);
+    vec3 T, N;
+    vec3 q = forestShootArc(s.u, s.h, s.rho, y, T, N);
+    if (k > 0) q += forestZigzag(c, s.hb, k, T, cross(T, N));
+    tangent = normalize(forestShootFlat(T));
+    return s.lc + forestShootFlat(q);
+}
+
+// The point `y` along a spray's axis as drawn.
+vec3 forestSprayAxisAt(ForestClumpShoots c, ForestSpray s, float y) {
+    int k0;
+    float f;
+    forestPieceAt(y / max(s.lam, 1e-5), FOREST_AXIS_PIECES, k0, f);
+    vec3 ta, tb;
+    return mix(forestSprayAxisJoint(c, s, k0, ta), forestSprayAxisJoint(c, s, k0 + 1, tb), f);
+}
+
 // Shoot `q` of a spray (0 its terminal shoot): where it leaves the axis
 // (y along it), its start (unflattened, about the lobe's centre), outward
-// and heading there, its length and leaves.
+// and heading there, its length and leaves, and how far it is moved to
+// leave the axis as drawn (`delta`, flattened).
 struct ForestShoot {
     float y;
     vec3 u, h;
     float len;
     int m;
     uint hs;
+    vec3 delta;
 };
 
 ForestShoot forestShoot(ForestClumpShoots c, ForestSpray s, int shoot, int q) {
@@ -213,7 +429,28 @@ ForestShoot forestShoot(ForestClumpShoots c, ForestSpray s, int shoot, int q) {
         o.h = normalize(T * cos(FOREST_SHOOT_ANGLE) + s.sd * (side * sin(FOREST_SHOOT_ANGLE)));
     }
     o.len = min(float(max(o.m, 1)) * FOREST_SHOOT_INTERNODE * c.Lf * (0.85 + 0.3 * procDraw(o.hs, 0u)), s.rho);
+    o.delta = forestSprayAxisAt(c, s, o.y) - (s.lc + forestShootFlat(N * s.rho));
     return o;
+}
+
+// A shoot's joint `k` of FOREST_SHOOT_PIECES (x = k / pieces of its length),
+// zigzag in the plane its leaves spread in; its tangent (flattened).
+vec3 forestShootJoint(ForestClumpShoots c, ForestSpray s, ForestShoot sh, int k, out vec3 tangent) {
+    float x = sh.len * float(k) / float(FOREST_SHOOT_PIECES);
+    vec3 T, N;
+    vec3 q = forestShootArc(sh.u, sh.h, s.rho, x, T, N);
+    if (k > 0) q += forestZigzag(c, sh.hs, k, T, cross(T, N));
+    tangent = normalize(forestShootFlat(T));
+    return s.lc + forestShootFlat(q) + sh.delta;
+}
+
+// The point `x` along a shoot as drawn.
+vec3 forestShootAt(ForestClumpShoots c, ForestSpray s, ForestShoot sh, float x) {
+    int k0;
+    float f;
+    forestPieceAt(x / max(sh.len, 1e-5), FOREST_SHOOT_PIECES, k0, f);
+    vec3 ta, tb;
+    return mix(forestShootJoint(c, s, sh, k0, ta), forestShootJoint(c, s, sh, k0 + 1, tb), f);
 }
 
 // How far along its shoot (0..1) node `i` of `M` lies: closer together
@@ -286,15 +523,9 @@ bool forestShootLeaf(ForestClumpShoots c, int j, out vec3 P, out mat3 R, out vec
     float x = sh.len * tn;
     at.x = x;
     vec3 T, Nn;
-    vec3 p = forestShootArc(sh.u, sh.h, s.rho, x, T, Nn);
-    // On the twig as drawn: the chord of its third of the shoot (the twig
-    // is three straight pieces), not the arc a few millimetres off it.
-    float u3 = 3.0 * x / max(sh.len, 1e-5);
-    float r3 = min(floor(u3), 2.0);
-    vec3 Ta, Na;
-    vec3 pa = forestShootArc(sh.u, sh.h, s.rho, sh.len * r3 / 3.0, Ta, Na);
-    vec3 pb = forestShootArc(sh.u, sh.h, s.rho, sh.len * (r3 + 1.0) / 3.0, Ta, Na);
-    P = s.lc + forestShootFlat(mix(pa, pb, u3 - r3));
+    forestShootArc(sh.u, sh.h, s.rho, x, T, Nn);
+    // On the twig as drawn: the chord of its piece of the shoot.
+    P = forestShootAt(c, s, sh, x);
 
     uint hl = procHash(sh.hs + uint(k + 1) * 0x27d4eb2fu);
     // Its azimuth about the shoot: two ranks, opposite pairs turning a
@@ -330,14 +561,16 @@ bool forestShootLeaf(ForestClumpShoots c, int j, out vec3 P, out mat3 R, out vec
     return true;
 }
 
-// Twig piece `p` of a clump: its two ends (`a`, `b`, specimen units, at rest)
-// and tangents there, their radii, how far each is along its spray's axis or
-// shoot (`ya`, `yb`; for forestShootBend), and which: 0 a lobe stem (no bend
-// of its own), 1 a spray's twig or axis, 2 a shoot. False for a piece that
-// is not there (a lobe with no sprays).
+// Twig piece `p` of a clump: one end of it (`end` 0 its start, 1 its end;
+// specimen units, at rest), the twig's way there, its radius, how far
+// along the whole twig it is (0..1, `frac`) and along its spray's axis or
+// shoot (`along`; for forestShootBend), and which: 0 a lobe's stem (no
+// bend of its own), 1 a spray's twig or axis, 2 a shoot. False for a piece
+// that is not there (a lobe with no sprays).
 struct ForestTwigEnd {
     vec3 p, t;
     float radius;
+    float frac;
     float along;   // y on the axis (kind 1) or x on the shoot (kind 2); 0 on a hub's twig
 };
 
@@ -351,55 +584,72 @@ bool forestTwigEnd(ForestClumpShoots c, int p, float end, out ForestTwigEnd o, o
     sh.len = 1.0;
     sh.m = 0;
     sh.hs = 0u;
+    sh.delta = vec3(0.0);
     float Lf = c.Lf;
-    if (p < 6) {
-        int lobe = p / 2;
+    int e = int(end + 0.5);
+    // The shoots a spray carries, on the average.
+    float Qm = float(c.S) / float(max(c.NB, 1));
+    if (p < FOREST_STEMS) {
+        int lobe = p / FOREST_STEM_PIECES;
         if (lobe >= c.NB) return false;
         vec3 lc;
         float lr;
         procClumpLobe(vec4(c.C, c.r), c.clump, lobe, c.seed, lc, lr);
-        float t = (float(p & 1) + end) * 0.5;
-        o.p = forestLobeAxis(c, lc, lr, t, o.t);
-        o.radius = Lf * mix(0.045, 0.03, t);
+        int k = p - lobe * FOREST_STEM_PIECES + e;
+        o.p = forestLobeStemJoint(c, lc, lr, forestLobeStream(c, lobe), k, o.t);
+        o.frac = float(k) / float(FOREST_STEM_PIECES);
+        // All its lobe's sprays at its foot, two sprays' worth at its end.
+        float L = float(forestLobeSprays(c.NB, lobe));
+        o.radius = Lf * mix(forestPipe(L * Qm), forestPipe(min(L, 2.0) * Qm), o.frac);
         return true;
     }
-    int pre = 6 + 5 * c.NB;
+    int slots = forestLimbSlots(c.NB) * FOREST_LIMB_PIECES;
+    int sprays = FOREST_STEMS + 3 * slots;
+    if (p < sprays) {
+        int lobe = (p - FOREST_STEMS) / slots;
+        int q = (p - FOREST_STEMS) - lobe * slots;
+        int g = q / FOREST_LIMB_PIECES;
+        int G = forestLobeLimbs(forestLobeSprays(c.NB, lobe));
+        if (g >= G) return false;
+        int k = q - g * FOREST_LIMB_PIECES + e;
+        o.p = forestLimbJoint(c, lobe, g, G, k, o.t);
+        o.frac = float(k) / float(FOREST_LIMB_PIECES);
+        float carried = float(forestLobeSprays(c.NB, lobe)) / float(G) * Qm;
+        o.radius = Lf * mix(forestPipe(carried), forestPipe(carried * 0.6), o.frac);
+        return true;
+    }
+    int pre = sprays + FOREST_SPRAY_PIECES * c.NB;
     if (p < pre) {
-        int b = (p - 6) / 5;
-        int r = (p - 6) - b * 5;
+        int b = (p - sprays) / FOREST_SPRAY_PIECES;
+        int r = (p - sprays) - b * FOREST_SPRAY_PIECES + e;
         s = forestSpray(c, b);
         kind = 1;
-        if (r < 2) {
-            vec3 E = s.lc + forestShootFlat(s.u * s.rho);
-            vec3 ctrl = E - s.h * (0.45 * length(E - s.hub));
-            float t = (float(r) + end) * 0.5;
-            o.p = forestQuadBezier(s.hub, ctrl, E, t, o.t);
-            o.radius = Lf * mix(0.028, 0.022, t);
+        if (r < FOREST_HUB_PIECES || (r == FOREST_HUB_PIECES && e == 1)) {
+            s.hub = forestSprayHub(c, s, s.hubWay);
+            o.p = forestSprayTwigJoint(s, r, o.t);
+            o.frac = float(r) / float(FOREST_HUB_PIECES);
+            o.radius = Lf * forestPipe(float(s.Q)) * (1.08 - 0.08 * o.frac);
             return true;
         }
-        float y = s.lam * (float(r - 2) + end) / 3.0;
-        vec3 T, N;
-        vec3 q = forestShootArc(s.u, s.h, s.rho, y, T, N);
-        o.p = s.lc + forestShootFlat(q);
-        o.t = normalize(forestShootFlat(T));
-        o.radius = Lf * mix(0.022, 0.016, y / max(s.lam, 1e-4));
-        o.along = y;
+        int k = r - FOREST_HUB_PIECES;
+        o.p = forestSprayAxisJoint(c, s, k, o.t);
+        o.frac = float(k) / float(FOREST_AXIS_PIECES);
+        // Its shoots leave it along its length, its terminal one at its end.
+        o.radius = Lf * forestPipe(1.0 + float(s.Q - 1) * (1.0 - o.frac));
+        o.along = s.lam * o.frac;
         return true;
     }
-    int shootIx = (p - pre) / 3;
+    int shootIx = (p - pre) / FOREST_SHOOT_PIECES;
     if (shootIx >= c.S) return false;
-    int r = (p - pre) - shootIx * 3;
+    int k = (p - pre) - shootIx * FOREST_SHOOT_PIECES + e;
     int b = shootIx % c.NB;
     s = forestSpray(c, b);
     sh = forestShoot(c, s, shootIx, shootIx / c.NB);
     kind = 2;
-    float x = sh.len * (float(r) + end) / 3.0;
-    vec3 T, N;
-    vec3 q = forestShootArc(sh.u, sh.h, s.rho, x, T, N);
-    o.p = s.lc + forestShootFlat(q);
-    o.t = normalize(forestShootFlat(T));
-    o.radius = Lf * mix(0.014, 0.008, x / max(sh.len, 1e-4));
-    o.along = x;
+    o.p = forestShootJoint(c, s, sh, k, o.t);
+    o.frac = float(k) / float(FOREST_SHOOT_PIECES);
+    o.radius = Lf * mix(FOREST_SHOOT_RADIUS.x, FOREST_SHOOT_RADIUS.y, o.frac);
+    o.along = sh.len * o.frac;
     return true;
 }
 

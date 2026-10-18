@@ -64,8 +64,8 @@ constexpr int kFarSides = 5;
 constexpr uint32_t kTwigPiecesPerEntry = 64;
 constexpr uint32_t kVertsPerTwig = 6;
 constexpr float kTwigPixels = 0.15f;
-constexpr float kTwigStemRadius = 0.045f;   // leaf lengths (forestTwigEnd's thickest stem)
-constexpr float kTwigShootRadius = 0.014f;  // a shoot's at its base
+constexpr float kTwigStemRadius = 0.04f;    // leaf lengths (forestPipe: a lobe stem's start)
+constexpr float kTwigShootRadius = 0.011f;  // a shoot's at its base
 constexpr float kTwigWidening[2] = {0.95f, 1.3f};
 
 // The shapes a forest draws, each one draw, in this order: a needle or

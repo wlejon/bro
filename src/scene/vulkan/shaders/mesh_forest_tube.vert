@@ -6,13 +6,16 @@
 // the wind field. shadow_forest_tube.vert is the caster.
 //
 // The TWIG build (push.extra.z 3, the drawer's Twigs): an entry is a run of
-// one clump's twig pieces (scene_forest_shoot.glsl: its lobe stems, its
-// sprays' twigs and axes, its shoots), `param` the clump, each piece a
-// ribbon facing the eye, a pixel wide at the least: thinner than that its
-// cover (mesh.frag's sample mask, through outColor.w) is its width in
-// pixels, so a twig thins away with distance rather than popping. Its
-// points take the wood's pose and its spray's and shoot's bending exactly
-// as the leaves on it do. Colour only.
+// one clump's twig pieces (scene_forest_shoot.glsl: its lobe stems and
+// limbs, its sprays' twigs and axes, its shoots), `param` the clump, each
+// piece a ribbon facing the eye at the wood's own radius (capped at
+// FOREST_TWIG_MAX_RADIUS), a pixel wide at the least: thinner than that its
+// cover (mesh.frag's sample mask, through outUV.x) is its width in pixels,
+// so a twig thins away with distance rather than popping, and it thins away
+// close to the eye too. Its points take the wood's pose and its spray's and
+// shoot's bending exactly as the leaves on it do. Shaded as bark
+// (mesh.frag's barkSurface, the specimen's bark word in outUV.y), as deep
+// in the crown as the leaves where it is.
 
 layout(location = 0) out vec3 outWorldPos;
 layout(location = 1) out vec3 outNormal;
@@ -36,6 +39,12 @@ layout(location = 7) out vec4 outVegShade;
 // A twig under this many pixels across is not drawn; to a pixel it fades
 // in (its cover its width).
 const vec2 FOREST_TWIG_PX = vec2(0.15, 0.4);
+// A twig's radius at most (m): thicker wood is the tree's own branches.
+const float FOREST_TWIG_MAX_RADIUS = 0.007;
+// A twig thins away as the eye nears it (gone by .x, whole from .y m), as
+// the leaves on it shrink away (VEG_NEAR_SHRINK): no rods across the eye
+// passing through a crown.
+const vec2 FOREST_TWIG_NEAR = vec2(0.2, 0.9);
 
 void twigMain(ForestEntry e) {
     int piece = e.first + gl_VertexIndex / 6;
@@ -79,11 +88,16 @@ void twigMain(ForestEntry e) {
         pos += mat3(model) * off;
     }
 
-    // A ribbon across the eye's line, a pixel wide at the least.
+    // A ribbon across the eye's line, a pixel wide at the least. Its radius
+    // is wood's, whatever the leaf: never past FOREST_TWIG_MAX_RADIUS. It
+    // thins away as the eye comes through the crown, as the leaves on it
+    // shrink away.
     float dist = max(length(pos), 1e-3);
     bool ortho = abs(camera.proj[3][3]) > 0.5;
     float pxPerM = abs(camera.proj[1][1]) * camera.viewport.y * 0.5 / (ortho ? 1.0 : dist);
-    float rw = o.radius * vegScale(model);
+    float sc = vegScale(model);
+    float near = ortho ? 1.0 : smoothstep(FOREST_TWIG_NEAR.x, FOREST_TWIG_NEAR.y, dist);
+    float rw = min(o.radius * sc, FOREST_TWIG_MAX_RADIUS) * near;
     float widthPx = 2.0 * rw * pxPerM;
     // Left out whole (every vertex of a piece decides alike, or a triangle
     // would stretch to the culled corner): by its start's radius at the
@@ -100,7 +114,7 @@ void twigMain(ForestEntry e) {
         }
         float dc = max(length((model * vec4(c.C, 1.0)).xyz), 1e-3);
         float pxc = abs(camera.proj[1][1]) * camera.viewport.y * 0.5 / (ortho ? 1.0 : dc);
-        if (2.0 * r0 * vegScale(model) * pxc < FOREST_TWIG_PX.x) {
+        if (2.0 * min(r0 * sc, FOREST_TWIG_MAX_RADIUS) * pxc < FOREST_TWIG_PX.x) {
             gl_Position = FOREST_CULLED;
             return;
         }
@@ -113,18 +127,32 @@ void twigMain(ForestEntry e) {
     float halfWidth = max(rw, 0.5 / pxPerM);
     pos += across * (sideSign * halfWidth);
 
+    // (Close to the eye a thinned twig is still a pixel or so across: it
+    // fades with its thinning too, not a wire.)
     float cover = clamp(widthPx, 0.0, 1.0) * smoothstep(FOREST_TWIG_PX.x, FOREST_TWIG_PX.y, widthPx) *
-                  clamp(e.keepEnd, 0.0, 1.0);
+                  clamp(e.keepEnd, 0.0, 1.0) * near * near;
     // Round across: its normal leans out to the side it is on.
     vec3 N = normalize(across * (0.8 * sideSign) + toEye * 0.6);
-    // This year's shoots are still green-brown; the older wood is bark.
-    vec3 green = kind == 2 ? vec3(0.78, 0.95, 0.55) : vec3(1.0);
+    // Bark (mesh.frag's barkSurface, as the tubes'): this year's shoots
+    // still green-brown toward their tips, the older wood the tree's bark
+    // (a birch's pale bark dark red-brown on wood this thin). Lit as the
+    // tubes are, darkening toward the ground, and as deep in the crown as
+    // the leaves where it is.
+    vec3 green = kind == 2 ? mix(vec3(1.0), vec3(0.8, 0.95, 0.6), 0.3 + 0.7 * o.frac) : vec3(1.0);
     vec4 shade = vegCrownShade(model, v1, anchor);
-    outVegShade = vec4(0.0, 0.0, 0.0, -shade.w);
+    float h = clamp((anchor.y - plant.root.y) / plant.height, 0.0, 1.0);
+    outVegShade = vec4(0.0, 0.0, 0.0, mix(0.6, 1.0, h) * (shade.w < 0.0 ? -shade.w : 1.0));
     outInstColor = vec4(vegetationTint(model, v0, v1, v2, v3, false) * forestSpecimenTint(specimen, true) * green,
                         e.fade);
-    outColor = vec4(0.0, 0.0, 0.0, cover);
-    outUV = vec2(0.0, -1.0);
+    // Where on the wood (scene_bark.glsl's coordinates: round the stem,
+    // along it, its radius), each piece its own stretch of bark; the cover
+    // and the bark word in the UV (mesh.frag's twig, inUV.y under -1.5).
+    float ang = sideSign * 1.3 + PROC_TWO_PI * fract(float(piece) * 0.618034 + float(clump) * 0.1031);
+    float alongM = (float(piece) * 0.37 + o.frac * 0.2) * c.Lf * sc;
+    outColor = vec4(vec2(cos(ang), sin(ang)) * rw, alongM, rw);
+    int segStart = int(floatBitsToUint(procedural.records[forestSpecimenRecord(specimen)].x));
+    float word = procedural.records[forestSegmentRecord(segStart) + 5].w;
+    outUV = vec2(cover, -2.0 - max(word, 0.0));
     outWorldPos = pos;
     gl_Position = camera.viewProj * vec4(pos, 1.0);
     outNormal = N;
