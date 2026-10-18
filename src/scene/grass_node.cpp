@@ -69,7 +69,10 @@ struct RingSpec {
 constexpr RingSpec kRingSpec[GrassNode::kRings] = {
     {0.10f, 7.0f, 14, 4, 0.5f, 0.5f, 1.0f, 0.5f, 0.5f},       // tufts of fine blades
     {0.16f, 20.0f, 8, 3, 0.5f, 0.35f, 4.0f, 0.5f, 0.5f},      // smaller tufts
-    {0.30f, 55.0f, 5, 2, 0.6f, 0.0f, 10.0f, 1.0f, 1.0f},      // blades over the cell
+    // Blades over the cell, as much cover (blades x width a square metre) as
+    // the ring inside keeps at its outer edge, there thinned to half: half
+    // as many again, twice as wide.
+    {0.30f, 55.0f, 6, 2, 0.6f, 0.0f, 19.0f, 1.0f, 1.0f},
     {0.75f, 150.0f, 5, 2, 0.6f, 0.0f, 25.0f, 1.0f, 1.0f},
 };
 constexpr float kRangeRef = 150.0f;
@@ -137,6 +140,9 @@ void GrassNode::setParams(const Params& p) {
     params_.bulk = std::clamp(p.bulk, 0.0f, 1.0f);
     params_.variety = std::clamp(p.variety, 0.0f, 1.0f);
     params_.wind = std::max(p.wind, 0.0f);
+    params_.tufts = std::clamp(p.tufts, 0.0f, 1.0f);
+    params_.flowering = std::clamp(p.flowering, 0.0f, 1.0f);
+    params_.dead = std::clamp(p.dead, 0.0f, 1.0f);
     bumpChangeGeneration();
 }
 
@@ -144,7 +150,8 @@ void GrassNode::paramsToArray(float (&o)[kParamCount]) const {
     const Params& p = params_;
     const float v[kParamCount] = {p.height,  p.width,  p.density,   p.range,     p.minNormalY, p.lush[0],
                                   p.lush[1], p.lush[2], p.dry[0],   p.dry[1],    p.dry[2],     p.bulk,
-                                  p.clumpFreq, p.rootShade, p.sheen, p.variety, p.wind};
+                                  p.clumpFreq, p.rootShade, p.sheen, p.variety, p.wind,
+                                  p.tufts, p.flowering, p.dead};
     std::copy(std::begin(v), std::end(v), o);
 }
 
@@ -168,6 +175,9 @@ void GrassNode::paramsFromArray(const double* v, size_t n) {
     p.sheen = a[14];
     p.variety = a[15];
     p.wind = a[16];
+    p.tufts = a[17];
+    p.flowering = a[18];
+    p.dead = a[19];
     setParams(p);
 }
 
@@ -697,9 +707,16 @@ void GrassNode::stampDisc(float x, float z, float radius, float vx, float vz, fl
                 tr = c[2] * trampleRelease(age);
             }
             const float nx = d > 1e-3f ? ddx / d : 0.0f, nz = d > 1e-3f ? ddz / d : 0.0f;
-            const float s = k * strength * dt * 12.0f;
-            bx += (nx * 0.7f + vx * 0.25f) * s;
-            bz += (nz * 0.7f + vz * 0.25f) * s;
+            // Built up over about a quarter second at the disc's middle (a
+            // tall herb or culm swung over in a tenth reads as a jump).
+            const float s = k * strength * dt * 7.0f;
+            // Out from the mover at the disc's edge, along its path under its
+            // body: the way out from its middle swings round as it passes
+            // over a cell, and a flattened blade (or herb) laid that way would
+            // swing across with it.
+            const float side = 0.7f * (1.0f - 0.7f * k), along = 0.25f + 0.5f * k;
+            bx += (nx * side + vx * along) * s;
+            bz += (nz * side + vz * along) * s;
             const float bl = std::sqrt(bx * bx + bz * bz);
             if (bl > 1.0f) {
                 bx /= bl;
@@ -707,7 +724,8 @@ void GrassNode::stampDisc(float x, float z, float radius, float vx, float vz, fl
             }
             c[0] = bx;
             c[1] = bz;
-            c[2] = std::max(tr, k * trample);
+            // Flattened over a quarter second at least, not at a stroke.
+            c[2] = std::max(tr, std::min(k * trample, tr + dt * 4.0f));
             c[3] = stampTime;
         }
     }

@@ -58,8 +58,12 @@ BRO_SCENE_SHADER(MeshVegIndirectFrag,      "mesh_veg_indirect.frag",      "mesh.
 BRO_SCENE_SHADER(ShadowVegVert,            "shadow_veg.vert",             "shadow.vert",                 "vert", "SCENE_VEGETATION")
 BRO_SCENE_SHADER(ShadowInstancedVegVert,   "shadow_instanced_veg.vert",   "shadow_instanced.vert",       "vert", "SCENE_VEGETATION")
 BRO_SCENE_SHADER(ShadowScatterVert,        "shadow_scatter.vert",         "shadow_scatter.vert",         "vert", "")
-// Grass blades (scene_grass.glsl), drawn with MeshVegFrag.
+// Grass blades (scene_grass.glsl), drawn with mesh.frag's SCENE_GRASS build
+// (a leaf's fold, a flowering culm's head cut per pixel, the light through
+// a blade), so the vegetation build carries none of their work.
 BRO_SCENE_SHADER(MeshGrassVert,            "mesh_grass.vert",             "mesh_grass.vert",             "vert", "")
+BRO_SCENE_SHADER(MeshGrassFrag,            "mesh_grass.frag",             "mesh.frag",                   "frag", "SCENE_VEGETATION SCENE_GRASS")
+BRO_SCENE_SHADER(MeshGrassIndirectFrag,    "mesh_grass_indirect.frag",    "mesh.frag",                   "frag", "SCENE_VEGETATION SCENE_GRASS SCENE_INDIRECT_OUTPUT")
 BRO_SCENE_SHADER(ShadowGrassVert,          "shadow_grass.vert",           "shadow_grass.vert",           "vert", "")
 // The forest node's tiers (scene_forest.glsl), drawn with MeshVegFrag; the
 // sprite casters cut out by ShadowForestFrag.

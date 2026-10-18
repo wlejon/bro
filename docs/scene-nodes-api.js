@@ -385,8 +385,15 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  * Grass: a meadow of procedural blades over a ground, from
  * `scene.createGrass(opts)`. No blade carries data: four rings of cells
  * around the camera, each cell an instance of several blades. Near (to 7 m at
- * the default range) a cell is a tuft of 14 fine blades (4 mm) fanning from
- * one root, about 1400 blades a square metre; further out, fewer and wider
+ * the default range) a cell holds 14 fine blades (4 mm), about 1400 a square
+ * metre, growing from crowns in bunches that fan out and, where `tufts` is
+ * high, gather into tussocks. Each blade tapers to a fine point, arches and
+ * droops by its length and age (young leaves upright, old ones bowed, a few
+ * lodged flat), folds along its midrib and twists a little; some are dead
+ * brown leaves low at the base (`dead`) and some are flowering culms, a bare
+ * stem carrying a panicle or a spike of spikelets well above the leaves
+ * (`flowering`). Sunlit blades seen against the light glow through.
+ * Further out, fewer and wider
  * blades over bigger cells, so blade count x width (the cover) stays about
  * level while the work falls. Within a ring the far half keeps fewer blades,
  * widened to match the next ring, and rings cross-fade through a dithered
@@ -442,7 +449,7 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  * @property {number} [height=0.4] - mean blade height (m); clumps run
  *   from about half to one and a half times it, and lush tall patches higher.
  * @property {number} [width=0.004] - the near blades' width (m); the outer
- *   rings' are 4, 10 and 25 times it, and every blade widens with distance
+ *   rings' are 4, 19 and 25 times it, and every blade widens with distance
  *   (never under about two thirds of a pixel).
  * @property {number} [bladeDensity=1] - blades per area, x the default
  *   (a 14-blade tuft per 10 cm square near the camera, before the clumps
@@ -461,6 +468,12 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  * @property {number} [sheen=0.35] - how much a gust lightens the blades it bends.
  * @property {number} [variety=1] - large-scale height variation, 0..1.
  * @property {number} [wind=1] - response to the wind, x.
+ * @property {number} [tufts=0.35] - 0 an even sward .. 1 bunch grass: how
+ *   far blades gather into tussocks with bare ground between.
+ * @property {number} [flowering=0.08] - 0..1, how many flowering culms
+ *   (about 150 a square metre at 1, more where the grass is lush and tall).
+ * @property {number} [dead=0.08] - 0..1, the share of dead brown leaves at
+ *   the base (more where it is dry).
  * @property {Array<number>|string} [color] - the node colour, multiplied in (default white).
  * @property {number} [roughness=0.7]
  * @property {boolean} [castsShadow=false] - the near ring's blades cast, a
@@ -474,7 +487,8 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  * how hard blades lean away and along its motion; they spring back as a
  * damped spring, 0.9 Hz, swinging once a little past upright), `trample`
  * (0..1, default 0: how flat it leaves the grass it crosses, which rises
- * again over 1 to 3 s, a faint 6% of it over a few seconds more) and
+ * again over 1 to 3 s, a faint 1% of it a second or two more; under
+ * its body it lays the grass along its path, at its edge out to the sides) and
  * `height` (m, default 1.8). The grass's herbs part with its blades. A
  * mover also parts the scene's swaying plants (trees, shrubs, a forest's
  * low foliage) within

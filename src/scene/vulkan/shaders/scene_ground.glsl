@@ -176,6 +176,12 @@ void groundSurface(vec3 rel, vec4 vdata, inout vec3 color, inout float roughness
     vec3 green = grass.lush.rgb;
     vec3 dryc = grass.dry.rgb;
     vec3 sward = mix(dryc, green, clamp(lush * 1.3 - 0.15 + clump * 0.2, 0.0, 1.0)) * 0.95;
+    // With its dead leaves and its flowering heads, as the blades have them
+    // there (scene_grass.glsl's grassKinds).
+    float tallN = smoothstep(0.35, 0.8, sceneWindNoise(xz * 0.045 + 3.0) * 0.5 + 0.5);
+    vec2 kinds = grassKinds(xz, lush, tallN);
+    sward = mix(sward, grassDeadColor(0.5), kinds.y * 0.45);
+    sward = mix(sward, grassHeadColor(clamp(1.1 - lush, 0.0, 1.0)), min(kinds.x * 0.35, 0.3));
     // How much of the ground the blades cover, seen from above.
     float cover = clamp(density * (0.35 + 0.9 * clump) * 1.4, 0.0, 1.0);
     // Near the eye the ground shows between the blades: their dark roots and

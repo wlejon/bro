@@ -148,7 +148,9 @@ bool SceneMeshDrawer::setup(SceneGpu& gpu) {
     vsHerb_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshHerbVert);
     fsHerb_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshHerbFrag);
     fsHerbIndirect_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshHerbIndirectFrag);
-    if (!vsLeafInline_ || !vsHerb_ || !fsHerb_ || !fsHerbIndirect_ ||std::find(std::begin(vs_), std::end(vs_), VK_NULL_HANDLE) != std::end(vs_) || !fs_ || !fsIndirect_ ||
+    fsGrass_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshGrassFrag);
+    fsGrassIndirect_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshGrassIndirectFrag);
+    if (!vsLeafInline_ || !vsHerb_ || !fsHerb_ || !fsHerbIndirect_ || !fsGrass_ || !fsGrassIndirect_ || std::find(std::begin(vs_), std::end(vs_), VK_NULL_HANDLE) != std::end(vs_) || !fs_ || !fsIndirect_ ||
         !fsVeg_ || !fsVegIndirect_ || !fsSprite_ || !fsSpriteIndirect_ || !fsCluster_ || !fsClusterIndirect_ ||
         !fsBark_ || !fsBarkIndirect_ || !fsGround_ || !fsGroundIndirect_ || !fsSpray_ || !fsSprayIndirect_ ||
         !vsBloom_ || !fsBloom_ || !fsBloomIndirect_) {
@@ -223,8 +225,10 @@ void SceneMeshDrawer::cleanup(SceneGpu& gpu) {
     SceneVkShaderModule::destroy(device_, vsHerb_);
     SceneVkShaderModule::destroy(device_, fsHerb_);
     SceneVkShaderModule::destroy(device_, fsHerbIndirect_);
+    SceneVkShaderModule::destroy(device_, fsGrass_);
+    SceneVkShaderModule::destroy(device_, fsGrassIndirect_);
     SceneVkShaderModule::destroy(device_, vsLeafInline_);
-    vsLeafInline_ = vsHerb_ = fsHerb_ = fsHerbIndirect_ = VK_NULL_HANDLE;
+    vsLeafInline_ = vsHerb_ = fsHerb_ = fsHerbIndirect_ = fsGrass_ = fsGrassIndirect_ = VK_NULL_HANDLE;
     fsSpray_ = fsSprayIndirect_ = vsBloom_ = fsBloom_ = fsBloomIndirect_ = VK_NULL_HANDLE;
     fs_ = fsIndirect_ = fsVeg_ = fsVegIndirect_ = fsSprite_ = fsSpriteIndirect_ = VK_NULL_HANDLE;
     fsCluster_ = fsClusterIndirect_ = fsBark_ = fsBarkIndirect_ = fsGround_ = fsGroundIndirect_ = VK_NULL_HANDLE;
@@ -343,6 +347,7 @@ VkPipeline SceneMeshDrawer::builtinPipeline(const MeshDraw& draw, const TargetFo
         if (draw.kind == MeshKind::Tube || draw.kind == MeshKind::ForestTube)
             fs = target.colorCount > 1 ? fsBarkIndirect_ : fsBark_;
         if (ground) fs = target.colorCount > 1 ? fsGroundIndirect_ : fsGround_;
+        if (draw.kind == MeshKind::Grass) fs = target.colorCount > 1 ? fsGrassIndirect_ : fsGrass_;
         return buildPipeline(leafInline ? vsLeafInline_ : vs_[static_cast<int>(draw.kind)], fs, draw.kind, rasterBits,
                              target);
     });

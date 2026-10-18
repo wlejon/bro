@@ -191,9 +191,13 @@ bool grassImages(SceneGpuResources& res, GrassNode& node, GrassImages& out) {
 /// the look, the influence map).
 void fillShared(const GrassNode& node, GrassUBO& u) {
     const GrassNode::Params& p = node.params();
+    u.cells[0] = p.tufts;
+    u.cells[1] = p.flowering;
+    u.cells[2] = p.dead;
     u.field[0] = node.fieldX0();
     u.field[1] = node.fieldZ0();
     u.field[2] = node.fieldCell();
+    u.field[3] = p.width;   // over which a ring's width is how many blades its blade stands for
     u.fieldSize[0] = static_cast<float>(node.fieldCols());
     u.fieldSize[1] = static_cast<float>(node.fieldRows());
     u.fieldSize[2] = 1.0f / static_cast<float>(node.fieldCols());
@@ -306,6 +310,9 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
     if (frame.ssr) flags |= mesh_flags::kReflectance;
     if (node.receivesShadow()) flags |= mesh_flags::kReceivesShadow;
     flags |= mesh_flags::kTwoSided;
+    // A culm's head is cut per pixel: under 4x MSAA it keeps its share of a
+    // pixel's samples rather than all or none.
+    const uint32_t msaa = frame.gpu.targets.samples() == VK_SAMPLE_COUNT_4_BIT ? mesh_flags::kForestMsaa : 0u;
 
     // The shadow tiles the near ring casts into: a directional light's first
     // cascade, every tile of any other light.
@@ -337,10 +344,13 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
         // tallest blade, padded by a blade's lean and its spread) is in the
         // view. Every vertex of an instance runs whether its blades are drawn
         // or not, so cells the shader would only cull are not issued at all.
-        // A blade stands at most about 3.9 x the mean height times the
-        // field's multiplier (clump 1.4, tuft 1.15, blade 1.4, tall patch 1.7).
-        const float reach = ring.cell + ring.spread + p.height * 1.5f;
-        const float top = p.height * 4.0f;
+        // A flowering culm stands at most about 4.8 x the mean height times
+        // the field's multiplier (clump 1.4, tuft 1.15, tall patch 1.7, culm
+        // 1.75), a leaf 3.6; a cell's roots gather to its tussock up to
+        // kGrassTussockReach off (scene_grass.glsl's grassTussock).
+        constexpr float kGrassTussockReach = 0.35f;
+        const float reach = ring.cell + ring.spread + p.height * 1.5f + kGrassTussockReach;
+        const float top = p.height * 4.8f;
         const float ex = view.eye.x, ez = view.eye.z;
         const float rIn = std::max(ring.inner - ring.bandIn - reach, 0.0f), rOut = ring.outer + reach;
         const auto keep = [&](float x0, float z0, float x1, float z1) {
@@ -385,7 +395,7 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
         draw.push.baseColor[3] = 1.0f;
         draw.push.pbrParams[0] = node.metallic();
         draw.push.pbrParams[1] = node.roughness();
-        draw.push.pbrParams[3] = static_cast<float>(flags);
+        draw.push.pbrParams[3] = static_cast<float>(flags | msaa);
         draw.push.extra[1] = node.subsurface();
         draw.push.extra[3] = 1.0f + 256.0f;   // no atlas
         draw.twoSided = true;
@@ -419,7 +429,6 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
     // shadow (yet): they lie in the grass's and the trees'.
     for (int r = 0; r < GrassNode::kHerbRings; ++r) node.setDrawnHerbs(r, 0);
     if (!node.hasHerbs()) return;
-    const uint32_t msaa = frame.gpu.targets.samples() == VK_SAMPLE_COUNT_4_BIT ? mesh_flags::kForestMsaa : 0u;
     const float herbTop = node.herbHeight() * 1.4f + 0.2f;
     for (int r = 0; r < GrassNode::kHerbRings; ++r) {
         const GrassNode::HerbRing ring = node.herbRing(r);

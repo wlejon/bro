@@ -17,6 +17,7 @@
 #include "scene_forest_spray.glsl.src.h"
 #include "scene_forest_bloom.glsl.src.h"
 #include "scene_grass.glsl.src.h"
+#include "scene_grass_surface.glsl.src.h"
 #include "scene_ground.glsl.src.h"
 #include "scene_herb_mix.glsl.src.h"
 #include "scene_herb_surface.glsl.src.h"
@@ -106,6 +107,7 @@ const char* embeddedInclude(const std::string& name) {
         {"scene_forest_spray.glsl", kVkSceneForestSpraySrc},
         {"scene_forest_bloom.glsl", kVkSceneForestBloomSrc},
         {"scene_grass.glsl", kVkSceneGrassSrc},
+        {"scene_grass_surface.glsl", kVkSceneGrassSurfaceSrc},
         {"scene_ground.glsl", kVkSceneGroundSrc},
         {"scene_herb_mix.glsl", kVkSceneHerbMixSrc},
         {"scene_herb_surface.glsl", kVkSceneHerbSurfaceSrc},

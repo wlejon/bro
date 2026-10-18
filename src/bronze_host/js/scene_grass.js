@@ -25,9 +25,9 @@
     const PARAMS = [
         ['height', 1], ['width', 1], ['density', 1], ['range', 1], ['minNormalY', 1],
         ['lush', 3], ['dryColor', 3], ['bulk', 1], ['clump', 1], ['rootShade', 1],
-        ['sheen', 1], ['variety', 1], ['wind', 1],
+        ['sheen', 1], ['variety', 1], ['wind', 1], ['tufts', 1], ['flowering', 1], ['dead', 1],
     ];
-    const PARAM_COUNT = 17;
+    const PARAM_COUNT = 20;
 
     function parseColor(c) {
         if (typeof c === 'string' && c[0] === '#') {

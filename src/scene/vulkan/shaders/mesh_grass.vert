@@ -1,9 +1,10 @@
 #version 450
 // Grass blades (scene_grass.glsl): one instance per cell of the draw's ring
 // rectangle, each copy of the blade in the ring mesh one of the cell's
-// blades, bent into place by the wind and the movers. Drawn
-// with mesh.frag's vegetation shading: the blade's normal leans toward the
-// ground's, the sun glows through it from behind, and the root is in shade.
+// blades, bent into place by the wind and the movers. Drawn with mesh.frag's
+// SCENE_GRASS build: a leaf folded along its midrib near the eye, its normal
+// leaning toward the ground's further off, the sun glowing through it from
+// behind, the root in shade, a culm's head cut per pixel.
 // shadow_grass.vert is the caster.
 
 layout(location = 0) in vec3 inPos;
@@ -37,8 +38,10 @@ void main() {
     outNormal = b.normal;
     outTangent = b.side;
     outBitangent = cross(b.normal, b.side);
-    outUV = inUV;
-    outColor = vec4(1.0);
+    // Across (in the blade's width) and along it; and what it is (a leaf, a
+    // culm and its head, a dead leaf), for mesh.frag's SCENE_GRASS build.
+    outUV = b.uv;
+    outColor = b.info;
     outInstColor = vec4(b.color, 0.0);
     // A blade: its ao, marked (w <= -2) so the fragment stage takes it for a
     // translucent blade with no paler underside; and the ground's normal.

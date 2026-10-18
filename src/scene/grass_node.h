@@ -64,8 +64,13 @@ public:
         float sheen = 0.35f;        // a gust's lift of the bent blades
         float variety = 1.0f;       // large-scale height variation, 0 .. 1
         float wind = 1.0f;          // wind response, x
+        // How the grass grows (scene_grass.glsl), each varying from place to
+        // place about the value by shared noise and the field's dryness:
+        float tufts = 0.35f;        // 0 a sward of many small tufts .. 1 bunch grass in tussocks with bare ground between
+        float flowering = 0.08f;    // the share of tufts sending up a flowering culm (a seed head), more where lush and tall
+        float dead = 0.08f;         // the share of a tuft's leaves that are dead (straw at its foot), more where dry
     };
-    static constexpr int kParamCount = 17;
+    static constexpr int kParamCount = 20;
     void setParams(const Params& p);
     const Params& params() const { return params_; }
     /// The params as the flat list the bindings pass (setParams' order).
@@ -193,12 +198,16 @@ public:
     // ratio kBendSpringDamping: they swing back past upright once, a little,
     // and settle within about 1.5 s. A trampled lane rises again critically
     // damped (no sudden start): most of it over kTrampleRelax s, a faint
-    // residue (kTrampleResidue of it) over kTrampleResidueRelax s.
+    // residue (kTrampleResidue of it) over kTrampleResidueRelax s. (A blade
+    // shows a trample as a lean from its root, and a lean of a few hundredths
+    // of a radian moves a fine blade's tip by its width: 6% over 4 s left a
+    // third of the lane's change 8 s on, 0.6 s with 2% over 2.5 s a fifth.
+    // At 0.35 s it is 90% risen by 1.4 s and gone by 3 s.)
     static constexpr float kBendSpringHz = 0.9f;
     static constexpr float kBendSpringDamping = 0.3f;
-    static constexpr float kTrampleRelax = 0.7f;
-    static constexpr float kTrampleResidue = 0.06f;
-    static constexpr float kTrampleResidueRelax = 4.0f;
+    static constexpr float kTrampleRelax = 0.35f;
+    static constexpr float kTrampleResidue = 0.01f;
+    static constexpr float kTrampleResidueRelax = 2.0f;
     /// The share of a stamped bend left `age` s after its stamp (1 at 0,
     /// level at 0, overshooting below 0 once).
     static float bendRelease(float age);

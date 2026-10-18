@@ -525,21 +525,26 @@ HerbSurface herbBloomSurface(int sp, vec2 uv, vec4 size, float seed, vec2 down) 
         // Its outline, soft over a pixel (the ellipsoid's edge, in q).
         float sil = clamp(0.5 + 0.5 * disc / max(fwidth(disc), 1e-5), 0.0, 1.0);
         if (hgt < hcut - 1e-3) sil = 0.0;
-        // The florets over its top: a grid across it (x, w), each a small
+        // The florets over its top: rows across it (x, w), every other row
+        // set half a floret over and each floret jittered in its place, so
+        // they crowd as florets do rather than lie on a grid; each a small
         // round head of five rays round a cream eye.
         float cells = 11.0;
         vec2 g = (vec2(p.x, w) / R + 1.0) * 0.5 * cells;
+        g.x += 0.5 * mod(floor(g.y), 2.0);
         vec2 cell = floor(g);
         vec2 hh = herbHash2(cell + seed * 11.0);
-        vec2 c = cell + 0.3 + 0.4 * hh;
+        vec2 c = cell + 0.22 + 0.56 * hh;
         vec2 dv = g - c;
         float fa = atan(dv.y, dv.x) + hh.x * 6.2831853;
-        float fr = 0.4 * (0.88 + 0.12 * cos(5.0 * fa));
-        // A floret's size on the card, against a pixel's (fq, in q).
+        float fr = (0.44 + 0.1 * hh.y) * (0.88 + 0.12 * cos(5.0 * fa));
+        // A floret's size on the card, against a pixel's (fq, in q). The
+        // pattern is gone by the time a floret is about two pixels across:
+        // finer, it only aliases into a lattice over the dome.
         float cellQ = 2.0 * R / cells;
         float fl = herbAA((fr - length(dv)) * cellQ, fq);
         float eye = 1.0 - smoothstep(0.1, 0.2, length(dv));
-        float show = 1.0 - smoothstep(0.35, 0.9, fq / cellQ);
+        float show = 1.0 - smoothstep(0.2, 0.5, fq / cellQ);
         // Between the florets, deep in the cluster: dark; at its rim only
         // the florets stand out against what lies behind.
         float rim = smoothstep(0.72, 0.95, rh);
@@ -558,14 +563,16 @@ HerbSurface herbBloomSurface(int sp, vec2 uv, vec4 size, float seed, vec2 down) 
         o.cover = max(sil * body, stalks * (1.0 - sil * body));
         vec3 shade = mix(herbRec(sp, 5).rgb * 0.8, r7.rgb * 0.35, 0.5);
         vec3 floret = mix(r7.rgb * (0.9 + 0.2 * hh.y), r8.rgb, eye * 0.8);
-        o.albedo = !top ? shade : mix(mix(r7.rgb * 0.8, shade, 0.5), floret, mix(0.75, fl, show));
+        // Unresolved, the dome is its florets' mean: mostly florets, a
+        // little of the shade between (the florets crowd it).
+        o.albedo = !top ? shade : mix(mix(r7.rgb * 0.8, shade, 0.4), floret, mix(0.85, fl, show));
         if (stalks > 0.5 && sil * body < 0.5) o.albedo = herbRec(sp, 5).rgb;
         // The dome's normal (the ellipsoid's gradient in the card's frame),
         // each floret a little dome of its own.
         vec3 gN = vec3(p.x / (R * R), w / (R * R) * cv + hgt / (Hd * Hd) * s, -w / (R * R) * s + hgt / (Hd * Hd) * cv);
         vec3 bump = vec3(dv * 0.6 * fl * show, 0.0);
         o.normal = top ? normalize(normalize(gN) + bump) : vec3(0.0, -0.6, 0.8);
-        o.ao = top ? mix(0.55, 1.0, smoothstep(hcut, Hd, hgt)) * mix(0.7, 1.0, mix(fl, 1.0, 1.0 - show)) : 0.45;
+        o.ao = top ? mix(0.6, 1.0, smoothstep(hcut, Hd, hgt)) * mix(0.75, 1.0, mix(fl, 1.0, 1.0 - show)) : 0.45;
         o.translucency = 0.3;
         return o;
     }

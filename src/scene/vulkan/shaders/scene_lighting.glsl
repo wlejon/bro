@@ -233,6 +233,10 @@ struct SceneSurface {
     bool twoSided;
     float subsurface;  // wrap-light translucency, two-sided surfaces only
     float translucency; // leaf light transport: the sun glowing through a leaf seen against it (0: none)
+    // A thin surface's own face toward the eye, which the light through it
+    // follows when its shading normal is another (a grass blade lit as the
+    // ground it covers); zero: the shading normal.
+    vec3 thinNormal;
     // Leaves placed in a sphere (a forest lobe, a crown's clump, or the lobe
     // a cluster of thinned leaves belongs to; scene_forest_mass.glsl):
     // its centre (camera-relative) and radius, w 0 for none, and the leaves'
@@ -362,7 +366,8 @@ vec3 sceneDirectLight(SceneSurface s) {
         // strongest looking toward the light, a warm yellow-green, and
         // shadowed by the leaves between it and the light.
         if (leafy) {
-            float through = smoothstep(-0.3, 0.4, 0.3 - NL);
+            float NLt = dot(s.thinNormal, s.thinNormal) > 0.25 ? dot(s.thinNormal, L) : NL;
+            float through = smoothstep(-0.3, 0.4, 0.3 - NLt);
             float back = pow(max(dot(-V, L), 0.0), 3.0);
             float amount = s.translucency * through * (0.1 + 0.9 * back);
             vec3 tcol = sqrt(max(s.baseColor, vec3(0.0))) * vec3(0.75, 0.95, 0.35) * 0.55;

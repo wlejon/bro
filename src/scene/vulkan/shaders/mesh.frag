@@ -108,6 +108,9 @@ layout(location = 1) out vec4 outIndirect;
 #include "scene_grass.glsl"
 #include "scene_ground.glsl"
 #endif
+#ifdef SCENE_GRASS
+#include "scene_grass_surface.glsl"
+#endif
 
 layout(set = 2, binding = 0) uniform sampler2D texAlbedo;
 layout(set = 2, binding = 1) uniform sampler2D texNormal;
@@ -476,6 +479,24 @@ void main() {
     }
     baseColor *= inInstColor.rgb;
     if (push.pbrParams.z > 0.0 && alpha < push.pbrParams.z) discard;
+#ifdef SCENE_GRASS
+    // A grass blade (scene_grass.glsl's GrassBlade): inColor what it is (its
+    // kind, under 0.5 a draw of its own; a culm's head, ripeness and stem
+    // share), inUV across it (in its width; a culm's in its head's) and
+    // along it. A culm's card is cut into its stem and its head.
+    float grassKind = floor(inColor.x + 1e-3);
+    bool grassCulm = grassKind > 0.5 && grassKind < 1.5;
+    bool grassDead = grassKind > 1.5;
+    float grassTrans = -1.0;
+    if (grassCulm) {
+        vec3 culmColor;
+        float cover = grassCulmSurface(inUV, inColor, baseColor, culmColor, grassTrans);
+        int mask = forestSampleMask(1.0, cover, (flags & MESH_FOREST_MSAA) != 0u, uint(fract(inColor.x) * 131072.0));
+        if (mask == 0) discard;
+        gl_SampleMask[0] = mask;
+        baseColor = culmColor;
+    }
+#endif
 #ifdef SCENE_HERB
     // A herb's colours are its species' (and the plant's own tone), its
     // veins paler and yellower than the blade between.
@@ -590,6 +611,15 @@ void main() {
             }
         }
 #endif
+#ifdef SCENE_GRASS
+        // Near, a live leaf is folded along its midrib: a shallow V, each
+        // half turned its own way, so one half takes the light the other
+        // misses. Gone by the distance a blade is a pixel or two.
+        if (!grassCulm && !grassDead) {
+            float near = 1.0 - smoothstep(3.0, 12.0, camDist);
+            if (near > 0.0) N = normalize(N - sign(inUV.x) * 0.55 * near * normalize(inTangent));
+        }
+#endif
         if (bulkWeight > 1e-4)
             N = normalize(N * (1.0 - bulkWeight * bulkKeep) + inVegShade.xyz * bulkKeep);
     }
@@ -633,6 +663,11 @@ void main() {
 #ifdef SCENE_HERB
     roughness = mix(roughness, 0.3, herb.gloss);
 #endif
+#ifdef SCENE_GRASS
+    // A live leaf's cuticle has a sheen (what a gust's wave across a meadow
+    // is lit by); a dead leaf and a head are matt.
+    roughness = grassDead || grassCulm ? 0.85 : mix(0.42, roughness, smoothstep(6.0, 40.0, camDist));
+#endif
 #ifdef SCENE_BARK
     // A plant's wood (scene_bark.glsl): inColor where on the stem, inUV its
     // height over the root and the bark word (negative: not a plant's).
@@ -675,6 +710,15 @@ void main() {
 #ifdef SCENE_HERB
     if (herb.translucency >= 0.0) s.translucency = herb.translucency;
     else s.translucency *= 1.0 - 0.5 * herb.gloss;
+#endif
+    s.thinNormal = vec3(0.0);
+#ifdef SCENE_GRASS
+    // A blade is thin: the light comes through it by its own face, not by
+    // the ground's normal it is lit through further off (which faces a high
+    // sun and would never let it glow). A dead leaf lets less through.
+    s.thinNormal = dot(geomN, -worldPos) >= 0.0 ? geomN : -geomN;
+    s.translucency = min(s.translucency * (grassDead ? 0.5 : 1.35), 1.0);
+    if (grassTrans >= 0.0) s.translucency = grassTrans * (1.0 - vegFade / 15.0);
 #endif
     s.leafSphere = vec4(0.0);
     s.leafDensity = 0.0;

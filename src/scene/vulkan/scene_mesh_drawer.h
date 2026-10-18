@@ -295,6 +295,8 @@ private:
     VkShaderModule vsHerb_ = VK_NULL_HANDLE;           // a grass node's herbs: mesh_herb.vert
     VkShaderModule fsHerb_ = VK_NULL_HANDLE;           // and mesh.frag's SCENE_HERB
     VkShaderModule fsHerbIndirect_ = VK_NULL_HANDLE;
+    VkShaderModule fsGrass_ = VK_NULL_HANDLE;          // grass blades: mesh.frag's SCENE_GRASS build
+    VkShaderModule fsGrassIndirect_ = VK_NULL_HANDLE;
     VkShaderModule fsBark_ = VK_NULL_HANDLE;          // Tube, ForestTube: mesh.frag's SCENE_BARK build
     VkShaderModule fsBarkIndirect_ = VK_NULL_HANDLE;
     VkShaderModule fsGround_ = VK_NULL_HANDLE;         // turf: mesh.frag's SCENE_GROUND build
