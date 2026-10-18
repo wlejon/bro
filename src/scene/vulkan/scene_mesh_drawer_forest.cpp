@@ -609,21 +609,33 @@ void SceneMeshDrawer::prepareForest(SceneFrame& frame, ForestNode& node, std::ve
 void SceneMeshDrawer::settleDetail(ForestDetail& d, const SceneFrame& frame, float budget, float shadowBudget,
                                    float& detail, float& shadowDetail) {
     // A jump of the eye (a cut, a teleport, the first frame) or a new
-    // budget takes the fit as it is. Otherwise a coarser fit (over budget) is caught up 6% a
-    // frame, and a finer one waits until it is 4% finer than what is drawn,
-    // then comes 2% a frame: each frame's fit, quantised by its search and
-    // moving with the camera, re-thinned the crowns a little every frame.
+    // budget takes the fit as it is. Otherwise the detail moves toward the
+    // fit 2% a 30th of a second, a finer fit only once it is 4% finer than
+    // what is drawn: each frame's fit, quantised by its search and moving
+    // with the camera, re-thinned the crowns a little every frame. A step is
+    // a share of the trees near a hand-over (leaves to cards, ±6% of
+    // widening) switching at once, so it stays small: at 6% a 30th (or a
+    // quarter of the gap a 30th) a dolly out through the card distances
+    // switched half a nearby crown to cards in one frame. The rates go by
+    // the scene's clock, not by renders: a frame drawn several times moved
+    // it as many steps (20% at once). With the clock still (paused) a moving
+    // eye settles at 60 Hz.
     const bromath::Vec3& eye = frame.view.eye;
     const float dx = eye.x - d.eye[0], dy = eye.y - d.eye[1], dz = eye.z - d.eye[2];
-    const bool snap = d.detail <= 0.0f || dx * dx + dy * dy + dz * dz > 25.0f || budget != d.budget ||
-                      shadowBudget != d.shadowBudget;
+    const float moved = dx * dx + dy * dy + dz * dz;
+    const bool snap = d.detail <= 0.0f || moved > 25.0f || budget != d.budget || shadowBudget != d.shadowBudget;
+    const float now = frame.graph.windTime();
+    float dt = std::clamp(now - d.time, 0.0f, 0.1f);
+    if (dt <= 0.0f && moved > 1e-6f) dt = 1.0f / 60.0f;
+    d.time = now;
     d.eye[0] = eye.x; d.eye[1] = eye.y; d.eye[2] = eye.z;
     d.budget = budget;
     d.shadowBudget = shadowBudget;
-    const auto settle = [snap](float prev, float target) {
+    const float step = std::pow(1.02f, dt * 30.0f);
+    const auto settle = [snap, step](float prev, float target) {
         if (snap || prev <= 0.0f) return target;
-        if (target > prev) return std::min(target, prev * 1.06f);
-        if (target < prev / 1.04f) return std::max(target, prev / 1.02f);
+        if (target > prev) return std::min(target, prev * step);
+        if (target < prev / 1.04f) return std::max(target, prev / step);
         return prev;
     };
     detail = d.detail = settle(d.detail, detail);

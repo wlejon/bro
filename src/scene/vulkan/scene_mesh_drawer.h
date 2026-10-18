@@ -331,6 +331,7 @@ private:
         float detail = 0.0f, shadow = 0.0f;
         float eye[3] = {0.0f, 0.0f, 0.0f};
         float budget = 0.0f, shadowBudget = 0.0f;
+        float time = 0.0f;   // the scene clock (windTime) when last settled
     };
     std::unordered_map<const void*, ForestDetail> forestDetail_;
     ForestDetail forestsDetail_;
