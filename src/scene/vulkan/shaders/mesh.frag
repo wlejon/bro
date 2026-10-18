@@ -803,6 +803,7 @@ void main() {
     s.leafDensity = 0.0;
     s.leafPath = 1.0;
     s.leafFlat = 1.0;
+    s.leafExitSpread = -2.0;
     s.leafSun = vec4(0.5);
     s.leafSunN = 0.0;
     s.leafSpread = 0.0;
@@ -816,6 +817,14 @@ void main() {
     s.leafSphere = massSphere;
     s.leafDensity = massDensity;
     s.leafFlat = massFlat;
+#endif
+#ifdef SCENE_FOREST_CLUSTER
+    // A cluster's exit tap is one: clusters are a crown's mid-range leaves,
+    // which the four-tap filter left smoother than the leaves they hand over
+    // from (canopy, 20-40 m, local contrast 10.2 / Leaves 12.5 -> 10.9), and
+    // the taps, at a scattered exit point each fragment, were 1.4 of its
+    // 2 ms in the slowest flight frames.
+    s.leafExitSpread = 0.0;
 #endif
 
     vec3 indirect = sceneAmbient(s);

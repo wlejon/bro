@@ -271,6 +271,10 @@ struct SceneSurface {
     vec4 leafSphere;
     float leafDensity;
     float leafPath;
+    // The filter of the shadow tap where the light leaves that sphere
+    // (sampleShadow's spread): -2, four taps as soft as a leaf's, where a
+    // sharp tap reads as hard blotches on a lobe; 0 one tap.
+    float leafExitSpread;
     // The sphere's height over its width (a conifer's flat lobes): the light
     // leaves an ellipsoid, so a flat pad lit from above is lit through its
     // thickness, not its breadth. 1: a sphere.
@@ -498,6 +502,7 @@ vec3 sceneDirectLight(SceneSurface s) {
                 float out_ = max((-b + sqrt(max(b * b - la * (dot(oc, oc) - s.leafSphere.w * s.leafSphere.w), 0.0))) / la, 0.0);
                 at += L * out_;
                 self = exp(-s.leafDensity * s.leafPath * out_);
+                spread = s.leafExitSpread;
                 // The exit tap is as soft as a leaf's (twice the filter):
                 // sharp, the discs' cells and the wider casters' edges read
                 // as hard blotches on the lobes they fall on.
