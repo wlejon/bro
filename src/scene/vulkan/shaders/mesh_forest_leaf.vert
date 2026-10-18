@@ -127,7 +127,9 @@ void main() {
     if (cluster) {
         k = e.widening * clamp((e.keepEnd - float(leaf)) / max(e.tail, 1.0), 0.0, 1.0);
         float aspect = procedural.header[3].y;
-        span = 1.1547 * vec2(0.5 * k * aspect + 0.55, 0.5 * k + 0.55);
+        // (Its leaves join out to 0.95 of 1.27 times the outline:
+        // scene_forest_mass.glsl's forestClusterLayer.)
+        span = 1.1547 * vec2(0.6 * k * aspect + 0.55, 0.6 * k + 0.55);
         local += vec3(inUV.x * span.x, 0.0, inUV.y * span.y) * len;
     }
 

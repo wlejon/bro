@@ -237,7 +237,12 @@ ForestLeafLayer forestClusterLayer(vec2 p, float fp, float k, float aspect, floa
     ForestLeafLayer o = forestLeafLayerNone();
     // A leaf's area of outline to each (a leaf is about an ellipse).
     float cell = sqrt(0.785 * aspect);
-    vec2 half_ = vec2(0.5 * aspect, 0.5) * max(k, 1e-3);
+    // The leaves join over an ellipse 1.27 times the widened outline: the
+    // last quarter of the way out they grow in, so over the outline alone
+    // their area was 0.62 k^2 leaves (and the thinned crown 0.62 of its
+    // cover, seen from above); 1.27^2 * 0.62 = 1. (mesh_forest_leaf.vert's
+    // span reaches 0.95 of it.)
+    vec2 half_ = vec2(0.5 * aspect, 0.5) * (1.27 * max(k, 1e-3));
     // The four cells whose centres surround p: a leaf is jittered at most
     // 0.175 cell, so any other's is over 0.82 cell off, past the largest
     // leaf's half length (0.55).
