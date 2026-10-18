@@ -207,6 +207,7 @@ void main() {
     float massPath = 1.0;   // the light's path through the sphere's own leaves, times
     vec4 massSun = vec4(0.5);   // SceneSurface::leafSun
     float massSunN = 0.0;
+    float massSelfMax = 1e9;   // SceneSurface::leafSelfMax
     if (inColor.z > 1.5) {
         // A lobe's CORE (forestLobeCore): the solid ellipsoid deep enough in
         // its leaves that nothing behind shows, its true depth written so the
@@ -299,6 +300,7 @@ void main() {
                 massSphere = vec4(inMass1.xyz, max(inMass1.w, length(h.at - inMass1.xyz) * 1.02));
                 massFlat = 1.0;
                 massDensity = FOREST_CROWN_SHADE * h.crownSigma;
+                massSelfMax = FOREST_CROWN_SELF_MAX;
             }
             worldPos = h.at;
             vec4 clip = camera.viewProj * vec4(h.at, 1.0);
@@ -815,6 +817,7 @@ void main() {
     s.leafPath = 1.0;
     s.leafFlat = 1.0;
     s.leafExitSpread = -2.0;
+    s.leafSelfMax = 1e9;
     s.leafSun = vec4(0.5);
     s.leafSunN = 0.0;
     s.leafSpread = 0.0;
@@ -823,6 +826,7 @@ void main() {
     s.leafPath = massPath;
     s.leafSun = massSun;
     s.leafSunN = massSunN;
+    s.leafSelfMax = massSelfMax;
 #endif
 #ifdef SCENE_VEGETATION
     s.leafSphere = massSphere;

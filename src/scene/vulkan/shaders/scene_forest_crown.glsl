@@ -49,6 +49,12 @@ const float FOREST_CROWN_FILL = 0.8;
 // The share of a broadleaf crown's mean density (ForestCrownHit::crownSigma)
 // its leaves are shaded through: as a lobe takes half its own.
 const float FOREST_CROWN_SHADE = 0.5;
+// The most of that density the light crosses to the leaves seen, which lie
+// within about one optical depth of the crown's surface along the eye's line
+// (what hides the rest), where the path from the point the trace stops at
+// runs on through the crown. A dense shrub's crown was shaded through its
+// whole depth: 30 levels darker than its leaves, near black from afar.
+const float FOREST_CROWN_SELF_MAX = 0.75;
 
 // A crown is traced a run of clumps at a time (coarse) once its mean clump
 // is under this many pixels in radius.
