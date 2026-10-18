@@ -153,8 +153,36 @@ CameraNode* SceneGraph::createCamera(const std::string& name) {
 GrassNode* SceneGraph::createGrass(const std::string& name) {
     auto node = std::make_unique<GrassNode>(name);
     auto* ptr = node.get();
+    grassIds_.push_back(ptr->id());
     nodes_[ptr->id()] = std::move(node);
     return ptr;
+}
+
+void SceneGraph::updatePlantMovers() {
+    // Every grass node's movers move through the shrubs and low foliage too.
+    std::vector<PlantMovers::Body> bodies;
+    for (auto it = grassIds_.begin(); it != grassIds_.end();) {
+        auto* g = dynamic_cast<GrassNode*>(resolveNode(*it));
+        if (!g) {
+            it = grassIds_.erase(it);
+            continue;
+        }
+        ++it;
+        for (const GrassNode::MoverInfo& m : g->moverInfo()) {
+            SceneNode* n = resolveNode(m.nodeId);
+            if (!n) continue;
+            const bromath::Mat4& w = n->worldMatrix();
+            PlantMovers::Body b;
+            b.id = m.nodeId;
+            b.x = w.at(0, 3);
+            b.z = w.at(2, 3);
+            b.radius = m.radius;
+            b.height = m.height;
+            b.strength = m.strength;
+            bodies.push_back(b);
+        }
+    }
+    renderer_.plantMovers().update(renderer_.windTimeExact(), bodies);
 }
 
 ForestNode* SceneGraph::createForest(const std::string& name) {
@@ -347,6 +375,7 @@ void SceneGraph::tickAnimations(float dtSec) {
     }
 
     advanceWindTime(dtSec);
+    updatePlantMovers();
 
     // Derive the view from the active camera node AFTER animations/tweens,
     // so a tweened/parented camera is applied on the same tick it moved and

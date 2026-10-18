@@ -36,7 +36,7 @@ layout(set = 4, binding = 0) uniform GrassUBO {
     vec4 dry;        // rgb sun-dried colour, w: clump frequency (1/m)
     vec4 look;       // x: root shade, y: gust sheen, z: height variety, w: width growth per metre of distance
     vec4 push;       // xy: world x, z of the influence map's corner; z: its cell (m); w: cells across
-    vec4 pushRate;   // x: bend recovery (1/s), y: trample recovery (1/s), z: 1 with a floor texture, w: unused
+    vec4 pushRate;   // x: the bend's spring (Hz), y: its damping ratio, z: 1 with a floor texture, w: the trample's relax time (s)
     vec4 shape;      // x: blades an instance, y: vertices a blade, z: spread from the root (m), w: a tuft's fan (rad)
     vec4 lod;        // x: thinning starts (m), y: the fewest blades kept (share), z: the share shadow casters keep, w: the eye's lift (m)
     // The herbs (scene_herb_mix.glsl): the low plants among the grass.
@@ -92,9 +92,14 @@ vec3 grassGroundNormal(vec2 xz) {
     return normalize(vec3(-hx, 2.0 * e, -hz));
 }
 
-// The movers' push at xz: the bend now (decayed since it was stamped); in
+// The movers' push at xz: the bend now, released since it was stamped; in
 // `trample`, how flat the grass there is, and in `lie`, the way flattened
-// blades lie (the push's direction when it was stamped).
+// blades lie (the push's direction when it was stamped). The release is
+// GrassNode::bendRelease / trampleRelease (keep in step): the bend springs
+// back as a damped spring, swinging a little past upright once; a trampled
+// lane rises critically damped, a faint residue lasting longer.
+const float GRASS_TRAMPLE_RESIDUE = 0.06;        // GrassNode::kTrampleResidue
+const float GRASS_TRAMPLE_RESIDUE_RELAX = 4.0;   // GrassNode::kTrampleResidueRelax
 vec2 grassInfluence(vec2 xz, out float trample, out vec2 lie) {
     trample = 0.0;
     lie = vec2(0.0);
@@ -103,9 +108,12 @@ vec2 grassInfluence(vec2 xz, out float trample, out vec2 lie) {
     vec4 p = textureLod(grassPush, q, 0.0);
     float age = camera.windParams.x - p.a;   // the stamps are on the wind clock
     if (p.a <= 0.0 || age < 0.0) return vec2(0.0);
-    trample = max(p.b - age * grass.pushRate.y, 0.0);
+    float ra = age / grass.pushRate.w, rb = age / GRASS_TRAMPLE_RESIDUE_RELAX;
+    trample = p.b * ((1.0 - GRASS_TRAMPLE_RESIDUE) * (1.0 + ra) * exp(-ra) + GRASS_TRAMPLE_RESIDUE * (1.0 + rb) * exp(-rb));
     lie = p.rg;
-    return p.rg * exp(-age * grass.pushRate.x);
+    float w = 6.2831853 * grass.pushRate.x, z = grass.pushRate.y;
+    float wd = w * sqrt(1.0 - z * z);
+    return p.rg * (exp(-z * w * age) * (cos(wd * age) + z * w / wd * sin(wd * age)));
 }
 
 struct GrassBlade {
@@ -237,8 +245,8 @@ bool grassBlade(int id, int vid, vec3 v, vec3 vn, out GrassBlade b) {
     float calm = clamp(camera.windField.z / GRASS_REFERENCE_SPEED, 0.0, 2.0);
     float spd = camera.windField.z + gu * 4.0;
     vec2 wdir = camera.windField.xy;
-    float t = camera.windParams.x;
-    float flut = sin(t * (2.2 + hb.y * 2.5) + dot(xz, wdir) * 0.9 + hr * 9.0) * (0.06 * calm + 0.12 * gu);
+    float flut = sin(6.2831853 * sceneWindCycles((2.2 + hb.y * 2.5) / 6.2831853) + dot(xz, wdir) * 0.9 + hr * 9.0) *
+                 (0.06 * calm + 0.12 * gu);
     vec2 B = wdir * (0.1 * min(calm, 1.0) + spd * 0.07 + gu * 0.35) * grass.blade.w +
              vec2(-side.z, side.x) * flut * grass.blade.w +
              vec2(cos(yaw * 3.0), sin(yaw * 3.0)) * 0.18 * (hb.z - 0.3) * (1.0 - min(grass.shape.w * 2.0, 0.6)) +

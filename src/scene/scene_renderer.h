@@ -10,6 +10,7 @@
 #include "scene/atmosphere.h"
 #include "scene/light_node.h"
 #include "scene/shadow_plan.h"
+#include "scene/plant_movers.h"
 #include "scene/wind_field.h"
 
 #include <bromath/aabb.h>
@@ -282,15 +283,22 @@ public:
         windStrength_ = strength;
         windFreq_ = frequency;
     }
-    void advanceWindTime(float dt) { windTime_ += dt; }
-    void resetWindTime() { windTime_ = 0.0f; }
-    float windTime() const { return windTime_; }
+    void advanceWindTime(float dt) { windTime_ += static_cast<double>(dt); }
+    void resetWindTime() { windTime_ = 0.0; }
+    float windTime() const { return static_cast<float>(windTime_); }
+    double windTimeExact() const { return windTime_; }
+    /// The bodies pushing through shrubs and low foliage (plant_movers.h).
+    PlantMovers& plantMovers() { return plantMovers_; }
+    const PlantMovers& plantMovers() const { return plantMovers_; }
+    /// The oscillator clock: the wind clock modulo kWindClockPeriod, reduced
+    /// in double (the camera block's windParams.w).
+    float windClock() const { return static_cast<float>(std::fmod(windTime_, kWindClockPeriod)); }
 
     /// The wind field vegetation bends with (wind_field.h). It blows along
     /// setWind's direction; a light breeze until set.
     void setWindField(const WindFieldParams& p) { windField_ = p; }
     const WindFieldParams& windFieldParams() const { return windField_; }
-    WindFieldState windField() const { return windFieldState(windDir_, windField_, windTime_); }
+    WindFieldState windField() const { return windFieldState(windDir_, windField_, windTime()); }
     /// How far a plant `height` tall (node units) under `world` can sway:
     /// the culling pad of a node carrying vegetation records (0 in a calm).
     float vegetationReach(float height, const bromath::Mat4& world) const;
@@ -511,8 +519,9 @@ private:
     float windDir_[3] = {1.0f, 0.0f, 0.0f};
     float windStrength_ = 0.0f;
     float windFreq_ = 1.5f;
-    float windTime_ = 0.0f;
+    double windTime_ = 0.0;   // double: the oscillators' phases stay exact after hours
     WindFieldParams windField_;
+    PlantMovers plantMovers_;
 
     // Editor affordance: render a marker icon per LightNode and include
     // them in raycast results.

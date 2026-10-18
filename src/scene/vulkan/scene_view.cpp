@@ -4,6 +4,7 @@
 #include "scene/scene_graph.h"
 #include "scene/scene_renderer.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 
@@ -94,6 +95,7 @@ SceneCameraUniforms SceneView::uniforms(const SceneRenderer* fog) const {
         // reduced in double so a far eye does not round the phase away.
         const double phase = 0.3 * static_cast<double>(eye.x) + 0.5 * static_cast<double>(eye.z);
         cam.windParams[2] = static_cast<float>(std::fmod(phase, 2.0 * 3.14159265358979323846));
+        cam.windParams[3] = fog->windClock();
         const WindFieldState wf = fog->windField();
         cam.windField[0] = wf.dirX;
         cam.windField[1] = wf.dirZ;
@@ -102,6 +104,43 @@ SceneCameraUniforms SceneView::uniforms(const SceneRenderer* fog) const {
         cam.windGust[0] = wf.gust;
         cam.windGust[1] = wf.invAlong;
         cam.windGust[2] = wf.invAcross;
+
+        // The plant movers: each one's trail, ages on the wind clock.
+        static_assert(PlantMovers::kMovers * 2 <= 8 && PlantMovers::kMovers * PlantMovers::kTrail <= 80,
+                      "the camera block's plant mover arrays");
+        const PlantMovers& pm = fog->plantMovers();
+        const double now = fog->windTimeExact();
+        const double span = PlantMovers::kTrail * PlantMovers::kStep;
+        int n = 0;
+        for (const PlantMovers::Track& t : pm.tracks()) {
+            if (n >= PlantMovers::kMovers) break;
+            const float cx = t.body.x - eye.x, cz = t.body.z - eye.z;
+            float reach = 0.0f;
+            int k = 0;
+            for (const PlantMovers::Sample& s : t.trail) {
+                const double age = now - s.time;
+                if (age < 0.0 || age >= span) continue;
+                float* o = cam.plantTrail[n * PlantMovers::kTrail + k++];
+                o[0] = s.x - eye.x;
+                o[1] = s.z - eye.z;
+                o[2] = static_cast<float>(age);
+                const double u = std::clamp((age - 0.6 * span) / (0.4 * span), 0.0, 1.0);
+                o[3] = static_cast<float>(1.0 - u * u * (3.0 - 2.0 * u));
+                reach = std::max(reach, std::hypot(o[0] - cx, o[1] - cz));
+            }
+            for (; k < PlantMovers::kTrail; ++k) cam.plantTrail[n * PlantMovers::kTrail + k][3] = 0.0f;
+            float* a = cam.plantMovers[n * 2];
+            a[0] = cx;
+            a[1] = cz;
+            a[2] = reach + 1.6f * t.body.radius;   // scene_vegetation.glsl's VEG_MOVER_REACH
+            a[3] = t.body.radius;
+            float* b = cam.plantMovers[n * 2 + 1];
+            b[0] = t.body.height;
+            b[1] = t.body.strength;
+            ++n;
+        }
+        cam.plantMoverInfo[0] = static_cast<float>(n);
+        cam.plantMoverInfo[1] = static_cast<float>(PlantMovers::kTrail);
     }
     return cam;
 }

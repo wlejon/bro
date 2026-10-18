@@ -471,13 +471,21 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
 
 /**
  * A grass mover's push: `radius` (m, default 0.6), `strength` (default 1:
- * how hard blades lean away and along its motion; they spring back in about
- * half a second) and `trample` (0..1, default 0: how flat it leaves the grass
- * it crosses, which rises again over about 1 / 0.05 = 20 s).
+ * how hard blades lean away and along its motion; they spring back as a
+ * damped spring, 0.9 Hz, swinging once a little past upright), `trample`
+ * (0..1, default 0: how flat it leaves the grass it crosses, which rises
+ * again over 1 to 3 s, a faint 6% of it over a few seconds more) and
+ * `height` (m, default 1.8). The grass's herbs part with its blades. A
+ * mover also parts the scene's swaying plants (trees, shrubs, a forest's
+ * low foliage) within
+ * 1.6 x `radius` of its path and up to `height` over their roots: they give
+ * as it arrives and spring back once after it goes (scene_vegetation.glsl's
+ * vegMoverPush; at most four movers in the scene).
  * @typedef {Object} GrassMoverOptions
  * @property {number} [radius]
  * @property {number} [strength]
  * @property {number} [trample]
+ * @property {number} [height]
  */
 
 /**

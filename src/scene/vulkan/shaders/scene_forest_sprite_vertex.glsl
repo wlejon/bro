@@ -7,7 +7,7 @@ struct ForestSprite {
     float radiusUp;  // world: up (a crown's height over two; a lobe's radius)
     vec2 corner;     // -1 .. 1
     float seed;
-    float gust;      // the drag at the tree now (scene_vegetation.glsl's VegWind.p0)
+    float gust;      // the drag at the tree now (scene_vegetation.glsl's VegPose.drag)
     vec3 tint;       // the tree's and limb's leaf tint (scene_vegetation.glsl's vegLimbLeafTint)
     float fade;
     vec4 crown;      // the crown's centre (posed, camera-relative) and radius (world)
@@ -118,7 +118,7 @@ bool forestSprite(int mode, int instanceIndex, int vertexIndex, mat4 base, out F
     s.center = rest + pose.offset;
     s.offset = pose.offset;
     s.instance = e.instance;
-    s.gust = w.p0;
+    s.gust = pose.drag;
     s.fade = e.fade;
     s.tint = vegLimbLeafTint(model, v0, v3) * forestSpecimenTint(specimen, false);
     // The crown's centre moves with the sprite, so a leaf's depth in it (its

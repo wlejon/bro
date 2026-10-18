@@ -141,10 +141,13 @@ struct SceneMeshDrawer::ForestPlan {
         ForestNode::TreeLod t = ForestNode::treeLod(L, sp, s.px, leafLength, force, s.barkPx);
         if (force >= 0 || t.crowns <= 0.0f || s.instance >= seenPx.size() || seenPx[s.instance] <= 0.0f) return t;
         const ForestNode::TreeLod c = ForestNode::treeLod(lod, sp, seenPx[s.instance], leafLength);
-        if (c.leaves < std::max(c.clumps, c.crowns)) return t;
-        // (A caster draws its heaviest tier, solid.)
-        t.clumps = std::max(t.clumps, 1.0f - t.leaves);
-        t.crowns = 0.0f;
+        // Where the camera sees leaves, the caster's crowns hand to clumps,
+        // over the camera's leaves share from 0.35 to 0.65 (a switch at a
+        // half stepped the shadow).
+        const float q = std::clamp((c.leaves - 0.35f) / 0.3f, 0.0f, 1.0f);
+        const float m = q * q * (3.0f - 2.0f * q);
+        t.clumps += m * t.crowns;
+        t.crowns *= 1.0f - m;
         return t;
     }
 
@@ -156,40 +159,54 @@ struct SceneMeshDrawer::ForestPlan {
         float lo[ForestNode::kTiers], hi[ForestNode::kTiers];
         ForestNode::fadeRanges(t, lo, hi);
         if (shadow) {
-            // A caster draws one tier, the heaviest, solid.
+            // A caster draws each tier at its share (lo 0, hi the share):
+            // the leaves keep that share of their casters, a sprite stops
+            // that share of the light it would (shadow_forest_sprite.vert).
+            // One tier at a time, the heaviest, switched the shadow whole
+            // where two tiers' shares crossed: a step in a tree's shade at
+            // each handover.
             const float w[ForestNode::kTiers] = {t.leaves, t.clumps, t.crowns};
-            int tier = 0;
-            for (int k = 1; k < ForestNode::kTiers; ++k)
-                if (w[k] > w[tier]) tier = k;
-            for (int k = 0; k < ForestNode::kTiers; ++k) { lo[k] = 0.0f; hi[k] = k == tier ? 1.0f : 0.0f; }
+            for (int k = 0; k < ForestNode::kTiers; ++k) { lo[k] = 0.0f; hi[k] = std::clamp(w[k], 0.0f, 1.0f); }
         }
         // Leaves: a prefix of the shuffled run, widened.
         if (hi[0] > lo[0] && sp.leafCount > 0) {
+            // Near leaves hand over to cards (clusters) through a narrow band
+            // of widening (TreeLod::cardShare), the two splitting the kept
+            // run (a shuffled prefix, so each part a random share of the
+            // crown): switched whole, the crown stepped in brightness where
+            // they met. Each leaf is drawn once, as one form or the other
+            // (both forms over the whole run, dithered apart, doubled the
+            // leaves' vertex work through the band: 8 ms flight frames
+            // under the canopy). A caster is cards.
+            const float cardShare = shadow ? 1.0f : std::clamp(t.cardShare, 0.0f, 1.0f);
             float widening = t.widening;
-            bool card = t.card;
-            if (shadow) {
-                widening /= std::sqrt(std::max(lod.shadowKeep, 0.01f));
-                card = true;
-            }
-            const float keepF = static_cast<float>(sp.leafCount) / (widening * widening);
+            if (shadow) widening /= std::sqrt(std::max(lod.shadowKeep, 0.01f));
+            const float keepF = static_cast<float>(sp.leafCount) / (widening * widening) * (shadow ? hi[0] : 1.0f);
             const uint32_t n = std::min(sp.leafCount, static_cast<uint32_t>(std::ceil(keepF)));
             const float tail = std::max(1.0f, 0.25f * keepF);
             const float keepEnd = static_cast<float>(sp.leafStart) + keepF;
-            const uint32_t K = static_cast<uint32_t>(card ? ForestNode::kCardCopies : leafCopies);
-            // (A cluster, the card in colour with Lod::clusters, is a hexagon.)
-            const bool cluster = card && !shadow && clusters;
-            const uint32_t V = static_cast<uint32_t>(!card ? leafVerts
-                                                     : cluster ? ForestNode::kCardVertices
-                                                               : cardVerts);
-            // An entry is K leaves' vertices whether all are kept or not.
-            vertices += uint64_t{(n + K - 1) / K} * K * V;
-            if (G) {
-                const float fade = ForestNode::fadeCode(lo[0], hi[0]);
-                auto& g = G->g[card ? LeafCard : LeafNear];
-                for (uint32_t c = 0; c < n; c += K)
-                    g.push_back({inst, sp.leafStart + c, sp.leafStart + std::min(c + K, n), V, widening, keepEnd,
-                                 tail, fade});
-                if (!shadow) stats.leaves += n;
+            const uint32_t nearN =
+                std::min(n, static_cast<uint32_t>(std::lround(static_cast<float>(n) * (1.0f - cardShare))));
+            for (int form = 0; form < 2; ++form) {
+                const bool card = form == 1;
+                const uint32_t from = card ? nearN : 0u, to = card ? n : nearN;
+                if (to <= from) continue;
+                const uint32_t K = static_cast<uint32_t>(card ? ForestNode::kCardCopies : leafCopies);
+                // (A cluster, the card in colour with Lod::clusters, is a hexagon.)
+                const bool cluster = card && !shadow && clusters;
+                const uint32_t V = static_cast<uint32_t>(!card ? leafVerts
+                                                         : cluster ? ForestNode::kCardVertices
+                                                                   : cardVerts);
+                // An entry is K leaves' vertices whether all are kept or not.
+                vertices += uint64_t{(to - from + K - 1) / K} * K * V;
+                if (G) {
+                    const float fade = ForestNode::fadeCode(lo[0], hi[0]);
+                    auto& g = G->g[card ? LeafCard : LeafNear];
+                    for (uint32_t c = from; c < to; c += K)
+                        g.push_back({inst, sp.leafStart + c, sp.leafStart + std::min(c + K, to), V, widening, keepEnd,
+                                     tail, fade});
+                    if (!shadow) stats.leaves += to - from;
+                }
             }
             // A spray node's leaves hide their lobes' depths: each lobe's
             // core drawn solid first (forestLobeCore), at the leaves' fade.
@@ -216,8 +233,10 @@ struct SceneMeshDrawer::ForestPlan {
             if (G) {
                 auto& g = G->g[sides == kNearSides ? Bark10 : Bark5];
                 for (uint32_t c = 0; c < n; c += kSegmentsPerEntry)
-                    g.push_back({inst, sp.segStart + c, sp.segStart + std::min(c + kSegmentsPerEntry, n),
-                                 static_cast<uint32_t>(sides), 1.0f, 0.0f, 1.0f, 1.0f});
+                    // (Its `widening` slot the radius it is cut at: scene_forest_tube.glsl
+                // thins the bark just over it to nothing.)
+                g.push_back({inst, sp.segStart + c, sp.segStart + std::min(c + kSegmentsPerEntry, n),
+                                 static_cast<uint32_t>(sides), t.barkRadius, 0.0f, 1.0f, 1.0f});
             }
         }
         // Sprites: counted when drawn, not against the budget, which buys
@@ -432,11 +451,38 @@ void SceneMeshDrawer::prepareForest(SceneFrame& frame, ForestNode& node, std::ve
     auto plan = planForest(frame, node);
     if (!plan) return;
     ForestPlan& P = *plan;
-    const float detail = P.force >= 0 || P.seen.empty()
-                             ? 1.0f : fitDetail([&](float d) { return P.cost(d, false); }, P.lod.budget);
-    const float shadowDetail = P.force >= 0 || P.cast.empty()
-                                   ? 1.0f : fitDetail([&](float d) { return P.cost(d, true); }, P.lod.shadowBudget);
+    float detail = P.force >= 0 || P.seen.empty()
+                       ? 1.0f : fitDetail([&](float d) { return P.cost(d, false); }, P.lod.budget);
+    float shadowDetail = P.force >= 0 || P.cast.empty()
+                             ? 1.0f : fitDetail([&](float d) { return P.cost(d, true); }, P.lod.shadowBudget);
+    if (forestDetail_.size() > 256) forestDetail_.clear();
+    if (P.force < 0)
+        settleDetail(forestDetail_[&node], frame, P.lod.budget, P.lod.shadowBudget, detail, shadowDetail);
     finishForest(frame, P, detail, shadowDetail, out);
+}
+
+void SceneMeshDrawer::settleDetail(ForestDetail& d, const SceneFrame& frame, float budget, float shadowBudget,
+                                   float& detail, float& shadowDetail) {
+    // A jump of the eye (a cut, a teleport, the first frame) or a new
+    // budget takes the fit as it is. Otherwise a coarser fit (over budget) is caught up 6% a
+    // frame, and a finer one waits until it is 4% finer than what is drawn,
+    // then comes 2% a frame: each frame's fit, quantised by its search and
+    // moving with the camera, re-thinned the crowns a little every frame.
+    const bromath::Vec3& eye = frame.view.eye;
+    const float dx = eye.x - d.eye[0], dy = eye.y - d.eye[1], dz = eye.z - d.eye[2];
+    const bool snap = d.detail <= 0.0f || dx * dx + dy * dy + dz * dz > 25.0f || budget != d.budget ||
+                      shadowBudget != d.shadowBudget;
+    d.eye[0] = eye.x; d.eye[1] = eye.y; d.eye[2] = eye.z;
+    d.budget = budget;
+    d.shadowBudget = shadowBudget;
+    const auto settle = [snap](float prev, float target) {
+        if (snap || prev <= 0.0f) return target;
+        if (target > prev) return std::min(target, prev * 1.06f);
+        if (target < prev / 1.04f) return std::max(target, prev / 1.02f);
+        return prev;
+    };
+    detail = d.detail = settle(d.detail, detail);
+    shadowDetail = d.shadow = settle(d.shadow, shadowDetail);
 }
 
 void SceneMeshDrawer::prepareForests(SceneFrame& frame, const std::vector<ForestNode*>& nodes,
@@ -466,10 +512,11 @@ void SceneMeshDrawer::prepareForests(SceneFrame& frame, const std::vector<Forest
             if (p) v += p->cost(d, shadow);
         return v;
     };
-    const float detail = forced || !anySeen || budget <= 0.0f
-                             ? 1.0f : fitDetail([&](float d) { return total(d, false); }, budget);
-    const float shadowDetail = forced || !anyCast || shadowBudget <= 0.0f
-                                   ? 1.0f : fitDetail([&](float d) { return total(d, true); }, shadowBudget);
+    float detail = forced || !anySeen || budget <= 0.0f
+                       ? 1.0f : fitDetail([&](float d) { return total(d, false); }, budget);
+    float shadowDetail = forced || !anyCast || shadowBudget <= 0.0f
+                             ? 1.0f : fitDetail([&](float d) { return total(d, true); }, shadowBudget);
+    if (!forced) settleDetail(forestsDetail_, frame, budget, shadowBudget, detail, shadowDetail);
     for (size_t i = 0; i < nodes.size(); ++i)
         if (plans[i]) finishForest(frame, *plans[i], detail, shadowDetail, out[i]);
 }

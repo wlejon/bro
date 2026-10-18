@@ -40,6 +40,11 @@ bool forestTubeVertex(ForestEntry e, int vertexIndex, out vec3 pos, out vec3 rad
     tubeRingFrame(axisDir, e1, e2);
     radial = cos(ang) * e1 + sin(ang) * e2;
     float rad = mix(s0.w, s1.w, endT);
+    // The drawer leaves out bark thinner than the entry's radius (its
+    // `widening` slot, specimen units): bark under 1.6 times it thins to
+    // nothing there, so a twig fades out as the eye backs off rather than
+    // blinking out between two frames.
+    if (e.widening > 0.0) rad *= smoothstep(e.widening, 1.6 * e.widening, rad);
     pos = (top ? s1.xyz : s0.xyz) + rad * radial;
     uv = vec2(ang / PROC_TWO_PI, endT);
     return true;

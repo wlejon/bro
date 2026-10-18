@@ -468,8 +468,20 @@ HerbSurface herbBloomSurface(int sp, vec2 uv, vec4 size, float seed, vec2 down) 
         float bowl = clamp(0.5 + (1.0 - eB) / max(fwidth(eB), 1e-4), 0.0, 1.0);
         o.cover = max(rim, bowl);
         float crinkle = 0.88 + 0.12 * sin(a2 * petals * 5.0 + length(q) * 26.0 + seed * 9.0);
-        bool inside = cv > 0.0 && rim > 0.5;
-        if (inside) {
+        // Inside where the rim is seen from above, the outside elsewhere; the
+        // two blend as the cup turns edge-on (cv through 0), so a cup tipping
+        // past the eye's line turns smoothly rather than flipping.
+        float inside = smoothstep(-0.06, 0.06, cv) * rim;
+        // Its outside: round, the petals' seams running up it, paler and
+        // lit through toward the rim, greener at its base.
+        float xb = clamp(q.x / (R * wav), -1.0, 1.0);
+        float seam = 1.0 - 0.15 * (1.0 - smoothstep(0.0, 0.08, abs(fract(asin(xb) / HERB_PI * petals * 0.5 + seed) - 0.5) - 0.42));
+        float up = clamp((q.y - (yc - D)) / max(D, 1e-3), 0.0, 1.0);
+        o.albedo = r7.rgb * crinkle * seam * mix(0.65, 1.0, up);
+        o.albedo = mix(o.albedo, herbRec(sp, 5).rgb, 0.4 * (1.0 - smoothstep(0.0, 0.2, up)));
+        o.normal = vec3(xb * 0.8, -0.25, sqrt(max(1.0 - 0.7 * xb * xb, 0.05)));
+        o.translucency = 0.75;
+        if (inside > 0.0) {
             // Into the cup: the eye at its bottom, the petals' faces darker
             // toward it (a poppy's black blotches at their bases).
             vec2 eyeC = vec2(0.0, yc - 0.55 * H * s);
@@ -477,19 +489,10 @@ HerbSurface herbBloomSurface(int sp, vec2 uv, vec4 size, float seed, vec2 down) 
             float de = length(vec2(q.x, (q.y - eyeC.y) / max(abs(cv), 0.15)));
             float eye = 1.0 - smoothstep(eyeR * 0.8, eyeR * 1.2, de);
             float blotch = (1.0 - smoothstep(eyeR * 1.2, eyeR * 2.0, de)) * 0.7;
-            o.albedo = mix(r7.rgb * crinkle * mix(0.7, 1.05, smoothstep(0.0, 1.0, eR)), r8.rgb, max(eye, blotch));
-            o.normal = vec3(-qr.x * 0.35, -0.2, 0.9);
-            o.translucency = 0.4;
-        } else {
-            // Its outside: round, the petals' seams running up it, paler and
-            // lit through toward the rim, greener at its base.
-            float xb = clamp(q.x / (R * wav), -1.0, 1.0);
-            float seam = 1.0 - 0.15 * (1.0 - smoothstep(0.0, 0.08, abs(fract(asin(xb) / HERB_PI * petals * 0.5 + seed) - 0.5) - 0.42));
-            float up = clamp((q.y - (yc - D)) / max(D, 1e-3), 0.0, 1.0);
-            o.albedo = r7.rgb * crinkle * seam * mix(0.65, 1.0, up);
-            o.albedo = mix(o.albedo, herbRec(sp, 5).rgb, 0.4 * (1.0 - smoothstep(0.0, 0.2, up)));
-            o.normal = vec3(xb * 0.8, -0.25, sqrt(max(1.0 - 0.7 * xb * xb, 0.05)));
-            o.translucency = 0.75;
+            vec3 inAlbedo = mix(r7.rgb * crinkle * mix(0.7, 1.05, smoothstep(0.0, 1.0, eR)), r8.rgb, max(eye, blotch));
+            o.albedo = mix(o.albedo, inAlbedo, inside);
+            o.normal = normalize(mix(o.normal, vec3(-qr.x * 0.35, -0.2, 0.9), inside));
+            o.translucency = mix(o.translucency, 0.4, inside);
         }
         return o;
     }

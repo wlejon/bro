@@ -6,6 +6,7 @@
 layout(location = 0) out vec2 outUV;
 layout(location = 1) out float outSeed;
 layout(location = 2) flat out float outDepth;   // the leaves' optical depth through the middle
+layout(location = 3) flat out float outShare;   // the tier's share of the tree's caster (the drawer's fade code)
 
 #include "scene_camera.glsl"
 #include "scene_shadow_push.glsl"
@@ -23,8 +24,14 @@ void main() {
         outUV = vec2(0.0);
         outSeed = 0.0;
         outDepth = 0.0;
+        outShare = 0.0;
         return;
     }
+    // A caster's fade code is [0, share): the light a tree's sprites stop
+    // is that share of what they would, the rest its other tier's (the
+    // drawer hands the tiers over continuously).
+    float k = floor(s.fade * 0.5);
+    outShare = clamp(s.fade - 2.0 * k - k * (1.0 / 4096.0), 0.0, 1.0);
     float r = max(s.radius, 1e-6);
     outDepth = forestMassDepth(sqrt(6.2831853 / s.leaves), s.leafLen / r, procedural.header[3].y);
     mat4 L = push.lightViewProj;

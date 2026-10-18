@@ -210,9 +210,10 @@ void fillShared(const GrassNode& node, GrassUBO& u) {
     u.push[1] = node.pushZ0();
     u.push[2] = GrassNode::kPushCell;
     u.push[3] = static_cast<float>(GrassNode::kPushCells);
-    u.pushRate[0] = GrassNode::kBendRecovery;
-    u.pushRate[1] = GrassNode::kTrampleRecovery;
+    u.pushRate[0] = GrassNode::kBendSpringHz;
+    u.pushRate[1] = GrassNode::kBendSpringDamping;
     u.pushRate[2] = node.hasFloor() ? 1.0f : 0.0f;
+    u.pushRate[3] = GrassNode::kTrampleRelax;
     // The herbs, which every grass shader reads: the plants, and past them
     // the turf that stands in.
     if (node.hasHerbs()) {

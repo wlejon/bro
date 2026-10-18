@@ -18,10 +18,15 @@ layout(set = 0, binding = 0) uniform CameraUBO {
     vec4 fogParams;   // x: start, y: end, z: density, w: start distance
     vec4 fogColor;    // rgb, a: height falloff
     vec4 wind;        // xyz: direction, w: strength
-    vec4 windParams;  // x: time (s), y: frequency, z: the eye's phase (dot(eye.xz, (0.3, 0.5)) mod 2 pi)
+    vec4 windParams;  // x: time (s), y: frequency, z: the eye's phase (dot(eye.xz, (0.3, 0.5)) mod 2 pi),
+                      // w: the oscillator clock, time mod SCENE_WIND_CLOCK_PERIOD (reduced in double)
     // The wind field (scene/wind_field.h): what vegetation bends with.
     vec4 windField;   // xy: horizontal direction (x, z; unit, drifting), z: steady speed (m/s), w: gust travel speed (m/s)
     vec4 windGust;    // x: gust amount, y: 1 / band length along the wind, z: 1 / across it, w: 0
+    // The plant movers (scene/plant_movers.h; scene_vegetation.glsl's vegMoverPush).
+    vec4 plantMoverInfo;   // x: movers, y: trail samples a mover
+    vec4 plantMovers[8];   // two a mover: (camera-relative x, z, its trail's reach, radius), (height, strength, 0, 0)
+    vec4 plantTrail[80];   // y samples a mover, oldest first: (camera-relative x, z, age (s), window)
 } camera;
 
 // The engine's wind uniforms under the names custom shader chunks use.
@@ -61,19 +66,52 @@ float sceneWindNoise(vec2 p) {
     return mix(mix(a, b, u.x), mix(c, d, u.x), u.y) * 2.0 - 1.0;
 }
 
+// The same with a quintic fade, so it is smooth to its second derivative:
+// what moves plants (the gusts). The cubic fade's acceleration jumps at
+// every lattice line a band crosses, a jerk in every limb it drives.
+float sceneWindNoise5(vec2 p) {
+    vec2 i = floor(p), f = p - i;
+    vec2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+    ivec2 ii = ivec2(i);
+    float a = sceneWindHash(ii), b = sceneWindHash(ii + ivec2(1, 0));
+    float c = sceneWindHash(ii + ivec2(0, 1)), d = sceneWindHash(ii + ivec2(1, 1));
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y) * 2.0 - 1.0;
+}
+
+// max(x, 0) with its corner rounded (a hyperbola, smooth to every
+// derivative, within SCENE_GUST_SOFT of the corner): a band's edge starts a
+// gust with no kink in what it drives's speed and no jump in its
+// acceleration.
+const float SCENE_GUST_SOFT = 0.06;
+float sceneWindSoftRamp(float x) { return 0.5 * (x + sqrt(x * x + SCENE_GUST_SOFT * SCENE_GUST_SOFT)); }
+
 // The gust at absolute world xz at time t: 0 between the bands, up to ~2 x
 // the gust amount inside one. The bands travel downwind at windField.w.
-// `fine` adds the second octave; without it the gust is its slow part (a
-// plant's lagged drag reads the past through it, scene_vegetation.glsl).
+// `fine` adds the second octave; without it the gust is its slow part.
 float sceneWindGustAtTime(vec2 xz, float t, bool fine) {
     if (camera.windGust.x <= 0.0) return 0.0;
     vec2 d = camera.windField.xy;
     float along = dot(xz, d) - t * camera.windField.w;
     float across = dot(xz, vec2(-d.y, d.x));
     vec2 k = camera.windGust.yz;
-    float g = sceneWindNoise(vec2(along * k.x, across * k.y)) * 0.5 + 0.5;
-    if (fine) g += 0.35 * sceneWindNoise(vec2(along * k.x * 3.18 + 5.3, across * k.y * 4.17));
-    return max(g - 0.45, 0.0) * 2.4 * camera.windGust.x;
+    float g = sceneWindNoise5(vec2(along * k.x, across * k.y)) * 0.5 + 0.5;
+    if (fine) g += 0.35 * sceneWindNoise5(vec2(along * k.x * 3.18 + 5.3, across * k.y * 4.17));
+    return sceneWindSoftRamp(g - 0.45) * 2.4 * camera.windGust.x;
+}
+
+// The oscillator clock. Everything that sways or flutters at a frequency
+// runs on the wind clock reduced modulo SCENE_WIND_CLOCK_PERIOD (in double,
+// on the CPU: windParams.w), with its frequency rounded to a whole number
+// of cycles in that period, so its phase is exact after hours of play and
+// carries on unbroken through the wrap. A frequency must be fixed: one that
+// varies multiplies the clock into a chirp (its instantaneous frequency
+// grows with the time), so the wind changes how far a thing moves, never
+// how fast it cycles.
+const float SCENE_WIND_CLOCK_PERIOD = 256.0;
+// The cycles (fraction in [0, 1)) of an oscillator of `hz` now.
+float sceneWindCycles(float hz) {
+    float f = floor(hz * SCENE_WIND_CLOCK_PERIOD + 0.5) / SCENE_WIND_CLOCK_PERIOD;
+    return fract(f * camera.windParams.w);
 }
 
 // The gust at absolute world xz now (wind_field.h's gustAt).

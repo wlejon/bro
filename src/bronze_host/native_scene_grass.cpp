@@ -99,11 +99,13 @@ void bro_scene_SceneNode_grassParams(void* self, bronze_native_buffer* out) {
     transferBuffer(std::vector<double>(std::begin(v), std::end(v)), out);
 }
 
-void bro_scene_SceneNode_setGrassMover(void* self, void* target, double radius, double strength, double trample) {
+void bro_scene_SceneNode_setGrassMover(void* self, void* target, double radius, double strength, double trample,
+                                       double height) {
     auto* gr = grassOf(self);
     auto* t = nodeOf(target);
     if (!gr || !t) return;
-    gr->setMover(t->id(), static_cast<float>(radius), static_cast<float>(strength), static_cast<float>(trample));
+    gr->setMover(t->id(), static_cast<float>(radius), static_cast<float>(strength), static_cast<float>(trample),
+                 static_cast<float>(height));
 }
 
 void bro_scene_SceneNode_grassPush(void* self, double x, double z, double radius, double vx, double vz,

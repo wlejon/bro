@@ -781,9 +781,11 @@ void bro_scene_SceneNode_setGrassParams(void* self, const double* params, uint32
 //   result: f64[] in *out; out->release == NULL, the runtime copies
 void bro_scene_SceneNode_grassParams(void* self, bronze_native_buffer* out);
 
-// grass.addMover / removeMover (radius <= 0 removes)
+// grass.addMover / removeMover (radius <= 0 removes); `height`: how high it
+// reaches into shrubs and low foliage (m above a plant's root)
 //   registered at __bro_native.scene.SceneNode_setGrassMover
-void bro_scene_SceneNode_setGrassMover(void* self, void* target, double radius, double strength, double trample);
+void bro_scene_SceneNode_setGrassMover(void* self, void* target, double radius, double strength, double trample,
+                                       double height);
 
 // grass.push: a one-off push this frame
 //   registered at __bro_native.scene.SceneNode_grassPush

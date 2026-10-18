@@ -249,11 +249,12 @@
         if (!isGrass(this) || !(target instanceof SceneNode)) return this;
         const m = mopts || {};
         __bro_native.scene.SceneNode_setGrassMover(this, target, m.radius > 0 ? +m.radius : 0.6,
-            typeof m.strength === 'number' ? m.strength : 1, typeof m.trample === 'number' ? m.trample : 0);
+            typeof m.strength === 'number' ? m.strength : 1, typeof m.trample === 'number' ? m.trample : 0,
+            typeof m.height === 'number' ? m.height : 1.8);
         return this;
     });
     fn(P, 'removeMover', function removeMover(target) {
-        if (isGrass(this) && target instanceof SceneNode) __bro_native.scene.SceneNode_setGrassMover(this, target, 0, 0, 0);
+        if (isGrass(this) && target instanceof SceneNode) __bro_native.scene.SceneNode_setGrassMover(this, target, 0, 0, 0, 0);
         return this;
     });
     fn(P, 'push', function push(x, z, popts) {

@@ -308,7 +308,8 @@ public:
     struct TreeLod {
         float widening = 1.0f;     // leaves drawn this much larger
         float keep = 1.0f;         // share of the leaves drawn (1 / widening^2)
-        bool card = false;         // leaves as cards
+        bool card = false;         // leaves as cards (cardShare past a half)
+        float cardShare = 0.0f;    // the leaves' share drawn as cards, rising through cardWidening (+-6%)
         float leaves = 1.0f;       // the leaf tier's weight (1 solid, 0 none)
         float clumps = 0.0f;       // the clump tier's
         float crowns = 0.0f;       // the crown tier's

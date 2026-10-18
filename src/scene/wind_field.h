@@ -97,14 +97,37 @@ inline float windNoise(float px, float py) {
     return (ab + (cd - ab) * uy) * 2.0f - 1.0f;
 }
 
+/// The same with a quintic fade (sceneWindNoise5): smooth to its second
+/// derivative, for the gusts.
+inline float windNoise5(float px, float py) {
+    const float ix = std::floor(px), iy = std::floor(py);
+    const float fx = px - ix, fy = py - iy;
+    const float ux = fx * fx * fx * (fx * (fx * 6.0f - 15.0f) + 10.0f);
+    const float uy = fy * fy * fy * (fy * (fy * 6.0f - 15.0f) + 10.0f);
+    const int32_t x = static_cast<int32_t>(ix), y = static_cast<int32_t>(iy);
+    const float a = windHash(x, y), b = windHash(x + 1, y);
+    const float c = windHash(x, y + 1), d = windHash(x + 1, y + 1);
+    const float ab = a + (b - a) * ux, cd = c + (d - c) * ux;
+    return (ab + (cd - ab) * uy) * 2.0f - 1.0f;
+}
+
+/// max(x, 0) with its corner rounded by a hyperbola (sceneWindSoftRamp): a
+/// gust starts with no kink and no jump in its acceleration.
+inline constexpr float kWindGustSoft = 0.06f;
+inline float windSoftRamp(float x) { return 0.5f * (x + std::sqrt(x * x + kWindGustSoft * kWindGustSoft)); }
+
+/// The oscillator clock's period (s): scene_camera.glsl's
+/// SCENE_WIND_CLOCK_PERIOD, the camera block's windParams.w.
+inline constexpr double kWindClockPeriod = 256.0;
+
 /// The gust at absolute world (x, z): 0 between bands, up to ~2 x gust in one.
 inline float windGustAt(const WindFieldState& s, float x, float z) {
     if (s.gust <= 0.0f) return 0.0f;
     const float along = x * s.dirX + z * s.dirZ - s.time * s.gustSpeed;
     const float across = -x * s.dirZ + z * s.dirX;
-    const float g = windNoise(along * s.invAlong, across * s.invAcross) * 0.5f + 0.5f +
-                    0.35f * windNoise(along * s.invAlong * 3.18f + 5.3f, across * s.invAcross * 4.17f);
-    return std::max(g - 0.45f, 0.0f) * 2.4f * s.gust;
+    const float g = windNoise5(along * s.invAlong, across * s.invAcross) * 0.5f + 0.5f +
+                    0.35f * windNoise5(along * s.invAlong * 3.18f + 5.3f, across * s.invAcross * 4.17f);
+    return windSoftRamp(g - 0.45f) * 2.4f * s.gust;
 }
 
 /// Wind velocity (m/s, horizontal) and gust at absolute world (x, z).

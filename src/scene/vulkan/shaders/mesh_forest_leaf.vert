@@ -114,7 +114,12 @@ void main() {
     vec2 cs = sx != 0.0 ? vec2(p.fold.x, sx * p.fold.y) : vec2(1.0, 0.0);
     mat3 F = mat3(vec3(cs.x, cs.y, 0.0), vec3(-cs.y, cs.x, 0.0), vec3(0.0, 0.0, 1.0));
     mat3 M = p.M * F;
-    vec3 pos = p.at + M * local;
+    // A leaf the eye passes through (a flight through a crown) shrinks to
+    // its middle over the last metre rather than filling the view for a
+    // frame or two and blinking out: at a few metres a second a leaf a few
+    // centimetres off is a different picture every frame.
+    float nearShrink = smoothstep(FOREST_NEAR_SHRINK.x, FOREST_NEAR_SHRINK.y, length(p.at));
+    vec3 pos = p.at + M * (local * nearShrink);
     // M is a rotation times a uniform scale, so normals take it too.
     vec3 Nw = normalize(M * inNormal);
     vec3 Tw = normalize(M * inTangent.xyz);

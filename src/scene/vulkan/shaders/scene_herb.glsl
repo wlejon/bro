@@ -66,9 +66,24 @@ struct HerbStalk {
     float len;
 };
 
+// The stalk's way at `t` as a tilt from upright (xz: the way it leans,
+// its length the angle): the rest pose's, then the wind's added to it, so
+// the two compose as angles. (As one vector sum, normalised, a nodding
+// head pushed back against its droop passed through nothing and turned
+// over in a frame: the poppies popped as a walker passed.) The wind's
+// tilt saturates near level, the whole short of folding back on itself.
 vec3 herbTangent(HerbStalk s, float t) {
     float b = s.bendFrom > 0.0 ? smoothstep(s.bendFrom - 0.12, s.bendFrom + 0.3, t) : t * t;
-    return normalize(s.d0 + s.bend * b + s.wind * (2.0 * t));
+    vec3 r = s.d0 + s.bend * b;
+    float rh = length(r.xz);
+    vec2 T = rh > 1e-6 ? r.xz * (atan(rh, r.y) / rh) : vec2(0.0);
+    vec2 W = s.wind.xz * (2.0 * t);
+    T += W * inversesqrt(1.0 + dot(W, W) * (1.0 / 1.96));   // ~atan for a small push, to 1.4 rad
+    float a = length(T);
+    if (a < 1e-6) return vec3(0.0, 1.0, 0.0);
+    float c = a < 2.2 ? a : 2.2 + 0.6 * tanh((a - 2.2) / 0.6);
+    vec2 d = T / a * sin(c);
+    return vec3(d.x, cos(c), d.y);
 }
 
 // The point `t` of the way along stalk `s`, and its direction there.
@@ -207,17 +222,9 @@ bool herbVertex(int id, int vid, vec3 v, out HerbVertex o) {
     o.ground = gn;
     float tone = 0.85 + 0.3 * fract(h.z * 13.1 + h.x);
     o.tint = vec3(tone) * mix(vec3(1.06, 1.0, 0.9), vec3(0.94, 1.0, 1.1), fract(h.y * 5.7 + h.w));
-    VegWind w;
-    {
-        vec2 dw = camera.windField.xy;
-        float u = camera.windField.z, t = camera.windParams.x;
-        w.dir = vec3(dw.x, 0.0, dw.y);
-        w.side = vec3(-dw.y, 0.0, dw.x);
-        w.p0 = vegPressure(u + 4.0 * sceneWindGustAtTime(rootXZ, t, true));
-        w.p1 = vegPressure(u + 4.0 * sceneWindGustAtTime(rootXZ, t - 0.4, false));
-        w.p2 = vegPressure(u + 4.0 * sceneWindGustAtTime(rootXZ, t - 1.3, false));
-        w.t = t;
-    }
+    // A herb's stalks are quick (a few hertz): the drag now drives them,
+    // rung by its change over the last 0.4 s.
+    VegWind w = vegWindLagged(rootXZ, 0.0, 0.4);
     // Under a closed canopy the wind near the ground is a fraction of the open's.
     float shelter = 1.0 - 0.8 * clamp(fh.x, 0.0, 1.0);
     float trample;
@@ -278,7 +285,7 @@ bool herbVertex(int id, int vid, vec3 v, out HerbVertex o) {
             vec3 side = cross(tgv, toEye);
             side = dot(side, side) > 1e-8 ? normalize(side) : vec3(1.0, 0.0, 0.0);
             // A raceme's bells hang out from the plant and down: its +x side.
-            vec3 outward = normalize(vec3(tip.x - root.x, 0.0, tip.z - root.z) + vec3(1e-4, 0.0, 0.0)) -
+            vec3 outward = normalize(vec3(s.d0.x, 0.0, s.d0.z) + vec3(1e-4, 0.0, 0.0)) -
                            vec3(0.0, 0.5, 0.0);
             if (dot(side, outward) < 0.0) side = -side;
             float bell = clamp(bs * 1.8 / max(r6.z, 1.0), 0.012, 0.05);
@@ -300,7 +307,10 @@ bool herbVertex(int id, int vid, vec3 v, out HerbVertex o) {
         // ball, its card facing the eye.
         // A flower's face turns out from its plant as well as up (a daisy's
         // heads look about, an umbel stays near level).
-        vec3 o3 = normalize(vec3(tip.x - root.x, 0.0, tip.z - root.z) + vec3(1e-4, 0.0, 0.0));
+        // (Out is the stem's way at rest, not its tip's from the root: a
+        // stem pushed over its root swung that half a turn in a frame or
+        // two, and the flower with it.)
+        vec3 o3 = normalize(vec3(s.d0.x, 0.0, s.d0.z) + vec3(1e-4, 0.0, 0.0));
         float tilt = (form == 1 ? 0.75 : form == 2 ? 0.45 : form == 5 ? 0.12 : 0.0) * (0.6 + 0.8 * fract(h.w * 5.3 + float(k) * 0.71));
         vec3 n = normalize((tg + o3 * tilt) * (1.0 - nod) - vec3(0.0, nod, 0.0) + vec3(0.0, 1e-3, 0.0));
         vec3 e1, e2;
@@ -314,8 +324,11 @@ bool herbVertex(int id, int vid, vec3 v, out HerbVertex o) {
             // ellipse at the angle it is seen (size.w, the axis on the eye).
             // So is an umbel's dome of florets, its middle over the tip.
             float cv = dot(n, toEye);
-            vec3 up2 = n - toEye * cv;
-            e2 = dot(up2, up2) > 1e-6 ? normalize(up2) : normalize(cross(toEye, vec3(1.0, 0.0, 0.0)));
+            // Up the card: the cup's axis on the eye, steadied by the
+            // flower's own outward way as the axis nears the eye's line (seen
+            // from straight above or below, its projection would spin).
+            vec3 up2 = n - toEye * cv + (o3 - toEye * dot(o3, toEye)) * 0.05;
+            e2 = dot(up2, up2) > 1e-8 ? normalize(up2) : normalize(cross(toEye, vec3(1.0, 0.0, 0.0)));
             e1 = normalize(cross(e2, toEye));
             centre = form == 2 ? tip + n * (0.7 * scale) - e2 * (0.25 * scale) : tip + n * (0.3 * scale);
             n = toEye;
@@ -396,13 +409,18 @@ bool herbVertex(int id, int vid, vec3 v, out HerbVertex o) {
     vec3 p = herbPoint(s, t, tg);
     // Across: level, square to the leaf; a fern's frond rolls a little
     // about its rachis, and every leaf flutters about its midrib.
-    vec3 side = cross(vec3(0.0, 1.0, 0.0), tg);
-    side = dot(side, side) > 1e-6 ? normalize(side) : vec3(-out3.z, 0.0, out3.x);
+    // (Square to the leaf's own outward way, not to the vertical: a frond
+    // pushed back through upright turned over as up x tangent passed
+    // through nothing, its card flipping face in a frame.)
+    vec3 side0 = vec3(out3.z, 0.0, -out3.x);   // up x out3, the way it was
+    vec3 side = side0 - tg * dot(side0, tg);
+    side = dot(side, side) > 1e-6 ? normalize(side) : side0;
     vec3 nrm = normalize(cross(side, tg));
     // (In a calm nothing flutters.)
-    float gust = clamp(w.p0 * 3.0, 0.0, 1.0);
+    float gust = smoothstep(0.0, 1.0, w.trunk * 3.0);
     float calm = clamp(camera.windField.z / 2.5, 0.0, 1.0);
-    float roll = (hk2 - 0.5) * 0.5 + sin(w.t * (4.0 + 5.0 * hk) + hk * 40.0) * (0.06 * calm + 0.3 * gust) * shelter;
+    float roll = (hk2 - 0.5) * 0.5 +
+                 sin(6.2831853 * sceneWindCycles((4.0 + 5.0 * hk) / 6.2831853) + hk * 40.0) * (0.06 * calm + 0.3 * gust) * shelter;
     vec3 sideR = side * cos(roll) + nrm * sin(roll);
     nrm = normalize(cross(sideR, tg));
     // The card's width: the leaf's (a carpet's card holds several leaves).

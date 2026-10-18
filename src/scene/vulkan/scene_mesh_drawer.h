@@ -320,6 +320,20 @@ private:
     VkPipelineLayout poseLayout_ = VK_NULL_HANDLE;
     VkShaderModule poseCs_ = VK_NULL_HANDLE;
     VkPipeline posePipeline_ = VK_NULL_HANDLE;
+
+    // The forests' detail factors as last drawn (per node, or the shared
+    // one of prepareForests): the budget's fit moves them only so fast and
+    // past a margin, so a moving camera does not re-thin the crowns a little
+    // every frame (scene_mesh_drawer_forest.cpp's settleDetail).
+    struct ForestDetail {
+        float detail = 0.0f, shadow = 0.0f;
+        float eye[3] = {0.0f, 0.0f, 0.0f};
+        float budget = 0.0f, shadowBudget = 0.0f;
+    };
+    std::unordered_map<const void*, ForestDetail> forestDetail_;
+    ForestDetail forestsDetail_;
+    void settleDetail(ForestDetail& d, const SceneFrame& frame, float budget, float shadowBudget, float& detail,
+                      float& shadowDetail);
 };
 
 }  // namespace bro::scene::vk

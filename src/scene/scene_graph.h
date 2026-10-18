@@ -630,8 +630,13 @@ private:
     /// applyActiveCamera(), before the 3D passes.
     void updateVisibilityGates();
 
+    /// Feed the grass nodes' movers, where they are now, to the renderer's
+    /// plant movers (plant_movers.h). Each tick, after the wind clock.
+    void updatePlantMovers();
+
     std::unique_ptr<SceneNode> root_;
     std::unordered_map<uint32_t, std::unique_ptr<SceneNode>> nodes_;
+    std::vector<uint32_t> grassIds_;   // the grass nodes created (pruned as they go)
 
     // AI integration. aiWorldPin_ keeps the attached world's JS wrapper alive
     // for the duration of the attachment (see attachAIWorld).

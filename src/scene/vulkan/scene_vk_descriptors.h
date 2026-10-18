@@ -19,9 +19,16 @@ struct alignas(16) SceneCameraUniforms {
     alignas(16) float fogParams[4];  // x = start, y = end, z = density, w = start distance
     alignas(16) float fogColor[4];   // rgb = color, a = heightFalloff
     alignas(16) float wind[4];       // xyz = direction, w = strength
-    alignas(16) float windParams[4]; // x = time (s), y = frequency, z = the eye's phase offset
+    alignas(16) float windParams[4]; // x = time (s), y = frequency, z = the eye's phase offset, w = the oscillator clock (time mod kWindClockPeriod)
     alignas(16) float windField[4];  // xy = horizontal direction (x, z), z = steady speed, w = gust travel speed
     alignas(16) float windGust[4];   // x = gust amount, y = 1 / along scale, z = 1 / across scale
+    // The plant movers (plant_movers.h, scene_vegetation.glsl's vegMoverPush).
+    alignas(16) float plantMoverInfo[4];   // x = movers, y = trail samples a mover
+    // Two a mover: (camera-relative x, z now, the reach of its trail's push
+    // (m), its radius), (height, strength, 0, 0).
+    alignas(16) float plantMovers[8][4];
+    // kTrail a mover, oldest first: (camera-relative x, z, age (s), window).
+    alignas(16) float plantTrail[80][4];
 };
 
 /// The light and shadow-tile capacity of the lighting block (SceneRenderer's

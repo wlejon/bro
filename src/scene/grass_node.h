@@ -168,9 +168,13 @@ public:
     // --- Movers ---
     /// Track node `nodeId`: every frame its path through the grass stamps a
     /// bend of `radius` m (blades lean away and along its motion) and, with
-    /// `trample` > 0, flattens it. radius <= 0 stops tracking.
-    void setMover(uint32_t nodeId, float radius, float strength, float trample);
+    /// `trample` > 0, flattens it. radius <= 0 stops tracking. It also
+    /// pushes through shrubs and low foliage (plant_movers.h) up to
+    /// `height` m above their roots.
+    void setMover(uint32_t nodeId, float radius, float strength, float trample, float height = 1.8f);
     size_t moverCount() const { return movers_.size(); }
+    struct MoverInfo { uint32_t nodeId; float radius, strength, height; };
+    std::vector<MoverInfo> moverInfo() const;
     /// A one-off push this frame at world (x, z), moving at (vx, vz) m/s.
     void push(float x, float z, float radius, float vx, float vz, float strength, float trample);
 
@@ -184,8 +188,22 @@ public:
     static constexpr float kPushCell = 0.2f;
     float pushX0() const { return static_cast<float>(pushOx_) * kPushCell; }
     float pushZ0() const { return static_cast<float>(pushOz_) * kPushCell; }
-    static constexpr float kBendRecovery = 2.2f;     // 1/s
-    static constexpr float kTrampleRecovery = 0.05f; // 1/s
+    // A push's release (grassInfluence in scene_grass.glsl: keep in step).
+    // Pushed blades spring back as a damped spring of kBendSpringHz and
+    // ratio kBendSpringDamping: they swing back past upright once, a little,
+    // and settle within about 1.5 s. A trampled lane rises again critically
+    // damped (no sudden start): most of it over kTrampleRelax s, a faint
+    // residue (kTrampleResidue of it) over kTrampleResidueRelax s.
+    static constexpr float kBendSpringHz = 0.9f;
+    static constexpr float kBendSpringDamping = 0.3f;
+    static constexpr float kTrampleRelax = 0.7f;
+    static constexpr float kTrampleResidue = 0.06f;
+    static constexpr float kTrampleResidueRelax = 4.0f;
+    /// The share of a stamped bend left `age` s after its stamp (1 at 0,
+    /// level at 0, overshooting below 0 once).
+    static float bendRelease(float age);
+    /// The share of a stamped trample left `age` s after its stamp.
+    static float trampleRelease(float age);
 
     // User-texture slot names (MeshNode::setCustomShaderTexture).
     static constexpr const char* kFieldTexture = "u_grassField";
@@ -229,7 +247,7 @@ public:
 private:
     struct Mover {
         uint32_t nodeId = 0;
-        float radius = 0.6f, strength = 1.0f, trample = 0.0f;
+        float radius = 0.6f, strength = 1.0f, trample = 0.0f, height = 1.8f;
         bool seen = false;
         float lastX = 0.0f, lastZ = 0.0f;
         float vx = 0.0f, vz = 0.0f;

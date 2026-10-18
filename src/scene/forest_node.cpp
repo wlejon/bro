@@ -347,7 +347,10 @@ ForestNode::TreeLod ForestNode::treeLod(const Lod& lod, const Specimen& s, float
     // ... but never past what anyone would see go: bark wider than
     // `barkKeepPixels` stays.
     if (lod.barkKeepPixels > 0.0f) t.barkRadius = std::min(t.barkRadius, lod.barkKeepPixels / (2.0f * barkPx));
-    t.card = t.widening > lod.cardWidening;
+    // Near leaves hand over to cards through a narrow band either side of
+    // cardWidening (the drawer splits the kept leaves between them).
+    t.cardShare = smooth(lod.cardWidening / 1.06f, lod.cardWidening * 1.06f, t.widening);
+    t.card = t.cardShare > 0.5f;
     const float toClumps = smooth(lod.clumpFrom, lod.clumpTo, t.widening);
     // Crowns take over as a clump shrinks on screen (crownFrom > crownTo).
     const float toCrowns = s.clumpCount > 0 ? 1.0f - smooth(lod.crownTo, lod.crownFrom, s.meanClumpRadius * px) : 0.0f;

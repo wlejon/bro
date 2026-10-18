@@ -28,18 +28,26 @@
 // long and holds the crown, so slow; sprays are short, so quick) and its
 // static tip deflection over its length at 10 m/s, from the drag on the
 // leaves it carries over that stiffness (so a thick trunk deflects
-// little). Here each level is driven by the drag at the plant, (U / 10
-// m/s)^1.3 (a crown streamlines, so drag grows slower than U^2), and
-// answers as a forced, damped oscillator: its static deflection under the
-// drag a quarter period back (a heavy level lags the gusts that reach it),
-// plus ringing at its own frequency, from the turbulence too fine for the
-// gust field (strongest on the slow, lightly damped levels) and from how
-// much the drag changed in its last half period, damped by its ratio (the
-// trunk most: its limbs soak up its energy, "multiple mass damping"). The
-// drag's past is the travelling gust field read at earlier
-// times: three reads a vertex, shared by the levels. A level's bend has the
-// shape of a loaded cantilever, s^2 (3 - s) / 2 along it, so the bend is at
-// its outer end, and the levels add down the hierarchy.
+// little). Here each level is driven by the drag, (U / 10 m/s)^1.3 (a
+// crown streamlines, so drag grows slower than U^2), and answers as a
+// forced, damped oscillator: its static deflection under the drag a
+// quarter period back (a heavy level lags the gusts that reach it), plus a
+// narrow band of ringing round its own frequency, from the turbulence too
+// fine for the gust field (strongest on the slow, lightly damped levels)
+// and from how much the drag changed over the trunk's last half period,
+// damped by its ratio (the trunk most: its limbs soak up its energy,
+// "multiple mass damping"). The trunk feels the wind at the root (it sums
+// the crown's); a limb and its twigs feel it where they are, so a gust
+// sweeps through a crown limb by limb, and they feel more of the
+// unresolved turbulence (eddies a crown's size or smaller), so each rings
+// on its own. Three reads of the travelling gust field a vertex (the
+// trunk's now and half a period before, the limb's). Every motion is
+// smooth in time to its second derivative (the gust field's quintic noise
+// and hyperbolic threshold, vegSmoothAbs) and every frequency is fixed
+// (scene_camera.glsl's oscillator clock). Movers (vegMoverPush) part the
+// limbs and twigs within their reach. A level's bend has the shape of a loaded cantilever,
+// s^2 (3 - s) / 2 along it, so the bend is at its outer end, and the
+// levels add down the hierarchy.
 //
 // Two layers, so a level-of-detail chain can share one pose:
 //   vegPose   the trunk, limb and twig bend at a rest point: the offset and
@@ -70,11 +78,27 @@ const float VEG_TWIG_DAMPING = 0.05;
 // The ringing (vegLevel). VEG_TURBULENCE: unresolved turbulence of 15% of
 // the drag above 0.1 Hz with a -5/3 spectrum, whose narrow-band resonant
 // RMS is sigma sqrt(pi / (4 * 6.76)) times the mean drag at 1 Hz and
-// damping 1. VEG_GUST_KICK: the share of a gust's change that rings. Both
-// were checked against a damped oscillator integrated under the same drag
-// (the grove's sway_check.js: deflection RMS and speed within ~15%).
+// damping 1: what a trunk, which sums the wind over its whole crown,
+// feels. VEG_CROWN_TURBULENCE: what a limb or a twig feels, about 40% (a canopy's
+// turbulence intensity is 30-50% of its mean wind, so of its drag about
+// twice that, and the eddies smaller than a crown, which the gust field
+// does not resolve and a trunk averages away, each reach only a limb or
+// two; at 30% three quarters of every part's motion was the one bend the
+// whole crown shares; at 50% a crown 20 m off, its leaves under a pixel,
+// flickered half as much again as at 40%). VEG_GUST_KICK: the share of a
+// gust's change that rings. Checked against a damped oscillator integrated
+// under the same drag (the grove's sway_check.js).
 const float VEG_TURBULENCE = 0.051;
+const float VEG_CROWN_TURBULENCE = 0.14;
 const float VEG_GUST_KICK = 0.4;
+// A leaf's flutter about its petiole: lowest frequency and spread (Hz).
+const vec2 VEG_LEAF_FLUTTER_HZ = vec2(2.0, 2.5);
+// A leaf the eye passes through (a camera in a crown) shrinks to its middle
+// within VEG_NEAR_SHRINK.y of the eye, gone by .x (m), rather than filling
+// the view for a frame or two: at a few metres a second a leaf a few
+// centimetres off is a different picture every frame. Colour passes only
+// (a shadow caster defines VEG_SHADOW_CASTER).
+const vec2 VEG_NEAR_SHRINK = vec2(0.25, 1.0);
 
 // How much a limb and a twig rise and fall as they ring, against their
 // sway (vegLevel's `bob`). A broadleaf's; a forest node sets its own
@@ -93,14 +117,17 @@ struct VegPlant { vec3 root; float height; VegCantilever trunk; float seed; };
 // What every vertex of a limb shares: the limb and its twigs, its phase.
 struct VegLimb { VegCantilever limb; VegCantilever twig; float phase; };
 
-// The wind at a plant: downwind and across (horizontal, unit), and the drag
-// (U / 10 m/s)^1.3 now, 0.4 s ago and 1.3 s ago (the past from the slow part
-// of the travelling gusts), and the clock.
-struct VegWind { vec3 dir; vec3 side; float p0; float p1; float p2; float t; };
+// The wind at a plant: downwind and across (horizontal, unit); the drag
+// (U / 10 m/s)^1.3 that drives its trunk (at its root, a quarter of the
+// trunk's period back: a heavy trunk lags the gusts), how much that drag
+// changed over the trunk's half period before (what sets a level ringing;
+// a smooth |change|), and the clock.
+struct VegWind { vec3 dir; vec3 side; float trunk; float kick; float t; };
 
 // The wood's pose at a point: the offset it moves by and its rotation (a
-// rotation vector: axis times radians).
-struct VegPose { vec3 offset; vec3 omega; };
+// rotation vector: axis times radians), and the drag where it is (its
+// limb's: what a leaf hanging there flutters in).
+struct VegPose { vec3 offset; vec3 omega; float drag; };
 
 // A packed word's number: log-quantised over `range`, code 0 is zero.
 float vegLogValue(uint code, uint bits, vec2 range) {
@@ -152,45 +179,114 @@ vec3 vegUnpackAxis(float word) {
 
 float vegPressure(float u) { return pow(max(u, 0.0) / VEG_REFERENCE_WIND, 1.3); }
 
-VegWind vegWind(VegPlant plant) {
+// The drag at absolute world xz at wind-clock time t.
+float vegDragAt(vec2 xz, float t, bool fine) {
+    return vegPressure(camera.windField.z + 4.0 * sceneWindGustAtTime(xz, t, fine));
+}
+
+// |x|, rounded at 0 so what it drives has no kink where x changes sign.
+float vegSmoothAbs(float x) { return sqrt(x * x + 0.0025) - 0.05; }
+
+// A level's lag behind the drag it feels: a quarter of its period.
+float vegLag(float freq) { return min(0.25 / max(freq, 0.05), 1.3); }
+
+// The wind at absolute xz: the drag `lag` seconds back and its change over
+// the `span` before that.
+VegWind vegWindLagged(vec2 xzAbs, float lag, float span) {
     VegWind w;
-    vec2 xz = plant.root.xz + camera.eyeWorld.xz;
     float t = camera.windParams.x;
     vec2 d = camera.windField.xy;
-    float u = camera.windField.z;
     w.dir = vec3(d.x, 0.0, d.y);
     w.side = vec3(-d.y, 0.0, d.x);
-    w.p0 = vegPressure(u + 4.0 * sceneWindGustAtTime(xz, t, true));
-    w.p1 = vegPressure(u + 4.0 * sceneWindGustAtTime(xz, t - 0.4, false));
-    w.p2 = vegPressure(u + 4.0 * sceneWindGustAtTime(xz, t - 1.3, false));
+    w.trunk = vegDragAt(xzAbs, t - lag, true);
+    w.kick = vegSmoothAbs(w.trunk - vegDragAt(xzAbs, t - lag - span, true));
     w.t = t;
     return w;
 }
 
+VegWind vegWind(VegPlant plant) {
+    float f = plant.trunk.freq;
+    return vegWindLagged(plant.root.xz + camera.eyeWorld.xz, vegLag(f), min(0.5 / max(f, 0.05), 1.5));
+}
+
 // One level's tip deflection (world metres) as a forced, damped oscillator
-// (see the model above). `phase` in cycles; `bob` how much it rises and
-// falls as it rings (limbs and twigs; a trunk only leans).
-vec3 vegLevel(VegCantilever c, float zeta, float phase, VegWind w, float bob) {
+// (see the model above), under drag `mean` (already lagged a quarter of its
+// period) and the gusts' change `kick`. `turbulence` is the share of
+// unresolved turbulence it feels (VEG_TURBULENCE, VEG_CROWN_TURBULENCE),
+// `phase` in cycles; `bob` how much it rises and falls as it rings (limbs
+// and twigs; a trunk only leans).
+//
+// The ring: what sets it ringing, each as an RMS: the turbulence the gust
+// field does not resolve, at its resonance (narrow-band response to a -5/3
+// spectrum: mean drag times f^(-1/3) / sqrt(damping)); and the gusts' own
+// change over the last half period, which only a slow level rings at. A
+// lightly damped oscillator under broadband forcing answers as a narrow band
+// of width about 2 zeta f round its frequency, so the ring is two sinusoids
+// at f (1 -+ zeta): it swells and dies away over about 1 / (2 zeta f)
+// rather than ringing on as a pure tone. Every frequency is fixed (the
+// drag changes the ring's size, never its rate: scene_camera.glsl's
+// oscillator clock).
+vec3 vegLevelDrive(VegCantilever c, float zeta, float turbulence, float phase, float mean, float kick, VegWind w,
+                   float bob) {
     if (c.sway <= 0.0 || c.freq <= 0.0) return vec3(0.0);
     float period = 1.0 / c.freq;
-    // The drag a quarter period back, from the three reads.
-    float lag = min(0.25 * period, 1.3);
-    float mean = lag < 0.4 ? mix(w.p0, w.p1, lag * 2.5) : mix(w.p1, w.p2, (lag - 0.4) / 0.9);
-    // What sets it ringing, each as an RMS: the turbulence the gust field
-    // does not resolve, at its resonance (narrow-band response to a -5/3
-    // spectrum: mean drag times f^(-1/3) / sqrt(damping)); and the gusts'
-    // own change over its last half period, which only a level slower than
-    // the change rings at. The ring is a sinusoid of their combined RMS.
-    float slow = clamp((0.5 * period - 0.4) / 0.9, 0.0, 1.0);
-    float kick = mix(abs(w.p0 - w.p1), abs(w.p0 - w.p1) + abs(w.p1 - w.p2), slow);
-    float turb = VEG_TURBULENCE * mean * pow(max(c.freq, 0.1), -1.0 / 3.0) * inversesqrt(zeta);
+    float turb = turbulence * mean * pow(max(c.freq, 0.1), -1.0 / 3.0) * inversesqrt(zeta);
     float gust = VEG_GUST_KICK * kick * min(1.0, 1.25 * period);
-    float ring = 1.41421 * sqrt(turb * turb + gust * gust);
-    float th = VEG_TWO_PI * (c.freq * w.t + phase);
-    float th2 = VEG_TWO_PI * (c.freq * 1.13 * w.t + phase * 3.7) + 1.3;
-    vec3 x = w.dir * (mean + ring * sin(th)) + w.side * (0.6 * ring * sin(th2)) +
-             vec3(0.0, bob * ring * sin(th * 0.97 + 2.1), 0.0);
+    float rms = sqrt(turb * turb + gust * gust);
+    float a1 = VEG_TWO_PI * (sceneWindCycles(c.freq * (1.0 - zeta)) + phase);
+    float a2 = VEG_TWO_PI * (sceneWindCycles(c.freq * (1.0 + zeta)) + phase * 2.3) + 2.0;
+    float a3 = VEG_TWO_PI * (sceneWindCycles(c.freq * 1.13) + phase * 3.7) + 1.3;
+    float a4 = VEG_TWO_PI * (sceneWindCycles(c.freq * 0.97) + phase) + 2.1;
+    vec3 x = w.dir * (mean + rms * (sin(a1) + sin(a2))) + w.side * (0.85 * rms * sin(a3)) +
+             vec3(0.0, 1.41421 * bob * rms * sin(a4), 0.0);
     return x * (c.sway * c.len);
+}
+
+// The same driven by the plant's trunk drag (a herb's stalk, a trunk).
+vec3 vegLevel(VegCantilever c, float zeta, float phase, VegWind w, float bob) {
+    return vegLevelDrive(c, zeta, VEG_TURBULENCE, phase, w.trunk, w.kick, w, bob);
+}
+
+// The movers' push at camera-relative rest point `p`, `above` metres over
+// its plant's root (scene/plant_movers.h). Each sample of a mover's trail
+// pushes the point away from the body's axis as far as the body is deep in
+// it, through a damped spring's impulse response at the sample's age: the
+// plant parts as the body arrives, holds while it stays and swings back
+// past rest once after it goes. Horizontal, and a little down (a pushed
+// shoot bends down as it goes aside). A point feels the body from
+// VEG_MOVER_REACH of its radius (scene_view.cpp sizes each mover's bound
+// with it); a quicker, stiffer spring parted a shrub by a hand's breadth a
+// frame.
+const float VEG_MOVER_HZ = 1.0;
+const float VEG_MOVER_DAMPING = 0.4;
+const float VEG_MOVER_REACH = 1.6;
+const float VEG_MOVER_STEP = 0.1;   // PlantMovers::kStep
+vec3 vegMoverPush(vec3 p, float above) {
+    int n = int(camera.plantMoverInfo.x + 0.5);
+    if (n <= 0) return vec3(0.0);
+    int K = int(camera.plantMoverInfo.y + 0.5);
+    float w = VEG_TWO_PI * VEG_MOVER_HZ, z = VEG_MOVER_DAMPING;
+    float wd = w * sqrt(1.0 - z * z);
+    vec2 acc = vec2(0.0);
+    for (int m = 0; m < n; ++m) {
+        vec4 a = camera.plantMovers[m * 2], b = camera.plantMovers[m * 2 + 1];
+        vec2 dm = p.xz - a.xy;
+        if (dot(dm, dm) > a.z * a.z || above > b.x) continue;
+        float R = a.w, reach = VEG_MOVER_REACH * R;
+        vec2 sum = vec2(0.0);
+        for (int k = 0; k < K; ++k) {
+            vec4 s = camera.plantTrail[m * K + k];
+            if (s.w <= 0.0) continue;
+            vec2 d = p.xz - s.xy;
+            float r = length(d);
+            if (r >= reach) continue;
+            vec2 dir = r > 1e-4 ? d / r : vec2(1.0, 0.0);
+            float h = w * w / wd * exp(-z * w * s.z) * sin(wd * s.z);
+            sum += dir * (R * (1.0 - smoothstep(0.0, reach, r)) * h * VEG_MOVER_STEP * s.w);
+        }
+        acc += sum * b.y * (1.0 - smoothstep(b.x - 0.3, b.x, above));
+    }
+    return vec3(acc.x, -0.25 * length(acc), acc.y);
 }
 
 // The bent shape of a cantilever s of the way along it, and its slope.
@@ -201,6 +297,7 @@ float vegBendSlope(float s) { return s <= 1.0 ? s * (3.0 - 1.5 * s) : 1.5; }
 // limb (0 on the trunk). The shared layer: see the header.
 VegPose vegPose(VegPlant plant, VegLimb limb, VegWind w, vec3 rest, float weight) {
     VegPose o;
+    o.drag = w.trunk;
     // The trunk, bending from the root; its top drops a little as it leans.
     float h = clamp((rest.y - plant.root.y) / plant.height, 0.0, 1.3);
     vec3 xt = vegLevel(plant.trunk, VEG_TRUNK_DAMPING, plant.seed, w, 0.0);
@@ -210,18 +307,27 @@ VegPose vegPose(VegPlant plant, VegLimb limb, VegWind w, vec3 rest, float weight
     if (limb.limb.sway <= 0.0 || weight <= 0.0) return o;
 
     // The limb, bending from where it leaves the trunk. Its direction here
-    // is taken as outward from the trunk and up.
+    // is taken as outward from the trunk and up. It feels the wind where it
+    // is, not at the root: a gust reaches the upwind side of a crown first
+    // and travels through it (about a second across a broad crown), so the
+    // limbs follow one another rather than moving with the trunk as one.
     vec3 rel = rest - plant.root;
     float out2 = dot(rel.xz, rel.xz);
     vec3 dir = out2 > 1e-6 ? normalize(vec3(rel.x, 0.75 * sqrt(out2), rel.z)) : vec3(0.0, 1.0, 0.0);
     float s = clamp(weight, 0.0, 1.0);
-    vec3 xl = vegLevel(limb.limb, VEG_LIMB_DAMPING, limb.phase, w, vegLimbBob);
+    vec2 here = rest.xz + camera.eyeWorld.xz;
+    float pl = vegDragAt(here, w.t - vegLag(limb.limb.freq), true);
+    o.drag = pl;
+    vec3 xl = vegLevelDrive(limb.limb, VEG_LIMB_DAMPING, VEG_CROWN_TURBULENCE, limb.phase, pl, w.kick, w, vegLimbBob);
     o.offset += xl * vegBend(s);
+    // A body pushing through it moves its outer shoots and leaves aside
+    // (the wood near the trunk stays).
+    o.offset += vegMoverPush(rest, rest.y - plant.root.y) * smoothstep(0.15, 0.7, s);
     o.omega += cross(dir, xl) * (vegBendSlope(s) / max(limb.limb.len, 0.05));
 
     // Its twigs: the outer end of the limb, each on a phase of its own that
     // drifts smoothly through the crown (so a twig and its leaves move
-    // together and neighbouring twigs do not).
+    // together and neighbouring twigs do not), in the limb's wind.
     if (limb.twig.sway <= 0.0) return o;
     float w0 = 1.0 - min(1.0, 1.5 * limb.twig.len / max(limb.limb.len, 0.05));
     float u = clamp((s - w0) / max(1.0 - w0, 1e-3), 0.0, 1.0);
@@ -229,7 +335,7 @@ VegPose vegPose(VegPlant plant, VegLimb limb, VegWind w, vec3 rest, float weight
     vec3 ra = rest + camera.eyeWorld.xyz;
     float ph = limb.phase + 0.12 * (sin(dot(ra, vec3(3.1, 1.7, 2.3))) + sin(dot(ra, vec3(-1.9, 2.9, 3.7))) +
                                     sin(dot(ra, vec3(2.7, -3.3, 1.3))));
-    vec3 xw = vegLevel(limb.twig, VEG_TWIG_DAMPING, ph, w, vegTwigBob);
+    vec3 xw = vegLevelDrive(limb.twig, VEG_TWIG_DAMPING, VEG_CROWN_TURBULENCE, ph, pl, w.kick, w, vegTwigBob);
     o.offset += xw * vegBend(u);
     o.omega += cross(dir, xw) * (vegBendSlope(u) / max(limb.twig.len, 0.02));
     return o;
@@ -257,7 +363,8 @@ mat3 vegRotation(vec3 omega) {
 //   - the wood's rotation where it hangs (pose.omega), so it turns with its
 //     limb and its shading follows the bend;
 //   - flutter about the petiole: a twist about its stem and a smaller pitch,
-//     at 3-9 Hz on its own phase, larger in stronger wind, in bursts;
+//     at its own fixed 2-4.5 Hz on its own phase, larger in stronger wind
+//     (the drag at its limb, pose.drag), in bursts;
 //   - in a gust (drag past a light breeze's), turned part of the way
 //     downwind and folded along its midrib, both halves rising.
 //
@@ -274,7 +381,8 @@ mat3 vegLeafTurn(VegPose pose, VegWind w, vec3 axis, vec3 normal, float seed, fl
     fold = 0.0;
     side = vec3(1.0, 0.0, 0.0);
     if (amount <= 0.0) return vegRotation(pose.omega);
-    float gust = clamp((w.p0 - 0.12) * 1.6, 0.0, 1.0) * amount;
+    float drag = pose.drag;
+    float gust = smoothstep(0.0, 1.0, (drag - 0.12) * 1.6) * amount;
     vec3 omega = pose.omega;
     vec3 turn = cross(axis, w.dir);
     float tl = length(turn);
@@ -283,10 +391,16 @@ mat3 vegLeafTurn(VegPose pose, VegWind w, vec3 axis, vec3 normal, float seed, fl
     side = cross(normal, axis);
     float sl = length(side);
     side = sl > 1e-4 ? side / sl : vec3(1.0, 0.0, 0.0);
-    float f = 3.0 + 4.0 * fract(seed * 7.13) + 2.5 * min(w.p0, 1.0);
-    float a = amount * 0.35 * sqrt(w.p0) * (0.55 + 0.45 * sin(VEG_TWO_PI * (0.6 * w.t + seed)));
-    float th = VEG_TWO_PI * (f * w.t + seed);
-    omega += axis * (a * sin(th)) + side * (0.45 * a * sin(1.37 * th + 2.0));
+    // Its own frequency, fixed (a leaf on its petiole flutters at 2-4.5 Hz;
+    // the wind sets how far, in bursts, never how fast: a frequency that
+    // followed the wind would chirp, scene_camera.glsl's oscillator clock).
+    float f = VEG_LEAF_FLUTTER_HZ.x + VEG_LEAF_FLUTTER_HZ.y * fract(seed * 7.13);
+    float a = amount * 0.35 * sqrt(max(drag, 0.0)) *
+              (0.55 + 0.45 * sin(VEG_TWO_PI * (sceneWindCycles(0.45 + 0.3 * fract(seed * 3.7)) + seed)));
+    float th = VEG_TWO_PI * (sceneWindCycles(f) + seed);
+    // (Each sinusoid its own cycles: a multiple of a wrapped phase would jump.)
+    float th2 = VEG_TWO_PI * (sceneWindCycles(1.37 * f) + 1.37 * seed) + 2.0;
+    omega += axis * (a * sin(th)) + side * (0.45 * a * sin(th2));
     fold = 0.8 * gust;
     return vegRotation(omega);
 }
@@ -359,7 +473,12 @@ vec4 vegetationSwayAxis(mat4 model, vec4 v0, vec4 v1, vec4 v2, vec4 v3, vec3 axi
     VegPose pose = vegPose(plant, limb, w, anchor, bw);
     float seed = fract(sin(dot(v2.xyz, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
     rot = vegLeaf(pose, w, normalize(mat3(model) * axis), leafNormal, pos - anchor, seed);
+#ifdef VEG_SHADOW_CASTER
     pos = anchor + pose.offset + rot * (pos - anchor);
+#else
+    vec3 at = anchor + pose.offset;
+    pos = at + rot * (pos - anchor) * smoothstep(VEG_NEAR_SHRINK.x, VEG_NEAR_SHRINK.y, length(at));
+#endif
 
     // The crown as one form: the leaf's normal leans toward the crown's
     // centre-out direction, and leaves deep inside take less sky.

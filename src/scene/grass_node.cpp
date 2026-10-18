@@ -603,7 +603,14 @@ float GrassNode::fieldHeight(float x, float z, float fallback) const {
     return h0 + (h1 - h0) * v;
 }
 
-void GrassNode::setMover(uint32_t nodeId, float radius, float strength, float trample) {
+std::vector<GrassNode::MoverInfo> GrassNode::moverInfo() const {
+    std::vector<MoverInfo> out;
+    out.reserve(movers_.size());
+    for (const Mover& m : movers_) out.push_back({m.nodeId, m.radius, m.strength, m.height});
+    return out;
+}
+
+void GrassNode::setMover(uint32_t nodeId, float radius, float strength, float trample, float height) {
     auto it = std::find_if(movers_.begin(), movers_.end(), [&](const Mover& m) { return m.nodeId == nodeId; });
     if (!(radius > 0.0f)) {
         if (it != movers_.end()) movers_.erase(it);
@@ -617,6 +624,7 @@ void GrassNode::setMover(uint32_t nodeId, float radius, float strength, float tr
     it->radius = radius;
     it->strength = std::max(strength, 0.0f);
     it->trample = std::clamp(trample, 0.0f, 1.0f);
+    it->height = std::max(height, 0.0f);
 }
 
 void GrassNode::push(float x, float z, float radius, float vx, float vz, float strength, float trample) {
@@ -649,6 +657,17 @@ void GrassNode::recentre(float eyeX, float eyeZ) {
     setCustomShaderTexture(kPushTexture, kPushCells, kPushCells, pushMap_.data(), false, false, false, 4);
 }
 
+float GrassNode::bendRelease(float age) {
+    const float w = 2.0f * 3.14159265f * kBendSpringHz, z = kBendSpringDamping;
+    const float wd = w * std::sqrt(1.0f - z * z);
+    return std::exp(-z * w * age) * (std::cos(wd * age) + z * w / wd * std::sin(wd * age));
+}
+
+float GrassNode::trampleRelease(float age) {
+    const float a = age / kTrampleRelax, b = age / kTrampleResidueRelax;
+    return (1.0f - kTrampleResidue) * (1.0f + a) * std::exp(-a) + kTrampleResidue * (1.0f + b) * std::exp(-b);
+}
+
 void GrassNode::stampDisc(float x, float z, float radius, float vx, float vz, float strength, float trample,
                           float dt, float now, int& minI, int& minJ, int& maxI, int& maxJ) {
     const int i0 = std::max(static_cast<int>(std::floor((x - radius) / kPushCell)) - pushOx_, 0);
@@ -672,10 +691,10 @@ void GrassNode::stampDisc(float x, float z, float radius, float vx, float vz, fl
             float bx = 0.0f, bz = 0.0f, tr = 0.0f;
             const float age = now - c[3];
             if (c[3] > 0.0f && age >= 0.0f) {
-                const float e = std::exp(-age * kBendRecovery);
+                const float e = bendRelease(age);
                 bx = c[0] * e;
                 bz = c[1] * e;
-                tr = std::max(c[2] - age * kTrampleRecovery, 0.0f);
+                tr = c[2] * trampleRelease(age);
             }
             const float nx = d > 1e-3f ? ddx / d : 0.0f, nz = d > 1e-3f ? ddz / d : 0.0f;
             const float s = k * strength * dt * 12.0f;
