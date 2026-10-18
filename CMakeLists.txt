@@ -48,6 +48,32 @@ endif()
 
 project(bro VERSION 0.1.0 LANGUAGES C CXX)
 
+# BRO_COMPILER_CACHE (default ON): compile through ccache, else sccache, when
+# one is on the PATH, every target in the tree included (the siblings are
+# added below, after the launcher is set). Ninja and Makefiles only; the
+# Visual Studio generator ignores a launcher. It saves the recompile of
+# sources that did not change: a fresh build dir, a branch switched and back,
+# a header touched and put back, a deps log lost to a killed build. A real
+# edit costs the same. ccache's base_dir is the projects root, so build dirs
+# and checkouts beside each other share their hits. A launcher already set
+# (-DCMAKE_CXX_COMPILER_LAUNCHER=...) is left alone.
+option(BRO_COMPILER_CACHE "Compile through ccache or sccache when one is found" ON)
+if(BRO_COMPILER_CACHE AND NOT CMAKE_GENERATOR MATCHES "^Visual Studio" AND NOT CMAKE_CXX_COMPILER_LAUNCHER)
+    find_program(BRO_COMPILER_CACHE_PROGRAM NAMES ccache sccache)
+    if(BRO_COMPILER_CACHE_PROGRAM)
+        set(_bro_launcher "${BRO_COMPILER_CACHE_PROGRAM}")
+        get_filename_component(_bro_launcher_name "${BRO_COMPILER_CACHE_PROGRAM}" NAME_WE)
+        if(_bro_launcher_name STREQUAL "ccache")
+            get_filename_component(_bro_projects_root "${CMAKE_SOURCE_DIR}/.." ABSOLUTE)
+            list(APPEND _bro_launcher "base_dir=${_bro_projects_root}")
+        endif()
+        foreach(_lang C CXX OBJC OBJCXX)
+            set(CMAKE_${_lang}_COMPILER_LAUNCHER "${_bro_launcher}")
+        endforeach()
+        message(STATUS "bro: compiling through ${_bro_launcher}")
+    endif()
+endif()
+
 # Dependencies: every library bro builds is declared here, before anything is
 # added, so these declarations win across the whole graph. A working tree at
 # ../<name> builds as it is; otherwise the sibling's main (third-party code: its
