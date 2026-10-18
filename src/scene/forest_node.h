@@ -377,6 +377,8 @@ public:
 
 private:
     void rebuildBounds();
+    // clumpTwigs_ from the clumps' leaves and the specimens' phyllotaxis.
+    void countClumpTwigs();
     void ensureBatches() const;
 
     std::vector<Specimen> specimens_;

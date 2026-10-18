@@ -678,7 +678,8 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  *   (leafColor rgb, form, barkColor rgb, leafSize), or 16 with each
  *   specimen's leaf after them all (8 a specimen: width, tip, teeth, tooth
  *   depth, gloss, spray brush, petiole (a share of the blade's length),
- *   phyllotaxis (0 alternate, 1 opposite, 2 spiral)); default the emit's.
+ *   phyllotaxis (0 alternate, 1 opposite, 2 spiral, 3 pinnate: leaflets on
+ *   the wood itself, no twigs)); default the emit's.
  *   All zeros: the node's own colours.
  * @property {ForestLod} [lod] - level-of-detail settings.
  * @property {Array<number>|string} [barkColor] - default `[0.2, 0.17, 0.14]`.

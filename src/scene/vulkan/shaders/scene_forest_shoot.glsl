@@ -702,6 +702,46 @@ bool forestTwigEnd(ForestClumpShoots c, int p, float end, out ForestTwigEnd o, o
     return true;
 }
 
+// A pinnate clump's leaf (phyllotaxis 3: a palm frond's leaflets): no twigs,
+// its leaves line the wood the clump grows on, through its base and a
+// clump's radius either way along its twig direction, in two ranks either
+// side, each angled forward and drooping (a frond's V), facing up. They
+// take no spray or shoot bend (`at` holds a still one): they ride the
+// wood's pose.
+const float FOREST_PINNATE_FORWARD = 0.45;   // radians a leaflet leans toward the tip
+const float FOREST_PINNATE_DROOP = 0.35;     // how far it hangs below its rank's level
+bool forestPinnateLeaf(ForestClumpShoots c, int j, out vec3 P, out mat3 R, out vec3 F, out vec3 lc, out float lr,
+                       out ForestLeafAt at) {
+    lc = c.C;
+    lr = c.r;
+    at.spray.lc = c.C; at.spray.lr = c.r; at.spray.hub = c.B; at.spray.hubWay = c.D;
+    at.spray.u = vec3(0.0, 1.0, 0.0); at.spray.h = vec3(1.0, 0.0, 0.0); at.spray.sd = vec3(0.0, 0.0, 1.0);
+    at.spray.rho = 1.0; at.spray.lam = 1.0; at.spray.Q = 1; at.spray.hb = 0u; at.spray.lobe = 0; at.spray.z = 0.0;
+    at.shoot.y = 0.0; at.shoot.u = vec3(0.0, 1.0, 0.0); at.shoot.h = vec3(1.0, 0.0, 0.0);
+    at.shoot.len = 1.0; at.shoot.m = 0; at.shoot.hs = 0u; at.shoot.delta = vec3(0.0);
+    at.x = 0.0;
+    uint hl = procHash(c.sb + uint(j + 1) * 0x27d4eb2fu);
+    int pairs = max((c.n + 1) / 2, 1);
+    float t = (float(j / 2) + 0.5 + (procDraw(hl, 0u) - 0.5) * 0.4) / float(pairs);
+    P = c.B + c.D * (c.r * (2.0 * t - 1.0));
+    vec3 up = vec3(0.0, 1.0, 0.0);
+    vec3 S = cross(c.D, up);
+    S = dot(S, S) > 1e-6 ? normalize(S) : perpendicularUnit(c.D);
+    vec3 U = cross(S, c.D);
+    float side = (j & 1) == 0 ? 1.0 : -1.0;
+    float fwd = FOREST_PINNATE_FORWARD + (procDraw(hl, 1u) - 0.5) * 0.2;
+    F = normalize(S * (side * cos(fwd)) + c.D * sin(fwd) - U * (FOREST_PINNATE_DROOP + (procDraw(hl, 2u) - 0.5) * 0.2));
+    vec3 N = U - F * dot(U, F);
+    N = dot(N, N) > 1e-10 ? normalize(N) : perpendicularUnit(F);
+    vec3 X = cross(F, N);
+    vec4 h1 = procedural.header[1];
+    float scale = h1.x * (1.0 + (procDraw(hl, 5u) * 2.0 - 1.0) * h1.y);
+    R = mat3(1.0);
+    if (scale < 1e-6) return false;
+    R = mat3(X * scale, N * scale, F * scale);
+    return true;
+}
+
 // Leaf `lf` (forestLeaf's clump and key) of instance `i`, as every forest
 // leaf stage places it: a broad node's on its shoot (`onShoot`, `at` where),
 // a spray node's as the clump-mode scatter places it.
@@ -713,6 +753,7 @@ bool forestLeafFrame(int i, ivec2 lf, out vec3 P, out mat3 R, out vec3 F, out ve
     ForestClumpShoots c = forestClumpShoots(lf.x, phyllotaxis);
     int j = lf.y - forestClumpKeyBase(lf.x);
     if (j < 0 || j >= c.n) return false;
+    if (phyllotaxis == 3) return forestPinnateLeaf(c, j, P, R, F, lc, lr, at);
     return forestShootLeaf(c, j, P, R, F, lc, lr, at);
 }
 

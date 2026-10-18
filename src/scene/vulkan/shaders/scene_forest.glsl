@@ -24,7 +24,7 @@
 //              the card's; tip, 0 pointed, 1 rounded; teeth a side; tooth
 //              depth, of the half-width); its sprays' brush, its broad
 //              leaf's petiole (of its blade's length) and phyllotaxis
-//              (0 alternate, 1 opposite, 2 spiral), 0
+//              (0 alternate, 1 opposite, 2 spiral, 3 pinnate), 0
 //   segments   7 records: (from.xyz, rFrom), (to.xyz, rTo), (oct tangent at
 //              from, at to), then its vegetation record (4)
 //   clumps     6 records: (centre.xyz, radius), (twig dir.xyz, leaf count),
@@ -180,7 +180,7 @@ float forestSpecimenGloss(int s) { return procedural.records[forestSpecimenRecor
 float forestSpecimenBrush(int s) { return procedural.records[forestSpecimenRecord(s) + 8].x; }
 // Specimen `s`'s broad leaf on its shoot (scene_forest_shoot.glsl): its
 // petiole's length over its blade's (0: sessile) and its phyllotaxis (0
-// alternate, 1 opposite, 2 spiral; broflora's Species::petiole and
+// alternate, 1 opposite, 2 spiral, 3 pinnate; broflora's Species::petiole and
 // Species::phyllotaxis).
 vec2 forestSpecimenShoot(int s) { return procedural.records[forestSpecimenRecord(s) + 8].yz; }
 

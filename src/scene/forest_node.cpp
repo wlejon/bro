@@ -165,10 +165,8 @@ bool ForestNode::setSpecimens(SpecimenArrays&& a) {
     if (looks_.size() != specimens_.size() * 8) looks_.clear();
     if (leafLooks_.size() != specimens_.size() * 8) leafLooks_.clear();
     keepRadius_ = a.keepRadius;
-    clumpTwigs_.resize(nClump);
-    for (size_t c = 0; c < nClump; ++c)
-        clumpTwigs_[c] = twigPieces(static_cast<uint32_t>(std::max(0.0f, a.clumps[c * 8 + 7]) + 0.5f));
     data_ = std::move(a);
+    countClumpTwigs();
     // The blooms were the old specimens' (setBlooms gives the new ones').
     data_.blooms.clear();
     // Rows naming a specimen that no longer exists go.
@@ -555,9 +553,25 @@ bool ForestNode::setSpecimenLooks(std::vector<float> looks) {
         leafLooks_.clear();
     }
     looks_ = std::move(looks);
+    countClumpTwigs();
     gpuDirty_ = true;
     dataGeneration_ = nextResourceGeneration();
     return true;
+}
+
+void ForestNode::countClumpTwigs() {
+    const size_t nClump = data_.clumps.size() / 8;
+    clumpTwigs_.assign(nClump, {});
+    for (size_t c = 0; c < nClump; ++c)
+        clumpTwigs_[c] = twigPieces(static_cast<uint32_t>(std::max(0.0f, data_.clumps[c * 8 + 7]) + 0.5f));
+    // A pinnate specimen's leaflets line its own wood (its leaf look's
+    // phyllotaxis 3, scene_forest_shoot.glsl's forestPinnateLeaf): no twigs.
+    if (leafLooks_.size() != specimens_.size() * 8) return;
+    for (size_t k = 0; k < specimens_.size(); ++k) {
+        if (std::lround(leafLooks_[k * 8 + 7]) != 3) continue;
+        const Specimen& s = specimens_[k];
+        for (uint32_t c = s.clumpStart; c < s.clumpStart + s.clumpCount && c < nClump; ++c) clumpTwigs_[c] = {};
+    }
 }
 
 void ForestNode::refreshGpu() const {

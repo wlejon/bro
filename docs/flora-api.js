@@ -285,7 +285,7 @@
  * @property {number} [leafTeeth=0] - Teeth along each side of the margin (0 entire).
  * @property {number} [leafToothDepth=0] - Their depth as a share of the half-width: under ~0.15 a serration (hydrangea 0.06), deeper spines between concave scallops whose margin waves up and down (holly 0.32).
  * @property {number} [leafGloss=0] - 0 a matte leaf (the renderer's roughness), 1 a waxy, glossy one (holly 0.9): sharper sheen, less light through.
- * @property {string|number} [phyllotaxis='alternate'] - A broad leaf's arrangement on its shoot: 'alternate' (0, two ranks: an oak's, a birch's), 'opposite' (1, pairs turning a quarter at each node: a hydrangea's, a boxwood's) or 'spiral' (2, a 2/5 spiral: a holly's). The forest node hangs each leaf from a node of its shoot so.
+ * @property {string|number} [phyllotaxis='alternate'] - A broad leaf's arrangement on its shoot: 'alternate' (0, two ranks: an oak's, a birch's), 'opposite' (1, pairs turning a quarter at each node: a hydrangea's, a boxwood's) 'spiral' (2, a 2/5 spiral: a holly's) or 'pinnate' (3, leaflets lining the wood itself in two ranks, no twigs: a palm's fronds). The forest node hangs each leaf from a node of its shoot so (a pinnate leaflet from the branch its clump grows on).
  * @property {number} [petiole=0.2] - A broad leaf's stalk, as a share of its blade's length (0 .. 0.6; a birch 0.3, a boxwood 0.05): the leaf hangs this far from its twig.
  * @property {number} [sprayBrush=0] - Needle and scale forms: 0 the sprays lie round the clump facing out (a fir's), 1 each turns up and out along its twig, gathered toward the clump's end: a pine's upswept brushes at the branch tips.
  * @property {number} [clumpFlat=1] - A clump's height over its width: 1 a broadleaf's round lobes, ~0.4 the flat pads of a fir's level sprays (the clumps pack closer up and down by as much).
@@ -737,7 +737,7 @@ class FloraWorld {
    *     (createForest takes them as the node's per-specimen look).
    *   - `specimenLeaves`: 8 floats a specimen, its species' leafWidth,
    *     leafTip, leafTeeth, leafToothDepth, leafGloss, sprayBrush, petiole,
-   *     phyllotaxis (0 alternate, 1 opposite, 2 spiral) (createForest's
+   *     phyllotaxis (0 alternate, 1 opposite, 2 spiral, 3 pinnate) (createForest's
    *     `setLook` hands them on after `specimenLooks`: each specimen's own
    *     leaf outline, gloss, spray brush, stalk and arrangement).
    *   - `blooms`: 8 floats a bloom, position xyz (relative: its twig's tip),
