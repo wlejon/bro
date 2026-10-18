@@ -718,8 +718,13 @@ const std::vector<float>& ForestNode::gpuData() const {
                 if (std::fabs((*it)[1] - e[1]) <= kTol && std::fabs((*it)[2] - e[2]) <= kTol) on = std::max(on, (*it)[3]);
             float* d = r + (segBase + g * 7) * 4;
             // A tip's end radius goes in negative: the bark closes over its
-            // last stretch to a rounded point (scene_forest_tube.glsl).
-            d[7] = on < 0.0f ? -d[7] * kTipTaper : std::min(d[7], on);
+            // last stretch to a rounded point (scene_forest_tube.glsl). Ribbed
+            // bark (a cactus's: the bark word's top bit, broflora's
+            // Species::barkRibs) keeps its girth to the end, which closes
+            // over it in a blunt dome.
+            const uint32_t word = static_cast<uint32_t>(std::max(a.segmentVegetation[g * 16 + 11], 0.0f) + 0.5f);
+            const float taper = (word >> 23) & 1u ? 1.0f : kTipTaper;
+            d[7] = on < 0.0f ? -d[7] * taper : std::min(d[7], on);
         }
     }
     // Each clump's leaves are keyed from its first (emitForest keys a
