@@ -4,6 +4,7 @@
 // them.
 
 #include "render/skia_backend.h"
+#include "render/skia_gpu.h"
 #include "broimage/encode.h"
 #include "render/pixel_convert.h"
 #include "render/shared_pixels_image.h"

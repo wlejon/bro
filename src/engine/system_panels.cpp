@@ -55,6 +55,11 @@ namespace fs = std::filesystem;
 
 namespace bro::engine {
 
+SystemDocument::SystemDocument() = default;
+SystemDocument::~SystemDocument() = default;
+SystemDocument::SystemDocument(SystemDocument&&) noexcept = default;
+SystemDocument& SystemDocument::operator=(SystemDocument&&) noexcept = default;
+
 // ---------------------------------------------------------------------------
 // System panel lifecycle
 // ---------------------------------------------------------------------------
@@ -647,7 +652,7 @@ void Engine::drawSystemPanels(render::Renderer* renderer,
                            viewportWidth_, viewportHeight_);
     }
 
-    overlayMgr_.drawIfContext(OverlayContext::System, renderer);
+    overlayMgr_->drawIfContext(OverlayContext::System, renderer);
 }
 
 // ---------------------------------------------------------------------------
@@ -693,7 +698,7 @@ bool Engine::systemHandleMouseDown(float x, float y, int button) {
         if (!isSystemDocVisible(doc) || !doc.document) continue;
         ControlContext cctx{doc.document.get(),
                            renderer_.get(), window_.get(), &systemDirty_,
-                           &overlayMgr_, OverlayContext::System,
+                           overlayMgr_.get(), OverlayContext::System,
                            viewportWidth_, viewportHeight_};
         auto* prevActive = doc.document->activeElement();
         auto disp = unfocusPreviousControl(cctx, prevActive);
@@ -732,7 +737,7 @@ bool Engine::systemHandleMouseDown(float x, float y, int button) {
         if (target) {
             ControlContext cctx{doc.document.get(),
                                renderer_.get(), window_.get(), &systemDirty_,
-                               &overlayMgr_, OverlayContext::System,
+                               overlayMgr_.get(), OverlayContext::System,
                                viewportWidth_, viewportHeight_};
 
             dom::MouseEvent evt("mousedown");
@@ -780,7 +785,7 @@ bool Engine::systemHandleMouseUp(float x, float y, int button) {
         if (target) {
             ControlContext cctx{doc.document.get(),
                                renderer_.get(), window_.get(), &systemDirty_,
-                               &overlayMgr_, OverlayContext::System,
+                               overlayMgr_.get(), OverlayContext::System,
                                viewportWidth_, viewportHeight_};
 
             dom::MouseEvent upEvt("mouseup");

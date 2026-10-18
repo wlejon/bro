@@ -1,4 +1,5 @@
 #include "engine/input_common.h"
+#include "engine/replaced_elements.h"
 #include "engine/engine.h"
 #include "engine/key_mapping.h"
 #include "dom/document.h"

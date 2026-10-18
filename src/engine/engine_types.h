@@ -1,7 +1,7 @@
 #pragma once
 
 #include "dom/node_handle.h"
-#include "engine/dom_undo.h"
+#include "engine/dom_undo_sel.h"
 #include <bromath/color.h>
 #include <cstddef>
 #include <cstdint>
@@ -98,7 +98,7 @@ struct EditableComposition {
     int length = 0;             // byte length of the current preedit
     std::string preedit;        // current preedit text
     std::string hostBefore;     // host innerHTML before the composition
-    DomUndoStack::Sel selBefore;// selection before the composition
+    DomUndoSel selBefore;       // selection before the composition
     bool replacedSelection = false;  // composition started over a selection
 };
 

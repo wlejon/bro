@@ -409,7 +409,7 @@ bool Engine::editDeleteAtCaret(bool backward) {
             auto* range = c.sel->getRangeAt(0);
             if (!range) return;
             if (!range->collapsed()) {
-                EditUndoScope undo(&editUndo_, document_.get(), c.host,
+                EditUndoScope undo(editUndo_.get(), document_.get(), c.host,
                                    nullptr, DomUndoStack::Kind::Discrete);
                 dom::Node* after = nullptr; int afterOff = 0;
                 deleteRangeContents(document_.get(), *range, after, afterOff);
@@ -427,7 +427,7 @@ bool Engine::editDeleteAtCaret(bool backward) {
                 static_cast<int>(target.text->length()) >
                     (target.end - target.start);
             EditUndoScope undo(
-                &editUndo_, document_.get(), c.host,
+                editUndo_.get(), document_.get(), c.host,
                 sameNodeSplice ? target.text : nullptr,
                 sameNodeSplice
                     ? (backward ? DomUndoStack::Kind::Backspace
@@ -471,7 +471,7 @@ bool Engine::editInsertLineBreak() {
     runEditableMutation(document_.get(), c.node,
         "insertLineBreak", "\n",
         [&] {
-            EditUndoScope undo(&editUndo_, document_.get(), c.host,
+            EditUndoScope undo(editUndo_.get(), document_.get(), c.host,
                                nullptr, DomUndoStack::Kind::Discrete);
             auto* range = c.sel->getRangeAt(0);
             if (!range) return;
@@ -516,7 +516,7 @@ bool Engine::editInsertTextAtSelection(const std::string& text) {
             auto* r = c.sel->getRangeAt(0);
             if (!r) return;
             if (!r->collapsed()) {
-                EditUndoScope undo(&editUndo_, document_.get(), c.host,
+                EditUndoScope undo(editUndo_.get(), document_.get(), c.host,
                                    nullptr, DomUndoStack::Kind::Discrete);
                 selectionInsertText(document_.get(), text);
                 undo.commit();
@@ -526,7 +526,7 @@ bool Engine::editInsertTextAtSelection(const std::string& text) {
             bool created = false;
             auto* tn = selectionCaretTextPosition(document_.get(), off, created);
             if (!tn) return;
-            EditUndoScope undo(&editUndo_, document_.get(), c.host, tn,
+            EditUndoScope undo(editUndo_.get(), document_.get(), c.host, tn,
                                DomUndoStack::Kind::Typing);
             tn->insertData(static_cast<size_t>(off), text);
             const int caret = off + static_cast<int>(text.size());
@@ -559,7 +559,7 @@ bool Engine::editHistoryStep(bool redo) {
     }
     const EditCaret c = editCaretOf(document_.get());
     if (!c) return false;
-    auto* stack = editUndo_.find(c.host);
+    auto* stack = editUndo_->find(c.host);
     if (!stack) return false;
     if (redo ? !stack->canRedo() : !stack->canUndo()) return false;
     const char* inputType = redo ? "historyRedo" : "historyUndo";
@@ -623,7 +623,7 @@ bool Engine::queryCommandEnabled(const std::string& name) {
     const EditCaret c = editCaretOf(document_.get());
     if (!c) return false;
     if (cmd == "undo" || cmd == "redo") {
-        auto* stack = editUndo_.find(c.host);
+        auto* stack = editUndo_->find(c.host);
         if (!stack) return false;
         return (cmd == "redo") ? stack->canRedo() : stack->canUndo();
     }

@@ -1,4 +1,5 @@
 #include "engine/engine.h"
+#include "engine/replaced_elements.h"
 #include "engine/input_common.h"
 #include "engine/input_editable.h"
 #include "engine/settings.h"
@@ -151,7 +152,7 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
     if (remoteKey(scancode, mod, true, repeat)) return;
 
     syncDatalist();  // a field's suggestions go with its focus
-    if (overlayMgr_.handleKeyDown(keycode, mod)) {
+    if (overlayMgr_->handleKeyDown(keycode, mod)) {
         uiDirty_ = true;
         return;
     }
@@ -266,7 +267,7 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
                             runEditableMutation(document_.get(), fn,
                                 "insertFromPaste", text,
                                 [&] {
-                                    EditUndoScope undo(&editUndo_, document_.get(), host,
+                                    EditUndoScope undo(editUndo_.get(), document_.get(), host,
                                                        nullptr, DomUndoStack::Kind::Discrete);
                                     selectionInsertText(document_.get(), text);
                                     undo.commit();
@@ -338,7 +339,7 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
                             runEditableMutation(document_.get(), fn,
                                 "deleteByCut", "",
                                 [&] {
-                                    EditUndoScope undo(&editUndo_, document_.get(), host,
+                                    EditUndoScope undo(editUndo_.get(), document_.get(), host,
                                                        nullptr, DomUndoStack::Kind::Discrete);
                                     auto* range = sel->getRangeAt(0);
                                     if (!range) return;
@@ -384,10 +385,10 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
         activeEl = handle.get();
         if (!activeEl || !document_ || activeEl != document_->activeElement()) return;
         // Down (or Alt+Down) in a field with a list opens its suggestions.
-        if (keycode == platform::kc::Down && !overlayMgr_.hasActive() &&
+        if (keycode == platform::kc::Down && !overlayMgr_->hasActive() &&
             !platform::hasPrimaryMod(mod) && layout::inputList(activeEl)) {
             updateDatalist(activeEl, /*explicitOpen=*/true);
-            if (overlayMgr_.hasActive()) return;
+            if (overlayMgr_->hasActive()) return;
         }
         if (auto* input = getElInput(activeEl); input && input->isFocused()) {
             result = input->handleKeyDown(activeEl, keycode, mod);
@@ -574,7 +575,7 @@ void Engine::advanceFocus(bool reverse) {
         if (prevInput) prevInput->setFocused(false);
         auto* prevTa = getElTextarea(activeEl);
         if (prevTa) prevTa->setFocused(false);
-        if (getElSelect(activeEl)) overlayMgr_.close();
+        if (getElSelect(activeEl)) overlayMgr_->close();
     }
 
     document_->setActiveElement(nextEl);

@@ -1,12 +1,11 @@
 #pragma once
 
 #include "engine/published_frame.h"
-#include "engine/replaced_elements.h"
+#include "engine/mouse_dispatch_state.h"
 #include "engine/sub_doc_animations.h"
 #include "dom/document.h"
-#include "canvas/canvas_scene.h"
 #include "render/command_buffer.h"
-#include "render/skia_backend.h"
+#include "render/skia_image.h"
 
 #include <cstdint>
 #include <memory>
@@ -14,12 +13,19 @@
 #include <vector>
 
 namespace bro::dom { class Element; }
+namespace bro::canvas { class CanvasScene; }
 
 namespace bro::engine {
 
 /// An isolated sub-document hosted by an <iframe> element in the app document.
 /// Owns its own DOM tree, canvas scenes, and input state.
 struct IframeDoc {
+    // Out of line (iframe.cpp), where CanvasScene is complete.
+    IframeDoc();
+    ~IframeDoc();
+    IframeDoc(const IframeDoc&) = delete;
+    IframeDoc& operator=(const IframeDoc&) = delete;
+
     dom::Element* element = nullptr;  // the <iframe> in the app document (non-owning)
     uint64_t id = 0;                  // registry id for compositor texture resolve
     std::string src;                  // resolved src currently loaded (change detection)

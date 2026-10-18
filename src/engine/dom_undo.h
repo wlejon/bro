@@ -73,6 +73,7 @@
 #include "dom/node_handle.h"
 #include "dom/selection.h"
 #include "dom/text_node.h"
+#include "engine/dom_undo_sel.h"
 #include "layout/text_undo.h"
 
 #include <algorithm>
@@ -87,28 +88,9 @@ public:
     // comment. Typing/Backspace/DeleteForward may merge; Discrete never does.
     using Kind = layout::TextUndoStack::Kind;
 
-    // A DOM position as a child-index path from the host plus an offset in
-    // the resolved container. `valid` distinguishes "no position recorded"
-    // from "the host itself, offset 0".
-    struct Pos {
-        std::vector<int> path;
-        int offset = 0;
-        bool valid = false;
-
-        bool operator==(const Pos& o) const {
-            return valid == o.valid && offset == o.offset && path == o.path;
-        }
-        bool operator!=(const Pos& o) const { return !(*this == o); }
-    };
-
-    // Anchor (pinned end) + focus (moving end), matching dom::Selection.
-    struct Sel {
-        Pos anchor, focus;
-        bool operator==(const Sel& o) const {
-            return anchor == o.anchor && focus == o.focus;
-        }
-        bool operator!=(const Sel& o) const { return !(*this == o); }
-    };
+    // A host-relative position and selection (engine/dom_undo_sel.h).
+    using Pos = DomUndoPos;
+    using Sel = DomUndoSel;
 
     // --- Position helpers -------------------------------------------------
 

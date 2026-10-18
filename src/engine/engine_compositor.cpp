@@ -1,4 +1,5 @@
 #include "engine/engine.h"
+#include "engine/replaced_elements.h"
 #include "engine/frame_presenter.h"
 #include "engine/sub_document.h"
 #include "engine/terminal_layers.h"
@@ -134,7 +135,7 @@ void Engine::recordAppLayers(render::CommandBuffer& outBuffer,
     }
 
     if (!promotedOnly) {
-        overlayMgr_.drawIfContext(OverlayContext::App, recordingRenderer_.get());
+        overlayMgr_->drawIfContext(OverlayContext::App, recordingRenderer_.get());
 
         if (document_) {
             float vh = static_cast<float>(contentH);
@@ -179,7 +180,7 @@ bool Engine::absorbLayerScroll(dom::Element* e, float scrollLeft, float scrollTo
     // highlight or caret, the inspector's highlight, an overlay.
     const auto& sel = selectionSnapshot_;
     if (!sel.rects.empty() || sel.hasCaret || !sel.compUnderlines.empty()) return false;
-    if (inspector_.visible || overlayMgr_.hasActive()) return false;
+    if (inspector_.visible || overlayMgr_->hasActive()) return false;
     bool rasterDue = false;
     if (!baseScrollLayers_.scrollTo(e, scrollLeft, scrollTop, deviceScale_.render, &rasterDue)) return false;
     if (rasterDue) uiDirty_ = true;  // a raster pass, no record: the layer at its new phase

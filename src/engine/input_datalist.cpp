@@ -72,20 +72,20 @@ bool takesSuggestions(dom::Element* el, layout::ElInput* input) {
 
 void Engine::updateDatalist(dom::Element* el, bool explicitOpen) {
     if (datalistPicking_ || !document_ || !el) return;
-    DatalistOverlay* open = activeDatalist(overlayMgr_);
+    DatalistOverlay* open = activeDatalist(*overlayMgr_);
     if (open && open->dismissRequested()) return;
 
     auto* input = getElInput(el);
     dom::Element* list = layout::inputList(el);
     if (!list || !takesSuggestions(el, input) || el != document_->activeElement()) {
-        if (open && open->owner() == el) overlayMgr_.close();
+        if (open && open->owner() == el) overlayMgr_->close();
         return;
     }
 
     auto rows = matches(list, layout::formValue(el), explicitOpen);
     if (rows.empty()) {
         if (open && open->owner() == el) {
-            overlayMgr_.close();
+            overlayMgr_->close();
             markAppBaseDirty();
         }
         return;
@@ -97,7 +97,7 @@ void Engine::updateDatalist(dom::Element* el, bool explicitOpen) {
     }
     // Another overlay (a <select>'s, a colour picker) stays: suggestions do
     // not take its place.
-    if (overlayMgr_.hasActive()) return;
+    if (overlayMgr_->hasActive()) return;
 
     std::string family = "Arial";
     float fontSize = 16.0f;
@@ -144,12 +144,12 @@ void Engine::updateDatalist(dom::Element* el, bool explicitOpen) {
     auto overlay = std::make_unique<DatalistOverlay>(
         el, std::move(anchor), static_cast<float>(contentHeight()), std::move(rows),
         std::move(family), fontSize, std::move(onPick));
-    overlayMgr_.open(std::move(overlay), OverlayContext::App, recordingRenderer_.get());
+    overlayMgr_->open(std::move(overlay), OverlayContext::App, recordingRenderer_.get());
     markAppBaseDirty();
 }
 
 void Engine::syncDatalist() {
-    DatalistOverlay* open = activeDatalist(overlayMgr_);
+    DatalistOverlay* open = activeDatalist(*overlayMgr_);
     if (!open) return;
     dom::Element* active = document_ ? document_->activeElement() : nullptr;
     auto* input = active ? getElInput(active) : nullptr;
@@ -157,7 +157,7 @@ void Engine::syncDatalist() {
     // that is focused now, so a freed owner is never touched.
     if (!active || open->owner() != active || !input || !input->isFocused() ||
         !layout::inputList(active)) {
-        overlayMgr_.close();
+        overlayMgr_->close();
         markAppBaseDirty();
     }
 }

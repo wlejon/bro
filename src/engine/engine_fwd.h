@@ -3,6 +3,8 @@
 // Forward declarations of the collaborators Engine holds by pointer or names
 // in its interface, so engine.h does not have to pull in their headers.
 
+#include <functional>
+
 namespace bro::layout { struct KeyHandleResult; }
 namespace bro::render {
     class RasterRenderer;
@@ -19,7 +21,7 @@ namespace bro::steam { class SteamService; }
 namespace bro::scene { class SceneGraph; class HtmlNode; struct CullStats; }
 namespace bro::canvas { class CanvasScene; }
 namespace bro::platform { class Window; class EventLoop; }
-namespace bro::dom { class Document; class Element; class Event; class TextNode; }
+namespace bro::dom { class Document; class Element; class Event; class MouseEvent; class TextNode; }
 namespace bro::layout { class DrawTraversal; class SkiaTextMetrics; }
 namespace brokit::api { class FsWatcher; }
 
@@ -32,5 +34,9 @@ class TerminalLayers;
 class FrameTrace;
 class ControlServer;
 struct SubDocRef;
+
+/// The audio engine, made on first ask: a <video> is given it, and a page
+/// with none never opens the audio device.
+using AudioEngineSource = std::function<broaudio::Engine*()>;
 
 } // namespace bro::engine

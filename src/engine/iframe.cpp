@@ -29,6 +29,9 @@
 
 namespace bro::engine {
 
+IframeDoc::IframeDoc() = default;
+IframeDoc::~IframeDoc() = default;
+
 // Depth-first collect every <iframe> element in a document subtree.
 static void collectIframes(dom::Element* el, std::vector<dom::Element*>& out) {
     if (!el) return;

@@ -18,13 +18,16 @@
 #include "render/font_family.h"
 #include "render/image_cache.h"
 #include "render/shaped_run.h"
-#include "render/skia_gpu.h"
+#include "render/skia_image.h"
 
 #include <functional>
 
 class GrDeferredDisplayListRecorder;
 
 namespace bro::render {
+
+class GpuImageUpload;  // render/gpu_image_upload.h
+class SkiaGpu;         // render/skia_gpu.h
 
 // ---------------------------------------------------------------------------
 // SkiaRenderer -- the UI (HTML/CSS) through Skia

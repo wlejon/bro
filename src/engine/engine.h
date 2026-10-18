@@ -5,7 +5,6 @@
 #include "engine/desktop_trust.h"
 #include "engine/device_scale.h"
 #include "engine/scroll_layers.h"
-#include "engine/dom_undo.h"
 #include "engine/engine_config.h"
 #include "engine/engine_fwd.h"
 #include "engine/engine_types.h"
@@ -15,8 +14,7 @@
 #include "engine/iframe.h"
 #include "engine/inspector_state.h"
 #include "engine/menu_bar.h"
-#include "engine/overlay.h"
-#include "engine/replaced_elements.h"
+#include "engine/mouse_dispatch_state.h"
 #include "engine/scrollbar.h"
 #include "engine/settings.h"
 #include "engine/system_document.h"
@@ -60,6 +58,9 @@ namespace bro::engine {
 
 class RemoteViewHost;
 class GizmoManager;  // engine/gizmo.h
+class DomUndoHistories;  // engine/dom_undo.h
+class OverlayManager;  // engine/overlay.h
+struct ControlContext;  // engine/replaced_elements.h
 
 class Engine {
 public:
@@ -448,7 +449,7 @@ public:
     // otherwise record into it forever.
     bool isSystemDocumentHidden(const dom::Document* doc) const;
     Settings* settings() const { return settings_.get(); }
-    OverlayManager& overlays() { return overlayMgr_; }
+    OverlayManager& overlays() { return *overlayMgr_; }
 
     void flush();
     /// Draw the 3D scenes a flush left to draw. An advanceTime step's flush
@@ -1214,7 +1215,7 @@ private:
 #if BRO_WITH_3D
     std::unique_ptr<GizmoManager> gizmo_;
 #endif
-    OverlayManager overlayMgr_;
+    std::unique_ptr<OverlayManager> overlayMgr_;
     std::unique_ptr<Settings> settings_;
     std::unique_ptr<broaudio::Engine> audioEngine_;
     std::unique_ptr<AudioInference> audioInference_;
@@ -1466,7 +1467,7 @@ private:
     bool controlDragIsPanel_ = false;
 
     EditableComposition editComp_;
-    DomUndoHistories editUndo_;
+    std::unique_ptr<DomUndoHistories> editUndo_;
 
     // The viewport scroll. Written only through setViewportScrollY, which
     // mirrors it into the document (Document::setViewportScroll) for the

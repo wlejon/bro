@@ -1,4 +1,5 @@
 #include "engine/engine.h"
+#include "engine/replaced_elements.h"
 #include "engine/source_preflight.h"
 
 #include "canvas/canvas_scene.h"
@@ -223,7 +224,7 @@ void Engine::performAppReload() {
     LOG_INFO("Reloading app '%s'", appDir_.c_str());
 
     exitPointerLock();
-    overlayMgr_.close();
+    overlayMgr_->close();
 
     menuBar_.releaseHandlers();
     resetMenuBarDefaults();

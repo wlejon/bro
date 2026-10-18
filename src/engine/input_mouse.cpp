@@ -38,7 +38,7 @@
 namespace bro::engine {
 
 float Engine::overlayMouseY(float y) const {
-    const Overlay* active = overlayMgr_.active();
+    const Overlay* active = overlayMgr_->active();
     if (active && active->context() == OverlayContext::App) {
         return y - static_cast<float>(contentTop());
     }
@@ -71,7 +71,7 @@ bool Engine::iframeHandleMouseDown(dom::Element* frameEl, float docX, float docY
                            0.0f, mod, 0.0f);
         applyMouseOffset(evt, sub);
         ControlContext cctx{dp->document.get(), renderer_.get(), window_.get(),
-                            &uiDirty_, &overlayMgr_, OverlayContext::App, dp->boxW, dp->boxH};
+                            &uiDirty_, overlayMgr_.get(), OverlayContext::App, dp->boxW, dp->boxH};
         dispatchDocMousePress(cctx, dp->mouseState, sub, evt, lx, ly);
     }
     return true;
@@ -91,7 +91,7 @@ bool Engine::iframeHandleMouseUp(dom::Element* frameEl, float docX, float docY,
                            0.0f, mod, 0.0f);
         applyMouseOffset(upEvt, sub);
         ControlContext cctx{dp->document.get(), renderer_.get(), window_.get(),
-                            &uiDirty_, &overlayMgr_, OverlayContext::App, dp->boxW, dp->boxH};
+                            &uiDirty_, overlayMgr_.get(), OverlayContext::App, dp->boxW, dp->boxH};
         dispatchDocMouseRelease(cctx, dp->mouseState, sub, upEvt,
                                 lx, ly, button, pressedButtons_, mod,
                                 movementX, movementY, lx, ly,
@@ -118,7 +118,7 @@ void Engine::handleMouseDown(float x, float y, int button) {
     button = sdlToDomButton(button);
 
     syncDatalist();  // a field's suggestions go with its focus
-    if (overlayMgr_.handleMouseDown(x, overlayMouseY(y), button)) {
+    if (overlayMgr_->handleMouseDown(x, overlayMouseY(y), button)) {
         pressedButtons_ |= domButtonMask(button);
         markAppBaseDirty();
         return;
@@ -226,7 +226,7 @@ void Engine::handleMouseDown(float x, float y, int button) {
         if (button == 0) dragDrop_.arm(target, x, y);
 
         ControlContext cctx{document_.get(), renderer_.get(), window_.get(),
-                            &uiDirty_, &overlayMgr_, OverlayContext::App,
+                            &uiDirty_, overlayMgr_.get(), OverlayContext::App,
                             contentWidth(), contentHeight()};
 
         const float focusX = x, focusY = y - static_cast<float>(contentTop());
@@ -375,7 +375,7 @@ void Engine::handleMouseUp(float x, float y, int button) {
     pressedButtons_ &= ~domButtonMask(button);
     dispatchMouseButtonAction(button, false);
 
-    if (overlayMgr_.handleMouseUp(x, overlayMouseY(y), button)) {
+    if (overlayMgr_->handleMouseUp(x, overlayMouseY(y), button)) {
         markAppBaseDirty();
         return;
     }
@@ -473,7 +473,7 @@ void Engine::handleMouseUp(float x, float y, int button) {
         if (target) applyMouseOffset(upEvt, target);
 
         ControlContext cctx{document_.get(), renderer_.get(), window_.get(),
-                            &uiDirty_, &overlayMgr_, OverlayContext::App,
+                            &uiDirty_, overlayMgr_.get(), OverlayContext::App,
                             contentWidth(), contentHeight()};
 
         if (dragDrop_.finish(target, x, y)) {

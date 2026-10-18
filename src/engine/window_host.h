@@ -2,7 +2,7 @@
 
 #include "engine/engine_config.h"
 #include "engine/published_frame.h"
-#include "engine/replaced_elements.h"
+#include "engine/mouse_dispatch_state.h"
 #include "engine/sub_doc_animations.h"
 #include "dom/node_handle.h"
 #include "render/command_buffer.h"

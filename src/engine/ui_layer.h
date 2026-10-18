@@ -6,7 +6,7 @@
 
 #include "render/command_buffer.h"
 #include "render/layer_source.h"
-#include "render/skia_gpu.h"
+#include "render/skia_image.h"
 
 #include <include/core/SkSurface.h>
 #include <vulkan/vulkan.h>

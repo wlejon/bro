@@ -1,4 +1,5 @@
 // Transparent, click-through windows: the engine's half. The window system
+#include "engine/replaced_elements.h"
 // composites a transparent window's premultiplied frames over the desktop
 // (the frame's base is cleared to transparent: engine_frame_composite.cpp);
 // a click-through window passes pointer input beneath it outside its input
@@ -106,7 +107,7 @@ bool Engine::windowTransparent() const {
 
 bool Engine::takesPointerAt(float x, float y) {
     if (!document_ || !document_->documentElement()) return false;
-    if (overlayMgr_.hasActive()) return true;  // an open dropdown closes on a click anywhere
+    if (overlayMgr_->hasActive()) return true;  // an open dropdown closes on a click anywhere
     if (y < static_cast<float>(contentTop())) return true;  // the menu bar
     if (isSystemVisible()) {
         SystemDocument* doc = nullptr;
@@ -122,7 +123,7 @@ std::vector<platform::WindowRect> Engine::computeInputRegion() {
     const int w = viewportWidth_, h = viewportHeight_;
     if (!document_ || !document_->documentElement() || w <= 0 || h <= 0) return rects;
     flushLayoutForRead(document_.get());
-    if (overlayMgr_.hasActive() || isSystemVisible()) {
+    if (overlayMgr_->hasActive() || isSystemVisible()) {
         rects.push_back({0, 0, w, h});
         return rects;
     }

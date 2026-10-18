@@ -1,6 +1,7 @@
 #include "engine/engine.h"
 #include "engine/app_runtime.h"
 #include "engine/control.h"
+#include "engine/dom_undo.h"
 #include "engine/frame_trace.h"
 #include "engine/frame_presenter.h"
 #include "engine/gizmo.h"
@@ -11,6 +12,7 @@
 #include "layout/box.h"
 #include "layout/layout_node_adapter.h"
 #include "engine/overflow.h"
+#include "engine/overlay.h"
 #include "engine/replaced_elements.h"
 #include "engine/default_styles.h"
 #include "engine/scene_audio_sync.h"
@@ -146,6 +148,8 @@ Engine::Engine(const EngineConfig& config)
 }
 
 void Engine::construct(const EngineConfig& config) {
+    overlayMgr_ = std::make_unique<OverlayManager>();
+    editUndo_ = std::make_unique<DomUndoHistories>();
     // Before the engine's threads exist, so they share a few arenas.
     configureHeap();
     // Under DRM bro is the display server: no desktop window system, and so

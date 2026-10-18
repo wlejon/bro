@@ -1,4 +1,5 @@
 #include "engine/engine.h"
+#include "engine/replaced_elements.h"
 #include "engine/input_common.h"
 #include "engine/overflow.h"
 #include "engine/overlay.h"
@@ -65,7 +66,7 @@ void Engine::handleWheel(float x, float y, float dx, float dy) {
     // Over a <remoteview> the wheel scrolls its screen, not the page.
     if (remoteWheel(x, y, dx, dy)) return;
 
-    if (overlayMgr_.handleWheel(x, overlayMouseY(y), dx, dy)) {
+    if (overlayMgr_->handleWheel(x, overlayMouseY(y), dx, dy)) {
         uiDirty_ = true;
         return;
     }

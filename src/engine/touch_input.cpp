@@ -197,7 +197,7 @@ void Engine::dispatchCompatMouseForTap(const TouchContact& c) {
 
     ControlContext cctx{document_.get(),
                         renderer_.get(), window_.get(), &uiDirty_,
-                        &overlayMgr_, OverlayContext::App,
+                        overlayMgr_.get(), OverlayContext::App,
                         contentWidth(), contentHeight()};
 
     auto populate = [&](dom::MouseEvent& evt, int buttons) {

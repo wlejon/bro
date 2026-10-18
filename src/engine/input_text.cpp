@@ -1,4 +1,5 @@
 #include "engine/engine.h"
+#include "engine/replaced_elements.h"
 #include "engine/input_common.h"
 #include "engine/input_editable.h"
 #include "platform/clipboard.h"
@@ -194,7 +195,7 @@ bool Engine::editableCompositionCommit(const std::string& text,
     }
 
     if (!cancel && host) {
-        editUndo_.forHost(document_.get(), host)
+        editUndo_->forHost(document_.get(), host)
             .recordStructural(host, hostBefore, host->innerHTML(), selBefore,
                               DomUndoStack::selectionOf(document_.get(), host),
                               util::currentTimeMs());
@@ -271,7 +272,7 @@ void Engine::updateTextInputArea() {
 void Engine::handleTextEditing(const std::string& text, int start,
                                int /*length*/) {
     if (!document_) return;
-    if (overlayMgr_.hasModal()) return;
+    if (overlayMgr_->hasModal()) return;
     if (capturedRemoteView()) return;
     if (terminalTextEditing(text)) return;
 
@@ -385,7 +386,7 @@ void Engine::handleTextInput(const std::string& text) {
     if (isControlChar(text)) return;
     if (capturedRemoteView()) return;  // its keys went to the remote screen
 
-    if (overlayMgr_.handleTextInput(text)) {
+    if (overlayMgr_->handleTextInput(text)) {
         uiDirty_ = true;
         return;
     }
@@ -478,7 +479,7 @@ void Engine::simulatePaste(const std::string& text) {
     runEditableMutation(document_.get(), fn,
         "insertFromPaste", text,
         [&] {
-            EditUndoScope undo(&editUndo_, document_.get(), host, nullptr,
+            EditUndoScope undo(editUndo_.get(), document_.get(), host, nullptr,
                                DomUndoStack::Kind::Discrete);
             selectionInsertText(document_.get(), text);
             undo.commit();
@@ -574,7 +575,7 @@ std::string Engine::simulateCut(
         runEditableMutation(document_.get(), ceFocus,
             "deleteByCut", "",
             [&] {
-                EditUndoScope undo(&editUndo_, document_.get(), ceHost, nullptr,
+                EditUndoScope undo(editUndo_.get(), document_.get(), ceHost, nullptr,
                                    DomUndoStack::Kind::Discrete);
                 auto* range = sel->getRangeAt(0);
                 if (!range) return;

@@ -1,4 +1,5 @@
 #include "render/skia_backend.h"
+#include "render/skia_gpu.h"
 #include "render/filter_chain.h"
 #include "render/font_generation.h"
 #include "render/shadow_ninepatch.h"

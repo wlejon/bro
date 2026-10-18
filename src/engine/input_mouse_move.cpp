@@ -188,7 +188,7 @@ void Engine::recheckHover() {
         systemSetHover(t, doc, x, y);
         if (t) return;  // a panel over the page has the pointer, as a move gives it
     }
-    if (!document_ || !document_->documentElement() || overlayMgr_.hasActive()) return;
+    if (!document_ || !document_->documentElement() || overlayMgr_->hasActive()) return;
     const float docX = x, docY = y - static_cast<float>(contentTop()) + scrollY_;
     dom::Element* target = hitTest(docX, docY);
     if (target && target->iframeDoc()) iframeSetHover(target, docX, docY);
@@ -226,14 +226,14 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
 
     float docX = x, docY = y - static_cast<float>(contentTop()) + scrollY_;
 
-    bool overlayActive = overlayMgr_.hasActive();
-    if (overlayActive && overlayMgr_.handleMouseMove(x, overlayMouseY(y))) {
+    bool overlayActive = overlayMgr_->hasActive();
+    if (overlayActive && overlayMgr_->handleMouseMove(x, overlayMouseY(y))) {
         markAppBaseDirty();
     }
     // A passive overlay (datalist suggestions) holds the pointer only over
     // itself; elsewhere the page keeps its hover.
-    if (overlayActive && !overlayMgr_.hasModal() && overlayMgr_.active() &&
-        !overlayMgr_.active()->pointInBounds(x, overlayMouseY(y))) {
+    if (overlayActive && !overlayMgr_->hasModal() && overlayMgr_->active() &&
+        !overlayMgr_->active()->pointInBounds(x, overlayMouseY(y))) {
         overlayActive = false;
     }
 

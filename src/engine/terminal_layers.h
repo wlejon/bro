@@ -13,7 +13,7 @@
 // compositor, through PublishedFrame's lock.
 
 #include "engine/published_frame.h"
-#include "render/skia_gpu.h"
+#include "render/skia_image.h"
 
 #include <cstdint>
 #include <memory>

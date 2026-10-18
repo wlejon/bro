@@ -1,6 +1,6 @@
 #pragma once
 
-#include "render/skia_gpu.h"
+#include "render/skia_image.h"
 
 #include <include/core/SkImage.h>
 #include <include/core/SkRefCnt.h>

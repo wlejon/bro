@@ -2,7 +2,9 @@
 #include "engine/control.h"
 #include "engine/frame_trace.h"
 #include "engine/engine_drm.h"
+#include "engine/dom_undo.h"  // ~Engine destroys editUndo_
 #include "engine/gizmo.h"  // ~Engine destroys gizmo_
+#include "engine/overlay.h"  // and overlayMgr_
 #include "engine/frame_presenter.h"
 #include "engine/layout_pipeline.h"
 #include "engine/scene_audio_sync.h"

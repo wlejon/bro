@@ -1,13 +1,14 @@
 #pragma once
 
-#include "engine/replaced_elements.h"
+#include "engine/mouse_dispatch_state.h"
 #include "engine/sub_doc_animations.h"
 #include "dom/document.h"
-#include "canvas/canvas_scene.h"
 
 #include <memory>
 #include <string>
 #include <vector>
+
+namespace bro::canvas { class CanvasScene; }
 
 namespace bro::engine {
 
@@ -21,6 +22,12 @@ namespace bro::engine {
 /// the settings, and building all of them cost every app ~250 ms before its
 /// first frame. `document` stays null until then.
 struct SystemDocument {
+    // Out of line (system_panels.cpp), where CanvasScene is complete.
+    SystemDocument();
+    ~SystemDocument();
+    SystemDocument(SystemDocument&&) noexcept;
+    SystemDocument& operator=(SystemDocument&&) noexcept;
+
     std::string name;
     std::string tabLabel;
     std::string group;

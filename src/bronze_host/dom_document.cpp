@@ -31,6 +31,7 @@
 #include <vector>
 
 #include "dom/node.h"
+#include "dom/range.h"
 
 namespace bro::bronze_host {
 

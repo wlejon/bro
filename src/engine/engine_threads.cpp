@@ -1,4 +1,5 @@
 #include "engine/engine.h"
+#include "render/skia_gpu.h"
 #include "engine/frame_presenter.h"
 #include "engine/layout_pipeline.h"
 #include "engine/terminal_layers.h"
