@@ -191,6 +191,7 @@ HerbSurface herbLeaf(int sp, vec2 uv, vec4 size, float stalk, float seed) {
         o.albedo *= mix(vec3(1.0), vec3(1.1, 1.08, 0.85), 0.5 * v);
     } else {
         float w;
+        float pleat = 0.0;
         if (shape == 2) {
             // A strap: parallel-sided, narrowing to its tip.
             w = sqrt(clamp((1.0 - v) / mix(0.18, 0.4, tip), 0.0, 1.0)) * (0.7 + 0.3 * smoothstep(0.0, 0.15, v));
@@ -199,9 +200,15 @@ HerbSurface herbLeaf(int sp, vec2 uv, vec4 size, float stalk, float seed) {
         } else if (shape == 5) {
             // Ribbed (a plantain's): an oval with veins along its length.
             w = pow(max(sin(HERB_PI * pow(clamp(v, 0.0, 1.0), 0.9)), 0.0), mix(0.9, 0.55, tip));
+            // Its ribs run base to tip, meeting at both ends (two a side
+            // and the midrib), raised and pale; the blade puckers up
+            // between them.
             float q = au / max(w, 1e-3);
-            float lines = min(abs(q - 0.42), abs(q - 0.78));
-            vein = (1.0 - smoothstep(0.0, 0.07, lines)) * (1.0 - smoothstep(0.3, 1.0, fp * 8.0 / max(halfW, 1e-4))) * 0.6;
+            float lines = min(abs(q - 0.4), abs(q - 0.76));
+            float show = 1.0 - smoothstep(0.3, 1.0, fp * 8.0 / max(halfW, 1e-4));
+            vein = (1.0 - smoothstep(0.02, 0.1, lines * (1.2 - 0.6 * abs(v - 0.5)))) * show;
+            float cellQ = q < 0.4 ? q / 0.4 : (q < 0.76 ? (q - 0.4) / 0.36 : (q - 0.76) / 0.24);
+            pleat = cos(HERB_PI * clamp(cellQ, 0.0, 1.0)) * 0.35 * show * sin(HERB_PI * clamp(v, 0.0, 1.0));
         } else {
             w = herbSimpleW(v, shape == 4 ? 0.5 : tip);
             float show = 1.0 - smoothstep(0.5, 1.4, fp * max(teeth, 1.0) / blade);
@@ -229,7 +236,7 @@ HerbSurface herbLeaf(int sp, vec2 uv, vec4 size, float stalk, float seed) {
         cover = herbAA((w - au) * halfW, fp) * step(0.0, v) * step(v, 1.02);
         vein = max(vein, herbLine(X, max(0.5 * rib * (1.0 - 0.7 * v), 0.0003), fp)) * cover;
         // The halves curve away from the midrib.
-        o.normal = vec3(-u * abs(u) * 0.45, 0.0, 1.0);
+        o.normal = vec3(-u * abs(u) * 0.45 + sign(u) * pleat, 0.0, 1.0);
     }
     o.cover = cover;
     o.vein = vein;
@@ -244,7 +251,12 @@ HerbSurface herbStemSurface(int sp, vec2 uv, vec4 size, float share) {
     float X = uv.x * 0.5 * wd;
     float fp = max(length(vec2(dFdx(X), dFdy(X))), 1e-6);
     float r = 0.5 * share * wd;
-    o.cover = share < 0.999 ? clamp(share, 0.0, 1.0) * step(abs(uv.x), 1.0) : herbLine(X, r, fp);
+    // A hairy stem's card is wider than the stem (HERB_STEM_HAIR_ROOM a
+    // side, scene_herb.glsl), the hairs standing off it in the margin.
+    float hr = herbRec(sp, 10).w;
+    bool resolved = share * (1.0 + 2.0 * HERB_STEM_HAIR_ROOM * hr) > 0.999;
+    float stem = resolved ? herbLine(X, r, fp) : clamp(share, 0.0, 1.0) * step(abs(uv.x), 1.0);
+    o.cover = stem;
     o.albedo = herbRec(sp, 5).rgb * (0.9 + 0.2 * uv.y);
     float x = clamp(uv.x / max(share, 1e-3), -1.0, 1.0);
     o.normal = vec3(x * 0.8, 0.0, sqrt(max(1.0 - 0.64 * x * x, 0.0)));
@@ -252,6 +264,35 @@ HerbSurface herbStemSurface(int sp, vec2 uv, vec4 size, float share) {
     o.gloss = 0.2;
     o.translucency = 0.15;
     o.ao = 1.0;
+    if (resolved && hr > 0.0) {
+        // Hairs: fine, pale, spreading out and a little up from the stem,
+        // about a millimetre apart up each side, each its own length. A
+        // pixel takes the share of it they cover, a silvery fringe where
+        // the stem crosses the light.
+        float Y = uv.y * size.x;
+        float fy = max(length(vec2(dFdx(Y), dFdy(Y))), 1e-6);
+        float t = abs(X) - r;                       // out from the stem's side
+        float side = X < 0.0 ? 0.37 : 0.0;
+        float sp1 = 0.0011;
+        float yy = Y - 0.55 * t;                    // slanting up as it leaves
+        float cell = floor(yy / sp1 + side);
+        float jit = herbHash1(cell * 1.71 + side * 9.0);
+        float yc = (cell + 0.5 + 0.6 * (jit - 0.5) - side) * sp1;
+        float hl = r * HERB_STEM_HAIR_ROOM * 2.0 * (0.5 + 0.5 * herbHash1(cell * 3.3 + side * 5.0));
+        float dist = abs(yy - yc) * 0.87;
+        float hair = herbLine(dist, 0.00005, max(fy, fp)) * step(0.0, t) * (1.0 - smoothstep(0.75 * hl, hl, t)) *
+                     (1.0 - smoothstep(0.92, 1.0, uv.y)) * hr;
+        // Hairs too fine to resolve: their mean share, a haze.
+        float haze = (0.00010 / sp1) * step(0.0, t) * (1.0 - smoothstep(0.4 * hl, hl, t)) * hr *
+                     smoothstep(0.5 * sp1, 2.0 * sp1, max(fy, fp));
+        hair = max(hair, haze);
+        float h = hair * (1.0 - stem);
+        o.cover = stem + h;
+        float hs = h / max(o.cover, 1e-4);
+        o.albedo = mix(o.albedo, vec3(0.42, 0.44, 0.36), hs);
+        o.translucency = mix(o.translucency, 0.7, hs);
+        o.normal = normalize(mix(o.normal, vec3(sign(X) * 0.6, 0.0, 0.8), hs));
+    }
     return o;
 }
 
@@ -335,18 +376,21 @@ HerbSurface herbBloomSurface(int sp, vec2 uv, vec4 size, float seed, vec2 down) 
             float jit = herbHash1(i * 3.1 + seed * 19.0) - 0.5;
             // Its pedicel out to the side, then the bell hangs down (the
             // world's, on the card) and out.
-            vec2 A = vec2((secund ? 0.25 : 0.35) * bi, yi) + down * (0.1 * bi);
-            vec2 d = normalize(down + vec2(secund ? 0.2 + 0.2 * jit : 0.6 + 0.3 * jit, 0.0));
+            // A foxglove's bells hang mostly to one side, the odd one to the
+            // other, each on its own short pedicel, a little apart.
+            float sd = !secund && jit > 0.32 ? -1.0 : 1.0;
+            vec2 A = vec2(sd * (secund ? 0.25 : 0.35 + 0.15 * jit) * bi, yi) + down * (0.1 * bi);
+            vec2 d = normalize(down + vec2(sd * (secund ? 0.2 + 0.2 * jit : 0.6 + 0.3 * jit), 0.0));
             vec2 q = P - A;
-            float a = dot(q, d) / ((secund ? 1.2 : 1.35) * bi * mix(1.0, 0.6, bud));
+            float a = dot(q, d) / ((secund ? 1.2 : 1.05) * bi * mix(1.0, 0.6, bud));
             float b = (d.x * q.y - d.y * q.x) / bi;
             float hw;
             if (secund) {
                 // Narrow, its six lobes flaring and curling back at the mouth.
                 hw = 0.13 + 0.07 * a + 0.2 * smoothstep(0.78, 1.0, a);
             } else {
-                // A fat tube swelling to its mouth, the lower lip longer.
-                hw = 0.2 + 0.16 * sqrt(max(a, 0.0)) + 0.04 * smoothstep(0.85, 1.0, a);
+                // A tube swelling to its mouth, the lower lip longer.
+                hw = 0.16 + 0.13 * sqrt(max(a, 0.0)) + 0.04 * smoothstep(0.85, 1.0, a);
             }
             // Rounded where it is held, like the closed end of a tube.
             hw *= mix(1.0, 0.75, bud) * sqrt(clamp(a / 0.2 + 0.15, 0.0, 1.0));
@@ -354,8 +398,8 @@ HerbSurface herbBloomSurface(int sp, vec2 uv, vec4 size, float seed, vec2 down) 
             float mouth = 1.0 - lip;
             float dist = min(hw - abs(b), min(a, mouth - a)) * bi;
             float c = herbAA(dist, fp);
-            float ped = herbLine(dot(P - vec2(0.0, yi), vec2(-d.y, d.x)), 0.0006, fp) * step(0.0, P.x) *
-                        step(P.x, A.x);
+            float ped = herbLine(dot(P - vec2(0.0, yi), vec2(-d.y, d.x)), 0.0006, fp) * step(0.0, P.x * sd) *
+                        step(P.x * sd, abs(A.x));
             if (c > best) {
                 best = c;
                 // A tube is round: darker at its sides; its mouth darker
@@ -364,7 +408,12 @@ HerbSurface herbBloomSurface(int sp, vec2 uv, vec4 size, float seed, vec2 down) 
                 float throat = smoothstep(0.86, 0.98, a) * (1.0 - smoothstep(0.3, 0.7, abs(xb)));
                 vec2 hs = herbHash2(floor(vec2(a * 24.0, xb * 6.0)) + i);
                 col = r7.rgb * (0.8 + 0.25 * a) * (1.0 - 0.45 * xb * xb) * (1.0 - 0.35 * throat);
-                if (!secund) col = mix(col, mix(r8.rgb * 0.8, r7.rgb * 0.35, step(0.6, hs.y)), throat * 0.6);
+                if (!secund) {
+                    col = mix(col, mix(r8.rgb * 0.8, r7.rgb * 0.35, step(0.6, hs.y)), throat * 0.6);
+                    // Its shoulder in the shade of the bell above, its
+                    // sides rounding away: each bell reads as itself.
+                    col *= mix(0.5, 1.0, smoothstep(0.0, 0.45, a)) * (1.0 - 0.25 * xb * xb);
+                }
                 col = mix(col, r7.rgb * vec3(0.7, 0.9, 0.6), bud * 0.5);
                 nb = vec3(xb * 0.85, 0.15, sqrt(max(1.0 - 0.72 * xb * xb, 0.0)));
             }
@@ -445,19 +494,75 @@ HerbSurface herbBloomSurface(int sp, vec2 uv, vec4 size, float seed, vec2 down) 
         return o;
     }
     if (form == 5) {
-        // An umbel: a flat-topped cluster of tiny florets.
-        float cells = 13.0;
-        vec2 g = (q + 1.0) * 0.5 * cells;
+        // An umbel (a yarrow's corymb): a low dome of tiny florets on a
+        // spray of stalks, drawn as seen (the card faces the eye, the dome's
+        // axis up it at size.w, its cosine to the eye). The dome is an
+        // oblate ellipsoid cut flat underneath, traced in the card's frame
+        // (x across, y up the card, z toward the eye; the axis is
+        // (0, s, cv)); florets lie over its top in a grid across it, the
+        // shadowed cluster showing between them, only florets at its rim.
+        float cv = size.w, s = sqrt(max(1.0 - cv * cv, 0.0));
+        const float R = 0.95, Hd = 0.24, hcut = -0.05;
+        vec2 p = q;
+        float A = s * s / (R * R) + cv * cv / (Hd * Hd);
+        float B = 2.0 * p.y * s * cv * (1.0 / (Hd * Hd) - 1.0 / (R * R));
+        float C = p.x * p.x / (R * R) + p.y * p.y * (cv * cv / (R * R) + s * s / (Hd * Hd)) - 1.0;
+        float disc = B * B - 4.0 * A * C;
+        float z = (-B + sqrt(max(disc, 0.0))) / (2.0 * A);
+        float hgt = p.y * s + z * cv, w = p.y * cv - z * s;
+        bool top = disc > 0.0 && hgt >= hcut;
+        if (disc > 0.0 && !top && abs(cv) > 0.05) {
+            // Seen from below: the flat underside, where the stalks fan out.
+            float zb = (hcut - p.y * s) / cv;
+            w = p.y * cv - zb * s;
+            hgt = hcut;
+            top = false;
+        }
+        float rh = length(vec2(p.x, w)) / R;
+        // Its outline, soft over a pixel (the ellipsoid's edge, in q).
+        float sil = clamp(0.5 + 0.5 * disc / max(fwidth(disc), 1e-5), 0.0, 1.0);
+        if (hgt < hcut - 1e-3) sil = 0.0;
+        // The florets over its top: a grid across it (x, w), each a small
+        // round head of five rays round a cream eye.
+        float cells = 11.0;
+        vec2 g = (vec2(p.x, w) / R + 1.0) * 0.5 * cells;
         vec2 cell = floor(g);
-        vec2 h = herbHash2(cell + seed * 11.0);
-        vec2 c = cell + 0.25 + 0.5 * h;
-        float fl = herbAA((0.42 - length(g - c)) / cells * 2.0, fq);
-        float show = 1.0 - smoothstep(0.4, 1.0, fq * cells * 0.5);
-        float edge = 0.92 + 0.08 * herbHash1(floor(ang * 3.0) + seed);
-        float inside = herbAA(edge - r, fq);
-        o.cover = inside * mix(0.8, fl, show);
-        o.albedo = mix(r7.rgb, r8.rgb, 0.25 * show * (1.0 - smoothstep(0.0, 0.15, length(g - c) / cells * 2.0)));
-        o.normal = vec3(q * 0.35, 1.0);
+        vec2 hh = herbHash2(cell + seed * 11.0);
+        vec2 c = cell + 0.3 + 0.4 * hh;
+        vec2 dv = g - c;
+        float fa = atan(dv.y, dv.x) + hh.x * 6.2831853;
+        float fr = 0.4 * (0.88 + 0.12 * cos(5.0 * fa));
+        // A floret's size on the card, against a pixel's (fq, in q).
+        float cellQ = 2.0 * R / cells;
+        float fl = herbAA((fr - length(dv)) * cellQ, fq);
+        float eye = 1.0 - smoothstep(0.1, 0.2, length(dv));
+        float show = 1.0 - smoothstep(0.35, 0.9, fq / cellQ);
+        // Between the florets, deep in the cluster: dark; at its rim only
+        // the florets stand out against what lies behind.
+        float rim = smoothstep(0.72, 0.95, rh);
+        float body = top ? mix(1.0, fl, rim * show) : 0.0;
+        // Its stalks: from the stem's tip (under the dome's middle) out to
+        // where they hold its edge, seen below and through its rim.
+        float stalks = 0.0;
+        vec2 tipQ = vec2(0.0, -0.3 * s);
+        for (int k = 0; k < 6; ++k) {
+            float a = (float(k) + herbHash1(float(k) + seed * 7.0) * 0.6) * 1.0472 + seed * 3.0;
+            vec2 e = vec2(0.6 * R * cos(a), hcut * s + 0.6 * R * sin(a) * cv);
+            vec2 se = e - tipQ, pp = p - tipQ;
+            float t = clamp(dot(pp, se) / max(dot(se, se), 1e-6), 0.0, 1.0);
+            stalks = max(stalks, herbAA(0.018 - length(pp - se * t), fq));
+        }
+        o.cover = max(sil * body, stalks * (1.0 - sil * body));
+        vec3 shade = mix(herbRec(sp, 5).rgb * 0.8, r7.rgb * 0.35, 0.5);
+        vec3 floret = mix(r7.rgb * (0.9 + 0.2 * hh.y), r8.rgb, eye * 0.8);
+        o.albedo = !top ? shade : mix(mix(r7.rgb * 0.8, shade, 0.5), floret, mix(0.75, fl, show));
+        if (stalks > 0.5 && sil * body < 0.5) o.albedo = herbRec(sp, 5).rgb;
+        // The dome's normal (the ellipsoid's gradient in the card's frame),
+        // each floret a little dome of its own.
+        vec3 gN = vec3(p.x / (R * R), w / (R * R) * cv + hgt / (Hd * Hd) * s, -w / (R * R) * s + hgt / (Hd * Hd) * cv);
+        vec3 bump = vec3(dv * 0.6 * fl * show, 0.0);
+        o.normal = top ? normalize(normalize(gN) + bump) : vec3(0.0, -0.6, 0.8);
+        o.ao = top ? mix(0.55, 1.0, smoothstep(hcut, Hd, hgt)) * mix(0.7, 1.0, mix(fl, 1.0, 1.0 - show)) : 0.45;
         o.translucency = 0.3;
         return o;
     }

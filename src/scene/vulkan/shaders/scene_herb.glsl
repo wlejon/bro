@@ -244,7 +244,7 @@ bool herbVertex(int id, int vid, vec3 v, out HerbVertex o) {
         side = dot(side, side) > 1e-8 ? normalize(side) : vec3(1.0, 0.0, 0.0);
         float px = 2.0 / max(abs(camera.proj[1][1]) * camera.viewport.y, 1.0);
         float dia = herbRec(sp, 5).w * (1.0 - 0.4 * v.y);
-        float wd = max(dia, length(p) * px * 0.7);
+        float wd = max(dia * (1.0 + 2.0 * HERB_STEM_HAIR_ROOM * herbRec(sp, 10).w), length(p) * px * 0.7);
         o.pos = p + side * (v.x * wd);
         o.side = side;
         o.normal = normalize(cross(side, tg));
@@ -308,15 +308,16 @@ bool herbVertex(int id, int vid, vec3 v, out HerbVertex o) {
         vec2 q = vec2(v.x * 2.0, v.y * 2.0 - 1.0);
         float scale = 0.5 * bs;
         o.size = vec4(bs, bs, bs, 1.0);
-        if (form == 2) {
+        if (form == 2 || form == 5) {
             // A cup is drawn as seen: its card faces the eye, up it the
             // cup's axis, and the fragment draws the bowl and the rim's
             // ellipse at the angle it is seen (size.w, the axis on the eye).
+            // So is an umbel's dome of florets, its middle over the tip.
             float cv = dot(n, toEye);
             vec3 up2 = n - toEye * cv;
             e2 = dot(up2, up2) > 1e-6 ? normalize(up2) : normalize(cross(toEye, vec3(1.0, 0.0, 0.0)));
             e1 = normalize(cross(e2, toEye));
-            centre = tip + n * (0.7 * scale) - e2 * (0.25 * scale);
+            centre = form == 2 ? tip + n * (0.7 * scale) - e2 * (0.25 * scale) : tip + n * (0.3 * scale);
             n = toEye;
             o.size.w = cv;
         } else {

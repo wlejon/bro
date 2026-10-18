@@ -931,7 +931,8 @@ bro.flora.herbPresets = function() {};
  * 'carpet'; height, spread, leaves, stems; leafShape 'frond' | 'simple' |
  * 'strap' | 'trifoliate' | 'lobed' | 'ribbed', leafLength, leafWidth,
  * leafTip, teeth, toothDepth, pinnae, lobes, stalk, rise, arch, leafColor,
- * gloss; stemColor, stemDiameter, ribDiameter; bloomForm 'none' | 'ray' |
+ * gloss; stemColor, stemDiameter, ribDiameter, hairs (0 bare .. 1 a
+ * poppy's bristling stems); bloomForm 'none' | 'ray' |
  * 'cup' | 'head' | 'spike' | 'umbel' | 'bell', bloomSize, bloomCount,
  * petals, bloomColor, centreColor, nod; where it grows: shade, shadeRange,
  * abundance, patch, patchCover, spacing — the distance between its plants

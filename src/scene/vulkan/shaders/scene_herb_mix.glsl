@@ -21,12 +21,16 @@
 //   0 habit, height, spread, leaves      7 bloomColor, nod
 //   1 stems, leafShape, length, width    8 centreColor, ribDiameter
 //   2 tip, teeth, toothDepth, pinnae     9 shade, shadeRange, abundance, patch
-//   3 lobes, stalk, rise, arch           10 patchCover, bloomShare, cover, 0
+//   3 lobes, stalk, rise, arch           10 patchCover, bloomShare, cover, hairs
 //   4 leafColor, gloss                   11 stem freq, stem sway, leaf freq, leaf sway
 //   5 stemColor, stemDiameter            12 spacing, side cover, its blooms' share, leaf top
 //   6 bloomForm, bloomSize, bloomCount, petals
 
 vec4 herbRec(int i, int k) { return grass.herbs[i * GRASS_HERB_RECORD + k]; }
+
+// A hairy stem's card reaches this many of the stem's diameters past each
+// side, times its hairs, for the hairs to stand in.
+const float HERB_STEM_HAIR_ROOM = 0.6;
 int herbCount() { return min(int(grass.herbInfo.x + 0.5), GRASS_HERB_MAX); }
 
 // Species `i`'s weight at absolute `xz` under canopy `canopy`.

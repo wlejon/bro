@@ -94,6 +94,35 @@ vec3 groundLeaves(vec2 xz, float size, out float edge, out float shade) {
     return c * mix(0.8, 1.0, rib);
 }
 
+// Blades lying low (short live ones, fallen dead ones): in each `size` m cell
+// one, a `keep` share of the cells, tapering to a point at each end. Returns
+// the share of the pixel on a blade; `tone` the topmost one's own 0..1.
+float groundBlades(vec2 xz, float size, float keep, float width, float fp, out float tone) {
+    ivec2 i = ivec2(floor(xz / size));
+    float on = 0.0;
+    tone = 0.5;
+    for (int y = -1; y <= 1; ++y)
+        for (int x = -1; x <= 1; ++x) {
+            ivec2 c = i + ivec2(x, y);
+            if (groundHash(c, 21) > keep) continue;
+            vec2 p = (vec2(c) + vec2(groundHash(c, 22), groundHash(c, 23))) * size;
+            float a = groundHash(c, 24) * 3.14159265;
+            vec2 d = vec2(cos(a), sin(a));
+            float len = size * (0.6 + 0.9 * groundHash(c, 25));
+            vec2 v = xz - p;
+            float t = clamp(dot(v, d) / (0.5 * len), -1.0, 1.0);
+            float dist = abs(dot(v, vec2(-d.y, d.x)));
+            float w = size * width * (0.5 + 0.8 * groundHash(c, 26)) * sqrt(max(1.0 - t * t, 0.0));
+            float cov = clamp((w + 0.5 * fp - dist) / fp, 0.0, 1.0) * min(w / max(fp, 1e-6) + 0.3, 1.0) *
+                        step(abs(dot(v, d)), 0.5 * len);
+            if (cov > on) {
+                on = cov;
+                tone = groundHash(c, 27);
+            }
+        }
+    return on;
+}
+
 // Twigs: in each `size` m cell perhaps one, a thin dark stroke. 1 on a
 // twig, 0 off one.
 float groundTwigs(vec2 xz, float size, float fp) {
@@ -161,11 +190,24 @@ void groundSurface(vec3 rel, vec4 vdata, inout vec3 color, inout float roughness
     if (nearSeen > 0.0) {
         float crumb = groundFbm(xz + 13.0, 45.0, fp, 2);
         float base = groundFbm(xz + 41.0, 14.0, fp, 2);
-        vec3 nearRoots = mix(soil * (0.55 + 0.9 * crumb), sward * grass.look.x * 0.8, smoothstep(0.35, 0.75, base) * 0.7);
-        float straw = max(groundTwigs(xz + vec2(3.7, 1.3), 0.07, fp),
-                          groundTwigs(vec2(xz.x * 0.8 - xz.y * 0.6, xz.x * 0.6 + xz.y * 0.8) + 9.1, 0.05, fp));
-        vec3 strawC = mix(grass.dry.rgb * 0.75, vec3(0.13, 0.11, 0.075), crumb);
-        nearRoots = mix(nearRoots, strawC, straw * 0.85);
+        // The foot of the sward: dark, the bases' green in shadow, crumbs
+        // of soil showing in its thin places.
+        float fine = groundFbm(xz + 7.0, 110.0, fp, 1);
+        float bare = smoothstep(0.66, 0.86, 0.6 * fine + 0.4 * crumb + 0.35 * (1.0 - density) - 0.2 * base) * 0.8;
+        vec3 nearRoots = mix(sward * grass.look.x * (0.25 + 0.15 * crumb), soil * (0.4 + 0.4 * fine), bare);
+        // Short live blades lying every way over it, each its own tone (some
+        // turned to the light), and fewer fallen dead ones, thin and pale to
+        // dun, tapering to their points.
+        float tA, tB, tS;
+        vec2 xr = vec2(xz.x * 0.5 - xz.y * 0.866, xz.x * 0.866 + xz.y * 0.5);
+        float lowA = groundBlades(xr + 5.3, 0.05, 0.85, 0.07, fp, tA);
+        float lowB = groundBlades(vec2(xz.y, -xz.x) + 2.9, 0.04, 0.75, 0.07, fp, tB);
+        float straw = groundBlades(xz + vec2(3.7, 1.3), 0.08, 0.3 + 0.4 * dry, 0.03, fp, tS);
+        vec3 live = sward * grass.look.x;
+        nearRoots = mix(nearRoots, live * (0.6 + 0.7 * tA), lowA * 0.9);
+        nearRoots = mix(nearRoots, mix(live, grass.dry.rgb * 0.7, 0.3 * tB) * (0.5 + 0.6 * tB), lowB * 0.85);
+        vec3 strawC = mix(vec3(0.11, 0.09, 0.055), grass.dry.rgb * 0.85, tS) * (0.75 + 0.4 * crumb);
+        nearRoots = mix(nearRoots, strawC, straw * 0.8);
         roots = mix(roots, nearRoots, nearSeen);
     }
     vec3 turf = mix(roots, sward, topSeen);
