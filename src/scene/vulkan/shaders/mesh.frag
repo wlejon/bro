@@ -56,6 +56,7 @@ layout(location = 8) flat in vec4 inLobeOut;
 layout(location = 9) flat in vec4 inLobeSphere;
 layout(location = 10) flat in float inLobeDensity;
 layout(location = 11) flat in float inLobeFlat;
+layout(location = 12) flat in float inLobeHollow;   // forestShellPath's hollow, 0: leaves throughout
 #endif
 #ifdef SCENE_FOREST_SPRAY
 // The spray's seed (mesh_forest_leaf.vert): its own dither.
@@ -387,10 +388,14 @@ void main() {
         // fewer, wider leaves, too coarse to shade a leaf among its own).
         // Half the lobe's density: a cluster stands for the leaves nearest
         // its outline, and the full depth through the lobe left the mid
-        // range darker than the leaves it hands over from.
+        // range darker than the leaves it hands over from. A broad forest's
+        // leaves lie in their lobe's shell, the hollow inside crossed free
+        // (forestShellPath).
         massSphere = inLobeSphere;
         massDensity = inLobeDensity * 0.5;
         massFlat = inLobeFlat;
+        if (inLobeHollow > 0.0 && lighting.sunDirection.w > 0.5)
+            massDensity *= forestShellPath(worldPos, massSphere, massFlat, -lighting.sunDirection.xyz, inLobeHollow);
     }
 #elif defined(SCENE_FOREST_BLOOM)
     // A bloom (scene_forest_bloom.glsl): its form shaped on its card, its

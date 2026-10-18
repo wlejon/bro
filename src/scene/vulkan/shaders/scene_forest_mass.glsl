@@ -284,6 +284,38 @@ void forestCrownTerms(vec3 rc, out vec3 bulk, out float ao, out vec3 deep) {
            (1.0 + 0.15 * smoothstep(0.85, 1.15, depth));
 }
 
+// A broad forest's leaves lie in the outer shell of their lobe (on shoots
+// along great circles at 1 - shell * (0.2 .. 0.8) of its radius,
+// scene_forest_shoot.glsl), not through it: the light toward `L` from a
+// point `pos` (camera-relative) crosses the hollow inside them free, and the
+// shell holds all the lobe's leaves, denser by the lobe's volume over its
+// own. The path through leaves over the whole path to where the light
+// leaves the lobe (`sphere` centre and radius, its height over its width
+// `flatness`), the share of the radius left hollow `hollow`: what a
+// cluster's light through its lobe (SceneSurface::leafPath) is scaled by.
+// Spread evenly through the lobe, a cluster's leaves were lit through as
+// many leaves on the side toward the light as the shoots' leaves have in
+// the shell's depth there, which left the mid range brighter than the
+// leaves it hands over from.
+float forestShellPath(vec3 pos, vec4 sphere, float flatness, vec3 L, float hollow) {
+    if (sphere.w <= 0.0 || hollow <= 0.0) return 1.0;
+    float ky = clamp(flatness, 0.1, 1.0);
+    vec3 oc = pos - sphere.xyz;
+    oc.y /= ky;
+    vec3 Ls = vec3(L.x, L.y / ky, L.z);
+    float la = dot(Ls, Ls), b = dot(oc, Ls);
+    float out_ = max((-b + sqrt(max(b * b - la * (dot(oc, oc) - sphere.w * sphere.w), 0.0))) / la, 0.0);
+    if (out_ <= 1e-6) return 1.0 / max(1.0 - hollow * hollow * hollow, 0.05);
+    float through = out_;
+    float hr = hollow * sphere.w;
+    float di = b * b - la * (dot(oc, oc) - hr * hr);
+    if (di > 0.0) {
+        float sq = sqrt(di);
+        through -= max(min((-b + sq) / la, out_) - max((-b - sq) / la, 0.0), 0.0);
+    }
+    return through / out_ / max(1.0 - hollow * hollow * hollow, 0.05);
+}
+
 // A broad forest leaf cut from its card per pixel (MESH_FOREST_LEAF_CUT,
 // mesh_forest_leaf.vert): `uv` x across the card (0.5 the midrib, 0 and 1
 // its widest), y along it (1 at the stalk, 0 the tip); `shape` its species'

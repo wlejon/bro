@@ -7,6 +7,7 @@ layout(location = 0) out vec2 outUV;
 layout(location = 1) out float outSeed;
 layout(location = 2) flat out float outDepth;   // the leaves' optical depth through the middle
 layout(location = 3) flat out float outShare;   // the tier's share of the tree's caster (the drawer's fade code)
+layout(location = 4) flat out float outHollow;  // a broad lobe's hollow (forestShellPath), 0: leaves throughout
 
 #include "scene_camera.glsl"
 #include "scene_shadow_push.glsl"
@@ -25,8 +26,14 @@ void main() {
         outSeed = 0.0;
         outDepth = 0.0;
         outShare = 0.0;
+        outHollow = 0.0;
         return;
     }
+    // A broad clump's leaves lie in its lobe's shell (scene_forest_shoot.glsl's
+    // shoots at 1 - shell * (0.2 .. 0.8) of its radius), a crown's in its
+    // clumps.
+    outHollow = int(push.params.x + 0.5) == 0 && forestLeafForm() == 0
+              ? 1.0 - 0.8 * clamp(procedural.header[0].w, 0.0, 1.0) : 0.0;
     // A caster's fade code is [0, share): the light a tree's sprites stop
     // is that share of what they would, the rest its other tier's (the
     // drawer hands the tiers over continuously).
@@ -40,6 +47,10 @@ void main() {
     // sphere has crossed only the leaves above it, so the disc shades the
     // sphere's far part and what lies beyond, not its lit side. (A sprite
     // takes its own leaves' shade analytically, mesh.frag's leafSphere.)
+    // A broad lobe's leaves lie in its shell, so all but its lit cap lie
+    // behind the near shell's leaves: its disc stands at the centre. (Half a
+    // radius on, the shell's sides and the inner face of its far half went
+    // unshaded: a canopy's crowns 4 units brighter than their leaves'.)
     vec3 away = normalize(vec3(L[0][2], L[1][2], L[2][2]));
     // The leaves lean up (the emit's upBias), so they stop less of a low sun
     // than of a high one: the area they turn to the light (Ross's G, 0.5 for
@@ -55,7 +66,7 @@ void main() {
     // As an even disc, a low sun's long shadows across a far canopy shaded
     // its crowns 7 units under its leaves'.
     if (int(push.params.x + 0.5) == 1) outDepth *= FOREST_CROWN_CLUMPING;
-    vec4 clip = L * vec4(s.center + away * (0.5 * s.radius), 1.0);
+    vec4 clip = L * vec4(s.center + away * ((outHollow > 0.0 ? 0.0 : 0.5) * s.radius), 1.0);
     // How far a world metre moves the tile's x and y: the lengths of its
     // first two rows.
     vec2 perMetre = vec2(length(vec3(L[0][0], L[1][0], L[2][0])), length(vec3(L[0][1], L[1][1], L[2][1])));

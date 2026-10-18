@@ -62,10 +62,14 @@ const float FOREST_LEAF_DROOP = 0.12;
 const float FOREST_LEAF_TILT = 1.0;
 
 // The pieces of each twig, and so of a clump.
+// A limb and a spray's twig to its limb can run most of a large lobe (a
+// grove broadleaf's clumps are 1.6 to 2.7 m across): in three pieces each
+// was a run of straight rods a third of a metre long, so they take five,
+// and a limb carries two sprays, so its sprays' twigs to it are short.
 const int FOREST_STEM_PIECES = 4;     // a lobe's stem
-const int FOREST_LIMB_PIECES = 3;     // a limb from it
-const int FOREST_LIMB_SPRAYS = 3;     // sprays a limb carries (a lobe of 3 or more sprays has limbs)
-const int FOREST_HUB_PIECES = 3;      // a spray's twig from its limb or its lobe's stem
+const int FOREST_LIMB_PIECES = 5;     // a limb from it
+const int FOREST_LIMB_SPRAYS = 2;     // sprays a limb carries (a lobe of 3 or more sprays has limbs)
+const int FOREST_HUB_PIECES = 5;      // a spray's twig from its limb or its lobe's stem
 const int FOREST_AXIS_PIECES = 4;     // a spray's axis
 const int FOREST_SPRAY_PIECES = FOREST_HUB_PIECES + FOREST_AXIS_PIECES;
 const int FOREST_SHOOT_PIECES = 4;

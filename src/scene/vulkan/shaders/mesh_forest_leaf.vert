@@ -35,6 +35,9 @@ layout(location = 8) flat out vec4 outLobeOut;
 layout(location = 9) flat out vec4 outLobeSphere;
 layout(location = 10) flat out float outLobeDensity;
 layout(location = 11) flat out float outLobeFlat;   // the lobe's height over its width
+// A broad forest's lobe: its leaves lie in its shell, outside this share of
+// its radius (scene_forest_mass.glsl's forestShellPath); 0 elsewhere.
+layout(location = 12) flat out float outLobeHollow;
 
 #include "scene_camera.glsl"
 #include "scene_mesh_push.glsl"
@@ -54,6 +57,7 @@ void main() {
     outLobeSphere = vec4(0.0);
     outLobeDensity = 0.0;
     outLobeFlat = 1.0;
+    outLobeHollow = 0.0;
     ForestEntry e = forestEntry(gl_InstanceIndex);
     int leaf = e.first + gl_VertexIndex / max(e.param, 1);
 #ifdef FOREST_LEAF_INLINE
@@ -155,6 +159,9 @@ void main() {
         outLobeSphere = vec4(p.at + p.lobeSphere.xyz, p.lobeSphere.w);
         outLobeDensity = p.lobeDensity;
         outLobeFlat = p.lobeFlat;
+        // Its shoots lie at 1 - shell * (0.2 .. 0.8) of the lobe's radius
+        // (scene_forest_shoot.glsl's forestSpray), its leaves out from them.
+        if (forestLeafForm() == 0) outLobeHollow = 1.0 - 0.8 * clamp(procedural.header[0].w, 0.0, 1.0);
     }
 
     outWorldPos = pos;

@@ -132,9 +132,10 @@ void barkSurface(vec4 coords, float hb, float word, vec3 pos, vec3 geomN, vec3 a
     barkUnpack(word, furrow, scale, moss);
     float r = max(coords.w, 1e-3);
     // A pale bark (a birch's white) comes with age: its twigs, under a
-    // couple of centimetres across, are dark red-brown.
+    // couple of centimetres across, are red-brown (not near black: deep in a
+    // crown, in shade, wood that dark read as a cage of black rods).
     float pale = smoothstep(0.3, 0.55, dot(color, vec3(0.3, 0.5, 0.2)));
-    color = mix(color, vec3(0.09, 0.055, 0.04), pale * (1.0 - smoothstep(0.006, 0.03, r)));
+    color = mix(color, vec3(0.15, 0.095, 0.065), pale * (1.0 - smoothstep(0.006, 0.03, r)));
     // The ridges' spacing grows with the girth (young wood is smooth and
     // finely lined, an old trunk's ridges are fingers wide), and the relief
     // with it: twigs show none.

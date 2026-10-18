@@ -33,9 +33,9 @@ void main() {
         return;
     }
     forestSprayBrush(e.instance, lf.x, lc, lr, P, R, F);
-    // Swayed about where it hangs, as mesh_forest_leaf.vert sways it (a
-    // caster leaves out its spray's and shoot's own bending: a few
-    // centimetres, under a shadow texel).
+    // Swayed about where it hangs as its leaf is (scene_forest_leaf_pose.glsl),
+    // its spray's and shoot's bending included: a leaf's own shadow on the
+    // leaves under it stays with it as a gust bends its spray.
     vec3 rest = P;
     float grown = (k - 1.0) * procedural.header[1].z;
     // A widened broad caster grows from its node as its leaf does
@@ -61,8 +61,21 @@ void main() {
     }
     vec4 v0, v1, v2, v3;
     forestVegetation(forestClumpRecord(lf.x) + 2, rest, 1.0, v0, v1, v2, v3);
-    mat3 rot;
-    forestLeafSway(model, v0, v1, v2, v3, F, normalize(mat3(model) * R[1]), forestFlutter(e.widening), treeSeed,
-                   pos, rot);
+    VegPlant plant = vegPlant(model, v0, v3);
+    VegLimb limb = vegLimb(model, v3);
+    VegWind w = vegWind(plant);
+    vec3 anchor = (model * vec4(v2.xyz, 1.0)).xyz;
+    VegPose pose = vegPose(plant, limb, w, anchor, clamp(v2.w, 0.0, 1.0));
+    float amount = forestFlutter(e.widening);
+    if (onShoot) {
+        vec3 off, om;
+        forestLeafShootSway(at, model, pose.drag, amount, off, om);
+        pose.offset += off;
+        pose.omega += om;
+    }
+    float seed = fract(sin(dot(v2.xyz, vec3(12.9898, 78.233, 37.719)) + treeSeed * 61.7) * 43758.5453);
+    mat3 rot = vegLeafAmount(pose, w, normalize(mat3(model) * F), normalize(mat3(model) * R[1]), pos - anchor, seed,
+                             amount);
+    pos = anchor + pose.offset + rot * (pos - anchor);
     gl_Position = push.lightViewProj * vec4(pos, 1.0);
 }

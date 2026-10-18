@@ -334,5 +334,8 @@ float forestFlutter(float widening) {
 
 const vec4 FOREST_CULLED = vec4(2.0, 2.0, 2.0, 1.0);
 // A colour leaf within FOREST_NEAR_SHRINK.y of the eye shrinks to its middle,
-// gone by .x (m): the eye passing through a crown (scene_vegetation.glsl's).
-const vec2 FOREST_NEAR_SHRINK = VEG_NEAR_SHRINK;
+// gone by .x (m): the eye passing through a crown. Closer than
+// scene_vegetation.glsl's metre: a forest leaf hangs on its twig, and one
+// shrunk half a metre off reads as a tiny leaf floating loose by full-size
+// ones; only the leaves the eye all but touches give way.
+const vec2 FOREST_NEAR_SHRINK = vec2(0.1, 0.4);

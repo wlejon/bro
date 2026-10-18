@@ -304,10 +304,11 @@ ForestNode::ClumpTwigs ForestNode::twigPieces(uint32_t leaves) {
     // limb slots (forestLimbSlots: lobe 0's limbs, one a FOREST_LIMB_SPRAYS
     // of its sprays, none under 3) of FOREST_LIMB_PIECES, then
     // FOREST_SPRAY_PIECES a spray and FOREST_SHOOT_PIECES a shoot.
+    constexpr uint32_t kStemPieces = 4, kLimbPieces = 5, kLimbSprays = 2, kSprayPieces = 5 + 4, kShootPieces = 4;
     const uint32_t lobeSprays = (NB + 2u) / 3u;
-    const uint32_t limbs = lobeSprays < 3u ? 0u : (lobeSprays + 2u) / 3u;
-    const uint32_t stems = 12u + 3u * 3u * limbs + 7u * NB;
-    return {stems, stems + 4u * S};
+    const uint32_t limbs = lobeSprays < 3u ? 0u : (lobeSprays + kLimbSprays - 1u) / kLimbSprays;
+    const uint32_t stems = 3u * kStemPieces + 3u * kLimbPieces * limbs + kSprayPieces * NB;
+    return {stems, stems + kShootPieces * S};
 }
 
 float ForestNode::fadeCode(float lo, float hi) {
