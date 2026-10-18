@@ -131,6 +131,10 @@ void barkSurface(vec4 coords, float hb, float word, vec3 pos, vec3 geomN, vec3 a
     float furrow, scale, moss;
     barkUnpack(word, furrow, scale, moss);
     float r = max(coords.w, 1e-3);
+    // Round the stem on its circle, not the chord of the side the fragment
+    // is on (interpolated, the across coordinates cut each side's corner,
+    // so the pattern bunched and stretched side by side, banding the wood).
+    coords.xy = normalize(coords.xy + vec2(1e-7, 0.0)) * coords.w;
     // A pale bark (a birch's white) comes with age: its twigs, under a
     // couple of centimetres across, are red-brown (not near black: deep in a
     // crown, in shade, wood that dark read as a cage of black rods).

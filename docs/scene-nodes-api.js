@@ -550,8 +550,10 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  *   time: nothing is baked or rendered ahead, so every tree may be unique.
  *   - BARK at the leaves' and sprites' tiers: the segments wider on screen
  *     than `barkPixels` times the leaves' widening, a connected run from
- *     the trunk out, so limbs go tip first as the crown thins; 10 sides
- *     while the trunk is wider than `barkSidesPixels`, else 5.
+ *     the trunk out, so limbs go tip first as the crown thins; 20 sides
+ *     while the trunk is wider than `barkFineSides` x `barkSidesPixels`,
+ *     10 while wider than `barkSidesPixels`, else 5, each ring morphing
+ *     between them by its own width on screen.
  *   - BLOOMS at every tier: a flowering specimen's blooms (the emit's
  *     `blooms` / `specimenBlooms`: its species' bloomForm, colour and size
  *     at its twigs' tips), a card each whose fragment shader shapes the
@@ -701,7 +703,10 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  * @property {number} [crownFrom=7] - a clump's radius (px) at which clumps start handing over to crowns...
  * @property {number} [crownTo=4.5] - ...and are gone.
  * @property {number} [barkPixels=0.7] - bark narrower than this (times the widening) is left out.
- * @property {number} [barkSidesPixels=24] - a trunk wider than this on screen has 10 sides, else 5.
+ * @property {number} [barkSidesPixels=24] - a trunk wider than this on screen has 10 sides, else 5; each ring
+ *   morphs between 5, 10 and 20 sides by its own width (5 to 10 over 1 to 2 times this, 10 to 20 over 2.5 to 5
+ *   times), so no switch shows.
+ * @property {number} [barkFineSides=2.5] - a trunk wider than this times `barkSidesPixels` has 20 sides; 0: never.
  * @property {number} [shadowKeep=0.35] - the share of its drawn leaves a tree's shadow keeps.
  * @property {number} [range=0] - trees further than this (m) are not drawn; 0: no limit.
  * @property {number} [budget=12.5] - millions of leaf and bark vertices the view may send; 0: no budget.

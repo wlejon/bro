@@ -137,7 +137,7 @@ struct MeshDraw {
 
     VkBuffer vertices = VK_NULL_HANDLE;
     VkBuffer indices = VK_NULL_HANDLE;
-    uint32_t indexCount = 0;   // Tube, ForestTube, ForestSprite: the vertex count of the unindexed draw
+    uint32_t indexCount = 0;   // Tube, ForestSprite: the vertex count of the unindexed draw (ForestTube: indexed)
     uint32_t firstInstance = 0;  // Forest kinds: the first draw entry (instanced)
     uint32_t firstVertex = 0;    // ForestSprite crowns: the first entry times 6 (not instanced)
     VkBuffer instances = VK_NULL_HANDLE;         // Instanced, InstancedVegetation

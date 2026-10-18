@@ -1,6 +1,7 @@
 #include "scene/forest_node.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -269,7 +270,7 @@ void ForestNode::lodToArray(float (&out)[kLodCount]) const {
     const Lod& l = lod_;
     const float v[kLodCount] = {l.leafPixels, l.flutterFade, l.cardWidening, l.clumpFrom, l.clumpTo, l.crownFrom,
                                 l.crownTo, l.barkPixels, l.barkSidesPixels, l.shadowKeep, l.range,
-                                l.budget, l.shadowBudget, l.clusters, l.barkKeepPixels};
+                                l.budget, l.shadowBudget, l.clusters, l.barkKeepPixels, l.barkFineSides};
     std::copy(std::begin(v), std::end(v), out);
 }
 
@@ -277,7 +278,7 @@ void ForestNode::lodFromArray(const double* v, size_t n) {
     float* dst[kLodCount] = {&lod_.leafPixels, &lod_.flutterFade, &lod_.cardWidening, &lod_.clumpFrom,
                              &lod_.clumpTo, &lod_.crownFrom, &lod_.crownTo, &lod_.barkPixels,
                              &lod_.barkSidesPixels, &lod_.shadowKeep, &lod_.range, &lod_.budget,
-                             &lod_.shadowBudget, &lod_.clusters, &lod_.barkKeepPixels};
+                             &lod_.shadowBudget, &lod_.clusters, &lod_.barkKeepPixels, &lod_.barkFineSides};
     for (size_t i = 0; i < n && i < static_cast<size_t>(kLodCount); ++i)
         if (!std::isnan(v[i])) *dst[i] = static_cast<float>(v[i]);
     lod_.leafPixels = std::max(lod_.leafPixels, 0.01f);
@@ -293,6 +294,7 @@ void ForestNode::lodFromArray(const double* v, size_t n) {
     lod_.shadowBudget = std::max(lod_.shadowBudget, 0.0f);
     lod_.clusters = lod_.clusters > 0.5f ? 1.0f : 0.0f;
     lod_.barkKeepPixels = std::max(lod_.barkKeepPixels, 0.0f);
+    lod_.barkFineSides = std::max(lod_.barkFineSides, 0.0f);
 }
 
 ForestNode::ClumpTwigs ForestNode::twigPieces(uint32_t leaves) {
@@ -347,7 +349,10 @@ ForestNode::TreeLod ForestNode::treeLod(const Lod& lod, const Specimen& s, float
     px = std::max(px, 1e-6f);
     barkPx = barkPx > 0.0f ? barkPx : px;
     t.barkRadius = lod.barkPixels / (2.0f * barkPx);
-    t.barkSides = 2.0f * s.trunkRadius * barkPx > lod.barkSidesPixels ? 10 : 5;
+    const float trunkPx = 2.0f * s.trunkRadius * barkPx;
+    t.barkSides = lod.barkFineSides > 0.0f && trunkPx > lod.barkFineSides * lod.barkSidesPixels ? 20
+                  : trunkPx > lod.barkSidesPixels                                                 ? 10
+                                                                                                  : 5;
     if (forceTier >= 0) {
         t.leaves = forceTier == 0 ? 1.0f : 0.0f;
         t.clumps = forceTier == 1 ? 1.0f : 0.0f;
@@ -671,6 +676,32 @@ const std::vector<float>& ForestNode::gpuData() const {
         octEncode(t[0], t[1], t[2], d[8], d[9]);
         octEncode(t[3], t[4], t[5], d[10], d[11]);
         std::memcpy(d + 12, &a.segmentVegetation[g * 16], 16 * sizeof(float));
+    }
+    // The bark's end where a branch stops or forks into thinner ones: the
+    // drawn wood narrows over its last segment to the thickest that goes
+    // on from its end, or at a tip (none does) to kTipTaper of itself, into
+    // the twigs its clump grows from. Without it the wood ended in an open
+    // cut as thick as itself, a finger-thick stem stopping dead with only
+    // its twigs going on. (The records only: the drawer's keep radii, and
+    // so what is drawn, are the emit's.)
+    constexpr float kTipTaper = 0.3f;
+    for (const Specimen& s : specimens_) {
+        std::vector<std::array<float, 4>> starts;   // a segment's start and radius there
+        starts.reserve(s.segCount);
+        for (uint32_t g = s.segStart; g < s.segStart + s.segCount && g < nSeg; ++g)
+            starts.push_back({a.segments[g * 8], a.segments[g * 8 + 1], a.segments[g * 8 + 2], a.segments[g * 8 + 3]});
+        std::sort(starts.begin(), starts.end());
+        constexpr float kTol = 1e-4f;
+        for (uint32_t g = s.segStart; g < s.segStart + s.segCount && g < nSeg; ++g) {
+            const float* e = &a.segments[g * 8 + 4];
+            auto it = std::lower_bound(starts.begin(), starts.end(),
+                                       std::array<float, 4>{e[0] - kTol, -1e30f, -1e30f, -1e30f});
+            float on = -1.0f;   // the thickest going on from its end
+            for (; it != starts.end() && (*it)[0] <= e[0] + kTol; ++it)
+                if (std::fabs((*it)[1] - e[1]) <= kTol && std::fabs((*it)[2] - e[2]) <= kTol) on = std::max(on, (*it)[3]);
+            float* d = r + (segBase + g * 7) * 4;
+            d[7] = on < 0.0f ? d[7] * kTipTaper : std::min(d[7], on);
+        }
     }
     // Each clump's leaves are keyed from its first (emitForest keys a
     // clump's leaves in one run): the shoot model numbers them from there.

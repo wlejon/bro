@@ -129,7 +129,12 @@ public:
         float crownFrom = 7.0f;       // mean clump radius (px) over which clumps hand over to crowns
         float crownTo = 4.5f;
         float barkPixels = 0.7f;      // bark narrower than this on screen is left out
-        float barkSidesPixels = 24.0f;// a trunk wider than this (px) has 10 sides, else 5
+        // A trunk wider than this (px) has 10 sides, wider than
+        // `barkFineSides` times it 20, else 5; each ring morphs between them
+        // by its own width (scene_forest_tube.glsl's forestTubeMorph: 5 to
+        // 10 over 1 to 2 times this, 10 to 20 over 2.5 to 5 times), so
+        // neither the tree's switch nor a branch's narrowing shows.
+        float barkSidesPixels = 24.0f;
         float shadowKeep = 0.35f;     // the share of a tree's drawn leaves its shadow keeps
         float range = 0.0f;           // trees further than this (m) are not drawn; 0: no limit
         // Vertex budgets (millions), the leaves' and bark's: when the trees
@@ -151,8 +156,12 @@ public:
         // widening and the budget ask, so a mid tree keeps its trunk and
         // scaffold limbs under its crown.
         float barkKeepPixels = 2.0f;
+        // Bark of 20 sides on a trunk wider than this times barkSidesPixels
+        // (0: never). Over 2.5 a ring past the shader's 10-to-20 morph pops
+        // as its tree switches.
+        float barkFineSides = 2.5f;
     };
-    static constexpr int kLodCount = 15;
+    static constexpr int kLodCount = 16;
     /// `lod` with its pixel thresholds scaled by a detail factor (>= 1).
     static Lod scaled(const Lod& lod, float detail) {
         Lod l = lod;

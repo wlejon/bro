@@ -22,7 +22,7 @@
     // ForestNode::lodFromArray's order.
     const LOD = ['leafPixels', 'flutterFade', 'cardWidening', 'clumpFrom', 'clumpTo', 'crownFrom', 'crownTo',
                  'barkPixels', 'barkSidesPixels', 'shadowKeep', 'range', 'budget', 'shadowBudget', 'clusters',
-                 'barkKeepPixels'];
+                 'barkKeepPixels', 'barkFineSides'];
     const TIERS = { auto: -1, leaves: 0, clumps: 1, crowns: 2 };
 
     const isForest = (node) => node instanceof SceneNode && __bro_native.scene.SceneNode_forestLod(node).length === LOD.length;

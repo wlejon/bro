@@ -175,7 +175,20 @@ function run(scene) {
             prev = t;
         }
         const near = node.forestTreeLod(0, 4000), far = node.forestTreeLod(0, 0.3);
-        assert(near.leaves === 1 && near.widening === 1 && near.barkSides === 10, 'close up: every leaf, full bark');
+        assert(near.leaves === 1 && near.widening === 1 && near.barkSides === 20, 'close up: every leaf, full bark: ' + JSON.stringify(near));
+        // The bark's sides step 20 -> 10 -> 5 as the trunk narrows on screen
+        // (Lod::barkFineSides, barkSidesPixels); never back up.
+        {
+            let sides = 20, steps = true;
+            const seen = new Set();
+            for (let px = 4000; px > 0.3; px *= 0.93) {
+                const s = node.forestTreeLod(0, px).barkSides;
+                if (s > sides) steps = false;
+                sides = s;
+                seen.add(s);
+            }
+            assert(steps && seen.has(20) && seen.has(10) && seen.has(5), 'bark sides 20, 10, 5 by width: ' + [...seen]);
+        }
         assert(far.crowns === 1 && far.barkSides === 5, 'far off, a crown');
         assert(sums, 'the tier weights sum to 1');
         assert(keeps, 'keep = 1 / widening^2');

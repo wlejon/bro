@@ -829,7 +829,14 @@ void SceneMeshDrawer::bindGeometryAndDraw(VkCommandBuffer cmd, const MeshDraw& d
         vkCmdDraw(cmd, draw.indexCount, 1, 0, 0);
         return;
     }
-    if (draw.kind == MeshKind::ForestTube || draw.kind == MeshKind::ForestSprite) {
+    if (draw.kind == MeshKind::ForestTube) {
+        // Indexed by a fixed pattern (scene_mesh_drawer_forest.cpp's
+        // woodIndices), no vertex buffers: each corner shaded once.
+        vkCmdBindIndexBuffer(cmd, draw.indices, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(cmd, draw.indexCount, draw.instanceCount, 0, 0, draw.firstInstance);
+        return;
+    }
+    if (draw.kind == MeshKind::ForestSprite) {
         vkCmdDraw(cmd, draw.indexCount, draw.instanceCount, draw.firstVertex, draw.firstInstance);
         return;
     }

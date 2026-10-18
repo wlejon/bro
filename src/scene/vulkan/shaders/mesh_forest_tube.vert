@@ -45,11 +45,19 @@ const float FOREST_TWIG_MAX_RADIUS = 0.007;
 // whole from .y m), inside the leaves' own FOREST_NEAR_SHRINK: up close it
 // is wood at its own few millimetres, many pixels across, holding up the
 // leaves on it.
-const vec2 FOREST_TWIG_NEAR = vec2(0.03, 0.1);
+const vec2 FOREST_TWIG_NEAR = vec2(0.03, 0.08);
+// ... and as the leaves on it shrink to their nodes (FOREST_NEAR_SHRINK,
+// 0.1-0.4 m), it slims to FOREST_TWIG_SLIM of itself (whole from .y m, at
+// the least by .x): a twig a few centimetres off is a slender stem across
+// the view, not a rod as thick as a finger.
+const vec2 FOREST_TWIG_SLIM_AT = vec2(0.05, 0.18);
+const float FOREST_TWIG_SLIM = 0.45;
 
 void twigMain(ForestEntry e) {
-    int piece = e.first + gl_VertexIndex / 6;
-    int corner = gl_VertexIndex - (gl_VertexIndex / 6) * 6;
+    // Drawn indexed (the drawer's woodIndices): four corners a piece, its
+    // start's two sides then its end's.
+    int piece = e.first + gl_VertexIndex / 4;
+    int corner = gl_VertexIndex - (gl_VertexIndex / 4) * 4;
     int clump = e.param;
     if (piece >= e.end || procClumpBare(e.instance, clump)) {
         gl_Position = FOREST_CULLED;
@@ -60,9 +68,9 @@ void twigMain(ForestEntry e) {
     float treeSeed;
     mat4 model = push.model * forestInstance(e.instance, specimen, treeSeed);
     ForestClumpShoots c = forestClumpShoots(clump, int(forestSpecimenShoot(specimen).y + 0.5));
-    // corner 0=a- 1=a+ 2=b-   3=b- 4=a+ 5=b+ (a the piece's start, b its end)
-    bool top = corner == 2 || corner == 3 || corner == 5;
-    float sideSign = corner == 1 || corner == 4 || corner == 5 ? 1.0 : -1.0;
+    // corner 0=a- 1=a+ 2=b- 3=b+ (a the piece's start, b its end)
+    bool top = corner >= 2;
+    float sideSign = (corner & 1) != 0 ? 1.0 : -1.0;
     ForestTwigEnd o;
     int kind;
     ForestSpray s;
@@ -97,7 +105,8 @@ void twigMain(ForestEntry e) {
     float pxPerM = abs(camera.proj[1][1]) * camera.viewport.y * 0.5 / (ortho ? 1.0 : dist);
     float sc = vegScale(model);
     float near = ortho ? 1.0 : smoothstep(FOREST_TWIG_NEAR.x, FOREST_TWIG_NEAR.y, dist);
-    float rw = min(o.radius * sc, FOREST_TWIG_MAX_RADIUS) * near;
+    float slim = ortho ? 1.0 : mix(FOREST_TWIG_SLIM, 1.0, smoothstep(FOREST_TWIG_SLIM_AT.x, FOREST_TWIG_SLIM_AT.y, dist));
+    float rw = min(o.radius * sc, FOREST_TWIG_MAX_RADIUS) * near * slim;
     float widthPx = 2.0 * rw * pxPerM;
     // Left out whole (every vertex of a piece decides alike, or a triangle
     // would stretch to the culled corner): by its start's radius at the
@@ -133,8 +142,12 @@ void twigMain(ForestEntry e) {
     // fades with its thinning too, not a wire.)
     float cover = clamp(widthPx, 0.0, 1.0) * smoothstep(FOREST_TWIG_PX.x, FOREST_TWIG_PX.y, widthPx) *
                   clamp(e.keepEnd, 0.0, 1.0) * near * near;
-    // Round across: its normal leans out to the side it is on.
-    vec3 N = normalize(across * (0.8 * sideSign) + toEye * 0.6);
+    // Round across: the normal sent is only its sideways part, so that
+    // interpolated it is the point's offset across the ribbon (-1..1);
+    // mesh.frag rounds it out toward the eye (a cylinder's normal there),
+    // rather than two flat faces meeting along the middle.
+    // (A hair toward the eye, so its middle still has a direction.)
+    vec3 N = across * sideSign + toEye * 0.02;
     // Bark (mesh.frag's barkSurface, as the tubes'): this year's shoots
     // still green-brown toward their tips, the older wood the tree's bark
     // (a birch's pale bark red-brown on wood this thin). Lit as the tubes
@@ -150,10 +163,12 @@ void twigMain(ForestEntry e) {
     outInstColor = vec4(vegetationTint(model, v0, v1, v2, v3, false) * forestSpecimenTint(specimen, true) * green,
                         e.fade);
     // Where on the wood (scene_bark.glsl's coordinates: round the stem,
-    // along it, its radius), each piece its own stretch of bark; the cover
-    // and the bark word in the UV (mesh.frag's twig, inUV.y under -1.5).
-    float ang = sideSign * 1.3 + PROC_TWO_PI * fract(float(piece) * 0.618034 + float(clump) * 0.1031);
-    float alongM = (float(piece) * 0.37 + o.frac * 0.2) * c.Lf * sc;
+    // along it, its radius), running on unbroken through the joints of a
+    // stem, limb, twig or shoot (o.frac is along the whole of it); the
+    // cover and the bark word in the UV (mesh.frag's twig, inUV.y under
+    // -1.5).
+    float ang = sideSign * 1.3 + PROC_TWO_PI * fract(float(clump) * 0.1031 + float(kind) * 0.37);
+    float alongM = o.frac * 0.8 * c.Lf * sc;
     outColor = vec4(vec2(cos(ang), sin(ang)) * rw, alongM, rw);
     int segStart = int(floatBitsToUint(procedural.records[forestSpecimenRecord(specimen)].x));
     float word = procedural.records[forestSegmentRecord(segStart) + 5].w;
@@ -173,17 +188,19 @@ void main() {
         twigMain(e);
         return;
     }
+    int specimen;
+    float treeSeed;
+    mat4 model = push.model * forestInstance(e.instance, specimen, treeSeed);
     vec3 pos, radial, axisDir;
     vec2 uv;
     int seg;
     float endT;
-    if (!forestTubeVertex(e, gl_VertexIndex, pos, radial, axisDir, uv, seg, endT)) {
+    // (The rings' sides morph by their width: push.extra.z is minus the
+    // pixels they do it by.)
+    if (!forestTubeVertexMorph(e, gl_VertexIndex, model, -push.extra.z, pos, radial, axisDir, uv, seg, endT)) {
         gl_Position = FOREST_CULLED;
         return;
     }
-    int specimen;
-    float treeSeed;
-    mat4 model = push.model * forestInstance(e.instance, specimen, treeSeed);
     vec4 v0, v1, v2, v3;
     forestVegetation(forestSegmentRecord(seg) + 3, pos, endT, v0, v1, v2, v3);
 
