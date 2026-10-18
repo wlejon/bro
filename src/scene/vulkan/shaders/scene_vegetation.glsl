@@ -70,10 +70,13 @@ const float VEG_TWO_PI = 6.28318530718;
 
 // Damping ratios. The trunk's is high because its limbs and leaves take
 // its energy (James et al.); a limb has twigs to give it to; a twig has
-// only its leaves.
+// its leaves, which are most of its face and little of its mass, so the air
+// damps it hard (a leafy shoot's ratio is 0.1-0.3; at 0.05 every spray rang
+// at its one frequency and a shrub, its sprays a third of its height,
+// buzzed and flickered at 4-5 Hz).
 const float VEG_TRUNK_DAMPING = 0.15;
 const float VEG_LIMB_DAMPING = 0.08;
-const float VEG_TWIG_DAMPING = 0.05;
+const float VEG_TWIG_DAMPING = 0.2;
 
 // The ringing (vegLevel). VEG_TURBULENCE: unresolved turbulence of 15% of
 // the drag above 0.1 Hz with a -5/3 spectrum, whose narrow-band resonant
@@ -261,6 +264,11 @@ const float VEG_MOVER_HZ = 1.0;
 const float VEG_MOVER_DAMPING = 0.4;
 const float VEG_MOVER_REACH = 1.6;
 const float VEG_MOVER_STEP = 0.1;   // PlantMovers::kStep
+// The damped spring's step response at time t (0 before it).
+float vegMoverStep(float t, float w, float z, float wd) {
+    if (t <= 0.0) return 0.0;
+    return 1.0 - exp(-z * w * t) * (cos(wd * t) + z * w / wd * sin(wd * t));
+}
 vec3 vegMoverPush(vec3 p, float above) {
     int n = int(camera.plantMoverInfo.x + 0.5);
     if (n <= 0) return vec3(0.0);
@@ -281,8 +289,15 @@ vec3 vegMoverPush(vec3 p, float above) {
             float r = length(d);
             if (r >= reach) continue;
             vec2 dir = r > 1e-4 ? d / r : vec2(1.0, 0.0);
-            float h = w * w / wd * exp(-z * w * s.z) * sin(wd * s.z);
-            sum += dir * (R * (1.0 - smoothstep(0.0, reach, r)) * h * VEG_MOVER_STEP * s.w);
+            // The spring's response to the push over the sample's whole
+            // step (its step response at the age less a step earlier), not
+            // an impulse at its time: each new sample then starts the plant
+            // moving with no kick in its speed (an impulse's response rises
+            // at once, and a shrub jerked aside every 0.1 s as it parted).
+            // The trail's oldest half second fades so a sample leaves softly.
+            float h = vegMoverStep(s.z, w, z, wd) - vegMoverStep(s.z - VEG_MOVER_STEP, w, z, wd);
+            h *= 1.0 - smoothstep(1.5, 2.0, s.z);
+            sum += dir * (R * (1.0 - smoothstep(0.0, reach, r)) * h * s.w);
         }
         acc += sum * b.y * (1.0 - smoothstep(b.x - 0.3, b.x, above));
     }

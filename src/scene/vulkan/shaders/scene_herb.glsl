@@ -255,7 +255,11 @@ bool herbVertex(int id, int vid, vec3 v, out HerbVertex o) {
     float trample;
     vec2 lie;
     vec2 pb = grassInfluence(rootXZ, trample, lie);
-    vec3 push = vec3(pb.x, 0.0, pb.y) * 1.2 + vec3(lie.x, 0.0, lie.y) * (min(trample, 1.0) * 1.5);
+    // A walker's push leans a herb aside, a trampled one over; a stalk is
+    // pushed by a leg brushing it, not laid flat (at twice this a poppy's
+    // head crossed a hand's breadth a frame as the walker came by, and
+    // popped).
+    vec3 push = vec3(pb.x, 0.0, pb.y) * 0.7 + vec3(lie.x, 0.0, lie.y) * (min(trample, 1.0) * 0.9);
     vec3 toEye = normalize(-root);
     o.info = vec4(float(role), float(sp), fract(h.x * 31.7 + h.z * 7.3 + float(j) * 0.137), 0.0);
     // The stand: its leaves' face over the ground (a plant's leaves seen
