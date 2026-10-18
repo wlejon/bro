@@ -292,8 +292,9 @@ bool herbVertex(int id, int vid, vec3 v, out HerbVertex o) {
             // A spike is slim (a plantain's a finger's width at most, its
             // anthers standing out of it); a raceme's card holds its bells
             // hanging out to their side, so it stands mostly to that side.
-            float wd = form == 4 ? max(bs * 0.075, 0.004) * 2.2 : bell * 3.4;
-            float shift = form == 4 ? 0.0 : 0.3;
+            // (A foxglove's, not nodding, has the odd bell to the other side.)
+            float wd = form == 4 ? max(bs * 0.075, 0.004) * 2.2 : nod >= 0.5 ? bell * 3.4 : bell * 4.2;
+            float shift = form == 4 ? 0.0 : nod >= 0.5 ? 0.3 : 0.15;
             o.pos = p + side * ((v.x + shift) * wd);
             o.side = side;
             o.normal = normalize(cross(side, tgv));

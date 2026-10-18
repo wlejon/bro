@@ -298,6 +298,100 @@ HerbSurface herbStemSurface(int sp, vec2 uv, vec4 size, float share) {
 
 // --- Blooms -----------------------------------------------------------------
 
+// One of a foxglove's bells, bell `i` of `n` up a raceme `len` long (P on the
+// card in metres, x out to the bells' side, y up the stalk; `down` the
+// world's down on the card): its cover, colour and card-space normal.
+// Mostly to one side, the odd one to the other, each hanging down and out
+// from a short pedicel; the lowest open and largest, smaller up the spike,
+// the top third buds, the last green. An open bell is a tube from a rounded,
+// green-sepalled base, swelling to a mouth whose lower lip reaches past the
+// upper and flares down: past the upper lip its inside shows, pale with dark
+// spots ringed in white, under the dark hollow of the throat.
+float herbFoxgloveBell(vec2 P, float i, float n, float len, float bell, float seed, vec2 down, float fp, vec3 pink,
+                       vec3 pale, out vec3 col, out vec3 nrm) {
+    col = pink;
+    nrm = vec3(0.0, 0.0, 1.0);
+    float f = i / n;
+    vec2 h = herbHash2(vec2(i * 1.7, seed * 13.0 + 0.5));
+    float jit = herbHash1(i * 3.1 + seed * 19.0) - 0.5;
+    float bud = smoothstep(0.6, 0.78, f);
+    float bi = bell * mix(1.0, 0.78, smoothstep(0.0, 0.6, f)) * mix(1.0, 0.45, smoothstep(0.6, 1.0, f)) *
+               (0.88 + 0.24 * h.x);
+    float yi = (i + 0.5 + 0.5 * (h.y - 0.5)) / n * len;
+    float sd = jit > 0.36 ? -1.0 : 1.0;
+    // Hanging toward or away from the eye, a bell looks shorter and its
+    // mouth more open to it.
+    float turn = herbHash1(i * 5.7 + seed * 3.0);
+    float fore = mix(0.62, 1.0, turn);
+    vec2 side = vec2(sd, 0.0);
+    // Down and out (an open bell, each at its own angle), out and a little
+    // up (a bud).
+    float droop = 0.55 + 0.7 * herbHash1(i * 2.3 + seed * 7.0);
+    vec2 d = normalize(mix(down * droop + side, side - down * 0.35, bud));
+    vec2 A = vec2(sd * 0.1 * bell, yi);
+    float L = mix(1.05, 0.5, bud) * bi * fore;
+    vec2 q = P - A;
+    float a = dot(q, d) / L;
+    if (a < -0.05 || a > 1.3) return 0.0;
+    vec2 pd = vec2(-d.y, d.x);
+    float lo = dot(pd, down) >= 0.0 ? 1.0 : -1.0;
+    pd *= lo;                       // across, toward the bell's underside
+    float bL = dot(q, pd) / bi;     // + on the underside
+    // Half widths (of bi): the upper side a slim tube, the lower swelling
+    // and flaring into its lip; a bud a closed spindle.
+    // (Seen from the mouth's side a bell is wider: its mouth faces part to
+    // the eye.)
+    float open3 = 1.0 + 0.35 * (1.0 - turn);
+    float hwU = (0.2 + 0.06 * a + 0.06 * smoothstep(0.85, 1.0, a)) * open3;
+    float hwL = (0.2 + 0.1 * a + 0.12 * smoothstep(0.78, 1.2, a)) * open3;
+    float hw = (bL >= 0.0 ? hwL : hwU) * sqrt(clamp(a / 0.22, 0.0, 1.0));
+    hw = mix(hw, 0.21 * pow(max(sin(HERB_PI * clamp(a, 0.0, 1.0)), 0.0), 0.6), bud);
+    // The mouth: the upper lip ends first, the lower reaches on.
+    float t = clamp(bL / max(hwL, 1e-3), -1.0, 1.0);
+    float aEnd = mix(mix(0.9, 1.2, smoothstep(-0.4, 0.9, t)), 1.0, bud);
+    float rim = min((hw - abs(bL)) * bi, (aEnd - a) * L);
+    float dist = min(rim, a * L);
+    float c = herbAA(dist, fp);
+    if (c <= 0.0) return 0.0;
+
+    float xb = clamp(bL / max(hw, 1e-3), -1.0, 1.0);   // -1 the upper edge, +1 the lower
+    // Round, lit from above, deeper at the base, faint ridges along it.
+    float show = 1.0 - smoothstep(0.5, 1.0, fp / (0.04 * bi));
+    col = pink * mix(0.78, 1.08, smoothstep(0.0, 0.9, a)) * (1.0 - 0.4 * xb * xb) * (1.0 - 0.12 * xb);
+    col *= 1.0 - 0.08 * show * (0.5 + 0.5 * cos(xb * HERB_PI * 3.0));
+    // Past the upper lip, the lower lip's inside: pale, spotted dark, each
+    // spot ringed white; the lip's edge stays pink; a dark hollow above.
+    float open = 1.0 - bud;
+    // (The throat seen in: an oval on the lower lip, fading to its pink
+    // at the lip's margin.)
+    vec2 tq = vec2((a - 1.02) / 0.17, (xb - 0.35) / 0.62);
+    float inner = open * (1.0 - smoothstep(0.55, 1.0, dot(tq, tq))) * smoothstep(0.02 * bi, 0.07 * bi, rim);
+    vec2 sp = vec2(a * L, bL * bi) / (0.1 * bi);
+    vec2 cell = floor(sp);
+    vec2 hh = herbHash2(cell + i * 7.0 + seed * 3.0);
+    float rs = length(sp - cell - 0.3 - 0.4 * hh);
+    float has = step(0.25, hh.y);
+    float spot = (1.0 - smoothstep(0.2, 0.28, rs)) * has;
+    float halo = (1.0 - smoothstep(0.28, 0.4, rs)) * has;
+    vec3 cream = mix(pale, pink, 0.3) * 1.1;
+    vec3 throat = mix(cream, vec3(0.88, 0.84, 0.86), 0.6 * halo * show);
+    throat = mix(throat, pink * 0.25, spot * show);
+    throat = mix(throat, mix(cream, pink * 0.3, 0.2), 1.0 - show);
+    col = mix(col, throat, inner);
+    float hollow = open * smoothstep(0.82, 0.88, a) * (1.0 - smoothstep(0.92, 1.0, a)) *
+                   (1.0 - smoothstep(-0.2, 0.25, xb)) * smoothstep(-1.0, -0.7, xb);
+    col *= 1.0 - 0.7 * hollow;
+    // Green sepals at its base; its shoulder in the shade of the bell above.
+    col = mix(col, vec3(0.08, 0.12, 0.045), 0.85 * (1.0 - smoothstep(0.07, 0.15, a)) * open);
+    col *= mix(0.6, 1.0, smoothstep(0.0, 0.4, a));
+    // Buds paler and greener, the last ones green.
+    col = mix(col, pink * vec3(0.8, 0.9, 0.65), 0.35 * bud);
+    col = mix(col, vec3(0.09, 0.13, 0.05), smoothstep(0.86, 1.0, f));
+    vec2 nxy = pd * (xb * 0.8);
+    nrm = mix(vec3(nxy, sqrt(max(1.0 - dot(nxy, nxy), 0.0))), normalize(vec3(-down * 0.6, 0.8)), inner);
+    return c;
+}
+
 HerbSurface herbBloomSurface(int sp, vec2 uv, vec4 size, float seed, vec2 down) {
     HerbSurface o;
     vec4 r6 = herbRec(sp, 6), r7 = herbRec(sp, 7), r8 = herbRec(sp, 8);
@@ -354,8 +448,8 @@ HerbSurface herbBloomSurface(int sp, vec2 uv, vec4 size, float seed, vec2 down) 
         // A raceme of bells hanging from the stalk to one side (+x on the
         // card): a nodding one's (a bluebell's) hang nearly straight down
         // off its arched tip, narrow, their lobes curled back; an upright
-        // spike's (a foxglove's) droop out and down, fat tubes with a lip;
-        // the top ones buds, smaller.
+        // spike's (a foxglove's, herbFoxgloveBell) droop out and down,
+        // lipped tubes with a spotted throat, graded up to the buds.
         float n = max(r6.z, 1.0);
         float bell = size.z;
         bool secund = r7.w >= 0.5;
@@ -370,50 +464,44 @@ HerbSurface herbBloomSurface(int sp, vec2 uv, vec4 size, float seed, vec2 down) 
             float i = ic + float(k);
             if (i < 0.0 || i >= n) continue;
             float f = i / n;
+            if (!secund) {
+                vec3 fc, fn;
+                float c = herbFoxgloveBell(P, i, n, len, bell, seed, down, fp, r7.rgb, r8.rgb, fc, fn);
+                if (c > best) {
+                    best = c;
+                    col = fc;
+                    nb = fn;
+                }
+                continue;
+            }
             float bud = smoothstep(0.7, 1.0, f);
             float bi = bell * mix(1.0, 0.45, f * f);
             float yi = (i + 0.5) / n * len;
             float jit = herbHash1(i * 3.1 + seed * 19.0) - 0.5;
             // Its pedicel out to the side, then the bell hangs down (the
             // world's, on the card) and out.
-            // A foxglove's bells hang mostly to one side, the odd one to the
-            // other, each on its own short pedicel, a little apart.
-            float sd = !secund && jit > 0.32 ? -1.0 : 1.0;
-            vec2 A = vec2(sd * (secund ? 0.25 : 0.35 + 0.15 * jit) * bi, yi) + down * (0.1 * bi);
-            vec2 d = normalize(down + vec2(sd * (secund ? 0.2 + 0.2 * jit : 0.6 + 0.3 * jit), 0.0));
+            vec2 A = vec2(0.25 * bi, yi) + down * (0.1 * bi);
+            vec2 d = normalize(down + vec2(0.2 + 0.2 * jit, 0.0));
             vec2 q = P - A;
-            float a = dot(q, d) / ((secund ? 1.2 : 1.05) * bi * mix(1.0, 0.6, bud));
+            float a = dot(q, d) / (1.2 * bi * mix(1.0, 0.6, bud));
             float b = (d.x * q.y - d.y * q.x) / bi;
-            float hw;
-            if (secund) {
-                // Narrow, its six lobes flaring and curling back at the mouth.
-                hw = 0.13 + 0.07 * a + 0.2 * smoothstep(0.78, 1.0, a);
-            } else {
-                // A tube swelling to its mouth, the lower lip longer.
-                hw = 0.16 + 0.13 * sqrt(max(a, 0.0)) + 0.04 * smoothstep(0.85, 1.0, a);
-            }
-            // Rounded where it is held, like the closed end of a tube.
+            // Narrow, its six lobes flaring and curling back at the mouth;
+            // rounded where it is held, like the closed end of a tube.
+            float hw = 0.13 + 0.07 * a + 0.2 * smoothstep(0.78, 1.0, a);
             hw *= mix(1.0, 0.75, bud) * sqrt(clamp(a / 0.2 + 0.15, 0.0, 1.0));
-            float lip = secund ? 0.07 * (1.0 - abs(cos(b * HERB_PI * 3.0))) : -0.12 * clamp(-b * d.x * 4.0, -1.0, 1.0);
+            float lip = 0.07 * (1.0 - abs(cos(b * HERB_PI * 3.0)));
             float mouth = 1.0 - lip;
             float dist = min(hw - abs(b), min(a, mouth - a)) * bi;
             float c = herbAA(dist, fp);
-            float ped = herbLine(dot(P - vec2(0.0, yi), vec2(-d.y, d.x)), 0.0006, fp) * step(0.0, P.x * sd) *
-                        step(P.x * sd, abs(A.x));
+            float ped = herbLine(dot(P - vec2(0.0, yi), vec2(-d.y, d.x)), 0.0006, fp) * step(0.0, P.x) *
+                        step(P.x, abs(A.x));
             if (c > best) {
                 best = c;
-                // A tube is round: darker at its sides; its mouth darker
-                // inside, a foxglove's throat pale and spotted.
+                // A tube is round: darker at its sides, its mouth darker
+                // inside.
                 float xb = clamp(b / max(hw, 1e-3), -1.0, 1.0);
                 float throat = smoothstep(0.86, 0.98, a) * (1.0 - smoothstep(0.3, 0.7, abs(xb)));
-                vec2 hs = herbHash2(floor(vec2(a * 24.0, xb * 6.0)) + i);
                 col = r7.rgb * (0.8 + 0.25 * a) * (1.0 - 0.45 * xb * xb) * (1.0 - 0.35 * throat);
-                if (!secund) {
-                    col = mix(col, mix(r8.rgb * 0.8, r7.rgb * 0.35, step(0.6, hs.y)), throat * 0.6);
-                    // Its shoulder in the shade of the bell above, its
-                    // sides rounding away: each bell reads as itself.
-                    col *= mix(0.5, 1.0, smoothstep(0.0, 0.45, a)) * (1.0 - 0.25 * xb * xb);
-                }
                 col = mix(col, r7.rgb * vec3(0.7, 0.9, 0.6), bud * 0.5);
                 nb = vec3(xb * 0.85, 0.15, sqrt(max(1.0 - 0.72 * xb * xb, 0.0)));
             }
