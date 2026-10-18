@@ -242,10 +242,12 @@ struct SceneMeshDrawer::ForestPlan {
         ForestNode::TreeLod t = ForestNode::treeLod(L, sp, s.px, leafLength, forceOf(s), s.barkPx);
         if (forceOf(s) >= 0 || t.crowns <= 0.0f || s.instance >= seenPx.size() || seenPx[s.instance] <= 0.0f) return t;
         const ForestNode::TreeLod c = ForestNode::treeLod(lod, sp, seenPx[s.instance], leafLength);
-        // Where the camera sees leaves, the caster's crowns hand to clumps,
-        // over the camera's leaves share from 0.35 to 0.65 (a switch at a
-        // half stepped the shadow).
-        const float q = std::clamp((c.leaves - 0.35f) / 0.3f, 0.0f, 1.0f);
+        // Where the camera sees leaves or clumps, the caster's crowns hand to
+        // clumps, over the camera's share of the two from 0.35 to 0.65 (a
+        // switch at a half stepped the shadow). Clumps shaded by crown
+        // casters had only the far half's shade: a pine from above at 80 m
+        // 7 levels brighter than its leaves at noon, 11 at golden.
+        const float q = std::clamp((c.leaves + c.clumps - 0.35f) / 0.3f, 0.0f, 1.0f);
         const float m = q * q * (3.0f - 2.0f * q);
         t.clumps += m * t.crowns;
         t.crowns *= 1.0f - m;
