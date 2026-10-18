@@ -5,10 +5,11 @@
 // the vertex index like mesh_tube.vert, mitred at the joints, and bending in
 // the wind field. shadow_forest_tube.vert is the caster.
 //
-// The TWIG build (push.extra.z 3, the drawer's Twigs): an entry is a run of
-// one clump's twig pieces (scene_forest_shoot.glsl: its lobe stems and
-// limbs, its sprays' twigs and axes, its shoots), `param` the clump, each
-// piece a ribbon facing the eye at the wood's own radius (capped at
+// The TWIG build (push.extra.z 2 + its rows a piece, the drawer's Twigs and
+// TwigsFine): an entry is a run of one clump's twig pieces
+// (scene_forest_shoot.glsl: its lobe stems and limbs, its sprays' twigs and
+// axes, its shoots), `param` the clump, each piece a ribbon along the curve
+// through its joints, facing the eye at the wood's own radius (capped at
 // FOREST_TWIG_MAX_RADIUS), a pixel wide at the least: thinner than that its
 // cover (mesh.frag's sample mask, through outUV.x) is its width in pixels,
 // so a twig thins away with distance rather than popping; near, it is its
@@ -53,11 +54,23 @@ const vec2 FOREST_TWIG_NEAR = vec2(0.03, 0.08);
 const vec2 FOREST_TWIG_SLIM_AT = vec2(0.05, 0.18);
 const float FOREST_TWIG_SLIM = 0.45;
 
+// A twig's collar: it starts (on the axis of the wood it grows from) at .x
+// of its width, so its square end lies inside that wood rather than poking
+// out beyond it, and swells to 1 + .y of it where it leaves that wood, .z
+// of its radius on; then narrows on to itself.
+const vec3 FOREST_TWIG_COLLAR = vec3(0.5, 0.0, 3.0);
+
 void twigMain(ForestEntry e) {
-    // Drawn indexed (the drawer's woodIndices): four corners a piece, its
-    // start's two sides then its end's.
-    int piece = e.first + gl_VertexIndex / 4;
-    int corner = gl_VertexIndex - (gl_VertexIndex / 4) * 4;
+    // Drawn indexed (the drawer's woodIndices): a piece is K + 1 rows of its
+    // two sides along it, K the draw's (push.extra.z - 2): 1 for the plain
+    // twigs, a row at each joint; more for a clump near the eye, whose
+    // twigs' curves through their joints show (forestHermite), the first
+    // row of a twig's first piece at its collar.
+    int K = max(1, int(push.extra.z - 2.0 + 0.5));
+    int per = 2 * (K + 1);
+    int piece = e.first + gl_VertexIndex / per;
+    int local = gl_VertexIndex - (gl_VertexIndex / per) * per;
+    int row = local >> 1;
     int clump = e.param;
     if (piece >= e.end || procClumpBare(e.instance, clump)) {
         gl_Position = FOREST_CULLED;
@@ -68,16 +81,48 @@ void twigMain(ForestEntry e) {
     float treeSeed;
     mat4 model = push.model * forestInstance(e.instance, specimen, treeSeed);
     ForestClumpShoots c = forestClumpShoots(clump, int(forestSpecimenShoot(specimen).y + 0.5));
-    // corner 0=a- 1=a+ 2=b- 3=b+ (a the piece's start, b its end)
-    bool top = corner >= 2;
-    float sideSign = (corner & 1) != 0 ? 1.0 : -1.0;
+    float sideSign = (local & 1) != 0 ? 1.0 : -1.0;
+    // This row's point: the piece's start, its end, or between them on the
+    // curve through both (only a row between them works out both ends).
     ForestTwigEnd o;
     int kind;
     ForestSpray s;
     ForestShoot sh;
-    if (!forestTwigEnd(c, piece, top ? 1.0 : 0.0, o, kind, s, sh)) {
+    if (!forestTwigEnd(c, piece, row == K ? 1.0 : 0.0, o, kind, s, sh)) {
         gl_Position = FOREST_CULLED;
         return;
+    }
+    // Left out whole (every vertex of a piece decides alike, or a triangle
+    // would stretch to the culled corner), before any posing: by its start's
+    // radius at the clump's distance.
+    {
+        bool orthoC = abs(camera.proj[3][3]) > 0.5;
+        float dc = max(length((model * vec4(c.C, 1.0)).xyz), 1e-3);
+        float pxc = abs(camera.proj[1][1]) * camera.viewport.y * 0.5 / (orthoC ? 1.0 : dc);
+        if (2.0 * min(o.start * vegScale(model), FOREST_TWIG_MAX_RADIUS) * pxc < FOREST_TWIG_PX.x) {
+            gl_Position = FOREST_CULLED;
+            return;
+        }
+    }
+    float swell = 1.0;
+    if (row > 0 && row < K) {
+        ForestTwigEnd oa = o, ob;
+        int kb;
+        ForestSpray sb;
+        ForestShoot shb;
+        forestTwigEnd(c, piece, 1.0, ob, kb, sb, shb);
+        {
+            float f1 = 1.0 / float(K);
+            if (oa.base) f1 = clamp(FOREST_TWIG_COLLAR.z * oa.radius / max(length(ob.p - oa.p), 1e-6), 0.02, f1);
+            float f = row == 1 ? f1 : mix(f1, 1.0, float(row - 1) / float(K - 1));
+            o.p = forestHermite(oa.p, oa.t, ob.p, ob.t, f, o.t);
+            o.radius = mix(oa.radius, ob.radius, f);
+            o.frac = mix(oa.frac, ob.frac, f);
+            o.along = mix(oa.along, ob.along, f);
+            if (oa.base && row == 1) swell = 1.0 + FOREST_TWIG_COLLAR.y;
+        }
+    } else if (row == 0 && o.base && K > 1) {
+        swell = FOREST_TWIG_COLLAR.x;
     }
 
     // Posed as a leaf at this point would be (forestPoseLeaf): the wood,
@@ -106,28 +151,8 @@ void twigMain(ForestEntry e) {
     float sc = vegScale(model);
     float near = ortho ? 1.0 : smoothstep(FOREST_TWIG_NEAR.x, FOREST_TWIG_NEAR.y, dist);
     float slim = ortho ? 1.0 : mix(FOREST_TWIG_SLIM, 1.0, smoothstep(FOREST_TWIG_SLIM_AT.x, FOREST_TWIG_SLIM_AT.y, dist));
-    float rw = min(o.radius * sc, FOREST_TWIG_MAX_RADIUS) * near * slim;
+    float rw = min(o.radius * sc, FOREST_TWIG_MAX_RADIUS) * near * slim * swell;
     float widthPx = 2.0 * rw * pxPerM;
-    // Left out whole (every vertex of a piece decides alike, or a triangle
-    // would stretch to the culled corner): by its start's radius at the
-    // clump's distance.
-    {
-        ForestTwigEnd o0;
-        float r0 = o.radius;
-        if (top) {
-            int k0;
-            ForestSpray s0;
-            ForestShoot sh0;
-            forestTwigEnd(c, piece, 0.0, o0, k0, s0, sh0);
-            r0 = o0.radius;
-        }
-        float dc = max(length((model * vec4(c.C, 1.0)).xyz), 1e-3);
-        float pxc = abs(camera.proj[1][1]) * camera.viewport.y * 0.5 / (ortho ? 1.0 : dc);
-        if (2.0 * min(r0 * sc, FOREST_TWIG_MAX_RADIUS) * pxc < FOREST_TWIG_PX.x) {
-            gl_Position = FOREST_CULLED;
-            return;
-        }
-    }
     // Across the curve's tangent at the joint, which both pieces meeting
     // there share, so the ribbon is unbroken through a crooked joint.
     vec3 T = normalize(vegRotation(pose.omega) * (mat3(model) * o.t));
@@ -197,7 +222,8 @@ void main() {
     float endT;
     // (The rings' sides morph by their width: push.extra.z is minus the
     // pixels they do it by.)
-    if (!forestTubeVertexMorph(e, gl_VertexIndex, model, -push.extra.z, pos, radial, axisDir, uv, seg, endT)) {
+    float rad;
+    if (!forestTubeVertexMorph(e, gl_VertexIndex, model, -push.extra.z, pos, radial, axisDir, uv, seg, endT, rad)) {
         gl_Position = FOREST_CULLED;
         return;
     }
@@ -208,7 +234,6 @@ void main() {
     // trunk's foot split into buttresses.
     int r0 = forestSegmentRecord(seg);
     vec4 barkRec = procedural.records[r0 + 5];   // (weightFrom, weightTo, path, bark word)
-    float rad = mix(procedural.records[r0].w, procedural.records[r0 + 1].w, endT);
     float ang = uv.x * PROC_TWO_PI;
     float hb = pos.y - v0.y;
     pos += radial * (rad * barkButtress(ang, hb, rad, treeSeed));

@@ -716,14 +716,14 @@ void main() {
     // well over the root.
     else if (inUV.y < -1.5) {
         // A twig's ribbon sends only its normal's sideways part (the point's
-        // offset across it): rounded out toward the eye, a cylinder's, once
-        // it is a few pixels wide. Thinner it keeps the ribbon's two sides:
-        // lit toward the eye a twig of a pixel or two stands out bright
-        // against the leaves and pops as it sways.
+        // offset across it): rounded out toward the eye, a cylinder's,
+        // however thin. (Kept as the ribbon's two flat faces under a few
+        // pixels, a twig a pixel or two wide took one face's light at one
+        // pixel and the other's at the next along it as it crossed the
+        // pixel grid: a stipple of lit and dark pixels that crawled.)
         vec3 side = inNormal;
         float u2 = min(dot(side, side), 1.0);
-        float roundness = 1.0 - smoothstep(0.35, 0.8, length(fwidth(inNormal)));
-        N = normalize(mix(normalize(side), side + normalize(-worldPos) * sqrt(1.0 - u2), roundness));
+        N = normalize(side + normalize(-worldPos) * sqrt(1.0 - u2));
         barkSurface(inColor, 10.0, -2.0 - inUV.y, worldPos, N, inTangent, baseColor, N, roughness, vegAO);
     }
 #endif

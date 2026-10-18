@@ -246,6 +246,25 @@ float forestLobeCore(float lr, float leaves, out float sigma) {
     if (depth >= shell * lr) return 0.0;
     return lr - depth;
 }
+// A piece of wood between its joints `a` and `b`, its way there `ta` and
+// `tb` (unit; the way the pieces meeting at a joint share): a cubic Hermite
+// curve through both joints, leaving and arriving along those ways, so a
+// branch or twig of many pieces is one curve, its way continuous through
+// every joint, not a polyline kinked at each (scene_forest_tube.glsl's bark
+// rings, scene_forest_shoot.glsl's twigs). The point `f` (0..1) along it
+// and its way there. Its ends' ways pull it FOREST_HERMITE_PULL of the
+// chord's length: at the whole of it a piece whose ends turn far from its
+// chord (a zigzag twig's) swings out into a hook.
+const float FOREST_HERMITE_PULL = 0.8;
+vec3 forestHermite(vec3 a, vec3 ta, vec3 b, vec3 tb, float f, out vec3 tangent) {
+    float L = FOREST_HERMITE_PULL * length(b - a);
+    vec3 m0 = ta * L, m1 = tb * L;
+    float f2 = f * f, f3 = f2 * f;
+    vec3 d = (6.0 * f2 - 6.0 * f) * (a - b) + (3.0 * f2 - 4.0 * f + 1.0) * m0 + (3.0 * f2 - 2.0 * f) * m1;
+    tangent = dot(d, d) > 1e-14 ? normalize(d) : normalize(b - a + vec3(1e-7));
+    return a + (3.0 * f2 - 2.0 * f3) * (b - a) + (f3 - 2.0 * f2 + f) * m0 + (f3 - f2) * m1;
+}
+
 int forestSegmentRecord(int g) { return forestBase(1) + g * 7; }
 int forestClumpRecord(int c) { return forestBase(2) + c * 6; }
 

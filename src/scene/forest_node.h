@@ -267,6 +267,9 @@ public:
     /// (`pieces`); 0 for a clump with no leaves.
     struct ClumpTwigs { uint32_t stems = 0, pieces = 0; };
     const std::vector<ClumpTwigs>& clumpTwigs() const { return clumpTwigs_; }
+    /// The clumps as emitForest gave them, 8 floats each: centre xyz
+    /// (specimen units, relative), radius, twig direction xyz, leaves.
+    const std::vector<float>& clumpRecords() const { return data_.clumps; }
     /// The pieces a clump of `leaves` leaves draws (forestTwigPieces).
     static ClumpTwigs twigPieces(uint32_t leaves);
 

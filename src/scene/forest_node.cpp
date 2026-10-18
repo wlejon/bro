@@ -700,7 +700,9 @@ const std::vector<float>& ForestNode::gpuData() const {
             for (; it != starts.end() && (*it)[0] <= e[0] + kTol; ++it)
                 if (std::fabs((*it)[1] - e[1]) <= kTol && std::fabs((*it)[2] - e[2]) <= kTol) on = std::max(on, (*it)[3]);
             float* d = r + (segBase + g * 7) * 4;
-            d[7] = on < 0.0f ? d[7] * kTipTaper : std::min(d[7], on);
+            // A tip's end radius goes in negative: the bark closes over its
+            // last stretch to a rounded point (scene_forest_tube.glsl).
+            d[7] = on < 0.0f ? -d[7] * kTipTaper : std::min(d[7], on);
         }
     }
     // Each clump's leaves are keyed from its first (emitForest keys a
