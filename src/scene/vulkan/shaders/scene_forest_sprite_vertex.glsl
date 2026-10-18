@@ -70,11 +70,22 @@ bool forestSprite(int mode, int instanceIndex, int vertexIndex, mat4 base, out F
         vec4 rec = procedural.records[forestClumpRecord(clump)];
         float lr;
         procClumpFlat = forestClumpFlat(specimen);
-        procClumpLobe(rec, clump, lobe, floatBitsToUint(procedural.header[0].x), c, lr);
-        // The lobe's leaves fill an ellipsoid: flattened underneath, 0.9 of
-        // the radius up and 0.7 down (clumpLeafFrame), times the specimen's
-        // flatness.
-        c.y += 0.1 * lr * procClumpFlat;
+        if (int(forestSpecimenShoot(specimen).y + 0.5) == 3) {
+            // A pinnate clump's leaves line its wood (forestPinnateLeaf): its
+            // lobes a run of three along it, each a third of the run and a
+            // leaflet's reach either side.
+            vec3 D = procedural.records[forestClumpRecord(clump) + 1].xyz;
+            D = dot(D, D) > 1e-12 ? normalize(D) : vec3(0.0, 1.0, 0.0);
+            c = rec.xyz - D * (0.35 * rec.w) + D * (rec.w * (float(lobe) - 1.0) * 0.6667);
+            lr = max(rec.w / 3.0, 0.8 * procedural.header[1].z);
+            procClumpFlat = 1.0;
+        } else {
+            procClumpLobe(rec, clump, lobe, floatBitsToUint(procedural.header[0].x), c, lr);
+            // The lobe's leaves fill an ellipsoid: flattened underneath, 0.9 of
+            // the radius up and 0.7 down (clumpLeafFrame), times the
+            // specimen's flatness.
+            c.y += 0.1 * lr * procClumpFlat;
+        }
         s.radius = lr * scale;
         s.radiusUp = 0.8 * procClumpFlat * s.radius;
         // A lobe holds about a third of its clump's leaves (clumpLeafFrame).
