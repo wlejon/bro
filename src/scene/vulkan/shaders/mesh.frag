@@ -363,6 +363,11 @@ void main() {
             // its leaves.
             bool sprayLobe = (floatBitsToUint(procedural.header[3].w) & 15u) != 0u;
             massDensity = sprayLobe ? 0.0 : forestMassDepth(inMass2.x, inMass2.y, inMass2.z) * 0.5 / max(inMass0.w, 1e-3);
+            // The leaves seen lie within about one optical depth of the
+            // lobe's surface, as a crown's do (FOREST_CROWN_SELF_MAX): a
+            // shrub's dense lobes 8.2 / 8.1 levels darker than its leaves
+            // at 10 / 20 m noon, now 6.7 / 6.6; a broadleaf's unchanged.
+            massSelfMax = FOREST_CROWN_SELF_MAX;
             // The lobe's height over its width, carried over its mode
             // (mesh_forest_sprite.vert).
             massFlat = fract(inColor.z) > 1e-3 ? fract(inColor.z) / 0.4 : 1.0;
