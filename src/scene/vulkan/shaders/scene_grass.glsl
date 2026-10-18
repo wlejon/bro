@@ -217,6 +217,18 @@ vec2 grassCombLean(vec2 xz, float gust) {
     float calm = clamp(camera.windField.z / GRASS_REFERENCE_SPEED, 0.0, 1.0);
     return d * (GRASS_COMB * comb * (0.4 + 0.6 * calm) + GRASS_GUST_LEAN * gust) * grassGustStir() * grass.blade.w;
 }
+// What a gust shows of a far sward beyond the mean light of its blades
+// (sceneSwardLight, which averages their faces and so keeps little of a
+// gust running across the view): the pale length of the blades it bends
+// over, and where it eases the darker sward between them. About the gust
+// field's mean (SCENE_GUST_MEAN of its strength), so the meadow's tone
+// stays as it was and only its waves stand out. Times the node's sheen;
+// the far blades take it from 4-20 m, the turf as they do.
+const float GRASS_GUST_FAR = 1.0;
+const float SCENE_GUST_MEAN = 0.34;   // sceneWindGustAt's mean over the field, per unit of camera.windGust.x
+float grassGustFar(float gust) {
+    return GRASS_GUST_FAR * (gust - SCENE_GUST_MEAN * camera.windGust.x) * grassGustStir();
+}
 
 // The share of a blade's shade along it that the eye sees on average from
 // afar (the dark root and lit tip, weighted to the upper part that shows
@@ -585,7 +597,7 @@ bool grassBlade(int id, int vid, vec3 v, vec3 vn, out GrassBlade b) {
     float sh = clamp(max(P.y / max(0.7 * ht, 1e-3), 0.5 * y), 0.0, 1.0);
     float far = smoothstep(12.0, 70.0, d) * 0.75;
     col *= mix(mix(grass.look.x, 1.0 + 0.2 * sh, sh), grassMeanShade(), far);
-    col *= 1.0 + gu * grass.look.y * sh * 1.2;
+    col *= 1.0 + grass.look.y * (gu * sh * 1.2 + grassGustFar(gu) * smoothstep(4.0, 20.0, d));
     col *= 1.0 + 0.4 * flattened;   // a flattened lane shows the blades' paler length
     // Past the herbs' plants a far fan stands for the herbs among the grass
     // as often as their cover seen from here has them (herbMixMean; the

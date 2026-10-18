@@ -312,7 +312,7 @@ void groundSurface(vec3 rel, vec4 vdata, inout vec3 color, inout vec3 N, inout f
         vec3 up = grassSwardUp(N, grassCombLean(xz, gu));
         N = normalize(mix(N, grassCanopyNormal(up, normalize(-rel)), asBlades));
         swardLight = vec4(up, asBlades);
-        color *= 1.0 + gu * grassGustStir() * grass.look.y * 0.7 * asBlades;
+        color *= 1.0 + grass.look.y * (gu * grassGustStir() * 0.7 + grassGustFar(gu)) * asBlades;
     }
     ao *= mix(litterAo, 1.0, cover) * mix(1.0, 0.8, asBlades);   // (a far blade's ao)
     roughness = mix(1.0, 0.9, asBlades);

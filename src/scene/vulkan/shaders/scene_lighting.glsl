@@ -377,6 +377,18 @@ vec3 sceneSwardLight(vec3 up, vec3 V, vec3 L) {
 // leaf lets through about as much as it reflects in the green (PROSPECT's
 // R ~ T), less in the blue, which the chlorophyll takes twice: yellower.
 const vec3 SWARD_TRANSMIT = vec3(0.95, 1.0, 0.45);
+// How the light through a blade spreads: SWARD_GLOW_SHARE of it in a lobe
+// about the sun's own way (cos^SWARD_GLOW_POWER of the angle between the
+// eye's line and the sun's, as much light in all as an even spread), the
+// rest even (Lambertian). Looking toward a low sun a meadow glows; looking
+// across it or down, the blades pass on only their even share.
+const float SWARD_GLOW_SHARE = 0.7;
+const float SWARD_GLOW_POWER = 4.0;
+float swardGlow(vec3 V, vec3 L) {
+    float c = max(dot(-V, L), 0.0);
+    float c2 = c * c;
+    return (1.0 - SWARD_GLOW_SHARE) + SWARD_GLOW_SHARE * (SWARD_GLOW_POWER + 1.0) * c2 * c2;
+}
 
 // A leaf's wrapped diffuse, clamp((c + 0.3) / 1.3, 0, 1), averaged over
 // cosines c spread evenly `k` either side of `c` (k 0: the wrap itself).
@@ -476,20 +488,36 @@ vec3 sceneDirectLight(SceneSurface s) {
         // A sward too fine to resolve: its blades' mean (sceneSwardLight),
         // the light through them as diffuse as off them.
         vec3 sward = s.sward.w > 0.0 ? sceneSwardLight(s.sward.xyz, V, L) : vec3(0.0);
-        vec3 swardThrough = s.baseColor * SWARD_TRANSMIT * (s.sward.w * sward.y / PI);
+        bool thin = dot(s.thinNormal, s.thinNormal) > 0.25;
+        float glow = thin ? swardGlow(V, L) : 1.0;
+        vec3 swardThrough = s.baseColor * SWARD_TRANSMIT * (s.sward.w * sward.y * glow / PI);
         if (leafy && s.sward.w < 1.0) {
-            float NLt = dot(s.thinNormal, s.thinNormal) > 0.25 ? dot(s.thinNormal, L) : NL;
-            float through = smoothstep(-0.3, 0.4, 0.3 - NLt);
-            float back = pow(max(dot(-V, L), 0.0), 3.0);
-            float amount = s.translucency * through * (0.1 + 0.9 * back) * (1.0 - s.sward.w);
-            vec3 tcol = sqrt(max(s.baseColor, vec3(0.0))) * vec3(0.75, 0.95, 0.35) * 0.55;
-            Lo += tcol * radiance * amount * leafShadow;
+            if (thin) {
+                // A blade near the eye: what comes through its face as the
+                // sward's blades pass it on (as much as its face reflects,
+                // yellower), so near and far are one meadow; a leaf's art
+                // glow, four times this, left the far sward darker than the
+                // near by 7-19%.
+                float NLt = dot(s.thinNormal, L);
+                Lo += s.baseColor * SWARD_TRANSMIT * radiance *
+                      (max(-NLt, 0.0) * glow / PI * s.translucency * (1.0 - s.sward.w) * leafShadow);
+            } else {
+                float through = smoothstep(-0.3, 0.4, 0.3 - NL);
+                float back = pow(max(dot(-V, L), 0.0), 3.0);
+                float amount = s.translucency * through * (0.1 + 0.9 * back) * (1.0 - s.sward.w);
+                vec3 tcol = sqrt(max(s.baseColor, vec3(0.0))) * vec3(0.75, 0.95, 0.35) * 0.55;
+                Lo += tcol * radiance * amount * leafShadow;
+            }
         }
 
         // A leaf's diffuse light wraps a little past its edge-on angle, so a
         // leaf turning away from the sun dims rather than switching off.
         float NdotL = max(NL, 0.0);
         float diffNL = leafy ? leafWrapMean(NL, s.leafSpread) : NdotL;
+        // A near blade's face the eye sees, where the sun is on it, is lit
+        // by its own slope to the sun, not by the softened bulk normal its
+        // shading takes (which a low sun barely reaches).
+        if (thin) diffNL = max(diffNL, max(dot(s.thinNormal, L), 0.0));
         diffNL = mix(diffNL, sward.x, s.sward.w);
         if (diffNL <= 0.0 && sward.y <= 0.0) continue;
         vec3 H = normalize(V + L);
