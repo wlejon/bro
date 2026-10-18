@@ -182,10 +182,29 @@ float shadowFromTile(int slot, vec3 pos, float lightDist, vec3 N, float NdotL, f
     return sampleShadow(slot, pos + N * nOff, bWorld, spread);
 }
 
+// How far inside tile `slot`'s window `pos` lies: 1 a twentieth of the window
+// in from its sides, 0 at or past them.
+float shadowTileCover(int slot, vec3 pos) {
+    vec4 sc = lighting.shadows[slot].matrix * vec4(pos, 1.0);
+    if (sc.w <= 0.0) return 0.0;
+    vec2 uv = sc.xy / sc.w;
+    vec2 e = min(uv, 1.0 - uv);
+    return smoothstep(0.0, 0.05, min(e.x, e.y));
+}
+
+// A cascade hands over to the next across this share of its depth. A
+// cascade's texels are coarser than the one before (each about twice), and a
+// crown's leaves take more of each other's shade from the finer: the far
+// crowns are about 2 levels darker just inside a cascade's end than just
+// past it (the meadow's far edge at noon), so the hand-over is spread over
+// tens of metres rather than made in a band that reads as a line.
+const float SHADOW_CASCADE_BLEND = 0.45;
+
 // Light `i`'s shadow at `pos`: the cube face of a point light, the cascade of
-// a directional one (blended into the next across the last 15% of each), or
-// the single tile of anything else. `spread` widens the filter (1: a 4-texel
-// tent at pcf 3; 0: one hardware-filtered tap).
+// a directional one (handed to the next across the last SHADOW_CASCADE_BLEND
+// of each, where the next one's window covers it), or the single tile of
+// anything else. `spread` widens the filter (1: a 4-texel tent at pcf 3; 0:
+// one hardware-filtered tap).
 float lightShadow(int i, vec3 pos, float camDist, float lightDist, vec3 N, float NdotL, float spread) {
     SceneLight light = lighting.lights[i];
     int slot = int(light.shadow.z);
@@ -211,8 +230,11 @@ float lightShadow(int i, vec3 pos, float camDist, float lightDist, vec3 N, float
         float prevFar = c == 0 ? 0.0 : splits[c - 1];
         float shadow = shadowFromTile(slot + c, pos, lightDist, N, NdotL, spread);
         if (c < count - 1) {
-            float blendStart = thisFar - max(thisFar - prevFar, 1e-4) * 0.15;
-            float tb = clamp((camDist - blendStart) / max(thisFar - blendStart, 1e-4), 0.0, 1.0);
+            float blendStart = thisFar - max(thisFar - prevFar, 1e-4) * SHADOW_CASCADE_BLEND;
+            float tb = smoothstep(blendStart, thisFar, camDist);
+            // The next cascade is fit to the depths past this one's end, so
+            // its window may not reach as near as the blend's start.
+            if (tb > 0.0 && tb < 1.0) tb *= shadowTileCover(slot + c + 1, pos);
             if (tb > 0.0) shadow = mix(shadow, shadowFromTile(slot + c + 1, pos, lightDist, N, NdotL, spread), tb);
         }
         return shadow;
