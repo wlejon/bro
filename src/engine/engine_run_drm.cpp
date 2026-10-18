@@ -21,6 +21,7 @@
 #if BRO_WITH_COMPOSITOR
 #include "compositor/wayland_compositor.h"
 #endif
+#include "canvas/canvas_scene.h"
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/event.h"
