@@ -25,13 +25,45 @@
 const vec3 BARK_MOSS_SIDE = vec3(0.0, 0.0, -1.0);
 
 // The plant's bark word (broflora packBarkWord): furrow 0..1, scale (x the
-// default spacing) and moss 0..1; a field of code 0 takes the default.
-void barkUnpack(float word, out float furrow, out float scale, out float moss) {
+// default spacing) and moss 0..1, a field of code 0 the default; and its top
+// bit, ribbed (Species::barkRibs).
+void barkUnpack(float word, out float furrow, out float scale, out float moss, out bool ribs) {
     uint w = uint(max(word, 0.0) + 0.5);
-    uint f = w & 255u, s = (w >> 8) & 255u, m = (w >> 16) & 255u;
+    uint f = w & 255u, s = (w >> 8) & 255u, m = (w >> 16) & 127u;
     furrow = f == 0u ? 0.55 : float(f - 1u) / 254.0;
     scale = s == 0u ? 1.0 : 0.25 * pow(16.0, float(s - 1u) / 254.0);
-    moss = m == 0u ? 0.5 : float(m - 1u) / 254.0;
+    moss = m == 0u ? 0.5 : float(m - 1u) / 126.0;
+    ribs = ((w >> 23) & 1u) != 0u;
+}
+
+// Ribbed bark (a cactus's): 48 / scale ridges round the stem however thick,
+// unbroken along it, rounded with sharp valleys between, as deep as a third
+// of their spacing times the furrow; a row of pale areoles (the spines'
+// cushions) along each crest. Each fades out under a couple of pixels.
+void barkRibbed(vec4 coords, float furrow, float scale, float r, float fp, vec3 geomN, vec3 axis, inout vec3 color,
+                inout vec3 N, inout float roughness, inout float ao) {
+    const float TAU = 6.2831853;
+    float n = max(5.0, floor(48.0 / scale + 0.5));
+    float spacing = TAU * r / n;
+    float seen = clamp(spacing / fp * 0.5 - 0.5, 0.0, 1.0);
+    float f = fract(atan(coords.y, coords.x) * n / TAU);
+    float s = sin(3.14159265 * f);
+    float rs = sqrt(max(s, 0.0));
+    float h = mix(0.75, rs, seen);
+    // The ridge's slope round the stem (per metre), and the normal tilted by
+    // it across the stem.
+    float slope = 0.5 / max(rs, 0.1) * 3.14159265 * cos(3.14159265 * f) * n / (TAU * r);
+    vec3 T = normalize(axis - geomN * dot(axis, geomN));
+    vec3 A = cross(T, geomN);
+    N = normalize(N - (furrow * spacing / 3.0) * seen * slope * A);
+    // Areoles: a dot on the crest every half a rib's spacing up the stem.
+    float seenFine = clamp(0.5 * spacing / fp * 0.25 - 0.5, 0.0, 1.0);
+    float up = fract(coords.z / (0.5 * spacing) + 0.5 * floor(atan(coords.y, coords.x) * n / TAU));
+    float areole = (1.0 - smoothstep(0.03, 0.09, abs(f - 0.5))) * (1.0 - smoothstep(0.08, 0.2, abs(up - 0.5)));
+    color *= 0.55 + 0.6 * h;
+    color = mix(color, vec3(0.42, 0.38, 0.3), 0.7 * areole * seenFine);
+    roughness = mix(0.75, 0.55, h);
+    ao *= mix(1.0 - 0.5 * furrow, 1.0, h);
 }
 
 // The buttresses of a trunk's foot: how far (x the radius) the point at
@@ -129,12 +161,17 @@ float barkPlates(vec3 q, out vec3 d, out float cell) {
 void barkSurface(vec4 coords, float hb, float word, vec3 pos, vec3 geomN, vec3 axis, inout vec3 color,
                  inout vec3 N, inout float roughness, inout float ao) {
     float furrow, scale, moss;
-    barkUnpack(word, furrow, scale, moss);
+    bool ribs;
+    barkUnpack(word, furrow, scale, moss, ribs);
     float r = max(coords.w, 1e-3);
     // Round the stem on its circle, not the chord of the side the fragment
     // is on (interpolated, the across coordinates cut each side's corner,
     // so the pattern bunched and stretched side by side, banding the wood).
     coords.xy = normalize(coords.xy + vec2(1e-7, 0.0)) * coords.w;
+    if (ribs) {
+        barkRibbed(coords, furrow, scale, r, max(length(fwidth(pos)), 1e-5), geomN, axis, color, N, roughness, ao);
+        return;
+    }
     // A pale bark (a birch's white) comes with age: its twigs, under a
     // couple of centimetres across, are red-brown (not near black: deep in a
     // crown, in shade, wood that dark read as a cage of black rods).

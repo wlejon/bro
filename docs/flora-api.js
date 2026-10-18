@@ -253,6 +253,7 @@
  * @property {number} [barkFurrow=0.55] - 0 smooth (beech) .. 1 deep furrows between plates (oak).
  * @property {number} [barkScale=1] - The plates' spacing, x the default (which already widens with the girth); 0.25..4.
  * @property {number} [barkMoss=0.5] - Moss and lichen, 0 none .. 1 lush (the shaded side, a limb's top, the foot).
+ * @property {number} [barkRibs=0] - 0 bark of plates parted by furrows; 1 ribbed: unbroken ridges the length of the stem, the same number round it however thick (a cactus's), more the smaller barkScale, as deep as barkFurrow.
  * @property {number} [rootFlare=0.6] - The trunk's swell where it meets the ground, x its radius.
  * @property {number} [branchCollar=0.5] - A side branch's swell where it leaves its parent, x its radius.
  * Habit (a plant's LEADER is its root module and every main child down from
