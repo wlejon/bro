@@ -709,6 +709,9 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  * @property {number} [barkFineSides=2.5] - a trunk wider than this times `barkSidesPixels` has 20 sides; 0: never.
  * @property {number} [shadowKeep=0.35] - the share of its drawn leaves a tree's shadow keeps.
  * @property {number} [range=0] - trees further than this (m) are not drawn; 0: no limit.
+ * @property {number} [forceRange=0] - a forced tier (`setForestTier`) holds within this distance (m) of the eye,
+ *   further trees go by size at full detail; 0: every tree. The Leaves tier forced on a whole forest to the
+ *   horizon is billions of vertices, a frame past a GPU's watchdog.
  * @property {number} [budget=12.5] - millions of leaf and bark vertices the view may send; 0: no budget.
  * @property {number} [shadowBudget=6] - the same for every shadow tile together.
  * @property {number} [clusters=1] - past `cardWidening` a kept leaf is drawn as the leaves it stands for (1),
@@ -1597,7 +1600,7 @@ class SceneNode {
 
   /**
    * Forest: `'auto'` (by size on screen), or every tree at `'leaves'`,
-   * `'clumps'` or `'crowns'`.
+   * `'clumps'` or `'crowns'` (every tree within ForestLod `forceRange`).
    * @param {string|number} tier
    * @returns {SceneNode}
    */

@@ -160,8 +160,15 @@ public:
         // (0: never). Over 2.5 a ring past the shader's 10-to-20 morph pops
         // as its tree switches.
         float barkFineSides = 2.5f;
+        // A forced tier (setForceTier) holds for the trees within this
+        // distance of the eye (m: to the crown, as the leaves measure it;
+        // to the tree's middle for a shadow caster); further trees go by
+        // size, at full detail. 0: every tree. Forcing the leaves on a whole
+        // forest to the horizon is billions of vertices, a frame longer than
+        // a GPU's watchdog allows.
+        float forceRange = 0.0f;
     };
-    static constexpr int kLodCount = 16;
+    static constexpr int kLodCount = 17;
     /// `lod` with its pixel thresholds scaled by a detail factor (>= 1).
     static Lod scaled(const Lod& lod, float detail) {
         Lod l = lod;

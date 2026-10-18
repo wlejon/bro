@@ -167,6 +167,7 @@ struct Seen {
     float px;           // at the crown (the leaves and sprites)
     int tile;           // index into the plan's tiles, -1 for the camera
     float barkPx = 0;   // at the whole tree (0: px)
+    bool forced = true; // within the forced tier's range (Lod::forceRange)
 };
 
 // The detail factor that keeps `cost`'s vertices within `budget` millions: 1
@@ -234,9 +235,12 @@ struct SceneMeshDrawer::ForestPlan {
     // leaves), but leaves take their shade from the casters alone, so the
     // near half of the crown went unshaded (a conifer's leaves 30 units
     // brighter than with leaf casters). Clump casters shade lobe by lobe.
+    // The tier a tree is forced to, -1 for none (by size).
+    int forceOf(const Seen& s) const { return s.forced ? force : -1; }
+
     ForestNode::TreeLod casterLod(const ForestNode::Lod& L, const ForestNode::Specimen& sp, const Seen& s) const {
-        ForestNode::TreeLod t = ForestNode::treeLod(L, sp, s.px, leafLength, force, s.barkPx);
-        if (force >= 0 || t.crowns <= 0.0f || s.instance >= seenPx.size() || seenPx[s.instance] <= 0.0f) return t;
+        ForestNode::TreeLod t = ForestNode::treeLod(L, sp, s.px, leafLength, forceOf(s), s.barkPx);
+        if (forceOf(s) >= 0 || t.crowns <= 0.0f || s.instance >= seenPx.size() || seenPx[s.instance] <= 0.0f) return t;
         const ForestNode::TreeLod c = ForestNode::treeLod(lod, sp, seenPx[s.instance], leafLength);
         // Where the camera sees leaves, the caster's crowns hand to clumps,
         // over the camera's leaves share from 0.35 to 0.65 (a switch at a
@@ -420,7 +424,7 @@ struct SceneMeshDrawer::ForestPlan {
         for (const Seen& s : shadow ? cast : seen) {
             const ForestNode::Specimen& sp = specimens[instances[s.instance].specimen];
             addTree(nullptr, s.instance, sp,
-                    shadow ? casterLod(L, sp, s) : ForestNode::treeLod(L, sp, s.px, leafLength, force, s.barkPx),
+                    shadow ? casterLod(L, sp, s) : ForestNode::treeLod(L, sp, s.px, leafLength, forceOf(s), s.barkPx),
                     shadow, v, s.px);
         }
         return static_cast<double>(v);
@@ -516,7 +520,8 @@ std::unique_ptr<SceneMeshDrawer::ForestPlan> SceneMeshDrawer::planForest(SceneFr
         }
         const float unit = in.scale * nodeScale;
         P.seen.push_back({i, (view.perspective ? pxAtMetre / dl : pxAtMetre) * unit, -1,
-                          (view.perspective ? pxAtMetre / d : pxAtMetre) * unit});
+                          (view.perspective ? pxAtMetre / d : pxAtMetre) * unit,
+                          P.lod.forceRange <= 0.0f || dl <= P.lod.forceRange});
     }
 
     P.seenPx.assign(instances.size(), 0.0f);
@@ -533,11 +538,10 @@ std::unique_ptr<SceneMeshDrawer::ForestPlan> SceneMeshDrawer::planForest(SceneFr
             for (uint32_t i = 0; i < instances.size(); ++i) {
                 if (!bromath::fintersects(tile.frustum, P.bounds[i])) continue;
                 float texel = tile.texelConst;
-                if (!tile.ortho) {
-                    const bromath::Vec3 c = (P.bounds[i].min + P.bounds[i].max) * 0.5f;
-                    texel += tile.texelPerMetre * bromath::vlen(c - view.eye);
-                }
-                P.cast.push_back({i, instances[i].scale * nodeScale / std::max(texel, 1e-5f), ti});
+                const float dc = bromath::vlen((P.bounds[i].min + P.bounds[i].max) * 0.5f - view.eye);
+                if (!tile.ortho) texel += tile.texelPerMetre * dc;
+                P.cast.push_back({i, instances[i].scale * nodeScale / std::max(texel, 1e-5f), ti, 0.0f,
+                                  P.lod.forceRange <= 0.0f || dc <= P.lod.forceRange});
             }
         }
     }
@@ -709,7 +713,7 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
         const ForestNode::Lod L = ForestNode::scaled(lod, detail);
         for (const Seen& s : P.seen) {
             const ForestNode::Specimen& sp = specimens[instances[s.instance].specimen];
-            const ForestNode::TreeLod t = ForestNode::treeLod(L, sp, s.px, P.leafLength, P.force, s.barkPx);
+            const ForestNode::TreeLod t = ForestNode::treeLod(L, sp, s.px, P.leafLength, P.forceOf(s), s.barkPx);
             if (t.leaves > 0.0f) stats.trees[0]++;
             if (t.clumps > 0.0f) stats.trees[1]++;
             if (t.crowns > 0.0f) stats.trees[2]++;
