@@ -117,6 +117,8 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
     frame.fxaa = renderer.fxaaEnabled();
     buildDrawLists(frame);
     timer_.mark(cmd, "setup");
+    meshes_.recordForestPoses(frame);
+    timer_.mark(cmd, "forestPose");
 
     graph_.run(frame);
 

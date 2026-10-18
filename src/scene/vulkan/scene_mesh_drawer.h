@@ -16,6 +16,7 @@
 #include "scene/shade_map.h"
 
 #include <bromath/aabb.h>
+#include "scene/vulkan/scene_vk_allocator.h"
 #include "scene/vulkan/scene_vk_custom_shader.h"
 #include "scene/vulkan/scene_vk_pipeline.h"
 #include "scene/vulkan/scene_vk_target_format.h"
@@ -74,6 +75,7 @@ constexpr uint32_t kForestSpray = 262144;   // a needle or scale-leaf forest's l
 constexpr uint32_t kForestBloom = 524288;   // a forest's blooms (a ForestSprite draw): mesh_forest_bloom.vert, SCENE_FOREST_BLOOM
 constexpr uint32_t kForestLeafCut = 1048576;   // a broad forest leaf's outline cut per pixel (mesh.frag)
 constexpr uint32_t kHerb = 2097152;            // a grass node's herb plants (a Grass draw): mesh_herb.vert, SCENE_HERB
+constexpr uint32_t kForestLeafInline = 4194304;   // forest leaves with no pose slot: mesh_forest_leaf.vert's FOREST_LEAF_INLINE
 /// The vertex colour mode (0 none, 1 replaces the albedo, 2 tints it) in bits 10-11.
 constexpr uint32_t vertexColor(int mode) { return static_cast<uint32_t>(mode & 3) << 10; }
 }
@@ -168,7 +170,12 @@ struct MeshDraw {
     static constexpr uint8_t kOrderMid = 10;
     static constexpr uint8_t kOrderFar = 20;   // a forest's clumps and crowns
     uint8_t order = kOrderMid;
-    bool hasBounds = false;      // world bounds, for the shadow tiles' and probe faces' culling
+    /// What the timed passes call it (a static string; null: its kind's name).
+    const char* timerLabel = nullptr;
+    /// The shadow pass's, for a caster it times on its own (null: untimed,
+    /// its time going to the next one timed).
+    const char* shadowTimerLabel = nullptr;
+    bool hasBounds = false;     // world bounds, for the shadow tiles' and probe faces' culling
     bromath::AABB3 bounds;
     bromath::Vec3 center{0.0f, 0.0f, 0.0f};   // bounds centre (else the origin): probe selection
     /// The tile shade map the draw samples (kShadeMap set), resolved from
@@ -199,6 +206,11 @@ public:
     /// budgets), as one node's trees do. `out[i]` is `nodes[i]`'s.
     void prepareForests(SceneFrame& frame, const std::vector<ForestNode*>& nodes,
                         std::vector<std::vector<MeshDraw>>& out);
+    /// Pose the leaves this frame's forest draws keep (forest_leaf_pose.comp,
+    /// a leaf at a time; their vertices read the poses): recorded into
+    /// frame.cmd outside any rendering, after the forests are prepared and
+    /// before anything draws them.
+    void recordForestPoses(SceneFrame& frame);
 
     /// Bind and draw into the open target described by `target`, lit by
     /// the draw's probe lighting set when it has one, else `lightingSet`.
@@ -279,6 +291,7 @@ private:
     VkShaderModule vsBloom_ = VK_NULL_HANDLE;          // forest blooms: mesh_forest_bloom.vert
     VkShaderModule fsBloom_ = VK_NULL_HANDLE;          // and mesh.frag's SCENE_FOREST_BLOOM
     VkShaderModule fsBloomIndirect_ = VK_NULL_HANDLE;
+    VkShaderModule vsLeafInline_ = VK_NULL_HANDLE;     // forest leaves past the pose buffer's room
     VkShaderModule vsHerb_ = VK_NULL_HANDLE;           // a grass node's herbs: mesh_herb.vert
     VkShaderModule fsHerb_ = VK_NULL_HANDLE;           // and mesh.frag's SCENE_HERB
     VkShaderModule fsHerbIndirect_ = VK_NULL_HANDLE;
@@ -289,6 +302,24 @@ private:
     VkShaderModule fsSpriteIndirect_ = VK_NULL_HANDLE;
     PipelineVariants builtin_;
     std::unordered_map<std::string, std::unique_ptr<CustomProgram>> custom_;
+
+    // The forests' leaf poses (forest_leaf_pose.comp): this frame's jobs,
+    // one per colour leaf draw, the slots handed out so far, and the
+    // device-local buffer they go to (kept across frames, grown as needed).
+    struct ForestPoseJob {
+        VkDescriptorSet set = VK_NULL_HANDLE;
+        MeshPushConstants push{};
+        uint32_t entries = 0;
+    };
+    /// The pose buffer with room for `slots` poses this frame (a new one,
+    /// the old deferred, when it has not); null on failure.
+    const SceneVkBuffer* ensurePoses(SceneFrame& frame, uint32_t slots);
+    std::vector<ForestPoseJob> poseJobs_;
+    uint32_t poseUsed_ = 0;
+    SceneVkBuffer poses_;
+    VkPipelineLayout poseLayout_ = VK_NULL_HANDLE;
+    VkShaderModule poseCs_ = VK_NULL_HANDLE;
+    VkPipeline posePipeline_ = VK_NULL_HANDLE;
 };
 
 }  // namespace bro::scene::vk

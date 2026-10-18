@@ -1,12 +1,14 @@
 #version 450
 // Forest leaves (scene_forest.glsl): each instance is a draw entry, several
 // copies of the leaf mesh end to end, copy k drawing leaf `first + k` of the
-// entry's tree. A leaf is placed as the clump-mode scatter places it
-// (clumpLeafFrame), so a tree at full detail has exactly the grown plant's
-// leaves; further off the drawer keeps a prefix of the tree's shuffled
-// leaves, each widened (and pulled into its lobe, so the crown's outline
-// holds), with the last few shrinking away. shadow_forest_leaf.vert is the
-// caster.
+// entry's tree. Each leaf was posed once by forest_leaf_pose.comp (placed as
+// the clump-mode scatter places it, widened, swayed: scene_forest.glsl's
+// ForestPose); a vertex takes its point through that pose, folding its half
+// of the leaf about the stem. A tree at full detail has exactly the grown
+// plant's leaves; further off the drawer keeps a prefix of the tree's
+// shuffled leaves, each widened (and pulled into its lobe, so the crown's
+// outline holds), with the last few shrinking away. shadow_forest_leaf.vert
+// is the caster.
 
 layout(location = 0) in vec3 inPos;
 layout(location = 1) in vec3 inNormal;
@@ -38,6 +40,11 @@ layout(location = 11) flat out float outLobeFlat;   // the lobe's height over it
 #include "scene_procedural.glsl"
 #include "scene_vegetation.glsl"
 #include "scene_forest.glsl"
+#ifdef FOREST_LEAF_INLINE
+// The leaves past the pose buffer's room (the drawer's kForestLeafInline
+// draws): each vertex poses its leaf itself.
+#include "scene_forest_leaf_pose.glsl"
+#endif
 
 void main() {
     outVegShade = vec4(0.0, 0.0, 0.0, 1.0);
@@ -45,43 +52,29 @@ void main() {
     outLobeSphere = vec4(0.0);
     outLobeDensity = 0.0;
     outLobeFlat = 1.0;
-    forestApplyLook();
     ForestEntry e = forestEntry(gl_InstanceIndex);
     int leaf = e.first + gl_VertexIndex / max(e.param, 1);
+#ifdef FOREST_LEAF_INLINE
     if (leaf >= e.end) {
         gl_Position = FOREST_CULLED;
         return;
     }
-    // Widened, and shrinking away over the tail of the kept run.
-    float k = e.widening * clamp((e.keepEnd - float(leaf)) / max(e.tail, 1.0), 0.0, 1.0);
-    ivec2 lf = forestLeaf(leaf);
-    vec3 P, F, lc;
-    mat3 R;
-    float lr;
-    forestApplyClumpFlat(e.instance);
-    if (k <= 0.0 || procClumpBare(e.instance, lf.x) ||
-        !clumpLeafFrame(procedural.records[forestClumpRecord(lf.x)], lf.y, lf.x, P, R, F, lc, lr)) {
+    forestApplyLook();
+    ForestPose p = forestPoseLeaf(e, leaf);
+#else
+    if (leaf >= e.end || e.slot < 0) {
         gl_Position = FOREST_CULLED;
         return;
     }
-    forestSprayBrush(e.instance, lf.x, lc, lr, P, R, F);
-    int specimen;
-    float treeSeed;
-    mat4 model = push.model * forestInstance(e.instance, specimen, treeSeed);
+    int slot = e.slot + leaf - e.first;
+    ForestPose p = forestPose(slot);
+#endif
+    if (!p.alive) {
+        gl_Position = FOREST_CULLED;
+        return;
+    }
 
-    // A widened card stands in for several leaves: it moves in toward its
-    // lobe's centre by the length it grew, so it stays inside the crown.
-    // Its light (depth in the crown, occlusion, tint) stays the leaf's own,
-    // from where it hangs. A CLUSTER (mesh.frag's SCENE_FOREST_CLUSTER)
-    // stays where the kept leaf hangs: its leaves keep to the outline the
-    // leaves they stand for fill, so it reaches no further than they do.
-    // It draws those leaves, each of its own size, in its plane: a hexagon
-    // round the widened outline and half a leaf more (inPos the leaf's
-    // middle, inUV a corner of the unit hexagon), outUV in leaf lengths.
     bool cluster = (meshFlags() & MESH_FOREST_CLUSTER) != 0u;
-    vec3 rest = P;
-    float grown = (k - 1.0) * procedural.header[1].z;
-    if (grown > 0.0 && !cluster) P = lc + (P - lc) * clamp(1.0 - 0.5 * grown / max(lr, 1e-3), 0.55, 1.0);
     vec3 local = inPos;
     // A cut leaf (MESH_FOREST_LEAF_CUT) takes its species' leaf
     // (scene_forest.glsl's forestSpecimenLeaf): its width as a share of
@@ -90,6 +83,7 @@ void main() {
     // the middle, a pointed or rounded tip), so a broad ovate leaf is not
     // clipped by a card cut for a narrower one.
     bool cut = (meshFlags() & MESH_FOREST_LEAF_CUT) != 0u;
+    int specimen = cut ? forestInstanceSpecimen(e.instance) : 0;
     vec4 cutLeaf = vec4(0.0);
     float cutWidth = 1.0;
     float len = procedural.header[1].z / max(procedural.header[1].x, 1e-6);   // the mesh's own
@@ -101,58 +95,42 @@ void main() {
         float row = t < 0.25 ? 0.72 : t < 0.75 ? 0.95 : mix(0.3, 0.58, clamp(cutLeaf.y, 0.0, 1.0));
         local.x = sign(inPos.x) * row * cutWidth * halfCard;
     }
+    // A cluster draws the leaves round the kept one, each of its own size,
+    // in its plane: a hexagon round the widened outline and half a leaf more
+    // (inPos the leaf's middle, inUV a corner of the unit hexagon), outUV in
+    // leaf lengths. (Its pose is not widened.)
     vec2 span = vec2(0.0);
+    float k = 1.0;
     if (cluster) {
+        k = e.widening * clamp((e.keepEnd - float(leaf)) / max(e.tail, 1.0), 0.0, 1.0);
         float aspect = procedural.header[3].y;
         span = 1.1547 * vec2(0.5 * k * aspect + 0.55, 0.5 * k + 0.55);
-        float len = procedural.header[1].z / max(procedural.header[1].x, 1e-6);   // the mesh's own
         local += vec3(inUV.x * span.x, 0.0, inUV.y * span.y) * len;
-    } else {
-        R *= k;
     }
-    mat3 M3 = mat3(model) * R;
-    vec3 pos = (model * vec4(R * local + P, 1.0)).xyz;
-    // R and the instance are rotations times a uniform scale, so normals
-    // take the same matrix.
-    vec3 Nw = normalize(M3 * inNormal);
-    vec3 Tw = normalize(M3 * inTangent.xyz);
 
-    vec4 v0, v1, v2, v3;
-    forestVegetation(forestClumpRecord(lf.x) + 2, rest, 1.0, v0, v1, v2, v3);
-    mat3 rot;
-    vec3 unswayed = pos;
-    outVegShade = forestLeafSway(model, v0, v1, v2, v3, F, normalize(mat3(model) * R[1]), forestFlutter(e.widening),
-                                 treeSeed, pos, rot);
-    Nw = rot * Nw;
-    Tw = rot * Tw;
-    outInstColor = vec4(vegetationTint(model, v0, v1, v2, v3, true) * forestSpecimenTint(specimen, false), e.fade);
+    // The fold: each half of the leaf turned about its stem (the mesh's +z),
+    // both halves rising.
+    float sx = local.x > 0.0 ? 1.0 : local.x < 0.0 ? -1.0 : 0.0;
+    vec2 cs = sx != 0.0 ? vec2(p.fold.x, sx * p.fold.y) : vec2(1.0, 0.0);
+    mat3 F = mat3(vec3(cs.x, cs.y, 0.0), vec3(-cs.y, cs.x, 0.0), vec3(0.0, 0.0, 1.0));
+    mat3 M = p.M * F;
+    vec3 pos = p.at + M * local;
+    // M is a rotation times a uniform scale, so normals take it too.
+    vec3 Nw = normalize(M * inNormal);
+    vec3 Tw = normalize(M * inTangent.xyz);
+
+    outVegShade = p.shade;
+    outInstColor = vec4(p.tint, e.fade);
     // A spray's (mesh.frag's SCENE_FOREST_SPRAY): its seed, its own dither.
-    if (!cluster) {
-        float seed = fract(float(leaf) * 0.618034 + treeSeed);
-        outLobeDensity = seed;
-        // Each leaf its own lightness about the tree's (as a cluster's and a
-        // lobe's leaves are, forestMassGrain): a sunlit side is leaves, not
-        // one sheet. The mean is the tree's.
-        outInstColor.rgb *= 0.85 + 0.3 * fract(seed * 7.31 + 0.137);
-    }
+    if (!cluster) outLobeDensity = p.seed;
     if (cluster) {
-        vec3 outward = rest - lc;
-        float upBias = procedural.header[0].y;
-        vec3 B = (dot(outward, outward) > 1e-10 ? normalize(outward) : vec3(0.0, 1.0, 0.0)) * (1.0 - upBias) +
-                 vec3(0.0, upBias, 0.0);
-        B = mat3(model) * B;
-        outLobeOut = vec4(dot(B, B) > 1e-10 ? normalize(rot * B) : vec3(0.0, 1.0, 0.0), procedural.header[0].z);
-        // The lobe moves with its leaves (as a lobe sprite's sphere does),
-        // flattened as clumpLeafFrame's: centred a tenth of its height up.
-        float scale = vegScale(model);
-        float r = max(lr * scale, 1e-3);
-        outLobeSphere = vec4((model * vec4(lc + vec3(0.0, 0.1 * lr * procClumpFlat, 0.0), 1.0)).xyz + (pos - unswayed), r);
-        // forestMassDepth's: its leaves (a third of the clump's), each
-        // turned every way, over the disc, through the middle, a unit length.
-        float leaves = max(procedural.records[forestClumpRecord(lf.x) + 1].w / 3.0, 1.0);
-        float a = 0.5 * procedural.header[1].z * scale / r;
-        outLobeDensity = leaves * a * a * procedural.header[3].y * 0.55 * 0.5 / r;
-        outLobeFlat = 0.8 * procClumpFlat;
+#ifndef FOREST_LEAF_INLINE
+        forestPoseLobe(slot, p);
+#endif
+        outLobeOut = vec4(p.lobeOut, procedural.header[0].z);
+        outLobeSphere = vec4(p.at + p.lobeSphere.xyz, p.lobeSphere.w);
+        outLobeDensity = p.lobeDensity;
+        outLobeFlat = p.lobeFlat;
     }
 
     outWorldPos = pos;
@@ -176,6 +154,6 @@ void main() {
     // width over its length.
     if (cluster) {
         outUV = inUV * span;
-        outColor = vec4(k, fract(float(leaf) * 0.618034 + treeSeed), procedural.header[3].y, 1.0);
+        outColor = vec4(k, p.seed, procedural.header[3].y, 1.0);
     }
 }

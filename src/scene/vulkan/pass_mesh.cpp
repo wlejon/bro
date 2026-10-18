@@ -30,7 +30,7 @@ void PassOpaque::record(SceneFrame& frame) {
     for (uint32_t i : frame.lists.opaque) {
         const MeshDraw& draw = frame.lists.meshes[i];
         frame.gpu.meshes.record(frame.cmd, frame.hdrTarget, frame.cameraSet, frame.lightingSet, draw);
-        if (frame.timer) frame.timer->mark(frame.cmd, kKind[static_cast<int>(draw.kind)]);
+        if (frame.timer) frame.timer->mark(frame.cmd, draw.timerLabel ? draw.timerLabel : kKind[static_cast<int>(draw.kind)]);
     }
 }
 

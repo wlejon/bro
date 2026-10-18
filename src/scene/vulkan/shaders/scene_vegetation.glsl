@@ -264,7 +264,15 @@ mat3 vegRotation(vec3 omega) {
 // vegLeafAmount scales the leaf's own motion (the downwind turn, flutter and
 // fold) by `amount`, so a tier that hands leaves over to coarser ones fades
 // it out rather than dropping it; vegLeaf is amount 1.
-mat3 vegLeafAmount(VegPose pose, VegWind w, vec3 axis, vec3 normal, vec3 local, float seed, float amount) {
+// The leaf's turn as a whole (the wood's rotation, the downwind turn and the
+// flutter), and its fold: each half turns a further `fold` radians about the
+// stem, the half on `side`'s positive side by +fold, the other by -fold
+// (vegLeafAmount's last step). A forest's leaves are posed by this once a
+// leaf (forest_leaf_pose.comp), not once a vertex.
+mat3 vegLeafTurn(VegPose pose, VegWind w, vec3 axis, vec3 normal, float seed, float amount, out vec3 side,
+                 out float fold) {
+    fold = 0.0;
+    side = vec3(1.0, 0.0, 0.0);
     if (amount <= 0.0) return vegRotation(pose.omega);
     float gust = clamp((w.p0 - 0.12) * 1.6, 0.0, 1.0) * amount;
     vec3 omega = pose.omega;
@@ -272,17 +280,23 @@ mat3 vegLeafAmount(VegPose pose, VegWind w, vec3 axis, vec3 normal, vec3 local, 
     float tl = length(turn);
     if (tl > 1e-4) omega += turn * (min(atan(tl, dot(axis, w.dir)) * 0.45, 1.0) * gust / tl);
 
-    vec3 side = cross(normal, axis);
+    side = cross(normal, axis);
     float sl = length(side);
     side = sl > 1e-4 ? side / sl : vec3(1.0, 0.0, 0.0);
     float f = 3.0 + 4.0 * fract(seed * 7.13) + 2.5 * min(w.p0, 1.0);
     float a = amount * 0.35 * sqrt(w.p0) * (0.55 + 0.45 * sin(VEG_TWO_PI * (0.6 * w.t + seed)));
     float th = VEG_TWO_PI * (f * w.t + seed);
     omega += axis * (a * sin(th)) + side * (0.45 * a * sin(1.37 * th + 2.0));
+    fold = 0.8 * gust;
+    return vegRotation(omega);
+}
 
-    mat3 R = vegRotation(omega);
+mat3 vegLeafAmount(VegPose pose, VegWind w, vec3 axis, vec3 normal, vec3 local, float seed, float amount) {
+    vec3 side;
+    float fold;
+    mat3 R = vegLeafTurn(pose, w, axis, normal, seed, amount, side, fold);
     float x = dot(local, side);
-    if (gust > 0.0 && abs(x) > 1e-6) R = R * vegAxisAngle(axis, sign(x) * 0.8 * gust);
+    if (fold > 0.0 && abs(x) > 1e-6) R = R * vegAxisAngle(axis, sign(x) * fold);
     return R;
 }
 

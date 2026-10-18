@@ -152,6 +152,71 @@ bool writeCacheFile(const std::string& path, const void* data, size_t size) {
     return true;
 }
 
+namespace {
+bool s_statsEnabled = false;
+std::mutex s_statsMutex;
+std::string s_statsLabel;
+}  // namespace
+
+bool pipelineStatsEnabled() { return s_statsEnabled; }
+void setPipelineStatsEnabled(bool on) { s_statsEnabled = on; }
+VkPipelineCreateFlags pipelineStatsFlags() {
+    return s_statsEnabled ? VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR : 0;
+}
+void setPipelineStatsLabel(const std::string& label) {
+    std::lock_guard<std::mutex> lock(s_statsMutex);
+    s_statsLabel = label;
+}
+
+void logPipelineStats(VkDevice device, VkPipeline pipeline) {
+    if (!s_statsEnabled || pipeline == VK_NULL_HANDLE) return;
+    auto getProps = reinterpret_cast<PFN_vkGetPipelineExecutablePropertiesKHR>(
+        vkGetDeviceProcAddr(device, "vkGetPipelineExecutablePropertiesKHR"));
+    auto getStats = reinterpret_cast<PFN_vkGetPipelineExecutableStatisticsKHR>(
+        vkGetDeviceProcAddr(device, "vkGetPipelineExecutableStatisticsKHR"));
+    if (!getProps || !getStats) return;
+    std::string label;
+    {
+        std::lock_guard<std::mutex> lock(s_statsMutex);
+        label = s_statsLabel;
+    }
+    VkPipelineInfoKHR info{VK_STRUCTURE_TYPE_PIPELINE_INFO_KHR};
+    info.pipeline = pipeline;
+    uint32_t count = 0;
+    getProps(device, &info, &count, nullptr);
+    std::vector<VkPipelineExecutablePropertiesKHR> props(count, {VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_PROPERTIES_KHR});
+    getProps(device, &info, &count, props.data());
+    for (uint32_t e = 0; e < count; ++e) {
+        VkPipelineExecutableInfoKHR ei{VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_INFO_KHR};
+        ei.pipeline = pipeline;
+        ei.executableIndex = e;
+        uint32_t n = 0;
+        getStats(device, &ei, &n, nullptr);
+        std::vector<VkPipelineExecutableStatisticKHR> stats(n, {VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_STATISTIC_KHR});
+        getStats(device, &ei, &n, stats.data());
+        std::string line;
+        for (const auto& s : stats) {
+            char buf[160];
+            switch (s.format) {
+            case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_BOOL32_KHR:
+                std::snprintf(buf, sizeof(buf), " %s=%u", s.name, s.value.b32);
+                break;
+            case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_INT64_KHR:
+                std::snprintf(buf, sizeof(buf), " %s=%lld", s.name, static_cast<long long>(s.value.i64));
+                break;
+            case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR:
+                std::snprintf(buf, sizeof(buf), " %s=%llu", s.name, static_cast<unsigned long long>(s.value.u64));
+                break;
+            default:
+                std::snprintf(buf, sizeof(buf), " %s=%.3f", s.name, s.value.f64);
+                break;
+            }
+            line += buf;
+        }
+        LOG_INFO("pipeline stats [%s] %s:%s", label.c_str(), props[e].name, line.c_str());
+    }
+}
+
 VkPipelineCache VulkanPipelineCache::forDevice(VkDevice device) {
     std::lock_guard<std::mutex> lock(s_registryMutex);
     for (const auto& [dev, cache] : s_registry)

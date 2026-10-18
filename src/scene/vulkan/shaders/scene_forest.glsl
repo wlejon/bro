@@ -42,7 +42,7 @@
 // All of a specimen's records are relative to where it stands.
 //
 // Set 3 binding 2 holds this frame's draw entries (the drawer's choice of
-// what to draw of which tree), 2 records each:
+// what to draw of which tree), 3 records each:
 //   e0  (instance, first, end, param) as uint bits: the run of leaves,
 //       segments, clumps or blooms the entry draws [first, end), and the
 //       leaf mesh's vertex count (leaves), the tube's sides (bark) or the
@@ -51,10 +51,26 @@
 //       their size, shrinking to nothing over the `tail` leaves before
 //       `keep end` (so the count thins without popping); `fade` is the
 //       dithered cross-fade code mesh.frag reads (ForestNode::fadeCode)
+//   e2  (slot, 0, 0, 0) as uint bits: a leaf entry in colour, its first
+//       leaf's pose in binding 3 (forest_leaf_pose.comp; -1: none)
+//
+// Set 3 binding 3 holds this frame's leaf poses (FOREST_POSE_RECORDS uvec4s a
+// leaf, forestPoseWrite / forestPose below): the compute pass poses each
+// leaf the colour draws keep once, and their vertices read it.
 
 layout(std430, set = 3, binding = 2) readonly buffer ForestEntries {
     vec4 records[];
 } forestEntries;
+
+#ifdef FOREST_POSE_WRITE
+layout(std430, set = 3, binding = 3) writeonly buffer ForestPoses {
+    uvec4 records[];
+} forestPoses;
+#else
+layout(std430, set = 3, binding = 3) readonly buffer ForestPoses {
+    uvec4 records[];
+} forestPoses;
+#endif
 
 struct ForestEntry {
     int instance;
@@ -65,13 +81,86 @@ struct ForestEntry {
     float keepEnd;
     float tail;
     float fade;
+    int slot;
 };
 
 ForestEntry forestEntry(int i) {
-    uvec4 a = floatBitsToUint(forestEntries.records[i * 2]);
-    vec4 b = forestEntries.records[i * 2 + 1];
-    return ForestEntry(int(a.x), int(a.y), int(a.z), int(a.w), b.x, b.y, b.z, b.w);
+    uvec4 a = floatBitsToUint(forestEntries.records[i * 3]);
+    vec4 b = forestEntries.records[i * 3 + 1];
+    int slot = int(floatBitsToUint(forestEntries.records[i * 3 + 2].x));
+    return ForestEntry(int(a.x), int(a.y), int(a.z), int(a.w), b.x, b.y, b.z, b.w, slot);
 }
+
+// A leaf posed (forest_leaf_pose.comp): where its centre is now
+// (camera-relative), the matrix that takes its mesh's points (after the
+// fold) to world offsets from there, swayed; its fold (each half turned
+// about its stem, +fold on the +x half, -fold on the -x half, as cos and
+// sin); its crown shading (scene_vegetation.glsl's vegCrownShade) and tint;
+// its seed. A cluster's lobe: the way its leaves face before their tilt,
+// its sphere (centre less the leaf's, unswayed: the lobe moves with the
+// leaf) and radius, its leaves' optical depth a unit length and its height
+// over its width. 4 uvec4s.
+const int FOREST_POSE_RECORDS = 4;
+struct ForestPose {
+    bool alive;
+    vec3 at;
+    mat3 M;
+    vec2 fold;
+    vec4 shade;
+    vec3 tint;
+    float seed;
+    vec3 lobeOut;
+    vec4 lobeSphere;   // centre less `at`, radius
+    float lobeDensity;
+    float lobeFlat;
+};
+
+#ifdef FOREST_POSE_WRITE
+void forestPoseWrite(int slot, ForestPose p) {
+    int b = slot * FOREST_POSE_RECORDS;
+    if (!p.alive) {
+        forestPoses.records[b + 1] = uvec4(0u);
+        return;
+    }
+    forestPoses.records[b] = uvec4(floatBitsToUint(p.at), packSnorm4x8(vec4(p.shade.xyz, -p.shade.w)));
+    forestPoses.records[b + 1] = uvec4(packHalf2x16(p.M[0].xy), packHalf2x16(vec2(p.M[0].z, p.M[1].x)),
+                                       packHalf2x16(p.M[1].yz), packHalf2x16(p.M[2].xy));
+    forestPoses.records[b + 2] = uvec4(packHalf2x16(vec2(p.M[2].z, 1.0)), packHalf2x16(p.fold),
+                                       packHalf2x16(p.tint.xy),
+                                       packHalf2x16(vec2(p.tint.z, 0.0)) | (uint(clamp(p.seed, 0.0, 1.0) * 65535.0 + 0.5) << 16));
+    forestPoses.records[b + 3] = uvec4(packSnorm4x8(vec4(p.lobeOut, 0.0)), packHalf2x16(p.lobeSphere.xy),
+                                       packHalf2x16(p.lobeSphere.zw), packHalf2x16(vec2(p.lobeDensity, p.lobeFlat)));
+}
+#else
+ForestPose forestPose(int slot) {
+    int b = slot * FOREST_POSE_RECORDS;
+    ForestPose p;
+    uvec4 r1 = forestPoses.records[b + 1];
+    p.alive = r1.x != 0u;
+    if (!p.alive) return p;
+    uvec4 r0 = forestPoses.records[b];
+    uvec4 r2 = forestPoses.records[b + 2];
+    p.at = uintBitsToFloat(r0.xyz);
+    vec4 s = unpackSnorm4x8(r0.w);
+    p.shade = vec4(s.xyz, -s.w);
+    vec2 a = unpackHalf2x16(r1.x), b1 = unpackHalf2x16(r1.y), c = unpackHalf2x16(r1.z), d = unpackHalf2x16(r1.w);
+    vec2 e = unpackHalf2x16(r2.x);
+    p.M = mat3(vec3(a, b1.x), vec3(b1.y, c), vec3(d, e.x));
+    p.fold = unpackHalf2x16(r2.y);
+    p.tint = vec3(unpackHalf2x16(r2.z), unpackHalf2x16(r2.w & 0xffffu).x);
+    p.seed = float(r2.w >> 16) / 65535.0;
+    return p;
+}
+// A cluster's lobe (the pose's last record).
+void forestPoseLobe(int slot, inout ForestPose p) {
+    uvec4 r3 = forestPoses.records[slot * FOREST_POSE_RECORDS + 3];
+    p.lobeOut = unpackSnorm4x8(r3.x).xyz;
+    p.lobeSphere = vec4(unpackHalf2x16(r3.y), unpackHalf2x16(r3.z));
+    vec2 df = unpackHalf2x16(r3.w);
+    p.lobeDensity = df.x;
+    p.lobeFlat = df.y;
+}
+#endif
 
 int forestBase(int k) { return int(floatBitsToUint(procedural.header[2][k])); }
 int forestSpecimenRecord(int s) { return forestBase(0) + s * FOREST_SPECIMEN_RECORDS; }

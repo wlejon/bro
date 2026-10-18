@@ -55,9 +55,14 @@ bool SceneDefaults::setup(SceneVkDevice& device, SceneVkAllocator& allocator) {
     bone.addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT);
     // The fragment stage reads it too: a forest crown places its clumps'
     // leaves per pixel (scene_forest_crown.glsl).
-    bone.addBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
+    // So does the forest's leaf pose pass (forest_leaf_pose.comp), with the
+    // entries.
+    constexpr VkShaderStageFlags kVsCs = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
+    bone.addBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kVsCs | VK_SHADER_STAGE_FRAGMENT_BIT);
     // A forest's draw entries this frame (scene_forest.glsl).
-    bone.addBinding(2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT);
+    bone.addBinding(2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kVsCs);
+    // A forest's leaf poses this frame, written by the pose pass.
+    bone.addBinding(3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kVsCs);
     boneLayout = bone.build(dev);
 
     SceneVkDescriptorLayoutBuilder custom;

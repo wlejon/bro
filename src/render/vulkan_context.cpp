@@ -688,6 +688,20 @@ bool VulkanContext::createLogicalDevice() {
         restartFeatures.primitiveTopologyPatchListRestart = VK_FALSE;
         if (!listRestart_) chain = restartFeatures.pNext;
     }
+    // BRO_VK_PIPELINE_STATS=1: the driver's statistics of each pipeline
+    // (render::logPipelineStats), a shader-cost diagnostic.
+    VkPhysicalDevicePipelineExecutablePropertiesFeaturesKHR statsFeatures{};
+    statsFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_EXECUTABLE_PROPERTIES_FEATURES_KHR;
+    if (const char* s = std::getenv("BRO_VK_PIPELINE_STATS");
+        s && *s && *s != '0' && hasExtension(availExts, VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME)) {
+        probe(statsFeatures);
+        if (statsFeatures.pipelineExecutableInfo) {
+            enabledExtensions.push_back(VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME);
+            setPipelineStatsEnabled(true);
+        } else {
+            chain = statsFeatures.pNext;
+        }
+    }
     if (hasExtension(availExts, "VK_KHR_portability_subset")) {
         probe(portabilityFeatures);
         imageView2DOn3D_ = portabilityFeatures.imageView2DOn3DImage == VK_TRUE;

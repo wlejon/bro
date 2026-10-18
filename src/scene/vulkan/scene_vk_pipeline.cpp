@@ -264,6 +264,7 @@ VkPipeline SceneVkPipelineBuilder::build(VkDevice device, VkPipelineLayout layou
     renderingInfo.stencilAttachmentFormat = stencilAttachmentFormat_;
 
     pipelineInfo.pNext = &renderingInfo;
+    pipelineInfo.flags |= render::pipelineStatsFlags();
 
     VkPipeline pipeline = VK_NULL_HANDLE;
     VkResult res = vkCreateGraphicsPipelines(device, render::VulkanPipelineCache::forDevice(device), 1,
@@ -272,6 +273,7 @@ VkPipeline SceneVkPipelineBuilder::build(VkDevice device, VkPipelineLayout layou
         LOG_ERROR("SceneVkPipelineBuilder: Failed to create graphics pipeline: %d", res);
         return VK_NULL_HANDLE;
     }
+    render::logPipelineStats(device, pipeline);
 
     return pipeline;
 }

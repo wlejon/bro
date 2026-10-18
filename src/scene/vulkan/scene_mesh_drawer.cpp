@@ -11,6 +11,7 @@
 #include "scene/vulkan/scene_vk_custom_shader.h"
 #include "scene/vulkan/scene_vk_device.h"
 #include "scene/vulkan/scene_vk_shader_compiler.h"
+#include "render/vulkan_pipeline_cache.h"
 #include "util/log.h"
 
 #include <algorithm>
@@ -143,15 +144,50 @@ bool SceneMeshDrawer::setup(SceneGpu& gpu) {
     fsBloom_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshForestBloomFrag);
     fsBloomIndirect_ =
         SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshForestBloomIndirectFrag);
+    vsLeafInline_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshForestLeafInlineVert);
     vsHerb_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshHerbVert);
     fsHerb_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshHerbFrag);
     fsHerbIndirect_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshHerbIndirectFrag);
-    if (!vsHerb_ || !fsHerb_ || !fsHerbIndirect_ ||std::find(std::begin(vs_), std::end(vs_), VK_NULL_HANDLE) != std::end(vs_) || !fs_ || !fsIndirect_ ||
+    if (!vsLeafInline_ || !vsHerb_ || !fsHerb_ || !fsHerbIndirect_ ||std::find(std::begin(vs_), std::end(vs_), VK_NULL_HANDLE) != std::end(vs_) || !fs_ || !fsIndirect_ ||
         !fsVeg_ || !fsVegIndirect_ || !fsSprite_ || !fsSpriteIndirect_ || !fsCluster_ || !fsClusterIndirect_ ||
         !fsBark_ || !fsBarkIndirect_ || !fsGround_ || !fsGroundIndirect_ || !fsSpray_ || !fsSprayIndirect_ ||
         !vsBloom_ || !fsBloom_ || !fsBloomIndirect_) {
         LOG_ERROR("SceneMeshDrawer: Failed creating the mesh shader modules");
         return false;
+    }
+
+    // The forest leaf poses' compute pipeline: the camera (set 0) and a
+    // forest's set 3, with the draws' push constants.
+    {
+        const std::array<VkDescriptorSetLayout, 4> poseSets = {gpu.defaults.cameraLayout, gpu.defaults.emptyLayout,
+                                                               gpu.defaults.emptyLayout, gpu.defaults.boneLayout};
+        VkPushConstantRange posePush{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(MeshPushConstants)};
+        VkPipelineLayoutCreateInfo pi{};
+        pi.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        pi.setLayoutCount = static_cast<uint32_t>(poseSets.size());
+        pi.pSetLayouts = poseSets.data();
+        pi.pushConstantRangeCount = 1;
+        pi.pPushConstantRanges = &posePush;
+        poseCs_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::ForestLeafPoseComp);
+        if (!poseCs_ || vkCreatePipelineLayout(device_, &pi, nullptr, &poseLayout_) != VK_SUCCESS) {
+            LOG_ERROR("SceneMeshDrawer: Failed creating the forest pose pipeline layout");
+            return false;
+        }
+        VkComputePipelineCreateInfo ci{};
+        ci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        ci.stage.module = poseCs_;
+        ci.stage.pName = "main";
+        ci.layout = poseLayout_;
+        ci.flags = render::pipelineStatsFlags();
+        if (vkCreateComputePipelines(device_, gpu.device.context().pipelineCache(), 1, &ci, nullptr,
+                                     &posePipeline_) != VK_SUCCESS) {
+            LOG_ERROR("SceneMeshDrawer: Failed creating the forest pose pipeline");
+            return false;
+        }
+        render::setPipelineStatsLabel("forest leaf pose");
+        render::logPipelineStats(device_, posePipeline_);
     }
     return true;
 }
@@ -187,12 +223,22 @@ void SceneMeshDrawer::cleanup(SceneGpu& gpu) {
     SceneVkShaderModule::destroy(device_, vsHerb_);
     SceneVkShaderModule::destroy(device_, fsHerb_);
     SceneVkShaderModule::destroy(device_, fsHerbIndirect_);
-    vsHerb_ = fsHerb_ = fsHerbIndirect_ = VK_NULL_HANDLE;
+    SceneVkShaderModule::destroy(device_, vsLeafInline_);
+    vsLeafInline_ = vsHerb_ = fsHerb_ = fsHerbIndirect_ = VK_NULL_HANDLE;
     fsSpray_ = fsSprayIndirect_ = vsBloom_ = fsBloom_ = fsBloomIndirect_ = VK_NULL_HANDLE;
     fs_ = fsIndirect_ = fsVeg_ = fsVegIndirect_ = fsSprite_ = fsSpriteIndirect_ = VK_NULL_HANDLE;
     fsCluster_ = fsClusterIndirect_ = fsBark_ = fsBarkIndirect_ = fsGround_ = fsGroundIndirect_ = VK_NULL_HANDLE;
     if (layout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(device_, layout_, nullptr);
     layout_ = VK_NULL_HANDLE;
+    if (posePipeline_ != VK_NULL_HANDLE) vkDestroyPipeline(device_, posePipeline_, nullptr);
+    SceneVkShaderModule::destroy(device_, poseCs_);
+    if (poseLayout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(device_, poseLayout_, nullptr);
+    posePipeline_ = VK_NULL_HANDLE;
+    poseCs_ = VK_NULL_HANDLE;
+    poseLayout_ = VK_NULL_HANDLE;
+    gpu.allocator.destroyBuffer(poses_);
+    poseJobs_.clear();
+    poseUsed_ = 0;
 }
 
 namespace raster {
@@ -265,13 +311,24 @@ VkPipeline SceneMeshDrawer::builtinPipeline(const MeshDraw& draw, const TargetFo
     // And a grass node's herb plants, a grass draw with its own stages.
     const bool herb = draw.kind == MeshKind::Grass &&
                       (static_cast<uint32_t>(draw.push.pbrParams[3]) & mesh_flags::kHerb) != 0u;
+    // And forest leaves past the pose buffer's room, which pose themselves.
+    const bool leafInline = draw.kind == MeshKind::ForestLeaf &&
+                            (static_cast<uint32_t>(draw.push.pbrParams[3]) & mesh_flags::kForestLeafInline) != 0u;
     const uint32_t variant = static_cast<uint32_t>(draw.kind) * raster::kCount + rasterBits +
+                             (leafInline ? 6u * static_cast<uint32_t>(kMeshKindCount) * raster::kCount : 0u) +
                              (cluster ? static_cast<uint32_t>(kMeshKindCount) * raster::kCount : 0u) +
                              (ground ? 2u * static_cast<uint32_t>(kMeshKindCount) * raster::kCount : 0u) +
                              (spray ? 3u * static_cast<uint32_t>(kMeshKindCount) * raster::kCount : 0u) +
                              (bloom ? 4u * static_cast<uint32_t>(kMeshKindCount) * raster::kCount : 0u) +
                              (herb ? 5u * static_cast<uint32_t>(kMeshKindCount) * raster::kCount : 0u);
     return builtin_.get(variant, target, [&] {
+        if (render::pipelineStatsEnabled()) {
+            render::setPipelineStatsLabel(
+                std::string("mesh kind ") + std::to_string(static_cast<int>(draw.kind)) + (cluster ? " cluster" : "") +
+                (ground ? " ground" : "") + (spray ? " spray" : "") + (bloom ? " bloom" : "") + (herb ? " herb" : "") +
+                (leafInline ? " inline" : "") + (target.colorCount > 1 ? " indirect" : "") +
+                " raster " + std::to_string(rasterBits));
+        }
         if (herb)
             return buildPipeline(vsHerb_, target.colorCount > 1 ? fsHerbIndirect_ : fsHerb_, draw.kind, rasterBits,
                                  target);
@@ -286,7 +343,8 @@ VkPipeline SceneMeshDrawer::builtinPipeline(const MeshDraw& draw, const TargetFo
         if (draw.kind == MeshKind::Tube || draw.kind == MeshKind::ForestTube)
             fs = target.colorCount > 1 ? fsBarkIndirect_ : fsBark_;
         if (ground) fs = target.colorCount > 1 ? fsGroundIndirect_ : fsGround_;
-        return buildPipeline(vs_[static_cast<int>(draw.kind)], fs, draw.kind, rasterBits, target);
+        return buildPipeline(leafInline ? vsLeafInline_ : vs_[static_cast<int>(draw.kind)], fs, draw.kind, rasterBits,
+                             target);
     });
 }
 

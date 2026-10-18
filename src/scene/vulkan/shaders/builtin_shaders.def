@@ -64,6 +64,10 @@ BRO_SCENE_SHADER(ShadowGrassVert,          "shadow_grass.vert",           "shado
 // The forest node's tiers (scene_forest.glsl), drawn with MeshVegFrag; the
 // sprite casters cut out by ShadowForestFrag.
 BRO_SCENE_SHADER(MeshForestLeafVert,       "mesh_forest_leaf.vert",       "mesh_forest_leaf.vert",       "vert", "")
+// Past the pose buffer's room, each vertex poses its own leaf.
+BRO_SCENE_SHADER(MeshForestLeafInlineVert, "mesh_forest_leaf_inline.vert", "mesh_forest_leaf.vert",       "vert", "FOREST_LEAF_INLINE")
+// The colour leaves' poses, a leaf at a time, ahead of the draws that read them.
+BRO_SCENE_SHADER(ForestLeafPoseComp,       "forest_leaf_pose.comp",       "forest_leaf_pose.comp",       "comp", "")
 BRO_SCENE_SHADER(MeshForestTubeVert,       "mesh_forest_tube.vert",       "mesh_forest_tube.vert",       "vert", "")
 BRO_SCENE_SHADER(MeshForestSpriteVert,     "mesh_forest_sprite.vert",     "mesh_forest_sprite.vert",     "vert", "")
 BRO_SCENE_SHADER(ShadowForestLeafVert,     "shadow_forest_leaf.vert",     "shadow_forest_leaf.vert",     "vert", "")

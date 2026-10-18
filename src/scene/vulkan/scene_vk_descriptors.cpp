@@ -43,8 +43,9 @@ VkDescriptorSetLayout SceneVkDescriptorLayoutBuilder::build(VkDevice device) {
 
 VkDescriptorSetLayout SceneVkDescriptorLayoutBuilder::createCameraLayout(VkDevice device) {
     SceneVkDescriptorLayoutBuilder builder;
+    // (Compute too: the forest's leaf poses sway in the camera's wind.)
     builder.addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1,
-                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
+                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT);
     return builder.build(device);
 }
 

@@ -2,6 +2,7 @@
 
 #include "scene/vulkan/scene_defaults.h"
 #include "scene/vulkan/scene_frame.h"
+#include "scene/vulkan/scene_gpu_timer.h"
 #include "scene/vulkan/scene_targets.h"
 #include "scene/vulkan/scene_view.h"
 #include "scene/vulkan/scene_vk_custom_shader.h"
@@ -293,6 +294,7 @@ void PassShadow::record(SceneFrame& frame) {
             }
             frame.stats.shadowDrawn++;
             drawCaster(frame, lightViewProj, draw);
+            if (frame.timer && draw.shadowTimerLabel) frame.timer->mark(cmd, draw.shadowTimerLabel);
         }
     }
 

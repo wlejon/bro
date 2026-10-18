@@ -23,6 +23,7 @@
 #include "scene/vulkan/scene_targets.h"
 #include "scene/vulkan/scene_vk_descriptors.h"
 #include "scene/vulkan/scene_vk_device.h"
+#include "util/log.h"
 
 #include <algorithm>
 #include <array>
@@ -64,6 +65,12 @@ struct Entry {
     float widening, keepEnd, tail, fade;
 };
 static_assert(sizeof(Entry) == 32);
+// An entry's floats on the GPU: its 8, then its pose slot and padding
+// (scene_forest.glsl's three records).
+constexpr size_t kEntryFloats = 12;
+// The most leaves posed a frame (64 bytes each: 256 MB). The flight's
+// heaviest views keep about 1.5 million.
+constexpr uint32_t kMaxPoses = 4u << 20;
 
 float floatBits(uint32_t u) {
     float f;
@@ -373,8 +380,55 @@ std::unique_ptr<SceneMeshDrawer::ForestPlan> SceneMeshDrawer::planForest(SceneFr
     return plan;
 }
 
+const SceneVkBuffer* SceneMeshDrawer::ensurePoses(SceneFrame& frame, uint32_t slots) {
+    constexpr VkDeviceSize kPoseBytes = 64;   // scene_forest.glsl's FOREST_POSE_RECORDS uvec4s
+    const VkDeviceSize need = std::max<VkDeviceSize>(slots, 1) * kPoseBytes;
+    if (poses_.isValid() && poses_.size >= need) return &poses_;
+    // Grown with room to spare; the old buffer stays until the frames that
+    // read it are done (this one's earlier nodes among them).
+    // (destroyBuffer defers the destruction past the frames in flight.)
+    if (poses_.isValid()) frame.gpu.allocator.destroyBuffer(poses_);
+    const VkDeviceSize size = std::max(
+        need, std::min<VkDeviceSize>(std::max<VkDeviceSize>(need + need / 2, VkDeviceSize{1} << 20),
+                                     VkDeviceSize{kMaxPoses} * kPoseBytes));
+    if (!frame.gpu.allocator.createBuffer(size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, poses_)) {
+        LOG_ERROR("SceneMeshDrawer: Failed creating the forest pose buffer (%llu bytes)",
+                  static_cast<unsigned long long>(size));
+        poses_ = {};
+        return nullptr;
+    }
+    return &poses_;
+}
+
+void SceneMeshDrawer::recordForestPoses(SceneFrame& frame) {
+    if (poseJobs_.empty()) return;
+    VkCommandBuffer cmd = frame.cmd;
+    // The last frame's draws read the buffer this one overwrites.
+    VkMemoryBarrier before{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+    before.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    before.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_VERTEX_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &before,
+                         0, nullptr, 0, nullptr);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, posePipeline_);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, poseLayout_, 0, 1, &frame.cameraSet, 0, nullptr);
+    for (const ForestPoseJob& job : poseJobs_) {
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, poseLayout_, 3, 1, &job.set, 0, nullptr);
+        vkCmdPushConstants(cmd, poseLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(MeshPushConstants), &job.push);
+        vkCmdDispatch(cmd, job.entries, 1, 1);
+    }
+    VkMemoryBarrier after{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+    after.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    after.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_VERTEX_SHADER_BIT, 0, 1, &after,
+                         0, nullptr, 0, nullptr);
+    poseJobs_.clear();
+}
+
 void SceneMeshDrawer::prepareForest(SceneFrame& frame, ForestNode& node, std::vector<MeshDraw>& out) {
     out.clear();
+    poseJobs_.clear();
+    poseUsed_ = 0;
     auto plan = planForest(frame, node);
     if (!plan) return;
     ForestPlan& P = *plan;
@@ -388,6 +442,8 @@ void SceneMeshDrawer::prepareForest(SceneFrame& frame, ForestNode& node, std::ve
 void SceneMeshDrawer::prepareForests(SceneFrame& frame, const std::vector<ForestNode*>& nodes,
                                      std::vector<std::vector<MeshDraw>>& out) {
     out.assign(nodes.size(), {});
+    poseJobs_.clear();
+    poseUsed_ = 0;
     std::vector<std::unique_ptr<ForestPlan>> plans(nodes.size());
     float budget = 0.0f, shadowBudget = 0.0f;
     bool forced = false, anySeen = false, anyCast = false;
@@ -501,19 +557,37 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
         node.setStats(stats);
         return;
     }
-    const size_t bytes = total * sizeof(Entry);
+    const size_t bytes = total * kEntryFloats * sizeof(float);
     const render::UploadSlice slice = frame.gpu.device.frameUpload(bytes);
     if (!slice) {
+        node.setStats(stats);
+        return;
+    }
+    // The colour leaves are posed a leaf at a time (forest_leaf_pose.comp):
+    // a pose slot each in this frame's pose buffer.
+    // A group past the buffer's room (a forced Leaves tier over a whole
+    // forest) poses its leaves vertex by vertex instead (kForestLeafInline).
+    uint32_t poseLeaves = 0;
+    bool posedGroup[kGroups] = {};
+    for (int k : {LeafNear, LeafCard}) {
+        uint32_t n = 0;
+        for (const Entry& e : colour.g[k]) n += e.end - e.first;
+        if (n == 0 || uint64_t{poseUsed_} + poseLeaves + n > kMaxPoses) continue;
+        posedGroup[k] = true;
+        poseLeaves += n;
+    }
+    const SceneVkBuffer* poses = ensurePoses(frame, poseUsed_ + poseLeaves);
+    if (!poses) {
         node.setStats(stats);
         return;
     }
     // Entries go up as uint bits and floats, the layout scene_forest.glsl reads.
     auto* dst = static_cast<float*>(slice.mapped);
     size_t at = 0;
-    const auto put = [&](const std::vector<Entry>& g) {
+    const auto put = [&](const std::vector<Entry>& g, bool posed) {
         const size_t first = at;
         for (const Entry& e : g) {
-            float* d = dst + at * 8;
+            float* d = dst + at * kEntryFloats;
             d[0] = floatBits(e.instance);
             d[1] = floatBits(e.first);
             d[2] = floatBits(e.end);
@@ -522,6 +596,9 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
             d[5] = e.keepEnd;
             d[6] = e.tail;
             d[7] = e.fade;
+            d[8] = floatBits(posed ? poseUsed_ : ~0u);
+            d[9] = d[10] = d[11] = 0.0f;
+            if (posed) poseUsed_ += e.end - e.first;
             ++at;
         }
         return static_cast<uint32_t>(first);
@@ -535,6 +612,7 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
     SceneVkDescriptorWriter writer;
     writer.writeBuffer(1, store->buffer, store->size, 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
     writer.writeBuffer(2, slice.buffer, bytes, slice.offset, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+    writer.writeBuffer(3, poses->buffer, poses->size, 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
     writer.updateSet(device_, set);
 
     // The draws' shared state: the leaves' material, the forest flag.
@@ -590,7 +668,8 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
         for (int k = 0; k < kGroups; ++k) {
             const auto& g = G.g[k];
             if (g.empty()) continue;
-            const uint32_t first = put(g);
+            const bool posed = !shadow && posedGroup[k];
+            const uint32_t first = put(g, posed);
             MeshDraw d = base;
             d.shadowOnly = shadow;
             d.castsShadow = shadow;
@@ -604,6 +683,21 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
             d.order = farLast && (k == Clumps || k == Crowns) ? static_cast<uint8_t>(MeshDraw::kOrderFar + k)
                                                               : static_cast<uint8_t>(k);
             if (shadow) d.shadowTileMask = 1u << slot;
+            // The timed passes' name for it: the group and the node's leaf form.
+            static constexpr const char* kLabel[kGroups][3] = {
+                {"forest:cores:broad", "forest:cores:needle", "forest:cores:scale"},
+                {"forest:leafNear:broad", "forest:leafNear:needle", "forest:leafNear:scale"},
+                {"forest:leafCard:broad", "forest:leafCard:needle", "forest:leafCard:scale"},
+                {"forest:bark10:broad", "forest:bark10:needle", "forest:bark10:scale"},
+                {"forest:bark5:broad", "forest:bark5:needle", "forest:bark5:scale"},
+                {"forest:blooms:broad", "forest:blooms:needle", "forest:blooms:scale"},
+                {"forest:clumps:broad", "forest:clumps:needle", "forest:clumps:scale"},
+                {"forest:crowns:broad", "forest:crowns:needle", "forest:crowns:scale"}};
+            static constexpr const char* kShadowLabel[kGroups] = {
+                "shadow:forest:cores", "shadow:forest:leafNear", "shadow:forest:leafCard", "shadow:forest:bark10",
+                "shadow:forest:bark5", "shadow:forest:blooms", "shadow:forest:clumps", "shadow:forest:crowns"};
+            d.timerLabel = kLabel[k][std::clamp(static_cast<int>(node.look().leafForm), 0, 2)];
+            if (shadow) d.shadowTimerLabel = kShadowLabel[k];
             switch (k) {
             case LeafNear:
             case LeafCard: {
@@ -629,7 +723,8 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
                                  (leafFlags & mesh_flags::kAlbedoMap) == 0u;
                 d.push.pbrParams[3] = static_cast<float>(leafFlags | (cluster ? mesh_flags::kForestCluster : 0u) |
                                                          (spray ? mesh_flags::kForestSpray : 0u) |
-                                                         (cut ? mesh_flags::kForestLeafCut : 0u));
+                                                         (cut ? mesh_flags::kForestLeafCut : 0u) |
+                                                         (!shadow && !posed ? mesh_flags::kForestLeafInline : 0u));
                 break;
             }
             case Bark10:
@@ -686,6 +781,17 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
                 d.push.pbrParams[3] = static_cast<float>(spriteFlags);
                 break;
             default: break;
+            }
+            if (posed) {
+                // The pose pass runs these entries first, with the draw's own
+                // push constants (its flags say cluster or cut), its first
+                // entry in extra.z.
+                ForestPoseJob job;
+                job.set = set;
+                job.push = d.push;
+                job.push.extra[2] = static_cast<float>(first);
+                job.entries = static_cast<uint32_t>(g.size());
+                poseJobs_.push_back(job);
             }
             out.push_back(d);
             stats.draws++;
