@@ -314,11 +314,23 @@ float herbFoxgloveBell(vec2 P, float i, float n, float len, float bell, float se
     float f = i / n;
     vec2 h = herbHash2(vec2(i * 1.7, seed * 13.0 + 0.5));
     float jit = herbHash1(i * 3.1 + seed * 19.0) - 0.5;
-    float bud = smoothstep(0.6, 0.78, f);
-    float bi = bell * mix(1.0, 0.78, smoothstep(0.0, 0.6, f)) * mix(1.0, 0.45, smoothstep(0.6, 1.0, f)) *
-               (0.88 + 0.24 * h.x);
-    float yi = (i + 0.5 + 0.5 * (h.y - 0.5)) / n * len;
-    float sd = jit > 0.36 ? -1.0 : 1.0;
+    // How far on the spike is (each its own): a young one in bud down to
+    // its middle, an old one open nearly to its top, its lowest bells gone
+    // to green seed pods.
+    float stage = herbHash1(seed * 7.7 + 0.3);
+    float budAt = mix(0.5, 0.8, stage);
+    float bud = smoothstep(budAt, budAt + 0.18, f);
+    float pod = 1.0 - step(max(stage - 0.55, 0.0) * 0.55, f);
+    float bi = bell * mix(1.0, 0.78, smoothstep(0.0, budAt, f)) * mix(1.0, 0.45, smoothstep(budAt, 1.0, f)) *
+               (0.82 + 0.36 * h.x);
+    // Spaced wider low on the spike, closer toward its tip, each a little
+    // off its place.
+    float u = clamp((i + 0.5 + 0.7 * (h.y - 0.5)) / n, 0.0, 1.0);
+    float yi = pow(u, 0.85) * len;
+    float sd = jit > 0.28 ? -1.0 : 1.0;
+    // A pod is a bud's closed spindle, smaller, held out and up.
+    bi *= mix(1.0, 0.62, pod);
+    bud = max(bud, pod);
     // Hanging toward or away from the eye, a bell looks shorter and its
     // mouth more open to it.
     float turn = herbHash1(i * 5.7 + seed * 3.0);
@@ -387,12 +399,13 @@ float herbFoxgloveBell(vec2 P, float i, float n, float len, float bell, float se
     // Buds paler and greener, the last ones green.
     col = mix(col, pink * vec3(0.8, 0.9, 0.65), 0.35 * bud);
     col = mix(col, vec3(0.09, 0.13, 0.05), smoothstep(0.86, 1.0, f));
+    col = mix(col, vec3(0.07, 0.1, 0.035) * (1.0 - 0.35 * xb * xb), pod);
     vec2 nxy = pd * (xb * 0.8);
     nrm = mix(vec3(nxy, sqrt(max(1.0 - dot(nxy, nxy), 0.0))), normalize(vec3(-down * 0.6, 0.8)), inner);
     return c;
 }
 
-HerbSurface herbBloomSurface(int sp, vec2 uv, vec4 size, float seed, vec2 down) {
+HerbSurface herbBloomSurface(int sp, vec2 uv, vec4 size, float seed, vec2 down, bool back) {
     HerbSurface o;
     vec4 r6 = herbRec(sp, 6), r7 = herbRec(sp, 7), r8 = herbRec(sp, 8);
     int form = int(r6.x + 0.5);
@@ -450,7 +463,7 @@ HerbSurface herbBloomSurface(int sp, vec2 uv, vec4 size, float seed, vec2 down) 
         // off its arched tip, narrow, their lobes curled back; an upright
         // spike's (a foxglove's, herbFoxgloveBell) droop out and down,
         // lipped tubes with a spotted throat, graded up to the buds.
-        float n = max(r6.z, 1.0);
+        float n = max(size.w, 1.0);   // the plant's own count (scene_herb.glsl)
         float bell = size.z;
         bool secund = r7.w >= 0.5;
         float ic = floor(uv.y * n);
@@ -475,13 +488,16 @@ HerbSurface herbBloomSurface(int sp, vec2 uv, vec4 size, float seed, vec2 down) 
                 continue;
             }
             float bud = smoothstep(0.7, 1.0, f);
-            float bi = bell * mix(1.0, 0.45, f * f);
-            float yi = (i + 0.5) / n * len;
             float jit = herbHash1(i * 3.1 + seed * 19.0) - 0.5;
+            vec2 hb = herbHash2(vec2(i * 2.9, seed * 11.0 + 1.7));
+            // Each its own size, place and hang (a row of one bell repeated
+            // read as a comb).
+            float bi = bell * mix(1.0, 0.45, f * f) * (0.85 + 0.3 * hb.x);
+            float yi = (i + 0.5 + 0.55 * (hb.y - 0.5)) / n * len;
             // Its pedicel out to the side, then the bell hangs down (the
-            // world's, on the card) and out.
-            vec2 A = vec2(0.25 * bi, yi) + down * (0.1 * bi);
-            vec2 d = normalize(down + vec2(0.2 + 0.2 * jit, 0.0));
+            // world's, on the card) and out, at its own slant.
+            vec2 A = vec2((0.15 + 0.2 * hb.y) * bi, yi) + down * (0.1 * bi);
+            vec2 d = normalize(down + vec2(0.25 + 0.55 * jit, 0.0));
             vec2 q = P - A;
             float a = dot(q, d) / (1.2 * bi * mix(1.0, 0.6, bud));
             float b = (d.x * q.y - d.y * q.x) / bi;
@@ -534,7 +550,21 @@ HerbSurface herbBloomSurface(int sp, vec2 uv, vec4 size, float seed, vec2 down) 
         o.cover = max(rays, disc);
         o.albedo = mix(r7.rgb * (0.9 + 0.1 * herbHash1(floor(seg))), r8.rgb, disc);
         o.normal = disc > 0.5 ? vec3(q / rc * 0.5, 1.0) : vec3(q * 0.15, 1.0);
-        o.translucency = mix(0.55, 0.15, disc);
+        // A petal lets through what it does not reflect as white, not as a
+        // leaf's green: lit from behind a ray glows little.
+        o.translucency = mix(0.3, 0.15, disc);
+        if (back) {
+            // From behind: the rays' backs, a little greyer, and in their
+            // middle the head's cup of green bracts, not its yellow disc,
+            // rimmed darker where the bracts overlap.
+            float cup = herbAA(rc * 1.1 - r, fq);
+            o.cover = max(rays, cup);
+            vec3 bract = herbRec(sp, 5).rgb * 1.3;
+            o.albedo = mix(r7.rgb * 0.82 * (0.9 + 0.1 * herbHash1(floor(seg))),
+                           bract * mix(1.0, 0.7, smoothstep(0.5 * rc, 1.05 * rc, r)), cup);
+            o.normal = cup > 0.5 ? vec3(q / rc * 0.6, 1.0) : vec3(q * 0.15, 1.0);
+            o.translucency = mix(0.3, 0.1, cup);
+        }
         return o;
     }
     if (form == 2) {
@@ -636,6 +666,16 @@ HerbSurface herbBloomSurface(int sp, vec2 uv, vec4 size, float seed, vec2 down) 
         // Between the florets, deep in the cluster: dark; at its rim only
         // the florets stand out against what lies behind.
         float rim = smoothstep(0.72, 0.95, rh);
+        // The corymb's florets come in small heads of their own, a dozen or
+        // so over the dome, the shadowed cluster between them: not one
+        // white plate.
+        vec2 gh = (vec2(p.x, w) / R + 1.0) * 2.2;
+        vec2 ch = floor(gh);
+        vec2 hc = herbHash2(ch + seed * 5.0);
+        float headR = 0.55 + 0.15 * hc.y;
+        float inHead = 1.0 - smoothstep(headR - 0.12, headR, length(gh - ch - 0.25 - 0.5 * hc));
+        float headShow = 1.0 - smoothstep(0.3, 0.8, fq / (0.5 * R));
+        float heads = mix(1.0, inHead, headShow * (1.0 - rim));
         float body = top ? mix(1.0, fl, rim * show) : 0.0;
         // Its stalks: from the stem's tip (under the dome's middle) out to
         // where they hold its edge, seen below and through its rim.
@@ -653,14 +693,16 @@ HerbSurface herbBloomSurface(int sp, vec2 uv, vec4 size, float seed, vec2 down) 
         vec3 floret = mix(r7.rgb * (0.9 + 0.2 * hh.y), r8.rgb, eye * 0.8);
         // Unresolved, the dome is its florets' mean: mostly florets, a
         // little of the shade between (the florets crowd it).
-        o.albedo = !top ? shade : mix(mix(r7.rgb * 0.8, shade, 0.4), floret, mix(0.85, fl, show));
+        o.albedo = !top ? shade
+                        : mix(shade, mix(mix(r7.rgb * 0.8, shade, 0.4), floret, mix(0.85, fl, show)), mix(0.15, 1.0, heads));
         if (stalks > 0.5 && sil * body < 0.5) o.albedo = herbRec(sp, 5).rgb;
         // The dome's normal (the ellipsoid's gradient in the card's frame),
         // each floret a little dome of its own.
         vec3 gN = vec3(p.x / (R * R), w / (R * R) * cv + hgt / (Hd * Hd) * s, -w / (R * R) * s + hgt / (Hd * Hd) * cv);
         vec3 bump = vec3(dv * 0.6 * fl * show, 0.0);
         o.normal = top ? normalize(normalize(gN) + bump) : vec3(0.0, -0.6, 0.8);
-        o.ao = top ? mix(0.6, 1.0, smoothstep(hcut, Hd, hgt)) * mix(0.75, 1.0, mix(fl, 1.0, 1.0 - show)) : 0.45;
+        o.ao = top ? mix(0.6, 1.0, smoothstep(hcut, Hd, hgt)) * mix(0.75, 1.0, mix(fl, 1.0, 1.0 - show)) * mix(0.6, 1.0, heads)
+                   : 0.45;
         o.translucency = 0.3;
         return o;
     }
@@ -680,11 +722,12 @@ HerbSurface herbBloomSurface(int sp, vec2 uv, vec4 size, float seed, vec2 down) 
 
 // The card's surface: `info` (role 0 leaf / 1 stem / 2 bloom, species,
 // seed), `size` (scene_herb.glsl's HerbVertex::size), `extra` (a stem's
-// cover of its card, or a leaf's stalk share).
-HerbSurface herbSurface(vec4 info, vec2 uv, vec4 size, float extra, vec2 down) {
+// cover of its card, or a leaf's stalk share), `back` the card seen from
+// behind its face (a flower's back).
+HerbSurface herbSurface(vec4 info, vec2 uv, vec4 size, float extra, vec2 down, bool back) {
     int role = int(info.x + 0.5);
     int sp = clamp(int(info.y + 0.5), 0, GRASS_HERB_MAX - 1);
     if (role == 1) return herbStemSurface(sp, uv, size, extra);
-    if (role == 2) return herbBloomSurface(sp, uv, size, info.z, normalize(down + vec2(0.0, -1e-4)));
+    if (role == 2) return herbBloomSurface(sp, uv, size, info.z, normalize(down + vec2(0.0, -1e-4)), back);
     return herbLeaf(sp, uv, size, extra, info.z);
 }

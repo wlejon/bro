@@ -2,7 +2,7 @@
 // (the herb plants' own, scene_herb.glsl, and the turf's). Included by
 // scene_grass.glsl; needs scene_camera.glsl's noise.
 //
-// The grass node holds a table of herb species (broflora's herbRecord, 13
+// The grass node holds a table of herb species (broflora's herbRecord, 14
 // vec4s each, GRASS_HERB_RECORD) and a grid of cells of its own (herbInfo.y
 // m). Each cell holds at most one plant, and nothing about it is stored:
 //   - each species weighs in at a point by its abundance, by how well the
@@ -24,7 +24,7 @@
 //   3 lobes, stalk, rise, arch           10 patchCover, bloomShare, cover, hairs
 //   4 leafColor, gloss                   11 stem freq, stem sway, leaf freq, leaf sway
 //   5 stemColor, stemDiameter            12 spacing, side cover, its blooms' share, leaf top
-//   6 bloomForm, bloomSize, bloomCount, petals
+//   6 bloomForm, bloomSize, bloomCount, petals   13 stemLeaves, stemLeafSize, -, -
 
 vec4 herbRec(int i, int k) { return grass.herbs[i * GRASS_HERB_RECORD + k]; }
 

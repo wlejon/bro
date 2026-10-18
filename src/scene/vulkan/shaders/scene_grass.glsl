@@ -36,7 +36,7 @@
 // no triangle of it survives.
 
 #define GRASS_HERB_MAX 12      // GrassNode::kHerbMax
-#define GRASS_HERB_RECORD 13   // vec4s a species (broflora::kHerbRecordFloats / 4)
+#define GRASS_HERB_RECORD 14   // vec4s a species (broflora::kHerbRecordFloats / 4)
 #define GRASS_HERB_MEAN 5      // GrassNode::kHerbMeanSteps (kHerbMeanFloats / 4 vec4s each)
 
 layout(set = 4, binding = 0) uniform GrassUBO {

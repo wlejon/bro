@@ -62,6 +62,11 @@ struct HerbStalk {
     vec3 d0;
     vec3 bend;
     float bendFrom;
+    // A stem's own bow at rest, its tilt growing along it (`bow` t +
+    // `bow2` t^2): no stem stands ruler-straight; the two ways apart, a
+    // tall one curves one way low and back near its top.
+    vec3 bow;
+    vec3 bow2;
     vec3 wind;
     float len;
 };
@@ -74,7 +79,7 @@ struct HerbStalk {
 // tilt saturates near level, the whole short of folding back on itself.
 vec3 herbTangent(HerbStalk s, float t) {
     float b = s.bendFrom > 0.0 ? smoothstep(s.bendFrom - 0.12, s.bendFrom + 0.3, t) : t * t;
-    vec3 r = s.d0 + s.bend * b;
+    vec3 r = s.d0 + s.bend * b + (s.bow + s.bow2 * t) * t;
     float rh = length(r.xz);
     vec2 T = rh > 1e-6 ? r.xz * (atan(rh, r.y) / rh) : vec2(0.0);
     vec2 W = s.wind.xz * (2.0 * t);
@@ -120,14 +125,24 @@ HerbStalk herbStem(int sp, int k, vec3 root, vec4 h, float size, VegWind w, floa
     float hk = fract(h.z * 7.13 + float(k) * 0.618);
     float a = float(k) * HERB_GOLDEN + h.y * 6.2831853;
     vec3 out3 = vec3(cos(a), 0.0, sin(a));
-    float off = habit == 2 ? r0.z * size * sqrt(fract(hk * 3.7)) : habit == 1 ? 0.02 + 0.04 * hk : 0.012 * size;
+    // (A leafy herb's shoots rise a hand's breadth apart, a clump.)
+    float off = habit == 2 ? r0.z * size * sqrt(fract(hk * 3.7)) : habit == 1 ? 0.03 + 0.08 * hk : 0.012 * size;
     HerbStalk s;
     s.base = root + out3 * off;
-    s.d0 = herbDir(a, 0.05 + 0.14 * hk);
+    // Each stem its own lean (more on a plant of several, spreading out) and
+    // its own bow: a slow curve one way along it, bending back a little or
+    // on over its top, by a hash of its own.
+    float hb = fract(h.w * 5.31 + float(k) * 0.381);
+    float hb2 = fract(h.x * 9.77 + float(k) * 0.713);
+    s.d0 = herbDir(a + (hb2 - 0.5) * 1.2, 0.03 + 0.16 * hk);
     s.len = r0.y * size * (0.82 + 0.3 * hk);
     // A nodding stem (a bluebell's) droops at its top.
     s.bend = (out3 * 0.3 - vec3(0.0, 1.0, 0.0)) * (r7.w * 2.2);
     s.bendFrom = 0.62;
+    float ab = a + 1.2 + 3.6 * hb;
+    vec3 bw = vec3(cos(ab), 0.0, sin(ab));
+    s.bow = bw * (0.04 + 0.2 * hb2);
+    s.bow2 = bw * ((hb - 0.55) * 0.35) + vec3(-bw.z, 0.0, bw.x) * ((hb2 - 0.5) * 0.15);
     vec3 x = herbSwing(r11.x, r11.y * shelter, s.len, 0.08, hk, w, 0.2);
     s.wind = x / max(s.len, 0.01) + push;
     return s;
@@ -195,6 +210,9 @@ bool herbVertex(int id, int vid, vec3 v, out HerbVertex o) {
     vec4 r11 = herbRec(sp, 11);
     int habit = int(r0.x + 0.5);
     int nl = int(r0.w + 0.5), ns = int(r1.x + 0.5);
+    // A leafy herb's leaves stand in opposite pairs, a card a pair (its two
+    // leaves out either way from the stem): as many again up the stems.
+    if (habit == 1 && ns > 0) nl = (nl + 1) / 2;
     int form = int(r6.x + 0.5);
     int nb = form > 0 ? ns : 0;
     int keptLeaves = clamp(K - nb - ns, 1, max(nl, 1));
@@ -210,8 +228,15 @@ bool herbVertex(int id, int vid, vec3 v, out HerbVertex o) {
         nb = form > 0 ? ns : 0;
         keptLeaves = clamp(K - nb - ns, 1, max(nl, 1));
     }
+    // A rosette's stem leaves (a foxglove's) take the cards left after its
+    // rosette, so the far ring, short of cards, drops them first.
+    vec4 r13 = herbRec(sp, 13);
+    int perStem = habit == 0 && ns > 0 ? int(r13.x + 0.5) : 0;
+    int nsl = perStem * ns;
+    int keptAll = clamp(K - nb - ns, 1, max(nl + nsl, 1));
+    if (keptLeaves >= nl) keptLeaves = keptAll;
     if (j >= nb + ns + keptLeaves) return false;
-    float widen = min(sqrt(float(max(nl, 1)) / float(keptLeaves)), 1.6);
+    float widen = min(sqrt(float(max(nl, 1)) / float(min(keptLeaves, max(nl, 1)))), 1.6);
     int role = j < nb ? 2 : j < nb + ns ? 1 : 0;
     int k = role == 2 ? j : role == 1 ? j - nb : j - nb - ns;
 
@@ -247,7 +272,10 @@ bool herbVertex(int id, int vid, vec3 v, out HerbVertex o) {
         HerbStalk s = herbStem(sp, k, root, h, size, w, shelter, push);
         vec3 tg;
         vec3 p = herbPoint(s, v.y, tg);
-        vec3 side = cross(tg, toEye);
+        // Turned to the eye where it is, not where its root is: a tall stem
+        // passing near the eye, its root a step off, turned by its root's
+        // way, showed the eye its edge.
+        vec3 side = cross(tg, normalize(-p));
         side = dot(side, side) > 1e-8 ? normalize(side) : vec3(1.0, 0.0, 0.0);
         float px = 2.0 / max(abs(camera.proj[1][1]) * camera.viewport.y, 1.0);
         float dia = herbRec(sp, 5).w * (1.0 - 0.4 * v.y);
@@ -278,17 +306,31 @@ bool herbVertex(int id, int vid, vec3 v, out HerbVertex o) {
         if (form == 4 || form == 6) {
             // A spike or a raceme: a strip up the stem's top, turned to the
             // eye about the stem, from bloomSize below the tip to the tip.
+            // A raceme's bells: as many as its length holds, each plant its
+            // own count (a young spike short, a strong one long).
+            float nBells = form == 6 ? max(floor(r6.z * (0.7 + 0.55 * fract(h.w * 3.71 + float(k) * 0.29)) + 0.5), 3.0)
+                                     : r6.z;
+            if (form == 6) bs *= nBells / max(r6.z, 1.0);
             float t0 = max(1.0 - bs / max(s.len, 1e-3), 0.0);
             float t = mix(t0, 1.0, v.y);
             vec3 tgv;
             vec3 p = herbPoint(s, t, tgv);
-            vec3 side = cross(tgv, toEye);
+            // Turned to the eye where it is (a raceme passing near the eye,
+            // turned by its root's way, showed its edge: its bells drawn
+            // across a card seen edge-on stretched into long pink slivers
+            // floating off the spike).
+            vec3 side = cross(tgv, normalize(-p));
             side = dot(side, side) > 1e-8 ? normalize(side) : vec3(1.0, 0.0, 0.0);
-            // A raceme's bells hang out from the plant and down: its +x side.
+            // A raceme's bells hang out from the plant and down: its +x side,
+            // which way round settled once for the whole card at its middle
+            // (each vertex for itself, the card twisted through itself where
+            // the bells hang toward or away from the eye).
             vec3 outward = normalize(vec3(s.d0.x, 0.0, s.d0.z) + vec3(1e-4, 0.0, 0.0)) -
                            vec3(0.0, 0.5, 0.0);
-            if (dot(side, outward) < 0.0) side = -side;
-            float bell = clamp(bs * 1.8 / max(r6.z, 1.0), 0.012, 0.05);
+            vec3 tgm;
+            vec3 pm = herbPoint(s, mix(t0, 1.0, 0.5), tgm);
+            if (dot(cross(tgm, normalize(-pm)), outward) < 0.0) side = -side;
+            float bell = clamp(bs * 1.8 / max(nBells, 1.0), 0.012, 0.05);
             // A spike is slim (a plantain's a finger's width at most, its
             // anthers standing out of it); a raceme's card holds its bells
             // hanging out to their side, so it stands mostly to that side.
@@ -299,9 +341,12 @@ bool herbVertex(int id, int vid, vec3 v, out HerbVertex o) {
             o.side = side;
             o.normal = normalize(cross(side, tgv));
             o.uv = vec2((v.x + shift) * 2.0, v.y);
-            o.size = vec4((1.0 - t0) * s.len, wd, bell, 1.0);
-            vec2 dn = vec2(-side.y, -tgv.y);
-            o.down = dot(dn, dn) > 1e-6 ? normalize(dn) : vec2(1.0, 0.0);
+            // (w: a raceme's bells, the plant's own count.)
+            o.size = vec4((1.0 - t0) * s.len, wd, bell, form == 6 ? nBells : 1.0);
+            // (Leaning to down the stalk as the card lies flat, where the
+            // world's down on it fades: a switch there, interpolated across
+            // the card, swung the bells about.)
+            o.down = normalize(vec2(-side.y, -tgv.y) + vec2(0.0, -0.05));
             return true;
         }
         // A disc facing along the stem (dipping as it nods), or for a head a
@@ -315,6 +360,9 @@ bool herbVertex(int id, int vid, vec3 v, out HerbVertex o) {
         float tilt = (form == 1 ? 0.75 : form == 2 ? 0.45 : form == 5 ? 0.12 : 0.0) * (0.6 + 0.8 * fract(h.w * 5.3 + float(k) * 0.71));
         vec3 n = normalize((tg + o3 * tilt) * (1.0 - nod) - vec3(0.0, nod, 0.0) + vec3(0.0, 1e-3, 0.0));
         vec3 e1, e2;
+        // The eye from the flower, not from the root (a flower near the eye
+        // turned to it from its root's way showed it an edge).
+        toEye = normalize(-tip);
         vec3 centre = tip + tg * (0.12 * bs);
         vec2 q = vec2(v.x * 2.0, v.y * 2.0 - 1.0);
         float scale = 0.5 * bs;
@@ -363,18 +411,43 @@ bool herbVertex(int id, int vid, vec3 v, out HerbVertex o) {
     float rise = r3.z + (hk2 - 0.5) * 0.3;
     vec3 up = vec3(0.0, 1.0, 0.0);
     vec3 baseWind = vec3(0.0);
+    // A pair's card: its first half (v.y to 0.5) one leaf from its tip in to
+    // the stem, its second the other leaf out to its tip.
+    bool pair = habit == 1 && ns > 0;
+    bool second = pair && v.y > 0.5;
+    float vy = pair ? abs(2.0 * v.y - 1.0) : v.y;
     if (habit == 1 && ns > 0) {
         // Up a stem: in opposite pairs, each pair a quarter turn from the
-        // last, smaller toward the top.
+        // last, closer and smaller toward the top, the last ones young
+        // leaves round its tip (not a bare pole over the highest pair).
         int sk = k % ns, i = k / ns;
         int per = (keptLeaves + ns - 1) / ns;
-        float ti = 0.16 + 0.72 * (float(i) + 0.5) / float(max(per, 1));
+        float ti = 0.12 + 0.84 * pow((float(i) + 0.5) / float(max(per, 1)), 0.8);
         HerbStalk st = herbStem(sp, sk, root, h, size, w, shelter, push);
         vec3 tg;
         base = herbPoint(st, ti, tg);
         up = tg;
-        a = float(sk) * HERB_GOLDEN + h.y * 6.2831853 + float(i % 2) * 3.14159265 + float(i / 2) * 1.5707963;
-        L *= 1.15 - 0.5 * ti;
+        a = float(sk) * HERB_GOLDEN + h.y * 6.2831853 + float(i) * 1.5707963 + (hk2 - 0.5) * 0.3 +
+            (second ? 3.14159265 : 0.0);
+        L *= 1.15 - 0.65 * ti * ti;
+    } else if (habit == 0 && k >= nl) {
+        // A rosette's stem leaf (a foxglove's): alternate up the flowering
+        // stem's lower half, stalkless, rising off it and arching out, the
+        // lowest stemLeafSize of a rosette leaf, shrinking to a bract below
+        // the flowers.
+        int q = k - nl;
+        int sk = q % ns, i = q / ns;
+        float fi = (float(i) + 0.5) / float(max(perStem, 1));
+        float ti = 0.08 + 0.42 * fi + 0.06 * (hk2 - 0.5);
+        HerbStalk st = herbStem(sp, sk, root, h, size, w, shelter, push);
+        vec3 tg;
+        base = herbPoint(st, ti, tg);
+        up = tg;
+        a = float(i) * HERB_GOLDEN + h.y * 6.2831853 + float(sk) * 1.3 + (hk - 0.5) * 0.5;
+        widen = 1.0;
+        L = r1.z * size * (0.85 + 0.3 * hk) * r13.y * mix(1.0, 0.3, fi) * pow(farWiden, 0.7);
+        stalk = 0.0;
+        rise = 0.4 + 0.3 * hk2 - 0.15 * fi;
     } else if (habit == 2) {
         // Strewn over the patch.
         a = hk * 6.2831853;
@@ -397,6 +470,8 @@ bool herbVertex(int id, int vid, vec3 v, out HerbVertex o) {
     s.d0 = normalize(up * cos(rise) + outPerp * sin(rise));
     s.bend = (out3 * 1.2 - vec3(0.0, 0.9, 0.0)) * r3.w;
     s.bendFrom = stalk > 0.3 ? 0.8 * stalk : 0.0;
+    s.bow = vec3(0.0);
+    s.bow2 = vec3(0.0);
     s.len = L;
     vec3 x = herbSwing(r11.z, r11.w * shelter, L, 0.06, hk, w, 0.5);
     s.wind = x / max(L, 0.01) + push * 0.6;
@@ -404,8 +479,9 @@ bool herbVertex(int id, int vid, vec3 v, out HerbVertex o) {
     float S = float(max(vpc / 2 - 1, 1));
     float row = v.y * S;
     // (A one-quad card, a far plant's, runs root to tip, its stalk cut per
-    // pixel.)
-    float t = stalk > 0.03 && vpc > 4 ? (row < 1.0 ? row * stalk : stalk + (row - 1.0) / max(S - 1.0, 1.0) * (1.0 - stalk)) : v.y;
+    // pixel; so does a pair's, its rows not falling on its stalks' ends.)
+    float t = stalk > 0.03 && vpc > 4 && !pair ? (row < 1.0 ? row * stalk : stalk + (row - 1.0) / max(S - 1.0, 1.0) * (1.0 - stalk))
+                                               : vy;
     vec3 tg;
     vec3 p = herbPoint(s, t, tg);
     // Across: level, square to the leaf; a fern's frond rolls a little
@@ -429,16 +505,20 @@ bool herbVertex(int id, int vid, vec3 v, out HerbVertex o) {
     float wd = r1.w * L * widen * pow(farWiden, 0.6) * (habit == 2 ? 2.6 : 1.0);
     if (habit == 2) blade *= 2.6;
     float halfW = 0.5 * wd;
-    o.pos = p + sideR * (v.x * wd);
+    // (A pair's second leaf turns half round, its across the first's the
+    // other way: taken the first's way, the card runs on across the stem
+    // untwisted, the second leaf drawn mirrored.)
+    float sx = second ? -v.x : v.x;
+    o.pos = p + sideR * (sx * wd);
     if (habit == 2 && t > stalk) {
         // A carpet's blade part lies on, flat, as long as it is wide.
         o.pos = herbPoint(s, stalk, tg) + normalize(vec3(tg.x, 0.0, tg.z) + 1e-4) * ((t - stalk) / (1.0 - stalk) * blade) +
                 sideR * (v.x * wd);
         nrm = vec3(0.0, 1.0, 0.0);
     }
-    o.side = sideR;
+    o.side = second ? -sideR : sideR;
     o.normal = nrm;
-    o.uv = vec2(v.x * 2.0, t);
+    o.uv = vec2(v.x * 2.0, t);   // (across o.side: the second leaf mirrored)
     o.info.w = stalk;
     o.size = vec4(L, wd, blade, clamp((p.y - root.y) / max(r0.y * size, 0.05), 0.0, 1.0));
     o.stand = vec2(lai, clamp(1.0 - (p.y - root.y) / leafTop, 0.0, 1.0));

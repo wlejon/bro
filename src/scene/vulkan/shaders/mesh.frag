@@ -414,7 +414,8 @@ void main() {
 #elif defined(SCENE_HERB)
     // A herb's card cut to its leaf, stem or bloom (scene_herb_surface.glsl),
     // its cover kept as that share of the samples, each card its own dither.
-    HerbSurface herb = herbSurface(inHerbInfo, inUV, inHerbSize, inColor.x, inColor.zw);
+    HerbSurface herb = herbSurface(inHerbInfo, inUV, inHerbSize, inColor.x, inColor.zw,
+                                   dot(inNormal, -worldPos) < 0.0);
     if (herb.cover < 1.0 / 255.0) discard;
     {
         int mask = forestSampleMask(1.0, herb.cover, (flags & MESH_FOREST_MSAA) != 0u,

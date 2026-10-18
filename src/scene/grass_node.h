@@ -114,7 +114,7 @@ public:
     // few of its largest cards, thinned and widened, to `far`; past that the
     // turf takes its colours.
     static constexpr int kHerbMax = 12;
-    static constexpr int kHerbRecordFloats = 52;
+    static constexpr int kHerbRecordFloats = 56;
     /// `count` species' records end to end (more than kHerbMax are dropped);
     /// the whole plants drawn to `range` m, their far form to `far` m (0
     /// keeps the current; a new range with no far puts it at 4 x the range),

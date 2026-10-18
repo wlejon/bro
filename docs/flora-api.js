@@ -931,7 +931,9 @@ bro.flora.herbPresets = function() {};
 /**
  * A herb species as a plain object: a preset's name, or `{preset, ...fields}`
  * overriding any HerbSpecies field (herbs.h: habit 'rosette' | 'leafy' |
- * 'carpet'; height, spread, leaves, stems; leafShape 'frond' | 'simple' |
+ * 'carpet'; height, spread, leaves, stems; stemLeaves and stemLeafSize (a
+ * rosette's leaves up each flowering stem, the lowest that share of
+ * leafLength: a foxglove's); leafShape 'frond' | 'simple' |
  * 'strap' | 'trifoliate' | 'lobed' | 'ribbed', leafLength, leafWidth,
  * leafTip, teeth, toothDepth, pinnae, lobes, stalk, rise, arch, leafColor,
  * gloss; stemColor, stemDiameter, ribDiameter, hairs (0 bare .. 1 a
@@ -951,8 +953,9 @@ bro.flora.herbPresets = function() {};
 bro.flora.herbPreset = function(spec) {};
 
 /**
- * The table the grass node reads (52 floats a species: the build, then its
- * spacing, its side cover and its blooms' share of it, its leaves' top),
+ * The table the grass node reads (56 floats a species: the build, then its
+ * spacing, its side cover and its blooms' share of it, its leaves' top, its
+ * stem leaves),
  * from names or
  * specs as herbPreset takes them (unknown ones are skipped). createGrass's
  * `herbs.species` takes the names and specs directly; this is for building
