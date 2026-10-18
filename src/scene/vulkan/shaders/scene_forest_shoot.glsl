@@ -728,6 +728,14 @@ bool forestPinnateLeaf(ForestClumpShoots c, int j, out vec3 P, out mat3 R, out v
     vec3 S = cross(c.D, up);
     S = dot(S, S) > 1e-6 ? normalize(S) : perpendicularUnit(c.D);
     vec3 U = cross(S, c.D);
+    // Wood that hangs (a willow's whips) holds its leaves all round it, not
+    // in the plane of two ranks a level frond spreads: each rank turns about
+    // the wood by up to a quarter turn either way as it hangs.
+    float hang = smoothstep(0.3, 0.8, -c.D.y);
+    float turn = (procDraw(hl, 3u) - 0.5) * 3.14159265 * hang;
+    vec3 S0 = S;
+    S = S0 * cos(turn) + U * sin(turn);
+    U = U * cos(turn) - S0 * sin(turn);
     float side = (j & 1) == 0 ? 1.0 : -1.0;
     float fwd = FOREST_PINNATE_FORWARD + (procDraw(hl, 1u) - 0.5) * 0.2;
     F = normalize(S * (side * cos(fwd)) + c.D * sin(fwd) - U * (FOREST_PINNATE_DROOP + (procDraw(hl, 2u) - 0.5) * 0.2));
