@@ -311,6 +311,17 @@ void main() {
             // and softened by the leaves between), as its leaves' mean.
             ForestLeafLayer farL = forestLobeMean(q, -1.0, inMass2.x, inMass2.y, inMass2.z, inMass2.w, upC,
                                                   inMass3.x, grain.zwxy);
+            // A spray node's lobe is its sprays hung a spray's length into
+            // it from its surface, overlapping into a mass nothing shows
+            // through deeper than that: within that depth's disc the far
+            // half's sprays close the near half's gaps. Without it a clumps
+            // tree's pads were a pale veil the ground showed through (a
+            // pine at 15 / 25 m 10.7 / 8.7 levels brighter than its leaves,
+            // now 3.0 / 1.3).
+            bool sprays = (floatBitsToUint(procedural.header[3].w) & 15u) != 0u;
+            float coreR = sprays ? min(1.0 - inMass2.y, 1.0 - 0.5 * inMass2.w) : 0.0;
+            if (coreR > 0.0 && farL.weight > 0.0)
+                farL.clear *= smoothstep(0.85 * coreR, coreR, length(q));
             float wn = 1.0 - nearL.clear, wf = nearL.clear * (1.0 - farL.clear);
             massCover = wn + wf;
             if (massCover < 1.0 / 255.0) discard;
