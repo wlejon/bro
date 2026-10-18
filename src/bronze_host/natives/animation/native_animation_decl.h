@@ -97,6 +97,24 @@ void bro_animation_AnimationPlayer_seek(void* self, double time);
 //   registered at __bro_native.animation.AnimationPlayer_destroy
 void bro_animation_AnimationPlayer_destroy(void* self);
 
+// Registered in native_animation_register.cpp as well; the bodies are in the native_*.cpp files.
+const char* bro_animation_AnimationPlayer_addClip(void* self, const char* name, uint64_t clipBits);
+const char* bro_animation_AnimationPlayer_clipDef(void* self, const char* name);
+const char* bro_animation_AnimationPlayer_play(void* self, const char* clipName, uint64_t optsBits);
+bool bro_animation_AnimationPlayer_playing(void* self);
+const char* bro_animation_AnimationPlayer_currentClip(void* self);
+double bro_animation_AnimationPlayer_currentTime(void* self);
+double bro_animation_AnimationPlayer_speed_get(void* self);
+void bro_animation_AnimationPlayer_speed_set(void* self, double v);
+void bro_animation_AnimationPlayer_setOnFinished(void* self, uint64_t cbBits);
+void bro_animation_AnimationPlayer_setOnEvent(void* self, uint64_t cbBits);
+void* bro_animation_Tween_to(void* self, int32_t targetId, uint64_t propsBits, double duration, uint64_t optsBits, uint64_t onUpdateBits);
+void* bro_animation_Tween_parallel(void* self);
+bool bro_animation_Tween_isRunning(void* self);
+bool bro_animation_Tween_isPaused(void* self);
+bool bro_animation_Tween_isFinished(void* self);
+void bro_animation_Tween_setOnFinished(void* self, uint64_t cbBits);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif

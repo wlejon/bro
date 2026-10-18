@@ -5,6 +5,8 @@
 // program.
 
 #include "native_profiler_decl.h"
+#include "bronze_host/native_table.h"
+#include "bronze_host/host_natives.h"
 
 #include "embed/embed.h"
 
@@ -25,15 +27,14 @@ bool fn(const char* path, void* f, const char* ret, std::initializer_list<const 
     return ev::registerNative(path, f, s, error);
 }
 
-template <typename F>
-void* p(F* f) { return reinterpret_cast<void*>(f); }
-
 }  // namespace
 
 bool registerNatives_profiler(std::string* error) {
-    return fn("__bro_native.profiler.start", p(&bro_profiler_start), "str", {"f64", "str"}, error) &&
-           fn("__bro_native.profiler.running", p(&bro_profiler_running), "bool", {}, error) &&
-           fn("__bro_native.profiler.stop", p(&bro_profiler_stop), "str", {"bool", "bool", "i32"}, error);
+    return fn("__bro_native.profiler.start", BRO_NATIVE_FN(bro_profiler_start), "str", {"f64", "str"}, error) &&
+           fn("__bro_native.profiler.running", BRO_NATIVE_FN(bro_profiler_running), "bool", {}, error) &&
+           fn("__bro_native.profiler.stop", BRO_NATIVE_FN(bro_profiler_stop), "str", {"bool", "bool", "i32"}, error);
 }
+
+bool registerProfilerNatives(std::string* error) { return registerNatives_profiler(error); }
 
 }  // namespace bro::bronze_host

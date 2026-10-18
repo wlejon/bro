@@ -24,6 +24,41 @@ source "$SCRIPT_DIR/lib.sh"
 # synthetic C modules with CMake) to keep its own file.
 check_loader() { bash "$SCRIPT_DIR/run_loader_test.sh"; }
 
+# The native tables (src/bronze_host/native_table.h) against the registry.
+# bro-native-manifest prints the manifest bro's own JavaScript is compiled
+# against from the tables alone, built with no entry points in them; this
+# asks the stock bro-headless what it registers at run time and requires
+# the two to be the same file. A native registered outside a table, or a
+# table that registers differently in the runtime build, fails here.
+check_natives() {
+    local bin built got
+    bin="$(bh_find_bro_headless "$PROJECT_DIR")" || return 77
+    for built in "$(dirname "$bin")/src/bronze_host/generated/natives.json" \
+                 "$(dirname "$bin")/../src/bronze_host/generated/natives.json"; do
+        [[ -f "$built" ]] && break
+    done
+    if [[ ! -f "$built" ]]; then
+        echo "  SKIP  bronze_host natives (no generated/natives.json beside $bin)"
+        return 77
+    fi
+    got="${TMPDIR:-/tmp}/bh_natives.$$.json"
+    if ! "$bin" "$(bh_to_win_path "$SCRIPT_DIR/appdir_bro_core")" \
+            --print-native-manifest "$(bh_to_win_path "$got")" > /dev/null 2>&1; then
+        echo "  FAIL  bronze_host natives ($bin --print-native-manifest)"
+        rm -f "$got"
+        return 1
+    fi
+    if cmp -s "$built" "$got"; then
+        echo "  PASS  bronze_host natives"
+        rm -f "$got"
+        return 0
+    fi
+    echo "  FAIL  bronze_host natives: the registry differs from $built"
+    diff "$built" "$got" | head -20
+    rm -f "$got"
+    return 1
+}
+
 # The scene graph, a fixed frame count: three.js's own arithmetic surviving
 # compilation, timers before rAF, the microtask checkpoint after it. The app
 # needs 5 frames and the spare ones must print nothing — an app still drawing
@@ -365,7 +400,7 @@ check_pixi() {
 # The core host checks. Heavy library mega-compiles (wild three.js, instanced
 # mesh load, pixi.js v8) belong in bronze's oracle test suite; JIT and the
 # host bindings checks below are sufficient in bro.
-CHECKS=(loader scenegraph events fetch dom node file abort observer resize
+CHECKS=(loader natives scenegraph events fetch dom node file abort observer resize
         parser proxy bro_core mesh class codecs input video audio physics ai
         aigame net)
 

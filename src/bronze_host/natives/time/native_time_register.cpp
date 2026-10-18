@@ -9,6 +9,8 @@
 // prototype is published as __bro_native.time.<Class>Proto for js/bro_core.js to chain.
 
 #include "native_time_decl.h"
+#include "bronze_host/native_table.h"
+#include "bronze_host/host_natives.h"
 
 #include "embed/embed.h"
 
@@ -37,20 +39,21 @@ bool setter(const char* path, void* f, const char* type, std::string* error) {
     return ev::registerNative(path, f, sig("void", {type}, ev::NativeKind::Setter), error);
 }
 
-template <typename F>
-void* p(F* f) { return reinterpret_cast<void*>(f); }
-
 }  // namespace
 
 bool registerNatives_time(std::string* error) {
     const bool ok =
-        getter("__bro_native.time.scale", p(&bro_time_scale_get), "f64", error) &&
-        setter("__bro_native.time.scale", p(&bro_time_scale_set), "f64", error) &&
-        getter("__bro_native.time.paused", p(&bro_time_paused_get), "bool", error) &&
-        setter("__bro_native.time.paused", p(&bro_time_paused_set), "bool", error) &&
-        getter("__bro_native.time.now", p(&bro_time_now_get), "f64", error);
+        getter("__bro_native.time.scale", BRO_NATIVE_FN(bro_time_scale_get), "f64", error) &&
+        setter("__bro_native.time.scale", BRO_NATIVE_FN(bro_time_scale_set), "f64", error) &&
+        getter("__bro_native.time.paused", BRO_NATIVE_FN(bro_time_paused_get), "bool", error) &&
+        setter("__bro_native.time.paused", BRO_NATIVE_FN(bro_time_paused_set), "bool", error) &&
+        getter("__bro_native.time.now", BRO_NATIVE_FN(bro_time_now_get), "f64", error);
     if (!ok) return false;
     return true;
+}
+
+bool registerTimeNatives(std::string* error) {
+    return registerNatives_time(error);
 }
 
 }  // namespace bro::bronze_host

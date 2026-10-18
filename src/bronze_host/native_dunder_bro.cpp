@@ -282,10 +282,5 @@ void bro_dunder_bro_inspector_toggle(void) { inspToggle(); }
 
 namespace bro::bronze_host {
 
-bool registerNatives_dunder_bro(std::string* error);
-
-bool registerDunderBroNatives(std::string* error) {
-    return registerNatives_dunder_bro(error);
-}
 
 }  // namespace bro::bronze_host

@@ -81,6 +81,9 @@ void bro_gizmo_attach(uint64_t handlers_position, uint64_t handlers_orientation,
 //   registered at __bro_native.gizmo.detach
 void bro_gizmo_detach(void);
 
+// Registered in native_gizmo_register.cpp as well; the bodies are in the native_*.cpp files.
+const char* bro_gizmo_hovered_get(void);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif

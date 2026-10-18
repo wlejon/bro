@@ -9,6 +9,8 @@
 // prototype is published as __bro_native.lighting.<Class>Proto for js/lighting.js to chain.
 
 #include "native_lighting_decl.h"
+#include "bronze_host/native_table.h"
+#include "bronze_host/host_natives.h"
 
 #include "embed/embed.h"
 
@@ -58,58 +60,55 @@ void publishPrototype(const char* ns, const char* className, const char* protoNa
     ev::setProperty(nsSlot.get(), protoName, protoSlot.get());
 }
 
-template <typename F>
-void* p(F* f) { return reinterpret_cast<void*>(f); }
-
 }  // namespace
 
 bool registerNatives_lighting(std::string* error) {
     const bool ok =
-        ctor("__bro_native.lighting.LightNode", p(&bro_lighting_LightNode_ctor), &bro_lighting_LightNode_dtor, bronze::runtime::Finalize::InSweep, {}, error) &&
-        ctor("__bro_native.lighting.ShapeNode", p(&bro_lighting_ShapeNode_ctor), &bro_lighting_ShapeNode_dtor, bronze::runtime::Finalize::InSweep, {}, error) &&
-        ctor("__bro_native.lighting.SpriteNode", p(&bro_lighting_SpriteNode_ctor), &bro_lighting_SpriteNode_dtor, bronze::runtime::Finalize::InSweep, {}, error) &&
-        ctor("__bro_native.lighting.HtmlNode", p(&bro_lighting_HtmlNode_ctor), &bro_lighting_HtmlNode_dtor, bronze::runtime::Finalize::InSweep, {}, error) &&
-        ctor("__bro_native.lighting.ParticleNode", p(&bro_lighting_ParticleNode_ctor), &bro_lighting_ParticleNode_dtor, bronze::runtime::Finalize::InSweep, {}, error) &&
-        ctor("__bro_native.lighting.Particles3DNode", p(&bro_lighting_Particles3DNode_ctor), &bro_lighting_Particles3DNode_dtor, bronze::runtime::Finalize::InSweep, {}, error) &&
-        ctor("__bro_native.lighting.GaussianSplatNode", p(&bro_lighting_GaussianSplatNode_ctor), &bro_lighting_GaussianSplatNode_dtor, bronze::runtime::Finalize::InSweep, {}, error) &&
-        ctor("__bro_native.lighting.DecalNode", p(&bro_lighting_DecalNode_ctor), &bro_lighting_DecalNode_dtor, bronze::runtime::Finalize::InSweep, {}, error) &&
-        ctor("__bro_native.lighting.ReflectionProbeNode", p(&bro_lighting_ReflectionProbeNode_ctor), &bro_lighting_ReflectionProbeNode_dtor, bronze::runtime::Finalize::InSweep, {}, error) &&
-        fn("__bro_native.lighting.LightNode_color_get", p(&bro_lighting_LightNode_color_get), "f64[]", {"__bro_native.lighting.LightNode"}, error) &&
-        fn("__bro_native.lighting.LightNode_color_set", p(&bro_lighting_LightNode_color_set), "void", {"__bro_native.lighting.LightNode", "f64[]"}, error) &&
-        fn("__bro_native.lighting.LightNode_intensity_get", p(&bro_lighting_LightNode_intensity_get), "f64", {"__bro_native.lighting.LightNode"}, error) &&
-        fn("__bro_native.lighting.LightNode_intensity_set", p(&bro_lighting_LightNode_intensity_set), "void", {"__bro_native.lighting.LightNode", "f64"}, error) &&
-        fn("__bro_native.lighting.LightNode_range_get", p(&bro_lighting_LightNode_range_get), "f64", {"__bro_native.lighting.LightNode"}, error) &&
-        fn("__bro_native.lighting.LightNode_range_set", p(&bro_lighting_LightNode_range_set), "void", {"__bro_native.lighting.LightNode", "f64"}, error) &&
-        fn("__bro_native.lighting.LightNode_innerCone_get", p(&bro_lighting_LightNode_innerCone_get), "f64", {"__bro_native.lighting.LightNode"}, error) &&
-        fn("__bro_native.lighting.LightNode_innerCone_set", p(&bro_lighting_LightNode_innerCone_set), "void", {"__bro_native.lighting.LightNode", "f64"}, error) &&
-        fn("__bro_native.lighting.LightNode_outerCone_get", p(&bro_lighting_LightNode_outerCone_get), "f64", {"__bro_native.lighting.LightNode"}, error) &&
-        fn("__bro_native.lighting.LightNode_outerCone_set", p(&bro_lighting_LightNode_outerCone_set), "void", {"__bro_native.lighting.LightNode", "f64"}, error) &&
-        fn("__bro_native.lighting.LightNode_castShadow_get", p(&bro_lighting_LightNode_castShadow_get), "bool", {"__bro_native.lighting.LightNode"}, error) &&
-        fn("__bro_native.lighting.LightNode_castShadow_set", p(&bro_lighting_LightNode_castShadow_set), "void", {"__bro_native.lighting.LightNode", "bool"}, error) &&
-        fn("__bro_native.lighting.ShapeNode_shapeType_get", p(&bro_lighting_ShapeNode_shapeType_get), "str", {"__bro_native.lighting.ShapeNode"}, error) &&
-        fn("__bro_native.lighting.ShapeNode_shapeType_set", p(&bro_lighting_ShapeNode_shapeType_set), "void", {"__bro_native.lighting.ShapeNode", "str"}, error) &&
-        fn("__bro_native.lighting.ShapeNode_color_get", p(&bro_lighting_ShapeNode_color_get), "f64[]", {"__bro_native.lighting.ShapeNode"}, error) &&
-        fn("__bro_native.lighting.ShapeNode_color_set", p(&bro_lighting_ShapeNode_color_set), "void", {"__bro_native.lighting.ShapeNode", "f64[]"}, error) &&
-        fn("__bro_native.lighting.ShapeNode_size_get", p(&bro_lighting_ShapeNode_size_get), "f64[]", {"__bro_native.lighting.ShapeNode"}, error) &&
-        fn("__bro_native.lighting.ShapeNode_size_set", p(&bro_lighting_ShapeNode_size_set), "void", {"__bro_native.lighting.ShapeNode", "f64[]"}, error) &&
-        fn("__bro_native.lighting.SpriteNode_texture_get", p(&bro_lighting_SpriteNode_texture_get), "str", {"__bro_native.lighting.SpriteNode"}, error) &&
-        fn("__bro_native.lighting.SpriteNode_texture_set", p(&bro_lighting_SpriteNode_texture_set), "void", {"__bro_native.lighting.SpriteNode", "str"}, error) &&
-        fn("__bro_native.lighting.SpriteNode_size_get", p(&bro_lighting_SpriteNode_size_get), "f64[]", {"__bro_native.lighting.SpriteNode"}, error) &&
-        fn("__bro_native.lighting.SpriteNode_size_set", p(&bro_lighting_SpriteNode_size_set), "void", {"__bro_native.lighting.SpriteNode", "f64[]"}, error) &&
-        fn("__bro_native.lighting.SpriteNode_play", p(&bro_lighting_SpriteNode_play), "void", {"__bro_native.lighting.SpriteNode", "str"}, error) &&
-        fn("__bro_native.lighting.SpriteNode_stop", p(&bro_lighting_SpriteNode_stop), "void", {"__bro_native.lighting.SpriteNode"}, error) &&
-        fn("__bro_native.lighting.HtmlNode_setHtml", p(&bro_lighting_HtmlNode_setHtml), "void", {"__bro_native.lighting.HtmlNode", "str"}, error) &&
-        fn("__bro_native.lighting.HtmlNode_markHtmlDirty", p(&bro_lighting_HtmlNode_markHtmlDirty), "void", {"__bro_native.lighting.HtmlNode"}, error) &&
-        fn("__bro_native.lighting.ParticleNode_burst", p(&bro_lighting_ParticleNode_burst), "void", {"__bro_native.lighting.ParticleNode", "i32"}, error) &&
-        fn("__bro_native.lighting.ParticleNode_clear", p(&bro_lighting_ParticleNode_clear), "void", {"__bro_native.lighting.ParticleNode"}, error) &&
-        fn("__bro_native.lighting.Particles3DNode_burst", p(&bro_lighting_Particles3DNode_burst), "void", {"__bro_native.lighting.Particles3DNode", "i32"}, error) &&
-        fn("__bro_native.lighting.Particles3DNode_clear", p(&bro_lighting_Particles3DNode_clear), "void", {"__bro_native.lighting.Particles3DNode"}, error) &&
-        fn("__bro_native.lighting.GaussianSplatNode_savePly", p(&bro_lighting_GaussianSplatNode_savePly), "void", {"__bro_native.lighting.GaussianSplatNode", "str"}, error) &&
-        fn("__bro_native.lighting.DecalNode_texture_get", p(&bro_lighting_DecalNode_texture_get), "str", {"__bro_native.lighting.DecalNode"}, error) &&
-        fn("__bro_native.lighting.DecalNode_texture_set", p(&bro_lighting_DecalNode_texture_set), "void", {"__bro_native.lighting.DecalNode", "str"}, error) &&
-        fn("__bro_native.lighting.DecalNode_size_get", p(&bro_lighting_DecalNode_size_get), "f64[]", {"__bro_native.lighting.DecalNode"}, error) &&
-        fn("__bro_native.lighting.DecalNode_size_set", p(&bro_lighting_DecalNode_size_set), "void", {"__bro_native.lighting.DecalNode", "f64[]"}, error) &&
-        fn("__bro_native.lighting.ReflectionProbeNode_probeCapture", p(&bro_lighting_ReflectionProbeNode_probeCapture), "void", {"__bro_native.lighting.ReflectionProbeNode"}, error);
+        ctor("__bro_native.lighting.LightNode", BRO_NATIVE_FN(bro_lighting_LightNode_ctor), BRO_NATIVE_DTOR(bro_lighting_LightNode_dtor), bronze::runtime::Finalize::InSweep, {}, error) &&
+        ctor("__bro_native.lighting.ShapeNode", BRO_NATIVE_FN(bro_lighting_ShapeNode_ctor), BRO_NATIVE_DTOR(bro_lighting_ShapeNode_dtor), bronze::runtime::Finalize::InSweep, {}, error) &&
+        ctor("__bro_native.lighting.SpriteNode", BRO_NATIVE_FN(bro_lighting_SpriteNode_ctor), BRO_NATIVE_DTOR(bro_lighting_SpriteNode_dtor), bronze::runtime::Finalize::InSweep, {}, error) &&
+        ctor("__bro_native.lighting.HtmlNode", BRO_NATIVE_FN(bro_lighting_HtmlNode_ctor), BRO_NATIVE_DTOR(bro_lighting_HtmlNode_dtor), bronze::runtime::Finalize::InSweep, {}, error) &&
+        ctor("__bro_native.lighting.ParticleNode", BRO_NATIVE_FN(bro_lighting_ParticleNode_ctor), BRO_NATIVE_DTOR(bro_lighting_ParticleNode_dtor), bronze::runtime::Finalize::InSweep, {}, error) &&
+        ctor("__bro_native.lighting.Particles3DNode", BRO_NATIVE_FN(bro_lighting_Particles3DNode_ctor), BRO_NATIVE_DTOR(bro_lighting_Particles3DNode_dtor), bronze::runtime::Finalize::InSweep, {}, error) &&
+        ctor("__bro_native.lighting.GaussianSplatNode", BRO_NATIVE_FN(bro_lighting_GaussianSplatNode_ctor), BRO_NATIVE_DTOR(bro_lighting_GaussianSplatNode_dtor), bronze::runtime::Finalize::InSweep, {}, error) &&
+        ctor("__bro_native.lighting.DecalNode", BRO_NATIVE_FN(bro_lighting_DecalNode_ctor), BRO_NATIVE_DTOR(bro_lighting_DecalNode_dtor), bronze::runtime::Finalize::InSweep, {}, error) &&
+        ctor("__bro_native.lighting.ReflectionProbeNode", BRO_NATIVE_FN(bro_lighting_ReflectionProbeNode_ctor), BRO_NATIVE_DTOR(bro_lighting_ReflectionProbeNode_dtor), bronze::runtime::Finalize::InSweep, {}, error) &&
+        fn("__bro_native.lighting.LightNode_color_get", BRO_NATIVE_FN(bro_lighting_LightNode_color_get), "f64[]", {"__bro_native.lighting.LightNode"}, error) &&
+        fn("__bro_native.lighting.LightNode_color_set", BRO_NATIVE_FN(bro_lighting_LightNode_color_set), "void", {"__bro_native.lighting.LightNode", "f64[]"}, error) &&
+        fn("__bro_native.lighting.LightNode_intensity_get", BRO_NATIVE_FN(bro_lighting_LightNode_intensity_get), "f64", {"__bro_native.lighting.LightNode"}, error) &&
+        fn("__bro_native.lighting.LightNode_intensity_set", BRO_NATIVE_FN(bro_lighting_LightNode_intensity_set), "void", {"__bro_native.lighting.LightNode", "f64"}, error) &&
+        fn("__bro_native.lighting.LightNode_range_get", BRO_NATIVE_FN(bro_lighting_LightNode_range_get), "f64", {"__bro_native.lighting.LightNode"}, error) &&
+        fn("__bro_native.lighting.LightNode_range_set", BRO_NATIVE_FN(bro_lighting_LightNode_range_set), "void", {"__bro_native.lighting.LightNode", "f64"}, error) &&
+        fn("__bro_native.lighting.LightNode_innerCone_get", BRO_NATIVE_FN(bro_lighting_LightNode_innerCone_get), "f64", {"__bro_native.lighting.LightNode"}, error) &&
+        fn("__bro_native.lighting.LightNode_innerCone_set", BRO_NATIVE_FN(bro_lighting_LightNode_innerCone_set), "void", {"__bro_native.lighting.LightNode", "f64"}, error) &&
+        fn("__bro_native.lighting.LightNode_outerCone_get", BRO_NATIVE_FN(bro_lighting_LightNode_outerCone_get), "f64", {"__bro_native.lighting.LightNode"}, error) &&
+        fn("__bro_native.lighting.LightNode_outerCone_set", BRO_NATIVE_FN(bro_lighting_LightNode_outerCone_set), "void", {"__bro_native.lighting.LightNode", "f64"}, error) &&
+        fn("__bro_native.lighting.LightNode_castShadow_get", BRO_NATIVE_FN(bro_lighting_LightNode_castShadow_get), "bool", {"__bro_native.lighting.LightNode"}, error) &&
+        fn("__bro_native.lighting.LightNode_castShadow_set", BRO_NATIVE_FN(bro_lighting_LightNode_castShadow_set), "void", {"__bro_native.lighting.LightNode", "bool"}, error) &&
+        fn("__bro_native.lighting.ShapeNode_shapeType_get", BRO_NATIVE_FN(bro_lighting_ShapeNode_shapeType_get), "str", {"__bro_native.lighting.ShapeNode"}, error) &&
+        fn("__bro_native.lighting.ShapeNode_shapeType_set", BRO_NATIVE_FN(bro_lighting_ShapeNode_shapeType_set), "void", {"__bro_native.lighting.ShapeNode", "str"}, error) &&
+        fn("__bro_native.lighting.ShapeNode_color_get", BRO_NATIVE_FN(bro_lighting_ShapeNode_color_get), "f64[]", {"__bro_native.lighting.ShapeNode"}, error) &&
+        fn("__bro_native.lighting.ShapeNode_color_set", BRO_NATIVE_FN(bro_lighting_ShapeNode_color_set), "void", {"__bro_native.lighting.ShapeNode", "f64[]"}, error) &&
+        fn("__bro_native.lighting.ShapeNode_size_get", BRO_NATIVE_FN(bro_lighting_ShapeNode_size_get), "f64[]", {"__bro_native.lighting.ShapeNode"}, error) &&
+        fn("__bro_native.lighting.ShapeNode_size_set", BRO_NATIVE_FN(bro_lighting_ShapeNode_size_set), "void", {"__bro_native.lighting.ShapeNode", "f64[]"}, error) &&
+        fn("__bro_native.lighting.SpriteNode_texture_get", BRO_NATIVE_FN(bro_lighting_SpriteNode_texture_get), "str", {"__bro_native.lighting.SpriteNode"}, error) &&
+        fn("__bro_native.lighting.SpriteNode_texture_set", BRO_NATIVE_FN(bro_lighting_SpriteNode_texture_set), "void", {"__bro_native.lighting.SpriteNode", "str"}, error) &&
+        fn("__bro_native.lighting.SpriteNode_size_get", BRO_NATIVE_FN(bro_lighting_SpriteNode_size_get), "f64[]", {"__bro_native.lighting.SpriteNode"}, error) &&
+        fn("__bro_native.lighting.SpriteNode_size_set", BRO_NATIVE_FN(bro_lighting_SpriteNode_size_set), "void", {"__bro_native.lighting.SpriteNode", "f64[]"}, error) &&
+        fn("__bro_native.lighting.SpriteNode_play", BRO_NATIVE_FN(bro_lighting_SpriteNode_play), "void", {"__bro_native.lighting.SpriteNode", "str"}, error) &&
+        fn("__bro_native.lighting.SpriteNode_stop", BRO_NATIVE_FN(bro_lighting_SpriteNode_stop), "void", {"__bro_native.lighting.SpriteNode"}, error) &&
+        fn("__bro_native.lighting.HtmlNode_setHtml", BRO_NATIVE_FN(bro_lighting_HtmlNode_setHtml), "void", {"__bro_native.lighting.HtmlNode", "str"}, error) &&
+        fn("__bro_native.lighting.HtmlNode_markHtmlDirty", BRO_NATIVE_FN(bro_lighting_HtmlNode_markHtmlDirty), "void", {"__bro_native.lighting.HtmlNode"}, error) &&
+        fn("__bro_native.lighting.ParticleNode_burst", BRO_NATIVE_FN(bro_lighting_ParticleNode_burst), "void", {"__bro_native.lighting.ParticleNode", "i32"}, error) &&
+        fn("__bro_native.lighting.ParticleNode_clear", BRO_NATIVE_FN(bro_lighting_ParticleNode_clear), "void", {"__bro_native.lighting.ParticleNode"}, error) &&
+        fn("__bro_native.lighting.Particles3DNode_burst", BRO_NATIVE_FN(bro_lighting_Particles3DNode_burst), "void", {"__bro_native.lighting.Particles3DNode", "i32"}, error) &&
+        fn("__bro_native.lighting.Particles3DNode_clear", BRO_NATIVE_FN(bro_lighting_Particles3DNode_clear), "void", {"__bro_native.lighting.Particles3DNode"}, error) &&
+        fn("__bro_native.lighting.GaussianSplatNode_savePly", BRO_NATIVE_FN(bro_lighting_GaussianSplatNode_savePly), "void", {"__bro_native.lighting.GaussianSplatNode", "str"}, error) &&
+        fn("__bro_native.lighting.DecalNode_texture_get", BRO_NATIVE_FN(bro_lighting_DecalNode_texture_get), "str", {"__bro_native.lighting.DecalNode"}, error) &&
+        fn("__bro_native.lighting.DecalNode_texture_set", BRO_NATIVE_FN(bro_lighting_DecalNode_texture_set), "void", {"__bro_native.lighting.DecalNode", "str"}, error) &&
+        fn("__bro_native.lighting.DecalNode_size_get", BRO_NATIVE_FN(bro_lighting_DecalNode_size_get), "f64[]", {"__bro_native.lighting.DecalNode"}, error) &&
+        fn("__bro_native.lighting.DecalNode_size_set", BRO_NATIVE_FN(bro_lighting_DecalNode_size_set), "void", {"__bro_native.lighting.DecalNode", "f64[]"}, error) &&
+        fn("__bro_native.lighting.ReflectionProbeNode_probeCapture", BRO_NATIVE_FN(bro_lighting_ReflectionProbeNode_probeCapture), "void", {"__bro_native.lighting.ReflectionProbeNode"}, error);
     if (!ok) return false;
     publishPrototype("lighting", "__bro_native.lighting.LightNode", "LightNodeProto");
     publishPrototype("lighting", "__bro_native.lighting.ShapeNode", "ShapeNodeProto");
@@ -121,6 +120,10 @@ bool registerNatives_lighting(std::string* error) {
     publishPrototype("lighting", "__bro_native.lighting.DecalNode", "DecalNodeProto");
     publishPrototype("lighting", "__bro_native.lighting.ReflectionProbeNode", "ReflectionProbeNodeProto");
     return true;
+}
+
+bool registerLightingNatives(std::string* error) {
+    return registerNatives_lighting(error);
 }
 
 }  // namespace bro::bronze_host

@@ -114,6 +114,7 @@ set(BRO_BRONZE_HOST_SOURCES
     host_app.cpp
     host_notification.cpp
     host_bro_root.cpp
+    native_tables.cpp
     host_sibling_apis.cpp
     native_time.cpp
     native_paths.cpp
@@ -494,12 +495,11 @@ bro_apply_feature_defs(bro_bronze_host)
 # (`bronze build --native-manifest`): the list of `__bro_native.*` entry
 # points and signatures that turns its `__bro_native.time.scale` into a
 # direct call. That list is printed by bro-native-manifest, a tool that
-# links bro_bronze_host and calls the same registerBroNatives bro calls at
-# run time (native_manifest_tool.cpp) — so the manifest is an output of the
-# host, never a file a person keeps in step with the C++ by hand. A library
-# that both contained bro_core.o and was linked by the tool that produces
-# bro_core.o's input would be a cycle; the split is what breaks it. The tool
-# links js_entry_stubs.cpp in place of the objects (it runs no entry).
+# links the native tables and calls the same registerBroNativeTables bro
+# calls at run time (native_manifest_tool.cpp, native_table.h) — so the
+# manifest is an output of the host, never a file a person keeps in step
+# with the C++ by hand. The objects stay out of bro_bronze_host so that
+# library never waits on the manifest.
 #
 # THE HOST-GLOBALS MANIFEST is js/module.globals, a checked-in list of the
 # bare identifiers these modules are allowed to read (globalThis, console,
@@ -521,19 +521,22 @@ else()
     set(BRO_JS_MODULE_GLOBALS "${CMAKE_CURRENT_SOURCE_DIR}/js/module.globals")
     set(BRO_COMPILED_JS_OBJECTS "")
 
-    # The manifest tool. It links the engine and the binding layer (the
-    # natives reach the engine only when called, and the tool calls none),
-    # so its link line is the executables' own.
-    add_executable(bro-native-manifest native_manifest_tool.cpp js_entry_stubs.cpp)
-    target_link_libraries(bro-native-manifest PRIVATE bro_bronze_host)
-    if(WIN32)
-        target_link_libraries(bro-native-manifest PRIVATE ws2_32)
-    endif()
-    target_include_directories(bro-native-manifest PRIVATE ${bro_SOURCE_DIR}/src)
+    # The manifest tool. It links the native tables alone — the bro_bronze_host
+    # sources that register natives (natives/*/native_*_register.cpp and
+    # native_tables.cpp), compiled again with BRO_NATIVE_TABLE_ONLY so they
+    # name no entry point (native_table.h) — and bronze's registry. So it
+    # relinks only when a table changes: an engine or native-body change does
+    # not put it on the way to libbro, whose modules wait on its output.
+    set(BRO_NATIVE_TABLE_SOURCES ${BRO_BRONZE_HOST_SOURCES})
+    list(FILTER BRO_NATIVE_TABLE_SOURCES INCLUDE REGEX "^(native_tables\\.cpp|natives/.*_register\\.cpp)$")
+    add_executable(bro-native-manifest native_manifest_tool.cpp ${BRO_NATIVE_TABLE_SOURCES})
+    target_compile_definitions(bro-native-manifest PRIVATE BRO_NATIVE_TABLE_ONLY=1)
+    target_link_libraries(bro-native-manifest PRIVATE bronze::embed)
+    target_include_directories(bro-native-manifest PRIVATE
+        $<TARGET_PROPERTY:bro_bronze_host,INCLUDE_DIRECTORIES>)
+    bro_apply_feature_defs(bro-native-manifest)
     bro_bronze_stage_runtime(bro-native-manifest)
-    # It relinks after every engine change, ahead of libbro (whose modules
-    # wait on its output), so its link is on every C++ rebuild's critical
-    # path: a build tool needs no PDB and no reference/COMDAT pruning.
+    # A build tool needs no PDB and no reference/COMDAT pruning.
     if(MSVC)
         target_link_options(bro-native-manifest PRIVATE
             $<$<NOT:$<CONFIG:Debug>>:/DEBUG:NONE /OPT:NOREF /OPT:NOICF>)

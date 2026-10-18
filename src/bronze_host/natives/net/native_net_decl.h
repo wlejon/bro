@@ -87,6 +87,16 @@ const char* bro_net_getPeerStats(int32_t peerId);
 //   registered at __bro_native.net.setPeerSimulatedLoss
 void bro_net_setPeerSimulatedLoss(int32_t peerId, double chance, double latencyMin, double latencyMax);
 
+// Registered in native_net_register.cpp as well; the bodies are in the native_*.cpp files.
+void bro_net_setDispatcher(uint64_t fnBits);
+bool bro_net_isHosting();
+bool bro_net_init();
+bool bro_net_sendCloneRaw(int32_t peerId, uint64_t valBits, uint64_t optsBits);
+void bro_net_broadcastCloneRaw(uint64_t valBits, uint64_t optsBits);
+bool bro_net_sendRawOpts(int32_t peerId, const uint8_t* data, uint32_t data_len, uint64_t optsBits);
+void bro_net_broadcastRawOpts(const uint8_t* data, uint32_t data_len, uint64_t optsBits);
+bool bro_net_sendUnframed(int32_t peerId, const uint8_t* data, uint32_t data_len, uint64_t optsBits);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif

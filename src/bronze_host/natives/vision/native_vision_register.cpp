@@ -5,6 +5,8 @@
 // installWorkerBroRoot, on the thread that runs the program.
 
 #include "native_vision_decl.h"
+#include "bronze_host/native_table.h"
+#include "bronze_host/host_natives.h"
 
 #include "embed/embed.h"
 
@@ -29,13 +31,14 @@ bool fn(const char* path, void* f, const char* ret, std::initializer_list<const 
     return ev::registerNative(path, f, sig(ret, params, ev::NativeKind::Function), error);
 }
 
-template <typename F>
-void* p(F* f) { return reinterpret_cast<void*>(f); }
-
 }  // namespace
 
 bool registerNatives_vision(std::string* error) {
-    return fn("__bro_native.vision.dotRows", p(&bro_vision_dotRows), "f32[]", {"f32[]", "f32[]", "i32"}, error);
+    return fn("__bro_native.vision.dotRows", BRO_NATIVE_FN(bro_vision_dotRows), "f32[]", {"f32[]", "f32[]", "i32"}, error);
+}
+
+bool registerVisionNatives(std::string* error) {
+    return registerNatives_vision(error);
 }
 
 }  // namespace bro::bronze_host

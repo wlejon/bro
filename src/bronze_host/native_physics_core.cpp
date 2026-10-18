@@ -1,6 +1,7 @@
 // native_physics_core.cpp — Physics core world, rigid body, and simulation natives.
 
 #include "bronze_host/native_physics_internal.h"
+#include "natives/physics/native_physics_decl.h"
 #include <iomanip>
 #include <sstream>
 
@@ -21,7 +22,6 @@ void popActiveWorld() {
     if (!tl_activeWorlds.empty()) tl_activeWorlds.pop_back();
 }
 
-bool registerNatives_physics(std::string* error);
 
 // Physics.setMotionType is hand-written in js/physics.js: the public member
 // takes 'static' | 'dynamic' | 'kinematic' or a boolean, the native takes the
@@ -39,15 +39,6 @@ extern "C" void bro_physics_moveKinematicRot(int32_t tag, double x, double y, do
                                              double qx, double qy, double qz, double qw,
                                              double dt);
 
-bool registerPhysicsNatives(std::string* error) {
-    if (!registerNatives_physics(error)) return false;
-    return natives::fn("__bro_native.physics.setMotionType", (void*)&bro_physics_setMotionType,
-                       "void", {"i32", "bool"}, error) &&
-           natives::fn("__bro_native.physics.moveKinematic", (void*)&bro_physics_moveKinematic,
-                       "void", {"i32", "f64", "f64", "f64", "f64"}, error) &&
-           natives::fn("__bro_native.physics.moveKinematicRot", (void*)&bro_physics_moveKinematicRot,
-                       "void", {"i32", "f64", "f64", "f64", "f64", "f64", "f64", "f64", "f64"}, error);
-}
 
 static thread_local std::vector<float> tl_allTransformsBuf;
 

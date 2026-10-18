@@ -69,11 +69,6 @@ void bro_server_stop(void) {
 
 namespace bro::bronze_host {
 
-bool registerNatives_server(std::string* error);
-
-bool registerServerNatives(std::string* error) {
-    return registerNatives_server(error);
-}
 
 void setWorkerServerControl(const WorkerServerControl* control) {
     t_workerControl = control;

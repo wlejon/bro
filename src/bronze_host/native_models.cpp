@@ -232,10 +232,5 @@ void bro_models_fetchCancel(int32_t id) {
 
 namespace bro::bronze_host {
 
-bool registerNatives_models(std::string* error);
-
-bool registerModelsNatives(std::string* error) {
-    return registerNatives_models(error);
-}
 
 }  // namespace bro::bronze_host

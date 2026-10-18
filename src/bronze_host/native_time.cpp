@@ -36,10 +36,5 @@ double bro_time_now_get(void) {
 
 namespace bro::bronze_host {
 
-bool registerNatives_time(std::string* error);
-
-bool registerTimeNatives(std::string* error) {
-    return registerNatives_time(error);
-}
 
 }  // namespace bro::bronze_host

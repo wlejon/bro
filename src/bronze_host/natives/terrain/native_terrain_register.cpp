@@ -9,6 +9,8 @@
 // prototype is published as __bro_native.terrain.<Class>Proto for js/terrain.js to chain.
 
 #include "native_terrain_decl.h"
+#include "bronze_host/native_table.h"
+#include "bronze_host/host_natives.h"
 
 #if BRO_WITH_3D
 
@@ -60,44 +62,45 @@ void publishPrototype(const char* ns, const char* className, const char* protoNa
     ev::setProperty(nsSlot.get(), protoName, protoSlot.get());
 }
 
-template <typename F>
-void* p(F* f) { return reinterpret_cast<void*>(f); }
-
 }  // namespace
 
 bool registerNatives_terrain(std::string* error) {
     const bool ok =
-        ctor("__bro_native.terrain.Terrain", p(&bro_terrain_Terrain_ctor), &bro_terrain_Terrain_dtor, bronze::runtime::Finalize::InSweep, {}, error) &&
-        fn("__bro_native.terrain.Terrain_chunkCount_get", p(&bro_terrain_Terrain_chunkCount_get), "i32", {"__bro_native.terrain.Terrain"}, error) &&
-        fn("__bro_native.terrain.Terrain_triangleCount_get", p(&bro_terrain_Terrain_triangleCount_get), "i32", {"__bro_native.terrain.Terrain"}, error) &&
-        fn("__bro_native.terrain.Terrain_vertexCount_get", p(&bro_terrain_Terrain_vertexCount_get), "i32", {"__bro_native.terrain.Terrain"}, error) &&
-        fn("__bro_native.terrain.Terrain_farDistance_get", p(&bro_terrain_Terrain_farDistance_get), "f64", {"__bro_native.terrain.Terrain"}, error) &&
-        fn("__bro_native.terrain.Terrain_planetRadius_get", p(&bro_terrain_Terrain_planetRadius_get), "f64", {"__bro_native.terrain.Terrain"}, error) &&
-        fn("__bro_native.terrain.Terrain_origin_get", p(&bro_terrain_Terrain_origin_get), "f64[]", {"__bro_native.terrain.Terrain"}, error) &&
-        fn("__bro_native.terrain.Terrain_update", p(&bro_terrain_Terrain_update), "i32", {"__bro_native.terrain.Terrain", "f64", "f64", "f64"}, error) &&
-        fn("__bro_native.terrain.Terrain_raycast", p(&bro_terrain_Terrain_raycast), "bool", {"__bro_native.terrain.Terrain", "f64[]", "f64[]", "bool", "f64"}, error) &&
-        fn("__bro_native.terrain.Terrain_raycast_hit", p(&bro_terrain_Terrain_raycast_hit), "bool", {}, error) &&
-        fn("__bro_native.terrain.Terrain_raycast_distance", p(&bro_terrain_Terrain_raycast_distance), "f64", {}, error) &&
-        fn("__bro_native.terrain.Terrain_raycast_position", p(&bro_terrain_Terrain_raycast_position), "f64[]", {}, error) &&
-        fn("__bro_native.terrain.Terrain_raycast_normal", p(&bro_terrain_Terrain_raycast_normal), "f64[]", {}, error) &&
-        fn("__bro_native.terrain.Terrain_raycast_chunk", p(&bro_terrain_Terrain_raycast_chunk), "i32[]", {}, error) &&
-        fn("__bro_native.terrain.Terrain_raycast_voxel", p(&bro_terrain_Terrain_raycast_voxel), "i32[]", {}, error) &&
-        fn("__bro_native.terrain.Terrain_raycast_material", p(&bro_terrain_Terrain_raycast_material), "i32", {}, error) &&
-        fn("__bro_native.terrain.Terrain_setVoxel", p(&bro_terrain_Terrain_setVoxel), "bool", {"__bro_native.terrain.Terrain", "f64", "f64", "f64", "i32"}, error) &&
-        fn("__bro_native.terrain.Terrain_getVoxel", p(&bro_terrain_Terrain_getVoxel), "i32", {"__bro_native.terrain.Terrain", "f64", "f64", "f64"}, error) &&
-        fn("__bro_native.terrain.Terrain_rebuild", p(&bro_terrain_Terrain_rebuild), "void", {"__bro_native.terrain.Terrain"}, error) &&
-        fn("__bro_native.terrain.Terrain_configure", p(&bro_terrain_Terrain_configure), "void", {"__bro_native.terrain.Terrain", "i32[]", "bool", "f64", "bool", "i32", "bool", "i32", "bool", "i32", "bool", "i32", "bool", "f64", "bool", "i32", "bool", "f64", "bool", "f64", "bool", "i32", "bool", "i32", "bool", "i32", "bool", "i32", "bool", "f64", "bool", "f64", "bool", "f64", "bool", "f64", "bool", "f64", "bool", "f64", "bool", "i32", "bool", "i32", "bool", "i32", "bool", "f64", "f64[]", "f32[]"}, error) &&
-        fn("__bro_native.terrain.Terrain_invalidateRegion", p(&bro_terrain_Terrain_invalidateRegion), "void", {"__bro_native.terrain.Terrain", "f64", "f64", "f64", "f64"}, error) &&
-        fn("__bro_native.terrain.Terrain_setHeightSource", p(&bro_terrain_Terrain_setHeightSource), "void", {"__bro_native.terrain.Terrain", "dynamic"}, error) &&
-        fn("__bro_native.terrain.Terrain_heightAt", p(&bro_terrain_Terrain_heightAt), "f64", {"__bro_native.terrain.Terrain", "f64", "f64"}, error) &&
-        fn("__bro_native.terrain.Terrain_normalAt", p(&bro_terrain_Terrain_normalAt), "f64[]", {"__bro_native.terrain.Terrain", "f64", "f64"}, error) &&
-        fn("__bro_native.terrain.Terrain_elevation", p(&bro_terrain_Terrain_elevation), "f64", {"__bro_native.terrain.Terrain", "f64", "f64"}, error) &&
-        fn("__bro_native.terrain.Terrain_splat", p(&bro_terrain_Terrain_splat), "void", {"__bro_native.terrain.Terrain", "f64", "f64", "f64", "i32"}, error) &&
-        fn("__bro_native.terrain.Terrain_layers_get", p(&bro_terrain_Terrain_layers_get), "i32", {"__bro_native.terrain.Terrain"}, error) &&
-        fn("__bro_native.terrain.Terrain_destroy", p(&bro_terrain_Terrain_destroy), "void", {"__bro_native.terrain.Terrain"}, error);
+        ctor("__bro_native.terrain.Terrain", BRO_NATIVE_FN(bro_terrain_Terrain_ctor), BRO_NATIVE_DTOR(bro_terrain_Terrain_dtor), bronze::runtime::Finalize::InSweep, {}, error) &&
+        fn("__bro_native.terrain.Terrain_chunkCount_get", BRO_NATIVE_FN(bro_terrain_Terrain_chunkCount_get), "i32", {"__bro_native.terrain.Terrain"}, error) &&
+        fn("__bro_native.terrain.Terrain_triangleCount_get", BRO_NATIVE_FN(bro_terrain_Terrain_triangleCount_get), "i32", {"__bro_native.terrain.Terrain"}, error) &&
+        fn("__bro_native.terrain.Terrain_vertexCount_get", BRO_NATIVE_FN(bro_terrain_Terrain_vertexCount_get), "i32", {"__bro_native.terrain.Terrain"}, error) &&
+        fn("__bro_native.terrain.Terrain_farDistance_get", BRO_NATIVE_FN(bro_terrain_Terrain_farDistance_get), "f64", {"__bro_native.terrain.Terrain"}, error) &&
+        fn("__bro_native.terrain.Terrain_planetRadius_get", BRO_NATIVE_FN(bro_terrain_Terrain_planetRadius_get), "f64", {"__bro_native.terrain.Terrain"}, error) &&
+        fn("__bro_native.terrain.Terrain_origin_get", BRO_NATIVE_FN(bro_terrain_Terrain_origin_get), "f64[]", {"__bro_native.terrain.Terrain"}, error) &&
+        fn("__bro_native.terrain.Terrain_update", BRO_NATIVE_FN(bro_terrain_Terrain_update), "i32", {"__bro_native.terrain.Terrain", "f64", "f64", "f64"}, error) &&
+        fn("__bro_native.terrain.Terrain_raycast", BRO_NATIVE_FN(bro_terrain_Terrain_raycast), "bool", {"__bro_native.terrain.Terrain", "f64[]", "f64[]", "bool", "f64"}, error) &&
+        fn("__bro_native.terrain.Terrain_raycast_hit", BRO_NATIVE_FN(bro_terrain_Terrain_raycast_hit), "bool", {}, error) &&
+        fn("__bro_native.terrain.Terrain_raycast_distance", BRO_NATIVE_FN(bro_terrain_Terrain_raycast_distance), "f64", {}, error) &&
+        fn("__bro_native.terrain.Terrain_raycast_position", BRO_NATIVE_FN(bro_terrain_Terrain_raycast_position), "f64[]", {}, error) &&
+        fn("__bro_native.terrain.Terrain_raycast_normal", BRO_NATIVE_FN(bro_terrain_Terrain_raycast_normal), "f64[]", {}, error) &&
+        fn("__bro_native.terrain.Terrain_raycast_chunk", BRO_NATIVE_FN(bro_terrain_Terrain_raycast_chunk), "i32[]", {}, error) &&
+        fn("__bro_native.terrain.Terrain_raycast_voxel", BRO_NATIVE_FN(bro_terrain_Terrain_raycast_voxel), "i32[]", {}, error) &&
+        fn("__bro_native.terrain.Terrain_raycast_material", BRO_NATIVE_FN(bro_terrain_Terrain_raycast_material), "i32", {}, error) &&
+        fn("__bro_native.terrain.Terrain_setVoxel", BRO_NATIVE_FN(bro_terrain_Terrain_setVoxel), "bool", {"__bro_native.terrain.Terrain", "f64", "f64", "f64", "i32"}, error) &&
+        fn("__bro_native.terrain.Terrain_getVoxel", BRO_NATIVE_FN(bro_terrain_Terrain_getVoxel), "i32", {"__bro_native.terrain.Terrain", "f64", "f64", "f64"}, error) &&
+        fn("__bro_native.terrain.Terrain_rebuild", BRO_NATIVE_FN(bro_terrain_Terrain_rebuild), "void", {"__bro_native.terrain.Terrain"}, error) &&
+        fn("__bro_native.terrain.Terrain_configure", BRO_NATIVE_FN(bro_terrain_Terrain_configure), "void", {"__bro_native.terrain.Terrain", "i32[]", "bool", "f64", "bool", "i32", "bool", "i32", "bool", "i32", "bool", "i32", "bool", "f64", "bool", "i32", "bool", "f64", "bool", "f64", "bool", "i32", "bool", "i32", "bool", "i32", "bool", "i32", "bool", "f64", "bool", "f64", "bool", "f64", "bool", "f64", "bool", "f64", "bool", "f64", "bool", "i32", "bool", "i32", "bool", "i32", "bool", "f64", "f64[]", "f32[]"}, error) &&
+        fn("__bro_native.terrain.Terrain_invalidateRegion", BRO_NATIVE_FN(bro_terrain_Terrain_invalidateRegion), "void", {"__bro_native.terrain.Terrain", "f64", "f64", "f64", "f64"}, error) &&
+        fn("__bro_native.terrain.Terrain_setHeightSource", BRO_NATIVE_FN(bro_terrain_Terrain_setHeightSource), "void", {"__bro_native.terrain.Terrain", "dynamic"}, error) &&
+        fn("__bro_native.terrain.Terrain_heightAt", BRO_NATIVE_FN(bro_terrain_Terrain_heightAt), "f64", {"__bro_native.terrain.Terrain", "f64", "f64"}, error) &&
+        fn("__bro_native.terrain.Terrain_normalAt", BRO_NATIVE_FN(bro_terrain_Terrain_normalAt), "f64[]", {"__bro_native.terrain.Terrain", "f64", "f64"}, error) &&
+        fn("__bro_native.terrain.Terrain_elevation", BRO_NATIVE_FN(bro_terrain_Terrain_elevation), "f64", {"__bro_native.terrain.Terrain", "f64", "f64"}, error) &&
+        fn("__bro_native.terrain.Terrain_splat", BRO_NATIVE_FN(bro_terrain_Terrain_splat), "void", {"__bro_native.terrain.Terrain", "f64", "f64", "f64", "i32"}, error) &&
+        fn("__bro_native.terrain.Terrain_layers_get", BRO_NATIVE_FN(bro_terrain_Terrain_layers_get), "i32", {"__bro_native.terrain.Terrain"}, error) &&
+        fn("__bro_native.terrain.Terrain_destroy", BRO_NATIVE_FN(bro_terrain_Terrain_destroy), "void", {"__bro_native.terrain.Terrain"}, error);
     if (!ok) return false;
     publishPrototype("terrain", "__bro_native.terrain.Terrain", "TerrainProto");
     return true;
+}
+
+bool registerTerrainNatives(std::string* error) {
+    return registerNatives_terrain(error);
 }
 
 }  // namespace bro::bronze_host

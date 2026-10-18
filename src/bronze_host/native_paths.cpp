@@ -47,10 +47,5 @@ const char* bro_paths_resolveWritePath(const char* path) {
 
 namespace bro::bronze_host {
 
-bool registerNatives_paths(std::string* error);
-
-bool registerPathsNatives(std::string* error) {
-    return registerNatives_paths(error);
-}
 
 }  // namespace bro::bronze_host

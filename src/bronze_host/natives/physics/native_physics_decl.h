@@ -614,6 +614,11 @@ double bro_physics_getConstraintBreakingImpulse(int32_t tag);
 //   result: i32[] in *out; out->release == NULL, the runtime copies
 void bro_physics_getBrokenConstraints(bronze_native_buffer* out);
 
+// Registered in native_physics_register.cpp as well; the bodies are in the native_*.cpp files.
+void bro_physics_setMotionType(int32_t tag, bool isStatic);
+void bro_physics_moveKinematic(int32_t tag, double x, double y, double z, double dt);
+void bro_physics_moveKinematicRot(int32_t tag, double x, double y, double z, double qx, double qy, double qz, double qw, double dt);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif

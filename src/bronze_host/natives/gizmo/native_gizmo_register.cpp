@@ -9,6 +9,8 @@
 // prototype is published as __bro_native.gizmo.<Class>Proto for js/gizmo.js to chain.
 
 #include "native_gizmo_decl.h"
+#include "bronze_host/native_table.h"
+#include "bronze_host/host_natives.h"
 
 #if BRO_WITH_3D
 
@@ -39,26 +41,28 @@ bool getter(const char* path, void* f, const char* ret, std::string* error) {
     return ev::registerNative(path, f, sig(ret, {}, ev::NativeKind::Getter), error);
 }
 
-template <typename F>
-void* p(F* f) { return reinterpret_cast<void*>(f); }
-
 }  // namespace
 
 bool registerNatives_gizmo(std::string* error) {
     const bool ok =
-        getter("__bro_native.gizmo.visible", p(&bro_gizmo_visible_get), "bool", error) &&
-        getter("__bro_native.gizmo.dragging", p(&bro_gizmo_dragging_get), "bool", error) &&
-        fn("__bro_native.gizmo.show", p(&bro_gizmo_show), "void", {}, error) &&
-        fn("__bro_native.gizmo.hide", p(&bro_gizmo_hide), "void", {}, error) &&
-        fn("__bro_native.gizmo.setMode", p(&bro_gizmo_setMode), "void", {"str"}, error) &&
-        fn("__bro_native.gizmo.setSpace", p(&bro_gizmo_setSpace), "void", {"str"}, error) &&
-        fn("__bro_native.gizmo.setPosition", p(&bro_gizmo_setPosition), "void", {"f64", "f64", "f64"}, error) &&
-        fn("__bro_native.gizmo.setOrientation", p(&bro_gizmo_setOrientation), "void", {"f64", "f64", "f64", "f64"}, error) &&
-        fn("__bro_native.gizmo.configure", p(&bro_gizmo_configure), "void", {"bool", "f64", "bool", "str", "bool", "str", "bool", "str", "bool", "str", "bool", "str", "bool", "f64", "bool", "f64", "bool", "bool"}, error) &&
-        fn("__bro_native.gizmo.attach", p(&bro_gizmo_attach), "void", {"dynamic", "dynamic", "dynamic", "dynamic", "dynamic", "dynamic", "dynamic", "dynamic"}, error) &&
-        fn("__bro_native.gizmo.detach", p(&bro_gizmo_detach), "void", {}, error);
+        getter("__bro_native.gizmo.visible", BRO_NATIVE_FN(bro_gizmo_visible_get), "bool", error) &&
+        getter("__bro_native.gizmo.dragging", BRO_NATIVE_FN(bro_gizmo_dragging_get), "bool", error) &&
+        fn("__bro_native.gizmo.show", BRO_NATIVE_FN(bro_gizmo_show), "void", {}, error) &&
+        fn("__bro_native.gizmo.hide", BRO_NATIVE_FN(bro_gizmo_hide), "void", {}, error) &&
+        fn("__bro_native.gizmo.setMode", BRO_NATIVE_FN(bro_gizmo_setMode), "void", {"str"}, error) &&
+        fn("__bro_native.gizmo.setSpace", BRO_NATIVE_FN(bro_gizmo_setSpace), "void", {"str"}, error) &&
+        fn("__bro_native.gizmo.setPosition", BRO_NATIVE_FN(bro_gizmo_setPosition), "void", {"f64", "f64", "f64"}, error) &&
+        fn("__bro_native.gizmo.setOrientation", BRO_NATIVE_FN(bro_gizmo_setOrientation), "void", {"f64", "f64", "f64", "f64"}, error) &&
+        fn("__bro_native.gizmo.configure", BRO_NATIVE_FN(bro_gizmo_configure), "void", {"bool", "f64", "bool", "str", "bool", "str", "bool", "str", "bool", "str", "bool", "str", "bool", "f64", "bool", "f64", "bool", "bool"}, error) &&
+        fn("__bro_native.gizmo.attach", BRO_NATIVE_FN(bro_gizmo_attach), "void", {"dynamic", "dynamic", "dynamic", "dynamic", "dynamic", "dynamic", "dynamic", "dynamic"}, error) &&
+        fn("__bro_native.gizmo.detach", BRO_NATIVE_FN(bro_gizmo_detach), "void", {}, error);
     if (!ok) return false;
     return true;
+}
+
+bool registerGizmoNatives(std::string* error) {
+    if (!registerNatives_gizmo(error)) return false;
+    return natives::getter("__bro_native.gizmo.hovered", BRO_NATIVE_FN(bro_gizmo_hovered_get), "str", error);
 }
 
 }  // namespace bro::bronze_host

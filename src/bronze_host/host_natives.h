@@ -63,9 +63,9 @@
 // One internal root and one JavaScript wrapper is one definition per member.
 //
 // The manifest a build compiles bro_core.js against is written by
-// bro-native-manifest (native_manifest_tool.cpp), which links this layer and
-// calls registerBroNatives — the same registrations bro makes at run time,
-// so the two cannot drift.
+// bro-native-manifest (native_manifest_tool.cpp), which links the native
+// tables (native_table.h) and calls registerBroNativeTables — the same
+// registrations bro makes at run time, so the two cannot drift.
 
 #include <functional>
 #include <initializer_list>
@@ -81,10 +81,18 @@ namespace bro::bronze_host {
 // Register every native under `__bro_native` on the calling thread. False
 // with `*error` set at the first refusal. No engine is needed: registration
 // records C entry points and signatures, and the entry points reach the
-// engine through hostEngine() when called.
+// engine through hostEngine() when called. The tables, then the members
+// installed on what they published (installSceneAgents).
 bool registerBroNatives(std::string* error);
+// Every native table (native_tables.cpp): the whole manifest, and nothing
+// that reaches the engine.
+bool registerBroNativeTables(std::string* error);
+// The agent members on the scene's prototypes (native_scene_core.cpp; 3D
+// builds only).
+void installSceneAgents();
 
-// The per-namespace halves of registerBroNatives, one per native_*.cpp.
+// The per-namespace tables registerBroNativeTables runs, each in its
+// natives/<ns>/native_<ns>_register.cpp.
 bool registerTimeNatives(std::string* error);
 // bro.server (native_server.cpp): the engine's server loop on the main
 // thread (bro-server's tick rate, uptime and stop), and on a Worker's thread
@@ -221,7 +229,7 @@ void shutdownWorkerSiblingApis();
 // The engine hook bro.settings.onChange listens through (native_settings.cpp).
 void installSettingsObserver(engine::Engine& engine);
 
-// ---- registration helpers, shared by the native_*.cpp files ---------------
+// ---- registration helpers, shared by the tables (native_tables.cpp) --------
 
 namespace natives {
 

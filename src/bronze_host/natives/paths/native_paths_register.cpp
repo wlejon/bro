@@ -9,6 +9,8 @@
 // prototype is published as __bro_native.paths.<Class>Proto for js/bro_core.js to chain.
 
 #include "native_paths_decl.h"
+#include "bronze_host/native_table.h"
+#include "bronze_host/host_natives.h"
 
 #include "embed/embed.h"
 
@@ -37,19 +39,20 @@ bool getter(const char* path, void* f, const char* ret, std::string* error) {
     return ev::registerNative(path, f, sig(ret, {}, ev::NativeKind::Getter), error);
 }
 
-template <typename F>
-void* p(F* f) { return reinterpret_cast<void*>(f); }
-
 }  // namespace
 
 bool registerNatives_paths(std::string* error) {
     const bool ok =
-        getter("__bro_native.paths.appDir", p(&bro_paths_appDir_get), "str", error) &&
-        getter("__bro_native.paths.userDataDir", p(&bro_paths_userDataDir_get), "str", error) &&
-        fn("__bro_native.paths.resolvePath", p(&bro_paths_resolvePath), "str", {"str"}, error) &&
-        fn("__bro_native.paths.resolveWritePath", p(&bro_paths_resolveWritePath), "str", {"str"}, error);
+        getter("__bro_native.paths.appDir", BRO_NATIVE_FN(bro_paths_appDir_get), "str", error) &&
+        getter("__bro_native.paths.userDataDir", BRO_NATIVE_FN(bro_paths_userDataDir_get), "str", error) &&
+        fn("__bro_native.paths.resolvePath", BRO_NATIVE_FN(bro_paths_resolvePath), "str", {"str"}, error) &&
+        fn("__bro_native.paths.resolveWritePath", BRO_NATIVE_FN(bro_paths_resolveWritePath), "str", {"str"}, error);
     if (!ok) return false;
     return true;
+}
+
+bool registerPathsNatives(std::string* error) {
+    return registerNatives_paths(error);
 }
 
 }  // namespace bro::bronze_host

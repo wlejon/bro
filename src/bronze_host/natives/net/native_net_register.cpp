@@ -9,6 +9,8 @@
 // prototype is published as __bro_native.net.<Class>Proto for js/net.js to chain.
 
 #include "native_net_decl.h"
+#include "bronze_host/native_table.h"
+#include "bronze_host/host_natives.h"
 
 #if BRO_WITH_NET
 
@@ -35,26 +37,52 @@ bool fn(const char* path, void* f, const char* ret, std::initializer_list<const 
     return ev::registerNative(path, f, sig(ret, params, ev::NativeKind::Function), error);
 }
 
-template <typename F>
-void* p(F* f) { return reinterpret_cast<void*>(f); }
-
 }  // namespace
 
 bool registerNatives_net(std::string* error) {
     const bool ok =
-        fn("__bro_native.net.host", p(&bro_net_host), "void", {"i32", "dynamic"}, error) &&
-        fn("__bro_native.net.unhost", p(&bro_net_unhost), "void", {}, error) &&
-        fn("__bro_native.net.connect", p(&bro_net_connect), "i32", {"str", "i32", "dynamic"}, error) &&
-        fn("__bro_native.net.disconnect", p(&bro_net_disconnect), "void", {"i32", "i32"}, error) &&
-        fn("__bro_native.net.disconnectAll", p(&bro_net_disconnectAll), "void", {}, error) &&
-        fn("__bro_native.net.send", p(&bro_net_send), "void", {"i32", "u8[]", "i32"}, error) &&
-        fn("__bro_native.net.broadcast", p(&bro_net_broadcast), "void", {"u8[]", "i32"}, error) &&
-        fn("__bro_native.net.peers", p(&bro_net_peers), "f64[]", {}, error) &&
-        fn("__bro_native.net.getPeerAddress", p(&bro_net_getPeerAddress), "str", {"i32"}, error) &&
-        fn("__bro_native.net.stats", p(&bro_net_stats), "str", {}, error) &&
-        fn("__bro_native.net.getPeerStats", p(&bro_net_getPeerStats), "str", {"i32"}, error) &&
-        fn("__bro_native.net.setPeerSimulatedLoss", p(&bro_net_setPeerSimulatedLoss), "void", {"i32", "f64", "f64", "f64"}, error);
+        fn("__bro_native.net.host", BRO_NATIVE_FN(bro_net_host), "void", {"i32", "dynamic"}, error) &&
+        fn("__bro_native.net.unhost", BRO_NATIVE_FN(bro_net_unhost), "void", {}, error) &&
+        fn("__bro_native.net.connect", BRO_NATIVE_FN(bro_net_connect), "i32", {"str", "i32", "dynamic"}, error) &&
+        fn("__bro_native.net.disconnect", BRO_NATIVE_FN(bro_net_disconnect), "void", {"i32", "i32"}, error) &&
+        fn("__bro_native.net.disconnectAll", BRO_NATIVE_FN(bro_net_disconnectAll), "void", {}, error) &&
+        fn("__bro_native.net.send", BRO_NATIVE_FN(bro_net_send), "void", {"i32", "u8[]", "i32"}, error) &&
+        fn("__bro_native.net.broadcast", BRO_NATIVE_FN(bro_net_broadcast), "void", {"u8[]", "i32"}, error) &&
+        fn("__bro_native.net.peers", BRO_NATIVE_FN(bro_net_peers), "f64[]", {}, error) &&
+        fn("__bro_native.net.getPeerAddress", BRO_NATIVE_FN(bro_net_getPeerAddress), "str", {"i32"}, error) &&
+        fn("__bro_native.net.stats", BRO_NATIVE_FN(bro_net_stats), "str", {}, error) &&
+        fn("__bro_native.net.getPeerStats", BRO_NATIVE_FN(bro_net_getPeerStats), "str", {"i32"}, error) &&
+        fn("__bro_native.net.setPeerSimulatedLoss", BRO_NATIVE_FN(bro_net_setPeerSimulatedLoss), "void", {"i32", "f64", "f64", "f64"}, error);
     if (!ok) return false;
+    return true;
+}
+
+bool registerNetNatives(std::string* error) {
+    if (!registerNatives_net(error)) return false;
+    if (!natives::fn("__bro_native.net._setDispatcher",
+                       BRO_NATIVE_FN(bro_net_setDispatcher),
+                       "void", {"dynamic"}, error)) return false;
+    if (!natives::fn("__bro_native.net.isHosting",
+                       BRO_NATIVE_FN(bro_net_isHosting),
+                       "bool", {}, error)) return false;
+    if (!natives::fn("__bro_native.net.init",
+                       BRO_NATIVE_FN(bro_net_init),
+                       "bool", {}, error)) return false;
+    if (!natives::fn("__bro_native.net.sendClone",
+                       BRO_NATIVE_FN(bro_net_sendCloneRaw),
+                       "bool", {"i32", "dynamic", "dynamic"}, error)) return false;
+    if (!natives::fn("__bro_native.net.broadcastClone",
+                       BRO_NATIVE_FN(bro_net_broadcastCloneRaw),
+                       "void", {"dynamic", "dynamic"}, error)) return false;
+    if (!natives::fn("__bro_native.net.sendRawOpts",
+                       BRO_NATIVE_FN(bro_net_sendRawOpts),
+                       "bool", {"i32", "u8[]", "dynamic"}, error)) return false;
+    if (!natives::fn("__bro_native.net.broadcastRawOpts",
+                       BRO_NATIVE_FN(bro_net_broadcastRawOpts),
+                       "void", {"u8[]", "dynamic"}, error)) return false;
+    if (!natives::fn("__bro_native.net._sendUnframed",
+                       BRO_NATIVE_FN(bro_net_sendUnframed),
+                       "bool", {"i32", "u8[]", "dynamic"}, error)) return false;
     return true;
 }
 
@@ -68,6 +96,8 @@ namespace bro::bronze_host {
 
 // Compiled out: nothing is registered and net.js is not to be installed.
 bool registerNatives_net(std::string*) { return true; }
+
+bool registerNetNatives(std::string*) { return true; }
 
 }  // namespace bro::bronze_host
 

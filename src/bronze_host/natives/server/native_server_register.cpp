@@ -9,6 +9,8 @@
 // prototype is published as __bro_native.server.<Class>Proto for js/server.js to chain.
 
 #include "native_server_decl.h"
+#include "bronze_host/native_table.h"
+#include "bronze_host/host_natives.h"
 
 #include "embed/embed.h"
 
@@ -41,19 +43,20 @@ bool setter(const char* path, void* f, const char* type, std::string* error) {
     return ev::registerNative(path, f, sig("void", {type}, ev::NativeKind::Setter), error);
 }
 
-template <typename F>
-void* p(F* f) { return reinterpret_cast<void*>(f); }
-
 }  // namespace
 
 bool registerNatives_server(std::string* error) {
     const bool ok =
-        getter("__bro_native.server.tickrate", p(&bro_server_tickrate_get), "f64", error) &&
-        setter("__bro_native.server.tickrate", p(&bro_server_tickrate_set), "f64", error) &&
-        getter("__bro_native.server.uptime", p(&bro_server_uptime_get), "f64", error) &&
-        fn("__bro_native.server.stop", p(&bro_server_stop), "void", {}, error);
+        getter("__bro_native.server.tickrate", BRO_NATIVE_FN(bro_server_tickrate_get), "f64", error) &&
+        setter("__bro_native.server.tickrate", BRO_NATIVE_FN(bro_server_tickrate_set), "f64", error) &&
+        getter("__bro_native.server.uptime", BRO_NATIVE_FN(bro_server_uptime_get), "f64", error) &&
+        fn("__bro_native.server.stop", BRO_NATIVE_FN(bro_server_stop), "void", {}, error);
     if (!ok) return false;
     return true;
+}
+
+bool registerServerNatives(std::string* error) {
+    return registerNatives_server(error);
 }
 
 }  // namespace bro::bronze_host

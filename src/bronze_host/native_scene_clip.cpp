@@ -3,6 +3,7 @@
 #if BRO_WITH_3D
 
 #include "bronze_host/native_scene_internal.h"
+#include "natives/animation/native_animation_decl.h"
 #include "bronze_host/host_natives.h"
 #include "scene/clip_player.h"
 #include "scene/scene_graph.h"
@@ -547,20 +548,6 @@ void bro_animation_AnimationPlayer_setOnEvent(void* self, uint64_t cbBits) {
 }  // extern "C"
 
 namespace bro::bronze_host {
-
-bool registerClipPlayerNatives(std::string* error) {
-    using namespace natives;
-    return fn("__bro_native.animation.AnimationPlayer_addClip", (void*)&bro_animation_AnimationPlayer_addClip, "str", {"__bro_native.animation.AnimationPlayer", "str", "dynamic"}, error) &&
-           fn("__bro_native.animation.AnimationPlayer_clipDef", (void*)&bro_animation_AnimationPlayer_clipDef, "str", {"__bro_native.animation.AnimationPlayer", "str"}, error) &&
-           fn("__bro_native.animation.AnimationPlayer_play", (void*)&bro_animation_AnimationPlayer_play, "str", {"__bro_native.animation.AnimationPlayer", "str", "dynamic"}, error) &&
-           fn("__bro_native.animation.AnimationPlayer_playing", (void*)&bro_animation_AnimationPlayer_playing, "bool", {"__bro_native.animation.AnimationPlayer"}, error) &&
-           fn("__bro_native.animation.AnimationPlayer_currentClip", (void*)&bro_animation_AnimationPlayer_currentClip, "str", {"__bro_native.animation.AnimationPlayer"}, error) &&
-           fn("__bro_native.animation.AnimationPlayer_currentTime", (void*)&bro_animation_AnimationPlayer_currentTime, "f64", {"__bro_native.animation.AnimationPlayer"}, error) &&
-           fn("__bro_native.animation.AnimationPlayer_speed_get", (void*)&bro_animation_AnimationPlayer_speed_get, "f64", {"__bro_native.animation.AnimationPlayer"}, error) &&
-           fn("__bro_native.animation.AnimationPlayer_speed_set", (void*)&bro_animation_AnimationPlayer_speed_set, "void", {"__bro_native.animation.AnimationPlayer", "f64"}, error) &&
-           fn("__bro_native.animation.AnimationPlayer_setOnFinished", (void*)&bro_animation_AnimationPlayer_setOnFinished, "void", {"__bro_native.animation.AnimationPlayer", "dynamic"}, error) &&
-           fn("__bro_native.animation.AnimationPlayer_setOnEvent", (void*)&bro_animation_AnimationPlayer_setOnEvent, "void", {"__bro_native.animation.AnimationPlayer", "dynamic"}, error);
-}
 
 }  // namespace bro::bronze_host
 

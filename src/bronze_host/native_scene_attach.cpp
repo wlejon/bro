@@ -6,6 +6,7 @@
 // canvas side (getContext('scene') answering the moved scene) in step.
 
 #include "bronze_host/native_scene_internal.h"
+#include "natives/scene/native_scene_decl.h"
 #include "bronze_host/host_natives.h"
 #include "bronze_host/host_realm_scope.h"
 #include "bronze_host/host_rooted.h"
@@ -96,15 +97,5 @@ void bro_scene_SceneGraph_keepAlive_set(void* self, bool v) {
 }  // extern "C"
 
 namespace bro::bronze_host {
-
-bool registerSceneAttachNatives(std::string* error) {
-    using natives::fn;
-    static const char* const G = "__bro_native.scene.SceneGraph";
-    return fn("__bro_native.scene.SceneGraph_attachTo", (void*)&bro_scene_SceneGraph_attachTo, "void", {"dynamic", "dynamic"}, error) &&
-           fn("__bro_native.scene.SceneGraph_detach", (void*)&bro_scene_SceneGraph_detach, "void", {G}, error) &&
-           fn("__bro_native.scene.SceneGraph_attached_get", (void*)&bro_scene_SceneGraph_attached_get, "bool", {G}, error) &&
-           fn("__bro_native.scene.SceneGraph_keepAlive_get", (void*)&bro_scene_SceneGraph_keepAlive_get, "bool", {G}, error) &&
-           fn("__bro_native.scene.SceneGraph_keepAlive_set", (void*)&bro_scene_SceneGraph_keepAlive_set, "void", {G, "bool"}, error);
-}
 
 }  // namespace bro::bronze_host

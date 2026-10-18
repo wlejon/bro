@@ -348,30 +348,6 @@ void installSceneNodeAgent(ObjectBuilder& b);
 }  // namespace bro::bronze_host
 
 extern "C" {
-void* bro_scene_SceneGraph_createClipmapTerrain(void* self, bool opts_levels_given, int32_t opts_levels,
-                                                bool opts_resolution_given, int32_t opts_resolution,
-                                                bool opts_cellSize_given, double opts_cellSize,
-                                                bool opts_heightScale_given, double opts_heightScale,
-                                                bool opts_seaLevel_given, double opts_seaLevel,
-                                                bool opts_snowLine_given, double opts_snowLine,
-                                                bool opts_maxCellScale_given, double opts_maxCellScale,
-                                                bool opts_planetRadius_given, double opts_planetRadius,
-                                                bool opts_layerFade_given, bool opts_layerFade,
-                                                bool opts_coverageFloor_given, bool opts_coverageFloor,
-                                                bool opts_cubicSurface_given, bool opts_cubicSurface,
-                                                bool opts_cubicHeight_given, bool opts_cubicHeight,
-                                                bool opts_detailWavelength_given, double opts_detailWavelength,
-                                                bool opts_detailRelief_given, double opts_detailRelief,
-                                                bool opts_detailGain_given, double opts_detailGain,
-                                                bool opts_detailOctaves_given, int32_t opts_detailOctaves);
-
-void* bro_scene_SceneGraph_createTileWorld(void* self, bool opts_chunkSize_given, int32_t opts_chunkSize,
-                                          bool opts_tileSize_given, double opts_tileSize,
-                                          const char* opts_layers, bool opts_tileAtlas_given, const char* opts_tileAtlas,
-                                          bool opts_atlasTileWidth_given, int32_t opts_atlasTileWidth,
-                                          bool opts_atlasTileHeight_given, int32_t opts_atlasTileHeight);
-
-void bro_scene_SceneGraph_clearActiveCamera(void* self);
 double bro_scene_SceneNode_fov_get(void* self);
 void bro_scene_SceneNode_fov_set(void* self, double v);
 double bro_scene_SceneNode_near_get(void* self);
@@ -383,111 +359,8 @@ void bro_scene_SceneNode_projection_set(void* self, const char* v);
 double bro_scene_SceneNode_aspect_get(void* self);
 void bro_scene_SceneNode_aspect_set(void* self, double v);
 double bro_scene_SceneNode_orthoHeight_get(void* self);
-void bro_scene_SceneNode_play(void* self, const char* clipName, const char* jsonOpts);
-
-bool bro_scene_SceneNode_hasShader(void* self);
-const char* bro_scene_SceneNode_setShader(void* self, const char* vertex, const char* fragment,
-                                          const char* uniformsJson);
-void bro_scene_SceneNode_clearShader(void* self);
-void bro_scene_SceneNode_setShaderUniform(void* self, const char* name, const double* vals, uint32_t count);
-void bro_scene_SceneNode_setLodMeshes(void* self, const char* jsonLods);
-int32_t bro_scene_SceneNode_lodCount(void* self);
-int32_t bro_scene_SceneNode_lodLevel(void* self);
-void bro_scene_SceneNode_visibilityRange_set(void* self, double begin, double end, double margin);
-void bro_scene_SceneNode_visibilityRange_clear(void* self);
-void bro_scene_SceneNode_visibilityRange_get(void* self, bronze_native_buffer* out);
-bool bro_scene_SceneGraph_isValid(void* self);
-void bro_scene_SceneNode_setBaseColorTextureFromScene(void* self, void* sourceScene);
-int32_t bro_scene_SceneGraph_raycast_instance(void);
-const char* bro_scene_SceneGraph_cullStatsJson(void* self);
-void bro_scene_SceneNode_setInstances(void* self, const float* data, uint32_t count);
-void bro_scene_SceneNode_setInstancesFromTransforms(void* self, const float* data, uint32_t count);
-double bro_scene_SceneNode_instanceCount_get(void* self);
-const char* bro_scene_SceneNode_updateMode_get(void* self);
-void bro_scene_SceneNode_updateMode_set(void* self, const char* mode);
-int32_t bro_scene_SceneNode_resolution_get(void* self);
-void bro_scene_SceneNode_resolution_set(void* self, int32_t res);
-bool bro_scene_SceneNode_boxProjection_get(void* self);
-void bro_scene_SceneNode_boxProjection_set(void* self, bool bp);
-double bro_scene_SceneNode_cullMargin_get(void* self);
-void bro_scene_SceneNode_cullMargin_set(void* self, double v);
-int32_t bro_scene_SceneNode_splatCount_get(void* self);
-void bro_scene_SceneNode_setCloud(void* self, const float* pos, uint32_t posCount, const float* scales, uint32_t scaleCount, const float* rots, uint32_t rotCount, const float* opacities, uint32_t opCount, const float* sh, uint32_t shCount, int32_t shDegree);
-bool bro_scene_SceneNode_loadSplatPly(void* self, const char* path);
 bool bro_scene_SceneNode_savePly(void* self, const char* path);
-void bro_scene_SceneNode_worldAnchor_get(void* self, bronze_native_buffer* out);
-void bro_scene_SceneNode_worldAnchor_set(void* self, const double* v, uint32_t len);
-void bro_scene_SceneNode_addStateMachine(void* self, const char* jsonDef);
-void bro_scene_SceneNode_travel(void* self, const char* targetState);
-void bro_scene_SceneNode_setRootMotion(void* self, const char* jsonOpts);
-const char* bro_scene_SceneNode_consumeRootMotion(void* self);
 void bro_scene_SceneNode_play(void* self, const char* clipName, const char* jsonOpts);
-void bro_scene_SceneNode_stop(void* self, const char* jsonOpts);
-void bro_scene_SceneNode_pause(void* self);
-void bro_scene_SceneNode_resume(void* self);
-int32_t bro_scene_SceneNode_setSkinningMatrices(void* self, uint64_t matsBits);
-void bro_scene_SceneNode_updateMesh(void* self, uint64_t meshBits, bool recomputeNormals);
-uint64_t bro_scene_SceneNode_getBoneWorldMatrix(void* self, uint64_t argBits);
-const char* bro_scene_SceneNode_blendState(void* self);
-void bro_scene_SceneNode_onAnimationFinished_set(void* self, uint64_t cbBits);
-const char* bro_scene_SceneNode_type_get(void* self);
-const char* bro_scene_SceneNode_kind_get(void* self);
-int32_t bro_scene_SceneNode_childCount_get(void* self);
-bool bro_scene_SceneNode_castsShadow_get(void* self);
-void bro_scene_SceneNode_castsShadow_set(void* self, bool v);
-bool bro_scene_SceneNode_receivesShadow_get(void* self);
-void bro_scene_SceneNode_receivesShadow_set(void* self, bool v);
-double bro_scene_SceneNode_metallic_get(void* self);
-void bro_scene_SceneNode_metallic_set(void* self, double v);
-double bro_scene_SceneNode_roughness_get(void* self);
-void bro_scene_SceneNode_roughness_set(void* self, double v);
-double bro_scene_SceneNode_emissive_get(void* self);
-void bro_scene_SceneNode_emissive_set(void* self, double v);
-void bro_scene_SceneNode_direction_get(void* self, bronze_native_buffer* out);
-void bro_scene_SceneNode_direction_set(void* self, const double* v, uint32_t len);
-void bro_scene_SceneNode_color_get(void* self, bronze_native_buffer* out);
-void bro_scene_SceneNode_color_set(void* self, const double* v, uint32_t len);
-double bro_scene_SceneNode_intensity_get(void* self);
-void bro_scene_SceneNode_intensity_set(void* self, double v);
-double bro_scene_SceneNode_range_get(void* self);
-void bro_scene_SceneNode_range_set(void* self, double v);
-double bro_scene_SceneNode_innerAngle_get(void* self);
-void bro_scene_SceneNode_innerAngle_set(void* self, double v);
-double bro_scene_SceneNode_outerAngle_get(void* self);
-void bro_scene_SceneNode_outerAngle_set(void* self, double v);
-double bro_scene_SceneNode_shadowBias_get(void* self);
-void bro_scene_SceneNode_shadowBias_set(void* self, double v);
-double bro_scene_SceneNode_shadowNormalBias_get(void* self);
-void bro_scene_SceneNode_shadowNormalBias_set(void* self, double v);
-int32_t bro_scene_SceneNode_cascadeCount_get(void* self);
-void bro_scene_SceneNode_cascadeCount_set(void* self, int32_t v);
-double bro_scene_SceneNode_cascadeSplitLambda_get(void* self);
-void bro_scene_SceneNode_cascadeSplitLambda_set(void* self, double v);
-void bro_scene_SceneGraph_render(void* self);
-double bro_scene_SceneGraph_canvasWidth(void* self);
-double bro_scene_SceneGraph_canvasHeight(void* self);
-void bro_scene_SceneGraph_setCanvasSize(void* self, double w, double h);
-void bro_scene_SceneGraph_readTonemapPixels(void* self, bronze_native_buffer* out);
-int32_t bro_scene_SceneGraph_readTonemapWidth(void);
-int32_t bro_scene_SceneGraph_readTonemapHeight(void);
-void* bro_scene_SceneGraph_createMesh(void* self, uint64_t optsBits, uint64_t meshHandle);
-void* bro_scene_SceneGraph_createForest(void* self, uint64_t optsBits, uint64_t meshHandle);
-void* bro_scene_SceneGraph_createSkinnedMesh(void* self, uint64_t optsBits, uint64_t meshHandle);
-void* bro_scene_SceneGraph_createInstancedMesh(void* self, uint64_t optsBits, uint64_t meshHandle);
-void* bro_scene_SceneGraph_createShape(void* self, const char* jsonOpts);
-void* bro_scene_SceneGraph_createSprite(void* self, const char* jsonOpts);
-void* bro_scene_SceneGraph_createPhysicsNode(void* self, const char* jsonOpts);
-void* bro_scene_SceneGraph_createParticles3D(void* self, const char* jsonOpts);
-void* bro_scene_SceneGraph_createGaussianSplat(void* self, const char* jsonOpts);
-void bro_scene_SceneNode_setSkeleton(void* self, uint64_t skelVal);
-void bro_scene_SceneNode_addClip(void* self, const char* name, uint64_t clipVal);
-void bro_scene_SceneNode_addBlendSpace1D(void* self, const char* name, const char* jsonPoints);
-void bro_scene_SceneNode_addBlendSpace2D(void* self, const char* name, const char* jsonPoints);
-void bro_scene_SceneNode_setBlendPos(void* self, const char* name, double x, bool hasY, double y);
-void bro_scene_SceneNode_playLayer(void* self, int32_t layerIndex, const char* clipName, const char* jsonOpts);
-void bro_scene_SceneNode_stopLayer(void* self, int32_t layerIndex, bool hasFade, double fadeTime);
-void bro_scene_SceneNode_setLayerWeight(void* self, int32_t layerIndex, double weight);
-void bro_scene_SceneNode_onStateChanged_set(void* self, uint64_t cbBits);
 }
 
 namespace bro::bronze_host {

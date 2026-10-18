@@ -356,8 +356,4 @@ void* bro_motion_load(bool opts_checkpoint_given, const char* opts_checkpoint,
 }  // extern "C"
 
 namespace bro::bronze_host {
-bool registerNatives_motion(std::string* error);
-bool registerMotionNatives(std::string* error) {
-    return registerNatives_motion(error);
-}
 }  // namespace bro::bronze_host

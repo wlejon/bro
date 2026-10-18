@@ -19,8 +19,6 @@
 
 namespace bro::bronze_host {
 
-bool registerNatives_lighting(std::string* error);
-
 namespace {
 
 static thread_local double tl_buf4[4];
@@ -31,9 +29,6 @@ static std::unordered_map<scene::DecalNode*, std::string> s_decalTextures;
 
 }  // namespace
 
-bool registerLightingNatives(std::string* error) {
-    return registerNatives_lighting(error);
-}
 
 }  // namespace bro::bronze_host
 

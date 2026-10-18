@@ -195,6 +195,51 @@ bool bro_tile_world_TileWorld_load(void* self, const uint8_t* data, uint32_t dat
 //   registered at __bro_native.tile_world.TileWorld_destroy
 void bro_tile_world_TileWorld_destroy(void* self);
 
+// Registered in native_tile_world_register.cpp as well; the bodies are in the native_*.cpp files.
+const char* bro_tile_world_TileWorld_distanceField(void* self, const char* sourcesJson, const char* jsonOpts);
+const char* bro_tile_world_TileWorld_floodFill(void* self, int32_t seedX, int32_t seedY, const char* jsonOpts);
+const char* bro_tile_world_TileWorld_components(void* self, const char* jsonOpts);
+int32_t bro_tile_world_TileWorld_cellDistance(void* self, int32_t ax, int32_t ay, int32_t bx, int32_t by, const char* connStr);
+const char* bro_tile_world_TileWorld_cellRing(void* self, int32_t cx, int32_t cy, int32_t radius, const char* connStr);
+const char* bro_tile_world_TileWorld_cellsInRange(void* self, int32_t cx, int32_t cy, int32_t radius, const char* connStr);
+const char* bro_tile_world_TileWorld_cellLine(void* self, int32_t ax, int32_t ay, int32_t bx, int32_t by);
+const char* bro_tile_world_TileWorld_cellNeighbors(void* self, int32_t cx, int32_t cy, const char* connStr);
+int32_t bro_tile_world_TileWorld_addObjectKind(void* self, uint64_t meshVal, const char* styleJson);
+bool bro_tile_world_TileWorld_replaceObjectKind(void* self, int32_t kind, uint64_t meshVal, bool hasStyle, const char* styleJson);
+bool bro_tile_world_TileWorld_removeObjectKind(void* self, int32_t kind);
+bool bro_tile_world_TileWorld_hasObjectKind(void* self, int32_t kind);
+int32_t bro_tile_world_TileWorld_addObjectPlacement(void* self, int32_t kind, int32_t x, int32_t y, double yaw, double scale, double yOffset, double offsetX, double offsetZ, int32_t variant, const double* color, uint32_t color_len);
+bool bro_tile_world_TileWorld_replaceObjectPlacement(void* self, int32_t kind, int32_t index, int32_t x, int32_t y, double yaw, double scale, double yOffset, double offsetX, double offsetZ, int32_t variant, const double* color, uint32_t color_len);
+bool bro_tile_world_TileWorld_removeObject(void* self, int32_t kind, int32_t index);
+void* bro_scene_SceneGraph_createTileWorldJson(void* self, const char* configJson);
+void bro_tile_world_TileWorld_findPathJson(void* self, int32_t startX, int32_t startY, int32_t endX, int32_t endY, const char* jsonOpts);
+void bro_tile_world_TileWorld_fillTile(void* self, int32_t x0, int32_t y0, int32_t x1, int32_t y1, int32_t tileId, int32_t layer);
+void bro_tile_world_TileWorld_setElevation(void* self, int32_t x, int32_t y, int32_t level);
+int32_t bro_tile_world_TileWorld_getElevation(void* self, int32_t x, int32_t y);
+void bro_tile_world_TileWorld_fillElevation(void* self, int32_t x0, int32_t y0, int32_t x1, int32_t y1, int32_t level);
+void bro_tile_world_TileWorld_setFlag(void* self, int32_t x, int32_t y, double bit, bool on);
+bool bro_tile_world_TileWorld_hasFlag(void* self, int32_t x, int32_t y, double bit);
+void bro_tile_world_TileWorld_setTint(void* self, int32_t x, int32_t y, double r, double g, double b, double a);
+void bro_tile_world_TileWorld_fillTint(void* self, int32_t x0, int32_t y0, int32_t x1, int32_t y1, double r, double g, double b, double a);
+const char* bro_tile_world_TileWorld_getTint(void* self, int32_t x, int32_t y);
+const char* bro_tile_world_TileWorld_worldToCell(void* self, double wx, double wz);
+const char* bro_tile_world_TileWorld_cellCenterWorldXZ(void* self, int32_t cx, int32_t cy);
+const char* bro_tile_world_TileWorld_worldBounds(void* self);
+double bro_tile_world_TileWorld_sampleHeight(void* self, double wx, double wz);
+const char* bro_tile_world_TileWorld_raycastCell(void* self, double ox, double oy, double oz, double dx, double dy, double dz, double maxDist);
+bool bro_tile_world_TileWorld_isWalkable(void* self, int32_t x, int32_t y, double mask);
+void bro_tile_world_TileWorld_configure(void* self, const char* configJson);
+void bro_tile_world_TileWorld_setShade(void* self, int32_t x, int32_t y, double v);
+void bro_tile_world_TileWorld_fillShade(void* self, int32_t x0, int32_t y0, int32_t x1, int32_t y1, double v);
+void bro_tile_world_TileWorld_setShadeMapFloat(void* self, const float* data, uint32_t count);
+void bro_tile_world_TileWorld_setShadeMapBytes(void* self, const uint8_t* data, uint32_t count);
+double bro_tile_world_TileWorld_getShade(void* self, int32_t x, int32_t y);
+void* bro_scene_SceneGraph_createTileWorld(void* self, bool opts_chunkSize_given, int32_t opts_chunkSize,
+                                          bool opts_tileSize_given, double opts_tileSize,
+                                          const char* opts_layers, bool opts_tileAtlas_given, const char* opts_tileAtlas,
+                                          bool opts_atlasTileWidth_given, int32_t opts_atlasTileWidth,
+                                          bool opts_atlasTileHeight_given, int32_t opts_atlasTileHeight);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif

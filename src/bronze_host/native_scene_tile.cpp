@@ -22,10 +22,6 @@ extern "C" void bro_tile_world_TileWorld_findPathJson(void* self, int32_t startX
 
 namespace bro::bronze_host {
 
-bool registerNatives_tile_world(std::string* error);
-bool registerTileWorldOpsNatives(std::string* error);
-bool registerTileWorldObjectNatives(std::string* error);
-
 namespace {
 
 namespace ev = bronze::embed;
@@ -328,74 +324,6 @@ double bro_tile_world_TileWorld_getShade(void* self, int32_t x, int32_t y);
 }
 
 
-bool registerTileWorldNatives(std::string* error) {
-    if (!registerNatives_tile_world(error)) return false;
-
-    auto reg = [&](const char* path, void* f, const char* ret, std::initializer_list<const char*> params) {
-        bronze::embed::NativeSignature s;
-        s.returnType = ret;
-        for (const char* p : params) s.paramTypes.emplace_back(p);
-        s.kind = bronze::embed::NativeKind::Function;
-        return bronze::embed::registerNative(path, f, s, error);
-    };
-
-    if (!reg("__bro_native.tile_world.createTileWorldJson", (void*)&bro_scene_SceneGraph_createTileWorldJson,
-             "__bro_native.tile_world.TileWorld", {"__bro_native.scene.SceneGraph", "str"})) return false;
-    if (!reg("__bro_native.tile_world.TileWorld_findPathJson", (void*)&bro_tile_world_TileWorld_findPathJson,
-             "void", {"__bro_native.tile_world.TileWorld", "i32", "i32", "i32", "i32", "str"})) return false;
-    if (!reg("__bro_native.tile_world.TileWorld_fillTile", (void*)&bro_tile_world_TileWorld_fillTile,
-             "void", {"__bro_native.tile_world.TileWorld", "i32", "i32", "i32", "i32", "i32", "i32"})) return false;
-    if (!reg("__bro_native.tile_world.TileWorld_setElevation", (void*)&bro_tile_world_TileWorld_setElevation,
-             "void", {"__bro_native.tile_world.TileWorld", "i32", "i32", "i32"})) return false;
-    if (!reg("__bro_native.tile_world.TileWorld_getElevation", (void*)&bro_tile_world_TileWorld_getElevation,
-             "i32", {"__bro_native.tile_world.TileWorld", "i32", "i32"})) return false;
-    if (!reg("__bro_native.tile_world.TileWorld_fillElevation", (void*)&bro_tile_world_TileWorld_fillElevation,
-             "void", {"__bro_native.tile_world.TileWorld", "i32", "i32", "i32", "i32", "i32"})) return false;
-    if (!reg("__bro_native.tile_world.TileWorld_setFlag", (void*)&bro_tile_world_TileWorld_setFlag,
-             "void", {"__bro_native.tile_world.TileWorld", "i32", "i32", "f64", "bool"})) return false;
-    if (!reg("__bro_native.tile_world.TileWorld_hasFlag", (void*)&bro_tile_world_TileWorld_hasFlag,
-             "bool", {"__bro_native.tile_world.TileWorld", "i32", "i32", "f64"})) return false;
-    if (!reg("__bro_native.tile_world.TileWorld_setTint", (void*)&bro_tile_world_TileWorld_setTint,
-             "void", {"__bro_native.tile_world.TileWorld", "i32", "i32", "f64", "f64", "f64", "f64"})) return false;
-    if (!reg("__bro_native.tile_world.TileWorld_fillTint", (void*)&bro_tile_world_TileWorld_fillTint,
-             "void", {"__bro_native.tile_world.TileWorld", "i32", "i32", "i32", "i32", "f64", "f64", "f64", "f64"})) return false;
-    if (!reg("__bro_native.tile_world.TileWorld_getTint", (void*)&bro_tile_world_TileWorld_getTint,
-             "str", {"__bro_native.tile_world.TileWorld", "i32", "i32"})) return false;
-    if (!reg("__bro_native.tile_world.TileWorld_worldToCell", (void*)&bro_tile_world_TileWorld_worldToCell,
-             "str", {"__bro_native.tile_world.TileWorld", "f64", "f64"})) return false;
-    if (!reg("__bro_native.tile_world.TileWorld_cellCenterWorldXZ", (void*)&bro_tile_world_TileWorld_cellCenterWorldXZ,
-             "str", {"__bro_native.tile_world.TileWorld", "i32", "i32"})) return false;
-    if (!reg("__bro_native.tile_world.TileWorld_worldBounds", (void*)&bro_tile_world_TileWorld_worldBounds,
-             "str", {"__bro_native.tile_world.TileWorld"})) return false;
-    if (!reg("__bro_native.tile_world.TileWorld_sampleHeight", (void*)&bro_tile_world_TileWorld_sampleHeight,
-             "f64", {"__bro_native.tile_world.TileWorld", "f64", "f64"})) return false;
-    if (!reg("__bro_native.tile_world.TileWorld_raycastCell", (void*)&bro_tile_world_TileWorld_raycastCell,
-             "str", {"__bro_native.tile_world.TileWorld", "f64", "f64", "f64", "f64", "f64", "f64", "f64"})) return false;
-    if (!reg("__bro_native.tile_world.TileWorld_isWalkable", (void*)&bro_tile_world_TileWorld_isWalkable,
-             "bool", {"__bro_native.tile_world.TileWorld", "i32", "i32", "f64"})) return false;
-    if (!reg("__bro_native.tile_world.TileWorld_configure", (void*)&bro_tile_world_TileWorld_configure,
-             "void", {"__bro_native.tile_world.TileWorld", "str"})) return false;
-    if (!reg("__bro_native.tile_world.TileWorld_setShade", (void*)&bro_tile_world_TileWorld_setShade,
-             "void", {"__bro_native.tile_world.TileWorld", "i32", "i32", "f64"})) return false;
-    if (!reg("__bro_native.tile_world.TileWorld_fillShade", (void*)&bro_tile_world_TileWorld_fillShade,
-             "void", {"__bro_native.tile_world.TileWorld", "i32", "i32", "i32", "i32", "f64"})) return false;
-    if (!reg("__bro_native.tile_world.TileWorld_setShadeMapFloat", (void*)&bro_tile_world_TileWorld_setShadeMapFloat,
-             "void", {"__bro_native.tile_world.TileWorld", "f32[]"})) return false;
-    if (!reg("__bro_native.tile_world.TileWorld_setShadeMapBytes", (void*)&bro_tile_world_TileWorld_setShadeMapBytes,
-             "void", {"__bro_native.tile_world.TileWorld", "u8[]"})) return false;
-    if (!reg("__bro_native.tile_world.TileWorld_getShade", (void*)&bro_tile_world_TileWorld_getShade,
-             "f64", {"__bro_native.tile_world.TileWorld", "i32", "i32"})) return false;
-
-    bronze::embed::NativeSignature s;
-    s.returnType = "__bro_native.tile_world.TileWorld";
-    s.paramTypes = {"__bro_native.scene.SceneGraph", "bool", "i32", "bool", "f64", "str", "bool", "str",
-                    "bool", "i32", "bool", "i32"};
-    if (!bronze::embed::registerNative(
-        "__bro_native.tile_world.createTileWorld",
-        reinterpret_cast<void*>(&bro_scene_SceneGraph_createTileWorld),
-        s, error)) return false;
-    return registerTileWorldOpsNatives(error) && registerTileWorldObjectNatives(error);
-}
 
 }  // namespace bro::bronze_host
 

@@ -2,6 +2,7 @@
 // remove and replace, for kinds (the instanced mesh) and single placements.
 
 #include "bronze_host/native_scene_internal.h"
+#include "natives/tile_world/native_tile_world_decl.h"
 #include "bronze_host/host_natives.h"
 #include "scene/tile_world.h"
 #include "util/asset_path.h"
@@ -143,16 +144,5 @@ bool bro_tile_world_TileWorld_removeObject(void* self, int32_t kind, int32_t ind
 
 } // extern "C"
 
-bool registerTileWorldObjectNatives(std::string* error) {
-    using namespace natives;
-    const char* TW = "__bro_native.tile_world.TileWorld";
-    return fn("__bro_native.tile_world.TileWorld_addObjectKind", (void*)&bro_tile_world_TileWorld_addObjectKind, "i32", {TW, "dynamic", "str"}, error) &&
-           fn("__bro_native.tile_world.TileWorld_replaceObjectKind", (void*)&bro_tile_world_TileWorld_replaceObjectKind, "bool", {TW, "i32", "dynamic", "bool", "str"}, error) &&
-           fn("__bro_native.tile_world.TileWorld_removeObjectKind", (void*)&bro_tile_world_TileWorld_removeObjectKind, "bool", {TW, "i32"}, error) &&
-           fn("__bro_native.tile_world.TileWorld_hasObjectKind", (void*)&bro_tile_world_TileWorld_hasObjectKind, "bool", {TW, "i32"}, error) &&
-           fn("__bro_native.tile_world.TileWorld_addObjectPlacement", (void*)&bro_tile_world_TileWorld_addObjectPlacement, "i32", {TW, "i32", "i32", "i32", "f64", "f64", "f64", "f64", "f64", "i32", "f64[]"}, error) &&
-           fn("__bro_native.tile_world.TileWorld_replaceObjectPlacement", (void*)&bro_tile_world_TileWorld_replaceObjectPlacement, "bool", {TW, "i32", "i32", "i32", "i32", "f64", "f64", "f64", "f64", "f64", "i32", "f64[]"}, error) &&
-           fn("__bro_native.tile_world.TileWorld_removeObject", (void*)&bro_tile_world_TileWorld_removeObject, "bool", {TW, "i32", "i32"}, error);
-}
 
 } // namespace bro::bronze_host

@@ -13,8 +13,6 @@
 
 namespace bro::bronze_host {
 
-bool registerNatives_gizmo(std::string* error);
-
 namespace {
 
 struct GizmoCallbacks {
@@ -102,11 +100,6 @@ static void parseHexColor(std::string_view s, float (&out)[4]) {
 
 extern "C" const char* bro_gizmo_hovered_get(void);
 
-bool registerGizmoNatives(std::string* error) {
-    if (!registerNatives_gizmo(error)) return false;
-    using namespace natives;
-    return getter("__bro_native.gizmo.hovered", (void*)&bro_gizmo_hovered_get, "str", error);
-}
 
 }  // namespace bro::bronze_host
 

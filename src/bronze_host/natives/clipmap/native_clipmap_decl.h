@@ -132,6 +132,27 @@ double bro_clipmap_ClipmapTerrain_horizonDistance(void* self, double eyeAboveSea
 //   registered at __bro_native.clipmap.ClipmapTerrain_destroy
 void bro_clipmap_ClipmapTerrain_destroy(void* self);
 
+// Registered in native_clipmap_register.cpp as well; the bodies are in the native_*.cpp files.
+void* bro_scene_SceneGraph_createClipmapTerrain(void* self, bool opts_levels_given, int32_t opts_levels,
+                                                bool opts_resolution_given, int32_t opts_resolution,
+                                                bool opts_cellSize_given, double opts_cellSize,
+                                                bool opts_heightScale_given, double opts_heightScale,
+                                                bool opts_seaLevel_given, double opts_seaLevel,
+                                                bool opts_snowLine_given, double opts_snowLine,
+                                                bool opts_maxCellScale_given, double opts_maxCellScale,
+                                                bool opts_planetRadius_given, double opts_planetRadius,
+                                                bool opts_layerFade_given, bool opts_layerFade,
+                                                bool opts_coverageFloor_given, bool opts_coverageFloor,
+                                                bool opts_cubicSurface_given, bool opts_cubicSurface,
+                                                bool opts_cubicHeight_given, bool opts_cubicHeight,
+                                                bool opts_detailWavelength_given, double opts_detailWavelength,
+                                                bool opts_detailRelief_given, double opts_detailRelief,
+                                                bool opts_detailGain_given, double opts_detailGain,
+                                                bool opts_detailOctaves_given, int32_t opts_detailOctaves);
+void bro_clipmap_ClipmapTerrain_setHeightLayer(void* self, int32_t index, const float* data, uint32_t data_len, int32_t width, int32_t height, double originX, double originZ, double metresPerCell, bool wrapX, bool bandLimited);
+void bro_clipmap_ClipmapTerrain_setChartCenter(void* self, bool has_xz, double x, double z);
+void bro_clipmap_ClipmapTerrain_setSurfaceLayer(void* self, int32_t index, const float* data, uint32_t data_len, int32_t width, int32_t height, double originX, double originZ, double metresPerCell, int32_t components);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif

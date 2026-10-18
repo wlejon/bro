@@ -8,8 +8,6 @@
 
 namespace bro::bronze_host {
 
-bool registerNatives_clipmap(std::string* error);
-
 extern "C" {
 void* bro_scene_SceneGraph_createClipmapTerrain(void* self, bool, int32_t, bool, int32_t, bool, double, bool, double, bool, double, bool, double, bool, double, bool, double, bool, bool, bool, bool, bool, bool, bool, bool, bool, double, bool, double, bool, double, bool, int32_t);
 void bro_clipmap_ClipmapTerrain_setHeightLayer(void* self, int32_t index, const float* data, uint32_t data_len, int32_t width, int32_t height, double originX, double originZ, double metresPerCell, bool wrapX, bool bandLimited);
@@ -23,46 +21,6 @@ static thread_local std::string tl_shaderSource;
 
 }  // namespace
 
-bool registerClipmapNatives(std::string* error) {
-    if (!registerNatives_clipmap(error)) return false;
-    bronze::embed::NativeSignature s;
-    s.returnType = "__bro_native.clipmap.ClipmapTerrain";
-    s.paramTypes = {"__bro_native.scene.SceneGraph", "bool", "i32", "bool", "i32", "bool", "f64", "bool", "f64",
-                    "bool", "f64", "bool", "f64", "bool", "f64", "bool", "f64", "bool", "bool", "bool", "bool",
-                    "bool", "bool", "bool", "bool", "bool", "f64", "bool", "f64", "bool", "f64", "bool", "i32"};
-    s.kind = bronze::embed::NativeKind::Function;
-    if (!bronze::embed::registerNative(
-            "__bro_native.clipmap.createClipmapTerrain",
-            reinterpret_cast<void*>(&bro_scene_SceneGraph_createClipmapTerrain),
-            s, error)) return false;
-
-    bronze::embed::NativeSignature sHl;
-    sHl.returnType = "void";
-    sHl.paramTypes = {"__bro_native.clipmap.ClipmapTerrain", "i32", "f32[]", "i32", "i32", "f64", "f64", "f64", "bool", "bool"};
-    sHl.kind = bronze::embed::NativeKind::Function;
-    if (!bronze::embed::registerNative(
-            "__bro_native.clipmap.ClipmapTerrain_setHeightLayer",
-            reinterpret_cast<void*>(&bro_clipmap_ClipmapTerrain_setHeightLayer),
-            sHl, error)) return false;
-
-    bronze::embed::NativeSignature sCc;
-    sCc.returnType = "void";
-    sCc.paramTypes = {"__bro_native.clipmap.ClipmapTerrain", "bool", "f64", "f64"};
-    sCc.kind = bronze::embed::NativeKind::Function;
-    if (!bronze::embed::registerNative(
-            "__bro_native.clipmap.ClipmapTerrain_setChartCenter",
-            reinterpret_cast<void*>(&bro_clipmap_ClipmapTerrain_setChartCenter),
-            sCc, error)) return false;
-
-    bronze::embed::NativeSignature sSl;
-    sSl.returnType = "void";
-    sSl.paramTypes = {"__bro_native.clipmap.ClipmapTerrain", "i32", "f32[]", "i32", "i32", "f64", "f64", "f64", "i32"};
-    sSl.kind = bronze::embed::NativeKind::Function;
-    return bronze::embed::registerNative(
-        "__bro_native.clipmap.ClipmapTerrain_setSurfaceLayer",
-        reinterpret_cast<void*>(&bro_clipmap_ClipmapTerrain_setSurfaceLayer),
-        sSl, error);
-}
 
 }  // namespace bro::bronze_host
 

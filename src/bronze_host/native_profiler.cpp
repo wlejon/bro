@@ -162,9 +162,6 @@ const char* bro_profiler_stop(bool callers, bool report, int32_t top) {
 
 namespace bro::bronze_host {
 
-bool registerNatives_profiler(std::string* error);
-
-bool registerProfilerNatives(std::string* error) { return registerNatives_profiler(error); }
 
 void registerProfilerMainThread() { bronze::embed::profilerRegisterThread(rt::kProfilerThreadMain, "main"); }
 

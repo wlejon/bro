@@ -178,17 +178,17 @@ void releaseNetState() {
 }
 
 // Internal hook for js/net.js to register its event dispatcher
-void bro_net_setDispatcher(uint64_t fnBits) {
+extern "C" void bro_net_setDispatcher(uint64_t fnBits) {
     NetState& g_net = netState();
     if (!g_net.dispatcher) g_net.dispatcher = new ev::Persistent();
     g_net.dispatcher->set(ev::fromBits(fnBits));
 }
 
-bool bro_net_isHosting() {
+extern "C" bool bro_net_isHosting() {
     return netState().hosting;
 }
 
-bool bro_net_init() {
+extern "C" bool bro_net_init() {
     return getNetSubscriber() != nullptr;
 }
 
@@ -243,7 +243,7 @@ static std::vector<uint8_t> frameRaw(const uint8_t* data, uint32_t data_len) {
     return framed;
 }
 
-bool bro_net_sendRawOpts(int32_t peerId, const uint8_t* data, uint32_t data_len, uint64_t optsBits) {
+extern "C" bool bro_net_sendRawOpts(int32_t peerId, const uint8_t* data, uint32_t data_len, uint64_t optsBits) {
     auto* sub = getNetSubscriber();
     if (!sub || !data) return false;
     std::vector<uint8_t> framed = frameRaw(data, data_len);
@@ -253,7 +253,7 @@ bool bro_net_sendRawOpts(int32_t peerId, const uint8_t* data, uint32_t data_len,
     return true;
 }
 
-bool bro_net_sendUnframed(int32_t peerId, const uint8_t* data, uint32_t data_len, uint64_t optsBits) {
+extern "C" bool bro_net_sendUnframed(int32_t peerId, const uint8_t* data, uint32_t data_len, uint64_t optsBits) {
     auto* sub = getNetSubscriber();
     if (!sub || !data) return false;
     std::vector<uint8_t> payload(data, data + data_len);  // before the allocating option reads
@@ -262,7 +262,7 @@ bool bro_net_sendUnframed(int32_t peerId, const uint8_t* data, uint32_t data_len
     return sub->send(static_cast<uint32_t>(peerId), std::move(payload), opts);
 }
 
-void bro_net_broadcastRawOpts(const uint8_t* data, uint32_t data_len, uint64_t optsBits) {
+extern "C" void bro_net_broadcastRawOpts(const uint8_t* data, uint32_t data_len, uint64_t optsBits) {
     auto* sub = getNetSubscriber();
     if (!sub || !data) return;
     std::vector<uint8_t> framed = frameRaw(data, data_len);
@@ -271,7 +271,7 @@ void bro_net_broadcastRawOpts(const uint8_t* data, uint32_t data_len, uint64_t o
     sub->broadcast(std::move(framed), opts);
 }
 
-bool bro_net_sendCloneRaw(int32_t peerId, uint64_t valBits, uint64_t optsBits) {
+extern "C" bool bro_net_sendCloneRaw(int32_t peerId, uint64_t valBits, uint64_t optsBits) {
     auto* sub = getNetSubscriber();
     if (!sub) return false;
     const Rooted val(ev::fromBits(valBits));  // the option reads allocate
@@ -296,7 +296,7 @@ bool bro_net_sendCloneRaw(int32_t peerId, uint64_t valBits, uint64_t optsBits) {
     return true;
 }
 
-void bro_net_broadcastCloneRaw(uint64_t valBits, uint64_t optsBits) {
+extern "C" void bro_net_broadcastCloneRaw(uint64_t valBits, uint64_t optsBits) {
     auto* sub = getNetSubscriber();
     if (!sub) return;
     const Rooted val(ev::fromBits(valBits));  // the option reads allocate
@@ -316,42 +316,12 @@ void bro_net_broadcastCloneRaw(uint64_t valBits, uint64_t optsBits) {
     sub->broadcast(std::move(framed), opts);
 }
 
-bool registerNatives_net(std::string* error);
 
-bool registerNetNatives(std::string* error) {
-    if (!registerNatives_net(error)) return false;
-    if (!natives::fn("__bro_native.net._setDispatcher",
-                       reinterpret_cast<void*>(&bro_net_setDispatcher),
-                       "void", {"dynamic"}, error)) return false;
-    if (!natives::fn("__bro_native.net.isHosting",
-                       reinterpret_cast<void*>(&bro_net_isHosting),
-                       "bool", {}, error)) return false;
-    if (!natives::fn("__bro_native.net.init",
-                       reinterpret_cast<void*>(&bro_net_init),
-                       "bool", {}, error)) return false;
-    if (!natives::fn("__bro_native.net.sendClone",
-                       reinterpret_cast<void*>(&bro_net_sendCloneRaw),
-                       "bool", {"i32", "dynamic", "dynamic"}, error)) return false;
-    if (!natives::fn("__bro_native.net.broadcastClone",
-                       reinterpret_cast<void*>(&bro_net_broadcastCloneRaw),
-                       "void", {"dynamic", "dynamic"}, error)) return false;
-    if (!natives::fn("__bro_native.net.sendRawOpts",
-                       reinterpret_cast<void*>(&bro_net_sendRawOpts),
-                       "bool", {"i32", "u8[]", "dynamic"}, error)) return false;
-    if (!natives::fn("__bro_native.net.broadcastRawOpts",
-                       reinterpret_cast<void*>(&bro_net_broadcastRawOpts),
-                       "void", {"u8[]", "dynamic"}, error)) return false;
-    if (!natives::fn("__bro_native.net._sendUnframed",
-                       reinterpret_cast<void*>(&bro_net_sendUnframed),
-                       "bool", {"i32", "u8[]", "dynamic"}, error)) return false;
-    return true;
-}
 
 #else  // !BRO_WITH_NET
 
 void pollNet() {}
 void releaseNetState() {}
-bool registerNetNatives(std::string*) { return true; }
 
 #endif  // BRO_WITH_NET
 

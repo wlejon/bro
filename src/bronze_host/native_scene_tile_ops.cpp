@@ -1,6 +1,7 @@
 // native_scene_tile_ops.cpp — TileWorld graph search, region, and coordinate operations.
 
 #include "bronze_host/native_scene_internal.h"
+#include "natives/tile_world/native_tile_world_decl.h"
 #include "bronze_host/host_natives.h"
 #include "scene/tile_world.h"
 #include "tile/pathfind.h"
@@ -289,16 +290,5 @@ const char* bro_tile_world_TileWorld_cellNeighbors(void* self, int32_t cx, int32
 
 } // extern "C"
 
-bool registerTileWorldOpsNatives(std::string* error) {
-    using namespace natives;
-    return fn("__bro_native.tile_world.TileWorld_distanceField", (void*)&bro_tile_world_TileWorld_distanceField, "str", {"__bro_native.tile_world.TileWorld", "str", "str"}, error) &&
-           fn("__bro_native.tile_world.TileWorld_floodFill", (void*)&bro_tile_world_TileWorld_floodFill, "str", {"__bro_native.tile_world.TileWorld", "i32", "i32", "str"}, error) &&
-           fn("__bro_native.tile_world.TileWorld_components", (void*)&bro_tile_world_TileWorld_components, "str", {"__bro_native.tile_world.TileWorld", "str"}, error) &&
-           fn("__bro_native.tile_world.TileWorld_cellDistance", (void*)&bro_tile_world_TileWorld_cellDistance, "i32", {"__bro_native.tile_world.TileWorld", "i32", "i32", "i32", "i32", "str"}, error) &&
-           fn("__bro_native.tile_world.TileWorld_cellRing", (void*)&bro_tile_world_TileWorld_cellRing, "str", {"__bro_native.tile_world.TileWorld", "i32", "i32", "i32", "str"}, error) &&
-           fn("__bro_native.tile_world.TileWorld_cellsInRange", (void*)&bro_tile_world_TileWorld_cellsInRange, "str", {"__bro_native.tile_world.TileWorld", "i32", "i32", "i32", "str"}, error) &&
-           fn("__bro_native.tile_world.TileWorld_cellLine", (void*)&bro_tile_world_TileWorld_cellLine, "str", {"__bro_native.tile_world.TileWorld", "i32", "i32", "i32", "i32"}, error) &&
-           fn("__bro_native.tile_world.TileWorld_cellNeighbors", (void*)&bro_tile_world_TileWorld_cellNeighbors, "str", {"__bro_native.tile_world.TileWorld", "i32", "i32", "str"}, error);
-}
 
 } // namespace bro::bronze_host

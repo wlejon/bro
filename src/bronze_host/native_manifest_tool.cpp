@@ -1,8 +1,9 @@
 // bro-native-manifest: prints the native manifest bro's own JavaScript
 // (js/bro_core.js) is compiled against, the same way bronze's own test suite
-// does (bronze/tests/native/manifest_tool.cpp). It links the binding layer
-// and calls the SAME registerBroNatives bro calls at run time, then writes
-// what the registry holds through embed::writeNativeManifest. Run at BUILD
+// does (bronze/tests/native/manifest_tool.cpp). It links the native tables,
+// compiled with BRO_NATIVE_TABLE_ONLY (native_table.h), and calls the SAME
+// registerBroNativeTables bro calls at run time, then writes what the
+// registry holds through embed::writeNativeManifest. Run at BUILD
 // time by CMakeLists.txt; the manifest is an output of the host, never a
 // file a person maintains beside it.
 //
@@ -44,7 +45,7 @@ int main(int argc, char** argv) {
     }
     try {
         std::string err;
-        if (!bro::bronze_host::registerBroNatives(&err)) {
+        if (!bro::bronze_host::registerBroNativeTables(&err)) {
             std::fprintf(stderr, "bro-native-manifest: %s\n", err.c_str());
             return 1;
         }

@@ -219,10 +219,4 @@ void bro_scene_SceneGraph_clearActiveCamera(void* self) {
 
 namespace bro::bronze_host {
 
-bool registerSceneCameraNatives(std::string* error) {
-    using namespace natives;
-    return fn("__bro_native.scene.SceneGraph_clearActiveCamera", (void*)&bro_scene_SceneGraph_clearActiveCamera, "void", {"__bro_native.scene.SceneGraph"}, error) &&
-           fn("__bro_native.scene.SceneGraph_raycast_instance", (void*)&bro_scene_SceneGraph_raycast_instance, "i32", {}, error);
-}
-
 }  // namespace bro::bronze_host

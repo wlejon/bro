@@ -16,9 +16,6 @@
 
 namespace bro::bronze_host {
 
-bool registerNatives_animation(std::string* error);
-bool registerClipPlayerNatives(std::string* error);
-
 namespace {
 
 
@@ -326,19 +323,6 @@ void bro_animation_Tween_setOnFinished(void* self, uint64_t cbBits) {
 }  // extern "C"
 
 namespace bro::bronze_host {
-
-bool registerAnimationNatives(std::string* error) {
-    if (!registerNatives_animation(error)) return false;
-
-    using namespace natives;
-    return fn("__bro_native.animation.Tween_to", (void*)&bro_animation_Tween_to, "void", {"__bro_native.animation.Tween", "i32", "dynamic", "f64", "dynamic", "dynamic"}, error) &&
-           fn("__bro_native.animation.Tween_parallel", (void*)&bro_animation_Tween_parallel, "void", {"__bro_native.animation.Tween"}, error) &&
-           fn("__bro_native.animation.Tween_isRunning", (void*)&bro_animation_Tween_isRunning, "bool", {"__bro_native.animation.Tween"}, error) &&
-           fn("__bro_native.animation.Tween_isPaused", (void*)&bro_animation_Tween_isPaused, "bool", {"__bro_native.animation.Tween"}, error) &&
-           fn("__bro_native.animation.Tween_isFinished", (void*)&bro_animation_Tween_isFinished, "bool", {"__bro_native.animation.Tween"}, error) &&
-           fn("__bro_native.animation.Tween_setOnFinished", (void*)&bro_animation_Tween_setOnFinished, "void", {"__bro_native.animation.Tween", "dynamic"}, error) &&
-           registerClipPlayerNatives(error);
-}
 
 }  // namespace bro::bronze_host
 

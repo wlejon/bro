@@ -9,6 +9,8 @@
 // prototype is published as __bro_native.motion.<Class>Proto for js/motion.js to chain.
 
 #include "native_motion_decl.h"
+#include "bronze_host/native_table.h"
+#include "bronze_host/host_natives.h"
 
 #include "embed/embed.h"
 
@@ -58,30 +60,31 @@ void publishPrototype(const char* ns, const char* className, const char* protoNa
     ev::setProperty(nsSlot.get(), protoName, protoSlot.get());
 }
 
-template <typename F>
-void* p(F* f) { return reinterpret_cast<void*>(f); }
-
 }  // namespace
 
 bool registerNatives_motion(std::string* error) {
     bool ok =
-        ctor("__bro_native.motion.ArdyMotionPipeline", p(&bro_motion_ArdyMotionPipeline_ctor), &bro_motion_ArdyMotionPipeline_dtor, bronze::runtime::Finalize::InSweep, {}, error) &&
-        fn("__bro_native.motion.ArdyMotionPipeline_device_get", p(&bro_motion_ArdyMotionPipeline_device_get), "str", {"__bro_native.motion.ArdyMotionPipeline"}, error) &&
-        fn("__bro_native.motion.ArdyMotionPipeline_generate", p(&bro_motion_ArdyMotionPipeline_generate), "void", {"__bro_native.motion.ArdyMotionPipeline", "str", "i32", "i32", "f64", "i32", "f64"}, error) &&
-        fn("__bro_native.motion.ArdyMotionPipeline_generate_frames", p(&bro_motion_ArdyMotionPipeline_generate_frames), "i32", {}, error) &&
-        fn("__bro_native.motion.ArdyMotionPipeline_generate_joints", p(&bro_motion_ArdyMotionPipeline_generate_joints), "i32", {}, error) &&
-        fn("__bro_native.motion.ArdyMotionPipeline_generate_fps", p(&bro_motion_ArdyMotionPipeline_generate_fps), "f64", {}, error) &&
-        fn("__bro_native.motion.ArdyMotionPipeline_generate_positions", p(&bro_motion_ArdyMotionPipeline_generate_positions), "f32[]", {}, error) &&
-        fn("__bro_native.motion.ArdyMotionPipeline_generate_parents", p(&bro_motion_ArdyMotionPipeline_generate_parents), "i32[]", {}, error) &&
-        fn("__bro_native.motion.ArdyMotionPipeline_generate_footContacts", p(&bro_motion_ArdyMotionPipeline_generate_footContacts), "f32[]", {}, error);
+        ctor("__bro_native.motion.ArdyMotionPipeline", BRO_NATIVE_FN(bro_motion_ArdyMotionPipeline_ctor), BRO_NATIVE_DTOR(bro_motion_ArdyMotionPipeline_dtor), bronze::runtime::Finalize::InSweep, {}, error) &&
+        fn("__bro_native.motion.ArdyMotionPipeline_device_get", BRO_NATIVE_FN(bro_motion_ArdyMotionPipeline_device_get), "str", {"__bro_native.motion.ArdyMotionPipeline"}, error) &&
+        fn("__bro_native.motion.ArdyMotionPipeline_generate", BRO_NATIVE_FN(bro_motion_ArdyMotionPipeline_generate), "void", {"__bro_native.motion.ArdyMotionPipeline", "str", "i32", "i32", "f64", "i32", "f64"}, error) &&
+        fn("__bro_native.motion.ArdyMotionPipeline_generate_frames", BRO_NATIVE_FN(bro_motion_ArdyMotionPipeline_generate_frames), "i32", {}, error) &&
+        fn("__bro_native.motion.ArdyMotionPipeline_generate_joints", BRO_NATIVE_FN(bro_motion_ArdyMotionPipeline_generate_joints), "i32", {}, error) &&
+        fn("__bro_native.motion.ArdyMotionPipeline_generate_fps", BRO_NATIVE_FN(bro_motion_ArdyMotionPipeline_generate_fps), "f64", {}, error) &&
+        fn("__bro_native.motion.ArdyMotionPipeline_generate_positions", BRO_NATIVE_FN(bro_motion_ArdyMotionPipeline_generate_positions), "f32[]", {}, error) &&
+        fn("__bro_native.motion.ArdyMotionPipeline_generate_parents", BRO_NATIVE_FN(bro_motion_ArdyMotionPipeline_generate_parents), "i32[]", {}, error) &&
+        fn("__bro_native.motion.ArdyMotionPipeline_generate_footContacts", BRO_NATIVE_FN(bro_motion_ArdyMotionPipeline_generate_footContacts), "f32[]", {}, error);
 #if BRO_WITH_DIFFUSION && BRO_WITH_LM
     ok = ok &&
-        fn("__bro_native.motion.init", p(&bro_motion_init), "void", {}, error) &&
-        fn("__bro_native.motion.load", p(&bro_motion_load), "__bro_native.motion.ArdyMotionPipeline", {"bool", "str", "bool", "str", "bool", "str"}, error);
+        fn("__bro_native.motion.init", BRO_NATIVE_FN(bro_motion_init), "void", {}, error) &&
+        fn("__bro_native.motion.load", BRO_NATIVE_FN(bro_motion_load), "__bro_native.motion.ArdyMotionPipeline", {"bool", "str", "bool", "str", "bool", "str"}, error);
 #endif
     if (!ok) return false;
     publishPrototype("motion", "__bro_native.motion.ArdyMotionPipeline", "ArdyMotionPipelineProto");
     return true;
+}
+
+bool registerMotionNatives(std::string* error) {
+    return registerNatives_motion(error);
 }
 
 }  // namespace bro::bronze_host

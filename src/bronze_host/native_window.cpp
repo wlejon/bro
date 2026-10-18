@@ -660,10 +660,6 @@ void dispatchWindowFocus(bool gained) {
     }
 }
 
-bool registerNatives_window(std::string* error);
 
-bool registerWindowNatives(std::string* error) {
-    return registerNatives_window(error);
-}
 
 }  // namespace bro::bronze_host

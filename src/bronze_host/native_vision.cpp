@@ -86,8 +86,4 @@ void bro_vision_dotRows(const float* queries, uint32_t queries_len,
 }  // extern "C"
 
 namespace bro::bronze_host {
-bool registerNatives_vision(std::string* error);
-bool registerVisionNatives(std::string* error) {
-    return registerNatives_vision(error);
-}
 }  // namespace bro::bronze_host

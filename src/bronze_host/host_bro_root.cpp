@@ -1,6 +1,6 @@
-// The `bro` and `__bro` roots, the `__bro_native` root under them, and the
-// registration helpers every native_*.cpp uses. host_natives.h states the
-// convention this file is the anchor of.
+// The `bro` and `__bro` roots, the `__bro_native` root under them, and
+// registerBroNatives (the tables themselves are in native_tables.cpp).
+// host_natives.h states the convention this file is the anchor of.
 //
 // THREE PLAIN OBJECTS are registered as host globals here. `bro` carries the
 // public namespaces the wrapper fills (time, window, settings) and the bare
@@ -36,40 +36,6 @@ namespace bro::bronze_host {
 
 namespace natives {
 
-namespace {
-
-ev::NativeSignature sig(const char* ret, std::initializer_list<const char*> params,
-                        ev::NativeKind kind) {
-    ev::NativeSignature s;
-    s.returnType = ret;
-    for (const char* p : params) s.paramTypes.emplace_back(p);
-    s.kind = kind;
-    return s;
-}
-
-}  // namespace
-
-bool fn(const char* path, void* f, const char* ret,
-        std::initializer_list<const char*> params, std::string* error) {
-    return ev::registerNative(path, f, sig(ret, params, ev::NativeKind::Function), error);
-}
-
-bool getter(const char* path, void* f, const char* ret, std::string* error) {
-    return ev::registerNative(path, f, sig(ret, {}, ev::NativeKind::Getter), error);
-}
-
-bool setter(const char* path, void* f, const char* type, std::string* error) {
-    return ev::registerNative(path, f, sig("void", {type}, ev::NativeKind::Setter), error);
-}
-
-bool ctor(const char* path, void* f, void (*dtor)(void*),
-          std::initializer_list<const char*> params, std::string* error) {
-    ev::NativeSignature s = sig(path, params, ev::NativeKind::Constructor);
-    s.className = path;
-    s.destructor = dtor;
-    return ev::registerNative(path, f, s, error);
-}
-
 const char* strResult(std::string s) {
     thread_local std::string scratch;
     scratch = std::move(s);
@@ -79,46 +45,11 @@ const char* strResult(std::string s) {
 }  // namespace natives
 
 bool registerBroNatives(std::string* error) {
-    bool ok = registerTimeNatives(error) &&
-              registerServerNatives(error) &&
-              registerPathsNatives(error) &&
-              registerModelsNatives(error) &&
-              registerWindowNatives(error) &&
-              registerSettingsNatives(error) &&
-              registerDunderBroNatives(error) &&
-              registerMeshNatives(error) &&
-              registerNetNatives(error) &&
-              registerRiggingNatives(error) &&
-              registerPhysicsNatives(error) &&
-              registerLmNatives(error) &&
-              registerRaveNatives(error) &&
-              registerMotionNatives(error) &&
-              registerProfilerNatives(error) &&
-              registerMicNatives(error) &&
-              registerSenseNatives(error) &&
-              registerGestureNatives(error) &&
-              registerWakeNatives(error) &&
-              registerKwsNatives(error) &&
-              registerListenNatives(error) &&
-              registerTriposplatNatives(error) &&
-              registerDiffusionNatives(error) &&
-              registerVisionNatives(error) &&
-              registerDiarNatives(error) &&
-              registerSttNatives(error) &&
-              registerTtsNatives(error) &&
-              registerFloraNatives(error) &&
-              registerTensorNatives(error);
+    if (!registerBroNativeTables(error)) return false;
 #if BRO_WITH_3D
-    ok = ok &&
-         registerAnimationNatives(error) &&
-         registerTerrainNatives(error) &&
-         registerSceneNatives(error) &&
-         registerClipmapNatives(error) &&
-         registerTileWorldNatives(error) &&
-         registerGizmoNatives(error) &&
-         registerLightingNatives(error);
+    installSceneAgents();
 #endif
-    return ok;
+    return true;
 }
 
 // bronze_host.h: the calling thread's registry as the manifest file an

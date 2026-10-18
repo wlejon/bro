@@ -14,6 +14,7 @@
 // not a throw).
 
 #include "bronze_host/native_scene_internal.h"
+#include "natives/scene/native_scene_decl.h"
 #include "bronze_host/host_natives.h"
 #include "bronze_host/host_values.h"
 
@@ -466,62 +467,5 @@ bool bro_scene_SceneNode_isTube(void* self) {
 
 namespace bro::bronze_host {
 
-bool registerSceneAttachNatives(std::string* error);  // native_scene_attach.cpp
-
-bool registerSceneExtraNatives(std::string* error) {
-    using natives::fn;
-    if (!registerSceneAttachNatives(error)) return false;
-    static const char* const N = "__bro_native.scene.SceneNode";
-    return fn("__bro_native.scene.SceneNode_alphaCutoff_get", (void*)&bro_scene_SceneNode_alphaCutoff_get, "f64", {N}, error) &&
-           fn("__bro_native.scene.SceneNode_alphaCutoff_set", (void*)&bro_scene_SceneNode_alphaCutoff_set, "void", {N, "f64"}, error) &&
-           fn("__bro_native.scene.SceneNode_doubleSided_get", (void*)&bro_scene_SceneNode_doubleSided_get, "bool", {N}, error) &&
-           fn("__bro_native.scene.SceneNode_doubleSided_set", (void*)&bro_scene_SceneNode_doubleSided_set, "void", {N, "bool"}, error) &&
-           fn("__bro_native.scene.SceneNode_interior_get", (void*)&bro_scene_SceneNode_interior_get, "f64", {N}, error) &&
-           fn("__bro_native.scene.SceneNode_interior_set", (void*)&bro_scene_SceneNode_interior_set, "void", {N, "f64"}, error) &&
-           fn("__bro_native.scene.SceneNode_priority_get", (void*)&bro_scene_SceneNode_priority_get, "i32", {N}, error) &&
-           fn("__bro_native.scene.SceneNode_priority_set", (void*)&bro_scene_SceneNode_priority_set, "void", {N, "i32"}, error) &&
-           fn("__bro_native.scene.SceneNode_emissiveColor_get", (void*)&bro_scene_SceneNode_emissiveColor_get, "f64[]", {N}, error) &&
-           fn("__bro_native.scene.SceneNode_emissiveColor_set", (void*)&bro_scene_SceneNode_emissiveColor_set, "void", {N, "f64[]"}, error) &&
-           fn("__bro_native.scene.SceneNode_emissiveColorCss_set", (void*)&bro_scene_SceneNode_emissiveColorCss_set, "void", {N, "str"}, error) &&
-           fn("__bro_native.scene.SceneNode_nearClipDist_get", (void*)&bro_scene_SceneNode_nearClipDist_get, "f64", {N}, error) &&
-           fn("__bro_native.scene.SceneNode_nearClipDist_set", (void*)&bro_scene_SceneNode_nearClipDist_set, "void", {N, "f64"}, error) &&
-           fn("__bro_native.scene.SceneNode_radius_get", (void*)&bro_scene_SceneNode_radius_get, "f64", {N}, error) &&
-           fn("__bro_native.scene.SceneNode_radius_set", (void*)&bro_scene_SceneNode_radius_set, "void", {N, "f64"}, error) &&
-           fn("__bro_native.scene.SceneNode_fillColor_get", (void*)&bro_scene_SceneNode_fillColor_get, "str", {N}, error) &&
-           fn("__bro_native.scene.SceneNode_fillColor_set", (void*)&bro_scene_SceneNode_fillColor_set, "void", {N, "str"}, error) &&
-           fn("__bro_native.scene.SceneNode_strokeColor_get", (void*)&bro_scene_SceneNode_strokeColor_get, "str", {N}, error) &&
-           fn("__bro_native.scene.SceneNode_strokeColor_set", (void*)&bro_scene_SceneNode_strokeColor_set, "void", {N, "str"}, error) &&
-           fn("__bro_native.scene.SceneNode_strokeWidth_get", (void*)&bro_scene_SceneNode_strokeWidth_get, "f64", {N}, error) &&
-           fn("__bro_native.scene.SceneNode_strokeWidth_set", (void*)&bro_scene_SceneNode_strokeWidth_set, "void", {N, "f64"}, error) &&
-           fn("__bro_native.scene.SceneNode_autoSync_get", (void*)&bro_scene_SceneNode_autoSync_get, "bool", {N}, error) &&
-           fn("__bro_native.scene.SceneNode_autoSync_set", (void*)&bro_scene_SceneNode_autoSync_set, "void", {N, "bool"}, error) &&
-           fn("__bro_native.scene.SceneNode_pixelsPerUnit_get", (void*)&bro_scene_SceneNode_pixelsPerUnit_get, "f64", {N}, error) &&
-           fn("__bro_native.scene.SceneNode_pixelsPerUnit_set", (void*)&bro_scene_SceneNode_pixelsPerUnit_set, "void", {N, "f64"}, error) &&
-           fn("__bro_native.scene.SceneNode_syncToPhysics", (void*)&bro_scene_SceneNode_syncToPhysics, "void", {N}, error) &&
-           fn("__bro_native.scene.SceneNode_billboard_get", (void*)&bro_scene_SceneNode_billboard_get, "str", {N}, error) &&
-           fn("__bro_native.scene.SceneNode_billboard_set", (void*)&bro_scene_SceneNode_billboard_set, "void", {N, "str"}, error) &&
-           fn("__bro_native.scene.SceneNode_frameIndex_get", (void*)&bro_scene_SceneNode_frameIndex_get, "i32", {N}, error) &&
-           fn("__bro_native.scene.SceneNode_frameIndex_set", (void*)&bro_scene_SceneNode_frameIndex_set, "void", {N, "i32"}, error) &&
-           fn("__bro_native.scene.SceneNode_updateInstance", (void*)&bro_scene_SceneNode_updateInstance, "void", {N, "i32", "f32[]"}, error) &&
-           fn("__bro_native.scene.SceneNode_setInstancedMesh", (void*)&bro_scene_SceneNode_setInstancedMesh, "void", {N, "dynamic"}, error) &&
-           fn("__bro_native.scene.SceneNode_setAtlasGrid", (void*)&bro_scene_SceneNode_setAtlasGrid, "void", {N, "i32", "i32"}, error) &&
-           fn("__bro_native.scene.SceneNode_setScatterSegments", (void*)&bro_scene_SceneNode_setScatterSegments, "void", {N, "f32[]", "f32[]", "f64[]", "f32[]"}, error) &&
-           fn("__bro_native.scene.SceneNode_setTubeSegments", (void*)&bro_scene_SceneNode_setTubeSegments, "void", {N, "f32[]", "i32", "f64", "f32[]", "f32[]"}, error) &&
-           fn("__bro_native.scene.SceneNode_setVegetation", (void*)&bro_scene_SceneNode_setVegetation, "void", {N, "f32[]"}, error) &&
-           fn("__bro_native.scene.SceneNode_isScatter", (void*)&bro_scene_SceneNode_isScatter, "bool", {N}, error) &&
-           fn("__bro_native.scene.SceneNode_isTube", (void*)&bro_scene_SceneNode_isTube, "bool", {N}, error) &&
-           fn("__bro_native.scene.SceneNode_anchorX_get", (void*)&bro_scene_SceneNode_anchorX_get, "f64", {N}, error) &&
-           fn("__bro_native.scene.SceneNode_anchorY_get", (void*)&bro_scene_SceneNode_anchorY_get, "f64", {N}, error) &&
-           fn("__bro_native.scene.SceneNode_anchor_set", (void*)&bro_scene_SceneNode_anchor_set, "void", {N, "f64", "f64"}, error) &&
-           fn("__bro_native.scene.SceneNode_cornerRadius_get", (void*)&bro_scene_SceneNode_cornerRadius_get, "f64", {N}, error) &&
-           fn("__bro_native.scene.SceneNode_cornerRadius_set", (void*)&bro_scene_SceneNode_cornerRadius_set, "void", {N, "f64"}, error) &&
-           fn("__bro_native.scene.SceneNode_pxPerUnit_get", (void*)&bro_scene_SceneNode_pxPerUnit_get, "f64", {N}, error) &&
-           fn("__bro_native.scene.SceneNode_pxPerUnit_set", (void*)&bro_scene_SceneNode_pxPerUnit_set, "void", {N, "f64"}, error) &&
-           fn("__bro_native.scene.SceneNode_bodyId_get", (void*)&bro_scene_SceneNode_bodyId_get, "f64", {N}, error) &&
-           fn("__bro_native.scene.SceneNode_atlasCols_get", (void*)&bro_scene_SceneNode_atlasCols_get, "i32", {N}, error) &&
-           fn("__bro_native.scene.SceneNode_atlasRows_get", (void*)&bro_scene_SceneNode_atlasRows_get, "i32", {N}, error) &&
-           fn("__bro_native.scene.SceneNode_staticBatch_get", (void*)&bro_scene_SceneNode_staticBatch_get, "bool", {N}, error) &&
-           fn("__bro_native.scene.SceneNode_staticBatch_set", (void*)&bro_scene_SceneNode_staticBatch_set, "void", {N, "bool"}, error);
-}
 
 }  // namespace bro::bronze_host

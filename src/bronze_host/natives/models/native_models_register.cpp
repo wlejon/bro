@@ -5,6 +5,8 @@
 // (native_models.cpp), part of registerBroNatives (src/bronze_host/host_natives.h).
 
 #include "native_models_decl.h"
+#include "bronze_host/native_table.h"
+#include "bronze_host/host_natives.h"
 
 #include "embed/embed.h"
 
@@ -29,18 +31,19 @@ bool fn(const char* path, void* f, const char* ret, std::initializer_list<const 
     return ev::registerNative(path, f, sig(ret, params, ev::NativeKind::Function), error);
 }
 
-template <typename F>
-void* p(F* f) { return reinterpret_cast<void*>(f); }
-
 }  // namespace
 
 bool registerNatives_models(std::string* error) {
-    return fn("__bro_native.models.dirs", p(&bro_models_dirs), "str", {}, error) &&
-           fn("__bro_native.models.find", p(&bro_models_find), "str", {"str"}, error) &&
-           fn("__bro_native.models.sources", p(&bro_models_sources), "str", {}, error) &&
-           fn("__bro_native.models.fetchStart", p(&bro_models_fetchStart), "i32", {"str", "bool"}, error) &&
-           fn("__bro_native.models.fetchPoll", p(&bro_models_fetchPoll), "str", {"i32"}, error) &&
-           fn("__bro_native.models.fetchCancel", p(&bro_models_fetchCancel), "void", {"i32"}, error);
+    return fn("__bro_native.models.dirs", BRO_NATIVE_FN(bro_models_dirs), "str", {}, error) &&
+           fn("__bro_native.models.find", BRO_NATIVE_FN(bro_models_find), "str", {"str"}, error) &&
+           fn("__bro_native.models.sources", BRO_NATIVE_FN(bro_models_sources), "str", {}, error) &&
+           fn("__bro_native.models.fetchStart", BRO_NATIVE_FN(bro_models_fetchStart), "i32", {"str", "bool"}, error) &&
+           fn("__bro_native.models.fetchPoll", BRO_NATIVE_FN(bro_models_fetchPoll), "str", {"i32"}, error) &&
+           fn("__bro_native.models.fetchCancel", BRO_NATIVE_FN(bro_models_fetchCancel), "void", {"i32"}, error);
+}
+
+bool registerModelsNatives(std::string* error) {
+    return registerNatives_models(error);
 }
 
 }  // namespace bro::bronze_host

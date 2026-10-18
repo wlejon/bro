@@ -9,6 +9,8 @@
 // prototype is published as __bro_native.animation.<Class>Proto for js/animation.js to chain.
 
 #include "native_animation_decl.h"
+#include "bronze_host/native_table.h"
+#include "bronze_host/host_natives.h"
 
 #include "embed/embed.h"
 
@@ -58,31 +60,54 @@ void publishPrototype(const char* ns, const char* className, const char* protoNa
     ev::setProperty(nsSlot.get(), protoName, protoSlot.get());
 }
 
-template <typename F>
-void* p(F* f) { return reinterpret_cast<void*>(f); }
-
 }  // namespace
 
 bool registerNatives_animation(std::string* error) {
     const bool ok =
-        ctor("__bro_native.animation.Tween", p(&bro_animation_Tween_ctor), &bro_animation_Tween_dtor, bronze::runtime::Finalize::InSweep, {}, error) &&
-        ctor("__bro_native.animation.AnimationPlayer", p(&bro_animation_AnimationPlayer_ctor), &bro_animation_AnimationPlayer_dtor, bronze::runtime::Finalize::InSweep, {}, error) &&
-        fn("__bro_native.animation.Tween_call", p(&bro_animation_Tween_call), "__bro_native.animation.Tween", {"__bro_native.animation.Tween", "dynamic"}, error) &&
-        fn("__bro_native.animation.Tween_loop", p(&bro_animation_Tween_loop), "__bro_native.animation.Tween", {"__bro_native.animation.Tween", "bool", "i32"}, error) &&
-        fn("__bro_native.animation.Tween_start", p(&bro_animation_Tween_start), "__bro_native.animation.Tween", {"__bro_native.animation.Tween"}, error) &&
-        fn("__bro_native.animation.Tween_stop", p(&bro_animation_Tween_stop), "__bro_native.animation.Tween", {"__bro_native.animation.Tween"}, error) &&
-        fn("__bro_native.animation.Tween_pause", p(&bro_animation_Tween_pause), "__bro_native.animation.Tween", {"__bro_native.animation.Tween"}, error) &&
-        fn("__bro_native.animation.Tween_resume", p(&bro_animation_Tween_resume), "__bro_native.animation.Tween", {"__bro_native.animation.Tween"}, error) &&
-        fn("__bro_native.animation.Tween_destroy", p(&bro_animation_Tween_destroy), "void", {"__bro_native.animation.Tween"}, error) &&
-        fn("__bro_native.animation.AnimationPlayer_pause", p(&bro_animation_AnimationPlayer_pause), "void", {"__bro_native.animation.AnimationPlayer"}, error) &&
-        fn("__bro_native.animation.AnimationPlayer_resume", p(&bro_animation_AnimationPlayer_resume), "void", {"__bro_native.animation.AnimationPlayer"}, error) &&
-        fn("__bro_native.animation.AnimationPlayer_stop", p(&bro_animation_AnimationPlayer_stop), "void", {"__bro_native.animation.AnimationPlayer"}, error) &&
-        fn("__bro_native.animation.AnimationPlayer_seek", p(&bro_animation_AnimationPlayer_seek), "void", {"__bro_native.animation.AnimationPlayer", "f64"}, error) &&
-        fn("__bro_native.animation.AnimationPlayer_destroy", p(&bro_animation_AnimationPlayer_destroy), "void", {"__bro_native.animation.AnimationPlayer"}, error);
+        ctor("__bro_native.animation.Tween", BRO_NATIVE_FN(bro_animation_Tween_ctor), BRO_NATIVE_DTOR(bro_animation_Tween_dtor), bronze::runtime::Finalize::InSweep, {}, error) &&
+        ctor("__bro_native.animation.AnimationPlayer", BRO_NATIVE_FN(bro_animation_AnimationPlayer_ctor), BRO_NATIVE_DTOR(bro_animation_AnimationPlayer_dtor), bronze::runtime::Finalize::InSweep, {}, error) &&
+        fn("__bro_native.animation.Tween_call", BRO_NATIVE_FN(bro_animation_Tween_call), "__bro_native.animation.Tween", {"__bro_native.animation.Tween", "dynamic"}, error) &&
+        fn("__bro_native.animation.Tween_loop", BRO_NATIVE_FN(bro_animation_Tween_loop), "__bro_native.animation.Tween", {"__bro_native.animation.Tween", "bool", "i32"}, error) &&
+        fn("__bro_native.animation.Tween_start", BRO_NATIVE_FN(bro_animation_Tween_start), "__bro_native.animation.Tween", {"__bro_native.animation.Tween"}, error) &&
+        fn("__bro_native.animation.Tween_stop", BRO_NATIVE_FN(bro_animation_Tween_stop), "__bro_native.animation.Tween", {"__bro_native.animation.Tween"}, error) &&
+        fn("__bro_native.animation.Tween_pause", BRO_NATIVE_FN(bro_animation_Tween_pause), "__bro_native.animation.Tween", {"__bro_native.animation.Tween"}, error) &&
+        fn("__bro_native.animation.Tween_resume", BRO_NATIVE_FN(bro_animation_Tween_resume), "__bro_native.animation.Tween", {"__bro_native.animation.Tween"}, error) &&
+        fn("__bro_native.animation.Tween_destroy", BRO_NATIVE_FN(bro_animation_Tween_destroy), "void", {"__bro_native.animation.Tween"}, error) &&
+        fn("__bro_native.animation.AnimationPlayer_pause", BRO_NATIVE_FN(bro_animation_AnimationPlayer_pause), "void", {"__bro_native.animation.AnimationPlayer"}, error) &&
+        fn("__bro_native.animation.AnimationPlayer_resume", BRO_NATIVE_FN(bro_animation_AnimationPlayer_resume), "void", {"__bro_native.animation.AnimationPlayer"}, error) &&
+        fn("__bro_native.animation.AnimationPlayer_stop", BRO_NATIVE_FN(bro_animation_AnimationPlayer_stop), "void", {"__bro_native.animation.AnimationPlayer"}, error) &&
+        fn("__bro_native.animation.AnimationPlayer_seek", BRO_NATIVE_FN(bro_animation_AnimationPlayer_seek), "void", {"__bro_native.animation.AnimationPlayer", "f64"}, error) &&
+        fn("__bro_native.animation.AnimationPlayer_destroy", BRO_NATIVE_FN(bro_animation_AnimationPlayer_destroy), "void", {"__bro_native.animation.AnimationPlayer"}, error);
     if (!ok) return false;
     publishPrototype("animation", "__bro_native.animation.Tween", "TweenProto");
     publishPrototype("animation", "__bro_native.animation.AnimationPlayer", "AnimationPlayerProto");
     return true;
+}
+
+bool registerClipPlayerNatives(std::string* error);
+
+bool registerClipPlayerNatives(std::string* error) {
+    return natives::fn("__bro_native.animation.AnimationPlayer_addClip", BRO_NATIVE_FN(bro_animation_AnimationPlayer_addClip), "str", {"__bro_native.animation.AnimationPlayer", "str", "dynamic"}, error) &&
+           natives::fn("__bro_native.animation.AnimationPlayer_clipDef", BRO_NATIVE_FN(bro_animation_AnimationPlayer_clipDef), "str", {"__bro_native.animation.AnimationPlayer", "str"}, error) &&
+           natives::fn("__bro_native.animation.AnimationPlayer_play", BRO_NATIVE_FN(bro_animation_AnimationPlayer_play), "str", {"__bro_native.animation.AnimationPlayer", "str", "dynamic"}, error) &&
+           natives::fn("__bro_native.animation.AnimationPlayer_playing", BRO_NATIVE_FN(bro_animation_AnimationPlayer_playing), "bool", {"__bro_native.animation.AnimationPlayer"}, error) &&
+           natives::fn("__bro_native.animation.AnimationPlayer_currentClip", BRO_NATIVE_FN(bro_animation_AnimationPlayer_currentClip), "str", {"__bro_native.animation.AnimationPlayer"}, error) &&
+           natives::fn("__bro_native.animation.AnimationPlayer_currentTime", BRO_NATIVE_FN(bro_animation_AnimationPlayer_currentTime), "f64", {"__bro_native.animation.AnimationPlayer"}, error) &&
+           natives::fn("__bro_native.animation.AnimationPlayer_speed_get", BRO_NATIVE_FN(bro_animation_AnimationPlayer_speed_get), "f64", {"__bro_native.animation.AnimationPlayer"}, error) &&
+           natives::fn("__bro_native.animation.AnimationPlayer_speed_set", BRO_NATIVE_FN(bro_animation_AnimationPlayer_speed_set), "void", {"__bro_native.animation.AnimationPlayer", "f64"}, error) &&
+           natives::fn("__bro_native.animation.AnimationPlayer_setOnFinished", BRO_NATIVE_FN(bro_animation_AnimationPlayer_setOnFinished), "void", {"__bro_native.animation.AnimationPlayer", "dynamic"}, error) &&
+           natives::fn("__bro_native.animation.AnimationPlayer_setOnEvent", BRO_NATIVE_FN(bro_animation_AnimationPlayer_setOnEvent), "void", {"__bro_native.animation.AnimationPlayer", "dynamic"}, error);
+}
+
+bool registerAnimationNatives(std::string* error) {
+    if (!registerNatives_animation(error)) return false;
+    return natives::fn("__bro_native.animation.Tween_to", BRO_NATIVE_FN(bro_animation_Tween_to), "void", {"__bro_native.animation.Tween", "i32", "dynamic", "f64", "dynamic", "dynamic"}, error) &&
+           natives::fn("__bro_native.animation.Tween_parallel", BRO_NATIVE_FN(bro_animation_Tween_parallel), "void", {"__bro_native.animation.Tween"}, error) &&
+           natives::fn("__bro_native.animation.Tween_isRunning", BRO_NATIVE_FN(bro_animation_Tween_isRunning), "bool", {"__bro_native.animation.Tween"}, error) &&
+           natives::fn("__bro_native.animation.Tween_isPaused", BRO_NATIVE_FN(bro_animation_Tween_isPaused), "bool", {"__bro_native.animation.Tween"}, error) &&
+           natives::fn("__bro_native.animation.Tween_isFinished", BRO_NATIVE_FN(bro_animation_Tween_isFinished), "bool", {"__bro_native.animation.Tween"}, error) &&
+           natives::fn("__bro_native.animation.Tween_setOnFinished", BRO_NATIVE_FN(bro_animation_Tween_setOnFinished), "void", {"__bro_native.animation.Tween", "dynamic"}, error) &&
+           registerClipPlayerNatives(error);
 }
 
 }  // namespace bro::bronze_host

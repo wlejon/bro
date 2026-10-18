@@ -9,8 +9,6 @@
 
 namespace bro::bronze_host {
 
-bool registerNatives_terrain(std::string* error);
-
 namespace {
 
 struct TerrainRaycastSlot {
@@ -29,9 +27,6 @@ static thread_local int32_t tl_ibuf[3];
 
 }  // namespace
 
-bool registerTerrainNatives(std::string* error) {
-    return registerNatives_terrain(error);
-}
 
 }  // namespace bro::bronze_host
 

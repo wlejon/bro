@@ -1,4 +1,5 @@
 #include "bronze_host/native_scene_internal.h"
+#include "natives/scene/native_scene_decl.h"
 #include "bronze_host/host_natives.h"
 #include "bronze_host/host_values.h"
 #include <bromesh/mesh_data.h>
@@ -567,35 +568,5 @@ void bro_scene_SceneNode_onFinished_set(void* self, uint64_t cbBits) {
 } // extern "C"
 
 namespace bro::bronze_host {
-
-bool registerSceneShaderNatives(std::string* error) {
-    using namespace natives;
-    return fn("__bro_native.scene.SceneNode_setShaderTexture", (void*)&bro_scene_SceneNode_setShaderTexture, "bool", {"__bro_native.scene.SceneNode", "str", "i32", "i32", "i32", "i32", "f32[]", "bool", "bool"}, error) &&
-           fn("__bro_native.scene.SceneNode_setBaseColorTextureData", (void*)&bro_scene_SceneNode_setBaseColorTextureData, "void", {"__bro_native.scene.SceneNode", "i32", "i32", "u8[]"}, error) &&
-           fn("__bro_native.scene.SceneNode_clearBaseColorTexture", (void*)&bro_scene_SceneNode_clearBaseColorTexture, "void", {"__bro_native.scene.SceneNode"}, error) &&
-           fn("__bro_native.scene.SceneNode_setEmissionTextureData", (void*)&bro_scene_SceneNode_setEmissionTextureData, "void", {"__bro_native.scene.SceneNode", "i32", "i32", "u8[]"}, error) &&
-           fn("__bro_native.scene.SceneNode_onAnimationEnd_set", (void*)&bro_scene_SceneNode_onAnimationEnd_set, "void", {"__bro_native.scene.SceneNode", "dynamic"}, error) &&
-           fn("__bro_native.scene.SceneNode_renderPriority_get", (void*)&bro_scene_SceneNode_renderPriority_get, "i32", {"__bro_native.scene.SceneNode"}, error) &&
-           fn("__bro_native.scene.SceneNode_renderPriority_set", (void*)&bro_scene_SceneNode_renderPriority_set, "void", {"__bro_native.scene.SceneNode", "i32"}, error) &&
-           fn("__bro_native.scene.SceneNode_emissionStrength_get", (void*)&bro_scene_SceneNode_emissionStrength_get, "f64", {"__bro_native.scene.SceneNode"}, error) &&
-           fn("__bro_native.scene.SceneNode_emissionStrength_set", (void*)&bro_scene_SceneNode_emissionStrength_set, "void", {"__bro_native.scene.SceneNode", "f64"}, error) &&
-           fn("__bro_native.scene.SceneNode_upperFade_get", (void*)&bro_scene_SceneNode_upperFade_get, "f64", {"__bro_native.scene.SceneNode"}, error) &&
-           fn("__bro_native.scene.SceneNode_upperFade_set", (void*)&bro_scene_SceneNode_upperFade_set, "void", {"__bro_native.scene.SceneNode", "f64"}, error) &&
-           fn("__bro_native.scene.SceneNode_lowerFade_get", (void*)&bro_scene_SceneNode_lowerFade_get, "f64", {"__bro_native.scene.SceneNode"}, error) &&
-           fn("__bro_native.scene.SceneNode_lowerFade_set", (void*)&bro_scene_SceneNode_lowerFade_set, "void", {"__bro_native.scene.SceneNode", "f64"}, error) &&
-           fn("__bro_native.scene.SceneNode_normalFade_get", (void*)&bro_scene_SceneNode_normalFade_get, "f64", {"__bro_native.scene.SceneNode"}, error) &&
-           fn("__bro_native.scene.SceneNode_normalFade_set", (void*)&bro_scene_SceneNode_normalFade_set, "void", {"__bro_native.scene.SceneNode", "f64"}, error) &&
-           fn("__bro_native.scene.SceneNode_modulate_get", (void*)&bro_scene_SceneNode_modulate_get, "f64[]", {"__bro_native.scene.SceneNode"}, error) &&
-           fn("__bro_native.scene.SceneNode_modulate_set", (void*)&bro_scene_SceneNode_modulate_set, "void", {"__bro_native.scene.SceneNode", "f64[]"}, error) &&
-           fn("__bro_native.scene.SceneNode_particleCount_get", (void*)&bro_scene_SceneNode_particleCount_get, "i32", {"__bro_native.scene.SceneNode"}, error) &&
-           fn("__bro_native.scene.SceneNode_particlePlaying_get", (void*)&bro_scene_SceneNode_particlePlaying_get, "bool", {"__bro_native.scene.SceneNode"}, error) &&
-           fn("__bro_native.scene.SceneNode_particleRate_get", (void*)&bro_scene_SceneNode_particleRate_get, "f64", {"__bro_native.scene.SceneNode"}, error) &&
-           fn("__bro_native.scene.SceneNode_particleRate_set", (void*)&bro_scene_SceneNode_particleRate_set, "void", {"__bro_native.scene.SceneNode", "f64"}, error) &&
-           fn("__bro_native.scene.SceneNode_particleEmit", (void*)&bro_scene_SceneNode_particleEmit, "void", {"__bro_native.scene.SceneNode", "f64[]"}, error) &&
-           fn("__bro_native.scene.SceneNode_particlePaused_get", (void*)&bro_scene_SceneNode_particlePaused_get, "bool", {"__bro_native.scene.SceneNode"}, error) &&
-           fn("__bro_native.scene.SceneNode_softness_get", (void*)&bro_scene_SceneNode_softness_get, "f64", {"__bro_native.scene.SceneNode"}, error) &&
-           fn("__bro_native.scene.SceneNode_softness_set", (void*)&bro_scene_SceneNode_softness_set, "void", {"__bro_native.scene.SceneNode", "f64"}, error) &&
-           fn("__bro_native.scene.SceneNode_onFinished_set", (void*)&bro_scene_SceneNode_onFinished_set, "void", {"__bro_native.scene.SceneNode", "dynamic"}, error);
-}
 
 } // namespace bro::bronze_host

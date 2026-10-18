@@ -376,10 +376,5 @@ void bro_settings_onChange(uint64_t listener) { onChange(listener); }
 
 namespace bro::bronze_host {
 
-bool registerNatives_settings(std::string* error);
-
-bool registerSettingsNatives(std::string* error) {
-    return registerNatives_settings(error);
-}
 
 }  // namespace bro::bronze_host
