@@ -197,8 +197,13 @@ void Engine::flush() {
             }
         }
         if (sg.graph) sg.graph->setDeviceScale(deviceScale_.render);
-        if (sg.graph) sg.graph->render();
+        if (sg.graph) sceneRenderPending_ = true;
     }
+    // An advanceTime step's flush leaves the scenes pending: the next step,
+    // a capture or a read of what a render drew draws them
+    // (renderPendingScenes), so the steps between two looks at the frame
+    // are not drawn. Any other flush draws them now.
+    if (!inTimeStep_) renderPendingScenes();
 
     pruneDetachedSceneGraphs();
 #endif  // BRO_WITH_3D
@@ -226,12 +231,24 @@ void Engine::flush() {
     if (displayMode_ == DisplayMode::Headless) noteFramePresented();
 }
 
+void Engine::renderPendingScenes(bool forRead) {
+#if BRO_WITH_3D
+    if (!sceneRenderPending_ || (forRead && inTimeStep_)) return;
+    sceneRenderPending_ = false;
+    for (auto& sg : sceneGraphs_)
+        if (sg.graph) sg.graph->render();
+#endif
+}
+
 void Engine::advanceTime(double ms) {
     double remaining = ms;
+    // The last frame flushed, before the clock moves past it.
+    renderPendingScenes();
     while (remaining > 0) {
         double step = std::min(remaining, 16.0);
         virtualTime_ += step;
         remaining -= step;
+        inTimeStep_ = true;
         // A headless frame is this step, in the flight recorder too (wall
         // time, as everywhere in the trace).
         // Its phases are timed as the windowed loop's are, so `trace` says
@@ -338,6 +355,7 @@ void Engine::advanceTime(double ms) {
         }
         mediaHeldForStep_ = false;
         traceFrameEnd();
+        inTimeStep_ = false;
     }
 }
 
@@ -371,6 +389,8 @@ std::vector<uint8_t> Engine::capturePixels() {
     for (auto& sg : sceneGraphs_) {
         if (sg.graph) sg.graph->materializeHtmlNodes(skia);
     }
+    // This render is the frame a flush left pending.
+    sceneRenderPending_ = false;
     for (auto& sg : sceneGraphs_) {
         if (!sg.graph) continue;
         sg.graph->setDeviceScale(deviceScale_.render);
@@ -504,6 +524,7 @@ bool Engine::screenshot(const std::string& path, int cx, int cy, int cw, int ch)
 // previous answer stands.
 double Engine::gpuFrameMs() {
 #if BRO_WITH_3D
+    renderPendingScenes(true);
     double sum = 0.0;
     bool timed = false;
     for (auto& sg : sceneGraphs_) {

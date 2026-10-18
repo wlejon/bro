@@ -4,6 +4,8 @@
 
 #include "bronze_host/native_scene_internal.h"
 #include "bronze_host/host_natives.h"
+#include "bronze_host/host_runtime.h"
+#include "engine/engine.h"
 #include "natives/scene/native_scene_decl.h"
 
 #include "scene/grass_node.h"
@@ -116,6 +118,8 @@ void bro_scene_SceneNode_grassPush(void* self, double x, double z, double radius
 }
 
 void bro_scene_SceneNode_grassStats(void* self, bronze_native_buffer* out) {
+    // What the last frame drew: a frame a flush left pending is drawn first.
+    if (auto* eng = hostEngine()) eng->renderPendingScenes(/*forRead=*/true);
     auto* gr = grassOf(self);
     if (!gr) { transferBuffer(std::vector<double>{}, out); return; }
     std::vector<double> v;

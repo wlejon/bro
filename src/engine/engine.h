@@ -451,6 +451,16 @@ public:
     OverlayManager& overlays() { return overlayMgr_; }
 
     void flush();
+    /// Draw the 3D scenes a flush left to draw. An advanceTime step's flush
+    /// lays the scenes out for its frame and leaves their render pending;
+    /// it runs before the clock moves on (the next step), inside a capture
+    /// (which renders anyway) or before a read of what a render drew
+    /// (gpuFrameMs, a forest's or grass's stats), so advanceTime(50) and a
+    /// frameImage() draw the scene once, not four times. A read inside a
+    /// step (a frame callback) sees the last frame drawn, as a window's
+    /// frame callback does: `forRead` draws nothing then. A flush outside a
+    /// step draws at once.
+    void renderPendingScenes(bool forRead = false);
     void advanceTime(double ms);
     /// Headless: run `frames` frames of the windowed frame loop itself (the
     /// layout and raster threads, the event pump, the source watcher, the
@@ -1497,6 +1507,8 @@ private:
     // next (awaitTerminalEcho).
     static constexpr double kTerminalEchoWaitMs = 3.0;
     double lastGCMs_ = 0.0, lastGpuFrameMs_ = -1.0;
+    bool sceneRenderPending_ = false;  // renderPendingScenes
+    bool inTimeStep_ = false;          // inside an advanceTime step
     bool testFailure_ = false;
 
     // The frame's composite, bottom to top: CPU layers composite into

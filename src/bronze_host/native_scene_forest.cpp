@@ -3,6 +3,8 @@
 
 #include "bronze_host/native_scene_internal.h"
 #include "bronze_host/host_natives.h"
+#include "bronze_host/host_runtime.h"
+#include "engine/engine.h"
 #include "natives/scene/native_scene_decl.h"
 
 #include "scene/forest_node.h"
@@ -108,6 +110,8 @@ void bro_scene_SceneNode_setForestTier(void* self, int32_t tier) {
 }
 
 void bro_scene_SceneNode_forestStats(void* self, bronze_native_buffer* out) {
+    // What the last frame drew: a frame a flush left pending is drawn first.
+    if (auto* eng = hostEngine()) eng->renderPendingScenes(/*forRead=*/true);
     auto* f = forestOf(self);
     if (!f) { transferBuffer(std::vector<double>{}, out); return; }
     const auto& s = f->stats();
