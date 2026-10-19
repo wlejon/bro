@@ -236,6 +236,8 @@ private:
     // factor, its draws.
     struct ForestPlan;
     std::unique_ptr<ForestPlan> planForest(SceneFrame& frame, ForestNode& node);
+    // Last frame's plans, whose buffers the next frame's take (ForestPlan::reuse).
+    std::vector<std::shared_ptr<ForestPlan>> sparePlans_;
     // A node's trees' world bounds and the cells of ground they stand in,
     // kept while its trees, transform and sway reach hold, so a frame tests
     // a cell before its trees and never re-transforms them.

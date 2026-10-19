@@ -256,6 +256,49 @@ struct SceneMeshDrawer::ForestPlan {
     float pxAtMetre = 0.0f, nodeScale = 1.0f;
     bool perspective = true;
 
+    // The frame's working buffers (place()'s chunks, finishForest's groups
+    // and sort), kept with the plan: a spent plan's go to the next frame's
+    // (reuse), so a far view's tens of megabytes of entries are neither
+    // allocated, faulted in nor freed each frame.
+    std::vector<std::vector<Groups>> parts;
+    Groups colour;
+    std::vector<Groups> tiles;
+    std::vector<uint32_t> order[kGroups];
+    std::vector<uint64_t> keyed, keyedSwap;
+
+    static void clearGroups(Groups& G) {
+        for (auto& g : G.g) g.clear();
+    }
+    // `v` as `n` empty groups, keeping each one's room.
+    static void clearGroups(std::vector<Groups>& v, size_t n) {
+        v.resize(n);
+        for (auto& G : v) clearGroups(G);
+    }
+    // Takes a spent plan's buffers, emptied.
+    void reuse(ForestPlan& old) {
+        const auto take = [](auto& mine, auto& theirs) {
+            mine.swap(theirs);
+            mine.clear();
+        };
+        take(seen, old.seen);
+        take(cast, old.cast);
+        take(crowned, old.crowned);
+        take(castCrowned, old.castCrowned);
+        for (int s = 0; s < 2; ++s) {
+            take(split[s].fine, old.split[s].fine);
+            take(split[s].varying, old.split[s].varying);
+            split[s].groups.swap(old.split[s].groups);
+            for (auto& G : split[s].groups) clearGroups(G);
+        }
+        parts.swap(old.parts);
+        colour = std::move(old.colour);
+        clearGroups(colour);
+        tiles.swap(old.tiles);
+        for (int k = 0; k < kGroups; ++k) take(order[k], old.order[k]);
+        take(keyed, old.keyed);
+        take(keyedSwap, old.keyedSwap);
+    }
+
     // The budget's detail factor addTree measures at (set by cost(),
     // forcedCost() and finishForest()): it scales what the eye misses
     // first, the twigs' fine rows and their shoots.
@@ -681,7 +724,10 @@ struct SceneMeshDrawer::ForestPlan {
         this->detail = d;
         const ForestNode::Lod L = ForestNode::scaled(shadow ? shadowLod : lod, d);
         const uint32_t chunks = chunksOf(trees.size());
-        std::vector<std::vector<Groups>> parts(out ? chunks : 0, std::vector<Groups>(out ? out->size() : 0));
+        if (out) {
+            parts.resize(std::max<size_t>(parts.size(), chunks));
+            for (uint32_t c = 0; c < chunks; ++c) clearGroups(parts[c], out->size());
+        }
         std::vector<Tally> tallies(chunks);
         std::vector<uint64_t> drawnOf(chunks, 0);
         std::vector<std::array<uint32_t, ForestNode::kTiers>> tiersOf(chunks);
@@ -702,18 +748,19 @@ struct SceneMeshDrawer::ForestPlan {
             tally.blooms += tallies[c].blooms;
             for (int k = 0; k < ForestNode::kTiers; ++k) tiers[k] += tiersOf[c][k];
         }
-        if (out) appendGroups(*out, parts);
+        if (out) appendGroups(*out, chunks);
     }
 
-    // Each chunk's groups appended to `out`'s, in chunk order: the order
-    // one thread would have added them in.
-    static void appendGroups(std::vector<Groups>& out, std::vector<std::vector<Groups>>& parts) {
+    // The first `chunks` of parts' groups appended to `out`'s, in chunk
+    // order: the order one thread would have added them in.
+    void appendGroups(std::vector<Groups>& out, uint32_t chunks) {
         for (size_t t = 0; t < out.size(); ++t)
             for (int k = 0; k < kGroups; ++k) {
                 size_t n = out[t].g[k].size();
-                for (auto& p : parts) n += p[t].g[k].size();
+                for (uint32_t c = 0; c < chunks; ++c) n += parts[c][t].g[k].size();
                 out[t].g[k].reserve(n);
-                for (auto& p : parts) out[t].g[k].insert(out[t].g[k].end(), p[t].g[k].begin(), p[t].g[k].end());
+                for (uint32_t c = 0; c < chunks; ++c)
+                    out[t].g[k].insert(out[t].g[k].end(), parts[c][t].g[k].begin(), parts[c][t].g[k].end());
             }
     }
 
@@ -751,7 +798,7 @@ struct SceneMeshDrawer::ForestPlan {
         const ForestNode::Lod& base = shadow ? shadowLod : lod;
         const size_t groupsOf = shadow ? tileSlots.size() : 1;
         if (cs.fine.size() != trees.size()) {
-            if (cs.group) cs.groups.assign(groupsOf, Groups{});
+            if (cs.group) clearGroups(cs.groups, groupsOf);
             Tally tally;
             place(shadow, 1.0f, cs.group ? &cs.groups : nullptr, cs.drawn, cs.tiers, tally, &cs.fine);
             cs.leaves = tally.leaves;
@@ -989,6 +1036,10 @@ std::unique_ptr<SceneMeshDrawer::ForestPlan> SceneMeshDrawer::planForest(SceneFr
     }
     auto plan = std::make_unique<ForestPlan>();
     ForestPlan& P = *plan;
+    if (!sparePlans_.empty()) {
+        P.reuse(*sparePlans_.back());
+        sparePlans_.pop_back();
+    }
     P.node = &node;
     const SceneView& view = frame.view;
     const bromath::Mat4& world = node.worldMatrix();
@@ -1262,6 +1313,7 @@ void SceneMeshDrawer::prepareForest(SceneFrame& frame, ForestNode& node, std::ve
     if (P.force < 0)
         settleDetail(forestDetail_[&node], frame, P.lod.budget, P.lod.shadowBudget, detail, shadowDetail);
     finishForest(frame, P, detail, shadowDetail, out);
+    if (sparePlans_.size() < 8) sparePlans_.push_back(std::move(plan));
 }
 
 void SceneMeshDrawer::settleDetail(ForestDetail& d, const SceneFrame& frame, float budget, float shadowBudget,
@@ -1343,6 +1395,10 @@ void SceneMeshDrawer::prepareForests(SceneFrame& frame, const std::vector<Forest
     if (!forced) settleDetail(forestsDetail_, frame, budget, shadowBudget, detail, shadowDetail);
     for (size_t i = 0; i < nodes.size(); ++i)
         if (plans[i]) finishForest(frame, *plans[i], detail, shadowDetail, out[i]);
+    // (A few kept: as many as the frame's forests, up to 8.)
+    sparePlans_.clear();
+    for (auto& p : plans)
+        if (p && sparePlans_.size() < 8) sparePlans_.push_back(std::move(p));
 }
 
 void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detail, float shadowDetail,
@@ -1368,7 +1424,7 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
     }
 
     // The camera's trees at the detail.
-    Groups colour;
+    Groups& colour = P.colour;
     uint64_t colourVerts = 0;
     stats.detail = detail;
     {
@@ -1378,16 +1434,18 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
         for (const Seen& s : P.seen) node.seenTree(s.instance).forceTier = P.forceOf(s);
         auto& fine = P.split[0];
         if (fine.grouped && detail == 1.0f) {
-            colour = std::move(fine.groups[0]);
+            for (int k = 0; k < kGroups; ++k) colour.g[k].swap(fine.groups[0].g[k]);
             colourVerts += fine.drawn;
             for (int k = 0; k < ForestNode::kTiers; ++k) stats.trees[k] += fine.tiers[k];
             stats.leaves += fine.leaves;
             stats.blooms += fine.blooms;
         } else {
-            std::vector<Groups> placed(1);
+            // (Placed into the ask at 1's groups, spare at this detail.)
+            std::vector<Groups>& placed = fine.groups;
+            ForestPlan::clearGroups(placed, 1);
             ForestPlan::Tally tally;
             P.place(false, detail, &placed, colourVerts, stats.trees, tally);
-            colour = std::move(placed[0]);
+            for (int k = 0; k < kGroups; ++k) colour.g[k].swap(placed[0].g[k]);
             stats.leaves += tally.leaves;
             stats.blooms += tally.blooms;
         }
@@ -1398,18 +1456,21 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
         for (uint32_t i : P.crowned) colour.g[Crowns].push_back({i, 0u, 1u, 0u, 1.0f, 0.0f, 1.0f, 1.0f});
     }
     stats.vertices = colourVerts;
-    // Clumps and crowns nearest the eye first: each writes the depth of the
-    // leaves it shows, so one behind a crown already drawn fails the early
-    // depth test rather than placing its leaves for nothing.
+    // Clumps and crowns nearest the eye first. (Measured on an RTX 4090 and
+    // on RADV, this does not spare their shading: a fragment stage that can
+    // discard gets no early depth rejection at all, even against depth an
+    // earlier draw wrote, so every layer behind a drawn crown still shades.)
     // (A stable sort by distance, as a radix sort of the distances' bits: a
     // distance is never negative, so its bits order as it does. A far view's
     // crowns are 200k entries a frame, so the entries stay where they are:
     // the group's order is kept beside it, and the upload follows it.)
-    std::vector<uint32_t> order[kGroups];
-    std::vector<uint64_t> keyed, swap;
+    auto& order = P.order;
+    std::vector<uint64_t>& keyed = P.keyed;
+    std::vector<uint64_t>& swap = P.keyedSwap;
     const auto nearestFirst = [&](int k) {
         const std::vector<Entry>& g = colour.g[k];
         const size_t n = g.size();
+        order[k].clear();
         if (n < 2) return;
         keyed.resize(n);
         swap.resize(n);
@@ -1435,8 +1496,7 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
     };
     nearestFirst(Cores);
     // So do the leaves, tree by tree (a tree's run of entries stays in its
-    // order): the sprays of a crown behind a nearer one fail the depth test
-    // rather than being shaded first and covered.
+    // order). (Discarding too: the order spares no shading, as above.)
     nearestFirst(LeafNear);
     nearestFirst(LeafCard);
     nearestFirst(Twigs);
@@ -1446,14 +1506,15 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
     nearestFirst(Crowns);
 
     // Each shadow tile's trees at the shadow detail.
-    std::vector<Groups> tiles(P.tileSlots.size());
+    std::vector<Groups>& tiles = P.tiles;
     stats.shadowDetail = shadowDetail;
     {
         auto& fine = P.split[1];
         if (fine.grouped && shadowDetail == 1.0f) {
-            tiles = std::move(fine.groups);
+            tiles.swap(fine.groups);
             stats.shadowVertices += fine.drawn;
         } else {
+            ForestPlan::clearGroups(tiles, P.tileSlots.size());
             ForestPlan::Tally tally;
             uint32_t unused[ForestNode::kTiers] = {};
             P.place(true, shadowDetail, &tiles, stats.shadowVertices, unused, tally);
