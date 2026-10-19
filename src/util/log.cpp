@@ -3,7 +3,9 @@
 #include <chrono>
 #include <cstdarg>
 #include <cstdio>
+#include <cstring>
 #include <ctime>
+#include <string>
 
 namespace bro::util {
 
@@ -52,10 +54,26 @@ void log(LogLevel level, const char* fmt, ...) {
 
     va_list args;
     va_start(args, fmt);
+    va_list again;
+    va_copy(again, args);
     int msgLen = (headerLen < static_cast<int>(sizeof(line)) - 2)
                      ? std::vsnprintf(line + headerLen, sizeof(line) - headerLen - 2, fmt, args)
                      : 0;
     va_end(args);
+    // A line past the buffer (a render's per-draw stats) is written whole
+    // from the heap, not cut where a reader's parse would stop.
+    if (headerLen + msgLen >= static_cast<int>(sizeof(line)) - 2) {
+        std::string big(static_cast<size_t>(headerLen + msgLen) + 2, '\0');
+        std::memcpy(big.data(), line, static_cast<size_t>(headerLen));
+        std::vsnprintf(big.data() + headerLen, static_cast<size_t>(msgLen) + 1, fmt, again);
+        va_end(again);
+        big[static_cast<size_t>(headerLen + msgLen)] = '\n';
+        big.resize(static_cast<size_t>(headerLen + msgLen) + 1);
+        std::fputs(big.c_str(), stderr);
+        std::fflush(stderr);
+        return;
+    }
+    va_end(again);
 
     int totalLen = headerLen + (msgLen > 0 ? msgLen : 0);
     if (totalLen >= static_cast<int>(sizeof(line)) - 2) {
