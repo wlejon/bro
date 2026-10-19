@@ -246,10 +246,12 @@ void barkRibbonMain(ForestEntry e) {
     float widthPx = 2.0 * rw * pxPerM;
     // The share of its width the round bark leaves (scene_forest_tube.glsl
     // thins it from 1.6 times the cut to nothing at it).
-    // The drawer stops at half the cut (kBarkRibbonCut): they fade in to
-    // three quarters of it, so none blinks out as the eye backs off.
+    // The drawer stops at its share of the cut (kBarkRibbonCut, the
+    // entry's `tail`): they fade in to 1.5 times that, so none blinks out
+    // as the eye backs off.
+    float low = e.tail * e.widening;
     float left = e.widening > 0.0 ? (1.0 - smoothstep(e.widening, 1.6 * e.widening, rad)) *
-                                        smoothstep(0.5 * e.widening, 0.75 * e.widening, rad)
+                                        smoothstep(low, 1.5 * low, rad)
                                   : 0.0;
     float cover = clamp(widthPx * left, 0.0, 1.0);
     vec3 toEye = ortho ? normalize(vec3(camera.view[0][2], camera.view[1][2], camera.view[2][2])) : -pos / dist;

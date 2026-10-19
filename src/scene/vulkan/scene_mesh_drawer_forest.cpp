@@ -444,7 +444,7 @@ struct SceneMeshDrawer::ForestPlan {
                     for (uint32_t c = r0; c < r1; c += kTwigPiecesPerEntry)
                             G->g[Twigs].push_back({inst, sp.segStart + c,
                                                    sp.segStart + std::min(c + kTwigPiecesPerEntry, r1), ~0u,
-                                                   t.barkRadius, 1.0f, 1.0f, 1.0f});
+                                                   t.barkRadius, 1.0f, kBarkRibbonCut, 1.0f});
                 }
             }
         }
