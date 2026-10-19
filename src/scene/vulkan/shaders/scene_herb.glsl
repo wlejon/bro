@@ -112,10 +112,19 @@ vec3 herbDir(float a, float lean) { return vec3(cos(a) * sin(lean), cos(lean), s
 // frequency `freq`, sway `sway` and length `len` on phase `phase`.
 // A stalk bent far leans out of the wind (it shows less of itself to it,
 // across less of the flow), so its deflection saturates: past about half
-// its length it gains little more.
-vec3 herbSwing(float freq, float sway, float len, float zeta, float phase, VegWind w, float bob) {
-    vec3 x = vegLevel(VegCantilever(freq, sway, len), zeta, phase, w, bob);
-    return x / (1.0 + length(x) / max(0.6 * len, 1e-3));
+// its length it gains little more. Where it stands (camera-relative `at`)
+// its ring, each stem's own at its own phase, is gone past HERB_RING_NEAR
+// and fades as it shrinks on screen: further out a meadow sways as the
+// gusts lean it, as one, not as stems each ringing a few pixels (which reads
+// as pixels flipping); and a swing under VEG_STILL_PIXELS holds still
+// (vegPose's reasons).
+const vec2 HERB_RING_NEAR = vec2(6.0, 10.0);
+float herbNear(vec3 at) { return 1.0 - smoothstep(HERB_RING_NEAR.x, HERB_RING_NEAR.y, length(at)); }
+vec3 herbSwing(float freq, float sway, float len, float zeta, float phase, VegWind w, float bob, vec3 at) {
+    float pxPerM = vegPixelsPerMetre(at);
+    vec3 x = vegLevel(VegCantilever(freq, sway, len), zeta, phase, w, bob, pxPerM, herbNear(at));
+    x /= 1.0 + length(x) / max(0.6 * len, 1e-3);
+    return x * smoothstep(VEG_STILL_PIXELS.x, VEG_STILL_PIXELS.y, length(x) * pxPerM);
 }
 
 // Stem `k` of a plant of species `sp` at camera-relative `root`.
@@ -143,7 +152,7 @@ HerbStalk herbStem(int sp, int k, vec3 root, vec4 h, float size, VegWind w, floa
     vec3 bw = vec3(cos(ab), 0.0, sin(ab));
     s.bow = bw * (0.04 + 0.2 * hb2);
     s.bow2 = bw * ((hb - 0.55) * 0.35) + vec3(-bw.z, 0.0, bw.x) * ((hb2 - 0.5) * 0.15);
-    vec3 x = herbSwing(r11.x, r11.y * shelter, s.len, 0.08, hk, w, 0.2);
+    vec3 x = herbSwing(r11.x, r11.y * shelter, s.len, 0.08, hk, w, 0.2, s.base);
     s.wind = x / max(s.len, 0.01) + push;
     return s;
 }
@@ -477,7 +486,7 @@ bool herbVertex(int id, int vid, vec3 v, out HerbVertex o) {
     s.bow = vec3(0.0);
     s.bow2 = vec3(0.0);
     s.len = L;
-    vec3 x = herbSwing(r11.z, r11.w * shelter, L, 0.06, hk, w, 0.5);
+    vec3 x = herbSwing(r11.z, r11.w * shelter, L, 0.06, hk, w, 0.5, base);
     s.wind = x / max(L, 0.01) + push * 0.6;
     // The card's rows: the first is the stalk, the rest the blade.
     float S = float(max(vpc / 2 - 1, 1));
@@ -500,8 +509,11 @@ bool herbVertex(int id, int vid, vec3 v, out HerbVertex o) {
     // (In a calm nothing flutters.)
     float gust = smoothstep(0.0, 1.0, w.trunk * 3.0);
     float calm = clamp(camera.windField.z / 2.5, 0.0, 1.0);
-    float roll = (hk2 - 0.5) * 0.5 +
-                 sin(6.2831853 * sceneWindCycles((4.0 + 5.0 * hk) / 6.2831853) + hk * 40.0) * (0.06 * calm + 0.3 * gust) * shelter;
+    // (Its flutter fades as the leaf's edge moves fewer pixels, vegFineKeep,
+    // and is gone past HERB_RING_NEAR.)
+    float flutter = (0.06 * calm + 0.3 * gust) * shelter;
+    flutter *= vegFineKeep(base, flutter * 0.5 * r1.w * L * widen) * herbNear(base);
+    float roll = (hk2 - 0.5) * 0.5 + sin(6.2831853 * sceneWindCycles((4.0 + 5.0 * hk) / 6.2831853) + hk * 40.0) * flutter;
     vec3 sideR = side * cos(roll) + nrm * sin(roll);
     nrm = normalize(cross(sideR, tg));
     // The card's width: the leaf's (a carpet's card holds several leaves).

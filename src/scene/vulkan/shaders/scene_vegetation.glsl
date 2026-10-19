@@ -215,6 +215,24 @@ VegWind vegWind(VegPlant plant) {
     return w;
 }
 
+// How much of a part's quick motion is kept where it moves `reach` metres
+// at camera-relative `at`: all of it while that is VEG_FINE_PIXELS.y pixels
+// on screen, none under .x. Finer, a leaf's flutter or a limb's shake is a
+// pixel or two each way at a few hertz: a crown of them reads as shimmer,
+// not as leaves or limbs moving (with no temporal filter, motion under a
+// pixel over sharp detail shows only as pixels flipping, as often as it
+// moves), and the wood's lean in the gusts carries the motion there.
+const vec2 VEG_FINE_PIXELS = vec2(3.0, 9.0);
+float vegPixelsPerMetre(vec3 at) {
+    bool ortho = abs(camera.proj[3][3]) > 0.5;
+    return abs(camera.proj[1][1]) * camera.viewport.y * 0.5 / (ortho ? 1.0 : max(length(at), 1e-3));
+}
+// The whole pose's reach (pixels) under which it holds still (vegPose).
+const vec2 VEG_STILL_PIXELS = vec2(1.0, 3.0);
+float vegFineKeep(vec3 at, float reach) {
+    return smoothstep(VEG_FINE_PIXELS.x, VEG_FINE_PIXELS.y, reach * vegPixelsPerMetre(at));
+}
+
 // A herb stalk's tip deflection (world metres) as a forced, damped
 // oscillator, under drag `mean` (already lagged a quarter of its period)
 // and the gusts' change `kick`. `turbulence` is the share of unresolved
@@ -233,12 +251,13 @@ VegWind vegWind(VegPlant plant) {
 // drag changes the ring's size, never its rate: scene_camera.glsl's
 // oscillator clock).
 vec3 vegLevelDrive(VegCantilever c, float zeta, float turbulence, float phase, float mean, float kick, VegWind w,
-                   float bob) {
+                   float bob, float pxPerM, float ring) {
     if (c.sway <= 0.0 || c.freq <= 0.0) return vec3(0.0);
     float period = 1.0 / c.freq;
     float turb = turbulence * mean * pow(max(c.freq, 0.1), -1.0 / 3.0) * inversesqrt(zeta);
     float gust = VEG_GUST_KICK * kick * min(1.0, 1.25 * period);
-    float rms = sqrt(turb * turb + gust * gust);
+    float rms = sqrt(turb * turb + gust * gust) * ring;
+    if (pxPerM > 0.0) rms *= smoothstep(VEG_FINE_PIXELS.x, VEG_FINE_PIXELS.y, 2.0 * rms * c.sway * c.len * pxPerM);
     float a1 = VEG_TWO_PI * (sceneWindCycles(c.freq * (1.0 - zeta)) + phase);
     float a2 = VEG_TWO_PI * (sceneWindCycles(c.freq * (1.0 + zeta)) + phase * 2.3) + 2.0;
     float a3 = VEG_TWO_PI * (sceneWindCycles(c.freq * 1.13) + phase * 3.7) + 1.3;
@@ -248,9 +267,12 @@ vec3 vegLevelDrive(VegCantilever c, float zeta, float turbulence, float phase, f
     return x * (c.sway * c.len);
 }
 
-// The same driven by the plant's trunk drag (a herb's stalk).
-vec3 vegLevel(VegCantilever c, float zeta, float phase, VegWind w, float bob) {
-    return vegLevelDrive(c, zeta, VEG_TURBULENCE, phase, w.trunk, w.kick, w, bob);
+// The same driven by the plant's trunk drag (a herb's stalk). `pxPerM` the
+// pixels a metre where it is (vegPixelsPerMetre): its ring fades as it
+// shrinks on screen (vegFineKeep), its lean kept; 0 keeps it whole. `ring`
+// scales the ring (1: all of it).
+vec3 vegLevel(VegCantilever c, float zeta, float phase, VegWind w, float bob, float pxPerM, float ring) {
+    return vegLevelDrive(c, zeta, VEG_TURBULENCE, phase, w.trunk, w.kick, w, bob, pxPerM, ring);
 }
 
 // --- Trees and shrubs: a held lean, damped by size ---------------------------
@@ -308,24 +330,6 @@ vec2 vegBuffet(float phase, float seed) {
     float c1 = sin(VEG_TWO_PI * (sceneWindCycles(0.43 * s) + phase * 1.9) + 0.7);
     float c2 = sin(VEG_TWO_PI * (sceneWindCycles(0.79 * s) + phase * 3.3) + 2.9);
     return vec2((b1 + 0.7 * b2 + 0.45 * b3) * 1.088, (c1 + 0.6 * c2) * 1.213);
-}
-
-// How much of a part's quick motion is kept where it moves `reach` metres
-// at camera-relative `at`: all of it while that is VEG_FINE_PIXELS.y pixels
-// on screen, none under .x. Finer, a leaf's flutter or a limb's shake is a
-// pixel or two each way at a few hertz: a crown of them reads as shimmer,
-// not as leaves or limbs moving (with no temporal filter, motion under a
-// pixel over sharp detail shows only as pixels flipping, as often as it
-// moves), and the wood's lean in the gusts carries the motion there.
-const vec2 VEG_FINE_PIXELS = vec2(3.0, 9.0);
-float vegPixelsPerMetre(vec3 at) {
-    bool ortho = abs(camera.proj[3][3]) > 0.5;
-    return abs(camera.proj[1][1]) * camera.viewport.y * 0.5 / (ortho ? 1.0 : max(length(at), 1e-3));
-}
-// The whole pose's reach (pixels) under which it holds still (vegPose).
-const vec2 VEG_STILL_PIXELS = vec2(1.0, 3.0);
-float vegFineKeep(vec3 at, float reach) {
-    return smoothstep(VEG_FINE_PIXELS.x, VEG_FINE_PIXELS.y, reach * vegPixelsPerMetre(at));
 }
 
 // A tree level's tip deflection (world metres): its held lean under `mean`,
