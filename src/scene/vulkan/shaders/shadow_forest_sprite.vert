@@ -66,7 +66,13 @@ void main() {
     // As an even disc, a low sun's long shadows across a far canopy shaded
     // its crowns 7 units under its leaves'.
     if (int(push.params.x + 0.5) == 1) outDepth *= FOREST_CROWN_CLUMPING;
-    vec4 clip = L * vec4(s.center + away * ((outHollow > 0.0 ? 0.0 : 0.5) * s.radius), 1.0);
+    // A spray node's crown (a needle or scale-leaf form) is its sprays' pads
+    // filled to their rims, dense through: its disc stands a quarter radius
+    // on, shading more of its near half. (Half a radius on, a cypress's
+    // crowns were 8 to 13 units brighter than its leaves at 45 / 75 m.)
+    bool sprayCrown = int(push.params.x + 0.5) == 1 && (floatBitsToUint(procedural.header[3].w) & 15u) != 0u;
+    float past = outHollow > 0.0 ? 0.0 : sprayCrown ? 0.25 : 0.5;
+    vec4 clip = L * vec4(s.center + away * (past * s.radius), 1.0);
     // How far a world metre moves the tile's x and y: the lengths of its
     // first two rows.
     vec2 perMetre = vec2(length(vec3(L[0][0], L[1][0], L[2][0])), length(vec3(L[0][1], L[1][1], L[2][1])));

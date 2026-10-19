@@ -239,7 +239,12 @@ ForestCrownHit forestCrownTrace(vec3 d, int instance, vec3 offset, float len, fl
     vec3 rel = h.at - S.xyz;
     rel.y /= ky * ky;   // the ellipsoid's normal
     h.normal = normalize(rel);
-    h.sphere = S;
+    // Its leaves' shade is a clump's own: a far pixel's ball is its run's
+    // clumps merged (radius times the grow, at their density), but the leaf
+    // seen lies in one of them. (Through the merged ball a cypress's crowns
+    // darkened with distance, 86 to 77 from 45 to 120 m at golden, where
+    // its leaves brighten.)
+    h.sphere = vec4(S.xyz, S.w / grow);
     h.density = sig;
     h.flatness = ky;
     return h;
