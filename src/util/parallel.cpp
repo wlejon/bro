@@ -2,9 +2,22 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <mutex>
 #include <thread>
+
+#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
+#include <intrin.h>
+#define BRO_PAUSE() _mm_pause()
+#elif defined(__x86_64__) || defined(__i386__)
+#include <immintrin.h>
+#define BRO_PAUSE() _mm_pause()
+#elif defined(__aarch64__)
+#define BRO_PAUSE() asm volatile("yield")
+#else
+#define BRO_PAUSE() ((void)0)
+#endif
 
 namespace bro::util {
 namespace {
@@ -15,21 +28,26 @@ struct Job {
     const std::function<void(uint32_t)>* fn = nullptr;
     uint32_t chunks = 0;
     std::atomic<uint32_t> next{0};
-    uint32_t active = 0;   // workers inside it (under the pool's lock)
+    std::atomic<uint32_t> active{0};   // workers inside it
 
     void drain() {
         for (uint32_t c; (c = next.fetch_add(1, std::memory_order_relaxed)) < chunks;) (*fn)(c);
     }
 };
 
+// A frame's jobs come microseconds apart: a worker done with one spins this
+// long for the next before it sleeps (a sleeping worker's wake is tens of
+// microseconds, a whole small job's length).
+constexpr auto kSpin = std::chrono::microseconds(200);
+
 // Never destroyed: its workers are detached and wait out the process (a
 // join from a static destructor deadlocks under the loader's lock when the
 // engine is a DLL).
 struct Pool {
     std::mutex m;
-    std::condition_variable wake, idle;
-    Job* job = nullptr;
-    uint64_t generation = 0;
+    std::condition_variable wake;
+    Job* job = nullptr;   // under m
+    std::atomic<uint64_t> generation{0};
     std::mutex running;   // one job at a time
     uint32_t workers = 0;
 
@@ -40,17 +58,23 @@ struct Pool {
     void loop() {
         tInJob = true;
         uint64_t seen = 0;
-        std::unique_lock lk(m);
         for (;;) {
-            wake.wait(lk, [&] { return generation != seen; });
-            seen = generation;
-            Job* j = job;
-            if (!j) continue;
-            j->active++;
-            lk.unlock();
+            const auto until = std::chrono::steady_clock::now() + kSpin;
+            for (int i = 0; generation.load(std::memory_order_acquire) == seen; ++i) {
+                BRO_PAUSE();
+                if ((i & 63) == 63 && std::chrono::steady_clock::now() > until) break;
+            }
+            Job* j;
+            {
+                std::unique_lock lk(m);
+                wake.wait(lk, [&] { return generation.load(std::memory_order_relaxed) != seen; });
+                seen = generation.load(std::memory_order_relaxed);
+                j = job;
+                if (!j) continue;
+                j->active.fetch_add(1, std::memory_order_relaxed);
+            }
             j->drain();
-            lk.lock();
-            if (--j->active == 0) idle.notify_all();
+            j->active.fetch_sub(1, std::memory_order_release);
         }
     }
 };
@@ -80,15 +104,21 @@ void parallelChunks(uint32_t chunks, const std::function<void(uint32_t)>& fn) {
     {
         std::lock_guard lk(p.m);
         p.job = &j;
-        p.generation++;
+        p.generation.fetch_add(1, std::memory_order_release);
     }
     p.wake.notify_all();
     tInJob = true;
     j.drain();
     tInJob = false;
-    std::unique_lock lk(p.m);
-    p.job = nullptr;
-    p.idle.wait(lk, [&] { return j.active == 0; });
+    {
+        // A worker joins only under the lock, so once the job is withdrawn
+        // the ones inside are all counted.
+        std::lock_guard lk(p.m);
+        p.job = nullptr;
+    }
+    // The last chunks finish within microseconds of the caller's own: it
+    // spins for them (its wait counted as the frame's CPU, as it is).
+    while (j.active.load(std::memory_order_acquire) != 0) BRO_PAUSE();
 }
 
 }  // namespace bro::util

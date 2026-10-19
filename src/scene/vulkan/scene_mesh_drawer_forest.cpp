@@ -727,14 +727,24 @@ struct SceneMeshDrawer::ForestPlan {
         return v - (tally.drawnOnly - only);
     }
 
-    // Trees [0, n) in chunks of kTreeChunk across the worker pool: `fn(chunk,
-    // begin, end)`.
-    static constexpr uint32_t kTreeChunk = 2048;
-    static uint32_t chunksOf(size_t n) { return static_cast<uint32_t>((n + kTreeChunk - 1) / kTreeChunk); }
+    // Trees [0, n) in chunks across the worker pool: `fn(chunk, begin, end)`.
+    // About 8 chunks a thread, of 256 to 2048 trees: a view's costly trees
+    // (the near ones, leaves and bark) stand together in the list, and
+    // in a few large chunks the frame waited on the one that held them (on
+    // foot, 24k trees seen in 12 chunks, the main thread waited 6 ms).
+    static uint32_t chunkSize(size_t n) {
+        const size_t want = n / (size_t{bro::util::parallelWidth()} * 8);
+        return static_cast<uint32_t>(std::clamp<size_t>(want, 256, 2048));
+    }
+    static uint32_t chunksOf(size_t n) {
+        const uint32_t s = chunkSize(n);
+        return static_cast<uint32_t>((n + s - 1) / s);
+    }
     template <class Fn> static void eachChunk(size_t n, Fn fn) {
+        const uint32_t s = chunkSize(n);
         const auto run = [&](uint32_t c) {
-            const uint32_t b = c * kTreeChunk;
-            fn(c, b, static_cast<uint32_t>(std::min<size_t>(n, size_t{b} + kTreeChunk)));
+            const uint32_t b = c * s;
+            fn(c, b, static_cast<uint32_t>(std::min<size_t>(n, size_t{b} + s)));
         };
         bro::util::parallelChunks(chunksOf(n), run);
     }
