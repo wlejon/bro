@@ -189,6 +189,15 @@ if(BRO_BUILD_TESTS)
     target_link_libraries(bro_vulkan_scene_passes_test PRIVATE bro_scene bro_engine bro_dom bro_engine
                           bro_render bro_platform bro_util skia Vulkan::Vulkan)
     target_include_directories(bro_vulkan_scene_passes_test PRIVATE ${bro_SOURCE_DIR}/src ${VK_GEN_DIR})
+
+    # The forest record format end to end: broflora's emit read by
+    # ForestNode. The test links broflora itself (bro_scene takes only its
+    # headers).
+    if(TARGET broflora)
+        add_executable(bro_forest_records_test tests/test_forest_records.cpp)
+        target_link_libraries(bro_forest_records_test PRIVATE bro_scene broflora bro_render bro_platform bro_util)
+        target_include_directories(bro_forest_records_test PRIVATE ${bro_SOURCE_DIR}/src)
+    endif()
 endif()
 
 
