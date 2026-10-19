@@ -46,9 +46,13 @@ layout(location = 9) flat in vec4 inBloom1;
 #if defined(SCENE_FOREST_SPRITE) || defined(SCENE_FOREST_BLOOM)
 // The card stands at the sphere's front (a sprite's, a bloom's head), so the
 // depth written only ever moves away from the eye: less under reversed-Z
-// (the default), where the early depth test keeps working. Under the
-// conventional mapping the card's own depth is written instead, which keeps
-// the promise.
+// (the default). Under the conventional mapping the card's own depth is
+// written instead, which keeps the promise. (The promise does not buy an
+// early depth test: these builds discard, and a stage that can discard is
+// depth-tested after it shades on an RTX 4090 as on RADV, even against
+// depth written before it. Opaque, nearest first, without the depth or
+// sample mask written, the wilds' far crowns still shaded 3.9 layers a
+// pixel.)
 layout(constant_id = 0) const bool REVERSED_Z = true;
 layout(depth_less) out float gl_FragDepth;
 #endif
