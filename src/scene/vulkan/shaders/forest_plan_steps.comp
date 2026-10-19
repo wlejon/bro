@@ -1,0 +1,176 @@
+#version 450
+// The forest planner's small steps (scene_forest_gpu_plan.cpp):
+//   PLAN_LAYOUT  one thread a node: each view's run of items (the camera's
+//                trees, then each shadow tile's, a run of whole item
+//                blocks each) and the item passes' dispatch
+//   PLAN_ITEMS   a thread a (view, tree): the runs filled, the camera's in
+//                its sorted order, a tile's in the trees' (by the flags'
+//                scan), each run's tail FP_NO_ITEM
+//   PLAN_SETTLE  one thread a budget: the searches' fits settled
+//                (settleDetail) against the details kept in SHARED
+//   PLAN_ARGS    one thread a node, the nodes in turn: each draw's indirect
+//                command from the place counts' scan, the posed groups'
+//                pose slots and dispatches, and the stats
+
+#include "scene_forest_plan.glsl"
+
+#if defined(PLAN_ITEMS)
+layout(local_size_x = FP_GROUP_SIZE) in;
+#else
+layout(local_size_x = 1) in;
+#endif
+
+uint roundUp(uint n, uint to) { return (n + to - 1u) / to * to; }
+
+#if defined(PLAN_LAYOUT)
+void main() {
+    planBegin();
+    uint at = 0u;
+    uint flags = workRun(FP_W_FLAGS);
+    for (uint v = 0u; v <= gTiles; ++v) {
+        uint n = planWork.w[FP_N_VIEW_COUNT + v];
+        planWork.w[FP_N_VIEW_BASE + v] = at;
+        planWork.w[FP_N_VIEW_START + v] = v == 0u ? 0u : planWork.w[flags + (v - 1u) * gTrees];
+        at += roundUp(n, uint(FP_GROUP_SIZE));
+    }
+    planArgs.w[FP_A_ITEM_DISPATCH] = at / uint(FP_GROUP_SIZE);
+    planArgs.w[FP_A_ITEM_DISPATCH + 1] = 1u;
+    planArgs.w[FP_A_ITEM_DISPATCH + 2] = 1u;
+}
+
+#elif defined(PLAN_ITEMS)
+void main() {
+    planBegin();
+    uint stride = roundUp(gTrees, uint(FP_GROUP_SIZE));
+    uint x = gl_GlobalInvocationID.x;
+    uint v = x / stride, j = x % stride;
+    if (v > gTiles) return;
+    uint items = workRun(FP_W_ITEMS);
+    uint n = planWork.w[FP_N_VIEW_COUNT + v];
+    uint base = planWork.w[FP_N_VIEW_BASE + v];
+    uint pad = roundUp(n, uint(FP_GROUP_SIZE)) - n;
+    if (j < pad) planWork.w[items + base + n + j] = FP_NO_ITEM;
+    if (j >= gTrees) return;
+    if (v == 0u) {
+        if (j < n) planWork.w[items + base + j] = planWork.w[workRun(FP_W_VALS_A) + j];
+        return;
+    }
+    uint flags = workRun(FP_W_FLAGS) + (v - 1u) * gTrees;
+    uint at = planWork.w[flags + j], next = planWork.w[flags + j + 1u];
+    if (next != at) planWork.w[items + base + (at - planWork.w[FP_N_VIEW_START + v])] = j | v << FP_VIEW_SHIFT;
+}
+
+#elif defined(PLAN_SETTLE)
+void main() {
+    float step = pf(FP_P_SEARCH + FP_Q_STEP);
+    bool snap = pu(FP_P_SEARCH + FP_Q_SNAP) != 0u;
+    uint slot = FP_G_SETTLED + 2u * pu(FP_P_SEARCH + FP_Q_SLOT);
+    for (uint q = 0u; q < 2u; ++q) {
+        Search s = planSearch(q, FP_ROUNDS);
+        float target = s.result;
+        float prev = uintBitsToFloat(planShared.w[slot + q]);
+        // settleDetail's settle().
+        float d = target;
+        if (!(snap || prev <= 0.0)) {
+            precise float up = prev * step;
+            if (target > prev) d = min(target, up);
+            else if (target < fdiv(prev, 1.04)) d = max(target, fdiv(prev, step));
+            else d = prev;
+        }
+        planShared.w[slot + q] = floatBitsToUint(d);
+        planShared.w[FP_G_DETAIL + q] = floatBitsToUint(d);
+    }
+}
+
+#elif defined(PLAN_ARGS)
+// A command at `slot` of view `v`: `b` 0 the whole range, 1 + batch.
+uint commandAt(uint v, uint slot, uint b) {
+    return (v * uint(FP_A_SLOTS_PER_VIEW) + slot) * uint(FP_A_SLOT_WORDS) + b * uint(FP_A_COMMAND_WORDS);
+}
+void writeCommand(uint at, uint kind, uint instances, uint count, uint first, uint n) {
+    if (kind == FP_DRAW_INDEXED) {
+        planArgs.w[at] = count;
+        planArgs.w[at + 1u] = n;
+        planArgs.w[at + 2u] = 0u;
+        planArgs.w[at + 3u] = 0u;
+        planArgs.w[at + 4u] = first;
+    } else if (kind == FP_DRAW_INSTANCED) {
+        planArgs.w[at] = count;
+        planArgs.w[at + 1u] = n;
+        planArgs.w[at + 2u] = 0u;
+        planArgs.w[at + 3u] = first;
+        planArgs.w[at + 4u] = 0u;
+    } else {   // crowns: an entry's card a FOREST_CARD_VERTICES run, not instanced
+        planArgs.w[at] = n * uint(FOREST_CARD_VERTICES);
+        planArgs.w[at + 1u] = n > 0u ? instances : 0u;
+        planArgs.w[at + 2u] = first * uint(FOREST_CARD_VERTICES);
+        planArgs.w[at + 3u] = 0u;
+        planArgs.w[at + 4u] = 0u;
+    }
+}
+
+void main() {
+    planBegin();
+    uint G = pu(FP_P_ITEM_GROUPS);
+    uint sums = workRun(FP_W_SUMS);
+    uint cap = pu(FP_P_ENTRY_CAP);
+    uint poseCap = pu(FP_P_POSE_CAP);
+    const uint kMaxPoses = 4u << 20;   // the drawer's kMaxPoses
+    uint draws = 0u;
+    uint poseLeaves = 0u, wantedLeaves = 0u;
+    uint cursor = planShared.w[FP_G_POSE_CURSOR], wanted = planShared.w[FP_G_POSE_WANTED];
+    for (uint v = 0u; v <= gTiles; ++v) {
+        uint n = planWork.w[FP_N_VIEW_COUNT + v];
+        uint g0 = planWork.w[FP_N_VIEW_BASE + v] / uint(FP_GROUP_SIZE);
+        uint g1 = g0 + roundUp(n, uint(FP_GROUP_SIZE)) / uint(FP_GROUP_SIZE);
+        uint drawBase = FP_P_DRAWS + (v == 0u ? 0u : uint(FP_GROUPS)) * 2u;
+        for (uint k = 0u; k < uint(FP_GROUPS); ++k) {
+            uint first = planWork.w[sums + k * G + g0];
+            uint want = planWork.w[sums + k * G + g1] - first;
+            if (want > 0u) draws++;
+            uint m = first >= cap ? 0u : min(want, cap - first);
+            uint word = pu(drawBase + 2u * k);
+            uint kind = word & 0xffu, instances = word >> 8, count = pu(drawBase + 2u * k + 1u);
+            bool leaf = v == 0u && (k == uint(G_LEAF_NEAR) || k == uint(G_LEAF_CARD));
+            if (leaf) {
+                // Posed while the pose buffer has room for the group's leaves
+                // (the drawer's posedGroup), else drawn inline (its twin).
+                uint j = k - uint(G_LEAF_NEAR);
+                uint col = sums + (uint(FP_GROUPS) + j) * G;
+                uint leaves = planWork.w[col + g1] - planWork.w[col + g0];
+                bool posed = leaves > 0u && cursor + poseLeaves + leaves <= poseCap;
+                if (leaves > 0u && wanted + wantedLeaves + leaves <= kMaxPoses) wantedLeaves += leaves;
+                planWork.w[FP_N_POSED + j] = posed ? 1u : 0u;
+                planWork.w[FP_N_POSE_BASE + j] = cursor + poseLeaves;
+                if (posed) poseLeaves += leaves;
+                writeCommand(commandAt(v, k, 0u), kind, instances, count, first, posed ? m : 0u);
+                writeCommand(commandAt(v, uint(FP_GROUPS) + j, 0u), kind, instances, count, first, posed ? 0u : m);
+                uint p = FP_A_POSE + 4u * j;
+                planArgs.w[p] = posed ? m : 0u;
+                planArgs.w[p + 1u] = 1u;
+                planArgs.w[p + 2u] = 1u;
+                planArgs.w[p + 3u] = first;
+                continue;
+            }
+            writeCommand(commandAt(v, k, 0u), kind, instances, count, first, m);
+            if (v == 0u && (k == uint(G_CLUMPS) || k == uint(G_CROWNS))) {
+                // The batches (MeshDraw::indirectBatches), nearest first.
+                float ends[FP_BATCHES + 1] = float[FP_BATCHES + 1](0.0, FP_BATCH_END_0, FP_BATCH_END_1, 1.0);
+                for (uint b = 0u; b < uint(FP_BATCHES); ++b) {
+                    uint a = b == 0u ? 0u : uint(floor(float(m) * ends[b]));
+                    uint e = b + 1u == uint(FP_BATCHES) ? m : uint(floor(float(m) * ends[b + 1u]));
+                    writeCommand(commandAt(v, k, 1u + b), kind, instances, count, first + a, e - a);
+                }
+            }
+        }
+    }
+    planShared.w[FP_G_POSE_CURSOR] = cursor + poseLeaves;
+    planShared.w[FP_G_POSE_WANTED] = wanted + wantedLeaves;
+    uint st = FP_N_STATS;
+    planWork.w[st + FP_S_ENTRIES] = planWork.w[sums + uint(FP_GROUPS) * G];
+    planWork.w[st + FP_S_DRAWS] = draws;
+    planWork.w[st + FP_S_DETAIL] = planShared.w[FP_G_DETAIL];
+    planWork.w[st + FP_S_SHADOW_DETAIL] = planShared.w[FP_G_DETAIL + 1u];
+    planWork.w[st + FP_S_POSES] = wantedLeaves;
+}
+#endif

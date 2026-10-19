@@ -72,6 +72,22 @@ BRO_SCENE_SHADER(MeshForestLeafVert,       "mesh_forest_leaf.vert",       "mesh_
 BRO_SCENE_SHADER(MeshForestLeafInlineVert, "mesh_forest_leaf_inline.vert", "mesh_forest_leaf.vert",       "vert", "FOREST_LEAF_INLINE")
 // The colour leaves' poses, a leaf at a time, ahead of the draws that read them.
 BRO_SCENE_SHADER(ForestLeafPoseComp,       "forest_leaf_pose.comp",       "forest_leaf_pose.comp",       "comp", "")
+// The same for the GPU planner's draws, their first entry and count read
+// from its indirect arguments (scene_forest_gpu_plan.cpp).
+BRO_SCENE_SHADER(ForestLeafPoseIndirectComp, "forest_leaf_pose_indirect.comp", "forest_leaf_pose.comp",  "comp", "FOREST_POSE_INDIRECT")
+// The forest's GPU planner (scene_forest_plan.glsl), its stages in order.
+BRO_SCENE_SHADER(ForestPlanMeasureComp,    "forest_plan_measure.comp",    "forest_plan_measure.comp",    "comp", "")
+BRO_SCENE_SHADER(ForestPlanScanLocalComp,  "forest_plan_scan_local.comp", "forest_plan_scan.comp",       "comp", "SCAN_LOCAL")
+BRO_SCENE_SHADER(ForestPlanScanAddComp,    "forest_plan_scan_add.comp",   "forest_plan_scan.comp",       "comp", "SCAN_ADD")
+BRO_SCENE_SHADER(ForestPlanSortHistComp,   "forest_plan_sort_hist.comp",  "forest_plan_scan.comp",       "comp", "SORT_HIST")
+BRO_SCENE_SHADER(ForestPlanSortScatterComp, "forest_plan_sort_scatter.comp", "forest_plan_scan.comp",    "comp", "SORT_SCATTER")
+BRO_SCENE_SHADER(ForestPlanLayoutComp,     "forest_plan_layout.comp",     "forest_plan_steps.comp",      "comp", "PLAN_LAYOUT")
+BRO_SCENE_SHADER(ForestPlanItemsComp,      "forest_plan_items.comp",      "forest_plan_steps.comp",      "comp", "PLAN_ITEMS")
+BRO_SCENE_SHADER(ForestPlanCostComp,       "forest_plan_cost.comp",       "forest_plan_place.comp",      "comp", "PLAN_COST")
+BRO_SCENE_SHADER(ForestPlanSettleComp,     "forest_plan_settle.comp",     "forest_plan_steps.comp",      "comp", "PLAN_SETTLE")
+BRO_SCENE_SHADER(ForestPlanCountComp,      "forest_plan_count.comp",      "forest_plan_place.comp",      "comp", "PLAN_COUNT")
+BRO_SCENE_SHADER(ForestPlanArgsComp,       "forest_plan_args.comp",       "forest_plan_steps.comp",      "comp", "PLAN_ARGS")
+BRO_SCENE_SHADER(ForestPlanWriteComp,      "forest_plan_write.comp",      "forest_plan_place.comp",      "comp", "PLAN_WRITE")
 BRO_SCENE_SHADER(MeshForestTubeVert,       "mesh_forest_tube.vert",       "mesh_forest_tube.vert",       "vert", "")
 BRO_SCENE_SHADER(MeshForestSpriteVert,     "mesh_forest_sprite.vert",     "mesh_forest_sprite.vert",     "vert", "")
 BRO_SCENE_SHADER(ShadowForestLeafVert,     "shadow_forest_leaf.vert",     "shadow_forest_leaf.vert",     "vert", "")

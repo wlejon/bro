@@ -1,0 +1,146 @@
+#version 450
+// The forest planner's first stage (scene_forest_gpu_plan.cpp), a thread a
+// tree: the camera's measure of it, as planForest takes it (its distances
+// to the tree's box and crown, its pixels per unit at each, its bark's
+// classes, classifyBark), its key in the camera's order, and whether each
+// shadow tile sees it. No cell is tested first, nor any far cell planned
+// apart: a far cell's trees come out of the rules a crown alone, as the
+// CPU's shortcut takes them.
+
+#include "scene_forest_plan.glsl"
+
+layout(local_size_x = FP_GROUP_SIZE) in;
+
+shared uint sCount[FP_MAX_VIEWS];
+shared uint sCulled;
+
+// std::clamp(v, lo, hi): v < lo ? lo : hi < v ? hi : v (a box thinner than
+// twice the reach clamps to its low side, as the CPU's does).
+float clampStd(float v, float lo, float hi) { return v < lo ? lo : (hi < v ? hi : v); }
+
+// ForestPlan::classifyBark: the camera's bark classes by each segment's own
+// width at its distance from the eye.
+void classifyBark(Tree tr, Spec sp, float px, float barkPx, inout uint curveEnd, inout uint fineEnd,
+                  inout uint nearEnd) {
+    if (!gPerspective || sp.segCount == 0u) return;
+    if ((sp.segStart + sp.segCount) > su(FP_ST_SEGMENT_COUNT)) return;
+    float near_ = max(px, barkPx);
+    precise float fine = gLod.barkFineSides * gLod.barkSidesPixels;
+    float wMin = min(gLod.barkSidesPixels, fine > 0.0 ? fine : gLod.barkSidesPixels);
+    precise float wDen = 2.0 * 1.25 * near_;
+    float rMin = min(fdiv(kBarkCurvePixels, near_), fdiv(wMin, wDen));
+    uint m = firstUnder(sp.segStart, 0u, sp.segCount, rMin);
+    curveEnd = 0u;
+    fineEnd = 0u;
+    nearEnd = 0u;
+    if (m == 0u) return;
+    vec3 eyeNode = rowsPoint(FP_P_INV_WORLD, gEye);
+    precise vec3 rel = eyeNode - tr.position;
+    precise vec3 v = rel * fdiv(1.0, tr.scale);
+    precise vec3 e = vec3(v.x * tr.cosYaw - v.z * tr.sinYaw, v.y, v.x * tr.sinYaw + v.z * tr.cosYaw);
+    precise float unit = tr.scale * gNodeScale;
+    uint segs = su(FP_ST_SEGMENTS);
+    for (uint i = 0u; i < m; ++i) {
+        uint g = segs + (sp.segStart + i) * 8u;
+        vec3 a = sv3(g), b = sv3(g + 4u);
+        float k0 = keepAt(sp.segStart + i);
+        precise vec3 ab = b - a;
+        precise float l2 = ab.x * ab.x + ab.y * ab.y + ab.z * ab.z;
+        precise vec3 ea = e - a;
+        precise float dotEA = ea.x * ab.x + ea.y * ab.y + ea.z * ab.z;
+        float f = l2 > 0.0 ? clamp(fdiv(dotEA, l2), 0.0, 1.0) : 0.0;
+        precise vec3 onSeg = a + ab * f;
+        precise vec3 off = e - onSeg;
+        precise float gap = flen(off) - k0;
+        precise float dRaw = gap * unit;
+        float d = max(dRaw, 0.25);
+        precise float pxAt = gPxAtMetre * unit;
+        float pxu = fdiv(pxAt, d);
+        precise float radiusPx = k0 * pxu;
+        if (radiusPx > kBarkCurvePixels) curveEnd = i + 1u;
+        precise float w = 2.0 * 1.25 * k0 * pxu;
+        if (fine > 0.0 && w >= fine) fineEnd = i + 1u;
+        if (w >= gLod.barkSidesPixels) nearEnd = i + 1u;
+    }
+}
+
+void main() {
+    planBegin();
+    uint lid = gl_LocalInvocationID.x;
+    if (lid < uint(FP_MAX_VIEWS)) sCount[lid] = 0u;
+    if (lid == 0u) sCulled = 0u;
+    barrier();
+    uint i = gl_GlobalInvocationID.x;
+    uint aligned = pu(FP_P_ALIGNED);
+    uint keysA = workRun(FP_W_KEYS_A), valsA = workRun(FP_W_VALS_A);
+    if (i == 0u) planWork.w[workRun(FP_W_FLAGS) + gTiles * gTrees] = 0u;
+    if (i < aligned) {
+        uint key = FP_SORT_UNSEEN;
+        if (i < gTrees) {
+            Tree tr = planTree(i);
+            Spec sp = planSpec(tr.specimen);
+            uint cam = workRun(FP_W_CAMERA) + i * FP_CAM_WORDS;
+            bool seen = false;
+            float px = 0.0, barkPx = 0.0, dl = -1.0, far_ = -1.0;
+            uint curveEnd = FP_ALL_SEGMENTS, fineEnd = FP_ALL_SEGMENTS, nearEnd = FP_ALL_SEGMENTS;
+            if (planIntersects(FP_P_FRUSTUM, tr.bmin, tr.bmax)) {
+                // planForest's camera loop.
+                float r = pf(FP_P_REACH);
+                precise vec3 lo = tr.bmin + vec3(r);
+                precise vec3 hi = tr.bmax - vec3(r);
+                vec3 e = gEye;
+                vec3 q = vec3(clampStd(e.x, lo.x, hi.x), clampStd(e.y, lo.y, hi.y), clampStd(e.z, lo.z, hi.z));
+                precise vec3 qe = q - e;
+                float d = max(flen(qe), 0.25);
+                if (!(gLod.range > 0.0 && d > gLod.range)) {
+                    seen = true;
+                    dl = d;
+                    far_ = d;
+                    if (sp.clumpCount > 0u) {
+                        precise vec3 local = vec3(sp.crown.x * tr.cosYaw + sp.crown.z * tr.sinYaw, sp.crown.y,
+                                                  -sp.crown.x * tr.sinYaw + sp.crown.z * tr.cosYaw);
+                        precise vec3 p = tr.position + local * tr.scale;
+                        vec3 c = rowsPoint(FP_P_WORLD, p);
+                        precise float unitK = tr.scale * gNodeScale;
+                        float k = fdiv(unitK, 0.92);
+                        precise float dhRaw = fhypot(e.x - c.x, e.z - c.z) - sp.crownRadius * k;
+                        precise float dvRaw = abs(e.y - c.y) - sp.crownRadiusUp * k;
+                        float dh = max(0.0, dhRaw), dv = max(0.0, dvRaw);
+                        dl = max(fhypot(dh, dv), d);
+                        precise vec3 ce = c - e;
+                        precise float farD = flen(ce) + max(sp.crownRadius, sp.crownRadiusUp) * k;
+                        far_ = farD;
+                    }
+                    precise float unit = tr.scale * gNodeScale;
+                    precise float pxv = (gPerspective ? fdiv(gPxAtMetre, dl) : gPxAtMetre) * unit;
+                    precise float barkv = (gPerspective ? fdiv(gPxAtMetre, d) : gPxAtMetre) * unit;
+                    px = pxv;
+                    barkPx = barkv;
+                    classifyBark(tr, sp, px, barkPx, curveEnd, fineEnd, nearEnd);
+                    key = min(floatBitsToUint(centreDist(tr)) >> (32 - FP_SORT_BITS), FP_SORT_UNSEEN - 1u);
+                }
+            }
+            planWork.w[cam + FP_CAM_SEEN] = seen ? 1u : 0u;
+            planWork.w[cam + FP_CAM_PX] = floatBitsToUint(px);
+            planWork.w[cam + FP_CAM_BARK_PX] = floatBitsToUint(barkPx);
+            planWork.w[cam + FP_CAM_DIST] = floatBitsToUint(dl);
+            planWork.w[cam + FP_CAM_FAR] = floatBitsToUint(far_);
+            planWork.w[cam + FP_CAM_CURVE_END] = curveEnd;
+            planWork.w[cam + FP_CAM_FINE_END] = fineEnd;
+            planWork.w[cam + FP_CAM_NEAR_END] = nearEnd;
+            if (seen) atomicAdd(sCount[0], 1u); else atomicAdd(sCulled, 1u);
+            // Each shadow tile's view of it (the camera's or not).
+            uint flags = workRun(FP_W_FLAGS);
+            for (uint t = 0u; t < gTiles; ++t) {
+                bool in_ = planIntersects(FP_P_TILE + t * FP_TILE_WORDS + FP_TILE_FRUSTUM, tr.bmin, tr.bmax);
+                planWork.w[flags + t * gTrees + i] = in_ ? 1u : 0u;
+                if (in_) atomicAdd(sCount[1u + t], 1u);
+            }
+        }
+        planWork.w[keysA + i] = key;
+        planWork.w[valsA + i] = i;
+    }
+    barrier();
+    if (lid <= gTiles && sCount[lid] > 0u) atomicAdd(planWork.w[FP_N_VIEW_COUNT + lid], sCount[lid]);
+    if (lid == 0u && sCulled > 0u) atomicAdd(planWork.w[FP_N_STATS + FP_S_CULLED], sCulled);
+}

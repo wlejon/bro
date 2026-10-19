@@ -16,9 +16,20 @@ layout(local_size_x = 64) in;
 #include "scene_forest_shoot.glsl"
 #include "scene_forest_leaf_pose.glsl"
 
+#if defined(FOREST_POSE_INDIRECT)
+// The GPU planner's draw (scene_forest_gpu_plan.cpp): dispatched indirectly,
+// a workgroup an entry, push.extra.z its posed group, whose first entry the
+// planner wrote beside the dispatch (set 1: the planner's set, binding 5).
+#include "scene_forest_plan_layout.h"
+layout(std430, set = 1, binding = 5) readonly buffer PlanArgs { uint w[]; } planArgs;
+int firstEntry() { return int(planArgs.w[FP_A_POSE + 4 * int(push.extra.z + 0.5) + 3]); }
+#else
+int firstEntry() { return int(push.extra.z + 0.5); }
+#endif
+
 void main() {
     forestApplyLook();
-    ForestEntry e = forestEntry(int(push.extra.z + 0.5) + int(gl_WorkGroupID.x));
+    ForestEntry e = forestEntry(firstEntry() + int(gl_WorkGroupID.x));
     if (e.slot < 0) return;
     for (int c = int(gl_LocalInvocationID.x); c < e.end - e.first; c += 64)
         forestPoseWrite(e.slot + c, forestPoseLeaf(e, e.first + c));

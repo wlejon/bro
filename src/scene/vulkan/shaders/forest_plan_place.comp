@@ -1,0 +1,170 @@
+#version 450
+// The forest planner's passes over the items (scene_forest_gpu_plan.cpp), a
+// thread an item (a tree of a view), dispatched over the item blocks in use
+// (FP_A_ITEM_DISPATCH). A block holds one view's items, so one search's.
+//   PLAN_COST   one round of the budget's search (push.round): each item's
+//               vertices against the budget at the round's ask, summed into
+//               SHARED (fitDetail's cost(); round 0 keeps each item's at
+//               detail 1, round 1 marks those the same at kMaxDetail, which
+//               the later rounds skip, as ForestPlan::CostSplit does)
+//   PLAN_COUNT  each item's entries a group and leaves a posed group at the
+//               settled detail, summed a block (FP_W_SUMS, column-major, for
+//               the scan to place), and the stats' tallies
+//   PLAN_WRITE  the entries, each at its place: the block's from the scan,
+//               then the items' before it in the block (so a group's
+//               entries go in item order, an item's in addTree's)
+
+#include "scene_forest_plan.glsl"
+
+layout(local_size_x = FP_GROUP_SIZE) in;
+
+shared uint sView;
+
+uint viewOfBlock(Item it) {
+    if (gl_LocalInvocationID.x == 0u) sView = it.view;
+    barrier();
+    return sView;
+}
+
+#if defined(PLAN_COST)
+shared uint sSum[2], sFixed[2];
+
+void sharedAdd(uint which, uint v) {
+    if (v == 0u) return;
+    uint old = which == 0u ? atomicAdd(sSum[0], v) : atomicAdd(sFixed[0], v);
+    if (old + v < old) {
+        if (which == 0u) atomicAdd(sSum[1], 1u); else atomicAdd(sFixed[1], 1u);
+    }
+}
+
+void main() {
+    planBegin();
+    gMode = MODE_COST;
+    uint t = gl_LocalInvocationID.x;
+    if (t == 0u) { sSum[0] = 0u; sSum[1] = 0u; sFixed[0] = 0u; sFixed[1] = 0u; }
+    uint index = gl_WorkGroupID.x * uint(FP_GROUP_SIZE) + t;
+    Item it = planItem(planWork.w[workRun(FP_W_ITEMS) + index]);
+    uint q = viewOfBlock(it) > 0u ? 1u : 0u;
+    uint round = planPush.round;
+    Search s = planSearch(q, round);
+    if (s.done) return;   // the whole block's search asks no more
+    uint fineAt = workRun(FP_W_FINE) + index;
+    if (it.valid) {
+        if (round == 0u) {
+            planItemAdd(it, 1.0);
+            uint cost = gVerts - gDrawnOnly;
+            planWork.w[fineAt] = cost;
+            sharedAdd(0u, cost);
+        } else if (round == 1u) {
+            planItemAdd(it, s.ask);
+            uint cost = gVerts - gDrawnOnly;
+            uint fine = planWork.w[fineAt];
+            if (cost == fine) {
+                planWork.w[fineAt] = fine | 0x80000000u;
+                sharedAdd(1u, fine);
+            }
+            sharedAdd(0u, cost);
+        } else if ((planWork.w[fineAt] & 0x80000000u) == 0u) {
+            planItemAdd(it, s.ask);
+            sharedAdd(0u, gVerts - gDrawnOnly);
+        }
+    }
+    barrier();
+    if (t == 0u) {
+        uint at = FP_G_SUMS + (q * FP_ROUNDS + round) * 2u;
+        if (sSum[1] > 0u) atomicAdd(planShared.w[at + 1u], sSum[1]);
+        sharedAdd64(at, sSum[0]);
+        if (round == 1u) {
+            uint f = FP_G_FIXED + q * 2u;
+            if (sFixed[1] > 0u) atomicAdd(planShared.w[f + 1u], sFixed[1]);
+            sharedAdd64(f, sFixed[0]);
+        }
+    }
+}
+
+#else   // PLAN_COUNT, PLAN_WRITE
+shared uint sCol[FP_COLUMNS][FP_GROUP_SIZE];
+#if defined(PLAN_COUNT)
+// The stats' tallies a block: trees a tier, then leaves, blooms, vertices
+// and shadow vertices (two words each).
+shared uint sTiers[3];
+shared uint sTally[8];
+void tallyAdd(uint at, uint v) {
+    if (v == 0u) return;
+    uint old = atomicAdd(sTally[at], v);
+    if (old + v < old) atomicAdd(sTally[at + 1u], 1u);
+}
+#endif
+
+void main() {
+    planBegin();
+    uint t = gl_LocalInvocationID.x;
+#if defined(PLAN_COUNT)
+    if (t < 3u) sTiers[t] = 0u;
+    if (t < 8u) sTally[t] = 0u;
+#endif
+    uint block = gl_WorkGroupID.x;
+    uint index = block * uint(FP_GROUP_SIZE) + t;
+    Item it = planItem(planWork.w[workRun(FP_W_ITEMS) + index]);
+    uint q = viewOfBlock(it) > 0u ? 1u : 0u;
+    float d = uintBitsToFloat(planShared.w[FP_G_DETAIL + q]);
+    gMode = MODE_COUNT;
+    uint counts[FP_COLUMNS];
+    for (int k = 0; k < FP_COLUMNS; ++k) counts[k] = 0u;
+    if (it.valid) {
+        TreeLod lod = planItemAdd(it, d);
+        for (int k = 0; k < FP_COLUMNS; ++k) counts[k] = gCount[k];
+#if defined(PLAN_COUNT)
+        if (it.view == 0u) {
+            if (lod.leaves > 0.0) atomicAdd(sTiers[0], 1u);
+            if (lod.clumps > 0.0) atomicAdd(sTiers[1], 1u);
+            if (lod.crowns > 0.0) atomicAdd(sTiers[2], 1u);
+            tallyAdd(0u, gLeaves);
+            tallyAdd(2u, gBlooms);
+            tallyAdd(4u, gVerts);
+        } else {
+            tallyAdd(6u, gVerts);
+        }
+#endif
+    }
+    for (int k = 0; k < FP_COLUMNS; ++k) sCol[k][t] = counts[k];
+    barrier();
+#if defined(PLAN_COUNT)
+    // The block's sums a column (thread k sums column k).
+    if (t < uint(FP_COLUMNS)) {
+        uint sum = 0u;
+        for (uint i = 0u; i < uint(FP_GROUP_SIZE); ++i) sum += sCol[t][i];
+        planWork.w[workRun(FP_W_SUMS) + t * pu(FP_P_ITEM_GROUPS) + block] = sum;
+    }
+    if (t < 3u && sTiers[t] > 0u) atomicAdd(planWork.w[FP_N_STATS + FP_S_TREES + t], sTiers[t]);
+    if (t < 4u) {
+        const uint kStat[4] = uint[4](FP_S_LEAVES, FP_S_BLOOMS, FP_S_VERTICES, FP_S_SHADOW_VERTICES);
+        uint at = FP_N_STATS + kStat[t];
+        if (sTally[2u * t + 1u] > 0u) atomicAdd(planWork.w[at + 1u], sTally[2u * t + 1u]);
+        workAdd64(at, sTally[2u * t]);
+    }
+#else   // PLAN_WRITE
+    // Each column's exclusive scan across the block (Hillis-Steele).
+    for (uint step = 1u; step < uint(FP_GROUP_SIZE); step <<= 1) {
+        uint add[FP_COLUMNS];
+        for (int k = 0; k < FP_COLUMNS; ++k) add[k] = t >= step ? sCol[k][t - step] : 0u;
+        barrier();
+        for (int k = 0; k < FP_COLUMNS; ++k) sCol[k][t] += add[k];
+        barrier();
+    }
+    if (!it.valid) return;
+    uint G = pu(FP_P_ITEM_GROUPS);
+    uint sums = workRun(FP_W_SUMS);
+    for (int k = 0; k < FP_GROUPS; ++k) gAt[k] = planWork.w[sums + uint(k) * G + block] + sCol[k][t] - counts[k];
+    for (int j = 0; j < 2; ++j) {
+        uint col = sums + uint(FP_GROUPS + j) * G;
+        gSlot[j] = planWork.w[FP_N_POSE_BASE + j] + (planWork.w[col + block] - planWork.w[col]) +
+                   sCol[FP_GROUPS + j][t] - counts[FP_GROUPS + j];
+        gPosed[j] = planWork.w[FP_N_POSED + j] != 0u;
+    }
+    gEntryCap = pu(FP_P_ENTRY_CAP);
+    gMode = MODE_EMIT;
+    planItemAdd(it, d);
+#endif
+}
+#endif

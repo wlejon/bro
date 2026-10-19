@@ -1,0 +1,123 @@
+#version 450
+// The forest planner's scans and sort (scene_forest_gpu_plan.cpp), over
+// runs of its WORK buffer, FP_SCAN_BLOCK elements a workgroup (4 a thread):
+//   SCAN_LOCAL    each block's exclusive scan in place, its total to
+//                 scratch[block] (push: offset, count, scratch; scratch
+//                 ~0 for none)
+//   SCAN_ADD      each block's scanned scratch added to it
+//   SORT_HIST     a sort pass's digit counts a block (push.round: the pass),
+//                 digit-major (FP_W_HIST), for SCAN_LOCAL to place
+//   SORT_SCATTER  the pass's keys and trees to their places, stable
+// The sort is LSD radix on the camera's FP_SORT_BITS-bit keys, ping-ponging
+// KEYS_A/VALS_A and KEYS_B/VALS_B (an even pass reads A).
+
+#include "scene_forest_plan.glsl"
+
+layout(local_size_x = FP_GROUP_SIZE) in;
+
+#if defined(SCAN_LOCAL)
+shared uint sSum[FP_GROUP_SIZE];
+
+void main() {
+    uint t = gl_LocalInvocationID.x, block = gl_WorkGroupID.x;
+    uint n = planPush.count, base = planPush.offset;
+    uint first = block * uint(FP_SCAN_BLOCK) + 4u * t;
+    uint v[4];
+    uint own = 0u;
+    for (uint j = 0u; j < 4u; ++j) {
+        v[j] = first + j < n ? planWork.w[base + first + j] : 0u;
+        own += v[j];
+    }
+    sSum[t] = own;
+    barrier();
+    // Hillis-Steele, inclusive.
+    for (uint step = 1u; step < uint(FP_GROUP_SIZE); step <<= 1) {
+        uint add = t >= step ? sSum[t - step] : 0u;
+        barrier();
+        sSum[t] += add;
+        barrier();
+    }
+    uint at = sSum[t] - own;
+    for (uint j = 0u; j < 4u; ++j) {
+        if (first + j < n) planWork.w[base + first + j] = at;
+        at += v[j];
+    }
+    if (t == uint(FP_GROUP_SIZE) - 1u && planPush.scratch != 0xffffffffu) planWork.w[planPush.scratch + block] = sSum[t];
+}
+
+#elif defined(SCAN_ADD)
+void main() {
+    uint t = gl_LocalInvocationID.x, block = gl_WorkGroupID.x;
+    uint n = planPush.count, base = planPush.offset;
+    uint add = planWork.w[planPush.scratch + block];
+    if (add == 0u) return;
+    uint first = block * uint(FP_SCAN_BLOCK) + 4u * t;
+    for (uint j = 0u; j < 4u; ++j)
+        if (first + j < n) planWork.w[base + first + j] += add;
+}
+
+#else   // SORT_HIST, SORT_SCATTER
+// Each thread's count of each digit among its 4 keys, then (two levels:
+// 16 chunks of 16 threads a digit) each thread's place among the block's
+// keys of a digit.
+shared uint sCount[FP_SORT_DIGITS][FP_GROUP_SIZE];
+shared uint sChunk[FP_SORT_DIGITS][16];
+
+void main() {
+    uint t = gl_LocalInvocationID.x, block = gl_WorkGroupID.x;
+    uint blocks = pu(FP_P_ALIGNED) / uint(FP_SCAN_BLOCK);
+    uint pass = planPush.round;
+    uint shift = pass * uint(FP_SORT_DIGIT_BITS);
+    bool fromA = (pass & 1u) == 0u;
+    uint srcKeys = workRun(fromA ? FP_W_KEYS_A : FP_W_KEYS_B), srcVals = workRun(fromA ? FP_W_VALS_A : FP_W_VALS_B);
+    uint dstKeys = workRun(fromA ? FP_W_KEYS_B : FP_W_KEYS_A), dstVals = workRun(fromA ? FP_W_VALS_B : FP_W_VALS_A);
+    uint first = block * uint(FP_SCAN_BLOCK) + 4u * t;
+    uint key[4], digit[4];
+    for (uint d = 0u; d < uint(FP_SORT_DIGITS); ++d) sCount[d][t] = 0u;
+    for (uint j = 0u; j < 4u; ++j) {
+        key[j] = planWork.w[srcKeys + first + j];
+        digit[j] = (key[j] >> shift) & uint(FP_SORT_DIGITS - 1);
+        sCount[digit[j]][t] += 1u;
+    }
+    barrier();
+    // Thread (digit d, chunk c) sums its 16 threads' counts of d.
+    uint d = t >> 4, c = t & 15u;
+    uint chunkSum = 0u;
+    for (uint k = 0u; k < 16u; ++k) chunkSum += sCount[d][c * 16u + k];
+    sChunk[d][c] = chunkSum;
+    barrier();
+    if (c == 0u) {
+        uint at = 0u;
+        for (uint k = 0u; k < 16u; ++k) {
+            uint s = sChunk[d][k];
+            sChunk[d][k] = at;
+            at += s;
+        }
+#if defined(SORT_HIST)
+        planWork.w[workRun(FP_W_HIST) + d * blocks + block] = at;
+#endif
+    }
+    barrier();
+#if defined(SORT_SCATTER)
+    {
+        uint at = sChunk[d][c];
+        for (uint k = 0u; k < 16u; ++k) {
+            uint s = sCount[d][c * 16u + k];
+            sCount[d][c * 16u + k] = at;
+            at += s;
+        }
+    }
+    barrier();
+    uint seen[FP_SORT_DIGITS];
+    for (uint k = 0u; k < uint(FP_SORT_DIGITS); ++k) seen[k] = 0u;
+    uint hist = workRun(FP_W_HIST);
+    for (uint j = 0u; j < 4u; ++j) {
+        uint dj = digit[j];
+        uint pos = planWork.w[hist + dj * blocks + block] + sCount[dj][t] + seen[dj];
+        seen[dj] += 1u;
+        planWork.w[dstKeys + pos] = key[j];
+        planWork.w[dstVals + pos] = planWork.w[srcVals + first + j];
+    }
+#endif
+}
+#endif

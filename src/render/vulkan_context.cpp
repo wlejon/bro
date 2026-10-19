@@ -649,6 +649,9 @@ bool VulkanContext::createLogicalDevice() {
     deviceFeatures.independentBlend = available.independentBlend;
     deviceFeatures.shaderClipDistance = available.shaderClipDistance;
     deviceFeatures.pipelineStatisticsQuery = available.pipelineStatisticsQuery;
+    // The forest's GPU planner draws its groups indirectly, each from its
+    // own first entry (scene_forest_gpu_plan.cpp; without it, the CPU path).
+    deviceFeatures.drawIndirectFirstInstance = available.drawIndirectFirstInstance;
     deviceFeatures_ = deviceFeatures;
 
     // Instanced-attribute divisors other than 0 and 1, and primitive restart

@@ -466,6 +466,7 @@ ForestNode::TreeLod ForestNode::treeLod(const Lod& lod, const Specimen& s, float
 }
 
 uint32_t ForestNode::beginSeen() {
+    hasSeenView_ = false;
     if (seen_.size() != instances_.size()) seen_.assign(instances_.size(), SeenTree{});
     if (++seenStamp_ == 0) {
         for (SeenTree& s : seen_) s.stamp = 0;
@@ -474,7 +475,53 @@ uint32_t ForestNode::beginSeen() {
     return seenStamp_;
 }
 
+// planForest's camera loop (scene_mesh_drawer_forest.cpp) for one tree,
+// which must change with it.
+bool ForestNode::measureSeen(uint32_t i, SeenTree& out) const {
+    if (i >= instances_.size()) return false;
+    const SeenView& v = seenView_;
+    const Instance& in = instances_[i];
+    const Specimen& sp = specimens_[in.specimen];
+    const float reach = v.reach;
+    bromath::AABB3 b = bromath::atransform(in.bounds, v.world);
+    b.min -= bromath::Vec3{reach, reach, reach};
+    b.max += bromath::Vec3{reach, reach, reach};
+    if (!bromath::fintersects(v.frustum, b)) return false;
+    const bromath::Vec3 e = v.eye;
+    const bromath::Vec3 q{std::clamp(e.x, b.min.x + reach, b.max.x - reach),
+                          std::clamp(e.y, b.min.y + reach, b.max.y - reach),
+                          std::clamp(e.z, b.min.z + reach, b.max.z - reach)};
+    const float d = std::max(bromath::vlen(q - e), 0.25f);
+    if (lod_.range > 0.0f && d > lod_.range) return false;
+    float dl = d, far = d;
+    if (sp.clumpCount > 0) {
+        const bromath::Vec3 local{sp.crown.x * in.cosYaw + sp.crown.z * in.sinYaw, sp.crown.y,
+                                  -sp.crown.x * in.sinYaw + sp.crown.z * in.cosYaw};
+        const bromath::Vec3 c = bromath::mtransformPoint(v.world, in.position + local * in.scale);
+        const float k = in.scale * v.nodeScale / 0.92f;
+        const float dh = std::max(0.0f, std::hypot(e.x - c.x, e.z - c.z) - sp.crownRadius * k);
+        const float dv = std::max(0.0f, std::fabs(e.y - c.y) - sp.crownRadiusUp * k);
+        dl = std::max(std::hypot(dh, dv), d);
+        far = bromath::vlen(c - e) + std::max(sp.crownRadius, sp.crownRadiusUp) * k;
+    }
+    const float unit = in.scale * v.nodeScale;
+    out.stamp = seenStamp_;
+    out.px = (v.perspective ? v.pxAtMetre / dl : v.pxAtMetre) * unit;
+    out.barkPx = (v.perspective ? v.pxAtMetre / d : v.pxAtMetre) * unit;
+    out.dist = dl;
+    out.far = far;
+    out.forceTier = -1;
+    return true;
+}
+
 bool ForestNode::seenLod(uint32_t i, TreeLod& out) const {
+    if (hasSeenView_) {
+        SeenTree m;
+        if (!measureSeen(i, m)) return false;
+        out = treeLod(scaled(lod_, stats().detail), specimens_[instances_[i].specimen], m.px, leafLength(), -1,
+                      m.barkPx, m.dist, m.far);
+        return true;
+    }
     const SeenTree* s = seenNow(i);
     if (!s) return false;
     out = treeLod(seenLod_, specimens_[instances_[i].specimen], s->px, leafLength(), s->forceTier, s->barkPx, s->dist,

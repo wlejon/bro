@@ -41,6 +41,9 @@ namespace bro::scene::vk {
 struct SceneFrame;
 struct SceneGpu;
 class SceneDefaults;
+namespace forest {
+class GpuPlanner;
+}
 
 /// Per-draw push constants of every mesh pipeline (and the terrain's) —
 /// shaders/scene_mesh_push.glsl. Exactly the 128 bytes every device offers.
@@ -141,6 +144,23 @@ struct MeshDraw {
     uint32_t indexCount = 0;   // Tube, ForestSprite: the vertex count of the unindexed draw (ForestTube: indexed)
     uint32_t firstInstance = 0;  // Forest kinds: the first draw entry (instanced)
     uint32_t firstVertex = 0;    // ForestSprite crowns: the first entry times 6 (not instanced)
+    /// A forest draw the GPU planned (scene_forest_gpu_plan.cpp): its counts
+    /// and firsts are in this buffer's command at `indirectOffset` (a
+    /// VkDrawIndexedIndirectCommand, or a VkDrawIndirectCommand for the
+    /// unindexed kinds), not in the fields above, which then hold 1 instance
+    /// and (crowns) one entry's vertices. Null: drawn from the fields.
+    VkBuffer indirect = VK_NULL_HANDLE;
+    VkDeviceSize indirectOffset = 0;
+    /// Its entries (nearest first) split in `indirectBatches` sub-ranges
+    /// (0: none; else 3, a camera's clumps and crowns): batch b is the
+    /// command at indirectOffset + (b + 1) * indirectBatchStride, entries
+    /// [floor(n * f_b), floor(n * f_(b+1))) of the group's n, f = 0, 0.05,
+    /// 0.25, 1 (FP_BATCH_END_* in scene_forest_plan_layout.h). A pass that
+    /// batches draws batch b by drawing a copy with indirectOffset moved
+    /// there and indirectBatches 0; the whole-range command stays at
+    /// indirectOffset.
+    uint8_t indirectBatches = 0;
+    uint32_t indirectBatchStride = 0;
     VkBuffer instances = VK_NULL_HANDLE;         // Instanced, InstancedVegetation
     VkDeviceSize instanceOffset = 0;
     VkBuffer vegetation = VK_NULL_HANDLE;        // Vegetation (per vertex), InstancedVegetation (per instance)
@@ -212,6 +232,9 @@ public:
     /// frame.cmd outside any rendering, after the forests are prepared and
     /// before anything draws them.
     void recordForestPoses(SceneFrame& frame);
+    /// The frame recorded since the last call went to the GPU as `ticket`:
+    /// the GPU planner's read-backs of it are read once it completes.
+    void forestSubmitted(uint64_t ticket);
 
     /// Bind and draw into the open target described by `target`, lit by
     /// the draw's probe lighting set when it has one, else `lightingSet`.
@@ -342,11 +365,32 @@ private:
         float eye[3] = {0.0f, 0.0f, 0.0f};
         float budget = 0.0f, shadowBudget = 0.0f;
         float time = 0.0f;   // the scene clock (windTime) when last settled
+        // The GPU planner settled it last (its details are in the planner's
+        // slot `gpuSlot`, not above).
+        bool onGpu = false;
+        int gpuSlot = -1;
     };
     std::unordered_map<const void*, ForestDetail> forestDetail_;
     ForestDetail forestsDetail_;
+    int nextGpuSlot_ = 1;   // the planner's settled-detail slots handed out (0: forestsDetail_'s)
+    // A settle's rate this frame (and the bookkeeping: the eye, budgets and
+    // clock it was taken at): snap takes the fit as it is (jump: for a jump
+    // of the eye or a new budget, not for want of a detail).
+    struct SettleRate {
+        bool snap = true;
+        bool jump = true;
+        float step = 1.0f;
+    };
+    SettleRate settleRate(ForestDetail& d, const SceneFrame& frame, float budget, float shadowBudget);
     void settleDetail(ForestDetail& d, const SceneFrame& frame, float budget, float shadowBudget, float& detail,
                       float& shadowDetail);
+
+    // The GPU planner (scene_mesh_drawer_forest_gpu.cpp, scene_forest_gpu_plan.cpp):
+    // the nodes' draws planned on the GPU, false when it does not apply this
+    // frame (the CPU's path then plans them).
+    bool prepareForestsGpu(SceneFrame& frame, const std::vector<ForestNode*>& nodes,
+                           std::vector<std::vector<MeshDraw>>& out, ForestDetail& detail);
+    std::shared_ptr<forest::GpuPlanner> gpuPlanner_;
 };
 
 }  // namespace bro::scene::vk

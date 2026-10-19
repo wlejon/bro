@@ -15,6 +15,9 @@
 #include "scene/vulkan/scene_mesh_drawer.h"
 
 #include "scene/forest_node.h"
+#include "scene/vulkan/scene_forest_cull.h"
+#include "scene/vulkan/scene_forest_draw.h"
+#include "scene/vulkan/scene_forest_gpu_plan.h"
 #include "scene/vulkan/shaders/scene_forest_layout.h"
 #include "scene/light_node.h"
 #include "scene/scene_graph.h"
@@ -37,19 +40,11 @@ namespace bro::scene::vk {
 
 namespace {
 
-// Geometry slots of the node's GpuMesh copies.
-constexpr uint32_t kLeafSlot = 0x7ff0;
-constexpr uint32_t kCardSlot = 0x7ff1;
-constexpr uint32_t kClusterSlot = 0x7ff2;
-// The wood's index patterns (kTubeSlot + sides; + 0 the twigs', + 1 the
-// fine twigs'; kTubeCurveSlot + sides the curved bark's).
-constexpr uint32_t kTubeSlot = 0x7fe0;
-constexpr uint32_t kTubeCurveSlot = 0x7fc0;
+// (The groups, their entries' sizes and their draws: scene_forest_draw.h,
+// shared with the GPU planner. Its rules here have their GLSL in
+// shaders/scene_forest_plan.glsl, which must change with them.)
+using namespace forest;
 
-constexpr uint32_t kSegmentsPerEntry = 16;   // bark: segments an instance
-constexpr uint32_t kClumpsPerEntry = 16;     // sprites: clumps an instance
-constexpr uint32_t kVertsPerClump = FOREST_CLUMP_VERTICES;   // three lobes of two triangles
-constexpr uint32_t kRunsPerEntry = 16;       // run casters: a disc each
 // A clumps-tier caster past kRunNear from the eye (m, the tree's middle)
 // casts a disc a run of its clumps (FOREST_CLUMP_BLOCK of them, the
 // ellipsoid they fill: FOREST_SPRITE_RUNS) in place of a disc a lobe,
@@ -58,8 +53,6 @@ constexpr uint32_t kRunsPerEntry = 16;       // run casters: a disc each
 // shadow pass's fragments, are a hundred and fifty discs.
 constexpr float kRunNear = 30.0f;
 constexpr float kRunBand = 10.0f;
-constexpr uint32_t kBloomsPerEntry = 16;     // blooms: a card each
-constexpr uint32_t kVertsPerBloom = FOREST_CARD_VERTICES;
 // A tree's blooms are drawn while the largest (ForestNode::bloomExtent of
 // it) is at least this wide on screen at the crown's nearest point (px): the
 // vertex stage culls each bloom under a quarter pixel by its own distance
@@ -68,22 +61,14 @@ constexpr uint32_t kVertsPerBloom = FOREST_CARD_VERTICES;
 constexpr float kBloomMinPixels = 0.2f;
 // Bark's sides (ForestNode::TreeLod::barkSides): 20 for a trunk many pixels
 // wide, 10, or 5; each ring morphs between them by its own width.
-constexpr int kNearestSides = FOREST_BARK_SIDES_NEAREST;
-constexpr int kNearSides = FOREST_BARK_SIDES_NEAR;
-constexpr int kFarSides = FOREST_BARK_SIDES_FAR;
-// The rows of rings a CURVED segment of bark is drawn in, along the curve
+// The rows of rings a CURVED segment of bark is drawn in (barkRows), along the curve
 // through its ends (scene_forest_tube.glsl, the entry's param >> FOREST_BARK_ROWS_SHIFT): a
 // segment at least kBarkCurvePixels in radius on screen at its tree's
 // nearest point, of a tree drawing 20 or 10 sides. Thinner wood (most of a
 // near conifer's whorls), and every far tree's, is the one straight row
 // between its ends: its bend inside a segment is a pixel or so, and rows
 // on all of it more than doubled the trunks' view's vertices.
-constexpr uint32_t barkRows(int sides) { return sides >= 20 ? 3u : sides >= 10 ? 2u : 1u; }
 constexpr float kBarkCurvePixels = 6.0f;
-// A bark entry's param (scene_forest_tube.glsl's forestTubeVertexMorph).
-constexpr uint32_t barkParam(int sides, uint32_t rows) {
-    return static_cast<uint32_t>(sides) | rows << FOREST_BARK_ROWS_SHIFT;
-}
 // Twigs (a broad node's, scene_forest_shoot.glsl): pieces an instance, each
 // a ribbon of 6 indices (4 corners, woodIndices; the budget counts the 6);
 // a clump's pieces take as many entries as they
@@ -93,8 +78,6 @@ constexpr uint32_t barkParam(int sides, uint32_t rows) {
 // mesh_forest_tube.vert's FOREST_TWIG_PX, so nothing pops there); and only
 // while its leaves are leaves, not clusters: they fade out over
 // kTwigWidening times the card widening.
-constexpr uint32_t kTwigPiecesPerEntry = 64;
-constexpr uint32_t kVertsPerTwig = 6;
 // Bark down to this share of the round bark's cut (Lod::barkPixels, 0.7 px:
 // 0.35 px) is drawn as ribbons covering their width. Down to 0.1 px took
 // the flight's twigs 0.35 -> 2.5 ms a frame; at 0.35 px 0.6 ms, keeping
@@ -122,7 +105,7 @@ constexpr float kWoodShade = 0.5f;
 // (its stems' pieces a few pixels long, the curve's bend inside one under
 // a pixel). By the clump, not its leaf: a clump of small leaves has stems
 // as long as any, a polyline of long straight runs at the leaf's measure.
-constexpr uint32_t kTwigFineRows = 3;
+// (kTwigFineRows of them.)
 // (A piece is about a quarter of its clump's radius; its chords turn about
 // 13 degrees off its joints' ways, so the curve stands about 3% of the piece
 // off its chord: a pixel at 120.)
@@ -132,46 +115,6 @@ constexpr float kTwigPixels = 0.15f;
 constexpr float kTwigStemRadius = 0.04f;    // leaf lengths (forestPipe: a lobe stem's start)
 constexpr float kTwigShootRadius = float(FOREST_SHOOT_RADIUS_BASE);  // a shoot's at its base
 constexpr float kTwigWidening[2] = {0.95f, 1.3f};
-
-// The wood draws indexed, so the vertex stage runs once a corner, not once a
-// triangle's corner (scene_forest_tube.glsl's vertex numbering): bark of
-// `sides` sides is barkRows + 1 rings of sides + 1 vertices a segment, each
-// side two triangles between each two; a twig (sides 0) `rows` + 1 rows of its two sides
-// a piece (four corners for the plain twigs' one row). Unindexed, a bark
-// side's ring points were each worked out three times, a twig's ends (the
-// shoot model, posed) three times over.
-const bromesh::MeshData& woodIndices(int sides, uint32_t rows = 1) {
-    static bromesh::MeshData twigs, fineTwigs, bark[3], curved[3];
-    bromesh::MeshData& m = sides == 0 ? (rows > 1 ? fineTwigs : twigs)
-                                      : (rows > 1 ? curved : bark)[sides == kFarSides ? 0 : sides == kNearSides ? 1 : 2];
-    if (!m.indices.empty()) return m;
-    if (sides == 0) {
-        const uint32_t per = 2 * (rows + 1);
-        for (uint32_t p = 0; p < kTwigPiecesPerEntry; ++p)
-            for (uint32_t r = 0; r < rows; ++r)
-                for (uint32_t c : {0u, 1u, 2u, 2u, 1u, 3u}) m.indices.push_back(per * p + 2 * r + c);
-        m.positions.assign(3 * per * kTwigPiecesPerEntry, 0.0f);
-        return m;
-    }
-    const uint32_t ring = static_cast<uint32_t>(sides) + 1, bRows = rows;
-    for (uint32_t k = 0; k < kSegmentsPerEntry; ++k)
-        for (uint32_t r = 0; r < bRows; ++r) {
-            const uint32_t b = (k * (bRows + 1) + r) * ring, t = b + ring;
-            for (uint32_t s = 0; s < static_cast<uint32_t>(sides); ++s)
-                for (uint32_t v : {b + s, b + s + 1, t + s, t + s, b + s + 1, t + s + 1}) m.indices.push_back(v);
-        }
-    m.positions.assign(3 * (bRows + 1) * ring * kSegmentsPerEntry, 0.0f);
-    return m;
-}
-
-// The shapes a forest draws, each one draw, in this order: a needle or
-// scale node's lobe CORES first, so the leaves they hide fail the depth test;
-// the blooms before the clumps and crowns, so the pixels they cover cost
-// those nothing.
-enum Group {
-    Cores, LeafNear, LeafCard, Bark20Curved, Bark10Curved, Bark20, Bark10, Bark5, Twigs, TwigsFine, Blooms, Clumps,
-    Crowns, Runs, kGroups
-};
 
 struct Entry {
     uint32_t instance, first, end, param;
@@ -763,27 +706,9 @@ struct SceneMeshDrawer::ForestPlan {
         return v - (tally.drawnOnly - only);
     }
 
-    // Trees [0, n) in chunks across the worker pool: `fn(chunk, begin, end)`.
-    // About 8 chunks a thread, of 256 to 2048 trees: a view's costly trees
-    // (the near ones, leaves and bark) stand together in the list, and
-    // in a few large chunks the frame waited on the one that held them (on
-    // foot, 24k trees seen in 12 chunks, the main thread waited 6 ms).
-    static uint32_t chunkSize(size_t n) {
-        const size_t want = n / (size_t{bro::util::parallelWidth()} * 8);
-        return static_cast<uint32_t>(std::clamp<size_t>(want, 256, 2048));
-    }
-    static uint32_t chunksOf(size_t n) {
-        const uint32_t s = chunkSize(n);
-        return static_cast<uint32_t>((n + s - 1) / s);
-    }
-    template <class Fn> static void eachChunk(size_t n, Fn fn) {
-        const uint32_t s = chunkSize(n);
-        const auto run = [&](uint32_t c) {
-            const uint32_t b = c * s;
-            fn(c, b, static_cast<uint32_t>(std::min<size_t>(n, size_t{b} + s)));
-        };
-        bro::util::parallelChunks(chunksOf(n), run);
-    }
+    // Trees [0, n) in chunks across the worker pool (scene_forest_cull.h).
+    static uint32_t chunksOf(size_t n) { return forest::chunksOf(n); }
+    template <class Fn> static void eachChunk(size_t n, Fn fn) { forest::eachChunk(n, fn); }
     // The camera's trees (or the shadow tiles') at detail `d`, chunk by
     // chunk across the pool, each chunk its own groups and counts, joined in
     // the trees' order: their entries appended to `out` (one Groups, or one
@@ -1014,93 +939,6 @@ template <class Plan> void capForced(const std::vector<Plan*>& plans, bool shado
 }
 
 }  // namespace
-
-struct SceneMeshDrawer::ForestCull {
-    static constexpr float kCell = 32.0f;   // metres a side: a couple of dozen trees at a forest's spacing
-    uint64_t generation = 0;
-    bromath::Mat4 world;
-    float reach = -1.0f;
-    uint64_t used = 0;
-    std::vector<bromath::AABB3> bounds;    // every tree's, world, padded by the reach
-    std::vector<uint32_t> start, items;    // each cell's trees (ascending), cells end to end
-    std::vector<bromath::AABB3> cellBox;   // the box round each cell's trees
-    std::vector<uint8_t> mark;             // per tree: in a cell a test let through (2: a far cell's)
-    // Per cell, the largest of its trees' (in metres): mean clump radius
-    // (infinite for a tree with no clumps), thickest bark's keep radius,
-    // largest bloom's extent. What far() measures a cell by.
-    std::vector<float> cellClump, cellKeep, cellBloom;
-    std::vector<float> cellUnit;   // its trees' largest scale (m a specimen unit)
-
-    void build(const ForestNode& node, const bromath::Mat4& w, float r) {
-        const auto& instances = node.instances();
-        const auto& specimens = node.specimens();
-        const auto& keepRadius = node.keepRadius();
-        const float nodeScale = std::sqrt(w.data[4] * w.data[4] + w.data[5] * w.data[5] + w.data[6] * w.data[6]);
-        const size_t n = instances.size();
-        bounds.resize(n);
-        float x0 = 1e30f, z0 = 1e30f, x1 = -1e30f, z1 = -1e30f;
-        for (size_t i = 0; i < n; ++i) {
-            bromath::AABB3& b = bounds[i];
-            b = bromath::atransform(instances[i].bounds, w);
-            b.min -= bromath::Vec3{r, r, r};
-            b.max += bromath::Vec3{r, r, r};
-            const float cx = (b.min.x + b.max.x) * 0.5f, cz = (b.min.z + b.max.z) * 0.5f;
-            x0 = std::min(x0, cx); x1 = std::max(x1, cx);
-            z0 = std::min(z0, cz); z1 = std::max(z1, cz);
-        }
-        const int gw = n ? static_cast<int>((x1 - x0) / kCell) + 1 : 0;
-        const int gh = n ? static_cast<int>((z1 - z0) / kCell) + 1 : 0;
-        const auto cellOf = [&](size_t i) {
-            const bromath::AABB3& b = bounds[i];
-            const int cx = std::clamp(static_cast<int>(((b.min.x + b.max.x) * 0.5f - x0) / kCell), 0, gw - 1);
-            const int cz = std::clamp(static_cast<int>(((b.min.z + b.max.z) * 0.5f - z0) / kCell), 0, gh - 1);
-            return static_cast<size_t>(cz) * gw + cx;
-        };
-        // A counting sort: each cell keeps its trees in the order given.
-        start.assign(static_cast<size_t>(gw) * gh + 1, 0);
-        for (size_t i = 0; i < n; ++i) start[cellOf(i) + 1]++;
-        for (size_t c = 1; c < start.size(); ++c) start[c] += start[c - 1];
-        items.resize(n);
-        std::vector<uint32_t> fill(start.begin(), start.end() - 1);
-        cellBox.assign(start.size() - 1, bromath::AABB3{{1e30f, 1e30f, 1e30f}, {-1e30f, -1e30f, -1e30f}});
-        cellClump.assign(start.size() - 1, 0.0f);
-        cellKeep.assign(start.size() - 1, 0.0f);
-        cellBloom.assign(start.size() - 1, 0.0f);
-        cellUnit.assign(start.size() - 1, 0.0f);
-        for (size_t i = 0; i < n; ++i) {
-            const size_t c = cellOf(i);
-            items[fill[c]++] = static_cast<uint32_t>(i);
-            cellBox[c].min = bromath::vmin(cellBox[c].min, bounds[i].min);
-            cellBox[c].max = bromath::vmax(cellBox[c].max, bounds[i].max);
-            const ForestNode::Specimen& sp = specimens[instances[i].specimen];
-            const float unit = instances[i].scale * nodeScale;
-            cellUnit[c] = std::max(cellUnit[c], unit);
-            cellClump[c] = std::max(cellClump[c], sp.clumpCount > 0 ? sp.meanClumpRadius * unit : 1e30f);
-            if (sp.segCount > 0) cellKeep[c] = std::max(cellKeep[c], keepRadius[sp.segStart] * unit);
-            if (sp.bloomCount > 0)
-                cellBloom[c] = std::max(cellBloom[c], sp.bloomSize * ForestNode::bloomExtent(sp.bloomForm) * unit);
-        }
-        mark.assign(n, 0);
-        world = w;
-        reach = r;
-    }
-    // Mark the trees of every cell `hit` lets through (and no others): 2
-    // those of the cells `far` names, else 1.
-    // (Across the pool: a cell marks only its own trees.)
-    template <class Hit, class Far> void markCells(Hit hit, Far far) {
-        ForestPlan::eachChunk(mark.size(), [&](uint32_t, uint32_t b, uint32_t e) {
-            std::fill(mark.begin() + b, mark.begin() + e, uint8_t{0});
-        });
-        const size_t cells = start.empty() ? 0 : start.size() - 1;
-        ForestPlan::eachChunk(cells, [&](uint32_t, uint32_t b, uint32_t e) {
-            for (uint32_t c = b; c < e; ++c) {
-                if (start[c] == start[c + 1] || !hit(cellBox[c])) continue;
-                const uint8_t m = far(c) ? 2 : 1;
-                for (uint32_t k = start[c]; k < start[c + 1]; ++k) mark[items[k]] = m;
-            }
-        });
-    }
-};
 
 SceneMeshDrawer::ForestCull& SceneMeshDrawer::forestCull(const ForestNode& node, const bromath::Mat4& world,
                                                          float reach) {
@@ -1353,6 +1191,8 @@ const SceneVkBuffer* SceneMeshDrawer::ensurePoses(SceneFrame& frame, uint32_t sl
 }
 
 void SceneMeshDrawer::recordForestPoses(SceneFrame& frame) {
+    // The GPU's plans first (their poses after them).
+    if (gpuPlanner_) gpuPlanner_->record(frame);
     if (poseJobs_.empty()) return;
     VkCommandBuffer cmd = frame.cmd;
     // The last frame's draws read the buffer this one overwrites.
@@ -1380,6 +1220,15 @@ void SceneMeshDrawer::prepareForest(SceneFrame& frame, ForestNode& node, std::ve
     out.clear();
     poseJobs_.clear();
     poseUsed_ = 0;
+    if (forestDetail_.size() > 256) forestDetail_.clear();
+    {
+        // On the GPU when it plans this frame (scene_mesh_drawer_forest_gpu.cpp).
+        std::vector<std::vector<MeshDraw>> gpu;
+        if (prepareForestsGpu(frame, {&node}, gpu, forestDetail_[&node])) {
+            out.swap(gpu[0]);
+            return;
+        }
+    }
     auto plan = planForest(frame, node);
     if (!plan) return;
     ForestPlan& P = *plan;
@@ -1402,8 +1251,8 @@ void SceneMeshDrawer::prepareForest(SceneFrame& frame, ForestNode& node, std::ve
     if (sparePlans_.size() < 8) sparePlans_.push_back(std::move(plan));
 }
 
-void SceneMeshDrawer::settleDetail(ForestDetail& d, const SceneFrame& frame, float budget, float shadowBudget,
-                                   float& detail, float& shadowDetail) {
+SceneMeshDrawer::SettleRate SceneMeshDrawer::settleRate(ForestDetail& d, const SceneFrame& frame, float budget,
+                                                        float shadowBudget) {
     // A jump of the eye (a cut, a teleport, the first frame) or a new
     // budget takes the fit as it is. Otherwise the detail moves toward the
     // fit 2% a 30th of a second, a finer fit only once it is 4% finer than
@@ -1419,7 +1268,8 @@ void SceneMeshDrawer::settleDetail(ForestDetail& d, const SceneFrame& frame, flo
     const bromath::Vec3& eye = frame.view.eye;
     const float dx = eye.x - d.eye[0], dy = eye.y - d.eye[1], dz = eye.z - d.eye[2];
     const float moved = dx * dx + dy * dy + dz * dz;
-    const bool snap = d.detail <= 0.0f || moved > 25.0f || budget != d.budget || shadowBudget != d.shadowBudget;
+    const bool jump = moved > 25.0f || budget != d.budget || shadowBudget != d.shadowBudget;
+    const bool snap = d.detail <= 0.0f || jump;
     const float now = frame.graph.windTime();
     float dt = std::clamp(now - d.time, 0.0f, 0.1f);
     if (dt <= 0.0f && moved > 1e-6f) dt = 1.0f / 60.0f;
@@ -1427,7 +1277,18 @@ void SceneMeshDrawer::settleDetail(ForestDetail& d, const SceneFrame& frame, flo
     d.eye[0] = eye.x; d.eye[1] = eye.y; d.eye[2] = eye.z;
     d.budget = budget;
     d.shadowBudget = shadowBudget;
-    const float step = std::pow(1.02f, dt * 30.0f);
+    return {snap, jump, std::pow(1.02f, dt * 30.0f)};
+}
+
+void SceneMeshDrawer::settleDetail(ForestDetail& d, const SceneFrame& frame, float budget, float shadowBudget,
+                                   float& detail, float& shadowDetail) {
+    // (The GPU planner settled it last: its details are on the GPU, so this
+    // takes the fit as it is, as on a jump.)
+    if (d.onGpu) d.detail = d.shadow = 0.0f;
+    d.onGpu = false;
+    const SettleRate rate = settleRate(d, frame, budget, shadowBudget);
+    const bool snap = rate.snap;
+    const float step = rate.step;
     const auto settle = [snap, step](float prev, float target) {
         if (snap || prev <= 0.0f) return target;
         if (target > prev) return std::min(target, prev * step);
@@ -1443,6 +1304,8 @@ void SceneMeshDrawer::prepareForests(SceneFrame& frame, const std::vector<Forest
     out.assign(nodes.size(), {});
     poseJobs_.clear();
     poseUsed_ = 0;
+    if (prepareForestsGpu(frame, nodes, out, forestsDetail_)) return;
+    out.assign(nodes.size(), {});
     std::vector<std::unique_ptr<ForestPlan>> plans(nodes.size());
     float budget = 0.0f, shadowBudget = 0.0f;
     bool forced = false, anySeen = false, anyCast = false;
@@ -1726,54 +1589,16 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
     writer.writeBuffer(3, poses->buffer, poses->size, 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
     writer.updateSet(device_, set);
 
-    // The draws' shared state: the leaves' material, the forest flag.
-    MeshDraw base;
-    base.nodeId = node.id();
-    base.vertexSet = set;
-    std::memcpy(base.push.model, view.relative(world).data, sizeof(base.push.model));
-    std::memcpy(base.push.baseColor, node.color(), sizeof(base.push.baseColor));
-    base.push.baseColor[3] = 1.0f;
-    base.push.pbrParams[0] = node.metallic();
-    base.push.pbrParams[1] = node.roughness();
-    base.push.pbrParams[2] = node.alphaCutoff();
-    base.push.extra[0] = node.nearClipDist();
-    base.push.extra[1] = node.subsurface();
-    base.push.extra[2] = 0.0f;
-    base.push.extra[3] = 1.0f + 256.0f;   // no atlas
-    uint32_t flags = mesh_flags::kForest | mesh_flags::vertexColor(node.vertexColorMode());
-    // In a 4x target a hand-over splits each pixel's samples, a blend in
-    // quarters rather than a stipple of whole pixels.
-    const uint32_t msaa = frame.gpu.targets.samples() == VK_SAMPLE_COUNT_4_BIT ? mesh_flags::kForestMsaa : 0u;
-    flags |= msaa;
-    if (frame.ssr) flags |= mesh_flags::kReflectance;
-    if (node.receivesShadow()) flags |= mesh_flags::kReceivesShadow;
-    uint32_t leafFlags = flags | mesh_flags::kTwoSided;
-    if (node.mesh().hasTangents()) leafFlags |= mesh_flags::kHasTangents;
-    const uint32_t barkFlags =
-        mesh_flags::kForest | msaa | (flags & (mesh_flags::kReflectance | mesh_flags::kReceivesShadow));
-    const uint32_t spriteFlags = barkFlags | mesh_flags::kForestSprite;
-    // The leaves' maps (an albedo with alpha is the usual leaf); sprites and
-    // bark take the plain colour.
-    VkDescriptorSet leafMaterial = VK_NULL_HANDLE;
-    {
-        struct Images { const SceneVkImage* albedo; const SceneVkImage* normal; } im{
-            res.texture(node.id(), TextureSlot::BaseColor, node.baseColorTexture()),
-            res.texture(node.id(), TextureSlot::Normal, node.normalTexture())};
-        if (im.albedo || im.normal) {
-            leafMaterial = frame.gpu.device.frameSet(defaults_->materialLayout);
-            SceneVkDescriptorWriter w;
-            w.writeImage(0, im.albedo ? im.albedo->view : defaults_->white.view,
-                         im.albedo ? im.albedo->sampler : defaults_->sampler);
-            w.writeImage(1, im.normal ? im.normal->view : defaults_->flatNormal.view,
-                         im.normal ? im.normal->sampler : defaults_->sampler);
-            w.writeImage(2, defaults_->white.view, defaults_->sampler);
-            w.writeImage(3, defaults_->black.view, defaults_->sampler);
-            w.writeImage(4, defaults_->white.view, defaults_->sampler);
-            w.updateSet(device_, leafMaterial);
-            if (im.albedo) leafFlags |= mesh_flags::kAlbedoMap;
-            if (im.normal) leafFlags |= mesh_flags::kNormalMap;
-        }
+    // The draws' shared state (scene_forest_draw.cpp).
+    forest::DrawBase drawBase;
+    if (!forest::drawBase(frame, *defaults_, device_, node, set, drawBase)) {
+        node.setStats(stats);
+        return;
     }
+    drawBase.clusters = P.clusters;
+    drawBase.lod = P.lod;
+    drawBase.shadowLod = P.shadowLod;
+    drawBase.farLast = P.canopyTop > -1e29f && view.eye.y < P.canopyTop;
 
     const auto emit = [&](const Groups& G, bool shadow, int slot) {
         for (int k = 0; k < kGroups; ++k) {
@@ -1781,198 +1606,8 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
             if (g.empty()) continue;
             const bool posed = !shadow && posedGroup[k];
             const uint32_t first = put(g, posed, &G == &colour ? &order[k] : nullptr);
-            MeshDraw d = base;
-            d.shadowOnly = shadow;
-            d.castsShadow = shadow;
-            // Across every forest node: cores, leaves and bark (near, solid)
-            // first, then the rest of the scene, then the far tiers, so the
-            // clumps and crowns behind near trees and ground are rejected
-            // before they shade. Seen from over the canopy the crowns are
-            // what hides the rest (the floor, the leaves under them), so
-            // there they keep their place before it.
-            const bool farLast = P.canopyTop > -1e29f && view.eye.y < P.canopyTop;
-            // (Ranked as before the curved bark and fine twigs had groups of
-            // their own, each with its plain one: the clumps and crowns
-            // under kOrderMid, so near them the static meshes and grass
-            // behind fail the depth test, not shade.)
-            const int rank = k == Bark20Curved ? Bark20 - 2 : k == Bark10Curved ? Bark10 - 2
-                           : k <= LeafCard ? k : k <= Twigs ? k - 2 : k - 3;
-            d.order = farLast && (k == Clumps || k == Crowns) ? static_cast<uint8_t>(MeshDraw::kOrderFar + rank)
-                                                              : static_cast<uint8_t>(rank);
-            if (shadow) d.shadowTileMask = 1u << slot;
-            // The timed passes' name for it: the group and the node's leaf form.
-            static constexpr const char* kLabel[kGroups][3] = {
-                {"forest:cores:broad", "forest:cores:needle", "forest:cores:scale"},
-                {"forest:leafNear:broad", "forest:leafNear:needle", "forest:leafNear:scale"},
-                {"forest:leafCard:broad", "forest:leafCard:needle", "forest:leafCard:scale"},
-                {"forest:bark20c:broad", "forest:bark20c:needle", "forest:bark20c:scale"},
-                {"forest:bark10c:broad", "forest:bark10c:needle", "forest:bark10c:scale"},
-                {"forest:bark20:broad", "forest:bark20:needle", "forest:bark20:scale"},
-                {"forest:bark10:broad", "forest:bark10:needle", "forest:bark10:scale"},
-                {"forest:bark5:broad", "forest:bark5:needle", "forest:bark5:scale"},
-                {"forest:twigs:broad", "forest:twigs:needle", "forest:twigs:scale"},
-                {"forest:twigsFine:broad", "forest:twigsFine:needle", "forest:twigsFine:scale"},
-                {"forest:blooms:broad", "forest:blooms:needle", "forest:blooms:scale"},
-                {"forest:clumps:broad", "forest:clumps:needle", "forest:clumps:scale"},
-                {"forest:crowns:broad", "forest:crowns:needle", "forest:crowns:scale"},
-                {"forest:runs:broad", "forest:runs:needle", "forest:runs:scale"}};
-            static constexpr const char* kShadowLabel[kGroups] = {
-                "shadow:forest:cores", "shadow:forest:leafNear", "shadow:forest:leafCard", "shadow:forest:bark20c",
-                "shadow:forest:bark10c", "shadow:forest:bark20", "shadow:forest:bark10",
-                "shadow:forest:bark5", "shadow:forest:twigs", "shadow:forest:twigsFine", "shadow:forest:blooms", "shadow:forest:clumps",
-                "shadow:forest:crowns", "shadow:forest:runs"};
-            d.timerLabel = kLabel[k][std::clamp(static_cast<int>(node.look().leafForm), 0, 2)];
-            if (shadow) d.shadowTimerLabel = kShadowLabel[k];
-            switch (k) {
-            case LeafNear:
-            case LeafCard: {
-                // In colour, past the card widening, each kept leaf is a
-                // cluster of leaves (Lod::clusters); a caster stays a card.
-                const bool cluster = k == LeafCard && !shadow && P.clusters;
-                const GpuMesh* m = k == LeafNear ? leafMesh : cluster ? clusterMesh : cardMesh;
-                d.kind = MeshKind::ForestLeaf;
-                d.vertices = m->vertices.buffer;
-                d.indices = m->indices.buffer;
-                d.indexCount = m->indexCount;
-                d.instanceCount = static_cast<uint32_t>(g.size());
-                d.firstInstance = first;
-                d.twoSided = true;
-                d.materialSet = leafMaterial;
-                // A needle or scale-leaf node's leaf is its spray's card, its
-                // needles cut out by mesh.frag's SCENE_FOREST_SPRAY build.
-                const bool spray = !cluster && node.look().leafForm != 0;
-                // A broad form's own card near: its outline cut per pixel,
-                // rounded and pointed (Look::leafCut; untextured: a
-                // texture's alpha is its outline).
-                const bool cut = k == LeafNear && node.look().leafForm == 0 && node.look().leafCut &&
-                                 (leafFlags & mesh_flags::kAlbedoMap) == 0u;
-                d.push.pbrParams[3] = static_cast<float>(leafFlags | (cluster ? mesh_flags::kForestCluster : 0u) |
-                                                         (spray ? mesh_flags::kForestSpray : 0u) |
-                                                         (cut ? mesh_flags::kForestLeafCut : 0u) |
-                                                         (!shadow && !posed ? mesh_flags::kForestLeafInline : 0u));
-                break;
-            }
-            case Bark20Curved:
-            case Bark10Curved:
-            case Bark20:
-            case Bark10:
-            case Bark5: {
-                const int sides = k == Bark20 || k == Bark20Curved ? kNearestSides
-                                  : k == Bark10 || k == Bark10Curved ? kNearSides : kFarSides;
-                const bool curved = k == Bark20Curved || k == Bark10Curved;
-                const uint32_t rows = curved ? barkRows(sides) : 1u;
-                d.kind = MeshKind::ForestTube;
-                d.indexCount = kSegmentsPerEntry * static_cast<uint32_t>(sides) * 6u * rows;
-                if (const GpuMesh* ix = res.mesh(node.id(), (curved ? kTubeCurveSlot : kTubeSlot) + sides, 1,
-                                                 woodIndices(sides, rows)))
-                    d.indices = ix->indices.buffer;
-                d.instanceCount = static_cast<uint32_t>(g.size());
-                d.firstInstance = first;
-                const float* bc = node.barkColor();
-                d.push.baseColor[0] = bc[0];
-                d.push.baseColor[1] = bc[1];
-                d.push.baseColor[2] = bc[2];
-                d.push.baseColor[3] = 1.0f;
-                d.push.pbrParams[1] = node.barkRoughness();
-                d.push.extra[1] = 0.0f;
-                // The width (px) the rings' sides morph by (forestTubeMorph),
-                // the tree's choice of sides by its trunk's (treeLod):
-                // negative, never the twigs' 3.
-                d.push.extra[2] = -(shadow ? P.shadowLod : P.lod).barkSidesPixels;
-                d.push.pbrParams[3] = static_cast<float>(barkFlags);
-                break;
-            }
-            case Twigs:
-            case TwigsFine: {
-                // Ribbons facing the eye (mesh_forest_tube.vert's twig
-                // build, push.extra.z 2 + its rows a piece) in the bark's
-                // colour.
-                const uint32_t rows = k == TwigsFine ? kTwigFineRows : 1u;
-                d.kind = MeshKind::ForestTube;
-                d.indexCount = kTwigPiecesPerEntry * kVertsPerTwig * rows;
-                // (Slot kTubeSlot + 1, which no bark's sides take, for the fine pattern.)
-                if (const GpuMesh* ix = res.mesh(node.id(), kTubeSlot + (rows > 1 ? 1 : 0), 1, woodIndices(0, rows)))
-                    d.indices = ix->indices.buffer;
-                d.instanceCount = static_cast<uint32_t>(g.size());
-                d.firstInstance = first;
-                d.twoSided = true;
-                const float* bc = node.barkColor();
-                d.push.baseColor[0] = bc[0];
-                d.push.baseColor[1] = bc[1];
-                d.push.baseColor[2] = bc[2];
-                d.push.baseColor[3] = 1.0f;
-                d.push.pbrParams[1] = node.barkRoughness();
-                d.push.extra[1] = 0.0f;
-                d.push.extra[2] = static_cast<float>(FOREST_TWIG_ROWS_BIAS + rows);
-                d.push.pbrParams[3] = static_cast<float>(barkFlags);
-                break;
-            }
-            case Cores:
-            case Clumps:
-                d.kind = MeshKind::ForestSprite;
-                d.push.extra[2] = k == Cores ? FOREST_SPRITE_CORES : FOREST_SPRITE_CLUMPS;
-                d.indexCount = kClumpsPerEntry * kVertsPerClump;
-                d.instanceCount = static_cast<uint32_t>(g.size());
-                d.firstInstance = first;
-                d.twoSided = true;   // no culling; lit from its front
-                d.push.pbrParams[3] = static_cast<float>(spriteFlags);
-                break;
-            case Runs:
-                d.kind = MeshKind::ForestSprite;
-                d.push.extra[2] = FOREST_SPRITE_RUNS;
-                d.indexCount = kRunsPerEntry * FOREST_CARD_VERTICES;
-                d.instanceCount = static_cast<uint32_t>(g.size());
-                d.firstInstance = first;
-                d.twoSided = true;
-                d.push.pbrParams[3] = static_cast<float>(spriteFlags);
-                break;
-            case Blooms:
-                // A card a bloom (mesh_forest_bloom.vert), shaped and lit by
-                // mesh.frag's SCENE_FOREST_BLOOM build: white times the
-                // instance colour, which is the bloom's own; petals matte.
-                d.kind = MeshKind::ForestSprite;
-                d.indexCount = kBloomsPerEntry * kVertsPerBloom;
-                d.instanceCount = static_cast<uint32_t>(g.size());
-                d.firstInstance = first;
-                d.twoSided = true;
-                d.push.baseColor[0] = d.push.baseColor[1] = d.push.baseColor[2] = d.push.baseColor[3] = 1.0f;
-                d.push.pbrParams[0] = 0.0f;
-                d.push.pbrParams[1] = 0.8f;
-                d.push.pbrParams[2] = 0.0f;
-                d.push.extra[1] = 0.0f;
-                d.push.pbrParams[3] =
-                    static_cast<float>(barkFlags | mesh_flags::kTwoSided | mesh_flags::kForestBloom);
-                break;
-            case Crowns:
-                d.kind = MeshKind::ForestSprite;
-                d.push.extra[2] = FOREST_SPRITE_CROWNS;
-                d.indexCount = static_cast<uint32_t>(g.size()) * FOREST_CARD_VERTICES;
-                // A caster is two discs through the crown (the second, a spray
-                // node's, shadow_forest_sprite.vert culls for a broad one's).
-                d.instanceCount = shadow ? 2u : 1u;
-                d.firstVertex = first * FOREST_CARD_VERTICES;
-                d.twoSided = true;
-                d.push.pbrParams[3] = static_cast<float>(spriteFlags);
-                break;
-            default: break;
-            }
-            // The near sphere (Lod::leavesRange): the camera's leaves and
-            // clumps cut each its pixels to its side of it, across the band
-            // (mesh.frag's MESH_FOREST_REVEAL); the sphere rides in the
-            // emissive's xy (its intensity 0, so it adds no light). A
-            // caster keeps each leaf or clump by its own distance as the
-            // camera keeps pixels, its side in the emissive's z
-            // (PassShadow's params.yzw; shadow_forest_*.vert's forestCasterKept).
-            const bool leafSide = k == Cores || k == LeafNear || k == LeafCard || k == Twigs || k == TwigsFine;
-            if (P.lod.leavesRange > 0.0f && (leafSide || k == Clumps || k == Runs)) {
-                if (!shadow)
-                    d.push.pbrParams[3] =
-                        static_cast<float>(static_cast<uint32_t>(d.push.pbrParams[3]) | mesh_flags::kForestReveal);
-                d.push.emissive[0] = P.lod.leavesRange;
-                d.push.emissive[1] = P.lod.leavesBand;
-                d.push.emissive[2] = shadow ? (k == Clumps || k == Runs ? -1.0f : 1.0f) : 0.0f;
-                d.push.emissive[3] = 0.0f;
-            }
+            const MeshDraw d = forest::groupDraw(frame, node, drawBase, k, shadow, slot, posed, first,
+                                                 static_cast<uint32_t>(g.size()));
             if (posed) {
                 // The pose pass runs these entries first, with the draw's own
                 // push constants (its flags say cluster or cut), its first

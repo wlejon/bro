@@ -6,6 +6,7 @@
 #include "scene/scene_graph.h"
 #include "scene/skinned_mesh_node.h"
 #include "scene/vulkan/scene_defaults.h"
+#include "scene/vulkan/scene_forest_gpu_plan.h"
 #include "scene/vulkan/scene_frame.h"
 #include "scene/vulkan/scene_gpu_resources.h"
 #include "scene/vulkan/scene_vk_custom_shader.h"
@@ -191,6 +192,13 @@ bool SceneMeshDrawer::setup(SceneGpu& gpu) {
         render::setPipelineStatsLabel("forest leaf pose");
         render::logPipelineStats(device_, posePipeline_);
     }
+    // The forests' GPU planner (without it, every forest plans on the CPU).
+    gpuPlanner_ = std::make_shared<forest::GpuPlanner>();
+    if (!gpuPlanner_->setup(gpu)) {
+        LOG_WARN("SceneMeshDrawer: the forest GPU planner failed; forests plan on the CPU");
+        gpuPlanner_->cleanup(gpu);
+        gpuPlanner_.reset();
+    }
     return true;
 }
 
@@ -243,6 +251,8 @@ void SceneMeshDrawer::cleanup(SceneGpu& gpu) {
     gpu.allocator.destroyBuffer(poses_);
     poseJobs_.clear();
     poseUsed_ = 0;
+    if (gpuPlanner_) gpuPlanner_->cleanup(gpu);
+    gpuPlanner_.reset();
 }
 
 namespace raster {
@@ -843,11 +853,17 @@ void SceneMeshDrawer::bindGeometryAndDraw(VkCommandBuffer cmd, const MeshDraw& d
         // Indexed by a fixed pattern (scene_mesh_drawer_forest.cpp's
         // woodIndices), no vertex buffers: each corner shaded once.
         vkCmdBindIndexBuffer(cmd, draw.indices, 0, VK_INDEX_TYPE_UINT32);
-        vkCmdDrawIndexed(cmd, draw.indexCount, draw.instanceCount, 0, 0, draw.firstInstance);
+        if (draw.indirect != VK_NULL_HANDLE)
+            vkCmdDrawIndexedIndirect(cmd, draw.indirect, draw.indirectOffset, 1, 0);
+        else
+            vkCmdDrawIndexed(cmd, draw.indexCount, draw.instanceCount, 0, 0, draw.firstInstance);
         return;
     }
     if (draw.kind == MeshKind::ForestSprite) {
-        vkCmdDraw(cmd, draw.indexCount, draw.instanceCount, draw.firstVertex, draw.firstInstance);
+        if (draw.indirect != VK_NULL_HANDLE)
+            vkCmdDrawIndirect(cmd, draw.indirect, draw.indirectOffset, 1, 0);
+        else
+            vkCmdDraw(cmd, draw.indexCount, draw.instanceCount, draw.firstVertex, draw.firstInstance);
         return;
     }
     VkBuffer buffers[3] = {draw.vertices, VK_NULL_HANDLE, VK_NULL_HANDLE};
@@ -884,7 +900,10 @@ void SceneMeshDrawer::bindGeometryAndDraw(VkCommandBuffer cmd, const MeshDraw& d
     }
     vkCmdBindVertexBuffers(cmd, 0, count, buffers, offsets);
     vkCmdBindIndexBuffer(cmd, draw.indices, 0, VK_INDEX_TYPE_UINT32);
-    vkCmdDrawIndexed(cmd, draw.indexCount, draw.instanceCount, 0, 0, draw.firstInstance);
+    if (draw.indirect != VK_NULL_HANDLE)
+        vkCmdDrawIndexedIndirect(cmd, draw.indirect, draw.indirectOffset, 1, 0);
+    else
+        vkCmdDrawIndexed(cmd, draw.indexCount, draw.instanceCount, 0, 0, draw.firstInstance);
 }
 
 }  // namespace bro::scene::vk

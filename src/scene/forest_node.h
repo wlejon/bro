@@ -64,9 +64,12 @@
 #include "scene/mesh_node.h"
 
 #include <bromath/aabb.h>
+#include <bromath/frustum.h>
+#include <bromath/mat.h>
 #include <bromath/vec.h>
 
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 namespace bro::scene {
@@ -430,8 +433,25 @@ public:
         uint32_t unforced = 0;       // the camera's trees past the forced tier's vertex ceiling (by size)
         uint32_t shadowUnforced = 0; // the shadow tiles' likewise
     };
-    void setStats(const Stats& s) { stats_ = s; }
-    const Stats& stats() const { return stats_; }
+    /// Where the stats come from while the drawer plans the node on the GPU
+    /// (scene_forest_gpu_plan.cpp): a frame's are read back once the GPU has
+    /// drawn it, a frame or two late, and stats() takes the newest finished
+    /// one without waiting for any.
+    class StatsSource {
+    public:
+        virtual ~StatsSource() = default;
+        /// The newest finished frame's stats into `out` (false: none newer).
+        virtual bool latest(Stats& out) = 0;
+    };
+    void setStatsSource(std::weak_ptr<StatsSource> source) { statsSource_ = std::move(source); }
+    void setStats(const Stats& s) {
+        stats_ = s;
+        statsSource_.reset();
+    }
+    const Stats& stats() const {
+        if (auto source = statsSource_.lock()) source->latest(stats_);
+        return stats_;
+    }
     /// The drawer's measure of each tree the camera saw in its last plan:
     /// treeLod's pixels per unit at the crown and at the whole tree, the
     /// crown's nearest and furthest distances, its forced tier. Kept from
@@ -451,6 +471,21 @@ public:
     }
     /// The Lod (scaled by the budget's detail) the last plan drew at.
     void setSeenLod(const Lod& l) { seenLod_ = l; }
+    /// The camera's view of the last plan the GPU made (it stamps no tree):
+    /// seenLod then measures the tree asked about in it, as planForest's
+    /// camera loop does, at the detail the stats last read back. The CPU's
+    /// next plan (beginSeen) puts it aside.
+    struct SeenView {
+        bromath::Frustum frustum;
+        bromath::Vec3 eye{};
+        bromath::Mat4 world;
+        float reach = 0.0f, pxAtMetre = 0.0f, nodeScale = 1.0f;
+        bool perspective = true;
+    };
+    void setSeenView(const SeenView& v) {
+        seenView_ = v;
+        hasSeenView_ = true;
+    }
     /// What the camera drew tree `i` at in the last frame: the drawer's
     /// TreeLod, at its own measure of the tree (its leaves to the crown, its
     /// bark to the whole tree) and the budget's detail. False: not drawn.
@@ -477,10 +512,15 @@ private:
     mutable float gpuColors_[6] = {};   // the node's leaf and bark colour gpu_'s tints were taken against
     float barkColor_[3] = {0.2f, 0.17f, 0.14f};
     float barkRoughness_ = 0.9f;
-    Stats stats_;
+    mutable Stats stats_;
+    std::weak_ptr<StatsSource> statsSource_;
     std::vector<SeenTree> seen_;
     uint32_t seenStamp_ = 0;
     Lod seenLod_;
+    SeenView seenView_;
+    bool hasSeenView_ = false;
+    // Tree `i` as the camera of seenView_ measures it (false: unseen).
+    bool measureSeen(uint32_t i, SeenTree& out) const;
 
     void refreshGpu() const;
 

@@ -153,6 +153,7 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
     if (repeat <= 1) timer_.end(cmd);
     if (device_.submitFrame(cmd)) {
         timer_.submitted(device_.lastFrameTicket());
+        meshes_.forestSubmitted(device_.lastFrameTicket());
         if (readbackInline && readbackBuffer_.isValid()) {
             readbackRecordedSerial_ = renderSerial_;
             readbackTicket_ = device_.lastFrameTicket();

@@ -140,6 +140,9 @@ add_library(bro_scene STATIC
     vulkan/scene_mesh_drawer.cpp
     vulkan/scene_mesh_drawer_grass.cpp
     vulkan/scene_mesh_drawer_forest.cpp
+    vulkan/scene_mesh_drawer_forest_gpu.cpp
+    vulkan/scene_forest_draw.cpp
+    vulkan/scene_forest_gpu_plan.cpp
     vulkan/scene_draw_list.cpp
     vulkan/scene_frame_graph.cpp
     vulkan/scene_fullscreen.cpp

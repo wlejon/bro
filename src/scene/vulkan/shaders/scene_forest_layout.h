@@ -174,6 +174,19 @@
 #define FOREST_POSE_RECORDS     4
 // A shoot's twig radius at its base, in leaf lengths (forestPipe's unit).
 #define FOREST_SHOOT_RADIUS_BASE 0.011
+// What one draw entry spans (the drawer's addTree, on the CPU and in the GPU
+// planner, scene_forest_plan.glsl): bark segments, clumps (a sprite's or a
+// core's), a caster's runs of clumps, blooms, twig pieces (each a ribbon of
+// FOREST_TWIG_VERTICES indices a row; a fine twig FOREST_TWIG_FINE_ROWS rows),
+// and a far leaf card's or cluster's copies of the leaf (ForestNode::kCardCopies).
+#define FOREST_SEGMENTS_PER_ENTRY    16
+#define FOREST_CLUMPS_PER_ENTRY      16
+#define FOREST_RUNS_PER_ENTRY        16
+#define FOREST_BLOOMS_PER_ENTRY      16
+#define FOREST_TWIG_PIECES_PER_ENTRY 64
+#define FOREST_TWIG_VERTICES         6
+#define FOREST_TWIG_FINE_ROWS        3
+#define FOREST_CARD_COPIES           160
 
 // What the readers take as given: an aligned field starts a record, and a
 // record read whole has its fields in the lanes they are read from (its
