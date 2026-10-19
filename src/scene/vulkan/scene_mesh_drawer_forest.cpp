@@ -287,6 +287,28 @@ struct SceneMeshDrawer::ForestPlan {
     std::vector<Groups> tiles;
     std::vector<uint32_t> order[kGroups];
     std::vector<uint64_t> keyed, keyedSwap;
+    // planForest's chunks' lists, the camera's and then each tile's.
+    struct ChunkLists {
+        std::vector<Seen> seen;
+        std::vector<uint32_t> crowned;
+        std::vector<std::pair<uint32_t, int>> castCrowned;
+        uint32_t culled = 0;
+        float canopyTop = -1e30f;
+    };
+    std::vector<ChunkLists> chunkLists;
+    // The first `n` of chunkLists, emptied.
+    std::vector<ChunkLists>& clearChunks(size_t n) {
+        if (chunkLists.size() < n) chunkLists.resize(n);
+        for (size_t c = 0; c < n; ++c) {
+            ChunkLists& l = chunkLists[c];
+            l.seen.clear();
+            l.crowned.clear();
+            l.castCrowned.clear();
+            l.culled = 0;
+            l.canopyTop = -1e30f;
+        }
+        return chunkLists;
+    }
 
     static void clearGroups(Groups& G) {
         for (auto& g : G.g) g.clear();
@@ -319,6 +341,7 @@ struct SceneMeshDrawer::ForestPlan {
         for (int k = 0; k < kGroups; ++k) take(order[k], old.order[k]);
         take(keyed, old.keyed);
         take(keyedSwap, old.keyedSwap);
+        chunkLists.swap(old.chunkLists);
     }
 
     // The budget's detail factor addTree measures at (set by cost(),
@@ -1063,13 +1086,19 @@ struct SceneMeshDrawer::ForestCull {
     }
     // Mark the trees of every cell `hit` lets through (and no others): 2
     // those of the cells `far` names, else 1.
+    // (Across the pool: a cell marks only its own trees.)
     template <class Hit, class Far> void markCells(Hit hit, Far far) {
-        std::fill(mark.begin(), mark.end(), uint8_t{0});
-        for (size_t c = 0; c + 1 < start.size(); ++c) {
-            if (start[c] == start[c + 1] || !hit(cellBox[c])) continue;
-            const uint8_t m = far(c) ? 2 : 1;
-            for (uint32_t k = start[c]; k < start[c + 1]; ++k) mark[items[k]] = m;
-        }
+        ForestPlan::eachChunk(mark.size(), [&](uint32_t, uint32_t b, uint32_t e) {
+            std::fill(mark.begin() + b, mark.begin() + e, uint8_t{0});
+        });
+        const size_t cells = start.empty() ? 0 : start.size() - 1;
+        ForestPlan::eachChunk(cells, [&](uint32_t, uint32_t b, uint32_t e) {
+            for (uint32_t c = b; c < e; ++c) {
+                if (start[c] == start[c + 1] || !hit(cellBox[c])) continue;
+                const uint8_t m = far(c) ? 2 : 1;
+                for (uint32_t k = start[c]; k < start[c + 1]; ++k) mark[items[k]] = m;
+            }
+        });
     }
 };
 
@@ -1177,30 +1206,27 @@ std::unique_ptr<SceneMeshDrawer::ForestPlan> SceneMeshDrawer::planForest(SceneFr
     const float nearMin = P.lod.leavesRange > 0.0f ? P.lod.leavesRange + 0.5f * P.lod.leavesBand : 0.0f;
     std::vector<uint8_t> cameraFar(cull.cellBox.size(), 0);
     if (farCells)
-        for (size_t c = 0; c < cull.cellBox.size(); ++c) {
-            float across = 0.0f;
-            const float d = nearest(cull.cellBox[c], across);
-            if (across < 40.0f || d < 1.0f || d < nearMin) continue;
-            const float px = pxAtMetre / d;   // a metre's pixels there
-            cameraFar[c] = cull.cellClump[c] * px < 0.98f * P.lod.crownTo &&
-                           cull.cellKeep[c] * px < 0.98f * kBarkRibbonCut * barkCut(cull.cellUnit[c] * px) &&
-                           cull.cellBloom[c] * px < 0.98f * kBloomMinPixels;
-        }
+        ForestPlan::eachChunk(cull.cellBox.size(), [&](uint32_t, uint32_t b, uint32_t e) {
+            for (uint32_t c = b; c < e; ++c) {
+                float across = 0.0f;
+                const float d = nearest(cull.cellBox[c], across);
+                if (across < 40.0f || d < 1.0f || d < nearMin) continue;
+                const float px = pxAtMetre / d;   // a metre's pixels there
+                cameraFar[c] = cull.cellClump[c] * px < 0.98f * P.lod.crownTo &&
+                               cull.cellKeep[c] * px < 0.98f * kBarkRibbonCut * barkCut(cull.cellUnit[c] * px) &&
+                               cull.cellBloom[c] * px < 0.98f * kBloomMinPixels;
+            }
+        });
 
     // The camera's trees: those of the cells in view, in the trees' order.
     const uint32_t stamp = node.beginSeen();
     cull.markCells([&](const bromath::AABB3& b) { return bromath::fintersects(view.frustum, b); },
                    [&](size_t c) { return cameraFar[c] != 0; });
     // (Chunk by chunk across the pool, each its own lists, joined in order.)
-    struct Part {
-        std::vector<Seen> seen;
-        std::vector<uint32_t> crowned;
-        uint32_t culled = 0;
-        float canopyTop = -1e30f;
-    };
-    std::vector<Part> parts(ForestPlan::chunksOf(instances.size()));
+    const uint32_t chunks = ForestPlan::chunksOf(instances.size());
+    auto& parts = P.clearChunks(chunks);
     ForestPlan::eachChunk(instances.size(), [&](uint32_t chunk, uint32_t begin, uint32_t end) {
-        Part& out = parts[chunk];
+        auto& out = parts[chunk];
         for (uint32_t i = begin; i < end; ++i) {
             const bromath::AABB3& b = cull.bounds[i];
             if (!cull.mark[i] || !bromath::fintersects(view.frustum, b)) {
@@ -1249,10 +1275,11 @@ std::unique_ptr<SceneMeshDrawer::ForestPlan> SceneMeshDrawer::planForest(SceneFr
     });
     {
         size_t ns = 0, nc = 0;
-        for (const Part& p : parts) { ns += p.seen.size(); nc += p.crowned.size(); }
+        for (uint32_t c = 0; c < chunks; ++c) { ns += parts[c].seen.size(); nc += parts[c].crowned.size(); }
         P.seen.reserve(ns);
         P.crowned.reserve(nc);
-        for (const Part& p : parts) {
+        for (uint32_t c = 0; c < chunks; ++c) {
+            const auto& p = parts[c];
             P.seen.insert(P.seen.end(), p.seen.begin(), p.seen.end());
             P.crowned.insert(P.crowned.end(), p.crowned.begin(), p.crowned.end());
             P.stats.culled += p.culled;
@@ -1279,29 +1306,25 @@ std::unique_ptr<SceneMeshDrawer::ForestPlan> SceneMeshDrawer::planForest(SceneFr
                        cull.cellKeep[c] * px < 0.98f * barkCut(cull.cellUnit[c] * px);
             };
             cull.markCells([&](const bromath::AABB3& b) { return bromath::fintersects(tile.frustum, b); }, casterFar);
-            struct CastPart {
-                std::vector<Seen> cast;
-                std::vector<std::pair<uint32_t, int>> crowned;
-            };
-            std::vector<CastPart> casts(ForestPlan::chunksOf(instances.size()));
+            auto& casts = P.clearChunks(chunks);
             ForestPlan::eachChunk(instances.size(), [&](uint32_t chunk, uint32_t begin, uint32_t end) {
-                CastPart& out = casts[chunk];
+                auto& out = casts[chunk];
                 for (uint32_t i = begin; i < end; ++i) {
                     if (!cull.mark[i] || !bromath::fintersects(tile.frustum, cull.bounds[i])) continue;
                     if (cull.mark[i] == 2) {
-                        out.crowned.push_back({i, ti});
+                        out.castCrowned.push_back({i, ti});
                         continue;
                     }
                     float texel = tile.texelConst;
                     const float dc = bromath::vlen((cull.bounds[i].min + cull.bounds[i].max) * 0.5f - view.eye);
                     if (!tile.ortho) texel += tile.texelPerMetre * dc;
-                    out.cast.push_back({i, instances[i].scale * nodeScale / std::max(texel, 1e-5f), ti, 0.0f,
+                    out.seen.push_back({i, instances[i].scale * nodeScale / std::max(texel, 1e-5f), ti, 0.0f,
                                         P.lod.forceRange <= 0.0f || dc <= P.lod.forceRange, dc});
                 }
             });
-            for (const CastPart& p : casts) {
-                P.cast.insert(P.cast.end(), p.cast.begin(), p.cast.end());
-                P.castCrowned.insert(P.castCrowned.end(), p.crowned.begin(), p.crowned.end());
+            for (uint32_t c = 0; c < chunks; ++c) {
+                P.cast.insert(P.cast.end(), casts[c].seen.begin(), casts[c].seen.end());
+                P.castCrowned.insert(P.castCrowned.end(), casts[c].castCrowned.begin(), casts[c].castCrowned.end());
             }
         }
     }
