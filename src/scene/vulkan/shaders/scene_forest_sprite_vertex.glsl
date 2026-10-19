@@ -46,10 +46,16 @@ bool forestSprite(int mode, int instanceIndex, int vertexIndex, mat4 base, out F
     ForestEntry e;
     int clump = -1;
     bool core = mode == FOREST_SPRITE_CORES;
+    bool runs = mode == FOREST_SPRITE_RUNS;
+    int run = -1;
     if (mode == FOREST_SPRITE_CLUMPS || core) {
         e = forestEntry(instanceIndex);
         clump = e.first + vertexIndex / FOREST_CLUMP_VERTICES;
         if (clump >= e.end || procClumpBare(e.instance, clump)) return false;
+    } else if (runs) {
+        e = forestEntry(instanceIndex);
+        run = e.first + vertexIndex / FOREST_CARD_VERTICES;
+        if (run >= e.end) return false;
     } else {
         e = forestEntry(vertexIndex / FOREST_CARD_VERTICES);
     }
@@ -119,6 +125,24 @@ bool forestSprite(int mode, int instanceIndex, int vertexIndex, mat4 base, out F
             s.radiusUp = upR * scale;
             s.leafLen = 0.0;
         }
+    } else if (runs) {
+        // A RUN of the specimen's clumps (a caster): the upright ellipsoid
+        // they fill, at the radii the crown trace takes it at (its form's
+        // fill, FOREST_FILL_SHRINK), with the run's leaves; posed as its
+        // first clump.
+        int blk = floatBitsToInt(FOREST_FLOAT(sr, FOREST_SP_BLOCKS)) + run * FOREST_BLOCK_RECORDS;
+        vec4 f = FOREST_RECORD(blk, FOREST_BLOCK_FILL);
+        uint form = floatBitsToUint(FOREST_HEADER(FOREST_H_LOOK)) & 15u;
+        float fill = (form == 1u ? 0.9 : form != 0u ? 1.0 : 0.8) * 0.9;
+        c = f.xyz;
+        s.radius = f.w * fill * scale;
+        s.radiusUp = FOREST_FLOAT(blk, FOREST_BLOCK_FILL_UP) * fill * scale;
+        s.leaves = max(FOREST_FLOAT(blk, FOREST_BLOCK_LEAVES), 1.0);
+        uint first = floatBitsToUint(FOREST_RECORD(sr, FOREST_SP_SEG_START)[FOREST_SP_CLUMP_START % 4]);
+        uint i0 = floatBitsToUint(FOREST_RECORD(blk, FOREST_BLOCK_CLUMPS).x) & 0xffffu;
+        forestVegetation(forestClumpRecord(int(first + i0)) + FOREST_CLUMP_VEGETATION / 4, c, 1.0, v0, v1, v2, v3);
+        weight = v2.w;
+        s.seed = fract(float(run) * 0.618034 + treeSeed + 0.5);
     } else {
         vec4 crown = FOREST_RECORD(sr, FOREST_SP_CROWN);
         vec4 more = FOREST_RECORD(sr, FOREST_SP_CROWN_UP);

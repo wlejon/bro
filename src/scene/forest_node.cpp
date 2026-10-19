@@ -674,6 +674,11 @@ void ForestNode::countClumpTwigs() {
     }
 }
 
+bool ForestNode::pinnate(size_t k) const {
+    return leafLooks_.size() == specimens_.size() * rec::leaf_look::kFloats && k < specimens_.size() &&
+           std::lround(leafLooks_[k * rec::leaf_look::kFloats + rec::leaf_look::kPhyllotaxis]) == 3;
+}
+
 void ForestNode::barkOverLeaf(size_t k, float out[3]) const {
     const float* c = color();
     const bool own = looks_.size() == specimens_.size() * rec::look::kFloats && k < specimens_.size();

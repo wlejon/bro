@@ -154,10 +154,13 @@
 #define FOREST_CLUMP_LOBES      3
 #define FOREST_CLUMP_VERTICES   (FOREST_CLUMP_LOBES * FOREST_CARD_VERTICES)
 // A sprite draw's kind (its push extra.z): a clump's lobes, a crown, a
-// needle or scale lobe's core.
+// needle or scale lobe's core, or (a caster only) a run of clumps as the
+// ellipsoid it fills (its block's FOREST_BLOCK_FILL), an entry's first and
+// end its runs.
 #define FOREST_SPRITE_CLUMPS    0
 #define FOREST_SPRITE_CROWNS    1
 #define FOREST_SPRITE_CORES     2
+#define FOREST_SPRITE_RUNS      3
 // Bark's sides (forestTubeMorph morphs a ring between them); a bark entry's
 // param is its sides | its rows << FOREST_BARK_ROWS_SHIFT.
 #define FOREST_BARK_SIDES_FAR       5

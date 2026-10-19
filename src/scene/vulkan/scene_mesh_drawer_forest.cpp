@@ -49,6 +49,15 @@ constexpr uint32_t kTubeCurveSlot = 0x7fc0;
 constexpr uint32_t kSegmentsPerEntry = 16;   // bark: segments an instance
 constexpr uint32_t kClumpsPerEntry = 16;     // sprites: clumps an instance
 constexpr uint32_t kVertsPerClump = FOREST_CLUMP_VERTICES;   // three lobes of two triangles
+constexpr uint32_t kRunsPerEntry = 16;       // run casters: a disc each
+// A clumps-tier caster past kRunNear from the eye (m, the tree's middle)
+// casts a disc a run of its clumps (FOREST_CLUMP_BLOCK of them, the
+// ellipsoid they fill: FOREST_SPRITE_RUNS) in place of a disc a lobe,
+// handed over dithered across kRunBand: the ground's shade near the eye
+// keeps its lobes, and past it a broadleaf's thousand lobes, most of the
+// shadow pass's fragments, are a hundred and fifty discs.
+constexpr float kRunNear = 30.0f;
+constexpr float kRunBand = 10.0f;
 constexpr uint32_t kBloomsPerEntry = 16;     // blooms: a card each
 constexpr uint32_t kVertsPerBloom = FOREST_CARD_VERTICES;
 // A tree's blooms are drawn while the largest (ForestNode::bloomExtent of
@@ -161,7 +170,7 @@ const bromesh::MeshData& woodIndices(int sides, uint32_t rows = 1) {
 // those nothing.
 enum Group {
     Cores, LeafNear, LeafCard, Bark20Curved, Bark10Curved, Bark20, Bark10, Bark5, Twigs, TwigsFine, Blooms, Clumps,
-    Crowns, kGroups
+    Crowns, Runs, kGroups
 };
 
 struct Entry {
@@ -409,7 +418,7 @@ struct SceneMeshDrawer::ForestPlan {
     // several threads at once, each with its own `G` and `tally`.
     void addTree(Groups* G, uint32_t inst, const ForestNode::Specimen& sp, const ForestNode::TreeLod& t,
                  bool shadow, uint64_t& vertices, Tally& tally, float px = 0.0f, float barkPx = 0.0f,
-                 const Seen* seen = nullptr) const {
+                 const Seen* seen = nullptr, float castDist = 0.0f) const {
         const auto& keepRadius = node->keepRadius();
         // A needle node's fine wood (its twigs are no form of their own):
         // what the bark's cut leaves out (under kBarkRibbonCut of the cut)
@@ -651,10 +660,27 @@ struct SceneMeshDrawer::ForestPlan {
         // Sprites: counted when drawn, not against the budget, which buys
         // leaves and bark (a sprite tree's cost is a fixed few hundred
         // vertices and its pixels).
-        if (hi[1] > lo[1] && sp.clumpCount > 0 && G) {
+        // A caster's clumps tier split between its lobes (near) and its runs
+        // (far): [lo, mid) lobes, [mid, hi) runs. (A pinnate specimen's runs
+        // hang beside each other across its curtain, so no ellipsoid stands
+        // for one: its lobes cast at every distance.)
+        float mid = hi[1];
+        if (shadow && !node->pinnate(static_cast<size_t>(&sp - node->specimens().data()))) {
+            const float w = std::clamp((castDist - kRunNear) / kRunBand, 0.0f, 1.0f);
+            mid = hi[1] - (hi[1] - lo[1]) * w;
+        }
+        if (hi[1] > mid && sp.clumpCount > 0 && G) {
+            const uint32_t n = (sp.clumpCount + FOREST_CLUMP_BLOCK - 1) / FOREST_CLUMP_BLOCK;
+            tally.drawn(vertices, uint64_t{(n + kRunsPerEntry - 1) / kRunsPerEntry} * kRunsPerEntry *
+                                      FOREST_CARD_VERTICES);
+            const float fade = ForestNode::fadeCode(mid, hi[1]);
+            for (uint32_t r = 0; r < n; r += kRunsPerEntry)
+                G->g[Runs].push_back({inst, r, std::min(r + kRunsPerEntry, n), 0u, 1.0f, 0.0f, 1.0f, fade});
+        }
+        if (mid > lo[1] && sp.clumpCount > 0 && G) {
             tally.drawn(vertices, uint64_t{(sp.clumpCount + kClumpsPerEntry - 1) / kClumpsPerEntry} *
                                       kClumpsPerEntry * kVertsPerClump);
-            const float fade = ForestNode::fadeCode(lo[1], hi[1]);
+            const float fade = ForestNode::fadeCode(lo[1], mid);
             for (uint32_t c = 0; c < sp.clumpCount; c += kClumpsPerEntry)
                 G->g[Clumps].push_back({inst, sp.clumpStart + c,
                                         sp.clumpStart + std::min(c + kClumpsPerEntry, sp.clumpCount), 0u, lobeReach,
@@ -696,7 +722,7 @@ struct SceneMeshDrawer::ForestPlan {
         }
         uint64_t v = 0;
         const uint64_t only = tally.drawnOnly;
-        addTree(G, s.instance, sp, t, shadow, v, tally, s.px, s.barkPx, shadow ? nullptr : &s);
+        addTree(G, s.instance, sp, t, shadow, v, tally, s.px, s.barkPx, shadow ? nullptr : &s, s.dist);
         if (all) *all += v;
         return v - (tally.drawnOnly - only);
     }
@@ -1694,12 +1720,13 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
                 {"forest:twigsFine:broad", "forest:twigsFine:needle", "forest:twigsFine:scale"},
                 {"forest:blooms:broad", "forest:blooms:needle", "forest:blooms:scale"},
                 {"forest:clumps:broad", "forest:clumps:needle", "forest:clumps:scale"},
-                {"forest:crowns:broad", "forest:crowns:needle", "forest:crowns:scale"}};
+                {"forest:crowns:broad", "forest:crowns:needle", "forest:crowns:scale"},
+                {"forest:runs:broad", "forest:runs:needle", "forest:runs:scale"}};
             static constexpr const char* kShadowLabel[kGroups] = {
                 "shadow:forest:cores", "shadow:forest:leafNear", "shadow:forest:leafCard", "shadow:forest:bark20c",
                 "shadow:forest:bark10c", "shadow:forest:bark20", "shadow:forest:bark10",
                 "shadow:forest:bark5", "shadow:forest:twigs", "shadow:forest:twigsFine", "shadow:forest:blooms", "shadow:forest:clumps",
-                "shadow:forest:crowns"};
+                "shadow:forest:crowns", "shadow:forest:runs"};
             d.timerLabel = kLabel[k][std::clamp(static_cast<int>(node.look().leafForm), 0, 2)];
             if (shadow) d.shadowTimerLabel = kShadowLabel[k];
             switch (k) {
@@ -1796,6 +1823,15 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
                 d.twoSided = true;   // no culling; lit from its front
                 d.push.pbrParams[3] = static_cast<float>(spriteFlags);
                 break;
+            case Runs:
+                d.kind = MeshKind::ForestSprite;
+                d.push.extra[2] = FOREST_SPRITE_RUNS;
+                d.indexCount = kRunsPerEntry * FOREST_CARD_VERTICES;
+                d.instanceCount = static_cast<uint32_t>(g.size());
+                d.firstInstance = first;
+                d.twoSided = true;
+                d.push.pbrParams[3] = static_cast<float>(spriteFlags);
+                break;
             case Blooms:
                 // A card a bloom (mesh_forest_bloom.vert), shaped and lit by
                 // mesh.frag's SCENE_FOREST_BLOOM build: white times the
@@ -1834,13 +1870,13 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
             // camera keeps pixels, its side in the emissive's z
             // (PassShadow's params.yzw; shadow_forest_*.vert's forestCasterKept).
             const bool leafSide = k == Cores || k == LeafNear || k == LeafCard || k == Twigs || k == TwigsFine;
-            if (P.lod.leavesRange > 0.0f && (leafSide || k == Clumps)) {
+            if (P.lod.leavesRange > 0.0f && (leafSide || k == Clumps || k == Runs)) {
                 if (!shadow)
                     d.push.pbrParams[3] =
                         static_cast<float>(static_cast<uint32_t>(d.push.pbrParams[3]) | mesh_flags::kForestReveal);
                 d.push.emissive[0] = P.lod.leavesRange;
                 d.push.emissive[1] = P.lod.leavesBand;
-                d.push.emissive[2] = shadow ? (k == Clumps ? -1.0f : 1.0f) : 0.0f;
+                d.push.emissive[2] = shadow ? (k == Clumps || k == Runs ? -1.0f : 1.0f) : 0.0f;
                 d.push.emissive[3] = 0.0f;
             }
             if (posed) {

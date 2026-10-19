@@ -319,6 +319,9 @@ public:
     /// through its crown, the share no leaf in front of it covers (1 with
     /// no leaves).
     float woodSeen(size_t k) const;
+    /// Whether specimen `k`'s leaflets line its wood (its leaf look's
+    /// phyllotaxis 3): its clumps are runs along it, not round.
+    bool pinnate(size_t k) const;
     /// A broad node's twigs (scene_forest_shoot.glsl): each clump's pieces,
     /// its lobe stems and sprays first (`stems`), then its shoots
     /// (`pieces`); 0 for a clump with no leaves.

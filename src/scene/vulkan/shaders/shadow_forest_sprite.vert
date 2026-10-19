@@ -17,6 +17,13 @@ layout(location = 4) flat out float outHollow;  // a broad lobe's hollow (forest
 #include "scene_forest_sprite_vertex.glsl"
 #include "scene_forest_mass.glsl"
 
+// A run caster's depth over its leaves' even spread through its ellipsoid:
+// its lobes' leaves lie in their shells, and its clumps overlap. (Measured
+// against its lobes' casters on the forest dolly: at 1, every form's runs
+// were 0.5 to 1 unit brighter at noon and golden alike; at 1.5 within half
+// a unit past 36 m.)
+const float FOREST_RUN_DEPTH = 1.5;
+
 void main() {
     ForestSprite s;
     // The draw's mode rides in the wind-mask slot (MeshDraw push.extra.z).
@@ -67,6 +74,18 @@ void main() {
     // As an even disc, a low sun's long shadows across a far canopy shaded
     // its crowns 7 units under its leaves'.
     if (int(push.params.x + 0.5) == FOREST_SPRITE_CROWNS) outDepth *= FOREST_CROWN_CLUMPING;
+    // A run's leaves fill an upright ellipsoid, not a sphere: the column the
+    // light crosses through its middle holds its leaves over the ellipsoid's
+    // shadow, pi r sqrt(up^2 (1 - Ly^2) + r^2 Ly^2), not pi r^2.
+    // Its disc is that shadow: r across, the rest along up as the light
+    // sees it.
+    bool run = int(push.params.x + 0.5) == FOREST_SPRITE_RUNS;
+    float runUp = r;
+    if (run) {
+        float up = max(s.radiusUp, 1e-6);
+        runUp = sqrt(up * up * (1.0 - away.y * away.y) + r * r * away.y * away.y);
+        outDepth *= FOREST_RUN_DEPTH * r / runUp;
+    }
     // A spray node's crown (a needle or scale-leaf form) is its sprays' pads
     // filled to their rims, dense through, so the light falls off through it
     // rather than past one plane: the drawer draws a crown's caster twice,
@@ -85,6 +104,23 @@ void main() {
     if (sprayCrown) {
         past = gl_InstanceIndex > 0 ? 0.5 : 0.0;
         outDepth *= 0.5;
+    }
+    if (run) {
+        // The disc across the light: r along the level axis, runUp along
+        // up's projection (any pair under a light overhead, the two equal).
+        vec3 side = cross(away, vec3(0.0, 1.0, 0.0));
+        side = dot(side, side) > 1e-6 ? normalize(side) : vec3(1.0, 0.0, 0.0);
+        vec3 upL = cross(side, away);
+        // Half its depth along the light past its centre, not half its
+        // radius across: a flat run's disc under a high sun stood below
+        // its own leaves (a broadleaf's run casters 0.6 units brighter at
+        // noon than its lobes').
+        float deep = sqrt(r * r * (1.0 - away.y * away.y) + s.radiusUp * s.radiusUp * away.y * away.y);
+        gl_Position = L * vec4(s.center + away * (past * deep) + side * (s.corner.x * r) +
+                               upL * (s.corner.y * runUp), 1.0);
+        outUV = s.corner;
+        outSeed = s.seed;
+        return;
     }
     vec4 clip = L * vec4(s.center + away * (past * s.radius), 1.0);
     // How far a world metre moves the tile's x and y: the lengths of its
