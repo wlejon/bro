@@ -245,8 +245,18 @@ struct SceneMeshDrawer::ForestPlan {
 
     ForestNode::TreeLod casterLod(const ForestNode::Lod& L, const ForestNode::Specimen& sp, const Seen& s) const {
         ForestNode::TreeLod t = ForestNode::treeLod(L, sp, s.px, leafLength, forceOf(s), s.barkPx);
-        if (forceOf(s) >= 0 || t.crowns <= 0.0f || s.instance >= seenPx.size() || seenPx[s.instance] <= 0.0f) return t;
+        if (forceOf(s) >= 0 || s.instance >= seenPx.size() || seenPx[s.instance] <= 0.0f) return t;
         const ForestNode::TreeLod c = ForestNode::treeLod(lod, sp, seenPx[s.instance], leafLength);
+        // Where the camera draws a tree's leaves, its caster keeps leaves
+        // (at the tile's widening) for that share rather than clumps: a leaf
+        // takes its shade from the casters alone, and a clump's disc stands
+        // past its lobe's middle, so leaves shaded by clump casters had only
+        // the far lobes' shade (a broadleaf at 45 / 75 m golden 6 / 11
+        // levels brighter than its leaves).
+        const float back = std::min(t.clumps, std::max(c.leaves - t.leaves, 0.0f));
+        t.clumps -= back;
+        t.leaves += back;
+        if (t.crowns <= 0.0f) return t;
         // Where the camera sees leaves or clumps, the caster's crowns hand to
         // clumps, over the camera's share of the two from 0.35 to 0.65 (a
         // switch at a half stepped the shadow). Clumps shaded by crown
