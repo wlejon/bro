@@ -92,8 +92,12 @@ ForestCrownHit forestCrownTrace(vec3 d, int instance, vec3 offset, float len, fl
     float leafArea = 3.14159265 * a * a * aspect * 0.55;
     // Its clumps' height over their width (scene_forest.glsl's forestClumpFlat).
     float flatness = FOREST_FLOAT(sr, FOREST_SP_CLUMP_FLAT) > 0.0 ? FOREST_FLOAT(sr, FOREST_SP_CLUMP_FLAT) : 1.0;
-    // (A spray node's clumps are its sprays' pads, filled to their rims.)
-    float fill = (floatBitsToUint(FOREST_HEADER(FOREST_H_LOOK)) & 15u) != 0u ? 1.0 : FOREST_CROWN_FILL;
+    // (A spray node's clumps are its sprays' pads, filled to their rims; a
+    // needle spray's pad, its needles radiating, leaves its outer tenth
+    // open: filled to the rim, a pine's crowns covered 0.6 to 0.9 points
+    // more of the view than its leaves at 100 to 150 m.)
+    uint form = floatBitsToUint(FOREST_HEADER(FOREST_H_LOOK)) & 15u;
+    float fill = form == 1u ? 0.9 : form != 0u ? 1.0 : FOREST_CROWN_FILL;
     // A pinnate specimen's clumps are runs of leaflets along their wood
     // (scene_forest_shoot.glsl's forestPinnateLeaf, its FOREST_SP_PHYLLOTAXIS
     // 3): each traced as the spheroid the clumps tier's run of

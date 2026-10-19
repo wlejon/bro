@@ -149,6 +149,16 @@ ForestMass forestSpriteSurface(uint flags) {
                 m.flatness = 1.0;
                 m.density = FOREST_CROWN_SHADE * h.crownSigma;
                 m.selfMax = FOREST_CROWN_SELF_MAX;
+            } else if (lighting.sunDirection.w > 0.5) {
+                // A spray crown's own leaves stop the light by the area they
+                // turn to it, as a broad lobe's do (below): its sprays lean
+                // up, so less of a low sun than a high one. With one depth
+                // for every sun a pine's crowns at 100 / 150 / 200 m were 1.0
+                // / 0.8 / 0.6 over its leaves at noon and 0.2 / 0.4 / 0.0
+                // under at golden; 0.6 / 0.6 / 0.5 over and 0.1 over / 0.3
+                // under / 0.0.
+                float gb = clamp(1.4 * FOREST_HEADER(FOREST_H_UP_BIAS), 0.0, 1.0);
+                m.density *= (1.0 - gb) + 2.0 * gb * abs(lighting.sunDirection.y);
             }
             m.at = h.at;
             vec4 clip = camera.viewProj * vec4(h.at, 1.0);
