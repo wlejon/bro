@@ -167,6 +167,9 @@ target_include_directories(bro_scene PRIVATE ${VK_GEN_DIR})
 # on (see the _bro_require chain in the top-level CMakeLists), so bro_physics +
 # brogameagent are always present here.
 target_link_libraries(bro_scene PUBLIC bro_canvas bro_physics bro_util broimage::broimage bromesh FastNoise brogameagent bro_dom bro_render bro_layout bro_tile Vulkan::Vulkan)
+# The forest node reads broflora's forest records (broflora/forest_records.h,
+# header-only): its include directory alone, not its code or its flags.
+target_include_directories(bro_scene PRIVATE $<TARGET_PROPERTY:broflora,INTERFACE_INCLUDE_DIRECTORIES>)
 target_compile_features(bro_scene PUBLIC cxx_std_20)
 bro_apply_feature_defs(bro_scene)
 

@@ -1,5 +1,7 @@
 #include "scene/forest_node.h"
 
+#include <broflora/forest_records.h>
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -10,10 +12,10 @@ namespace bro::scene {
 
 namespace {
 
-constexpr size_t kSpecimenFloats = 16;   // emitForest's binding: see setSpecimens
+// emitForest's arrays, as broflora lays them out.
+namespace rec = broflora::forest_records;
 constexpr size_t kHeaderFloats = 16;
 constexpr size_t kSpecimenRecords = 9;   // scene_forest.glsl's FOREST_SPECIMEN_RECORDS
-constexpr size_t kBloomFloats = 8;       // emitForest's blooms and specimenBlooms: see setBlooms
 
 float smooth(float a, float b, float x) {
     if (a == b) return x < a ? 0.0f : 1.0f;
@@ -93,28 +95,31 @@ ForestNode::ForestNode(const std::string& name) : MeshNode(name) {
 ForestNode::~ForestNode() = default;
 
 bool ForestNode::setSpecimens(SpecimenArrays&& a) {
-    const size_t nSpec = a.specimens.size() / kSpecimenFloats;
-    const size_t nSeg = a.segments.size() / 8;
-    const size_t nClump = a.clumps.size() / 8;
-    const size_t nLeaf = a.leaves.size() / 2;
-    if (a.specimens.size() % kSpecimenFloats || a.segments.size() % 8 || a.tangents.size() != nSeg * 6 ||
-        a.segmentVegetation.size() != nSeg * 16 || a.keepRadius.size() != nSeg || a.clumps.size() % 8 ||
-        a.clumpVegetation.size() != nClump * 16 || a.leaves.size() % 2)
+    const size_t nSpec = a.specimens.size() / rec::specimen::kFloats;
+    const size_t nSeg = a.segments.size() / rec::segment::kFloats;
+    const size_t nClump = a.clumps.size() / rec::clump::kFloats;
+    const size_t nLeaf = a.leaves.size() / rec::leaf::kValues;
+    if (a.specimens.size() % rec::specimen::kFloats || a.segments.size() % rec::segment::kFloats ||
+        a.tangents.size() != nSeg * rec::tangent::kFloats ||
+        a.segmentVegetation.size() != nSeg * rec::vegetation::kFloats || a.keepRadius.size() != nSeg ||
+        a.clumps.size() % rec::clump::kFloats || a.clumpVegetation.size() != nClump * rec::vegetation::kFloats ||
+        a.leaves.size() % rec::leaf::kValues)
         return false;
     for (size_t i = 0; i < nLeaf; ++i)
-        if (a.leaves[2 * i] >= nClump) return false;
+        if (a.leaves[i * rec::leaf::kValues + rec::leaf::kClump] >= nClump) return false;
 
     std::vector<Specimen> specs(nSpec);
     for (size_t k = 0; k < nSpec; ++k) {
-        const float* f = &a.specimens[k * kSpecimenFloats];
+        const float* f = &a.specimens[k * rec::specimen::kFloats];
         Specimen& s = specs[k];
-        const auto u = [&](int i) { return static_cast<uint32_t>(std::max(0.0f, f[i])); };
-        s.segStart = u(0); s.segCount = u(1);
-        s.clumpStart = u(2); s.clumpCount = u(3);
-        s.leafStart = u(4); s.leafCount = u(5);
-        s.height = f[6];
+        const auto u = [&](size_t i) { return static_cast<uint32_t>(std::max(0.0f, f[i])); };
+        s.segStart = u(rec::specimen::kSegStart); s.segCount = u(rec::specimen::kSegCount);
+        s.clumpStart = u(rec::specimen::kClumpStart); s.clumpCount = u(rec::specimen::kClumpCount);
+        s.leafStart = u(rec::specimen::kLeafStart); s.leafCount = u(rec::specimen::kLeafCount);
+        s.height = f[rec::specimen::kHeight];
         // Its clumps' height over their width (0: emitted before it existed).
-        s.clumpFlat = f[15] > 0.0f ? std::clamp(f[15], 0.2f, 1.0f) : 1.0f;
+        const float flat = f[rec::specimen::kClumpFlat];
+        s.clumpFlat = flat > 0.0f ? std::clamp(flat, 0.2f, 1.0f) : 1.0f;
         if (uint64_t{s.segStart} + s.segCount > nSeg || uint64_t{s.clumpStart} + s.clumpCount > nClump ||
             uint64_t{s.leafStart} + s.leafCount > nLeaf)
             return false;
@@ -123,19 +128,22 @@ bool ForestNode::setSpecimens(SpecimenArrays&& a) {
         bromath::AABB3 crown = bromath::aempty3();
         float sumR = 0.0f;
         for (uint32_t c = s.clumpStart; c < s.clumpStart + s.clumpCount; ++c) {
-            const float* r = &a.clumps[c * 8];
+            const float* p = &a.clumps[c * rec::clump::kFloats + rec::clump::kCentre];
+            const float r = a.clumps[c * rec::clump::kFloats + rec::clump::kRadius];
             // Its ellipsoid: r across, 0.9 r up and 0.7 r down times the flatness.
-            const float up = r[3] * s.clumpFlat;
-            crown = bromath::amerge(crown, bromath::AABB3{{r[0] - r[3], r[1] - 0.7f * up, r[2] - r[3]},
-                                                          {r[0] + r[3], r[1] + 0.9f * up, r[2] + r[3]}});
-            sumR += r[3];
+            const float up = r * s.clumpFlat;
+            crown = bromath::amerge(crown, bromath::AABB3{{p[0] - r, p[1] - 0.7f * up, p[2] - r},
+                                                          {p[0] + r, p[1] + 0.9f * up, p[2] + r}});
+            sumR += r;
         }
         s.bounds = crown;
         for (uint32_t g = s.segStart; g < s.segStart + s.segCount; ++g) {
-            const float* r = &a.segments[g * 8];
-            s.bounds = grow(s.bounds, {r[0], r[1], r[2]}, r[3]);
-            s.bounds = grow(s.bounds, {r[4], r[5], r[6]}, r[7]);
-            s.trunkRadius = std::max(s.trunkRadius, r[3]);
+            const float* r = &a.segments[g * rec::segment::kFloats];
+            const float* from = r + rec::segment::kFrom;
+            const float* to = r + rec::segment::kTo;
+            s.bounds = grow(s.bounds, {from[0], from[1], from[2]}, r[rec::segment::kRFrom]);
+            s.bounds = grow(s.bounds, {to[0], to[1], to[2]}, r[rec::segment::kRTo]);
+            s.trunkRadius = std::max(s.trunkRadius, r[rec::segment::kRFrom]);
         }
         if (bromath::aisEmpty(s.bounds)) s.bounds = bromath::AABB3{{0.0f, 0.0f, 0.0f}, {0.0f, s.height, 0.0f}};
         s.bareBounds = s.bounds;
@@ -149,28 +157,31 @@ bool ForestNode::setSpecimens(SpecimenArrays&& a) {
             float sumW = 0.0f, best = 1e30f;
             s.crownClump = s.clumpStart;
             for (uint32_t c = s.clumpStart; c < s.clumpStart + s.clumpCount; ++c) {
-                sumW += a.clumpVegetation[c * 16 + 9];   // weightTo (broflora appendSegmentVegetation)
-                const float* r = &a.clumps[c * 8];
+                sumW += a.clumpVegetation[c * rec::vegetation::kFloats + rec::vegetation::kWeightTo];
+                const float* r = &a.clumps[c * rec::clump::kFloats + rec::clump::kCentre];
                 const float dx = r[0] - s.crown.x, dz = r[2] - s.crown.z;
                 if (dx * dx + dz * dz < best) { best = dx * dx + dz * dz; s.crownClump = c; }
             }
             s.meanClumpWeight = std::clamp(sumW / static_cast<float>(s.clumpCount), 0.0f, 1.0f);
         } else {
-            s.crown = {f[8], f[9], f[10]};
-            s.crownRadius = s.crownRadiusUp = f[7];
+            const float* crown = f + rec::specimen::kCrown;
+            s.crown = {crown[0], crown[1], crown[2]};
+            s.crownRadius = s.crownRadiusUp = f[rec::specimen::kCrownRadius];
         }
     }
 
     specimens_ = std::move(specs);
-    if (looks_.size() != specimens_.size() * 8) looks_.clear();
-    if (leafLooks_.size() != specimens_.size() * 8) leafLooks_.clear();
+    if (looks_.size() != specimens_.size() * rec::look::kFloats) looks_.clear();
+    if (leafLooks_.size() != specimens_.size() * rec::leaf_look::kFloats) leafLooks_.clear();
     keepRadius_ = a.keepRadius;
     woodArea_.assign(nSeg + 1, 0.0f);
     for (size_t i = 0; i < nSeg; ++i) {
-        const float* g = &a.segments[i * 8];
-        const float len = std::sqrt((g[4] - g[0]) * (g[4] - g[0]) + (g[5] - g[1]) * (g[5] - g[1]) +
-                                    (g[6] - g[2]) * (g[6] - g[2]));
-        woodArea_[i + 1] = woodArea_[i] + (g[3] + std::max(g[7], 0.0f)) * len;
+        const float* g = &a.segments[i * rec::segment::kFloats];
+        const float* p = g + rec::segment::kFrom;
+        const float* q = g + rec::segment::kTo;
+        const float len = std::sqrt((q[0] - p[0]) * (q[0] - p[0]) + (q[1] - p[1]) * (q[1] - p[1]) +
+                                    (q[2] - p[2]) * (q[2] - p[2]));
+        woodArea_[i + 1] = woodArea_[i] + (g[rec::segment::kRFrom] + std::max(g[rec::segment::kRTo], 0.0f)) * len;
     }
     data_ = std::move(a);
     countClumpTwigs();
@@ -190,16 +201,20 @@ void ForestNode::setInstances(const float* rows, size_t count) {
     instances_.clear();
     instances_.reserve(count);
     for (size_t i = 0; i < count; ++i) {
-        const float* r = rows + i * 8;
-        if (!(r[5] >= 0.0f) || static_cast<size_t>(r[5]) >= specimens_.size() || !(r[3] > 0.0f)) continue;
+        namespace ir = rec::instance;
+        const float* r = rows + i * ir::kFloats;
+        const float* p = r + ir::kPosition;
+        if (!(r[ir::kSpecimen] >= 0.0f) || static_cast<size_t>(r[ir::kSpecimen]) >= specimens_.size() ||
+            !(r[ir::kScale] > 0.0f))
+            continue;
         Instance in;
-        in.position = {r[0], r[1], r[2]};
-        in.scale = r[3];
-        in.cosYaw = std::cos(r[4]);
-        in.sinYaw = std::sin(r[4]);
-        in.specimen = static_cast<uint32_t>(r[5]);
+        in.position = {p[0], p[1], p[2]};
+        in.scale = r[ir::kScale];
+        in.cosYaw = std::cos(r[ir::kYaw]);
+        in.sinYaw = std::sin(r[ir::kYaw]);
+        in.specimen = static_cast<uint32_t>(r[ir::kSpecimen]);
         // A seed from where it stands.
-        const float h = std::sin(r[0] * 12.9898f + r[2] * 78.233f) * 43758.5453f;
+        const float h = std::sin(p[0] * 12.9898f + p[2] * 78.233f) * 43758.5453f;
         in.seed = h - std::floor(h);
         instances_.push_back(in);
     }
@@ -210,20 +225,22 @@ void ForestNode::setInstances(const float* rows, size_t count) {
 
 bool ForestNode::setBlooms(std::vector<float> blooms, std::vector<float> specimenBlooms) {
     const size_t nSpec = specimens_.size();
-    const size_t nBloom = blooms.size() / kBloomFloats;
+    namespace br = rec::bloom;
+    namespace sb = rec::specimen_bloom;
+    const size_t nBloom = blooms.size() / br::kFloats;
     const bool none = blooms.empty() && specimenBlooms.empty();
-    if (!none && (blooms.size() % kBloomFloats || specimenBlooms.size() != nSpec * kBloomFloats)) return false;
+    if (!none && (blooms.size() % br::kFloats || specimenBlooms.size() != nSpec * sb::kFloats)) return false;
     // Every specimen's run inside the blooms, every bloom's segment its
     // specimen's own.
     for (size_t k = 0; k < nSpec && !none; ++k) {
-        const float* f = &specimenBlooms[k * kBloomFloats];
-        const uint64_t start = static_cast<uint64_t>(std::max(0.0f, f[0]));
-        const uint64_t count = static_cast<uint64_t>(std::max(0.0f, f[1]));
+        const float* f = &specimenBlooms[k * sb::kFloats];
+        const uint64_t start = static_cast<uint64_t>(std::max(0.0f, f[sb::kStart]));
+        const uint64_t count = static_cast<uint64_t>(std::max(0.0f, f[sb::kCount]));
         if (start + count > nBloom) return false;
-        for (uint64_t b = start; b < start + count; ++b)
-            if (!(blooms[b * kBloomFloats + 7] >= 0.0f) ||
-                blooms[b * kBloomFloats + 7] >= static_cast<float>(specimens_[k].segCount))
-                return false;
+        for (uint64_t b = start; b < start + count; ++b) {
+            const float seg = blooms[b * br::kFloats + br::kSegment];
+            if (!(seg >= 0.0f) || seg >= static_cast<float>(specimens_[k].segCount)) return false;
+        }
     }
     for (size_t k = 0; k < nSpec; ++k) {
         Specimen& s = specimens_[k];
@@ -232,18 +249,20 @@ bool ForestNode::setBlooms(std::vector<float> blooms, std::vector<float> specime
         s.bloomSize = 0.0f;
         s.bounds = s.bareBounds;
         if (none) continue;
-        const float* f = &specimenBlooms[k * kBloomFloats];
-        const int form = static_cast<int>(std::lround(f[2]));
+        const float* f = &specimenBlooms[k * sb::kFloats];
+        const int form = static_cast<int>(std::lround(f[sb::kForm]));
         if (form <= 0 || form >= kBloomForms) continue;
-        s.bloomStart = static_cast<uint32_t>(std::max(0.0f, f[0]));
-        s.bloomCount = static_cast<uint32_t>(std::max(0.0f, f[1]));
+        s.bloomStart = static_cast<uint32_t>(std::max(0.0f, f[sb::kStart]));
+        s.bloomCount = static_cast<uint32_t>(std::max(0.0f, f[sb::kCount]));
         s.bloomForm = form;
-        for (int i = 0; i < 3; ++i) s.bloomColor[i] = std::max(f[4 + i], 0.0f);
+        for (int i = 0; i < 3; ++i) s.bloomColor[i] = std::max(f[sb::kColor + i], 0.0f);
         // Its blooms in its bounds, each as far as its form reaches.
         for (uint32_t b = s.bloomStart; b < s.bloomStart + s.bloomCount; ++b) {
-            const float* r = &blooms[b * kBloomFloats];
-            s.bloomSize = std::max(s.bloomSize, r[3]);
-            s.bounds = grow(s.bounds, {r[0], r[1], r[2]}, r[3] * bloomReach(form));
+            const float* r = &blooms[b * br::kFloats];
+            const float size = r[br::kSize];
+            s.bloomSize = std::max(s.bloomSize, size);
+            s.bounds = grow(s.bounds, {r[br::kPosition], r[br::kPosition + 1], r[br::kPosition + 2]},
+                            size * bloomReach(form));
         }
     }
     data_.blooms = none ? std::vector<float>{} : std::move(blooms);
@@ -551,11 +570,12 @@ void ForestNode::setLook(const Look& l) {
 
 bool ForestNode::setSpecimenLooks(std::vector<float> looks) {
     const size_t n = specimens_.size();
-    if (!looks.empty() && looks.size() != n * 8 && looks.size() != n * 16) return false;
+    const size_t nLook = n * rec::look::kFloats;
+    if (!looks.empty() && looks.size() != nLook && looks.size() != nLook + n * rec::leaf_look::kFloats) return false;
     // Past the looks, each specimen's broad leaf (emitForest's specimenLeaves).
-    if (looks.size() == n * 16) {
-        leafLooks_.assign(looks.begin() + static_cast<std::ptrdiff_t>(n * 8), looks.end());
-        looks.resize(n * 8);
+    if (looks.size() > nLook) {
+        leafLooks_.assign(looks.begin() + static_cast<std::ptrdiff_t>(nLook), looks.end());
+        looks.resize(nLook);
     } else {
         leafLooks_.clear();
     }
@@ -567,15 +587,17 @@ bool ForestNode::setSpecimenLooks(std::vector<float> looks) {
 }
 
 void ForestNode::countClumpTwigs() {
-    const size_t nClump = data_.clumps.size() / 8;
+    const size_t nClump = data_.clumps.size() / rec::clump::kFloats;
     clumpTwigs_.assign(nClump, {});
-    for (size_t c = 0; c < nClump; ++c)
-        clumpTwigs_[c] = twigPieces(static_cast<uint32_t>(std::max(0.0f, data_.clumps[c * 8 + 7]) + 0.5f));
+    for (size_t c = 0; c < nClump; ++c) {
+        const float leaves = data_.clumps[c * rec::clump::kFloats + rec::clump::kLeafCount];
+        clumpTwigs_[c] = twigPieces(static_cast<uint32_t>(std::max(0.0f, leaves) + 0.5f));
+    }
     // A pinnate specimen's leaflets line its own wood (its leaf look's
     // phyllotaxis 3, scene_forest_shoot.glsl's forestPinnateLeaf): no twigs.
-    if (leafLooks_.size() != specimens_.size() * 8) return;
+    if (leafLooks_.size() != specimens_.size() * rec::leaf_look::kFloats) return;
     for (size_t k = 0; k < specimens_.size(); ++k) {
-        if (std::lround(leafLooks_[k * 8 + 7]) != 3) continue;
+        if (std::lround(leafLooks_[k * rec::leaf_look::kFloats + rec::leaf_look::kPhyllotaxis]) != 3) continue;
         const Specimen& s = specimens_[k];
         for (uint32_t c = s.clumpStart; c < s.clumpStart + s.clumpCount && c < nClump; ++c) clumpTwigs_[c] = {};
     }
@@ -583,10 +605,11 @@ void ForestNode::countClumpTwigs() {
 
 void ForestNode::barkOverLeaf(size_t k, float out[3]) const {
     const float* c = color();
-    const bool own = looks_.size() == specimens_.size() * 8 && k < specimens_.size();
-    const float* leaf = own && looks_[k * 8] + looks_[k * 8 + 1] + looks_[k * 8 + 2] > 0.0f ? &looks_[k * 8] : c;
-    const float* bark =
-        own && looks_[k * 8 + 4] + looks_[k * 8 + 5] + looks_[k * 8 + 6] > 0.0f ? &looks_[k * 8 + 4] : barkColor_;
+    const bool own = looks_.size() == specimens_.size() * rec::look::kFloats && k < specimens_.size();
+    const float* ownLeaf = own ? &looks_[k * rec::look::kFloats + rec::look::kLeafColor] : nullptr;
+    const float* ownBark = own ? &looks_[k * rec::look::kFloats + rec::look::kBarkColor] : nullptr;
+    const float* leaf = own && ownLeaf[0] + ownLeaf[1] + ownLeaf[2] > 0.0f ? ownLeaf : c;
+    const float* bark = own && ownBark[0] + ownBark[1] + ownBark[2] > 0.0f ? ownBark : barkColor_;
     for (int i = 0; i < 3; ++i) out[i] = leaf[i] > 1e-4f ? std::clamp(bark[i] / leaf[i], 0.05f, 8.0f) : 1.0f;
 }
 
@@ -608,8 +631,8 @@ const std::vector<float>& ForestNode::gpuData() const {
     if (!gpuDirty_) return gpu_;
     gpuDirty_ = false;
     const SpecimenArrays& a = data_;
-    const size_t nSpec = specimens_.size(), nSeg = a.segments.size() / 8, nClump = a.clumps.size() / 8;
-    const size_t nLeaf = a.leaves.size() / 2;
+    const size_t nSpec = specimens_.size(), nSeg = a.segments.size() / rec::segment::kFloats;
+    const size_t nClump = a.clumps.size() / rec::clump::kFloats, nLeaf = a.leaves.size() / rec::leaf::kValues;
 
     // Record offsets (vec4s) of each array.
     const uint32_t specBase = 0;
@@ -631,7 +654,7 @@ const std::vector<float>& ForestNode::gpuData() const {
     // The blooms after the instances, 2 records each (the bloom entries
     // carry their base: the header is full).
     const uint32_t bloomBase = instBase + static_cast<uint32_t>(instances_.size() * 2);
-    const size_t nBloom = a.blooms.size() / kBloomFloats;
+    const size_t nBloom = a.blooms.size() / rec::bloom::kFloats;
     gpuBloomBase_ = bloomBase;
     const size_t records = bloomBase + nBloom * 2;
 
@@ -678,23 +701,24 @@ const std::vector<float>& ForestNode::gpuData() const {
         d[27] = bitsOf(static_cast<uint32_t>(s.bloomForm));
         // Record 7: its broad leaf (width over length, tip, teeth a side,
         // tooth depth); record 5's w its gloss. All 0: the node's own leaf.
-        if (leafLooks_.size() == nSpec * 8) {
-            const float* L = &leafLooks_[k * 8];
-            d[28] = L[0]; d[29] = L[1]; d[30] = L[2]; d[31] = L[3];
-            d[23] = L[4];
+        if (leafLooks_.size() == nSpec * rec::leaf_look::kFloats) {
+            namespace ll = rec::leaf_look;
+            const float* L = &leafLooks_[k * ll::kFloats];
+            d[28] = L[ll::kWidth]; d[29] = L[ll::kTip]; d[30] = L[ll::kTeeth]; d[31] = L[ll::kToothDepth];
+            d[23] = L[ll::kGloss];
             // Record 8: its sprays' brush (Species::sprayBrush), its broad
             // leaf's petiole (of the blade's length) and phyllotaxis
             // (Species::petiole, Species::phyllotaxis: 0 alternate, 1
             // opposite, 2 spiral; scene_forest_shoot.glsl), 0.
-            d[32] = L[5];
-            d[33] = L[6];
-            d[34] = L[7];
+            d[32] = L[ll::kSprayBrush];
+            d[33] = L[ll::kPetiole];
+            d[34] = L[ll::kPhyllotaxis];
         }
         for (int part = 0; part < 2; ++part) {
             float* t = d + 16 + part * 4;
             t[0] = t[1] = t[2] = 1.0f;
-            if (looks_.size() != nSpec * 8) continue;
-            const float* look = &looks_[k * 8 + part * 4];
+            if (looks_.size() != nSpec * rec::look::kFloats) continue;
+            const float* look = &looks_[k * rec::look::kFloats + (part ? rec::look::kBarkColor : rec::look::kLeafColor)];
             if (look[0] + look[1] + look[2] <= 0.0f) continue;
             for (int i = 0; i < 3; ++i) {
                 const float base = gpuColors_[part * 3 + i];
@@ -722,11 +746,15 @@ const std::vector<float>& ForestNode::gpuData() const {
         std::vector<std::array<float, 4>> starts;   // a segment's start and radius there
         starts.reserve(s.segCount);
         for (uint32_t g = s.segStart; g < s.segStart + s.segCount && g < nSeg; ++g)
-            starts.push_back({a.segments[g * 8], a.segments[g * 8 + 1], a.segments[g * 8 + 2], a.segments[g * 8 + 3]});
+        {
+            const float* r = &a.segments[g * rec::segment::kFloats];
+            const float* p = r + rec::segment::kFrom;
+            starts.push_back({p[0], p[1], p[2], r[rec::segment::kRFrom]});
+        }
         std::sort(starts.begin(), starts.end());
         constexpr float kTol = 1e-4f;
         for (uint32_t g = s.segStart; g < s.segStart + s.segCount && g < nSeg; ++g) {
-            const float* e = &a.segments[g * 8 + 4];
+            const float* e = &a.segments[g * rec::segment::kFloats + rec::segment::kTo];
             auto it = std::lower_bound(starts.begin(), starts.end(),
                                        std::array<float, 4>{e[0] - kTol, -1e30f, -1e30f, -1e30f});
             float on = -1.0f;   // the thickest going on from its end
@@ -738,7 +766,8 @@ const std::vector<float>& ForestNode::gpuData() const {
             // bark (a cactus's: the bark word's top bit, broflora's
             // Species::barkRibs) keeps its girth to the end, which closes
             // over it in a blunt dome.
-            const uint32_t word = static_cast<uint32_t>(std::max(a.segmentVegetation[g * 16 + 11], 0.0f) + 0.5f);
+            const float bark = a.segmentVegetation[g * rec::vegetation::kFloats + rec::vegetation::kBark];
+            const uint32_t word = static_cast<uint32_t>(std::max(bark, 0.0f) + 0.5f);
             const float taper = (word >> 23) & 1u ? 1.0f : kTipTaper;
             d[7] = on < 0.0f ? -d[7] * taper : std::min(d[7], on);
         }
@@ -747,8 +776,9 @@ const std::vector<float>& ForestNode::gpuData() const {
     // clump's leaves in one run): the shoot model numbers them from there.
     std::vector<uint32_t> keyBase(nClump, ~0u);
     for (size_t i = 0; i < nLeaf; ++i) {
-        const uint32_t c = a.leaves[2 * i];
-        if (c < nClump) keyBase[c] = std::min(keyBase[c], a.leaves[2 * i + 1]);
+        const uint32_t* l = &a.leaves[i * rec::leaf::kValues];
+        const uint32_t c = l[rec::leaf::kClump];
+        if (c < nClump) keyBase[c] = std::min(keyBase[c], l[rec::leaf::kKey]);
     }
     for (size_t c = 0; c < nClump; ++c) {
         float* d = r + (clumpBase + c * 6) * 4;
@@ -764,8 +794,9 @@ const std::vector<float>& ForestNode::gpuData() const {
         // radius across) lies in the sphere of its radius about a point 0.1
         // of it above the centre.
         const auto centre = [&](uint32_t local) {
-            const float* p = &a.clumps[(s.clumpStart + local) * 8];
-            return bromath::Vec3{p[0], p[1] + 0.1f * p[3], p[2]};
+            const float* q = &a.clumps[(s.clumpStart + local) * rec::clump::kFloats];
+            const float* p = q + rec::clump::kCentre;
+            return bromath::Vec3{p[0], p[1] + 0.1f * q[rec::clump::kRadius], p[2]};
         };
         const std::vector<uint32_t> order = groupClumps(s.clumpCount, centre);
         for (uint32_t b = 0; b * kClumpBlock < s.clumpCount; ++b) {
@@ -775,7 +806,8 @@ const std::vector<float>& ForestNode::gpuData() const {
             m = m * (1.0f / static_cast<float>(i1 - i0));
             float rad = 0.0f;
             for (uint32_t i = i0; i < i1; ++i)
-                rad = std::max(rad, bromath::vdist(centre(order[i]), m) + a.clumps[(s.clumpStart + order[i]) * 8 + 3]);
+                rad = std::max(rad, bromath::vdist(centre(order[i]), m) +
+                                        a.clumps[(s.clumpStart + order[i]) * rec::clump::kFloats + rec::clump::kRadius]);
             float* d = r + (specBlock[k] + b * kBlockRecords) * 4;
             d[0] = m.x; d[1] = m.y; d[2] = m.z; d[3] = rad;
             // Its clumps (the specimen's own indices), two to a float, 0xffff
@@ -802,10 +834,10 @@ const std::vector<float>& ForestNode::gpuData() const {
     for (size_t k = 0; k < nSpec; ++k) {
         const Specimen& s = specimens_[k];
         for (uint32_t b = s.bloomStart; b < s.bloomStart + s.bloomCount; ++b) {
-            const float* src = &a.blooms[b * kBloomFloats];
+            const float* src = &a.blooms[b * rec::bloom::kFloats];
             float* d = r + (bloomBase + b * 2) * 4;
-            std::memcpy(d, src, 7 * sizeof(float));
-            d[7] = bitsOf(s.segStart + static_cast<uint32_t>(src[7]));
+            std::memcpy(d, src, rec::bloom::kSegment * sizeof(float));
+            d[rec::bloom::kSegment] = bitsOf(s.segStart + static_cast<uint32_t>(src[rec::bloom::kSegment]));
         }
     }
     return gpu_;

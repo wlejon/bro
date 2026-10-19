@@ -184,7 +184,9 @@ if(BRO_WITH_3D)
 endif()
 
 # --- broflora (ecosystem simulation: Makowski et al. "Synthetic Silviculture") ---
-if(BRO_WITH_FLORA)
+# The 3D scene's forest node reads broflora's forest records
+# (broflora/forest_records.h), so 3D resolves it too.
+if(BRO_WITH_FLORA OR BRO_WITH_3D)
     bro_dependency(broflora)
 endif()
 
