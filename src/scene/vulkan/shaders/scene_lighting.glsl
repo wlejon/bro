@@ -351,24 +351,27 @@ struct SceneSurface {
 //     level ground it covers. Under a low sun behind the eye it sees faces
 //     turned to it; looking toward the sun, the shaded sides with the light
 //     through them, a dim glow, not a sheet of lit faces.
-//   - The share of them the light reaches (a turbid canopy: both lines run
-//     through blades of the same density, extinction G / cos each way, the
-//     eye's line short across the sward): the eye along a low line sees the
-//     tops, mostly lit; from higher it sees deeper in, among the blades'
-//     shadows. Where the two lines run together the blades the eye sees are
-//     the ones the light reaches (the hot spot, Kuusk's correlation over a
-//     few blade-lengths' slope).
+//   - The share of them in light, as the near blades it stands for show it
+//     at the same view: along a low line the eye sees the tops, all lit;
+//     from higher it sees deeper in, down to the blades' shaded feet and
+//     the ground between them, SWARD_LIT_TOP less the sine of the eye's
+//     line to the blades' way. The near blades show no shade of their
+//     neighbours that follows the sun (only their height's shade and the
+//     shadow map's), so neither does the sward: a turbid canopy's
+//     extinction along the sun's line as well (G 0.6 over its cosine each
+//     way, with Kuusk's hot spot) left the far meadow 10-16% darker than
+//     its near blades at one angle of view, golden and noon alike.
 //
-// No shadow map resolves a blade's shadow on its neighbour, so this is the
-// sward's self-shadowing; the shadows of what stands over it come from the
-// map as for anything else. Returns x the mean cosine of the lit faces the
+// The shadows of what stands over it come from the shadow map as for
+// anything else. Returns x the mean cosine of the lit faces the
 // eye sees (for the diffuse), y the mean cosine through the faces turned
 // away, z the mean of their cuticles' sheen (the specular term, cosine
 // included), all times the lit share.
 const float SWARD_TILT_A = 0.35;   // rad from upright
 const float SWARD_TILT_B = 1.0;
-const float SWARD_G = 0.6;         // the blades' projection (between upright, 0.64, and a spherical spread, 0.5)
-const float SWARD_HOTSPOT = 0.12;  // the hot spot's width in slope (a blade's breadth over the sward's depth, and its tufts)
+// The lit share seen straight along the blades' way is SWARD_LIT_TOP - 1
+// (meadowtone at 8, 30 and 60 degrees, noon and golden, against 3 m).
+const float SWARD_LIT_TOP = 1.25;
 // Blinn's exponent for a blade's cuticle (roughness about 0.42 gives 2 /
 // r^4 - 2 = 60), widened a little for the curl along a blade.
 const float SWARD_SHEEN_POWER = 40.0;   // sceneSwardLight raises to it by squaring (keep in step)
@@ -423,11 +426,7 @@ vec3 sceneSwardLight(vec3 up, vec3 V, vec3 L) {
         sumS += w * max(NL, 0.0) * n32 * n8;
     }
     // The lit share of the blades seen.
-    float mv = max(vu, 0.01), ms = max(lu, 0.01);
-    float kv = SWARD_G / mv, ks = SWARD_G / ms;
-    vec3 pv = (V - up * vu) / mv, ps = (L - up * lu) / ms;
-    float hot = exp(-length(pv - ps) / SWARD_HOTSPOT);
-    float lit = lu > 0.0 ? kv / (kv + ks - sqrt(kv * ks) * hot) : 0.0;
+    float lit = lu > 0.0 ? clamp(SWARD_LIT_TOP - vu, 0.0, 1.0) : 0.0;
     // The sheen: normalised Blinn, Schlick's Fresnel from a cuticle's 0.04.
     float vh = max(dot(V, H), 0.0);
     float F = 0.04 + 0.96 * pow(1.0 - vh, 5.0);
