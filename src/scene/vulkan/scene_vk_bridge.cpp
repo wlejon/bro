@@ -21,6 +21,9 @@
 #include "scene/vulkan/scene_lighting.h"
 #include "util/log.h"
 
+#include <algorithm>
+#include <cstdlib>
+
 namespace bro::scene::vk {
 
 SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
@@ -120,6 +123,25 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
     meshes_.recordForestPoses(frame);
     timer_.mark(cmd, "forestPose");
 
+    // BRO_SCENE_GPU_REPEAT=<n>: the frame's passes recorded n times back to
+    // back, timed (SceneGpuTimer) on the last alone, its forest poses not
+    // included: a measure at the GPU's full clocks while the CPU is the
+    // frame's bound, when a frame's GPU work alone leaves the GPU idle long
+    // enough to clock down and every pass reads slow by as much.
+    static const int repeat = [] {
+        const char* env = std::getenv("BRO_SCENE_GPU_REPEAT");
+        return env && *env ? std::max(1, std::atoi(env)) : 1;
+    }();
+    for (int i = 1; i < repeat; ++i) {
+        const auto kept = frame.stats;
+        frame.timer = nullptr;
+        graph_.run(frame);
+        frame.stats = kept;
+    }
+    if (repeat > 1) {
+        frame.timer = &timer_;
+        timer_.begin(cmd);
+    }
     graph_.run(frame);
 
     // The result stays on the GPU for the compositor; it is copied out for
