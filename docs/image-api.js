@@ -814,7 +814,9 @@ bro.image.applyExifOrientation = function(pixels, width, height, orient) {};
  * @param {number} height
  * @param {number} channels
  * @param {number} [strideBytes=0] row pitch in bytes; 0 = tightly packed
- * @returns {boolean}
+ * @returns {boolean} true
+ * @throws {Error} `encodePngFile: could not write <path>` when the file cannot be written
+ *   (its directory missing, no permission); the directory is not created
  */
 bro.image.encodePngFile = function(path, pixels, width, height, channels, strideBytes) {};
 
@@ -824,7 +826,8 @@ bro.image.encodePng = function(pixels, width, height, channels, strideBytes) {};
 /**
  * JPEG, lossy. `channels` is 1 (gray) or 3 (RGB).
  * @param {number} [quality=90] 1..100
- * @returns {boolean}
+ * @returns {boolean} true
+ * @throws {Error} `encodeJpegFile: could not write <path>`, as encodePngFile
  */
 bro.image.encodeJpegFile = function(path, pixels, width, height, channels, quality) {};
 
