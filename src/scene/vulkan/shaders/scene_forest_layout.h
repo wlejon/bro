@@ -66,14 +66,18 @@
 #define FOREST_SP_PHYLLOTAXIS   34   //   and phyllotaxis (0 alternate, 1 opposite, 2 spiral, 3 pinnate)
 #define FOREST_SP_FREE          35   // unused (0)
 
-// --- A segment: 7 records (broflora's segment, then its tangents, then its vegetation) ---
-#define FOREST_SEGMENT_RECORDS  7
+// --- A segment: 8 records (broflora's segment, its tangents, its vegetation, its clumps) ---
+#define FOREST_SEGMENT_RECORDS  8
 #define FOREST_SEG_FROM         0    // aligned: from.xyz, rFrom
 #define FOREST_SEG_R_FROM       3
 #define FOREST_SEG_TO           4    // aligned: to.xyz, rTo (negative: a tip, closing over)
 #define FOREST_SEG_R_TO         7
 #define FOREST_SEG_TANGENTS     8    // aligned: the octahedral tangent at from (xy), at to (zw)
 #define FOREST_SEG_VEGETATION   12   // aligned: its vegetation record (4 records)
+#define FOREST_SEG_CLUMPS       28   // aligned, bits: the few clumps it leads to (global; broflora's
+                                     //   segment_clumps), FOREST_SEG_NO_CLUMP past the last
+#define FOREST_SEG_CLUMP_SLOTS  4
+#define FOREST_SEG_NO_CLUMP     0xffffffffu
 
 // --- A clump: 6 records (broflora's clump, then its vegetation) ---
 #define FOREST_CLUMP_RECORDS    6
@@ -182,7 +186,8 @@
 #endif
 #if FOREST_SEG_FROM % 4 != 0 || FOREST_SEG_R_FROM != FOREST_SEG_FROM + 3 || FOREST_SEG_TO % 4 != 0 || \
     FOREST_SEG_R_TO != FOREST_SEG_TO + 3 || FOREST_SEG_TANGENTS % 4 != 0 || FOREST_SEG_VEGETATION % 4 != 0 || \
-    FOREST_SEG_VEGETATION + 16 > FOREST_SEGMENT_RECORDS * 4
+    FOREST_SEG_VEGETATION + 16 > FOREST_SEG_CLUMPS || FOREST_SEG_CLUMPS % 4 != 0 || \
+    FOREST_SEG_CLUMPS + FOREST_SEG_CLUMP_SLOTS > FOREST_SEGMENT_RECORDS * 4
 #error "scene_forest_layout.h: a segment record's fields moved"
 #endif
 #if FOREST_CLUMP_CENTRE % 4 != 0 || FOREST_CLUMP_RADIUS != FOREST_CLUMP_CENTRE + 3 || FOREST_CLUMP_TWIG % 4 != 0 || \

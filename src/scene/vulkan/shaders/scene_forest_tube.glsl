@@ -57,7 +57,7 @@ bool forestTubeVertexMorph(ForestEntry e, int vertexIndex, mat4 model, float sid
     uv = vec2(0.0);
     endT = 0.0;
     rad = 0.0;
-    if (seg >= e.end) return false;
+    if (seg >= e.end || forestSegmentBare(e.instance, seg)) return false;
 
     float ang = float(pt) / float(sides) * PROC_TWO_PI;
     endT = float(row) / float(rows);

@@ -91,6 +91,10 @@ public:
     /// not fit together.
     struct SpecimenArrays {
         std::vector<float> specimens, segments, tangents, segmentVegetation, keepRadius, clumps, clumpVegetation;
+        // The few clumps each segment leads to (4 floats a segment), whose
+        // wood is not drawn while every one is bare (procClumpBare); empty:
+        // every segment drawn.
+        std::vector<float> segmentClumps;
         std::vector<uint32_t> leaves;
         LeafParams leaf;
         std::vector<float> blooms;   // setBlooms's (setSpecimens leaves them empty)

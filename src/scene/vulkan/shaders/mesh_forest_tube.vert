@@ -219,7 +219,7 @@ void barkRibbonMain(ForestEntry e) {
     int r = forestSegmentRecord(seg);
     vec4 s0 = FOREST_RECORD(r, FOREST_SEG_FROM), s1 = FOREST_RECORD(r, FOREST_SEG_TO);
     vec3 axis = s1.xyz - s0.xyz;
-    if (seg >= e.end || dot(axis, axis) < 1e-12) {
+    if (seg >= e.end || dot(axis, axis) < 1e-12 || forestSegmentBare(e.instance, seg)) {
         gl_Position = FOREST_CULLED;
         return;
     }

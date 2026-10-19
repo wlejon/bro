@@ -98,6 +98,7 @@ int main() {
     a.tangents = f.tangents;
     a.segmentVegetation = f.segmentVegetation;
     a.keepRadius = f.keepRadius;
+    a.segmentClumps = f.segmentClumps;
     a.clumps = f.clumps;
     a.clumpVegetation = f.clumpVegetation;
     a.leaves = f.leaves;
@@ -258,6 +259,21 @@ int main() {
         for (int c = 0; c < int(rec::vegetation::kFloats); ++c)
             check(same(d[FOREST_SEG_VEGETATION + c], v[c]), at("segment vegetation", i));
     }
+    // Each segment's few clumps, made global (its specimen's run).
+    size_t listed = 0;
+    for (size_t k = 0; k < nSpec; ++k) {
+        const ForestSpecimen& s = f.specimens[k];
+        for (uint32_t i = s.segStart; i < s.segStart + s.segCount; ++i) {
+            const float* d = segRec + size_t(i) * FOREST_SEGMENT_RECORDS * 4;
+            for (size_t j = 0; j < rec::segment_clumps::kMax; ++j) {
+                const float w = f.segmentClumps[i * rec::segment_clumps::kFloats + rec::segment_clumps::kClumps + j];
+                const uint32_t want = w >= 0.0f ? s.clumpStart + uint32_t(w) : FOREST_SEG_NO_CLUMP;
+                check(bits(d[FOREST_SEG_CLUMPS + j]) == want, at("segment clumps", i));
+                listed += w >= 0.0f;
+            }
+        }
+    }
+    check(listed > 0, "some segments list their clumps");
 
     const size_t nClump = f.clumps.size() / rec::clump::kFloats;
     for (size_t i = 0; i < nClump; ++i) {
@@ -315,7 +331,7 @@ int main() {
         }
     }
 
-    std::printf("forest records: %d checks, %d failed (%zu specimens, %zu segments, %zu clumps, %zu leaves, %zu blooms)\n",
-                g_checks, g_failures, nSpec, nSeg, nClump, nLeaf, f.blooms.size() / rec::bloom::kFloats);
+    std::printf("forest records (%zu segment clumps listed): %d checks, %d failed (%zu specimens, %zu segments, %zu clumps, %zu leaves, %zu blooms)\n",
+                listed, g_checks, g_failures, nSpec, nSeg, nClump, nLeaf, f.blooms.size() / rec::bloom::kFloats);
     return g_failures == 0 ? 0 : 1;
 }

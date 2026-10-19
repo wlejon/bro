@@ -282,6 +282,19 @@ vec3 forestHermite(vec3 a, vec3 ta, vec3 b, vec3 tb, float f, out vec3 tangent) 
 int forestSegmentRecord(int g) { return FOREST_BASE(FOREST_H_SEGMENTS) + g * FOREST_SEGMENT_RECORDS; }
 int forestClumpRecord(int c) { return FOREST_BASE(FOREST_H_CLUMPS) + c * FOREST_CLUMP_RECORDS; }
 
+// Whether tree `tree`'s segment `g` led only to clumps the tree leaves bare
+// (procClumpBare): its few clumps (FOREST_SEG_CLUMPS; none listed for wood
+// leading to more, or to none) every one bare. Its bark, its casters and its
+// ribbon are then not drawn: a bare limb tip standing out of the crown
+// reads as dieback.
+bool forestSegmentBare(int tree, int g) {
+    uvec4 c = floatBitsToUint(FOREST_RECORD(forestSegmentRecord(g), FOREST_SEG_CLUMPS));
+    if (c.x == FOREST_SEG_NO_CLUMP) return false;
+    for (int j = 0; j < FOREST_SEG_CLUMP_SLOTS; ++j)
+        if (c[j] != FOREST_SEG_NO_CLUMP && !procClumpBare(tree, int(c[j]))) return false;
+    return true;
+}
+
 // Leaf `i`: its clump (global) and its placement key.
 ivec2 forestLeaf(int i) {
     vec4 r = procedural.records[FOREST_BASE(FOREST_H_LEAVES) + i / FOREST_LEAVES_PER_RECORD];

@@ -36,6 +36,8 @@ static_assert(FOREST_VEG_ROOT == rec::vegetation::kRoot && FOREST_VEG_HEIGHT == 
 static_assert(FOREST_BLOOM_POSITION == rec::bloom::kPosition && FOREST_BLOOM_SIZE == rec::bloom::kSize &&
               FOREST_BLOOM_DIR == rec::bloom::kDir && FOREST_BLOOM_SEGMENT == rec::bloom::kSegment);
 static_assert(FOREST_LEAVES_PER_RECORD * rec::leaf::kValues == 4);
+static_assert(FOREST_SEG_CLUMP_SLOTS == rec::segment_clumps::kMax &&
+              rec::segment_clumps::kFloats == rec::segment_clumps::kClumps + rec::segment_clumps::kMax);
 static_assert(ForestNode::kClumpBlock == FOREST_CLUMP_BLOCK && ForestNode::kBlockRecords == FOREST_BLOCK_RECORDS);
 constexpr size_t kHeaderFloats = FOREST_HEADER_FLOATS;
 constexpr size_t kSpecimenRecords = FOREST_SPECIMEN_RECORDS;
@@ -126,7 +128,8 @@ bool ForestNode::setSpecimens(SpecimenArrays&& a) {
         a.tangents.size() != nSeg * rec::tangent::kFloats ||
         a.segmentVegetation.size() != nSeg * rec::vegetation::kFloats || a.keepRadius.size() != nSeg ||
         a.clumps.size() % rec::clump::kFloats || a.clumpVegetation.size() != nClump * rec::vegetation::kFloats ||
-        a.leaves.size() % rec::leaf::kValues)
+        a.leaves.size() % rec::leaf::kValues ||
+        (!a.segmentClumps.empty() && a.segmentClumps.size() != nSeg * rec::segment_clumps::kFloats))
         return false;
     for (size_t i = 0; i < nLeaf; ++i)
         if (a.leaves[i * rec::leaf::kValues + rec::leaf::kClump] >= nClump) return false;
@@ -146,6 +149,10 @@ bool ForestNode::setSpecimens(SpecimenArrays&& a) {
         if (uint64_t{s.segStart} + s.segCount > nSeg || uint64_t{s.clumpStart} + s.clumpCount > nClump ||
             uint64_t{s.leafStart} + s.leafCount > nLeaf)
             return false;
+        if (!a.segmentClumps.empty())
+            for (size_t i = s.segStart * rec::segment_clumps::kFloats;
+                 i < (s.segStart + s.segCount) * rec::segment_clumps::kFloats; ++i)
+                if (!(a.segmentClumps[i] < static_cast<float>(s.clumpCount))) return false;
 
         // The crown: the extent of its clumps; the bounds: bark and clumps.
         bromath::AABB3 crown = bromath::aempty3();
@@ -784,6 +791,17 @@ const std::vector<float>& ForestNode::gpuData() const {
         std::memcpy(d + FOREST_SEG_VEGETATION, &a.segmentVegetation[g * rec::vegetation::kFloats],
                     rec::vegetation::kFloats * sizeof(float));
     }
+    // Each segment's few clumps, made global: its wood is drawn while any
+    // of them is not bare (scene_forest.glsl's forestSegmentBare).
+    for (const Specimen& s : specimens_)
+        for (uint32_t g = s.segStart; g < s.segStart + s.segCount && g < nSeg; ++g) {
+            float* d = r + (segBase + g * FOREST_SEGMENT_RECORDS) * 4 + FOREST_SEG_CLUMPS;
+            for (uint32_t j = 0; j < FOREST_SEG_CLUMP_SLOTS; ++j) {
+                const float c = a.segmentClumps.empty()
+                    ? -1.0f : a.segmentClumps[g * rec::segment_clumps::kFloats + rec::segment_clumps::kClumps + j];
+                d[j] = bitsOf(c >= 0.0f ? s.clumpStart + static_cast<uint32_t>(c) : FOREST_SEG_NO_CLUMP);
+            }
+        }
     // The bark's end where a branch stops or forks into thinner ones: the
     // drawn wood narrows over its last segment to the thickest that goes
     // on from its end, or at a tip (none does) to kTipTaper of itself, into
