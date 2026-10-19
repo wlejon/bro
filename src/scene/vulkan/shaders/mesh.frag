@@ -57,6 +57,7 @@ layout(location = 9) flat in vec4 inLobeSphere;
 layout(location = 10) flat in float inLobeDensity;
 layout(location = 11) flat in float inLobeFlat;
 layout(location = 12) flat in float inLobeHollow;   // forestShellPath's hollow, 0: leaves throughout
+layout(location = 13) flat in float inLobeUpBias;   // the leaves' lean up (the emit's up bias)
 #endif
 #ifdef SCENE_FOREST_SPRAY
 // The spray's seed (mesh_forest_leaf.vert): its own dither.

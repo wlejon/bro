@@ -269,15 +269,18 @@ ForestMass forestClusterSurface() {
     // lobe's own leaves analytically, and by one shadow tap where the
     // light leaves the lobe (the casters there are the lobes' discs or
     // fewer, wider leaves, too coarse to shade a leaf among its own).
-    // 0.8 of the lobe's density, as the lobe sprite's: a cluster stands
-    // for the leaves nearest its outline (at the full depth, with the
+    // 0.9 of the lobe's density times its leaves' facing to the light, as
+    // the lobe sprite's: a cluster stands for the leaves nearest its
+    // outline (at the full depth, with the
     // path's first few shadow texels skipped as the leaves tier skips
     // them, SHADOW_LEAF_BLIND, the mid range was darker than the leaves
     // it hands over from; at half, before that skip). A broad forest's
     // leaves lie in their lobe's shell, the hollow inside crossed free
     // (forestShellPath).
     c.sphere = inLobeSphere;
-    c.density = inLobeDensity * 0.8;
+    float gb = clamp(1.4 * inLobeUpBias, 0.0, 1.0);
+    float lit = lighting.sunDirection.w > 0.5 ? (1.0 - gb) + 2.0 * gb * abs(lighting.sunDirection.y) : 1.0;
+    c.density = inLobeDensity * 0.9 * lit;
     c.flatness = inLobeFlat;
     if (inLobeHollow > 0.0 && lighting.sunDirection.w > 0.5)
         c.density *= forestShellPath(inWorldPos, c.sphere, c.flatness, -lighting.sunDirection.xyz, inLobeHollow);

@@ -38,6 +38,9 @@ layout(location = 11) flat out float outLobeFlat;   // the lobe's height over it
 // A broad forest's lobe: its leaves lie in its shell, outside this share of
 // its radius (scene_forest_mass.glsl's forestShellPath); 0 elsewhere.
 layout(location = 12) flat out float outLobeHollow;
+// The leaves' lean up (the emit's up bias): how much more of a high sun than
+// a low one they stop.
+layout(location = 13) flat out float outLobeUpBias;
 
 #include "scene_camera.glsl"
 #include "scene_mesh_push.glsl"
@@ -58,6 +61,7 @@ void main() {
     outLobeDensity = 0.0;
     outLobeFlat = 1.0;
     outLobeHollow = 0.0;
+    outLobeUpBias = 0.0;
     ForestEntry e = forestEntry(gl_InstanceIndex);
     int leaf = e.first + gl_VertexIndex / max(e.param, 1);
 #ifdef FOREST_LEAF_INLINE
@@ -168,6 +172,7 @@ void main() {
         // Its shoots lie at 1 - shell * (0.2 .. 0.8) of the lobe's radius
         // (scene_forest_shoot.glsl's forestSpray), its leaves out from them.
         if (forestLeafForm() == 0) outLobeHollow = 1.0 - 0.8 * clamp(FOREST_HEADER(FOREST_H_SHELL), 0.0, 1.0);
+        outLobeUpBias = FOREST_HEADER(FOREST_H_UP_BIAS);
     }
 
     outWorldPos = pos;
