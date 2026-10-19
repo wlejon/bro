@@ -242,15 +242,27 @@ float procDraw(uint base, uint k) {
     return float(procHash(base + k * 0x9e3779b9u) >> 8) * (1.0 / 16777216.0);
 }
 
-// Whether a forest tree (`tree`, its instance) leaves clump `clump` bare:
-// each tree drops its own few (up to a fifth, by a hash of the tree), so
-// trees of one specimen part their crowns differently. Every tier asks the
-// same (the leaves, their casters, the lobes, the crown's trace), so a tree
-// keeps its gaps from near to far.
+// Whether a forest tree (`tree`, its instance) leaves clump `clump` (global)
+// bare: each tree drops its own few (up to a fifth, by its seed),
+// so trees of one specimen part their crowns differently. A clump goes with
+// its drop group (FOREST_CLUMP_GROUP: the few clumps beyond a small branch),
+// so the branch's wood, leading to nothing then, goes too
+// (forestSegmentBare) rather than standing bare in the gap. The groups are
+// taken down a golden-ratio sequence from the tree's own start rather than
+// each by its own draw, so a tree leaves bare close to its share of them: a
+// small crown of a few groups drawn independently would now and then lose
+// most of them. Every tier asks the same (the leaves, their casters, the
+// lobes, the crown's trace), so a tree keeps its gaps from near to far.
 bool procClumpBare(int tree, int clump) {
-    uint h = procHash(uint(tree) * 0x9e3779b9u ^ 0x7f4a7c15u);
+    uint group = floatBitsToUint(FOREST_FLOAT(FOREST_BASE(FOREST_H_CLUMPS) + clump * FOREST_CLUMP_RECORDS,
+                                              FOREST_CLUMP_GROUP));
+    // The tree's own seed (from where it stands), not its index: it keeps
+    // its gaps whichever node, and wherever in it, draws it.
+    float seed = FOREST_FLOAT(FOREST_BASE(FOREST_H_INSTANCES) + tree * FOREST_INSTANCE_RECORDS, FOREST_INST_SEED);
+    uint h = procHash(uint(seed * 16777216.0) * 0x9e3779b9u ^ 0x7f4a7c15u);
     float share = 0.2 * float(h >> 8) * (1.0 / 16777216.0);
-    return float(procHash(h ^ (uint(clump) * 0x632be5abu)) >> 8) * (1.0 / 16777216.0) < share;
+    float start = float(procHash(h ^ 0x632be5abu) >> 8) * (1.0 / 16777216.0);
+    return fract(float(group) * 0.61803398875 + start) < share;
 }
 
 // A clump's height over its width: its lobes and their leaves are

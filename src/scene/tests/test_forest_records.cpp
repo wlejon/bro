@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -99,6 +100,7 @@ int main() {
     a.segmentVegetation = f.segmentVegetation;
     a.keepRadius = f.keepRadius;
     a.segmentClumps = f.segmentClumps;
+    a.clumpGroups = f.clumpGroups;
     a.clumps = f.clumps;
     a.clumpVegetation = f.clumpVegetation;
     a.leaves = f.leaves;
@@ -274,6 +276,18 @@ int main() {
         }
     }
     check(listed > 0, "some segments list their clumps");
+    // Each clump's drop group, as its ordinal in its specimen.
+    size_t grouped = 0;
+    for (size_t k = 0; k < nSpec; ++k) {
+        const ForestSpecimen& s = f.specimens[k];
+        std::map<float, uint32_t> ordinal;
+        for (uint32_t c = s.clumpStart; c < s.clumpStart + s.clumpCount; ++c) {
+            const uint32_t want = ordinal.emplace(f.clumpGroups[c], uint32_t(ordinal.size())).first->second;
+            check(bits(clumpRec[size_t(c) * FOREST_CLUMP_RECORDS * 4 + FOREST_CLUMP_GROUP]) == want, at("clump group", c));
+            grouped += f.clumpGroups[c] != float(c - s.clumpStart);
+        }
+    }
+    check(grouped > 0, "some clumps drop with others");
 
     const size_t nClump = f.clumps.size() / rec::clump::kFloats;
     for (size_t i = 0; i < nClump; ++i) {

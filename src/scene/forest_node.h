@@ -95,6 +95,10 @@ public:
         // wood is not drawn while every one is bare (procClumpBare); empty:
         // every segment drawn.
         std::vector<float> segmentClumps;
+        // Each clump's drop group (its specimen's index of the group's first
+        // clump), left bare or not as one (procClumpBare); empty: each clump
+        // its own.
+        std::vector<float> clumpGroups;
         std::vector<uint32_t> leaves;
         LeafParams leaf;
         std::vector<float> blooms;   // setBlooms's (setSpecimens leaves them empty)

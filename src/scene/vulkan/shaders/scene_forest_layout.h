@@ -79,8 +79,8 @@
 #define FOREST_SEG_CLUMP_SLOTS  4
 #define FOREST_SEG_NO_CLUMP     0xffffffffu
 
-// --- A clump: 6 records (broflora's clump, then its vegetation) ---
-#define FOREST_CLUMP_RECORDS    6
+// --- A clump: 7 records (broflora's clump, its vegetation, its drop group) ---
+#define FOREST_CLUMP_RECORDS    7
 #define FOREST_CLUMP_CENTRE     0    // aligned: centre.xyz, radius
 #define FOREST_CLUMP_RADIUS     3
 #define FOREST_CLUMP_TWIG       4    // aligned: its twig's direction.xyz, its leaf count
@@ -89,6 +89,8 @@
 // The vegetation record's path (which no clump stage reads) carries the
 // clump's first placement key (bits: scene_forest_shoot.glsl).
 #define FOREST_CLUMP_KEY_BASE   (FOREST_CLUMP_VEGETATION + FOREST_VEG_PATH)
+#define FOREST_CLUMP_GROUP      24   // aligned, bits: its drop group's ordinal in its specimen (broflora's
+                                     //   clumpGroups, in clump order): a tree leaves the group bare or not as one
 
 // --- A vegetation record within a run: 4 records (broflora's 16 floats) ---
 #define FOREST_VEG_ROOT         0    // aligned: root.xyz, height
@@ -192,7 +194,8 @@
 #endif
 #if FOREST_CLUMP_CENTRE % 4 != 0 || FOREST_CLUMP_RADIUS != FOREST_CLUMP_CENTRE + 3 || FOREST_CLUMP_TWIG % 4 != 0 || \
     FOREST_CLUMP_LEAVES != FOREST_CLUMP_TWIG + 3 || FOREST_CLUMP_VEGETATION % 4 != 0 || \
-    FOREST_CLUMP_VEGETATION + 16 > FOREST_CLUMP_RECORDS * 4
+    FOREST_CLUMP_VEGETATION + 16 > FOREST_CLUMP_GROUP || FOREST_CLUMP_GROUP % 4 != 0 || \
+    FOREST_CLUMP_GROUP >= FOREST_CLUMP_RECORDS * 4
 #error "scene_forest_layout.h: a clump record's fields moved"
 #endif
 #if FOREST_VEG_ROOT != 0 || FOREST_VEG_HEIGHT != 3 || FOREST_VEG_CROWN != 4 || FOREST_VEG_CROWN_RADIUS != 7 || \

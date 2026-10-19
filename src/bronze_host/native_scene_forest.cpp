@@ -33,7 +33,8 @@ bool bro_scene_SceneNode_setForestSpecimens(void* self, const float* specimens, 
                                             uint32_t keepRadius_len, const float* clumps, uint32_t clumps_len,
                                             const float* clumpVegetation, uint32_t clumpVegetation_len,
                                             const int32_t* leaves, uint32_t leaves_len, const double* leaf,
-                                            uint32_t leaf_len, const float* segmentClumps, uint32_t segmentClumps_len) {
+                                            uint32_t leaf_len, const float* segmentClumps, uint32_t segmentClumps_len,
+                                            const float* clumpGroups, uint32_t clumpGroups_len) {
     auto* f = forestOf(self);
     if (!f) return false;
     scene::ForestNode::SpecimenArrays a;
@@ -45,6 +46,7 @@ bool bro_scene_SceneNode_setForestSpecimens(void* self, const float* specimens, 
     a.clumps = copyOf(clumps, clumps_len);
     a.clumpVegetation = copyOf(clumpVegetation, clumpVegetation_len);
     a.segmentClumps = copyOf(segmentClumps, segmentClumps_len);
+    a.clumpGroups = copyOf(clumpGroups, clumpGroups_len);
     if (leaves) a.leaves.assign(reinterpret_cast<const uint32_t*>(leaves),
                                 reinterpret_cast<const uint32_t*>(leaves) + leaves_len);
     const auto at = [&](uint32_t i, double d) { return i < leaf_len && std::isfinite(leaf[i]) ? leaf[i] : d; };

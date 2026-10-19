@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <unordered_map>
 
 namespace bro::scene {
 
@@ -129,7 +130,8 @@ bool ForestNode::setSpecimens(SpecimenArrays&& a) {
         a.segmentVegetation.size() != nSeg * rec::vegetation::kFloats || a.keepRadius.size() != nSeg ||
         a.clumps.size() % rec::clump::kFloats || a.clumpVegetation.size() != nClump * rec::vegetation::kFloats ||
         a.leaves.size() % rec::leaf::kValues ||
-        (!a.segmentClumps.empty() && a.segmentClumps.size() != nSeg * rec::segment_clumps::kFloats))
+        (!a.segmentClumps.empty() && a.segmentClumps.size() != nSeg * rec::segment_clumps::kFloats) ||
+        (!a.clumpGroups.empty() && a.clumpGroups.size() != nClump))
         return false;
     for (size_t i = 0; i < nLeaf; ++i)
         if (a.leaves[i * rec::leaf::kValues + rec::leaf::kClump] >= nClump) return false;
@@ -153,6 +155,9 @@ bool ForestNode::setSpecimens(SpecimenArrays&& a) {
             for (size_t i = s.segStart * rec::segment_clumps::kFloats;
                  i < (s.segStart + s.segCount) * rec::segment_clumps::kFloats; ++i)
                 if (!(a.segmentClumps[i] < static_cast<float>(s.clumpCount))) return false;
+        if (!a.clumpGroups.empty())
+            for (uint32_t c = s.clumpStart; c < s.clumpStart + s.clumpCount; ++c)
+                if (!(a.clumpGroups[c] >= 0.0f && a.clumpGroups[c] < static_cast<float>(s.clumpCount))) return false;
 
         // The crown: the extent of its clumps; the bounds: bark and clumps.
         bromath::AABB3 crown = bromath::aempty3();
@@ -856,6 +861,16 @@ const std::vector<float>& ForestNode::gpuData() const {
         // Its vegetation record's r2.z (the path, which no clump stage
         // reads): its placement-key base (scene_forest_shoot.glsl).
         d[FOREST_CLUMP_KEY_BASE] = bitsOf(keyBase[c] == ~0u ? 0u : keyBase[c]);
+    }
+    // Its drop group's ordinal in its specimen, in clump order (each clump
+    // its own without the array).
+    for (const Specimen& s : specimens_) {
+        std::unordered_map<uint32_t, uint32_t> ordinal;
+        for (uint32_t c = s.clumpStart; c < s.clumpStart + s.clumpCount && c < nClump; ++c) {
+            const uint32_t g = a.clumpGroups.empty() ? c - s.clumpStart : static_cast<uint32_t>(a.clumpGroups[c]);
+            const uint32_t o = ordinal.emplace(g, static_cast<uint32_t>(ordinal.size())).first->second;
+            r[(clumpBase + c * FOREST_CLUMP_RECORDS) * 4 + FOREST_CLUMP_GROUP] = bitsOf(o);
+        }
     }
     for (size_t k = 0; k < nSpec; ++k) {
         const Specimen& s = specimens_[k];

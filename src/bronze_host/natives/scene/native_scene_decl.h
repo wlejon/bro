@@ -706,7 +706,8 @@ void bro_scene_SceneGraph_detachAIWorld(void* self);
 
 // forest specimens: bro.flora's emitForest arrays, leaves as (clump, key)
 // pairs, leaf = (seed, upBias, tiltJitter, shell, baseScale, scaleJitter),
-// segmentClumps (4 floats a segment; empty: every segment drawn)
+// segmentClumps (4 floats a segment; empty: every segment drawn), clumpGroups
+// (a float a clump; empty: each clump its own drop group)
 //   registered at __bro_native.scene.SceneNode_setForestSpecimens
 bool bro_scene_SceneNode_setForestSpecimens(void* self, const float* specimens, uint32_t specimens_len,
                                             const float* segments, uint32_t segments_len, const float* tangents,
@@ -715,7 +716,8 @@ bool bro_scene_SceneNode_setForestSpecimens(void* self, const float* specimens, 
                                             uint32_t keepRadius_len, const float* clumps, uint32_t clumps_len,
                                             const float* clumpVegetation, uint32_t clumpVegetation_len,
                                             const int32_t* leaves, uint32_t leaves_len, const double* leaf,
-                                            uint32_t leaf_len, const float* segmentClumps, uint32_t segmentClumps_len);
+                                            uint32_t leaf_len, const float* segmentClumps, uint32_t segmentClumps_len,
+                                            const float* clumpGroups, uint32_t clumpGroups_len);
 
 // forest blooms: bro.flora's emitForest `blooms` (8 floats a bloom) and
 // `specimenBlooms` (8 floats a specimen); both empty: none. False when they

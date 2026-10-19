@@ -144,7 +144,7 @@
         if (!__bro_native.scene.SceneNode_setForestSpecimens(node, f32(forest.specimens), f32(forest.segments),
             f32(forest.tangents), f32(forest.segmentVegetation), f32(forest.keepRadius), f32(forest.clumps),
             f32(forest.clumpVegetation), leaves, leaf,
-            f32(forest.segmentClumps)))
+            f32(forest.segmentClumps), f32(forest.clumpGroups)))
             return false;
         // A flowering specimen's blooms (an emit from before them has none).
         const withBlooms = forest.blooms && forest.specimenBlooms;
