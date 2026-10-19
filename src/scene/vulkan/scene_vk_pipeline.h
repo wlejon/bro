@@ -6,6 +6,7 @@
 #include <vulkan/vulkan.h>
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace bro::scene::vk {
@@ -86,6 +87,10 @@ public:
     /// Specify dynamic states (defaults to VIEWPORT and SCISSOR).
     SceneVkPipelineBuilder& setDynamicStates(const std::vector<VkDynamicState>& states);
 
+    /// A boolean specialization constant `id` for every stage, beside the
+    /// depth policy (a stage that does not declare it ignores it).
+    SceneVkPipelineBuilder& setSpecialization(uint32_t id, bool value);
+
     /// Build and return the graphics pipeline, through the device's persisted
     /// pipeline cache (render::VulkanPipelineCache).
     VkPipeline build(VkDevice device, VkPipelineLayout layout);
@@ -100,6 +105,7 @@ private:
     VkPipelineDepthStencilStateCreateInfo depthStencil_{};
     std::vector<VkPipelineColorBlendAttachmentState> colorBlendAttachments_;
     std::vector<VkDynamicState> dynamicStates_;
+    std::vector<std::pair<uint32_t, VkBool32>> specializations_;
 
     // Dynamic rendering state
     std::vector<VkFormat> colorAttachmentFormats_;

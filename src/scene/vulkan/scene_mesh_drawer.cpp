@@ -251,13 +251,22 @@ constexpr uint32_t kTwoSided = 2;
 constexpr uint32_t kLines = 4;
 constexpr uint32_t kMirrored = 8;
 constexpr uint32_t kNoDepth = 16;
-constexpr uint32_t kCount = 32;
+// It cuts pixels (a near clip or an alpha cutoff): mesh.frag's discards are
+// built in only then (MESH_CUTS). A fragment stage that can discard is
+// depth-tested after it shades, so every layer behind the nearest was shaded
+// too: the wilds' ground, three meshes over one another, its turf shaded
+// under the near tiles twice over.
+constexpr uint32_t kCuts = 32;
+constexpr uint32_t kCount = 64;
+// mesh.frag's MESH_CUTS.
+constexpr uint32_t kCutsConstantId = 1;
 }
 
 uint32_t SceneMeshDrawer::rasterVariant(const MeshDraw& draw) {
     return (draw.translucent ? raster::kTranslucent : 0u) | (draw.twoSided ? raster::kTwoSided : 0u) |
            (draw.lines ? raster::kLines : 0u) | (draw.mirrored ? raster::kMirrored : 0u) |
-           (draw.noDepthTest ? raster::kNoDepth : 0u);
+           (draw.noDepthTest ? raster::kNoDepth : 0u) |
+           (draw.push.extra[0] > 0.0f || draw.push.pbrParams[2] > 0.0f ? raster::kCuts : 0u);
 }
 
 VkPipeline SceneMeshDrawer::buildPipeline(VkShaderModule vs, VkShaderModule fs, MeshKind kind, uint32_t rasterBits,
@@ -281,7 +290,8 @@ VkPipeline SceneMeshDrawer::buildPipeline(VkShaderModule vs, VkShaderModule fs, 
                   (rasterBits & raster::kMirrored) ? VK_FRONT_FACE_CLOCKWISE : VK_FRONT_FACE_COUNTER_CLOCKWISE)
      .setTarget(target)
      .setDepthBias(true)
-     .setDynamicStates(dynamic);
+     .setDynamicStates(dynamic)
+     .setSpecialization(raster::kCutsConstantId, (rasterBits & raster::kCuts) != 0);
     if (rasterBits & raster::kTranslucent) {
         b.enableAlphaBlending(1);
         if (rasterBits & raster::kNoDepth) {

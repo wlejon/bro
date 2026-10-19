@@ -39,6 +39,7 @@ SceneVkPipelineBuilder::SceneVkPipelineBuilder() {
 
 SceneVkPipelineBuilder& SceneVkPipelineBuilder::reset() {
     shaderStages_.clear();
+    specializations_.clear();
     vertexBindings_.clear();
     vertexAttributes_.clear();
 
@@ -194,6 +195,11 @@ SceneVkPipelineBuilder& SceneVkPipelineBuilder::setDynamicStates(const std::vect
     return *this;
 }
 
+SceneVkPipelineBuilder& SceneVkPipelineBuilder::setSpecialization(uint32_t id, bool value) {
+    specializations_.emplace_back(id, value ? VK_TRUE : VK_FALSE);
+    return *this;
+}
+
 VkPipeline SceneVkPipelineBuilder::build(VkDevice device, VkPipelineLayout layout) {
     VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
     vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
@@ -223,14 +229,19 @@ VkPipeline SceneVkPipelineBuilder::build(VkDevice device, VkPipelineLayout layou
     colorBlending.attachmentCount = static_cast<uint32_t>(blends.size());
     colorBlending.pAttachments = blends.data();
 
-    // The depth policy, as specialization constant 0 on every stage.
-    const VkBool32 reversed = reversedZ() ? VK_TRUE : VK_FALSE;
-    const VkSpecializationMapEntry policyEntry{depth::kReversedZConstantId, 0, sizeof(VkBool32)};
+    // The depth policy, as specialization constant 0 on every stage, and
+    // the builder's own after it.
+    std::vector<VkBool32> specData{reversedZ() ? VK_TRUE : VK_FALSE};
+    std::vector<VkSpecializationMapEntry> specEntries{{depth::kReversedZConstantId, 0, sizeof(VkBool32)}};
+    for (const auto& [id, value] : specializations_) {
+        specEntries.push_back({id, static_cast<uint32_t>(specData.size() * sizeof(VkBool32)), sizeof(VkBool32)});
+        specData.push_back(value);
+    }
     VkSpecializationInfo policy{};
-    policy.mapEntryCount = 1;
-    policy.pMapEntries = &policyEntry;
-    policy.dataSize = sizeof(reversed);
-    policy.pData = &reversed;
+    policy.mapEntryCount = static_cast<uint32_t>(specEntries.size());
+    policy.pMapEntries = specEntries.data();
+    policy.dataSize = specData.size() * sizeof(VkBool32);
+    policy.pData = specData.data();
     std::vector<VkPipelineShaderStageCreateInfo> stages = shaderStages_;
     for (auto& st : stages) st.pSpecializationInfo = &policy;
 

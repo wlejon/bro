@@ -10,6 +10,10 @@
 // normal so the crown lights as one form, its underside reads paler, the
 // sun glows through it from behind, and the crown's depth occludes the sky.
 
+// Whether the draw cuts pixels (a near clip, an alpha cutoff): only then are
+// its discards built in, as a stage that can discard is depth-tested after it
+// shades (SceneMeshDrawer's raster::kCuts).
+layout(constant_id = 1) const bool MESH_CUTS = true;
 layout(location = 0) in vec3 inWorldPos;
 layout(location = 1) in vec3 inNormal;
 layout(location = 2) in vec2 inUV;
@@ -232,7 +236,7 @@ void main() {
     }
 #endif
     float camDist = length(worldPos);
-    if (push.extra.x > 0.0 && camDist < push.extra.x) discard;
+    if (MESH_CUTS && push.extra.x > 0.0 && camDist < push.extra.x) discard;
 #ifdef SCENE_VEGETATION
     if ((flags & MESH_FOREST) != 0u) {
 #ifdef SCENE_FOREST_SPRAY
@@ -302,7 +306,7 @@ void main() {
         alpha = push.baseColor.a;
     }
     baseColor *= inInstColor.rgb;
-    if (push.pbrParams.z > 0.0 && alpha < push.pbrParams.z) discard;
+    if (MESH_CUTS && push.pbrParams.z > 0.0 && alpha < push.pbrParams.z) discard;
 #ifdef SCENE_GRASS
     // A grass blade (scene_grass_surface.glsl's grassSurface): a far fan cut
     // into its leaves, a culm into its stem and head.
