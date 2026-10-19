@@ -1394,6 +1394,7 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
         // (addTree's entry for a crown alone.)
         stats.trees[2] += static_cast<uint32_t>(P.crowned.size());
         colourVerts += 6 * uint64_t{P.crowned.size()};
+        colour.g[Crowns].reserve(colour.g[Crowns].size() + P.crowned.size());
         for (uint32_t i : P.crowned) colour.g[Crowns].push_back({i, 0u, 1u, 0u, 1.0f, 0.0f, 1.0f, 1.0f});
     }
     stats.vertices = colourVerts;
@@ -1402,44 +1403,47 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
     // depth test rather than placing its leaves for nothing.
     // (A stable sort by distance, as a radix sort of the distances' bits: a
     // distance is never negative, so its bits order as it does. A far view's
-    // crowns are 200k entries a frame.)
+    // crowns are 200k entries a frame, so the entries stay where they are:
+    // the group's order is kept beside it, and the upload follows it.)
+    std::vector<uint32_t> order[kGroups];
     std::vector<uint64_t> keyed, swap;
-    std::vector<Entry> sorted;
-    const auto nearestFirst = [&](std::vector<Entry>& g) {
+    const auto nearestFirst = [&](int k) {
+        const std::vector<Entry>& g = colour.g[k];
         const size_t n = g.size();
         if (n < 2) return;
         keyed.resize(n);
         swap.resize(n);
-        for (size_t i = 0; i < n; ++i) {
-            const auto& b = (*P.bounds)[g[i].instance];
-            const float d = bromath::vlen((b.min + b.max) * 0.5f - view.eye);
-            uint32_t bits;
-            std::memcpy(&bits, &d, sizeof(bits));
-            keyed[i] = uint64_t{bits} << 32 | i;
-        }
+        ForestPlan::eachChunk(n, [&](uint32_t, uint32_t b0, uint32_t b1) {
+            for (uint32_t i = b0; i < b1; ++i) {
+                const auto& b = (*P.bounds)[g[i].instance];
+                const float d = bromath::vlen((b.min + b.max) * 0.5f - view.eye);
+                uint32_t bits;
+                std::memcpy(&bits, &d, sizeof(bits));
+                keyed[i] = uint64_t{bits} << 32 | i;
+            }
+        });
         for (int shift = 32; shift < 64; shift += 8) {
             size_t count[257] = {};
-            for (uint64_t k : keyed) count[((k >> shift) & 255) + 1]++;
+            for (uint64_t key : keyed) count[((key >> shift) & 255) + 1]++;
             if (*std::max_element(count, count + 257) == n) continue;   // one bucket: in order already
             for (int i = 0; i < 256; ++i) count[i + 1] += count[i];
-            for (uint64_t k : keyed) swap[count[(k >> shift) & 255]++] = k;
+            for (uint64_t key : keyed) swap[count[(key >> shift) & 255]++] = key;
             keyed.swap(swap);
         }
-        sorted.resize(n);
-        for (size_t i = 0; i < n; ++i) sorted[i] = g[static_cast<uint32_t>(keyed[i])];
-        g.swap(sorted);
+        order[k].resize(n);
+        for (size_t i = 0; i < n; ++i) order[k][i] = static_cast<uint32_t>(keyed[i]);
     };
-    nearestFirst(colour.g[Cores]);
+    nearestFirst(Cores);
     // So do the leaves, tree by tree (a tree's run of entries stays in its
     // order): the sprays of a crown behind a nearer one fail the depth test
     // rather than being shaded first and covered.
-    nearestFirst(colour.g[LeafNear]);
-    nearestFirst(colour.g[LeafCard]);
-    nearestFirst(colour.g[Twigs]);
-    nearestFirst(colour.g[TwigsFine]);
-    nearestFirst(colour.g[Blooms]);
-    nearestFirst(colour.g[Clumps]);
-    nearestFirst(colour.g[Crowns]);
+    nearestFirst(LeafNear);
+    nearestFirst(LeafCard);
+    nearestFirst(Twigs);
+    nearestFirst(TwigsFine);
+    nearestFirst(Blooms);
+    nearestFirst(Clumps);
+    nearestFirst(Crowns);
 
     // Each shadow tile's trees at the shadow detail.
     std::vector<Groups> tiles(P.tileSlots.size());
@@ -1455,6 +1459,9 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
             P.place(true, shadowDetail, &tiles, stats.shadowVertices, unused, tally);
         }
         stats.shadowVertices += 6 * uint64_t{P.castCrowned.size()};
+        std::vector<size_t> perTile(tiles.size(), 0);
+        for (const auto& c : P.castCrowned) perTile[static_cast<size_t>(c.second)]++;
+        for (size_t t = 0; t < tiles.size(); ++t) tiles[t].g[Crowns].reserve(tiles[t].g[Crowns].size() + perTile[t]);
         for (const auto& [i, tile] : P.castCrowned)
             tiles[static_cast<size_t>(tile)].g[Crowns].push_back({i, 0u, 1u, 0u, 1.0f, 0.0f, 1.0f, 1.0f});
     }
@@ -1496,10 +1503,14 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
     // Entries go up as uint bits and floats, the layout scene_forest.glsl reads.
     auto* dst = static_cast<float*>(slice.mapped);
     size_t at = 0;
-    const auto put = [&](const std::vector<Entry>& g, bool posed) {
+    // A group in its order (`ord`, or as it stands): a posed one in turn (its
+    // slots run on from entry to entry), the rest across the pool.
+    const auto put = [&](const std::vector<Entry>& g, bool posed, const std::vector<uint32_t>* ord) {
         const size_t first = at;
-        for (const Entry& e : g) {
-            float* d = dst + at * kEntryFloats;
+        const bool sorted = ord && ord->size() == g.size();
+        const auto write = [&](size_t j, uint32_t slot) {
+            const Entry& e = g[sorted ? (*ord)[j] : j];
+            float* d = dst + (first + j) * kEntryFloats;
             d[FOREST_E_INSTANCE] = floatBits(e.instance);
             d[FOREST_E_FIRST] = floatBits(e.first);
             d[FOREST_E_END] = floatBits(e.end);
@@ -1508,11 +1519,18 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
             d[FOREST_E_KEEP_END] = e.keepEnd;
             d[FOREST_E_TAIL] = e.tail;
             d[FOREST_E_FADE] = e.fade;
-            d[FOREST_E_SLOT] = floatBits(posed ? poseUsed_ : ~0u);
+            d[FOREST_E_SLOT] = floatBits(slot);
             for (int i = 0; i < 3; ++i) d[FOREST_E_WOOD + i] = e.wood[i];
-            if (posed) poseUsed_ += e.end - e.first;
-            ++at;
+            return e.end - e.first;
+        };
+        if (posed) {
+            for (size_t j = 0; j < g.size(); ++j) poseUsed_ += write(j, poseUsed_);
+        } else {
+            ForestPlan::eachChunk(g.size(), [&](uint32_t, uint32_t b, uint32_t e) {
+                for (uint32_t j = b; j < e; ++j) write(j, ~0u);
+            });
         }
+        at += g.size();
         return static_cast<uint32_t>(first);
     };
 
@@ -1581,7 +1599,7 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
             const auto& g = G.g[k];
             if (g.empty()) continue;
             const bool posed = !shadow && posedGroup[k];
-            const uint32_t first = put(g, posed);
+            const uint32_t first = put(g, posed, &G == &colour ? &order[k] : nullptr);
             MeshDraw d = base;
             d.shadowOnly = shadow;
             d.castsShadow = shadow;
