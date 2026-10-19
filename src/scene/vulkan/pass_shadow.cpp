@@ -248,6 +248,12 @@ void PassShadow::drawCaster(SceneFrame& frame, const bromath::Mat4& lightViewPro
 
     // A chunked caster draws the chunks inside the tile.
     const SceneMeshDrawer::ChunkCull cull{tileFrustum, frame.view.eye};
+    if (draw.shadowIndexCount != 0 && draw.shadowIndexCount < draw.indexCount) {
+        MeshDraw cut = draw;
+        cut.indexCount = draw.shadowIndexCount;
+        SceneMeshDrawer::bindGeometryAndDraw(cmd, cut, &cull);
+        return;
+    }
     SceneMeshDrawer::bindGeometryAndDraw(cmd, draw, &cull);
 }
 

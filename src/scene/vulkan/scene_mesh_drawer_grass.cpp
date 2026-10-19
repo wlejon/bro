@@ -429,6 +429,16 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
         // far cascade's texel, and the near ring lies inside the first.
         draw.castsShadow = r == 0 && node.castsShadow();
         draw.shadowTileMask = shadowMask;
+        // A caster keeps at most kShadowKeep of an instance's blades, the
+        // first ones (scene_grass.glsl's thinning: blade j while j + a hash
+        // < kept + 0.5), so its draw stops past them: the rest ran every
+        // vertex only to be culled.
+        if (draw.castsShadow) {
+            const uint32_t blades = static_cast<uint32_t>(ring.blades);
+            const uint32_t kept = std::min(blades, static_cast<uint32_t>(std::ceil(blades * GrassNode::kShadowKeep)) + 1u);
+            const uint32_t perBlade = 3u * (2u * static_cast<uint32_t>(ring.segments) - 1u);   // grass_node.cpp's bladeMesh
+            draw.shadowIndexCount = std::min(blade->indexCount, perBlade * kept);
+        }
         // A draw a run of tiles: its cell rectangle rides in the model
         // matrix's first row (column, row, columns), which grass has no use
         // for (its blades stand on the field, the node's transform ignored);

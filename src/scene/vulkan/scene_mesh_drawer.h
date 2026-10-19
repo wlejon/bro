@@ -183,6 +183,7 @@ struct MeshDraw {
     bool castsShadow = false;
     bool shadowOnly = false;     // a caster only (a forest's shadow tiers): never in the colour lists
     uint32_t shadowTileMask = ~0u;   // the shadow plan's tiles it casts into (bit per slot)
+    uint32_t shadowIndexCount = 0;   // a caster's indices, a prefix of indexCount's (0: all of them)
     bool twoSided = false;       // no back-face culling (and no front-face culling as a caster)
     bool lines = false;          // indices are line pairs; drawn unlit
     float lineWidth = 1.0f;
