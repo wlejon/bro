@@ -4,7 +4,8 @@
 // scene_camera.glsl, scene_procedural.glsl (its `procedural` block and the
 // clump-mode leaf) and scene_vegetation.glsl.
 //
-// Set 3 binding 1 holds the node's data, uploaded once (ForestNode::gpuData):
+// Set 3 binding 1 holds the node's data, uploaded once (ForestNode::gpuData;
+// every field's offset is named in scene_forest_layout.h):
 //   header[0]  seed (uint bits), up bias, tilt jitter, shell   (the scatter's)
 //   header[1]  base scale, scale jitter, leaf length, flutter fade (widening)
 //   header[2]  first record of: specimens, segments, clumps, leaves (uint bits)
@@ -46,7 +47,7 @@
 // All of a specimen's records are relative to where it stands.
 //
 // Set 3 binding 2 holds this frame's draw entries (the drawer's choice of
-// what to draw of which tree), 3 records each:
+// what to draw of which tree), 3 records each (scene_forest_layout.h's FOREST_E_*):
 //   e0  (instance, first, end, param) as uint bits: the run of leaves,
 //       segments, clumps or blooms the entry draws [first, end), and the
 //       leaf mesh's vertex count (leaves), the tube's sides (bark) or the
@@ -92,12 +93,17 @@ struct ForestEntry {
 };
 
 ForestEntry forestEntry(int i) {
-    uvec4 a = floatBitsToUint(forestEntries.records[i * 3]);
-    vec4 b = forestEntries.records[i * 3 + 1];
-    vec4 c = forestEntries.records[i * 3 + 2];
-    int slot = int(floatBitsToUint(c.x));
+    uvec4 a = floatBitsToUint(forestEntries.records[i * FOREST_ENTRY_RECORDS + FOREST_E_INSTANCE / 4]);
+    vec4 b = forestEntries.records[i * FOREST_ENTRY_RECORDS + FOREST_E_WIDENING / 4];
+    vec4 c = forestEntries.records[i * FOREST_ENTRY_RECORDS + FOREST_E_SLOT / 4];
+    int slot = int(floatBitsToUint(c[FOREST_E_SLOT % 4]));
+#if FOREST_E_WOOD % 4 != 1
+#error "forestEntry reads the wood tint as its record's yzw"
+#endif
     vec3 wood = c.y + c.z + c.w > 0.0 ? c.yzw : vec3(1.0);
-    return ForestEntry(int(a.x), int(a.y), int(a.z), int(a.w), b.x, b.y, b.z, b.w, slot, wood);
+    return ForestEntry(int(a[FOREST_E_INSTANCE % 4]), int(a[FOREST_E_FIRST % 4]), int(a[FOREST_E_END % 4]),
+                       int(a[FOREST_E_PARAM % 4]), b[FOREST_E_WIDENING % 4], b[FOREST_E_KEEP_END % 4],
+                       b[FOREST_E_TAIL % 4], b[FOREST_E_FADE % 4], slot, wood);
 }
 
 // A leaf posed (forest_leaf_pose.comp): where its centre is now
@@ -171,58 +177,62 @@ void forestPoseLobe(int slot, inout ForestPose p) {
 }
 #endif
 
-int forestBase(int k) { return int(floatBitsToUint(procedural.header[2][k])); }
-int forestSpecimenRecord(int s) { return forestBase(0) + s * FOREST_SPECIMEN_RECORDS; }
+int forestSpecimenRecord(int s) { return FOREST_BASE(FOREST_H_SPECIMENS) + s * FOREST_SPECIMEN_RECORDS; }
 
 // Specimen `s`'s tint on the node's colour: its leaves' or its bark's.
-vec3 forestSpecimenTint(int s, bool bark) { return procedural.records[forestSpecimenRecord(s) + (bark ? 5 : 4)].xyz; }
+vec3 forestSpecimenTint(int s, bool bark) {
+    return FOREST_RECORD(forestSpecimenRecord(s), bark ? FOREST_SP_BARK_TINT : FOREST_SP_LEAF_TINT).xyz;
+}
 
 // Specimen `s`'s broad leaf: (width over length, tip, teeth a side, tooth
 // depth), all 0 for the node's own; and its gloss (0..1).
-vec4 forestSpecimenLeaf(int s) { return procedural.records[forestSpecimenRecord(s) + 7]; }
-float forestSpecimenGloss(int s) { return procedural.records[forestSpecimenRecord(s) + 5].w; }
+vec4 forestSpecimenLeaf(int s) { return FOREST_RECORD(forestSpecimenRecord(s), FOREST_SP_LEAF); }
+float forestSpecimenGloss(int s) { return FOREST_FLOAT(forestSpecimenRecord(s), FOREST_SP_GLOSS); }
 // Specimen `s`'s sprays' brush (broflora's Species::sprayBrush).
-float forestSpecimenBrush(int s) { return procedural.records[forestSpecimenRecord(s) + 8].x; }
+float forestSpecimenBrush(int s) { return FOREST_FLOAT(forestSpecimenRecord(s), FOREST_SP_BRUSH); }
 // Specimen `s`'s broad leaf on its shoot (scene_forest_shoot.glsl): its
 // petiole's length over its blade's (0: sessile) and its phyllotaxis (0
 // alternate, 1 opposite, 2 spiral, 3 pinnate; broflora's Species::petiole and
 // Species::phyllotaxis).
-vec2 forestSpecimenShoot(int s) { return procedural.records[forestSpecimenRecord(s) + 8].yz; }
+#if FOREST_SP_PETIOLE % 4 != 1 || FOREST_SP_PHYLLOTAXIS != FOREST_SP_PETIOLE + 1
+#error "forestSpecimenShoot reads the petiole and phyllotaxis as one record's yz"
+#endif
+vec2 forestSpecimenShoot(int s) { return FOREST_RECORD(forestSpecimenRecord(s), FOREST_SP_PETIOLE).yz; }
 
 // Specimen `s`'s blooms: their colour (rgb, linear) and form (w: 0 none, 1
 // flower, 2 head, 3 spike).
 vec4 forestSpecimenBloom(int s) {
-    vec4 r = procedural.records[forestSpecimenRecord(s) + 6];
-    return vec4(r.xyz, float(floatBitsToUint(r.w)));
+    vec4 r = FOREST_RECORD(forestSpecimenRecord(s), FOREST_SP_BLOOM_COLOR);
+    return vec4(r.xyz, float(floatBitsToUint(r[FOREST_SP_BLOOM_FORM % 4])));
 }
 
-// The node's leaf form (header[3].w bits 0-3): 0 broad, 1 needle sprays, 2
+// The node's leaf form (FOREST_H_LOOK bits 0-3): 0 broad, 1 needle sprays, 2
 // scale-leaf sprays; and the share of its card a spray covers
 // (ForestNode::sprayFill).
-int forestLeafForm() { return int(floatBitsToUint(procedural.header[3].w) & 15u); }
+int forestLeafForm() { return int(floatBitsToUint(FOREST_HEADER(FOREST_H_LOOK)) & 15u); }
 float forestSprayFill() {
     int f = forestLeafForm();
     return f == 1 ? 0.45 : f == 2 ? 0.47 : 1.0;
 }
 
-// The node's look (header[3].w): its plants' limbs and twigs bounce as they
+// The node's look (FOREST_H_LOOK): its plants' limbs and twigs bounce as they
 // ring (scene_vegetation.glsl's vegLimbBob / vegTwigBob, which every
 // forest vertex stage sets first, so every tier is posed alike).
 void forestApplyLook() {
-    uint w = floatBitsToUint(procedural.header[3].w);
+    uint w = floatBitsToUint(FOREST_HEADER(FOREST_H_LOOK));
     vegLimbBob = float((w >> 8) & 255u) / 64.0;
     vegTwigBob = float((w >> 16) & 255u) / 64.0;
 }
 
-// Specimen `s`'s clumps' height over their width (specimen record 4's w,
+// Specimen `s`'s clumps' height over their width (FOREST_SP_CLUMP_FLAT,
 // broflora's Species::clumpFlat: a fir's flat pads of level sprays).
 float forestClumpFlat(int s) {
-    float f = procedural.records[forestSpecimenRecord(s) + 4].w;
+    float f = FOREST_FLOAT(forestSpecimenRecord(s), FOREST_SP_CLUMP_FLAT);
     return f > 0.0 ? f : 1.0;
 }
 // The specimen instance `i` draws.
 int forestInstanceSpecimen(int i) {
-    return int(floatBitsToUint(procedural.records[int(floatBitsToUint(procedural.header[3].x)) + i * 2 + 1].z));
+    return int(floatBitsToUint(FOREST_FLOAT(FOREST_BASE(FOREST_H_INSTANCES) + i * FOREST_INSTANCE_RECORDS, FOREST_INST_SPECIMEN)));
 }
 // Every clump placement (clumpLeafFrame, procClumpLobe) flattened as
 // instance `i`'s specimen's clumps are.
@@ -239,9 +249,9 @@ void forestApplyClumpFlat(int i) { procClumpFlat = forestClumpFlat(forestInstanc
 // through). `sigma` the leaves' optical depth a unit length.
 const float FOREST_CORE_DEPTH = 1.5;
 float forestLobeCore(float lr, float leaves, out float sigma) {
-    float shell = clamp(procedural.header[0].w, 0.05, 1.0);
-    float a = 0.5 * procedural.header[1].z;
-    float area = 3.14159265 * a * a * procedural.header[3].y * 0.55;
+    float shell = clamp(FOREST_HEADER(FOREST_H_SHELL), 0.05, 1.0);
+    float a = 0.5 * FOREST_HEADER(FOREST_H_LEAF_LENGTH);
+    float area = 3.14159265 * a * a * FOREST_HEADER(FOREST_H_LEAF_ASPECT) * 0.55;
     float inner = 1.0 - shell;
     float volume = 4.18879 * lr * lr * lr * 0.8 * procClumpFlat * (1.0 - inner * inner * inner);
     sigma = leaves * area / max(volume, 1e-9);
@@ -270,12 +280,12 @@ vec3 forestHermite(vec3 a, vec3 ta, vec3 b, vec3 tb, float f, out vec3 tangent) 
     return a + (3.0 * f2 - 2.0 * f3) * (b - a) + (f3 - 2.0 * f2 + f) * m0 + (f3 - f2) * m1;
 }
 
-int forestSegmentRecord(int g) { return forestBase(1) + g * 7; }
-int forestClumpRecord(int c) { return forestBase(2) + c * 6; }
+int forestSegmentRecord(int g) { return FOREST_BASE(FOREST_H_SEGMENTS) + g * FOREST_SEGMENT_RECORDS; }
+int forestClumpRecord(int c) { return FOREST_BASE(FOREST_H_CLUMPS) + c * FOREST_CLUMP_RECORDS; }
 
 // Leaf `i`: its clump (global) and its placement key.
 ivec2 forestLeaf(int i) {
-    vec4 r = procedural.records[forestBase(3) + i / 2];
+    vec4 r = procedural.records[FOREST_BASE(FOREST_H_LEAVES) + i / FOREST_LEAVES_PER_RECORD];
     uvec2 u = floatBitsToUint((i & 1) == 0 ? r.xy : r.zw);
     return ivec2(u);
 }
@@ -297,7 +307,7 @@ void forestSprayBrush(int i, int clump, vec3 lc, float lr, inout vec3 P, inout m
     vec3 N = R[1] / max(length(R[1]), 1e-9);
     vec3 o = P - lc;
     vec3 out1 = dot(o, o) > 1e-12 ? normalize(o) : vec3(0.0, 1.0, 0.0);
-    vec3 tw = procedural.records[forestClumpRecord(clump) + 1].xyz;
+    vec3 tw = FOREST_RECORD(forestClumpRecord(clump), FOREST_CLUMP_TWIG).xyz;
     tw = dot(tw, tw) > 1e-12 ? normalize(tw) : out1;
     vec3 Fb = normalize(out1 + 0.6 * tw + vec3(0.0, 0.9, 0.0));
     vec3 Fn = normalize(mix(F, Fb, b));
@@ -311,12 +321,12 @@ void forestSprayBrush(int i, int clump, vec3 lc, float lr, inout vec3 P, inout m
 // Instance `i`: its specimen, its transform (specimen space to node space:
 // a turn about +Y, a uniform scale, a position) and a seed in [0, 1).
 mat4 forestInstance(int i, out int specimen, out float seed) {
-    int b = int(floatBitsToUint(procedural.header[3].x)) + i * 2;
-    vec4 p = procedural.records[b];
-    vec4 q = procedural.records[b + 1];
-    specimen = int(floatBitsToUint(q.z));
-    seed = q.w;
-    float s = p.w;
+    int b = FOREST_BASE(FOREST_H_INSTANCES) + i * FOREST_INSTANCE_RECORDS;
+    vec4 p = FOREST_RECORD(b, FOREST_INST_POSITION);
+    vec4 q = FOREST_RECORD(b, FOREST_INST_COS_YAW);
+    specimen = int(floatBitsToUint(q[FOREST_INST_SPECIMEN % 4]));
+    seed = q[FOREST_INST_SEED % 4];
+    float s = p[FOREST_INST_SCALE % 4];
     return mat4(vec4(q.x * s, 0.0, -q.y * s, 0.0), vec4(0.0, s, 0.0, 0.0), vec4(q.y * s, 0.0, q.x * s, 0.0),
                 vec4(p.xyz, 1.0));
 }
@@ -324,11 +334,11 @@ mat4 forestInstance(int i, out int specimen, out float seed) {
 // The vegetation record at record `r`: v0, v1, v2 (its anchor `anchor`, its
 // weight `along` from its from-end to its to-end), v3.
 void forestVegetation(int r, vec3 anchor, float along, out vec4 v0, out vec4 v1, out vec4 v2, out vec4 v3) {
-    v0 = procedural.records[r];
-    v1 = procedural.records[r + 1];
-    vec4 w = procedural.records[r + 2];
-    v2 = vec4(anchor, mix(w.x, w.y, along));
-    v3 = procedural.records[r + 3];
+    v0 = FOREST_RECORD(r, FOREST_VEG_ROOT);
+    v1 = FOREST_RECORD(r, FOREST_VEG_CROWN);
+    vec4 w = FOREST_RECORD(r, FOREST_VEG_WEIGHT_FROM);
+    v2 = vec4(anchor, mix(w[FOREST_VEG_WEIGHT_FROM % 4], w[FOREST_VEG_WEIGHT_TO % 4], along));
+    v3 = FOREST_RECORD(r, FOREST_VEG_AXIS);
 }
 
 // A leaf of the forest, swayed: the wood's pose where it hangs, its own
@@ -352,8 +362,8 @@ vec4 forestLeafSway(mat4 model, vec4 v0, vec4 v1, vec4 v2, vec4 v3, vec3 axisNod
 // The flutter a leaf keeps at a widening: whole up close, gone by the
 // header's flutter fade.
 float forestFlutter(float widening) {
-    float to = max(procedural.header[1].w, 1.01);
-    return (1.0 - smoothstep(1.0, to, widening)) * procedural.header[3].z;
+    float to = max(FOREST_HEADER(FOREST_H_FLUTTER_FADE), 1.01);
+    return (1.0 - smoothstep(1.0, to, widening)) * FOREST_HEADER(FOREST_H_FLUTTER);
 }
 
 const vec4 FOREST_CULLED = vec4(2.0, 2.0, 2.0, 1.0);

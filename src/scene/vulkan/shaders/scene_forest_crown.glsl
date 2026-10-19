@@ -16,11 +16,11 @@
 // The instance's transform, specimen space to camera-relative node space
 // (scene_forest.glsl's forestInstance, without the entries it needs).
 mat4 forestCrownInstance(int i, out int specimen) {
-    int b = int(floatBitsToUint(procedural.header[3].x)) + i * 2;
-    vec4 p = procedural.records[b];
-    vec4 q = procedural.records[b + 1];
-    specimen = int(floatBitsToUint(q.z));
-    float s = p.w;
+    int b = FOREST_BASE(FOREST_H_INSTANCES) + i * FOREST_INSTANCE_RECORDS;
+    vec4 p = FOREST_RECORD(b, FOREST_INST_POSITION);
+    vec4 q = FOREST_RECORD(b, FOREST_INST_COS_YAW);
+    specimen = int(floatBitsToUint(q[FOREST_INST_SPECIMEN % 4]));
+    float s = p[FOREST_INST_SCALE % 4];
     return mat4(vec4(q.x * s, 0.0, -q.y * s, 0.0), vec4(0.0, s, 0.0, 0.0), vec4(q.y * s, 0.0, q.x * s, 0.0),
                 vec4(p.xyz, 1.0));
 }
@@ -83,28 +83,28 @@ ForestCrownHit forestCrownTrace(vec3 d, int instance, vec3 offset, float len, fl
     int specimen;
     mat4 model = push.model * forestCrownInstance(instance, specimen);
     float scale = length(model[1].xyz);
-    int sr = int(floatBitsToUint(procedural.header[2].x)) + specimen * FOREST_SPECIMEN_RECORDS;
-    uvec4 counts = floatBitsToUint(procedural.records[sr]);
-    int first = int(counts.z), count = int(counts.w);
-    int clumpBase = int(floatBitsToUint(procedural.header[2].z));
+    int sr = FOREST_BASE(FOREST_H_SPECIMENS) + specimen * FOREST_SPECIMEN_RECORDS;
+    uvec4 counts = floatBitsToUint(FOREST_RECORD(sr, FOREST_SP_SEG_START));
+    int first = int(counts[FOREST_SP_CLUMP_START % 4]), count = int(counts[FOREST_SP_CLUMP_COUNT % 4]);
+    int clumpBase = FOREST_BASE(FOREST_H_CLUMPS);
     // A leaf's area facing any way (forestMassDepth's 0.55 of its ellipse).
     float a = 0.5 * len;
     float leafArea = 3.14159265 * a * a * aspect * 0.55;
     // Its clumps' height over their width (scene_forest.glsl's forestClumpFlat).
-    float flatness = procedural.records[sr + 4].w > 0.0 ? procedural.records[sr + 4].w : 1.0;
+    float flatness = FOREST_FLOAT(sr, FOREST_SP_CLUMP_FLAT) > 0.0 ? FOREST_FLOAT(sr, FOREST_SP_CLUMP_FLAT) : 1.0;
     // (A spray node's clumps are its sprays' pads, filled to their rims.)
-    float fill = (floatBitsToUint(procedural.header[3].w) & 15u) != 0u ? 1.0 : FOREST_CROWN_FILL;
+    float fill = (floatBitsToUint(FOREST_HEADER(FOREST_H_LOOK)) & 15u) != 0u ? 1.0 : FOREST_CROWN_FILL;
     // A pinnate specimen's clumps are runs of leaflets along their wood
-    // (scene_forest_shoot.glsl's forestPinnateLeaf, its record 8's z the
-    // phyllotaxis): each traced as the spheroid the clumps tier's run of
+    // (scene_forest_shoot.glsl's forestPinnateLeaf, its FOREST_SP_PHYLLOTAXIS
+    // 3): each traced as the spheroid the clumps tier's run of
     // three lobes fills (scene_forest_sprite_vertex.glsl), its axis the
     // wood's, not the round clump's ellipsoid, which stood out past a
     // hanging whip's narrow curtain either side.
-    bool pinnate = int(procedural.records[sr + 8].z + 0.5) == 3;
+    bool pinnate = int(FOREST_FLOAT(sr, FOREST_SP_PHYLLOTAXIS) + 0.5) == 3;
     {
-        float leaves = float(floatBitsToUint(procedural.records[sr + 1].y));
-        float cr = max(procedural.records[sr + 2].w, 1e-3) * scale;
-        float cu = max(procedural.records[sr + 3].x, 1e-3) * scale;
+        float leaves = float(floatBitsToUint(FOREST_FLOAT(sr, FOREST_SP_LEAF_COUNT)));
+        float cr = max(FOREST_FLOAT(sr, FOREST_SP_CROWN_RADIUS), 1e-3) * scale;
+        float cu = max(FOREST_FLOAT(sr, FOREST_SP_CROWN_UP), 1e-3) * scale;
         h.crownSigma = leaves * leafArea / (4.18879 * cr * cr * cu);
     }
 
@@ -127,7 +127,7 @@ ForestCrownHit forestCrownTrace(vec3 d, int instance, vec3 offset, float len, fl
     // (radius times the cube root of the stride), so the crown keeps its
     // outline and mass at a half or a quarter of the chords. The steps are
     // dithered by the pixel's wander so a switch never draws a line.
-    float px = procedural.records[sr + 3].y * scale / max(pixel, 1e-6) * (0.8 + 0.4 * grain.z);
+    float px = FOREST_FLOAT(sr, FOREST_SP_CLUMP_RADIUS) * scale / max(pixel, 1e-6) * (0.8 + 0.4 * grain.z);
     int stride = px < FOREST_COARSE_PIXELS * 0.5 ? 4 : px < FOREST_COARSE_PIXELS ? 2 : 1;
     // (Not a pinnate specimen's: its runs are narrow, and a run's
     // neighbours in its block hang beside it across the curtain, not
@@ -138,9 +138,9 @@ ForestCrownHit forestCrownTrace(vec3 d, int instance, vec3 offset, float len, fl
     float grow = stride == 4 ? 1.587 : stride == 2 ? 1.26 : 1.0;
     // The clumps in runs of FOREST_CLUMP_BLOCK that lie together
     // (ForestNode::kClumpBlock), two records a run from the specimen's first
-    // (specimen record 3's w): its bounding sphere, which a ray that misses
+    // (FOREST_SP_BLOCKS): its bounding sphere, which a ray that misses
     // skips the run by, and its clumps.
-    int blocks = floatBitsToInt(procedural.records[sr + 3].w);
+    int blocks = floatBitsToInt(FOREST_FLOAT(sr, FOREST_SP_BLOCKS));
     // The ray in the specimen's own space (the instance is a turn about +Y
     // and a uniform scale, so its clumps stay upright there): o + e t, t
     // still the distance from the eye. The runs and clumps are tested where
@@ -151,7 +151,7 @@ ForestCrownHit forestCrownTrace(vec3 d, int instance, vec3 offset, float len, fl
     vec3 e = At * d * inv2;
     float ee = dot(e, e);
     for (int b = 0; b * FOREST_CLUMP_BLOCK < count; ++b) {
-        vec4 bs = procedural.records[blocks + b * 2];
+        vec4 bs = FOREST_RECORD(blocks + b * FOREST_BLOCK_RECORDS, FOREST_BLOCK_SPHERE);
         vec3 v = bs.xyz - o;
         // The grown balls reach a little past the run's sphere.
         float br = bs.w * grow, BR = br * scale;
@@ -161,14 +161,14 @@ ForestCrownHit forestCrownTrace(vec3 d, int instance, vec3 offset, float len, fl
         // wholly behind the second changes neither.
         if (tauAll > 6.0 && tc - BR > t2) continue;
         // The run's clumps, two 16-bit specimen indices to a float.
-        uvec4 run = floatBitsToUint(procedural.records[blocks + b * 2 + 1]);
+        uvec4 run = floatBitsToUint(FOREST_RECORD(blocks + b * FOREST_BLOCK_RECORDS, FOREST_BLOCK_CLUMPS));
         for (int j = 0; j < FOREST_CLUMP_BLOCK; j += stride) {
             int i = int((run[j >> 1] >> uint((j & 1) * 16)) & 0xffffu);
             if (i == 0xffff) break;
             if (procClumpBare(instance, first + i)) continue;
-            int r = clumpBase + (first + i) * 6;
-            vec4 c = procedural.records[r];
-            float leaves = procedural.records[r + 1].w * float(stride);
+            int r = clumpBase + (first + i) * FOREST_CLUMP_RECORDS;
+            vec4 c = FOREST_RECORD(r, FOREST_CLUMP_CENTRE);
+            float leaves = FOREST_FLOAT(r, FOREST_CLUMP_LEAVES) * float(stride);
             // 0.9 of the radius up and 0.7 down about the clump's centre:
             // 0.8 up about a point 0.1 above it, times the flatness.
             float rr = c.w * grow * fill, ry = 0.8 * flatness * rr;
@@ -180,11 +180,11 @@ ForestCrownHit forestCrownTrace(vec3 d, int instance, vec3 offset, float len, fl
                 // wood `ax` about its middle, and a third of that or a
                 // leaflet's reach (0.8 of a leaf) across, as the clumps
                 // tier's lobes (the same volume as the three of them).
-                vec3 D = procedural.records[r + 1].xyz;
+                vec3 D = FOREST_RECORD(r, FOREST_CLUMP_TWIG).xyz;
                 vec3 ax = dot(D, D) > 1e-12 ? normalize(D) : vec3(0.0, 1.0, 0.0);
                 cs = c.xyz - ax * (0.35 * c.w);
                 ry = c.w;
-                rr = max(c.w / 3.0, 0.8 * procedural.header[1].z);
+                rr = max(c.w / 3.0, 0.8 * FOREST_HEADER(FOREST_H_LEAF_LENGTH));
                 float sa = rr / ry;
                 oc = o - cs;
                 oc += ax * ((sa - 1.0) * dot(oc, ax));

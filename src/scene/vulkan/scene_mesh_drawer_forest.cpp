@@ -15,6 +15,7 @@
 #include "scene/vulkan/scene_mesh_drawer.h"
 
 #include "scene/forest_node.h"
+#include "scene/vulkan/shaders/scene_forest_layout.h"
 #include "scene/light_node.h"
 #include "scene/scene_graph.h"
 #include "scene/vulkan/scene_defaults.h"
@@ -158,9 +159,9 @@ struct Entry {
     float wood[3];   // leaves' and sprites' tint toward the bark (scene_forest.glsl's e2; 0: none)
 };
 static_assert(sizeof(Entry) == 44);
-// An entry's floats on the GPU: its 8, then its pose slot and padding
-// (scene_forest.glsl's three records).
-constexpr size_t kEntryFloats = 12;
+// An entry's floats on the GPU (scene_forest_layout.h's FOREST_E_*, which
+// scene_forest.glsl reads): its 8, then its pose slot and its wood.
+constexpr size_t kEntryFloats = FOREST_ENTRY_RECORDS * 4;
 // The most leaves posed a frame (64 bytes each: 256 MB). The flight's
 // heaviest views keep about 1.5 million.
 constexpr uint32_t kMaxPoses = 4u << 20;
@@ -878,18 +879,16 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
         const size_t first = at;
         for (const Entry& e : g) {
             float* d = dst + at * kEntryFloats;
-            d[0] = floatBits(e.instance);
-            d[1] = floatBits(e.first);
-            d[2] = floatBits(e.end);
-            d[3] = floatBits(e.param);
-            d[4] = e.widening;
-            d[5] = e.keepEnd;
-            d[6] = e.tail;
-            d[7] = e.fade;
-            d[8] = floatBits(posed ? poseUsed_ : ~0u);
-            d[9] = e.wood[0];
-            d[10] = e.wood[1];
-            d[11] = e.wood[2];
+            d[FOREST_E_INSTANCE] = floatBits(e.instance);
+            d[FOREST_E_FIRST] = floatBits(e.first);
+            d[FOREST_E_END] = floatBits(e.end);
+            d[FOREST_E_PARAM] = floatBits(e.param);
+            d[FOREST_E_WIDENING] = e.widening;
+            d[FOREST_E_KEEP_END] = e.keepEnd;
+            d[FOREST_E_TAIL] = e.tail;
+            d[FOREST_E_FADE] = e.fade;
+            d[FOREST_E_SLOT] = floatBits(posed ? poseUsed_ : ~0u);
+            for (int i = 0; i < 3; ++i) d[FOREST_E_WOOD + i] = e.wood[i];
             if (posed) poseUsed_ += e.end - e.first;
             ++at;
         }

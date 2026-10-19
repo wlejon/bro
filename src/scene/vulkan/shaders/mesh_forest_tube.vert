@@ -135,7 +135,7 @@ void twigMain(ForestEntry e) {
     // Posed as a leaf at this point would be (forestPoseLeaf): the wood,
     // then the spray's and shoot's bending.
     vec4 v0, v1, v2, v3;
-    forestVegetation(forestClumpRecord(clump) + 2, o.p, 1.0, v0, v1, v2, v3);
+    forestVegetation(forestClumpRecord(clump) + FOREST_CLUMP_VEGETATION / 4, o.p, 1.0, v0, v1, v2, v3);
     VegPlant plant = vegPlant(model, v0, v3);
     VegLimb limb = vegLimb(model, v3);
     VegWind w = vegWind(plant);
@@ -202,8 +202,8 @@ void twigMain(ForestEntry e) {
     float ang = sideSign * 1.3 + PROC_TWO_PI * fract(float(clump) * 0.1031 + float(kind) * 0.37);
     float alongM = o.frac * 0.8 * c.Lf * sc;
     outColor = vec4(vec2(cos(ang), sin(ang)) * rw, alongM, rw);
-    int segStart = int(floatBitsToUint(procedural.records[forestSpecimenRecord(specimen)].x));
-    float word = procedural.records[forestSegmentRecord(segStart) + 5].w;
+    int segStart = int(floatBitsToUint(FOREST_FLOAT(forestSpecimenRecord(specimen), FOREST_SP_SEG_START)));
+    float word = FOREST_FLOAT(forestSegmentRecord(segStart), FOREST_SEG_VEGETATION + FOREST_VEG_BARK);
     outUV = vec2(cover, -2.0 - max(word, 0.0));
     outWorldPos = pos;
     gl_Position = camera.viewProj * vec4(pos, 1.0);
@@ -217,7 +217,7 @@ void barkRibbonMain(ForestEntry e) {
     int seg = e.first + gl_VertexIndex / 4;
     int local = gl_VertexIndex & 3;
     int r = forestSegmentRecord(seg);
-    vec4 s0 = procedural.records[r], s1 = procedural.records[r + 1];
+    vec4 s0 = FOREST_RECORD(r, FOREST_SEG_FROM), s1 = FOREST_RECORD(r, FOREST_SEG_TO);
     vec3 axis = s1.xyz - s0.xyz;
     if (seg >= e.end || dot(axis, axis) < 1e-12) {
         gl_Position = FOREST_CULLED;
@@ -232,7 +232,7 @@ void barkRibbonMain(ForestEntry e) {
     // (A tip's end radius is negative: it closes to a point.)
     float rad = endT > 0.5 ? max(s1.w, 0.0) : s0.w;
     vec4 v0, v1, v2, v3;
-    forestVegetation(r + 3, centre, endT, v0, v1, v2, v3);
+    forestVegetation(r + FOREST_SEG_VEGETATION / 4, centre, endT, v0, v1, v2, v3);
     vec3 pos = (model * vec4(centre, 1.0)).xyz;
     mat3 rot;
     outVegShade = vegetationSwayAxis(model, v0, v1, v2, v3, vec3(0.0), vec3(0.0, 1.0, 0.0), pos, rot);
@@ -262,7 +262,7 @@ void barkRibbonMain(ForestEntry e) {
 
     vec3 N = across * sideSign + toEye * 0.02;
     outInstColor = vec4(vegetationTint(model, v0, v1, v2, v3, false) * forestSpecimenTint(specimen, true), e.fade);
-    vec4 barkRec = procedural.records[r + 5];   // (weightFrom, weightTo, path, bark word)
+    vec4 barkRec = FOREST_RECORD(r, FOREST_SEG_VEGETATION + FOREST_VEG_WEIGHT_FROM);   // (weightFrom, weightTo, path, bark word)
     float ang = sideSign * 1.3;
     outColor = vec4(vec2(cos(ang), sin(ang)) * rw, (barkRec.z + endT * length(axis)) * sc, rw);
     outUV = vec2(cover, -2.0 - max(barkRec.w, 0.0));
@@ -299,17 +299,17 @@ void main() {
         return;
     }
     vec4 v0, v1, v2, v3;
-    forestVegetation(forestSegmentRecord(seg) + 3, pos, endT, v0, v1, v2, v3);
+    forestVegetation(forestSegmentRecord(seg) + FOREST_SEG_VEGETATION / 4, pos, endT, v0, v1, v2, v3);
 
     // The bark (scene_bark.glsl): where on the stem the point lies, the
     // trunk's foot split into buttresses.
     int r0 = forestSegmentRecord(seg);
-    vec4 barkRec = procedural.records[r0 + 5];   // (weightFrom, weightTo, path, bark word)
+    vec4 barkRec = FOREST_RECORD(r0, FOREST_SEG_VEGETATION + FOREST_VEG_WEIGHT_FROM);   // (weightFrom, weightTo, path, bark word)
     float ang = uv.x * PROC_TWO_PI;
     float hb = pos.y - v0.y;
     pos += radial * (rad * barkButtress(ang, hb, rad, treeSeed));
     float sc = vegScale(model);
-    float along = barkRec.z + endT * length(procedural.records[r0 + 1].xyz - procedural.records[r0].xyz);
+    float along = barkRec.z + endT * length(FOREST_RECORD(r0, FOREST_SEG_TO).xyz - FOREST_RECORD(r0, FOREST_SEG_FROM).xyz);
     outColor = vec4(vec2(cos(ang), sin(ang)) * (rad * sc), along * sc, rad * sc);
     outUV = vec2(hb * sc, barkRec.w);
 

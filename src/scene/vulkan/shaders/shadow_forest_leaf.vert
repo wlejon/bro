@@ -37,7 +37,7 @@ void main() {
     // its spray's and shoot's bending included: a leaf's own shadow on the
     // leaves under it stays with it as a gust bends its spray.
     vec3 rest = P;
-    float grown = (k - 1.0) * procedural.header[1].z;
+    float grown = (k - 1.0) * FOREST_HEADER(FOREST_H_LEAF_LENGTH);
     // A widened broad caster grows from its node as its leaf does
     // (forestPoseLeaf).
     if (grown > 0.0 && !onShoot) P = lc + (P - lc) * clamp(1.0 - 0.5 * grown / max(lr, 1e-3), 0.55, 1.0);
@@ -63,7 +63,7 @@ void main() {
         pos += away * (0.15 * grown * vegScale(model));
     }
     vec4 v0, v1, v2, v3;
-    forestVegetation(forestClumpRecord(lf.x) + 2, rest, 1.0, v0, v1, v2, v3);
+    forestVegetation(forestClumpRecord(lf.x) + FOREST_CLUMP_VEGETATION / 4, rest, 1.0, v0, v1, v2, v3);
     VegPlant plant = vegPlant(model, v0, v3);
     VegLimb limb = vegLimb(model, v3);
     VegWind w = vegWind(plant);

@@ -63,9 +63,9 @@ bool forestTubeVertexMorph(ForestEntry e, int vertexIndex, mat4 model, float sid
     endT = float(row) / float(rows);
 
     int r = forestSegmentRecord(seg);
-    vec4 s0 = procedural.records[r];
-    vec4 s1 = procedural.records[r + 1];
-    vec4 j = procedural.records[r + 2];
+    vec4 s0 = FOREST_RECORD(r, FOREST_SEG_FROM);
+    vec4 s1 = FOREST_RECORD(r, FOREST_SEG_TO);
+    vec4 j = FOREST_RECORD(r, FOREST_SEG_TANGENTS);
     vec3 axis = s1.xyz - s0.xyz;
     float len = length(axis);
     if (len < 1e-6) return false;

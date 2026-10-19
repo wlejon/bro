@@ -132,7 +132,7 @@ ForestMass forestSpriteSurface(uint flags) {
             m.sphere = h.sphere;
             m.density = h.density;
             m.flatness = h.flatness;
-            if ((floatBitsToUint(procedural.header[3].w) & 15u) == 0u) {
+            if ((floatBitsToUint(FOREST_HEADER(FOREST_H_LOOK)) & 15u) == 0u) {
                 // A broadleaf's crown is shaded through the whole crown's
                 // leaves toward the light (its mean density), not its one
                 // clump's: the crown's caster is one disc past its middle,
@@ -166,7 +166,7 @@ ForestMass forestSpriteSurface(uint flags) {
             // tree's pads were a pale veil the ground showed through (a
             // pine at 15 / 25 m 10.7 / 8.7 levels brighter than its leaves,
             // now 3.0 / 1.3).
-            bool sprays = (floatBitsToUint(procedural.header[3].w) & 15u) != 0u;
+            bool sprays = (floatBitsToUint(FOREST_HEADER(FOREST_H_LOOK)) & 15u) != 0u;
             float coreR = sprays ? min(1.0 - inMass2.y, 1.0 - 0.5 * inMass2.w) : 0.0;
             if (coreR > 0.0 && farL.weight > 0.0)
                 farL.clear *= smoothstep(0.85 * coreR, coreR, length(q));
@@ -207,7 +207,7 @@ ForestMass forestSpriteSurface(uint flags) {
             // already shade it lobe by lobe as its sprays' casters do
             // theirs. With both, its clumps were 4 to 12 units darker than
             // its leaves.
-            bool sprayLobe = (floatBitsToUint(procedural.header[3].w) & 15u) != 0u;
+            bool sprayLobe = (floatBitsToUint(FOREST_HEADER(FOREST_H_LOOK)) & 15u) != 0u;
             // 0.8 of the depth through the lobe (its path's first few shadow
             // texels skipped, SHADOW_LEAF_BLIND): a broadleaf's clumps at
             // noon within a level of its leaves at 45 / 75 / 120 m (+1.7 /

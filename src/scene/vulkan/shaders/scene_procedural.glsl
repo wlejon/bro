@@ -17,10 +17,16 @@ layout(std430, set = 3, binding = 1) readonly buffer ProceduralSegments {
     vec4 records[];
 } procedural;
 
-// A forest specimen's records (scene_forest.glsl; ForestNode's kSpecimenRecords).
-const int FOREST_SPECIMEN_RECORDS = 9;
-// A crown's clumps in runs this long, each bounded (ForestNode::kClumpBlock).
-const int FOREST_CLUMP_BLOCK = 8;
+// The forest node's layout (FOREST_SPECIMEN_RECORDS, FOREST_CLUMP_BLOCK, every
+// field's offset), shared with ForestNode and the forest drawer, and its
+// accessors: float `f` (a FOREST_H_* offset) of the header; the first
+// record of a run (`f` FOREST_H_SPECIMENS, ...); the record holding float
+// `f` of the run starting at record `r`; that float.
+#include "scene_forest_layout.h"
+#define FOREST_HEADER(f) procedural.header[(f) / 4][(f) % 4]
+#define FOREST_BASE(f) int(floatBitsToUint(FOREST_HEADER(f)))
+#define FOREST_RECORD(r, f) procedural.records[(r) + (f) / 4]
+#define FOREST_FLOAT(r, f) procedural.records[(r) + (f) / 4][(f) % 4]
 
 // The leaf a scatter vertex belongs to: each instance draws header[3].x
 // copies of the leaf mesh end to end (InstancedMeshNode::scatterBatchMesh).

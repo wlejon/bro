@@ -83,8 +83,8 @@ void main() {
     float cell = sqrt(6.2831853 / s.leaves);
     outMass0 = vec4(s.center, s.radius);
     outMass1 = s.crown;
-    outMass2 = vec4(cell, len, procedural.header[3].y, procedural.header[0].w);
-    outMass3 = vec4(procedural.header[0].y, procedural.header[0].z, yScale, s.leafLen);
+    outMass2 = vec4(cell, len, FOREST_HEADER(FOREST_H_LEAF_ASPECT), FOREST_HEADER(FOREST_H_SHELL));
+    outMass3 = vec4(FOREST_HEADER(FOREST_H_UP_BIAS), FOREST_HEADER(FOREST_H_TILT_JITTER), yScale, s.leafLen);
     outMass4 = vec4(s.offset, uintBitsToFloat(uint(s.instance)));
     // A core: its height over its width, its lobe's radius, the lobe's
     // leaves' optical depth a unit length and a leaf's length (world).

@@ -2,6 +2,8 @@
 
 #include <broflora/forest_records.h>
 
+#include "scene/vulkan/shaders/scene_forest_layout.h"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -14,8 +16,29 @@ namespace {
 
 // emitForest's arrays, as broflora lays them out.
 namespace rec = broflora::forest_records;
-constexpr size_t kHeaderFloats = 16;
-constexpr size_t kSpecimenRecords = 9;   // scene_forest.glsl's FOREST_SPECIMEN_RECORDS
+// The node's GPU layout (scene_forest_layout.h, which the forest shaders
+// read by): the runs that copy broflora's records verbatim keep broflora's
+// offsets.
+static_assert(FOREST_SEG_TO - FOREST_SEG_FROM == rec::segment::kTo - rec::segment::kFrom &&
+              FOREST_SEG_R_FROM - FOREST_SEG_FROM == rec::segment::kRFrom - rec::segment::kFrom &&
+              FOREST_SEG_R_TO - FOREST_SEG_FROM == rec::segment::kRTo - rec::segment::kFrom &&
+              rec::segment::kFrom == 0 && FOREST_SEG_TANGENTS - FOREST_SEG_FROM == rec::segment::kFloats);
+static_assert(FOREST_CLUMP_CENTRE == rec::clump::kCentre && FOREST_CLUMP_RADIUS == rec::clump::kRadius &&
+              FOREST_CLUMP_TWIG == rec::clump::kTwig && FOREST_CLUMP_LEAVES == rec::clump::kLeafCount &&
+              FOREST_CLUMP_VEGETATION == rec::clump::kFloats);
+static_assert(FOREST_VEG_ROOT == rec::vegetation::kRoot && FOREST_VEG_HEIGHT == rec::vegetation::kHeight &&
+              FOREST_VEG_CROWN == rec::vegetation::kCrown && FOREST_VEG_CROWN_RADIUS == rec::vegetation::kCrownRadius &&
+              FOREST_VEG_WEIGHT_FROM == rec::vegetation::kWeightFrom && FOREST_VEG_WEIGHT_TO == rec::vegetation::kWeightTo &&
+              FOREST_VEG_PATH == rec::vegetation::kPath && FOREST_VEG_BARK == rec::vegetation::kBark &&
+              FOREST_VEG_AXIS == rec::vegetation::kAxis && FOREST_VEG_TWIG == rec::vegetation::kTwig &&
+              FOREST_VEG_LIMB == rec::vegetation::kLimb && FOREST_VEG_TRUNK == rec::vegetation::kTrunk &&
+              rec::vegetation::kFloats == 16);
+static_assert(FOREST_BLOOM_POSITION == rec::bloom::kPosition && FOREST_BLOOM_SIZE == rec::bloom::kSize &&
+              FOREST_BLOOM_DIR == rec::bloom::kDir && FOREST_BLOOM_SEGMENT == rec::bloom::kSegment);
+static_assert(FOREST_LEAVES_PER_RECORD * rec::leaf::kValues == 4);
+static_assert(ForestNode::kClumpBlock == FOREST_CLUMP_BLOCK && ForestNode::kBlockRecords == FOREST_BLOCK_RECORDS);
+constexpr size_t kHeaderFloats = FOREST_HEADER_FLOATS;
+constexpr size_t kSpecimenRecords = FOREST_SPECIMEN_RECORDS;
 
 float smooth(float a, float b, float x) {
     if (a == b) return x < a ? 0.0f : 1.0f;
@@ -637,12 +660,12 @@ const std::vector<float>& ForestNode::gpuData() const {
     // Record offsets (vec4s) of each array.
     const uint32_t specBase = 0;
     const uint32_t segBase = specBase + static_cast<uint32_t>(nSpec * kSpecimenRecords);
-    const uint32_t clumpBase = segBase + static_cast<uint32_t>(nSeg * 7);
+    const uint32_t clumpBase = segBase + static_cast<uint32_t>(nSeg * FOREST_SEGMENT_RECORDS);
     // A crown traces its tree's clumps a block of kClumpBlock at a time
     // (scene_forest_crown.glsl), skipping a block whose bounding sphere its
     // ray misses: each specimen's clumps in runs of kClumpBlock, a record a
     // run (the sphere round the run's ellipsoids), after the clumps.
-    const uint32_t blockBase = clumpBase + static_cast<uint32_t>(nClump * 6);
+    const uint32_t blockBase = clumpBase + static_cast<uint32_t>(nClump * FOREST_CLUMP_RECORDS);
     std::vector<uint32_t> specBlock(nSpec);
     uint32_t nBlock = 0;
     for (size_t k = 0; k < nSpec; ++k) {
@@ -650,72 +673,78 @@ const std::vector<float>& ForestNode::gpuData() const {
         nBlock += (specimens_[k].clumpCount + kClumpBlock - 1) / kClumpBlock;
     }
     const uint32_t leafBase = blockBase + nBlock * kBlockRecords;
-    const uint32_t instBase = leafBase + static_cast<uint32_t>((nLeaf + 1) / 2);
+    const uint32_t instBase =
+        leafBase + static_cast<uint32_t>((nLeaf + FOREST_LEAVES_PER_RECORD - 1) / FOREST_LEAVES_PER_RECORD);
     // The blooms after the instances, 2 records each (the bloom entries
     // carry their base: the header is full).
-    const uint32_t bloomBase = instBase + static_cast<uint32_t>(instances_.size() * 2);
+    const uint32_t bloomBase = instBase + static_cast<uint32_t>(instances_.size() * FOREST_INSTANCE_RECORDS);
     const size_t nBloom = a.blooms.size() / rec::bloom::kFloats;
     gpuBloomBase_ = bloomBase;
-    const size_t records = bloomBase + nBloom * 2;
+    const size_t records = bloomBase + nBloom * FOREST_BLOOM_RECORDS;
 
     gpu_.assign(kHeaderFloats + records * 4, 0.0f);
     float* h = gpu_.data();
-    h[0] = bitsOf(a.leaf.seed);
-    h[1] = a.leaf.upBias;
-    h[2] = a.leaf.tiltJitter;
-    h[3] = a.leaf.shell;
-    h[4] = a.leaf.baseScale;
-    h[5] = a.leaf.scaleJitter;
-    h[6] = leafLength();
-    h[7] = lod_.flutterFade;
-    h[8] = bitsOf(specBase);
-    h[9] = bitsOf(segBase);
-    h[10] = bitsOf(clumpBase);
-    h[11] = bitsOf(leafBase);
-    h[12] = bitsOf(instBase);
+    h[FOREST_H_SEED] = bitsOf(a.leaf.seed);
+    h[FOREST_H_UP_BIAS] = a.leaf.upBias;
+    h[FOREST_H_TILT_JITTER] = a.leaf.tiltJitter;
+    h[FOREST_H_SHELL] = a.leaf.shell;
+    h[FOREST_H_BASE_SCALE] = a.leaf.baseScale;
+    h[FOREST_H_SCALE_JITTER] = a.leaf.scaleJitter;
+    h[FOREST_H_LEAF_LENGTH] = leafLength();
+    h[FOREST_H_FLUTTER_FADE] = lod_.flutterFade;
+    h[FOREST_H_SPECIMENS] = bitsOf(specBase);
+    h[FOREST_H_SEGMENTS] = bitsOf(segBase);
+    h[FOREST_H_CLUMPS] = bitsOf(clumpBase);
+    h[FOREST_H_LEAVES] = bitsOf(leafBase);
+    h[FOREST_H_INSTANCES] = bitsOf(instBase);
     // A spray's leaves cover kSprayFill of its card: the far tiers take them
     // as leaves of that area (an ellipse a card's length long; a broad leaf's
     // ellipse is its card's outline already).
     const float fill = sprayFill(look_.leafForm);
-    h[13] = look_.leafForm == 0 ? leafAspect() : leafAspect() * fill * (4.0f / 3.14159265f);
-    h[14] = look_.flutter;
+    h[FOREST_H_LEAF_ASPECT] = look_.leafForm == 0 ? leafAspect() : leafAspect() * fill * (4.0f / 3.14159265f);
+    h[FOREST_H_FLUTTER] = look_.flutter;
     // Leaf form (bits 0-3), limb and twig bob in 64ths (8 bits each).
     const auto q = [](float v) { return static_cast<uint32_t>(std::clamp(std::lround(v * 64.0f), 0L, 255L)); };
-    h[15] = bitsOf(static_cast<uint32_t>(look_.leafForm) | (q(look_.limbBob) << 8) | (q(look_.twigBob) << 16));
+    h[FOREST_H_LOOK] = bitsOf(static_cast<uint32_t>(look_.leafForm) | (q(look_.limbBob) << 8) | (q(look_.twigBob) << 16));
 
     float* r = gpu_.data() + kHeaderFloats;
     for (size_t k = 0; k < nSpec; ++k) {
         const Specimen& s = specimens_[k];
         float* d = r + (specBase + k * kSpecimenRecords) * 4;
-        d[0] = bitsOf(s.segStart); d[1] = bitsOf(s.segCount); d[2] = bitsOf(s.clumpStart); d[3] = bitsOf(s.clumpCount);
-        d[4] = bitsOf(s.leafStart); d[5] = bitsOf(s.leafCount); d[6] = bitsOf(s.crownClump);
-        d[7] = s.meanClumpWeight;
-        d[8] = s.crown.x; d[9] = s.crown.y; d[10] = s.crown.z; d[11] = s.crownRadius;
-        d[12] = s.crownRadiusUp; d[13] = s.meanClumpRadius; d[14] = s.height; d[15] = bitsOf(specBlock[k]);
+        d[FOREST_SP_SEG_START] = bitsOf(s.segStart); d[FOREST_SP_SEG_COUNT] = bitsOf(s.segCount);
+        d[FOREST_SP_CLUMP_START] = bitsOf(s.clumpStart); d[FOREST_SP_CLUMP_COUNT] = bitsOf(s.clumpCount);
+        d[FOREST_SP_LEAF_START] = bitsOf(s.leafStart); d[FOREST_SP_LEAF_COUNT] = bitsOf(s.leafCount);
+        d[FOREST_SP_CROWN_CLUMP] = bitsOf(s.crownClump);
+        d[FOREST_SP_CLUMP_WEIGHT] = s.meanClumpWeight;
+        d[FOREST_SP_CROWN] = s.crown.x; d[FOREST_SP_CROWN + 1] = s.crown.y; d[FOREST_SP_CROWN + 2] = s.crown.z;
+        d[FOREST_SP_CROWN_RADIUS] = s.crownRadius;
+        d[FOREST_SP_CROWN_UP] = s.crownRadiusUp; d[FOREST_SP_CLUMP_RADIUS] = s.meanClumpRadius;
+        d[FOREST_SP_HEIGHT] = s.height; d[FOREST_SP_BLOCKS] = bitsOf(specBlock[k]);
         // Its leaves' and bark's tint: its colour over the node's (1 where it
         // has none, or the node is black).
         // Record 4's w: its clumps' flatness (scene_forest.glsl's forestClumpFlat).
-        d[19] = s.clumpFlat;
+        d[FOREST_SP_CLUMP_FLAT] = s.clumpFlat;
         // Record 6: its blooms' colour (absolute) and form.
-        d[24] = s.bloomColor[0]; d[25] = s.bloomColor[1]; d[26] = s.bloomColor[2];
-        d[27] = bitsOf(static_cast<uint32_t>(s.bloomForm));
+        for (int i = 0; i < 3; ++i) d[FOREST_SP_BLOOM_COLOR + i] = s.bloomColor[i];
+        d[FOREST_SP_BLOOM_FORM] = bitsOf(static_cast<uint32_t>(s.bloomForm));
         // Record 7: its broad leaf (width over length, tip, teeth a side,
         // tooth depth); record 5's w its gloss. All 0: the node's own leaf.
         if (leafLooks_.size() == nSpec * rec::leaf_look::kFloats) {
             namespace ll = rec::leaf_look;
             const float* L = &leafLooks_[k * ll::kFloats];
-            d[28] = L[ll::kWidth]; d[29] = L[ll::kTip]; d[30] = L[ll::kTeeth]; d[31] = L[ll::kToothDepth];
-            d[23] = L[ll::kGloss];
+            d[FOREST_SP_LEAF] = L[ll::kWidth]; d[FOREST_SP_LEAF + 1] = L[ll::kTip];
+            d[FOREST_SP_LEAF + 2] = L[ll::kTeeth]; d[FOREST_SP_LEAF + 3] = L[ll::kToothDepth];
+            d[FOREST_SP_GLOSS] = L[ll::kGloss];
             // Record 8: its sprays' brush (Species::sprayBrush), its broad
             // leaf's petiole (of the blade's length) and phyllotaxis
             // (Species::petiole, Species::phyllotaxis: 0 alternate, 1
             // opposite, 2 spiral; scene_forest_shoot.glsl), 0.
-            d[32] = L[ll::kSprayBrush];
-            d[33] = L[ll::kPetiole];
-            d[34] = L[ll::kPhyllotaxis];
+            d[FOREST_SP_BRUSH] = L[ll::kSprayBrush];
+            d[FOREST_SP_PETIOLE] = L[ll::kPetiole];
+            d[FOREST_SP_PHYLLOTAXIS] = L[ll::kPhyllotaxis];
         }
         for (int part = 0; part < 2; ++part) {
-            float* t = d + 16 + part * 4;
+            float* t = d + (part ? FOREST_SP_BARK_TINT : FOREST_SP_LEAF_TINT);
             t[0] = t[1] = t[2] = 1.0f;
             if (looks_.size() != nSpec * rec::look::kFloats) continue;
             const float* look = &looks_[k * rec::look::kFloats + (part ? rec::look::kBarkColor : rec::look::kLeafColor)];
@@ -727,12 +756,15 @@ const std::vector<float>& ForestNode::gpuData() const {
         }
     }
     for (size_t g = 0; g < nSeg; ++g) {
-        float* d = r + (segBase + g * 7) * 4;
-        std::memcpy(d, &a.segments[g * 8], 8 * sizeof(float));
-        const float* t = &a.tangents[g * 6];
-        octEncode(t[0], t[1], t[2], d[8], d[9]);
-        octEncode(t[3], t[4], t[5], d[10], d[11]);
-        std::memcpy(d + 12, &a.segmentVegetation[g * 16], 16 * sizeof(float));
+        float* d = r + (segBase + g * FOREST_SEGMENT_RECORDS) * 4;
+        std::memcpy(d + FOREST_SEG_FROM, &a.segments[g * rec::segment::kFloats], rec::segment::kFloats * sizeof(float));
+        const float* t = &a.tangents[g * rec::tangent::kFloats];
+        const float* t0 = t + rec::tangent::kFrom;
+        const float* t1 = t + rec::tangent::kTo;
+        octEncode(t0[0], t0[1], t0[2], d[FOREST_SEG_TANGENTS], d[FOREST_SEG_TANGENTS + 1]);
+        octEncode(t1[0], t1[1], t1[2], d[FOREST_SEG_TANGENTS + 2], d[FOREST_SEG_TANGENTS + 3]);
+        std::memcpy(d + FOREST_SEG_VEGETATION, &a.segmentVegetation[g * rec::vegetation::kFloats],
+                    rec::vegetation::kFloats * sizeof(float));
     }
     // The bark's end where a branch stops or forks into thinner ones: the
     // drawn wood narrows over its last segment to the thickest that goes
@@ -760,7 +792,7 @@ const std::vector<float>& ForestNode::gpuData() const {
             float on = -1.0f;   // the thickest going on from its end
             for (; it != starts.end() && (*it)[0] <= e[0] + kTol; ++it)
                 if (std::fabs((*it)[1] - e[1]) <= kTol && std::fabs((*it)[2] - e[2]) <= kTol) on = std::max(on, (*it)[3]);
-            float* d = r + (segBase + g * 7) * 4;
+            float* d = r + (segBase + g * FOREST_SEGMENT_RECORDS) * 4;
             // A tip's end radius goes in negative: the bark closes over its
             // last stretch to a rounded point (scene_forest_tube.glsl). Ribbed
             // bark (a cactus's: the bark word's top bit, broflora's
@@ -769,7 +801,7 @@ const std::vector<float>& ForestNode::gpuData() const {
             const float bark = a.segmentVegetation[g * rec::vegetation::kFloats + rec::vegetation::kBark];
             const uint32_t word = static_cast<uint32_t>(std::max(bark, 0.0f) + 0.5f);
             const float taper = (word >> 23) & 1u ? 1.0f : kTipTaper;
-            d[7] = on < 0.0f ? -d[7] * taper : std::min(d[7], on);
+            d[FOREST_SEG_R_TO] = on < 0.0f ? -d[FOREST_SEG_R_TO] * taper : std::min(d[FOREST_SEG_R_TO], on);
         }
     }
     // Each clump's leaves are keyed from its first (emitForest keys a
@@ -781,12 +813,13 @@ const std::vector<float>& ForestNode::gpuData() const {
         if (c < nClump) keyBase[c] = std::min(keyBase[c], l[rec::leaf::kKey]);
     }
     for (size_t c = 0; c < nClump; ++c) {
-        float* d = r + (clumpBase + c * 6) * 4;
-        std::memcpy(d, &a.clumps[c * 8], 8 * sizeof(float));
-        std::memcpy(d + 8, &a.clumpVegetation[c * 16], 16 * sizeof(float));
+        float* d = r + (clumpBase + c * FOREST_CLUMP_RECORDS) * 4;
+        std::memcpy(d + FOREST_CLUMP_CENTRE, &a.clumps[c * rec::clump::kFloats], rec::clump::kFloats * sizeof(float));
+        std::memcpy(d + FOREST_CLUMP_VEGETATION, &a.clumpVegetation[c * rec::vegetation::kFloats],
+                    rec::vegetation::kFloats * sizeof(float));
         // Its vegetation record's r2.z (the path, which no clump stage
         // reads): its placement-key base (scene_forest_shoot.glsl).
-        d[18] = bitsOf(keyBase[c] == ~0u ? 0u : keyBase[c]);
+        d[FOREST_CLUMP_KEY_BASE] = bitsOf(keyBase[c] == ~0u ? 0u : keyBase[c]);
     }
     for (size_t k = 0; k < nSpec; ++k) {
         const Specimen& s = specimens_[k];
@@ -821,35 +854,39 @@ const std::vector<float>& ForestNode::gpuData() const {
                 rad = std::max(rad, bromath::vdist(centre(order[i]), m) +
                                         a.clumps[(s.clumpStart + order[i]) * rec::clump::kFloats + rec::clump::kRadius]);
             float* d = r + (specBlock[k] + b * kBlockRecords) * 4;
-            d[0] = m.x; d[1] = m.y; d[2] = m.z; d[3] = rad;
+            d[FOREST_BLOCK_SPHERE] = m.x; d[FOREST_BLOCK_SPHERE + 1] = m.y; d[FOREST_BLOCK_SPHERE + 2] = m.z;
+            d[FOREST_BLOCK_SPHERE + 3] = rad;
             // Its clumps (the specimen's own indices), two to a float, 0xffff
             // past the last.
             for (uint32_t j = 0; j < kClumpBlock; j += 2) {
                 const uint32_t lo = i0 + j < i1 ? order[i0 + j] : 0xffffu;
                 const uint32_t hi = i0 + j + 1 < i1 ? order[i0 + j + 1] : 0xffffu;
-                d[4 + j / 2] = bitsOf(lo | (hi << 16));
+                d[FOREST_BLOCK_CLUMPS + j / 2] = bitsOf(lo | (hi << 16));
             }
         }
     }
     for (size_t i = 0; i < nLeaf; ++i) {
-        float* d = r + leafBase * 4 + i * 2;
-        d[0] = bitsOf(a.leaves[2 * i]);
-        d[1] = bitsOf(a.leaves[2 * i + 1]);
+        const uint32_t* l = &a.leaves[i * rec::leaf::kValues];
+        float* d = r + leafBase * 4 + i * rec::leaf::kValues;
+        d[0] = bitsOf(l[rec::leaf::kClump]);
+        d[1] = bitsOf(l[rec::leaf::kKey]);
     }
     for (size_t i = 0; i < instances_.size(); ++i) {
         const Instance& in = instances_[i];
-        float* d = r + (instBase + i * 2) * 4;
-        d[0] = in.position.x; d[1] = in.position.y; d[2] = in.position.z; d[3] = in.scale;
-        d[4] = in.cosYaw; d[5] = in.sinYaw; d[6] = bitsOf(in.specimen); d[7] = in.seed;
+        float* d = r + (instBase + i * FOREST_INSTANCE_RECORDS) * 4;
+        d[FOREST_INST_POSITION] = in.position.x; d[FOREST_INST_POSITION + 1] = in.position.y;
+        d[FOREST_INST_POSITION + 2] = in.position.z; d[FOREST_INST_SCALE] = in.scale;
+        d[FOREST_INST_COS_YAW] = in.cosYaw; d[FOREST_INST_SIN_YAW] = in.sinYaw;
+        d[FOREST_INST_SPECIMEN] = bitsOf(in.specimen); d[FOREST_INST_SEED] = in.seed;
     }
     // Each bloom's segment made global (its specimen's run of segments).
     for (size_t k = 0; k < nSpec; ++k) {
         const Specimen& s = specimens_[k];
         for (uint32_t b = s.bloomStart; b < s.bloomStart + s.bloomCount; ++b) {
             const float* src = &a.blooms[b * rec::bloom::kFloats];
-            float* d = r + (bloomBase + b * 2) * 4;
-            std::memcpy(d, src, rec::bloom::kSegment * sizeof(float));
-            d[rec::bloom::kSegment] = bitsOf(s.segStart + static_cast<uint32_t>(src[rec::bloom::kSegment]));
+            float* d = r + (bloomBase + b * FOREST_BLOOM_RECORDS) * 4;
+            std::memcpy(d + FOREST_BLOOM_POSITION, src, rec::bloom::kSegment * sizeof(float));
+            d[FOREST_BLOOM_SEGMENT] = bitsOf(s.segStart + static_cast<uint32_t>(src[rec::bloom::kSegment]));
         }
     }
     return gpu_;

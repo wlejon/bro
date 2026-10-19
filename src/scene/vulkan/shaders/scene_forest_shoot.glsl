@@ -131,8 +131,8 @@ struct ForestClumpShoots {
 
 ForestClumpShoots forestClumpShoots(int clump, int phyllotaxis) {
     ForestClumpShoots c;
-    vec4 r0 = procedural.records[forestClumpRecord(clump)];
-    vec4 r1 = procedural.records[forestClumpRecord(clump) + 1];
+    vec4 r0 = FOREST_RECORD(forestClumpRecord(clump), FOREST_CLUMP_CENTRE);
+    vec4 r1 = FOREST_RECORD(forestClumpRecord(clump), FOREST_CLUMP_TWIG);
     c.C = r0.xyz;
     c.r = r0.w;
     c.D = dot(r1.xyz, r1.xyz) > 1e-12 ? normalize(r1.xyz) : vec3(0.0, 1.0, 0.0);
@@ -140,16 +140,16 @@ ForestClumpShoots forestClumpShoots(int clump, int phyllotaxis) {
     c.n = int(r1.w + 0.5);
     forestShootCounts(c.n, c.S, c.NB);
     c.clump = clump;
-    c.seed = floatBitsToUint(procedural.header[0].x);
+    c.seed = floatBitsToUint(FOREST_HEADER(FOREST_H_SEED));
     c.sb = procHash(c.seed ^ procHash(uint(clump) * 0x632be5abu + 0x51ed27u) ^ 0x5eed1234u);
-    c.Lf = max(procedural.header[1].z, 1e-4);
+    c.Lf = max(FOREST_HEADER(FOREST_H_LEAF_LENGTH), 1e-4);
     c.phyllotaxis = phyllotaxis;
     return c;
 }
 
-// The clump's leaves are keyed from this (ForestNode::gpuData's r2.z).
+// The clump's leaves are keyed from this (FOREST_CLUMP_KEY_BASE).
 int forestClumpKeyBase(int clump) {
-    return int(floatBitsToUint(procedural.records[forestClumpRecord(clump) + 4].z));
+    return int(floatBitsToUint(FOREST_FLOAT(forestClumpRecord(clump), FOREST_CLUMP_KEY_BASE)));
 }
 
 // A point relative to its lobe, flattened as the clump is (clumpLeafFrame's).
@@ -275,7 +275,7 @@ ForestSpray forestSpray(ForestClumpShoots c, int b) {
     s.z = z;
     s.hub = vec3(0.0);
     s.hubWay = o;
-    float shell = procedural.header[0].w;
+    float shell = FOREST_HEADER(FOREST_H_SHELL);
     s.rho = s.lr * (1.0 - shell * (0.2 + 0.6 * procDraw(s.hb, 2u)));
 
     // Heading away from the clump's base across the sphere, turned a little.
@@ -322,7 +322,7 @@ vec3 forestLimbJoint(ForestClumpShoots c, int lobe, int g, int G, int k, out vec
     // way there and its own) and bends out to its end.
     vec3 st;
     vec3 a = forestLobeStemAtT(c, lc, lr, lk, t0, st);
-    vec3 b = lc + forestShootFlat(d * (lr * 0.95 * (1.0 - 0.8 * procedural.header[0].w)));
+    vec3 b = lc + forestShootFlat(d * (lr * 0.95 * (1.0 - 0.8 * FOREST_HEADER(FOREST_H_SHELL))));
     float L = length(b - a);
     vec3 w = normalize(st + normalize(b - a + d * 1e-4));
     vec3 p = forestQuadBezier(a, a + w * (0.5 * L), b, float(k) / float(FOREST_LIMB_PIECES), tangent);
@@ -569,8 +569,8 @@ bool forestShootLeaf(ForestClumpShoots c, int j, out vec3 P, out mat3 R, out vec
 
     // Turned toward the light: into the spray's plane, facing out of the
     // crown and up; drooping.
-    float upBias = procedural.header[0].y;
-    float tiltJitter = procedural.header[0].z;
+    float upBias = FOREST_HEADER(FOREST_H_UP_BIAS);
+    float tiltJitter = FOREST_HEADER(FOREST_H_TILT_JITTER);
     vec3 Nt = normalize(Nn * (1.0 - upBias) + vec3(0.0, upBias, 0.0));
     F = F0 - Nt * (FOREST_LEAF_FLATTEN * dot(F0, Nt)) - vec3(0.0, FOREST_LEAF_DROOP, 0.0);
     F = dot(F, F) > 1e-10 ? normalize(F) : T;
@@ -580,9 +580,9 @@ bool forestShootLeaf(ForestClumpShoots c, int j, out vec3 P, out mat3 R, out vec
     N = dot(N, N) > 1e-10 ? normalize(N) : perpendicularUnit(F);
     vec3 X = cross(F, N);
 
-    vec4 h1 = procedural.header[1];
+    vec4 h1 = procedural.header[FOREST_H_BASE_SCALE / 4];
     float grade = 0.8 + 0.35 * smoothstep(0.0, 0.5, tn) - 0.12 * smoothstep(0.8, 1.0, tn);
-    float scale = h1.x * (1.0 + (procDraw(hl, 5u) * 2.0 - 1.0) * h1.y) * grade;
+    float scale = h1[FOREST_H_BASE_SCALE % 4] * (1.0 + (procDraw(hl, 5u) * 2.0 - 1.0) * h1[FOREST_H_SCALE_JITTER % 4]) * grade;
     R = mat3(1.0);
     if (scale < 1e-6) return false;
     R = mat3(X * scale, N * scale, F * scale);
@@ -742,8 +742,8 @@ bool forestPinnateLeaf(ForestClumpShoots c, int j, out vec3 P, out mat3 R, out v
     vec3 N = U - F * dot(U, F);
     N = dot(N, N) > 1e-10 ? normalize(N) : perpendicularUnit(F);
     vec3 X = cross(F, N);
-    vec4 h1 = procedural.header[1];
-    float scale = h1.x * (1.0 + (procDraw(hl, 5u) * 2.0 - 1.0) * h1.y);
+    vec4 h1 = procedural.header[FOREST_H_BASE_SCALE / 4];
+    float scale = h1[FOREST_H_BASE_SCALE % 4] * (1.0 + (procDraw(hl, 5u) * 2.0 - 1.0) * h1[FOREST_H_SCALE_JITTER % 4]);
     R = mat3(1.0);
     if (scale < 1e-6) return false;
     R = mat3(X * scale, N * scale, F * scale);
@@ -756,7 +756,7 @@ bool forestPinnateLeaf(ForestClumpShoots c, int j, out vec3 P, out mat3 R, out v
 bool forestLeafFrame(int i, ivec2 lf, out vec3 P, out mat3 R, out vec3 F, out vec3 lc, out float lr, out bool onShoot,
                      out ForestLeafAt at) {
     onShoot = forestLeafForm() == 0;
-    if (!onShoot) return clumpLeafFrame(procedural.records[forestClumpRecord(lf.x)], lf.y, lf.x, P, R, F, lc, lr);
+    if (!onShoot) return clumpLeafFrame(FOREST_RECORD(forestClumpRecord(lf.x), FOREST_CLUMP_CENTRE), lf.y, lf.x, P, R, F, lc, lr);
     int phyllotaxis = int(forestSpecimenShoot(forestInstanceSpecimen(i)).y + 0.5);
     ForestClumpShoots c = forestClumpShoots(lf.x, phyllotaxis);
     int j = lf.y - forestClumpKeyBase(lf.x);

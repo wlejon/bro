@@ -25,7 +25,7 @@ void main() {
     mat4 model = casterModel() * forestInstance(e.instance, specimen, treeSeed);
     vec4 world = model * vec4(pos, 1.0);
     vec4 v0, v1, v2, v3;
-    forestVegetation(forestSegmentRecord(seg) + 3, pos, endT, v0, v1, v2, v3);
+    forestVegetation(forestSegmentRecord(seg) + FOREST_SEG_VEGETATION / 4, pos, endT, v0, v1, v2, v3);
     mat3 rot;
     vec3 p = world.xyz;
     vegetationSwayAxis(model, v0, v1, v2, v3, vec3(0.0), vec3(0.0, 1.0, 0.0), p, rot);

@@ -530,7 +530,7 @@ void main() {
     // (A spray node's: its sprays turn every way. A broad node's lobe keeps
     // its leaves' own facing: spread, its far crowns were 7 levels darker
     // than its leaves against a low sun.)
-    s.leafThroughSpread = (floatBitsToUint(procedural.header[3].w) & 15u) != 0u ? FOREST_THROUGH_SPREAD : 0.0;
+    s.leafThroughSpread = (floatBitsToUint(FOREST_HEADER(FOREST_H_LOOK)) & 15u) != 0u ? FOREST_THROUGH_SPREAD : 0.0;
     s.leafPath = mass.path;
     s.leafSun = mass.sun;
     s.leafSunN = mass.sunN;

@@ -64,16 +64,16 @@ void main() {
     vec4 look = forestSpecimenBloom(specimen);
     int form = int(look.w + 0.5);
     if (form < 1 || form > 3) { cull(); return; }
-    int r = e.param + bloom * 2;
-    vec4 b0 = procedural.records[r];
-    vec4 b1 = procedural.records[r + 1];
-    int seg = int(floatBitsToUint(b1.w));
+    int r = e.param + bloom * FOREST_BLOOM_RECORDS;
+    vec4 b0 = FOREST_RECORD(r, FOREST_BLOOM_POSITION);
+    vec4 b1 = FOREST_RECORD(r, FOREST_BLOOM_DIR);
+    int seg = int(floatBitsToUint(b1[FOREST_BLOOM_SEGMENT % 4]));
     float scale = vegScale(model);
-    float size = b0.w * scale;
+    float size = b0[FOREST_BLOOM_SIZE % 4] * scale;
 
     // Posed as its twig's tip.
     vec4 v0, v1, v2, v3;
-    forestVegetation(forestSegmentRecord(seg) + 3, b0.xyz, 1.0, v0, v1, v2, v3);
+    forestVegetation(forestSegmentRecord(seg) + FOREST_SEG_VEGETATION / 4, b0.xyz, 1.0, v0, v1, v2, v3);
     VegPlant plant = vegPlant(model, v0, v3);
     VegLimb limb = vegLimb(model, v3);
     VegWind w = vegWind(plant);

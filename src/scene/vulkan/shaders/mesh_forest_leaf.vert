@@ -92,8 +92,8 @@ void main() {
     int specimen = cut ? forestInstanceSpecimen(e.instance) : 0;
     vec4 cutLeaf = vec4(0.0);
     float cutWidth = 1.0;
-    float len = procedural.header[1].z / max(procedural.header[1].x, 1e-6);   // the mesh's own
-    float halfCard = 0.5 * procedural.header[3].y * len;                      // its widest, half
+    float len = FOREST_HEADER(FOREST_H_LEAF_LENGTH) / max(FOREST_HEADER(FOREST_H_BASE_SCALE), 1e-6);   // the mesh's own
+    float halfCard = 0.5 * FOREST_HEADER(FOREST_H_LEAF_ASPECT) * len;                      // its widest, half
     // Its petiole (forestSpecimenShoot: of the blade's length): the card's
     // stalk row stays at the node and the blade's rows move out by it, the
     // stalk cut per pixel along the first pf / (1 + pf) of the card.
@@ -101,7 +101,7 @@ void main() {
     float cardT = 1.0 - inUV.y;
     if (cut) {
         cutLeaf = forestSpecimenLeaf(specimen);
-        cutWidth = cutLeaf.x > 0.0 ? clamp(cutLeaf.x / max(procedural.header[3].y, 1e-3), 0.4, 1.6) : 1.0;
+        cutWidth = cutLeaf.x > 0.0 ? clamp(cutLeaf.x / max(FOREST_HEADER(FOREST_H_LEAF_ASPECT), 1e-3), 0.4, 1.6) : 1.0;
         float t = 1.0 - inUV.y;   // 0 the stalk's row, 0.5 the middle's, 1 the tip's
         petiole = forestLeafForm() == 0 ? clamp(forestSpecimenShoot(specimen).x, 0.0, 0.6) : 0.0;
         // A stalk under a pixel or so is not seen, and its card would only
@@ -126,7 +126,7 @@ void main() {
     float k = 1.0;
     if (cluster) {
         k = e.widening * clamp((e.keepEnd - float(leaf)) / max(e.tail, 1.0), 0.0, 1.0);
-        float aspect = procedural.header[3].y;
+        float aspect = FOREST_HEADER(FOREST_H_LEAF_ASPECT);
         // (Its leaves join out to 0.95 of 1.27 times the outline:
         // scene_forest_mass.glsl's forestClusterLayer.)
         span = 1.1547 * vec2(0.6 * k * aspect + 0.55, 0.6 * k + 0.55);
@@ -161,13 +161,13 @@ void main() {
 #ifndef FOREST_LEAF_INLINE
         forestPoseLobe(slot, p);
 #endif
-        outLobeOut = vec4(p.lobeOut, procedural.header[0].z);
+        outLobeOut = vec4(p.lobeOut, FOREST_HEADER(FOREST_H_TILT_JITTER));
         outLobeSphere = vec4(p.at + p.lobeSphere.xyz, p.lobeSphere.w);
         outLobeDensity = p.lobeDensity;
         outLobeFlat = p.lobeFlat;
         // Its shoots lie at 1 - shell * (0.2 .. 0.8) of the lobe's radius
         // (scene_forest_shoot.glsl's forestSpray), its leaves out from them.
-        if (forestLeafForm() == 0) outLobeHollow = 1.0 - 0.8 * clamp(procedural.header[0].w, 0.0, 1.0);
+        if (forestLeafForm() == 0) outLobeHollow = 1.0 - 0.8 * clamp(FOREST_HEADER(FOREST_H_SHELL), 0.0, 1.0);
     }
 
     outWorldPos = pos;
@@ -193,6 +193,6 @@ void main() {
     // width over its length.
     if (cluster) {
         outUV = inUV * span;
-        outColor = vec4(k, p.seed, procedural.header[3].y, 1.0);
+        outColor = vec4(k, p.seed, FOREST_HEADER(FOREST_H_LEAF_ASPECT), 1.0);
     }
 }

@@ -40,7 +40,7 @@ ForestPose forestPoseLeaf(ForestEntry e, int leaf) {
     // widening.
     bool cluster = (meshFlags() & MESH_FOREST_CLUSTER) != 0u;
     vec3 rest = P;
-    float grown = (k - 1.0) * procedural.header[1].z;
+    float grown = (k - 1.0) * FOREST_HEADER(FOREST_H_LEAF_LENGTH);
     if (grown > 0.0 && !cluster && !onShoot) P = lc + (P - lc) * clamp(1.0 - 0.5 * grown / max(lr, 1e-3), 0.55, 1.0);
     if (!cluster) R *= k;
     mat3 M3 = mat3(model) * R;
@@ -49,7 +49,7 @@ ForestPose forestPoseLeaf(ForestEntry e, int leaf) {
     // The sway (forestLeafSway's, a leaf at a time): the wood's pose where
     // it hangs, then its own turn.
     vec4 v0, v1, v2, v3;
-    forestVegetation(forestClumpRecord(lf.x) + 2, rest, 1.0, v0, v1, v2, v3);
+    forestVegetation(forestClumpRecord(lf.x) + FOREST_CLUMP_VEGETATION / 4, rest, 1.0, v0, v1, v2, v3);
     VegPlant plant = vegPlant(model, v0, v3);
     VegLimb limb = vegLimb(model, v3);
     VegWind w = vegWind(plant);
@@ -92,7 +92,7 @@ ForestPose forestPoseLeaf(ForestEntry e, int leaf) {
         p.tint *= 0.85 + 0.3 * fract(p.seed * 7.31 + 0.137);
     } else {
         vec3 outward = rest - lc;
-        float upBias = procedural.header[0].y;
+        float upBias = FOREST_HEADER(FOREST_H_UP_BIAS);
         vec3 B = (dot(outward, outward) > 1e-10 ? normalize(outward) : vec3(0.0, 1.0, 0.0)) * (1.0 - upBias) +
                  vec3(0.0, upBias, 0.0);
         B = mat3(model) * B;
@@ -104,9 +104,9 @@ ForestPose forestPoseLeaf(ForestEntry e, int leaf) {
         p.lobeSphere = vec4((model * vec4(lc + vec3(0.0, 0.1 * lr * procClumpFlat, 0.0), 1.0)).xyz - center, r);
         // forestMassDepth's: its leaves (a third of the clump's), each
         // turned every way, over the disc, through the middle, a unit length.
-        float leaves = max(procedural.records[forestClumpRecord(lf.x) + 1].w / 3.0, 1.0);
-        float a = 0.5 * procedural.header[1].z * scale / r;
-        p.lobeDensity = leaves * a * a * procedural.header[3].y * 0.55 * 0.5 / r;
+        float leaves = max(FOREST_FLOAT(forestClumpRecord(lf.x), FOREST_CLUMP_LEAVES) / 3.0, 1.0);
+        float a = 0.5 * FOREST_HEADER(FOREST_H_LEAF_LENGTH) * scale / r;
+        p.lobeDensity = leaves * a * a * FOREST_HEADER(FOREST_H_LEAF_ASPECT) * 0.55 * 0.5 / r;
         p.lobeFlat = 0.8 * procClumpFlat;
     }
     return p;

@@ -58,7 +58,7 @@ bool forestSprite(int mode, int instanceIndex, int vertexIndex, mat4 base, out F
     mat4 model = base * forestInstance(e.instance, specimen, treeSeed);
     float scale = vegScale(model);
     int sr = forestSpecimenRecord(specimen);
-    s.leafLen = procedural.header[1].z * scale;
+    s.leafLen = FOREST_HEADER(FOREST_H_LEAF_LENGTH) * scale;
     s.lightFlat = 0.8 * forestClumpFlat(specimen);
 
     vec3 c;           // specimen space
@@ -67,7 +67,7 @@ bool forestSprite(int mode, int instanceIndex, int vertexIndex, mat4 base, out F
     s.core = vec4(0.0);
     if (mode == 0 || core) {
         int lobe = (vertexIndex / 6) % 3;
-        vec4 rec = procedural.records[forestClumpRecord(clump)];
+        vec4 rec = FOREST_RECORD(forestClumpRecord(clump), FOREST_CLUMP_CENTRE);
         float lr;
         procClumpFlat = forestClumpFlat(specimen);
         // The lobe's height over its width: a clump's leaf shell is 0.9 of
@@ -80,13 +80,13 @@ bool forestSprite(int mode, int instanceIndex, int vertexIndex, mat4 base, out F
             // A pinnate clump's leaves line its wood (forestPinnateLeaf): its
             // lobes a run of three along it, each a third of the run and a
             // leaflet's reach either side.
-            vec3 D = procedural.records[forestClumpRecord(clump) + 1].xyz;
+            vec3 D = FOREST_RECORD(forestClumpRecord(clump), FOREST_CLUMP_TWIG).xyz;
             D = dot(D, D) > 1e-12 ? normalize(D) : vec3(0.0, 1.0, 0.0);
             c = rec.xyz - D * (0.35 * rec.w) + D * (rec.w * (float(lobe) - 1.0) * 0.6667);
-            lr = max(rec.w / 3.0, 0.8 * procedural.header[1].z);
+            lr = max(rec.w / 3.0, 0.8 * FOREST_HEADER(FOREST_H_LEAF_LENGTH));
             procClumpFlat = 1.0;
         } else {
-            procClumpLobe(rec, clump, lobe, floatBitsToUint(procedural.header[0].x), c, lr);
+            procClumpLobe(rec, clump, lobe, floatBitsToUint(FOREST_HEADER(FOREST_H_SEED)), c, lr);
             // The lobe's leaves fill an ellipsoid: flattened underneath, 0.9 of
             // the radius up and 0.7 down (clumpLeafFrame), times the
             // specimen's flatness.
@@ -98,8 +98,8 @@ bool forestSprite(int mode, int instanceIndex, int vertexIndex, mat4 base, out F
         float lobeUp = pinnate ? 1.0 : 0.8 * procClumpFlat;
         s.radiusUp = lobeUp * s.radius;
         // A lobe holds about a third of its clump's leaves (clumpLeafFrame).
-        s.leaves = max(procedural.records[forestClumpRecord(clump) + 1].w / 3.0, 1.0);
-        forestVegetation(forestClumpRecord(clump) + 2, c, 1.0, v0, v1, v2, v3);
+        s.leaves = max(FOREST_FLOAT(forestClumpRecord(clump), FOREST_CLUMP_LEAVES) / 3.0, 1.0);
+        forestVegetation(forestClumpRecord(clump) + FOREST_CLUMP_VEGETATION / 4, c, 1.0, v0, v1, v2, v3);
         weight = v2.w;
         s.seed = fract(float(clump * 3 + lobe) * 0.618034 + treeSeed);
         if (core) {
@@ -114,17 +114,17 @@ bool forestSprite(int mode, int instanceIndex, int vertexIndex, mat4 base, out F
             s.leafLen = 0.0;
         }
     } else {
-        vec4 crown = procedural.records[sr + 2];
-        vec4 more = procedural.records[sr + 3];
-        vec4 counts = procedural.records[sr + 1];
+        vec4 crown = FOREST_RECORD(sr, FOREST_SP_CROWN);
+        vec4 more = FOREST_RECORD(sr, FOREST_SP_CROWN_UP);
+        vec4 counts = FOREST_RECORD(sr, FOREST_SP_LEAF_START);
         c = crown.xyz;
         // The clumps' whole extent (ForestNode keeps 0.92 of it).
-        s.radius = crown.w / 0.92 * scale;
-        s.radiusUp = more.x / 0.92 * scale;
-        s.leaves = max(float(floatBitsToUint(counts.y)), 1.0);
+        s.radius = crown[FOREST_SP_CROWN_RADIUS % 4] / 0.92 * scale;
+        s.radiusUp = more[FOREST_SP_CROWN_UP % 4] / 0.92 * scale;
+        s.leaves = max(float(floatBitsToUint(counts[FOREST_SP_LEAF_COUNT % 4])), 1.0);
         // Posed as the clumps it stands in for: their mean branch weight,
         // on the limb of the clump at the crown's middle.
-        forestVegetation(forestClumpRecord(int(floatBitsToUint(counts.z))) + 2, c, 1.0, v0, v1, v2, v3);
+        forestVegetation(forestClumpRecord(int(floatBitsToUint(counts[FOREST_SP_CROWN_CLUMP % 4]))) + FOREST_CLUMP_VEGETATION / 4, c, 1.0, v0, v1, v2, v3);
         weight = counts.w;
         s.seed = treeSeed;
     }

@@ -40,10 +40,10 @@ float forestSprayReach(float v, float halfWidth) {
 
 // The node's spray: its form and its card's width over its length (the
 // header's aspect is its needles' cover as an ellipse, ForestNode::gpuData).
-int forestSprayForm() { return int(floatBitsToUint(procedural.header[3].w) & 15u); }
+int forestSprayForm() { return int(floatBitsToUint(FOREST_HEADER(FOREST_H_LOOK)) & 15u); }
 float forestSprayCardAspect(int form) {
     float fill = form == 1 ? 0.45 : form == 2 ? 0.47 : 1.0;
-    return procedural.header[3].y / (fill * (4.0 / 3.14159265));
+    return FOREST_HEADER(FOREST_H_LEAF_ASPECT) / (fill * (4.0 / 3.14159265));
 }
 
 // The share of the pixel at `uv` the spray covers.
