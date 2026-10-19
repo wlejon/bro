@@ -87,7 +87,7 @@ const vec2 FOREST_ZIGZAG = vec2(0.1, 0.045);
 // A twig's radius in leaf lengths: a shoot's at its base and tip; wood
 // carrying more shoots is thicker by their square root (the pipe model:
 // its section is the sum of theirs), forestPipe.
-const vec2 FOREST_SHOOT_RADIUS = vec2(0.011, 0.005);
+const vec2 FOREST_SHOOT_RADIUS = vec2(FOREST_SHOOT_RADIUS_BASE, 0.005);
 float forestPipe(float shoots) { return FOREST_SHOOT_RADIUS.x * sqrt(max(shoots, 1.0)); }
 
 // The shoots and sprays a clump of `n` leaves carries.

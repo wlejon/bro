@@ -47,9 +47,9 @@ constexpr uint32_t kTubeCurveSlot = 0x7fc0;
 
 constexpr uint32_t kSegmentsPerEntry = 16;   // bark: segments an instance
 constexpr uint32_t kClumpsPerEntry = 16;     // sprites: clumps an instance
-constexpr uint32_t kVertsPerClump = 18;      // three lobes of two triangles
-constexpr uint32_t kBloomsPerEntry = 16;     // blooms: a card (6 vertices) each
-constexpr uint32_t kVertsPerBloom = 6;
+constexpr uint32_t kVertsPerClump = FOREST_CLUMP_VERTICES;   // three lobes of two triangles
+constexpr uint32_t kBloomsPerEntry = 16;     // blooms: a card each
+constexpr uint32_t kVertsPerBloom = FOREST_CARD_VERTICES;
 // A tree's blooms are drawn while the largest (ForestNode::bloomExtent of
 // it) is at least this wide on screen at the crown's nearest point (px): the
 // vertex stage culls each bloom under a quarter pixel by its own distance
@@ -58,11 +58,11 @@ constexpr uint32_t kVertsPerBloom = 6;
 constexpr float kBloomMinPixels = 0.2f;
 // Bark's sides (ForestNode::TreeLod::barkSides): 20 for a trunk many pixels
 // wide, 10, or 5; each ring morphs between them by its own width.
-constexpr int kNearestSides = 20;
-constexpr int kNearSides = 10;
-constexpr int kFarSides = 5;
+constexpr int kNearestSides = FOREST_BARK_SIDES_NEAREST;
+constexpr int kNearSides = FOREST_BARK_SIDES_NEAR;
+constexpr int kFarSides = FOREST_BARK_SIDES_FAR;
 // The rows of rings a CURVED segment of bark is drawn in, along the curve
-// through its ends (scene_forest_tube.glsl, the entry's param / 256): a
+// through its ends (scene_forest_tube.glsl, the entry's param >> FOREST_BARK_ROWS_SHIFT): a
 // segment at least kBarkCurvePixels in radius on screen at its tree's
 // nearest point, of a tree drawing 20 or 10 sides. Thinner wood (most of a
 // near conifer's whorls), and every far tree's, is the one straight row
@@ -70,6 +70,10 @@ constexpr int kFarSides = 5;
 // on all of it more than doubled the trunks' view's vertices.
 constexpr uint32_t barkRows(int sides) { return sides >= 20 ? 3u : sides >= 10 ? 2u : 1u; }
 constexpr float kBarkCurvePixels = 6.0f;
+// A bark entry's param (scene_forest_tube.glsl's forestTubeVertexMorph).
+constexpr uint32_t barkParam(int sides, uint32_t rows) {
+    return static_cast<uint32_t>(sides) | rows << FOREST_BARK_ROWS_SHIFT;
+}
 // Twigs (a broad node's, scene_forest_shoot.glsl): pieces an instance, each
 // a ribbon of 6 indices (4 corners, woodIndices; the budget counts the 6);
 // a clump's pieces take as many entries as they
@@ -110,7 +114,7 @@ constexpr float kTwigFinePixels = 120.0f;
 constexpr float kTwigFineClumpLeaves = 40.0f;
 constexpr float kTwigPixels = 0.15f;
 constexpr float kTwigStemRadius = 0.04f;    // leaf lengths (forestPipe: a lobe stem's start)
-constexpr float kTwigShootRadius = 0.011f;  // a shoot's at its base
+constexpr float kTwigShootRadius = float(FOREST_SHOOT_RADIUS_BASE);  // a shoot's at its base
 constexpr float kTwigWidening[2] = {0.95f, 1.3f};
 
 // The wood draws indexed, so the vertex stage runs once a corner, not once a
@@ -123,7 +127,7 @@ constexpr float kTwigWidening[2] = {0.95f, 1.3f};
 const bromesh::MeshData& woodIndices(int sides, uint32_t rows = 1) {
     static bromesh::MeshData twigs, fineTwigs, bark[3], curved[3];
     bromesh::MeshData& m = sides == 0 ? (rows > 1 ? fineTwigs : twigs)
-                                      : (rows > 1 ? curved : bark)[sides == 5 ? 0 : sides == 10 ? 1 : 2];
+                                      : (rows > 1 ? curved : bark)[sides == kFarSides ? 0 : sides == kNearSides ? 1 : 2];
     if (!m.indices.empty()) return m;
     if (sides == 0) {
         const uint32_t per = 2 * (rows + 1);
@@ -432,13 +436,13 @@ struct SceneMeshDrawer::ForestPlan {
                 auto& g = G->g[sides == kNearestSides ? Bark20 : sides == kNearSides ? Bark10 : Bark5];
                 // (Its `widening` slot the radius it is cut at: scene_forest_tube.glsl
                 // thins the bark just over it to nothing; its param its sides
-                // and rows, sides + 256 rows.)
+                // and rows, sides | rows << FOREST_BARK_ROWS_SHIFT.)
                 for (uint32_t c = 0; c < nc; c += kSegmentsPerEntry)
                     gc.push_back({inst, sp.segStart + c, sp.segStart + std::min(c + kSegmentsPerEntry, nc),
-                                  static_cast<uint32_t>(sides) + 256u * rows, t.barkRadius, 0.0f, 1.0f, 1.0f});
+                                  barkParam(sides, rows), t.barkRadius, 0.0f, 1.0f, 1.0f});
                 for (uint32_t c = nc; c < n; c += kSegmentsPerEntry)
                     g.push_back({inst, sp.segStart + c, sp.segStart + std::min(c + kSegmentsPerEntry, n),
-                                 static_cast<uint32_t>(sides) + 256u, t.barkRadius, 0.0f, 1.0f, 1.0f});
+                                 barkParam(sides, 1), t.barkRadius, 0.0f, 1.0f, 1.0f});
             }
             // What the round bark leaves out or thins (keep radius under
             // twice the cut) down to kBarkRibbonCut of the cut, as ribbons
@@ -630,7 +634,7 @@ std::unique_ptr<SceneMeshDrawer::ForestPlan> SceneMeshDrawer::planForest(SceneFr
 }
 
 const SceneVkBuffer* SceneMeshDrawer::ensurePoses(SceneFrame& frame, uint32_t slots) {
-    constexpr VkDeviceSize kPoseBytes = 64;   // scene_forest.glsl's FOREST_POSE_RECORDS uvec4s
+    constexpr VkDeviceSize kPoseBytes = FOREST_POSE_RECORDS * 16;   // uvec4s
     const VkDeviceSize need = std::max<VkDeviceSize>(slots, 1) * kPoseBytes;
     if (poses_.isValid() && poses_.size >= need) return &poses_;
     // Grown with room to spare; the old buffer stays until the frames that
@@ -1082,14 +1086,14 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
                 d.push.baseColor[3] = 1.0f;
                 d.push.pbrParams[1] = node.barkRoughness();
                 d.push.extra[1] = 0.0f;
-                d.push.extra[2] = 2.0f + static_cast<float>(rows);
+                d.push.extra[2] = static_cast<float>(FOREST_TWIG_ROWS_BIAS + rows);
                 d.push.pbrParams[3] = static_cast<float>(barkFlags);
                 break;
             }
             case Cores:
             case Clumps:
                 d.kind = MeshKind::ForestSprite;
-                d.push.extra[2] = k == Cores ? 2.0f : 0.0f;
+                d.push.extra[2] = k == Cores ? FOREST_SPRITE_CORES : FOREST_SPRITE_CLUMPS;
                 d.indexCount = kClumpsPerEntry * kVertsPerClump;
                 d.instanceCount = static_cast<uint32_t>(g.size());
                 d.firstInstance = first;
@@ -1115,10 +1119,10 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
                 break;
             case Crowns:
                 d.kind = MeshKind::ForestSprite;
-                d.push.extra[2] = 1.0f;
-                d.indexCount = static_cast<uint32_t>(g.size()) * 6u;
+                d.push.extra[2] = FOREST_SPRITE_CROWNS;
+                d.indexCount = static_cast<uint32_t>(g.size()) * FOREST_CARD_VERTICES;
                 d.instanceCount = 1;
-                d.firstVertex = first * 6u;
+                d.firstVertex = first * FOREST_CARD_VERTICES;
                 d.twoSided = true;
                 d.push.pbrParams[3] = static_cast<float>(spriteFlags);
                 break;

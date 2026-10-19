@@ -38,20 +38,20 @@ bool forestSprite(int mode, int instanceIndex, int vertexIndex, mat4 base, out F
     s.lightFlat = 1.0;
 
     // corner 0..5: two triangles of the quad.
-    int corner = vertexIndex % 6;
+    int corner = vertexIndex % FOREST_CARD_VERTICES;
     const vec2 kCorners[6] = vec2[6](vec2(-1.0, -1.0), vec2(1.0, -1.0), vec2(1.0, 1.0),
                                      vec2(-1.0, -1.0), vec2(1.0, 1.0), vec2(-1.0, 1.0));
     s.corner = kCorners[corner];
 
     ForestEntry e;
     int clump = -1;
-    bool core = mode == 2;
-    if (mode == 0 || core) {
+    bool core = mode == FOREST_SPRITE_CORES;
+    if (mode == FOREST_SPRITE_CLUMPS || core) {
         e = forestEntry(instanceIndex);
-        clump = e.first + vertexIndex / 18;
+        clump = e.first + vertexIndex / FOREST_CLUMP_VERTICES;
         if (clump >= e.end || procClumpBare(e.instance, clump)) return false;
     } else {
-        e = forestEntry(vertexIndex / 6);
+        e = forestEntry(vertexIndex / FOREST_CARD_VERTICES);
     }
     int specimen;
     float treeSeed;
@@ -65,8 +65,8 @@ bool forestSprite(int mode, int instanceIndex, int vertexIndex, mat4 base, out F
     float weight;
     vec4 v0, v1, v2, v3;
     s.core = vec4(0.0);
-    if (mode == 0 || core) {
-        int lobe = (vertexIndex / 6) % 3;
+    if (mode == FOREST_SPRITE_CLUMPS || core) {
+        int lobe = (vertexIndex / FOREST_CARD_VERTICES) % FOREST_CLUMP_LOBES;
         vec4 rec = FOREST_RECORD(forestClumpRecord(clump), FOREST_CLUMP_CENTRE);
         float lr;
         procClumpFlat = forestClumpFlat(specimen);

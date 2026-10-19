@@ -138,6 +138,31 @@
 #define FOREST_E_SLOT           8    // aligned, bits: its first leaf's pose (-1: none)
 #define FOREST_E_WOOD           9    // the tint toward the bark (rgb)
 
+// --- The draws: what the drawer sizes them by and the vertex stages number by ---
+// A card is two triangles, unindexed (a bloom's, a crown's, each lobe of a
+// clump's sprite: a clump's three lobes, FOREST_CLUMP_VERTICES a clump).
+#define FOREST_CARD_VERTICES    6
+#define FOREST_CLUMP_LOBES      3
+#define FOREST_CLUMP_VERTICES   (FOREST_CLUMP_LOBES * FOREST_CARD_VERTICES)
+// A sprite draw's kind (its push extra.z): a clump's lobes, a crown, a
+// needle or scale lobe's core.
+#define FOREST_SPRITE_CLUMPS    0
+#define FOREST_SPRITE_CROWNS    1
+#define FOREST_SPRITE_CORES     2
+// Bark's sides (forestTubeMorph morphs a ring between them); a bark entry's
+// param is its sides | its rows << FOREST_BARK_ROWS_SHIFT.
+#define FOREST_BARK_SIDES_FAR       5
+#define FOREST_BARK_SIDES_NEAR      10
+#define FOREST_BARK_SIDES_NEAREST   20
+#define FOREST_BARK_ROWS_SHIFT      8
+#define FOREST_BARK_SIDES_MASK      255
+// A twig draw's push extra.z: this plus its rows a piece.
+#define FOREST_TWIG_ROWS_BIAS   2
+// A posed leaf: 4 uvec4s (set 3 binding 3; scene_forest.glsl's ForestPose).
+#define FOREST_POSE_RECORDS     4
+// A shoot's twig radius at its base, in leaf lengths (forestPipe's unit).
+#define FOREST_SHOOT_RADIUS_BASE 0.011
+
 // What the readers take as given: an aligned field starts a record, and a
 // record read whole has its fields in the lanes they are read from (its
 // xyz and w, a header record's lanes).
@@ -178,6 +203,10 @@
 #endif
 #if FOREST_E_INSTANCE % 4 != 0 || FOREST_E_WIDENING % 4 != 0 || FOREST_E_SLOT % 4 != 0
 #error "scene_forest_layout.h: a draw entry's records moved"
+#endif
+#if FOREST_BARK_SIDES_NEAREST > FOREST_BARK_SIDES_MASK || FOREST_BARK_SIDES_MASK + 1 != (1 << FOREST_BARK_ROWS_SHIFT) || \
+    FOREST_BARK_SIDES_NEAR % FOREST_BARK_SIDES_FAR != 0 || FOREST_BARK_SIDES_NEAREST % FOREST_BARK_SIDES_NEAR != 0
+#error "scene_forest_layout.h: a bark entry's sides overflow its param, or a level does not divide the next"
 #endif
 
 #endif

@@ -114,8 +114,7 @@ ForestEntry forestEntry(int i) {
 // its seed. A cluster's lobe: the way its leaves face before their tilt,
 // its sphere (centre less the leaf's, unswayed: the lobe moves with the
 // leaf) and radius, its leaves' optical depth a unit length and its height
-// over its width. 4 uvec4s.
-const int FOREST_POSE_RECORDS = 4;
+// over its width. FOREST_POSE_RECORDS (scene_forest_layout.h) uvec4s.
 struct ForestPose {
     bool alive;
     vec3 at;

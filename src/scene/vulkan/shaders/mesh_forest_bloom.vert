@@ -56,7 +56,7 @@ void main() {
     outBloom1 = vec4(0.0);
     forestApplyLook();
     ForestEntry e = forestEntry(gl_InstanceIndex);
-    int bloom = e.first + gl_VertexIndex / 6;
+    int bloom = e.first + gl_VertexIndex / FOREST_CARD_VERTICES;
     if (bloom >= e.end) { cull(); return; }
     int specimen;
     float treeSeed;
@@ -92,7 +92,7 @@ void main() {
 
     const vec2 kCorners[6] = vec2[6](vec2(-1.0, -1.0), vec2(1.0, -1.0), vec2(1.0, 1.0),
                                      vec2(-1.0, -1.0), vec2(1.0, 1.0), vec2(-1.0, 1.0));
-    vec2 corner = kCorners[gl_VertexIndex % 6];
+    vec2 corner = kCorners[gl_VertexIndex % FOREST_CARD_VERTICES];
     const vec3 up = vec3(0.0, 1.0, 0.0);
     vec3 pos, N, R, U;
     float g = 1.0, stalk = 0.0;

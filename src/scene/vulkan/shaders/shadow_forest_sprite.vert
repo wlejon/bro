@@ -32,7 +32,7 @@ void main() {
     // A broad clump's leaves lie in its lobe's shell (scene_forest_shoot.glsl's
     // shoots at 1 - shell * (0.2 .. 0.8) of its radius), a crown's in its
     // clumps.
-    outHollow = int(push.params.x + 0.5) == 0 && forestLeafForm() == 0
+    outHollow = int(push.params.x + 0.5) == FOREST_SPRITE_CLUMPS && forestLeafForm() == 0
               ? 1.0 - 0.8 * clamp(FOREST_HEADER(FOREST_H_SHELL), 0.0, 1.0) : 0.0;
     // A caster's fade code is [0, share): the light a tree's sprites stop
     // is that share of what they would, the rest its other tier's (the
@@ -65,12 +65,12 @@ void main() {
     // evenly (forestry's clumping index, about half for a crown of clumps).
     // As an even disc, a low sun's long shadows across a far canopy shaded
     // its crowns 7 units under its leaves'.
-    if (int(push.params.x + 0.5) == 1) outDepth *= FOREST_CROWN_CLUMPING;
+    if (int(push.params.x + 0.5) == FOREST_SPRITE_CROWNS) outDepth *= FOREST_CROWN_CLUMPING;
     // A spray node's crown (a needle or scale-leaf form) is its sprays' pads
     // filled to their rims, dense through: its disc stands a quarter radius
     // on, shading more of its near half. (Half a radius on, a cypress's
     // crowns were 8 to 13 units brighter than its leaves at 45 / 75 m.)
-    bool sprayCrown = int(push.params.x + 0.5) == 1 && (floatBitsToUint(FOREST_HEADER(FOREST_H_LOOK)) & 15u) != 0u;
+    bool sprayCrown = int(push.params.x + 0.5) == FOREST_SPRITE_CROWNS && (floatBitsToUint(FOREST_HEADER(FOREST_H_LOOK)) & 15u) != 0u;
     float past = outHollow > 0.0 ? 0.0 : sprayCrown ? 0.25 : 0.5;
     vec4 clip = L * vec4(s.center + away * (past * s.radius), 1.0);
     // How far a world metre moves the tile's x and y: the lengths of its

@@ -28,10 +28,10 @@ vec2 forestTubeLevel(int j, int n, int m) {
 // the tree's switch nor the narrowing toward its twigs shows a step.
 vec2 forestTubeMorph(int j, int n, float widthPx, float sidesPx) {
     vec2 own = vec2(cos(float(j) / float(n) * PROC_TWO_PI), sin(float(j) / float(n) * PROC_TWO_PI));
-    if (n < 10) return own;
-    vec2 p10 = n == 10 ? own : forestTubeLevel(j, n, 10);
-    vec2 r = mix(forestTubeLevel(j, n, 5), p10, smoothstep(sidesPx, 2.0 * sidesPx, widthPx));
-    if (n >= 20) r = mix(r, own, smoothstep(2.5 * sidesPx, 5.0 * sidesPx, widthPx));
+    if (n < FOREST_BARK_SIDES_NEAR) return own;
+    vec2 p10 = n == FOREST_BARK_SIDES_NEAR ? own : forestTubeLevel(j, n, FOREST_BARK_SIDES_NEAR);
+    vec2 r = mix(forestTubeLevel(j, n, FOREST_BARK_SIDES_FAR), p10, smoothstep(sidesPx, 2.0 * sidesPx, widthPx));
+    if (n >= FOREST_BARK_SIDES_NEAREST) r = mix(r, own, smoothstep(2.5 * sidesPx, 5.0 * sidesPx, widthPx));
     return r;
 }
 
@@ -39,13 +39,13 @@ bool forestTubeVertexMorph(ForestEntry e, int vertexIndex, mat4 model, float sid
                            out vec3 axisDir, out vec2 uv, out int seg, out float endT, out float rad) {
     // Drawn indexed (the drawer's woodIndices): a segment is rows + 1 rings
     // of sides + 1 points, from its start ring to its end ring.
-    // The entry's param is its sides + 256 x its rows (the drawer's
+    // The entry's param is its sides | its rows << FOREST_BARK_ROWS_SHIFT (the drawer's
     // barkRows): the rings past the first, its curve (forestHermite through
     // its two ends along the bark's way there) in rows - 1 bends for the
     // near trees' thick wood, one straight row for the rest.
-    int sides = max(e.param & 255, 3);
+    int sides = max(e.param & FOREST_BARK_SIDES_MASK, 3);
     int ring = sides + 1;
-    int rows = max(e.param >> 8, 1);
+    int rows = max(e.param >> FOREST_BARK_ROWS_SHIFT, 1);
     int k = vertexIndex / ((rows + 1) * ring);
     int local = vertexIndex - k * (rows + 1) * ring;
     int row = local / ring;

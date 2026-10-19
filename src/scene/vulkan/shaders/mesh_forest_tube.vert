@@ -73,7 +73,7 @@ void twigMain(ForestEntry e) {
     // twigs, a row at each joint; more for a clump near the eye, whose
     // twigs' curves through their joints show (forestHermite), the first
     // row of a twig's first piece at its collar.
-    int K = max(1, int(push.extra.z - 2.0 + 0.5));
+    int K = max(1, int(push.extra.z - float(FOREST_TWIG_ROWS_BIAS) + 0.5));
     int per = 2 * (K + 1);
     int piece = e.first + gl_VertexIndex / per;
     int local = gl_VertexIndex - (gl_VertexIndex / per) * per;

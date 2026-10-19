@@ -400,9 +400,10 @@ ForestNode::TreeLod ForestNode::treeLod(const Lod& lod, const Specimen& s, float
     barkPx = barkPx > 0.0f ? barkPx : px;
     t.barkRadius = lod.barkPixels / (2.0f * barkPx);
     const float trunkPx = 2.0f * s.trunkRadius * barkPx;
-    t.barkSides = lod.barkFineSides > 0.0f && trunkPx > lod.barkFineSides * lod.barkSidesPixels ? 20
-                  : trunkPx > lod.barkSidesPixels                                                 ? 10
-                                                                                                  : 5;
+    t.barkSides = lod.barkFineSides > 0.0f && trunkPx > lod.barkFineSides * lod.barkSidesPixels
+                      ? FOREST_BARK_SIDES_NEAREST
+                  : trunkPx > lod.barkSidesPixels ? FOREST_BARK_SIDES_NEAR
+                                                  : FOREST_BARK_SIDES_FAR;
     if (forceTier >= 0) {
         t.leaves = forceTier == 0 ? 1.0f : 0.0f;
         t.clumps = forceTier == 1 ? 1.0f : 0.0f;
