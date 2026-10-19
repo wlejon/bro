@@ -42,7 +42,12 @@ ForestPose forestPoseLeaf(ForestEntry e, int leaf) {
     vec3 rest = P;
     float grown = (k - 1.0) * FOREST_HEADER(FOREST_H_LEAF_LENGTH);
     if (grown > 0.0 && !cluster && !onShoot) P = lc + (P - lc) * clamp(1.0 - 0.5 * grown / max(lr, 1e-3), 0.55, 1.0);
-    if (!cluster) R *= k;
+    // A spray's card grows by k^0.8, not k: the k^2 sprays it stands for
+    // overlap where they hang together, so they cover less than k^2 of one.
+    // (Grown by k, a pine's widened sprays covered 12.6% of the pane against
+    // its leaves' 11.2% at 45 m, 0.7 to 0.9 dY darker; at k^0.8, 11.4%, 0.14
+    // to 0.20.)
+    if (!cluster) R *= forestLeafForm() != 0 ? pow(k, 0.8) : k;
     mat3 M3 = mat3(model) * R;
     vec3 center = (model * vec4(P, 1.0)).xyz;
 
