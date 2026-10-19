@@ -296,7 +296,9 @@ void PassShadow::record(SceneFrame& frame) {
                 continue;
             }
             frame.stats.shadowDrawn++;
+            if (frame.timer) frame.timer->statBegin(cmd, draw.shadowTimerLabel ? draw.shadowTimerLabel : "shadow:mesh");
             drawCaster(frame, lightViewProj, draw);
+            if (frame.timer) frame.timer->statEnd(cmd);
             if (frame.timer && draw.shadowTimerLabel) frame.timer->mark(cmd, draw.shadowTimerLabel);
         }
         // Each tile's end, so a pass log splits the shadows by tile (a
