@@ -39,7 +39,8 @@ static_assert(FOREST_BLOOM_POSITION == rec::bloom::kPosition && FOREST_BLOOM_SIZ
 static_assert(FOREST_LEAVES_PER_RECORD * rec::leaf::kValues == 4);
 static_assert(FOREST_SEG_CLUMP_SLOTS == rec::segment_clumps::kMax &&
               rec::segment_clumps::kFloats == rec::segment_clumps::kClumps + rec::segment_clumps::kMax);
-static_assert(ForestNode::kClumpBlock == FOREST_CLUMP_BLOCK && ForestNode::kBlockRecords == FOREST_BLOCK_RECORDS);
+static_assert(ForestNode::kClumpBlock == FOREST_CLUMP_BLOCK && ForestNode::kBlockRecords == FOREST_BLOCK_RECORDS &&
+              ForestNode::kBlockGroup == FOREST_BLOCK_GROUP);
 constexpr size_t kHeaderFloats = FOREST_HEADER_FLOATS;
 constexpr size_t kSpecimenRecords = FOREST_SPECIMEN_RECORDS;
 
@@ -781,15 +782,19 @@ const std::vector<float>& ForestNode::gpuData() const {
     // A crown traces its tree's clumps a block of kClumpBlock at a time
     // (scene_forest_crown.glsl), skipping a block whose bounding sphere its
     // ray misses: each specimen's clumps in runs of kClumpBlock, a record a
-    // run (the sphere round the run's ellipsoids), after the clumps.
+    // run (the sphere round the run's ellipsoids), after the clumps; before
+    // a specimen's runs, the ellipsoid each kBlockGroup of them fills
+    // (FOREST_GROUP_RECORDS a group).
     const uint32_t blockBase = clumpBase + static_cast<uint32_t>(nClump * FOREST_CLUMP_RECORDS);
     std::vector<uint32_t> specBlock(nSpec);
-    uint32_t nBlock = 0;
+    uint32_t nBlockRecords = 0;
     for (size_t k = 0; k < nSpec; ++k) {
-        specBlock[k] = blockBase + nBlock * kBlockRecords;
-        nBlock += (specimens_[k].clumpCount + kClumpBlock - 1) / kClumpBlock;
+        const uint32_t runs = (specimens_[k].clumpCount + kClumpBlock - 1) / kClumpBlock;
+        nBlockRecords += (runs + kBlockGroup - 1) / kBlockGroup * FOREST_GROUP_RECORDS;
+        specBlock[k] = blockBase + nBlockRecords;
+        nBlockRecords += runs * kBlockRecords;
     }
-    const uint32_t leafBase = blockBase + nBlock * kBlockRecords;
+    const uint32_t leafBase = blockBase + nBlockRecords;
     const uint32_t instBase =
         leafBase + static_cast<uint32_t>((nLeaf + FOREST_LEAVES_PER_RECORD - 1) / FOREST_LEAVES_PER_RECORD);
     // The blooms after the instances, 2 records each (the bloom entries
@@ -982,33 +987,16 @@ const std::vector<float>& ForestNode::gpuData() const {
             return bromath::Vec3{p[0], p[1] + 0.1f * cr, p[2]};
         };
         const std::vector<uint32_t> order = groupClumps(s.clumpCount, centre);
-        for (uint32_t b = 0; b * kClumpBlock < s.clumpCount; ++b) {
-            const uint32_t i0 = b * kClumpBlock, i1 = std::min(i0 + kClumpBlock, s.clumpCount);
-            bromath::Vec3 m{0.0f, 0.0f, 0.0f};
-            for (uint32_t i = i0; i < i1; ++i) m = m + centre(order[i]);
-            m = m * (1.0f / static_cast<float>(i1 - i0));
-            float rad = 0.0f;
-            for (uint32_t i = i0; i < i1; ++i)
-                rad = std::max(rad, bromath::vdist(centre(order[i]), m) +
-                                        a.clumps[(s.clumpStart + order[i]) * rec::clump::kFloats + rec::clump::kRadius]);
-            float* d = r + (specBlock[k] + b * kBlockRecords) * 4;
-            d[FOREST_BLOCK_SPHERE] = m.x; d[FOREST_BLOCK_SPHERE + 1] = m.y; d[FOREST_BLOCK_SPHERE + 2] = m.z;
-            d[FOREST_BLOCK_SPHERE + 3] = rad;
-            // Its clumps (the specimen's own indices), two to a float, 0xffff
-            // past the last.
-            for (uint32_t j = 0; j < kClumpBlock; j += 2) {
-                const uint32_t lo = i0 + j < i1 ? order[i0 + j] : 0xffffu;
-                const uint32_t hi = i0 + j + 1 < i1 ? order[i0 + j + 1] : 0xffffu;
-                d[FOREST_BLOCK_CLUMPS + j / 2] = bitsOf(lo | (hi << 16));
-            }
-            // The upright ellipsoid the run's clumps fill: the one with their
-            // union's second moments (a solid ellipsoid's are a fifth of its
-            // radius squared an axis), each clump's ellipsoid weighted by its
-            // volume (its radius across, 0.8 of it times the specimen's
-            // flatness up about a point 0.1 of that above its centre, as
-            // scene_forest_crown.glsl traces it), and their leaves: what a
-            // crown whose clumps are each a few pixels traces in their place.
-            const float flat = s.clumpFlat > 0.0f ? s.clumpFlat : 1.0f;
+        // The upright ellipsoid clumps [i0, i1) of `order` fill: the one with
+        // their union's second moments (a solid ellipsoid's are a fifth of
+        // its radius squared an axis), each clump's ellipsoid weighted by its
+        // volume (its radius across, 0.8 of it times the specimen's flatness
+        // up about a point 0.1 of that above its centre, as
+        // scene_forest_crown.glsl traces it): its centre, radius across and
+        // up, and their leaves. What a crown whose clumps are each a few
+        // pixels traces in their place.
+        const float flat = s.clumpFlat > 0.0f ? s.clumpFlat : 1.0f;
+        const auto fill = [&](uint32_t i0, uint32_t i1, float out[6]) {
             double W = 0.0, sx = 0.0, sy = 0.0, sz = 0.0, leaves = 0.0;
             for (uint32_t i = i0; i < i1; ++i) {
                 const float* q = &a.clumps[(s.clumpStart + order[i]) * rec::clump::kFloats];
@@ -1030,12 +1018,52 @@ const std::vector<float>& ForestNode::gpuData() const {
                 across += w * (0.5 * (dx * dx + dz * dz) + 0.2 * cr * cr);
                 up += w * (dy * dy + 0.2 * ry * ry);
             }
-            d[FOREST_BLOCK_FILL] = static_cast<float>(fx);
-            d[FOREST_BLOCK_FILL + 1] = static_cast<float>(fy);
-            d[FOREST_BLOCK_FILL + 2] = static_cast<float>(fz);
-            d[FOREST_BLOCK_FILL + 3] = static_cast<float>(std::sqrt(5.0 * across / W));
-            d[FOREST_BLOCK_FILL_UP] = static_cast<float>(std::sqrt(5.0 * up / W));
-            d[FOREST_BLOCK_LEAVES] = static_cast<float>(leaves);
+            out[0] = static_cast<float>(fx);
+            out[1] = static_cast<float>(fy);
+            out[2] = static_cast<float>(fz);
+            out[3] = static_cast<float>(std::sqrt(5.0 * across / W));
+            out[4] = static_cast<float>(std::sqrt(5.0 * up / W));
+            out[5] = static_cast<float>(leaves);
+        };
+        const uint32_t runs = (s.clumpCount + kClumpBlock - 1) / kClumpBlock;
+        const uint32_t groups = (runs + kBlockGroup - 1) / kBlockGroup;
+        for (uint32_t g = 0; g < groups; ++g) {
+            const uint32_t i0 = g * kBlockGroup * kClumpBlock;
+            const uint32_t i1 = std::min(i0 + kBlockGroup * kClumpBlock, s.clumpCount);
+            float f[6];
+            fill(i0, i1, f);
+            float* d = r + (specBlock[k] - (groups - g) * FOREST_GROUP_RECORDS) * 4;
+            d[FOREST_GROUP_FILL] = f[0]; d[FOREST_GROUP_FILL + 1] = f[1]; d[FOREST_GROUP_FILL + 2] = f[2];
+            d[FOREST_GROUP_FILL + 3] = f[3];
+            d[FOREST_GROUP_FILL_UP] = f[4];
+            d[FOREST_GROUP_LEAVES] = f[5];
+        }
+        for (uint32_t b = 0; b * kClumpBlock < s.clumpCount; ++b) {
+            const uint32_t i0 = b * kClumpBlock, i1 = std::min(i0 + kClumpBlock, s.clumpCount);
+            bromath::Vec3 m{0.0f, 0.0f, 0.0f};
+            for (uint32_t i = i0; i < i1; ++i) m = m + centre(order[i]);
+            m = m * (1.0f / static_cast<float>(i1 - i0));
+            float rad = 0.0f;
+            for (uint32_t i = i0; i < i1; ++i)
+                rad = std::max(rad, bromath::vdist(centre(order[i]), m) +
+                                        a.clumps[(s.clumpStart + order[i]) * rec::clump::kFloats + rec::clump::kRadius]);
+            float* d = r + (specBlock[k] + b * kBlockRecords) * 4;
+            d[FOREST_BLOCK_SPHERE] = m.x; d[FOREST_BLOCK_SPHERE + 1] = m.y; d[FOREST_BLOCK_SPHERE + 2] = m.z;
+            d[FOREST_BLOCK_SPHERE + 3] = rad;
+            // Its clumps (the specimen's own indices), two to a float, 0xffff
+            // past the last.
+            for (uint32_t j = 0; j < kClumpBlock; j += 2) {
+                const uint32_t lo = i0 + j < i1 ? order[i0 + j] : 0xffffu;
+                const uint32_t hi = i0 + j + 1 < i1 ? order[i0 + j + 1] : 0xffffu;
+                d[FOREST_BLOCK_CLUMPS + j / 2] = bitsOf(lo | (hi << 16));
+            }
+            // The ellipsoid the run's clumps fill.
+            float f[6];
+            fill(i0, i1, f);
+            d[FOREST_BLOCK_FILL] = f[0]; d[FOREST_BLOCK_FILL + 1] = f[1]; d[FOREST_BLOCK_FILL + 2] = f[2];
+            d[FOREST_BLOCK_FILL + 3] = f[3];
+            d[FOREST_BLOCK_FILL_UP] = f[4];
+            d[FOREST_BLOCK_LEAVES] = f[5];
         }
     }
     for (size_t i = 0; i < nLeaf; ++i) {

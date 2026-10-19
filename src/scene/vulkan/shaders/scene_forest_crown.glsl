@@ -69,6 +69,11 @@ const float FOREST_FILL_PIXELS = 3.0;
 // by clump at 300-1150 m, its share of the light 0.7 levels under; at 0.9
 // 1.6-2.1 points and 0.5, a broadleaf's and a scale leaf's within 0.1).
 const float FOREST_FILL_SHRINK = 0.9;
+// A crown traces each group of FOREST_BLOCK_GROUP runs as the one ellipsoid
+// it fills once its mean clump is under this many pixels in radius, at this
+// share of the group's fitted radii.
+const float FOREST_GROUP_PIXELS = 1.0;
+const float FOREST_GROUP_SHRINK = 0.9;
 
 // The crown of instance `instance` along unit `d`, its clumps moved by
 // `offset` (the crown's pose). `len` and `aspect` a leaf's length (world)
@@ -157,6 +162,13 @@ ForestCrownHit forestCrownTrace(vec3 d, int instance, vec3 offset, float len, fl
     // frame from a mountain).
     bool runFill = !pinnate && px < FOREST_FILL_PIXELS;
     if (runFill) stride = FOREST_CLUMP_BLOCK;
+    // Under FOREST_GROUP_PIXELS a group of FOREST_BLOCK_GROUP runs is traced
+    // as the one ellipsoid it fills (FOREST_GROUP_FILL): its runs are then a
+    // pixel or two each, and the chords a run apiece were most of a far
+    // view's crowns.
+    bool groupFill = runFill && px < FOREST_GROUP_PIXELS;
+    int runs = (count + FOREST_CLUMP_BLOCK - 1) / FOREST_CLUMP_BLOCK;
+    int groupRecords = (runs + FOREST_BLOCK_GROUP - 1) / FOREST_BLOCK_GROUP * FOREST_GROUP_RECORDS;
     // (The mean clump's radius, world, as traced.)
     float clumpR = FOREST_FLOAT(sr, FOREST_SP_CLUMP_RADIUS) * scale * fill;
     float grow = stride == 4 ? 1.587 : stride == 2 ? 1.26 : 1.0;
@@ -174,25 +186,34 @@ ForestCrownHit forestCrownTrace(vec3 d, int instance, vec3 offset, float len, fl
     vec3 o = At * (-(model[3].xyz + offset)) * inv2;
     vec3 e = At * d * inv2;
     float ee = dot(e, e);
-    for (int b = 0; b * FOREST_CLUMP_BLOCK < count; ++b) {
-        vec4 bs = FOREST_RECORD(blocks + b * FOREST_BLOCK_RECORDS, FOREST_BLOCK_SPHERE);
-        vec3 v = bs.xyz - o;
-        // The grown balls reach a little past the run's sphere.
-        float br = bs.w * grow, BR = br * scale;
-        float tc = dot(v, e) / ee;
-        if (dot(v, v) - tc * tc * ee >= br * br || tc + BR <= 0.0) continue;
-        // Once the pixel is covered and its two nearest clumps found, a run
-        // wholly behind the second changes neither.
-        if (tauAll > 6.0 && tc - BR > t2) continue;
-        // The run's clumps, two 16-bit specimen indices to a float.
+    for (int b = 0; b < runs; b += groupFill ? FOREST_BLOCK_GROUP : 1) {
         int blk = blocks + b * FOREST_BLOCK_RECORDS;
+        if (!groupFill) {
+            vec4 bs = FOREST_RECORD(blk, FOREST_BLOCK_SPHERE);
+            vec3 v = bs.xyz - o;
+            // The grown balls reach a little past the run's sphere.
+            float br = bs.w * grow, BR = br * scale;
+            float tc = dot(v, e) / ee;
+            if (dot(v, v) - tc * tc * ee >= br * br || tc + BR <= 0.0) continue;
+            // Once the pixel is covered and its two nearest clumps found, a
+            // run wholly behind the second changes neither.
+            if (tauAll > 6.0 && tc - BR > t2) continue;
+        }
+        // The run's clumps, two 16-bit specimen indices to a float.
         uvec4 run = floatBitsToUint(FOREST_RECORD(blk, FOREST_BLOCK_CLUMPS));
         for (int j = 0; j < FOREST_CLUMP_BLOCK; j += stride) {
             int r = 0;
             vec4 c = vec4(0.0);
             float leaves, rr, ry;
             vec3 cs;
-            if (runFill) {
+            if (groupFill) {
+                int g = blocks - groupRecords + (b / FOREST_BLOCK_GROUP) * FOREST_GROUP_RECORDS;
+                vec4 f = FOREST_RECORD(g, FOREST_GROUP_FILL);
+                leaves = FOREST_FLOAT(g, FOREST_GROUP_LEAVES);
+                rr = f.w * fill * FOREST_GROUP_SHRINK;
+                ry = FOREST_FLOAT(g, FOREST_GROUP_FILL_UP) * fill * FOREST_GROUP_SHRINK;
+                cs = f.xyz;
+            } else if (runFill) {
                 vec4 f = FOREST_RECORD(blk, FOREST_BLOCK_FILL);
                 leaves = FOREST_FLOAT(blk, FOREST_BLOCK_LEAVES);
                 rr = f.w * fill * FOREST_FILL_SHRINK;
@@ -252,7 +273,8 @@ ForestCrownHit forestCrownTrace(vec3 d, int instance, vec3 offset, float len, fl
             // density (its share of the run's leaves in the specimen's mean
             // clump), not the run's mean through its gaps.
             float seenSigma = runFill
-                ? leaves / float(min(FOREST_CLUMP_BLOCK, count - b * FOREST_CLUMP_BLOCK)) * leafArea /
+                ? leaves / float(min(groupFill ? FOREST_CLUMP_BLOCK * FOREST_BLOCK_GROUP : FOREST_CLUMP_BLOCK,
+                                     count - b * FOREST_CLUMP_BLOCK)) * leafArea /
                       (4.18879 * clumpR * clumpR * 0.8 * flatness * clumpR)
                 : sigma;
             if (t.x < t1) {

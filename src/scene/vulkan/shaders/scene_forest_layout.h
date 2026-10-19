@@ -114,6 +114,13 @@
 #define FOREST_BLOCK_FILL       8    // aligned: the upright ellipsoid the run fills (centre.xyz, radius across)
 #define FOREST_BLOCK_FILL_UP    12   // its radius up
 #define FOREST_BLOCK_LEAVES     13   // the run's leaves
+// --- A run group: before a specimen's first run (FOREST_SP_BLOCKS), 2 records
+// for each FOREST_BLOCK_GROUP of its runs, in order ---
+#define FOREST_BLOCK_GROUP      8
+#define FOREST_GROUP_RECORDS    2
+#define FOREST_GROUP_FILL       0    // aligned: the upright ellipsoid its runs' clumps fill (centre.xyz, radius across)
+#define FOREST_GROUP_FILL_UP    4    // its radius up
+#define FOREST_GROUP_LEAVES     5    // the group's leaves
 
 // --- Leaves: two a record (clump, placement key), bits ---
 #define FOREST_LEAVES_PER_RECORD 2

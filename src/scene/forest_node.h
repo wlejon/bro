@@ -254,6 +254,7 @@ public:
     /// their place).
     static constexpr uint32_t kClumpBlock = 8;
     static constexpr uint32_t kBlockRecords = 4;
+    static constexpr uint32_t kBlockGroup = 8;   // runs a group (scene_forest_layout.h's FOREST_BLOCK_GROUP)
     /// The share of a spray's card its needles or scales cover (mesh.frag's
     /// forestSprayCover averages to it), by leaf form.
     static float sprayFill(int leafForm) { return leafForm == 1 ? 0.45f : leafForm == 2 ? 0.47f : 1.0f; }
