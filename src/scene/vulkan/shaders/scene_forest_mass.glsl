@@ -202,11 +202,14 @@ ForestLeafLayer forestLobeMean(vec2 q, float side, float cell, float len, float 
     return o;
 }
 
-// A lobe's layer at the cost its pixel needs: leaf by leaf while a leaf
-// spans about a pixel or more, their mean once a pixel spans a cell, and a
-// blend between (forestLobeMeanShare). `g` the pixel's grain.
+// A lobe's layer at the cost its pixel needs: leaf by leaf while a cell
+// spans about three pixels or more, their mean once it is under one and a
+// half, and a blend between (forestLobeMeanShare). `g` the pixel's grain.
+// The leaf-by-leaf loop is most of a clumps tier's cost (14 lobes a pixel
+// over the forest's canopy): handing over at a cell of 1.4 to 0.7 pixels,
+// its clumps took 8.5 ms of a 19 ms frame there, now 6.8.
 float forestLobeMeanShare(float fp, float cell) {
-    return smoothstep(0.7, 1.4, fp / cell);
+    return smoothstep(0.35, 0.7, fp / cell);
 }
 
 ForestLeafLayer forestLobeLayerAt(vec2 q, float fp, float side, float cell, float len, float aspect, float shell,
