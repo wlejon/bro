@@ -67,16 +67,18 @@ ForestMass forestSpriteSurface(uint flags) {
         vec3 e = vec3(d.x, d.y / ky, d.z);
         float a = dot(e, e), b = dot(o, e), k = dot(o, o) - inMass0.w * inMass0.w;
         float disc = b * b - a * k;
-        if (disc <= 0.0) discard;
-        float t = (-b - sqrt(disc)) / a;
-        if (t <= 0.0) discard;
+        // Every pixel of the quad on to the derivative before any leaves (a
+        // miss taken at the ray's nearest approach, not a NaN): a pixel's
+        // neighbours are its derivative's other half.
+        float t = (-b - sqrt(max(disc, 0.0))) / a;
         m.at = d * t;
         vec3 rel = m.at - inMass0.xyz;
-        vec3 n = normalize(vec3(rel.x, rel.y / (ky * ky), rel.z));
         // The leaves there, a leaf's length apart: each its own turn and
         // lightness, their mean once a pixel holds several.
         vec3 p = rel / max(inMass2.w, 1e-4);
         float fp = max(length(dFdx(p)), length(dFdy(p)));
+        if (disc <= 0.0 || t <= 0.0) discard;
+        vec3 n = normalize(vec3(rel.x, rel.y / (ky * ky), rel.z));
         vec4 g = forestMassHash(ivec2(floor(p.xz + vec2(0.37, 0.71) * floor(p.y))), uint(floor(p.y)) + 0x3c6ef372u);
         float keep = 1.0 - smoothstep(0.6, 2.0, fp);
         // Its outline ragged, leaf by leaf: the ray's nearest approach over
@@ -97,6 +99,8 @@ ForestMass forestSpriteSurface(uint flags) {
         vec3 right = normalize(inTangent), up = normalize(inBitangent), view = normalize(inNormal);
         vec2 q = inUV;
         float fp = max(max(length(dFdx(q)), length(dFdy(q))), 1e-5);
+        // A pixel's size (world) on the card (a crown's, at the crown).
+        float pixel = max(length(dFdx(inWorldPos)), length(dFdy(inWorldPos)));
         // Past the leaves' reach (the card's corners).
         float reach = 1.0 + 0.6 * inMass2.y;
         if (dot(q, q) > reach * reach) discard;
@@ -114,8 +118,6 @@ ForestMass forestSpriteSurface(uint flags) {
             // (scene_forest_crown.glsl), each lit as a lobe is: through its
             // own leaves to where the light leaves it.
             vec3 d = normalize(inWorldPos);
-            // A pixel's size (world) on the card, at the crown.
-            float pixel = max(length(dFdx(inWorldPos)), length(dFdy(inWorldPos)));
             ForestCrownHit h = forestCrownTrace(d, int(floatBitsToUint(inMass4.w)), inMass4.xyz, inMass3.w,
                                                 inMass2.z, grain, pixel, draws.x);
             m.cover = h.cover;
