@@ -429,12 +429,29 @@ public:
     };
     void setStats(const Stats& s) { stats_ = s; }
     const Stats& stats() const { return stats_; }
-    /// What the camera drew each tree at in the last frame: the drawer's
+    /// The drawer's measure of each tree the camera saw in its last plan:
+    /// treeLod's pixels per unit at the crown and at the whole tree, the
+    /// crown's nearest and furthest distances, its forced tier. Kept from
+    /// plan to plan (285k trees refilled every frame was its own cost): a
+    /// tree's is current while its stamp is the last plan's (beginSeen).
+    struct SeenTree {
+        uint32_t stamp = 0;
+        float px = 0.0f, barkPx = 0.0f, dist = -1.0f, far = -1.0f;
+        int forceTier = -1;
+    };
+    /// A new plan: its stamp, every tree unseen until the drawer stamps it.
+    uint32_t beginSeen();
+    SeenTree& seenTree(uint32_t i) { return seen_[i]; }
+    /// Tree `i`'s measure if the last plan saw it, else null.
+    const SeenTree* seenNow(uint32_t i) const {
+        return i < seen_.size() && seen_[i].stamp == seenStamp_ ? &seen_[i] : nullptr;
+    }
+    /// The Lod (scaled by the budget's detail) the last plan drew at.
+    void setSeenLod(const Lod& l) { seenLod_ = l; }
+    /// What the camera drew tree `i` at in the last frame: the drawer's
     /// TreeLod, at its own measure of the tree (its leaves to the crown, its
-    /// bark to the whole tree) and the budget's detail. A tree it did not
-    /// draw has widening 0.
-    void setSeenLods(std::vector<TreeLod> lods) { seenLods_ = std::move(lods); }
-    const std::vector<TreeLod>& seenLods() const { return seenLods_; }
+    /// bark to the whole tree) and the budget's detail. False: not drawn.
+    bool seenLod(uint32_t i, TreeLod& out) const;
 
 private:
     void rebuildBounds();
@@ -458,7 +475,9 @@ private:
     float barkColor_[3] = {0.2f, 0.17f, 0.14f};
     float barkRoughness_ = 0.9f;
     Stats stats_;
-    std::vector<TreeLod> seenLods_;
+    std::vector<SeenTree> seen_;
+    uint32_t seenStamp_ = 0;
+    Lod seenLod_;
 
     void refreshGpu() const;
 

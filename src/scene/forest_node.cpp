@@ -465,6 +465,23 @@ ForestNode::TreeLod ForestNode::treeLod(const Lod& lod, const Specimen& s, float
     return t;
 }
 
+uint32_t ForestNode::beginSeen() {
+    if (seen_.size() != instances_.size()) seen_.assign(instances_.size(), SeenTree{});
+    if (++seenStamp_ == 0) {
+        for (SeenTree& s : seen_) s.stamp = 0;
+        seenStamp_ = 1;
+    }
+    return seenStamp_;
+}
+
+bool ForestNode::seenLod(uint32_t i, TreeLod& out) const {
+    const SeenTree* s = seenNow(i);
+    if (!s) return false;
+    out = treeLod(seenLod_, specimens_[instances_[i].specimen], s->px, leafLength(), s->forceTier, s->barkPx, s->dist,
+                  s->far);
+    return true;
+}
+
 float ForestNode::leafLength() const {
     ensureBatches();
     return leafLength_ * data_.leaf.baseScale;
