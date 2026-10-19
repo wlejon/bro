@@ -1121,7 +1121,9 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
                 d.kind = MeshKind::ForestSprite;
                 d.push.extra[2] = FOREST_SPRITE_CROWNS;
                 d.indexCount = static_cast<uint32_t>(g.size()) * FOREST_CARD_VERTICES;
-                d.instanceCount = 1;
+                // A caster is two discs through the crown (the second, a spray
+                // node's, shadow_forest_sprite.vert culls for a broad one's).
+                d.instanceCount = shadow ? 2u : 1u;
                 d.firstVertex = first * FOREST_CARD_VERTICES;
                 d.twoSided = true;
                 d.push.pbrParams[3] = static_cast<float>(spriteFlags);

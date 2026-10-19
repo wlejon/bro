@@ -67,11 +67,24 @@ void main() {
     // its crowns 7 units under its leaves'.
     if (int(push.params.x + 0.5) == FOREST_SPRITE_CROWNS) outDepth *= FOREST_CROWN_CLUMPING;
     // A spray node's crown (a needle or scale-leaf form) is its sprays' pads
-    // filled to their rims, dense through: its disc stands a quarter radius
-    // on, shading more of its near half. (Half a radius on, a cypress's
-    // crowns were 8 to 13 units brighter than its leaves at 45 / 75 m.)
-    bool sprayCrown = int(push.params.x + 0.5) == FOREST_SPRITE_CROWNS && (floatBitsToUint(FOREST_HEADER(FOREST_H_LOOK)) & 15u) != 0u;
-    float past = outHollow > 0.0 ? 0.0 : sprayCrown ? 0.25 : 0.5;
+    // filled to their rims, dense through, so the light falls off through it
+    // rather than past one plane: the drawer draws a crown's caster twice,
+    // and a spray crown's two discs stand at its centre and half a radius
+    // on, each half its depth (a broad crown's second is culled). Its near
+    // half takes half the shade, its far half all of it. (One disc half a
+    // radius on: a cypress's crowns 8 to 13 units brighter than its leaves
+    // at 45 / 75 m; a quarter on, still 8 to 9 at golden.)
+    bool crown = int(push.params.x + 0.5) == FOREST_SPRITE_CROWNS;
+    bool sprayCrown = crown && (floatBitsToUint(FOREST_HEADER(FOREST_H_LOOK)) & 15u) != 0u;
+    if (crown && gl_InstanceIndex > 0 && !sprayCrown) {
+        gl_Position = FOREST_CULLED;
+        return;
+    }
+    float past = outHollow > 0.0 ? 0.0 : 0.5;
+    if (sprayCrown) {
+        past = gl_InstanceIndex > 0 ? 0.5 : 0.0;
+        outDepth *= 0.5;
+    }
     vec4 clip = L * vec4(s.center + away * (past * s.radius), 1.0);
     // How far a world metre moves the tile's x and y: the lengths of its
     // first two rows.
