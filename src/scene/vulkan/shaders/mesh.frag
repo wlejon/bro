@@ -80,6 +80,44 @@ layout(location = 0) out vec4 outColor;
 layout(location = 1) out vec4 outIndirect;
 #endif
 
+#ifdef SCENE_VEGETATION
+// The samples of this pixel a forest tier draws (ForestNode::fadeCode): a
+// pixel dither h, each tier drawing where h is in its [lo, hi), the tiers of
+// a tree splitting [0, 1) between them, so they cover each pixel once. The
+// code is 2 * round(lo * 4096) + hi; 1 is solid. Under 4x MSAA each sample
+// takes its own quarter-step of h, so a pixel is split between the tiers in
+// quarters and resolves to a blend rather than a stipple; `coverage` (the
+// share of the pixel placed leaves cover, scene_forest_mass.glsl) keeps that
+// share of the samples by a second dither, salted by `salt` (the card's), so
+// two cards over one pixel keep different samples and their cover adds up as
+// leaves' would. Without MSAA a pixel is all or nothing (the mask is all
+// bits).
+int forestSampleMask(float code, float coverage, bool msaa, uint salt) {
+    // Two independent white-noise values a pixel (an integer hash): a
+    // gradient noise lines up into visible diagonal hatching at part fades.
+    uvec2 q = uvec2(gl_FragCoord.xy);
+    uint v = q.x * 1973u + q.y * 9277u + 0x9e3779b9u;
+    v = (v ^ (v >> 16u)) * 0x7feb352du;
+    v = (v ^ (v >> 15u)) * 0x846ca68bu;
+    v ^= v >> 16u;
+    float h = float(v & 0xffffu) * (1.0 / 65536.0);
+    uint v2 = v ^ (salt * 0x9e3779b9u);
+    v2 = (v2 ^ (v2 >> 15u)) * 0x2c1b3c6du;
+    v2 ^= v2 >> 12u;
+    float h2 = float(v2 >> 16u) * (1.0 / 65536.0);
+    float k = floor(code * 0.5);
+    float lo = k * (1.0 / 4096.0), hi = code - 2.0 * k;
+    if (!msaa) return h >= lo && h < hi && h2 < coverage ? -1 : 0;
+    int mask = 0;
+    for (int s = 0; s < 4; ++s) {
+        float hs = fract(h + 0.25 * float(s));
+        float cs = fract(h2 + 0.25 * float(s));
+        if (hs >= lo && hs < hi && cs < coverage) mask |= 1 << s;
+    }
+    return mask;
+}
+#endif
+
 #include "scene_camera.glsl"
 #include "scene_lighting.glsl"
 #include "scene_mesh_push.glsl"
@@ -142,43 +180,6 @@ vec2 albedoUV() {
 // gathered and before the lights, so standard lighting applies to its result.
 //__USER_CHUNK__
 
-#ifdef SCENE_VEGETATION
-// The samples of this pixel a forest tier draws (ForestNode::fadeCode): a
-// pixel dither h, each tier drawing where h is in its [lo, hi), the tiers of
-// a tree splitting [0, 1) between them, so they cover each pixel once. The
-// code is 2 * round(lo * 4096) + hi; 1 is solid. Under 4x MSAA each sample
-// takes its own quarter-step of h, so a pixel is split between the tiers in
-// quarters and resolves to a blend rather than a stipple; `coverage` (the
-// share of the pixel placed leaves cover, scene_forest_mass.glsl) keeps that
-// share of the samples by a second dither, salted by `salt` (the card's), so
-// two cards over one pixel keep different samples and their cover adds up as
-// leaves' would. Without MSAA a pixel is all or nothing (the mask is all
-// bits).
-int forestSampleMask(float code, float coverage, bool msaa, uint salt) {
-    // Two independent white-noise values a pixel (an integer hash): a
-    // gradient noise lines up into visible diagonal hatching at part fades.
-    uvec2 q = uvec2(gl_FragCoord.xy);
-    uint v = q.x * 1973u + q.y * 9277u + 0x9e3779b9u;
-    v = (v ^ (v >> 16u)) * 0x7feb352du;
-    v = (v ^ (v >> 15u)) * 0x846ca68bu;
-    v ^= v >> 16u;
-    float h = float(v & 0xffffu) * (1.0 / 65536.0);
-    uint v2 = v ^ (salt * 0x9e3779b9u);
-    v2 = (v2 ^ (v2 >> 15u)) * 0x2c1b3c6du;
-    v2 ^= v2 >> 12u;
-    float h2 = float(v2 >> 16u) * (1.0 / 65536.0);
-    float k = floor(code * 0.5);
-    float lo = k * (1.0 / 4096.0), hi = code - 2.0 * k;
-    if (!msaa) return h >= lo && h < hi && h2 < coverage ? -1 : 0;
-    int mask = 0;
-    for (int s = 0; s < 4; ++s) {
-        float hs = fract(h + 0.25 * float(s));
-        float cs = fract(h2 + 0.25 * float(s));
-        if (hs >= lo && hs < hi && cs < coverage) mask |= 1 << s;
-    }
-    return mask;
-}
-#endif
 
 void main() {
     uint flags = meshFlags();
@@ -289,45 +290,14 @@ void main() {
     baseColor *= inInstColor.rgb;
     if (push.pbrParams.z > 0.0 && alpha < push.pbrParams.z) discard;
 #ifdef SCENE_GRASS
-    // A grass blade (scene_grass.glsl's GrassBlade): inColor what it is (its
-    // kind, under 0.5 a draw of its own; a culm's head, ripeness and stem
-    // share), inUV across it (in its width; a culm's in its head's) and
-    // along it. A culm's card is cut into its stem and its head.
-    float grassKind = floor(inColor.x + 1e-3);
-    bool grassCulm = grassKind > 0.5 && grassKind < 1.5;
-    bool grassDead = grassKind > 1.5 && grassKind < 2.5;
-    float grassTrans = -1.0;
-    if (grassKind > 2.5) {
-        // A far fan of leaves, cut into them.
-        float tone;
-        float cover = grassFanSurface(inUV, inColor, tone);
-        // A far herb's bloom over it (scene_grass_surface.glsl's
-        // grassFanBloom), in place of the blade's colour.
-        float fanBloom = 0.0;
-        vec3 bloomColor = vec3(0.0);
-        if (inColor.z > 0.5) fanBloom = grassFanBloom(inUV, inColor, bloomColor);
-        vec3 plain = baseColor / max(inInstColor.rgb, vec3(1e-4));
-        baseColor = mix(baseColor * mix(0.84, 1.16, tone), plain * bloomColor, fanBloom);
-        cover = max(cover, fanBloom);
-        int mask = forestSampleMask(1.0, cover, (flags & MESH_FOREST_MSAA) != 0u, uint(fract(inColor.x) * 131072.0));
-        if (mask == 0) discard;
-        gl_SampleMask[0] = mask;
-    }
-    if (grassCulm) {
-        vec3 culmColor;
-        float graze = 1.0 - smoothstep(0.05, 0.4, -worldPos.y / max(length(worldPos.xz), 1e-3));
-        float cover = grassCulmSurface(inUV, inColor, baseColor, graze, culmColor, grassTrans);
-        int mask = forestSampleMask(1.0, cover, (flags & MESH_FOREST_MSAA) != 0u, uint(fract(inColor.x) * 131072.0));
-        if (mask == 0) discard;
-        gl_SampleMask[0] = mask;
-        baseColor = culmColor;
-    }
+    // A grass blade (scene_grass_surface.glsl's grassSurface): a far fan cut
+    // into its leaves, a culm into its stem and head.
+    GrassSurface grass = grassSurface(worldPos, baseColor, (flags & MESH_FOREST_MSAA) != 0u);
 #endif
 #ifdef SCENE_HERB
     // A herb's colours are its species' (and the plant's own tone), its
     // veins paler and yellower than the blade between.
-    baseColor = herb.albedo * inInstColor.rgb;
-    baseColor = mix(baseColor, baseColor * vec3(1.35, 1.45, 1.05) + vec3(0.01, 0.015, 0.0), herb.vein);
+    baseColor = herbAlbedo(herb);
     alpha = 1.0;
 #endif
 #ifdef SCENE_VEGETATION
@@ -406,9 +376,6 @@ void main() {
         N = normalize(mat3(normalize(inTangent), normalize(inBitangent), N) * nTS);
     }
     vec3 shadePos = worldPos;
-#ifdef SCENE_GRASS
-    vec3 grassUp = vec3(0.0, 1.0, 0.0);   // the way the sward's blades stand
-#endif
 #ifdef SCENE_VEGETATION
     // Placed leaves are lit through their mean normal, which faces the eye.
     if (mass.leaves) N = mass.normal;
@@ -442,23 +409,7 @@ void main() {
         }
 #endif
 #ifdef SCENE_GRASS
-        // Near, a live leaf is folded along its midrib: a shallow V, each
-        // half turned its own way, so one half takes the light the other
-        // misses. Gone by the distance a blade is a pixel or two.
-        if (!grassCulm && !grassDead) {
-            float near = 1.0 - smoothstep(3.0, 12.0, camDist);
-            if (near > 0.0) N = normalize(N - sign(inUV.x) * 0.55 * near * normalize(inTangent));
-        }
-        // Further off the bulk is the sward's: the vertex sends the way its
-        // blades stand (scene_grass.glsl's grassSwardUp); its faces' mean
-        // facet is the way to the eye bent up toward it (grassCanopyNormal,
-        // GRASS_CANOPY_UP 0.5), what the sky lights and it mirrors. The sun
-        // on it is its blades' mean (sceneSwardLight, below).
-        grassUp = bulkWeight > 1e-4 ? inVegShade.xyz / bulkWeight : vec3(0.0, 1.0, 0.0);
-        if (bulkWeight > 1e-4) {
-            vec3 facet = normalize(normalize(-worldPos) + 0.5 * grassUp);
-            vegShadeN = normalize(mix(grassUp, facet, smoothstep(2.0, 14.0, camDist))) * bulkWeight;
-        }
+        grassLeafNormal(grass, N, vegShadeN, bulkWeight, worldPos, camDist);
 #endif
         if (bulkWeight > 1e-4)
             N = normalize(N * (1.0 - bulkWeight * bulkKeep) + vegShadeN * bulkKeep);
@@ -468,24 +419,10 @@ void main() {
     N = bloom.normal;
 #endif
 #ifdef SCENE_HERB
-    {
-        // The card's face toward the eye, leaned as its surface says (a
-        // leaf's halves, a stem's round, a cup's petals), then partly toward
-        // the ground's normal (the plant lit as one low form).
-        vec3 face = normalize(inNormal);
-        if (dot(face, -inWorldPos) < 0.0) face = -face;
-        vec3 across = normalize(inTangent), along = normalize(inBitangent);
-        N = normalize(across * herb.normal.x + along * herb.normal.y + face * herb.normal.z);
-        float bulkWeight = length(inVegShade.xyz);
-        if (bulkWeight > 1e-4) N = normalize(N * (1.0 - bulkWeight) + inVegShade.xyz);
-        vegAO *= herb.ao;
-    }
-    // The stand shades itself: the leaves above a point take the sun on its
-    // slant path through them (a fern stand is dark within, lit at its top)
-    // and part of the sky.
-    float standLeaves = inHerbStand.x * inHerbStand.y;
-    float standSun = exp(-0.6 * standLeaves / max(-lighting.sunDirection.y, 0.2));
-    vegAO *= exp(-0.35 * standLeaves);
+    // The card's face leaned as its surface says, then toward the ground's
+    // normal; and the stand's shade of itself (scene_herb_surface.glsl).
+    N = herbNormal(herb, vegAO);
+    float standSun = herbStandSun(vegAO);
 #endif
 
     float metallic = push.pbrParams.x;
@@ -504,12 +441,7 @@ void main() {
     roughness = mix(roughness, 0.3, herb.gloss);
 #endif
 #ifdef SCENE_GRASS
-    // A live leaf's cuticle has a sheen (what a gust's wave across a meadow
-    // is lit by); a dead leaf and a head are matt.
-    // Far off a blade is lit through its sward's mean face (turned to the
-    // eye, scene_grass.glsl's grassCanopyNormal), which would mirror a sun
-    // behind the eye back at it: the sward's sheen is broad and faint.
-    roughness = grassDead || grassCulm ? 0.85 : mix(0.42, max(roughness, 0.9), smoothstep(6.0, 40.0, camDist));
+    roughness = grassRoughness(grass, roughness, camDist);
 #endif
 #ifdef SCENE_BARK
     // A plant's wood (scene_bark.glsl): inColor where on the stem, inUV its
@@ -565,33 +497,13 @@ void main() {
     // Thin petals let the light through; a head's florets and a spike less.
     s.translucency = bloom.translucency;
 #endif
-#ifdef SCENE_HERB
-    if (herb.translucency >= 0.0) s.translucency = herb.translucency;
-    else s.translucency *= 1.0 - 0.5 * herb.gloss;
-#endif
     s.thinNormal = vec3(0.0);
     s.sward = vec4(0.0);
 #ifdef SCENE_HERB
-    // A herb's leaves and stems stand among the blades, and further off are
-    // lit as the sward is, their leaves' mean (a stand of fronds seen across
-    // shows their sides and shadows as the grass round it does, not a sheet
-    // of faces to the sun); its blooms sit on top, lit as themselves.
-    if (int(inHerbInfo.x + 0.5) != 2) {
-        float herbBulk = length(inVegShade.xyz);
-        s.sward = vec4(herbBulk > 1e-4 ? inVegShade.xyz / herbBulk : vec3(0.0, 1.0, 0.0),
-                       smoothstep(8.0, 30.0, camDist));
-    }
+    herbSurfaceLight(s, herb, camDist);
 #endif
 #ifdef SCENE_GRASS
-    // A blade is thin: the light comes through it by its own face, not by
-    // the ground's normal it is lit through further off (which faces a high
-    // sun and would never let it glow). A dead leaf lets less through.
-    s.thinNormal = dot(geomN, -worldPos) >= 0.0 ? geomN : -geomN;
-    s.translucency = min(s.translucency * (grassDead ? 0.5 : 1.35), 1.0);
-    if (grassTrans >= 0.0) s.translucency = grassTrans * (1.0 - vegFade / 15.0);
-    // Once a blade is a pixel or so wide (from about 6 m), the sun on the
-    // blades a pixel holds is their mean.
-    s.sward = vec4(grassUp, smoothstep(2.0, 12.0, camDist));
+    grassSurfaceLight(s, grass, geomN, worldPos, vegFade, camDist);
 #endif
 #ifdef SCENE_GROUND
     // Where the turf stands for far blades, it is lit as they are, the

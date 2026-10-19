@@ -731,3 +731,55 @@ HerbSurface herbSurface(vec4 info, vec2 uv, vec4 size, float extra, vec2 down, b
     if (role == 2) return herbBloomSurface(sp, uv, size, info.z, normalize(down + vec2(0.0, -1e-4)), back);
     return herbLeaf(sp, uv, size, extra, info.z);
 }
+
+// ---- The plant as mesh.frag lights it (its SCENE_HERB build) ---------------
+// These read mesh.frag's varyings (inInstColor, inNormal, inTangent,
+// inBitangent, inVegShade, inHerbInfo, inHerbStand).
+
+// Its colours are its species' (and the plant's own tone), its veins paler
+// and yellower than the blade between.
+vec3 herbAlbedo(HerbSurface herb) {
+    vec3 baseColor = herb.albedo * inInstColor.rgb;
+    return mix(baseColor, baseColor * vec3(1.35, 1.45, 1.05) + vec3(0.01, 0.015, 0.0), herb.vein);
+}
+
+// The card's face toward the eye, leaned as its surface says (a leaf's
+// halves, a stem's round, a cup's petals), then partly toward the ground's
+// normal (the plant lit as one low form); `vegAO` takes its surface's.
+vec3 herbNormal(HerbSurface herb, inout float vegAO) {
+    vec3 face = normalize(inNormal);
+    if (dot(face, -inWorldPos) < 0.0) face = -face;
+    vec3 across = normalize(inTangent), along = normalize(inBitangent);
+    vec3 N = normalize(across * herb.normal.x + along * herb.normal.y + face * herb.normal.z);
+    float bulkWeight = length(inVegShade.xyz);
+    if (bulkWeight > 1e-4) N = normalize(N * (1.0 - bulkWeight) + inVegShade.xyz);
+    vegAO *= herb.ao;
+    return N;
+}
+
+// The stand shades itself: the leaves above a point take the sun on its
+// slant path through them (a fern stand is dark within, lit at its top)
+// and part of the sky.
+// Returns what of the sun reaches the point; `vegAO` takes the sky's share.
+float herbStandSun(inout float vegAO) {
+    float standLeaves = inHerbStand.x * inHerbStand.y;
+    float standSun = exp(-0.6 * standLeaves / max(-lighting.sunDirection.y, 0.2));
+    vegAO *= exp(-0.35 * standLeaves);
+    return standSun;
+}
+
+// What the lighting takes from the plant (SceneSurface): a herb's own
+// translucency, else the leaf's less a glossy leaf's share; and the sward.
+void herbSurfaceLight(inout SceneSurface s, HerbSurface herb, float camDist) {
+    if (herb.translucency >= 0.0) s.translucency = herb.translucency;
+    else s.translucency *= 1.0 - 0.5 * herb.gloss;
+    // A herb's leaves and stems stand among the blades, and further off are
+    // lit as the sward is, their leaves' mean (a stand of fronds seen across
+    // shows their sides and shadows as the grass round it does, not a sheet
+    // of faces to the sun); its blooms sit on top, lit as themselves.
+    if (int(inHerbInfo.x + 0.5) != 2) {
+        float herbBulk = length(inVegShade.xyz);
+        s.sward = vec4(herbBulk > 1e-4 ? inVegShade.xyz / herbBulk : vec3(0.0, 1.0, 0.0),
+                       smoothstep(8.0, 30.0, camDist));
+    }
+}
