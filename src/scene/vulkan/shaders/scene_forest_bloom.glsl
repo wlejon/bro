@@ -186,6 +186,9 @@ ForestBloomSurface forestBloomHead(vec3 worldPos, vec2 q, vec3 n, vec4 ball, flo
     float keep = 1.0 - smoothstep(0.25, 0.7, length(fwidth(worldPos)) * FOREST_BLOOM_FLORETS / ball.w);
     float margin = top.margin;
     float marginAA = fwidth(margin);
+    // Both rims' edges here, every pixel of the quad still on the same path
+    // (taken below in the branches, a pixel's neighbours could be off it).
+    float edgeOut = forestBloomEdge(rimOut), edgeIn = forestBloomEdge(rimIn);
 
     bool onTop = rimOut > 0.0 && tOut > 0.0 && (top.inside || keep < 0.5);
     bool onBelow = rimIn > 0.0 && tIn > 0.0;
@@ -212,8 +215,8 @@ ForestBloomSurface forestBloomHead(vec3 worldPos, vec2 q, vec3 n, vec4 ball, flo
     // from the ball; they thin out toward the very rim instead.)
     s.cover = onTop ? (onBelow ? 1.0 : clamp(margin / max(marginAA, 1e-6) + 0.5, 0.0, 1.0) *
                                           smoothstep(0.0, 0.2, rimOut) *
-                                          mix(1.0, forestBloomEdge(rimOut), 1.0 - keep))
-                    : (onBelow ? forestBloomEdge(rimIn) : 0.0);
+                                          mix(1.0, edgeOut, 1.0 - keep))
+                    : (onBelow ? edgeIn : 0.0);
     return s;
 }
 
