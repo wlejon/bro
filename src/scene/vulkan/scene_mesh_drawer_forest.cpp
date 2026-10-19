@@ -1546,18 +1546,22 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
         });
     }
     stats.vertices = colourVerts;
-    // A group nearest the eye first, so what it covers fails the early depth
-    // test. (Only where its draw can have one: measured on an RTX 4090 and
-    // on RADV, a fragment stage that can discard gets no early depth
-    // rejection at all, even against depth an earlier draw wrote.)
+    // A group nearest the eye first. Not for the early depth test: every
+    // forest build can discard (the dithered fade, the near sphere), and a
+    // stage that can discard gets none, on an RTX 4090 as on RADV. But the
+    // same fragments shade faster in that order (on foot, the clumps 2.3 ms
+    // nearest first, 3.3 in the trees' order; a vista's crowns 4.16 against
+    // 4.31): neighbours on screen draw together.
     // (A stable sort by distance, as a radix sort of the distances' bits: a
-    // distance is never negative, so its bits order as it does. The entries
-    // stay where they are: the group's order is kept beside it, and the
-    // upload follows it.)
+    // distance is never negative, so its bits order as it does. `fromBit`
+    // the lowest bit sorted on: 16, the exponent and 7 bits of the mantissa,
+    // orders within 1% of the distance in 2 passes. The entries stay where
+    // they are: the group's order is kept beside it, and the upload follows
+    // it.)
     auto& order = P.order;
     std::vector<uint64_t>& keyed = P.keyed;
     std::vector<uint64_t>& swap = P.keyedSwap;
-    const auto nearestFirst = [&](int k) {
+    const auto nearestFirst = [&](int k, int fromBit = 0) {
         const Entries& g = colour.g[k];
         const size_t n = g.size();
         order[k].clear();
@@ -1573,7 +1577,9 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
                 keyed[i] = uint64_t{bits} << 32 | i;
             }
         });
-        for (int shift = 32; shift < 64; shift += 8) {
+        // (Its passes in turn: across the pool, the counts, places and
+        // scatter ran slower, a far view's 0.5 ms.)
+        for (int shift = 32 + fromBit; shift < 64; shift += 8) {
             size_t count[257] = {};
             for (uint64_t key : keyed) count[((key >> shift) & 255) + 1]++;
             if (*std::max_element(count, count + 257) == n) continue;   // one bucket: in order already
@@ -1584,16 +1590,16 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
         order[k].resize(n);
         for (size_t i = 0; i < n; ++i) order[k][i] = static_cast<uint32_t>(keyed[i]);
     };
-    // The sprites (cores, clumps, crowns) and blooms always discard and
-    // write their depth, so they go in the trees' order: their sort spared
-    // nothing and was the frame's longest serial step on a far view (200k
-    // crowns). The leaves and twigs, which may draw without a discard,
-    // nearest first, tree by tree (a tree's run of entries stays in its
-    // order).
+    // Tree by tree (a tree's run of entries stays in its order). The cores
+    // and blooms gain nothing from it (measured: unchanged either way); a
+    // far view's crowns (200k entries, the frame's longest serial step
+    // sorted in full) to 1%.
     nearestFirst(LeafNear);
     nearestFirst(LeafCard);
     nearestFirst(Twigs);
     nearestFirst(TwigsFine);
+    nearestFirst(Clumps);
+    nearestFirst(Crowns, 16);
 
     // Each shadow tile's trees at the shadow detail.
     std::vector<Groups>& tiles = P.tiles;
@@ -1681,7 +1687,25 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
             return e.end - e.first;
         };
         if (posed) {
-            for (size_t j = 0; j < g.size(); ++j) poseUsed_ += write(j, poseUsed_);
+            // Each chunk's leaves summed, then its first slot known: written
+            // across the pool, the slots as in turn.
+            const auto leaves = [&](size_t j) {
+                const Entry& e = g[sorted ? (*ord)[j] : j];
+                return e.end - e.first;
+            };
+            std::vector<uint32_t> slotAt(ForestPlan::chunksOf(g.size()) + 1, 0);
+            ForestPlan::eachChunk(g.size(), [&](uint32_t c, uint32_t b, uint32_t e) {
+                uint32_t n = 0;
+                for (uint32_t j = b; j < e; ++j) n += leaves(j);
+                slotAt[c + 1] = n;
+            });
+            slotAt[0] = poseUsed_;
+            for (size_t c = 1; c < slotAt.size(); ++c) slotAt[c] += slotAt[c - 1];
+            ForestPlan::eachChunk(g.size(), [&](uint32_t c, uint32_t b, uint32_t e) {
+                uint32_t slot = slotAt[c];
+                for (uint32_t j = b; j < e; ++j) slot += write(j, slot);
+            });
+            poseUsed_ = slotAt.back();
         } else {
             ForestPlan::eachChunk(g.size(), [&](uint32_t, uint32_t b, uint32_t e) {
                 for (uint32_t j = b; j < e; ++j) write(j, ~0u);
