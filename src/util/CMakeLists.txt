@@ -1,6 +1,9 @@
-add_library(bro_util STATIC log.cpp string_utils.cpp time.cpp interrupt.cpp asset_mounts.cpp asset_path.cpp object_url.cpp remote_asset.cpp user_dirs.cpp model_dirs.cpp model_fetch.cpp sha.cpp json_in.cpp exe_dir.cpp process_spawn.cpp storage_file.cpp crash_handler.cpp main_loop_wake.cpp)
+add_library(bro_util STATIC log.cpp string_utils.cpp time.cpp interrupt.cpp asset_mounts.cpp asset_path.cpp object_url.cpp remote_asset.cpp user_dirs.cpp model_dirs.cpp model_fetch.cpp sha.cpp json_in.cpp exe_dir.cpp process_spawn.cpp storage_file.cpp crash_handler.cpp main_loop_wake.cpp parallel.cpp)
 target_include_directories(bro_util PUBLIC ${bro_SOURCE_DIR}/src)
 target_link_libraries(bro_util PUBLIC bromath::bromath)
+# parallel.cpp's worker pool.
+find_package(Threads REQUIRED)
+target_link_libraries(bro_util PUBLIC Threads::Threads)
 
 # The crash handler symbolises its backtrace through DbgHelp.
 if(WIN32)

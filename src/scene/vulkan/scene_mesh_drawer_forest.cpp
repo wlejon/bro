@@ -25,6 +25,7 @@
 #include "scene/vulkan/scene_vk_descriptors.h"
 #include "scene/vulkan/scene_vk_device.h"
 #include "util/log.h"
+#include "util/parallel.h"
 
 #include <algorithm>
 #include <array>
@@ -347,19 +348,25 @@ struct SceneMeshDrawer::ForestPlan {
         return t;
     }
 
-    // Vertices counted when drawn but not against the budget (the sprites,
-    // crowns, blooms, cores and bark ribbons: only with a `G`), also kept
-    // apart, so a pass that groups can still give the budget's count.
-    uint64_t drawnOnly = 0;
-    void drawn(uint64_t& vertices, uint64_t n) {
-        vertices += n;
-        drawnOnly += n;
-    }
+    // What addTree counts besides its vertices (a tally a thread, summed
+    // after): the vertices counted when drawn but not against the budget
+    // (the sprites, crowns, blooms, cores and bark ribbons: only with a
+    // `G`), so a pass that groups can still give the budget's count, and the
+    // leaves and blooms a colour group issues (Stats).
+    struct Tally {
+        uint64_t drawnOnly = 0, leaves = 0, blooms = 0;
+        void drawn(uint64_t& vertices, uint64_t n) {
+            vertices += n;
+            drawnOnly += n;
+        }
+    };
 
     // What one tree at level of detail `t` adds to `G` (or, with no `G`, only
-    // the vertices it would).
+    // the vertices it would). Reads the plan only, so trees may be added on
+    // several threads at once, each with its own `G` and `tally`.
     void addTree(Groups* G, uint32_t inst, const ForestNode::Specimen& sp, const ForestNode::TreeLod& t,
-                 bool shadow, uint64_t& vertices, float px = 0.0f, float barkPx = 0.0f, const Seen* seen = nullptr) {
+                 bool shadow, uint64_t& vertices, Tally& tally, float px = 0.0f, float barkPx = 0.0f,
+                 const Seen* seen = nullptr) const {
         const auto& keepRadius = node->keepRadius();
         // A needle node's fine wood (its twigs are no form of their own):
         // what the bark's cut leaves out (under kBarkRibbonCut of the cut)
@@ -446,7 +453,7 @@ struct SceneMeshDrawer::ForestPlan {
                     for (uint32_t c = from; c < to; c += K)
                         g.push_back({inst, sp.leafStart + c, sp.leafStart + std::min(c + K, to), V, widening, keepEnd,
                                      tail, fade, {leafWood[0], leafWood[1], leafWood[2]}});
-                    if (!shadow) stats.leaves += to - from;
+                    if (!shadow) tally.leaves += to - from;
                 }
             }
             // A broad node's twigs, which its leaves hang from, at the
@@ -500,8 +507,8 @@ struct SceneMeshDrawer::ForestPlan {
             // core drawn solid first (forestLobeCore), at the leaves' fade.
             if (G && !shadow && cores && sp.clumpCount > 0) {
                 const float fade = ForestNode::fadeCode(lo[0], hi[0]);
-                drawn(vertices, uint64_t{(sp.clumpCount + kClumpsPerEntry - 1) / kClumpsPerEntry} * kClumpsPerEntry *
-                                    kVertsPerClump);
+                tally.drawn(vertices, uint64_t{(sp.clumpCount + kClumpsPerEntry - 1) / kClumpsPerEntry} *
+                                          kClumpsPerEntry * kVertsPerClump);
                 for (uint32_t c = 0; c < sp.clumpCount; c += kClumpsPerEntry)
                     G->g[Cores].push_back({inst, sp.clumpStart + c,
                                            sp.clumpStart + std::min(c + kClumpsPerEntry, sp.clumpCount), 0u, 1.0f,
@@ -589,7 +596,7 @@ struct SceneMeshDrawer::ForestPlan {
                 };
                 const uint32_t r0 = upTo(2.0f * t.barkRadius), r1 = upTo(kBarkRibbonCut * t.barkRadius);
                 if (r1 > r0) {
-                    drawn(vertices, uint64_t{(r1 - r0 + kTwigPiecesPerEntry - 1) / kTwigPiecesPerEntry} *
+                    tally.drawn(vertices, uint64_t{(r1 - r0 + kTwigPiecesPerEntry - 1) / kTwigPiecesPerEntry} *
                                         kTwigPiecesPerEntry * kVertsPerTwig);
                     for (uint32_t c = r0; c < r1; c += kTwigPiecesPerEntry)
                             G->g[Twigs].push_back({inst, sp.segStart + c,
@@ -602,8 +609,8 @@ struct SceneMeshDrawer::ForestPlan {
         // leaves and bark (a sprite tree's cost is a fixed few hundred
         // vertices and its pixels).
         if (hi[1] > lo[1] && sp.clumpCount > 0 && G) {
-            drawn(vertices, uint64_t{(sp.clumpCount + kClumpsPerEntry - 1) / kClumpsPerEntry} * kClumpsPerEntry *
-                                kVertsPerClump);
+            tally.drawn(vertices, uint64_t{(sp.clumpCount + kClumpsPerEntry - 1) / kClumpsPerEntry} *
+                                      kClumpsPerEntry * kVertsPerClump);
             const float fade = ForestNode::fadeCode(lo[1], hi[1]);
             for (uint32_t c = 0; c < sp.clumpCount; c += kClumpsPerEntry)
                 G->g[Clumps].push_back({inst, sp.clumpStart + c,
@@ -611,7 +618,7 @@ struct SceneMeshDrawer::ForestPlan {
                                         0.0f, 1.0f, fade, {wood[0], wood[1], wood[2]}});
         }
         if (hi[2] > lo[2] && sp.clumpCount > 0 && G) {
-            drawn(vertices, 6);
+            tally.drawn(vertices, 6);
             G->g[Crowns].push_back({inst, 0u, 1u, 0u, 1.0f, 0.0f, 1.0f, ForestNode::fadeCode(lo[2], hi[2])});
         }
         // Blooms: whatever the tier, while the largest is wide enough to
@@ -620,22 +627,21 @@ struct SceneMeshDrawer::ForestPlan {
         // Counted when drawn, as the sprites are. They cast no shadow.
         if (G && !shadow && sp.bloomCount > 0 &&
             sp.bloomSize * ForestNode::bloomExtent(sp.bloomForm) * px >= kBloomMinPixels) {
-            drawn(vertices, uint64_t{(sp.bloomCount + kBloomsPerEntry - 1) / kBloomsPerEntry} * kBloomsPerEntry *
+            tally.drawn(vertices, uint64_t{(sp.bloomCount + kBloomsPerEntry - 1) / kBloomsPerEntry} * kBloomsPerEntry *
                                 kVertsPerBloom);
             for (uint32_t c = 0; c < sp.bloomCount; c += kBloomsPerEntry)
                 G->g[Blooms].push_back({inst, sp.bloomStart + c,
                                         sp.bloomStart + std::min(c + kBloomsPerEntry, sp.bloomCount), bloomBase,
                                         1.0f, 0.0f, 1.0f, 1.0f});
-            stats.blooms += sp.bloomCount;
+            tally.blooms += sp.bloomCount;
         }
     }
 
-    // The vertices tree `s` sends at `detail` (against the budget), adding
-    // its entries to `G` if given, and the vertices they draw to `*all`.
-    uint64_t treeCost(const Seen& s, float detail, bool shadow, Groups* G = nullptr, uint64_t* all = nullptr,
-                      uint32_t* tiers = nullptr) {
-        this->detail = detail;
-        const ForestNode::Lod L = ForestNode::scaled(shadow ? shadowLod : lod, detail);
+    // The vertices tree `s` sends at the plan's `detail` (`L`, the Lod scaled
+    // by it), against the budget; adding its entries to `G` if given, the
+    // vertices they draw to `*all` and its tiers to `tiers`.
+    uint64_t treeCost(const Seen& s, const ForestNode::Lod& L, bool shadow, Tally& tally, Groups* G = nullptr,
+                      uint64_t* all = nullptr, uint32_t* tiers = nullptr) const {
         const ForestNode::Specimen& sp = node->specimens()[node->instances()[s.instance].specimen];
         const ForestNode::TreeLod t =
             shadow ? casterLod(L, sp, s)
@@ -646,10 +652,69 @@ struct SceneMeshDrawer::ForestPlan {
             if (t.crowns > 0.0f) tiers[2]++;
         }
         uint64_t v = 0;
-        const uint64_t only = drawnOnly;
-        addTree(G, s.instance, sp, t, shadow, v, s.px, s.barkPx, shadow ? nullptr : &s);
+        const uint64_t only = tally.drawnOnly;
+        addTree(G, s.instance, sp, t, shadow, v, tally, s.px, s.barkPx, shadow ? nullptr : &s);
         if (all) *all += v;
-        return v - (drawnOnly - only);
+        return v - (tally.drawnOnly - only);
+    }
+
+    // Trees [0, n) in chunks of kTreeChunk across the worker pool: `fn(chunk,
+    // begin, end)`.
+    static constexpr uint32_t kTreeChunk = 2048;
+    static uint32_t chunksOf(size_t n) { return static_cast<uint32_t>((n + kTreeChunk - 1) / kTreeChunk); }
+    template <class Fn> static void eachChunk(size_t n, Fn fn) {
+        const auto run = [&](uint32_t c) {
+            const uint32_t b = c * kTreeChunk;
+            fn(c, b, static_cast<uint32_t>(std::min<size_t>(n, size_t{b} + kTreeChunk)));
+        };
+        bro::util::parallelChunks(chunksOf(n), run);
+    }
+    // The camera's trees (or the shadow tiles') at detail `d`, chunk by
+    // chunk across the pool, each chunk its own groups and counts, joined in
+    // the trees' order: their entries appended to `out` (one Groups, or one
+    // a tile; none: only counted), the vertices they draw to `drawn`, their
+    // tiers to `tiers` (the camera's), the rest to `tally`, and each tree's
+    // vertices against the budget to `each`.
+    void place(bool shadow, float d, std::vector<Groups>* out, uint64_t& drawn,
+               uint32_t (&tiers)[ForestNode::kTiers], Tally& tally, std::vector<uint64_t>* each = nullptr) {
+        const std::vector<Seen>& trees = shadow ? cast : seen;
+        this->detail = d;
+        const ForestNode::Lod L = ForestNode::scaled(shadow ? shadowLod : lod, d);
+        const uint32_t chunks = chunksOf(trees.size());
+        std::vector<std::vector<Groups>> parts(out ? chunks : 0, std::vector<Groups>(out ? out->size() : 0));
+        std::vector<Tally> tallies(chunks);
+        std::vector<uint64_t> drawnOf(chunks, 0);
+        std::vector<std::array<uint32_t, ForestNode::kTiers>> tiersOf(chunks);
+        if (each) each->resize(trees.size());
+        eachChunk(trees.size(), [&](uint32_t c, uint32_t b, uint32_t e) {
+            tiersOf[c] = {};
+            for (uint32_t i = b; i < e; ++i) {
+                Groups* G = out ? &parts[c][shadow ? static_cast<size_t>(trees[i].tile) : 0] : nullptr;
+                const uint64_t v =
+                    treeCost(trees[i], L, shadow, tallies[c], G, &drawnOf[c], shadow ? nullptr : tiersOf[c].data());
+                if (each) (*each)[i] = v;
+            }
+        });
+        for (uint32_t c = 0; c < chunks; ++c) {
+            drawn += drawnOf[c];
+            tally.drawnOnly += tallies[c].drawnOnly;
+            tally.leaves += tallies[c].leaves;
+            tally.blooms += tallies[c].blooms;
+            for (int k = 0; k < ForestNode::kTiers; ++k) tiers[k] += tiersOf[c][k];
+        }
+        if (out) appendGroups(*out, parts);
+    }
+
+    // Each chunk's groups appended to `out`'s, in chunk order: the order
+    // one thread would have added them in.
+    static void appendGroups(std::vector<Groups>& out, std::vector<std::vector<Groups>>& parts) {
+        for (size_t t = 0; t < out.size(); ++t)
+            for (int k = 0; k < kGroups; ++k) {
+                size_t n = out[t].g[k].size();
+                for (auto& p : parts) n += p[t].g[k].size();
+                out[t].g[k].reserve(n);
+                for (auto& p : parts) out[t].g[k].insert(out[t].g[k].end(), p[t].g[k].begin(), p[t].g[k].end());
+            }
     }
 
     // The budget's search asks cost() at a dozen details. A tree sends no
@@ -683,32 +748,41 @@ struct SceneMeshDrawer::ForestPlan {
         if (force >= 0) return 0.0;
         const std::vector<Seen>& trees = shadow ? cast : seen;
         CostSplit& cs = split[shadow ? 1 : 0];
+        const ForestNode::Lod& base = shadow ? shadowLod : lod;
+        const size_t groupsOf = shadow ? tileSlots.size() : 1;
         if (cs.fine.size() != trees.size()) {
-            cs.fine.resize(trees.size());
-            if (cs.group) cs.groups.assign(shadow ? tileSlots.size() : 1, Groups{});
-            // (addTree counts a group's leaves and blooms in the stats, which
-            // finishForest does itself if it draws another detail.)
-            const uint64_t leaves0 = stats.leaves, blooms0 = stats.blooms;
-            for (uint32_t i = 0; i < trees.size(); ++i) {
-                Groups* G = cs.group ? &cs.groups[shadow ? static_cast<size_t>(trees[i].tile) : 0] : nullptr;
-                cs.fineSum += cs.fine[i] = treeCost(trees[i], 1.0f, shadow, G, &cs.drawn, shadow ? nullptr : cs.tiers);
-            }
-            cs.leaves = stats.leaves - leaves0;
-            cs.blooms = stats.blooms - blooms0;
-            stats.leaves = leaves0;
-            stats.blooms = blooms0;
+            if (cs.group) cs.groups.assign(groupsOf, Groups{});
+            Tally tally;
+            place(shadow, 1.0f, cs.group ? &cs.groups : nullptr, cs.drawn, cs.tiers, tally, &cs.fine);
+            cs.leaves = tally.leaves;
+            cs.blooms = tally.blooms;
+            for (uint64_t f : cs.fine) cs.fineSum += f;
             cs.grouped = cs.group;
         }
         if (detail == 1.0f) return static_cast<double>(cs.fineSum);
         if (!cs.split) {
             cs.split = true;
+            this->detail = kMaxDetail;
+            const ForestNode::Lod L = ForestNode::scaled(base, kMaxDetail);
+            std::vector<uint8_t> varies(trees.size());
+            eachChunk(trees.size(), [&](uint32_t, uint32_t b, uint32_t e) {
+                Tally tally;
+                for (uint32_t i = b; i < e; ++i) varies[i] = cs.fine[i] != treeCost(trees[i], L, shadow, tally);
+            });
             for (uint32_t i = 0; i < trees.size(); ++i) {
-                if (cs.fine[i] == treeCost(trees[i], kMaxDetail, shadow)) cs.fixed += cs.fine[i];
+                if (!varies[i]) cs.fixed += cs.fine[i];
                 else cs.varying.push_back(i);
             }
         }
+        this->detail = detail;
+        const ForestNode::Lod L = ForestNode::scaled(base, detail);
+        std::vector<uint64_t> sums(chunksOf(cs.varying.size()), 0);
+        eachChunk(cs.varying.size(), [&](uint32_t c, uint32_t b, uint32_t e) {
+            Tally tally;
+            for (uint32_t k = b; k < e; ++k) sums[c] += treeCost(trees[cs.varying[k]], L, shadow, tally);
+        });
         uint64_t v = cs.fixed;
-        for (uint32_t i : cs.varying) v += treeCost(trees[i], detail, shadow);
+        for (uint64_t s : sums) v += s;
         return static_cast<double>(v);
     }
 
@@ -765,9 +839,10 @@ struct SceneMeshDrawer::ForestPlan {
         detail = 1.0f;
         const ForestNode::Specimen& sp = node->specimens()[node->instances()[s.instance].specimen];
         uint64_t v = 0;
+        Tally tally;
         addTree(nullptr, s.instance, sp,
                 shadow ? casterLod(shadowLod, sp, s) : ForestNode::treeLod(lod, sp, s.px, leafLength, force, s.barkPx, s.dist, s.far),
-                shadow, v, s.px, s.barkPx, shadow ? nullptr : &s);
+                shadow, v, tally, s.px, s.barkPx, shadow ? nullptr : &s);
         return v;
     }
 };
@@ -1002,52 +1077,74 @@ std::unique_ptr<SceneMeshDrawer::ForestPlan> SceneMeshDrawer::planForest(SceneFr
     const uint32_t stamp = node.beginSeen();
     cull.markCells([&](const bromath::AABB3& b) { return bromath::fintersects(view.frustum, b); },
                    [&](size_t c) { return cameraFar[c] != 0; });
-    for (uint32_t i = 0; i < instances.size(); ++i) {
-        const bromath::AABB3& b = cull.bounds[i];
-        if (!cull.mark[i] || !bromath::fintersects(view.frustum, b)) {
-            P.stats.culled++;
-            continue;
+    // (Chunk by chunk across the pool, each its own lists, joined in order.)
+    struct Part {
+        std::vector<Seen> seen;
+        std::vector<uint32_t> crowned;
+        uint32_t culled = 0;
+        float canopyTop = -1e30f;
+    };
+    std::vector<Part> parts(ForestPlan::chunksOf(instances.size()));
+    ForestPlan::eachChunk(instances.size(), [&](uint32_t chunk, uint32_t begin, uint32_t end) {
+        Part& out = parts[chunk];
+        for (uint32_t i = begin; i < end; ++i) {
+            const bromath::AABB3& b = cull.bounds[i];
+            if (!cull.mark[i] || !bromath::fintersects(view.frustum, b)) {
+                out.culled++;
+                continue;
+            }
+            const ForestNode::Instance& in = instances[i];
+            const ForestNode::Specimen& sp = specimens[in.specimen];
+            // The bark's distance: to the nearest point of the tree's box at
+            // rest (the wind's strength does not move the choice).
+            const bromath::Vec3 e = view.eye;
+            const bromath::Vec3 q{std::clamp(e.x, b.min.x + reach, b.max.x - reach),
+                                  std::clamp(e.y, b.min.y + reach, b.max.y - reach),
+                                  std::clamp(e.z, b.min.z + reach, b.max.z - reach)};
+            const float d = std::max(bromath::vlen(q - e), 0.25f);
+            if (std::hypot(q.x - e.x, q.z - e.z) < 40.0f) out.canopyTop = std::max(out.canopyTop, b.max.y - reach);
+            if (P.lod.range > 0.0f && d > P.lod.range) {
+                out.culled++;
+                continue;
+            }
+            // The leaves': to the crown, an upright cylinder round its
+            // clumps, so a crown overhead is as near as its underside, not
+            // the trunk beside the eye.
+            float dl = d, far = d;
+            if (sp.clumpCount > 0) {
+                const bromath::Vec3 local{sp.crown.x * in.cosYaw + sp.crown.z * in.sinYaw, sp.crown.y,
+                                          -sp.crown.x * in.sinYaw + sp.crown.z * in.cosYaw};
+                const bromath::Vec3 c = bromath::mtransformPoint(world, in.position + local * in.scale);
+                const float k = in.scale * nodeScale / 0.92f;
+                const float dh = std::max(0.0f, std::hypot(e.x - c.x, e.z - c.z) - sp.crownRadius * k);
+                const float dv = std::max(0.0f, std::fabs(e.y - c.y) - sp.crownRadiusUp * k);
+                dl = std::max(std::hypot(dh, dv), d);
+                far = bromath::vlen(c - e) + std::max(sp.crownRadius, sp.crownRadiusUp) * k;
+            }
+            const float unit = in.scale * nodeScale;
+            const float px = (view.perspective ? pxAtMetre / dl : pxAtMetre) * unit;
+            const float barkPx = (view.perspective ? pxAtMetre / d : pxAtMetre) * unit;
+            node.seenTree(i) = {stamp, px, barkPx, dl, far, -1};
+            if (cull.mark[i] == 2) {
+                out.crowned.push_back(i);
+                continue;
+            }
+            out.seen.push_back({i, px, -1, barkPx, P.lod.forceRange <= 0.0f || dl <= P.lod.forceRange, dl, far});
         }
-        const ForestNode::Instance& in = instances[i];
-        const ForestNode::Specimen& sp = specimens[in.specimen];
-        // The bark's distance: to the nearest point of the tree's box at
-        // rest (the wind's strength does not move the choice).
-        const bromath::Vec3 e = view.eye;
-        const bromath::Vec3 q{std::clamp(e.x, b.min.x + reach, b.max.x - reach),
-                              std::clamp(e.y, b.min.y + reach, b.max.y - reach),
-                              std::clamp(e.z, b.min.z + reach, b.max.z - reach)};
-        const float d = std::max(bromath::vlen(q - e), 0.25f);
-        if (std::hypot(q.x - e.x, q.z - e.z) < 40.0f) P.canopyTop = std::max(P.canopyTop, b.max.y - reach);
-        if (P.lod.range > 0.0f && d > P.lod.range) {
-            P.stats.culled++;
-            continue;
+        for (Seen& s : out.seen) P.classifyBark(s);
+    });
+    {
+        size_t ns = 0, nc = 0;
+        for (const Part& p : parts) { ns += p.seen.size(); nc += p.crowned.size(); }
+        P.seen.reserve(ns);
+        P.crowned.reserve(nc);
+        for (const Part& p : parts) {
+            P.seen.insert(P.seen.end(), p.seen.begin(), p.seen.end());
+            P.crowned.insert(P.crowned.end(), p.crowned.begin(), p.crowned.end());
+            P.stats.culled += p.culled;
+            P.canopyTop = std::max(P.canopyTop, p.canopyTop);
         }
-        // The leaves': to the crown, an upright cylinder round its clumps,
-        // so a crown overhead is as near as its underside, not the trunk
-        // beside the eye.
-        float dl = d, far = d;
-        if (sp.clumpCount > 0) {
-            const bromath::Vec3 local{sp.crown.x * in.cosYaw + sp.crown.z * in.sinYaw, sp.crown.y,
-                                      -sp.crown.x * in.sinYaw + sp.crown.z * in.cosYaw};
-            const bromath::Vec3 c = bromath::mtransformPoint(world, in.position + local * in.scale);
-            const float k = in.scale * nodeScale / 0.92f;
-            const float dh = std::max(0.0f, std::hypot(e.x - c.x, e.z - c.z) - sp.crownRadius * k);
-            const float dv = std::max(0.0f, std::fabs(e.y - c.y) - sp.crownRadiusUp * k);
-            dl = std::max(std::hypot(dh, dv), d);
-            far = bromath::vlen(c - e) + std::max(sp.crownRadius, sp.crownRadiusUp) * k;
-        }
-        const float unit = in.scale * nodeScale;
-        const float px = (view.perspective ? pxAtMetre / dl : pxAtMetre) * unit;
-        const float barkPx = (view.perspective ? pxAtMetre / d : pxAtMetre) * unit;
-        node.seenTree(i) = {stamp, px, barkPx, dl, far, -1};
-        if (cull.mark[i] == 2) {
-            P.crowned.push_back(i);
-            continue;
-        }
-        P.seen.push_back({i, px, -1, barkPx, P.lod.forceRange <= 0.0f || dl <= P.lod.forceRange, dl, far});
     }
-
-    for (Seen& s : P.seen) P.classifyBark(s);
 
     // Each shadow tile's trees, at its texel size.
     const ShadowPlan& shadows = frame.renderer.shadowPlan();
@@ -1068,17 +1165,29 @@ std::unique_ptr<SceneMeshDrawer::ForestPlan> SceneMeshDrawer::planForest(SceneFr
                        cull.cellKeep[c] * px < 0.98f * barkCut(cull.cellUnit[c] * px);
             };
             cull.markCells([&](const bromath::AABB3& b) { return bromath::fintersects(tile.frustum, b); }, casterFar);
-            for (uint32_t i = 0; i < instances.size(); ++i) {
-                if (!cull.mark[i] || !bromath::fintersects(tile.frustum, cull.bounds[i])) continue;
-                if (cull.mark[i] == 2) {
-                    P.castCrowned.push_back({i, ti});
-                    continue;
+            struct CastPart {
+                std::vector<Seen> cast;
+                std::vector<std::pair<uint32_t, int>> crowned;
+            };
+            std::vector<CastPart> casts(ForestPlan::chunksOf(instances.size()));
+            ForestPlan::eachChunk(instances.size(), [&](uint32_t chunk, uint32_t begin, uint32_t end) {
+                CastPart& out = casts[chunk];
+                for (uint32_t i = begin; i < end; ++i) {
+                    if (!cull.mark[i] || !bromath::fintersects(tile.frustum, cull.bounds[i])) continue;
+                    if (cull.mark[i] == 2) {
+                        out.crowned.push_back({i, ti});
+                        continue;
+                    }
+                    float texel = tile.texelConst;
+                    const float dc = bromath::vlen((cull.bounds[i].min + cull.bounds[i].max) * 0.5f - view.eye);
+                    if (!tile.ortho) texel += tile.texelPerMetre * dc;
+                    out.cast.push_back({i, instances[i].scale * nodeScale / std::max(texel, 1e-5f), ti, 0.0f,
+                                        P.lod.forceRange <= 0.0f || dc <= P.lod.forceRange, dc});
                 }
-                float texel = tile.texelConst;
-                const float dc = bromath::vlen((cull.bounds[i].min + cull.bounds[i].max) * 0.5f - view.eye);
-                if (!tile.ortho) texel += tile.texelPerMetre * dc;
-                P.cast.push_back({i, instances[i].scale * nodeScale / std::max(texel, 1e-5f), ti, 0.0f,
-                                  P.lod.forceRange <= 0.0f || dc <= P.lod.forceRange, dc});
+            });
+            for (const CastPart& p : casts) {
+                P.cast.insert(P.cast.end(), p.cast.begin(), p.cast.end());
+                P.castCrowned.insert(P.castCrowned.end(), p.crowned.begin(), p.crowned.end());
             }
         }
     }
@@ -1275,15 +1384,12 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
             stats.leaves += fine.leaves;
             stats.blooms += fine.blooms;
         } else {
-            for (const Seen& s : P.seen) {
-                const ForestNode::Specimen& sp = specimens[instances[s.instance].specimen];
-                const ForestNode::TreeLod t =
-                    ForestNode::treeLod(L, sp, s.px, P.leafLength, P.forceOf(s), s.barkPx, s.dist, s.far);
-                if (t.leaves > 0.0f) stats.trees[0]++;
-                if (t.clumps > 0.0f) stats.trees[1]++;
-                if (t.crowns > 0.0f) stats.trees[2]++;
-                P.addTree(&colour, s.instance, sp, t, false, colourVerts, s.px, s.barkPx, &s);
-            }
+            std::vector<Groups> placed(1);
+            ForestPlan::Tally tally;
+            P.place(false, detail, &placed, colourVerts, stats.trees, tally);
+            colour = std::move(placed[0]);
+            stats.leaves += tally.leaves;
+            stats.blooms += tally.blooms;
         }
         // (addTree's entry for a crown alone.)
         stats.trees[2] += static_cast<uint32_t>(P.crowned.size());
@@ -1339,17 +1445,14 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
     std::vector<Groups> tiles(P.tileSlots.size());
     stats.shadowDetail = shadowDetail;
     {
-        const ForestNode::Lod L = ForestNode::scaled(P.shadowLod, shadowDetail);
         auto& fine = P.split[1];
         if (fine.grouped && shadowDetail == 1.0f) {
             tiles = std::move(fine.groups);
             stats.shadowVertices += fine.drawn;
         } else {
-            for (const Seen& s : P.cast) {
-                const ForestNode::Specimen& sp = specimens[instances[s.instance].specimen];
-                P.addTree(&tiles[static_cast<size_t>(s.tile)], s.instance, sp, P.casterLod(L, sp, s), true,
-                          stats.shadowVertices);
-            }
+            ForestPlan::Tally tally;
+            uint32_t unused[ForestNode::kTiers] = {};
+            P.place(true, shadowDetail, &tiles, stats.shadowVertices, unused, tally);
         }
         stats.shadowVertices += 6 * uint64_t{P.castCrowned.size()};
         for (const auto& [i, tile] : P.castCrowned)
