@@ -86,7 +86,9 @@ bool forestSprite(int mode, int instanceIndex, int vertexIndex, mat4 base, out F
             // specimen's flatness.
             c.y += 0.1 * lr * procClumpFlat;
         }
-        s.radius = lr * scale;
+        // Wider by the entry's reach (its `widening`, 1 or more): the fine
+        // wood the bark's cut leaves out, whose cover the lobes take over.
+        s.radius = lr * scale * (core ? 1.0 : max(e.widening, 1.0));
         s.radiusUp = 0.8 * procClumpFlat * s.radius;
         // A lobe holds about a third of its clump's leaves (clumpLeafFrame).
         s.leaves = max(procedural.records[forestClumpRecord(clump) + 1].w / 3.0, 1.0);

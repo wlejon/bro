@@ -88,6 +88,12 @@ constexpr float kBarkRibbonCut = 0.5f;
 // How much of a needle node's undrawn fine wood shows through its needles
 // (the share of its outline area the tint toward the bark stands for).
 constexpr float kWoodShare = 0.6f;
+// How much further a broad node's lobe sprites reach, per unit of that
+// share (their radius times 1 + this times it, at most 1.3).
+constexpr float kLobeReach = 0.5f;
+// A broad node's limbs among its lobes are in their shade: the tint toward
+// its bark takes this of the bark's colour.
+constexpr float kWoodShade = 0.5f;
 // A clump at least kTwigFinePixels across (its radius) on screen at its
 // nearest point draws its twigs FINE: each piece kTwigFineRows quads along
 // the curve through its joints (forestHermite), with a collar where a twig
@@ -286,7 +292,10 @@ struct SceneMeshDrawer::ForestPlan {
         // where they stand among the needles (auto 100.8 against 107.1 at
         // 45 m noon unshadowed).
         float wood[3] = {0.0f, 0.0f, 0.0f};
-        if (!shadow && !twigs && sp.segCount > 0 && t.barkRadius > 0.0f && sp.crownRadius > 0.0f) {
+        // A broad node's lobe sprites reach further by the same share: the
+        // limbs the cut leaves out are cover between its lobes.
+        float lobeReach = 1.0f;
+        if (!shadow && sp.segCount > 0 && t.barkRadius > 0.0f && sp.crownRadius > 0.0f) {
             const float* k0 = keepRadius.data() + sp.segStart;
             const uint32_t cut = static_cast<uint32_t>(
                 std::upper_bound(k0, k0 + sp.segCount, kBarkRibbonCut * t.barkRadius,
@@ -294,13 +303,18 @@ struct SceneMeshDrawer::ForestPlan {
             const auto& A = node->woodArea();
             const float area = A[sp.segStart + sp.segCount] - A[sp.segStart + cut];
             const float crown = 3.14159265f * sp.crownRadius * std::max(sp.crownRadiusUp, sp.crownRadius * 0.25f);
-            const float f = std::clamp(kWoodShare * area / crown, 0.0f, 0.5f);
+            const float share = area / crown;
+            if (twigs) lobeReach = 1.0f + std::clamp(kLobeReach * share, 0.0f, 0.3f);
+            const float f = std::clamp(kWoodShare * share, 0.0f, 0.5f);
             if (f > 0.0f) {
                 float r[3];
                 node->barkOverLeaf(static_cast<size_t>(&sp - node->specimens().data()), r);
-                for (int i = 0; i < 3; ++i) wood[i] = 1.0f + f * (r[i] - 1.0f);
+                const float shade = twigs ? kWoodShade : 1.0f;
+                for (int i = 0; i < 3; ++i) wood[i] = 1.0f + f * (shade * r[i] - 1.0f);
             }
         }
+        // (A broad node's leaves hang from their twigs, drawn with them.)
+        const float leafWood[3] = {twigs ? 0.0f : wood[0], twigs ? 0.0f : wood[1], twigs ? 0.0f : wood[2]};
         float lo[ForestNode::kTiers], hi[ForestNode::kTiers];
         ForestNode::fadeRanges(t, lo, hi);
         if (shadow) {
@@ -349,7 +363,7 @@ struct SceneMeshDrawer::ForestPlan {
                     auto& g = G->g[card ? LeafCard : LeafNear];
                     for (uint32_t c = from; c < to; c += K)
                         g.push_back({inst, sp.leafStart + c, sp.leafStart + std::min(c + K, to), V, widening, keepEnd,
-                                     tail, fade, {wood[0], wood[1], wood[2]}});
+                                     tail, fade, {leafWood[0], leafWood[1], leafWood[2]}});
                     if (!shadow) stats.leaves += to - from;
                 }
             }
@@ -457,8 +471,8 @@ struct SceneMeshDrawer::ForestPlan {
             const float fade = ForestNode::fadeCode(lo[1], hi[1]);
             for (uint32_t c = 0; c < sp.clumpCount; c += kClumpsPerEntry)
                 G->g[Clumps].push_back({inst, sp.clumpStart + c,
-                                        sp.clumpStart + std::min(c + kClumpsPerEntry, sp.clumpCount), 0u, 1.0f, 0.0f,
-                                        1.0f, fade, {wood[0], wood[1], wood[2]}});
+                                        sp.clumpStart + std::min(c + kClumpsPerEntry, sp.clumpCount), 0u, lobeReach,
+                                        0.0f, 1.0f, fade, {wood[0], wood[1], wood[2]}});
         }
         if (hi[2] > lo[2] && sp.clumpCount > 0 && G) {
             vertices += 6;
