@@ -204,16 +204,17 @@ struct Seen {
     uint32_t curveEnd = kAllSegments, fineEnd = kAllSegments, nearEnd = kAllSegments;
 };
 
+// The coarsest detail the budget asks for: past it the trees are sprites
+// and trunks, and a budget still unmet is the view's floor, not a reason to
+// strip the nearest tree bare.
+constexpr float kMaxDetail = 8.0f;
+
 // The detail factor that keeps `cost`'s vertices within `budget` millions: 1
 // when they fit, else the least (to about 3%) that does.
 float fitDetail(const std::function<double(float)>& cost, float budget) {
     if (budget <= 0.0f) return 1.0f;
     const double limit = static_cast<double>(budget) * 1e6;
     if (cost(1.0f) <= limit) return 1.0f;
-    // At most kMaxDetail: past it the trees are sprites and trunks, and a
-    // budget still unmet is the view's floor, not a reason to strip the
-    // nearest tree bare.
-    constexpr float kMaxDetail = 8.0f;
     if (cost(kMaxDetail) > limit) return kMaxDetail;
     float lo = 1.0f, hi = 2.0f;
     while (hi < kMaxDetail && cost(hi) > limit) { lo = hi; hi *= 2.0f; }
@@ -238,7 +239,7 @@ struct SceneMeshDrawer::ForestPlan {
     bool twigs = false;      // its leaves hang from twigs drawn as such (a broad node's)
     bool needles = false;    // a needle node's (its crowns shade through the whole crown)
     uint32_t bloomBase = 0;  // the blooms' first record in the node's data (ForestNode::bloomRecordBase)
-    std::vector<bromath::AABB3> bounds;   // every tree's, world, padded by the sway's reach
+    const std::vector<bromath::AABB3>* bounds = nullptr;   // every tree's, world, padded by the sway's reach (ForestCull's)
     std::vector<Seen> seen;               // the camera's trees
     std::vector<Seen> cast;               // each shadow tile's
     std::vector<int> tileSlots;           // per tile: its slot in the shadow plan
@@ -617,20 +618,53 @@ struct SceneMeshDrawer::ForestPlan {
         }
     }
 
+    // The vertices tree `s` sends at `detail`.
+    uint64_t treeCost(const Seen& s, float detail, bool shadow) {
+        this->detail = detail;
+        const ForestNode::Lod L = ForestNode::scaled(shadow ? shadowLod : lod, detail);
+        const ForestNode::Specimen& sp = node->specimens()[node->instances()[s.instance].specimen];
+        uint64_t v = 0;
+        addTree(nullptr, s.instance, sp,
+                shadow ? casterLod(L, sp, s)
+                       : ForestNode::treeLod(L, sp, s.px, leafLength, forceOf(s), s.barkPx, s.dist, s.far),
+                shadow, v, s.px, s.barkPx, shadow ? nullptr : &s);
+        return v;
+    }
+
+    // The budget's search asks cost() at a dozen details. A tree sends no
+    // fewer vertices at a finer one, so one that sends as many at the
+    // coarsest the search goes (kMaxDetail) as at 1 sends that at every
+    // detail between: most of a large forest's, its far crowns. Their sum
+    // is taken once, and each search step walks only the others.
+    // (The search's first ask, at 1, is often its last: each tree's cost
+    // there is kept, and the split made only if it asks again.)
+    struct CostSplit {
+        std::vector<uint64_t> fine;      // each tree's at detail 1 (seen / cast order)
+        uint64_t fineSum = 0;
+        bool split = false;
+        uint64_t fixed = 0;
+        std::vector<uint32_t> varying;   // indices into seen / cast
+    } split[2];
+
     // The vertices the camera's (or the shadow tiles') trees send at `detail`.
     double cost(float detail, bool shadow) {
         if (force >= 0) return 0.0;
-        this->detail = detail;
-        const ForestNode::Lod L = ForestNode::scaled(shadow ? shadowLod : lod, detail);
-        const auto& specimens = node->specimens();
-        const auto& instances = node->instances();
-        uint64_t v = 0;
-        for (const Seen& s : shadow ? cast : seen) {
-            const ForestNode::Specimen& sp = specimens[instances[s.instance].specimen];
-            addTree(nullptr, s.instance, sp,
-                    shadow ? casterLod(L, sp, s) : ForestNode::treeLod(L, sp, s.px, leafLength, forceOf(s), s.barkPx, s.dist, s.far),
-                    shadow, v, s.px, s.barkPx, shadow ? nullptr : &s);
+        const std::vector<Seen>& trees = shadow ? cast : seen;
+        CostSplit& cs = split[shadow ? 1 : 0];
+        if (cs.fine.size() != trees.size()) {
+            cs.fine.resize(trees.size());
+            for (uint32_t i = 0; i < trees.size(); ++i) cs.fineSum += cs.fine[i] = treeCost(trees[i], 1.0f, shadow);
         }
+        if (detail == 1.0f) return static_cast<double>(cs.fineSum);
+        if (!cs.split) {
+            cs.split = true;
+            for (uint32_t i = 0; i < trees.size(); ++i) {
+                if (cs.fine[i] == treeCost(trees[i], kMaxDetail, shadow)) cs.fixed += cs.fine[i];
+                else cs.varying.push_back(i);
+            }
+        }
+        uint64_t v = cs.fixed;
+        for (uint32_t i : cs.varying) v += treeCost(trees[i], detail, shadow);
         return static_cast<double>(v);
     }
 
@@ -729,6 +763,84 @@ template <class Plan> void capForced(const std::vector<Plan*>& plans, bool shado
 
 }  // namespace
 
+struct SceneMeshDrawer::ForestCull {
+    static constexpr float kCell = 32.0f;   // metres a side: a couple of dozen trees at a forest's spacing
+    uint64_t generation = 0;
+    bromath::Mat4 world;
+    float reach = -1.0f;
+    uint64_t used = 0;
+    std::vector<bromath::AABB3> bounds;    // every tree's, world, padded by the reach
+    std::vector<uint32_t> start, items;    // each cell's trees (ascending), cells end to end
+    std::vector<bromath::AABB3> cellBox;   // the box round each cell's trees
+    std::vector<uint8_t> mark;             // per tree: in a cell a test let through
+
+    void build(const std::vector<ForestNode::Instance>& instances, const bromath::Mat4& w, float r) {
+        const size_t n = instances.size();
+        bounds.resize(n);
+        float x0 = 1e30f, z0 = 1e30f, x1 = -1e30f, z1 = -1e30f;
+        for (size_t i = 0; i < n; ++i) {
+            bromath::AABB3& b = bounds[i];
+            b = bromath::atransform(instances[i].bounds, w);
+            b.min -= bromath::Vec3{r, r, r};
+            b.max += bromath::Vec3{r, r, r};
+            const float cx = (b.min.x + b.max.x) * 0.5f, cz = (b.min.z + b.max.z) * 0.5f;
+            x0 = std::min(x0, cx); x1 = std::max(x1, cx);
+            z0 = std::min(z0, cz); z1 = std::max(z1, cz);
+        }
+        const int gw = n ? static_cast<int>((x1 - x0) / kCell) + 1 : 0;
+        const int gh = n ? static_cast<int>((z1 - z0) / kCell) + 1 : 0;
+        const auto cellOf = [&](size_t i) {
+            const bromath::AABB3& b = bounds[i];
+            const int cx = std::clamp(static_cast<int>(((b.min.x + b.max.x) * 0.5f - x0) / kCell), 0, gw - 1);
+            const int cz = std::clamp(static_cast<int>(((b.min.z + b.max.z) * 0.5f - z0) / kCell), 0, gh - 1);
+            return static_cast<size_t>(cz) * gw + cx;
+        };
+        // A counting sort: each cell keeps its trees in the order given.
+        start.assign(static_cast<size_t>(gw) * gh + 1, 0);
+        for (size_t i = 0; i < n; ++i) start[cellOf(i) + 1]++;
+        for (size_t c = 1; c < start.size(); ++c) start[c] += start[c - 1];
+        items.resize(n);
+        std::vector<uint32_t> fill(start.begin(), start.end() - 1);
+        cellBox.assign(start.size() - 1, bromath::AABB3{{1e30f, 1e30f, 1e30f}, {-1e30f, -1e30f, -1e30f}});
+        for (size_t i = 0; i < n; ++i) {
+            const size_t c = cellOf(i);
+            items[fill[c]++] = static_cast<uint32_t>(i);
+            cellBox[c].min = bromath::vmin(cellBox[c].min, bounds[i].min);
+            cellBox[c].max = bromath::vmax(cellBox[c].max, bounds[i].max);
+        }
+        mark.assign(n, 0);
+        world = w;
+        reach = r;
+    }
+    // Mark the trees of every cell `hit` lets through (and no others).
+    template <class Hit> void markCells(Hit hit) {
+        std::fill(mark.begin(), mark.end(), uint8_t{0});
+        for (size_t c = 0; c + 1 < start.size(); ++c) {
+            if (start[c] == start[c + 1] || !hit(cellBox[c])) continue;
+            for (uint32_t k = start[c]; k < start[c + 1]; ++k) mark[items[k]] = 1;
+        }
+    }
+};
+
+SceneMeshDrawer::ForestCull& SceneMeshDrawer::forestCull(const ForestNode& node, const bromath::Mat4& world,
+                                                         float reach) {
+    const uint64_t use = ++forestCullUse_;
+    auto& slot = forestCull_[&node];
+    if (!slot) slot = std::make_shared<ForestCull>();
+    ForestCull& c = *slot;
+    if (c.generation != node.dataGeneration() || c.reach != reach ||
+        std::memcmp(c.world.data, world.data, sizeof(world.data)) != 0 || c.bounds.size() != node.instances().size()) {
+        c.build(node.instances(), world, reach);
+        c.generation = node.dataGeneration();
+    }
+    c.used = use;
+    // Nodes gone (or long undrawn) give their cells back.
+    if ((use & 1023) == 0)
+        for (auto it = forestCull_.begin(); it != forestCull_.end();)
+            it = it->second->used + 4096 < use ? forestCull_.erase(it) : std::next(it);
+    return c;
+}
+
 std::unique_ptr<SceneMeshDrawer::ForestPlan> SceneMeshDrawer::planForest(SceneFrame& frame, ForestNode& node) {
     if (node.instanceCount() == 0 || node.specimenCount() == 0 || node.mesh().empty() || node.effectiveUnlit()) {
         node.setStats({});
@@ -778,19 +890,15 @@ std::unique_ptr<SceneMeshDrawer::ForestPlan> SceneMeshDrawer::planForest(SceneFr
     for (const auto& in : instances) maxScale = std::max(maxScale, in.scale);
     const float reach = frame.renderer.vegetationReach(maxHeight * maxScale, world);
 
-    // Every tree's world bounds once.
-    P.bounds.resize(instances.size());
-    for (size_t i = 0; i < instances.size(); ++i) {
-        P.bounds[i] = bromath::atransform(instances[i].bounds, world);
-        P.bounds[i].min -= bromath::Vec3{reach, reach, reach};
-        P.bounds[i].max += bromath::Vec3{reach, reach, reach};
-    }
+    // Every tree's world bounds (kept from frame to frame), by cell.
+    ForestCull& cull = forestCull(node, world, reach);
+    P.bounds = &cull.bounds;
 
-    // The camera's trees.
-    P.seen.reserve(instances.size());
+    // The camera's trees: those of the cells in view, in the trees' order.
+    cull.markCells([&](const bromath::AABB3& b) { return bromath::fintersects(view.frustum, b); });
     for (uint32_t i = 0; i < instances.size(); ++i) {
-        const bromath::AABB3& b = P.bounds[i];
-        if (!bromath::fintersects(view.frustum, b)) {
+        const bromath::AABB3& b = cull.bounds[i];
+        if (!cull.mark[i] || !bromath::fintersects(view.frustum, b)) {
             P.stats.culled++;
             continue;
         }
@@ -846,10 +954,11 @@ std::unique_ptr<SceneMeshDrawer::ForestPlan> SceneMeshDrawer::planForest(SceneFr
             if (!tile.render) continue;
             const int ti = static_cast<int>(P.tileSlots.size());
             P.tileSlots.push_back(slot);
+            cull.markCells([&](const bromath::AABB3& b) { return bromath::fintersects(tile.frustum, b); });
             for (uint32_t i = 0; i < instances.size(); ++i) {
-                if (!bromath::fintersects(tile.frustum, P.bounds[i])) continue;
+                if (!cull.mark[i] || !bromath::fintersects(tile.frustum, cull.bounds[i])) continue;
                 float texel = tile.texelConst;
-                const float dc = bromath::vlen((P.bounds[i].min + P.bounds[i].max) * 0.5f - view.eye);
+                const float dc = bromath::vlen((cull.bounds[i].min + cull.bounds[i].max) * 0.5f - view.eye);
                 if (!tile.ortho) texel += tile.texelPerMetre * dc;
                 P.cast.push_back({i, instances[i].scale * nodeScale / std::max(texel, 1e-5f), ti, 0.0f,
                                   P.lod.forceRange <= 0.0f || dc <= P.lod.forceRange, dc});
@@ -1051,7 +1160,7 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
         std::vector<std::pair<float, Entry>> keyed;
         keyed.reserve(g.size());
         for (const Entry& e : g)
-            keyed.push_back({bromath::vlen((P.bounds[e.instance].min + P.bounds[e.instance].max) * 0.5f - view.eye),
+            keyed.push_back({bromath::vlen(((*P.bounds)[e.instance].min + (*P.bounds)[e.instance].max) * 0.5f - view.eye),
                              e});
         std::stable_sort(keyed.begin(), keyed.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
         for (size_t i = 0; i < g.size(); ++i) g[i] = keyed[i].second;

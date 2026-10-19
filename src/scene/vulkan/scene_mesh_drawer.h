@@ -235,7 +235,14 @@ private:
     // a node shows the camera and the shadow tiles, then, at a detail
     // factor, its draws.
     struct ForestPlan;
-    static std::unique_ptr<ForestPlan> planForest(SceneFrame& frame, ForestNode& node);
+    std::unique_ptr<ForestPlan> planForest(SceneFrame& frame, ForestNode& node);
+    // A node's trees' world bounds and the cells of ground they stand in,
+    // kept while its trees, transform and sway reach hold, so a frame tests
+    // a cell before its trees and never re-transforms them.
+    struct ForestCull;
+    ForestCull& forestCull(const ForestNode& node, const bromath::Mat4& world, float reach);
+    std::unordered_map<const ForestNode*, std::shared_ptr<ForestCull>> forestCull_;
+    uint64_t forestCullUse_ = 0;
     void finishForest(SceneFrame& frame, ForestPlan& plan, float detail, float shadowDetail,
                       std::vector<MeshDraw>& out);
 
