@@ -637,6 +637,23 @@ void ForestNode::barkOverLeaf(size_t k, float out[3]) const {
     for (int i = 0; i < 3; ++i) out[i] = leaf[i] > 1e-4f ? std::clamp(bark[i] / leaf[i], 0.05f, 8.0f) : 1.0f;
 }
 
+float ForestNode::woodSeen(size_t k) const {
+    if (k >= specimens_.size()) return 1.0f;
+    const Specimen& s = specimens_[k];
+    if (s.leafCount == 0 || s.crownRadius <= 0.0f) return 1.0f;
+    // Its leaves' optical depth through the crown's outline (half their
+    // area facing any way, each an ellipse its card long, a spray's at its
+    // fill), and the share of wood spread evenly through that depth seen
+    // past the leaves in front of it.
+    const float len = leafLength();
+    const float aspect =
+        look_.leafForm == 0 ? leafAspect() : leafAspect() * sprayFill(look_.leafForm) * (4.0f / 3.14159265f);
+    const float leaf = 0.785398f * len * len * aspect;
+    const float outline = 3.14159265f * s.crownRadius * std::max(s.crownRadiusUp, s.crownRadius * 0.25f);
+    const float L = 0.5f * static_cast<float>(s.leafCount) * leaf / outline;
+    return L > 1e-3f ? (1.0f - std::exp(-L)) / L : 1.0f;
+}
+
 void ForestNode::refreshGpu() const {
     const float* c = color();
     const float colors[6] = {c[0], c[1], c[2], barkColor_[0], barkColor_[1], barkColor_[2]};

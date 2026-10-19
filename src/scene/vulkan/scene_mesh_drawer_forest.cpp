@@ -93,6 +93,12 @@ constexpr float kBarkRibbonCut = 0.5f;
 // How much of a needle node's undrawn fine wood shows through its needles
 // (the share of its outline area the tint toward the bark stands for).
 constexpr float kWoodShare = 0.6f;
+// ForestNode::woodSeen of the forest demo's pines, where kWoodShare was
+// fitted: a needle or scale-leaf node's share is scaled by its own over
+// this. (At kWoodShare alone, a cypress, its scale leaves twice as deep,
+// was tinted as much as a pine: its widened tier 8.9 levels lighter than
+// its leaves at 25 m noon unshadowed, 1.4 with no tint.)
+constexpr float kWoodSeenRef = 0.13f;
 // How much further a broad node's lobe sprites reach, per unit of that
 // share (their radius times 1 + this times it, at most 1.3).
 constexpr float kLobeReach = 0.5f;
@@ -310,10 +316,15 @@ struct SceneMeshDrawer::ForestPlan {
             const float crown = 3.14159265f * sp.crownRadius * std::max(sp.crownRadiusUp, sp.crownRadius * 0.25f);
             const float share = area / crown;
             if (twigs) lobeReach = 1.0f + std::clamp(kLobeReach * share, 0.0f, 0.3f);
-            const float f = std::clamp(kWoodShare * share, 0.0f, 0.5f);
+            const size_t spk = static_cast<size_t>(&sp - node->specimens().data());
+            // A needle or scale-leaf node's wood shows past the leaves in
+            // front of it: as much as its leaves leave open (woodSeen), over
+            // a pine's (kWoodSeenRef), which kWoodShare was fitted on.
+            const float seen = twigs ? 1.0f : node->woodSeen(spk) / kWoodSeenRef;
+            const float f = std::clamp(kWoodShare * share * seen, 0.0f, 0.5f);
             if (f > 0.0f) {
                 float r[3];
-                node->barkOverLeaf(static_cast<size_t>(&sp - node->specimens().data()), r);
+                node->barkOverLeaf(spk, r);
                 const float shade = twigs ? kWoodShade : 1.0f;
                 for (int i = 0; i < 3; ++i) wood[i] = 1.0f + f * (shade * r[i] - 1.0f);
             }
