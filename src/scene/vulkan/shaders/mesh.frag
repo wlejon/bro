@@ -542,6 +542,7 @@ void main() {
     // own one's (alone, a widened conifer's sprays against a low sun glowed
     // half again as much as its leaves).
     s.leafThroughSpread = FOREST_THROUGH_SPREAD * clamp(1.0 - 1.0 / max(inSprayWidening, 1.0), 0.0, 1.0);
+    s.leafSpread = FOREST_MASS_SPREAD * clamp(1.0 - 1.0 / max(inSprayWidening * inSprayWidening, 1.0), 0.0, 1.0);
 #endif
 #ifdef SCENE_VEGETATION
     s.leafSphere = mass.sphere;
