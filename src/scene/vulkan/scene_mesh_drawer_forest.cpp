@@ -195,6 +195,7 @@ struct Seen {
     float barkPx = 0;   // at the whole tree (0: px)
     bool forced = true; // within the forced tier's range (Lod::forceRange) and its ceiling (capForced)
     float dist = 0.0f;  // from the eye (m: the camera's to the crown, a caster's to the tree's middle)
+    float far = -1.0f;  // the camera's: to the crown's far side (m; Lod::leavesRange)
     // The camera's bark by its segments' own widths (ForestPlan::classifyBark):
     // one past the last segment (thickest first) curved, one past the last at
     // least barkFineSides * barkSidesPixels wide, at least barkSidesPixels
@@ -242,6 +243,8 @@ struct SceneMeshDrawer::ForestPlan {
     std::vector<Seen> cast;               // each shadow tile's
     std::vector<int> tileSlots;           // per tile: its slot in the shadow plan
     std::vector<float> seenPx;            // per tree: the camera's px (Seen::px), 0 when unseen
+    std::vector<float> seenDist;          // per tree: the camera's distances (Seen::dist, Seen::far), -1 when unseen
+    std::vector<float> seenFar;
     float canopyTop = -1e30f;             // the highest tree top within 40 m of the eye (across the ground)
     // The view, for a clump's own size on screen (fine twigs).
     bromath::Vec3 eye{};
@@ -280,9 +283,34 @@ struct SceneMeshDrawer::ForestPlan {
     int forceOf(const Seen& s) const { return s.forced ? force : -1; }
 
     ForestNode::TreeLod casterLod(const ForestNode::Lod& L, const ForestNode::Specimen& sp, const Seen& s) const {
-        ForestNode::TreeLod t = ForestNode::treeLod(L, sp, s.px, leafLength, forceOf(s), s.barkPx);
-        if (forceOf(s) >= 0 || s.instance >= seenPx.size() || seenPx[s.instance] <= 0.0f) return t;
-        const ForestNode::TreeLod c = ForestNode::treeLod(lod, sp, seenPx[s.instance], leafLength);
+        // Its leaves within the camera's Lod::leavesRange as the camera's
+        // are (by the caster's own distance when the camera does not see it).
+        const bool seenTree = s.instance < seenPx.size() && seenPx[s.instance] > 0.0f;
+        const float camDist = seenTree ? seenDist[s.instance] : s.dist;
+        const float camFar = seenTree ? seenFar[s.instance] : s.dist;
+        ForestNode::TreeLod t = ForestNode::treeLod(L, sp, s.px, leafLength, forceOf(s), s.barkPx, camDist, camFar);
+        // Inside the sphere its leaf casters are at full detail whatever the
+        // texel, thinned only by the shadow budget (L's detail): leaf casters widened to a texel shade more than
+        // the leaves they stand for (a pine inside the sphere 13 levels
+        // darker than its leaves forced), and at full detail unbounded a
+        // trunks view sent 32 M caster vertices to 12.6 M by size.
+        if (forceOf(s) < 0 && L.leavesRange > 0.0f && camDist >= 0.0f && camDist < L.leavesRange + 0.5f * L.leavesBand &&
+            sp.clumpCount > 0) {
+            const float w = std::max(1.0f, L.detail);
+            t.widening = w;
+            t.keep = 1.0f / (w * w);
+        }
+        // A crown across the near sphere: the camera draws both tiers whole,
+        // each its pixels on its side, and so does its caster, each leaf and
+        // clump kept by its own distance (forestCasterKept). (Both whole
+        // shaded it twice; leaves to the crown's last pixel inside, then
+        // clumps, stepped the crown 15 levels lighter as it left; leaves for
+        // the share inside and clumps for the rest, each over the whole
+        // crown, shaded a pine's near leaves 8 levels darker.)
+        if (forceOf(s) < 0 && t.leaves >= 1.0f && t.clumps >= 1.0f) return t;
+        if (forceOf(s) >= 0 || !seenTree) return t;
+        const ForestNode::TreeLod c =
+            ForestNode::treeLod(lod, sp, seenPx[s.instance], leafLength, -1, 0.0f, camDist, camFar);
         // Where the camera draws a tree's leaves, its caster keeps leaves
         // (at the tile's widening) for that share rather than clumps: a leaf
         // takes its shade from the casters alone, and a clump's disc stands
@@ -600,7 +628,7 @@ struct SceneMeshDrawer::ForestPlan {
         for (const Seen& s : shadow ? cast : seen) {
             const ForestNode::Specimen& sp = specimens[instances[s.instance].specimen];
             addTree(nullptr, s.instance, sp,
-                    shadow ? casterLod(L, sp, s) : ForestNode::treeLod(L, sp, s.px, leafLength, forceOf(s), s.barkPx),
+                    shadow ? casterLod(L, sp, s) : ForestNode::treeLod(L, sp, s.px, leafLength, forceOf(s), s.barkPx, s.dist, s.far),
                     shadow, v, s.px, s.barkPx, shadow ? nullptr : &s);
         }
         return static_cast<double>(v);
@@ -660,7 +688,7 @@ struct SceneMeshDrawer::ForestPlan {
         const ForestNode::Specimen& sp = node->specimens()[node->instances()[s.instance].specimen];
         uint64_t v = 0;
         addTree(nullptr, s.instance, sp,
-                shadow ? casterLod(shadowLod, sp, s) : ForestNode::treeLod(lod, sp, s.px, leafLength, force, s.barkPx),
+                shadow ? casterLod(shadowLod, sp, s) : ForestNode::treeLod(lod, sp, s.px, leafLength, force, s.barkPx, s.dist, s.far),
                 shadow, v, s.px, s.barkPx, shadow ? nullptr : &s);
         return v;
     }
@@ -732,6 +760,9 @@ std::unique_ptr<SceneMeshDrawer::ForestPlan> SceneMeshDrawer::planForest(SceneFr
     P.leafCopies = node.leafCopies();
     P.cardVerts = node.cardVertices();
     P.force = node.forceTier();
+    // A forced tier is drawn whole, not cut to the near sphere (forced
+    // leaves past it were their pixels inside it only).
+    if (P.force >= 0) P.lod.leavesRange = P.shadowLod.leavesRange = 0.0f;
     P.cores = node.look().leafForm != 0;
     // A spray node's thinned leaves stay sprays, each widened (its needles
     // cut out as the near ones'), not clusters of broad leaves.
@@ -780,7 +811,7 @@ std::unique_ptr<SceneMeshDrawer::ForestPlan> SceneMeshDrawer::planForest(SceneFr
         // The leaves': to the crown, an upright cylinder round its clumps,
         // so a crown overhead is as near as its underside, not the trunk
         // beside the eye.
-        float dl = d;
+        float dl = d, far = d;
         if (sp.clumpCount > 0) {
             const bromath::Vec3 local{sp.crown.x * in.cosYaw + sp.crown.z * in.sinYaw, sp.crown.y,
                                       -sp.crown.x * in.sinYaw + sp.crown.z * in.cosYaw};
@@ -789,16 +820,23 @@ std::unique_ptr<SceneMeshDrawer::ForestPlan> SceneMeshDrawer::planForest(SceneFr
             const float dh = std::max(0.0f, std::hypot(e.x - c.x, e.z - c.z) - sp.crownRadius * k);
             const float dv = std::max(0.0f, std::fabs(e.y - c.y) - sp.crownRadiusUp * k);
             dl = std::max(std::hypot(dh, dv), d);
+            far = bromath::vlen(c - e) + std::max(sp.crownRadius, sp.crownRadiusUp) * k;
         }
         const float unit = in.scale * nodeScale;
         P.seen.push_back({i, (view.perspective ? pxAtMetre / dl : pxAtMetre) * unit, -1,
                           (view.perspective ? pxAtMetre / d : pxAtMetre) * unit,
-                          P.lod.forceRange <= 0.0f || dl <= P.lod.forceRange, dl});
+                          P.lod.forceRange <= 0.0f || dl <= P.lod.forceRange, dl, far});
     }
 
     for (Seen& s : P.seen) P.classifyBark(s);
     P.seenPx.assign(instances.size(), 0.0f);
-    for (const Seen& s : P.seen) P.seenPx[s.instance] = s.px;
+    P.seenDist.assign(instances.size(), -1.0f);
+    P.seenFar.assign(instances.size(), -1.0f);
+    for (const Seen& s : P.seen) {
+        P.seenPx[s.instance] = s.px;
+        P.seenDist[s.instance] = s.dist;
+        P.seenFar[s.instance] = s.far;
+    }
 
     // Each shadow tile's trees, at its texel size.
     const ShadowPlan& shadows = frame.renderer.shadowPlan();
@@ -996,7 +1034,7 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
         std::vector<ForestNode::TreeLod> seenLods(instances.size(), unseen);
         for (const Seen& s : P.seen) {
             const ForestNode::Specimen& sp = specimens[instances[s.instance].specimen];
-            const ForestNode::TreeLod t = ForestNode::treeLod(L, sp, s.px, P.leafLength, P.forceOf(s), s.barkPx);
+            const ForestNode::TreeLod t = ForestNode::treeLod(L, sp, s.px, P.leafLength, P.forceOf(s), s.barkPx, s.dist, s.far);
             seenLods[s.instance] = t;
             if (t.leaves > 0.0f) stats.trees[0]++;
             if (t.clumps > 0.0f) stats.trees[1]++;
@@ -1329,6 +1367,23 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
                 d.push.pbrParams[3] = static_cast<float>(spriteFlags);
                 break;
             default: break;
+            }
+            // The near sphere (Lod::leavesRange): the camera's leaves and
+            // clumps cut each its pixels to its side of it, across the band
+            // (mesh.frag's MESH_FOREST_REVEAL); the sphere rides in the
+            // emissive's xy (its intensity 0, so it adds no light). A
+            // caster keeps each leaf or clump by its own distance as the
+            // camera keeps pixels, its side in the emissive's z
+            // (PassShadow's params.yzw; shadow_forest_*.vert's forestCasterKept).
+            const bool leafSide = k == Cores || k == LeafNear || k == LeafCard || k == Twigs || k == TwigsFine;
+            if (P.lod.leavesRange > 0.0f && (leafSide || k == Clumps)) {
+                if (!shadow)
+                    d.push.pbrParams[3] =
+                        static_cast<float>(static_cast<uint32_t>(d.push.pbrParams[3]) | mesh_flags::kForestReveal);
+                d.push.emissive[0] = P.lod.leavesRange;
+                d.push.emissive[1] = P.lod.leavesBand;
+                d.push.emissive[2] = shadow ? (k == Clumps ? -1.0f : 1.0f) : 0.0f;
+                d.push.emissive[3] = 0.0f;
             }
             if (posed) {
                 // The pose pass runs these entries first, with the draw's own

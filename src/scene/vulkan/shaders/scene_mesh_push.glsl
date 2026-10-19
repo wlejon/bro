@@ -43,6 +43,10 @@ const uint MESH_FOREST_CLUSTER      = 65536u;
 const uint MESH_FOREST_LEAF_CUT     = 1048576u;
 // A grass node's herb plants (mesh_herb.vert, mesh.frag's SCENE_HERB build).
 const uint MESH_HERB                = 2097152u;
+// A forest's leaves (leaf, card, cluster, core and twig draws) or clumps, cut
+// to their side of the near sphere (ForestNode::Lod::leavesRange): its
+// radius and band in push.emissive.xy (mesh.frag's forestSampleMask).
+const uint MESH_FOREST_REVEAL       = 8388608u;
 // Bits 10-11: the vertex colour mode — 0 none, 1 replaces the albedo, 2 tints it.
 const uint MESH_VERTEX_COLOR_SHIFT  = 10u;
 

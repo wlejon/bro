@@ -35,7 +35,7 @@ private:
     struct alignas(16) Push {
         float lightViewProj[16];
         float modelRows[12];
-        float params[4];   // x wind mask
+        float params[4];   // x wind mask; yzw a forest caster's near sphere
     };
     static_assert(sizeof(Push) == 128);
 

@@ -20,7 +20,8 @@ layout(location = 4) flat out float outHollow;  // a broad lobe's hollow (forest
 void main() {
     ForestSprite s;
     // The draw's mode rides in the wind-mask slot (MeshDraw push.extra.z).
-    if (!forestSprite(int(push.params.x + 0.5), gl_InstanceIndex, gl_VertexIndex, casterModel(), s)) {
+    if (!forestSprite(int(push.params.x + 0.5), gl_InstanceIndex, gl_VertexIndex, casterModel(), s) ||
+        !forestCasterKept(s.center, s.seed)) {
         gl_Position = FOREST_CULLED;
         outUV = vec2(0.0);
         outSeed = 0.0;

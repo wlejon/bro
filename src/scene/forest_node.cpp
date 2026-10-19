@@ -330,7 +330,7 @@ void ForestNode::lodToArray(float (&out)[kLodCount]) const {
     const float v[kLodCount] = {l.leafPixels, l.flutterFade, l.cardWidening, l.clumpFrom, l.clumpTo, l.crownFrom,
                                 l.crownTo, l.barkPixels, l.barkSidesPixels, l.shadowKeep, l.range,
                                 l.budget, l.shadowBudget, l.clusters, l.barkKeepPixels, l.barkFineSides,
-                                l.forceRange};
+                                l.forceRange, l.leavesRange, l.leavesBand};
     std::copy(std::begin(v), std::end(v), out);
 }
 
@@ -339,7 +339,7 @@ void ForestNode::lodFromArray(const double* v, size_t n) {
                              &lod_.clumpTo, &lod_.crownFrom, &lod_.crownTo, &lod_.barkPixels,
                              &lod_.barkSidesPixels, &lod_.shadowKeep, &lod_.range, &lod_.budget,
                              &lod_.shadowBudget, &lod_.clusters, &lod_.barkKeepPixels, &lod_.barkFineSides,
-                             &lod_.forceRange};
+                             &lod_.forceRange, &lod_.leavesRange, &lod_.leavesBand};
     for (size_t i = 0; i < n && i < static_cast<size_t>(kLodCount); ++i)
         if (!std::isnan(v[i])) *dst[i] = static_cast<float>(v[i]);
     lod_.leafPixels = std::max(lod_.leafPixels, 0.01f);
@@ -357,6 +357,8 @@ void ForestNode::lodFromArray(const double* v, size_t n) {
     lod_.barkKeepPixels = std::max(lod_.barkKeepPixels, 0.0f);
     lod_.barkFineSides = std::max(lod_.barkFineSides, 0.0f);
     lod_.forceRange = std::max(lod_.forceRange, 0.0f);
+    lod_.leavesRange = std::max(lod_.leavesRange, 0.0f);
+    lod_.leavesBand = std::max(lod_.leavesBand, 0.0f);
 }
 
 ForestNode::ClumpTwigs ForestNode::twigPieces(uint32_t leaves) {
@@ -406,7 +408,7 @@ void ForestNode::fadeRanges(const TreeLod& t, float (&lo)[kTiers], float (&hi)[k
 }
 
 ForestNode::TreeLod ForestNode::treeLod(const Lod& lod, const Specimen& s, float px, float leafLength,
-                                        int forceTier, float barkPx) {
+                                        int forceTier, float barkPx, float dist, float distFar) {
     TreeLod t;
     px = std::max(px, 1e-6f);
     barkPx = barkPx > 0.0f ? barkPx : px;
@@ -444,6 +446,22 @@ ForestNode::TreeLod ForestNode::treeLod(const Lod& lod, const Specimen& s, float
     t.crowns = toCrowns;
     t.clumps = s.clumpCount > 0 ? toClumps * (1.0f - toCrowns) : 0.0f;
     t.leaves = s.clumpCount > 0 ? (1.0f - toClumps) * (1.0f - toCrowns) : 1.0f;
+    // The near sphere: a crown reaching into it draws its leaves whole, and
+    // its clumps whole where it reaches past the band's near edge (each
+    // tier's pixels are cut to its side of the sphere); one wholly past it
+    // hands its leaves' share to its clumps.
+    if (lod.leavesRange > 0.0f && dist >= 0.0f && s.clumpCount > 0) {
+        const float half = 0.5f * lod.leavesBand;
+        const float farD = std::max(distFar, dist);
+        if (dist < lod.leavesRange + half) {
+            t.leaves = 1.0f;
+            t.clumps = farD > lod.leavesRange - half ? 1.0f : 0.0f;
+            t.crowns = 0.0f;
+        } else {
+            t.clumps += t.leaves;
+            t.leaves = 0.0f;
+        }
+    }
     return t;
 }
 

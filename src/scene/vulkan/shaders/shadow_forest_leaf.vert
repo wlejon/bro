@@ -80,5 +80,9 @@ void main() {
     mat3 rot = vegLeafAmount(pose, w, normalize(mat3(model) * F), normalize(mat3(model) * R[1]), pos - anchor, seed,
                              amount);
     pos = anchor + pose.offset + rot * (pos - anchor);
+    if (!forestCasterKept(pos, float(procHash(uint(leaf))) * (1.0 / 4294967296.0))) {
+        gl_Position = FOREST_CULLED;
+        return;
+    }
     gl_Position = push.lightViewProj * vec4(pos, 1.0);
 }

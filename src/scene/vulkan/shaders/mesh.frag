@@ -93,8 +93,8 @@ layout(location = 1) out vec4 outIndirect;
 // share of the samples by a second dither, salted by `salt` (the card's), so
 // two cards over one pixel keep different samples and their cover adds up as
 // leaves' would. Without MSAA a pixel is all or nothing (the mask is all
-// bits).
-int forestSampleMask(float code, float coverage, bool msaa, uint salt) {
+// bits). `range` narrows [lo, hi) further (the near sphere's cut).
+int forestSampleMask(float code, float coverage, bool msaa, uint salt, vec2 range) {
     // Two independent white-noise values a pixel (an integer hash): a
     // gradient noise lines up into visible diagonal hatching at part fades.
     uvec2 q = uvec2(gl_FragCoord.xy);
@@ -108,7 +108,7 @@ int forestSampleMask(float code, float coverage, bool msaa, uint salt) {
     v2 ^= v2 >> 12u;
     float h2 = float(v2 >> 16u) * (1.0 / 65536.0);
     float k = floor(code * 0.5);
-    float lo = k * (1.0 / 4096.0), hi = code - 2.0 * k;
+    float lo = max(k * (1.0 / 4096.0), range.x), hi = min(code - 2.0 * k, range.y);
     if (!msaa) return h >= lo && h < hi && h2 < coverage ? -1 : 0;
     int mask = 0;
     for (int s = 0; s < 4; ++s) {
@@ -123,6 +123,7 @@ int forestSampleMask(float code, float coverage, bool msaa, uint salt) {
 #include "scene_camera.glsl"
 #include "scene_lighting.glsl"
 #include "scene_mesh_push.glsl"
+#include "scene_forest_layout.h"
 #ifdef SCENE_VEGETATION
 #define FOREST_MASS_FRAGMENT 1
 #include "scene_forest_mass.glsl"
@@ -225,7 +226,7 @@ void main() {
     if (herb.cover < 1.0 / 255.0) discard;
     {
         int mask = forestSampleMask(1.0, herb.cover, (flags & MESH_FOREST_MSAA) != 0u,
-                                    uint(inHerbInfo.z * 16777216.0));
+                                    uint(inHerbInfo.z * 16777216.0), vec2(0.0, 1.0));
         if (mask == 0) discard;
         gl_SampleMask[0] = mask;
     }
@@ -261,7 +262,18 @@ void main() {
         // under a pixel wide, its cover (inUV.x) is its width.
         if (inUV.y < -1.5) mass.cover = clamp(inUV.x, 0.0, 1.0);
 #endif
-        int mask = forestSampleMask(inInstColor.a, mass.cover, (flags & MESH_FOREST_MSAA) != 0u, mass.salt);
+        // The near sphere (MESH_FOREST_REVEAL, ForestNode::Lod::leavesRange):
+        // a leaf's pixel shows inside it and a clump's outside, the two
+        // sharing the band's dither (the pixel's h), so on approach the
+        // leaves come in from the crown's near side as one front, each
+        // pixel one tier or the other.
+        vec2 range = vec2(0.0, 1.0);
+        if ((flags & MESH_FOREST_REVEAL) != 0u) {
+            float inside = clamp((push.emissive.x + 0.5 * push.emissive.y - camDist) / max(push.emissive.y, 1e-3), 0.0, 1.0);
+            bool clumps = (flags & MESH_FOREST_SPRITE) != 0u && int(push.extra.z) == FOREST_SPRITE_CLUMPS;
+            range = clumps ? vec2(0.0, 1.0 - inside) : vec2(1.0 - inside, 1.0);
+        }
+        int mask = forestSampleMask(inInstColor.a, mass.cover, (flags & MESH_FOREST_MSAA) != 0u, mass.salt, range);
         if (mask == 0) discard;
         gl_SampleMask[0] = mask;
     }

@@ -735,6 +735,13 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  *   they send 16 times `budget` (`shadowBudget` for the casters) of vertices, the rest going by size: the
  *   Leaves tier forced on a whole forest to the horizon was billions of vertices, a frame past a GPU's
  *   watchdog (`forestStats().unforced` counts the trees the ceiling let go).
+ * @property {number} [leavesRange=10] - the near sphere (m from the eye): inside it the trees are drawn as their
+ *   leaves whatever their size on screen (their shadow casters at full detail, within `shadowBudget`); past it
+ *   as clumps and crowns by size. The two meet per pixel, not per tree: a crown across the sphere draws its leaves' pixels inside and
+ *   its clumps' outside, its casters likewise leaf by leaf and clump by clump, so on approach the leaves come in
+ *   from the crown's near side as one front. 0: by size alone.
+ * @property {number} [leavesBand=2] - the metres of dither about `leavesRange` over which a pixel turns from
+ *   clumps to leaves.
  * @property {number} [budget=12.5] - millions of leaf and bark vertices the view may send; 0: no budget.
  * @property {number} [shadowBudget=6] - the same for every shadow tile together.
  * @property {number} [clusters=1] - past `cardWidening` a kept leaf is drawn as the leaves it stands for (1),
@@ -1648,7 +1655,9 @@ class SceneNode {
    * Forest: what specimen `specimen` draws at `pxPerUnit` pixels per
    * specimen unit (the view's pixels per metre at the tree times its scale),
    * at full detail: `{widening, keep, card, leaves, clumps, crowns,
-   * barkRadius, barkSides}`, the three tier weights summing to 1.
+   * barkRadius, barkSides}`, the three tier weights summing to 1. By size
+   * alone: ForestLod `leavesRange` needs the tree's distance
+   * (forestSeenLod has it).
    * @param {number} specimen
    * @param {number} pxPerUnit
    * @returns {Object|undefined}

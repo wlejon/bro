@@ -151,7 +151,7 @@ function run(scene) {
     // ── The node ─────────────────────────────────────────────────────────
     const node = scene.createForest({ forest: f, leaf: leaf(), color: '#4a7a2a', castsShadow: true });
     assert(node && node.forestLod, 'createForest returns the node');
-    node.setForestLod({ leafPixels: 9, budget: 0, shadowBudget: 0 });
+    node.setForestLod({ leafPixels: 9, budget: 0, shadowBudget: 0, leavesRange: 0 });
     const lod = node.forestLod();
     assert(lod.leafPixels === 9 && lod.clumpFrom === 3 && lod.budget === 0, 'lod round trips: ' + JSON.stringify(lod));
 
@@ -234,6 +234,35 @@ function run(scene) {
     assert(tight.detail > 1 && tight.vertices < free.vertices * 0.4,
            'a quarter budget scales the detail down: ' + tight.detail.toFixed(2) + ', ' + tight.vertices + ' of ' + free.vertices);
     node.setForestLod({ budget: 0 });
+
+    // ── The near sphere ──────────────────────────────────────────────────
+    // Leaves too wide on screen for the leaves tier by size are drawn
+    // inside Lod.leavesRange whatever their size, and none outside it; the
+    // casters inside are at full detail but thin to the shadow budget.
+    node.setForestLod({ leafPixels: 400, leavesRange: 0 });
+    scene.captureFrame();
+    const bySize = node.forestStats();
+    node.setForestLod({ leavesRange: 40 });
+    scene.captureFrame();
+    const within = node.forestStats();
+    node.setForestLod({ leavesRange: 1 });
+    scene.captureFrame();
+    const outside = node.forestStats();
+    assert(bySize.trees.leaves === 0 && within.trees.leaves > 0 && outside.trees.leaves === 0,
+           'leaves inside the sphere only: ' + bySize.trees.leaves + ' / ' + within.trees.leaves + ' / ' + outside.trees.leaves);
+    const sun = scene.createLight({ type: 'directional', direction: [-0.4, -1, -0.3], intensity: 3 });
+    sun.castsShadow = true;
+    node.setForestLod({ leavesRange: 40 });
+    scene.captureFrame();
+    const casters = node.forestStats();
+    node.setForestLod({ shadowBudget: casters.shadowVertices * 0.25e-6 });
+    scene.captureFrame();
+    const thin = node.forestStats();
+    assert(thin.shadowDetail > 1 && thin.shadowVertices < casters.shadowVertices * 0.6,
+           'the sphere\'s casters thin to the shadow budget: ' + thin.shadowDetail.toFixed(2) + ', ' +
+           thin.shadowVertices + ' of ' + casters.shadowVertices);
+    sun.destroy();
+    node.setForestLod({ leafPixels: 9, leavesRange: 0, shadowBudget: 0 });
 
     // ── Pose agreement ───────────────────────────────────────────────────
     // A steady wind along +x (no gusts, so the bend settles): each tier's

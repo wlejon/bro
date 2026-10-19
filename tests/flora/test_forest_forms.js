@@ -65,7 +65,7 @@ function run(scene) {
 
     // ── A needle node, its own spray card ────────────────────────────────
     const color = [0.3, 0.5, 0.2];
-    const nn = scene.createForest({ forest: needle, leafForm: 'needle', color, lod: { budget: 0, shadowBudget: 0 } });
+    const nn = scene.createForest({ forest: needle, leafForm: 'needle', color, lod: { budget: 0, shadowBudget: 0, leavesRange: 0 } });
     assert(nn && nn.forestLod, 'a needle forest');
     for (const t of ['leaves', 'clumps', 'crowns']) {
         nn.setForestTier(t);
@@ -91,8 +91,8 @@ function run(scene) {
     nn.setForestTier('auto');
 
     // ── A scale-leaf node and a shrub node, every tier ───────────────────
-    const sn = scene.createForest({ forest: scale, color, lod: { budget: 0, shadowBudget: 0 } });
-    const bn = scene.createForest({ forest: broad, color, lod: { budget: 0, shadowBudget: 0 } });
+    const sn = scene.createForest({ forest: scale, color, lod: { budget: 0, shadowBudget: 0, leavesRange: 0 } });
+    const bn = scene.createForest({ forest: broad, color, lod: { budget: 0, shadowBudget: 0, leavesRange: 0 } });
     nn.visible = false;
     for (const [name, node] of [['scale', sn], ['shrub', bn]]) {
         const other = node === sn ? bn : sn;

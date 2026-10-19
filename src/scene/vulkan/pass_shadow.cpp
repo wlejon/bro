@@ -233,6 +233,9 @@ void PassShadow::drawCaster(SceneFrame& frame, const bromath::Mat4& lightViewPro
         for (int c = 0; c < 4; ++c) push.modelRows[r * 4 + c] = draw.push.model[c * 4 + r];
     }
     push.params[0] = draw.push.extra[2];
+    // A forest caster's near sphere and side (SceneMeshDrawer's forest
+    // emit; zero on every other draw that reads them).
+    for (int i = 0; i < 3; ++i) push.params[1 + i] = draw.push.emissive[i];
     vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(push), &push);
 
     SceneMeshDrawer::bindGeometryAndDraw(cmd, draw);

@@ -180,11 +180,24 @@ public:
         // forest to the horizon is billions of vertices, a frame longer than
         // a GPU's watchdog allows.
         float forceRange = 0.0f;
+        // The near sphere: leaves are drawn only within this distance of
+        // the eye (m), whatever their size on screen (their casters at full
+        // detail within the shadow budget, leaf by leaf as the camera's
+        // pixels), so the leaves tier holds at any resolution or field of
+        // view; past it the clumps (and crowns, by size) draw the trees.
+        // The two meet at the sphere, not
+        // tree by tree: a leaf's pixel shows inside it and a clump's outside,
+        // across `leavesBand` metres of dither about it (mesh.frag's
+        // MESH_FOREST_REVEAL), so on approach the leaves come in from the
+        // crown's near side as one front. Individual leaves are not needed
+        // past about 10 m. 0: by size alone.
+        float leavesRange = 10.0f;
+        float leavesBand = 2.0f;
         // The budget's detail factor this Lod is scaled by (scaled(); not
         // a setting).
         float detail = 1.0f;
     };
-    static constexpr int kLodCount = 17;
+    static constexpr int kLodCount = 19;
     /// `lod` with its pixel thresholds (leafPixels, barkPixels,
     /// barkKeepPixels) scaled by a detail factor (>= 1).
     static Lod scaled(const Lod& lod, float detail) {
@@ -382,9 +395,12 @@ public:
     /// pixels per metre at the tree times its scale) draws. `leafLength` in
     /// specimen units. `forceTier` as setForceTier. The drawer measures the
     /// leaves at the crown and the bark at the whole tree, so `barkPx` may
-    /// differ (0: the same).
+    /// differ (0: the same). `dist` and `distFar`: the crown's nearest and
+    /// furthest from the eye (m), for Lod::leavesRange (negative: by size
+    /// alone): a crown reaching into the near sphere draws its leaves, one
+    /// reaching past it its clumps too, each tier's pixels on its side.
     static TreeLod treeLod(const Lod& lod, const Specimen& s, float pxPerUnit, float leafLength, int forceTier = -1,
-                           float barkPx = 0.0f);
+                           float barkPx = 0.0f, float dist = -1.0f, float distFar = -1.0f);
 
     /// The dithered fade code mesh.frag reads: the tier draws the pixels
     /// whose dither value h is in [lo, hi). The tiers of a tree split [0, 1)

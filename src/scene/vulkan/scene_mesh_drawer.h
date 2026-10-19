@@ -76,6 +76,7 @@ constexpr uint32_t kForestBloom = 524288;   // a forest's blooms (a ForestSprite
 constexpr uint32_t kForestLeafCut = 1048576;   // a broad forest leaf's outline cut per pixel (mesh.frag)
 constexpr uint32_t kHerb = 2097152;            // a grass node's herb plants (a Grass draw): mesh_herb.vert, SCENE_HERB
 constexpr uint32_t kForestLeafInline = 4194304;   // forest leaves with no pose slot: mesh_forest_leaf.vert's FOREST_LEAF_INLINE
+constexpr uint32_t kForestReveal = 8388608;       // a forest's leaves or clumps cut to their side of the near sphere (emissive.xy)
 /// The vertex colour mode (0 none, 1 replaces the albedo, 2 tints it) in bits 10-11.
 constexpr uint32_t vertexColor(int mode) { return static_cast<uint32_t>(mode & 3) << 10; }
 }
