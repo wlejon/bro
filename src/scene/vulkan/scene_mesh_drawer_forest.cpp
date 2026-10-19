@@ -195,6 +195,12 @@ struct Seen {
     float barkPx = 0;   // at the whole tree (0: px)
     bool forced = true; // within the forced tier's range (Lod::forceRange) and its ceiling (capForced)
     float dist = 0.0f;  // from the eye (m: the camera's to the crown, a caster's to the tree's middle)
+    // The camera's bark by its segments' own widths (ForestPlan::classifyBark):
+    // one past the last segment (thickest first) curved, one past the last at
+    // least barkFineSides * barkSidesPixels wide, at least barkSidesPixels
+    // wide. kAllSegments: measured at the tree's nearest point.
+    static constexpr uint32_t kAllSegments = ~0u;
+    uint32_t curveEnd = kAllSegments, fineEnd = kAllSegments, nearEnd = kAllSegments;
 };
 
 // The detail factor that keeps `cost`'s vertices within `budget` millions: 1
@@ -238,21 +244,28 @@ struct SceneMeshDrawer::ForestPlan {
     float canopyTop = -1e30f;             // the highest tree top within 40 m of the eye (across the ground)
     // The view, for a clump's own size on screen (fine twigs).
     bromath::Vec3 eye{};
-    bromath::Mat4 world;
+    bromath::Mat4 world, invWorld;
     float pxAtMetre = 0.0f, nodeScale = 1.0f;
     bool perspective = true;
 
-    // Whether clump `c` of tree `inst` draws its twigs fine (kTwigFinePixels).
-    bool fineTwigs(uint32_t inst, uint32_t c) const {
+    // The budget's detail factor addTree measures at (set by cost(),
+    // forcedCost() and finishForest()): it scales what the eye misses
+    // first, the twigs' fine rows and their shoots.
+    float detail = 1.0f;
+    // Clump `c` of tree `inst`: its radius (specimen units) and the pixels
+    // a specimen unit spans at its nearest point (0 past the records).
+    float clumpPx(uint32_t inst, uint32_t c, float& radius) const {
         const auto& rec = node->clumpRecords();
-        if (c * 8 + 3 >= rec.size()) return false;
+        radius = 0.0f;
+        if (c * 8 + 3 >= rec.size()) return 0.0f;
         const ForestNode::Instance& in = node->instances()[inst];
         const float* q = &rec[c * 8];
         const bromath::Vec3 local{q[0] * in.cosYaw + q[2] * in.sinYaw, q[1], -q[0] * in.sinYaw + q[2] * in.cosYaw};
         const bromath::Vec3 w = bromath::mtransformPoint(world, in.position + local * in.scale);
         const float unit = in.scale * nodeScale;
         const float d = std::max(bromath::vlen(w - eye) - q[3] * unit, 0.25f);
-        return q[3] * (perspective ? pxAtMetre / d : pxAtMetre) * unit >= kTwigFinePixels;
+        radius = q[3];
+        return (perspective ? pxAtMetre / d : pxAtMetre) * unit;
     }
 
     // A tree's caster in a shadow tile: at the tile's texel size, but never
@@ -297,7 +310,7 @@ struct SceneMeshDrawer::ForestPlan {
     // What one tree at level of detail `t` adds to `G` (or, with no `G`, only
     // the vertices it would).
     void addTree(Groups* G, uint32_t inst, const ForestNode::Specimen& sp, const ForestNode::TreeLod& t,
-                 bool shadow, uint64_t& vertices, float px = 0.0f, float barkPx = 0.0f) {
+                 bool shadow, uint64_t& vertices, float px = 0.0f, float barkPx = 0.0f, const Seen* seen = nullptr) {
         const auto& keepRadius = node->keepRadius();
         // A needle node's fine wood (its twigs are no form of their own):
         // what the bark's cut leaves out (under kBarkRibbonCut of the cut)
@@ -403,12 +416,28 @@ struct SceneMeshDrawer::ForestPlan {
                     // Only a tree whose crown's nearest point is that near
                     // has a clump near enough to draw fine.
                     // (A clump is under kTwigFineClumpLeaves leaves across.)
-                    const bool mayFine = kTwigFineClumpLeaves * leafLength * px >= kTwigFinePixels;
+                    // Under the budget (detail over 1) the fine rows and the
+                    // shoots go first, by the square of the detail: a shoot
+                    // is a pixel wide where its leaves are 45, and a fine
+                    // twig's bend under a pixel where its clump is 120 px
+                    // across, both lost among the leaves before a leaf's
+                    // thinning would be seen. (Among the forest's trunks
+                    // 4.9 M vertices of twigs at detail 1, as many as their
+                    // leaves; under the trees 6.4 M of fine rows alone.)
+                    const float fineMin = kTwigFinePixels * detail * detail;
+                    const bool mayFine = kTwigFineClumpLeaves * leafLength * px >= fineMin;
                     const auto& twigsOf = node->clumpTwigs();
                     const float fade = ForestNode::fadeCode(lo[0], hi[0]);
+                    const float shootMin = kTwigPixels * detail * detail;
                     for (uint32_t c = sp.clumpStart; c < sp.clumpStart + sp.clumpCount && c < twigsOf.size(); ++c) {
-                        const uint32_t n = shoots ? twigsOf[c].pieces : twigsOf[c].stems;
-                        const bool fine = mayFine && fineTwigs(inst, c);
+                        // Each clump's shoots and fine rows by its own size
+                        // on screen (the tree's crown's nearest point is a
+                        // bound, the eye itself under the crown).
+                        float radius = 0.0f;
+                        const float cpx = shoots || mayFine ? clumpPx(inst, c, radius) : 0.0f;
+                        const bool shootsC = shoots && 2.0f * kTwigShootRadius * leafLength * cpx >= shootMin;
+                        const uint32_t n = shootsC ? twigsOf[c].pieces : twigsOf[c].stems;
+                        const bool fine = mayFine && radius * cpx >= fineMin;
                         vertices += uint64_t{(n + kTwigPiecesPerEntry - 1) / kTwigPiecesPerEntry} *
                                     kTwigPiecesPerEntry * kVertsPerTwig * (fine ? kTwigFineRows : 1u);
                         if (!G) continue;
@@ -440,9 +469,12 @@ struct SceneMeshDrawer::ForestPlan {
             const int sides = shadow ? kFarSides : t.barkSides;
             // Its thickest segments, curved (barkRows), and the rest straight.
             const uint32_t rows = barkRows(sides);
+            // (By the segments' own widths where the plan measured them.)
+            const bool own = seen && seen->curveEnd != Seen::kAllSegments;
             const uint32_t nc = rows > 1 && px > 0.0f
-                ? static_cast<uint32_t>(std::upper_bound(k0, k0 + n, kBarkCurvePixels / px,
-                                                         [](float r, float v) { return r > v; }) - k0)
+                ? own ? std::min(seen->curveEnd, n)
+                      : static_cast<uint32_t>(std::upper_bound(k0, k0 + n, kBarkCurvePixels / px,
+                                                               [](float r, float v) { return r > v; }) - k0)
                 : 0u;
             const auto entries = [](uint32_t m) { return uint64_t{(m + kSegmentsPerEntry - 1) / kSegmentsPerEntry}; };
             // Each segment's sides by its own width: a ring under
@@ -465,11 +497,13 @@ struct SceneMeshDrawer::ForestPlan {
             const float fine = lod.barkFineSides * lod.barkSidesPixels;
             // [0, c20) curved at 20 sides, [c20, nc) at 10; [nc, n20) straight
             // at the tree's sides, [n20, n10) at 10, [n10, n) at 5.
-            const uint32_t c20 = sides == kNearestSides ? under(0, nc, fine) : 0u;
+            const auto ownEnd = [&](uint32_t end, uint32_t from, uint32_t to) { return std::clamp(end, from, to); };
+            const uint32_t c20 = sides != kNearestSides ? 0u : own ? ownEnd(seen->fineEnd, 0, nc) : under(0, nc, fine);
             uint32_t n20 = n, n10 = n;
             if (sides > kFarSides) {
-                n10 = under(nc, n, lod.barkSidesPixels);
-                n20 = sides == kNearestSides ? std::min(under(nc, n, fine), n10) : nc;
+                n10 = own ? ownEnd(seen->nearEnd, nc, n) : under(nc, n, lod.barkSidesPixels);
+                n20 = sides == kNearestSides
+                    ? std::min(own ? ownEnd(seen->fineEnd, nc, n) : under(nc, n, fine), n10) : nc;
             }
             const uint64_t perEntry = uint64_t{kSegmentsPerEntry} * 6u;
             vertices += entries(c20) * barkRows(kNearestSides) * kNearestSides * perEntry;
@@ -550,6 +584,7 @@ struct SceneMeshDrawer::ForestPlan {
     // The vertices the camera's (or the shadow tiles') trees send at `detail`.
     double cost(float detail, bool shadow) {
         if (force >= 0) return 0.0;
+        this->detail = detail;
         const ForestNode::Lod L = ForestNode::scaled(shadow ? shadowLod : lod, detail);
         const auto& specimens = node->specimens();
         const auto& instances = node->instances();
@@ -558,18 +593,67 @@ struct SceneMeshDrawer::ForestPlan {
             const ForestNode::Specimen& sp = specimens[instances[s.instance].specimen];
             addTree(nullptr, s.instance, sp,
                     shadow ? casterLod(L, sp, s) : ForestNode::treeLod(L, sp, s.px, leafLength, forceOf(s), s.barkPx),
-                    shadow, v, s.px, s.barkPx);
+                    shadow, v, s.px, s.barkPx, shadow ? nullptr : &s);
         }
         return static_cast<double>(v);
     }
 
+    // The camera's tree `s`'s bark classes (Seen::curveEnd, ...) by each
+    // segment's width at its own distance from the eye (at rest; the drawer
+    // measures a quarter over for the sway, as at the tree's nearest point).
+    // The tree's nearest point is a bound for all its wood: inside its box,
+    // under its crown, it is the eye itself (0.25 m), and every limb of the
+    // tree drew 20 sides in 3 rows, metres away or not (the forest's
+    // understory view, 13 M vertices of curved bark against a 12.5 M
+    // budget, so every near tree's leaves went to clumps). A class stays a
+    // prefix of the thickest-first order (one past the last segment that
+    // needs it): a thinner segment needing more only raises the ones
+    // before it, never lowers one below its own width.
+    void classifyBark(Seen& s) const {
+        if (!perspective) return;
+        const ForestNode::Instance& in = node->instances()[s.instance];
+        const ForestNode::Specimen& sp = node->specimens()[in.specimen];
+        if (sp.segCount == 0) return;
+        const float* k0 = node->keepRadius().data() + sp.segStart;
+        const std::vector<float>& rec = node->segmentRecords();
+        if ((sp.segStart + sp.segCount) * 8u > rec.size()) return;
+        // At most what the tree's nearest point asks for (its own distance
+        // is never nearer).
+        const float near = std::max(s.px, s.barkPx);
+        const float fine = lod.barkFineSides * lod.barkSidesPixels;
+        const float wMin = std::min(lod.barkSidesPixels, fine > 0.0f ? fine : lod.barkSidesPixels);
+        const float rMin = std::min(kBarkCurvePixels / near, wMin / (2.0f * 1.25f * near));
+        const uint32_t m = static_cast<uint32_t>(
+            std::upper_bound(k0, k0 + sp.segCount, rMin, [](float r, float v) { return r > v; }) - k0);
+        s.curveEnd = s.fineEnd = s.nearEnd = 0;
+        if (m == 0) return;
+        // The eye in the specimen's space.
+        const bromath::Vec3 v = (bromath::mtransformPoint(invWorld, eye) - in.position) * (1.0f / in.scale);
+        const bromath::Vec3 e{v.x * in.cosYaw - v.z * in.sinYaw, v.y, v.x * in.sinYaw + v.z * in.cosYaw};
+        const float unit = in.scale * nodeScale;
+        for (uint32_t i = 0; i < m; ++i) {
+            const float* g = &rec[(sp.segStart + i) * 8u];
+            const bromath::Vec3 a{g[0], g[1], g[2]}, b{g[4], g[5], g[6]};
+            const bromath::Vec3 ab = b - a;
+            const float l2 = bromath::vdot(ab, ab);
+            const float f = l2 > 0.0f ? std::clamp(bromath::vdot(e - a, ab) / l2, 0.0f, 1.0f) : 0.0f;
+            const float d = std::max((bromath::vlen(e - (a + ab * f)) - k0[i]) * unit, 0.25f);
+            const float pxu = pxAtMetre * unit / d;   // px per specimen unit there
+            if (k0[i] * pxu > kBarkCurvePixels) s.curveEnd = i + 1;
+            const float w = 2.0f * 1.25f * k0[i] * pxu;
+            if (fine > 0.0f && w >= fine) s.fineEnd = i + 1;
+            if (w >= lod.barkSidesPixels) s.nearEnd = i + 1;
+        }
+    }
+
     // The vertices tree `s` sends at the forced tier, full detail.
     uint64_t forcedCost(const Seen& s, bool shadow) {
+        detail = 1.0f;
         const ForestNode::Specimen& sp = node->specimens()[node->instances()[s.instance].specimen];
         uint64_t v = 0;
         addTree(nullptr, s.instance, sp,
                 shadow ? casterLod(shadowLod, sp, s) : ForestNode::treeLod(lod, sp, s.px, leafLength, force, s.barkPx),
-                shadow, v, s.px, s.barkPx);
+                shadow, v, s.px, s.barkPx, shadow ? nullptr : &s);
         return v;
     }
 };
@@ -625,6 +709,7 @@ std::unique_ptr<SceneMeshDrawer::ForestPlan> SceneMeshDrawer::planForest(SceneFr
     const float pxAtMetre = std::fabs(view.proj.at(1, 1)) * static_cast<float>(view.height) * 0.5f;
     P.eye = view.eye;
     P.world = world;
+    P.invWorld = bromath::minverse(world);
     P.pxAtMetre = pxAtMetre;
     P.nodeScale = nodeScale;
     P.perspective = view.perspective;
@@ -702,6 +787,7 @@ std::unique_ptr<SceneMeshDrawer::ForestPlan> SceneMeshDrawer::planForest(SceneFr
                           P.lod.forceRange <= 0.0f || dl <= P.lod.forceRange, dl});
     }
 
+    for (Seen& s : P.seen) P.classifyBark(s);
     P.seenPx.assign(instances.size(), 0.0f);
     for (const Seen& s : P.seen) P.seenPx[s.instance] = s.px;
 
@@ -895,6 +981,7 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
     P.bloomBase = node.bloomRecordBase();
     {
         const ForestNode::Lod L = ForestNode::scaled(lod, detail);
+        P.detail = detail;
         ForestNode::TreeLod unseen;
         unseen.widening = 0.0f;
         std::vector<ForestNode::TreeLod> seenLods(instances.size(), unseen);
@@ -905,7 +992,7 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
             if (t.leaves > 0.0f) stats.trees[0]++;
             if (t.clumps > 0.0f) stats.trees[1]++;
             if (t.crowns > 0.0f) stats.trees[2]++;
-            P.addTree(&colour, s.instance, sp, t, false, colourVerts, s.px, s.barkPx);
+            P.addTree(&colour, s.instance, sp, t, false, colourVerts, s.px, s.barkPx, &s);
         }
         node.setSeenLods(std::move(seenLods));
     }

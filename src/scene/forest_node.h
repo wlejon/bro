@@ -161,8 +161,11 @@ public:
         // size (1); or as the one widened leaf (0).
         float clusters = 1.0f;
         // Bark at least this wide on screen (px) is drawn whatever the
-        // widening and the budget ask, so a mid tree keeps its trunk and
-        // scaffold limbs under its crown.
+        // widening asks, so a mid tree keeps its trunk and scaffold limbs
+        // under its crown; under the budget, this times the detail (the
+        // clump and crown trees' limbs under their sprites go before the
+        // near trees' leaves thin: 3.3 M vertices of them under the
+        // forest's trees).
         float barkKeepPixels = 2.0f;
         // Bark of 20 sides on a trunk wider than this times barkSidesPixels
         // (0: never). Over 2.5 a ring past the shader's 10-to-20 morph pops
@@ -177,13 +180,19 @@ public:
         // forest to the horizon is billions of vertices, a frame longer than
         // a GPU's watchdog allows.
         float forceRange = 0.0f;
+        // The budget's detail factor this Lod is scaled by (scaled(); not
+        // a setting).
+        float detail = 1.0f;
     };
     static constexpr int kLodCount = 17;
-    /// `lod` with its pixel thresholds scaled by a detail factor (>= 1).
+    /// `lod` with its pixel thresholds (leafPixels, barkPixels,
+    /// barkKeepPixels) scaled by a detail factor (>= 1).
     static Lod scaled(const Lod& lod, float detail) {
         Lod l = lod;
         l.leafPixels *= detail;
         l.barkPixels *= detail;
+        l.detail = detail;
+        l.barkKeepPixels *= detail;
         return l;
     }
     void setLod(const Lod& l) { lod_ = l; }
@@ -279,6 +288,10 @@ public:
     const std::vector<Specimen>& specimens() const { return specimens_; }
     /// Segment keep radii, thickest first within each specimen.
     const std::vector<float>& keepRadius() const { return keepRadius_; }
+    /// The segments as emitForest gave them, in that order, 8 floats each:
+    /// from xyz, its radius, to xyz, its radius (specimen units, relative;
+    /// a tip's end radius negative).
+    const std::vector<float>& segmentRecords() const { return data_.segments; }
     /// The wood's side area (specimen units: twice its mean radius times its
     /// length) of every segment before each, in segment order (one more
     /// than the segments): a run's area is a difference of two.
