@@ -100,6 +100,19 @@
         const k = typeof v === 'number' ? v : dflt;
         return () => k;
     };
+    // An input over the whole field at once, or null (asked a texel at a
+    // time): a Float32Array of cols x rows on the field's grid, or what a
+    // function's `grid(x0, z0, cell, cols, rows, ys, canopy)` returns (ys
+    // the field's heights, canopy the floor's when there is one).
+    const gridOf = (v, x0, z0, cell, cols, rows, ys, canopy) => {
+        let g = null;
+        if (v instanceof Float32Array) g = v;
+        else if (typeof v === 'function' && typeof v.grid === 'function') g = v.grid(x0, z0, cell, cols, rows, ys, canopy);
+        if (!g) return null;
+        if (!(g instanceof Float32Array) || g.length !== cols * rows)
+            throw new TypeError(`createGrass: a grid input must be a Float32Array of ${cols} x ${rows}`);
+        return g;
+    };
 
     // Bake the field: heights from the ground, then density / dry / height
     // per texel. Texels with no ground (off a mesh) get no grass.
@@ -114,33 +127,48 @@
         if (src.node) {
             heights = __bro_native.scene.SceneNode_sampleHeights(src.node, x0, z0, cell, cols, rows);
             if (heights.length !== cols * rows) heights = new Float32Array(cols * rows).fill(NaN);
+        } else if (typeof opts.ground === 'function' && typeof opts.ground.grid === 'function') {
+            heights = gridOf(opts.ground, x0, z0, cell, cols, rows);
         } else {
             heights = new Float32Array(cols * rows);
             for (let j = 0; j < rows; j++)
                 for (let i = 0; i < cols; i++) heights[j * cols + i] = +src.at(x0 + i * cell, z0 + j * cell);
         }
-        const density = valueAt(opts.density, 1), dry = valueAt(opts.dry, 0), tall = valueAt(opts.tall, 1);
-        const data = new Float32Array(cols * rows * 4);
+        const n = cols * rows;
+        // The heights, a texel off the ground taking the last one on it in
+        // its row (a row that starts off the mesh, its first from the right).
+        // These loops run a texel at a time over millions of texels: the
+        // clamps are written out and `v - v === 0` is "v is finite" (a call
+        // to Math.min / Number.isFinite costs this AOT code ~100 ns).
+        const ys = new Float32Array(n);
         for (let j = 0; j < rows; j++) {
-            let last = NaN;
+            let last = 0, seen = false, first = -1;
+            for (let i = 0; i < cols; i++) {
+                const k = j * cols + i, y = heights[k];
+                if (y - y === 0) { last = y; seen = true; if (first < 0) first = i; }
+                ys[k] = y - y === 0 ? y : seen ? last : 0;
+            }
+            for (let i = 0; i < first; i++) ys[j * cols + i] = ys[j * cols + first];
+        }
+        const density = valueAt(opts.density, 1), dry = valueAt(opts.dry, 0), tall = valueAt(opts.tall, 1);
+        const gDensity = gridOf(opts.density, x0, z0, cell, cols, rows, ys);
+        const gDry = gridOf(opts.dry, x0, z0, cell, cols, rows, ys);
+        const gTall = gridOf(opts.tall, x0, z0, cell, cols, rows, ys);
+        const data = new Float32Array(n * 4);
+        for (let j = 0; j < rows; j++) {
             for (let i = 0; i < cols; i++) {
                 const k = j * cols + i;
-                const x = x0 + i * cell, z = z0 + j * cell;
-                let y = heights[k];
-                const has = Number.isFinite(y);
-                if (has) last = y;
-                else y = Number.isFinite(last) ? last : 0;
+                const x = x0 + i * cell, z = z0 + j * cell, y = ys[k], h = heights[k];
                 data[k * 4] = y;
-                if (has) {
-                    data[k * 4 + 1] = Math.min(Math.max(+density(x, z, y), 0), 1);
-                    data[k * 4 + 2] = Math.min(Math.max(+dry(x, z, y), 0), 1);
-                    data[k * 4 + 3] = Math.max(+tall(x, z, y), 0);
+                if (h - h === 0) {
+                    const d = gDensity ? gDensity[k] : +density(x, z, y);
+                    const w = gDry ? gDry[k] : +dry(x, z, y);
+                    const t = gTall ? gTall[k] : +tall(x, z, y);
+                    data[k * 4 + 1] = d < 0 ? 0 : d > 1 ? 1 : d;
+                    data[k * 4 + 2] = w < 0 ? 0 : w > 1 ? 1 : w;
+                    data[k * 4 + 3] = t < 0 ? 0 : t;
                 }
             }
-            // A row that starts off the mesh takes its first height from the right.
-            let first = -1;
-            for (let i = 0; i < cols && first < 0; i++) if (Number.isFinite(heights[j * cols + i])) first = i;
-            for (let i = 0; i < first; i++) data[(j * cols + i) * 4] = data[(j * cols + first) * 4];
         }
         __bro_native.scene.SceneNode_setGrassField(node, data, cols, rows, x0, z0, cell);
         fields.set(node, { data, cols, rows, x0, z0, cell });
@@ -152,16 +180,30 @@
         if (hasFloor || herbs) {
             const floorAt = valueAt(hasFloor ? opts.floor : 0, 0);
             const herbAt = herbs ? valueAt(herbs.density, 1) : null;
+            const gFloor = hasFloor ? gridOf(opts.floor, x0, z0, cell, cols, rows, ys) : null;
             const ch = herbs ? 2 : 1;
-            const fl = new Float32Array(cols * rows * ch);
+            const fl = new Float32Array(n * ch);
             for (let j = 0; j < rows; j++)
                 for (let i = 0; i < cols; i++) {
                     const k = j * cols + i;
-                    const x = x0 + i * cell, z = z0 + j * cell, y = data[k * 4];
-                    const c = Math.min(Math.max(+floorAt(x, z, y), 0), 1) || 0;
-                    fl[k * ch] = c;
-                    if (herbAt) fl[k * ch + 1] = Math.min(Math.max(+herbAt(x, z, y, c), 0), 1) || 0;
+                    const v = gFloor ? gFloor[k] : +floorAt(x0 + i * cell, z0 + j * cell, ys[k]);
+                    fl[k * ch] = v > 0 ? (v > 1 ? 1 : v) : 0;
                 }
+            if (herbAt) {
+                // The herbs' density sees the floor's canopy, as clamped.
+                let canopy = null;
+                if (typeof herbs.density === 'function' && typeof herbs.density.grid === 'function') {
+                    canopy = new Float32Array(n);
+                    for (let k = 0; k < n; k++) canopy[k] = fl[k * ch];
+                }
+                const gHerb = gridOf(herbs.density, x0, z0, cell, cols, rows, ys, canopy);
+                for (let j = 0; j < rows; j++)
+                    for (let i = 0; i < cols; i++) {
+                        const k = j * cols + i;
+                        const v = gHerb ? gHerb[k] : +herbAt(x0 + i * cell, z0 + j * cell, ys[k], fl[k * ch]);
+                        fl[k * ch + 1] = v > 0 ? (v > 1 ? 1 : v) : 0;
+                    }
+            }
             __bro_native.scene.SceneNode_setGrassFloor(node, fl);
         }
         if (herbs) setHerbs(node, herbs);

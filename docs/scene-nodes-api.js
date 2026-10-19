@@ -241,9 +241,21 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  * @property {Array<number>} [color]
  * @property {number} [intensity]
  * @property {number} [range]
- * @property {number} [innerCone]
- * @property {number} [outerCone]
- * @property {boolean} [castShadow]
+ * @property {number} [innerAngle] - a spot's inner cone (radians)
+ * @property {number} [outerAngle] - a spot's outer cone (radians)
+ * @property {Array<number>} [direction]
+ * @property {boolean} [castsShadow]
+ * @property {number} [shadowBias]
+ * @property {number} [shadowNormalBias]
+ * @property {number} [cascadeCount=4] - a directional light's shadow
+ *   cascades (1..4), each a tile of the shadow atlas
+ * @property {number} [cascadeSplitLambda=0.5] - the cascades' split, 0
+ *   uniform .. 1 logarithmic in depth
+ * @property {number} [shadowDistance=0] - how far from the camera a
+ *   directional light's shadow reaches (m): its cascades split this depth,
+ *   and it fades out over the last tenth. 0: the camera's far plane. A
+ *   view kilometres deep needs it, or the nearest cascade spans hundreds of
+ *   metres. All of these are also properties of the node.
  * @property {Array<number>} [position]
  * @property {Array<number>} [rotation]
  */
@@ -416,8 +428,16 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  * over `area` every `cell` metres of (ground height, density, dryness, height
  * multiplier). `density`, `dry` and `tall` are numbers or functions
  * `(x, z, y) => value`, called once per field texel at bake time, so they can
- * read the same noise an app colours its ground with. Re-bake with
- * `node.setGround(opts)` (a moved or edited ground, a new season).
+ * read the same noise an app colours its ground with. For a large field
+ * (a few million texels, where a call a texel takes tens of seconds) any of
+ * them, `floor` and `herbs.density` may instead come a grid at once: a
+ * Float32Array of cols x rows, texel (i, j) at (x0 + i * cell, z0 + j *
+ * cell) with cols = floor((x1 - x0) / cell) + 1 and rows likewise, or a
+ * function carrying `grid(x0, z0, cell, cols, rows, ys, canopy)` that
+ * returns one (`ys` the field's heights, `canopy` the clamped floor, for
+ * the herbs' density). bro.flora.forestCover's functions carry one; so may
+ * a `ground` function (its `grid` returns the heights). Re-bake
+ * with `node.setGround(opts)` (a moved or edited ground, a new season).
  *
  * @example
  *   const ground = scene.createMesh({ data: Mesh.heightmapGrid(h, N, N, cell) });

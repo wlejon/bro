@@ -975,6 +975,10 @@ bro.flora.herbRecords = function(list) {};
  * are overhead (0 in the open, 1 under a crown's middle or where crowns
  * overlap), for createGrass's `floor` (the litter and low leafy plants
  * under trees).
+ * Both carry `grid(x0, z0, cell, cols, rows)`: their values at cols x rows
+ * points (x0 + i * cell, z0 + j * cell) as one row-major Float32Array,
+ * worked out natively on every core (a 4 km world's field at once);
+ * createGrass uses it in place of a call a texel.
  * @example const cover = bro.flora.forestCover(forest, { instances: trees });
  * scene.createGrass({ ground, density: cover, floor: cover.canopy, turf: true });
  * @param {Object} forest - world.emitForest()'s result.
