@@ -6,6 +6,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -99,12 +100,16 @@ double SceneGpuTimer::takeMs() {
         for (uint32_t i = 0; i < marks; ++i) {
             const double d = ms(prev, stamps[2 + i]);
             prev = stamps[2 + i];
-            if (d < 0.01) continue;
+            // (A shadow tile's end stays, short or not: it bounds the tile's marks.)
+            if (d < 0.01 && std::strncmp(markNames_[pendingPair_][i], "shadow:tile", 11) != 0) continue;
             std::snprintf(buf, sizeof(buf), " %s %.2f", markNames_[pendingPair_][i], d);
             line += buf;
         }
         std::snprintf(buf, sizeof(buf), " rest %.2f", ms(prev, stamps[1]));
         line += buf;
+        // (Past kMaxMarks the render's later marks were not written: their
+        // time is in `rest`.)
+        if (marks >= kMaxMarks) line += " (marks full)";
         LOG_INFO("scene GPU %.2f ms:%s", total, line.c_str());
     }
     return total;

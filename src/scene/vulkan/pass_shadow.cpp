@@ -296,6 +296,17 @@ void PassShadow::record(SceneFrame& frame) {
             drawCaster(frame, lightViewProj, draw);
             if (frame.timer && draw.shadowTimerLabel) frame.timer->mark(cmd, draw.shadowTimerLabel);
         }
+        // Each tile's end, so a pass log splits the shadows by tile (a
+        // cascade or a local light's face): the marks since the last tile's
+        // are this one's.
+        static const char* const kTileLabels[32] = {
+            "shadow:tile0",  "shadow:tile1",  "shadow:tile2",  "shadow:tile3",  "shadow:tile4",  "shadow:tile5",
+            "shadow:tile6",  "shadow:tile7",  "shadow:tile8",  "shadow:tile9",  "shadow:tile10", "shadow:tile11",
+            "shadow:tile12", "shadow:tile13", "shadow:tile14", "shadow:tile15", "shadow:tile16", "shadow:tile17",
+            "shadow:tile18", "shadow:tile19", "shadow:tile20", "shadow:tile21", "shadow:tile22", "shadow:tile23",
+            "shadow:tile24", "shadow:tile25", "shadow:tile26", "shadow:tile27", "shadow:tile28", "shadow:tile29",
+            "shadow:tile30", "shadow:tile31"};
+        if (frame.timer && slot < 32) frame.timer->mark(cmd, kTileLabels[slot]);
     }
 
     frame.gpu.device.cmdEndRendering(cmd);
