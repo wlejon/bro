@@ -51,18 +51,26 @@ float herbWeightInside(int i, float canopy) {
 
 // Species `i`'s colonies at absolute `xz`: 0 outside .. 1 inside. Two
 // octaves of value noise at its own period, offset species by species; the
-// threshold leaves about patchCover inside.
-float herbColony(int i, vec2 xz) {
-    vec2 p = xz / max(herbRec(i, 9).w, 0.5) + vec2(float(i) * 37.13 + 11.0, float(i) * -19.71 + 3.0);
-    float n = 0.5 + 0.33 * sceneWindNoise(p) + 0.17 * sceneWindNoise(p * 2.7 + 5.1);
+// threshold leaves about patchCover inside. `fp` the pixel's footprint (m;
+// 0: none): each octave fades out as its period nears two pixels, and the
+// colonies to their mean cover (patchCover) as the first does, so far off
+// they are a filter's mean, not a pattern aliasing (nor their noise paid).
+float herbColony(int i, vec2 xz, float fp) {
+    float period = max(herbRec(i, 9).w, 0.5);
+    float seen = fp > 0.0 ? clamp(0.5 * period / fp - 1.0, 0.0, 1.0) : 1.0;
+    float mean = clamp(herbRec(i, 10).x, 0.05, 1.0);
+    if (seen <= 0.0) return mean;
+    float seen2 = fp > 0.0 ? clamp(0.5 * period / (2.7 * fp) - 1.0, 0.0, 1.0) : 1.0;
+    vec2 p = xz / period + vec2(float(i) * 37.13 + 11.0, float(i) * -19.71 + 3.0);
+    float n = 0.5 + 0.33 * sceneWindNoise(p) + (seen2 > 0.0 ? 0.17 * seen2 * sceneWindNoise(p * 2.7 + 5.1) : 0.0);
     float t = mix(0.7, 0.3, clamp(herbRec(i, 10).x, 0.0, 1.0));
-    return smoothstep(t - 0.07, t + 0.07, n);
+    return mix(mean, smoothstep(t - 0.07, t + 0.07, n), seen);
 }
 
 // Species `i`'s weight at absolute `xz` under canopy `canopy`.
 float herbWeight(int i, vec2 xz, float canopy) {
     float w = herbWeightInside(i, canopy);
-    return w > 0.0 ? w * herbColony(i, xz) : 0.0;
+    return w > 0.0 ? w * herbColony(i, xz, 0.0) : 0.0;
 }
 
 // The plant in a cell at `xz` (canopy `canopy`, herb density `density`),
@@ -127,9 +135,10 @@ HerbMix herbMixMean(float canopy, float density, float tanView) {
 // land is the table's. Returns the local blooms over their mean (0 where
 // none bloom, 1 the mean, more inside a colony); `bloom` their colour
 // there; `pick` the colour of one bloom drawn by `u` (0..1) among them.
+// `fp` the pixel's footprint (herbColony; 0: none).
 // (A loop over the species with two noises each: only where the turf or a
 // far blade stands for the herbs' blooms.)
-float herbBloomLocal(vec2 xz, float canopy, float u, out vec3 bloom, out vec3 pick) {
+float herbBloomLocal(vec2 xz, float canopy, float u, float fp, out vec3 bloom, out vec3 pick) {
     int n = herbCount();
     float B[GRASS_HERB_MAX];
     float local = 0.0, mean = 0.0;
@@ -149,7 +158,7 @@ float herbBloomLocal(vec2 xz, float canopy, float u, out vec3 bloom, out vec3 pi
         float spread = herbRec(i, 0).z;
         float b = w * shown * spread * spread;
         mean += b * clamp(h10.x, 0.05, 1.0);
-        B[i] = b * herbColony(i, xz);
+        B[i] = b * herbColony(i, xz, fp);
         local += B[i];
         col += B[i] * herbRec(i, 7).rgb;
     }

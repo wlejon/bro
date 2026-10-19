@@ -317,7 +317,7 @@ void groundSurface(vec3 rel, vec4 vdata, inout vec3 color, inout vec3 N, inout f
         // Tipped by the sward's lay and its gusts as the far blades are,
         // and a gust lifts the sheen of what it bends (scene_grass.glsl).
         float gu = sceneWindGustAt(xz);
-        vec3 up = grassSwardUp(N, grassCombLean(xz, gu));
+        vec3 up = grassSwardUp(N, grassCombLean(xz, gu, fp));
         N = normalize(mix(N, grassCanopyNormal(up, normalize(-rel)), asBlades));
         swardLight = vec4(up, asBlades);
         color *= 1.0 + grass.look.y * (gu * grassGustStir() * 0.7 + grassGustFar(gu)) * asBlades;
@@ -348,7 +348,7 @@ void groundSurface(vec3 rel, vec4 vdata, inout vec3 color, inout vec3 N, inout f
             // past them; their leaves mostly down among the grass, as the
             // plants' are (GRASS_HERB_LEAF_SEEN).
             vec3 bloom, pick;
-            float more = herbBloomLocal(xz, under, -1.0, bloom, pick);
+            float more = herbBloomLocal(xz, under, -1.0, fp, bloom, pick);
             float share = min(hm.bloomShare * more, 0.95);
             float leaves = hm.cover * (1.0 - hm.bloomShare) * GRASS_HERB_LEAF_SEEN;
             float blooms = min(hm.cover * share, 1.0) * GRASS_HERB_BLOOM_SEEN * GRASS_TURF_BLOOMS;

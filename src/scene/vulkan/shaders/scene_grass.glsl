@@ -215,17 +215,22 @@ const float GRASS_HERB_BLOOM_SEEN = 0.5;
 // waves where single blades are too fine to see bend. A wind lays a sward
 // only downwind, more in one streak than the next, never back against it;
 // sceneSwardLight gathers the blades' leans that way by it (SWARD_COMB).
+// `fp` the pixel's footprint (m; 0: none): a streak fades to its mean as it
+// narrows to two pixels across, as the turf's octaves do.
 const float GRASS_COMB = 0.6;
 const float GRASS_GUST_LEAN = 2.4;
 // How far the wind's lay and its gusts show in the sward's sheen: none in
 // still air (the gust field and the wind's way run on whatever the steady
 // wind), all from half the reference wind.
 float grassGustStir() { return clamp(2.0 * camera.windField.z / GRASS_REFERENCE_SPEED, 0.0, 1.0); }
-vec2 grassCombLean(vec2 xz, float gust) {
+vec2 grassCombLean(vec2 xz, float gust, float fp) {
     vec2 d = camera.windField.xy;
     float along = dot(xz, d), across = dot(xz, vec2(-d.y, d.x));
-    float comb = 0.5 + 0.5 * (sceneWindNoise(vec2(along * 0.035, across * 0.3)) +
-                              0.5 * sceneWindNoise(vec2(along * 0.09 + 7.1, across * 0.8 - 3.3)));
+    float s1 = fp > 0.0 ? clamp(0.5 / (0.3 * fp) - 1.0, 0.0, 1.0) : 1.0;
+    float s2 = fp > 0.0 ? clamp(0.5 / (0.8 * fp) - 1.0, 0.0, 1.0) : 1.0;
+    float comb = 0.5;
+    if (s1 > 0.0) comb += 0.5 * s1 * sceneWindNoise(vec2(along * 0.035, across * 0.3));
+    if (s2 > 0.0) comb += 0.25 * s2 * sceneWindNoise(vec2(along * 0.09 + 7.1, across * 0.8 - 3.3));
     float calm = clamp(camera.windField.z / GRASS_REFERENCE_SPEED, 0.0, 1.0);
     return d * (GRASS_COMB * comb * (0.4 + 0.6 * calm) + GRASS_GUST_LEAN * gust) * grassGustStir() * grass.blade.w;
 }
@@ -628,7 +633,7 @@ bool grassBlade(int id, int vid, vec3 v, vec3 vn, out GrassBlade b) {
             if (fh.y > 0.0 && u < stand * hm.cover) {
                 vec3 bloom, pick;
                 float u2 = fract(u * 61.7 + hb.x);
-                float more = herbBloomLocal(root, fh.x, fract(u2 * 37.3), bloom, pick);
+                float more = herbBloomLocal(root, fh.x, fract(u2 * 37.3), 0.0, bloom, pick);
                 float share = min(hm.bloomShare * more, 0.95);
                 // A bloom is a dot over the fan's top (scene_grass_surface.glsl's
                 // grassFanBloom), not the whole fan: a share of it about
@@ -651,7 +656,7 @@ bool grassBlade(int id, int vid, vec3 v, vec3 vn, out GrassBlade b) {
     // lay and its gusts (grassCombLean), from where the sward's light takes
     // over from the blade's own face (mesh.frag's SCENE_GRASS, 2-12 m). The
     // lay is the sward's, steady while the blade stirs.
-    vec2 lay = grassCombLean(root, gu) * smoothstep(2.0, 12.0, d);
+    vec2 lay = grassCombLean(root, gu, 0.0) * smoothstep(2.0, 12.0, d);
     b.ground = grassSwardUp(gn, lay);
     // Seen against a low sun a far meadow still glows through its blades,
     // less than a near blade held to the light.
