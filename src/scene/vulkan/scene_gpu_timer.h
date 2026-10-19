@@ -7,7 +7,9 @@
 // With BRO_SCENE_GPU_PASSES=<ms> set, each pass of the frame graph also
 // writes a stamp as it ends (mark()), and a render that took longer than
 // <ms> logs its time pass by pass ("0" logs every render): where a slow
-// frame's time went, without a profiler attached.
+// frame's time went, without a profiler attached. With BRO_SCENE_GPU_FRAGS
+// set as well, each opaque draw's fragment shader invocations follow the line
+// (statBegin): its overdraw, where a pass is fragment-bound.
 #include "render/vulkan_context.h"
 
 #include <vulkan/vulkan.h>
@@ -35,8 +37,20 @@ public:
     /// Milliseconds of the last submitted render, waiting for it (its own
     /// ticket); -1 when nothing was timed since the last call.
     double takeMs();
+    /// Count the fragment shader invocations of one draw called `name`
+    /// (inside rendering, closed by statEnd); a no-op unless
+    /// BRO_SCENE_GPU_FRAGS is set, when a logged render's line is followed
+    /// by its draws' counts ("scene FRAG: name count ...").
+    void statBegin(VkCommandBuffer cmd, const char* name);
+    void statEnd(VkCommandBuffer cmd);
 
 private:
+    static constexpr uint32_t kMaxStats = 190;   // counted draws a render (as marks)
+    VkQueryPool statPool_ = VK_NULL_HANDLE;
+    uint32_t statCount_[8] = {};
+    const char* statNames_[8][kMaxStats] = {};
+    bool statOpen_ = false;
+
     static constexpr uint32_t kMaxMarks = 190;   // (a forest's grass alone is a few dozen draws)
     static constexpr uint32_t kPerSlot = 2 + kMaxMarks;   // start, end, the marks
 

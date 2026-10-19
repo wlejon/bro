@@ -15,10 +15,9 @@ namespace bro::scene::vk {
 static_assert(render::VulkanFrames::kFramesInFlight <= 8, "SceneGpuTimer keeps marks for at most 8 slots");
 
 SceneGpuTimer::~SceneGpuTimer() {
-    if (pool_ == VK_NULL_HANDLE) return;
-    VkQueryPool pool = pool_;
     VkDevice device = context_.device();
-    context_.frames().defer([device, pool] { vkDestroyQueryPool(device, pool, nullptr); });
+    for (VkQueryPool pool : {pool_, statPool_})
+        if (pool != VK_NULL_HANDLE) context_.frames().defer([device, pool] { vkDestroyQueryPool(device, pool, nullptr); });
 }
 
 bool SceneGpuTimer::init() {
@@ -40,6 +39,17 @@ bool SceneGpuTimer::init() {
     VkQueryPoolCreateInfo info{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
     info.queryType = VK_QUERY_TYPE_TIMESTAMP;
     info.queryCount = kPerSlot * render::VulkanFrames::kFramesInFlight;
+    // BRO_SCENE_GPU_FRAGS: each opaque draw's fragment shader invocations too
+    // (a pipeline-statistics query a draw): overdraw, which the times alone
+    // don't tell from a costly shader.
+    if (const char* env = std::getenv("BRO_SCENE_GPU_FRAGS");
+        env && *env && passLogMs_ >= 0.0 && context_.features().pipelineStatisticsQuery) {
+        VkQueryPoolCreateInfo s{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+        s.queryType = VK_QUERY_TYPE_PIPELINE_STATISTICS;
+        s.pipelineStatistics = VK_QUERY_PIPELINE_STATISTIC_FRAGMENT_SHADER_INVOCATIONS_BIT;
+        s.queryCount = kMaxStats * render::VulkanFrames::kFramesInFlight;
+        vkCreateQueryPool(context_.device(), &s, nullptr, &statPool_);
+    }
     return vkCreateQueryPool(context_.device(), &info, nullptr, &pool_) == VK_SUCCESS;
 }
 
@@ -56,6 +66,23 @@ void SceneGpuTimer::begin(VkCommandBuffer cmd) {
     vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, pool_, kPerSlot * pair);
     recordingPair_ = pair;
     markCount_[pair] = 0;
+    statCount_[pair] = 0;
+    if (statPool_ != VK_NULL_HANDLE) vkCmdResetQueryPool(cmd, statPool_, kMaxStats * pair, kMaxStats);
+}
+
+void SceneGpuTimer::statBegin(VkCommandBuffer cmd, const char* name) {
+    if (statPool_ == VK_NULL_HANDLE || recordingPair_ == UINT32_MAX) return;
+    uint32_t& n = statCount_[recordingPair_];
+    if (n >= kMaxStats) return;
+    vkCmdBeginQuery(cmd, statPool_, kMaxStats * recordingPair_ + n, 0);
+    statNames_[recordingPair_][n++] = name;
+    statOpen_ = true;
+}
+
+void SceneGpuTimer::statEnd(VkCommandBuffer cmd) {
+    if (!statOpen_) return;
+    statOpen_ = false;
+    vkCmdEndQuery(cmd, statPool_, kMaxStats * recordingPair_ + statCount_[recordingPair_] - 1);
 }
 
 void SceneGpuTimer::mark(VkCommandBuffer cmd, const char* name) {
@@ -111,6 +138,19 @@ double SceneGpuTimer::takeMs() {
         // time is in `rest`.)
         if (marks >= kMaxMarks) line += " (marks full)";
         LOG_INFO("scene GPU %.2f ms:%s", total, line.c_str());
+        if (const uint32_t ns = statCount_[pendingPair_]; statPool_ != VK_NULL_HANDLE && ns > 0) {
+            uint64_t inv[kMaxStats] = {};
+            std::string s;
+            if (vkGetQueryPoolResults(context_.device(), statPool_, kMaxStats * pendingPair_, ns, sizeof(inv), inv,
+                                      sizeof(uint64_t), VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT) == VK_SUCCESS) {
+                for (uint32_t i = 0; i < ns; ++i) {
+                    std::snprintf(buf, sizeof(buf), " %s %llu", statNames_[pendingPair_][i],
+                                  static_cast<unsigned long long>(inv[i]));
+                    s += buf;
+                }
+                LOG_INFO("scene FRAG:%s", s.c_str());
+            }
+        }
     }
     return total;
 }

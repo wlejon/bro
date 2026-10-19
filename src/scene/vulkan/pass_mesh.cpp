@@ -29,8 +29,13 @@ void PassOpaque::record(SceneFrame& frame) {
         "opaque:forestTube", "opaque:forestSprite"};
     for (uint32_t i : frame.lists.opaque) {
         const MeshDraw& draw = frame.lists.meshes[i];
+        const char* label = draw.timerLabel ? draw.timerLabel : kKind[static_cast<int>(draw.kind)];
+        if (frame.timer) frame.timer->statBegin(frame.cmd, label);
         frame.gpu.meshes.record(frame.cmd, frame.hdrTarget, frame.cameraSet, frame.lightingSet, draw);
-        if (frame.timer) frame.timer->mark(frame.cmd, draw.timerLabel ? draw.timerLabel : kKind[static_cast<int>(draw.kind)]);
+        if (frame.timer) {
+            frame.timer->statEnd(frame.cmd);
+            frame.timer->mark(frame.cmd, label);
+        }
     }
 }
 
