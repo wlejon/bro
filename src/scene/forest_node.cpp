@@ -1043,10 +1043,32 @@ const std::vector<float>& ForestNode::gpuData() const {
             bromath::Vec3 m{0.0f, 0.0f, 0.0f};
             for (uint32_t i = i0; i < i1; ++i) m = m + centre(order[i]);
             m = m * (1.0f / static_cast<float>(i1 - i0));
-            float rad = 0.0f;
-            for (uint32_t i = i0; i < i1; ++i)
-                rad = std::max(rad, bromath::vdist(centre(order[i]), m) +
-                                        a.clumps[(s.clumpStart + order[i]) * rec::clump::kFloats + rec::clump::kRadius]);
+            // The least sphere round the clumps' (Badoiu-Clarkson: the centre
+            // stepped toward the farthest point, the best kept), not the one
+            // about their mean: a ray that misses it skips the run, and the
+            // crowns' trace is mostly these tests.
+            const auto clumpR = [&](uint32_t i) {
+                return a.clumps[(s.clumpStart + order[i]) * rec::clump::kFloats + rec::clump::kRadius];
+            };
+            const auto reach = [&](const bromath::Vec3& c, uint32_t& far) {
+                float best = -1.0f;
+                for (uint32_t i = i0; i < i1; ++i) {
+                    const float e = bromath::vdist(centre(order[i]), c) + clumpR(i);
+                    if (e > best) { best = e; far = i; }
+                }
+                return best;
+            };
+            uint32_t far = i0;
+            float rad = reach(m, far);
+            bromath::Vec3 c = m;
+            for (int it = 1; it <= 64; ++it) {
+                const bromath::Vec3 to = centre(order[far]) - c;
+                const float l = bromath::vlen(to);
+                const bromath::Vec3 p = l > 1e-9f ? centre(order[far]) + to * (clumpR(far) / l) : centre(order[far]);
+                c = c + (p - c) * (1.0f / static_cast<float>(it + 1));
+                const float e = reach(c, far);
+                if (e < rad) { rad = e; m = c; }
+            }
             float* d = r + (specBlock[k] + b * kBlockRecords) * 4;
             d[FOREST_BLOCK_SPHERE] = m.x; d[FOREST_BLOCK_SPHERE + 1] = m.y; d[FOREST_BLOCK_SPHERE + 2] = m.z;
             d[FOREST_BLOCK_SPHERE + 3] = rad;
