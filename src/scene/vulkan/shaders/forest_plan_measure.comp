@@ -19,31 +19,63 @@ shared uint sCulled;
 float clampStd(float v, float lo, float hi) { return v < lo ? lo : (hi < v ? hi : v); }
 
 // ForestPlan::classifyBark: the camera's bark classes by each segment's own
-// width at its distance from the eye.
-void classifyBark(Tree tr, Spec sp, float px, float barkPx, inout uint curveEnd, inout uint fineEnd,
-                  inout uint nearEnd) {
-    if (!gPerspective || sp.segCount == 0u) return;
-    if ((sp.segStart + sp.segCount) > su(FP_ST_SEGMENT_COUNT)) return;
+// width at its distance from the eye, each class one past the last segment
+// that needs it. Its segments are measured by the whole workgroup (classify
+// below): a tree beside the eye measures every segment it has, thousands,
+// and a thread a tree took the walk's measure stage 3.6 GPU ms, the
+// workgroup waiting on its one near tree. Here each tree's setup: the
+// segments to measure (`m`), its classes 0 (none yet) or, where the CPU
+// returns before measuring, left at FP_ALL_SEGMENTS.
+uint classifySetup(Spec sp, float px, float barkPx, inout uint curveEnd, inout uint fineEnd, inout uint nearEnd) {
+    if (!gPerspective || sp.segCount == 0u) return 0u;
+    if ((sp.segStart + sp.segCount) > su(FP_ST_SEGMENT_COUNT)) return 0u;
     float near_ = max(px, barkPx);
     precise float fine = gLod.barkFineSides * gLod.barkSidesPixels;
     float wMin = min(gLod.barkSidesPixels, fine > 0.0 ? fine : gLod.barkSidesPixels);
     precise float wDen = 2.0 * 1.25 * near_;
     float rMin = min(fdiv(kBarkCurvePixels, near_), fdiv(wMin, wDen));
-    uint m = firstUnder(sp.segStart, 0u, sp.segCount, rMin);
     curveEnd = 0u;
     fineEnd = 0u;
     nearEnd = 0u;
-    if (m == 0u) return;
-    vec3 eyeNode = rowsPoint(FP_P_INV_WORLD, gEye);
-    precise vec3 rel = eyeNode - tr.position;
-    precise vec3 v = rel * fdiv(1.0, tr.scale);
-    precise vec3 e = vec3(v.x * tr.cosYaw - v.z * tr.sinYaw, v.y, v.x * tr.sinYaw + v.z * tr.cosYaw);
-    precise float unit = tr.scale * gNodeScale;
+    return firstUnder(sp.segStart, 0u, sp.segCount, rMin);
+}
+
+// The workgroup's trees' segments to measure, end to end: each tree's run
+// (sRun, an inclusive scan of their counts), its first segment, the eye in
+// its specimen's space and its metres a unit; its classes, raised by any
+// thread (a class is a maximum over its segments, in any order).
+shared uint sRun[FP_GROUP_SIZE];
+shared uint sSeg[FP_GROUP_SIZE];
+shared vec4 sEye[FP_GROUP_SIZE];
+shared uint sEnd[3][FP_GROUP_SIZE];
+
+void classify(uint lid) {
+    // (Hillis-Steele: the counts' inclusive scan.)
+    for (uint step = 1u; step < uint(FP_GROUP_SIZE); step <<= 1) {
+        uint add = lid >= step ? sRun[lid - step] : 0u;
+        barrier();
+        sRun[lid] += add;
+        barrier();
+    }
+    uint total = sRun[FP_GROUP_SIZE - 1];
+    if (total == 0u) return;
+    precise float fine = gLod.barkFineSides * gLod.barkSidesPixels;
     uint segs = su(FP_ST_SEGMENTS);
-    for (uint i = 0u; i < m; ++i) {
-        uint g = segs + (sp.segStart + i) * 8u;
+    for (uint w = lid; w < total; w += uint(FP_GROUP_SIZE)) {
+        // The tree whose run holds `w`: the first run ending past it.
+        uint lo = 0u, hi = uint(FP_GROUP_SIZE) - 1u;
+        while (lo < hi) {
+            uint mid = (lo + hi) >> 1;
+            if (sRun[mid] > w) hi = mid; else lo = mid + 1u;
+        }
+        uint j = lo;
+        uint i = w - (j > 0u ? sRun[j - 1u] : 0u);
+        vec3 e = sEye[j].xyz;
+        float unit = sEye[j].w;
+        uint s = sSeg[j] + i;
+        uint g = segs + s * 8u;
         vec3 a = sv3(g), b = sv3(g + 4u);
-        float k0 = keepAt(sp.segStart + i);
+        float k0 = keepAt(s);
         precise vec3 ab = b - a;
         precise float l2 = ab.x * ab.x + ab.y * ab.y + ab.z * ab.z;
         precise vec3 ea = e - a;
@@ -57,10 +89,10 @@ void classifyBark(Tree tr, Spec sp, float px, float barkPx, inout uint curveEnd,
         precise float pxAt = gPxAtMetre * unit;
         float pxu = fdiv(pxAt, d);
         precise float radiusPx = k0 * pxu;
-        if (radiusPx > kBarkCurvePixels) curveEnd = i + 1u;
-        precise float w = 2.0 * 1.25 * k0 * pxu;
-        if (fine > 0.0 && w >= fine) fineEnd = i + 1u;
-        if (w >= gLod.barkSidesPixels) nearEnd = i + 1u;
+        if (radiusPx > kBarkCurvePixels) atomicMax(sEnd[0][j], i + 1u);
+        precise float wPx = 2.0 * 1.25 * k0 * pxu;
+        if (fine > 0.0 && wPx >= fine) atomicMax(sEnd[1][j], i + 1u);
+        if (wPx >= gLod.barkSidesPixels) atomicMax(sEnd[2][j], i + 1u);
     }
 }
 
@@ -69,6 +101,7 @@ void main() {
     uint lid = gl_LocalInvocationID.x;
     if (lid < uint(FP_MAX_VIEWS)) sCount[lid] = 0u;
     if (lid == 0u) sCulled = 0u;
+    sRun[lid] = 0u;
     barrier();
     uint i = gl_GlobalInvocationID.x;
     uint aligned = pu(FP_P_ALIGNED);
@@ -116,7 +149,18 @@ void main() {
                     precise float barkv = (gPerspective ? fdiv(gPxAtMetre, d) : gPxAtMetre) * unit;
                     px = pxv;
                     barkPx = barkv;
-                    classifyBark(tr, sp, px, barkPx, curveEnd, fineEnd, nearEnd);
+                    uint m = classifySetup(sp, px, barkPx, curveEnd, fineEnd, nearEnd);
+                    if (m > 0u) {
+                        vec3 eyeNode = rowsPoint(FP_P_INV_WORLD, gEye);
+                        precise vec3 rel = eyeNode - tr.position;
+                        precise vec3 v = rel * fdiv(1.0, tr.scale);
+                        precise vec3 es = vec3(v.x * tr.cosYaw - v.z * tr.sinYaw, v.y,
+                                               v.x * tr.sinYaw + v.z * tr.cosYaw);
+                        precise float unit = tr.scale * gNodeScale;
+                        sRun[lid] = m;
+                        sSeg[lid] = sp.segStart;
+                        sEye[lid] = vec4(es, unit);
+                    }
                     key = min(floatBitsToUint(centreDist(tr)) >> (32 - FP_SORT_BITS), FP_SORT_UNSEEN - 1u);
                 }
             }
@@ -125,9 +169,10 @@ void main() {
             planWork.w[cam + FP_CAM_BARK_PX] = floatBitsToUint(barkPx);
             planWork.w[cam + FP_CAM_DIST] = floatBitsToUint(dl);
             planWork.w[cam + FP_CAM_FAR] = floatBitsToUint(far_);
-            planWork.w[cam + FP_CAM_CURVE_END] = curveEnd;
-            planWork.w[cam + FP_CAM_FINE_END] = fineEnd;
-            planWork.w[cam + FP_CAM_NEAR_END] = nearEnd;
+            // (Its bark classes once the workgroup has measured them.)
+            sEnd[0][lid] = curveEnd;
+            sEnd[1][lid] = fineEnd;
+            sEnd[2][lid] = nearEnd;
             if (seen) atomicAdd(sCount[0], 1u); else atomicAdd(sCulled, 1u);
             // Each shadow tile's view of it (the camera's or not).
             uint flags = workRun(FP_W_FLAGS);
@@ -141,6 +186,14 @@ void main() {
         planWork.w[valsA + i] = i;
     }
     barrier();
+    classify(lid);
+    barrier();
+    if (i < gTrees) {
+        uint cam = workRun(FP_W_CAMERA) + i * FP_CAM_WORDS;
+        planWork.w[cam + FP_CAM_CURVE_END] = sEnd[0][lid];
+        planWork.w[cam + FP_CAM_FINE_END] = sEnd[1][lid];
+        planWork.w[cam + FP_CAM_NEAR_END] = sEnd[2][lid];
+    }
     if (lid <= gTiles && sCount[lid] > 0u) atomicAdd(planWork.w[FP_N_VIEW_COUNT + lid], sCount[lid]);
     if (lid == 0u && sCulled > 0u) atomicAdd(planWork.w[FP_N_STATS + FP_S_CULLED], sCulled);
 }

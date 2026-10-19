@@ -4,6 +4,7 @@
 #include "render/vulkan_queue.h"
 #include "scene/vulkan/scene_defaults.h"
 #include "scene/vulkan/scene_frame.h"
+#include "scene/vulkan/scene_gpu_timer.h"
 #include "scene/vulkan/scene_vk_descriptors.h"
 #include "scene/vulkan/scene_vk_device.h"
 #include "scene/vulkan/scene_vk_shader_compiler.h"
@@ -518,6 +519,10 @@ void GpuPlanner::scan(VkCommandBuffer cmd, const Node& n, uint32_t offset, uint3
 void GpuPlanner::record(SceneFrame& frame) {
     if (queued_.empty() && poseJobs_.empty()) return;
     VkCommandBuffer cmd = frame.cmd;
+    // (The timed passes' stages, BRO_SCENE_GPU_PASSES.)
+    const auto mark = [&](const char* name) {
+        if (frame.timer) frame.timer->mark(cmd, name);
+    };
     if (!queued_.empty()) {
         // Last frame's draws, poses and read-backs used what this rewrites.
         VkMemoryBarrier start{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
@@ -538,6 +543,7 @@ void GpuPlanner::record(SceneFrame& frame) {
         // Each tree's measure, the camera's order, each view's items.
         for (Node* n : queued_) dispatch(cmd, Measure, *n, n->aligned / FP_GROUP_SIZE);
         barrier(cmd);
+        mark("plan:measure");
         for (uint32_t pass = 0; pass < FP_SORT_PASSES; ++pass) {
             for (Node* n : queued_) dispatch(cmd, SortHist, *n, n->aligned / FP_SCAN_BLOCK, {pass, 0, 0, 0});
             barrier(cmd);
@@ -547,6 +553,7 @@ void GpuPlanner::record(SceneFrame& frame) {
             for (Node* n : queued_) dispatch(cmd, SortScatter, *n, n->aligned / FP_SCAN_BLOCK, {pass, 0, 0, 0});
             barrier(cmd);
         }
+        mark("plan:sort");
         for (Node* n : queued_)
             scan(cmd, *n, n->runs[FP_W_FLAGS], n->tiles * static_cast<uint32_t>(n->trees) + 1, n->runs[FP_W_SCRATCH]);
         barrier(cmd);
@@ -554,6 +561,7 @@ void GpuPlanner::record(SceneFrame& frame) {
         barrier(cmd);
         for (Node* n : queued_) dispatch(cmd, Items, *n, n->itemGroups);
         barrier(cmd);
+        mark("plan:items");
         // The budget's search, every node's items at each round's ask, then
         // its fits settled.
         for (uint32_t round = 0; round < FP_ROUNDS; ++round) {
@@ -562,6 +570,7 @@ void GpuPlanner::record(SceneFrame& frame) {
         }
         dispatch(cmd, Settle, *queued_.front(), 1);
         barrier(cmd);
+        mark("plan:cost");
         // The entries: counted, placed, written.
         for (Node* n : queued_) dispatchItems(cmd, Count, *n);
         barrier(cmd);
@@ -573,6 +582,7 @@ void GpuPlanner::record(SceneFrame& frame) {
             dispatch(cmd, Args, *n, 1);
             barrier(cmd);
         }
+        mark("plan:count");
         for (Node* n : queued_) dispatchItems(cmd, Write, *n);
         VkMemoryBarrier done{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
         done.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
@@ -582,6 +592,7 @@ void GpuPlanner::record(SceneFrame& frame) {
                              VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT |
                                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
                              0, 1, &done, 0, nullptr, 0, nullptr);
+        mark("plan:write");
         // The stats, to the read-back ring.
         for (Node* n : queued_) {
             const int slot = n->cursor_;
