@@ -242,6 +242,34 @@ float lightShadow(int i, vec3 pos, float camDist, float lightDist, vec3 N, float
     return shadowFromTile(slot, pos, lightDist, N, NdotL, spread);
 }
 
+// A placed leaf's own sphere shades it analytically (SceneSurface::
+// leafSphere) for what the shadow map gives the leaves tier: a leaf's
+// lookup there is pushed off along its normal and biased in depth by about
+// this many of the cascade's texels, so a leaf is never shaded by the
+// leaves that near it toward the light, and the analytic path skips them
+// too (at most 0.15 m, a shrub's lobe's scale: past it a far cascade's
+// texels are coarser than any lobe, and the leaves tier is darkened by the
+// lobes round it, not within). Shrub lobes at noon 6.7 / 6.6 levels darker
+// than their leaves at 10 / 20 m, now 1.6 / 2.5.
+const float SHADOW_LEAF_BLIND = 3.0;
+
+// The world width of a texel of light `i`'s shadow at `camDist` (the
+// cascade lightShadow reads there; 0 with no shadow).
+float lightShadowTexel(int i, float camDist, float lightDist) {
+    SceneLight light = lighting.lights[i];
+    int slot = int(light.shadow.z);
+    if (slot < 0) return 0.0;
+    int count = int(light.shadow.w);
+    if (int(light.position.w) == 0 && count > 1) {
+        vec4 splits = light.cascadeSplit;
+        if (count >= 2 && camDist > splits.x) slot += 1;
+        if (count >= 3 && camDist > splits.y) slot += 1;
+        if (count >= 4 && camDist > splits.z) slot += 1;
+    }
+    ShadowTile tile = lighting.shadows[slot];
+    return tile.bias.z + tile.bias.w * lightDist;
+}
+
 // A lit surface, as every lit shader hands it to sceneDirectLight/sceneAmbient.
 struct SceneSurface {
     vec3 position;     // camera-relative
@@ -504,7 +532,8 @@ vec3 sceneDirectLight(SceneSurface s) {
                 float la = dot(Ls, Ls), b = dot(oc, Ls);
                 float out_ = max((-b + sqrt(max(b * b - la * (dot(oc, oc) - s.leafSphere.w * s.leafSphere.w), 0.0))) / la, 0.0);
                 at += L * out_;
-                self = exp(-min(s.leafDensity * s.leafPath * out_, s.leafSelfMax));
+                float blind = min(SHADOW_LEAF_BLIND * lightShadowTexel(i, s.camDist, lightDist), 0.15);
+                self = exp(-min(s.leafDensity * s.leafPath * max(out_ - blind, 0.0), s.leafSelfMax));
                 spread = s.leafExitSpread;
                 // The exit tap is as soft as a leaf's (twice the filter):
                 // sharp, the discs' cells and the wider casters' edges read

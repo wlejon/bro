@@ -362,7 +362,11 @@ void main() {
             // theirs. With both, its clumps were 4 to 12 units darker than
             // its leaves.
             bool sprayLobe = (floatBitsToUint(procedural.header[3].w) & 15u) != 0u;
-            massDensity = sprayLobe ? 0.0 : forestMassDepth(inMass2.x, inMass2.y, inMass2.z) * 0.5 / max(inMass0.w, 1e-3);
+            // 0.8 of the depth through the lobe (its path's first few shadow
+            // texels skipped, SHADOW_LEAF_BLIND): a broadleaf's clumps at
+            // noon within a level of its leaves at 45 / 75 / 120 m (+1.7 /
+            // +2.1 / +2.1 at half the depth, no skip).
+            massDensity = sprayLobe ? 0.0 : forestMassDepth(inMass2.x, inMass2.y, inMass2.z) * 0.8 / max(inMass0.w, 1e-3);
             // The leaves seen lie within about one optical depth of the
             // lobe's surface, as a crown's do (FOREST_CROWN_SELF_MAX): a
             // shrub's dense lobes 8.2 / 8.1 levels darker than its leaves
@@ -404,13 +408,15 @@ void main() {
         // lobe's own leaves analytically, and by one shadow tap where the
         // light leaves the lobe (the casters there are the lobes' discs or
         // fewer, wider leaves, too coarse to shade a leaf among its own).
-        // Half the lobe's density: a cluster stands for the leaves nearest
-        // its outline, and the full depth through the lobe left the mid
-        // range darker than the leaves it hands over from. A broad forest's
+        // 0.8 of the lobe's density, as the lobe sprite's: a cluster stands
+        // for the leaves nearest its outline (at the full depth, with the
+        // path's first few shadow texels skipped as the leaves tier skips
+        // them, SHADOW_LEAF_BLIND, the mid range was darker than the leaves
+        // it hands over from; at half, before that skip). A broad forest's
         // leaves lie in their lobe's shell, the hollow inside crossed free
         // (forestShellPath).
         massSphere = inLobeSphere;
-        massDensity = inLobeDensity * 0.5;
+        massDensity = inLobeDensity * 0.8;
         massFlat = inLobeFlat;
         if (inLobeHollow > 0.0 && lighting.sunDirection.w > 0.5)
             massDensity *= forestShellPath(worldPos, massSphere, massFlat, -lighting.sunDirection.xyz, inLobeHollow);
