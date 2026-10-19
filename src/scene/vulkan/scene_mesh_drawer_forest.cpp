@@ -796,14 +796,19 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
     P.bloomBase = node.bloomRecordBase();
     {
         const ForestNode::Lod L = ForestNode::scaled(lod, detail);
+        ForestNode::TreeLod unseen;
+        unseen.widening = 0.0f;
+        std::vector<ForestNode::TreeLod> seenLods(instances.size(), unseen);
         for (const Seen& s : P.seen) {
             const ForestNode::Specimen& sp = specimens[instances[s.instance].specimen];
             const ForestNode::TreeLod t = ForestNode::treeLod(L, sp, s.px, P.leafLength, P.forceOf(s), s.barkPx);
+            seenLods[s.instance] = t;
             if (t.leaves > 0.0f) stats.trees[0]++;
             if (t.clumps > 0.0f) stats.trees[1]++;
             if (t.crowns > 0.0f) stats.trees[2]++;
             P.addTree(&colour, s.instance, sp, t, false, colourVerts, s.px);
         }
+        node.setSeenLods(std::move(seenLods));
     }
     stats.vertices = colourVerts;
     // Clumps and crowns nearest the eye first: each writes the depth of the

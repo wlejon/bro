@@ -761,6 +761,11 @@ void bro_scene_SceneNode_forestStats(void* self, bronze_native_buffer* out);
 //   registered at __bro_native.scene.SceneNode_forestTreeLod
 void bro_scene_SceneNode_forestTreeLod(void* self, int32_t specimen, double pxPerUnit, bronze_native_buffer* out);
 
+// forest tree `instance`'s treeLod as the camera drew it last frame, the same
+// layout; empty when it was not drawn
+//   registered at __bro_native.scene.SceneNode_forestSeenLod
+void bro_scene_SceneNode_forestSeenLod(void* self, int32_t instance, bronze_native_buffer* out);
+
 // ---- Grass (native_scene_grass.cpp, js/scene_grass.js) ----
 
 // bro.scene.SceneGraph.prototype.createGrass

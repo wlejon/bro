@@ -238,4 +238,13 @@
         return { widening: a[0], keep: a[1], card: a[2] > 0, leaves: a[3], clumps: a[4], crowns: a[5],
                  barkRadius: a[6], barkSides: a[7] };
     });
+    // What tree `instance` was drawn at in the last frame, as forestTreeLod
+    // reports it: the drawer's own (its leaves measured to the crown, the
+    // budget's detail applied). undefined when the camera did not draw it.
+    fn(P, 'forestSeenLod', function forestSeenLod(instance) {
+        const a = __bro_native.scene.SceneNode_forestSeenLod(this, instance | 0);
+        if (a.length < 8) return undefined;
+        return { widening: a[0], keep: a[1], card: a[2] > 0, leaves: a[3], clumps: a[4], crowns: a[5],
+                 barkRadius: a[6], barkSides: a[7] };
+    });
 })();

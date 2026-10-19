@@ -1631,6 +1631,18 @@ class SceneNode {
   forestTreeLod(specimen, pxPerUnit) {}
 
   /**
+   * Forest: what tree `instance` was drawn at in the last frame, as
+   * forestTreeLod reports it but the drawer's own: its leaves measured to
+   * the crown (an upright cylinder round its clumps, so nearer than the
+   * tree's top or middle), its bark to the whole tree, and the budget's
+   * `detail` applied. undefined when the camera did not draw it (culled,
+   * out of range, or no frame yet).
+   * @param {number} instance  the tree's index in the node
+   * @returns {Object|undefined}
+   */
+  forestSeenLod(instance) {}
+
+  /**
    * Mesh: the node's top surface (world y) on a grid, NaN where it has none:
    * texel (i, j) at world (x0 + i * cell, z0 + j * cell), row-major
    * (`cols` per row). What createGrass bakes a mesh ground with.

@@ -137,3 +137,17 @@ void bro_scene_SceneNode_forestTreeLod(void* self, int32_t specimen, double pxPe
                                        t.barkRadius, static_cast<double>(t.barkSides)},
                    out);
 }
+
+void bro_scene_SceneNode_forestSeenLod(void* self, int32_t instance, bronze_native_buffer* out) {
+    auto* f = forestOf(self);
+    const auto* lods = f ? &f->seenLods() : nullptr;
+    if (!lods || instance < 0 || static_cast<size_t>(instance) >= lods->size() ||
+        (*lods)[static_cast<size_t>(instance)].widening <= 0.0f) {
+        transferBuffer(std::vector<double>{}, out);
+        return;
+    }
+    const auto& t = (*lods)[static_cast<size_t>(instance)];
+    transferBuffer(std::vector<double>{t.widening, t.keep, t.card ? 1.0 : 0.0, t.leaves, t.clumps, t.crowns,
+                                       t.barkRadius, static_cast<double>(t.barkSides)},
+                   out);
+}

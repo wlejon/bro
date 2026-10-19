@@ -382,6 +382,12 @@ public:
     };
     void setStats(const Stats& s) { stats_ = s; }
     const Stats& stats() const { return stats_; }
+    /// What the camera drew each tree at in the last frame: the drawer's
+    /// TreeLod, at its own measure of the tree (its leaves to the crown, its
+    /// bark to the whole tree) and the budget's detail. A tree it did not
+    /// draw has widening 0.
+    void setSeenLods(std::vector<TreeLod> lods) { seenLods_ = std::move(lods); }
+    const std::vector<TreeLod>& seenLods() const { return seenLods_; }
 
 private:
     void rebuildBounds();
@@ -405,6 +411,7 @@ private:
     float barkColor_[3] = {0.2f, 0.17f, 0.14f};
     float barkRoughness_ = 0.9f;
     Stats stats_;
+    std::vector<TreeLod> seenLods_;
 
     void refreshGpu() const;
 
