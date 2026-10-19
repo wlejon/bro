@@ -279,14 +279,17 @@ struct SceneMeshDrawer::ForestPlan {
         t.leaves += back;
         if (t.crowns <= 0.0f) return t;
         // Where the camera sees leaves or clumps, the caster's crowns hand to
-        // clumps, over the camera's share of the two from 0.35 to 0.65 (a
-        // switch at a half stepped the shadow). Clumps shaded by crown
-        // casters had only the far half's shade: a pine from above at 80 m
-        // 7 levels brighter than its leaves at noon, 11 at golden.
-        const float q = std::clamp((c.leaves + c.clumps - 0.35f) / 0.3f, 0.0f, 1.0f);
-        const float m = q * q * (3.0f - 2.0f * q);
-        t.clumps += m * t.crowns;
-        t.crowns *= 1.0f - m;
+        // clumps: its crowns no more than the camera's share of them. Clumps
+        // shaded by crown casters had only the far half's shade (a pine from
+        // above at 80 m 7 levels brighter than its leaves at noon, 11 at
+        // golden), and a crown shaded by clump casters takes their shade on
+        // top of its own. (Handed over by a smoothstep across the camera's
+        // share of the two from 0.35 to 0.65, the casters ran behind the
+        // colour's hand-over and then ahead of it: a pine at 92 to 104 m
+        // golden dipped 0.4 under both tiers' dY and then rose 1.4 over.)
+        const float keep = std::min(t.crowns, std::max(c.crowns, 0.0f));
+        t.clumps += t.crowns - keep;
+        t.crowns = keep;
         return t;
     }
 
