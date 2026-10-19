@@ -246,7 +246,11 @@ void groundSurface(vec3 rel, vec4 vdata, inout vec3 color, inout vec3 N, inout f
         nearRoots = mix(nearRoots, strawC, straw * 0.8);
         roots = mix(roots, nearRoots, nearSeen);
     }
-    vec3 turf = mix(roots, sward * GRASS_TURF_TOPS, topSeen);
+    // Seen from above, the tops there part over their gaps as the far
+    // fans' do: the gaps (the sward's depth) are 0.9 of the sine of the
+    // eye's line down of what is seen there, none seen across.
+    float steepT = -rel.y / max(length(rel), 1e-3);
+    vec3 turf = mix(roots, sward * GRASS_TURF_TOPS, topSeen * (1.0 - 0.9 * steepT));
 
     // Mottling at every scale: big patches (a few metres to tens), tussocks
     // (a metre or so), the grain of blades (centimetres).
