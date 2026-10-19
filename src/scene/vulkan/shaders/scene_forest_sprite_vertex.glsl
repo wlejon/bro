@@ -70,7 +70,13 @@ bool forestSprite(int mode, int instanceIndex, int vertexIndex, mat4 base, out F
         vec4 rec = procedural.records[forestClumpRecord(clump)];
         float lr;
         procClumpFlat = forestClumpFlat(specimen);
-        if (int(forestSpecimenShoot(specimen).y + 0.5) == 3) {
+        // The lobe's height over its width: a clump's leaf shell is 0.9 of
+        // its radius up and 0.7 down (clumpLeafFrame), times the specimen's
+        // flatness; a pinnate run's lobes are round (its leaflets line the
+        // wood whichever way it runs: up and down along a hanging whip, where
+        // the shell's squash left a fifth of the run between its lobes bare).
+        bool pinnate = int(forestSpecimenShoot(specimen).y + 0.5) == 3;
+        if (pinnate) {
             // A pinnate clump's leaves line its wood (forestPinnateLeaf): its
             // lobes a run of three along it, each a third of the run and a
             // leaflet's reach either side.
@@ -89,7 +95,8 @@ bool forestSprite(int mode, int instanceIndex, int vertexIndex, mat4 base, out F
         // Wider by the entry's reach (its `widening`, 1 or more): the fine
         // wood the bark's cut leaves out, whose cover the lobes take over.
         s.radius = lr * scale * (core ? 1.0 : max(e.widening, 1.0));
-        s.radiusUp = 0.8 * procClumpFlat * s.radius;
+        float lobeUp = pinnate ? 1.0 : 0.8 * procClumpFlat;
+        s.radiusUp = lobeUp * s.radius;
         // A lobe holds about a third of its clump's leaves (clumpLeafFrame).
         s.leaves = max(procedural.records[forestClumpRecord(clump) + 1].w / 3.0, 1.0);
         forestVegetation(forestClumpRecord(clump) + 2, c, 1.0, v0, v1, v2, v3);
@@ -101,9 +108,9 @@ bool forestSprite(int mode, int instanceIndex, int vertexIndex, mat4 base, out F
             float sigma;
             float rc = forestLobeCore(lr, s.leaves, sigma);
             if (rc <= 0.0) return false;
-            s.core = vec4(lr * scale, 0.8 * procClumpFlat, sigma / scale, s.leafLen);
+            s.core = vec4(lr * scale, lobeUp, sigma / scale, s.leafLen);
             s.radius = rc * scale;
-            s.radiusUp = 0.8 * procClumpFlat * s.radius;
+            s.radiusUp = lobeUp * s.radius;
             s.leafLen = 0.0;
         }
     } else {

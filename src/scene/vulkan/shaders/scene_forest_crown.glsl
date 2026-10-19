@@ -94,6 +94,13 @@ ForestCrownHit forestCrownTrace(vec3 d, int instance, vec3 offset, float len, fl
     float flatness = procedural.records[sr + 4].w > 0.0 ? procedural.records[sr + 4].w : 1.0;
     // (A spray node's clumps are its sprays' pads, filled to their rims.)
     float fill = (floatBitsToUint(procedural.header[3].w) & 15u) != 0u ? 1.0 : FOREST_CROWN_FILL;
+    // A pinnate specimen's clumps are runs of leaflets along their wood
+    // (scene_forest_shoot.glsl's forestPinnateLeaf, its record 8's z the
+    // phyllotaxis): each traced as the spheroid the clumps tier's run of
+    // three lobes fills (scene_forest_sprite_vertex.glsl), its axis the
+    // wood's, not the round clump's ellipsoid, which stood out past a
+    // hanging whip's narrow curtain either side.
+    bool pinnate = int(procedural.records[sr + 8].z + 0.5) == 3;
     {
         float leaves = float(floatBitsToUint(procedural.records[sr + 1].y));
         float cr = max(procedural.records[sr + 2].w, 1e-3) * scale;
@@ -122,6 +129,12 @@ ForestCrownHit forestCrownTrace(vec3 d, int instance, vec3 offset, float len, fl
     // dithered by the pixel's wander so a switch never draws a line.
     float px = procedural.records[sr + 3].y * scale / max(pixel, 1e-6) * (0.8 + 0.4 * grain.z);
     int stride = px < FOREST_COARSE_PIXELS * 0.5 ? 4 : px < FOREST_COARSE_PIXELS ? 2 : 1;
+    // (Not a pinnate specimen's: its runs are narrow, and a run's
+    // neighbours in its block hang beside it across the curtain, not
+    // around it, so no grown run stands in for them; every second one
+    // opened the curtain at range, 150 m cover 0.80 of the leaves', not
+    // 0.86.)
+    if (pinnate) stride = 1;
     float grow = stride == 4 ? 1.587 : stride == 2 ? 1.26 : 1.0;
     // The clumps in runs of FOREST_CLUMP_BLOCK that lie together
     // (ForestNode::kClumpBlock), two records a run from the specimen's first
@@ -161,10 +174,27 @@ ForestCrownHit forestCrownTrace(vec3 d, int instance, vec3 offset, float len, fl
             float rr = c.w * grow * fill, ry = 0.8 * flatness * rr;
             vec3 cs = c.xyz + vec3(0.0, 0.1 * rr * flatness, 0.0);
             // The chord, the ellipsoid scaled to a sphere.
-            float sy = rr / ry;
-            vec3 oc = o - cs;
-            oc.y *= sy;
-            vec3 es = vec3(e.x, e.y * sy, e.z);
+            vec3 oc, es;
+            if (pinnate) {
+                // The run: half its length (the clump's radius) along its
+                // wood `ax` about its middle, and a third of that or a
+                // leaflet's reach (0.8 of a leaf) across, as the clumps
+                // tier's lobes (the same volume as the three of them).
+                vec3 D = procedural.records[r + 1].xyz;
+                vec3 ax = dot(D, D) > 1e-12 ? normalize(D) : vec3(0.0, 1.0, 0.0);
+                cs = c.xyz - ax * (0.35 * c.w);
+                ry = c.w;
+                rr = max(c.w / 3.0, 0.8 * procedural.header[1].z);
+                float sa = rr / ry;
+                oc = o - cs;
+                oc += ax * ((sa - 1.0) * dot(oc, ax));
+                es = e + ax * ((sa - 1.0) * dot(e, ax));
+            } else {
+                float sy = rr / ry;
+                oc = o - cs;
+                oc.y *= sy;
+                es = vec3(e.x, e.y * sy, e.z);
+            }
             float qa = dot(es, es), qb = dot(oc, es), qk = dot(oc, oc) - rr * rr;
             float disc = qb * qb - qa * qk;
             if (disc <= 0.0) continue;
@@ -177,11 +207,14 @@ ForestCrownHit forestCrownTrace(vec3 d, int instance, vec3 offset, float len, fl
             float sigma = leaves * leafArea / (4.18879 * R * R * RY);
             float tau = sigma * (t.y - max(t.x, 0.0)) * wander;
             tauAll += tau;
+            // (Its height over its width; a pinnate run's long axis is its
+            // wood's, lit as round.)
+            float ky = pinnate ? 1.0 : RY / R;
             if (t.x < t1) {
                 t2 = t1; tau2 = tau1; s2 = s1; d2 = d1; y2 = y1;
-                t1 = t.x; tau1 = tau; s1 = vec4(C, R); d1 = sigma; y1 = RY / R;
+                t1 = t.x; tau1 = tau; s1 = vec4(C, R); d1 = sigma; y1 = ky;
             } else if (t.x < t2) {
-                t2 = t.x; tau2 = tau; s2 = vec4(C, R); d2 = sigma; y2 = RY / R;
+                t2 = t.x; tau2 = tau; s2 = vec4(C, R); d2 = sigma; y2 = ky;
             }
         }
     }

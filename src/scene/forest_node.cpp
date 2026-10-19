@@ -792,11 +792,23 @@ const std::vector<float>& ForestNode::gpuData() const {
         const Specimen& s = specimens_[k];
         // Each clump's ellipsoid (0.9 of its radius up, 0.7 down, its
         // radius across) lies in the sphere of its radius about a point 0.1
-        // of it above the centre.
+        // of it above the centre. A pinnate specimen's clump is a run along
+        // its wood (scene_forest_crown.glsl), within its radius of the run's
+        // middle, 0.35 of it back along the twig direction.
+        const bool pinnate = leafLooks_.size() == nSpec * rec::leaf_look::kFloats &&
+            std::lround(leafLooks_[k * rec::leaf_look::kFloats + rec::leaf_look::kPhyllotaxis]) == 3;
         const auto centre = [&](uint32_t local) {
             const float* q = &a.clumps[(s.clumpStart + local) * rec::clump::kFloats];
             const float* p = q + rec::clump::kCentre;
-            return bromath::Vec3{p[0], p[1] + 0.1f * q[rec::clump::kRadius], p[2]};
+            const float cr = q[rec::clump::kRadius];
+            if (pinnate) {
+                const float* t = q + rec::clump::kTwig;
+                bromath::Vec3 D{t[0], t[1], t[2]};
+                const float dl = bromath::vlen(D);
+                D = dl > 1e-6f ? D * (1.0f / dl) : bromath::Vec3{0.0f, 1.0f, 0.0f};
+                return bromath::Vec3{p[0], p[1], p[2]} - D * (0.35f * cr);
+            }
+            return bromath::Vec3{p[0], p[1] + 0.1f * cr, p[2]};
         };
         const std::vector<uint32_t> order = groupClumps(s.clumpCount, centre);
         for (uint32_t b = 0; b * kClumpBlock < s.clumpCount; ++b) {
