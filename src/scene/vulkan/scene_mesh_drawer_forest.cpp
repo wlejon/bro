@@ -1546,14 +1546,14 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
         });
     }
     stats.vertices = colourVerts;
-    // Clumps and crowns nearest the eye first. (Measured on an RTX 4090 and
-    // on RADV, this does not spare their shading: a fragment stage that can
-    // discard gets no early depth rejection at all, even against depth an
-    // earlier draw wrote, so every layer behind a drawn crown still shades.)
+    // A group nearest the eye first, so what it covers fails the early depth
+    // test. (Only where its draw can have one: measured on an RTX 4090 and
+    // on RADV, a fragment stage that can discard gets no early depth
+    // rejection at all, even against depth an earlier draw wrote.)
     // (A stable sort by distance, as a radix sort of the distances' bits: a
-    // distance is never negative, so its bits order as it does. A far view's
-    // crowns are 200k entries a frame, so the entries stay where they are:
-    // the group's order is kept beside it, and the upload follows it.)
+    // distance is never negative, so its bits order as it does. The entries
+    // stay where they are: the group's order is kept beside it, and the
+    // upload follows it.)
     auto& order = P.order;
     std::vector<uint64_t>& keyed = P.keyed;
     std::vector<uint64_t>& swap = P.keyedSwap;
@@ -1584,16 +1584,16 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
         order[k].resize(n);
         for (size_t i = 0; i < n; ++i) order[k][i] = static_cast<uint32_t>(keyed[i]);
     };
-    nearestFirst(Cores);
-    // So do the leaves, tree by tree (a tree's run of entries stays in its
-    // order). (Discarding too: the order spares no shading, as above.)
+    // The sprites (cores, clumps, crowns) and blooms always discard and
+    // write their depth, so they go in the trees' order: their sort spared
+    // nothing and was the frame's longest serial step on a far view (200k
+    // crowns). The leaves and twigs, which may draw without a discard,
+    // nearest first, tree by tree (a tree's run of entries stays in its
+    // order).
     nearestFirst(LeafNear);
     nearestFirst(LeafCard);
     nearestFirst(Twigs);
     nearestFirst(TwigsFine);
-    nearestFirst(Blooms);
-    nearestFirst(Clumps);
-    nearestFirst(Crowns);
 
     // Each shadow tile's trees at the shadow detail.
     std::vector<Groups>& tiles = P.tiles;
