@@ -270,34 +270,39 @@ void groundSurface(vec3 rel, vec4 vdata, inout vec3 color, inout vec3 N, inout f
     turf *= 0.85 + 0.3 * grain;
 
     // The forest floor: litter where the canopy closes, soil where nothing
-    // grows in the open.
-    float lf;
-    float lshade;
-    float leafSize = 0.055;
-    float leafSeen = clamp(leafSize / fp * 0.4 - 0.5, 0.0, 1.0);
-    vec3 litter = vec3(0.095, 0.07, 0.048);   // the leaves' mean
-    float litterAo = 1.0;
-    if (leafSeen > 0.0 && under > 0.02) {
-        vec3 leaf = groundLeaves(xz, leafSize, lf, lshade);
-        vec3 l = leaf * lshade * mix(0.7, 1.0, smoothstep(0.0, 0.15, lf));
-        litter = mix(litter, l, leafSeen);
-        litterAo = mix(1.0, mix(0.7, 1.0, lshade), leafSeen);
-    }
-    // Leaf drifts (some fresher and russet, some old and grey), damp dark
-    // hollows and moss, at scales that hold from a few metres to far above.
+    // grows in the open (there the litter is not worked out at all: it was
+    // two fifths of an open ground's turf, of the wilds' land round its
+    // world all of it).
     float drift = groundFbm(xz + 5.0, 0.25, fp, 3);
-    float heap = groundFbm(xz + 23.0, 2.2, fp, 3);
-    float damp = groundFbm(xz + 51.0, 0.12, fp, 3);
-    float mossy = groundFbm(xz + 91.0, 0.3, fp, 3);
-    litter *= 0.65 + 0.7 * drift;
-    litter *= 0.7 + 0.6 * heap;
-    litter = mix(litter * vec3(0.85, 0.9, 1.0), litter * vec3(1.25, 1.0, 0.75), smoothstep(0.3, 0.7, heap));
-    litter = mix(litter, vec3(0.03, 0.023, 0.017), smoothstep(0.55, 0.75, damp) * 0.75);
-    litter = mix(litter, vec3(0.045, 0.075, 0.018) * (0.7 + 0.6 * tuss), smoothstep(0.58, 0.72, mossy) * 0.85);
-    float twig = groundTwigs(xz, 0.35, fp) * clamp(0.35 / fp * 0.1 - 0.3, 0.0, 1.0);
-    litter = mix(litter, vec3(0.045, 0.032, 0.022), twig * 0.85);
     vec3 bare = soil * (0.75 + 0.5 * drift) * (0.85 + 0.3 * grain);
-    vec3 floorC = mix(bare, litter, smoothstep(0.0, 0.3, under));
+    vec3 floorC = bare;
+    float litterAo = 1.0;
+    if (under > 0.0) {
+        float lf;
+        float lshade;
+        float leafSize = 0.055;
+        float leafSeen = clamp(leafSize / fp * 0.4 - 0.5, 0.0, 1.0);
+        vec3 litter = vec3(0.095, 0.07, 0.048);   // the leaves' mean
+        if (leafSeen > 0.0 && under > 0.02) {
+            vec3 leaf = groundLeaves(xz, leafSize, lf, lshade);
+            vec3 l = leaf * lshade * mix(0.7, 1.0, smoothstep(0.0, 0.15, lf));
+            litter = mix(litter, l, leafSeen);
+            litterAo = mix(1.0, mix(0.7, 1.0, lshade), leafSeen);
+        }
+        // Leaf drifts (some fresher and russet, some old and grey), damp dark
+        // hollows and moss, at scales that hold from a few metres to far above.
+        float heap = groundFbm(xz + 23.0, 2.2, fp, 3);
+        float damp = groundFbm(xz + 51.0, 0.12, fp, 3);
+        float mossy = groundFbm(xz + 91.0, 0.3, fp, 3);
+        litter *= 0.65 + 0.7 * drift;
+        litter *= 0.7 + 0.6 * heap;
+        litter = mix(litter * vec3(0.85, 0.9, 1.0), litter * vec3(1.25, 1.0, 0.75), smoothstep(0.3, 0.7, heap));
+        litter = mix(litter, vec3(0.03, 0.023, 0.017), smoothstep(0.55, 0.75, damp) * 0.75);
+        litter = mix(litter, vec3(0.045, 0.075, 0.018) * (0.7 + 0.6 * tuss), smoothstep(0.58, 0.72, mossy) * 0.85);
+        float twig = groundTwigs(xz, 0.35, fp) * clamp(0.35 / fp * 0.1 - 0.3, 0.0, 1.0);
+        litter = mix(litter, vec3(0.045, 0.032, 0.022), twig * 0.85);
+        floorC = mix(bare, litter, smoothstep(0.0, 0.3, under));
+    }
 
     // Far off, a thin clump's ground is hidden by the blades around it (they
     // lean over it, and the eye sees across): only thin grass leaves soil.
