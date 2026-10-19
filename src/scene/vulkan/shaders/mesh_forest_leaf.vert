@@ -151,8 +151,12 @@ void main() {
 
     outVegShade = p.shade;
     outInstColor = vec4(p.tint * e.wood, e.fade);
-    // A spray's (mesh.frag's SCENE_FOREST_SPRAY): its seed, its own dither.
-    if (!cluster) outLobeDensity = p.seed;
+    // A spray's (mesh.frag's SCENE_FOREST_SPRAY): its seed, its own dither,
+    // and its widening (the sprays it stands for, each turned its own way).
+    if (!cluster) {
+        outLobeDensity = p.seed;
+        outLobeFlat = max(e.widening, 1.0);
+    }
     if (cluster) {
 #ifndef FOREST_LEAF_INLINE
         forestPoseLobe(slot, p);

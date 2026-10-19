@@ -325,6 +325,10 @@ struct SceneSurface {
     // mean over normals whose cosine to the light spreads this far either
     // side of the one given (0: as given).
     float leafSpread;
+    // The same for the light through them (their translucency), set apart:
+    // what a widened spray or a sprite stands for glows by its leaves' mean
+    // facing, while its diffuse keeps leafSpread's narrower wrap.
+    float leafThroughSpread;
     // A sward too fine to resolve (far grass, the turf standing for it):
     // xyz the way its blades stand on average (the ground's normal tipped
     // by the wind's lay), w how much of the direct light is the sward's
@@ -561,7 +565,11 @@ vec3 sceneDirectLight(SceneSurface s) {
                 Lo += s.baseColor * SWARD_TRANSMIT * radiance *
                       (max(-NLt, 0.0) * glow / PI * s.translucency * (1.0 - s.sward.w) * leafShadow);
             } else {
-                float through = smoothstep(-0.3, 0.4, 0.3 - NL);
+                // (Over its leaves' spread of facings, as leafWrapMean.)
+                float k = s.leafThroughSpread;
+                float through = k > 1e-3 ? (smoothstep(-0.3, 0.4, 0.3 - NL + k) + smoothstep(-0.3, 0.4, 0.3 - NL) +
+                                            smoothstep(-0.3, 0.4, 0.3 - NL - k)) / 3.0
+                                         : smoothstep(-0.3, 0.4, 0.3 - NL);
                 float back = pow(max(dot(-V, L), 0.0), 3.0);
                 float amount = s.translucency * through * (0.1 + 0.9 * back) * (1.0 - s.sward.w);
                 vec3 tcol = sqrt(max(s.baseColor, vec3(0.0))) * vec3(0.75, 0.95, 0.35) * 0.55;

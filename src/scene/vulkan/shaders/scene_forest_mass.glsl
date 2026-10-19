@@ -40,6 +40,9 @@ const float FOREST_CROWN_CLUMPING = 0.4;
 // far tier lit through one normal a pixel took more of a high sun than its
 // leaves, which face every way about it.
 const float FOREST_MASS_SPREAD = 0.6;
+// The same for the light through them (SceneSurface::leafThroughSpread):
+// wider, the glow of a far tier against a low sun its leaves' mean.
+const float FOREST_THROUGH_SPREAD = 2.5;
 
 // Four values in [0, 1] from a cell and a salt (an integer hash).
 vec4 forestMassHash(ivec2 c, uint salt) {

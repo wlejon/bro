@@ -61,6 +61,7 @@ layout(location = 12) flat in float inLobeHollow;   // forestShellPath's hollow,
 #ifdef SCENE_FOREST_SPRAY
 // The spray's seed (mesh_forest_leaf.vert): its own dither.
 layout(location = 10) flat in float inSpraySeed;
+layout(location = 11) flat in float inSprayWidening;   // the sprays it stands for, k^2
 #endif
 #ifdef SCENE_HERB
 // A herb plant's card (mesh_herb.vert): its role (leaf, stem, bloom),
@@ -523,12 +524,24 @@ void main() {
     s.leafSun = vec4(0.5);
     s.leafSunN = 0.0;
     s.leafSpread = 0.0;
+    s.leafThroughSpread = 0.0;
 #ifdef SCENE_FOREST_SPRITE
     s.leafSpread = FOREST_MASS_SPREAD;
+    // (A spray node's: its sprays turn every way. A broad node's lobe keeps
+    // its leaves' own facing: spread, its far crowns were 7 levels darker
+    // than its leaves against a low sun.)
+    s.leafThroughSpread = (floatBitsToUint(procedural.header[3].w) & 15u) != 0u ? FOREST_THROUGH_SPREAD : 0.0;
     s.leafPath = mass.path;
     s.leafSun = mass.sun;
     s.leafSunN = mass.sunN;
     s.leafSelfMax = mass.selfMax;
+#endif
+#ifdef SCENE_FOREST_SPRAY
+    // A widened spray stands for the k^2 round it, each turned its own way:
+    // the light through it is theirs, by their spread of facings, not its
+    // own one's (alone, a widened conifer's sprays against a low sun glowed
+    // half again as much as its leaves).
+    s.leafThroughSpread = FOREST_THROUGH_SPREAD * clamp(1.0 - 1.0 / max(inSprayWidening, 1.0), 0.0, 1.0);
 #endif
 #ifdef SCENE_VEGETATION
     s.leafSphere = mass.sphere;
