@@ -48,13 +48,15 @@ public:
     void statEnd(VkCommandBuffer cmd);
 
 private:
-    static constexpr uint32_t kMaxStats = 190;   // counted draws a render (as marks)
+    static constexpr uint32_t kMaxStats = 512;   // counted draws a render (as marks)
     VkQueryPool statPool_ = VK_NULL_HANDLE;
     uint32_t statCount_[8] = {};
     const char* statNames_[8][kMaxStats] = {};
     bool statOpen_ = false;
 
-    static constexpr uint32_t kMaxMarks = 190;   // (a forest's grass alone is a few dozen draws)
+    // (A forest's grass alone is a few dozen draws, and the wilds walk's
+    // opaque and shadow passes over 190: its forest clumps went uncounted.)
+    static constexpr uint32_t kMaxMarks = 512;
     static constexpr uint32_t kPerSlot = 2 + kMaxMarks;   // start, end, the marks
 
     render::VulkanContext& context_;
