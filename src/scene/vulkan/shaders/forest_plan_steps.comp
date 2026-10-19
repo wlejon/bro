@@ -6,6 +6,8 @@
 //   PLAN_ITEMS   a thread a (view, tree): the runs filled, the camera's in
 //                its sorted order, a tile's in the trees' (by the flags'
 //                scan), each run's tail FP_NO_ITEM
+//   PLAN_VARY    one thread a node: the search's later rounds' dispatch, over
+//                the items round 1 found varying
 //   PLAN_SETTLE  one thread a budget: the searches' fits settled
 //                (settleDetail) against the details kept in SHARED
 //   PLAN_ARGS    one thread a node, the nodes in turn: each draw's indirect
@@ -36,6 +38,13 @@ void main() {
     planArgs.w[FP_A_ITEM_DISPATCH] = at / uint(FP_GROUP_SIZE);
     planArgs.w[FP_A_ITEM_DISPATCH + 1] = 1u;
     planArgs.w[FP_A_ITEM_DISPATCH + 2] = 1u;
+}
+
+#elif defined(PLAN_VARY)
+void main() {
+    planArgs.w[FP_A_VARY_DISPATCH] = (planWork.w[FP_N_VARY_COUNT] + uint(FP_GROUP_SIZE) - 1u) / uint(FP_GROUP_SIZE);
+    planArgs.w[FP_A_VARY_DISPATCH + 1] = 1u;
+    planArgs.w[FP_A_VARY_DISPATCH + 2] = 1u;
 }
 
 #elif defined(PLAN_ITEMS)

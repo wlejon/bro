@@ -162,10 +162,12 @@
 #define FP_W_KEYS_B             5
 #define FP_W_VALS_B             6
 #define FP_W_HIST               7     // FP_SORT_DIGITS x blocks: the sort's digit counts
-#define FP_W_FINE               8     // FP_P_ITEMS: each item's cost at detail 1 (bit 31: fixed)
+#define FP_W_FINE               8     // FP_P_ITEMS: each item's cost at detail 1
 #define FP_W_SUMS               9     // FP_COLUMNS x item groups + 1: the place pass's counts
 #define FP_W_SCRATCH            10    // the scans' block sums
-#define FP_W_RUNS               11
+#define FP_W_VARY               11    // FP_P_ITEMS: the items whose cost varies with the detail (the
+                                      //   search's later rounds walk these alone), in no order
+#define FP_W_RUNS               12
 
 // The camera's measure of a tree (ForestNode::SeenTree and the bark's classes).
 #define FP_CAM_WORDS            8
@@ -192,6 +194,7 @@
 #define FP_N_STATS              128   // FP_S_*: copied to the read-back
 #define FP_N_POSED              176   // per posed group: 1 posed, 0 inline
 #define FP_N_POSE_BASE          178   // per posed group: its first pose slot
+#define FP_N_VARY_COUNT         180   // the items in FP_W_VARY
 #define FP_N_WORDS              256
 
 // The stats (ForestNode::Stats), as read back.
@@ -229,7 +232,8 @@
 #define FP_A_POSE               (FP_MAX_VIEWS * FP_A_SLOTS_PER_VIEW * FP_A_SLOT_WORDS)   // per posed group:
                                       // a dispatch (x, 1, 1) and its first entry
 #define FP_A_ITEM_DISPATCH      (FP_A_POSE + 8)   // the item passes' dispatch: the item blocks in use, 1, 1
-#define FP_A_WORDS              (FP_A_ITEM_DISPATCH + 4)
+#define FP_A_VARY_DISPATCH      (FP_A_ITEM_DISPATCH + 4)   // the search's later rounds': FP_W_VARY's blocks
+#define FP_A_WORDS              (FP_A_VARY_DISPATCH + 4)
 
 // A group's draw (FP_P_DRAWS): its command's kind.
 #define FP_DRAW_INDEXED         0u    // instanced, indexed: an entry an instance

@@ -36,13 +36,15 @@ constexpr BuiltinSceneShader kStageShaders[] = {
     BuiltinSceneShader::ForestPlanScanAddComp,    BuiltinSceneShader::ForestPlanSortHistComp,
     BuiltinSceneShader::ForestPlanSortScatterComp, BuiltinSceneShader::ForestPlanLayoutComp,
     BuiltinSceneShader::ForestPlanItemsComp,      BuiltinSceneShader::ForestPlanCostComp,
-    BuiltinSceneShader::ForestPlanSettleComp,     BuiltinSceneShader::ForestPlanCountComp,
-    BuiltinSceneShader::ForestPlanArgsComp,       BuiltinSceneShader::ForestPlanWriteComp,
+    BuiltinSceneShader::ForestPlanVaryComp,       BuiltinSceneShader::ForestPlanSettleComp,
+    BuiltinSceneShader::ForestPlanCountComp,      BuiltinSceneShader::ForestPlanArgsComp,
+    BuiltinSceneShader::ForestPlanWriteComp,
 };
 constexpr const char* kStageNames[] = {"forest plan measure", "forest plan scan", "forest plan scan add",
                                        "forest plan sort hist", "forest plan sort scatter", "forest plan layout",
-                                       "forest plan items", "forest plan cost", "forest plan settle",
-                                       "forest plan count", "forest plan args", "forest plan write"};
+                                       "forest plan items", "forest plan cost", "forest plan vary",
+                                       "forest plan settle", "forest plan count", "forest plan args",
+                                       "forest plan write"};
 
 VkPipeline computePipeline(SceneVkDevice& device, VkShaderModule module, VkPipelineLayout layout, const char* name) {
     VkComputePipelineCreateInfo ci{};
@@ -384,7 +386,8 @@ bool GpuPlanner::begin(SceneFrame& frame, Node& n, const ForestNode& node, const
     const uint32_t widest = std::max({flags, sums, FP_SORT_DIGITS * blocks});
     const uint32_t scratch = widest / (FP_SCAN_BLOCK - 1) + 16;
     const uint32_t sizes[FP_W_RUNS] = {N * FP_CAM_WORDS, flags,    n.items,   n.aligned, n.aligned, n.aligned,
-                                       n.aligned,        FP_SORT_DIGITS * blocks, n.items, sums,      scratch};
+                                       n.aligned,        FP_SORT_DIGITS * blocks, n.items, sums,      scratch,
+                                       n.items};
     uint64_t at = FP_N_WORDS;
     for (int r = 0; r < FP_W_RUNS; ++r) {
         n.runs[r] = static_cast<uint32_t>(at);
@@ -495,10 +498,15 @@ void GpuPlanner::dispatch(VkCommandBuffer cmd, Stage s, const Node& n, uint32_t 
 }
 
 void GpuPlanner::dispatchItems(VkCommandBuffer cmd, Stage s, const Node& n, const Push& p) const {
+    dispatchIndirect(cmd, s, n, FP_A_ITEM_DISPATCH, p);
+}
+
+void GpuPlanner::dispatchIndirect(VkCommandBuffer cmd, Stage s, const Node& n, uint32_t argsWord,
+                                  const Push& p) const {
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelines_[s]);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout_, 0, 1, &n.set, 0, nullptr);
     vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(Push), &p);
-    vkCmdDispatchIndirect(cmd, n.args.buffer, VkDeviceSize{FP_A_ITEM_DISPATCH} * 4);
+    vkCmdDispatchIndirect(cmd, n.args.buffer, VkDeviceSize{argsWord} * 4);
 }
 
 // An exclusive scan of `count` words at `offset` in place: each block's
@@ -564,9 +572,20 @@ void GpuPlanner::record(SceneFrame& frame) {
         mark("plan:items");
         // The budget's search, every node's items at each round's ask, then
         // its fits settled.
+        // (Rounds 0 and 1 over every item; round 1 lists those whose cost
+        // varies, and the later rounds walk the list alone.)
         for (uint32_t round = 0; round < FP_ROUNDS; ++round) {
-            for (Node* n : queued_) dispatchItems(cmd, Cost, *n, {round, 0, 0, 0});
+            for (Node* n : queued_) {
+                if (round < 2)
+                    dispatchItems(cmd, Cost, *n, {round, 0, 0, 0});
+                else
+                    dispatchIndirect(cmd, Cost, *n, FP_A_VARY_DISPATCH, {round, 1, 0, 0});
+            }
             barrier(cmd);
+            if (round == 1) {
+                for (Node* n : queued_) dispatch(cmd, Vary, *n, 1);
+                barrier(cmd);
+            }
         }
         dispatch(cmd, Settle, *queued_.front(), 1);
         barrier(cmd);

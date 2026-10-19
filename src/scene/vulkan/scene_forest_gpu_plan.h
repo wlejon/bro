@@ -128,7 +128,7 @@ public:
 
 private:
     enum Stage {
-        Measure, ScanLocal, ScanAdd, SortHist, SortScatter, Layout, Items, Cost, Settle, Count, Args, Write,
+        Measure, ScanLocal, ScanAdd, SortHist, SortScatter, Layout, Items, Cost, Vary, Settle, Count, Args, Write,
         kStages
     };
     struct Push {
@@ -136,6 +136,8 @@ private:
     };
     void dispatch(VkCommandBuffer cmd, Stage s, const Node& n, uint32_t groups, const Push& p = {}) const;
     void dispatchItems(VkCommandBuffer cmd, Stage s, const Node& n, const Push& p = {}) const;
+    // Over the groups ARGS holds at `argsWord` (an x, 1, 1 dispatch).
+    void dispatchIndirect(VkCommandBuffer cmd, Stage s, const Node& n, uint32_t argsWord, const Push& p) const;
     void scan(VkCommandBuffer cmd, const Node& n, uint32_t offset, uint32_t count, uint32_t scratch) const;
     static void barrier(VkCommandBuffer cmd);
     static void destroyNode(SceneVkAllocator& allocator, Node& n);

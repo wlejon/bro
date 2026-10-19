@@ -86,6 +86,7 @@ BRO_SCENE_SHADER(ForestPlanSortScatterComp, "forest_plan_sort_scatter.comp", "fo
 BRO_SCENE_SHADER(ForestPlanLayoutComp,     "forest_plan_layout.comp",     "forest_plan_steps.comp",      "comp", "PLAN_LAYOUT")
 BRO_SCENE_SHADER(ForestPlanItemsComp,      "forest_plan_items.comp",      "forest_plan_steps.comp",      "comp", "PLAN_ITEMS")
 BRO_SCENE_SHADER(ForestPlanCostComp,       "forest_plan_cost.comp",       "forest_plan_place.comp",      "comp", "PLAN_COST")
+BRO_SCENE_SHADER(ForestPlanVaryComp,       "forest_plan_vary.comp",       "forest_plan_steps.comp",      "comp", "PLAN_VARY")
 BRO_SCENE_SHADER(ForestPlanSettleComp,     "forest_plan_settle.comp",     "forest_plan_steps.comp",      "comp", "PLAN_SETTLE")
 BRO_SCENE_SHADER(ForestPlanCountComp,      "forest_plan_count.comp",      "forest_plan_place.comp",      "comp", "PLAN_COUNT")
 BRO_SCENE_SHADER(ForestPlanArgsComp,       "forest_plan_args.comp",       "forest_plan_steps.comp",      "comp", "PLAN_ARGS")
