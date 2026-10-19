@@ -105,12 +105,18 @@ bool forestSprite(int mode, int instanceIndex, int vertexIndex, mat4 base, out F
         if (core) {
             // The lobe's CORE (forestLobeCore): its depth past which its own
             // leaves hide everything, drawn solid in their place.
+            // As deep in its leaves up and down as across: a flat lobe's
+            // shell is thinner over and under it, so the core is flatter
+            // than its lobe (a pine's pads, its core its lobe's shape, showed
+            // their cores' undersides from below as tan discs), and a lobe
+            // too flat to hide one has none.
             float sigma;
             float rc = forestLobeCore(lr, s.leaves, sigma);
-            if (rc <= 0.0) return false;
-            s.core = vec4(lr * scale, lobeUp, sigma / scale, s.leafLen);
+            float upR = lobeUp * lr - (lr - rc);
+            if (rc <= 0.0 || upR <= 0.0) return false;
+            s.core = vec4(lr * scale, upR / rc, sigma / scale, s.leafLen);
             s.radius = rc * scale;
-            s.radiusUp = lobeUp * s.radius;
+            s.radiusUp = upR * scale;
             s.leafLen = 0.0;
         }
     } else {

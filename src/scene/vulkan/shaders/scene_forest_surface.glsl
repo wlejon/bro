@@ -92,7 +92,8 @@ ForestMass forestSpriteSurface(uint flags) {
         m.sphere = vec4(inMass0.xyz, inMass2.y);
         // As a lobe's leaves are lit (half the lobe's density, below).
         m.density = inMass2.z * 0.5;
-        m.flatness = ky;
+        // (Lit in its lobe's shape, carried over its mode as a lobe's is.)
+        m.flatness = fract(inColor.z) > 1e-3 ? fract(inColor.z) / 0.4 : ky;
         vec4 clip = camera.viewProj * vec4(m.at, 1.0);
         gl_FragDepth = REVERSED_Z ? min(clip.z / clip.w, gl_FragCoord.z) : gl_FragCoord.z;
     } else {
