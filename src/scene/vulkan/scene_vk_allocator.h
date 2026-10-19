@@ -86,8 +86,10 @@ public:
     SceneVkAllocator& operator=(const SceneVkAllocator&) = delete;
 
     // Buffer management
+    /// `shared`: read or written by the async compute queue as well
+    /// (VulkanContext::createBuffer).
     bool createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
-                      VkMemoryPropertyFlags memProps, SceneVkBuffer& outBuffer);
+                      VkMemoryPropertyFlags memProps, SceneVkBuffer& outBuffer, bool shared = false);
     /// Device-local vertex / index buffers, filled through the upload stream.
     bool createVertexBuffer(VkDeviceSize size, const void* initialData, SceneVkBuffer& outBuffer);
     bool createIndexBuffer(VkDeviceSize size, const void* initialData, SceneVkBuffer& outBuffer);

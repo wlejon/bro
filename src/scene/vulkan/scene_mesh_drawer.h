@@ -17,6 +17,7 @@
 
 #include <bromath/aabb.h>
 #include <bromath/frustum.h>
+#include "render/vulkan_frames.h"
 #include "scene/vulkan/scene_gpu_resources.h"
 #include "scene/vulkan/scene_vk_allocator.h"
 #include "scene/vulkan/scene_vk_custom_shader.h"
@@ -236,13 +237,14 @@ public:
     void prepareForests(SceneFrame& frame, const std::vector<ForestNode*>& nodes,
                         std::vector<std::vector<MeshDraw>>& out);
     /// Pose the leaves this frame's forest draws keep (forest_leaf_pose.comp,
-    /// a leaf at a time; their vertices read the poses): recorded into
-    /// frame.cmd outside any rendering, after the forests are prepared and
-    /// before anything draws them.
+    /// a leaf at a time; their vertices read the poses): recorded outside any
+    /// rendering, after the forests are prepared and before anything draws
+    /// them. The GPU planner's plans and poses go into the frame's compute
+    /// stream (SceneFrame::computeStream), the CPU's poses into frame.cmd.
     void recordForestPoses(SceneFrame& frame);
-    /// The frame recorded since the last call went to the GPU as `ticket`:
-    /// the GPU planner's read-backs of it are read once it completes.
-    void forestSubmitted(uint64_t ticket);
+    /// The plans recorded since the last call went to the GPU as `ticket` on
+    /// `queue`: the GPU planner's read-backs of them are read once it completes.
+    void forestSubmitted(uint64_t ticket, render::VulkanQueue& queue);
 
     /// A pass's view for a chunked draw (MeshDraw::chunks): its frustum
     /// (absolute world) and the origin its draws' push.model is relative to
@@ -367,12 +369,14 @@ private:
         MeshPushConstants push{};
         uint32_t entries = 0;
     };
-    /// The pose buffer with room for `slots` poses this frame (a new one,
-    /// the old deferred, when it has not); null on failure.
+    /// This frame slot's pose buffer with room for `slots` poses (a new one,
+    /// the old deferred, when it has not); null on failure. A copy a slot:
+    /// the GPU planner's poses for a frame are written on the async compute
+    /// queue while the last frame's draws may still read theirs.
     const SceneVkBuffer* ensurePoses(SceneFrame& frame, uint32_t slots);
     std::vector<ForestPoseJob> poseJobs_;
     uint32_t poseUsed_ = 0;
-    SceneVkBuffer poses_;
+    SceneVkBuffer poses_[render::VulkanFrames::kFramesInFlight];
     VkPipelineLayout poseLayout_ = VK_NULL_HANDLE;
     VkShaderModule poseCs_ = VK_NULL_HANDLE;
     VkPipeline posePipeline_ = VK_NULL_HANDLE;

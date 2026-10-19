@@ -79,7 +79,7 @@ void fillTable(uint32_t* table, int node, float lo, float hi, int depth) {
 // --- A node's read-backs ---
 
 void GpuPlanner::Node::poll() {
-    if (!queue_ || !readback.mappedData) return;
+    if (!readback.mappedData) return;
     // At most a render late: the render before the newest is waited for.
     // With two frames in flight it is done (or all but) by the time the
     // next is prepared, so this costs a frame nothing; unwaited, a script's
@@ -96,11 +96,11 @@ void GpuPlanner::Node::poll() {
             before = i;
         }
     }
-    if (before >= 0 && ring_[before].serial > readSerial_) queue_->wait(ring_[before].ticket);
+    if (before >= 0 && ring_[before].serial > readSerial_) ring_[before].queue->wait(ring_[before].ticket);
     int best = -1;
     for (int i = 0; i < kRing; ++i) {
         const Slot& s = ring_[i];
-        if (s.state != Slot::Submitted || s.serial <= readSerial_ || !queue_->isComplete(s.ticket)) continue;
+        if (s.state != Slot::Submitted || s.serial <= readSerial_ || !s.queue->isComplete(s.ticket)) continue;
         if (best < 0 || s.serial > ring_[best].serial) best = i;
     }
     if (best < 0) return;
@@ -123,7 +123,7 @@ void GpuPlanner::Node::poll() {
     have_ = true;
     readSerial_ = ring_[best].serial;
     for (Slot& slot : ring_)
-        if (slot.state == Slot::Submitted && slot.serial <= readSerial_ && queue_->isComplete(slot.ticket))
+        if (slot.state == Slot::Submitted && slot.serial <= readSerial_ && slot.queue->isComplete(slot.ticket))
             slot.state = Slot::Free;
 }
 
@@ -181,17 +181,24 @@ bool GpuPlanner::setup(SceneGpu& gpu) {
         LOG_ERROR("forest planner: failed creating its pose stage");
         return false;
     }
+    // (Shared: uploaded on the graphics queue, then the plan's alone.)
     if (!gpu.allocator.createBuffer(FP_G_WORDS * 4, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, shared_))
+                                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, shared_, /*shared=*/true))
         return false;
     ready_ = true;
     return true;
 }
 
 void GpuPlanner::destroyNode(SceneVkAllocator& allocator, Node& n) {
-    for (SceneVkBuffer* b : {&n.staticBuf, &n.work, &n.readback, &n.entries, &n.args})
+    for (SceneVkBuffer* b : {&n.staticBuf, &n.work, &n.readback})
         if (b->isValid()) allocator.destroyBuffer(*b);
-    n.queue_ = nullptr;
+    for (uint32_t s = 0; s < Node::kSlots; ++s) {
+        for (SceneVkBuffer* b : {&n.slotEntries_[s], &n.slotArgs_[s]})
+            if (b->isValid()) allocator.destroyBuffer(*b);
+        n.slotEntryCap_[s] = 0;
+    }
+    n.entries = n.args = {};
+    n.entryCap = 0;
 }
 
 void GpuPlanner::cleanup(SceneGpu& gpu) {
@@ -227,11 +234,11 @@ std::shared_ptr<GpuPlanner::Node> GpuPlanner::node(const ForestNode& n) {
 }
 
 bool GpuPlanner::ensureBuffer(SceneFrame& frame, SceneVkBuffer& buf, VkDeviceSize size, VkBufferUsageFlags usage,
-                              VkMemoryPropertyFlags props, VkDeviceSize headroom) {
+                              VkMemoryPropertyFlags props, VkDeviceSize headroom, bool shared) {
     if (buf.isValid() && buf.size >= size) return true;
     // (The old one stays until the frames that read it are done.)
     if (buf.isValid()) frame.gpu.allocator.destroyBuffer(buf);
-    if (!frame.gpu.allocator.createBuffer(size + headroom, usage, props, buf)) {
+    if (!frame.gpu.allocator.createBuffer(size + headroom, usage, props, buf, shared)) {
         buf = {};
         return false;
     }
@@ -329,13 +336,18 @@ bool GpuPlanner::buildStatic(SceneFrame& frame, Node& n, const ForestNode& node,
 
     const VkDeviceSize bytes = VkDeviceSize{words.size()} * 4;
     if (bytes > limits_.maxStorageBufferRange) return false;
-    if (n.staticBuf.isValid() && n.staticBuf.size != bytes) frame.gpu.allocator.destroyBuffer(n.staticBuf);
+    // A new buffer each time, never rewritten in place: the last frame's plan
+    // may still read the old one on the compute queue, which the upload on
+    // the graphics queue is not ordered against. The plan waits for the
+    // upload (computeReadsGraphics).
+    if (n.staticBuf.isValid()) frame.gpu.allocator.destroyBuffer(n.staticBuf);
     if (!ensureBuffer(frame, n.staticBuf, bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0) ||
+                      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0, /*shared=*/true) ||
         !frame.gpu.allocator.stageAndUploadBuffer(n.staticBuf.buffer, words.data(), bytes)) {
         if (n.staticBuf.isValid()) frame.gpu.allocator.destroyBuffer(n.staticBuf);
         return false;
     }
+    frame.gpu.device.computeReadsGraphics();
     n.generation = node.dataGeneration();
     n.reach = reach;
     n.trees = instances.size();
@@ -344,8 +356,9 @@ bool GpuPlanner::buildStatic(SceneFrame& frame, Node& n, const ForestNode& node,
     return true;
 }
 
-bool GpuPlanner::begin(SceneFrame& frame, Node& n, const ForestNode& node, const std::vector<bromath::AABB3>& bounds,
-                       float reach, uint32_t tiles, std::vector<uint32_t>& params) {
+bool GpuPlanner::begin(SceneFrame& frame, Node& n, const ForestNode& node, VkBuffer store,
+                       const std::vector<bromath::AABB3>& bounds, float reach, uint32_t tiles,
+                       std::vector<uint32_t>& params) {
     if (!ready_) return false;
     // Nodes gone (or long unplanned) give their buffers back.
     if ((use_ & 1023) == 0)
@@ -363,9 +376,14 @@ bool GpuPlanner::begin(SceneFrame& frame, Node& n, const ForestNode& node, const
         const float trees[3][2] = {{1.0f, 2.0f}, {2.0f, 4.0f}, {4.0f, 8.0f}};
         for (int t = 0; t < 3; ++t) fillTable(init.data() + FP_G_TABLE + t * 64, 1, trees[t][0], trees[t][1], 0);
         if (!frame.gpu.allocator.stageAndUploadBuffer(shared_.buffer, init.data(), init.size() * 4)) return false;
+        frame.gpu.device.computeReadsGraphics();
         sharedReady_ = true;
     }
-    n.queue_ = &frame.gpu.device.context().queue();
+    // A leaf store new since the last plan (its upload on the graphics queue).
+    if (store != n.store_) {
+        n.store_ = store;
+        frame.gpu.device.computeReadsGraphics();
+    }
     n.poll();
     // A frame recorded but never submitted reads back nothing.
     for (Node::Slot& s : n.ring_)
@@ -404,25 +422,33 @@ bool GpuPlanner::begin(SceneFrame& frame, Node& n, const ForestNode& node, const
 
     // The entries: room for what the last frames asked and half again
     // (at first twice the trees: most of a large forest is a crown each).
+    // This frame slot's, as are the args: the last frame's draws may still
+    // read theirs while this plan writes these.
+    const uint32_t f = frame.gpu.device.frames().frameIndex();
+    SceneVkBuffer& entries = n.slotEntries_[f];
+    uint32_t& entryCap = n.slotEntryCap_[f];
     const VkDeviceSize entryBytes = VkDeviceSize{FOREST_ENTRY_RECORDS} * 16;
     const uint64_t maxCap = limits_.maxStorageBufferRange / entryBytes;
     const uint64_t asked = n.askedEntries_;
     const uint64_t need = std::min<uint64_t>(std::max<uint64_t>({asked, 65536u, uint64_t{N} * 2}), maxCap);
-    if (!n.entries.isValid() || n.entryCap < need) {
+    if (!entries.isValid() || entryCap < need) {
         const uint64_t cap = std::min<uint64_t>(std::max(need, asked + asked / 2), maxCap);
-        if (n.entries.isValid()) frame.gpu.allocator.destroyBuffer(n.entries);
+        if (entries.isValid()) frame.gpu.allocator.destroyBuffer(entries);
         if (!frame.gpu.allocator.createBuffer(cap * entryBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                                              VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, n.entries)) {
-            n.entries = {};
-            n.entryCap = 0;
+                                              VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, entries, /*shared=*/true)) {
+            entries = {};
+            entryCap = 0;
             return false;
         }
-        n.entryCap = static_cast<uint32_t>(cap);
+        entryCap = static_cast<uint32_t>(cap);
     }
-    if (!ensureBuffer(frame, n.args, FP_A_WORDS * 4,
+    if (!ensureBuffer(frame, n.slotArgs_[f], FP_A_WORDS * 4,
                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
-                      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0))
+                      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0, /*shared=*/true))
         return false;
+    n.entries = entries;
+    n.entryCap = entryCap;
+    n.args = n.slotArgs_[f];
     if (!n.readback.isValid()) {
         if (!frame.gpu.allocator.createBuffer(Node::kRing * FP_S_WORDS * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
@@ -526,7 +552,11 @@ void GpuPlanner::scan(VkCommandBuffer cmd, const Node& n, uint32_t offset, uint3
 
 void GpuPlanner::record(SceneFrame& frame) {
     if (queued_.empty() && poseJobs_.empty()) return;
-    VkCommandBuffer cmd = frame.cmd;
+    VkCommandBuffer cmd = frame.computeStream();
+    // On the async compute queue the draws are on another queue: the frame's
+    // join (a timeline wait) orders them after the plan, and its barriers
+    // name only the stages a compute queue has.
+    const bool apart = frame.computeApart();
     // (The timed passes' stages, BRO_SCENE_GPU_PASSES.)
     const auto mark = [&](const char* name) {
         if (frame.timer) frame.timer->mark(cmd, name);
@@ -608,7 +638,7 @@ void GpuPlanner::record(SceneFrame& frame) {
         done.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_INDIRECT_COMMAND_READ_BIT |
                              VK_ACCESS_TRANSFER_READ_BIT;
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                             VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT |
+                             (apart ? 0 : VK_PIPELINE_STAGE_VERTEX_SHADER_BIT) | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT |
                                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
                              0, 1, &done, 0, nullptr, 0, nullptr);
         mark("plan:write");
@@ -641,22 +671,25 @@ void GpuPlanner::record(SceneFrame& frame) {
             vkCmdPushConstants(cmd, poseLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(MeshPushConstants), &job.push);
             vkCmdDispatchIndirect(cmd, job.node->args.buffer, VkDeviceSize{FP_A_POSE + 4 * job.group} * 4);
         }
-        VkMemoryBarrier after{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
-        after.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        after.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_VERTEX_SHADER_BIT, 0, 1,
-                             &after, 0, nullptr, 0, nullptr);
+        if (!apart) {
+            VkMemoryBarrier after{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+            after.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            after.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_VERTEX_SHADER_BIT, 0, 1,
+                                 &after, 0, nullptr, 0, nullptr);
+        }
     }
     queued_.clear();
     poseJobs_.clear();
 }
 
-void GpuPlanner::submitted(uint64_t ticket) {
+void GpuPlanner::submitted(uint64_t ticket, render::VulkanQueue& queue) {
     for (auto& [key, n] : nodes_)
         for (Node::Slot& s : n->ring_)
             if (s.state == Node::Slot::Recorded) {
                 s.state = Node::Slot::Submitted;
                 s.ticket = ticket;
+                s.queue = &queue;
             }
 }
 

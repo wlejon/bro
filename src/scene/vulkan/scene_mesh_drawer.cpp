@@ -248,7 +248,7 @@ void SceneMeshDrawer::cleanup(SceneGpu& gpu) {
     posePipeline_ = VK_NULL_HANDLE;
     poseCs_ = VK_NULL_HANDLE;
     poseLayout_ = VK_NULL_HANDLE;
-    gpu.allocator.destroyBuffer(poses_);
+    for (SceneVkBuffer& poses : poses_) gpu.allocator.destroyBuffer(poses);
     poseJobs_.clear();
     poseUsed_ = 0;
     if (gpuPlanner_) gpuPlanner_->cleanup(gpu);

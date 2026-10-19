@@ -38,6 +38,13 @@ bool VulkanFrames::init(VulkanContext& context) {
             LOG_ERROR("VulkanFrames: failed to create a frame command pool");
             return false;
         }
+        if (context.asyncComputeQueue()) {
+            poolInfo.queueFamilyIndex = static_cast<uint32_t>(context.queueFamilies().computeFamily);
+            if (vkCreateCommandPool(context.device(), &poolInfo, nullptr, &slot.computePool) != VK_SUCCESS) {
+                LOG_ERROR("VulkanFrames: failed to create a frame compute command pool");
+                return false;
+            }
+        }
     }
     return true;
 }
@@ -45,6 +52,7 @@ bool VulkanFrames::init(VulkanContext& context) {
 void VulkanFrames::shutdown() {
     if (!context_) return;
     VkDevice device = context_->device();
+    if (VulkanQueue* compute = context_->asyncComputeQueue()) compute->waitIdle();
     queue().waitIdle();
     frameEndHooks_.clear();
     for (auto& fn : pending_) fn();
@@ -56,11 +64,12 @@ void VulkanFrames::shutdown() {
         slot.uploads.clear();
         for (VkDescriptorPool pool : slot.descriptorPools) vkDestroyDescriptorPool(device, pool, nullptr);
         slot.descriptorPools.clear();
-        if (slot.commandPool != VK_NULL_HANDLE) {
-            vkDestroyCommandPool(device, slot.commandPool, nullptr);
-            slot.commandPool = VK_NULL_HANDLE;
+        for (VkCommandPool* pool : {&slot.commandPool, &slot.computePool}) {
+            if (*pool != VK_NULL_HANDLE) vkDestroyCommandPool(device, *pool, nullptr);
+            *pool = VK_NULL_HANDLE;
         }
         slot.commandBuffers.clear();
+        slot.computeBuffers.clear();
     }
     context_ = nullptr;
 }
@@ -82,6 +91,7 @@ void VulkanFrames::beginFrame() {
                       static_cast<unsigned long long>(serial_), closing.openCommandBuffers);
         }
         closing.ticket = queue().retireTicket();
+        if (VulkanQueue* compute = context_->asyncComputeQueue()) closing.computeTicket = compute->lastSubmittedTicket();
         for (auto& fn : pending_) closing.deferred.push_back(std::move(fn));
         pending_.clear();
     }
@@ -91,12 +101,17 @@ void VulkanFrames::beginFrame() {
 
 void VulkanFrames::recycle(Slot& slot) {
     queue().wait(slot.ticket);
+    // (A frame's graphics waits for its compute, so this is done by now
+    // unless the compute's results went unread.)
+    if (VulkanQueue* compute = context_->asyncComputeQueue()) compute->wait(slot.computeTicket);
     for (auto& fn : slot.deferred) fn();
     slot.deferred.clear();
 
     VkDevice device = context_->device();
     vkResetCommandPool(device, slot.commandPool, 0);
     slot.nextCommandBuffer = 0;
+    if (slot.computePool != VK_NULL_HANDLE) vkResetCommandPool(device, slot.computePool, 0);
+    slot.nextComputeBuffer = 0;
     slot.openCommandBuffers = 0;
     slot.used = false;
 
@@ -117,13 +132,11 @@ void VulkanFrames::recycle(Slot& slot) {
     slot.activeDescriptorPool = 0;
 }
 
-VkCommandBuffer VulkanFrames::beginCommands() {
-    ensureFrame();
-    Slot& slot = slots_[frameIndex()];
-    if (slot.nextCommandBuffer == slot.commandBuffers.size()) {
+VkCommandBuffer VulkanFrames::nextBuffer(VkCommandPool pool, std::vector<VkCommandBuffer>& buffers, size_t& next) {
+    if (next == buffers.size()) {
         VkCommandBufferAllocateInfo allocInfo{};
         allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        allocInfo.commandPool = slot.commandPool;
+        allocInfo.commandPool = pool;
         allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         allocInfo.commandBufferCount = 1;
         VkCommandBuffer cmd = VK_NULL_HANDLE;
@@ -131,9 +144,10 @@ VkCommandBuffer VulkanFrames::beginCommands() {
             LOG_ERROR("VulkanFrames: failed to allocate a frame command buffer");
             return VK_NULL_HANDLE;
         }
-        slot.commandBuffers.push_back(cmd);
+        buffers.push_back(cmd);
     }
-    VkCommandBuffer cmd = slot.commandBuffers[slot.nextCommandBuffer++];
+    VkCommandBuffer cmd = buffers[next++];
+    Slot& slot = slots_[frameIndex()];
     slot.used = true;
     VkCommandBufferBeginInfo begin{};
     begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -141,6 +155,35 @@ VkCommandBuffer VulkanFrames::beginCommands() {
     vkBeginCommandBuffer(cmd, &begin);
     ++slot.openCommandBuffers;
     return cmd;
+}
+
+VkCommandBuffer VulkanFrames::beginComputeCommands() {
+    ensureFrame();
+    Slot& slot = slots_[frameIndex()];
+    if (slot.computePool == VK_NULL_HANDLE) return VK_NULL_HANDLE;
+    return nextBuffer(slot.computePool, slot.computeBuffers, slot.nextComputeBuffer);
+}
+
+uint64_t VulkanFrames::submitCompute(VkCommandBuffer cmd, std::vector<SemaphoreWait> waits,
+                                     std::vector<SemaphoreSignal> signals) {
+    Slot& slot = slots_[frameIndex()];
+    if (slot.openCommandBuffers > 0) --slot.openCommandBuffers;
+    VulkanQueue* compute = context_->asyncComputeQueue();
+    if (vkEndCommandBuffer(cmd) != VK_SUCCESS || !compute) {
+        LOG_ERROR("VulkanFrames: ending or submitting a compute command buffer failed");
+        return 0;
+    }
+    QueueSubmit batch;
+    batch.commandBuffers.push_back(cmd);
+    batch.waits = std::move(waits);
+    batch.signals = std::move(signals);
+    return compute->submit(batch);
+}
+
+VkCommandBuffer VulkanFrames::beginCommands() {
+    ensureFrame();
+    Slot& slot = slots_[frameIndex()];
+    return nextBuffer(slot.commandPool, slot.commandBuffers, slot.nextCommandBuffer);
 }
 
 uint64_t VulkanFrames::submit(VkCommandBuffer cmd, std::vector<SemaphoreWait> waits,
@@ -165,10 +208,11 @@ bool VulkanFrames::addUploadChunk(Slot& slot, VkDeviceSize minSize) {
         VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT |
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
         VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+    // (Shared: async compute reads its parameters and uniforms from here too.)
     if (!context_->createBuffer(chunk.size, usage,
                                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                                 chunk.buffer, chunk.memory, chunk.memoryOffset, chunk.allocId,
-                                chunk.mapped) || !chunk.mapped) {
+                                chunk.mapped, /*shared=*/true) || !chunk.mapped) {
         LOG_ERROR("VulkanFrames: failed to create a %llu-byte upload chunk",
                   static_cast<unsigned long long>(chunk.size));
         destroyUploadChunk(chunk);

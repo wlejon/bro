@@ -30,6 +30,10 @@ struct UploadSlice {
 /// recycles all three wholesale. Consumers key their own per-frame ring
 /// resources off frameIndex().
 ///
+/// With an async compute queue (VulkanContext::asyncComputeQueue), a slot
+/// also owns a command pool on the compute family (beginComputeCommands),
+/// and its reuse waits for the slot's work on that queue as well.
+///
 /// Deferred destruction: defer(fn) runs `fn` once every submission made up to
 /// the end of the current frame has completed, so a resource can be released
 /// as soon as the CPU is done with it even while the GPU may still read it.
@@ -76,6 +80,14 @@ public:
     uint64_t submit(VkCommandBuffer cmd, std::vector<SemaphoreWait> waits = {},
                     std::vector<SemaphoreSignal> signals = {});
 
+    /// A primary command buffer from this frame's compute-family pool, begun
+    /// (ONE_TIME_SUBMIT), for the async compute queue; null without one.
+    VkCommandBuffer beginComputeCommands();
+    /// End `cmd` (from beginComputeCommands) and submit it to the async
+    /// compute queue. Returns that queue's ticket, 0 on failure.
+    uint64_t submitCompute(VkCommandBuffer cmd, std::vector<SemaphoreWait> waits = {},
+                           std::vector<SemaphoreSignal> signals = {});
+
     /// `size` bytes of mapped, host-coherent memory valid until this slot is
     /// reused, aligned to `alignment` (and at least the device's uniform and
     /// copy-offset alignments). Usable as a transfer source, uniform, storage,
@@ -116,9 +128,13 @@ private:
         VkCommandPool commandPool = VK_NULL_HANDLE;
         std::vector<VkCommandBuffer> commandBuffers;
         size_t nextCommandBuffer = 0;
+        VkCommandPool computePool = VK_NULL_HANDLE;   // the async compute family's
+        std::vector<VkCommandBuffer> computeBuffers;
+        size_t nextComputeBuffer = 0;
         uint32_t openCommandBuffers = 0;
         bool used = false;    // a command buffer, upload or descriptor set taken this frame
         uint64_t ticket = 0;  // retires every queue op of this slot's previous frame
+        uint64_t computeTicket = 0;   // the same on the async compute queue
         std::vector<std::function<void()>> deferred;
         std::vector<UploadChunk> uploads;
         std::vector<VkDescriptorPool> descriptorPools;
@@ -126,6 +142,7 @@ private:
     };
 
     void recycle(Slot& slot);
+    VkCommandBuffer nextBuffer(VkCommandPool pool, std::vector<VkCommandBuffer>& buffers, size_t& next);
     bool addUploadChunk(Slot& slot, VkDeviceSize minSize);
     void destroyUploadChunk(UploadChunk& chunk);
     VkDescriptorPool createDescriptorPool();

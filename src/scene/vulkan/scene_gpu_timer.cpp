@@ -18,7 +18,7 @@ static_assert(render::VulkanFrames::kFramesInFlight <= 8, "SceneGpuTimer keeps m
 
 SceneGpuTimer::~SceneGpuTimer() {
     VkDevice device = context_.device();
-    for (VkQueryPool pool : {pool_, statPool_})
+    for (VkQueryPool pool : {pool_, statPool_, computePool_})
         if (pool != VK_NULL_HANDLE) context_.frames().defer([device, pool] { vkDestroyQueryPool(device, pool, nullptr); });
 }
 
@@ -52,7 +52,32 @@ bool SceneGpuTimer::init() {
         s.queryCount = kMaxStats * render::VulkanFrames::kFramesInFlight;
         vkCreateQueryPool(context_.device(), &s, nullptr, &statPool_);
     }
+    // The async compute queue's stamps, when its family writes them.
+    const int computeFamily = context_.queueFamilies().computeFamily;
+    if (context_.asyncComputeQueue() && computeFamily >= 0 && static_cast<uint32_t>(computeFamily) < familyCount &&
+        families[computeFamily].timestampValidBits > 0) {
+        const uint32_t cbits = families[computeFamily].timestampValidBits;
+        computeMask_ = cbits >= 64 ? ~0ull : ((1ull << cbits) - 1);
+        if (vkCreateQueryPool(context_.device(), &info, nullptr, &computePool_) != VK_SUCCESS)
+            computePool_ = VK_NULL_HANDLE;
+    }
     return vkCreateQueryPool(context_.device(), &info, nullptr, &pool_) == VK_SUCCESS;
+}
+
+void SceneGpuTimer::beginCompute(VkCommandBuffer cmd) {
+    computeCmd_ = VK_NULL_HANDLE;
+    if (computePool_ == VK_NULL_HANDLE || recordingPair_ == UINT32_MAX) return;
+    const uint32_t pair = recordingPair_;
+    vkCmdResetQueryPool(cmd, computePool_, kPerSlot * pair, kPerSlot);
+    vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, computePool_, kPerSlot * pair);
+    computeCmd_ = cmd;
+    computeTimed_[pair] = true;
+    computeMarkCount_[pair] = 0;
+}
+
+void SceneGpuTimer::endCompute(VkCommandBuffer cmd) {
+    if (cmd == VK_NULL_HANDLE || cmd != computeCmd_ || recordingPair_ == UINT32_MAX) return;
+    vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, computePool_, kPerSlot * recordingPair_ + 1);
 }
 
 void SceneGpuTimer::begin(VkCommandBuffer cmd) {
@@ -77,6 +102,8 @@ void SceneGpuTimer::begin(VkCommandBuffer cmd) {
     vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, pool_, kPerSlot * pair);
     recordingPair_ = pair;
     markCount_[pair] = 0;
+    computeTimed_[pair] = false;
+    computeCmd_ = VK_NULL_HANDLE;
     statCount_[pair] = 0;
     if (statPool_ != VK_NULL_HANDLE) vkCmdResetQueryPool(cmd, statPool_, kMaxStats * pair, kMaxStats);
 }
@@ -98,6 +125,15 @@ void SceneGpuTimer::statEnd(VkCommandBuffer cmd) {
 
 void SceneGpuTimer::mark(VkCommandBuffer cmd, const char* name) {
     if (passLogMs_ < 0.0 || recordingPair_ == UINT32_MAX) return;
+    if (cmd == computeCmd_ && cmd != VK_NULL_HANDLE) {
+        // (The compute stream's own stage: its queue's clock.)
+        uint32_t& c = computeMarkCount_[recordingPair_];
+        if (c >= kMaxMarks) return;
+        vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, computePool_,
+                            kPerSlot * recordingPair_ + 2 + c);
+        computeMarkNames_[recordingPair_][c++] = name;
+        return;
+    }
     uint32_t& n = markCount_[recordingPair_];
     if (n >= kMaxMarks) return;
     vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, pool_, kPerSlot * recordingPair_ + 2 + n);
@@ -114,6 +150,7 @@ void SceneGpuTimer::submitted(uint64_t ticket) {
     pendingTicket_[recordingPair_] = ticket;
     pendingOrder_[recordingPair_] = ++submits_;
     recordingPair_ = UINT32_MAX;
+    computeCmd_ = VK_NULL_HANDLE;
 }
 
 double SceneGpuTimer::takeMs(bool wait) {
@@ -162,8 +199,24 @@ double SceneGpuTimer::harvest(uint32_t pair) {
         const uint64_t ticks = ((to & validMask_) - (from & validMask_)) & validMask_;
         return static_cast<double>(ticks) * periodNs_ / 1.0e6;
     };
-    const double total = ms(stamps[0], stamps[1]);
-    if (passLogMs_ >= 0.0 && marks > 0 && total > passLogMs_) {
+    // The compute stream's stamps, on the same device clock.
+    const uint32_t cmarks = computeTimed_[pair] ? computeMarkCount_[pair] : 0;
+    uint64_t cstamps[kPerSlot] = {};
+    const bool computed = computeTimed_[pair] &&
+                          vkGetQueryPoolResults(context_.device(), computePool_, kPerSlot * pair, 2 + cmarks,
+                                                sizeof(cstamps), cstamps, sizeof(uint64_t),
+                                                VK_QUERY_RESULT_64_BIT) == VK_SUCCESS;
+    computeTimed_[pair] = false;
+    uint64_t start = stamps[0] & validMask_, end = stamps[1] & validMask_;
+    if (computed) {
+        start = std::min(start, cstamps[0] & computeMask_);
+        end = std::max(end, cstamps[1] & computeMask_);
+    }
+    // Wall time from the later of its start and the last render's end.
+    const uint64_t from = lastEnd_ > start && lastEnd_ < end ? lastEnd_ : start;
+    lastEnd_ = end;
+    const double total = static_cast<double>(end - from) * periodNs_ / 1.0e6;
+    if (passLogMs_ >= 0.0 && (marks > 0 || cmarks > 0) && total > passLogMs_) {
         std::string line;
         uint64_t prev = stamps[0];
         char buf[96];
@@ -180,6 +233,25 @@ double SceneGpuTimer::harvest(uint32_t pair) {
         // (Past kMaxMarks the render's later marks were not written: their
         // time is in `rest`.)
         if (marks >= kMaxMarks) line += " (marks full)";
+        if (computed) {
+            // The compute queue's stages, from its own start.
+            const auto cms = [&](uint64_t a, uint64_t b) {
+                return static_cast<double>(((b & computeMask_) - (a & computeMask_)) & computeMask_) * periodNs_ /
+                       1.0e6;
+            };
+            std::snprintf(buf, sizeof(buf), " | compute %.2f:", cms(cstamps[0], cstamps[1]));
+            line += buf;
+            uint64_t at = cstamps[0];
+            for (uint32_t i = 0; i < cmarks; ++i) {
+                const double d = cms(at, cstamps[2 + i]);
+                at = cstamps[2 + i];
+                if (d < 0.01) continue;
+                std::snprintf(buf, sizeof(buf), " %s %.2f", computeMarkNames_[pair][i], d);
+                line += buf;
+            }
+            std::snprintf(buf, sizeof(buf), " rest %.2f", cms(at, cstamps[1]));
+            line += buf;
+        }
         LOG_INFO("scene GPU %.2f ms:%s", total, line.c_str());
         if (const uint32_t ns = statCount_[pair]; statPool_ != VK_NULL_HANDLE && ns > 0) {
             uint64_t inv[kMaxStats] = {};

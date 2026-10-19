@@ -186,8 +186,8 @@ bool SceneMeshDrawer::prepareForestsGpu(SceneFrame& frame, const std::vector<For
         ForestCull& cull = forestCull(node, world, P.reach);
         P.canopyTop = cull.canopyTop(view.frustum, view.eye);
         P.state = planner.node(node);
-        if (!planner.begin(frame, *P.state, node, cull.bounds, P.reach, static_cast<uint32_t>(P.tileSlots.size()),
-                           P.params))
+        if (!planner.begin(frame, *P.state, node, P.store->buffer, cull.bounds, P.reach,
+                           static_cast<uint32_t>(P.tileSlots.size()), P.params))
             return false;
         plans.push_back(std::move(P));
     }
@@ -317,6 +317,7 @@ bool SceneMeshDrawer::prepareForestsGpu(SceneFrame& frame, const std::vector<For
             p[at + FP_TILE_TEXEL_CONST] = bitsOf(tile.texelConst);
             p[at + FP_TILE_TEXEL_PER_METRE] = bitsOf(tile.texelPerMetre);
             p[at + FP_TILE_ORTHO] = tile.ortho ? 1u : 0u;
+            p[at + FP_TILE_RECEIVERS] = bitsOf(tile.receiversFrom);
         }
     }
 
@@ -377,8 +378,8 @@ bool SceneMeshDrawer::prepareForestsGpu(SceneFrame& frame, const std::vector<For
     return true;
 }
 
-void SceneMeshDrawer::forestSubmitted(uint64_t ticket) {
-    if (gpuPlanner_) gpuPlanner_->submitted(ticket);
+void SceneMeshDrawer::forestSubmitted(uint64_t ticket, render::VulkanQueue& queue) {
+    if (gpuPlanner_) gpuPlanner_->submitted(ticket, queue);
 }
 
 }  // namespace bro::scene::vk

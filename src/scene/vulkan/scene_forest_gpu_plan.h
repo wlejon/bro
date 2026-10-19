@@ -12,7 +12,19 @@
 // (ForestNode::StatsSource), and the room for entries and poses grows from
 // them: a frame that asks for more than there is draws what fits (the
 // entries past the room are dropped, the count still says all).
+//
+// The plan records into the frame's compute stream (SceneFrame::
+// computeStream): on the async compute queue when there is one, beside the
+// frame's graphics up to its first forest draw. What it writes for the draws
+// (entries, indirect commands, and the drawer's leaf poses) is kept a copy a
+// frame slot, so a frame's plan never waits for the last frame's draws to
+// finish with them; what only the plan reads and writes (its work, the
+// shared search and settled details, the read-backs) is one copy, ordered by
+// the compute queue itself, so its state carries from frame to frame as
+// before. A frame whose plan reads something just uploaded on the graphics
+// queue (a node's static data, its leaf store) waits for that queue first.
 
+#include "render/vulkan_frames.h"
 #include "scene/forest_node.h"
 #include "scene/vulkan/scene_mesh_drawer.h"
 #include "scene/vulkan/scene_vk_allocator.h"
@@ -56,7 +68,7 @@ public:
         /// The leaves the newest read-back's posed groups asked to pose.
         uint32_t askedPoses() const { return askedPoses_; }
 
-        // This frame's (begin()).
+        // This frame's (begin()): entries and args are this frame slot's.
         VkDescriptorSet set = VK_NULL_HANDLE;   // the plan's set 0 (the pose stage's set 1)
         SceneVkBuffer entries, args;
         uint32_t entryCap = 0;
@@ -65,7 +77,10 @@ public:
         friend class GpuPlanner;
         void poll();
 
-        render::VulkanQueue* queue_ = nullptr;
+        static constexpr uint32_t kSlots = render::VulkanFrames::kFramesInFlight;
+        SceneVkBuffer slotEntries_[kSlots], slotArgs_[kSlots];
+        uint32_t slotEntryCap_[kSlots] = {};
+        VkBuffer store_ = VK_NULL_HANDLE;   // the leaf store the last plan read
         uint64_t used = 0;
         // What static was built from.
         uint64_t generation = ~uint64_t{0};
@@ -82,6 +97,7 @@ public:
         struct Slot {
             enum State : uint8_t { Free, Recorded, Submitted } state = Free;
             uint64_t ticket = 0, serial = 0;
+            render::VulkanQueue* queue = nullptr;   // the queue `ticket` is of
         };
         Slot ring_[kRing];
         int cursor_ = 0;
@@ -103,11 +119,11 @@ public:
     /// the node's data, transform or reach moved, or a specimen's words),
     /// its buffers sized for its trees and `tiles` shadow tiles, its entries
     /// grown to the last frames' asks, its descriptor set made. `bounds`:
-    /// every tree's world box padded by `reach` (ForestCull::bounds). Fills
-    /// the work runs and room in `params`; false on failure (the frame
-    /// then goes the CPU's way).
-    bool begin(SceneFrame& frame, Node& state, const ForestNode& node, const std::vector<bromath::AABB3>& bounds,
-               float reach, uint32_t tiles, std::vector<uint32_t>& params);
+    /// every tree's world box padded by `reach` (ForestCull::bounds); `store`
+    /// the node's leaf store (the pose stage's). Fills the work runs and room
+    /// in `params`; false on failure (the frame then goes the CPU's way).
+    bool begin(SceneFrame& frame, Node& state, const ForestNode& node, VkBuffer store,
+               const std::vector<bromath::AABB3>& bounds, float reach, uint32_t tiles, std::vector<uint32_t>& params);
     /// Queue `state`'s plan with its finished `params` (FP_P_WORDS words).
     bool add(SceneFrame& frame, Node& state, const std::vector<uint32_t>& params);
     /// A posed leaf group's pose stage (forest_leaf_pose.comp's indirect
@@ -121,10 +137,11 @@ public:
         queued_.clear();
         poseJobs_.clear();
     }
-    /// Record the queued plans (then their pose stages) into frame.cmd.
+    /// Record the queued plans (then their pose stages) into the frame's
+    /// compute stream.
     void record(SceneFrame& frame);
-    /// The frame just recorded went to the GPU as `ticket`.
-    void submitted(uint64_t ticket);
+    /// The plans just recorded went to the GPU as `ticket` on `queue`.
+    void submitted(uint64_t ticket, render::VulkanQueue& queue);
 
 private:
     enum Stage {
@@ -148,7 +165,7 @@ private:
     static void barrier(VkCommandBuffer cmd);
     static void destroyNode(SceneVkAllocator& allocator, Node& n);
     bool ensureBuffer(SceneFrame& frame, SceneVkBuffer& buf, VkDeviceSize size, VkBufferUsageFlags usage,
-                      VkMemoryPropertyFlags props, VkDeviceSize headroom);
+                      VkMemoryPropertyFlags props, VkDeviceSize headroom, bool shared = false);
     bool buildStatic(SceneFrame& frame, Node& state, const ForestNode& node, const std::vector<bromath::AABB3>& bounds,
                      float reach);
 

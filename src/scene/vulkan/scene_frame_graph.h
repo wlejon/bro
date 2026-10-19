@@ -13,6 +13,11 @@
 // and depth to the far plane; later scopes load what the earlier ones left.
 // Closing a scope makes everything it wrote — resolves included — visible to
 // whatever comes next.
+//
+// The first pass that reads the frame's compute results (PassIO::
+// readsCompute) is where the frame's graphics splits when the compute runs on
+// its own queue (SceneFrame::joinCompute): the passes before it run beside
+// the compute, it and the passes after it wait for the compute's timeline.
 
 #include "scene/vulkan/scene_pass.h"
 

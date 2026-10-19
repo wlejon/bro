@@ -56,7 +56,7 @@ bool VulkanContext::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
                                  VkMemoryPropertyFlags properties,
                                  VkBuffer& buffer, VkDeviceMemory& memory,
                                  VkDeviceSize& outOffset, uint64_t& outAllocId,
-                                 void*& outMappedData) {
+                                 void*& outMappedData, bool shared) {
     if (size == 0) return false;
     std::lock_guard<std::mutex> lock(resourceMutex_);
 
@@ -65,6 +65,15 @@ bool VulkanContext::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
     bufferInfo.size = size;
     bufferInfo.usage = usage;
     bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    // Read and written on both queues: concurrent, so neither has to hand it
+    // to the other.
+    const uint32_t families[2] = {static_cast<uint32_t>(queueIndices_.graphicsFamily),
+                                  static_cast<uint32_t>(queueIndices_.computeFamily)};
+    if (shared && hasAsyncCompute_) {
+        bufferInfo.sharingMode = VK_SHARING_MODE_CONCURRENT;
+        bufferInfo.queueFamilyIndexCount = 2;
+        bufferInfo.pQueueFamilyIndices = families;
+    }
 
     if (vkCreateBuffer(device_, &bufferInfo, nullptr, &buffer) != VK_SUCCESS) {
         LOG_ERROR("VulkanContext: Failed to create buffer of size %zu", static_cast<size_t>(size));
@@ -347,7 +356,9 @@ void VulkanContext::transitionImageLayout(VkImage image, VkFormat format,
 }
 
 void VulkanContext::waitIdle() const {
-    if (device_ != VK_NULL_HANDLE) queue_.waitIdle();
+    if (device_ == VK_NULL_HANDLE) return;
+    if (hasAsyncCompute_) asyncCompute_.waitIdle();
+    queue_.waitIdle();
 }
 
 } // namespace bro::render

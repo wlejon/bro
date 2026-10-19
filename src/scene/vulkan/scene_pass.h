@@ -58,11 +58,17 @@ public:
     /// with nothing but such passes before the next scope, is not resolved:
     /// the next one's resolve takes in what it drew.
     void unresolved() { unresolved_ = true; }
+    /// The pass reads what this frame's compute stream writes (a forest's
+    /// GPU plan): the graph splits the frame's graphics before the first
+    /// such pass, which waits for the compute while everything before it
+    /// runs beside it (SceneFrame::joinCompute).
+    void readsCompute() { compute_ = true; }
 
     struct Use { SceneVkImage* image; ImageAccess access; };
     const std::vector<Use>& uses() const { return uses_; }
     bool drawsHdr() const { return hdr_; }
     bool readsUnresolved() const { return unresolved_; }
+    bool readsComputeResults() const { return compute_; }
     const HdrScope& scope() const { return scope_; }
 
 private:
@@ -73,6 +79,7 @@ private:
     std::vector<Use> uses_;
     bool hdr_ = false;
     bool unresolved_ = false;
+    bool compute_ = false;
     HdrScope scope_{};
 };
 

@@ -50,10 +50,28 @@ struct SceneFrame {
     SceneFrame(VkCommandBuffer c, SceneGpu& g, SceneGraph& gr, SceneRenderer& r)
         : cmd(c), gpu(g), graph(gr), renderer(r) {}
 
+    /// The frame's graphics command buffer. It changes once, at the join
+    /// (joinCompute): passes read it as they record.
     VkCommandBuffer cmd;
     SceneGpu& gpu;
     SceneGraph& graph;
     SceneRenderer& renderer;
+
+    /// This frame's compute stream (SceneVkDevice::computeCommands), begun on
+    /// first use: work there runs on the async compute queue, submitted
+    /// ahead of the frame's graphics; without one it is `cmd` itself, so the
+    /// work records at this point of the graphics stream.
+    VkCommandBuffer computeStream();
+    /// The compute stream runs on a queue of its own this frame.
+    bool computeApart() const { return computeCmd != VK_NULL_HANDLE && computeCmd != cmd; }
+    /// Right before the frame's first consumer of the compute results (the
+    /// frame graph calls it for a pass that declares PassIO::readsCompute,
+    /// outside any rendering): from here on `cmd` is the part of the frame
+    /// that waits for the compute. Once a frame; a no-op without a separate
+    /// compute stream.
+    void joinCompute();
+    VkCommandBuffer computeCmd = VK_NULL_HANDLE;   // computeStream's (null until used)
+    bool computeJoined = false;
 
     SceneView view;
     SceneDrawLists lists;

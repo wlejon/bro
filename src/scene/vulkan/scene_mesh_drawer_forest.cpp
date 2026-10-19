@@ -1172,22 +1172,23 @@ std::unique_ptr<SceneMeshDrawer::ForestPlan> SceneMeshDrawer::planForest(SceneFr
 const SceneVkBuffer* SceneMeshDrawer::ensurePoses(SceneFrame& frame, uint32_t slots) {
     constexpr VkDeviceSize kPoseBytes = FOREST_POSE_RECORDS * 16;   // uvec4s
     const VkDeviceSize need = std::max<VkDeviceSize>(slots, 1) * kPoseBytes;
-    if (poses_.isValid() && poses_.size >= need) return &poses_;
+    SceneVkBuffer& poses = poses_[frame.gpu.device.frames().frameIndex()];
+    if (poses.isValid() && poses.size >= need) return &poses;
     // Grown with room to spare; the old buffer stays until the frames that
     // read it are done (this one's earlier nodes among them).
     // (destroyBuffer defers the destruction past the frames in flight.)
-    if (poses_.isValid()) frame.gpu.allocator.destroyBuffer(poses_);
+    if (poses.isValid()) frame.gpu.allocator.destroyBuffer(poses);
     const VkDeviceSize size = std::max(
         need, std::min<VkDeviceSize>(std::max<VkDeviceSize>(need + need / 2, VkDeviceSize{1} << 20),
                                      VkDeviceSize{kMaxPoses} * kPoseBytes));
     if (!frame.gpu.allocator.createBuffer(size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                                          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, poses_)) {
+                                          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, poses, /*shared=*/true)) {
         LOG_ERROR("SceneMeshDrawer: Failed creating the forest pose buffer (%llu bytes)",
                   static_cast<unsigned long long>(size));
-        poses_ = {};
+        poses = {};
         return nullptr;
     }
-    return &poses_;
+    return &poses;
 }
 
 void SceneMeshDrawer::recordForestPoses(SceneFrame& frame) {

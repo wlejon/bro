@@ -203,14 +203,17 @@ bool PassShadow::active(const SceneFrame& frame) const {
     const ShadowPlan& plan = frame.renderer.shadowPlan();
     // An atlas that failed to allocate at the planned size draws nothing.
     if (frame.gpu.targets.shadowAtlas.width != static_cast<uint32_t>(plan.atlasSize)) return false;
-    for (int i = 0; i < plan.tileCount; ++i) {
-        if (plan.tiles[i].render) return true;
-    }
+    bool any = false;
+    for (int i = 0; i < plan.tileCount; ++i) any = any || plan.tiles[i].render;
+    if (!any || part_ != Part::Planned) return any;
+    for (const MeshDraw& draw : frame.lists.meshes)
+        if (draw.castsShadow && draw.indirect != VK_NULL_HANDLE) return true;
     return false;
 }
 
 void PassShadow::declare(const SceneFrame& frame, PassIO& io) const {
     io.depthTarget(frame.gpu.targets.shadowAtlas);
+    if (part_ == Part::Planned) io.readsCompute();
 }
 
 void PassShadow::drawCaster(SceneFrame& frame, const bromath::Mat4& lightViewProj, const MeshDraw& draw,
@@ -265,7 +268,9 @@ void PassShadow::record(SceneFrame& frame) {
 
     // Every tile re-renders: clear the atlas as it opens. Otherwise each
     // re-rendered tile is cleared on its own and the cached ones keep theirs.
-    bool all = true;
+    // (The planned casters' part draws over what the first left.)
+    const bool clears = part_ != Part::Planned;
+    bool all = clears;
     for (int i = 0; i < plan.tileCount; ++i) all = all && plan.tiles[i].render;
 
     VkRenderingAttachmentInfo depth{};
@@ -293,7 +298,7 @@ void PassShadow::record(SceneFrame& frame) {
                                   0.0f, 1.0f};
         vkCmdSetViewport(cmd, 0, 1, &viewport);
         vkCmdSetScissor(cmd, 0, 1, &rect);
-        if (!all) {
+        if (!all && clears) {
             VkClearAttachment clear{};
             clear.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
             clear.clearValue.depthStencil = {1.0f, 0};
@@ -312,6 +317,8 @@ void PassShadow::record(SceneFrame& frame) {
         const char* run = nullptr;
         for (const MeshDraw& draw : frame.lists.meshes) {
             if (!draw.castsShadow) continue;
+            const bool planned = draw.indirect != VK_NULL_HANDLE;
+            if ((part_ == Part::Unplanned && planned) || (part_ == Part::Planned && !planned)) continue;
             if (slot < 32 && !(draw.shadowTileMask & (1u << slot))) continue;
             if (culling && draw.hasBounds && !bromath::fintersects(tile.frustum, draw.bounds)) {
                 frame.stats.shadowCulled++;

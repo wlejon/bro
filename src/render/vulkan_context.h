@@ -19,6 +19,9 @@ namespace bro::render {
 struct VulkanQueueFamilyIndices {
     int graphicsFamily = -1;
     int presentFamily = -1;
+    /// A family with compute and no graphics when the device has one (its
+    /// queues run beside the graphics queue: VulkanContext::asyncComputeQueue),
+    /// else the graphics family.
     int computeFamily = -1;
     int transferFamily = -1;
 
@@ -107,6 +110,14 @@ public:
     /// image it writes changes queue family ownership (release here, acquire
     /// on queue()).
     VulkanQueue* uploadQueue() { return hasUploadQueue_ ? &uploadQueue_ : nullptr; }
+    /// The queue owner of a compute family without graphics, when the device
+    /// has one (and BRO_ASYNC_COMPUTE is not 0), else null: then work meant
+    /// for it records into the graphics stream instead. Its tickets are its
+    /// own timeline's; a frame orders against it by timeline waits at
+    /// submission boundaries. Buffers both queues touch are created shared
+    /// (createBuffer's `shared`), so they need no ownership transfers; an
+    /// image moves by release on one family and acquire on the other.
+    VulkanQueue* asyncComputeQueue() { return hasAsyncCompute_ ? &asyncCompute_ : nullptr; }
     VulkanFrames& frames() { return frames_; }
     /// The device's pipeline cache, persisted across runs; pass it to every
     /// vkCreate*Pipelines.
@@ -129,12 +140,14 @@ public:
     static constexpr uint32_t kNoMemoryType = UINT32_MAX;
     uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) const;
 
-    /// Pooled memory allocation methods (using VulkanMemoryPool)
+    /// Pooled memory allocation methods (using VulkanMemoryPool). A `shared`
+    /// buffer is concurrent between the graphics and async compute families
+    /// (exclusive when there is no async compute queue).
     bool createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
                       VkMemoryPropertyFlags properties,
                       VkBuffer& buffer, VkDeviceMemory& memory,
                       VkDeviceSize& outOffset, uint64_t& outAllocId,
-                      void*& outMappedData);
+                      void*& outMappedData, bool shared = false);
 
     void destroyBuffer(VkBuffer buffer, uint64_t allocId);
 
@@ -184,7 +197,8 @@ public:
                                uint32_t mipLevels = 1, uint32_t baseMipLevel = 0,
                                uint32_t layerCount = 1, uint32_t baseArrayLayer = 0) const;
 
-    /// Wait for everything submitted through the queue owner so far.
+    /// Wait for everything submitted through the queue owners so far (the
+    /// graphics queue's and the async compute queue's).
     void waitIdle() const;
 
     bool isHeadless() const { return config_.headless; }
@@ -241,6 +255,9 @@ private:
     mutable VulkanQueue queue_;  // thread-safe; const helpers submit through it
     VulkanQueue uploadQueue_;    // the transfer family's, when apart from graphics
     bool hasUploadQueue_ = false;
+    mutable VulkanQueue asyncCompute_;   // a compute family's without graphics
+    bool hasAsyncCompute_ = false;
+    uint32_t computeQueueIndex_ = 0;     // in its family (1 when it shares the transfer family)
     VulkanFrames frames_;
     VulkanPipelineCache pipelineCache_;
 };

@@ -34,11 +34,26 @@ SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
       timer_(context) {
     // The frame, in order. A pass draws into the HDR scope or brings its own
     // targets; the graph does every shared transition (scene_frame_graph.h).
-    graph_.add(std::make_unique<PassShadow>());
-    graph_.add(std::make_unique<PassForestBatches>(opaqueBatches_));
-    graph_.add(std::make_unique<PassFrameUniforms>());
-    graph_.add(std::make_unique<PassReflectionProbe>());
-    graph_.add(std::make_unique<PassEnvironment>());
+    if (context.asyncComputeQueue()) {
+        // The forests' plans run on the async compute queue: what needs no
+        // plan goes first, beside it (the other casters, the frame's
+        // uniforms, the sky), and the graphics waits for the plan at its
+        // first reader (the planned casters, else the opaque meshes). The
+        // probe stays after the planned casters: its faces are lit through
+        // the shadow atlas, the forest's shadows included.
+        graph_.add(std::make_unique<PassShadow>(PassShadow::Part::Unplanned));
+        graph_.add(std::make_unique<PassFrameUniforms>());
+        graph_.add(std::make_unique<PassEnvironment>());
+        graph_.add(std::make_unique<PassShadow>(PassShadow::Part::Planned));
+        graph_.add(std::make_unique<PassForestBatches>(opaqueBatches_));
+        graph_.add(std::make_unique<PassReflectionProbe>());
+    } else {
+        graph_.add(std::make_unique<PassShadow>());
+        graph_.add(std::make_unique<PassForestBatches>(opaqueBatches_));
+        graph_.add(std::make_unique<PassFrameUniforms>());
+        graph_.add(std::make_unique<PassReflectionProbe>());
+        graph_.add(std::make_unique<PassEnvironment>());
+    }
     graph_.add(std::make_unique<PassOpaque>(opaqueBatches_, 0));
     for (int k = 1; k < OpaqueBatches::kBatches; ++k) {
         graph_.add(std::make_unique<PassFarDepth>(opaqueBatches_, k));
@@ -127,6 +142,7 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
     timer_.mark(cmd, "setup");
     meshes_.recordForestPoses(frame);
     timer_.mark(cmd, "forestPose");
+    if (frame.computeApart()) timer_.mark(frame.computeCmd, "forestPose");
 
     // BRO_SCENE_GPU_REPEAT=<n>: the frame's passes recorded n times back to
     // back, timed (SceneGpuTimer) on the first alone: a measure at the GPU's
@@ -141,12 +157,17 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
     }();
     graph_.run(frame);
     if (repeat > 1) {
-        timer_.end(cmd);
+        timer_.end(frame.cmd);
         const auto kept = frame.stats;
         frame.timer = nullptr;
         for (int i = 1; i < repeat; ++i) graph_.run(frame);
         frame.stats = kept;
     }
+
+    // A frame whose compute no pass read (none declared it) still waits for
+    // it before its end.
+    frame.joinCompute();
+    cmd = frame.cmd;
 
     // The result stays on the GPU for the compositor; it is copied out for
     // the CPU only when someone read the previous render's pixels.
@@ -156,9 +177,14 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
         SceneFrameGraph::transition(cmd, targets_.ldr, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     }
     if (repeat <= 1) timer_.end(cmd);
+    const bool computeApart = frame.computeApart();
+    if (computeApart) timer_.endCompute(frame.computeCmd);
     if (device_.submitFrame(cmd)) {
         timer_.submitted(device_.lastFrameTicket());
-        meshes_.forestSubmitted(device_.lastFrameTicket());
+        // The plans' read-backs count as done with the frame's graphics (which
+        // waited for them), not as soon as the compute is: read a frame late
+        // as on the graphics queue, not now and then the frame itself.
+        meshes_.forestSubmitted(device_.lastFrameTicket(), device_.context().queue());
         if (readbackInline && readbackBuffer_.isValid()) {
             readbackRecordedSerial_ = renderSerial_;
             readbackTicket_ = device_.lastFrameTicket();

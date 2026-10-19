@@ -69,14 +69,57 @@ VkCommandBuffer SceneVkDevice::beginFrame() {
 }
 
 bool SceneVkDevice::submitFrame(VkCommandBuffer cmd) {
+    render::VulkanFrames& frames = context_.frames();
     flushUploads();
-    const uint64_t ticket = context_.frames().submit(cmd);
+    uint64_t computeTicket = 0;
+    if (computeCmd_ != VK_NULL_HANDLE) {
+        // What compute writes is versioned by frame slot, so it never waits
+        // for the previous frame's graphics, except for inputs the graphics
+        // queue wrote, or when an earlier render this frame still reads this
+        // slot's results.
+        std::vector<render::SemaphoreWait> waits;
+        render::VulkanQueue& graphics = context_.queue();
+        if (computeAfterGraphics_ || lastFrameSerial_ == frames.frameSerial())
+            if (const uint64_t t = graphics.lastSubmittedTicket())
+                waits.push_back({graphics.timeline(), VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, t});
+        computeTicket = frames.submitCompute(computeCmd_, std::move(waits));
+        if (computeTicket == 0) LOG_ERROR("SceneVkDevice: Failed to submit the frame's compute");
+    }
+    if (headCmd_ != VK_NULL_HANDLE && frames.submit(headCmd_) == 0)
+        LOG_ERROR("SceneVkDevice: Failed to submit the frame's graphics before its compute join");
+    std::vector<render::SemaphoreWait> waits;
+    if (computeTicket != 0)
+        waits.push_back({computeQueue().timeline(), VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, computeTicket});
+    const uint64_t ticket = frames.submit(cmd, std::move(waits));
+    computeCmd_ = headCmd_ = VK_NULL_HANDLE;
+    computeAfterGraphics_ = false;
+    lastFrameSerial_ = frames.frameSerial();
+    lastComputeTicket_ = computeTicket;
     if (ticket == 0) {
         LOG_ERROR("SceneVkDevice: Failed to submit the frame command buffer");
         return false;
     }
     lastFrameTicket_ = ticket;
     return true;
+}
+
+render::VulkanQueue& SceneVkDevice::computeQueue() {
+    render::VulkanQueue* async = context_.asyncComputeQueue();
+    return async ? *async : context_.queue();
+}
+
+VkCommandBuffer SceneVkDevice::computeCommands(VkCommandBuffer frameCmd) {
+    if (!asyncCompute()) return frameCmd;
+    if (computeCmd_ == VK_NULL_HANDLE) computeCmd_ = context_.frames().beginComputeCommands();
+    return computeCmd_ != VK_NULL_HANDLE ? computeCmd_ : frameCmd;
+}
+
+VkCommandBuffer SceneVkDevice::joinCompute(VkCommandBuffer cmd) {
+    if (computeCmd_ == VK_NULL_HANDLE || headCmd_ != VK_NULL_HANDLE) return cmd;
+    VkCommandBuffer rest = context_.frames().beginCommands();
+    if (rest == VK_NULL_HANDLE) return cmd;
+    headCmd_ = cmd;
+    return rest;
 }
 
 VkCommandBuffer SceneVkDevice::uploadCommands() {

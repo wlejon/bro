@@ -18,6 +18,15 @@ namespace bro::scene::vk {
 /// nothing rendered, so every upload completes before any command that reads
 /// it; the barriers that open and close it order it against GPU work on
 /// either side. Nothing here waits, except waitIdle() at teardown.
+///
+/// A frame may also have a compute stream (computeCommands): work recorded
+/// there runs on the async compute queue when the device has one, else it is
+/// the frame's own command buffer, so the same recording goes into the
+/// graphics stream in the same order. The frame's graphics is split at its
+/// first consumer of the compute results (joinCompute): what comes before
+/// runs beside the compute, what comes after waits for it on the compute
+/// queue's timeline. submitFrame submits the uploads, then the compute, then
+/// the graphics: nothing waits on the CPU.
 class SceneVkDevice {
 public:
     explicit SceneVkDevice(render::VulkanContext& context);
@@ -35,10 +44,34 @@ public:
 
     /// A begun command buffer from the current frame for the scene's passes.
     VkCommandBuffer beginFrame();
-    /// Submit the pending uploads, then `cmd`. Returns false on failure.
+    /// Submit the pending uploads, then the compute stream, then the frame's
+    /// graphics (the part before its join, then `cmd`). Returns false on
+    /// failure.
     bool submitFrame(VkCommandBuffer cmd);
     /// The ticket of the last frame submission (0 before the first).
     uint64_t lastFrameTicket() const { return lastFrameTicket_; }
+
+    /// Compute work has a queue of its own (VulkanContext::asyncComputeQueue).
+    bool asyncCompute() { return context_.asyncComputeQueue() != nullptr; }
+    /// The queue the compute stream goes to (the graphics queue without an
+    /// async one): what its tickets are tickets of.
+    render::VulkanQueue& computeQueue();
+    /// This frame's compute stream, begun on the first call: a command buffer
+    /// on the compute family, submitted ahead of the frame's graphics; without
+    /// an async queue, `frameCmd` itself.
+    VkCommandBuffer computeCommands(VkCommandBuffer frameCmd);
+    /// The compute stream reads what the graphics queue wrote (an upload this
+    /// frame or an earlier one): its submission waits for the graphics
+    /// queue's work so far. That orders it behind the previous frame's
+    /// graphics, so only for a frame whose inputs changed.
+    void computeReadsGraphics() { computeAfterGraphics_ = true; }
+    /// The frame's graphics reaches its first consumer of the compute
+    /// results: `cmd`, left open, will be submitted ahead without a wait, and
+    /// the returned command buffer (the rest of the frame) waits for the
+    /// compute. `cmd` itself when there is no separate compute stream.
+    VkCommandBuffer joinCompute(VkCommandBuffer cmd);
+    /// The ticket (on computeQueue()) of the last frame's compute, 0 for none.
+    uint64_t lastComputeTicket() const { return lastComputeTicket_; }
 
     /// This frame's upload command buffer, begun on first use.
     VkCommandBuffer uploadCommands();
@@ -80,6 +113,11 @@ private:
     VkSampler shadowCompareSampler_ = VK_NULL_HANDLE;
     VkCommandBuffer uploadCmd_ = VK_NULL_HANDLE;
     uint64_t lastFrameTicket_ = 0;
+    VkCommandBuffer computeCmd_ = VK_NULL_HANDLE;   // this frame's compute stream (async)
+    VkCommandBuffer headCmd_ = VK_NULL_HANDLE;      // the graphics before the join
+    bool computeAfterGraphics_ = false;
+    uint64_t lastComputeTicket_ = 0;
+    uint64_t lastFrameSerial_ = 0;   // the frame-ring serial of the last submitFrame
     render::VulkanFrames::HookId frameEndHook_ = 0;
 };
 

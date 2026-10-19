@@ -33,11 +33,11 @@ SceneVkAllocatorStats SceneVkAllocator::stats() const {
 }
 
 bool SceneVkAllocator::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
-                                     VkMemoryPropertyFlags memProps, SceneVkBuffer& outBuffer) {
+                                     VkMemoryPropertyFlags memProps, SceneVkBuffer& outBuffer, bool shared) {
     if (size == 0) return false;
     void* mapped = nullptr;
     if (!device_.context().createBuffer(size, usage, memProps, outBuffer.buffer, outBuffer.memory,
-                                        outBuffer.offset, outBuffer.allocId, mapped)) {
+                                        outBuffer.offset, outBuffer.allocId, mapped, shared)) {
         LOG_ERROR("SceneVkAllocator: Failed to create a %zu-byte buffer", static_cast<size_t>(size));
         outBuffer = SceneVkBuffer{};
         return false;

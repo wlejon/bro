@@ -263,8 +263,9 @@ const SceneVkBuffer* SceneGpuResources::storage(uint32_t id, uint64_t generation
     if (entry.buffer.isValid() && entry.generation == generation) return &entry.buffer;
     allocator_.destroyBuffer(entry.buffer);
     const VkDeviceSize size = std::max<VkDeviceSize>(bytes, 16);
+    // (Shared: a forest's leaf poses read it on the async compute queue.)
     if (!allocator_.createBuffer(size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, entry.buffer) ||
+                                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, entry.buffer, /*shared=*/true) ||
         !allocator_.stageAndUploadBuffer(entry.buffer.buffer, data, bytes)) {
         LOG_ERROR("SceneGpuResources: Failed uploading the storage of node %u (%zu bytes)", id, bytes);
         allocator_.destroyBuffer(entry.buffer);

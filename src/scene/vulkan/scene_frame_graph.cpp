@@ -43,6 +43,19 @@ VkRenderingAttachmentInfo attachment(const SceneVkImage& drawn, const SceneVkIma
 
 }  // namespace
 
+VkCommandBuffer SceneFrame::computeStream() {
+    if (computeCmd != VK_NULL_HANDLE) return computeCmd;
+    computeCmd = gpu.device.computeCommands(cmd);
+    if (timer && computeApart()) timer->beginCompute(computeCmd);
+    return computeCmd;
+}
+
+void SceneFrame::joinCompute() {
+    if (computeJoined || !computeApart()) return;
+    computeJoined = true;
+    cmd = gpu.device.joinCompute(cmd);
+}
+
 ScenePass& SceneFrameGraph::add(std::unique_ptr<ScenePass> pass) {
     passes_.push_back(std::move(pass));
     return *passes_.back();
@@ -90,7 +103,12 @@ void SceneFrameGraph::run(SceneFrame& frame) {
         PassIO io;
         pass.declare(frame, io);
 
-        if (scopeOpen_ && (moves(io) || !io.drawsHdr() || io.scope().indirect != scopeIndirect_)) closeScope(frame);
+        // The frame's first reader of its compute results: the graphics is
+        // split here, the rest waiting for the compute (outside rendering).
+        const bool join = io.readsComputeResults() && frame.computeApart() && !frame.computeJoined;
+        if (scopeOpen_ && (join || moves(io) || !io.drawsHdr() || io.scope().indirect != scopeIndirect_))
+            closeScope(frame);
+        if (join) frame.joinCompute();
         for (const auto& use : io.uses()) transition(frame.cmd, *use.image, layoutFor(use.access));
         if (io.drawsHdr() && !scopeOpen_) openScope(frame, io.scope(), resolves(frame, i, io.scope()));
 

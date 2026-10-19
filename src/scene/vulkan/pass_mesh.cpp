@@ -107,7 +107,12 @@ bool PassOpaque::active(const SceneFrame&) const {
 
 void PassOpaque::declare(const SceneFrame& frame, PassIO& io) const {
     io.hdr({.indirect = frame.ssao});
+    // (Its draws light through the shadow atlas: readable even where the
+    // planned casters drew last, PassShadow::Part::Planned.)
+    io.sample(frame.gpu.targets.shadowAtlas);
     if (batches_.sprites) io.sample(frame.gpu.targets.farDepth);
+    // A forest's planned draws read the plan's entries and commands.
+    if (frame.computeApart()) io.readsCompute();
 }
 
 void PassOpaque::record(SceneFrame& frame) {

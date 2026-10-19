@@ -148,6 +148,24 @@ bool VulkanContext::init(platform::Window* presentTarget) {
         return false;
     }
 
+    // A compute family apart from graphics: work submitted there runs beside
+    // the frame's graphics (async compute). BRO_ASYNC_COMPUTE=0 leaves it
+    // unused, for an A/B of the same work on the graphics queue.
+    static const bool asyncAllowed = [] {
+        const char* env = std::getenv("BRO_ASYNC_COMPUTE");
+        return !(env && std::strcmp(env, "0") == 0);
+    }();
+    if (asyncAllowed && queueIndices_.computeFamily != queueIndices_.graphicsFamily &&
+        computeQueue_ != VK_NULL_HANDLE) {
+        if (asyncCompute_.init(device_, computeQueue_, VK_NULL_HANDLE,
+                               static_cast<uint32_t>(queueIndices_.computeFamily))) {
+            hasAsyncCompute_ = true;
+            LOG_INFO("Vulkan: async compute on queue family %d", queueIndices_.computeFamily);
+        } else {
+            asyncCompute_.shutdown();
+            LOG_WARN("Vulkan: no async compute queue; compute work records into the graphics stream");
+        }
+    }
     if (!queue_.init(device_, graphicsQueue_, presentQueue_,
                      static_cast<uint32_t>(queueIndices_.graphicsFamily)) ||
         !frames_.init(*this)) {
@@ -186,6 +204,8 @@ void VulkanContext::cleanup() {
         frames_.shutdown();
         uploadQueue_.shutdown();
         hasUploadQueue_ = false;
+        asyncCompute_.shutdown();
+        hasAsyncCompute_ = false;
         queue_.shutdown();
         memoryPool_.cleanup(device_);
     }
@@ -344,7 +364,10 @@ VulkanQueueFamilyIndices VulkanContext::findQueueFamilies(VkPhysicalDevice devic
         if ((qf.queueFlags & VK_QUEUE_GRAPHICS_BIT) && indices.graphicsFamily < 0) {
             indices.graphicsFamily = static_cast<int>(i);
         }
-        if ((qf.queueFlags & VK_QUEUE_COMPUTE_BIT) && indices.computeFamily < 0) {
+        // Compute: a family without graphics, whose queue runs beside the
+        // graphics queue (async compute).
+        if ((qf.queueFlags & VK_QUEUE_COMPUTE_BIT) && !(qf.queueFlags & VK_QUEUE_GRAPHICS_BIT) &&
+            indices.computeFamily < 0) {
             indices.computeFamily = static_cast<int>(i);
         }
         // Transfer: the copy engine (a transfer-only family) if there is one,
@@ -561,15 +584,33 @@ bool VulkanContext::createLogicalDevice() {
         queueIndices_.transferFamily
     };
 
+    // A compute family apart from graphics that is also the transfer family
+    // (no copy-only family) gives the async compute queue its second queue:
+    // two queue owners must never share a VkQueue. With one queue there, no
+    // async compute.
+    uint32_t familyCount = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice_, &familyCount, nullptr);
+    std::vector<VkQueueFamilyProperties> familyProps(familyCount);
+    vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice_, &familyCount, familyProps.data());
+    const int computeFamily = queueIndices_.computeFamily;
+    bool computeApart = computeFamily >= 0 && computeFamily != queueIndices_.graphicsFamily &&
+                        computeFamily != queueIndices_.presentFamily;
+    computeQueueIndex_ = 0;
+    if (computeApart && computeFamily == queueIndices_.transferFamily) {
+        if (familyProps[static_cast<uint32_t>(computeFamily)].queueCount >= 2) computeQueueIndex_ = 1;
+        else computeApart = false;
+    }
+    if (!computeApart) queueIndices_.computeFamily = queueIndices_.graphicsFamily;
+
     std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
-    float queuePriority = 1.0f;
+    const float queuePriorities[2] = {1.0f, 1.0f};
     for (int queueFamily : uniqueQueueFamilies) {
         if (queueFamily < 0) continue;
         VkDeviceQueueCreateInfo queueCreateInfo{};
         queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
         queueCreateInfo.queueFamilyIndex = static_cast<uint32_t>(queueFamily);
-        queueCreateInfo.queueCount = 1;
-        queueCreateInfo.pQueuePriorities = &queuePriority;
+        queueCreateInfo.queueCount = computeApart && queueFamily == computeFamily ? computeQueueIndex_ + 1 : 1;
+        queueCreateInfo.pQueuePriorities = queuePriorities;
         queueCreateInfos.push_back(queueCreateInfo);
     }
 
@@ -730,7 +771,9 @@ bool VulkanContext::createLogicalDevice() {
 
     vkGetDeviceQueue(device_, queueIndices_.graphicsFamily, 0, &graphicsQueue_);
     vkGetDeviceQueue(device_, queueIndices_.presentFamily, 0, &presentQueue_);
-    vkGetDeviceQueue(device_, queueIndices_.computeFamily, 0, &computeQueue_);
+    vkGetDeviceQueue(device_, queueIndices_.computeFamily,
+                     queueIndices_.computeFamily == queueIndices_.graphicsFamily ? 0 : computeQueueIndex_,
+                     &computeQueue_);
     vkGetDeviceQueue(device_, queueIndices_.transferFamily, 0, &transferQueue_);
     return true;
 }

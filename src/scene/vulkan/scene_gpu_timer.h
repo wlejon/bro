@@ -10,6 +10,15 @@
 // frame's time went, without a profiler attached. With BRO_SCENE_GPU_FRAGS
 // set as well, each opaque draw's fragment shader invocations follow the line
 // (statBegin): its overdraw, where a pass is fragment-bound.
+//
+// A frame's compute stream on the async compute queue (SceneFrame::
+// computeStream) is stamped in a query pool of its own: its start and end,
+// and its marks (a mark recorded into that command buffer goes there), logged
+// after the graphics' as "| compute <ms>: ...". The frame's time is then wall
+// time on the GPU: from the earlier of the two starts to the later end. A
+// frame whose start overlaps the previous frame's GPU work (the previous end
+// read) counts from that end instead, so overlapped frames do not count the
+// overlap twice.
 #include "render/vulkan_context.h"
 
 #include <vulkan/vulkan.h>
@@ -33,6 +42,13 @@ public:
     void mark(VkCommandBuffer cmd, const char* name);
     /// Write the end stamp; the render is timed once `ticket` completes.
     void end(VkCommandBuffer cmd);
+    /// The render's compute stream on the async compute queue, begun (reset
+    /// its queries, write its start) and ending (its end stamp). A no-op
+    /// when the render is untimed or that queue cannot write timestamps.
+    void beginCompute(VkCommandBuffer cmd);
+    void endCompute(VkCommandBuffer cmd);
+    /// `ticket` is the render's last graphics submission, which waits for its
+    /// compute: once it completes, both are done.
     void submitted(uint64_t ticket);
     /// Milliseconds of the last submitted render, waiting for it (its own
     /// ticket); -1 when nothing was timed since the last call. Not `wait`:
@@ -81,6 +97,16 @@ private:
     // Each slot's marks: how many, and their names.
     uint32_t markCount_[8] = {};
     const char* markNames_[8][kMaxMarks] = {};
+
+    // The compute stream's stamps (start, end, marks), a slot as the
+    // graphics' (kPerSlot each), when the async compute queue has timestamps.
+    VkQueryPool computePool_ = VK_NULL_HANDLE;
+    uint64_t computeMask_ = ~0ull;
+    VkCommandBuffer computeCmd_ = VK_NULL_HANDLE;   // the open render's compute stream
+    bool computeTimed_[8] = {};
+    uint32_t computeMarkCount_[8] = {};
+    const char* computeMarkNames_[8][kMaxMarks] = {};
+    uint64_t lastEnd_ = 0;   // the end stamp of the last render read
 };
 
 }  // namespace bro::scene::vk
