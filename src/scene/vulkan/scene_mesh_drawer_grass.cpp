@@ -279,6 +279,7 @@ VkDescriptorSet SceneMeshDrawer::groundSet(SceneFrame& frame, GrassNode& node) {
     u.ring[3] = outer.bandOut;
     u.blade[0] = node.params().height;
     u.blade[2] = node.params().minNormalY;
+    u.blade[3] = node.params().wind;   // the sward's lay and gusts (grassCombLean), as the blades'
     u.lod[3] = eyeLift(node, frame.view);
     return writeSet(frame, device_, *defaults_, u, img);
 }
