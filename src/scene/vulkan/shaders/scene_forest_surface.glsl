@@ -210,11 +210,19 @@ ForestMass forestSpriteSurface(uint flags) {
             // theirs. With both, its clumps were 4 to 12 units darker than
             // its leaves.
             bool sprayLobe = (floatBitsToUint(FOREST_HEADER(FOREST_H_LOOK)) & 15u) != 0u;
-            // 0.8 of the depth through the lobe (its path's first few shadow
-            // texels skipped, SHADOW_LEAF_BLIND): a broadleaf's clumps at
-            // noon within a level of its leaves at 45 / 75 / 120 m (+1.7 /
-            // +2.1 / +2.1 at half the depth, no skip).
-            m.density = sprayLobe ? 0.0 : forestMassDepth(inMass2.x, inMass2.y, inMass2.z) * 0.8 / max(inMass0.w, 1e-3);
+            // 0.9 of the depth through the lobe (its path's first few shadow
+            // texels skipped, SHADOW_LEAF_BLIND), times the area its leaves
+            // turn to the light, as its disc caster's (they lean up, so stop
+            // less of a low sun than of a high one: about (1 - b) + 2 b |L.y|,
+            // b the emit's up bias). As one depth for every sun, a lobe
+            // fitted to golden was too light at noon (a broadleaf's clumps
+            // +1.3 to +1.8 over its leaves at 35 / 75 / 120 m) and a birch's
+            // separate lobes, shaded by few discs but their own, pale balls
+            // (+5 at 60 m). broflora docs/look-and-motion.md has the trade.
+            float gb = clamp(1.4 * FOREST_HEADER(FOREST_H_UP_BIAS), 0.0, 1.0);
+            float facing = lighting.sunDirection.w > 0.5 ? (1.0 - gb) + 2.0 * gb * abs(lighting.sunDirection.y) : 1.0;
+            m.density = sprayLobe ? 0.0
+                                  : forestMassDepth(inMass2.x, inMass2.y, inMass2.z) * 0.9 * facing / max(inMass0.w, 1e-3);
             // The leaves seen lie within about one optical depth of the
             // lobe's surface, as a crown's do (FOREST_CROWN_SELF_MAX): a
             // shrub's dense lobes 8.2 / 8.1 levels darker than its leaves
