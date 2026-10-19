@@ -104,6 +104,7 @@
             if (d_opts.shadowNormalBias !== undefined) node.shadowNormalBias = d_opts.shadowNormalBias;
             if (d_opts.cascadeCount !== undefined) node.cascadeCount = d_opts.cascadeCount;
             if (d_opts.cascadeSplitLambda !== undefined) node.cascadeSplitLambda = d_opts.cascadeSplitLambda;
+            if (d_opts.shadowDistance !== undefined) node.shadowDistance = d_opts.shadowDistance;
         }
         return node;
     });

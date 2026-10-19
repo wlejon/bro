@@ -237,8 +237,14 @@ float lightShadow(int i, vec3 pos, float camDist, float lightDist, vec3 N, float
             if (tb > 0.0 && tb < 1.0) tb *= shadowTileCover(slot + c + 1, pos);
             if (tb > 0.0) shadow = mix(shadow, shadowFromTile(slot + c + 1, pos, lightDist, N, NdotL, spread), tb);
         }
+        // The last cascade's far split is the light's shadow distance (1e30
+        // with none): the shadow fades out over its last tenth.
+        else shadow = mix(shadow, 1.0, smoothstep(0.9 * thisFar, thisFar, camDist));
         return shadow;
     }
+    if (type == 0 && count == 1)
+        return mix(shadowFromTile(slot, pos, lightDist, N, NdotL, spread), 1.0,
+                   smoothstep(0.9 * light.cascadeSplit.x, light.cascadeSplit.x, camDist));
     return shadowFromTile(slot, pos, lightDist, N, NdotL, spread);
 }
 

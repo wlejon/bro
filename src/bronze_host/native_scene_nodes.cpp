@@ -740,6 +740,21 @@ void bro_scene_SceneNode_cascadeSplitLambda_set(void* self, double v) {
     }
 }
 
+double bro_scene_SceneNode_shadowDistance_get(void* self) {
+    auto* n = nodeOf(self);
+    if (n && n->type() == scene::SceneNode::Type::Light) {
+        return static_cast<double>(static_cast<scene::LightNode*>(n)->shadowDistance());
+    }
+    return 0.0;
+}
+
+void bro_scene_SceneNode_shadowDistance_set(void* self, double v) {
+    auto* n = nodeOf(self);
+    if (n && n->type() == scene::SceneNode::Type::Light) {
+        static_cast<scene::LightNode*>(n)->setShadowDistance(static_cast<float>(v));
+    }
+}
+
 double bro_scene_SceneNode_fov_get(void* self) {
     auto* n = nodeOf(self);
     if (n && n->type() == scene::SceneNode::Type::Camera) {

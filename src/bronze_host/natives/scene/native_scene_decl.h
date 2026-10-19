@@ -971,6 +971,8 @@ int32_t bro_scene_SceneNode_cascadeCount_get(void* self);
 void bro_scene_SceneNode_cascadeCount_set(void* self, int32_t v);
 double bro_scene_SceneNode_cascadeSplitLambda_get(void* self);
 void bro_scene_SceneNode_cascadeSplitLambda_set(void* self, double v);
+double bro_scene_SceneNode_shadowDistance_get(void* self);
+void bro_scene_SceneNode_shadowDistance_set(void* self, double v);
 void bro_scene_SceneNode_setSkeleton(void* self, uint64_t skelVal);
 void bro_scene_SceneNode_addClip(void* self, const char* name, uint64_t clipVal);
 void bro_scene_SceneNode_addBlendSpace1D(void* self, const char* name, const char* jsonPoints);

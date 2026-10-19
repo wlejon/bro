@@ -92,6 +92,14 @@ public:
     float cascadeSplitLambda() const { return cascadeSplitLambda_; }
     void setCascadeSplitLambda(float l) { cascadeSplitLambda_ = l; }
 
+    /// How far from the camera a directional light's shadow reaches (m):
+    /// its cascades split this depth rather than the camera's whole range,
+    /// and the shadow fades out over its last tenth. 0 = the camera's far
+    /// plane. A view kilometres deep needs it, or the nearest cascade spans
+    /// hundreds of metres.
+    float shadowDistance() const { return shadowDistance_; }
+    void setShadowDistance(float d) { shadowDistance_ = d > 0.0f ? d : 0.0f; }
+
 private:
     Kind kind_ = Kind::Directional;
     bromath::Vec3 direction_{0.0f, -1.0f, 0.0f};
@@ -105,6 +113,7 @@ private:
     float shadowNormalBias_ = 0.03f;
     int   cascadeCount_ = 4;
     float cascadeSplitLambda_ = 0.5f;
+    float shadowDistance_ = 0.0f;
 };
 
 } // namespace bro::scene

@@ -374,6 +374,12 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
             // for tight indoor scenes with no far geometry.
             float zn = std::max(graph_.cameraNearZ_, 1e-3f);
             float zf = std::max(graph_.cameraFarZ_, zn + 1e-3f);
+            // A shadow distance short of the far plane: the cascades split
+            // that depth, and the last one ends there (the shader fades it
+            // out by its far split).
+            const float reach = L->shadowDistance();
+            const bool capped = reach > 0.0f && reach < zf;
+            if (capped) zf = std::max(reach, zn + 1e-3f);
             float lambda = L->cascadeSplitLambda();
             // splitFar[c] = far view-distance of cascade c. cascade c covers
             // [splitFar[c-1], splitFar[c]], with splitFar[-1] = zn.
@@ -391,7 +397,9 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
             for (int c = 0; c < N - 1; ++c) {
                 plan.cascadeSplit[i][c] = splitFar[c + 1];
             }
-            // The last cascade absorbs anything farther — already 1e30f from reset.
+            // The last cascade absorbs anything farther — already 1e30f from
+            // reset — unless the shadow ends short of the far plane.
+            if (capped) plan.cascadeSplit[i][N - 1] = zf;
 
             // A fixed light basis (eye at the world origin, looking along d)
             // so the projection window can be snapped to whole texels in a

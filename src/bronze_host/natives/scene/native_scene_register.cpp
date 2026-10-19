@@ -403,6 +403,8 @@ bool registerSceneNatives(std::string* error) {
            natives::fn("__bro_native.scene.SceneNode_cascadeCount_set", BRO_NATIVE_FN(bro_scene_SceneNode_cascadeCount_set), "void", {"__bro_native.scene.SceneNode", "i32"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_cascadeSplitLambda_get", BRO_NATIVE_FN(bro_scene_SceneNode_cascadeSplitLambda_get), "f64", {"__bro_native.scene.SceneNode"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_cascadeSplitLambda_set", BRO_NATIVE_FN(bro_scene_SceneNode_cascadeSplitLambda_set), "void", {"__bro_native.scene.SceneNode", "f64"}, error) &&
+           natives::fn("__bro_native.scene.SceneNode_shadowDistance_get", BRO_NATIVE_FN(bro_scene_SceneNode_shadowDistance_get), "f64", {"__bro_native.scene.SceneNode"}, error) &&
+           natives::fn("__bro_native.scene.SceneNode_shadowDistance_set", BRO_NATIVE_FN(bro_scene_SceneNode_shadowDistance_set), "void", {"__bro_native.scene.SceneNode", "f64"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_setSkeleton", BRO_NATIVE_FN(bro_scene_SceneNode_setSkeleton), "void", {"__bro_native.scene.SceneNode", "dynamic"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_addClip", BRO_NATIVE_FN(bro_scene_SceneNode_addClip), "void", {"__bro_native.scene.SceneNode", "str", "dynamic"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_addBlendSpace1D", BRO_NATIVE_FN(bro_scene_SceneNode_addBlendSpace1D), "void", {"__bro_native.scene.SceneNode", "str", "str"}, error) &&
