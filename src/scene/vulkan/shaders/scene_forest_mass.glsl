@@ -379,16 +379,12 @@ ForestLeafCut forestLeafCut(vec2 uv, vec4 shape) {
         c.tilt = 0.0;
         return c;
     }
-    if (tc < q) {
-        // The petiole: a stalk along the midrib, a little thicker at the
-        // blade, its cover its width where that is under a pixel.
-        float hw = 0.03 * (0.8 + 0.4 * tc / max(q, 1e-4));
-        float fs = max(fwidth(across), 1e-5);
-        c.cover = mix(clamp((hw - across) / fs + 0.5, 0.0, 1.0) * min(1.0, 2.0 * hw / fs), farCover, far);
-        c.vein = 1.0;
-        c.tilt = 0.0;
-        return c;
-    }
+    // The blade's outline and laterals, and every derivative, before the
+    // stalk and the blade part: a quad straddling the two would take the
+    // blade's derivatives with its stalk pixels gone, reading their stale
+    // registers (another wave's, on RADV), and a leaf's edge and veins
+    // there changed between two frames of the same scene. (The far test
+    // above is coarse, one answer a quad, so it parts no quad.)
     float t = clamp((tc - q) / max(1.0 - q, 1e-4), 0.0, 1.0);
     float width = shape.x > 0.0 ? shape.x : 1.0;
     float tip = clamp(shape.y, 0.0, 1.0);
@@ -413,18 +409,29 @@ ForestLeafCut forestLeafCut(vec2 uv, vec4 shape) {
         edge *= 1.0 - depth * g * fade;
         c.tilt = 0.9 * spiny * depth * sin(6.2831853 * m * teeth) * smoothstep(0.3, 0.9, across / max(edge, 1e-3));
     }
-    float fpx = max(fwidth(across) + 0.5 * fwidth(edge), 1e-5);
+    float u = 7.0 * (t - 0.18 * across - 0.22 * across * across);
+    float fa = fwidth(across);
+    float fe = fwidth(edge);
+    float fu = fwidth(u);
+    if (tc < q) {
+        // The petiole: a stalk along the midrib, a little thicker at the
+        // blade, its cover its width where that is under a pixel.
+        float hw = 0.03 * (0.8 + 0.4 * tc / max(q, 1e-4));
+        float fs = max(fa, 1e-5);
+        c.cover = mix(clamp((hw - across) / fs + 0.5, 0.0, 1.0) * min(1.0, 2.0 * hw / fs), farCover, far);
+        c.vein = 1.0;
+        c.tilt = 0.0;
+        return c;
+    }
+    float fpx = max(fa + 0.5 * fe, 1e-5);
     c.cover = clamp((edge - across) / fpx + 0.5, 0.0, 1.0);
     c.cover = mix(c.cover, farCover, far);
     // Venation: the midrib, tapering to the tip, and pinnate laterals
     // leaving it for the margin at a slant toward the tip, curving up
     // along it as they near it.
-    float fa = fwidth(across);
     float rib = 0.035 * (1.0 - 0.6 * t);
     float mid = (1.0 - smoothstep(rib, rib + fa, across)) * clamp((0.05 - fa) / 0.03, 0.0, 1.0);
-    float u = 7.0 * (t - 0.18 * across - 0.22 * across * across);
     float f = fract(u);
-    float fu = fwidth(u);
     float lat = (1.0 - smoothstep(0.05, 0.05 + fu, min(f, 1.0 - f))) * (1.0 - smoothstep(0.1, 0.25, fu)) *
                 smoothstep(0.08, 0.25, t) * (1.0 - smoothstep(0.75, 0.95, across / max(edge, 1e-3)));
     c.vein = max(mid, 0.45 * lat);
