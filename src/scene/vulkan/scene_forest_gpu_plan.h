@@ -134,8 +134,14 @@ private:
     struct Push {
         uint32_t round = 0, offset = 0, count = 0, scratch = 0xffffffffu;
     };
-    void dispatch(VkCommandBuffer cmd, Stage s, const Node& n, uint32_t groups, const Push& p = {}) const;
-    void dispatchItems(VkCommandBuffer cmd, Stage s, const Node& n, const Push& p = {}) const;
+    void dispatch(VkCommandBuffer cmd, Stage s, const Node& n, uint32_t groups, const Push& p) const;
+    void dispatchItems(VkCommandBuffer cmd, Stage s, const Node& n, const Push& p) const;
+    // (Overloads rather than `= {}`: GCC will not take a default argument
+    // made from a nested class's member initializers inside its class.)
+    void dispatch(VkCommandBuffer cmd, Stage s, const Node& n, uint32_t groups) const {
+        dispatch(cmd, s, n, groups, Push{});
+    }
+    void dispatchItems(VkCommandBuffer cmd, Stage s, const Node& n) const { dispatchItems(cmd, s, n, Push{}); }
     // Over the groups ARGS holds at `argsWord` (an x, 1, 1 dispatch).
     void dispatchIndirect(VkCommandBuffer cmd, Stage s, const Node& n, uint32_t argsWord, const Push& p) const;
     void scan(VkCommandBuffer cmd, const Node& n, uint32_t offset, uint32_t count, uint32_t scratch) const;
