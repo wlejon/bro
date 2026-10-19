@@ -673,6 +673,9 @@ struct SceneMeshDrawer::ForestPlan {
         std::vector<Groups> groups;
         uint64_t drawn = 0, leaves = 0, blooms = 0;
         uint32_t tiers[ForestNode::kTiers] = {};
+        // Whether the ask at 1 groups: not where the last frame settled
+        // coarser (a binding budget's frames rarely draw detail 1).
+        bool group = true;
     } split[2];
 
     // The vertices the camera's (or the shadow tiles') trees send at `detail`.
@@ -682,19 +685,19 @@ struct SceneMeshDrawer::ForestPlan {
         CostSplit& cs = split[shadow ? 1 : 0];
         if (cs.fine.size() != trees.size()) {
             cs.fine.resize(trees.size());
-            cs.groups.assign(shadow ? tileSlots.size() : 1, Groups{});
+            if (cs.group) cs.groups.assign(shadow ? tileSlots.size() : 1, Groups{});
             // (addTree counts a group's leaves and blooms in the stats, which
             // finishForest does itself if it draws another detail.)
             const uint64_t leaves0 = stats.leaves, blooms0 = stats.blooms;
-            for (uint32_t i = 0; i < trees.size(); ++i)
-                cs.fineSum += cs.fine[i] =
-                    treeCost(trees[i], 1.0f, shadow, &cs.groups[shadow ? static_cast<size_t>(trees[i].tile) : 0],
-                             &cs.drawn, shadow ? nullptr : cs.tiers);
+            for (uint32_t i = 0; i < trees.size(); ++i) {
+                Groups* G = cs.group ? &cs.groups[shadow ? static_cast<size_t>(trees[i].tile) : 0] : nullptr;
+                cs.fineSum += cs.fine[i] = treeCost(trees[i], 1.0f, shadow, G, &cs.drawn, shadow ? nullptr : cs.tiers);
+            }
             cs.leaves = stats.leaves - leaves0;
             cs.blooms = stats.blooms - blooms0;
             stats.leaves = leaves0;
             stats.blooms = blooms0;
-            cs.grouped = true;
+            cs.grouped = cs.group;
         }
         if (detail == 1.0f) return static_cast<double>(cs.fineSum);
         if (!cs.split) {
@@ -1136,6 +1139,12 @@ void SceneMeshDrawer::prepareForest(SceneFrame& frame, ForestNode& node, std::ve
     ForestPlan& P = *plan;
     capForced(std::vector<ForestPlan*>{&P}, false);
     capForced(std::vector<ForestPlan*>{&P}, true);
+    if (forestDetail_.size() > 256) forestDetail_.clear();
+    {
+        const ForestDetail& last = forestDetail_[&node];
+        P.split[0].group = !(last.detail > 1.0f);
+        P.split[1].group = !(last.shadow > 1.0f);
+    }
     float detail = P.force >= 0 || P.seen.empty()
                        ? 1.0f : fitDetail([&](float d) { return P.cost(d, false); }, P.lod.budget);
     float shadowDetail = P.force >= 0 || P.cast.empty()
@@ -1204,7 +1213,12 @@ void SceneMeshDrawer::prepareForests(SceneFrame& frame, const std::vector<Forest
         anyCast = anyCast || !P.cast.empty();
     }
     std::vector<ForestPlan*> raw;
-    for (auto& p : plans) raw.push_back(p.get());
+    for (auto& p : plans) {
+        raw.push_back(p.get());
+        if (!p) continue;
+        p->split[0].group = !(forestsDetail_.detail > 1.0f);
+        p->split[1].group = !(forestsDetail_.shadow > 1.0f);
+    }
     capForced(raw, false);
     capForced(raw, true);
     const auto total = [&](float d, bool shadow) {
