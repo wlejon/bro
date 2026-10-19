@@ -15,6 +15,7 @@
 #include "scene/texture_source.h"
 #include "scene/vulkan/scene_vk_allocator.h"
 
+#include <bromath/aabb.h>
 #include <bromesh/mesh_data.h>
 
 #include <cstdint>
@@ -22,6 +23,7 @@
 #include <span>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace bro::scene {
 class SkinnedMeshNode;
@@ -51,9 +53,24 @@ enum class TextureSlot : uint32_t {
     Occlusion,
 };
 
+/// A run of a big mesh's triangles that lie together (SceneGpuResources::chunked):
+/// its range in GpuMesh::chunkIndices and its bounds in the mesh's own space.
+struct MeshChunk {
+    uint32_t firstIndex = 0;
+    uint32_t indexCount = 0;
+    bromath::AABB3 bounds;
+};
+
 struct GpuMesh {
     SceneVkBuffer vertices;   // PackedVertex (64 bytes)
     SceneVkBuffer indices;    // uint32
+    // A big triangle mesh's indices again, its triangles sorted into chunks
+    // by where they lie, so a pass draws the chunks its view reaches
+    // (SceneMeshDrawer::bindGeometryAndDraw's ChunkCull); empty for a small
+    // one. Built once a node asks (chunked), not for a line mesh.
+    SceneVkBuffer chunkIndices;
+    std::vector<MeshChunk> chunks;
+    bool chunksTried = false;
     SceneVkBuffer vegetation; // MeshData::vegetation (64 bytes a vertex), when the mesh has it
     uint32_t indexCount = 0;
     uint64_t generation = 0;
@@ -70,6 +87,12 @@ public:
 
     /// Geometry `slot` of node `id` (LOD level + 1, or 0 for the base mesh).
     const GpuMesh* mesh(uint32_t id, uint32_t slot, uint64_t generation, const bromesh::MeshData& data);
+    /// The same, its triangles chunked (GpuMesh::chunks) when it has
+    /// kChunkMinTriangles or more: for a triangle list whose draws may be cut
+    /// to their view (a static mesh drawn as triangles).
+    const GpuMesh* chunked(uint32_t id, uint32_t slot, uint64_t generation, const bromesh::MeshData& data);
+    static constexpr uint32_t kChunkMinTriangles = 32768;
+    static constexpr uint32_t kChunkTriangles = 4096;   // a chunk's, about
 
     /// A node's RGBA8 image as a mipmapped, repeating texture; null when empty.
     const SceneVkImage* texture(uint32_t id, TextureSlot slot, const NodeTexture& tex);

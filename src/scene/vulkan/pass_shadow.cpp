@@ -213,7 +213,8 @@ void PassShadow::declare(const SceneFrame& frame, PassIO& io) const {
     io.depthTarget(frame.gpu.targets.shadowAtlas);
 }
 
-void PassShadow::drawCaster(SceneFrame& frame, const bromath::Mat4& lightViewProj, const MeshDraw& draw) {
+void PassShadow::drawCaster(SceneFrame& frame, const bromath::Mat4& lightViewProj, const MeshDraw& draw,
+                            const bromath::Frustum* tileFrustum) {
     VkCommandBuffer cmd = frame.cmd;
     VkPipeline pipeline = VK_NULL_HANDLE;
     const bool custom = draw.custom && draw.customSet && !draw.custom->vertexChunk.empty() &&
@@ -245,7 +246,9 @@ void PassShadow::drawCaster(SceneFrame& frame, const bromath::Mat4& lightViewPro
     for (int i = 0; i < 3; ++i) push.params[1 + i] = draw.push.emissive[i];
     vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(push), &push);
 
-    SceneMeshDrawer::bindGeometryAndDraw(cmd, draw);
+    // A chunked caster draws the chunks inside the tile.
+    const SceneMeshDrawer::ChunkCull cull{tileFrustum, frame.view.eye};
+    SceneMeshDrawer::bindGeometryAndDraw(cmd, draw, &cull);
 }
 
 void PassShadow::record(SceneFrame& frame) {
@@ -313,7 +316,7 @@ void PassShadow::record(SceneFrame& frame) {
             if (frame.timer && run && run != label) frame.timer->mark(cmd, run);
             run = label;
             if (frame.timer) frame.timer->statBegin(cmd, label);
-            drawCaster(frame, lightViewProj, draw);
+            drawCaster(frame, lightViewProj, draw, culling ? &tile.frustum : nullptr);
             if (frame.timer) frame.timer->statEnd(cmd);
         }
         if (frame.timer && run) frame.timer->mark(cmd, run);

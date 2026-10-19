@@ -130,7 +130,8 @@ void PassOpaque::record(SceneFrame& frame) {
         }
         const char* label = draw.timerLabel ? draw.timerLabel : kKind[static_cast<int>(draw.kind)];
         if (frame.timer) frame.timer->statBegin(frame.cmd, label);
-        frame.gpu.meshes.record(frame.cmd, frame.hdrTarget, frame.cameraSet, frame.lightingSet, draw);
+        const SceneMeshDrawer::ChunkCull cull{frame.renderer.cullingFrustum(), frame.view.eye, true};
+        frame.gpu.meshes.record(frame.cmd, frame.hdrTarget, frame.cameraSet, frame.lightingSet, draw, &cull);
         if (frame.timer) {
             frame.timer->statEnd(frame.cmd);
             frame.timer->mark(frame.cmd, label);
@@ -200,6 +201,7 @@ void PassTranslucent::declare(const SceneFrame&, PassIO& io) const {
 }
 
 void PassTranslucent::record(SceneFrame& frame) {
+    // (Drawn whole, not cut to chunks: a blend's order is its triangles'.)
     for (uint32_t i : frame.lists.translucent) {
         frame.gpu.meshes.record(frame.cmd, frame.hdrTarget, frame.cameraSet, frame.lightingSet,
                                 frame.lists.meshes[i]);

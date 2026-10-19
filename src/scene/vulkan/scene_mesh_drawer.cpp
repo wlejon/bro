@@ -627,6 +627,16 @@ bool SceneMeshDrawer::prepare(SceneFrame& frame, MeshNode& node, MeshDraw& out) 
         out.lineWidth = node.lineWidth();
         out.castsShadow = false;
     }
+    // A big plain mesh (a ground, a mountain ring) in chunks, each pass
+    // drawing those its view reaches. Not a custom shader's: its vertex
+    // chunk may move the points out of the chunks' bounds.
+    if (out.kind == MeshKind::Static && !out.lines && !node.customShader()) {
+        const GpuMesh* c = frame.gpu.resources.chunked(node.id(), slot, node.geometryGeneration(), data);
+        if (c && !c->chunks.empty()) {
+            out.chunks = &c->chunks;
+            out.chunkIndices = c->chunkIndices.buffer;
+        }
+    }
 
     if (skinned) {
         out.skin = frame.gpu.resources.skinAttributes(*skinned, data.vertexCount());
@@ -812,7 +822,7 @@ bool SceneMeshDrawer::prepare(SceneFrame& frame, InstancedMeshNode& node, MeshDr
 }
 
 void SceneMeshDrawer::record(VkCommandBuffer cmd, const TargetFormat& target, VkDescriptorSet cameraSet,
-                             VkDescriptorSet lightingSet, const MeshDraw& draw) {
+                             VkDescriptorSet lightingSet, const MeshDraw& draw, const ChunkCull* cull) {
     VkPipeline pipeline = VK_NULL_HANDLE;
     bool custom = false;
     if (draw.custom && draw.customSet) {
@@ -841,10 +851,10 @@ void SceneMeshDrawer::record(VkCommandBuffer cmd, const TargetFormat& target, Vk
     vkCmdSetDepthBias(cmd, toward * draw.depthBiasUnits, 0.0f, toward * draw.depthBiasFactor);
     if (draw.lines && wideLines_) vkCmdSetLineWidth(cmd, draw.lineWidth);
 
-    bindGeometryAndDraw(cmd, draw);
+    bindGeometryAndDraw(cmd, draw, cull);
 }
 
-void SceneMeshDrawer::bindGeometryAndDraw(VkCommandBuffer cmd, const MeshDraw& draw) {
+void SceneMeshDrawer::bindGeometryAndDraw(VkCommandBuffer cmd, const MeshDraw& draw, const ChunkCull* cull) {
     if (draw.kind == MeshKind::Tube) {
         vkCmdDraw(cmd, draw.indexCount, 1, 0, 0);
         return;
@@ -899,6 +909,38 @@ void SceneMeshDrawer::bindGeometryAndDraw(VkCommandBuffer cmd, const MeshDraw& d
     case MeshKind::ForestSprite: break;
     }
     vkCmdBindVertexBuffers(cmd, 0, count, buffers, offsets);
+    if (draw.chunks && draw.chunkIndices != VK_NULL_HANDLE && cull && cull->frustum) {
+        // The chunks the frustum reaches (nearest the origin first when
+        // cull.nearFirst: what is near hides what is behind it before it
+        // shades), a run of neighbours as one range.
+        vkCmdBindIndexBuffer(cmd, draw.chunkIndices, 0, VK_INDEX_TYPE_UINT32);
+        bromath::Mat4 model;
+        std::memcpy(model.data, draw.push.model, sizeof(model.data));
+        thread_local std::vector<std::pair<float, uint32_t>> seen;
+        seen.clear();
+        for (uint32_t i = 0; i < draw.chunks->size(); ++i) {
+            // (Relative to the origin: the draw's own space.)
+            const bromath::AABB3 rel = bromath::atransform((*draw.chunks)[i].bounds, model);
+            const bromath::AABB3 b{rel.min + cull->origin, rel.max + cull->origin};
+            if (!bromath::fintersects(*cull->frustum, b)) continue;
+            const bromath::Vec3 d = bromath::vmax(bromath::vmax(rel.min, -rel.max), bromath::Vec3{0.0f, 0.0f, 0.0f});
+            seen.emplace_back(cull->nearFirst ? bromath::vdot(d, d) : 0.0f, i);
+        }
+        if (cull->nearFirst) std::stable_sort(seen.begin(), seen.end());
+        uint32_t first = 0, n = 0;
+        for (const auto& [dist, i] : seen) {
+            const MeshChunk& c = (*draw.chunks)[i];
+            if (n && first + n == c.firstIndex) {
+                n += c.indexCount;
+                continue;
+            }
+            if (n) vkCmdDrawIndexed(cmd, n, draw.instanceCount, first, 0, draw.firstInstance);
+            first = c.firstIndex;
+            n = c.indexCount;
+        }
+        if (n) vkCmdDrawIndexed(cmd, n, draw.instanceCount, first, 0, draw.firstInstance);
+        return;
+    }
     vkCmdBindIndexBuffer(cmd, draw.indices, 0, VK_INDEX_TYPE_UINT32);
     if (draw.indirect != VK_NULL_HANDLE)
         vkCmdDrawIndexedIndirect(cmd, draw.indirect, draw.indirectOffset, 1, 0);

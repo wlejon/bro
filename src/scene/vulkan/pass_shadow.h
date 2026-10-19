@@ -42,7 +42,8 @@ private:
     VkPipeline builtinPipeline(MeshKind kind, bool twoSided, bool leafInline);
     VkPipeline customPipeline(const CustomShaderState& cs, MeshKind kind, bool twoSided);
     VkPipeline buildPipeline(VkShaderModule vs, MeshKind kind, bool custom, bool twoSided);
-    void drawCaster(SceneFrame& frame, const bromath::Mat4& lightViewProj, const MeshDraw& draw);
+    void drawCaster(SceneFrame& frame, const bromath::Mat4& lightViewProj, const MeshDraw& draw,
+                    const bromath::Frustum* tileFrustum);
 
     SceneVkDevice* device_ = nullptr;
     VkPipelineLayout layout_ = VK_NULL_HANDLE;

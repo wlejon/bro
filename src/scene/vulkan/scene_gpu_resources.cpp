@@ -75,6 +75,7 @@ const GpuMesh* SceneGpuResources::mesh(uint32_t id, uint32_t slot, uint64_t gene
     allocator_.destroyBuffer(entry.vertices);
     allocator_.destroyBuffer(entry.indices);
     allocator_.destroyBuffer(entry.vegetation);
+    allocator_.destroyBuffer(entry.chunkIndices);
     entry = GpuMesh{};
 
     const size_t vc = data.vertexCount();
@@ -100,6 +101,73 @@ const GpuMesh* SceneGpuResources::mesh(uint32_t id, uint32_t slot, uint64_t gene
     entry.indexCount = static_cast<uint32_t>(indices->size());
     entry.generation = generation;
     noteMeshUpload(vc * sizeof(PackedVertex) + indices->size() * sizeof(uint32_t) + vegBytes);
+    return &entry;
+}
+
+const GpuMesh* SceneGpuResources::chunked(uint32_t id, uint32_t slot, uint64_t generation,
+                                          const bromesh::MeshData& data) {
+    const GpuMesh* m = mesh(id, slot, generation, data);
+    if (!m || m->chunksTried) return m;
+    GpuMesh& entry = meshes_[key(id, slot)];
+    entry.chunksTried = true;
+    const size_t vc = data.vertexCount();
+    const size_t ic = data.indices.empty() ? vc : data.indices.size();
+    const size_t tris = ic / 3;
+    if (tris < kChunkMinTriangles || ic % 3 != 0) return &entry;
+    const auto index = [&](size_t i) { return data.indices.empty() ? static_cast<uint32_t>(i) : data.indices[i]; };
+    const auto vertex = [&](uint32_t v) {
+        return bromath::Vec3{data.positions[v * 3], data.positions[v * 3 + 1], data.positions[v * 3 + 2]};
+    };
+
+    // A grid over the mesh's two longest extents (a ground's or a wall's
+    // plane), as many cells as chunks of about kChunkTriangles, each
+    // triangle in the cell of its centroid; the cells in turn, a row's
+    // back and forth, so neighbouring cells stay neighbouring runs.
+    bromath::AABB3 box = bromath::aempty3();
+    for (size_t v = 0; v < vc; ++v) box = bromath::aexpand(box, vertex(static_cast<uint32_t>(v)));
+    const bromath::Vec3 ext = bromath::aextent(box);
+    const float e[3] = {ext.x, ext.y, ext.z};
+    int ax[3] = {0, 1, 2};
+    std::sort(ax, ax + 3, [&](int a, int b) { return e[a] > e[b]; });
+    const float ea = std::max(e[ax[0]], 1e-6f), eb = std::max(e[ax[1]], 1e-6f);
+    const double cells = static_cast<double>(tris) / kChunkTriangles;
+    const int na = std::clamp(static_cast<int>(std::lround(std::sqrt(cells * ea / eb))), 1, 256);
+    const int nb = std::clamp(static_cast<int>(std::lround(cells / na)), 1, 256);
+    const float lo[3] = {box.min.x, box.min.y, box.min.z};
+    std::vector<uint32_t> cellOf(tris);
+    std::vector<uint32_t> start(static_cast<size_t>(na) * nb + 1, 0);
+    for (size_t t = 0; t < tris; ++t) {
+        const bromath::Vec3 c = (vertex(index(3 * t)) + vertex(index(3 * t + 1)) + vertex(index(3 * t + 2))) * (1.0f / 3.0f);
+        const float p[3] = {c.x, c.y, c.z};
+        const int a = std::clamp(static_cast<int>((p[ax[0]] - lo[ax[0]]) / ea * na), 0, na - 1);
+        int b = std::clamp(static_cast<int>((p[ax[1]] - lo[ax[1]]) / eb * nb), 0, nb - 1);
+        if (a & 1) b = nb - 1 - b;
+        cellOf[t] = static_cast<uint32_t>(a * nb + b);
+        start[cellOf[t] + 1]++;
+    }
+    for (size_t c = 1; c < start.size(); ++c) start[c] += start[c - 1];
+    std::vector<uint32_t> sorted(ic);
+    std::vector<uint32_t> at(start.begin(), start.end() - 1);
+    for (size_t t = 0; t < tris; ++t) {
+        const uint32_t o = 3 * at[cellOf[t]]++;
+        for (int k = 0; k < 3; ++k) sorted[o + k] = index(3 * t + k);
+    }
+    for (size_t c = 0; c + 1 < start.size(); ++c) {
+        if (start[c + 1] == start[c]) continue;
+        MeshChunk ch;
+        ch.firstIndex = 3 * start[c];
+        ch.indexCount = 3 * (start[c + 1] - start[c]);
+        ch.bounds = bromath::aempty3();
+        for (uint32_t i = ch.firstIndex; i < ch.firstIndex + ch.indexCount; ++i)
+            ch.bounds = bromath::aexpand(ch.bounds, vertex(sorted[i]));
+        entry.chunks.push_back(ch);
+    }
+    if (entry.chunks.size() < 2 ||
+        !allocator_.createIndexBuffer(sorted.size() * sizeof(uint32_t), sorted.data(), entry.chunkIndices)) {
+        entry.chunks.clear();
+        return &entry;
+    }
+    noteMeshUpload(sorted.size() * sizeof(uint32_t));
     return &entry;
 }
 
@@ -368,6 +436,7 @@ void SceneGpuResources::releaseNodes(std::span<const uint32_t> ids) {
             allocator_.destroyBuffer(m.vertices);
             allocator_.destroyBuffer(m.indices);
             allocator_.destroyBuffer(m.vegetation);
+            allocator_.destroyBuffer(m.chunkIndices);
         });
         eraseNode(textures_, id, [&](Texture& t) { allocator_.destroyImage(t.image); });
         if (auto it = skins_.find(id); it != skins_.end()) {
@@ -390,6 +459,7 @@ void SceneGpuResources::cleanup() {
         allocator_.destroyBuffer(m.vertices);
         allocator_.destroyBuffer(m.indices);
         allocator_.destroyBuffer(m.vegetation);
+        allocator_.destroyBuffer(m.chunkIndices);
     }
     meshes_.clear();
     for (auto& [k, t] : textures_) allocator_.destroyImage(t.image);

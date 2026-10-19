@@ -237,7 +237,8 @@ void PassReflectionProbe::renderFace(SceneFrame& frame, const ReflectionProbeNod
             if (fresh) it->second = shadedLightingSet(gpu, lighting, draw.shade, eye);
             faceDraw.lightingSet = it->second;
         }
-        gpu.meshes.record(cmd, target, cameraSet, lightingSet, faceDraw);
+        const SceneMeshDrawer::ChunkCull chunkCull{cull ? &view.frustum : nullptr, eye, true};
+        gpu.meshes.record(cmd, target, cameraSet, lightingSet, faceDraw, &chunkCull);
     }
     gpu.device.cmdEndRendering(cmd);
 }

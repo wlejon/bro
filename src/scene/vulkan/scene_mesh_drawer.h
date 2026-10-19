@@ -16,6 +16,8 @@
 #include "scene/shade_map.h"
 
 #include <bromath/aabb.h>
+#include <bromath/frustum.h>
+#include "scene/vulkan/scene_gpu_resources.h"
 #include "scene/vulkan/scene_vk_allocator.h"
 #include "scene/vulkan/scene_vk_custom_shader.h"
 #include "scene/vulkan/scene_vk_pipeline.h"
@@ -166,6 +168,11 @@ struct MeshDraw {
     VkBuffer vegetation = VK_NULL_HANDLE;        // Vegetation (per vertex), InstancedVegetation (per instance)
     VkDeviceSize vegetationOffset = 0;
     uint32_t instanceCount = 1;
+    /// A big static mesh's chunks (GpuMesh::chunks) and their index buffer:
+    /// a pass given a ChunkCull draws the chunks its frustum reaches, else
+    /// `indices` whole. Null: not chunked.
+    const std::vector<MeshChunk>* chunks = nullptr;
+    VkBuffer chunkIndices = VK_NULL_HANDLE;
     VkBuffer skin = VK_NULL_HANDLE;              // Skinned
     VkDescriptorSet vertexSet = VK_NULL_HANDLE;  // set 3: Skinned bones, Scatter/Tube segments
     VkDescriptorSet materialSet = VK_NULL_HANDLE;// null: the default material
@@ -236,16 +243,28 @@ public:
     /// the GPU planner's read-backs of it are read once it completes.
     void forestSubmitted(uint64_t ticket);
 
+    /// A pass's view for a chunked draw (MeshDraw::chunks): its frustum
+    /// (absolute world) and the origin its draws' push.model is relative to
+    /// (the eye they were made for, or a probe's after MeshDraw::rebase).
+    struct ChunkCull {
+        const bromath::Frustum* frustum = nullptr;
+        bromath::Vec3 origin{0.0f, 0.0f, 0.0f};
+        bool nearFirst = false;   // a view's chunks nearest the origin first (a camera's, a probe face's)
+    };
+
     /// Bind and draw into the open target described by `target`, lit by
-    /// the draw's probe lighting set when it has one, else `lightingSet`.
+    /// the draw's probe lighting set when it has one, else `lightingSet`;
+    /// a chunked draw cut to `cull` when given.
     void record(VkCommandBuffer cmd, const TargetFormat& target, VkDescriptorSet cameraSet,
-                VkDescriptorSet lightingSet, const MeshDraw& draw);
+                VkDescriptorSet lightingSet, const MeshDraw& draw, const ChunkCull* cull = nullptr);
 
     VkPipelineLayout layout() const { return layout_; }
 
     /// Bind a draw's vertex streams (none for a tube) and issue it: shared
-    /// with the shadow casters, whose pipelines read the same streams.
-    static void bindGeometryAndDraw(VkCommandBuffer cmd, const MeshDraw& draw);
+    /// with the shadow casters, whose pipelines read the same streams. A
+    /// chunked draw given `cull` draws its chunks inside cull's frustum,
+    /// neighbouring ones as one range.
+    static void bindGeometryAndDraw(VkCommandBuffer cmd, const MeshDraw& draw, const ChunkCull* cull = nullptr);
 
     /// The vertex input of a mesh kind (binding 0 = packed vertices, binding 1
     /// = instance rows, skin attributes or per-vertex vegetation, binding 2 =
