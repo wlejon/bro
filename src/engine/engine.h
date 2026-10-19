@@ -496,7 +496,7 @@ public:
     static std::string screenCaptureRequestPath();
     bool screenshot(const std::string& path, int x, int y, int w, int h);
     std::vector<uint8_t> capturePixels();
-    double gpuFrameMs();
+    double gpuFrameMs(bool wait = true);
 
     dom::Element* querySelector(const std::string& selector) const;
     // Builds the panel first if it has not been shown yet.

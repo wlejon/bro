@@ -146,8 +146,8 @@ void SceneRenderer::collectLights(std::vector<LightNode*>& out) const {
     }
 }
 
-double SceneRenderer::takeGpuMs() {
-    return vkBridge_ ? vkBridge_->takeGpuMs() : -1.0;
+double SceneRenderer::takeGpuMs(bool wait) {
+    return vkBridge_ ? vkBridge_->takeGpuMs(wait) : -1.0;
 }
 
 void SceneRenderer::render3D() {

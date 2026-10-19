@@ -35,8 +35,11 @@ public:
     void end(VkCommandBuffer cmd);
     void submitted(uint64_t ticket);
     /// Milliseconds of the last submitted render, waiting for it (its own
-    /// ticket); -1 when nothing was timed since the last call.
-    double takeMs();
+    /// ticket); -1 when nothing was timed since the last call. Not `wait`:
+    /// the oldest render that has finished and was not taken yet, -1 for
+    /// none, so a caller reading every frame reads each render once, a frame
+    /// or so behind, and its frames overlap the GPU's.
+    double takeMs(bool wait = true);
     /// Count the fragment shader invocations of one draw called `name`
     /// (inside rendering, closed by statEnd); a no-op unless
     /// BRO_SCENE_GPU_FRAGS is set, when a logged render's line is followed
@@ -59,9 +62,20 @@ private:
     double periodNs_ = 1.0;
     uint64_t validMask_ = ~0ull;
     double passLogMs_ = -1.0;               // BRO_SCENE_GPU_PASSES (< 0: passes untimed)
+    // The slot's render's ms, read once its ticket completed (and its pass
+    // and fragment lines logged).
+    double harvest(uint32_t pair);
+
     uint32_t recordingPair_ = UINT32_MAX;   // slot begun in the open command buffer
-    uint32_t pendingPair_ = UINT32_MAX;     // slot of the last submitted render
-    uint64_t pendingTicket_ = 0;
+    // Each slot's submitted render not read yet (its ticket, 0: none), and
+    // the order they went in (lower first).
+    uint64_t pendingTicket_[8] = {};
+    uint64_t pendingOrder_[8] = {};
+    uint64_t submits_ = 0;
+    // Renders read (by begin, before their slot's queries were reset) and
+    // not taken yet, oldest first.
+    double ready_[8] = {};
+    uint32_t readyCount_ = 0;
     // Each slot's marks: how many, and their names.
     uint32_t markCount_[8] = {};
     const char* markNames_[8][kMaxMarks] = {};

@@ -52,7 +52,14 @@ public:
     void shutdown();
 
     /// Start the next frame: close the current one, wait for the slot about to
-    /// be reused, run its deferred destructors and reset its arenas.
+    /// be reused, run its deferred destructors and reset its arenas. A frame
+    /// that took nothing of its slot (no command buffer, upload or descriptor
+    /// set) stays open instead, as the frame that follows, while the slot
+    /// next is still on the GPU: it holds no GPU
+    /// work to wait for, and closing it would spend a slot, so the next
+    /// frame's would be the one the GPU is still drawing (a headless
+    /// advanceTime of two steps, the first drawing nothing, waited each frame
+    /// for the frame before it).
     void beginFrame();
     /// Begin a frame if none has been begun yet (for standalone users).
     void ensureFrame() { if (serial_ == 0) beginFrame(); }
@@ -110,6 +117,7 @@ private:
         std::vector<VkCommandBuffer> commandBuffers;
         size_t nextCommandBuffer = 0;
         uint32_t openCommandBuffers = 0;
+        bool used = false;    // a command buffer, upload or descriptor set taken this frame
         uint64_t ticket = 0;  // retires every queue op of this slot's previous frame
         std::vector<std::function<void()>> deferred;
         std::vector<UploadChunk> uploads;

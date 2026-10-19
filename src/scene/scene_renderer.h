@@ -85,7 +85,8 @@ public:
     vk::SceneVkBridge* vkBridge() const { return vkBridge_.get(); }
     /// GPU milliseconds of the last render3D (timestamp queries), waiting for
     /// it; -1 when nothing was rendered or timed since the previous call.
-    double takeGpuMs();
+    /// Not `wait`: the oldest render finished and not read yet, -1 for none.
+    double takeGpuMs(bool wait = true);
 
     /// Read RGBA8 pixels of the LDR output (top-down row order).
     std::vector<uint8_t> readTonemapPixelsRGBA(int& outW, int& outH);

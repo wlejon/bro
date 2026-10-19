@@ -878,8 +878,15 @@ void installHeadlessFrame(engine::Engine& engine) {
             return o.get();
         });
     setPerfFn("gpuFrameMs", 0,
-        [&engine](Value, std::span<const Value>) -> Value {
-            return ev::fromDouble(engine.gpuFrameMs());
+        [&engine](Value, std::span<const Value> a) -> Value {
+            // ({ wait: false }): the oldest finished render not read yet,
+            // without waiting for the newest.
+            bool wait = true;
+            if (!a.empty() && ev::isObject(a[0])) {
+                const Value w = ev::getProperty(a[0], "wait");
+                if (!ev::isUndefined(w)) wait = ev::toBool(w);
+            }
+            return ev::fromDouble(engine.gpuFrameMs(wait));
         });
     ev::registerGlobal("perf", perf.get());
 }

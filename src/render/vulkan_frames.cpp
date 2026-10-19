@@ -76,6 +76,7 @@ void VulkanFrames::beginFrame() {
         auto hooks = frameEndHooks_;
         for (auto& [id, hook] : hooks) hook();
         Slot& closing = slots_[frameIndex()];
+        if (!closing.used && !queue().isComplete(slots_[(serial_ + 1) % kFramesInFlight].ticket)) return;
         if (closing.openCommandBuffers > 0) {
             LOG_ERROR("VulkanFrames: frame %llu ended with %u command buffer(s) never submitted",
                       static_cast<unsigned long long>(serial_), closing.openCommandBuffers);
@@ -97,6 +98,7 @@ void VulkanFrames::recycle(Slot& slot) {
     vkResetCommandPool(device, slot.commandPool, 0);
     slot.nextCommandBuffer = 0;
     slot.openCommandBuffers = 0;
+    slot.used = false;
 
     // A frame that needed more than one upload chunk gets one chunk big
     // enough for all of it next time, so the arena settles at one buffer.
@@ -132,6 +134,7 @@ VkCommandBuffer VulkanFrames::beginCommands() {
         slot.commandBuffers.push_back(cmd);
     }
     VkCommandBuffer cmd = slot.commandBuffers[slot.nextCommandBuffer++];
+    slot.used = true;
     VkCommandBufferBeginInfo begin{};
     begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -196,6 +199,7 @@ UploadSlice VulkanFrames::allocUpload(VkDeviceSize size, VkDeviceSize alignment)
     slice.size = size;
     slice.mapped = static_cast<char*>(chunk->mapped) + slice.offset;
     chunk->used = slice.offset + size;
+    slot.used = true;
     return slice;
 }
 
@@ -225,6 +229,7 @@ VkDescriptorPool VulkanFrames::createDescriptorPool() {
 VkDescriptorSet VulkanFrames::allocDescriptorSet(VkDescriptorSetLayout layout) {
     ensureFrame();
     Slot& slot = slots_[frameIndex()];
+    slot.used = true;
     for (;;) {
         const bool fresh = slot.activeDescriptorPool == slot.descriptorPools.size();
         if (fresh) {

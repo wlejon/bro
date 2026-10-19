@@ -98,6 +98,9 @@ void testQueueAndFrames(render::VulkanContext& ctx) {
     frames.defer([&] { ++destroyed; ctx.destroyBuffer(buf, id); });
     frames.beginFrame();  // frame `serial` closes; its slot is not reused yet
     CHECK(destroyed == 0);
+    // (A frame that takes nothing of its slot stays open while the next slot
+    // is on the GPU; this one takes an upload, so it closes.)
+    CHECK(frames.allocUpload(16));
     frames.beginFrame();  // the slot comes round: its submissions are complete
     CHECK(destroyed == 1);
     CHECK(queue.isComplete(t));

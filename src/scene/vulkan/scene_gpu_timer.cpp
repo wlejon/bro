@@ -4,7 +4,9 @@
 #include "render/vulkan_queue.h"
 #include "util/log.h"
 
+#include <algorithm>
 #include <cstdio>
+#include <iterator>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -59,9 +61,18 @@ void SceneGpuTimer::begin(VkCommandBuffer cmd) {
     const uint32_t pair = context_.frames().frameIndex();
     // A second render in the same frame slot would reset queries the first
     // may still be writing; it goes untimed and the first keeps its result.
-    if (pair == pendingPair_ && pendingTicket_ != 0 &&
-        !context_.queue().isComplete(pendingTicket_))
-        return;
+    // A finished one not taken yet is read before its queries are reset.
+    if (pendingTicket_[pair] != 0) {
+        if (!context_.queue().isComplete(pendingTicket_[pair])) return;
+        const double ms = harvest(pair);
+        if (ms >= 0.0) {
+            if (readyCount_ == std::size(ready_)) {
+                std::copy(ready_ + 1, ready_ + readyCount_, ready_);
+                --readyCount_;
+            }
+            ready_[readyCount_++] = ms;
+        }
+    }
     vkCmdResetQueryPool(cmd, pool_, kPerSlot * pair, kPerSlot);
     vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, pool_, kPerSlot * pair);
     recordingPair_ = pair;
@@ -100,19 +111,51 @@ void SceneGpuTimer::end(VkCommandBuffer cmd) {
 
 void SceneGpuTimer::submitted(uint64_t ticket) {
     if (recordingPair_ == UINT32_MAX || ticket == 0) return;
-    pendingPair_ = recordingPair_;
-    pendingTicket_ = ticket;
+    pendingTicket_[recordingPair_] = ticket;
+    pendingOrder_[recordingPair_] = ++submits_;
     recordingPair_ = UINT32_MAX;
 }
 
-double SceneGpuTimer::takeMs() {
-    if (pendingTicket_ == 0) return -1.0;
-    const uint64_t ticket = pendingTicket_;
-    pendingTicket_ = 0;
-    if (!context_.queue().wait(ticket)) return -1.0;
-    const uint32_t marks = markCount_[pendingPair_];
+double SceneGpuTimer::takeMs(bool wait) {
+    // The renders submitted and not read, oldest first: each finished one
+    // read; not `wait`ing, up to the first still on the GPU.
+    for (;;) {
+        uint32_t pair = UINT32_MAX;
+        for (uint32_t i = 0; i < render::VulkanFrames::kFramesInFlight; ++i)
+            if (pendingTicket_[i] != 0 && (pair == UINT32_MAX || pendingOrder_[i] < pendingOrder_[pair])) pair = i;
+        if (pair == UINT32_MAX) break;
+        if (!context_.queue().isComplete(pendingTicket_[pair])) {
+            if (!wait) break;
+            if (!context_.queue().wait(pendingTicket_[pair])) {
+                pendingTicket_[pair] = 0;
+                continue;
+            }
+        }
+        const double ms = harvest(pair);
+        if (ms < 0.0) continue;
+        if (readyCount_ == std::size(ready_)) {
+            std::copy(ready_ + 1, ready_ + readyCount_, ready_);
+            --readyCount_;
+        }
+        ready_[readyCount_++] = ms;
+    }
+    if (readyCount_ == 0) return -1.0;
+    if (wait) {
+        const double last = ready_[readyCount_ - 1];
+        readyCount_ = 0;
+        return last;
+    }
+    const double first = ready_[0];
+    std::copy(ready_ + 1, ready_ + readyCount_, ready_);
+    --readyCount_;
+    return first;
+}
+
+double SceneGpuTimer::harvest(uint32_t pair) {
+    pendingTicket_[pair] = 0;
+    const uint32_t marks = markCount_[pair];
     uint64_t stamps[kPerSlot] = {};
-    if (vkGetQueryPoolResults(context_.device(), pool_, kPerSlot * pendingPair_, 2 + marks, sizeof(stamps),
+    if (vkGetQueryPoolResults(context_.device(), pool_, kPerSlot * pair, 2 + marks, sizeof(stamps),
                               stamps, sizeof(uint64_t), VK_QUERY_RESULT_64_BIT) != VK_SUCCESS)
         return -1.0;
     const auto ms = [&](uint64_t from, uint64_t to) {
@@ -128,8 +171,8 @@ double SceneGpuTimer::takeMs() {
             const double d = ms(prev, stamps[2 + i]);
             prev = stamps[2 + i];
             // (A shadow tile's end stays, short or not: it bounds the tile's marks.)
-            if (d < 0.01 && std::strncmp(markNames_[pendingPair_][i], "shadow:tile", 11) != 0) continue;
-            std::snprintf(buf, sizeof(buf), " %s %.2f", markNames_[pendingPair_][i], d);
+            if (d < 0.01 && std::strncmp(markNames_[pair][i], "shadow:tile", 11) != 0) continue;
+            std::snprintf(buf, sizeof(buf), " %s %.2f", markNames_[pair][i], d);
             line += buf;
         }
         std::snprintf(buf, sizeof(buf), " rest %.2f", ms(prev, stamps[1]));
@@ -138,13 +181,13 @@ double SceneGpuTimer::takeMs() {
         // time is in `rest`.)
         if (marks >= kMaxMarks) line += " (marks full)";
         LOG_INFO("scene GPU %.2f ms:%s", total, line.c_str());
-        if (const uint32_t ns = statCount_[pendingPair_]; statPool_ != VK_NULL_HANDLE && ns > 0) {
+        if (const uint32_t ns = statCount_[pair]; statPool_ != VK_NULL_HANDLE && ns > 0) {
             uint64_t inv[kMaxStats] = {};
             std::string s;
-            if (vkGetQueryPoolResults(context_.device(), statPool_, kMaxStats * pendingPair_, ns, sizeof(inv), inv,
+            if (vkGetQueryPoolResults(context_.device(), statPool_, kMaxStats * pair, ns, sizeof(inv), inv,
                                       sizeof(uint64_t), VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT) == VK_SUCCESS) {
                 for (uint32_t i = 0; i < ns; ++i) {
-                    std::snprintf(buf, sizeof(buf), " %s %llu", statNames_[pendingPair_][i],
+                    std::snprintf(buf, sizeof(buf), " %s %llu", statNames_[pair][i],
                                   static_cast<unsigned long long>(inv[i]));
                     s += buf;
                 }

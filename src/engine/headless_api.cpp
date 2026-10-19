@@ -520,16 +520,16 @@ bool Engine::screenshot(const std::string& path, int cx, int cy, int cw, int ch)
 }
 
 // Sum of the scene graphs' last renders, each from its own timestamp pair;
-// reading one waits for that render's ticket. Without a newer render, the
-// previous answer stands.
-double Engine::gpuFrameMs() {
+// reading one waits for that render's ticket (`wait`), or takes the oldest
+// render finished and not read yet. Without one, the previous answer stands.
+double Engine::gpuFrameMs(bool wait) {
 #if BRO_WITH_3D
     renderPendingScenes(true);
     double sum = 0.0;
     bool timed = false;
     for (auto& sg : sceneGraphs_) {
         if (!sg.graph) continue;
-        const double ms = sg.graph->renderer().takeGpuMs();
+        const double ms = sg.graph->renderer().takeGpuMs(wait);
         if (ms >= 0.0) { sum += ms; timed = true; }
     }
     if (timed) lastGpuFrameMs_ = sum;

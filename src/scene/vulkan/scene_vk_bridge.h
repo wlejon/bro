@@ -63,8 +63,9 @@ public:
     /// compositor reading every frame pays no extra submission.
     std::vector<uint8_t> readTonemapPixelsRGBA(int& outW, int& outH);
     /// GPU milliseconds of the last render, waiting on its ticket; -1 when
-    /// nothing was rendered (or timed) since the previous call.
-    double takeGpuMs() { return timer_.takeMs(); }
+    /// nothing was rendered (or timed) since the previous call. Not `wait`:
+    /// the oldest render finished and not read yet (SceneGpuTimer::takeMs).
+    double takeGpuMs(bool wait = true) { return timer_.takeMs(wait); }
 
 private:
     bool ensureReadbackBuffer();
