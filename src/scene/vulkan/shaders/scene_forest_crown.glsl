@@ -59,14 +59,24 @@ const float FOREST_CROWN_SELF_MAX = 0.75;
 // A crown is traced a run of clumps at a time (coarse) once its mean clump
 // is under this many pixels in radius.
 const float FOREST_COARSE_PIXELS = 3.0;
+// A crown traces each run of its clumps as the one ellipsoid it fills once
+// its mean clump is under this many pixels in radius.
+const float FOREST_FILL_PIXELS = 3.0;
+// The share of its fitted radii a run's ellipsoid is traced at: fitted to
+// the clumps' second moments it spans the gaps about its edge they leave
+// open, and its leaves are dense enough that the chord through them all
+// but closes (a needle crown covered 2.5 points more of its view than clump
+// by clump at 300-1150 m, its share of the light 0.7 levels under; at 0.9
+// 1.6-2.1 points and 0.5, a broadleaf's and a scale leaf's within 0.1).
+const float FOREST_FILL_SHRINK = 0.9;
 
 // The crown of instance `instance` along unit `d`, its clumps moved by
 // `offset` (the crown's pose). `len` and `aspect` a leaf's length (world)
 // and width over length; `grain` the pixel's wander (forestMassGrain).
 // `pixel` the size of a pixel (world) at the crown: where its clumps are
-// each under about a pixel, each run of them is traced as the one
-// ellipsoid it fills (the block's second and third records), not clump by
-// clump, the crown's outline and mass the same at a fraction of the cost.
+// each a few pixels or less, each run of them is traced as the one
+// ellipsoid it fills (its block's FOREST_BLOCK_FILL), not clump by clump,
+// the crown's outline and lumps kept at a fraction of the cost.
 // `pick` the pixel's own draw in [0, 1).
 ForestCrownHit forestCrownTrace(vec3 d, int instance, vec3 offset, float len, float aspect, vec4 grain,
                                 float pixel, float pick) {
@@ -139,11 +149,21 @@ ForestCrownHit forestCrownTrace(vec3 d, int instance, vec3 offset, float len, fl
     // opened the curtain at range, 150 m cover 0.80 of the leaves', not
     // 0.86.)
     if (pinnate) stride = 1;
+    // Under FOREST_FILL_PIXELS a run of clumps is traced as the upright
+    // ellipsoid it fills (its block's FOREST_BLOCK_FILL), at their leaves'
+    // mean density: one chord a run, not one a clump, the crown's lumps
+    // kept a run apiece (most of a far forest's crowns are 10-25 px in
+    // radius, their clumps 2-5 px: clump by clump they were most of its
+    // frame from a mountain).
+    bool runFill = !pinnate && px < FOREST_FILL_PIXELS;
+    if (runFill) stride = FOREST_CLUMP_BLOCK;
+    // (The mean clump's radius, world, as traced.)
+    float clumpR = FOREST_FLOAT(sr, FOREST_SP_CLUMP_RADIUS) * scale * fill;
     float grow = stride == 4 ? 1.587 : stride == 2 ? 1.26 : 1.0;
     // The clumps in runs of FOREST_CLUMP_BLOCK that lie together
-    // (ForestNode::kClumpBlock), two records a run from the specimen's first
-    // (FOREST_SP_BLOCKS): its bounding sphere, which a ray that misses
-    // skips the run by, and its clumps.
+    // (ForestNode::kClumpBlock), FOREST_BLOCK_RECORDS a run from the
+    // specimen's first (FOREST_SP_BLOCKS): its bounding sphere, which a ray
+    // that misses skips the run by, its clumps, and the ellipsoid they fill.
     int blocks = floatBitsToInt(FOREST_FLOAT(sr, FOREST_SP_BLOCKS));
     // The ray in the specimen's own space (the instance is a turn about +Y
     // and a uniform scale, so its clumps stay upright there): o + e t, t
@@ -165,18 +185,32 @@ ForestCrownHit forestCrownTrace(vec3 d, int instance, vec3 offset, float len, fl
         // wholly behind the second changes neither.
         if (tauAll > 6.0 && tc - BR > t2) continue;
         // The run's clumps, two 16-bit specimen indices to a float.
-        uvec4 run = floatBitsToUint(FOREST_RECORD(blocks + b * FOREST_BLOCK_RECORDS, FOREST_BLOCK_CLUMPS));
+        int blk = blocks + b * FOREST_BLOCK_RECORDS;
+        uvec4 run = floatBitsToUint(FOREST_RECORD(blk, FOREST_BLOCK_CLUMPS));
         for (int j = 0; j < FOREST_CLUMP_BLOCK; j += stride) {
-            int i = int((run[j >> 1] >> uint((j & 1) * 16)) & 0xffffu);
-            if (i == 0xffff) break;
-            if (procClumpBare(instance, first + i)) continue;
-            int r = clumpBase + (first + i) * FOREST_CLUMP_RECORDS;
-            vec4 c = FOREST_RECORD(r, FOREST_CLUMP_CENTRE);
-            float leaves = FOREST_FLOAT(r, FOREST_CLUMP_LEAVES) * float(stride);
-            // 0.9 of the radius up and 0.7 down about the clump's centre:
-            // 0.8 up about a point 0.1 above it, times the flatness.
-            float rr = c.w * grow * fill, ry = 0.8 * flatness * rr;
-            vec3 cs = c.xyz + vec3(0.0, 0.1 * rr * flatness, 0.0);
+            int r = 0;
+            vec4 c = vec4(0.0);
+            float leaves, rr, ry;
+            vec3 cs;
+            if (runFill) {
+                vec4 f = FOREST_RECORD(blk, FOREST_BLOCK_FILL);
+                leaves = FOREST_FLOAT(blk, FOREST_BLOCK_LEAVES);
+                rr = f.w * fill * FOREST_FILL_SHRINK;
+                ry = FOREST_FLOAT(blk, FOREST_BLOCK_FILL_UP) * fill * FOREST_FILL_SHRINK;
+                cs = f.xyz;
+            } else {
+                int i = int((run[j >> 1] >> uint((j & 1) * 16)) & 0xffffu);
+                if (i == 0xffff) break;
+                if (procClumpBare(instance, first + i)) continue;
+                r = clumpBase + (first + i) * FOREST_CLUMP_RECORDS;
+                c = FOREST_RECORD(r, FOREST_CLUMP_CENTRE);
+                leaves = FOREST_FLOAT(r, FOREST_CLUMP_LEAVES) * float(stride);
+                // 0.9 of the radius up and 0.7 down about the clump's centre:
+                // 0.8 up about a point 0.1 above it, times the flatness.
+                rr = c.w * grow * fill;
+                ry = 0.8 * flatness * rr;
+                cs = c.xyz + vec3(0.0, 0.1 * rr * flatness, 0.0);
+            }
             // The chord, the ellipsoid scaled to a sphere.
             vec3 oc, es;
             if (pinnate) {
@@ -214,11 +248,18 @@ ForestCrownHit forestCrownTrace(vec3 d, int instance, vec3 offset, float len, fl
             // (Its height over its width; a pinnate run's long axis is its
             // wood's, lit as round.)
             float ky = pinnate ? 1.0 : RY / R;
+            // The leaf seen in a run lies in one of its clumps, at a clump's
+            // density (its share of the run's leaves in the specimen's mean
+            // clump), not the run's mean through its gaps.
+            float seenSigma = runFill
+                ? leaves / float(min(FOREST_CLUMP_BLOCK, count - b * FOREST_CLUMP_BLOCK)) * leafArea /
+                      (4.18879 * clumpR * clumpR * 0.8 * flatness * clumpR)
+                : sigma;
             if (t.x < t1) {
                 t2 = t1; tau2 = tau1; s2 = s1; d2 = d1; y2 = y1;
-                t1 = t.x; tau1 = tau; s1 = vec4(C, R); d1 = sigma; y1 = ky;
+                t1 = t.x; tau1 = tau; s1 = vec4(C, R); d1 = seenSigma; y1 = ky;
             } else if (t.x < t2) {
-                t2 = t.x; tau2 = tau; s2 = vec4(C, R); d2 = sigma; y2 = ky;
+                t2 = t.x; tau2 = tau; s2 = vec4(C, R); d2 = seenSigma; y2 = ky;
             }
         }
     }
@@ -251,5 +292,12 @@ ForestCrownHit forestCrownTrace(vec3 d, int instance, vec3 offset, float len, fl
     h.sphere = vec4(S.xyz, S.w / grow);
     h.density = sig;
     h.flatness = ky;
+    // A run's: the clump it lies in, a mean clump about half its radius in
+    // from where the leaf is (lit through the run's ellipsoid, a scale
+    // leaf's crowns, shaded through their one clump, went 23 levels dark).
+    if (runFill) {
+        h.sphere = vec4(h.at - h.normal * (0.5 * clumpR), clumpR);
+        h.flatness = 0.8 * flatness;
+    }
     return h;
 }

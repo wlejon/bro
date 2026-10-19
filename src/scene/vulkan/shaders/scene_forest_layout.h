@@ -106,11 +106,14 @@
 #define FOREST_VEG_LIMB         14
 #define FOREST_VEG_TRUNK        15
 
-// --- A clump block: 2 records per run of FOREST_CLUMP_BLOCK of a specimen's clumps ---
+// --- A clump block: 4 records per run of FOREST_CLUMP_BLOCK of a specimen's clumps ---
 #define FOREST_CLUMP_BLOCK      8
-#define FOREST_BLOCK_RECORDS    2
+#define FOREST_BLOCK_RECORDS    4
 #define FOREST_BLOCK_SPHERE     0    // aligned: the sphere round their ellipsoids (centre.xyz, radius)
 #define FOREST_BLOCK_CLUMPS     4    // aligned: bits: the clumps, 16 bits each, two a float, 0xffff past the last
+#define FOREST_BLOCK_FILL       8    // aligned: the upright ellipsoid the run fills (centre.xyz, radius across)
+#define FOREST_BLOCK_FILL_UP    12   // its radius up
+#define FOREST_BLOCK_LEAVES     13   // the run's leaves
 
 // --- Leaves: two a record (clump, placement key), bits ---
 #define FOREST_LEAVES_PER_RECORD 2
@@ -206,7 +209,7 @@
 #if FOREST_INST_POSITION % 4 != 0 || FOREST_INST_SCALE != FOREST_INST_POSITION + 3 || FOREST_INST_COS_YAW % 4 != 0 || \
     FOREST_INST_SIN_YAW != FOREST_INST_COS_YAW + 1 || FOREST_BLOOM_POSITION % 4 != 0 || \
     FOREST_BLOOM_SIZE != FOREST_BLOOM_POSITION + 3 || FOREST_BLOOM_DIR % 4 != 0 || \
-    FOREST_BLOCK_SPHERE % 4 != 0 || FOREST_BLOCK_CLUMPS % 4 != 0
+    FOREST_BLOCK_SPHERE % 4 != 0 || FOREST_BLOCK_CLUMPS % 4 != 0 || FOREST_BLOCK_FILL % 4 != 0
 #error "scene_forest_layout.h: an instance, bloom or block record's fields moved"
 #endif
 #if FOREST_E_INSTANCE % 4 != 0 || FOREST_E_WIDENING % 4 != 0 || FOREST_E_SLOT % 4 != 0

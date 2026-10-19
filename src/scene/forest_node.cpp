@@ -932,6 +932,41 @@ const std::vector<float>& ForestNode::gpuData() const {
                 const uint32_t hi = i0 + j + 1 < i1 ? order[i0 + j + 1] : 0xffffu;
                 d[FOREST_BLOCK_CLUMPS + j / 2] = bitsOf(lo | (hi << 16));
             }
+            // The upright ellipsoid the run's clumps fill: the one with their
+            // union's second moments (a solid ellipsoid's are a fifth of its
+            // radius squared an axis), each clump's ellipsoid weighted by its
+            // volume (its radius across, 0.8 of it times the specimen's
+            // flatness up about a point 0.1 of that above its centre, as
+            // scene_forest_crown.glsl traces it), and their leaves: what a
+            // crown whose clumps are each a few pixels traces in their place.
+            const float flat = s.clumpFlat > 0.0f ? s.clumpFlat : 1.0f;
+            double W = 0.0, sx = 0.0, sy = 0.0, sz = 0.0, leaves = 0.0;
+            for (uint32_t i = i0; i < i1; ++i) {
+                const float* q = &a.clumps[(s.clumpStart + order[i]) * rec::clump::kFloats];
+                const double cr = q[rec::clump::kRadius], w = cr * cr * cr;
+                W += w;
+                sx += w * q[rec::clump::kCentre];
+                sy += w * (q[rec::clump::kCentre + 1] + 0.1 * cr * flat);
+                sz += w * q[rec::clump::kCentre + 2];
+                leaves += q[rec::clump::kLeafCount];
+            }
+            W = std::max(W, 1e-12);
+            const double fx = sx / W, fy = sy / W, fz = sz / W;
+            double across = 0.0, up = 0.0;
+            for (uint32_t i = i0; i < i1; ++i) {
+                const float* q = &a.clumps[(s.clumpStart + order[i]) * rec::clump::kFloats];
+                const double cr = q[rec::clump::kRadius], w = cr * cr * cr, ry = 0.8 * flat * cr;
+                const double dx = q[rec::clump::kCentre] - fx, dz = q[rec::clump::kCentre + 2] - fz;
+                const double dy = q[rec::clump::kCentre + 1] + 0.1 * cr * flat - fy;
+                across += w * (0.5 * (dx * dx + dz * dz) + 0.2 * cr * cr);
+                up += w * (dy * dy + 0.2 * ry * ry);
+            }
+            d[FOREST_BLOCK_FILL] = static_cast<float>(fx);
+            d[FOREST_BLOCK_FILL + 1] = static_cast<float>(fy);
+            d[FOREST_BLOCK_FILL + 2] = static_cast<float>(fz);
+            d[FOREST_BLOCK_FILL + 3] = static_cast<float>(std::sqrt(5.0 * across / W));
+            d[FOREST_BLOCK_FILL_UP] = static_cast<float>(std::sqrt(5.0 * up / W));
+            d[FOREST_BLOCK_LEAVES] = static_cast<float>(leaves);
         }
     }
     for (size_t i = 0; i < nLeaf; ++i) {

@@ -246,9 +246,11 @@ public:
     static constexpr int kLeafForms = 3;
     /// A crown traces its clumps in runs of this many that lie together, each
     /// run bounded by a sphere its ray can skip (gpuData's block records: the
-    /// sphere, then the run's clumps as 16-bit specimen indices).
+    /// sphere, the run's clumps as 16-bit specimen indices, then the upright
+    /// ellipsoid they fill and their leaves, which a far crown traces in
+    /// their place).
     static constexpr uint32_t kClumpBlock = 8;
-    static constexpr uint32_t kBlockRecords = 2;
+    static constexpr uint32_t kBlockRecords = 4;
     /// The share of a spray's card its needles or scales cover (mesh.frag's
     /// forestSprayCover averages to it), by leaf form.
     static float sprayFill(int leafForm) { return leafForm == 1 ? 0.45f : leafForm == 2 ? 0.47f : 1.0f; }
