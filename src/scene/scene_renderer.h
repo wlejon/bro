@@ -54,6 +54,11 @@ struct CullStats {
     // re-rendering, and tiles whose previous content is still valid. A cached
     // tile contributes nothing to shadowDrawn/shadowCulled.
     int shadowTilesTotal = 0, shadowTilesRendered = 0, shadowTilesCached = 0;
+    // Tiles standing in for this frame with the depth the frame before drew
+    // (a sun's last cascade, drawn every other frame): not exact, so apart
+    // from shadowTilesCached.
+    int shadowTilesHeld = 0;
+    uint32_t shadowTilesHeldMask = 0;   // the held tiles, a bit per atlas slot
 };
 
 class SceneRenderer {
@@ -323,9 +328,11 @@ public:
     /// camera motion — the cascade fit follows the camera), or the set of
     /// casters overlapping the tile changed membership or mutated (transform,
     /// geometry, visibility). Tiles overlapping skinned or custom-vertex
-    /// casters are permanently dynamic and re-render every frame. Strictly
-    /// conservative: pixels are identical with the cache on or off — the
-    /// escape hatch exists for debugging and regression bisecting.
+    /// casters are permanently dynamic and re-render every frame. A sun's
+    /// last cascade (of three or more) is also drawn every other frame,
+    /// standing in for the frame between while the view's fit still lies
+    /// inside the window it was drawn with (planShadowTiles). Off, every
+    /// tile re-renders every frame, for debugging and regression bisecting.
     void setShadowCache(bool on) {
         if (on != shadowCacheEnabled_) {
             shadowCacheEnabled_ = on;
@@ -454,6 +461,7 @@ public:
     /// all (the atlas they were drawn into is gone).
     void invalidateShadowCache() {
         for (auto& e : shadowTileCache_) e.valid = false;
+        for (auto& e : shadowFarHeld_) e.held = false;
     }
 
 private:
@@ -618,6 +626,15 @@ private:
     };
     ShadowTileCacheEntry shadowTileCache_[kMaxShadowTiles];
     bool shadowCacheEnabled_ = true;
+    // A sun's last cascade as last drawn (ShadowTilePlan::farCascade): held
+    // when drawn the frame before, so this frame may sample it in its place.
+    struct ShadowFarEntry {
+        bool held = false;
+        uint32_t lightId = 0;
+        ShadowTilePlan tile;
+        bromath::Vec3 origin{0.0f, 0.0f, 0.0f};   // the eye its relViewProj is relative to
+    };
+    ShadowFarEntry shadowFarHeld_[kMaxShadowTiles];
 
     // Per-frame shadow caster lists; rebuilt at the top of prepareShadows.
     // Skinned casters deform with the palette; casters whose custom shader

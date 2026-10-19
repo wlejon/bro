@@ -297,6 +297,8 @@ const char* bro_scene_SceneGraph_cullStatsJson(void* self) {
     j["shadowTilesTotal"] = s.shadowTilesTotal;
     j["shadowTilesRendered"] = s.shadowTilesRendered;
     j["shadowTilesCached"] = s.shadowTilesCached;
+    j["shadowTilesHeld"] = s.shadowTilesHeld;
+    j["shadowTilesHeldMask"] = s.shadowTilesHeldMask;
     tl_cullJson = j.dump();
     return tl_cullJson.c_str();
 }

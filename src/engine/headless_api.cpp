@@ -576,6 +576,8 @@ scene::CullStats Engine::sceneCullStats() const {
         sum.shadowTilesTotal    += s.shadowTilesTotal;
         sum.shadowTilesRendered += s.shadowTilesRendered;
         sum.shadowTilesCached   += s.shadowTilesCached;
+        sum.shadowTilesHeld     += s.shadowTilesHeld;
+        sum.shadowTilesHeldMask |= s.shadowTilesHeldMask;
     }
     return sum;
 }

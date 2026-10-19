@@ -14,6 +14,9 @@
 //     the camera) but NOT spot/point tiles (camera-independent).
 //   - Skinned casters are permanently dynamic: their tiles re-render every
 //     frame even when nothing changed.
+//   - A sun's last cascade (of three or more) is drawn every other frame
+//     while the view's fit stays inside the window it was drawn with
+//     (shadowTilesHeld / shadowTilesHeldMask), and looks as a fresh draw.
 
 function diffCount(a, b, tol) {
     if (a.width !== b.width || a.height !== b.height) return a.width * a.height;
@@ -281,6 +284,65 @@ if (!probe.scene) {
                 `skinned caster keeps its tile dynamic (frame ${i}: ` +
                 `${st.shadowTilesRendered}/${st.shadowTilesCached})`);
         }
+
+        dropScene(s);
+    }
+
+    // =====================================================================
+    // Section 5: a sun's last cascade (of three or more) is drawn every
+    // other frame while the camera moves: the frame between samples the
+    // draw before through the window it was drawn with (shadowTilesHeld),
+    // and looks as a fresh draw does. A jump past that window draws it anew.
+    // =====================================================================
+    {
+        const s = freshScene(160);
+        const scn = s.scene;
+        const cam = (x) => scn.setCamera({ fov: 50, near: 0.1, far: 80,
+                                           position: [x, 6, 14], target: [x, 0, 0] });
+        cam(0);
+        scn.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+        scn.createMesh({ mesh: 'plane', halfW: 40, halfD: 40, color: 'white',
+                         castsShadow: false, y: 0 });
+        for (let i = -4; i <= 4; ++i)
+            scn.createMesh({ mesh: 'box', color: 'red', x: i * 4, y: 1, z: -i * 3 });
+        const sun = scn.createLight({ type: 'directional',
+                                      direction: [-0.3, -1, -0.2], intensity: 2 });
+        sun.castsShadow = true;
+        sun.cascadeCount = 3;
+
+        scn.captureFrame();
+        let held = 0, drawn = 0;
+        for (let i = 1; i <= 6; ++i) {
+            cam(i * 0.01);
+            scn.captureFrame();
+            const st = scn.cullStats();
+            assert(st.shadowTilesTotal === 3, `three cascades (${st.shadowTilesTotal})`);
+            assert(st.shadowTilesRendered + st.shadowTilesHeld === 3 && st.shadowTilesCached === 0,
+                `a moving camera draws or holds every cascade (frame ${i}: ` +
+                `${st.shadowTilesRendered}/${st.shadowTilesHeld})`);
+            held += st.shadowTilesHeld;
+            drawn += st.shadowTilesRendered;
+        }
+        assert(held === 3 && drawn === 15, `the last cascade held every other frame (${held} held, ${drawn} drawn)`);
+
+        // A held frame against the same view with every tile drawn.
+        cam(0.07);
+        const heldImg = scn.captureFrame();
+        assert(scn.cullStats().shadowTilesHeld === 1 && scn.cullStats().shadowTilesHeldMask === 4,
+            'this frame holds the last cascade');
+        scn.setShadowCache({ enabled: false });
+        const drawnImg = scn.captureFrame();
+        scn.setShadowCache({ enabled: true });
+        const off = diffCount(heldImg, drawnImg, 2);
+        assert(off < 160 * 160 / 200, `a held cascade looks as a drawn one (${off} px off)`);
+
+        // A jump far past the window: drawn again, not held.
+        scn.captureFrame();
+        cam(30);
+        scn.captureFrame();
+        const st = scn.cullStats();
+        assert(st.shadowTilesHeld === 0 && st.shadowTilesRendered === 3,
+            `a jump draws every cascade (${st.shadowTilesRendered}/${st.shadowTilesHeld})`);
 
         dropScene(s);
     }

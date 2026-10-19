@@ -1296,7 +1296,11 @@ void SceneMeshDrawer::settleDetail(ForestDetail& d, const SceneFrame& frame, flo
         return prev;
     };
     detail = d.detail = settle(d.detail, detail);
-    shadowDetail = d.shadow = settle(d.shadow, shadowDetail);
+    // A frame holding a shadow tile (a sun's last cascade, drawn every
+    // other frame) draws fewer casters: the shadow's fit there is not the
+    // drawn frames', so its detail keeps theirs.
+    const bool hold = frame.renderer.shadowPlan().heldTiles > 0 && !snap && d.shadow > 0.0f;
+    shadowDetail = d.shadow = hold ? d.shadow : settle(d.shadow, shadowDetail);
 }
 
 void SceneMeshDrawer::prepareForests(SceneFrame& frame, const std::vector<ForestNode*>& nodes,

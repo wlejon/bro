@@ -167,6 +167,24 @@ function run(scene) {
         const moving = diffCount(m0, m1, 2);
         assert(moving > 10, name + ': sways in a wind (' + moving + ' px changed)');
         assert(scene.cullStats().shadowTilesCached === 0, name + ': swaying casters keep the shadow tiles dynamic');
+        // The sun's last cascade (of three or more) is drawn every other
+        // frame, so its far shadows lag a frame's sway on the frame between
+        // (shadowTilesHeld); every nearer cascade is drawn every frame.
+        let wasHeld = false, heldFrames = 0;
+        for (let i = 0; i < 6; i++) {
+            scene.captureFrame();
+            const st = scene.cullStats();
+            assert(st.shadowTilesCached === 0, name + ': a swaying frame caches no tile');
+            assert(st.shadowTilesHeld <= (st.shadowTilesTotal >= 3 ? 1 : 0) &&
+                   st.shadowTilesRendered + st.shadowTilesHeld === st.shadowTilesTotal,
+                name + `: only the last cascade is held (${st.shadowTilesRendered} drawn, ${st.shadowTilesHeld} held)`);
+            assert(!st.shadowTilesHeld || st.shadowTilesHeldMask === 1 << (st.shadowTilesTotal - 1),
+                name + `: the held tile is the last cascade (mask ${st.shadowTilesHeldMask})`);
+            assert(!(wasHeld && st.shadowTilesHeld), name + ': the last cascade is drawn at least every other frame');
+            wasHeld = st.shadowTilesHeld > 0;
+            if (wasHeld) heldFrames++;
+        }
+        assert(heldFrames === 3 || scene.cullStats().shadowTilesTotal < 3, name + `: held every other frame (${heldFrames} of 6)`);
         for (const n of nodes) n.destroy();
     }
 }

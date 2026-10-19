@@ -186,6 +186,7 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
     // Reset per-frame shadow state. Default every light to "no shadow".
     ShadowPlan& plan = shadowPlan_;
     plan.tileCount = 0;
+    plan.heldTiles = 0;
     plan.origin = graph_.cameraEye_;
     plan.pcfTaps = shadowPCFTaps_;
     plan.atlasSize = std::max(1, std::min(shadowAtlasSize_, shadowAtlasLimit_));
@@ -338,6 +339,7 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
         t.ortho = ortho;
         t.render = false;
         t.light = L;
+        t.farCascade = false;
     };
 
     // For each shadow-casting light, allocate slot(s) and build matrices.
@@ -488,6 +490,7 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
                 for (int k = 0; k < np; ++k)
                     radius = std::max(radius, bromath::vlen(pts[k] - center));
                 if (radius < 1e-3f) radius = 1.0f;
+                const float fitRadius = radius;
                 // Quantise the radius to eighth-octave steps: a pan that
                 // changes the clipped shape a little must not change the
                 // texel size a little, or every shadow edge re-samples every
@@ -499,6 +502,7 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
                 // the snapped centre back relative to the eye.
                 const float texelSize = (2.0f * radius) / (float)tilePx;
                 Vec3 cLS = bromath::mtransformPoint(lightRot, center);
+                const Vec3 fitLS = cLS;
                 for (int a = 0; a < 2; ++a) {
                     const double abs = (double)(a == 0 ? cLS.x : cLS.y) + eyeLS[a];
                     const double snapped = std::floor(abs / texelSize) * texelSize;
@@ -520,6 +524,21 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
                 Mat4 projView = bromath::mmul(relProjView, bromath::mtranslate(-eye));
                 bakeTile(firstSlot + c, relProjView, projView, L, texelSize, 0.0f,
                          nearD, farD, true);
+                if (N >= 3 && c == N - 1) {
+                    ShadowTilePlan& t = plan.tiles[firstSlot + c];
+                    t.farCascade = true;
+                    t.lightDir = d;
+                    t.lightEye[0] = eyeLS[0];
+                    t.lightEye[1] = eyeLS[1];
+                    t.lightEye[2] = bromath::vdot(eye, d);
+                    t.windowCentre[0] = cLS.x;
+                    t.windowCentre[1] = cLS.y;
+                    t.windowRadius = radius;
+                    t.fitCentre[0] = fitLS.x;
+                    t.fitCentre[1] = fitLS.y;
+                    t.fitCentre[2] = centerD;
+                    t.fitRadius = fitRadius;
+                }
                 plan.tileCount++;
             }
         }
@@ -696,8 +715,47 @@ void SceneRenderer::planShadowTiles() {
             cullStats_.shadowTilesCached++;
             continue;
         }
+        // A sun's last cascade is drawn every other frame: the frame after
+        // one draws it samples that draw, through the window it was drawn
+        // with, while every receiver it shades (the sphere this frame's fit
+        // bounds) still lies inside that window and its depth range. Its
+        // texels are a metre or so across, so a frame's sway of its casters
+        // is under one; a sun that turned or a view that jumped draws it anew.
+        ShadowFarEntry& far = shadowFarHeld_[slot];
+        if (tile.farCascade && far.held && far.lightId == lightId) {
+            const ShadowTilePlan& was = far.tile;
+            bool inside = was.lightDir.x == tile.lightDir.x && was.lightDir.y == tile.lightDir.y &&
+                          was.lightDir.z == tile.lightDir.z && was.windowRadius == tile.windowRadius;
+            for (int a = 0; a < 2 && inside; ++a) {
+                const double off = (tile.fitCentre[a] + tile.lightEye[a]) - (was.windowCentre[a] + was.lightEye[a]);
+                inside = std::abs(off) + tile.fitRadius <= was.windowRadius;
+            }
+            if (inside) {
+                const double depth = tile.fitCentre[2] + tile.lightEye[2];
+                inside = depth - tile.fitRadius >= was.zNear + was.lightEye[2] &&
+                         depth + tile.fitRadius <= was.zFar + was.lightEye[2];
+            }
+            if (inside) {
+                const float rect[4] = {tile.rect[0], tile.rect[1], tile.rect[2], tile.rect[3]};
+                tile = was;
+                std::memcpy(tile.rect, rect, sizeof(rect));
+                tile.relViewProj = bromath::mmul(was.relViewProj, bromath::mtranslate(plan.origin - far.origin));
+                tile.render = false;
+                far.held = false;
+                cullStats_.shadowTilesHeld++;
+                cullStats_.shadowTilesHeldMask |= 1u << slot;
+                plan.heldTiles++;
+                continue;
+            }
+        }
         tile.render = true;
         cullStats_.shadowTilesRendered++;
+        far.held = tile.farCascade;
+        if (far.held) {
+            far.lightId = lightId;
+            far.tile = tile;
+            far.origin = plan.origin;
+        }
         // Record what the tile is about to contain. Dynamic tiles never
         // validate — their casters mutate without a generation bump.
         e.valid = !dynamic;

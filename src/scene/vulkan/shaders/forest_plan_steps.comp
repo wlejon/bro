@@ -80,7 +80,12 @@ void main() {
         float prev = uintBitsToFloat(planShared.w[slot + q]);
         // settleDetail's settle().
         float d = target;
-        if (!(snap || prev <= 0.0)) {
+        // A frame holding a shadow tile (a sun's last cascade, drawn every
+        // other frame) draws fewer casters: the shadow's fit there is not
+        // the drawn frames', so its detail keeps theirs.
+        bool hold = pu(FP_P_SEARCH + 4u * q + FP_Q_HOLD) != 0u;
+        if (hold && !snap && prev > 0.0) d = prev;
+        else if (!(snap || prev <= 0.0)) {
             precise float up = prev * step;
             if (target > prev) d = min(target, up);
             else if (target < fdiv(prev, 1.04)) d = max(target, fdiv(prev, step));

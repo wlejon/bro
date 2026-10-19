@@ -341,6 +341,7 @@ bool SceneMeshDrawer::prepareForestsGpu(SceneFrame& frame, const std::vector<For
             const uint32_t at = FP_P_SEARCH + 4 * q;
             const uint64_t limit = budgets[q] > 0.0f ? limitOf(budgets[q]) : 0u;
             p[at + FP_Q_ON] = budgets[q] > 0.0f ? 1u : 0u;
+            p[at + FP_Q_HOLD] = q == 1 && shadows.heldTiles > 0 ? 1u : 0u;
             p[at + FP_Q_LIMIT] = static_cast<uint32_t>(limit);
             p[at + FP_Q_LIMIT + 1] = static_cast<uint32_t>(limit >> 32);
         }

@@ -37,6 +37,18 @@ struct ShadowTilePlan {
     bool ortho = true;
     bool render = false;         // re-render this frame (not cached)
     const LightNode* light = nullptr;
+    /// A sun's last cascade (of three or more), drawn every other frame
+    /// (SceneRenderer::planShadowTiles): its light direction, the light-space
+    /// eye it was fit about (x, y in the light's fixed basis, then depth
+    /// along the light), its window's centre relative to that, and the
+    /// sphere its receivers lie in (centre relative to the same eye).
+    bool farCascade = false;
+    bromath::Vec3 lightDir{0.0f, 0.0f, 0.0f};
+    double lightEye[3] = {};
+    float windowCentre[2] = {};
+    float windowRadius = 0.0f;
+    float fitCentre[3] = {};
+    float fitRadius = 0.0f;
 };
 
 struct ShadowPlan {
@@ -44,6 +56,7 @@ struct ShadowPlan {
     static constexpr int kMaxLights = 32;
 
     int tileCount = 0;
+    int heldTiles = 0;           // tiles standing in with the frame before's depth (planShadowTiles)
     bromath::Vec3 origin{0.0f, 0.0f, 0.0f};   // the camera eye relViewProj is relative to
     int atlasSize = 0;           // side of the square depth atlas, in texels
     int pcfTaps = 3;             // receiver PCF grid side: 1, 3 or 5

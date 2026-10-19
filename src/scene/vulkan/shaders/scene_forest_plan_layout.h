@@ -185,6 +185,7 @@
 // The search (the camera's, then the shadow's: FP_Q_* + 4 * search).
 #define FP_Q_ON                 0     // uint: a budget to fit
 #define FP_Q_LIMIT              1     // uint64 (lo, hi): the most vertices that fit
+#define FP_Q_HOLD               3     // uint: keep the settled detail (the shadow's, a frame holding a tile)
 #define FP_Q_SNAP               8     // uint: the settle snaps (a jump, a new budget, a new path)
 #define FP_Q_STEP               9     // float: the settle's rate this frame
 #define FP_Q_SLOT               10    // uint: the settled details' slot in SHARED

@@ -504,8 +504,9 @@ public:
 
     /// Static shadow-tile cache (default on): atlas tiles whose light
     /// projection and overlapping caster set are unchanged are reused
-    /// instead of re-rendered. Strictly conservative — pixels are identical
-    /// either way — so the toggle exists for debugging and bisecting.
+    /// instead of re-rendered, and a sun's last cascade (of three or more)
+    /// is drawn every other frame. Off, every tile re-renders every frame,
+    /// for debugging and bisecting.
     /// See SceneRenderer::setShadowCache.
     void setShadowCache(bool on) { renderer_.setShadowCache(on); }
     bool shadowCache() const { return renderer_.shadowCacheEnabled(); }
