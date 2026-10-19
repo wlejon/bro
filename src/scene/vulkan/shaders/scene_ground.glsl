@@ -172,12 +172,10 @@ void groundSurface(vec3 rel, vec4 vdata, inout vec3 color, inout vec3 N, inout f
     float fp = max(length(fwidth(rel)), 1e-4);
 
     // The ground's data: the field where it reaches (faded out over its last
-    // few metres), the mesh's own beyond.
+    // few metres, as the blades and herbs are), the mesh's own beyond.
     vec4 data = clamp(vdata, 0.0, 1.0);
+    float inside = grassFieldInside(xz);
     if (grassInField(xz)) {
-        vec2 q = (xz - grass.field.xy) / grass.field.z;
-        vec2 toEdge = min(q, grass.fieldSize.xy - 1.0 - q) * grass.field.z;
-        float inside = smoothstep(0.0, 12.0, min(toEdge.x, toEdge.y));
         vec4 f = grassFieldAt(xz);
         vec2 fl = grassFloorHerbsAt(xz);
         vec4 fd = vec4(f.g, f.b, fl.x, grass.pushRate.z > 0.5 ? fl.y : 0.0);
@@ -216,7 +214,8 @@ void groundSurface(vec3 rel, vec4 vdata, inout vec3 color, inout vec3 N, inout f
     // their shade (a gap among far blades is more grass, not a paler
     // ground). Where the blades end only their tops are seen.
     float d = length(vec2(length(rel.xz), grass.lod.w));   // as the rings measure it
-    float topSeen = smoothstep(grass.ring.y - 2.5 * grass.ring.w, grass.ring.y - 0.2 * grass.ring.w, d);
+    // (Off the field there are none: there it is their tops at any distance.)
+    float topSeen = 1.0 - (1.0 - smoothstep(grass.ring.y - 2.5 * grass.ring.w, grass.ring.y - 0.2 * grass.ring.w, d)) * inside;
     vec3 soil = vec3(0.065, 0.048, 0.03);
     float deep = smoothstep(10.0, 40.0, d);
     vec3 roots = mix(mix(soil, sward * grass.look.x, 0.6), sward * GRASS_TURF_DEPTH, deep);
@@ -335,7 +334,7 @@ void groundSurface(vec3 rel, vec4 vdata, inout vec3 color, inout vec3 N, inout f
     // tenth of a millisecond, even where no herbs grow.)
     if (grass.herbInfo.x > 0.5 && herbs > 0.0) {
         float tanView = -rel.y / max(length(rel.xz), 1e-3);
-        float stand = 1.0 - herbPlantsDrawn(d, grass.lod.w / max(length(rel.xz), 1e-3));
+        float stand = 1.0 - herbPlantsDrawn(d, grass.lod.w / max(length(rel.xz), 1e-3)) * inside;
         if (stand > 0.0) {
             HerbMix hm = herbMixMean(under, herbs, tanView);
             // The blooms patch by patch (herbBloomLocal): a colony's colour

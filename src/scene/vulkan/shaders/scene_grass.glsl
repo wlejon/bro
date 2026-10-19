@@ -98,6 +98,18 @@ bool grassInField(vec2 xz) {
     return q.x >= 0.0 && q.y >= 0.0 && q.x <= grass.fieldSize.x - 1.0 && q.y <= grass.fieldSize.y - 1.0;
 }
 
+// How far `xz` is inside the field: 0 off it and at its edge, 1 from
+// GRASS_FIELD_FADE m in. The blades and the herbs thin out over that margin
+// (a whole instance at a time, as a ring hands over) and the turf
+// (scene_ground.glsl) takes them as it does past their range, so the field's
+// end shows no line where the ground goes on past it.
+const float GRASS_FIELD_FADE = 12.0;
+float grassFieldInside(vec2 xz) {
+    vec2 q = (xz - grass.field.xy) / grass.field.z;
+    vec2 toEdge = min(q, grass.fieldSize.xy - 1.0 - q) * grass.field.z;
+    return smoothstep(0.0, GRASS_FIELD_FADE, min(toEdge.x, toEdge.y));
+}
+
 vec3 grassGroundNormal(vec2 xz) {
     float e = grass.field.z;
     float hx = grassFieldAt(xz + vec2(e, 0.0)).r - grassFieldAt(xz - vec2(e, 0.0)).r;
@@ -371,7 +383,7 @@ bool grassBlade(int id, int vid, vec3 v, vec3 vn, out GrassBlade b) {
     float fin = grass.ring.x <= 0.0 ? 1.0 : smoothstep(grass.ring.x - grass.ring.z, grass.ring.x, d);
     float fout = 1.0 - smoothstep(grass.ring.y - grass.ring.w, grass.ring.y, d);
     if (h.w > fin || h.w > fout) return false;
-    if (!grassInField(root)) return false;
+    if (!grassInField(root) || h.w > grassFieldInside(root)) return false;
     vec4 f = grassFieldAt(root);
 
     // Off screen: a generous box around the cell's middle.

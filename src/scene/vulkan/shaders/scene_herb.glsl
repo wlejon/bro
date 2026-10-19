@@ -190,7 +190,7 @@ bool herbVertex(int id, int vid, vec3 v, out HerbVertex o) {
         if (hk >= keep * herbFarSteep(d, grass.lod.w / horiz)) return false;
         farWiden = inversesqrt(keep);
     }
-    if (!grassInField(rootXZ)) return false;
+    if (!grassInField(rootXZ) || h.w > grassFieldInside(rootXZ)) return false;
 
     // Which card of the instance this is, and whether the far ring keeps it.
     int K = int(grass.herbShape.x + 0.5);
