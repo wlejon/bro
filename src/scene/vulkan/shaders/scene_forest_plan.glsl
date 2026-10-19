@@ -490,6 +490,36 @@ uint gAt[FP_GROUPS];
 uint gSlot[2];
 bool gPosed[2];
 uint gEntryCap;
+// A broad tree's twigs, a clump at a time, are the workgroup's when the
+// stage defers them (gDeferTwigs; forest_plan_place.comp's twigs()): the
+// tree's thread leaves its job here, its clumps and what they are measured
+// against, and in MODE_EMIT moves its twig groups' places past them
+// (gTwigTotal, the entries the count pass found). One thread looping a near
+// tree's clumps held its workgroup: on foot the search took 0.63 GPU ms.
+bool gDeferTwigs = false;
+struct TwigJob {
+    bool on;
+    uint first, count;    // its clumps
+    bool shoots, mayFine;
+    float shootMin, fineMin;
+    float widening, keep, fade;
+    uint base[2];         // MODE_EMIT: its first plain and fine twig entries
+};
+TwigJob gTwigJob;
+uint gTwigTotal[2];
+
+// A deferred twig job's clump `c` (addTree's twig loop, one turn of it): its
+// pieces and whether they are drawn fine.
+void twigClump(TwigJob j, Tree tr, uint c, out uint n, out bool fine) {
+    float radius = 0.0;
+    float cpx = j.shoots || j.mayFine ? planClumpPx(tr, c, radius) : 0.0;
+    precise float shootC = 2.0 * kTwigShootRadius * gLeafLength * cpx;
+    bool shootsC = j.shoots && shootC >= j.shootMin;
+    uint twigs = su(FP_ST_TWIGS);
+    n = shootsC ? su(twigs + 2u * c + 1u) : su(twigs + 2u * c);
+    precise float clumpW = radius * cpx;
+    fine = j.mayFine && clumpW >= j.fineMin;
+}
 
 void planReset() {
     gVerts = 0u;
@@ -497,8 +527,28 @@ void planReset() {
     gLeaves = 0u;
     gBlooms = 0u;
     for (int k = 0; k < FP_COLUMNS; ++k) gCount[k] = 0u;
+    gTwigJob.on = false;
+    gTwigJob.count = 0u;
 }
 
+// An entry written at `at` (past the room: dropped, its count still asked).
+void entryAt(uint at, uint inst, uint first, uint end, uint param, float widening, float keepEnd, float tail,
+             float fade, vec3 wood, uint slot) {
+    if (at >= gEntryCap) return;
+    uint b = at * uint(FOREST_ENTRY_RECORDS * 4);
+    planEntries.w[b + FOREST_E_INSTANCE] = inst;
+    planEntries.w[b + FOREST_E_FIRST] = first;
+    planEntries.w[b + FOREST_E_END] = end;
+    planEntries.w[b + FOREST_E_PARAM] = param;
+    planEntries.w[b + FOREST_E_WIDENING] = floatBitsToUint(widening);
+    planEntries.w[b + FOREST_E_KEEP_END] = floatBitsToUint(keepEnd);
+    planEntries.w[b + FOREST_E_TAIL] = floatBitsToUint(tail);
+    planEntries.w[b + FOREST_E_FADE] = floatBitsToUint(fade);
+    planEntries.w[b + FOREST_E_SLOT] = slot;
+    planEntries.w[b + FOREST_E_WOOD] = floatBitsToUint(wood.x);
+    planEntries.w[b + FOREST_E_WOOD + 1] = floatBitsToUint(wood.y);
+    planEntries.w[b + FOREST_E_WOOD + 2] = floatBitsToUint(wood.z);
+}
 void planEntry(int k, uint inst, uint first, uint end, uint param, float widening, float keepEnd, float tail,
                float fade, vec3 wood, bool camera) {
     bool leaf = camera && (k == G_LEAF_NEAR || k == G_LEAF_CARD);
@@ -514,20 +564,7 @@ void planEntry(int k, uint inst, uint first, uint end, uint param, float widenin
         if (gPosed[j]) slot = gSlot[j];
         gSlot[j] += end - first;
     }
-    if (at >= gEntryCap) return;
-    uint b = at * uint(FOREST_ENTRY_RECORDS * 4);
-    planEntries.w[b + FOREST_E_INSTANCE] = inst;
-    planEntries.w[b + FOREST_E_FIRST] = first;
-    planEntries.w[b + FOREST_E_END] = end;
-    planEntries.w[b + FOREST_E_PARAM] = param;
-    planEntries.w[b + FOREST_E_WIDENING] = floatBitsToUint(widening);
-    planEntries.w[b + FOREST_E_KEEP_END] = floatBitsToUint(keepEnd);
-    planEntries.w[b + FOREST_E_TAIL] = floatBitsToUint(tail);
-    planEntries.w[b + FOREST_E_FADE] = floatBitsToUint(fade);
-    planEntries.w[b + FOREST_E_SLOT] = slot;
-    planEntries.w[b + FOREST_E_WOOD] = floatBitsToUint(wood.x);
-    planEntries.w[b + FOREST_E_WOOD + 1] = floatBitsToUint(wood.y);
-    planEntries.w[b + FOREST_E_WOOD + 2] = floatBitsToUint(wood.z);
+    entryAt(at, inst, first, end, param, widening, keepEnd, tail, fade, wood, slot);
 }
 // A run [0, n) in entries of `per` each, from `base`: counted at once, or written.
 void planRun(int k, uint inst, uint base, uint n, uint per, uint param, float widening, float keepEnd, float tail,
@@ -630,7 +667,26 @@ void planAddTree(uint inst, Tree tr, Spec sp, TreeLod t, bool shadow, float px, 
                 float fade = planFadeCode(lo[0], hi[0]);
                 precise float shootMin = kTwigPixels * gDetail * gDetail;
                 uint twigs = su(FP_ST_TWIGS), twigCount = su(FP_ST_TWIG_COUNT);
-                for (uint c = sp.clumpStart; c < sp.clumpStart + sp.clumpCount && c < twigCount; ++c) {
+                if (gDeferTwigs) {
+                    uint end = min(sp.clumpStart + sp.clumpCount, twigCount);
+                    gTwigJob.on = end > sp.clumpStart;
+                    gTwigJob.first = sp.clumpStart;
+                    gTwigJob.count = gTwigJob.on ? end - sp.clumpStart : 0u;
+                    gTwigJob.shoots = shoots;
+                    gTwigJob.mayFine = mayFine;
+                    gTwigJob.shootMin = shootMin;
+                    gTwigJob.fineMin = fineMin;
+                    gTwigJob.widening = t.widening;
+                    gTwigJob.keep = keep;
+                    gTwigJob.fade = fade;
+                    if (gMode == MODE_EMIT) {
+                        gTwigJob.base[0] = gAt[G_TWIGS];
+                        gTwigJob.base[1] = gAt[G_TWIGS_FINE];
+                        gAt[G_TWIGS] += gTwigTotal[0];
+                        gAt[G_TWIGS_FINE] += gTwigTotal[1];
+                    }
+                }
+                for (uint c = sp.clumpStart; !gDeferTwigs && c < sp.clumpStart + sp.clumpCount && c < twigCount; ++c) {
                     float radius = 0.0;
                     float cpx = shoots || mayFine ? planClumpPx(tr, c, radius) : 0.0;
                     precise float shootC = 2.0 * kTwigShootRadius * gLeafLength * cpx;

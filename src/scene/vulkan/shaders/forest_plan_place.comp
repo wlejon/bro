@@ -26,6 +26,149 @@ uint viewOfBlock(Item it) {
     return sView;
 }
 
+// The block's deferred twig jobs (gTwigJob, scene_forest_plan.glsl), their
+// clumps end to end shared out a clump a thread. Every thread of the block
+// calls it, after its item's addTree. In MODE_COST and MODE_COUNT each
+// clump's vertices (and entries, plain and fine) go to its tree's tally,
+// added to the thread's own after; in MODE_EMIT each clump's entries are
+// written at its tree's twig places in clump order (a chunk of clumps at a
+// time, each tree's places running on from the chunk before).
+shared uint sTwRun[FP_GROUP_SIZE];      // the jobs' clump counts, then their inclusive scan
+shared uint sTwTree[FP_GROUP_SIZE];
+shared uint sTwFirst[FP_GROUP_SIZE];
+shared uint sTwFlags[FP_GROUP_SIZE];    // 1 shoots, 2 may be fine
+shared float sTwMin[2][FP_GROUP_SIZE];  // shoots', fine rows' least
+shared uint sTwAcc[3][FP_GROUP_SIZE];   // MODE_COST/COUNT: vertices, plain and fine entries;
+                                        // MODE_EMIT: each tree's next plain and fine places
+shared float sTwEntry[3][FP_GROUP_SIZE];   // MODE_EMIT: widening, keep, fade
+shared uint sTwScan[2][FP_GROUP_SIZE];
+
+TwigJob sharedJob(uint j) {
+    TwigJob job;
+    job.on = true;
+    job.first = sTwFirst[j];
+    job.shoots = (sTwFlags[j] & 1u) != 0u;
+    job.mayFine = (sTwFlags[j] & 2u) != 0u;
+    job.shootMin = sTwMin[0][j];
+    job.fineMin = sTwMin[1][j];
+    return job;
+}
+
+void inclusiveScan(uint t) {
+    for (uint step = 1u; step < uint(FP_GROUP_SIZE); step <<= 1) {
+        uint add = t >= step ? sTwRun[t - step] : 0u;
+        barrier();
+        sTwRun[t] += add;
+        barrier();
+    }
+}
+
+// The job whose run holds `w` (the first run ending past it).
+uint jobOf(uint w) {
+    uint lo = 0u, hi = uint(FP_GROUP_SIZE) - 1u;
+    while (lo < hi) {
+        uint mid = (lo + hi) >> 1;
+        if (sTwRun[mid] > w) hi = mid; else lo = mid + 1u;
+    }
+    return lo;
+}
+
+void twigs(uint t, Item it) {
+    TwigJob mine = gTwigJob;
+    bool on = it.valid && mine.on && mine.count > 0u;
+    sTwRun[t] = on ? mine.count : 0u;
+    sTwTree[t] = it.tree;
+    sTwFirst[t] = mine.first;
+    sTwFlags[t] = (mine.shoots ? 1u : 0u) | (mine.mayFine ? 2u : 0u);
+    sTwMin[0][t] = mine.shootMin;
+    sTwMin[1][t] = mine.fineMin;
+    if (gMode == MODE_EMIT) {
+        sTwAcc[0][t] = mine.base[0];
+        sTwAcc[1][t] = mine.base[1];
+        sTwEntry[0][t] = mine.widening;
+        sTwEntry[1][t] = mine.keep;
+        sTwEntry[2][t] = mine.fade;
+    } else {
+        sTwAcc[0][t] = 0u;
+        sTwAcc[1][t] = 0u;
+        sTwAcc[2][t] = 0u;
+    }
+    barrier();
+    inclusiveScan(t);
+    uint total = sTwRun[FP_GROUP_SIZE - 1];
+    if (total == 0u) return;
+    const uint per = uint(FOREST_TWIG_PIECES_PER_ENTRY);
+    if (gMode != MODE_EMIT) {
+        for (uint w = t; w < total; w += uint(FP_GROUP_SIZE)) {
+            uint j = jobOf(w);
+            uint c = sTwFirst[j] + w - (j > 0u ? sTwRun[j - 1u] : 0u);
+            uint n;
+            bool fine;
+            twigClump(sharedJob(j), planTree(sTwTree[j]), c, n, fine);
+            uint e = (n + per - 1u) / per;
+            atomicAdd(sTwAcc[0][j], e * per * uint(FOREST_TWIG_VERTICES) * (fine ? uint(FOREST_TWIG_FINE_ROWS) : 1u));
+            if (e > 0u) atomicAdd(sTwAcc[fine ? 2 : 1][j], e);
+        }
+        barrier();
+        if (on) {
+            gVerts += sTwAcc[0][t];
+            gCount[G_TWIGS] += sTwAcc[1][t];
+            gCount[G_TWIGS_FINE] += sTwAcc[2][t];
+        }
+        return;
+    }
+    // MODE_EMIT: a chunk of the block's clumps at a time, their entries'
+    // places an inclusive scan (plain, fine) across the chunk.
+    for (uint c0 = 0u; c0 < total; c0 += uint(FP_GROUP_SIZE)) {
+        uint w = c0 + t;
+        uint j = 0u, c = 0u, n = 0u, e = 0u;
+        bool fine = false;
+        if (w < total) {
+            j = jobOf(w);
+            c = sTwFirst[j] + w - (j > 0u ? sTwRun[j - 1u] : 0u);
+            twigClump(sharedJob(j), planTree(sTwTree[j]), c, n, fine);
+            e = (n + per - 1u) / per;
+        }
+        sTwScan[0][t] = fine ? 0u : e;
+        sTwScan[1][t] = fine ? e : 0u;
+        barrier();
+        for (uint step = 1u; step < uint(FP_GROUP_SIZE); step <<= 1) {
+            uint a0 = t >= step ? sTwScan[0][t - step] : 0u;
+            uint a1 = t >= step ? sTwScan[1][t - step] : 0u;
+            barrier();
+            sTwScan[0][t] += a0;
+            sTwScan[1][t] += a1;
+            barrier();
+        }
+        if (w < total) {
+            // Its tree's clumps in this chunk start at `s` (the chunk's
+            // first, or the tree's run's): its places run on from there.
+            uint runStart = j > 0u ? sTwRun[j - 1u] : 0u;
+            uint s = max(runStart, c0) - c0;
+            uint g = fine ? 1u : 0u;
+            uint before = sTwScan[g][t] - e - (s > 0u ? sTwScan[g][s - 1u] : 0u);
+            uint at = sTwAcc[g][j] + before;
+            for (uint p = 0u; p < n; p += per)
+                entryAt(at++, sTwTree[j], p, min(p + per, n), c, sTwEntry[0][j], sTwEntry[1][j], 1.0,
+                        sTwEntry[2][j], vec3(0.0), 0xffffffffu);
+        }
+        barrier();
+        // Each tree's places past this chunk's: the thread at its last
+        // clump here moves them.
+        if (w < total) {
+            uint runEnd = sTwRun[j];
+            bool last = w + 1u == runEnd || t + 1u == uint(FP_GROUP_SIZE) || w + 1u == total;
+            if (last) {
+                uint runStart = j > 0u ? sTwRun[j - 1u] : 0u;
+                uint s = max(runStart, c0) - c0;
+                for (uint g = 0u; g < 2u; ++g)
+                    sTwAcc[g][j] += sTwScan[g][t] - (s > 0u ? sTwScan[g][s - 1u] : 0u);
+            }
+        }
+        barrier();
+    }
+}
+
 #if defined(PLAN_COST)
 // Per search (the camera's, the shadow's): the block's sum at the ask and
 // its fixed trees' (uint64 as lo, carries).
@@ -61,24 +204,22 @@ void main() {
     uint q = it.view > 0u ? 1u : 0u;
     Search s = planSearch(q, round);
     bool varies = false;
-    if (it.valid && !s.done) {
+    bool run = it.valid && !s.done;
+    gDeferTwigs = true;
+    gTwigJob.on = false;
+    if (run) planItemAdd(it, round == 0u ? 1.0 : s.ask);
+    twigs(t, it);
+    if (run) {
         uint fineAt = workRun(FP_W_FINE) + index;
+        uint cost = gVerts - gDrawnOnly;
         if (round == 0u) {
-            planItemAdd(it, 1.0);
-            uint cost = gVerts - gDrawnOnly;
             planWork.w[fineAt] = cost;
-            sharedAdd(false, q, cost);
         } else if (round == 1u) {
-            planItemAdd(it, s.ask);
-            uint cost = gVerts - gDrawnOnly;
             uint fine = planWork.w[fineAt];
             if (cost == fine) sharedAdd(true, q, fine);
             else varies = true;
-            sharedAdd(false, q, cost);
-        } else {
-            planItemAdd(it, s.ask);
-            sharedAdd(false, q, gVerts - gDrawnOnly);
         }
+        sharedAdd(false, q, cost);
     }
     // (Round 1's varying items listed, a block's at once.)
     uint mine = 0u;
@@ -126,10 +267,19 @@ void main() {
     uint q = viewOfBlock(it) > 0u ? 1u : 0u;
     float d = uintBitsToFloat(planShared.w[FP_G_DETAIL + q]);
     gMode = MODE_COUNT;
+    gDeferTwigs = true;
+    gTwigJob.on = false;
     uint counts[FP_COLUMNS];
     for (int k = 0; k < FP_COLUMNS; ++k) counts[k] = 0u;
+    TreeLod lod;
+    if (it.valid) lod = planItemAdd(it, d);
+    twigs(t, it);
+    // (The twigs' entries the workgroup counted, for the write's places.)
+    gTwigTotal[0] = sTwAcc[1][t];
+    gTwigTotal[1] = sTwAcc[2][t];
+    if (!(it.valid && gTwigJob.on)) { gTwigTotal[0] = 0u; gTwigTotal[1] = 0u; }
+    barrier();
     if (it.valid) {
-        TreeLod lod = planItemAdd(it, d);
         for (int k = 0; k < FP_COLUMNS; ++k) counts[k] = gCount[k];
 #if defined(PLAN_COUNT)
         if (it.view == 0u) {
@@ -169,19 +319,22 @@ void main() {
         for (int k = 0; k < FP_COLUMNS; ++k) sCol[k][t] += add[k];
         barrier();
     }
-    if (!it.valid) return;
-    uint G = pu(FP_P_ITEM_GROUPS);
-    uint sums = workRun(FP_W_SUMS);
-    for (int k = 0; k < FP_GROUPS; ++k) gAt[k] = planWork.w[sums + uint(k) * G + block] + sCol[k][t] - counts[k];
-    for (int j = 0; j < 2; ++j) {
-        uint col = sums + uint(FP_GROUPS + j) * G;
-        gSlot[j] = planWork.w[FP_N_POSE_BASE + j] + (planWork.w[col + block] - planWork.w[col]) +
-                   sCol[FP_GROUPS + j][t] - counts[FP_GROUPS + j];
-        gPosed[j] = planWork.w[FP_N_POSED + j] != 0u;
-    }
     gEntryCap = pu(FP_P_ENTRY_CAP);
     gMode = MODE_EMIT;
-    planItemAdd(it, d);
+    gTwigJob.on = false;
+    if (it.valid) {
+        uint G = pu(FP_P_ITEM_GROUPS);
+        uint sums = workRun(FP_W_SUMS);
+        for (int k = 0; k < FP_GROUPS; ++k) gAt[k] = planWork.w[sums + uint(k) * G + block] + sCol[k][t] - counts[k];
+        for (int j = 0; j < 2; ++j) {
+            uint col = sums + uint(FP_GROUPS + j) * G;
+            gSlot[j] = planWork.w[FP_N_POSE_BASE + j] + (planWork.w[col + block] - planWork.w[col]) +
+                       sCol[FP_GROUPS + j][t] - counts[FP_GROUPS + j];
+            gPosed[j] = planWork.w[FP_N_POSED + j] != 0u;
+        }
+        planItemAdd(it, d);
+    }
+    twigs(t, it);
 #endif
 }
 #endif
