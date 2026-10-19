@@ -171,7 +171,9 @@ public:
         // A forced tier (setForceTier) holds for the trees within this
         // distance of the eye (m: to the crown, as the leaves measure it;
         // to the tree's middle for a shadow caster); further trees go by
-        // size, at full detail. 0: every tree. Forcing the leaves on a whole
+        // size, at full detail. 0: every tree. Within it the forced trees
+        // hold nearest first up to 16 budgets of vertices (the drawer's
+        // capForced), the rest by size: forcing the leaves on a whole
         // forest to the horizon is billions of vertices, a frame longer than
         // a GPU's watchdog allows.
         float forceRange = 0.0f;
@@ -391,6 +393,8 @@ public:
         uint32_t draws = 0;
         float detail = 1.0f;       // the budget's scale on the pixel thresholds (1: none)
         float shadowDetail = 1.0f;
+        uint32_t unforced = 0;       // the camera's trees past the forced tier's vertex ceiling (by size)
+        uint32_t shadowUnforced = 0; // the shadow tiles' likewise
     };
     void setStats(const Stats& s) { stats_ = s; }
     const Stats& stats() const { return stats_; }

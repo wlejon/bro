@@ -229,7 +229,8 @@
         return { trees: { leaves: s[0], clumps: s[1], crowns: s[2] }, culled: s[3], leaves: s[4],
                  vertices: s[5],
                  shadowVertices: s[6], entries: s[7], draws: s[8], treeCount: s[9], specimenCount: s[10],
-                 detail: s[11], shadowDetail: s[12], blooms: s.length > 13 ? s[13] : 0 };
+                 detail: s[11], shadowDetail: s[12], blooms: s.length > 13 ? s[13] : 0,
+                 unforced: s.length > 14 ? s[14] : 0, shadowUnforced: s.length > 15 ? s[15] : 0 };
     });
     // What specimen `specimen` draws at `pxPerUnit` pixels per specimen unit
     // (the view's pixels per metre at the tree, times its scale).

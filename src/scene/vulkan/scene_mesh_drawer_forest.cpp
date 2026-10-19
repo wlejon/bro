@@ -193,7 +193,8 @@ struct Seen {
     float px;           // at the crown (the leaves and sprites)
     int tile;           // index into the plan's tiles, -1 for the camera
     float barkPx = 0;   // at the whole tree (0: px)
-    bool forced = true; // within the forced tier's range (Lod::forceRange)
+    bool forced = true; // within the forced tier's range (Lod::forceRange) and its ceiling (capForced)
+    float dist = 0.0f;  // from the eye (m: the camera's to the crown, a caster's to the tree's middle)
 };
 
 // The detail factor that keeps `cost`'s vertices within `budget` millions: 1
@@ -561,7 +562,52 @@ struct SceneMeshDrawer::ForestPlan {
         }
         return static_cast<double>(v);
     }
+
+    // The vertices tree `s` sends at the forced tier, full detail.
+    uint64_t forcedCost(const Seen& s, bool shadow) {
+        const ForestNode::Specimen& sp = node->specimens()[node->instances()[s.instance].specimen];
+        uint64_t v = 0;
+        addTree(nullptr, s.instance, sp,
+                shadow ? casterLod(shadowLod, sp, s) : ForestNode::treeLod(lod, sp, s.px, leafLength, force, s.barkPx),
+                shadow, v, s.px, s.barkPx);
+        return v;
+    }
 };
+
+namespace {
+
+// A forced tier holds for the nearest trees (the camera's, or the shadow
+// tiles') of every node in `plans` until they send kForceCeiling budgets of
+// vertices; the rest go by size, at full detail, as the trees past
+// Lod::forceRange do. Forced Leaves over a whole forest was billions of
+// vertices (the forest's glade, 2.2 G), a frame longer than the GPU's
+// watchdog: the device was lost. A tiers subject (one tree) never meets it.
+constexpr double kForceCeiling = 16.0;
+
+template <class Plan> void capForced(const std::vector<Plan*>& plans, bool shadow) {
+    std::vector<std::pair<Plan*, Seen*>> forced;
+    double ceiling = 0.0;
+    for (Plan* p : plans) {
+        if (!p || p->force < 0) continue;
+        const float budget = shadow ? p->lod.shadowBudget : p->lod.budget;
+        ceiling = std::max(ceiling, kForceCeiling * 1e6 *
+                                        (budget > 0.0f ? budget : shadow ? ForestNode::Lod{}.shadowBudget
+                                                                         : ForestNode::Lod{}.budget));
+        for (Seen& s : shadow ? p->cast : p->seen)
+            if (s.forced) forced.push_back({p, &s});
+    }
+    std::stable_sort(forced.begin(), forced.end(),
+                     [](const auto& a, const auto& b) { return a.second->dist < b.second->dist; });
+    double v = 0.0;
+    for (auto& [p, s] : forced) {
+        if (v <= ceiling) v += static_cast<double>(p->forcedCost(*s, shadow));
+        if (v <= ceiling) continue;
+        s->forced = false;
+        ++(shadow ? p->stats.shadowUnforced : p->stats.unforced);
+    }
+}
+
+}  // namespace
 
 std::unique_ptr<SceneMeshDrawer::ForestPlan> SceneMeshDrawer::planForest(SceneFrame& frame, ForestNode& node) {
     if (node.instanceCount() == 0 || node.specimenCount() == 0 || node.mesh().empty() || node.effectiveUnlit()) {
@@ -653,7 +699,7 @@ std::unique_ptr<SceneMeshDrawer::ForestPlan> SceneMeshDrawer::planForest(SceneFr
         const float unit = in.scale * nodeScale;
         P.seen.push_back({i, (view.perspective ? pxAtMetre / dl : pxAtMetre) * unit, -1,
                           (view.perspective ? pxAtMetre / d : pxAtMetre) * unit,
-                          P.lod.forceRange <= 0.0f || dl <= P.lod.forceRange});
+                          P.lod.forceRange <= 0.0f || dl <= P.lod.forceRange, dl});
     }
 
     P.seenPx.assign(instances.size(), 0.0f);
@@ -673,7 +719,7 @@ std::unique_ptr<SceneMeshDrawer::ForestPlan> SceneMeshDrawer::planForest(SceneFr
                 const float dc = bromath::vlen((P.bounds[i].min + P.bounds[i].max) * 0.5f - view.eye);
                 if (!tile.ortho) texel += tile.texelPerMetre * dc;
                 P.cast.push_back({i, instances[i].scale * nodeScale / std::max(texel, 1e-5f), ti, 0.0f,
-                                  P.lod.forceRange <= 0.0f || dc <= P.lod.forceRange});
+                                  P.lod.forceRange <= 0.0f || dc <= P.lod.forceRange, dc});
             }
         }
     }
@@ -732,6 +778,8 @@ void SceneMeshDrawer::prepareForest(SceneFrame& frame, ForestNode& node, std::ve
     auto plan = planForest(frame, node);
     if (!plan) return;
     ForestPlan& P = *plan;
+    capForced(std::vector<ForestPlan*>{&P}, false);
+    capForced(std::vector<ForestPlan*>{&P}, true);
     float detail = P.force >= 0 || P.seen.empty()
                        ? 1.0f : fitDetail([&](float d) { return P.cost(d, false); }, P.lod.budget);
     float shadowDetail = P.force >= 0 || P.cast.empty()
@@ -799,6 +847,10 @@ void SceneMeshDrawer::prepareForests(SceneFrame& frame, const std::vector<Forest
         anySeen = anySeen || !P.seen.empty();
         anyCast = anyCast || !P.cast.empty();
     }
+    std::vector<ForestPlan*> raw;
+    for (auto& p : plans) raw.push_back(p.get());
+    capForced(raw, false);
+    capForced(raw, true);
     const auto total = [&](float d, bool shadow) {
         double v = 0.0;
         for (auto& p : plans)

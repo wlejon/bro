@@ -711,8 +711,10 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  * @property {number} [shadowKeep=0.35] - the share of its drawn leaves a tree's shadow keeps.
  * @property {number} [range=0] - trees further than this (m) are not drawn; 0: no limit.
  * @property {number} [forceRange=0] - a forced tier (`setForestTier`) holds within this distance (m) of the eye,
- *   further trees go by size at full detail; 0: every tree. The Leaves tier forced on a whole forest to the
- *   horizon is billions of vertices, a frame past a GPU's watchdog.
+ *   further trees go by size at full detail; 0: every tree. Within it the forced trees hold nearest first until
+ *   they send 16 times `budget` (`shadowBudget` for the casters) of vertices, the rest going by size: the
+ *   Leaves tier forced on a whole forest to the horizon was billions of vertices, a frame past a GPU's
+ *   watchdog (`forestStats().unforced` counts the trees the ceiling let go).
  * @property {number} [budget=12.5] - millions of leaf and bark vertices the view may send; 0: no budget.
  * @property {number} [shadowBudget=6] - the same for every shadow tile together.
  * @property {number} [clusters=1] - past `cardWidening` a kept leaf is drawn as the leaves it stands for (1),
@@ -1601,7 +1603,7 @@ class SceneNode {
 
   /**
    * Forest: `'auto'` (by size on screen), or every tree at `'leaves'`,
-   * `'clumps'` or `'crowns'` (every tree within ForestLod `forceRange`).
+   * `'clumps'` or `'crowns'` (every tree within ForestLod `forceRange`, nearest first up to a vertex ceiling).
    * @param {string|number} tier
    * @returns {SceneNode}
    */
@@ -1612,10 +1614,13 @@ class SceneNode {
    * over counts in both), `culled`, `leaves` and `blooms` issued, `vertices` and
    * `shadowVertices` sent, `entries` and `draws`, `treeCount`,
    * `specimenCount`, and `detail` / `shadowDetail`, the budget's scale on
-   * the pixel thresholds (1: within budget at full detail).
+   * the pixel thresholds (1: within budget at full detail), and `unforced` /
+   * `shadowUnforced`, the trees (camera's, casters') a forced tier left to
+   * go by size past its vertex ceiling.
    * @returns {{trees: {leaves: number, clumps: number, crowns: number}, culled: number, leaves: number,
    *            vertices: number, shadowVertices: number, entries: number, draws: number, treeCount: number,
-   *            specimenCount: number, detail: number, shadowDetail: number, blooms: number}|undefined}
+   *            specimenCount: number, detail: number, shadowDetail: number, blooms: number,
+   *            unforced: number, shadowUnforced: number}|undefined}
    */
   forestStats() {}
 

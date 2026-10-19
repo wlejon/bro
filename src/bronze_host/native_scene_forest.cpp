@@ -124,7 +124,8 @@ void bro_scene_SceneNode_forestStats(void* self, bronze_native_buffer* out) {
                                        static_cast<double>(s.shadowVertices), static_cast<double>(s.entries),
                                        static_cast<double>(s.draws), static_cast<double>(f->instanceCount()),
                                        static_cast<double>(f->specimenCount()), static_cast<double>(s.detail),
-                                       static_cast<double>(s.shadowDetail), static_cast<double>(s.blooms)},
+                                       static_cast<double>(s.shadowDetail), static_cast<double>(s.blooms),
+                                       static_cast<double>(s.unforced), static_cast<double>(s.shadowUnforced)},
                    out);
 }
 
