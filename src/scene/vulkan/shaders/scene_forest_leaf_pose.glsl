@@ -60,7 +60,7 @@ ForestPose forestPoseLeaf(ForestEntry e, int leaf) {
     VegWind w = vegWind(plant);
     vec3 anchor = (model * vec4(v2.xyz, 1.0)).xyz;
     VegPose pose = vegPose(plant, limb, w, anchor, clamp(v2.w, 0.0, 1.0));
-    float amount = forestFlutter(e.widening);
+    float amount = forestFlutterAt(e.widening, model, anchor, pose.drag);
     if (onShoot) {
         // Its spray's and shoot's bending (the twig it hangs from moves
         // the same, mesh_forest_tube.vert's twig build).

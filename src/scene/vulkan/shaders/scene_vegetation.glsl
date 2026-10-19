@@ -310,13 +310,33 @@ vec2 vegBuffet(float phase, float seed) {
     return vec2((b1 + 0.7 * b2 + 0.45 * b3) * 1.088, (c1 + 0.6 * c2) * 1.213);
 }
 
+// How much of a part's quick motion is kept where it moves `reach` metres
+// at camera-relative `at`: all of it while that is VEG_FINE_PIXELS.y pixels
+// on screen, none under .x. Finer, a leaf's flutter or a limb's shake is a
+// pixel or two each way at a few hertz: a crown of them reads as shimmer,
+// not as leaves or limbs moving (with no temporal filter, motion under a
+// pixel over sharp detail shows only as pixels flipping, as often as it
+// moves), and the wood's lean in the gusts carries the motion there.
+const vec2 VEG_FINE_PIXELS = vec2(3.0, 9.0);
+float vegPixelsPerMetre(vec3 at) {
+    bool ortho = abs(camera.proj[3][3]) > 0.5;
+    return abs(camera.proj[1][1]) * camera.viewport.y * 0.5 / (ortho ? 1.0 : max(length(at), 1e-3));
+}
+// The whole pose's reach (pixels) under which it holds still (vegPose).
+const vec2 VEG_STILL_PIXELS = vec2(1.0, 3.0);
+float vegFineKeep(vec3 at, float reach) {
+    return smoothstep(VEG_FINE_PIXELS.x, VEG_FINE_PIXELS.y, reach * vegPixelsPerMetre(at));
+}
+
 // A tree level's tip deflection (world metres): its held lean under `mean`,
 // buffeted (`buffet`: 0 for a trunk, which averages the eddies over its
 // crown), ringing as its damping lets: the unresolved turbulence at its
 // resonance (narrow band: mean f^-1/3 / sqrt(zeta)) and the gusts' change
-// `kick`. `seed`: the limb's (vegBuffet).
+// `kick`. `seed`: the limb's (vegBuffet). `pxPerM` the pixels a metre
+// where it is (vegPixelsPerMetre): its ring and buffeting fade as they shrink
+// on screen (vegFineKeep), its lean kept; 0 keeps them whole.
 vec3 vegTreeLevel(VegCantilever c, float zeta, float ring, float phase, float mean, float kick, VegWind w, float bob,
-                  float buffet, float seed) {
+                  float buffet, float seed, float pxPerM) {
     if (c.sway <= 0.0 || c.freq <= 0.0) return vec3(0.0);
     float over = vegOver(zeta);
     float rms = 0.0, a1 = 0.0, a2 = 0.0, a3 = 0.0, a4 = 0.0;
@@ -333,9 +353,18 @@ vec3 vegTreeLevel(VegCantilever c, float zeta, float ring, float phase, float me
         a4 = sin(VEG_TWO_PI * (sceneWindCycles(c.freq * 0.97) + phase) + 2.1);
     }
     vec2 b = vec2(0.0);
+    float bAmp = 0.0;
     if (buffet > 0.0) {
         float lp = c.freq * c.freq / (c.freq * c.freq + VEG_EDDY_HZ * VEG_EDDY_HZ);
-        b = vegBuffet(phase, seed) * vec2(VEG_BUFFET, 0.7 * VEG_BUFFET) * (buffet * mean * lp);
+        bAmp = VEG_BUFFET * buffet * mean * lp;
+        b = vegBuffet(phase, seed) * vec2(bAmp, 0.7 * bAmp);
+    }
+    if (pxPerM > 0.0) {
+        // Its quick part's reach each way: the ring's two sinusoids and the
+        // buffeting's peak.
+        float keep = smoothstep(VEG_FINE_PIXELS.x, VEG_FINE_PIXELS.y, (2.0 * rms + 2.0 * bAmp) * c.sway * c.len * pxPerM);
+        rms *= keep;
+        b *= keep;
     }
     vec3 x = w.dir * (mean + b.x + rms * (a1 + a2)) + w.side * (b.y + 0.85 * rms * a3) +
              vec3(0.0, bob * (1.41421 * rms * a4 + 0.5 * b.y), 0.0);
@@ -413,15 +442,15 @@ float vegTrunkBendSlope(float h, float p) {
 }
 
 // The wood's pose at camera-relative rest point `rest`, `weight` along its
-// limb (0 on the trunk). The shared layer: see the header.
-VegPose vegPose(VegPlant plant, VegLimb limb, VegWind w, vec3 rest, float weight) {
+// limb (0 on the trunk), however small on screen (vegPose holds it still).
+VegPose vegPoseMoving(VegPlant plant, VegLimb limb, VegWind w, vec3 rest, float weight) {
     VegPose o;
     o.drag = w.trunk;
     // The trunk, bending from the root in its stem's shape; its top drops a
     // little as it leans.
     float h = clamp((rest.y - plant.root.y) / plant.height, 0.0, 1.3);
     vec3 xt = vegTreeLevel(plant.trunk, vegTrunkDamping(w.trunk), VEG_TREE_TURBULENCE, plant.seed, w.trunk, w.kick, w,
-                           0.0, 0.0, plant.seed);
+                           0.0, 0.0, plant.seed, 0.0);
     float bt = vegTrunkBend(h, plant.shape);
     o.offset = xt * bt - vec3(0.0, 0.6 * dot(xt, xt) * bt / plant.height, 0.0);
     o.omega = cross(vec3(0.0, 1.0, 0.0), xt) * (vegTrunkBendSlope(h, plant.shape) / plant.height);
@@ -439,8 +468,9 @@ VegPose vegPose(VegPlant plant, VegLimb limb, VegWind w, vec3 rest, float weight
     vec2 here = rest.xz + camera.eyeWorld.xz;
     float pl = vegDragAt(here, w.t - vegLag(limb.limb.freq), true);
     o.drag = pl;
+    float pxPerM = vegPixelsPerMetre(rest);
     vec3 xl = vegTreeLevel(limb.limb, vegDamping(limb.limb, VEG_BOUGH_DAMPING, pl), VEG_CROWN_RING, limb.phase, pl,
-                           w.kick, w, vegLimbBob, 1.0, limb.phase);
+                           w.kick, w, vegLimbBob, 1.0, limb.phase, pxPerM);
     o.offset += xl * vegBend(s);
     // A body pushing through it moves its outer shoots and leaves aside
     // (the wood near the trunk stays).
@@ -458,9 +488,22 @@ VegPose vegPose(VegPlant plant, VegLimb limb, VegWind w, vec3 rest, float weight
     float ph = limb.phase + 0.12 * (sin(dot(ra, vec3(3.1, 1.7, 2.3))) + sin(dot(ra, vec3(-1.9, 2.9, 3.7))) +
                                     sin(dot(ra, vec3(2.7, -3.3, 1.3))));
     vec3 xw = vegTreeLevel(limb.twig, vegDamping(limb.twig, VEG_SPRAY_DAMPING, pl), VEG_CROWN_RING, ph, pl, w.kick, w,
-                           vegTwigBob, 1.0, limb.phase);
+                           vegTwigBob, 1.0, limb.phase, pxPerM);
     o.offset += xw * vegBend(u);
     o.omega += cross(dir, xw) * (vegBendSlope(u) / max(limb.twig.len, 0.02));
+    return o;
+}
+
+// The wood's pose at camera-relative rest point `rest`, `weight` along its
+// limb (0 on the trunk). The shared layer: see the header. A pose that moves
+// it under VEG_STILL_PIXELS on screen holds still: a far crown's sway is a
+// pixel or less, which shows only as its sharp detail flipping, not as the
+// crown moving (the gusts' sheen still rolls across it).
+VegPose vegPose(VegPlant plant, VegLimb limb, VegWind w, vec3 rest, float weight) {
+    VegPose o = vegPoseMoving(plant, limb, w, rest, weight);
+    float still = smoothstep(VEG_STILL_PIXELS.x, VEG_STILL_PIXELS.y, length(o.offset) * vegPixelsPerMetre(rest));
+    o.offset *= still;
+    o.omega *= still;
     return o;
 }
 

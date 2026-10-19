@@ -378,6 +378,16 @@ float forestFlutter(float widening) {
     return (1.0 - smoothstep(1.0, to, widening)) * FOREST_HEADER(FOREST_H_FLUTTER);
 }
 
+// forestFlutter where a leaf of the tree drawn by `model` hangs at
+// camera-relative `at` in drag `drag`, faded as it shrinks on screen
+// (vegFineKeep): its flutter turns it 0.35 sqrt(drag) radians (vegLeafTurn),
+// so it reaches that much of its length.
+const vec2 FOREST_FLUTTER_NEAR = vec2(6.0, 10.0);
+float forestFlutterAt(float widening, mat4 model, vec3 at, float drag) {
+    float reach = 0.35 * sqrt(max(drag, 0.0)) * FOREST_HEADER(FOREST_H_LEAF_LENGTH) * vegScale(model);
+    return forestFlutter(widening) * vegFineKeep(at, reach) * (1.0 - smoothstep(FOREST_FLUTTER_NEAR.x, FOREST_FLUTTER_NEAR.y, length(at)));
+}
+
 const vec4 FOREST_CULLED = vec4(2.0, 2.0, 2.0, 1.0);
 // A colour leaf within FOREST_NEAR_SHRINK.y of the eye shrinks to its middle,
 // gone by .x (m): the eye passing through a crown. Closer than

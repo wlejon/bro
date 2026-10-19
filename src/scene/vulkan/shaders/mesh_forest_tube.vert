@@ -143,7 +143,7 @@ void twigMain(ForestEntry e) {
     VegPose pose = vegPose(plant, limb, w, anchor, clamp(v2.w, 0.0, 1.0));
     vec3 pos = anchor + pose.offset;
     if (kind > 0) {
-        ForestShootSway sw = forestShootSwayAt(s, sh, pose.drag, forestFlutter(e.widening));
+        ForestShootSway sw = forestShootSwayAt(s, sh, pose.drag, forestFlutterAt(e.widening, model, anchor, pose.drag));
         vec3 om;
         vec3 off = kind == 1 ? forestSprayBend(sw, s, o.along) : forestShootBend(sw, s, sh, o.along, om);
         pos += mat3(model) * off;

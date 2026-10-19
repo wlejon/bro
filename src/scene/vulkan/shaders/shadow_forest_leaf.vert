@@ -69,7 +69,7 @@ void main() {
     VegWind w = vegWind(plant);
     vec3 anchor = (model * vec4(v2.xyz, 1.0)).xyz;
     VegPose pose = vegPose(plant, limb, w, anchor, clamp(v2.w, 0.0, 1.0));
-    float amount = forestFlutter(e.widening);
+    float amount = forestFlutterAt(e.widening, model, anchor, pose.drag);
     if (onShoot) {
         vec3 off, om;
         forestLeafShootSway(at, model, pose.drag, amount, off, om);
