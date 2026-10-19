@@ -780,6 +780,7 @@ struct SceneMeshDrawer::ForestCull {
     // (infinite for a tree with no clumps), thickest bark's keep radius,
     // largest bloom's extent. What far() measures a cell by.
     std::vector<float> cellClump, cellKeep, cellBloom;
+    std::vector<float> cellUnit;   // its trees' largest scale (m a specimen unit)
 
     void build(const ForestNode& node, const bromath::Mat4& w, float r) {
         const auto& instances = node.instances();
@@ -816,6 +817,7 @@ struct SceneMeshDrawer::ForestCull {
         cellClump.assign(start.size() - 1, 0.0f);
         cellKeep.assign(start.size() - 1, 0.0f);
         cellBloom.assign(start.size() - 1, 0.0f);
+        cellUnit.assign(start.size() - 1, 0.0f);
         for (size_t i = 0; i < n; ++i) {
             const size_t c = cellOf(i);
             items[fill[c]++] = static_cast<uint32_t>(i);
@@ -823,6 +825,7 @@ struct SceneMeshDrawer::ForestCull {
             cellBox[c].max = bromath::vmax(cellBox[c].max, bounds[i].max);
             const ForestNode::Specimen& sp = specimens[instances[i].specimen];
             const float unit = instances[i].scale * nodeScale;
+            cellUnit[c] = std::max(cellUnit[c], unit);
             cellClump[c] = std::max(cellClump[c], sp.clumpCount > 0 ? sp.meanClumpRadius * unit : 1e30f);
             if (sp.segCount > 0) cellKeep[c] = std::max(cellKeep[c], keepRadius[sp.segStart] * unit);
             if (sp.bloomCount > 0)
@@ -932,9 +935,14 @@ std::unique_ptr<SceneMeshDrawer::ForestPlan> SceneMeshDrawer::planForest(SceneFr
         return std::sqrt(dx * dx + dy * dy + dz * dz);
     };
     const bool farCells = view.perspective && P.force < 0 && P.lod.range <= 0.0f && P.lod.crownFrom > P.lod.crownTo;
-    // (treeLod's bark is cut at least this many pixels across over 2.)
-    const float barkMin = 0.5f * (P.lod.barkKeepPixels > 0.0f ? std::min(P.lod.barkPixels, P.lod.barkKeepPixels)
-                                                               : P.lod.barkPixels);
+    // treeLod's bark is cut at this many pixels across over 2, at least, for
+    // trees of at most `unitPx` pixels a specimen unit: as wide as their
+    // leaves widen (which they do at least as long as the largest's).
+    const auto barkCut = [&](float unitPx) {
+        const float w = P.leafLength > 0.0f ? std::max(1.0f, P.lod.leafPixels / (P.leafLength * unitPx)) : 1.0f;
+        return 0.5f * (P.lod.barkKeepPixels > 0.0f ? std::min(P.lod.barkPixels * w, P.lod.barkKeepPixels)
+                                                    : P.lod.barkPixels * w);
+    };
     const float nearMin = P.lod.leavesRange > 0.0f ? P.lod.leavesRange + 0.5f * P.lod.leavesBand : 0.0f;
     std::vector<uint8_t> cameraFar(cull.cellBox.size(), 0);
     if (farCells)
@@ -944,7 +952,7 @@ std::unique_ptr<SceneMeshDrawer::ForestPlan> SceneMeshDrawer::planForest(SceneFr
             if (across < 40.0f || d < 1.0f || d < nearMin) continue;
             const float px = pxAtMetre / d;   // a metre's pixels there
             cameraFar[c] = cull.cellClump[c] * px < 0.98f * P.lod.crownTo &&
-                           cull.cellKeep[c] * px < 0.98f * kBarkRibbonCut * barkMin &&
+                           cull.cellKeep[c] * px < 0.98f * kBarkRibbonCut * barkCut(cull.cellUnit[c] * px) &&
                            cull.cellBloom[c] * px < 0.98f * kBloomMinPixels;
         }
 
@@ -1014,7 +1022,8 @@ std::unique_ptr<SceneMeshDrawer::ForestPlan> SceneMeshDrawer::planForest(SceneFr
                 float across = 0.0f;
                 const float d = nearest(cull.cellBox[c], across);
                 const float px = 1.0f / std::max(tile.texelConst + (tile.ortho ? 0.0f : tile.texelPerMetre * d), 1e-5f);
-                return cull.cellClump[c] * px < 0.98f * P.shadowLod.crownTo && cull.cellKeep[c] * px < 0.98f * barkMin;
+                return cull.cellClump[c] * px < 0.98f * P.shadowLod.crownTo &&
+                       cull.cellKeep[c] * px < 0.98f * barkCut(cull.cellUnit[c] * px);
             };
             cull.markCells([&](const bromath::AABB3& b) { return bromath::fintersects(tile.frustum, b); }, casterFar);
             for (uint32_t i = 0; i < instances.size(); ++i) {
