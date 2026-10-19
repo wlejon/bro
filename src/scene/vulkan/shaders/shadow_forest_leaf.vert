@@ -53,11 +53,14 @@ void main() {
     // A widened caster holds the area of the leaves it stands for, but
     // reaches further from its centre than they do: its shadow would fall on
     // leaves that stand above it toward the light. Set back away from the
-    // light by about the reach it gained, the crown's shadow starts where
-    // the leaves' does. (The tile's depth grows away from the light.)
+    // light by part of the reach it gained, the crown's shadow starts about
+    // where the leaves' does. (The tile's depth grows away from the light.)
+    // At 0.35 of it, set back past leaves it should shade: a broadleaf's
+    // thinned crown at golden 45 / 75 m 1.5 / 7.0 levels brighter than its
+    // leaves; at 0.15, 0.2 / 5.5 (at none, -0.6 / 4.1).
     if (grown > 0.0) {
         vec3 away = normalize(vec3(push.lightViewProj[0][2], push.lightViewProj[1][2], push.lightViewProj[2][2]));
-        pos += away * (0.35 * grown * vegScale(model));
+        pos += away * (0.15 * grown * vegScale(model));
     }
     vec4 v0, v1, v2, v3;
     forestVegetation(forestClumpRecord(lf.x) + 2, rest, 1.0, v0, v1, v2, v3);
