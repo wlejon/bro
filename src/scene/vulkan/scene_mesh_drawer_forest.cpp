@@ -192,8 +192,21 @@ float floatBits(uint32_t u) {
     return f;
 }
 
+// An allocator whose resize leaves new elements unset (default-init, not
+// value-init): a group grown to be filled in place is not zeroed first.
+template <class T> struct UninitAlloc : std::allocator<T> {
+    template <class U> struct rebind { using other = UninitAlloc<U>; };
+    UninitAlloc() = default;
+    template <class U> UninitAlloc(const UninitAlloc<U>&) noexcept {}
+    template <class U> void construct(U* p) noexcept { ::new (static_cast<void*>(p)) U; }
+    template <class U, class... A> void construct(U* p, A&&... a) {
+        ::new (static_cast<void*>(p)) U(std::forward<A>(a)...);
+    }
+};
+using Entries = std::vector<Entry, UninitAlloc<Entry>>;
+
 struct Groups {
-    std::vector<Entry> g[kGroups];
+    Entries g[kGroups];
 };
 
 // A tree in view of the camera or of a shadow tile: its pixels per specimen
@@ -789,16 +802,30 @@ struct SceneMeshDrawer::ForestPlan {
 
     // The first `chunks` of parts' groups appended to `out`'s, in chunk
     // order: the order one thread would have added them in.
+    // Each group is grown once, every chunk's place in it known, and the
+    // chunks copied across the pool.
     void appendGroups(std::vector<Groups>& out, uint32_t chunks) {
+        appendAt.resize(size_t{chunks} * out.size() * kGroups);
         for (size_t t = 0; t < out.size(); ++t)
             for (int k = 0; k < kGroups; ++k) {
                 size_t n = out[t].g[k].size();
-                for (uint32_t c = 0; c < chunks; ++c) n += parts[c][t].g[k].size();
-                out[t].g[k].reserve(n);
-                for (uint32_t c = 0; c < chunks; ++c)
-                    out[t].g[k].insert(out[t].g[k].end(), parts[c][t].g[k].begin(), parts[c][t].g[k].end());
+                for (uint32_t c = 0; c < chunks; ++c) {
+                    appendAt[(size_t{c} * out.size() + t) * kGroups + k] = n;
+                    n += parts[c][t].g[k].size();
+                }
+                out[t].g[k].resize(n);
             }
+        bro::util::parallelChunks(chunks, [&](uint32_t c) {
+            for (size_t t = 0; t < out.size(); ++t)
+                for (int k = 0; k < kGroups; ++k) {
+                    const Entries& from = parts[c][t].g[k];
+                    if (!from.empty())
+                        std::memcpy(out[t].g[k].data() + appendAt[(size_t{c} * out.size() + t) * kGroups + k],
+                                    from.data(), from.size() * sizeof(Entry));
+                }
+        });
     }
+    std::vector<size_t> appendAt;   // appendGroups': each chunk's place in each group
 
     // The budget's search asks cost() at a dozen details. A tree sends no
     // fewer vertices at a finer one, so one that sends as many at the
@@ -1488,8 +1515,12 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
         // (addTree's entry for a crown alone.)
         stats.trees[2] += static_cast<uint32_t>(P.crowned.size());
         colourVerts += 6 * uint64_t{P.crowned.size()};
-        colour.g[Crowns].reserve(colour.g[Crowns].size() + P.crowned.size());
-        for (uint32_t i : P.crowned) colour.g[Crowns].push_back({i, 0u, 1u, 0u, 1.0f, 0.0f, 1.0f, 1.0f});
+        Entries& crowns = colour.g[Crowns];
+        const size_t base = crowns.size();
+        crowns.resize(base + P.crowned.size());
+        ForestPlan::eachChunk(P.crowned.size(), [&](uint32_t, uint32_t b, uint32_t e) {
+            for (uint32_t j = b; j < e; ++j) crowns[base + j] = {P.crowned[j], 0u, 1u, 0u, 1.0f, 0.0f, 1.0f, 1.0f};
+        });
     }
     stats.vertices = colourVerts;
     // Clumps and crowns nearest the eye first. (Measured on an RTX 4090 and
@@ -1504,7 +1535,7 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
     std::vector<uint64_t>& keyed = P.keyed;
     std::vector<uint64_t>& swap = P.keyedSwap;
     const auto nearestFirst = [&](int k) {
-        const std::vector<Entry>& g = colour.g[k];
+        const Entries& g = colour.g[k];
         const size_t n = g.size();
         order[k].clear();
         if (n < 2) return;
@@ -1556,11 +1587,17 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
             P.place(true, shadowDetail, &tiles, stats.shadowVertices, unused, tally);
         }
         stats.shadowVertices += 6 * uint64_t{P.castCrowned.size()};
-        std::vector<size_t> perTile(tiles.size(), 0);
-        for (const auto& c : P.castCrowned) perTile[static_cast<size_t>(c.second)]++;
-        for (size_t t = 0; t < tiles.size(); ++t) tiles[t].g[Crowns].reserve(tiles[t].g[Crowns].size() + perTile[t]);
+        // (Each tile's grown once, then written at a cursor.)
+        std::vector<size_t> cursor(tiles.size(), 0);
+        for (const auto& c : P.castCrowned) cursor[static_cast<size_t>(c.second)]++;
+        for (size_t t = 0; t < tiles.size(); ++t) {
+            const size_t base = tiles[t].g[Crowns].size();
+            tiles[t].g[Crowns].resize(base + cursor[t]);
+            cursor[t] = base;
+        }
         for (const auto& [i, tile] : P.castCrowned)
-            tiles[static_cast<size_t>(tile)].g[Crowns].push_back({i, 0u, 1u, 0u, 1.0f, 0.0f, 1.0f, 1.0f});
+            tiles[static_cast<size_t>(tile)].g[Crowns][cursor[static_cast<size_t>(tile)]++] =
+                {i, 0u, 1u, 0u, 1.0f, 0.0f, 1.0f, 1.0f};
     }
 
     // One buffer of entries: the camera's groups, then each tile's.
@@ -1602,7 +1639,7 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
     size_t at = 0;
     // A group in its order (`ord`, or as it stands): a posed one in turn (its
     // slots run on from entry to entry), the rest across the pool.
-    const auto put = [&](const std::vector<Entry>& g, bool posed, const std::vector<uint32_t>* ord) {
+    const auto put = [&](const Entries& g, bool posed, const std::vector<uint32_t>* ord) {
         const size_t first = at;
         const bool sorted = ord && ord->size() == g.size();
         const auto write = [&](size_t j, uint32_t slot) {
