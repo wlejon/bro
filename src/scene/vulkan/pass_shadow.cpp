@@ -295,6 +295,12 @@ void PassShadow::record(SceneFrame& frame) {
         // The draws are relative to the frame's eye, the tile to the plan's
         // (the same eye unless a caller re-planned in between).
         const bromath::Mat4 lightViewProj = toVulkanClip(rebased(tile.relViewProj, frame.view.eye - plan.origin));
+        // The timed passes' names: a draw's own (a forest group's), else its
+        // kind's, a run of draws under one name marked once as it ends.
+        static constexpr const char* kKindLabels[kMeshKindCount] = {
+            "shadow:static", "shadow:instanced", "shadow:skinned", "shadow:scatter", "shadow:tube", "shadow:veg",
+            "shadow:instancedVeg", "shadow:grass", "shadow:forestLeaf", "shadow:forestTube", "shadow:forestSprite"};
+        const char* run = nullptr;
         for (const MeshDraw& draw : frame.lists.meshes) {
             if (!draw.castsShadow) continue;
             if (slot < 32 && !(draw.shadowTileMask & (1u << slot))) continue;
@@ -303,14 +309,17 @@ void PassShadow::record(SceneFrame& frame) {
                 continue;
             }
             frame.stats.shadowDrawn++;
-            if (frame.timer) frame.timer->statBegin(cmd, draw.shadowTimerLabel ? draw.shadowTimerLabel : "shadow:mesh");
+            const char* label = draw.shadowTimerLabel ? draw.shadowTimerLabel : kKindLabels[static_cast<int>(draw.kind)];
+            if (frame.timer && run && run != label) frame.timer->mark(cmd, run);
+            run = label;
+            if (frame.timer) frame.timer->statBegin(cmd, label);
             drawCaster(frame, lightViewProj, draw);
             if (frame.timer) frame.timer->statEnd(cmd);
-            if (frame.timer && draw.shadowTimerLabel) frame.timer->mark(cmd, draw.shadowTimerLabel);
         }
+        if (frame.timer && run) frame.timer->mark(cmd, run);
         // Each tile's end, so a pass log splits the shadows by tile (a
         // cascade or a local light's face): the marks since the last tile's
-        // are this one's.
+        // are this one's (its own: its clear).
         static const char* const kTileLabels[32] = {
             "shadow:tile0",  "shadow:tile1",  "shadow:tile2",  "shadow:tile3",  "shadow:tile4",  "shadow:tile5",
             "shadow:tile6",  "shadow:tile7",  "shadow:tile8",  "shadow:tile9",  "shadow:tile10", "shadow:tile11",
