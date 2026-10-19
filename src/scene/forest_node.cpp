@@ -165,6 +165,13 @@ bool ForestNode::setSpecimens(SpecimenArrays&& a) {
     if (looks_.size() != specimens_.size() * 8) looks_.clear();
     if (leafLooks_.size() != specimens_.size() * 8) leafLooks_.clear();
     keepRadius_ = a.keepRadius;
+    woodArea_.assign(nSeg + 1, 0.0f);
+    for (size_t i = 0; i < nSeg; ++i) {
+        const float* g = &a.segments[i * 8];
+        const float len = std::sqrt((g[4] - g[0]) * (g[4] - g[0]) + (g[5] - g[1]) * (g[5] - g[1]) +
+                                    (g[6] - g[2]) * (g[6] - g[2]));
+        woodArea_[i + 1] = woodArea_[i] + (g[3] + std::max(g[7], 0.0f)) * len;
+    }
     data_ = std::move(a);
     countClumpTwigs();
     // The blooms were the old specimens' (setBlooms gives the new ones').
@@ -572,6 +579,15 @@ void ForestNode::countClumpTwigs() {
         const Specimen& s = specimens_[k];
         for (uint32_t c = s.clumpStart; c < s.clumpStart + s.clumpCount && c < nClump; ++c) clumpTwigs_[c] = {};
     }
+}
+
+void ForestNode::barkOverLeaf(size_t k, float out[3]) const {
+    const float* c = color();
+    const bool own = looks_.size() == specimens_.size() * 8 && k < specimens_.size();
+    const float* leaf = own && looks_[k * 8] + looks_[k * 8 + 1] + looks_[k * 8 + 2] > 0.0f ? &looks_[k * 8] : c;
+    const float* bark =
+        own && looks_[k * 8 + 4] + looks_[k * 8 + 5] + looks_[k * 8 + 6] > 0.0f ? &looks_[k * 8 + 4] : barkColor_;
+    for (int i = 0; i < 3; ++i) out[i] = leaf[i] > 1e-4f ? std::clamp(bark[i] / leaf[i], 0.05f, 8.0f) : 1.0f;
 }
 
 void ForestNode::refreshGpu() const {

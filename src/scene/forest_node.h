@@ -269,6 +269,14 @@ public:
     const std::vector<Specimen>& specimens() const { return specimens_; }
     /// Segment keep radii, thickest first within each specimen.
     const std::vector<float>& keepRadius() const { return keepRadius_; }
+    /// The wood's side area (specimen units: twice its mean radius times its
+    /// length) of every segment before each, in segment order (one more
+    /// than the segments): a run's area is a difference of two.
+    const std::vector<float>& woodArea() const { return woodArea_; }
+    /// Specimen `k`'s bark colour over its leaves' (each its own, or the
+    /// node's), per channel: what a leaf's colour is multiplied by to be
+    /// its bark's.
+    void barkOverLeaf(size_t k, float out[3]) const;
     /// A broad node's twigs (scene_forest_shoot.glsl): each clump's pieces,
     /// its lobe stems and sprays first (`stems`), then its shoots
     /// (`pieces`); 0 for a clump with no leaves.
@@ -384,6 +392,7 @@ private:
     std::vector<Specimen> specimens_;
     SpecimenArrays data_;
     std::vector<float> keepRadius_;
+    std::vector<float> woodArea_;
     std::vector<ClumpTwigs> clumpTwigs_;
     std::vector<Instance> instances_;
     bromath::AABB3 forestBounds_;

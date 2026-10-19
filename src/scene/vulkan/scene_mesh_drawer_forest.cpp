@@ -85,6 +85,9 @@ constexpr uint32_t kVertsPerTwig = 6;
 // the flight's twigs 0.35 -> 2.5 ms a frame; at 0.35 px 0.6 ms, keeping
 // most of the canopy's edges (40-80 m hard, noon 7.2 -> 6.9).
 constexpr float kBarkRibbonCut = 0.5f;
+// How much of a needle node's undrawn fine wood shows through its needles
+// (the share of its outline area the tint toward the bark stands for).
+constexpr float kWoodShare = 0.6f;
 // A clump at least kTwigFinePixels across (its radius) on screen at its
 // nearest point draws its twigs FINE: each piece kTwigFineRows quads along
 // the curve through its joints (forestHermite), with a collar where a twig
@@ -146,8 +149,9 @@ enum Group {
 struct Entry {
     uint32_t instance, first, end, param;
     float widening, keepEnd, tail, fade;
+    float wood[3];   // leaves' and sprites' tint toward the bark (scene_forest.glsl's e2; 0: none)
 };
-static_assert(sizeof(Entry) == 32);
+static_assert(sizeof(Entry) == 44);
 // An entry's floats on the GPU: its 8, then its pose slot and padding
 // (scene_forest.glsl's three records).
 constexpr size_t kEntryFloats = 12;
@@ -274,6 +278,29 @@ struct SceneMeshDrawer::ForestPlan {
     void addTree(Groups* G, uint32_t inst, const ForestNode::Specimen& sp, const ForestNode::TreeLod& t,
                  bool shadow, uint64_t& vertices, float px = 0.0f) {
         const auto& keepRadius = node->keepRadius();
+        // A needle node's fine wood (its twigs are no form of their own):
+        // what the bark's cut leaves out (under kBarkRibbonCut of the cut)
+        // tints its leaves and sprites toward the bark, by that wood's share
+        // of the crown's outline. Undrawn, a pine's twigs and fine limbs
+        // left its far tiers greener and lighter than its leaves tier,
+        // where they stand among the needles (auto 100.8 against 107.1 at
+        // 45 m noon unshadowed).
+        float wood[3] = {0.0f, 0.0f, 0.0f};
+        if (!shadow && !twigs && sp.segCount > 0 && t.barkRadius > 0.0f && sp.crownRadius > 0.0f) {
+            const float* k0 = keepRadius.data() + sp.segStart;
+            const uint32_t cut = static_cast<uint32_t>(
+                std::upper_bound(k0, k0 + sp.segCount, kBarkRibbonCut * t.barkRadius,
+                                 [](float r, float v) { return r > v; }) - k0);
+            const auto& A = node->woodArea();
+            const float area = A[sp.segStart + sp.segCount] - A[sp.segStart + cut];
+            const float crown = 3.14159265f * sp.crownRadius * std::max(sp.crownRadiusUp, sp.crownRadius * 0.25f);
+            const float f = std::clamp(kWoodShare * area / crown, 0.0f, 0.5f);
+            if (f > 0.0f) {
+                float r[3];
+                node->barkOverLeaf(static_cast<size_t>(&sp - node->specimens().data()), r);
+                for (int i = 0; i < 3; ++i) wood[i] = 1.0f + f * (r[i] - 1.0f);
+            }
+        }
         float lo[ForestNode::kTiers], hi[ForestNode::kTiers];
         ForestNode::fadeRanges(t, lo, hi);
         if (shadow) {
@@ -322,7 +349,7 @@ struct SceneMeshDrawer::ForestPlan {
                     auto& g = G->g[card ? LeafCard : LeafNear];
                     for (uint32_t c = from; c < to; c += K)
                         g.push_back({inst, sp.leafStart + c, sp.leafStart + std::min(c + K, to), V, widening, keepEnd,
-                                     tail, fade});
+                                     tail, fade, {wood[0], wood[1], wood[2]}});
                     if (!shadow) stats.leaves += to - from;
                 }
             }
@@ -431,7 +458,7 @@ struct SceneMeshDrawer::ForestPlan {
             for (uint32_t c = 0; c < sp.clumpCount; c += kClumpsPerEntry)
                 G->g[Clumps].push_back({inst, sp.clumpStart + c,
                                         sp.clumpStart + std::min(c + kClumpsPerEntry, sp.clumpCount), 0u, 1.0f, 0.0f,
-                                        1.0f, fade});
+                                        1.0f, fade, {wood[0], wood[1], wood[2]}});
         }
         if (hi[2] > lo[2] && sp.clumpCount > 0 && G) {
             vertices += 6;
@@ -846,7 +873,9 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
             d[6] = e.tail;
             d[7] = e.fade;
             d[8] = floatBits(posed ? poseUsed_ : ~0u);
-            d[9] = d[10] = d[11] = 0.0f;
+            d[9] = e.wood[0];
+            d[10] = e.wood[1];
+            d[11] = e.wood[2];
             if (posed) poseUsed_ += e.end - e.first;
             ++at;
         }

@@ -55,8 +55,10 @@
 //       their size, shrinking to nothing over the `tail` leaves before
 //       `keep end` (so the count thins without popping); `fade` is the
 //       dithered cross-fade code mesh.frag reads (ForestNode::fadeCode)
-//   e2  (slot, 0, 0, 0) as uint bits: a leaf entry in colour, its first
-//       leaf's pose in binding 3 (forest_leaf_pose.comp; -1: none)
+//   e2  (slot as uint bits, wood): a leaf entry in colour, its first
+//       leaf's pose in binding 3 (forest_leaf_pose.comp; -1: none); `wood`
+//       the leaves' and sprites' tint toward the bark for the fine wood the
+//       bark's cut leaves out (rgb, 0: none)
 //
 // Set 3 binding 3 holds this frame's leaf poses (FOREST_POSE_RECORDS uvec4s a
 // leaf, forestPoseWrite / forestPose below): the compute pass poses each
@@ -86,13 +88,16 @@ struct ForestEntry {
     float tail;
     float fade;
     int slot;
+    vec3 wood;
 };
 
 ForestEntry forestEntry(int i) {
     uvec4 a = floatBitsToUint(forestEntries.records[i * 3]);
     vec4 b = forestEntries.records[i * 3 + 1];
-    int slot = int(floatBitsToUint(forestEntries.records[i * 3 + 2].x));
-    return ForestEntry(int(a.x), int(a.y), int(a.z), int(a.w), b.x, b.y, b.z, b.w, slot);
+    vec4 c = forestEntries.records[i * 3 + 2];
+    int slot = int(floatBitsToUint(c.x));
+    vec3 wood = c.y + c.z + c.w > 0.0 ? c.yzw : vec3(1.0);
+    return ForestEntry(int(a.x), int(a.y), int(a.z), int(a.w), b.x, b.y, b.z, b.w, slot, wood);
 }
 
 // A leaf posed (forest_leaf_pose.comp): where its centre is now

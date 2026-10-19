@@ -150,7 +150,7 @@ void main() {
     vec3 Tw = normalize(M * inTangent.xyz);
 
     outVegShade = p.shade;
-    outInstColor = vec4(p.tint, e.fade);
+    outInstColor = vec4(p.tint * e.wood, e.fade);
     // A spray's (mesh.frag's SCENE_FOREST_SPRAY): its seed, its own dither.
     if (!cluster) outLobeDensity = p.seed;
     if (cluster) {
