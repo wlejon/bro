@@ -235,6 +235,7 @@ struct SceneMeshDrawer::ForestPlan {
     bool cores = false;   // the leaves tier draws its lobes' cores (a spray node's)
     bool clusters = false;   // past the card widening a kept leaf is a cluster (Lod::clusters, a broad node's)
     bool twigs = false;      // its leaves hang from twigs drawn as such (a broad node's)
+    bool needles = false;    // a needle node's (its crowns shade through the whole crown)
     uint32_t bloomBase = 0;  // the blooms' first record in the node's data (ForestNode::bloomRecordBase)
     std::vector<bromath::AABB3> bounds;   // every tree's, world, padded by the sway's reach
     std::vector<Seen> seen;               // the camera's trees
@@ -301,7 +302,14 @@ struct SceneMeshDrawer::ForestPlan {
         // share of the two from 0.35 to 0.65, the casters ran behind the
         // colour's hand-over and then ahead of it: a pine at 92 to 104 m
         // golden dipped 0.4 under both tiers' dY and then rose 1.4 over.)
-        const float keep = std::min(t.crowns, std::max(c.crowns, 0.0f));
+        // A needle crown takes the whole crown's shade itself and reads the
+        // map past it (scene_forest_surface.glsl), so no clump caster lands
+        // on it: its caster's crowns follow the cube of the camera's share,
+        // the clumps keeping their own casters through most of the hand-over
+        // (at the camera's share, a pine at 120 m, half of each, was +0.24 /
+        // +0.48 dY over its leaves at noon / golden; +0.11 / +0.15).
+        const float cc = std::max(c.crowns, 0.0f);
+        const float keep = std::min(t.crowns, needles ? cc * cc * cc : cc);
         t.clumps += t.crowns - keep;
         t.crowns = keep;
         return t;
@@ -729,6 +737,7 @@ std::unique_ptr<SceneMeshDrawer::ForestPlan> SceneMeshDrawer::planForest(SceneFr
     // cut out as the near ones'), not clusters of broad leaves.
     P.clusters = P.lod.clusters > 0.5f && node.look().leafForm == 0;
     P.twigs = node.look().leafForm == 0 && !node.clumpTwigs().empty();
+    P.needles = node.look().leafForm == 1;
     const auto& specimens = node.specimens();
     const auto& instances = node.instances();
 

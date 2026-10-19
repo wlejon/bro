@@ -129,28 +129,40 @@ ForestMass forestSpriteSurface(uint flags) {
                                (right * grain.x + up * grain.y + view * grain.z) * 0.85);
             float facing = dot(n, -d);
             m.under = smoothstep(0.1, -0.1, facing);
+            // A needle spray's needles radiate from their shoot, so about
+            // half the faces the eye meets are their undersides whichever
+            // way its clump turns (the leaves' and clumps' share; by the
+            // clump's one normal a pine's crowns showed under half as many,
+            // their albedo 11 to 13 levels under its leaves' at both skies).
+            uint form = floatBitsToUint(FOREST_HEADER(FOREST_H_LOOK)) & 15u;
+            if (form == 1u) m.under = max(m.under, 0.5);
             m.normal = facing < 0.0 ? -n : n;
             m.tone = 1.0 + 0.1 * grain.x * grain.y;
             m.path = max(1.0 + 1.5 * grain.w, 0.05);
             m.sphere = h.sphere;
             m.density = h.density;
             m.flatness = h.flatness;
-            if ((floatBitsToUint(FOREST_HEADER(FOREST_H_LOOK)) & 15u) == 0u) {
-                // A broadleaf's crown is shaded through the whole crown's
-                // leaves toward the light (its mean density), not its one
-                // clump's: the crown's caster is one disc past its middle,
-                // which leaves its near half unshaded, where the clumps
-                // tier's lobes shade each other through their own casters
-                // (its crowns were 12 units brighter than its clumps and
-                // leaves). The shadow map is read where the light leaves the
-                // crown's sphere, past that disc. (A spray node's crown, a
-                // shell of sprays over dark cores, is as its leaves lit
-                // through its one clump.)
+            if (form <= 1u) {
+                // A broadleaf's or a needle node's crown is shaded through
+                // the whole crown's leaves toward the light (its mean
+                // density), not its one clump's: the crown's casters are a
+                // disc or two about its middle, which leave its near half
+                // unshaded, where the clumps tier's lobes shade each other
+                // through their own casters (a broadleaf's crowns were 12
+                // units brighter than its clumps and leaves; a pine's, its
+                // leaves' shadow map passing 0.6 of a noon sun and 0.45 of a
+                // golden one and its crowns' all of it, +0.40 / +0.47 /
+                // +0.22 over its leaves' dY at 100 / 120 / 150 m noon and
+                // -0.24 / -0.37 / -0.41 at golden). The shadow map is read
+                // where the light leaves the crown's sphere, past those
+                // discs. (A scale-leaf crown, a shell of dense pads over
+                // dark cores, is as its leaves lit through its one clump.)
                 m.sphere = vec4(inMass1.xyz, max(inMass1.w, length(h.at - inMass1.xyz) * 1.02));
                 m.flatness = 1.0;
                 m.density = FOREST_CROWN_SHADE * h.crownSigma;
                 m.selfMax = FOREST_CROWN_SELF_MAX;
-            } else if (lighting.sunDirection.w > 0.5) {
+            }
+            if (form != 0u && lighting.sunDirection.w > 0.5) {
                 // A spray crown's own leaves stop the light by the area they
                 // turn to it, as a broad lobe's do (below): its sprays lean
                 // up, so less of a low sun than a high one. With one depth
