@@ -39,7 +39,7 @@ private:
     };
     static_assert(sizeof(Push) == 128);
 
-    VkPipeline builtinPipeline(MeshKind kind, bool twoSided);
+    VkPipeline builtinPipeline(MeshKind kind, bool twoSided, bool leafInline);
     VkPipeline customPipeline(const CustomShaderState& cs, MeshKind kind, bool twoSided);
     VkPipeline buildPipeline(VkShaderModule vs, MeshKind kind, bool custom, bool twoSided);
     void drawCaster(SceneFrame& frame, const bromath::Mat4& lightViewProj, const MeshDraw& draw);
@@ -50,6 +50,10 @@ private:
     VkShaderModule fs_ = VK_NULL_HANDLE;
     VkShaderModule fsForest_ = VK_NULL_HANDLE;   // forest sprites' leafy cutout
     VkPipeline builtin_[kMeshKindCount][2] = {};   // [kind][two-sided]
+    // Forest leaf casters past the pose buffer's room (kForestLeafInline),
+    // each vertex posing its leaf: shadow_forest_leaf.vert's inline build.
+    VkShaderModule vsLeafInline_ = VK_NULL_HANDLE;
+    VkPipeline leafInline_[2] = {};                // [two-sided]
     // Custom-vertex casters by (chunk key, kind, sidedness); VK_NULL_HANDLE
     // remembers a failed compile, so it is reported once and the caster
     // falls back to its undisplaced silhouette.

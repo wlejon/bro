@@ -170,7 +170,7 @@ MeshDraw groupDraw(SceneFrame& frame, ForestNode& node, const DrawBase& b, int k
         d.push.pbrParams[3] = static_cast<float>(b.leafFlags | (cluster ? mesh_flags::kForestCluster : 0u) |
                                                  (spray ? mesh_flags::kForestSpray : 0u) |
                                                  (cut ? mesh_flags::kForestLeafCut : 0u) |
-                                                 (!shadow && !posed ? mesh_flags::kForestLeafInline : 0u));
+                                                 (!posed ? mesh_flags::kForestLeafInline : 0u));
         break;
     }
     case Bark20Curved:

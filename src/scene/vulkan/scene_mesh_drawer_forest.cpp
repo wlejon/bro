@@ -1509,18 +1509,22 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
         return;
     }
     // The colour leaves are posed a leaf at a time (forest_leaf_pose.comp):
-    // a pose slot each in this frame's pose buffer.
+    // a pose slot each in this frame's pose buffer; then each tile's leaf
+    // casters, the same (the GPU planner's posed groups, in its order).
     // A group past the buffer's room (a forced Leaves tier over a whole
     // forest) poses its leaves vertex by vertex instead (kForestLeafInline).
     uint32_t poseLeaves = 0;
-    bool posedGroup[kGroups] = {};
-    for (int k : {LeafNear, LeafCard}) {
+    const auto room = [&](const Entries& g) {
         uint32_t n = 0;
-        for (const Entry& e : colour.g[k]) n += e.end - e.first;
-        if (n == 0 || uint64_t{poseUsed_} + poseLeaves + n > kMaxPoses) continue;
-        posedGroup[k] = true;
+        for (const Entry& e : g) n += e.end - e.first;
+        if (n == 0 || uint64_t{poseUsed_} + poseLeaves + n > kMaxPoses) return false;
         poseLeaves += n;
-    }
+        return true;
+    };
+    bool posedGroup[kGroups] = {};
+    for (int k : {LeafNear, LeafCard}) posedGroup[k] = room(colour.g[k]);
+    std::vector<char> posedCasters(tiles.size());
+    for (size_t t = 0; t < tiles.size(); ++t) posedCasters[t] = room(tiles[t].g[LeafCard]);
     const SceneVkBuffer* poses = ensurePoses(frame, poseUsed_ + poseLeaves);
     if (!poses) {
         node.setStats(stats);
@@ -1600,22 +1604,23 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
     drawBase.shadowLod = P.shadowLod;
     drawBase.farLast = P.canopyTop > -1e29f && view.eye.y < P.canopyTop;
 
-    const auto emit = [&](const Groups& G, bool shadow, int slot) {
+    const auto emit = [&](const Groups& G, bool shadow, int slot, bool posedCaster) {
         for (int k = 0; k < kGroups; ++k) {
             const auto& g = G.g[k];
             if (g.empty()) continue;
-            const bool posed = !shadow && posedGroup[k];
+            const bool posed = shadow ? posedCaster && k == LeafCard : posedGroup[k];
             const uint32_t first = put(g, posed, &G == &colour ? &order[k] : nullptr);
             const MeshDraw d = forest::groupDraw(frame, node, drawBase, k, shadow, slot, posed, first,
                                                  static_cast<uint32_t>(g.size()));
             if (posed) {
                 // The pose pass runs these entries first, with the draw's own
                 // push constants (its flags say cluster or cut), its first
-                // entry in extra.z.
+                // entry in extra.z, extra.w 1 for a caster.
                 ForestPoseJob job;
                 job.set = set;
                 job.push = d.push;
                 job.push.extra[2] = static_cast<float>(first);
+                job.push.extra[3] = shadow ? 1.0f : 0.0f;
                 job.entries = static_cast<uint32_t>(g.size());
                 poseJobs_.push_back(job);
             }
@@ -1623,8 +1628,8 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
             stats.draws++;
         }
     };
-    emit(colour, false, 0);
-    for (size_t t = 0; t < tiles.size(); ++t) emit(tiles[t], true, P.tileSlots[t]);
+    emit(colour, false, 0, false);
+    for (size_t t = 0; t < tiles.size(); ++t) emit(tiles[t], true, P.tileSlots[t], posedCasters[t] != 0);
     node.setStats(stats);
 }
 

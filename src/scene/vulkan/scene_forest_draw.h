@@ -88,8 +88,9 @@ bool drawBase(SceneFrame& frame, SceneDefaults& defaults, VkDevice device, Fores
               DrawBase& out);
 
 /// Group `k`'s draw of `n` entries from entry `first` (the camera's, or a
-/// shadow caster's in shadow plan slot `slot`). `posed`: a colour leaf
-/// group whose leaves the pose pass posed (else it poses them inline).
+/// shadow caster's in shadow plan slot `slot`). `posed`: a leaf group (a
+/// colour one, or a tile's leaf casters) whose leaves the pose pass posed
+/// (else it poses them inline).
 MeshDraw groupDraw(SceneFrame& frame, ForestNode& node, const DrawBase& b, int k, bool shadow, int slot, bool posed,
                    uint32_t first, uint32_t n);
 

@@ -176,6 +176,49 @@ void forestPoseLobe(int slot, inout ForestPose p) {
 }
 #endif
 
+// A leaf's shadow caster posed (forest_leaf_pose.comp's caster jobs, read by
+// shadow_forest_leaf.vert): its centre, matrix and fold as a ForestPose's,
+// and how far it is set back from the light (world units), which the vertex
+// adds along its tile's light. The first three of the slot's records.
+struct ForestCasterPose {
+    bool alive;
+    vec3 at;
+    mat3 M;
+    vec2 fold;
+    float setback;
+};
+
+#ifdef FOREST_POSE_WRITE
+void forestCasterPoseWrite(int slot, ForestCasterPose p) {
+    int b = slot * FOREST_POSE_RECORDS;
+    if (!p.alive) {
+        forestPoses.records[b + 1] = uvec4(0u);
+        return;
+    }
+    forestPoses.records[b] = uvec4(floatBitsToUint(p.at), floatBitsToUint(p.setback));
+    forestPoses.records[b + 1] = uvec4(packHalf2x16(p.M[0].xy), packHalf2x16(vec2(p.M[0].z, p.M[1].x)),
+                                       packHalf2x16(p.M[1].yz), packHalf2x16(p.M[2].xy));
+    forestPoses.records[b + 2] = uvec4(packHalf2x16(vec2(p.M[2].z, 1.0)), packHalf2x16(p.fold), 0u, 0u);
+}
+#else
+ForestCasterPose forestCasterPose(int slot) {
+    int b = slot * FOREST_POSE_RECORDS;
+    ForestCasterPose p;
+    uvec4 r1 = forestPoses.records[b + 1];
+    p.alive = r1.x != 0u;
+    if (!p.alive) return p;
+    uvec4 r0 = forestPoses.records[b];
+    uvec4 r2 = forestPoses.records[b + 2];
+    p.at = uintBitsToFloat(r0.xyz);
+    p.setback = uintBitsToFloat(r0.w);
+    vec2 a = unpackHalf2x16(r1.x), b1 = unpackHalf2x16(r1.y), c = unpackHalf2x16(r1.z), d = unpackHalf2x16(r1.w);
+    vec2 e = unpackHalf2x16(r2.x);
+    p.M = mat3(vec3(a, b1.x), vec3(b1.y, c), vec3(d, e.x));
+    p.fold = unpackHalf2x16(r2.y);
+    return p;
+}
+#endif
+
 int forestSpecimenRecord(int s) { return FOREST_BASE(FOREST_H_SPECIMENS) + s * FOREST_SPECIMEN_RECORDS; }
 
 // Specimen `s`'s tint on the node's colour: its leaves' or its bark's.

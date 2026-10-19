@@ -339,7 +339,8 @@ private:
     std::unordered_map<std::string, std::unique_ptr<CustomProgram>> custom_;
 
     // The forests' leaf poses (forest_leaf_pose.comp): this frame's jobs,
-    // one per colour leaf draw, the slots handed out so far, and the
+    // one per posed leaf draw (colour, or a tile's leaf casters, push.extra.w
+    // 1), the slots handed out so far, and the
     // device-local buffer they go to (kept across frames, grown as needed).
     struct ForestPoseJob {
         VkDescriptorSet set = VK_NULL_HANDLE;

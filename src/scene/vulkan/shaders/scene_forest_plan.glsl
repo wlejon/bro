@@ -487,8 +487,11 @@ uint gMode;
 uint gVerts, gDrawnOnly, gLeaves, gBlooms;
 uint gCount[FP_COLUMNS];
 uint gAt[FP_GROUPS];
-uint gSlot[2];
+uint gSlot[2];     // the block's view's leaf groups (LeafNear, LeafCard)
 bool gPosed[2];
+// View v's leaf group j (0 LeafNear, 1 LeafCard) as a posed group
+// (FP_POSED_GROUPS), -1 for none: a tile poses its LeafCard casters alone.
+int posedGroupOf(uint v, int j) { return v == 0u ? j : j == 1 ? int(1u + v) : -1; }
 uint gEntryCap;
 // A broad tree's twigs, a clump at a time, are the workgroup's when the
 // stage defers them (gDeferTwigs; forest_plan_place.comp's twigs()): the
@@ -551,7 +554,8 @@ void entryAt(uint at, uint inst, uint first, uint end, uint param, float widenin
 }
 void planEntry(int k, uint inst, uint first, uint end, uint param, float widening, float keepEnd, float tail,
                float fade, vec3 wood, bool camera) {
-    bool leaf = camera && (k == G_LEAF_NEAR || k == G_LEAF_CARD);
+    // A leaf group that may be posed: the camera's two, a tile's casters.
+    bool leaf = k == G_LEAF_CARD || (camera && k == G_LEAF_NEAR);
     if (gMode == MODE_COUNT) {
         gCount[k]++;
         if (leaf) gCount[FP_GROUPS + k - G_LEAF_NEAR] += end - first;
@@ -572,7 +576,7 @@ void planRun(int k, uint inst, uint base, uint n, uint per, uint param, float wi
     if (n == 0u) return;
     if (gMode == MODE_COUNT) {
         gCount[k] += (n + per - 1u) / per;
-        if (camera && (k == G_LEAF_NEAR || k == G_LEAF_CARD)) gCount[FP_GROUPS + k - G_LEAF_NEAR] += n;
+        if (k == G_LEAF_CARD || (camera && k == G_LEAF_NEAR)) gCount[FP_GROUPS + k - G_LEAF_NEAR] += n;
         return;
     }
     for (uint c = 0u; c < n; c += per)

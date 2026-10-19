@@ -103,6 +103,7 @@ bool PassShadow::setup(SceneGpu& gpu) {
         SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowGrassVert);
     vs_[static_cast<int>(MeshKind::ForestLeaf)] =
         SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowForestLeafVert);
+    vsLeafInline_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowForestLeafInlineVert);
     vs_[static_cast<int>(MeshKind::ForestTube)] =
         SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowForestTubeVert);
     vs_[static_cast<int>(MeshKind::ForestSprite)] =
@@ -112,13 +113,14 @@ bool PassShadow::setup(SceneGpu& gpu) {
     for (VkShaderModule m : vs_) {
         if (!m) return false;
     }
-    return fs_ != VK_NULL_HANDLE && fsForest_ != VK_NULL_HANDLE;
+    return fs_ != VK_NULL_HANDLE && fsForest_ != VK_NULL_HANDLE && vsLeafInline_ != VK_NULL_HANDLE;
 }
 
 void PassShadow::cleanup(SceneGpu& gpu) {
     VkDevice dev = gpu.device.device();
     std::vector<VkPipeline> pipelines;
     for (auto& perKind : builtin_) pipelines.insert(pipelines.end(), std::begin(perKind), std::end(perKind));
+    pipelines.insert(pipelines.end(), std::begin(leafInline_), std::end(leafInline_));
     for (auto& [key, p] : custom_) pipelines.push_back(p);
     gpu.device.defer([dev, pipelines] {
         for (VkPipeline p : pipelines) {
@@ -127,10 +129,13 @@ void PassShadow::cleanup(SceneGpu& gpu) {
     });
     custom_.clear();
     for (auto& perKind : builtin_) perKind[0] = perKind[1] = VK_NULL_HANDLE;
+    leafInline_[0] = leafInline_[1] = VK_NULL_HANDLE;
     for (VkShaderModule& m : vs_) {
         SceneVkShaderModule::destroy(dev, m);
         m = VK_NULL_HANDLE;
     }
+    SceneVkShaderModule::destroy(dev, vsLeafInline_);
+    vsLeafInline_ = VK_NULL_HANDLE;
     SceneVkShaderModule::destroy(dev, fs_);
     SceneVkShaderModule::destroy(dev, fsForest_);
     fs_ = fsForest_ = VK_NULL_HANDLE;
@@ -164,9 +169,9 @@ VkPipeline PassShadow::buildPipeline(VkShaderModule vs, MeshKind kind, bool cust
     return b.build(device_->device(), layout_);
 }
 
-VkPipeline PassShadow::builtinPipeline(MeshKind kind, bool twoSided) {
-    VkPipeline& p = builtin_[static_cast<int>(kind)][twoSided ? 1 : 0];
-    if (p == VK_NULL_HANDLE) p = buildPipeline(vs_[static_cast<int>(kind)], kind, false, twoSided);
+VkPipeline PassShadow::builtinPipeline(MeshKind kind, bool twoSided, bool leafInline) {
+    VkPipeline& p = leafInline ? leafInline_[twoSided ? 1 : 0] : builtin_[static_cast<int>(kind)][twoSided ? 1 : 0];
+    if (p == VK_NULL_HANDLE) p = buildPipeline(leafInline ? vsLeafInline_ : vs_[static_cast<int>(kind)], kind, false, twoSided);
     return p;
 }
 
@@ -215,7 +220,9 @@ void PassShadow::drawCaster(SceneFrame& frame, const bromath::Mat4& lightViewPro
                         draw.kind != MeshKind::Instanced;
     if (custom) pipeline = customPipeline(*draw.custom, draw.kind, draw.twoSided);
     const bool customBound = pipeline != VK_NULL_HANDLE;
-    if (!pipeline) pipeline = builtinPipeline(draw.kind, draw.twoSided);
+    const bool leafInline = draw.kind == MeshKind::ForestLeaf &&
+                            (static_cast<uint32_t>(draw.push.pbrParams[3]) & mesh_flags::kForestLeafInline) != 0u;
+    if (!pipeline) pipeline = builtinPipeline(draw.kind, draw.twoSided, leafInline);
     if (!pipeline) return;
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);

@@ -217,7 +217,9 @@ bool SceneMeshDrawer::prepareForestsGpu(SceneFrame& frame, const std::vector<For
     // Each node's draws (every group its plan can fill) and parameters.
     std::vector<std::vector<MeshDraw>> draws(plans.size());
     std::vector<VkDescriptorSet> sets(plans.size(), VK_NULL_HANDLE);
-    std::vector<std::array<MeshPushConstants, 2>> posePush(plans.size());
+    // Each posed group's pose job push constants (FP_POSED_GROUPS: the
+    // camera's two leaf groups, then each tile's leaf casters).
+    std::vector<std::vector<MeshPushConstants>> posePush(plans.size());
     for (size_t pi = 0; pi < plans.size(); ++pi) {
         NodePlan& P = plans[pi];
         ForestNode& node = *P.node;
@@ -244,6 +246,7 @@ bool SceneMeshDrawer::prepareForestsGpu(SceneFrame& frame, const std::vector<For
             d.indirectOffset = argsCommandOffset(v, slot);
             return d;
         };
+        posePush[pi].assign(2 + P.tileSlots.size(), MeshPushConstants{});
         // The camera's groups, in the CPU's order (a posed leaf group, then
         // its inline twin; the clumps and crowns in batches).
         for (int k = 0; k < kGroups; ++k) {
@@ -256,6 +259,7 @@ bool SceneMeshDrawer::prepareForestsGpu(SceneFrame& frame, const std::vector<For
                 list.push_back(indirect(posed, 0, static_cast<uint32_t>(k)));
                 list.push_back(indirect(groupDraw(frame, node, base, k, false, 0, false, 0, 1), 0, FP_GROUPS + j));
                 posePush[pi][j] = posed.push;
+                posePush[pi][j].extra[3] = 0.0f;
                 continue;
             }
             MeshDraw d = indirect(groupDraw(frame, node, base, k, false, 0, false, 0, 1), 0, static_cast<uint32_t>(k));
@@ -267,12 +271,21 @@ bool SceneMeshDrawer::prepareForestsGpu(SceneFrame& frame, const std::vector<For
             list.push_back(d);
         }
         // Each shadow tile's casters: cards, the far bark, runs, clumps and
-        // crowns (addTree draws a caster nothing else).
+        // crowns (addTree draws a caster nothing else). The cards are a posed
+        // group as the camera's leaves are (its inline twin at FP_GROUPS + 1),
+        // posed with the caster's push constants, extra.w 1.
         for (size_t t = 0; t < P.tileSlots.size(); ++t)
             for (int k : {LeafCard, Bark5, Clumps, Crowns, Runs}) {
-                const MeshDraw d = groupDraw(frame, node, base, k, true, P.tileSlots[t], false, 0, 1);
+                const uint32_t v = static_cast<uint32_t>(1 + t);
+                const MeshDraw d = groupDraw(frame, node, base, k, true, P.tileSlots[t], k == LeafCard, 0, 1);
                 putDraw(p, static_cast<uint32_t>(k), true, d);
-                list.push_back(indirect(d, static_cast<uint32_t>(1 + t), static_cast<uint32_t>(k)));
+                list.push_back(indirect(d, v, static_cast<uint32_t>(k)));
+                if (k == LeafCard) {
+                    list.push_back(indirect(groupDraw(frame, node, base, k, true, P.tileSlots[t], false, 0, 1), v,
+                                            FP_GROUPS + 1));
+                    posePush[pi][2 + t] = d.push;
+                    posePush[pi][2 + t].extra[3] = 1.0f;
+                }
             }
 
         // The view, the node and the tiles.
@@ -346,7 +359,7 @@ bool SceneMeshDrawer::prepareForestsGpu(SceneFrame& frame, const std::vector<For
         if (empty[i]) nodes[i]->setStats({});
     for (size_t pi = 0; pi < plans.size(); ++pi) {
         NodePlan& P = plans[pi];
-        for (uint32_t j = 0; j < 2; ++j) planner.addPoseJob(*P.state, posePush[pi][j], j, sets[pi]);
+        for (uint32_t j = 0; j < posePush[pi].size(); ++j) planner.addPoseJob(*P.state, posePush[pi][j], j, sets[pi]);
         out[P.index].swap(draws[pi]);
         ForestNode& node = *P.node;
         node.setStatsSource(P.state);

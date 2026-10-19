@@ -10,7 +10,10 @@
 // scene_camera.glsl, scene_mesh_push.glsl (the draw's flags say cluster),
 // scene_procedural.glsl, scene_vegetation.glsl, scene_forest.glsl and
 // scene_forest_shoot.glsl, with forestApplyLook() called first.
+// forestCasterPoseLeaf is the same for a leaf's shadow caster (the one a
+// shadow vertex builds from scene_shadow_push.glsl, which has no colour pose).
 
+#ifndef VEG_SHADOW_CASTER
 ForestPose forestPoseLeaf(ForestEntry e, int leaf) {
     ForestPose p;
     p.alive = false;
@@ -114,5 +117,72 @@ ForestPose forestPoseLeaf(ForestEntry e, int leaf) {
         p.lobeDensity = leaves * a * a * FOREST_HEADER(FOREST_H_LEAF_ASPECT) * 0.55 * 0.5 / r;
         p.lobeFlat = 0.8 * procClumpFlat;
     }
+    return p;
+}
+#endif
+
+// A leaf's caster (the drawer hands casters fewer, wider leaves: a shadow
+// texel is wider than a leaf), placed and swayed as the leaf is, so its
+// shadow on the leaves under it stays with it as a gust bends its spray, and
+// folded about its stem as the leaf (each half its way, by the vertex). Its
+// card is not narrowed here: the vertex narrows a spray's to the share its
+// needles cover (forestSprayFill), across the card before its fold.
+ForestCasterPose forestCasterPoseLeaf(ForestEntry e, int leaf) {
+    ForestCasterPose p;
+    p.alive = false;
+    float k = e.widening * clamp((e.keepEnd - float(leaf)) / max(e.tail, 1.0), 0.0, 1.0);
+    ivec2 lf = forestLeaf(leaf);
+    vec3 P, F, lc;
+    mat3 R;
+    float lr;
+    bool onShoot;
+    ForestLeafAt at;
+    forestApplyClumpFlat(e.instance);
+    if (k <= 0.0 || procClumpBare(e.instance, lf.x) || !forestLeafFrame(e.instance, lf, P, R, F, lc, lr, onShoot, at))
+        return p;
+    forestSprayBrush(e.instance, lf.x, lc, lr, P, R, F);
+    int specimen;
+    float treeSeed;
+    mat4 model = sceneModel() * forestInstance(e.instance, specimen, treeSeed);
+    vec3 rest = P;
+    float grown = (k - 1.0) * FOREST_HEADER(FOREST_H_LEAF_LENGTH);
+    // A widened broad caster grows from its node as its leaf does
+    // (forestPoseLeaf).
+    if (grown > 0.0 && !onShoot) P = lc + (P - lc) * clamp(1.0 - 0.5 * grown / max(lr, 1e-3), 0.55, 1.0);
+    mat3 M3 = mat3(model) * (R * k);
+    vec3 center = (model * vec4(P, 1.0)).xyz;
+    // A widened caster holds the area of the leaves it stands for, but
+    // reaches further from its centre than they do: its shadow would fall on
+    // leaves that stand above it toward the light. Set back away from the
+    // light by part of the reach it gained, the crown's shadow starts about
+    // where the leaves' does. At 0.35 of it, set back past leaves it should
+    // shade: a broadleaf's thinned crown at golden 45 / 75 m 1.5 / 7.0
+    // levels brighter than its leaves; at 0.15, 0.2 / 5.5 (at none, -0.6 /
+    // 4.1).
+    p.setback = grown > 0.0 ? 0.15 * grown * vegScale(model) : 0.0;
+
+    vec4 v0, v1, v2, v3;
+    forestVegetation(forestClumpRecord(lf.x) + FOREST_CLUMP_VEGETATION / 4, rest, 1.0, v0, v1, v2, v3);
+    VegPlant plant = vegPlant(model, v0, v3);
+    VegLimb limb = vegLimb(model, v3);
+    VegWind w = vegWind(plant);
+    vec3 anchor = (model * vec4(v2.xyz, 1.0)).xyz;
+    VegPose pose = vegPose(plant, limb, w, anchor, clamp(v2.w, 0.0, 1.0));
+    float amount = forestFlutterAt(e.widening, model, anchor, pose.drag);
+    if (onShoot) {
+        vec3 off, om;
+        forestLeafShootSway(at, model, pose.drag, amount, off, om);
+        pose.offset += off;
+        pose.omega += om;
+    }
+    float seed = fract(sin(dot(v2.xyz, vec3(12.9898, 78.233, 37.719)) + treeSeed * 61.7) * 43758.5453);
+    vec3 side;
+    float fold;
+    mat3 rot = vegLeafTurn(pose, w, normalize(mat3(model) * F), normalize(mat3(model) * R[1]), seed, amount, side,
+                           fold);
+    p.alive = true;
+    p.at = anchor + pose.offset + rot * (center - anchor);
+    p.M = rot * M3;
+    p.fold = vec2(cos(fold), sin(fold));
     return p;
 }

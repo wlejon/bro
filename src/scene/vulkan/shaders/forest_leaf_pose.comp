@@ -4,6 +4,8 @@
 // only takes its point through its leaf's pose, where it was placing and
 // swaying its whole leaf itself. Run over a draw's entries, a workgroup an
 // entry (push.extra.z its first), with the draw's push constants and set 3.
+// A shadow tile's leaf casters are posed the same way (push.extra.w 1, a
+// caster draw's push constants), for shadow_forest_leaf.vert.
 
 layout(local_size_x = 64) in;
 
@@ -31,6 +33,11 @@ void main() {
     forestApplyLook();
     ForestEntry e = forestEntry(firstEntry() + int(gl_WorkGroupID.x));
     if (e.slot < 0) return;
+    if (push.extra.w > 0.5) {
+        for (int c = int(gl_LocalInvocationID.x); c < e.end - e.first; c += 64)
+            forestCasterPoseWrite(e.slot + c, forestCasterPoseLeaf(e, e.first + c));
+        return;
+    }
     for (int c = int(gl_LocalInvocationID.x); c < e.end - e.first; c += 64)
         forestPoseWrite(e.slot + c, forestPoseLeaf(e, e.first + c));
 }

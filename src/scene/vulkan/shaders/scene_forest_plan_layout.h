@@ -23,9 +23,11 @@
 #define FP_SCAN_BLOCK           1024  // elements a scan workgroup takes (4 a thread)
 #define FP_GROUPS               14    // the drawer's groups (forest::Group)
 #define FP_COLUMNS              16    // a place pass's columns: the groups' entries, then the
-                                      // posed groups' leaves (LeafNear, LeafCard; the camera's)
+                                      // leaf groups' leaves (LeafNear, LeafCard; a tile's LeafCard)
 #define FP_MAX_TILES            32
 #define FP_MAX_VIEWS            (1 + FP_MAX_TILES)   // the camera, then each shadow tile
+#define FP_POSED_GROUPS         (2 + FP_MAX_TILES)   // the camera's LeafNear and LeafCard, then each
+                                      // tile's LeafCard casters (view v's at 1 + v)
 #define FP_VIEW_SHIFT           26    // an item: its tree | its view << FP_VIEW_SHIFT
 #define FP_TREE_MASK            ((1u << FP_VIEW_SHIFT) - 1u)
 #define FP_NO_ITEM              0xffffffffu
@@ -192,10 +194,13 @@
 #define FP_N_VIEW_BASE          40    // its first item (block-aligned)
 #define FP_N_VIEW_START         80    // its first place in the flags' scan
 #define FP_N_STATS              128   // FP_S_*: copied to the read-back
-#define FP_N_POSED              176   // per posed group: 1 posed, 0 inline
-#define FP_N_POSE_BASE          178   // per posed group: its first pose slot
 #define FP_N_VARY_COUNT         180   // the items in FP_W_VARY
+#define FP_N_POSED              184   // per posed group (FP_POSED_GROUPS): 1 posed, 0 inline
+#define FP_N_POSE_BASE          (FP_N_POSED + FP_POSED_GROUPS)   // per posed group: its first pose slot
 #define FP_N_WORDS              256
+#if FP_N_POSE_BASE + FP_POSED_GROUPS > FP_N_WORDS
+#error "the node's posed groups run past WORK's first words"
+#endif
 
 // The stats (ForestNode::Stats), as read back.
 #define FP_S_TREES              0     // 3
@@ -231,7 +236,7 @@
 #define FP_A_SLOT_WORDS         (FP_A_COMMAND_WORDS * (1 + FP_BATCHES))
 #define FP_A_POSE               (FP_MAX_VIEWS * FP_A_SLOTS_PER_VIEW * FP_A_SLOT_WORDS)   // per posed group:
                                       // a dispatch (x, 1, 1) and its first entry
-#define FP_A_ITEM_DISPATCH      (FP_A_POSE + 8)   // the item passes' dispatch: the item blocks in use, 1, 1
+#define FP_A_ITEM_DISPATCH      (FP_A_POSE + 4 * FP_POSED_GROUPS)   // the item passes' dispatch: the item blocks in use, 1, 1
 #define FP_A_VARY_DISPATCH      (FP_A_ITEM_DISPATCH + 4)   // the search's later rounds': FP_W_VARY's blocks
 #define FP_A_WORDS              (FP_A_VARY_DISPATCH + 4)
 

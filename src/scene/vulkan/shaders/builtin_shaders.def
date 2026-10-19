@@ -94,6 +94,8 @@ BRO_SCENE_SHADER(ForestPlanWriteComp,      "forest_plan_write.comp",      "fores
 BRO_SCENE_SHADER(MeshForestTubeVert,       "mesh_forest_tube.vert",       "mesh_forest_tube.vert",       "vert", "")
 BRO_SCENE_SHADER(MeshForestSpriteVert,     "mesh_forest_sprite.vert",     "mesh_forest_sprite.vert",     "vert", "")
 BRO_SCENE_SHADER(ShadowForestLeafVert,     "shadow_forest_leaf.vert",     "shadow_forest_leaf.vert",     "vert", "")
+// Past the pose buffer's room, each caster vertex poses its own leaf.
+BRO_SCENE_SHADER(ShadowForestLeafInlineVert, "shadow_forest_leaf_inline.vert", "shadow_forest_leaf.vert", "vert", "FOREST_LEAF_INLINE")
 BRO_SCENE_SHADER(ShadowForestTubeVert,     "shadow_forest_tube.vert",     "shadow_forest_tube.vert",     "vert", "")
 BRO_SCENE_SHADER(ShadowForestSpriteVert,   "shadow_forest_sprite.vert",   "shadow_forest_sprite.vert",   "vert", "")
 BRO_SCENE_SHADER(ShadowForestFrag,         "shadow_forest.frag",          "shadow_forest.frag",          "frag", "")

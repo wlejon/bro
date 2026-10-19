@@ -140,21 +140,22 @@ void main() {
             uint m = first >= cap ? 0u : min(want, cap - first);
             uint word = pu(drawBase + 2u * k);
             uint kind = word & 0xffu, instances = word >> 8, count = pu(drawBase + 2u * k + 1u);
-            bool leaf = v == 0u && (k == uint(G_LEAF_NEAR) || k == uint(G_LEAF_CARD));
-            if (leaf) {
+            int pg = k == uint(G_LEAF_NEAR) || k == uint(G_LEAF_CARD) ? posedGroupOf(v, int(k) - G_LEAF_NEAR) : -1;
+            if (pg >= 0) {
                 // Posed while the pose buffer has room for the group's leaves
-                // (the drawer's posedGroup), else drawn inline (its twin).
+                // (the drawer's posedGroup and posedCasters, in its order),
+                // else drawn inline (its twin).
                 uint j = k - uint(G_LEAF_NEAR);
                 uint col = sums + (uint(FP_GROUPS) + j) * G;
                 uint leaves = planWork.w[col + g1] - planWork.w[col + g0];
                 bool posed = leaves > 0u && cursor + poseLeaves + leaves <= poseCap;
                 if (leaves > 0u && wanted + wantedLeaves + leaves <= kMaxPoses) wantedLeaves += leaves;
-                planWork.w[FP_N_POSED + j] = posed ? 1u : 0u;
-                planWork.w[FP_N_POSE_BASE + j] = cursor + poseLeaves;
+                planWork.w[FP_N_POSED + uint(pg)] = posed ? 1u : 0u;
+                planWork.w[FP_N_POSE_BASE + uint(pg)] = cursor + poseLeaves;
                 if (posed) poseLeaves += leaves;
                 writeCommand(commandAt(v, k, 0u), kind, instances, count, first, posed ? m : 0u);
                 writeCommand(commandAt(v, uint(FP_GROUPS) + j, 0u), kind, instances, count, first, posed ? 0u : m);
-                uint p = FP_A_POSE + 4u * j;
+                uint p = FP_A_POSE + 4u * uint(pg);
                 planArgs.w[p] = posed ? m : 0u;
                 planArgs.w[p + 1u] = 1u;
                 planArgs.w[p + 2u] = 1u;

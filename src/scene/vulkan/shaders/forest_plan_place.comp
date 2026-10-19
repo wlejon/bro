@@ -326,11 +326,17 @@ void main() {
         uint G = pu(FP_P_ITEM_GROUPS);
         uint sums = workRun(FP_W_SUMS);
         for (int k = 0; k < FP_GROUPS; ++k) gAt[k] = planWork.w[sums + uint(k) * G + block] + sCol[k][t] - counts[k];
+        // The view's posed groups' slots run on from its first block's.
+        uint g0 = planWork.w[FP_N_VIEW_BASE + it.view] / uint(FP_GROUP_SIZE);
         for (int j = 0; j < 2; ++j) {
+            int pg = posedGroupOf(it.view, j);
+            gSlot[j] = 0u;
+            gPosed[j] = false;
+            if (pg < 0) continue;
             uint col = sums + uint(FP_GROUPS + j) * G;
-            gSlot[j] = planWork.w[FP_N_POSE_BASE + j] + (planWork.w[col + block] - planWork.w[col]) +
+            gSlot[j] = planWork.w[FP_N_POSE_BASE + pg] + (planWork.w[col + block] - planWork.w[col + g0]) +
                        sCol[FP_GROUPS + j][t] - counts[FP_GROUPS + j];
-            gPosed[j] = planWork.w[FP_N_POSED + j] != 0u;
+            gPosed[j] = planWork.w[FP_N_POSED + pg] != 0u;
         }
         planItemAdd(it, d);
     }
