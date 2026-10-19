@@ -268,6 +268,7 @@
  * @property {number} [crownRadiusMax=0] - ... and never past this (a column, a flat-topped pine; 0 no cap).
  * @property {number} [crownLift=0] - Self-pruning: a bough leaving the leader below this fraction of the plant's height is shed, and the short shoots the leader keeps along that bare trunk carry no foliage (0.5 a pine's crown on the top half of its trunk; 0 boughs to the ground).
  * @property {number} [heightMax=0] - No shoot buds above this height (m): the leader stops and the upper boughs fill in under it, a mature pine's flat top (0 no limit).
+ * @property {number} [climb=0] - A climber's turns a metre (the 'ivy' preset 0.12): a plant of it planted where a plant that does not climb stands (the same origin, across) has its wood wound up that plant's trunk and leading limbs, hugging the bark, and sways as that plant's stem (emit only: the simulation grows it as a column). 0 it stands on its own. A forest draws the two as two specimens under one instance transform.
  * @property {number} [prototypeGroup=0] - The prototype sites the leader grows from.
  * @property {number} [lateralGroup] - The sites a lateral grows from (default: the leader's group).
  * @property {number} [lateralElevation=0] - A lateral's set-point elevation, radians from the horizon: 0 level boughs (fir), negative drooping or weeping (spruce), positive rising (pine), near pi/2 turned up (a columnar cypress).
