@@ -28,7 +28,9 @@ const float GRASS_TURF_DEPTH = 0.75;
 const float GRASS_TURF_TRANSLUCENCY = 0.3;
 // Past the blades, the sward's tops as the far fans show them: their
 // leaves over the deeper ones between (GRASS_TURF_DEPTH where they part).
-const float GRASS_TURF_TOPS = 0.85;
+// (Wilds at the fans' edge, 85-110 m, golden and noon: 0.85 left the turf
+// 1-4% darker than the fans looking across.)
+const float GRASS_TURF_TOPS = 0.95;
 // The herbs' blooms in the turf, against the share the far fans' dots
 // show (scene_grass.glsl's grassFanBloom; the two meet at the blades' end).
 const float GRASS_TURF_BLOOMS = 0.6;
@@ -215,7 +217,10 @@ void groundSurface(vec3 rel, vec4 vdata, inout vec3 color, inout vec3 N, inout f
     // ground). Where the blades end only their tops are seen.
     float d = length(vec2(length(rel.xz), grass.lod.w));   // as the rings measure it
     // (Off the field there are none: there it is their tops at any distance.)
-    float topSeen = 1.0 - (1.0 - smoothstep(grass.ring.y - 2.5 * grass.ring.w, grass.ring.y - 0.2 * grass.ring.w, d)) * inside;
+    // The tops show as the far ring's blades dither out over its band
+    // (scene_grass.glsl's fout), not before: under the blades still drawn a
+    // gap is the sward's depth.
+    float topSeen = 1.0 - (1.0 - smoothstep(grass.ring.y - grass.ring.w, grass.ring.y, d)) * inside;
     vec3 soil = vec3(0.065, 0.048, 0.03);
     float deep = smoothstep(10.0, 40.0, d);
     vec3 roots = mix(mix(soil, sward * grass.look.x, 0.6), sward * GRASS_TURF_DEPTH, deep);
@@ -319,7 +324,11 @@ void groundSurface(vec3 rel, vec4 vdata, inout vec3 color, inout vec3 N, inout f
         float gu = sceneWindGustAt(xz);
         vec3 up = grassSwardUp(N, grassCombLean(xz, gu, fp));
         N = normalize(mix(N, grassCanopyNormal(up, normalize(-rel)), asBlades));
-        swardLight = vec4(up, asBlades);
+        // Past the blades the sun on it is all the sward's, as on the far
+        // blades (mesh.frag's grass, its weight 1 from 12 m): the share left
+        // to the canopy normal, which faces the eye, lit it by the eye's
+        // line, not the sun's.
+        swardLight = vec4(up, mix(asBlades, 1.0, topSeen));
         color *= 1.0 + grass.look.y * (gu * grassGustStir() * 0.7 + grassGustFar(gu)) * asBlades;
     }
     ao *= mix(litterAo, 1.0, cover) * mix(1.0, 0.8, asBlades);   // (a far blade's ao)

@@ -164,6 +164,26 @@ bool tileInRing(float ex, float ez, float lift, float rIn, float rOut, float x0,
     return nx * nx + nz * nz + lift * lift <= rOut * rOut && fx * fx + fz * fz + lift * lift >= rIn * rIn;
 }
 
+// The far fans' ring ends where a blade of the mean height stands this many
+// pixels tall, never past the node's range: further out the turf's tops
+// (scene_ground.glsl) carry the sward, so the hand-over sits at the same
+// size on screen at any resolution and field of view.
+constexpr float kFanEdgePixels = 6.0f;
+
+/// Ring `r` as this view draws it: the far ring pulled in to kFanEdgePixels
+/// (never inside the ring before it, its band and a margin).
+GrassNode::Ring ringInView(const GrassNode& node, const SceneView& view, int r) {
+    GrassNode::Ring ring = node.ring(r);
+    if (r != GrassNode::kRings - 1 || !view.perspective || view.height == 0) return ring;
+    const float pxAtMetre = std::fabs(view.proj.at(1, 1)) * static_cast<float>(view.height) * 0.5f;
+    const float edge = std::max(node.params().height * pxAtMetre / kFanEdgePixels, ring.inner + ring.bandIn + 1.5f);
+    if (edge >= ring.outer) return ring;
+    ring.thinFrom *= edge / ring.outer;
+    ring.outer = edge;
+    ring.bandOut = std::max(1.5f, edge * 0.12f);   // as GrassNode::ring's
+    return ring;
+}
+
 MeshNode::UserTexture* slot(GrassNode& node, const char* name) {
     for (auto& t : node.customShaderTextures())
         if (t.name == name && t.w > 0 && t.h > 0) return &t;
@@ -272,8 +292,8 @@ VkDescriptorSet SceneMeshDrawer::groundSet(SceneFrame& frame, GrassNode& node) {
     if (!grassImages(frame.gpu.resources, node, img)) return VK_NULL_HANDLE;
     GrassUBO u{};
     fillShared(node, u);
-    // The ring the turf continues: the whole of the blades' range.
-    const GrassNode::Ring outer = node.ring(GrassNode::kRings - 1);
+    // The ring the turf continues: the far ring as this view draws it.
+    const GrassNode::Ring outer = ringInView(node, frame.view, GrassNode::kRings - 1);
     u.ring[0] = 0.0f;
     u.ring[1] = outer.outer;
     u.ring[3] = outer.bandOut;
@@ -333,7 +353,7 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
     TileRuns runs;
 
     for (int r = 0; r < GrassNode::kRings; ++r) {
-        const GrassNode::Ring ring = node.ring(r);
+        const GrassNode::Ring ring = ringInView(node, view, r);
         // Blades lean and stand up to ~2x the mean height: pad the box by
         // that, a cell and a margin.
         float box[4];
