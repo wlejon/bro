@@ -293,7 +293,7 @@ struct SceneMeshDrawer::ForestPlan {
     // What one tree at level of detail `t` adds to `G` (or, with no `G`, only
     // the vertices it would).
     void addTree(Groups* G, uint32_t inst, const ForestNode::Specimen& sp, const ForestNode::TreeLod& t,
-                 bool shadow, uint64_t& vertices, float px = 0.0f) {
+                 bool shadow, uint64_t& vertices, float px = 0.0f, float barkPx = 0.0f) {
         const auto& keepRadius = node->keepRadius();
         // A needle node's fine wood (its twigs are no form of their own):
         // what the bark's cut leaves out (under kBarkRibbonCut of the cut)
@@ -441,19 +441,52 @@ struct SceneMeshDrawer::ForestPlan {
                                                          [](float r, float v) { return r > v; }) - k0)
                 : 0u;
             const auto entries = [](uint32_t m) { return uint64_t{(m + kSegmentsPerEntry - 1) / kSegmentsPerEntry}; };
-            vertices += (entries(nc) * rows + entries(n - nc)) * kSegmentsPerEntry * static_cast<uint32_t>(sides) * 6u;
+            // Each segment's sides by its own width: a ring under
+            // barkSidesPixels draws a 5-sided outline whatever its sides, and
+            // one under barkFineSides times it a 10-sided one
+            // (forestTubeMorph), so a segment drawn with no more sides than
+            // its widest ring morphs to has the outline the tree's would. Its
+            // width is measured at the tree's nearest (the larger of its two
+            // measures), a quarter over for the sway. A curved one keeps a
+            // curved group's (10 sides and 2 rows at the least). (At the
+            // trunk's sides, a near tree drew every limb as 20 in 3 rows: a
+            // skim over the canopy's bark 21.9M vertices against a 12.5M
+            // budget, so every near tree's leaves went to clumps.)
+            const float wpx = 2.0f * 1.25f * std::max(px, barkPx);
+            const auto under = [&](uint32_t from, uint32_t to, float w) {
+                return wpx > 0.0f ? static_cast<uint32_t>(std::upper_bound(k0 + from, k0 + to, w / wpx,
+                                                                           [](float v, float r) { return v >= r; }) - k0)
+                                  : to;
+            };
+            const float fine = lod.barkFineSides * lod.barkSidesPixels;
+            // [0, c20) curved at 20 sides, [c20, nc) at 10; [nc, n20) straight
+            // at the tree's sides, [n20, n10) at 10, [n10, n) at 5.
+            const uint32_t c20 = sides == kNearestSides ? under(0, nc, fine) : 0u;
+            uint32_t n20 = n, n10 = n;
+            if (sides > kFarSides) {
+                n10 = under(nc, n, lod.barkSidesPixels);
+                n20 = sides == kNearestSides ? std::min(under(nc, n, fine), n10) : nc;
+            }
+            const uint64_t perEntry = uint64_t{kSegmentsPerEntry} * 6u;
+            vertices += entries(c20) * barkRows(kNearestSides) * kNearestSides * perEntry;
+            vertices += entries(nc - c20) * barkRows(kNearSides) * kNearSides * perEntry;
+            vertices += entries(n20 - nc) * static_cast<uint32_t>(sides) * perEntry;
+            vertices += entries(n10 - n20) * kNearSides * perEntry;
+            vertices += entries(n - n10) * kFarSides * perEntry;
             if (G) {
-                auto& gc = G->g[sides == kNearestSides ? Bark20Curved : Bark10Curved];
-                auto& g = G->g[sides == kNearestSides ? Bark20 : sides == kNearSides ? Bark10 : Bark5];
                 // (Its `widening` slot the radius it is cut at: scene_forest_tube.glsl
                 // thins the bark just over it to nothing; its param its sides
                 // and rows, sides | rows << FOREST_BARK_ROWS_SHIFT.)
-                for (uint32_t c = 0; c < nc; c += kSegmentsPerEntry)
-                    gc.push_back({inst, sp.segStart + c, sp.segStart + std::min(c + kSegmentsPerEntry, nc),
-                                  barkParam(sides, rows), t.barkRadius, 0.0f, 1.0f, 1.0f});
-                for (uint32_t c = nc; c < n; c += kSegmentsPerEntry)
-                    g.push_back({inst, sp.segStart + c, sp.segStart + std::min(c + kSegmentsPerEntry, n),
-                                 barkParam(sides, 1), t.barkRadius, 0.0f, 1.0f, 1.0f});
+                const auto add = [&](int k, int s, uint32_t r, uint32_t from, uint32_t to) {
+                    for (uint32_t c = from; c < to; c += kSegmentsPerEntry)
+                        G->g[k].push_back({inst, sp.segStart + c, sp.segStart + std::min(c + kSegmentsPerEntry, to),
+                                           barkParam(s, r), t.barkRadius, 0.0f, 1.0f, 1.0f});
+                };
+                add(Bark20Curved, kNearestSides, barkRows(kNearestSides), 0, c20);
+                add(Bark10Curved, kNearSides, barkRows(kNearSides), c20, nc);
+                add(sides == kNearestSides ? Bark20 : sides == kNearSides ? Bark10 : Bark5, sides, 1, nc, n20);
+                add(Bark10, kNearSides, 1, n20, n10);
+                add(Bark5, kFarSides, 1, n10, n);
             }
             // What the round bark leaves out or thins (keep radius under
             // twice the cut) down to kBarkRibbonCut of the cut, as ribbons
@@ -521,7 +554,7 @@ struct SceneMeshDrawer::ForestPlan {
             const ForestNode::Specimen& sp = specimens[instances[s.instance].specimen];
             addTree(nullptr, s.instance, sp,
                     shadow ? casterLod(L, sp, s) : ForestNode::treeLod(L, sp, s.px, leafLength, forceOf(s), s.barkPx),
-                    shadow, v, s.px);
+                    shadow, v, s.px, s.barkPx);
         }
         return static_cast<double>(v);
     }
@@ -817,7 +850,7 @@ void SceneMeshDrawer::finishForest(SceneFrame& frame, ForestPlan& P, float detai
             if (t.leaves > 0.0f) stats.trees[0]++;
             if (t.clumps > 0.0f) stats.trees[1]++;
             if (t.crowns > 0.0f) stats.trees[2]++;
-            P.addTree(&colour, s.instance, sp, t, false, colourVerts, s.px);
+            P.addTree(&colour, s.instance, sp, t, false, colourVerts, s.px, s.barkPx);
         }
         node.setSeenLods(std::move(seenLods));
     }
