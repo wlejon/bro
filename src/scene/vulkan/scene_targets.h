@@ -14,6 +14,9 @@
 //                            nearest sample (depth::resolveNearest).
 //   depthSnapshot            sampleable copy of the opaque depth (decals,
 //                            soft particles, SSAO, SSR, depth of field).
+//   farDepth                 the opaque depth drawn so far, each pixel's
+//                            farthest sample (R32F, PassFarDepth): what the
+//                            forest's later sprites are rejected against.
 //   ssrSnapshot              the lit opaque colour SSR reflects.
 //   dofHdr, postLdr, ldr     the post chain; ldr is the frame's output.
 //   shadowAtlas              every light's shadow tiles (SceneRenderer's
@@ -36,6 +39,7 @@ public:
     static constexpr VkFormat kHdrFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
     static constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
     static constexpr VkFormat kLdrFormat = VK_FORMAT_R8G8B8A8_UNORM;
+    static constexpr VkFormat kFarDepthFormat = VK_FORMAT_R32_SFLOAT;
 
     bool setup(SceneVkDevice& device, SceneVkAllocator& allocator);
     void cleanup(SceneVkAllocator& allocator);
@@ -75,6 +79,7 @@ public:
     SceneVkImage indirect, indirectMsaa;
     SceneVkImage depth, depthMsaa;
     SceneVkImage depthSnapshot;
+    SceneVkImage farDepth;
     SceneVkImage ssrSnapshot;
     SceneVkImage dofHdr;
     SceneVkImage postLdr;

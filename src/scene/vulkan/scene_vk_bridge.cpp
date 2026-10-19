@@ -35,10 +35,15 @@ SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
     // The frame, in order. A pass draws into the HDR scope or brings its own
     // targets; the graph does every shared transition (scene_frame_graph.h).
     graph_.add(std::make_unique<PassShadow>());
+    graph_.add(std::make_unique<PassForestBatches>(opaqueBatches_));
     graph_.add(std::make_unique<PassFrameUniforms>());
     graph_.add(std::make_unique<PassReflectionProbe>());
     graph_.add(std::make_unique<PassEnvironment>());
-    graph_.add(std::make_unique<PassOpaque>());
+    graph_.add(std::make_unique<PassOpaque>(opaqueBatches_, 0));
+    for (int k = 1; k < OpaqueBatches::kBatches; ++k) {
+        graph_.add(std::make_unique<PassFarDepth>(opaqueBatches_, k));
+        graph_.add(std::make_unique<PassOpaque>(opaqueBatches_, k));
+    }
     graph_.add(std::make_unique<PassDepthSnapshot>());
     auto& ssao = static_cast<PassSSAO&>(graph_.add(std::make_unique<PassSSAO>()));
     graph_.add(std::make_unique<PassAoApply>(ssao));

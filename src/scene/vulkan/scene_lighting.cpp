@@ -143,6 +143,8 @@ VkDescriptorSet writeLightingSet(SceneGpu& gpu, const SceneLightingUniforms& uni
                       VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
     writer.writeImage(3, shadeMap ? shadeMap->view : d.white.view, VK_NULL_HANDLE,
                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
+    writer.writeImage(9, gpu.targets.farDepth.isValid() ? gpu.targets.farDepth.view : d.white.view, VK_NULL_HANDLE,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
     gpu.environment.writeBindings(writer, d);
     writer.updateSet(gpu.device.device(), set);
     return set;
@@ -150,6 +152,8 @@ VkDescriptorSet writeLightingSet(SceneGpu& gpu, const SceneLightingUniforms& uni
 
 void PassFrameUniforms::declare(const SceneFrame& frame, PassIO& io) const {
     io.sample(frame.gpu.targets.shadowAtlas);
+    // (Read by the forest's sprites, mesh.frag's forestFarRejected.)
+    io.sample(frame.gpu.targets.farDepth);
 }
 
 namespace {

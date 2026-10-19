@@ -84,27 +84,54 @@ void SceneFrameGraph::run(SceneFrame& frame) {
     firstScope_ = true;
     indirectCleared_ = false;
 
-    for (auto& pass : passes_) {
-        if (!pass->active(frame)) continue;
+    for (size_t i = 0; i < passes_.size(); ++i) {
+        ScenePass& pass = *passes_[i];
+        if (!pass.active(frame)) continue;
         PassIO io;
-        pass->declare(frame, io);
+        pass.declare(frame, io);
 
-        bool moves = false;
-        for (const auto& use : io.uses()) moves |= use.image->currentLayout != layoutFor(use.access);
-        if (scopeOpen_ && (moves || !io.drawsHdr() || io.scope().indirect != scopeIndirect_)) closeScope(frame);
+        if (scopeOpen_ && (moves(io) || !io.drawsHdr() || io.scope().indirect != scopeIndirect_)) closeScope(frame);
         for (const auto& use : io.uses()) transition(frame.cmd, *use.image, layoutFor(use.access));
-        if (io.drawsHdr() && !scopeOpen_) openScope(frame, io.scope());
+        if (io.drawsHdr() && !scopeOpen_) openScope(frame, io.scope(), resolves(frame, i, io.scope()));
 
-        pass->record(frame);
-        if (frame.timer) frame.timer->mark(frame.cmd, pass->name());
+        pass.record(frame);
+        if (frame.timer) frame.timer->mark(frame.cmd, pass.name());
     }
     if (scopeOpen_) closeScope(frame);
 }
 
-void SceneFrameGraph::openScope(SceneFrame& frame, const HdrScope& scope) {
+bool SceneFrameGraph::moves(const PassIO& io) {
+    for (const auto& use : io.uses()) {
+        if (use.image->currentLayout != layoutFor(use.access)) return true;
+    }
+    return false;
+}
+
+bool SceneFrameGraph::resolves(const SceneFrame& frame, size_t at, const HdrScope& scope) const {
+    if (!frame.gpu.targets.msaa()) return true;
+    bool closed = false;
+    for (size_t j = at + 1; j < passes_.size(); ++j) {
+        const ScenePass& pass = *passes_[j];
+        if (!pass.active(frame)) continue;
+        PassIO io;
+        pass.declare(frame, io);
+        // (The passes sharing the scope move no image, so the layouts now
+        // are the ones the pass that closes it meets.)
+        if (!closed && io.drawsHdr() && !moves(io) && io.scope().indirect == scope.indirect) continue;
+        // (Its resolve takes in this one's attachments: all of them only if
+        // it has the same.)
+        if (closed && io.drawsHdr()) return io.scope().indirect != scope.indirect;
+        if (!io.readsUnresolved()) return true;
+        closed = true;
+    }
+    return true;
+}
+
+void SceneFrameGraph::openScope(SceneFrame& frame, const HdrScope& scope, bool resolve) {
     SceneTargets& t = frame.gpu.targets;
     VkCommandBuffer cmd = frame.cmd;
     const bool msaa = t.msaa();
+    const bool resolving = msaa && resolve;
     constexpr VkImageLayout kColor = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     constexpr VkImageLayout kDepth = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
 
@@ -124,17 +151,17 @@ void SceneFrameGraph::openScope(SceneFrame& frame, const HdrScope& scope) {
     clearDepth.depthStencil = {depth::clearFar(), 0};
 
     VkRenderingAttachmentInfo colors[2];
-    colors[0] = attachment(t.hdrDrawn(), msaa ? &t.hdr : nullptr, VK_RESOLVE_MODE_AVERAGE_BIT, kColor,
+    colors[0] = attachment(t.hdrDrawn(), resolving ? &t.hdr : nullptr, VK_RESOLVE_MODE_AVERAGE_BIT, kColor,
                            firstScope_, clearColor);
     uint32_t colorCount = 1;
     if (scope.indirect) {
-        colors[1] = attachment(t.indirectDrawn(), msaa ? &t.indirect : nullptr, VK_RESOLVE_MODE_AVERAGE_BIT,
+        colors[1] = attachment(t.indirectDrawn(), resolving ? &t.indirect : nullptr, VK_RESOLVE_MODE_AVERAGE_BIT,
                                kColor, !indirectCleared_, clearColor);
         colorCount = 2;
         indirectCleared_ = true;
     }
-    VkRenderingAttachmentInfo depthAtt = attachment(t.depthDrawn(), msaa ? &t.depth : nullptr, t.depthResolve(),
-                                                    kDepth, firstScope_, clearDepth);
+    VkRenderingAttachmentInfo depthAtt = attachment(t.depthDrawn(), resolving ? &t.depth : nullptr,
+                                                    t.depthResolve(), kDepth, firstScope_, clearDepth);
 
     VkRenderingInfo info{};
     info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;

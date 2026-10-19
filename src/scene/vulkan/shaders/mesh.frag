@@ -139,6 +139,20 @@ int forestSampleMask(float code, float coverage, bool msaa, uint salt, vec2 rang
 #ifdef SCENE_FOREST_SPRITE
 #include "scene_procedural.glsl"
 #include "scene_forest_crown.glsl"
+
+// Whether the pixel's 2x2 quad lies behind the depth drawn before this
+// sprite's batch (PassFarDepth) at every sample: a sprite writes no nearer
+// than its card (gl_FragDepth, depth_less), so nearer than none of them it
+// fails the depth test at all, and is dropped before it places its leaves.
+// The hardware's early test would drop it, were its stage free of discard.
+// A whole quad or none, so the derivatives of the quads kept hold.
+bool forestFarRejected() {
+    float far = texelFetch(sampler2D(texFarDepthImage, lightingSampler), ivec2(gl_FragCoord.xy), 0).r;
+    float r = (REVERSED_Z ? gl_FragCoord.z < far : gl_FragCoord.z > far) ? 1.0 : 0.0;
+    r = min(r, r - abs(dFdxFine(r)));
+    r = min(r, r - abs(dFdyFine(r)));
+    return r > 0.5;
+}
 #endif
 #ifdef SCENE_FOREST_SPRAY
 #include "scene_procedural.glsl"
@@ -208,6 +222,7 @@ void main() {
     float leafCutVein = 0.0, leafCutTilt = 0.0, leafCutGloss = 0.0;
 #endif
 #ifdef SCENE_FOREST_SPRITE
+    if (forestFarRejected()) discard;
     mass = forestSpriteSurface(flags);
     worldPos = mass.at;
 #elif defined(SCENE_FOREST_CLUSTER)

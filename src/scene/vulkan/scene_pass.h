@@ -34,9 +34,10 @@ enum class ImageAccess : uint8_t {
 };
 
 /// The HDR raster scope: the frame's colour + depth target (MSAA when the
-/// renderer asks for it, resolved at the end of every scope), plus the
-/// indirect-light attachment while SSAO needs it. The frame's first scope
-/// clears colour and depth; every later one loads them.
+/// renderer asks for it, resolved at the end of a scope unless what follows
+/// reads only the drawn images, PassIO::unresolved), plus the indirect-light
+/// attachment while SSAO needs it. The frame's first scope clears colour and
+/// depth; every later one loads them.
 struct HdrScope {
     bool indirect = false;   // carries the indirect-light attachment
 };
@@ -52,10 +53,16 @@ public:
     /// Draw into the HDR scope. Consecutive passes that ask for the same
     /// attachments share one scope.
     void hdr(HdrScope scope = {}) { hdr_ = true; scope_ = scope; }
+    /// The pass reads none of the resolved HDR images (only the drawn ones,
+    /// SceneTargets::hdrDrawn / depthDrawn), so an HDR scope closed for it,
+    /// with nothing but such passes before the next scope, is not resolved:
+    /// the next one's resolve takes in what it drew.
+    void unresolved() { unresolved_ = true; }
 
     struct Use { SceneVkImage* image; ImageAccess access; };
     const std::vector<Use>& uses() const { return uses_; }
     bool drawsHdr() const { return hdr_; }
+    bool readsUnresolved() const { return unresolved_; }
     const HdrScope& scope() const { return scope_; }
 
 private:
@@ -65,6 +72,7 @@ private:
 
     std::vector<Use> uses_;
     bool hdr_ = false;
+    bool unresolved_ = false;
     HdrScope scope_{};
 };
 
@@ -82,7 +90,9 @@ public:
     /// Whether the pass runs this frame (settings, content).
     virtual bool active(const SceneFrame& /*frame*/) const { return true; }
     /// The shared images the pass reads and writes, and whether it draws
-    /// into the HDR scope. Called right before record(); the graph moves each
+    /// into the HDR scope. Called right before record() (and, for a pass
+    /// after an HDR scope opens, when it opens, to see whether the scope is
+    /// to be resolved: so it is a function of the frame); the graph moves each
     /// image into the layout its access needs (closing an open HDR scope
     /// first when one has to change) and opens or keeps the scope.
     virtual void declare(const SceneFrame& /*frame*/, PassIO& /*io*/) const {}

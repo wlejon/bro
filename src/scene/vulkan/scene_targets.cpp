@@ -94,7 +94,7 @@ bool SceneTargets::createAttachment(SceneVkAllocator& allocator, SceneVkImage& o
 }
 
 void SceneTargets::destroyFrameImages(SceneVkAllocator& allocator) {
-    for (SceneVkImage* img : {&hdr, &hdrMsaa, &depth, &depthMsaa, &depthSnapshot, &ssrSnapshot, &dofHdr,
+    for (SceneVkImage* img : {&hdr, &hdrMsaa, &depth, &depthMsaa, &depthSnapshot, &farDepth, &ssrSnapshot, &dofHdr,
                               &postLdr, &ldr}) {
         allocator.destroyImage(*img);
     }
@@ -113,19 +113,20 @@ bool SceneTargets::ensure(SceneVkAllocator& allocator, uint32_t width, uint32_t 
     samples_ = samples;
 
     constexpr VkImageUsageFlags kColor = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    // (The drawn depth is sampled by PassFarDepth.)
+    constexpr VkImageUsageFlags kDepthUse = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
     bool ok = createSampled(allocator, hdr, kHdrFormat, kColor | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, false) &&
-              createAttachment(allocator, depth, kDepthFormat,
-                               VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+              createAttachment(allocator, depth, kDepthFormat, kDepthUse | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
                                VK_SAMPLE_COUNT_1_BIT) &&
               createSampled(allocator, depthSnapshot, kDepthFormat, VK_IMAGE_USAGE_TRANSFER_DST_BIT, true) &&
+              createSampled(allocator, farDepth, kFarDepthFormat, kColor | VK_IMAGE_USAGE_TRANSFER_DST_BIT, true) &&
               createSampled(allocator, ssrSnapshot, kHdrFormat, VK_IMAGE_USAGE_TRANSFER_DST_BIT, false) &&
               createSampled(allocator, dofHdr, kHdrFormat, kColor, false) &&
               createSampled(allocator, postLdr, kLdrFormat, kColor, false) &&
               createSampled(allocator, ldr, kLdrFormat, kColor | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, false);
     if (ok && msaa()) {
         ok = createAttachment(allocator, hdrMsaa, kHdrFormat, kColor, samples) &&
-             createAttachment(allocator, depthMsaa, kDepthFormat, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
-                              samples);
+             createAttachment(allocator, depthMsaa, kDepthFormat, kDepthUse, samples);
     }
     if (ok && hadIndirect) ok = ensureIndirect(allocator);
     if (!ok) {

@@ -7,6 +7,7 @@
 // SceneFrame (camera view, draw lists, lighting) and hands it to the graph.
 
 #include "render/layer_image.h"
+#include "scene/vulkan/pass_mesh.h"
 #include "scene/vulkan/scene_defaults.h"
 #include "scene/vulkan/scene_environment.h"
 #include "scene/vulkan/scene_frame.h"
@@ -79,6 +80,7 @@ private:
     SceneMeshDrawer meshes_;
     SceneEnvironment environment_;
     SceneGpu gpu_;
+    OpaqueBatches opaqueBatches_;   // PassForestBatches' split, read by the opaque passes
     SceneFrameGraph graph_;
     SceneGpuTimer timer_;
     bool ready_ = false;

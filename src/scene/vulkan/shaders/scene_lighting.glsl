@@ -78,6 +78,9 @@ layout(set = 1, binding = 4) uniform textureCube texIrradianceImage;
 layout(set = 1, binding = 5) uniform textureCube texPrefilterImage;
 layout(set = 1, binding = 6) uniform texture2D texBrdfLutImage;
 layout(set = 1, binding = 7) uniform textureCube texEnvironmentImage;
+// The opaque depth drawn so far, each pixel's farthest sample
+// (SceneTargets::farDepth), read by texel: mesh.frag's forestFarRejected.
+layout(set = 1, binding = 9) uniform texture2D texFarDepthImage;
 #define texReflectionProbe samplerCube(texReflectionProbeImage, lightingSampler)
 #define texShadeMap sampler2D(texShadeMapImage, lightingSampler)
 #define texIrradiance samplerCube(texIrradianceImage, lightingSampler)

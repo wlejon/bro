@@ -7,7 +7,8 @@
 //
 // The HDR scope renders into SceneTargets' HDR colour and depth (their MSAA
 // twins when multisampled, resolved into the single-sample images at the end
-// of every scope) and, when a pass asks for it, the indirect-light
+// of a scope, unless all that runs before the next scope reads only the MSAA
+// ones: PassIO::unresolved) and, when a pass asks for it, the indirect-light
 // attachment. The first scope of a frame clears colour to transparent black
 // and depth to the far plane; later scopes load what the earlier ones left.
 // Closing a scope makes everything it wrote — resolves included — visible to
@@ -40,8 +41,13 @@ public:
     static void transition(VkCommandBuffer cmd, SceneVkImage& image, VkImageLayout layout);
 
 private:
-    void openScope(SceneFrame& frame, const HdrScope& scope);
+    void openScope(SceneFrame& frame, const HdrScope& scope, bool resolve);
     void closeScope(SceneFrame& frame);
+    /// Whether a scope opened for pass `at` is to resolve: not when the pass
+    /// that closes it, and every pass after that up to the next scope, read
+    /// only the drawn images (PassIO::unresolved).
+    bool resolves(const SceneFrame& frame, size_t at, const HdrScope& scope) const;
+    static bool moves(const PassIO& io);
 
     std::vector<std::unique_ptr<ScenePass>> passes_;
     bool scopeOpen_ = false;

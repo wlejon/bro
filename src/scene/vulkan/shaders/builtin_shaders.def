@@ -34,6 +34,8 @@ BRO_SCENE_SHADER(SsaoFrag,                 "ssao.frag",                   "ssao.
 BRO_SCENE_SHADER(SsrFrag,                  "ssr.frag",                    "ssr.frag",                    "frag", "")
 BRO_SCENE_SHADER(DofFrag,                  "dof.frag",                    "dof.frag",                    "frag", "")
 BRO_SCENE_SHADER(ApplyAoFrag,              "apply_ao.frag",               "apply_ao.frag",               "frag", "")
+BRO_SCENE_SHADER(FarDepthFrag,             "far_depth.frag",              "far_depth.frag",              "frag", "")
+BRO_SCENE_SHADER(FarDepthMsFrag,           "far_depth_ms.frag",           "far_depth.frag",              "frag", "FAR_DEPTH_MS")
 BRO_SCENE_SHADER(GaussianSplatVert,        "gaussian_splat.vert",         "gaussian_splat.vert",         "vert", "")
 BRO_SCENE_SHADER(GaussianSplatFrag,        "gaussian_splat.frag",         "gaussian_splat.frag",         "frag", "")
 BRO_SCENE_SHADER(SkyVert,                  "sky.vert",                    "sky.vert",                    "vert", "")
