@@ -192,7 +192,7 @@ vec3 grassHeadFarColor(float ripe) { return mix(vec3(0.25, 0.2, 0.19), vec3(0.42
 // The sward as one surface, as the eye sees it from afar (a far blade and
 // the turf where it stands for the blades). Its blades stand on average
 // along `grassSwardUp`: the ground's normal `gn` tipped downwind by `lean`
-// (the wind's comb and its gusts, across the ground), the way the bent
+// (the wind and its gusts: grassSwardLay), the way the bent
 // blades lean. The direct light on it is its blades' mean as each is lit
 // (scene_lighting.glsl's sceneSwardLight, SceneSurface::sward), so how a
 // far meadow takes the sun follows from how its blades stand and where the
@@ -212,32 +212,35 @@ vec3 grassCanopyNormal(vec3 up, vec3 toEye) { return normalize(toEye + GRASS_CAN
 // range show, so they hand over to the far blades and the turf unseen.
 const float GRASS_HERB_LEAF_SEEN = 0.1;
 const float GRASS_HERB_BLOOM_SEEN = 0.5;
-// The lay of the sward seen from afar: how its blades lean across the
-// ground past the wind's mean lean, as a tilt of grassSwardUp. Streaks
-// combed along the wind (tens of metres long, a few across: the rest lay a
-// steady wind leaves) and each gust `gust` travelling through it, bending
-// the blades it crosses, so a far meadow shows the wind's sheen and its
-// waves where single blades are too fine to see bend. A wind lays a sward
-// only downwind, more in one streak than the next, never back against it;
-// sceneSwardLight gathers the blades' leans that way by it (SWARD_COMB).
-// `fp` the pixel's footprint (m; 0: none): a streak fades to its mean as it
-// narrows to two pixels across, as the turf's octaves do.
-const float GRASS_COMB = 0.6;
-const float GRASS_GUST_LEAN = 2.4;
+// A blade's bend in the wind with the gust `gust` over it: the tilt it
+// gains along its length (grassTilt's `w`) before the blade's own flex
+// and the node's wind response.
+float grassWindBend(float gust) {
+    float calm = clamp(camera.windField.z / GRASS_REFERENCE_SPEED, 0.0, 2.0);
+    float spd = camera.windField.z + gust * 4.0;
+    return 0.1 * min(calm, 1.0) + spd * 0.07 + gust * 0.45;
+}
+// The lay of the sward seen from afar: how its blades lean downwind in the
+// wind and the gust `gust` over them, as a tilt of grassSwardUp. As far as
+// the blades it stands for bend (grassWindBend over the upper blade the
+// eye sees from afar, GRASS_LAY_SEEN of the tilt a blade gains to its
+// tip), so a gust lays the far sward as it lays the near blades and a far
+// meadow shows its waves where single blades are too fine to see bend.
+// (It was a lean of 0.6 along streaks combed along the wind plus 2.4 a unit
+// of gust, added to the ground's normal, which sceneSwardLight then
+// gathered downwind: a gust laid the far sward to 70-80 degrees where the
+// blades it stood for bent 20-30, and the streaks, which the near blades
+// never had, were 0 to 37 degrees. Seen from above, the gusts' bands were
+// the brightest and darkest things on the ground, and the streaks smears
+// along the wind, down the view wherever it ran with it.)
+const float GRASS_LAY_SEEN = 0.6;
 // How far the wind's lay and its gusts show in the sward's sheen: none in
 // still air (the gust field and the wind's way run on whatever the steady
 // wind), all from half the reference wind.
 float grassGustStir() { return clamp(2.0 * camera.windField.z / GRASS_REFERENCE_SPEED, 0.0, 1.0); }
-vec2 grassCombLean(vec2 xz, float gust, float fp) {
-    vec2 d = camera.windField.xy;
-    float along = dot(xz, d), across = dot(xz, vec2(-d.y, d.x));
-    float s1 = fp > 0.0 ? clamp(0.5 / (0.3 * fp) - 1.0, 0.0, 1.0) : 1.0;
-    float s2 = fp > 0.0 ? clamp(0.5 / (0.8 * fp) - 1.0, 0.0, 1.0) : 1.0;
-    float comb = 0.5;
-    if (s1 > 0.0) comb += 0.5 * s1 * sceneWindNoise(vec2(along * 0.035, across * 0.3));
-    if (s2 > 0.0) comb += 0.25 * s2 * sceneWindNoise(vec2(along * 0.09 + 7.1, across * 0.8 - 3.3));
-    float calm = clamp(camera.windField.z / GRASS_REFERENCE_SPEED, 0.0, 1.0);
-    return d * (GRASS_COMB * comb * (0.4 + 0.6 * calm) + GRASS_GUST_LEAN * gust) * grassGustStir() * grass.blade.w;
+vec2 grassSwardLay(float gust) {
+    float tilt = GRASS_LAY_SEEN * grassWindBend(gust) * grassGustStir() * grass.blade.w;
+    return camera.windField.xy * tan(min(tilt, 1.2));
 }
 // What a gust shows of a far sward beyond the mean light of its blades
 // (sceneSwardLight, which averages their faces and so keeps little of a
@@ -485,12 +488,11 @@ bool grassBlade(int id, int vid, vec3 v, vec3 vn, out GrassBlade b) {
     // push, and their trample as a lean from the root the way it was pushed.
     float gu = sceneWindGustAt(root);
     float calm = clamp(camera.windField.z / GRASS_REFERENCE_SPEED, 0.0, 2.0);
-    float spd = camera.windField.z + gu * 4.0;
     vec2 wdir = camera.windField.xy;
     float flex = culm ? 1.2 : dead ? 0.35 : mix(0.7, 1.3, he.w) * clamp(0.55 + 0.6 * len / max(H, 1e-3), 0.6, 1.5);
     float flut = sin(6.2831853 * sceneWindCycles((2.2 + hb.y * 2.5) / 6.2831853) + dot(xz, wdir) * 0.9 + hr * 9.0) *
                  (0.06 * calm + 0.12 * gu);
-    vec2 Wb = (wdir * (0.1 * min(calm, 1.0) + spd * 0.07 + gu * 0.45) + lean * flut) * (grass.blade.w * flex);
+    vec2 Wb = (wdir * grassWindBend(gu) + lean * flut) * (grass.blade.w * flex);
     float trample;
     vec2 lie;
     vec2 pb = grassInfluence(xz, trample, lie);
@@ -658,10 +660,10 @@ bool grassBlade(int id, int vid, vec3 v, vec3 vn, out GrassBlade b) {
     // SCENE_GRASS turns this way into the sward's light and facet).
     b.bulk = mix(mix(0.3, grass.lush.w, smoothstep(2.0, 14.0, d)), 0.95, far);
     // The way its blades stand: the ground's normal tipped by the sward's
-    // lay and its gusts (grassCombLean), from where the sward's light takes
-    // over from the blade's own face (mesh.frag's SCENE_GRASS, 2-12 m). The
-    // lay is the sward's, steady while the blade stirs.
-    vec2 lay = grassCombLean(root, gu, 0.0) * smoothstep(2.0, 12.0, d);
+    // lay in the wind and its gusts (grassSwardLay), from where the sward's
+    // light takes over from the blade's own face (mesh.frag's SCENE_GRASS,
+    // 2-12 m). The lay is the sward's, steady while the blade stirs.
+    vec2 lay = grassSwardLay(gu) * smoothstep(2.0, 12.0, d);
     b.ground = grassSwardUp(gn, lay);
     // Seen against a low sun a far meadow still glows through its blades,
     // less than a near blade held to the light.

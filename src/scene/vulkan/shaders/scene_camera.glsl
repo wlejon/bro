@@ -69,16 +69,35 @@ float sceneWindNoise(vec2 p) {
     return mix(mix(a, b, u.x), mix(c, d, u.x), u.y) * 2.0 - 1.0;
 }
 
-// The same with a quintic fade, so it is smooth to its second derivative:
-// what moves plants (the gusts). The cubic fade's acceleration jumps at
-// every lattice line a band crosses, a jerk in every limb it drives.
-float sceneWindNoise5(vec2 p) {
-    vec2 i = floor(p), f = p - i;
-    vec2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+// Simplex gradient noise, about [-0.8, 0.8] (its spread is the value
+// noise's: standard deviation 0.43): the gusts and the sward's comb, the
+// fields seen whole from above as the sward's sheen. Value noise is flat at
+// every lattice point, so a band cut from it (the gusts' soft ramp) traces
+// the lattice: rounded rectangles in rows, staircase edges. A gradient
+// noise on the simplex grid has no plateaus and no square axes, so its
+// bands are the wind's shapes. Each corner's (0.5 - r^2)^4 falls off smooth
+// to its second derivative: no jerk in a limb a band crosses. Its grid is
+// SCENE_WIND_SIMPLEX_GRID of the value noise's period, so a feature is as
+// wide as one of the value noise's (correlation 0.5 about 0.6 apart).
+const float SCENE_WIND_SIMPLEX_GRID = 0.38;
+float sceneWindSimplexCorner(ivec2 c, vec2 d) {
+    float t = 0.5 - dot(d, d);
+    if (t <= 0.0) return 0.0;
+    float a = sceneWindHash(c) * 6.2831853;
+    t *= t;
+    return t * t * (cos(a) * d.x + sin(a) * d.y);
+}
+float sceneWindSimplex(vec2 p) {
+    const float F2 = 0.36602540378, G2 = 0.21132486540;
+    p *= SCENE_WIND_SIMPLEX_GRID;
+    vec2 i = floor(p + (p.x + p.y) * F2);
+    vec2 d0 = p - i + (i.x + i.y) * G2;
+    ivec2 o = d0.x > d0.y ? ivec2(1, 0) : ivec2(0, 1);
+    vec2 d1 = d0 - vec2(o) + G2;
+    vec2 d2 = d0 - 1.0 + 2.0 * G2;
     ivec2 ii = ivec2(i);
-    float a = sceneWindHash(ii), b = sceneWindHash(ii + ivec2(1, 0));
-    float c = sceneWindHash(ii + ivec2(0, 1)), d = sceneWindHash(ii + ivec2(1, 1));
-    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y) * 2.0 - 1.0;
+    return 80.0 * (sceneWindSimplexCorner(ii, d0) + sceneWindSimplexCorner(ii + o, d1) +
+                   sceneWindSimplexCorner(ii + ivec2(1), d2));
 }
 
 // max(x, 0) with its corner rounded (a hyperbola, smooth to every
@@ -88,7 +107,7 @@ float sceneWindNoise5(vec2 p) {
 const float SCENE_GUST_SOFT = 0.06;
 float sceneWindSoftRamp(float x) { return 0.5 * (x + sqrt(x * x + SCENE_GUST_SOFT * SCENE_GUST_SOFT)); }
 
-// The gust at absolute world xz at time t: 0 between the bands, up to ~2 x
+// The gust at absolute world xz at time t: 0 between the bands, up to ~1.7 x
 // the gust amount inside one. The bands travel downwind at windField.w.
 // `fine` adds the second octave; without it the gust is its slow part.
 float sceneWindGustAtTime(vec2 xz, float t, bool fine) {
@@ -97,8 +116,8 @@ float sceneWindGustAtTime(vec2 xz, float t, bool fine) {
     float along = dot(xz, d) - t * camera.windField.w;
     float across = dot(xz, vec2(-d.y, d.x));
     vec2 k = camera.windGust.yz;
-    float g = sceneWindNoise5(vec2(along * k.x, across * k.y)) * 0.5 + 0.5;
-    if (fine) g += 0.35 * sceneWindNoise5(vec2(along * k.x * 3.18 + 5.3, across * k.y * 4.17));
+    float g = sceneWindSimplex(vec2(along * k.x, across * k.y)) * 0.5 + 0.5;
+    if (fine) g += 0.35 * sceneWindSimplex(vec2(along * k.x * 3.18 + 5.3, across * k.y * 4.17));
     return sceneWindSoftRamp(g - 0.45) * 2.4 * camera.windGust.x;
 }
 

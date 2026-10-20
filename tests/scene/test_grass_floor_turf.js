@@ -77,8 +77,9 @@ if (!scn) {
     const sward = patchStats(turf, 10, 90, 80, 150), litter = patchStats(turf, 112, 90, 182, 150);
     assert(sward.g > sward.b + 8 && sward.g > sward.r * 0.9, `the turf under grass is green (${sward.r.toFixed(0)}, ${sward.g.toFixed(0)}, ${sward.b.toFixed(0)})`);
     // (Seen from above under a high sun the sward shows its blades' shaded
-    // depths, sceneSwardLight; the litter lies level in the sun.)
-    assert(litter.r > litter.b * 1.3 && litter.lum < sward.lum * 1.6, `the floor under a canopy is brown litter (${litter.r.toFixed(0)}, ${litter.g.toFixed(0)}, ${litter.b.toFixed(0)})`);
+    // depths, sceneSwardLight; the litter lies level in the sun. In this dead
+    // calm the sward stands unlaid, its darkest: about 1.6 x under the litter.)
+    assert(litter.r > litter.b * 1.3 && litter.lum < sward.lum * 1.8, `the floor under a canopy is brown litter (${litter.r.toFixed(0)}, ${litter.g.toFixed(0)}, ${litter.b.toFixed(0)})`);
     assert(sward.sd > 0.08 * sward.lum && litter.sd > 0.08 * litter.lum,
         `both are textured (sd ${sward.sd.toFixed(2)} of ${sward.lum.toFixed(1)}, ${litter.sd.toFixed(2)} of ${litter.lum.toFixed(1)})`);
     grass.shadeGround(floor, false);

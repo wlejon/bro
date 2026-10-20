@@ -380,14 +380,85 @@ struct SceneSurface {
 // included), all times the lit share.
 const float SWARD_TILT_A = 0.35;   // rad from upright
 const float SWARD_TILT_B = 1.0;
+// The ways round each tilt summed, evenly: the wind's lay is all in `up`
+// (the near blades' bend, scene_grass.glsl's grassSwardLay). A comb that
+// gathered the leans downwind as well, by the lay, made far more of a gust
+// than its blades show, and cost the far blades a tenth of a millisecond.
+const int SWARD_WAYS = 4;
 // The lit share seen straight along the blades' way is SWARD_LIT_TOP - 1
 // (meadowtone at 8, 30 and 60 degrees, noon and golden, against 3 m).
 const float SWARD_LIT_TOP = 1.25;
 // Blinn's exponent for a blade's cuticle (roughness about 0.42 gives 2 /
 // r^4 - 2 = 60), widened a little for the curl along a blade.
 const float SWARD_SHEEN_POWER = 40.0;   // sceneSwardLight raises to it by squaring (keep in step)
-// How far a lay of `up` (its sine) gathers the blades' leans downwind.
-const float SWARD_COMB = 0.7;
+// e^-x I0(x), the modified Bessel function scaled: the mean of
+// exp(x (cos - 1)) round a circle, x >= 0. Its ends (1 - x at 0, 1 /
+// sqrt(2 pi x) far out) with a rational between them fitted to within 1.9%
+// of it over 0..60, smooth and without a branch (Abramowitz & Stegun's two
+// polynomials and an exp cost the far blades a tenth of a millisecond).
+float swardBesselI0e(float x) {
+    const float P = 3.94802, Q = 1.80643, R = 6.34250;
+    float x2 = R * x * x;
+    return (1.0 + P * x + x2) / (1.0 + Q * x + x2) * inversesqrt(1.0 + 6.2831853 * x);
+}
+// I1(x) / I0(x), the mean cosine of that lobe (x / 2 small, 1 - 1 / 2x large).
+float swardBesselRatio(float x) { return x / (0.5 + sqrt(x * x + 2.25)); }
+// sceneSwardLight's frame (below): the eye, the light and the half-way in
+// it.
+struct SwardFrame { float vu, v1, lu, l1, l2, hu, hr; vec2 hdir; };
+// One tilt's blades, SWARD_WAYS ways round (turned `phase` of a step),
+// added to sums (sumW, sumD, sumT, sumS); `faces` 2 to take the sheen of
+// the faces turned from the eye as well as those turned to it.
+void swardTilt(SwardFrame f, float tilt, float phase, int faces, inout vec4 sums) {
+    float ca = cos(tilt), sa = sin(tilt);
+    float litF = 0.0, litB = 0.0;
+    for (int k = 0; k < SWARD_WAYS; ++k) {
+        float psi = (float(k) + phase) * (6.2831853 / float(SWARD_WAYS));
+        vec2 dir = vec2(cos(psi), sin(psi));
+        // A blade leaning `a` toward psi: its face's normal lies in the
+        // plane of its lean, square to it (the upper face: up and back).
+        // In the frame: n = up sa - (e1 cp + e2 sp) ca.
+        float nv = f.vu * sa - f.v1 * dir.x * ca;
+        float nl = f.lu * sa - (f.l1 * dir.x + f.l2 * dir.y) * ca;
+        // The face the eye sees.
+        float w = abs(nv);
+        float NL = nv < 0.0 ? -nl : nl;
+        float lit = w * max(NL, 0.0);
+        sums.xyz += vec3(w, lit, w * max(-NL, 0.0));
+        // The lit faces' share for the sheen, front and back faces apart.
+        if (nv >= 0.0) litF += lit; else litB += lit;
+    }
+    // Their cuticles' sheen (a Blinn lobe as wide as a near blade's,
+    // roughness about 0.42): where a gust bends the blades, the faces that
+    // catch the sun change, and the wave shows whichever way it runs across
+    // the view. The lobe is far narrower than the ways a tilt takes, so it
+    // is integrated round the blades' ways, not sampled at them (sampled,
+    // the half-way swinging past a way as a gust laid the sward drew a thin
+    // pale line round every band of the gusts). n.H = A - R cos(psi - psiH):
+    // the front faces' lobe peaks at psiH + pi (A + R), the back faces' at
+    // psiH (R - A, never over cos(tilt) with the half-way above the sward).
+    float A = f.hu * sa, R = ca * f.hr;
+    for (int s = 0; s < faces; ++s) {
+        float sg = s == 0 ? 1.0 : -1.0;
+        float P = R + sg * A;
+        // (0.8^40 is 1e-4: under a hundredth of the diffuse light.)
+        if (P <= 0.8) continue;
+        vec2 dir = -sg * f.hdir;
+        float nv = f.vu * sa - f.v1 * dir.x * ca;
+        float nl = f.lu * sa - (f.l1 * dir.x + f.l2 * dir.y) * ca;
+        // The lit face there, if it is the face the eye sees.
+        float atPeak = nv * sg > 0.0 ? abs(nv) * max(nl * sg, 0.0) : 0.0;
+        // The lobe round the ways: (n.H)^40 ~ P^40 exp(-x (1 - cos)),
+        // x = 40 R / P, whose mean is P^40 e^-x I0(x) and whose first moment
+        // I1 / I0 weighs the faces at its peak against the tilt's mean.
+        float x = SWARD_SHEEN_POWER * R / P;
+        float share = (s == 0 ? litF : litB) / float(SWARD_WAYS);
+        float g = share + swardBesselRatio(x) * (atPeak - share);
+        float p2 = P * P, p8 = p2 * p2; p8 *= p8;
+        float p32 = p8 * p8; p32 *= p32;
+        sums.w += float(SWARD_WAYS) * g * p32 * p8 * swardBesselI0e(x);
+    }
+}
 vec3 sceneSwardLight(vec3 up, vec3 V, vec3 L) {
     // A frame about `up`, its first axis toward the eye (the set is
     // symmetric across the view, so the mean is steady as the eye turns).
@@ -399,43 +470,19 @@ vec3 sceneSwardLight(vec3 up, vec3 V, vec3 L) {
     float lu = dot(L, up), l1L = dot(L, e1), l2 = dot(L, e2);
     vec3 H = normalize(V + L);
     float hu = dot(H, up), h1 = dot(H, e1), h2 = dot(H, e2);
-    // The comb: where the wind lays the sward (`up` tipped off the vertical)
-    // its blades no longer lean every way round but mostly downwind, and
-    // further; a gust running across the view swings the faces the eye sees
-    // between those turned to the light and those turned from it.
-    vec2 comb = vec2(dot(vec3(up.x, 0.0, up.z), e1), dot(vec3(up.x, 0.0, up.z), e2));
-    float combK = clamp(length(comb) * SWARD_COMB, 0.0, 0.85);
-    comb = length(comb) > 1e-5 ? normalize(comb) : vec2(1.0, 0.0);
-    float sumW = 0.0, sumD = 0.0, sumT = 0.0, sumS = 0.0;
-    for (int k = 0; k < 8; ++k) {
-        // Four ways at each tilt, the second set turned half a step.
-        float a = (k < 4) ? SWARD_TILT_A : SWARD_TILT_B;
-        float psi = (float(k & 3) + ((k < 4) ? 0.125 : 0.625)) * 1.5707963;
-        vec2 dir = normalize(mix(vec2(cos(psi), sin(psi)), comb, combK) + vec2(1e-5, 0.0));
-        a = min(a + combK * 0.5, 1.4);
-        float ca = cos(a), sa = sin(a), cp = dir.x, sp = dir.y;
-        // A blade leaning `a` toward psi: its face's normal lies in the
-        // plane of its lean, square to it (the upper face: up and back).
-        // In the frame: n = up sa - (e1 cp + e2 sp) ca.
-        float nv = vu * sa - v1 * cp * ca;
-        float nl = lu * sa - (l1L * cp + l2 * sp) * ca;
-        // The face the eye sees.
-        float s = nv < 0.0 ? -1.0 : 1.0;
-        float w = abs(nv);
-        float NL = nl * s;
-        sumW += w;
-        sumD += w * max(NL, 0.0);
-        sumT += w * max(-NL, 0.0);
-        // Its cuticle's sheen (a Blinn lobe as wide as a near blade's,
-        // roughness about 0.42): where a gust bends the blades, the faces
-        // that catch the sun change, and the wave shows whichever way it
-        // runs across the view.
-        // (nh^40 by squaring: x^32 x^8.)
-        float nh = max((hu * sa - (h1 * cp + h2 * sp) * ca) * s, 0.0);
-        float n2 = nh * nh, n8 = n2 * n2; n8 *= n8;
-        float n32 = n8 * n8; n32 *= n32;
-        sumS += w * max(NL, 0.0) * n32 * n8;
-    }
+    // Where the wind lays the sward `up` is tipped off the vertical, and a
+    // gust running across the view swings the faces the eye sees between
+    // those turned to the light and those turned from it.
+    SwardFrame f;
+    f.vu = vu; f.v1 = v1; f.lu = lu; f.l1 = l1L; f.l2 = l2;
+    f.hu = hu; f.hr = sqrt(h1 * h1 + h2 * h2);
+    f.hdir = f.hr > 1e-5 ? vec2(h1, h2) / f.hr : vec2(1.0, 0.0);
+    vec4 sums = vec4(0.0);   // sumW, sumD, sumT, sumS
+    // The second tilt's ways turned half a step; its back faces' sheen peaks
+    // at cos(1.0)^40, nothing.
+    swardTilt(f, SWARD_TILT_A, 0.125, 2, sums);
+    swardTilt(f, SWARD_TILT_B, 0.625, 1, sums);
+    float sumW = sums.x, sumD = sums.y, sumT = sums.z, sumS = sums.w;
     // The lit share of the blades seen: over 1 along a low line, the tops
     // it sees lighter than the blades' mean shade the far blade and the
     // turf carry (scene_grass.glsl's grassMeanShade).

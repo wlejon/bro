@@ -410,9 +410,9 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  * pinkish-buff haze. Sunlit blades seen against the light glow through.
  * Further out, fewer and wider
  * blades over bigger cells (the far rings' leaves fans of four strands cut
- * per pixel, lit as the sward's mean face, combed by the wind and leaning
- * with its gusts, so a far meadow shows the wind's sheen and its travelling
- * waves), so blade count x width (the cover) stays about
+ * per pixel, lit as the sward's mean face, laid over as far as the near
+ * blades bend in the wind and its gusts, so a far meadow shows the wind's
+ * sheen and its travelling waves), so blade count x width (the cover) stays about
  * level while the work falls. Within a ring the far half keeps fewer blades,
  * widened to match the next ring, and rings cross-fade through a dithered
  * band. Only tiles of cells the view can see, inside the ring and where

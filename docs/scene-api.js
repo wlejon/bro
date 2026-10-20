@@ -70,7 +70,7 @@ target/up/mode: the 6DOF / FPS path that avoids target+up precision loss.
 /**
  * @typedef {Object} WindSample
  * @property {Array<number>} velocity -  The wind [x, 0, z] in m/s at the point now: the steady speed plus 4 m/s per unit of gust, along the drifting direction with a little cross-wind wobble.
- * @property {number} gust -  The gust band over the point now (0 between bands, up to ~2.2 × the gust amount inside one).
+ * @property {number} gust -  The gust band over the point now (0 between bands, up to ~1.7 × the gust amount inside one).
  * @property {number} speed -  |velocity|.
  */
 

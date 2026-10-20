@@ -69,7 +69,9 @@ inline bool windFieldCalm(const WindFieldState& s) { return s.base <= 0.0f && s.
 inline float windSwayReach(const WindFieldParams& p, float height) {
     if (height <= 0.0f) return 0.0f;
     const float base = std::max(0.0f, p.speed) * 1.28f;
-    const float gu = 2.16f * std::max(0.0f, p.gust);          // (1.35 - 0.45) * 2.4 at most
+    // (0.5 + 0.85 * 0.9 - 0.45) * 2.4 = 1.96 at most (windSimplex stays
+    // within +-0.9), padded.
+    const float gu = 2.16f * std::max(0.0f, p.gust);
     const float calm = std::min(base / 2.5f, 3.0f);
     const float spd = base + 4.0f * gu;
     const float trunk = (spd * 0.006f + gu * 0.03f + 0.008f * (0.6f * calm + gu) + 0.004f * (0.5f * calm + gu)) *
@@ -97,18 +99,28 @@ inline float windNoise(float px, float py) {
     return (ab + (cd - ab) * uy) * 2.0f - 1.0f;
 }
 
-/// The same with a quintic fade (sceneWindNoise5): smooth to its second
-/// derivative, for the gusts.
-inline float windNoise5(float px, float py) {
-    const float ix = std::floor(px), iy = std::floor(py);
-    const float fx = px - ix, fy = py - iy;
-    const float ux = fx * fx * fx * (fx * (fx * 6.0f - 15.0f) + 10.0f);
-    const float uy = fy * fy * fy * (fy * (fy * 6.0f - 15.0f) + 10.0f);
+/// Simplex gradient noise, about [-0.8, 0.8] with the value noise's spread
+/// (sceneWindSimplex): the gusts. No plateaus at the lattice points, so a
+/// gust band does not trace the lattice; smooth to its second derivative.
+inline float windSimplexCorner(int32_t x, int32_t y, float dx, float dy) {
+    float t = 0.5f - dx * dx - dy * dy;
+    if (t <= 0.0f) return 0.0f;
+    const float a = windHash(x, y) * 6.2831853f;
+    t *= t;
+    return t * t * (std::cos(a) * dx + std::sin(a) * dy);
+}
+inline constexpr float kWindSimplexGrid = 0.38f;   // SCENE_WIND_SIMPLEX_GRID
+inline float windSimplex(float px, float py) {
+    constexpr float F2 = 0.36602540378f, G2 = 0.21132486540f;
+    px *= kWindSimplexGrid;
+    py *= kWindSimplexGrid;
+    const float ix = std::floor(px + (px + py) * F2), iy = std::floor(py + (px + py) * F2);
+    const float d0x = px - ix + (ix + iy) * G2, d0y = py - iy + (ix + iy) * G2;
+    const int32_t ox = d0x > d0y ? 1 : 0, oy = 1 - ox;
     const int32_t x = static_cast<int32_t>(ix), y = static_cast<int32_t>(iy);
-    const float a = windHash(x, y), b = windHash(x + 1, y);
-    const float c = windHash(x, y + 1), d = windHash(x + 1, y + 1);
-    const float ab = a + (b - a) * ux, cd = c + (d - c) * ux;
-    return (ab + (cd - ab) * uy) * 2.0f - 1.0f;
+    return 80.0f * (windSimplexCorner(x, y, d0x, d0y) +
+                    windSimplexCorner(x + ox, y + oy, d0x - ox + G2, d0y - oy + G2) +
+                    windSimplexCorner(x + 1, y + 1, d0x - 1.0f + 2.0f * G2, d0y - 1.0f + 2.0f * G2));
 }
 
 /// max(x, 0) with its corner rounded by a hyperbola (sceneWindSoftRamp): a
@@ -120,13 +132,14 @@ inline float windSoftRamp(float x) { return 0.5f * (x + std::sqrt(x * x + kWindG
 /// SCENE_WIND_CLOCK_PERIOD, the camera block's windParams.w.
 inline constexpr double kWindClockPeriod = 256.0;
 
-/// The gust at absolute world (x, z): 0 between bands, up to ~2 x gust in one.
+/// The gust at absolute world (x, z): 0 between bands, up to ~1.7 x gust in one
+/// (its mean over the field 0.34 x gust: scene_grass.glsl's SCENE_GUST_MEAN).
 inline float windGustAt(const WindFieldState& s, float x, float z) {
     if (s.gust <= 0.0f) return 0.0f;
     const float along = x * s.dirX + z * s.dirZ - s.time * s.gustSpeed;
     const float across = -x * s.dirZ + z * s.dirX;
-    const float g = windNoise5(along * s.invAlong, across * s.invAcross) * 0.5f + 0.5f +
-                    0.35f * windNoise5(along * s.invAlong * 3.18f + 5.3f, across * s.invAcross * 4.17f);
+    const float g = windSimplex(along * s.invAlong, across * s.invAcross) * 0.5f + 0.5f +
+                    0.35f * windSimplex(along * s.invAlong * 3.18f + 5.3f, across * s.invAcross * 4.17f);
     return windSoftRamp(g - 0.45f) * 2.4f * s.gust;
 }
 

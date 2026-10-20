@@ -318,7 +318,7 @@ VkDescriptorSet SceneMeshDrawer::groundSet(SceneFrame& frame, GrassNode& node) {
     u.ring[3] = outer.bandOut;
     u.blade[0] = node.params().height;
     u.blade[2] = node.params().minNormalY;
-    u.blade[3] = node.params().wind;   // the sward's lay and gusts (grassCombLean), as the blades'
+    u.blade[3] = node.params().wind;   // the sward's lay in the wind (grassSwardLay), as the blades'
     u.lod[3] = eyeLift(node, frame.view);
     // The turf's surface layer, once its tiles are configured (its first
     // frame works everything out where it draws).

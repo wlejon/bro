@@ -395,7 +395,7 @@ void groundSurface(vec3 rel, vec4 vdata, inout vec3 color, inout vec3 N, inout f
         // Tipped by the sward's lay and its gusts as the far blades are,
         // and a gust lifts the sheen of what it bends (scene_grass.glsl).
         float gu = sceneWindGustAt(xz);
-        vec3 up = grassSwardUp(N, grassCombLean(xz, gu, fp));
+        vec3 up = grassSwardUp(N, grassSwardLay(gu));
         N = normalize(mix(N, grassCanopyNormal(up, normalize(-rel)), asBlades));
         // Past the blades the sun on it is all the sward's, as on the far
         // blades (mesh.frag's grass, its weight 1 from 12 m): the share left
