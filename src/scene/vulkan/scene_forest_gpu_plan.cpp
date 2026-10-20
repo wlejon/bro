@@ -40,6 +40,12 @@ uint32_t roundUp(uint32_t n, uint32_t to) { return (n + to - 1) / to * to; }
 constexpr float kNearCellPixels = 512.0f;
 constexpr float kFarCellPixels = 32.0f;
 
+// The bark classes' workgroups a node (forest_plan_measure.comp's
+// PLAN_CLASSIFY, each walking every this many workgroups' worth of the
+// segments): about the device's SMs twice, so the trees beside the eye,
+// thousands of segments each, spread over the GPU.
+constexpr uint32_t kClassifyGroups = 128;
+
 // The plan walks the trees of the cells in view (the world cell pass's);
 // BRO_WORLD_CELLS=0 walks every tree, for A/B (the plan is the same).
 bool worldCellsOn() {
@@ -51,7 +57,8 @@ bool worldCellsOn() {
 }
 
 constexpr BuiltinSceneShader kStageShaders[] = {
-    BuiltinSceneShader::ForestPlanMeasureComp,    BuiltinSceneShader::ForestPlanScanLocalComp,
+    BuiltinSceneShader::ForestPlanMeasureComp,    BuiltinSceneShader::ForestPlanClassifyComp,
+    BuiltinSceneShader::ForestPlanScanLocalComp,
     BuiltinSceneShader::ForestPlanScanAddComp,    BuiltinSceneShader::ForestPlanSortHistComp,
     BuiltinSceneShader::ForestPlanSortScatterComp, BuiltinSceneShader::ForestPlanLayoutComp,
     BuiltinSceneShader::ForestPlanItemsComp,      BuiltinSceneShader::ForestPlanCostComp,
@@ -59,7 +66,7 @@ constexpr BuiltinSceneShader kStageShaders[] = {
     BuiltinSceneShader::ForestPlanCountComp,      BuiltinSceneShader::ForestPlanArgsComp,
     BuiltinSceneShader::ForestPlanWriteComp,
 };
-constexpr const char* kStageNames[] = {"forest plan measure", "forest plan scan", "forest plan scan add",
+constexpr const char* kStageNames[] = {"forest plan measure", "forest plan classify", "forest plan scan", "forest plan scan add",
                                        "forest plan sort hist", "forest plan sort scatter", "forest plan layout",
                                        "forest plan items", "forest plan cost", "forest plan vary",
                                        "forest plan settle", "forest plan count", "forest plan args",
@@ -449,7 +456,7 @@ bool GpuPlanner::begin(SceneFrame& frame, Node& n, const ForestNode& node, VkBuf
     const uint32_t scratch = widest / (FP_SCAN_BLOCK - 1) + 16;
     const uint32_t sizes[FP_W_RUNS] = {N * FP_CAM_WORDS, flags,    n.items,   n.aligned, n.aligned, n.aligned,
                                        n.aligned,        FP_SORT_DIGITS * blocks, n.items, sums,      scratch,
-                                       n.items,          n.aligned};
+                                       n.items,          n.aligned, N * FP_CLASSIFY_WORDS};
     uint64_t at = FP_N_WORDS;
     for (int r = 0; r < FP_W_RUNS; ++r) {
         n.runs[r] = static_cast<uint32_t>(at);
@@ -632,44 +639,48 @@ void GpuPlanner::dispatchIndirect(VkCommandBuffer cmd, Stage s, const Node& n, V
     vkCmdDispatchIndirect(cmd, buffer, offset);
 }
 
-// An exclusive scan of `count` words at `offset` in place: each block's
-// scan, the blocks' totals scanned (at `scratch`, the same way), then added.
-void GpuPlanner::scan(VkCommandBuffer cmd, const Node& n, uint32_t offset, uint32_t count, uint32_t scratch) const {
-    const uint32_t blocks = (count + FP_SCAN_BLOCK - 1) / FP_SCAN_BLOCK;
-    if (blocks <= 1) {
-        dispatch(cmd, ScanLocal, n, 1, {0, offset, count, 0xffffffffu});
-        return;
+// An exclusive scan in place of each queued node's WORK run `run`, of a
+// length the GPU set (planScanSized's words from `words`, dispatches from
+// ARGS word `args`), at most `most[i]` long for the i-th node: each block's
+// scan, the blocks' sums scanned the same way a level up (each level's at
+// the next's offset in the scratch run), then added back down. A level the
+// count leaves one block scans to a single sum, which the levels above it
+// scan to zero and add nothing. The nodes go a level at a time, a barrier
+// a level for them all.
+void GpuPlanner::scanSized(VkCommandBuffer cmd, uint32_t run, uint32_t words, uint32_t args,
+                           const std::vector<uint32_t>& most) const {
+    struct Levels {
+        uint32_t at[FP_SCAN_LEVELS + 1];
+        uint32_t count = 0;
+    };
+    std::vector<Levels> nodes(queued_.size());
+    uint32_t deepest = 0;
+    for (size_t i = 0; i < queued_.size(); ++i) {
+        Levels& L = nodes[i];
+        L.at[0] = queued_[i]->runs[run];
+        uint32_t scratch = queued_[i]->runs[FP_W_SCRATCH];
+        for (uint32_t count = most[i]; count > FP_SCAN_BLOCK && L.count + 1 < FP_SCAN_LEVELS; ++L.count) {
+            const uint32_t blocks = (count + FP_SCAN_BLOCK - 1) / FP_SCAN_BLOCK;
+            L.at[L.count + 1] = scratch;
+            scratch += blocks;
+            count = blocks;
+        }
+        deepest = std::max(deepest, L.count);
     }
-    dispatch(cmd, ScanLocal, n, blocks, {0, offset, count, scratch});
-    barrier(cmd);
-    scan(cmd, n, scratch, blocks, scratch + blocks);
-    barrier(cmd);
-    dispatch(cmd, ScanAdd, n, blocks, {0, offset, count, scratch});
-}
-
-// scan's steps for the longest the run can be (each level's blocks' sums
-// at the next level's offset), each dispatched over the blocks the GPU's
-// count fills. A level the count leaves one block scans to a single sum,
-// which the levels above it scan to zero and add nothing.
-void GpuPlanner::scanSized(VkCommandBuffer cmd, const Node& n, uint32_t offset, uint32_t words, uint32_t args,
-                           uint32_t most, uint32_t scratch) const {
-    uint32_t at[FP_SCAN_LEVELS + 1] = {offset};
-    uint32_t levels = 0;
-    for (uint32_t count = most; count > FP_SCAN_BLOCK && levels + 1 < FP_SCAN_LEVELS; ++levels) {
-        const uint32_t blocks = (count + FP_SCAN_BLOCK - 1) / FP_SCAN_BLOCK;
-        at[levels + 1] = scratch;
-        scratch += blocks;
-        count = blocks;
-    }
-    const auto push = [&](uint32_t l, uint32_t sums) { return Push{0, at[l], FP_SCAN_COUNT_WORD | (words + l), sums}; };
-    for (uint32_t l = 0; l < levels; ++l) {
-        dispatchIndirect(cmd, ScanLocal, n, args + 4 * l, push(l, at[l + 1]));
+    const auto push = [&](const Levels& L, uint32_t l, uint32_t sums) {
+        return Push{0, L.at[l], FP_SCAN_COUNT_WORD | (words + l), sums};
+    };
+    for (uint32_t l = 0; l < deepest; ++l) {
+        for (size_t i = 0; i < queued_.size(); ++i)
+            if (l < nodes[i].count) dispatchIndirect(cmd, ScanLocal, *queued_[i], args + 4 * l, push(nodes[i], l, nodes[i].at[l + 1]));
         barrier(cmd);
     }
-    dispatch(cmd, ScanLocal, n, 1, push(levels, 0xffffffffu));
-    for (uint32_t l = levels; l-- > 0;) {
+    for (size_t i = 0; i < queued_.size(); ++i)
+        dispatch(cmd, ScanLocal, *queued_[i], 1, push(nodes[i], nodes[i].count, 0xffffffffu));
+    for (uint32_t l = deepest; l-- > 0;) {
         barrier(cmd);
-        dispatchIndirect(cmd, ScanAdd, n, args + 4 * l, push(l, at[l + 1]));
+        for (size_t i = 0; i < queued_.size(); ++i)
+            if (l < nodes[i].count) dispatchIndirect(cmd, ScanAdd, *queued_[i], args + 4 * l, push(nodes[i], l, nodes[i].at[l + 1]));
     }
 }
 
@@ -718,19 +729,20 @@ void GpuPlanner::record(SceneFrame& frame) {
         barrier(cmd);
         mark("plan:measure");
         for (uint32_t pass = 0; pass < FP_SORT_PASSES; ++pass) {
+            // (The bark classes beside the sort's first pass, which does
+            // not read them.)
+            if (pass == 0)
+                for (Node* n : queued_) dispatch(cmd, Classify, *n, kClassifyGroups);
             for (Node* n : queued_) dispatchIndirect(cmd, SortHist, *n, FP_A_SORT_DISPATCH, {pass, 0, 0, 0});
-            barrier(cmd);
-            for (Node* n : queued_)
-                scanSized(cmd, *n, n->runs[FP_W_HIST], FP_N_SCAN_HIST, FP_A_SCAN_HIST,
-                          FP_SORT_DIGITS * (n->aligned / FP_SCAN_BLOCK), n->runs[FP_W_SCRATCH]);
             barrier(cmd);
             for (Node* n : queued_) dispatchIndirect(cmd, SortScatter, *n, FP_A_SORT_DISPATCH, {pass, 0, 0, 0});
             barrier(cmd);
         }
         mark("plan:sort");
-        for (Node* n : queued_)
-            scanSized(cmd, *n, n->runs[FP_W_FLAGS], FP_N_SCAN_FLAGS, FP_A_SCAN_FLAGS,
-                      n->tiles * static_cast<uint32_t>(n->trees) + 1, n->runs[FP_W_SCRATCH]);
+        std::vector<uint32_t> most(queued_.size());
+        for (size_t i = 0; i < queued_.size(); ++i)
+            most[i] = queued_[i]->tiles * static_cast<uint32_t>(queued_[i]->trees) + 1;
+        scanSized(cmd, FP_W_FLAGS, FP_N_SCAN_FLAGS, FP_A_SCAN_FLAGS, most);
         barrier(cmd);
         for (Node* n : queued_) dispatch(cmd, Layout, *n, 1);
         barrier(cmd);
@@ -760,9 +772,8 @@ void GpuPlanner::record(SceneFrame& frame) {
         // The entries: counted, placed, written.
         for (Node* n : queued_) dispatchItems(cmd, Count, *n);
         barrier(cmd);
-        for (Node* n : queued_)
-            scanSized(cmd, *n, n->runs[FP_W_SUMS], FP_N_SCAN_SUMS, FP_A_SCAN_SUMS, FP_COLUMNS * n->itemGroups + 1,
-                      n->runs[FP_W_SCRATCH]);
+        for (size_t i = 0; i < queued_.size(); ++i) most[i] = FP_COLUMNS * queued_[i]->itemGroups + 1;
+        scanSized(cmd, FP_W_SUMS, FP_N_SCAN_SUMS, FP_A_SCAN_SUMS, most);
         barrier(cmd);
         for (Node* n : queued_) {
             // (In turn: each takes its pose slots after the last's.)

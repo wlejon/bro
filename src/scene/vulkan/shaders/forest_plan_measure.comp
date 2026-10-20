@@ -1,9 +1,12 @@
 #version 450
-// The forest planner's first stage (scene_forest_gpu_plan.cpp), a thread a
-// tree: the camera's measure of it, as planForest takes it (its distances
-// to the tree's box and crown, its pixels per unit at each, its bark's
-// classes, classifyBark), its key in the camera's order, and whether each
-// shadow tile sees it.
+// The forest planner's first stages (scene_forest_gpu_plan.cpp):
+//   (MEASURE)      a thread a tree: the camera's measure of it, as
+//                  planForest takes it (its distances to the tree's box and
+//                  crown, its pixels per unit at each, its bark's classes
+//                  set up, classifyBark), its key in the camera's order,
+//                  and whether each shadow tile sees it
+//   PLAN_CLASSIFY  the bark classes of the trees measure listed, a thread
+//                  a segment across every workgroup
 //
 // The trees are walked in the node's cell order: with push.round 1 those of
 // the cells some view sees (the world cell pass's list, CELLS), else every
@@ -17,13 +20,122 @@
 #include "scene_forest_plan.glsl"
 #include "world_cells_layout.h"
 
+layout(local_size_x = FP_GROUP_SIZE) in;
+
+// ForestPlan::classifyBark: the camera's bark classes by each segment's own
+// width at its distance from the eye, each class one past the last segment
+// that needs it (a maximum over its segments, so in any order). A tree
+// beside the eye measures every segment it has, thousands: a thread a tree
+// took the walk's measure stage 3.6 GPU ms, and a workgroup a tree's
+// segments 0.16 (the workgroup holding the near trees the tail), so measure
+// lists each tree with segments to measure (FP_W_CLASSIFY, a job a tree in
+// any order) and PLAN_CLASSIFY shares the jobs' segments out over its
+// workgroups, beside the sort.
+
+#if defined(PLAN_CLASSIFY)
+// A chunk of the jobs: their segment counts' inclusive scan, and each
+// thread's job's classes in this stretch of segments (by its offset from
+// the stretch's first job), raised in shared and then once in WORK.
+shared uint sRun[FP_GROUP_SIZE];
+shared uint sEnd[3][FP_GROUP_SIZE];
+
+void main() {
+    planBegin();
+    uint lid = gl_LocalInvocationID.x;
+    uint jobs = planWork.w[FP_N_CLASSIFY_JOBS];
+    uint list = workRun(FP_W_CLASSIFY);
+    precise float fine = gLod.barkFineSides * gLod.barkSidesPixels;
+    uint segs = su(FP_ST_SEGMENTS);
+    uint stride = gl_NumWorkGroups.x * uint(FP_GROUP_SIZE);
+    for (uint c0 = 0u; c0 < jobs; c0 += uint(FP_GROUP_SIZE)) {
+        uint j = c0 + lid;
+        sRun[lid] = j < jobs ? planWork.w[list + j * FP_CLASSIFY_WORDS + FP_CJ_COUNT] : 0u;
+        barrier();
+        // (Hillis-Steele: the counts' inclusive scan.)
+        for (uint step = 1u; step < uint(FP_GROUP_SIZE); step <<= 1) {
+            uint add = lid >= step ? sRun[lid - step] : 0u;
+            barrier();
+            sRun[lid] += add;
+            barrier();
+        }
+        uint total = sRun[FP_GROUP_SIZE - 1];
+        for (uint base = gl_WorkGroupID.x * uint(FP_GROUP_SIZE); base < total; base += stride) {
+            // The job whose run holds `w`: the first run ending past it.
+            uint w = base + lid;
+            uint jj = 0u;
+            if (w < total) {
+                uint lo = 0u, hi = uint(FP_GROUP_SIZE) - 1u;
+                while (lo < hi) {
+                    uint mid = (lo + hi) >> 1;
+                    if (sRun[mid] > w) hi = mid; else lo = mid + 1u;
+                }
+                jj = lo;
+            }
+            // The stretch's first job (thread 0's): the others' follow it,
+            // fewer than a workgroup of them.
+            uint first = 0u;
+            {
+                uint lo = 0u, hi = uint(FP_GROUP_SIZE) - 1u;
+                while (lo < hi) {
+                    uint mid = (lo + hi) >> 1;
+                    if (sRun[mid] > base) hi = mid; else lo = mid + 1u;
+                }
+                first = lo;
+            }
+            sEnd[0][lid] = 0u;
+            sEnd[1][lid] = 0u;
+            sEnd[2][lid] = 0u;
+            barrier();
+            if (w < total) {
+                uint b = list + (c0 + jj) * FP_CLASSIFY_WORDS;
+                uint i = w - (jj > 0u ? sRun[jj - 1u] : 0u);
+                vec3 e = uintBitsToFloat(uvec3(planWork.w[b + FP_CJ_EYE], planWork.w[b + FP_CJ_EYE + 1u],
+                                               planWork.w[b + FP_CJ_EYE + 2u]));
+                float unit = uintBitsToFloat(planWork.w[b + FP_CJ_UNIT]);
+                uint s = planWork.w[b + FP_CJ_SEG] + i;
+                uint g = segs + s * 8u;
+                vec3 a = sv3(g), bb = sv3(g + 4u);
+                float k0 = keepAt(s);
+                precise vec3 ab = bb - a;
+                precise float l2 = ab.x * ab.x + ab.y * ab.y + ab.z * ab.z;
+                precise vec3 ea = e - a;
+                precise float dotEA = ea.x * ab.x + ea.y * ab.y + ea.z * ab.z;
+                float f = l2 > 0.0 ? clamp(fdiv(dotEA, l2), 0.0, 1.0) : 0.0;
+                precise vec3 onSeg = a + ab * f;
+                precise vec3 off = e - onSeg;
+                precise float gap = flen(off) - k0;
+                precise float dRaw = gap * unit;
+                float d = max(dRaw, 0.25);
+                precise float pxAt = gPxAtMetre * unit;
+                float pxu = fdiv(pxAt, d);
+                precise float radiusPx = k0 * pxu;
+                uint at = jj - first;
+                if (radiusPx > kBarkCurvePixels) atomicMax(sEnd[0][at], i + 1u);
+                precise float wPx = 2.0 * 1.25 * k0 * pxu;
+                if (fine > 0.0 && wPx >= fine) atomicMax(sEnd[1][at], i + 1u);
+                if (wPx >= gLod.barkSidesPixels) atomicMax(sEnd[2][at], i + 1u);
+            }
+            barrier();
+            uint mine = first + lid;
+            if (mine < uint(FP_GROUP_SIZE) && c0 + mine < jobs) {
+                uint cam = workRun(FP_W_CAMERA) +
+                           planWork.w[list + (c0 + mine) * FP_CLASSIFY_WORDS + FP_CJ_TREE] * FP_CAM_WORDS;
+                if (sEnd[0][lid] > 0u) atomicMax(planWork.w[cam + FP_CAM_CURVE_END], sEnd[0][lid]);
+                if (sEnd[1][lid] > 0u) atomicMax(planWork.w[cam + FP_CAM_FINE_END], sEnd[1][lid]);
+                if (sEnd[2][lid] > 0u) atomicMax(planWork.w[cam + FP_CAM_NEAR_END], sEnd[2][lid]);
+            }
+            barrier();
+        }
+        barrier();
+    }
+}
+
+#else   // MEASURE
 layout(std430, set = 0, binding = 6) readonly buffer PlanCells { uint w[]; } planCells;
 // The far cards' cells (FP_F_CARDS): a word a cell, nonzero where a card
 // stands for its trees, which the camera then leaves out (their shadow
 // tiles still see them).
 layout(std430, set = 0, binding = 7) readonly buffer PlanCards { uint w[]; } planCards;
-
-layout(local_size_x = FP_GROUP_SIZE) in;
 
 shared uint sCount[FP_MAX_VIEWS];
 
@@ -31,14 +143,9 @@ shared uint sCount[FP_MAX_VIEWS];
 // twice the reach clamps to its low side, as the CPU's does).
 float clampStd(float v, float lo, float hi) { return v < lo ? lo : (hi < v ? hi : v); }
 
-// ForestPlan::classifyBark: the camera's bark classes by each segment's own
-// width at its distance from the eye, each class one past the last segment
-// that needs it. Its segments are measured by the whole workgroup (classify
-// below): a tree beside the eye measures every segment it has, thousands,
-// and a thread a tree took the walk's measure stage 3.6 GPU ms, the
-// workgroup waiting on its one near tree. Here each tree's setup: the
-// segments to measure (`m`), its classes 0 (none yet) or, where the CPU
-// returns before measuring, left at FP_ALL_SEGMENTS.
+// A tree's bark classes set up: the segments to measure (`m`), its classes
+// 0 (none yet) or, where the CPU returns before measuring, left at
+// FP_ALL_SEGMENTS.
 uint classifySetup(Spec sp, float px, float barkPx, inout uint curveEnd, inout uint fineEnd, inout uint nearEnd) {
     if (!gPerspective || sp.segCount == 0u) return 0u;
     if ((sp.segStart + sp.segCount) > su(FP_ST_SEGMENT_COUNT)) return 0u;
@@ -51,62 +158,6 @@ uint classifySetup(Spec sp, float px, float barkPx, inout uint curveEnd, inout u
     fineEnd = 0u;
     nearEnd = 0u;
     return firstUnder(sp.segStart, 0u, sp.segCount, rMin);
-}
-
-// The workgroup's trees' segments to measure, end to end: each tree's run
-// (sRun, an inclusive scan of their counts), its first segment, the eye in
-// its specimen's space and its metres a unit; its classes, raised by any
-// thread (a class is a maximum over its segments, in any order).
-shared uint sRun[FP_GROUP_SIZE];
-shared uint sSeg[FP_GROUP_SIZE];
-shared vec4 sEye[FP_GROUP_SIZE];
-shared uint sEnd[3][FP_GROUP_SIZE];
-
-void classify(uint lid) {
-    // (Hillis-Steele: the counts' inclusive scan.)
-    for (uint step = 1u; step < uint(FP_GROUP_SIZE); step <<= 1) {
-        uint add = lid >= step ? sRun[lid - step] : 0u;
-        barrier();
-        sRun[lid] += add;
-        barrier();
-    }
-    uint total = sRun[FP_GROUP_SIZE - 1];
-    if (total == 0u) return;
-    precise float fine = gLod.barkFineSides * gLod.barkSidesPixels;
-    uint segs = su(FP_ST_SEGMENTS);
-    for (uint w = lid; w < total; w += uint(FP_GROUP_SIZE)) {
-        // The tree whose run holds `w`: the first run ending past it.
-        uint lo = 0u, hi = uint(FP_GROUP_SIZE) - 1u;
-        while (lo < hi) {
-            uint mid = (lo + hi) >> 1;
-            if (sRun[mid] > w) hi = mid; else lo = mid + 1u;
-        }
-        uint j = lo;
-        uint i = w - (j > 0u ? sRun[j - 1u] : 0u);
-        vec3 e = sEye[j].xyz;
-        float unit = sEye[j].w;
-        uint s = sSeg[j] + i;
-        uint g = segs + s * 8u;
-        vec3 a = sv3(g), b = sv3(g + 4u);
-        float k0 = keepAt(s);
-        precise vec3 ab = b - a;
-        precise float l2 = ab.x * ab.x + ab.y * ab.y + ab.z * ab.z;
-        precise vec3 ea = e - a;
-        precise float dotEA = ea.x * ab.x + ea.y * ab.y + ea.z * ab.z;
-        float f = l2 > 0.0 ? clamp(fdiv(dotEA, l2), 0.0, 1.0) : 0.0;
-        precise vec3 onSeg = a + ab * f;
-        precise vec3 off = e - onSeg;
-        precise float gap = flen(off) - k0;
-        precise float dRaw = gap * unit;
-        float d = max(dRaw, 0.25);
-        precise float pxAt = gPxAtMetre * unit;
-        float pxu = fdiv(pxAt, d);
-        precise float radiusPx = k0 * pxu;
-        if (radiusPx > kBarkCurvePixels) atomicMax(sEnd[0][j], i + 1u);
-        precise float wPx = 2.0 * 1.25 * k0 * pxu;
-        if (fine > 0.0 && wPx >= fine) atomicMax(sEnd[1][j], i + 1u);
-        if (wPx >= gLod.barkSidesPixels) atomicMax(sEnd[2][j], i + 1u);
-    }
 }
 
 // The tree at place `p` of those measured: the cells' (the cell in view
@@ -141,25 +192,22 @@ void sizeStages(uint measured) {
     planArgs.w[FP_A_FILL_DISPATCH + 1] = 1u;
     planArgs.w[FP_A_FILL_DISPATCH + 2] = 1u;
     planScanSized(gTiles * measured + 1u, FP_N_SCAN_FLAGS, FP_A_SCAN_FLAGS);
-    planScanSized(uint(FP_SORT_DIGITS) * planArgs.w[FP_A_SORT_DISPATCH], FP_N_SCAN_HIST, FP_A_SCAN_HIST);
 }
 
 void main() {
     planBegin();
     uint lid = gl_LocalInvocationID.x;
     if (lid < uint(FP_MAX_VIEWS)) sCount[lid] = 0u;
-    sRun[lid] = 0u;
     barrier();
     bool cells = planPush.round != 0u;
     uint measured = cells ? min(planCells.w[WC_O_ITEMS], gTrees) : gTrees;
     uint place = gl_GlobalInvocationID.x;
     uint keysA = workRun(FP_W_KEYS_A), valsA = workRun(FP_W_VALS_A);
     if (place == 0u) sizeStages(measured);
-    uint i = 0u;
     if (place < measured) {
         uint key = FP_SORT_UNSEEN;
         bool carded;
-        i = treeAt(place, cells, carded);
+        uint i = treeAt(place, cells, carded);
         {
             Tree tr = planTree(i);
             Spec sp = planSpec(tr.specimen);
@@ -208,9 +256,14 @@ void main() {
                         precise vec3 es = vec3(v.x * tr.cosYaw - v.z * tr.sinYaw, v.y,
                                                v.x * tr.sinYaw + v.z * tr.cosYaw);
                         precise float unit = tr.scale * gNodeScale;
-                        sRun[lid] = m;
-                        sSeg[lid] = sp.segStart;
-                        sEye[lid] = vec4(es, unit);
+                        uint b = workRun(FP_W_CLASSIFY) + atomicAdd(planWork.w[FP_N_CLASSIFY_JOBS], 1u) * FP_CLASSIFY_WORDS;
+                        planWork.w[b + FP_CJ_TREE] = i;
+                        planWork.w[b + FP_CJ_SEG] = sp.segStart;
+                        planWork.w[b + FP_CJ_COUNT] = m;
+                        planWork.w[b + FP_CJ_EYE] = floatBitsToUint(es.x);
+                        planWork.w[b + FP_CJ_EYE + 1u] = floatBitsToUint(es.y);
+                        planWork.w[b + FP_CJ_EYE + 2u] = floatBitsToUint(es.z);
+                        planWork.w[b + FP_CJ_UNIT] = floatBitsToUint(unit);
                     }
                     key = min(floatBitsToUint(centreDist(tr)) >> (32 - FP_SORT_BITS), FP_SORT_UNSEEN - 1u);
                 }
@@ -220,10 +273,10 @@ void main() {
             planWork.w[cam + FP_CAM_BARK_PX] = floatBitsToUint(barkPx);
             planWork.w[cam + FP_CAM_DIST] = floatBitsToUint(dl);
             planWork.w[cam + FP_CAM_FAR] = floatBitsToUint(far_);
-            // (Its bark classes once the workgroup has measured them.)
-            sEnd[0][lid] = curveEnd;
-            sEnd[1][lid] = fineEnd;
-            sEnd[2][lid] = nearEnd;
+            // (A listed tree's classes are raised from 0 by PLAN_CLASSIFY.)
+            planWork.w[cam + FP_CAM_CURVE_END] = curveEnd;
+            planWork.w[cam + FP_CAM_FINE_END] = fineEnd;
+            planWork.w[cam + FP_CAM_NEAR_END] = nearEnd;
             if (seen) atomicAdd(sCount[0], 1u);
             // Each shadow tile's view of it (the camera's or not).
             uint flags = workRun(FP_W_FLAGS);
@@ -238,13 +291,6 @@ void main() {
         planWork.w[workRun(FP_W_TREE_OF) + place] = i;
     }
     barrier();
-    classify(lid);
-    barrier();
-    if (place < measured) {
-        uint cam = workRun(FP_W_CAMERA) + i * FP_CAM_WORDS;
-        planWork.w[cam + FP_CAM_CURVE_END] = sEnd[0][lid];
-        planWork.w[cam + FP_CAM_FINE_END] = sEnd[1][lid];
-        planWork.w[cam + FP_CAM_NEAR_END] = sEnd[2][lid];
-    }
     if (lid <= gTiles && sCount[lid] > 0u) atomicAdd(planWork.w[FP_N_VIEW_COUNT + lid], sCount[lid]);
 }
+#endif

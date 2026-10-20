@@ -172,7 +172,7 @@ public:
 
 private:
     enum Stage {
-        Measure, ScanLocal, ScanAdd, SortHist, SortScatter, Layout, Items, Cost, Vary, Settle, Count, Args, Write,
+        Measure, Classify, ScanLocal, ScanAdd, SortHist, SortScatter, Layout, Items, Cost, Vary, Settle, Count, Args, Write,
         kStages
     };
     struct Push {
@@ -191,11 +191,10 @@ private:
     void dispatchIndirect(VkCommandBuffer cmd, Stage s, const Node& n, uint32_t argsWord, const Push& p) const;
     void dispatchIndirect(VkCommandBuffer cmd, Stage s, const Node& n, VkBuffer buffer, VkDeviceSize offset,
                           const Push& p) const;
-    void scan(VkCommandBuffer cmd, const Node& n, uint32_t offset, uint32_t count, uint32_t scratch) const;
-    // The same, of a length the GPU set (planScanSized's words from
-    // `words`, dispatches from ARGS word `args`), at most `most` long.
-    void scanSized(VkCommandBuffer cmd, const Node& n, uint32_t offset, uint32_t words, uint32_t args, uint32_t most,
-                   uint32_t scratch) const;
+    // Each queued node's WORK run `run` scanned, of a length the GPU set,
+    // at most `most[i]` long for the i-th.
+    void scanSized(VkCommandBuffer cmd, uint32_t run, uint32_t words, uint32_t args,
+                   const std::vector<uint32_t>& most) const;
     static void barrier(VkCommandBuffer cmd);
     static void destroyNode(SceneVkAllocator& allocator, Node& n);
     bool ensureBuffer(SceneFrame& frame, SceneVkBuffer& buf, VkDeviceSize size, VkBufferUsageFlags usage,

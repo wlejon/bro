@@ -81,6 +81,7 @@ BRO_SCENE_SHADER(ForestLeafPoseComp,       "forest_leaf_pose.comp",       "fores
 BRO_SCENE_SHADER(ForestLeafPoseIndirectComp, "forest_leaf_pose_indirect.comp", "forest_leaf_pose.comp",  "comp", "FOREST_POSE_INDIRECT")
 // The forest's GPU planner (scene_forest_plan.glsl), its stages in order.
 BRO_SCENE_SHADER(ForestPlanMeasureComp,    "forest_plan_measure.comp",    "forest_plan_measure.comp",    "comp", "")
+BRO_SCENE_SHADER(ForestPlanClassifyComp,   "forest_plan_classify.comp",   "forest_plan_measure.comp",    "comp", "PLAN_CLASSIFY")
 BRO_SCENE_SHADER(ForestPlanScanLocalComp,  "forest_plan_scan_local.comp", "forest_plan_scan.comp",       "comp", "SCAN_LOCAL")
 BRO_SCENE_SHADER(ForestPlanScanAddComp,    "forest_plan_scan_add.comp",   "forest_plan_scan.comp",       "comp", "SCAN_ADD")
 BRO_SCENE_SHADER(ForestPlanSortHistComp,   "forest_plan_sort_hist.comp",  "forest_plan_scan.comp",       "comp", "SORT_HIST")

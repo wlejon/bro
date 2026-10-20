@@ -12,14 +12,18 @@
 //                the items round 1 found varying
 //   PLAN_SETTLE  one thread a budget: the searches' fits settled
 //                (settleDetail) against the details kept in SHARED
-//   PLAN_ARGS    one thread a node, the nodes in turn: each draw's indirect
-//                command from the place counts' scan, the posed groups'
-//                pose slots and dispatches, and the stats
+//   PLAN_ARGS    a workgroup a node, the nodes in turn: the posed groups'
+//                pose slots (one thread, in the drawer's order), then a
+//                thread a (view, group) each draw's indirect command from
+//                the place counts' scan and the posed groups' dispatches,
+//                and the stats
 
 #include "scene_forest_plan.glsl"
 
 #if defined(PLAN_ITEMS)
 layout(local_size_x = FP_GROUP_SIZE) in;
+#elif defined(PLAN_ARGS)
+layout(local_size_x = 64) in;
 #else
 layout(local_size_x = 1) in;
 #endif
@@ -139,22 +143,61 @@ void writeCommand(uint at, uint kind, uint instances, uint count, uint first, ui
     }
 }
 
+// A view's range of item blocks.
+void viewBlocks(uint v, out uint g0, out uint g1) {
+    uint n = planWork.w[FP_N_VIEW_COUNT + v];
+    g0 = planWork.w[FP_N_VIEW_BASE + v] / uint(FP_GROUP_SIZE);
+    g1 = g0 + roundUp(n, uint(FP_GROUP_SIZE)) / uint(FP_GROUP_SIZE);
+}
+
+shared uint sDraws;
+shared uint sPosed[FP_POSED_GROUPS];
+
 void main() {
     planBegin();
+    uint t = gl_LocalInvocationID.x;
     uint G = planWork.w[FP_N_ITEM_GROUPS];
     uint sums = workRun(FP_W_SUMS);
     uint cap = pu(FP_P_ENTRY_CAP);
-    uint poseCap = pu(FP_P_POSE_CAP);
-    const uint kMaxPoses = 4u << 20;   // the drawer's kMaxPoses
+    if (t == 0u) {
+        // The posed groups in the drawer's order (posedGroup, then
+        // posedCasters): each posed while the pose buffer has room for its
+        // leaves, else drawn inline (its twin); the nodes in turn, each
+        // taking its slots after the last's.
+        uint poseCap = pu(FP_P_POSE_CAP);
+        const uint kMaxPoses = 4u << 20;   // the drawer's kMaxPoses
+        uint poseLeaves = 0u, wantedLeaves = 0u;
+        uint cursor = planShared.w[FP_G_POSE_CURSOR], wanted = planShared.w[FP_G_POSE_WANTED];
+        for (uint v = 0u; v <= gTiles; ++v) {
+            uint g0, g1;
+            viewBlocks(v, g0, g1);
+            for (int j = 0; j < 2; ++j) {
+                int pg = posedGroupOf(v, j);
+                if (pg < 0) continue;
+                uint col = sums + (uint(FP_GROUPS) + uint(j)) * G;
+                uint leaves = planWork.w[col + g1] - planWork.w[col + g0];
+                bool posed = leaves > 0u && cursor + poseLeaves + leaves <= poseCap;
+                if (leaves > 0u && wanted + wantedLeaves + leaves <= kMaxPoses) wantedLeaves += leaves;
+                planWork.w[FP_N_POSED + uint(pg)] = posed ? 1u : 0u;
+                planWork.w[FP_N_POSE_BASE + uint(pg)] = cursor + poseLeaves;
+                sPosed[pg] = posed ? 1u : 0u;
+                if (posed) poseLeaves += leaves;
+            }
+        }
+        planShared.w[FP_G_POSE_CURSOR] = cursor + poseLeaves;
+        planShared.w[FP_G_POSE_WANTED] = wanted + wantedLeaves;
+        planWork.w[FP_N_STATS + FP_S_POSES] = wantedLeaves;
+        sDraws = 0u;
+    }
+    barrier();
+    // A thread a (view, group): its commands.
     uint draws = 0u;
-    uint poseLeaves = 0u, wantedLeaves = 0u;
-    uint cursor = planShared.w[FP_G_POSE_CURSOR], wanted = planShared.w[FP_G_POSE_WANTED];
-    for (uint v = 0u; v <= gTiles; ++v) {
-        uint n = planWork.w[FP_N_VIEW_COUNT + v];
-        uint g0 = planWork.w[FP_N_VIEW_BASE + v] / uint(FP_GROUP_SIZE);
-        uint g1 = g0 + roundUp(n, uint(FP_GROUP_SIZE)) / uint(FP_GROUP_SIZE);
+    for (uint at = t; at < (gTiles + 1u) * uint(FP_GROUPS); at += gl_WorkGroupSize.x) {
+        uint v = at / uint(FP_GROUPS), k = at % uint(FP_GROUPS);
+        uint g0, g1;
+        viewBlocks(v, g0, g1);
         uint drawBase = FP_P_DRAWS + (v == 0u ? 0u : uint(FP_GROUPS)) * 2u;
-        for (uint k = 0u; k < uint(FP_GROUPS); ++k) {
+        {
             uint first = planWork.w[sums + k * G + g0];
             uint want = planWork.w[sums + k * G + g1] - first;
             if (want > 0u) draws++;
@@ -163,17 +206,8 @@ void main() {
             uint kind = word & 0xffu, instances = word >> 8, count = pu(drawBase + 2u * k + 1u);
             int pg = k == uint(G_LEAF_NEAR) || k == uint(G_LEAF_CARD) ? posedGroupOf(v, int(k) - G_LEAF_NEAR) : -1;
             if (pg >= 0) {
-                // Posed while the pose buffer has room for the group's leaves
-                // (the drawer's posedGroup and posedCasters, in its order),
-                // else drawn inline (its twin).
                 uint j = k - uint(G_LEAF_NEAR);
-                uint col = sums + (uint(FP_GROUPS) + j) * G;
-                uint leaves = planWork.w[col + g1] - planWork.w[col + g0];
-                bool posed = leaves > 0u && cursor + poseLeaves + leaves <= poseCap;
-                if (leaves > 0u && wanted + wantedLeaves + leaves <= kMaxPoses) wantedLeaves += leaves;
-                planWork.w[FP_N_POSED + uint(pg)] = posed ? 1u : 0u;
-                planWork.w[FP_N_POSE_BASE + uint(pg)] = cursor + poseLeaves;
-                if (posed) poseLeaves += leaves;
+                bool posed = sPosed[pg] != 0u;
                 writeCommand(commandAt(v, k, 0u), kind, instances, count, first, posed ? m : 0u);
                 writeCommand(commandAt(v, uint(FP_GROUPS) + j, 0u), kind, instances, count, first, posed ? 0u : m);
                 uint p = FP_A_POSE + 4u * uint(pg);
@@ -195,13 +229,14 @@ void main() {
             }
         }
     }
-    planShared.w[FP_G_POSE_CURSOR] = cursor + poseLeaves;
-    planShared.w[FP_G_POSE_WANTED] = wanted + wantedLeaves;
-    uint st = FP_N_STATS;
-    planWork.w[st + FP_S_ENTRIES] = planWork.w[sums + uint(FP_GROUPS) * G];
-    planWork.w[st + FP_S_DRAWS] = draws;
-    planWork.w[st + FP_S_DETAIL] = planShared.w[FP_G_DETAIL];
-    planWork.w[st + FP_S_SHADOW_DETAIL] = planShared.w[FP_G_DETAIL + 1u];
-    planWork.w[st + FP_S_POSES] = wantedLeaves;
+    if (draws > 0u) atomicAdd(sDraws, draws);
+    barrier();
+    if (t == 0u) {
+        uint st = FP_N_STATS;
+        planWork.w[st + FP_S_ENTRIES] = planWork.w[sums + uint(FP_GROUPS) * G];
+        planWork.w[st + FP_S_DRAWS] = sDraws;
+        planWork.w[st + FP_S_DETAIL] = planShared.w[FP_G_DETAIL];
+        planWork.w[st + FP_S_SHADOW_DETAIL] = planShared.w[FP_G_DETAIL + 1u];
+    }
 }
 #endif

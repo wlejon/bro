@@ -191,7 +191,17 @@
 #define FP_W_VARY               11    // FP_P_ITEMS: the items whose cost varies with the detail (the
                                       //   search's later rounds walk these alone), in no order
 #define FP_W_TREE_OF            12    // FP_P_ALIGNED: each measured place's tree, in cell order
-#define FP_W_RUNS               13
+#define FP_W_CLASSIFY           13    // FP_CLASSIFY_WORDS a tree: the bark classes' jobs (the trees
+                                      // with segments to measure, as measured, in any order)
+#define FP_W_RUNS               14
+
+// A bark classes' job (FP_W_CLASSIFY).
+#define FP_CLASSIFY_WORDS       8
+#define FP_CJ_TREE              0
+#define FP_CJ_SEG               1     // its specimen's first segment
+#define FP_CJ_COUNT             2     // the segments to measure
+#define FP_CJ_EYE               3     // vec3: the eye in its specimen's space
+#define FP_CJ_UNIT              6     // float: its metres a unit
 
 // The camera's measure of a tree (ForestNode::SeenTree and the bark's classes).
 #define FP_CAM_WORDS            8
@@ -222,12 +232,13 @@
 #define FP_N_ITEM_GROUPS        162   // the item blocks in use (the place counts' column)
 #define FP_N_SCAN_FLAGS         164   // the flags' scan: each level's count (FP_SCAN_LEVELS)
 #define FP_N_SCAN_SUMS          168   // the place counts' scan: the same
-#define FP_N_SCAN_HIST          172   // the sort's digit counts' scan: the same
 #define FP_N_VARY_COUNT         180   // the items in FP_W_VARY
+#define FP_N_CLASSIFY_JOBS      181   // the jobs in FP_W_CLASSIFY
 #define FP_N_POSED              184   // per posed group (FP_POSED_GROUPS): 1 posed, 0 inline
 #define FP_N_POSE_BASE          (FP_N_POSED + FP_POSED_GROUPS)   // per posed group: its first pose slot
-#define FP_N_WORDS              256
-#if FP_N_POSE_BASE + FP_POSED_GROUPS > FP_N_WORDS
+#define FP_N_SORT_TOTALS        256   // per sort pass, per digit: the measured's keys of it
+#define FP_N_WORDS              (FP_N_SORT_TOTALS + FP_SORT_PASSES * FP_SORT_DIGITS)
+#if FP_N_POSE_BASE + FP_POSED_GROUPS > FP_N_SORT_TOTALS
 #error "the node's posed groups run past WORK's first words"
 #endif
 
@@ -272,8 +283,7 @@
 #define FP_A_FILL_DISPATCH      (FP_A_SORT_DISPATCH + 4)   // the items stage's: each view's run of the measured
 #define FP_A_SCAN_FLAGS         (FP_A_FILL_DISPATCH + 4)   // the flags' scan: each level's blocks (4 a level)
 #define FP_A_SCAN_SUMS          (FP_A_SCAN_FLAGS + 4 * FP_SCAN_LEVELS)   // the place counts' scan: the same
-#define FP_A_SCAN_HIST          (FP_A_SCAN_SUMS + 4 * FP_SCAN_LEVELS)   // the sort's digit counts' scan
-#define FP_A_WORDS              (FP_A_SCAN_HIST + 4 * FP_SCAN_LEVELS)
+#define FP_A_WORDS              (FP_A_SCAN_SUMS + 4 * FP_SCAN_LEVELS)
 
 // A group's draw (FP_P_DRAWS): its command's kind.
 #define FP_DRAW_INDEXED         0u    // instanced, indexed: an entry an instance

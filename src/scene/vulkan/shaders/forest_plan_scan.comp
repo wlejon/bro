@@ -6,12 +6,16 @@
 //                 ~0 for none)
 //   SCAN_ADD      each block's scanned scratch added to it
 //   SORT_HIST     a sort pass's digit counts a block (push.round: the pass),
-//                 digit-major (FP_W_HIST), for SCAN_LOCAL to place
-//   SORT_SCATTER  the pass's keys and trees to their places, stable
+//                 digit-major (FP_W_HIST), and each digit's total
+//                 (FP_N_SORT_TOTALS)
+//   SORT_SCATTER  the pass's keys and trees to their places, stable, each
+//                 block finding its first place a digit from the counts
 // The sort is LSD radix on the camera's FP_SORT_BITS-bit keys, ping-ponging
 // KEYS_A/VALS_A and KEYS_B/VALS_B (an even pass reads A), over the measured
 // trees' blocks (FP_A_SORT_DISPATCH), its digit counts a column of those
-// blocks a digit (their scan sized to match, FP_N_SCAN_HIST).
+// blocks a digit. (Two dispatches a pass, no scan between: a block's sum of
+// the blocks before it is cheap beside a scan's barriers at the forest's
+// counts, a few hundred blocks.)
 // A scan's count with FP_SCAN_COUNT_WORD set is read from that WORK word.
 
 #include "scene_forest_plan.glsl"
@@ -70,6 +74,9 @@ void main() {
 // keys of a digit.
 shared uint sCount[FP_SORT_DIGITS][FP_GROUP_SIZE];
 shared uint sChunk[FP_SORT_DIGITS][16];
+#if defined(SORT_SCATTER)
+shared uint sBase[FP_SORT_DIGITS][16];
+#endif
 
 void main() {
     uint t = gl_LocalInvocationID.x, block = gl_WorkGroupID.x;
@@ -106,8 +113,25 @@ void main() {
         }
 #if defined(SORT_HIST)
         planWork.w[workRun(FP_W_HIST) + d * blocks + block] = at;
+        if (at != 0u) atomicAdd(planWork.w[FP_N_SORT_TOTALS + pass * uint(FP_SORT_DIGITS) + d], at);
 #endif
     }
+#if defined(SORT_SCATTER)
+    // The block's first place for each digit: the keys of the digits below
+    // it, then those of the digit in the blocks before this one (thread
+    // (d, c) sums every 16th of those blocks from c).
+    uint hist = workRun(FP_W_HIST);
+    uint before = 0u;
+    for (uint b = c; b < block; b += 16u) before += planWork.w[hist + d * blocks + b];
+    sBase[d][c] = before;
+    barrier();
+    if (c == 0u) {
+        uint at = 0u;
+        for (uint k = 0u; k < d; ++k) at += planWork.w[FP_N_SORT_TOTALS + pass * uint(FP_SORT_DIGITS) + k];
+        for (uint k = 0u; k < 16u; ++k) at += sBase[d][k];
+        sBase[d][0] = at;
+    }
+#endif
     barrier();
 #if defined(SORT_SCATTER)
     {
@@ -121,10 +145,9 @@ void main() {
     barrier();
     uint seen[FP_SORT_DIGITS];
     for (uint k = 0u; k < uint(FP_SORT_DIGITS); ++k) seen[k] = 0u;
-    uint hist = workRun(FP_W_HIST);
     for (uint j = 0u; j < 4u; ++j) {
         uint dj = digit[j];
-        uint pos = planWork.w[hist + dj * blocks + block] + sCount[dj][t] + seen[dj];
+        uint pos = sBase[dj][0] + sCount[dj][t] + seen[dj];
         seen[dj] += 1u;
         planWork.w[dstKeys + pos] = key[j];
         planWork.w[dstVals + pos] = planWork.w[srcVals + first + j];
