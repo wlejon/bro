@@ -42,10 +42,12 @@ struct GrassUBO {
     float herbInfo[4];
     float herbRing[4];
     float herbShape[4];
+    float layer[4];    // the turf's surface layer (scene_ground_layers.glsl): tile side, texels, border, levels (0: none)
+    float layer2[4];   // its texel's most pixels, page shift, page entries a side, level-0 texel
     float herbs[GrassNode::kHerbMax * GrassNode::kHerbRecordFloats];
     float herbMean[GrassNode::kHerbMeanSteps * GrassNode::kHerbMeanFloats];
 };
-static_assert(sizeof(GrassUBO) == (15 + GrassNode::kHerbMax * GrassNode::kHerbRecordFloats / 4
+static_assert(sizeof(GrassUBO) == (17 + GrassNode::kHerbMax * GrassNode::kHerbRecordFloats / 4
                                    + GrassNode::kHerbMeanSteps * GrassNode::kHerbMeanFloats / 4) * 16);
 
 constexpr float kPi = 3.14159265358979f;
@@ -266,8 +268,17 @@ float eyeLift(const GrassNode& node, const SceneView& view) {
     return std::max(0.0f, view.eye.y - node.fieldHeight(view.eye.x, view.eye.z, view.eye.y) - kStandingEye);
 }
 
+/// The ground set's surface layer (scene_ground_layers.glsl's bindings 4-8):
+/// its four layers and its page table, or the empty fallbacks.
+struct GroundLayerBinding {
+    VkImageView layers[4] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
+    VkSampler layerSampler = VK_NULL_HANDLE;
+    VkImageView page = VK_NULL_HANDLE;
+    VkSampler pageSampler = VK_NULL_HANDLE;
+};
+
 VkDescriptorSet writeSet(SceneFrame& frame, VkDevice device, const SceneDefaults& defaults, const GrassUBO& u,
-                         const GrassImages& img) {
+                         const GrassImages& img, const GroundLayerBinding* ground = nullptr) {
     const VkDescriptorBufferInfo ubo = frame.gpu.device.frameUniform(&u, sizeof(u));
     VkDescriptorSet set = frame.gpu.device.frameSet(defaults.customLayout);
     if (set == VK_NULL_HANDLE) return VK_NULL_HANDLE;
@@ -278,7 +289,15 @@ VkDescriptorSet writeSet(SceneFrame& frame, VkDevice device, const SceneDefaults
     // No floor: black (an open sky everywhere).
     writer.writeImage(3, img.floor ? img.floor->view : defaults.black.view,
                       img.floor ? img.floor->sampler : defaults.sampler);
-    for (uint32_t b = 4; b <= static_cast<uint32_t>(MeshNode::kMaxUserTextures); ++b)
+    uint32_t b = 4;
+    if (ground) {
+        for (int i = 0; i < 4; ++i, ++b)
+            writer.writeImage(b, ground->layers[i] ? ground->layers[i] : defaults.zeroArray.view,
+                              ground->layers[i] ? ground->layerSampler : defaults.sampler);
+        writer.writeImage(b++, ground->page ? ground->page : defaults.zeroUintArray.view,
+                          ground->page ? ground->pageSampler : defaults.nearestSampler);
+    }
+    for (; b <= static_cast<uint32_t>(MeshNode::kMaxUserTextures); ++b)
         writer.writeImage(b, defaults.white.view, defaults.sampler);
     writer.updateSet(device, set);
     return set;
@@ -301,7 +320,49 @@ VkDescriptorSet SceneMeshDrawer::groundSet(SceneFrame& frame, GrassNode& node) {
     u.blade[2] = node.params().minNormalY;
     u.blade[3] = node.params().wind;   // the sward's lay and gusts (grassCombLean), as the blades'
     u.lod[3] = eyeLift(node, frame.view);
-    return writeSet(frame, device_, *defaults_, u, img);
+    // The turf's surface layer, once its tiles are configured (its first
+    // frame works everything out where it draws).
+    GroundLayerBinding layers;
+    if (GroundLayers* gl = groundLayers(frame, node); gl && gl->tiles.configured()) {
+        const SurfaceLayerConfig& c = gl->tiles.config();
+        for (int i = 0; i < gl->atlas.layerCount() && i < 4; ++i) layers.layers[i] = gl->atlas.layerView(i);
+        layers.layerSampler = gl->atlas.layerSampler();
+        layers.page = gl->atlas.pageView();
+        layers.pageSampler = gl->atlas.pageSampler();
+        u.layer[0] = c.tileMetres;
+        u.layer[1] = static_cast<float>(c.tileTexels);
+        u.layer[2] = static_cast<float>(c.border);
+        u.layer[3] = static_cast<float>(gl->tiles.levels());
+        u.layer2[0] = c.texelPixels;
+        u.layer2[1] = static_cast<float>(gl->tiles.pageShift());
+        u.layer2[2] = static_cast<float>(c.pageSize);
+        u.layer2[3] = gl->tiles.texelMetres(0);
+    }
+    return writeSet(frame, device_, *defaults_, u, img, &layers);
+}
+
+uint64_t SceneMeshDrawer::groundGeneration(GrassNode& node) {
+    // FNV-1a over everything every tile's fill reads: the field and floor,
+    // the herbs and the parameters the patterns take.
+    uint64_t h = 1469598103934665603ull;
+    const auto mix = [&h](const void* p, size_t n) {
+        const auto* b = static_cast<const uint8_t*>(p);
+        for (size_t i = 0; i < n; ++i) h = (h ^ b[i]) * 1099511628211ull;
+    };
+    for (const char* name : {GrassNode::kFieldTexture, GrassNode::kFloorTexture}) {
+        const MeshNode::UserTexture* t = slot(node, name);
+        const uint64_t g = t ? t->generation : 0;
+        mix(&g, sizeof(g));
+    }
+    const std::vector<float>& herbs = node.herbRecords();
+    if (!herbs.empty()) mix(herbs.data(), herbs.size() * sizeof(float));
+    const int count = node.hasHerbs() ? node.herbCount() : 0;
+    mix(&count, sizeof(count));
+    const GrassNode::Params& p = node.params();
+    const float params[] = {p.clumpFreq, p.height, p.flowering, p.dead, node.fieldX0(), node.fieldZ0(),
+                            node.fieldCell()};
+    mix(params, sizeof(params));
+    return h;
 }
 
 void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vector<MeshDraw>& out) {

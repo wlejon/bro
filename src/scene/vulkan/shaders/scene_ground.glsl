@@ -164,6 +164,77 @@ float groundTwigs(vec2 xz, float size, float fp) {
     return on;
 }
 
+// The ground's data at `xz`: the grass node's field where it reaches (faded
+// out over its last few metres, as the blades and herbs are), the mesh's own
+// (`vdata`, its vertex colour: density, dryness, floor, herbs) beyond.
+struct GroundData {
+    float density, dry, under, herbs, inside;
+};
+GroundData groundData(vec2 xz, vec4 vdata) {
+    vec4 data = clamp(vdata, 0.0, 1.0);
+    float inside = grassFieldInside(xz);
+    if (grassInField(xz)) {
+        vec4 f = grassFieldAt(xz);
+        vec2 fl = grassFloorHerbsAt(xz);
+        vec4 fd = vec4(f.g, f.b, fl.x, grass.pushRate.z > 0.5 ? fl.y : 0.0);
+        data = mix(data, fd, inside);
+    }
+    GroundData g;
+    g.density = data.r;
+    g.dry = data.g;
+    g.under = data.b;
+    g.herbs = data.a;
+    g.inside = inside;
+    return g;
+}
+
+// What the turf's surface layer keeps (docs/scene-world-architecture.md
+// §5): every pattern of the turf that depends only on where it is, each
+// band-limited to the footprint `fp` (a tile's texel as the tile is filled,
+// the pixel's where a fragment works them out itself), 0..1 each:
+//   a: the sward's clumps, its tall patches, its flowering patches' noise,
+//      the big mottling;
+//   b: the tussocks, the tufts, the grain, the soil's drift;
+//   c: the forest floor's leaf heaps, damp hollows, moss, twigs;
+//   d: the herbs' blooms here (herbBloomLocal): rgb their colour, a how
+//      many more of them than their mean, m as m / (1 + m).
+struct GroundBake {
+    vec4 a, b, c, d;
+};
+
+// An octave of frequency `freq`'s share at footprint `fp`, as groundOctave
+// fades it (to its mean as its period nears two footprints).
+float groundSeen(float freq, float fp) { return clamp(0.5 / (freq * fp) - 1.0, 0.0, 1.0); }
+
+GroundBake groundBake(vec2 xz, GroundData g, float fp) {
+    GroundBake b;
+    float k = grass.dry.w;
+    float clump = (0.5 * sceneWindNoise(xz * k) + 0.25 * sceneWindNoise(xz * k * 2.03 + 17.3)) * 0.667;
+    b.a.x = clamp(clump * groundSeen(k, fp) + 0.5, 0.0, 1.0);
+    float tall = mix(0.5, sceneWindNoise(xz * 0.045 + 3.0) * 0.5 + 0.5, groundSeen(0.045, fp));
+    b.a.y = smoothstep(0.35, 0.8, tall);
+    b.a.z = mix(0.5, grassKindsNoise(xz), groundSeen(0.07, fp));
+    b.a.w = groundFbm(xz, 0.035, fp, 3);
+    b.b.x = groundFbm(xz + 31.0, 0.6, fp, 3);
+    b.b.y = groundFbm(xz + 57.0, 3.1, fp, 2);
+    b.b.z = groundFbm(xz * vec2(1.0, 1.6) + 77.0, 9.0, fp, 2);
+    b.b.w = groundFbm(xz + 5.0, 0.25, fp, 3);
+    b.c.x = groundFbm(xz + 23.0, 2.2, fp, 3);
+    b.c.y = groundFbm(xz + 51.0, 0.12, fp, 3);
+    b.c.z = groundFbm(xz + 91.0, 0.3, fp, 3);
+    b.c.w = groundTwigs(xz, 0.35, fp) * clamp(0.35 / fp * 0.1 - 0.3, 0.0, 1.0);
+    b.d = vec4(0.0);
+    if (grass.herbInfo.x > 0.5 && g.herbs > 0.0) {
+        vec3 bloom, pick;
+        float more = herbBloomLocal(xz, g.under, -1.0, fp, bloom, pick);
+        b.d = vec4(bloom, more / (1.0 + more));
+    }
+    return b;
+}
+
+#ifndef GROUND_LAYER_FILL
+#include "scene_ground_layers.glsl"
+
 // The ground at a fragment: `rel` its camera-relative position, `vdata` the
 // vertex colour (density, dryness, floor) for where the field does not
 // reach. Sets the colour, the roughness and the occlusion.
@@ -173,23 +244,16 @@ void groundSurface(vec3 rel, vec4 vdata, inout vec3 color, inout vec3 N, inout f
     vec2 xz = rel.xz + eye.xz;
     float fp = max(length(fwidth(rel)), 1e-4);
 
-    // The ground's data: the field where it reaches (faded out over its last
-    // few metres, as the blades and herbs are), the mesh's own beyond.
-    vec4 data = clamp(vdata, 0.0, 1.0);
-    float inside = grassFieldInside(xz);
-    if (grassInField(xz)) {
-        vec4 f = grassFieldAt(xz);
-        vec2 fl = grassFloorHerbsAt(xz);
-        vec4 fd = vec4(f.g, f.b, fl.x, grass.pushRate.z > 0.5 ? fl.y : 0.0);
-        data = mix(data, fd, inside);
-    }
-    float density = data.r, dry = data.g, under = data.b, herbs = data.a;
+    GroundData g = groundData(xz, vdata);
+    float density = g.density, dry = g.dry, under = g.under, herbs = g.herbs, inside = g.inside;
+    // Its patterns from the surface layer, or worked out here where no
+    // tile holds them yet.
+    GroundBake b;
+    if (!groundLayerSample(xz, fp, b)) b = groundBake(xz, g, fp);
 
     // The sward: the blades' mean colour (scene_grass.glsl's), its clumps
     // and its large patches of taller, lusher grass.
-    float k = grass.dry.w;
-    float clump = clamp((0.5 * sceneWindNoise(xz * k) + 0.25 * sceneWindNoise(xz * k * 2.03 + 17.3)) * 0.667 + 0.5,
-                        0.0, 1.0);
+    float clump = b.a.x;
     float lush = 1.0 - dry;
     vec3 green = grass.lush.rgb;
     vec3 dryc = grass.dry.rgb;
@@ -201,8 +265,8 @@ void groundSurface(vec3 rel, vec4 vdata, inout vec3 color, inout vec3 N, inout f
                  GRASS_BLADE_MEAN_TINT;
     // With its dead leaves and its flowering heads, as the blades have them
     // there (scene_grass.glsl's grassKinds).
-    float tallN = smoothstep(0.35, 0.8, sceneWindNoise(xz * 0.045 + 3.0) * 0.5 + 0.5);
-    vec2 kinds = grassKinds(xz, lush, tallN);
+    float tallN = b.a.y;
+    vec2 kinds = grassKindsOf(b.a.z, lush, tallN);
     sward = mix(sward, grassDeadColor(0.5), kinds.y * 0.45);
     // (Seen across, their haze: scene_grass_surface.glsl's far heads.)
     float ripe = clamp(1.1 - lush, 0.0, 1.0);
@@ -258,10 +322,10 @@ void groundSurface(vec3 rel, vec4 vdata, inout vec3 color, inout vec3 N, inout f
 
     // Mottling at every scale: big patches (a few metres to tens), tussocks
     // (a metre or so), the grain of blades (centimetres).
-    float big = groundFbm(xz, 0.035, fp, 3);
-    float tuss = groundFbm(xz + 31.0, 0.6, fp, 3);
-    float tuft = groundFbm(xz + 57.0, 3.1, fp, 2);
-    float grain = groundFbm(xz * vec2(1.0, 1.6) + 77.0, 9.0, fp, 2);
+    float big = b.a.w;
+    float tuss = b.b.x;
+    float tuft = b.b.y;
+    float grain = b.b.z;
     // Seen between drawn blades (past the near ground) the turf is their
     // shaded depth: the blades carry the sward's own patches, so it is
     // mottled less and not bleached (pale patches under far blades read as
@@ -278,7 +342,7 @@ void groundSurface(vec3 rel, vec4 vdata, inout vec3 color, inout vec3 N, inout f
     // grows in the open (there the litter is not worked out at all: it was
     // two fifths of an open ground's turf, of the wilds' land round its
     // world all of it).
-    float drift = groundFbm(xz + 5.0, 0.25, fp, 3);
+    float drift = b.b.w;
     vec3 bare = soil * (0.75 + 0.5 * drift) * (0.85 + 0.3 * grain);
     vec3 floorC = bare;
     float litterAo = 1.0;
@@ -296,15 +360,18 @@ void groundSurface(vec3 rel, vec4 vdata, inout vec3 color, inout vec3 N, inout f
         }
         // Leaf drifts (some fresher and russet, some old and grey), damp dark
         // hollows and moss, at scales that hold from a few metres to far above.
-        float heap = groundFbm(xz + 23.0, 2.2, fp, 3);
-        float damp = groundFbm(xz + 51.0, 0.12, fp, 3);
-        float mossy = groundFbm(xz + 91.0, 0.3, fp, 3);
+        float heap = b.c.x;
+        float damp = b.c.y;
+        float mossy = b.c.z;
         litter *= 0.65 + 0.7 * drift;
         litter *= 0.7 + 0.6 * heap;
         litter = mix(litter * vec3(0.85, 0.9, 1.0), litter * vec3(1.25, 1.0, 0.75), smoothstep(0.3, 0.7, heap));
         litter = mix(litter, vec3(0.03, 0.023, 0.017), smoothstep(0.55, 0.75, damp) * 0.75);
         litter = mix(litter, vec3(0.045, 0.075, 0.018) * (0.7 + 0.6 * tuss), smoothstep(0.58, 0.72, mossy) * 0.85);
-        float twig = groundTwigs(xz, 0.35, fp) * clamp(0.35 / fp * 0.1 - 0.3, 0.0, 1.0);
+        // (A twig is a centimetre or so across: finer than the finest
+        // tile's texel, it is drawn here.)
+        float twig = fp < groundLayerFinest() ? groundTwigs(xz, 0.35, fp) * clamp(0.35 / fp * 0.1 - 0.3, 0.0, 1.0)
+                                               : b.c.w;
         litter = mix(litter, vec3(0.045, 0.032, 0.022), twig * 0.85);
         floorC = mix(bare, litter, smoothstep(0.0, 0.3, under));
     }
@@ -356,8 +423,8 @@ void groundSurface(vec3 rel, vec4 vdata, inout vec3 color, inout vec3 N, inout f
             // of them as of the far blades (scene_grass.glsl), between and
             // past them; their leaves mostly down among the grass, as the
             // plants' are (GRASS_HERB_LEAF_SEEN).
-            vec3 bloom, pick;
-            float more = herbBloomLocal(xz, under, -1.0, fp, bloom, pick);
+            vec3 bloom = b.d.rgb;
+            float more = b.d.a / max(1.0 - b.d.a, 1e-3);
             float share = min(hm.bloomShare * more, 0.95);
             float leaves = hm.cover * (1.0 - hm.bloomShare) * GRASS_HERB_LEAF_SEEN;
             float blooms = min(hm.cover * share, 1.0) * GRASS_HERB_BLOOM_SEEN * GRASS_TURF_BLOOMS;
@@ -369,3 +436,4 @@ void groundSurface(vec3 rel, vec4 vdata, inout vec3 color, inout vec3 N, inout f
         }
     }
 }
+#endif  // GROUND_LAYER_FILL

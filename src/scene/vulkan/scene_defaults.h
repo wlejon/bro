@@ -38,8 +38,10 @@ public:
     SceneVkImage black;     // (0,0,0,1)
     SceneVkImage cube;      // black cube map
     SceneVkImage zeroArray; // one-layer 2D array of zeros (an unset sampler2DArray)
+    SceneVkImage zeroUintArray;   // the same, R32_UINT (an unset usampler2DArray: an empty page table)
     VkSampler sampler = VK_NULL_HANDLE;      // linear, clamp to edge
     VkSampler cubeSampler = VK_NULL_HANDLE;  // linear mips, clamp to edge
+    VkSampler nearestSampler = VK_NULL_HANDLE;   // nearest, clamp to edge (integer images)
 
     /// Material set of all fallbacks (written once, never changes).
     VkDescriptorSet defaultMaterialSet = VK_NULL_HANDLE;

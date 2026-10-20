@@ -18,7 +18,9 @@
 #include <bromath/aabb.h>
 #include <bromath/frustum.h>
 #include "render/vulkan_frames.h"
+#include "scene/surface_layers.h"
 #include "scene/vulkan/scene_gpu_resources.h"
+#include "scene/vulkan/scene_surface_layers.h"
 #include "scene/vulkan/scene_vk_allocator.h"
 #include "scene/vulkan/scene_vk_custom_shader.h"
 #include "scene/vulkan/scene_vk_pipeline.h"
@@ -245,6 +247,13 @@ public:
     /// The plans recorded since the last call went to the GPU as `ticket` on
     /// `queue`: the GPU planner's read-backs of them are read once it completes.
     void forestSubmitted(uint64_t ticket, render::VulkanQueue& queue);
+    /// The turf's surface layers (docs/scene-world-architecture.md §5;
+    /// scene_mesh_drawer_ground.cpp): for each grass node whose turf this
+    /// frame draws, the tiles the camera needs, the fills due this frame
+    /// (its turf meshes drawn straight down into them) and the page table's
+    /// changes. Recorded outside any rendering, after the frame's uniforms
+    /// and before anything draws the turf.
+    void recordGroundLayers(SceneFrame& frame);
 
     /// A pass's view for a chunked draw (MeshDraw::chunks): its frustum
     /// (absolute world) and the origin its draws' push.model is relative to
@@ -316,6 +325,32 @@ private:
     /// floor, with its outermost ring (scene_mesh_drawer_grass.cpp). Null
     /// when the node has no field.
     VkDescriptorSet groundSet(SceneFrame& frame, GrassNode& grass);
+    /// A grass node's turf surface layers: the tiles' CPU state and atlas.
+    struct GroundLayers {
+        SurfaceLayers tiles;
+        SceneSurfaceLayerAtlas atlas;
+        uint64_t frame = 0;
+        uint64_t serial = 0;   // the engine frame last updated in
+        uint64_t turfKey = 0;  // the turf meshes the tiles' items were taken from
+        bromath::AABB3 bounds = bromath::aempty3();   // the items' union
+        bool failed = false;   // its atlas could not be made: the turf works everything out
+        /// Each turf mesh's items (by node id), shown or not, kept while it is in the graph.
+        struct TurfItems {
+            uint64_t key = 0;   // its geometry and placement they were taken at
+            std::vector<SurfaceItem> items;
+        };
+        std::unordered_map<uint32_t, TurfItems> turf;
+    };
+    /// Grass node `grass`'s, made on first use (its atlas included).
+    GroundLayers* groundLayers(SceneFrame& frame, const GrassNode& grass);
+    /// Turf mesh `node`'s items (its world box `bounds`): its ground's
+    /// heights in cells, retaken when its geometry or placement changes.
+    static const std::vector<SurfaceItem>& turfItems(GroundLayers& gl, const MeshNode& node,
+                                                     const bromath::AABB3& bounds);
+    /// What every tile of a grass node's turf layer reads changes with this
+    /// (its field, floor, herbs and the patterns' parameters; each turf
+    /// mesh is an item of its own, recordGroundLayers').
+    static uint64_t groundGeneration(GrassNode& grass);
     /// Set 3 holding a procedural draw's header and records, then its
     /// vegetation records (4 vec4s a segment; header[10] says where); null
     /// when the frame's upload memory runs out.
@@ -356,6 +391,8 @@ private:
     VkShaderModule fsBarkIndirect_ = VK_NULL_HANDLE;
     VkShaderModule fsGround_ = VK_NULL_HANDLE;         // turf: mesh.frag's SCENE_GROUND build
     VkShaderModule fsGroundIndirect_ = VK_NULL_HANDLE;
+    VkShaderModule fsGroundFill_ = VK_NULL_HANDLE;     // a turf layer tile's fill (ground_layer_fill.frag)
+    std::unordered_map<uint32_t, std::unique_ptr<GroundLayers>> groundLayers_;   // by grass node id
     VkShaderModule fsSpriteIndirect_ = VK_NULL_HANDLE;
     PipelineVariants builtin_;
     std::unordered_map<std::string, std::unique_ptr<CustomProgram>> custom_;

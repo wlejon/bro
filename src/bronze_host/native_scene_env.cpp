@@ -299,6 +299,9 @@ const char* bro_scene_SceneGraph_cullStatsJson(void* self) {
     j["shadowTilesCached"] = s.shadowTilesCached;
     j["shadowTilesHeld"] = s.shadowTilesHeld;
     j["shadowTilesHeldMask"] = s.shadowTilesHeldMask;
+    j["groundLayerNeeded"] = s.groundLayerNeeded;
+    j["groundLayerMissing"] = s.groundLayerMissing;
+    j["groundLayerFills"] = s.groundLayerFills;
     tl_cullJson = j.dump();
     return tl_cullJson.c_str();
 }

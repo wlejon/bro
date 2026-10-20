@@ -17,9 +17,9 @@
 namespace bro::scene::vk {
 
 struct TargetFormat {
-    static constexpr uint32_t kMaxColor = 2;
+    static constexpr uint32_t kMaxColor = 4;   // (a surface layer tile's fill writes four)
 
-    VkFormat color[kMaxColor] = {VK_FORMAT_UNDEFINED, VK_FORMAT_UNDEFINED};
+    VkFormat color[kMaxColor] = {VK_FORMAT_UNDEFINED, VK_FORMAT_UNDEFINED, VK_FORMAT_UNDEFINED, VK_FORMAT_UNDEFINED};
     uint32_t colorCount = 0;
     VkFormat depth = VK_FORMAT_UNDEFINED;
     VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
@@ -40,8 +40,13 @@ struct TargetFormat {
                (static_cast<uint64_t>(samples) << 36) |
                (static_cast<uint64_t>(colorCount) << 44);
     }
-    bool operator==(const TargetFormat& o) const { return key() == o.key(); }
-    bool operator!=(const TargetFormat& o) const { return key() != o.key(); }
+    /// The third and fourth colour formats (key() holds the rest).
+    uint32_t keyMore() const {
+        return static_cast<uint32_t>((static_cast<uint64_t>(color[2]) & 0xFFF) |
+                                     ((static_cast<uint64_t>(color[3]) & 0xFFF) << 12));
+    }
+    bool operator==(const TargetFormat& o) const { return key() == o.key() && keyMore() == o.keyMore(); }
+    bool operator!=(const TargetFormat& o) const { return !(*this == o); }
 };
 
 /// Pipelines of one pass keyed by (variant, TargetFormat), built on first use
@@ -51,7 +56,7 @@ class PipelineVariants {
 public:
     VkPipeline get(uint32_t variant, const TargetFormat& target,
                    const std::function<VkPipeline()>& build) {
-        const uint64_t key = target.key() | (static_cast<uint64_t>(variant) << 48);
+        const Key key{target.key() | (static_cast<uint64_t>(variant) << 48), target.keyMore()};
         auto it = pipelines_.find(key);
         if (it != pipelines_.end()) return it->second;
         VkPipeline p = build();
@@ -70,7 +75,17 @@ public:
     }
 
 private:
-    std::unordered_map<uint64_t, VkPipeline> pipelines_;
+    struct Key {
+        uint64_t lo;
+        uint32_t more;
+        bool operator==(const Key& o) const { return lo == o.lo && more == o.more; }
+    };
+    struct KeyHash {
+        size_t operator()(const Key& k) const {
+            return std::hash<uint64_t>()(k.lo ^ (static_cast<uint64_t>(k.more) * 0x9E3779B97F4A7C15ull));
+        }
+    };
+    std::unordered_map<Key, VkPipeline, KeyHash> pipelines_;
 };
 
 }  // namespace bro::scene::vk

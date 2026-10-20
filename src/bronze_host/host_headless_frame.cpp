@@ -772,6 +772,9 @@ void installHeadlessFrame(engine::Engine& engine) {
                 snum("shadowTilesCached", s.shadowTilesCached);
                 snum("shadowTilesHeld", s.shadowTilesHeld);
                 snum("shadowTilesHeldMask", s.shadowTilesHeldMask);
+                snum("groundLayerNeeded", s.groundLayerNeeded);
+                snum("groundLayerMissing", s.groundLayerMissing);
+                snum("groundLayerFills", s.groundLayerFills);
                 o.set(ev::setProperty(o.get(), "scene", sc.get()));
             }
 #endif

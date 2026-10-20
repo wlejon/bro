@@ -6,6 +6,7 @@
 #include "scene/vulkan/pass_billboard.h"
 #include "scene/vulkan/pass_decal.h"
 #include "scene/vulkan/pass_dof.h"
+#include "scene/vulkan/pass_ground_layers.h"
 #include "scene/vulkan/pass_environment.h"
 #include "scene/vulkan/pass_gaussian_splat.h"
 #include "scene/vulkan/pass_mesh.h"
@@ -43,6 +44,7 @@ SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
         // the shadow atlas, the forest's shadows included.
         graph_.add(std::make_unique<PassShadow>(PassShadow::Part::Unplanned));
         graph_.add(std::make_unique<PassFrameUniforms>());
+        graph_.add(std::make_unique<PassGroundLayers>());
         graph_.add(std::make_unique<PassEnvironment>());
         graph_.add(std::make_unique<PassShadow>(PassShadow::Part::Planned));
         graph_.add(std::make_unique<PassForestBatches>(opaqueBatches_));
@@ -51,6 +53,7 @@ SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
         graph_.add(std::make_unique<PassShadow>());
         graph_.add(std::make_unique<PassForestBatches>(opaqueBatches_));
         graph_.add(std::make_unique<PassFrameUniforms>());
+        graph_.add(std::make_unique<PassGroundLayers>());
         graph_.add(std::make_unique<PassReflectionProbe>());
         graph_.add(std::make_unique<PassEnvironment>());
     }

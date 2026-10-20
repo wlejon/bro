@@ -133,3 +133,6 @@ BRO_SCENE_SHADER(MeshBarkIndirectFrag,         "mesh_bark_indirect.frag",       
 // (scene_ground.glsl), set 4 the grass node's field.
 BRO_SCENE_SHADER(MeshGroundFrag,               "mesh_ground.frag",                 "mesh.frag", "frag", "SCENE_GROUND")
 BRO_SCENE_SHADER(MeshGroundIndirectFrag,       "mesh_ground_indirect.frag",        "mesh.frag", "frag", "SCENE_GROUND SCENE_INDIRECT_OUTPUT")
+// A tile of the turf's surface layer, the ground drawn straight down into it
+// (scene_ground_layers.glsl; scene_mesh_drawer_ground.cpp).
+BRO_SCENE_SHADER(GroundLayerFillFrag,          "ground_layer_fill.frag",           "ground_layer_fill.frag", "frag", "")

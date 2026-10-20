@@ -56,6 +56,9 @@ layout(set = 4, binding = 0) uniform GrassUBO {
     vec4 herbInfo;   // x: species, y: the herbs' cell (m), z: where the far plants end (m: the turf stands in past it), w: that hand-over's band (m)
     vec4 herbRing;   // a herb draw's ring: inner, outer, the band at the inner edge, at the outer
     vec4 herbShape;  // x: cards an instance, y: vertices a card, z: the ring (0 near, 1 mid, 2 far), w: where the whole plants end (m)
+    // The turf's surface layer (scene_ground_layers.glsl; SurfaceLayers):
+    vec4 layer;      // x: a level-0 tile's side (m), y: its texels a side, z: its border (texels), w: levels (0: none)
+    vec4 layer2;     // x: a texel's most pixels, y: the page shift, z: page entries a side, w: a level-0 texel (m)
     vec4 herbs[GRASS_HERB_MAX * GRASS_HERB_RECORD];   // GrassNode::kHerbMax species of broflora's herbRecord
     // The herbs' mean over their colonies under a canopy of 0, 1/4 .. 1
     // (GrassNode::herbMean): (cover exponent from above, leaf rgb), (the
@@ -170,12 +173,14 @@ const float GRASS_NEAR_BLADES = 1400.0;   // the near ring's blades a square met
 // Where the grass flowers and how much of it is dead at xz: x the share of
 // tufts sending up a culm (in patches of tens of metres, more where it is
 // lush and tall), y the share of leaves that are dead (more where dry).
-vec2 grassKinds(vec2 xz, float lush, float tall) {
-    float n = sceneWindNoise(xz * 0.07 + vec2(-41.3, 12.9)) * 0.5 + 0.5;
+// (Its patches' noise, 0..1, apart: the turf's surface layer keeps it.)
+float grassKindsNoise(vec2 xz) { return sceneWindNoise(xz * 0.07 + vec2(-41.3, 12.9)) * 0.5 + 0.5; }
+vec2 grassKindsOf(float n, float lush, float tall) {
     float flower = grass.cells.y * 2.0 * smoothstep(0.2, 0.7, n) * (0.35 + 0.65 * lush * (0.6 + 0.4 * tall));
     float dead = min(grass.cells.z * (0.5 + 2.2 * (1.0 - lush)), 0.6);
     return vec2(min(flower, 1.0), dead);
 }
+vec2 grassKinds(vec2 xz, float lush, float tall) { return grassKindsOf(grassKindsNoise(xz), lush, tall); }
 // A dead leaf's colour: weathered straw to dun (t 0..1).
 vec3 grassDeadColor(float t) { return mix(vec3(0.30, 0.255, 0.16), vec3(0.15, 0.13, 0.095), t); }
 // A culm's head: fresh, green flushed with purple; ripe, straw (r 0..1).

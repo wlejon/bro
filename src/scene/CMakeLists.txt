@@ -76,6 +76,7 @@ embed_vk_shader(scene_grass.glsl      kVkSceneGrassSrc)
 embed_vk_shader(scene_grass_surface.glsl kVkSceneGrassSurfaceSrc)
 embed_vk_shader(scene_forest_surface.glsl kVkSceneForestSurfaceSrc)
 embed_vk_shader(scene_ground.glsl     kVkSceneGroundSrc)
+embed_vk_shader(scene_ground_layers.glsl kVkSceneGroundLayersSrc)
 embed_vk_shader(scene_herb_mix.glsl   kVkSceneHerbMixSrc)
 embed_vk_shader(scene_herb_surface.glsl kVkSceneHerbSurfaceSrc)
 embed_vk_shader(clipmap_common.glsl       kClipmapCommonSrc)
@@ -116,6 +117,7 @@ add_library(bro_scene STATIC
     grass_node.cpp
     forest_node.cpp
     world_cells.cpp
+    surface_layers.cpp
     reflection_probe_node.cpp
     terrain_manager.cpp
     terrain_manager_mesh.cpp
@@ -140,6 +142,9 @@ add_library(bro_scene STATIC
     vulkan/scene_gpu_resources.cpp
     vulkan/scene_mesh_drawer.cpp
     vulkan/scene_mesh_drawer_grass.cpp
+    vulkan/scene_mesh_drawer_ground.cpp
+    vulkan/pass_ground_layers.cpp
+    vulkan/scene_surface_layers.cpp
     vulkan/scene_mesh_drawer_forest.cpp
     vulkan/scene_mesh_drawer_forest_gpu.cpp
     vulkan/scene_forest_draw.cpp
@@ -203,6 +208,12 @@ if(BRO_BUILD_TESTS)
         target_link_libraries(bro_forest_records_test PRIVATE bro_scene broflora bro_render bro_platform bro_util)
         target_include_directories(bro_forest_records_test PRIVATE ${bro_SOURCE_DIR}/src)
     endif()
+
+    # SurfaceLayers' tile bookkeeping (selection, budget, slots, page table),
+    # CPU only.
+    add_executable(bro_surface_layers_test tests/test_surface_layers.cpp)
+    target_link_libraries(bro_surface_layers_test PRIVATE bro_scene bro_render bro_platform bro_util)
+    target_include_directories(bro_surface_layers_test PRIVATE ${bro_SOURCE_DIR}/src)
 endif()
 
 

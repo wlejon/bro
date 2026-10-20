@@ -138,6 +138,7 @@ bool SceneMeshDrawer::setup(SceneGpu& gpu) {
     fsBarkIndirect_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshBarkIndirectFrag);
     fsGround_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshGroundFrag);
     fsGroundIndirect_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshGroundIndirectFrag);
+    fsGroundFill_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::GroundLayerFillFrag);
     fsSpray_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshForestSprayFrag);
     fsSprayIndirect_ =
         SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshForestSprayIndirectFrag);
@@ -153,7 +154,8 @@ bool SceneMeshDrawer::setup(SceneGpu& gpu) {
     fsGrassIndirect_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshGrassIndirectFrag);
     if (!vsLeafInline_ || !vsHerb_ || !fsHerb_ || !fsHerbIndirect_ || !fsGrass_ || !fsGrassIndirect_ || std::find(std::begin(vs_), std::end(vs_), VK_NULL_HANDLE) != std::end(vs_) || !fs_ || !fsIndirect_ ||
         !fsVeg_ || !fsVegIndirect_ || !fsSprite_ || !fsSpriteIndirect_ || !fsCluster_ || !fsClusterIndirect_ ||
-        !fsBark_ || !fsBarkIndirect_ || !fsGround_ || !fsGroundIndirect_ || !fsSpray_ || !fsSprayIndirect_ ||
+        !fsBark_ || !fsBarkIndirect_ || !fsGround_ || !fsGroundIndirect_ || !fsGroundFill_ || !fsSpray_ ||
+        !fsSprayIndirect_ ||
         !vsBloom_ || !fsBloom_ || !fsBloomIndirect_) {
         LOG_ERROR("SceneMeshDrawer: Failed creating the mesh shader modules");
         return false;
@@ -204,6 +206,10 @@ bool SceneMeshDrawer::setup(SceneGpu& gpu) {
 
 void SceneMeshDrawer::cleanup(SceneGpu& gpu) {
     builtin_.destroy(gpu.device);
+    for (auto& [id, layers] : groundLayers_) layers->atlas.destroy(gpu.device, gpu.allocator);
+    groundLayers_.clear();
+    SceneVkShaderModule::destroy(device_, fsGroundFill_);
+    fsGroundFill_ = VK_NULL_HANDLE;
     for (auto& [key, prog] : custom_) {
         prog->pipelines.destroy(gpu.device);
         for (VkShaderModule m : {prog->vs, prog->fs, prog->fsIndirect}) SceneVkShaderModule::destroy(device_, m);
@@ -367,6 +373,8 @@ VkPipeline SceneMeshDrawer::builtinPipeline(const MeshDraw& draw, const TargetFo
         if (draw.kind == MeshKind::Tube || draw.kind == MeshKind::ForestTube)
             fs = target.colorCount > 1 ? fsBarkIndirect_ : fsBark_;
         if (ground) fs = target.colorCount > 1 ? fsGroundIndirect_ : fsGround_;
+        // (A surface layer tile's fill draws the turf into its four layers.)
+        if (ground && target.colorCount == 4) fs = fsGroundFill_;
         if (draw.kind == MeshKind::Grass) fs = target.colorCount > 1 ? fsGrassIndirect_ : fsGrass_;
         return buildPipeline(leafInline ? vsLeafInline_ : vs_[static_cast<int>(draw.kind)], fs, draw.kind, rasterBits,
                              target);

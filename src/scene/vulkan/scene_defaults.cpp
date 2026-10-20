@@ -18,12 +18,12 @@ bool makePixel(SceneVkAllocator& allocator, const uint8_t (&rgba)[4], SceneVkIma
     return allocator.createTexture2D(rgba, desc, out);
 }
 
-VkSampler makeSampler(VkDevice dev, float maxLod) {
+VkSampler makeSampler(VkDevice dev, float maxLod, VkFilter filter = VK_FILTER_LINEAR) {
     VkSamplerCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    info.magFilter = VK_FILTER_LINEAR;
-    info.minFilter = VK_FILTER_LINEAR;
-    info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    info.magFilter = filter;
+    info.minFilter = filter;
+    info.mipmapMode = filter == VK_FILTER_LINEAR ? VK_SAMPLER_MIPMAP_MODE_LINEAR : VK_SAMPLER_MIPMAP_MODE_NEAREST;
     info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
@@ -42,7 +42,8 @@ bool SceneDefaults::setup(SceneVkDevice& device, SceneVkAllocator& allocator) {
 
     sampler = makeSampler(dev, 0.0f);
     cubeSampler = makeSampler(dev, 16.0f);
-    if (!sampler || !cubeSampler) {
+    nearestSampler = makeSampler(dev, 0.0f, VK_FILTER_NEAREST);
+    if (!sampler || !cubeSampler || !nearestSampler) {
         LOG_ERROR("SceneDefaults: Failed creating the default samplers");
         return false;
     }
@@ -97,6 +98,12 @@ bool SceneDefaults::setup(SceneVkDevice& device, SceneVkAllocator& allocator) {
         LOG_ERROR("SceneDefaults: Failed creating the fallback 2D array");
         return false;
     }
+    if (!allocator.createImage(1, 1, VK_FORMAT_R32_UINT, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, zeroUintArray, 1, VK_SAMPLE_COUNT_1_BIT,
+                               VK_IMAGE_ASPECT_COLOR_BIT, 1, 0, VK_IMAGE_VIEW_TYPE_2D_ARRAY)) {
+        LOG_ERROR("SceneDefaults: Failed creating the fallback uint 2D array");
+        return false;
+    }
 
     if (!pool_.init(dev, 1)) return false;
     defaultMaterialSet = pool_.allocate(materialLayout);
@@ -120,7 +127,8 @@ void SceneDefaults::cleanup(SceneVkDevice& device, SceneVkAllocator& allocator) 
     allocator.destroyImage(black);
     allocator.destroyImage(cube);
     allocator.destroyImage(zeroArray);
-    for (VkSampler* s : {&sampler, &cubeSampler}) {
+    allocator.destroyImage(zeroUintArray);
+    for (VkSampler* s : {&sampler, &cubeSampler, &nearestSampler}) {
         if (*s != VK_NULL_HANDLE) vkDestroySampler(dev, *s, nullptr);
         *s = VK_NULL_HANDLE;
     }

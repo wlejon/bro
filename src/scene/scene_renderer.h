@@ -59,6 +59,9 @@ struct CullStats {
     // from shadowTilesCached.
     int shadowTilesHeld = 0;
     uint32_t shadowTilesHeldMask = 0;   // the held tiles, a bit per atlas slot
+    // The turf's surface layers (surface_layers.h): tiles the camera needs,
+    // those not filled at the current generation, fills issued.
+    int groundLayerNeeded = 0, groundLayerMissing = 0, groundLayerFills = 0;
 };
 
 class SceneRenderer {

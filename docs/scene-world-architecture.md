@@ -231,26 +231,44 @@ sun, shadows and air stay current.
   so the texels near the eye are centimetres and far off are kilometres.
 - **Which tiles are needed** is decided by the same projected-size rule as
   everything else (§1): a cell is tiled at the level where a texel covers
-  about a pixel. The cell pass picks them from the camera; nothing is read
-  back from the GPU, unlike feedback-driven virtual texturing.
-- **Lookup:** for each level, a camera-centred toroidal grid of entries, a
-  clipmap of page tables, maps a position to its tile. A fragment takes its
-  level from its footprint, blends between that level and the next coarser
-  one, and falls back to a coarser level when a tile is not resident. The
-  coarsest levels are always resident.
+  about a pixel (`texelPixels`, 1.5 for the turf), with every ancestor of
+  a needed tile needed too. The CPU picks them from the camera
+  (`SurfaceLayers`, `scene/surface_layers.h`); nothing is read back from
+  the GPU, unlike feedback-driven virtual texturing. A tile's heights, the
+  slope its footprint sees and its version come from the provider's items
+  (for the turf, each mesh's triangles in 32 m cells), gathered into a
+  min/max pyramid so a tile reads a few cells. The atlas's slots bound the
+  set, the tile most too coarse refined first: in wilds the footprint rule
+  alone asks for 4–10× the 1024 slots on hilly, forested routes, since a
+  frustum hides no ground behind hills or trees. Occlusion (§3's HiZ) is
+  what would close that gap.
+- **Lookup:** for each level, a toroidal grid of entries (256 a side), a
+  clipmap of page tables, maps a position to its tile; an entry carries
+  its tile's slot and the high bits of its key, so a tile that wraps onto
+  another's entry is told apart and the lookup falls through. A fragment
+  takes its level from its footprint, blends between that level and the
+  next coarser one, and falls back to a coarser level when a tile is not
+  resident. The coarsest level is always resident.
 
 ### Filling
 
-- A layer has a **provider**: a compute entry that fills a tile from the
-  world's data (the grass field, the floor texture, the ground's vertex data,
-  the forest's cover) for a cell's rectangle and texel size. Its patterns are
-  band-limited to the tile's texel, so a tile never aliases.
-- The **budget** is a fixed number of tile fills a frame, highest error
-  first. Fills run on the async compute queue (§4).
+- A layer has a **provider**: it fills a tile from the world's data (the
+  grass field, the floor texture, the ground's vertex data, the forest's
+  cover) for a cell's rectangle and texel size. The turf's fill is a draw:
+  the ground's meshes rasterised straight down under an orthographic camera
+  fitted to the tile and its border, into the layer's four colour targets,
+  so the vertex data a mesh carries reaches the fill as it reaches the
+  ground's own pass. Its patterns are band-limited to the tile's texel, so
+  a tile never aliases.
+- The **budget** is a fixed number of tile fills a frame, the coarsest
+  first (the coarsest level whatever the budget). Fills are recorded at the
+  frame's head on the graphics queue, so the frame's own draws read them
+  without a wait; they are small enough that async compute (§4) would buy
+  nothing a raster fill does not already have.
 - **Versioning:** a tile carries its provider's generation. A change to the
   world's data bumps it, and the stale tile keeps drawing until its
-  replacement lands. Atlas slots are double-buffered by generation, so a
-  fill never waits for a tile to stop being read.
+  replacement lands. A refill writes the slot in place: the queue orders it
+  after the frames that read the old contents.
 
 ### The shader's part
 
@@ -283,8 +301,16 @@ binaries, the stills' per-band diff, the motion oracle for anything temporal).
 | 2 | World cells (§1), cell-range planning, frustum only | plan cost tracks visible cells, not the world; a 4× larger world costs about the same | ~3k LOC |
 | 3 | Visibility pass for foliage (§3) and HiZ two-phase culling, which then joins the cell pass | foliage shaded once per pixel, hidden trees never raster | ~4k LOC |
 | 4 | Far-field cell cards (§2) | far forest and terrain cost proportional to cells on screen, not trees | ~4k LOC |
-| 5 | Surface layers (§5): tiles, page-table clipmap, async fills; the turf as the first provider | the ground's opaque:static down by most of its 0.5–0.7 ms on the open routes | ~3k LOC |
+| 5 | Surface layers (§5): tiles, page-table clipmap, budgeted fills; the turf as the first provider | the ground's opaque:static down by most of its 0.5–0.7 ms on the open routes | ~3k LOC |
 | 6 | Planet roots: cube-sphere cells, horizon culling, content folding into layers below its last representation | ground to orbit with the frame's cost tracking pixels | to size once 2–5 land |
 
 Step 5 needs only step 2's keys and cell pass, so it can be built beside
 steps 3 and 4.
+
+Going up brings things in as well as folding them away: the atmosphere
+seen as a shell, space, other bodies. They are providers like any other,
+refined by the pixels they cover: a planet a few pixels across is a point
+of light, then a lit disc, then a body with its own face roots, as a tree
+goes from a layer's texels to a card to a mesh. Step 6 therefore adds a
+level above the face roots (a system, its bodies, each body's six faces),
+with every body's origin, like every cell's, taken eye-relative in double.
