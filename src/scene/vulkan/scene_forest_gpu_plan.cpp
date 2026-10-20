@@ -102,8 +102,6 @@ void fillTable(uint32_t* table, int node, float lo, float hi, int depth) {
 
 }  // namespace
 
-bool cellSkipHonoured() { return worldCellsOn(); }
-
 // --- A node's read-backs ---
 
 void GpuPlanner::Node::poll() {
@@ -173,7 +171,7 @@ bool GpuPlanner::setup(SceneGpu& gpu) {
         return true;
     }
     SceneVkDescriptorLayoutBuilder builder;
-    for (uint32_t b = 0; b < 8; ++b) builder.addBinding(b, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
+    for (uint32_t b = 0; b < 7; ++b) builder.addBinding(b, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
     setLayout_ = builder.build(device_);
     VkPushConstantRange push{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(Push)};
     VkPipelineLayoutCreateInfo pi{};
@@ -526,23 +524,12 @@ bool GpuPlanner::begin(SceneFrame& frame, Node& n, const ForestNode& node, VkBuf
     return true;
 }
 
-bool GpuPlanner::add(SceneFrame& frame, Node& n, const std::vector<uint32_t>& params,
-                     const std::vector<uint32_t>* cellSkip) {
+bool GpuPlanner::add(SceneFrame& frame, Node& n, const std::vector<uint32_t>& params) {
     const VkDeviceSize bytes = FP_P_WORDS * 4;
     const VkDeviceSize align = std::max<VkDeviceSize>(limits_.minStorageBufferOffsetAlignment, 16);
     const render::UploadSlice slice = frame.gpu.device.frameUpload(bytes, align);
     if (!slice || params.size() < FP_P_WORDS) return false;
     std::memcpy(slice.mapped, params.data(), bytes);
-    // The far cards' cells, a word a cell, when the measure stage walks the
-    // cells (the cell pass's leaves are the node's cells, in order).
-    render::UploadSlice skip{};
-    if (n.cellsOn && cellSkip && !cellSkip->empty() && cellSkip->size() == n.cells_.content(n.provider_).size()) {
-        skip = frame.gpu.device.frameUpload(cellSkip->size() * 4, align);
-        if (skip) {
-            std::memcpy(skip.mapped, cellSkip->data(), cellSkip->size() * 4);
-            static_cast<uint32_t*>(slice.mapped)[FP_P_FLAGS] |= FP_F_CARDS;
-        }
-    }
     n.set = frame.gpu.device.frameSet(setLayout_);
     if (n.set == VK_NULL_HANDLE) return false;
     SceneVkDescriptorWriter writer;
@@ -581,11 +568,6 @@ bool GpuPlanner::add(SceneFrame& frame, Node& n, const std::vector<uint32_t>& pa
     // (The measure stage's cells; any buffer when it walks every tree.)
     const SceneVkBuffer& cells = n.cellsOn ? n.cellTarget_.out : n.staticBuf;
     writer.writeBuffer(6, cells.buffer, cells.size, 0, kStorage);
-    // (The far cards' cells; any buffer without them.)
-    if (skip)
-        writer.writeBuffer(7, skip.buffer, cellSkip->size() * 4, skip.offset, kStorage);
-    else
-        writer.writeBuffer(7, n.staticBuf.buffer, n.staticBuf.size, 0, kStorage);
     writer.updateSet(device_, n.set);
     queued_.push_back(&n);
     return true;

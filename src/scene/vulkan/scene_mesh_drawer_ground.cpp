@@ -245,7 +245,7 @@ void SceneMeshDrawer::recordGroundLayers(SceneFrame& frame) {
         sv.focalPixels = 0.5f * static_cast<float>(std::max(view.height, 1u)) * std::fabs(view.proj.at(1, 1));
         sv.orthoMetresPerPixel =
             2.0f / std::max(std::fabs(view.proj.at(1, 1)) * static_cast<float>(std::max(view.height, 1u)), 1e-6f);
-        // (Not culled by occlusion, SceneOcclusionReadback: on the wilds the
+        // (Not culled by the pyramid read back to the CPU: on the wilds the
         // shortfall is the visible tiles', and tiles behind swaying trees
         // came and went, five times the fills and nine tiles a frame coarse.)
         gl.tiles.update(sv, ++gl.frame);

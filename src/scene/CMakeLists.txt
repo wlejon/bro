@@ -120,7 +120,6 @@ add_library(bro_scene STATIC
     forest_node.cpp
     world_cells.cpp
     surface_layers.cpp
-    occlusion_snapshot.cpp
     reflection_probe_node.cpp
     terrain_manager.cpp
     terrain_manager_mesh.cpp
@@ -149,14 +148,11 @@ add_library(bro_scene STATIC
     vulkan/pass_ground_layers.cpp
     vulkan/pass_hiz.cpp
     vulkan/scene_surface_layers.cpp
-    vulkan/scene_occlusion_readback.cpp
     vulkan/scene_mesh_drawer_forest.cpp
     vulkan/scene_mesh_drawer_forest_gpu.cpp
     vulkan/scene_forest_draw.cpp
     vulkan/scene_forest_gpu_plan.cpp
     vulkan/scene_world_cells_pass.cpp
-    vulkan/scene_far_cards.cpp
-    vulkan/pass_far_cards.cpp
     vulkan/scene_draw_list.cpp
     vulkan/scene_frame_graph.cpp
     vulkan/scene_fullscreen.cpp

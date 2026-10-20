@@ -67,11 +67,6 @@ constexpr VkDeviceSize argsCommandOffset(uint32_t view, uint32_t slot) {
 }
 constexpr uint32_t kArgsBatchStride = FP_A_COMMAND_WORDS * 4u;   // bytes between a slot's commands
 
-/// Whether every planner leaves out the cells SceneFrame::forestCellSkip
-/// names: the CPU's always, the GPU's while it walks the world cells (not
-/// under BRO_WORLD_CELLS=0).
-bool cellSkipHonoured();
-
 class GpuPlanner {
 public:
     /// A node's planner state, kept from frame to frame: its trees and
@@ -147,12 +142,7 @@ public:
     bool begin(SceneFrame& frame, Node& state, const ForestNode& node, VkBuffer store,
                const std::vector<bromath::AABB3>& bounds, float reach, uint32_t tiles, std::vector<uint32_t>& params);
     /// Queue `state`'s plan with its finished `params` (FP_P_WORDS words).
-    /// `cellSkip`: a word a cell of the node (SceneFrame::forestCellSkip),
-    /// nonzero where a far card stands for the cell's trees, which the
-    /// camera then leaves out; honoured when the plan walks the cells (as
-    /// cellSkipHonoured() says), else to be null.
-    bool add(SceneFrame& frame, Node& state, const std::vector<uint32_t>& params,
-             const std::vector<uint32_t>* cellSkip = nullptr);
+    bool add(SceneFrame& frame, Node& state, const std::vector<uint32_t>& params);
     /// A posed leaf group's pose stage (forest_leaf_pose.comp's indirect
     /// build): `push` its draw's, `group` 0 LeafNear or 1 LeafCard, `boneSet`
     /// the draw's set 3.

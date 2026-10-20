@@ -147,36 +147,6 @@ Between the near/mid band and the card band there is a distance band, about
 in. The reach is set in pixels, not metres, so the band is the same size on
 screen at any resolution.
 
-### As built: the forest's crowns (scene_far_cards.h)
-
-The first provider is the forest, and only for its far cells: cells whose
-every tree already draws as a crown alone (`forest::crownsAlone`, the
-planner's own far-cell test) and whose box spans at most 256 px on screen.
-The first cut departs from the design above in four places.
-
-- **Captured radiance.** A capture is the camera's own view, its projection
-  cropped to the cell's rectangle at one texel a pixel. It uses the frame's
-  lighting, shadows, fog and 4x sample pattern, so a fresh card is exactly
-  the pixels the crowns would have drawn. Cards are not relit. A change of
-  sun, ambient or fog recaptures them, which costs nothing while the light
-  is still.
-- **Error in pixels.** A card is recaptured when the eye's turn round the
-  cell would shift the cell's relief by 1.5 px, or when its size on screen
-  is off the captured size by a quarter. A grid of 16x16 quads, displaced
-  by the card's depth, keeps the parallax in between. Each fragment writes
-  its own texel's depth, reprojected.
-- **No dither band yet.** A card takes over the moment its capture lands.
-  Because the capture is pixel-exact, that hand-over doesn't show. The
-  record carries a window of samples (`[x, 1)`, `forestSampleMask`'s
-  dither) for the band to use.
-- **Tiles rewritten in place.** The atlas's barriers wait for the last
-  frames' reads instead of double-buffering a tile.
-
-The trees a card stands for leave the camera's plan
-(`SceneFrame::forestCellSkip`: the CPU planner per tree, the GPU planner's
-measure stage per cell); their shadow casters stay. `BRO_FAR_CARDS=1`
-turns cards on.
-
 ## 3. Visibility pass
 
 Opaque content that is expensive to shade, or that discards (foliage first),

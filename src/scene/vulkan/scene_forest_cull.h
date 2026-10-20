@@ -72,8 +72,7 @@ inline bool farCellsApply(const ForestNode::Lod& lod, int force, bool perspectiv
 /// along the ground), `pxAtMetre` the view's pixels a metre at a metre.
 /// Measured at the nearest point, which none of its trees is nearer than,
 /// with a margin, so a tree on a test's edge goes with the trees that ask.
-/// (scene_mesh_drawer_forest.cpp: planForest's far cells, and the far
-/// cards' cells.)
+/// (scene_mesh_drawer_forest.cpp: planForest's far cells.)
 bool crownsAlone(const ForestNode::Lod& lod, float leafLength, float pxAtMetre, const CellExtent& e, float d,
                  float across);
 

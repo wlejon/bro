@@ -1065,20 +1065,6 @@ std::unique_ptr<SceneMeshDrawer::ForestPlan> SceneMeshDrawer::planForest(SceneFr
             }
         });
 
-    // The trees of the world cells a far card stands for this frame
-    // (SceneFrame::forestCellSkip): the camera leaves them to the card.
-    std::vector<uint8_t> carded;
-    if (auto it = frame.forestCellSkip.find(node.id());
-        it != frame.forestCellSkip.end() && it->second.size() == node.cells().size()) {
-        carded.assign(instances.size(), 0);
-        const auto& order = node.cellOrder();
-        for (size_t c = 0; c < it->second.size(); ++c) {
-            if (!it->second[c]) continue;
-            const CellContent& cell = node.cells()[c];
-            for (uint32_t k = cell.first; k < cell.first + cell.count; ++k) carded[order[k]] = 1;
-        }
-    }
-
     // The camera's trees: those of the cells in view, in the trees' order.
     const uint32_t stamp = node.beginSeen();
     cull.markCells([&](const bromath::AABB3& b) { return bromath::fintersects(view.frustum, b); },
@@ -1090,7 +1076,7 @@ std::unique_ptr<SceneMeshDrawer::ForestPlan> SceneMeshDrawer::planForest(SceneFr
         auto& out = parts[chunk];
         for (uint32_t i = begin; i < end; ++i) {
             const bromath::AABB3& b = cull.bounds[i];
-            if (!cull.mark[i] || (!carded.empty() && carded[i]) || !bromath::fintersects(view.frustum, b)) {
+            if (!cull.mark[i] || !bromath::fintersects(view.frustum, b)) {
                 out.culled++;
                 continue;
             }

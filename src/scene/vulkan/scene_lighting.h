@@ -39,12 +39,8 @@ void writeCameraSet(SceneFrame& frame);
 
 /// A lighting set: `uniforms`, the shadow atlas, a probe cube, a shade map
 /// (fallbacks where `probeView` / `shadeMap` are null) and the environment.
-/// `farDepth`: what the forest's sprites test their depth against
-/// (mesh.frag's forestFarRejected) in place of the frame's far depth, for a
-/// view of its own drawing them (a far card's capture: an image cleared to
-/// the far plane, so nothing is rejected).
 VkDescriptorSet writeLightingSet(SceneGpu& gpu, const SceneLightingUniforms& uniforms, VkImageView probeView,
-                                 const SceneVkImage* shadeMap, VkImageView farDepth = VK_NULL_HANDLE);
+                                 const SceneVkImage* shadeMap);
 
 /// A captured reflection probe, as a lighting set samples it.
 struct ProbeLighting {
