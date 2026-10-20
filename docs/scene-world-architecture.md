@@ -1,6 +1,7 @@
-# Scene world architecture: cells, far field, visibility, async compute
+# Scene world architecture: cells, far field, visibility, async compute, surface layers
 
-Four engine mechanisms for big worlds at high frame rates. Each one is general:
+Five engine mechanisms for big worlds at high frame rates, from the ground up
+to orbit. Each one is general:
 terrain, forest, grass and static meshes all build on them, so none is shaped
 around a single consumer. They share one rule: **no stage waits for another
 stage to give a resource back.** Anything written in one frame and read in a
@@ -12,9 +13,17 @@ inside a frame.
 Target: 2.78 ms a frame (360 fps) at 2560×1364 on an RTX 4090, for:
 - a near sphere of about 10 m, drawn in full detail;
 - views kilometres deep;
-- finite worlds up to about 64 km a side. Floats in camera-relative drawing
-  hold millimetres out to 32 km. Past that, cell-local coordinates are the
-  path (§1).
+- worlds from a 64 km square up to a planet seen from orbit. Floats in
+  camera-relative drawing hold millimetres out to 32 km; past that, content
+  is drawn from cell-local coordinates (§1).
+
+**One measure decides every level of detail: pixels.** A representation's
+error in metres, projected from the current view, is its error in pixels.
+Every system refines its content while that error is over its threshold, and
+stops where it is not, at whatever altitude. Content smaller than a few
+pixels stops being separate: it is folded into the surface of the cell it
+stands on (§5). The cost of a frame then follows the pixels on screen, not
+the size of the world.
 
 Where the frame goes today (wilds, GPU ms; the details are in the git log):
 
@@ -29,16 +38,24 @@ Where the frame goes today (wilds, GPU ms; the details are in the git log):
 
 ## 1. World cells
 
-A quadtree over the ground plane that every system's content hangs off.
+A quadtree over the ground that every system's content hangs off.
 
-- **Cell keys** are integer coordinates (level, x, z), never floats.
+- **Cell keys** are integer coordinates (root, level, x, z), never floats,
+  packed in 64 bits. A flat world has one root. A planet has six, the faces
+  of a cube-sphere, each a quadtree of its own (about 18 levels down to
+  64 m leaves at Earth's size).
 - **Leaves** are a fixed size, 64 m by default.
+- **A cell's origin** is part of every cell: the CPU computes each cell's
+  eye-relative origin in double every frame, and a provider's content may be
+  stored relative to it.
 - **Cell bounds** take their y range from whatever registers content in the
   cell. Terrain gives a min/max height for each cell; the forest gives its
   crowns' tops.
 
 A system registers a **cell content provider**:
 - its content's bounds for each cell;
+- the geometric error, in metres, of each representation it offers, and the
+  pixel threshold at which it hands from one to the next;
 - a draw entry that renders that content for any view, the main camera or a
   far-field capture (§2);
 - a generation number, bumped whenever the content changes.
@@ -48,12 +65,20 @@ A system registers a **cell content provider**:
 A small GPU pass walks the tree top-down. It tests each cell against:
 - the frustum;
 - the hierarchical depth from the visibility pass (§3);
-- each shadow tile's frustum.
+- each shadow tile's frustum;
+- on a planet, the horizon: a cell below it is hidden behind the curve of
+  the ground, which from orbit is most of the planet.
 
-Each surviving cell is given a band by its projected size: near, mid or far.
+Each surviving cell carries its projected size in pixels (its bounds'
+radius over its distance, times the view's focal length in pixels). A cell
+is refined into its children while its providers' errors, projected the
+same way, are over their thresholds. The pass has no fixed bands: near, mid
+and far are pixel thresholds a provider chooses, so each provider hands
+over where its own representations meet, and the same thresholds hold at
+any resolution and altitude.
 
-The pass writes compact lists of visible cells for each band and each view.
-Systems consume those lists instead of their whole content:
+The pass writes compact lists of visible cells for each provider's ranges
+and each view. Systems consume those lists instead of their whole content:
 - the forest planner measures only trees in near and mid cells;
 - static chunks draw by cell;
 - far cells go to the far field (§2).
@@ -71,9 +96,10 @@ Systems consume those lists instead of their whole content:
 
 ### Precision and streaming
 
-- **Precision past 32 km:** a cell's content can be stored relative to the
-  cell's origin. The cell pass hands each cell to the GPU as an eye-relative
-  origin, computed in double on the CPU. Optional per provider.
+- **Precision past 32 km:** a cell's content is stored relative to the
+  cell's origin, which the cell pass hands to the GPU as an eye-relative
+  offset computed in double on the CPU. A provider whose content fits in
+  32 km may keep it world-relative for now; the origin is there either way.
 - **Streaming:** a cell has a residency state. A provider can generate or load
   its content when the cell first comes within range, under a per-frame
   budget, and drop it past a hysteresis radius. Nothing waits on a load: a
@@ -182,6 +208,70 @@ A capability of the frame graph, not of any one pass.
 - **Other users:** clipmap height-pyramid updates, cell residency generation,
   terrain streaming, and the cell pass itself.
 
+## 5. Surface layers
+
+What a cell's surface is made of, worked out once per cell and kept,
+instead of in every pixel that shows it. Wherever content is drawn as a
+stand-in for what is no longer drawn there (the turf for blades and herbs
+past their rings, and, from far above, the forest and everything else on
+the land), the stand-in depends on the position and the world, not on the
+view. Today the ground's fragment shader recomputes it every frame, at every
+pixel: its colony weights, mottling, sward colour and litter were
+0.5–0.7 ms of opaque:static in wilds.
+
+A **layer** is the surface's material, never its light: its colours,
+covers, roughness, its blades' lay, its emissive. It is lit live, so the
+sun, shadows and air stay current.
+
+### Tiles
+
+- A layer is stored in **tiles**, each a cell's square of texels (64×64 by
+  default, with a border for filtering), in an atlas.
+- Tiles share the cells' key space and can subdivide below the leaf size,
+  so the texels near the eye are centimetres and far off are kilometres.
+- **Which tiles are needed** is decided by the same projected-size rule as
+  everything else (§1): a cell is tiled at the level where a texel covers
+  about a pixel. The cell pass picks them from the camera; nothing is read
+  back from the GPU, unlike feedback-driven virtual texturing.
+- **Lookup:** for each level, a camera-centred toroidal grid of entries, a
+  clipmap of page tables, maps a position to its tile. A fragment takes its
+  level from its footprint, blends between that level and the next coarser
+  one, and falls back to a coarser level when a tile is not resident. The
+  coarsest levels are always resident.
+
+### Filling
+
+- A layer has a **provider**: a compute entry that fills a tile from the
+  world's data (the grass field, the floor texture, the ground's vertex data,
+  the forest's cover) for a cell's rectangle and texel size. Its patterns are
+  band-limited to the tile's texel, so a tile never aliases.
+- The **budget** is a fixed number of tile fills a frame, highest error
+  first. Fills run on the async compute queue (§4).
+- **Versioning:** a tile carries its provider's generation. A change to the
+  world's data bumps it, and the stale tile keeps drawing until its
+  replacement lands. Atlas slots are double-buffered by generation, so a
+  fill never waits for a tile to stop being read.
+
+### The shader's part
+
+What depends on the view stays in the fragment: how much of the blades'
+tops is seen at a grazing angle, the distance the turf stands in for the
+blades from, the gusts, and the detail finer than the finest tile (the
+near ground's crumbs, blades and leaves). Everything else is a sample.
+
+### What folds into layers
+
+- **First, the turf:** sward colour, mottling, the herbs' blooms, the forest
+  floor's litter. These are today's ground shader moved to fills.
+- **Next, content too small to draw.** Below its last representation
+  (cards, at a few pixels), a system writes its share of the cell's
+  surface: a forest from orbit is a darker, rougher, taller canopy layer; a
+  city at night is emissive texels. A provider declares which layers it
+  writes and from what pixel size.
+- **Light from far off:** lights too small to draw sum into the emissive
+  layer, and shadowing past the sun's last cascade into the layer's horizon
+  and occlusion terms.
+
 ## Build order
 
 Each step must land as a measured win on its own (wilds, interleaved
@@ -193,3 +283,8 @@ binaries, the stills' per-band diff, the motion oracle for anything temporal).
 | 2 | World cells (§1), cell-range planning, frustum only | plan cost tracks visible cells, not the world; a 4× larger world costs about the same | ~3k LOC |
 | 3 | Visibility pass for foliage (§3) and HiZ two-phase culling, which then joins the cell pass | foliage shaded once per pixel, hidden trees never raster | ~4k LOC |
 | 4 | Far-field cell cards (§2) | far forest and terrain cost proportional to cells on screen, not trees | ~4k LOC |
+| 5 | Surface layers (§5): tiles, page-table clipmap, async fills; the turf as the first provider | the ground's opaque:static down by most of its 0.5–0.7 ms on the open routes | ~3k LOC |
+| 6 | Planet roots: cube-sphere cells, horizon culling, content folding into layers below its last representation | ground to orbit with the frame's cost tracking pixels | to size once 2–5 land |
+
+Step 5 needs only step 2's keys and cell pass, so it can be built beside
+steps 3 and 4.
