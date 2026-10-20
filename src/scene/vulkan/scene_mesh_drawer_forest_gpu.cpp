@@ -1,8 +1,8 @@
 // SceneMeshDrawer's forest draws planned on the GPU (scene_forest_gpu_plan.cpp):
 // the nodes' parameters, the draws of every group the plan can fill (their
 // counts in its indirect commands), and the budget's settle. For a
-// perspective view with no forced tier (and not BRO_FOREST_PLAN=cpu); else
-// a frame takes the CPU's path (scene_mesh_drawer_forest.cpp), whose
+// perspective view with no forced tier, while the planner is ready; else a
+// frame takes the CPU's path (scene_mesh_drawer_forest.cpp), whose
 // choices the GPU's are, tree by tree.
 //
 // What differs from the CPU's frame: every group of a camera's draws goes
@@ -46,17 +46,6 @@ using namespace forest;
 
 constexpr uint32_t kMaxPoses = 4u << 20;   // scene_mesh_drawer_forest.cpp's
 constexpr VkDeviceSize kPoseBytes = FOREST_POSE_RECORDS * 16;
-
-// Forests are planned on the GPU where it applies; BRO_FOREST_PLAN=cpu
-// plans every frame on the CPU (the reference the GPU's choices are
-// checked against).
-bool cpuOnly() {
-    static const bool cpu = [] {
-        const char* env = std::getenv("BRO_FOREST_PLAN");
-        return env && std::strcmp(env, "cpu") == 0;
-    }();
-    return cpu;
-}
 
 uint32_t bitsOf(float f) {
     uint32_t u;
@@ -128,7 +117,7 @@ struct NodePlan {
 
 bool SceneMeshDrawer::prepareForestsGpu(SceneFrame& frame, const std::vector<ForestNode*>& nodes,
                                         std::vector<std::vector<MeshDraw>>& out, ForestDetail& detail) {
-    if (cpuOnly() || !gpuPlanner_ || !gpuPlanner_->ready()) return false;
+    if (!gpuPlanner_|| !gpuPlanner_->ready()) return false;
     const SceneView& view = frame.view;
     if (!view.perspective) return false;
     for (const ForestNode* n : nodes)
