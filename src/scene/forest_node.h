@@ -62,6 +62,7 @@
 // bark's. Its transform places the whole forest. It is left out of raycasts.
 
 #include "scene/mesh_node.h"
+#include "scene/world_cells.h"
 
 #include <bromath/aabb.h>
 #include <bromath/frustum.h>
@@ -348,6 +349,13 @@ public:
     const std::vector<Instance>& instances() const { return instances_; }
     /// Node space, every tree (empty without trees).
     const bromath::AABB3& forestBounds() const { return forestBounds_; }
+    /// The trees in world-cell order (world_cells.h: leaves of a default
+    /// CellGrid in the node's space): cellOrder()[k] is the k-th tree's
+    /// instance index, and each of cells() a run of that order with its
+    /// trees' node-space bounds. Made as the trees are set; an instance's
+    /// index keeps its meaning (the GPU planner walks the cells' runs).
+    const std::vector<uint32_t>& cellOrder() const { return cellOrder_; }
+    const std::vector<CellContent>& cells() const { return cells_; }
 
     /// The node's GPU data (scene_forest.glsl's header and records), moving
     /// to a new generation when the specimens or instances change.
@@ -505,6 +513,8 @@ private:
     std::vector<ClumpTwigs> clumpTwigs_;
     std::vector<Instance> instances_;
     bromath::AABB3 forestBounds_;
+    std::vector<uint32_t> cellOrder_;
+    std::vector<CellContent> cells_;
     Lod lod_;
     int forceTier_ = -1;
     Look look_;

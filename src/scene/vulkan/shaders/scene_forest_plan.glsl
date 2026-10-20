@@ -119,6 +119,22 @@ uint su(uint i) { return planStatic.w[i]; }
 float sf(uint i) { return uintBitsToFloat(planStatic.w[i]); }
 vec3 sv3(uint i) { return vec3(sf(i), sf(i + 1u), sf(i + 2u)); }
 uint workRun(uint run) { return pu(FP_P_WORK + run); }
+// The trees the measure stage measured this frame (FP_N_MEASURED).
+uint planMeasured() { return planWork.w[FP_N_MEASURED]; }
+
+// A scan of `count` words whose length the GPU sets: each level's count
+// (the WORK words from `words`) and blocks to dispatch (the ARGS words from
+// `args`, 4 a level), for GpuPlanner::scanSized's dispatches.
+void planScanSized(uint count, uint words, uint args) {
+    for (uint l = 0u; l < uint(FP_SCAN_LEVELS); ++l) {
+        uint blocks = (count + uint(FP_SCAN_BLOCK) - 1u) / uint(FP_SCAN_BLOCK);
+        planWork.w[words + l] = count;
+        planArgs.w[args + 4u * l] = blocks;
+        planArgs.w[args + 4u * l + 1u] = 1u;
+        planArgs.w[args + 4u * l + 2u] = 1u;
+        count = blocks;
+    }
+}
 
 // A 64-bit sum in two words, added to by many threads: exact in any order.
 void workAdd64(uint at, uint v) {

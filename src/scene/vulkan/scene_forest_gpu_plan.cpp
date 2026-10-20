@@ -9,10 +9,12 @@
 #include "scene/vulkan/scene_vk_device.h"
 #include "scene/vulkan/scene_vk_shader_compiler.h"
 #include "scene/vulkan/shaders/scene_forest_layout.h"
+#include "scene/vulkan/shaders/world_cells_layout.h"
 #include "util/log.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 
 namespace bro::scene::vk::forest {
@@ -30,6 +32,23 @@ float floatOf(uint32_t u) {
     return f;
 }
 uint32_t roundUp(uint32_t n, uint32_t to) { return (n + to - 1) / to * to; }
+
+// The forest's cell bands, by a cell's bounding radius in pixels on the
+// camera's screen: a 64 m cell (a radius near 48 m) is near within about
+// 110 m and far past about 1.8 km at 1364 px high and 60 degrees. Every band is still planned tree by tree; the far field (step 4 of
+// docs/scene-world-architecture.md) will take the far band's cells.
+constexpr float kNearCellPixels = 512.0f;
+constexpr float kFarCellPixels = 32.0f;
+
+// The plan walks the trees of the cells in view (the world cell pass's);
+// BRO_WORLD_CELLS=0 walks every tree, for A/B (the plan is the same).
+bool worldCellsOn() {
+    static const bool on = [] {
+        const char* env = std::getenv("BRO_WORLD_CELLS");
+        return !(env && std::strcmp(env, "0") == 0);
+    }();
+    return on;
+}
 
 constexpr BuiltinSceneShader kStageShaders[] = {
     BuiltinSceneShader::ForestPlanMeasureComp,    BuiltinSceneShader::ForestPlanScanLocalComp,
@@ -119,8 +138,7 @@ void GpuPlanner::Node::poll() {
     s.shadowDetail = floatOf(w[FP_S_SHADOW_DETAIL]);
     newest_ = s;
     askedEntries_ = s.entries;
-    askedPoses_ = w[FP_S_POSES];
-    have_ = true;
+    askedPoses_ = w[FP_S_POSES];    have_ = true;
     readSerial_ = ring_[best].serial;
     for (Slot& slot : ring_)
         if (slot.state == Slot::Submitted && slot.serial <= readSerial_ && slot.queue->isComplete(slot.ticket))
@@ -146,7 +164,7 @@ bool GpuPlanner::setup(SceneGpu& gpu) {
         return true;
     }
     SceneVkDescriptorLayoutBuilder builder;
-    for (uint32_t b = 0; b < 6; ++b) builder.addBinding(b, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
+    for (uint32_t b = 0; b < 7; ++b) builder.addBinding(b, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
     setLayout_ = builder.build(device_);
     VkPushConstantRange push{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(Push)};
     VkPipelineLayoutCreateInfo pi{};
@@ -181,6 +199,11 @@ bool GpuPlanner::setup(SceneGpu& gpu) {
         LOG_ERROR("forest planner: failed creating its pose stage");
         return false;
     }
+    // (Without the cell pass every tree is walked, as BRO_WORLD_CELLS=0.)
+    if (worldCellsOn() && !cellsPass_.setup(gpu)) {
+        LOG_ERROR("forest planner: no world cell pass; the plan walks every tree");
+        cellsPass_.cleanup(gpu);
+    }
     // (Shared: uploaded on the graphics queue, then the plan's alone.)
     if (!gpu.allocator.createBuffer(FP_G_WORDS * 4, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, shared_, /*shared=*/true))
@@ -199,6 +222,7 @@ void GpuPlanner::destroyNode(SceneVkAllocator& allocator, Node& n) {
     }
     n.entries = n.args = {};
     n.entryCap = 0;
+    WorldCellsPass::destroy(allocator, n.cellTarget_);
 }
 
 void GpuPlanner::cleanup(SceneGpu& gpu) {
@@ -208,6 +232,7 @@ void GpuPlanner::cleanup(SceneGpu& gpu) {
     poseJobs_.clear();
     if (shared_.isValid()) gpu.allocator.destroyBuffer(shared_);
     sharedReady_ = false;
+    cellsPass_.cleanup(gpu);
     for (int s = 0; s < kStages; ++s) {
         if (pipelines_[s]) vkDestroyPipeline(device_, pipelines_[s], nullptr);
         SceneVkShaderModule::destroy(device_, modules_[s]);
@@ -312,7 +337,12 @@ bool GpuPlanner::buildStatic(SceneFrame& frame, Node& n, const ForestNode& node,
     head[FP_ST_SEGMENTS] = at;
     head[FP_ST_SEGMENT_COUNT] = segmentCount;
     at += segmentCount * 8;
+    const auto& order = node.cellOrder();
+    if (order.size() != N) return false;
+    head[FP_ST_ORDER] = at;
+    at += N;
     std::vector<uint32_t> words(at, 0u);
+    std::memcpy(words.data() + head[FP_ST_ORDER], order.data(), size_t{N} * 4);
     std::memcpy(words.data(), head, sizeof(head));
     for (uint32_t i = 0; i < N; ++i) {
         const ForestNode::Instance& in = instances[i];
@@ -348,6 +378,18 @@ bool GpuPlanner::buildStatic(SceneFrame& frame, Node& n, const ForestNode& node,
         return false;
     }
     frame.gpu.device.computeReadsGraphics();
+    // Its cells, each bounded by its trees' boxes as the plan tests them (so
+    // a tree a view sees is in a cell it sees, to the last bit).
+    std::vector<CellContent> cells = node.cells();
+    for (CellContent& c : cells) {
+        c.bounds = bromath::aempty3();
+        for (uint32_t k = c.first; k < c.first + c.count; ++k) {
+            c.bounds.min = bromath::vmin(c.bounds.min, bounds[order[k]].min);
+            c.bounds.max = bromath::vmax(c.bounds.max, bounds[order[k]].max);
+        }
+    }
+    n.cellsGeneration_ = nextResourceGeneration();
+    n.cells_.setContent(n.provider_, std::move(cells), n.cellsGeneration_);
     n.generation = node.dataGeneration();
     n.reach = reach;
     n.trees = instances.size();
@@ -405,7 +447,7 @@ bool GpuPlanner::begin(SceneFrame& frame, Node& n, const ForestNode& node, VkBuf
     const uint32_t scratch = widest / (FP_SCAN_BLOCK - 1) + 16;
     const uint32_t sizes[FP_W_RUNS] = {N * FP_CAM_WORDS, flags,    n.items,   n.aligned, n.aligned, n.aligned,
                                        n.aligned,        FP_SORT_DIGITS * blocks, n.items, sums,      scratch,
-                                       n.items};
+                                       n.items,          n.aligned};
     uint64_t at = FP_N_WORDS;
     for (int r = 0; r < FP_W_RUNS; ++r) {
         n.runs[r] = static_cast<uint32_t>(at);
@@ -460,6 +502,10 @@ bool GpuPlanner::begin(SceneFrame& frame, Node& n, const ForestNode& node, VkBuf
         for (Node::Slot& s : n.ring_) s = {};
     }
 
+    // Its cells on the GPU, when the plan walks them.
+    n.cellsOn = worldCellsOn() && cellsPass_.ready() &&
+                cellsPass_.update(frame, n.cellTarget_, n.cells_, n.provider_, n.cellsGeneration_);
+
     params.resize(FP_P_WORDS, 0u);
     params[FP_P_TREES] = N;
     params[FP_P_TILES] = tiles;
@@ -487,6 +533,34 @@ bool GpuPlanner::add(SceneFrame& frame, Node& n, const std::vector<uint32_t>& pa
     writer.writeBuffer(3, shared_.buffer, shared_.size, 0, kStorage);
     writer.writeBuffer(4, n.entries.buffer, n.entries.size, 0, kStorage);
     writer.writeBuffer(5, n.args.buffer, n.args.size, 0, kStorage);
+    // The cell pass's views, the plan's own: the camera, then each tile.
+    if (n.cellsOn) {
+        std::vector<uint32_t> planes(size_t{1 + n.tiles} * 24);
+        std::memcpy(planes.data(), params.data() + FP_P_FRUSTUM, 24 * 4);
+        for (uint32_t t = 0; t < n.tiles; ++t)
+            std::memcpy(planes.data() + (1 + t) * 24, params.data() + FP_P_TILE + t * FP_TILE_WORDS + FP_TILE_FRUSTUM,
+                        24 * 4);
+        // Each view's pixel scale: the camera's focal length, a tile's texel.
+        std::vector<WorldCellsPass::Scale> scales(1 + n.tiles);
+        scales[0].focalPixels = floatOf(params[FP_P_PX_AT_METRE]);
+        for (uint32_t t = 0; t < n.tiles; ++t) {
+            const uint32_t at = FP_P_TILE + t * FP_TILE_WORDS;
+            scales[1 + t].texel = floatOf(params[at + FP_TILE_TEXEL_CONST]);
+            scales[1 + t].texelPerMetre = params[at + FP_TILE_ORTHO] ? 0.0f : floatOf(params[at + FP_TILE_TEXEL_PER_METRE]);
+        }
+        WorldCellsPass::Views views;
+        for (int j = 0; j < 3; ++j) views.eye[j] = floatOf(params[FP_P_EYE + j]);
+        views.count = 1 + n.tiles;
+        views.planes = planes.data();
+        views.scales = scales.data();
+        views.nearPixels = kNearCellPixels;
+        views.farPixels = kFarCellPixels;
+        views.itemGroup = FP_GROUP_SIZE;
+        n.cellsOn = cellsPass_.begin(frame, n.cellTarget_, views, n.cells_, n.provider_);
+    }
+    // (The measure stage's cells; any buffer when it walks every tree.)
+    const SceneVkBuffer& cells = n.cellsOn ? n.cellTarget_.out : n.staticBuf;
+    writer.writeBuffer(6, cells.buffer, cells.size, 0, kStorage);
     writer.updateSet(device_, n.set);
     queued_.push_back(&n);
     return true;
@@ -529,10 +603,15 @@ void GpuPlanner::dispatchItems(VkCommandBuffer cmd, Stage s, const Node& n, cons
 
 void GpuPlanner::dispatchIndirect(VkCommandBuffer cmd, Stage s, const Node& n, uint32_t argsWord,
                                   const Push& p) const {
+    dispatchIndirect(cmd, s, n, n.args.buffer, VkDeviceSize{argsWord} * 4, p);
+}
+
+void GpuPlanner::dispatchIndirect(VkCommandBuffer cmd, Stage s, const Node& n, VkBuffer buffer, VkDeviceSize offset,
+                                  const Push& p) const {
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelines_[s]);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout_, 0, 1, &n.set, 0, nullptr);
     vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(Push), &p);
-    vkCmdDispatchIndirect(cmd, n.args.buffer, VkDeviceSize{argsWord} * 4);
+    vkCmdDispatchIndirect(cmd, buffer, offset);
 }
 
 // An exclusive scan of `count` words at `offset` in place: each block's
@@ -548,6 +627,32 @@ void GpuPlanner::scan(VkCommandBuffer cmd, const Node& n, uint32_t offset, uint3
     scan(cmd, n, scratch, blocks, scratch + blocks);
     barrier(cmd);
     dispatch(cmd, ScanAdd, n, blocks, {0, offset, count, scratch});
+}
+
+// scan's steps for the longest the run can be (each level's blocks' sums
+// at the next level's offset), each dispatched over the blocks the GPU's
+// count fills. A level the count leaves one block scans to a single sum,
+// which the levels above it scan to zero and add nothing.
+void GpuPlanner::scanSized(VkCommandBuffer cmd, const Node& n, uint32_t offset, uint32_t words, uint32_t args,
+                           uint32_t most, uint32_t scratch) const {
+    uint32_t at[FP_SCAN_LEVELS + 1] = {offset};
+    uint32_t levels = 0;
+    for (uint32_t count = most; count > FP_SCAN_BLOCK && levels + 1 < FP_SCAN_LEVELS; ++levels) {
+        const uint32_t blocks = (count + FP_SCAN_BLOCK - 1) / FP_SCAN_BLOCK;
+        at[levels + 1] = scratch;
+        scratch += blocks;
+        count = blocks;
+    }
+    const auto push = [&](uint32_t l, uint32_t sums) { return Push{0, at[l], FP_SCAN_COUNT_WORD | (words + l), sums}; };
+    for (uint32_t l = 0; l < levels; ++l) {
+        dispatchIndirect(cmd, ScanLocal, n, args + 4 * l, push(l, at[l + 1]));
+        barrier(cmd);
+    }
+    dispatch(cmd, ScanLocal, n, 1, push(levels, 0xffffffffu));
+    for (uint32_t l = levels; l-- > 0;) {
+        barrier(cmd);
+        dispatchIndirect(cmd, ScanAdd, n, args + 4 * l, push(l, at[l + 1]));
+    }
 }
 
 void GpuPlanner::record(SceneFrame& frame) {
@@ -572,32 +677,46 @@ void GpuPlanner::record(SceneFrame& frame) {
                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &start, 0,
                              nullptr, 0, nullptr);
         vkCmdFillBuffer(cmd, shared_.buffer, 0, FP_G_FRAME_WORDS * 4, 0u);
-        for (Node* n : queued_) {
-            vkCmdFillBuffer(cmd, n->work.buffer, 0, FP_N_WORDS * 4, 0u);
-            vkCmdFillBuffer(cmd, n->work.buffer, VkDeviceSize{n->runs[FP_W_SUMS]} * 4,
-                            VkDeviceSize{FP_COLUMNS * n->itemGroups + 1} * 4, 0u);
-        }
+        for (Node* n : queued_) vkCmdFillBuffer(cmd, n->work.buffer, 0, FP_N_WORDS * 4, 0u);
         barrier(cmd);
-        // Each tree's measure, the camera's order, each view's items.
-        for (Node* n : queued_) dispatch(cmd, Measure, *n, n->aligned / FP_GROUP_SIZE);
+        // The cells in view, of the nodes that walk them.
+        std::vector<WorldCellsPass::Target*> cellTargets;
+        for (Node* n : queued_)
+            if (n->cellsOn) cellTargets.push_back(&n->cellTarget_);
+        if (!cellTargets.empty()) {
+            cellsPass_.record(cmd, cellTargets);
+            barrier(cmd);
+            mark("plan:cells");
+        }
+        // Each tree's measure (of the cells in view, or all), the camera's
+        // order, each view's items.
+        for (Node* n : queued_) {
+            if (n->cellsOn)
+                dispatchIndirect(cmd, Measure, *n, n->cellTarget_.out.buffer, VkDeviceSize{WC_O_DISPATCH} * 4,
+                                 {1, 0, 0, 0});
+            else
+                dispatch(cmd, Measure, *n, (static_cast<uint32_t>(n->trees) + FP_GROUP_SIZE - 1) / FP_GROUP_SIZE);
+        }
         barrier(cmd);
         mark("plan:measure");
         for (uint32_t pass = 0; pass < FP_SORT_PASSES; ++pass) {
-            for (Node* n : queued_) dispatch(cmd, SortHist, *n, n->aligned / FP_SCAN_BLOCK, {pass, 0, 0, 0});
+            for (Node* n : queued_) dispatchIndirect(cmd, SortHist, *n, FP_A_SORT_DISPATCH, {pass, 0, 0, 0});
             barrier(cmd);
             for (Node* n : queued_)
-                scan(cmd, *n, n->runs[FP_W_HIST], FP_SORT_DIGITS * (n->aligned / FP_SCAN_BLOCK), n->runs[FP_W_SCRATCH]);
+                scanSized(cmd, *n, n->runs[FP_W_HIST], FP_N_SCAN_HIST, FP_A_SCAN_HIST,
+                          FP_SORT_DIGITS * (n->aligned / FP_SCAN_BLOCK), n->runs[FP_W_SCRATCH]);
             barrier(cmd);
-            for (Node* n : queued_) dispatch(cmd, SortScatter, *n, n->aligned / FP_SCAN_BLOCK, {pass, 0, 0, 0});
+            for (Node* n : queued_) dispatchIndirect(cmd, SortScatter, *n, FP_A_SORT_DISPATCH, {pass, 0, 0, 0});
             barrier(cmd);
         }
         mark("plan:sort");
         for (Node* n : queued_)
-            scan(cmd, *n, n->runs[FP_W_FLAGS], n->tiles * static_cast<uint32_t>(n->trees) + 1, n->runs[FP_W_SCRATCH]);
+            scanSized(cmd, *n, n->runs[FP_W_FLAGS], FP_N_SCAN_FLAGS, FP_A_SCAN_FLAGS,
+                      n->tiles * static_cast<uint32_t>(n->trees) + 1, n->runs[FP_W_SCRATCH]);
         barrier(cmd);
         for (Node* n : queued_) dispatch(cmd, Layout, *n, 1);
         barrier(cmd);
-        for (Node* n : queued_) dispatch(cmd, Items, *n, n->itemGroups);
+        for (Node* n : queued_) dispatchIndirect(cmd, Items, *n, FP_A_FILL_DISPATCH, Push{});
         barrier(cmd);
         mark("plan:items");
         // The budget's search, every node's items at each round's ask, then
@@ -624,7 +743,8 @@ void GpuPlanner::record(SceneFrame& frame) {
         for (Node* n : queued_) dispatchItems(cmd, Count, *n);
         barrier(cmd);
         for (Node* n : queued_)
-            scan(cmd, *n, n->runs[FP_W_SUMS], FP_COLUMNS * n->itemGroups + 1, n->runs[FP_W_SCRATCH]);
+            scanSized(cmd, *n, n->runs[FP_W_SUMS], FP_N_SCAN_SUMS, FP_A_SCAN_SUMS, FP_COLUMNS * n->itemGroups + 1,
+                      n->runs[FP_W_SCRATCH]);
         barrier(cmd);
         for (Node* n : queued_) {
             // (In turn: each takes its pose slots after the last's.)

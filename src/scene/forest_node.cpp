@@ -324,6 +324,13 @@ void ForestNode::rebuildBounds() {
         }
         forestBounds_ = bromath::amerge(forestBounds_, in.bounds);
     }
+    // The trees by world cell, and each cell's bounds.
+    cells_ = sortIntoCells(CellGrid{}, instances_.size(),
+                           [&](size_t i) { return bromath::Vec2{instances_[i].position.x, instances_[i].position.z}; },
+                           cellOrder_);
+    for (CellContent& c : cells_)
+        for (uint32_t k = c.first; k < c.first + c.count; ++k)
+            c.bounds = bromath::amerge(c.bounds, instances_[cellOrder_[k]].bounds);
 }
 
 void ForestNode::lodToArray(float (&out)[kLodCount]) const {

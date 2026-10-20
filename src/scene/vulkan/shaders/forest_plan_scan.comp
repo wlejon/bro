@@ -9,18 +9,26 @@
 //                 digit-major (FP_W_HIST), for SCAN_LOCAL to place
 //   SORT_SCATTER  the pass's keys and trees to their places, stable
 // The sort is LSD radix on the camera's FP_SORT_BITS-bit keys, ping-ponging
-// KEYS_A/VALS_A and KEYS_B/VALS_B (an even pass reads A).
+// KEYS_A/VALS_A and KEYS_B/VALS_B (an even pass reads A), over the measured
+// trees' blocks (FP_A_SORT_DISPATCH), its digit counts a column of those
+// blocks a digit (their scan sized to match, FP_N_SCAN_HIST).
+// A scan's count with FP_SCAN_COUNT_WORD set is read from that WORK word.
 
 #include "scene_forest_plan.glsl"
 
 layout(local_size_x = FP_GROUP_SIZE) in;
+
+uint scanCount() {
+    uint c = planPush.count;
+    return (c & FP_SCAN_COUNT_WORD) != 0u ? planWork.w[c & ~FP_SCAN_COUNT_WORD] : c;
+}
 
 #if defined(SCAN_LOCAL)
 shared uint sSum[FP_GROUP_SIZE];
 
 void main() {
     uint t = gl_LocalInvocationID.x, block = gl_WorkGroupID.x;
-    uint n = planPush.count, base = planPush.offset;
+    uint n = scanCount(), base = planPush.offset;
     uint first = block * uint(FP_SCAN_BLOCK) + 4u * t;
     uint v[4];
     uint own = 0u;
@@ -48,7 +56,7 @@ void main() {
 #elif defined(SCAN_ADD)
 void main() {
     uint t = gl_LocalInvocationID.x, block = gl_WorkGroupID.x;
-    uint n = planPush.count, base = planPush.offset;
+    uint n = scanCount(), base = planPush.offset;
     uint add = planWork.w[planPush.scratch + block];
     if (add == 0u) return;
     uint first = block * uint(FP_SCAN_BLOCK) + 4u * t;
@@ -65,7 +73,7 @@ shared uint sChunk[FP_SORT_DIGITS][16];
 
 void main() {
     uint t = gl_LocalInvocationID.x, block = gl_WorkGroupID.x;
-    uint blocks = pu(FP_P_ALIGNED) / uint(FP_SCAN_BLOCK);
+    uint blocks = gl_NumWorkGroups.x;   // the measured trees' (FP_A_SORT_DISPATCH)
     uint pass = planPush.round;
     uint shift = pass * uint(FP_SORT_DIGIT_BITS);
     bool fromA = (pass & 1u) == 0u;
@@ -74,8 +82,11 @@ void main() {
     uint first = block * uint(FP_SCAN_BLOCK) + 4u * t;
     uint key[4], digit[4];
     for (uint d = 0u; d < uint(FP_SORT_DIGITS); ++d) sCount[d][t] = 0u;
+    // (The places past the measured trees, to the block's end, are unseen:
+    // each pass leaves them last, where they began.)
+    uint measured = planMeasured();
     for (uint j = 0u; j < 4u; ++j) {
-        key[j] = planWork.w[srcKeys + first + j];
+        key[j] = first + j < measured ? planWork.w[srcKeys + first + j] : FP_SORT_UNSEEN;
         digit[j] = (key[j] >> shift) & uint(FP_SORT_DIGITS - 1);
         sCount[digit[j]][t] += 1u;
     }

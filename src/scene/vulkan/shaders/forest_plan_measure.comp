@@ -3,16 +3,25 @@
 // tree: the camera's measure of it, as planForest takes it (its distances
 // to the tree's box and crown, its pixels per unit at each, its bark's
 // classes, classifyBark), its key in the camera's order, and whether each
-// shadow tile sees it. No cell is tested first, nor any far cell planned
-// apart: a far cell's trees come out of the rules a crown alone, as the
-// CPU's shortcut takes them.
+// shadow tile sees it.
+//
+// The trees are walked in the node's cell order: with push.round 1 those of
+// the cells some view sees (the world cell pass's list, CELLS), else every
+// tree. A tree no view's cell holds is in no view, so the plan is the same
+// either way; only the trees walked are fewer. Each place measured keeps
+// its tree (FP_W_TREE_OF) and its key and tile flags go at its place, so the
+// stages after walk the measured alone, in cell order (whose dispatches the
+// first thread writes). No far cell is planned apart yet: a far cell's trees
+// come out of the rules a crown alone, as the CPU's shortcut takes them.
 
 #include "scene_forest_plan.glsl"
+#include "world_cells_layout.h"
+
+layout(std430, set = 0, binding = 6) readonly buffer PlanCells { uint w[]; } planCells;
 
 layout(local_size_x = FP_GROUP_SIZE) in;
 
 shared uint sCount[FP_MAX_VIEWS];
-shared uint sCulled;
 
 // std::clamp(v, lo, hi): v < lo ? lo : hi < v ? hi : v (a box thinner than
 // twice the reach clamps to its low side, as the CPU's does).
@@ -96,20 +105,54 @@ void classify(uint lid) {
     }
 }
 
+// The tree at place `p` of those measured: the cells' (the cell in view
+// whose items hold it, the last starting at or before it) or the node's.
+uint treeAt(uint p, bool cells) {
+    uint k = p;
+    if (cells) {
+        uint lo = 0u, hi = planCells.w[WC_O_CELLS] - 1u;
+        while (lo < hi) {
+            uint mid = (lo + hi + 1u) >> 1;
+            if (planCells.w[WC_O_HEADER + mid * WC_V_WORDS + WC_V_PREFIX] <= p) lo = mid; else hi = mid - 1u;
+        }
+        uint v = WC_O_HEADER + lo * WC_V_WORDS;
+        k = planCells.w[v + WC_V_FIRST] + (p - planCells.w[v + WC_V_PREFIX]);
+    }
+    return su(su(FP_ST_ORDER) + k);
+}
+
+// The stages after this one walk the measured: their counts and dispatches.
+void sizeStages(uint measured) {
+    uint stride = (measured + uint(FP_GROUP_SIZE) - 1u) / uint(FP_GROUP_SIZE) * uint(FP_GROUP_SIZE);
+    planWork.w[FP_N_MEASURED] = measured;
+    planWork.w[FP_N_ITEM_STRIDE] = stride;
+    planWork.w[workRun(FP_W_FLAGS) + gTiles * measured] = 0u;
+    planArgs.w[FP_A_SORT_DISPATCH] = (measured + uint(FP_SCAN_BLOCK) - 1u) / uint(FP_SCAN_BLOCK);
+    planArgs.w[FP_A_SORT_DISPATCH + 1] = 1u;
+    planArgs.w[FP_A_SORT_DISPATCH + 2] = 1u;
+    planArgs.w[FP_A_FILL_DISPATCH] = (1u + gTiles) * stride / uint(FP_GROUP_SIZE);
+    planArgs.w[FP_A_FILL_DISPATCH + 1] = 1u;
+    planArgs.w[FP_A_FILL_DISPATCH + 2] = 1u;
+    planScanSized(gTiles * measured + 1u, FP_N_SCAN_FLAGS, FP_A_SCAN_FLAGS);
+    planScanSized(uint(FP_SORT_DIGITS) * planArgs.w[FP_A_SORT_DISPATCH], FP_N_SCAN_HIST, FP_A_SCAN_HIST);
+}
+
 void main() {
     planBegin();
     uint lid = gl_LocalInvocationID.x;
     if (lid < uint(FP_MAX_VIEWS)) sCount[lid] = 0u;
-    if (lid == 0u) sCulled = 0u;
     sRun[lid] = 0u;
     barrier();
-    uint i = gl_GlobalInvocationID.x;
-    uint aligned = pu(FP_P_ALIGNED);
+    bool cells = planPush.round != 0u;
+    uint measured = cells ? min(planCells.w[WC_O_ITEMS], gTrees) : gTrees;
+    uint place = gl_GlobalInvocationID.x;
     uint keysA = workRun(FP_W_KEYS_A), valsA = workRun(FP_W_VALS_A);
-    if (i == 0u) planWork.w[workRun(FP_W_FLAGS) + gTiles * gTrees] = 0u;
-    if (i < aligned) {
+    if (place == 0u) sizeStages(measured);
+    uint i = 0u;
+    if (place < measured) {
         uint key = FP_SORT_UNSEEN;
-        if (i < gTrees) {
+        i = treeAt(place, cells);
+        {
             Tree tr = planTree(i);
             Spec sp = planSpec(tr.specimen);
             uint cam = workRun(FP_W_CAMERA) + i * FP_CAM_WORDS;
@@ -173,27 +216,27 @@ void main() {
             sEnd[0][lid] = curveEnd;
             sEnd[1][lid] = fineEnd;
             sEnd[2][lid] = nearEnd;
-            if (seen) atomicAdd(sCount[0], 1u); else atomicAdd(sCulled, 1u);
+            if (seen) atomicAdd(sCount[0], 1u);
             // Each shadow tile's view of it (the camera's or not).
             uint flags = workRun(FP_W_FLAGS);
             for (uint t = 0u; t < gTiles; ++t) {
                 bool in_ = planIntersects(FP_P_TILE + t * FP_TILE_WORDS + FP_TILE_FRUSTUM, tr.bmin, tr.bmax);
-                planWork.w[flags + t * gTrees + i] = in_ ? 1u : 0u;
+                planWork.w[flags + t * measured + place] = in_ ? 1u : 0u;
                 if (in_) atomicAdd(sCount[1u + t], 1u);
             }
         }
-        planWork.w[keysA + i] = key;
-        planWork.w[valsA + i] = i;
+        planWork.w[keysA + place] = key;
+        planWork.w[valsA + place] = i;
+        planWork.w[workRun(FP_W_TREE_OF) + place] = i;
     }
     barrier();
     classify(lid);
     barrier();
-    if (i < gTrees) {
+    if (place < measured) {
         uint cam = workRun(FP_W_CAMERA) + i * FP_CAM_WORDS;
         planWork.w[cam + FP_CAM_CURVE_END] = sEnd[0][lid];
         planWork.w[cam + FP_CAM_FINE_END] = sEnd[1][lid];
         planWork.w[cam + FP_CAM_NEAR_END] = sEnd[2][lid];
     }
     if (lid <= gTiles && sCount[lid] > 0u) atomicAdd(planWork.w[FP_N_VIEW_COUNT + lid], sCount[lid]);
-    if (lid == 0u && sCulled > 0u) atomicAdd(planWork.w[FP_N_STATS + FP_S_CULLED], sCulled);
 }

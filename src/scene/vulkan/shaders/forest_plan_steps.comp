@@ -2,10 +2,12 @@
 // The forest planner's small steps (scene_forest_gpu_plan.cpp):
 //   PLAN_LAYOUT  one thread a node: each view's run of items (the camera's
 //                trees, then each shadow tile's, a run of whole item
-//                blocks each) and the item passes' dispatch
-//   PLAN_ITEMS   a thread a (view, tree): the runs filled, the camera's in
-//                its sorted order, a tile's in the trees' (by the flags'
-//                scan), each run's tail FP_NO_ITEM
+//                blocks each), the item passes' dispatch, the place
+//                counts' scan sized, and the culled trees' count
+//   PLAN_ITEMS   a thread a (view, measured tree): the runs filled, the
+//                camera's in its sorted order, a tile's in the measured
+//                trees' (cell) order (by the flags' scan), each run's tail
+//                FP_NO_ITEM
 //   PLAN_VARY    one thread a node: the search's later rounds' dispatch, over
 //                the items round 1 found varying
 //   PLAN_SETTLE  one thread a budget: the searches' fits settled
@@ -29,15 +31,26 @@ void main() {
     planBegin();
     uint at = 0u;
     uint flags = workRun(FP_W_FLAGS);
+    uint measured = planMeasured();
     for (uint v = 0u; v <= gTiles; ++v) {
         uint n = planWork.w[FP_N_VIEW_COUNT + v];
         planWork.w[FP_N_VIEW_BASE + v] = at;
-        planWork.w[FP_N_VIEW_START + v] = v == 0u ? 0u : planWork.w[flags + (v - 1u) * gTrees];
+        planWork.w[FP_N_VIEW_START + v] = v == 0u ? 0u : planWork.w[flags + (v - 1u) * measured];
         at += roundUp(n, uint(FP_GROUP_SIZE));
     }
-    planArgs.w[FP_A_ITEM_DISPATCH] = at / uint(FP_GROUP_SIZE);
+    uint G = at / uint(FP_GROUP_SIZE);
+    planArgs.w[FP_A_ITEM_DISPATCH] = G;
     planArgs.w[FP_A_ITEM_DISPATCH + 1] = 1u;
     planArgs.w[FP_A_ITEM_DISPATCH + 2] = 1u;
+    // The place counts: a column of the blocks in use a group (the count
+    // stage writes each), the scan's total after them.
+    planWork.w[FP_N_ITEM_GROUPS] = G;
+    planWork.w[workRun(FP_W_SUMS) + uint(FP_COLUMNS) * G] = 0u;
+    planScanSized(uint(FP_COLUMNS) * G + 1u, FP_N_SCAN_SUMS, FP_A_SCAN_SUMS);
+    // Every tree the camera does not see is culled (those no cell in view
+    // holds were never measured).
+    planWork.w[FP_N_STATS + FP_S_CULLED] = gTrees - planWork.w[FP_N_VIEW_COUNT];
+    planWork.w[FP_N_STATS + FP_S_MEASURED] = measured;
 }
 
 #elif defined(PLAN_VARY)
@@ -50,7 +63,8 @@ void main() {
 #elif defined(PLAN_ITEMS)
 void main() {
     planBegin();
-    uint stride = roundUp(gTrees, uint(FP_GROUP_SIZE));
+    uint measured = planMeasured();
+    uint stride = planWork.w[FP_N_ITEM_STRIDE];
     uint x = gl_GlobalInvocationID.x;
     uint v = x / stride, j = x % stride;
     if (v > gTiles) return;
@@ -59,14 +73,16 @@ void main() {
     uint base = planWork.w[FP_N_VIEW_BASE + v];
     uint pad = roundUp(n, uint(FP_GROUP_SIZE)) - n;
     if (j < pad) planWork.w[items + base + n + j] = FP_NO_ITEM;
-    if (j >= gTrees) return;
+    if (j >= measured) return;
     if (v == 0u) {
         if (j < n) planWork.w[items + base + j] = planWork.w[workRun(FP_W_VALS_A) + j];
         return;
     }
-    uint flags = workRun(FP_W_FLAGS) + (v - 1u) * gTrees;
+    uint flags = workRun(FP_W_FLAGS) + (v - 1u) * measured;
     uint at = planWork.w[flags + j], next = planWork.w[flags + j + 1u];
-    if (next != at) planWork.w[items + base + (at - planWork.w[FP_N_VIEW_START + v])] = j | v << FP_VIEW_SHIFT;
+    if (next != at)
+        planWork.w[items + base + (at - planWork.w[FP_N_VIEW_START + v])] =
+            planWork.w[workRun(FP_W_TREE_OF) + j] | v << FP_VIEW_SHIFT;
 }
 
 #elif defined(PLAN_SETTLE)
@@ -125,7 +141,7 @@ void writeCommand(uint at, uint kind, uint instances, uint count, uint first, ui
 
 void main() {
     planBegin();
-    uint G = pu(FP_P_ITEM_GROUPS);
+    uint G = planWork.w[FP_N_ITEM_GROUPS];
     uint sums = workRun(FP_W_SUMS);
     uint cap = pu(FP_P_ENTRY_CAP);
     uint poseCap = pu(FP_P_POSE_CAP);

@@ -23,12 +23,22 @@
 // the compute queue itself, so its state carries from frame to frame as
 // before. A frame whose plan reads something just uploaded on the graphics
 // queue (a node's static data, its leaf store) waits for that queue first.
+//
+// A node's trees are a world-cell provider (world_cells.h): each leaf
+// cell's run of its cell order, bounded by its trees' boxes. Ahead of the
+// plan, the cell pass (scene_world_cells_pass.h) culls its cells against the
+// camera and every shadow tile planned, and the measure stage walks the
+// trees of the cells in view alone, the stages after it what it measured.
+// The plan is the same as over every tree (a tree in a view is in a cell
+// in that view); BRO_WORLD_CELLS=0 walks every tree, for A/B.
 
 #include "render/vulkan_frames.h"
 #include "scene/forest_node.h"
 #include "scene/vulkan/scene_mesh_drawer.h"
 #include "scene/vulkan/scene_vk_allocator.h"
+#include "scene/vulkan/scene_world_cells_pass.h"
 #include "scene/vulkan/shaders/scene_forest_plan_layout.h"
+#include "scene/world_cells.h"
 
 #include <vulkan/vulkan.h>
 
@@ -89,6 +99,13 @@ public:
         size_t trees = 0;
         std::vector<uint32_t> specimenWords;
         SceneVkBuffer staticBuf, work, readback;
+        // Its trees' cells (one provider), their GPU copy and the cell
+        // pass's output; `cellsOn` this frame's plan walks them.
+        WorldCells cells_;
+        WorldCells::Provider provider_ = cells_.addProvider();
+        uint64_t cellsGeneration_ = 0;
+        WorldCellsPass::Target cellTarget_;
+        bool cellsOn = false;
         // This frame's layout of the work buffer.
         uint32_t tiles = 0, aligned = 0, items = 0, itemGroups = 0;
         uint32_t runs[FP_W_RUNS] = {};
@@ -159,9 +176,16 @@ private:
         dispatch(cmd, s, n, groups, Push{});
     }
     void dispatchItems(VkCommandBuffer cmd, Stage s, const Node& n) const { dispatchItems(cmd, s, n, Push{}); }
-    // Over the groups ARGS holds at `argsWord` (an x, 1, 1 dispatch).
+    // Over the groups ARGS holds at `argsWord` (an x, 1, 1 dispatch), or
+    // `buffer` at byte `offset`.
     void dispatchIndirect(VkCommandBuffer cmd, Stage s, const Node& n, uint32_t argsWord, const Push& p) const;
+    void dispatchIndirect(VkCommandBuffer cmd, Stage s, const Node& n, VkBuffer buffer, VkDeviceSize offset,
+                          const Push& p) const;
     void scan(VkCommandBuffer cmd, const Node& n, uint32_t offset, uint32_t count, uint32_t scratch) const;
+    // The same, of a length the GPU set (planScanSized's words from
+    // `words`, dispatches from ARGS word `args`), at most `most` long.
+    void scanSized(VkCommandBuffer cmd, const Node& n, uint32_t offset, uint32_t words, uint32_t args, uint32_t most,
+                   uint32_t scratch) const;
     static void barrier(VkCommandBuffer cmd);
     static void destroyNode(SceneVkAllocator& allocator, Node& n);
     bool ensureBuffer(SceneFrame& frame, SceneVkBuffer& buf, VkDeviceSize size, VkBufferUsageFlags usage,
@@ -180,6 +204,7 @@ private:
     VkPipeline posePipeline_ = VK_NULL_HANDLE;
     SceneVkBuffer shared_;
     bool sharedReady_ = false;
+    WorldCellsPass cellsPass_;
     VkPhysicalDeviceLimits limits_{};
 
     std::unordered_map<const ForestNode*, std::shared_ptr<Node>> nodes_;

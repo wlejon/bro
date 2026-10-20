@@ -115,6 +115,7 @@ add_library(bro_scene STATIC
     decal_node.cpp
     grass_node.cpp
     forest_node.cpp
+    world_cells.cpp
     reflection_probe_node.cpp
     terrain_manager.cpp
     terrain_manager_mesh.cpp
@@ -143,6 +144,7 @@ add_library(bro_scene STATIC
     vulkan/scene_mesh_drawer_forest_gpu.cpp
     vulkan/scene_forest_draw.cpp
     vulkan/scene_forest_gpu_plan.cpp
+    vulkan/scene_world_cells_pass.cpp
     vulkan/scene_draw_list.cpp
     vulkan/scene_frame_graph.cpp
     vulkan/scene_fullscreen.cpp

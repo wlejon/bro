@@ -8,8 +8,9 @@
 //               detail 1, round 1 marks those the same at kMaxDetail, which
 //               the later rounds skip, as ForestPlan::CostSplit does)
 //   PLAN_COUNT  each item's entries a group and leaves a posed group at the
-//               settled detail, summed a block (FP_W_SUMS, column-major, for
-//               the scan to place), and the stats' tallies
+//               settled detail, summed a block (FP_W_SUMS, column-major, a
+//               column FP_N_ITEM_GROUPS long, for the scan to place), and
+//               the stats' tallies
 //   PLAN_WRITE  the entries, each at its place: the block's from the scan,
 //               then the items' before it in the block (so a group's
 //               entries go in item order, an item's in addTree's)
@@ -301,7 +302,7 @@ void main() {
     if (t < uint(FP_COLUMNS)) {
         uint sum = 0u;
         for (uint i = 0u; i < uint(FP_GROUP_SIZE); ++i) sum += sCol[t][i];
-        planWork.w[workRun(FP_W_SUMS) + t * pu(FP_P_ITEM_GROUPS) + block] = sum;
+        planWork.w[workRun(FP_W_SUMS) + t * planWork.w[FP_N_ITEM_GROUPS] + block] = sum;
     }
     if (t < 3u && sTiers[t] > 0u) atomicAdd(planWork.w[FP_N_STATS + FP_S_TREES + t], sTiers[t]);
     if (t < 4u) {
@@ -323,7 +324,7 @@ void main() {
     gMode = MODE_EMIT;
     gTwigJob.on = false;
     if (it.valid) {
-        uint G = pu(FP_P_ITEM_GROUPS);
+        uint G = planWork.w[FP_N_ITEM_GROUPS];
         uint sums = workRun(FP_W_SUMS);
         for (int k = 0; k < FP_GROUPS; ++k) gAt[k] = planWork.w[sums + uint(k) * G + block] + sCol[k][t] - counts[k];
         // The view's posed groups' slots run on from its first block's.

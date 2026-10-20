@@ -14,6 +14,15 @@
 //              one for every node planned under one budget
 //   binding 4  ENTRIES: the draw entries (FOREST_E_*), FP_P_ENTRY_CAP of them
 //   binding 5  ARGS: the draws' indirect commands (FP_A_*)
+//   binding 6  CELLS: the world cell pass's output for the node's cells
+//              (world_cells_layout.h's OUT), read by the measure stage
+//
+// The trees are planned in the node's cell order (ForestNode::cellOrder):
+// the measure stage walks the trees of the cells some view sees, or with
+// BRO_WORLD_CELLS=0 every tree, in that order, and the stages after it walk
+// what it measured (FP_N_MEASURED: their dispatches from words the measure
+// stage writes). A tree is its instance index everywhere else (the camera's
+// measure of it, an item, an entry), so the order is all the cells change.
 
 #ifndef BRO_SCENE_FOREST_PLAN_LAYOUT_H
 #define BRO_SCENE_FOREST_PLAN_LAYOUT_H
@@ -42,6 +51,12 @@
 #define FP_SORT_DIGITS          16
 #define FP_SORT_PASSES          4
 #define FP_SORT_UNSEEN          0xffffu   // the key of a tree the camera does not see (last)
+// A scan whose length the GPU sets (the measured trees', the item blocks'):
+// its levels' counts in WORK words and their dispatches in ARGS, at most
+// FP_SCAN_LEVELS levels (FP_SCAN_BLOCK^4 elements). A scan's push.count with
+// FP_SCAN_COUNT_WORD set names the WORK word holding its count.
+#define FP_SCAN_LEVELS          4
+#define FP_SCAN_COUNT_WORD      0x80000000u
 
 // The camera's Clumps and Crowns draws come in FP_BATCHES batches, nearest
 // first, each a share of the group's entries: batch b is entries
@@ -62,6 +77,7 @@
 #define FP_ST_TWIG_COUNT        7
 #define FP_ST_SEGMENTS          8     // 8 a segment: from xyz, 0, to xyz, 0 (segmentRecords)
 #define FP_ST_SEGMENT_COUNT     9
+#define FP_ST_ORDER             10    // the trees in cell order (ForestNode::cellOrder: instance indices)
 #define FP_ST_HEADER            16
 
 // A tree: its world bounds padded by the sway's reach (ForestCull::bounds:
@@ -114,7 +130,7 @@
 #define FP_P_POSE_CAP           16    // uint: the pose buffer's room (poses)
 #define FP_P_ITEMS              17    // uint: the item runs' room (FP_P_ALIGNED a view)
 #define FP_P_ALIGNED            18    // uint: the trees rounded up to FP_SCAN_BLOCK (the sort's blocks)
-#define FP_P_ITEM_GROUPS        19    // uint: FP_P_ITEMS / FP_GROUP_SIZE (the place counts' column)
+#define FP_P_ITEM_GROUPS        19    // uint: FP_P_ITEMS / FP_GROUP_SIZE (the item blocks' room)
 #define FP_P_WORLD              20    // the world matrix's three rows (12)
 #define FP_P_INV_WORLD          32    // its inverse's (12)
 #define FP_P_FRUSTUM            44    // the camera's six planes: normal xyz, d (24)
@@ -156,8 +172,9 @@
 #define FP_TILE_ORTHO           26    // uint
 
 // The work runs (FP_P_WORK + these: each one's first word in WORK).
-#define FP_W_CAMERA             0     // FP_CAM_WORDS a tree: the camera's measure of it
-#define FP_W_FLAGS              1     // tiles x trees + 1: in a tile's view, then where in the scan
+#define FP_W_CAMERA             0     // FP_CAM_WORDS a tree: the camera's measure of it (a tree
+                                      //   measured this frame's; another's is stale and unread)
+#define FP_W_FLAGS              1     // tiles x measured + 1: in a tile's view, then where in the scan
 #define FP_W_ITEMS              2     // FP_P_ITEMS: each view's trees, a block-aligned run a view
 #define FP_W_KEYS_A             3     // the sort's keys and trees, twice (FP_P_ALIGNED each)
 #define FP_W_VALS_A             4
@@ -169,7 +186,8 @@
 #define FP_W_SCRATCH            10    // the scans' block sums
 #define FP_W_VARY               11    // FP_P_ITEMS: the items whose cost varies with the detail (the
                                       //   search's later rounds walk these alone), in no order
-#define FP_W_RUNS               12
+#define FP_W_TREE_OF            12    // FP_P_ALIGNED: each measured place's tree, in cell order
+#define FP_W_RUNS               13
 
 // The camera's measure of a tree (ForestNode::SeenTree and the bark's classes).
 #define FP_CAM_WORDS            8
@@ -195,6 +213,12 @@
 #define FP_N_VIEW_BASE          40    // its first item (block-aligned)
 #define FP_N_VIEW_START         80    // its first place in the flags' scan
 #define FP_N_STATS              128   // FP_S_*: copied to the read-back
+#define FP_N_MEASURED           160   // the trees measured (in the cells in view, or all)
+#define FP_N_ITEM_STRIDE        161   // the measured rounded up to FP_GROUP_SIZE: the items stage's run a view
+#define FP_N_ITEM_GROUPS        162   // the item blocks in use (the place counts' column)
+#define FP_N_SCAN_FLAGS         164   // the flags' scan: each level's count (FP_SCAN_LEVELS)
+#define FP_N_SCAN_SUMS          168   // the place counts' scan: the same
+#define FP_N_SCAN_HIST          172   // the sort's digit counts' scan: the same
 #define FP_N_VARY_COUNT         180   // the items in FP_W_VARY
 #define FP_N_POSED              184   // per posed group (FP_POSED_GROUPS): 1 posed, 0 inline
 #define FP_N_POSE_BASE          (FP_N_POSED + FP_POSED_GROUPS)   // per posed group: its first pose slot
@@ -215,6 +239,7 @@
 #define FP_S_DETAIL             14    // float
 #define FP_S_SHADOW_DETAIL      15    // float
 #define FP_S_POSES              16    // the leaves the posed groups asked to pose
+#define FP_S_MEASURED           17    // the trees measured (FP_N_MEASURED)
 #define FP_S_WORDS              32
 
 // --- SHARED ---
@@ -239,7 +264,12 @@
                                       // a dispatch (x, 1, 1) and its first entry
 #define FP_A_ITEM_DISPATCH      (FP_A_POSE + 4 * FP_POSED_GROUPS)   // the item passes' dispatch: the item blocks in use, 1, 1
 #define FP_A_VARY_DISPATCH      (FP_A_ITEM_DISPATCH + 4)   // the search's later rounds': FP_W_VARY's blocks
-#define FP_A_WORDS              (FP_A_VARY_DISPATCH + 4)
+#define FP_A_SORT_DISPATCH      (FP_A_VARY_DISPATCH + 4)   // the sort's: the measured's FP_SCAN_BLOCK blocks
+#define FP_A_FILL_DISPATCH      (FP_A_SORT_DISPATCH + 4)   // the items stage's: each view's run of the measured
+#define FP_A_SCAN_FLAGS         (FP_A_FILL_DISPATCH + 4)   // the flags' scan: each level's blocks (4 a level)
+#define FP_A_SCAN_SUMS          (FP_A_SCAN_FLAGS + 4 * FP_SCAN_LEVELS)   // the place counts' scan: the same
+#define FP_A_SCAN_HIST          (FP_A_SCAN_SUMS + 4 * FP_SCAN_LEVELS)   // the sort's digit counts' scan
+#define FP_A_WORDS              (FP_A_SCAN_HIST + 4 * FP_SCAN_LEVELS)
 
 // A group's draw (FP_P_DRAWS): its command's kind.
 #define FP_DRAW_INDEXED         0u    // instanced, indexed: an entry an instance
