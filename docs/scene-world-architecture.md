@@ -1,9 +1,19 @@
-# Scene world architecture: cells, far field, visibility, async compute, surface layers
+# Scene world architecture
 
-Five engine mechanisms for big worlds at high frame rates, from the ground up
-to orbit. Each one is general:
-terrain, forest, grass and static meshes all build on them, so none is shaped
-around a single consumer. They share one rule: **no stage waits for another
+The engine mechanisms for a world the size of a planet, seen from a person
+standing in a forest up to orbit as one place, at high frame rates: cells,
+the far field, visibility, async compute, surface layers, the world service,
+lighting, shadows, the ground and its cover, placement, and the planet
+itself. Each one is general: terrain, plants, grass and static meshes all
+build on them, so none is shaped around a single consumer. Each has one path:
+a mechanism that replaces another removes it, with no fallback kept beside
+it.
+
+The target world is a planet at Earth's size (6371 km): plates, continents
+and oceans, mountain belts, climate belts and snow lines, biomes that are
+whole different worlds of geometry rather than colours, clouds and weather.
+Every view, eye level, aerial, orbital, space, reads the same state, so the
+same place looks like the same place from any distance. They share one rule: **no stage waits for another
 stage to give a resource back.** Anything written in one frame and read in a
 later one is versioned, either by frame-in-flight slot or by a generation
 number. Every cross-queue dependency is a timeline value one queue signals and
@@ -25,16 +35,25 @@ pixels stops being separate: it is folded into the surface of the cell it
 stands on (§5). The cost of a frame then follows the pixels on screen, not
 the size of the world.
 
-Where the frame goes today (wilds, GPU ms; the details are in the git log):
+Where the frame goes today (../broworkshop/demos/biomes, 32.5k plants with
+grass, turf and herbs, GPU ms; capture.js `cost`):
 
-- **Foliage fragments (crowns and clumps):** 2–4.5 ms on the forest routes.
-  Crowns and clumps are ray-traced or discarding cards with no early-Z, drawn
-  with overdraw. Fixed by the visibility pass (§3) and the far field (§2).
-- **Work over every tree, every frame:** the planner (0.6–0.8 ms) plus the
-  casters it feeds. Its cost grows with the world, not the screen. Fixed by
-  world cells (§1).
-- **Latency-bound compute:** about 90 small dependent dispatches leave the GPU
-  mostly idle. Fixed by async compute (§4).
+| | glade | meadow | flyover |
+|---|---|---|---|
+| grass and herb rings | 1.34 | 1.71 | 0 |
+| ground (mesh and turf) | 0.18 | 0.26 | 0.25 |
+| plants (leaves and their shadows) | 0.60 | 0.53 | 0.55 |
+| frame | 2.29 | 2.60 | 0.90 |
+
+- **The ground's cover** is two thirds of an eye-level frame: the ground is
+  shaded whole and the blades drawn over it, and the far rings draw blades
+  the turf could stand in for. Fixed by the ground and its cover as one
+  surface (§9).
+- **Shadows redrawn every frame** for content that does not move: the plants'
+  casters are a third of a millisecond on every shot. Fixed by cached shadow
+  pages (§8).
+- **At a million plants** (8.4 km) the plants alone take 3 ms, most of it
+  plants too far to be more than a few pixels. Fixed by the far field (§2).
 
 ## 1. World cells
 
@@ -313,27 +332,177 @@ near ground's crumbs, blades and leaves). Everything else is a sample.
   layer, and shadowing past the sun's last cascade into the layer's horizon
   and occlusion terms.
 
+## 6. The world service
+
+Everything about the world that does not depend on the view is made once,
+kept, and refreshed only when it changes: the terrain's heights and normals,
+its material (§5's layers), the sun's shadow on what does not move (§8),
+the horizon and the canopy's density (§7), the far field's cards (§2), the
+plants placed in a cell (§10), the light the probes gather (§7), the weather.
+The frame draws from what is kept; it never makes any of it. One service
+makes all of it, so no producer competes with another, or with the frame,
+by its own rules.
+
+- **Producers** register kinds of tile: what a tile is keyed by (a cell key,
+  a probe's place, a shadow page), the job that makes one, its size, and its
+  error in pixels when it is missing, stale or too coarse.
+- **One queue of jobs, ranked by that error.** What is most wrong on screen
+  is made first, whoever its producer is. Ties go to the coarser tile, so the
+  world fills in from the top down.
+- **A budget in milliseconds from measured slack.** The GPU timer stamps every
+  frame; the service gets what the frame left under its target (2.78 ms on
+  the 4090, 16.7 ms on a 3060 at 60 fps), and a small floor so it never
+  starves. A frame that runs over takes the service down to its floor. Each
+  job's cost is measured too, so the budget is spent in jobs, not guessed.
+- **Nothing waits.** The coarsest level of every producer is always resident.
+  A missing tile shows its coarser parent; a stale one keeps drawing until its
+  replacement lands; a replacement is written to a free slot and swapped in by
+  its version, so no job waits for a frame to finish reading.
+- **The queue:** the device's compute queue at low priority where it has one
+  (§4: timeline values at the edges, never a fence), otherwise sliced into
+  the graphics stream at the frame's head. One code path, two schedules.
+  Async compute shares the GPU's cores, so the gain is less parallelism than
+  amortisation: each tile is made once instead of every frame, in the gaps
+  the frame leaves (its depth-only and shadow raster leave arithmetic idle).
+
+The surface layers' fills (§5), the far field's captures (§2) and streaming
+(§1) are the service's first producers; each keeps its own policy (which
+tiles it wants) and gives up its own budget.
+
+## 7. Lighting
+
+Lighting is the lens every other system is judged through, so it is built
+early and built for every altitude and time of day.
+
+- **Atmosphere from tables** (Hillaire 2020): transmittance, multiple
+  scattering and the sky's view in small LUTs, remade when the sun moves;
+  the haze between the eye and what it sees in a camera-aligned froxel volume
+  (about 32 × 32 × 32), not marched at every pixel. The same model from the
+  ground to space, a different planet a parameter change. The sky's light on
+  a surface comes from it with its direction (spherical harmonics an altitude
+  and sun angle), not one colour a frame.
+- **Exposure** in physical units with eye adaptation, one path from forest
+  shade to snow to orbit.
+- **Sky occlusion and bounced light from a probe grid** (DDGI, Majercik 2019):
+  camera-centred cascades of probes, each gathering irradiance and its
+  visibility by rays against a simplified world (the terrain's height tiles,
+  the canopy's density, the cards), a slice of them a frame as world-service
+  jobs. It is what makes a valley floor see less sky, a forest's inside dim
+  and green, sunlit rock warm the shade beside it. Hardware ray tracing where
+  the device has it and it is cheaper; the 4090 and a 3060 both do.
+- **Horizon and canopy:** a terrain tile's horizon (the elevation it sees in
+  a ring of directions) and a cell's canopy density, made once each by the
+  world service: the sun's shadow and the sky's occlusion past the last
+  cascade, and the light under a forest without drawing it.
+- **Volumetric light** in the same froxel volume as the haze, lit by the
+  shadow pages: shafts through a canopy, mist in a valley, the clouds'
+  shadows on the land.
+- **Night:** the moon's light, the stars, the emissive layer (§5) for what
+  shines too small to draw (a city from orbit), and clustered lights past the
+  forward path's 32.
+
+The plants' crown-depth falloff and the turf's tuned darkening stand in for
+the probes today; they go when the probes land.
+
+## 8. Shadows
+
+- **Cached shadow pages** (as Unreal's virtual shadow maps): the sun's
+  shadow is a clipmap of pages at about a texel a pixel. A page holds what
+  does not move and is redrawn only when that changes (a cell's generation,
+  the sun past a threshold); what moves is drawn over it each frame. Plants'
+  sway is under a texel past the near pages, so only the near pages redraw
+  their plants.
+- **Past the pages:** the horizon tiles (§7).
+- **Every caster** draws into pages through its provider's draw entry, as
+  for the camera; the shadow tiles of today go.
+
+## 9. The ground and its cover
+
+The ground and what covers it (turf, grass, herbs, litter, snow) are one
+surface. The blades are only the near detail of the cover.
+
+- **Order:** the terrain's depth first, then the blades, then the ground's
+  shading only where the blades leave it showing; there it is the dark between
+  their roots, not a material of its own.
+- **Heights** for the blades come from the terrain's tiles, not a mesh.
+- **Handover:** the turf stands in for the blades where they are too fine to
+  matter, so its look (the sward's wind sheen, its ragged edge against the
+  sky) is what lets the far rings go; how near they can go is judged in
+  motion, at the meadow's edge.
+- **The terrain's own material** (rock, soil, scree, snow) is made only
+  where the cover thins, once a tile, by the world service.
+
+## 10. Placement
+
+A planet cannot store its plants (an Earth's is of the order of 10^12). A
+cell's plants, herbs and rocks are made from its fields (biome, climate,
+cover, slope, the terrain's age) when it comes within reach, deterministically
+from the cell's key, as world-service jobs (as Decima places its vegetation),
+and dropped past a hysteresis radius. The plants node takes the cells and the
+rules (its species and what grows where), not a list of plants. The rules
+are data, so a biome is a table, not code.
+
+## 11. The planet
+
+- **Roots:** six cube-sphere faces of world cells (§1), each a quadtree to
+  64 m leaves, every origin eye-relative in double.
+- **Its fields:** the terrain's shape (plates, the isostatic datum, mountain
+  belts, warp, erosion), its climate (belts, snow lines, rain) and its biomes,
+  each a field with a CPU reference (for physics and gameplay queries) and a
+  GPU kernel the world service runs to make tiles. Every additive term
+  switchable from the host, so a wrong look is ablated before it is guessed.
+- **Culling** adds the horizon: a cell below it is behind the planet's curve.
+- **Going up** brings things in as well as folding them away: the
+  atmosphere seen as a shell, space, other bodies. They are providers like
+  any other, refined by the pixels they cover: a planet a few pixels across
+  is a point of light, then a lit disc, then a body with its own face roots,
+  as a tree goes from a layer's texels to a card to a mesh. So there is a
+  level above the face roots (a system, its bodies, each body's six faces),
+  with every body's origin, like every cell's, taken eye-relative in double.
+
+## 12. Where the code lives
+
+All of it in bro. `src/scene` is split into sub-modules, each with its CPU
+half (testable without a GPU) apart from its GPU half:
+
+```
+src/scene/
+  nodes/            the node types: their CPU halves
+  world/            cells, the planet's roots and fields, the world service's
+                    policy, surface layers' paging, placement rules
+  vulkan/
+    frame/          device, frame graph, queues, allocator, targets, timers
+    world/          the world service's executor, tile atlases, the cell pass
+    terrain/        planet terrain tiles, the clipmap drawn from them, horizons
+    ground/         the ground and its cover: turf, grass, herbs
+    foliage/        the plants node's plan, poses and draws; the far field
+    lighting/       atmosphere, exposure, probes, volumetrics, clustered lights
+    shadow/         shadow pages
+    sky/            clouds, weather, stars, the moon
+    post/           post-fx, SSAO, SSR, DOF
+    shaders/        the same folders
+```
+
 ## Build order
 
-Each step must land as a measured win on its own (wilds, interleaved
-binaries, the stills' per-band diff, the motion oracle for anything temporal).
+Each step lands as a measured win on its own: interleaved binaries on
+demos/biomes (and, once it exists, the planet), the stills' numeric diff,
+the motion oracle for anything temporal. Each step removes what it replaces.
 
-| Step | Mechanism | Win it should show | Size |
+| Step | What | Win it should show | Size |
 |---|---|---|---|
-| 1 | Async compute (§4) | plan time hidden: about 0.4–0.7 ms on every route | ~2k LOC |
-| 2 | World cells (§1), cell-range planning, frustum only | plan cost tracks visible cells, not the world; a 4× larger world costs about the same | ~3k LOC |
-| 3 | Visibility pass for foliage (§3) and HiZ two-phase culling, which then joins the cell pass | foliage shaded once per pixel, hidden trees never raster | ~4k LOC |
-| 4 | Far-field cell cards (§2) | far forest and terrain cost proportional to cells on screen, not trees | ~4k LOC |
-| 5 | Surface layers (§5): tiles, page-table clipmap, budgeted fills; the turf as the first provider | the ground's opaque:static down by most of its 0.5–0.7 ms on the open routes | ~3k LOC |
-| 6 | Planet roots: cube-sphere cells, horizon culling, content folding into layers below its last representation | ground to orbit with the frame's cost tracking pixels | to size once 2–5 land |
+| 1 | The layout (§12), moves only | frames byte-identical, suites green | moves |
+| 2 | The old forest path retired (ForestNode, its drawers, planner, impostors) | one foliage path: the plants node | −6–8k |
+| 3 | The world service (§6), the surface layers' fills its first producer | fills follow the frame's slack; no stall when the view jumps | ~3k |
+| 4 | Atmosphere tables and exposure (§7) | one sky from ground to orbit, cheaper than today's per-pixel march | ~2k |
+| 5 | Cached shadow pages (§8), then horizons and canopy density (§7) | plant and terrain shadows off the per-frame cost | ~6k |
+| 6 | The ground and its cover as one surface (§9) | the eye-level frame's 1.3–1.7 ms of cover cut by most of its hidden and far work | ~2k |
+| 7 | The probe grid (§7) | forests, valleys and slopes lit as places; the stand-in falloffs gone | ~5k |
+| 8 | Placement per cell (§10) | a world of any size placed around the eye at a flat cost | ~3k |
+| 9 | The planet (§11) | ground to orbit, one place, the frame following the pixels | ~5k |
+| 10 | Far-field cell cards (§2) | far plants and terrain cost by the cells on screen | ~4k |
+| 11 | Volumetric light and clouds (§7) | shafts, mist, weather from every altitude | ~5k |
+| 12 | Night and many lights (§7) | moon, stars, cities from orbit, fires | ~2k |
 
-Step 5 needs only step 2's keys and cell pass, so it can be built beside
-steps 3 and 4.
-
-Going up brings things in as well as folding them away: the atmosphere
-seen as a shell, space, other bodies. They are providers like any other,
-refined by the pixels they cover: a planet a few pixels across is a point
-of light, then a lit disc, then a body with its own face roots, as a tree
-goes from a layer's texels to a card to a mesh. Step 6 therefore adds a
-level above the face roots (a system, its bodies, each body's six faces),
-with every body's origin, like every cell's, taken eye-relative in double.
+The visibility pass (§3) joins when a measurement shows foliage shading, not
+its count, is what the frame is spent on.
