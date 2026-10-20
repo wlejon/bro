@@ -35,7 +35,7 @@
 // level; tile (x, z) of level L is entry (x mod pageSize, z mod pageSize) of
 // layer L, which holds its slot + 1 and the tile's x and z above the grid's
 // own bits (so a tile pageSize away that shares the entry is told apart):
-// encodePage below, scene_surface_layers.glsl's lookup. Two tiles that would
+// encodePage below, ground/scene_ground_layers.glsl's lookup. Two tiles that would
 // share an entry are never paged at once (the further one goes).
 //
 // Items. The provider describes its data by where it lies: items, each a box
@@ -168,7 +168,7 @@ public:
 
     /// A tile's texel size, metres.
     float texelMetres(int level) const;
-    /// The page-table word for a tile in `slot` (scene_surface_layers.glsl's).
+    /// The page-table word for a tile in `slot` (ground/scene_ground_layers.glsl's).
     static uint32_t encodePage(const CellKey& key, int slot, int pageShift);
     int pageShift() const { return pageShift_; }
 

@@ -9,7 +9,7 @@
 //       touches only that region and keeps the mip chain coherent
 //       (MeshNode::updateCustomShaderTexture).
 //   (c) The shadow pass binds user samplers exactly as the color pass does
-//       (uploadUserTextures in scene_renderer_shadow.cpp), so a vertex chunk
+//       (vulkan/shadow/pass_shadow.cpp), so a vertex chunk
 //       that displaces from a height texture casts the DISPLACED silhouette
 //       instead of sampling an unbound unit and casting the rest silhouette.
 

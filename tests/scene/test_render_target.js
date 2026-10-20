@@ -4,9 +4,9 @@
 // `softness`), setRenderScale (internal FBO chain at canvas * scale), and
 // setMSAA (multisampled HDR passes resolved before tonemap). Exercises
 // src/scene/scene_renderer.cpp (ensureMeshFBO / ensureMSAAFBO / resolve
-// ordering), scene_renderer_particles.cpp (scene-depth snapshot blit),
-// scene_renderer_postfx.cpp (shared depth attachment, scaled chains), and
-// the setRenderScale / setMSAA / softness bindings in scene_bindings.cpp.
+// ordering), vulkan/frame/pass_snapshot.cpp (scene-depth snapshot blit),
+// vulkan/post/pass_postfx.cpp (shared depth attachment, scaled chains), and
+// the setRenderScale / setMSAA / softness natives in src/bronze_host/native_scene_*.cpp.
 
 function near(a, b, tol, label) {
     assert(Math.abs(a - b) < tol, `${label}: ${a} vs ${b}`);

@@ -3,7 +3,7 @@
 // and the shadow caster pass (per light/cascade tile, never the camera
 // frustum). Exercises SceneRenderer::nodeWorldBounds/cameraCulled in
 // src/scene/scene_renderer.cpp, the per-tile caster cull in
-// scene_renderer_shadow.cpp, SkinnedMeshNode::posedLocalBounds, and the
+// vulkan/shadow/pass_shadow.cpp, SkinnedMeshNode::posedLocalBounds, and the
 // scene.setFrustumCulling / scene.cullStats / perf.stats().scene bindings.
 //
 // Culling is required to be pixel-invisible: every section that toggles it

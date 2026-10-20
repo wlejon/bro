@@ -1,10 +1,10 @@
 // Custom shaders on the non-static mesh pipelines — the skinned and
 // instanced program variants plus shadow-pass displacement added on top of
 // test_custom_shader.js's static coverage. Exercises the SKINNED /
-// INSTANCED custom variants of ensureCustomProgram (scene_renderer_mesh.cpp),
+// INSTANCED custom variants of SceneMeshDrawer::program (vulkan/draw/scene_mesh_drawer.cpp),
 // the grouped custom sub-passes in render3D (scene_renderer.cpp), the
-// spliced shadow variants + caster routing (ensureCustomShadowProgram in
-// scene_renderer_shadow.cpp — a vertex-displaced mesh casts the DISPLACED
+// spliced shadow variants + caster routing (PassShadow::customPipeline in
+// vulkan/shadow/pass_shadow.cpp — a vertex-displaced mesh casts the DISPLACED
 // silhouette, fragment-only keeps the default depth program), and the
 // setShader bindings accepting skinned + instanced nodes.
 

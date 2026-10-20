@@ -13,8 +13,8 @@
 //   - ortho cameras reconstruct depth correctly (decal still lands)
 //   - emission adds self-lit color independent of albedo alpha
 //   - frustum culling counts decals (cullStats) and property round-trips
-// Exercises SceneRenderer::renderDecalPass (scene_renderer_decals.cpp),
-// DecalNode (decal_node.h) and the createDecal/property bindings.
+// Exercises PassDecal (src/scene/vulkan/draw/pass_decal.cpp),
+// DecalNode (nodes/decal_node.h) and the createDecal/property bindings.
 
 function patchChannelAvg(img, cx, cy, r, ch) {
     let sum = 0, n = 0;

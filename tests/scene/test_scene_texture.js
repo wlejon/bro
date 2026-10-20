@@ -2,9 +2,9 @@
 // live-linked handle; mesh.setBaseColorTexture(handle) makes a mesh in
 // scene B sample scene A's post-tonemap LDR output every frame. Exercises
 // MeshNode's external texture slot (src/scene/nodes/mesh_node.h), the draw-time
-// resolution + LINEAR/CLAMP params in scene_renderer_mesh.cpp, the
+// resolution + LINEAR/CLAMP params in vulkan/draw/scene_mesh_drawer.cpp, the
 // SceneGraph::OutputTextureSource liveness token (scene_graph.h), and the
-// asTexture / setBaseColorTexture(handle) bindings in scene_bindings.cpp.
+// asTexture / setBaseColorTexture(handle) natives in src/bronze_host/native_scene_*.cpp.
 // Covers: live link across source renderScale change (FBO/texture id
 // recreated), source-scene destruction (fall back to base color, no stale
 // GL id), source-never-rendered (untextured until first frame), clearing

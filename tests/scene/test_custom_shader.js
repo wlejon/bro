@@ -2,11 +2,11 @@
 // user GLSL chunks (userVertex / userFragment hooks spliced into the mesh
 // uber-shader), setShaderUniform drives numeric u_-prefixed uniforms live,
 // clearShader restores the default pipeline. Exercises the program cache in
-// src/scene/scene_renderer_mesh.cpp (ensureCustomProgram — identical sources
+// src/scene/vulkan/draw/scene_mesh_drawer.cpp (SceneMeshDrawer::program — identical sources
 // share one program), the custom sub-pass routing in scene_renderer.cpp
 // (incl. the "custom shader wins over unlit" rule), the eager-compile error
 // path (invalid GLSL throws, node keeps rendering default), and the
-// setShader/setShaderUniform/clearShader bindings in scene_bindings_mesh.cpp.
+// setShader/setShaderUniform/clearShader bindings in src/bronze_host/native_scene_shaders.cpp.
 
 function regionChannel(img, ch, x0, y0, x1, y1) {
     let sum = 0, n = 0;
