@@ -138,3 +138,9 @@ BRO_SCENE_SHADER(MeshGroundIndirectFrag,       "mesh_ground_indirect.frag",     
 // A tile of the turf's surface layer, the ground drawn straight down into it
 // (scene_ground_layers.glsl; scene_mesh_drawer_ground.cpp).
 BRO_SCENE_SHADER(GroundLayerFillFrag,          "ground_layer_fill.frag",           "ground_layer_fill.frag", "frag", "")
+// Far cards (scene_far_cards.h): a capture's resolve into the atlas, and the
+// card drawn in its cell's crowns' place.
+BRO_SCENE_SHADER(FarCardResolveComp,           "far_card_resolve.comp",            "far_card_resolve.comp", "comp", "")
+BRO_SCENE_SHADER(FarCardVert,                  "far_card.vert",                    "far_card.vert", "vert", "")
+BRO_SCENE_SHADER(FarCardFrag,                  "far_card.frag",                    "far_card.frag", "frag", "")
+BRO_SCENE_SHADER(FarCardIndirectFrag,          "far_card_indirect.frag",           "far_card.frag", "frag", "FAR_CARD_INDIRECT")

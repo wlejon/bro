@@ -10,6 +10,7 @@
 #include "scene/vulkan/pass_mesh.h"
 #include "scene/vulkan/scene_defaults.h"
 #include "scene/vulkan/scene_environment.h"
+#include "scene/vulkan/scene_far_cards.h"
 #include "scene/vulkan/scene_frame.h"
 #include "scene/vulkan/scene_frame_graph.h"
 #include "scene/vulkan/scene_gpu_resources.h"
@@ -81,6 +82,7 @@ private:
     SceneEnvironment environment_;
     SceneGpu gpu_;
     OpaqueBatches opaqueBatches_;   // PassForestBatches' split, read by the opaque passes
+    FarCards farCards_;             // chosen with the draw lists; captured and drawn by their passes
     SceneFrameGraph graph_;
     SceneGpuTimer timer_;
     bool ready_ = false;

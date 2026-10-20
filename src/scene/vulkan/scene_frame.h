@@ -18,7 +18,9 @@
 
 #include <cstdint>
 #include <map>
+#include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace bro::scene {
 class SceneGraph;
@@ -34,6 +36,7 @@ class SceneGpuResources;
 class SceneMeshDrawer;
 class SceneEnvironment;
 class SceneGpuTimer;
+class FarCards;
 struct SceneVkImage;
 
 struct SceneGpu {
@@ -112,6 +115,15 @@ struct SceneFrame {
 
     /// The attachments of the open HDR scope (set by the frame graph).
     TargetFormat hdrTarget;
+
+    /// The far cards (scene_far_cards.h): chosen as the draw lists are
+    /// built, right before the forests are planned. Null: none.
+    FarCards* farCards = nullptr;
+    /// Per forest node id, a word for each of its world cells
+    /// (ForestNode::cells): nonzero where a far card stands for the cell's
+    /// trees this frame, which the camera's plan then leaves out (their
+    /// shadow casters stay). A node not here keeps every tree.
+    std::unordered_map<uint32_t, std::vector<uint32_t>> forestCellSkip;
 };
 
 }  // namespace bro::scene::vk

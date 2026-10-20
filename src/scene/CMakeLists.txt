@@ -153,6 +153,8 @@ add_library(bro_scene STATIC
     vulkan/scene_forest_draw.cpp
     vulkan/scene_forest_gpu_plan.cpp
     vulkan/scene_world_cells_pass.cpp
+    vulkan/scene_far_cards.cpp
+    vulkan/pass_far_cards.cpp
     vulkan/scene_draw_list.cpp
     vulkan/scene_frame_graph.cpp
     vulkan/scene_fullscreen.cpp

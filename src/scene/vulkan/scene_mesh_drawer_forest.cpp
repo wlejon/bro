@@ -83,6 +83,13 @@ constexpr float kBarkCurvePixels = 6.0f;
 // the flight's twigs 0.35 -> 2.5 ms a frame; at 0.35 px 0.6 ms, keeping
 // most of the canopy's edges (40-80 m hard, noon 7.2 -> 6.9).
 constexpr float kBarkRibbonCut = 0.5f;
+// treeLod's bark is cut at this many pixels across over 2, at least, for
+// trees of at most `unitPx` pixels a specimen unit: as wide as their leaves
+// widen (which they do at least as long as the largest's).
+float forestBarkCut(const ForestNode::Lod& lod, float leafLength, float unitPx) {
+    const float w = leafLength > 0.0f ? std::max(1.0f, lod.leafPixels / (leafLength * unitPx)) : 1.0f;
+    return 0.5f * (lod.barkKeepPixels > 0.0f ? std::min(lod.barkPixels * w, lod.barkKeepPixels) : lod.barkPixels * w);
+}
 // How much of a needle node's undrawn fine wood shows through its needles
 // (the share of its outline area the tint toward the bark stands for).
 constexpr float kWoodShare = 0.6f;
@@ -940,6 +947,16 @@ template <class Plan> void capForced(const std::vector<Plan*>& plans, bool shado
 
 }  // namespace
 
+bool forest::crownsAlone(const ForestNode::Lod& lod, float leafLength, float pxAtMetre, const CellExtent& e, float d,
+                         float across) {
+    const float nearMin = lod.leavesRange > 0.0f ? lod.leavesRange + 0.5f * lod.leavesBand : 0.0f;
+    if (across < 40.0f || d < 1.0f || d < nearMin) return false;
+    const float px = pxAtMetre / d;   // a metre's pixels there
+    return e.clump * px < 0.98f * lod.crownTo &&
+           e.keep * px < 0.98f * kBarkRibbonCut * forestBarkCut(lod, leafLength, e.unit * px) &&
+           e.bloom * px < 0.98f * kBloomMinPixels;
+}
+
 SceneMeshDrawer::ForestCull& SceneMeshDrawer::forestCull(const ForestNode& node, const bromath::Mat4& world,
                                                          float reach) {
     const uint64_t use = ++forestCullUse_;
@@ -1032,29 +1049,35 @@ std::unique_ptr<SceneMeshDrawer::ForestPlan> SceneMeshDrawer::planForest(SceneFr
         across = std::sqrt(dx * dx + dz * dz);
         return std::sqrt(dx * dx + dy * dy + dz * dz);
     };
-    const bool farCells = view.perspective && P.force < 0 && P.lod.range <= 0.0f && P.lod.crownFrom > P.lod.crownTo;
+    const bool farCells = farCellsApply(P.lod, P.force, view.perspective);
     // treeLod's bark is cut at this many pixels across over 2, at least, for
-    // trees of at most `unitPx` pixels a specimen unit: as wide as their
-    // leaves widen (which they do at least as long as the largest's).
-    const auto barkCut = [&](float unitPx) {
-        const float w = P.leafLength > 0.0f ? std::max(1.0f, P.lod.leafPixels / (P.leafLength * unitPx)) : 1.0f;
-        return 0.5f * (P.lod.barkKeepPixels > 0.0f ? std::min(P.lod.barkPixels * w, P.lod.barkKeepPixels)
-                                                    : P.lod.barkPixels * w);
-    };
-    const float nearMin = P.lod.leavesRange > 0.0f ? P.lod.leavesRange + 0.5f * P.lod.leavesBand : 0.0f;
+    // trees of at most `unitPx` pixels a specimen unit (crownsAlone's).
+    const auto barkCut = [&](float unitPx) { return forestBarkCut(P.lod, P.leafLength, unitPx); };
     std::vector<uint8_t> cameraFar(cull.cellBox.size(), 0);
     if (farCells)
         ForestPlan::eachChunk(cull.cellBox.size(), [&](uint32_t, uint32_t b, uint32_t e) {
             for (uint32_t c = b; c < e; ++c) {
                 float across = 0.0f;
                 const float d = nearest(cull.cellBox[c], across);
-                if (across < 40.0f || d < 1.0f || d < nearMin) continue;
-                const float px = pxAtMetre / d;   // a metre's pixels there
-                cameraFar[c] = cull.cellClump[c] * px < 0.98f * P.lod.crownTo &&
-                               cull.cellKeep[c] * px < 0.98f * kBarkRibbonCut * barkCut(cull.cellUnit[c] * px) &&
-                               cull.cellBloom[c] * px < 0.98f * kBloomMinPixels;
+                cameraFar[c] = crownsAlone(P.lod, P.leafLength, pxAtMetre,
+                                           {cull.cellClump[c], cull.cellKeep[c], cull.cellBloom[c], cull.cellUnit[c]},
+                                           d, across);
             }
         });
+
+    // The trees of the world cells a far card stands for this frame
+    // (SceneFrame::forestCellSkip): the camera leaves them to the card.
+    std::vector<uint8_t> carded;
+    if (auto it = frame.forestCellSkip.find(node.id());
+        it != frame.forestCellSkip.end() && it->second.size() == node.cells().size()) {
+        carded.assign(instances.size(), 0);
+        const auto& order = node.cellOrder();
+        for (size_t c = 0; c < it->second.size(); ++c) {
+            if (!it->second[c]) continue;
+            const CellContent& cell = node.cells()[c];
+            for (uint32_t k = cell.first; k < cell.first + cell.count; ++k) carded[order[k]] = 1;
+        }
+    }
 
     // The camera's trees: those of the cells in view, in the trees' order.
     const uint32_t stamp = node.beginSeen();
@@ -1067,7 +1090,7 @@ std::unique_ptr<SceneMeshDrawer::ForestPlan> SceneMeshDrawer::planForest(SceneFr
         auto& out = parts[chunk];
         for (uint32_t i = begin; i < end; ++i) {
             const bromath::AABB3& b = cull.bounds[i];
-            if (!cull.mark[i] || !bromath::fintersects(view.frustum, b)) {
+            if (!cull.mark[i] || (!carded.empty() && carded[i]) || !bromath::fintersects(view.frustum, b)) {
                 out.culled++;
                 continue;
             }

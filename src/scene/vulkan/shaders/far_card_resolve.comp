@@ -1,0 +1,62 @@
+#version 450
+// A far card's capture into its tile of the atlas (FarCards::capture,
+// scene_far_cards.h; the texel's packing in far_card_layout.h): the mean
+// colour of the pixel's covered samples, how many were covered, and the
+// nearest covered sample's depth across the card's depth range.
+
+#include "far_card_layout.h"
+
+// The camera depth policy (scene/vulkan/scene_vk_depth.h).
+layout(constant_id = 0) const bool REVERSED_Z = true;
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2DMS scratchColor;
+layout(set = 0, binding = 1) uniform sampler2DMS scratchDepth;
+layout(set = 0, binding = 2, rg32ui) uniform writeonly uimage2D atlas;
+
+layout(push_constant) uniform Push {
+    ivec2 src;        // the capture's square in the scratch target
+    ivec2 dst;        // its tile in the atlas
+    int size;
+    float clearFar;   // the depth of no sample drawn
+    vec2 range;       // the depths the 24 bits span
+} pc;
+
+// RGB9E5: three 9-bit mantissas under a shared 5-bit exponent (bias 15).
+uint packRGB9E5(vec3 c) {
+    c = clamp(c, vec3(0.0), vec3(65408.0));
+    float top = max(c.r, max(c.g, c.b));
+    if (top < 1.0e-7) return 0u;
+    int e = max(-16, int(floor(log2(top)))) + 16;
+    float denom = exp2(float(e - 24));
+    if (floor(top / denom + 0.5) >= 512.0) {
+        denom *= 2.0;
+        e += 1;
+    }
+    uvec3 m = uvec3(min(floor(c / denom + 0.5), vec3(511.0)));
+    return m.r | (m.g << 9) | (m.b << 18) | (uint(e) << 27);
+}
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= pc.size || p.y >= pc.size) return;
+    int samples = textureSamples(scratchColor);
+    vec4 sum = vec4(0.0);
+    int covered = 0;
+    float nearest = pc.clearFar;
+    for (int s = 0; s < samples; ++s) {
+        float d = texelFetch(scratchDepth, pc.src + p, s).r;
+        if (d == pc.clearFar) continue;
+        sum += texelFetch(scratchColor, pc.src + p, s);
+        covered++;
+        nearest = REVERSED_Z ? max(nearest, d) : min(nearest, d);
+    }
+    uvec2 texel = uvec2(0u);
+    if (covered > 0) {
+        float t = clamp((nearest - pc.range.x) / (pc.range.y - pc.range.x), 0.0, 1.0);
+        texel.x = packRGB9E5(sum.rgb / float(covered));
+        texel.y = uint(t * float(FAR_CARD_DEPTH_MAX) + 0.5) | (uint(covered) << FAR_CARD_DEPTH_BITS);
+    }
+    imageStore(atlas, pc.dst + p, uvec4(texel, 0u, 0u));
+}

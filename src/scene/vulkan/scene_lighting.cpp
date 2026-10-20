@@ -157,7 +157,7 @@ void writeCameraSet(SceneFrame& frame) {
 }
 
 VkDescriptorSet writeLightingSet(SceneGpu& gpu, const SceneLightingUniforms& uniforms, VkImageView probeView,
-                                 const SceneVkImage* shadeMap) {
+                                 const SceneVkImage* shadeMap, VkImageView farDepth) {
     const SceneDefaults& d = gpu.defaults;
     const VkDescriptorBufferInfo ubo = gpu.device.frameUniform(&uniforms, sizeof(uniforms));
     VkDescriptorSet set = gpu.device.frameSet(d.lightingLayout);
@@ -168,7 +168,8 @@ VkDescriptorSet writeLightingSet(SceneGpu& gpu, const SceneLightingUniforms& uni
                       VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
     writer.writeImage(3, shadeMap ? shadeMap->view : d.white.view, VK_NULL_HANDLE,
                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
-    writer.writeImage(9, gpu.targets.farDepth.isValid() ? gpu.targets.farDepth.view : d.white.view, VK_NULL_HANDLE,
+    if (farDepth == VK_NULL_HANDLE) farDepth = gpu.targets.farDepth.isValid() ? gpu.targets.farDepth.view : d.white.view;
+    writer.writeImage(9, farDepth, VK_NULL_HANDLE,
                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
     writer.writeImage(10, gpu.targets.hiZPrev.isValid() ? gpu.targets.hiZPrev.view : d.white.view, VK_NULL_HANDLE,
                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);

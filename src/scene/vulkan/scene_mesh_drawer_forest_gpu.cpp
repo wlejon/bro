@@ -124,6 +124,12 @@ struct NodePlan {
     bool cores = false, clusters = false, twigs = false, needles = false, blooms = false;
 };
 
+// The node's far-card cells this frame (SceneFrame::forestCellSkip), or null.
+const std::vector<uint32_t>* cellSkipOf(const SceneFrame& frame, const ForestNode& node) {
+    auto it = frame.forestCellSkip.find(node.id());
+    return it != frame.forestCellSkip.end() ? &it->second : nullptr;
+}
+
 }  // namespace
 
 bool SceneMeshDrawer::prepareForestsGpu(SceneFrame& frame, const std::vector<ForestNode*>& nodes,
@@ -351,7 +357,7 @@ bool SceneMeshDrawer::prepareForestsGpu(SceneFrame& frame, const std::vector<For
     }
 
     for (NodePlan& P : plans)
-        if (!planner.add(frame, *P.state, P.params)) {
+        if (!planner.add(frame, *P.state, P.params, cellSkipOf(frame, *P.node))) {
             planner.cancel();
             return false;
         }

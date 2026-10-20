@@ -5,6 +5,7 @@
 #include "scene/instanced_mesh_node.h"
 #include "scene/mesh_node.h"
 #include "scene/scene_graph.h"
+#include "scene/vulkan/scene_far_cards.h"
 #include "scene/vulkan/scene_frame.h"
 
 #include <algorithm>
@@ -73,6 +74,8 @@ void buildDrawLists(SceneFrame& frame) {
     for (SceneNode* node : lists.nodes)
         if (node->type() == SceneNode::Type::Mesh)
             if (ForestNode* forest = static_cast<MeshNode*>(node)->asForest()) forests.push_back(forest);
+    // The far cards first: the cells they stand for leave the forests' plans.
+    if (frame.farCards) frame.farCards->select(frame, forests);
     std::vector<std::vector<MeshDraw>> forestDraws;
     if (forests.size() == 1) {
         forestDraws.resize(1);

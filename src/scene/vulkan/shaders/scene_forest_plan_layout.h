@@ -16,6 +16,9 @@
 //   binding 5  ARGS: the draws' indirect commands (FP_A_*)
 //   binding 6  CELLS: the world cell pass's output for the node's cells
 //              (world_cells_layout.h's OUT), read by the measure stage
+//   binding 7  CARDS: a word a cell of the node, nonzero where a far card
+//              stands for the cell's trees this frame (FP_F_CARDS set), so
+//              the camera leaves them out (SceneFrame::forestCellSkip)
 //
 // The trees are planned in the node's cell order (ForestNode::cellOrder):
 // the measure stage walks the trees of the cells some view sees, or with
@@ -146,6 +149,7 @@
 #define FP_F_CLUSTERS           2u
 #define FP_F_TWIGS              4u
 #define FP_F_NEEDLES            8u
+#define FP_F_CARDS              16u   // CARDS holds the far cards' cells (the plan walks the cells)
 
 // A Lod (ForestNode::Lod's fields the plan reads).
 #define FP_LOD_LEAF_PIXELS      0

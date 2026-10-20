@@ -44,6 +44,39 @@ template <class Fn> void eachChunk(size_t n, Fn fn) {
     bro::util::parallelChunks(chunksOf(n), run);
 }
 
+/// Per cell, the largest of its trees' (in metres): mean clump radius
+/// (infinite for a tree with no clumps), thickest bark's keep radius,
+/// largest bloom's extent, and their scale (m a specimen unit). What a far
+/// cell is measured by (crownsAlone).
+struct CellExtent {
+    float clump = 0.0f, keep = 0.0f, bloom = 0.0f, unit = 0.0f;
+};
+/// `e` grown by tree `in` of `node` (`nodeScale` the node's world scale).
+inline void growExtent(CellExtent& e, const ForestNode& node, const ForestNode::Instance& in, float nodeScale) {
+    const ForestNode::Specimen& sp = node.specimens()[in.specimen];
+    const float unit = in.scale * nodeScale;
+    e.unit = std::max(e.unit, unit);
+    e.clump = std::max(e.clump, sp.clumpCount > 0 ? sp.meanClumpRadius * unit : 1e30f);
+    if (sp.segCount > 0) e.keep = std::max(e.keep, node.keepRadius()[sp.segStart] * unit);
+    if (sp.bloomCount > 0) e.bloom = std::max(e.bloom, sp.bloomSize * ForestNode::bloomExtent(sp.bloomForm) * unit);
+}
+/// Whether a view of `lod` (with no forced tier) can have far cells at all:
+/// a perspective one, unlimited in range, with a crown hand-over.
+inline bool farCellsApply(const ForestNode::Lod& lod, int force, bool perspective) {
+    return perspective && force < 0 && lod.range <= 0.0f && lod.crownFrom > lod.crownTo;
+}
+/// A far cell: every tree of a cell of extent `e` draws as a crown alone,
+/// with no bark (nor the ribbons the bark's cut leaves) and no blooms, at
+/// any detail (the budget only coarsens), outside the near sphere and the
+/// canopy's 40 m, the cell's nearest point `d` from the eye (`across` of it
+/// along the ground), `pxAtMetre` the view's pixels a metre at a metre.
+/// Measured at the nearest point, which none of its trees is nearer than,
+/// with a margin, so a tree on a test's edge goes with the trees that ask.
+/// (scene_mesh_drawer_forest.cpp: planForest's far cells, and the far
+/// cards' cells.)
+bool crownsAlone(const ForestNode::Lod& lod, float leafLength, float pxAtMetre, const CellExtent& e, float d,
+                 float across);
+
 }  // namespace forest
 
 struct SceneMeshDrawer::ForestCull {
@@ -56,16 +89,12 @@ struct SceneMeshDrawer::ForestCull {
     std::vector<uint32_t> start, items;    // each cell's trees (ascending), cells end to end
     std::vector<bromath::AABB3> cellBox;   // the box round each cell's trees
     std::vector<uint8_t> mark;             // per tree: in a cell a test let through (2: a far cell's)
-    // Per cell, the largest of its trees' (in metres): mean clump radius
-    // (infinite for a tree with no clumps), thickest bark's keep radius,
-    // largest bloom's extent. What far() measures a cell by.
+    // Per cell, its forest::CellExtent's fields: what far() measures a cell by.
     std::vector<float> cellClump, cellKeep, cellBloom;
-    std::vector<float> cellUnit;   // its trees' largest scale (m a specimen unit)
+    std::vector<float> cellUnit;
 
     void build(const ForestNode& node, const bromath::Mat4& w, float r) {
         const auto& instances = node.instances();
-        const auto& specimens = node.specimens();
-        const auto& keepRadius = node.keepRadius();
         const float nodeScale = std::sqrt(w.data[4] * w.data[4] + w.data[5] * w.data[5] + w.data[6] * w.data[6]);
         const size_t n = instances.size();
         bounds.resize(n);
@@ -103,13 +132,12 @@ struct SceneMeshDrawer::ForestCull {
             items[fill[c]++] = static_cast<uint32_t>(i);
             cellBox[c].min = bromath::vmin(cellBox[c].min, bounds[i].min);
             cellBox[c].max = bromath::vmax(cellBox[c].max, bounds[i].max);
-            const ForestNode::Specimen& sp = specimens[instances[i].specimen];
-            const float unit = instances[i].scale * nodeScale;
-            cellUnit[c] = std::max(cellUnit[c], unit);
-            cellClump[c] = std::max(cellClump[c], sp.clumpCount > 0 ? sp.meanClumpRadius * unit : 1e30f);
-            if (sp.segCount > 0) cellKeep[c] = std::max(cellKeep[c], keepRadius[sp.segStart] * unit);
-            if (sp.bloomCount > 0)
-                cellBloom[c] = std::max(cellBloom[c], sp.bloomSize * ForestNode::bloomExtent(sp.bloomForm) * unit);
+            forest::CellExtent e{cellClump[c], cellKeep[c], cellBloom[c], cellUnit[c]};
+            forest::growExtent(e, node, instances[i], nodeScale);
+            cellClump[c] = e.clump;
+            cellKeep[c] = e.keep;
+            cellBloom[c] = e.bloom;
+            cellUnit[c] = e.unit;
         }
         mark.assign(n, 0);
         world = w;

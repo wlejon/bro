@@ -18,6 +18,10 @@
 #include "world_cells_layout.h"
 
 layout(std430, set = 0, binding = 6) readonly buffer PlanCells { uint w[]; } planCells;
+// The far cards' cells (FP_F_CARDS): a word a cell, nonzero where a card
+// stands for its trees, which the camera then leaves out (their shadow
+// tiles still see them).
+layout(std430, set = 0, binding = 7) readonly buffer PlanCards { uint w[]; } planCards;
 
 layout(local_size_x = FP_GROUP_SIZE) in;
 
@@ -107,8 +111,10 @@ void classify(uint lid) {
 
 // The tree at place `p` of those measured: the cells' (the cell in view
 // whose items hold it, the last starting at or before it) or the node's.
-uint treeAt(uint p, bool cells) {
+// `carded`: a far card stands for its cell.
+uint treeAt(uint p, bool cells, out bool carded) {
     uint k = p;
+    carded = false;
     if (cells) {
         uint lo = 0u, hi = planCells.w[WC_O_CELLS] - 1u;
         while (lo < hi) {
@@ -117,6 +123,7 @@ uint treeAt(uint p, bool cells) {
         }
         uint v = WC_O_HEADER + lo * WC_V_WORDS;
         k = planCells.w[v + WC_V_FIRST] + (p - planCells.w[v + WC_V_PREFIX]);
+        if ((pu(FP_P_FLAGS) & FP_F_CARDS) != 0u) carded = planCards.w[planCells.w[v + WC_V_LEAF]] != 0u;
     }
     return su(su(FP_ST_ORDER) + k);
 }
@@ -151,7 +158,8 @@ void main() {
     uint i = 0u;
     if (place < measured) {
         uint key = FP_SORT_UNSEEN;
-        i = treeAt(place, cells);
+        bool carded;
+        i = treeAt(place, cells, carded);
         {
             Tree tr = planTree(i);
             Spec sp = planSpec(tr.specimen);
@@ -159,7 +167,7 @@ void main() {
             bool seen = false;
             float px = 0.0, barkPx = 0.0, dl = -1.0, far_ = -1.0;
             uint curveEnd = FP_ALL_SEGMENTS, fineEnd = FP_ALL_SEGMENTS, nearEnd = FP_ALL_SEGMENTS;
-            if (planIntersects(FP_P_FRUSTUM, tr.bmin, tr.bmax)) {
+            if (!carded && planIntersects(FP_P_FRUSTUM, tr.bmin, tr.bmax)) {
                 // planForest's camera loop.
                 float r = pf(FP_P_REACH);
                 precise vec3 lo = tr.bmin + vec3(r);

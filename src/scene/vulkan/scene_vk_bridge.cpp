@@ -8,6 +8,7 @@
 #include "scene/vulkan/pass_dof.h"
 #include "scene/vulkan/pass_ground_layers.h"
 #include "scene/vulkan/pass_environment.h"
+#include "scene/vulkan/pass_far_cards.h"
 #include "scene/vulkan/pass_gaussian_splat.h"
 #include "scene/vulkan/pass_hiz.h"
 #include "scene/vulkan/pass_mesh.h"
@@ -52,6 +53,7 @@ SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
         // The occlusion list's slots enabled for the batches' sprites (PassHiZ).
         graph_.add(std::make_unique<PassOcclusionBudget>(opaqueBatches_));
         graph_.add(std::make_unique<PassReflectionProbe>());
+        graph_.add(std::make_unique<PassFarCardCapture>(farCards_));
     } else {
         // (The batches first: the occlusion budget reads the plans' commands
         // as the casters do, so its barriers are theirs.)
@@ -61,6 +63,7 @@ SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
         graph_.add(std::make_unique<PassFrameUniforms>());
         graph_.add(std::make_unique<PassGroundLayers>());
         graph_.add(std::make_unique<PassReflectionProbe>());
+        graph_.add(std::make_unique<PassFarCardCapture>(farCards_));
         graph_.add(std::make_unique<PassEnvironment>());
     }
     graph_.add(std::make_unique<PassOpaque>(opaqueBatches_, 0));
@@ -68,6 +71,9 @@ SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
         graph_.add(std::make_unique<PassFarDepth>(opaqueBatches_, k));
         graph_.add(std::make_unique<PassOpaque>(opaqueBatches_, k));
     }
+    // The far cards, in their cells' crowns' place (before the far depth, so
+    // the pyramid has them).
+    graph_.add(std::make_unique<PassFarCardDraw>(farCards_));
     // The opaque depth's pyramid (this frame's retest, the next frame's
     // first phase), and the cards the batches held back that it does not hide.
     graph_.add(std::make_unique<PassFarDepth>(opaqueBatches_, -1));
@@ -96,6 +102,7 @@ SceneVkBridge::~SceneVkBridge() {
     device_.waitIdle();
     allocator_.destroyBuffer(readbackBuffer_);
     graph_.cleanup(gpu_);
+    farCards_.cleanup(gpu_);
     meshes_.cleanup(gpu_);
     environment_.cleanup(device_, allocator_);
     resources_.cleanup();
@@ -113,6 +120,12 @@ bool SceneVkBridge::init() {
         !environment_.setup(device_, allocator_, defaults_) || !graph_.setup(gpu_)) {
         LOG_ERROR("SceneVkBridge: Failed setting up the scene renderer");
         return false;
+    }
+    // (The far cards are an optimisation: a renderer without them draws
+    // every crown.)
+    if (!farCards_.setup(gpu_)) {
+        LOG_ERROR("SceneVkBridge: Failed setting up the far cards; drawing without them");
+        farCards_.cleanup(gpu_);
     }
     timer_.init();   // a queue without timestamps leaves gpuMs() at -1
     ready_ = true;
@@ -156,6 +169,7 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
     frame.dof = renderer.depthOfFieldEnabled();
     frame.tilt = renderer.tiltShiftEnabled();
     frame.fxaa = renderer.fxaaEnabled();
+    frame.farCards = &farCards_;
     buildDrawLists(frame);
     timer_.mark(cmd, "setup");
     meshes_.recordForestPoses(frame);
@@ -230,6 +244,7 @@ void SceneVkBridge::releaseNodes(std::span<const uint32_t> ids) {
     if (!ready_ || ids.empty()) return;
     resources_.releaseNodes(ids);
     graph_.releaseNodes(gpu_, ids);
+    farCards_.releaseNodes(ids);
 }
 
 bool SceneVkBridge::ensureReadbackBuffer() {
