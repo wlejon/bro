@@ -15,22 +15,21 @@ void main() {
     int c = gl_VertexIndex % perElement;
     vec3 pos;
     bool ok;
+    vec4 chunk = plantChunks.chunks[gl_InstanceIndex];
     if (wood) {
-        vec4 chunk = plants.records[int(plants.header[1].y) + gl_InstanceIndex];
         int k = int(chunk.y) + gl_VertexIndex / perElement;
         PlantVertex o;
         ok = float(k) < chunk.z && plantWood(int(chunk.x), k, c, o);
         pos = o.pos;
     } else {
-        vec4 chunk = plants.records[int(plants.header[1].y) + gl_InstanceIndex];
         int e = gl_VertexIndex / perElement;
         if (chunk.w > 1.5) {
-            // A chunk of crown discs (chunk.x the first of its plants in the
-            // disc list, chunk.y how many): a far tree's shadow is its crown's
-            // outline, a hexagon square to the light about its centre.
+            // A chunk of crown discs (chunk.x its first disc record, chunk.y
+            // how many): a far tree's shadow is its crown's outline, a
+            // hexagon square to the light about its centre.
             ok = float(e) < chunk.y;
             if (ok) {
-                int pi = int(plants.records[int(plants.header[1].z) + int(chunk.x) + e].x);
+                int pi = int(plantChunks.chunks[int(chunk.x) + e].x);
                 Plant p = plantAt(pi);
                 PlantSpecies s = plantSpecies(p.species);
                 PlantCrown cr = plantCrown(s, p.scale);
@@ -49,7 +48,7 @@ void main() {
             }
         } else {
             vec2 q;
-            ok = plantPosedCorner(gl_InstanceIndex * int(plants.header[0].z) + e, c, pos, q);
+            ok = plantPosedCorner(gl_InstanceIndex * PLANT_LEAVES_PER_CHUNK + e, c, pos, q);
         }
     }
     if (!ok) {

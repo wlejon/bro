@@ -1,5 +1,7 @@
 // scene.createPlants: plants built on the GPU from a species table and their
-// records (scene/plants_node.h, vulkan/shaders/scene_plants.glsl). Verifies:
+// records (scene/plants_node.h, vulkan/shaders/scene_plants.glsl), planned on
+// the GPU over the world cells in view (vulkan/scene_plants_gpu_plan.cpp).
+// Verifies:
 //   - the node draws: a tree in view turns its patch of the frame green, its
 //     elements and limbs counted in plantStats
 //   - the detail falls with distance (fewer elements far off), never under
@@ -8,6 +10,11 @@
 //     the count
 //   - casting: the shadow tiles' casters are counted, and the ground under a
 //     tree is darker than beside it
+//   - many plants: 200k over 4 km, the camera's count between the plants
+//     surely in its horizontal field and those that may be
+//
+// The stats are the plan's, read back from the GPU a frame or two late:
+// drawn() draws a few frames before it reads them.
 
 function patchAvg(img, x0, y0, x1, y1, ch) {
     let sum = 0, n = 0;
@@ -38,9 +45,14 @@ if (!scn) {
                        light: '#5a8a2a', dark: '#18300c' }];
     const plants = scn.createPlants({ species, plants: [{ x: 0, y: 0, z: 0, seed: 7 }] });
     assert(plants && typeof plants.plantStats === 'function', 'createPlants returns a plants node');
+    // A few frames drawn, then the stats of the newest the GPU finished.
+    const drawn = () => {
+        flush();
+        for (let i = 0; i < 3; i++) advanceTime(16);
+        return plants.plantStats();
+    };
 
-    flush();
-    let st = plants.plantStats();
+    let st = drawn();
     assert(st.plants === 1 && st.visible === 1, `one plant, in view (${JSON.stringify(st)})`);
     assert(st.elements > 100 && st.elements <= 2000, `near, it draws many elements (${st.elements})`);
     assert(st.limbs > 1, `near, its limbs are drawn as well as its trunk (${st.limbs})`);
@@ -56,8 +68,7 @@ if (!scn) {
     // its other side.
     plants.castsShadow = true;
     scn.setCamera({ fov: 50, near: 0.1, far: 500, position: [0, 40, 0], target: [0, 0, 0], up: [0, 0, -1] });
-    flush();
-    st = plants.plantStats();
+    st = drawn();
     assert(st.shadowElements > 0, `the shadow tiles' casters are counted (${st.shadowElements})`);
     const above = scn.captureFrame();
 
@@ -65,37 +76,31 @@ if (!scn) {
     // elements across on screen may go under minElements, never to none.
     const near = st.elements;
     scn.setCamera({ fov: 50, near: 0.1, far: 2000, position: [0, 4, 40], target: [0, 4, 0] });
-    flush();
-    const mid = plants.plantStats().elements;
+    const mid = drawn().elements;
     scn.setCamera({ fov: 50, near: 0.1, far: 2000, position: [0, 4, 400], target: [0, 4, 0] });
-    flush();
-    st = plants.plantStats();
+    st = drawn();
     assert(near > mid && mid > st.elements && st.elements >= 1,
            `elements fall with distance, never to none (${near}, ${mid}, ${st.elements})`);
     assert(st.limbs <= 1, `far off, the trunk alone (${st.limbs})`);
 
     // Past `range`, or out of view: nothing.
     plants.setPlants({ range: 100 });
-    flush();
-    assert(plants.plantStats().visible === 0, 'past range, not drawn');
+    assert(drawn().visible === 0, 'past range, not drawn');
     plants.setPlants({ range: 6000 });
     scn.setCamera({ fov: 50, near: 0.1, far: 2000, position: [0, 4, 400], target: [0, 4, 800] });
-    flush();
-    assert(plants.plantStats().visible === 0, 'behind the eye, not drawn');
+    assert(drawn().visible === 0, 'behind the eye, not drawn');
 
     // Coarser elements, fewer of them.
     scn.setCamera({ fov: 50, near: 0.1, far: 500, position: [0, 4, 40], target: [0, 4, 0] });
-    flush();
-    const fine = plants.plantStats().elements;
+    const fine = drawn().elements;
     plants.setPlants({ pixels: 40 });
-    flush();
-    const coarse = plants.plantStats().elements;
+    const coarse = drawn().elements;
     assert(coarse < fine, `a larger pixels draws fewer elements (${fine} -> ${coarse})`);
+    plants.setPlants({ pixels: 14 });
 
     // New records replace the old.
     plants.setPlants([{ x: -4, z: 0, seed: 1 }, { x: 4, z: 0, seed: 2 }, { x: 0, z: -6, seed: 3 }]);
-    flush();
-    assert(plants.plantStats().plants === 3, 'setPlants replaces the plants');
+    assert(drawn().plants === 3, 'setPlants replaces the plants');
 
     // (About 5 px a metre on the ground from 40 m up: the shadow's middle
     // about 6 m +x of the trunk, the open ground as far -x.)
@@ -104,4 +109,31 @@ if (!scn) {
     const under = patchAvg(above, at(5.5), S / 2 - 4, at(7.5), S / 2 + 4, 1);
     const open = patchAvg(above, at(-7.5), S / 2 - 4, at(-5.5), S / 2 + 4, 1);
     assert(under < open * 0.85, `the crown's shadow darkens the ground (${under.toFixed(1)} vs ${open.toFixed(1)})`);
+
+    // Many plants: 200k over 4 km square, the eye at the middle at the
+    // crowns' height looking along -z (the side planes upright, 25 degrees
+    // either side). A plant whose centre is well inside that wedge is drawn;
+    // one further out than its sphere reaches is not.
+    let seed = 12345;
+    const rand = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296;
+    const many = [];
+    for (let i = 0; i < 200000; i++) many.push({ x: (rand() - 0.5) * 4000, z: (rand() - 0.5) * 4000, seed: i });
+    plants.setPlants(many);
+    scn.setCamera({ fov: 50, near: 0.1, far: 5000, position: [0, 4, 0], target: [0, 4, -100] });
+    const reach = Math.sqrt(16 + 9) + 0.45 + 0.3;   // the sphere's radius (PlantsNode)
+    const half = 25 * Math.PI / 180;
+    let surely = 0, maybe = 0;
+    for (const p of many) {
+        const d = Math.hypot(p.x, p.z);
+        const off = Math.abs(Math.atan2(p.x, -p.z));
+        if (d > 12 && off < half - 0.01) surely++;
+        if (off < half + Math.asin(Math.min(1, (reach + 0.5) / Math.max(d, 1e-3))) + 0.01) maybe++;
+    }
+    st = drawn();
+    assert(st.plants === 200000, `200k plants (${st.plants})`);
+    assert(st.visible >= surely && st.visible <= maybe,
+           `the camera draws the plants in its field (${surely} <= ${st.visible} <= ${maybe})`);
+    assert(st.elements >= st.visible && st.elements < st.visible * 200,
+           `each drawn with at least one element, the far ones few (${st.elements} for ${st.visible})`);
+    assert(st.shadowElements > 0, `the many cast (${st.shadowElements})`);
 }

@@ -9,6 +9,7 @@
 #include "scene/vulkan/scene_forest_gpu_plan.h"
 #include "scene/vulkan/scene_frame.h"
 #include "scene/vulkan/scene_gpu_resources.h"
+#include "scene/vulkan/scene_plants_gpu_plan.h"
 #include "scene/vulkan/scene_vk_custom_shader.h"
 #include "scene/vulkan/scene_vk_device.h"
 #include "scene/vulkan/scene_vk_shader_compiler.h"
@@ -214,6 +215,13 @@ bool SceneMeshDrawer::setup(SceneGpu& gpu) {
         gpuPlanner_->cleanup(gpu);
         gpuPlanner_.reset();
     }
+    // The plants' GPU planner (without it, plants plan on the CPU).
+    plantPlanner_ = std::make_shared<plants::GpuPlanner>();
+    if (!plantPlanner_->setup(gpu)) {
+        LOG_WARN("SceneMeshDrawer: the plants GPU planner failed; plants plan on the CPU");
+        plantPlanner_->cleanup(gpu);
+        plantPlanner_.reset();
+    }
     return true;
 }
 
@@ -281,6 +289,8 @@ void SceneMeshDrawer::cleanup(SceneGpu& gpu) {
     poseUsed_ = 0;
     if (gpuPlanner_) gpuPlanner_->cleanup(gpu);
     gpuPlanner_.reset();
+    if (plantPlanner_) plantPlanner_->cleanup(gpu);
+    plantPlanner_.reset();
 }
 
 namespace raster {
@@ -901,10 +911,16 @@ void SceneMeshDrawer::bindGeometryAndDraw(VkCommandBuffer cmd, const MeshDraw& d
     }
     if (draw.kind == MeshKind::Plants) {
         // An instance a chunk of a plant's elements (scene_mesh_drawer_plants.cpp):
-        // the leaves indexed (each polygon point posed once), the wood not.
+        // the leaves indexed (each polygon point posed once), the wood not;
+        // planned on the GPU, the counts in the plan's commands.
         if (draw.indices != VK_NULL_HANDLE) {
             vkCmdBindIndexBuffer(cmd, draw.indices, 0, VK_INDEX_TYPE_UINT32);
-            vkCmdDrawIndexed(cmd, draw.indexCount, draw.instanceCount, 0, 0, draw.firstInstance);
+            if (draw.indirect != VK_NULL_HANDLE)
+                vkCmdDrawIndexedIndirect(cmd, draw.indirect, draw.indirectOffset, 1, 0);
+            else
+                vkCmdDrawIndexed(cmd, draw.indexCount, draw.instanceCount, 0, 0, draw.firstInstance);
+        } else if (draw.indirect != VK_NULL_HANDLE) {
+            vkCmdDrawIndirect(cmd, draw.indirect, draw.indirectOffset, 1, 0);
         } else {
             vkCmdDraw(cmd, draw.indexCount, draw.instanceCount, 0, draw.firstInstance);
         }

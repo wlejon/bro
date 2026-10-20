@@ -14,7 +14,7 @@
 // (CellGrid::topLevel) together, so content sorted into that order is a
 // contiguous run a leaf and a contiguous run a top.
 //
-// The provider contract. A content provider (the forest now; terrain,
+// The provider contract. A content provider (the forest and the plants now; terrain,
 // ground surface layers, grass and static meshes are meant to join)
 // registers, for each leaf it has content in:
 //   - the content's bounds, a box (its y range included), in the space the

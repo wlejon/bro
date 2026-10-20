@@ -10,8 +10,13 @@
 // is opaque leaf-shaped elements, as many as its size on screen asks for:
 // up close thousands of leaves, far off a few dozen broad daubs, every count
 // a prefix of one sequence that covers the whole crown, so the change with
-// distance is continuous (vulkan/scene_mesh_drawer_plants.cpp picks the
-// counts each frame).
+// distance is continuous (vulkan/scene_plants_gpu_plan.cpp picks the counts
+// each frame, on the GPU).
+//
+// The plants are a world-cell provider (world_cells.h): setPlants sorts
+// them into cell order once, and the records the GPU reads (gpuData) are in
+// that order, uploaded when they or the species change and never per frame.
+// A frame's work then follows the cells in view, not the plant count.
 //
 // A PlantsNode is a MeshNode so the material setters (receivesShadow,
 // castsShadow, visible) apply; it has no mesh, its transform is ignored
@@ -19,8 +24,10 @@
 // raycasts and bounds.
 
 #include "scene/mesh_node.h"
+#include "scene/world_cells.h"
 
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 namespace bro::scene {
@@ -41,17 +48,27 @@ public:
     static constexpr int kMaxSpecies = 64;
     /// A plant: x, y, z (its foot), yaw (radians); scale, species, seed, tint.
     static constexpr int kPlantFloats = 8;
+    /// gpuData's header, before the species: plants, species, 0, the first
+    /// species record (in vec4s, from the records' start); the first plant
+    /// record, 0, 0, 0; then 8 zeros (scene_plants.glsl's header[4]).
+    static constexpr int kHeaderFloats = 16;
 
     /// `count` species' records end to end (past kMaxSpecies dropped).
     void setSpecies(const float* data, int count);
-    const std::vector<float>& species() const { return species_; }
-    int speciesCount() const { return static_cast<int>(species_.size() / kSpeciesFloats); }
+    int speciesCount() const { return speciesCount_; }
+    /// Species `s`'s record.
+    const float* species(int s) const { return data_.data() + kHeaderFloats + static_cast<size_t>(s) * kSpeciesFloats; }
 
-    /// `count` plants' records end to end. A plant's species past the
-    /// table's is drawn as species 0.
+    /// `count` plants' records end to end, kept in cell order (not the
+    /// order given). A plant's species past the table's is drawn as species 0.
     void setPlants(const float* data, int count);
-    const std::vector<float>& plants() const { return plants_; }
-    int plantCount() const { return static_cast<int>(plants_.size() / kPlantFloats); }
+    int plantCount() const { return plantCount_; }
+    /// Plant `i`'s record, in cell order.
+    const float* plant(int i) const { return data_.data() + plantsAt_ + static_cast<size_t>(i) * kPlantFloats; }
+
+    /// The header, the species and the plants as the GPU reads them (set 3
+    /// binding 1 of the plants' draws, scene_plants.glsl).
+    const std::vector<float>& gpuData() const { return data_; }
 
     struct Params {
         float pixels = 14.0f;      // the size on screen (px) an element is kept to past full detail
@@ -65,32 +82,58 @@ public:
     void setParams(const Params& p) { params_ = p; }
     const Params& params() const { return params_; }
 
-    /// A plant's bounding sphere (absolute world: centre, radius), kept with
-    /// the records.
+    /// A plant's bounding sphere (absolute world: centre, radius), in cell
+    /// order, kept with the records (plantsSphere's in the plan's GLSL).
     const std::vector<float>& spheres() const { return spheres_; }
+
+    /// The plants' cells (world_cells.h): each leaf's run of the cell order,
+    /// bounded by its plants' spheres' boxes (a little wider: the GPU works
+    /// the spheres out again in its own arithmetic).
+    const CellGrid& cellGrid() const { return grid_; }
+    const std::vector<CellContent>& cells() const { return cells_; }
 
     /// Moves when species or plants change (the drawer's cached buffers).
     uint64_t generation() const { return generation_; }
 
-    // What the last frame drew (the drawer sets them).
+    // What a frame drew.
     struct Stats {
         uint32_t plants = 0;     // plants in view
         uint32_t elements = 0;   // leaf elements drawn
         uint32_t limbs = 0;      // trunks and limbs drawn
         uint32_t shadowElements = 0;   // leaf elements cast, every shadow tile's summed
     };
-    Stats& stats() { return stats_; }
-    const Stats& stats() const { return stats_; }
+    /// Where the stats come from while the drawer plans the node on the GPU
+    /// (scene_plants_gpu_plan.cpp): a frame's are read back once the GPU has
+    /// drawn it, a frame or two late, and stats() takes the newest finished.
+    class StatsSource {
+    public:
+        virtual ~StatsSource() = default;
+        /// The newest finished frame's stats into `out` (false: none newer).
+        virtual bool latest(Stats& out) = 0;
+    };
+    void setStatsSource(std::weak_ptr<StatsSource> source) { statsSource_ = std::move(source); }
+    void setStats(const Stats& s) {
+        stats_ = s;
+        statsSource_.reset();
+    }
+    const Stats& stats() const {
+        if (auto source = statsSource_.lock()) source->latest(stats_);
+        return stats_;
+    }
 
 private:
-    void updateSpheres();
+    void rebuild();
 
-    std::vector<float> species_;
-    std::vector<float> plants_;
+    CellGrid grid_;
+    std::vector<float> data_;       // header, species, plants (cell order)
+    size_t plantsAt_ = kHeaderFloats;   // the first plant's float in data_
+    int speciesCount_ = 0, plantCount_ = 0;
     std::vector<float> spheres_;
+    std::vector<CellContent> cells_;
     Params params_;
-    uint64_t generation_ = 1;
-    Stats stats_;
+    uint64_t generation_ = 0;
+    mutable Stats stats_;
+    std::weak_ptr<StatsSource> statsSource_;
 };
 
 }  // namespace bro::scene

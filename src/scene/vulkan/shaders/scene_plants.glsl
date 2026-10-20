@@ -12,24 +12,33 @@
 // close a tree is thousands of leaves, far off a few dozen broad daubs of
 // its colours. The last element grows in with N's fraction, so nothing pops.
 //
-// Set 3 binding 1 (the procedural slot), written each frame by the drawer:
-//   header[0]  plants, species, elements a chunk, the first species record
-//   header[1]  the first plant record, the first chunk record, the first
-//              disc record, 0
+// Set 3 binding 1 (the procedural slot): the node's records
+// (PlantsNode::gpuData), uploaded when they change, never per frame:
+//   header[0]  plants, species, 0, the first species record
+//   header[1]  the first plant record, 0, 0, 0
 //   header[2]  0, 0, 0, 0
 //   header[3]  0, 0, 0, 0
-//   records[]  species (PLANT_SPECIES_VEC4 each), plants (2 each: x, y, z,
-//              yaw; scale, species, seed (an integer under 2^24), tint),
-//              chunks (1 each: plant, first element, the plant's element
-//              count N (a wood chunk: its tubes), 1 for a shadow tile's
-//              caster else 0); a chunk of crown discs (shadow_plants.vert):
-//              its first disc record, how many, 0, 2
-//   discs      (1 each: plant, 0, 0, 0)
+//   records[]  species (PLANT_SPECIES_VEC4 each), plants in cell order (2
+//              each: x, y, z, yaw; scale, species, seed (an integer under
+//              2^24), tint)
+// Set 3 binding 2: this frame's chunks, written by the plan
+// (plants_plan.comp; scene_plants_gpu_plan.cpp), an instance of a draw
+// each: plant, first element, the plant's element count N (a wood chunk:
+// its tubes), 1 for a shadow tile's caster else 0; a chunk of crown discs
+// (shadow_plants.vert): its first disc record, how many, 0, 2. A disc
+// record (in the same buffer): plant, 0, 0, 0.
 
 layout(std430, set = 3, binding = 1) readonly buffer PlantRecords {
     vec4 header[4];
     vec4 records[];
 } plants;
+
+layout(std430, set = 3, binding = 2) readonly buffer PlantChunks {
+    vec4 chunks[];
+} plantChunks;
+
+// A leaf chunk's elements (the plan's PP_LEAVES_PER_CHUNK).
+#define PLANT_LEAVES_PER_CHUNK 32
 
 #define PLANT_SPECIES_VEC4 8
 // The leaf polygon: base, two pairs up its sides and the tip, as 4 triangles.
@@ -99,6 +108,8 @@ struct Plant {
 };
 
 Plant plantAt(int i) {
+    // (Never past the records: a chunk names a plant of this frame's plan.)
+    i = clamp(i, 0, max(int(plants.header[0].x) - 1, 0));
     int r = int(plants.header[1].x) + i * 2;
     vec4 a = plants.records[r], b = plants.records[r + 1];
     Plant p;

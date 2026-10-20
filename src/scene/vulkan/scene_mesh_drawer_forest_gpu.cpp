@@ -23,6 +23,7 @@
 #include "scene/vulkan/scene_forest_draw.h"
 #include "scene/vulkan/scene_forest_gpu_plan.h"
 #include "scene/vulkan/scene_frame.h"
+#include "scene/vulkan/scene_plants_gpu_plan.h"
 #include "scene/vulkan/scene_gpu_resources.h"
 #include "scene/vulkan/scene_targets.h"
 #include "scene/vulkan/scene_vk_descriptors.h"
@@ -366,8 +367,9 @@ bool SceneMeshDrawer::prepareForestsGpu(SceneFrame& frame, const std::vector<For
     return true;
 }
 
-void SceneMeshDrawer::forestSubmitted(uint64_t ticket, render::VulkanQueue& queue) {
+void SceneMeshDrawer::plansSubmitted(uint64_t ticket, render::VulkanQueue& queue) {
     if (gpuPlanner_) gpuPlanner_->submitted(ticket, queue);
+    if (plantPlanner_) plantPlanner_->submitted(ticket, queue);
 }
 
 }  // namespace bro::scene::vk

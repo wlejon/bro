@@ -88,6 +88,10 @@ and each view. Systems consume those lists instead of their whole content:
 - **Forest:** instances are sorted by leaf cell once, at setInstances, and
   each cell holds a contiguous range of them. The planner's Measure stage
   walks those cell ranges instead of all instances.
+- **Plants:** setPlants keeps the records themselves in leaf-cell order and
+  uploads them once. The plants plan (count, lay out, place) walks the
+  cells in view and writes the draws' chunks and indirect commands; nothing
+  on the CPU walks the plants.
 - **Terrain:** the clipmap already costs the same whatever the world's size,
   so it keeps its rings. It joins the cells as the source of their heights and
   as a provider for far-field captures.

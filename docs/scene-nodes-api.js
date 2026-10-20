@@ -564,9 +564,17 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  * a few of those across casts its outline, a disc square to the light. So
  * a far cascade's thousands of trees cost a disc each.
  *
- * Each leaf is built once a frame by a compute pass (plants_pose.comp) and
- * its corners read by the colour and shadow passes. The node is left out of
- * raycasts and bounds; its transform is ignored (plants stand in the world).
+ * What each view draws is planned on the GPU (scene_plants_gpu_plan.cpp):
+ * the plants are sorted into world cells once, at setPlants, and uploaded
+ * once (again only when they or the species change); each frame the cell
+ * pass culls the cells against the camera and every shadow tile, and the
+ * plan picks each plant of the cells in view, writing the draws' chunks and
+ * indirect commands. So a frame's CPU cost does not grow with the plants (a
+ * million cost what seventy thousand do), and the camera's plants go in
+ * distance bands, nearest first. Each leaf is built once a frame by a
+ * compute pass (plants_pose.comp) and its corners read by the colour and
+ * shadow passes. The node is left out of raycasts and bounds; its
+ * transform is ignored (plants stand in the world).
  *
  * @example
  *   const plants = scene.createPlants({
@@ -1701,9 +1709,11 @@ class SceneNode {
   setPlants(opts) {}
 
   /**
-   * Plants: what the last frame drew: `plants` (all of them), `visible`
+   * Plants: what a recent frame drew: `plants` (all of them), `visible`
    * (in the camera's view), `elements` and `limbs` (the camera's), and
-   * `shadowElements` (every shadow tile's casters summed, a disc one).
+   * `shadowElements` (every shadow tile's casters summed, a disc one). The
+   * plan's counts are read back from the GPU a frame or two late: after a
+   * change, draw a few frames (`advanceTime`) before reading them.
    * @returns {{plants: number, visible: number, elements: number, limbs: number, shadowElements: number}|undefined}
    */
   plantStats() {}

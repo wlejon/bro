@@ -3,7 +3,7 @@
 // (its leaves, or its trunk and limbs). A leaf's corners are read from its
 // pose (plants_pose.comp built it this frame); a tube's vertices are built
 // here from its plant and species. No vertex streams. push.extra.x: 0 the
-// leaves, 1 the wood; push.extra.y: elements a chunk.
+// leaves, 1 the wood.
 
 layout(location = 0) out vec3 outWorldPos;
 layout(location = 1) out vec3 outLeafNormal;
@@ -27,12 +27,12 @@ void main() {
     PlantVertex o;
     bool ok;
     if (wood) {
-        vec4 chunk = plants.records[int(plants.header[1].y) + gl_InstanceIndex];
+        vec4 chunk = plantChunks.chunks[gl_InstanceIndex];
         int k = int(chunk.y) + gl_VertexIndex / perElement;
         // (A wood chunk's z: the plant's tubes drawn, the trunk alone far off.)
         ok = float(k) < chunk.z && plantWood(int(chunk.x), k, c, o);
     } else {
-        ok = plantPosedLeaf(gl_InstanceIndex * int(plants.header[0].z) + gl_VertexIndex / perElement, c, o);
+        ok = plantPosedLeaf(gl_InstanceIndex * PLANT_LEAVES_PER_CHUNK + gl_VertexIndex / perElement, c, o);
     }
     if (!ok) {
         gl_Position = vec4(2.0, 2.0, 2.0, 1.0);

@@ -50,6 +50,9 @@ class SceneDefaults;
 namespace forest {
 class GpuPlanner;
 }
+namespace plants {
+class GpuPlanner;
+}
 
 /// Per-draw push constants of every mesh pipeline (and the terrain's) —
 /// shaders/scene_mesh_push.glsl. Exactly the 128 bytes every device offers.
@@ -230,7 +233,8 @@ public:
     /// A grass node's draws, one per ring with visible cells, nearest first
     /// (scene_mesh_drawer_grass.cpp). Also stamps its movers for the frame.
     void prepareGrass(SceneFrame& frame, GrassNode& node, std::vector<MeshDraw>& out);
-    /// A plants node's draws, its leaves and its wood (scene_mesh_drawer_plants.cpp).
+    /// A plants node's draws, its leaves and its wood for the camera and
+    /// each shadow tile, planned on the GPU (scene_mesh_drawer_plants.cpp).
     void preparePlants(SceneFrame& frame, PlantsNode& node, std::vector<MeshDraw>& out);
     /// A forest node's draws (scene_mesh_drawer_forest.cpp): a draw per tier
     /// and shape for the camera, and the shadow tiers per shadow tile
@@ -247,12 +251,14 @@ public:
     /// them. The GPU planner's plans and poses go into the frame's compute
     /// stream (SceneFrame::computeStream), the CPU's poses into frame.cmd.
     void recordForestPoses(SceneFrame& frame);
-    /// Build the leaves this frame's plants draws read (plants_pose.comp,
-    /// queued by preparePlants), before the passes that draw them.
+    /// The plants' plans and the leaves their draws read (plants_pose.comp,
+    /// queued by preparePlants), before the passes that draw them: the GPU
+    /// planner's into the frame's compute stream, the CPU's poses into
+    /// frame.cmd.
     void recordPlantPoses(SceneFrame& frame);
     /// The plans recorded since the last call went to the GPU as `ticket` on
-    /// `queue`: the GPU planner's read-backs of them are read once it completes.
-    void forestSubmitted(uint64_t ticket, render::VulkanQueue& queue);
+    /// `queue`: the GPU planners' read-backs of them are read once it completes.
+    void plansSubmitted(uint64_t ticket, render::VulkanQueue& queue);
     /// The turf's surface layers (docs/scene-world-architecture.md §5;
     /// scene_mesh_drawer_ground.cpp): for each grass node whose turf this
     /// frame draws, the tiles the camera needs, the fills due this frame
@@ -424,8 +430,11 @@ private:
     VkPipelineLayout poseLayout_ = VK_NULL_HANDLE;
     VkShaderModule poseCs_ = VK_NULL_HANDLE;
     VkPipeline posePipeline_ = VK_NULL_HANDLE;
-    // The plants' leaf poses (plants_pose.comp, on the forest poses'
-    // layout): this frame's jobs, a dispatch of a workgroup a leaf chunk,
+    // The plants' GPU planner (scene_plants_gpu_plan.h); without it, the
+    // CPU plans them (scene_mesh_drawer_plants.cpp).
+    std::shared_ptr<plants::GpuPlanner> plantPlanner_;
+    // The CPU-planned plants' leaf poses (plants_pose.comp, on the forest
+    // poses' layout): this frame's jobs, a dispatch of a workgroup a leaf chunk,
     // and each frame slot's buffer (kept, grown as needed; a node's set
     // names the buffer its job writes, so a node growing it leaves the
     // earlier nodes' poses where they were).

@@ -183,7 +183,7 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
         // The plans' read-backs count as done with the frame's graphics (which
         // waited for them), not as soon as the compute is: read a frame late
         // as on the graphics queue, not now and then the frame itself.
-        meshes_.forestSubmitted(device_.lastFrameTicket(), device_.context().queue());
+        meshes_.plansSubmitted(device_.lastFrameTicket(), device_.context().queue());
         if (readbackInline && readbackBuffer_.isValid()) {
             readbackRecordedSerial_ = renderSerial_;
             readbackTicket_ = device_.lastFrameTicket();

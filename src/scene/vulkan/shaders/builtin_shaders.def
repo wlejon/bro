@@ -128,6 +128,10 @@ BRO_SCENE_SHADER(PlantsFrag,                   "plants.frag",                   
 BRO_SCENE_SHADER(PlantsIndirectFrag,           "plants_indirect.frag",             "plants.frag", "frag", "SCENE_INDIRECT_OUTPUT")
 BRO_SCENE_SHADER(ShadowPlantsVert,             "shadow_plants.vert",               "shadow_plants.vert", "vert", "")
 BRO_SCENE_SHADER(PlantsPoseComp,               "plants_pose.comp",                 "plants_pose.comp", "comp", "")
+// The plants' GPU plan (scene_plants_gpu_plan.cpp): count, lay out, place.
+BRO_SCENE_SHADER(PlantsPlanCountComp,          "plants_plan_count.comp",           "plants_plan.comp", "comp", "PLANTS_COUNT")
+BRO_SCENE_SHADER(PlantsPlanLayoutComp,         "plants_plan_layout.comp",          "plants_plan.comp", "comp", "PLANTS_LAYOUT")
+BRO_SCENE_SHADER(PlantsPlanPlaceComp,          "plants_plan_place.comp",           "plants_plan.comp", "comp", "PLANTS_PLACE")
 // A forest's blooms (scene_forest_bloom.glsl): a card a bloom, its flower,
 // head or spike shaped and lit by mesh.frag's SCENE_FOREST_BLOOM build.
 BRO_SCENE_SHADER(MeshForestBloomVert,          "mesh_forest_bloom.vert",           "mesh_forest_bloom.vert", "vert", "")
