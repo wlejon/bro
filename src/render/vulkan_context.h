@@ -111,7 +111,7 @@ public:
     /// on queue()).
     VulkanQueue* uploadQueue() { return hasUploadQueue_ ? &uploadQueue_ : nullptr; }
     /// The queue owner of a compute family without graphics, when the device
-    /// has one (and BRO_ASYNC_COMPUTE is not 0), else null: then work meant
+    /// has one, else null: then work meant
     /// for it records into the graphics stream instead. Its tickets are its
     /// own timeline's; a frame orders against it by timeline waits at
     /// submission boundaries. Buffers both queues touch are created shared

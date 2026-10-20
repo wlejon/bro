@@ -15,25 +15,16 @@
 #include "util/log.h"
 
 #include <algorithm>
-#include <cstdlib>
 #include <vector>
 
 namespace bro::scene::vk {
-
-bool hiZEnabled() {
-    static const bool on = [] {
-        const char* env = std::getenv("BRO_SCENE_HIZ");
-        return !(env && *env == '0');
-    }();
-    return on;
-}
 
 static_assert(sizeof(OcclusionListPipeline::OlDraws) == 16 * OL_SLOTS);
 
 bool occlusionRetests(const SceneFrame& frame, const OpaqueBatches& batches) {
     // (As writeCameraSet's occlusion.z says the batches test the last
     // frame's pyramid; a pyramid is built when a slot draws.)
-    return hiZEnabled() && batches.slots > 0 && frame.gpu.targets.hiZPrevState.built;
+    return batches.slots > 0 && frame.gpu.targets.hiZPrevState.built;
 }
 
 bool OcclusionListPipeline::setup(SceneGpu& gpu) {
@@ -264,7 +255,7 @@ void PassHiZ::resize(SceneGpu& gpu, uint32_t, uint32_t) {
 }
 
 bool PassHiZ::active(const SceneFrame& frame) const {
-    return hiZEnabled() && pipeline_ && batches_.slots > 0 && frame.gpu.targets.hiZ.isValid() &&
+    return pipeline_ &&batches_.slots > 0 && frame.gpu.targets.hiZ.isValid() &&
            viewsOf(frame.gpu.targets.hiZ.image);
 }
 

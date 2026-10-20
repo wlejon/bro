@@ -16,8 +16,7 @@
 // the retest runs only the cards it draws.
 //
 // The frame's own camera says it may cull (SceneCameraUniforms::occlusion),
-// a probe's face never. BRO_SCENE_HIZ=0 (read once) leaves it unbuilt and
-// the cards untested, for A/B.
+// a probe's face never.
 
 #include "scene/vulkan/scene_pass.h"
 
@@ -30,11 +29,8 @@ namespace bro::scene::vk {
 struct OpaqueBatches;
 struct SceneVkImage;
 
-/// Whether the frame builds and tests against the HiZ (BRO_SCENE_HIZ).
-bool hiZEnabled();
-
 /// Whether this frame's batches hold cards back and the retest draws them:
-/// the HiZ is on, the last frame's pyramid was built, and a sprite draws.
+/// the last frame's pyramid was built and a sprite draws.
 bool occlusionRetests(const SceneFrame& frame, const OpaqueBatches& batches);
 
 /// occlusion_list.comp's pipeline: binding 0 a pyramid (sampled), binding 1

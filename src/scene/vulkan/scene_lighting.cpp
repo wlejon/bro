@@ -10,7 +10,6 @@
 #include "scene/vulkan/scene_defaults.h"
 #include "scene/vulkan/scene_environment.h"
 #include "scene/vulkan/scene_frame.h"
-#include "scene/vulkan/pass_hiz.h"
 #include "scene/vulkan/scene_gpu_resources.h"
 #include "scene/vulkan/scene_targets.h"
 #include "scene/vulkan/scene_vk_device.h"
@@ -132,7 +131,7 @@ void writeCameraSet(SceneFrame& frame) {
     // retest draws each sprite draw's from its own first instance.)
     const VkPhysicalDeviceFeatures& features = frame.gpu.device.context().features();
     const bool retest = features.vertexPipelineStoresAndAtomics && features.drawIndirectFirstInstance;
-    cam.occlusion[0] = hiZEnabled() && retest && t.hiZ.isValid() ? 1.0f : 0.0f;
+    cam.occlusion[0] = retest && t.hiZ.isValid() ? 1.0f : 0.0f;
     cam.occlusion[2] = t.hiZPrevState.built ? 1.0f : 0.0f;
     if (t.hiZPrevState.built) {
         // Its clip space from this frame's camera-relative positions: the

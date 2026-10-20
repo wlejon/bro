@@ -226,7 +226,7 @@ void PassFarDepth::cleanup(SceneGpu& gpu) {
 
 bool PassFarDepth::active(const SceneFrame&) const {
     // (After the last batch: the opaque depth the pyramid is built from.)
-    if (batch_ < 0) return hiZEnabled() && batches_.slots > 0;
+    if (batch_ < 0) return batches_.slots > 0;
     return !batches_.draws[batch_].empty();
 }
 

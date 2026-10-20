@@ -149,13 +149,8 @@ bool VulkanContext::init(platform::Window* presentTarget) {
     }
 
     // A compute family apart from graphics: work submitted there runs beside
-    // the frame's graphics (async compute). BRO_ASYNC_COMPUTE=0 leaves it
-    // unused, for an A/B of the same work on the graphics queue.
-    static const bool asyncAllowed = [] {
-        const char* env = std::getenv("BRO_ASYNC_COMPUTE");
-        return !(env && std::strcmp(env, "0") == 0);
-    }();
-    if (asyncAllowed && queueIndices_.computeFamily != queueIndices_.graphicsFamily &&
+    // the frame's graphics (async compute).
+    if (queueIndices_.computeFamily != queueIndices_.graphicsFamily &&
         computeQueue_ != VK_NULL_HANDLE) {
         if (asyncCompute_.init(device_, computeQueue_, VK_NULL_HANDLE,
                                static_cast<uint32_t>(queueIndices_.computeFamily))) {
