@@ -7,7 +7,8 @@
 // drew. Static, instanced (batched too), skinned and branch-tube casters
 // (scatter leaves only when they carry vegetation records), with the colour
 // pass's wind sway, vegetation sway and custom vertex chunks so the
-// silhouette matches what is drawn.
+// silhouette matches what is drawn. A textured static or instanced mesh
+// with an alpha cutoff casts its cut (its base colour texture at set 2).
 // Casters are tested against each tile's light volume, never the camera's:
 // an off-screen caster still shadows what is on screen.
 //
@@ -53,8 +54,9 @@ private:
     static_assert(sizeof(Push) == 128);
 
     VkPipeline builtinPipeline(MeshKind kind, bool twoSided, bool leafInline);
-    VkPipeline customPipeline(const CustomShaderState& cs, MeshKind kind, bool twoSided);
-    VkPipeline buildPipeline(VkShaderModule vs, MeshKind kind, bool custom, bool twoSided);
+    VkPipeline cutoutPipeline(MeshKind kind, bool twoSided);
+    VkPipeline customPipeline(const CustomShaderState& cs, MeshKind kind, bool twoSided, bool cutout);
+    VkPipeline buildPipeline(VkShaderModule vs, MeshKind kind, bool custom, bool twoSided, bool cutout);
     void drawCaster(SceneFrame& frame, const bromath::Mat4& lightViewProj, const MeshDraw& draw,
                     const bromath::Frustum* tileFrustum);
 
@@ -69,6 +71,11 @@ private:
     // each vertex posing its leaf: shadow_forest_leaf.vert's inline build.
     VkShaderModule vsLeafInline_ = VK_NULL_HANDLE;
     VkPipeline leafInline_[2] = {};                // [two-sided]
+    // Cutout casters (a textured static or instanced mesh with an alpha
+    // cutoff): their base colour's alpha cut, scene_shadow_cutout.glsl.
+    VkShaderModule vsCutout_[2] = {};              // [instanced]
+    VkShaderModule fsCutout_ = VK_NULL_HANDLE;
+    VkPipeline cutout_[2][2] = {};                 // [instanced][two-sided]
     // Custom-vertex casters by (chunk key, kind, sidedness); VK_NULL_HANDLE
     // remembers a failed compile, so it is reported once and the caster
     // falls back to its undisplaced silhouette.

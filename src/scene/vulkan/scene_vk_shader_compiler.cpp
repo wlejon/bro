@@ -8,6 +8,7 @@
 #include "scene_atmosphere.glsl.src.h"
 #include "scene_mesh_push.glsl.src.h"
 #include "scene_shadow_push.glsl.src.h"
+#include "scene_shadow_cutout.glsl.src.h"
 #include "scene_vegetation.glsl.src.h"
 #include "scene_forest_sprite.glsl.src.h"
 #include "scene_forest_mass.glsl.src.h"
@@ -100,6 +101,7 @@ const char* embeddedInclude(const std::string& name) {
         {"scene_atmosphere.glsl", kVkSceneAtmosphereSrc},
         {"scene_mesh_push.glsl", kVkSceneMeshPushSrc},
         {"scene_shadow_push.glsl", kVkSceneShadowPushSrc},
+        {"scene_shadow_cutout.glsl", kVkSceneShadowCutoutSrc},
         {"scene_vegetation.glsl", kVkSceneVegetationSrc},
         {"scene_forest_sprite.glsl", kVkSceneForestSpriteSrc},
         {"scene_forest_mass.glsl", kVkSceneForestMassSrc},

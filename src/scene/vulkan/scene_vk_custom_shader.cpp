@@ -13,6 +13,7 @@
 #include "mesh_skinned.vert.src.h"
 #include "shadow.vert.src.h"
 #include "shadow_skinned.vert.src.h"
+#include "shadow_instanced.vert.src.h"
 
 namespace bro::scene::vk {
 
@@ -292,15 +293,22 @@ bool SceneVkCustomShader::compileCustomShaderModules(VkDevice device,
 }
 
 bool SceneVkCustomShader::compileCustomShadowShaderModule(VkDevice device,
-                                                          bool isSkinned,
+                                                          ShadowCaster caster,
+                                                          bool cutout,
                                                           const CustomShaderInterface& iface,
                                                           VkShaderModule& outVs,
                                                           std::string& errOut) {
     const std::string chunk = iface.vertexSource();
     if (chunk.empty()) return false;
+    std::string src;
+    switch (caster) {
+    case ShadowCaster::Skinned: src = base("shadow_skinned.vert", kVkShadowSkinnedVertSrc); break;
+    case ShadowCaster::Instanced: src = base("shadow_instanced.vert", kVkShadowInstancedVertSrc); break;
+    default: src = base("shadow.vert", kVkShadowVertSrc); break;
+    }
     // CUSTOM_CASTER declares the inputs only a custom caster's pipeline feeds.
-    const std::string vsSrc = defineAfterVersion(
-        splice(isSkinned ? base("shadow_skinned.vert", kVkShadowSkinnedVertSrc) : base("shadow.vert", kVkShadowVertSrc), chunk, "CUSTOM_VERTEX"), "CUSTOM_CASTER");
+    std::string vsSrc = defineAfterVersion(splice(src, chunk, "CUSTOM_VERTEX"), "CUSTOM_CASTER");
+    if (cutout) vsSrc = defineAfterVersion(std::move(vsSrc), "SHADOW_CUTOUT");
     const auto spirv = SceneVkShaderCompiler::compileGlsl(vsSrc, VK_SHADER_STAGE_VERTEX_BIT, &errOut);
     if (spirv.empty()) return false;
     outVs = SceneVkShaderModule::create(device, spirv);

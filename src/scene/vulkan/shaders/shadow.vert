@@ -2,7 +2,9 @@
 // Depth-only shadow casters into one atlas tile, with the same wind sway and
 // custom vertex hook as mesh.vert so the silhouette matches the colour pass.
 // shadow_skinned.vert deforms with the bone palette first. Built again with
-// SCENE_VEGETATION for meshes carrying vegetation records (mesh.vert's).
+// SCENE_VEGETATION for meshes carrying vegetation records (mesh.vert's), and
+// with SHADOW_CUTOUT for a textured mesh with an alpha cutoff
+// (scene_shadow_cutout.glsl).
 
 layout(location = 0) in vec3 inPos;
 layout(location = 1) in vec3 inNormal;
@@ -24,6 +26,10 @@ layout(location = 15) in vec4 inVeg3;
 #ifdef SCENE_VEGETATION
 #include "scene_vegetation.glsl"
 #endif
+#ifdef SHADOW_CUTOUT
+#define SHADOW_CUTOUT_VERTEX 1
+#include "scene_shadow_cutout.glsl"
+#endif
 
 //__USER_CHUNK__
 
@@ -44,4 +50,7 @@ void main() {
     vegetationSway(model, inVeg0, inVeg1, inVeg2, inVeg3, normalize(mat3(model) * normal), worldPos.xyz, rot);
 #endif
     gl_Position = push.lightViewProj * worldPos;
+#ifdef SHADOW_CUTOUT
+    shadowCutoutOut(uv, inColor.a, 1.0);
+#endif
 }

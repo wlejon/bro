@@ -104,9 +104,14 @@ public:
                                            bool indirectOutput,
                                            std::string& errOut);
 
-    /// Compile the shadow vertex stage with the spliced user vertex chunk.
+    /// The shadow vertex stage a chunk is spliced into: shadow.vert,
+    /// shadow_skinned.vert or shadow_instanced.vert.
+    enum class ShadowCaster { Static, Skinned, Instanced };
+    /// Compile the shadow vertex stage with the spliced user vertex chunk
+    /// (`cutout`: its SHADOW_CUTOUT build, scene_shadow_cutout.glsl).
     static bool compileCustomShadowShaderModule(VkDevice device,
-                                                bool isSkinned,
+                                                ShadowCaster caster,
+                                                bool cutout,
                                                 const CustomShaderInterface& iface,
                                                 VkShaderModule& outVs,
                                                 std::string& errOut);

@@ -234,8 +234,15 @@ bool InstancedMeshNode::hasVegetation() const {
     return vegetation_.size() == instanceCount_ * 16;
 }
 
-void InstancedMeshNode::setBaseColorTexture(int w, int h, const uint8_t* rgba) { baseColorTex_.set(w, h, rgba); }
-void InstancedMeshNode::clearBaseColorTexture() { baseColorTex_.clear(); }
+// A cutout caster casts the texture's alpha, so either re-renders its shadow tiles.
+void InstancedMeshNode::setBaseColorTexture(int w, int h, const uint8_t* rgba) {
+    baseColorTex_.set(w, h, rgba);
+    if (alphaCutoff_ > 0.0f) bumpChangeGeneration();
+}
+void InstancedMeshNode::clearBaseColorTexture() {
+    baseColorTex_.clear();
+    if (alphaCutoff_ > 0.0f) bumpChangeGeneration();
+}
 void InstancedMeshNode::setNormalTexture(int w, int h, const uint8_t* rgba) { normalTex_.set(w, h, rgba); }
 void InstancedMeshNode::clearNormalTexture() { normalTex_.clear(); }
 void InstancedMeshNode::setMetallicRoughnessTexture(int w, int h, const uint8_t* rgba) { mrTex_.set(w, h, rgba); }

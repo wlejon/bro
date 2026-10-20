@@ -659,7 +659,7 @@ void SceneRenderer::planShadowTiles() {
     // signature is the ordered (node id, change generation) list of
     // overlapping casters with per-list separators; conservative-correct:
     // any membership or generation difference re-renders, and tiles touched
-    // by skinned, custom-vertex or wind-swayed casters (pose, displacement
+    // by skinned, custom-vertex (instanced too) or wind-swayed casters (pose, displacement
     // and sway change with no generation signal) are permanently dynamic.
     // Directional cascades fold camera motion into lightVP (the fit follows
     // the camera), so they only cache while the camera is still; spot/point
@@ -696,6 +696,9 @@ void SceneRenderer::planShadowTiles() {
                     }
                 } else {
                     if (swaying && casters[i]->hasVegetation()) dynamic = true;
+                    // A vertex chunk displaces with no generation signal (time, wind).
+                    const CustomShaderState* cs = casters[i]->customShader();
+                    if (cs && !cs->vertexChunk.empty()) dynamic = true;
                 }
             }
         };

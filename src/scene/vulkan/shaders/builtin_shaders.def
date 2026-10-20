@@ -20,6 +20,10 @@ BRO_SCENE_SHADER(ShadowVert,               "shadow.vert",                 "shado
 BRO_SCENE_SHADER(ShadowInstancedVert,      "shadow_instanced.vert",       "shadow_instanced.vert",       "vert", "")
 BRO_SCENE_SHADER(ShadowSkinnedVert,        "shadow_skinned.vert",         "shadow_skinned.vert",         "vert", "")
 BRO_SCENE_SHADER(ShadowFrag,               "shadow.frag",                 "shadow.frag",                 "frag", "")
+// Cutout casters (scene_shadow_cutout.glsl): a textured mesh with an alpha cutoff.
+BRO_SCENE_SHADER(ShadowCutoutVert,         "shadow_cutout.vert",          "shadow.vert",                 "vert", "SHADOW_CUTOUT")
+BRO_SCENE_SHADER(ShadowInstancedCutoutVert, "shadow_instanced_cutout.vert", "shadow_instanced.vert",    "vert", "SHADOW_CUTOUT")
+BRO_SCENE_SHADER(ShadowCutoutFrag,         "shadow_cutout.frag",          "shadow_cutout.frag",          "frag", "")
 BRO_SCENE_SHADER(PostFxVert,               "postfx.vert",                 "postfx.vert",                 "vert", "")
 BRO_SCENE_SHADER(TonemapFrag,              "tonemap.frag",                "tonemap.frag",                "frag", "")
 BRO_SCENE_SHADER(FxaaFrag,                 "fxaa.frag",                   "fxaa.frag",                   "frag", "")

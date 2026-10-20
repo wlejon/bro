@@ -90,6 +90,7 @@ public:
     // --- Material (mirrors MeshNode) ---
 
     void setColor(float r, float g, float b, float a = 1.0f) {
+        if (a != color_[3] && alphaCutoff_ > 0.0f) bumpChangeGeneration();   // a cutout caster's cut
         color_[0] = r; color_[1] = g; color_[2] = b; color_[3] = a;
         emissiveColor_[0] = r; emissiveColor_[1] = g; emissiveColor_[2] = b;
     }
@@ -134,8 +135,12 @@ public:
 
     /// Alpha-test cutoff. > 0 enables `discard` for fragments whose final
     /// alpha is below the threshold (used for leaf cards and similar
-    /// cutout textures). 0 disables the test.
-    void  setAlphaCutoff(float c) { alphaCutoff_ = c; }
+    /// cutout textures). 0 disables the test. A textured caster casts its
+    /// cut, so a change re-renders its shadow tiles.
+    void  setAlphaCutoff(float c) {
+        if (c != alphaCutoff_) bumpChangeGeneration();
+        alphaCutoff_ = c;
+    }
     float alphaCutoff() const { return alphaCutoff_; }
 
     /// Disable back-face culling for this node. Required for double-sided
@@ -308,6 +313,7 @@ public:
         atlasCols_ = cols < 1 ? 1 : cols;
         atlasRows_ = rows < 1 ? 1 : rows;
         batchDirty_ = true;   // the batch bakes the atlas cell into its UVs
+        if (alphaCutoff_ > 0.0f) bumpChangeGeneration();   // and a cutout caster casts the cell's alpha
     }
     int atlasCols() const { return atlasCols_; }
     int atlasRows() const { return atlasRows_; }
@@ -316,8 +322,8 @@ public:
     // Same surface as MeshNode (see custom_shader.h). The renderer compiles
     // the INSTANCED program variant — the vertex hook runs in mesh-local
     // space, before the per-instance transform, so a displacement applies
-    // identically to every instance in its own frame. The depth-only shadow
-    // pass keeps the undisplaced silhouette for instanced meshes.
+    // identically to every instance in its own frame. The shadow pass runs
+    // the same hook before the instance rows, so the shadow moves with it.
 
     void setCustomShader(std::string vertexChunk, std::string fragmentChunk) {
         customShader_ = CustomShaderState::make(std::move(vertexChunk),

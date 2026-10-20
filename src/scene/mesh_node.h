@@ -139,6 +139,7 @@ public:
     // --- Material ---
 
     void setColor(float r, float g, float b, float a = 1.0f) {
+        if (a != color_[3] && alphaCutoff_ > 0.0f) bumpChangeGeneration();   // a cutout caster's cut
         color_[0] = r; color_[1] = g; color_[2] = b; color_[3] = a;
         emissiveColor_[0] = r; emissiveColor_[1] = g; emissiveColor_[2] = b;
     }
@@ -305,7 +306,11 @@ public:
     /// Alpha cutoff threshold. 0 (default) disables. When >0, fragments with
     /// baseAlpha (texture.a * uColor.a, or vColor.a) below this threshold
     /// are discarded — for cut-out leaves/petals using straight-alpha textures.
-    void setAlphaCutoff(float c) { alphaCutoff_ = c; }
+    /// A textured caster casts its cut, so a change re-renders its shadow tiles.
+    void setAlphaCutoff(float c) {
+        if (c != alphaCutoff_) bumpChangeGeneration();
+        alphaCutoff_ = c;
+    }
     float alphaCutoff() const { return alphaCutoff_; }
 
     /// Wind sway opt-in [0,1]. The mesh VS multiplies the per-vertex bend

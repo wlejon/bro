@@ -128,10 +128,12 @@ const bromesh::MeshBVH& MeshNode::bvh() const {
 void MeshNode::setBaseColorTexture(int width, int height, const uint8_t* rgba) {
     externalSceneProvider_ = nullptr;  // owned bytes win; drop the live link
     baseColorTex_.set(width, height, rgba);
+    if (alphaCutoff_ > 0.0f) bumpChangeGeneration();  // a cutout caster casts the texture's alpha
 }
 void MeshNode::clearBaseColorTexture() {
     externalSceneProvider_ = nullptr;
     baseColorTex_.clear();
+    if (alphaCutoff_ > 0.0f) bumpChangeGeneration();
 }
 
 void MeshNode::setNormalTexture(int width, int height, const uint8_t* rgba) {
