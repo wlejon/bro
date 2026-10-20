@@ -361,6 +361,11 @@ void FarCards::select(SceneFrame& frame, const std::vector<ForestNode*>& forests
         }
 
         const bromath::Vec3 eye = view.eye;
+        // A cell the opaque depth hid a few frames ago neither stands in nor
+        // is captured: it draws its crowns, which the sprites' own two-phase
+        // occlusion culls exactly, so the snapshot's age shows nothing.
+        const OcclusionSnapshot& occlusion =
+            frame.gpu.targets.occlusionReadback.snapshot(frame.gpu.device.frames().frameSerial());
         // A cell with no card is weighed for one a frame in four (the
         // rectangle on screen is most of the cost, and a cell waiting draws
         // its crowns); a card standing in is checked every frame.
@@ -369,7 +374,7 @@ void FarCards::select(SceneFrame& frame, const std::vector<ForestNode*>& forests
             const bool carded = nc.carded[c] != 0;
             if (!carded && (c & 3) != phase) continue;
             const bromath::AABB3& b = nc.bounds[c];
-            if (!bromath::fintersects(view.frustum, b)) continue;
+            if (!bromath::fintersects(view.frustum, b) || occlusion.occluded(b)) continue;
             const float dx = std::max(std::max(b.min.x - eye.x, eye.x - b.max.x), 0.0f);
             const float dy = std::max(std::max(b.min.y - eye.y, eye.y - b.max.y), 0.0f);
             const float dz = std::max(std::max(b.min.z - eye.z, eye.z - b.max.z), 0.0f);
