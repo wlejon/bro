@@ -36,11 +36,6 @@ struct ShadowTilePlan {
     float zNear = 0.0f, zFar = 1.0f;
     bool ortho = true;
     bool render = false;         // re-render this frame (not cached)
-    /// The nearest camera distance whose shading reads this tile: a sun's
-    /// cascade from where the cascade before hands over to it
-    /// (scene_lighting.glsl's SHADOW_CASCADE_BLEND), 0 for its first and for
-    /// any other light's tile.
-    float receiversFrom = 0.0f;
     const LightNode* light = nullptr;
     /// A sun's last cascade (of three or more), drawn every other frame
     /// (SceneRenderer::planShadowTiles): its light direction, the light-space

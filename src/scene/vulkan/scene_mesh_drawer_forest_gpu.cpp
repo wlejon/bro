@@ -317,7 +317,6 @@ bool SceneMeshDrawer::prepareForestsGpu(SceneFrame& frame, const std::vector<For
             p[at + FP_TILE_TEXEL_CONST] = bitsOf(tile.texelConst);
             p[at + FP_TILE_TEXEL_PER_METRE] = bitsOf(tile.texelPerMetre);
             p[at + FP_TILE_ORTHO] = tile.ortho ? 1u : 0u;
-            p[at + FP_TILE_RECEIVERS] = bitsOf(tile.receiversFrom);
         }
     }
 

@@ -154,7 +154,6 @@
 #define FP_TILE_TEXEL_CONST     24
 #define FP_TILE_TEXEL_PER_METRE 25
 #define FP_TILE_ORTHO           26    // uint
-#define FP_TILE_RECEIVERS       27    // the nearest camera distance whose shading reads the tile (ShadowTilePlan::receiversFrom)
 
 // The work runs (FP_P_WORK + these: each one's first word in WORK).
 #define FP_W_CAMERA             0     // FP_CAM_WORDS a tree: the camera's measure of it
