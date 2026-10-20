@@ -5,10 +5,10 @@
 #include <bromesh/mesh_data.h>
 #include <bromesh/manipulation/normals.h>
 #include <bromesh/api.h>
-#include "scene/particles3d_node.h"
-#include "scene/particle_node.h"
-#include "scene/decal_node.h"
-#include "scene/sprite_node.h"
+#include "scene/nodes/particles3d_node.h"
+#include "scene/nodes/particle_node.h"
+#include "scene/nodes/decal_node.h"
+#include "scene/nodes/sprite_node.h"
 #include <json.hpp>
 
 namespace bro::bronze_host {

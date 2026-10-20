@@ -4,7 +4,7 @@
 #include "bronze_host/host_natives.h"
 #include "bronze_host/host_values.h"
 #include "natives/terrain/native_terrain_decl.h"
-#include "scene/terrain_manager.h"
+#include "scene/nodes/terrain_manager.h"
 #include <cmath>
 
 namespace bro::bronze_host {

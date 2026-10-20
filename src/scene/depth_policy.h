@@ -16,11 +16,11 @@
 //
 // Camera depth is always reversed: the projections here, and on the GPU side
 // the clear value, the depth compare ops and the MSAA depth resolve
-// (scene/vulkan/scene_vk_depth.h) and the shaders' depth reconstructions.
+// (scene/vulkan/frame/scene_vk_depth.h) and the shaders' depth reconstructions.
 //
 // Clip space is always Vulkan's [0,1] depth range; only the direction flips.
 // The Y flip from bromath's y-up clip space to Vulkan's y-down one is not part
-// of these matrices — it happens once, in SceneView (scene/vulkan/scene_view.h).
+// of these matrices — it happens once, in SceneView (scene/vulkan/frame/scene_view.h).
 
 #include <bromath/frustum.h>
 #include <bromath/mat.h>

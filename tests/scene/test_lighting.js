@@ -1,4 +1,4 @@
-// Test bro.scene lighting/PBR pipeline — exercises src/scene/light_node.cpp,
+// Test bro.scene lighting/PBR pipeline — exercises src/scene/nodes/light_node.cpp,
 // src/scene/scene_graph.cpp (tonemap / bloom / ambient / environment passes)
 // and scene subsystem light + material property bindings.
 // See docs/lighting-api.js for the documented surface.

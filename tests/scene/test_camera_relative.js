@@ -1,4 +1,4 @@
-// Camera-relative rendering (scene/vulkan/scene_view.h): the GPU sees every
+// Camera-relative rendering (scene/vulkan/frame/scene_view.h): the GPU sees every
 // position with the eye subtracted on the CPU, where the large values cancel,
 // so a scene far from the world origin renders exactly as the same scene at
 // the origin. Drawn in absolute world space instead, fp32 positions near

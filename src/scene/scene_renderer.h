@@ -3,15 +3,15 @@
 // SceneRenderer: the backend-neutral half of drawing a SceneGraph in 3D —
 // the render settings JS configures, light collection, frustum culling and
 // the shadow-tile planner. Everything that touches the GPU lives in the
-// Vulkan renderer (vulkan/scene_vk_bridge.h and the passes it runs), which
+// Vulkan renderer (vulkan/frame/scene_vk_bridge.h and the passes it runs), which
 // reads its settings from here every frame.
 
 #include "render/layer_image.h"
-#include "scene/atmosphere.h"
-#include "scene/light_node.h"
-#include "scene/shadow_plan.h"
-#include "scene/plant_movers.h"
-#include "scene/wind_field.h"
+#include "scene/world/atmosphere.h"
+#include "scene/nodes/light_node.h"
+#include "scene/world/shadow_plan.h"
+#include "scene/nodes/plant_movers.h"
+#include "scene/world/wind_field.h"
 
 #include <bromath/aabb.h>
 #include <bromath/frustum.h>
@@ -396,7 +396,7 @@ public:
     /// decodes as float). The panorama is decoded here and kept as RGBA half
     /// floats until the GPU side takes it (takeEnvironmentPixels), which
     /// bakes the radiance cube, its irradiance and its GGX prefilter on the
-    /// next frame (scene/vulkan/scene_environment.h). The lit shaders then
+    /// next frame (scene/vulkan/lighting/scene_environment.h). The lit shaders then
     /// use them for their ambient and the sky shows the cube when the
     /// atmosphere is off. False (and the previous environment kept) when the
     /// file does not decode or is larger than the device's image limit; an

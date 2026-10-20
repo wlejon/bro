@@ -1,5 +1,5 @@
-// scene.createGrass: procedural blades over a baked field (scene/grass_node.h,
-// vulkan/shaders/scene_grass.glsl). Verifies:
+// scene.createGrass: procedural blades over a baked field (scene/nodes/grass_node.h,
+// vulkan/shaders/ground/scene_grass.glsl). Verifies:
 //   - the node, its params round trip and the field bake (sampleHeights of a
 //     ground mesh, grassHeightAt, a density function)
 //   - blades are drawn: ring instances in grassStats, a grassy floor greener

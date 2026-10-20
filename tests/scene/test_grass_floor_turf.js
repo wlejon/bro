@@ -1,5 +1,5 @@
-// The grass node's forest floor and turf (scene/grass_node.h setFloor,
-// vulkan/shaders/scene_ground.glsl). Verifies:
+// The grass node's forest floor and turf (scene/nodes/grass_node.h setFloor,
+// vulkan/shaders/ground/scene_ground.glsl). Verifies:
 //   - createGrass's `herbs` grow low plants among (and without) the grass:
 //     with no grass anywhere, a closed floor's wood sorrel still issues herb
 //     cells and draws green leaves; a herb density of 0 grows nothing

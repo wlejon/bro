@@ -3,7 +3,7 @@
 //
 //   (a) `mipmap: true` builds a real mip chain with GL_LINEAR_MIPMAP_LINEAR
 //       minification, so textureLod() at a FRACTIONAL level blends the two
-//       bracketing levels (flushUserTex in src/scene/mesh_node.cpp). Without
+//       bracketing levels (flushUserTex in src/scene/nodes/mesh_node.cpp). Without
 //       it there is only level 0 and GL clamps every lod to it.
 //   (b) `x`/`y` turn a set into a glTexSubImage2D sub-rectangle write that
 //       touches only that region and keeps the mip chain coherent

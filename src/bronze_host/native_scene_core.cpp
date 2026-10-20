@@ -508,7 +508,7 @@ void bro_scene_SceneGraph_setWind(void* self, const double* opts_direction, uint
 }
 
 // setWind's wind-field half: [speed, gust, gustSpeed, gustScale, drift]
-// (scene/wind_field.h), defaults filled in by the JS wrapper. Non-finite
+// (scene/world/wind_field.h), defaults filled in by the JS wrapper. Non-finite
 // entries keep the default.
 void bro_scene_SceneGraph_setWindField(void* self, const double* params, uint32_t params_len) {
     auto* g = graphOf(self);

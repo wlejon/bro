@@ -1,4 +1,4 @@
-// Test bro scene.createTileWorld — exercises src/scene/tile_world.cpp and
+// Test bro scene.createTileWorld — exercises src/scene/nodes/tile_world.cpp and
 // tile API.
 
 const canvas = document.createElement('canvas');

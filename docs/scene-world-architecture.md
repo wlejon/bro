@@ -256,7 +256,7 @@ sun, shadows and air stay current.
   everything else (§1): a cell is tiled at the level where a texel covers
   about a pixel (`texelPixels`, 1.5 for the turf), with every ancestor of
   a needed tile needed too. The CPU picks them from the camera
-  (`SurfaceLayers`, `scene/surface_layers.h`); nothing is read back from
+  (`SurfaceLayers`, `scene/world/surface_layers.h`); nothing is read back from
   the GPU, unlike feedback-driven virtual texturing. A tile's heights, the
   slope its footprint sees and its version come from the provider's items
   (for the turf, each mesh's triangles in 32 m cells), gathered into a
@@ -444,25 +444,46 @@ are data, so a biome is a table, not code.
 ## 12. Where the code lives
 
 All of it in bro. `src/scene` is split into sub-modules, each with its CPU
-half (testable without a GPU) apart from its GPU half:
+half (testable without a GPU) apart from its GPU half. They are folders of
+one module, not modules of their own: one library, the namespaces
+`bro::scene` and `bro::scene::vk` throughout.
 
 ```
 src/scene/
+  (top level)       the scene graph and node base, SceneRenderer (the
+                    backend-neutral renderer: settings, lights, culling, the
+                    shadow planner), animation, tweens, clips, the agent glue
   nodes/            the node types: their CPU halves
-  world/            cells, the planet's roots and fields, the world service's
-                    policy, surface layers' paging, placement rules
+  world/            cells, surface layers' paging, the shade map, the shadow
+                    plan, the wind field, the atmosphere's parameters and
+                    irradiance; later the planet's roots and fields, the
+                    world service's policy, placement rules
   vulkan/
-    frame/          device, frame graph, queues, allocator, targets, timers
-    world/          the world service's executor, tile atlases, the cell pass
-    terrain/        planet terrain tiles, the clipmap drawn from them, horizons
+    frame/          device, allocator, descriptors, pipelines, the shader
+                    compiler, frame graph, targets, timers, GPU resources,
+                    defaults, the view, the snapshot pass, the bridge
+    draw/           the mesh drawer core and the draw list; meshes, decals,
+                    particles, billboards, splats; custom mesh shaders
+    world/          the cell pass, the surface layers' atlas; later the world
+                    service's executor
     ground/         the ground and its cover: turf, grass, herbs
     foliage/        the plants node's plan, poses and draws; the far field
-    lighting/       atmosphere, exposure, probes, volumetrics, clustered lights
-    shadow/         shadow pages
-    sky/            clouds, weather, stars, the moon
+    lighting/       scene lighting, environment and sky, reflection probes;
+                    later exposure, probes, volumetrics, clustered lights
+    shadow/         the shadow pass; later shadow pages
     post/           post-fx, SSAO, SSR, DOF
-    shaders/        the same folders
+    terrain/        (planned) planet terrain tiles, the clipmap drawn from
+                    them, horizons
+    sky/            (planned) clouds, weather, stars, the moon
+    shaders/        the same folders (terrain/ holds the clipmap's GLSL, which
+                    nodes/clipmap_terrain compiles at run time), and common/
+                    for what every area includes (camera, lighting,
+                    atmosphere, push blocks, vegetation sway); every
+                    #include is a path from shaders/
 ```
+
+A folder is made when something lands in it; the planned ones above have
+nothing yet.
 
 ## Build order
 
@@ -473,7 +494,7 @@ the motion oracle for anything temporal. Each step removes what it replaces.
 | Step | What | Win it should show | Size |
 |---|---|---|---|
 | 1 | Done: the old forest path retired (ForestNode, its drawers, planner, impostors, HiZ; the plants' CPU planner) | one foliage path, the plants node planned on the GPU; biomes' stills identical, GPU ms 7–11% lower | −17k |
-| 2 | The layout (§12), moves only | frames byte-identical, suites green | moves |
+| 2 | Done: the layout (§12), moves only | frames byte-identical, suites green | moves |
 | 3 | The world service (§6), the surface layers' fills its first producer | fills follow the frame's slack; no stall when the view jumps | ~3k |
 | 4 | Atmosphere tables and exposure (§7) | one sky from ground to orbit, cheaper than today's per-pixel march | ~2k |
 | 5 | Cached shadow pages (§8), then horizons and canopy density (§7) | plant and terrain shadows off the per-frame cost | ~6k |

@@ -1,0 +1,359 @@
+#version 450
+// Every scene mesh: the material inputs (base colour, vertex colour, maps,
+// the instance tint and atlas cell), then the shared lighting
+// (scene_lighting.glsl), the air (aerial perspective or fog) and the tile
+// shade map. Unlit meshes skip the
+// lighting. inWorldPos is camera-relative (scene_camera.glsl): the eye is the
+// origin. Built twice: as is, and with SCENE_INDIRECT_OUTPUT for the opaque
+// pass while SSAO is on; and both again with SCENE_VEGETATION for plants
+// (scene_vegetation.glsl): a leaf's normal leans toward its crown's bulk
+// normal so the crown lights as one form, its underside reads paler, the
+// sun glows through it from behind, and the crown's depth occludes the sky.
+
+// Whether the draw cuts pixels (a near clip, an alpha cutoff): only then are
+// its discards built in, as a stage that can discard is depth-tested after it
+// shades (SceneMeshDrawer's raster::kCuts).
+layout(constant_id = 1) const bool MESH_CUTS = true;
+layout(location = 0) in vec3 inWorldPos;
+layout(location = 1) in vec3 inNormal;
+layout(location = 2) in vec2 inUV;
+layout(location = 3) in vec4 inColor;      // vertex colour, white when the mode is off
+layout(location = 4) in vec3 inTangent;
+layout(location = 5) in vec3 inBitangent;
+layout(location = 6) in vec4 inInstColor;  // rgb tint, a atlas cell / 256 (white off instancing)
+#ifdef SCENE_VEGETATION
+// xyz the crown's bulk normal times its weight, w the ambient occlusion,
+// negative on a leaf (vegetationSway), -(2 + ao) on a grass blade.
+layout(location = 7) in vec4 inVegShade;
+#endif
+#ifdef SCENE_HERB
+// A herb plant's card (mesh_herb.vert): its role (leaf, stem, bloom),
+// species and seed, and its size (scene_herb.glsl's HerbVertex); inColor.x
+// a stem's cover of its card or a leaf's stalk share.
+layout(location = 8) flat in vec4 inHerbInfo;
+layout(location = 9) in vec4 inHerbSize;
+// The stand it grows in (HerbVertex.stand): its leaf area index and the
+// share of the stand's leaves above this point.
+layout(location = 10) in vec2 inHerbStand;
+#endif
+
+layout(location = 0) out vec4 outColor;
+#ifdef SCENE_INDIRECT_OUTPUT
+// The indirect (ambient + probe) light in outColor, for the SSAO pass to
+// darken after the opaque pass (scene/vulkan/post/pass_ssao.h).
+layout(location = 1) out vec4 outIndirect;
+#endif
+
+#ifdef SCENE_VEGETATION
+// The samples of this pixel a cut card keeps: `coverage` of them (the share
+// of the pixel its blade, leaf or bloom covers) by a pixel dither salted by
+// `salt` (the card's), so two cards over one pixel keep different samples
+// and their cover adds up as leaves' would. Under 4x MSAA each sample takes
+// its own quarter-step of the dither, so a pixel is kept in quarters and
+// resolves to a blend rather than a stipple; without MSAA a pixel is all or
+// nothing (the mask is all bits).
+int coverSampleMask(float coverage, bool msaa, uint salt) {
+    // A white-noise value a pixel (an integer hash): a gradient noise lines
+    // up into visible diagonal hatching at part covers.
+    uvec2 q = uvec2(gl_FragCoord.xy);
+    uint v = q.x * 1973u + q.y * 9277u + 0x9e3779b9u;
+    v = (v ^ (v >> 16u)) * 0x7feb352du;
+    v = (v ^ (v >> 15u)) * 0x846ca68bu;
+    v ^= v >> 16u;
+    uint v2 = v ^ (salt * 0x9e3779b9u);
+    v2 = (v2 ^ (v2 >> 15u)) * 0x2c1b3c6du;
+    v2 ^= v2 >> 12u;
+    float h = float(v2 >> 16u) * (1.0 / 65536.0);
+    if (!msaa) return h < coverage ? -1 : 0;
+    int mask = 0;
+    for (int s = 0; s < 4; ++s)
+        if (fract(h + 0.25 * float(s)) < coverage) mask |= 1 << s;
+    return mask;
+}
+#endif
+
+#include "common/scene_camera.glsl"
+#include "common/scene_lighting.glsl"
+#include "common/scene_mesh_push.glsl"
+#ifdef SCENE_BARK
+#include "draw/scene_bark.glsl"
+#endif
+#ifdef SCENE_HERB
+#include "ground/scene_grass.glsl"
+#include "ground/scene_herb_surface.glsl"
+#endif
+#ifdef SCENE_GROUND
+#include "ground/scene_grass.glsl"
+#include "ground/scene_ground.glsl"
+#endif
+#ifdef SCENE_GRASS
+#include "ground/scene_grass_surface.glsl"
+#endif
+
+layout(set = 2, binding = 0) uniform sampler2D texAlbedo;
+layout(set = 2, binding = 1) uniform sampler2D texNormal;
+layout(set = 2, binding = 2) uniform sampler2D texMetallicRoughness;   // glTF: G roughness, B metallic
+layout(set = 2, binding = 3) uniform sampler2D texEmissive;
+layout(set = 2, binding = 4) uniform sampler2D texOcclusion;           // R
+
+// The base colour uv: an instance's cell of the atlas grid, else the mesh uv.
+// Only the base colour samples the atlas.
+vec2 albedoUV() {
+    float grid = push.extra.w;
+    int cols = max(int(mod(grid, 256.0)), 1);
+    int rows = max(int(grid / 256.0), 1);
+    if (cols == 1 && rows == 1) return inUV;
+    int cell = clamp(int(inInstColor.a * 256.0), 0, cols * rows - 1);
+    vec2 cellSize = vec2(1.0 / float(cols), 1.0 / float(rows));
+    return (vec2(float(cell % cols), float(cell / cols)) + fract(inUV)) * cellSize;
+}
+
+// Custom-shader splice point: a user chunk defining
+// `void userFragment(inout vec3 baseColor, inout vec3 normal,
+//                    inout float metallic, inout float roughness,
+//                    inout vec3 emissive, inout float alpha)` replaces this
+// marker and defines CUSTOM_FRAGMENT. It runs after every material input is
+// gathered and before the lights, so standard lighting applies to its result.
+//__USER_CHUNK__
+
+
+void main() {
+    uint flags = meshFlags();
+    vec3 worldPos = inWorldPos;
+    bool frontFacing = gl_FrontFacing;
+#ifdef SCENE_VEGETATION
+    gl_SampleMask[0] = -1;
+#endif
+#ifdef SCENE_HERB
+    // A herb's card cut to its leaf, stem or bloom (scene_herb_surface.glsl),
+    // its cover kept as that share of the samples, each card its own dither.
+    HerbSurface herb = herbSurface(inHerbInfo, inUV, inHerbSize, inColor.x, inColor.zw,
+                                   dot(inNormal, -worldPos) < 0.0);
+    if (herb.cover < 1.0 / 255.0) discard;
+    {
+        int mask = coverSampleMask(herb.cover, (flags & MESH_MSAA) != 0u, uint(inHerbInfo.z * 16777216.0));
+        if (mask == 0) discard;
+        gl_SampleMask[0] = mask;
+    }
+#endif
+    float camDist = length(worldPos);
+    if (MESH_CUTS && push.extra.x > 0.0 && camDist < push.extra.x) discard;
+
+    // Base colour: the texture composes with the colour and the vertex tint
+    // (white when off); without one the vertex colour replaces or tints it.
+    vec3 baseColor;
+    float alpha;
+    uint vertexColor = meshVertexColorMode();
+    if ((flags & MESH_ALBEDO_MAP) != 0u) {
+        vec4 tex = texture(texAlbedo, albedoUV());
+        baseColor = tex.rgb * push.baseColor.rgb * inColor.rgb;
+        alpha = tex.a * push.baseColor.a * inColor.a;
+    } else if (vertexColor == 1u) {
+        baseColor = inColor.rgb;
+        alpha = inColor.a;
+    } else if (vertexColor == 2u) {
+        baseColor = push.baseColor.rgb * inColor.rgb;
+        alpha = push.baseColor.a * inColor.a;
+    } else {
+        baseColor = push.baseColor.rgb;
+        alpha = push.baseColor.a;
+    }
+    baseColor *= inInstColor.rgb;
+    if (MESH_CUTS && push.pbrParams.z > 0.0 && alpha < push.pbrParams.z) discard;
+#ifdef SCENE_GRASS
+    // A grass blade (scene_grass_surface.glsl's grassSurface): a far fan cut
+    // into its leaves, a culm into its stem and head.
+    GrassSurface grass = grassSurface(worldPos, baseColor, (flags & MESH_MSAA) != 0u);
+#endif
+#ifdef SCENE_HERB
+    // A herb's colours are its species' (and the plant's own tone), its
+    // veins paler and yellower than the blade between.
+    baseColor = herbAlbedo(herb);
+    alpha = 1.0;
+#endif
+#ifdef SCENE_VEGETATION
+    // A grass blade (mesh_grass.vert) marks itself with w <= -2: w = -(2 +
+    // ao + 2k), k (0..15) how far its translucency has faded with distance.
+    // Translucent like a leaf, with no paler underside.
+    bool vegLeaf = inVegShade.w < 0.0;
+    bool vegBlade = inVegShade.w < -1.5;
+    float vegBladeT = -inVegShade.w - 2.0;
+    float vegFade = vegBlade ? floor(vegBladeT * 0.5) : 0.0;
+    float vegAO = vegBlade ? vegBladeT - 2.0 * vegFade : abs(inVegShade.w);
+    // A leaf's face is the one its normal points to. Its frame (the clump
+    // and scatter placements, clumpLeafFrame, bromesh's leaf scatter) is a
+    // mirror image (across, normal, tip are left-handed), so its triangles
+    // wind the other way and gl_FrontFacing names the wrong face: the eye
+    // would see a sunlit top lit as its own underside, and a leaf against
+    // the sun lit on the side away from it.
+    if (vegLeaf && !vegBlade) frontFacing = dot(inNormal, -inWorldPos) >= 0.0;
+    // A leaf's underside is paler and yellower than its top.
+    vec3 vegUnder = baseColor * vec3(1.25, 1.3, 1.05) + vec3(0.015, 0.02, 0.0);
+    if (vegLeaf && !vegBlade && !frontFacing) baseColor = mix(baseColor, vegUnder, 0.6);
+#endif
+
+    vec3 emissive = push.emissive.rgb * push.emissive.a;
+    vec3 geomN = normalize(inNormal);
+    SceneAir air = sceneAir(worldPos, camDist);
+
+    // Unlit is the authored base colour as is: no lights and no emissive
+    // (GL's unlit branch), only the air in front of it.
+    if ((flags & MESH_UNLIT) != 0u) {
+        vec3 color = baseColor * air.transmittance + air.inscatter;
+        if ((flags & MESH_SHADE_MAP) != 0u && lighting.shadeOrigin.w > 0.5) color *= cellShade(worldPos, geomN);
+        // Unlit surfaces reflect nothing in the SSR mask phase.
+        outColor = vec4(color, (flags & MESH_REFLECTANCE) != 0u ? 0.0 : mix(alpha, 0.0, air.fade));
+#ifdef SCENE_INDIRECT_OUTPUT
+        outIndirect = vec4(0.0);
+#endif
+        return;
+    }
+
+    // Two-sided thin surfaces shade the face the camera sees.
+    vec3 N = geomN;
+    if ((flags & MESH_TWO_SIDED) != 0u && !frontFacing) N = -N;
+    if ((flags & (MESH_NORMAL_MAP | MESH_HAS_TANGENTS)) == (MESH_NORMAL_MAP | MESH_HAS_TANGENTS)) {
+        vec3 nTS = texture(texNormal, inUV).xyz * 2.0 - 1.0;
+        N = normalize(mat3(normalize(inTangent), normalize(inBitangent), N) * nTS);
+    }
+    vec3 shadePos = worldPos;
+#ifdef SCENE_VEGETATION
+    // The crown as one form: the leaf's own normal blended toward the bulk.
+    {
+        float bulkWeight = length(inVegShade.xyz);
+        float bulkKeep = 1.0;
+        vec3 vegShadeN = inVegShade.xyz;
+        if (vegLeaf && !vegBlade) {
+            // Near, a leaf is its own face, not the crown's: folded along
+            // its midrib (the halves tilt apart, so one takes more light than
+            // the other) and turned its own way more than the bulk's, so the
+            // leaves of a sunlit side differ leaf by leaf rather than lying
+            // as one flat sheet. The halves curve away from a midrib that
+            // is level (the tilt grows as the square of the way out), so a
+            // leaf shades round, not as two flat facets. Gone by the
+            // distance a leaf is a few pixels.
+            float near = 1.0 - smoothstep(6.0, 25.0, camDist);
+            if (near > 0.0) {
+                float across = clamp(inUV.x * 2.0 - 1.0, -1.0, 1.0);
+                vec3 T = normalize(inTangent);
+                N = normalize(N - (frontFacing ? 1.0 : -1.0) * 0.55 * near * across * abs(across) * T);
+                bulkKeep = 1.0 - 0.5 * near;
+            }
+        }
+#ifdef SCENE_GRASS
+        grassLeafNormal(grass, N, vegShadeN, bulkWeight, worldPos, camDist);
+#endif
+        if (bulkWeight > 1e-4)
+            N = normalize(N * (1.0 - bulkWeight * bulkKeep) + vegShadeN * bulkKeep);
+    }
+#endif
+#ifdef SCENE_HERB
+    // The card's face leaned as its surface says, then toward the ground's
+    // normal; and the stand's shade of itself (scene_herb_surface.glsl).
+    N = herbNormal(herb, vegAO);
+    float standSun = herbStandSun(vegAO);
+#endif
+
+    float metallic = push.pbrParams.x;
+    float roughness = push.pbrParams.y;
+    if ((flags & MESH_METALLIC_ROUGHNESS) != 0u) {
+        vec4 mr = texture(texMetallicRoughness, inUV);
+        roughness *= mr.g;
+        metallic *= mr.b;
+    }
+    if ((flags & MESH_EMISSIVE_MAP) != 0u) emissive *= texture(texEmissive, inUV).rgb;
+#ifdef SCENE_HERB
+    roughness = mix(roughness, 0.3, herb.gloss);
+#endif
+#ifdef SCENE_GRASS
+    roughness = grassRoughness(grass, roughness, camDist);
+#endif
+#ifdef SCENE_BARK
+    // A tube's wood (scene_bark.glsl): inColor where on the stem, inUV its
+    // height over the root and the bark word (negative: not a plant's).
+    if (inUV.y >= 0.0) barkSurface(inColor, inUV.x, inUV.y, worldPos, N, inTangent, baseColor, N, roughness, vegAO);
+#endif
+#ifdef SCENE_GROUND
+    // Turf (scene_ground.glsl): the vertex colour is the ground's data
+    // (density, dryness, floor) where the grass node's field does not reach.
+    float groundAO = 1.0;
+    vec4 groundThin, groundSward;
+    groundSurface(worldPos, inColor, baseColor, N, roughness, groundAO, groundThin, groundSward);
+    baseColor *= push.baseColor.rgb;
+#endif
+
+#ifdef CUSTOM_FRAGMENT
+    userFragment(baseColor, N, metallic, roughness, emissive, alpha);
+    N = normalize(N);
+#endif
+
+    SceneSurface s;
+    s.position = shadePos;
+    s.normal = N;
+    s.view = normalize(-worldPos);
+    s.camDist = camDist;
+    s.baseColor = baseColor;
+    s.metallic = clamp(metallic, 0.0, 1.0);
+    s.roughness = clamp(roughness, 0.04, 1.0);
+    s.receivesShadow = (flags & MESH_RECEIVES_SHADOW) != 0u;
+    s.twoSided = (flags & MESH_TWO_SIDED) != 0u;
+    s.subsurface = push.extra.y;
+    s.translucency = 0.0;
+#ifdef SCENE_VEGETATION
+    if (vegLeaf) s.translucency = (push.extra.y > 0.0 ? min(1.4 * push.extra.y, 1.0) : 0.6) * (1.0 - vegFade / 15.0);
+#endif
+    s.thinNormal = vec3(0.0);
+    s.sward = vec4(0.0);
+#ifdef SCENE_HERB
+    herbSurfaceLight(s, herb, camDist);
+#endif
+#ifdef SCENE_GRASS
+    grassSurfaceLight(s, grass, geomN, worldPos, vegFade, camDist);
+#endif
+#ifdef SCENE_GROUND
+    // Where the turf stands for far blades, it is lit as they are, the
+    // light coming through them as through theirs.
+    s.sward = groundSward;
+    if (groundThin.w > 0.0) {
+        s.translucency = groundThin.w;
+        s.thinNormal = groundThin.xyz;
+    }
+#endif
+
+    vec3 indirect = sceneAmbient(s);
+    if ((flags & MESH_OCCLUSION_MAP) != 0u) indirect *= texture(texOcclusion, inUV).r;
+#ifdef SCENE_VEGETATION
+    indirect *= vegAO;
+#endif
+#ifdef SCENE_GROUND
+    indirect *= groundAO;
+#endif
+#ifdef SCENE_HERB
+    vec3 color = sceneDirectLight(s) * standSun + indirect + emissive;
+#else
+    vec3 color = sceneDirectLight(s) + indirect + emissive;
+#endif
+
+    // SSR mask phase: alpha carries the reflectance the SSR pass weights its
+    // reflections by (normal-incidence Fresnel luminance times smoothness^2);
+    // the SSR pass restores coverage before anything blends against it.
+    if ((flags & MESH_REFLECTANCE) != 0u) {
+        vec3 F0 = mix(vec3(0.04), s.baseColor, s.metallic);
+        alpha = dot(F0, vec3(0.2126, 0.7152, 0.0722)) * (1.0 - s.roughness) * (1.0 - s.roughness);
+    }
+
+    color = color * air.transmittance + air.inscatter;
+    indirect *= air.transmittance;
+    alpha = mix(alpha, 0.0, air.fade);
+
+    if ((flags & MESH_SHADE_MAP) != 0u && lighting.shadeOrigin.w > 0.5) {
+        float shade = cellShade(worldPos, geomN);
+        color *= shade;
+        indirect *= shade;
+    }
+
+    outColor = vec4(color, alpha);
+#ifdef SCENE_INDIRECT_OUTPUT
+    outIndirect = vec4(indirect, 0.0);
+#endif
+}

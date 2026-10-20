@@ -1,4 +1,4 @@
-// SurfaceLayers (scene/surface_layers.h), the CPU half of the surface layers
+// SurfaceLayers (scene/world/surface_layers.h), the CPU half of the surface layers
 // every provider shares: which tiles a view needs, which it fills and when,
 // and what the page table says, held against a page table rebuilt from the
 // writes alone as the GPU's is. A view's tiles must be a quadtree's leaves
@@ -7,7 +7,7 @@
 // filled whatever the budget; no slot holds two tiles; a stale generation
 // refills while the old tiles keep their entries.
 
-#include "scene/surface_layers.h"
+#include "scene/world/surface_layers.h"
 
 #include <bromath/frustum.h>
 #include <bromath/mat.h>

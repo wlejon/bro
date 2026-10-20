@@ -27,7 +27,7 @@
 
 #if BRO_WITH_3D
 #include "scene/scene_graph.h"
-#include "scene/html_node.h"
+#include "scene/nodes/html_node.h"
 #endif
 
 #include <algorithm>

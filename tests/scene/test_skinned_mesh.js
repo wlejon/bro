@@ -1,5 +1,5 @@
 // Test scene.createSkinnedMesh — GPU skinning (SkinnedMeshNode).
-// Exercises src/scene/skinned_mesh_node.cpp, the SKINNED variants of
+// Exercises src/scene/nodes/skinned_mesh_node.cpp, the SKINNED variants of
 // mesh.vert / shadow.vert, and the createSkinnedMesh / setSkinningMatrices
 // bindings in scene subsystem.
 //

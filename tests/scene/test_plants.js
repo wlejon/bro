@@ -1,6 +1,7 @@
 // scene.createPlants: plants built on the GPU from a species table and their
-// records (scene/plants_node.h, vulkan/shaders/scene_plants.glsl), planned on
-// the GPU over the world cells in view (vulkan/scene_plants_gpu_plan.cpp).
+// records (scene/nodes/plants_node.h, vulkan/shaders/foliage/scene_plants.glsl),
+// planned on the GPU over the world cells in view
+// (vulkan/foliage/scene_plants_gpu_plan.cpp).
 // Verifies:
 //   - the node draws: a tree in view turns its patch of the frame green, its
 //     elements and limbs counted in plantStats

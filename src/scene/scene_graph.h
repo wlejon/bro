@@ -482,7 +482,7 @@ public:
     void advanceWindTime(float dt) { renderer_.advanceWindTime(dt); }
     void resetWindTime() { renderer_.resetWindTime(); }
     float windTime() const { return renderer_.windTime(); }
-    /// The wind field vegetation bends with (scene/wind_field.h): speed,
+    /// The wind field vegetation bends with (scene/world/wind_field.h): speed,
     /// gusts travelling downwind and a drifting direction around setWind's.
     void setWindField(const WindFieldParams& p) { renderer_.setWindField(p); }
     const WindFieldParams& windFieldParams() const { return renderer_.windFieldParams(); }

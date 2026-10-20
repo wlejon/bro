@@ -1,8 +1,8 @@
 #include "scene/scene_renderer.h"
-#include "scene/instanced_mesh_node.h"
+#include "scene/nodes/instanced_mesh_node.h"
 #include "scene/depth_policy.h"
 #include "scene/scene_graph.h"
-#include "scene/skinned_mesh_node.h"
+#include "scene/nodes/skinned_mesh_node.h"
 #include "util/log.h"
 
 #include <algorithm>

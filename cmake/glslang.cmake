@@ -44,8 +44,8 @@ if(NOT TARGET glslang::glslang OR NOT TARGET glslang::glslang-default-resource-l
 endif()
 
 # bro_spirv_header(<out_var> <gen_dir> <glsl_file> <vert|frag|comp>
-#                  [NAME <variant>] [SYMBOL <ns::symbol>] [DEFINES <define>...]
-#                  [DEPENDS <file>...])
+#                  [NAME <variant>] [SYMBOL <ns::symbol>] [INCLUDE_DIR <dir>]
+#                  [DEFINES <define>...] [DEPENDS <file>...])
 #
 # Compiles <glsl_file> at build time with bro_spirv_embed (src/render/tools)
 # into <gen_dir>/<name>.spv.h and appends that header to <out_var>, for a
@@ -57,6 +57,9 @@ endif()
 # own defining `extern const uint32_t <symbol>[]` and `<symbol>Words`, so a
 # shader edit recompiles that one small file.
 #
+# INCLUDE_DIR is the directory every `#include "name"` is a path from (by
+# default the shader's own directory).
+#
 # The tool writes a depfile of the files the shader actually #includes, so
 # editing one reruns only the shaders that pull it in; DEPENDS adds others.
 #
@@ -64,7 +67,11 @@ endif()
 # host build of the tool with -DBRO_SPIRV_EMBED=<path>.
 set(BRO_SPIRV_EMBED "" CACHE FILEPATH "Host bro_spirv_embed, for cross builds")
 function(bro_spirv_header out_var gen_dir glsl_file stage)
-    cmake_parse_arguments(_spv "" "NAME;SYMBOL" "DEFINES;DEPENDS" ${ARGN})
+    cmake_parse_arguments(_spv "" "NAME;SYMBOL;INCLUDE_DIR" "DEFINES;DEPENDS" ${ARGN})
+    set(_includeDir "")
+    if(_spv_INCLUDE_DIR)
+        set(_includeDir --include-dir "${_spv_INCLUDE_DIR}")
+    endif()
     get_filename_component(_name "${glsl_file}" NAME)
     if(_spv_NAME)
         set(_name "${_spv_NAME}")
@@ -90,7 +97,7 @@ function(bro_spirv_header out_var gen_dir glsl_file stage)
     add_custom_command(
         OUTPUT  "${_out}"
         COMMAND "${_tool}" ${stage} "${glsl_file}" "${_out}" ${_mode}
-                --depfile "${_out}.d" ${_spv_DEFINES}
+                --depfile "${_out}.d" ${_includeDir} ${_spv_DEFINES}
         DEPENDS "${glsl_file}" ${_spv_DEPENDS} ${_tool_dep}
         DEPFILE "${_out}.d"
         COMMENT "SPIR-V ${_name} -> ${_outName}"

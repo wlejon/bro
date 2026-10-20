@@ -1,6 +1,6 @@
 // Numerical conditioning of the gaussian-splat 2x2 eigen-decomposition —
 // exercises the principal-axis derivation in the splat vertex shader
-// (src/scene/gaussian_splat_node.cpp). For an elongated splat whose major
+// (src/scene/nodes/gaussian_splat_node.cpp). For an elongated splat whose major
 // axis is NEARLY x-aligned (tiny but nonzero rotation), the off-diagonal b
 // is tiny and (l1 - a) suffers catastrophic cancellation; taking the
 // eigenvector from the ill-conditioned row could rotate the computed major

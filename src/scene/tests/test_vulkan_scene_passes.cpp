@@ -7,12 +7,12 @@
 // fails the run too.
 #undef NDEBUG
 
-#include "scene/particles3d_node.h"
-#include "scene/mesh_node.h"
+#include "scene/nodes/particles3d_node.h"
+#include "scene/nodes/mesh_node.h"
 #include "scene/scene_graph.h"
 #include "scene/scene_renderer.h"
-#include "scene/vulkan/scene_vk_device.h"
-#include "scene/vulkan/scene_vk_shader_compiler.h"
+#include "scene/vulkan/frame/scene_vk_device.h"
+#include "scene/vulkan/frame/scene_vk_shader_compiler.h"
 #include "render/vulkan_context.h"
 #include "render/vulkan_debug.h"
 #include "util/log.h"

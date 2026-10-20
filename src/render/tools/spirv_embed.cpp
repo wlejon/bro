@@ -1,7 +1,7 @@
 // bro_spirv_embed — the build-time half of render/glsl_compiler.h.
 //
 //   bro_spirv_embed <vert|frag|comp> <input.glsl> <output> [--cpp <ns::symbol>]
-//                   [--depfile <file>] [DEFINE...]
+//                   [--depfile <file>] [--include-dir <dir>] [DEFINE...]
 //
 // Compiles one GLSL file with the same in-process glslang the engine uses at
 // run time. By default it writes the SPIR-V as a brace-enclosed list of
@@ -17,7 +17,8 @@
 // not the file that holds every shader.
 //
 // The text compiled is render::preprocessGlslFile's: each `#include "name"`
-// line replaced by the file beside the input (recursively), and each DEFINE
+// line replaced by the file `name` from --include-dir, or from beside the
+// input without it (recursively), and each DEFINE
 // made `#define DEFINE 1` right after the #version line, so one source can
 // build several variants. --depfile writes the files read as a Makefile
 // depfile, so the build reruns a shader only when something it includes
@@ -62,7 +63,7 @@ int main(int argc, char** argv) {
     using bro::render::ShaderStage;
     if (argc < 4) {
         std::fprintf(stderr, "usage: bro_spirv_embed <vert|frag|comp> <input.glsl> <output> "
-                             "[--cpp <ns::symbol>] [--depfile <file>] [DEFINE...]\n");
+                             "[--cpp <ns::symbol>] [--depfile <file>] [--include-dir <dir>] [DEFINE...]\n");
         return 2;
     }
     ShaderStage stage;
@@ -74,17 +75,18 @@ int main(int argc, char** argv) {
         return 2;
     }
     const std::string input = argv[2], output = argv[3];
-    std::string cppSymbol, depfile;
+    std::string cppSymbol, depfile, includeDir;
     std::vector<std::string> defines;
     for (int i = 4; i < argc; ++i) {
         if (std::strcmp(argv[i], "--cpp") == 0 && i + 1 < argc) cppSymbol = argv[++i];
         else if (std::strcmp(argv[i], "--depfile") == 0 && i + 1 < argc) depfile = argv[++i];
+        else if (std::strcmp(argv[i], "--include-dir") == 0 && i + 1 < argc) includeDir = argv[++i];
         else defines.emplace_back(argv[i]);
     }
 
     std::string text, err;
     std::vector<std::string> deps;
-    if (!bro::render::preprocessGlslFile(input, defines, text, &deps, &err)) {
+    if (!bro::render::preprocessGlslFile(input, defines, text, &deps, &err, includeDir)) {
         std::fprintf(stderr, "bro_spirv_embed: %s\n", err.c_str());
         return 1;
     }

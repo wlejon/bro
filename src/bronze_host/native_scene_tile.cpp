@@ -3,7 +3,7 @@
 #include "bronze_host/native_scene_internal.h"
 #include "bronze_host/host_natives.h"
 #include "natives/tile_world/native_tile_world_decl.h"
-#include "scene/tile_world.h"
+#include "scene/nodes/tile_world.h"
 #include "scene/scene_node.h"
 #include "tile/serialize.h"
 #include "tile/pathfind.h"

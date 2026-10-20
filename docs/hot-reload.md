@@ -31,7 +31,7 @@ It is never on for `bro-headless`, `bro-server`, or an app with an `app.dll`.
 
 ## Scene shaders without a rebuild
 
-The 3D scene's built-in shaders (`src/scene/vulkan/shaders/`, listed with their variants in `builtin_shaders.def`) are compiled to SPIR-V at build time and embedded. For a shader edit loop, compile them from the source tree at start-up instead:
+The 3D scene's built-in shaders (`src/scene/vulkan/shaders/`, in a folder per area with every `#include` a path from there, listed with their variants in `builtin_shaders.def`) are compiled to SPIR-V at build time and embedded. For a shader edit loop, compile them from the source tree at start-up instead:
 
 ```
 BRO_SCENE_SHADER_SOURCE=1 bro-headless ../broworkshop/demos/lighting-demo -e "screenshot('out.png')"

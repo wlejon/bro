@@ -3,7 +3,7 @@
 #if BRO_WITH_3D
 
 #include <broaudio/engine.h>
-#include "scene/mesh_node.h"
+#include "scene/nodes/mesh_node.h"
 #include <bromath/mat.h>
 #include <bromath/vec.h>
 

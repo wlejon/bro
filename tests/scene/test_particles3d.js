@@ -1,5 +1,5 @@
 // Test scene.createParticles3D — the world-space 3D particle system.
-// Exercises src/scene/particles3d_node.cpp, the particle pass in
+// Exercises src/scene/nodes/particles3d_node.cpp, the particle pass in
 // src/scene/scene_renderer_particles.cpp, and the Particles3D bindings in
 // scene subsystem: emission + rendering into the 3D pass, the
 // gravity arc against the analytic parabola, color-over-life in captured

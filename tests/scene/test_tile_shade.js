@@ -1,7 +1,7 @@
 // Test the TileWorld shade map — exercises setShade / fillShade /
-// setShadeMap / getShade in src/scene/tile_world.cpp, the uShade* upload in
+// setShadeMap / getShade in src/scene/nodes/tile_world.cpp, the uShade* upload in
 // scene_renderer_mesh.cpp / scene_renderer_instanced.cpp and the cellShade()
-// lookup in shaders/mesh.frag. See docs/tile-api.js "setShade".
+// lookup in shaders/draw/mesh.frag. See docs/tile-api.js "setShade".
 
 const canvas = document.createElement('canvas');
 canvas.setAttribute('width', '128');

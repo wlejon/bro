@@ -7,14 +7,14 @@
 // fails the run too.
 #undef NDEBUG
 
-#include "scene/vulkan/scene_vk_device.h"
-#include "scene/vulkan/scene_vk_allocator.h"
-#include "scene/vulkan/scene_vk_pipeline.h"
-#include "scene/vulkan/scene_vk_descriptors.h"
-#include "scene/vulkan/scene_frame_graph.h"
-#include "scene/vulkan/scene_targets.h"
-#include "scene/vulkan/scene_vk_target_format.h"
-#include "scene/vulkan/scene_vk_shader_compiler.h"
+#include "scene/vulkan/frame/scene_vk_device.h"
+#include "scene/vulkan/frame/scene_vk_allocator.h"
+#include "scene/vulkan/frame/scene_vk_pipeline.h"
+#include "scene/vulkan/frame/scene_vk_descriptors.h"
+#include "scene/vulkan/frame/scene_frame_graph.h"
+#include "scene/vulkan/frame/scene_targets.h"
+#include "scene/vulkan/frame/scene_vk_target_format.h"
+#include "scene/vulkan/frame/scene_vk_shader_compiler.h"
 #include "render/vulkan_context.h"
 #include "render/vulkan_debug.h"
 #include "util/log.h"

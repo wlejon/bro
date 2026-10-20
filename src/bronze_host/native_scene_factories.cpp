@@ -4,8 +4,8 @@
 #include "bronze_host/host_natives.h"
 #include "bronze_host/native_physics_internal.h"
 #include "natives/scene/native_scene_decl.h"
-#include "scene/particles3d_node.h"
-#include "scene/physics_node.h"
+#include "scene/nodes/particles3d_node.h"
+#include "scene/nodes/physics_node.h"
 #include "scene/animation_player.h"
 #include "util/log.h"
 

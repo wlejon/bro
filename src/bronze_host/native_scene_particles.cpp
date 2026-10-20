@@ -4,7 +4,7 @@
 
 #include "bronze_host/native_scene_internal.h"
 #include "natives/scene/native_scene_decl.h"
-#include "scene/particle_node.h"
+#include "scene/nodes/particle_node.h"
 #include "util/log.h"
 #include <json.hpp>
 

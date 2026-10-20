@@ -30,14 +30,19 @@ foreach(_line IN LISTS _vkShaderLines)
     set(_vkStage "${CMAKE_MATCH_4}")
     string(REPLACE " " ";" _vkDefines "${CMAKE_MATCH_5}")
     bro_spirv_header(VK_GENERATED_HEADERS "${VK_GEN_DIR}" "${VK_SHADER_DIR}/${_vkSource}" ${_vkStage}
-                     NAME "${_vkName}" SYMBOL "bro::scene::vk::spv::kSpv${_vkEnum}" DEFINES ${_vkDefines})
+                     NAME "${_vkName}" SYMBOL "bro::scene::vk::spv::kSpv${_vkEnum}"
+                     INCLUDE_DIR "${VK_SHADER_DIR}" DEFINES ${_vkDefines})
 endforeach()
-set_source_files_properties(vulkan/scene_vk_shader_compiler.cpp PROPERTIES
+set_source_files_properties(vulkan/frame/scene_vk_shader_compiler.cpp PROPERTIES
     COMPILE_DEFINITIONS "BRO_SCENE_SHADER_SOURCE_DIR=\"${VK_SHADER_DIR}\"")
 
+# A shader source embedded as text, for the shaders compiled at run time
+# (custom mesh shaders, the clipmap terrain). SHADER_FILE is its path under
+# vulkan/shaders; the header is named by the file alone (<file>.src.h).
 function(embed_vk_shader SHADER_FILE VAR_NAME)
+    get_filename_component(_name "${SHADER_FILE}" NAME)
     set(INPUT  "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/${SHADER_FILE}")
-    set(OUTPUT "${VK_GEN_DIR}/${SHADER_FILE}.src.h")
+    set(OUTPUT "${VK_GEN_DIR}/${_name}.src.h")
     add_custom_command(
         OUTPUT  "${OUTPUT}"
         COMMAND ${CMAKE_COMMAND}
@@ -46,41 +51,41 @@ function(embed_vk_shader SHADER_FILE VAR_NAME)
                 -DVAR_NAME="${VAR_NAME}"
                 -P "${EMBED_SCRIPT}"
         DEPENDS "${INPUT}" "${EMBED_SCRIPT}"
-        COMMENT "Embedding vulkan/shaders/${SHADER_FILE} -> ${SHADER_FILE}.src.h"
+        COMMENT "Embedding vulkan/shaders/${SHADER_FILE} -> ${_name}.src.h"
     )
     list(APPEND VK_GENERATED_HEADERS "${OUTPUT}")
     set(VK_GENERATED_HEADERS "${VK_GENERATED_HEADERS}" PARENT_SCOPE)
 endfunction()
 
-embed_vk_shader(mesh.vert             kVkMeshVertSrc)
-embed_vk_shader(mesh.frag             kVkMeshFragSrc)
-embed_vk_shader(mesh_instanced.vert   kVkMeshInstancedVertSrc)
-embed_vk_shader(mesh_skinned.vert     kVkMeshSkinnedVertSrc)
-embed_vk_shader(shadow.vert           kVkShadowVertSrc)
-embed_vk_shader(shadow_skinned.vert   kVkShadowSkinnedVertSrc)
-embed_vk_shader(shadow_instanced.vert kVkShadowInstancedVertSrc)
-embed_vk_shader(scene_camera.glsl     kVkSceneCameraSrc)
-embed_vk_shader(scene_lighting.glsl   kVkSceneLightingSrc)
-embed_vk_shader(scene_atmosphere.glsl kVkSceneAtmosphereSrc)
-embed_vk_shader(scene_mesh_push.glsl  kVkSceneMeshPushSrc)
-embed_vk_shader(scene_shadow_push.glsl kVkSceneShadowPushSrc)
-embed_vk_shader(scene_shadow_cutout.glsl kVkSceneShadowCutoutSrc)
-embed_vk_shader(scene_vegetation.glsl kVkSceneVegetationSrc)
-embed_vk_shader(scene_procedural.glsl kVkSceneProceduralSrc)
-embed_vk_shader(scene_bark.glsl       kVkSceneBarkSrc)
-embed_vk_shader(scene_grass.glsl      kVkSceneGrassSrc)
-embed_vk_shader(scene_grass_surface.glsl kVkSceneGrassSurfaceSrc)
-embed_vk_shader(scene_ground.glsl     kVkSceneGroundSrc)
-embed_vk_shader(scene_ground_layers.glsl kVkSceneGroundLayersSrc)
-embed_vk_shader(scene_herb_mix.glsl   kVkSceneHerbMixSrc)
-embed_vk_shader(scene_herb_surface.glsl kVkSceneHerbSurfaceSrc)
-embed_vk_shader(clipmap_common.glsl       kClipmapCommonSrc)
-embed_vk_shader(clipmap_detail.glsl       kClipmapDetailSrc)
-embed_vk_shader(clipmap_material.glsl     kClipmapMaterialSrc)
-embed_vk_shader(clipmap_cubic.glsl        kClipmapCubicSrc)
-embed_vk_shader(clipmap_cubic_height.glsl kClipmapCubicHeightSrc)
-embed_vk_shader(clipmap.vert.glsl         kClipmapVertSrc)
-embed_vk_shader(clipmap.frag.glsl         kClipmapFragSrc)
+embed_vk_shader(draw/mesh.vert                  kVkMeshVertSrc)
+embed_vk_shader(draw/mesh.frag                  kVkMeshFragSrc)
+embed_vk_shader(draw/mesh_instanced.vert        kVkMeshInstancedVertSrc)
+embed_vk_shader(draw/mesh_skinned.vert          kVkMeshSkinnedVertSrc)
+embed_vk_shader(shadow/shadow.vert              kVkShadowVertSrc)
+embed_vk_shader(shadow/shadow_skinned.vert      kVkShadowSkinnedVertSrc)
+embed_vk_shader(shadow/shadow_instanced.vert    kVkShadowInstancedVertSrc)
+embed_vk_shader(common/scene_camera.glsl        kVkSceneCameraSrc)
+embed_vk_shader(common/scene_lighting.glsl      kVkSceneLightingSrc)
+embed_vk_shader(common/scene_atmosphere.glsl    kVkSceneAtmosphereSrc)
+embed_vk_shader(common/scene_mesh_push.glsl     kVkSceneMeshPushSrc)
+embed_vk_shader(common/scene_shadow_push.glsl   kVkSceneShadowPushSrc)
+embed_vk_shader(shadow/scene_shadow_cutout.glsl kVkSceneShadowCutoutSrc)
+embed_vk_shader(common/scene_vegetation.glsl    kVkSceneVegetationSrc)
+embed_vk_shader(common/scene_procedural.glsl    kVkSceneProceduralSrc)
+embed_vk_shader(draw/scene_bark.glsl            kVkSceneBarkSrc)
+embed_vk_shader(ground/scene_grass.glsl         kVkSceneGrassSrc)
+embed_vk_shader(ground/scene_grass_surface.glsl kVkSceneGrassSurfaceSrc)
+embed_vk_shader(ground/scene_ground.glsl        kVkSceneGroundSrc)
+embed_vk_shader(ground/scene_ground_layers.glsl kVkSceneGroundLayersSrc)
+embed_vk_shader(ground/scene_herb_mix.glsl      kVkSceneHerbMixSrc)
+embed_vk_shader(ground/scene_herb_surface.glsl  kVkSceneHerbSurfaceSrc)
+embed_vk_shader(terrain/clipmap_common.glsl       kClipmapCommonSrc)
+embed_vk_shader(terrain/clipmap_detail.glsl       kClipmapDetailSrc)
+embed_vk_shader(terrain/clipmap_material.glsl     kClipmapMaterialSrc)
+embed_vk_shader(terrain/clipmap_cubic.glsl        kClipmapCubicSrc)
+embed_vk_shader(terrain/clipmap_cubic_height.glsl kClipmapCubicHeightSrc)
+embed_vk_shader(terrain/clipmap.vert.glsl         kClipmapVertSrc)
+embed_vk_shader(terrain/clipmap.frag.glsl         kClipmapFragSrc)
 
 ## ── Library ──────────────────────────────────────────────────────────────────
 find_package(Vulkan REQUIRED)
@@ -90,76 +95,76 @@ add_library(bro_scene STATIC
     scene_graph.cpp
     scene_renderer.cpp
     scene_renderer_shadow.cpp
-    shape_node.cpp
-    sprite_node.cpp
-    physics_node.cpp
-    mesh_node.cpp
-    skinned_mesh_node.cpp
     animation_player.cpp
     animation_player_state_machine.cpp
     animation_player_root_motion.cpp
     tween.cpp
     clip_player.cpp
-    instanced_mesh_node.cpp
-    gaussian_splat_node.cpp
-    html_node.cpp
-    light_node.cpp
-    particle_node.cpp
-    particles3d_node.cpp
-    decal_node.cpp
-    grass_node.cpp
-    plants_node.cpp
-    world_cells.cpp
-    surface_layers.cpp
-    reflection_probe_node.cpp
-    terrain_manager.cpp
-    terrain_manager_mesh.cpp
-    terrain_manager_raycast.cpp
-    clipmap_terrain.cpp
-    clipmap_terrain_elevation.cpp
-    tile_world.cpp
-    tile_world_mesh.cpp
-    tile_world_objects.cpp
     agent_binding.cpp
     ai_world_ticker.cpp
-    vulkan/scene_vk_device.cpp
-    vulkan/scene_vk_allocator.cpp
-    vulkan/scene_vk_pipeline.cpp
-    vulkan/scene_vk_descriptors.cpp
-    vulkan/scene_vk_shader_compiler.cpp
-    vulkan/scene_vk_custom_shader.cpp
-    vulkan/scene_view.cpp
-    vulkan/scene_defaults.cpp
-    vulkan/scene_targets.cpp
-    vulkan/scene_gpu_timer.cpp
-    vulkan/scene_gpu_resources.cpp
-    vulkan/scene_mesh_drawer.cpp
-    vulkan/scene_mesh_drawer_grass.cpp
-    vulkan/scene_mesh_drawer_plants.cpp
-    vulkan/scene_mesh_drawer_ground.cpp
-    vulkan/pass_ground_layers.cpp
-    vulkan/scene_surface_layers.cpp
-    vulkan/scene_plants_gpu_plan.cpp
-    vulkan/scene_world_cells_pass.cpp
-    vulkan/scene_draw_list.cpp
-    vulkan/scene_frame_graph.cpp
-    vulkan/scene_fullscreen.cpp
-    vulkan/scene_lighting.cpp
-    vulkan/scene_environment.cpp
-    vulkan/pass_shadow.cpp
-    vulkan/pass_reflection_probe.cpp
-    vulkan/pass_environment.cpp
-    vulkan/pass_mesh.cpp
-    vulkan/pass_snapshot.cpp
-    vulkan/pass_ssao.cpp
-    vulkan/pass_ssr.cpp
-    vulkan/pass_decal.cpp
-    vulkan/pass_particles.cpp
-    vulkan/pass_billboard.cpp
-    vulkan/pass_gaussian_splat.cpp
-    vulkan/pass_dof.cpp
-    vulkan/pass_postfx.cpp
-    vulkan/scene_vk_bridge.cpp
+    nodes/shape_node.cpp
+    nodes/sprite_node.cpp
+    nodes/physics_node.cpp
+    nodes/mesh_node.cpp
+    nodes/skinned_mesh_node.cpp
+    nodes/instanced_mesh_node.cpp
+    nodes/gaussian_splat_node.cpp
+    nodes/html_node.cpp
+    nodes/light_node.cpp
+    nodes/particle_node.cpp
+    nodes/particles3d_node.cpp
+    nodes/decal_node.cpp
+    nodes/grass_node.cpp
+    nodes/plants_node.cpp
+    nodes/reflection_probe_node.cpp
+    nodes/terrain_manager.cpp
+    nodes/terrain_manager_mesh.cpp
+    nodes/terrain_manager_raycast.cpp
+    nodes/clipmap_terrain.cpp
+    nodes/clipmap_terrain_elevation.cpp
+    nodes/tile_world.cpp
+    nodes/tile_world_mesh.cpp
+    nodes/tile_world_objects.cpp
+    world/world_cells.cpp
+    world/surface_layers.cpp
+    vulkan/frame/scene_vk_device.cpp
+    vulkan/frame/scene_vk_allocator.cpp
+    vulkan/frame/scene_vk_pipeline.cpp
+    vulkan/frame/scene_vk_descriptors.cpp
+    vulkan/frame/scene_vk_shader_compiler.cpp
+    vulkan/frame/scene_view.cpp
+    vulkan/frame/scene_defaults.cpp
+    vulkan/frame/scene_targets.cpp
+    vulkan/frame/scene_gpu_timer.cpp
+    vulkan/frame/scene_gpu_resources.cpp
+    vulkan/frame/scene_frame_graph.cpp
+    vulkan/frame/scene_fullscreen.cpp
+    vulkan/frame/pass_snapshot.cpp
+    vulkan/frame/scene_vk_bridge.cpp
+    vulkan/world/scene_surface_layers.cpp
+    vulkan/world/scene_world_cells_pass.cpp
+    vulkan/draw/scene_vk_custom_shader.cpp
+    vulkan/draw/scene_mesh_drawer.cpp
+    vulkan/draw/scene_draw_list.cpp
+    vulkan/draw/pass_mesh.cpp
+    vulkan/draw/pass_decal.cpp
+    vulkan/draw/pass_particles.cpp
+    vulkan/draw/pass_billboard.cpp
+    vulkan/draw/pass_gaussian_splat.cpp
+    vulkan/ground/scene_mesh_drawer_grass.cpp
+    vulkan/ground/scene_mesh_drawer_ground.cpp
+    vulkan/ground/pass_ground_layers.cpp
+    vulkan/foliage/scene_mesh_drawer_plants.cpp
+    vulkan/foliage/scene_plants_gpu_plan.cpp
+    vulkan/lighting/scene_lighting.cpp
+    vulkan/lighting/scene_environment.cpp
+    vulkan/lighting/pass_environment.cpp
+    vulkan/lighting/pass_reflection_probe.cpp
+    vulkan/shadow/pass_shadow.cpp
+    vulkan/post/pass_ssao.cpp
+    vulkan/post/pass_ssr.cpp
+    vulkan/post/pass_dof.cpp
+    vulkan/post/pass_postfx.cpp
     ${VK_GENERATED_HEADERS}
 )
 

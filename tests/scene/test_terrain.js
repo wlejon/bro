@@ -1,4 +1,4 @@
-// Test bro scene.createTerrain — exercises src/scene/terrain_manager.cpp
+// Test bro scene.createTerrain — exercises src/scene/nodes/terrain_manager.cpp
 // and terrain API.
 
 const canvas = document.createElement('canvas');

@@ -1,4 +1,4 @@
-// Test scene.createGaussianSplat — exercises src/scene/gaussian_splat_node.cpp
+// Test scene.createGaussianSplat — exercises src/scene/nodes/gaussian_splat_node.cpp
 // and the createGaussianSplat/savePly/splatCount bindings in
 // scene subsystem. Builds an in-memory SoA cloud (the same shape
 // bro.triposplat.generate returns) rather than depending on a real .ply asset,

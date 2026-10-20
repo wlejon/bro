@@ -3,7 +3,7 @@
 #include "bronze_host/native_scene_internal.h"
 #include "bronze_host/host_natives.h"
 #include "natives/clipmap/native_clipmap_decl.h"
-#include "scene/clipmap_terrain.h"
+#include "scene/nodes/clipmap_terrain.h"
 #include "scene/scene_node.h"
 
 namespace bro::bronze_host {

@@ -1,7 +1,7 @@
 #include "engine/gizmo.h"
 #include "engine/gizmo_internal.h"
 
-#include "scene/mesh_node.h"
+#include "scene/nodes/mesh_node.h"
 
 #include <algorithm>
 #include <cmath>

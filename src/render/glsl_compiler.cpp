@@ -52,7 +52,8 @@ bool readTextFile(const std::string& path, std::string& out) {
     return true;
 }
 
-// Replace every `#include "name"` line of `text` with the file `name` from `dir`.
+// Replace every `#include "name"` line of `text` with the file `name` from
+// `dir`, the include root (an included file's own includes are from it too).
 bool expandIncludes(std::string& text, const std::string& dir, int depth,
                     std::vector<std::string>* deps, std::string* err) {
     if (depth > 8) {
@@ -93,15 +94,21 @@ bool expandIncludes(std::string& text, const std::string& dir, int depth,
 } // namespace
 
 bool preprocessGlslFile(const std::string& path, const std::vector<std::string>& defines,
-                        std::string& out, std::vector<std::string>* deps, std::string* err) {
+                        std::string& out, std::vector<std::string>* deps, std::string* err,
+                        const std::string& includeDir) {
     std::string text;
     if (!readTextFile(path, text)) {
         if (err) *err = "cannot read " + path;
         return false;
     }
     if (deps) deps->push_back(path);
-    const size_t slash = path.find_last_of("/\\");
-    const std::string dir = slash == std::string::npos ? std::string() : path.substr(0, slash + 1);
+    std::string dir = includeDir;
+    if (dir.empty()) {
+        const size_t slash = path.find_last_of("/\\");
+        if (slash != std::string::npos) dir = path.substr(0, slash + 1);
+    } else if (dir.back() != '/' && dir.back() != '\\') {
+        dir += '/';
+    }
     if (!expandIncludes(text, dir, 0, deps, err)) return false;
     if (!defines.empty()) {
         std::string lines;

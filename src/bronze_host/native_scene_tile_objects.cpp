@@ -4,7 +4,7 @@
 #include "bronze_host/native_scene_internal.h"
 #include "natives/tile_world/native_tile_world_decl.h"
 #include "bronze_host/host_natives.h"
-#include "scene/tile_world.h"
+#include "scene/nodes/tile_world.h"
 #include "util/asset_path.h"
 #include "broimage/decode.h"
 #include <bromesh/mesh_data.h>

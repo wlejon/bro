@@ -1,7 +1,7 @@
 // scene_grass.js — SceneGraph.createGrass and the grass node's members over
 // native_scene_grass.cpp.
 //
-// The node (scene/grass_node.h) draws blades over a FIELD: a grid of (ground
+// The node (scene/nodes/grass_node.h) draws blades over a FIELD: a grid of (ground
 // height, density, dryness, height multiplier). This file bakes that field
 // from whatever the app's ground is (a mesh node, a terrain, a clipmap, a
 // height function) and from the app's density / dryness / height inputs

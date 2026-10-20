@@ -7,7 +7,7 @@
 #include "engine/engine.h"
 #include "natives/scene/native_scene_decl.h"
 
-#include "scene/plants_node.h"
+#include "scene/nodes/plants_node.h"
 
 #include <cmath>
 #include <vector>

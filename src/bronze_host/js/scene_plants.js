@@ -1,7 +1,7 @@
 // scene_plants.js — SceneGraph.createPlants and the plants node's members
 // over native_scene_plants.cpp.
 //
-// The node (scene/plants_node.h) builds every plant on the GPU from a table
+// The node (scene/nodes/plants_node.h) builds every plant on the GPU from a table
 // of species and a list of plants; this file packs species objects and plant
 // objects into the records the node takes.
 //

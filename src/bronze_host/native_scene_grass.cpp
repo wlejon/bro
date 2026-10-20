@@ -8,7 +8,7 @@
 #include "engine/engine.h"
 #include "natives/scene/native_scene_decl.h"
 
-#include "scene/grass_node.h"
+#include "scene/nodes/grass_node.h"
 
 #include <bromesh/mesh_data.h>
 

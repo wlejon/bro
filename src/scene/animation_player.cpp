@@ -1,5 +1,5 @@
 #include "scene/animation_player.h"
-#include "scene/skinned_mesh_node.h"
+#include "scene/nodes/skinned_mesh_node.h"
 
 #include <algorithm>
 #include <cmath>

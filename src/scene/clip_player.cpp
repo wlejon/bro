@@ -1,11 +1,11 @@
 #include "scene/clip_player.h"
 #include "scene/scene_graph.h"
 #include "scene/scene_node.h"
-#include "scene/camera_node.h"
-#include "scene/light_node.h"
-#include "scene/mesh_node.h"
-#include "scene/shape_node.h"
-#include "scene/sprite_node.h"
+#include "scene/nodes/camera_node.h"
+#include "scene/nodes/light_node.h"
+#include "scene/nodes/mesh_node.h"
+#include "scene/nodes/shape_node.h"
+#include "scene/nodes/sprite_node.h"
 
 #include <bromath/quat.h>
 #include <bromath/scalar.h>
