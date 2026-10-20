@@ -6,7 +6,12 @@
 // found through its entry (and decode to its slot); the coarsest level is
 // filled whatever the budget; no slot holds two tiles; a stale generation
 // refills while the old tiles keep their entries.
+//
+// And OcclusionSnapshot (scene/occlusion_snapshot.h), the CPU's occlusion
+// query, against pyramids built here: what it calls hidden lies behind every
+// depth over its rect, and nothing reaching the eye or off the frame is.
 
+#include "scene/occlusion_snapshot.h"
 #include "scene/surface_layers.h"
 
 #include <bromath/frustum.h>
@@ -242,6 +247,91 @@ void testItems() {
     check(over > 0, "the tiles over the changed item refill");
 }
 
+/// A Vulkan clip space (depth 0 at `n` to 1 at `f`, y down), vertical field `fovY`.
+bromath::Mat4 vulkanProj(float fovY, float aspect, float n, float f) {
+    bromath::Mat4 p{};
+    for (float& v : p.data) v = 0.0f;
+    const float t = 1.0f / std::tan(0.5f * fovY);
+    p.at(0, 0) = t / aspect;
+    p.at(1, 1) = -t;
+    p.at(2, 2) = f / (n - f);
+    p.at(2, 3) = n * f / (n - f);
+    p.at(3, 2) = -1.0f;
+    return p;
+}
+
+/// A pyramid of a `w` x `h` frame (level 0 half of it) whose depth is
+/// depthAt(level 0 texel x, y), each level the farthest (largest) of the 2x2
+/// below with the odd row or column folded into the last texel.
+std::vector<OcclusionSnapshot::Level> pyramid(uint32_t w, uint32_t h, float (*depthAt)(uint32_t, uint32_t)) {
+    std::vector<OcclusionSnapshot::Level> levels(1);
+    levels[0].width = (w + 1) / 2;
+    levels[0].height = (h + 1) / 2;
+    for (uint32_t y = 0; y < levels[0].height; ++y)
+        for (uint32_t x = 0; x < levels[0].width; ++x) levels[0].depth.push_back(depthAt(x, y));
+    while (levels.back().width > 1 || levels.back().height > 1) {
+        const OcclusionSnapshot::Level& s = levels.back();
+        OcclusionSnapshot::Level d;
+        d.width = std::max(s.width / 2, 1u);
+        d.height = std::max(s.height / 2, 1u);
+        for (uint32_t y = 0; y < d.height; ++y)
+            for (uint32_t x = 0; x < d.width; ++x) {
+                const uint32_t x1 = x + 1 == d.width ? s.width - 1 : std::min(2 * x + 1, s.width - 1);
+                const uint32_t y1 = y + 1 == d.height ? s.height - 1 : std::min(2 * y + 1, s.height - 1);
+                float far = 0.0f;
+                for (uint32_t sy = 2 * y; sy <= y1; ++sy)
+                    for (uint32_t sx = 2 * x; sx <= x1; ++sx) far = std::max(far, s.depth[sy * s.width + sx]);
+                d.depth.push_back(far);
+            }
+        levels.push_back(std::move(d));
+    }
+    return levels;
+}
+
+constexpr float kNear = 0.1f, kFar = 1000.0f;
+// The depth of a point `d` metres ahead.
+float depthAhead(float d) { return (kFar / (kNear - kFar) * -d + kNear * kFar / (kNear - kFar)) / d; }
+// A wall 50 m ahead over the right half of a 256 x 128 frame, nothing on the left.
+float rightWall(uint32_t x, uint32_t) { return x >= 64 ? depthAhead(50.0f) : 1.0f; }
+// Something just past the near plane over the whole frame.
+float nearWall(uint32_t, uint32_t) { return depthAhead(0.2f); }
+
+void testOcclusionSnapshot() {
+    // Looking down -z from the origin, 90 degrees vertically, 256 x 128.
+    const bromath::Mat4 proj = vulkanProj(1.5707963f, 2.0f, kNear, kFar);
+    const bromath::Mat4 relView{};   // identity: looking down -z
+    const bromath::Vec3 eye{10.0f, 0.0f, 20.0f};
+    OcclusionSnapshot o;
+    const bromath::AABB3 none{{9.0f, -1.0f, -80.0f}, {11.0f, 1.0f, -78.0f}};
+    check(!o.occluded(none), "no pyramid hides nothing");
+    o.set(pyramid(256, 128, rightWall), 0, 256, 128, proj, relView, eye, false, 7);
+    check(o.valid() && o.frame() == 7, "a snapshot knows its frame");
+    const auto at = [&](float x, float z, float half) {
+        return bromath::AABB3{{eye.x + x - half, -half, eye.z + z - half}, {eye.x + x + half, half, eye.z + z + half}};
+    };
+    check(o.occluded(at(40.0f, -100.0f, 2.0f)), "a box behind the wall is hidden");
+    check(!o.occluded(at(-40.0f, -100.0f, 2.0f)), "a box behind nothing is not");
+    check(!o.occluded(at(15.0f, -30.0f, 2.0f)), "a box before the wall is not");
+    check(!o.occluded(at(0.0f, -100.0f, 3.0f)), "a box straddling the wall's edge is not");
+    check(!o.occluded(at(40.0f, 30.0f, 2.0f)), "a box behind the eye is not");
+    check(!o.occluded(at(0.0f, -0.1f, 1.0f)), "a box reaching past the near plane is not");
+    check(!o.occluded(at(400.0f, -100.0f, 2.0f)), "a box off the frame is not");
+    // Kept from a coarser first level, the same answers.
+    std::vector<OcclusionSnapshot::Level> all = pyramid(256, 128, rightWall);
+    all.erase(all.begin(), all.begin() + 3);
+    o.set(std::move(all), 3, 256, 128, proj, relView, eye, false, 8);
+    check(o.occluded(at(40.0f, -100.0f, 2.0f)) && !o.occluded(at(-40.0f, -100.0f, 2.0f)) &&
+              !o.occluded(at(0.0f, -100.0f, 3.0f)),
+          "a pyramid from level 3 answers as the whole one");
+
+    // Seen from inside a box that the wall cuts, never hidden; a box wholly
+    // behind a wall just past the near plane always is.
+    o.set(pyramid(256, 128, nearWall), 0, 256, 128, proj, relView, eye, false, 9);
+    check(o.occluded(at(-40.0f, -100.0f, 2.0f)) && o.occluded(at(0.0f, -30.0f, 5.0f)),
+          "behind a near wall every box is hidden");
+    check(!o.occluded(at(0.0f, -0.15f, 0.03f)), "a box before the near wall is not");
+}
+
 }  // namespace
 
 int main() {
@@ -250,6 +340,7 @@ int main() {
     testEvictionAndGenerations();
     testAliases();
     testItems();
+    testOcclusionSnapshot();
     std::printf("surface layers: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

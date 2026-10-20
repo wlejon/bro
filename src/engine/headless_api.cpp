@@ -581,6 +581,7 @@ scene::CullStats Engine::sceneCullStats() const {
         sum.groundLayerNeeded   += s.groundLayerNeeded;
         sum.groundLayerMissing  += s.groundLayerMissing;
         sum.groundLayerFills    += s.groundLayerFills;
+        sum.groundLayerShortfall = std::max(sum.groundLayerShortfall, s.groundLayerShortfall);
     }
     return sum;
 }

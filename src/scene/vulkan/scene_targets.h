@@ -28,6 +28,8 @@
 //                            held back against hiZPrev, and the retest's
 //                            draws of those hiZ does not hide
 //                            (occlusion_list_layout.h).
+//   occlusionReadback        hiZ's coarse levels read back for the CPU's
+//                            occlusion queries (scene/occlusion_snapshot.h).
 //   ssrSnapshot              the lit opaque colour SSR reflects.
 //   dofHdr, postLdr, ldr     the post chain; ldr is the frame's output.
 //   shadowAtlas              every light's shadow tiles (SceneRenderer's
@@ -36,6 +38,7 @@
 //                            shadow, then the plan's size; it never shrinks,
 //                            so cached tiles survive frames without shadows.
 
+#include "scene/vulkan/scene_occlusion_readback.h"
 #include "scene/vulkan/scene_vk_allocator.h"
 #include "scene/vulkan/scene_vk_target_format.h"
 
@@ -111,6 +114,9 @@ public:
         hiZState = {};
     }
     SceneVkBuffer occlusionList;
+    /// hiZ's coarse levels on the CPU, a few frames old (PassHiZ copies,
+    /// the frame's start reads).
+    SceneOcclusionReadback occlusionReadback;
     SceneVkImage ssrSnapshot;
     SceneVkImage dofHdr;
     SceneVkImage postLdr;

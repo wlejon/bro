@@ -245,11 +245,15 @@ void SceneMeshDrawer::recordGroundLayers(SceneFrame& frame) {
         sv.focalPixels = 0.5f * static_cast<float>(std::max(view.height, 1u)) * std::fabs(view.proj.at(1, 1));
         sv.orthoMetresPerPixel =
             2.0f / std::max(std::fabs(view.proj.at(1, 1)) * static_cast<float>(std::max(view.height, 1u)), 1e-6f);
+        // (Not culled by occlusion, SceneOcclusionReadback: on the wilds the
+        // shortfall is the visible tiles', and tiles behind swaying trees
+        // came and went, five times the fills and nine tiles a frame coarse.)
         gl.tiles.update(sv, ++gl.frame);
         const std::vector<SurfaceFill>& fills = gl.tiles.fills();
         frame.stats.groundLayerFills += static_cast<int>(fills.size());
         frame.stats.groundLayerNeeded += static_cast<int>(gl.tiles.stats().needed);
         frame.stats.groundLayerMissing += static_cast<int>(gl.tiles.stats().missing);
+        frame.stats.groundLayerShortfall = std::max(frame.stats.groundLayerShortfall, gl.tiles.stats().worstError);
 
         if (!fills.empty()) {
             SceneSurfaceLayerAtlas& atlas = gl.atlas;

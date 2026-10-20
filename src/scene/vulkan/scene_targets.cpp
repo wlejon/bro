@@ -40,6 +40,7 @@ bool SceneTargets::setup(SceneVkDevice& device, SceneVkAllocator& allocator) {
 void SceneTargets::cleanup(SceneVkAllocator& allocator) {
     destroyFrameImages(allocator);
     if (occlusionList.isValid()) allocator.destroyBuffer(occlusionList);
+    occlusionReadback.cleanup(allocator);
     allocator.destroyImage(indirect);
     allocator.destroyImage(indirectMsaa);
     allocator.destroyImage(shadowAtlas);
@@ -148,6 +149,8 @@ bool SceneTargets::ensure(SceneVkAllocator& allocator, uint32_t width, uint32_t 
                                              VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, *img, levels);
         hiZState = {};
         hiZPrevState = {};
+        if (!occlusionReadback.resize(allocator, w, h, levels, width, height))
+            LOG_ERROR("SceneTargets: failed creating the occlusion readback; the CPU sees no occlusion");
     }
     if (ok && msaa()) {
         ok = createAttachment(allocator, hdrMsaa, kHdrFormat, kColor, samples) &&

@@ -307,6 +307,10 @@ void PassHiZ::record(SceneFrame& frame) {
     t.hiZState.proj = frame.view.proj;
     t.hiZState.relView = frame.view.relView;
     t.hiZState.eye = frame.view.eye;
+    // Its coarse levels for the CPU's queries (SceneOcclusionReadback).
+    const render::VulkanFrames& frames = frame.gpu.device.frames();
+    t.occlusionReadback.record(cmd, t.hiZ.image, frames.frameIndex(), frames.frameSerial(), frame.view.proj,
+                               frame.view.relView, frame.view.eye);
     if (!occlusionRetests(frame, batches_)) return;
 
     // The cards the batches held back, against it: each slot's run of the

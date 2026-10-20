@@ -302,6 +302,7 @@ const char* bro_scene_SceneGraph_cullStatsJson(void* self) {
     j["groundLayerNeeded"] = s.groundLayerNeeded;
     j["groundLayerMissing"] = s.groundLayerMissing;
     j["groundLayerFills"] = s.groundLayerFills;
+    j["groundLayerShortfall"] = s.groundLayerShortfall;
     tl_cullJson = j.dump();
     return tl_cullJson.c_str();
 }

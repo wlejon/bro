@@ -148,6 +148,8 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
     frame.lighting = sceneLighting(renderer, environment_, frame.view.eye);
     // Last frame's pyramid becomes the one this frame's cards test first.
     targets_.swapHiZ();
+    // (The slot's last copy of a pyramid is done: VulkanFrames waited for it.)
+    targets_.occlusionReadback.harvest(device_.frames().frameIndex(), device_.frames().frameSerial());
     writeCameraSet(frame);
     frame.ssao = renderer.ssaoEnabled() && targets_.ensureIndirect(allocator_);
     frame.ssr = renderer.ssrEnabled() && renderer.ssrIntensity() > 0.0f;
