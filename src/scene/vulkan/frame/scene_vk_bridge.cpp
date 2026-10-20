@@ -6,7 +6,6 @@
 #include "scene/vulkan/draw/pass_billboard.h"
 #include "scene/vulkan/draw/pass_decal.h"
 #include "scene/vulkan/post/pass_dof.h"
-#include "scene/vulkan/ground/pass_ground_layers.h"
 #include "scene/vulkan/lighting/pass_environment.h"
 #include "scene/vulkan/draw/pass_gaussian_splat.h"
 #include "scene/vulkan/draw/pass_mesh.h"
@@ -17,6 +16,7 @@
 #include "scene/vulkan/frame/pass_snapshot.h"
 #include "scene/vulkan/post/pass_ssao.h"
 #include "scene/vulkan/post/pass_ssr.h"
+#include "scene/vulkan/world/pass_world_service.h"
 #include "scene/vulkan/draw/scene_draw_list.h"
 #include "scene/vulkan/frame/scene_frame.h"
 #include "scene/vulkan/lighting/scene_lighting.h"
@@ -30,7 +30,7 @@ SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
     : device_(context),
       allocator_(device_),
       resources_(allocator_),
-      gpu_{device_, allocator_, defaults_, targets_, resources_, meshes_, environment_},
+      gpu_{device_, allocator_, defaults_, targets_, resources_, meshes_, environment_, world_},
       timer_(context) {
     // The frame, in order. A pass draws into the HDR scope or brings its own
     // targets; the graph does every shared transition (scene_frame_graph.h).
@@ -43,14 +43,14 @@ SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
         // the shadow atlas, the plants' shadows included.
         graph_.add(std::make_unique<PassShadow>(PassShadow::Part::Unplanned));
         graph_.add(std::make_unique<PassFrameUniforms>());
-        graph_.add(std::make_unique<PassGroundLayers>());
+        graph_.add(std::make_unique<PassWorldService>());
         graph_.add(std::make_unique<PassEnvironment>());
         graph_.add(std::make_unique<PassShadow>(PassShadow::Part::Planned));
         graph_.add(std::make_unique<PassReflectionProbe>());
     } else {
         graph_.add(std::make_unique<PassShadow>());
         graph_.add(std::make_unique<PassFrameUniforms>());
-        graph_.add(std::make_unique<PassGroundLayers>());
+        graph_.add(std::make_unique<PassWorldService>());
         graph_.add(std::make_unique<PassReflectionProbe>());
         graph_.add(std::make_unique<PassEnvironment>());
     }

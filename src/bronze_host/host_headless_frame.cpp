@@ -776,6 +776,11 @@ void installHeadlessFrame(engine::Engine& engine) {
                 snum("groundLayerMissing", s.groundLayerMissing);
                 snum("groundLayerFills", s.groundLayerFills);
                 snum("groundLayerShortfall", s.groundLayerShortfall);
+                snum("worldBudgetMs", s.worldBudgetMs);
+                snum("worldSpentMs", s.worldSpentMs);
+                snum("worldJobs", s.worldJobs);
+                snum("worldQueued", s.worldQueued);
+                snum("worldWorstError", s.worldWorstError);
                 o.set(ev::setProperty(o.get(), "scene", sc.get()));
             }
 #endif

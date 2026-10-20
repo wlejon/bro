@@ -2,8 +2,8 @@
 // Surface layers (docs/scene-world-architecture.md §5): a surface's
 // material, worked out once per tile and kept, instead of in every pixel
 // that shows it. This is the CPU half, the same for every provider: which
-// tiles a view needs, where they live, which to fill this frame and what the
-// page table says. The GPU half (scene/vulkan/world/scene_surface_layers.h) owns
+// tiles a view needs, where they live, the fills it offers the world service
+// and what the page table says. The GPU half (scene/vulkan/world/scene_surface_layers.h) owns
 // the atlas and the page table and records the fills the provider draws.
 //
 // Tiles. A tile is a square of the ground, keyed as a world cell is
@@ -48,13 +48,21 @@
 // With no items, the bounds are one item of generation 0.
 //
 // Filling. Each frame the tiles a view needs but has not got (or got at an
-// older generation of the provider's data) are filled, coarsest first, then
-// nearest, up to `fillBudget` a frame (the coarsest level always, whatever
-// the budget, so nothing is ever without a layer after the first frame). A
-// stale tile keeps drawing until its refill lands. A tile no view needs
-// stays where it is until its slot is wanted (least recently needed first),
-// so turning back finds it. A slot is reused in the same command stream that
-// read it, after it, so nothing waits for a reader to finish.
+// older generation of the provider's data) are the layer's jobs (jobs()),
+// which the world service (world_service.h, docs/scene-world-architecture.md
+// §6) ranks against every other producer's and grants as the frame's slack
+// allows; the granted ones are filled (commit()). A job's error is in
+// pixels, what the view shows while it is not made: a missing tile's texels
+// are its nearest resident ancestor's, 2^(levels between) times its own on
+// screen; a stale tile's are its own. A tile's error is never above its
+// parent's while that one is a job too, so with ties going to the larger
+// tile a tile is never ranked ahead of its parent. The coarsest level's
+// missing tiles are required (filled whatever the budget), so nothing is
+// ever without a layer after the first frame. A stale tile keeps drawing
+// until its refill lands. A tile no view needs stays where it is until its
+// slot is wanted (least recently needed first), so turning back finds it. A
+// slot is reused in the same command stream that read it, after it, so
+// nothing waits for a reader to finish.
 
 #include "scene/world/world_cells.h"
 
@@ -63,6 +71,7 @@
 #include <bromath/vec.h>
 
 #include <cstdint>
+#include <span>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -77,9 +86,17 @@ struct SurfaceLayerConfig {
     int pageSize = 256;          // page-table entries a side, a level (a power of two)
     int maxLevels = 20;          // the most levels (the provider's bounds set how many)
     float texelPixels = 1.5f;    // a tile is refined while its texel covers more pixels than this
-    int fillBudget = 24;         // tiles filled a frame (the coarsest level aside)
 
     int stride() const { return tileTexels + 2 * border; }
+};
+
+/// A tile the view needs and has not got at the current generation: a job
+/// for the world service (WorldJob's fields, the layer's side of them).
+struct SurfaceJob {
+    CellKey key;
+    float error = 0.0f;      // pixels on screen while it is not filled
+    double side = 1.0;       // metres
+    bool required = false;   // a missing tile of the coarsest level
 };
 
 /// A tile to fill this frame: its key, its slot and its ground rectangle
@@ -107,7 +124,7 @@ struct SurfaceItem {
 struct SurfaceLayerStats {
     uint32_t needed = 0;      // tiles the view needs
     uint32_t resident = 0;    // tiles holding a slot
-    uint32_t missing = 0;     // needed and not filled at the current generation
+    uint32_t missing = 0;     // needed and not filled at the current generation (after commit)
     uint32_t filled = 0;      // fills issued this frame
     uint32_t levels = 0;
     /// The atlas's shortfall: how many times too coarse the worst tile the
@@ -157,10 +174,15 @@ public:
     }
     static constexpr int kGridCells = 512;
 
-    /// Select the tiles `view` needs, give the ones to fill this frame slots
-    /// (fills()), and gather the page-table writes (pageWrites(), to apply
-    /// after the fills). `frame` counts up by one a call.
+    /// Select the tiles `view` needs and gather the jobs (jobs()): those not
+    /// filled at the current generation. `frame` counts up by one a call.
     void update(const View& view, uint64_t frame);
+    const std::vector<SurfaceJob>& jobs() const { return jobs_; }
+    /// Fill the granted jobs (their keys' packed bits, in the order given):
+    /// give them slots (fills()) and gather the page-table writes
+    /// (pageWrites(), to apply after the fills). Once a frame, after update(),
+    /// with no keys when none were granted (it settles the frame's stats).
+    void commit(std::span<const uint64_t> granted);
 
     const std::vector<SurfaceFill>& fills() const { return fills_; }
     const std::vector<SurfacePageWrite>& pageWrites() const { return pageWrites_; }
@@ -185,6 +207,7 @@ private:
         CellKey key;
         float distance = 0.0f;
         uint64_t generation = 0;
+        float texelPixels = 0.0f;   // its texel's pixels on screen at its nearest
     };
 
     struct Cell {
@@ -220,6 +243,8 @@ private:
     std::vector<int> freeSlots_;
     std::vector<uint64_t> pageTile_;              // each page entry's tile (kFree when none)
 
+    std::vector<SurfaceJob> jobs_;
+    uint64_t frame_ = 0;   // update()'s
     std::vector<SurfaceFill> fills_;
     std::vector<SurfacePageWrite> pageWrites_;
     SurfaceLayerStats stats_;

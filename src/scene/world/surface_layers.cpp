@@ -122,9 +122,6 @@ float SurfaceLayers::select(const View& view, std::vector<Need>& out) const {
         const bool seen = bromath::fintersects(view.frustum, box);
         if (k.level != top && !seen) return;
         const float dist = boxDistance(view.eye, box);
-        out.push_back({k, dist, mix64(generation_ ^ g.sum)});
-        if (k.level == 0 || !seen) return;
-
         float metresPerPixel = view.orthoMetresPerPixel;
         if (view.perspective) {
             // The eye's height over the ground's middle there, and the
@@ -136,6 +133,9 @@ float SurfaceLayers::select(const View& view, std::vector<Need>& out) const {
             const float sine = std::min(1.0f, vert / d + std::max(slope, kSlopeSine));
             metresPerPixel = d / (std::max(view.focalPixels, 1.0f) * sine);
         }
+        const float texelPixels = texelMetres(k.level) / std::max(metresPerPixel, 1e-9f);
+        out.push_back({k, dist, mix64(generation_ ^ g.sum), texelPixels});
+        if (k.level == 0 || !seen) return;
         const float error = texelMetres(k.level) / (config_.texelPixels * std::max(metresPerPixel, 1e-9f));
         if (error > 1.0f) open.push({error, k});
     };
@@ -296,9 +296,11 @@ void SurfaceLayers::page(const Tile& tile) {
 }
 
 void SurfaceLayers::update(const View& view, uint64_t frame) {
+    jobs_.clear();
     fills_.clear();
     pageWrites_.clear();
     stats_ = {};
+    frame_ = frame;
     if (!configured()) return;
     stats_.levels = static_cast<uint32_t>(levels_);
     if (gridDirty_) buildGrid();
@@ -322,14 +324,11 @@ void SurfaceLayers::update(const View& view, uint64_t frame) {
     }
     stats_.needed = static_cast<uint32_t>(needs.size());
 
-    struct Candidate {
-        uint64_t packed;
-        int level;
-        bool stale;
-        float distance;
-        uint64_t generation;
-    };
-    std::vector<Candidate> todo;
+    // Coarsest first, so a tile's parent's error is known before its own.
+    std::stable_sort(needs.begin(), needs.end(),
+                     [](const Need& a, const Need& b) { return a.key.level > b.key.level; });
+    const int top = levels_ - 1;
+    std::unordered_map<uint64_t, float> jobError;   // this frame's jobs, by key
     for (const Need& n : needs) {
         const uint64_t packed = n.key.packed();
         Tile& t = tiles_[packed];
@@ -337,40 +336,56 @@ void SurfaceLayers::update(const View& view, uint64_t frame) {
         t.lastNeeded = frame;
         t.wanted = n.generation;
         if (t.filled && t.generation == n.generation) continue;
-        todo.push_back({packed, n.key.level, t.filled, n.distance, n.generation});
+        // A stale tile shows its own texels; a missing one its nearest
+        // resident ancestor's (none: as if one above the coarsest).
+        int shown = n.key.level;
+        if (!t.filled) {
+            shown = levels_;
+            for (int up = 1; n.key.level + up <= top; ++up) {
+                const auto a = tiles_.find(n.key.parent(up).packed());
+                if (a != tiles_.end() && a->second.filled) {
+                    shown = n.key.level + up;
+                    break;
+                }
+            }
+        }
+        float error = n.texelPixels * static_cast<float>(uint64_t{1} << (shown - n.key.level));
+        if (n.key.level < top) {
+            const auto p = jobError.find(n.key.parent().packed());
+            if (p != jobError.end()) error = std::min(error, p->second);
+        }
+        jobError[packed] = error;
+        const double side = static_cast<double>(config_.tileMetres) * static_cast<double>(uint64_t{1} << n.key.level);
+        jobs_.push_back({n.key, error, side, !t.filled && n.key.level == top});
     }
-    // Coarsest first (a finer tile is no use without them), the missing
-    // before the stale, then the nearest.
-    std::sort(todo.begin(), todo.end(), [](const Candidate& a, const Candidate& b) {
-        if (a.level != b.level) return a.level > b.level;
-        if (a.stale != b.stale) return !a.stale;
-        return a.distance < b.distance;
-    });
+}
 
-    const int top = levels_ - 1;
-    int issued = 0;
-    for (const Candidate& c : todo) {
-        if (issued >= config_.fillBudget && c.level != top) break;
-        const auto it = tiles_.find(c.packed);
-        if (it == tiles_.end()) continue;   // evicted as another's alias
+void SurfaceLayers::commit(std::span<const uint64_t> granted) {
+    fills_.clear();
+    if (!configured()) return;
+    const uint64_t frame = frame_;
+    for (const uint64_t packed : granted) {
+        const auto it = tiles_.find(packed);
+        if (it == tiles_.end() || it->second.lastNeeded != frame) continue;   // evicted as another's alias
         Tile& t = it->second;
+        if (t.filled && t.generation == t.wanted) continue;
         if (t.slot < 0) {
             const int s = takeSlot(frame);
             if (s < 0) break;   // every slot is needed this frame
             t.slot = s;
-            slotTile_[static_cast<size_t>(s)] = c.packed;
+            slotTile_[static_cast<size_t>(s)] = packed;
         }
         t.filled = true;
-        t.generation = c.generation;
+        t.generation = t.wanted;
         const double side = static_cast<double>(config_.tileMetres) * static_cast<double>(uint64_t{1} << t.key.level);
         fills_.push_back({t.key, t.slot, t.key.x * side, t.key.z * side, side});
         page(t);
-        ++issued;
     }
     stats_.filled = static_cast<uint32_t>(fills_.size());
 
     // Tiles needed this frame but given no slot are forgotten (they are
     // chosen again next frame); every other tile keeps its slot.
+    stats_.missing = stats_.resident = 0;
     for (auto it = tiles_.begin(); it != tiles_.end();) {
         if (it->second.slot < 0) {
             ++stats_.missing;

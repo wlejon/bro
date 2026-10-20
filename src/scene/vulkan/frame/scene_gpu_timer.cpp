@@ -84,6 +84,9 @@ void SceneGpuTimer::endCompute(VkCommandBuffer cmd) {
 void SceneGpuTimer::begin(VkCommandBuffer cmd) {
     recordingPair_ = UINT32_MAX;
     if (pool_ == VK_NULL_HANDLE) return;
+    // (The renders that have finished are read now, so takeFrames sees each
+    // as soon as it can, whoever takes the milliseconds.)
+    drain(false);
     const uint32_t pair = context_.frames().frameIndex();
     // A second render in the same frame slot would reset queries the first
     // may still be writing; it goes untimed and the first keeps its result.
@@ -103,8 +106,35 @@ void SceneGpuTimer::begin(VkCommandBuffer cmd) {
     vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, pool_, kPerSlot * pair);
     recordingPair_ = pair;
     markCount_[pair] = 0;
+    spanMask_[pair] = spanApart_[pair] = 0;
     computeTimed_[pair] = false;
     computeCmd_ = VK_NULL_HANDLE;
+}
+
+bool SceneGpuTimer::beginSpan(VkCommandBuffer cmd, uint32_t id, bool apart) {
+    if (recordingPair_ == UINT32_MAX || id >= kMaxSpans || cmd == VK_NULL_HANDLE) return false;
+    if (apart && cmd != computeCmd_) return false;   // the compute stream is untimed
+    const uint32_t pair = recordingPair_;
+    if ((spanMask_[pair] >> id) & 1u) return false;   // once a render
+    vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, apart ? computePool_ : pool_,
+                        kPerSlot * pair + kSpanBase + 2 * id);
+    spanMask_[pair] |= 1u << id;
+    if (apart) spanApart_[pair] |= 1u << id;
+    spanJobs_[pair][id] = 0;
+    return true;
+}
+
+void SceneGpuTimer::endSpan(VkCommandBuffer cmd, uint32_t id, bool apart, uint32_t jobs) {
+    if (recordingPair_ == UINT32_MAX || id >= kMaxSpans || !((spanMask_[recordingPair_] >> id) & 1u)) return;
+    vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, apart ? computePool_ : pool_,
+                        kPerSlot * recordingPair_ + kSpanBase + 2 * id + 1);
+    spanJobs_[recordingPair_][id] = jobs;
+}
+
+void SceneGpuTimer::takeFrames(std::vector<Frame>& out) {
+    drain(false);
+    out = std::move(frames_);
+    frames_.clear();
 }
 
 void SceneGpuTimer::mark(VkCommandBuffer cmd, const char* name) {
@@ -186,6 +216,8 @@ bool SceneGpuTimer::lastPasses(Passes& passes, Passes& compute, bool& computed) 
 double SceneGpuTimer::harvest(uint32_t pair) {
     pendingTicket_[pair] = 0;
     const uint32_t marks = markCount_[pair];
+    const uint32_t spans = spanMask_[pair];
+    spanMask_[pair] = 0;
     uint64_t stamps[kPerSlot] = {};
     if (vkGetQueryPoolResults(context_.device(), pool_, kPerSlot * pair, 2 + marks, sizeof(stamps),
                               stamps, sizeof(uint64_t), VK_QUERY_RESULT_64_BIT) != VK_SUCCESS)
@@ -211,6 +243,24 @@ double SceneGpuTimer::harvest(uint32_t pair) {
     const uint64_t from = lastEnd_ > start && lastEnd_ < end ? lastEnd_ : start;
     lastEnd_ = end;
     const double total = static_cast<double>(end - from) * periodNs_ / 1.0e6;
+    // Its spans, each on its own queue's clock.
+    Frame frame;
+    frame.order = pendingOrder_[pair];
+    frame.ms = total;
+    for (uint32_t id = 0; id < kMaxSpans; ++id) {
+        if (!((spans >> id) & 1u)) continue;
+        const bool apart = (spanApart_[pair] >> id) & 1u;
+        if (apart && !computed) continue;
+        uint64_t s[2] = {};
+        if (vkGetQueryPoolResults(context_.device(), apart ? computePool_ : pool_, kPerSlot * pair + kSpanBase + 2 * id,
+                                  2, sizeof(s), s, sizeof(uint64_t), VK_QUERY_RESULT_64_BIT) != VK_SUCCESS)
+            continue;
+        const uint64_t mask = apart ? computeMask_ : validMask_;
+        const double ms = static_cast<double>(((s[1] & mask) - (s[0] & mask)) & mask) * periodNs_ / 1.0e6;
+        frame.spans.push_back({id, spanJobs_[pair][id], ms, apart});
+    }
+    if (frames_.size() >= 16) frames_.erase(frames_.begin());
+    frames_.push_back(std::move(frame));
     if (marks > 0 || cmarks > 0) {
         // Its passes, each from the mark before it. (Past kMaxMarks the
         // render's later marks were not written: their time is in `rest`.)

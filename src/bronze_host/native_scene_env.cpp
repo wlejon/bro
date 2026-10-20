@@ -205,6 +205,11 @@ void bro_scene_SceneGraph_setDither(void* self, bool enabled) {
     if (g) g->setDither(enabled);
 }
 
+void bro_scene_SceneGraph_setFrameTarget(void* self, double ms) {
+    auto* g = graphOf(self);
+    if (g) g->setFrameTarget(static_cast<float>(ms));
+}
+
 void bro_scene_SceneGraph_setRenderScale(void* self, double scale) {
     auto* g = graphOf(self);
     if (g) g->setRenderScale(static_cast<float>(scale));
@@ -303,6 +308,11 @@ const char* bro_scene_SceneGraph_cullStatsJson(void* self) {
     j["groundLayerMissing"] = s.groundLayerMissing;
     j["groundLayerFills"] = s.groundLayerFills;
     j["groundLayerShortfall"] = s.groundLayerShortfall;
+    j["worldBudgetMs"] = s.worldBudgetMs;
+    j["worldSpentMs"] = s.worldSpentMs;
+    j["worldJobs"] = s.worldJobs;
+    j["worldQueued"] = s.worldQueued;
+    j["worldWorstError"] = s.worldWorstError;
     tl_cullJson = j.dump();
     return tl_cullJson.c_str();
 }

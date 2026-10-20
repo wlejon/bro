@@ -85,10 +85,29 @@ target/up/mode: the 6DOF / FPS path that avoids target+up precision loss.
  */
 
 /**
+ * The last frame's counters (`cullStats()`), and the world service's state.
+ * The world service (docs/scene-world-architecture.md §6) makes what does
+ * not depend on the view (today the turf's surface layer tiles) in the time
+ * the frame leaves under its target (`setFrameTarget`), most wrong on screen
+ * first.
  * @typedef {Object} SceneCullStats
  * @property {number} [totalNodes]
  * @property {number} [renderedNodes]
  * @property {number} [culledNodes]
+ * @property {number} [groundLayerNeeded]   the turf's surface layer tiles the camera needs
+ * @property {number} [groundLayerMissing]  of those, the ones not filled at their data's current generation
+ * @property {number} [groundLayerFills]    tiles filled this frame
+ * @property {number} [groundLayerShortfall]  how many times too coarse the worst tile the atlas had no
+ *   room to refine is (1: none)
+ * @property {number} [worldBudgetMs]   the world service's budget this frame: GPU ms the last frames left
+ *   under the target (their heaviest of the last four, less the service's own share), never under a
+ *   floor of 0.1 ms, and the floor after a frame over the target
+ * @property {number} [worldSpentMs]    the jobs granted this frame, at each kind's cost measured from GPU
+ *   timestamps
+ * @property {number} [worldJobs]       jobs granted this frame
+ * @property {number} [worldQueued]     jobs left for a later frame
+ * @property {number} [worldWorstError] the largest error left queued, in pixels on screen (what is shown
+ *   in its place: a missing tile's coarser parent's texels); 0 when nothing waits
  */
 
 // ── Classes & Interfaces ─────────────────────────────────────────────────────
@@ -771,6 +790,17 @@ class SceneGraph {
    * @param {boolean} enabled
    */
   setDither(enabled) {}
+
+  /**
+   * The frame's GPU target in milliseconds: 2.78 by default (360 fps on an
+   * RTX 4090), 16.7 for 60 fps. The world service spends what each frame
+   * leaves under it on world tiles (the turf's surface layers), and only its
+   * floor while frames run over it; `cullStats()`'s `world*` counters show
+   * its state. A value of 0 or less restores the default.
+   *
+   * @param {number} ms
+   */
+  setFrameTarget(ms) {}
 
   /**
    * @param {number} scale

@@ -17,6 +17,13 @@
 // start overlaps the previous frame's GPU work (the previous end read)
 // counts from that end instead, so overlapped frames do not count the
 // overlap twice.
+//
+// Spans are stamped always, timed passes or not: a numbered stretch of a
+// render (the world service's jobs of one kind, scene/vulkan/world/
+// scene_world_service.h) with the jobs it held, on the graphics queue or on
+// the async compute stream. Every render read, oldest first, is kept with
+// its spans for takeFrames(), apart from takeMs(): the world service reads
+// its frames there whatever perf.gpuFrameMs reads.
 #include "render/vulkan_context.h"
 
 #include <vulkan/vulkan.h>
@@ -33,6 +40,19 @@ public:
     /// mark before it (a name marked more than once, summed), then "rest"
     /// (the last mark to the end).
     using Passes = std::vector<std::pair<std::string, double>>;
+    static constexpr uint32_t kMaxSpans = 8;
+    /// A render read: its milliseconds (as takeMs reports them) and its spans.
+    struct Frame {
+        uint64_t order = 0;   // its place among the timed renders submitted (1 the first)
+        double ms = 0.0;
+        struct Span {
+            uint32_t id = 0;
+            uint32_t jobs = 0;
+            double ms = 0.0;
+            bool apart = false;   // on the async compute queue
+        };
+        std::vector<Span> spans;
+    };
 
     explicit SceneGpuTimer(render::VulkanContext& context) : context_(context) {}
     ~SceneGpuTimer();
@@ -57,9 +77,20 @@ public:
     /// when the render is untimed or that queue cannot write timestamps.
     void beginCompute(VkCommandBuffer cmd);
     void endCompute(VkCommandBuffer cmd);
+    /// Span `id` (below kMaxSpans, once a render) begins and ends in `cmd`:
+    /// the render's graphics, or (`apart`) its compute stream on the async
+    /// compute queue. False, and nothing written, when the render or that
+    /// stream is untimed.
+    bool beginSpan(VkCommandBuffer cmd, uint32_t id, bool apart);
+    void endSpan(VkCommandBuffer cmd, uint32_t id, bool apart, uint32_t jobs);
     /// `ticket` is the render's last graphics submission, which waits for its
     /// compute: once it completes, both are done.
     void submitted(uint64_t ticket);
+    /// The renders read since the last call (oldest first, at most 16 kept),
+    /// reading those that have finished without waiting.
+    void takeFrames(std::vector<Frame>& out);
+    /// Timed renders submitted so far: the open one, timed, will be the next.
+    uint64_t submittedRenders() const { return submits_; }
     /// Milliseconds of the last submitted render, waiting for it (its own
     /// ticket); -1 when nothing was timed since the last call. Not `wait`:
     /// the oldest render that has finished and was not taken yet, -1 for
@@ -76,7 +107,8 @@ private:
     // (A scene's grass alone is a few dozen draws, and a large scene's
     // opaque and shadow passes can take hundreds.)
     static constexpr uint32_t kMaxMarks = 512;
-    static constexpr uint32_t kPerSlot = 2 + kMaxMarks;   // start, end, the marks
+    static constexpr uint32_t kSpanBase = 2 + kMaxMarks;
+    static constexpr uint32_t kPerSlot = kSpanBase + 2 * kMaxSpans;   // start, end, the marks, the spans
 
     render::VulkanContext& context_;
     VkQueryPool pool_ = VK_NULL_HANDLE;
@@ -99,6 +131,13 @@ private:
     // not taken yet, oldest first.
     double ready_[8] = {};
     uint32_t readyCount_ = 0;
+    // Each slot's spans: those written (on the graphics queue, on the
+    // compute stream) and their jobs.
+    uint32_t spanMask_[8] = {};
+    uint32_t spanApart_[8] = {};
+    uint32_t spanJobs_[8][kMaxSpans] = {};
+    // The renders read for takeFrames, oldest first.
+    std::vector<Frame> frames_;
     // Each slot's marks: how many, and their names.
     uint32_t markCount_[8] = {};
     const char* markNames_[8][kMaxMarks] = {};

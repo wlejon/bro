@@ -599,6 +599,11 @@ scene::CullStats Engine::sceneCullStats() const {
         sum.groundLayerMissing  += s.groundLayerMissing;
         sum.groundLayerFills    += s.groundLayerFills;
         sum.groundLayerShortfall = std::max(sum.groundLayerShortfall, s.groundLayerShortfall);
+        sum.worldBudgetMs       += s.worldBudgetMs;
+        sum.worldSpentMs        += s.worldSpentMs;
+        sum.worldJobs           += s.worldJobs;
+        sum.worldQueued         += s.worldQueued;
+        sum.worldWorstError      = std::max(sum.worldWorstError, s.worldWorstError);
     }
     return sum;
 }

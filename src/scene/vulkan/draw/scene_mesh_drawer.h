@@ -21,6 +21,7 @@
 #include "scene/world/surface_layers.h"
 #include "scene/vulkan/frame/scene_gpu_resources.h"
 #include "scene/vulkan/world/scene_surface_layers.h"
+#include "scene/vulkan/world/scene_world_service.h"
 #include "scene/vulkan/frame/scene_vk_allocator.h"
 #include "scene/vulkan/draw/scene_vk_custom_shader.h"
 #include "scene/vulkan/frame/scene_vk_pipeline.h"
@@ -186,7 +187,7 @@ struct MeshDraw {
     VkDescriptorSet lightingSet = VK_NULL_HANDLE;
 };
 
-class SceneMeshDrawer {
+class SceneMeshDrawer final : public WorldProducer {
 public:
     bool setup(SceneGpu& gpu);
     void cleanup(SceneGpu& gpu);
@@ -209,12 +210,14 @@ public:
     /// `queue`: the GPU planner's read-backs of them are read once it completes.
     void plansSubmitted(uint64_t ticket, render::VulkanQueue& queue);
     /// The turf's surface layers (docs/scene-world-architecture.md §5;
-    /// scene_mesh_drawer_ground.cpp): for each grass node whose turf this
-    /// frame draws, the tiles the camera needs, the fills due this frame
-    /// (its turf meshes drawn straight down into them) and the page table's
-    /// changes. Recorded outside any rendering, after the frame's uniforms
-    /// and before anything draws the turf.
-    void recordGroundLayers(SceneFrame& frame);
+    /// scene_mesh_drawer_ground.cpp), the world service's first producer:
+    /// for each grass node whose turf this frame draws, the tiles the camera
+    /// needs and has not got, offered as fills (offer), and the fills the
+    /// service granted (its turf meshes drawn straight down into them) with
+    /// the page table's changes (record). Recorded outside any rendering,
+    /// after the frame's uniforms and before anything draws the turf.
+    void offer(SceneFrame& frame, WorldService& service) override;
+    uint32_t record(SceneFrame& frame, int kind, std::span<const WorldJob> granted, WorldStream& stream) override;
 
     /// A pass's view for a chunked draw (MeshDraw::chunks): its frustum
     /// (absolute world) and the origin its draws' push.model is relative to
@@ -292,7 +295,7 @@ private:
                                                      const bromath::AABB3& bounds);
     /// What every tile of a grass node's turf layer reads changes with this
     /// (its field, floor, herbs and the patterns' parameters; each turf
-    /// mesh is an item of its own, recordGroundLayers').
+    /// mesh is an item of its own, offer()'s).
     static uint64_t groundGeneration(GrassNode& grass);
     /// Set 3 holding a procedural draw's header and records, then its
     /// vegetation records (4 vec4s a segment; header[10] says where); null
@@ -329,6 +332,10 @@ private:
     VkShaderModule fsGroundIndirect_ = VK_NULL_HANDLE;
     VkShaderModule fsGroundFill_ = VK_NULL_HANDLE;     // a turf layer tile's fill (ground_layer_fill.frag)
     std::unordered_map<uint32_t, std::unique_ptr<GroundLayers>> groundLayers_;   // by grass node id
+    int turfKind_ = -1;   // the turf's fills, a world service job kind
+    /// This frame's turf draws by grass node (offer's, for record).
+    std::unordered_map<uint32_t, std::vector<const MeshDraw*>> turfDraws_;
+    std::vector<uint32_t> turfOffered_;   // the grass nodes whose tiles offer() updated this frame
     PipelineVariants builtin_;
     std::unordered_map<std::string, std::unique_ptr<CustomProgram>> custom_;
 

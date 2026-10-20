@@ -17,6 +17,7 @@
 #include "scene/vulkan/frame/scene_targets.h"
 #include "scene/vulkan/frame/scene_vk_allocator.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
+#include "scene/vulkan/world/scene_world_service.h"
 
 #include <cstdint>
 #include <memory>
@@ -82,6 +83,7 @@ private:
     SceneGpuResources resources_;
     SceneMeshDrawer meshes_;
     SceneEnvironment environment_;
+    SceneWorldService world_;
     SceneGpu gpu_;
     SceneFrameGraph graph_;
     SceneGpuTimer timer_;

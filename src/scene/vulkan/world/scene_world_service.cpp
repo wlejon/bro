@@ -1,0 +1,110 @@
+#include "scene/vulkan/world/scene_world_service.h"
+
+#include "scene/vulkan/frame/scene_frame.h"
+#include "scene/vulkan/frame/scene_gpu_timer.h"
+
+#include <algorithm>
+#include <cmath>
+
+namespace bro::scene::vk {
+
+static_assert(WorldService::kMaxKinds <= static_cast<int>(SceneGpuTimer::kMaxSpans),
+              "each world job kind is one span of the GPU timer");
+
+VkCommandBuffer WorldStream::cmd() {
+    if (cmd_ != VK_NULL_HANDLE) return cmd_;
+    if (schedule_ == WorldSchedule::Compute && streams_->compute) {
+        cmd_ = streams_->compute();
+        apart_ = cmd_ != streams_->graphics;
+    } else {
+        cmd_ = streams_->graphics;
+    }
+    if (streams_->timer) stamped_ = streams_->timer->beginSpan(cmd_, static_cast<uint32_t>(kind_), apart_);
+    return cmd_;
+}
+
+SceneWorldService::SceneWorldService() = default;
+
+int SceneWorldService::addKind(WorldProducer* producer, const WorldJobKind& kind) {
+    const int k = policy_.addKind(kind);
+    if (k < 0) return -1;
+    producers_.resize(static_cast<size_t>(k) + 1, nullptr);
+    producers_[static_cast<size_t>(k)] = producer;
+    return k;
+}
+
+bool SceneWorldService::viewCut(const bromath::Vec3& eye, const bromath::Vec3& forward, const bromath::Vec3& wasEye,
+                                const bromath::Vec3& wasForward, float halfFov) {
+    const bromath::Vec3 d = eye - wasEye;
+    if (bromath::vdot(d, d) > kCutMetres * kCutMetres) return true;
+    const float n = std::sqrt(bromath::vdot(forward, forward) * bromath::vdot(wasForward, wasForward));
+    return n > 0.0f && bromath::vdot(forward, wasForward) < n * std::cos(halfFov);
+}
+
+void SceneWorldService::beginFrame(SceneGpuTimer* timer, float targetMs, bool cut) {
+    if (cut) {
+        policy_.forgetSlack();
+        if (timer) staleThrough_ = timer->submittedRenders();
+    }
+    if (timer) {
+        std::vector<SceneGpuTimer::Frame> frames;
+        timer->takeFrames(frames);
+        for (const SceneGpuTimer::Frame& f : frames) {
+            WorldFrameTiming t;
+            t.frameMs = f.order > staleThrough_ ? f.ms : -1.0;   // (a view before the cut: its costs only)
+            for (const SceneGpuTimer::Frame::Span& s : f.spans)
+                t.spans.push_back({static_cast<int>(s.id), s.jobs, s.ms, s.apart});
+            policy_.observe(t);
+        }
+    }
+    policy_.setTarget(targetMs);
+    policy_.beginFrame();
+}
+
+uint32_t SceneWorldService::run(WorldStreams& streams, int kind,
+                                const std::function<uint32_t(WorldStream&)>& record) {
+    if (kind < 0 || kind >= policy_.kindCount()) return 0;
+    WorldStream stream;
+    stream.streams_ = &streams;
+    stream.kind_ = kind;
+    stream.schedule_ = policy_.kind(kind).schedule;
+    const uint32_t jobs = record(stream);
+    if (stream.stamped_) streams.timer->endSpan(stream.cmd_, static_cast<uint32_t>(kind), stream.apart_, jobs);
+    return jobs;
+}
+
+void SceneWorldService::runFrame(SceneFrame& frame) {
+    // The view's eye and forward (the camera looks down its -z), and whether
+    // it jumped since the last render.
+    const SceneView& view = frame.view;
+    const bromath::Vec3 forward{-view.invRelView.at(0, 2), -view.invRelView.at(1, 2), -view.invRelView.at(2, 2)};
+    const float halfFov = view.perspective ? std::atan(1.0f / std::max(std::fabs(view.proj.at(1, 1)), 1e-6f))
+                                           : 0.5235988f;   // (an orthographic view: 30 degrees)
+    const bool cut = haveView_ && viewCut(view.eye, forward, eye_, forward_, halfFov);
+    eye_ = view.eye;
+    forward_ = forward;
+    haveView_ = true;
+    beginFrame(frame.timer, frame.renderer.frameTargetMs(), cut);
+    // Each producer offers once, whatever kinds it registered.
+    std::vector<WorldProducer*> offered;
+    for (WorldProducer* p : producers_) {
+        if (!p || std::find(offered.begin(), offered.end(), p) != offered.end()) continue;
+        offered.push_back(p);
+        p->offer(frame, policy_);
+    }
+    policy_.schedule();
+    WorldStreams streams{frame.cmd, [&frame] { return frame.computeStream(); }, frame.timer};
+    for (int k = 0; k < policy_.kindCount(); ++k) {
+        WorldProducer* p = producers_[static_cast<size_t>(k)];
+        if (!p) continue;
+        run(streams, k, [&](WorldStream& s) { return p->record(frame, k, policy_.granted(k), s); });
+    }
+    const WorldServiceStats& s = policy_.stats();
+    frame.stats.worldBudgetMs = s.budgetMs;
+    frame.stats.worldSpentMs = s.spentMs;
+    frame.stats.worldJobs = static_cast<int>(s.granted);
+    frame.stats.worldQueued = static_cast<int>(s.queued);
+    frame.stats.worldWorstError = s.worstError;
+}
+
+}  // namespace bro::scene::vk

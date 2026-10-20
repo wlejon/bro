@@ -127,6 +127,7 @@ add_library(bro_scene STATIC
     nodes/tile_world_objects.cpp
     world/world_cells.cpp
     world/surface_layers.cpp
+    world/world_service.cpp
     vulkan/frame/scene_vk_device.cpp
     vulkan/frame/scene_vk_allocator.cpp
     vulkan/frame/scene_vk_pipeline.cpp
@@ -143,6 +144,8 @@ add_library(bro_scene STATIC
     vulkan/frame/scene_vk_bridge.cpp
     vulkan/world/scene_surface_layers.cpp
     vulkan/world/scene_world_cells_pass.cpp
+    vulkan/world/scene_world_service.cpp
+    vulkan/world/pass_world_service.cpp
     vulkan/draw/scene_vk_custom_shader.cpp
     vulkan/draw/scene_mesh_drawer.cpp
     vulkan/draw/scene_draw_list.cpp
@@ -153,7 +156,6 @@ add_library(bro_scene STATIC
     vulkan/draw/pass_gaussian_splat.cpp
     vulkan/ground/scene_mesh_drawer_grass.cpp
     vulkan/ground/scene_mesh_drawer_ground.cpp
-    vulkan/ground/pass_ground_layers.cpp
     vulkan/foliage/scene_mesh_drawer_plants.cpp
     vulkan/foliage/scene_plants_gpu_plan.cpp
     vulkan/lighting/scene_lighting.cpp
@@ -193,11 +195,17 @@ if(BRO_BUILD_TESTS)
                           bro_render bro_platform bro_util skia Vulkan::Vulkan)
     target_include_directories(bro_vulkan_scene_passes_test PRIVATE ${bro_SOURCE_DIR}/src ${VK_GEN_DIR})
 
-    # SurfaceLayers' tile bookkeeping (selection, budget, slots, page table),
+    # SurfaceLayers' tile bookkeeping (selection, jobs, slots, page table),
     # CPU only.
     add_executable(bro_surface_layers_test tests/test_surface_layers.cpp)
     target_link_libraries(bro_surface_layers_test PRIVATE bro_scene bro_render bro_platform bro_util)
     target_include_directories(bro_surface_layers_test PRIVATE ${bro_SOURCE_DIR}/src)
+
+    # The world service's policy (ranking, budget from slack, cost learning),
+    # CPU only.
+    add_executable(bro_world_service_test tests/test_world_service.cpp)
+    target_link_libraries(bro_world_service_test PRIVATE bro_scene bro_render bro_platform bro_util)
+    target_include_directories(bro_world_service_test PRIVATE ${bro_SOURCE_DIR}/src)
 endif()
 
 

@@ -339,6 +339,10 @@
         if (enabled === undefined) throw new TypeError("bro.scene.SceneGraph.prototype.setDither: enabled is required");
         __bro_native.scene.SceneGraph_setDither(this, !!enabled);
     });
+    fn(SceneGraph.prototype, "setFrameTarget", function setFrameTarget(ms) {
+        if (ms === undefined) throw new TypeError("bro.scene.SceneGraph.prototype.setFrameTarget: ms is required");
+        __bro_native.scene.SceneGraph_setFrameTarget(this, +ms || 0);
+    });
     fn(SceneGraph.prototype, "setRenderScale", function setRenderScale(scale) {
         if (scale === undefined) throw new TypeError("bro.scene.SceneGraph.prototype.setRenderScale: scale is required");
         __bro_native.scene.SceneGraph_setRenderScale(this, scale);

@@ -64,6 +64,13 @@ struct CullStats {
     // atlas's shortfall (SurfaceLayerStats::worstError: 1 when none).
     int groundLayerNeeded = 0, groundLayerMissing = 0, groundLayerFills = 0;
     float groundLayerShortfall = 1.0f;
+    // The world service (world/world_service.h): this frame's budget (GPU
+    // ms from the measured slack under frameTargetMs), the cost of the jobs
+    // it granted, how many it granted and left queued, and the largest
+    // error left queued (pixels; 0 when nothing waits).
+    float worldBudgetMs = 0.0f, worldSpentMs = 0.0f;
+    int worldJobs = 0, worldQueued = 0;
+    float worldWorstError = 0.0f;
 };
 
 class SceneRenderer {
@@ -296,6 +303,13 @@ public:
     /// the exact quantised values, for tests that read single pixels.
     void setDither(bool enabled) { ditherEnabled_ = enabled; }
     bool ditherEnabled() const { return ditherEnabled_; }
+
+    /// The frame's GPU target in milliseconds (2.78 by default: 360 fps on
+    /// the 4090): the world service (world/world_service.h) spends what the
+    /// frame leaves under it on world tiles, and only its floor when the
+    /// frame runs over it.
+    void setFrameTargetMs(float ms) { frameTargetMs_ = ms > 0.0f ? ms : 2.78f; }
+    float frameTargetMs() const { return frameTargetMs_; }
 
     void setWind(float dirX, float dirY, float dirZ,
                  float strength, float frequency) {
@@ -590,6 +604,7 @@ private:
     // --- FXAA ---
     bool  fxaaEnabled_ = false;
     bool  ditherEnabled_ = true;
+    float frameTargetMs_ = 2.78f;
 
     // --- Tilt-shift ---
     bool  tiltEnabled_     = false;

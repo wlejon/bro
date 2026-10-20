@@ -15,7 +15,10 @@
 #include "scene/vulkan/frame/scene_targets.h"
 #include "scene/vulkan/frame/scene_vk_target_format.h"
 #include "scene/vulkan/frame/scene_vk_shader_compiler.h"
+#include "scene/vulkan/frame/scene_gpu_timer.h"
+#include "scene/vulkan/world/scene_world_service.h"
 #include "render/vulkan_context.h"
+#include "render/vulkan_util.h"
 #include "render/vulkan_debug.h"
 #include "util/log.h"
 
@@ -492,6 +495,134 @@ int main() {
         }
     }
     std::cout << "PASSED (" << static_cast<int>(BuiltinSceneShader::Count) << " shaders)" << std::endl;
+
+    // The world service's compute path: a compute kind's granted jobs record
+    // into the frame's compute stream (the async compute queue where the
+    // device has one, else the graphics stream at the same point), the
+    // frame's graphics waits for them, what they wrote is there, and their
+    // span teaches the policy the kind's cost.
+    std::cout << "[Test] World service: compute jobs on the compute stream... " << std::flush;
+    {
+        SceneGpuTimer timer(context);
+        const bool timed = timer.init();
+        SceneWorldService world;
+        const int kind = world.addKind(nullptr, {"test-compute", scene::WorldSchedule::Compute, 0.01f});
+        assert(kind == 0);
+
+        constexpr uint32_t kCount = 64;
+        SceneVkBuffer out;
+        assert(allocator.createBuffer(kCount * sizeof(uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, out,
+                                      true));
+        assert(out.mappedData);
+        const char* src =
+            "#version 450\n"
+            "layout(local_size_x = 64) in;\n"
+            "layout(set = 0, binding = 0) buffer Out { uint v[]; } o;\n"
+            "layout(push_constant) uniform P { uint base; } p;\n"
+            "void main() { o.v[gl_GlobalInvocationID.x] = p.base + gl_GlobalInvocationID.x; }\n";
+        const auto spirv = SceneVkShaderCompiler::compileGlsl(src, VK_SHADER_STAGE_COMPUTE_BIT);
+        assert(!spirv.empty());
+        VkShaderModule cs = SceneVkShaderCompiler::createModule(device.device(), spirv);
+        VkDescriptorSetLayoutBinding binding{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT,
+                                             nullptr};
+        VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        li.bindingCount = 1;
+        li.pBindings = &binding;
+        VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
+        assert(vkCreateDescriptorSetLayout(device.device(), &li, nullptr, &setLayout) == VK_SUCCESS);
+        VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(uint32_t)};
+        VkPipelineLayoutCreateInfo pli{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        pli.setLayoutCount = 1;
+        pli.pSetLayouts = &setLayout;
+        pli.pushConstantRangeCount = 1;
+        pli.pPushConstantRanges = &range;
+        VkPipelineLayout layout = VK_NULL_HANDLE;
+        assert(vkCreatePipelineLayout(device.device(), &pli, nullptr, &layout) == VK_SUCCESS);
+        VkComputePipelineCreateInfo ci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+        ci.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_COMPUTE_BIT, cs,
+                    "main", nullptr};
+        ci.layout = layout;
+        VkPipeline pipeline = VK_NULL_HANDLE;
+        assert(vkCreateComputePipelines(device.device(), VK_NULL_HANDLE, 1, &ci, nullptr, &pipeline) == VK_SUCCESS);
+
+        bool apart = false;
+        uint32_t lastBase = 0;
+        for (uint32_t f = 1; f <= 6; ++f) {
+            context.frames().beginFrame();
+            VkCommandBuffer cmd = device.beginFrame();
+            timer.begin(cmd);
+            world.beginFrame(&timer, 2.78f);
+            for (uint64_t k = 0; k < 4; ++k) world.policy().offer({k, 0, kind, 10.0f - k, 1.0, false});
+            world.policy().schedule();
+            assert(!world.policy().granted(kind).empty());
+            VkCommandBuffer computeCmd = VK_NULL_HANDLE;
+            WorldStreams streams{cmd,
+                                 [&] {
+                                     computeCmd = device.computeCommands(cmd);
+                                     if (computeCmd != cmd) timer.beginCompute(computeCmd);
+                                     return computeCmd;
+                                 },
+                                 &timer};
+            const uint32_t base = f * 1000;
+            const uint32_t jobs = world.run(streams, kind, [&](WorldStream& s) {
+                const auto granted = world.policy().granted(kind);
+                VkCommandBuffer c = s.cmd();
+                apart = s.apart();
+                VkDescriptorSet set = device.frameSet(setLayout);
+                assert(set != VK_NULL_HANDLE);
+                VkDescriptorBufferInfo bi{out.buffer, 0, kCount * sizeof(uint32_t)};
+                VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+                w.dstSet = set;
+                w.descriptorCount = 1;
+                w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                w.pBufferInfo = &bi;
+                vkUpdateDescriptorSets(device.device(), 1, &w, 0, nullptr);
+                vkCmdBindPipeline(c, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+                vkCmdBindDescriptorSets(c, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 0, 1, &set, 0, nullptr);
+                // (Each granted job one dispatch over the buffer, the last's values kept.)
+                for (size_t j = 0; j < granted.size(); ++j) {
+                    vkCmdPushConstants(c, layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(uint32_t), &base);
+                    vkCmdDispatch(c, 1, 1, 1);
+                    render::cmdMemoryBarrier(c, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+                                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT);
+                }
+                render::cmdMemoryBarrier(c, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+                                         VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_HOST_READ_BIT);
+                return static_cast<uint32_t>(granted.size());
+            });
+            assert(jobs == 4);
+            lastBase = base;
+            // The frame's graphics waits for its compute from here on.
+            cmd = device.joinCompute(cmd);
+            timer.end(cmd);
+            if (apart) timer.endCompute(computeCmd);
+            assert(device.submitFrame(cmd));
+            timer.submitted(device.lastFrameTicket());
+            context.queue().wait(device.lastFrameTicket());
+        }
+        assert(apart == device.asyncCompute());
+        const auto* v = static_cast<const uint32_t*>(out.mappedData);
+        for (uint32_t i = 0; i < kCount; ++i) assert(v[i] == lastBase + i);
+        // The span reached the policy: the kind's cost is measured, where
+        // the queue the jobs ran on writes timestamps.
+        uint32_t familyCount = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties(context.physicalDevice(), &familyCount, nullptr);
+        std::vector<VkQueueFamilyProperties> families(familyCount);
+        vkGetPhysicalDeviceQueueFamilyProperties(context.physicalDevice(), &familyCount, families.data());
+        const int family = apart ? context.queueFamilies().computeFamily : context.queueFamilies().graphicsFamily;
+        const bool stamps = timed && family >= 0 && families[static_cast<size_t>(family)].timestampValidBits > 0;
+        assert(world.policy().measured(kind) == stamps);
+        std::cout << "PASSED (" << (apart ? "async compute queue" : "graphics stream") << ", a job "
+                  << world.policy().cost(kind) << " ms" << (stamps ? " measured" : " unmeasured") << ")"
+                  << std::endl;
+
+        vkDestroyPipeline(device.device(), pipeline, nullptr);
+        vkDestroyPipelineLayout(device.device(), layout, nullptr);
+        vkDestroyDescriptorSetLayout(device.device(), setLayout, nullptr);
+        SceneVkShaderCompiler::destroyModule(device.device(), cs);
+        allocator.destroyBuffer(out);
+    }
 
     // Clean up
     allocator.destroyImage(color);

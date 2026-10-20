@@ -1,8 +1,9 @@
 // The turf's surface layers (docs/scene-world-architecture.md §5): each
-// grass node's tiles, chosen for the camera (scene/world/surface_layers.h), filled
-// by drawing its turf meshes straight down into them with
-// ground_layer_fill.frag, and found by the turf's fragments through the page
-// table (scene_ground_layers.glsl).
+// grass node's tiles, chosen for the camera (scene/world/surface_layers.h),
+// offered to the world service (§6, scene/vulkan/world/scene_world_service.h)
+// as fills, filled as it grants them by drawing the turf meshes straight
+// down into them with ground_layer_fill.frag, and found by the turf's
+// fragments through the page table (scene_ground_layers.glsl).
 
 #include "scene/vulkan/draw/scene_mesh_drawer.h"
 
@@ -43,7 +44,6 @@ SurfaceLayerConfig groundConfig() {
     c.pageSize = 256;
     c.maxLevels = 20;
     c.texelPixels = 1.5f;
-    c.fillBudget = 24;
     return c;
 }
 
@@ -156,15 +156,16 @@ SceneMeshDrawer::GroundLayers* SceneMeshDrawer::groundLayers(SceneFrame& frame, 
     return slot->failed ? nullptr : slot.get();
 }
 
-void SceneMeshDrawer::recordGroundLayers(SceneFrame& frame) {
+void SceneMeshDrawer::offer(SceneFrame& frame, WorldService& service) {
     // Each grass node's turf draws this frame.
-    std::unordered_map<uint32_t, std::vector<const MeshDraw*>> turf;
+    turfDraws_.clear();
+    turfOffered_.clear();
     for (const MeshDraw& d : frame.lists.meshes) {
         if (d.kind != MeshKind::Static || !d.customSet || !d.hasBounds) continue;
         if (!(static_cast<uint32_t>(d.push.pbrParams[3]) & mesh_flags::kGround)) continue;
         const SceneNode* n = frame.graph.findById(d.nodeId);
         if (!n || n->type() != SceneNode::Type::Mesh) continue;
-        if (const uint32_t g = static_cast<const MeshNode*>(n)->turfGrass()) turf[g].push_back(&d);
+        if (const uint32_t g = static_cast<const MeshNode*>(n)->turfGrass()) turfDraws_[g].push_back(&d);
     }
     // A grass node gone takes its layers with it.
     for (auto it = groundLayers_.begin(); it != groundLayers_.end();) {
@@ -178,7 +179,7 @@ void SceneMeshDrawer::recordGroundLayers(SceneFrame& frame) {
 
     VkCommandBuffer cmd = frame.cmd;
     const SceneView& view = frame.view;
-    for (auto& [grassId, draws] : turf) {
+    for (auto& [grassId, draws] : turfDraws_) {
         const auto found = groundLayers_.find(grassId);
         if (found == groundLayers_.end() || found->second->failed) continue;
         GroundLayers& gl = *found->second;
@@ -239,13 +240,37 @@ void SceneMeshDrawer::recordGroundLayers(SceneFrame& frame) {
         // shortfall is the visible tiles', and tiles behind swaying trees
         // came and went, five times the fills and nine tiles a frame coarse.)
         gl.tiles.update(sv, ++gl.frame);
+        for (const SurfaceJob& j : gl.tiles.jobs())
+            service.offer({j.key.packed(), grassId, turfKind_, j.error, j.side, j.required});
+        turfOffered_.push_back(grassId);
+    }
+}
+
+uint32_t SceneMeshDrawer::record(SceneFrame& frame, int kind, std::span<const WorldJob> granted,
+                                 WorldStream& stream) {
+    if (kind != turfKind_) return 0;
+    // The fills granted, by grass node, in rank order.
+    std::unordered_map<uint32_t, std::vector<uint64_t>> grantedKeys;
+    for (const WorldJob& j : granted) grantedKeys[j.producer].push_back(j.key);
+
+    const SceneView& view = frame.view;
+    uint32_t recorded = 0;
+    for (const uint32_t grassId : turfOffered_) {
+        GroundLayers& gl = *groundLayers_.at(grassId);
+        const std::vector<const MeshDraw*>& draws = turfDraws_.at(grassId);
+        const auto keys = grantedKeys.find(grassId);
+        gl.tiles.commit(keys != grantedKeys.end() ? std::span<const uint64_t>(keys->second)
+                                                  : std::span<const uint64_t>());
         const std::vector<SurfaceFill>& fills = gl.tiles.fills();
         frame.stats.groundLayerFills += static_cast<int>(fills.size());
         frame.stats.groundLayerNeeded += static_cast<int>(gl.tiles.stats().needed);
         frame.stats.groundLayerMissing += static_cast<int>(gl.tiles.stats().missing);
         frame.stats.groundLayerShortfall = std::max(frame.stats.groundLayerShortfall, gl.tiles.stats().worstError);
+        recorded += static_cast<uint32_t>(fills.size());
+        const bromath::AABB3& bounds = gl.tiles.bounds();
 
         if (!fills.empty()) {
+            VkCommandBuffer cmd = stream.cmd();
             SceneSurfaceLayerAtlas& atlas = gl.atlas;
             const TargetFormat target = atlas.target();
             const uint32_t stride = atlas.stride();
@@ -323,8 +348,9 @@ void SceneMeshDrawer::recordGroundLayers(SceneFrame& frame) {
             }
             atlas.endFills(cmd, fills);
         }
-        gl.atlas.writePages(frame.gpu.device, cmd, gl.tiles.pageWrites());
+        if (!gl.tiles.pageWrites().empty()) gl.atlas.writePages(frame.gpu.device, stream.cmd(), gl.tiles.pageWrites());
     }
+    return recorded;
 }
 
 }  // namespace bro::scene::vk

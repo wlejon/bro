@@ -12,6 +12,7 @@
 #include "scene/vulkan/draw/scene_vk_custom_shader.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
 #include "scene/vulkan/frame/scene_vk_shader_compiler.h"
+#include "scene/vulkan/world/scene_world_service.h"
 #include "render/vulkan_pipeline_cache.h"
 #include "util/log.h"
 
@@ -146,6 +147,13 @@ bool SceneMeshDrawer::setup(SceneGpu& gpu) {
     plantPlanner_ = std::make_shared<plants::GpuPlanner>();
     if (!plantPlanner_->setup(gpu)) {
         LOG_ERROR("SceneMeshDrawer: Failed setting up the plants' GPU planner");
+        return false;
+    }
+    // The turf's surface layer fills are the world service's jobs (a draw:
+    // raster), a first guess at a fill's cost until the service measures one.
+    if (turfKind_ < 0) turfKind_ = gpu.world.addKind(this, {"turf", WorldSchedule::Raster, 0.03f});
+    if (turfKind_ < 0) {
+        LOG_ERROR("SceneMeshDrawer: the world service has no room for the turf's fills");
         return false;
     }
     return true;

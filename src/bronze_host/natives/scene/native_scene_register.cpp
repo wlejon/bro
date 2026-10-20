@@ -199,6 +199,7 @@ bool registerNatives_scene(std::string* error) {
         fn("__bro_native.scene.SceneGraph_setFXAA", BRO_NATIVE_FN(bro_scene_SceneGraph_setFXAA), "void", {"__bro_native.scene.SceneGraph", "bool"}, error) &&
         fn("__bro_native.scene.SceneGraph_setGroundBounce", BRO_NATIVE_FN(bro_scene_SceneGraph_setGroundBounce), "void", {"__bro_native.scene.SceneGraph", "f64", "f64", "f64"}, error) &&
         fn("__bro_native.scene.SceneGraph_setDither", BRO_NATIVE_FN(bro_scene_SceneGraph_setDither), "void", {"__bro_native.scene.SceneGraph", "bool"}, error) &&
+        fn("__bro_native.scene.SceneGraph_setFrameTarget", BRO_NATIVE_FN(bro_scene_SceneGraph_setFrameTarget), "void", {"__bro_native.scene.SceneGraph", "f64"}, error) &&
         fn("__bro_native.scene.SceneGraph_setRenderScale", BRO_NATIVE_FN(bro_scene_SceneGraph_setRenderScale), "void", {"__bro_native.scene.SceneGraph", "f64"}, error) &&
         fn("__bro_native.scene.SceneGraph_setMSAA", BRO_NATIVE_FN(bro_scene_SceneGraph_setMSAA), "void", {"__bro_native.scene.SceneGraph", "i32"}, error) &&
         fn("__bro_native.scene.SceneGraph_setEnvironment", BRO_NATIVE_FN(bro_scene_SceneGraph_setEnvironment), "bool", {"__bro_native.scene.SceneGraph", "bool", "str", "bool", "str", "f64[]", "bool", "f64", "bool", "f64", "bool", "bool"}, error) &&

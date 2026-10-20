@@ -283,11 +283,16 @@ sun, shadows and air stay current.
   so the vertex data a mesh carries reaches the fill as it reaches the
   ground's own pass. Its patterns are band-limited to the tile's texel, so
   a tile never aliases.
-- The **budget** is a fixed number of tile fills a frame, the coarsest
-  first (the coarsest level whatever the budget). Fills are recorded at the
-  frame's head on the graphics queue, so the frame's own draws read them
-  without a wait; they are small enough that async compute (§4) would buy
-  nothing a raster fill does not already have.
+- The **budget** is the world service's (§6): each tile a view needs and
+  has not got is a job, its error the pixels of what shows in its place (a
+  missing tile's nearest resident ancestor's texels, 2^levels its own; a
+  stale tile's own), never above its parent's while that is a job too, so
+  with ties to the larger tile a layer fills in from the top down. The
+  coarsest level's missing tiles are required, made whatever the budget.
+  Fills are recorded at the frame's head on the graphics queue (a raster
+  job), so the frame's own draws read them without a wait; they are small
+  enough that async compute (§4) would buy nothing a raster fill does not
+  already have.
 - **Versioning:** a tile carries its provider's generation. A change to the
   world's data bumps it, and the stale tile keeps drawing until its
   replacement lands. A refill writes the slot in place: the queue orders it
@@ -349,6 +354,49 @@ by its own rules.
 The surface layers' fills (§5), the far field's captures (§2) and streaming
 (§1) are the service's first producers; each keeps its own policy (which
 tiles it wants) and gives up its own budget.
+
+### As built
+
+- **The policy** (`world/world_service.h`, CPU only, unit-tested by
+  `bro_world_service_test`) holds the kinds (a name, raster or compute, a
+  first guess at a job's cost), takes each frame's offers (key, producer,
+  error in pixels, size, required) and grants them: required jobs first,
+  then by error, ties to the larger tile, then by kind, producer and key, so
+  the order never depends on who offered first. A job is granted while the
+  frame's spending plus its kind's cost fits the budget; a kind that does
+  not fit leaves the rest of its jobs, and a cheaper kind's may still fit.
+- **The budget** is the target less the most the last four timed frames
+  needed outside the service (each frame's GPU ms less its service spans on
+  the graphics queue; spans on the async queue are not subtracted), floored
+  at 0.1 ms. A frame over the target, or no timed frame yet, gives the floor.
+  The target is a scene setting, `scene.setFrameTarget(ms)`, 2.78 ms by
+  default. A kind's cost per job is its span's ms over its jobs: the first
+  measurement replaces the guess, later ones move it by a quarter.
+- **A cut.** The slack a view left says nothing of the next view after a
+  jump, and a frame or two of timings is read late. So when the eye moves
+  more than 10 m or the view turns more than half its vertical field of view
+  between two renders, the service forgets its slack (the floor until the
+  new view is measured), and the frames rendered before the cut count only
+  for the kinds' costs.
+- **The executor** (`vulkan/world/scene_world_service.h`, run by the
+  `world-service` pass at the frame's head) feeds the policy the GPU
+  timer's frames, collects the producers' offers, and runs each kind's
+  granted jobs inside one span of the timer (`SceneGpuTimer::beginSpan`,
+  stamped always, with the jobs it held). A raster kind records into the
+  frame's graphics stream; a compute kind into the frame's compute stream,
+  the async compute queue where there is one, else the graphics stream at
+  the same point. The compute path has no shipping producer yet; it is
+  exercised by `bro_vulkan_scene_test`'s "compute jobs on the compute
+  stream". The compute queue at low priority is not made: a world job on
+  the async queue shares the plants' plan's priority until a compute
+  producer's jobs are long enough to need one.
+- **The turf** (the surface layers' one kind, `turf`) offers every tile its
+  view wants and has not got; its fills are about 0.01 ms each. A refill
+  still writes its slot in place (§5) rather than a free slot swapped by
+  version: the queue orders it after the frames that read the old contents,
+  and nothing waits.
+- **Stats:** the scene's cull stats carry `worldBudgetMs`, `worldSpentMs`,
+  `worldJobs`, `worldQueued` and `worldWorstError` (docs/scene-api.js).
 
 ## 7. Lighting
 
@@ -454,18 +502,18 @@ src/scene/
                     backend-neutral renderer: settings, lights, culling, the
                     shadow planner), animation, tweens, clips, the agent glue
   nodes/            the node types: their CPU halves
-  world/            cells, surface layers' paging, the shade map, the shadow
-                    plan, the wind field, the atmosphere's parameters and
-                    irradiance; later the planet's roots and fields, the
-                    world service's policy, placement rules
+  world/            cells, surface layers' paging, the world service's
+                    policy, the shade map, the shadow plan, the wind field,
+                    the atmosphere's parameters and irradiance; later the
+                    planet's roots and fields, placement rules
   vulkan/
     frame/          device, allocator, descriptors, pipelines, the shader
                     compiler, frame graph, targets, timers, GPU resources,
                     defaults, the view, the snapshot pass, the bridge
     draw/           the mesh drawer core and the draw list; meshes, decals,
                     particles, billboards, splats; custom mesh shaders
-    world/          the cell pass, the surface layers' atlas; later the world
-                    service's executor
+    world/          the cell pass, the surface layers' atlas, the world
+                    service's executor and its pass
     ground/         the ground and its cover: turf, grass, herbs
     foliage/        the plants node's plan, poses and draws; the far field
     lighting/       scene lighting, environment and sky, reflection probes;
@@ -495,7 +543,7 @@ the motion oracle for anything temporal. Each step removes what it replaces.
 |---|---|---|---|
 | 1 | Done: the old forest path retired (ForestNode, its drawers, planner, impostors, HiZ; the plants' CPU planner) | one foliage path, the plants node planned on the GPU; biomes' stills identical, GPU ms 7–11% lower | −17k |
 | 2 | Done: the layout (§12), moves only | frames byte-identical, suites green | moves |
-| 3 | The world service (§6), the surface layers' fills its first producer | fills follow the frame's slack; no stall when the view jumps | ~3k |
+| 3 | Done: the world service (§6), the surface layers' fills its first producer | biomes' stills byte-identical, GPU ms unchanged; a cut glade→flyover settles in 4 frames (24 fills a frame took 24), flyover→glade in 12 (took 38), no frame over 2.78 ms | +1.4k |
 | 4 | Atmosphere tables and exposure (§7) | one sky from ground to orbit, cheaper than today's per-pixel march | ~2k |
 | 5 | Cached shadow pages (§8), then horizons and canopy density (§7) | plant and terrain shadows off the per-frame cost | ~6k |
 | 6 | The ground and its cover as one surface (§9) | the eye-level frame's 1.3–1.7 ms of cover cut by most of its hidden and far work | ~2k |

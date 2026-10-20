@@ -4,7 +4,8 @@
 //
 // SceneGpu is the renderer's long-lived GPU state: the frame core, the
 // shared layouts and fallbacks, the frame targets, the per-node resource
-// cache, the mesh drawer and the environment (IBL maps and the sky). SceneFrame is one render: the command buffer,
+// cache, the mesh drawer, the environment (IBL maps and the sky) and the
+// world service. SceneFrame is one render: the command buffer,
 // the graph and its settings, the camera view, what is drawn, the lighting
 // and the counters the passes add to.
 
@@ -36,6 +37,7 @@ class SceneGpuResources;
 class SceneMeshDrawer;
 class SceneEnvironment;
 class SceneGpuTimer;
+class SceneWorldService;
 struct SceneVkImage;
 
 struct SceneGpu {
@@ -46,6 +48,7 @@ struct SceneGpu {
     SceneGpuResources& resources;
     SceneMeshDrawer& meshes;
     SceneEnvironment& environment;
+    SceneWorldService& world;
 };
 
 struct SceneFrame {

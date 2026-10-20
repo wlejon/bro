@@ -470,6 +470,11 @@ public:
     void setDither(bool enabled) { renderer_.setDither(enabled); }
     bool ditherEnabled() const { return renderer_.ditherEnabled(); }
 
+    /// The frame's GPU target (ms) the world service fills under — see
+    /// SceneRenderer::setFrameTargetMs.
+    void setFrameTarget(float ms) { renderer_.setFrameTargetMs(ms); }
+    float frameTarget() const { return renderer_.frameTargetMs(); }
+
     /// Wind sway parameters consumed by the mesh vertex shader. Per-vertex
     /// `windBend` (vertex color R, 0..1) modulates the global displacement
     /// `windDir * sin(windTime*windFreq + dot(pos.xz, k)) * strength * bend`.
