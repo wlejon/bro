@@ -31,6 +31,12 @@ const float GRASS_TURF_TRANSLUCENCY = 0.3;
 // (Wilds at the fans' edge, 85-110 m, golden and noon: 0.85 left the turf
 // 1-4% darker than the fans looking across.)
 const float GRASS_TURF_TOPS = 0.95;
+// The share of the sward's light through it that comes in its blades' lobe
+// about the sun (scene_lighting.glsl's swardGlow), the rest even: the far
+// fans' own pixels glow in the lobe, the turf seen between them evenly,
+// and the turf past them stands for both. (Wilds, noon, looking across at
+// 85-110 m: all of it in the lobe left the turf 3.5% darker than the fans.)
+const float GRASS_TURF_GLOW_SHARE = 0.8;
 // The herbs' blooms in the turf, against the share the far fans' dots
 // show (scene_grass.glsl's grassFanBloom; the two meet at the blades' end).
 const float GRASS_TURF_BLOOMS = 0.6;
@@ -404,7 +410,7 @@ void groundSurface(vec3 rel, vec4 vdata, inout vec3 color, inout vec3 N, inout f
     // through the far blades (their faces turned to the eye; mesh.frag's
     // translucency, as theirs); a gap among drawn blades is in their shade.
     vec3 faceEye = normalize(vec3(-rel.x, 0.3 * length(rel.xz), -rel.z));
-    thin = vec4(faceEye, GRASS_TURF_TRANSLUCENCY * cover * topSeen);
+    thin = vec4(faceEye * sqrt(GRASS_TURF_GLOW_SHARE), GRASS_TURF_TRANSLUCENCY * cover * topSeen);
 
     // The herbs past their plants (scene_herb_mix.glsl): their leaves' and
     // blooms' mean over the share of the ground they cover as the eye sees

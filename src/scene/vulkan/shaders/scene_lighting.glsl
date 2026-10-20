@@ -294,7 +294,9 @@ struct SceneSurface {
     float translucency; // leaf light transport: the sun glowing through a leaf seen against it (0: none)
     // A thin surface's own face toward the eye, which the light through it
     // follows when its shading normal is another (a grass blade lit as the
-    // ground it covers); zero: the shading normal.
+    // ground it covers); zero: the shading normal. Shorter than unit (its
+    // squared length, at least a quarter), only that share of a sward's
+    // light through it comes in swardGlow's lobe, the rest evenly.
     vec3 thinNormal;
     // Leaves placed in a sphere (a forest lobe, a crown's clump, or the lobe
     // a cluster of thinned leaves belongs to; scene_forest_mass.glsl):
@@ -562,7 +564,7 @@ vec3 sceneDirectLight(SceneSurface s) {
         // the light through them as diffuse as off them.
         vec3 sward = s.sward.w > 0.0 ? sceneSwardLight(s.sward.xyz, V, L) : vec3(0.0);
         bool thin = dot(s.thinNormal, s.thinNormal) > 0.25;
-        float glow = thin ? swardGlow(V, L) : 1.0;
+        float glow = thin ? mix(1.0, swardGlow(V, L), min(dot(s.thinNormal, s.thinNormal), 1.0)) : 1.0;
         vec3 swardThrough = s.baseColor * SWARD_TRANSMIT * (s.sward.w * sward.y * glow / PI);
         if (leafy && s.sward.w < 1.0) {
             if (thin) {
