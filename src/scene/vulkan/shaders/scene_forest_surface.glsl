@@ -3,7 +3,7 @@
 // (SCENE_FOREST_CLUSTER) builds on its card for mesh.frag to light, as a
 // ForestMass. They place their leaves here rather than drawing them
 // (scene_forest_mass.glsl), discard what they do not cover and write a
-// sprite's depth (gl_FragDepth, mesh.frag's REVERSED_Z). The other plants
+// sprite's depth (gl_FragDepth, mesh.frag's depth_less). The other plants
 // leave the ForestMass as forestMassNone() makes it, except the cover and
 // salt mesh.frag sets for their sample mask.
 
@@ -95,7 +95,7 @@ ForestMass forestSpriteSurface(uint flags) {
         // (Lit in its lobe's shape, carried over its mode as a lobe's is.)
         m.flatness = fract(inColor.z) > 1e-3 ? fract(inColor.z) / 0.4 : ky;
         vec4 clip = camera.viewProj * vec4(m.at, 1.0);
-        gl_FragDepth = REVERSED_Z ? min(clip.z / clip.w, gl_FragCoord.z) : gl_FragCoord.z;
+        gl_FragDepth = min(clip.z / clip.w, gl_FragCoord.z);
     } else {
         vec3 right = normalize(inTangent), up = normalize(inBitangent), view = normalize(inNormal);
         vec2 q = inUV;
@@ -175,7 +175,7 @@ ForestMass forestSpriteSurface(uint flags) {
             }
             m.at = h.at;
             vec4 clip = camera.viewProj * vec4(h.at, 1.0);
-            gl_FragDepth = REVERSED_Z ? min(clip.z / clip.w, gl_FragCoord.z) : gl_FragCoord.z;
+            gl_FragDepth = min(clip.z / clip.w, gl_FragCoord.z);
         } else {
             // The near half of the shell, and the far half through its gaps.
             ForestLeafLayer nearL = forestLobeLayerAt(q, fp, 1.0, inMass2.x, inMass2.y, inMass2.z, inMass2.w, upC,
@@ -224,7 +224,7 @@ ForestMass forestSpriteSurface(uint flags) {
             vec3 at = inMass0.xyz + inMass0.w * (right * q.x + up * (q.y * inMass3.z));
             m.at = at + view * (inMass0.w * (nearL.z * kn + farL.z * kf));
             vec4 clip = camera.viewProj * vec4(at + view * (inMass0.w * (an >= 0.5 ? z : -z)), 1.0);
-            gl_FragDepth = REVERSED_Z ? min(clip.z / clip.w, gl_FragCoord.z) : gl_FragCoord.z;
+            gl_FragDepth = min(clip.z / clip.w, gl_FragCoord.z);
             m.sphere = inMass0;
             // A spray node's lobe (a needle or scale-leaf form, the
             // header's look) takes no shade of its own leaves: its leaves

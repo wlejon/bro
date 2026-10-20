@@ -1,8 +1,5 @@
 #version 450
 
-// The camera depth policy (scene/vulkan/scene_vk_depth.h).
-layout(constant_id = 0) const bool REVERSED_Z = true;
-
 #include "scene_camera.glsl"
 #include "scene_lighting.glsl"
 
@@ -37,7 +34,7 @@ void main() {
     vec3 nrm = normalize(cross(dFdy(worldPos), dFdx(worldPos)));
 
     // Cleared (sky) depth: nothing to project onto.
-    if (REVERSED_Z ? d <= 0.0 : d >= 1.0) discard;
+    if (d <= 0.0) discard;
 
     // How far the reconstructed point can sit off the real surface. Under
     // MSAA the snapshot holds the NEAREST of the pixel's samples (the depth

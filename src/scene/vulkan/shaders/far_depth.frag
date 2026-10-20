@@ -5,9 +5,6 @@
 // samples fails the depth test at all of them, whatever it then writes, as a
 // sprite writes no nearer than its card. FAR_DEPTH_MS: the MSAA depth.
 
-// The camera depth policy (scene/vulkan/scene_vk_depth.h).
-layout(constant_id = 0) const bool REVERSED_Z = true;
-
 layout(location = 0) in vec2 inUV;
 layout(location = 0) out float outDepth;
 
@@ -23,7 +20,7 @@ void main() {
     float d = texelFetch(uDepth, p, 0).r;
     for (int s = 1; s < textureSamples(uDepth); ++s) {
         float e = texelFetch(uDepth, p, s).r;
-        d = REVERSED_Z ? min(d, e) : max(d, e);
+        d = min(d, e);   // (reversed-Z: the farthest is the least)
     }
     outDepth = d;
 #else

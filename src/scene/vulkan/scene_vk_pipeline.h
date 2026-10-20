@@ -21,8 +21,7 @@ public:
 
 /// Fluent graphics pipeline builder supporting Vulkan 1.3 Dynamic Rendering.
 ///
-/// Every stage gets the depth policy as specialization constant
-/// depth::kReversedZConstantId. Colour attachments the blend state does not
+/// Colour attachments the blend state does not
 /// mention (a target wider than what the shader writes) get a zero write
 /// mask, so a pass can draw into a scope that carries extra attachments.
 class SceneVkPipelineBuilder {
@@ -87,8 +86,8 @@ public:
     /// Specify dynamic states (defaults to VIEWPORT and SCISSOR).
     SceneVkPipelineBuilder& setDynamicStates(const std::vector<VkDynamicState>& states);
 
-    /// A boolean specialization constant `id` for every stage, beside the
-    /// depth policy (a stage that does not declare it ignores it).
+    /// A boolean specialization constant `id` for every stage (a stage that
+    /// does not declare it ignores it).
     SceneVkPipelineBuilder& setSpecialization(uint32_t id, bool value);
 
     /// Build and return the graphics pipeline, through the device's persisted

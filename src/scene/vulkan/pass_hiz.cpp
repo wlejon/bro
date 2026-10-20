@@ -51,15 +51,11 @@ bool OcclusionListPipeline::setup(SceneGpu& gpu) {
     if (vkCreatePipelineLayout(device, &pi, nullptr, &layout) != VK_SUCCESS) return false;
     VkShaderModule module = SceneVkShaderCompiler::createBuiltinModule(device, BuiltinSceneShader::OcclusionListComp);
     if (!module) return false;
-    const VkBool32 reversed = reversedZ() ? VK_TRUE : VK_FALSE;
-    const VkSpecializationMapEntry entry{depth::kReversedZConstantId, 0, sizeof(VkBool32)};
-    VkSpecializationInfo spec{1, &entry, sizeof(reversed), &reversed};
     VkComputePipelineCreateInfo ci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
     ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
     ci.stage.module = module;
     ci.stage.pName = "main";
-    ci.stage.pSpecializationInfo = &spec;
     ci.layout = layout;
     const bool ok = vkCreateComputePipelines(device, gpu.device.context().pipelineCache(), 1, &ci, nullptr,
                                              &pipeline) == VK_SUCCESS;
@@ -186,15 +182,11 @@ bool PassHiZ::setup(SceneGpu& gpu) {
     if (vkCreatePipelineLayout(device_, &pi, nullptr, &layout_) != VK_SUCCESS) return false;
     VkShaderModule module = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::HiZBuildComp);
     if (!module) return false;
-    const VkBool32 reversed = reversedZ() ? VK_TRUE : VK_FALSE;
-    const VkSpecializationMapEntry entry{depth::kReversedZConstantId, 0, sizeof(VkBool32)};
-    VkSpecializationInfo spec{1, &entry, sizeof(reversed), &reversed};
     VkComputePipelineCreateInfo ci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
     ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
     ci.stage.module = module;
     ci.stage.pName = "main";
-    ci.stage.pSpecializationInfo = &spec;
     ci.layout = layout_;
     const bool ok = vkCreateComputePipelines(device_, gpu.device.context().pipelineCache(), 1, &ci, nullptr,
                                              &pipeline_) == VK_SUCCESS;

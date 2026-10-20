@@ -49,7 +49,7 @@ SurfaceLayerConfig groundConfig() {
 
 /// The camera-relative matrix taking a turf vertex (world - eye) to a fill's
 /// clip space: x and z across the tile and its border, the highest ground
-/// nearest (under either depth policy).
+/// nearest (reversed-Z: the highest ground at 1).
 bromath::Mat4 fillViewProj(const SurfaceFill& f, double texel, int border, const bromath::Vec3& eye, float yMin,
                            float yMax) {
     const double pad = texel * border;
@@ -67,13 +67,8 @@ bromath::Mat4 fillViewProj(const SurfaceFill& f, double texel, int border, const
     m.at(1, 3) = static_cast<float>((static_cast<double>(eye.z) - z0) * s - 1.0);
     m.at(2, 0) = 0.0f;
     m.at(2, 2) = 0.0f;
-    if (reversedZ()) {
-        m.at(2, 1) = static_cast<float>(1.0 / yr);
-        m.at(2, 3) = static_cast<float>((static_cast<double>(eye.y) - yMin) / yr);
-    } else {
-        m.at(2, 1) = static_cast<float>(-1.0 / yr);
-        m.at(2, 3) = static_cast<float>((static_cast<double>(yMax) - eye.y) / yr);
-    }
+    m.at(2, 1) = static_cast<float>(1.0 / yr);
+    m.at(2, 3) = static_cast<float>((static_cast<double>(eye.y) - yMin) / yr);
     m.at(3, 0) = m.at(3, 1) = m.at(3, 2) = 0.0f;
     m.at(3, 3) = 1.0f;
     return m;

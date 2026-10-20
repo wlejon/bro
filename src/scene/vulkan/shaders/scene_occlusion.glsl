@@ -7,8 +7,8 @@
 // what it skips is exactly what the depth test would have dropped and the
 // image is the same.
 //
-// The includer declares REVERSED_Z (constant_id 0, the camera's depth
-// policy) and the pyramid as `texHiZ` (a sampler2D); by default it is the
+// Depth is reversed (near 1, far 0: scene/depth_policy.h). The includer
+// declares the pyramid as `texHiZ` (a sampler2D); by default it is the
 // lighting set's binding 10 (scene_vk_descriptors.cpp), read in the vertex
 // stage, which a mesh pipeline gets. A compute pass binds it where it likes
 // with SCENE_HIZ_SET / SCENE_HIZ_BINDING. sceneHiZOccludedRect takes a rect
@@ -35,7 +35,7 @@ layout(set = SCENE_HIZ_SET, binding = SCENE_HIZ_BINDING) uniform sampler2D texHi
 layout(set = SCENE_HIZ_SET, binding = SCENE_HIZ_PREV_BINDING) uniform sampler2D texHiZPrev;
 #endif
 
-float sceneHiZFarther(float a, float b) { return REVERSED_Z ? min(a, b) : max(a, b); }
+float sceneHiZFarther(float a, float b) { return min(a, b); }
 
 // Pixels [pxMin, pxMax] (inclusive, the frame's) all lie behind what pyramid
 // `hiZ` says was drawn, at depth `nearest` (the box's nearest, in the depth
@@ -55,7 +55,7 @@ bool sceneHiZOccludedRectIn(sampler2D hiZ, ivec2 pxMin, ivec2 pxMax, float neare
     far = sceneHiZFarther(far, texelFetch(hiZ, ivec2(b.x, a.y), level).r);
     far = sceneHiZFarther(far, texelFetch(hiZ, ivec2(a.x, b.y), level).r);
     far = sceneHiZFarther(far, texelFetch(hiZ, b, level).r);
-    return REVERSED_Z ? nearest < far : nearest > far;
+    return nearest < far;
 }
 
 bool sceneHiZOccludedRect(ivec2 pxMin, ivec2 pxMax, float nearest) {
@@ -69,7 +69,7 @@ bool sceneHiZOccludedRect(ivec2 pxMin, ivec2 pxMax, float nearest) {
 // frame.
 bool sceneHiZClipRect(vec4 c[8], int count, vec2 frame, out ivec2 pxMin, out ivec2 pxMax, out float nearest) {
     vec2 lo = vec2(1e30), hi = vec2(-1e30);
-    nearest = REVERSED_Z ? 0.0 : 1.0;
+    nearest = 0.0;
     pxMin = pxMax = ivec2(0);
     for (int i = 0; i < count; ++i) {
         if (c[i].w <= 1e-6) return false;
@@ -78,7 +78,7 @@ bool sceneHiZClipRect(vec4 c[8], int count, vec2 frame, out ivec2 pxMin, out ive
         vec2 p = (n.xy * 0.5 + 0.5) * frame;
         lo = min(lo, p);
         hi = max(hi, p);
-        nearest = REVERSED_Z ? max(nearest, n.z) : min(nearest, n.z);
+        nearest = max(nearest, n.z);
     }
     if (hi.x < 0.0 || hi.y < 0.0 || lo.x >= frame.x || lo.y >= frame.y) return false;
     ivec2 size = ivec2(frame);

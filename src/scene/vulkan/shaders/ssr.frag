@@ -1,8 +1,5 @@
 #version 450
 
-// The camera depth policy (scene/vulkan/scene_vk_depth.h).
-layout(constant_id = 0) const bool REVERSED_Z = true;
-
 layout(location = 0) in vec2 inUV;
 layout(location = 0) out vec4 outColor;
 
@@ -16,7 +13,7 @@ layout(set = 0, binding = 2) uniform SSRUBO {
     vec4 uParams2; // x: intensity, y: edgeFade, zw: pad
 } ubo;
 
-bool isSky(float d) { return REVERSED_Z ? d <= 0.0 : d >= 1.0; }
+bool isSky(float d) { return d <= 0.0; }   // (reversed-Z: far is 0)
 
 vec3 viewPos(vec2 uv, float d) {
     vec4 clip = vec4(uv * 2.0 - 1.0, d, 1.0);

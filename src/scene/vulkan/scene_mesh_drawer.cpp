@@ -853,10 +853,9 @@ void SceneMeshDrawer::record(VkCommandBuffer cmd, const TargetFormat& target, Vk
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 4, 1, &draw.customSet, 0, nullptr);
     vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                        sizeof(MeshPushConstants), &draw.push);
-    // Polygon offset, oriented so a negative bias pulls toward the camera
-    // under either depth policy.
-    const float toward = reversedZ() ? -1.0f : 1.0f;
-    vkCmdSetDepthBias(cmd, toward * draw.depthBiasUnits, 0.0f, toward * draw.depthBiasFactor);
+    // Polygon offset, negated so a negative bias pulls toward the camera
+    // (reversed-Z: nearer is greater).
+    vkCmdSetDepthBias(cmd, -draw.depthBiasUnits, 0.0f, -draw.depthBiasFactor);
     if (draw.lines && wideLines_) vkCmdSetLineWidth(cmd, draw.lineWidth);
 
     bindGeometryAndDraw(cmd, draw, cull);

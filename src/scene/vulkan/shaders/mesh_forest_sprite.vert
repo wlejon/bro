@@ -41,9 +41,6 @@ layout(location = 12) flat out vec4 outMass4; // the pose's offset, the tree (ui
 #include "scene_vegetation.glsl"
 #include "scene_forest.glsl"
 #include "scene_forest_sprite_vertex.glsl"
-
-// The camera depth policy (scene/vulkan/scene_vk_depth.h).
-layout(constant_id = 0) const bool REVERSED_Z = true;
 #include "scene_occlusion.glsl"
 
 void main() {

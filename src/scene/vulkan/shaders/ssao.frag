@@ -1,9 +1,6 @@
 #version 450
 #define KERNEL_SIZE 16
 
-// The camera depth policy (scene/vulkan/scene_vk_depth.h).
-layout(constant_id = 0) const bool REVERSED_Z = true;
-
 layout(location = 0) in vec2 inUV;
 layout(location = 0) out vec4 outColor;
 
@@ -26,7 +23,7 @@ vec3 viewPos(vec2 uv) {
 
 void main() {
     float d0 = texture(uDepthTex, inUV).r;
-    if (REVERSED_Z ? d0 <= 0.0 : d0 >= 1.0) {   // sky: nothing to occlude
+    if (d0 <= 0.0) {   // sky: nothing to occlude
         outColor = vec4(1.0);
         return;
     }

@@ -96,7 +96,6 @@ add_library(bro_scene STATIC
     scene_node.cpp
     scene_graph.cpp
     impostor_layer.cpp
-    depth_policy.cpp
     scene_renderer.cpp
     scene_renderer_shadow.cpp
     shape_node.cpp

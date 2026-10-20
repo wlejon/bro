@@ -11,9 +11,6 @@
 //                    frame's pyramid: what it does not hide goes to its
 //                    slot's run of OL_SORTED, counted in the command.
 
-// The camera depth policy (scene/vulkan/scene_vk_depth.h).
-layout(constant_id = 0) const bool REVERSED_Z = true;
-
 #include "occlusion_list_layout.h"
 #include "scene_forest_layout.h"
 

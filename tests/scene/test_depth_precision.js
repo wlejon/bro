@@ -17,18 +17,9 @@ canvas.setAttribute('height', '200');
 document.body.appendChild(canvas);
 flush();
 
-// BRO_DISABLE_REVERSED_Z forces the conventional depth fallback so that path
-// stays testable. Under it this test would measure a capability that has been
-// deliberately switched off, so it reports SKIP rather than a failure.
-const forcedOff = typeof process !== 'undefined' && process.env &&
-                  process.env.BRO_DISABLE_REVERSED_Z &&
-                  process.env.BRO_DISABLE_REVERSED_Z !== '0';
-
 const scene = canvas.getContext('scene');
 if (!scene) {
     missingGpuContext('scene');
-} else if (forcedOff) {
-    skipTest('BRO_DISABLE_REVERSED_Z forces the conventional depth path');
 } else {
     scene.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
     scene.setCamera({

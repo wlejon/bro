@@ -6,9 +6,6 @@
 // rounded-up one), so every pixel is under some texel of every level and a
 // rect clamped to a level's last texel still sees it (scene_occlusion.glsl).
 
-// The camera depth policy (scene/vulkan/scene_vk_depth.h).
-layout(constant_id = 0) const bool REVERSED_Z = true;
-
 layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(set = 0, binding = 0) uniform sampler2D farDepth;
@@ -34,7 +31,7 @@ void main() {
     for (int y = s0.y; y <= s1.y; ++y)
         for (int x = s0.x; x <= s1.x; ++x) {
             float v = srcAt(ivec2(x, y));
-            far = REVERSED_Z ? min(far, v) : max(far, v);
+            far = min(far, v);   // (reversed-Z: the farthest is the least)
         }
     imageStore(dstLevel, d, vec4(far));
 }
