@@ -108,9 +108,6 @@ struct SceneFrame {
     /// lighting set instead (MeshDraw::lightingSet).
     VkDescriptorSet cameraSet = VK_NULL_HANDLE;
     VkDescriptorSet lightingSet = VK_NULL_HANDLE;
-    /// The camera set again for the occlusion retest (PassOpaque's retest:
-    /// CameraUBO.occlusion.y = 2).
-    VkDescriptorSet cameraSetRetest = VK_NULL_HANDLE;
 
     /// The attachments of the open HDR scope (set by the frame graph).
     TargetFormat hdrTarget;

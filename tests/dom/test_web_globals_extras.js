@@ -147,7 +147,7 @@ assert(window.screenX === 0 && window.screenY === 0, 'headless screenX/screenY a
 assert(screenLeft === 0 && screenTop === 0, 'screenLeft/screenTop aliases');
 
 // --- bro.<ns>.available ------------------------------------------------------------------
-const GATED = ['tts', 'lm', 'stt', 'diar', 'net', 'ai', 'gesture', 'gizmo', 'impostor', 'kws', 'listen',
+const GATED = ['tts', 'lm', 'stt', 'diar', 'net', 'ai', 'gesture', 'gizmo', 'kws', 'listen',
                'motion', 'rave', 'music', 'sense', 'triposplat', 'vision', 'wake', 'diffusion', 'tensor', 'mesh', 'scene'];
 for (const ns of GATED) {
     const o = bro[ns];

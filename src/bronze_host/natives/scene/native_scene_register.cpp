@@ -218,17 +218,6 @@ bool registerNatives_scene(std::string* error) {
         fn("__bro_native.scene.SceneGraph_projectLocal", BRO_NATIVE_FN(bro_scene_SceneGraph_projectLocal), "f64[]", {"__bro_native.scene.SceneGraph", "f64", "f64", "f64"}, error) &&
         fn("__bro_native.scene.SceneGraph_bindAudioListenerToCamera", BRO_NATIVE_FN(bro_scene_SceneGraph_bindAudioListenerToCamera), "void", {"__bro_native.scene.SceneGraph", "bool"}, error) &&
         fn("__bro_native.scene.SceneGraph_detachAIWorld", BRO_NATIVE_FN(bro_scene_SceneGraph_detachAIWorld), "void", {"__bro_native.scene.SceneGraph"}, error) &&
-        fn("__bro_native.scene.SceneNode_setForestSpecimens", BRO_NATIVE_FN(bro_scene_SceneNode_setForestSpecimens), "bool", {"__bro_native.scene.SceneNode", "f32[]", "f32[]", "f32[]", "f32[]", "f32[]", "f32[]", "f32[]", "i32[]", "f64[]", "f32[]", "f32[]"}, error) &&
-        fn("__bro_native.scene.SceneNode_setForestBlooms", BRO_NATIVE_FN(bro_scene_SceneNode_setForestBlooms), "bool", {"__bro_native.scene.SceneNode", "f32[]", "f32[]"}, error) &&
-        fn("__bro_native.scene.SceneNode_setForestInstances",BRO_NATIVE_FN(bro_scene_SceneNode_setForestInstances), "void", {"__bro_native.scene.SceneNode", "f32[]"}, error) &&
-        fn("__bro_native.scene.SceneNode_setForestLod", BRO_NATIVE_FN(bro_scene_SceneNode_setForestLod), "void", {"__bro_native.scene.SceneNode", "f64[]"}, error) &&
-        fn("__bro_native.scene.SceneNode_forestLod", BRO_NATIVE_FN(bro_scene_SceneNode_forestLod), "f64[]", {"__bro_native.scene.SceneNode"}, error) &&
-        fn("__bro_native.scene.SceneNode_setForestBark", BRO_NATIVE_FN(bro_scene_SceneNode_setForestBark), "void", {"__bro_native.scene.SceneNode", "f64", "f64", "f64", "f64"}, error) &&
-        fn("__bro_native.scene.SceneNode_setForestLook", BRO_NATIVE_FN(bro_scene_SceneNode_setForestLook), "bool", {"__bro_native.scene.SceneNode", "f32[]", "f64[]"}, error) &&
-        fn("__bro_native.scene.SceneNode_setForestTier",BRO_NATIVE_FN(bro_scene_SceneNode_setForestTier), "void", {"__bro_native.scene.SceneNode", "i32"}, error) &&
-        fn("__bro_native.scene.SceneNode_forestStats", BRO_NATIVE_FN(bro_scene_SceneNode_forestStats), "f64[]", {"__bro_native.scene.SceneNode"}, error) &&
-        fn("__bro_native.scene.SceneNode_forestTreeLod", BRO_NATIVE_FN(bro_scene_SceneNode_forestTreeLod), "f64[]", {"__bro_native.scene.SceneNode", "i32", "f64"}, error) &&
-        fn("__bro_native.scene.SceneNode_forestSeenLod", BRO_NATIVE_FN(bro_scene_SceneNode_forestSeenLod), "f64[]", {"__bro_native.scene.SceneNode", "i32"}, error) &&
         fn("__bro_native.scene.SceneGraph_createPlants", BRO_NATIVE_FN(bro_scene_SceneGraph_createPlants), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph"}, error) &&
         fn("__bro_native.scene.SceneNode_setPlantSpecies", BRO_NATIVE_FN(bro_scene_SceneNode_setPlantSpecies), "void", {"__bro_native.scene.SceneNode", "f32[]"}, error) &&
         fn("__bro_native.scene.SceneNode_setPlants", BRO_NATIVE_FN(bro_scene_SceneNode_setPlants), "void", {"__bro_native.scene.SceneNode", "f32[]"}, error) &&
@@ -367,7 +356,6 @@ bool registerSceneNatives(std::string* error) {
            natives::fn("__bro_native.scene.SceneGraph_readTonemapWidth", BRO_NATIVE_FN(bro_scene_SceneGraph_readTonemapWidth), "i32", {}, error) &&
            natives::fn("__bro_native.scene.SceneGraph_readTonemapHeight", BRO_NATIVE_FN(bro_scene_SceneGraph_readTonemapHeight), "i32", {}, error) &&
            natives::fn("__bro_native.scene.SceneGraph_createMesh", BRO_NATIVE_FN(bro_scene_SceneGraph_createMesh), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "dynamic", "dynamic"}, error) &&
-           natives::fn("__bro_native.scene.SceneGraph_createForest", BRO_NATIVE_FN(bro_scene_SceneGraph_createForest), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "dynamic", "dynamic"}, error) &&
            natives::fn("__bro_native.scene.SceneGraph_createSkinnedMesh", BRO_NATIVE_FN(bro_scene_SceneGraph_createSkinnedMesh), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "dynamic", "dynamic"}, error) &&
            natives::fn("__bro_native.scene.SceneGraph_createInstancedMesh", BRO_NATIVE_FN(bro_scene_SceneGraph_createInstancedMesh), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "dynamic", "dynamic"}, error) &&
            natives::fn("__bro_native.scene.SceneGraph_createShape", BRO_NATIVE_FN(bro_scene_SceneGraph_createShape), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "str"}, error) &&

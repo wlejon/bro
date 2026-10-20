@@ -1,139 +1,29 @@
 #include "scene/vulkan/pass_mesh.h"
 
-#include "scene/vulkan/pass_hiz.h"
 #include "scene/mesh_node.h"
 #include "scene/scene_graph.h"
 #include "scene/vulkan/scene_defaults.h"
 #include "scene/vulkan/scene_frame.h"
 #include "scene/vulkan/scene_gpu_resources.h"
 #include "scene/vulkan/scene_gpu_timer.h"
-#include "scene/vulkan/scene_fullscreen.h"
 #include "scene/vulkan/scene_mesh_drawer.h"
 #include "scene/vulkan/scene_targets.h"
-#include "scene/vulkan/scene_vk_depth.h"
 #include "scene/vulkan/scene_vk_descriptors.h"
 #include "scene/vulkan/scene_vk_device.h"
-#include "scene/vulkan/scene_vk_shader_compiler.h"
-#include "scene/vulkan/shaders/occlusion_list_layout.h"
-#include "scene/vulkan/shaders/scene_forest_layout.h"
-#include "scene/vulkan/shaders/scene_forest_plan_layout.h"
 
 #include <algorithm>
-#include <cmath>
 #include <cstring>
 #include <iterator>
 #include <vector>
 
 namespace bro::scene::vk {
 
-namespace {
-
-// A forest's clumps or crowns: the sprites placed by their leaves, so the
-// ones drawn behind the depth drawn so far are dropped (forestFarRejected).
-bool farTested(const MeshDraw& d) {
-    if (d.kind != MeshKind::ForestSprite || d.shadowOnly) return false;
-    if (static_cast<uint32_t>(d.push.pbrParams[3]) & mesh_flags::kForestBloom) return false;
-    const int mode = static_cast<int>(d.push.extra[2]);
-    return mode == FOREST_SPRITE_CLUMPS || mode == FOREST_SPRITE_CROWNS;
-}
-
-// A forest sprite the camera draws: its vertex stage tests its cards for
-// occlusion (mesh_forest_sprite.vert), so the retest draws it again.
-bool sprite(const MeshDraw& d) {
-    return d.kind == MeshKind::ForestSprite && !d.shadowOnly;
-}
-
-// A crown is an unindexed draw of its entries' cards; clumps an instance an entry.
-bool crowns(const MeshDraw& d) {
-    return static_cast<int>(d.push.extra[2]) == FOREST_SPRITE_CROWNS;
-}
-
-// Where each batch's share of a draw's entries (nearest first) ends, as the
-// GPU planner splits its draws (scene_forest_plan_layout.h): the nearest few
-// cover most of what the draw covers, and each boundary costs a pass over
-// the depth. On the wilds routes (GPU ms at full clocks) 5% / 25% beat 10% / 35%,
-// 10% / 45%, 20% / 50% and 3% / 15%.
-static_assert(FP_BATCHES == OpaqueBatches::kBatches);
-constexpr float kBatchEnd[OpaqueBatches::kBatches] = {static_cast<float>(FP_BATCH_END_0),
-                                                      static_cast<float>(FP_BATCH_END_1), 1.0f};
-}  // namespace
-
-void PassForestBatches::declare(const SceneFrame& frame, PassIO& io) const {
-    OpaqueBatches& b = batches_;
-    for (auto& list : b.draws) list.clear();
-    b.sprites = false;
-    // Every other draw goes in the first batch, the ground and the static
-    // meshes included: their depth drops the far crowns behind a hill (most
-    // of what a far view gains). Drawn after the crowns instead, as they are
-    // seen from over the canopy, they kept their early test under the
-    // crowns, but the vista, treetop and skim gained a third as much and
-    // the orbit lost 0.35 ms either way.
-    for (uint32_t i : frame.lists.opaque) {
-        const MeshDraw& draw = frame.lists.meshes[i];
-        if (!farTested(draw)) {
-            b.draws[0].push_back({i});
-            continue;
-        }
-        b.sprites = true;
-        // Planned on the GPU, its entries' count is the GPU's: the planner
-        // writes each batch's command, split as kBatchEnd splits it here.
-        if (draw.indirect != VK_NULL_HANDLE) {
-            for (int k = 0; k < OpaqueBatches::kBatches; ++k) {
-                OpaqueBatches::Draw d{i};
-                if (draw.indirectBatches == OpaqueBatches::kBatches) d.batch = k;
-                else if (k > 0) break;
-                b.draws[k].push_back(d);
-            }
-            continue;
-        }
-        const uint32_t n = crowns(draw) ? draw.indexCount / FOREST_CARD_VERTICES : draw.instanceCount;
-        uint32_t at = 0;
-        for (int k = 0; k < OpaqueBatches::kBatches; ++k) {
-            const uint32_t end = k + 1 == OpaqueBatches::kBatches
-                                     ? n : static_cast<uint32_t>(std::floor(kBatchEnd[k] * static_cast<float>(n)));
-            if (end <= at) continue;
-            b.draws[k].push_back({i, true, at, end - at});
-            at = end;
-        }
-    }
-    // Each sprite draw a slot of the occlusion list, while they last.
-    b.slots = 0;
-    for (auto& list : b.draws)
-        for (OpaqueBatches::Draw& d : list)
-            d.slot = sprite(frame.lists.meshes[d.mesh]) && b.slots < OL_SLOTS ? b.slots++ : -1;
-    if (b.sprites) io.transferDst(frame.gpu.targets.farDepth);
-}
-
-void PassForestBatches::record(SceneFrame& frame) {
-    if (!batches_.sprites) return;
-    // Nothing drawn yet: the first batch drops nothing by pixel (its cards
-    // test the last frame's pyramid: PassHiZ).
-    VkClearColorValue far{};
-    far.float32[0] = depth::clearFar();
-    const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCmdClearColorImage(frame.cmd, frame.gpu.targets.farDepth.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &far, 1,
-                         &range);
-}
-
-bool PassOpaque::active(const SceneFrame& frame) const {
-    // (The retest: only when the batches held something back, against a
-    // last frame's pyramid, and this frame's was built.)
-    if (retest_) return occlusionRetests(frame, batches_);
-    return batch_ == 0 || !batches_.draws[batch_].empty();
-}
-
 void PassOpaque::declare(const SceneFrame& frame, PassIO& io) const {
     io.hdr({.indirect = frame.ssao});
     // (Its draws light through the shadow atlas: readable even where the
     // planned casters drew last, PassShadow::Part::Planned.)
     io.sample(frame.gpu.targets.shadowAtlas);
-    if (batches_.slots > 0) {
-        io.sample(frame.gpu.targets.farDepth);
-        // (Its sprites' cards cull against the pyramids: scene_occlusion.glsl.)
-        io.sample(frame.gpu.targets.hiZ);
-        io.sample(frame.gpu.targets.hiZPrev);
-    }
-    // A forest's planned draws read the plan's entries and commands.
+    // The plants' planned draws read the plan's chunks and commands.
     if (frame.computeApart()) io.readsCompute();
 }
 
@@ -141,104 +31,14 @@ void PassOpaque::record(SceneFrame& frame) {
     // Each draw's own time when the passes are timed (SceneGpuTimer), by kind.
     static constexpr const char* kKind[kMeshKindCount] = {
         "opaque:static", "opaque:instanced", "opaque:skinned", "opaque:scatter", "opaque:tube",
-        "opaque:vegetation", "opaque:instancedVegetation", "opaque:grass", "opaque:forestLeaf",
-        "opaque:forestTube", "opaque:forestSprite", "opaque:plants"};
-    if (retest_) {
-        // Every slot's draw again, under the retest's camera: the cards the
-        // batches held back that this frame's pyramid does not hide, one an
-        // instance, from the list's command (PassHiZ's test counts them).
-        for (const auto& batch : batches_.draws)
-            for (const OpaqueBatches::Draw& d : batch) {
-                if (d.slot < 0) continue;
-                OpaqueBatches::Draw card{d.mesh};
-                card.slot = d.slot;
-                MeshDraw draw = frame.lists.meshes[d.mesh];
-                draw.indirect = frame.gpu.targets.occlusionList.buffer;
-                draw.indirectOffset = static_cast<VkDeviceSize>(OL_CMDS + 4 * d.slot) * 4;
-                draw.indirectBatches = 0;
-                recordDraw(frame, card, draw, frame.cameraSetRetest, "occlusion:retest");
-            }
-        return;
-    }
-    for (const OpaqueBatches::Draw& d : batches_.draws[batch_]) {
-        const MeshDraw& draw = frame.lists.meshes[d.mesh];
-        recordDraw(frame, d, draw, frame.cameraSet,
-                   draw.timerLabel ? draw.timerLabel : kKind[static_cast<int>(draw.kind)]);
-    }
-}
-
-void PassOpaque::recordDraw(SceneFrame& frame, const OpaqueBatches::Draw& d, MeshDraw draw,
-                            VkDescriptorSet cameraSet, const char* label) const {
-    // (A sprite's slot over 65536 in extra.w, its atlas grid under it.)
-    if (d.slot >= 0) draw.push.extra[3] += 65536.0f * static_cast<float>(d.slot + 1);
-    if (d.batch >= 0) {
-        draw.indirectOffset += static_cast<VkDeviceSize>(d.batch + 1) * draw.indirectBatchStride;
-        draw.indirectBatches = 0;
-    } else if (d.split && crowns(draw)) {
-        draw.firstVertex += d.first * FOREST_CARD_VERTICES;
-        draw.indexCount = d.count * FOREST_CARD_VERTICES;
-    } else if (d.split) {
-        draw.firstInstance += d.first;
-        draw.instanceCount = d.count;
-    }
+        "opaque:vegetation", "opaque:instancedVegetation", "opaque:grass", "opaque:plants"};
     const SceneMeshDrawer::ChunkCull cull{frame.renderer.cullingFrustum(), frame.view.eye, true};
-    frame.gpu.meshes.record(frame.cmd, frame.hdrTarget, cameraSet, frame.lightingSet, draw, &cull);
-    if (frame.timer) frame.timer->mark(frame.cmd, label);
-}
-
-bool PassFarDepth::setup(SceneGpu& gpu) {
-    VkDevice dev = gpu.device.device();
-    VkSamplerCreateInfo sampler{};
-    sampler.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    sampler.magFilter = sampler.minFilter = VK_FILTER_NEAREST;
-    sampler.addressModeU = sampler.addressModeV = sampler.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    if (vkCreateSampler(dev, &sampler, nullptr, &sampler_) != VK_SUCCESS) return false;
-    setLayout_ = fullscreen::samplerSetLayout(dev, 1);
-    if (!setLayout_) return false;
-    layout_ = fullscreen::layout(dev, setLayout_, 0);
-    if (!layout_) return false;
-    VkShaderModule vs = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::PostFxVert);
-    VkShaderModule fs = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::FarDepthFrag);
-    VkShaderModule fsMs = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::FarDepthMsFrag);
-    pipelines_[0] = fullscreen::pipeline(dev, layout_, vs, fs, SceneTargets::kFarDepthFormat);
-    pipelines_[1] = fullscreen::pipeline(dev, layout_, vs, fsMs, SceneTargets::kFarDepthFormat);
-    for (VkShaderModule m : {vs, fs, fsMs}) SceneVkShaderModule::destroy(dev, m);
-    return pipelines_[0] && pipelines_[1];
-}
-
-void PassFarDepth::cleanup(SceneGpu& gpu) {
-    VkDevice dev = gpu.device.device();
-    for (VkPipeline& p : pipelines_) {
-        if (p) vkDestroyPipeline(dev, p, nullptr);
-        p = VK_NULL_HANDLE;
+    for (uint32_t i : frame.lists.opaque) {
+        const MeshDraw& draw = frame.lists.meshes[i];
+        frame.gpu.meshes.record(frame.cmd, frame.hdrTarget, frame.cameraSet, frame.lightingSet, draw, &cull);
+        if (frame.timer)
+            frame.timer->mark(frame.cmd, draw.timerLabel ? draw.timerLabel : kKind[static_cast<int>(draw.kind)]);
     }
-    if (layout_) vkDestroyPipelineLayout(dev, layout_, nullptr);
-    if (setLayout_) vkDestroyDescriptorSetLayout(dev, setLayout_, nullptr);
-    if (sampler_) vkDestroySampler(dev, sampler_, nullptr);
-    layout_ = VK_NULL_HANDLE;
-    setLayout_ = VK_NULL_HANDLE;
-    sampler_ = VK_NULL_HANDLE;
-}
-
-bool PassFarDepth::active(const SceneFrame&) const {
-    // (After the last batch: the opaque depth the pyramid is built from.)
-    if (batch_ < 0) return batches_.slots > 0;
-    return !batches_.draws[batch_].empty();
-}
-
-void PassFarDepth::declare(const SceneFrame& frame, PassIO& io) const {
-    io.sample(frame.gpu.targets.depthDrawn());
-    io.colorTarget(frame.gpu.targets.farDepth);
-    io.unresolved();
-}
-
-void PassFarDepth::record(SceneFrame& frame) {
-    SceneTargets& t = frame.gpu.targets;
-    VkDescriptorSet set = frame.gpu.device.frameSet(setLayout_);
-    SceneVkDescriptorWriter writer;
-    writer.writeImage(0, t.depthDrawn().view, sampler_);
-    writer.updateSet(frame.gpu.device.device(), set);
-    fullscreen::draw(frame.gpu.device, frame.cmd, t.farDepth, pipelines_[t.msaa() ? 1 : 0], layout_, set);
 }
 
 bool PassTranslucent::active(const SceneFrame& frame) const {

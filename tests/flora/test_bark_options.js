@@ -1,8 +1,8 @@
 // A species' bark settings reach the bark build of mesh.frag through the
 // vegetation records' bark word (broflora packBarkWord): barkFurrow cuts the
 // plates deeper (more contrast on the trunk), barkMoss greens it. Drawn as
-// GPU tubes (emitBranchTubes, MeshKind::Tube; flora/test_forest.js covers a
-// forest's), compared on the trunk's pixels against the view without it.
+// GPU tubes (emitBranchTubes, MeshKind::Tube), compared on the trunk's
+// pixels against the view without it.
 
 function growTree(bark) {
     const world = bro.flora.createWorld({

@@ -10,17 +10,10 @@
 #include "scene_shadow_push.glsl.src.h"
 #include "scene_shadow_cutout.glsl.src.h"
 #include "scene_vegetation.glsl.src.h"
-#include "scene_forest_sprite.glsl.src.h"
-#include "scene_forest_mass.glsl.src.h"
 #include "scene_procedural.glsl.src.h"
-#include "scene_forest_layout.h.src.h"
-#include "scene_forest_crown.glsl.src.h"
 #include "scene_bark.glsl.src.h"
-#include "scene_forest_spray.glsl.src.h"
-#include "scene_forest_bloom.glsl.src.h"
 #include "scene_grass.glsl.src.h"
 #include "scene_grass_surface.glsl.src.h"
-#include "scene_forest_surface.glsl.src.h"
 #include "scene_ground.glsl.src.h"
 #include "scene_ground_layers.glsl.src.h"
 #include "scene_herb_mix.glsl.src.h"
@@ -103,18 +96,10 @@ const char* embeddedInclude(const std::string& name) {
         {"scene_shadow_push.glsl", kVkSceneShadowPushSrc},
         {"scene_shadow_cutout.glsl", kVkSceneShadowCutoutSrc},
         {"scene_vegetation.glsl", kVkSceneVegetationSrc},
-        {"scene_forest_sprite.glsl", kVkSceneForestSpriteSrc},
-        {"scene_forest_mass.glsl", kVkSceneForestMassSrc},
-        // mesh.frag's forest-sprite half; spliced in whole, compiled out.
         {"scene_procedural.glsl", kVkSceneProceduralSrc},
-        {"scene_forest_layout.h", kVkSceneForestLayoutSrc},
-        {"scene_forest_crown.glsl", kVkSceneForestCrownSrc},
         {"scene_bark.glsl", kVkSceneBarkSrc},
-        {"scene_forest_spray.glsl", kVkSceneForestSpraySrc},
-        {"scene_forest_bloom.glsl", kVkSceneForestBloomSrc},
         {"scene_grass.glsl", kVkSceneGrassSrc},
         {"scene_grass_surface.glsl", kVkSceneGrassSurfaceSrc},
-        {"scene_forest_surface.glsl", kVkSceneForestSurfaceSrc},
         {"scene_ground.glsl", kVkSceneGroundSrc},
         {"scene_ground_layers.glsl", kVkSceneGroundLayersSrc},
         {"scene_herb_mix.glsl", kVkSceneHerbMixSrc},

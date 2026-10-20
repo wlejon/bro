@@ -18,7 +18,7 @@
 // distance, keep what is near ahead of what is behind it for the early depth
 // test. A tile's casters go in no order at all.
 //
-// pick() is the CPU's old choice, plant by plant: the camera's plants within
+// pick() is the choice, plant by plant: the camera's plants within
 // range and frustum, each with as many elements as keep one `pixels` across
 // (never under a floor that covers its crown on screen); each tile's casters
 // within shadowRange and its frustum, each kept to `shadowTexels` of its

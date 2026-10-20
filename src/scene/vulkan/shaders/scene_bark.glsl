@@ -1,4 +1,4 @@
-// Bark: the wood of a plant's tubes (mesh_tube.vert, mesh_forest_tube.vert)
+// Bark: the wood of a plant's tubes (mesh_tube.vert)
 // drawn as bark rather than clay. Everything is procedural and comes from
 // the tube's own records, so nothing is baked per tree:
 //

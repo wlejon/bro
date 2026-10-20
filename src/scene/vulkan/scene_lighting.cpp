@@ -123,36 +123,12 @@ SceneLightingUniforms sceneLighting(const SceneRenderer& renderer, const SceneEn
 }
 
 void writeCameraSet(SceneFrame& frame) {
-    SceneCameraUniforms cam = frame.view.uniforms(&frame.renderer);
-    // The frame's own view: the pyramids its opaque passes build and read
-    // are this view's.
-    const SceneTargets& t = frame.gpu.targets;
-    // (The cards held back append themselves in the vertex stage, and the
-    // retest draws each sprite draw's from its own first instance.)
-    const VkPhysicalDeviceFeatures& features = frame.gpu.device.context().features();
-    const bool retest = features.vertexPipelineStoresAndAtomics && features.drawIndirectFirstInstance;
-    cam.occlusion[0] = retest && t.hiZ.isValid() ? 1.0f : 0.0f;
-    cam.occlusion[2] = t.hiZPrevState.built ? 1.0f : 0.0f;
-    if (t.hiZPrevState.built) {
-        // Its clip space from this frame's camera-relative positions: the
-        // position relative to the last frame's eye is this one's plus the
-        // eye's move.
-        const bromath::Vec3 move = frame.view.eye - t.hiZPrevState.eye;
-        const bromath::Mat4 prev =
-            bromath::mmul(bromath::mmul(t.hiZPrevState.proj, t.hiZPrevState.relView), bromath::mtranslate(move));
-        std::memcpy(cam.occlusionPrev, prev.data, sizeof(cam.occlusionPrev));
-    }
-    const auto write = [&](float phase) {
-        cam.occlusion[1] = phase;
-        const VkDescriptorBufferInfo camInfo = frame.gpu.device.frameUniform(&cam, sizeof(cam));
-        VkDescriptorSet set = frame.gpu.device.frameSet(frame.gpu.defaults.cameraLayout);
-        SceneVkDescriptorWriter camWriter;
-        camWriter.writeBuffer(0, camInfo.buffer, camInfo.range, camInfo.offset);
-        camWriter.updateSet(frame.gpu.device.device(), set);
-        return set;
-    };
-    frame.cameraSet = write(1.0f);
-    frame.cameraSetRetest = write(2.0f);
+    const SceneCameraUniforms cam = frame.view.uniforms(&frame.renderer);
+    const VkDescriptorBufferInfo camInfo = frame.gpu.device.frameUniform(&cam, sizeof(cam));
+    frame.cameraSet = frame.gpu.device.frameSet(frame.gpu.defaults.cameraLayout);
+    SceneVkDescriptorWriter camWriter;
+    camWriter.writeBuffer(0, camInfo.buffer, camInfo.range, camInfo.offset);
+    camWriter.updateSet(frame.gpu.device.device(), frame.cameraSet);
 }
 
 VkDescriptorSet writeLightingSet(SceneGpu& gpu, const SceneLightingUniforms& uniforms, VkImageView probeView,
@@ -167,14 +143,6 @@ VkDescriptorSet writeLightingSet(SceneGpu& gpu, const SceneLightingUniforms& uni
                       VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
     writer.writeImage(3, shadeMap ? shadeMap->view : d.white.view, VK_NULL_HANDLE,
                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
-    writer.writeImage(9, gpu.targets.farDepth.isValid() ? gpu.targets.farDepth.view : d.white.view, VK_NULL_HANDLE,
-                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
-    writer.writeImage(10, gpu.targets.hiZPrev.isValid() ? gpu.targets.hiZPrev.view : d.white.view, VK_NULL_HANDLE,
-                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
-    writer.writeImage(11, gpu.targets.hiZ.isValid() ? gpu.targets.hiZ.view : d.white.view, VK_NULL_HANDLE,
-                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
-    writer.writeBuffer(12, gpu.targets.occlusionList.buffer, gpu.targets.occlusionList.size, 0,
-                       VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
     gpu.environment.writeBindings(writer, d);
     writer.updateSet(gpu.device.device(), set);
     return set;
@@ -182,11 +150,6 @@ VkDescriptorSet writeLightingSet(SceneGpu& gpu, const SceneLightingUniforms& uni
 
 void PassFrameUniforms::declare(const SceneFrame& frame, PassIO& io) const {
     io.sample(frame.gpu.targets.shadowAtlas);
-    // (Read by the forest's sprites, mesh.frag's forestFarRejected.)
-    io.sample(frame.gpu.targets.farDepth);
-    // (And the pyramids, by their vertex stage: scene_occlusion.glsl.)
-    io.sample(frame.gpu.targets.hiZ);
-    io.sample(frame.gpu.targets.hiZPrev);
 }
 
 namespace {

@@ -38,10 +38,6 @@ BRO_SCENE_SHADER(SsaoFrag,                 "ssao.frag",                   "ssao.
 BRO_SCENE_SHADER(SsrFrag,                  "ssr.frag",                    "ssr.frag",                    "frag", "")
 BRO_SCENE_SHADER(DofFrag,                  "dof.frag",                    "dof.frag",                    "frag", "")
 BRO_SCENE_SHADER(ApplyAoFrag,              "apply_ao.frag",               "apply_ao.frag",               "frag", "")
-BRO_SCENE_SHADER(FarDepthFrag,             "far_depth.frag",              "far_depth.frag",              "frag", "")
-BRO_SCENE_SHADER(FarDepthMsFrag,           "far_depth_ms.frag",           "far_depth.frag",              "frag", "FAR_DEPTH_MS")
-BRO_SCENE_SHADER(HiZBuildComp,             "hiz_build.comp",              "hiz_build.comp",              "comp", "")
-BRO_SCENE_SHADER(OcclusionListComp,        "occlusion_list.comp",         "occlusion_list.comp",         "comp", "")
 BRO_SCENE_SHADER(GaussianSplatVert,        "gaussian_splat.vert",         "gaussian_splat.vert",         "vert", "")
 BRO_SCENE_SHADER(GaussianSplatFrag,        "gaussian_splat.frag",         "gaussian_splat.frag",         "frag", "")
 BRO_SCENE_SHADER(SkyVert,                  "sky.vert",                    "sky.vert",                    "vert", "")
@@ -73,54 +69,10 @@ BRO_SCENE_SHADER(MeshGrassVert,            "mesh_grass.vert",             "mesh_
 BRO_SCENE_SHADER(MeshGrassFrag,            "mesh_grass.frag",             "mesh.frag",                   "frag", "SCENE_VEGETATION SCENE_GRASS")
 BRO_SCENE_SHADER(MeshGrassIndirectFrag,    "mesh_grass_indirect.frag",    "mesh.frag",                   "frag", "SCENE_VEGETATION SCENE_GRASS SCENE_INDIRECT_OUTPUT")
 BRO_SCENE_SHADER(ShadowGrassVert,          "shadow_grass.vert",           "shadow_grass.vert",           "vert", "")
-// The forest node's tiers (scene_forest.glsl), drawn with MeshVegFrag; the
-// sprite casters cut out by ShadowForestFrag.
-BRO_SCENE_SHADER(MeshForestLeafVert,       "mesh_forest_leaf.vert",       "mesh_forest_leaf.vert",       "vert", "")
-// Past the pose buffer's room, each vertex poses its own leaf.
-BRO_SCENE_SHADER(MeshForestLeafInlineVert, "mesh_forest_leaf_inline.vert", "mesh_forest_leaf.vert",       "vert", "FOREST_LEAF_INLINE")
-// The colour leaves' poses, a leaf at a time, ahead of the draws that read them.
-BRO_SCENE_SHADER(ForestLeafPoseComp,       "forest_leaf_pose.comp",       "forest_leaf_pose.comp",       "comp", "")
-// The same for the GPU planner's draws, their first entry and count read
-// from its indirect arguments (scene_forest_gpu_plan.cpp).
-BRO_SCENE_SHADER(ForestLeafPoseIndirectComp, "forest_leaf_pose_indirect.comp", "forest_leaf_pose.comp",  "comp", "FOREST_POSE_INDIRECT")
-// The forest's GPU planner (scene_forest_plan.glsl), its stages in order.
-BRO_SCENE_SHADER(ForestPlanMeasureComp,    "forest_plan_measure.comp",    "forest_plan_measure.comp",    "comp", "")
-BRO_SCENE_SHADER(ForestPlanClassifyComp,   "forest_plan_classify.comp",   "forest_plan_measure.comp",    "comp", "PLAN_CLASSIFY")
-BRO_SCENE_SHADER(ForestPlanScanLocalComp,  "forest_plan_scan_local.comp", "forest_plan_scan.comp",       "comp", "SCAN_LOCAL")
-BRO_SCENE_SHADER(ForestPlanScanAddComp,    "forest_plan_scan_add.comp",   "forest_plan_scan.comp",       "comp", "SCAN_ADD")
-BRO_SCENE_SHADER(ForestPlanSortHistComp,   "forest_plan_sort_hist.comp",  "forest_plan_scan.comp",       "comp", "SORT_HIST")
-BRO_SCENE_SHADER(ForestPlanSortScatterComp, "forest_plan_sort_scatter.comp", "forest_plan_scan.comp",    "comp", "SORT_SCATTER")
-BRO_SCENE_SHADER(ForestPlanLayoutComp,     "forest_plan_layout.comp",     "forest_plan_steps.comp",      "comp", "PLAN_LAYOUT")
-BRO_SCENE_SHADER(ForestPlanItemsComp,      "forest_plan_items.comp",      "forest_plan_steps.comp",      "comp", "PLAN_ITEMS")
-BRO_SCENE_SHADER(ForestPlanCostComp,       "forest_plan_cost.comp",       "forest_plan_place.comp",      "comp", "PLAN_COST")
-BRO_SCENE_SHADER(ForestPlanVaryComp,       "forest_plan_vary.comp",       "forest_plan_steps.comp",      "comp", "PLAN_VARY")
-BRO_SCENE_SHADER(ForestPlanSettleComp,     "forest_plan_settle.comp",     "forest_plan_steps.comp",      "comp", "PLAN_SETTLE")
-BRO_SCENE_SHADER(ForestPlanCountComp,      "forest_plan_count.comp",      "forest_plan_place.comp",      "comp", "PLAN_COUNT")
-BRO_SCENE_SHADER(ForestPlanArgsComp,       "forest_plan_args.comp",       "forest_plan_steps.comp",      "comp", "PLAN_ARGS")
-BRO_SCENE_SHADER(ForestPlanWriteComp,      "forest_plan_write.comp",      "forest_plan_place.comp",      "comp", "PLAN_WRITE")
 // The GPU cell pass (scene_world_cells_pass.cpp), its three steps.
 BRO_SCENE_SHADER(WorldCellsTopComp,        "world_cells_top.comp",        "world_cells_cull.comp",       "comp", "CELLS_TOP")
 BRO_SCENE_SHADER(WorldCellsLeafComp,       "world_cells_leaf.comp",       "world_cells_cull.comp",       "comp", "CELLS_LEAF")
 BRO_SCENE_SHADER(WorldCellsGatherComp,     "world_cells_gather.comp",     "world_cells_cull.comp",       "comp", "CELLS_GATHER")
-BRO_SCENE_SHADER(MeshForestTubeVert,       "mesh_forest_tube.vert",       "mesh_forest_tube.vert",       "vert", "")
-BRO_SCENE_SHADER(MeshForestSpriteVert,     "mesh_forest_sprite.vert",     "mesh_forest_sprite.vert",     "vert", "")
-BRO_SCENE_SHADER(ShadowForestLeafVert,     "shadow_forest_leaf.vert",     "shadow_forest_leaf.vert",     "vert", "")
-// Past the pose buffer's room, each caster vertex poses its own leaf.
-BRO_SCENE_SHADER(ShadowForestLeafInlineVert, "shadow_forest_leaf_inline.vert", "shadow_forest_leaf.vert", "vert", "FOREST_LEAF_INLINE")
-BRO_SCENE_SHADER(ShadowForestTubeVert,     "shadow_forest_tube.vert",     "shadow_forest_tube.vert",     "vert", "")
-BRO_SCENE_SHADER(ShadowForestSpriteVert,   "shadow_forest_sprite.vert",   "shadow_forest_sprite.vert",   "vert", "")
-BRO_SCENE_SHADER(ShadowForestFrag,         "shadow_forest.frag",          "shadow_forest.frag",          "frag", "")
-// The forest's clump lobes and crowns (scene_forest_mass.glsl): mesh.frag
-// built with SCENE_FOREST_SPRITE (and SCENE_INDIRECT_OUTPUT), which places a
-// card's leaves, lights them and writes their depth.
-BRO_SCENE_SHADER(MeshForestSpriteFrag,         "mesh_forest_sprite.frag",          "mesh.frag", "frag", "SCENE_VEGETATION SCENE_FOREST_SPRITE")
-BRO_SCENE_SHADER(MeshForestSpriteIndirectFrag, "mesh_forest_sprite_indirect.frag", "mesh.frag", "frag", "SCENE_VEGETATION SCENE_FOREST_SPRITE SCENE_INDIRECT_OUTPUT")
-BRO_SCENE_SHADER(MeshForestClusterFrag,        "mesh_forest_cluster.frag",         "mesh.frag", "frag", "SCENE_VEGETATION SCENE_FOREST_CLUSTER")
-BRO_SCENE_SHADER(MeshForestClusterIndirectFrag, "mesh_forest_cluster_indirect.frag", "mesh.frag", "frag", "SCENE_VEGETATION SCENE_FOREST_CLUSTER SCENE_INDIRECT_OUTPUT")
-// A needle or scale-leaf forest's leaves (scene_forest_spray.glsl): the
-// spray's needles cut out of its card.
-BRO_SCENE_SHADER(MeshForestSprayFrag,          "mesh_forest_spray.frag",           "mesh.frag", "frag", "SCENE_VEGETATION SCENE_FOREST_SPRAY")
-BRO_SCENE_SHADER(MeshForestSprayIndirectFrag,  "mesh_forest_spray_indirect.frag",  "mesh.frag", "frag", "SCENE_VEGETATION SCENE_FOREST_SPRAY SCENE_INDIRECT_OUTPUT")
 // Plants (scene_plants.glsl): every leaf, limb and trunk built from its
 // plant's and species' records; opaque, lit as its lobe's form.
 BRO_SCENE_SHADER(PlantsVert,                   "plants.vert",                      "plants.vert", "vert", "")
@@ -132,18 +84,13 @@ BRO_SCENE_SHADER(PlantsPoseComp,               "plants_pose.comp",              
 BRO_SCENE_SHADER(PlantsPlanCountComp,          "plants_plan_count.comp",           "plants_plan.comp", "comp", "PLANTS_COUNT")
 BRO_SCENE_SHADER(PlantsPlanLayoutComp,         "plants_plan_layout.comp",          "plants_plan.comp", "comp", "PLANTS_LAYOUT")
 BRO_SCENE_SHADER(PlantsPlanPlaceComp,          "plants_plan_place.comp",           "plants_plan.comp", "comp", "PLANTS_PLACE")
-// A forest's blooms (scene_forest_bloom.glsl): a card a bloom, its flower,
-// head or spike shaped and lit by mesh.frag's SCENE_FOREST_BLOOM build.
-BRO_SCENE_SHADER(MeshForestBloomVert,          "mesh_forest_bloom.vert",           "mesh_forest_bloom.vert", "vert", "")
-BRO_SCENE_SHADER(MeshForestBloomFrag,          "mesh_forest_bloom.frag",           "mesh.frag", "frag", "SCENE_VEGETATION SCENE_FOREST_BLOOM")
-BRO_SCENE_SHADER(MeshForestBloomIndirectFrag,  "mesh_forest_bloom_indirect.frag",  "mesh.frag", "frag", "SCENE_VEGETATION SCENE_FOREST_BLOOM SCENE_INDIRECT_OUTPUT")
 // Herb plants (scene_herb.glsl): a grass node's ferns, wildflowers and forbs,
 // a card strip a leaf, stem or bloom, cut by mesh.frag's SCENE_HERB build
 // (scene_herb_surface.glsl). A Grass draw flagged mesh_flags::kHerb.
 BRO_SCENE_SHADER(MeshHerbVert,                 "mesh_herb.vert",                   "mesh_herb.vert", "vert", "")
 BRO_SCENE_SHADER(MeshHerbFrag,                 "mesh_herb.frag",                   "mesh.frag", "frag", "SCENE_VEGETATION SCENE_HERB")
 BRO_SCENE_SHADER(MeshHerbIndirectFrag,         "mesh_herb_indirect.frag",          "mesh.frag", "frag", "SCENE_VEGETATION SCENE_HERB SCENE_INDIRECT_OUTPUT")
-// A plant's wood (Tube and ForestTube): mesh.frag built with SCENE_BARK
+// A tube's wood (createTubes): mesh.frag built with SCENE_BARK
 // (scene_bark.glsl), ridges, furrows, moss and lichen from the tube's records.
 BRO_SCENE_SHADER(MeshBarkFrag,                 "mesh_bark.frag",                   "mesh.frag", "frag", "SCENE_VEGETATION SCENE_BARK")
 BRO_SCENE_SHADER(MeshBarkIndirectFrag,         "mesh_bark_indirect.frag",          "mesh.frag", "frag", "SCENE_VEGETATION SCENE_BARK SCENE_INDIRECT_OUTPUT")

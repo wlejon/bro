@@ -38,7 +38,7 @@ vec3 cellV3(uint i) {
     return vec3(uintBitsToFloat(cells.w[i]), uintBitsToFloat(cells.w[i + 1u]), uintBitsToFloat(cells.w[i + 2u]));
 }
 
-// bromath::fintersects(frustum, box), as the forest planner's planIntersects.
+// bromath::fintersects(frustum, box).
 bool intersects(uint view, vec3 bmin, vec3 bmax) {
     if (bmin.x > bmax.x || bmin.y > bmax.y || bmin.z > bmax.z) return false;
     uint planes = WC_P_PLANES + view * 24u;

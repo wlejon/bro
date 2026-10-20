@@ -117,7 +117,7 @@ void installBroRoots(engine::Engine& engine) {
                                              "scene", "terrain", "clipmap", "tile_world", "lighting", "animation", "lm",
                                              "rave", "music", "motion", "mic", "sense", "gesture", "wake", "kws", "listen",
                                              "triposplat", "diffusion", "vision", "diar", "stt", "tts",
-                                             "flora", "tensor", "impostor", "profiler", "apps", "vfs", "models"}));
+                                             "flora", "tensor", "profiler", "apps", "vfs", "models"}));
     auto* dunder = new ev::Persistent(
         makeRoot({"splash", "viewport", "perf", "bronze", "menu", "settingsUI", "inspector"}));
     auto* native = new ev::Persistent(
@@ -224,7 +224,6 @@ void installBroRoots(engine::Engine& engine) {
     setUnavailable("lighting", "BRO_WITH_3D");
     setUnavailable("animation", "BRO_WITH_3D");
     setUnavailable("gizmo", "BRO_WITH_3D");
-    setUnavailable("impostor", "BRO_WITH_3D");
 #endif
 #if !BRO_WITH_PHYSICS
     // The `Physics` global js/physics.js would have filled: the same stub
@@ -372,7 +371,7 @@ void installBroRoots(engine::Engine& engine) {
 // own runtime probe, e.g. bro.net's transport) is left alone.
 void markAvailableNamespaces() {
     static const char* const kGated[] = {
-        "tts", "lm", "stt", "diar", "net", "ai", "gesture", "gizmo", "impostor", "kws",
+        "tts", "lm", "stt", "diar", "net", "ai", "gesture", "gizmo", "kws",
         "listen", "motion", "rave", "music", "sense", "triposplat", "vision", "wake", "diffusion",
         "tensor", "flora", "media", "mesh", "rigging", "scene", "terrain", "clipmap",
         "tile_world", "lighting", "animation", "mic", "conf", "themes", "keys", "search",

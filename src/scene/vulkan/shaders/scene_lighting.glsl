@@ -78,9 +78,6 @@ layout(set = 1, binding = 4) uniform textureCube texIrradianceImage;
 layout(set = 1, binding = 5) uniform textureCube texPrefilterImage;
 layout(set = 1, binding = 6) uniform texture2D texBrdfLutImage;
 layout(set = 1, binding = 7) uniform textureCube texEnvironmentImage;
-// The opaque depth drawn so far, each pixel's farthest sample
-// (SceneTargets::farDepth), read by texel: mesh.frag's forestFarRejected.
-layout(set = 1, binding = 9) uniform texture2D texFarDepthImage;
 #define texReflectionProbe samplerCube(texReflectionProbeImage, lightingSampler)
 #define texShadeMap sampler2D(texShadeMapImage, lightingSampler)
 #define texIrradiance samplerCube(texIrradianceImage, lightingSampler)
@@ -251,34 +248,6 @@ float lightShadow(int i, vec3 pos, float camDist, float lightDist, vec3 N, float
     return shadowFromTile(slot, pos, lightDist, N, NdotL, spread);
 }
 
-// A placed leaf's own sphere shades it analytically (SceneSurface::
-// leafSphere) for what the shadow map gives the leaves tier: a leaf's
-// lookup there is pushed off along its normal and biased in depth by about
-// this many of the cascade's texels, so a leaf is never shaded by the
-// leaves that near it toward the light, and the analytic path skips them
-// too (at most 0.15 m, a shrub's lobe's scale: past it a far cascade's
-// texels are coarser than any lobe, and the leaves tier is darkened by the
-// lobes round it, not within). Shrub lobes at noon 6.7 / 6.6 levels darker
-// than their leaves at 10 / 20 m, now 1.6 / 2.5.
-const float SHADOW_LEAF_BLIND = 3.0;
-
-// The world width of a texel of light `i`'s shadow at `camDist` (the
-// cascade lightShadow reads there; 0 with no shadow).
-float lightShadowTexel(int i, float camDist, float lightDist) {
-    SceneLight light = lighting.lights[i];
-    int slot = int(light.shadow.z);
-    if (slot < 0) return 0.0;
-    int count = int(light.shadow.w);
-    if (int(light.position.w) == 0 && count > 1) {
-        vec4 splits = light.cascadeSplit;
-        if (count >= 2 && camDist > splits.x) slot += 1;
-        if (count >= 3 && camDist > splits.y) slot += 1;
-        if (count >= 4 && camDist > splits.z) slot += 1;
-    }
-    ShadowTile tile = lighting.shadows[slot];
-    return tile.bias.z + tile.bias.w * lightDist;
-}
-
 // A lit surface, as every lit shader hands it to sceneDirectLight/sceneAmbient.
 struct SceneSurface {
     vec3 position;     // camera-relative
@@ -298,48 +267,6 @@ struct SceneSurface {
     // squared length, at least a quarter), only that share of a sward's
     // light through it comes in swardGlow's lobe, the rest evenly.
     vec3 thinNormal;
-    // Leaves placed in a sphere (a forest lobe, a crown's clump, or the lobe
-    // a cluster of thinned leaves belongs to; scene_forest_mass.glsl):
-    // its centre (camera-relative) and radius, w 0 for none, and the leaves'
-    // optical depth a unit length through it. Such a leaf is shadowed by its
-    // own sphere's leaves analytically, and by everything else from the
-    // shadow map where the light enters the sphere (past the sphere's own
-    // caster, shadow_forest_sprite.vert).
-    // leafPath: the light's path through those leaves, times (how many lie
-    // in it wanders from pixel to pixel).
-    vec4 leafSphere;
-    float leafDensity;
-    float leafPath;
-    // The filter of the shadow tap where the light leaves that sphere
-    // (sampleShadow's spread): -2, four taps as soft as a leaf's, where a
-    // sharp tap reads as hard blotches on a lobe; 0 one tap.
-    float leafExitSpread;
-    // The most optical depth the light crosses in that sphere to reach the
-    // leaves seen (a crown's: they lie within about one of its surface).
-    float leafSelfMax;
-    // The sphere's height over its width (a conifer's flat lobes): the light
-    // leaves an ellipsoid, so a flat pad lit from above is lit through its
-    // thickness, not its breadth. 1: a sphere.
-    float leafFlat;
-    // Placed leaves (forest lobes, crowns and clusters) know the share of
-    // the sun reaching where they lie, not which of their leaves it reaches:
-    // a leaf is lit or in another's shadow, so the leaves of a crown are
-    // sunflecks among shade, which the leaves tier shows leaf by leaf and,
-    // under MSAA, a pixel as the mean of its samples' leaves. leafSun holds a
-    // draw in [0, 1) for each of up to four leaves seen in the pixel, each lit
-    // when its draw is under the share; leafSunN is how many of them the
-    // pixel averages (1 to 4, fractional between; 0 keeps the share as is).
-    vec4 leafSun;
-    float leafSunN;
-    // Placed leaves are lit through one normal a pixel, but the leaves it
-    // stands for face many ways about it: their diffuse light is the wrap's
-    // mean over normals whose cosine to the light spreads this far either
-    // side of the one given (0: as given).
-    float leafSpread;
-    // The same for the light through them (their translucency), set apart:
-    // what a widened spray or a sprite stands for glows by its leaves' mean
-    // facing, while its diffuse keeps leafSpread's narrower wrap.
-    float leafThroughSpread;
     // A sward too fine to resolve (far grass, the turf standing for it):
     // xyz the way its blades stand on average (the ground's normal tipped
     // by the wind's lay), w how much of the direct light is the sward's
@@ -510,27 +437,6 @@ float swardGlow(vec3 V, vec3 L) {
     return (1.0 - SWARD_GLOW_SHARE) + SWARD_GLOW_SHARE * (SWARD_GLOW_POWER + 1.0) * c2 * c2;
 }
 
-// A leaf's wrapped diffuse, clamp((c + 0.3) / 1.3, 0, 1), averaged over
-// cosines c spread evenly `k` either side of `c` (k 0: the wrap itself).
-float leafWrapIntegral(float x) {
-    float t = clamp(x + 0.3, 0.0, 1.3);
-    return t * t / 2.6 + max(x - 1.0, 0.0);
-}
-float leafWrapMean(float c, float k) {
-    if (k < 1e-3) return clamp((c + 0.3) / 1.3, 0.0, 1.0);
-    return (leafWrapIntegral(c + k) - leafWrapIntegral(c - k)) / (2.0 * k);
-}
-
-// The sun on a pixel of placed leaves (SceneSurface::leafSun): each of its
-// leaves lit or not by its draw, the share `vis` on average.
-float leafSunflecks(vec4 draw, float n, float vis) {
-    if (n <= 0.0) return vis;
-    vec4 lit = smoothstep(draw - 0.08, draw + 0.08, vec4(vis));
-    vec4 w = clamp(vec4(n) - vec4(0.0, 1.0, 2.0, 3.0), 0.0, 1.0);
-    float flecks = dot(lit, w) / max(dot(w, vec4(1.0)), 1e-4);
-    return mix(vis, flecks, min(n, 1.0));
-}
-
 // The direct light of every scene light on `s`.
 vec3 sceneDirectLight(SceneSurface s) {
     vec3 N = s.normal;
@@ -579,31 +485,12 @@ vec3 sceneDirectLight(SceneSurface s) {
         float leafShadow = 1.0;
         if (leafy && s.receivesShadow) {
             vec3 tN = NL < 0.0 ? -N : N;
-            vec3 at = s.position;
             // Four hardware-filtered taps as wide as nine point taps: leaves
             // are most of the frame's lit pixels, and a leaf's shadow is
             // soft (the sun's disc) whichever way it is filtered.
-            float self = 1.0, spread = -2.0;
-            if (s.leafSphere.w > 0.0) {
-                // Out of the sphere toward the light, through its leaves;
-                // what falls on it from outside is coarse (the sphere's own
-                // leaves are the fine part), so one tap.
-                vec3 oc = at - s.leafSphere.xyz;
-                float ky = clamp(s.leafFlat, 0.1, 1.0);
-                oc.y /= ky;
-                vec3 Ls = vec3(L.x, L.y / ky, L.z);
-                float la = dot(Ls, Ls), b = dot(oc, Ls);
-                float out_ = max((-b + sqrt(max(b * b - la * (dot(oc, oc) - s.leafSphere.w * s.leafSphere.w), 0.0))) / la, 0.0);
-                at += L * out_;
-                float blind = min(SHADOW_LEAF_BLIND * lightShadowTexel(i, s.camDist, lightDist), 0.15);
-                self = exp(-min(s.leafDensity * s.leafPath * max(out_ - blind, 0.0), s.leafSelfMax));
-                spread = s.leafExitSpread;
-                // The exit tap is as soft as a leaf's (twice the filter):
-                // sharp, the discs' cells and the wider casters' edges read
-                // as hard blotches on the lobes they fall on.
-            }
-            float vis = self * lightShadow(i, at, s.camDist, lightDist, tN, max(abs(NL), 0.2), spread);
-            leafShadow = 0.1 + 0.9 * (type == 0 ? leafSunflecks(s.leafSun, s.leafSunN, vis) : vis);        }
+            float vis = lightShadow(i, s.position, s.camDist, lightDist, tN, max(abs(NL), 0.2), -2.0);
+            leafShadow = 0.1 + 0.9 * vis;
+        }
         // Leaf translucency: light passing through a leaf lit from behind,
         // strongest looking toward the light, a warm yellow-green, and
         // shadowed by the leaves between it and the light.
@@ -624,11 +511,7 @@ vec3 sceneDirectLight(SceneSurface s) {
                 Lo += s.baseColor * SWARD_TRANSMIT * radiance *
                       (max(-NLt, 0.0) * glow / PI * s.translucency * (1.0 - s.sward.w) * leafShadow);
             } else {
-                // (Over its leaves' spread of facings, as leafWrapMean.)
-                float k = s.leafThroughSpread;
-                float through = k > 1e-3 ? (smoothstep(-0.3, 0.4, 0.3 - NL + k) + smoothstep(-0.3, 0.4, 0.3 - NL) +
-                                            smoothstep(-0.3, 0.4, 0.3 - NL - k)) / 3.0
-                                         : smoothstep(-0.3, 0.4, 0.3 - NL);
+                float through = smoothstep(-0.3, 0.4, 0.3 - NL);
                 float back = pow(max(dot(-V, L), 0.0), 3.0);
                 float amount = s.translucency * through * (0.1 + 0.9 * back) * (1.0 - s.sward.w);
                 vec3 tcol = sqrt(max(s.baseColor, vec3(0.0))) * vec3(0.75, 0.95, 0.35) * 0.55;
@@ -639,7 +522,7 @@ vec3 sceneDirectLight(SceneSurface s) {
         // A leaf's diffuse light wraps a little past its edge-on angle, so a
         // leaf turning away from the sun dims rather than switching off.
         float NdotL = max(NL, 0.0);
-        float diffNL = leafy ? leafWrapMean(NL, s.leafSpread) : NdotL;
+        float diffNL = leafy ? clamp((NL + 0.3) / 1.3, 0.0, 1.0) : NdotL;
         // A near blade's face the eye sees, where the sun is on it, is lit
         // by its own slope to the sun, not by the softened bulk normal its
         // shading takes (which a low sun barely reaches).

@@ -57,7 +57,7 @@ void installVisionWildlifeModule();
 // the roots and natives are registered; lifts nothing.
 void installBroCoreModule();
 // The 3D family (js/physics.js, terrain, clipmap, tile_world, lighting,
-// gizmo, animation, scene, impostor) and js/net.js / js/motion.js /
+// gizmo, animation, scene) and js/net.js / js/motion.js /
 // js/server.js: each enters its module after installBroRoots and lifts the
 // classes it defined. The sibling libraries' own APIs (bro.mesh, bro.lm,
 // bro.stt, ...) are NOT here: installSiblingApis (host_natives.h) installs
@@ -73,10 +73,9 @@ void installGizmoModule();
 void installAnimationModule();
 void installSceneModule();
 void installMotionModule();
-void installImpostorModule();
 
 // The main realm's wrapper modules that most apps never touch, deferred
-// until a program first does: the 3D family (physics ... impostor), net
+// until a program first does: the 3D family (physics ... scene), net
 // (net_sync + net), motion, bro.image.gpu and bro.vision.wildlife. Each group
 // registers its globals as lazy host globals (bronze registerLazyGlobal: the
 // manifest lists them, the first read runs the group) and turns its `bro.<ns>`

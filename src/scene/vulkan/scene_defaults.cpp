@@ -54,15 +54,13 @@ bool SceneDefaults::setup(SceneVkDevice& device, SceneVkAllocator& allocator) {
 
     SceneVkDescriptorLayoutBuilder bone;
     bone.addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT);
-    // The fragment stage reads it too: a forest crown places its clumps'
-    // leaves per pixel (scene_forest_crown.glsl).
-    // So does the forest's leaf pose pass (forest_leaf_pose.comp), with the
-    // entries.
+    // A procedural draw's segment records, or the plants' records; the
+    // plants' leaf pose pass (plants_pose.comp) reads them too.
     constexpr VkShaderStageFlags kVsCs = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
-    bone.addBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kVsCs | VK_SHADER_STAGE_FRAGMENT_BIT);
-    // A forest's draw entries this frame (scene_forest.glsl).
+    bone.addBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kVsCs);
+    // The plants' chunks this frame, written by their plan.
     bone.addBinding(2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kVsCs);
-    // A forest's leaf poses this frame, written by the pose pass.
+    // The plants' leaf poses this frame, written by the pose pass.
     bone.addBinding(3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kVsCs);
     boneLayout = bone.build(dev);
 

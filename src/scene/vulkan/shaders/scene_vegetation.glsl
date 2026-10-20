@@ -52,8 +52,8 @@
 //
 // Two layers, so a level-of-detail chain can share one pose:
 //   vegPose   the trunk, limb and twig bend at a rest point: the offset and
-//             the rotation of the wood there. Every tier (leaves, clump
-//             cards, clump lobes) calls it with the same per-plant data
+//             the rotation of the wood there. Every part (leaves, wood)
+//             calls it with the same per-plant data
 //             (VegPlant: root, height, trunk cantilever) and per-limb data
 //             (VegLimb: limb and twig cantilevers, phase) and the same rest
 //             point and weight, and gets the same pose, so crossfades between
@@ -87,10 +87,9 @@ const vec2 VEG_LEAF_FLUTTER_HZ = vec2(2.0, 2.5);
 const vec2 VEG_NEAR_SHRINK = vec2(0.25, 1.0);
 
 // How much a limb and a twig rise and fall as they ring, against their
-// sway (vegLevel's `bob`). A broadleaf's; a forest node sets its own
-// (scene_forest.glsl's forestApplyLook: a conifer's long boughs bounce).
-float vegLimbBob = 0.6;
-float vegTwigBob = 0.8;
+// sway (vegLevel's `bob`): a broadleaf's.
+const float vegLimbBob = 0.6;
+const float vegTwigBob = 0.8;
 
 // A cantilever: natural frequency (Hz), tip deflection over length at
 // VEG_REFERENCE_WIND (0: it does not bend), length (world metres).
@@ -544,8 +543,7 @@ mat3 vegRotation(vec3 omega) {
 // The leaf's turn as a whole (the wood's rotation, the downwind turn and the
 // flutter), and its fold: each half turns a further `fold` radians about the
 // stem, the half on `side`'s positive side by +fold, the other by -fold
-// (vegLeafAmount's last step). A forest's leaves are posed by this once a
-// leaf (forest_leaf_pose.comp), not once a vertex.
+// (vegLeafAmount's last step).
 mat3 vegLeafTurn(VegPose pose, VegWind w, vec3 axis, vec3 normal, float seed, float amount, out vec3 side,
                  out float fold) {
     fold = 0.0;
@@ -672,8 +670,7 @@ vec4 vegetationSway(mat4 model, vec4 v0, vec4 v1, vec4 v2, vec4 v3, vec3 leafNor
 // Bark varies by plant, and darkens toward the ground.
 //
 // The per-tree part (vegTreeTone: a hash of where the plant stands, and the
-// leaf and bark tints from it) is split out so a forest's clump lobes, which
-// place their own leaves (scene_forest_mass.glsl), take the same.
+// leaf and bark tints from it).
 float vegTreeTone(mat4 model, vec4 v0) {
     vec3 rootAbs = (model * vec4(v0.xyz, 1.0)).xyz + camera.eyeWorld.xyz;
     return sceneWindHash(ivec2(floor(rootAbs.xz * 8.0)) + ivec2(17, 3));
@@ -686,7 +683,7 @@ vec3 vegTreeLeafTint(float tree) {
 vec3 vegTreeBarkTint(float tree) { return vec3(0.82 + 0.3 * tree, 0.8 + 0.28 * tree, 0.78 + 0.24 * tree); }
 
 // A leaf's tint before its own and its depth in the crown: the tree's, and
-// its limb's (a forest lobe adds the rest leaf by leaf, scene_forest_mass.glsl).
+// its limb's.
 vec3 vegLimbLeafTint(mat4 model, vec4 v0, vec4 v3) {
     float phase = float(uint(max(v3.y, 0.0) + 0.5) >> 18) / 64.0;
     float limb = fract(phase * 7.31 + 0.37);

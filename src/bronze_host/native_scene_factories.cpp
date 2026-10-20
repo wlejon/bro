@@ -1,7 +1,6 @@
 // native_scene_factories.cpp — SceneGraph node creation factories.
 
 #include "bronze_host/native_scene_internal.h"
-#include "scene/forest_node.h"
 #include "bronze_host/host_natives.h"
 #include "bronze_host/native_physics_internal.h"
 #include "natives/scene/native_scene_decl.h"
@@ -220,28 +219,6 @@ void applyInstancedOpts(scene::InstancedMeshNode* node, Value optsIn) {
 extern "C" {
 
 using namespace bro::bronze_host;
-
-// A forest (scene/forest_node.h): its leaf mesh (`mesh` / `leaf`, or the
-// second argument) and the leaves' material; js/scene_forest.js hands over
-// the specimens and trees.
-void* bro_scene_SceneGraph_createForest(void* self, uint64_t optsBits, uint64_t meshVal) {
-    auto* g = graphOf(self);
-    if (!g) return nullptr;
-    auto* node = g->createForest();
-    if (!node) return nullptr;
-    g->root()->addChild(node);
-    const Rooted opts(ev::fromBits(optsBits));
-    const bromesh::MeshData* md = bromesh::api::meshDataOf(bronze::Value{meshVal});
-    if (!md && ev::isObject(opts)) {
-        for (const char* k : {"leaf", "mesh"}) {
-            Value cand = ev::getProperty(opts, k);
-            if (ev::isObject(cand) && (md = bromesh::api::meshDataOf(cand))) break;
-        }
-    }
-    if (md) node->setMesh(*md);
-    if (ev::isObject(opts)) applyMeshMaterialOpts(node, opts);
-    return wrapNode(node, g);
-}
 
 void* bro_scene_SceneGraph_createMesh(void* self, uint64_t optsBits, uint64_t meshVal) {
     auto* g = graphOf(self);

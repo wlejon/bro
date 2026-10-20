@@ -9,7 +9,6 @@
 #include "scene/vulkan/pass_ground_layers.h"
 #include "scene/vulkan/pass_environment.h"
 #include "scene/vulkan/pass_gaussian_splat.h"
-#include "scene/vulkan/pass_hiz.h"
 #include "scene/vulkan/pass_mesh.h"
 #include "scene/vulkan/pass_particles.h"
 #include "scene/vulkan/pass_postfx.h"
@@ -36,42 +35,26 @@ SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
     // The frame, in order. A pass draws into the HDR scope or brings its own
     // targets; the graph does every shared transition (scene_frame_graph.h).
     if (context.asyncComputeQueue()) {
-        // The forests' plans run on the async compute queue: what needs no
+        // The plants' plans run on the async compute queue: what needs no
         // plan goes first, beside it (the other casters, the frame's
         // uniforms, the sky), and the graphics waits for the plan at its
         // first reader (the planned casters, else the opaque meshes). The
         // probe stays after the planned casters: its faces are lit through
-        // the shadow atlas, the forest's shadows included.
+        // the shadow atlas, the plants' shadows included.
         graph_.add(std::make_unique<PassShadow>(PassShadow::Part::Unplanned));
         graph_.add(std::make_unique<PassFrameUniforms>());
         graph_.add(std::make_unique<PassGroundLayers>());
         graph_.add(std::make_unique<PassEnvironment>());
         graph_.add(std::make_unique<PassShadow>(PassShadow::Part::Planned));
-        graph_.add(std::make_unique<PassForestBatches>(opaqueBatches_));
-        // The occlusion list's slots enabled for the batches' sprites (PassHiZ).
-        graph_.add(std::make_unique<PassOcclusionBudget>(opaqueBatches_));
         graph_.add(std::make_unique<PassReflectionProbe>());
     } else {
-        // (The batches first: the occlusion budget reads the plans' commands
-        // as the casters do, so its barriers are theirs.)
-        graph_.add(std::make_unique<PassForestBatches>(opaqueBatches_));
-        graph_.add(std::make_unique<PassOcclusionBudget>(opaqueBatches_));
         graph_.add(std::make_unique<PassShadow>());
         graph_.add(std::make_unique<PassFrameUniforms>());
         graph_.add(std::make_unique<PassGroundLayers>());
         graph_.add(std::make_unique<PassReflectionProbe>());
         graph_.add(std::make_unique<PassEnvironment>());
     }
-    graph_.add(std::make_unique<PassOpaque>(opaqueBatches_, 0));
-    for (int k = 1; k < OpaqueBatches::kBatches; ++k) {
-        graph_.add(std::make_unique<PassFarDepth>(opaqueBatches_, k));
-        graph_.add(std::make_unique<PassOpaque>(opaqueBatches_, k));
-    }
-    // The opaque depth's pyramid (this frame's retest, the next frame's
-    // first phase), and the cards the batches held back that it does not hide.
-    graph_.add(std::make_unique<PassFarDepth>(opaqueBatches_, -1));
-    graph_.add(std::make_unique<PassHiZ>(opaqueBatches_));
-    graph_.add(std::make_unique<PassOpaque>(opaqueBatches_, 0, true));
+    graph_.add(std::make_unique<PassOpaque>());
     graph_.add(std::make_unique<PassDepthSnapshot>());
     auto& ssao = static_cast<PassSSAO&>(graph_.add(std::make_unique<PassSSAO>()));
     graph_.add(std::make_unique<PassAoApply>(ssao));
@@ -145,8 +128,6 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
     }
     environment_.update(gpu_, cmd, renderer);
     frame.lighting = sceneLighting(renderer, environment_, frame.view.eye);
-    // Last frame's pyramid becomes the one this frame's cards test first.
-    targets_.swapHiZ();
     writeCameraSet(frame);
     frame.ssao = renderer.ssaoEnabled() && targets_.ensureIndirect(allocator_);
     frame.ssr = renderer.ssrEnabled() && renderer.ssrIntensity() > 0.0f;
@@ -155,11 +136,7 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
     frame.fxaa = renderer.fxaaEnabled();
     buildDrawLists(frame);
     timer_.mark(cmd, "setup");
-    meshes_.recordForestPoses(frame);
-    timer_.mark(cmd, "forestPose");
-    meshes_.recordPlantPoses(frame);
-    timer_.mark(cmd, "plants:pose");
-    if (frame.computeApart()) timer_.mark(frame.computeCmd, "forestPose");
+    meshes_.recordPlans(frame);
 
     graph_.run(frame);
 

@@ -394,7 +394,7 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
     flags |= mesh_flags::kTwoSided;
     // A culm's head is cut per pixel: under 4x MSAA it keeps its share of a
     // pixel's samples rather than all or none.
-    const uint32_t msaa = frame.gpu.targets.samples() == VK_SAMPLE_COUNT_4_BIT ? mesh_flags::kForestMsaa : 0u;
+    const uint32_t msaa = frame.gpu.targets.samples() == VK_SAMPLE_COUNT_4_BIT ? mesh_flags::kMsaa : 0u;
 
     // The shadow tiles the near ring casts into: a directional light's first
     // cascade, every tile of any other light.

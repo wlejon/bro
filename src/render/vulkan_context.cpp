@@ -424,6 +424,14 @@ bool VulkanContext::deviceMeetsRequirements(VkPhysicalDevice dev,
                  f.dynamicRendering, f.timelineSemaphore);
         return false;
     }
+    // The plants' GPU plan draws each view's chunks indirectly from its own
+    // first instance (scene_plants_gpu_plan.cpp).
+    VkPhysicalDeviceFeatures core{};
+    vkGetPhysicalDeviceFeatures(dev, &core);
+    if (!core.drawIndirectFirstInstance) {
+        LOG_INFO("Vulkan: skipping %s (no drawIndirectFirstInstance)", props.deviceName);
+        return false;
+    }
     if (!config_.headless) {
         const auto exts = deviceExtensions(dev);
         for (const char* req : kRequiredDeviceExtensions) {
@@ -685,9 +693,8 @@ bool VulkanContext::createLogicalDevice() {
     deviceFeatures.independentBlend = available.independentBlend;
     deviceFeatures.shaderClipDistance = available.shaderClipDistance;
     deviceFeatures.pipelineStatisticsQuery = available.pipelineStatisticsQuery;
-    // The forest's GPU planner draws its groups indirectly, each from its
-    // own first entry (scene_forest_gpu_plan.cpp; without it, the CPU path).
-    deviceFeatures.drawIndirectFirstInstance = available.drawIndirectFirstInstance;
+    // Required (deviceMeetsRequirements): the plants' indirect draws.
+    deviceFeatures.drawIndirectFirstInstance = VK_TRUE;
     deviceFeatures_ = deviceFeatures;
 
     // Instanced-attribute divisors other than 0 and 1, and primitive restart

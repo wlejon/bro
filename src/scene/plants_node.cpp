@@ -65,7 +65,7 @@ void PlantsNode::rebuild() {
     // Each plant's sphere: the crown's reach and the leaves past its skin,
     // and the sway.
     const int n = plantCount_;
-    spheres_.resize(static_cast<size_t>(n) * 4);
+    std::vector<float> spheres(static_cast<size_t>(n) * 4);
     for (int i = 0; i < n; ++i) {
         const float* p = plant(i);
         int s = static_cast<int>(p[5]);
@@ -76,7 +76,7 @@ void PlantsNode::rebuild() {
             radius = species(s)[2];
         }
         const float scale = p[4];
-        float* o = spheres_.data() + static_cast<size_t>(i) * 4;
+        float* o = spheres.data() + static_cast<size_t>(i) * 4;
         o[0] = p[0];
         o[1] = p[1] + 0.5f * height * scale;
         o[2] = p[2];
@@ -86,7 +86,7 @@ void PlantsNode::rebuild() {
     for (CellContent& c : cells_) {
         c.bounds = bromath::aempty3();
         for (uint32_t k = c.first; k < c.first + c.count; ++k) {
-            const float* s = spheres_.data() + size_t{k} * 4;
+            const float* s = spheres.data() + size_t{k} * 4;
             const float r = s[3] + kCellPad;
             c.bounds.min = bromath::vmin(c.bounds.min, bromath::Vec3{s[0] - r, s[1] - r, s[2] - r});
             c.bounds.max = bromath::vmax(c.bounds.max, bromath::Vec3{s[0] + r, s[1] + r, s[2] + r});

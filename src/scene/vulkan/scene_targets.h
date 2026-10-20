@@ -14,20 +14,6 @@
 //                            nearest sample (depth::resolveNearest).
 //   depthSnapshot            sampleable copy of the opaque depth (decals,
 //                            soft particles, SSAO, SSR, depth of field).
-//   farDepth                 the opaque depth drawn so far, each pixel's
-//                            farthest sample (R32F, PassFarDepth): what the
-//                            forest's later sprites are rejected against.
-//   hiZ, hiZPrev             the opaque depth's pyramid (R32F, PassHiZ),
-//                            this frame's and the last frame's (swapped at
-//                            each frame's start, swapHiZ): level 0 half its
-//                            size, each texel the farthest of the 2x2 below,
-//                            so a box tested against a few texels of the
-//                            level its size picks is behind all that was
-//                            drawn under it (scene_occlusion.glsl).
-//   occlusionList            (a buffer) the forest cards the opaque batches
-//                            held back against hiZPrev, and the retest's
-//                            draws of those hiZ does not hide
-//                            (occlusion_list_layout.h).
 //   ssrSnapshot              the lit opaque colour SSR reflects.
 //   dofHdr, postLdr, ldr     the post chain; ldr is the frame's output.
 //   shadowAtlas              every light's shadow tiles (SceneRenderer's
@@ -39,12 +25,9 @@
 #include "scene/vulkan/scene_vk_allocator.h"
 #include "scene/vulkan/scene_vk_target_format.h"
 
-#include <bromath/mat.h>
-#include <bromath/vec.h>
 #include <vulkan/vulkan.h>
 
 #include <cstdint>
-#include <utility>
 
 namespace bro::scene::vk {
 
@@ -53,7 +36,6 @@ public:
     static constexpr VkFormat kHdrFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
     static constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
     static constexpr VkFormat kLdrFormat = VK_FORMAT_R8G8B8A8_UNORM;
-    static constexpr VkFormat kFarDepthFormat = VK_FORMAT_R32_SFLOAT;
 
     bool setup(SceneVkDevice& device, SceneVkAllocator& allocator);
     void cleanup(SceneVkAllocator& allocator);
@@ -93,24 +75,6 @@ public:
     SceneVkImage indirect, indirectMsaa;
     SceneVkImage depth, depthMsaa;
     SceneVkImage depthSnapshot;
-    SceneVkImage farDepth;
-    SceneVkImage hiZ, hiZPrev;
-    /// The view a pyramid was built from (PassHiZ), to reproject into.
-    struct HiZState {
-        bool built = false;
-        bromath::Mat4 proj;      // Vulkan clip space
-        bromath::Mat4 relView;   // the view without its translation
-        bromath::Vec3 eye{0.0f, 0.0f, 0.0f};
-    };
-    HiZState hiZState, hiZPrevState;
-    /// This frame's pyramid becomes the last frame's (each run of the
-    /// frame graph, before anything reads either).
-    void swapHiZ() {
-        std::swap(hiZ, hiZPrev);
-        std::swap(hiZState, hiZPrevState);
-        hiZState = {};
-    }
-    SceneVkBuffer occlusionList;
     SceneVkImage ssrSnapshot;
     SceneVkImage dofHdr;
     SceneVkImage postLdr;

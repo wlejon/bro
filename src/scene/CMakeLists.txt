@@ -66,17 +66,10 @@ embed_vk_shader(scene_mesh_push.glsl  kVkSceneMeshPushSrc)
 embed_vk_shader(scene_shadow_push.glsl kVkSceneShadowPushSrc)
 embed_vk_shader(scene_shadow_cutout.glsl kVkSceneShadowCutoutSrc)
 embed_vk_shader(scene_vegetation.glsl kVkSceneVegetationSrc)
-embed_vk_shader(scene_forest_sprite.glsl kVkSceneForestSpriteSrc)
-embed_vk_shader(scene_forest_mass.glsl kVkSceneForestMassSrc)
 embed_vk_shader(scene_procedural.glsl kVkSceneProceduralSrc)
-embed_vk_shader(scene_forest_layout.h  kVkSceneForestLayoutSrc)
-embed_vk_shader(scene_forest_crown.glsl kVkSceneForestCrownSrc)
 embed_vk_shader(scene_bark.glsl       kVkSceneBarkSrc)
-embed_vk_shader(scene_forest_spray.glsl kVkSceneForestSpraySrc)
-embed_vk_shader(scene_forest_bloom.glsl kVkSceneForestBloomSrc)
 embed_vk_shader(scene_grass.glsl      kVkSceneGrassSrc)
 embed_vk_shader(scene_grass_surface.glsl kVkSceneGrassSurfaceSrc)
-embed_vk_shader(scene_forest_surface.glsl kVkSceneForestSurfaceSrc)
 embed_vk_shader(scene_ground.glsl     kVkSceneGroundSrc)
 embed_vk_shader(scene_ground_layers.glsl kVkSceneGroundLayersSrc)
 embed_vk_shader(scene_herb_mix.glsl   kVkSceneHerbMixSrc)
@@ -95,7 +88,6 @@ find_package(Vulkan REQUIRED)
 add_library(bro_scene STATIC
     scene_node.cpp
     scene_graph.cpp
-    impostor_layer.cpp
     scene_renderer.cpp
     scene_renderer_shadow.cpp
     shape_node.cpp
@@ -116,7 +108,6 @@ add_library(bro_scene STATIC
     particles3d_node.cpp
     decal_node.cpp
     grass_node.cpp
-    forest_node.cpp
     plants_node.cpp
     world_cells.cpp
     surface_layers.cpp
@@ -147,12 +138,7 @@ add_library(bro_scene STATIC
     vulkan/scene_mesh_drawer_plants.cpp
     vulkan/scene_mesh_drawer_ground.cpp
     vulkan/pass_ground_layers.cpp
-    vulkan/pass_hiz.cpp
     vulkan/scene_surface_layers.cpp
-    vulkan/scene_mesh_drawer_forest.cpp
-    vulkan/scene_mesh_drawer_forest_gpu.cpp
-    vulkan/scene_forest_draw.cpp
-    vulkan/scene_forest_gpu_plan.cpp
     vulkan/scene_plants_gpu_plan.cpp
     vulkan/scene_world_cells_pass.cpp
     vulkan/scene_draw_list.cpp
@@ -183,9 +169,6 @@ target_include_directories(bro_scene PRIVATE ${VK_GEN_DIR})
 # on (see the _bro_require chain in the top-level CMakeLists), so bro_physics +
 # brogameagent are always present here.
 target_link_libraries(bro_scene PUBLIC bro_canvas bro_physics bro_util broimage::broimage bromesh FastNoise brogameagent bro_dom bro_render bro_layout bro_tile Vulkan::Vulkan)
-# The forest node reads broflora's forest records (broflora/forest_records.h,
-# header-only): its include directory alone, not its code or its flags.
-target_include_directories(bro_scene PRIVATE $<TARGET_PROPERTY:broflora,INTERFACE_INCLUDE_DIRECTORIES>)
 target_compile_features(bro_scene PUBLIC cxx_std_20)
 bro_apply_feature_defs(bro_scene)
 
@@ -204,15 +187,6 @@ if(BRO_BUILD_TESTS)
     target_link_libraries(bro_vulkan_scene_passes_test PRIVATE bro_scene bro_engine bro_dom bro_engine
                           bro_render bro_platform bro_util skia Vulkan::Vulkan)
     target_include_directories(bro_vulkan_scene_passes_test PRIVATE ${bro_SOURCE_DIR}/src ${VK_GEN_DIR})
-
-    # The forest record format end to end: broflora's emit read by
-    # ForestNode. The test links broflora itself (bro_scene takes only its
-    # headers).
-    if(TARGET broflora)
-        add_executable(bro_forest_records_test tests/test_forest_records.cpp)
-        target_link_libraries(bro_forest_records_test PRIVATE bro_scene broflora bro_render bro_platform bro_util)
-        target_include_directories(bro_forest_records_test PRIVATE ${bro_SOURCE_DIR}/src)
-    endif()
 
     # SurfaceLayers' tile bookkeeping (selection, budget, slots, page table),
     # CPU only.

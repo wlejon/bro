@@ -98,7 +98,7 @@ public:
     const SceneVkImage* texture(uint32_t id, TextureSlot slot, const NodeTexture& tex);
 
     /// A device-local storage buffer holding `bytes` of `data` for node `id`,
-    /// re-uploaded when `generation` moves (a forest's records).
+    /// re-uploaded when `generation` moves (the plants' records).
     const SceneVkBuffer* storage(uint32_t id, uint64_t generation, const void* data, size_t bytes);
 
     /// The skinned node's joint/weight vertex stream.

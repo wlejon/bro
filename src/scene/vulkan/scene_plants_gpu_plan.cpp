@@ -86,8 +86,7 @@ void barrier(VkCommandBuffer cmd) {
 
 void GpuPlanner::Node::poll() {
     if (!readback_.mappedData) return;
-    // At most a render late, as the forest planner's: the render before the
-    // newest is waited for (done, or all but, by the time the next is
+    // At most a render late: the render before the newest is waited for (done, or all but, by the time the next is
     // prepared), so a script's read two renders after a change sees it.
     int newest = -1, before = -1;
     for (int i = 0; i < kRing; ++i) {
@@ -134,12 +133,6 @@ bool GpuPlanner::Node::latest(PlantsNode::Stats& out) {
 bool GpuPlanner::setup(SceneGpu& gpu) {
     device_ = gpu.device.device();
     limits_ = gpu.device.context().deviceProperties().limits;
-    // Each view's draws start at their own first chunk, an instance index
-    // from the indirect command: without the feature, the CPU plans.
-    if (!gpu.device.context().features().drawIndirectFirstInstance) {
-        LOG_INFO("plants planner: drawIndirectFirstInstance unsupported; plants plan on the CPU");
-        return true;
-    }
     SceneVkDescriptorLayoutBuilder builder;
     for (uint32_t b = 0; b < 6; ++b) builder.addBinding(b, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
     setLayout_ = builder.build(device_);
@@ -160,14 +153,13 @@ bool GpuPlanner::setup(SceneGpu& gpu) {
         }
     }
     // The leaf poses over what the plan made: the camera (set 0) and the
-    // draws' set 3, with the draws' push constants.
+    // draws' set 3.
     const std::array<VkDescriptorSetLayout, 4> poseSets = {gpu.defaults.cameraLayout, gpu.defaults.emptyLayout,
                                                            gpu.defaults.emptyLayout, gpu.defaults.boneLayout};
-    VkPushConstantRange posePush{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(MeshPushConstants)};
     pi.setLayoutCount = static_cast<uint32_t>(poseSets.size());
     pi.pSetLayouts = poseSets.data();
-    pi.pushConstantRangeCount = 1;
-    pi.pPushConstantRanges = &posePush;
+    pi.pushConstantRangeCount = 0;
+    pi.pPushConstantRanges = nullptr;
     poseModule_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::PlantsPoseComp);
     if (!poseModule_ || vkCreatePipelineLayout(device_, &pi, nullptr, &poseLayout_) != VK_SUCCESS ||
         !(posePipeline_ = computePipeline(gpu.device, poseModule_, poseLayout_, "plants pose indirect"))) {
@@ -175,10 +167,9 @@ bool GpuPlanner::setup(SceneGpu& gpu) {
         return false;
     }
     if (!cellsPass_.setup(gpu)) {
-        LOG_ERROR("plants planner: no world cell pass; plants plan on the CPU");
+        LOG_ERROR("plants planner: failed setting up the world cell pass");
         return false;
     }
-    ready_ = true;
     return true;
 }
 
@@ -212,7 +203,6 @@ void GpuPlanner::cleanup(SceneGpu& gpu) {
     poseModule_ = VK_NULL_HANDLE;
     poseLayout_ = layout_ = VK_NULL_HANDLE;
     setLayout_ = VK_NULL_HANDLE;
-    ready_ = false;
 }
 
 std::shared_ptr<GpuPlanner::Node> GpuPlanner::node(const PlantsNode& n) {
@@ -239,7 +229,7 @@ bool GpuPlanner::ensure(SceneFrame& frame, SceneVkBuffer& buf, VkDeviceSize size
 
 bool GpuPlanner::add(SceneFrame& frame, Node& n, const PlantsNode& node, const SceneVkBuffer& store,
                      const std::vector<int>& tiles) {
-    if (!ready_ || tiles.size() > PP_MAX_TILES || node.cells().empty()) return false;
+    if (tiles.size() > PP_MAX_TILES || node.cells().empty()) return false;
     // Nodes gone (or long unplanned) give their buffers back.
     if ((use_ & 1023) == 0)
         for (auto it = nodes_.begin(); it != nodes_.end();) {
@@ -427,8 +417,6 @@ void GpuPlanner::record(SceneFrame& frame) {
     // The leaf poses, a workgroup a leaf chunk the plan made.
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, posePipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, poseLayout_, 0, 1, &frame.cameraSet, 0, nullptr);
-    MeshPushConstants push{};
-    vkCmdPushConstants(cmd, poseLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(MeshPushConstants), &push);
     for (Node* n : queued_) {
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, poseLayout_, 3, 1, &n->drawSet, 0, nullptr);
         vkCmdDispatchIndirect(cmd, n->args.buffer, VkDeviceSize{PP_A_POSE} * 4);

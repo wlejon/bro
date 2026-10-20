@@ -73,8 +73,8 @@ public:
     bool lastPasses(Passes& passes, Passes& compute, bool& computed);
 
 private:
-    // (A forest's grass alone is a few dozen draws, and the wilds walk's
-    // opaque and shadow passes over 190: its forest clumps went uncounted.)
+    // (A scene's grass alone is a few dozen draws, and a large scene's
+    // opaque and shadow passes can take hundreds.)
     static constexpr uint32_t kMaxMarks = 512;
     static constexpr uint32_t kPerSlot = 2 + kMaxMarks;   // start, end, the marks
 

@@ -63,8 +63,7 @@ std::optional<bromath::AABB3> SceneRenderer::nodeWorldBounds(SceneNode* n) const
     case SceneNode::Type::Mesh: {
         auto* m = static_cast<MeshNode*>(n);
         // Grass stands around the camera wherever its field is: never culled.
-        // A forest culls tree by tree itself.
-        if (!m->hasDrawableMesh() || m->asGrass() || m->asForest()) return std::nullopt;
+        if (!m->hasDrawableMesh() || m->asGrass()) return std::nullopt;
         bromath::AABB3 local = m->localBounds();
         auto* sm = m->asSkinnedMesh();
         if (sm && sm->skinReady()) local = sm->posedLocalBounds();

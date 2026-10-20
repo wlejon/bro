@@ -82,13 +82,10 @@ public:
     void setParams(const Params& p) { params_ = p; }
     const Params& params() const { return params_; }
 
-    /// A plant's bounding sphere (absolute world: centre, radius), in cell
-    /// order, kept with the records (plantsSphere's in the plan's GLSL).
-    const std::vector<float>& spheres() const { return spheres_; }
-
     /// The plants' cells (world_cells.h): each leaf's run of the cell order,
-    /// bounded by its plants' spheres' boxes (a little wider: the GPU works
-    /// the spheres out again in its own arithmetic).
+    /// bounded by its plants' bounding spheres' boxes (a little wider: the
+    /// GPU works the spheres out again in its own arithmetic, the plan's
+    /// plantsSphere).
     const CellGrid& cellGrid() const { return grid_; }
     const std::vector<CellContent>& cells() const { return cells_; }
 
@@ -102,8 +99,8 @@ public:
         uint32_t limbs = 0;      // trunks and limbs drawn
         uint32_t shadowElements = 0;   // leaf elements cast, every shadow tile's summed
     };
-    /// Where the stats come from while the drawer plans the node on the GPU
-    /// (scene_plants_gpu_plan.cpp): a frame's are read back once the GPU has
+    /// Where the stats come from: the drawer plans the node on the GPU
+    /// (scene_plants_gpu_plan.cpp), a frame's read back once the GPU has
     /// drawn it, a frame or two late, and stats() takes the newest finished.
     class StatsSource {
     public:
@@ -128,7 +125,6 @@ private:
     std::vector<float> data_;       // header, species, plants (cell order)
     size_t plantsAt_ = kHeaderFloats;   // the first plant's float in data_
     int speciesCount_ = 0, plantCount_ = 0;
-    std::vector<float> spheres_;
     std::vector<CellContent> cells_;
     Params params_;
     uint64_t generation_ = 0;

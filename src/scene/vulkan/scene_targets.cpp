@@ -2,7 +2,6 @@
 
 #include "scene/vulkan/scene_vk_depth.h"
 #include "scene/vulkan/scene_vk_device.h"
-#include "scene/vulkan/shaders/occlusion_list_layout.h"
 #include "util/log.h"
 
 #include <algorithm>
@@ -26,20 +25,11 @@ bool SceneTargets::setup(SceneVkDevice& device, SceneVkAllocator& allocator) {
     depthResolve_ = depth::resolveNearest(supportedDepthResolve_);
 
     maxImageDimension_ = limits.maxImageDimension2D;
-
-    if (!allocator.createBuffer(static_cast<VkDeviceSize>(OL_WORDS) * 4,
-                                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
-                                    VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, occlusionList)) {
-        LOG_ERROR("SceneTargets: failed creating the occlusion list");
-        return false;
-    }
     return ensureShadowAtlas(allocator, 1);
 }
 
 void SceneTargets::cleanup(SceneVkAllocator& allocator) {
     destroyFrameImages(allocator);
-    if (occlusionList.isValid()) allocator.destroyBuffer(occlusionList);
     allocator.destroyImage(indirect);
     allocator.destroyImage(indirectMsaa);
     allocator.destroyImage(shadowAtlas);
@@ -105,8 +95,7 @@ bool SceneTargets::createAttachment(SceneVkAllocator& allocator, SceneVkImage& o
 }
 
 void SceneTargets::destroyFrameImages(SceneVkAllocator& allocator) {
-    for (SceneVkImage* img : {&hdr, &hdrMsaa, &depth, &depthMsaa, &depthSnapshot, &farDepth, &hiZ, &hiZPrev, &ssrSnapshot, &dofHdr,
-                              &postLdr, &ldr}) {
+    for (SceneVkImage* img : {&hdr, &hdrMsaa, &depth, &depthMsaa, &depthSnapshot, &ssrSnapshot, &dofHdr, &postLdr, &ldr}) {
         allocator.destroyImage(*img);
     }
 }
@@ -124,31 +113,15 @@ bool SceneTargets::ensure(SceneVkAllocator& allocator, uint32_t width, uint32_t 
     samples_ = samples;
 
     constexpr VkImageUsageFlags kColor = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-    // (The drawn depth is sampled by PassFarDepth.)
-    constexpr VkImageUsageFlags kDepthUse = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    constexpr VkImageUsageFlags kDepthUse = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
     bool ok = createSampled(allocator, hdr, kHdrFormat, kColor | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, false) &&
               createAttachment(allocator, depth, kDepthFormat, kDepthUse | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
                                VK_SAMPLE_COUNT_1_BIT) &&
               createSampled(allocator, depthSnapshot, kDepthFormat, VK_IMAGE_USAGE_TRANSFER_DST_BIT, true) &&
-              createSampled(allocator, farDepth, kFarDepthFormat, kColor | VK_IMAGE_USAGE_TRANSFER_DST_BIT, true) &&
               createSampled(allocator, ssrSnapshot, kHdrFormat, VK_IMAGE_USAGE_TRANSFER_DST_BIT, false) &&
               createSampled(allocator, dofHdr, kHdrFormat, kColor, false) &&
               createSampled(allocator, postLdr, kLdrFormat, kColor, false) &&
               createSampled(allocator, ldr, kLdrFormat, kColor | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, false);
-    if (ok) {
-        // farDepth's pyramid: half its size at level 0, down to one texel.
-        const uint32_t w = (width + 1) / 2, h = (height + 1) / 2;
-        uint32_t levels = 1;
-        while ((std::max(w, h) >> levels) > 0) ++levels;
-        // (Two: this frame's and the last one's, swapped each frame.)
-        for (SceneVkImage* img : {&hiZ, &hiZPrev})
-            ok = ok && allocator.createImage(w, h, kFarDepthFormat,
-                                             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
-                                                 VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
-                                             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, *img, levels);
-        hiZState = {};
-        hiZPrevState = {};
-    }
     if (ok && msaa()) {
         ok = createAttachment(allocator, hdrMsaa, kHdrFormat, kColor, samples) &&
              createAttachment(allocator, depthMsaa, kDepthFormat, kDepthUse, samples);

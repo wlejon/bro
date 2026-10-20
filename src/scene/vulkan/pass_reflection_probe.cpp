@@ -113,10 +113,6 @@ PassReflectionProbe::Probe* PassReflectionProbe::ensure(SceneGpu& gpu, const Ref
 void PassReflectionProbe::declare(const SceneFrame& frame, PassIO& io) const {
     // The faces bind the frame's lighting set, whose shadow binding must be readable.
     io.sample(frame.gpu.targets.shadowAtlas);
-    // (So must its far depth and HiZ, which a sprite's stages bind; its
-    // faces' cameras never cull against the HiZ.)
-    io.sample(frame.gpu.targets.farDepth);
-    io.sample(frame.gpu.targets.hiZ);
 }
 
 void PassReflectionProbe::record(SceneFrame& frame) {
@@ -225,7 +221,7 @@ void PassReflectionProbe::renderFace(SceneFrame& frame, const ReflectionProbeNod
     const bool cull = frame.renderer.frustumCullingEnabled();
     for (const MeshDraw& draw : frame.lists.meshes) {
         if (draw.translucent) continue;   // no sorted translucent pass in a capture
-        // Grass rings and forest tiers are cut to the camera's view and level
+        // Grass rings and plants are cut to the camera's view and level
         // of detail; shadow-only draws are casters.
         if (cameraCut(draw.kind) || draw.shadowOnly) continue;
         if (cull && draw.hasBounds && !bromath::fintersects(view.frustum, draw.bounds)) continue;

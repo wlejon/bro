@@ -34,7 +34,6 @@ class Particles3DNode;
 class DecalNode;
 class GrassNode;
 class PlantsNode;
-class ForestNode;
 class ReflectionProbeNode;
 class AgentBinding;
 class AIWorldTicker;
@@ -70,7 +69,6 @@ public:
     DecalNode* createDecal(const std::string& name = "");
     GrassNode* createGrass(const std::string& name = "");
     PlantsNode* createPlants(const std::string& name = "");
-    ForestNode* createForest(const std::string& name = "");
     ReflectionProbeNode* createReflectionProbe(const std::string& name = "");
 
     /// Destroy a node and remove it from the tree. Also destroys children.

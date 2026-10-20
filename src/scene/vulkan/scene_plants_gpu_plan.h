@@ -15,13 +15,13 @@
 // out, place each plant's chunks; then the leaf poses (plants_pose.comp),
 // dispatched over the leaf chunks the plan made.
 //
-// As the forest's planner (scene_forest_gpu_plan.h): it records into the
-// frame's compute stream; what the draws read (chunks, commands, poses) is
-// kept a copy a frame slot, what only the plan touches one copy; the stats
-// come back a frame or two late (PlantsNode::StatsSource), and the room for
-// chunks and poses grows from them: a frame that asks for more than there
-// is draws what fits. Without the cell pass, or a device that cannot start
-// an indirect draw at an instance, the plants plan on the CPU.
+// It records into the frame's compute stream; what the draws read (chunks,
+// commands, poses) is kept a copy a frame slot, what only the plan touches
+// one copy; the stats come back a frame or two late (PlantsNode::
+// StatsSource), and the room for chunks and poses grows from them: a frame
+// that asks for more than there is draws what fits. Each view's draws start
+// at their own first chunk, an instance index from the indirect command
+// (the device's drawIndirectFirstInstance, which bro requires).
 
 #include "render/vulkan_frames.h"
 #include "scene/plants_node.h"
@@ -98,7 +98,6 @@ public:
 
     bool setup(SceneGpu& gpu);
     void cleanup(SceneGpu& gpu);
-    bool ready() const { return ready_; }
 
     /// Node `n`'s state (made on first use; a node long unplanned is dropped).
     std::shared_ptr<Node> node(const PlantsNode& n);
@@ -107,7 +106,8 @@ public:
     /// buffers sized from the last frames' asks, its sets written (the
     /// draws' set 3 reading `store`, the node's records). `tiles` the
     /// shadow tiles its casters go to, by slot in the frame's plan. False:
-    /// the frame plans it on the CPU.
+    /// it draws nothing this frame (its cells, buffers or sets could not be
+    /// had).
     bool add(SceneFrame& frame, Node& state, const PlantsNode& node, const SceneVkBuffer& store,
              const std::vector<int>& tiles);
     /// Record the queued plans and their poses into the frame's compute stream.
@@ -122,7 +122,6 @@ private:
                 VkMemoryPropertyFlags props);
 
     VkDevice device_ = VK_NULL_HANDLE;
-    bool ready_ = false;
     VkDescriptorSetLayout setLayout_ = VK_NULL_HANDLE;
     VkPipelineLayout layout_ = VK_NULL_HANDLE;
     VkShaderModule modules_[kStages] = {};

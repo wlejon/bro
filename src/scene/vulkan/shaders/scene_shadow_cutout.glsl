@@ -2,7 +2,7 @@
 // with an alpha cutoff casts what the colour pass keeps, its base colour's
 // alpha (mesh.frag's: the texture's at albedoUV, by the base colour's and
 // the vertex colour's) against the cutoff. The caster's push carries them
-// in params.yzw (a forest caster's near sphere elsewhere): y the cutoff, z
+// in params.yzw: y the cutoff, z
 // the base colour's alpha (negated when the vertex colour's alpha counts
 // too), w the atlas grid (cols + rows * 256, mesh.frag's push.extra.w).
 
@@ -17,7 +17,7 @@ void shadowCutoutOut(vec2 uv, float vertexAlpha, float cellCode) {
     float base = push.params.z;
     outCutUV = uv;
     outCutAlpha = base < 0.0 ? -base * vertexAlpha : base;
-    float grid = mod(push.params.w, 65536.0);
+    float grid = push.params.w;
     float cols = max(floor(mod(grid, 256.0)), 1.0), rows = max(floor(grid / 256.0), 1.0);
     outCut = vec4(push.params.y, cellCode, cols, rows);
 }

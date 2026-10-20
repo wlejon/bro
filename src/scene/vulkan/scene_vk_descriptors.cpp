@@ -43,7 +43,7 @@ VkDescriptorSetLayout SceneVkDescriptorLayoutBuilder::build(VkDevice device) {
 
 VkDescriptorSetLayout SceneVkDescriptorLayoutBuilder::createCameraLayout(VkDevice device) {
     SceneVkDescriptorLayoutBuilder builder;
-    // (Compute too: the forest's leaf poses sway in the camera's wind.)
+    // (Compute too: the plants' leaf poses sway in the camera's wind.)
     builder.addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT);
     return builder.build(device);
@@ -70,17 +70,6 @@ VkDescriptorSetLayout SceneVkDescriptorLayoutBuilder::createLightingLayout(VkDev
     for (uint32_t binding = 2; binding <= 7; ++binding)
         builder.addBinding(binding, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
     builder.addBinding(8, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, linearSampler);
-    // The opaque depth drawn so far (SceneTargets::farDepth), read by texel.
-    builder.addBinding(9, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
-    // The opaque depth's pyramids, the last frame's (SceneTargets::hiZPrev)
-    // and this frame's (hiZ), read by texel where a draw's vertex stage
-    // culls against them (scene_occlusion.glsl; the sampler's filter is
-    // unused).
-    builder.addBinding(10, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_VERTEX_BIT, linearSampler);
-    builder.addBinding(11, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_VERTEX_BIT, linearSampler);
-    // The cards held back against hiZPrev and the retest's (SceneTargets::
-    // occlusionList), appended and read in the vertex stage.
-    builder.addBinding(12, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT);
     return builder.build(device);
 }
 

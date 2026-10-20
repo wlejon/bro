@@ -17,7 +17,6 @@ namespace bro::scene {
 
 class SkinnedMeshNode;
 class GrassNode;
-class ForestNode;
 class PlantsNode;
 
 /// A renderable 3D mesh node: bromesh::MeshData plus a PBR material. The node
@@ -45,11 +44,6 @@ public:
     /// Type::Mesh for the material setters but draws through the grass path
     /// and stays out of raycasts and bounds.
     virtual GrassNode* asGrass() { return nullptr; }
-
-    /// Downcast hook: non-null when this node is a ForestNode, which keeps
-    /// Type::Mesh for the material setters but draws through the forest path
-    /// and stays out of raycasts (its mesh is one leaf).
-    virtual ForestNode* asForest() { return nullptr; }
 
     /// Downcast hook: non-null when this node is a PlantsNode, which keeps
     /// Type::Mesh for the material setters but draws through the plants
@@ -288,7 +282,7 @@ public:
 
     /// Whether this mesh writes into the shadow atlas. Default true. Set false
     /// for meshes that should illuminate with shadows but not cast their own
-    /// (foliage impostors, transparent geometry, debug markers).
+    /// (billboards, transparent geometry, debug markers).
     void setCastsShadow(bool b) { castsShadow_ = b; }
     bool castsShadow() const { return castsShadow_; }
 

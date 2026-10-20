@@ -700,75 +700,6 @@ void bro_scene_SceneGraph_bindAudioListenerToCamera(void* self, bool bind);
 //   registered at __bro_native.scene.SceneGraph_detachAIWorld
 void bro_scene_SceneGraph_detachAIWorld(void* self);
 
-// ---- Forest (native_scene_forest.cpp, js/scene_forest.js) ----
-
-// (SceneGraph_createForest is createMesh's sibling: native_scene_internal.h.)
-
-// forest specimens: bro.flora's emitForest arrays, leaves as (clump, key)
-// pairs, leaf = (seed, upBias, tiltJitter, shell, baseScale, scaleJitter),
-// segmentClumps (4 floats a segment; empty: every segment drawn), clumpGroups
-// (a float a clump; empty: each clump its own drop group)
-//   registered at __bro_native.scene.SceneNode_setForestSpecimens
-bool bro_scene_SceneNode_setForestSpecimens(void* self, const float* specimens, uint32_t specimens_len,
-                                            const float* segments, uint32_t segments_len, const float* tangents,
-                                            uint32_t tangents_len, const float* segmentVegetation,
-                                            uint32_t segmentVegetation_len, const float* keepRadius,
-                                            uint32_t keepRadius_len, const float* clumps, uint32_t clumps_len,
-                                            const float* clumpVegetation, uint32_t clumpVegetation_len,
-                                            const int32_t* leaves, uint32_t leaves_len, const double* leaf,
-                                            uint32_t leaf_len, const float* segmentClumps, uint32_t segmentClumps_len,
-                                            const float* clumpGroups, uint32_t clumpGroups_len);
-
-// forest blooms: bro.flora's emitForest `blooms` (8 floats a bloom) and
-// `specimenBlooms` (8 floats a specimen); both empty: none. False when they
-// do not fit the specimens.
-//   registered at __bro_native.scene.SceneNode_setForestBlooms
-bool bro_scene_SceneNode_setForestBlooms(void* self, const float* blooms, uint32_t blooms_len,
-                                         const float* specimenBlooms, uint32_t specimenBlooms_len);
-
-// forest trees: 8 floats each (x, y, z, scale, yaw, specimen, 0, 0)
-//   registered at __bro_native.scene.SceneNode_setForestInstances
-void bro_scene_SceneNode_setForestInstances(void* self, const float* rows, uint32_t rows_len);
-
-// forest level of detail, ForestNode::lodFromArray's order (a NaN keeps a value)
-//   registered at __bro_native.scene.SceneNode_setForestLod
-void bro_scene_SceneNode_setForestLod(void* self, const double* lod, uint32_t lod_len);
-//   registered at __bro_native.scene.SceneNode_forestLod
-void bro_scene_SceneNode_forestLod(void* self, bronze_native_buffer* out);
-
-// forest bark material
-//   registered at __bro_native.scene.SceneNode_setForestBark
-void bro_scene_SceneNode_setForestBark(void* self, double r, double g, double b, double roughness);
-
-// forest look: per specimen 8 floats (emitForest's specimenLooks: leaf rgb,
-// leaf form, bark rgb, 0; empty: the node's colours), and [leafForm, flutter,
-// limbBob, twigBob, looks given] (ForestNode::Look; a NaN keeps a value; the
-// specimens keep their looks unless the last is 1). False when the looks do
-// not match the specimens.
-//   registered at __bro_native.scene.SceneNode_setForestLook
-bool bro_scene_SceneNode_setForestLook(void* self, const float* looks, uint32_t looks_len, const double* look,
-                                       uint32_t look_len);
-
-// forest forced tier (-1 by size, 0 leaves, 1 clumps, 2 crowns)
-//   registered at __bro_native.scene.SceneNode_setForestTier
-void bro_scene_SceneNode_setForestTier(void* self, int32_t tier);
-
-// forest stats: [trees leaves, clumps, crowns, culled, leaves, vertices,
-// shadow vertices, entries, draws, trees, specimens, detail, shadow detail,
-// blooms]
-//   registered at __bro_native.scene.SceneNode_forestStats
-void bro_scene_SceneNode_forestStats(void* self, bronze_native_buffer* out);
-
-// forest treeLod for specimen at px per specimen unit: [widening, keep, card,
-// leaves, clumps, crowns, bark radius, bark sides]
-//   registered at __bro_native.scene.SceneNode_forestTreeLod
-void bro_scene_SceneNode_forestTreeLod(void* self, int32_t specimen, double pxPerUnit, bronze_native_buffer* out);
-
-// forest tree `instance`'s treeLod as the camera drew it last frame, the same
-// layout; empty when it was not drawn
-//   registered at __bro_native.scene.SceneNode_forestSeenLod
-void bro_scene_SceneNode_forestSeenLod(void* self, int32_t instance, bronze_native_buffer* out);
-
 // ---- Grass (native_scene_grass.cpp, js/scene_grass.js) ----
 
 // bro.scene.SceneGraph.prototype.createGrass
@@ -954,7 +885,6 @@ void bro_scene_SceneGraph_readTonemapPixels(void* self, bronze_native_buffer* ou
 int32_t bro_scene_SceneGraph_readTonemapWidth(void);
 int32_t bro_scene_SceneGraph_readTonemapHeight(void);
 void* bro_scene_SceneGraph_createMesh(void* self, uint64_t optsBits, uint64_t meshHandle);
-void* bro_scene_SceneGraph_createForest(void* self, uint64_t optsBits, uint64_t meshHandle);
 void* bro_scene_SceneGraph_createSkinnedMesh(void* self, uint64_t optsBits, uint64_t meshHandle);
 void* bro_scene_SceneGraph_createInstancedMesh(void* self, uint64_t optsBits, uint64_t meshHandle);
 void* bro_scene_SceneGraph_createShape(void* self, const char* jsonOpts);

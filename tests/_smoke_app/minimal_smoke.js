@@ -56,7 +56,7 @@ assert(px[0] === 255 && px[1] === 0 && px[2] === 0 && px[3] === 255,
 // `bro.*` namespaces, and a build without them just does not define the global,
 // so there is nothing to check for them here.)
 const GATED = [
-  'media', 'net', 'flora', 'ai', 'gizmo', 'impostor',
+  'media', 'net', 'flora', 'ai', 'gizmo',
   'lm', 'stt', 'tts', 'diar', 'rave', 'music', 'wake', 'kws', 'sense', 'gesture',
   'listen', 'vision', 'diffusion', 'tensor', 'gpu', 'triposplat', 'motion',
 ];

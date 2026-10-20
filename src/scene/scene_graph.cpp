@@ -5,7 +5,6 @@
 #include "scene/tween.h"
 #include "scene/camera_node.h"
 #include "scene/decal_node.h"
-#include "scene/forest_node.h"
 #include "scene/gaussian_splat_node.h"
 #include "scene/grass_node.h"
 #include "scene/plants_node.h"
@@ -210,13 +209,6 @@ void SceneGraph::updatePlantMovers() {
         }
     }
     renderer_.plantMovers().update(renderer_.windTimeExact(), bodies);
-}
-
-ForestNode* SceneGraph::createForest(const std::string& name) {
-    auto node = std::make_unique<ForestNode>(name);
-    auto* ptr = node.get();
-    nodes_[ptr->id()] = std::move(node);
-    return ptr;
 }
 
 DecalNode* SceneGraph::createDecal(const std::string& name) {

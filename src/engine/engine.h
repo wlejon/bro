@@ -456,7 +456,7 @@ public:
     /// lays the scenes out for its frame and leaves their render pending;
     /// it runs before the clock moves on (the next step), inside a capture
     /// (which renders anyway) or before a read of what a render drew
-    /// (gpuFrameMs, a forest's or grass's stats), so advanceTime(50) and a
+    /// (gpuFrameMs, the plants' or grass's stats), so advanceTime(50) and a
     /// frameImage() draw the scene once, not four times. A read inside a
     /// step (a frame callback) sees the last frame drawn, as a window's
     /// frame callback does: `forRead` draws nothing then. A flush outside a

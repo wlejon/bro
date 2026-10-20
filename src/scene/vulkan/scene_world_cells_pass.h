@@ -13,8 +13,8 @@
 // of what reads it.
 //
 // Frustum only for now: the hierarchical depth of a visibility pass (§3)
-// joins the same test later. A target's output is one copy, as the forest
-// planner's work is: the compute queue orders a frame's pass after the last
+// joins the same test later. A target's output is one copy, as the plants
+// plan's work is: the compute queue orders a frame's pass after the last
 // frame's reads.
 
 #include "scene/vulkan/scene_vk_allocator.h"

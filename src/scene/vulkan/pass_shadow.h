@@ -14,7 +14,7 @@
 //
 // With async compute the pass runs as two: the casters that read nothing of
 // the frame's compute (Part::Unplanned, which clears the tiles), then, after
-// the frame's join, those a GPU plan drew up (Part::Planned: a forest's
+// the frame's join, those a GPU plan drew up (Part::Planned: the plants'
 // indirect draws), so the first runs beside the plan. A shadow map is depth
 // only, its texel the nearest of its casters', so the order of the casters
 // leaves it the same.
@@ -49,11 +49,11 @@ private:
     struct alignas(16) Push {
         float lightViewProj[16];
         float modelRows[12];
-        float params[4];   // x wind mask; yzw a forest caster's near sphere
+        float params[4];   // x wind mask (a plants caster's mode); yzw a cutout caster's
     };
     static_assert(sizeof(Push) == 128);
 
-    VkPipeline builtinPipeline(MeshKind kind, bool twoSided, bool leafInline);
+    VkPipeline builtinPipeline(MeshKind kind, bool twoSided);
     VkPipeline cutoutPipeline(MeshKind kind, bool twoSided);
     VkPipeline customPipeline(const CustomShaderState& cs, MeshKind kind, bool twoSided, bool cutout);
     VkPipeline buildPipeline(VkShaderModule vs, MeshKind kind, bool custom, bool twoSided, bool cutout);
@@ -65,12 +65,7 @@ private:
     VkPipelineLayout layout_ = VK_NULL_HANDLE;
     VkShaderModule vs_[kMeshKindCount] = {};
     VkShaderModule fs_ = VK_NULL_HANDLE;
-    VkShaderModule fsForest_ = VK_NULL_HANDLE;   // forest sprites' leafy cutout
     VkPipeline builtin_[kMeshKindCount][2] = {};   // [kind][two-sided]
-    // Forest leaf casters past the pose buffer's room (kForestLeafInline),
-    // each vertex posing its leaf: shadow_forest_leaf.vert's inline build.
-    VkShaderModule vsLeafInline_ = VK_NULL_HANDLE;
-    VkPipeline leafInline_[2] = {};                // [two-sided]
     // Cutout casters (a textured static or instanced mesh with an alpha
     // cutoff): their base colour's alpha cut, scene_shadow_cutout.glsl.
     VkShaderModule vsCutout_[2] = {};              // [instanced]

@@ -17,7 +17,7 @@
 
 #define WC_GROUP_SIZE           256
 #define WC_TOP_LEAVES           64    // the most leaves a top holds (CellGrid::topLevel 3: 8 x 8)
-#define WC_MAX_VIEWS            33    // the camera and 32 shadow tiles (the forest planner's)
+#define WC_MAX_VIEWS            33    // the camera and 32 shadow tiles (PP_MAX_TILES, the plants plan's)
 #define WC_ORIGIN_WORDS         4     // xyz, 0
 
 // --- CELLS: the header, the tops, then the leaves ---

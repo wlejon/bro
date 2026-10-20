@@ -175,7 +175,7 @@ float grassFanBloom(vec2 uv, vec4 info, out vec3 color) {
 
 // ---- The blade as mesh.frag lights it (its SCENE_GRASS build) --------------
 // These read mesh.frag's varyings (inUV, inColor, inInstColor, inTangent,
-// inVegShade) and call its forestSampleMask.
+// inVegShade) and call its coverSampleMask.
 
 // What a blade is, and what it hands the lighting.
 struct GrassSurface {
@@ -189,7 +189,7 @@ struct GrassSurface {
 // kind, under 0.5 a draw of its own; a culm's head, ripeness and stem
 // share), inUV across it (in its width; a culm's in its head's) and
 // along it. A culm's card is cut into its stem and its head.
-// `baseColor` the blade's colour, `msaa` MESH_FOREST_MSAA; a cut card's cover
+// `baseColor` the blade's colour, `msaa` MESH_MSAA; a cut card's cover
 // is kept as that share of the samples (gl_SampleMask), none discards.
 GrassSurface grassSurface(vec3 worldPos, inout vec3 baseColor, bool msaa) {
     GrassSurface g;
@@ -210,7 +210,7 @@ GrassSurface grassSurface(vec3 worldPos, inout vec3 baseColor, bool msaa) {
         vec3 plain = baseColor / max(inInstColor.rgb, vec3(1e-4));
         baseColor = mix(baseColor * mix(0.84, 1.16, tone), plain * bloomColor, fanBloom);
         cover = max(cover, fanBloom);
-        int mask = forestSampleMask(1.0, cover, msaa, uint(fract(inColor.x) * 131072.0), vec2(0.0, 1.0));
+        int mask = coverSampleMask(cover, msaa, uint(fract(inColor.x) * 131072.0));
         if (mask == 0) discard;
         gl_SampleMask[0] = mask;
     }
@@ -218,7 +218,7 @@ GrassSurface grassSurface(vec3 worldPos, inout vec3 baseColor, bool msaa) {
         vec3 culmColor;
         float graze = 1.0 - smoothstep(0.05, 0.4, -worldPos.y / max(length(worldPos.xz), 1e-3));
         float cover = grassCulmSurface(inUV, inColor, baseColor, graze, culmColor, g.trans);
-        int mask = forestSampleMask(1.0, cover, msaa, uint(fract(inColor.x) * 131072.0), vec2(0.0, 1.0));
+        int mask = coverSampleMask(cover, msaa, uint(fract(inColor.x) * 131072.0));
         if (mask == 0) discard;
         gl_SampleMask[0] = mask;
         baseColor = culmColor;

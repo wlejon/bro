@@ -35,8 +35,7 @@ enum class ImageAccess : uint8_t {
 };
 
 /// The HDR raster scope: the frame's colour + depth target (MSAA when the
-/// renderer asks for it, resolved at the end of a scope unless what follows
-/// reads only the drawn images, PassIO::unresolved), plus the indirect-light
+/// renderer asks for it, resolved at the end of a scope), plus the indirect-light
 /// attachment while SSAO needs it. The frame's first scope clears colour and
 /// depth; every later one loads them.
 struct HdrScope {
@@ -55,12 +54,7 @@ public:
     /// Draw into the HDR scope. Consecutive passes that ask for the same
     /// attachments share one scope.
     void hdr(HdrScope scope = {}) { hdr_ = true; scope_ = scope; }
-    /// The pass reads none of the resolved HDR images (only the drawn ones,
-    /// SceneTargets::hdrDrawn / depthDrawn), so an HDR scope closed for it,
-    /// with nothing but such passes before the next scope, is not resolved:
-    /// the next one's resolve takes in what it drew.
-    void unresolved() { unresolved_ = true; }
-    /// The pass reads what this frame's compute stream writes (a forest's
+    /// The pass reads what this frame's compute stream writes (the plants'
     /// GPU plan): the graph splits the frame's graphics before the first
     /// such pass, which waits for the compute while everything before it
     /// runs beside it (SceneFrame::joinCompute).
@@ -69,7 +63,6 @@ public:
     struct Use { SceneVkImage* image; ImageAccess access; };
     const std::vector<Use>& uses() const { return uses_; }
     bool drawsHdr() const { return hdr_; }
-    bool readsUnresolved() const { return unresolved_; }
     bool readsComputeResults() const { return compute_; }
     const HdrScope& scope() const { return scope_; }
 
@@ -80,7 +73,6 @@ private:
 
     std::vector<Use> uses_;
     bool hdr_ = false;
-    bool unresolved_ = false;
     bool compute_ = false;
     HdrScope scope_{};
 };

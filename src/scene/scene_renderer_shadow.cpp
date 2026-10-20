@@ -1,5 +1,4 @@
 #include "scene/scene_renderer.h"
-#include "scene/forest_node.h"
 #include "scene/instanced_mesh_node.h"
 #include "scene/depth_policy.h"
 #include "scene/scene_graph.h"
@@ -36,20 +35,8 @@ void SceneRenderer::computeShadowBounds(bromath::AABB3& casters,
             // custom shader suppresses unlit, so such meshes count here too.
             // hasDrawableMesh: LOD-chain-only nodes fit too (localBounds is
             // the chain union, so every level's silhouette is covered).
-            // Grass lies on a ground that is itself a receiver. A forest
-            // fits by its trees (its mesh is one leaf).
-            if (ForestNode* f = m->asForest()) {
-                if (!m->effectiveUnlit() && f->instanceCount() > 0) {
-                    float height = 0.0f;
-                    for (const auto& s : f->specimens()) height = std::max(height, s.height);
-                    const float cm = m->cullMargin() + vegetationReach(height, m->worldMatrix());
-                    bromath::AABB3 wb = bromath::atransform(f->forestBounds(), m->worldMatrix());
-                    wb.min -= Vec3{cm, cm, cm};
-                    wb.max += Vec3{cm, cm, cm};
-                    if (m->castsShadow()) casters = bromath::amerge(casters, wb);
-                    if (m->receivesShadow() || m->castsShadow()) receivers = bromath::amerge(receivers, wb);
-                }
-            } else if (!m->effectiveUnlit() && m->hasDrawableMesh() && !m->asGrass()) {
+            // Grass lies on a ground that is itself a receiver.
+            if (!m->effectiveUnlit() && m->hasDrawableMesh() && !m->asGrass()) {
                 // cullMargin pads the fit the same way it pads culling
                 // bounds (world units) — a custom vertex shader can displace
                 // geometry along the light direction past the bind-pose
@@ -228,21 +215,16 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
     auto hasVertexChunk = [](const MeshNode* m) {
         return m->hasCustomShader() && !m->customShader()->vertexChunk.empty();
     };
-    bool forestCasts = false;
     auto gather = [&](auto&& self, SceneNode* n) -> void {
         if (!n || !n->renderVisible()) return;
         if (n->type() == SceneNode::Type::Mesh) {
             auto* m = static_cast<MeshNode*>(n);
             // Casting grass draws through the mesh drawer's grass path; its
             // blades move with the wind and the camera, so its tiles never cache.
-            // A casting forest draws its casters itself, a tier per tree per
-            // tile chosen from the camera and the wind: its tiles never cache.
             // So do casting plants (built where they stand, swaying).
-            if ((m->asGrass() || m->asForest() || m->asPlants()) && m->castsShadow() && !m->effectiveUnlit())
+            if ((m->asGrass() || m->asPlants()) && m->castsShadow() && !m->effectiveUnlit())
                 grassCasts_ = true;
-            if (m->asForest() && m->castsShadow() && !m->effectiveUnlit()) forestCasts = true;
-            if (!m->effectiveUnlit() && m->castsShadow() && m->hasDrawableMesh() && !m->asGrass() &&
-                !m->asForest()) {
+            if (!m->effectiveUnlit() && m->castsShadow() && m->hasDrawableMesh() && !m->asGrass()) {
                 auto* sm = m->asSkinnedMesh();
                 if (sm && sm->skinReady()) {
                     (hasVertexChunk(m) ? shadowSkinnedCustomCasters_
@@ -264,7 +246,6 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
         for (auto* c : n->children()) self(self, c);
     };
     grassCasts_ = false;
-    forestCasts = false;
     gather(gather, graph_.root_.get());
     // Group the custom casters by chunk source so the per-tile loop binds
     // each shadow variant once per group.
@@ -276,7 +257,7 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
                      shadowSkinnedCustomCasters_.end(), byChunk);
     if (shadowCasters_.empty() && shadowSkinnedCasters_.empty() &&
         shadowCustomCasters_.empty() && shadowSkinnedCustomCasters_.empty() &&
-        shadowInstancedCasters_.empty() && shadowTubeCasters_.empty() && !forestCasts) return;
+        shadowInstancedCasters_.empty() && shadowTubeCasters_.empty()) return;
 
     // Scene bounds: casters stretch the directional depth range; receivers
     // clip the camera volume the directional fit covers.

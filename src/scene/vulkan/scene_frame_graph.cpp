@@ -111,7 +111,7 @@ void SceneFrameGraph::run(SceneFrame& frame) {
             closeScope(frame);
         if (join) frame.joinCompute();
         for (const auto& use : io.uses()) transition(frame.cmd, *use.image, layoutFor(use.access));
-        if (io.drawsHdr() && !scopeOpen_) openScope(frame, io.scope(), resolves(frame, i, io.scope()));
+        if (io.drawsHdr() && !scopeOpen_) openScope(frame, io.scope());
 
         pass.record(frame);
         if (frame.timer) frame.timer->mark(frame.cmd, pass.name());
@@ -126,31 +126,12 @@ bool SceneFrameGraph::moves(const PassIO& io) {
     return false;
 }
 
-bool SceneFrameGraph::resolves(const SceneFrame& frame, size_t at, const HdrScope& scope) const {
-    if (!frame.gpu.targets.msaa()) return true;
-    bool closed = false;
-    for (size_t j = at + 1; j < passes_.size(); ++j) {
-        const ScenePass& pass = *passes_[j];
-        if (!pass.active(frame)) continue;
-        PassIO io;
-        pass.declare(frame, io);
-        // (The passes sharing the scope move no image, so the layouts now
-        // are the ones the pass that closes it meets.)
-        if (!closed && io.drawsHdr() && !moves(io) && io.scope().indirect == scope.indirect) continue;
-        // (Its resolve takes in this one's attachments: all of them only if
-        // it has the same.)
-        if (closed && io.drawsHdr()) return io.scope().indirect != scope.indirect;
-        if (!io.readsUnresolved()) return true;
-        closed = true;
-    }
-    return true;
-}
-
-void SceneFrameGraph::openScope(SceneFrame& frame, const HdrScope& scope, bool resolve) {
+void SceneFrameGraph::openScope(SceneFrame& frame, const HdrScope& scope) {
     SceneTargets& t = frame.gpu.targets;
     VkCommandBuffer cmd = frame.cmd;
+    // (MSAA scopes resolve into the single-sample images as they close.)
     const bool msaa = t.msaa();
-    const bool resolving = msaa && resolve;
+    const bool resolving = msaa;
     constexpr VkImageLayout kColor = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     constexpr VkImageLayout kDepth = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
 

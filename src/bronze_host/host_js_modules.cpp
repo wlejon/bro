@@ -49,11 +49,9 @@ extern "C" void bro_scene_main();
 extern "C" void bro_scene_graph_main();
 extern "C" void bro_scene_extras_main();
 extern "C" void bro_scene_grass_main();
-extern "C" void bro_scene_forest_main();
 extern "C" void bro_scene_plants_main();
 extern "C" void bro_motion_main();
 extern "C" void bro_server_main();
-extern "C" void bro_impostor_main();
 extern "C" void bro_profiler_main();
 extern "C" void bro_models_main();
 
@@ -218,8 +216,6 @@ void installSceneModule() {
     bronze::embed::runEntry(bro_scene_extras_main);
     // js/scene_grass.js: createGrass and the grass node's members.
     bronze::embed::runEntry(bro_scene_grass_main);
-    // js/scene_forest.js: createForest and the forest node's members.
-    bronze::embed::runEntry(bro_scene_forest_main);
     // js/scene_plants.js: createPlants and the plants node's members.
     bronze::embed::runEntry(bro_scene_plants_main);
 }
@@ -233,12 +229,6 @@ void installMotionModule() {
 // own `bro` root read off globalThis.
 void installServerModule() {
     bronze::embed::runEntry(bro_server_main);
-}
-
-// impostor.js reads `Mesh` (bromesh's, installed with the roots) only when
-// an impostor is built, never at load.
-void installImpostorModule() {
-    bronze::embed::runEntry(bro_impostor_main);
 }
 
 // js/profiler.js mounts bro.profiler over __bro_native.profiler; main realm
@@ -443,7 +433,6 @@ void installDeferredModules() {
             installGizmoModule();
             installAnimationModule();
             installSceneModule();
-            installImpostorModule();
         });
         g3d = &g;
         for (const char* name : {"Physics", "PhysicsCharacter", "PhysicsSoftBody", "PhysicsVehicle",
@@ -453,7 +442,7 @@ void installDeferredModules() {
         }
         const ev::Persistent bro(ev::globalValue("bro").value);
         for (const char* ns : {"scene", "terrain", "clipmap", "tile_world", "lighting", "animation",
-                               "gizmo", "impostor"}) {
+                               "gizmo"}) {
             deferMember(g, bro.get(), ns);
         }
     }

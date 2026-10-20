@@ -17,17 +17,6 @@ layout(std430, set = 3, binding = 1) readonly buffer ProceduralSegments {
     vec4 records[];
 } procedural;
 
-// The forest node's layout (FOREST_SPECIMEN_RECORDS, FOREST_CLUMP_BLOCK, every
-// field's offset), shared with ForestNode and the forest drawer, and its
-// accessors: float `f` (a FOREST_H_* offset) of the header; the first
-// record of a run (`f` FOREST_H_SPECIMENS, ...); the record holding float
-// `f` of the run starting at record `r`; that float.
-#include "scene_forest_layout.h"
-#define FOREST_HEADER(f) procedural.header[(f) / 4][(f) % 4]
-#define FOREST_BASE(f) int(floatBitsToUint(FOREST_HEADER(f)))
-#define FOREST_RECORD(r, f) procedural.records[(r) + (f) / 4]
-#define FOREST_FLOAT(r, f) procedural.records[(r) + (f) / 4][(f) % 4]
-
 // The leaf a scatter vertex belongs to: each instance draws header[3].x
 // copies of the leaf mesh end to end (InstancedMeshNode::scatterBatchMesh).
 // False past the last leaf.
@@ -242,34 +231,6 @@ float procDraw(uint base, uint k) {
     return float(procHash(base + k * 0x9e3779b9u) >> 8) * (1.0 / 16777216.0);
 }
 
-// Whether a forest tree (`tree`, its instance) leaves clump `clump` (global)
-// bare: each tree drops its own few (up to a fifth, by its seed),
-// so trees of one specimen part their crowns differently. A clump goes with
-// its drop group (FOREST_CLUMP_GROUP: the few clumps beyond a small branch),
-// so the branch's wood, leading to nothing then, goes too
-// (forestSegmentBare) rather than standing bare in the gap. The groups are
-// taken down a golden-ratio sequence from the tree's own start rather than
-// each by its own draw, so a tree leaves bare close to its share of them: a
-// small crown of a few groups drawn independently would now and then lose
-// most of them. Every tier asks the same (the leaves, their casters, the
-// lobes, the crown's trace), so a tree keeps its gaps from near to far.
-bool procClumpBare(int tree, int clump) {
-    uint group = floatBitsToUint(FOREST_FLOAT(FOREST_BASE(FOREST_H_CLUMPS) + clump * FOREST_CLUMP_RECORDS,
-                                              FOREST_CLUMP_GROUP));
-    // The tree's own seed (from where it stands), not its index: it keeps
-    // its gaps whichever node, and wherever in it, draws it.
-    float seed = FOREST_FLOAT(FOREST_BASE(FOREST_H_INSTANCES) + tree * FOREST_INSTANCE_RECORDS, FOREST_INST_SEED);
-    uint h = procHash(uint(seed * 16777216.0) * 0x9e3779b9u ^ 0x7f4a7c15u);
-    float share = 0.2 * float(h >> 8) * (1.0 / 16777216.0);
-    float start = float(procHash(h ^ 0x632be5abu) >> 8) * (1.0 / 16777216.0);
-    return fract(float(group) * 0.61803398875 + start) < share;
-}
-
-// A clump's height over its width: its lobes and their leaves are
-// flattened by this (1 round; the forest node sets a specimen's, as
-// forestApplyClumpFlat). bromesh's CPU placement is the round one.
-float procClumpFlat = 1.0;
-
 void procClumpLobe(vec4 c, int clump, int lobe, uint seed, out vec3 center, out float radius) {
     if (lobe <= 0) {
         center = c.xyz;
@@ -281,14 +242,14 @@ void procClumpLobe(vec4 c, int clump, int lobe, uint seed, out vec3 center, out 
     float z = procDraw(b, 0u) * 1.2 - 0.4;
     float phi = procDraw(b, 1u) * PROC_TWO_PI;
     float s = sqrt(max(0.0, 1.0 - z * z));
-    center = c.xyz + vec3(s * cos(phi), z * procClumpFlat, s * sin(phi)) * (c.w * 0.42);
+    center = c.xyz + vec3(s * cos(phi), z, s * sin(phi)) * (c.w * 0.42);
     radius = c.w * (0.5 + 0.2 * procDraw(b, 2u));
 }
 
-// The core of it, for clump record `c` (centre.xyz, radius): leaf `leaf` (its
-// placement key) of clump `clump`, and the lobe it sits in. The header's [0]
-// and [1] are the scatter's (the forest node keeps the same two).
-bool clumpLeafFrame(vec4 c, int leaf, int clump, out vec3 P, out mat3 R, out vec3 F, out vec3 lc, out float lr) {
+// Leaf `leaf` (its placement key) of clump `clump`, its record (centre.xyz,
+// radius) the clump's first.
+bool scatterClumpLeaf(int leaf, int clump, out vec3 P, out mat3 R, out vec3 F) {
+    vec4 c = procedural.records[clump * 2];
     vec4 h0 = procedural.header[0];
     vec4 h1 = procedural.header[1];
     uint seed = floatBitsToUint(h0.x);
@@ -296,6 +257,8 @@ bool clumpLeafFrame(vec4 c, int leaf, int clump, out vec3 P, out mat3 R, out vec
 
     uint base = procHash(seed ^ procHash(uint(leaf) + 1u));
     int lobe = min(2, int(procDraw(base, 0u) * 3.0));
+    vec3 lc;
+    float lr;
     procClumpLobe(c, clump, lobe, seed, lc, lr);
 
     float z = procDraw(base, 1u) * 2.0 - 1.0;
@@ -303,7 +266,7 @@ bool clumpLeafFrame(vec4 c, int leaf, int clump, out vec3 P, out mat3 R, out vec
     float s = sqrt(max(0.0, 1.0 - z * z));
     vec3 u = vec3(s * cos(phi), z, s * sin(phi));
     vec3 off = u * (lr * (1.0 - shell * procDraw(base, 3u)));
-    off.y *= (u.y < 0.0 ? 0.7 : 0.9) * procClumpFlat;
+    off.y *= u.y < 0.0 ? 0.7 : 0.9;
     P = lc + off;
 
     vec3 N = normalize(u * (1.0 - upBias) + vec3(0.0, upBias, 0.0));
@@ -322,12 +285,6 @@ bool clumpLeafFrame(vec4 c, int leaf, int clump, out vec3 P, out mat3 R, out vec
     if (scale < 1e-6) return false;
     R = mat3(X * scale, N * scale, F * scale);
     return true;
-}
-
-bool scatterClumpLeaf(int leaf, int clump, out vec3 P, out mat3 R, out vec3 F) {
-    vec3 lc;
-    float lr;
-    return clumpLeafFrame(procedural.records[clump * 2], leaf, clump, P, R, F, lc, lr);
 }
 
 // Whether the draw carries vegetation records (scene_vegetation.glsl).
