@@ -39,6 +39,7 @@ namespace bro::scene {
 class InstancedMeshNode;
 class GrassNode;
 class ForestNode;
+class PlantsNode;
 }
 
 namespace bro::scene::vk {
@@ -108,9 +109,9 @@ constexpr uint32_t vertexColor(int mode) { return static_cast<uint32_t>(mode & 3
 /// (SCENE_FOREST_BLOOM).
 enum class MeshKind : uint8_t {
     Static, Instanced, Skinned, Scatter, Tube, Vegetation, InstancedVegetation, Grass,
-    ForestLeaf, ForestTube, ForestSprite,
+    ForestLeaf, ForestTube, ForestSprite, Plants,
 };
-constexpr int kMeshKindCount = 11;
+constexpr int kMeshKindCount = 12;
 
 /// The kinds the vegetation shading (mesh.frag's SCENE_VEGETATION variant) draws.
 constexpr bool vegetationShading(MeshKind k) {
@@ -121,14 +122,14 @@ constexpr bool vegetationShading(MeshKind k) {
 
 /// Kinds with no vertex streams: the vertex shader builds everything.
 constexpr bool streamless(MeshKind k) {
-    return k == MeshKind::Tube || k == MeshKind::ForestTube || k == MeshKind::ForestSprite;
+    return k == MeshKind::Tube || k == MeshKind::ForestTube || k == MeshKind::ForestSprite || k == MeshKind::Plants;
 }
 
 /// Kinds cut to the camera's view and level of detail this frame (a
 /// reflection probe's faces would see them wrong).
 constexpr bool cameraCut(MeshKind k) {
     return k == MeshKind::Grass || k == MeshKind::ForestLeaf || k == MeshKind::ForestTube ||
-           k == MeshKind::ForestSprite;
+           k == MeshKind::ForestSprite || k == MeshKind::Plants;
 }
 
 struct MeshDraw {
@@ -229,6 +230,8 @@ public:
     /// A grass node's draws, one per ring with visible cells, nearest first
     /// (scene_mesh_drawer_grass.cpp). Also stamps its movers for the frame.
     void prepareGrass(SceneFrame& frame, GrassNode& node, std::vector<MeshDraw>& out);
+    /// A plants node's draws, its leaves and its wood (scene_mesh_drawer_plants.cpp).
+    void preparePlants(SceneFrame& frame, PlantsNode& node, std::vector<MeshDraw>& out);
     /// A forest node's draws (scene_mesh_drawer_forest.cpp): a draw per tier
     /// and shape for the camera, and the shadow tiers per shadow tile
     /// (shadowOnly, each with its tile's bit).
@@ -244,6 +247,9 @@ public:
     /// them. The GPU planner's plans and poses go into the frame's compute
     /// stream (SceneFrame::computeStream), the CPU's poses into frame.cmd.
     void recordForestPoses(SceneFrame& frame);
+    /// Build the leaves this frame's plants draws read (plants_pose.comp,
+    /// queued by preparePlants), before the passes that draw them.
+    void recordPlantPoses(SceneFrame& frame);
     /// The plans recorded since the last call went to the GPU as `ticket` on
     /// `queue`: the GPU planner's read-backs of them are read once it completes.
     void forestSubmitted(uint64_t ticket, render::VulkanQueue& queue);
@@ -384,6 +390,8 @@ private:
     VkShaderModule vsHerb_ = VK_NULL_HANDLE;           // a grass node's herbs: mesh_herb.vert
     VkShaderModule fsHerb_ = VK_NULL_HANDLE;           // and mesh.frag's SCENE_HERB
     VkShaderModule fsHerbIndirect_ = VK_NULL_HANDLE;
+    VkShaderModule fsPlants_ = VK_NULL_HANDLE;         // plants: plants.frag (plants.vert is vs_[Plants])
+    VkShaderModule fsPlantsIndirect_ = VK_NULL_HANDLE;
     VkShaderModule fsGrass_ = VK_NULL_HANDLE;          // grass blades: mesh.frag's SCENE_GRASS build
     VkShaderModule fsGrassIndirect_ = VK_NULL_HANDLE;
     VkShaderModule fsBark_ = VK_NULL_HANDLE;          // Tube, ForestTube: mesh.frag's SCENE_BARK build
@@ -416,6 +424,24 @@ private:
     VkPipelineLayout poseLayout_ = VK_NULL_HANDLE;
     VkShaderModule poseCs_ = VK_NULL_HANDLE;
     VkPipeline posePipeline_ = VK_NULL_HANDLE;
+    // The plants' leaf poses (plants_pose.comp, on the forest poses'
+    // layout): this frame's jobs, a dispatch of a workgroup a leaf chunk,
+    // and each frame slot's buffer (kept, grown as needed; a node's set
+    // names the buffer its job writes, so a node growing it leaves the
+    // earlier nodes' poses where they were).
+    struct PlantPoseJob {
+        VkDescriptorSet set = VK_NULL_HANDLE;
+        uint32_t firstChunk = 0;
+        uint32_t chunks = 0;
+    };
+    /// Room for `bytes` more poses in this frame slot's buffer, at `offset`
+    /// (a new buffer when it has none, the old deferred); null on failure.
+    const SceneVkBuffer* ensurePlantPoses(SceneFrame& frame, VkDeviceSize bytes, VkDeviceSize& offset);
+    std::vector<PlantPoseJob> plantPoseJobs_;
+    VkDeviceSize plantPoseUsed_ = 0;   // bytes of this frame's buffer handed out
+    VkShaderModule plantPoseCs_ = VK_NULL_HANDLE;
+    VkPipeline plantPosePipeline_ = VK_NULL_HANDLE;
+    SceneVkBuffer plantPoses_[render::VulkanFrames::kFramesInFlight];
 
     // The forests' detail factors as last drawn (per node, or the shared
     // one of prepareForests): the budget's fit moves them only so fast and

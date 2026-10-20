@@ -157,6 +157,8 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
     timer_.mark(cmd, "setup");
     meshes_.recordForestPoses(frame);
     timer_.mark(cmd, "forestPose");
+    meshes_.recordPlantPoses(frame);
+    timer_.mark(cmd, "plants:pose");
     if (frame.computeApart()) timer_.mark(frame.computeCmd, "forestPose");
 
     graph_.run(frame);

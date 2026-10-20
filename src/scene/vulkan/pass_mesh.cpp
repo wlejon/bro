@@ -142,7 +142,7 @@ void PassOpaque::record(SceneFrame& frame) {
     static constexpr const char* kKind[kMeshKindCount] = {
         "opaque:static", "opaque:instanced", "opaque:skinned", "opaque:scatter", "opaque:tube",
         "opaque:vegetation", "opaque:instancedVegetation", "opaque:grass", "opaque:forestLeaf",
-        "opaque:forestTube", "opaque:forestSprite"};
+        "opaque:forestTube", "opaque:forestSprite", "opaque:plants"};
     if (retest_) {
         // Every slot's draw again, under the retest's camera: the cards the
         // batches held back that this frame's pyramid does not hide, one an

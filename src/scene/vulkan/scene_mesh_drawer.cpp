@@ -38,7 +38,8 @@ SceneRenderer::CustomShaderTarget shaderTarget(MeshKind kind) {
     case MeshKind::Grass:
     case MeshKind::ForestLeaf:
     case MeshKind::ForestTube:
-    case MeshKind::ForestSprite: break;
+    case MeshKind::ForestSprite:
+    case MeshKind::Plants: break;
     }
     return SceneRenderer::CustomShaderTarget::Static;
 }
@@ -124,7 +125,11 @@ bool SceneMeshDrawer::setup(SceneGpu& gpu) {
         SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshForestTubeVert);
     vs_[static_cast<int>(MeshKind::ForestSprite)] =
         SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshForestSpriteVert);
-    fs_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshFrag);
+    vs_[static_cast<int>(MeshKind::Plants)] =
+        SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::PlantsVert);
+    fsPlants_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::PlantsFrag);
+    fsPlantsIndirect_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::PlantsIndirectFrag);
+    fs_ =SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshFrag);
     fsIndirect_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshIndirectFrag);
     fsVeg_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshVegFrag);
     fsVegIndirect_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshVegIndirectFrag);
@@ -152,7 +157,7 @@ bool SceneMeshDrawer::setup(SceneGpu& gpu) {
     fsHerbIndirect_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshHerbIndirectFrag);
     fsGrass_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshGrassFrag);
     fsGrassIndirect_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshGrassIndirectFrag);
-    if (!vsLeafInline_ || !vsHerb_ || !fsHerb_ || !fsHerbIndirect_ || !fsGrass_ || !fsGrassIndirect_ || std::find(std::begin(vs_), std::end(vs_), VK_NULL_HANDLE) != std::end(vs_) || !fs_ || !fsIndirect_ ||
+    if (!fsPlants_ || !fsPlantsIndirect_ || !vsLeafInline_ || !vsHerb_ || !fsHerb_ || !fsHerbIndirect_ || !fsGrass_ || !fsGrassIndirect_ || std::find(std::begin(vs_), std::end(vs_), VK_NULL_HANDLE) != std::end(vs_) || !fs_ || !fsIndirect_ ||
         !fsVeg_ || !fsVegIndirect_ || !fsSprite_ || !fsSpriteIndirect_ || !fsCluster_ || !fsClusterIndirect_ ||
         !fsBark_ || !fsBarkIndirect_ || !fsGround_ || !fsGroundIndirect_ || !fsGroundFill_ || !fsSpray_ ||
         !fsSprayIndirect_ ||
@@ -193,6 +198,14 @@ bool SceneMeshDrawer::setup(SceneGpu& gpu) {
         }
         render::setPipelineStatsLabel("forest leaf pose");
         render::logPipelineStats(device_, posePipeline_);
+        // The plants' leaf poses, on the same layout.
+        plantPoseCs_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::PlantsPoseComp);
+        ci.stage.module = plantPoseCs_;
+        if (!plantPoseCs_ || vkCreateComputePipelines(device_, gpu.device.context().pipelineCache(), 1, &ci, nullptr,
+                                                      &plantPosePipeline_) != VK_SUCCESS) {
+            LOG_ERROR("SceneMeshDrawer: Failed creating the plants pose pipeline");
+            return false;
+        }
     }
     // The forests' GPU planner (without it, every forest plans on the CPU).
     gpuPlanner_ = std::make_shared<forest::GpuPlanner>();
@@ -242,7 +255,10 @@ void SceneMeshDrawer::cleanup(SceneGpu& gpu) {
     SceneVkShaderModule::destroy(device_, fsGrass_);
     SceneVkShaderModule::destroy(device_, fsGrassIndirect_);
     SceneVkShaderModule::destroy(device_, vsLeafInline_);
-    vsLeafInline_ = vsHerb_ = fsHerb_ = fsHerbIndirect_ = fsGrass_ = fsGrassIndirect_ = VK_NULL_HANDLE;
+    SceneVkShaderModule::destroy(device_, fsPlants_);
+    SceneVkShaderModule::destroy(device_, fsPlantsIndirect_);
+    fsPlants_ = fsPlantsIndirect_ = VK_NULL_HANDLE;
+    vsLeafInline_ =vsHerb_ = fsHerb_ = fsHerbIndirect_ = fsGrass_ = fsGrassIndirect_ = VK_NULL_HANDLE;
     fsSpray_ = fsSprayIndirect_ = vsBloom_ = fsBloom_ = fsBloomIndirect_ = VK_NULL_HANDLE;
     fs_ = fsIndirect_ = fsVeg_ = fsVegIndirect_ = fsSprite_ = fsSpriteIndirect_ = VK_NULL_HANDLE;
     fsCluster_ = fsClusterIndirect_ = fsBark_ = fsBarkIndirect_ = fsGround_ = fsGroundIndirect_ = VK_NULL_HANDLE;
@@ -256,6 +272,12 @@ void SceneMeshDrawer::cleanup(SceneGpu& gpu) {
     poseLayout_ = VK_NULL_HANDLE;
     for (SceneVkBuffer& poses : poses_) gpu.allocator.destroyBuffer(poses);
     poseJobs_.clear();
+    if (plantPosePipeline_ != VK_NULL_HANDLE) vkDestroyPipeline(device_, plantPosePipeline_, nullptr);
+    SceneVkShaderModule::destroy(device_, plantPoseCs_);
+    plantPosePipeline_ = VK_NULL_HANDLE;
+    plantPoseCs_ = VK_NULL_HANDLE;
+    for (SceneVkBuffer& poses : plantPoses_) gpu.allocator.destroyBuffer(poses);
+    plantPoseJobs_.clear();
     poseUsed_ = 0;
     if (gpuPlanner_) gpuPlanner_->cleanup(gpu);
     gpuPlanner_.reset();
@@ -376,6 +398,7 @@ VkPipeline SceneMeshDrawer::builtinPipeline(const MeshDraw& draw, const TargetFo
         // (A surface layer tile's fill draws the turf into its four layers.)
         if (ground && target.colorCount == 4) fs = fsGroundFill_;
         if (draw.kind == MeshKind::Grass) fs = target.colorCount > 1 ? fsGrassIndirect_ : fsGrass_;
+        if (draw.kind == MeshKind::Plants) fs = target.colorCount > 1 ? fsPlantsIndirect_ : fsPlants_;
         return buildPipeline(leafInline ? vsLeafInline_ : vs_[static_cast<int>(draw.kind)], fs, draw.kind, rasterBits,
                              target);
     });
@@ -876,6 +899,17 @@ void SceneMeshDrawer::bindGeometryAndDraw(VkCommandBuffer cmd, const MeshDraw& d
             vkCmdDrawIndexed(cmd, draw.indexCount, draw.instanceCount, 0, 0, draw.firstInstance);
         return;
     }
+    if (draw.kind == MeshKind::Plants) {
+        // An instance a chunk of a plant's elements (scene_mesh_drawer_plants.cpp):
+        // the leaves indexed (each polygon point posed once), the wood not.
+        if (draw.indices != VK_NULL_HANDLE) {
+            vkCmdBindIndexBuffer(cmd, draw.indices, 0, VK_INDEX_TYPE_UINT32);
+            vkCmdDrawIndexed(cmd, draw.indexCount, draw.instanceCount, 0, 0, draw.firstInstance);
+        } else {
+            vkCmdDraw(cmd, draw.indexCount, draw.instanceCount, 0, draw.firstInstance);
+        }
+        return;
+    }
     if (draw.kind == MeshKind::ForestSprite) {
         if (draw.indirect != VK_NULL_HANDLE)
             vkCmdDrawIndirect(cmd, draw.indirect, draw.indirectOffset, 1, 0);
@@ -913,7 +947,8 @@ void SceneMeshDrawer::bindGeometryAndDraw(VkCommandBuffer cmd, const MeshDraw& d
     case MeshKind::Grass:
     case MeshKind::ForestLeaf:
     case MeshKind::ForestTube:
-    case MeshKind::ForestSprite: break;
+    case MeshKind::ForestSprite:
+    case MeshKind::Plants: break;
     }
     vkCmdBindVertexBuffers(cmd, 0, count, buffers, offsets);
     if (draw.chunks && draw.chunkIndices != VK_NULL_HANDLE && cull && cull->frustum) {

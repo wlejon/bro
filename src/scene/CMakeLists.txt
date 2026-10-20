@@ -117,6 +117,7 @@ add_library(bro_scene STATIC
     decal_node.cpp
     grass_node.cpp
     forest_node.cpp
+    plants_node.cpp
     world_cells.cpp
     surface_layers.cpp
     reflection_probe_node.cpp
@@ -143,6 +144,7 @@ add_library(bro_scene STATIC
     vulkan/scene_gpu_resources.cpp
     vulkan/scene_mesh_drawer.cpp
     vulkan/scene_mesh_drawer_grass.cpp
+    vulkan/scene_mesh_drawer_plants.cpp
     vulkan/scene_mesh_drawer_ground.cpp
     vulkan/pass_ground_layers.cpp
     vulkan/pass_hiz.cpp

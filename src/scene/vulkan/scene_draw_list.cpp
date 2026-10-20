@@ -2,6 +2,7 @@
 
 #include "scene/forest_node.h"
 #include "scene/grass_node.h"
+#include "scene/plants_node.h"
 #include "scene/instanced_mesh_node.h"
 #include "scene/mesh_node.h"
 #include "scene/scene_graph.h"
@@ -100,6 +101,21 @@ void buildDrawLists(SceneFrame& frame) {
                     stats.meshDrawn++;
                     lists.opaque.push_back(static_cast<uint32_t>(lists.meshes.size()));
                     lists.meshes.push_back(draw);
+                }
+                continue;
+            }
+            if (PlantsNode* plants = static_cast<MeshNode*>(node)->asPlants()) {
+                // Plants: their leaves and their wood, cut to the view, and
+                // their casters (never in the colour lists).
+                std::vector<MeshDraw> parts;
+                drawer.preparePlants(frame, *plants, parts);
+                for (MeshDraw& draw : parts) {
+                    placeDraw(frame, node, std::nullopt, draw);
+                    const auto index = static_cast<uint32_t>(lists.meshes.size());
+                    lists.meshes.push_back(draw);
+                    if (draw.shadowOnly) continue;
+                    stats.meshDrawn++;
+                    lists.opaque.push_back(index);
                 }
                 continue;
             }

@@ -112,7 +112,9 @@ bool PassShadow::setup(SceneGpu& gpu) {
         SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowForestTubeVert);
     vs_[static_cast<int>(MeshKind::ForestSprite)] =
         SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowForestSpriteVert);
-    fs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowFrag);
+    vs_[static_cast<int>(MeshKind::Plants)] =
+        SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowPlantsVert);
+    fs_ =SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowFrag);
     fsForest_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowForestFrag);
     vsCutout_[0] = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowCutoutVert);
     vsCutout_[1] = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowInstancedCutoutVert);
@@ -357,7 +359,8 @@ void PassShadow::record(SceneFrame& frame) {
         // kind's, a run of draws under one name marked once as it ends.
         static constexpr const char* kKindLabels[kMeshKindCount] = {
             "shadow:static", "shadow:instanced", "shadow:skinned", "shadow:scatter", "shadow:tube", "shadow:veg",
-            "shadow:instancedVeg", "shadow:grass", "shadow:forestLeaf", "shadow:forestTube", "shadow:forestSprite"};
+            "shadow:instancedVeg", "shadow:grass", "shadow:forestLeaf", "shadow:forestTube", "shadow:forestSprite",
+            "shadow:plants"};
         const char* run = nullptr;
         for (const MeshDraw& draw : frame.lists.meshes) {
             if (!draw.castsShadow) continue;

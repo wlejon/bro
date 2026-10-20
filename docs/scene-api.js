@@ -534,6 +534,18 @@ class SceneGraph {
   createGrass(opts) {}
 
   /**
+   * Plants: trees and shrubs built on the GPU from a species table and a
+   * record a plant (where it stands, its turn, size, species and seed),
+   * nothing stored a leaf; each drawn with as many leaves as its size on
+   * screen asks for. See PlantsNodeOptions and the plants members in
+   * docs/scene-nodes-api.js.
+   * @example scene.createPlants({ species: [{ height: 14 }], plants: [{ x: 0, z: 0 }] });
+   * @param {PlantsNodeOptions} [opts]
+   * @returns {SceneNode}
+   */
+  createPlants(opts) {}
+
+  /**
    * A forest: many trees from a few grown plants (bro.flora's
    * `world.emitForest()`), each drawn at the detail its size on screen asks
    * for, from every leaf up close to one disc a tree at the horizon, all

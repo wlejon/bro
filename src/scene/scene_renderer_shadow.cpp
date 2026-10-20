@@ -237,7 +237,9 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
             // blades move with the wind and the camera, so its tiles never cache.
             // A casting forest draws its casters itself, a tier per tree per
             // tile chosen from the camera and the wind: its tiles never cache.
-            if ((m->asGrass() || m->asForest()) && m->castsShadow() && !m->effectiveUnlit()) grassCasts_ = true;
+            // So do casting plants (built where they stand, swaying).
+            if ((m->asGrass() || m->asForest() || m->asPlants()) && m->castsShadow() && !m->effectiveUnlit())
+                grassCasts_ = true;
             if (m->asForest() && m->castsShadow() && !m->effectiveUnlit()) forestCasts = true;
             if (!m->effectiveUnlit() && m->castsShadow() && m->hasDrawableMesh() && !m->asGrass() &&
                 !m->asForest()) {

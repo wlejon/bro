@@ -806,6 +806,30 @@ void bro_scene_SceneNode_grassPush(void* self, double x, double z, double radius
 //   result: f64[] in *out; out->release == NULL, the runtime copies
 void bro_scene_SceneNode_grassStats(void* self, bronze_native_buffer* out);
 
+// ---- Plants (native_scene_plants.cpp, js/scene_plants.js) ----
+
+// bro.scene.SceneGraph.prototype.createPlants
+//   registered at __bro_native.scene.SceneGraph_createPlants
+void* bro_scene_SceneGraph_createPlants(void* self);
+
+// plants species: PlantsNode::kSpeciesFloats floats a species
+//   registered at __bro_native.scene.SceneNode_setPlantSpecies
+void bro_scene_SceneNode_setPlantSpecies(void* self, const float* data, uint32_t data_len);
+
+// plants: PlantsNode::kPlantFloats floats a plant
+//   registered at __bro_native.scene.SceneNode_setPlants
+void bro_scene_SceneNode_setPlants(void* self, const float* data, uint32_t data_len);
+
+// plants params: pixels, minElements, woodRange, range (a NaN keeps a value)
+//   registered at __bro_native.scene.SceneNode_setPlantParams
+void bro_scene_SceneNode_setPlantParams(void* self, const double* params, uint32_t params_len);
+
+// plants stats: [plants, plants in view, elements drawn, limbs drawn]; empty
+// for a node that is not a plants node
+//   registered at __bro_native.scene.SceneNode_plantStats
+//   result: f64[] in *out; out->release == NULL, the runtime copies
+void bro_scene_SceneNode_plantStats(void* self, bronze_native_buffer* out);
+
 // grass floor: one float a field texel (0 open .. 1 a closed canopy), or two
 // (that, and the herbs' density 0..1); fewer than the field's texels clears it
 //   registered at __bro_native.scene.SceneNode_setGrassFloor

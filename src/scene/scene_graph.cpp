@@ -8,6 +8,7 @@
 #include "scene/forest_node.h"
 #include "scene/gaussian_splat_node.h"
 #include "scene/grass_node.h"
+#include "scene/plants_node.h"
 #include "scene/html_node.h"
 #include "scene/instanced_mesh_node.h"
 #include "scene/mesh_node.h"
@@ -173,6 +174,13 @@ GrassNode* SceneGraph::createGrass(const std::string& name) {
     auto node = std::make_unique<GrassNode>(name);
     auto* ptr = node.get();
     grassIds_.push_back(ptr->id());
+    nodes_[ptr->id()] = std::move(node);
+    return ptr;
+}
+
+PlantsNode* SceneGraph::createPlants(const std::string& name) {
+    auto node = std::make_unique<PlantsNode>(name);
+    auto* ptr = node.get();
     nodes_[ptr->id()] = std::move(node);
     return ptr;
 }

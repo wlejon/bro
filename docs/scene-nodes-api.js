@@ -529,6 +529,100 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  */
 
 /**
+ * Plants: trees and shrubs from `scene.createPlants(opts)`, every one built
+ * where it stands on the GPU from its species and its seed (nothing is
+ * stored per leaf). A plant is a crown of LOBES (clumps of foliage, on a
+ * golden-angle spiral over an ellipsoid or, by `shape`, a cone) round a
+ * trunk with a limb to each, and its foliage is ELEMENTS: opaque leaf
+ * polygons, so the depth test rejects what is hidden before it shades.
+ *
+ * One representation at every distance: a plant drawn with N elements draws
+ * the first N of one fixed sequence, which goes round its lobes, so any N
+ * covers the whole crown; as N falls each element grows (by sqrt(full / N),
+ * at most a lobe across) and turns toward the eye, so a near tree is
+ * thousands of leaves and a far one a few dozen daubs of its colours. N is
+ * the species' `elements` while a leaf is at least `pixels` across on
+ * screen, then falls with the square of the distance (each element stays
+ * about `pixels` across), never under `minElements`; its fraction grows the
+ * last element in, so nothing pops. Limbs are drawn to 0.4 x `woodRange`,
+ * the trunk to `woodRange`.
+ *
+ * A leaf is lit as its lobe's round more than its own face (more so as it
+ * stands for more leaves): the sun reaches it through the crown's density
+ * (`density`), the shadow map is read where that path leaves the crown, the
+ * sun shows through the leaves at the rim from behind (`glow`,
+ * `glowColor`), and the sky reaches a crown's core less. A near leaf shows
+ * its midrib and is darker toward its stalk. Plants sway in the scene's wind
+ * field (`setWind`): the trunk bends, each lobe lags, near leaves flutter.
+ *
+ * Casting (`castsShadow`): each shadow tile drawn this frame gets its own
+ * casters, the plants in its frustum (in view or not) within `shadowRange`,
+ * each kept to `shadowTexels` of the tile's texels an element; a crown only
+ * a few of those across casts its outline, a disc square to the light. So
+ * a far cascade's thousands of trees cost a disc each.
+ *
+ * Each leaf is built once a frame by a compute pass (plants_pose.comp) and
+ * its corners read by the colour and shadow passes. The node is left out of
+ * raycasts and bounds; its transform is ignored (plants stand in the world).
+ *
+ * @example
+ *   const plants = scene.createPlants({
+ *     species: [
+ *       { height: 15, radius: 5, lobes: 16, lobeSize: 0.52, leafLength: 0.34, elements: 8000,
+ *         light: '#5d8c2a', dark: '#0c1c0a', density: 0.9 },
+ *       { height: 18, radius: 4.4, shape: 0.95, lobes: 34, needle: 1, droop: 0.5,
+ *         light: [0.10, 0.20, 0.08], dark: [0.015, 0.04, 0.025] },
+ *     ],
+ *     plants: trees.map((t, i) => ({ x: t.x, y: t.y, z: t.z, yaw: t.yaw, scale: t.s, species: t.kind, seed: i })),
+ *     castsShadow: true, receivesShadow: true,
+ *   });
+ *
+ * @typedef {Object} PlantSpecies
+ * @property {number} [height=12] - m, at scale 1.
+ * @property {number} [base=0.3] - where the crown starts, a fraction of the height.
+ * @property {number} [radius=4] - the crown's radius (m).
+ * @property {number} [shape=0] - 0 a round crown .. 1 a cone.
+ * @property {number} [lobes=18] - clumps in the crown (at most 48).
+ * @property {number} [lobeSize=0.42] - a lobe's radius, a fraction of the crown's.
+ * @property {number} [leafLength=0.22] - a leaf's length (m) at full detail.
+ * @property {number} [leafWidth=0.5] - its width over its length.
+ * @property {number} [elements=6000] - leaves at full detail.
+ * @property {number} [trunk=0.25] - the trunk's radius at its foot (m).
+ * @property {number} [spread=0.8] - how far the lobes sit out from the trunk, 0..1.
+ * @property {number} [droop=0.2] - how far the leaves (a needle tree's tiers) hang, 0..1.
+ * @property {Array<number>|string} [light] - sunlit foliage colour (linear, or '#rrggbb' sRGB).
+ * @property {number} [hueVariety=0.25] - plant to plant and lobe to lobe colour variety.
+ * @property {Array<number>|string} [dark] - its colour deep in the crown.
+ * @property {number} [glow=0.8] - how much the sun shows through from behind.
+ * @property {Array<number>|string} [bark] - the trunk's colour.
+ * @property {number} [density=0.6] - the crown's density to the sun's light (1/m).
+ * @property {Array<number>|string} [glowColor] - the colour of the light through it.
+ * @property {number} [needle=0] - 0 broad leaves .. 1 needle sprays: flat drooping tiers, narrow stiff elements.
+ *
+ * @typedef {Object} PlantRecord
+ * @property {number} x
+ * @property {number} y - its foot.
+ * @property {number} z
+ * @property {number} [yaw=0]
+ * @property {number} [scale=1]
+ * @property {number} [species=0] - index into the species table.
+ * @property {number} [seed] - an integer under 2^24 (default its index): its shape.
+ * @property {number} [tint=0] - -1..1, its colours toward the dark or the light.
+ *
+ * @typedef {Object} PlantsNodeOptions
+ * @property {Array<PlantSpecies>|Float32Array} [species] - at most 64.
+ * @property {Array<PlantRecord>|Float32Array} [plants]
+ * @property {number} [pixels=14] - the size on screen (px) an element is kept to past full detail.
+ * @property {number} [minElements=12] - the fewest a plant is drawn with.
+ * @property {number} [woodRange=220] - past this (m) no trunks or limbs.
+ * @property {number} [range=6000] - past this (m) no plant is drawn.
+ * @property {number} [shadowTexels=12] - as `pixels`, in a shadow tile's texels, for its casters.
+ * @property {number} [shadowRange=1500] - past this (m) no plant casts.
+ * @property {boolean} [castsShadow=false]
+ * @property {boolean} [receivesShadow=false]
+ */
+
+/**
  * Forest: many trees drawn from a few SPECIMENS, from
  * `scene.createForest(opts)`. The specimens are bro.flora's
  * `world.emitForest()` (every grown plant's bark segments, crown clumps and
@@ -1592,6 +1686,24 @@ class SceneNode {
    * @returns {number|undefined}
    */
   grassHeightAt(x, z) {}
+
+  // ── Plants (scene.createPlants) ──
+
+  /**
+   * Plants: replace the plants (an array of records) or set any of
+   * PlantsNodeOptions (`species`, `plants`, the detail params).
+   * @example plants.setPlants({ pixels: 20, shadowTexels: 16 });
+   * @param {Array<PlantRecord>|PlantsNodeOptions} opts
+   */
+  setPlants(opts) {}
+
+  /**
+   * Plants: what the last frame drew: `plants` (all of them), `visible`
+   * (in the camera's view), `elements` and `limbs` (the camera's), and
+   * `shadowElements` (every shadow tile's casters summed, a disc one).
+   * @returns {{plants: number, visible: number, elements: number, limbs: number, shadowElements: number}|undefined}
+   */
+  plantStats() {}
 
   // ── Forest (scene.createForest) ──
 
