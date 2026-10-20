@@ -170,7 +170,11 @@ void SceneMeshDrawer::preparePlants(SceneFrame& frame, PlantsNode& node, std::ve
         if (d - s[3] > p.range || !bromath::fintersects(view.frustum, boxOf(i))) continue;
         // Pixels across a metre at the plant's near side.
         const float across = focal / std::max(d - 0.5f * s[3], 0.5f);
-        groups[0].plants.push_back({d, i, elementCount(i, across, p.pixels, p.minElements), d - s[3] < p.woodRange});
+        // Never fewer than minElements, nor than it takes elements `pixels`
+        // across to cover its crown on screen (a tree at the horizon: one).
+        const float crown = plantSpecies(i)[2] * rec[static_cast<size_t>(i) * PlantsNode::kPlantFloats + 4] * across / p.pixels;
+        const float least = std::clamp(3.14159f * crown * crown, 1.0f, p.minElements);
+        groups[0].plants.push_back({d, i, elementCount(i, across, p.pixels, least), d - s[3] < p.woodRange});
     }
     std::sort(groups[0].plants.begin(), groups[0].plants.end(),
               [](const Visible& a, const Visible& b) { return a.dist < b.dist; });

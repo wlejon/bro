@@ -43,6 +43,9 @@ void main() {
     vec3 V = -pos / camDist;
     bool wood = inInfo.y > 0.5;
     float far = inInfo.x;
+    // How deep in its lobe (0 skin .. 1 core); a daub standing for many
+    // leaves, their mean.
+    float depth = mix(inShade.y, 0.35, far);
 
     vec3 nLeaf = normalize(inLeafNormal);
     if (!wood && !gl_FrontFacing) nLeaf = -nLeaf;
@@ -88,7 +91,7 @@ void main() {
     if (!wood) {
         // From behind, through the leaves at the crown's skin.
         float back = pow(max(dot(-V, L), 0.0), 3.0);
-        float skin = 1.0 - inShade.y;
+        float skin = 1.0 - depth;
         through = inGlowColor * albedo * sunRad / PI * back * inShade.z * sqrt(vis) * skin * (0.4 + 0.6 * max(-NL, 0.0));
         // A glint off a near leaf's face.
         vec3 H = normalize(L + V);
@@ -102,7 +105,7 @@ void main() {
         irr = texture(texIrradiance, rotateY(N, lighting.iblParams.z)).rgb * lighting.iblParams.y;
         irr += lighting.groundBounce.rgb * (0.5 - 0.5 * N.y);
     }
-    float ao = mix(1.0, 0.3, inShade.y) * (0.7 + 0.3 * clamp(0.5 + 0.5 * nForm.y, 0.0, 1.0));
+    float ao = mix(1.0, 0.3, depth) * (0.7 + 0.3 * clamp(0.5 + 0.5 * nForm.y, 0.0, 1.0));
     vec3 indirect = irr * albedo * ao;
 
     vec3 color = direct + through + indirect;

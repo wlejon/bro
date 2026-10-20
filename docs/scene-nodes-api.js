@@ -543,8 +543,11 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  * thousands of leaves and a far one a few dozen daubs of its colours. N is
  * the species' `elements` while a leaf is at least `pixels` across on
  * screen, then falls with the square of the distance (each element stays
- * about `pixels` across), never under `minElements`; its fraction grows the
- * last element in, so nothing pops. Limbs are drawn to 0.4 x `woodRange`,
+ * about `pixels` across), never under `minElements` (nor, for a crown only
+ * a few elements across on screen, under what covers it: a speck at the
+ * horizon is one); its fraction grows the last element in, so nothing pops.
+ * A daub standing for many leaves takes their mean colour and depth, so a
+ * far crown shows its form's light and shade rather than a speckle. Limbs are drawn to 0.4 x `woodRange`,
  * the trunk to `woodRange`.
  *
  * A leaf is lit as its lobe's round more than its own face (more so as it

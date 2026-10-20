@@ -309,10 +309,14 @@ bool plantLeafPose(int pi, int k, float n, bool caster, out PlantLeafPose e) {
     float hp = (plantRand(p.seed, 21u) - 0.5) * s.hueVar + 0.35 * p.tint;
     float hl = (plantRand(p.seed, uint(j) * 7u + 4u) - 0.5) * s.hueVar;
     float up = clamp((local.y - cr.center.y) / max(cr.radii.y, 0.1) * 0.5 + 0.5, 0.0, 1.0);
-    vec3 col = mix(s.dark, s.light, clamp(0.35 + 0.45 * up - 0.4 * depth + hl, 0.0, 1.0));
+    // A daub standing for many leaves is their mean: its own depth and
+    // jitter fade with how many it stands for, so a far crown is its form's
+    // light and shade, not a speckle of single leaves.
+    float near_ = 1.0 - e.far;
+    vec3 col = mix(s.dark, s.light, clamp(0.35 + 0.45 * up - 0.4 * mix(0.35, depth, near_) + hl, 0.0, 1.0));
     col *= 1.0 + hp;
     col *= vec3(1.0 + 0.6 * hl, 1.0, 1.0 - 0.8 * hl);   // warmer or cooler
-    col *= 0.9 + 0.2 * plantRand(ks, 9u);
+    col *= 1.0 + (0.2 * plantRand(ks, 9u) - 0.1) * near_;
     e.albedo = max(col, vec3(0.0));
     e.crownCenter = plantToWorld(p, cr.center) + sway - camera.eyeWorld.xyz;
     e.radii = vec2(cr.radii.x, cr.radii.y);

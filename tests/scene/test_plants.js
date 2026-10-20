@@ -61,12 +61,17 @@ if (!scn) {
     assert(st.shadowElements > 0, `the shadow tiles' casters are counted (${st.shadowElements})`);
     const above = scn.captureFrame();
 
-    // Far off: fewer elements, never under minElements.
+    // Far off: fewer elements, falling with distance; a crown a few
+    // elements across on screen may go under minElements, never to none.
+    const near = st.elements;
+    scn.setCamera({ fov: 50, near: 0.1, far: 2000, position: [0, 4, 40], target: [0, 4, 0] });
+    flush();
+    const mid = plants.plantStats().elements;
     scn.setCamera({ fov: 50, near: 0.1, far: 2000, position: [0, 4, 400], target: [0, 4, 0] });
     flush();
     st = plants.plantStats();
-    assert(st.visible === 1 && st.elements >= 12 && st.elements < 200,
-           `far off, few elements, at least minElements (${st.elements})`);
+    assert(near > mid && mid > st.elements && st.elements >= 1,
+           `elements fall with distance, never to none (${near}, ${mid}, ${st.elements})`);
     assert(st.limbs <= 1, `far off, the trunk alone (${st.limbs})`);
 
     // Past `range`, or out of view: nothing.
