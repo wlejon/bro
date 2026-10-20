@@ -4,7 +4,7 @@
 //
 // Every vertex (or instance, or leaf expanded from a segment record) carries
 // four vec4s in node space, the layout bro.flora's emitters write
-// (broflora/sway.h, docs/scene-nodes-api.js "Vegetation",
+// (broflora/sway.h, docs/vegetation-api.js "Vegetation records",
 // bromesh::MeshData::vegetation):
 //
 //   v0 (root.xyz, height)        the plant's base and height

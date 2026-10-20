@@ -68,7 +68,7 @@ A quadtree over the ground that every system's content hangs off.
   eye-relative origin in double every frame, and a provider's content may be
   stored relative to it.
 - **Cell bounds** take their y range from whatever registers content in the
-  cell. Terrain gives a min/max height for each cell; the forest gives its
+  cell. Terrain gives a min/max height for each cell; the plants give their
   crowns' tops.
 
 A system registers a **cell content provider**:
@@ -98,15 +98,12 @@ any resolution and altitude.
 
 The pass writes compact lists of visible cells for each provider's ranges
 and each view. Systems consume those lists instead of their whole content:
-- the forest planner measures only trees in near and mid cells;
+- the plants plan walks only the plants of the cells in view;
 - static chunks draw by cell;
 - far cells go to the far field (§2).
 
 ### Per-system data
 
-- **Forest:** instances are sorted by leaf cell once, at setInstances, and
-  each cell holds a contiguous range of them. The planner's Measure stage
-  walks those cell ranges instead of all instances.
 - **Plants:** setPlants keeps the records themselves in leaf-cell order and
   uploads them once. The plants plan (count, lay out, place) walks the
   cells in view and writes the draws' chunks and indirect commands; nothing
@@ -144,8 +141,8 @@ rendered from the current view direction into an atlas tile.
 ### Capture
 
 A capture calls each provider's cell draw entry with a camera fitted to the
-cell. The forest draws its normal tiered output, terrain its patch, statics
-their chunks. Nothing about a card is baked, and nothing is authored per
+cell. The plants draw as they would at the capture's pixel size, terrain
+its patch, statics their chunks. Nothing about a card is baked, and nothing is authored per
 asset.
 
 - **Resolution** follows the cell's size on screen, so a far cell takes a
@@ -178,13 +175,13 @@ moves into two steps.
 1. **Visibility.** Draw into depth plus a 32-bit visibility ID:
    - the content kind;
    - the instance;
-   - a sub-element: the clump run hit, the leaf, the triangle.
+   - a sub-element: the leaf element, the triangle.
 
-   Crowns still trace here, to find their hit, but write only depth and ID.
-   No lighting, shadow lookups or colour.
+   Content that finds its surface per pixel (a traced card) still does so
+   here, but writes only depth and ID. No lighting, shadow lookups or colour.
 2. **Resolve.** A full-screen pass, split into tiles by content kind,
    rebuilds each pixel's surface from its ID and shades it once:
-   - crowns re-trace only the one run that was hit;
+   - traced content re-traces only the one hit;
    - cards just sample.
 
    Overdraw then costs only the trace, never the shading.
@@ -195,28 +192,12 @@ moves into two steps.
 3. Test everything else against it.
 4. Draw what is newly visible.
 
-The hierarchical depth also feeds the cell pass (§1). This replaces the
-forest's hand-made far-depth batches with a general mechanism that rejects
-whole trees, chunks and grass tiles before they rasterise.
-
-**As built, for the forest's sprite cards (pass_hiz.h):**
-- The opaque batches hold back each card the last frame's pyramid hides
-  (reprojected through the eye's move) in the vertex stage, and list it
-  with its rect in this frame.
-- After the last batch, PassHiZ builds this frame's pyramid from the
-  opaque depth, tests the list against it and gathers what it does not
-  hide into an indirect draw for each sprite draw. The retest draws only
-  those cards.
-- A budget pass at the frame's head counts each draw's cards (the GPU
-  planners' commands included), so every card held back has room in the
-  list.
-- Frames are byte-identical with occlusion on and off.
-
-The win is the crowns behind terrain and nearer trees: wilds totals with
-occlusion on against off were vista −0.93 ms, treetop −0.32, walk −0.1,
-cruise 0, orbit +0.04 (the pyramid and the far depth it is built from).
-The clumps barely move. Their overdraw is among visible overlapping cards,
-which is the visibility pass's to remove.
+The hierarchical depth also feeds the cell pass (§1): a general mechanism
+that rejects whole cells, plants, chunks and grass tiles before they
+rasterise. Nothing builds a depth pyramid today; the plants and grass are
+culled by frustum and distance alone. The retired forest node's sprite
+cards had a first one, a measure of what is at stake: crowns behind
+terrain and nearer trees, wilds vista −0.93 ms, treetop −0.32, walk −0.1.
 
 **Adoption is per content kind.** Content that hasn't adopted the pass draws
 forward as now, after the resolve, depth-tested against it. Nothing has to
@@ -236,7 +217,7 @@ A capability of the frame graph, not of any one pass.
 - **Passes:** a pass can declare that it runs on the compute queue. The graph
   splits the frame into submissions at each edge between queues, and waits
   and signals on timeline values at those edges, never on a fence.
-- **Overlap:** a frame's compute work, such as the forest plan and the cell
+- **Overlap:** a frame's compute work, such as the plants plan and the cell
   pass, is submitted ahead of its graphics work. It runs beside the previous
   frame's tail (post-processing, translucents) and the current frame's work
   that doesn't need it (sky, probe, static and grass shadows). The graphics
@@ -255,7 +236,7 @@ A capability of the frame graph, not of any one pass.
 What a cell's surface is made of, worked out once per cell and kept,
 instead of in every pixel that shows it. Wherever content is drawn as a
 stand-in for what is no longer drawn there (the turf for blades and herbs
-past their rings, and, from far above, the forest and everything else on
+past their rings, and, from far above, the plants and everything else on
 the land), the stand-in depends on the position and the world, not on the
 view. Today the ground's fragment shader recomputes it every frame, at every
 pixel: its colony weights, mottling, sward colour and litter were
@@ -282,8 +263,8 @@ sun, shadows and air stay current.
   min/max pyramid so a tile reads a few cells. The atlas's slots bound the
   set, the tile most too coarse refined first: in wilds the footprint rule
   alone asks for 4–10× the 1024 slots on hilly, forested routes, since a
-  frustum hides no ground behind hills or trees. Occlusion (§3's HiZ) is
-  what would close that gap.
+  frustum hides no ground behind hills or trees. Occlusion (§3's
+  hierarchical depth) is what would close that gap.
 - **Lookup:** for each level, a toroidal grid of entries (256 a side), a
   clipmap of page tables, maps a position to its tile; an entry carries
   its tile's slot and the high bits of its key, so a tile that wraps onto
@@ -295,7 +276,7 @@ sun, shadows and air stay current.
 ### Filling
 
 - A layer has a **provider**: it fills a tile from the world's data (the
-  grass field, the floor texture, the ground's vertex data, the forest's
+  grass field, the floor texture, the ground's vertex data, the plants'
   cover) for a cell's rectangle and texel size. The turf's fill is a draw:
   the ground's meshes rasterised straight down under an orthographic camera
   fitted to the tile and its border, into the layer's four colour targets,
@@ -491,7 +472,7 @@ the motion oracle for anything temporal. Each step removes what it replaces.
 
 | Step | What | Win it should show | Size |
 |---|---|---|---|
-| 1 | The old forest path retired (ForestNode, its drawers, planner, impostors) | one foliage path: the plants node | −6–8k |
+| 1 | Done: the old forest path retired (ForestNode, its drawers, planner, impostors, HiZ; the plants' CPU planner) | one foliage path, the plants node planned on the GPU; biomes' stills identical, GPU ms 7–11% lower | −17k |
 | 2 | The layout (§12), moves only | frames byte-identical, suites green | moves |
 | 3 | The world service (§6), the surface layers' fills its first producer | fills follow the frame's slack; no stall when the view jumps | ~3k |
 | 4 | Atmosphere tables and exposure (§7) | one sky from ground to orbit, cheaper than today's per-pixel march | ~2k |

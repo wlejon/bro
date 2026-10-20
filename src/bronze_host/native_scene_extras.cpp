@@ -447,7 +447,7 @@ void bro_scene_SceneNode_setTubeSegments(void* self, const float* seg, uint32_t 
 
 // setVegetation(Float32Array): the wind-sway records of an instanced node —
 // 16 floats per instance, or 12 per segment of a scatter / tube node
-// (docs/scene-nodes-api.js "Vegetation"). An empty array clears them.
+// (docs/vegetation-api.js "Vegetation records"). An empty array clears them.
 void bro_scene_SceneNode_setVegetation(void* self, const float* data, uint32_t len) {
     auto* im = instancedOf(self);
     if (!im) { ev::throwTypeError("setVegetation: node is not an InstancedMesh"); return; }

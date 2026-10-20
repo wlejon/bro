@@ -1,6 +1,6 @@
 // Vegetation sway: bro.flora's emitters write the per-vertex / per-segment
 // plant records (docs/flora-api.js "Vegetation records") and bro.scene bends
-// them in its wind field (docs/scene-nodes-api.js "Vegetation"), with no
+// them in its wind field (docs/vegetation-api.js "Vegetation records"), with no
 // wind code in the app.
 //
 // Contract under test:

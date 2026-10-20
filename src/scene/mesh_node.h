@@ -326,7 +326,7 @@ public:
     void setTurfGrass(uint32_t grassId) { turfGrass_ = grassId; }
     uint32_t turfGrass() const { return turfGrass_; }
     /// A mesh carrying MeshData::vegetation bends in the scene's wind field
-    /// (docs/scene-nodes-api.js "Vegetation"); this is its tallest record's
+    /// (docs/vegetation-api.js "Vegetation records"); this is its tallest record's
     /// height (node space), how far the sway can reach.
     float vegetationHeight() const { return vegetationHeight_; }
 

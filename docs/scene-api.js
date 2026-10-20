@@ -11,8 +11,8 @@
  * This file is the graph itself: `SceneGraph` (factories, cameras, render
  * settings, raycasts, capture, moving a scene between canvases) and the
  * `SceneNode` core every node shares (identity, hierarchy, transforms,
- * camera projection). The per-type half — the create* option dictionaries,
- * `bro.impostor`, and the SceneNode members for meshes, shaders, LOD,
+ * camera projection). The per-type half — the create* option dictionaries
+ * and the SceneNode members for meshes, shaders, LOD,
  * instances, splats, audio emitters and skeletal playback — is
  * docs/scene-nodes-api.js. Lighting configs are docs/lighting-api.js.
  *
@@ -57,8 +57,8 @@ target/up/mode: the 6DOF / FPS path that avoids target+up precision loss.
  * @property {number} [strength] -  Displacement amplitude in world units (default 0: no sway).
  * @property {number} [frequency] -  Oscillation frequency in rad/s (default 1.5).
  *
- * The wind field (what vegetation and grass bend with; see scene-nodes-api.js
- * "Vegetation" and GrassNodeOptions). It blows along `direction`. Every field is optional and a
+ * The wind field (what vegetation and grass bend with; see vegetation-api.js
+ * "Vegetation records" and GrassNodeOptions). It blows along `direction`. Every field is optional and a
  * field left out keeps its value; strength / frequency above do not touch it.
  * @property {number} [speed] -  Steady wind in m/s (default 2.5, a breeze; 0 with gust 0 is a calm). It breathes ±28 % over a few minutes.
  * @property {number} [gust] -  Gust amount: 0 none, 1 a gusty day (default), 2 a gale's.
@@ -96,7 +96,8 @@ target/up/mode: the 6DOF / FPS path that avoids target+up precision loss.
 /**
  * The members every node has. Node-type members (meshes, shaders, LOD,
  * instances, splats, audio emitters, skeletal playback, billboards) continue
- * this class in docs/scene-nodes-api.js.
+ * this class in docs/scene-nodes-api.js, the plants', grass's and
+ * vegetation records' in docs/vegetation-api.js.
  */
 class SceneNode {
 
@@ -526,7 +527,7 @@ class SceneGraph {
    * clipmap or a height function), with density, dryness and height from
    * numbers or functions of (x, z, y); swaying in the wind field, parted by
    * movers. See GrassNodeOptions and the grass members in
-   * docs/scene-nodes-api.js.
+   * docs/vegetation-api.js.
    * @example scene.createGrass({ ground, dry: (x, z) => patches(x, z) });
    * @param {GrassNodeOptions} [opts]
    * @returns {SceneNode}
@@ -538,27 +539,12 @@ class SceneGraph {
    * record a plant (where it stands, its turn, size, species and seed),
    * nothing stored a leaf; each drawn with as many leaves as its size on
    * screen asks for. See PlantsNodeOptions and the plants members in
-   * docs/scene-nodes-api.js.
+   * docs/vegetation-api.js.
    * @example scene.createPlants({ species: [{ height: 14 }], plants: [{ x: 0, z: 0 }] });
    * @param {PlantsNodeOptions} [opts]
    * @returns {SceneNode}
    */
   createPlants(opts) {}
-
-  /**
-   * A forest: many trees from a few grown plants (bro.flora's
-   * `world.emitForest()`), each drawn at the detail its size on screen asks
-   * for, from every leaf up close to one disc a tree at the horizon, all
-   * posed by the same sway. See ForestNodeOptions and the forest members in
-   * docs/scene-nodes-api.js.
-   * @example
-   *   const forest = world.emitForest({ perArea: 90 });
-   *   const trees = bro.flora.plantForest(forest, { area: [-200, -200, 200, 200], ground: heightAt });
-   *   scene.createForest({ forest, instances: trees, leaf: Mesh.leafCard('oval'), color: [0.2, 0.36, 0.11] });
-   * @param {ForestNodeOptions} opts
-   * @returns {SceneNode}
-   */
-  createForest(opts) {}
 
   /**
    * @param {ReflectionProbeNodeOptions} [opts]

@@ -98,7 +98,8 @@ Annotated `.js` files with JSDoc + examples. Read the file before using or chang
 | `audio-engine-api.js` | `AudioContext` engine half: clips, playbacks, streams, voices, buses + effects, presets; VoiceAllocator, ModMatrix, MidiInput, Sequence |
 | `audio-synth-graph-api.js` | `SynthGraph`: procedural voices from a plain-object graph (osc/FM/noise/filter/env/sweep/shaper/resonator/comb/layers), seeded per-trigger jitter, `render()` offline to an AudioBuffer bit-identical to live, `ctx.playSynth` / `releaseSynth`; JIT kernel per shape |
 | `ear-api.js` | `bro.ear`: judge a finished clip offline, deterministic: `measure` (timing, LUFS, centroid/flatness, tonality, ringing partials), `compare` to a reference, labelled `spectrogram` images/PNGs; `loadClap` prompt scorer in ML builds |
-| `mesh-api.js` | `bro.mesh`: the `Mesh` container, primitives, CSG, simplify/subdivide/smooth, analysis, `MeshBVH` |
+| `mesh-api.js` | `bro.mesh`: the `Mesh` container, primitives, CSG, simplify/subdivide/smooth, analysis |
+| `mesh-bvh-api.js` | `MeshBVH` (ray / closest-point queries over a mesh snapshot) and `ProgressiveMesh` (edge-collapse LOD) |
 | `mesh-io-api.js` | `bro.mesh` IO half: loaders/savers, Draco, splat clouds, isosurface + voxel statics, `PolyMesh`, `SDFGraph` |
 | `mesh-plants-api.js` | `bro.mesh` procedural half: sweeps, leaf/flower cards, branch trees, scattering, `CapsuleField`, `LSystem` |
 | `rigging-api.js` | `bro.rigging`: skins, skeletons, poses, clips, IK, `Rig.autoRig`, glTF rigged assets |
@@ -119,7 +120,8 @@ Annotated `.js` files with JSDoc + examples. Read the file before using or chang
 | `intl-api.js` | `Intl` (ECMA-402): `NumberFormat`, `DateTimeFormat`, `PluralRules`, `Collator`, `ListFormat`, `RelativeTimeFormat`, `DisplayNames` |
 | `text-api.js` | `bro.text`: render-layer text shaping (`shape`, `byteOffsetToX`, `xToByteOffset`, `clusterRange`, `cacheStats`) and UAX #9 bidi diagnostics |
 | `scene-api.js` | `bro.scene`: `SceneGraph` + `SceneNode` core: hierarchy, transforms, cameras, render settings, raycast/project, capture, `attachTo` |
-| `scene-nodes-api.js` | `bro.scene` node types: create* options (mesh/skinned/instanced, splats, shapes, sprites, HTML, lights, particles, decals, probes, grass, plants), `bro.impostor`, per-type SceneNode members (shaders, LOD, instances, vegetation wind sway, grass movers, skeletal playback) |
+| `scene-nodes-api.js` | `bro.scene` node types: create* options (mesh/skinned/instanced, splats, shapes, sprites, HTML, lights, particles, decals, probes), per-type SceneNode members (shaders, LOD, instances, skeletal playback) |
+| `vegetation-api.js` | `bro.scene` what grows: `createPlants` (trees and shrubs planned and built on the GPU), `createGrass` (blades, herbs and `bro.flora.herbPreset`/`herbRecords`, turf, movers), vegetation records and their wind sway (`setVegetation`) |
 | `animation-api.js` | `scene.createAnimationPlayer()`: data-driven keyframe clips for node properties, plus skeletal blend spaces, layered blending, and an authored state machine |
 | `lighting-api.js` | PBR lighting: LightNode, materials, tonemap, ambient |
 | `net-api.js` | `bro.net`: game networking (host/connect/send) via GNS |

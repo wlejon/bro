@@ -2,9 +2,11 @@
 //
 // Geometry: the `Mesh` container, its primitive factories, the mutating
 // operators (clean / simplify / subdivide / smooth / CSG / bake), the analysis
-// and query surface, `MeshBVH` and `ProgressiveMesh`.
+// and query surface.
 //
 // The rest of bromesh lives beside this file:
+//   docs/mesh-bvh-api.js    `MeshBVH` (ray / closest-point queries) and
+//                           `ProgressiveMesh` (edge-collapse LOD)
 //   docs/mesh-io-api.js     loaders/savers, Draco, splat clouds, isosurface +
 //                           voxel statics, `PolyMesh`, `SDFGraph`, `VoxelChunk`
 //   docs/mesh-plants-api.js sweeps, leaf/flower cards, branch trees, leaf
@@ -285,7 +287,7 @@ class Mesh {
    * leaf's stem direction, 0 on wood, and the cantilevers it hangs from; see
    * flora-api.js "Vegetation records"). bro.flora's emitters write it and a
    * mesh node that carries it sways in the scene's wind; the layout is in
-   * scene-nodes-api.js "Vegetation". Operations that rebuild the vertex set
+   * vegetation-api.js "Vegetation records". Operations that rebuild the vertex set
    * (weld, simplify, merge) drop it.
    * @type {Float32Array}
    */
@@ -952,100 +954,5 @@ class Mesh {
   // `mesh.applySkinning()`, `mesh.applyMorphTarget()`, `mesh.saveGLTF()` and
   // `Mesh.loadGLTF()` are installed by the rigging half of bromesh and are
   // documented in docs/rigging-api.js.
-
-}
-
-// ── MeshBVH ──────────────────────────────────────────────────────────────────
-
-/**
- * A bounding-volume hierarchy over a COPY of the mesh it was built from, so
- * later edits to that mesh leave it valid (and stale — rebuild after an edit
- * you care about). Build one whenever a mesh takes more than a handful of ray
- * queries.
- *
- * Every query optionally takes a Mesh as its first argument: pass one to run
- * the traversal against different geometry with the same topology (a posed
- * copy of the bind mesh, say) instead of the snapshot.
- *
- * @example
- *   const bvh = new MeshBVH(terrain, 8);          // or terrain.buildBVH()
- *   const hit = bvh.raycast([x, 100, z], [0, -1, 0]);
- *   if (hit) place(hit.point, hit.normal);
- */
-class MeshBVH {
-
-  /**
-   * @param {Mesh} mesh
-   * @param {number} [leafSize=8]
-   */
-  constructor(mesh, leafSize) {}
-
-  /** @readonly @type {boolean} */
-  empty;
-
-  /** @readonly @type {number} */
-  triangleCount;
-
-  /** @readonly @type {number} */
-  nodeCount;
-
-  /** @returns {MeshBounds} */
-  bounds() {}
-
-  /**
-   * @param {Array<number>} origin @param {Array<number>} direction @param {number} [maxDistance=0]
-   * @returns {MeshRayHit|null}
-   */
-  raycast(origin, direction, maxDistance) {}
-
-  /**
-   * @param {Array<number>} origin @param {Array<number>} direction @param {number} [maxDistance=0]
-   * @returns {boolean}
-   */
-  raycastTest(origin, direction, maxDistance) {}
-
-  /** @param {Array<number>} point @returns {MeshRayHit|null} */
-  closestPoint(point) {}
-
-}
-
-// ── ProgressiveMesh ──────────────────────────────────────────────────────────
-
-/**
- * A pre-computed edge-collapse sequence: build it once, then pull any level of
- * detail out of it in constant time. Cheaper than re-running `simplify()` per
- * LOD, and the levels are nested, so they pop less.
- *
- * @example
- *   const pm = new ProgressiveMesh(hero);
- *   const near = pm.atRatio(1.0);
- *   const far  = pm.atTriangleCount(500);
- *   fs.writeFileSync('hero.pm', pm.serialize());
- */
-class ProgressiveMesh {
-
-  /** @param {Mesh} mesh */
-  constructor(mesh) {}
-
-  /** @readonly @type {number} triangles at full detail */
-  maxTriangles;
-
-  /** @readonly @type {number} triangles once every collapse is applied */
-  minTriangles;
-
-  /** @readonly @type {number} edge collapses in the recorded sequence */
-  collapseCount;
-
-  /** @param {number} ratio -  0..1 of `maxTriangles`. @returns {Mesh} */
-  atRatio(ratio) {}
-
-  /** @param {number} count @returns {Mesh} */
-  atTriangleCount(count) {}
-
-  /** @returns {Uint8Array} */
-  serialize() {}
-
-  /** @param {Uint8Array} bytes @returns {ProgressiveMesh} */
-  static deserialize(bytes) {}
 
 }

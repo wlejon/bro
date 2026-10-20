@@ -186,7 +186,7 @@
     // setVegetation(Float32Array | null): wind-sway records, 16 floats per
     // instance (world.emitFoliageVegetation / emitSegmentVegetation) or 12
     // per scatter / tube segment (set by setScatterSegments / setTubeSegments
-    // from the emitter's object). docs/scene-nodes-api.js "Vegetation".
+    // from the emitter's object). docs/vegetation-api.js "Vegetation records".
     fn(SceneNode.prototype, 'setVegetation', function setVegetation(data) {
         __bro_native.scene.SceneNode_setVegetation(this, data ? toF32(data) : EMPTY_F32);
     });

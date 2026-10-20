@@ -60,7 +60,7 @@
  *
  * ── Vegetation records ──
  * Every geometry emitter also writes what bro.scene needs to move a plant
- * like a plant (docs/scene-nodes-api.js "Vegetation"); emit, create the
+ * like a plant (docs/vegetation-api.js "Vegetation records"); emit, create the
  * nodes, and the trees sway in `scene.setWind`'s field:
  *
  *   const bark = scene.createMesh({ data: world.emitMesh(7) });              // mesh.vegetation
@@ -107,7 +107,7 @@
  * (broflora/sway.h has the constants: green hardwood E 9 GPa, 800 kg/m^3;
  * Cd 0.3; gains for the trunk's taper and root plate.) bro.scene drives
  * each level with the drag at the plant, (U / 10)^1.3, as a damped
- * oscillator (scene-nodes-api.js "Vegetation").
+ * oscillator (vegetation-api.js "Vegetation records").
  *
  * The packed words are integers below 2^24, exact in a float; each number
  * is log-quantised (code 0 is zero) over freq 0.05-50 Hz, sway 1e-5-1,
@@ -248,7 +248,7 @@
  * @property {number} [distributionWeightCollisions=1] @property {number} [distributionWeightTropism=0.5]
  * @property {number} [orthotropy=0.3] @property {number} [individualVariation=0]
  * Bark (emit only: the simulation never reads it). The first three ride in
- * every bark record (emitBranchTubes, a forest's tubes) and are drawn by
+ * every bark record (emitBranchTubes) and are drawn by
  * bro.scene's bark shading; the last two shape the tubes.
  * @property {number} [barkFurrow=0.55] - 0 smooth (beech) .. 1 deep furrows between plates (oak).
  * @property {number} [barkScale=1] - The plates' spacing, x the default (which already widens with the girth); 0.25..4.
@@ -268,35 +268,20 @@
  * @property {number} [crownRadiusMax=0] - ... and never past this (a column, a flat-topped pine; 0 no cap).
  * @property {number} [crownLift=0] - Self-pruning: a bough leaving the leader below this fraction of the plant's height is shed, and the short shoots the leader keeps along that bare trunk carry no foliage (0.5 a pine's crown on the top half of its trunk; 0 boughs to the ground).
  * @property {number} [heightMax=0] - No shoot buds above this height (m): the leader stops and the upper boughs fill in under it, a mature pine's flat top (0 no limit).
- * @property {number} [climb=0] - A climber's turns a metre (the 'ivy' preset 0.12): a plant of it planted where a plant that does not climb stands (the same origin, across) has its wood wound up that plant's trunk and leading limbs, hugging the bark, and sways as that plant's stem (emit only: the simulation grows it as a column). 0 it stands on its own. A forest draws the two as two specimens under one instance transform.
+ * @property {number} [climb=0] - A climber's turns a metre (the 'ivy' preset 0.12): a plant of it planted where a plant that does not climb stands (the same origin, across) has its wood wound up that plant's trunk and leading limbs, hugging the bark, and sways as that plant's stem (emit only: the simulation grows it as a column). 0 it stands on its own.
  * @property {number} [prototypeGroup=0] - The prototype sites the leader grows from.
  * @property {number} [lateralGroup] - The sites a lateral grows from (default: the leader's group).
  * @property {number} [lateralElevation=0] - A lateral's set-point elevation, radians from the horizon: 0 level boughs (fir), negative drooping or weeping (spruce), positive rising (pine), near pi/2 turned up (a columnar cypress).
  * @property {number} [lateralOrthotropy=NaN] - How strongly a lateral's new growth returns to that angle (0 goes on along the arm, 1 aims at it); NaN grows laterals as the leader.
- * Foliage and colour (emit only): what a renderer draws the leaves as.
- * emitForest carries them per specimen (`specimenLooks`), and bro.scene's
- * forest node draws them.
- * @property {string|number} [leafForm='broad'] - 'broad' (0), 'needle' (1) or 'scale' (2): a conifer's leaf is a whole spray, its needles or scale leaves cut out per pixel.
- * @property {Array<number>} [leafColor=[0,0,0]] - The leaves' mean albedo (linear); 0,0,0 the renderer's own.
- * @property {Array<number>} [barkColor=[0,0,0]] - The bark's; 0,0,0 the renderer's own.
+ * Foliage (emit only): how the crown's leaf mass is gathered into clumps
+ * (emitClumps, the clump-mode foliage emits and scatter).
  * @property {number} [clumpScale=1] - The crown clumps' size, x what the emit's options give (a conifer's small dense tufts 0.3); 0 none, leafless (a succulent, whose leaves are drawn as its wood).
  * @property {number} [leafSize=1] - A leaf's size, x the renderer's card (a boxwood 0.3): its clumps carry 1/leafSize² the leaves, so they cover as much.
- * @property {number} [leafWidth=0] - A broad leaf's width over its length (0 the renderer's card, ~0.5): its outline, cut per pixel near (emitForest's `specimenLeaves`).
- * @property {number} [leafTip=0] - 0 a pointed (acuminate) tip, 1 a rounded one (a boxwood's).
- * @property {number} [leafTeeth=0] - Teeth along each side of the margin (0 entire).
- * @property {number} [leafToothDepth=0] - Their depth as a share of the half-width: under ~0.15 a serration (hydrangea 0.06), deeper spines between concave scallops whose margin waves up and down (holly 0.32).
- * @property {number} [leafGloss=0] - 0 a matte leaf (the renderer's roughness), 1 a waxy, glossy one (holly 0.9): sharper sheen, less light through.
- * @property {string|number} [phyllotaxis='alternate'] - A broad leaf's arrangement on its shoot: 'alternate' (0, two ranks: an oak's, a birch's), 'opposite' (1, pairs turning a quarter at each node: a hydrangea's, a boxwood's) 'spiral' (2, a 2/5 spiral: a holly's) or 'pinnate' (3, leaflets lining the wood itself in two ranks, no twigs: a palm's fronds). The forest node hangs each leaf from a node of its shoot so (a pinnate leaflet from the branch its clump grows on).
- * @property {number} [petiole=0.2] - A broad leaf's stalk, as a share of its blade's length (0 .. 0.6; a birch 0.3, a boxwood 0.05): the leaf hangs this far from its twig.
- * @property {number} [sprayBrush=0] - Needle and scale forms: 0 the sprays lie round the clump facing out (a fir's), 1 each turns up and out along its twig, gathered toward the clump's end: a pine's upswept brushes at the branch tips.
  * @property {number} [clumpFlat=1] - A clump's height over its width: 1 a broadleaf's round lobes, ~0.4 the flat pads of a fir's level sprays (the clumps pack closer up and down by as much).
  * @property {number} [clumpReach=0] - A clump reaches no further across than this x its distance from the plant's axis, plus a quarter of its size (0 no limit): a conifer's short top boughs carry small clumps, so its crown narrows to a spire.
  * @property {number} [clumpFill=0] - 0 (a broadleaf tree's): foliage on the crown's outermost shoots, its interior thinly leaved; 1: every shoot tip carries foliage however its module has branched on (a conifer's clothed boughs, a shrub's mound).
  * @property {number} [clumpInner=0] - 0: a shoot that has branched on carries a tenth of a tip's foliage, thinned further by its shade; 1: as much as a tip in half light, and the clumps packed up to 40% closer (a shrub's mound leaved inside and to the ground, its stems hidden; a juniper's bushy cone).
- * @property {number} [clumpGap=1] - the clumps' spacing along a shoot, times the emit's (0.5 .. 4): above 1 they stand apart as separate tufts with sky between them (a pine's needle brushes at its boughs' ends).
- * @property {string|number} [bloomForm='none'] - What it flowers as once past floweringAge: 'none' (0), 'flower' (1, one open flower at a shoot's tip), 'head' (2, a round head of florets), 'spike' (3, florets up an upright stalk). Emitted per specimen (emitForest's `blooms` / `specimenBlooms`) and drawn by bro.scene's forest node (setForestBlooms).
- * @property {Array<number>} [bloomColor=[0,0,0]] - The blooms' albedo (linear).
- * @property {number} [bloomSize=0] - A bloom's size (m): a flower's or a head's across, a spike's length.
+ * @property {number} [clumpGap=1] - the clumps' spacing along a shoot, times the emit's (0.5 .. 4): above 1 they stand apart as separate tufts with sky between them (a pine's needle tufts at its boughs' ends).
  */
 
 /**
@@ -699,83 +684,13 @@ class FloraWorld {
 
   /**
    * One 16-float vegetation record per world segment, in lockstep with
-   * `emitSegmentTransforms()`: wood, in the segment form (scene-nodes-api.js
-   * "Vegetation"): the crown floats carry the segment's tip and its weight,
+   * `emitSegmentTransforms()`: wood, in the segment form (vegetation-api.js
+   * "Vegetation records"): the crown floats carry the segment's tip and its weight,
    * so each vertex of the instanced cylinder bends by the weight at its own
    * point and the tip moves exactly as its child's base.
    * @returns {Float32Array} 16 floats per segment.
    */
   emitSegmentVegetation() {}
-
-  // ── Forests ──
-
-  /**
-   * Every plant as a SPECIMEN for bro.scene's forest node
-   * (`scene.createForest`, docs/scene-nodes-api.js "Forest"): its bark
-   * segments, crown clumps and leaves relative to where it stands, so a few
-   * grown plants can be stood thousands of times. Plants in order; each
-   * specimen's runs follow on from the last. Arrays:
-   *   - `specimens`: 16 floats each: segStart, segCount, clumpStart,
-   *     clumpCount, leafStart, leafCount, height, crownRadius, crown xyz
-   *     (relative), plant index, origin xyz (where it grew), its clumps'
-   *     height over their width (the species' clumpFlat);
-   *   - `segments` (8 each: from xyz, rFrom, to xyz, rTo), `tangents` (6:
-   *     the bark's direction at from and at to), `segmentVegetation` (16, the
-   *     segment records of "Vegetation records") and `keepRadius` (1: the
-   *     thickest tip at or beyond the segment), in an order where the keep
-   *     radius never grows down a specimen's run, so "every segment at least
-   *     r thick" is a prefix;
-   *   - `clumps` (8 each: centre xyz, radius, twig dir xyz, leaf count) and
-   *     `clumpVegetation` (16 each, the clump's twig record);
-   *   - `leaves`: a Uint32Array of (clump, placement key) pairs, shuffled
-   *     within each specimen (`shuffleSeed`) so any prefix is an even
-   *     thinning of the crown; the scene places each leaf from its key
-   *     exactly as the clump-mode scatter does;
-   *   - `instances`: 8 floats a plant, x, y, z, 1, 0, specimen, 0, 0: every
-   *     plant where it grew (createForest's default trees).
-   *   - `specimenLooks`: 8 floats a specimen, its species' leafColor rgb,
-   *     leafForm (0 broad, 1 needle, 2 scale), barkColor rgb and leafSize
-   *     (createForest takes them as the node's per-specimen look).
-   *   - `specimenLeaves`: 8 floats a specimen, its species' leafWidth,
-   *     leafTip, leafTeeth, leafToothDepth, leafGloss, sprayBrush, petiole,
-   *     phyllotaxis (0 alternate, 1 opposite, 2 spiral, 3 pinnate) (createForest's
-   *     `setLook` hands them on after `specimenLooks`: each specimen's own
-   *     leaf outline, gloss, spray brush, stalk and arrangement).
-   *   - `blooms`: 8 floats a bloom, position xyz (relative: its twig's tip),
-   *     size (m: a flower's or a head's across, a spike's length; the
-   *     species' bloomSize, smaller on a young, weak or shaded shoot and as
-   *     the plant senesces), its twig's outward direction xyz, and its
-   *     segment (an index into its specimen's run of `segments`: the twig
-   *     it sways with). Only a flowering plant whose species has a
-   *     bloomForm bears them, one per terminal shoot tip, thinned so none
-   *     stands nearer another than about its size (a spike a third of its
-   *     length), in a shuffled order (`shuffleSeed`);
-   *   - `specimenBlooms`: 8 floats a specimen, bloomStart, bloomCount (into
-   *     `blooms`), bloomForm (0 none, 1 flower, 2 head, 3 spike), bloomSize,
-   *     bloomColor rgb, 0 (createForest draws them: docs/scene-nodes-api.js).
-   * Plus `specimenCount`, `leafCount`, `bloomCount` and the leaf placement fields (seed,
-   * upBias, tiltJitter, shell, baseScale, scaleJitter), and `leafForm`
-   * (the form's name) when the emit was filtered to one.
-   *
-   * A forest node draws one leaf form, so a mixed world is emitted a form at
-   * a time: `leafForm` keeps only the plants of that form, `plants` (plant
-   * indices) only those. A needle or scale emit fills in the options it is
-   * not given with the conifer's (needle / scale: perArea 50 / 140, upBias
-   * 0.65 / 0.6, tiltJitter 0.3, clumpSpacing 1 / 0.8: flatter spray cards
-   * in small tufts that touch, the dark, dense, layered crown).
-   * @example
-   *   const forest = world.emitForest({ perArea: 90 });
-   *   scene.createForest({ forest, instances: bro.flora.plantForest(forest, { area }), leaf });
-   * @example
-   *   // A mixed world, a node per form; with no leaf each draws its form's card.
-   *   for (const leafForm of ['broad', 'needle', 'scale'])
-   *     scene.createForest({ forest: world.emitForest({ leafForm }) });
-   * @param {FloraLeafPlacementOptions & {minRadius?: number, shuffleSeed?: number,
-   *   leafForm?: string|number, plants?: Array<number>}} [opts] - the clump and leaf
-   *   options of the foliage emits; `minRadius` leaves out thinner bark.
-   * @returns {Object}
-   */
-  emitForest(opts) {}
 
   // ── Species presets ──
 
@@ -791,7 +706,7 @@ class FloraWorld {
   /**
    * Plant a species preset: registers it on first use (addSpecies) and
    * plants one at `spec.origin`. `spec.species` is a partial Species over the
-   * preset's (a bluer spruce, a taller cypress).
+   * preset's (a stiffer spruce, a taller cypress).
    * @example
    *   world.plantSpecies('fir', { origin: [-6, 0, 0] });
    *   world.plantSpecies('boxwood', { origin: [4, 0, 2], species: { leafSize: 0.25 } });
@@ -856,140 +771,31 @@ bro.flora.createWorld = function(opts) {};
 bro.flora.FloraWorld = FloraWorld;
 
 /**
- * Trees for a forest: `forest`'s specimens (world.emitForest) stood over an
- * area, one to a cell of a jittered grid, the rows createForest's
- * `instances` takes (x, y, z, scale, yaw, specimen, 0, 0). Deterministic
- * for a seed.
- * @example
- *   const trees = bro.flora.plantForest(forest, {
- *     area: [-200, -200, 200, 200], spacing: 6.5, ground: heightAt,
- *     density: (x, z) => clearing(x, z) ? 0 : 1, scale: [1.3, 1.8],
- *   });
- * @param {Object} forest - world.emitForest()'s result.
- * @param {Object} [opts]
- * @param {Array<number>} [opts.area=[-50, -50, 50, 50]] - [x0, z0, x1, z1], metres.
- * @param {number} [opts.spacing=7] - mean distance between neighbours.
- * @param {number} [opts.jitter=0.42] - how far a tree strays from its cell's centre, in spacings.
- * @param {Function} [opts.ground] - (x, z) => y the trees stand on (default 0).
- * @param {number|Function} [opts.density=1] - the chance a cell holds a tree, or (x, z) => 0..1.
- * @param {number|Array<number>} [opts.scale=1] - the scale, or [min, max].
- * @param {number} [opts.sink=0.1] - how far a root sits below the ground.
- * @param {Array<number>} [opts.specimens] - which specimens (indices), or a weight per specimen.
- * @param {number} [opts.seed=1]
- * @param {Function} [opts.mix] - a mixed forest: with `forest` an array of
- *   emits (a node's each), (x, z, y) => a weight per emit, or the index of
- *   one, at that point (conifers by elevation, shrubs at a glade's rim).
- *   `specimens` and `scale` may then hold an entry per emit.
- * @returns {Float32Array|Array<Float32Array>} 8 floats a tree; mixed, an
- *   array a forest.
- * @example
- *   const [broad, conifer] = bro.flora.plantForest([broadEmit, needleEmit], {
- *     area, ground: heightAt, mix: (x, z, y) => [1 - high(y), high(y)],
- *     scale: [[1.3, 1.8], [0.7, 0.95]],
- *   });
- */
-bro.flora.plantForest = function(forest, opts) {};
-
-/**
- * The species presets plantSpecies / addSpecies know, each a habit with
- * its leaf form, colours and bark:
- *   - broadleaf: oak (spreading, round), elm (vase), beech (tall, smooth grey
- *     bark), birch (slender and narrow, a light open crown of small bright
- *     leaves, white bark);
- *   - needle conifers: pine (an open crown widest near its flat top, on a
- *     bare red-brown trunk), spruce (a narrow spire, drooping boughs and
- *     hanging sprays), fir (a regular cone of level boughs), cedar (flat
- *     shelves), redwood (a tall narrow column of near-level short boughs on
- *     a long clear massive trunk, fibrous red bark);
- *   - scale-leaf conifers: cypress (a dark column, boughs turned up against
- *     the leader), juniper (a bushy blue-grey cone filled to the core);
+ * The species presets plantSpecies / addSpecies know, each a habit with its
+ * clumps and bark:
+ *   - broadleaf: oak (spreading, round), elm (vase), beech (tall, smooth
+ *     bark), birch (slender and narrow, a light open crown of small leaves),
+ *     willow (whips hanging under their leaves, Species sag), palm (a clear
+ *     column under a rosette of arching fronds), cactus (a ribbed column,
+ *     arms turning up, no leaves);
+ *   - conifers: pine (an open crown widest near its flat top, on a bare
+ *     trunk), spruce (a narrow spire, drooping boughs), fir (a regular cone
+ *     of level boughs), cedar (flat shelves), redwood (a tall narrow column
+ *     of near-level short boughs on a long clear massive trunk), cypress (a
+ *     column, boughs turned up against the leader), juniper (a bushy cone
+ *     filled to the core);
  *   - shrubs, multi-stemmed, leaved inside and to the ground (clumpInner):
- *     boxwood (a dense mound of tiny dark leaves), holly (upright, glossy),
- *     hydrangea (a broad mound of arching stems, big pale leaves, round
- *     flower heads), hibiscus (upright, open, large flowers), lavender (a
- *     low grey-green cushion under purple spikes).
+ *     boxwood (a dense mound of tiny leaves), holly (upright, dense),
+ *     hydrangea (a broad mound of arching stems, big leaves), hibiscus
+ *     (upright, open), lavender (a low cushion of fine shoots), succulent (a
+ *     stemless rosette of leaves drawn as its wood), vine (level runners),
+ *     ivy (a climber, Species climb).
  * @returns {Array<string>}
  */
 bro.flora.speciesPresets = function() {};
 
-/**
- * Herbs (broflora/herbs.h): ferns, wildflowers, forbs and ground cover,
- * nothing grown — a species table bro.scene's grass node builds every plant
- * from where it stands (scene.createGrass({herbs}), scene-nodes-api.js
- * GrassHerbOptions). The presets:
- *   - ferns: bracken (tall fronds, deltoid, deeply lobed pinnae), ladyfern
- *     (a shuttlecock of lanceolate fronds; shade);
- *   - wildflowers: daisy (rays over a low rosette), poppy (red cups, lobed
- *     leaves), foxglove (a tall raceme of pink bells; part shade), bluebell
- *     (strap leaves, a nodding raceme of blue bells; shade);
- *   - forbs and ground cover: yarrow (white umbels, feathery leaves), nettle
- *     (leafy stems, toothed leaves in pairs), plantain (ribbed rosette, brown
- *     spikes), clover (a carpet of trifoliate leaves, white heads), woodsorrel
- *     (a carpet of notched leaflets, small white cups; deep shade).
- * @returns {Array<string>}
- */
-bro.flora.herbPresets = function() {};
-
-/**
- * A herb species as a plain object: a preset's name, or `{preset, ...fields}`
- * overriding any HerbSpecies field (herbs.h: habit 'rosette' | 'leafy' |
- * 'carpet'; height, spread, leaves, stems; stemLeaves and stemLeafSize (a
- * rosette's leaves up each flowering stem, the lowest that share of
- * leafLength: a foxglove's); leafShape 'frond' | 'simple' |
- * 'strap' | 'trifoliate' | 'lobed' | 'ribbed', leafLength, leafWidth,
- * leafTip, teeth, toothDepth, pinnae, lobes, stalk, rise, arch, leafColor,
- * gloss; stemColor, stemDiameter, ribDiameter, hairs (0 bare .. 1 a
- * poppy's bristling stems); bloomForm 'none' | 'ray' |
- * 'cup' | 'head' | 'spike' | 'umbel' | 'bell', bloomSize, bloomCount,
- * petals, bloomColor, centreColor, nod; where it grows: shade, shadeRange,
- * abundance, patch, patchCover, spacing — the distance between its plants
- * inside a colony, 0 for 1.6 x spread; a bracken's fronds stand 0.45 m
- * apart). Comes back with its sway worked out from
- * its build (`stemSway`, `leafSway`: {freq, sway, length}) and what it shows
- * from above (`meanColor`, `bloomShare`, `cover`). Null for an unknown name.
- * @example
- *   const tall = bro.flora.herbPreset({ preset: 'foxglove', height: 1.6, bloomColor: [0.8, 0.8, 0.75] });
- * @param {string|Object} spec
- * @returns {Object|null}
- */
-bro.flora.herbPreset = function(spec) {};
-
-/**
- * The table the grass node reads (56 floats a species: the build, then its
- * spacing, its side cover and its blooms' share of it, its leaves' top, its
- * stem leaves),
- * from names or
- * specs as herbPreset takes them (unknown ones are skipped). createGrass's
- * `herbs.species` takes the names and specs directly; this is for building
- * the table once and sharing it.
- * @param {Array<string|Object>} list
- * @returns {Float32Array}
- */
-bro.flora.herbRecords = function(list) {};
-
-/**
- * Where ground cover grows under a forest, for scene.createGrass's
- * `density`: a function (x, z) => 0..1, clear at each trunk, thinner the
- * more crowns overlap overhead, nothing where they close, full in the open.
- * The function also carries `canopy`, (x, z) => 0..1: how closed the crowns
- * are overhead (0 in the open, 1 under a crown's middle or where crowns
- * overlap), for createGrass's `floor` (the litter and low leafy plants
- * under trees).
- * Both carry `grid(x0, z0, cell, cols, rows)`: their values at cols x rows
- * points (x0 + i * cell, z0 + j * cell) as one row-major Float32Array,
- * worked out natively on every core (a 4 km world's field at once);
- * createGrass uses it in place of a call a texel.
- * @example const cover = bro.flora.forestCover(forest, { instances: trees });
- * scene.createGrass({ ground, density: cover, floor: cover.canopy, turf: true });
- * @param {Object} forest - world.emitForest()'s result.
- * @param {Object} [opts]
- * @param {Float32Array} [opts.instances] - the trees (default `forest.instances`).
- * @param {number} [opts.floor=0.35] - the cover left in a crown's shade before the canopy closes.
- * @param {number} [opts.closed=1.6] - the crown overlap at which nothing grows.
- * @param {number} [opts.trunkClear=0.7] - the bare radius round a trunk (m).
- * @returns {function(number, number): number}
- */
-bro.flora.forestCover = function(forest, opts) {};
+// The herbs the grass node draws (bro.flora.herbPresets, herbPreset,
+// herbRecords) are docs/vegetation-api.js "Herbs".
 
 /**
  * Leaf arrangement enum. Also exposed as `bro.flora.phyllotaxy`, and each
