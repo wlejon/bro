@@ -34,7 +34,7 @@ It is never on for `bro-headless`, `bro-server`, or an app with an `app.dll`.
 The 3D scene's built-in shaders (`src/scene/vulkan/shaders/`, listed with their variants in `builtin_shaders.def`) are compiled to SPIR-V at build time and embedded. For a shader edit loop, compile them from the source tree at start-up instead:
 
 ```
-BRO_SCENE_SHADER_SOURCE=1 bro-headless ../broworkshop/demos/forest capture.js -- still above
+BRO_SCENE_SHADER_SOURCE=1 bro-headless ../broworkshop/demos/lighting-demo -e "screenshot('out.png')"
 BRO_SCENE_SHADER_SOURCE=D:/work/shaders bro ...     # a directory other than the build's tree
 ```
 

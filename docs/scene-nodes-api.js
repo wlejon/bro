@@ -1108,7 +1108,7 @@ class SceneNode {
   // ratios 0.15 (trunk: its limbs take its energy), 0.08 (limb), 0.05
   // (spray). Over a minute of the grove's wind the deflection's RMS and
   // speed at each level are within ~15% of an integrated oscillator under
-  // the same drag (broworkshop's demos/grove/sway_check.js). A level bends
+  // the same drag (checked by the former broworkshop demos/grove/sway_check.js). A level bends
   // in a loaded cantilever's shape, s² (3 - s) / 2 along it, the levels add
   // down the hierarchy, and the wood turns with its slope, so bark normals
   // follow the bend. A leaf turns with the wood it hangs from (its shading
