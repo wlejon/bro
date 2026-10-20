@@ -491,8 +491,8 @@ the motion oracle for anything temporal. Each step removes what it replaces.
 
 | Step | What | Win it should show | Size |
 |---|---|---|---|
-| 1 | The layout (§12), moves only | frames byte-identical, suites green | moves |
-| 2 | The old forest path retired (ForestNode, its drawers, planner, impostors) | one foliage path: the plants node | −6–8k |
+| 1 | The old forest path retired (ForestNode, its drawers, planner, impostors) | one foliage path: the plants node | −6–8k |
+| 2 | The layout (§12), moves only | frames byte-identical, suites green | moves |
 | 3 | The world service (§6), the surface layers' fills its first producer | fills follow the frame's slack; no stall when the view jumps | ~3k |
 | 4 | Atmosphere tables and exposure (§7) | one sky from ground to orbit, cheaper than today's per-pixel march | ~2k |
 | 5 | Cached shadow pages (§8), then horizons and canopy density (§7) | plant and terrain shadows off the per-frame cost | ~6k |
