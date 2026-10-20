@@ -188,7 +188,8 @@ layout(set = 2, binding = 4) uniform sampler2D texOcclusion;           // R
 // The base colour uv: an instance's cell of the atlas grid, else the mesh uv.
 // Only the base colour samples the atlas.
 vec2 albedoUV() {
-    float grid = push.extra.w;
+    // (Over 65536: a forest sprite's occlusion slot, mesh_forest_sprite.vert.)
+    float grid = mod(push.extra.w, 65536.0);
     int cols = max(int(mod(grid, 256.0)), 1);
     int rows = max(int(grid / 256.0), 1);
     if (cols == 1 && rows == 1) return inUV;

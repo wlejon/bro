@@ -147,6 +147,36 @@ Between the near/mid band and the card band there is a distance band, about
 in. The reach is set in pixels, not metres, so the band is the same size on
 screen at any resolution.
 
+### As built: the forest's crowns (scene_far_cards.h)
+
+The first provider is the forest, and only for its far cells: cells whose
+every tree already draws as a crown alone (`forest::crownsAlone`, the
+planner's own far-cell test) and whose box spans at most 256 px on screen.
+The first cut departs from the design above in four places.
+
+- **Captured radiance.** A capture is the camera's own view, its projection
+  cropped to the cell's rectangle at one texel a pixel. It uses the frame's
+  lighting, shadows, fog and 4x sample pattern, so a fresh card is exactly
+  the pixels the crowns would have drawn. Cards are not relit. A change of
+  sun, ambient or fog recaptures them, which costs nothing while the light
+  is still.
+- **Error in pixels.** A card is recaptured when the eye's turn round the
+  cell would shift the cell's relief by 1.5 px, or when its size on screen
+  is off the captured size by a quarter. A grid of 16x16 quads, displaced
+  by the card's depth, keeps the parallax in between. Each fragment writes
+  its own texel's depth, reprojected.
+- **No dither band yet.** A card takes over the moment its capture lands.
+  Because the capture is pixel-exact, that hand-over doesn't show. The
+  record carries a window of samples (`[x, 1)`, `forestSampleMask`'s
+  dither) for the band to use.
+- **Tiles rewritten in place.** The atlas's barriers wait for the last
+  frames' reads instead of double-buffering a tile.
+
+The trees a card stands for leave the camera's plan
+(`SceneFrame::forestCellSkip`: the CPU planner per tree, the GPU planner's
+measure stage per cell); their shadow casters stay. `BRO_FAR_CARDS=1`
+turns cards on.
+
 ## 3. Visibility pass
 
 Opaque content that is expensive to shade, or that discards (foliage first),
@@ -175,6 +205,25 @@ moves into two steps.
 The hierarchical depth also feeds the cell pass (§1). This replaces the
 forest's hand-made far-depth batches with a general mechanism that rejects
 whole trees, chunks and grass tiles before they rasterise.
+
+**As built, for the forest's sprite cards (pass_hiz.h):**
+- The opaque batches hold back each card the last frame's pyramid hides
+  (reprojected through the eye's move) in the vertex stage, and list it
+  with its rect in this frame.
+- After the last batch, PassHiZ builds this frame's pyramid from the
+  opaque depth, tests the list against it and gathers what it does not
+  hide into an indirect draw for each sprite draw. The retest draws only
+  those cards.
+- A budget pass at the frame's head counts each draw's cards (the GPU
+  planners' commands included), so every card held back has room in the
+  list.
+- Frames are byte-identical with occlusion on and off.
+
+The win is the crowns behind terrain and nearer trees: wilds totals with
+occlusion on against off were vista −0.93 ms, treetop −0.32, walk −0.1,
+cruise 0, orbit +0.04 (the pyramid and the far depth it is built from).
+The clumps barely move. Their overdraw is among visible overlapping cards,
+which is the visibility pass's to remove.
 
 **Adoption is per content kind.** Content that hasn't adopted the pass draws
 forward as now, after the resolve, depth-tested against it. Nothing has to

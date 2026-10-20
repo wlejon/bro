@@ -51,9 +51,11 @@ struct OpaqueBatches {
         bool split = false;          // only entries [first, first + count)
         uint32_t first = 0, count = 0;
         int batch = -1;              // a GPU-planned draw: its batch's own command (MeshDraw::indirectBatches)
+        int slot = -1;               // a forest sprite's in the occlusion list (occlusion_list_layout.h)
     };
     std::vector<Draw> draws[kBatches];
-    bool sprites = false;   // a forest sprite draws (farDepth is read)
+    bool sprites = false;   // a forest's clumps or crowns draw (farDepth is read)
+    int slots = 0;          // the occlusion list's slots given out, every batch's sprites in order
 };
 
 class PassForestBatches final : public ScenePass {
@@ -69,10 +71,18 @@ private:
     OpaqueBatches& batches_;   // (filled by declare: what the later passes are)
 };
 
+/// A batch of the opaque draws; or, as the occlusion retest (`retest`),
+/// every batch's forest sprites again under the retest's camera
+/// (SceneFrame::cameraSetRetest): the cards the batches held back because
+/// the last frame's pyramid hid them, drawn if this frame's does not
+/// (scene_occlusion.glsl), after PassHiZ built it.
 class PassOpaque final : public ScenePass {
 public:
-    PassOpaque(const OpaqueBatches& batches, int batch) : batches_(batches), batch_(batch) {}
-    const char* name() const override { return batch_ == 0 ? "opaque" : batch_ == 1 ? "opaque1" : "opaque2"; }
+    PassOpaque(const OpaqueBatches& batches, int batch, bool retest = false)
+        : batches_(batches), batch_(batch), retest_(retest) {}
+    const char* name() const override {
+        return retest_ ? "opaqueRetest" : batch_ == 0 ? "opaque" : batch_ == 1 ? "opaque1" : "opaque2";
+    }
     bool setup(SceneGpu&) override { return true; }
     bool active(const SceneFrame& frame) const override;
     void declare(const SceneFrame& frame, PassIO& io) const override;
@@ -80,8 +90,13 @@ public:
     void cleanup(SceneGpu&) override {}
 
 private:
+    /// Draw `draw` (d's mesh, or a copy the retest redirected) as `d` splits it.
+    void recordDraw(SceneFrame& frame, const OpaqueBatches::Draw& d, MeshDraw draw, VkDescriptorSet cameraSet,
+                    const char* label) const;
+
     const OpaqueBatches& batches_;
     int batch_;
+    bool retest_;
 };
 
 class PassFarDepth final : public ScenePass {

@@ -1,0 +1,110 @@
+#version 450
+// The occlusion retest's list (SceneTargets::occlusionList,
+// occlusion_list_layout.h), a stage a dispatch (push.stage):
+//   OL_STAGE_BUDGET  (one workgroup, before the batches: PassOcclusionBudget)
+//                    each slot enabled while the cards of it and the slots
+//                    before it fit in the list, and the counts cleared;
+//   OL_STAGE_PREFIX  (one workgroup, after the pyramid: PassHiZ) each slot's
+//                    first card in OL_SORTED, its retest command with none
+//                    yet, and the test's dispatch over the cards appended;
+//   OL_STAGE_TEST    (a thread a card appended) the card against this
+//                    frame's pyramid: what it does not hide goes to its
+//                    slot's run of OL_SORTED, counted in the command.
+
+// The camera depth policy (scene/vulkan/scene_vk_depth.h).
+layout(constant_id = 0) const bool REVERSED_Z = true;
+
+#include "occlusion_list_layout.h"
+#include "scene_forest_layout.h"
+
+layout(local_size_x = OL_GROUP_SIZE) in;
+
+#define SCENE_HIZ_SET 0
+#define SCENE_HIZ_BINDING 0
+#include "scene_occlusion.glsl"
+
+layout(std430, set = 0, binding = 1) buffer OcclusionList { uint olWords[]; };
+// The budget's slots' draws, and the planners' buffers they read
+// (occlusion_list_layout.h).
+layout(std140, set = 0, binding = 2) uniform OlDraws { uvec4 olDraws[OL_SLOTS]; };
+layout(std430, set = 0, binding = 3) readonly buffer Planned0 { uint words[]; } planned0;
+layout(std430, set = 0, binding = 4) readonly buffer Planned1 { uint words[]; } planned1;
+layout(std430, set = 0, binding = 5) readonly buffer Planned2 { uint words[]; } planned2;
+layout(std430, set = 0, binding = 6) readonly buffer Planned3 { uint words[]; } planned3;
+
+// A planner's command's vertex and instance counts.
+uvec2 plannedCounts(uint which, uint at) {
+    if (which == 0u) return uvec2(planned0.words[at], planned0.words[at + 1u]);
+    if (which == 1u) return uvec2(planned1.words[at], planned1.words[at + 1u]);
+    if (which == 2u) return uvec2(planned2.words[at], planned2.words[at + 1u]);
+    return uvec2(planned3.words[at], planned3.words[at + 1u]);
+}
+
+layout(push_constant) uniform Push { int stage; } pc;
+
+shared uint scan[OL_GROUP_SIZE];
+
+// The sum of `v` over the workgroup's threads up to this one's (inclusive);
+// every thread calls it.
+uint inclusiveScan(uint v) {
+    uint t = gl_LocalInvocationID.x;
+    scan[t] = v;
+    barrier();
+    for (uint step = 1u; step < uint(OL_GROUP_SIZE); step <<= 1u) {
+        uint add = t >= step ? scan[t - step] : 0u;
+        barrier();
+        scan[t] += add;
+        barrier();
+    }
+    return scan[t];
+}
+
+void main() {
+    // (The budget and the prefix: one workgroup, a thread a slot.)
+    int s = int(gl_LocalInvocationID.x);
+    bool slot = s < OL_SLOTS;
+    if (pc.stage == OL_STAGE_BUDGET) {
+        uvec4 d = slot ? olDraws[s] : uvec4(0u, 0u, OL_DRAW_NONE, 0u);
+        uvec2 n = d.z == OL_DRAW_CPU ? d.xy : d.z == OL_DRAW_NONE ? uvec2(0u) : plannedCounts(d.z, d.w);
+        uint cards = n.x / uint(FOREST_CARD_VERTICES) * n.y;
+        // (A slot's cards past OL_CAP alone: far past it, the sum could wrap.)
+        uint upTo = inclusiveScan(min(cards, uint(OL_CAP) + 1u));
+        if (slot) {
+            olWords[OL_ENABLED + s] = upTo <= uint(OL_CAP) && d.z != OL_DRAW_NONE ? 1u : 0u;
+            olWords[OL_HELD + s] = 0u;
+        }
+        if (s == 0) olWords[OL_TOTAL] = 0u;
+        return;
+    }
+    if (pc.stage == OL_STAGE_PREFIX) {
+        uint held = slot ? olWords[OL_HELD + s] : 0u;
+        uint first = inclusiveScan(held) - held;
+        if (slot) {
+            uint c = OL_CMDS + 4u * uint(s);
+            olWords[c] = uint(FOREST_CARD_VERTICES);
+            olWords[c + 1] = 0u;
+            olWords[c + 2] = 0u;
+            olWords[c + 3] = first;
+        }
+        if (s != 0) return;
+        uint count = min(olWords[OL_TOTAL], uint(OL_CAP));
+        olWords[OL_COUNT] = count;
+        olWords[OL_DISPATCH] = (count + uint(OL_GROUP_SIZE) - 1u) / uint(OL_GROUP_SIZE);
+        olWords[OL_DISPATCH + 1] = 1u;
+        olWords[OL_DISPATCH + 2] = 1u;
+        return;
+    }
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= olWords[OL_COUNT]) return;
+    uint e = OL_ENTRIES + i * OL_ENTRY_WORDS;
+    uint lo = olWords[e + 4];
+    if (lo != OL_SHOWN) {
+        uint hi = olWords[e + 5];
+        ivec2 pxMin = ivec2(lo & 0xffffu, lo >> 16), pxMax = ivec2(hi & 0xffffu, hi >> 16);
+        if (sceneHiZOccludedRectIn(texHiZ, pxMin, pxMax, uintBitsToFloat(olWords[e + 3]))) return;
+    }
+    uint c = OL_CMDS + 4u * olWords[e];
+    uint k = olWords[c + 3] + atomicAdd(olWords[c + 1], 1u);
+    olWords[OL_SORTED + 2u * k] = olWords[e + 1];
+    olWords[OL_SORTED + 2u * k + 1u] = olWords[e + 2];
+}

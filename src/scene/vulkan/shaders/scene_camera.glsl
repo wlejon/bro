@@ -27,7 +27,9 @@ layout(set = 0, binding = 0) uniform CameraUBO {
     vec4 plantMoverInfo;   // x: movers, y: trail samples a mover
     vec4 plantMovers[8];   // two a mover: (camera-relative x, z, its trail's reach, radius), (height, strength, 0, 0)
     vec4 plantTrail[80];   // y samples a mover, oldest first: (camera-relative x, z, age (s), window)
-    vec4 occlusion;   // x: 1 when the lighting set's HiZ is this view's (scene_occlusion.glsl)
+    vec4 occlusion;   // x: 1 when the lighting set's pyramids are this view's, y: the phase (1, 2),
+                      // z: 1 when the last frame's exists (scene_occlusion.glsl)
+    mat4 occlusionPrev;   // the last frame's pyramid's clip space, from this frame's positions
 } camera;
 
 // The engine's wind uniforms under the names custom shader chunks use.

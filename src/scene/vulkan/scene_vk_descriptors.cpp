@@ -72,10 +72,15 @@ VkDescriptorSetLayout SceneVkDescriptorLayoutBuilder::createLightingLayout(VkDev
     builder.addBinding(8, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, linearSampler);
     // The opaque depth drawn so far (SceneTargets::farDepth), read by texel.
     builder.addBinding(9, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
-    // Its pyramid (SceneTargets::hiZ), read by texel where a draw's vertex
-    // stage culls against it (scene_occlusion.glsl; the sampler's filter is
+    // The opaque depth's pyramids, the last frame's (SceneTargets::hiZPrev)
+    // and this frame's (hiZ), read by texel where a draw's vertex stage
+    // culls against them (scene_occlusion.glsl; the sampler's filter is
     // unused).
     builder.addBinding(10, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_VERTEX_BIT, linearSampler);
+    builder.addBinding(11, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_VERTEX_BIT, linearSampler);
+    // The cards held back against hiZPrev and the retest's (SceneTargets::
+    // occlusionList), appended and read in the vertex stage.
+    builder.addBinding(12, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT);
     return builder.build(device);
 }
 

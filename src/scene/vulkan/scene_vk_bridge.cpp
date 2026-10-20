@@ -49,10 +49,15 @@ SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
         graph_.add(std::make_unique<PassEnvironment>());
         graph_.add(std::make_unique<PassShadow>(PassShadow::Part::Planned));
         graph_.add(std::make_unique<PassForestBatches>(opaqueBatches_));
+        // The occlusion list's slots enabled for the batches' sprites (PassHiZ).
+        graph_.add(std::make_unique<PassOcclusionBudget>(opaqueBatches_));
         graph_.add(std::make_unique<PassReflectionProbe>());
     } else {
-        graph_.add(std::make_unique<PassShadow>());
+        // (The batches first: the occlusion budget reads the plans' commands
+        // as the casters do, so its barriers are theirs.)
         graph_.add(std::make_unique<PassForestBatches>(opaqueBatches_));
+        graph_.add(std::make_unique<PassOcclusionBudget>(opaqueBatches_));
+        graph_.add(std::make_unique<PassShadow>());
         graph_.add(std::make_unique<PassFrameUniforms>());
         graph_.add(std::make_unique<PassGroundLayers>());
         graph_.add(std::make_unique<PassReflectionProbe>());
@@ -61,9 +66,13 @@ SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
     graph_.add(std::make_unique<PassOpaque>(opaqueBatches_, 0));
     for (int k = 1; k < OpaqueBatches::kBatches; ++k) {
         graph_.add(std::make_unique<PassFarDepth>(opaqueBatches_, k));
-        graph_.add(std::make_unique<PassHiZ>(opaqueBatches_, k));
         graph_.add(std::make_unique<PassOpaque>(opaqueBatches_, k));
     }
+    // The opaque depth's pyramid (this frame's retest, the next frame's
+    // first phase), and the cards the batches held back that it does not hide.
+    graph_.add(std::make_unique<PassFarDepth>(opaqueBatches_, -1));
+    graph_.add(std::make_unique<PassHiZ>(opaqueBatches_));
+    graph_.add(std::make_unique<PassOpaque>(opaqueBatches_, 0, true));
     graph_.add(std::make_unique<PassDepthSnapshot>());
     auto& ssao = static_cast<PassSSAO&>(graph_.add(std::make_unique<PassSSAO>()));
     graph_.add(std::make_unique<PassAoApply>(ssao));
@@ -137,6 +146,8 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
     }
     environment_.update(gpu_, cmd, renderer);
     frame.lighting = sceneLighting(renderer, environment_, frame.view.eye);
+    // Last frame's pyramid becomes the one this frame's cards test first.
+    targets_.swapHiZ();
     writeCameraSet(frame);
     frame.ssao = renderer.ssaoEnabled() && targets_.ensureIndirect(allocator_);
     frame.ssr = renderer.ssrEnabled() && renderer.ssrIntensity() > 0.0f;

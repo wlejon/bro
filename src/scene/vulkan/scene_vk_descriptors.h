@@ -29,10 +29,17 @@ struct alignas(16) SceneCameraUniforms {
     alignas(16) float plantMovers[8][4];
     // kTrail a mover, oldest first: (camera-relative x, z, age (s), window).
     alignas(16) float plantTrail[80][4];
-    // x = 1 when the lighting set's HiZ (SceneTargets::hiZ) is this view's
-    // depth drawn so far, so its draws may cull against it
-    // (scene_occlusion.glsl); 0 for every other view (a probe's face).
+    // Two-phase occlusion (scene_occlusion.glsl, pass_hiz.h): x = 1 when
+    // the lighting set's pyramids are this view's, so its draws may cull
+    // against them (0 for every other view: a probe's face); y the phase, 1
+    // (the opaque batches: what the last frame's pyramid hides is held back
+    // and listed) or 2 (PassOpaque's retest: the listed cards this frame's
+    // pyramid does not hide, one an instance); z = 1 when the last frame's
+    // pyramid exists.
     alignas(16) float occlusion[4];
+    // The last frame's pyramid's clip space, from this frame's camera-
+    // relative positions (its viewProj, rebased by the eye's move).
+    alignas(16) float occlusionPrev[16];
 };
 
 /// The light and shadow-tile capacity of the lighting block (SceneRenderer's
