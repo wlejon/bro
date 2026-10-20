@@ -40,4 +40,13 @@
 #define FAR_CARD_DEPTH_BITS 24
 #define FAR_CARD_DEPTH_MAX 16777215u
 
+// The cells image (R32UI, the atlas's size over FAR_CARD_GRID_TEXELS): a
+// texel a grid cell of a tile, its covered texels' nearest depth, so a grid
+// point stood at its cells' nearest lies in front of every texel round it
+// (and the fragment's depth, clamped to the point's, gives early depth
+// tests). 0 for a cell with nothing covered, else the nearest's 24 bits
+// plus one, counted toward the eye: q + 1 under REVERSED_Z (the nearest
+// the largest), FAR_CARD_DEPTH_MAX - q + 1 otherwise, so the nearest of
+// several is always the largest.
+
 #endif

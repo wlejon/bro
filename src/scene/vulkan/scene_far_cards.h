@@ -91,6 +91,7 @@ public:
     static constexpr uint32_t kMaxCaptures = 16;   // a frame
     static constexpr uint32_t kCaptureSamples = 4; // the scratch target's
     static constexpr float kParallaxPixels = 1.5f;
+    static constexpr uint32_t kGridSizes = 5;      // a card's grid: 1 to kMaxTile / FAR_CARD_GRID_TEXELS quads a side
 
     bool setup(SceneGpu& gpu);
     void cleanup(SceneGpu& gpu);
@@ -173,13 +174,17 @@ private:
     std::vector<Capture> captures_;
     std::vector<float> records_;   // this frame's cards', by tile size
     struct DrawGroup {
-        uint32_t vertices, first, count;   // a grid size's draw: its records [first, first + count)
+        uint32_t grid, first, count;   // a grid size's draw: its records [first, first + count)
     };
     std::vector<DrawGroup> groups_;
+    // The grids' triangles, indexing their points (grid + 1 a row), a run a
+    // grid size.
+    SceneVkBuffer gridIndices_;
+    uint32_t gridFirstIndex_[kGridSizes] = {};
 
-    // The atlas (far_card_layout.h's texels), the scratch target, and the
-    // far depth for captures.
-    SceneVkImage atlas_;
+    // The atlas (far_card_layout.h's texels) and its cells' nearest depths,
+    // the scratch target, and the far depth for captures.
+    SceneVkImage atlas_, cells_;
     SceneVkImage scratchColor_, scratchDepth_;
     SceneVkImage clearFar_;
     bool clearFarReady_ = false;

@@ -29,7 +29,10 @@ layout(location = 0) out vec4 outColor;
 #ifdef FAR_CARD_INDIRECT
 layout(location = 1) out vec4 outIndirect;
 #endif
-layout(depth_any) out float gl_FragDepth;
+// Never nearer than the card's grid, which lies in front of its texels: the
+// depth test can run before the fragment (REVERSED_Z; as mesh.frag, the
+// other policy keeps the grid's depth).
+layout(depth_less) out float gl_FragDepth;
 
 vec3 unpackRGB9E5(uint v) {
     float scale = exp2(float(int(v >> 27) - 24));
@@ -59,7 +62,7 @@ void main() {
     mat4 back = mat4(cards.r[base], cards.r[base + 1u], cards.r[base + 2u], cards.r[base + 3u]);
     vec4 p = back * vec4(inTile * 2.0 - 1.0, z, 1.0);
     vec4 clip = camera.viewProj * vec4(p.xyz / p.w, 1.0);
-    gl_FragDepth = clamp(clip.z / clip.w, 0.0, 1.0);
+    gl_FragDepth = REVERSED_Z ? min(clamp(clip.z / clip.w, 0.0, 1.0), gl_FragCoord.z) : gl_FragCoord.z;
 
     // The samples it keeps: `cover` of them, in its window [info.x, 1) of
     // the pixel's dither (the real crowns' the rest).

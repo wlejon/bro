@@ -2,18 +2,21 @@
 // A far card's capture into its tile of the atlas (FarCards::capture,
 // scene_far_cards.h; the texel's packing in far_card_layout.h): the mean
 // colour of the pixel's covered samples, how many were covered, and the
-// nearest covered sample's depth across the card's depth range.
+// nearest covered sample's depth across the card's depth range; and each
+// grid cell's nearest into the cells image (far_card_layout.h), a workgroup
+// a cell.
 
 #include "far_card_layout.h"
 
 // The camera depth policy (scene/vulkan/scene_vk_depth.h).
 layout(constant_id = 0) const bool REVERSED_Z = true;
 
-layout(local_size_x = 8, local_size_y = 8) in;
+layout(local_size_x = FAR_CARD_GRID_TEXELS, local_size_y = FAR_CARD_GRID_TEXELS) in;
 
 layout(set = 0, binding = 0) uniform sampler2DMS scratchColor;
 layout(set = 0, binding = 1) uniform sampler2DMS scratchDepth;
 layout(set = 0, binding = 2, rg32ui) uniform writeonly uimage2D atlas;
+layout(set = 0, binding = 3, r32ui) uniform writeonly uimage2D cells;
 
 layout(push_constant) uniform Push {
     ivec2 src;        // the capture's square in the scratch target
@@ -38,9 +41,13 @@ uint packRGB9E5(vec3 c) {
     return m.r | (m.g << 9) | (m.b << 18) | (uint(e) << 27);
 }
 
+shared uint cellKey;
+
 void main() {
+    if (gl_LocalInvocationIndex == 0u) cellKey = 0u;
+    barrier();
     ivec2 p = ivec2(gl_GlobalInvocationID.xy);
-    if (p.x >= pc.size || p.y >= pc.size) return;
+    // (A tile is whole cells: no invocation falls outside it.)
     int samples = textureSamples(scratchColor);
     vec4 sum = vec4(0.0);
     int covered = 0;
@@ -56,7 +63,12 @@ void main() {
     if (covered > 0) {
         float t = clamp((nearest - pc.range.x) / (pc.range.y - pc.range.x), 0.0, 1.0);
         texel.x = packRGB9E5(sum.rgb / float(covered));
-        texel.y = uint(t * float(FAR_CARD_DEPTH_MAX) + 0.5) | (uint(covered) << FAR_CARD_DEPTH_BITS);
+        uint q = uint(t * float(FAR_CARD_DEPTH_MAX) + 0.5);
+        texel.y = q | (uint(covered) << FAR_CARD_DEPTH_BITS);
+        atomicMax(cellKey, (REVERSED_Z ? q : FAR_CARD_DEPTH_MAX - q) + 1u);
     }
     imageStore(atlas, pc.dst + p, uvec4(texel, 0u, 0u));
+    barrier();
+    if (gl_LocalInvocationIndex == 0u)
+        imageStore(cells, pc.dst / FAR_CARD_GRID_TEXELS + ivec2(gl_WorkGroupID.xy), uvec4(cellKey, 0u, 0u, 0u));
 }
