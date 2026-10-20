@@ -29,6 +29,10 @@ struct alignas(16) SceneCameraUniforms {
     alignas(16) float plantMovers[8][4];
     // kTrail a mover, oldest first: (camera-relative x, z, age (s), window).
     alignas(16) float plantTrail[80][4];
+    // x = 1 when the lighting set's HiZ (SceneTargets::hiZ) is this view's
+    // depth drawn so far, so its draws may cull against it
+    // (scene_occlusion.glsl); 0 for every other view (a probe's face).
+    alignas(16) float occlusion[4];
 };
 
 /// The light and shadow-tile capacity of the lighting block (SceneRenderer's

@@ -113,6 +113,10 @@ PassReflectionProbe::Probe* PassReflectionProbe::ensure(SceneGpu& gpu, const Ref
 void PassReflectionProbe::declare(const SceneFrame& frame, PassIO& io) const {
     // The faces bind the frame's lighting set, whose shadow binding must be readable.
     io.sample(frame.gpu.targets.shadowAtlas);
+    // (So must its far depth and HiZ, which a sprite's stages bind; its
+    // faces' cameras never cull against the HiZ.)
+    io.sample(frame.gpu.targets.farDepth);
+    io.sample(frame.gpu.targets.hiZ);
 }
 
 void PassReflectionProbe::record(SceneFrame& frame) {

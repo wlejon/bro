@@ -19,6 +19,7 @@ VkImageLayout layoutFor(ImageAccess access) {
     case ImageAccess::DepthTarget: return VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
     case ImageAccess::TransferSrc: return VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     case ImageAccess::TransferDst: return VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    case ImageAccess::Storage: return VK_IMAGE_LAYOUT_GENERAL;
     }
     return VK_IMAGE_LAYOUT_GENERAL;
 }

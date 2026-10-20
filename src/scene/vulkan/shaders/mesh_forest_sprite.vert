@@ -42,6 +42,10 @@ layout(location = 12) flat out vec4 outMass4; // the pose's offset, the tree (ui
 #include "scene_forest.glsl"
 #include "scene_forest_sprite_vertex.glsl"
 
+// The camera depth policy (scene/vulkan/scene_vk_depth.h).
+layout(constant_id = 0) const bool REVERSED_Z = true;
+#include "scene_occlusion.glsl"
+
 void main() {
     ForestSprite s;
     if (!forestSprite(int(push.extra.z + 0.5), gl_InstanceIndex, gl_VertexIndex, push.model, s)) {
@@ -64,6 +68,23 @@ void main() {
     // Never nearer the eye than the eye's own near plane.
     vec3 front = s.center + f * min(s.radius, max(D - 0.05, 0.0));
     vec3 pos = front + right * (q.x * s.radius) + up * (q.y * s.radius * yScale);
+
+    // A card behind all the depth drawn under it so far is dropped whole
+    // (scene_occlusion.glsl): every depth its fragment writes lies behind
+    // the card, so all of them would fail the depth test. Each of its
+    // vertices takes the same four corners, so they agree.
+    if (camera.occlusion.x > 0.5) {
+        vec4 c[8];
+        for (int k = 0; k < 4; ++k) {
+            vec2 qk = vec2((k & 1) != 0 ? 1.0 : -1.0, (k & 2) != 0 ? 1.0 : -1.0) * margin;
+            c[k] = camera.viewProj * vec4(front + right * (qk.x * s.radius) + up * (qk.y * s.radius * yScale), 1.0);
+        }
+        if (sceneHiZOccludedClip(c, 4, camera.viewport.xy)) {
+            gl_Position = FOREST_CULLED;
+            outVegShade = vec4(0.0, 0.0, 0.0, -1.0);
+            return;
+        }
+    }
 
     outWorldPos = pos;
     gl_Position = camera.viewProj * vec4(pos, 1.0);

@@ -10,6 +10,7 @@
 #include "scene/vulkan/scene_defaults.h"
 #include "scene/vulkan/scene_environment.h"
 #include "scene/vulkan/scene_frame.h"
+#include "scene/vulkan/pass_hiz.h"
 #include "scene/vulkan/scene_gpu_resources.h"
 #include "scene/vulkan/scene_targets.h"
 #include "scene/vulkan/scene_vk_device.h"
@@ -123,9 +124,11 @@ SceneLightingUniforms sceneLighting(const SceneRenderer& renderer, const SceneEn
 }
 
 void writeCameraSet(SceneFrame& frame) {
-    const SceneCameraUniforms cam = frame.view.uniforms(&frame.renderer);
+    SceneCameraUniforms cam = frame.view.uniforms(&frame.renderer);
+    // The frame's own view: the HiZ its opaque passes build is this view's.
+    cam.occlusion[0] = hiZEnabled() && frame.gpu.targets.hiZ.isValid() ? 1.0f : 0.0f;
     const VkDescriptorBufferInfo camInfo = frame.gpu.device.frameUniform(&cam, sizeof(cam));
-    frame.cameraSet = frame.gpu.device.frameSet(frame.gpu.defaults.cameraLayout);
+    frame.cameraSet =frame.gpu.device.frameSet(frame.gpu.defaults.cameraLayout);
     SceneVkDescriptorWriter camWriter;
     camWriter.writeBuffer(0, camInfo.buffer, camInfo.range, camInfo.offset);
     camWriter.updateSet(frame.gpu.device.device(), frame.cameraSet);
@@ -145,6 +148,8 @@ VkDescriptorSet writeLightingSet(SceneGpu& gpu, const SceneLightingUniforms& uni
                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
     writer.writeImage(9, gpu.targets.farDepth.isValid() ? gpu.targets.farDepth.view : d.white.view, VK_NULL_HANDLE,
                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
+    writer.writeImage(10, gpu.targets.hiZ.isValid() ? gpu.targets.hiZ.view : d.white.view, VK_NULL_HANDLE,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
     gpu.environment.writeBindings(writer, d);
     writer.updateSet(gpu.device.device(), set);
     return set;
@@ -154,6 +159,8 @@ void PassFrameUniforms::declare(const SceneFrame& frame, PassIO& io) const {
     io.sample(frame.gpu.targets.shadowAtlas);
     // (Read by the forest's sprites, mesh.frag's forestFarRejected.)
     io.sample(frame.gpu.targets.farDepth);
+    // (And its pyramid, by their vertex stage: scene_occlusion.glsl.)
+    io.sample(frame.gpu.targets.hiZ);
 }
 
 namespace {

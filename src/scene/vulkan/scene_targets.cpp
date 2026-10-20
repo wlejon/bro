@@ -94,7 +94,7 @@ bool SceneTargets::createAttachment(SceneVkAllocator& allocator, SceneVkImage& o
 }
 
 void SceneTargets::destroyFrameImages(SceneVkAllocator& allocator) {
-    for (SceneVkImage* img : {&hdr, &hdrMsaa, &depth, &depthMsaa, &depthSnapshot, &farDepth, &ssrSnapshot, &dofHdr,
+    for (SceneVkImage* img : {&hdr, &hdrMsaa, &depth, &depthMsaa, &depthSnapshot, &farDepth, &hiZ, &ssrSnapshot, &dofHdr,
                               &postLdr, &ldr}) {
         allocator.destroyImage(*img);
     }
@@ -124,6 +124,16 @@ bool SceneTargets::ensure(SceneVkAllocator& allocator, uint32_t width, uint32_t 
               createSampled(allocator, dofHdr, kHdrFormat, kColor, false) &&
               createSampled(allocator, postLdr, kLdrFormat, kColor, false) &&
               createSampled(allocator, ldr, kLdrFormat, kColor | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, false);
+    if (ok) {
+        // farDepth's pyramid: half its size at level 0, down to one texel.
+        const uint32_t w = (width + 1) / 2, h = (height + 1) / 2;
+        uint32_t levels = 1;
+        while ((std::max(w, h) >> levels) > 0) ++levels;
+        ok = allocator.createImage(w, h, kFarDepthFormat,
+                                   VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                                       VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                                   VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, hiZ, levels);
+    }
     if (ok && msaa()) {
         ok = createAttachment(allocator, hdrMsaa, kHdrFormat, kColor, samples) &&
              createAttachment(allocator, depthMsaa, kDepthFormat, kDepthUse, samples);

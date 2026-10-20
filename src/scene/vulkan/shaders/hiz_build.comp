@@ -1,0 +1,40 @@
+#version 450
+// One level of the HiZ (SceneTargets::hiZ, PassHiZ): each texel the farthest
+// depth of the 2x2 below it, from farDepth (level 0) or the level under it.
+// The last texel of a row or column also takes in what the level below has
+// past twice its index (an odd size, or farDepth's odd size under level 0's
+// rounded-up one), so every pixel is under some texel of every level and a
+// rect clamped to a level's last texel still sees it (scene_occlusion.glsl).
+
+// The camera depth policy (scene/vulkan/scene_vk_depth.h).
+layout(constant_id = 0) const bool REVERSED_Z = true;
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D farDepth;
+layout(set = 0, binding = 1, r32f) uniform readonly image2D srcLevel;
+layout(set = 0, binding = 2, r32f) uniform writeonly image2D dstLevel;
+
+layout(push_constant) uniform Push { int fromFarDepth; } pc;
+
+float srcAt(ivec2 p) {
+    return pc.fromFarDepth != 0 ? texelFetch(farDepth, p, 0).r : imageLoad(srcLevel, p).r;
+}
+
+void main() {
+    ivec2 d = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 dd = imageSize(dstLevel);
+    if (d.x >= dd.x || d.y >= dd.y) return;
+    ivec2 ss = pc.fromFarDepth != 0 ? textureSize(farDepth, 0) : imageSize(srcLevel);
+    ivec2 s0 = min(d * 2, ss - 1);
+    ivec2 s1 = min(d * 2 + 1, ss - 1);
+    if (d.x == dd.x - 1) s1.x = ss.x - 1;
+    if (d.y == dd.y - 1) s1.y = ss.y - 1;
+    float far = srcAt(s0);
+    for (int y = s0.y; y <= s1.y; ++y)
+        for (int x = s0.x; x <= s1.x; ++x) {
+            float v = srcAt(ivec2(x, y));
+            far = REVERSED_Z ? min(far, v) : max(far, v);
+        }
+    imageStore(dstLevel, d, vec4(far));
+}

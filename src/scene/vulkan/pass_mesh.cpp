@@ -1,5 +1,6 @@
 #include "scene/vulkan/pass_mesh.h"
 
+#include "scene/vulkan/pass_hiz.h"
 #include "scene/mesh_node.h"
 #include "scene/scene_graph.h"
 #include "scene/vulkan/scene_defaults.h"
@@ -88,17 +89,25 @@ void PassForestBatches::declare(const SceneFrame& frame, PassIO& io) const {
             at = end;
         }
     }
-    if (b.sprites) io.transferDst(frame.gpu.targets.farDepth);
+    if (b.sprites) {
+        io.transferDst(frame.gpu.targets.farDepth);
+        if (hiZEnabled()) io.transferDst(frame.gpu.targets.hiZ);
+    }
 }
 
 void PassForestBatches::record(SceneFrame& frame) {
     if (!batches_.sprites) return;
-    // Nothing drawn yet: the first batch drops nothing.
+    // Nothing drawn yet: the first batch drops nothing, by pixel or by card.
     VkClearColorValue far{};
     far.float32[0] = depth::clearFar();
     const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     vkCmdClearColorImage(frame.cmd, frame.gpu.targets.farDepth.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &far, 1,
                          &range);
+    SceneVkImage& hiZ = frame.gpu.targets.hiZ;
+    if (hiZEnabled() && hiZ.isValid()) {
+        const VkImageSubresourceRange all{VK_IMAGE_ASPECT_COLOR_BIT, 0, hiZ.mipLevels, 0, 1};
+        vkCmdClearColorImage(frame.cmd, hiZ.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &far, 1, &all);
+    }
 }
 
 bool PassOpaque::active(const SceneFrame&) const {
@@ -110,7 +119,11 @@ void PassOpaque::declare(const SceneFrame& frame, PassIO& io) const {
     // (Its draws light through the shadow atlas: readable even where the
     // planned casters drew last, PassShadow::Part::Planned.)
     io.sample(frame.gpu.targets.shadowAtlas);
-    if (batches_.sprites) io.sample(frame.gpu.targets.farDepth);
+    if (batches_.sprites) {
+        io.sample(frame.gpu.targets.farDepth);
+        // (Its sprites' cards cull against the pyramid: scene_occlusion.glsl.)
+        io.sample(frame.gpu.targets.hiZ);
+    }
     // A forest's planned draws read the plan's entries and commands.
     if (frame.computeApart()) io.readsCompute();
 }

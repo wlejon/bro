@@ -144,6 +144,7 @@ add_library(bro_scene STATIC
     vulkan/scene_mesh_drawer_grass.cpp
     vulkan/scene_mesh_drawer_ground.cpp
     vulkan/pass_ground_layers.cpp
+    vulkan/pass_hiz.cpp
     vulkan/scene_surface_layers.cpp
     vulkan/scene_mesh_drawer_forest.cpp
     vulkan/scene_mesh_drawer_forest_gpu.cpp

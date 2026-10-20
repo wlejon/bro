@@ -9,6 +9,7 @@
 #include "scene/vulkan/pass_ground_layers.h"
 #include "scene/vulkan/pass_environment.h"
 #include "scene/vulkan/pass_gaussian_splat.h"
+#include "scene/vulkan/pass_hiz.h"
 #include "scene/vulkan/pass_mesh.h"
 #include "scene/vulkan/pass_particles.h"
 #include "scene/vulkan/pass_postfx.h"
@@ -60,6 +61,7 @@ SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
     graph_.add(std::make_unique<PassOpaque>(opaqueBatches_, 0));
     for (int k = 1; k < OpaqueBatches::kBatches; ++k) {
         graph_.add(std::make_unique<PassFarDepth>(opaqueBatches_, k));
+        graph_.add(std::make_unique<PassHiZ>(opaqueBatches_, k));
         graph_.add(std::make_unique<PassOpaque>(opaqueBatches_, k));
     }
     graph_.add(std::make_unique<PassDepthSnapshot>());

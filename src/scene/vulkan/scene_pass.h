@@ -31,6 +31,7 @@ enum class ImageAccess : uint8_t {
     DepthTarget,      // rendered into as a depth attachment (own rendering)
     TransferSrc,
     TransferDst,
+    Storage,          // read and written as a storage image (GENERAL)
 };
 
 /// The HDR raster scope: the frame's colour + depth target (MSAA when the
@@ -49,6 +50,7 @@ public:
     void depthTarget(SceneVkImage& image) { add(image, ImageAccess::DepthTarget); }
     void transferSrc(SceneVkImage& image) { add(image, ImageAccess::TransferSrc); }
     void transferDst(SceneVkImage& image) { add(image, ImageAccess::TransferDst); }
+    void storage(SceneVkImage& image) { add(image, ImageAccess::Storage); }
 
     /// Draw into the HDR scope. Consecutive passes that ask for the same
     /// attachments share one scope.

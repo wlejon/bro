@@ -27,6 +27,7 @@ layout(set = 0, binding = 0) uniform CameraUBO {
     vec4 plantMoverInfo;   // x: movers, y: trail samples a mover
     vec4 plantMovers[8];   // two a mover: (camera-relative x, z, its trail's reach, radius), (height, strength, 0, 0)
     vec4 plantTrail[80];   // y samples a mover, oldest first: (camera-relative x, z, age (s), window)
+    vec4 occlusion;   // x: 1 when the lighting set's HiZ is this view's (scene_occlusion.glsl)
 } camera;
 
 // The engine's wind uniforms under the names custom shader chunks use.

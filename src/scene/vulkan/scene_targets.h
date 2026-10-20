@@ -17,6 +17,11 @@
 //   farDepth                 the opaque depth drawn so far, each pixel's
 //                            farthest sample (R32F, PassFarDepth): what the
 //                            forest's later sprites are rejected against.
+//   hiZ                      farDepth's pyramid (R32F, PassHiZ): level 0
+//                            half its size, each texel the farthest of the
+//                            2x2 below, so a box tested against a few texels
+//                            of the level its size picks is behind all that
+//                            was drawn under it (scene_occlusion.glsl).
 //   ssrSnapshot              the lit opaque colour SSR reflects.
 //   dofHdr, postLdr, ldr     the post chain; ldr is the frame's output.
 //   shadowAtlas              every light's shadow tiles (SceneRenderer's
@@ -80,6 +85,7 @@ public:
     SceneVkImage depth, depthMsaa;
     SceneVkImage depthSnapshot;
     SceneVkImage farDepth;
+    SceneVkImage hiZ;
     SceneVkImage ssrSnapshot;
     SceneVkImage dofHdr;
     SceneVkImage postLdr;
