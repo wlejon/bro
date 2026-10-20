@@ -330,7 +330,6 @@ private:
         SurfaceLayers tiles;
         SceneSurfaceLayerAtlas atlas;
         uint64_t frame = 0;
-        uint64_t serial = 0;   // the engine frame last updated in
         uint64_t turfKey = 0;  // the turf meshes the tiles' items were taken from
         bromath::AABB3 bounds = bromath::aempty3();   // the items' union
         bool failed = false;   // its atlas could not be made: the turf works everything out

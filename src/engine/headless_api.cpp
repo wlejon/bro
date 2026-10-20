@@ -537,6 +537,23 @@ double Engine::gpuFrameMs(bool wait) {
     return lastGpuFrameMs_;
 }
 
+bool Engine::gpuPasses(std::vector<std::pair<std::string, double>>& passes,
+                       std::vector<std::pair<std::string, double>>& compute, bool& computed) {
+    passes.clear();
+    compute.clear();
+    computed = false;
+#if BRO_WITH_3D
+    scene::SceneRenderer::timeGpuPasses();
+    renderPendingScenes(true);
+    bool any = false;
+    for (auto& sg : sceneGraphs_)
+        if (sg.graph && sg.graph->renderer().gpuPasses(passes, compute, computed)) any = true;
+    return any;
+#else
+    return false;
+#endif
+}
+
 dom::Element* Engine::querySelector(const std::string& selector) const {
     if (!document_) return nullptr;
 

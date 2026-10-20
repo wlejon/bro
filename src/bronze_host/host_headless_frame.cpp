@@ -894,6 +894,25 @@ void installHeadlessFrame(engine::Engine& engine) {
             }
             return ev::fromDouble(engine.gpuFrameMs(wait));
         });
+    setPerfFn("gpuPasses", 0,
+        [&engine](Value, std::span<const Value>) -> Value {
+            // The last timed scene render's GPU ms pass by pass, {name: ms},
+            // its async compute stream's under `compute`. The first call
+            // turns the stamps on: {} until a render after it is read.
+            std::vector<std::pair<std::string, double>> passes, compute;
+            bool computed = false;
+            ev::Persistent o(ev::createObject());
+            if (!engine.gpuPasses(passes, compute, computed)) return o.get();
+            for (const auto& [name, ms] : passes)
+                o.set(ev::setProperty(o.get(), name.c_str(), ev::fromDouble(ms)));
+            if (computed) {
+                ev::Persistent c(ev::createObject());
+                for (const auto& [name, ms] : compute)
+                    c.set(ev::setProperty(c.get(), name.c_str(), ev::fromDouble(ms)));
+                o.set(ev::setProperty(o.get(), "compute", c.get()));
+            }
+            return o.get();
+        });
     ev::registerGlobal("perf", perf.get());
 }
 

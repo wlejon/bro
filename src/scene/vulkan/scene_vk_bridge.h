@@ -67,6 +67,10 @@ public:
     /// nothing was rendered (or timed) since the previous call. Not `wait`:
     /// the oldest render finished and not read yet (SceneGpuTimer::takeMs).
     double takeGpuMs(bool wait = true) { return timer_.takeMs(wait); }
+    /// The last timed render's passes (SceneGpuTimer::lastPasses).
+    bool gpuPasses(SceneGpuTimer::Passes& passes, SceneGpuTimer::Passes& compute, bool& computed) {
+        return timer_.lastPasses(passes, compute, computed);
+    }
 
 private:
     bool ensureReadbackBuffer();

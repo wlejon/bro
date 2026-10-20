@@ -372,12 +372,10 @@ void PassShadow::record(SceneFrame& frame) {
             const char* label = draw.shadowTimerLabel ? draw.shadowTimerLabel : kKindLabels[static_cast<int>(draw.kind)];
             if (frame.timer && run && run != label) frame.timer->mark(cmd, run);
             run = label;
-            if (frame.timer) frame.timer->statBegin(cmd, label);
             drawCaster(frame, lightViewProj, draw, culling ? &tile.frustum : nullptr);
-            if (frame.timer) frame.timer->statEnd(cmd);
         }
         if (frame.timer && run) frame.timer->mark(cmd, run);
-        // Each tile's end, so a pass log splits the shadows by tile (a
+        // Each tile's end, so the timed passes split the shadows by tile (a
         // cascade or a local light's face): the marks since the last tile's
         // are this one's (its own: its clear).
         static const char* const kTileLabels[32] = {

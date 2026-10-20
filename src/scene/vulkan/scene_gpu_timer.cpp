@@ -2,23 +2,36 @@
 
 #include "render/vulkan_frames.h"
 #include "render/vulkan_queue.h"
-#include "util/log.h"
 
 #include <algorithm>
-#include <cstdio>
-#include <iterator>
-#include <cstdlib>
+#include <atomic>
 #include <cstring>
-#include <string>
+#include <iterator>
 #include <vector>
 
 namespace bro::scene::vk {
 
 static_assert(render::VulkanFrames::kFramesInFlight <= 8, "SceneGpuTimer keeps marks for at most 8 slots");
 
+namespace {
+std::atomic<bool> g_timePasses{false};
+
+// `name`'s entry in `passes` grown by `ms` (a name marked twice, summed).
+void addPass(SceneGpuTimer::Passes& passes, const char* name, double ms) {
+    for (auto& [n, v] : passes)
+        if (n == name) {
+            v += ms;
+            return;
+        }
+    passes.emplace_back(name, ms);
+}
+}  // namespace
+
+void SceneGpuTimer::timePasses() { g_timePasses.store(true, std::memory_order_relaxed); }
+
 SceneGpuTimer::~SceneGpuTimer() {
     VkDevice device = context_.device();
-    for (VkQueryPool pool : {pool_, statPool_, computePool_})
+    for (VkQueryPool pool : {pool_, computePool_})
         if (pool != VK_NULL_HANDLE) context_.frames().defer([device, pool] { vkDestroyQueryPool(device, pool, nullptr); });
 }
 
@@ -36,22 +49,10 @@ bool SceneGpuTimer::init() {
     const uint32_t bits = families[family].timestampValidBits;
     validMask_ = bits >= 64 ? ~0ull : ((1ull << bits) - 1);
     periodNs_ = props.limits.timestampPeriod;
-    if (const char* env = std::getenv("BRO_SCENE_GPU_PASSES"); env && *env) passLogMs_ = std::atof(env);
 
     VkQueryPoolCreateInfo info{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
     info.queryType = VK_QUERY_TYPE_TIMESTAMP;
     info.queryCount = kPerSlot * render::VulkanFrames::kFramesInFlight;
-    // BRO_SCENE_GPU_FRAGS: each opaque draw's fragment shader invocations too
-    // (a pipeline-statistics query a draw): overdraw, which the times alone
-    // don't tell from a costly shader.
-    if (const char* env = std::getenv("BRO_SCENE_GPU_FRAGS");
-        env && *env && passLogMs_ >= 0.0 && context_.features().pipelineStatisticsQuery) {
-        VkQueryPoolCreateInfo s{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
-        s.queryType = VK_QUERY_TYPE_PIPELINE_STATISTICS;
-        s.pipelineStatistics = VK_QUERY_PIPELINE_STATISTIC_FRAGMENT_SHADER_INVOCATIONS_BIT;
-        s.queryCount = kMaxStats * render::VulkanFrames::kFramesInFlight;
-        vkCreateQueryPool(context_.device(), &s, nullptr, &statPool_);
-    }
     // The async compute queue's stamps, when its family writes them.
     const int computeFamily = context_.queueFamilies().computeFamily;
     if (context_.asyncComputeQueue() && computeFamily >= 0 && static_cast<uint32_t>(computeFamily) < familyCount &&
@@ -104,27 +105,10 @@ void SceneGpuTimer::begin(VkCommandBuffer cmd) {
     markCount_[pair] = 0;
     computeTimed_[pair] = false;
     computeCmd_ = VK_NULL_HANDLE;
-    statCount_[pair] = 0;
-    if (statPool_ != VK_NULL_HANDLE) vkCmdResetQueryPool(cmd, statPool_, kMaxStats * pair, kMaxStats);
-}
-
-void SceneGpuTimer::statBegin(VkCommandBuffer cmd, const char* name) {
-    if (statPool_ == VK_NULL_HANDLE || recordingPair_ == UINT32_MAX) return;
-    uint32_t& n = statCount_[recordingPair_];
-    if (n >= kMaxStats) return;
-    vkCmdBeginQuery(cmd, statPool_, kMaxStats * recordingPair_ + n, 0);
-    statNames_[recordingPair_][n++] = name;
-    statOpen_ = true;
-}
-
-void SceneGpuTimer::statEnd(VkCommandBuffer cmd) {
-    if (!statOpen_) return;
-    statOpen_ = false;
-    vkCmdEndQuery(cmd, statPool_, kMaxStats * recordingPair_ + statCount_[recordingPair_] - 1);
 }
 
 void SceneGpuTimer::mark(VkCommandBuffer cmd, const char* name) {
-    if (passLogMs_ < 0.0 || recordingPair_ == UINT32_MAX) return;
+    if (recordingPair_ == UINT32_MAX || !g_timePasses.load(std::memory_order_relaxed)) return;
     if (cmd == computeCmd_ && cmd != VK_NULL_HANDLE) {
         // (The compute stream's own stage: its queue's clock.)
         uint32_t& c = computeMarkCount_[recordingPair_];
@@ -153,9 +137,7 @@ void SceneGpuTimer::submitted(uint64_t ticket) {
     computeCmd_ = VK_NULL_HANDLE;
 }
 
-double SceneGpuTimer::takeMs(bool wait) {
-    // The renders submitted and not read, oldest first: each finished one
-    // read; not `wait`ing, up to the first still on the GPU.
+void SceneGpuTimer::drain(bool wait) {
     for (;;) {
         uint32_t pair = UINT32_MAX;
         for (uint32_t i = 0; i < render::VulkanFrames::kFramesInFlight; ++i)
@@ -176,6 +158,10 @@ double SceneGpuTimer::takeMs(bool wait) {
         }
         ready_[readyCount_++] = ms;
     }
+}
+
+double SceneGpuTimer::takeMs(bool wait) {
+    drain(wait);
     if (readyCount_ == 0) return -1.0;
     if (wait) {
         const double last = ready_[readyCount_ - 1];
@@ -186,6 +172,15 @@ double SceneGpuTimer::takeMs(bool wait) {
     std::copy(ready_ + 1, ready_ + readyCount_, ready_);
     --readyCount_;
     return first;
+}
+
+bool SceneGpuTimer::lastPasses(Passes& passes, Passes& compute, bool& computed) {
+    drain(true);
+    if (!havePasses_) return false;
+    passes = lastPasses_;
+    compute = lastCompute_;
+    computed = lastComputed_;
+    return true;
 }
 
 double SceneGpuTimer::harvest(uint32_t pair) {
@@ -216,56 +211,32 @@ double SceneGpuTimer::harvest(uint32_t pair) {
     const uint64_t from = lastEnd_ > start && lastEnd_ < end ? lastEnd_ : start;
     lastEnd_ = end;
     const double total = static_cast<double>(end - from) * periodNs_ / 1.0e6;
-    if (passLogMs_ >= 0.0 && (marks > 0 || cmarks > 0) && total > passLogMs_) {
-        std::string line;
+    if (marks > 0 || cmarks > 0) {
+        // Its passes, each from the mark before it. (Past kMaxMarks the
+        // render's later marks were not written: their time is in `rest`.)
+        lastPasses_.clear();
         uint64_t prev = stamps[0];
-        char buf[96];
         for (uint32_t i = 0; i < marks; ++i) {
-            const double d = ms(prev, stamps[2 + i]);
+            addPass(lastPasses_, markNames_[pair][i], ms(prev, stamps[2 + i]));
             prev = stamps[2 + i];
-            // (A shadow tile's end stays, short or not: it bounds the tile's marks.)
-            if (d < 0.01 && std::strncmp(markNames_[pair][i], "shadow:tile", 11) != 0) continue;
-            std::snprintf(buf, sizeof(buf), " %s %.2f", markNames_[pair][i], d);
-            line += buf;
         }
-        std::snprintf(buf, sizeof(buf), " rest %.2f", ms(prev, stamps[1]));
-        line += buf;
-        // (Past kMaxMarks the render's later marks were not written: their
-        // time is in `rest`.)
-        if (marks >= kMaxMarks) line += " (marks full)";
+        addPass(lastPasses_, "rest", ms(prev, stamps[1]));
+        // The compute queue's stages, from its own start.
+        lastCompute_.clear();
+        lastComputed_ = computed;
         if (computed) {
-            // The compute queue's stages, from its own start.
             const auto cms = [&](uint64_t a, uint64_t b) {
                 return static_cast<double>(((b & computeMask_) - (a & computeMask_)) & computeMask_) * periodNs_ /
                        1.0e6;
             };
-            std::snprintf(buf, sizeof(buf), " | compute %.2f:", cms(cstamps[0], cstamps[1]));
-            line += buf;
             uint64_t at = cstamps[0];
             for (uint32_t i = 0; i < cmarks; ++i) {
-                const double d = cms(at, cstamps[2 + i]);
+                addPass(lastCompute_, computeMarkNames_[pair][i], cms(at, cstamps[2 + i]));
                 at = cstamps[2 + i];
-                if (d < 0.01) continue;
-                std::snprintf(buf, sizeof(buf), " %s %.2f", computeMarkNames_[pair][i], d);
-                line += buf;
             }
-            std::snprintf(buf, sizeof(buf), " rest %.2f", cms(at, cstamps[1]));
-            line += buf;
+            addPass(lastCompute_, "rest", cms(at, cstamps[1]));
         }
-        LOG_INFO("scene GPU %.2f ms:%s", total, line.c_str());
-        if (const uint32_t ns = statCount_[pair]; statPool_ != VK_NULL_HANDLE && ns > 0) {
-            uint64_t inv[kMaxStats] = {};
-            std::string s;
-            if (vkGetQueryPoolResults(context_.device(), statPool_, kMaxStats * pair, ns, sizeof(inv), inv,
-                                      sizeof(uint64_t), VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT) == VK_SUCCESS) {
-                for (uint32_t i = 0; i < ns; ++i) {
-                    std::snprintf(buf, sizeof(buf), " %s %llu", statNames_[pair][i],
-                                  static_cast<unsigned long long>(inv[i]));
-                    s += buf;
-                }
-                LOG_INFO("scene FRAG:%s", s.c_str());
-            }
-        }
+        havePasses_ = true;
     }
     return total;
 }

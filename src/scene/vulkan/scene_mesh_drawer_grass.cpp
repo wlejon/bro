@@ -481,7 +481,7 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
         draw.push.extra[1] = node.subsurface();
         draw.push.extra[3] = 1.0f + 256.0f;   // no atlas
         draw.twoSided = true;
-        // (Timed by ring: BRO_SCENE_GPU_PASSES.)
+        // (Timed by ring: perf.gpuPasses().)
         static constexpr const char* kRingLabels[GrassNode::kRings] = {"grass:ring0", "grass:ring1", "grass:ring2",
                                                                        "grass:ring3"};
         draw.timerLabel = kRingLabels[r];
@@ -582,7 +582,7 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
         draw.push.extra[1] = node.subsurface();
         draw.push.extra[3] = 1.0f + 256.0f;   // no atlas
         draw.twoSided = true;
-        // (Timed by ring: BRO_SCENE_GPU_PASSES.)
+        // (Timed by ring: perf.gpuPasses().)
         static constexpr const char* kHerbLabels[GrassNode::kHerbRings] = {"herb:ring0", "herb:ring1", "herb:ring2"};
         draw.timerLabel = kHerbLabels[r];
         draw.castsShadow = false;

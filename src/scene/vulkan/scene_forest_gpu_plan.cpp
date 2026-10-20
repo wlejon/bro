@@ -660,7 +660,7 @@ void GpuPlanner::record(SceneFrame& frame) {
     // join (a timeline wait) orders them after the plan, and its barriers
     // name only the stages a compute queue has.
     const bool apart = frame.computeApart();
-    // (The timed passes' stages, BRO_SCENE_GPU_PASSES.)
+    // (The timed passes' stages, perf.gpuPasses().)
     const auto mark = [&](const char* name) {
         if (frame.timer) frame.timer->mark(cmd, name);
     };

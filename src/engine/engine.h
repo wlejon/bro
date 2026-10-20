@@ -497,6 +497,12 @@ public:
     bool screenshot(const std::string& path, int x, int y, int w, int h);
     std::vector<uint8_t> capturePixels();
     double gpuFrameMs(bool wait = true);
+    /// The last timed scene render's GPU milliseconds pass by pass (the
+    /// page's scenes added by name), and its async compute stream's
+    /// (`computed`: there was one). The first call turns the passes' stamps
+    /// on, so it finds none; false while no render with them has been read.
+    bool gpuPasses(std::vector<std::pair<std::string, double>>& passes,
+                   std::vector<std::pair<std::string, double>>& compute, bool& computed);
 
     dom::Element* querySelector(const std::string& selector) const;
     // Builds the panel first if it has not been shown yet.

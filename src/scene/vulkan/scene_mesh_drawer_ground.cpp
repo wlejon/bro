@@ -182,11 +182,6 @@ void SceneMeshDrawer::recordGroundLayers(SceneFrame& frame) {
         const auto found = groundLayers_.find(grassId);
         if (found == groundLayers_.end() || found->second->failed) continue;
         GroundLayers& gl = *found->second;
-        // Once a frame (BRO_SCENE_GPU_REPEAT records the graph again: those
-        // draw from what the first filled).
-        const uint64_t serial = frame.gpu.device.frames().frameSerial();
-        if (gl.serial == serial) continue;
-        gl.serial = serial;
         SceneNode* gn = frame.graph.findById(grassId);
         MeshNode* gm = gn && gn->type() == SceneNode::Type::Mesh ? static_cast<MeshNode*>(gn) : nullptr;
         GrassNode* grass = gm ? gm->asGrass() : nullptr;

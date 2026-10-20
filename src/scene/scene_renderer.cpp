@@ -150,6 +150,29 @@ double SceneRenderer::takeGpuMs(bool wait) {
     return vkBridge_ ? vkBridge_->takeGpuMs(wait) : -1.0;
 }
 
+void SceneRenderer::timeGpuPasses() { vk::SceneGpuTimer::timePasses(); }
+
+bool SceneRenderer::gpuPasses(std::vector<std::pair<std::string, double>>& passes,
+                              std::vector<std::pair<std::string, double>>& compute, bool& computed) {
+    vk::SceneGpuTimer::Passes p, c;
+    bool apart = false;
+    if (!vkBridge_ || !vkBridge_->gpuPasses(p, c, apart)) return false;
+    // (Added by name: a page's scenes summed, as perf.gpuFrameMs sums them.)
+    const auto add = [](std::vector<std::pair<std::string, double>>& into, const vk::SceneGpuTimer::Passes& from) {
+        for (const auto& [name, ms] : from) {
+            auto it = std::find_if(into.begin(), into.end(), [&](const auto& e) { return e.first == name; });
+            if (it != into.end())
+                it->second += ms;
+            else
+                into.emplace_back(name, ms);
+        }
+    };
+    add(passes, p);
+    add(compute, c);
+    computed = computed || apart;
+    return true;
+}
+
 void SceneRenderer::render3D() {
     if (!defaultVulkanContext_) {
         static bool warned = false;

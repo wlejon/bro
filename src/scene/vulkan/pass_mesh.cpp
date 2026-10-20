@@ -51,7 +51,7 @@ bool crowns(const MeshDraw& d) {
 // Where each batch's share of a draw's entries (nearest first) ends, as the
 // GPU planner splits its draws (scene_forest_plan_layout.h): the nearest few
 // cover most of what the draw covers, and each boundary costs a pass over
-// the depth. On the wilds routes (GPU ms, REPEAT=4) 5% / 25% beat 10% / 35%,
+// the depth. On the wilds routes (GPU ms at full clocks) 5% / 25% beat 10% / 35%,
 // 10% / 45%, 20% / 50% and 3% / 15%.
 static_assert(FP_BATCHES == OpaqueBatches::kBatches);
 constexpr float kBatchEnd[OpaqueBatches::kBatches] = {static_cast<float>(FP_BATCH_END_0),
@@ -181,13 +181,9 @@ void PassOpaque::recordDraw(SceneFrame& frame, const OpaqueBatches::Draw& d, Mes
         draw.firstInstance += d.first;
         draw.instanceCount = d.count;
     }
-    if (frame.timer) frame.timer->statBegin(frame.cmd, label);
     const SceneMeshDrawer::ChunkCull cull{frame.renderer.cullingFrustum(), frame.view.eye, true};
     frame.gpu.meshes.record(frame.cmd, frame.hdrTarget, cameraSet, frame.lightingSet, draw, &cull);
-    if (frame.timer) {
-        frame.timer->statEnd(frame.cmd);
-        frame.timer->mark(frame.cmd, label);
-    }
+    if (frame.timer) frame.timer->mark(frame.cmd, label);
 }
 
 bool PassFarDepth::setup(SceneGpu& gpu) {

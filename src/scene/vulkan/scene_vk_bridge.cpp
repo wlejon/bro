@@ -24,7 +24,6 @@
 #include "util/log.h"
 
 #include <algorithm>
-#include <cstdlib>
 
 namespace bro::scene::vk {
 
@@ -160,25 +159,7 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
     timer_.mark(cmd, "forestPose");
     if (frame.computeApart()) timer_.mark(frame.computeCmd, "forestPose");
 
-    // BRO_SCENE_GPU_REPEAT=<n>: the frame's passes recorded n times back to
-    // back, timed (SceneGpuTimer) on the first alone: a measure at the GPU's
-    // full clocks while the CPU is the frame's bound, when a frame's GPU work
-    // alone leaves the GPU idle long enough to clock down and every pass
-    // reads slow by as much. (The first, not the last: on an RTX 4090 a run
-    // after another in the same command buffer culled less before shading,
-    // its forest clumps 2.7 times the fragments.)
-    static const int repeat = [] {
-        const char* env = std::getenv("BRO_SCENE_GPU_REPEAT");
-        return env && *env ? std::max(1, std::atoi(env)) : 1;
-    }();
     graph_.run(frame);
-    if (repeat > 1) {
-        timer_.end(frame.cmd);
-        const auto kept = frame.stats;
-        frame.timer = nullptr;
-        for (int i = 1; i < repeat; ++i) graph_.run(frame);
-        frame.stats = kept;
-    }
 
     // A frame whose compute no pass read (none declared it) still waits for
     // it before its end.
@@ -192,7 +173,7 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
     } else {
         SceneFrameGraph::transition(cmd, targets_.ldr, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     }
-    if (repeat <= 1) timer_.end(cmd);
+    timer_.end(cmd);
     const bool computeApart = frame.computeApart();
     if (computeApart) timer_.endCompute(frame.computeCmd);
     if (device_.submitFrame(cmd)) {
