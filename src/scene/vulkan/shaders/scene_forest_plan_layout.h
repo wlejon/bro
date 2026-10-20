@@ -18,8 +18,8 @@
 //              (world_cells_layout.h's OUT), read by the measure stage
 //
 // The trees are planned in the node's cell order (ForestNode::cellOrder):
-// the measure stage walks the trees of the cells some view sees, or with
-// BRO_WORLD_CELLS=0 every tree, in that order, and the stages after it walk
+// the measure stage walks the trees of the cells some view sees, in that
+// order, and the stages after it walk
 // what it measured (FP_N_MEASURED: their dispatches from words the measure
 // stage writes). A tree is its instance index everywhere else (the camera's
 // measure of it, an item, an entry), so the order is all the cells change.

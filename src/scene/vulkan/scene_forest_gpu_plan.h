@@ -30,7 +30,7 @@
 // camera and every shadow tile planned, and the measure stage walks the
 // trees of the cells in view alone, the stages after it what it measured.
 // The plan is the same as over every tree (a tree in a view is in a cell
-// in that view); BRO_WORLD_CELLS=0 walks every tree, for A/B.
+// in that view). Without the cell pass the forests plan on the CPU.
 
 #include "render/vulkan_frames.h"
 #include "scene/forest_node.h"
@@ -100,12 +100,11 @@ public:
         std::vector<uint32_t> specimenWords;
         SceneVkBuffer staticBuf, work, readback;
         // Its trees' cells (one provider), their GPU copy and the cell
-        // pass's output; `cellsOn` this frame's plan walks them.
+        // pass's output, which the plan walks.
         WorldCells cells_;
         WorldCells::Provider provider_ = cells_.addProvider();
         uint64_t cellsGeneration_ = 0;
         WorldCellsPass::Target cellTarget_;
-        bool cellsOn = false;
         // This frame's layout of the work buffer.
         uint32_t tiles = 0, aligned = 0, items = 0, itemGroups = 0;
         uint32_t runs[FP_W_RUNS] = {};

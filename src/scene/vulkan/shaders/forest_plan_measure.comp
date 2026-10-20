@@ -8,10 +8,10 @@
 //   PLAN_CLASSIFY  the bark classes of the trees measure listed, a thread
 //                  a segment across every workgroup
 //
-// The trees are walked in the node's cell order: with push.round 1 those of
-// the cells some view sees (the world cell pass's list, CELLS), else every
-// tree. A tree no view's cell holds is in no view, so the plan is the same
-// either way; only the trees walked are fewer. Each place measured keeps
+// The trees are walked in the node's cell order, those of the cells some
+// view sees (the world cell pass's list, CELLS). A tree no view's cell holds
+// is in no view, so the plan is that over every tree; only the trees walked
+// are fewer. Each place measured keeps
 // its tree (FP_W_TREE_OF) and its key and tile flags go at its place, so the
 // stages after walk the measured alone, in cell order (whose dispatches the
 // first thread writes). No far cell is planned apart yet: a far cell's trees
@@ -157,18 +157,15 @@ uint classifySetup(Spec sp, float px, float barkPx, inout uint curveEnd, inout u
 }
 
 // The tree at place `p` of those measured: the cells' (the cell in view
-// whose items hold it, the last starting at or before it) or the node's.
-uint treeAt(uint p, bool cells) {
-    uint k = p;
-    if (cells) {
-        uint lo = 0u, hi = planCells.w[WC_O_CELLS] - 1u;
-        while (lo < hi) {
-            uint mid = (lo + hi + 1u) >> 1;
-            if (planCells.w[WC_O_HEADER + mid * WC_V_WORDS + WC_V_PREFIX] <= p) lo = mid; else hi = mid - 1u;
-        }
-        uint v = WC_O_HEADER + lo * WC_V_WORDS;
-        k = planCells.w[v + WC_V_FIRST] + (p - planCells.w[v + WC_V_PREFIX]);
+// whose items hold it, the last starting at or before it).
+uint treeAt(uint p) {
+    uint lo = 0u, hi = planCells.w[WC_O_CELLS] - 1u;
+    while (lo < hi) {
+        uint mid = (lo + hi + 1u) >> 1;
+        if (planCells.w[WC_O_HEADER + mid * WC_V_WORDS + WC_V_PREFIX] <= p) lo = mid; else hi = mid - 1u;
     }
+    uint v = WC_O_HEADER + lo * WC_V_WORDS;
+    uint k = planCells.w[v + WC_V_FIRST] + (p - planCells.w[v + WC_V_PREFIX]);
     return su(su(FP_ST_ORDER) + k);
 }
 
@@ -192,14 +189,13 @@ void main() {
     uint lid = gl_LocalInvocationID.x;
     if (lid < uint(FP_MAX_VIEWS)) sCount[lid] = 0u;
     barrier();
-    bool cells = planPush.round != 0u;
-    uint measured = cells ? min(planCells.w[WC_O_ITEMS], gTrees) : gTrees;
+    uint measured = min(planCells.w[WC_O_ITEMS], gTrees);
     uint place = gl_GlobalInvocationID.x;
     uint keysA = workRun(FP_W_KEYS_A), valsA = workRun(FP_W_VALS_A);
     if (place == 0u) sizeStages(measured);
     if (place < measured) {
         uint key = FP_SORT_UNSEEN;
-        uint i = treeAt(place, cells);
+        uint i = treeAt(place);
         {
             Tree tr = planTree(i);
             Spec sp = planSpec(tr.specimen);
