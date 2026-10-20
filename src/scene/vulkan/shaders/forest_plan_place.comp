@@ -170,6 +170,42 @@ void twigs(uint t, Item it) {
     }
 }
 
+#if defined(PLAN_WRITE)
+// The block's long runs (deferRun, scene_forest_plan.glsl), their entries
+// end to end shared out an entry a thread. Every thread of the block calls
+// it, after its item's addTree and twigs.
+shared uint sRunEnd[FP_RUN_JOBS];   // the jobs' entries, an inclusive scan
+
+void runs(uint t) {
+    barrier();
+    uint jobs = min(sRunCount, uint(FP_RUN_JOBS));
+    if (jobs == 0u) return;
+    if (t == 0u) {
+        uint acc = 0u;
+        for (uint j = 0u; j < jobs; ++j) {
+            acc += sRunB[j].w;
+            sRunEnd[j] = acc;
+        }
+    }
+    barrier();
+    uint total = sRunEnd[jobs - 1u];
+    for (uint w = t; w < total; w += uint(FP_GROUP_SIZE)) {
+        uint lo = 0u, hi = jobs - 1u;
+        while (lo < hi) {
+            uint mid = (lo + hi) >> 1;
+            if (sRunEnd[mid] > w) hi = mid; else lo = mid + 1u;
+        }
+        uvec4 a = sRunA[lo], b = sRunB[lo];
+        vec4 c = sRunC[lo];
+        uint i = w - (lo > 0u ? sRunEnd[lo - 1u] : 0u);
+        uint first = i * a.w;
+        uint slot = b.z == 0xffffffffu ? 0xffffffffu : b.z + first;
+        entryAt(b.y + i, a.x, a.y + first, a.y + min(first + a.w, a.z), b.x, c.x, c.y, c.z, c.w, sRunD[lo].xyz,
+                slot);
+    }
+}
+#endif
+
 #if defined(PLAN_COST)
 // Per search (the camera's, the shadow's): the block's sum at the ask and
 // its fixed trees' (uint64 as lo, carries).
@@ -261,6 +297,8 @@ void main() {
 #if defined(PLAN_COUNT)
     if (t < 3u) sTiers[t] = 0u;
     if (t < 8u) sTally[t] = 0u;
+#else
+    if (t == 0u) sRunCount = 0u;
 #endif
     uint block = gl_WorkGroupID.x;
     uint index = block * uint(FP_GROUP_SIZE) + t;
@@ -342,6 +380,7 @@ void main() {
         planItemAdd(it, d);
     }
     twigs(t, it);
+    runs(t);
 #endif
 }
 #endif

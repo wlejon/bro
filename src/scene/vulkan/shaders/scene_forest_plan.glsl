@@ -21,7 +21,8 @@ layout(std430, set = 0, binding = 0) readonly buffer PlanStatic { uint w[]; } pl
 layout(std430, set = 0, binding = 1) readonly buffer PlanParams { uint w[]; } planParams;
 layout(std430, set = 0, binding = 2) buffer PlanWork { uint w[]; } planWork;
 layout(std430, set = 0, binding = 3) buffer PlanShared { uint w[]; } planShared;
-layout(std430, set = 0, binding = 4) writeonly buffer PlanEntries { uint w[]; } planEntries;
+// (An entry's records, a vec4 each: one store a record.)
+layout(std430, set = 0, binding = 4) writeonly buffer PlanEntries { uvec4 v[]; } planEntries;
 layout(std430, set = 0, binding = 5) buffer PlanArgs { uint w[]; } planArgs;
 
 // round: the search's round, or a sort's shift; offset, count, scratch: a
@@ -554,19 +555,16 @@ void planReset() {
 void entryAt(uint at, uint inst, uint first, uint end, uint param, float widening, float keepEnd, float tail,
              float fade, vec3 wood, uint slot) {
     if (at >= gEntryCap) return;
-    uint b = at * uint(FOREST_ENTRY_RECORDS * 4);
-    planEntries.w[b + FOREST_E_INSTANCE] = inst;
-    planEntries.w[b + FOREST_E_FIRST] = first;
-    planEntries.w[b + FOREST_E_END] = end;
-    planEntries.w[b + FOREST_E_PARAM] = param;
-    planEntries.w[b + FOREST_E_WIDENING] = floatBitsToUint(widening);
-    planEntries.w[b + FOREST_E_KEEP_END] = floatBitsToUint(keepEnd);
-    planEntries.w[b + FOREST_E_TAIL] = floatBitsToUint(tail);
-    planEntries.w[b + FOREST_E_FADE] = floatBitsToUint(fade);
-    planEntries.w[b + FOREST_E_SLOT] = slot;
-    planEntries.w[b + FOREST_E_WOOD] = floatBitsToUint(wood.x);
-    planEntries.w[b + FOREST_E_WOOD + 1] = floatBitsToUint(wood.y);
-    planEntries.w[b + FOREST_E_WOOD + 2] = floatBitsToUint(wood.z);
+    uint b = at * uint(FOREST_ENTRY_RECORDS);
+#if FOREST_E_FIRST != FOREST_E_INSTANCE + 1 || FOREST_E_END != FOREST_E_INSTANCE + 2 || \
+    FOREST_E_PARAM != FOREST_E_INSTANCE + 3 || FOREST_E_KEEP_END != FOREST_E_WIDENING + 1 || \
+    FOREST_E_TAIL != FOREST_E_WIDENING + 2 || FOREST_E_FADE != FOREST_E_WIDENING + 3 || \
+    FOREST_E_WOOD != FOREST_E_SLOT + 1
+#error "entryAt writes the entry's records whole"
+#endif
+    planEntries.v[b + FOREST_E_INSTANCE / 4] = uvec4(inst, first, end, param);
+    planEntries.v[b + FOREST_E_WIDENING / 4] = floatBitsToUint(vec4(widening, keepEnd, tail, fade));
+    planEntries.v[b + FOREST_E_SLOT / 4] = uvec4(slot, floatBitsToUint(wood));
 }
 void planEntry(int k, uint inst, uint first, uint end, uint param, float widening, float keepEnd, float tail,
                float fade, vec3 wood, bool camera) {
@@ -586,6 +584,43 @@ void planEntry(int k, uint inst, uint first, uint end, uint param, float widenin
     }
     entryAt(at, inst, first, end, param, widening, keepEnd, tail, fade, wood, slot);
 }
+#if defined(PLAN_WRITE)
+// A long run's entries are the workgroup's (forest_plan_place.comp's
+// runs()): its thread takes their places (and pose slots) as it goes and
+// leaves the run here, and the workgroup writes them after. A tree beside
+// the eye has runs of hundreds of entries, which one thread wrote while its
+// workgroup waited. Past the room, the thread writes its own.
+#define FP_RUN_DEFER_ENTRIES    8u    // a run this many entries long or more
+#define FP_RUN_JOBS             64
+shared uint sRunCount;
+shared uvec4 sRunA[FP_RUN_JOBS];   // inst, base, n, per
+shared uvec4 sRunB[FP_RUN_JOBS];   // param, its first place, its first pose slot (~0 none), its entries
+shared vec4 sRunC[FP_RUN_JOBS];    // widening, keep end, tail, fade
+shared vec4 sRunD[FP_RUN_JOBS];    // wood
+
+bool deferRun(int k, uint inst, uint base, uint n, uint per, uint param, float widening, float keepEnd, float tail,
+              float fade, vec3 wood, bool camera) {
+    uint e = (n + per - 1u) / per;
+    if (e < FP_RUN_DEFER_ENTRIES) return false;
+    uint job = atomicAdd(sRunCount, 1u);
+    if (job >= uint(FP_RUN_JOBS)) return false;
+    // planEntry's places and slots, a run's at once.
+    uint at = gAt[k];
+    gAt[k] += e;
+    uint slot = 0xffffffffu;
+    if (k == G_LEAF_CARD || (camera && k == G_LEAF_NEAR)) {
+        int j = k - G_LEAF_NEAR;
+        if (gPosed[j]) slot = gSlot[j];
+        gSlot[j] += n;
+    }
+    sRunA[job] = uvec4(inst, base, n, per);
+    sRunB[job] = uvec4(param, at, slot, e);
+    sRunC[job] = vec4(widening, keepEnd, tail, fade);
+    sRunD[job] = vec4(wood, 0.0);
+    return true;
+}
+#endif
+
 // A run [0, n) in entries of `per` each, from `base`: counted at once, or written.
 void planRun(int k, uint inst, uint base, uint n, uint per, uint param, float widening, float keepEnd, float tail,
              float fade, vec3 wood, bool camera) {
@@ -595,6 +630,9 @@ void planRun(int k, uint inst, uint base, uint n, uint per, uint param, float wi
         if (k == G_LEAF_CARD || (camera && k == G_LEAF_NEAR)) gCount[FP_GROUPS + k - G_LEAF_NEAR] += n;
         return;
     }
+#if defined(PLAN_WRITE)
+    if (deferRun(k, inst, base, n, per, param, widening, keepEnd, tail, fade, wood, camera)) return;
+#endif
     for (uint c = 0u; c < n; c += per)
         planEntry(k, inst, base + c, base + min(c + per, n), param, widening, keepEnd, tail, fade, wood, camera);
 }
