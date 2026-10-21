@@ -9,9 +9,16 @@
 //
 //  - transmittance: the table along rays to the top, against a 4000-step
 //    march;
-//  - sky radiance: the sky-view table at the eye, over zenith angles across
-//    its whole domain (the shell's edge to the nadir) and azimuths 0, 90 and
-//    180 degrees from the sun;
+//  - sky radiance: the sky-view table at the eye over a dense grid, zenith
+//    angles across its whole domain (the shell's edge to the nadir, the
+//    zenith cap finely) and azimuths every 5 degrees from the sun, finely
+//    about it;
+//  - the sky as drawn: the sky pass's pixels in three views (at the sun,
+//    straight up, away from it), so the shader's own direction -> table
+//    mapping, the sun's azimuth either side of the view and the dither are
+//    checked too; 1.5 codes of 8-bit step and dither, and the reference's
+//    own spread over the half texel the lookup is dithered by, are allowed
+//    before the relative error, with a floor of 2% of the view's peak;
 //  - aerial perspective: the froxel volume's in-scattered light and
 //    transmittance at columns across the frustum and slices near to far;
 //  - the sky's light: the SH table's irradiance on an upward surface at the
@@ -65,6 +72,11 @@ using bro::scene::atmref::V3;
 namespace {
 
 constexpr double kPi = 3.14159265358979323846;
+// Directions within 0.1 degree of the horizon are left out of the sky's
+// checks: the sky and the ground meet there in one texel row of the sky-view
+// table, and the sampler blends the two across it (the drawn sky puts the
+// ground's own pixels over that band).
+constexpr double kHorizonBand = 0.1 * kPi / 180.0;
 int failures = 0;
 
 double luminance(const double c[3]) { return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; }
@@ -223,9 +235,18 @@ int main() {
                     double got, want, z, az;   // degrees
                 };
                 std::vector<Sample> samples;
-                for (const double f : {0.02, 0.25, 0.5, 0.75, 0.92, 0.985, 1.03, 1.3, 1.8}) {
+                // A dense grid: the zenith cap finely, the sky every 2% of its
+                // span, under the horizon every 10%; azimuths every 5 degrees,
+                // finely about the sun.
+                std::vector<double> fs = {0.0, 0.002, 0.005, 0.01};
+                for (int i = 1; i <= 50; ++i) fs.push_back(i * 0.02);
+                for (int i = 1; i <= 9; ++i) fs.push_back(1.0 + i * 0.1);
+                std::vector<double> azs = {0.0, 1.0, 2.0, 3.0};
+                for (int i = 1; i <= 36; ++i) azs.push_back(i * 5.0);
+                for (const double f : fs) {
                     const double z = f <= 1.0 ? zTop + f * (zH - zTop) : zH + (f - 1.0) * (kPi - zH);
-                    for (const double azDeg : {0.0, 90.0, 180.0}) {
+                    if (std::abs(z - zH) < kHorizonBand) continue;
+                    for (const double azDeg : azs) {
                         const double az = azDeg * kPi / 180.0;
                         double u, v, s[4];
                         atm::skyViewUv(Rb, Rt, rv, std::cos(z), std::cos(az), u, v);
@@ -234,7 +255,7 @@ int main() {
                         double ta, tb;
                         bool ground;
                         RGB want;
-                        if (ref.segment(ro, rd, ta, tb, ground)) want = ref.radiance(ro, rd, sunL, ta, tb, 4000, nullptr);
+                        if (ref.segment(ro, rd, ta, tb, ground)) want = ref.radiance(ro, rd, sunL, ta, tb, 1000, nullptr);
                         samples.push_back({luminance(s), luminance(want.c), z * 180.0 / kPi, azDeg});
                     }
                 }
@@ -244,6 +265,115 @@ int main() {
                 for (const Sample& s : samples)
                     st.add(std::abs(s.got - s.want) / std::max(s.want, 1e-3 * peak), s.got, s.want, s.z, s.az);
                 check("sky radiance (sky-view)", st, twilight ? 0.30 : 0.12, twilight ? 0.15 : 0.08);
+            }
+
+            // --- The sky as drawn ------------------------------------------------
+            // The sky pass's pixels (its own direction -> table lookup, the
+            // sun's frame and both sides of its azimuth, the dither), every
+            // fourth pixel of three views: at the sun (its Mie lobe and the
+            // azimuths either side), straight up (the zenith cap) and away
+            // from the sun near the horizon. Linear tone curve, a fixed
+            // exposure that puts the view's brightest sky at 0.85.
+            if (alt < 100000.0) {
+                Stat st;
+                double zTopUnused, zHorizon;
+                atm::skyViewHorizon(Rb, Rt, Rb + alt, zTopUnused, zHorizon);
+                const V3 roRef{0.0, 0.0, Rb + alt};
+                const V3 sunRef{0.0, std::cos(se), std::sin(se)};   // world (x, y, z) -> (x, -z, y)
+                struct View {
+                    V3 dir;      // world
+                    double fov;  // degrees, vertical
+                };
+                const View views[] = {{{0.0, std::sin(se), -std::cos(se)}, 90.0},   // at the sun
+                                      {{0.0, 1.0, -0.002}, 100.0},                   // straight up
+                                      {{0.0, 0.25, 1.0}, 90.0}};                     // away
+                for (const View& vw : views) {
+                    constexpr int W = 192, H = 192, kStep = 4;
+                    scene::SceneGraph g2;
+                    g2.setCanvasSize(W, H);
+                    const V3 f = normalize(vw.dir);
+                    const bromath::Vec3 eye2{0.0f, static_cast<float>(alt), 0.0f};
+                    const bromath::Vec3 tgt{static_cast<float>(f.x * 100.0), static_cast<float>(alt + f.y * 100.0),
+                                            static_cast<float>(f.z * 100.0)};
+                    g2.setCamera(static_cast<float>(vw.fov * kPi / 180.0), 1.0f, 0.5f, 1.0e6f, eye2, tgt);
+                    g2.setAtmosphere(a);
+                    g2.setToneMap(scene::SceneRenderer::ToneMap::Linear, 1.0f);
+                    // The camera's basis (up +y).
+                    V3 rgt = normalize({-f.z, 0.0, f.x});   // f x up
+                    const V3 up{rgt.y * f.z - rgt.z * f.y, rgt.z * f.x - rgt.x * f.z, rgt.x * f.y - rgt.y * f.x};
+                    const double th = std::tan(vw.fov * kPi / 360.0);
+                    struct Px {
+                        int x, y;
+                        double want, spread;   // the reference; its spread over the dither's half texel
+                    };
+                    std::vector<Px> pxs;
+                    double peak = 0.0;
+                    for (int y = kStep / 2; y < H; y += kStep)
+                        for (int x = kStep / 2; x < W; x += kStep) {
+                            const double nx = (x + 0.5) / W * 2.0 - 1.0, ny = 1.0 - (y + 0.5) / H * 2.0;
+                            const V3 d = normalize(add(add(f, mul(rgt, nx * th)), mul(up, ny * th)));
+                            const double toSun = std::acos(std::clamp(d.y * std::sin(se) - d.z * std::cos(se), -1.0, 1.0));
+                            if (toSun < 2.0 * kPi / 180.0) continue;   // the disc and the texels about it
+                            const V3 rd{d.x, -d.z, d.y};
+                            if (std::abs(std::acos(std::clamp(d.y, -1.0, 1.0)) - zHorizon) < kHorizonBand) continue;
+                            double ta, tb;
+                            bool ground;
+                            if (!ref.segment(roRef, rd, ta, tb, ground) || ground) continue;
+                            const RGB want = ref.radiance(roRef, rd, sunRef, ta, tb, 300, nullptr);
+                            // The shader dithers its lookup by half a texel
+                            // either way: what the reference gives at the
+                            // zenith angles half a texel up and down is the
+                            // spread a pixel may read (on the limb from high
+                            // up, where the light doubles in a degree, it is
+                            // what is left).
+                            double spread = 0.0;
+                            {
+                                const double hl = std::hypot(d.x, d.z);
+                                double u, v;
+                                atm::skyViewUv(Rb, Rt, Rb + alt, d.y, 1.0, u, v);
+                                for (const double dv : {-0.5, 0.5}) {
+                                    double cz, caz;
+                                    atm::skyViewDirection(Rb, Rt, Rb + alt, u, v + dv / atm::kSkyViewH, cz, caz);
+                                    const double sz = std::sqrt(std::max(1.0 - cz * cz, 0.0));
+                                    const V3 dj = hl > 1e-6 ? V3{d.x / hl * sz, -d.z / hl * sz, cz} : V3{0.0, 0.0, cz};
+                                    double ta2, tb2;
+                                    bool ground2;
+                                    if (!ref.segment(roRef, dj, ta2, tb2, ground2) || ground2) continue;
+                                    const RGB w2 = ref.radiance(roRef, dj, sunRef, ta2, tb2, 300, nullptr);
+                                    spread = std::max(spread, std::abs(luminance(w2.c) - luminance(want.c)));
+                                }
+                            }
+                            pxs.push_back({x, y, luminance(want.c), spread});
+                            peak = std::max(peak, std::max({want.c[0], want.c[1], want.c[2]}));
+                        }
+                    if (pxs.empty() || !(peak > 0.0)) continue;
+                    const double scale = 0.85 / peak;
+                    scene::ExposureSettings e;
+                    e.ev100 = static_cast<float>(std::log2(1.0 / (1.2 * scale)));
+                    g2.setExposure(e);
+                    g2.render();
+                    g2.render();
+                    int w = 0, h = 0;
+                    const std::vector<uint8_t> px = g2.readTonemapPixelsRGBA(w, h);
+                    if (w != W || h != H) {
+                        std::printf("    FAILED: no sky pixels read back\n");
+                        ++failures;
+                        continue;
+                    }
+                    for (const Px& p : pxs) {
+                        const uint8_t* c = &px[(static_cast<size_t>(p.y) * W + p.x) * 4];
+                        const double got[3] = {c[0] / 255.0, c[1] / 255.0, c[2] / 255.0};
+                        const double want = p.want * scale;
+                        // The 8-bit output's step and the dither (1.5 codes)
+                        // are not the model's error; a floor of 2% of the
+                        // view's peak.
+                        const double err = std::max(std::abs(luminance(got) - want) - 1.5 / 255.0 - p.spread * scale, 0.0);
+                        // Where: the pixel, the view's index in the thousands of x.
+                        st.add(err / std::max(want, 0.02 * 0.85), luminance(got), want,
+                               p.x + 1000.0 * static_cast<double>(&vw - views), p.y);
+                    }
+                }
+                check("the sky as drawn (sun, zenith, away)", st, twilight ? 0.30 : 0.12, twilight ? 0.15 : 0.08);
             }
 
             // --- Aerial perspective from the froxels ---------------------------
