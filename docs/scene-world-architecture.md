@@ -887,15 +887,14 @@ the motion oracle for anything temporal. Each step removes what it replaces.
 | 7 | Done: the probe grid (§7), with the canopy's density it traces against | forests lit as places: a crown's shade within 2% of a CPU march, the open sky within 1%, the ground's bounce within 1.5%; biomes' forest 5–11% darker under its crowns, the meadow unchanged; +0.25–0.4 ms a frame at a 30 Hz clock (a refresh slice nearly every frame), no frame over 2.78 ms, no refresh step in motion | +2.9k |
 | 8 | Placement per cell (§10) | a world of any size placed around the eye at a flat cost | ~3k |
 | 9 | The planet (§11), with the terrain's height tiles and their horizons (§7) | ground to orbit, one place, the frame following the pixels; the sun's shadow and the sky's occlusion past the pages | ~5k |
-
-The horizons and the canopy's density were step 5b. Each needs something
-no step before it makes (the terrain's height tiles, the probes that read
-the density), and biomes has nothing past the pages to show them on (its
-ground is a 1.4 km mesh, the pages' window 262 km), so they land with
-those steps.
 | 10 | Far-field cell cards (§2) | far plants and terrain cost by the cells on screen | ~4k |
 | 11 | Volumetric light and clouds (§7) | shafts, mist, weather from every altitude | ~5k |
 | 12 | Night and many lights (§7) | moon, stars, cities from orbit, fires | ~2k |
+
+The horizons were step 5b. They need the terrain's height tiles, which no
+step before 9 makes, and biomes has nothing past the pages to show them on
+(its ground is a 1.4 km mesh, the pages' window 262 km), so they land with
+step 9. The canopy's density landed with the probes that read it (step 7).
 
 The visibility pass (§3) joins when a measurement shows foliage shading, not
 its count, is what the frame is spent on.
