@@ -203,15 +203,10 @@
  * @property {boolean} [castsShadow]
  * @property {number} [shadowBias]
  * @property {number} [shadowNormalBias]
- * @property {number} [cascadeCount=4] - a directional light's shadow
- *   cascades (1..4), each a tile of the shadow atlas
- * @property {number} [cascadeSplitLambda=0.5] - the cascades' split, 0
- *   uniform .. 1 logarithmic in depth
  * @property {number} [shadowDistance=0] - how far from the camera a
- *   directional light's shadow reaches (m): its cascades split this depth,
- *   and it fades out over the last tenth. 0: the camera's far plane. A
- *   view kilometres deep needs it, or the nearest cascade spans hundreds of
- *   metres. All of these are also properties of the node.
+ *   directional light's shadow reaches (m): it fades out over the last
+ *   tenth, and nothing past it asks for shadow pages. 0: as far as the
+ *   sun's clipmap reaches. All of these are also properties of the node.
  * @property {Array<number>} [position]
  * @property {Array<number>} [rotation]
  */

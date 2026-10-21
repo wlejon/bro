@@ -75,8 +75,8 @@ public:
         float minElements = 12.0f; // the fewest a plant is drawn with
         float woodRange = 220.0f;  // past this (m) no trunks or limbs are drawn
         float range = 6000.0f;     // past this (m) no plant is drawn
-        float shadowTexels = 12.0f; // as `pixels`, in a shadow tile's texels, for its casters
-        float shadowRange = 1500.0f; // past this (m) no plant casts (the tiles' frusta cut nearer)
+        float shadowTexels = 12.0f; // as `pixels`, in a shadow page's texels, for its casters
+        float shadowRange = 1500.0f; // past this (m) no plant casts (the shadow views cut nearer)
     };
     static constexpr int kParamCount = 6;
     void setParams(const Params& p) { params_ = p; }
@@ -97,7 +97,7 @@ public:
         uint32_t plants = 0;     // plants in view
         uint32_t elements = 0;   // leaf elements drawn
         uint32_t limbs = 0;      // trunks and limbs drawn
-        uint32_t shadowElements = 0;   // leaf elements cast, every shadow tile's summed
+        uint32_t shadowElements = 0;   // leaf elements cast, every shadow view's summed
     };
     /// Where the stats come from: the drawer plans the node on the GPU
     /// (scene_plants_gpu_plan.cpp), a frame's read back once the GPU has

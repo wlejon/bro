@@ -18,7 +18,7 @@ public:
     void cleanup(SceneVkDevice& device, SceneVkAllocator& allocator);
 
     // --- Set layouts of the lit pipelines ---
-    // set 0: camera UBO; set 1: lighting UBO + shadow atlas, then the probe
+    // set 0: camera UBO; set 1: lighting UBO + shadow pages, then the probe
     // cube, shade map and IBL as bare images under one shared sampler; set 2: material (albedo, normal, metallic-roughness,
     // emissive, occlusion); set 3: per-draw vertex data, the bone palette UBO
     // (binding 0) or a procedural draw's segment records or the plants'

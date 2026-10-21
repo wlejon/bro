@@ -1,7 +1,7 @@
 #pragma once
 // The GPU cell pass (docs/scene-world-architecture.md §1): a provider's
 // world cells (world_cells.h) culled against a frame's views, the camera's
-// frustum and its shadow tiles', top-down in three dependent dispatches
+// frustum and its shadow views', top-down in three dependent dispatches
 // (world_cells_cull.comp: the tops; the leaves of the tops in view, a
 // workgroup a top; the cells in view gathered into one list in order).
 // It writes, in the cells' order, the cells some view sees with the views
@@ -41,7 +41,7 @@ public:
     };
 
     /// How a view turns metres into pixels (WC_SCALE_*): a perspective
-    /// camera by its focal length in pixels, a shadow tile by its texel.
+    /// camera by its focal length in pixels, a shadow view by its texel.
     struct Scale {
         float focalPixels = 0.0f;      // > 0: a camera
         float texel = 0.0f;            // a tile's texel, metres

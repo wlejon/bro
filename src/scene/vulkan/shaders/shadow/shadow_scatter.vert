@@ -1,6 +1,6 @@
 #version 450
-// Foliage scatter shadow casters: mesh_scatter.vert's leaves into an atlas
-// tile, swaying with them when the node carries vegetation records.
+// Foliage scatter shadow casters: mesh_scatter.vert's leaves into a shadow
+// view, swaying with them when the node carries vegetation records.
 
 layout(location = 0) in vec3 inPos;
 

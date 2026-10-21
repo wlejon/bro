@@ -219,16 +219,20 @@
  * its midrib and is darker toward its stalk. Plants sway in the scene's wind
  * field (`setWind`): the trunk bends, each lobe lags, near leaves flutter.
  *
- * Casting (`castsShadow`): each shadow tile drawn this frame gets its own
- * casters, the plants in its frustum (in view or not) within `shadowRange`,
- * each kept to `shadowTexels` of the tile's texels an element; a crown only
- * a few of those across casts its outline, a disc square to the light. So
- * a far cascade's thousands of trees cost a disc each.
+ * Casting (`castsShadow`): each shadow view drawn this frame (the shadow
+ * pages being drawn, lighting-api.js) gets its own casters, the plants in
+ * its frustum (in view or not) within `shadowRange`, each kept to
+ * `shadowTexels` of the page's texels an element; a crown only a few of
+ * those across casts its outline, a disc square to the light. So a coarse
+ * level's thousands of trees cost a disc each. The pages are cached: a
+ * still forest draws no casters, and swaying plants redraw only the sway
+ * level near the eye each frame (finer levels read it; coarser ones keep
+ * the plants still, where the sway is under a texel).
  *
  * What each view draws is planned on the GPU (scene_plants_gpu_plan.cpp):
  * the plants are sorted into world cells once, at setPlants, and uploaded
  * once (again only when they or the species change); each frame the cell
- * pass culls the cells against the camera and every shadow tile, and the
+ * pass culls the cells against the camera and every shadow view, and the
  * plan picks each plant of the cells in view, writing the draws' chunks and
  * indirect commands. So a frame's CPU cost does not grow with the plants (a
  * million cost what seventy thousand do), and the camera's plants go in
@@ -288,7 +292,7 @@
  * @property {number} [minElements=12] - the fewest a plant is drawn with.
  * @property {number} [woodRange=220] - past this (m) no trunks or limbs.
  * @property {number} [range=6000] - past this (m) no plant is drawn.
- * @property {number} [shadowTexels=12] - as `pixels`, in a shadow tile's texels, for its casters.
+ * @property {number} [shadowTexels=12] - as `pixels`, in a shadow page's texels, for its casters.
  * @property {number} [shadowRange=1500] - past this (m) no plant casts.
  * @property {boolean} [castsShadow=false]
  * @property {boolean} [receivesShadow=false]
@@ -590,7 +594,7 @@ class SceneNode {
   /**
    * Plants: what a recent frame drew: `plants` (all of them), `visible`
    * (in the camera's view), `elements` and `limbs` (the camera's), and
-   * `shadowElements` (every shadow tile's casters summed, a disc one). The
+   * `shadowElements` (every shadow view's casters summed, a disc one). The
    * plan's counts are read back from the GPU a frame or two late: after a
    * change, draw a few frames (`advanceTime`) before reading them.
    * @returns {{plants: number, visible: number, elements: number, limbs: number, shadowElements: number}|undefined}

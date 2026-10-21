@@ -1,6 +1,6 @@
 #version 450
 // Plants' shadow casters (scene_plants.glsl): their own chunks (fewer,
-// bigger leaves than the camera's) into an atlas tile, a leaf's corners read
+// bigger leaves than the camera's) into a shadow view, a leaf's corners read
 // from its pose as plants.vert's are. push.params.x: 0 the leaves, 1 the
 // wood (the colour draw's push.extra.z).
 

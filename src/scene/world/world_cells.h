@@ -29,13 +29,13 @@
 // and a generation, moved whenever any of that changes.
 //
 // What the GPU cell pass (scene_world_cells_pass.h) gives a provider each
-// frame, for its cells in view of any view (the camera, each shadow tile):
+// frame, for its cells in view of any view (the camera, each shadow view):
 // their list in cell order with their items' places, the views that see
 // each, each one's eye-relative origin, its projected size in pixels in
 // every view that sees it, and a band (near, mid, far) by the provider's own
 // pixel thresholds on the camera's size. The size is the one pixel-error
 // metric every system refines on: a cell's bounding radius over its distance
-// times the view's focal length in pixels (a shadow tile: over its texel).
+// times the view's focal length in pixels (a shadow view: over its texel).
 // A provider's geometric error in metres projects the same way:
 // projectedPixels() below, the GLSL in world_cells_cull.comp.
 //

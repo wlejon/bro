@@ -82,7 +82,7 @@ A new panel loads `panel-runtime.js` and calls `PanelLayout.onResize(...)` rathe
 
 Accessors, read on demand: `perf.{fps, frameTime, js, layout, raster, gpu, draw}` are getters over the engine's own 500 ms rolling frame statistics (`Engine::perfFps()` and siblings), `viewport.{width, height}` over the current viewport. The engine writes no panel DOM; `perf.html` polls these on its own timer and renders them.
 
-`perf.windows` is a getter that builds an array with one entry per live secondary window (`bro.window.open`, see [window-api.js](window-api.js)), `{id, title, width, height, focused, minimized}`, empty when the app has opened none. `perf.html` renders it as its "Secondary windows" table. `perf.scene` (only in a build with the scene graph, `BRO_WITH_3D`) is the 3D cull counters, `{meshDrawn, meshCulled, instancedDrawn, ..., shadowTilesCached}`.
+`perf.windows` is a getter that builds an array with one entry per live secondary window (`bro.window.open`, see [window-api.js](window-api.js)), `{id, title, width, height, focused, minimized}`, empty when the app has opened none. `perf.html` renders it as its "Secondary windows" table. `perf.scene` (only in a build with the scene graph, `BRO_WITH_3D`) is the 3D cull counters, `{meshDrawn, meshCulled, instancedDrawn, ..., shadowPagesResident}`.
 
 `__bro.bronze.{heapUsedBytes, heapCommittedBytes, heapReservedBytes, gcCollections, gcPauseNs, shapeTransitions}` is the JavaScript runtime's own telemetry (`getHostTelemetry()`), which `perf.html` shows beside the frame numbers.
 

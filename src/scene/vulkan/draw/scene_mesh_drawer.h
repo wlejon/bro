@@ -184,7 +184,7 @@ struct MeshDraw {
     /// The shadow pass's, for a caster it times on its own (null: untimed,
     /// its time going to the next one timed).
     const char* shadowTimerLabel = nullptr;
-    bool hasBounds = false;     // world bounds, for the shadow tiles' and probe faces' culling
+    bool hasBounds = false;     // world bounds, for the shadow views' and probe faces' culling
     bromath::AABB3 bounds;
     bromath::Vec3 center{0.0f, 0.0f, 0.0f};   // bounds centre (else the origin): probe selection
     /// The tile shade map the draw samples (kShadeMap set), resolved from
@@ -211,7 +211,7 @@ public:
     /// (scene_mesh_drawer_grass.cpp). Also stamps its movers for the frame.
     void prepareGrass(SceneFrame& frame, GrassNode& node, std::vector<MeshDraw>& out);
     /// A plants node's draws, its leaves and its wood for the camera and
-    /// each shadow tile, planned on the GPU (scene_mesh_drawer_plants.cpp).
+    /// each shadow view, planned on the GPU (scene_mesh_drawer_plants.cpp).
     void preparePlants(SceneFrame& frame, PlantsNode& node, std::vector<MeshDraw>& out);
     /// The plants' plans and the leaf poses their draws read (queued by
     /// preparePlants) into the frame's compute stream (SceneFrame::

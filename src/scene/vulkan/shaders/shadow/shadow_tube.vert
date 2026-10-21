@@ -1,5 +1,5 @@
 #version 450
-// Branch tube shadow casters: mesh_tube.vert's walls into an atlas tile,
+// Branch tube shadow casters: mesh_tube.vert's walls into a shadow view,
 // bending with them when the node carries vegetation records.
 
 #include "common/scene_camera.glsl"

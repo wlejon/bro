@@ -94,6 +94,17 @@ target/up/mode: the 6DOF / FPS path that avoids target+up precision loss.
  * @property {number} [totalNodes]
  * @property {number} [renderedNodes]
  * @property {number} [culledNodes]
+ * @property {number} [shadowDrawn]   shadow casters drawn this frame (per caster × page view)
+ * @property {number} [shadowCulled]  shadow casters culled
+ * @property {number} [shadowPagesNeeded]    shadow pages the newest marking of the depth buffer named
+ * @property {number} [shadowPagesResident]  of those, the pages drawn and sampled this frame
+ * @property {number} [shadowPagesDrawn]     pages drawn into the cache this frame (0 in a still scene)
+ * @property {number} [shadowPagesDynamic]   overlays drawn over the cached depth this frame, for what
+ *   moves every frame (skinned or moving nodes, swaying plants)
+ * @property {number} [shadowPagesWanted]    needed pages left for a later frame; a coarser (or finer)
+ *   resident level shows in their place meanwhile
+ * @property {number} [shadowPagesEvicted]   pages taken from others this frame (least recently used)
+ * @property {number} [shadowViews]          the views (page rects) the shadow pass drew
  * @property {number} [groundLayerNeeded]   the turf's surface layer tiles the camera needs
  * @property {number} [groundLayerMissing]  of those, the ones not filled at their data's current generation
  * @property {number} [groundLayerFills]    tiles filled this frame
@@ -430,11 +441,6 @@ class SceneGraph {
   frustumCulling;
 
   /**
-   * @type {boolean}
-   */
-  shadowCache;
-
-  /**
    * @type {number}
    */
   renderScale;
@@ -717,17 +723,12 @@ class SceneGraph {
   wind() {}
 
   /**
-   * Shadow atlas size and filter. `setShadowQuality(atlasSize, pcfTaps)`
-   * positional is accepted too.
+   * The receivers' shadow filter (see ShadowQualityConfig in
+   * docs/lighting-api.js for how shadows are cached).
    *
    * @param {ShadowQualityConfig} [opts]
    */
   setShadowQuality(opts) {}
-
-  /**
-   * @param {ShadowCacheConfig} [opts]
-   */
-  setShadowCache(opts) {}
 
   /**
    * @param {FogConfig} [opts]

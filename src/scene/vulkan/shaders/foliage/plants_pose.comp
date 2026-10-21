@@ -20,7 +20,7 @@ void main() {
     vec4 chunk = plantChunks.chunks[chunkIndex];
     if (chunk.w > 1.5) return;   // crown discs: built where they are drawn
     PlantLeafPose pose;
-    // (chunk.w: 1 a shadow tile's caster.)
+    // (chunk.w: 1 a shadow view's caster.)
     bool drawn = plantLeafPose(int(chunk.x), int(chunk.y) + e, chunk.z, chunk.w > 0.5, pose);
     uvec4 a, b, c, d;
     if (drawn) {

@@ -4,7 +4,7 @@
 //
 //   binding 0  STATIC: the node's header, species and plants in cell order
 //              (PlantsNode::gpuData; scene_plants.glsl's set 3 binding 1)
-//   binding 1  PARAMS: this frame's camera, shadow tiles and the node's
+//   binding 1  PARAMS: this frame's camera, shadow views and the node's
 //              detail params (PP_P_*)
 //   binding 2  CELLS: the world cell pass's output for the node's cells
 //              (world_cells_layout.h), whose items in view the plan walks
@@ -16,7 +16,7 @@
 //              commands (PP_A_*), this frame slot's
 //
 // A SLOT is where a view's chunks go: the camera's PP_BANDS distance bands
-// (nearest first), then each shadow tile's one.
+// (nearest first), then each shadow view's one.
 
 #ifndef BRO_SCENE_PLANTS_PLAN_LAYOUT_H
 #define BRO_SCENE_PLANTS_PLAN_LAYOUT_H
@@ -32,7 +32,7 @@
 #define PP_MAX_LOBES            48
 
 // --- PARAMS ---
-#define PP_P_TILES              0     // uint: the shadow tiles drawn (0: the node casts none)
+#define PP_P_TILES              0     // uint: the shadow views drawn (0: the node casts none)
 #define PP_P_CHUNK_CAP          1     // uint: the chunk records CHUNKS holds
 #define PP_P_LEAF_CAP           2     // uint: the leaf chunks the poses hold (a leaf chunk's index under it)
 #define PP_P_EYE                4     // xyz

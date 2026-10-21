@@ -117,8 +117,8 @@ public:
     int selectedLod() const { return lodSelected_; }
 
     /// Per-frame selection from camera distance (SceneGraph's distance
-    /// pass). Bumps the change generation on a switch so shadow tiles
-    /// holding the old level's silhouette re-render.
+    /// pass). Bumps the change generation on a switch so shadow pages
+    /// holding the old level's silhouette are redrawn.
     void selectLodByDistance(float d);
 
     /// Active mesh: returns the selected LOD level's mesh if a LOD chain is
@@ -280,7 +280,7 @@ public:
     void setNearClipDist(float d) { nearClipDist_ = d; }
     float nearClipDist() const { return nearClipDist_; }
 
-    /// Whether this mesh writes into the shadow atlas. Default true. Set false
+    /// Whether this mesh writes into the shadow pages. Default true. Set false
     /// for meshes that should illuminate with shadows but not cast their own
     /// (billboards, transparent geometry, debug markers).
     void setCastsShadow(bool b) { castsShadow_ = b; }
@@ -306,7 +306,7 @@ public:
     /// Alpha cutoff threshold. 0 (default) disables. When >0, fragments with
     /// baseAlpha (texture.a * uColor.a, or vColor.a) below this threshold
     /// are discarded — for cut-out leaves/petals using straight-alpha textures.
-    /// A textured caster casts its cut, so a change re-renders its shadow tiles.
+    /// A textured caster casts its cut, so a change redraws its shadow pages.
     void setAlphaCutoff(float c) {
         if (c != alphaCutoff_) bumpChangeGeneration();
         alphaCutoff_ = c;

@@ -1,5 +1,5 @@
 #version 450
-// Grass shadow casters: mesh_grass.vert's blades into an atlas tile, bending
+// Grass shadow casters: mesh_grass.vert's blades into a shadow view, bending
 // with them. Only the cells the camera draws cast (the same draws and
 // instance test), which is all a near ring's self-shadowing needs, and of
 // those only a share of the blades, widened to keep their cover: a shadow

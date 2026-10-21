@@ -24,7 +24,7 @@
 // Set 3 binding 2: this frame's chunks, written by the plan
 // (plants_plan.comp; scene_plants_gpu_plan.cpp), an instance of a draw
 // each: plant, first element, the plant's element count N (a wood chunk:
-// its tubes), 1 for a shadow tile's caster else 0; a chunk of crown discs
+// its tubes), 1 for a shadow view's caster else 0; a chunk of crown discs
 // (shadow_plants.vert): its first disc record, how many, 0, 2. A disc
 // record (in the same buffer): plant, 0, 0, 0.
 
@@ -247,7 +247,7 @@ struct PlantLeafPose {
 
 // Element `k` of plant `pi`, drawn `n` strong (the plant's element count).
 // False: not drawn.
-// A caster (`caster`: a shadow tile's) drawn with fewer elements than its
+// A caster (`caster`: a shadow view's) drawn with fewer elements than its
 // crown has lobes spreads them over the lobes and lets each grow past its
 // lobe's size, as wide as its share of the crown: a far tree's shadow is
 // a few broad daubs (the camera's prefix keeps every lobe instead).

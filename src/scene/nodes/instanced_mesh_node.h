@@ -136,7 +136,7 @@ public:
     /// Alpha-test cutoff. > 0 enables `discard` for fragments whose final
     /// alpha is below the threshold (used for leaf cards and similar
     /// cutout textures). 0 disables the test. A textured caster casts its
-    /// cut, so a change re-renders its shadow tiles.
+    /// cut, so a change redraws its shadow pages.
     void  setAlphaCutoff(float c) {
         if (c != alphaCutoff_) bumpChangeGeneration();
         alphaCutoff_ = c;

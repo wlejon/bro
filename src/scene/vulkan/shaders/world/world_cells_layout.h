@@ -17,7 +17,7 @@
 
 #define WC_GROUP_SIZE           256
 #define WC_TOP_LEAVES           64    // the most leaves a top holds (CellGrid::topLevel 3: 8 x 8)
-#define WC_MAX_VIEWS            33    // the camera and 32 shadow tiles (PP_MAX_TILES, the plants plan's)
+#define WC_MAX_VIEWS            33    // the camera and 32 shadow views (PP_MAX_TILES, the plants plan's)
 #define WC_ORIGIN_WORDS         4     // xyz, 0
 
 // --- CELLS: the header, the tops, then the leaves ---
@@ -45,7 +45,7 @@
 #define WC_P_PLANES             (WC_P_SCALES + WC_SCALE_WORDS * WC_MAX_VIEWS)   // per view, six planes (24)
 #define WC_P_WORDS              (WC_P_PLANES + 24 * WC_MAX_VIEWS)
 // A view's scale: pixels = metres * focal / distance (a perspective
-// camera), or metres / (texel + texelPerMetre * distance) (a shadow tile:
+// camera), or metres / (texel + texelPerMetre * distance) (a shadow view:
 // its texel's size, constant when ortho), the distance the camera eye's.
 #define WC_SCALE_WORDS          4
 #define WC_SCALE_FOCAL          0     // the focal length in pixels (pixels a metre at a metre); 0 for a tile

@@ -1,5 +1,5 @@
 #version 450
-// Depth-only shadow casters into one atlas tile, with the same wind sway and
+// Depth-only shadow casters into one shadow view, with the same wind sway and
 // custom vertex hook as mesh.vert so the silhouette matches the colour pass.
 // shadow_skinned.vert deforms with the bone palette first. Built again with
 // SCENE_VEGETATION for meshes carrying vegetation records (mesh.vert's), and

@@ -32,7 +32,7 @@ void MeshNode::setMesh(const bromesh::MeshData& mesh) {
     if (lods_.empty()) hasVertexColors_ = mesh_.hasColors();
     bvhDirty_ = true;
     recomputeBounds();
-    bumpChangeGeneration();  // geometry changed — shadow tiles must re-render
+    bumpChangeGeneration();  // geometry changed — its shadow pages are redrawn
 }
 
 void MeshNode::setMesh(bromesh::MeshData&& mesh) {
@@ -42,7 +42,7 @@ void MeshNode::setMesh(bromesh::MeshData&& mesh) {
     if (lods_.empty()) hasVertexColors_ = mesh_.hasColors();
     bvhDirty_ = true;
     recomputeBounds();
-    bumpChangeGeneration();  // geometry changed — shadow tiles must re-render
+    bumpChangeGeneration();  // geometry changed — its shadow pages are redrawn
 }
 
 void MeshNode::recomputeBounds() {
@@ -113,7 +113,7 @@ void MeshNode::selectLodByDistance(float d) {
     if (sel != lodSelected_) {
         lodSelected_ = sel;
         hasVertexColors_ = lods_[sel].hasColors;
-        bumpChangeGeneration();  // shadow tiles hold the old silhouette
+        bumpChangeGeneration();  // shadow pages hold the old silhouette
     }
 }
 

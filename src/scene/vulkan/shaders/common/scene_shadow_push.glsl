@@ -1,5 +1,5 @@
 // The per-draw push constants of every shadow caster pipeline (PassShadow):
-// the atlas tile's light view-projection and the caster's affine world
+// the shadow view's light view-projection and the caster's affine world
 // matrix as three rows, both camera-relative like the colour pass's.
 layout(push_constant) uniform ShadowPushConstants {
     mat4 lightViewProj;

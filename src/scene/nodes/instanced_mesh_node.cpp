@@ -30,7 +30,7 @@ void InstancedMeshNode::setMesh(const bromesh::MeshData& mesh) {
     bounds_ = mesh_.empty() ? bromath::AABB3{} : bromesh::computeBBox(mesh_);
     instanceBoundsDirty_ = true;
     bvhDirty_ = true;
-    bumpChangeGeneration();  // geometry changed — shadow tiles must re-render
+    bumpChangeGeneration();  // geometry changed — its shadow pages are redrawn
 }
 
 void InstancedMeshNode::setMesh(bromesh::MeshData&& mesh) {
@@ -42,7 +42,7 @@ void InstancedMeshNode::setMesh(bromesh::MeshData&& mesh) {
     bounds_ = mesh_.empty() ? bromath::AABB3{} : bromesh::computeBBox(mesh_);
     instanceBoundsDirty_ = true;
     bvhDirty_ = true;
-    bumpChangeGeneration();  // geometry changed — shadow tiles must re-render
+    bumpChangeGeneration();  // geometry changed — its shadow pages are redrawn
 }
 
 const bromesh::MeshBVH& InstancedMeshNode::bvh() const {
@@ -64,7 +64,7 @@ void InstancedMeshNode::setStaticBatch(bool b) {
 void InstancedMeshNode::instancesChanged() {
     batchDirty_ = true;
     instanceBoundsDirty_ = true;
-    bumpChangeGeneration();  // instance set changed — shadow tiles must re-render
+    bumpChangeGeneration();  // instance set changed — its shadow pages are redrawn
 }
 
 void InstancedMeshNode::setInstances(const float* data, size_t count) {
@@ -234,7 +234,7 @@ bool InstancedMeshNode::hasVegetation() const {
     return vegetation_.size() == instanceCount_ * 16;
 }
 
-// A cutout caster casts the texture's alpha, so either re-renders its shadow tiles.
+// A cutout caster casts the texture's alpha, so either redraws its shadow pages.
 void InstancedMeshNode::setBaseColorTexture(int w, int h, const uint8_t* rgba) {
     baseColorTex_.set(w, h, rgba);
     if (alphaCutoff_ > 0.0f) bumpChangeGeneration();

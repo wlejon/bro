@@ -1,6 +1,6 @@
 #pragma once
 // The plants' GPU plan: each frame's choice of what every plant is drawn
-// with, in the camera and in each shadow tile, made on the GPU by
+// with, in the camera and in each shadow view, made on the GPU by
 // plants_plan.comp straight into the chunk records the plants' draws read,
 // their counts into indirect commands, so a frame's CPU work does not grow
 // with the plants (the drawer, scene_mesh_drawer_plants.cpp, fills the
@@ -10,7 +10,7 @@
 // A node's plants are a world-cell provider (world_cells.h; their cells
 // PlantsNode's, in the cell order its records are kept in). Ahead of the
 // plan, the cell pass (scene_world_cells_pass.h) culls the cells against
-// the camera and every shadow tile drawn, and the plan walks the plants of
+// the camera and every shadow view drawn, and the plan walks the plants of
 // the cells in view alone: count each view's chunks a slot, lay the slots
 // out, place each plant's chunks; then the leaf poses (plants_pose.comp),
 // dispatched over the leaf chunks the plan made.
@@ -48,7 +48,7 @@ struct SceneGpu;
 
 namespace plants {
 
-/// View `view`'s (0 the camera, 1 + t shadow tile t as planned) leaves' or
+/// View `view`'s (0 the camera, 1 + t shadow view t as planned) leaves' or
 /// wood's indirect command, its byte offset in the args buffer.
 constexpr VkDeviceSize commandOffset(uint32_t view, bool wood) {
     return VkDeviceSize{PP_A_COMMANDS + (2 * view + (wood ? 1u : 0u)) * PP_A_COMMAND_WORDS} * 4u;
