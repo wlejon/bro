@@ -106,7 +106,7 @@ void SceneGpuTimer::begin(VkCommandBuffer cmd) {
     vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, pool_, kPerSlot * pair);
     recordingPair_ = pair;
     markCount_[pair] = 0;
-    spanMask_[pair] = spanApart_[pair] = 0;
+    spanMask_[pair] = spanApart_[pair] = spanOpen_[pair] = 0;
     computeTimed_[pair] = false;
     computeCmd_ = VK_NULL_HANDLE;
 }
@@ -114,21 +114,31 @@ void SceneGpuTimer::begin(VkCommandBuffer cmd) {
 bool SceneGpuTimer::beginSpan(VkCommandBuffer cmd, uint32_t id, bool apart) {
     if (recordingPair_ == UINT32_MAX || id >= kMaxSpans || cmd == VK_NULL_HANDLE) return false;
     if (apart && cmd != computeCmd_) return false;   // the compute stream is untimed
-    const uint32_t pair = recordingPair_;
-    if ((spanMask_[pair] >> id) & 1u) return false;   // once a render
+    const uint32_t pair = recordingPair_, bit = 1u << id;
+    if (spanOpen_[pair] & bit) return false;
+    if (spanMask_[pair] & bit) {
+        // (Its later segments: on its queue, while it has one left.)
+        if (spanSegments_[pair][id] >= kSpanSegments || ((spanApart_[pair] & bit) != 0) != apart) return false;
+    } else {
+        spanMask_[pair] |= bit;
+        if (apart) spanApart_[pair] |= bit;
+        spanSegments_[pair][id] = 0;
+        spanJobs_[pair][id] = 0;
+    }
+    const uint32_t seg = spanSegments_[pair][id]++;
     vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, apart ? computePool_ : pool_,
-                        kPerSlot * pair + kSpanBase + 2 * id);
-    spanMask_[pair] |= 1u << id;
-    if (apart) spanApart_[pair] |= 1u << id;
-    spanJobs_[pair][id] = 0;
+                        kPerSlot * pair + kSpanBase + 2 * (id * kSpanSegments + seg));
+    spanOpen_[pair] |= bit;
     return true;
 }
 
 void SceneGpuTimer::endSpan(VkCommandBuffer cmd, uint32_t id, bool apart, uint32_t jobs) {
-    if (recordingPair_ == UINT32_MAX || id >= kMaxSpans || !((spanMask_[recordingPair_] >> id) & 1u)) return;
+    if (recordingPair_ == UINT32_MAX || id >= kMaxSpans || !((spanOpen_[recordingPair_] >> id) & 1u)) return;
+    const uint32_t pair = recordingPair_, seg = spanSegments_[pair][id] - 1;
     vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, apart ? computePool_ : pool_,
-                        kPerSlot * recordingPair_ + kSpanBase + 2 * id + 1);
-    spanJobs_[recordingPair_][id] = jobs;
+                        kPerSlot * pair + kSpanBase + 2 * (id * kSpanSegments + seg) + 1);
+    spanOpen_[pair] &= ~(1u << id);
+    spanJobs_[pair][id] += jobs;
 }
 
 void SceneGpuTimer::takeFrames(std::vector<Frame>& out) {
@@ -251,12 +261,18 @@ double SceneGpuTimer::harvest(uint32_t pair) {
         if (!((spans >> id) & 1u)) continue;
         const bool apart = (spanApart_[pair] >> id) & 1u;
         if (apart && !computed) continue;
-        uint64_t s[2] = {};
-        if (vkGetQueryPoolResults(context_.device(), apart ? computePool_ : pool_, kPerSlot * pair + kSpanBase + 2 * id,
-                                  2, sizeof(s), s, sizeof(uint64_t), VK_QUERY_RESULT_64_BIT) != VK_SUCCESS)
+        // (A segment left open has no end: the span is dropped.)
+        const uint32_t segs = spanSegments_[pair][id];
+        uint64_t s[2 * kSpanSegments] = {};
+        if ((spanOpen_[pair] >> id) & 1u ||
+            vkGetQueryPoolResults(context_.device(), apart ? computePool_ : pool_,
+                                  kPerSlot * pair + kSpanBase + 2 * id * kSpanSegments, 2 * segs, sizeof(s), s,
+                                  sizeof(uint64_t), VK_QUERY_RESULT_64_BIT) != VK_SUCCESS)
             continue;
         const uint64_t mask = apart ? computeMask_ : validMask_;
-        const double ms = static_cast<double>(((s[1] & mask) - (s[0] & mask)) & mask) * periodNs_ / 1.0e6;
+        uint64_t ticks = 0;
+        for (uint32_t k = 0; k < segs; ++k) ticks += ((s[2 * k + 1] & mask) - (s[2 * k] & mask)) & mask;
+        const double ms = static_cast<double>(ticks) * periodNs_ / 1.0e6;
         frame.spans.push_back({id, spanJobs_[pair][id], ms, apart});
     }
     if (frames_.size() >= 16) frames_.erase(frames_.begin());

@@ -17,11 +17,13 @@
 //             (takeRequests, before the next plan): a frame or two late.
 //
 // It is the world service's producer of shadow pages: it offers the pages
-// the paging wants (ShadowPages::wants) as jobs of its kind and hands the
-// grants back to the paging, which draws them the next frame (the plants'
-// GPU plan must know the frame's views before the frame's graph runs); the
-// shadow pass stamps the kind's span around the pages it redraws, with
-// their count, so the kind's cost is a page's measured cost.
+// the paging wants (ShadowPages::wants) as jobs of its two kinds (pages the
+// plants draw into, pages they do not: their costs are a hundred times
+// apart) and hands the grants back to the paging, which draws them the next
+// frame (the plants' GPU plan must know the frame's views before the
+// frame's graph runs); the shadow pass stamps each kind's span around the
+// pages of it that it redraws, with their count, so a kind's cost is one of
+// its pages' measured cost.
 
 #include "scene/vulkan/frame/scene_vk_allocator.h"
 #include "scene/vulkan/world/scene_world_service.h"
@@ -62,8 +64,10 @@ public:
     VkImageView scratchView() const { return scratch.view; }
     /// The frame's page table (a single zero entry when there is none).
     VkDescriptorBufferInfo table() const { return table_; }
-    /// The world service's kind of shadow page jobs.
+    /// The world service's kinds of shadow page jobs: a page the plants draw
+    /// into, and one only what stands still draws into.
     int kind() const { return kind_; }
+    int stillKind() const { return stillKind_; }
 
     /// The requests' buffer this frame (cleared, then marked).
     VkBuffer requestBuffer() const { return requests_.buffer; }
@@ -101,6 +105,7 @@ private:
 
     SceneVkAllocator* allocator_ = nullptr;
     int kind_ = -1;
+    int stillKind_ = -1;
     bool ready_ = false;
     VkDescriptorBufferInfo table_{};
     SceneVkBuffer requests_;

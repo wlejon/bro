@@ -3,7 +3,9 @@
 // The pages the shadow pass redrew, copied from the scratch target into the
 // pool (SceneShadowPages; ShadowPlan::copyOut): each into its physical page,
 // border and all, ahead of the passes that sample it. The overlays stay in
-// the scratch target, where the lit shaders sample them.
+// the scratch target, where the lit shaders sample them. Each kind's pages
+// are copied in a segment of its world service span: a page's copy is part
+// of what it costs.
 
 #include "scene/vulkan/frame/scene_pass.h"
 

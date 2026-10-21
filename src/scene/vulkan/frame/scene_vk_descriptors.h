@@ -63,7 +63,8 @@ struct alignas(16) SceneShadowMarkUniforms {
     alignas(16) float view[4];          // x = metres a pixel a metre (perspective), y = metres a pixel (ortho), z = finest texel, w = levels
     alignas(16) float lights[kSceneMaxLights][4];    // first map, maps, kind (0 sun, 1 spot, 2 point), reach (0: none)
     alignas(16) float lightPos[kSceneMaxLights][4];  // camera-relative position, range
-    SceneShadowMapUniform maps[kSceneMaxShadowMaps];
+    // The sampled maps, then the sun's next clipmap's levels while it is built.
+    SceneShadowMapUniform maps[SP_MARK_MAPS];
 };
 
 /// The atmosphere's block (std140) — AtmosphereGpu in

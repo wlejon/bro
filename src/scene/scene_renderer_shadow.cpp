@@ -247,6 +247,7 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
     cullStats_.shadowPagesDynamic = static_cast<int>(s.dynamic);
     cullStats_.shadowPagesWanted = static_cast<int>(s.wanted);
     cullStats_.shadowPagesEvicted = static_cast<int>(s.evicted);
+    cullStats_.shadowPagesBuilding = static_cast<int>(s.building);
     cullStats_.shadowViews = static_cast<int>(s.views);
 }
 

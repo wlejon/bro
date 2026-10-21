@@ -59,7 +59,7 @@ struct CullStats {
     // the cache, overlays drawn over it, pages wanted and left for later
     // frames, pages taken from others, and the views (rects) drawn.
     int shadowPagesNeeded = 0, shadowPagesResident = 0, shadowPagesDrawn = 0, shadowPagesDynamic = 0;
-    int shadowPagesWanted = 0, shadowPagesEvicted = 0, shadowViews = 0;
+    int shadowPagesWanted = 0, shadowPagesEvicted = 0, shadowViews = 0, shadowPagesBuilding = 0;
     // The turf's surface layers (surface_layers.h): tiles the camera needs,
     // those not filled at the current generation, fills issued; and the
     // atlas's shortfall (SurfaceLayerStats::worstError: 1 when none).

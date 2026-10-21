@@ -36,6 +36,7 @@
 #define SP_LOCAL_MIPS           4                       // 8, 4, 2, 1 pages a side
 #define SP_LOCAL_ENTRIES        85                      // 64 + 16 + 4 + 1
 #define SP_MAX_MAPS             32                      // the lighting block's maps: the sun's levels, local faces
+#define SP_MARK_MAPS            (SP_MAX_MAPS + SP_MAX_LEVELS)   // the marking pass's: those, the next clipmap's levels
 #define SP_MAX_VIEWS            32                      // a frame's drawn rects (the plants' plan's views)
 
 // A pixel marks its page at the level its footprint wants and at

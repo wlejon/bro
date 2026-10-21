@@ -371,17 +371,22 @@ void PassShadow::record(SceneFrame& frame) {
     if (frame.timer) frame.timer->mark(cmd, "shadow:moving");
 
     // The pages redrawn into the cache, all their casters at once (after
-    // the join when there is one): the world service's jobs, timed as its
-    // kind's span with the pages they hold.
+    // the join when there is one): the world service's jobs, each kind's
+    // views timed as its span with the pages they hold.
     if (planned && plan.staticPages > 0) {
-        const int kind = frame.gpu.shadows.kind();
-        const bool stamped = frame.timer && kind >= 0 && frame.timer->beginSpan(cmd, static_cast<uint32_t>(kind), false);
-        for (int v = 0; v < plan.viewCount; ++v) {
-            if (plan.views[v].dynamic) continue;
-            clearView(v);
-            drawView(frame, v, true, true);
-        }
-        if (stamped) frame.timer->endSpan(cmd, static_cast<uint32_t>(kind), false, plan.staticPages);
+        const auto drawKind = [&](int kind, bool plants, uint32_t pages) {
+            if (pages == 0) return;
+            const bool stamped =
+                frame.timer && kind >= 0 && frame.timer->beginSpan(cmd, static_cast<uint32_t>(kind), false);
+            for (int v = 0; v < plan.viewCount; ++v) {
+                if (plan.views[v].dynamic || plan.views[v].plants != plants) continue;
+                clearView(v);
+                drawView(frame, v, true, true);
+            }
+            if (stamped) frame.timer->endSpan(cmd, static_cast<uint32_t>(kind), false, pages);
+        };
+        drawKind(frame.gpu.shadows.stillKind(), false, plan.staticPages - plan.plantPages);
+        drawKind(frame.gpu.shadows.kind(), true, plan.plantPages);
         if (frame.timer) frame.timer->mark(cmd, "shadow:pages");
     }
 

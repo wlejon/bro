@@ -39,11 +39,15 @@ void ShadowPages::configure(const ShadowPagesConfig& config) {
     config_.levels = std::clamp(config_.levels, 1, SP_MAX_LEVELS);
     const int total = std::max(2, config_.poolColumns * config_.poolRows);
     config_.overlayPages = std::max(config_.overlayPages, 0);
-    entries_.assign(static_cast<size_t>(config_.levels) * SP_LEVEL_ENTRIES + kLocalSlots * SP_LOCAL_ENTRIES, Entry{});
+    entries_.assign(static_cast<size_t>(clipFirst(true)) + static_cast<size_t>(config_.levels) * SP_LEVEL_ENTRIES,
+                    Entry{});
     owner_.assign(static_cast<size_t>(total), -1);
     free_.clear();
     for (int p = total - 1; p >= 0; --p) free_.push_back(p);
     sun_ = Sun{};
+    next_ = Sun{};
+    building_ = ready_ = false;
+    begun_ = shown_ = 0;
     for (LocalSlot& s : locals_) s = LocalSlot{};
     for (History& h : history_) h = History{};
     maps_.clear();
@@ -64,16 +68,16 @@ int64_t ShadowPages::pageOf(double coordinate, double pageSize) {
     return static_cast<int64_t>(std::floor(coordinate / pageSize));
 }
 
-void ShadowPages::sunPlane(const double p[3], double& a, double& b, double& c) const {
-    const double q[3] = {p[0] - sun_.anchor[0], p[1] - sun_.anchor[1], p[2] - sun_.anchor[2]};
-    a = dot3(sun_.s, q) + sun_.offset[0];
-    b = -dot3(sun_.u, q) + sun_.offset[1];
-    c = dot3(sun_.d, q) + sun_.offset[2];
+void ShadowPages::sunPlane(const Sun& sun, const double p[3], double& a, double& b, double& c) {
+    const double q[3] = {p[0] - sun.anchor[0], p[1] - sun.anchor[1], p[2] - sun.anchor[2]};
+    a = dot3(sun.s, q) + sun.offset[0];
+    b = -dot3(sun.u, q) + sun.offset[1];
+    c = dot3(sun.d, q) + sun.offset[2];
 }
 
-void ShadowPages::sunCoordinates(const bromath::Vec3& p, double& a, double& b, double& c) const {
+void ShadowPages::sunCoordinates(const bromath::Vec3& p, double& a, double& b, double& c, bool next) const {
     const double q[3] = {p.x, p.y, p.z};
-    sunPlane(q, a, b, c);
+    sunPlane(sunOf(next), q, a, b, c);
 }
 
 void ShadowPages::window(int level, int64_t& x, int64_t& y) const {
@@ -81,11 +85,12 @@ void ShadowPages::window(int level, int64_t& x, int64_t& y) const {
     y = sun_.oy[level];
 }
 
-int ShadowPages::clipmapEntry(int level, int64_t x, int64_t y) const {
+int ShadowPages::clipmapEntry(int level, int64_t x, int64_t y, bool next) const {
     if (level < 0 || level >= config_.levels) return -1;
-    if (x < sun_.ox[level] || x >= sun_.ox[level] + SP_WINDOW || y < sun_.oy[level] || y >= sun_.oy[level] + SP_WINDOW)
+    const Sun& sun = sunOf(next);
+    if (x < sun.ox[level] || x >= sun.ox[level] + SP_WINDOW || y < sun.oy[level] || y >= sun.oy[level] + SP_WINDOW)
         return -1;
-    return level * SP_LEVEL_ENTRIES + static_cast<int>(wrap(y) * SP_WINDOW + wrap(x));
+    return clipFirst(next) + level * SP_LEVEL_ENTRIES + static_cast<int>(wrap(y) * SP_WINDOW + wrap(x));
 }
 
 ShadowPages::EntryView ShadowPages::entry(int index) const {
@@ -107,6 +112,12 @@ int ShadowPages::mapOfEntry(int index, int& mip) const {
     if (index < clip) {
         const int level = index / SP_LEVEL_ENTRIES;
         return sun_.on && level < static_cast<int>(maps_.size()) ? level : -1;
+    }
+    if (isNext(index)) {
+        const int level = (index - clipFirst(true)) / SP_LEVEL_ENTRIES;
+        for (size_t m = 0; m < maps_.size(); ++m)
+            if (maps_[m].next && maps_[m].level == level) return static_cast<int>(m);
+        return -1;
     }
     const int slot = (index - clip) / SP_LOCAL_ENTRIES;
     const int j = (index - clip) % SP_LOCAL_ENTRIES;
@@ -153,24 +164,24 @@ void ShadowPages::releaseMap(int first, int count) {
     }
 }
 
-void ShadowPages::moveWindows() {
+void ShadowPages::moveWindows(Sun& sun, int first) {
     const double eye[3] = {eye_.x, eye_.y, eye_.z};
     double ea, eb, ec;
-    sunPlane(eye, ea, eb, ec);
+    sunPlane(sun, eye, ea, eb, ec);
     for (int level = 0; level < config_.levels; ++level) {
         const double size = pageSize(level);
         const int64_t ox = pageOf(ea, size) - SP_WINDOW / 2;
         const int64_t oy = pageOf(eb, size) - SP_WINDOW / 2;
-        if (sun_.haveWindows && ox == sun_.ox[level] && oy == sun_.oy[level]) continue;
-        sun_.ox[level] = ox;
-        sun_.oy[level] = oy;
+        if (sun.haveWindows && ox == sun.ox[level] && oy == sun.oy[level]) continue;
+        sun.ox[level] = ox;
+        sun.oy[level] = oy;
         // Each slot holds the one page of the window congruent to it: a page
         // the window left gives its slot (and its physical page) to the one
         // that came in.
         for (int sy = 0; sy < SP_WINDOW; ++sy)
             for (int sx = 0; sx < SP_WINDOW; ++sx) {
                 const int64_t x = ox + wrap(sx - ox), y = oy + wrap(sy - oy);
-                const int i = level * SP_LEVEL_ENTRIES + sy * SP_WINDOW + sx;
+                const int i = first + level * SP_LEVEL_ENTRIES + sy * SP_WINDOW + sx;
                 Entry& e = entries_[static_cast<size_t>(i)];
                 if (e.occupied && e.x == x && e.y == y) continue;
                 release(i);
@@ -180,115 +191,105 @@ void ShadowPages::moveWindows() {
                 e.needed = 0;
             }
     }
-    sun_.haveWindows = true;
+    sun.haveWindows = true;
 }
 
-void ShadowPages::setSun(const ShadowSun& sun) {
-    double d[3] = {sun.direction.x, sun.direction.y, sun.direction.z};
-    const double len = std::sqrt(dot3(d, d));
-    if (len < 1e-9) return;
-    for (double& v : d) v /= len;
-    const int clip = config_.levels * SP_LEVEL_ENTRIES;
+void ShadowPages::beginBasis(Sun& sun, const double d[3], const Sun* from) const {
+    // mlookAt's: across = normalize(d x up), up' = across x d.
+    const double up[3] = {0.0, std::fabs(d[1]) > 0.99 ? 0.0 : 1.0, std::fabs(d[1]) > 0.99 ? 1.0 : 0.0};
+    double s[3] = {d[1] * up[2] - d[2] * up[1], d[2] * up[0] - d[0] * up[2], d[0] * up[1] - d[1] * up[0]};
+    const double sl = std::sqrt(dot3(s, s));
+    for (double& v : s) v /= sl;
+    const double u[3] = {s[1] * d[2] - s[2] * d[1], s[2] * d[0] - s[0] * d[2], s[0] * d[1] - s[1] * d[0]};
     const double eye[3] = {eye_.x, eye_.y, eye_.z};
-    const auto basis = [&] {
-        // mlookAt's: across = normalize(d x up), up' = across x d.
-        const double up[3] = {0.0, std::fabs(d[1]) > 0.99 ? 0.0 : 1.0, std::fabs(d[1]) > 0.99 ? 1.0 : 0.0};
-        double s[3] = {d[1] * up[2] - d[2] * up[1], d[2] * up[0] - d[0] * up[2], d[0] * up[1] - d[1] * up[0]};
-        const double sl = std::sqrt(dot3(s, s));
-        for (double& v : s) v /= sl;
-        const double u[3] = {s[1] * d[2] - s[2] * d[1], s[2] * d[0] - s[0] * d[2], s[0] * d[1] - s[1] * d[0]};
-        std::memcpy(sun_.s, s, sizeof(s));
-        std::memcpy(sun_.u, u, sizeof(u));
-        std::memcpy(sun_.d, d, sizeof(d));
-    };
-    if (!sun_.had || sun.lightId != sun_.lightId) {
-        // Another light's pages: nothing of them holds.
-        releaseMap(0, clip);
-        sun_ = Sun{};
-        basis();
-        std::memcpy(sun_.anchor, eye, sizeof(eye));
-        sun_.had = true;
-        sun_.lightId = sun.lightId;
-    } else if (dot3(sun_.d, d) < std::cos(static_cast<double>(config_.sunTurn))) {
-        // The sun turned: a new basis about the eye, its plane coordinates
-        // there kept, so the pages near the eye move least while every page
-        // waits to be redrawn (and draws, stale, until it is).
-        double a, b, c;
-        sunPlane(eye, a, b, c);
-        basis();
-        std::memcpy(sun_.anchor, eye, sizeof(eye));
-        sun_.offset[0] = a;
-        sun_.offset[1] = b;
-        sun_.offset[2] = c;
-        sun_.haveRange = false;
-        for (int i = 0; i < clip; ++i)
-            if (entries_[static_cast<size_t>(i)].drawn) entries_[static_cast<size_t>(i)].dirty = true;
-    }
-    sun_.on = true;
-    sun_.lightIndex = sun.lightIndex;
-    sun_.bias = sun.bias;
-    sun_.normalBias = sun.normalBias;
-    sun_.reach = sun.reach;
+    double offset[3] = {0.0, 0.0, 0.0};
+    if (from) sunPlane(*from, eye, offset[0], offset[1], offset[2]);
+    std::memcpy(sun.s, s, sizeof(s));
+    std::memcpy(sun.u, u, sizeof(u));
+    std::memcpy(sun.d, d, sizeof(sun.d));
+    std::memcpy(sun.anchor, eye, sizeof(eye));
+    std::memcpy(sun.offset, offset, sizeof(offset));
+}
 
+bool ShadowPages::fitRange(Sun& sun, const bromath::AABB3& box, bool grow) const {
     // The depth range along the light: the casters' extent, grown in coarse
     // steps (a change redraws every page, so it moves rarely) and never
     // shrunk.
-    sun_.casterRect[0] = sun_.casterRect[2] = 1e300;
-    sun_.casterRect[1] = sun_.casterRect[3] = -1e300;
-    if (!bromath::aisEmpty(sun.casters)) {
+    sun.casterRect[0] = sun.casterRect[2] = 1e300;
+    sun.casterRect[1] = sun.casterRect[3] = -1e300;
+    bool grew = false;
+    if (!bromath::aisEmpty(box)) {
         double cs[8][3];
-        corners(sun.casters, cs);
+        corners(box, cs);
         double lo = 1e300, hi = -1e300;
         for (auto& p : cs) {
             double a, b, c;
-            sunPlane(p, a, b, c);
+            sunPlane(sun, p, a, b, c);
             lo = std::min(lo, c);
             hi = std::max(hi, c);
-            sun_.casterRect[0] = std::min(sun_.casterRect[0], a);
-            sun_.casterRect[1] = std::max(sun_.casterRect[1], a);
-            sun_.casterRect[2] = std::min(sun_.casterRect[2], b);
-            sun_.casterRect[3] = std::max(sun_.casterRect[3], b);
+            sun.casterRect[0] = std::min(sun.casterRect[0], a);
+            sun.casterRect[1] = std::max(sun.casterRect[1], a);
+            sun.casterRect[2] = std::min(sun.casterRect[2], b);
+            sun.casterRect[3] = std::max(sun.casterRect[3], b);
         }
-        if (!sun_.haveRange || lo < sun_.zLo || hi > sun_.zHi) {
-            if (sun_.haveRange) {
-                lo = std::min(lo, sun_.zLo);
-                hi = std::max(hi, sun_.zHi);
+        if (!sun.haveRange || lo < sun.zLo || hi > sun.zHi) {
+            grew = sun.haveRange;
+            if (grew && !grow) return true;
+            if (sun.haveRange) {
+                lo = std::min(lo, sun.zLo);
+                hi = std::max(hi, sun.zHi);
             }
             const double step = std::exp2(std::ceil(std::log2(std::max(16.0, (hi - lo) * 0.25))));
-            const double newLo = std::floor((lo - step * 0.5) / step) * step;
-            const double newHi = std::ceil((hi + step * 0.5) / step) * step;
-            if (sun_.haveRange)
-                for (int i = 0; i < clip; ++i)
-                    if (entries_[static_cast<size_t>(i)].drawn) entries_[static_cast<size_t>(i)].dirty = true;
-            sun_.zLo = newLo;
-            sun_.zHi = newHi;
-            sun_.haveRange = true;
+            sun.zLo = std::floor((lo - step * 0.5) / step) * step;
+            sun.zHi = std::ceil((hi + step * 0.5) / step) * step;
+            sun.haveRange = true;
         }
     }
-    if (!sun_.haveRange) {
-        sun_.zLo = -64.0;
-        sun_.zHi = 64.0;
+    if (!sun.haveRange) {
+        sun.zLo = -64.0;
+        sun.zHi = 64.0;
     }
-    moveWindows();
+    return grew;
+}
 
+void ShadowPages::show() {
+    // The entries trade places (each physical page follows its entry): the
+    // built clipmap's at the shown one's, the shown one's freed.
+    const int clip = config_.levels * SP_LEVEL_ENTRIES, first = clipFirst(true);
+    for (int i = 0; i < clip; ++i) {
+        std::swap(entries_[static_cast<size_t>(i)], entries_[static_cast<size_t>(first + i)]);
+        for (const int j : {i, first + i}) {
+            const Entry& e = entries_[static_cast<size_t>(j)];
+            if (e.physical >= 0) owner_[static_cast<size_t>(e.physical)] = j;
+        }
+    }
+    std::swap(sun_, next_);
+    releaseMap(first, clip);
+    next_ = Sun{};
+    building_ = ready_ = false;
+    ++shown_;
+}
+
+void ShadowPages::addLevelMaps(const Sun& sun, bool next) {
     // A level's map: an ortho window over its pages, relative to the eye.
+    const double eye[3] = {eye_.x, eye_.y, eye_.z};
     double ea, eb, ec;
-    sunPlane(eye, ea, eb, ec);
+    sunPlane(sun, eye, ea, eb, ec);
     bromath::Mat4 rot = bromath::midentity();
     for (int c = 0; c < 3; ++c) {
-        rot.at(0, c) = static_cast<float>(sun_.s[c]);
-        rot.at(1, c) = static_cast<float>(sun_.u[c]);
-        rot.at(2, c) = static_cast<float>(-sun_.d[c]);
+        rot.at(0, c) = static_cast<float>(sun.s[c]);
+        rot.at(1, c) = static_cast<float>(sun.u[c]);
+        rot.at(2, c) = static_cast<float>(-sun.d[c]);
     }
-    const float zNear = static_cast<float>(sun_.zLo - ec), zFar = static_cast<float>(sun_.zHi - ec);
+    const float zNear = static_cast<float>(sun.zLo - ec), zFar = static_cast<float>(sun.zHi - ec);
     for (int level = 0; level < config_.levels; ++level) {
         const double size = pageSize(level), w = size * SP_WINDOW;
-        const double a0 = static_cast<double>(sun_.ox[level]) * size - ea;
-        const double b0 = static_cast<double>(sun_.oy[level]) * size - eb;
+        const double a0 = static_cast<double>(sun.ox[level]) * size - ea;
+        const double b0 = static_cast<double>(sun.oy[level]) * size - eb;
         Map m;
         m.kind = SP_KIND_CLIPMAP;
         m.level = level;
-        m.first = level * SP_LEVEL_ENTRIES;
+        m.first = clipFirst(next) + level * SP_LEVEL_ENTRIES;
         m.light = sun.lightIndex;
         m.lightId = sun.lightId;
         m.relViewProj = bromath::mmul(makeOrthoZeroToOne(static_cast<float>(a0), static_cast<float>(a0 + w),
@@ -302,8 +303,61 @@ void ShadowPages::setSun(const ShadowSun& sun) {
         m.ortho = true;
         m.bias = sun.bias;
         m.normalBias = sun.normalBias;
+        m.next = next;
         maps_.push_back(m);
     }
+}
+
+void ShadowPages::setSun(const ShadowSun& sun) {
+    double d[3] = {sun.direction.x, sun.direction.y, sun.direction.z};
+    const double len = std::sqrt(dot3(d, d));
+    if (len < 1e-9) return;
+    for (double& v : d) v /= len;
+    const int clip = config_.levels * SP_LEVEL_ENTRIES;
+    if (!sun_.had || sun.lightId != sun_.lightId) {
+        // Another light's pages: nothing of them holds.
+        releaseMap(0, clip);
+        releaseMap(clipFirst(true), clip);
+        sun_ = Sun{};
+        next_ = Sun{};
+        building_ = ready_ = false;
+        beginBasis(sun_, d, nullptr);
+        sun_.had = true;
+        sun_.lightId = sun.lightId;
+    } else if (building_ && (ready_ || serial_ - begun_ >= static_cast<uint64_t>(config_.buildFrames))) {
+        show();
+    }
+    for (Sun* s : {&sun_, &next_}) {
+        s->lightIndex = sun.lightIndex;
+        s->bias = sun.bias;
+        s->normalBias = sun.normalBias;
+        s->reach = sun.reach;
+    }
+    sun_.on = true;
+
+    // The sun turned past the shown clipmap, or its casters outgrew the
+    // depth range: the next one begins, about the eye, in light space of the
+    // sun as it is now.
+    const bool outgrown = fitRange(sun_, sun.casters, false);
+    if (!building_ && (outgrown || dot3(sun_.d, d) < std::cos(static_cast<double>(config_.sunTurn)))) {
+        next_ = Sun{};
+        next_.had = true;
+        next_.lightId = sun.lightId;
+        next_.lightIndex = sun.lightIndex;
+        next_.bias = sun.bias;
+        next_.normalBias = sun.normalBias;
+        next_.reach = sun.reach;
+        beginBasis(next_, d, &sun_);
+        building_ = true;
+        ready_ = false;
+        begun_ = serial_;
+    }
+    if (building_ && fitRange(next_, sun.casters, true))
+        for (int i = clipFirst(true); i < clipFirst(true) + clip; ++i)
+            if (entries_[static_cast<size_t>(i)].drawn) entries_[static_cast<size_t>(i)].dirty = true;
+    moveWindows(sun_, 0);
+    if (building_) moveWindows(next_, clipFirst(true));
+    addLevelMaps(sun_, false);
 }
 
 bool ShadowPages::addLocal(const ShadowLocal& local) {
@@ -378,6 +432,8 @@ void ShadowPages::endLights() {
         releaseMap(localFirst(s), SP_LOCAL_ENTRIES);
         locals_[s].used = false;
     }
+    // The clipmap built: its levels' maps after the sampled ones.
+    if (sun_.on && building_) addLevelMaps(next_, true);
     // The casters' changes met before the maps were set.
     lightsSet_ = true;
     for (const bromath::AABB3& box : invalid_) invalidate(box);
@@ -385,8 +441,12 @@ void ShadowPages::endLights() {
     History& h = history_[serial_ % 8];
     h.serial = serial_;
     h.sun = sun_.on;
+    h.building = sun_.on && building_;
+    h.shown = shown_;
     std::memcpy(h.ox, sun_.ox, sizeof(h.ox));
     std::memcpy(h.oy, sun_.oy, sizeof(h.oy));
+    std::memcpy(h.nx, next_.ox, sizeof(h.nx));
+    std::memcpy(h.ny, next_.oy, sizeof(h.ny));
     for (int s = 0; s < kLocalSlots; ++s) {
         h.localId[s] = locals_[s].used ? locals_[s].lightId : 0u;
         h.localFace[s] = locals_[s].face;
@@ -395,14 +455,14 @@ void ShadowPages::endLights() {
 
 // --- Casters ---
 
-void ShadowPages::planeRect(const bromath::AABB3& box, double rect[4]) const {
+void ShadowPages::planeRect(const Sun& sun, const bromath::AABB3& box, double rect[4]) {
     double cs[8][3];
     corners(box, cs);
     rect[0] = rect[2] = 1e300;
     rect[1] = rect[3] = -1e300;
     for (auto& p : cs) {
         double a, b, c;
-        sunPlane(p, a, b, c);
+        sunPlane(sun, p, a, b, c);
         rect[0] = std::min(rect[0], a);
         rect[1] = std::max(rect[1], a);
         rect[2] = std::min(rect[2], b);
@@ -411,10 +471,11 @@ void ShadowPages::planeRect(const bromath::AABB3& box, double rect[4]) const {
 }
 
 template <class F>
-void ShadowPages::forLevelRect(int level, const double rect[4], F&& f) {
-    const Map& m = maps_[static_cast<size_t>(level)];
+void ShadowPages::forLevelRect(const Map& m, const double rect[4], F&& f) {
+    const int level = m.level;
     const double size = pageSize(level), border = static_cast<double>(m.texel) * SP_BORDER;
-    const int64_t ox = sun_.ox[level], oy = sun_.oy[level];
+    const Sun& sun = sunOf(m.next);
+    const int64_t ox = sun.ox[level], oy = sun.oy[level];
     const auto clampPage = [&](double v, int64_t o) {
         const double p = std::floor(v / size);
         return static_cast<int64_t>(std::clamp(p, static_cast<double>(o), static_cast<double>(o + SP_WINDOW - 1)));
@@ -429,15 +490,17 @@ void ShadowPages::forLevelRect(int level, const double rect[4], F&& f) {
 }
 
 template <class F>
-void ShadowPages::forPages(const bromath::AABB3& box, int minLevel, int maxLevel, F&& f) {
+void ShadowPages::forPages(const bromath::AABB3& box, int minLevel, int maxLevel, bool next, F&& f) {
     if (bromath::aisEmpty(box)) return;
     double cs[8][3];
     corners(box, cs);
-    double rect[4];
-    if (sun_.on) planeRect(box, rect);
+    double rect[4], nextRect[4];
+    if (sun_.on) planeRect(sun_, box, rect);
+    if (sun_.on && building_) planeRect(next_, box, nextRect);
     for (const Map& m : maps_) {
         if (m.kind == SP_KIND_CLIPMAP) {
-            if (m.level >= minLevel && m.level <= maxLevel) forLevelRect(m.level, rect, f);
+            if (m.next && !next) continue;
+            if (m.level >= minLevel && m.level <= maxLevel) forLevelRect(m, m.next ? nextRect : rect, f);
         } else {
             // The box's corners in the face's (u, v); a corner behind the
             // light covers the face.
@@ -482,7 +545,7 @@ void ShadowPages::invalidate(const bromath::AABB3& box) {
         invalid_.push_back(box);
         return;
     }
-    forPages(box, 0, SP_MAX_LEVELS, [this](int i) {
+    forPages(box, 0, SP_MAX_LEVELS, true, [this](int i) {
         Entry& e = entries_[static_cast<size_t>(i)];
         if (e.drawn) e.dirty = true;
     });
@@ -516,7 +579,7 @@ void ShadowPages::markDynamic() {
             }
     }
     for (const Dynamic& d : dynamic_)
-        forPages(d.box, s, d.sways ? s : SP_MAX_LEVELS, [&](int i) {
+        forPages(d.box, s, d.sways ? s : SP_MAX_LEVELS, false, [&](int i) {
             Entry& e = entries_[static_cast<size_t>(i)];
             const bool atSway = i >= s * SP_LEVEL_ENTRIES && i < (s + 1) * SP_LEVEL_ENTRIES;
             if (neededNow(e) || (atSway && under[static_cast<size_t>(i - s * SP_LEVEL_ENTRIES)])) e.dynamic = true;
@@ -530,23 +593,26 @@ void ShadowPages::markBase() {
     // shadow can fall in view (a pixel that wants a coarser level, with none
     // drawn there, takes the finer).
     // What is seen and what casts, both across the light: where a shadow
-    // can fall in view.
-    if (sun_.on && !bromath::aisEmpty(seen_)) {
+    // can fall in view. The clipmap built has its own, drawn before it is
+    // shown.
+    for (const Map& m : maps_) {
+        if (m.kind != SP_KIND_CLIPMAP || m.level != 0 || bromath::aisEmpty(seen_)) continue;
+        const Sun& sun = sunOf(m.next);
         double rect[4];
-        planeRect(seen_, rect);
-        rect[0] = std::max(rect[0], sun_.casterRect[0]);
-        rect[1] = std::min(rect[1], sun_.casterRect[1]);
-        rect[2] = std::max(rect[2], sun_.casterRect[2]);
-        rect[3] = std::min(rect[3], sun_.casterRect[3]);
-        if (rect[0] <= rect[1] && rect[2] <= rect[3]) {
-            const double span = std::max(rect[1] - rect[0], rect[3] - rect[2]);
-            int level = 0;
-            while (level < config_.levels - 1 && span > kBasePages * pageSize(level)) ++level;
-            forLevelRect(level, rect, [this](int i) {
-                Entry& e = entries_[static_cast<size_t>(i)];
-                if (e.occupied) e.base = serial_;
-            });
-        }
+        planeRect(sun, seen_, rect);
+        rect[0] = std::max(rect[0], sun.casterRect[0]);
+        rect[1] = std::min(rect[1], sun.casterRect[1]);
+        rect[2] = std::max(rect[2], sun.casterRect[2]);
+        rect[3] = std::min(rect[3], sun.casterRect[3]);
+        if (rect[0] > rect[1] || rect[2] > rect[3]) continue;
+        const double span = std::max(rect[1] - rect[0], rect[3] - rect[2]);
+        int level = 0;
+        while (level < config_.levels - 1 && span > kBasePages * pageSize(level)) ++level;
+        // (A clipmap's level maps run in order from its level 0's.)
+        forLevelRect((&m)[level], rect, [this](int i) {
+            Entry& e = entries_[static_cast<size_t>(i)];
+            if (e.occupied) e.base = serial_;
+        });
     }
     // A local map: its coarsest mip's one page.
     for (const Map& m : maps_)
@@ -560,27 +626,42 @@ void ShadowPages::request(uint64_t serial, std::span<const uint32_t> bits) {
     const History& h = history_[serial % 8];
     if (h.serial != serial || serial == 0) return;
     newestRequest_ = std::max(newestRequest_, serial);
-    const int clip = config_.levels * SP_LEVEL_ENTRIES;
+    const int clip = config_.levels * SP_LEVEL_ENTRIES, nextFirst = clipFirst(true);
     const size_t words = std::min(bits.size(), (entries_.size() + 31) / 32);
     for (size_t w = 0; w < words; ++w) {
         uint32_t word = bits[w];
         while (word) {
             const int bit = std::countr_zero(word);
             word &= word - 1;
-            const int i = static_cast<int>(w * 32 + bit);
+            int i = static_cast<int>(w * 32 + bit);
             if (i >= entryCount()) break;
-            Entry& e = entries_[static_cast<size_t>(i)];
-            if (i < clip) {
+            if (i < clip || i >= nextFirst) {
+                // A clipmap's page: the shown one's while no other has been
+                // shown since; the one built then, now built or shown.
                 if (!h.sun) continue;
-                const int level = i / SP_LEVEL_ENTRIES, slot = i % SP_LEVEL_ENTRIES;
-                const int64_t x = h.ox[level] + wrap(slot % SP_WINDOW - h.ox[level]);
-                const int64_t y = h.oy[level] + wrap(slot / SP_WINDOW - h.oy[level]);
+                const bool next = i >= nextFirst;
+                const int64_t *hx = h.ox, *hy = h.oy;
+                if (next) {
+                    if (!h.building) continue;
+                    hx = h.nx;
+                    hy = h.ny;
+                    if (h.shown + 1 == shown_) i -= nextFirst;
+                    else if (h.shown != shown_ || !building_) continue;
+                } else if (h.shown != shown_) {
+                    continue;
+                }
+                const int k = next ? static_cast<int>(w * 32 + bit) - nextFirst : i;
+                const int level = k / SP_LEVEL_ENTRIES, slot = k % SP_LEVEL_ENTRIES;
+                const int64_t x = hx[level] + wrap(slot % SP_WINDOW - hx[level]);
+                const int64_t y = hy[level] + wrap(slot / SP_WINDOW - hy[level]);
+                const Entry& e = entries_[static_cast<size_t>(i)];
                 if (!e.occupied || e.x != x || e.y != y) continue;   // gone from the window since
             } else {
                 const int s = (i - clip) / SP_LOCAL_ENTRIES;
                 if (!locals_[s].used || h.localId[s] != locals_[s].lightId || h.localFace[s] != locals_[s].face)
                     continue;
             }
+            Entry& e = entries_[static_cast<size_t>(i)];
             e.needed = std::max(e.needed, serial);
         }
     }

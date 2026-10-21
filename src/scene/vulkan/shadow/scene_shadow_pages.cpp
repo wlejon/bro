@@ -16,10 +16,11 @@ namespace bro::scene::vk {
 bool SceneShadowPages::setup(SceneGpu& gpu) {
     allocator_ = &gpu.allocator;
     // A page's first guess: about what one of biomes' redrawn pages costs.
-    kind_ = gpu.world.addKind(this, {"shadow pages", WorldSchedule::Raster, 0.004f});
+    kind_ = gpu.world.addKind(this, {"shadow pages", WorldSchedule::Raster, 0.007f});
+    stillKind_ = gpu.world.addKind(this, {"shadow pages, still", WorldSchedule::Raster, 0.0001f});
     // 1x1 until a light casts a shadow: the lighting set always has a pool
     // and a scratch target.
-    return kind_ >= 0 && ensureImage(gpu, pool, 1, kPoolUsage, "pool") &&
+    return kind_ >= 0 && stillKind_ >= 0 && ensureImage(gpu, pool, 1, kPoolUsage, "pool") &&
            ensureImage(gpu, scratch, 1, kScratchUsage, "scratch target");
 }
 
@@ -82,10 +83,10 @@ bool SceneShadowPages::beginFrame(SceneGpu& gpu, SceneRenderer& renderer) {
     const bool had = pool.width > 1;
     const uint32_t poolSide = static_cast<uint32_t>(std::max(plan.poolColumns, plan.poolRows) * SP_STRIDE);
     const bool poolOk = pool.isValid() && pool.width == poolSide;
-    // (Two table words an entry, a request bit an entry.)
+    // (A request bit an entry.)
     if (!ensureImage(gpu, pool, poolSide, kPoolUsage, "page pool") ||
         !ensureImage(gpu, scratch, static_cast<uint32_t>(plan.scratchSize), kScratchUsage, "scratch target") ||
-        !ensureRequests(gpu, static_cast<VkDeviceSize>((plan.table.size() / 2 + 31) / 32) * 4u)) {
+        !ensureRequests(gpu, static_cast<VkDeviceSize>((plan.entryCount + 31) / 32) * 4u)) {
         gpu.allocator.destroyImage(pool);
         gpu.allocator.destroyImage(scratch);
         ensureImage(gpu, pool, 1, kPoolUsage, "pool");
@@ -146,7 +147,7 @@ void SceneShadowPages::offer(SceneFrame& frame, WorldService& service) {
     for (const ShadowPageWant& w : frame.renderer.shadowPages().wants()) {
         WorldJob job;
         job.key = w.key;
-        job.kind = kind_;
+        job.kind = w.plants ? kind_ : stillKind_;
         job.error = w.error;
         job.size = w.size;
         job.required = w.required;
@@ -156,7 +157,8 @@ void SceneShadowPages::offer(SceneFrame& frame, WorldService& service) {
 
 uint32_t SceneShadowPages::record(SceneFrame& frame, int /*kind*/, std::span<const WorldJob> granted,
                                   WorldStream& /*stream*/) {
-    // Drawn next frame (the shadow pass stamps this kind's span there).
+    // Drawn next frame (the shadow pass stamps this kind's span there); each
+    // kind's grants are added to the frame's.
     std::vector<uint64_t> keys;
     keys.reserve(granted.size());
     for (const WorldJob& j : granted) keys.push_back(j.key);

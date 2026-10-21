@@ -3,8 +3,10 @@
 // and the clipmap's snapping, the requests a marking pass reads back (late,
 // across a window's move), the jobs it offers and what a grant draws, the
 // levels a want's error and the guard's requirement come from, the pool's
-// least-recently-needed reuse, invalidation by bounds, by the sun's turn and
-// by a light's move, the overlays of what moves (from the sway level up,
+// least-recently-needed reuse, invalidation by bounds and by a light's move,
+// the sun's next clipmap (begun by a turn or an outgrown depth range, built
+// under the shown one's wants, shown when drawn or after buildFrames,
+// requests read late across the show), the overlays of what moves (from the sway level up,
 // the finer levels reading the sway level's), the rect covers, and the
 // casters' still and moving states.
 
@@ -140,6 +142,8 @@ void testRequestsWantsAndGrants() {
     check(wg.required && !wf.required, "the top of a chain is required, a page under a needed one is not");
     check(wf.error == 64.0f, "with nothing drawn above it a page is as wrong as can be");
     check(wg.size > wf.size, "a coarser page is the larger");
+    check(wg.plants == (2 + SP_GUARD_LEVELS > p.swayLevel()) && !wf.plants,
+          "a page the plants draw into (past the sway level) is the dearer kind");
     // Grant the guard alone: drawn next frame and sampled in it.
     p.grant(std::vector<uint64_t>{static_cast<uint64_t>(guard)});
     p.beginFrame(eye);
@@ -224,7 +228,7 @@ void testLruReuse() {
     check(drawn == 3, "a pool of three holds three needed pages, the fourth waits");
 }
 
-void testInvalidationAndSunTurn() {
+void testInvalidation() {
     // With no stale page redrawn the frame it goes stale (staleNow 0), what
     // the world service is left: testStaleNow has the default.
     ShadowPagesConfig c;
@@ -254,25 +258,111 @@ void testInvalidationAndSunTurn() {
     p.grant(keys);
     frame(p, plan, eye, {near, far});
     check(!p.entry(near).dirty && plan.staticPages == 1, "redrawn in place, it is clean");
-    // The sun turning under the threshold keeps every page; past it, all
-    // are stale and still sampled.
-    const float t = 0.001f;
-    frame(p, plan, eye, {near, far}, downSun(bromath::vnorm(Vec3{std::sin(t), -1.0f, 0.0f})));
-    check(!p.entry(near).dirty && !p.entry(far).dirty, "a turn under the threshold keeps the pages");
-    frame(p, plan, eye, {near, far}, downSun(bromath::vnorm(Vec3{std::sin(0.01f), -1.0f, 0.0f})));
-    const int n2 = entryAt(p, eye, 4);
-    check(p.entry(n2).dirty && (plan.table[2 * static_cast<size_t>(n2)] & SP_RESIDENT) != 0,
-          "past it every page is stale and still drawn until redrawn");
-    double a0, b0, c0;
+    // The sun turning under the threshold keeps every page and begins
+    // nothing.
+    frame(p, plan, eye, {near, far}, downSun(bromath::vnorm(Vec3{std::sin(0.001f), -1.0f, 0.0f})));
+    check(!p.entry(near).dirty && !p.entry(far).dirty && !p.building(), "a turn under the threshold keeps the pages");
+}
+
+/// The level-`level` entry under `p` in the clipmap being built.
+int nextEntryAt(const ShadowPages& pages, const Vec3& p, int level) {
+    double a, b, c;
+    pages.sunCoordinates(p, a, b, c, true);
+    const double size = pages.pageSize(level);
+    return pages.clipmapEntry(level, ShadowPages::pageOf(a, size), ShadowPages::pageOf(b, size), true);
+}
+
+void testSunTurnBuildsTheNext() {
+    ShadowPagesConfig c;
+    c.staleNow = 0;
+    ShadowPages p;
+    p.configure(c);
+    ShadowPlan plan;
+    const Vec3 eye{0.0f, 1.0f, 0.0f};
+    frame(p, plan, eye, {});
+    const int near = entryAt(p, eye, 4);
+    frame(p, plan, eye, {near});
+    frame(p, plan, eye, {near});
+    check(p.entry(near).drawn, "drawn");
+    const int phys = p.entry(near).physical;
+
+    // Past the threshold the shown pages stay clean and sampled while the
+    // next clipmap, in light space of the sun as it is now, is built.
+    // (Its own frame's requests would name the next pages too, the mark pass
+    // marking both; none are read back yet.)
+    const ShadowSun turned = downSun(bromath::vnorm(Vec3{std::sin(0.01f), -1.0f, 0.0f}));
+    frame(p, plan, eye, {}, turned, false);
+    check(p.building() && !p.entry(near).dirty && (plan.table[2 * static_cast<size_t>(near)] & SP_RESIDENT) != 0,
+          "a turn past the threshold begins the next clipmap and keeps the shown one");
+    check(plan.nextCount == SP_MAX_LEVELS && plan.mapCount == SP_MAX_LEVELS, "its levels are planned apart");
+    check(plan.table.size() / 2 < static_cast<size_t>(plan.entryCount) && plan.entryCount == p.entryCount(),
+          "the page table ends before its entries; the requests run on past");
+    const int next = nextEntryAt(p, eye, 4);
+    check(next >= static_cast<int>(plan.table.size() / 2), "its entries are past the table");
+    double a0, b0, c0, a1, b1, c1;
     p.sunCoordinates(eye, a0, b0, c0);
-    check(n2 == near, "the turn keeps the eye's plane coordinates: its page stays where it was");
-    // A caster beyond the depth range grows it: every page is stale.
-    frame(p, plan, eye, {n2});
-    frame(p, plan, eye, {n2});
-    ShadowSun tall = downSun(bromath::vnorm(Vec3{std::sin(0.01f), -1.0f, 0.0f}));
+    p.sunCoordinates(eye, a1, b1, c1, true);
+    check(std::fabs(a0 - a1) < 1e-9 && std::fabs(b0 - b1) < 1e-9, "it keeps the eye's plane coordinates");
+    // Its pages are wanted under a pixel and never required.
+    frame(p, plan, eye, {near, next}, turned, false);
+    ShadowPageWant w;
+    check(hasWant(p, next, &w) && w.error < 1.0f && !w.required && p.stats().building == 1,
+          "its pages wait under every shown page");
+    // A further turn while it is built waits for it.
+    const ShadowSun further = downSun(bromath::vnorm(Vec3{std::sin(0.02f), -1.0f, 0.0f}));
+    frame(p, plan, eye, {near, next}, further, false);
+    check(p.building() && nextEntryAt(p, eye, 4) == next, "a turn while one is built waits");
+    // Granted and drawn, the frame after it is shown: the shown entries are
+    // its, the old pages freed.
+    p.grant(std::vector<uint64_t>{static_cast<uint64_t>(next)});
+    frame(p, plan, eye, {near, next}, further, false);
+    check(p.entry(next).drawn && p.stats().building == 0 && plan.staticPages == 1, "drawn");
+    const int nextPhys = p.entry(next).physical;
+    frame(p, plan, eye, {near}, further, false);
+    const int shown = entryAt(p, eye, 4);
+    check(shown == near && p.entry(shown).drawn && p.entry(shown).physical == nextPhys,
+          "once its needed pages are drawn it is shown, its pages kept");
+    check(p.stats().resident >= 1 &&
+              (plan.table[2 * static_cast<size_t>(shown)] & SP_PHYSICAL_MASK) == static_cast<uint32_t>(nextPhys),
+          "and sampled");
+    // The sun has turned on since (further): the next one begins at once.
+    check(p.building(), "a turn past the one shown begins another");
+    (void)phys;
+}
+
+void testBuildAcrossShowAndRange() {
+    ShadowPagesConfig c;
+    c.staleNow = 0;
+    c.buildFrames = 3;
+    ShadowPages p;
+    p.configure(c);
+    ShadowPlan plan;
+    const Vec3 eye{0.0f, 1.0f, 0.0f};
+    frame(p, plan, eye, {});
+    const int near = entryAt(p, eye, 4);
+    frame(p, plan, eye, {near});
+    frame(p, plan, eye, {near});
+    // A caster beyond the depth range: the shown pages stay clean, the next
+    // clipmap (the same sun, a range that holds it) is built.
+    ShadowSun tall = downSun();
     tall.casters.max.y = 900.0f;
-    frame(p, plan, eye, {n2}, tall);
-    check(p.entry(n2).dirty, "a depth range that grows redraws every page");
+    frame(p, plan, eye, {near}, tall, false);
+    check(p.building() && !p.entry(near).dirty, "an outgrown depth range builds the next clipmap");
+    const int next = nextEntryAt(p, eye, 4);
+    const uint64_t serial = p.serial();
+    // Nothing granted: after buildFrames it is shown anyway (its pages then
+    // wanted as the shown one's), and a request read late for its page
+    // names the shown one's.
+    frame(p, plan, eye, {}, tall, false);
+    frame(p, plan, eye, {}, tall, false);
+    frame(p, plan, eye, {}, tall, false);
+    check(!p.building() && !p.entry(near).drawn, "after buildFrames it is shown, drawn or not");
+    p.beginFrame(eye);
+    p.setSun(tall);
+    p.endLights();
+    p.request(serial, bitsOf(p, {next}));
+    p.plan(plan);
+    check(p.entry(near).needed && hasWant(p, near), "a late request for the built page names the shown one");
 }
 
 void testOverlays() {
@@ -499,7 +589,9 @@ int main() {
     testRequestsWantsAndGrants();
     testWindowMoveAndLateRequests();
     testLruReuse();
-    testInvalidationAndSunTurn();
+    testInvalidation();
+    testSunTurnBuildsTheNext();
+    testBuildAcrossShowAndRange();
     testStaleNow();
     testBase();
     testOverlays();

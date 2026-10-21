@@ -91,8 +91,21 @@ void PassShadowMark::record(SceneFrame& frame) {
         u.lightPos[count][3] = l.range() > 0.0f ? l.range() : 1e30f;
         ++count;
     }
+    for (int m = 0; m < plan.mapCount && m < kSceneMaxShadowMaps; ++m)
+        shadowMapUniform(plan, plan.maps[m], view.eye, u.maps[m]);
+    // The sun's next clipmap, while it is built: one more sun, its levels
+    // past the sampled maps.
+    if (plan.nextCount > 0 && count < kSceneMaxLights) {
+        const int light = plan.next[0].light;
+        u.lights[count][0] = static_cast<float>(kSceneMaxShadowMaps);
+        u.lights[count][1] = static_cast<float>(plan.nextCount);
+        u.lights[count][2] = 0.0f;
+        u.lights[count][3] = light >= 0 && light < ShadowPlan::kMaxLights ? plan.lightReach[light] : 0.0f;
+        ++count;
+        for (int m = 0; m < plan.nextCount; ++m)
+            shadowMapUniform(plan, plan.next[m], view.eye, u.maps[kSceneMaxShadowMaps + m]);
+    }
     u.grid[3] = static_cast<float>(count);
-    for (int m = 0; m < plan.mapCount && m < kSceneMaxShadowMaps; ++m) shadowMapUniform(plan, m, view.eye, u.maps[m]);
 
     const VkDescriptorBufferInfo ubo = frame.gpu.device.frameUniform(&u, sizeof(u));
     VkDescriptorSet set = frame.gpu.device.frameSet(setLayout_);

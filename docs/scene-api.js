@@ -104,6 +104,9 @@ target/up/mode: the 6DOF / FPS path that avoids target+up precision loss.
  * @property {number} [shadowPagesWanted]    needed pages left for a later frame; a coarser (or finer)
  *   resident level shows in their place meanwhile
  * @property {number} [shadowPagesEvicted]   pages taken from others this frame (least recently used)
+ * @property {number} [shadowPagesBuilding]  while the sun's next clipmap is built (after a turn past
+ *   about 0.1 degree), its needed pages not drawn yet; it is shown, every shadow moving at once,
+ *   when this reaches 0
  * @property {number} [shadowViews]          the views (page rects) the shadow pass drew
  * @property {number} [groundLayerNeeded]   the turf's surface layer tiles the camera needs
  * @property {number} [groundLayerMissing]  of those, the ones not filled at their data's current generation

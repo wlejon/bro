@@ -596,6 +596,7 @@ scene::CullStats Engine::sceneCullStats() const {
         sum.shadowPagesDynamic  += s.shadowPagesDynamic;
         sum.shadowPagesWanted   += s.shadowPagesWanted;
         sum.shadowPagesEvicted  += s.shadowPagesEvicted;
+        sum.shadowPagesBuilding += s.shadowPagesBuilding;
         sum.shadowViews         += s.shadowViews;
         sum.groundLayerNeeded   += s.groundLayerNeeded;
         sum.groundLayerMissing  += s.groundLayerMissing;

@@ -86,6 +86,7 @@ inline bool shadowCastsInto(const ShadowViewPlan& v, ShadowMotion motion) {
 struct ShadowPageCopy {
     int scratchX = 0, scratchY = 0;   // the bordered page's first texel in the scratch target
     int physical = 0;                 // its page in the pool
+    bool plants = false;              // drawn in a view the plants draw into (its job's kind)
 };
 
 struct ShadowPlan {
@@ -103,6 +104,10 @@ struct ShadowPlan {
     int lightMap[kMaxLights] = {};
     int lightMapCount[kMaxLights] = {};
     float lightReach[kMaxLights] = {};
+    // The sun's next clipmap while it is built (ShadowPages::building()):
+    // its levels, marked and drawn, not sampled until it is shown.
+    int nextCount = 0;
+    ShadowMapPlan next[SP_MAX_LEVELS];
     float finestTexel = 0.0f;    // the sun's level 0 texel (m)
     int levels = 0;              // the sun's clipmap levels
     int swayLevel = 0;           // the level whose overlays the finer ones read (ShadowPages::swayLevel)
@@ -111,11 +116,13 @@ struct ShadowPlan {
     // eye (a perspective camera), or metres a pixel (an orthographic one).
     float pixelAngle = 0.0f, orthoPixel = 0.0f;
 
-    // The page table, two words an entry (a map's run each): its cached
-    // page (SP_RESIDENT | physical) and its overlay this frame
+    // The page table, two words an entry (a sampled map's run each): its
+    // cached page (SP_RESIDENT | physical) and its overlay this frame
     // (SP_RESIDENT | the page's first texel in the scratch target,
-    // SP_OVERLAY_X/Y), and the pool's size in pages.
+    // SP_OVERLAY_X/Y), and the pool's size in pages. The entries the
+    // marking pass may name run on past it (the next clipmap's).
     std::vector<uint32_t> table;
+    int entryCount = 0;
     int poolColumns = 0, poolRows = 0;
     int scratchSize = 0;         // the scratch target's side, texels
 
@@ -125,6 +132,7 @@ struct ShadowPlan {
     ShadowViewPlan views[SP_MAX_VIEWS];
     std::vector<ShadowPageCopy> copyOut;
     uint32_t staticPages = 0;    // pages the static views redraw (the world service's jobs)
+    uint32_t plantPages = 0;     // of them, in views the plants draw into
 
     bool any() const { return mapCount > 0; }
 };

@@ -19,7 +19,7 @@ layout(std140, set = 0, binding = 0) uniform ShadowMarkUBO {
     vec4 view;          // metres a pixel a metre (perspective), metres a pixel (ortho), finest texel, levels
     vec4 lights[32];    // first map, maps, kind (0 sun, 1 spot, 2 point), reach (0: none)
     vec4 lightPos[32];  // camera-relative position, range
-    ShadowMapGpu maps[SP_MAX_MAPS];
+    ShadowMapGpu maps[SP_MARK_MAPS];
 } u;
 
 layout(set = 0, binding = 1) uniform sampler2D sceneDepth;

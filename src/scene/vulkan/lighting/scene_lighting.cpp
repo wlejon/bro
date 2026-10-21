@@ -49,8 +49,8 @@ void setLight(SceneLightUniform& out, const LightNode& l, const bromath::Vec3& e
 
 }  // namespace
 
-void shadowMapUniform(const ShadowPlan& plan, int index, const bromath::Vec3& eye, SceneShadowMapUniform& out) {
-    const ShadowMapPlan& map = plan.maps[index];
+void shadowMapUniform(const ShadowPlan& plan, const ShadowMapPlan& map, const bromath::Vec3& eye,
+                      SceneShadowMapUniform& out) {
     // Clip -> (map uv, depth): x,y from [-1,1] to [0,1]; the clip y flip of
     // toVulkanClip matches the flip the shadow pass drew the pages with.
     // The maps are relative to the plan's eye; positions here to `eye`.
@@ -129,7 +129,7 @@ SceneLightingUniforms sceneLighting(const SceneRenderer& renderer, const SceneGp
     for (int v = 0; v < plan.viewCount; ++v) overlays = overlays || plan.views[v].dynamic;
     light.shadowView[3] = overlays ? static_cast<float>(plan.swayLevel) : -1.0f;
     for (int m = 0; m < plan.mapCount && m < kSceneMaxShadowMaps; ++m)
-        shadowMapUniform(plan, m, eye, light.shadowMaps[m]);
+        shadowMapUniform(plan, plan.maps[m], eye, light.shadowMaps[m]);
     gpu.environment.fillLighting(light, renderer);
     gpu.atmosphere.fill(light.atm, eye);
     return light;

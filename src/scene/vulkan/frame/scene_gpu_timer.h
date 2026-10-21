@@ -21,7 +21,9 @@
 // Spans are stamped always, timed passes or not: a numbered stretch of a
 // render (the world service's jobs of one kind, scene/vulkan/world/
 // scene_world_service.h) with the jobs it held, on the graphics queue or on
-// the async compute stream. Every render read, oldest first, is kept with
+// the async compute stream. A span may run in a few segments (a kind's jobs
+// drawn in one pass and copied in another): its time is theirs summed, its
+// jobs theirs. Every render read, oldest first, is kept with
 // its spans for takeFrames(), apart from takeMs(): the world service reads
 // its frames there whatever perf.gpuFrameMs reads.
 #include "render/vulkan_context.h"
@@ -41,6 +43,7 @@ public:
     /// (the last mark to the end).
     using Passes = std::vector<std::pair<std::string, double>>;
     static constexpr uint32_t kMaxSpans = 8;
+    static constexpr uint32_t kSpanSegments = 4;   // a span's segments a render
     /// A render read: its milliseconds (as takeMs reports them) and its spans.
     struct Frame {
         uint64_t order = 0;   // its place among the timed renders submitted (1 the first)
@@ -77,10 +80,11 @@ public:
     /// when the render is untimed or that queue cannot write timestamps.
     void beginCompute(VkCommandBuffer cmd);
     void endCompute(VkCommandBuffer cmd);
-    /// Span `id` (below kMaxSpans, once a render) begins and ends in `cmd`:
-    /// the render's graphics, or (`apart`) its compute stream on the async
-    /// compute queue. False, and nothing written, when the render or that
-    /// stream is untimed.
+    /// A segment of span `id` (below kMaxSpans; up to kSpanSegments a
+    /// render, all on one queue) begins and ends in `cmd`: the render's
+    /// graphics, or (`apart`) its compute stream on the async compute queue,
+    /// holding `jobs` of the span's. False, and nothing written, when the
+    /// render or that stream is untimed or the span has no segment left.
     bool beginSpan(VkCommandBuffer cmd, uint32_t id, bool apart);
     void endSpan(VkCommandBuffer cmd, uint32_t id, bool apart, uint32_t jobs);
     /// `ticket` is the render's last graphics submission, which waits for its
@@ -108,7 +112,8 @@ private:
     // opaque and shadow passes can take hundreds.)
     static constexpr uint32_t kMaxMarks = 512;
     static constexpr uint32_t kSpanBase = 2 + kMaxMarks;
-    static constexpr uint32_t kPerSlot = kSpanBase + 2 * kMaxSpans;   // start, end, the marks, the spans
+    // start, end, the marks, the spans' segments
+    static constexpr uint32_t kPerSlot = kSpanBase + 2 * kMaxSpans * kSpanSegments;
 
     render::VulkanContext& context_;
     VkQueryPool pool_ = VK_NULL_HANDLE;
@@ -132,9 +137,12 @@ private:
     double ready_[8] = {};
     uint32_t readyCount_ = 0;
     // Each slot's spans: those written (on the graphics queue, on the
-    // compute stream) and their jobs.
+    // compute stream), the one with a segment open, and each one's segments
+    // and jobs.
     uint32_t spanMask_[8] = {};
     uint32_t spanApart_[8] = {};
+    uint32_t spanOpen_[8] = {};
+    uint32_t spanSegments_[8][kMaxSpans] = {};
     uint32_t spanJobs_[8][kMaxSpans] = {};
     // The renders read for takeFrames, oldest first.
     std::vector<Frame> frames_;

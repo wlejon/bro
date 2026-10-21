@@ -14,6 +14,10 @@ namespace {
 
 int64_t wrap(int64_t v) { return ((v % SP_WINDOW) + SP_WINDOW) % SP_WINDOW; }
 
+// A page of the clipmap built is wrong by nothing on screen yet: its error
+// is under a pixel, under every page shown.
+constexpr float kNextError = 0.5f;
+
 }  // namespace
 
 void shadowCoverRects(const std::vector<uint8_t>& grid, int w, int h, int maxSide, int block, std::vector<int>& out) {
@@ -69,7 +73,7 @@ int ShadowPages::allocate() {
     return best;
 }
 
-void ShadowPages::grant(std::span<const uint64_t> keys) { granted_.assign(keys.begin(), keys.end()); }
+void ShadowPages::grant(std::span<const uint64_t> keys) { granted_.insert(granted_.end(), keys.begin(), keys.end()); }
 
 void ShadowPages::viewMatrix(const Map& m, const Rect& r, ShadowViewPlan& v) const {
     const int n = m.kind == SP_KIND_CLIPMAP ? SP_WINDOW : SP_LOCAL >> r.mip;
@@ -112,19 +116,23 @@ void ShadowPages::plan(ShadowPlan& out) {
     out.viewCount = 0;
     out.copyOut.clear();
     out.staticPages = 0;
-    out.table.assign(entries_.size() * 2, 0u);
+    out.plantPages = 0;
+    out.nextCount = 0;
+    out.entryCount = entryCount();
+    // (The table ends before the clipmap built: nothing samples it.)
+    out.table.assign(static_cast<size_t>(clipFirst(true)) * 2, 0u);
 
     for (const Map& m : maps_) {
-        if (out.mapCount >= SP_MAX_MAPS) break;
-        ShadowMapPlan& p = out.maps[out.mapCount];
+        if (m.next ? out.nextCount >= SP_MAX_LEVELS : out.mapCount >= SP_MAX_MAPS) continue;
+        ShadowMapPlan& p = m.next ? out.next[out.nextCount] : out.maps[out.mapCount];
         p.relViewProj = m.relViewProj;
         p.viewProj = m.viewProj;
         p.kind = m.kind;
         p.light = m.light;
         p.level = m.kind == SP_KIND_CLIPMAP ? m.level : 0;
         p.firstEntry = m.first;
-        p.originX = m.kind == SP_KIND_CLIPMAP ? static_cast<int>(wrap(sun_.ox[m.level])) : 0;
-        p.originY = m.kind == SP_KIND_CLIPMAP ? static_cast<int>(wrap(sun_.oy[m.level])) : 0;
+        p.originX = m.kind == SP_KIND_CLIPMAP ? static_cast<int>(wrap(sunOf(m.next).ox[m.level])) : 0;
+        p.originY = m.kind == SP_KIND_CLIPMAP ? static_cast<int>(wrap(sunOf(m.next).oy[m.level])) : 0;
         p.texel = m.texel;
         p.texelPerMetre = m.texelPerMetre;
         p.zNear = m.zNear;
@@ -132,6 +140,10 @@ void ShadowPages::plan(ShadowPlan& out) {
         p.ortho = m.ortho;
         p.bias = m.bias;
         p.normalBias = m.normalBias;
+        if (m.next) {
+            ++out.nextCount;
+            continue;
+        }
         if (m.light >= 0 && m.light < ShadowPlan::kMaxLights) {
             if (out.lightMap[m.light] < 0) out.lightMap[m.light] = out.mapCount;
             ++out.lightMapCount[m.light];
@@ -151,6 +163,7 @@ void ShadowPages::plan(ShadowPlan& out) {
     markDynamic();
     std::vector<int> dynamicPages;
     for (const Map& m : maps_) {
+        if (m.next) continue;
         const int count = m.kind == SP_KIND_CLIPMAP ? SP_LEVEL_ENTRIES : SP_LOCAL_ENTRIES;
         for (int i = m.first; i < m.first + count; ++i)
             if (entries_[static_cast<size_t>(i)].dynamic) dynamicPages.push_back(i);
@@ -170,10 +183,10 @@ void ShadowPages::plan(ShadowPlan& out) {
     int mip = 0;
     // A stale needed page is redrawn now too, while staleNow allows (finest
     // first): it shows a caster where it no longer is, not merely a coarser
-    // texel.
+    // texel. (The clipmap built shows nothing: its pages wait for grants.)
     std::vector<uint64_t> keys;
     int stale = 0;
-    for (size_t i = 0; i < entries_.size(); ++i) {
+    for (size_t i = 0; i < static_cast<size_t>(clipFirst(true)); ++i) {
         const Entry& e = entries_[i];
         if (e.base == serial_ && (!e.drawn || e.dirty)) keys.push_back(i);
         else if (e.drawn && e.dirty && neededNow(e) && stale < config_.staleNow) {
@@ -218,8 +231,9 @@ void ShadowPages::plan(ShadowPlan& out) {
         const Entry& e = entries_[static_cast<size_t>(i)];
         if (maps_[static_cast<size_t>(map)].kind == SP_KIND_CLIPMAP) {
             const int level = maps_[static_cast<size_t>(map)].level;
-            x = static_cast<int>(e.x - sun_.ox[level]);
-            y = static_cast<int>(e.y - sun_.oy[level]);
+            const Sun& sun = sunOf(maps_[static_cast<size_t>(map)].next);
+            x = static_cast<int>(e.x - sun.ox[level]);
+            y = static_cast<int>(e.y - sun.oy[level]);
             n = SP_WINDOW;
         } else {
             x = static_cast<int>(e.x);
@@ -327,7 +341,8 @@ void ShadowPages::plan(ShadowPlan& out) {
             for (int x = r.x; x < r.x + r.w; ++x) {
                 int i;
                 if (m.kind == SP_KIND_CLIPMAP)
-                    i = m.first + static_cast<int>(wrap(sun_.oy[m.level] + y) * SP_WINDOW + wrap(sun_.ox[m.level] + x));
+                    i = m.first + static_cast<int>(wrap(sunOf(m.next).oy[m.level] + y) * SP_WINDOW +
+                                                   wrap(sunOf(m.next).ox[m.level] + x));
                 else
                     i = m.first + SP_LOCAL_MIP_FIRST(r.mip) + y * n + x;
                 Entry& e = entries_[static_cast<size_t>(i)];
@@ -346,7 +361,9 @@ void ShadowPages::plan(ShadowPlan& out) {
                     continue;
                 }
                 c.physical = e.physical;
+                c.plants = v.plants;
                 ++out.staticPages;
+                out.plantPages += v.plants;
                 out.copyOut.push_back(c);
             }
     }
@@ -373,6 +390,7 @@ void ShadowPages::plan(ShadowPlan& out) {
         ++stats_.drawn;
     }
     for (const Map& m : maps_) {
+        if (m.next) continue;
         const int count = m.kind == SP_KIND_CLIPMAP ? SP_LEVEL_ENTRIES : SP_LOCAL_ENTRIES;
         for (int i = m.first; i < m.first + count; ++i) {
             const Entry& e = entries_[static_cast<size_t>(i)];
@@ -386,8 +404,11 @@ void ShadowPages::plan(ShadowPlan& out) {
         }
     }
 
-    // The world service's jobs: every needed page not drawn or stale.
+    // The world service's jobs: every needed page not drawn or stale. The
+    // clipmap built's are under a pixel: what the shown one leaves.
     wants_.clear();
+    uint32_t building = 0;
+    const int sway = swayLevel();
     for (size_t mi = 0; mi < maps_.size(); ++mi) {
         const Map& m = maps_[mi];
         const bool clip = m.kind == SP_KIND_CLIPMAP;
@@ -405,7 +426,7 @@ void ShadowPages::plan(ShadowPlan& out) {
             for (int k = 1; level + k <= top; ++k) {
                 int a;
                 if (clip) {
-                    a = clipmapEntry(level + k, e.x >> k, e.y >> k);
+                    a = clipmapEntry(level + k, e.x >> k, e.y >> k, m.next);
                 } else {
                     const int n = SP_LOCAL >> (level + k);
                     a = m.first + SP_LOCAL_MIP_FIRST(level + k) + static_cast<int>((e.y >> k) * n + (e.x >> k));
@@ -420,10 +441,20 @@ void ShadowPages::plan(ShadowPlan& out) {
             w.error = e.drawn ? 1.0f : shown > 0 ? std::min(std::ldexp(1.0f, shown), 64.0f) : 64.0f;
             w.size = std::ldexp(1.0, level);
             w.required = !e.drawn && !neededAbove;
+            w.plants = clip && level > sway;
+            if (m.next) {
+                w.error = std::min(w.error, kNextError);
+                w.required = false;
+                ++building;
+            }
             wants_.push_back(w);
         }
     }
-    stats_.wanted = static_cast<uint32_t>(wants_.size());
+    stats_.wanted = static_cast<uint32_t>(wants_.size()) - building;
+    stats_.building = building;
+    // The clipmap built is ready once requests have named its pages and
+    // every one needed is drawn.
+    ready_ = building_ && newestRequest_ >= begun_ && building == 0;
 }
 
 }  // namespace bro::scene

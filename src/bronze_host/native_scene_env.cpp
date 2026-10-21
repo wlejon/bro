@@ -305,6 +305,7 @@ const char* bro_scene_SceneGraph_cullStatsJson(void* self) {
     j["shadowPagesDynamic"] = s.shadowPagesDynamic;
     j["shadowPagesWanted"] = s.shadowPagesWanted;
     j["shadowPagesEvicted"] = s.shadowPagesEvicted;
+    j["shadowPagesBuilding"] = s.shadowPagesBuilding;
     j["shadowViews"] = s.shadowViews;
     j["groundLayerNeeded"] = s.groundLayerNeeded;
     j["groundLayerMissing"] = s.groundLayerMissing;

@@ -12,10 +12,22 @@
 // eye: a camera move changes which pages are in the windows, never what a
 // page holds, so a page drawn stays valid and its edges do not swim. Light
 // space is the plane across the light (a, b) and the depth along it (c), in
-// double, about an anchor: the eye where the sun last turned, its plane
-// coordinates there kept, so a turn moves what lies near the eye least. A
-// spot light's map and each of a point light's faces is a mip chain of
-// SP_LOCAL_MIPS levels; a light that moves redraws its pages.
+// double, about an anchor: the eye where the clipmap was begun, its plane
+// coordinates there kept from the clipmap before. A spot light's map and
+// each of a point light's faces is a mip chain of SP_LOCAL_MIPS levels; a
+// light that moves redraws its pages.
+//
+// The sun's turn. A page drawn under one direction is wrong under another
+// everywhere at once, so pages are not redrawn one by one as the sun turns
+// (each would show the new sun while its neighbours show the old). When the
+// sun has turned sunTurn past the clipmap shown, or its casters outgrow its
+// depth range, the next clipmap is begun (building()): a second set of
+// levels in light space of the sun as it is then, marked by the marking
+// pass, drawn by the world service from what the shown one leaves of the
+// budget (its pages' error is under any shown page's), never sampled. When
+// every page it needs is drawn (or buildFrames have passed) it is shown in
+// one frame, the old one's pages freed: every shadow moves at once by the
+// turn, as the sun moved. A turn while one is built waits for it.
 //
 // Pages. Each map's entries hold the page they stand for, its physical page
 // in the pool (SP_STRIDE texels with its border) when it has one, whether it
@@ -26,6 +38,9 @@
 // pixels: what shows in its place is its coarsest drawn ancestor's depth
 // (2^k pixels for an ancestor k levels up), a stale page's is a pixel's; a
 // needed page with no needed ancestor is the top of its chain and required.
+// A page the plants draw into (a sun page past the sway level) is a job of
+// another kind than one they do not: biomes' cost a hundred times one of
+// the near levels', where only what stands still casts.
 // The world service's grants (grant()) are drawn the next frame, into
 // physical pages from the free list, else the least recently needed, and
 // sampled the frame they are drawn (copied into the pool ahead of the lit
@@ -69,7 +84,8 @@ struct ShadowPagesConfig {
     int overlayPages = 512;               // the frame's overlays at most
     int staleNow = 128;                   // stale needed pages redrawn the frame they go stale, at most
     int scratchSize = 4096;               // the scratch target's side, texels
-    float sunTurn = 0.0017f;              // radians the sun turns before its pages are redrawn (~0.1 degree)
+    float sunTurn = 0.0017f;              // radians the sun turns before the next clipmap is begun (~0.1 degree)
+    int buildFrames = 90;                 // a next clipmap is shown after at most this many frames
     // The sway level's texel (m): the overlays of what moves start at the
     // level with about this texel, and the finer levels read them.
     float swayTexel = 0.008f;
@@ -103,6 +119,7 @@ struct ShadowPageWant {
     float error = 0.0f;
     double size = 0.0;
     bool required = false;
+    bool plants = false;   // the plants' casters draw into it (a sun page past the sway level): the dearer kind
 };
 
 struct ShadowPagesStats {
@@ -113,6 +130,7 @@ struct ShadowPagesStats {
     uint32_t wanted = 0;        // needed, not drawn or stale, left for later frames
     uint32_t evicted = 0;       // pages taken from another this frame
     uint32_t views = 0;
+    uint32_t building = 0;      // the next clipmap's needed pages not drawn yet
 };
 
 class ShadowPages {
@@ -153,8 +171,8 @@ public:
     int swayLevel() const;
 
     /// The marking pass's requests for the plan `serial` named: a bit an
-    /// entry (SP_LEVEL_ENTRIES a clipmap level, then the local maps'), set
-    /// where a pixel needed it.
+    /// entry (SP_LEVEL_ENTRIES a clipmap level, then the local maps', then
+    /// the next clipmap's levels), set where a pixel needed it.
     void request(uint64_t serial, std::span<const uint32_t> bits);
 
     /// The frame's plan: its maps and page table, and what it draws (the
@@ -162,7 +180,8 @@ public:
     void plan(ShadowPlan& out);
     /// The pages wanted and not drawn this frame, for the world service.
     const std::vector<ShadowPageWant>& wants() const { return wants_; }
-    /// The world service's grants of wants(): drawn next frame.
+    /// The world service's grants of wants() (a call a kind of them, added
+    /// together): drawn next frame.
     void grant(std::span<const uint64_t> keys);
 
     const ShadowPagesStats& stats() const { return stats_; }
@@ -170,15 +189,19 @@ public:
     uint64_t serial() const { return serial_; }
 
     // --- The paging's view, for tests and the stats ---
-    /// The sun's light-space plane coordinates (a, b) and depth (c) of `p`.
-    void sunCoordinates(const bromath::Vec3& p, double& a, double& b, double& c) const;
+    /// The shown clipmap's (`next`: the one built) light-space plane
+    /// coordinates (a, b) and depth (c) of `p`.
+    void sunCoordinates(const bromath::Vec3& p, double& a, double& b, double& c, bool next = false) const;
     /// Clipmap level `level`'s window origin page (absolute).
     void window(int level, int64_t& x, int64_t& y) const;
     /// The page of `level` that holds the plane point (a, b).
     static int64_t pageOf(double coordinate, double pageSize);
     double pageSize(int level) const;
-    /// The entry of clipmap level `level`'s absolute page (x, y), -1 outside its window.
-    int clipmapEntry(int level, int64_t x, int64_t y) const;
+    /// The entry of the shown (`next`: the built) clipmap level `level`'s
+    /// absolute page (x, y), -1 outside its window.
+    int clipmapEntry(int level, int64_t x, int64_t y, bool next = false) const;
+    /// A next clipmap is being built.
+    bool building() const { return building_; }
     struct EntryView {
         int64_t x = 0, y = 0;
         int physical = -1;
@@ -211,6 +234,7 @@ private:
         float texel = 0.0f, texelPerMetre = 0.0f, zNear = 0.0f, zFar = 1.0f;
         bool ortho = true;
         float bias = 0.0f, normalBias = 0.0f;
+        bool next = false;       // a level of the clipmap being built
     };
     struct Sun {
         bool on = false, had = false;
@@ -237,9 +261,12 @@ private:
     struct History {
         uint64_t serial = 0;
         int64_t ox[SP_MAX_LEVELS] = {}, oy[SP_MAX_LEVELS] = {};
+        int64_t nx[SP_MAX_LEVELS] = {}, ny[SP_MAX_LEVELS] = {};   // the built clipmap's windows
         uint32_t localId[kLocalSlots] = {};
         int localFace[kLocalSlots] = {};
         bool sun = false;
+        bool building = false;
+        uint64_t shown = 0;      // shown_ then
     };
     struct Dynamic {
         bromath::AABB3 box;
@@ -251,20 +278,39 @@ private:
     };
 
     int localFirst(int slot) const { return config_.levels * SP_LEVEL_ENTRIES + slot * SP_LOCAL_ENTRIES; }
+    /// The first entry of the shown clipmap (0) or the one built (past the
+    /// local maps': the page table the lit shaders read ends before it).
+    int clipFirst(bool next) const {
+        return next ? config_.levels * SP_LEVEL_ENTRIES + kLocalSlots * SP_LOCAL_ENTRIES : 0;
+    }
+    bool isNext(int index) const { return index >= clipFirst(true); }
+    const Sun& sunOf(bool next) const { return next ? next_ : sun_; }
     int mapOfEntry(int index, int& mip) const;
     float levelTexel(int level) const;
-    void sunPlane(const double p[3], double& a, double& b, double& c) const;
-    void moveWindows();
+    static void sunPlane(const Sun& sun, const double p[3], double& a, double& b, double& c);
+    void moveWindows(Sun& sun, int first);
+    /// Begin `sun`'s light space along `d` about the eye, its plane
+    /// coordinates there kept from `from`'s.
+    void beginBasis(Sun& sun, const double d[3], const Sun* from) const;
+    /// Fit `sun`'s depth range to the casters' `box` (and its casters'
+    /// plane rect); true when a range it had must grow (grown only with
+    /// `grow`).
+    bool fitRange(Sun& sun, const bromath::AABB3& box, bool grow) const;
+    /// `sun`'s levels' maps, appended to maps_.
+    void addLevelMaps(const Sun& sun, bool next);
+    /// The built clipmap becomes the shown one, the shown one's pages freed.
+    void show();
     void release(int index);
     void releaseMap(int first, int count);
     /// Calls f(entry) for each entry of each map whose page (padded by the
-    /// border) `box` touches, the clipmap levels minLevel to maxLevel.
-    template <class F> void forPages(const bromath::AABB3& box, int minLevel, int maxLevel, F&& f);
-    /// The sun's plane rect (a0, a1, b0, b1) of `box`.
-    void planeRect(const bromath::AABB3& box, double rect[4]) const;
-    /// Calls f(entry) for each page of clipmap level `level` the plane rect
+    /// border) `box` touches, the clipmap levels minLevel to maxLevel (the
+    /// built clipmap's too with `next`).
+    template <class F> void forPages(const bromath::AABB3& box, int minLevel, int maxLevel, bool next, F&& f);
+    /// `sun`'s plane rect (a0, a1, b0, b1) of `box`.
+    static void planeRect(const Sun& sun, const bromath::AABB3& box, double rect[4]);
+    /// Calls f(entry) for each page of clipmap level map `m` the plane rect
     /// (padded by the border) touches.
-    template <class F> void forLevelRect(int level, const double rect[4], F&& f);
+    template <class F> void forLevelRect(const Map& m, const double rect[4], F&& f);
     /// Flag the pages the frame's moving bounds touch that want an overlay:
     /// needed ones, and the sway level's over a needed finer page.
     void markDynamic();
@@ -278,7 +324,12 @@ private:
     std::vector<Entry> entries_;
     std::vector<int32_t> owner_;      // each physical page's entry (-1 free)
     std::vector<int32_t> free_;
-    Sun sun_;
+    Sun sun_;                         // the clipmap shown
+    Sun next_;                        // the one built (building_)
+    bool building_ = false;
+    bool ready_ = false;              // the built one's needed pages are all drawn
+    uint64_t begun_ = 0;              // the serial it was begun in
+    uint64_t shown_ = 0;              // the clipmaps shown so far
     LocalSlot locals_[kLocalSlots];
     std::vector<Map> maps_;           // this frame's: the sun's levels, then local faces
     std::vector<Dynamic> dynamic_;

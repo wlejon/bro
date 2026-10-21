@@ -21,6 +21,7 @@ namespace bro::scene {
 class ReflectionProbeNode;
 class SceneRenderer;
 struct ShadowPlan;
+struct ShadowMapPlan;
 struct ShadeMapBinding;
 }
 
@@ -33,8 +34,9 @@ namespace bro::scene::vk {
 /// (camera-relative rendering, scene_view.h).
 SceneLightingUniforms sceneLighting(const SceneRenderer& renderer, const SceneGpu& gpu, const bromath::Vec3& eye);
 
-/// Shadow map `index` of `plan`, for positions relative to `eye`.
-void shadowMapUniform(const ShadowPlan& plan, int index, const bromath::Vec3& eye, SceneShadowMapUniform& out);
+/// Shadow map `map` of `plan`, for positions relative to `eye`.
+void shadowMapUniform(const ShadowPlan& plan, const ShadowMapPlan& map, const bromath::Vec3& eye,
+                      SceneShadowMapUniform& out);
 
 /// The frame's camera set (frame.cameraSet), from frame.view.
 void writeCameraSet(SceneFrame& frame);
