@@ -104,8 +104,8 @@ HostNodeState* stateFor(dom::Node* node) {
         return stateFor(node);
     }
     if (dom::Document* doc = node->document()) {
-        if (r.observed.insert(doc).second)
-            doc->addNodeFreedObserver(&onNodeFreed);
+        r.observed.insert(doc);
+        doc->addNodeFreedObserver(&onNodeFreed);
     }
     auto owned = std::make_unique<HostNodeState>();
     HostNodeState* st = owned.get();

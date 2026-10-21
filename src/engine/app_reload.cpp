@@ -285,6 +285,9 @@ void Engine::performAppReload() {
     pointerCaptures_.clear();
     touchContacts_.clear();
 
+    if (document_) {
+        bro::bronze_host::clearHostElementsForDocument(document_.get());
+    }
     document_.reset();
     documentHeight_ = 0.0f;
     setViewportScrollY(0.0f);   // document_ is gone; nothing to mirror into
