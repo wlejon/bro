@@ -650,10 +650,31 @@ bought nothing (the cost is the vertices' work, not the instances).
 Biomes, GPU ms interleaved: glade 2.29 → 1.87, edge 2.33 → 1.93, meadow
 2.37 → 1.98, canopy 0.82 → 0.68, walking 2.35 → 1.88.
 
-Next, from the same measurements: grass ring 2 (20–55 m) shades about 3.5M
-fragments a frame, four blades deep over its band, and is the dearest
-ring (0.4–0.5 ms); the far herbs and rings are where the turf could take
-over, judged in motion at the meadow's edge.
+Grass ring 2 (20–55 m) is then the dearest ring (0.4–0.5 ms at the edge
+and the meadow): about 3.5M fragments a frame, four blades deep over its
+band. Taken apart (throwaway builds, interleaved): drawn unlit it is 0.22
+ms, so its fans' lighting is half of it, the sun's shadow lookup 0.07 ms
+of that and the rest (the sward's light, the sky's, the air) 0.15. Its
+cut (the fans' leaves, per pixel) is 0.07.
+
+- **Lighting a far fan at its vertices lost.** Everything but the shadow
+  is the same along a fan, so it was worked out at the vertices and handed
+  to the pixels (7 more outputs a vertex), the sun's shadow still per
+  pixel. Grass triangles are about 17 pixels, and the outputs cost more to
+  set up than the lighting saved: ring 2 0.48 → 0.54, and rings 0 and 1,
+  with no fans, 50% slower from the declared outputs alone. Per-blade
+  values belong in a buffer read by the instance, not interpolated.
+- **What is left is overdraw.** A fan can discard, so its pixels are
+  depth-tested after they shade, nearer blades or not. Cutting it means a
+  second pass over the ring's geometry (its depth, then its colour against
+  it) or splitting the ring nearest-first and dropping quads behind the
+  depth drawn so far (the retired forest's farDepth batches); either buys
+  some 0.1–0.15 ms for that machinery, not worth it while every eye-level
+  shot is under 2.0 ms.
+
+The far rings and herbs stay as they are: they cost 0.2–0.25 ms
+together, and the turf takes them over only when its look earns their
+range, which the probes (step 7) change.
 
 ## 10. Placement
 
@@ -713,7 +734,7 @@ src/scene/
     lighting/       scene lighting, environment and sky, the atmosphere's
                     tables, reflection probes; later probes, volumetrics,
                     clustered lights
-    shadow/         the shadow pass; later shadow pages
+    shadow/         the shadow pages: marked, drawn, copied into the pool
     post/           post-fx, exposure, SSAO, SSR, DOF
     terrain/        (planned) planet terrain tiles, the clipmap drawn from
                     them, horizons
@@ -741,7 +762,7 @@ the motion oracle for anything temporal. Each step removes what it replaces.
 | 3 | Done: the world service (§6), the surface layers' fills its first producer | biomes' stills byte-identical, GPU ms unchanged; a cut glade→flyover settles in 4 frames (24 fills a frame took 24), flyover→glade in 12 (took 38), no frame over 2.78 ms | +1.4k |
 | 4 | Done: atmosphere tables and exposure (§7) | one sky from ground to orbit: the LUT path within 7% of a reference march by day (14% in a clear day's haze), 0.13 ms where the per-pixel march took 0.61; metered exposure in EV, a sunlit field at middle grey; biomes on it under a clear day's air, 0.10–0.24 ms over its HDR panorama, its sky bands gone | +3.1k |
 | 5a | Done: cached shadow pages (§8) | plant shadows off the per-frame cost: away from eye level 0.17–0.21 ms less than the atlas, the canopy's dappled shadows at a texel a pixel; at eye level 0.08–0.19 ms more (the lookup), and a turning sun's pages built behind the shown ones | +2.5k |
-| 6 | The ground and its cover as one surface (§9): the cover planned on the GPU and drawn before the ground done; the rest next | the eye-level frame's 1.3–1.7 ms of cover cut by most of its hidden and far work: so far 0.36–0.42 ms off every eye-level shot | ~2k |
+| 6 | Done: the ground and its cover as one surface (§9), the cover planned on the GPU and drawn before the ground | the cover's hidden work gone: 0.36–0.42 ms off every eye-level shot, all of them under 2.0 ms; what is left is the far fans' lighting and overdraw, not worth its machinery yet | +0.5k |
 | 7 | The probe grid (§7), with the canopy's density it traces against | forests, valleys and slopes lit as places; the stand-in falloffs gone | ~5k |
 | 8 | Placement per cell (§10) | a world of any size placed around the eye at a flat cost | ~3k |
 | 9 | The planet (§11), with the terrain's height tiles and their horizons (§7) | ground to orbit, one place, the frame following the pixels; the sun's shadow and the sky's occlusion past the pages | ~5k |
