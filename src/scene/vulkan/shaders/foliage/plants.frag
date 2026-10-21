@@ -80,8 +80,11 @@ void main() {
         float disc = b * b - a * c;
         exitT = disc > 0.0 ? max((-b + sqrt(disc)) / a, 0.0) : 0.0;
         vis = exp(-inShade.w * exitT);
-        if ((floatBitsToUint(push.pbrParams.w) & MESH_RECEIVES_SHADOW) != 0u)
-            vis *= lightShadow(sun, pos + L * exitT, camDist, 0.0, L, 1.0, -2.0);
+        if ((floatBitsToUint(push.pbrParams.w) & MESH_RECEIVES_SHADOW) != 0u) {
+            // (And the land's shade, the probe grid's, for the sun it traced.)
+            if (sun == int(lighting.sunDirection.w) - 1) vis *= sceneLandSun(pos);
+            if (vis > 0.0) vis *= lightShadow(sun, pos + L * exitT, camDist, 0.0, L, 1.0, -2.0);
+        }
     }
 
     float NL = dot(N, L);

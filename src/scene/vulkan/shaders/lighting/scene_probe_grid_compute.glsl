@@ -6,7 +6,8 @@
 //   3  the splat's sums (PG_FIXED a unit, four words a voxel)
 //   4  the canopy's medium (rgba16f storage: extinction (1/m), albedo)
 //   5  the same, filtered
-//   6  the sun's transmittance (r16f storage)
+//   6  the sun's volume (rg16f storage: r its transmittance through the
+//      canopy and past the ground, g how much of it the land alone leaves)
 //   7  a plants node's records (scene_plants.glsl's)
 //   8  the sun's transmittance, filtered
 //   9-11  the probes' SH, red, green, blue (rgba16f storage)
@@ -37,7 +38,7 @@ layout(std430, set = 0, binding = 3) buffer ProbeGridSums {
 } pgSums;
 layout(set = 0, binding = 4, rgba16f) uniform image3D pgMediumImage;
 layout(set = 0, binding = 5) uniform sampler3D pgMedium;
-layout(set = 0, binding = 6, r16f) uniform image3D pgSunImage;
+layout(set = 0, binding = 6, rg16f) uniform image3D pgSunImage;
 layout(set = 0, binding = 8) uniform sampler3D pgSun;
 layout(set = 0, binding = 9, rgba16f) uniform image3D pgShRImage;
 layout(set = 0, binding = 10, rgba16f) uniform image3D pgShGImage;

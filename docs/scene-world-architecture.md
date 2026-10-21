@@ -516,7 +516,10 @@ ambient is the open sky's as before.
   heights (128² a cascade, the still opaque casters drawn straight down
   through the shared caster drawer), the canopy (64 × 64 × 32 RGBA16F of
   extinction and albedo, every plants node's crowns splatted from their
-  records) and the sun's transmittance through it (R16F). It is stored
+  records) and the sun's light through it (RG16F: the transmittance past
+  the canopy and the ground, and the land's shade alone, the least the ray
+  clears the ground by as a share of a penumbra 0.02 a metre wide, the ray
+  going on through a canopy that took all the light). It is stored
   wrapped like the probes (`pgHeightStored`, `pgVoxelStored`), so it scrolls:
   what is stale is boxes of a cascade's columns (`ProbeGrid::staleBoxes`),
   the strips a move brought in, the columns over a change of the canopy
@@ -549,17 +552,28 @@ ambient is the open sky's as before.
   not changed waits for what visibly has. At a pixel a second the refreshes
   outranked the shadow pages and left the meadow's tree shadows undrawn.
 - **The lit shaders** (`common/scene_lighting.glsl`, lighting set bindings
-  17–21: a repeat sampler, the SH, the heights): `sceneAmbientIrradiance` is
+  17–22: a repeat sampler, the SH, the heights, the sun's volume): `sceneAmbientIrradiance` is
   the probes' irradiance along the normal (each cascade blended into the next
   over its outer 1–4 columns), else the open sky's; the ambient's specular is
   scaled by how much of the open sky the probes see along the reflection. A
   plant's crown keeps its own occlusion only where the crown is smaller than
   the probes' spacing there (`sceneProbeSpacing`), a quarter for the leaves'
   crowding where they resolve it.
+- **The land's shade** (binding 22, `sceneLandSun`, blended over the
+  cascades as the probes are) multiplies the sun's shadow wherever it is
+  read: `sceneDirectLight` (leaves past their shadow's floor, so a hill's
+  shade passes on nothing) and the plants' own sun. The shadow pages miss
+  it at a low sun: the slope-scaled bias that keeps a lee face off its own
+  depth swallows the shade a hill casts over it. At golden hour (6°) a
+  third of biomes' ground should be in a hill's shade and almost none of it
+  was; the sward's light, off on a slope facing away from the sun and
+  tipped by the gusts, showed as dark islands drifting over a lit hillside.
 
 Measured: `bro_probe_grid_test` (49 checks) and `bro_probe_grid_gpu_test`
 (the world against its scene, every cascade's again after a move scrolls
-it; under a black crown 32 probes within 0.04 of a
+it; the land's shade under a low sun up the slope within 3% of a march over
+the ground, a voxel's error 0.006 on average, and nothing under a high sun
+through the crowns; under a black crown 32 probes within 0.04 of a
 CPU march and its shade within 2%, the open sky within 1%, sunlit ground's
 bounce within 1.5%). On biomes, interleaved: the forest bands 5–11% darker,
 the sky bands 2–6% brighter by the exposure, the meadow unchanged; +0.25–0.4
@@ -580,6 +594,10 @@ near its target (the glade and the meadow, 2.54 ms) leaves the world
 service less than a refresh slice's cost (about 0.3 ms against the 0.1 ms
 floor), so their probes keep their first fresh trace however old it grows;
 which frame that trace fell in moves their stills 2–3% in some bands.
+The land's shade, interleaved: the afternoon's stills unchanged (a mean
+difference of 0.5–0.7 of 255); at golden hour the glade and the meadow
++0.05–0.15 ms (3.1 → 3.2 ms, both already over 2.78), the forest's edge
+0.3 ms less (its shaded ground lit by less).
 
 ### As built: the atmosphere and exposure
 

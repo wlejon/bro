@@ -32,7 +32,7 @@ struct SceneLight {
 #include "lighting/scene_probe_grid.glsl"
 
 layout(set = 1, binding = 0) uniform LightingUBO {
-    vec4 sunDirection;  // the dominant directional light (decals), w = 1 when present
+    vec4 sunDirection;  // the dominant directional light (decals, the probe grid's sun), w its index + 1 (0: none)
     vec4 sunColor;      // rgb, a = intensity
     vec4 ambientColor;  // rgb flat ambient
     vec4 params;        // x light count, y PCF grid side (1/3/5), z 1/the pool's side (texels), w pool columns
@@ -107,12 +107,14 @@ layout(set = 1, binding = 13) uniform texture3D texAtmSkyLightImage;
 
 // The probe grid (scene/vulkan/lighting/scene_probe_grid.h): its probes' SH,
 // a colour channel each, through binding 17's sampler (which repeats across:
-// the columns wrap), and the ground's height under its cascades.
+// the columns wrap), the ground's height under its cascades and the sun's
+// volume (probe_sun.comp's: g the land's shade).
 layout(set = 1, binding = 17) uniform sampler probeGridSampler;
 layout(set = 1, binding = 18) uniform texture3D probeShRImage;
 layout(set = 1, binding = 19) uniform texture3D probeShGImage;
 layout(set = 1, binding = 20) uniform texture3D probeShBImage;
 layout(set = 1, binding = 21) uniform texture2D probeHeightImage;
+layout(set = 1, binding = 22) uniform texture3D probeSunImage;
 #define PG lighting.probeGrid
 #define PG_HEIGHT_LOAD(texel) texelFetch(sampler2D(probeHeightImage, lightingSampler), texel, 0).r
 #include "lighting/scene_probe_grid.glsl"
@@ -194,6 +196,30 @@ bool sceneProbeSh(vec3 pos, out vec4 r, out vec4 g, out vec4 b) {
         if (left <= 0.0) break;
     }
     return true;
+}
+
+// What the land leaves of the probe grid's sun at camera-relative `pos`: the
+// hills' shade, however far off they stand and however low the sun (the
+// shadow pages' depth offsets swallow a slope that runs along a low sun's
+// rays, and end at their reach). Blended over the cascades as the SH are;
+// 1 where the grid is off or ends.
+float sceneLandSun(vec3 pos) {
+    if (PG.params.x < 0.5) return 1.0;
+    int c = pgCascadeAt(pos.xz, 0);
+    if (c < 0) return 1.0;
+    float land = 0.0, left = 1.0;
+    for (int n = 0; n < 2 && c < pgCascades(); ++n, ++c) {
+        vec2 col = (pos.xz - PG.cascade[c].xy) * PG.cascade[c].w;
+        float edge = min(min(col.x, col.y), min(float(PG_COLUMNS) - col.x, float(PG_COLUMNS) - col.y));
+        float w = c + 1 < pgCascades() ? left * clamp((edge - 1.0) / 3.0, 0.0, 1.0) : left;
+        if (n == 1) w = left;
+        if (w <= 0.0) continue;
+        vec3 uvw = pgVolumeUvw(c, pos.xz, pos.y - pgBase(pgGround(c, pos.xz)));
+        land += w * textureLod(sampler3D(probeSunImage, probeGridSampler), uvw, 0.0).g;
+        left -= w;
+        if (left <= 0.0) break;
+    }
+    return land + left;
 }
 
 // The spacing (m) of the probes lighting camera-relative `pos` (its finest
@@ -688,6 +714,8 @@ vec3 sceneDirectLight(SceneSurface s) {
         // The atmosphere's sun is that light above the air: what reaches the
         // surface is what the air and the planet's shadow leave of it.
         if (SCENE_ATMOSPHERE && i == int(lighting.atm.ground.w)) radiance *= sceneSunTransmittance(s.position);
+        // The sun's shade of the land (the probe grid's), over its shadow pages'.
+        float land = s.receivesShadow && i == int(lighting.sunDirection.w) - 1 ? sceneLandSun(s.position) : 1.0;
         // Wrap light through thin two-sided surfaces (leaves): lights the back
         // relative to L whether or not the front faces the light.
         if (s.twoSided && s.subsurface > 0.0 && s.translucency <= 0.0) {
@@ -707,8 +735,9 @@ vec3 sceneDirectLight(SceneSurface s) {
             // Four hardware-filtered taps as wide as nine point taps: leaves
             // are most of the frame's lit pixels, and a leaf's shadow is
             // soft (the sun's disc) whichever way it is filtered.
-            float vis = lightShadow(i, s.position, s.camDist, lightDist, tN, max(abs(NL), 0.2), -2.0);
-            leafShadow = 0.1 + 0.9 * vis;
+            // (A hill's shade passes on nothing.)
+            float vis = land > 0.0 ? lightShadow(i, s.position, s.camDist, lightDist, tN, max(abs(NL), 0.2), -2.0) : 0.0;
+            leafShadow = (0.1 + 0.9 * vis) * land;
         }
         // Leaf translucency: light passing through a leaf lit from behind,
         // strongest looking toward the light, a warm yellow-green, and
@@ -756,7 +785,9 @@ vec3 sceneDirectLight(SceneSurface s) {
         vec3 diffuse = (vec3(1.0) - F) * (1.0 - s.metallic) * s.baseColor / PI;
 
         float shadow = leafy ? leafShadow
-                     : s.receivesShadow ? lightShadow(i, s.position, s.camDist, lightDist, N, max(NdotL, 0.3 * s.sward.w), 1.0) : 1.0;
+                     : !s.receivesShadow ? 1.0
+                     : land > 0.0 ? land * lightShadow(i, s.position, s.camDist, lightDist, N, max(NdotL, 0.3 * s.sward.w), 1.0)
+                     : 0.0;
         vec3 spec = mix(specular * NdotL, vec3(sward.z), s.sward.w);
         Lo += shadow * (diffuse * diffNL + swardThrough + spec) * radiance;
     }

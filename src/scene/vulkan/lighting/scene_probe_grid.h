@@ -19,8 +19,8 @@
 //   - the canopy: every plants node's crowns splatted into fixed-point sums
 //     (probe_splat.comp) and resolved into the medium, extinction and
 //     albedo (probe_resolve.comp);
-//   - the sun's transmittance through it and past the ground
-//     (probe_sun.comp).
+//   - the sun's transmittance through it and past the ground, and the
+//     land's shade alone (probe_sun.comp).
 //
 // Its probes (l <= 1 SH of the radiance, three 3D images, one a colour
 // channel; probe_grid_layout.h), traced through that world as a second
@@ -61,6 +61,7 @@ struct ProbeGridTables {
     std::vector<float> height;    // PG_HEIGHT x PG_HEIGHT * PG_MAX_CASCADES world heights
     std::vector<float> medium;    // PG_VOXELS^2 x PG_LAYERS_Y * PG_MAX_CASCADES, RGBA: extinction, albedo
     std::vector<float> sun;       // the same voxels' transmittance
+    std::vector<float> land;      // and what the land alone leaves of the sun
     // The probes' SH, red, green, blue: PG_COLUMNS^2 x PG_LAYERS *
     // PG_MAX_CASCADES texels of (c0, cx, cy, cz), as stored (wrapped).
     std::vector<float> sh[3];
@@ -81,7 +82,8 @@ public:
     /// reflection probe's): the frame's with its positions relative to it.
     /// Off: zero.
     void fill(ProbeGridGpu& out, const bromath::Vec3& eye) const;
-    /// The lighting set's probe grid bindings (18-20 the SH, 21 the ground's height).
+    /// The lighting set's probe grid bindings (18-20 the SH, 21 the ground's
+    /// height, 22 the sun's volume).
     void writeBindings(SceneVkDescriptorWriter& writer) const;
 
     /// The last render's world, copied out (waits for the GPU).

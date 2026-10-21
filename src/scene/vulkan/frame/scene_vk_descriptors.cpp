@@ -81,9 +81,10 @@ VkDescriptorSetLayout SceneVkDescriptorLayoutBuilder::createLightingLayout(VkDev
     builder.addBinding(15, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
     builder.addBinding(16, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, shadowCompareSampler);
     // The probe grid (SceneProbeGrid::writeBindings): its SH through a
-    // sampler that repeats across (the columns wrap), and the ground's height.
+    // sampler that repeats across (the columns wrap), the ground's height and
+    // the sun's volume.
     builder.addBinding(17, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, repeatSampler);
-    for (uint32_t binding = 18; binding <= 21; ++binding)
+    for (uint32_t binding = 18; binding <= 22; ++binding)
         builder.addBinding(binding, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
     return builder.build(device);
 }

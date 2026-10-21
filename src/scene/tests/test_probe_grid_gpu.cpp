@@ -25,7 +25,12 @@
 //    average and 0.1 at worst. Against the crowns as they are, not voxels,
 //    the shade is about 16% more (exp(-tau) is convex: a medium blurred a
 //    voxel wide shades more than a sharp one); under a quarter more is
-//    checked.
+//    checked;
+//  - the land's shade (the sun volume's second channel): the finest
+//    cascade's voxels against a march toward the sun over the ground alone,
+//    how near the ray comes to it as a share of the penumbra: under the high
+//    sun nothing (the crowns pass it on); then the sun turned low up the
+//    slope, the total within 5% and a voxel's error 0.03 on average.
 //
 // Then the probes, each world rendered frames a tenth of a second apart
 // (fresh probes traced, then refreshed) and read back:
@@ -389,6 +394,67 @@ void checkSun(const ProbeGridTables& t) {
     check(std::abs(shadeGot / shadeCrowns - 1.0) < 0.25, "the voxels' blur adds under a quarter to the shade");
 }
 
+/// The ground under (x, z): the plane, the box's top over its footprint, or
+/// nothing past the ground's edge.
+bool groundAt(double x, double z, double& h) {
+    if (std::max(std::abs(x), std::abs(z)) > kGroundHalf) return false;
+    h = std::abs(x - kBoxX) < kBoxHalf && std::abs(z - kBoxZ) < kBoxHalf ? boxTop() : plane(x, z);
+    return true;
+}
+
+/// The land's shade (the sun volume's second channel): the finest cascade's
+/// voxels against a march toward the sun over the ground alone (the crowns
+/// pass it on), the least the ray clears the ground by as a share of the
+/// penumbra (probe_sun.comp's 0.02 a metre), 0 where it meets the ground.
+/// `shadedWanted`: whether some of the square should be in the land's shade.
+void checkLand(const ProbeGridTables& t, bool shadedWanted) {
+    constexpr double kPenumbra = 0.02, kStep = 0.25;
+    const double top = t.block.params[2], voxY = top / PG_LAYERS_Y;
+    double L[3] = {t.block.sun[0], t.block.sun[1], t.block.sun[2]};
+    const double len = std::sqrt(L[0] * L[0] + L[1] * L[1] + L[2] * L[2]);
+    for (double& a : L) a /= len;
+    const Cascade k = cascadeOf(t, 0);
+    const double vox = 0.5 * k.s;
+    double errSum = 0.0, worst = 0.0, shadeGot = 0.0, shadeWant = 0.0;
+    int voxels = 0;
+    for (int kk = 0; kk < PG_LAYERS_Y; ++kk)
+        for (int j = 0; j < PG_VOXELS; ++j)
+            for (int i = 0; i < PG_VOXELS; ++i) {
+                const double x = k.x0 + (i + 0.5) * vox, z = k.z0 + (j + 0.5) * vox;
+                const double p[3] = {x, plane(x, z) + (kk + 0.5) * voxY, z};
+                double clear = 1e6;
+                for (double s = kStep; s < 4000.0; s += kStep) {
+                    double g;
+                    if (!groundAt(p[0] + L[0] * s, p[2] + L[2] * s, g)) break;
+                    const double h = p[1] + L[1] * s - g;
+                    if (h < 0.0) {
+                        clear = 0.0;
+                        break;
+                    }
+                    clear = std::min(clear, h / (s * kPenumbra));
+                }
+                const double c = std::clamp(clear, 0.0, 1.0);
+                const double want = c * c * (3.0 - 2.0 * c);
+                const double got = t.land[voxelIndex(0, i, j, kk)];
+                const double e = std::abs(got - want);
+                errSum += e;
+                worst = std::max(worst, e);
+                shadeGot += 1.0 - got;
+                shadeWant += 1.0 - want;
+                ++voxels;
+            }
+    const double mean = errSum / voxels;
+    std::printf("  the land's shade, cascade 0: %.4g vs %.4g, %d voxels, mean error %.4f, worst %.3f\n", shadeGot,
+                shadeWant, voxels, mean, worst);
+    if (shadedWanted) {
+        check(shadeWant > 0.1 * voxels, "a low sun: the plane shades a good part of the square");
+        check(std::abs(shadeGot - shadeWant) < 0.05 * shadeWant, "the land's shade within 5% of the march");
+        check(mean < 0.03, "each voxel's land shade: mean error under 0.03");
+    } else {
+        check(shadeGot < 1e-3 * voxels && worst < 0.01, "a high sun: the land shades nothing, the crowns pass it on");
+    }
+}
+
 // --- The probes ------------------------------------------------------------
 
 /// A world for the traces: level ground at y = 0 under a flat sky, with a
@@ -604,6 +670,7 @@ int main() {
             checkHeight(t);
             checkCanopy(t, static_cast<int>(t.block.params[1]));
             checkSun(t);
+            checkLand(t, false);
         }
         // Moved a few columns: the finest cascades' worlds scrolled (the
         // columns the move brought in made, the rest kept where they are
@@ -623,6 +690,21 @@ int main() {
             checkHeight(moved);
             checkCanopy(moved, static_cast<int>(moved.block.params[1]));
             checkSun(moved);
+            checkLand(moved, false);
+        }
+        // A low sun up the slope: the plane shades what lies low enough on
+        // it (the ray rises 0.08 a metre over ground rising 0.1), the rest
+        // clearing it as far as the ground's edge.
+        auto* sun = static_cast<scene::LightNode*>(graph.findByName("sun"));
+        sun->setDirection({-0.995f, -0.08f, 0.0f});
+        graph.render();
+        ProbeGridTables low;
+        if (!graph.renderer().readProbeGrid(low)) {
+            std::printf("FAILED: no probe grid read back under the low sun\n");
+            ++failures;
+        } else {
+            std::printf("a low sun up the slope\n");
+            checkLand(low, true);
         }
     }
     {

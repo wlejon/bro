@@ -123,7 +123,7 @@ bool SceneProbeGrid::setup(SceneGpu& gpu) {
         !a.createStorageImage(PG_HEIGHT, PG_HEIGHT * PG_MAX_CASCADES, 1, VK_FORMAT_R32_SFLOAT, height_, false) ||
         !a.createStorageImage(PG_VOXELS, PG_VOXELS, PG_LAYERS_Y * PG_MAX_CASCADES, VK_FORMAT_R16G16B16A16_SFLOAT,
                               medium_, false) ||
-        !a.createStorageImage(PG_VOXELS, PG_VOXELS, PG_LAYERS_Y * PG_MAX_CASCADES, VK_FORMAT_R16_SFLOAT, sun_,
+        !a.createStorageImage(PG_VOXELS, PG_VOXELS, PG_LAYERS_Y * PG_MAX_CASCADES, VK_FORMAT_R16G16_SFLOAT, sun_,
                               false) ||
         !a.createBuffer(kSumBytesPerCascade * PG_MAX_CASCADES,
                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -271,6 +271,7 @@ void SceneProbeGrid::writeBindings(SceneVkDescriptorWriter& writer) const {
         writer.writeImage(18 + ch, sh_[ch].view, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL,
                           VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
     writer.writeImage(21, height_.view, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
+    writer.writeImage(22, sun_.view, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
 }
 
 void SceneProbeGrid::offer(SceneFrame& frame, WorldService& service) {
@@ -591,7 +592,7 @@ bool SceneProbeGrid::read(SceneGpu& gpu, ProbeGridTables& out) {
         uint32_t texelBytes;
         SceneVkBuffer buffer;
     };
-    Copy copies[] = {{&height_, 4, {}}, {&medium_, 8, {}}, {&sun_, 2, {}},
+    Copy copies[] = {{&height_, 4, {}}, {&medium_, 8, {}}, {&sun_, 4, {}},
                      {&sh_[0], 8, {}},  {&sh_[1], 8, {}},  {&sh_[2], 8, {}}};
     VkCommandBuffer cmd = device.frames().beginCommands();
     bool ok = true;
@@ -636,6 +637,7 @@ bool SceneProbeGrid::read(SceneGpu& gpu, ProbeGridTables& out) {
         const auto* s = static_cast<const uint16_t*>(copies[2].buffer.mappedData);
         out.medium.resize(voxels * 4);
         out.sun.resize(voxels);
+        out.land.resize(voxels);
         for (int c = 0; c < PG_MAX_CASCADES; ++c)
             for (int k = 0; k < PG_LAYERS_Y; ++k)
                 for (int j = 0; j < PG_VOXELS; ++j)
@@ -644,7 +646,8 @@ bool SceneProbeGrid::read(SceneGpu& gpu, ProbeGridTables& out) {
                         const size_t slab = static_cast<size_t>(c * PG_LAYERS_Y + k) * PG_VOXELS;
                         const size_t to = (slab + j) * PG_VOXELS + i, from = (slab + z) * PG_VOXELS + x;
                         for (int ch = 0; ch < 4; ++ch) out.medium[to * 4 + ch] = halfToFloat(m[from * 4 + ch]);
-                        out.sun[to] = halfToFloat(s[from]);
+                        out.sun[to] = halfToFloat(s[from * 2]);
+                        out.land[to] = halfToFloat(s[from * 2 + 1]);
                     }
         const size_t texels = size_t{sh_[0].width} * sh_[0].height * sh_[0].depth * 4;
         for (int ch = 0; ch < 3; ++ch) {

@@ -101,7 +101,7 @@ static_assert(sizeof(ProbeGridGpu) == 176);
 
 /// The lighting block (set 1), std140 — shaders/common/scene_lighting.glsl.
 struct alignas(16) SceneLightingUniforms {
-    alignas(16) float sunDirection[4];  // dominant directional light, w = 1 when present
+    alignas(16) float sunDirection[4];  // dominant directional light, w = its index + 1 (0: none)
     alignas(16) float sunColor[4];      // rgb = color, a = intensity
     alignas(16) float ambientColor[4];  // rgb = flat ambient
     alignas(16) float params[4];        // light count, PCF taps, 1 / the shadow pool's side (texels), pool columns

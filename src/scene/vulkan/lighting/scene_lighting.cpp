@@ -85,6 +85,7 @@ SceneLightingUniforms sceneLighting(const SceneRenderer& renderer, const SceneGp
     // The sun (decals light by it alone): the first directional light,
     // unless a later one casts shadows and it does not.
     const LightNode* sun = nullptr;
+    int sunIndex = -1;
     for (int i = 0; i < count; ++i) {
         const LightNode& l = *lights[i];
         setLight(light.lights[i], l, eye);
@@ -94,7 +95,10 @@ SceneLightingUniforms sceneLighting(const SceneRenderer& renderer, const SceneGp
             light.lights[i].shadowReach[0] = plan.lightReach[i];
         }
         if (l.kind() != LightNode::Kind::Directional) continue;
-        if (!sun || (l.castsShadow() && !sun->castsShadow())) sun = &l;
+        if (!sun || (l.castsShadow() && !sun->castsShadow())) {
+            sun = &l;
+            sunIndex = i;
+        }
     }
     if (sun) {
         bromath::Vec3 dir = sun->direction();
@@ -103,7 +107,7 @@ SceneLightingUniforms sceneLighting(const SceneRenderer& renderer, const SceneGp
         light.sunDirection[0] = dir.x;
         light.sunDirection[1] = dir.y;
         light.sunDirection[2] = dir.z;
-        light.sunDirection[3] = 1.0f;
+        light.sunDirection[3] = static_cast<float>(sunIndex + 1);
         const auto& c = sun->color();
         light.sunColor[0] = c.x;
         light.sunColor[1] = c.y;
