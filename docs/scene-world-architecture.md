@@ -459,7 +459,10 @@ twilight sky does not underflow.
   beside the plants' plans; and the aerial perspective (32 × 32 × 32
   froxels over the camera's frustum, slices squared in depth out to the far
   plane or the air's horizon, eight steps a slice, a slice ending at the
-  ground), on the async compute queue.
+  ground, an invocation a froxel and a scan summing each column front to
+  back), in the graphics stream beside the sky view, ahead of the frame's
+  join: on the async compute queue the join waited for it behind the
+  plants' plans, where the graphics idled anyway.
 - **The sky** reads the sky view (its lookup dithered by a texel), the sun's
   disc from the transmittance with its limb darkened, the planet's surface
   where the view meets it, and nothing where a view from above misses the
@@ -471,11 +474,18 @@ twilight sky does not underflow.
 - **Exposure** (`scene/exposure.h`, `vulkan/post/scene_exposure`): EV100 with
   a compensation, scale = 1 / (1.2 · 2^(EV − compensation)). Fixed (the
   default, EV −log2 1.2: a scale of exactly 1) or auto: a 128-bin log2
-  histogram of the HDR frame on the GPU, the mean of its 10–90% share
-  (pixels darker than its range, such as space, left out), adapted
-  exponentially at separate up and down speeds, read by the tone pass on
-  the GPU so no frame waits on it. The old exposure multiplier is the fixed
+  histogram of the HDR frame on the GPU (a pixel of every 4 × 4), its
+  log-average over the 10–90% share keyed to middle grey (0.18, so EV100 =
+  log2(L / (1.2 · 0.18)); pixels darker than its range, such as space,
+  left out), adapted exponentially at separate up and down speeds, all in
+  one dispatch whose last workgroup meters, read by the tone pass on the
+  GPU so no frame waits on it. The old exposure multiplier is the fixed
   mode's compensation.
+- **Free of the atmosphere when off:** the lit pipelines specialise on it
+  (`SCENE_ATMOSPHERE`, the mesh drawer's kAtmosphere raster bit), so a
+  scene without it has none of its code; and pooled buffers of 64 KB or
+  more start on a 64 KB page, since where a big buffer began in its page
+  moved the plants' shadow draws by 0.06 ms.
 
 Measured. Against a CPU reference (`src/scene/tests/atmosphere_reference`:
 brute-force single scattering and multiple scattering iterated order by
@@ -484,15 +494,27 @@ order to 0.1%) at 2 m, 2 km, 30 km and 400 km and suns at 68°, 10° and −4°,
 7.3%, mean 4.8%; twilight worst 25%, mean 10% (the sun's last degrees,
 where the sky's light falls by orders of magnitude); aerial in-scatter
 worst 7.5% by day, 18% at twilight; the air's transmittance 0.6%; the sky's
-light on the ground 1.4–5.8%. The sky and haze cost, interleaved at
-2560 × 1364 on a 4090: 0.61 ms for the per-pixel march, 0.21 ms for the
-tables (sky 0.11, compute 0.05). biomes on the atmosphere, its sun at
-128,000 lux and exposure metered: 0.23–0.33 ms more a frame than on its
-HDR panorama with no haze (0.1 of it the sky and compute, the rest the haze
-and sky light in every lit shader and the frame's compute join); the
-sky's gradient bands are gone (the longest run of one colour down a sky
-column 5–6 rows, was 9–13). A cut canopy → flyover → canopy adapts with no
-overshoot or oscillation and holds still (±0.001 EV) once the view does.
+light on the ground 1.4–5.8%. In a clear day's haze (turbidity 10, the
+workshop kit's air) at 2 m and 2 km: sky radiance worst 14%, mean 5%;
+aerial in-scatter worst 12%, mean 8% (the haze's forward lobe scatters
+more of the light more than once, which the isotropic series fits worse);
+the bright aureole such a sky has about the sun is the reference's too.
+The sky-view table is checked over a dense grid of directions (the zenith
+cap finely, azimuths both sides of the sun) and as the sky pass draws it.
+The sky and haze cost, interleaved at 2560 × 1364 on a 4090: 0.61 ms for
+the per-pixel march, 0.13 ms for the tables (sky 0.04, view tables
+0.007). biomes on the atmosphere, its sun at 128,000 lux, turbidity 10 and
+exposure metered: 0.10–0.24 ms more a frame than on its HDR panorama with
+no haze (GPU ms, HDRI / atmosphere: glade 1.92 / 2.10, edge 1.99 / 2.23,
+meadow 2.13 / 2.30, canopy 0.89 / 0.99, above 0.67 / 0.79, flyover 0.74 /
+0.86); per pass, the view tables 0.009, the sky 0.04–0.06 against 0.025,
+the exposure 0.016, and in the lit shaders the aerial lookup 0.04–0.08 and
+the sky's SH 0.03–0.05. The sky's gradient bands are gone (the longest run
+of one colour down a sky column 6–9 rows, was 9–13). A sunlit field meters
+where a camera puts it (biomes' ground band, sRGB luminance: meadow 77,
+canopy 75, above 80; on the HDR panorama 105, 89, 83). A cut canopy →
+flyover → canopy adapts with no overshoot or oscillation and holds still
+once the view does.
 
 ## 8. Shadows
 
@@ -606,7 +628,7 @@ the motion oracle for anything temporal. Each step removes what it replaces.
 | 1 | Done: the old forest path retired (ForestNode, its drawers, planner, impostors, HiZ; the plants' CPU planner) | one foliage path, the plants node planned on the GPU; biomes' stills identical, GPU ms 7–11% lower | −17k |
 | 2 | Done: the layout (§12), moves only | frames byte-identical, suites green | moves |
 | 3 | Done: the world service (§6), the surface layers' fills its first producer | biomes' stills byte-identical, GPU ms unchanged; a cut glade→flyover settles in 4 frames (24 fills a frame took 24), flyover→glade in 12 (took 38), no frame over 2.78 ms | +1.4k |
-| 4 | Done: atmosphere tables and exposure (§7) | one sky from ground to orbit: the LUT path within 7% of a reference march by day, 0.21 ms where the per-pixel march took 0.61; metered exposure in EV; biomes on it, its sky bands gone | +3.1k |
+| 4 | Done: atmosphere tables and exposure (§7) | one sky from ground to orbit: the LUT path within 7% of a reference march by day (14% in a clear day's haze), 0.13 ms where the per-pixel march took 0.61; metered exposure in EV, a sunlit field at middle grey; biomes on it under a clear day's air, 0.10–0.24 ms over its HDR panorama, its sky bands gone | +3.1k |
 | 5 | Cached shadow pages (§8), then horizons and canopy density (§7) | plant and terrain shadows off the per-frame cost | ~6k |
 | 6 | The ground and its cover as one surface (§9) | the eye-level frame's 1.3–1.7 ms of cover cut by most of its hidden and far work | ~2k |
 | 7 | The probe grid (§7) | forests, valleys and slopes lit as places; the stand-in falloffs gone | ~5k |
