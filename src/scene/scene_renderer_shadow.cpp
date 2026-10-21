@@ -98,7 +98,18 @@ void SceneRenderer::gatherShadowCasters(bromath::AABB3& casterBounds) {
                     if (bromath::vlen(near - eye) < swayReach) pages.addDynamic(b, true);
                 }
                 if (!bromath::aisEmpty(all)) {
-                    shadowCasterStates_.still(m->id(), p->generation(), all, pages);
+                    // (A cell past the plants' shadow range casts nothing:
+                    // its coming and going changes no page.)
+                    const float castReach = p->params().shadowRange;
+                    shadowCasterStates_.still(m->id(), p->generation(), all, pages,
+                                              [p, eye, castReach](uint64_t since, std::vector<bromath::AABB3>& boxes) {
+                                                  if (!p->changesSince(since, boxes)) return false;
+                                                  std::erase_if(boxes, [&](const bromath::AABB3& b) {
+                                                      const Vec3 near = bromath::vmin(bromath::vmax(eye, b.min), b.max);
+                                                      return bromath::vlen(near - eye) > castReach;
+                                                  });
+                                                  return true;
+                                              });
                     casterBounds = bromath::amerge(casterBounds, all);
                 }
                 shadowMotion_[m->id()] = ShadowMotion::Swaying;

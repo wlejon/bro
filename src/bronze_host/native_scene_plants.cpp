@@ -1,5 +1,5 @@
 // Plants natives: SceneGraph.createPlants and the PlantsNode members behind
-// js/scene_plants.js (species, plants, params, stats).
+// js/scene_plants.js (species, plants, placement rules, params, stats).
 
 #include "bronze_host/native_scene_internal.h"
 #include "bronze_host/host_natives.h"
@@ -8,8 +8,11 @@
 #include "natives/scene/native_scene_decl.h"
 
 #include "scene/nodes/plants_node.h"
+#include "scene/world/plant_placement.h"
 
 #include <cmath>
+#include <memory>
+#include <string>
 #include <vector>
 
 using namespace bro::bronze_host;
@@ -39,6 +42,29 @@ void bro_scene_SceneNode_setPlantSpecies(void* self, const float* data, uint32_t
 
 void bro_scene_SceneNode_setPlants(void* self, const float* data, uint32_t data_len) {
     if (auto* pl = plantsOf(self)) pl->setPlants(data, static_cast<int>(data_len / scene::PlantsNode::kPlantFloats));
+}
+
+const char* bro_scene_SceneNode_setPlantRules(void* self, const char* json) {
+    static thread_local std::string tl_error;
+    tl_error.clear();
+    auto* pl = plantsOf(self);
+    if (!pl) return tl_error.c_str();
+    if (!json || !*json) {
+        pl->setRules(nullptr);
+        return tl_error.c_str();
+    }
+    auto rules = std::make_shared<scene::PlacementRules>();
+    if (!scene::parsePlacementRules(json, *rules, &tl_error)) return tl_error.c_str();
+    pl->setRules(std::move(rules));
+    return tl_error.c_str();
+}
+
+void bro_scene_SceneNode_plantPlacement(void* self, bronze_native_buffer* out) {
+    auto* pl = plantsOf(self);
+    if (!pl) { transferBuffer(std::vector<double>{}, out); return; }
+    transferBuffer(std::vector<double>{static_cast<double>(pl->cells().size()),
+                                       static_cast<double>(pl->placementPending())},
+                   out);
 }
 
 void bro_scene_SceneNode_setPlantParams(void* self, const double* params, uint32_t params_len) {

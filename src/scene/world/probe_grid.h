@@ -95,9 +95,12 @@ public:
     /// about it, and the columns a move brought in queued as fresh boxes.
     void place(double eyeX, double eyeZ);
 
-    /// The canopy (the plants' records) or the sun changed: every cascade's
-    /// volumes are remade, then its probes refreshed.
-    void setCanopyGeneration(uint64_t generation);
+    /// The canopy (the plants' records) changed over the ground box
+    /// (x0, z0)-(x1, z1): the volumes of the cascades it overlaps are
+    /// remade, then their probes refreshed. Without a box, everywhere.
+    void canopyChanged(double x0, double z0, double x1, double z1);
+    void canopyChanged();
+    /// The sun changed: every cascade's volumes are remade.
     void setSunGeneration(uint64_t generation);
 
     /// Whether cascade c's volumes are made for what it stands on now.
@@ -128,6 +131,7 @@ private:
     struct Cascade {
         int64_t cornerX = 0, cornerZ = 0;
         bool placed = false;
+        uint64_t canopy = 1;   // moves with each canopy change over it
         // What its volumes were made for.
         int64_t madeX = 0, madeZ = 0;
         uint64_t madeCanopy = 0, madeSun = 0;
@@ -143,7 +147,7 @@ private:
     ProbeGridConfig config_;
     std::vector<Cascade> cascades_;
     float top_ = 32.0f;
-    uint64_t canopy_ = 1, sun_ = 1;
+    uint64_t sun_ = 1;
     std::vector<TraceJob> jobs_;
 };
 

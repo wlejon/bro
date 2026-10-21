@@ -258,21 +258,42 @@ VkBuffer SceneGpuResources::skinAttributes(const SkinnedMeshNode& node, size_t v
     return entry.buffer.buffer;
 }
 
-const SceneVkBuffer* SceneGpuResources::storage(uint32_t id, uint64_t generation, const void* data, size_t bytes) {
+const SceneVkBuffer* SceneGpuResources::storage(uint32_t id, const CellStore& store, bool& changed) {
     Storage& entry = storages_[id];
-    if (entry.buffer.isValid() && entry.generation == generation) return &entry.buffer;
+    changed = false;
+    if (entry.buffer.isValid() && entry.layout == store.layout() && entry.serial == store.serial())
+        return &entry.buffer;
+    const std::vector<float>& data = store.data();
+    // The ranges changed in place: a run written is one no frame in flight
+    // reads (CellStore holds a run given back a few frames).
+    std::vector<std::pair<size_t, size_t>> ranges;
+    if (entry.buffer.isValid() && entry.layout == store.layout() && store.changesSince(entry.serial, ranges)) {
+        for (const auto& [offset, count] : ranges)
+            if (!allocator_.stageAndUploadBuffer(entry.buffer.buffer, data.data() + offset, count * sizeof(float),
+                                                 offset * sizeof(float))) {
+                LOG_ERROR("SceneGpuResources: Failed uploading the storage of node %u", id);
+                return nullptr;
+            }
+        entry.serial = store.serial();
+        changed = !ranges.empty();
+        return &entry.buffer;
+    }
+    // Whole, into a new buffer (the frames in flight keep the old).
     allocator_.destroyBuffer(entry.buffer);
+    const size_t bytes = data.size() * sizeof(float);
     const VkDeviceSize size = std::max<VkDeviceSize>(bytes, 16);
     // (Shared: the plants' plan and leaf poses read it on the async compute queue.)
     if (!allocator_.createBuffer(size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, entry.buffer, /*shared=*/true) ||
-        !allocator_.stageAndUploadBuffer(entry.buffer.buffer, data, bytes)) {
+        !allocator_.stageAndUploadBuffer(entry.buffer.buffer, data.data(), bytes)) {
         LOG_ERROR("SceneGpuResources: Failed uploading the storage of node %u (%zu bytes)", id, bytes);
         allocator_.destroyBuffer(entry.buffer);
         storages_.erase(id);
         return nullptr;
     }
-    entry.generation = generation;
+    entry.layout = store.layout();
+    entry.serial = store.serial();
+    changed = true;
     return &entry.buffer;
 }
 

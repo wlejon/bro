@@ -38,7 +38,12 @@
 #include <vulkan/vulkan.h>
 
 #include <cstdint>
+#include <unordered_map>
 #include <vector>
+
+namespace bro::scene {
+class PlantsNode;
+}
 
 namespace bro::scene::vk {
 
@@ -99,20 +104,23 @@ private:
         AtmosphereGpu atm;
     };
     /// What a dispatch reads besides the grid's own: a plants node's records
-    /// (the splat), the probes listed (the trace and the blend).
+    /// (the splat), and its list (binding 15): the plants it splats, or the
+    /// probes it traces and blends.
     struct Inputs {
         uint32_t mask = 0;
         VkBuffer plants = VK_NULL_HANDLE;
         VkDeviceSize plantsBytes = 0;
         uint32_t groups = 0;
         uint32_t probes = 0;
+        VkDescriptorBufferInfo list{};
     };
 
     uint32_t recordWorld(SceneFrame& frame, WorldStream& stream);
     uint32_t recordTraces(SceneFrame& frame, std::span<const WorldJob> granted, WorldStream& stream);
 
-    /// The canopy this frame: its plants nodes, a hash of their records'
-    /// generations, and the layers' top (above the tallest plant).
+    /// The canopy this frame: its plants nodes, the cascades their changes
+    /// since the last frame fall in told, and the layers' top (above the
+    /// tallest plant).
     void gatherCanopy(SceneFrame& frame);
     void capture(SceneFrame& frame, VkCommandBuffer cmd, uint32_t mask);
     void dispatch(SceneFrame& frame, VkCommandBuffer cmd, Stage stage, const Inputs& in);
@@ -137,16 +145,15 @@ private:
     uint32_t seed_ = 0;
     ProbeGridGpu block_{};
     VkDescriptorBufferInfo blockInfo_{};
-    VkDescriptorBufferInfo probeList_{};   // this frame's, while its traces record
-    // The canopy's plants nodes this frame, and what the volumes were made for.
+    // The canopy's plants nodes this frame, and the generation of each
+    // its changes were last taken from.
     struct Canopy {
-        uint32_t id = 0;
+        const PlantsNode* node = nullptr;
         VkBuffer records = VK_NULL_HANDLE;
         VkDeviceSize bytes = 0;
-        uint32_t plants = 0;
     };
     std::vector<Canopy> canopy_;
-    uint64_t canopyHash_ = 0, canopyGeneration_ = 1;
+    std::unordered_map<uint32_t, uint64_t> canopySeen_;
     float top_ = 0.0f;
     bromath::Vec3 sunRef_{0.0f, 1.0f, 0.0f};
     uint64_t sunGeneration_ = 1;

@@ -107,12 +107,26 @@ void ProbeGrid::place(double eyeX, double eyeZ) {
     }
 }
 
-void ProbeGrid::setCanopyGeneration(uint64_t generation) { canopy_ = generation; }
+void ProbeGrid::canopyChanged(double x0, double z0, double x1, double z1) {
+    for (size_t i = 0; i < cascades_.size(); ++i) {
+        Cascade& c = cascades_[i];
+        const double s = spacing(static_cast<int>(i));
+        const double lo[2] = {static_cast<double>(c.cornerX) * s, static_cast<double>(c.cornerZ) * s};
+        const double side = s * config_.columns;
+        if (x1 < lo[0] || x0 > lo[0] + side || z1 < lo[1] || z0 > lo[1] + side) continue;
+        ++c.canopy;
+    }
+}
+
+void ProbeGrid::canopyChanged() {
+    for (Cascade& c : cascades_) ++c.canopy;
+}
+
 void ProbeGrid::setSunGeneration(uint64_t generation) { sun_ = generation; }
 
 bool ProbeGrid::volumesCurrent(int c) const {
     const Cascade& k = cascades_[static_cast<size_t>(c)];
-    return k.made && k.madeX == k.cornerX && k.madeZ == k.cornerZ && k.madeCanopy == canopy_ && k.madeSun == sun_ &&
+    return k.made && k.madeX == k.cornerX && k.madeZ == k.cornerZ && k.madeCanopy == k.canopy && k.madeSun == sun_ &&
            k.madeTop == top_;
 }
 
@@ -121,7 +135,7 @@ void ProbeGrid::volumesMade(int c) {
     k.made = true;
     k.madeX = k.cornerX;
     k.madeZ = k.cornerZ;
-    k.madeCanopy = canopy_;
+    k.madeCanopy = k.canopy;
     k.madeSun = sun_;
     k.madeTop = top_;
 }

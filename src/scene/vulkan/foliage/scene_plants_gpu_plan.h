@@ -78,7 +78,6 @@ public:
         uint64_t generation_ = 0;   // the node's its cells were built from
         uint64_t cellsGeneration_ = 0;
         WorldCellsPass::Target cellTarget_;
-        VkBuffer store_ = VK_NULL_HANDLE;   // the records the last plan read
         SceneVkBuffer work_, readback_;
         VkDescriptorSet planSet_ = VK_NULL_HANDLE;
         uint32_t askedRecords_ = 0, askedLeaves_ = 0;

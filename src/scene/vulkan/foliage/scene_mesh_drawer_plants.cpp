@@ -63,16 +63,19 @@ void SceneMeshDrawer::plansSubmitted(uint64_t ticket, render::VulkanQueue& queue
 
 void SceneMeshDrawer::preparePlants(SceneFrame& frame, PlantsNode& node, std::vector<MeshDraw>& out) {
     out.clear();
+    // The cells placed about the camera's eye.
+    node.follow(frame.view.eye.x, frame.view.eye.z);
     if (node.plantCount() == 0 || node.speciesCount() == 0 || node.effectiveUnlit()) {
         node.setStats({});
         return;
     }
-    // The records, uploaded when they change.
-    const std::vector<float>& data = node.gpuData();
-    const SceneVkBuffer* store = frame.gpu.resources.storage(node.id(), node.generation(), data.data(),
-                                                             data.size() * sizeof(float));
+    // The records, the runs changed since the last frame copied in.
+    bool changed = false;
+    const SceneVkBuffer* store = frame.gpu.resources.storage(node.id(), node.store(), changed);
     const GpuMesh* ix = frame.gpu.resources.mesh(node.id(), kLeafIndexSlot, 1, leafIndices());
     if (!store || !ix) return;
+    // (Copied on the graphics queue, read by the plan on the compute queue.)
+    if (changed) frame.gpu.device.computeReadsGraphics();
     // The shadow views its casters go to: the overlays of the levels where
     // its sway shows, the redrawn pages of the rest.
     std::vector<int> tiles;

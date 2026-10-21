@@ -145,4 +145,51 @@ if (!scn) {
     assert(st.elements >= st.visible && st.elements < st.visible * 200,
            `each drawn with at least one element, the far ones few (${st.elements} for ${st.visible})`);
     assert(cast > 0, `the many cast (${cast})`);
+
+    // Rules: the plants placed per cell on the engine's threads, from
+    // fields (a number is a constant field), around the eye out to `range`.
+    // Flown 20 km, about as many cells are kept wherever the eye is (as
+    // many as the leaves in range there, plus those kept in the hysteresis
+    // band behind it), and back where it began the plants are there again.
+    const settle = () => {
+        let p;
+        for (let i = 0; i < 600; i++) {
+            st = drawn();
+            p = plants.plantPlacement();
+            if (p.pending === 0) break;
+        }
+        return p;
+    };
+    const kinked = FastNoise.create('Simplex');
+    kinked.set('Feature Scale', 80);
+    const size = FastNoise.create('Add');   // 0.5 .. 1.5
+    size.set('LHS', kinked);
+    size.set('RHS', 1);
+    plants.setPlants({ plants: [], rules: { range: 400, hysteresis: 64,
+                                            layers: [{ spacing: 12, chance: 0.5, species: [0], scale: size }] } });
+    scn.setCamera({ fov: 50, near: 0.1, far: 2000, position: [0, 4, 0], target: [0, 4, -100] });
+    let p = settle();
+    const home = { cells: p.cells, plants: st.plants };
+    const disc = Math.PI * 400 * 400 / (12 * 12) * 0.5;
+    assert(p.pending === 0 && home.plants > disc * 0.8 && home.plants < disc * 3,
+           `placed about half the candidates in range (${home.plants}, a disc's ${Math.round(disc)}; ${p.cells} cells)`);
+    assert(st.visible > 0, `the placed plants draw (${st.visible})`);
+    let most = 0;
+    for (let z = 0; z >= -20000; z -= 40) {
+        scn.setCamera({ fov: 50, near: 0.1, far: 2000, position: [0, 4, z], target: [0, 4, z - 100] });
+        flush();
+        advanceTime(16);
+        most = Math.max(most, plants.plantPlacement().cells);
+    }
+    p = settle();
+    const about = (a, b) => Math.abs(a - b) <= b * 0.3;
+    assert(about(p.cells, home.cells), `20 km off, about as many cells (${p.cells} vs ${home.cells})`);
+    assert(most <= home.cells * 2, `on the way, never more than twice them (${most})`);
+    assert(about(st.plants, home.plants), `and about as many plants (${st.plants} vs ${home.plants})`);
+    assert(st.visible > 0, `the plants there draw (${st.visible})`);
+    scn.setCamera({ fov: 50, near: 0.1, far: 2000, position: [0, 4, 0], target: [0, 4, -100] });
+    p = settle();
+    assert(about(p.cells, home.cells) && about(st.plants, home.plants), `back home, the plants again (${st.plants})`);
+    plants.setPlants({ rules: null });
+    assert(drawn().plants === 0, 'rules cleared, no plants');
 }

@@ -45,6 +45,8 @@ layout(set = 0, binding = 11, rgba16f) uniform image3D pgShBImage;
 layout(set = 0, binding = 12) uniform sampler3D pgShR;
 layout(set = 0, binding = 13) uniform sampler3D pgShG;
 layout(set = 0, binding = 14) uniform sampler3D pgShB;
+// The dispatch's list: the probes a trace or a blend makes, the plants
+// (their records' indices) a splat spreads.
 layout(std430, set = 0, binding = 15) readonly buffer ProbeGridProbes {
     uint list[];
 } pgProbes;

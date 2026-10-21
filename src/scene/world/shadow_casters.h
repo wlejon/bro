@@ -17,7 +17,9 @@
 #include <bromath/aabb.h>
 
 #include <cstdint>
+#include <functional>
 #include <unordered_map>
+#include <vector>
 
 namespace bro::scene {
 
@@ -57,12 +59,20 @@ public:
     }
     /// Caster `id` this frame, one that never moves out of the cached depth
     /// (the plants, whose sway the overlays of the near levels carry):
-    /// its change redraws the pages its old and new bounds touch.
-    void still(uint32_t id, uint64_t generation, const bromath::AABB3& bounds, ShadowPages& pages) {
+    /// its change redraws the pages its old and new bounds touch, or, when
+    /// it knows what changed since the generation it was last seen with
+    /// (`changes`, given that generation: its cells come and go), the pages
+    /// those boxes touch.
+    using Changes = std::function<bool(uint64_t since, std::vector<bromath::AABB3>& boxes)>;
+    void still(uint32_t id, uint64_t generation, const bromath::AABB3& bounds, ShadowPages& pages,
+               const Changes& changes = {}) {
         auto [it, added] = states_.try_emplace(id);
         State& s = it->second;
+        std::vector<bromath::AABB3> boxes;
         if (added) {
             pages.invalidate(bounds);
+        } else if (generation != s.generation && changes && changes(s.generation, boxes)) {
+            for (const bromath::AABB3& b : boxes) pages.invalidate(b);
         } else if (generation != s.generation) {
             pages.invalidate(s.bounds);
             pages.invalidate(bounds);

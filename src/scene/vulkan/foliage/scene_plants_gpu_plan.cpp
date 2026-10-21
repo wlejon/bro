@@ -240,11 +240,6 @@ bool GpuPlanner::add(SceneFrame& frame, Node& n, const PlantsNode& node, const S
                 ++it;
             }
         }
-    // Records new since the last plan (uploaded on the graphics queue).
-    if (store.buffer != n.store_) {
-        n.store_ = store.buffer;
-        frame.gpu.device.computeReadsGraphics();
-    }
     n.poll();
     // A frame recorded but never submitted reads back nothing.
     for (Node::Slot& s : n.ring_)

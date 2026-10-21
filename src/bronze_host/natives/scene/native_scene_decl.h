@@ -751,6 +751,16 @@ void bro_scene_SceneNode_setPlantSpecies(void* self, const float* data, uint32_t
 //   registered at __bro_native.scene.SceneNode_setPlants
 void bro_scene_SceneNode_setPlants(void* self, const float* data, uint32_t data_len);
 
+// plants rules: world/plant_placement.h's JSON (parsePlacementRules); empty
+// clears them. Returns "" or what was wrong with them.
+//   registered at __bro_native.scene.SceneNode_setPlantRules
+const char* bro_scene_SceneNode_setPlantRules(void* self, const char* json);
+
+// plants placement: [leaves placed, leaves wanted and not yet placed]
+//   registered at __bro_native.scene.SceneNode_plantPlacement
+//   result: f64[] in *out; out->release == NULL, the runtime copies
+void bro_scene_SceneNode_plantPlacement(void* self, bronze_native_buffer* out);
+
 // plants params: pixels, minElements, woodRange, range (a NaN keeps a value)
 //   registered at __bro_native.scene.SceneNode_setPlantParams
 void bro_scene_SceneNode_setPlantParams(void* self, const double* params, uint32_t params_len);

@@ -1,6 +1,7 @@
 #version 450
 // The probe grid's canopy (scene_probe_grid.cpp): a plants node's crowns
-// splatted into each cascade it makes, a workgroup a plant. A crown is its
+// splatted into each cascade it makes, a workgroup a plant listed (those of
+// its cells over the cascades, pgProbes.list). A crown is its
 // species' envelope (scene_plant_records.glsl's plantCrown, narrowed by
 // plantCrownWidth), filled with its species' extinction; it is sampled by
 // points spread evenly through it (an R3 sequence, rotated by the plant's
@@ -45,9 +46,7 @@ bool crownPoint(PlantCrown cr, vec3 turn, int q, float reach, out vec3 at) {
 }
 
 void main() {
-    int i = int(gl_WorkGroupID.x);
-    if (i >= int(plants.header[0].x)) return;
-    Plant p = plantAt(i);
+    Plant p = plantAt(int(pgProbes.list[gl_WorkGroupID.x]));
     PlantSpecies s = plantSpecies(p.species);
     PlantCrown cr = plantCrown(s, p.scale);
     if (s.density <= 0.0 || cr.radii.x <= 0.0 || cr.radii.y <= 0.0) return;

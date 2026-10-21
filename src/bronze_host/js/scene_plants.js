@@ -2,8 +2,9 @@
 // over native_scene_plants.cpp.
 //
 // The node (scene/nodes/plants_node.h) builds every plant on the GPU from a table
-// of species and a list of plants; this file packs species objects and plant
-// objects into the records the node takes.
+// of species, and plants placed about the eye by rules (FastNoise fields) or set
+// by hand; this file packs species, plant and rule objects into what the node
+// takes.
 //
 // Entered after js/scene_extras.js (installSceneModule, host_js_modules.cpp).
 (function () {
@@ -78,11 +79,51 @@
         return out;
     }
 
+    // Rules as world/plant_placement.h's JSON: every field (a FastNoise node,
+    // its encoded tree, a number for a constant, or { tree, seed } of any of
+    // them) once in a table, each rule's field its index there.
+    function rulesJson(r) {
+        const fields = [];
+        const known = new Map();
+        const encode = (tree) => {
+            if (typeof tree === 'string') return tree;
+            if (typeof tree === 'number') {
+                const c = FastNoise.create('Constant');
+                c.set('Value', tree);
+                return c.encode();
+            }
+            return tree.encode();
+        };
+        const field = (f) => {
+            if (f === undefined || f === null) return null;
+            const tree = f.tree !== undefined ? f.tree : f;
+            const seed = typeof f.seed === 'number' ? f.seed | 0 : (typeof r.seed === 'number' ? r.seed | 0 : 1337);
+            const encoded = encode(tree);
+            const key = encoded + '#' + seed;
+            if (!known.has(key)) { known.set(key, fields.length); fields.push({ tree: encoded, seed }); }
+            return known.get(key);
+        };
+        const num = (v) => (typeof v === 'number' ? v : undefined);
+        const layers = (r.layers || []).map((l, i) => ({
+            spacing: num(l.spacing), jitter: num(l.jitter), chance: field(l.chance),
+            species: (l.species || []).map((s) => (typeof s === 'number' ? { species: s, weight: null }
+                                                                     : { species: s.species | 0, weight: field(s.weight) })),
+            scale: field(l.scale), scaleVariety: num(l.scaleVariety),
+            tint: field(l.tint), tintVariety: num(l.tintVariety),
+            sink: num(l.sink), seed: typeof l.seed === 'number' ? l.seed : i + 1,
+        }));
+        return JSON.stringify({ fields, ground: field(r.ground), range: num(r.range), hysteresis: num(r.hysteresis), layers });
+    }
+
     const isPlants = (n) => n instanceof SceneNode && __bro_native.scene.SceneNode_plantStats(n).length > 0;
 
     function apply(node, o) {
         if (o.species) __bro_native.scene.SceneNode_setPlantSpecies(node, speciesRecords(o.species));
         if (o.plants) __bro_native.scene.SceneNode_setPlants(node, plantRecords(o.plants));
+        if (o.rules !== undefined) {
+            const err = __bro_native.scene.SceneNode_setPlantRules(node, o.rules ? rulesJson(o.rules) : '');
+            if (err) throw new TypeError(err);
+        }
         const params = PARAMS.map((k) => (typeof o[k] === 'number' ? o[k] : NaN));
         if (params.some((v) => !Number.isNaN(v)))
             __bro_native.scene.SceneNode_setPlantParams(node, new Float64Array(params));
@@ -99,6 +140,11 @@
     fn(P, 'setPlants', function setPlants(opts) {
         if (opts && isPlants(this)) apply(this, Array.isArray(opts) || opts instanceof Float32Array ? { plants: opts } : opts);
         return this;
+    });
+    fn(P, 'plantPlacement', function plantPlacement() {
+        const a = __bro_native.scene.SceneNode_plantPlacement(this);
+        if (a.length < 2) return undefined;
+        return { cells: a[0], pending: a[1] };
     });
     fn(P, 'plantStats', function plantStats() {
         const a = __bro_native.scene.SceneNode_plantStats(this);

@@ -221,6 +221,8 @@ bool registerNatives_scene(std::string* error) {
         fn("__bro_native.scene.SceneGraph_createPlants", BRO_NATIVE_FN(bro_scene_SceneGraph_createPlants), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph"}, error) &&
         fn("__bro_native.scene.SceneNode_setPlantSpecies", BRO_NATIVE_FN(bro_scene_SceneNode_setPlantSpecies), "void", {"__bro_native.scene.SceneNode", "f32[]"}, error) &&
         fn("__bro_native.scene.SceneNode_setPlants", BRO_NATIVE_FN(bro_scene_SceneNode_setPlants), "void", {"__bro_native.scene.SceneNode", "f32[]"}, error) &&
+        fn("__bro_native.scene.SceneNode_setPlantRules", BRO_NATIVE_FN(bro_scene_SceneNode_setPlantRules), "str", {"__bro_native.scene.SceneNode", "str"}, error) &&
+        fn("__bro_native.scene.SceneNode_plantPlacement", BRO_NATIVE_FN(bro_scene_SceneNode_plantPlacement), "f64[]", {"__bro_native.scene.SceneNode"}, error) &&
         fn("__bro_native.scene.SceneNode_setPlantParams", BRO_NATIVE_FN(bro_scene_SceneNode_setPlantParams), "void", {"__bro_native.scene.SceneNode", "f64[]"}, error) &&
         fn("__bro_native.scene.SceneNode_plantStats", BRO_NATIVE_FN(bro_scene_SceneNode_plantStats), "f64[]", {"__bro_native.scene.SceneNode"}, error) &&
         fn("__bro_native.scene.SceneGraph_createGrass",BRO_NATIVE_FN(bro_scene_SceneGraph_createGrass), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph"}, error) &&

@@ -1,10 +1,10 @@
 #pragma once
 
 // Plants: trees and shrubs built on the GPU where they stand, from a table
-// of SPECIES and a list of PLANTS (where each stands, its species, scale,
-// turn, seed and tint). Nothing per leaf is stored: the vertex shader
-// (vulkan/shaders/foliage/scene_plants.glsl) builds every leaf, limb and trunk from
-// its plant's record and its species'.
+// of SPECIES and the plants of each world cell (where each stands, its
+// species, scale, turn, seed and tint). Nothing per leaf is stored: the
+// vertex shader (vulkan/shaders/foliage/scene_plants.glsl) builds every
+// leaf, limb and trunk from its plant's record and its species'.
 //
 // A plant is a crown of lobes over a trunk with a limb to each; its foliage
 // is opaque leaf-shaped elements, as many as its size on screen asks for:
@@ -13,10 +13,15 @@
 // distance is continuous (vulkan/foliage/scene_plants_gpu_plan.cpp picks the
 // counts each frame, on the GPU).
 //
-// The plants are a world-cell provider (world/world_cells.h): setPlants sorts
-// them into cell order once, and the records the GPU reads (gpuData) are in
-// that order, uploaded when they or the species change and never per frame.
-// A frame's work then follows the cells in view, not the plant count.
+// Where the plants are (docs/scene-world-architecture.md §10): placed by
+// RULES (world/plant_placement.h), the leaves about the eye made from the
+// world's fields as it moves (follow(), each frame, the camera's eye) and
+// dropped behind it, so a world of any size costs what is in reach; and any
+// plants set by hand (setPlants), kept always. Both live in one store by
+// world cell (world/cell_store.h): a leaf's plants a run of its records,
+// the GPU copy taking only the runs that changed. The plants are a
+// world-cell provider (world/world_cells.h): a frame's work follows the
+// cells in view, not the plant count.
 //
 // A PlantsNode is a MeshNode so the material setters (receivesShadow,
 // castsShadow, visible) apply; it has no mesh, its transform is ignored
@@ -24,13 +29,19 @@
 // raycasts and bounds.
 
 #include "scene/nodes/mesh_node.h"
+#include "scene/world/cell_store.h"
 #include "scene/world/world_cells.h"
 
 #include <cstdint>
+#include <functional>
+#include <map>
 #include <memory>
 #include <vector>
 
 namespace bro::scene {
+
+class PlantPlacement;
+struct PlacementRules;
 
 class PlantsNode : public MeshNode {
 public:
@@ -48,27 +59,45 @@ public:
     static constexpr int kMaxSpecies = 64;
     /// A plant: x, y, z (its foot), yaw (radians); scale, species, seed, tint.
     static constexpr int kPlantFloats = 8;
-    /// gpuData's header, before the species: plants, species, 0, the first
-    /// species record (in vec4s, from the records' start); the first plant
-    /// record, 0, 0, 0; then 8 zeros (scene_plants.glsl's header[4]).
+    /// gpuData's header, before the species: the pool's room (in plants),
+    /// species, 0, the first species record (in vec4s, from the records'
+    /// start); the first plant record, 0, 0, 0; then 8 zeros
+    /// (scene_plants.glsl's header[4]). The species table has room for
+    /// kMaxSpecies, so the pool always starts at the same place.
     static constexpr int kHeaderFloats = 16;
+    static constexpr int kPrefixFloats = kHeaderFloats + kMaxSpecies * kSpeciesFloats;
 
     /// `count` species' records end to end (past kMaxSpecies dropped).
     void setSpecies(const float* data, int count);
     int speciesCount() const { return speciesCount_; }
     /// Species `s`'s record.
-    const float* species(int s) const { return data_.data() + kHeaderFloats + static_cast<size_t>(s) * kSpeciesFloats; }
+    const float* species(int s) const {
+        return store_.data().data() + kHeaderFloats + static_cast<size_t>(s) * kSpeciesFloats;
+    }
 
-    /// `count` plants' records end to end, kept in cell order (not the
-    /// order given). A plant's species past the table's is drawn as species 0.
+    /// `count` plants' records end to end, placed by hand: each kept in its
+    /// cell, whatever the eye does.
     void setPlants(const float* data, int count);
-    int plantCount() const { return plantCount_; }
-    /// Plant `i`'s record, in cell order.
-    const float* plant(int i) const { return data_.data() + plantsAt_ + static_cast<size_t>(i) * kPlantFloats; }
+    /// The rules the plants about the eye are placed by (null: none).
+    void setRules(std::shared_ptr<const PlacementRules> rules);
+    const PlacementRules* rules() const;
+    /// The eye this frame (the camera's, world metres): the leaves placed by
+    /// the rules come in about it and go behind it. Never waits for a
+    /// placement; a cell not placed yet is not drawn yet.
+    void follow(double eyeX, double eyeZ);
+    /// Placement's leaves wanted and not yet placed.
+    size_t placementPending() const;
 
-    /// The header, the species and the plants as the GPU reads them (set 3
-    /// binding 1 of the plants' draws, scene_plants.glsl).
-    const std::vector<float>& gpuData() const { return data_; }
+    /// The plants in the store now.
+    int plantCount() const { return static_cast<int>(store_.live()); }
+    /// The tallest a plant stands (its species' height by its scale).
+    float tallest() const { return tallest_; }
+
+    /// The header, the species and the plants' pool as the GPU reads them
+    /// (set 3 binding 1 of the plants' draws, scene_plants.glsl), and how
+    /// they change (CellStore: the runs changed since a serial).
+    const CellStore& store() const { return store_; }
+    const std::vector<float>& gpuData() const { return store_.data(); }
 
     struct Params {
         float pixels = 14.0f;      // the size on screen (px) an element is kept to past full detail
@@ -82,15 +111,21 @@ public:
     void setParams(const Params& p) { params_ = p; }
     const Params& params() const { return params_; }
 
-    /// The plants' cells (world_cells.h): each leaf's run of the cell order,
+    /// The plants' cells (world_cells.h): each leaf's run of the pool,
     /// bounded by its plants' bounding spheres' boxes (a little wider: the
     /// GPU works the spheres out again in its own arithmetic, the plan's
-    /// plantsSphere).
+    /// plantsSphere), in quadtree order.
     const CellGrid& cellGrid() const { return grid_; }
-    const std::vector<CellContent>& cells() const { return cells_; }
+    const std::vector<CellContent>& cells() const;
 
-    /// Moves when species or plants change (the drawer's cached buffers).
+    /// Moves when the cells change (a leaf placed, dropped or set, the
+    /// species).
     uint64_t generation() const { return generation_; }
+    /// The boxes of what changed after `generation` (each changed leaf's
+    /// old and new bounds); false when the log no longer reaches back so
+    /// far, or a change touched everything (the species): take all of it
+    /// as changed.
+    bool changesSince(uint64_t generation, std::vector<bromath::AABB3>& out) const;
 
     // What a frame drew.
     struct Stats {
@@ -119,15 +154,41 @@ public:
     }
 
 private:
-    void rebuild();
+    // A leaf's plants: those set by hand and how many placed follow them in
+    // its run, and the run's bounds.
+    struct Leaf {
+        std::vector<float> fixed;
+        uint32_t placed = 0;
+        bromath::AABB3 bounds = bromath::aempty3();
+    };
+    struct Before {
+        const CellGrid* grid;
+        bool operator()(const CellKey& a, const CellKey& b) const { return grid->before(a, b); }
+    };
+    using Leaves = std::map<CellKey, Leaf, Before>;
+    /// Leaf `it`'s run made again from its fixed plants and `placed` (null:
+    /// keep the placed it has; an empty leaf goes).
+    void putLeaf(Leaves::iterator it, const std::vector<float>* placed);
+    bromath::AABB3 boundsOf(uint32_t first, uint32_t count);
+    void writeHeader();
+    void changedAll();
 
     CellGrid grid_;
-    std::vector<float> data_;       // header, species, plants (cell order)
-    size_t plantsAt_ = kHeaderFloats;   // the first plant's float in data_
-    int speciesCount_ = 0, plantCount_ = 0;
-    std::vector<CellContent> cells_;
+    CellStore store_{kPrefixFloats, kPlantFloats};
+    Leaves leaves_{Before{&grid_}};
+    int speciesCount_ = 0;
+    float tallest_ = 0.0f;
+    std::unique_ptr<PlantPlacement> placement_;
     Params params_;
     uint64_t generation_ = 0;
+    struct Change {
+        uint64_t generation;
+        bromath::AABB3 bounds;
+    };
+    std::vector<Change> changes_;
+    uint64_t changesFloor_ = 0;   // changes after this generation are all in changes_
+    mutable std::vector<CellContent> cells_;
+    mutable bool cellsDirty_ = false;
     mutable Stats stats_;
     std::weak_ptr<StatsSource> statsSource_;
 };

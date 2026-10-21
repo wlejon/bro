@@ -168,36 +168,35 @@ void SceneProbeGrid::cleanup(SceneGpu& gpu) {
 
 void SceneProbeGrid::gatherCanopy(SceneFrame& frame) {
     canopy_.clear();
-    uint64_t hash = 1469598103934665603ull;
-    const auto mix = [&](uint64_t v) {
-        hash ^= v;
-        hash *= 1099511628211ull;
-    };
     float tallest = 0.0f;
+    std::unordered_map<uint32_t, uint64_t> seen;
+    std::vector<bromath::AABB3> boxes;
     for (SceneNode* node : frame.lists.nodes) {
         if (node->type() != SceneNode::Type::Mesh) continue;
         PlantsNode* plants = static_cast<MeshNode*>(node)->asPlants();
         if (!plants || plants->plantCount() == 0 || plants->speciesCount() == 0) continue;
-        const std::vector<float>& data = plants->gpuData();
-        const SceneVkBuffer* store = frame.gpu.resources.storage(plants->id(), plants->generation(), data.data(),
-                                                                 data.size() * sizeof(float));
+        bool changed = false;
+        const SceneVkBuffer* store = frame.gpu.resources.storage(plants->id(), plants->store(), changed);
         if (!store) continue;
-        canopy_.push_back({plants->id(), store->buffer, data.size() * sizeof(float),
-                           static_cast<uint32_t>(plants->plantCount())});
-        mix(plants->id());
-        mix(plants->generation());
-        for (int i = 0; i < plants->plantCount(); ++i) {
-            const float* p = plants->plant(i);
-            const int s = std::clamp(static_cast<int>(p[5]), 0, plants->speciesCount() - 1);
-            tallest = std::max(tallest, plants->species(s)[0] * p[4]);
+        canopy_.push_back({plants, store->buffer, plants->gpuData().size() * sizeof(float)});
+        tallest = std::max(tallest, plants->tallest());
+        // What changed since the last frame: the cascades it falls in remake
+        // their volumes (a cell placed far off, none); a node new, or one
+        // whose log no longer reaches back, everywhere.
+        const auto last = canopySeen_.find(plants->id());
+        if (last == canopySeen_.end() || !plants->changesSince(last->second, boxes)) {
+            grid_.canopyChanged();
+        } else {
+            for (const bromath::AABB3& b : boxes) grid_.canopyChanged(b.min.x, b.min.z, b.max.x, b.max.z);
         }
+        seen[plants->id()] = plants->generation();
     }
-    if (hash != canopyHash_) {
-        canopyHash_ = hash;
-        ++canopyGeneration_;
-        // The layers reach a little over the tallest crown.
-        top_ = std::max(8.0f, tallest * 1.15f);
-    }
+    // A node gone takes its crowns with it.
+    for (const auto& [id, generation] : canopySeen_)
+        if (!seen.count(id)) grid_.canopyChanged();
+    canopySeen_ = std::move(seen);
+    // The layers reach a little over the tallest crown.
+    top_ = std::max(8.0f, tallest * 1.15f);
 }
 
 void SceneProbeGrid::beginFrame(SceneFrame& frame) {
@@ -205,7 +204,6 @@ void SceneProbeGrid::beginFrame(SceneFrame& frame) {
     if (!on_) return;
     rendered_ = true;
     gatherCanopy(frame);
-    grid_.setCanopyGeneration(canopyGeneration_);
     grid_.setTop(top_);
 
     // The sun (the lighting's dominant directional light, toward it).
@@ -413,8 +411,8 @@ void SceneProbeGrid::dispatch(SceneFrame& frame, VkCommandBuffer cmd, Stage stag
         storage(9 + ch, sh_[ch]);
         w.writeImage(12 + ch, sh_[ch].view, repeat_, VK_IMAGE_LAYOUT_GENERAL);
     }
+    if (in.list.buffer) w.writeBuffer(15, in.list.buffer, in.list.range, in.list.offset, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
     if (in.probes) {
-        w.writeBuffer(15, probeList_.buffer, probeList_.range, probeList_.offset, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
         w.writeBuffer(16, traces_.buffer, traces_.size, 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
         w.writeImage(17, frame.gpu.atmosphere.transmittanceView(), linear_, VK_IMAGE_LAYOUT_GENERAL);
         w.writeImage(18, frame.gpu.atmosphere.skyLightView(), linear_, VK_IMAGE_LAYOUT_GENERAL);
@@ -461,7 +459,6 @@ uint32_t SceneProbeGrid::recordTraces(SceneFrame& frame, std::span<const WorldJo
     const render::UploadSlice slice = frame.gpu.device.frameUpload(bytes);
     if (!slice) return 0;
     std::memcpy(slice.mapped, list.data(), bytes);
-    probeList_ = {slice.buffer, slice.offset, bytes};
     VkCommandBuffer cmd = stream.cmd();
 
     // What the frames before read of the probes is done with before they are
@@ -479,6 +476,7 @@ uint32_t SceneProbeGrid::recordTraces(SceneFrame& frame, std::span<const WorldJo
     }
     Inputs in;
     in.probes = static_cast<uint32_t>(list.size());
+    in.list = {slice.buffer, slice.offset, bytes};
     dispatch(frame, cmd, kTrace, in);
     computeBarrier(cmd);
     dispatch(frame, cmd, kBlend, in);
@@ -487,7 +485,6 @@ uint32_t SceneProbeGrid::recordTraces(SceneFrame& frame, std::span<const WorldJo
                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
                                  VK_PIPELINE_STAGE_TRANSFER_BIT,
                              VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT);
-    probeList_ = {};
     for (const WorldJob& job : granted) grid_.traced(static_cast<int>(job.key));
     return static_cast<uint32_t>(granted.size());
 }
@@ -513,11 +510,35 @@ uint32_t SceneProbeGrid::recordWorld(SceneFrame& frame, WorldStream& stream) {
     in.mask = mask;
     dispatch(frame, cmd, kHeight, in);
     computeBarrier(cmd);
+    // Each node's plants in the cells over the cascades remade, a workgroup
+    // a plant.
+    double lo[2] = {1e300, 1e300}, hi[2] = {-1e300, -1e300};
+    for (int c = 0; c < cascades; ++c) {
+        if (!(mask & (1u << c))) continue;
+        const double s = grid_.spacing(c), side = s * grid_.config().columns;
+        lo[0] = std::min(lo[0], static_cast<double>(grid_.cornerX(c)) * s);
+        lo[1] = std::min(lo[1], static_cast<double>(grid_.cornerZ(c)) * s);
+        hi[0] = std::max(hi[0], static_cast<double>(grid_.cornerX(c)) * s + side);
+        hi[1] = std::max(hi[1], static_cast<double>(grid_.cornerZ(c)) * s + side);
+    }
+    std::vector<uint32_t> list;
     for (const Canopy& node : canopy_) {
+        list.clear();
+        for (const CellContent& cell : node.node->cells()) {
+            const bromath::AABB3& b = cell.bounds;
+            if (b.max.x < lo[0] || b.min.x > hi[0] || b.max.z < lo[1] || b.min.z > hi[1]) continue;
+            for (uint32_t i = cell.first; i < cell.first + cell.count; ++i) list.push_back(i);
+        }
+        if (list.empty()) continue;
+        const VkDeviceSize bytes = list.size() * sizeof(uint32_t);
+        const render::UploadSlice slice = frame.gpu.device.frameUpload(bytes);
+        if (!slice) continue;
+        std::memcpy(slice.mapped, list.data(), bytes);
         Inputs splat = in;
         splat.plants = node.records;
         splat.plantsBytes = node.bytes;
-        splat.groups = node.plants;
+        splat.groups = static_cast<uint32_t>(list.size());
+        splat.list = {slice.buffer, slice.offset, bytes};
         dispatch(frame, cmd, kSplat, splat);
     }
     computeBarrier(cmd);

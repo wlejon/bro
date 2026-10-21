@@ -136,6 +136,10 @@ add_library(bro_scene STATIC
     world/shadow_pages.cpp
     world/shadow_pages_plan.cpp
     world/probe_grid.cpp
+    world/world_workers.cpp
+    world/fields.cpp
+    world/cell_store.cpp
+    world/plant_placement.cpp
     vulkan/frame/scene_vk_device.cpp
     vulkan/frame/scene_vk_allocator.cpp
     vulkan/frame/scene_vk_pipeline.cpp
@@ -236,6 +240,12 @@ if(BRO_BUILD_TESTS)
     # in, volumes and refresh slices), CPU only: its source alone.
     add_executable(bro_probe_grid_test tests/test_probe_grid.cpp world/probe_grid.cpp)
     target_include_directories(bro_probe_grid_test PRIVATE ${bro_SOURCE_DIR}/src)
+
+    # Placement (fields, rules, a cell's plants, the leaves kept about the
+    # eye on the world's workers) and the cell store's runs, CPU only.
+    add_executable(bro_plant_placement_test tests/test_plant_placement.cpp)
+    target_link_libraries(bro_plant_placement_test PRIVATE bro_scene bro_render bro_platform bro_util)
+    target_include_directories(bro_plant_placement_test PRIVATE ${bro_SOURCE_DIR}/src)
 
     # The atmosphere's tables against a CPU reference march (single
     # scattering brute force, multiple scattering by iterated orders).

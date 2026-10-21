@@ -140,9 +140,17 @@ void testVolumes() {
     g.place(0.0, 0.0);
     makeAll(g);
     check(g.volumesCurrent(0) && g.volumesCurrent(2), "made volumes are current");
-    g.setCanopyGeneration(5);
-    check(!g.volumesCurrent(0) && !g.volumesCurrent(2), "a canopy change remakes every cascade's");
+    g.canopyChanged();
+    check(!g.volumesCurrent(0) && !g.volumesCurrent(2), "a canopy change everywhere remakes every cascade's");
     makeAll(g);
+    // Cascade 0 spans -8..8 m (8 columns of 2 m), cascade 1 -32..32,
+    // cascade 2 -128..128: a change at 50 m is the outer one's alone.
+    g.canopyChanged(48.0, 48.0, 52.0, 52.0);
+    check(g.volumesCurrent(0) && g.volumesCurrent(1) && !g.volumesCurrent(2),
+          "a canopy change in a box remakes the cascades it overlaps");
+    makeAll(g);
+    g.canopyChanged(300.0, 300.0, 310.0, 310.0);
+    check(g.volumesCurrent(2), "one past every cascade remakes none");
     g.setSunGeneration(9);
     check(!g.volumesCurrent(1), "a sun turn remakes them");
     makeAll(g);
