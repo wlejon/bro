@@ -100,7 +100,13 @@ layout(set = 1, binding = 13) uniform texture3D texAtmSkyLightImage;
 #define ATM_TRANSMITTANCE_TEX texAtmTransmittance
 #include "common/scene_atmosphere.glsl"
 
-bool sceneAtmosphereOn() { return lighting.atm.sunDir.w > 0.5; }
+// Whether the pipeline was built for a frame with the atmosphere on (the
+// mesh drawer's kAtmosphere raster bit): without it the atmosphere's code is
+// not in the shader at all, so a scene that does not use it pays nothing.
+// A pipeline that does not set it keeps the branch on the uniform.
+layout(constant_id = 2) const bool SCENE_ATMOSPHERE = true;
+
+bool sceneAtmosphereOn() { return SCENE_ATMOSPHERE && lighting.atm.sunDir.w > 0.5; }
 
 // The sun's light at camera-relative `pos`, for a sun of 1 at the top of
 // the air: what the air and the planet's shadow leave of it.
@@ -549,7 +555,7 @@ vec3 sceneDirectLight(SceneSurface s) {
         vec3 radiance = light.color.rgb * light.color.a * atten;
         // The atmosphere's sun is that light above the air: what reaches the
         // surface is what the air and the planet's shadow leave of it.
-        if (i == int(lighting.atm.ground.w)) radiance *= sceneSunTransmittance(s.position);
+        if (SCENE_ATMOSPHERE && i == int(lighting.atm.ground.w)) radiance *= sceneSunTransmittance(s.position);
         // Wrap light through thin two-sided surfaces (leaves): lights the back
         // relative to L whether or not the front faces the light.
         if (s.twoSided && s.subsurface > 0.0 && s.translucency <= 0.0) {

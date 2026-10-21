@@ -73,7 +73,7 @@ void main() {
         SceneLight light = lighting.lights[sun];
         L = -light.direction.xyz;
         sunRad = light.color.rgb * light.color.a;
-        if (sun == int(lighting.atm.ground.w)) sunRad *= sceneSunTransmittance(pos);
+        if (SCENE_ATMOSPHERE && sun == int(lighting.atm.ground.w)) sunRad *= sceneSunTransmittance(pos);
         vec3 radii = vec3(inCrown.w, inShade.x, inCrown.w);
         vec3 o = (pos - inCrown.xyz) / radii, l = L / radii;
         float a = dot(l, l), b = dot(o, l), c = dot(o, o) - 1.0;

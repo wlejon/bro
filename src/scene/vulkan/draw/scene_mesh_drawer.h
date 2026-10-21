@@ -192,6 +192,10 @@ public:
     bool setup(SceneGpu& gpu);
     void cleanup(SceneGpu& gpu);
 
+    /// Whether this frame has the atmosphere on: the pipelines its draws
+    /// select are built with the atmosphere's shading, or without it.
+    void setAtmosphere(bool on) { atmosphere_ = on; }
+
     /// Fill `out` for this frame. False when the node has nothing to draw.
     bool prepare(SceneFrame& frame, MeshNode& node, MeshDraw& out);
     bool prepare(SceneFrame& frame, InstancedMeshNode& node, MeshDraw& out);
@@ -304,7 +308,7 @@ private:
                                const std::vector<float>* leafSegments, const std::vector<float>* vegetation);
     bool prepareProcedural(SceneFrame& frame, InstancedMeshNode& node, MeshDraw& out);
     /// The pipeline state a draw selects beyond its shaders.
-    static uint32_t rasterVariant(const MeshDraw& draw);
+    uint32_t rasterVariant(const MeshDraw& draw) const;
     VkPipeline builtinPipeline(const MeshDraw& draw, const TargetFormat& target);
     VkPipeline customPipeline(CustomProgram& prog, const MeshDraw& draw, const TargetFormat& target);
     VkPipeline buildPipeline(VkShaderModule vs, VkShaderModule fs, MeshKind kind, uint32_t raster,
@@ -314,6 +318,7 @@ private:
     SceneDefaults* defaults_ = nullptr;
     bool wideLines_ = false;   // the device draws lines wider than 1 px
     VkPipelineLayout layout_ = VK_NULL_HANDLE;
+    bool atmosphere_ = false;   // setAtmosphere
     VkShaderModule vs_[kMeshKindCount] = {};
     VkShaderModule fs_ = VK_NULL_HANDLE;
     VkShaderModule fsIndirect_ = VK_NULL_HANDLE;

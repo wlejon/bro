@@ -211,13 +211,19 @@ constexpr uint32_t kNoDepth = 16;
 // too: the wilds' ground, three meshes over one another, its turf shaded
 // under the near tiles twice over.
 constexpr uint32_t kCuts = 32;
-constexpr uint32_t kCount = 64;
+// The frame has the atmosphere on: the lit stages are built with its code
+// (scene_lighting.glsl's SCENE_ATMOSPHERE), and without it when it is off.
+constexpr uint32_t kAtmosphere = 64;
+constexpr uint32_t kCount = 128;
 // mesh.frag's MESH_CUTS.
 constexpr uint32_t kCutsConstantId = 1;
+// scene_lighting.glsl's SCENE_ATMOSPHERE.
+constexpr uint32_t kAtmosphereConstantId = 2;
 }
 
-uint32_t SceneMeshDrawer::rasterVariant(const MeshDraw& draw) {
-    return (draw.translucent ? raster::kTranslucent : 0u) | (draw.twoSided ? raster::kTwoSided : 0u) |
+uint32_t SceneMeshDrawer::rasterVariant(const MeshDraw& draw) const {
+    return (atmosphere_ ? raster::kAtmosphere : 0u) | (draw.translucent ? raster::kTranslucent : 0u) |
+           (draw.twoSided ? raster::kTwoSided : 0u) |
            (draw.lines ? raster::kLines : 0u) | (draw.mirrored ? raster::kMirrored : 0u) |
            (draw.noDepthTest ? raster::kNoDepth : 0u) |
            (draw.push.extra[0] > 0.0f || draw.push.pbrParams[2] > 0.0f ? raster::kCuts : 0u);
@@ -245,7 +251,8 @@ VkPipeline SceneMeshDrawer::buildPipeline(VkShaderModule vs, VkShaderModule fs, 
      .setTarget(target)
      .setDepthBias(true)
      .setDynamicStates(dynamic)
-     .setSpecialization(raster::kCutsConstantId, (rasterBits & raster::kCuts) != 0);
+     .setSpecialization(raster::kCutsConstantId, (rasterBits & raster::kCuts) != 0)
+     .setSpecialization(raster::kAtmosphereConstantId, (rasterBits & raster::kAtmosphere) != 0);
     if (rasterBits & raster::kTranslucent) {
         b.enableAlphaBlending(1);
         if (rasterBits & raster::kNoDepth) {

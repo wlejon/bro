@@ -135,6 +135,7 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
     }
     environment_.update(gpu_, cmd, renderer);
     atmosphere_.beginFrame(frame);
+    meshes_.setAtmosphere(atmosphere_.active());
     frame.lighting = sceneLighting(renderer, gpu_, frame.view.eye);
     writeCameraSet(frame);
     frame.ssao = renderer.ssaoEnabled() && targets_.ensureIndirect(allocator_);
