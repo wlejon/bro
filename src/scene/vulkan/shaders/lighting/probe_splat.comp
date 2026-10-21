@@ -1,0 +1,107 @@
+#version 450
+// The probe grid's canopy (scene_probe_grid.cpp): a plants node's crowns
+// splatted into each cascade it makes, a workgroup a plant. A crown is its
+// species' envelope (scene_plant_records.glsl's plantCrown, narrowed by
+// plantCrownWidth), filled with its species' extinction; it is sampled by
+// points spread evenly through it (an R3 sequence, rotated by the plant's
+// seed), each carrying its share of the crown's volume into the voxel it
+// falls in, so the sum a voxel holds is the extinction times the share of
+// it the crowns fill, and the canopy's total is exact at any voxel size.
+//
+// The points are drawn uniform through the cylinder about the crown (its
+// widest radius, its height), and those outside the crown (the disc of
+// radius plantCrownWidth(v) at its height v, -1 the foot .. 1 the top)
+// dropped; the crown's volume (integrated over v) is shared among the points
+// kept, so a crown carries all of it however few points it has.
+
+layout(local_size_x = 64) in;
+
+#define PLANT_RECORDS_SET 0
+#define PLANT_RECORDS_BINDING 7
+#include "foliage/scene_plant_records.glsl"
+#include "lighting/scene_probe_grid_compute.glsl"
+
+const float PI = 3.14159265359;
+
+void deposit(int idx, vec4 v) {
+    uvec4 q = uvec4(v * PG_FIXED + 0.5);
+    atomicAdd(pgSums.sums[idx * 4 + 0], q.x);
+    atomicAdd(pgSums.sums[idx * 4 + 1], q.y);
+    atomicAdd(pgSums.sums[idx * 4 + 2], q.z);
+    atomicAdd(pgSums.sums[idx * 4 + 3], q.w);
+}
+
+shared uint kept;
+
+// Point q of K in the crown: its place relative to the crown's middle, or
+// false when it falls outside the crown.
+bool crownPoint(PlantCrown cr, vec3 turn, int q, float reach, out vec3 at) {
+    vec3 u = fract(turn + float(q + 1) * vec3(0.8191725134, 0.6710436067, 0.5497004779));
+    float v = 2.0 * u.x - 1.0;
+    float r = sqrt(u.y) * reach;
+    float a = 2.0 * PI * u.z;
+    at = vec3(cos(a) * r, v * cr.radii.y, sin(a) * r);
+    return r <= plantCrownWidth(cr, v) * cr.radii.x;
+}
+
+void main() {
+    int i = int(gl_WorkGroupID.x);
+    if (i >= int(plants.header[0].x)) return;
+    Plant p = plantAt(i);
+    PlantSpecies s = plantSpecies(p.species);
+    PlantCrown cr = plantCrown(s, p.scale);
+    if (s.density <= 0.0 || cr.radii.x <= 0.0 || cr.radii.y <= 0.0) return;
+    vec3 center = plantToWorld(p, cr.center) - PG.eye.xyz;
+    float rx = cr.radii.x, ry = cr.radii.y;
+    // (A cone's foot is a tenth wider than its radius.)
+    float reach = rx * 1.1;
+    vec3 albedo = 0.5 * (s.light + s.dark);
+    float top = pgTop();
+    float voxY = top / float(PG_LAYERS_Y);
+    vec3 turn = vec3(plantRand(p.seed, 101u), plantRand(p.seed, 102u), plantRand(p.seed, 103u));
+    float cylinder = PI * reach * reach * 2.0 * ry;
+    // The crown's volume: pi rx^2 ry times the integral of its width squared
+    // over v (32 midpoints).
+    float w2 = 0.0;
+    for (int k = 0; k < 32; ++k) {
+        float w = plantCrownWidth(cr, (float(k) + 0.5) / 16.0 - 1.0);
+        w2 += w * w;
+    }
+    float volume = PI * rx * rx * ry * w2 / 16.0;
+
+    for (int c = 0; c < pgCascades(); ++c) {
+        if (!pgMaking(c)) continue;
+        vec4 cas = PG.cascade[c];
+        vec2 lo = cas.xy, hi = cas.xy + cas.z * float(PG_COLUMNS);
+        if (center.x + reach < lo.x || center.x - reach > hi.x || center.z + reach < lo.y ||
+            center.z - reach > hi.y)
+            continue;
+        float vox = 0.5 * cas.z;
+        float voxVol = vox * vox * voxY;
+        int K = clamp(int(cylinder / voxVol * PG_SAMPLES_PER_VOXEL), PG_MIN_SAMPLES, PG_MAX_SAMPLES);
+        // The points the crown keeps, then each one's share of its
+        // extinction-volume over the voxel's.
+        if (gl_LocalInvocationIndex == 0u) kept = 0u;
+        barrier();
+        uint mine = 0u;
+        vec3 at;
+        for (int q = int(gl_LocalInvocationIndex); q < K; q += 64)
+            if (crownPoint(cr, turn, q, reach, at)) ++mine;
+        atomicAdd(kept, mine);
+        barrier();
+        float share = s.density * volume / (float(max(kept, 1u)) * voxVol);
+        barrier();   // (read by all before the next cascade clears it)
+        for (int q = int(gl_LocalInvocationIndex); q < K; q += 64) {
+            if (!crownPoint(cr, turn, q, reach, at)) continue;
+            vec3 pt = center + at;
+            float ground = pgBase(pgGround(c, pt.xz));
+            float h = pt.y - ground;
+            if (h < 0.0 || h >= top) continue;
+            ivec3 vx = ivec3(floor((pt.x - cas.x) / vox), floor((pt.z - cas.y) / vox), floor(h / voxY));
+            if (any(lessThan(vx, ivec3(0))) || vx.x >= PG_VOXELS || vx.y >= PG_VOXELS || vx.z >= PG_LAYERS_Y)
+                continue;
+            int idx = ((c * PG_LAYERS_Y + vx.z) * PG_VOXELS + vx.y) * PG_VOXELS + vx.x;
+            deposit(idx, share * vec4(1.0, albedo));
+        }
+    }
+}

@@ -173,6 +173,7 @@ add_library(bro_scene STATIC
     vulkan/lighting/pass_reflection_probe.cpp
     vulkan/shadow/pass_shadow.cpp
     vulkan/shadow/scene_caster_drawer.cpp
+    vulkan/lighting/scene_probe_grid.cpp
     vulkan/shadow/pass_shadow_copy.cpp
     vulkan/shadow/pass_shadow_mark.cpp
     vulkan/shadow/scene_shadow_pages.cpp
@@ -240,6 +241,13 @@ if(BRO_BUILD_TESTS)
     target_link_libraries(bro_atmosphere_test PRIVATE bro_scene bro_engine bro_dom bro_engine
                           bro_render bro_platform bro_util skia Vulkan::Vulkan)
     target_include_directories(bro_atmosphere_test PRIVATE ${bro_SOURCE_DIR}/src ${VK_GEN_DIR})
+
+    # The probe grid's world (the ground's height, the canopy, the sun
+    # through it) against the scene it was made from.
+    add_executable(bro_probe_grid_gpu_test tests/test_probe_grid_gpu.cpp)
+    target_link_libraries(bro_probe_grid_gpu_test PRIVATE bro_scene bro_engine bro_dom bro_engine
+                          bro_render bro_platform bro_util skia Vulkan::Vulkan)
+    target_include_directories(bro_probe_grid_gpu_test PRIVATE ${bro_SOURCE_DIR}/src ${VK_GEN_DIR})
 endif()
 
 

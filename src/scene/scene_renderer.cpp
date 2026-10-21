@@ -350,4 +350,6 @@ bool SceneRenderer::readAtmosphereTables(vk::AtmosphereTables& out) {
     return vkBridge_ && vkBridge_->readAtmosphereTables(out);
 }
 
+bool SceneRenderer::readProbeGrid(vk::ProbeGridTables& out) { return vkBridge_ && vkBridge_->readProbeGrid(out); }
+
 }  // namespace bro::scene

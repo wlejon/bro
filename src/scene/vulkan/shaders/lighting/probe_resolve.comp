@@ -1,0 +1,20 @@
+#version 450
+// The probe grid's canopy (scene_probe_grid.cpp): the splat's fixed-point
+// sums made into the medium, a voxel an invocation: its extinction (1/m)
+// and the albedo of what fills it (black where nothing does).
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+#include "lighting/scene_probe_grid_compute.glsl"
+
+void main() {
+    ivec3 v = ivec3(gl_GlobalInvocationID.x, gl_GlobalInvocationID.y, gl_WorkGroupID.z);
+    int c = v.z / PG_LAYERS_Y;
+    if (v.x >= PG_VOXELS || v.y >= PG_VOXELS || c >= pgCascades() || !pgMaking(c)) return;
+    int idx = (v.z * PG_VOXELS + v.y) * PG_VOXELS + v.x;
+    uvec4 q = uvec4(pgSums.sums[idx * 4 + 0], pgSums.sums[idx * 4 + 1], pgSums.sums[idx * 4 + 2],
+                    pgSums.sums[idx * 4 + 3]);
+    float sigma = float(q.x) / PG_FIXED;
+    vec3 albedo = q.x > 0u ? vec3(q.yzw) / float(q.x) : vec3(0.0);
+    imageStore(pgMediumImage, v, vec4(sigma, albedo));
+}

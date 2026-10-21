@@ -1,0 +1,56 @@
+#version 450
+// The probe grid's sun (scene_probe_grid.cpp): what reaches each voxel of a
+// cascade it makes of the sun's light, through the canopy's medium and past
+// the ground, a voxel an invocation. Its ray climbs toward the sun through
+// the finest cascade's world it is in at each step (so a finer cascade's
+// rays leave its square through the coarser ones), in steps of half that
+// cascade's voxel (shorter where a steep sun crosses the layers sooner),
+// and ends at the ground (in its shade) or past every cascade (lit by what
+// got through).
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+#include "lighting/scene_probe_grid_compute.glsl"
+
+const int kMaxSteps = 512;
+
+void main() {
+    ivec3 v = ivec3(gl_GlobalInvocationID.x, gl_GlobalInvocationID.y, gl_WorkGroupID.z);
+    int c = v.z / PG_LAYERS_Y;
+    if (v.x >= PG_VOXELS || v.y >= PG_VOXELS || c >= pgCascades() || !pgMaking(c)) return;
+    float top = pgTop();
+    float voxY = top / float(PG_LAYERS_Y);
+    vec4 cas = PG.cascade[c];
+    float vox = 0.5 * cas.z;
+    vec2 xz = cas.xy + (vec2(v.xy) + 0.5) * vox;
+    float k = float(v.z - c * PG_LAYERS_Y);
+    vec3 p = vec3(xz.x, pgBase(pgGround(c, xz)) + (k + 0.5) * voxY, xz.y);
+    vec3 L = normalize(PG.sun.xyz);
+
+    float T = 1.0;
+    int cc = c;
+    for (int n = 0; n < kMaxSteps && T > 1e-3; ++n) {
+        cc = pgCascadeAt(p.xz, cc);
+        if (cc < 0) break;
+        float g = pgGround(cc, p.xz);
+        float h = p.y - pgBase(g);
+        // (A hole has no ground to shade the ray, but a canopy over it
+        // stands on the eye's own, as the splat put it.)
+        if (!pgHole(g) && h < 0.0) {
+            T = 0.0;
+            break;
+        }
+        float stepVox = 0.5 * PG.cascade[cc].z;
+        float step = 0.5 * stepVox;
+        if (h >= 0.0 && h < top) {
+            step = min(step, 0.5 * voxY / max(abs(L.y), 0.05));
+            // The medium at the step's middle.
+            vec3 m = p + L * (0.5 * step);
+            float gm = pgGround(cc, m.xz);
+            float hm = m.y - pgBase(gm);
+            if (hm >= 0.0 && hm < top) T *= exp(-texture(pgMedium, pgVolumeUvw(cc, m.xz, hm)).r * step);
+        }
+        p += L * step;
+    }
+    imageStore(pgSunImage, v, vec4(T, 0.0, 0.0, 0.0));
+}

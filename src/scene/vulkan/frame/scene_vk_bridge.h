@@ -10,6 +10,7 @@
 #include "scene/vulkan/frame/scene_defaults.h"
 #include "scene/vulkan/lighting/scene_atmosphere.h"
 #include "scene/vulkan/lighting/scene_environment.h"
+#include "scene/vulkan/lighting/scene_probe_grid.h"
 #include "scene/vulkan/frame/scene_frame.h"
 #include "scene/vulkan/frame/scene_frame_graph.h"
 #include "scene/vulkan/frame/scene_gpu_resources.h"
@@ -66,6 +67,8 @@ public:
 
     /// The atmosphere's tables of the last render (SceneAtmosphere::read).
     bool readAtmosphereTables(AtmosphereTables& out) { return ready_ && atmosphere_.read(gpu_, out); }
+    /// The probe grid's world of the last render (SceneProbeGrid::read).
+    bool readProbeGrid(ProbeGridTables& out) { return ready_ && probes_.read(gpu_, out); }
 
     /// The last render's tonemapped result as top-down RGBA. Waits for that
     /// render (its own ticket, never the device); the copy is recorded into
@@ -96,6 +99,7 @@ private:
     SceneAtmosphere atmosphere_;
     SceneShadowPages shadows_;
     SceneCasterDrawer casters_;
+    SceneProbeGrid probes_;
     SceneGpu gpu_;
     SceneFrameGraph graph_;
     SceneGpuTimer timer_;

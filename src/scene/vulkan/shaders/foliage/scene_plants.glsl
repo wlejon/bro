@@ -13,14 +13,7 @@
 // its colours. The last element grows in with N's fraction, so nothing pops.
 //
 // Set 3 binding 1 (the procedural slot): the node's records
-// (PlantsNode::gpuData), uploaded when they change, never per frame:
-//   header[0]  plants, species, 0, the first species record
-//   header[1]  the first plant record, 0, 0, 0
-//   header[2]  0, 0, 0, 0
-//   header[3]  0, 0, 0, 0
-//   records[]  species (PLANT_SPECIES_VEC4 each), plants in cell order (2
-//              each: x, y, z, yaw; scale, species, seed (an integer under
-//              2^24), tint)
+// (scene_plant_records.glsl).
 // Set 3 binding 2: this frame's chunks, written by the plan
 // (plants_plan.comp; scene_plants_gpu_plan.cpp), an instance of a draw
 // each: plant, first element, the plant's element count N (a wood chunk:
@@ -28,10 +21,7 @@
 // (shadow_plants.vert): its first disc record, how many, 0, 2. A disc
 // record (in the same buffer): plant, 0, 0, 0.
 
-layout(std430, set = 3, binding = 1) readonly buffer PlantRecords {
-    vec4 header[4];
-    vec4 records[];
-} plants;
+#include "foliage/scene_plant_records.glsl"
 
 layout(std430, set = 3, binding = 2) readonly buffer PlantChunks {
     vec4 chunks[];
@@ -40,112 +30,12 @@ layout(std430, set = 3, binding = 2) readonly buffer PlantChunks {
 // A leaf chunk's elements (the plan's PP_LEAVES_PER_CHUNK).
 #define PLANT_LEAVES_PER_CHUNK 32
 
-#define PLANT_SPECIES_VEC4 8
 // The leaf polygon: base, two pairs up its sides and the tip, as 4 triangles.
 #define PLANT_LEAF_VERTS 12
 // A limb or the trunk: a tapered tube of 6 sides, one span (6 quads).
 #define PLANT_TUBE_SIDES 6
 #define PLANT_TUBE_VERTS (PLANT_TUBE_SIDES * 6)
 #define PLANT_MAX_LOBES 48
-
-uint plantHash(uint x) {
-    x ^= x >> 16;
-    x *= 0x7feb352du;
-    x ^= x >> 15;
-    x *= 0x846ca68bu;
-    x ^= x >> 16;
-    return x;
-}
-float plantRand(uint x) { return float(plantHash(x) >> 8) * (1.0 / 16777216.0); }
-float plantRand(uint a, uint b) { return plantRand(a * 0x9e3779b9u + plantHash(b)); }
-
-struct PlantSpecies {
-    float height;      // m, at scale 1
-    float base;        // where the crown starts, a fraction of the height
-    float radius;      // the crown's radius (m)
-    float shape;       // 0 a round crown .. 1 a cone
-    float lobes;       // clumps in the crown
-    float lobeSize;    // a lobe's radius, a fraction of the crown's
-    float leafLen;     // a leaf's length (m) at full detail
-    float leafWidth;   // its width over its length
-    float full;        // elements at full detail
-    float trunk;       // the trunk's radius at the foot (m)
-    float spread;      // how far the lobes sit out from the trunk, 0..1
-    float droop;       // how far leaves hang, 0..1
-    vec3 light;        // the foliage's sunlit colour (linear)
-    float hueVar;      // plant to plant and lobe to lobe colour variety
-    vec3 dark;         // its colour deep in the crown
-    float glow;        // how much the sun shows through it from behind
-    vec3 bark;         // the trunk's colour
-    float density;     // how dense the crown is to the sun's light (1/m)
-    vec3 glowColor;    // the colour of the light through it
-    float needle;      // 0 broad leaves .. 1 needle sprays (narrow, dark, stiff)
-};
-
-PlantSpecies plantSpecies(int i) {
-    int r = int(plants.header[0].w) + i * PLANT_SPECIES_VEC4;
-    vec4 a = plants.records[r], b = plants.records[r + 1], c = plants.records[r + 2];
-    vec4 d = plants.records[r + 3], e = plants.records[r + 4], f = plants.records[r + 5];
-    vec4 g = plants.records[r + 6];
-    PlantSpecies s;
-    s.height = a.x; s.base = a.y; s.radius = a.z; s.shape = a.w;
-    s.lobes = b.x; s.lobeSize = b.y; s.leafLen = b.z; s.leafWidth = b.w;
-    s.full = c.x; s.trunk = c.y; s.spread = c.z; s.droop = c.w;
-    s.light = d.xyz; s.hueVar = d.w;
-    s.dark = e.xyz; s.glow = e.w;
-    s.bark = f.xyz; s.density = f.w;
-    s.glowColor = g.xyz; s.needle = g.w;
-    return s;
-}
-
-struct Plant {
-    vec3 pos;      // absolute world
-    float yaw;
-    float scale;
-    int species;
-    uint seed;
-    float tint;    // -1..1: a shift of its colours toward the dark or the light
-};
-
-Plant plantAt(int i) {
-    // (Never past the records: a chunk names a plant of this frame's plan.)
-    i = clamp(i, 0, max(int(plants.header[0].x) - 1, 0));
-    int r = int(plants.header[1].x) + i * 2;
-    vec4 a = plants.records[r], b = plants.records[r + 1];
-    Plant p;
-    p.pos = a.xyz;
-    p.yaw = a.w;
-    p.scale = b.x;
-    p.species = int(b.y);
-    p.seed = plantHash(uint(b.z) + 0x51ed27u);
-    p.tint = b.w;
-    return p;
-}
-
-// The crown's envelope in the plant's frame (y up, metres): an ellipsoid
-// about `center` with `radii`, narrowed toward its top by `shape` (a cone at 1).
-struct PlantCrown {
-    vec3 center;
-    vec3 radii;
-    float shape;
-};
-
-PlantCrown plantCrown(PlantSpecies s, float scale) {
-    PlantCrown c;
-    float h = s.height * scale;
-    float b = h * s.base;
-    c.center = vec3(0.0, 0.5 * (b + h), 0.0);
-    c.radii = vec3(s.radius * scale, 0.5 * (h - b), s.radius * scale);
-    c.shape = s.shape;
-    return c;
-}
-
-// The crown's horizontal radius at height v (-1 its foot .. 1 its top), over its full radius.
-float plantCrownWidth(PlantCrown c, float v) {
-    float round_ = sqrt(max(1.0 - v * v, 0.0));
-    float cone = clamp(0.5 * (1.0 - v), 0.0, 1.0) * 1.1;
-    return mix(round_, cone, c.shape);
-}
 
 // Lobe `j` of a plant: its centre (plant frame) and radius. The lobes lie
 // over the envelope on a golden-angle spiral from the top down, jittered by
@@ -166,16 +56,6 @@ vec4 plantLobe(PlantSpecies s, PlantCrown c, uint seed, int j) {
     out_ *= mix(0.3 + 0.7 * sqrt(plantRand(seed, uint(j) * 7u + 5u)), 1.0, c.shape);
     vec3 at = c.center + vec3(cos(ang) * out_, v * max(c.radii.y - 0.6 * lr, 0.0), sin(ang) * out_);
     return vec4(at, lr);
-}
-
-// The plant's frame to the world: turned by its yaw about its foot.
-vec3 plantToWorld(Plant p, vec3 local) {
-    float cs = cos(p.yaw), sn = sin(p.yaw);
-    return p.pos + vec3(cs * local.x - sn * local.z, local.y, sn * local.x + cs * local.z);
-}
-vec3 plantDirToWorld(Plant p, vec3 d) {
-    float cs = cos(p.yaw), sn = sin(p.yaw);
-    return vec3(cs * d.x - sn * d.z, d.y, sn * d.x + cs * d.z);
 }
 
 // The wind's push on a point `up` metres up a plant `height` tall: the

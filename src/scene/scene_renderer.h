@@ -33,7 +33,7 @@ namespace bro::render { class VulkanContext; }
 
 namespace bro::scene {
 
-namespace vk { class SceneVkBridge; struct AtmosphereTables; }
+namespace vk { class SceneVkBridge; struct AtmosphereTables; struct ProbeGridTables; }
 
 class SceneGraph;
 class SceneNode;
@@ -228,6 +228,14 @@ public:
     float ssaoRadius() const { return ssaoRadius_; }
     float ssaoIntensity() const { return ssaoIntensity_; }
     float ssaoBias() const { return ssaoBias_; }
+
+    /// The probe grid (docs/scene-world-architecture.md §7): irradiance
+    /// probes about the eye, tracing a world made for them (the ground's
+    /// height, the plants' crowns as a medium, the sun through it).
+    void setProbeGrid(bool enabled) { probeGrid_ = enabled; }
+    bool probeGridEnabled() const { return probeGrid_; }
+    /// The probe grid's world of the last render (waits for the GPU).
+    bool readProbeGrid(vk::ProbeGridTables& out);
 
     /// Screen-space reflections on opaque surfaces. Runs right after the
     /// opaque passes, SSAO and decals (before translucents): a
@@ -552,6 +560,7 @@ private:
     // --- SSAO ---
     bool  ssaoEnabled_   = false;
     float ssaoRadius_    = 0.5f;
+    bool  probeGrid_     = false;
     float ssaoIntensity_ = 1.0f;
     float ssaoBias_      = 0.025f;
 

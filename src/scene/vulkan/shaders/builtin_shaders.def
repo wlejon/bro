@@ -115,6 +115,12 @@ BRO_SCENE_SHADER(AtmosphereMultiScatterComp, "atmosphere_multiscatter.comp", "li
 BRO_SCENE_SHADER(AtmosphereSkyLightComp,   "atmosphere_skylight.comp",    "lighting/atmosphere_skylight.comp",  "comp", "")
 BRO_SCENE_SHADER(AtmosphereSkyViewComp,    "atmosphere_skyview.comp",     "lighting/atmosphere_skyview.comp",   "comp", "")
 BRO_SCENE_SHADER(AtmosphereAerialComp,     "atmosphere_aerial.comp",      "lighting/atmosphere_aerial.comp",    "comp", "")
+// The probe grid's world (scene_probe_grid.cpp): the ground's heights from
+// the capture, the canopy splatted and resolved, the sun's light through it.
+BRO_SCENE_SHADER(ProbeHeightComp,          "probe_height.comp",           "lighting/probe_height.comp",         "comp", "")
+BRO_SCENE_SHADER(ProbeSplatComp,           "probe_splat.comp",            "lighting/probe_splat.comp",          "comp", "")
+BRO_SCENE_SHADER(ProbeResolveComp,         "probe_resolve.comp",          "lighting/probe_resolve.comp",        "comp", "")
+BRO_SCENE_SHADER(ProbeSunComp,             "probe_sun.comp",              "lighting/probe_sun.comp",            "comp", "")
 // Exposure (scene_exposure.cpp): the frame's luminance histogram, metered and
 // adapted by its last workgroup.
 BRO_SCENE_SHADER(ExposureComp,             "exposure.comp",               "post/exposure.comp",                 "comp", "")
