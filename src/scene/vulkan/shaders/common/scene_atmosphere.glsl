@@ -9,7 +9,8 @@
 // the transmittance table as a sampler2D expression (a combined sampler, or
 // a sampler2D(texture, sampler) constructor, which must sit at the lookup,
 // so the functions below name the macro rather than take the table as an
-// argument). Every table holds
+// argument). An includer that reads the sky's light defines ATM_SKYLIGHT_TEX,
+// the sky-light table as a sampler3D expression, the same way. Every table holds
 // radiance for a sun of illuminance 1; what reads it scales by
 // ATM.sunIlluminance, so a dimmer or redder sun is not a remade table.
 //
@@ -262,6 +263,51 @@ void atmShBasis6(vec3 d, out float b[6]) {
     b[4] = 1.092548 * d.x * d.z;
     b[5] = 0.546274 * (d.x * d.x - d.y * d.y);
 }
+
+#ifdef ATM_SKYLIGHT_TEX
+// The sky's light at camera-relative `pos` (scene/world/atmosphere.h): the
+// six SH coefficients a channel in the sun's frame there, times the sun.
+void atmSkyLightSh(vec3 pos, out vec3 c[6], out mat3 frame) {
+    vec3 p = atmOrigin(pos);
+    float r = length(p);
+    vec3 up = p / r;
+    vec3 xAxis, yAxis;
+    float muS;
+    atmSunFrame(up, xAxis, yAxis, muS);
+    frame = mat3(xAxis, yAxis, up);   // columns: local x, y, z in air space
+    vec2 uv = atmSkyLightUv(r, muS);
+    vec4 l0 = textureLod(ATM_SKYLIGHT_TEX, vec3(uv, 0.1), 0.0);
+    vec4 l1 = textureLod(ATM_SKYLIGHT_TEX, vec3(uv, 0.3), 0.0);
+    vec4 l2 = textureLod(ATM_SKYLIGHT_TEX, vec3(uv, 0.5), 0.0);
+    vec4 l3 = textureLod(ATM_SKYLIGHT_TEX, vec3(uv, 0.7), 0.0);
+    vec4 l4 = textureLod(ATM_SKYLIGHT_TEX, vec3(uv, 0.9), 0.0);
+    vec3 E = ATM.sunIlluminance.rgb / ATM_TABLE_SCALE;
+    c[0] = l0.rgb * E;
+    c[1] = vec3(l0.a, l1.rg) * E;
+    c[2] = vec3(l1.ba, l2.r) * E;
+    c[3] = l2.gba * E;
+    c[4] = l3.rgb * E;
+    c[5] = vec3(l3.a, l4.rg) * E;
+}
+
+// The irradiance over pi the coefficients `c` (in the sun's `frame`) give a
+// surface facing `n`.
+vec3 atmShIrradiance(vec3 c[6], mat3 frame, vec3 n) {
+    float b[6];
+    atmShBasis6(n * frame, b);   // into the sun's frame
+    vec3 e = ATM_PI * c[0] * b[0] + (2.0 * ATM_PI / 3.0) * (c[1] * b[1] + c[2] * b[2]) +
+             (ATM_PI / 4.0) * (c[3] * b[3] + c[4] * b[4] + c[5] * b[5]);
+    return max(e, vec3(0.0)) / ATM_PI;
+}
+
+// The radiance along `dir` the coefficients hold (smooth: the ambient's
+// specular on a surface no probe covers).
+vec3 atmShRadiance(vec3 c[6], mat3 frame, vec3 dir) {
+    float b[6];
+    atmShBasis6(dir * frame, b);
+    return max(c[0] * b[0] + c[1] * b[1] + c[2] * b[2] + c[3] * b[3] + c[4] * b[4] + c[5] * b[5], vec3(0.0));
+}
+#endif
 
 // --- The aerial-perspective froxels --------------------------------------------------
 

@@ -100,6 +100,7 @@ layout(set = 1, binding = 13) uniform texture3D texAtmSkyLightImage;
 
 #define ATM lighting.atm
 #define ATM_TRANSMITTANCE_TEX texAtmTransmittance
+#define ATM_SKYLIGHT_TEX texAtmSkyLight
 #include "common/scene_atmosphere.glsl"
 
 // Whether the pipeline was built for a frame with the atmosphere on (the
@@ -118,56 +119,13 @@ vec3 sceneSunTransmittance(vec3 pos) {
     return atmSunTransmittance(r,dot(p, lighting.atm.sunDir.xyz) / r);
 }
 
-// The sky's light at camera-relative `pos` (scene/world/atmosphere.h): the
-// six SH coefficients a channel in the sun's frame there, times the sun.
-void sceneSkyLightSh(vec3 pos, out vec3 c[6], out mat3 frame) {
-    vec3 p = atmOrigin(pos);
-    float r = length(p);
-    vec3 up = p / r;
-    vec3 xAxis, yAxis;
-    float muS;
-    atmSunFrame(up, xAxis, yAxis, muS);
-    frame = mat3(xAxis, yAxis, up);   // columns: local x, y, z in air space
-    vec2 uv = atmSkyLightUv(r, muS);
-    vec4 l0 = textureLod(texAtmSkyLight, vec3(uv, 0.1), 0.0);
-    vec4 l1 = textureLod(texAtmSkyLight, vec3(uv, 0.3), 0.0);
-    vec4 l2 = textureLod(texAtmSkyLight, vec3(uv, 0.5), 0.0);
-    vec4 l3 = textureLod(texAtmSkyLight, vec3(uv, 0.7), 0.0);
-    vec4 l4 = textureLod(texAtmSkyLight, vec3(uv, 0.9), 0.0);
-    vec3 E = lighting.atm.sunIlluminance.rgb / ATM_TABLE_SCALE;
-    c[0] = l0.rgb * E;
-    c[1] = vec3(l0.a, l1.rg) * E;
-    c[2] = vec3(l1.ba, l2.r) * E;
-    c[3] = l2.gba * E;
-    c[4] = l3.rgb * E;
-    c[5] = vec3(l3.a, l4.rg) * E;
-}
-
-// The irradiance over pi the coefficients `c` (in the sun's `frame`) give a
-// surface facing `n`.
-vec3 sceneShIrradiance(vec3 c[6], mat3 frame, vec3 n) {
-    float b[6];
-    atmShBasis6(n * frame, b);   // into the sun's frame
-    vec3 e = ATM_PI * c[0] * b[0] + (2.0 * ATM_PI / 3.0) * (c[1] * b[1] + c[2] * b[2]) +
-             (ATM_PI / 4.0) * (c[3] * b[3] + c[4] * b[4] + c[5] * b[5]);
-    return max(e, vec3(0.0)) / ATM_PI;
-}
-
-// The radiance along `dir` the coefficients hold (smooth: the ambient's
-// specular on a surface no probe covers).
-vec3 sceneShRadiance(vec3 c[6], mat3 frame, vec3 dir) {
-    float b[6];
-    atmShBasis6(dir * frame, b);
-    return max(c[0] * b[0] + c[1] * b[1] + c[2] * b[2] + c[3] * b[3] + c[4] * b[4] + c[5] * b[5], vec3(0.0));
-}
-
 // The sky's irradiance over pi on a surface at `pos` facing `n` (the
 // atmosphere's ambient: the sky above, the lit ground below, through the air).
 vec3 sceneSkyIrradiance(vec3 pos, vec3 n) {
     vec3 c[6];
     mat3 frame;
-    sceneSkyLightSh(pos, c, frame);
-    return sceneShIrradiance(c, frame, n);
+    atmSkyLightSh(pos, c, frame);
+    return atmShIrradiance(c, frame, n);
 }
 
 // What the scene's HDR target holds at most (RGBA16F's largest finite value,
@@ -779,9 +737,9 @@ vec3 sceneAmbient(SceneSurface s) {
         vec3 nI = s.sward.w > 0.0 ? normalize(mix(s.normal, s.sward.xyz, s.sward.w)) : s.normal;
         vec3 c[6];
         mat3 frame;
-        sceneSkyLightSh(s.position, c, frame);   // once, for both
-        vec3 irradiance = sceneShIrradiance(c, frame, nI);
-        vec3 specular = sceneShRadiance(c, frame, R) * (F * brdf.x + brdf.y);
+        atmSkyLightSh(s.position, c, frame);   // once, for both
+        vec3 irradiance = atmShIrradiance(c, frame, nI);
+        vec3 specular = atmShRadiance(c, frame, R) * (F * brdf.x + brdf.y);
         return kD * irradiance * s.baseColor + mix(specular, probeSpec, probeW);
     }
     if (lighting.iblParams.x > 0.5) {
