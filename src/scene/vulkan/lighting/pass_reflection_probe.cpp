@@ -10,6 +10,7 @@
 #include "scene/vulkan/lighting/scene_lighting.h"
 #include "scene/vulkan/draw/scene_mesh_drawer.h"
 #include "scene/vulkan/frame/scene_targets.h"
+#include "scene/vulkan/shadow/scene_shadow_pages.h"
 #include "scene/vulkan/frame/scene_vk_depth.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
 #include "util/log.h"
@@ -112,8 +113,9 @@ PassReflectionProbe::Probe* PassReflectionProbe::ensure(SceneGpu& gpu, const Ref
 }
 
 void PassReflectionProbe::declare(const SceneFrame& frame, PassIO& io) const {
-    // The faces bind the frame's lighting set, whose shadow binding must be readable.
-    io.sample(frame.gpu.targets.shadowAtlas);
+    // The faces bind the frame's lighting set, whose shadow bindings must be readable.
+    io.sample(frame.gpu.shadows.pool);
+    io.sample(frame.gpu.shadows.scratch);
     // Its faces draw the atmosphere's sky and air from this frame's tables.
     if (frame.gpu.atmosphere.active()) io.readsCompute();
 }

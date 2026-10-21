@@ -16,7 +16,7 @@ namespace bro::scene {
 /// the fresh view) and again at the top of render() (so transforms mutated
 /// from JS between tick and render are honored) — a tweened or parented
 /// camera is therefore frame-accurate with no per-frame JS. Every consumer of
-/// camera state (CSM cascade fitting, frustum culling, billboards, soft
+/// camera state (shadow page marking, frustum culling, billboards, soft
 /// particles, DoF, skybox, unproject/picking, the bound audio listener)
 /// reads those derived matrices, so all of them follow the active camera.
 ///

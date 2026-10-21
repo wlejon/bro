@@ -105,9 +105,9 @@ bool registerNatives_dunder_bro(std::string* error) {
         getter("__bro_native.perf.scene.decalsCulled", BRO_NATIVE_FN(bro_dunder_bro_scene_decalsCulled_get), "f64", error) &&
         getter("__bro_native.perf.scene.shadowDrawn", BRO_NATIVE_FN(bro_dunder_bro_scene_shadowDrawn_get), "f64", error) &&
         getter("__bro_native.perf.scene.shadowCulled", BRO_NATIVE_FN(bro_dunder_bro_scene_shadowCulled_get), "f64", error) &&
-        getter("__bro_native.perf.scene.shadowTilesTotal", BRO_NATIVE_FN(bro_dunder_bro_scene_shadowTilesTotal_get), "f64", error) &&
-        getter("__bro_native.perf.scene.shadowTilesRendered", BRO_NATIVE_FN(bro_dunder_bro_scene_shadowTilesRendered_get), "f64", error) &&
-        getter("__bro_native.perf.scene.shadowTilesCached", BRO_NATIVE_FN(bro_dunder_bro_scene_shadowTilesCached_get), "f64", error);
+        getter("__bro_native.perf.scene.shadowPagesNeeded", BRO_NATIVE_FN(bro_dunder_bro_scene_shadowPagesNeeded_get), "f64", error) &&
+        getter("__bro_native.perf.scene.shadowPagesDrawn", BRO_NATIVE_FN(bro_dunder_bro_scene_shadowPagesDrawn_get), "f64", error) &&
+        getter("__bro_native.perf.scene.shadowPagesResident", BRO_NATIVE_FN(bro_dunder_bro_scene_shadowPagesResident_get), "f64", error);
 #endif
     if (!ok) return false;
     return true;

@@ -187,21 +187,21 @@ double bro_dunder_bro_scene_shadowCulled_get(void);
 #endif
 
 #if BRO_WITH_3D
-// __bro.perf.scene.shadowTilesTotal read
-//   registered as a namespace property (getter) at __bro_native.perf.scene.shadowTilesTotal
-double bro_dunder_bro_scene_shadowTilesTotal_get(void);
+// __bro.perf.scene.shadowPagesNeeded read
+//   registered as a namespace property (getter) at __bro_native.perf.scene.shadowPagesNeeded
+double bro_dunder_bro_scene_shadowPagesNeeded_get(void);
 #endif
 
 #if BRO_WITH_3D
-// __bro.perf.scene.shadowTilesRendered read
-//   registered as a namespace property (getter) at __bro_native.perf.scene.shadowTilesRendered
-double bro_dunder_bro_scene_shadowTilesRendered_get(void);
+// __bro.perf.scene.shadowPagesDrawn read
+//   registered as a namespace property (getter) at __bro_native.perf.scene.shadowPagesDrawn
+double bro_dunder_bro_scene_shadowPagesDrawn_get(void);
 #endif
 
 #if BRO_WITH_3D
-// __bro.perf.scene.shadowTilesCached read
-//   registered as a namespace property (getter) at __bro_native.perf.scene.shadowTilesCached
-double bro_dunder_bro_scene_shadowTilesCached_get(void);
+// __bro.perf.scene.shadowPagesResident read
+//   registered as a namespace property (getter) at __bro_native.perf.scene.shadowPagesResident
+double bro_dunder_bro_scene_shadowPagesResident_get(void);
 #endif
 
 // __bro.bronze.heapUsedBytes read

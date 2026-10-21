@@ -11,16 +11,15 @@
 //                            colour attachment of the opaque scope while SSAO
 //                            is on (allocated on first use).
 //   depth / depthMsaa        scene depth; the MSAA depth resolves to the
-//                            nearest sample (depth::resolveNearest).
+//                            nearest sample (depth::resolveNearest). The
+//                            shadow pages' marking pass samples depth.
 //   depthSnapshot            sampleable copy of the opaque depth (decals,
 //                            soft particles, SSAO, SSR, depth of field).
 //   ssrSnapshot              the lit opaque colour SSR reflects.
 //   dofHdr, postLdr, ldr     the post chain; ldr is the frame's output.
-//   shadowAtlas              every light's shadow tiles (SceneRenderer's
-//                            ShadowPlan), sampled with the compare sampler of
-//                            the lighting layout. 1x1 until a light casts a
-//                            shadow, then the plan's size; it never shrinks,
-//                            so cached tiles survive frames without shadows.
+//
+// The shadow pages' pool and scratch target are not frame-sized: they are
+// SceneShadowPages' (vulkan/shadow/scene_shadow_pages.h).
 
 #include "scene/vulkan/frame/scene_vk_allocator.h"
 #include "scene/vulkan/frame/scene_vk_target_format.h"
@@ -50,11 +49,6 @@ public:
     bool ensure(SceneVkAllocator& allocator, uint32_t width, uint32_t height, VkSampleCountFlagBits samples);
     /// Allocate the indirect-light attachments if they are not yet.
     bool ensureIndirect(SceneVkAllocator& allocator);
-    /// Make the shadow atlas `size` texels square (clamped to the device),
-    /// recreating it when the size differs. False on allocation failure.
-    bool ensureShadowAtlas(SceneVkAllocator& allocator, uint32_t size);
-    /// The largest shadow atlas the device can allocate.
-    uint32_t maxShadowAtlas() const { return maxImageDimension_; }
 
     bool valid() const { return hdr.isValid() && depth.isValid() && ldr.isValid(); }
     uint32_t width() const { return width_; }
@@ -80,8 +74,6 @@ public:
     SceneVkImage postLdr;
     SceneVkImage ldr;
 
-    SceneVkImage shadowAtlas;
-
 private:
     void destroyFrameImages(SceneVkAllocator& allocator);
     bool createSampled(SceneVkAllocator& allocator, SceneVkImage& out, VkFormat format,
@@ -94,7 +86,6 @@ private:
     VkSampleCountFlags supportedSamples_ = VK_SAMPLE_COUNT_1_BIT;
     VkResolveModeFlags supportedDepthResolve_ = 0;
     VkResolveModeFlagBits depthResolve_ = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;
-    uint32_t maxImageDimension_ = 4096;
     uint32_t width_ = 0;
     uint32_t height_ = 0;
     VkSampleCountFlagBits samples_ = VK_SAMPLE_COUNT_1_BIT;

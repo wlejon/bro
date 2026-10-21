@@ -25,6 +25,8 @@ BRO_SCENE_SHADER(ShadowFrag,               "shadow.frag",                 "shado
 BRO_SCENE_SHADER(ShadowCutoutVert,         "shadow_cutout.vert",          "shadow/shadow.vert",                 "vert", "SHADOW_CUTOUT")
 BRO_SCENE_SHADER(ShadowInstancedCutoutVert, "shadow_instanced_cutout.vert", "shadow/shadow_instanced.vert",    "vert", "SHADOW_CUTOUT")
 BRO_SCENE_SHADER(ShadowCutoutFrag,         "shadow_cutout.frag",          "shadow/shadow_cutout.frag",          "frag", "")
+// The shadow pages' marking (pass_shadow_mark.cpp).
+BRO_SCENE_SHADER(ShadowMarkComp,           "shadow_mark.comp",            "shadow/shadow_mark.comp",            "comp", "")
 BRO_SCENE_SHADER(PostFxVert,               "postfx.vert",                 "post/postfx.vert",                   "vert", "")
 BRO_SCENE_SHADER(TonemapFrag,              "tonemap.frag",                "post/tonemap.frag",                  "frag", "")
 BRO_SCENE_SHADER(FxaaFrag,                 "fxaa.frag",                   "post/fxaa.frag",                     "frag", "")

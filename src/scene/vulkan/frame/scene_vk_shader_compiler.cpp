@@ -9,6 +9,8 @@
 #include "scene_atmosphere_params.glsl.src.h"
 #include "scene_mesh_push.glsl.src.h"
 #include "scene_shadow_push.glsl.src.h"
+#include "scene_shadow_pages.glsl.src.h"
+#include "shadow_pages_layout.h.src.h"
 #include "scene_shadow_cutout.glsl.src.h"
 #include "scene_vegetation.glsl.src.h"
 #include "scene_procedural.glsl.src.h"
@@ -97,6 +99,8 @@ const char* embeddedInclude(const std::string& name) {
         {"common/scene_atmosphere_params.glsl", kVkSceneAtmosphereParamsSrc},
         {"common/scene_mesh_push.glsl", kVkSceneMeshPushSrc},
         {"common/scene_shadow_push.glsl", kVkSceneShadowPushSrc},
+        {"common/scene_shadow_pages.glsl", kVkSceneShadowPagesSrc},
+        {"shadow/shadow_pages_layout.h", kVkShadowPagesLayoutSrc},
         {"shadow/scene_shadow_cutout.glsl", kVkSceneShadowCutoutSrc},
         {"common/scene_vegetation.glsl", kVkSceneVegetationSrc},
         {"common/scene_procedural.glsl", kVkSceneProceduralSrc},

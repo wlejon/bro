@@ -151,7 +151,10 @@ if (!probe.scene) {
     // ---- A static card's custom chunk, cut --------------------------------------
     {
         const { s, scn } = setup();
-        const m = scn.createMesh({ mesh: card(), texture: halfTexture(), alphaCutoff: 0.5, twoSided: true, y: 2 });
+        // (Its cullMargin the chunk's reach past its bounds, as setCullMargin
+        // asks: the shadow pages its shadow can fall in are found by it.)
+        const m = scn.createMesh({ mesh: card(), texture: halfTexture(), alphaCutoff: 0.5, twoSided: true, y: 2,
+                                   cullMargin: 3 });
         m.setShader({ vertex: SHIFT });
         expectCut(halves(scn, scn.captureFrame(), 3, 0), 'static custom chunk, cutout');
         dropScene(s);

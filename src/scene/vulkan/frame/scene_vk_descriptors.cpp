@@ -63,11 +63,11 @@ VkDescriptorSetLayout SceneVkDescriptorLayoutBuilder::createLightingLayout(VkDev
     assert(shadowCompareSampler != VK_NULL_HANDLE && linearSampler != VK_NULL_HANDLE);
     SceneVkDescriptorLayoutBuilder builder;
     builder.addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
-    builder.addBinding(1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT,
-                       shadowCompareSampler);
+    // The shadow pages' pool (1) and the frame's overlays in the scratch
+    // target (15), bare images compared through binding 16's sampler.
     // Bare images sharing binding 8's sampler: two sampler descriptors for the
     // whole set, so material + custom + lighting stay within 16 per stage.
-    for (uint32_t binding = 2; binding <= 7; ++binding)
+    for (uint32_t binding = 1; binding <= 7; ++binding)
         builder.addBinding(binding, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
     builder.addBinding(8, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, linearSampler);
     // The atmosphere's tables (SceneAtmosphere::writeBindings), through the
@@ -75,6 +75,9 @@ VkDescriptorSetLayout SceneVkDescriptorLayoutBuilder::createLightingLayout(VkDev
     // in-scatter and transmittance, the sky's light.
     for (uint32_t binding = 9; binding <= 13; ++binding)
         builder.addBinding(binding, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
+    builder.addBinding(14, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
+    builder.addBinding(15, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
+    builder.addBinding(16, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, shadowCompareSampler);
     return builder.build(device);
 }
 

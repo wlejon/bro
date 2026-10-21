@@ -8,6 +8,7 @@
 #include "scene/vulkan/draw/scene_vk_custom_shader.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
 #include "scene/vulkan/frame/scene_vk_shader_compiler.h"
+#include "scene/vulkan/shadow/scene_shadow_pages.h"
 #include "util/log.h"
 
 #include <array>
@@ -59,12 +60,9 @@ void shadowVertexInput(MeshKind kind, bool custom, bool cutout, std::vector<VkVe
     attributes = std::move(used);
 }
 
-/// The texel rect of an atlas tile.
-VkRect2D tileRect(const float (&rect)[4], uint32_t atlasSize) {
-    const auto px = [&](float uv) { return static_cast<int32_t>(std::lround(uv * static_cast<float>(atlasSize))); };
-    const int32_t x0 = px(rect[0]), y0 = px(rect[1]);
-    const int32_t x1 = px(rect[0] + rect[2]), y1 = px(rect[1] + rect[3]);
-    return {{x0, y0}, {static_cast<uint32_t>(x1 - x0), static_cast<uint32_t>(y1 - y0)}};
+/// A view's rect of the scratch target, its pages and their border.
+VkRect2D viewRect(const ShadowViewPlan& v) {
+    return {{v.scratchX, v.scratchY}, {static_cast<uint32_t>(v.texelsW), static_cast<uint32_t>(v.texelsH)}};
 }
 
 }  // namespace
@@ -214,19 +212,23 @@ VkPipeline PassShadow::customPipeline(const CustomShaderState& cs, MeshKind kind
 }
 
 bool PassShadow::active(const SceneFrame& frame) const {
+    // Pages that failed to allocate draw nothing.
     const ShadowPlan& plan = frame.renderer.shadowPlan();
-    // An atlas that failed to allocate at the planned size draws nothing.
-    if (frame.gpu.targets.shadowAtlas.width != static_cast<uint32_t>(plan.atlasSize)) return false;
-    bool any = false;
-    for (int i = 0; i < plan.tileCount; ++i) any = any || plan.tiles[i].render;
-    if (!any || part_ != Part::Planned) return any;
+    if (!frame.gpu.shadows.ready() || plan.viewCount == 0) return false;
+    if (part_ == Part::All) return true;
+    // The unplanned part clears the overlays and draws their unplanned
+    // casters; the planned one theirs and every redrawn page.
+    bool overlays = false;
+    for (int v = 0; v < plan.viewCount; ++v) overlays = overlays || plan.views[v].dynamic;
+    if (part_ == Part::Unplanned) return overlays;
+    if (plan.staticPages > 0) return true;
     for (const MeshDraw& draw : frame.lists.meshes)
-        if (draw.castsShadow && draw.indirect != VK_NULL_HANDLE) return true;
+        if (draw.castsShadow && draw.indirect != VK_NULL_HANDLE && overlays) return true;
     return false;
 }
 
 void PassShadow::declare(const SceneFrame& frame, PassIO& io) const {
-    io.depthTarget(frame.gpu.targets.shadowAtlas);
+    io.depthTarget(frame.gpu.shadows.scratch);
     if (part_ == Part::Planned) io.readsCompute();
 }
 
@@ -275,7 +277,7 @@ void PassShadow::drawCaster(SceneFrame& frame, const bromath::Mat4& lightViewPro
     }
     vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(push), &push);
 
-    // A chunked caster draws the chunks inside the tile.
+    // A chunked caster draws the chunks inside the view.
     const SceneMeshDrawer::ChunkCull cull{tileFrustum, frame.view.eye};
     if (draw.shadowIndexCount != 0 && draw.shadowIndexCount < draw.indexCount) {
         MeshDraw cut = draw;
@@ -286,88 +288,101 @@ void PassShadow::drawCaster(SceneFrame& frame, const bromath::Mat4& lightViewPro
     SceneMeshDrawer::bindGeometryAndDraw(cmd, draw, &cull);
 }
 
+void PassShadow::drawView(SceneFrame& frame, int index, bool planned, bool unplanned) {
+    VkCommandBuffer cmd = frame.cmd;
+    const ShadowPlan& plan = frame.renderer.shadowPlan();
+    const ShadowViewPlan& view = plan.views[index];
+    const VkRect2D rect = viewRect(view);
+    const VkViewport viewport{static_cast<float>(rect.offset.x), static_cast<float>(rect.offset.y),
+                              static_cast<float>(rect.extent.width), static_cast<float>(rect.extent.height), 0.0f, 1.0f};
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    vkCmdSetScissor(cmd, 0, 1, &rect);
+    // The draws are relative to the frame's eye, the view to the plan's
+    // (the same eye unless a caller re-planned in between).
+    const bromath::Mat4 lightViewProj = toVulkanClip(rebased(view.relViewProj, frame.view.eye - plan.origin));
+    const bool culling = frame.renderer.cullingFrustum() != nullptr;
+    // The timed passes' names: the overlays' casters by kind and the pages'
+    // by kind, a run of draws under one name marked once as it ends.
+    static constexpr const char* kOverlay[kMeshKindCount] = {
+        "shadow:moving:static", "shadow:moving:instanced", "shadow:moving:skinned", "shadow:moving:scatter",
+        "shadow:moving:tube",   "shadow:moving:veg",       "shadow:moving:instancedVeg", "shadow:moving:grass",
+        "shadow:moving:plants"};
+    static constexpr const char* kPages[kMeshKindCount] = {
+        "shadow:pages:static", "shadow:pages:instanced", "shadow:pages:skinned", "shadow:pages:scatter",
+        "shadow:pages:tube",   "shadow:pages:veg",       "shadow:pages:instancedVeg", "shadow:pages:grass",
+        "shadow:pages:plants"};
+    const char* run = nullptr;
+    for (const MeshDraw& draw : frame.lists.meshes) {
+        if (!draw.castsShadow) continue;
+        const bool isPlanned = draw.indirect != VK_NULL_HANDLE;
+        if (isPlanned ? !planned : !unplanned) continue;
+        // A plants node's planned casters are its view's alone; any other
+        // goes where its motion does.
+        if (isPlanned ? draw.shadowView != index : !shadowCastsInto(view, draw.shadowMotion)) continue;
+        if (culling && draw.hasBounds && !isPlanned && !bromath::fintersects(view.frustum, draw.bounds)) {
+            frame.stats.shadowCulled++;
+            continue;
+        }
+        frame.stats.shadowDrawn++;
+        const char* label = (view.dynamic ? kOverlay : kPages)[static_cast<int>(draw.kind)];
+        if (frame.timer && run && run != label) frame.timer->mark(cmd, run);
+        run = label;
+        drawCaster(frame, lightViewProj, draw, culling ? &view.frustum : nullptr);
+    }
+    if (frame.timer && run) frame.timer->mark(cmd, run);
+}
+
 void PassShadow::record(SceneFrame& frame) {
     VkCommandBuffer cmd = frame.cmd;
     const ShadowPlan& plan = frame.renderer.shadowPlan();
-    const SceneVkImage& atlas = frame.gpu.targets.shadowAtlas;
-    const uint32_t size = atlas.width;
-
-    // Every tile re-renders: clear the atlas as it opens. Otherwise each
-    // re-rendered tile is cleared on its own and the cached ones keep theirs.
-    // (The planned casters' part draws over what the first left.)
-    const bool clears = part_ != Part::Planned;
-    bool all = clears;
-    for (int i = 0; i < plan.tileCount; ++i) all = all && plan.tiles[i].render;
+    const SceneVkImage& scratch = frame.gpu.shadows.scratch;
 
     VkRenderingAttachmentInfo depth{};
     depth.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-    depth.imageView = atlas.view;
+    depth.imageView = scratch.view;
     depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-    depth.loadOp = all ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+    // Each view's rect is cleared as it is first drawn (an overlay's by the
+    // unplanned part, the planned part drawing over it).
+    depth.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
     depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    depth.clearValue.depthStencil = {1.0f, 0};
     VkRenderingInfo info{};
     info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-    info.renderArea = {{0, 0}, {size, size}};
+    info.renderArea = {{0, 0}, {scratch.width, scratch.height}};
     info.layerCount = 1;
     info.pDepthAttachment = &depth;
     frame.gpu.device.cmdBeginRendering(cmd, &info);
     vkCmdSetDepthBias(cmd, kDepthBiasConstant, 0.0f, kDepthBiasSlope);
 
-    const bool culling = frame.renderer.cullingFrustum() != nullptr;
-    for (int slot = 0; slot < plan.tileCount; ++slot) {
-        const ShadowTilePlan& tile = plan.tiles[slot];
-        if (!tile.render) continue;
-        const VkRect2D rect = tileRect(tile.rect, size);
-        const VkViewport viewport{static_cast<float>(rect.offset.x), static_cast<float>(rect.offset.y),
-                                  static_cast<float>(rect.extent.width), static_cast<float>(rect.extent.height),
-                                  0.0f, 1.0f};
-        vkCmdSetViewport(cmd, 0, 1, &viewport);
-        vkCmdSetScissor(cmd, 0, 1, &rect);
-        if (!all && clears) {
-            VkClearAttachment clear{};
-            clear.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
-            clear.clearValue.depthStencil = {1.0f, 0};
-            const VkClearRect clearRect{rect, 0, 1};
-            vkCmdClearAttachments(cmd, 1, &clear, 1, &clearRect);
-        }
+    const auto clearView = [&](int v) {
+        VkClearAttachment clear{};
+        clear.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+        clear.clearValue.depthStencil = {1.0f, 0};
+        const VkClearRect clearRect{viewRect(plan.views[v]), 0, 1};
+        vkCmdClearAttachments(cmd, 1, &clear, 1, &clearRect);
+    };
+    // The overlays: what moves, alone. Their unplanned casters beside the
+    // compute, the planned ones after the join.
+    const bool unplanned = part_ != Part::Planned, planned = part_ != Part::Unplanned;
+    for (int v = 0; v < plan.viewCount; ++v) {
+        if (!plan.views[v].dynamic) continue;
+        if (unplanned) clearView(v);
+        drawView(frame, v, planned, unplanned);
+    }
+    if (frame.timer) frame.timer->mark(cmd, "shadow:moving");
 
-        // The draws are relative to the frame's eye, the tile to the plan's
-        // (the same eye unless a caller re-planned in between).
-        const bromath::Mat4 lightViewProj = toVulkanClip(rebased(tile.relViewProj, frame.view.eye - plan.origin));
-        // The timed passes' names: a draw's own (the plants'), else its
-        // kind's, a run of draws under one name marked once as it ends.
-        static constexpr const char* kKindLabels[kMeshKindCount] = {
-            "shadow:static", "shadow:instanced", "shadow:skinned", "shadow:scatter", "shadow:tube", "shadow:veg",
-            "shadow:instancedVeg", "shadow:grass", "shadow:plants"};
-        const char* run = nullptr;
-        for (const MeshDraw& draw : frame.lists.meshes) {
-            if (!draw.castsShadow) continue;
-            const bool planned = draw.indirect != VK_NULL_HANDLE;
-            if ((part_ == Part::Unplanned && planned) || (part_ == Part::Planned && !planned)) continue;
-            if (slot < 32 && !(draw.shadowTileMask & (1u << slot))) continue;
-            if (culling && draw.hasBounds && !bromath::fintersects(tile.frustum, draw.bounds)) {
-                frame.stats.shadowCulled++;
-                continue;
-            }
-            frame.stats.shadowDrawn++;
-            const char* label = draw.shadowTimerLabel ? draw.shadowTimerLabel : kKindLabels[static_cast<int>(draw.kind)];
-            if (frame.timer && run && run != label) frame.timer->mark(cmd, run);
-            run = label;
-            drawCaster(frame, lightViewProj, draw, culling ? &tile.frustum : nullptr);
+    // The pages redrawn into the cache, all their casters at once (after
+    // the join when there is one): the world service's jobs, timed as its
+    // kind's span with the pages they hold.
+    if (planned && plan.staticPages > 0) {
+        const int kind = frame.gpu.shadows.kind();
+        const bool stamped = frame.timer && kind >= 0 && frame.timer->beginSpan(cmd, static_cast<uint32_t>(kind), false);
+        for (int v = 0; v < plan.viewCount; ++v) {
+            if (plan.views[v].dynamic) continue;
+            clearView(v);
+            drawView(frame, v, true, true);
         }
-        if (frame.timer && run) frame.timer->mark(cmd, run);
-        // Each tile's end, so the timed passes split the shadows by tile (a
-        // cascade or a local light's face): the marks since the last tile's
-        // are this one's (its own: its clear).
-        static const char* const kTileLabels[32] = {
-            "shadow:tile0",  "shadow:tile1",  "shadow:tile2",  "shadow:tile3",  "shadow:tile4",  "shadow:tile5",
-            "shadow:tile6",  "shadow:tile7",  "shadow:tile8",  "shadow:tile9",  "shadow:tile10", "shadow:tile11",
-            "shadow:tile12", "shadow:tile13", "shadow:tile14", "shadow:tile15", "shadow:tile16", "shadow:tile17",
-            "shadow:tile18", "shadow:tile19", "shadow:tile20", "shadow:tile21", "shadow:tile22", "shadow:tile23",
-            "shadow:tile24", "shadow:tile25", "shadow:tile26", "shadow:tile27", "shadow:tile28", "shadow:tile29",
-            "shadow:tile30", "shadow:tile31"};
-        if (frame.timer && slot < 32) frame.timer->mark(cmd, kTileLabels[slot]);
+        if (stamped) frame.timer->endSpan(cmd, static_cast<uint32_t>(kind), false, plan.staticPages);
+        if (frame.timer) frame.timer->mark(cmd, "shadow:pages");
     }
 
     frame.gpu.device.cmdEndRendering(cmd);

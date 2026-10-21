@@ -8,9 +8,10 @@
 // shadows, a sun, a decal, an unlit marker — is rendered at the origin and
 // shifted by a large offset with the camera moved along. Every coordinate is
 // a multiple of 0.25, exact in fp32 at every offset, so any difference is the
-// renderer's own rounding. The sun casts no shadow here: its cascades snap to
-// a world-anchored texel grid (deliberately, so they do not shimmer under a
-// pan), which a shift that is not a whole number of texels moves by design.
+// renderer's own rounding. The sun casts no shadow here: its clipmap's pages
+// snap to a grid anchored in light space (deliberately, so they do not
+// shimmer under a pan), which a shift that is not a whole number of texels
+// moves by design.
 
 function freshScene(size) {
     const cv = document.createElement('canvas');
@@ -66,9 +67,21 @@ if (!s.scene) {
         scn.setCamera({ fov: 55, near: 0.1, far: 60,
                         position: [O + 2.5, 4, O + 6], target: [O, 0.5, O], up: [0, 1, 0] });
         flush();
+        // The shadow pages the frame's pixels ask for are drawn over the
+        // next frames (a light that moved redraws its own): a few frames
+        // settle them.
+        for (let i = 0; i < 10; i++) {
+            scn.captureFrame();
+            const st = scn.cullStats();
+            // (The pixels' requests come back a frame or two late.)
+            if (i >= 3 && st.shadowPagesWanted === 0 && st.shadowPagesDrawn === 0) break;
+        }
         return scn.captureFrame();
     }
 
+    // (Once over, so the shadow pages the view asks for are the ones every
+    // later visit finds.)
+    frameAt(0);
     const origin = frameAt(0);
     assert(origin.width === SIZE && origin.height === SIZE, 'frame captured');
     // The scene is really there: lit ground, a shadow, the decal.
@@ -76,7 +89,8 @@ if (!s.scene) {
     for (let i = 0; i < origin.data.length; i += 4) if (origin.data[i] > 40) lit++;
     assert(lit > SIZE * SIZE / 4, `the scene covers the frame (${lit} lit px)`);
     const st = scn.cullStats();
-    assert(st.shadowTilesTotal === 7, `the point and spot lights cast (7 tiles, got ${st.shadowTilesTotal})`);
+    assert(st.shadowPagesResident > 0 && st.shadowPagesWanted === 0,
+           `the point and spot lights' pages are drawn (${st.shadowPagesResident}, ${st.shadowPagesWanted} wanted)`);
     assert(st.decalsDrawn === 1, 'the decal draws');
 
     for (const O of [100000, 4000000]) {

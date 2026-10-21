@@ -90,16 +90,6 @@ void bro_scene_SceneGraph_frustumCulling_set(void* self, bool v) {
     if (g) g->setFrustumCulling(v);
 }
 
-bool bro_scene_SceneGraph_shadowCache_get(void* self) {
-    auto* g = graphOf(self);
-    return g ? g->shadowCache() : false;
-}
-
-void bro_scene_SceneGraph_shadowCache_set(void* self, bool v) {
-    auto* g = graphOf(self);
-    if (g) g->setShadowCache(v);
-}
-
 double bro_scene_SceneGraph_renderScale_get(void* self) {
     auto* g = graphOf(self);
     return g ? g->renderScale() : 1.0;
@@ -585,22 +575,12 @@ void bro_scene_SceneGraph_windState(void* self, bronze_native_buffer* out) {
     copyBuffer(tl_windBuf, 14, out);
 }
 
-// setShadowQuality({atlasSize, pcfTaps}) — atlas side length and PCF grid
-// side (1, 3 or 5). A non-positive value keeps the default.
-void bro_scene_SceneGraph_setShadowQuality(void* self, bool opts_atlasSize_given, int32_t opts_atlasSize,
-                                          bool opts_pcfTaps_given, int32_t opts_pcfTaps) {
+// setShadowQuality({pcfTaps}) — the receivers' PCF grid side (1, 3 or 5).
+// A non-positive value keeps the default.
+void bro_scene_SceneGraph_setShadowQuality(void* self, bool opts_pcfTaps_given, int32_t opts_pcfTaps) {
     auto* g = graphOf(self);
     if (!g) return;
-    const int atlasSize = (opts_atlasSize_given && opts_atlasSize > 0) ? opts_atlasSize : 4096;
-    const int pcfTaps = (opts_pcfTaps_given && opts_pcfTaps > 0) ? opts_pcfTaps : 3;
-    g->setShadowQuality(atlasSize, pcfTaps);
-}
-
-void bro_scene_SceneGraph_setShadowCache(void* self, bool opts_enabled_given, bool opts_enabled,
-                                        bool opts_staticResolution_given, int32_t opts_staticResolution) {
-    auto* g = graphOf(self);
-    if (!g) return;
-    if (opts_enabled_given) g->setShadowCache(opts_enabled);
+    g->setShadowQuality((opts_pcfTaps_given && opts_pcfTaps > 0) ? opts_pcfTaps : 3);
 }
 
 void bro_scene_SceneGraph_setFog(void* self, bool opts_mode_given, const char* opts_mode,

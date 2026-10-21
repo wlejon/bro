@@ -69,21 +69,12 @@ if (!scene) {
     // is an extra constant on top (see LightNode::shadowBias).
     assert(Math.abs(sun.shadowBias) < 1e-6, 'shadowBias default');
     assert(Math.abs(sun.shadowNormalBias - 0.03) < 1e-6, 'shadowNormalBias default');
-    assert(sun.cascadeCount === 4, 'cascadeCount default');
-    assert(Math.abs(sun.cascadeSplitLambda - 0.5) < 1e-6, 'cascadeSplitLambda default');
     sun.shadowBias = 1e-3;
     sun.shadowNormalBias = 0.06;
-    sun.cascadeCount = 2;
-    sun.cascadeSplitLambda = 0.8;
     assert(Math.abs(sun.shadowBias - 1e-3) < 1e-6, 'shadowBias setter');
     assert(Math.abs(sun.shadowNormalBias - 0.06) < 1e-6, 'shadowNormalBias setter');
-    assert(sun.cascadeCount === 2, 'cascadeCount setter');
-    assert(Math.abs(sun.cascadeSplitLambda - 0.8) < 1e-6, 'cascadeSplitLambda setter');
-    // Clamped to [1,4]
-    sun.cascadeCount = 10;
-    assert(sun.cascadeCount === 4, 'cascadeCount clamps to 4');
-    sun.cascadeCount = 0;
-    assert(sun.cascadeCount === 1, 'cascadeCount clamps to 1');
+    // The sun's shadow is a clipmap of cached pages: no cascades to set.
+    assert(sun.cascadeCount === undefined && sun.cascadeSplitLambda === undefined, 'no cascade knobs');
 
     // --- Point light -----------------------------------------------------------
     const lamp = scene.createLight({
@@ -190,10 +181,9 @@ if (!scene) {
     assert(defaultMesh.receivesShadow === false, 'mesh receivesShadow setter');
 
     // --- Shadow quality global -------------------------------------------------
-    if (typeof scene.setShadowQuality === 'function') {
-        scene.setShadowQuality(2048, 3);
-        scene.setShadowQuality(4096, 1);
-    }
+    assert(typeof scene.setShadowQuality === 'function', 'setShadowQuality exists');
+    scene.setShadowQuality({ pcfTaps: 1 });
+    scene.setShadowQuality({ pcfTaps: 3 });
 
     flush();
     document.body.removeChild(canvas);

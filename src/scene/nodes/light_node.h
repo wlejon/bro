@@ -79,24 +79,9 @@ public:
     float shadowNormalBias() const { return shadowNormalBias_; }
     void setShadowNormalBias(float b) { shadowNormalBias_ = b; }
 
-    /// Number of cascades for directional CSM. Clamped to [1, 4]; ignored
-    /// for non-directional lights and under an orthographic camera (one
-    /// on-screen scale, so one map). 1 = single map (no cascading); higher
-    /// gives sharper near-camera shadows at the cost of one atlas tile each.
-    int cascadeCount() const { return cascadeCount_; }
-    void setCascadeCount(int n) { cascadeCount_ = (n < 1) ? 1 : (n > 4 ? 4 : n); }
-
-    /// Log/uniform split blend factor for CSM. 0 = uniform spacing (good
-    /// for indoor/short-range), 1 = pure log spacing (good for outdoor /
-    /// long view distance). Default 0.5 is a practical balance.
-    float cascadeSplitLambda() const { return cascadeSplitLambda_; }
-    void setCascadeSplitLambda(float l) { cascadeSplitLambda_ = l; }
-
-    /// How far from the camera a directional light's shadow reaches (m):
-    /// its cascades split this depth rather than the camera's whole range,
-    /// and the shadow fades out over its last tenth. 0 = the camera's far
-    /// plane. A view kilometres deep needs it, or the nearest cascade spans
-    /// hundreds of metres.
+    /// How far from the camera a directional light's shadow reaches (m): the
+    /// shadow fades out over its last tenth, and nothing past it asks for
+    /// shadow pages. 0 = as far as the sun's clipmap reaches.
     float shadowDistance() const { return shadowDistance_; }
     void setShadowDistance(float d) { shadowDistance_ = d > 0.0f ? d : 0.0f; }
 
@@ -111,8 +96,6 @@ private:
     bool castsShadow_ = false;
     float shadowBias_ = 0.0f;
     float shadowNormalBias_ = 0.03f;
-    int   cascadeCount_ = 4;
-    float cascadeSplitLambda_ = 0.5f;
     float shadowDistance_ = 0.0f;
 };
 

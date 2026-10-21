@@ -1,754 +1,253 @@
 #include "scene/scene_renderer.h"
-#include "scene/nodes/instanced_mesh_node.h"
 #include "scene/depth_policy.h"
-#include "scene/scene_graph.h"
+#include "scene/nodes/grass_node.h"
+#include "scene/nodes/instanced_mesh_node.h"
+#include "scene/nodes/plants_node.h"
 #include "scene/nodes/skinned_mesh_node.h"
-#include "util/log.h"
+#include "scene/scene_graph.h"
+#include "scene/vulkan/frame/scene_vk_bridge.h"
 
 #include <algorithm>
 #include <cmath>
-#include <cstring>
-#include <functional>
-#include <type_traits>
-#include <vector>
 
 namespace bro::scene {
 
-using bromath::Vec3;
-using bromath::Quat;
 using bromath::Mat4;
+using bromath::Vec3;
 
 // ---------------------------------------------------------------------------
-// Shadow-tile planner (see scene_renderer.h and shadow_plan.h).
+// The shadow planner (see scene_renderer.h and world/shadow_pages.h).
 // ---------------------------------------------------------------------------
 
-void SceneRenderer::computeShadowBounds(bromath::AABB3& casters,
-                                        bromath::AABB3& receivers) const {
-    casters = bromath::aempty3();
-    receivers = bromath::aempty3();
+namespace {
+
+bromath::AABB3 padded(const bromath::AABB3& b, float pad) {
+    return {b.min - Vec3{pad, pad, pad}, b.max + Vec3{pad, pad, pad}};
+}
+
+}  // namespace
+
+ShadowMotion SceneRenderer::shadowMotion(uint32_t nodeId) const {
+    const auto it = shadowMotion_.find(nodeId);
+    return it == shadowMotion_.end() ? ShadowMotion::Still : it->second;
+}
+
+bromath::AABB3 SceneRenderer::seenBounds(float reach) const {
+    // The view frustum's corners (out to the shadow's reach), in world space.
+    const float zNear = graph_.cameraNearZ_;
+    float zFar = graph_.cameraFarZ_;
+    if (reach > 0.0f) zFar = std::min(zFar, std::max(reach, zNear));
+    const Mat4 invView = bromath::minverse(graph_.viewMatrix_);
+    bromath::AABB3 box = bromath::aempty3();
+    for (int c = 0; c < 8; ++c) {
+        const float z = (c & 4) ? zFar : zNear;
+        float x, y;
+        if (graph_.cameraIsPerspective_) {
+            const float h = z * std::tan(graph_.cameraFovY_ * 0.5f);
+            x = ((c & 1) ? h : -h) * graph_.cameraAspect_;
+            y = (c & 2) ? h : -h;
+        } else {
+            x = (c & 1) ? graph_.cameraOrthoR_ : graph_.cameraOrthoL_;
+            y = (c & 2) ? graph_.cameraOrthoT_ : graph_.cameraOrthoB_;
+        }
+        const Vec3 p{invView.at(0, 0) * x + invView.at(0, 1) * y - invView.at(0, 2) * z + invView.at(0, 3),
+                     invView.at(1, 0) * x + invView.at(1, 1) * y - invView.at(1, 2) * z + invView.at(1, 3),
+                     invView.at(2, 0) * x + invView.at(2, 1) * y - invView.at(2, 2) * z + invView.at(2, 3)};
+        box = bromath::amerge(box, bromath::AABB3{p, p});
+    }
+    return box;
+}
+
+void SceneRenderer::gatherShadowCasters(bromath::AABB3& casterBounds) {
+    ShadowPages& pages = shadowPages_;
+    const ShadowPagesConfig& config = pages.config();
+    const Vec3 eye = graph_.cameraEye_;
+    // Vegetation sways whenever the wind field moves at all; a wind-masked
+    // mesh bends under the wind.
+    const bool swaying = !windFieldCalm(windField());
+    const bool windy = windStrength_ > 0.0f;
+    shadowCasterStates_.begin();
+    casterBounds = bromath::aempty3();
+    // How far from the eye the sway level, whose overlays carry what sways,
+    // reaches (its window's half side).
+    const float swayReach = std::ldexp(config.finestTexel, pages.swayLevel()) * SP_PAGE * (SP_WINDOW / 2);
 
     auto walk = [&](auto&& self, SceneNode* n) -> void {
         if (!n || !n->renderVisible()) return;
         if (n->type() == SceneNode::Type::Mesh) {
             auto* m = static_cast<MeshNode*>(n);
-            // Same unlit rule as the caster gather (effectiveUnlit): a
-            // custom shader suppresses unlit, so such meshes count here too.
-            // hasDrawableMesh: LOD-chain-only nodes fit too (localBounds is
-            // the chain union, so every level's silhouette is covered).
-            // Grass lies on a ground that is itself a receiver.
-            if (!m->effectiveUnlit() && m->hasDrawableMesh() && !m->asGrass()) {
-                // cullMargin pads the fit the same way it pads culling
-                // bounds (world units) — a custom vertex shader can displace
-                // geometry along the light direction past the bind-pose
-                // AABB, and the directional depth range is fit from these
-                // bounds.
-                const float cm = m->cullMargin() + vegetationReach(m->vegetationHeight(), m->worldMatrix());
-                bromath::AABB3 wb = bromath::atransform(m->localBounds(), m->worldMatrix());
-                wb.min -= Vec3{cm, cm, cm};
-                wb.max += Vec3{cm, cm, cm};
-                if (m->castsShadow()) casters = bromath::amerge(casters, wb);
-                if (m->receivesShadow() || m->castsShadow())
-                    receivers = bromath::amerge(receivers, wb);
+            // Unlit meshes never cast (a custom shader suppresses unlit).
+            const bool casts = m->castsShadow() && !m->effectiveUnlit();
+            if (casts && m->asGrass()) {
+                // The near ring's blades, around the eye wherever its field
+                // is: the sway level's overlays.
+                const float r = 256.0f;
+                pages.addDynamic({eye - Vec3{r, r, r}, eye + Vec3{r, r, r}}, true);
+                shadowMotion_[m->id()] = ShadowMotion::Grass;
+            } else if (casts && m->asPlants()) {
+                // In the cached depth, but for the sway level's overlays
+                // (which the finer levels read): those its cells near the
+                // eye touch.
+                const PlantsNode* p = m->asPlants();
+                bromath::AABB3 all = bromath::aempty3();
+                for (const CellContent& c : p->cells()) {
+                    if (bromath::aisEmpty(c.bounds)) continue;
+                    const bromath::AABB3 b = padded(c.bounds, 1.0f);
+                    all = bromath::amerge(all, b);
+                    const Vec3 near = bromath::vmin(bromath::vmax(eye, b.min), b.max);
+                    if (bromath::vlen(near - eye) < swayReach) pages.addDynamic(b, true);
+                }
+                if (!bromath::aisEmpty(all)) {
+                    shadowCasterStates_.still(m->id(), p->generation(), all, pages);
+                    casterBounds = bromath::amerge(casterBounds, all);
+                }
+                shadowMotion_[m->id()] = ShadowMotion::Swaying;
+            } else if (casts && m->hasDrawableMesh() && !m->asGrass() && !m->asPlants()) {
+                if (const auto wb = nodeWorldBounds(m)) {
+                    auto* sm = m->asSkinnedMesh();
+                    const bool skinned = sm && sm->skinReady();
+                    // A custom vertex chunk displaces with no generation signal.
+                    const bool chunk = m->hasCustomShader() && !m->customShader()->vertexChunk.empty();
+                    const bool sways = (m->vegetationHeight() > 0.0f && swaying) ||
+                                       (m->vegetationHeight() <= 0.0f && windy && m->windMask() > 0.0f);
+                    const bool moving = shadowCasterStates_.caster(m->id(), m->changeGeneration(), *wb,
+                                                                   skinned || chunk, pages, sways);
+                    if (moving) shadowMotion_[m->id()] = ShadowMotion::Moving;
+                    else if (sways) shadowMotion_[m->id()] = ShadowMotion::Swaying;
+                    casterBounds = bromath::amerge(casterBounds, *wb);   // (its cullMargin in)
+                }
             }
         } else if (n->type() == SceneNode::Type::InstancedMesh) {
             auto* m = static_cast<InstancedMeshNode*>(n);
-            float wlo[3], whi[3];
-            if (!m->effectiveUnlit() && m->computeWorldInstanceBounds(wlo, whi)) {
-                const float cm = m->cullMargin() +
-                                 (m->hasVegetation() ? vegetationReach(m->vegetationHeight(), m->worldMatrix()) : 0.0f);
-                bromath::AABB3 wb{{wlo[0] - cm, wlo[1] - cm, wlo[2] - cm},
-                                  {whi[0] + cm, whi[1] + cm, whi[2] + cm}};
-                if (m->castsShadow()) casters = bromath::amerge(casters, wb);
-                if (m->receivesShadow() || m->castsShadow())
-                    receivers = bromath::amerge(receivers, wb);
+            // Branch tubes, swaying scatter leaves, and instanced meshes.
+            const bool procedural = (m->isTube() && m->tubeSegCount() > 0) ||
+                                    (m->isScatter() && m->hasVegetation() && m->scatterSegCount() > 0);
+            const bool casts = m->castsShadow() &&
+                               (procedural || (!m->effectiveUnlit() && !m->mesh().empty() && m->instanceCount() > 0));
+            if (casts) {
+                if (const auto wb = nodeWorldBounds(m)) {
+                    const CustomShaderState* cs = m->customShader();
+                    const bool chunk = cs && !cs->vertexChunk.empty();
+                    const bool sways = swaying && m->hasVegetation();
+                    const bool moving =
+                        shadowCasterStates_.caster(m->id(), m->changeGeneration(), *wb, chunk, pages, sways);
+                    if (moving) shadowMotion_[m->id()] = ShadowMotion::Moving;
+                    else if (sways) shadowMotion_[m->id()] = ShadowMotion::Swaying;
+                    casterBounds = bromath::amerge(casterBounds, *wb);
+                }
             }
         }
         for (auto* c : n->children()) self(self, c);
     };
     walk(walk, graph_.root_.get());
+    shadowCasterStates_.end(pages);
 }
-
-namespace {
-
-// A half-space: inside where dot(n, p) + d >= 0.
-struct HalfSpace { Vec3 n; float d; };
-
-// Clip the segment a->b against a set of half-spaces (Cyrus–Beck). Returns
-// false when nothing of it survives; otherwise a/b are moved to the clipped
-// endpoints.
-bool clipSegment(Vec3& a, Vec3& b, const HalfSpace* hs, int count) {
-    float t0 = 0.0f, t1 = 1.0f;
-    const Vec3 ab = b - a;
-    for (int i = 0; i < count; ++i) {
-        const float da = bromath::vdot(hs[i].n, a) + hs[i].d;
-        const float db = bromath::vdot(hs[i].n, b) + hs[i].d;
-        if (da < 0.0f && db < 0.0f) return false;
-        if (da >= 0.0f && db >= 0.0f) continue;
-        const float t = da / (da - db);   // crossing parameter
-        if (da < 0.0f) t0 = std::max(t0, t); else t1 = std::min(t1, t);
-        if (t0 > t1) return false;
-    }
-    const Vec3 na = a + ab * t0;
-    const Vec3 nb = a + ab * t1;
-    a = na; b = nb;
-    return true;
-}
-
-bool insideAll(const Vec3& p, const HalfSpace* hs, int count) {
-    for (int i = 0; i < count; ++i)
-        if (bromath::vdot(hs[i].n, p) + hs[i].d < 0.0f) return false;
-    return true;
-}
-
-// Corner layout shared by the fit: index k*4 + j, k = 0 near / 1 far,
-// j bit 0 = +x side, j bit 1 = +y side.
-constexpr int kBoxEdges[12][2] = {
-    {0, 1}, {1, 3}, {3, 2}, {2, 0},   // near ring
-    {4, 5}, {5, 7}, {7, 6}, {6, 4},   // far ring
-    {0, 4}, {1, 5}, {3, 7}, {2, 6},   // near -> far
-};
-constexpr int kBoxFaces[6][4] = {
-    {0, 1, 3, 2}, {4, 5, 7, 6},       // near, far
-    {0, 2, 6, 4}, {1, 3, 7, 5},       // -x, +x
-    {0, 1, 5, 4}, {2, 3, 7, 6},       // -y, +y
-};
-
-// The vertex set of (convex frustum given by its 8 corners) ∩ (AABB): the
-// corners of each inside the other, plus every edge of each clipped to the
-// other. Every vertex of an intersection of two convex polytopes is one of
-// those, so bounding this set bounds the intersection exactly. Returns the
-// number of points written (0 = disjoint). `out` needs room for 64.
-int clipFrustumToBox(const Vec3 corners[8], const bromath::AABB3& box, Vec3* out) {
-    // Frustum half-spaces from its faces, oriented toward the centroid.
-    Vec3 centroid{0, 0, 0};
-    for (int i = 0; i < 8; ++i) centroid += corners[i];
-    centroid *= 0.125f;
-    HalfSpace fh[6]; int fhCount = 0;
-    for (int f = 0; f < 6; ++f) {
-        const Vec3& a = corners[kBoxFaces[f][0]];
-        const Vec3& b = corners[kBoxFaces[f][1]];
-        const Vec3& c = corners[kBoxFaces[f][2]];
-        const Vec3& d = corners[kBoxFaces[f][3]];
-        // Two triangles' normals summed: robust to one degenerate corner
-        // pair (a perspective near face at a tiny near plane).
-        Vec3 n = bromath::vcross(b - a, c - a) + bromath::vcross(c - a, d - a);
-        const float L = bromath::vlen(n);
-        if (L < 1e-12f) continue;               // degenerate face: no constraint
-        n *= 1.0f / L;
-        float dd = -bromath::vdot(n, a);
-        if (bromath::vdot(n, centroid) + dd < 0.0f) { n = -n; dd = -dd; }
-        fh[fhCount++] = {n, dd};
-    }
-    const HalfSpace bh[6] = {
-        {{ 1, 0, 0}, -box.min.x}, {{-1, 0, 0},  box.max.x},
-        {{ 0, 1, 0}, -box.min.y}, {{ 0,-1, 0},  box.max.y},
-        {{ 0, 0, 1}, -box.min.z}, {{ 0, 0,-1},  box.max.z},
-    };
-    Vec3 bc[8];
-    for (int c = 0; c < 8; ++c) {
-        bc[c] = Vec3{(c & 1) ? box.max.x : box.min.x,
-                     (c & 2) ? box.max.y : box.min.y,
-                     (c & 4) ? box.max.z : box.min.z};
-    }
-
-    int n = 0;
-    for (int i = 0; i < 8; ++i)
-        if (insideAll(corners[i], bh, 6)) out[n++] = corners[i];
-    for (int i = 0; i < 8; ++i)
-        if (insideAll(bc[i], fh, fhCount)) out[n++] = bc[i];
-    for (const auto& e : kBoxEdges) {
-        Vec3 a = corners[e[0]], b = corners[e[1]];
-        if (clipSegment(a, b, bh, 6)) { out[n++] = a; out[n++] = b; }
-    }
-    for (const auto& e : kBoxEdges) {
-        Vec3 a = bc[e[0]], b = bc[e[1]];
-        if (clipSegment(a, b, fh, fhCount)) { out[n++] = a; out[n++] = b; }
-    }
-    return n;
-}
-
-}  // namespace
 
 void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
-    // Reset per-frame shadow state. Default every light to "no shadow".
+    ShadowPages& pages = shadowPages_;
     ShadowPlan& plan = shadowPlan_;
-    plan.tileCount = 0;
-    plan.heldTiles = 0;
-    plan.origin = graph_.cameraEye_;
     plan.pcfTaps = shadowPCFTaps_;
-    plan.atlasSize = std::max(1, std::min(shadowAtlasSize_, shadowAtlasLimit_));
-    if (plan.atlasSize != shadowPlannedAtlas_) {
-        // Every tile's texels move with the atlas: nothing cached survives.
-        shadowPlannedAtlas_ = plan.atlasSize;
-        invalidateShadowCache();
+    // A pixel's footprint on the target the frame renders at.
+    const float rows = static_cast<float>(std::max(targetHeight(), 1));
+    plan.pixelAngle = graph_.cameraIsPerspective_ ? 2.0f * std::tan(graph_.cameraFovY_ * 0.5f) / rows : 0.0f;
+    plan.orthoPixel = graph_.cameraIsPerspective_ ? 0.0f : (graph_.cameraOrthoT_ - graph_.cameraOrthoB_) / rows;
+    shadowMotion_.clear();
+    const Vec3 eye = graph_.cameraEye_;
+    pages.beginFrame(eye);
+
+    bool anyLight = false;
+    for (auto* L : lights) anyLight = anyLight || (L && L->castsShadow());
+    bromath::AABB3 casterBounds = bromath::aempty3();
+    if (anyLight) {
+        gatherShadowCasters(casterBounds);
+    } else {
+        // Nothing casts: the pages go with their lights (endLights), and the
+        // casters are met anew when a light casts again.
+        shadowCasterStates_.clear();
     }
-    shadowCasters_.clear();
-    shadowSkinnedCasters_.clear();
-    shadowCustomCasters_.clear();
-    shadowSkinnedCustomCasters_.clear();
-    shadowInstancedCasters_.clear();
-    shadowTubeCasters_.clear();
-    for (int i = 0; i < ShadowPlan::kMaxLights; ++i) {
-        plan.lightSlot[i] = -1;
-        plan.lightSlotCount[i] = 0;
-        plan.cascadeSplit[i][0] = plan.cascadeSplit[i][1] =
-        plan.cascadeSplit[i][2] = plan.cascadeSplit[i][3] = 1e30f;
-    }
 
-    // Quick skip: if no light wants shadows, don't bother fitting.
-    bool anyCaster = false;
-    for (auto* L : lights) {
-        if (L && L->castsShadow()) { anyCaster = true; break; }
-    }
-    if (!anyCaster) return;
-
-    // Gather shadow-casting meshes once. Unlit meshes never cast (a custom
-    // shader suppresses unlit in the color pass, so custom-shader casters
-    // route on castsShadow alone). Skinned meshes (ready skin) go in their
-    // own list so the skinned depth shader deforms their silhouettes;
-    // frustum fitting still uses their bind-pose bounds via
-    // computeShadowCasterBounds (the directional depth range is padded by
-    // the whole-scene extent, so palette motion stays covered). Casters
-    // with a custom VERTEX chunk split further into the custom lists and
-    // render with the spliced shadow variant — displaced silhouettes;
-    // fragment-only shaders stay on the default depth program.
-    auto hasVertexChunk = [](const MeshNode* m) {
-        return m->hasCustomShader() && !m->customShader()->vertexChunk.empty();
-    };
-    auto gather = [&](auto&& self, SceneNode* n) -> void {
-        if (!n || !n->renderVisible()) return;
-        if (n->type() == SceneNode::Type::Mesh) {
-            auto* m = static_cast<MeshNode*>(n);
-            // Casting grass draws through the mesh drawer's grass path; its
-            // blades move with the wind and the camera, so its tiles never cache.
-            // So do casting plants (built where they stand, swaying).
-            if ((m->asGrass() || m->asPlants()) && m->castsShadow() && !m->effectiveUnlit())
-                grassCasts_ = true;
-            if (!m->effectiveUnlit() && m->castsShadow() && m->hasDrawableMesh() && !m->asGrass()) {
-                auto* sm = m->asSkinnedMesh();
-                if (sm && sm->skinReady()) {
-                    (hasVertexChunk(m) ? shadowSkinnedCustomCasters_
-                                       : shadowSkinnedCasters_).push_back(m);
-                } else {
-                    (hasVertexChunk(m) ? shadowCustomCasters_
-                                       : shadowCasters_).push_back(m);
-                }
-            }
-        } else if (n->type() == SceneNode::Type::InstancedMesh) {
-            auto* m = static_cast<InstancedMeshNode*>(n);
-            // Procedural casters: branch tubes, and scatter leaves that sway.
-            if (m->castsShadow() && ((m->isTube() && m->tubeSegCount() > 0) ||
-                                     (m->isScatter() && m->hasVegetation() && m->scatterSegCount() > 0)))
-                shadowTubeCasters_.push_back(m);
-            else if (!m->effectiveUnlit() && m->castsShadow() && !m->mesh().empty() && m->instanceCount() > 0)
-                shadowInstancedCasters_.push_back(m);
-        }
-        for (auto* c : n->children()) self(self, c);
-    };
-    grassCasts_ = false;
-    gather(gather, graph_.root_.get());
-    // Group the custom casters by chunk source so the per-tile loop binds
-    // each shadow variant once per group.
-    auto byChunk = [](MeshNode* a, MeshNode* b) {
-        return a->customShader()->vertexChunk < b->customShader()->vertexChunk;
-    };
-    std::stable_sort(shadowCustomCasters_.begin(), shadowCustomCasters_.end(), byChunk);
-    std::stable_sort(shadowSkinnedCustomCasters_.begin(),
-                     shadowSkinnedCustomCasters_.end(), byChunk);
-    if (shadowCasters_.empty() && shadowSkinnedCasters_.empty() &&
-        shadowCustomCasters_.empty() && shadowSkinnedCustomCasters_.empty() &&
-        shadowInstancedCasters_.empty() && shadowTubeCasters_.empty()) return;
-
-    // Scene bounds: casters stretch the directional depth range; receivers
-    // clip the camera volume the directional fit covers.
-    bromath::AABB3 casterBounds, receiverBounds;
-    computeShadowBounds(casterBounds, receiverBounds);
-    if (bromath::aisEmpty(casterBounds)) return;
-
-    // Atlas grid from the tile demand: one sun over an ortho camera (or a
-    // single-cascade sun) takes the WHOLE atlas, up to four tiles take a
-    // quarter each, anything more falls back to 16ths. A 512 px tile — the
-    // old fixed 4x4 of a 2048 atlas — is what made every shadow a blob: at
-    // 64 m across the view that is a 6 m texel. The demand is an upper
-    // bound on what gets allocated (a point light that no longer fits is
-    // skipped), so the grid always has room.
-    int demand = 0;
-    for (auto* L : lights) {
-        if (!L || !L->castsShadow()) continue;
-        switch (L->kind()) {
-        case LightNode::Kind::Directional:
-            demand += graph_.cameraIsPerspective_ ? L->cascadeCount() : 1; break;
-        case LightNode::Kind::Spot:  demand += 1; break;
-        case LightNode::Kind::Point: demand += 6; break;
-        }
-    }
-    const int gridDim = demand <= 1 ? 1 : (demand <= 4 ? 2 : 4);
-    if (gridDim != shadowGridDim_) {
-        // Every tile moved: cached texels are at the wrong place.
-        shadowGridDim_ = gridDim;
-        invalidateShadowCache();
-    }
-    const float tileUV = 1.0f / (float)gridDim;
-    const int   tilePx = plan.atlasSize / gridDim;
-
-    // Every tile is fit in camera-relative space (positions less the eye,
-    // plan.origin) so its relViewProj — what the GPU draws and samples with —
-    // never rounds a large world coordinate; lightProjView is the absolute
-    // twin, for caster culling and the tile cache.
-    // texelConst / texelPerDist: world size of one shadow texel at the
-    // receiver — a constant for an ortho tile, per metre of light distance
-    // for a perspective one. zNear/zFar/ortho describe the tile's depth
-    // mapping so the FS can express a world-unit bias in [0,1] depth.
-    const Vec3 eye = plan.origin;
-    auto bakeTile = [&](int slot, const Mat4& relProjView, const Mat4& lightProjView, LightNode* L,
-                        float texelConst, float texelPerDist,
-                        float zNear, float zFar, bool ortho) {
-        ShadowTilePlan& t = plan.tiles[slot];
-        t.viewProj = lightProjView;
-        t.relViewProj = relProjView;
-        t.frustum = makeFrustum(lightProjView);
-        const int gx = slot % gridDim;
-        const int gy = slot / gridDim;
-        t.rect[0] = gx * tileUV;
-        t.rect[1] = gy * tileUV;
-        t.rect[2] = tileUV;
-        t.rect[3] = tileUV;
-        t.bias = L->shadowBias();
-        t.normalBias = L->shadowNormalBias();
-        t.texelConst = texelConst;
-        t.texelPerMetre = texelPerDist;
-        t.zNear = zNear;
-        t.zFar = zFar;
-        t.ortho = ortho;
-        t.render = false;
-        t.light = L;
-        t.farCascade = false;
-    };
-
-    // For each shadow-casting light, allocate slot(s) and build matrices.
-    for (int i = 0; i < (int)lights.size() && i < ShadowPlan::kMaxLights; ++i) {
+    // The lights: the first shadowed directional light is the sun (its
+    // clipmap); spots and point lights get their maps while there is room.
+    // Positions are relative to the eye in relViewProj (what the GPU draws
+    // and samples with), absolute in viewProj (culling).
+    bool haveSun = false;
+    float sunReach = 0.0f;
+    for (int i = 0; i < static_cast<int>(lights.size()) && i < ShadowPlan::kMaxLights && anyLight; ++i) {
         LightNode* L = lights[i];
         if (!L || !L->castsShadow()) continue;
-        if (plan.tileCount >= kMaxShadowTiles) break;
+        Vec3 d = L->direction();
+        const float dlen = bromath::vlen(d);
+        if (L->kind() != LightNode::Kind::Point && dlen < 1e-6f) continue;
+        if (dlen > 0.0f) d = d * (1.0f / dlen);
 
         if (L->kind() == LightNode::Kind::Directional) {
-            Vec3 d = L->direction();
-            float dlen = std::sqrt(d.x*d.x + d.y*d.y + d.z*d.z);
-            if (dlen < 1e-6f) continue;
-            d.x /= dlen; d.y /= dlen; d.z /= dlen;
-
-            // Camera basis from view matrix (transposed columns: row 0 = right,
-            // row 1 = up, row 2 = -forward). lookAt produces the same.
-            Vec3 sBasis{graph_.viewMatrix_.at(0, 0), graph_.viewMatrix_.at(0, 1), graph_.viewMatrix_.at(0, 2)};
-            Vec3 uBasis{graph_.viewMatrix_.at(1, 0), graph_.viewMatrix_.at(1, 1), graph_.viewMatrix_.at(1, 2)};
-            Vec3 fBasis{-graph_.viewMatrix_.at(2, 0), -graph_.viewMatrix_.at(2, 1), -graph_.viewMatrix_.at(2, 2)};
-            const bool persp = graph_.cameraIsPerspective_;
-
-            // Number of cascades. Cap to remaining tile budget so we don't
-            // blow past the atlas — better to drop late cascades than to
-            // silently corrupt allocations. An orthographic camera has one
-            // on-screen scale, so depth slices buy it nothing: one map.
-            int N = L->cascadeCount();
-            if (!persp) N = 1;
-            int budgetLeft = kMaxShadowTiles - plan.tileCount;
-            if (N > budgetLeft) N = budgetLeft;
-            if (N <= 0) continue;
-
-            // Practical Split Scheme (Zhang et al., 2006): blend uniform and
-            // log spacing. lambda ~0.5 works well outdoors; closer to 0
-            // for tight indoor scenes with no far geometry.
-            float zn = std::max(graph_.cameraNearZ_, 1e-3f);
-            float zf = std::max(graph_.cameraFarZ_, zn + 1e-3f);
-            // A shadow distance short of the far plane: the cascades split
-            // that depth, and the last one ends there (the shader fades it
-            // out by its far split).
-            const float reach = L->shadowDistance();
-            const bool capped = reach > 0.0f && reach < zf;
-            if (capped) zf = std::max(reach, zn + 1e-3f);
-            float lambda = L->cascadeSplitLambda();
-            // splitFar[c] = far view-distance of cascade c. cascade c covers
-            // [splitFar[c-1], splitFar[c]], with splitFar[-1] = zn.
-            float splitFar[5]; splitFar[0] = zn;
-            for (int c = 1; c <= N; ++c) {
-                float t = (float)c / (float)N;
-                float uniform = zn + (zf - zn) * t;
-                float logS    = zn * std::pow(zf / zn, t);
-                splitFar[c] = lambda * logS + (1.0f - lambda) * uniform;
-            }
-
-            int firstSlot = plan.tileCount;
-            plan.lightSlot[i] = firstSlot;
-            plan.lightSlotCount[i] = N;
-            for (int c = 0; c < N - 1; ++c) {
-                plan.cascadeSplit[i][c] = splitFar[c + 1];
-            }
-            // The last cascade absorbs anything farther — already 1e30f from
-            // reset — unless the shadow ends short of the far plane.
-            if (capped) plan.cascadeSplit[i][N - 1] = zf;
-
-            // A fixed light basis (eye at the world origin, looking along d)
-            // so the projection window can be snapped to whole texels in a
-            // frame that does not move with the camera. Looking AT the
-            // cascade centre — the old way — puts the centre at light-space
-            // (0,0) every frame, so snapping it snapped nothing and the map
-            // shimmered under every pan.
-            Vec3 up = (std::abs(d.y) > 0.99f) ? Vec3{0,0,1} : Vec3{0,1,0};
-            Mat4 lightRot = bromath::mlookAt(Vec3{0, 0, 0}, d, up);
-
-            // Caster extent along the light, in world units, for the depth
-            // range: casters outside the fitted sphere (behind the camera,
-            // above the view) must still write depth or they cast nothing
-            // onto what IS in view.
-            float castMinD =  1e30f, castMaxD = -1e30f;
-            for (int c = 0; c < 8; ++c) {
-                Vec3 p{(c & 1) ? casterBounds.max.x : casterBounds.min.x,
-                       (c & 2) ? casterBounds.max.y : casterBounds.min.y,
-                       (c & 4) ? casterBounds.max.z : casterBounds.min.z};
-                float t = bromath::vdot(p - eye, d);
-                castMinD = std::min(castMinD, t);
-                castMaxD = std::max(castMaxD, t);
-            }
-
-            // The light basis's own coordinates of the eye, in double: the
-            // texel snap below runs in the fixed basis (absolute), the fit
-            // relative to the eye.
-            const double eyeLS[2] = {
-                (double)lightRot.at(0, 0) * eye.x + (double)lightRot.at(0, 1) * eye.y + (double)lightRot.at(0, 2) * eye.z,
-                (double)lightRot.at(1, 0) * eye.x + (double)lightRot.at(1, 1) * eye.y + (double)lightRot.at(1, 2) * eye.z,
-            };
-            const bromath::AABB3 receiversRel = bromath::aisEmpty(receiverBounds)
-                ? receiverBounds
-                : bromath::AABB3{receiverBounds.min - eye, receiverBounds.max - eye};
-
-            // Per-cascade fit: the camera-relative corners of the camera
-            // sub-volume [splitFar[c], splitFar[c+1]] — a frustum slice for
-            // a perspective camera, a box for an orthographic one — CLIPPED
-            // to the receiver bounds (the exact convex intersection), then
-            // bounded with a sphere (rotation-stable) and fit as an ortho
-            // frustum in light space. The clip is the whole story for an
-            // ortho camera: its volume is near..far deep whatever is in it,
-            // and an unclipped 1400 m slab over a 60 m scene is a 6 m texel.
-            for (int c = 0; c < N; ++c) {
-                float zNear = splitFar[c];
-                float zFar  = splitFar[c + 1];
-                float tanH  = std::tan(graph_.cameraFovY_ * 0.5f);
-
-                Vec3 corners[8];
-                for (int k = 0; k < 2; ++k) {
-                    float z = (k == 0) ? zNear : zFar;
-                    float hw, hh, cx = 0.0f, cy = 0.0f;
-                    if (persp) {
-                        hh = z * tanH;
-                        hw = hh * graph_.cameraAspect_;
-                    } else {
-                        hw = 0.5f * (graph_.cameraOrthoR_ - graph_.cameraOrthoL_);
-                        hh = 0.5f * (graph_.cameraOrthoT_ - graph_.cameraOrthoB_);
-                        cx = 0.5f * (graph_.cameraOrthoR_ + graph_.cameraOrthoL_);
-                        cy = 0.5f * (graph_.cameraOrthoT_ + graph_.cameraOrthoB_);
-                    }
-                    Vec3 cz = fBasis * z;
-                    for (int j = 0; j < 4; ++j) {
-                        float xs = (j & 1) ? 1.0f : -1.0f;
-                        float ys = (j & 2) ? 1.0f : -1.0f;
-                        corners[k*4 + j] = cz + sBasis * (cx + hw * xs)
-                                              + uBasis * (cy + hh * ys);
-                    }
-                }
-
-                Vec3 pts[64];
-                int np = 0;
-                if (!bromath::aisEmpty(receiversRel))
-                    np = clipFrustumToBox(corners, receiversRel, pts);
-                if (np == 0) {
-                    // Nothing that receives shadow in this slice (or no
-                    // bounds at all): fall back to the raw slice.
-                    for (int k = 0; k < 8; ++k) pts[k] = corners[k];
-                    np = 8;
-                }
-
-                bromath::AABB3 pb = bromath::aempty3();
-                for (int k = 0; k < np; ++k) pb = bromath::aexpand(pb, pts[k]);
-                Vec3 center = bromath::acenter(pb);
-                float radius = 0.0f;
-                for (int k = 0; k < np; ++k)
-                    radius = std::max(radius, bromath::vlen(pts[k] - center));
-                if (radius < 1e-3f) radius = 1.0f;
-                const float fitRadius = radius;
-                // Quantise the radius to eighth-octave steps: a pan that
-                // changes the clipped shape a little must not change the
-                // texel size a little, or every shadow edge re-samples every
-                // frame. It now steps (~9%) rarely instead.
-                radius = std::exp2(std::ceil(std::log2(radius) * 8.0f) / 8.0f);
-
-                // Snap the window to the texel grid in the fixed light basis
-                // (absolute light-space coordinates, in double), then take
-                // the snapped centre back relative to the eye.
-                const float texelSize = (2.0f * radius) / (float)tilePx;
-                Vec3 cLS = bromath::mtransformPoint(lightRot, center);
-                const Vec3 fitLS = cLS;
-                for (int a = 0; a < 2; ++a) {
-                    const double abs = (double)(a == 0 ? cLS.x : cLS.y) + eyeLS[a];
-                    const double snapped = std::floor(abs / texelSize) * texelSize;
-                    (a == 0 ? cLS.x : cLS.y) = (float)(snapped - eyeLS[a]);
-                }
-
-                // Depth along d (light view looks down -z, so depth = -z).
-                // Cover the sphere, then stretch over every caster.
-                const float centerD = bromath::vdot(center, d);
-                float nearD = std::min(centerD - radius, castMinD);
-                float farD  = std::max(centerD + radius, castMaxD);
-                const float pad = std::max(0.5f, 0.01f * (farD - nearD));
-                nearD -= pad; farD += pad;
-
-                Mat4 proj = makeOrthoZeroToOne(cLS.x - radius, cLS.x + radius,
-                                               cLS.y - radius, cLS.y + radius,
-                                               nearD, farD);
-                Mat4 relProjView = bromath::mmul(proj, lightRot);
-                Mat4 projView = bromath::mmul(relProjView, bromath::mtranslate(-eye));
-                bakeTile(firstSlot + c, relProjView, projView, L, texelSize, 0.0f,
-                         nearD, farD, true);
-                if (N >= 3 && c == N - 1) {
-                    ShadowTilePlan& t = plan.tiles[firstSlot + c];
-                    t.farCascade = true;
-                    t.lightDir = d;
-                    t.lightEye[0] = eyeLS[0];
-                    t.lightEye[1] = eyeLS[1];
-                    t.lightEye[2] = bromath::vdot(eye, d);
-                    t.windowCentre[0] = cLS.x;
-                    t.windowCentre[1] = cLS.y;
-                    t.windowRadius = radius;
-                    t.fitCentre[0] = fitLS.x;
-                    t.fitCentre[1] = fitLS.y;
-                    t.fitCentre[2] = centerD;
-                    t.fitRadius = fitRadius;
-                }
-                plan.tileCount++;
-            }
+            if (haveSun) continue;
+            haveSun = true;
+            ShadowSun sun;
+            sun.lightId = L->id();
+            sun.lightIndex = i;
+            sun.direction = d;
+            sun.casters = casterBounds;
+            sun.bias = L->shadowBias();
+            sun.normalBias = L->shadowNormalBias();
+            sun.reach = L->shadowDistance();
+            sunReach = sun.reach;
+            pages.setSun(sun);
+            continue;
         }
-        else if (L->kind() == LightNode::Kind::Spot) {
-            // Spot light shadow = perspective projection from the light's
-            // position along its direction. FOV = 2 * outerAngle so the
-            // shadow frustum exactly covers the cone the FS computes
-            // attenuation for. Range determines the far plane.
-            Vec3 d = L->direction();
-            float dlen = std::sqrt(d.x*d.x + d.y*d.y + d.z*d.z);
-            if (dlen < 1e-6f) continue;
-            d.x /= dlen; d.y /= dlen; d.z /= dlen;
-
-            const Mat4& M = L->worldMatrix();
-            Vec3 pos{M.at(0,3), M.at(1,3), M.at(2,3)};
-            Vec3 target{pos.x + d.x, pos.y + d.y, pos.z + d.z};
-            Vec3 up = (std::abs(d.y) > 0.99f) ? Vec3{0,0,1} : Vec3{0,1,0};
-
-            float far  = std::max(L->range(), 0.5f);
-            float near = std::max(0.1f, far * 0.005f);
-            float fov  = 2.0f * std::max(L->outerAngle(), 0.05f);
-            // Cap aperture below 180 deg so the perspective matrix stays sane.
-            if (fov > 3.10f) fov = 3.10f;
-
-            Mat4 view = bromath::mlookAt(pos, target, up);
-            const Vec3 rel = pos - eye;
-            Mat4 relView = bromath::mlookAt(rel, rel + d, up);
-            Mat4 proj = makePerspectiveZeroToOne(fov, 1.0f, near, far);
-            Mat4 projView = bromath::mmul(proj, view);
-            bakeTile(plan.tileCount, bromath::mmul(proj, relView), projView, L,
-                     0.0f, 2.0f * std::tan(fov * 0.5f) / (float)tilePx,
-                     near, far, false);
-            plan.lightSlot[i] = plan.tileCount;
-            plan.lightSlotCount[i] = 1;
-            plan.tileCount++;
-        }
-        else if (L->kind() == LightNode::Kind::Point) {
-            // Point light = 6-face cube projection. Each face gets its own
-            // atlas tile rendered with perspective(90deg, 1, near, far).
-            // Needs 6 contiguous slots; skip if the budget can't fit them.
-            if (plan.tileCount + 6 > kMaxShadowTiles) continue;
-
-            const Mat4& M = L->worldMatrix();
-            Vec3 pos{M.at(0,3), M.at(1,3), M.at(2,3)};
-            const Vec3 rel = pos - eye;
-            float far  = std::max(L->range(), 0.5f);
-            float near = std::max(0.05f, far * 0.005f);
-            // PI/2 + small fudge so the 6 frusta have a smidge of overlap
-            // at the seams; eliminates a single-texel sliver of "no shadow"
-            // at face boundaries.
-            Mat4 proj = makePerspectiveZeroToOne(1.5708f, 1.0f, near, far);
-
-            // Cube-face conventions (matches D3D / OpenGL cube map order).
-            // Each entry is { forward.xyz, up.xyz }.
-            const Vec3 forward[6] = {
-                { 1, 0, 0}, {-1, 0, 0},
-                { 0, 1, 0}, { 0,-1, 0},
-                { 0, 0, 1}, { 0, 0,-1},
-            };
-            const Vec3 upVec[6] = {
-                {0,-1, 0}, {0,-1, 0},
-                {0, 0, 1}, {0, 0,-1},
-                {0,-1, 0}, {0,-1, 0},
-            };
-
-            int firstSlot = plan.tileCount;
-            plan.lightSlot[i] = firstSlot;
-            plan.lightSlotCount[i] = 6;
+        const Mat4& M = L->worldMatrix();
+        const Vec3 pos{M.at(0, 3), M.at(1, 3), M.at(2, 3)};
+        const Vec3 rel = pos - eye;
+        const float far = std::max(L->range(), 0.5f);
+        ShadowLocal local;
+        local.lightId = L->id();
+        local.lightIndex = i;
+        local.bias = L->shadowBias();
+        local.normalBias = L->shadowNormalBias();
+        local.zFar = far;
+        // The finest mip is SP_LOCAL pages of SP_PAGE texels across.
+        constexpr float kSide = static_cast<float>(SP_LOCAL * SP_PAGE);
+        if (L->kind() == LightNode::Kind::Spot) {
+            // The cone: FOV twice the outer angle (capped below 180 degrees).
+            const Vec3 up = std::abs(d.y) > 0.99f ? Vec3{0, 0, 1} : Vec3{0, 1, 0};
+            const float fov = std::min(2.0f * std::max(L->outerAngle(), 0.05f), 3.10f);
+            local.zNear = std::max(0.1f, far * 0.005f);
+            const Mat4 proj = makePerspectiveZeroToOne(fov, 1.0f, local.zNear, far);
+            local.faces = 1;
+            local.viewProj[0] = bromath::mmul(proj, bromath::mlookAt(pos, pos + d, up));
+            local.relViewProj[0] = bromath::mmul(proj, bromath::mlookAt(rel, rel + d, up));
+            local.texelPerMetre = 2.0f * std::tan(fov * 0.5f) / kSide;
+        } else {
+            // Six cube faces (the D3D / GL order), a little over 90 degrees
+            // so the faces overlap at their seams.
+            local.zNear = std::max(0.05f, far * 0.005f);
+            const Mat4 proj = makePerspectiveZeroToOne(1.5708f, 1.0f, local.zNear, far);
+            static const Vec3 kForward[6] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+            static const Vec3 kUp[6] = {{0, -1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}, {0, -1, 0}, {0, -1, 0}};
+            local.faces = 6;
             for (int f = 0; f < 6; ++f) {
-                Mat4 view = bromath::mlookAt(pos, pos + forward[f], upVec[f]);
-                Mat4 relView = bromath::mlookAt(rel, rel + forward[f], upVec[f]);
-                Mat4 projView = bromath::mmul(proj, view);
-                // 90 deg face: a texel spans 2*tan(45deg)/tilePx per metre.
-                bakeTile(firstSlot + f, bromath::mmul(proj, relView), projView, L,
-                         0.0f, 2.0f / (float)tilePx, near, far, false);
-                plan.tileCount++;
+                local.viewProj[f] = bromath::mmul(proj, bromath::mlookAt(pos, pos + kForward[f], kUp[f]));
+                local.relViewProj[f] = bromath::mmul(proj, bromath::mlookAt(rel, rel + kForward[f], kUp[f]));
             }
+            local.texelPerMetre = 2.0f / kSide;
         }
+        pages.addLocal(local);
     }
-}
+    pages.endLights();
+    pages.setSeen(anyLight ? seenBounds(sunReach) : bromath::aempty3());
 
-void SceneRenderer::planShadowTiles() {
-    ShadowPlan& plan = shadowPlan_;
-    if (plan.tileCount == 0) return;
+    // What the marking passes read back since the last frame, then the plan.
+    if (vkBridge_) vkBridge_->shadowRequests(pages);
+    pages.plan(plan);
 
-    // Caster world bounds, cached once per frame (posed for skinned casters)
-    // for the per-tile overlap test below. A caster without valid bounds
-    // overlaps every tile. The test is against each tile's light volume —
-    // never the camera frustum: an off-screen caster must still shadow
-    // on-screen geometry.
-    struct CasterBounds { bromath::AABB3 box; bool valid; };
-    std::vector<CasterBounds> staticBounds, skinnedBounds, instBounds,
-                              customBounds, skinnedCustomBounds, tubeBounds;
-    if (cullingActive_) {
-        auto cache = [&](auto& casters, std::vector<CasterBounds>& out) {
-            out.resize(casters.size());
-            for (size_t i = 0; i < casters.size(); ++i) {
-                if (auto wbOpt = nodeWorldBounds(casters[i])) {
-                    out[i].valid = true;
-                    out[i].box = *wbOpt;
-                } else {
-                    out[i].valid = false;
-                }
-            }
-        };
-        cache(shadowCasters_, staticBounds);
-        cache(shadowSkinnedCasters_, skinnedBounds);
-        cache(shadowCustomCasters_, customBounds);
-        cache(shadowSkinnedCustomCasters_, skinnedCustomBounds);
-        cache(shadowInstancedCasters_, instBounds);
-        cache(shadowTubeCasters_, tubeBounds);
-    }
-
-    // --- Static shadow-tile cache decision -------------------------------
-    // A tile's depth content is a pure function of its lightVP matrix and
-    // the (geometry, world transform) of every caster overlapping its
-    // frustum — so it can be reused verbatim when neither changed. The
-    // signature is the ordered (node id, change generation) list of
-    // overlapping casters with per-list separators; conservative-correct:
-    // any membership or generation difference re-renders, and tiles touched
-    // by skinned, custom-vertex (instanced too) or wind-swayed casters (pose, displacement
-    // and sway change with no generation signal) are permanently dynamic.
-    // Directional cascades fold camera motion into lightVP (the fit follows
-    // the camera), so they only cache while the camera is still; spot/point
-    // tiles are camera-independent and cache across any camera movement.
-    cullStats_.shadowTilesTotal += plan.tileCount;
-    const bool windy = windStrength_ > 0.0f;
-    // Vegetation sways whenever the wind field moves at all.
-    const bool swaying = !windFieldCalm(windField());
-    std::vector<std::pair<uint32_t, uint64_t>> sig;
-    for (int slot = 0; slot < plan.tileCount; ++slot) {
-        ShadowTilePlan& tile = plan.tiles[slot];
-        if (!shadowCacheEnabled_) {
-            tile.render = true;
-            cullStats_.shadowTilesRendered++;
-            continue;
-        }
-        sig.clear();
-        bool dynamic = grassCasts_;
-        auto addList = [&](const auto& casters,
-                           const std::vector<CasterBounds>& bounds,
-                           uint64_t listTag, bool listDynamic) {
-            sig.emplace_back(0u, listTag);  // separator — node ids start at 1
-            for (size_t i = 0; i < casters.size(); ++i) {
-                if (cullingActive_ && bounds[i].valid &&
-                    !bromath::fintersects(tile.frustum, bounds[i].box))
-                    continue;
-                sig.emplace_back(casters[i]->id(), casters[i]->changeGeneration());
-                if (listDynamic) dynamic = true;
-                if constexpr (std::is_same_v<std::decay_t<decltype(*casters[i])>, MeshNode>) {
-                    if (casters[i]->vegetationHeight() > 0.0f) {
-                        if (swaying) dynamic = true;
-                    } else if (windy && casters[i]->windMask() > 0.0f) {
-                        dynamic = true;
-                    }
-                } else {
-                    if (swaying && casters[i]->hasVegetation()) dynamic = true;
-                    // A vertex chunk displaces with no generation signal (time, wind).
-                    const CustomShaderState* cs = casters[i]->customShader();
-                    if (cs && !cs->vertexChunk.empty()) dynamic = true;
-                }
-            }
-        };
-        addList(shadowCasters_,              staticBounds,        1, false);
-        addList(shadowSkinnedCasters_,       skinnedBounds,       2, true);
-        addList(shadowCustomCasters_,        customBounds,        3, true);
-        addList(shadowSkinnedCustomCasters_, skinnedCustomBounds, 4, true);
-        addList(shadowInstancedCasters_,     instBounds,          5, false);
-        addList(shadowTubeCasters_,          tubeBounds,          6, false);
-
-        ShadowTileCacheEntry& e = shadowTileCache_[slot];
-        const uint32_t lightId = tile.light->id();
-        if (!dynamic && e.valid && e.lightId == lightId &&
-            std::memcmp(e.lightVP, tile.viewProj.data, sizeof(e.lightVP)) == 0 &&
-            e.casters == sig) {
-            // The atlas texels already hold exactly this content.
-            cullStats_.shadowTilesCached++;
-            continue;
-        }
-        // A sun's last cascade is drawn every other frame: the frame after
-        // one draws it samples that draw, through the window it was drawn
-        // with, while every receiver it shades (the sphere this frame's fit
-        // bounds) still lies inside that window and its depth range. Its
-        // texels are a metre or so across, so a frame's sway of its casters
-        // is under one; a sun that turned or a view that jumped draws it anew.
-        ShadowFarEntry& far = shadowFarHeld_[slot];
-        if (tile.farCascade && far.held && far.lightId == lightId) {
-            const ShadowTilePlan& was = far.tile;
-            bool inside = was.lightDir.x == tile.lightDir.x && was.lightDir.y == tile.lightDir.y &&
-                          was.lightDir.z == tile.lightDir.z && was.windowRadius == tile.windowRadius;
-            for (int a = 0; a < 2 && inside; ++a) {
-                const double off = (tile.fitCentre[a] + tile.lightEye[a]) - (was.windowCentre[a] + was.lightEye[a]);
-                inside = std::abs(off) + tile.fitRadius <= was.windowRadius;
-            }
-            if (inside) {
-                const double depth = tile.fitCentre[2] + tile.lightEye[2];
-                inside = depth - tile.fitRadius >= was.zNear + was.lightEye[2] &&
-                         depth + tile.fitRadius <= was.zFar + was.lightEye[2];
-            }
-            if (inside) {
-                const float rect[4] = {tile.rect[0], tile.rect[1], tile.rect[2], tile.rect[3]};
-                tile = was;
-                std::memcpy(tile.rect, rect, sizeof(rect));
-                tile.relViewProj = bromath::mmul(was.relViewProj, bromath::mtranslate(plan.origin - far.origin));
-                tile.render = false;
-                far.held = false;
-                cullStats_.shadowTilesHeld++;
-                cullStats_.shadowTilesHeldMask |= 1u << slot;
-                plan.heldTiles++;
-                continue;
-            }
-        }
-        tile.render = true;
-        cullStats_.shadowTilesRendered++;
-        far.held = tile.farCascade;
-        if (far.held) {
-            far.lightId = lightId;
-            far.tile = tile;
-            far.origin = plan.origin;
-        }
-        // Record what the tile is about to contain. Dynamic tiles never
-        // validate — their casters mutate without a generation bump.
-        e.valid = !dynamic;
-        e.lightId = lightId;
-        std::memcpy(e.lightVP, tile.viewProj.data, sizeof(e.lightVP));
-        e.casters = sig;
-    }
+    const ShadowPagesStats& s = pages.stats();
+    cullStats_.shadowPagesNeeded = static_cast<int>(s.needed);
+    cullStats_.shadowPagesResident = static_cast<int>(s.resident);
+    cullStats_.shadowPagesDrawn = static_cast<int>(s.drawn);
+    cullStats_.shadowPagesDynamic = static_cast<int>(s.dynamic);
+    cullStats_.shadowPagesWanted = static_cast<int>(s.wanted);
+    cullStats_.shadowPagesEvicted = static_cast<int>(s.evicted);
+    cullStats_.shadowViews = static_cast<int>(s.views);
 }
 
 }  // namespace bro::scene

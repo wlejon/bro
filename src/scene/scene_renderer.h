@@ -2,7 +2,7 @@
 
 // SceneRenderer: the backend-neutral half of drawing a SceneGraph in 3D —
 // the render settings JS configures, light collection, frustum culling and
-// the shadow-tile planner. Everything that touches the GPU lives in the
+// the shadow planner. Everything that touches the GPU lives in the
 // Vulkan renderer (vulkan/frame/scene_vk_bridge.h and the passes it runs), which
 // reads its settings from here every frame.
 
@@ -10,6 +10,8 @@
 #include "scene/exposure.h"
 #include "scene/world/atmosphere.h"
 #include "scene/nodes/light_node.h"
+#include "scene/world/shadow_casters.h"
+#include "scene/world/shadow_pages.h"
 #include "scene/world/shadow_plan.h"
 #include "scene/nodes/plant_movers.h"
 #include "scene/world/wind_field.h"
@@ -23,6 +25,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -40,9 +43,9 @@ class InstancedMeshNode;
 /// Per-frame frustum-culling counters, reset at the top of every render3D().
 /// "Drawn" counts nodes submitted to a pass (including nodes without valid
 /// bounds, which always draw); "culled" counts nodes skipped by a frustum
-/// test. Shadow counts are per caster x atlas tile (a caster planned into two
-/// cascades and skipped in one contributes drawn+=2, culled+=1) and come from
-/// the shadow-tile planner (see planShadowTiles).
+/// test. Shadow counts are per caster x shadow view (a rect of shadow pages
+/// drawn this frame: a caster drawn into two views and culled from one
+/// contributes drawn+=2, culled+=1) and come from the shadow pass.
 struct CullStats {
     int meshDrawn = 0,       meshCulled = 0;
     int instancedDrawn = 0,  instancedCulled = 0;
@@ -51,15 +54,12 @@ struct CullStats {
     int billboardsDrawn = 0, billboardsCulled = 0;
     int decalsDrawn = 0,     decalsCulled = 0;
     int shadowDrawn = 0,     shadowCulled = 0;
-    // Shadow-tile cache counters: tiles allocated this frame, tiles that need
-    // re-rendering, and tiles whose previous content is still valid. A cached
-    // tile contributes nothing to shadowDrawn/shadowCulled.
-    int shadowTilesTotal = 0, shadowTilesRendered = 0, shadowTilesCached = 0;
-    // Tiles standing in for this frame with the depth the frame before drew
-    // (a sun's last cascade, drawn every other frame): not exact, so apart
-    // from shadowTilesCached.
-    int shadowTilesHeld = 0;
-    uint32_t shadowTilesHeldMask = 0;   // the held tiles, a bit per atlas slot
+    // The cached shadow pages (world/shadow_pages.h): pages the newest
+    // marking named, those of them sampled this frame, pages redrawn into
+    // the cache, overlays drawn over it, pages wanted and left for later
+    // frames, pages taken from others, and the views (rects) drawn.
+    int shadowPagesNeeded = 0, shadowPagesResident = 0, shadowPagesDrawn = 0, shadowPagesDynamic = 0;
+    int shadowPagesWanted = 0, shadowPagesEvicted = 0, shadowViews = 0;
     // The turf's surface layers (surface_layers.h): tiles the camera needs,
     // those not filled at the current generation, fills issued; and the
     // atlas's shortfall (SurfaceLayerStats::worstError: 1 when none).
@@ -337,37 +337,12 @@ public:
     /// the culling pad of a node carrying vegetation records (0 in a calm).
     float vegetationReach(float height, const bromath::Mat4& world) const;
 
-    /// `atlasSize` is the side of the square depth atlas (default 4096).
-    /// `pcfTaps` is the side of the receiver's PCF grid: 1 (one hardware-
-    /// bilinear tap), 3 (3x3 taps, a 4-texel tent — default) or 5 (5x5 taps,
-    /// softer). Tile size is NOT set here: the atlas is cut into a 1x1, 2x2
-    /// or 4x4 grid per frame from how many tiles the lights ask for, so one
-    /// sun over an orthographic camera gets the whole atlas.
-    void setShadowQuality(int atlasSize, int pcfTaps) {
-        shadowAtlasSize_ = atlasSize > 0 ? atlasSize : 4096;
-        shadowPCFTaps_ = (pcfTaps >= 5) ? 5 : (pcfTaps >= 3) ? 3 : 1;
-    }
-    int shadowAtlasSize() const { return shadowAtlasSize_; }
+    /// The side of the receiver's PCF grid: 1 (one hardware-bilinear tap), 3
+    /// (3x3 taps, a 4-texel tent — default) or 5 (5x5 taps, softer). The
+    /// shadow maps' resolution is not set: their pages are a texel a pixel
+    /// wherever they are sampled (world/shadow_pages.h).
+    void setShadowQuality(int pcfTaps) { shadowPCFTaps_ = (pcfTaps >= 5) ? 5 : (pcfTaps >= 3) ? 3 : 1; }
     int shadowPCFTaps() const { return shadowPCFTaps_; }
-
-    /// Static shadow-tile cache (default on). When enabled, an atlas tile is
-    /// only re-rendered when its content could have changed: the owning
-    /// light's projection moved (which for directional cascades includes any
-    /// camera motion — the cascade fit follows the camera), or the set of
-    /// casters overlapping the tile changed membership or mutated (transform,
-    /// geometry, visibility). Tiles overlapping skinned or custom-vertex
-    /// casters are permanently dynamic and re-render every frame. A sun's
-    /// last cascade (of three or more) is also drawn every other frame,
-    /// standing in for the frame between while the view's fit still lies
-    /// inside the window it was drawn with (planShadowTiles). Off, every
-    /// tile re-renders every frame, for debugging and regression bisecting.
-    void setShadowCache(bool on) {
-        if (on != shadowCacheEnabled_) {
-            shadowCacheEnabled_ = on;
-            invalidateShadowCache();
-        }
-    }
-    bool shadowCacheEnabled() const { return shadowCacheEnabled_; }
 
     void setShowLightIcons(bool on) { showLightIcons_ = on; }
     bool showLightIcons() const { return showLightIcons_; }
@@ -489,12 +464,14 @@ public:
 
     /// This frame's shadow plan (see shadow_plan.h).
     const ShadowPlan& shadowPlan() const { return shadowPlan_; }
-    /// Forgets every cached shadow tile, so the next frame re-renders them
-    /// all (the atlas they were drawn into is gone).
-    void invalidateShadowCache() {
-        for (auto& e : shadowTileCache_) e.valid = false;
-        for (auto& e : shadowFarHeld_) e.held = false;
-    }
+    /// The cached shadow pages' policy: the world service's shadow jobs are
+    /// its wants, and its grants go back to it (vk::SceneShadowPages).
+    ShadowPages& shadowPages() { return shadowPages_; }
+    /// How node `nodeId` casts this frame (ShadowMotion; Still for a node
+    /// the planner did not meet).
+    ShadowMotion shadowMotion(uint32_t nodeId) const;
+    /// Every cached shadow page is redrawn (their depth is gone).
+    void invalidateShadowPages() { shadowPages_.invalidateAll(); }
 
 private:
     // Rebuilds frameLights_ (see frameLights()).
@@ -506,22 +483,18 @@ private:
     LightNode implicitSun_;
     std::vector<LightNode*> frameLights_;
 
-    // --- Shadow-tile planner (scene_renderer_shadow.cpp) ---
-    // Decides which lights cast shadows this frame, allocates atlas tiles and
-    // computes their world->shadow-clip matrices (prepareShadows), then
-    // decides per tile whether its cached content is still valid
-    // (planShadowTiles), filling shadowPlan_ and the tile counters of
-    // cullStats_. The Vulkan shadow pass draws the tiles marked for render
-    // and counts the casters it draws and culls.
+    // --- Shadow planner (scene_renderer_shadow.cpp) ---
+    // Meets the frame's casters (their motion, and what their changes
+    // invalidate), sets the shadowed lights' maps, hands the paging the
+    // marking passes' requests and plans the frame (shadowPlan_ and the page
+    // counters of cullStats_). The Vulkan shadow pass draws what it plans and
+    // counts the casters it draws and culls.
     void prepareShadows(const std::vector<LightNode*>& lights);
-    void planShadowTiles();
-
-    // World-space AABBs of (a) every shadow caster and (b) every lit mesh
-    // that receives shadows (casters included). The directional fit clips
-    // the camera's visible volume against `receivers` and stretches its
-    // depth range over `casters`. Either box may come back empty.
-    void computeShadowBounds(bromath::AABB3& casters,
-                             bromath::AABB3& receivers) const;
+    // The casters (shadowMotion_, the casters' states, the overlays of what
+    // moves) and their bounds' union, the sun's depth range.
+    void gatherShadowCasters(bromath::AABB3& casterBounds);
+    /// The bounds of what the camera sees out to `reach` (0: its far plane).
+    bromath::AABB3 seenBounds(float reach) const;
 
 
     /// The graph this renderer draws. Outlives the renderer (the graph owns
@@ -623,61 +596,12 @@ private:
     float bloomStrength_  = 2.0f;
 
     // --- Shadow planner state ---
-    // Hard cap: 16 atlas tiles. A typical scene budget is 1 directional
-    // (1-4 cascades) + a few spots/points; overflow lights go unshadowed.
-    static constexpr int kMaxShadowTiles = ShadowPlan::kMaxTiles;
-
-    int shadowAtlasSize_ = 4096;
-    int shadowAtlasLimit_ = 4096;  // the device's largest 2D image side
     int shadowPCFTaps_ = 3;       // PCF grid side: 1, 3 or 5 (see setShadowQuality)
-    // Atlas grid for the current frame: 1, 2 or 4 tiles per side, chosen by
-    // prepareShadows from the tile demand (1 -> whole atlas, <=4 -> quarters,
-    // else 16ths). Changing it moves every tile, so it invalidates the cache,
-    // as does a new atlas size.
-    int shadowGridDim_ = 4;
-    int shadowPlannedAtlas_ = 0;
+    ShadowPages shadowPages_;
+    ShadowCasters shadowCasterStates_;
     ShadowPlan shadowPlan_;
-
-    // --- Static shadow-tile cache ---
-    // One entry per atlas tile, recording what the tile's depth content was
-    // planned from: the owning light (by node id — ids are never reused),
-    // the exact world->clip matrix, and the ordered (node id, change
-    // generation) list of casters that overlapped the tile's frustum,
-    // interleaved with (0, listIndex) separators so a caster migrating
-    // between caster lists never aliases an unchanged signature. A tile is
-    // reused when the current signature is identical — any difference, or
-    // any overlapping skinned, wind-swayed or custom-vertex caster,
-    // re-renders.
-    struct ShadowTileCacheEntry {
-        bool valid = false;
-        uint32_t lightId = 0;
-        float lightVP[16] = {};
-        std::vector<std::pair<uint32_t, uint64_t>> casters;
-    };
-    ShadowTileCacheEntry shadowTileCache_[kMaxShadowTiles];
-    bool shadowCacheEnabled_ = true;
-    // A sun's last cascade as last drawn (ShadowTilePlan::farCascade): held
-    // when drawn the frame before, so this frame may sample it in its place.
-    struct ShadowFarEntry {
-        bool held = false;
-        uint32_t lightId = 0;
-        ShadowTilePlan tile;
-        bromath::Vec3 origin{0.0f, 0.0f, 0.0f};   // the eye its relViewProj is relative to
-    };
-    ShadowFarEntry shadowFarHeld_[kMaxShadowTiles];
-
-    // Per-frame shadow caster lists; rebuilt at the top of prepareShadows.
-    // Skinned casters deform with the palette; casters whose custom shader
-    // has a VERTEX chunk split into the custom lists, whose displacement
-    // changes without a generation bump. Fragment-only custom shaders stay
-    // in the default lists.
-    std::vector<MeshNode*> shadowCasters_;
-    std::vector<MeshNode*> shadowSkinnedCasters_;
-    std::vector<MeshNode*> shadowCustomCasters_;
-    std::vector<MeshNode*> shadowSkinnedCustomCasters_;
-    std::vector<InstancedMeshNode*> shadowInstancedCasters_;
-    std::vector<InstancedMeshNode*> shadowTubeCasters_;
-    bool grassCasts_ = false;   // a GrassNode casts: every tile re-renders
+    // This frame's casters that are not still (ShadowMotion), by node id.
+    std::unordered_map<uint32_t, ShadowMotion> shadowMotion_;
 
     // --- Environment state ---
     std::string envPath_;

@@ -460,6 +460,7 @@ void SceneMeshDrawer::fillMaterial(const SceneFrame& frame, const Node& node, Me
     // Unlit meshes never cast: they draw outside the lighting a shadow
     // belongs to (a custom shader suppresses unlit, so it casts).
     out.castsShadow = node.castsShadow() && !node.effectiveUnlit();
+    out.shadowMotion = frame.renderer.shadowMotion(node.id());
     out.depthBiasFactor = node.depthBiasFactor();
     out.depthBiasUnits = node.depthBiasUnits();
 }

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "scene/vulkan/shaders/shadow/shadow_pages_layout.h"
+
 #include <vulkan/vulkan.h>
 #include <cstdint>
 #include <vector>
@@ -31,26 +33,37 @@ struct alignas(16) SceneCameraUniforms {
     alignas(16) float plantTrail[80][4];
 };
 
-/// The light and shadow-tile capacity of the lighting block (SceneRenderer's
+/// The light and shadow-map capacity of the lighting block (SceneRenderer's
 /// light list and shadow plan never exceed them).
 constexpr int kSceneMaxLights = 32;
-constexpr int kSceneMaxShadowTiles = 16;
+constexpr int kSceneMaxShadowMaps = SP_MAX_MAPS;
 
 /// One light — SceneLight in shaders/common/scene_lighting.glsl.
 struct alignas(16) SceneLightUniform {
     alignas(16) float position[4];      // xyz = camera-relative position, w = type (0 dir, 1 point, 2 spot)
     alignas(16) float direction[4];     // xyz = unit direction (light -> scene), w = range
     alignas(16) float color[4];         // rgb = color, a = intensity
-    alignas(16) float shadow[4];        // x = cos(inner), y = cos(outer), z = first tile (-1), w = tile count
-    alignas(16) float cascadeSplit[4];  // cascade far view distances
+    alignas(16) float shadow[4];        // x = cos(inner), y = cos(outer), z = first shadow map (-1), w = map count
+    alignas(16) float shadowReach[4];   // x = how far from the eye it shadows (0: no limit)
 };
 
-/// One shadow atlas tile — ShadowTile in shaders/common/scene_lighting.glsl.
-struct alignas(16) SceneShadowTileUniform {
-    alignas(16) float matrix[16];       // camera-relative position -> (tile uv, [0,1] depth)
-    alignas(16) float rect[4];          // atlas uv origin.xy, size.zw
-    alignas(16) float bias[4];          // const depth bias, normal offset, texel world const, per metre
-    alignas(16) float depth[4];         // near, far, ortho
+/// One virtual shadow map (a sun's clipmap level, a spot's map, a point
+/// light's face) — ShadowMapGpu in shaders/common/scene_shadow_pages.glsl.
+struct alignas(16) SceneShadowMapUniform {
+    alignas(16) float matrix[16];       // camera-relative position -> (map uv, [0,1] depth)
+    alignas(16) float info[4];          // first page-table entry, kind (SP_KIND_*), window origin x, y (mod SP_WINDOW)
+    alignas(16) float bias[4];          // const depth bias, normal offset, texel (m, a clipmap level's), per metre (a local map's finest)
+    alignas(16) float depth[4];         // near, far, ortho, clipmap level
+};
+
+/// The marking pass's block (std140) — shaders/shadow/shadow_mark.comp.
+struct alignas(16) SceneShadowMarkUniforms {
+    alignas(16) float invViewProj[16];  // Vulkan clip (the camera's reversed depth) -> camera-relative
+    alignas(16) float grid[4];          // x, y = the depth target's size, z = pixels a side an invocation marks for, w = lights
+    alignas(16) float view[4];          // x = metres a pixel a metre (perspective), y = metres a pixel (ortho), z = finest texel, w = levels
+    alignas(16) float lights[kSceneMaxLights][4];    // first map, maps, kind (0 sun, 1 spot, 2 point), reach (0: none)
+    alignas(16) float lightPos[kSceneMaxLights][4];  // camera-relative position, range
+    SceneShadowMapUniform maps[kSceneMaxShadowMaps];
 };
 
 /// The atmosphere's block (std140) — AtmosphereGpu in
@@ -77,9 +90,10 @@ struct alignas(16) SceneLightingUniforms {
     alignas(16) float sunDirection[4];  // dominant directional light, w = 1 when present
     alignas(16) float sunColor[4];      // rgb = color, a = intensity
     alignas(16) float ambientColor[4];  // rgb = flat ambient
-    alignas(16) float params[4];        // light count, PCF taps, 1/atlas size, shadow tile count
+    alignas(16) float params[4];        // light count, PCF taps, 1 / the shadow pool's side (texels), pool columns
+    alignas(16) float shadowView[4];    // x = metres a pixel a metre (perspective), y = metres a pixel (ortho), z = finest texel, w = the sway level (-1: no overlays this frame)
     SceneLightUniform lights[kSceneMaxLights];
-    SceneShadowTileUniform shadows[kSceneMaxShadowTiles];
+    SceneShadowMapUniform shadowMaps[kSceneMaxShadowMaps];
     // The probe and shade map, like every position here, camera-relative.
     alignas(16) float probeWorldToLocal[16];
     alignas(16) float probeLocalToWorld[16];
@@ -92,7 +106,7 @@ struct alignas(16) SceneLightingUniforms {
     alignas(16) float groundBounce[4];  // rgb = the ground's bounce, irradiance over pi and intensity (0: none)
     AtmosphereGpu atm;                  // the atmosphere (sunDir[3] = 1 when on)
 };
-static_assert(sizeof(SceneLightUniform) == 80 && sizeof(SceneShadowTileUniform) == 112);
+static_assert(sizeof(SceneLightUniform) == 80 && sizeof(SceneShadowMapUniform) == 112);
 
 /// Utility for constructing VkDescriptorSetLayouts with arbitrary bindings.
 class SceneVkDescriptorLayoutBuilder {
@@ -109,11 +123,12 @@ public:
     static VkDescriptorSetLayout createCameraLayout(VkDevice device);
     static VkDescriptorSetLayout createMaterialLayout(VkDevice device, uint32_t samplerCount = 5);
 
-    /// Set 1 of every lit pipeline: lighting UBO, shadow atlas (with
-    /// `shadowCompareSampler` immutable — SceneVkDevice::shadowCompareSampler),
-    /// reflection probe cubemap, tile shade map, then the environment's
-    /// irradiance and prefiltered cubes, the BRDF LUT and the sky cube, the
-    /// shared sampler (8), and the atmosphere's tables (9-13).
+    /// Set 1 of every lit pipeline: lighting UBO, the shadow pages' pool
+    /// (with `shadowCompareSampler` immutable — SceneVkDevice::
+    /// shadowCompareSampler), reflection probe cubemap, tile shade map, then
+    /// the environment's irradiance and prefiltered cubes, the BRDF LUT and
+    /// the sky cube, the shared sampler (8), the atmosphere's tables (9-13)
+    /// and the shadow pages' page table (14).
     static VkDescriptorSetLayout createLightingLayout(VkDevice device, VkSampler shadowCompareSampler,
                                                       VkSampler linearSampler);
 

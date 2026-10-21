@@ -767,11 +767,13 @@ void installHeadlessFrame(engine::Engine& engine) {
                 snum("billboardsCulled", s.billboardsCulled);
                 snum("shadowDrawn", s.shadowDrawn);
                 snum("shadowCulled", s.shadowCulled);
-                snum("shadowTilesTotal", s.shadowTilesTotal);
-                snum("shadowTilesRendered", s.shadowTilesRendered);
-                snum("shadowTilesCached", s.shadowTilesCached);
-                snum("shadowTilesHeld", s.shadowTilesHeld);
-                snum("shadowTilesHeldMask", s.shadowTilesHeldMask);
+                snum("shadowPagesNeeded", s.shadowPagesNeeded);
+                snum("shadowPagesResident", s.shadowPagesResident);
+                snum("shadowPagesDrawn", s.shadowPagesDrawn);
+                snum("shadowPagesDynamic", s.shadowPagesDynamic);
+                snum("shadowPagesWanted", s.shadowPagesWanted);
+                snum("shadowPagesEvicted", s.shadowPagesEvicted);
+                snum("shadowViews", s.shadowViews);
                 snum("groundLayerNeeded", s.groundLayerNeeded);
                 snum("groundLayerMissing", s.groundLayerMissing);
                 snum("groundLayerFills", s.groundLayerFills);

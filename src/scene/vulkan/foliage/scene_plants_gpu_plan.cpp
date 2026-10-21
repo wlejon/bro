@@ -319,14 +319,14 @@ bool GpuPlanner::add(SceneFrame& frame, Node& n, const PlantsNode& node, const S
     putPlanes(planes.data(), view.frustum);
     scales[0].focalPixels = focal;
     for (size_t t = 0; t < tiles.size(); ++t) {
-        const ShadowTilePlan& tile = plan.tiles[tiles[t]];
+        const ShadowViewPlan& tile = plan.views[tiles[t]];
         uint32_t* at = w.data() + PP_P_TILE + t * PP_TILE_WORDS;
         putPlanes(at + PP_TILE_FRUSTUM, tile.frustum);
-        at[PP_TILE_TEXEL_CONST] = bitsOf(tile.texelConst);
+        at[PP_TILE_TEXEL_CONST] = bitsOf(tile.texel);
         at[PP_TILE_TEXEL_PER_METRE] = bitsOf(tile.texelPerMetre);
         at[PP_TILE_ORTHO] = tile.ortho ? 1u : 0u;
         putPlanes(planes.data() + 24 * (1 + t), tile.frustum);
-        scales[1 + t].texel = tile.texelConst;
+        scales[1 + t].texel = tile.texel;
         scales[1 + t].texelPerMetre = tile.ortho ? 0.0f : tile.texelPerMetre;
     }
     WorldCellsPass::Views views;

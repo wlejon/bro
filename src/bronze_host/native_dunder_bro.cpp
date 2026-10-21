@@ -87,9 +87,9 @@ double sceneDecalsDrawn() { return cull().decalsDrawn; }
 double sceneDecalsCulled() { return cull().decalsCulled; }
 double sceneShadowDrawn() { return cull().shadowDrawn; }
 double sceneShadowCulled() { return cull().shadowCulled; }
-double sceneShadowTilesTotal() { return cull().shadowTilesTotal; }
-double sceneShadowTilesRendered() { return cull().shadowTilesRendered; }
-double sceneShadowTilesCached() { return cull().shadowTilesCached; }
+double sceneShadowPagesNeeded() { return cull().shadowPagesNeeded; }
+double sceneShadowPagesDrawn() { return cull().shadowPagesDrawn; }
+double sceneShadowPagesResident() { return cull().shadowPagesResident; }
 #endif
 
 // ---- bronze (runtime telemetry) --------------------------------------------
@@ -241,9 +241,9 @@ double bro_dunder_bro_scene_decalsDrawn_get(void) { return sceneDecalsDrawn(); }
 double bro_dunder_bro_scene_decalsCulled_get(void) { return sceneDecalsCulled(); }
 double bro_dunder_bro_scene_shadowDrawn_get(void) { return sceneShadowDrawn(); }
 double bro_dunder_bro_scene_shadowCulled_get(void) { return sceneShadowCulled(); }
-double bro_dunder_bro_scene_shadowTilesTotal_get(void) { return sceneShadowTilesTotal(); }
-double bro_dunder_bro_scene_shadowTilesRendered_get(void) { return sceneShadowTilesRendered(); }
-double bro_dunder_bro_scene_shadowTilesCached_get(void) { return sceneShadowTilesCached(); }
+double bro_dunder_bro_scene_shadowPagesNeeded_get(void) { return sceneShadowPagesNeeded(); }
+double bro_dunder_bro_scene_shadowPagesDrawn_get(void) { return sceneShadowPagesDrawn(); }
+double bro_dunder_bro_scene_shadowPagesResident_get(void) { return sceneShadowPagesResident(); }
 #endif
 
 double bro_dunder_bro_bronze_heapUsedBytes_get(void) { return heapUsedBytes(); }

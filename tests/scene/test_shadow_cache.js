@@ -1,22 +1,18 @@
-// Static shadow-tile cache (scene_renderer_shadow.cpp) — atlas tiles whose
-// light projection and overlapping caster set are unchanged are reused
-// instead of re-rendered every frame.
+// Cached shadow pages (world/shadow_pages.h, docs/scene-world-architecture.md
+// §8): a page's depth is kept until a caster or its light changes, so a
+// still scene draws no shadow casters at all once its pages are in.
 //
 // Contract under test:
-//   - Caching is pixel-INVISIBLE: captures are byte-identical (tolerance 0)
-//     frame-over-frame on a static scene, and between cache on and off.
-//   - Stats: perf.stats().scene / scene.cullStats() report
-//     shadowTilesTotal / shadowTilesRendered / shadowTilesCached per frame.
-//   - Partial invalidation: a moving caster re-renders only the tiles whose
-//     light frustum it overlaps; other lights' tiles stay cached.
-//   - Light changes (move, cone angle) invalidate that light's tiles only.
-//   - Camera movement invalidates directional cascades (the CSM fit follows
-//     the camera) but NOT spot/point tiles (camera-independent).
-//   - Skinned casters are permanently dynamic: their tiles re-render every
-//     frame even when nothing changed.
-//   - A sun's last cascade (of three or more) is drawn every other frame
-//     while the view's fit stays inside the window it was drawn with
-//     (shadowTilesHeld / shadowTilesHeldMask), and looks as a fresh draw.
+//   - Caching is pixel-invisible: once the pages a view needs are drawn,
+//     captures are byte-identical frame over frame.
+//   - Stats: scene.cullStats() / perf.stats().scene report the pages needed,
+//     resident and drawn each frame.
+//   - A camera pan keeps the pages drawn (the clipmap is fixed in light
+//     space): it draws only the pages that come into view.
+//   - A caster's change redraws the pages its bounds touch, the frame it
+//     changes; a light's move redraws its own.
+//   - What moves every frame (a skinned caster) is drawn into overlays each
+//     frame over the cached depth, never by redrawing pages.
 
 function diffCount(a, b, tol) {
     if (a.width !== b.width || a.height !== b.height) return a.width * a.height;
@@ -44,6 +40,18 @@ function dropScene(s) {
     flush();
 }
 
+// Frames until no page is wanted and none drawn: the pages the view needs
+// are in. Returns how many it took.
+function settle(scn) {
+    for (let i = 1; i <= 10; ++i) {
+        scn.captureFrame();
+        const st = scn.cullStats();
+        // (The pixels' requests come back a frame or two late.)
+        if (i > 3 && st.shadowPagesWanted === 0 && st.shadowPagesDrawn === 0) return i;
+    }
+    return -1;
+}
+
 const probe = freshScene(64);
 if (!probe.scene) {
     missingGpuContext('scene');
@@ -51,299 +59,153 @@ if (!probe.scene) {
     dropScene(probe);
 
     // =====================================================================
-    // Section 1: static scene, directional + spot + point — everything
-    // caches after frame 1, captures stay byte-identical, and camera motion
-    // invalidates exactly the directional cascades.
+    // Section 1: a still scene with a sun, a spot and a point light caches
+    // every page; captures stay byte-identical; a pan draws only new pages.
     // =====================================================================
     {
         const s = freshScene(160);
         const scn = s.scene;
-        scn.setCamera({ fov: 50, near: 0.1, far: 60,
-                        position: [0, 6, 12], target: [0, 0, 0] });
+        scn.setCamera({ fov: 50, near: 0.1, far: 60, position: [0, 6, 12], target: [0, 0, 0] });
         scn.setToneMap({ mode: 'linear', gamma: 1.0 });
 
-        assert(scn.shadowCache === true, 'shadow cache defaults on');
-
-        scn.createMesh({ mesh: 'plane', halfW: 10, halfD: 10, color: 'white',
-                         castsShadow: false, y: 0 });
+        scn.createMesh({ mesh: 'plane', halfW: 10, halfD: 10, color: 'white', castsShadow: false, y: 0 });
         scn.createMesh({ mesh: 'box', color: 'red',   x: -3, y: 1 });
         scn.createMesh({ mesh: 'box', color: 'green', x:  0, y: 1 });
         scn.createMesh({ mesh: 'box', color: 'blue',  x:  3, y: 1 });
 
-        const sun = scn.createLight({ type: 'directional',
-                                      direction: [-0.3, -1, -0.2], intensity: 2 });
+        const sun = scn.createLight({ type: 'directional', direction: [-0.3, -1, -0.2], intensity: 2 });
         sun.castsShadow = true;
-        sun.cascadeCount = 2;
-        const spot = scn.createLight({ type: 'spot', position: [-3, 5, 0],
-                                       direction: [0, -1, 0], intensity: 30 });
+        const spot = scn.createLight({ type: 'spot', position: [-3, 5, 0], direction: [0, -1, 0], intensity: 30 });
         spot.castsShadow = true;
-        const lamp = scn.createLight({ type: 'point', position: [3, 4, 0],
-                                       range: 12, intensity: 25 });
+        const lamp = scn.createLight({ type: 'point', position: [3, 4, 0], range: 12, intensity: 25 });
         lamp.castsShadow = true;
-        // 2 cascades + 1 spot + 6 point faces = 9 atlas tiles.
+
+        scn.captureFrame();
+        let st = scn.cullStats();
+        assert(st.shadowPagesDrawn > 0 && st.shadowDrawn > 0,
+            `the first frame draws pages (${st.shadowPagesDrawn}) and casters (${st.shadowDrawn})`);
+        const frames = settle(scn);
+        assert(frames > 0, `the pages settle (${frames} frames)`);
 
         const f1 = scn.captureFrame();
-        let st = scn.cullStats();
-        assert(st.shadowTilesTotal === 9,
-            `9 tiles allocated (got ${st.shadowTilesTotal})`);
-        assert(st.shadowTilesRendered === 9 && st.shadowTilesCached === 0,
-            `cold frame renders all tiles (${st.shadowTilesRendered}/${st.shadowTilesCached})`);
-        assert(st.shadowDrawn > 0, 'cold frame submits casters');
-
-        const f2 = scn.captureFrame();
         st = scn.cullStats();
-        assert(st.shadowTilesRendered === 0 && st.shadowTilesCached === 9,
-            `static frame 2 reuses all tiles (${st.shadowTilesRendered}/${st.shadowTilesCached})`);
-        assert(st.shadowDrawn === 0 && st.shadowCulled === 0,
-            'cached tiles submit no casters at all');
+        assert(st.shadowPagesDrawn === 0 && st.shadowDrawn === 0 && st.shadowViews === 0,
+            `a still frame draws nothing (${st.shadowPagesDrawn} pages, ${st.shadowDrawn} casters)`);
+        assert(st.shadowPagesNeeded > 0 && st.shadowPagesResident === st.shadowPagesNeeded,
+            `every page needed is resident (${st.shadowPagesResident} of ${st.shadowPagesNeeded})`);
 
-        // perf.stats().scene carries the same counters.
         const ps = perf.stats();
-        assert(ps.scene.shadowTilesTotal === 9 && ps.scene.shadowTilesCached === 9,
-            `perf.stats().scene mirrors tile counters (${ps.scene.shadowTilesTotal}/${ps.scene.shadowTilesCached})`);
+        assert(ps.scene.shadowPagesNeeded === st.shadowPagesNeeded && ps.scene.shadowPagesDrawn === 0 &&
+               ps.scene.shadowPagesResident === st.shadowPagesResident,
+            `perf.stats().scene mirrors the page counters (${ps.scene.shadowPagesNeeded}/${ps.scene.shadowPagesResident})`);
 
-        advanceTime(50 * 16);  // 50 virtual frames later — still nothing moved
-        const f3 = scn.captureFrame();
-        st = scn.cullStats();
-        assert(st.shadowTilesCached === 9, 'still fully cached after advanceTime');
+        advanceTime(50 * 16);  // 50 virtual frames later, still nothing moved
+        const f2 = scn.captureFrame();
+        assert(scn.cullStats().shadowPagesDrawn === 0, 'still cached after advanceTime');
+        assert(diffCount(f1, f2, 0) === 0, 'frames before and after byte-identical');
 
-        assert(diffCount(f1, f2, 0) === 0, 'frames 1 and 2 byte-identical');
-        assert(diffCount(f1, f3, 0) === 0, 'frames 1 and N+50 byte-identical');
-
-        // Camera moves -> the CSM fit follows it, so exactly the 2 cascades
-        // re-render; spot/point tiles are camera-independent and stay cached.
-        scn.setCamera({ fov: 50, near: 0.1, far: 60,
-                        position: [0.5, 6, 12], target: [0, 0, 0] });
-        scn.captureFrame();
-        st = scn.cullStats();
-        assert(st.shadowTilesRendered === 2 && st.shadowTilesCached === 7,
-            `camera move re-renders only the cascades (${st.shadowTilesRendered}/${st.shadowTilesCached})`);
-        scn.captureFrame();
-        st = scn.cullStats();
-        assert(st.shadowTilesCached === 9, 'camera still again -> fully cached');
-
-        // ------------------------------------------------------------------
-        // Section 2 (same scene): cache off vs on is pixel-identical.
-        // ------------------------------------------------------------------
-        scn.setCamera({ fov: 50, near: 0.1, far: 60,
-                        position: [0, 6, 12], target: [0, 0, 0] });
-        scn.captureFrame();  // settle back to the section-1 view
-        const cachedImg = scn.captureFrame();
-        st = scn.cullStats();
-        assert(st.shadowTilesCached === 9, 'baseline fully cached');
-
-        scn.setShadowCache({ enabled: false });
-        assert(scn.shadowCache === false, 'setShadowCache(false) reads back');
-        const uncachedImg = scn.captureFrame();
-        st = scn.cullStats();
-        assert(st.shadowTilesRendered === 9 && st.shadowTilesCached === 0,
-            'cache off re-renders every tile every frame');
-        assert(st.shadowDrawn > 0, 'cache off submits casters again');
-        assert(diffCount(cachedImg, uncachedImg, 0) === 0,
-            'cache on vs off byte-identical');
-
-        scn.shadowCache = true;  // property-setter path
-        assert(scn.shadowCache === true, 'shadowCache prop setter re-enables');
-        scn.captureFrame();      // re-seed (toggle invalidates)
-        st = scn.cullStats();
-        assert(st.shadowTilesRendered === 9, 'toggle invalidates: first frame re-renders');
-        const reCachedImg = scn.captureFrame();
-        st = scn.cullStats();
-        assert(st.shadowTilesCached === 9, 're-enabled cache fully reuses');
-        assert(diffCount(cachedImg, reCachedImg, 0) === 0,
-            're-enabled cache byte-identical');
-
+        // A small pan: the pages already drawn stay; only those coming into
+        // view are drawn.
+        const resident = st.shadowPagesResident;
+        let drawn = 0;
+        for (let i = 1; i <= 4; ++i) {
+            scn.setCamera({ fov: 50, near: 0.1, far: 60, position: [0.25 * i, 6, 12], target: [0.25 * i, 0, 0] });
+            scn.captureFrame();
+            drawn += scn.cullStats().shadowPagesDrawn;
+        }
+        assert(drawn < resident, `a pan draws only the pages it brings in (${drawn} drawn, ${resident} resident)`);
+        assert(settle(scn) > 0, 'and settles again');
         dropScene(s);
     }
 
     // =====================================================================
-    // Section 3: partial invalidation — a caster moving inside spot A's
-    // frustum re-renders only A's tile; spot B's tile stays cached. Then
-    // light-property changes invalidate exactly that light's tile.
+    // Section 2: a caster's move redraws pages the frame it moves, and the
+    // shadow follows it; a light's move redraws its pages.
     // =====================================================================
     {
         const s = freshScene(160);
         const scn = s.scene;
-        scn.setCamera({ fov: 55, near: 0.1, far: 60,
-                        position: [0, 8, 14], target: [0, 0, 0] });
+        scn.setCamera({ fov: 55, near: 0.1, far: 60, position: [0, 8, 14], target: [0, 0, 0] });
         scn.setToneMap({ mode: 'linear', gamma: 1.0 });
 
-        scn.createMesh({ mesh: 'plane', halfW: 12, halfD: 8, color: 'white',
-                         castsShadow: false, y: 0 });
-        const mover = scn.createMesh({ mesh: 'box', color: 'red',
-                                       x: -5, y: 1.2 });
+        scn.createMesh({ mesh: 'plane', halfW: 12, halfD: 8, color: 'white', castsShadow: false, y: 0 });
+        const mover = scn.createMesh({ mesh: 'box', color: 'red', x: -5, y: 1.2 });
         scn.createMesh({ mesh: 'box', color: 'blue', x: 5, y: 1.2 });
 
-        const spotA = scn.createLight({ type: 'spot', position: [-5, 5, 0],
-                                        direction: [0, -1, 0], intensity: 40 });
+        const spotA = scn.createLight({ type: 'spot', position: [-5, 5, 0], direction: [0, -1, 0], intensity: 40 });
         spotA.castsShadow = true;
         spotA.range = 6;
-        const spotB = scn.createLight({ type: 'spot', position: [5, 5, 0],
-                                        direction: [0, -1, 0], intensity: 40 });
+        const spotB = scn.createLight({ type: 'spot', position: [5, 5, 0], direction: [0, -1, 0], intensity: 40 });
         spotB.castsShadow = true;
         spotB.range = 6;
 
-        const before = scn.captureFrame();  // cold
-        scn.captureFrame();                 // warm
-        let st = scn.cullStats();
-        assert(st.shadowTilesTotal === 2 && st.shadowTilesCached === 2,
-            `two spot tiles, both cached when static (${st.shadowTilesCached})`);
+        assert(settle(scn) > 0, 'two spots settle');
+        const before = scn.captureFrame();
 
-        // Animate the caster through spot A's frustum: every frame it moves,
-        // only A's tile re-renders, and the shadow visibly tracks it.
-        let duringImg = null;
+        // A caster that moves is drawn every frame (an overlay) while it
+        // moves, and its shadow tracks it.
+        let during = null;
         for (let i = 0; i < 4; ++i) {
             mover.x += 0.25;
-            duringImg = scn.captureFrame();
-            st = scn.cullStats();
-            assert(st.shadowTilesRendered === 1 && st.shadowTilesCached === 1,
-                `moving caster re-renders only spot A's tile (frame ${i}: ` +
-                `${st.shadowTilesRendered}/${st.shadowTilesCached})`);
+            during = scn.captureFrame();
+            const st = scn.cullStats();
+            assert(st.shadowPagesDynamic > 0, `the moving caster is drawn this frame (frame ${i}: ${st.shadowPagesDynamic})`);
         }
-        assert(diffCount(before, duringImg, 2) > 0,
-            'shadow visibly updates while the caster moves');
+        assert(diffCount(before, during, 2) > 0, 'the shadow follows the caster');
+        // Come to rest (a few frames without a change), it is back in the
+        // cached depth.
+        for (let i = 0; i < 10; ++i) scn.captureFrame();
+        assert(settle(scn) > 0, 'the caster at rest settles');
+        const rest = scn.captureFrame();
+        assert(scn.cullStats().shadowPagesDynamic === 0, 'a caster at rest draws no overlay');
+        assert(diffCount(during, rest, 2) < 160 * 160 / 400, 'at rest it shadows as it did moving');
 
-        // Caster stops -> back to fully cached.
-        scn.captureFrame();
-        st = scn.cullStats();
-        assert(st.shadowTilesCached === 2, 'stopped caster -> fully cached again');
-
-        // Light moved -> its projection changed -> only its tile re-renders.
-        const preLightMove = scn.captureFrame();
+        // The light moves: its pages are redrawn.
         spotB.x += 0.8;
-        const postLightMove = scn.captureFrame();
-        st = scn.cullStats();
-        assert(st.shadowTilesRendered === 1 && st.shadowTilesCached === 1,
-            `moving spot B re-renders only its tile (${st.shadowTilesRendered}/${st.shadowTilesCached})`);
-        assert(diffCount(preLightMove, postLightMove, 2) > 0,
-            'moving the light visibly changes the frame');
-
-        // Cone angle (shadow FOV) change -> same story.
-        scn.captureFrame();
-        spotB.outerAngle = 0.7;
-        scn.captureFrame();
-        st = scn.cullStats();
-        assert(st.shadowTilesRendered === 1 && st.shadowTilesCached === 1,
-            `spot FOV change re-renders only its tile (${st.shadowTilesRendered}/${st.shadowTilesCached})`);
-        scn.captureFrame();
-        st = scn.cullStats();
-        assert(st.shadowTilesCached === 2, 'light untouched again -> fully cached');
-
+        const moved = scn.captureFrame();
+        assert(scn.cullStats().shadowPagesDrawn > 0, 'a moved light redraws its pages');
+        assert(diffCount(rest, moved, 2) > 0, 'moving the light visibly changes the frame');
+        assert(settle(scn) > 0, 'the light at rest settles');
         dropScene(s);
     }
 
     // =====================================================================
-    // Section 4: skinned casters are permanently dynamic — the tile they
-    // overlap re-renders every frame even with an unchanged palette, while
-    // an unaffected light's tile stays cached.
+    // Section 3: a skinned caster moves every frame: drawn into overlays,
+    // the cached pages untouched.
     // =====================================================================
     {
         const s = freshScene(128);
         const scn = s.scene;
-        scn.setCamera({ fov: 55, near: 0.1, far: 60,
-                        position: [0, 6, 12], target: [0, 0, 0] });
+        scn.setCamera({ fov: 55, near: 0.1, far: 60, position: [0, 6, 12], target: [0, 0, 0] });
         scn.setToneMap({ mode: 'linear', gamma: 1.0 });
 
-        scn.createMesh({ mesh: 'plane', halfW: 12, halfD: 8, color: 'white',
-                         castsShadow: false, y: 0 });
+        scn.createMesh({ mesh: 'plane', halfW: 12, halfD: 8, color: 'white', castsShadow: false, y: 0 });
         scn.createMesh({ mesh: 'box', color: 'blue', x: 5, y: 1.2 });
+        const sun = scn.createLight({ type: 'directional', direction: [-0.3, -1, -0.2], intensity: 2 });
+        sun.castsShadow = true;
 
-        const spotA = scn.createLight({ type: 'spot', position: [-5, 5, 0],
-                                        direction: [0, -1, 0], intensity: 40 });
-        spotA.castsShadow = true;
-        spotA.range = 6;
-        const spotB = scn.createLight({ type: 'spot', position: [5, 5, 0],
-                                        direction: [0, -1, 0], intensity: 40 });
-        spotB.castsShadow = true;
-        spotB.range = 6;
-
-        // Skinned quad under spot A (bind pose at the node origin).
-        const positions = new Float32Array([
-            -0.5, -0.5, 0,  0.5, -0.5, 0,  0.5, 0.5, 0,  -0.5, 0.5, 0,
-        ]);
+        const positions = new Float32Array([-0.5, -0.5, 0, 0.5, -0.5, 0, 0.5, 0.5, 0, -0.5, 0.5, 0]);
         const normals = new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1]);
         const indices = new Uint32Array([0, 1, 2, 0, 2, 3]);
         const skin = new SkinData({
             boneWeights: new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]),
             boneIndices: new Uint32Array(16),
-            inverseBindMatrices: new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]),
+            inverseBindMatrices: new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]),
             boneCount: 1,
         });
-        const skinned = scn.createSkinnedMesh({ positions, normals, indices,
-                                                color: 'red', skin });
+        const skinned = scn.createSkinnedMesh({ positions, normals, indices, color: 'red', skin });
         skinned.x = -5;
         skinned.y = 1.5;
         assert(skinned.skinReady === true, 'skin ready');
 
-        scn.captureFrame();  // cold
+        for (let i = 0; i < 6; ++i) scn.captureFrame();
         for (let i = 0; i < 3; ++i) {
             scn.captureFrame();
             const st = scn.cullStats();
-            assert(st.shadowTilesTotal === 2, 'two spot tiles');
-            assert(st.shadowTilesRendered === 1 && st.shadowTilesCached === 1,
-                `skinned caster keeps its tile dynamic (frame ${i}: ` +
-                `${st.shadowTilesRendered}/${st.shadowTilesCached})`);
+            assert(st.shadowPagesDynamic > 0 && st.shadowPagesDrawn === 0,
+                `a skinned caster is an overlay each frame, no page redrawn (frame ${i}: ` +
+                `${st.shadowPagesDynamic} overlays, ${st.shadowPagesDrawn} pages)`);
         }
-
-        dropScene(s);
-    }
-
-    // =====================================================================
-    // Section 5: a sun's last cascade (of three or more) is drawn every
-    // other frame while the camera moves: the frame between samples the
-    // draw before through the window it was drawn with (shadowTilesHeld),
-    // and looks as a fresh draw does. A jump past that window draws it anew.
-    // =====================================================================
-    {
-        const s = freshScene(160);
-        const scn = s.scene;
-        const cam = (x) => scn.setCamera({ fov: 50, near: 0.1, far: 80,
-                                           position: [x, 6, 14], target: [x, 0, 0] });
-        cam(0);
-        scn.setToneMap({ mode: 'linear', gamma: 1.0 });
-        scn.createMesh({ mesh: 'plane', halfW: 40, halfD: 40, color: 'white',
-                         castsShadow: false, y: 0 });
-        for (let i = -4; i <= 4; ++i)
-            scn.createMesh({ mesh: 'box', color: 'red', x: i * 4, y: 1, z: -i * 3 });
-        const sun = scn.createLight({ type: 'directional',
-                                      direction: [-0.3, -1, -0.2], intensity: 2 });
-        sun.castsShadow = true;
-        sun.cascadeCount = 3;
-
-        scn.captureFrame();
-        let held = 0, drawn = 0;
-        for (let i = 1; i <= 6; ++i) {
-            cam(i * 0.01);
-            scn.captureFrame();
-            const st = scn.cullStats();
-            assert(st.shadowTilesTotal === 3, `three cascades (${st.shadowTilesTotal})`);
-            assert(st.shadowTilesRendered + st.shadowTilesHeld === 3 && st.shadowTilesCached === 0,
-                `a moving camera draws or holds every cascade (frame ${i}: ` +
-                `${st.shadowTilesRendered}/${st.shadowTilesHeld})`);
-            held += st.shadowTilesHeld;
-            drawn += st.shadowTilesRendered;
-        }
-        assert(held === 3 && drawn === 15, `the last cascade held every other frame (${held} held, ${drawn} drawn)`);
-
-        // A held frame against the same view with every tile drawn.
-        cam(0.07);
-        const heldImg = scn.captureFrame();
-        assert(scn.cullStats().shadowTilesHeld === 1 && scn.cullStats().shadowTilesHeldMask === 4,
-            'this frame holds the last cascade');
-        scn.setShadowCache({ enabled: false });
-        const drawnImg = scn.captureFrame();
-        scn.setShadowCache({ enabled: true });
-        const off = diffCount(heldImg, drawnImg, 2);
-        assert(off < 160 * 160 / 200, `a held cascade looks as a drawn one (${off} px off)`);
-
-        // A jump far past the window: drawn again, not held.
-        scn.captureFrame();
-        cam(30);
-        scn.captureFrame();
-        const st = scn.cullStats();
-        assert(st.shadowTilesHeld === 0 && st.shadowTilesRendered === 3,
-            `a jump draws every cascade (${st.shadowTilesRendered}/${st.shadowTilesHeld})`);
-
         dropScene(s);
     }
 

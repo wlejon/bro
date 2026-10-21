@@ -14,7 +14,8 @@
 //     downwind at gustSpeed;
 //   - each node kind (mesh, instanced, tubes, scatter) draws with its records
 //     (under validation), stands still in a calm and moves in a wind;
-//   - swaying casters keep their shadow tiles dynamic; a calm lets them cache.
+//   - swaying casters are drawn into the shadow overlays each frame; in a
+//     calm they stay in the cached shadow pages.
 
 function diffCount(a, b, tol) {
     if (a.width !== b.width || a.height !== b.height) return a.width * a.height;
@@ -152,39 +153,40 @@ function run(scene) {
     for (const [name, make] of Object.entries(kinds)) {
         const nodes = make();
         scene.setWind({ speed: 0, gust: 0 });
-        scene.captureFrame();
+        for (let i = 0; i < 4; i++) scene.captureFrame();
         const c0 = scene.captureFrame();
         advanceTime(700);
         const c1 = scene.captureFrame();
         const st = scene.cullStats();
         assert(diffCount(c0, c1, 0) === 0, name + ': still in a calm');
-        assert(st.shadowTilesCached > 0, name + ': a calm lets the shadow tiles cache');
+        assert(st.shadowPagesDynamic === 0 && st.shadowPagesDrawn === 0,
+            name + `: a calm keeps its shadow in the cached pages (${st.shadowPagesDynamic} overlays, ` +
+            `${st.shadowPagesDrawn} drawn)`);
 
+        // In a wind, from a couple of metres off the crown's shadow on the
+        // ground (the crown is about 20 m up; the sun throws its shadow
+        // about 9 m -x, 7 m -z), where the shadow's texels are about a
+        // centimetre: the sway level's, whose overlays carry what sways.
+        // (Farther off, where a texel hides the sway, it holds still in the
+        // cached pages.)
         scene.setWind({ speed: 5, gust: 1.5, gustScale: 15 });
+        scene.setCamera({ fov: 45, near: 0.1, far: 100, position: [-8, 1.6, -5.5], target: [-9, 0, -7] });
+        for (let i = 0; i < 4; i++) scene.captureFrame();
         const m0 = scene.captureFrame();
         advanceTime(700);
         const m1 = scene.captureFrame();
         const moving = diffCount(m0, m1, 2);
-        assert(moving > 10, name + ': sways in a wind (' + moving + ' px changed)');
-        assert(scene.cullStats().shadowTilesCached === 0, name + ': swaying casters keep the shadow tiles dynamic');
-        // The sun's last cascade (of three or more) is drawn every other
-        // frame, so its far shadows lag a frame's sway on the frame between
-        // (shadowTilesHeld); every nearer cascade is drawn every frame.
-        let wasHeld = false, heldFrames = 0;
-        for (let i = 0; i < 6; i++) {
+        assert(moving > 10, name + ': its shadow sways in a wind (' + moving + ' px changed)');
+        // Swaying, it is drawn every frame into the overlays over the cached
+        // depth, and no page is redrawn for it.
+        for (let i = 0; i < 4; i++) {
             scene.captureFrame();
             const st = scene.cullStats();
-            assert(st.shadowTilesCached === 0, name + ': a swaying frame caches no tile');
-            assert(st.shadowTilesHeld <= (st.shadowTilesTotal >= 3 ? 1 : 0) &&
-                   st.shadowTilesRendered + st.shadowTilesHeld === st.shadowTilesTotal,
-                name + `: only the last cascade is held (${st.shadowTilesRendered} drawn, ${st.shadowTilesHeld} held)`);
-            assert(!st.shadowTilesHeld || st.shadowTilesHeldMask === 1 << (st.shadowTilesTotal - 1),
-                name + `: the held tile is the last cascade (mask ${st.shadowTilesHeldMask})`);
-            assert(!(wasHeld && st.shadowTilesHeld), name + ': the last cascade is drawn at least every other frame');
-            wasHeld = st.shadowTilesHeld > 0;
-            if (wasHeld) heldFrames++;
+            assert(st.shadowPagesDynamic > 0 && st.shadowPagesDrawn === 0,
+                name + `: a swaying frame draws overlays, not pages (${st.shadowPagesDynamic} overlays, ` +
+                `${st.shadowPagesDrawn} drawn)`);
         }
-        assert(heldFrames === 3 || scene.cullStats().shadowTilesTotal < 3, name + `: held every other frame (${heldFrames} of 6)`);
+        scene.setCamera({ fov: 45, near: 0.1, far: 100, position: [0, 4, 14], target: [0, 3, 0] });
         for (const n of nodes) n.destroy();
     }
 }

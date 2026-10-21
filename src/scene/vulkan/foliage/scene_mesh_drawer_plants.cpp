@@ -1,7 +1,7 @@
 // SceneMeshDrawer's plants path: a PlantsNode becomes two draws a view, its
 // leaves and its wood, each an instance a chunk of one plant's elements
 // (shaders/foliage/scene_plants.glsl builds them), for the camera and for each
-// shadow tile its casters go to.
+// shadow view (a rect of shadow pages the frame draws) its casters go to.
 //
 // Which plants each view draws and with how many elements is planned on the
 // GPU (scene_plants_gpu_plan.cpp, plants_plan.comp) over the cells in view:
@@ -18,6 +18,7 @@
 
 #include "scene/nodes/plants_node.h"
 #include "scene/scene_renderer.h"
+#include "scene/vulkan/shadow/scene_shadow_pages.h"
 #include "scene/vulkan/frame/scene_frame.h"
 #include "scene/vulkan/frame/scene_gpu_resources.h"
 #include "scene/vulkan/foliage/scene_plants_gpu_plan.h"
@@ -70,12 +71,13 @@ void SceneMeshDrawer::preparePlants(SceneFrame& frame, PlantsNode& node, std::ve
                                                              data.size() * sizeof(float));
     const GpuMesh* ix = frame.gpu.resources.mesh(node.id(), kLeafIndexSlot, 1, leafIndices());
     if (!store || !ix) return;
-    // The shadow tiles its casters go to.
+    // The shadow views its casters go to: the overlays of the levels where
+    // its sway shows, the redrawn pages of the rest.
     std::vector<int> tiles;
     const ShadowPlan& shadows = frame.renderer.shadowPlan();
-    if (node.castsShadow() && frame.gpu.targets.shadowAtlas.width == static_cast<uint32_t>(shadows.atlasSize))
-        for (int slot = 0; slot < shadows.tileCount && slot < PP_MAX_TILES; ++slot)
-            if (shadows.tiles[slot].render) tiles.push_back(slot);
+    if (node.castsShadow() && frame.gpu.shadows.ready())
+        for (int v = 0; v < shadows.viewCount && v < PP_MAX_TILES; ++v)
+            if (shadows.views[v].plants) tiles.push_back(v);
 
     // Planned on the GPU: each view's draws indirect, their counts the plan's.
     std::shared_ptr<plants::GpuPlanner::Node> state = plantPlanner_->node(node);
@@ -109,14 +111,14 @@ void SceneMeshDrawer::preparePlants(SceneFrame& frame, PlantsNode& node, std::ve
     wood.push.extra[2] = 1.0f;
     wood.indexCount = kLimbsPerChunk * kTubeVerts;
     wood.timerLabel = "plants:wood";
-    // A view's part: the camera's (view 0) or a tile's casters (never in
-    // the colour lists).
+    // A view's part: the camera's (view 0) or a shadow view's casters
+    // (never in the colour lists).
     for (uint32_t v = 0; v <= tiles.size(); ++v)
         for (MeshDraw part : {leaves, wood}) {
             part.indirectOffset = plants::commandOffset(v, part.push.extra[0] > 0.5f);
             if (v > 0) {
                 part.shadowOnly = part.castsShadow = true;
-                part.shadowTileMask = 1u << tiles[v - 1];
+                part.shadowView = tiles[v - 1];
                 part.shadowTimerLabel = "shadow:plants";
             }
             out.push_back(part);

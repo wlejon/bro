@@ -445,8 +445,6 @@
     accessor(SceneNode.prototype, "shadowNormalBias",
         function () { return __bro_native.scene.SceneNode_shadowNormalBias_get(this); },
         function (v) { __bro_native.scene.SceneNode_shadowNormalBias_set(this, +v); });
-    accessor(SceneNode.prototype, "cascadeCount", function () { return __bro_native.scene.SceneNode_cascadeCount_get(this); }, function (v) { __bro_native.scene.SceneNode_cascadeCount_set(this, v | 0); });
-    accessor(SceneNode.prototype, "cascadeSplitLambda", function () { return __bro_native.scene.SceneNode_cascadeSplitLambda_get(this); }, function (v) { __bro_native.scene.SceneNode_cascadeSplitLambda_set(this, +v); });
     accessor(SceneNode.prototype, "shadowDistance", function () { return __bro_native.scene.SceneNode_shadowDistance_get(this); }, function (v) { __bro_native.scene.SceneNode_shadowDistance_set(this, +v); });
     accessor(SceneNode.prototype, "fov", function () { return __bro_native.scene.SceneNode_type_get(this) === 'camera' ? __bro_native.scene.SceneNode_fov_get(this) : undefined; }, function (v) { if (__bro_native.scene.SceneNode_type_get(this) === 'camera') __bro_native.scene.SceneNode_fov_set(this, +v); });
     accessor(SceneNode.prototype, "near", function () { return __bro_native.scene.SceneNode_type_get(this) === 'camera' ? __bro_native.scene.SceneNode_near_get(this) : undefined; }, function (v) { if (__bro_native.scene.SceneNode_type_get(this) === 'camera') __bro_native.scene.SceneNode_near_set(this, +v); });

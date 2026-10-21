@@ -8,6 +8,7 @@
 #include "scene/vulkan/frame/scene_gpu_timer.h"
 #include "scene/vulkan/draw/scene_mesh_drawer.h"
 #include "scene/vulkan/frame/scene_targets.h"
+#include "scene/vulkan/shadow/scene_shadow_pages.h"
 #include "scene/vulkan/frame/scene_vk_descriptors.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
 
@@ -20,9 +21,9 @@ namespace bro::scene::vk {
 
 void PassOpaque::declare(const SceneFrame& frame, PassIO& io) const {
     io.hdr({.indirect = frame.ssao});
-    // (Its draws light through the shadow atlas: readable even where the
-    // planned casters drew last, PassShadow::Part::Planned.)
-    io.sample(frame.gpu.targets.shadowAtlas);
+    // (Its draws light through the shadow pages' pool and overlays.)
+    io.sample(frame.gpu.shadows.pool);
+    io.sample(frame.gpu.shadows.scratch);
     // The plants' planned draws read the plan's chunks and commands.
     if (frame.computeApart()) io.readsCompute();
 }

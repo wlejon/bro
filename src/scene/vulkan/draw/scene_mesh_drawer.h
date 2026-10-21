@@ -154,8 +154,16 @@ struct MeshDraw {
     MeshPushConstants push{};
     bool translucent = false;
     bool castsShadow = false;
-    bool shadowOnly = false;     // a caster only (a plants node's tile casters): never in the colour lists
-    uint32_t shadowTileMask = ~0u;   // the shadow plan's tiles it casts into (bit per slot)
+    bool shadowOnly = false;     // a caster only (a plants node's view casters): never in the colour lists
+    /// The shadow plan's view it casts into alone (a plants node's planned
+    /// casters), -1 for any its kind goes into: a caster that moves the
+    /// overlays, one that does not the redrawn pages (ShadowViewPlan).
+    int shadowView = -1;
+    /// How it casts (SceneRenderer::shadowMotion): in the cached depth, in
+    /// the overlays drawn over it each frame, swaying (in the overlays of
+    /// the levels its sway shows in, the cached depth of the rest) or as the
+    /// grass (the finest levels' overlays alone).
+    ShadowMotion shadowMotion = ShadowMotion::Still;
     uint32_t shadowIndexCount = 0;   // a caster's indices, a prefix of indexCount's (0: all of them)
     bool twoSided = false;       // no back-face culling (and no front-face culling as a caster)
     bool lines = false;          // indices are line pairs; drawn unlit

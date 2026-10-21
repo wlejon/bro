@@ -105,7 +105,8 @@ public:
     /// Queue `state`'s plan of `node` this frame: its cells current, its
     /// buffers sized from the last frames' asks, its sets written (the
     /// draws' set 3 reading `store`, the node's records). `tiles` the
-    /// shadow tiles its casters go to, by slot in the frame's plan. False:
+    /// shadow views its casters go to (the rects of shadow pages the frame
+    /// draws), by index in the frame's plan (ShadowPlan::views). False:
     /// it draws nothing this frame (its cells, buffers or sets could not be
     /// had).
     bool add(SceneFrame& frame, Node& state, const PlantsNode& node, const SceneVkBuffer& store,

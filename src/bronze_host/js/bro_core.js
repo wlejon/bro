@@ -559,9 +559,9 @@
             decalsCulled: __bro_native.perf.scene.decalsCulled,
             shadowDrawn: __bro_native.perf.scene.shadowDrawn,
             shadowCulled: __bro_native.perf.scene.shadowCulled,
-            shadowTilesTotal: __bro_native.perf.scene.shadowTilesTotal,
-            shadowTilesRendered: __bro_native.perf.scene.shadowTilesRendered,
-            shadowTilesCached: __bro_native.perf.scene.shadowTilesCached,
+            shadowPagesNeeded: __bro_native.perf.scene.shadowPagesNeeded,
+            shadowPagesDrawn: __bro_native.perf.scene.shadowPagesDrawn,
+            shadowPagesResident: __bro_native.perf.scene.shadowPagesResident,
         }), undefined);
     }
 

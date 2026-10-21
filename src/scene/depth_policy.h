@@ -55,7 +55,7 @@ inline bromath::Mat4 makePerspective(float fovY, float aspect, float znear, floa
 /// Right-handed perspective in [0,1] that is NEVER reversed — near 0, far 1.
 ///
 /// For shadow maps: they are their own depth targets with their own near/far,
-/// fitted tightly per cascade, so they never had a precision problem worth
+/// fitted tightly per view, so they never had a precision problem worth
 /// reversing for. They keep the conventional depth bias signs and the
 /// LESS_OR_EQUAL compare sampler.
 inline bromath::Mat4 makePerspectiveZeroToOne(float fovY, float aspect,
@@ -92,8 +92,8 @@ inline bromath::Mat4 makeOrtho(float l, float r, float b, float t,
     return m;
 }
 
-/// Right-handed orthographic in [0,1] that is NEVER reversed — the shadow
-/// cascade builder (see makePerspectiveZeroToOne).
+/// Right-handed orthographic in [0,1] that is NEVER reversed — the sun's
+/// shadow pages (see makePerspectiveZeroToOne).
 inline bromath::Mat4 makeOrthoZeroToOne(float l, float r, float b, float t,
                                         float znear, float zfar) {
     bromath::Mat4 m;

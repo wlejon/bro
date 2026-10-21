@@ -196,9 +196,7 @@ void SceneRenderer::render3D() {
     if (frameLights_.empty()) frameLights_.push_back(&implicitSun_);
     exposureDt_ = pendingExposureDt_;
     pendingExposureDt_ = 0.0f;
-    shadowAtlasLimit_ = static_cast<int>(vkBridge_->maxShadowAtlas());
     prepareShadows(frameLights_);
-    planShadowTiles();
 
     hasMeshContent_ = vkBridge_->render3D(graph_, *this, cullStats_);
 }

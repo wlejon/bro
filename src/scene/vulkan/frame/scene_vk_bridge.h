@@ -18,6 +18,7 @@
 #include "scene/vulkan/frame/scene_targets.h"
 #include "scene/vulkan/frame/scene_vk_allocator.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
+#include "scene/vulkan/shadow/scene_shadow_pages.h"
 #include "scene/vulkan/world/scene_world_service.h"
 
 #include <cstdint>
@@ -53,8 +54,11 @@ public:
 
     /// The last render's LDR output (shader-read once its submission completes).
     render::LayerImage outputImage() const;
-    /// The largest shadow atlas side the device allows.
-    uint32_t maxShadowAtlas() const { return targets_.maxShadowAtlas(); }
+    /// The shadow pages' marking passes whose requests the GPU has finished
+    /// since the last call, handed to `pages` (oldest first).
+    void shadowRequests(ShadowPages& pages) {
+        if (ready_) shadows_.takeRequests(device_, pages);
+    }
 
     /// Drop everything held for these destroyed nodes (deferred).
     void releaseNodes(std::span<const uint32_t> ids);
@@ -89,6 +93,7 @@ private:
     SceneEnvironment environment_;
     SceneWorldService world_;
     SceneAtmosphere atmosphere_;
+    SceneShadowPages shadows_;
     SceneGpu gpu_;
     SceneFrameGraph graph_;
     SceneGpuTimer timer_;

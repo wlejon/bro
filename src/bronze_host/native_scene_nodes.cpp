@@ -710,36 +710,6 @@ void bro_scene_SceneNode_shadowNormalBias_set(void* self, double v) {
     }
 }
 
-int32_t bro_scene_SceneNode_cascadeCount_get(void* self) {
-    auto* n = nodeOf(self);
-    if (n && n->type() == scene::SceneNode::Type::Light) {
-        return static_cast<scene::LightNode*>(n)->cascadeCount();
-    }
-    return 4;
-}
-
-void bro_scene_SceneNode_cascadeCount_set(void* self, int32_t v) {
-    auto* n = nodeOf(self);
-    if (n && n->type() == scene::SceneNode::Type::Light) {
-        static_cast<scene::LightNode*>(n)->setCascadeCount(v);
-    }
-}
-
-double bro_scene_SceneNode_cascadeSplitLambda_get(void* self) {
-    auto* n = nodeOf(self);
-    if (n && n->type() == scene::SceneNode::Type::Light) {
-        return static_cast<double>(static_cast<scene::LightNode*>(n)->cascadeSplitLambda());
-    }
-    return 0.5;
-}
-
-void bro_scene_SceneNode_cascadeSplitLambda_set(void* self, double v) {
-    auto* n = nodeOf(self);
-    if (n && n->type() == scene::SceneNode::Type::Light) {
-        static_cast<scene::LightNode*>(n)->setCascadeSplitLambda(static_cast<float>(v));
-    }
-}
-
 double bro_scene_SceneNode_shadowDistance_get(void* self) {
     auto* n = nodeOf(self);
     if (n && n->type() == scene::SceneNode::Type::Light) {

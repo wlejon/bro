@@ -14,6 +14,8 @@
 #include "scene/vulkan/post/pass_postfx.h"
 #include "scene/vulkan/lighting/pass_reflection_probe.h"
 #include "scene/vulkan/shadow/pass_shadow.h"
+#include "scene/vulkan/shadow/pass_shadow_copy.h"
+#include "scene/vulkan/shadow/pass_shadow_mark.h"
 #include "scene/vulkan/frame/pass_snapshot.h"
 #include "scene/vulkan/post/pass_ssao.h"
 #include "scene/vulkan/post/pass_ssr.h"
@@ -31,10 +33,13 @@ SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
     : device_(context),
       allocator_(device_),
       resources_(allocator_),
-      gpu_{device_, allocator_, defaults_, targets_, resources_, meshes_, environment_, world_, atmosphere_},
+      gpu_{device_, allocator_, defaults_, targets_, resources_, meshes_, environment_, world_, atmosphere_, shadows_},
       timer_(context) {
     // The frame, in order. A pass draws into the HDR scope or brings its own
     // targets; the graph does every shared transition (scene_frame_graph.h).
+    // The shadow pages the frame draws are drawn into the scratch target,
+    // the redrawn ones then copied into the pool; the overlays are sampled
+    // where they were drawn.
     if (context.asyncComputeQueue()) {
         // The plants' plans and the atmosphere's froxels run on the async
         // compute queue: what needs neither goes first, beside them (the
@@ -44,16 +49,18 @@ SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
         // else the opaque meshes; the sky itself on a frame the world
         // service remade the atmosphere's tables there). The probe stays
         // after the planned casters: its faces are lit through the shadow
-        // atlas, the plants' shadows included.
+        // pages, the plants' shadows included.
         graph_.add(std::make_unique<PassShadow>(PassShadow::Part::Unplanned));
         graph_.add(std::make_unique<PassFrameUniforms>());
         graph_.add(std::make_unique<PassWorldService>());
         graph_.add(std::make_unique<PassAtmosphere>());
         graph_.add(std::make_unique<PassEnvironment>());
         graph_.add(std::make_unique<PassShadow>(PassShadow::Part::Planned));
+        graph_.add(std::make_unique<PassShadowCopy>());
         graph_.add(std::make_unique<PassReflectionProbe>());
     } else {
         graph_.add(std::make_unique<PassShadow>());
+        graph_.add(std::make_unique<PassShadowCopy>());
         graph_.add(std::make_unique<PassFrameUniforms>());
         graph_.add(std::make_unique<PassWorldService>());
         graph_.add(std::make_unique<PassAtmosphere>());
@@ -61,6 +68,8 @@ SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
         graph_.add(std::make_unique<PassEnvironment>());
     }
     graph_.add(std::make_unique<PassOpaque>());
+    // The pages the opaque surfaces' pixels need, for the next plans.
+    graph_.add(std::make_unique<PassShadowMark>());
     graph_.add(std::make_unique<PassDepthSnapshot>());
     auto& ssao = static_cast<PassSSAO&>(graph_.add(std::make_unique<PassSSAO>()));
     graph_.add(std::make_unique<PassAoApply>(ssao));
@@ -84,6 +93,7 @@ SceneVkBridge::~SceneVkBridge() {
     device_.waitIdle();
     allocator_.destroyBuffer(readbackBuffer_);
     graph_.cleanup(gpu_);
+    shadows_.cleanup(gpu_);
     atmosphere_.cleanup(gpu_);
     meshes_.cleanup(gpu_);
     environment_.cleanup(device_, allocator_);
@@ -99,7 +109,8 @@ bool SceneVkBridge::init() {
         return false;
     }
     if (!defaults_.setup(device_, allocator_) || !targets_.setup(device_, allocator_) || !meshes_.setup(gpu_) ||
-        !environment_.setup(device_, allocator_, defaults_) || !atmosphere_.setup(gpu_) || !graph_.setup(gpu_)) {
+        !environment_.setup(device_, allocator_, defaults_) || !atmosphere_.setup(gpu_) || !shadows_.setup(gpu_) ||
+        !graph_.setup(gpu_)) {
         LOG_ERROR("SceneVkBridge: Failed setting up the scene renderer");
         return false;
     }
@@ -129,10 +140,7 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
     frame.stats = stats;
     frame.timer = &timer_;
     frame.view = SceneView::fromCamera(graph, width, height);
-    if (renderer.shadowPlan().tileCount > 0 &&
-        !targets_.ensureShadowAtlas(allocator_, static_cast<uint32_t>(renderer.shadowPlan().atlasSize))) {
-        renderer.invalidateShadowCache();
-    }
+    shadows_.beginFrame(gpu_, renderer);
     environment_.update(gpu_, cmd, renderer);
     atmosphere_.beginFrame(frame);
     meshes_.setAtmosphere(atmosphere_.active());
@@ -167,6 +175,7 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
     if (device_.submitFrame(cmd)) {
         timer_.submitted(device_.lastFrameTicket());
         graph_.submitted(gpu_, device_.lastFrameTicket());
+        shadows_.submitted(device_.lastFrameTicket());
         // The plans' read-backs count as done with the frame's graphics (which
         // waited for them), not as soon as the compute is: read a frame late
         // as on the graphics queue, not now and then the frame itself.

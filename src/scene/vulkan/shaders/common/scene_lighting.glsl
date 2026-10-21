@@ -1,5 +1,5 @@
 // Set 1 of every lit scene pipeline and the shading every lit surface shares:
-// Cook-Torrance PBR over the frame's lights, the shadow atlas, the ambient
+// Cook-Torrance PBR over the frame's lights, the shadow pages, the ambient
 // (split-sum image-based lighting from the environment, else the flat
 // ambient) with the bound reflection probe's specular, the air between the
 // eye and the surface (aerial perspective or fog) and the tile shade map. Mirrors SceneLightingUniforms (scene_vk_descriptors.h); filled by
@@ -16,38 +16,28 @@
 const float PI = 3.14159265359;
 
 #define SCENE_MAX_LIGHTS 32
-#define SCENE_MAX_SHADOW_TILES 16
 
 struct SceneLight {
     vec4 position;      // xyz camera-relative position, w type
     vec4 direction;     // xyz unit direction (light -> scene), w range (0 = unbounded)
     vec4 color;         // rgb linear, a intensity
-    vec4 shadow;        // x cos(inner), y cos(outer), z first atlas tile (-1 = none), w tile count
-    vec4 cascadeSplit;  // far view distance of each cascade (directional CSM)
+    vec4 shadow;        // x cos(inner), y cos(outer), z first shadow map (-1 = none), w map count
+    vec4 shadowReach;   // x how far from the eye it shadows (0: no limit)
 };
 
-// One atlas tile. `matrix` takes a camera-relative position straight to
-// (tile uv, [0,1] depth); `rect` places the tile in the atlas. Biases are in world units and
-// shadow texels: bias.x a constant depth bias, bias.y the normal offset,
-// bias.zw the world size of one texel (constant for ortho tiles, per metre of
-// light distance for perspective ones); depth = (near, far, ortho) of the
-// tile's projection, to turn a world-unit bias into [0,1] depth.
-struct ShadowTile {
-    mat4 matrix;
-    vec4 rect;
-    vec4 bias;
-    vec4 depth;
-};
-
+// The shadow maps (ShadowMapGpu): the sun's clipmap levels and the local
+// lights' maps, each a set of cached pages in the one pool.
+#include "common/scene_shadow_pages.glsl"
 #include "common/scene_atmosphere_params.glsl"
 
 layout(set = 1, binding = 0) uniform LightingUBO {
     vec4 sunDirection;  // the dominant directional light (decals), w = 1 when present
     vec4 sunColor;      // rgb, a = intensity
     vec4 ambientColor;  // rgb flat ambient
-    vec4 params;        // x light count, y PCF grid side (1/3/5), z 1/atlas size, w shadow tile count
+    vec4 params;        // x light count, y PCF grid side (1/3/5), z 1/the pool's side (texels), w pool columns
+    vec4 shadowView;    // x metres a pixel a metre (perspective), y metres a pixel (ortho), z finest texel, w the sway level (-1: no overlays this frame)
     SceneLight lights[SCENE_MAX_LIGHTS];
-    ShadowTile shadows[SCENE_MAX_SHADOW_TILES];
+    ShadowMapGpu shadowMaps[SP_MAX_MAPS];
     mat4 probeWorldToLocal;
     mat4 probeLocalToWorld;
     vec4 probePos;      // xyz = pos, w = enabled
@@ -60,7 +50,19 @@ layout(set = 1, binding = 0) uniform LightingUBO {
     AtmosphereGpu atm;  // the atmosphere (scene/vulkan/lighting/scene_atmosphere.h), atm.sunDir.w = on
 } lighting;
 
-layout(set = 1, binding = 1) uniform sampler2DShadow shadowAtlas;
+// The pool of shadow pages and the frame's overlays (the scratch target the
+// shadow pass drew what moves into), depth compared through binding 16's
+// sampler; and the page table, two words a virtual page: SP_RESIDENT plus
+// its physical page when it holds depth, SP_RESIDENT plus its overlay's
+// place in the scratch target when what moves was drawn over it.
+layout(set = 1, binding = 1) uniform texture2D shadowPoolImage;
+layout(set = 1, binding = 15) uniform texture2D shadowOverlayImage;
+layout(set = 1, binding = 16) uniform samplerShadow shadowCompare;
+layout(std430, set = 1, binding = 14) readonly buffer ShadowPageTable {
+    uint shadowTable[];
+};
+#define shadowPool sampler2DShadow(shadowPoolImage, shadowCompare)
+#define shadowOverlay sampler2DShadow(shadowOverlayImage, shadowCompare)
 // Bindings 2-7 are bare images read through the one shared sampler at
 // binding 8 (linear, mipmapped, clamped): a fragment stage also sees the
 // material's 5 and a custom shader's 8 samplers, and Apple GPUs allow 16.
@@ -212,126 +214,218 @@ float distanceAttenuation(float dist, float range) {
     return win * win / (dist * dist + 1.0);
 }
 
-// One atlas tile: 1 lit, 0 shadowed, 1 outside the tile's frustum. The filter
-// is a grid of hardware-bilinear compares, params.y taps on a side at
-// `spread`-texel spacing (3x3 at 1 is a 4-texel tent), clamped inside the
-// tile so a neighbour never bleeds in.
-float sampleShadow(int slot, vec3 pos, float biasWorld, float spread) {
-    ShadowTile tile = lighting.shadows[slot];
-    vec4 sc = tile.matrix * vec4(pos, 1.0);
-    if (sc.w <= 0.0) return 1.0;
-    float zEye = sc.w;
-    sc /= sc.w;
-    if (sc.x < 0.0 || sc.x > 1.0 || sc.y < 0.0 || sc.y > 1.0 || sc.z > 1.0) return 1.0;
-    float span = max(tile.depth.y - tile.depth.x, 1e-6);
-    float b01 = tile.depth.z > 0.5 ? biasWorld / span
-                                   : biasWorld * tile.depth.x * tile.depth.y / (span * zEye * zEye);
-    float ref = sc.z - tile.bias.x - b01;
-    vec2 texel = vec2(lighting.params.z);
-    vec2 base = tile.rect.xy + sc.xy * tile.rect.zw;
-    int hk = (int(lighting.params.y) - 1) / 2;
-    vec2 minUV = tile.rect.xy + texel * (float(hk) + 1.0);
-    vec2 maxUV = tile.rect.xy + tile.rect.zw - texel * (float(hk) + 1.0);
-    // spread 0: the one hardware-filtered tap.
-    if (hk <= 0 || spread == 0.0) return texture(shadowAtlas, vec3(clamp(base, minUV, maxUV), ref));
-    float s = 0.0;
-    // spread < 0: four hardware-filtered taps spanning about what the grid
-    // at -spread does, at under half its cost.
-    if (spread < 0.0) {
-        vec2 o = texel * (-spread * 0.5 * float(hk));
-        s = texture(shadowAtlas, vec3(clamp(base + vec2(-o.x, -o.y), minUV, maxUV), ref)) +
-            texture(shadowAtlas, vec3(clamp(base + vec2(o.x, -o.y), minUV, maxUV), ref)) +
-            texture(shadowAtlas, vec3(clamp(base + vec2(-o.x, o.y), minUV, maxUV), ref)) +
-            texture(shadowAtlas, vec3(clamp(base + vec2(o.x, o.y), minUV, maxUV), ref));
-        return s * 0.25;
-    }
-    vec2 step = texel * spread;
-    for (int y = -hk; y <= hk; ++y) {
-        for (int x = -hk; x <= hk; ++x) {
-            s += texture(shadowAtlas, vec3(clamp(base + vec2(x, y) * step, minUV, maxUV), ref));
-        }
-    }
-    float side = float(2 * hk + 1);
-    return s / (side * side);
+// Where `pos` falls in map `m`'s mip `mip` (a clipmap level has the one):
+// where in its page it lies (texels from the page's first, 0 to SP_PAGE),
+// the table words of its page and overlay, its [0,1] depth and its depth
+// from the light (1 in an ortho map). False when it lies off the map.
+struct ShadowHit {
+    vec2 inPage;
+    uint page;
+    uint overlay;
+    float depth;
+    float zEye;
+};
+
+bool shadowLocate(int m, int mip, vec3 pos, out ShadowHit hit) {
+    ShadowMapGpu map = lighting.shadowMaps[m];
+    vec4 sc = map.matrix * vec4(pos, 1.0);
+    if (sc.w <= 0.0) return false;
+    hit.zEye = sc.w;
+    sc.xyz /= sc.w;
+    bool clipmap = int(map.info.y) == SP_KIND_CLIPMAP;
+    int n = clipmap ? SP_WINDOW : (SP_LOCAL >> mip);
+    vec2 pc = sc.xy * float(n);
+    if (any(lessThan(pc, vec2(0.0))) || any(greaterThanEqual(pc, vec2(float(n))))) return false;
+    ivec2 p = min(ivec2(floor(pc)), ivec2(n - 1));
+    int e = clipmap ? shadowClipmapEntry(map, p) : shadowLocalEntry(map, mip, p);
+    hit.page = shadowTable[2 * e];
+    hit.overlay = shadowTable[2 * e + 1];
+    hit.inPage = (pc - vec2(p)) * float(SP_PAGE);
+    hit.depth = sc.z;
+    return true;
 }
 
-// The shadow term of tile `slot`: the lookup point pushed off the surface
-// along the normal and a slope-scaled depth bias, both sized in shadow texels
-// (about half a texel head-on, more at grazing incidence). The caster pass
-// culls light-facing faces and applies a slope offset; this is the remainder.
-float shadowFromTile(int slot, vec3 pos, float lightDist, vec3 N, float NdotL, float spread) {
-    ShadowTile tile = lighting.shadows[slot];
-    float texelW = tile.bias.z + tile.bias.w * lightDist;
+// A bordered page's shadow at `texel` (its first texel `first`, in a
+// texture of 1/`inv` texels a side): 1 lit, 0 shadowed. The filter is a
+// grid of hardware-bilinear compares, params.y taps on a side at
+// `spread`-texel spacing (3x3 at 1 is a 4-texel tent), kept inside the
+// page's bordered square: the border holds what lies past the page's edge,
+// drawn from the same casters, so the filter crosses the edge with no seam
+// and never reads the texture's next page. One function a texture (the
+// pool's pages, the overlays), so neither carries a branch a tap.
+#define SCENE_SHADOW_FILTER(NAME, TEX)                                                                       \
+    float NAME(vec2 first, vec2 texel, float inv, float ref, float spread) {                                \
+        vec2 base = texel * inv;                                                                            \
+        vec2 minUV = (first - float(SP_BORDER) + 1.0) * inv;                                                \
+        vec2 maxUV = (first + float(SP_PAGE + SP_BORDER) - 1.0) * inv;                                      \
+        int hk = (int(lighting.params.y) - 1) / 2;                                                          \
+        if (hk <= 0 || spread == 0.0) return texture(TEX, vec3(clamp(base, minUV, maxUV), ref));            \
+        if (spread < 0.0) {                                                                                 \
+            vec2 o = vec2(inv * (-spread * 0.5 * float(hk)));                                               \
+            return 0.25 * (texture(TEX, vec3(clamp(base + vec2(-o.x, -o.y), minUV, maxUV), ref)) +          \
+                           texture(TEX, vec3(clamp(base + vec2(o.x, -o.y), minUV, maxUV), ref)) +           \
+                           texture(TEX, vec3(clamp(base + vec2(-o.x, o.y), minUV, maxUV), ref)) +           \
+                           texture(TEX, vec3(clamp(base + vec2(o.x, o.y), minUV, maxUV), ref)));            \
+        }                                                                                                   \
+        float s = 0.0;                                                                                      \
+        vec2 step = vec2(inv * spread);                                                                     \
+        for (int y = -hk; y <= hk; ++y)                                                                     \
+            for (int x = -hk; x <= hk; ++x) s += texture(TEX, vec3(clamp(base + vec2(x, y) * step, minUV, maxUV), ref)); \
+        float side = float(2 * hk + 1);                                                                     \
+        return s / (side * side);                                                                           \
+    }
+// spread 0: the one hardware-filtered tap; spread < 0: four hardware-
+// filtered taps spanning about what the grid at -spread does, at under half
+// its cost.
+SCENE_SHADOW_FILTER(shadowFilterPage, shadowPool)
+SCENE_SHADOW_FILTER(shadowFilterOverlay, shadowOverlay)
+
+// Where map `m`'s mip `mip`, whose texels are `texelW` metres, looks `pos`
+// up, and the depth it compares there (`ref`). The lookup point is pushed
+// off the surface along the normal and the depth biased by the slope, both
+// sized in its texels (about half a texel head-on, more at grazing
+// incidence). The caster pass culls light-facing faces and applies a slope
+// offset; this is the remainder. False when it lies off the map.
+bool shadowProbe(int m, int mip, float texelW, vec3 pos, vec3 N, float NdotL, out ShadowHit hit, out float ref) {
+    ShadowMapGpu map = lighting.shadowMaps[m];
     float sinT = sqrt(max(1.0 - NdotL * NdotL, 0.0));
-    float nOff = tile.bias.y + texelW * (0.5 + sinT);
+    float nOff = map.bias.y + texelW * (0.5 + sinT);
     float bWorld = texelW * (0.3 + 0.5 * sinT);
-    return sampleShadow(slot, pos + N * nOff, bWorld, spread);
+    ref = 0.0;
+    if (!shadowLocate(m, mip, pos + N * nOff, hit)) return false;
+    float span = max(map.depth.y - map.depth.x, 1e-6);
+    float b01 = map.depth.z > 0.5 ? bWorld / span
+                                  : bWorld * map.depth.x * map.depth.y / (span * hit.zEye * hit.zEye);
+    // Past the far plane is behind every caster: compared at it.
+    ref = min(hit.depth - map.bias.x - b01, 1.0);
+    return true;
 }
 
-// How far inside tile `slot`'s window `pos` lies: 1 a twentieth of the window
-// in from its sides, 0 at or past them.
-float shadowTileCover(int slot, vec3 pos) {
-    vec4 sc = lighting.shadows[slot].matrix * vec4(pos, 1.0);
-    if (sc.w <= 0.0) return 0.0;
-    vec2 uv = sc.xy / sc.w;
-    vec2 e = min(uv, 1.0 - uv);
-    return smoothstep(0.0, 0.05, min(e.x, e.y));
+// A probe's cached page (its word resident) and its overlay of what moves
+// this frame (when its overlay word is). The overlay's filter is the four
+// hardware-filtered taps over the same span: what it holds sways, and its
+// edges are soft anyway.
+float shadowPageAt(ShadowHit hit, float ref, float spread) {
+    // The pool's row and column in float: exact for its few thousand pages,
+    // and no integer divide.
+    float phys = float(hit.page & SP_PHYSICAL_MASK);
+    float row = floor((phys + 0.5) / lighting.params.w);
+    vec2 first = vec2(phys - row * lighting.params.w, row) * float(SP_STRIDE) + float(SP_BORDER);
+    return shadowFilterPage(first, first + hit.inPage, lighting.params.z, ref, spread);
+}
+float shadowOverlayAt(ShadowHit hit, float ref, float spread) {
+    if ((hit.overlay & SP_RESIDENT) == 0u) return 1.0;
+    vec2 first = vec2(float(hit.overlay & SP_OVERLAY_MASK), float((hit.overlay >> SP_OVERLAY_BITS) & SP_OVERLAY_MASK));
+    return shadowFilterOverlay(first, first + hit.inPage, 1.0 / float(textureSize(shadowOverlay, 0).x), ref,
+                               -abs(spread));
 }
 
-// A cascade hands over to the next across this share of its depth. A
-// cascade's texels are coarser than the one before (each about twice), and a
-// crown's leaves take more of each other's shade from the finer: the far
-// crowns are about 2 levels darker just inside a cascade's end than just
-// past it (the meadow's far edge at noon), so the hand-over is spread over
-// tens of metres rather than made in a band that reads as a line.
-const float SHADOW_CASCADE_BLEND = 0.45;
+// A sun's clipmap levels share the light's rotation and depth range and
+// differ only in scale (each twice the one before) and where their windows
+// lie, so one transform by level 0's matrix (`first`, the same for every
+// pixel) serves the walk over levels: a level's (u, v) is level 0's scaled
+// by 2^-level plus its own offset, the normal offset sized in its texels
+// added along the normal's image.
+struct SunProbe {
+    vec3 p;       // level 0's (u, v, depth) of the point
+    vec3 n;       // and of the unit normal (a direction)
+    float sinT;
+};
 
-// Light `i`'s shadow at `pos`: the cube face of a point light, the cascade of
-// a directional one (handed to the next across the last SHADOW_CASCADE_BLEND
-// of each, where the next one's window covers it), or the single tile of
-// anything else. `spread` widens the filter (1: a 4-texel tent at pcf 3; 0:
-// one hardware-filtered tap).
+SunProbe sunProbe(int first, vec3 pos, vec3 N, float NdotL) {
+    mat4 M = lighting.shadowMaps[first].matrix;
+    SunProbe sp;
+    sp.p = (M * vec4(pos, 1.0)).xyz;
+    sp.n = (M * vec4(N, 0.0)).xyz;
+    sp.sinT = sqrt(max(1.0 - NdotL * NdotL, 0.0));
+    return sp;
+}
+
+// shadowProbe for the sun's level `level`.
+bool sunLocate(int first, int level, SunProbe sp, out ShadowHit hit, out float ref) {
+    ShadowMapGpu map0 = lighting.shadowMaps[first];
+    float scale = exp2(-float(level));
+    float texelW = map0.bias.z / scale;
+    float nOff = map0.bias.y + texelW * (0.5 + sp.sinT);
+    float bWorld = texelW * (0.3 + 0.5 * sp.sinT);
+    vec3 q = sp.p + sp.n * nOff;
+    ShadowMapGpu map = lighting.shadowMaps[first + level];
+    vec2 pc = (q.xy * scale + (map.matrix[3].xy - scale * map0.matrix[3].xy)) * float(SP_WINDOW);
+    ref = 0.0;
+    if (any(lessThan(pc, vec2(0.0))) || any(greaterThanEqual(pc, vec2(float(SP_WINDOW))))) return false;
+    ivec2 p = min(ivec2(floor(pc)), ivec2(SP_WINDOW - 1));
+    int e = shadowClipmapEntry(map, p);
+    hit.page = shadowTable[2 * e];
+    hit.overlay = shadowTable[2 * e + 1];
+    hit.inPage = (pc - vec2(p)) * float(SP_PAGE);
+    hit.depth = q.z;
+    hit.zEye = 1.0;
+    ref = min(q.z - map0.bias.x - bWorld / max(map0.depth.y - map0.depth.x, 1e-6), 1.0);
+    return true;
+}
+
+// Light `i`'s shadow at `pos`. The level (a sun's clipmap) or mip (a spot's
+// map, a point light's face) is the one whose texel is about the pixel's
+// footprint there, as the marking pass (shadow/shadow_mark.comp) asked for
+// it; while its page is not drawn yet the next coarser one that is serves
+// (a sun's next finer, when none coarser is).
+// The walk reads only table words, so whichever level serves, the page is
+// filtered once. What moves over a page this frame is in its overlay, which
+// a sun's level finer than the sway level reads from the sway level's.
+// A sun's level hands over to the next across the last SP_BLEND_BAND of it
+// (in log2 of the footprint), so no line shows where the texels double; its
+// shadow fades out over the last tenth of its reach. `spread` widens the
+// filter (1: a 4-texel tent at pcf 3; 0: one hardware-filtered tap).
 float lightShadow(int i, vec3 pos, float camDist, float lightDist, vec3 N, float NdotL, float spread) {
     SceneLight light = lighting.lights[i];
-    int slot = int(light.shadow.z);
-    if (slot < 0) return 1.0;
+    int first = int(light.shadow.z);
+    if (first < 0) return 1.0;
     int count = int(light.shadow.w);
-    int type = int(light.position.w);
-    if (type == 1 && count == 6) {
-        vec3 toFrag = pos - light.position.xyz;
-        vec3 a = abs(toFrag);
-        int face;
-        if (a.x >= a.y && a.x >= a.z) face = toFrag.x > 0.0 ? 0 : 1;
-        else if (a.y >= a.z)          face = toFrag.y > 0.0 ? 2 : 3;
-        else                          face = toFrag.z > 0.0 ? 4 : 5;
-        return shadowFromTile(slot + face, pos, lightDist, N, NdotL, spread);
-    }
-    if (type == 0 && count > 1) {
-        vec4 splits = light.cascadeSplit;
-        int c = 0;
-        if (count >= 2 && camDist > splits.x) c = 1;
-        if (count >= 3 && camDist > splits.y) c = 2;
-        if (count >= 4 && camDist > splits.z) c = 3;
-        float thisFar = splits[c];
-        float prevFar = c == 0 ? 0.0 : splits[c - 1];
-        float shadow = shadowFromTile(slot + c, pos, lightDist, N, NdotL, spread);
-        if (c < count - 1) {
-            float blendStart = thisFar - max(thisFar - prevFar, 1e-4) * SHADOW_CASCADE_BLEND;
-            float tb = smoothstep(blendStart, thisFar, camDist);
-            // The next cascade is fit to the depths past this one's end, so
-            // its window may not reach as near as the blend's start.
-            if (tb > 0.0 && tb < 1.0) tb *= shadowTileCover(slot + c + 1, pos);
-            if (tb > 0.0) shadow = mix(shadow, shadowFromTile(slot + c + 1, pos, lightDist, N, NdotL, spread), tb);
+    float footprint = lighting.shadowView.x > 0.0 ? camDist * lighting.shadowView.x : lighting.shadowView.y;
+    ShadowHit hit;
+    float ref = 0.0;
+    if (int(light.position.w) == 0) {
+        float lf = log2(max(footprint / lighting.shadowView.z, 1e-9));
+        int want = clamp(int(floor(lf)), 0, count - 1);
+        SunProbe sp = sunProbe(first, pos, N, NdotL);
+        int level = want;
+        for (; level < count; ++level)
+            if (sunLocate(first, level, sp, hit, ref) && (hit.page & SP_RESIDENT) != 0u) break;
+        if (level >= count) {
+            // Nothing as coarse is drawn (the first frames over a place): a
+            // finer page, the base pages that cover what is seen.
+            for (level = want - 1; level >= 0; --level)
+                if (sunLocate(first, level, sp, hit, ref) && (hit.page & SP_RESIDENT) != 0u) break;
+            if (level < 0) return 1.0;
         }
-        // The last cascade's far split is the light's shadow distance (1e30
-        // with none): the shadow fades out over its last tenth.
-        else shadow = mix(shadow, 1.0, smoothstep(0.9 * thisFar, thisFar, camDist));
-        return shadow;
+        float s = shadowPageAt(hit, ref, spread);
+        float t = (fract(lf) - (1.0 - SP_BLEND_BAND)) / SP_BLEND_BAND;
+        if (level == want && level + 1 < count && lf >= 0.0 && t > 0.0) {
+            ShadowHit next;
+            float nextRef;
+            if (sunLocate(first, level + 1, sp, next, nextRef) && (next.page & SP_RESIDENT) != 0u)
+                s = mix(s, shadowPageAt(next, nextRef, spread), smoothstep(0.0, 1.0, t));
+        }
+        int sway = min(int(lighting.shadowView.w), count - 1);
+        if (s > 0.0 && sway >= 0) {
+            if (level < sway && !sunLocate(first, sway, sp, hit, ref)) hit.overlay = 0u;
+            s *= shadowOverlayAt(hit, ref, spread);
+        }
+        float reach = light.shadowReach.x;
+        if (reach > 0.0) s = mix(s, 1.0, smoothstep(0.9 * reach, reach, camDist));
+        return s;
     }
-    if (type == 0 && count == 1)
-        return mix(shadowFromTile(slot, pos, lightDist, N, NdotL, spread), 1.0,
-                   smoothstep(0.9 * light.cascadeSplit.x, light.cascadeSplit.x, camDist));
-    return shadowFromTile(slot, pos, lightDist, N, NdotL, spread);
+    vec3 toFrag = pos - light.position.xyz;
+    int m = first + (count == 6 ? shadowCubeFace(toFrag) : 0);
+    float texel0 = lighting.shadowMaps[m].bias.w * lightDist;
+    int mip = clamp(int(floor(log2(max(footprint / max(texel0, 1e-9), 1e-9)))), 0, SP_LOCAL_MIPS - 1);
+    for (; mip < SP_LOCAL_MIPS; ++mip) {
+        if (shadowProbe(m, mip, texel0 * exp2(float(mip)), pos, N, NdotL, hit, ref) && (hit.page & SP_RESIDENT) != 0u)
+            break;
+    }
+    if (mip >= SP_LOCAL_MIPS) return 1.0;
+    float s = shadowPageAt(hit, ref, spread);
+    return s > 0.0 && lighting.shadowView.w >= 0.0 ? s * shadowOverlayAt(hit, ref, spread) : s;
 }
 
 // A lit surface, as every lit shader hands it to sceneDirectLight/sceneAmbient.

@@ -70,6 +70,8 @@ embed_vk_shader(common/scene_atmosphere.glsl    kVkSceneAtmosphereSrc)
 embed_vk_shader(common/scene_atmosphere_params.glsl kVkSceneAtmosphereParamsSrc)
 embed_vk_shader(common/scene_mesh_push.glsl     kVkSceneMeshPushSrc)
 embed_vk_shader(common/scene_shadow_push.glsl   kVkSceneShadowPushSrc)
+embed_vk_shader(common/scene_shadow_pages.glsl  kVkSceneShadowPagesSrc)
+embed_vk_shader(shadow/shadow_pages_layout.h    kVkShadowPagesLayoutSrc)
 embed_vk_shader(shadow/scene_shadow_cutout.glsl kVkSceneShadowCutoutSrc)
 embed_vk_shader(common/scene_vegetation.glsl    kVkSceneVegetationSrc)
 embed_vk_shader(common/scene_procedural.glsl    kVkSceneProceduralSrc)
@@ -129,6 +131,8 @@ add_library(bro_scene STATIC
     world/world_cells.cpp
     world/surface_layers.cpp
     world/world_service.cpp
+    world/shadow_pages.cpp
+    world/shadow_pages_plan.cpp
     vulkan/frame/scene_vk_device.cpp
     vulkan/frame/scene_vk_allocator.cpp
     vulkan/frame/scene_vk_pipeline.cpp
@@ -166,6 +170,9 @@ add_library(bro_scene STATIC
     vulkan/lighting/pass_environment.cpp
     vulkan/lighting/pass_reflection_probe.cpp
     vulkan/shadow/pass_shadow.cpp
+    vulkan/shadow/pass_shadow_copy.cpp
+    vulkan/shadow/pass_shadow_mark.cpp
+    vulkan/shadow/scene_shadow_pages.cpp
     vulkan/post/pass_ssao.cpp
     vulkan/post/pass_ssr.cpp
     vulkan/post/pass_dof.cpp
@@ -210,6 +217,14 @@ if(BRO_BUILD_TESTS)
     add_executable(bro_world_service_test tests/test_world_service.cpp)
     target_link_libraries(bro_world_service_test PRIVATE bro_scene bro_render bro_platform bro_util)
     target_include_directories(bro_world_service_test PRIVATE ${bro_SOURCE_DIR}/src)
+
+    # The cached shadow pages' paging policy (addressing, snapping, requests,
+    # wants and grants, the pool's reuse, invalidation, composites) and the
+    # casters' still and moving states, CPU only: its sources and bromath.
+    add_executable(bro_shadow_pages_test tests/test_shadow_pages.cpp world/shadow_pages.cpp
+                   world/shadow_pages_plan.cpp)
+    target_link_libraries(bro_shadow_pages_test PRIVATE bromath)
+    target_include_directories(bro_shadow_pages_test PRIVATE ${bro_SOURCE_DIR}/src)
 
     # The atmosphere's tables against a CPU reference march (single
     # scattering brute force, multiple scattering by iterated orders).

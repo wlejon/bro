@@ -5,7 +5,7 @@
 //
 // sceneLighting() fills the CPU half before any pass runs — SceneRenderer's
 // light list (up to 32, the implicit sun when the scene has none), the
-// ambient, the shadow plan's atlas tiles, the environment's image-based
+// ambient, the shadow plan's maps, the environment's image-based
 // lighting and the atmosphere. writeCameraSet() writes the
 // camera set then too, since the shadow pass draws with it. PassFrameUniforms
 // writes this frame's lighting set and gives every draw sampling a tile shade
@@ -20,23 +20,28 @@
 namespace bro::scene {
 class ReflectionProbeNode;
 class SceneRenderer;
+struct ShadowPlan;
 struct ShadeMapBinding;
 }
 
 namespace bro::scene::vk {
 
-/// The lights, ambient and shadow tiles of `renderer`'s current frame
+/// The lights, ambient and shadow maps of `renderer`'s current frame
 /// (SceneRenderer::frameLights / shadowPlan), with the environment's IBL and
 /// the atmosphere (gpu.environment, gpu.atmosphere, which began the frame),
 /// for a view whose eye is `eye`: every position is relative to it
 /// (camera-relative rendering, scene_view.h).
 SceneLightingUniforms sceneLighting(const SceneRenderer& renderer, const SceneGpu& gpu, const bromath::Vec3& eye);
 
+/// Shadow map `index` of `plan`, for positions relative to `eye`.
+void shadowMapUniform(const ShadowPlan& plan, int index, const bromath::Vec3& eye, SceneShadowMapUniform& out);
+
 /// The frame's camera set (frame.cameraSet), from frame.view.
 void writeCameraSet(SceneFrame& frame);
 
-/// A lighting set: `uniforms`, the shadow atlas, a probe cube, a shade map
-/// (fallbacks where `probeView` / `shadeMap` are null) and the environment.
+/// A lighting set: `uniforms`, the shadow pages (their pool and page table),
+/// a probe cube, a shade map (fallbacks where `probeView` / `shadeMap` are
+/// null) and the environment.
 VkDescriptorSet writeLightingSet(SceneGpu& gpu, const SceneLightingUniforms& uniforms, VkImageView probeView,
                                  const SceneVkImage* shadeMap);
 
@@ -61,7 +66,6 @@ class PassFrameUniforms final : public ScenePass {
 public:
     const char* name() const override { return "frame-uniforms"; }
     bool setup(SceneGpu&) override { return true; }
-    void declare(const SceneFrame& frame, PassIO& io) const override;
     void record(SceneFrame& frame) override;
     void cleanup(SceneGpu&) override {}
 };

@@ -24,29 +24,14 @@ bool SceneTargets::setup(SceneVkDevice& device, SceneVkAllocator& allocator) {
     supportedDepthResolve_ = resolve.supportedDepthResolveModes;
     depthResolve_ = depth::resolveNearest(supportedDepthResolve_);
 
-    maxImageDimension_ = limits.maxImageDimension2D;
-    return ensureShadowAtlas(allocator, 1);
+    (void)allocator;
+    return true;
 }
 
 void SceneTargets::cleanup(SceneVkAllocator& allocator) {
     destroyFrameImages(allocator);
     allocator.destroyImage(indirect);
     allocator.destroyImage(indirectMsaa);
-    allocator.destroyImage(shadowAtlas);
-}
-
-bool SceneTargets::ensureShadowAtlas(SceneVkAllocator& allocator, uint32_t size) {
-    size = std::clamp<uint32_t>(size, 1, maxImageDimension_);
-    if (shadowAtlas.isValid() && shadowAtlas.width == size) return true;
-    allocator.destroyImage(shadowAtlas);
-    if (!allocator.createImage(size, size, kDepthFormat,
-                               VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, shadowAtlas, 1, VK_SAMPLE_COUNT_1_BIT,
-                               VK_IMAGE_ASPECT_DEPTH_BIT)) {
-        LOG_ERROR("SceneTargets: Failed creating the %ux%u shadow atlas", size, size);
-        return false;
-    }
-    return true;
 }
 
 VkSampleCountFlagBits SceneTargets::supportedSamples(int requested) const {
@@ -115,7 +100,8 @@ bool SceneTargets::ensure(SceneVkAllocator& allocator, uint32_t width, uint32_t 
     constexpr VkImageUsageFlags kColor = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     constexpr VkImageUsageFlags kDepthUse = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
     bool ok = createSampled(allocator, hdr, kHdrFormat, kColor | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, false) &&
-              createAttachment(allocator, depth, kDepthFormat, kDepthUse | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+              createAttachment(allocator, depth, kDepthFormat,
+                               kDepthUse | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                                VK_SAMPLE_COUNT_1_BIT) &&
               createSampled(allocator, depthSnapshot, kDepthFormat, VK_IMAGE_USAGE_TRANSFER_DST_BIT, true) &&
               createSampled(allocator, ssrSnapshot, kHdrFormat, VK_IMAGE_USAGE_TRANSFER_DST_BIT, false) &&

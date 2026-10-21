@@ -1,8 +1,8 @@
 // Test frustum culling in the 3D scene renderer — forward passes (mesh,
 // skinned mesh, instanced mesh, gaussian splat, 3D particles, billboards)
-// and the shadow caster pass (per light/cascade tile, never the camera
+// and the shadow caster pass (per shadow-page view, never the camera
 // frustum). Exercises SceneRenderer::nodeWorldBounds/cameraCulled in
-// src/scene/scene_renderer.cpp, the per-tile caster cull in
+// src/scene/scene_renderer.cpp, the per-view caster cull in
 // vulkan/shadow/pass_shadow.cpp, SkinnedMeshNode::posedLocalBounds, and the
 // scene.setFrustumCulling / scene.cullStats / perf.stats().scene bindings.
 //
@@ -209,28 +209,26 @@ if (!probe.scene) {
         const sun = scn.createLight({ type: 'directional', direction: [0, -1, 0],
                                       color: [1, 1, 1], intensity: 3 });
         sun.castsShadow = true;
-        sun.cascadeCount = 1;   // one atlas tile -> exact shadowDrawn counts
-        // The static shadow-tile cache would legitimately skip re-rendering
-        // this tile on later identical frames (shadowDrawn 0) — disable it
-        // so every capture submits casters and the exact counts hold.
-        scn.setShadowCache({ enabled: false });
 
         // Caster: a slab 20 units above the ground, far outside the camera
         // frustum, straight-down sun -> its shadow covers the view center.
         const caster = scn.createMesh({ mesh: 'box', halfW: 2, halfH: 0.25, halfD: 2,
                                         y: 20, color: 'red' });
 
-        const withCull = scn.captureFrame();
+        // The first frame draws the shadow pages the view needs (they are
+        // kept after, so later frames draw no casters).
+        scn.captureFrame();
         let st = scn.cullStats();
         assert(st.meshDrawn === 1 && st.meshCulled === 1,
             `forward pass culls the off-screen caster (${st.meshDrawn}/${st.meshCulled})`);
-        assert(st.shadowDrawn === 1 && st.shadowCulled === 0,
-            `shadow pass keeps the off-screen caster (${st.shadowDrawn}/${st.shadowCulled})`);
+        assert(st.shadowDrawn >= 1, `shadow pass keeps the off-screen caster (${st.shadowDrawn})`);
+        for (let i = 0; i < 3; i++) scn.captureFrame();
+        const withCull = scn.captureFrame();
 
         scn.setFrustumCulling(false);
         const noCull = scn.captureFrame();
         st = scn.cullStats();
-        assert(st.meshDrawn === 2 && st.shadowDrawn === 1, 'toggle off draws caster + ground');
+        assert(st.meshDrawn === 2, 'toggle off draws caster + ground');
         const nd = diffCount(withCull, noCull, 2);
         assert(nd === 0, `shadow from off-screen caster identical with culling (diff pixels ${nd})`);
         scn.setFrustumCulling(true);

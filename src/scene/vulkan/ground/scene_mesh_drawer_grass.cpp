@@ -396,20 +396,6 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
     // pixel's samples rather than all or none.
     const uint32_t msaa = frame.gpu.targets.samples() == VK_SAMPLE_COUNT_4_BIT ? mesh_flags::kMsaa : 0u;
 
-    // The shadow tiles the near ring casts into: a directional light's first
-    // cascade, every tile of any other light.
-    uint32_t shadowMask = 0;
-    {
-        const ShadowPlan& plan = frame.renderer.shadowPlan();
-        for (int i = 0; i < ShadowPlan::kMaxLights; ++i) {
-            const int slot = plan.lightSlot[i];
-            if (slot < 0 || slot >= plan.tileCount) continue;
-            const LightNode* light = plan.tiles[slot].light;
-            const int count = light && light->kind() == LightNode::Kind::Directional ? 1 : plan.lightSlotCount[i];
-            for (int k = 0; k < count && slot + k < 32; ++k) shadowMask |= 1u << (slot + k);
-        }
-    }
-
     const float lift = eyeLift(node, view);
     TileRuns runs;
 
@@ -486,10 +472,11 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
                                                                        "grass:ring3"};
         draw.timerLabel = kRingLabels[r];
         // Only the near ring casts: its blades are the ones whose shadows read.
-        // And only into a sun's nearest cascade: a blade is narrower than a
-        // far cascade's texel, and the near ring lies inside the first.
+        // And only into the overlays of the sun's finest levels and of
+        // local lights (ShadowViewPlan::grass): a blade is narrower than a
+        // coarser level's texel, and it moves with the wind every frame.
         draw.castsShadow = r == 0 && node.castsShadow();
-        draw.shadowTileMask = shadowMask;
+        draw.shadowMotion = ShadowMotion::Grass;
         // A caster keeps at most kShadowKeep of an instance's blades, the
         // first ones (scene_grass.glsl's thinning: blade j while j + a hash
         // < kept + 0.5), so its draw stops past them: the rest ran every

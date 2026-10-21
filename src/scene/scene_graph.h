@@ -498,23 +498,11 @@ public:
 
     // --- Shadow mapping ---
 
-    /// Configure shadow atlas and quality. `atlasSize` is the side length of
-    /// the square depth texture (e.g. 4096). `pcfTaps` is 1 (single sample)
-    /// or 3 (3x3 PCF, default). Defaults are sane — call only to tune.
-    void setShadowQuality(int atlasSize, int pcfTaps) {
-        renderer_.setShadowQuality(atlasSize, pcfTaps);
-    }
-    int shadowAtlasSize() const { return renderer_.shadowAtlasSize(); }
+    /// The receivers' filter: `pcfTaps` is 1 (single sample), 3 (3x3 PCF,
+    /// default) or 5. The shadows themselves are cached pages sized to the
+    /// screen (docs/scene-world-architecture.md §8), with nothing to tune.
+    void setShadowQuality(int pcfTaps) { renderer_.setShadowQuality(pcfTaps); }
     int shadowPCFTaps() const { return renderer_.shadowPCFTaps(); }
-
-    /// Static shadow-tile cache (default on): atlas tiles whose light
-    /// projection and overlapping caster set are unchanged are reused
-    /// instead of re-rendered, and a sun's last cascade (of three or more)
-    /// is drawn every other frame. Off, every tile re-renders every frame,
-    /// for debugging and bisecting.
-    /// See SceneRenderer::setShadowCache.
-    void setShadowCache(bool on) { renderer_.setShadowCache(on); }
-    bool shadowCache() const { return renderer_.shadowCacheEnabled(); }
 
     /// Editor affordance: when true, every LightNode renders a small
     /// kind-specific marker billboard at its world position (visible in
@@ -678,8 +666,8 @@ private:
     bromath::Mat4 projectionMatrix_;
     bromath::Vec3 cameraEye_;
 
-    // Cached camera intrinsics — needed by CSM cascade fitting (which has to
-    // walk the view-frustum corners). Set by every setCamera*() entry point.
+    // Cached camera intrinsics — needed by the shadow planner (which walks
+    // the view-frustum corners). Set by every setCamera*() entry point.
     float cameraNearZ_ = 0.1f;
     float cameraFarZ_  = 100.0f;
     float cameraFovY_  = 1.0f;

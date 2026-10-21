@@ -153,8 +153,6 @@ bool registerNatives_scene(std::string* error) {
         fn("__bro_native.scene.SceneGraph_showLightIcons_set", BRO_NATIVE_FN(bro_scene_SceneGraph_showLightIcons_set), "void", {"__bro_native.scene.SceneGraph", "bool"}, error) &&
         fn("__bro_native.scene.SceneGraph_frustumCulling_get", BRO_NATIVE_FN(bro_scene_SceneGraph_frustumCulling_get), "bool", {"__bro_native.scene.SceneGraph"}, error) &&
         fn("__bro_native.scene.SceneGraph_frustumCulling_set", BRO_NATIVE_FN(bro_scene_SceneGraph_frustumCulling_set), "void", {"__bro_native.scene.SceneGraph", "bool"}, error) &&
-        fn("__bro_native.scene.SceneGraph_shadowCache_get", BRO_NATIVE_FN(bro_scene_SceneGraph_shadowCache_get), "bool", {"__bro_native.scene.SceneGraph"}, error) &&
-        fn("__bro_native.scene.SceneGraph_shadowCache_set", BRO_NATIVE_FN(bro_scene_SceneGraph_shadowCache_set), "void", {"__bro_native.scene.SceneGraph", "bool"}, error) &&
         fn("__bro_native.scene.SceneGraph_renderScale_get", BRO_NATIVE_FN(bro_scene_SceneGraph_renderScale_get), "f64", {"__bro_native.scene.SceneGraph"}, error) &&
         fn("__bro_native.scene.SceneGraph_renderScale_set", BRO_NATIVE_FN(bro_scene_SceneGraph_renderScale_set), "void", {"__bro_native.scene.SceneGraph", "f64"}, error) &&
         fn("__bro_native.scene.SceneGraph_msaa_get", BRO_NATIVE_FN(bro_scene_SceneGraph_msaa_get), "f64", {"__bro_native.scene.SceneGraph"}, error) &&
@@ -186,8 +184,7 @@ bool registerNatives_scene(std::string* error) {
         fn("__bro_native.scene.SceneGraph_setWindField", BRO_NATIVE_FN(bro_scene_SceneGraph_setWindField), "void", {"__bro_native.scene.SceneGraph", "f64[]"}, error) &&
         fn("__bro_native.scene.SceneGraph_windAt", BRO_NATIVE_FN(bro_scene_SceneGraph_windAt), "f64[]", {"__bro_native.scene.SceneGraph", "f64", "f64"}, error) &&
         fn("__bro_native.scene.SceneGraph_windState", BRO_NATIVE_FN(bro_scene_SceneGraph_windState), "f64[]", {"__bro_native.scene.SceneGraph"}, error) &&
-        fn("__bro_native.scene.SceneGraph_setShadowQuality", BRO_NATIVE_FN(bro_scene_SceneGraph_setShadowQuality), "void", {"__bro_native.scene.SceneGraph", "bool", "i32", "bool", "i32"}, error) &&
-        fn("__bro_native.scene.SceneGraph_setShadowCache", BRO_NATIVE_FN(bro_scene_SceneGraph_setShadowCache), "void", {"__bro_native.scene.SceneGraph", "bool", "bool", "bool", "i32"}, error) &&
+        fn("__bro_native.scene.SceneGraph_setShadowQuality", BRO_NATIVE_FN(bro_scene_SceneGraph_setShadowQuality), "void", {"__bro_native.scene.SceneGraph", "bool", "i32"}, error) &&
         fn("__bro_native.scene.SceneGraph_setFog", BRO_NATIVE_FN(bro_scene_SceneGraph_setFog), "void", {"__bro_native.scene.SceneGraph", "bool", "str", "f64[]", "bool", "f64", "bool", "f64", "bool", "f64", "bool", "f64", "bool", "f64"}, error) &&
         fn("__bro_native.scene.SceneGraph_setAtmosphere", BRO_NATIVE_FN(bro_scene_SceneGraph_setAtmosphere), "void", {"__bro_native.scene.SceneGraph", "f64[]"}, error) &&
         fn("__bro_native.scene.SceneGraph_setStarfield", BRO_NATIVE_FN(bro_scene_SceneGraph_setStarfield), "void", {"__bro_native.scene.SceneGraph", "bool", "i32", "bool", "f64", "bool", "f64", "f64[]"}, error) &&
@@ -394,10 +391,6 @@ bool registerSceneNatives(std::string* error) {
            natives::fn("__bro_native.scene.SceneNode_shadowBias_set", BRO_NATIVE_FN(bro_scene_SceneNode_shadowBias_set), "void", {"__bro_native.scene.SceneNode", "f64"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_shadowNormalBias_get", BRO_NATIVE_FN(bro_scene_SceneNode_shadowNormalBias_get), "f64", {"__bro_native.scene.SceneNode"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_shadowNormalBias_set", BRO_NATIVE_FN(bro_scene_SceneNode_shadowNormalBias_set), "void", {"__bro_native.scene.SceneNode", "f64"}, error) &&
-           natives::fn("__bro_native.scene.SceneNode_cascadeCount_get", BRO_NATIVE_FN(bro_scene_SceneNode_cascadeCount_get), "i32", {"__bro_native.scene.SceneNode"}, error) &&
-           natives::fn("__bro_native.scene.SceneNode_cascadeCount_set", BRO_NATIVE_FN(bro_scene_SceneNode_cascadeCount_set), "void", {"__bro_native.scene.SceneNode", "i32"}, error) &&
-           natives::fn("__bro_native.scene.SceneNode_cascadeSplitLambda_get", BRO_NATIVE_FN(bro_scene_SceneNode_cascadeSplitLambda_get), "f64", {"__bro_native.scene.SceneNode"}, error) &&
-           natives::fn("__bro_native.scene.SceneNode_cascadeSplitLambda_set", BRO_NATIVE_FN(bro_scene_SceneNode_cascadeSplitLambda_set), "void", {"__bro_native.scene.SceneNode", "f64"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_shadowDistance_get", BRO_NATIVE_FN(bro_scene_SceneNode_shadowDistance_get), "f64", {"__bro_native.scene.SceneNode"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_shadowDistance_set", BRO_NATIVE_FN(bro_scene_SceneNode_shadowDistance_set), "void", {"__bro_native.scene.SceneNode", "f64"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_setSkeleton", BRO_NATIVE_FN(bro_scene_SceneNode_setSkeleton), "void", {"__bro_native.scene.SceneNode", "dynamic"}, error) &&

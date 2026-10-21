@@ -136,8 +136,6 @@ if (!probe.scene) {
         scn.createMesh({ mesh: 'box', halfW: 0.25, halfH: 0.25, halfD: 0.25, color: 'white', x: 1.5, y: 1.5 });
         scn.createMesh({ mesh: 'box', halfW: 0.25, halfH: 0.25, halfD: 0.25, color: 'white', z: -1.5, y: 1.5 });
         const f = scn.captureFrame();
-        const st = scn.cullStats();
-        assert(st.shadowTilesTotal === 6, `a point light takes six tiles (${st.shadowTilesTotal})`);
         const litX = ground(scn, f, -2.4, 0), shadowX = ground(scn, f, 2.4, 0);
         const shadowZ = ground(scn, f, 0, -2.4);
         assert(litX > 40, `the lamp lights the ground (${litX.toFixed(1)})`);
@@ -146,7 +144,8 @@ if (!probe.scene) {
         dropScene(s);
     }
 
-    // ---- Cascades: a near and a far caster each shadow their own spot ------
+    // ---- Levels: a near and a far caster each shadow their own spot -------
+    // (the sun's clipmap: the far one at a coarser level than the near)
     {
         const s = freshScene(192);
         const scn = s.scene;
@@ -159,37 +158,37 @@ if (!probe.scene) {
         scn.createMesh({ mesh: 'box', halfW: 1, halfH: 2.5, halfD: 3, color: 'white', y: 2.5, z: -36 });
         const sun = scn.createLight({ type: 'directional', direction: [1, -1, 0], intensity: 3 });
         sun.castsShadow = true;
-        sun.cascadeCount = 4;
+        const first = scn.captureFrame();
+        for (let i = 0; i < 3; i++) scn.captureFrame();
         const f = scn.captureFrame();
-        assert(scn.cullStats().shadowTilesTotal === 4, 'four cascades take four tiles');
-        const nearLit = ground(scn, f, -1.5, -4), nearShadow = ground(scn, f, 1.5, -4);
-        const farLit = ground(scn, f, -3.5, -36), farShadow = ground(scn, f, 3.5, -36);
-        assert(nearShadow < nearLit * 0.35, `near cascade shadow (${nearShadow.toFixed(1)} vs ${nearLit.toFixed(1)})`);
-        assert(farShadow < farLit * 0.35, `far cascade shadow (${farShadow.toFixed(1)} vs ${farLit.toFixed(1)})`);
+        for (const [img, when] of [[first, 'first frame'], [f, 'settled']]) {
+            const nearLit = ground(scn, img, -1.5, -4), nearShadow = ground(scn, img, 1.5, -4);
+            const farLit = ground(scn, img, -3.5, -36), farShadow = ground(scn, img, 3.5, -36);
+            assert(nearShadow < nearLit * 0.35,
+                `near shadow, ${when} (${nearShadow.toFixed(1)} vs ${nearLit.toFixed(1)})`);
+            assert(farShadow < farLit * 0.35, `far shadow, ${when} (${farShadow.toFixed(1)} vs ${farLit.toFixed(1)})`);
+        }
         dropScene(s);
     }
 
-    // ---- Quality: the PCF grid and the atlas size change the edges ---------
+    // ---- Quality: the PCF grid changes the edges ----------------------------
     {
         const { s, scn } = setup(192);
         scn.createMesh({ mesh: 'sphere', radius: 0.8, color: 'white', y: 1.2 });
         const sun = scn.createLight({ type: 'directional', direction: [0.4, -1, 0.2], intensity: 3 });
         sun.castsShadow = true;
-        sun.cascadeCount = 1;
-        scn.setShadowQuality({ atlasSize: 4096, pcfTaps: 1 });
+        scn.setShadowQuality({ pcfTaps: 1 });
+        for (let i = 0; i < 3; i++) scn.captureFrame();
         const hard = scn.captureFrame();
-        scn.setShadowQuality({ atlasSize: 4096, pcfTaps: 5 });
+        scn.setShadowQuality({ pcfTaps: 5 });
         const soft = scn.captureFrame();
         assert(diffCount(hard, soft, 2) > 20, `PCF 5x5 softens the edge (${diffCount(hard, soft, 2)} px)`);
-        scn.setShadowQuality({ atlasSize: 256, pcfTaps: 1 });
-        const coarse = scn.captureFrame();
-        assert(diffCount(hard, coarse, 2) > 20, `a 256 atlas changes the edge (${diffCount(hard, coarse, 2)} px)`);
-        // Still a shadow at either size.
+        // A shadow either way.
         const under = scn.projectLocal(0.48, 0, 0.24);
-        assert(patchBrightness(coarse, Math.round(under.x), Math.round(under.y), 1) <
-               patchBrightness(coarse, Math.round(scn.projectLocal(-3, 0, 0).x),
+        assert(patchBrightness(soft, Math.round(under.x), Math.round(under.y), 1) <
+               patchBrightness(soft, Math.round(scn.projectLocal(-3, 0, 0).x),
                                Math.round(scn.projectLocal(-3, 0, 0).y), 1) * 0.5,
-            'the coarse atlas still shadows the core');
+            'the soft edge still shadows the core');
         dropScene(s);
     }
 }

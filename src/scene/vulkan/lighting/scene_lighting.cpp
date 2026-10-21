@@ -14,6 +14,7 @@
 #include "scene/vulkan/frame/scene_gpu_resources.h"
 #include "scene/vulkan/frame/scene_targets.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
+#include "scene/vulkan/shadow/scene_shadow_pages.h"
 
 #include <algorithm>
 #include <cmath>
@@ -48,6 +49,32 @@ void setLight(SceneLightUniform& out, const LightNode& l, const bromath::Vec3& e
 
 }  // namespace
 
+void shadowMapUniform(const ShadowPlan& plan, int index, const bromath::Vec3& eye, SceneShadowMapUniform& out) {
+    const ShadowMapPlan& map = plan.maps[index];
+    // Clip -> (map uv, depth): x,y from [-1,1] to [0,1]; the clip y flip of
+    // toVulkanClip matches the flip the shadow pass drew the pages with.
+    // The maps are relative to the plan's eye; positions here to `eye`.
+    bromath::Mat4 toUv = bromath::midentity();
+    toUv.at(0, 0) = 0.5f;
+    toUv.at(1, 1) = 0.5f;
+    toUv.at(0, 3) = 0.5f;
+    toUv.at(1, 3) = 0.5f;
+    const bromath::Mat4 m = bromath::mmul(toUv, toVulkanClip(rebased(map.relViewProj, eye - plan.origin)));
+    std::memcpy(out.matrix, m.data, sizeof(out.matrix));
+    out.info[0] = static_cast<float>(map.firstEntry);
+    out.info[1] = static_cast<float>(map.kind);
+    out.info[2] = static_cast<float>(map.originX);
+    out.info[3] = static_cast<float>(map.originY);
+    out.bias[0] = map.bias;
+    out.bias[1] = map.normalBias;
+    out.bias[2] = map.texel;
+    out.bias[3] = map.texelPerMetre;
+    out.depth[0] = map.zNear;
+    out.depth[1] = map.zFar;
+    out.depth[2] = map.ortho ? 1.0f : 0.0f;
+    out.depth[3] = static_cast<float>(map.level);
+}
+
 SceneLightingUniforms sceneLighting(const SceneRenderer& renderer, const SceneGpu& gpu, const bromath::Vec3& eye) {
     SceneLightingUniforms light{};
     const ShadowPlan& plan = renderer.shadowPlan();
@@ -60,10 +87,10 @@ SceneLightingUniforms sceneLighting(const SceneRenderer& renderer, const SceneGp
     for (int i = 0; i < count; ++i) {
         const LightNode& l = *lights[i];
         setLight(light.lights[i], l, eye);
-        if (i < ShadowPlan::kMaxLights && plan.lightSlot[i] >= 0 && plan.lightSlotCount[i] > 0) {
-            light.lights[i].shadow[2] = static_cast<float>(plan.lightSlot[i]);
-            light.lights[i].shadow[3] = static_cast<float>(plan.lightSlotCount[i]);
-            std::memcpy(light.lights[i].cascadeSplit, plan.cascadeSplit[i], sizeof(light.lights[i].cascadeSplit));
+        if (i < ShadowPlan::kMaxLights && plan.lightMap[i] >= 0 && plan.lightMapCount[i] > 0 && gpu.shadows.ready()) {
+            light.lights[i].shadow[2] = static_cast<float>(plan.lightMap[i]);
+            light.lights[i].shadow[3] = static_cast<float>(plan.lightMapCount[i]);
+            light.lights[i].shadowReach[0] = plan.lightReach[i];
         }
         if (l.kind() != LightNode::Kind::Directional) continue;
         if (!sun || (l.castsShadow() && !sun->castsShadow())) sun = &l;
@@ -89,35 +116,20 @@ SceneLightingUniforms sceneLighting(const SceneRenderer& renderer, const SceneGp
     light.ambientColor[2] = amb[2];
     light.ambientColor[3] = 1.0f;
 
-    const int tiles = std::min(plan.tileCount, kSceneMaxShadowTiles);
     light.params[0] = static_cast<float>(count);
     light.params[1] = static_cast<float>(plan.pcfTaps);
-    light.params[2] = plan.atlasSize > 0 ? 1.0f / static_cast<float>(plan.atlasSize) : 0.0f;
-    light.params[3] = static_cast<float>(tiles);
-
-    // Clip -> (tile uv, depth): x,y from [-1,1] to [0,1]; the clip y flip of
-    // toVulkanClip matches the flip the shadow pass rendered the tile with.
-    // The tiles were fit relative to the plan's eye; positions here are
-    // relative to `eye`.
-    bromath::Mat4 toUv = bromath::midentity();
-    toUv.at(0, 0) = 0.5f;
-    toUv.at(1, 1) = 0.5f;
-    toUv.at(0, 3) = 0.5f;
-    toUv.at(1, 3) = 0.5f;
-    for (int t = 0; t < tiles; ++t) {
-        const ShadowTilePlan& tile = plan.tiles[t];
-        SceneShadowTileUniform& out = light.shadows[t];
-        const bromath::Mat4 m = bromath::mmul(toUv, toVulkanClip(rebased(tile.relViewProj, eye - plan.origin)));
-        std::memcpy(out.matrix, m.data, sizeof(out.matrix));
-        std::memcpy(out.rect, tile.rect, sizeof(out.rect));
-        out.bias[0] = tile.bias;
-        out.bias[1] = tile.normalBias;
-        out.bias[2] = tile.texelConst;
-        out.bias[3] = tile.texelPerMetre;
-        out.depth[0] = tile.zNear;
-        out.depth[1] = tile.zFar;
-        out.depth[2] = tile.ortho ? 1.0f : 0.0f;
-    }
+    light.params[2] = gpu.shadows.ready() ? 1.0f / static_cast<float>(gpu.shadows.pool.width) : 0.0f;
+    light.params[3] = static_cast<float>(plan.poolColumns);
+    light.shadowView[0] = plan.pixelAngle;
+    light.shadowView[1] = plan.orthoPixel;
+    light.shadowView[2] = plan.finestTexel;
+    // The sway level, or -1 when the frame draws no overlay (lit shaders
+    // then read none).
+    bool overlays = false;
+    for (int v = 0; v < plan.viewCount; ++v) overlays = overlays || plan.views[v].dynamic;
+    light.shadowView[3] = overlays ? static_cast<float>(plan.swayLevel) : -1.0f;
+    for (int m = 0; m < plan.mapCount && m < kSceneMaxShadowMaps; ++m)
+        shadowMapUniform(plan, m, eye, light.shadowMaps[m]);
     gpu.environment.fillLighting(light, renderer);
     gpu.atmosphere.fill(light.atm, eye);
     return light;
@@ -139,19 +151,21 @@ VkDescriptorSet writeLightingSet(SceneGpu& gpu, const SceneLightingUniforms& uni
     VkDescriptorSet set = gpu.device.frameSet(d.lightingLayout);
     SceneVkDescriptorWriter writer;
     writer.writeBuffer(0, ubo.buffer, ubo.range, ubo.offset);
-    writer.writeImage(1, gpu.targets.shadowAtlas.view, VK_NULL_HANDLE);   // immutable compare sampler
+    // The shadow pages' pool and overlays, through binding 16's compare sampler.
+    writer.writeImage(1, gpu.shadows.poolView(), VK_NULL_HANDLE, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                      VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
+    writer.writeImage(15, gpu.shadows.scratchView(), VK_NULL_HANDLE, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                      VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
     writer.writeImage(2, probeView ? probeView : d.cube.view, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                       VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
     writer.writeImage(3, shadeMap ? shadeMap->view : d.white.view, VK_NULL_HANDLE,
                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
     gpu.environment.writeBindings(writer, d);
     gpu.atmosphere.writeBindings(writer);
+    const VkDescriptorBufferInfo table = gpu.shadows.table();
+    writer.writeBuffer(14, table.buffer, table.range, table.offset, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
     writer.updateSet(gpu.device.device(), set);
     return set;
-}
-
-void PassFrameUniforms::declare(const SceneFrame& frame, PassIO& io) const {
-    io.sample(frame.gpu.targets.shadowAtlas);
 }
 
 namespace {

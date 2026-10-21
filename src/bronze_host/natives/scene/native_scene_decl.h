@@ -406,14 +406,6 @@ bool bro_scene_SceneGraph_frustumCulling_get(void* self);
 //   registered at __bro_native.scene.SceneGraph_frustumCulling_set
 void bro_scene_SceneGraph_frustumCulling_set(void* self, bool v);
 
-// bro.scene.SceneGraph.prototype.shadowCache read
-//   registered at __bro_native.scene.SceneGraph_shadowCache_get
-bool bro_scene_SceneGraph_shadowCache_get(void* self);
-
-// bro.scene.SceneGraph.prototype.shadowCache write
-//   registered at __bro_native.scene.SceneGraph_shadowCache_set
-void bro_scene_SceneGraph_shadowCache_set(void* self, bool v);
-
 // bro.scene.SceneGraph.prototype.renderScale read
 //   registered at __bro_native.scene.SceneGraph_renderScale_get
 double bro_scene_SceneGraph_renderScale_get(void* self);
@@ -559,13 +551,8 @@ void bro_scene_SceneGraph_windState(void* self, bronze_native_buffer* out);
 
 // bro.scene.SceneGraph.prototype.setShadowQuality
 //   registered at __bro_native.scene.SceneGraph_setShadowQuality
-//   opts_atlasSize_given, opts_pcfTaps_given: false when the value was not passed (no declared default)
-void bro_scene_SceneGraph_setShadowQuality(void* self, bool opts_atlasSize_given, int32_t opts_atlasSize, bool opts_pcfTaps_given, int32_t opts_pcfTaps);
-
-// bro.scene.SceneGraph.prototype.setShadowCache
-//   registered at __bro_native.scene.SceneGraph_setShadowCache
-//   opts_enabled_given, opts_staticResolution_given: false when the value was not passed (no declared default)
-void bro_scene_SceneGraph_setShadowCache(void* self, bool opts_enabled_given, bool opts_enabled, bool opts_staticResolution_given, int32_t opts_staticResolution);
+//   opts_pcfTaps_given: false when the value was not passed (no declared default)
+void bro_scene_SceneGraph_setShadowQuality(void* self, bool opts_pcfTaps_given, int32_t opts_pcfTaps);
 
 // bro.scene.SceneGraph.prototype.setFog
 //   registered at __bro_native.scene.SceneGraph_setFog
@@ -930,10 +917,6 @@ double bro_scene_SceneNode_shadowBias_get(void* self);
 void bro_scene_SceneNode_shadowBias_set(void* self, double v);
 double bro_scene_SceneNode_shadowNormalBias_get(void* self);
 void bro_scene_SceneNode_shadowNormalBias_set(void* self, double v);
-int32_t bro_scene_SceneNode_cascadeCount_get(void* self);
-void bro_scene_SceneNode_cascadeCount_set(void* self, int32_t v);
-double bro_scene_SceneNode_cascadeSplitLambda_get(void* self);
-void bro_scene_SceneNode_cascadeSplitLambda_set(void* self, double v);
 double bro_scene_SceneNode_shadowDistance_get(void* self);
 void bro_scene_SceneNode_shadowDistance_set(void* self, double v);
 void bro_scene_SceneNode_setSkeleton(void* self, uint64_t skelVal);

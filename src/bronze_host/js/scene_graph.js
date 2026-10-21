@@ -46,7 +46,6 @@
     accessor(SceneGraph.prototype, "cameraZoom", function () { return __bro_native.scene.SceneGraph_cameraZoom_get(this); }, function (v) { __bro_native.scene.SceneGraph_cameraZoom_set(this, v); });
     accessor(SceneGraph.prototype, "showLightIcons", function () { return __bro_native.scene.SceneGraph_showLightIcons_get(this); }, function (v) { __bro_native.scene.SceneGraph_showLightIcons_set(this, v); });
     accessor(SceneGraph.prototype, "frustumCulling", function () { return __bro_native.scene.SceneGraph_frustumCulling_get(this); }, function (v) { __bro_native.scene.SceneGraph_frustumCulling_set(this, v); });
-    accessor(SceneGraph.prototype, "shadowCache", function () { return __bro_native.scene.SceneGraph_shadowCache_get(this); }, function (v) { __bro_native.scene.SceneGraph_shadowCache_set(this, v); });
     accessor(SceneGraph.prototype, "renderScale", function () { return __bro_native.scene.SceneGraph_renderScale_get(this); }, function (v) { __bro_native.scene.SceneGraph_renderScale_set(this, v); });
     accessor(SceneGraph.prototype, "msaa", function () { return __bro_native.scene.SceneGraph_msaa_get(this); }, function (v) { __bro_native.scene.SceneGraph_msaa_set(this, v); });
     accessor(SceneGraph.prototype, "activeCamera", function () { return canon(__bro_native.scene.SceneGraph_activeCamera_get(this)); }, function (v) { if (v === null || v === undefined) __bro_native.scene.SceneGraph_clearActiveCamera(this); else __bro_native.scene.SceneGraph_activeCamera_set(this, v); });
@@ -102,8 +101,6 @@
             if (d_opts.outerAngle !== undefined) node.outerAngle = d_opts.outerAngle;
             if (d_opts.shadowBias !== undefined) node.shadowBias = d_opts.shadowBias;
             if (d_opts.shadowNormalBias !== undefined) node.shadowNormalBias = d_opts.shadowNormalBias;
-            if (d_opts.cascadeCount !== undefined) node.cascadeCount = d_opts.cascadeCount;
-            if (d_opts.cascadeSplitLambda !== undefined) node.cascadeSplitLambda = d_opts.cascadeSplitLambda;
             if (d_opts.shadowDistance !== undefined) node.shadowDistance = d_opts.shadowDistance;
         }
         return node;
@@ -277,16 +274,9 @@
             time: r[10], now: { direction: [r[11], 0, r[12]], speed: r[13] },
         };
     });
-    fn(SceneGraph.prototype, "setShadowQuality", function setShadowQuality(opts, pcfTaps) {
-        // setShadowQuality({ atlasSize, pcfTaps }) or the positional
-        // setShadowQuality(atlasSize, pcfTaps) every workshop app calls.
-        let d_opts = opts === undefined || opts === null ? {} : opts;
-        if (typeof opts === "number") d_opts = { atlasSize: opts, pcfTaps: pcfTaps };
-        __bro_native.scene.SceneGraph_setShadowQuality(this, d_opts.atlasSize !== undefined, d_opts.atlasSize === undefined ? 0 : d_opts.atlasSize, d_opts.pcfTaps !== undefined, d_opts.pcfTaps === undefined ? 0 : d_opts.pcfTaps);
-    });
-    fn(SceneGraph.prototype, "setShadowCache", function setShadowCache(opts) {
-        const d_opts = opts === undefined ? {} : opts;
-        __bro_native.scene.SceneGraph_setShadowCache(this, d_opts.enabled !== undefined, d_opts.enabled === undefined ? false : d_opts.enabled, d_opts.staticResolution !== undefined, d_opts.staticResolution === undefined ? 0 : d_opts.staticResolution);
+    fn(SceneGraph.prototype, "setShadowQuality", function setShadowQuality(opts) {
+        const d_opts = opts === undefined || opts === null ? {} : opts;
+        __bro_native.scene.SceneGraph_setShadowQuality(this, d_opts.pcfTaps !== undefined, d_opts.pcfTaps === undefined ? 0 : d_opts.pcfTaps);
     });
     fn(SceneGraph.prototype, "setFog", function setFog(opts) {
         const d_opts = opts == null ? {} : opts;   // null, like {}, turns fog off

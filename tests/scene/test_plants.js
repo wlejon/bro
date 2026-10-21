@@ -130,11 +130,19 @@ if (!scn) {
         if (d > 12 && off < half - 0.01) surely++;
         if (off < half + Math.asin(Math.min(1, (reach + 0.5) / Math.max(d, 1e-3))) + 0.01) maybe++;
     }
+    // The shadow pages that hold them are drawn in the first frames and then
+    // kept, so their casters are counted in those frames.
+    let cast = 0;
+    flush();
+    for (let i = 0; i < 3; i++) {
+        advanceTime(16);
+        cast = Math.max(cast, plants.plantStats().shadowElements);
+    }
     st = drawn();
     assert(st.plants === 200000, `200k plants (${st.plants})`);
     assert(st.visible >= surely && st.visible <= maybe,
            `the camera draws the plants in its field (${surely} <= ${st.visible} <= ${maybe})`);
     assert(st.elements >= st.visible && st.elements < st.visible * 200,
            `each drawn with at least one element, the far ones few (${st.elements} for ${st.visible})`);
-    assert(st.shadowElements > 0, `the many cast (${st.shadowElements})`);
+    assert(cast > 0, `the many cast (${cast})`);
 }
