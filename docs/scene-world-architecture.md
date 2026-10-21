@@ -432,8 +432,8 @@ early and built for every altitude and time of day.
   shines too small to draw (a city from orbit), and clustered lights past the
   forward path's 32.
 
-The plants' crown-depth falloff and the turf's tuned darkening stand in for
-the probes today; they go when the probes land.
+The probes (below) light every lit surface's ambient; the plants' own crown
+occlusion is left only below their resolution.
 
 ### Design: the probe grid
 
@@ -445,8 +445,8 @@ darkened by a tuned map the app hands in.
 - **The probes follow the ground.** A cascade is a square of columns
   around the eye, each column a few probes at fixed heights above the
   ground under it (a forest's light changes with height above the ground,
-  not with height above the sea). Cascades double their spacing a few times
-  over (2 m near the eye, out to kilometres), and a cascade moves with the
+  not with height above the sea). Each cascade's spacing is a few times the
+  last's (2 m near the eye, out to kilometres), and a cascade moves with the
   eye in whole columns, its storage wrapping (a clipmap), so a step forward
   only refreshes the new edge. A point finds its cascade by distance and
   blends to the next near the edge; inside one, its column by x, z and its
@@ -496,6 +496,63 @@ Built in this order, each verified before the next: the density volume
 mesh it was drawn from), the probes (a probe in the open within a few
 percent of the open sky's irradiance, a known crown's shade against a CPU
 integral), then the shaders' switch, judged in stills and in motion.
+
+### As built: the probe grid
+
+On when `SceneGraph.setProbeGrid(true)` (biomes turns it on); off, the
+ambient is the open sky's as before.
+
+- **The CPU half** (`world/probe_grid`, testable without a GPU): 4 cascades
+  of 32 × 32 columns, 8 layers, 2 m apart in the finest and each the last's
+  spacing times 4 (2, 8, 32, 128 m). The corner snaps so the eye stays in
+  the middle column; storage wraps (column i at `(corner + i) mod 32`). A
+  column's layers stand 0.25 m over its ground up to the canopy's top
+  (`max(8, 1.15 × the tallest crown)`), spread by the power 1.6. The
+  columns a move brings in are fresh boxes (required, traced afresh), cut
+  into slices' rows so every job costs about a slice's; the rest refresh a
+  slice (2 rows) at a time.
+- **The world it traces** (`lighting/scene_probe_grid`), one required
+  world-service job a cascade when it moves, the canopy changes or the sun
+  turns a quarter degree: the ground's heights (128² a cascade, the still
+  opaque casters drawn straight down through the shared caster drawer), the
+  canopy (64 × 64 × 32 RGBA16F of extinction and albedo, every plants node's
+  crowns splatted from their records) and the sun's transmittance through
+  it (R16F).
+- **The probes** (`lighting/probe_trace.comp`, `probe_blend.comp`): l ≤ 1
+  SH of radiance in three RGBA16F 3D images (32 × 32 × 32, a colour channel
+  each). A workgroup traces a probe's rays (256 fresh, 128 a refresh, a
+  Fibonacci set turned at random) through the finest cascade's world at each
+  step: the canopy scatters the sun through its transmittance and the
+  probes' mean light, the ground sends back its albedo (the atmosphere's
+  ground, else the renderer's ground bounce) of the sun and of the probes
+  over it, an escaping ray takes the sky. The traces go to a buffer and a
+  second dispatch blends them in (fresh replaces, a refresh blends a half),
+  so a trace reads only what the probes held before it.
+- **The refresh cadence.** A slice of the finest cascade is offered a second
+  after its last refresh, doubling each coarser one; the slices start spread
+  over that period, so they come due one or two at a time. A slice just due
+  is a quarter pixel wrong, growing with its age (halved each cascade): under
+  a shadow page still building (half a pixel), so light that has probably
+  not changed waits for what visibly has. At a pixel a second the refreshes
+  outranked the shadow pages and left the meadow's tree shadows undrawn.
+- **The lit shaders** (`common/scene_lighting.glsl`, lighting set bindings
+  17–21: a repeat sampler, the SH, the heights): `sceneAmbientIrradiance` is
+  the probes' irradiance along the normal (each cascade blended into the next
+  over its outer 1–4 columns), else the open sky's; the ambient's specular is
+  scaled by how much of the open sky the probes see along the reflection. A
+  plant's crown keeps its own occlusion only where the crown is smaller than
+  the probes' spacing there (`sceneProbeSpacing`), a quarter for the leaves'
+  crowding where they resolve it.
+
+Measured: `bro_probe_grid_test` (40 checks) and `bro_probe_grid_gpu_test`
+(the world against its scene; under a black crown 32 probes within 0.04 of a
+CPU march and its shade within 2%, the open sky within 1%, sunlit ground's
+bounce within 1.5%). On biomes, interleaved: the forest bands 5–11% darker,
+the sky bands 2–6% brighter by the exposure, the meadow unchanged; +0.25–0.4
+ms a frame under capture.js's 30 Hz clock (a 512-probe slice, about 0.3 ms,
+nearly every frame; at 360 fps one frame in twelve), no frame over 2.78 ms;
+the motion oracle (pan, a turning sun) shows no refresh step, the frames
+between the shadow pages' steps changing 0.027 a point either way.
 
 ### As built: the atmosphere and exposure
 
@@ -796,8 +853,8 @@ src/scene/
     ground/         the ground and its cover: turf, grass, herbs
     foliage/        the plants node's plan, poses and draws; the far field
     lighting/       scene lighting, environment and sky, the atmosphere's
-                    tables, reflection probes; later probes, volumetrics,
-                    clustered lights
+                    tables, reflection probes, the probe grid; later
+                    volumetrics, clustered lights
     shadow/         the shadow pages: marked, drawn, copied into the pool
     post/           post-fx, exposure, SSAO, SSR, DOF
     terrain/        (planned) planet terrain tiles, the clipmap drawn from
@@ -827,7 +884,7 @@ the motion oracle for anything temporal. Each step removes what it replaces.
 | 4 | Done: atmosphere tables and exposure (§7) | one sky from ground to orbit: the LUT path within 7% of a reference march by day (14% in a clear day's haze), 0.13 ms where the per-pixel march took 0.61; metered exposure in EV, a sunlit field at middle grey; biomes on it under a clear day's air, 0.10–0.24 ms over its HDR panorama, its sky bands gone | +3.1k |
 | 5a | Done: cached shadow pages (§8) | plant shadows off the per-frame cost: away from eye level 0.17–0.21 ms less than the atlas, the canopy's dappled shadows at a texel a pixel; at eye level 0.08–0.19 ms more (the lookup), and a turning sun's pages built behind the shown ones | +2.5k |
 | 6 | Done: the ground and its cover as one surface (§9), the cover planned on the GPU and drawn before the ground | the cover's hidden work gone: 0.36–0.42 ms off every eye-level shot, all of them under 2.0 ms; what is left is the far fans' lighting and overdraw, not worth its machinery yet | +0.5k |
-| 7 | The probe grid (§7), with the canopy's density it traces against | forests, valleys and slopes lit as places; the stand-in falloffs gone | ~5k |
+| 7 | Done: the probe grid (§7), with the canopy's density it traces against | forests lit as places: a crown's shade within 2% of a CPU march, the open sky within 1%, the ground's bounce within 1.5%; biomes' forest 5–11% darker under its crowns, the meadow unchanged; +0.25–0.4 ms a frame at a 30 Hz clock (a refresh slice nearly every frame), no frame over 2.78 ms, no refresh step in motion | +2.9k |
 | 8 | Placement per cell (§10) | a world of any size placed around the eye at a flat cost | ~3k |
 | 9 | The planet (§11), with the terrain's height tiles and their horizons (§7) | ground to orbit, one place, the frame following the pixels; the sun's shadow and the sky's occlusion past the pages | ~5k |
 
