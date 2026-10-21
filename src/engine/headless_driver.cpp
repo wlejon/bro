@@ -452,6 +452,9 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
         }
 
         if (!scriptPath.empty()) {
+            if (!bro::bronze_host::isWebHostGlobalsInstalled()) {
+                bro::bronze_host::installWebHostGlobals(*engine);
+            }
             bool ok = bro::bronze_host::evalScriptFile(*engine, scriptPath);
             drainAppReloads();
             if (!ok || bro::bronze_host::hasTestFailure() || engine->hasTestFailure()) {

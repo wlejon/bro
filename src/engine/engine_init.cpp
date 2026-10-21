@@ -755,7 +755,12 @@ std::vector<Engine::PageScriptUnit> Engine::pageScriptUnits() const {
     std::vector<PageScriptUnit> units;
     if (displayMode_ == DisplayMode::Server && !manifest_.htmlPath.empty()) return units;
     std::string classic = combinedClassicScripts();
-    if (!classic.empty()) units.push_back({std::move(classic), manifest_.htmlPath, false});
+    if (!classic.empty()) {
+        std::string unitName = !manifest_.htmlPath.empty()
+            ? manifest_.htmlPath
+            : (!manifest_.scripts.empty() ? manifest_.scripts.front().path : appDir_);
+        units.push_back({std::move(classic), unitName, false});
+    }
     std::vector<std::string> moduleFiles;
     for (const auto& script : manifest_.scripts) {
         if (!script.isModule) continue;

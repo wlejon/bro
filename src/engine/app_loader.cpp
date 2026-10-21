@@ -106,10 +106,20 @@ std::string AppLoader::resolvePath(const std::string& base,
 
 AppManifest AppLoader::loadApp(const std::string& appDir, const util::AssetMounts* mounts) {
     AppManifest manifest;
+    std::error_code ec;
+    if (appDir.size() >= 3 && appDir.substr(appDir.size() - 3) == ".js" &&
+        std::filesystem::is_regular_file(appDir, ec)) {
+        std::filesystem::path p(appDir);
+        manifest.basePath = p.has_parent_path() ? p.parent_path().string() : std::string(".");
+        manifest.scripts.push_back({appDir, {}, /*isModule=*/false});
+        manifest.htmlPath.clear();
+        LOG_INFO("AppLoader: loaded standalone script '%s'", appDir.c_str());
+        return manifest;
+    }
+
     manifest.basePath = appDir;
     manifest.htmlPath = resolvePath(appDir, "index.html", mounts);
 
-    std::error_code ec;
     std::string html;
     if (std::filesystem::exists(manifest.htmlPath, ec)) {
         html = loadFile(manifest.htmlPath);
