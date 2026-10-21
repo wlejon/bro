@@ -512,13 +512,25 @@ ambient is the open sky's as before.
   columns a move brings in are fresh boxes (required, traced afresh), cut
   into slices' rows so every job costs about a slice's; the rest refresh a
   slice (2 rows) at a time.
-- **The world it traces** (`lighting/scene_probe_grid`), one required
-  world-service job a cascade when it moves, the canopy changes or the sun
-  turns a quarter degree: the ground's heights (128² a cascade, the still
-  opaque casters drawn straight down through the shared caster drawer), the
-  canopy (64 × 64 × 32 RGBA16F of extinction and albedo, every plants node's
-  crowns splatted from their records) and the sun's transmittance through
-  it (R16F).
+- **The world it traces** (`lighting/scene_probe_grid`): the ground's
+  heights (128² a cascade, the still opaque casters drawn straight down
+  through the shared caster drawer), the canopy (64 × 64 × 32 RGBA16F of
+  extinction and albedo, every plants node's crowns splatted from their
+  records) and the sun's transmittance through it (R16F). It is stored
+  wrapped like the probes (`pgHeightStored`, `pgVoxelStored`), so it scrolls:
+  what is stale is boxes of a cascade's columns (`ProbeGrid::staleBoxes`),
+  the strips a move brought in, the columns over a change of the canopy
+  widened away from the sun as far as its shade reaches under the layers'
+  top, every column when the sun turns a quarter degree or the top moves.
+  A cascade's boxes never overlap (one that would takes in those it
+  overlaps; past 8 they merge into one), so the splat deposits only into
+  its box's voxels and the resolve zeroes the sums it reads. All of it is
+  one required world-service job, a dispatch a box and stage, recorded
+  ahead of the traces in the same stream: a cascade's traces are offered
+  the frame its world is remade (a cascade moving every frame, the finest
+  past 720 m/s at 360 fps, would otherwise trace nothing until it stood
+  still, and then its whole square at once). A trace's ray under a hole's
+  base going down ends there (no ground, no canopy under it).
 - **The probes** (`lighting/probe_trace.comp`, `probe_blend.comp`): l ≤ 1
   SH of radiance in three RGBA16F 3D images (32 × 32 × 32, a colour channel
   each). A workgroup traces a probe's rays (256 fresh, 128 a refresh, a
@@ -545,15 +557,29 @@ ambient is the open sky's as before.
   the probes' spacing there (`sceneProbeSpacing`), a quarter for the leaves'
   crowding where they resolve it.
 
-Measured: `bro_probe_grid_test` (40 checks) and `bro_probe_grid_gpu_test`
-(the world against its scene; under a black crown 32 probes within 0.04 of a
+Measured: `bro_probe_grid_test` (49 checks) and `bro_probe_grid_gpu_test`
+(the world against its scene, every cascade's again after a move scrolls
+it; under a black crown 32 probes within 0.04 of a
 CPU march and its shade within 2%, the open sky within 1%, sunlit ground's
 bounce within 1.5%). On biomes, interleaved: the forest bands 5–11% darker,
 the sky bands 2–6% brighter by the exposure, the meadow unchanged; +0.25–0.4
 ms a frame under capture.js's 30 Hz clock (a 512-probe slice, about 0.3 ms,
 nearly every frame; at 360 fps one frame in twelve), no frame over 2.78 ms;
 the motion oracle (pan, a turning sun) shows no refresh step, the frames
-between the shadow pages' steps changing 0.027 a point either way.
+between the shadow pages' steps changing 0.027 a point either way. Flown
+over a placed forest (2 km range) at 360 fps steps, interleaved against
+remaking whole cascades: at 300 m/s the world's remake 0.20 → 0.11 ms a
+frame, the frame 1.28 → 1.23 ms mean (p99 1.9 both); at 1,000 m/s the
+remake 0.53 → 0.27, the frame's p99 9.4 → 2.2 ms (the finest cascade's
+traces were piling up, then its whole square traced in one frame), its mean
+1.55 → 1.73 ms, the finest cascade now traced as it moves (0.76 ms a frame
+of fresh probes at that speed). Stills: the scrolled world alone is the
+remade one's to within the runs' noise; with refreshes always granted (a
+20 ms target) the glade's light is the same either way. Not yet: a frame
+near its target (the glade and the meadow, 2.54 ms) leaves the world
+service less than a refresh slice's cost (about 0.3 ms against the 0.1 ms
+floor), so their probes keep their first fresh trace however old it grows;
+which frame that trace fell in moves their stills 2–3% in some bands.
 
 ### As built: the atmosphere and exposure
 
@@ -841,8 +867,8 @@ are data, so a biome is a table, not code.
 - **Invalidation by cell:** the node keeps a log of changed boxes by
   generation (`changesSince`). The shadow pages redraw only the pages over
   a changed box within `shadowRange`; the probe grid remakes only the
-  cascades whose extent it overlaps, and its splat reads only the plants of
-  the cells over the cascades it remakes.
+  columns of each cascade over it (and those its shade falls on), its
+  splat reading only the plants of the cells over them.
 - **What was measured** (4090, 2560×1364): biomes' 1.4 km world, now its
   rules (its own fields as FastNoise trees), places 478 leaves (3,433 jobs
   over the 2 km range, 0.11 ms each) in 9 frames, 300 ms; its shots cost
@@ -851,9 +877,8 @@ are data, so a biome is a table, not code.
   the main thread's own time is 0.25 ms a frame flown at 0, 300 or
   1,000 m/s for up to 10 km, the resident set flat; GPU 1.9 ms mean in
   flight against 2.2 for the same density hand-placed over the whole flight.
-  What spikes in flight (2–4 ms every ~8 frames at 300 m/s) is the probe
-  grid's: a cascade remakes its whole world each time its corner moves,
-  with or without placement. tests/scene/test_plants.js flies 20 km and
+  The spikes that flight showed were the probe grid's whole-cascade remakes,
+  since scrolled (§7's "As built"). tests/scene/test_plants.js flies 20 km and
   comes back; bro_plant_placement_test checks the draws, the streaming and
   the store.
 - **Not yet:** herbs and rocks are still the grass node's own density
