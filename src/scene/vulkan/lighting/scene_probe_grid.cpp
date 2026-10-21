@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <utility>
 
 namespace bro::scene::vk {
 
@@ -214,7 +215,7 @@ void SceneProbeGrid::beginFrame(SceneFrame& frame) {
         sunRef_ = sun;
         ++sunGeneration_;
     }
-    grid_.setSunGeneration(sunGeneration_);
+    grid_.setSun(sunRef_.x, sunRef_.y, sunRef_.z, sunGeneration_);
 
     const bromath::Vec3 eye = frame.view.eye;
     grid_.place(eye.x, eye.z);
@@ -332,7 +333,7 @@ void SceneProbeGrid::computeBarrier(VkCommandBuffer cmd) {
                              VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
 }
 
-void SceneProbeGrid::capture(SceneFrame& frame, VkCommandBuffer cmd, uint32_t mask) {
+void SceneProbeGrid::capture(SceneFrame& frame, VkCommandBuffer cmd, const std::vector<ProbeBox>& boxes) {
     SceneFrameGraph::transition(cmd, captureDepth_, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
     VkRenderingAttachmentInfo depth{};
     depth.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
@@ -351,9 +352,13 @@ void SceneProbeGrid::capture(SceneFrame& frame, VkCommandBuffer cmd, uint32_t ma
 
     const bromath::Vec3 eye = frame.view.eye;
     const float R = kCaptureRange;
-    for (int c = 0; c < PG_MAX_CASCADES; ++c) {
-        if ((mask & (1u << c)) == 0) continue;
-        const VkRect2D rect{{0, c * PG_HEIGHT}, {PG_HEIGHT, PG_HEIGHT}};
+    constexpr int kTexels = PG_HEIGHT / PG_COLUMNS;
+    for (const ProbeBox& b : boxes) {
+        const int c = b.cascade;
+        // The cascade's world from its corner, the box's texels of it.
+        const VkRect2D rect{{b.x0 * kTexels, c * PG_HEIGHT + b.z0 * kTexels},
+                            {static_cast<uint32_t>((b.x1 - b.x0) * kTexels),
+                             static_cast<uint32_t>((b.z1 - b.z0) * kTexels)}};
         const VkViewport viewport{0.0f, static_cast<float>(c * PG_HEIGHT), static_cast<float>(PG_HEIGHT),
                                   static_cast<float>(PG_HEIGHT), 0.0f, 1.0f};
         vkCmdSetViewport(cmd, 0, 1, &viewport);
@@ -362,6 +367,7 @@ void SceneProbeGrid::capture(SceneFrame& frame, VkCommandBuffer cmd, uint32_t ma
         // z down the rows, the depth from R above the eye (0) to R below (1).
         const float ox = block_.cascade[c][0], oz = block_.cascade[c][1];
         const float W = block_.cascade[c][2] * PG_COLUMNS;
+        const float col = block_.cascade[c][2];
         bromath::Mat4 vp{};
         std::memset(vp.data, 0, sizeof(vp.data));
         vp.data[0] = 2.0f / W;                 // x
@@ -373,7 +379,8 @@ void SceneProbeGrid::capture(SceneFrame& frame, VkCommandBuffer cmd, uint32_t ma
         vp.data[15] = 1.0f;
 
         // The box in the world, for the draws' bounds and chunks.
-        const bromath::AABB3 box{{ox + eye.x, eye.y - R, oz + eye.z}, {ox + W + eye.x, eye.y + R, oz + W + eye.z}};
+        const bromath::AABB3 box{{ox + b.x0 * col + eye.x, eye.y - R, oz + b.z0 * col + eye.z},
+                                 {ox + b.x1 * col + eye.x, eye.y + R, oz + b.z1 * col + eye.z}};
         bromath::Frustum frustum;
         const bromath::Vec3 n[6] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
         const float d[6] = {-box.min.x, box.max.x, -box.min.y, box.max.y, -box.min.z, box.max.z};
@@ -403,10 +410,10 @@ void SceneProbeGrid::dispatch(SceneFrame& frame, VkCommandBuffer cmd, Stage stag
     w.writeImage(2, captureDepth_.view, nearest_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     w.writeBuffer(3, sums_.buffer, sums_.size, 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
     storage(4, medium_);
-    w.writeImage(5, medium_.view, linear_, VK_IMAGE_LAYOUT_GENERAL);
+    w.writeImage(5, medium_.view, repeat_, VK_IMAGE_LAYOUT_GENERAL);
     storage(6, sun_);
     if (in.plants) w.writeBuffer(7, in.plants, in.plantsBytes, 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
-    w.writeImage(8, sun_.view, linear_, VK_IMAGE_LAYOUT_GENERAL);
+    w.writeImage(8, sun_.view, repeat_, VK_IMAGE_LAYOUT_GENERAL);
     for (uint32_t ch = 0; ch < 3; ++ch) {
         storage(9 + ch, sh_[ch]);
         w.writeImage(12 + ch, sh_[ch].view, repeat_, VK_IMAGE_LAYOUT_GENERAL);
@@ -421,15 +428,22 @@ void SceneProbeGrid::dispatch(SceneFrame& frame, VkCommandBuffer cmd, Stage stag
     }
     w.updateSet(device.device(), set);
 
-    const uint32_t job[4] = {in.mask, in.probes, 0, 0};
+    const ProbeBox& b = in.box;
+    const uint32_t job[4] = {static_cast<uint32_t>(b.cascade), in.probes,
+                             static_cast<uint32_t>(b.x0) | static_cast<uint32_t>(b.z0) << 16,
+                             static_cast<uint32_t>(b.x1) | static_cast<uint32_t>(b.z1) << 16};
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelines_[stage]);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout_, 0, 1, &set, 0, nullptr);
     vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(job), job);
+    // A world stage's invocations: its box's texels or voxels, 8 x 8 a group.
+    const auto groups = [&](int per) { return static_cast<uint32_t>((per * (b.x1 - b.x0) + 7) / 8); };
+    const auto rows = [&](int per) { return static_cast<uint32_t>((per * (b.z1 - b.z0) + 7) / 8); };
+    constexpr int kTexels = PG_HEIGHT / PG_COLUMNS, kVoxels = PG_VOXELS / PG_COLUMNS;
     switch (stage) {
-    case kHeight: vkCmdDispatch(cmd, PG_HEIGHT / 8, PG_HEIGHT * PG_MAX_CASCADES / 8, 1); break;
+    case kHeight: vkCmdDispatch(cmd, groups(kTexels), rows(kTexels), 1); break;
     case kSplat: vkCmdDispatch(cmd, in.groups, 1, 1); break;
     case kResolve:
-    case kSun: vkCmdDispatch(cmd, PG_VOXELS / 8, PG_VOXELS / 8, PG_LAYERS_Y * PG_MAX_CASCADES); break;
+    case kSun: vkCmdDispatch(cmd, groups(kVoxels), rows(kVoxels), PG_LAYERS_Y); break;
     case kTrace: vkCmdDispatch(cmd, in.probes, 1, 1); break;
     case kBlend: vkCmdDispatch(cmd, (in.probes + 63) / 64, 1, 1); break;
     case kStages: break;
@@ -490,68 +504,81 @@ uint32_t SceneProbeGrid::recordTraces(SceneFrame& frame, std::span<const WorldJo
 }
 
 uint32_t SceneProbeGrid::recordWorld(SceneFrame& frame, WorldStream& stream) {
-    uint32_t mask = 0;
+    // The stale boxes of every cascade (a cascade's never overlap, so each
+    // voxel's sums are splatted and resolved once).
+    std::vector<ProbeBox> boxes, stale;
     const int cascades = std::min(grid_.config().cascades, PG_MAX_CASCADES);
-    for (int c = 0; c < cascades; ++c)
-        if (!grid_.volumesCurrent(c)) mask |= 1u << c;
-    if (mask == 0) return 0;
+    for (int c = 0; c < cascades; ++c) {
+        grid_.staleBoxes(c, stale);
+        boxes.insert(boxes.end(), stale.begin(), stale.end());
+    }
+    if (boxes.empty()) return 0;
     VkCommandBuffer cmd = stream.cmd();
 
-    // What the frames before read of the world is done with before it is remade.
+    // What the frames before read of the world is done with before it is
+    // remade, and the sums their resolves zeroed are zero for this splat.
     render::cmdMemoryBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                             VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
-                                 VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT);
-    capture(frame, cmd, mask);
-    // The cascades' sums cleared for the splat.
-    for (int c = 0; c < cascades; ++c)
-        if (mask & (1u << c)) vkCmdFillBuffer(cmd, sums_.buffer, kSumBytesPerCascade * c, kSumBytesPerCascade, 0);
-    Inputs in;
-    in.mask = mask;
-    dispatch(frame, cmd, kHeight, in);
+                             VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT);
+    capture(frame, cmd, boxes);
+    if (!sumsCleared_) {
+        vkCmdFillBuffer(cmd, sums_.buffer, 0, VK_WHOLE_SIZE, 0);
+        sumsCleared_ = true;
+    }
+    for (const ProbeBox& b : boxes) {
+        Inputs in;
+        in.box = b;
+        dispatch(frame, cmd, kHeight, in);
+    }
     computeBarrier(cmd);
-    // Each node's plants in the cells over the cascades remade, a workgroup
+    // Each box's plants: each node's in its cells over the box, a workgroup
     // a plant.
-    double lo[2] = {1e300, 1e300}, hi[2] = {-1e300, -1e300};
-    for (int c = 0; c < cascades; ++c) {
-        if (!(mask & (1u << c))) continue;
-        const double s = grid_.spacing(c), side = s * grid_.config().columns;
-        lo[0] = std::min(lo[0], static_cast<double>(grid_.cornerX(c)) * s);
-        lo[1] = std::min(lo[1], static_cast<double>(grid_.cornerZ(c)) * s);
-        hi[0] = std::max(hi[0], static_cast<double>(grid_.cornerX(c)) * s + side);
-        hi[1] = std::max(hi[1], static_cast<double>(grid_.cornerZ(c)) * s + side);
-    }
     std::vector<uint32_t> list;
-    for (const Canopy& node : canopy_) {
-        list.clear();
-        for (const CellContent& cell : node.node->cells()) {
-            const bromath::AABB3& b = cell.bounds;
-            if (b.max.x < lo[0] || b.min.x > hi[0] || b.max.z < lo[1] || b.min.z > hi[1]) continue;
-            for (uint32_t i = cell.first; i < cell.first + cell.count; ++i) list.push_back(i);
+    for (const ProbeBox& b : boxes) {
+        const double s = grid_.spacing(b.cascade);
+        const double lo[2] = {(static_cast<double>(grid_.cornerX(b.cascade) + b.x0) - 0.5) * s,
+                              (static_cast<double>(grid_.cornerZ(b.cascade) + b.z0) - 0.5) * s};
+        const double hi[2] = {lo[0] + (b.x1 - b.x0) * s, lo[1] + (b.z1 - b.z0) * s};
+        for (const Canopy& node : canopy_) {
+            list.clear();
+            for (const CellContent& cell : node.node->cells()) {
+                const bromath::AABB3& cb = cell.bounds;
+                if (cb.max.x < lo[0] || cb.min.x > hi[0] || cb.max.z < lo[1] || cb.min.z > hi[1]) continue;
+                for (uint32_t i = cell.first; i < cell.first + cell.count; ++i) list.push_back(i);
+            }
+            if (list.empty()) continue;
+            const VkDeviceSize bytes = list.size() * sizeof(uint32_t);
+            const render::UploadSlice slice = frame.gpu.device.frameUpload(bytes);
+            if (!slice) continue;
+            std::memcpy(slice.mapped, list.data(), bytes);
+            Inputs splat;
+            splat.box = b;
+            splat.plants = node.records;
+            splat.plantsBytes = node.bytes;
+            splat.groups = static_cast<uint32_t>(list.size());
+            splat.list = {slice.buffer, slice.offset, bytes};
+            dispatch(frame, cmd, kSplat, splat);
         }
-        if (list.empty()) continue;
-        const VkDeviceSize bytes = list.size() * sizeof(uint32_t);
-        const render::UploadSlice slice = frame.gpu.device.frameUpload(bytes);
-        if (!slice) continue;
-        std::memcpy(slice.mapped, list.data(), bytes);
-        Inputs splat = in;
-        splat.plants = node.records;
-        splat.plantsBytes = node.bytes;
-        splat.groups = static_cast<uint32_t>(list.size());
-        splat.list = {slice.buffer, slice.offset, bytes};
-        dispatch(frame, cmd, kSplat, splat);
     }
     computeBarrier(cmd);
-    dispatch(frame, cmd, kResolve, in);
+    for (const ProbeBox& b : boxes) {
+        Inputs in;
+        in.box = b;
+        dispatch(frame, cmd, kResolve, in);
+    }
     computeBarrier(cmd);
-    dispatch(frame, cmd, kSun, in);
+    for (const ProbeBox& b : boxes) {
+        Inputs in;
+        in.box = b;
+        dispatch(frame, cmd, kSun, in);
+    }
     // For the frame's readers (the probes' traces, the lit shaders).
     render::cmdMemoryBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
                                  VK_PIPELINE_STAGE_TRANSFER_BIT,
                              VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT);
-    for (int c = 0; c < cascades; ++c)
-        if (mask & (1u << c)) grid_.volumesMade(c);
+    for (int c = 0; c < cascades; ++c) grid_.volumesMade(c);
     return 1;
 }
 
@@ -587,15 +614,38 @@ bool SceneProbeGrid::read(SceneGpu& gpu, ProbeGridTables& out) {
     const uint64_t ticket = device.frames().submit(cmd);
     ok = ok && ticket != 0 && device.context().queue().wait(ticket);
     if (ok) {
+        // The world unwrapped: each cascade's from its corner (the shaders'
+        // pgHeightStored and pgVoxelStored).
+        const auto stored = [&](int c, int i, int j, int size) {
+            const int per = size / PG_COLUMNS;
+            const int x = (i + static_cast<int>(block_.wrap[c][0]) * per - per / 2) & (size - 1);
+            const int z = (j + static_cast<int>(block_.wrap[c][1]) * per - per / 2) & (size - 1);
+            return std::pair<size_t, size_t>{static_cast<size_t>(x), static_cast<size_t>(z)};
+        };
         const auto* h = static_cast<const float*>(copies[0].buffer.mappedData);
-        out.height.assign(h, h + VkDeviceSize{height_.width} * height_.height);
-        const size_t voxels = size_t{medium_.width} * medium_.height * medium_.depth;
+        out.height.resize(size_t{PG_HEIGHT} * PG_HEIGHT * PG_MAX_CASCADES);
+        for (int c = 0; c < PG_MAX_CASCADES; ++c)
+            for (int j = 0; j < PG_HEIGHT; ++j)
+                for (int i = 0; i < PG_HEIGHT; ++i) {
+                    const auto [x, z] = stored(c, i, j, PG_HEIGHT);
+                    out.height[(static_cast<size_t>(c * PG_HEIGHT + j)) * PG_HEIGHT + i] =
+                        h[(c * PG_HEIGHT + z) * PG_HEIGHT + x];
+                }
+        const size_t voxels = size_t{PG_VOXELS} * PG_VOXELS * PG_LAYERS_Y * PG_MAX_CASCADES;
         const auto* m = static_cast<const uint16_t*>(copies[1].buffer.mappedData);
-        out.medium.resize(voxels * 4);
-        for (size_t i = 0; i < voxels * 4; ++i) out.medium[i] = halfToFloat(m[i]);
         const auto* s = static_cast<const uint16_t*>(copies[2].buffer.mappedData);
+        out.medium.resize(voxels * 4);
         out.sun.resize(voxels);
-        for (size_t i = 0; i < voxels; ++i) out.sun[i] = halfToFloat(s[i]);
+        for (int c = 0; c < PG_MAX_CASCADES; ++c)
+            for (int k = 0; k < PG_LAYERS_Y; ++k)
+                for (int j = 0; j < PG_VOXELS; ++j)
+                    for (int i = 0; i < PG_VOXELS; ++i) {
+                        const auto [x, z] = stored(c, i, j, PG_VOXELS);
+                        const size_t slab = static_cast<size_t>(c * PG_LAYERS_Y + k) * PG_VOXELS;
+                        const size_t to = (slab + j) * PG_VOXELS + i, from = (slab + z) * PG_VOXELS + x;
+                        for (int ch = 0; ch < 4; ++ch) out.medium[to * 4 + ch] = halfToFloat(m[from * 4 + ch]);
+                        out.sun[to] = halfToFloat(s[from]);
+                    }
         const size_t texels = size_t{sh_[0].width} * sh_[0].height * sh_[0].depth * 4;
         for (int ch = 0; ch < 3; ++ch) {
             const auto* q = static_cast<const uint16_t*>(copies[3 + ch].buffer.mappedData);

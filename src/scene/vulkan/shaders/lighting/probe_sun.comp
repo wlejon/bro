@@ -1,6 +1,6 @@
 #version 450
-// The probe grid's sun (scene_probe_grid.cpp): what reaches each voxel of a
-// cascade it makes of the sun's light, through the canopy's medium and past
+// The probe grid's sun (scene_probe_grid.cpp): what reaches each voxel of
+// the job's box of the sun's light, through the canopy's medium and past
 // the ground, a voxel an invocation. Its ray climbs toward the sun through
 // the finest cascade's world it is in at each step (so a finer cascade's
 // rays leave its square through the coarser ones), in steps of half that
@@ -15,15 +15,16 @@ layout(local_size_x = 8, local_size_y = 8) in;
 const int kMaxSteps = 512;
 
 void main() {
-    ivec3 v = ivec3(gl_GlobalInvocationID.x, gl_GlobalInvocationID.y, gl_WorkGroupID.z);
-    int c = v.z / PG_LAYERS_Y;
-    if (v.x >= PG_VOXELS || v.y >= PG_VOXELS || c >= pgCascades() || !pgMaking(c)) return;
+    int c = pgJobCascade();
+    ivec4 box = pgJobBox() * (PG_VOXELS / PG_COLUMNS);
+    ivec2 v = box.xy + ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(v, box.zw))) return;
     float top = pgTop();
     float voxY = top / float(PG_LAYERS_Y);
     vec4 cas = PG.cascade[c];
-    float vox = 0.5 * cas.z;
-    vec2 xz = cas.xy + (vec2(v.xy) + 0.5) * vox;
-    float k = float(v.z - c * PG_LAYERS_Y);
+    float vox = cas.z / float(PG_VOXELS / PG_COLUMNS);
+    vec2 xz = cas.xy + (vec2(v) + 0.5) * vox;
+    float k = float(gl_WorkGroupID.z);
     vec3 p = vec3(xz.x, pgBase(pgGround(c, xz)) + (k + 0.5) * voxY, xz.y);
     vec3 L = normalize(PG.sun.xyz);
 
@@ -52,5 +53,5 @@ void main() {
         }
         p += L * step;
     }
-    imageStore(pgSunImage, v, vec4(T, 0.0, 0.0, 0.0));
+    imageStore(pgSunImage, ivec3(pgVoxelStored(c, v), c * PG_LAYERS_Y + int(k)), vec4(T, 0.0, 0.0, 0.0));
 }

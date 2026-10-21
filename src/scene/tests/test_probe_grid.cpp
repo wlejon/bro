@@ -85,8 +85,8 @@ void testPlace() {
     // Cascade 2: 32 m columns, the eye's column 0.
     check(g.cornerX(2) == -4 && g.cornerZ(2) == -4, "cascade 2's corner about the eye");
     check(std::abs(g.spacing(2) - 32.0) < 1e-9, "spacing by the ratio");
-    check(g.traceJobs().empty(), "nothing traces before its volumes are made");
     check(!g.volumesCurrent(0), "a new cascade's volumes are a job");
+    check(!g.traceJobs().empty(), "its probes trace the frame its volumes are made (their job records first)");
     makeAll(g);
     bool overlap = false;
     check(freshColumns(g, 0, overlap).size() == 64 && !overlap, "a new square is fresh, every column once");
@@ -109,9 +109,13 @@ void testMoves() {
     g.place(4.0, -2.0);
     check(g.cornerX(0) == -2 && g.cornerZ(0) == -5, "the corner moves in whole columns");
     check(!g.volumesCurrent(0) && g.volumesCurrent(2), "the moved cascade's volumes are a job, the still one's not");
-    bool overlap = false;
-    check(freshColumns(g, 0, overlap).empty(), "its fresh boxes wait for its volumes");
+    std::vector<ProbeBox> stale;
+    g.staleBoxes(0, stale);
+    check(stale.size() == 2 && stale[0].x0 == 6 && stale[0].x1 == 8 && stale[0].z0 == 0 && stale[0].z1 == 8 &&
+              stale[1].x0 == 0 && stale[1].x1 == 6 && stale[1].z0 == 0 && stale[1].z1 == 1,
+          "its stale world is the move's strips");
     g.volumesMade(0);
+    bool overlap = false;
     const auto cols = freshColumns(g, 0, overlap);
     // Two new columns (x 6, 7: 16 cells), one new row (z 0) less theirs: 6.
     check(cols.size() == 22 && !overlap, "the move's strips: every new column once");
@@ -121,6 +125,9 @@ void testMoves() {
 
     // Moved again before tracing: the queued strips move with the square.
     g.place(6.0, -2.0);   // one more column east
+    g.staleBoxes(0, stale);
+    check(stale.size() == 1 && stale[0].x0 == 7 && stale[0].x1 == 8 && stale[0].z0 == 0 && stale[0].z1 == 8,
+          "a made world's stale strip is the new column alone");
     g.volumesMade(0);
     const auto again = freshColumns(g, 0, overlap);
     // The old x 6, 7 are now x 5, 6; the new x 7; the old row z 0 shifted
@@ -129,8 +136,23 @@ void testMoves() {
     check(covered && !overlap, "queued strips move with the square, the new column added");
     check(!again.count({0, 3}), "an old column stays traced");
 
+    // Moved a column every frame (the world remade each frame): each
+    // frame's strip is offered that frame, never piled up for a still one.
+    g.volumesMade(0);
+    traceFresh(g);
+    bool eachFrame = true;
+    for (int f = 1; f <= 10; ++f) {
+        g.place(6.0 + 2.0 * f, -2.0);
+        eachFrame = eachFrame && !g.volumesCurrent(0) && freshColumns(g, 0, overlap).size() == 8;
+        traceFresh(g);
+        g.volumesMade(0);
+    }
+    check(eachFrame, "a cascade moving every frame traces each frame's strip that frame");
+
     // A jump past the square: all of it fresh.
     g.place(1000.0, 1000.0);
+    g.staleBoxes(0, stale);
+    check(stale.size() == 1 && stale[0].columnCount() == 64, "a jump makes the whole world stale");
     g.volumesMade(0);
     check(freshColumns(g, 0, overlap).size() == 64, "a jump makes the whole square fresh");
 }
@@ -148,11 +170,31 @@ void testVolumes() {
     g.canopyChanged(48.0, 48.0, 52.0, 52.0);
     check(g.volumesCurrent(0) && g.volumesCurrent(1) && !g.volumesCurrent(2),
           "a canopy change in a box remakes the cascades it overlaps");
+    // Cascade 2's corner is column -4, and column k's world is 32 m from
+    // (k - 4.5) * 32: 48..52 m lies in column 6's, [48, 80).
+    std::vector<ProbeBox> stale;
+    g.staleBoxes(2, stale);
+    check(stale.size() == 1 && stale[0].x0 == 6 && stale[0].x1 == 7 && stale[0].z0 == 6 && stale[0].z1 == 7,
+          "only the columns over the change are stale");
+    g.canopyChanged(70.0, 48.0, 90.0, 52.0);   // columns 6 and 7
+    g.staleBoxes(2, stale);
+    check(stale.size() == 1 && stale[0].x0 == 6 && stale[0].x1 == 8 && stale[0].z0 == 6 && stale[0].z1 == 7,
+          "stale boxes that overlap are merged (a voxel is splatted once)");
+    makeAll(g);
+    // A sun low in the east (toward +x, 0.8 up): the crowns' shade reaches
+    // 32 / 0.8 * 0.6 = 24 m west of them, into column 5.
+    g.setSun(0.6f, 0.8f, 0.0f, 1);
+    g.canopyChanged(48.0, 48.0, 52.0, 52.0);
+    g.staleBoxes(2, stale);
+    check(stale.size() == 1 && stale[0].x0 == 5 && stale[0].x1 == 7 && stale[0].z0 == 6 && stale[0].z1 == 7,
+          "and those its shade falls on, away from the sun");
     makeAll(g);
     g.canopyChanged(300.0, 300.0, 310.0, 310.0);
     check(g.volumesCurrent(2), "one past every cascade remakes none");
-    g.setSunGeneration(9);
+    g.setSun(0.6f, 0.8f, 0.0f, 9);
     check(!g.volumesCurrent(1), "a sun turn remakes them");
+    g.staleBoxes(1, stale);
+    check(stale.size() == 1 && stale[0].columnCount() == 64, "all of them");
     makeAll(g);
     g.setTop(40.0f);
     check(!g.volumesCurrent(1), "a new top remakes them");

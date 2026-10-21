@@ -41,6 +41,21 @@ int pgCascadeAt(vec2 xz, int first) {
     return -1;
 }
 
+// Where cascade c's world keeps its ground's texel t and its canopy's voxel
+// column v (each from the cascade's corner): wrapped, as its probes are, so
+// that a world texel stays where it is while the cascade moves. Column i
+// holds texels 4i .. 4i + 3 and voxels 2i, 2i + 1; texel 0 starts half a
+// column before the corner column's middle.
+ivec2 pgHeightStored(int c, ivec2 t) {
+    const int per = PG_HEIGHT / PG_COLUMNS;
+    ivec2 at = (t + ivec2(PG.wrap[c].xy) * per - per / 2) & (PG_HEIGHT - 1);
+    return ivec2(at.x, c * PG_HEIGHT + at.y);
+}
+ivec2 pgVoxelStored(int c, ivec2 v) {
+    const int per = PG_VOXELS / PG_COLUMNS;
+    return (v + ivec2(PG.wrap[c].xy) * per - per / 2) & (PG_VOXELS - 1);
+}
+
 // The ground's height (camera-relative) under `xz` in cascade c: bilinear
 // over its texels, the holes left out; PG_HOLE where all four are holes.
 float pgGround(int c, vec2 xz) {
@@ -49,9 +64,8 @@ float pgGround(int c, vec2 xz) {
     ivec2 i0 = ivec2(floor(t));
     ivec2 i1 = min(i0 + 1, ivec2(PG_HEIGHT - 1));
     vec2 f = t - vec2(i0);
-    int row = c * PG_HEIGHT;
-    float h[4] = float[4](PG_HEIGHT_LOAD(ivec2(i0.x, row + i0.y)), PG_HEIGHT_LOAD(ivec2(i1.x, row + i0.y)),
-                          PG_HEIGHT_LOAD(ivec2(i0.x, row + i1.y)), PG_HEIGHT_LOAD(ivec2(i1.x, row + i1.y)));
+    float h[4] = float[4](PG_HEIGHT_LOAD(pgHeightStored(c, i0)), PG_HEIGHT_LOAD(pgHeightStored(c, ivec2(i1.x, i0.y))),
+                          PG_HEIGHT_LOAD(pgHeightStored(c, ivec2(i0.x, i1.y))), PG_HEIGHT_LOAD(pgHeightStored(c, i1)));
     float w[4] = float[4]((1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y), (1.0 - f.x) * f.y, f.x * f.y);
     float sum = 0.0, wsum = 0.0;
     for (int k = 0; k < 4; ++k) {
@@ -69,10 +83,14 @@ bool pgHole(float ground) { return ground < PG_HOLE_TEST; }
 float pgBase(float ground) { return pgHole(ground) ? -1.7 : ground; }
 
 // The canopy's volumes at camera-relative (x, z) and `h` above the ground
-// there, in cascade c: the 3D images' coordinates, clamped inside the
-// cascade's slab so a filter never reads the next cascade's.
+// there, in cascade c: the 3D images' coordinates for a sampler that
+// repeats (the voxels wrap), clamped to the cascade's own voxels across (a
+// filter never reads one wrapped in from its far side) and inside its slab
+// up (nor the next cascade's).
 vec3 pgVolumeUvw(int c, vec2 xz, float h) {
-    vec2 uv = (xz - PG.cascade[c].xy) * PG.cascade[c].w * (1.0 / float(PG_COLUMNS));
+    const float per = float(PG_VOXELS / PG_COLUMNS);
+    vec2 v = clamp((xz - PG.cascade[c].xy) * PG.cascade[c].w * per, vec2(0.5), vec2(float(PG_VOXELS) - 0.5));
+    vec2 uv = (v + PG.wrap[c].xy * per - 0.5 * per) / float(PG_VOXELS);
     float k = clamp(h / pgTop() * float(PG_LAYERS_Y), 0.5, float(PG_LAYERS_Y) - 0.5);
     return vec3(uv, (float(c * PG_LAYERS_Y) + k) / float(PG_LAYERS_Y * PG_MAX_CASCADES));
 }

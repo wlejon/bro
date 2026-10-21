@@ -6,10 +6,12 @@
 // are shaders/lighting/probe_grid_layout.h). On when the renderer's setting
 // is (SceneRenderer::setProbeGrid).
 //
-// The world the probes trace, made for each cascade where it stands (a
-// world-service job, required, raster: in the frame's graphics stream at its
-// head, so what reads it this frame reads it made), when it moves, when the
-// canopy changes (a plants node's records) or when the sun turns:
+// The world the probes trace, made a box of a cascade's columns at a time
+// (a world-service job, required, raster: in the frame's graphics stream at
+// its head, so what reads it this frame reads it made), the boxes the CPU
+// half says are stale: the strips a move brought in, the columns a change
+// of the canopy (a plants node's records) touched or shades, every column
+// when the sun turns. A dispatch a box and stage:
 //   - the ground's height: the casters that are opaque and stand still
 //     (static and instanced meshes) drawn straight down by the caster drawer
 //     (scene_caster_drawer.h) into a depth target, both faces, then made
@@ -55,6 +57,7 @@ struct SceneGpu;
 struct ProbeGridTables {
     ProbeGridGpu block{};         // the last render's
     float captureRange = 0.0f;    // the capture's depth: this far above and below the eye
+    // The world, unwrapped: each cascade's from its corner.
     std::vector<float> height;    // PG_HEIGHT x PG_HEIGHT * PG_MAX_CASCADES world heights
     std::vector<float> medium;    // PG_VOXELS^2 x PG_LAYERS_Y * PG_MAX_CASCADES, RGBA: extinction, albedo
     std::vector<float> sun;       // the same voxels' transmittance
@@ -103,11 +106,11 @@ private:
         float ground[4];        // rgb the ground's albedo, w the frame's seed
         AtmosphereGpu atm;
     };
-    /// What a dispatch reads besides the grid's own: a plants node's records
-    /// (the splat), and its list (binding 15): the plants it splats, or the
-    /// probes it traces and blends.
+    /// What a dispatch makes and reads besides the grid's own: a world
+    /// stage's box, a plants node's records (the splat), and its list
+    /// (binding 15): the plants it splats, or the probes it traces and blends.
     struct Inputs {
-        uint32_t mask = 0;
+        ProbeBox box;
         VkBuffer plants = VK_NULL_HANDLE;
         VkDeviceSize plantsBytes = 0;
         uint32_t groups = 0;
@@ -122,7 +125,7 @@ private:
     /// since the last frame fall in told, and the layers' top (above the
     /// tallest plant).
     void gatherCanopy(SceneFrame& frame);
-    void capture(SceneFrame& frame, VkCommandBuffer cmd, uint32_t mask);
+    void capture(SceneFrame& frame, VkCommandBuffer cmd, const std::vector<ProbeBox>& boxes);
     void dispatch(SceneFrame& frame, VkCommandBuffer cmd, Stage stage, const Inputs& in);
     static void computeBarrier(VkCommandBuffer cmd);
 
@@ -141,6 +144,7 @@ private:
     bool on_ = false;
     bool rendered_ = false;
     bool shCleared_ = false;
+    bool sumsCleared_ = false;   // (then each resolve zeroes what it read)
     double clock_ = -1.0;   // the scene's clock at the last frame (s)
     uint32_t seed_ = 0;
     ProbeGridGpu block_{};

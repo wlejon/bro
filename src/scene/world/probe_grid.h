@@ -15,16 +15,16 @@
 // height above its floor, whatever the distance.
 //
 // Storage wraps. A probe's place in its cascade's textures is its column
-// mod `columns` (a clipmap), so a move keeps every column still in the
-// square where it was, and only the columns the move brought in are new.
+// mod `columns` (a clipmap), and so is its world's (the ground's heights,
+// the canopy's voxels), so a move keeps every column still in the square
+// where it was, and only the columns the move brought in are new.
 //
 // Volumes. Each cascade's ground heights (captured from above) and its
 // canopy (the plants' crowns as a medium, and the sun's transmittance
-// through it) are made for its corner: when it moves, when the canopy
-// changes (canopy generation) or when the sun turns (sun generation), the
-// cascade's volumes are a job, required (its probes can trace nothing
-// without them), coarsest first: a finer cascade's sun rays leave its square
-// through the coarser ones.
+// through it) are made a box of columns at a time: the strips a move
+// brought in; the columns over a change of the canopy, and those its shade
+// falls on; all of them when the sun turns or the layers' top moves. What
+// is stale is a job, required (its probes can trace nothing without it).
 //
 // Traces. A trace job is a box of a cascade's columns, every layer, its
 // probes' rays traced and blended into what they held. The columns a move
@@ -96,26 +96,34 @@ public:
     void place(double eyeX, double eyeZ);
 
     /// The canopy (the plants' records) changed over the ground box
-    /// (x0, z0)-(x1, z1): the volumes of the cascades it overlaps are
-    /// remade, then their probes refreshed. Without a box, everywhere.
+    /// (x0, z0)-(x1, z1): the columns of each cascade over it, and those
+    /// its shade falls on, are remade, then their probes refreshed. Without
+    /// a box, everywhere.
     void canopyChanged(double x0, double z0, double x1, double z1);
     void canopyChanged();
-    /// The sun changed: every cascade's volumes are remade.
-    void setSunGeneration(uint64_t generation);
+    /// The sun (toward it), and its generation: a new one remakes every
+    /// cascade's volumes.
+    void setSun(float x, float y, float z, uint64_t generation);
 
     /// Whether cascade c's volumes are made for what it stands on now.
     bool volumesCurrent(int c) const;
+    /// The boxes of cascade c's columns whose volumes are stale (none when
+    /// current; the whole square when nothing of it can be kept).
+    void staleBoxes(int c, std::vector<ProbeBox>& out) const;
     /// Its volumes made (the GPU recorded them this frame).
     void volumesMade(int c);
-    /// Whether every cascade's volumes are made, so its probes can trace.
-    bool traceable(int c) const { return volumesCurrent(c); }
+    /// A cascade's stale boxes past this many are merged into the box
+    /// about them (a frame's remake is a dispatch per box and stage).
+    static constexpr int kMaxStaleBoxes = 8;
 
     /// Seconds pass (the frame's step): the refresh slices' ages grow.
     void advance(float seconds);
 
     /// This frame's trace jobs: the fresh boxes (required) and every
-    /// refresh slice (its error by age), of the cascades whose volumes are
-    /// made. A box's index in this list is its job key.
+    /// refresh slice (its error by age), of every cascade, stale or not:
+    /// what is stale of its world is a required job of the frame's that
+    /// records ahead of the traces. A box's index in this list is its job
+    /// key.
     struct TraceJob {
         ProbeBox box;
         float error = 0.0f;
@@ -131,23 +139,26 @@ private:
     struct Cascade {
         int64_t cornerX = 0, cornerZ = 0;
         bool placed = false;
-        uint64_t canopy = 1;   // moves with each canopy change over it
-        // What its volumes were made for.
-        int64_t madeX = 0, madeZ = 0;
-        uint64_t madeCanopy = 0, madeSun = 0;
+        // What its volumes were made for, and what of them is stale since.
+        uint64_t madeSun = 0;
         float madeTop = 0.0f;
-        bool made = false;
+        bool made = false;   // false: all of it is stale
+        std::vector<ProbeBox> stale;
         std::vector<ProbeBox> fresh;     // queued, required
         std::vector<float> sliceAge;     // seconds since each slice's refresh
     };
     void queueMove(Cascade& c, int index, int64_t dx, int64_t dz);
     /// `box` queued fresh, cut into boxes of at most a slice's rows.
     void queueFresh(Cascade& c, const ProbeBox& box) const;
+    /// `box` stale in c: merged with those it overlaps, and with all the
+    /// rest past kMaxStaleBoxes.
+    static void addStale(Cascade& c, ProbeBox box);
 
     ProbeGridConfig config_;
     std::vector<Cascade> cascades_;
     float top_ = 32.0f;
     uint64_t sun_ = 1;
+    float sunDir_[3] = {0.0f, 1.0f, 0.0f};
     std::vector<TraceJob> jobs_;
 };
 

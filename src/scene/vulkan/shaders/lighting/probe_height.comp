@@ -1,20 +1,22 @@
 #version 450
 // The probe grid's ground (scene_probe_grid.cpp): the casters that stand
 // still, drawn straight down into the capture's depth (a cascade a band of
-// rows, its world PG_HEIGHT texels a side), made into world heights. The
-// capture's depth runs from block.capture.x above the eye (0) to as far
-// below it (1); a texel nothing was drawn into is a hole.
+// rows, its world PG_HEIGHT texels a side from its corner), made into world
+// heights where the cascade keeps them (wrapped), a texel of the job's box
+// an invocation. The capture's depth runs from block.capture.x above the
+// eye (0) to as far below it (1); a texel nothing was drawn into is a hole.
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
 #include "lighting/scene_probe_grid_compute.glsl"
 
 void main() {
-    ivec2 t = ivec2(gl_GlobalInvocationID.xy);
-    int c = t.y / PG_HEIGHT;
-    if (t.x >= PG_HEIGHT || c >= pgCascades() || !pgMaking(c)) return;
-    float d = texelFetch(pgCaptureDepth, t, 0).r;
+    int c = pgJobCascade();
+    ivec4 box = pgJobBox() * (PG_HEIGHT / PG_COLUMNS);
+    ivec2 t = box.xy + ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(t, box.zw))) return;
+    float d = texelFetch(pgCaptureDepth, ivec2(t.x, c * PG_HEIGHT + t.y), 0).r;
     float range = block.capture.x;
     float h = d >= 1.0 ? PG_HOLE : range * (1.0 - 2.0 * d) + PG.eye.y;
-    imageStore(pgHeightImage, t, vec4(h, 0.0, 0.0, 0.0));
+    imageStore(pgHeightImage, pgHeightStored(c, t), vec4(h, 0.0, 0.0, 0.0));
 }

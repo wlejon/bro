@@ -57,13 +57,16 @@ layout(set = 0, binding = 17) uniform sampler2D pgAtmTransmittance;
 layout(set = 0, binding = 18) uniform sampler3D pgAtmSkyLight;
 layout(set = 0, binding = 19) uniform samplerCube pgPrefiltered;
 
-// x the cascades this dispatch makes (a bit each), y the probes it traces,
-// zw the stage's own.
+// A world stage's: x the cascade it makes, zw the box of its columns it
+// makes (x0 | z0 << 16, x1 | z1 << 16, from the corner). A trace's or a
+// blend's: y the probes listed.
 layout(push_constant) uniform ProbeGridPush {
     uvec4 job;
 } push;
 
-bool pgMaking(int c) { return (push.job.x & (1u << uint(c))) != 0u; }
+int pgJobCascade() { return int(push.job.x); }
+// The box's columns [x0, x1) x [z0, z1), as (x0, z0, x1, z1).
+ivec4 pgJobBox() { return ivec4(uvec4(push.job.z, push.job.z >> 16, push.job.w, push.job.w >> 16) & 0xffffu); }
 
 #define PG block.grid
 #define PG_HEIGHT_LOAD(texel) imageLoad(pgHeightImage, texel).r

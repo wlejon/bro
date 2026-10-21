@@ -78,6 +78,9 @@ vec3 trace(int c, vec3 p, vec3 d, vec3 sunE, vec3 L) {
         float g = pgGround(cc, p.xz);
         float h = p.y - pgBase(g);
         if (!pgHole(g) && h < 0.0) return radiance + T * groundRadiance(cc, p, sunE, L);
+        // Under a hole's base, going down: no ground and no canopy to meet
+        // (none is splatted under it), only the sky's below.
+        if (h < 0.0 && d.y <= 0.0) break;
         if (h >= top && d.y >= 0.0) break;
         float vox = 0.5 * PG.cascade[cc].z;
         float step = 0.5 * vox;

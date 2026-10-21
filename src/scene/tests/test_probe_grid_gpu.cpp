@@ -605,8 +605,9 @@ int main() {
             checkCanopy(t, static_cast<int>(t.block.params[1]));
             checkSun(t);
         }
-        // Moved a few columns: the finest cascades' worlds made where they
-        // now stand.
+        // Moved a few columns: the finest cascades' worlds scrolled (the
+        // columns the move brought in made, the rest kept where they are
+        // stored), every cascade's as if made where it now stands.
         const float eyeX = 5.3f, eyeZ = -3.1f;
         const float eyeY = static_cast<float>(plane(eyeX, eyeZ) + 1.7);
         graph.setCamera(1.0f, 256.0f / 144.0f, 0.1f, 2000.0f, {eyeX, eyeY, eyeZ}, {eyeX, eyeY, eyeZ - 10.0f});
@@ -620,7 +621,7 @@ int main() {
             check(moved.block.cascade[0][0] + moved.block.eye[0] != t.block.cascade[0][0] + t.block.eye[0],
                   "the finest cascade moved");
             checkHeight(moved);
-            checkCanopy(moved, 1);
+            checkCanopy(moved, static_cast<int>(moved.block.params[1]));
             checkSun(moved);
         }
     }

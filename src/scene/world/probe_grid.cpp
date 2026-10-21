@@ -50,37 +50,80 @@ void ProbeGrid::queueFresh(Cascade& c, const ProbeBox& box) const {
     }
 }
 
+void ProbeGrid::addStale(Cascade& c, ProbeBox box) {
+    // A cascade's stale boxes never overlap (a voxel is splatted once): one
+    // that would takes in those it overlaps, until none is left.
+    const auto overlaps = [](const ProbeBox& a, const ProbeBox& b) {
+        return a.x0 < b.x1 && b.x0 < a.x1 && a.z0 < b.z1 && b.z0 < a.z1;
+    };
+    for (bool merged = true; merged;) {
+        merged = false;
+        for (auto it = c.stale.begin(); it != c.stale.end(); ++it) {
+            if (!overlaps(*it, box)) continue;
+            box.x0 = std::min(box.x0, it->x0);
+            box.z0 = std::min(box.z0, it->z0);
+            box.x1 = std::max(box.x1, it->x1);
+            box.z1 = std::max(box.z1, it->z1);
+            c.stale.erase(it);
+            merged = true;
+            break;
+        }
+    }
+    c.stale.push_back(box);
+    if (c.stale.size() <= static_cast<size_t>(kMaxStaleBoxes)) return;
+    ProbeBox all = c.stale.front();
+    for (const ProbeBox& b : c.stale) {
+        all.x0 = std::min(all.x0, b.x0);
+        all.z0 = std::min(all.z0, b.z0);
+        all.x1 = std::max(all.x1, b.x1);
+        all.z1 = std::max(all.z1, b.z1);
+    }
+    c.stale.assign(1, all);
+}
+
 void ProbeGrid::queueMove(Cascade& c, int index, int64_t dx, int64_t dz) {
     const int n = config_.columns;
     // The boxes still queued move with the square; what leaves it goes.
-    std::vector<ProbeBox> kept;
-    for (ProbeBox b : c.fresh) {
-        const int64_t x0 = std::max<int64_t>(b.x0 - dx, 0), x1 = std::min<int64_t>(b.x1 - dx, n);
-        const int64_t z0 = std::max<int64_t>(b.z0 - dz, 0), z1 = std::min<int64_t>(b.z1 - dz, n);
-        if (x0 >= x1 || z0 >= z1) continue;
-        b.x0 = static_cast<int>(x0);
-        b.x1 = static_cast<int>(x1);
-        b.z0 = static_cast<int>(z0);
-        b.z1 = static_cast<int>(z1);
-        kept.push_back(b);
-    }
-    c.fresh = std::move(kept);
+    const auto shift = [&](std::vector<ProbeBox>& boxes) {
+        std::vector<ProbeBox> kept;
+        for (ProbeBox b : boxes) {
+            const int64_t x0 = std::max<int64_t>(b.x0 - dx, 0), x1 = std::min<int64_t>(b.x1 - dx, n);
+            const int64_t z0 = std::max<int64_t>(b.z0 - dz, 0), z1 = std::min<int64_t>(b.z1 - dz, n);
+            if (x0 >= x1 || z0 >= z1) continue;
+            b.x0 = static_cast<int>(x0);
+            b.x1 = static_cast<int>(x1);
+            b.z0 = static_cast<int>(z0);
+            b.z1 = static_cast<int>(z1);
+            kept.push_back(b);
+        }
+        boxes = std::move(kept);
+    };
+    shift(c.fresh);
+    shift(c.stale);
     if (std::abs(dx) >= n || std::abs(dz) >= n) {
         c.fresh.clear();
         queueFresh(c, ProbeBox{index, 0, 0, n, n, true});
+        c.made = false;
+        c.stale.clear();
         return;
     }
     // The strips the move brought in: the columns along x, then the rows
-    // along z (less what the columns took).
+    // along z (less what the columns took); their world and their probes.
     const int ax = static_cast<int>(std::abs(dx)), az = static_cast<int>(std::abs(dz));
     if (ax > 0) {
         const int x0 = dx > 0 ? n - ax : 0;
-        queueFresh(c, ProbeBox{index, x0, 0, x0 + ax, n, true});
+        const ProbeBox strip{index, x0, 0, x0 + ax, n, true};
+        queueFresh(c, strip);
+        addStale(c, strip);
     }
     if (az > 0) {
         const int z0 = dz > 0 ? n - az : 0;
         const int x0 = dx > 0 ? 0 : ax, x1 = dx > 0 ? n - ax : n;
-        if (x0 < x1) queueFresh(c, ProbeBox{index, x0, z0, x1, z0 + az, true});
+        if (x0 < x1) {
+            const ProbeBox strip{index, x0, z0, x1, z0 + az, true};
+            queueFresh(c, strip);
+            addStale(c, strip);
+        }
     }
 }
 
@@ -108,34 +151,64 @@ void ProbeGrid::place(double eyeX, double eyeZ) {
 }
 
 void ProbeGrid::canopyChanged(double x0, double z0, double x1, double z1) {
+    // The crowns' shade falls away from the sun, as far as the sun's ray
+    // from the ground crosses under the layers' top (a low sun's no
+    // farther than twenty tops).
+    const float reach = top_ / std::max(sunDir_[1], 0.05f);
+    const double sx = -sunDir_[0] * reach, sz = -sunDir_[2] * reach;
+    x0 += std::min(sx, 0.0);
+    x1 += std::max(sx, 0.0);
+    z0 += std::min(sz, 0.0);
+    z1 += std::max(sz, 0.0);
+    const int n = config_.columns;
     for (size_t i = 0; i < cascades_.size(); ++i) {
         Cascade& c = cascades_[i];
+        if (!c.made) continue;
+        // Column k's world is [k - 0.5, k + 0.5) spacings from the corner's.
         const double s = spacing(static_cast<int>(i));
-        const double lo[2] = {static_cast<double>(c.cornerX) * s, static_cast<double>(c.cornerZ) * s};
-        const double side = s * config_.columns;
-        if (x1 < lo[0] || x0 > lo[0] + side || z1 < lo[1] || z0 > lo[1] + side) continue;
-        ++c.canopy;
+        const auto first = [&](double v, int64_t corner) {
+            return std::clamp<int64_t>(static_cast<int64_t>(std::floor(v / s + 0.5)) - corner, 0, n);
+        };
+        const ProbeBox box{static_cast<int>(i), static_cast<int>(first(x0, c.cornerX)),
+                           static_cast<int>(first(z0, c.cornerZ)), static_cast<int>(first(x1, c.cornerX - 1)),
+                           static_cast<int>(first(z1, c.cornerZ - 1)), false};
+        if (box.x0 < box.x1 && box.z0 < box.z1) addStale(c, box);
     }
 }
 
 void ProbeGrid::canopyChanged() {
-    for (Cascade& c : cascades_) ++c.canopy;
+    for (Cascade& c : cascades_) {
+        c.made = false;
+        c.stale.clear();
+    }
 }
 
-void ProbeGrid::setSunGeneration(uint64_t generation) { sun_ = generation; }
+void ProbeGrid::setSun(float x, float y, float z, uint64_t generation) {
+    sunDir_[0] = x;
+    sunDir_[1] = y;
+    sunDir_[2] = z;
+    sun_ = generation;
+}
 
 bool ProbeGrid::volumesCurrent(int c) const {
     const Cascade& k = cascades_[static_cast<size_t>(c)];
-    return k.made && k.madeX == k.cornerX && k.madeZ == k.cornerZ && k.madeCanopy == k.canopy && k.madeSun == sun_ &&
-           k.madeTop == top_;
+    return k.made && k.stale.empty() && k.madeSun == sun_ && k.madeTop == top_;
+}
+
+void ProbeGrid::staleBoxes(int c, std::vector<ProbeBox>& out) const {
+    out.clear();
+    const Cascade& k = cascades_[static_cast<size_t>(c)];
+    if (!k.made || k.madeSun != sun_ || k.madeTop != top_) {
+        out.push_back(ProbeBox{c, 0, 0, config_.columns, config_.columns, false});
+        return;
+    }
+    out = k.stale;
 }
 
 void ProbeGrid::volumesMade(int c) {
     Cascade& k = cascades_[static_cast<size_t>(c)];
     k.made = true;
-    k.madeX = k.cornerX;
-    k.madeZ = k.cornerZ;
-    k.madeCanopy = k.canopy;
+    k.stale.clear();
     k.madeSun = sun_;
     k.madeTop = top_;
 }
@@ -150,7 +223,6 @@ const std::vector<ProbeGrid::TraceJob>& ProbeGrid::traceJobs() {
     const int n = config_.columns;
     for (int i = 0; i < config_.cascades; ++i) {
         const Cascade& c = cascades_[static_cast<size_t>(i)];
-        if (!traceable(i)) continue;
         for (const ProbeBox& b : c.fresh) jobs_.push_back(TraceJob{b, 0.0f, true});
         const float weight = config_.refreshPixelsPerSecond / static_cast<float>(1 << i);
         const float period = config_.refreshSeconds * static_cast<float>(1 << i);

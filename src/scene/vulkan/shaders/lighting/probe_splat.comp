@@ -1,7 +1,9 @@
 #version 450
 // The probe grid's canopy (scene_probe_grid.cpp): a plants node's crowns
-// splatted into each cascade it makes, a workgroup a plant listed (those of
-// its cells over the cascades, pgProbes.list). A crown is its
+// splatted into the job's box of a cascade, a workgroup a plant listed
+// (those of its cells over the box, pgProbes.list), each point deposited
+// only into the box's voxels (another box's job deposits the rest of a
+// crown that crosses into it). A crown is its
 // species' envelope (scene_plant_records.glsl's plantCrown, narrowed by
 // plantCrownWidth), filled with its species' extinction; it is sampled by
 // points spread evenly through it (an R3 sequence, rotated by the plant's
@@ -68,39 +70,37 @@ void main() {
     }
     float volume = PI * rx * rx * ry * w2 / 16.0;
 
-    for (int c = 0; c < pgCascades(); ++c) {
-        if (!pgMaking(c)) continue;
-        vec4 cas = PG.cascade[c];
-        vec2 lo = cas.xy, hi = cas.xy + cas.z * float(PG_COLUMNS);
-        if (center.x + reach < lo.x || center.x - reach > hi.x || center.z + reach < lo.y ||
-            center.z - reach > hi.y)
-            continue;
-        float vox = 0.5 * cas.z;
-        float voxVol = vox * vox * voxY;
-        int K = clamp(int(cylinder / voxVol * PG_SAMPLES_PER_VOXEL), PG_MIN_SAMPLES, PG_MAX_SAMPLES);
-        // The points the crown keeps, then each one's share of its
-        // extinction-volume over the voxel's.
-        if (gl_LocalInvocationIndex == 0u) kept = 0u;
-        barrier();
-        uint mine = 0u;
-        vec3 at;
-        for (int q = int(gl_LocalInvocationIndex); q < K; q += 64)
-            if (crownPoint(cr, turn, q, reach, at)) ++mine;
-        atomicAdd(kept, mine);
-        barrier();
-        float share = s.density * volume / (float(max(kept, 1u)) * voxVol);
-        barrier();   // (read by all before the next cascade clears it)
-        for (int q = int(gl_LocalInvocationIndex); q < K; q += 64) {
-            if (!crownPoint(cr, turn, q, reach, at)) continue;
-            vec3 pt = center + at;
-            float ground = pgBase(pgGround(c, pt.xz));
-            float h = pt.y - ground;
-            if (h < 0.0 || h >= top) continue;
-            ivec3 vx = ivec3(floor((pt.x - cas.x) / vox), floor((pt.z - cas.y) / vox), floor(h / voxY));
-            if (any(lessThan(vx, ivec3(0))) || vx.x >= PG_VOXELS || vx.y >= PG_VOXELS || vx.z >= PG_LAYERS_Y)
-                continue;
-            int idx = ((c * PG_LAYERS_Y + vx.z) * PG_VOXELS + vx.y) * PG_VOXELS + vx.x;
-            deposit(idx, share * vec4(1.0, albedo));
-        }
+    int c = pgJobCascade();
+    vec4 cas = PG.cascade[c];
+    float vox = cas.z / float(PG_VOXELS / PG_COLUMNS);
+    ivec4 box = pgJobBox() * (PG_VOXELS / PG_COLUMNS);
+    vec2 lo = cas.xy + vec2(box.xy) * vox, hi = cas.xy + vec2(box.zw) * vox;
+    if (center.x + reach < lo.x || center.x - reach > hi.x || center.z + reach < lo.y || center.z - reach > hi.y)
+        return;
+    float voxVol = vox * vox * voxY;
+    int K = clamp(int(cylinder / voxVol * PG_SAMPLES_PER_VOXEL), PG_MIN_SAMPLES, PG_MAX_SAMPLES);
+    // The points the crown keeps, then each one's share of its
+    // extinction-volume over the voxel's.
+    if (gl_LocalInvocationIndex == 0u) kept = 0u;
+    barrier();
+    uint mine = 0u;
+    vec3 at;
+    for (int q = int(gl_LocalInvocationIndex); q < K; q += 64)
+        if (crownPoint(cr, turn, q, reach, at)) ++mine;
+    atomicAdd(kept, mine);
+    barrier();
+    float share = s.density * volume / (float(max(kept, 1u)) * voxVol);
+    for (int q = int(gl_LocalInvocationIndex); q < K; q += 64) {
+        if (!crownPoint(cr, turn, q, reach, at)) continue;
+        vec3 pt = center + at;
+        float ground = pgBase(pgGround(c, pt.xz));
+        float h = pt.y - ground;
+        if (h < 0.0 || h >= top) continue;
+        ivec2 v = ivec2(floor((pt.xz - cas.xy) / vox));
+        int k = int(floor(h / voxY));
+        if (any(lessThan(v, box.xy)) || any(greaterThanEqual(v, box.zw)) || k >= PG_LAYERS_Y) continue;
+        ivec2 at2 = pgVoxelStored(c, v);
+        int idx = ((c * PG_LAYERS_Y + k) * PG_VOXELS + at2.y) * PG_VOXELS + at2.x;
+        deposit(idx, share * vec4(1.0, albedo));
     }
 }

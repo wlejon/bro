@@ -4,9 +4,11 @@
 // (lighting/scene_probe_grid.glsl) agree on, for C++ and GLSL alike.
 //
 // Every cascade is the same square of PG_COLUMNS x PG_COLUMNS columns, its
-// spacing its own. Its world, made for it when it moves (and never
-// wrapped), covers the square and half a column past it on every side, so
-// column i stands at the middle of its cells:
+// spacing its own. Its world covers the square and half a column past it on
+// every side, so column i stands at the middle of its cells, and is stored
+// wrapped as the probes are (a texel's place is its world texel mod the
+// side: scene_probe_grid.glsl's pgHeightStored and pgVoxelStored), so a move
+// remakes only the columns it brought in:
 //   - the ground's height, PG_HEIGHT x PG_HEIGHT texels (four a column),
 //     the cascades stacked down one 2D image (cascade c's rows
 //     c * PG_HEIGHT ..);
