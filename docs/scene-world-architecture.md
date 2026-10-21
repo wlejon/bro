@@ -435,6 +435,68 @@ early and built for every altitude and time of day.
 The plants' crown-depth falloff and the turf's tuned darkening stand in for
 the probes today; they go when the probes land.
 
+### Design: the probe grid
+
+What it fixes, in biomes: a leaf's sky light is the open sky's, scaled only
+by how deep it sits in its own crown, so a tree in the middle of a forest
+is lit like one alone in the meadow, and the floor under the trees is
+darkened by a tuned map the app hands in.
+
+- **The probes follow the ground.** A cascade is a square of columns
+  around the eye, each column a few probes at fixed heights above the
+  ground under it (a forest's light changes with height above the ground,
+  not with height above the sea). Cascades double their spacing a few times
+  over (2 m near the eye, out to kilometres), and a cascade moves with the
+  eye in whole columns, its storage wrapping (a clipmap), so a step forward
+  only refreshes the new edge. A point finds its cascade by distance and
+  blends to the next near the edge; inside one, its column by x, z and its
+  layer by its height above the ground, so hardware trilinear filtering
+  across columns blends probes at the same height above their own ground.
+  Past the last cascade the open sky is the far field (§7's horizon and
+  canopy tiles replace it).
+- **Each probe holds irradiance** as l ≤ 1 spherical harmonics, RGB, in
+  three RGBA16F 3D textures (all cascades in one, stacked along the layer
+  axis), so a lit pixel pays a few filtered taps. Their sum is the light
+  from every direction: the sky as it gets through, the ground's bounce
+  and the canopy's green.
+- **A probe traces a world made for it**, never the drawn geometry:
+  - the ground's height under each cascade, captured from above (the
+    depth of what is opaque and stands still, the shadow pass's casters
+    drawn orthographically, so any mesh, terrain or building the scene has
+    is in it; the planet's height tiles take its place in step 9);
+  - the canopy's density: the plants' crowns as a medium, their leaf area
+    a volume around the eye splatted from the plants' records (each crown
+    its species' ellipsoid and extinction, the same the plants' shader
+    shades a crown by), with the leaves' mean albedo;
+  - the sun's light through that medium, a volume of its transmittance to
+    the sun swept along the sun's way, remade when the sun or the canopy
+    moves.
+
+  A ray marches the medium (its transmittance falling, picking up the
+  light the leaves it passes scatter: the sun's through the transmittance
+  volume, the sky's from the probes themselves, a bounce later) and ends on
+  the ground (its albedo, the sun on it, the probes' light) or in the sky
+  (the sky-view table). A probe's rays go into its harmonics, blended into
+  what it held (hysteresis), so light changes over a few updates rather than
+  flickering.
+- **World-service jobs.** A job is a slice of a cascade's probes, ranked by
+  the error of their staleness; the density and transmittance volumes are
+  jobs when their cells change or the sun turns. A probe is never waited on:
+  the frame reads what the textures hold.
+- **What it replaces.** The ambient light of every lit surface (mesh,
+  plants, grass, herbs, ground) is the probes' irradiance along its normal,
+  its sky reflection scaled by how much of the open sky's irradiance got
+  through. The plants keep only the occlusion of their own crown finer than
+  the probes resolve (a crown much smaller than the spacing); the turf's
+  and the herbs' canopy darkening go. The floor map stays what it is for
+  (where litter and herbs grow), not a light.
+
+Built in this order, each verified before the next: the density volume
+(checked against the records on the CPU), the ground's height (against the
+mesh it was drawn from), the probes (a probe in the open within a few
+percent of the open sky's irradiance, a known crown's shade against a CPU
+integral), then the shaders' switch, judged in stills and in motion.
+
 ### As built: the atmosphere and exposure
 
 The first two bullets. `world/atmosphere.h` holds the parameters (Earth's
