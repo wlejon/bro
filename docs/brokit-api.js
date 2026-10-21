@@ -12,6 +12,8 @@
 //     const cp = require('child_process'); // or require('node:child_process')
 //     const net = require('net');         // raw TCP client + server
 //     const dgram = require('dgram');     // raw UDP sockets
+//     const http = require('http');       // HTTP/1.1 server + client (llhttp)
+//     const sqlite = require('sqlite');   // SQLite DatabaseSync (node:sqlite)
 //     const events = require('events');   // EventEmitter
 //     const util = require('util');       // format, inspect, promisify, types, ...
 //     const url = require('url');         // URL, URLSearchParams, fileURLToPath, ...
@@ -462,6 +464,50 @@ rx.on('message', (msg, rinfo) => rx.close());
 rx.bind(0);
 const tx = dgram.createSocket('udp4');
 tx.send('hello', rx.address().port);          // → rx 'message' fires
+
+
+// -----------------------------------------------------------------------------
+// http, require('http'), HTTP/1.1 server + client (llhttp over net)
+// -----------------------------------------------------------------------------
+//
+// SECURITY: server.listen() binds 127.0.0.1 unless a host is passed explicitly;
+// pass '0.0.0.0' (or an interface IP) to expose a LAN service.
+
+const http = require('http');
+
+const httpSrv = http.createServer((req, res) => {
+    // req: IncomingMessage (method, url, headers, rawHeaders, httpVersion,
+    //      setEncoding('utf8'), 'data' / 'end' / 'close' events)
+    // res: ServerResponse (statusCode, setHeader, getHeader, writeHead,
+    //      write, end, flushHeaders)
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, path: req.url }));
+});
+httpSrv.on('upgrade', (req, socket, head) => { /* protocol upgrade handoff */ });
+httpSrv.listen(0, '127.0.0.1');
+
+http.get('http://127.0.0.1:' + httpSrv.address().port + '/test', (res) => {
+    res.setEncoding('utf8');
+    res.on('data', (chunk) => {});
+    res.on('end', () => httpSrv.close());
+});
+
+
+// -----------------------------------------------------------------------------
+// sqlite, require('sqlite') / require('node:sqlite'), synchronous SQLite 3
+// -----------------------------------------------------------------------------
+
+const { DatabaseSync } = require('sqlite');
+
+const db = new DatabaseSync(':memory:');      // or a file path
+db.exec('PRAGMA journal_mode = WAL; CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT);');
+const ins = db.prepare('INSERT INTO items (name) VALUES (?)');
+ins.run('alpha');                             // → { changes: 1, lastInsertRowid: 1 }
+const row = db.prepare('SELECT * FROM items WHERE id = ?').get(1);
+const all = db.prepare('SELECT * FROM items').all();
+const tx = db.transaction((names) => { for (const n of names) ins.run(n); });
+tx(['beta', 'gamma']);
+db.close();
 
 
 // =============================================================================

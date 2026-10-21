@@ -470,6 +470,10 @@ void WorkerInstance::threadFunc() {
     bk::installNet();
     bk::installNetJS();
     bk::installWebSocketServerJS();
+    bk::installHttp();
+    bk::installHttpJS();
+    bk::installSqlite();
+    bk::installSqliteJS();
     bk::installRequire();
     auto* eng = hostEngine();
     if (eng) {

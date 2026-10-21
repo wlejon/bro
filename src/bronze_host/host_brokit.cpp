@@ -203,6 +203,10 @@ void installBrokitGlobals(engine::Engine& engine) {
     bk::installNet();
     bk::installNetJS();
     bk::installWebSocketServerJS();
+    bk::installHttp();
+    bk::installHttpJS();
+    bk::installSqlite();
+    bk::installSqliteJS();
     bk::installRequire();
     // Not bk::installImage(): broimage_api installs the same typed-array
     // kernels (and the codecs beside them) onto `bro.image`, from
