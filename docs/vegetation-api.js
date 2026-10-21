@@ -229,9 +229,25 @@
  * level near the eye each frame (finer levels read it; coarser ones keep
  * the plants still, where the sway is under a texel).
  *
+ * Where they stand: given as records (`plants`), or placed by `rules` over
+ * a world with no edge. Rules are layers of candidates on a grid fixed in
+ * the world (`spacing` apart, `jitter`ed), each kept by a `chance` field,
+ * its species drawn by weight fields, sized by a `scale` field and
+ * coloured by a `tint` field, and stood on the `ground` field. A field is a
+ * FastNoise node tree (noise-api.js), its encoding, a number (a constant)
+ * or `{ tree, seed }`: the engine decodes its own copy and places the
+ * world's cells (leaves of 64 m, scene/world/world_cells.h) on its worker threads
+ * about the eye, the nearest first, out to `range`, dropping those past
+ * `range + hysteresis`. Every draw is the candidate's own hash, so a cell
+ * places the same plants whenever and however often it is placed, and a
+ * script sampling the same trees (`genSingle2D`) reads the fields the
+ * engine placed by. Hand-placed `plants` stay beside the placed ones.
+ *
  * What each view draws is planned on the GPU (scene_plants_gpu_plan.cpp):
- * the plants are sorted into world cells once, at setPlants, and uploaded
- * once (again only when they or the species change); each frame the cell
+ * the plants live in a store of runs a cell each (scene/world/cell_store.h),
+ * uploaded where they change (a cell placed or dropped copies its run and
+ * nothing else; only shadow pages and probe cascades over a changed cell
+ * are redone); each frame the cell
  * pass culls the cells against the camera and every shadow view, and the
  * plan picks each plant of the cells in view, writing the draws' chunks and
  * indirect commands. So a frame's CPU cost does not grow with the plants (a
@@ -285,9 +301,45 @@
  * @property {number} [seed] - an integer under 2^24 (default its index): its shape.
  * @property {number} [tint=0] - -1..1, its colours toward the dark or the light.
  *
+ * @example
+ *   // A forest over the whole world: conifers where the pine noise is up.
+ *   const N = (type, props) => { const n = FastNoise.create(type); for (const k in props) n.set(k, props[k]); return n; };
+ *   const fbm = N('FractalFBm', { Source: N('Value', { 'Feature Scale': 160 }), Octaves: 3 });
+ *   const pine = N('Max', { LHS: N('Simplex', { 'Feature Scale': 250 }), RHS: 0 });
+ *   plants.setPlants({ rules: {
+ *     ground: heightTree, range: 2000,
+ *     layers: [{ spacing: 5.5, chance: N('Max', { LHS: fbm, RHS: 0 }), scale: 1, scaleVariety: 0.2,
+ *                species: [{ species: 2, weight: pine }, { species: 0, weight: N('Subtract', { LHS: 1, RHS: pine }) }] }],
+ *   } });
+ *
+ * @typedef {FastNoise|string|number|{tree: FastNoise|string|number, seed: number}} PlantField
+ * A field over the ground (x, z): a FastNoise node, its `encode()`, a
+ * constant, or either with its seed (default the rules' `seed`, else 1337).
+ *
+ * @typedef {Object} PlantLayer
+ * @property {number} [spacing=5] - m between candidates.
+ * @property {number} [jitter=0.9] - how far each is moved off its grid point: up to half this of the spacing each way.
+ * @property {PlantField} [chance] - 0..1, the chance a candidate grows (default 1).
+ * @property {Array<number|{species: number, weight: PlantField}>} species - a candidate's species,
+ *   drawn by the weights where it stands (a bare index weighs 1); where every weight is 0, none grows.
+ * @property {PlantField} [scale] - its size (default 1); under 0, none grows.
+ * @property {number} [scaleVariety=0] - each plant's own: the size times 1 +- this.
+ * @property {PlantField} [tint] - -1..1 (default 0).
+ * @property {number} [tintVariety=0] - each plant's own, +- half of this.
+ * @property {number} [sink=0] - m its foot is set below the ground.
+ * @property {number} [seed] - the layer's draws (default its index + 1).
+ *
+ * @typedef {Object} PlantRules
+ * @property {Array<PlantLayer>} layers
+ * @property {PlantField} [ground] - the height a plant stands on (default 0).
+ * @property {number} [range=1000] - m: cells nearer the eye than this are placed.
+ * @property {number} [hysteresis=128] - m past `range` a placed cell is kept.
+ * @property {number} [seed] - the fields' seed where a field names none.
+ *
  * @typedef {Object} PlantsNodeOptions
  * @property {Array<PlantSpecies>|Float32Array} [species] - at most 64.
- * @property {Array<PlantRecord>|Float32Array} [plants]
+ * @property {Array<PlantRecord>|Float32Array} [plants] - hand-placed.
+ * @property {PlantRules|null} [rules] - plants placed about the eye; null removes them.
  * @property {number} [pixels=14] - the size on screen (px) an element is kept to past full detail.
  * @property {number} [minElements=12] - the fewest a plant is drawn with.
  * @property {number} [woodRange=220] - past this (m) no trunks or limbs.
@@ -600,5 +652,15 @@ class SceneNode {
    * @returns {{plants: number, visible: number, elements: number, limbs: number, shadowElements: number}|undefined}
    */
   plantStats() {}
+
+  /**
+   * Plants: the rules' placement now: `cells` placed and `pending` (wanted
+   * and not yet placed; 1 before the first frame has looked about the
+   * eye). A script waiting for the world in reach draws frames until
+   * `pending` is 0.
+   * @example for (let i = 0; i < 600 && plants.plantPlacement().pending > 0; i++) advanceTime(16);
+   * @returns {{cells: number, pending: number}|undefined}
+   */
+  plantPlacement() {}
 
 }

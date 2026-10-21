@@ -95,6 +95,7 @@
  *
  *   VAR     "Distance Function" (enum) {Euclidean, Euclidean Squared, Manhattan,
  *                                        Hybrid, Max Axis, Minkowski}
+ *                                        default: Euclidean Squared
  *   HYBRID  "Point"       (float)   [per-dim]  default: 0
  *   HYBRID  "Minkowski P" (float)   default: 1.5
  *
@@ -598,7 +599,8 @@
 class FastNoise {
 
   /**
-   * Create from an encoded node tree string (from FN2 Node Editor).
+   * Create from an encoded node tree string (from the FN2 Node Editor or
+   * `encode()`). The tree decoded takes `set` like any other.
    *
    * @param {string} encodedNodeTree - Base64-encoded node graph
    */
@@ -692,6 +694,24 @@ class FastNoise {
    * @returns {FastNoiseNodeMembers} Node structure description
    */
   getMembers() {}
+
+  /**
+   * The node and every source under it as an encoded node tree: the string
+   * `new FastNoise(encoded)` (or the FN2 Node Editor, or FastNoise2's
+   * `NewFromEncodedNodeTree`) decodes to a tree making the same noise. A
+   * tree is data this way: kept in a file, handed to a Worker, or given to
+   * the engine (scene.createPlants' rules, vegetation-api.js), which samples
+   * its own copy on its own threads. Sources set after this node took them
+   * are encoded as they are now.
+   *
+   * @example
+   *   const fbm = FastNoise.create('FractalFBm');
+   *   fbm.set('Source', FastNoise.create('Simplex'));
+   *   const again = new FastNoise(fbm.encode());   // the same noise
+   * @returns {string}
+   * @throws {Error} when a source the tree needs is unset ("encode: the node tree has an unset source").
+   */
+  encode() {}
 
   /**
    * Sample a single 2D noise value.

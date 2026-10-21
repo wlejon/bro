@@ -106,8 +106,9 @@ and each view. Systems consume those lists instead of their whole content:
 
 ### Per-system data
 
-- **Plants:** setPlants keeps the records themselves in leaf-cell order and
-  uploads them once. The plants plan (count, lay out, place) walks the
+- **Plants:** the records live in a store of runs, a leaf cell each (placed
+  by rules about the eye, or hand-placed by setPlants), uploaded where they
+  change (§10). The plants plan (count, lay out, place) walks the
   cells in view and writes the draws' chunks and indirect commands; nothing
   on the CPU walks the plants.
 - **Terrain:** the clipmap already costs the same whatever the world's size,
@@ -807,6 +808,60 @@ and dropped past a hysteresis radius. The plants node takes the cells and the
 rules (its species and what grows where), not a list of plants. The rules
 are data, so a biome is a table, not code.
 
+### As built: the plants' placement
+
+- **Fields** are FastNoise2 node trees (`world/fields.h`): a script builds
+  one with `FastNoise.create` and `set`, and `encode()` (brokit's binding
+  mirrors every `set` into FastNoise2's NodeData) hands it to the engine,
+  which decodes its own copy, safe to sample from any thread. The same tree
+  sampled in script (`genSingle2D`) is the field the engine placed by, so
+  the ground, the grass and the views read what the plants stand on. They
+  run on the CPU (FastNoise2 is SIMD, not GPU), so placement is not a
+  world-service job but a job for `world/world_workers.h`'s pool (half the
+  hardware's threads, 1 to 8); that also leaves every plant's place known
+  on the CPU, for physics and gameplay.
+- **Rules** (`world/plant_placement.h`, JSON from `scene_plants.js`): layers
+  of candidates on a grid fixed in the world, each draw its candidate's own
+  hash (layer seed, i, j, draw), so a leaf's plants are the same however the
+  ground is cut into leaves or how often it is placed. A `chance` field keeps
+  a candidate; species are drawn over weight fields' running total; `scale`
+  and `tint` fields with each plant's own variety; it stands on the `ground`
+  field. (vegetation-api.js has the JS shape.)
+- **Streaming** (`PlantPlacement`): the 64 m leaves within `range` of the
+  eye are queued nearest first and kept posted to the pool as `queueMs` of
+  each thread's time at the jobs' learned cost; a leaf past `range +
+  hysteresis` is dropped. The queue is re-ranked when the eye crosses a
+  leaf, looking only at the band where new leaves can enter.
+- **The store** (`world/cell_store.h`): the node's GPU records are a prefix
+  (header, species) and a pool of fixed-size records, each leaf's run
+  anywhere in it (first fit, coalescing free runs, a run released held 4
+  frames before reuse), with a log of the ranges written. The upload copies
+  only those ranges; a full copy only when the pool grows. Hand-placed
+  plants keep their own runs beside the placed ones.
+- **Invalidation by cell:** the node keeps a log of changed boxes by
+  generation (`changesSince`). The shadow pages redraw only the pages over
+  a changed box within `shadowRange`; the probe grid remakes only the
+  cascades whose extent it overlaps, and its splat reads only the plants of
+  the cells over the cascades it remakes.
+- **What was measured** (4090, 2560×1364): biomes' 1.4 km world, now its
+  rules (its own fields as FastNoise trees), places 478 leaves (3,433 jobs
+  over the 2 km range, 0.11 ms each) in 9 frames, 300 ms; its shots cost
+  2.54 / 2.53 / 0.98 ms (glade, meadow, flyover). Over an unbounded world at
+  the same density (2,692 leaves, 259k plants resident at a 2 km range),
+  the main thread's own time is 0.25 ms a frame flown at 0, 300 or
+  1,000 m/s for up to 10 km, the resident set flat; GPU 1.9 ms mean in
+  flight against 2.2 for the same density hand-placed over the whole flight.
+  What spikes in flight (2–4 ms every ~8 frames at 300 m/s) is the probe
+  grid's: a cascade remakes its whole world each time its corner moves,
+  with or without placement. tests/scene/test_plants.js flies 20 km and
+  comes back; bro_plant_placement_test checks the draws, the streaming and
+  the store.
+- **Not yet:** herbs and rocks are still the grass node's own density
+  functions, and the ground is biomes' mesh: both come to fields with the
+  planet's terrain (step 9). FastNoise2's DistanceToPoint left at its
+  default measures squared distance (the default its metadata now names,
+  pinned at upstream's fix).
+
 ## 11. The planet
 
 - **Roots:** six cube-sphere faces of world cells (§1), each a quadtree to
@@ -840,8 +895,9 @@ src/scene/
   nodes/            the node types: their CPU halves
   world/            cells, surface layers' paging, the world service's
                     policy, the shade map, the shadow plan, the wind field,
-                    the atmosphere's parameters; later the
-                    planet's roots and fields, placement rules
+                    the atmosphere's parameters, the fields, the plants'
+                    placement and store, the world's worker threads; later
+                    the planet's roots
   vulkan/
     frame/          device, allocator, descriptors, pipelines, the shader
                     compiler, frame graph, targets, timers, GPU resources,
@@ -885,7 +941,7 @@ the motion oracle for anything temporal. Each step removes what it replaces.
 | 5a | Done: cached shadow pages (§8) | plant shadows off the per-frame cost: away from eye level 0.17–0.21 ms less than the atlas, the canopy's dappled shadows at a texel a pixel; at eye level 0.08–0.19 ms more (the lookup), and a turning sun's pages built behind the shown ones | +2.5k |
 | 6 | Done: the ground and its cover as one surface (§9), the cover planned on the GPU and drawn before the ground | the cover's hidden work gone: 0.36–0.42 ms off every eye-level shot, all of them under 2.0 ms; what is left is the far fans' lighting and overdraw, not worth its machinery yet | +0.5k |
 | 7 | Done: the probe grid (§7), with the canopy's density it traces against | forests lit as places: a crown's shade within 2% of a CPU march, the open sky within 1%, the ground's bounce within 1.5%; biomes' forest 5–11% darker under its crowns, the meadow unchanged; +0.25–0.4 ms a frame at a 30 Hz clock (a refresh slice nearly every frame), no frame over 2.78 ms, no refresh step in motion | +2.9k |
-| 8 | Placement per cell (§10) | a world of any size placed around the eye at a flat cost | ~3k |
+| 8 | Done: placement per cell (§10), its fields FastNoise2 trees placed on worker threads, the plants' store paged by cell | a world of any size placed around the eye at a flat cost: 0.25 ms of the main thread a frame at 0 to 1,000 m/s, the resident set flat over 20 km; biomes placed in 9 frames; shadow pages and probe cascades redone only over the cells that changed | +1.7k |
 | 9 | The planet (§11), with the terrain's height tiles and their horizons (§7) | ground to orbit, one place, the frame following the pixels; the sun's shadow and the sky's occlusion past the pages | ~5k |
 | 10 | Far-field cell cards (§2) | far plants and terrain cost by the cells on screen | ~4k |
 | 11 | Volumetric light and clouds (§7) | shafts, mist, weather from every altitude | ~5k |
