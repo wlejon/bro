@@ -1,13 +1,16 @@
 #version 450
 // Exposure (scene/exposure.h; scene/vulkan/post/scene_exposure.h): one
-// workgroup reads the frame's histogram, meters it (the mean log2 luminance
-// of the pixels between the lowPercent and highPercent shares, EV100 =
-// log2(L * 100 / 12.5)), moves the applied EV toward it exponentially at the
-// up or down speed for the frame's time step, and writes the scale the
-// tonemap multiplies by. In the fixed mode the scale is the CPU's (an exact
-// 1 at the default EV). The histogram is cleared for the next frame.
+// workgroup reads the frame's histogram, meters it (the log-average
+// luminance L of the pixels between the lowPercent and highPercent shares,
+// and the EV100 whose scale puts L at middle grey: log2(L / (1.2 * 0.18))),
+// moves the applied EV toward it exponentially at the up or down speed for
+// the frame's time step, and writes the scale the tonemap multiplies by. In
+// the fixed mode the scale is the CPU's (an exact 1 at the default EV). The
+// histogram is cleared for the next frame.
 
 layout(local_size_x = 128) in;
+
+const float MIDDLE_GREY = 0.18;   // the key the log-average lands on (Reinhard's)
 
 layout(set = 0, binding = 1) buffer Histogram { uint bins[128]; } histogram;
 layout(set = 0, binding = 2) buffer State {
@@ -64,7 +67,7 @@ void main() {
             weight += take;
             below += n;
         }
-        if (weight > 0.0) metered = clamp(sum / weight + log2(100.0 / 12.5), push.minEv, push.maxEv);
+        if (weight > 0.0) metered = clamp(sum / weight - log2(1.2 * MIDDLE_GREY), push.minEv, push.maxEv);
         if (state.adapting == 0u) {
             ev = metered;
         } else {

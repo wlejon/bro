@@ -9,8 +9,9 @@
 // Fixed: EV100 is the setting. The default is -log2(1.2), a scale of exactly
 // 1, so a scene authored in display units passes to the tone curve as it is.
 // Auto: EV100 is metered from the frame's luminance on the GPU (a histogram
-// of log2 luminance, the mean of the part between lowPercent and highPercent
-// of the pixels: EV100 = log2(L * 100 / 12.5)) and the applied EV follows it
+// of log2 luminance; L the log-average of the part between lowPercent and
+// highPercent of the pixels, and the EV the one whose scale puts L at middle
+// grey, 0.18: EV100 = log2(L / (1.2 * 0.18))) and the applied EV follows it
 // exponentially, at speedUp per second toward a brighter scene and speedDown
 // toward a darker one: no overshoot, no oscillation, and the frame never
 // waits for it (scene/vulkan/post/scene_exposure.h).
@@ -47,8 +48,10 @@ constexpr int kBins = 128;
 
 /// The scale an EV100 gives (computed in double, so the default is exactly 1).
 inline float scaleForEv(double ev100) { return static_cast<float>(1.0 / (1.2 * std::exp2(ev100))); }
-/// The EV100 a mean luminance meters to (K = 12.5, S = 100).
-inline double evForLuminance(double luminance) { return std::log2(std::max(luminance, 1e-9) * 100.0 / 12.5); }
+/// The key the meter puts the log-average luminance on.
+constexpr double kMiddleGrey = 0.18;
+/// The EV100 a log-average luminance meters to: the one whose scale puts it at middle grey.
+inline double evForLuminance(double luminance) { return std::log2(std::max(luminance, 1e-9) / (1.2 * kMiddleGrey)); }
 /// One frame of adaptation: `current` toward `target` over `dt` seconds.
 inline double adapt(double current, double target, double dt, double speedUp, double speedDown) {
     const double speed = target > current ? speedUp : speedDown;

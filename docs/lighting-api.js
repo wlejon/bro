@@ -66,8 +66,10 @@
  *    compensation brightens (+1 is twice as bright) or darkens. Tests and
  *    stills want this: the frame does not depend on the frames before it.
  *  - "auto": EV is metered from the frame on the GPU (a 128-bin histogram of
- *    log2 luminance; the mean of the pixels between the lowPercent and
- *    highPercent shares, EV = log2(L * 100 / 12.5)) and the applied EV
+ *    log2 luminance; L the log-average of the pixels between the lowPercent
+ *    and highPercent shares, and EV the one that puts L at middle grey,
+ *    log2(L / (1.2 * 0.18)), so a sunlit field lands where a camera would
+ *    put it) and the applied EV
  *    follows it exponentially, at speedUp per second toward a brighter scene
  *    and speedDown toward a darker one: no overshoot, no oscillation. The
  *    tone pass reads the result on the GPU, so no frame waits on the meter;
@@ -86,8 +88,8 @@
  *    living room: 50 to 150 lux; the full moon: 0.1 to 0.3 lux; a starlit
  *    night: 0.001 lux.
  *  - a 60 W incandescent bulb (800 lm): about 65 cd; a candle: 1 cd.
- *  - metered EVs to expect: a sunlit scene 14 to 16, an overcast one 12 to
- *    13, an interior 5 to 7, moonlight about -2. The meter is clamped to
+ *  - metered EVs to expect: a sunlit scene 13 to 15, an overcast one 11 to
+ *    12, an interior 4 to 6, moonlight about -3. The meter is clamped to
  *    [minEv, maxEv].
  * @typedef {Object} ExposureConfig
  * @property {string} [mode]  "fixed" (default) or "auto".
@@ -156,6 +158,15 @@
  * times intensity (the illuminance above the air, lux in physical units:
  * 128,000 for Earth's sun, ExposureConfig) are tracked unless pinned here.
  * Pair it with auto exposure (scene.setExposure({ mode: 'auto' })).
+ *
+ * The air's haze. Earth's default Mie (Hillaire's and Bruneton's reference
+ * air) is near-pristine: an aerosol optical depth of 0.005 and over 200 km
+ * of visibility, so ground tens of kilometres off is barely hazed. Most of a
+ * real day's haze is the boundary layer's aerosol; `turbidity` scales it.
+ * Visibility V (metres) wants Mie extinction 3.912 / V less the Rayleigh's
+ * 13.6e-6 at sea level; the Mie extinction is 4.44e-6 per unit of turbidity:
+ *   turbidity  1  pristine, 200+ km      turbidity 19  a fine day, 40 km (AOD 0.1)
+ *   turbidity 10  clear, 65 km (AOD 0.05) turbidity 40  hazy, 20 km (AOD 0.2)
  * @typedef {Object} AtmosphereConfig
  * @property {boolean} [enabled]  false turns it off (default true).
  * @property {Array<number>} [rayleigh]  Rayleigh scattering per metre at the surface, [r, g, b] (default [5.802e-6, 13.558e-6, 33.1e-6]).
