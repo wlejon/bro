@@ -133,6 +133,7 @@ add_library(bro_scene STATIC
     world/world_service.cpp
     world/shadow_pages.cpp
     world/shadow_pages_plan.cpp
+    world/probe_grid.cpp
     vulkan/frame/scene_vk_device.cpp
     vulkan/frame/scene_vk_allocator.cpp
     vulkan/frame/scene_vk_pipeline.cpp
@@ -226,6 +227,11 @@ if(BRO_BUILD_TESTS)
                    world/shadow_pages_plan.cpp)
     target_link_libraries(bro_shadow_pages_test PRIVATE bromath)
     target_include_directories(bro_shadow_pages_test PRIVATE ${bro_SOURCE_DIR}/src)
+
+    # The probe grid's layout (layers, corners, the columns a move brings
+    # in, volumes and refresh slices), CPU only: its source alone.
+    add_executable(bro_probe_grid_test tests/test_probe_grid.cpp world/probe_grid.cpp)
+    target_include_directories(bro_probe_grid_test PRIVATE ${bro_SOURCE_DIR}/src)
 
     # The atmosphere's tables against a CPU reference march (single
     # scattering brute force, multiple scattering by iterated orders).
