@@ -1,0 +1,84 @@
+#version 450
+// The cover's plan (vulkan/ground/scene_cover_plan.h): every candidate of
+// one of a grass node's rings (a blade of a cell, or a cell of the herbs'
+// grid) tested once by the test its vertices ran each (grassBladeLive,
+// herbPlantLive), the ones it draws appended to the ring's entries
+// (scene_cover_plan.glsl) and counted into the ring's indirect command.
+// The ring's cells are runs of the tiles in view, as its draws had them.
+
+layout(local_size_x = 64) in;
+
+#define COVER_PLAN 1
+#include "common/scene_camera.glsl"
+#include "ground/scene_grass.glsl"
+#include "common/scene_vegetation.glsl"
+#include "ground/scene_herb.glsl"
+#include "ground/scene_cover_plan.glsl"
+
+// A run of cells: its first column and row, columns and rows; and the
+// ring's cells before it.
+struct CoverRun {
+    ivec4 rect;
+    uvec4 before;
+};
+layout(std430, set = 3, binding = 3) readonly buffer CoverRuns {
+    CoverRun runs[];
+} coverRuns;
+// The rings' VkDrawIndexedIndirectCommands, their instance counts added to.
+layout(std430, set = 3, binding = 2) buffer CoverCommands {
+    uint words[];
+} coverCommands;
+
+layout(push_constant) uniform CoverPush {
+    uint firstRun;     // the ring's runs
+    uint runCount;
+    uint perCell;      // candidates a cell (a cell's blades; a herb cell's one plant)
+    uint candidates;   // the ring's cells times perCell
+    uint count;        // the word of its command's instance count
+    uint first;        // its first entry
+    uint herbs;        // 1: a herb ring
+    uint start;        // this dispatch's first candidate (a ring past a dispatch's most workgroups takes several)
+} plan;
+
+shared uint sLive;
+shared uint sBase;
+
+void main() {
+    if (gl_LocalInvocationIndex == 0u) sLive = 0u;
+    barrier();
+
+    uint g = plan.start + gl_GlobalInvocationID.x;
+    bool live = false;
+    uvec2 entry = uvec2(0u);
+    if (g < plan.candidates) {
+        uint cellIndex = g / plan.perCell;
+        int j = int(g % plan.perCell);
+        // The run holding it: the last whose cells before it are not past it.
+        uint lo = plan.firstRun, hi = plan.firstRun + plan.runCount - 1u;
+        while (lo < hi) {
+            uint mid = (lo + hi + 1u) >> 1;
+            if (coverRuns.runs[mid].before.x <= cellIndex) lo = mid;
+            else hi = mid - 1u;
+        }
+        CoverRun r = coverRuns.runs[lo];
+        int local = int(cellIndex - r.before.x);
+        int W = max(r.rect.z, 1);
+        ivec2 c = r.rect.xy + ivec2(local % W, local / W);
+        if (plan.herbs != 0u) {
+            HerbSeed s;
+            live = herbPlantLive(c, s);
+        } else {
+            GrassSeed s;
+            live = grassBladeLive(c, j, s);
+        }
+        entry = coverPack(c, j);
+    }
+
+    // A workgroup's entries go in together: one add to the ring's count.
+    uint slot = 0u;
+    if (live) slot = atomicAdd(sLive, 1u);
+    barrier();
+    if (gl_LocalInvocationIndex == 0u && sLive > 0u) sBase = atomicAdd(coverCommands.words[plan.count], sLive);
+    barrier();
+    if (live) coverList.entries[plan.first + sBase + slot] = entry;
+}

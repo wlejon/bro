@@ -64,10 +64,12 @@ bool SceneDefaults::setup(SceneVkDevice& device, SceneVkAllocator& allocator) {
     bone.addBinding(3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kVsCs);
     boneLayout = bone.build(dev);
 
+    // (A grass node's set is read by the cover's plan too, cover_plan.comp.)
     SceneVkDescriptorLayoutBuilder custom;
-    custom.addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, kVsFs);
+    constexpr VkShaderStageFlags kVsFsCs = kVsFs | VK_SHADER_STAGE_COMPUTE_BIT;
+    custom.addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, kVsFsCs);
     for (uint32_t i = 1; i <= static_cast<uint32_t>(MeshNode::kMaxUserTextures); ++i)
-        custom.addBinding(i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, kVsFs);
+        custom.addBinding(i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, kVsFsCs);
     customLayout = custom.build(dev);
 
     SceneVkDescriptorLayoutBuilder empty;

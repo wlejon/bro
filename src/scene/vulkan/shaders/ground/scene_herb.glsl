@@ -5,9 +5,10 @@
 // field, the floor, the influence map; herbPick from scene_herb_mix.glsl)
 // and scene_vegetation.glsl (a cantilever's response to the wind).
 //
-// No plant has data of its own. An instance is a cell of the herbs' grid;
+// No plant has data of its own. A plant is a cell of the herbs' grid;
 // herbPick says which species grows there, if any, and its hashes the rest.
-// The instance's mesh is several CARDS (strips of a few segments, x across
+// The cover's plan (cover_plan.comp) lists the cells of a ring that hold a
+// plant it draws, a plant an instance. Its mesh is several CARDS (strips of a few segments, x across
 // -0.5..0.5, y along 0..1), and its plant takes them in turn:
 //   blooms  one a stem, at its tip: a disc facing along the stem (a daisy's
 //           rays, a poppy's cup, a yarrow's umbel), a ball facing the eye (a
@@ -157,7 +158,66 @@ HerbStalk herbStem(int sp, int k, vec3 root, vec4 h, float size, VegWind w, floa
     return s;
 }
 
-bool herbVertex(int id, int vid, vec3 v, out HerbVertex o) {
+// What a plant's every vertex shares, from its cell alone.
+struct HerbSeed {
+    vec4 h;          // the cell's hashes
+    vec4 f;          // the field at its root
+    vec2 rootXZ;
+    vec2 fh;         // the floor there: the canopy, the herbs' density
+    float d;         // its distance from the eye (with the eye's lift)
+    float farWiden;  // the far ring's widening of the plants it keeps
+    int sp;          // its species
+};
+
+// The plant of cell `c` of the herbs' grid, if the draw draws one: inside
+// its ring, kept by the far ring's thinning, on the field, roughly on
+// screen, and a species growing there. The cover's plan (cover_plan.comp)
+// runs it once a cell.
+bool herbPlantLive(ivec2 c, out HerbSeed s) {
+    s.h = vec4(grassHash(c, 101), grassHash(c, 102), grassHash(c, 103), grassHash(c, 104));
+    s.f = vec4(0.0);
+    s.fh = vec2(0.0);
+    s.farWiden = 1.0;
+    s.sp = -1;
+    s.rootXZ = (vec2(c) + s.h.xy) * grass.herbInfo.y;
+    vec3 eye = camera.eyeWorld.xyz;
+    s.d = length(vec2(length(s.rootXZ - eye.xz), grass.lod.w));
+
+    // The ring, handing over through a dithered band, a plant at a time.
+    float fin = grass.herbRing.x <= 0.0 ? 1.0 : smoothstep(grass.herbRing.x - grass.herbRing.z, grass.herbRing.x, s.d);
+    float fout = 1.0 - smoothstep(grass.herbRing.y - grass.herbRing.w, grass.herbRing.y, s.d);
+    if (s.h.w > fin || s.h.w > fout) return false;
+    // The far ring keeps fewer plants with distance (as many as the whole
+    // plants' range over the distance), each widened to keep their cover:
+    // past the range a plant is a few pixels, and a stand reads by its mass.
+    if (grass.herbShape.z > 1.5) {
+        float keep = clamp(grass.herbShape.w / max(s.d, 1e-3), 0.2, 1.0);
+        float hk = grassHash(c, 107);
+        if (hk >= keep) return false;
+        // (Seen from well above, the turf takes them: herbFarSteep. Its
+        // ground height from the eye's lift: a field read here, before most
+        // cells are let go, cost more than the plants.)
+        float horiz = max(length(s.rootXZ - eye.xz), 1e-3);
+        if (hk >= keep * herbFarSteep(s.d, grass.lod.w / horiz)) return false;
+        s.farWiden = inversesqrt(keep);
+    }
+    if (!grassInField(s.rootXZ) || s.h.w > grassFieldInside(s.rootXZ)) return false;
+
+    // Off screen: a box round the cell as tall as the tallest herb.
+    s.f = grassFieldAt(s.rootXZ);
+    vec4 cp = camera.viewProj * vec4(s.rootXZ.x - eye.x, s.f.r + 0.5 - eye.y, s.rootXZ.y - eye.z, 1.0);
+    float m = cp.w * 0.15 + 2.2;
+    if (cp.w < -2.5 || cp.x < -cp.w - m || cp.x > cp.w + m || cp.y < -cp.w - m || cp.y > cp.w + m) return false;
+
+    s.fh = grassFloorHerbsAt(s.rootXZ);
+    s.sp = herbPick(s.rootXZ, s.fh.x, s.fh.y, grassHash(c, 105), grassHash(c, 106));
+    return s.sp >= 0;
+}
+
+// The plant of cell `c` (one the plan listed) at vertex `vid` of the ring
+// mesh (card vid / vertices a card), card-space vertex `v`. False when the
+// ring does not draw that card.
+bool herbVertex(ivec2 c, int vid, vec3 v, out HerbVertex o) {
     o.pos = vec3(0.0);
     o.normal = vec3(0.0, 1.0, 0.0);
     o.side = vec3(1.0, 0.0, 0.0);
@@ -171,49 +231,19 @@ bool herbVertex(int id, int vid, vec3 v, out HerbVertex o) {
     o.down = vec2(0.0, -1.0);
     o.stand = vec2(0.0);
 
-    vec3 rect = grassRect();
-    int W = max(int(rect.z), 1);
-    ivec2 c = ivec2(int(rect.x) + id % W, int(rect.y) + id / W);
-    float cell = grass.herbInfo.y;
-    vec4 h = vec4(grassHash(c, 101), grassHash(c, 102), grassHash(c, 103), grassHash(c, 104));
-    vec2 rootXZ = (vec2(c) + h.xy) * cell;
+    HerbSeed seed;
+    if (!herbPlantLive(c, seed)) return false;
+    vec4 h = seed.h, f = seed.f;
+    vec2 rootXZ = seed.rootXZ, fh = seed.fh;
+    float d = seed.d, farWiden = seed.farWiden;
+    int sp = seed.sp;
     vec3 eye = camera.eyeWorld.xyz;
-    float d = length(vec2(length(rootXZ - eye.xz), grass.lod.w));
+    float cell = grass.herbInfo.y;
 
-    // The ring, handing over through a dithered band, a plant at a time.
-    float fin = grass.herbRing.x <= 0.0 ? 1.0 : smoothstep(grass.herbRing.x - grass.herbRing.z, grass.herbRing.x, d);
-    float fout = 1.0 - smoothstep(grass.herbRing.y - grass.herbRing.w, grass.herbRing.y, d);
-    if (h.w > fin || h.w > fout) return false;
-    // The far ring keeps fewer plants with distance (as many as the whole
-    // plants' range over the distance), each widened to keep their cover:
-    // past the range a plant is a few pixels, and a stand reads by its mass.
-    float farWiden = 1.0;
-    if (grass.herbShape.z > 1.5) {
-        float keep = clamp(grass.herbShape.w / max(d, 1e-3), 0.2, 1.0);
-        float hk = grassHash(c, 107);
-        if (hk >= keep) return false;
-        // (Seen from well above, the turf takes them: herbFarSteep. Its
-        // ground height from the eye's lift: a field read here, before most
-        // cells are let go, cost more than the plants.)
-        float horiz = max(length(rootXZ - eye.xz), 1e-3);
-        if (hk >= keep * herbFarSteep(d, grass.lod.w / horiz)) return false;
-        farWiden = inversesqrt(keep);
-    }
-    if (!grassInField(rootXZ) || h.w > grassFieldInside(rootXZ)) return false;
-
-    // Which card of the instance this is, and whether the far ring keeps it.
+    // Which card of the plant this is (and below, whether the ring keeps it).
     int K = int(grass.herbShape.x + 0.5);
     int vpc = max(int(grass.herbShape.y + 0.5), 1);
     int j = vid / vpc;
-
-    // Off screen: a box round the cell as tall as the tallest herb.
-    vec4 f = grassFieldAt(rootXZ);
-    vec4 cp = camera.viewProj * vec4(rootXZ.x - eye.x, f.r + 0.5 - eye.y, rootXZ.y - eye.z, 1.0);
-    float m = cp.w * 0.15 + 2.2;
-    if (cp.w < -2.5 || cp.x < -cp.w - m || cp.x > cp.w + m || cp.y < -cp.w - m || cp.y > cp.w + m) return false;
-
-    vec2 fh = grassFloorHerbsAt(rootXZ);
-    int sp = herbPick(rootXZ, fh.x, fh.y, grassHash(c, 105), grassHash(c, 106));    if (sp < 0) return false;
 
     vec4 r0 = herbRec(sp, 0), r1 = herbRec(sp, 1), r3 = herbRec(sp, 3), r6 = herbRec(sp, 6);
     vec4 r11 = herbRec(sp, 11);

@@ -47,6 +47,7 @@ namespace bro::scene::vk {
 struct SceneFrame;
 struct SceneGpu;
 class SceneDefaults;
+class CoverPlan;
 namespace plants {
 class GpuPlanner;
 }
@@ -130,10 +131,11 @@ struct MeshDraw {
     VkBuffer vertices = VK_NULL_HANDLE;
     VkBuffer indices = VK_NULL_HANDLE;
     uint32_t indexCount = 0;   // Tube: the vertex count of the unindexed draw
-    /// A plants draw (scene_plants_gpu_plan.cpp): its counts and firsts are
-    /// in this buffer's command at `indirectOffset` (a
-    /// VkDrawIndexedIndirectCommand for the leaves, a VkDrawIndirectCommand
-    /// for the wood). Null for every other kind.
+    /// A plants draw (scene_plants_gpu_plan.cpp) or a grass ring's
+    /// (scene_cover_plan.cpp): its counts and firsts are in this buffer's
+    /// command at `indirectOffset` (a VkDrawIndexedIndirectCommand, or a
+    /// VkDrawIndirectCommand for the plants' wood). Null for every other
+    /// draw.
     VkBuffer indirect = VK_NULL_HANDLE;
     VkDeviceSize indirectOffset = 0;
     VkBuffer instances = VK_NULL_HANDLE;         // Instanced, InstancedVegetation
@@ -215,8 +217,9 @@ public:
     void preparePlants(SceneFrame& frame, PlantsNode& node, std::vector<MeshDraw>& out);
     /// The plants' plans and the leaf poses their draws read (queued by
     /// preparePlants) into the frame's compute stream (SceneFrame::
-    /// computeStream): recorded outside any rendering, before the passes
-    /// that draw them.
+    /// computeStream), and the grass rings' (queued by prepareGrass) into
+    /// its graphics stream: recorded outside any rendering, before the
+    /// passes that draw them.
     void recordPlans(SceneFrame& frame);
     /// The plans recorded since the last call went to the GPU as `ticket` on
     /// `queue`: the GPU planner's read-backs of them are read once it completes.
@@ -354,6 +357,8 @@ private:
 
     // The plants' GPU planner (scene_plants_gpu_plan.h).
     std::shared_ptr<plants::GpuPlanner> plantPlanner_;
+    // The grass rings' (scene_cover_plan.h).
+    std::shared_ptr<CoverPlan> coverPlan_;
 };
 
 }  // namespace bro::scene::vk

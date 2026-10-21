@@ -1,6 +1,6 @@
 #version 450
-// Herb plants (scene_herb.glsl): one instance per cell of the herbs' grid
-// in the draw's ring rectangle, each copy of the card strip in the ring mesh
+// Herb plants (scene_herb.glsl): an instance a plant of the ring's list in
+// the cover's plan (scene_cover_plan.glsl), each copy of the card strip in the ring mesh
 // one of the plant's cards (its blooms, stems and leaves), built and swayed
 // where it stands. Drawn with mesh.frag's SCENE_HERB build, which cuts each
 // card to its leaf, stem or bloom (scene_herb_surface.glsl).
@@ -28,10 +28,11 @@ layout(location = 10) out vec2 outHerbStand;
 #include "ground/scene_grass.glsl"
 #include "common/scene_vegetation.glsl"
 #include "ground/scene_herb.glsl"
+#include "ground/scene_cover_plan.glsl"
 
 void main() {
     HerbVertex h;
-    if (!herbVertex(gl_InstanceIndex, gl_VertexIndex, inPos, h)) {
+    if (!herbVertex(coverCell(coverList.entries[gl_InstanceIndex]), gl_VertexIndex, inPos, h)) {
         gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
         outVegShade = vec4(0.0, 0.0, 0.0, -1.0);
         outHerbInfo = vec4(0.0);

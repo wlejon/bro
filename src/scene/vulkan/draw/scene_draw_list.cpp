@@ -82,9 +82,11 @@ void buildDrawLists(SceneFrame& frame) {
                 drawer.prepareGrass(frame, *grass, rings);
                 for (MeshDraw& draw : rings) {
                     placeDraw(frame, node, std::nullopt, draw);
-                    stats.meshDrawn++;
-                    lists.opaque.push_back(static_cast<uint32_t>(lists.meshes.size()));
+                    const auto index = static_cast<uint32_t>(lists.meshes.size());
                     lists.meshes.push_back(draw);
+                    if (draw.shadowOnly) continue;   // its near ring's casters
+                    stats.meshDrawn++;
+                    lists.opaque.push_back(index);
                 }
                 continue;
             }

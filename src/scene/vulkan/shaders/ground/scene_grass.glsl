@@ -2,14 +2,14 @@
 // scene_camera.glsl (the camera, the wind field, the hashes and noise).
 //
 // No blade has any data of its own. A ring of cells around the camera is
-// drawn as one instanced draw. An instance is a cell: its root is a hashed
-// spot in the cell (the draw's rectangle of absolute cells), gathered toward
-// its tussock where the grass grows in bunches, and it draws several blades
-// (the ring mesh is that many copies of the blade, so the vertex index says
-// which): a tuft's tillers rising from a small crown near the camera, blades
-// over the cell further off. The ground there (the node's field texture), the
-// clump noise and a few shared noises (bunches, flowering patches) do the
-// rest. Everything after is per vertex:
+// drawn as one draw. A cell's root is a hashed spot in it (an absolute cell
+// of the ring's grid), gathered toward its tussock where the grass grows in
+// bunches, and it holds several blades: a tuft's tillers rising from a small
+// crown near the camera, blades over the cell further off. The ground there
+// (the node's field texture), the clump noise and a few shared noises
+// (bunches, flowering patches) do the rest. The cover's plan
+// (cover_plan.comp) lists the blades a ring draws, a blade an instance;
+// everything after is per vertex:
 //
 //   - a blade is a leaf, a dead leaf or a flowering culm, by its hash and
 //     the share of each where it grows (GrassNode::Params tufts, flowering,
@@ -32,8 +32,8 @@
 //     at its sheath, dark at the root and lifted where a gust bends it.
 //
 // A blade the draw does not want (outside its ring, off screen, thinned by
-// the density) is culled at every vertex by the same instance-only test, so
-// no triangle of it survives.
+// the density) is left out of the plan's list (grassBladeLive); a caster,
+// drawn over the ring's cells, culls it at every vertex by the same test.
 
 #define GRASS_HERB_MAX 12      // GrassNode::kHerbMax
 #define GRASS_HERB_RECORD 14   // vec4s a species (broflora::kHerbRecordFloats / 4)
@@ -305,16 +305,16 @@ struct GrassBlade {
     vec4 info;
 };
 
-// The draw's rectangle of cells: its first column and row and its width in
-// cells, in the model matrix's first row (scene_mesh_drawer_grass.cpp: a
-// draw a run of the tiles in view).
-vec3 grassRect() {
 #ifdef GRASS_SHADOW
-    return push.modelRows[0].xyz;
-#else
-    return vec3(push.model[0][0], push.model[1][0], push.model[2][0]);
-#endif
+// A caster's rectangle of cells: its first column and row and its width in
+// cells, in the model matrix's first row (scene_mesh_drawer_grass.cpp: a
+// draw a run of the tiles in view), and instance `id`'s cell in it.
+ivec2 grassRectCell(int id) {
+    vec3 rect = push.modelRows[0].xyz;
+    int W = max(int(rect.z), 1);
+    return ivec2(int(rect.x) + id % W, int(rect.y) + id / W);
 }
+#endif
 
 // A hash of cell `c` and slot `k` in [0, 1): a blade's own draws.
 float grassHash(ivec2 c, int k) {
@@ -347,10 +347,85 @@ vec2 grassTilt(vec2 r, vec2 w, vec2 c, float s, bool culm) {
     return m > 1e-4 ? t * (GRASS_TILT_MAX * tanh(m / GRASS_TILT_MAX) / m) : t;
 }
 
-// Instance `id` of the draw at vertex `vid` of its ring mesh, blade-space
-// vertex `v` (x across: -0.5, 0.5 or 0 at the tip; y 0 at the root .. 1 at
-// the tip). False when the draw does not draw that blade.
-bool grassBlade(int id, int vid, vec3 v, vec3 vn, out GrassBlade b) {
+// What a blade's every vertex shares, from its cell and slot alone.
+struct GrassSeed {
+    vec4 h;       // the cell's hashes
+    vec4 hb;      // the blade's
+    vec4 f;       // the field at its root
+    vec3 gn;      // the ground's normal there
+    vec2 root;    // the cell's root (gathered toward its tussock)
+    vec2 tc;      // its tussock's middle
+    float bunch;  // how bunched the grass grows there
+    float d;      // its distance from the eye (with the eye's lift)
+    float kept;   // the blades the cell keeps
+    float clump;  // the clump noise
+};
+
+// Blade `j` of cell `c` (the draw's cells, grass.cells.w a side), and
+// whether the draw draws it: inside its ring, on the field, roughly on
+// screen and kept by the thinning and the density. The cover's plan
+// (cover_plan.comp) runs it once a blade; a caster's vertices run it each.
+bool grassBladeLive(ivec2 c, int j, out GrassSeed s) {
+    s.h = vec4(sceneWindHash(c), sceneWindHash(c + ivec2(71, 13)), sceneWindHash(c + ivec2(-35, 29)),
+               sceneWindHash(c + ivec2(17, -91)));
+    s.hb = vec4(0.0);
+    s.f = vec4(0.0);
+    s.gn = vec3(0.0, 1.0, 0.0);
+    s.clump = 0.0;
+    float cell = grass.cells.w;
+    vec2 root = (vec2(c) + s.h.xy) * cell;
+    // Bunch grass: the cell's root gathers toward its tussock.
+    s.bunch = grassBunch(root);
+    vec3 tus = grassTussock(root);
+    s.tc = tus.xy;
+    s.root = mix(root, s.tc, GRASS_TUSSOCK_GATHER * tus.z * s.bunch);
+    vec3 eye = camera.eyeWorld.xyz;
+    // Across the ground and the eye's lift over it (lod.w): the rings scale
+    // with the eye's height.
+    s.d = length(vec2(length(s.root - eye.xz), grass.lod.w));
+
+    // Thinning, first since it is the cheapest test: past lod.x the instance
+    // keeps fewer of its blades, widened to keep the cover; shadow casters
+    // keep fewer again.
+    float keep = clamp(grass.lod.x / max(s.d, 1e-3), grass.lod.y, 1.0);
+#ifdef GRASS_SHADOW
+    keep *= grass.lod.z;
+#endif
+    s.kept = max(grass.shape.x * keep, 1.0);
+    if (float(j) + grassHash(c, 4096 + j) * 0.999 >= s.kept + 0.5) return false;
+
+    // The ring, handing over to its neighbours through a dithered band (a
+    // whole instance at a time).
+    float fin = grass.ring.x <= 0.0 ? 1.0 : smoothstep(grass.ring.x - grass.ring.z, grass.ring.x, s.d);
+    float fout = 1.0 - smoothstep(grass.ring.y - grass.ring.w, grass.ring.y, s.d);
+    if (s.h.w > fin || s.h.w > fout) return false;
+    if (!grassInField(s.root) || s.h.w > grassFieldInside(s.root)) return false;
+    s.f = grassFieldAt(s.root);
+
+    // Off screen: a generous box around the cell's middle.
+    float H = grass.blade.x;
+    vec4 cp = camera.viewProj * vec4(s.root.x - eye.x, s.f.r + 0.6 * H - eye.y, s.root.y - eye.z, 1.0);
+    float m = cp.w * 0.15 + 2.5 * H + 0.5 + grass.shape.z;
+    if (cp.w < -2.0 || cp.x < -cp.w - m || cp.x > cp.w + m || cp.y < -cp.w - m || cp.y > cp.w + m) return false;
+
+    if (s.f.g <= 0.0 || s.f.a <= 0.0) return false;
+
+    // Clumps: thick and tall in some places, thin and short between. The
+    // density thins blade by blade, so a thin patch is sparse tufts.
+    s.gn = grassGroundNormal(s.root);
+    float k = grass.dry.w;
+    s.clump = clamp((0.5 * sceneWindNoise(s.root * k) + 0.25 * sceneWindNoise(s.root * k * 2.03 + 17.3)) * 0.667 + 0.5,
+                    0.0, 1.0);
+    float minY = grass.blade.z;
+    float dens = (0.55 + 0.7 * s.clump) * s.f.g * smoothstep(minY - 0.05, minY + 0.05, s.gn.y);
+    s.hb = vec4(grassHash(c, j * 4), grassHash(c, j * 4 + 1), grassHash(c, j * 4 + 2), grassHash(c, j * 4 + 3));
+    return s.hb.w <= dens;
+}
+
+// Blade `j` of cell `c` at blade-space vertex `v` (x across: -0.5, 0.5 or
+// 0 at the tip; y 0 at the root .. 1 at the tip). False when the draw does
+// not draw that blade.
+bool grassBlade(ivec2 c, int j, vec3 v, vec3 vn, out GrassBlade b) {
     b.pos = vec3(0.0);
     b.normal = vec3(0.0, 1.0, 0.0);
     b.side = vec3(1.0, 0.0, 0.0);
@@ -362,61 +437,15 @@ bool grassBlade(int id, int vid, vec3 v, vec3 vn, out GrassBlade b) {
     b.uv = vec2(0.0);
     b.info = vec4(0.0);
 
-    vec3 rect = grassRect();
-    int W = max(int(rect.z), 1);
-    ivec2 c = ivec2(int(rect.x) + id % W, int(rect.y) + id / W);
-    vec4 h = vec4(sceneWindHash(c), sceneWindHash(c + ivec2(71, 13)), sceneWindHash(c + ivec2(-35, 29)),
-                  sceneWindHash(c + ivec2(17, -91)));
-    float cell = grass.cells.w;
-    vec2 root = (vec2(c) + h.xy) * cell;
-    // Bunch grass: the cell's root gathers toward its tussock.
-    float bunch = grassBunch(root);
-    vec3 tus = grassTussock(root);
-    vec2 tc = tus.xy;
-    root = mix(root, tc, GRASS_TUSSOCK_GATHER * tus.z * bunch);
+    GrassSeed seed;
+    if (!grassBladeLive(c, j, seed)) return false;
+    vec4 h = seed.h, hb = seed.hb, f = seed.f;
+    vec3 gn = seed.gn;
+    vec2 root = seed.root, tc = seed.tc;
+    float bunch = seed.bunch, d = seed.d, kept = seed.kept, clump = seed.clump;
     vec3 eye = camera.eyeWorld.xyz;
-    // Across the ground and the eye's lift over it (lod.w): the rings scale
-    // with the eye's height.
-    float d = length(vec2(length(root - eye.xz), grass.lod.w));
-
-    // Thinning, first since it is the cheapest test: past lod.x the instance
-    // keeps fewer of its blades, widened to keep the cover; shadow casters
-    // keep fewer again.
-    int vpb = max(int(grass.shape.y + 0.5), 1);
-    int j = vid / vpb;
-    float keep = clamp(grass.lod.x / max(d, 1e-3), grass.lod.y, 1.0);
-#ifdef GRASS_SHADOW
-    keep *= grass.lod.z;
-#endif
-    float kept = max(grass.shape.x * keep, 1.0);
-    if (float(j) + grassHash(c, 4096 + j) * 0.999 >= kept + 0.5) return false;
-
-    // The ring, handing over to its neighbours through a dithered band (a
-    // whole instance at a time).
-    float fin = grass.ring.x <= 0.0 ? 1.0 : smoothstep(grass.ring.x - grass.ring.z, grass.ring.x, d);
-    float fout = 1.0 - smoothstep(grass.ring.y - grass.ring.w, grass.ring.y, d);
-    if (h.w > fin || h.w > fout) return false;
-    if (!grassInField(root) || h.w > grassFieldInside(root)) return false;
-    vec4 f = grassFieldAt(root);
-
-    // Off screen: a generous box around the cell's middle.
     float H = grass.blade.x;
-    vec4 cp = camera.viewProj * vec4(root.x - eye.x, f.r + 0.6 * H - eye.y, root.y - eye.z, 1.0);
-    float m = cp.w * 0.15 + 2.5 * H + 0.5 + grass.shape.z;
-    if (cp.w < -2.0 || cp.x < -cp.w - m || cp.x > cp.w + m || cp.y < -cp.w - m || cp.y > cp.w + m) return false;
-
-    if (f.g <= 0.0 || f.a <= 0.0) return false;
-
-    // Clumps: thick and tall in some places, thin and short between. The
-    // density thins blade by blade, so a thin patch is sparse tufts.
-    vec3 gn = grassGroundNormal(root);
-    float k = grass.dry.w;
-    float clump = clamp((0.5 * sceneWindNoise(root * k) + 0.25 * sceneWindNoise(root * k * 2.03 + 17.3)) * 0.667 + 0.5,
-                        0.0, 1.0);
-    float minY = grass.blade.z;
-    float dens = (0.55 + 0.7 * clump) * f.g * smoothstep(minY - 0.05, minY + 0.05, gn.y);
-    vec4 hb = vec4(grassHash(c, j * 4), grassHash(c, j * 4 + 1), grassHash(c, j * 4 + 2), grassHash(c, j * 4 + 3));
-    if (hb.w > dens) return false;
+    int vpb = max(int(grass.shape.y + 0.5), 1);
     vec4 he = vec4(grassHash(c, 2048 + j * 4), grassHash(c, 2049 + j * 4), grassHash(c, 2050 + j * 4),
                    grassHash(c, 2051 + j * 4));
 

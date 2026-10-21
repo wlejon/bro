@@ -72,6 +72,9 @@ BRO_SCENE_SHADER(MeshGrassVert,            "mesh_grass.vert",             "groun
 BRO_SCENE_SHADER(MeshGrassFrag,            "mesh_grass.frag",             "draw/mesh.frag",                     "frag", "SCENE_VEGETATION SCENE_GRASS")
 BRO_SCENE_SHADER(MeshGrassIndirectFrag,    "mesh_grass_indirect.frag",    "draw/mesh.frag",                     "frag", "SCENE_VEGETATION SCENE_GRASS SCENE_INDIRECT_OUTPUT")
 BRO_SCENE_SHADER(ShadowGrassVert,          "shadow_grass.vert",           "ground/shadow_grass.vert",           "vert", "")
+// The cover's plan (scene_cover_plan.cpp): the blades and herb plants a
+// grass node's rings draw.
+BRO_SCENE_SHADER(CoverPlanComp,            "cover_plan.comp",             "ground/cover_plan.comp",             "comp", "")
 // The GPU cell pass (scene_world_cells_pass.cpp), its three steps.
 BRO_SCENE_SHADER(WorldCellsTopComp,        "world_cells_top.comp",        "world/world_cells_cull.comp",        "comp", "CELLS_TOP")
 BRO_SCENE_SHADER(WorldCellsLeafComp,       "world_cells_leaf.comp",       "world/world_cells_cull.comp",        "comp", "CELLS_LEAF")

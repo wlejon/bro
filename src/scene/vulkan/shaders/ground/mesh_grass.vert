@@ -1,7 +1,7 @@
 #version 450
-// Grass blades (scene_grass.glsl): one instance per cell of the draw's ring
-// rectangle, each copy of the blade in the ring mesh one of the cell's
-// blades, bent into place by the wind and the movers. Drawn with mesh.frag's
+// Grass blades (scene_grass.glsl): an instance a blade of the ring's list in
+// the cover's plan (scene_cover_plan.glsl), the ring mesh's first blade its
+// vertices, bent into place by the wind and the movers. Drawn with mesh.frag's
 // SCENE_GRASS build: a leaf folded along its midrib near the eye, its normal
 // leaning toward the ground's further off, the sun glowing through it from
 // behind, the root in shade, a culm's head cut per pixel.
@@ -25,10 +25,12 @@ layout(location = 7) out vec4 outVegShade;
 #include "common/scene_camera.glsl"
 #include "common/scene_mesh_push.glsl"
 #include "ground/scene_grass.glsl"
+#include "ground/scene_cover_plan.glsl"
 
 void main() {
     GrassBlade b;
-    if (!grassBlade(gl_InstanceIndex, gl_VertexIndex, inPos, inNormal, b)) {
+    uvec2 e = coverList.entries[gl_InstanceIndex];
+    if (!grassBlade(coverCell(e), coverSlot(e), inPos, inNormal, b)) {
         gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
         outVegShade = vec4(0.0, 0.0, 0.0, 1.0);
         return;

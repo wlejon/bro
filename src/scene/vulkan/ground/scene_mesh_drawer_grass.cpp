@@ -1,8 +1,10 @@
-// SceneMeshDrawer's grass path: a GrassNode becomes up to four draws, one
-// per ring around the camera, each instancing its ring mesh (a cell's
-// blades) over only the cells of its ring the view can see. The shader (shaders/ground/scene_grass.glsl)
-// places, culls, bends and colours every blade; this file picks the cells,
-// stamps the movers and binds the node's field and influence map.
+// SceneMeshDrawer's grass path: a GrassNode becomes a draw a ring around the
+// camera (four of grass, three of herbs). This file picks each ring's cells
+// the view can see, stamps the movers and binds the node's field and
+// influence map; the cover's plan (scene_cover_plan.h) lists the blades and
+// plants in those cells the ring draws, and the shaders
+// (shaders/ground/scene_grass.glsl, scene_herb.glsl) place, bend and colour
+// each one, an instance a blade or a plant.
 
 #include "scene/vulkan/draw/scene_mesh_drawer.h"
 
@@ -15,6 +17,7 @@
 #include "scene/vulkan/frame/scene_targets.h"
 #include "scene/vulkan/frame/scene_vk_descriptors.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
+#include "scene/vulkan/ground/scene_cover_plan.h"
 
 #include <algorithm>
 #include <array>
@@ -398,6 +401,33 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
 
     const float lift = eyeLift(node, view);
     TileRuns runs;
+    // Each ring's camera draw and its cells, for the cover's plan.
+    struct Planned {
+        MeshDraw draw;
+        TileRuns runs;
+        uint32_t perCell = 1;
+        bool herbs = false;
+    };
+    std::vector<Planned> planned;
+    // The rings planned: their camera draws take the plan's commands.
+    const auto emitPlanned = [&]() {
+        std::vector<CoverPlan::Ring> rings;
+        rings.reserve(planned.size());
+        for (const Planned& p : planned)
+            rings.push_back({&p.runs, p.perCell, p.herbs, p.draw.customSet, p.draw.indexCount});
+        std::vector<CoverPlan::Draw> draws;
+        if (!coverPlan_->add(frame, node.id(), rings, draws)) return;
+        for (size_t i = 0; i < planned.size(); ++i) {
+            MeshDraw d = planned[i].draw;
+            d.indirect = draws[i].commands;
+            d.indirectOffset = draws[i].offset;
+            d.vertexSet = draws[i].listSet;
+            // After the plants, before the ground: the ground under the
+            // blades then fails the early depth test rather than shading.
+            d.order = MeshDraw::kOrderMid - 1;
+            out.push_back(d);
+        }
+    };
 
     for (int r = 0; r < GrassNode::kRings; ++r) {
         const GrassNode::Ring ring = ringInView(node, view, r);
@@ -410,8 +440,7 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
         // hold a drawn blade: it reaches the ring (its dithered bands
         // included), something grows on it, and its box (ground to the
         // tallest blade, padded by a blade's lean and its spread) is in the
-        // view. Every vertex of an instance runs whether its blades are drawn
-        // or not, so cells the shader would only cull are not issued at all.
+        // view. The plan tests every blade of every cell kept.
         // A flowering culm stands at most about 4.8 x the mean height times
         // the field's multiplier (clump 1.4, tuft 1.15, tall patch 1.7, culm
         // 1.75), a leaf 3.6; a cell's roots gather to its tussock up to
@@ -449,7 +478,7 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
         u.lod[3] = lift;
 
         VkDescriptorSet set = writeSet(frame, device_, *defaults_, u, img);
-        if (set == VK_NULL_HANDLE) return;
+        if (set == VK_NULL_HANDLE) break;
 
         const GpuMesh* blade = ringMeshes[r];
         MeshDraw draw;
@@ -471,47 +500,56 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
         static constexpr const char* kRingLabels[GrassNode::kRings] = {"grass:ring0", "grass:ring1", "grass:ring2",
                                                                        "grass:ring3"};
         draw.timerLabel = kRingLabels[r];
+        const uint32_t perBlade = 3u * (2u * static_cast<uint32_t>(ring.segments) - 1u);   // grass_node.cpp's bladeMesh
+        uint32_t drawn = 0;
+        for (const auto& run : runs) drawn += static_cast<uint32_t>(run[2]) * static_cast<uint32_t>(run[3]);
+        node.setDrawnInstances(r, drawn);
         // Only the near ring casts: its blades are the ones whose shadows read.
         // And only into the overlays of the sun's finest levels and of
         // local lights (ShadowViewPlan::grass): a blade is narrower than a
         // coarser level's texel, and it moves with the wind every frame.
-        draw.castsShadow = r == 0 && node.castsShadow();
-        draw.shadowMotion = ShadowMotion::Grass;
-        // A caster keeps at most kShadowKeep of an instance's blades, the
-        // first ones (scene_grass.glsl's thinning: blade j while j + a hash
-        // < kept + 0.5), so its draw stops past them: the rest ran every
-        // vertex only to be culled.
-        if (draw.castsShadow) {
-            const uint32_t blades = static_cast<uint32_t>(ring.blades);
-            const uint32_t kept = std::min(blades, static_cast<uint32_t>(std::ceil(blades * GrassNode::kShadowKeep)) + 1u);
-            const uint32_t perBlade = 3u * (2u * static_cast<uint32_t>(ring.segments) - 1u);   // grass_node.cpp's bladeMesh
-            draw.shadowIndexCount = std::min(blade->indexCount, perBlade * kept);
-        }
-        // A draw a run of tiles: its cell rectangle rides in the model
+        // A caster is drawn over the ring's cells, an instance a cell
+        // running every blade's test at each vertex (it keeps at most
+        // kShadowKeep of a cell's blades, the first ones, scene_grass.glsl's
+        // thinning: blade j while j + a hash < kept + 0.5, so its draw stops
+        // past them): a draw a run of tiles, its cell rectangle in the model
         // matrix's first row (column, row, columns), which grass has no use
         // for (its blades stand on the field, the node's transform ignored);
         // the shadow pass passes that row on as modelRows[0].
-        uint32_t drawn = 0;
-        for (const auto& run : runs) {
-            MeshDraw d = draw;
-            std::memset(d.push.model, 0, sizeof(d.push.model));
-            d.push.model[0] = static_cast<float>(run[0]);
-            d.push.model[4] = static_cast<float>(run[1]);
-            d.push.model[8] = static_cast<float>(run[2]);
-            d.push.model[15] = 1.0f;
-            d.instanceCount = static_cast<uint32_t>(run[2]) * static_cast<uint32_t>(run[3]);
-            drawn += d.instanceCount;
-            out.push_back(d);
+        if (r == 0 && node.castsShadow()) {
+            MeshDraw caster = draw;
+            caster.shadowOnly = true;
+            caster.castsShadow = true;
+            caster.shadowMotion = ShadowMotion::Grass;
+            const uint32_t blades = static_cast<uint32_t>(ring.blades);
+            const uint32_t kept = std::min(blades, static_cast<uint32_t>(std::ceil(blades * GrassNode::kShadowKeep)) + 1u);
+            caster.shadowIndexCount = std::min(blade->indexCount, perBlade * kept);
+            for (const auto& run : runs) {
+                MeshDraw d = caster;
+                std::memset(d.push.model, 0, sizeof(d.push.model));
+                d.push.model[0] = static_cast<float>(run[0]);
+                d.push.model[4] = static_cast<float>(run[1]);
+                d.push.model[8] = static_cast<float>(run[2]);
+                d.push.model[15] = 1.0f;
+                d.instanceCount = static_cast<uint32_t>(run[2]) * static_cast<uint32_t>(run[3]);
+                out.push_back(d);
+            }
         }
-        node.setDrawnInstances(r, drawn);
+        // The camera's draw: an instance a blade the plan lists, the ring
+        // mesh's first blade its vertices.
+        draw.indexCount = std::min(blade->indexCount, perBlade);
+        planned.push_back({draw, runs, static_cast<uint32_t>(ring.blades), false});
     }
 
-    // The herbs: a draw a run of tiles of the herbs' cells in each of their
-    // rings, mesh_herb.vert building each cell's plant (if any) from its
-    // card strips, mesh.frag's SCENE_HERB build cutting them. They cast no
-    // shadow (yet): they lie in the grass's and the trees'.
+    // The herbs: a draw in each of their rings, an instance a plant the plan
+    // lists from the herbs' cells in view, mesh_herb.vert building it from
+    // its card strips, mesh.frag's SCENE_HERB build cutting them. They cast
+    // no shadow (yet): they lie in the grass's and the trees'.
     for (int r = 0; r < GrassNode::kHerbRings; ++r) node.setDrawnHerbs(r, 0);
-    if (!node.hasHerbs()) return;
+    if (!node.hasHerbs()) {
+        emitPlanned();
+        return;
+    }
     const float herbTop = node.herbHeight() * 1.4f + 0.2f;
     for (int r = 0; r < GrassNode::kHerbRings; ++r) {
         const GrassNode::HerbRing ring = node.herbRing(r);
@@ -520,7 +558,7 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
         if (r == GrassNode::kHerbRings - 1 && lift > 0.5f * ring.outer) continue;
         const GpuMesh* cards = res.mesh(node.id(), static_cast<uint32_t>(GrassNode::kRings + r),
                                         node.geometryGeneration(), node.herbRingMesh(r));
-        if (!cards) return;
+        if (!cards) break;
         const float cell = GrassNode::kHerbCell;
         // A plant reaches out about its spread and leans with the wind (a far
         // plant widened up to twice).
@@ -552,7 +590,7 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
         u.blade[3] = p.wind;
         u.lod[3] = lift;
         VkDescriptorSet set = writeSet(frame, device_, *defaults_, u, img);
-        if (set == VK_NULL_HANDLE) return;
+        if (set == VK_NULL_HANDLE) break;
 
         MeshDraw draw;
         draw.kind = MeshKind::Grass;
@@ -574,19 +612,11 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
         draw.timerLabel = kHerbLabels[r];
         draw.castsShadow = false;
         uint32_t drawn = 0;
-        for (const auto& run : runs) {
-            MeshDraw d = draw;
-            std::memset(d.push.model, 0, sizeof(d.push.model));
-            d.push.model[0] = static_cast<float>(run[0]);
-            d.push.model[4] = static_cast<float>(run[1]);
-            d.push.model[8] = static_cast<float>(run[2]);
-            d.push.model[15] = 1.0f;
-            d.instanceCount = static_cast<uint32_t>(run[2]) * static_cast<uint32_t>(run[3]);
-            drawn += d.instanceCount;
-            out.push_back(d);
-        }
+        for (const auto& run : runs) drawn += static_cast<uint32_t>(run[2]) * static_cast<uint32_t>(run[3]);
         node.setDrawnHerbs(r, drawn);
+        planned.push_back({draw, runs, 1u, true});
     }
+    emitPlanned();
 }
 
 }  // namespace bro::scene::vk

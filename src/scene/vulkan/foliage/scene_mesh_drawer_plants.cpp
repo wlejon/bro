@@ -23,6 +23,7 @@
 #include "scene/vulkan/frame/scene_gpu_resources.h"
 #include "scene/vulkan/foliage/scene_plants_gpu_plan.h"
 #include "scene/vulkan/frame/scene_targets.h"
+#include "scene/vulkan/ground/scene_cover_plan.h"
 
 #include <cstring>
 
@@ -53,6 +54,7 @@ const bromesh::MeshData& leafIndices() {
 
 void SceneMeshDrawer::recordPlans(SceneFrame& frame) {
     plantPlanner_->record(frame);
+    coverPlan_->record(frame);
 }
 
 void SceneMeshDrawer::plansSubmitted(uint64_t ticket, render::VulkanQueue& queue) {
@@ -94,8 +96,9 @@ void SceneMeshDrawer::preparePlants(SceneFrame& frame, PlantsNode& node, std::ve
     draw.push.baseColor[0] = draw.push.baseColor[1] = draw.push.baseColor[2] = draw.push.baseColor[3] = 1.0f;
     draw.push.pbrParams[3] = static_cast<float>(flags);
     draw.twoSided = true;
-    // Near and solid first: the plants are the nearest solid cover.
-    draw.order = MeshDraw::kOrderMid - 1;
+    // Near and solid first: the plants are the nearest solid cover (then the
+    // grass and herbs, then the ground under them).
+    draw.order = MeshDraw::kOrderMid - 2;
     draw.vertexSet = state->drawSet;
     draw.indirect = state->args.buffer;
     // (extra.z, the wind mask elsewhere, is the mode again for the casters:

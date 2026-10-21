@@ -14,8 +14,11 @@ layout(location = 1) in vec3 inNormal;
 #include "ground/scene_grass.glsl"
 
 void main() {
+    // An instance a cell of the ring's caster runs, each copy of the blade
+    // in the ring mesh one of its blades.
     GrassBlade b;
-    if (!grassBlade(gl_InstanceIndex, gl_VertexIndex, inPos, inNormal, b)) {
+    int vpb = max(int(grass.shape.y + 0.5), 1);
+    if (!grassBlade(grassRectCell(gl_InstanceIndex), gl_VertexIndex / vpb, inPos, inNormal, b)) {
         gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
         return;
     }

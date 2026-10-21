@@ -9,6 +9,7 @@
 #include "scene/vulkan/frame/scene_frame.h"
 #include "scene/vulkan/frame/scene_gpu_resources.h"
 #include "scene/vulkan/foliage/scene_plants_gpu_plan.h"
+#include "scene/vulkan/ground/scene_cover_plan.h"
 #include "scene/vulkan/draw/scene_vk_custom_shader.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
 #include "scene/vulkan/frame/scene_vk_shader_compiler.h"
@@ -149,6 +150,11 @@ bool SceneMeshDrawer::setup(SceneGpu& gpu) {
         LOG_ERROR("SceneMeshDrawer: Failed setting up the plants' GPU planner");
         return false;
     }
+    coverPlan_ = std::make_shared<CoverPlan>();
+    if (!coverPlan_->setup(gpu)) {
+        LOG_ERROR("SceneMeshDrawer: Failed setting up the cover's plan");
+        return false;
+    }
     // The turf's surface layer fills are the world service's jobs (a draw:
     // raster), a first guess at a fill's cost until the service measures one.
     if (turfKind_ < 0) turfKind_ = gpu.world.addKind(this, {"turf", WorldSchedule::Raster, 0.03f});
@@ -197,6 +203,8 @@ void SceneMeshDrawer::cleanup(SceneGpu& gpu) {
     layout_ = VK_NULL_HANDLE;
     if (plantPlanner_) plantPlanner_->cleanup(gpu);
     plantPlanner_.reset();
+    if (coverPlan_) coverPlan_->cleanup(gpu);
+    coverPlan_.reset();
 }
 
 namespace raster {
@@ -864,6 +872,11 @@ void SceneMeshDrawer::bindGeometryAndDraw(VkCommandBuffer cmd, const MeshDraw& d
         return;
     }
     vkCmdBindIndexBuffer(cmd, draw.indices, 0, VK_INDEX_TYPE_UINT32);
+    if (draw.indirect != VK_NULL_HANDLE) {
+        // A grass ring's draw: its instances the cover's plan's.
+        vkCmdDrawIndexedIndirect(cmd, draw.indirect, draw.indirectOffset, 1, 0);
+        return;
+    }
     vkCmdDrawIndexed(cmd, draw.indexCount, draw.instanceCount, 0, 0, 0);
 }
 

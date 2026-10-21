@@ -159,6 +159,7 @@ add_library(bro_scene STATIC
     vulkan/draw/pass_particles.cpp
     vulkan/draw/pass_billboard.cpp
     vulkan/draw/pass_gaussian_splat.cpp
+    vulkan/ground/scene_cover_plan.cpp
     vulkan/ground/scene_mesh_drawer_grass.cpp
     vulkan/ground/scene_mesh_drawer_ground.cpp
     vulkan/foliage/scene_mesh_drawer_plants.cpp
