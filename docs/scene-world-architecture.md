@@ -514,7 +514,12 @@ of one colour down a sky column 6–9 rows, was 9–13). A sunlit field meters
 where a camera puts it (biomes' ground band, sRGB luminance: meadow 77,
 canopy 75, above 80; on the HDR panorama 105, 89, 83). A cut canopy →
 flyover → canopy adapts with no overshoot or oscillation and holds still
-once the view does.
+once the view does. Those stills were taken in turbidity 10. Facing the
+afternoon sun at eye level, that haze turned the whole sky white under the
+ACES curve, so the workshop's kit now uses turbidity 3 (about 145 km of
+visibility). Its sky stays blue around the sun's glow. From above, the ground
+past the terrain fades the same either way: what that view lacks is the
+planet's relief (step 9), not haze.
 
 ## 8. Shadows
 
