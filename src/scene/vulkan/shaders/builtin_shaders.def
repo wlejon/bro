@@ -96,6 +96,12 @@ BRO_SCENE_SHADER(PlantsPlanPlaceComp,      "plants_plan_place.comp",      "folia
 BRO_SCENE_SHADER(MeshHerbVert,             "mesh_herb.vert",              "ground/mesh_herb.vert",              "vert", "")
 BRO_SCENE_SHADER(MeshHerbFrag,             "mesh_herb.frag",              "draw/mesh.frag",                     "frag", "SCENE_VEGETATION SCENE_HERB")
 BRO_SCENE_SHADER(MeshHerbIndirectFrag,     "mesh_herb_indirect.frag",     "draw/mesh.frag",                     "frag", "SCENE_VEGETATION SCENE_HERB SCENE_INDIRECT_OUTPUT")
+// The cover's far tier (scene_cover_far.glsl): past the rings, a quad an
+// element of what grows on the ground, as many as the screen holds. A Grass
+// draw flagged mesh_flags::kCoverFar.
+BRO_SCENE_SHADER(MeshCoverFarVert,         "mesh_cover_far.vert",         "ground/mesh_cover_far.vert",         "vert", "")
+BRO_SCENE_SHADER(MeshCoverFarFrag,         "cover_far.frag",              "ground/cover_far.frag",              "frag", "")
+BRO_SCENE_SHADER(MeshCoverFarIndirectFrag, "cover_far_indirect.frag",     "ground/cover_far.frag",              "frag", "SCENE_INDIRECT_OUTPUT")
 // A tube's wood (createTubes): mesh.frag built with SCENE_BARK
 // (scene_bark.glsl), ridges, furrows, moss and lichen from the tube's records.
 BRO_SCENE_SHADER(MeshBarkFrag,             "mesh_bark.frag",              "draw/mesh.frag",                     "frag", "SCENE_VEGETATION SCENE_BARK")

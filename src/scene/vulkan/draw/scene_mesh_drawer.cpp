@@ -134,9 +134,14 @@ bool SceneMeshDrawer::setup(SceneGpu& gpu) {
     vsHerb_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshHerbVert);
     fsHerb_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshHerbFrag);
     fsHerbIndirect_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshHerbIndirectFrag);
-    fsGrass_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshGrassFrag);
+    vsCoverFar_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshCoverFarVert);
+    fsCoverFar_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshCoverFarFrag);
+    fsCoverFarIndirect_ =
+        SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshCoverFarIndirectFrag);
+    fsGrass_ =SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshGrassFrag);
     fsGrassIndirect_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshGrassIndirectFrag);
-    if (!fsPlants_ || !fsPlantsIndirect_ || !vsHerb_ || !fsHerb_ || !fsHerbIndirect_ || !fsGrass_ ||
+    if (!fsPlants_ || !fsPlantsIndirect_ || !vsHerb_ || !fsHerb_ || !fsHerbIndirect_ || !vsCoverFar_ ||
+        !fsCoverFar_ || !fsCoverFarIndirect_ || !fsGrass_ ||
         !fsGrassIndirect_ || std::find(std::begin(vs_), std::end(vs_), VK_NULL_HANDLE) != std::end(vs_) || !fs_ ||
         !fsIndirect_ || !fsVeg_ || !fsVegIndirect_ || !fsBark_ || !fsBarkIndirect_ || !fsGround_ ||
         !fsGroundIndirect_ || !fsGroundFill_) {
@@ -191,12 +196,16 @@ void SceneMeshDrawer::cleanup(SceneGpu& gpu) {
     SceneVkShaderModule::destroy(device_, vsHerb_);
     SceneVkShaderModule::destroy(device_, fsHerb_);
     SceneVkShaderModule::destroy(device_, fsHerbIndirect_);
+    SceneVkShaderModule::destroy(device_, vsCoverFar_);
+    SceneVkShaderModule::destroy(device_, fsCoverFar_);
+    SceneVkShaderModule::destroy(device_, fsCoverFarIndirect_);
     SceneVkShaderModule::destroy(device_, fsGrass_);
     SceneVkShaderModule::destroy(device_, fsGrassIndirect_);
     SceneVkShaderModule::destroy(device_, fsPlants_);
     SceneVkShaderModule::destroy(device_, fsPlantsIndirect_);
     fsPlants_ = fsPlantsIndirect_ = VK_NULL_HANDLE;
     vsHerb_ = fsHerb_ = fsHerbIndirect_ = fsGrass_ = fsGrassIndirect_ = VK_NULL_HANDLE;
+    vsCoverFar_ = fsCoverFar_ = fsCoverFarIndirect_ = VK_NULL_HANDLE;
     fs_ = fsIndirect_ = fsVeg_ = fsVegIndirect_ = VK_NULL_HANDLE;
     fsBark_ = fsBarkIndirect_ = fsGround_ = fsGroundIndirect_ = VK_NULL_HANDLE;
     if (layout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(device_, layout_, nullptr);
@@ -285,19 +294,27 @@ VkPipeline SceneMeshDrawer::builtinPipeline(const MeshDraw& draw, const TargetFo
     // And a grass node's herb plants, a grass draw with its own stages.
     const bool herb = draw.kind == MeshKind::Grass &&
                       (static_cast<uint32_t>(draw.push.pbrParams[3]) & mesh_flags::kHerb) != 0u;
+    // And the cover's far tier, the same.
+    const bool coverFar = draw.kind == MeshKind::Grass &&
+                          (static_cast<uint32_t>(draw.push.pbrParams[3]) & mesh_flags::kCoverFar) != 0u;
     const uint32_t variant = static_cast<uint32_t>(draw.kind) * raster::kCount + rasterBits +
                              (ground ? 1u * static_cast<uint32_t>(kMeshKindCount) * raster::kCount : 0u) +
-                             (herb ? 2u * static_cast<uint32_t>(kMeshKindCount) * raster::kCount : 0u);
+                             (herb ? 2u * static_cast<uint32_t>(kMeshKindCount) * raster::kCount : 0u) +
+                             (coverFar ? 3u * static_cast<uint32_t>(kMeshKindCount) * raster::kCount : 0u);
     return builtin_.get(variant, target, [&] {
         if (render::pipelineStatsEnabled()) {
             render::setPipelineStatsLabel(std::string("mesh kind ") + std::to_string(static_cast<int>(draw.kind)) +
                                           (ground ? " ground" : "") + (herb ? " herb" : "") +
+                                          (coverFar ? " cover far" : "") +
                                           (target.colorCount > 1 ? " indirect" : "") + " raster " +
                                           std::to_string(rasterBits));
         }
         if (herb)
             return buildPipeline(vsHerb_, target.colorCount > 1 ? fsHerbIndirect_ : fsHerb_, draw.kind, rasterBits,
                                  target);
+        if (coverFar)
+            return buildPipeline(vsCoverFar_, target.colorCount > 1 ? fsCoverFarIndirect_ : fsCoverFar_, draw.kind,
+                                 rasterBits, target);
         const bool veg = vegetationShading(draw.kind);
         VkShaderModule fs = target.colorCount > 1 ? (veg ? fsVegIndirect_ : fsIndirect_) : (veg ? fsVeg_ : fs_);
         if (draw.kind == MeshKind::Tube) fs = target.colorCount > 1 ? fsBarkIndirect_ : fsBark_;

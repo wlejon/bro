@@ -158,6 +158,8 @@ HerbStalk herbStem(int sp, int k, vec3 root, vec4 h, float size, VegWind w, floa
     return s;
 }
 
+#include "ground/scene_cover_far.glsl"
+
 // What a plant's every vertex shares, from its cell alone.
 struct HerbSeed {
     vec4 h;          // the cell's hashes
@@ -187,20 +189,12 @@ bool herbPlantLive(ivec2 c, out HerbSeed s) {
     float fin = grass.herbRing.x <= 0.0 ? 1.0 : smoothstep(grass.herbRing.x - grass.herbRing.z, grass.herbRing.x, s.d);
     float fout = 1.0 - smoothstep(grass.herbRing.y - grass.herbRing.w, grass.herbRing.y, s.d);
     if (s.h.w > fin || s.h.w > fout) return false;
-    // The far ring keeps fewer plants with distance (as many as the whole
-    // plants' range over the distance), each widened to keep their cover:
-    // past the range a plant is a few pixels, and a stand reads by its mass.
-    if (grass.herbShape.z > 1.5) {
-        float keep = clamp(grass.herbShape.w / max(s.d, 1e-3), 0.2, 1.0);
-        float hk = grassHash(c, 107);
-        if (hk >= keep) return false;
-        // (Seen from well above, the turf takes them: herbFarSteep. Its
-        // ground height from the eye's lift: a field read here, before most
-        // cells are let go, cost more than the plants.)
-        float horiz = max(length(s.rootXZ - eye.xz), 1e-3);
-        if (hk >= keep * herbFarSteep(s.d, grass.lod.w / horiz)) return false;
-        s.farWiden = inversesqrt(keep);
-    }
+    // The far ring keeps the plants the far tier would (scene_cover_far.glsl:
+    // as many as the screen holds, each widened to keep their cover), so
+    // past it the same plants go on as the tier's elements. (Kept with the
+    // ground face on first: the view meeting it at a slant only thins more.)
+    bool far = grass.herbShape.z > 1.5;
+    if (far && coverKept(c, coverLevel(s.d, 1.0)) <= 0.0) return false;
     if (!grassInField(s.rootXZ) || s.h.w > grassFieldInside(s.rootXZ)) return false;
 
     // Off screen: a box round the cell as tall as the tallest herb.
@@ -208,6 +202,12 @@ bool herbPlantLive(ivec2 c, out HerbSeed s) {
     vec4 cp = camera.viewProj * vec4(s.rootXZ.x - eye.x, s.f.r + 0.5 - eye.y, s.rootXZ.y - eye.z, 1.0);
     float m = cp.w * 0.15 + 2.2;
     if (cp.w < -2.5 || cp.x < -cp.w - m || cp.x > cp.w + m || cp.y < -cp.w - m || cp.y > cp.w + m) return false;
+    if (far) {
+        vec3 toEye = normalize(vec3(eye.x - s.rootXZ.x, eye.y - s.f.r, eye.z - s.rootXZ.y));
+        float lam = coverLevel(s.d, dot(grassGroundNormal(s.rootXZ), toEye));
+        if (coverKept(c, lam) <= 0.0) return false;
+        s.farWiden = coverWiden(lam);
+    }
 
     s.fh = grassFloorHerbsAt(s.rootXZ);
     s.sp = herbPick(s.rootXZ, s.fh.x, s.fh.y, grassHash(c, 105), grassHash(c, 106));

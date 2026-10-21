@@ -1,9 +1,10 @@
 #version 450
 // The cover's plan (vulkan/ground/scene_cover_plan.h): every candidate of
-// one of a grass node's rings (a blade of a cell, or a cell of the herbs'
-// grid) tested once by the test its vertices ran each (grassBladeLive,
-// herbPlantLive), the ones it draws appended to the ring's entries
-// (scene_cover_plan.glsl) and counted into the ring's indirect command.
+// one of a grass node's rings (a blade of a cell, a cell of the herbs'
+// grid, a cell of a level of the far tier) tested once by the test its
+// vertices ran each (grassBladeLive, herbPlantLive, coverFarLive), the ones
+// it draws appended to the ring's entries (scene_cover_plan.glsl) and
+// counted into the ring's indirect command.
 // The ring's cells are runs of the tiles in view, as its draws had them.
 
 layout(local_size_x = 64) in;
@@ -36,7 +37,7 @@ layout(push_constant) uniform CoverPush {
     uint candidates;   // the ring's cells times perCell
     uint count;        // the word of its command's instance count
     uint first;        // its first entry
-    uint herbs;        // 1: a herb ring
+    uint kind;         // 0 a grass ring, 1 a herb ring, 2 a level of the far tier
     uint start;        // this dispatch's first candidate (a ring past a dispatch's most workgroups takes several)
 } plan;
 
@@ -64,7 +65,13 @@ void main() {
         int local = int(cellIndex - r.before.x);
         int W = max(r.rect.z, 1);
         ivec2 c = r.rect.xy + ivec2(local % W, local / W);
-        if (plan.herbs != 0u) {
+        if (plan.kind == 2u) {
+            // A cell of one of the far tier's levels (grass.herbShape.x),
+            // listed with its element's kind.
+            CoverFar e;
+            live = coverFarLive(c, int(grass.herbShape.x + 0.5), -1, e);
+            j = max(e.kind, 0);
+        } else if (plan.kind == 1u) {
             HerbSeed s;
             live = herbPlantLive(c, s);
         } else {

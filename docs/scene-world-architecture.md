@@ -839,8 +839,48 @@ cut (the fans' leaves, per pixel) is 0.07.
   shot is under 2.0 ms.
 
 The far rings and herbs stay as they are: they cost 0.2–0.25 ms
-together, and the turf takes them over only when its look earns their
-range, which the probes (step 7) change.
+together.
+
+### As built: the cover's far tier
+
+Past the rings the turf alone was a hard line at eye level (a lush stand
+of flowers, then flat ground a similar colour) and plastic from a
+flyover. Extending the rings fixed the look (the ground's grain at
+90–130 m 3.5 → 20) but cost 1 ms more, their cards and fans being dear a
+pixel. So the cover goes on past them as a tier of its own
+(`ground/scene_cover_far.glsl`, `mesh_cover_far.vert`, `cover_far.frag`):
+
+- **An element a quad.** A cell of the herbs' grid (0.35 m) is the herb
+  `herbPick` puts there, or a tuft of the sward where the grass grows; it
+  is drawn as one quad at its root facing the eye, upright seen across
+  the ground and a blob seen from above, cut to a tuft's blade tips or a
+  herb's lobes with its blooms, lit as the sward it stands in.
+- **As many as the screen holds, not the ground.** Each element stands
+  for about 5×5 pixels of ground: at a ring distance where a cell is
+  `cellPx` pixels and the eye meets the ground at sine `sinE`, the share
+  kept is `cellPx² sinE / 25` and λ = −log4 of it. The thinning is nested
+  (stochastic simplification): a level-k cell is 2^k herb cells a side
+  and stands for its four children by one of them, by a hash, so the
+  elements kept are spread a cell of the level apart, never clumped, and
+  as the eye recedes one either stays (widened 2^λ, at most 8×, so the
+  cover holds) or shrinks away over the last share of its level. The far
+  herb ring keeps its plants by the same rule, so a plant there is the
+  one the tier draws past it.
+- **A draw a level** (10 levels): its cells are the tiles whose λ can
+  fall in it (at least the ground's at the tile's nearest seen as face on
+  as its height range allows, at most its farthest's seen edge on), run
+  through the cover's plan like the rings (`coverFarLive`, the entry's
+  slot its element's kind). It hands over from the far fans and the far
+  herb ring by the complements of their dithers, and to the turf alone
+  over 2.4–3 km.
+
+Biomes (4090, 2560×1364): meadow 2.50 → 2.59 ms, edge 2.41 → 2.49,
+above 0.85 → 1.11, flyover 1.03 → 1.19; the meadow's grain at 90–130 m
+3.5 → 13.8. Walking on at 3 m/s, the ground 60–300 m out changes 3.7 a
+point a frame against 2.8 without the tier (the texture it adds, moving).
+Still to come: the turf under the tier read as the sward's depth rather
+than adding the herbs' mean, and the biomes' other covers (pebbles,
+litter, snow) as kinds of element.
 
 ## 10. Placement
 

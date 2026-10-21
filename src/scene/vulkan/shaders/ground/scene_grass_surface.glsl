@@ -175,7 +175,8 @@ float grassFanBloom(vec2 uv, vec4 info, out vec3 color) {
 
 // ---- The blade as mesh.frag lights it (its SCENE_GRASS build) --------------
 // These read mesh.frag's varyings (inUV, inColor, inInstColor, inTangent,
-// inVegShade) and call its coverSampleMask.
+// inVegShade) and call coverSampleMask (scene_cover_mask.glsl, which
+// mesh.frag includes).
 
 // What a blade is, and what it hands the lighting.
 struct GrassSurface {

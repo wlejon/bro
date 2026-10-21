@@ -1,10 +1,11 @@
 #pragma once
-// The cover's plan: each frame, the blades and herb plants a grass node's
-// rings draw, chosen on the GPU (shaders/ground/cover_plan.comp). A ring's
-// cells in view are runs of tiles (scene_mesh_drawer_grass.cpp); every
-// candidate in them (a blade of a cell, a cell of the herbs' grid) is tested
-// once by the test its vertices used to run each (grassBladeLive,
-// herbPlantLive), and the ones drawn are listed for the ring's draw, which
+// The cover's plan: each frame, the blades, herb plants and far elements a
+// grass node's rings draw, chosen on the GPU (shaders/ground/cover_plan.comp).
+// A ring's cells in view are runs of tiles (scene_mesh_drawer_grass.cpp);
+// every candidate in them (a blade of a cell, a cell of the herbs' grid, a
+// cell of a level of the far tier) is tested once by the test its vertices
+// used to run each (grassBladeLive, herbPlantLive, coverFarLive), and the
+// ones drawn are listed for the ring's draw, which
 // takes them as its instances through an indirect command. So a ring's
 // vertices run only for what it draws: the rings issued some 5 million
 // vertices a frame at eye level for well under a million triangles on
@@ -38,7 +39,9 @@ public:
         /// Its cells: runs of (first column, row, columns, rows).
         const std::vector<std::array<int, 4>>* runs = nullptr;
         uint32_t perCell = 1;     // candidates a cell: its blades, or a herb cell's one plant
-        bool herbs = false;
+        /// What its cells are (cover_plan.comp's kind): a grass ring's, a
+        /// herb ring's, or a level of the far tier's (scene_cover_far.glsl).
+        enum class Kind : uint32_t { Grass, Herbs, Far } kind = Kind::Grass;
         VkDescriptorSet set = VK_NULL_HANDLE;   // the ring's grass set (set 4)
         uint32_t indexCount = 0;  // what its draw draws an instance
     };
@@ -70,7 +73,7 @@ private:
     /// A ring's dispatch.
     struct Job {
         VkDescriptorSet listSet = VK_NULL_HANDLE, set = VK_NULL_HANDLE;
-        uint32_t firstRun = 0, runCount = 0, perCell = 1, candidates = 0, count = 0, first = 0, herbs = 0;
+        uint32_t firstRun = 0, runCount = 0, perCell = 1, candidates = 0, count = 0, first = 0, kind = 0;
     };
     /// A node's commands, as they start each frame.
     struct Commands {

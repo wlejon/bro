@@ -189,6 +189,16 @@ GrassNode::Ring ringInView(const GrassNode& node, const SceneView& view, int r) 
     return ring;
 }
 
+// The cover's far tier (shaders/ground/scene_cover_far.glsl, whose constants
+// these are): its levels, the ground's image an element stands for (pixels
+// a side), the least sine of the eye's line onto the ground, and how far it
+// reaches (its last stretch handing over to the turf alone by a dither).
+constexpr int kCoverLevels = 10;           // COVER_FAR_LEVELS
+constexpr float kCoverFarPixels = 5.0f;    // COVER_FAR_PIXELS
+constexpr float kCoverFarMinSin = 0.01f;   // COVER_FAR_MIN_SIN
+constexpr float kCoverFarRange = 3000.0f;
+constexpr float kCoverFarBand = 600.0f;
+
 MeshNode::UserTexture* slot(GrassNode& node, const char* name) {
     for (auto& t : node.customShaderTextures())
         if (t.name == name && t.w > 0 && t.h > 0) return &t;
@@ -243,6 +253,9 @@ void fillShared(const GrassNode& node, GrassUBO& u) {
     u.pushRate[1] = GrassNode::kBendSpringDamping;
     u.pushRate[2] = node.hasFloor() ? 1.0f : 0.0f;
     u.pushRate[3] = GrassNode::kTrampleRelax;
+    // The herbs' grid, which the far tier's elements stand on with or
+    // without herbs.
+    u.herbInfo[1] = GrassNode::kHerbCell;
     // The herbs, which every grass shader reads: the plants, and past them
     // the turf that stands in.
     if (node.hasHerbs()) {
@@ -251,7 +264,6 @@ void fillShared(const GrassNode& node, GrassUBO& u) {
         std::copy(node.herbMean(), node.herbMean() + GrassNode::kHerbMeanSteps * GrassNode::kHerbMeanFloats,
                   u.herbMean);
         u.herbInfo[0] = static_cast<float>(node.herbCount());
-        u.herbInfo[1] = GrassNode::kHerbCell;
         const GrassNode::HerbRing last = node.herbRing(GrassNode::kHerbRings - 1);
         u.herbInfo[2] = last.outer;
         u.herbInfo[3] = last.bandOut;
@@ -406,7 +418,7 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
         MeshDraw draw;
         TileRuns runs;
         uint32_t perCell = 1;
-        bool herbs = false;
+        CoverPlan::Ring::Kind kind = CoverPlan::Ring::Kind::Grass;
     };
     std::vector<Planned> planned;
     // The rings planned: their camera draws take the plan's commands.
@@ -414,7 +426,7 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
         std::vector<CoverPlan::Ring> rings;
         rings.reserve(planned.size());
         for (const Planned& p : planned)
-            rings.push_back({&p.runs, p.perCell, p.herbs, p.draw.customSet, p.draw.indexCount});
+            rings.push_back({&p.runs, p.perCell, p.kind, p.draw.customSet, p.draw.indexCount});
         std::vector<CoverPlan::Draw> draws;
         if (!coverPlan_->add(frame, node.id(), rings, draws)) return;
         for (size_t i = 0; i < planned.size(); ++i) {
@@ -426,6 +438,110 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
             // blades then fails the early depth test rather than shading.
             d.order = MeshDraw::kOrderMid - 1;
             out.push_back(d);
+        }
+    };
+
+    // The cover's far tier (scene_cover_far.glsl): a draw a level of its
+    // nested cells, each over the tiles whose elements' lambda can fall in
+    // that level. A tile's lambda is at least the ground's at its nearest
+    // seen as face on as it can be (the eye's elevation over its lowest
+    // ground, tipped by a slope as steep as its height range, and more), and
+    // at most its farthest's seen edge on.
+    const auto planCoverFar = [&]() {
+        if (!view.perspective || view.height == 0) return;
+        const GpuMesh* quad = res.mesh(node.id(), static_cast<uint32_t>(GrassNode::kRings + GrassNode::kHerbRings - 1),
+                                       node.geometryGeneration(), node.herbRingMesh(GrassNode::kHerbRings - 1));
+        if (!quad) return;
+        const float pxAtMetre = std::fabs(view.proj.at(1, 1)) * static_cast<float>(view.height) * 0.5f;
+        const float cell0 = GrassNode::kHerbCell;
+        const auto lambda = [&](float d, float sinE) {
+            const float cellPx = cell0 * pxAtMetre / std::max(d, 1e-3f);
+            const float keep = cellPx * cellPx * std::max(sinE, kCoverFarMinSin) / (kCoverFarPixels * kCoverFarPixels);
+            return std::max(-0.5f * std::log2(std::max(keep, 1e-12f)), 0.0f);
+        };
+        // Where the rings hand over: the fans' outer band and the far herb
+        // ring's.
+        const GrassNode::Ring fan = ringInView(node, view, GrassNode::kRings - 1);
+        float start = fan.outer - fan.bandOut;
+        if (node.hasHerbs()) {
+            const GrassNode::HerbRing hr = node.herbRing(GrassNode::kHerbRings - 1);
+            start = std::min(start, hr.outer - hr.bandOut);
+        }
+        const float tallest = std::max(node.params().height * 4.8f, node.hasHerbs() ? node.herbHeight() * 1.4f : 0.0f);
+        const float ex = view.eye.x, ez = view.eye.z;
+        u.ring[0] = kCoverFarRange;
+        u.ring[1] = fan.outer;
+        u.ring[2] = kCoverFarBand;
+        u.ring[3] = fan.bandOut;
+        u.blade[0] = node.params().height;
+        u.blade[2] = node.params().minNormalY;
+        u.blade[3] = node.params().wind;
+        u.lod[3] = lift;
+        u.herbShape[2] = 3.0f;   // the far tier
+        for (int k = 0; k < kCoverLevels; ++k) {
+            const bool last = k == kCoverLevels - 1;
+            const float cell = cell0 * std::exp2(static_cast<float>(k));
+            // The level's lambda is under k + 1 only nearer than the ground
+            // seen face on gives it there.
+            const float reachK = last ? kCoverFarRange : std::min(kCoverFarRange, cell0 * pxAtMetre * std::exp2(static_cast<float>(k + 1)) / kCoverFarPixels);
+            // An element stands within its cell, widened up to
+            // COVER_FAR_WIDEN times its plant's spread.
+            const float reach = cell + 8.0f * 1.5f;
+            float box[4];
+            visibleBox(view, reachK, reach, box);
+            const auto keep = [&](float x0, float z0, float x1, float z1) {
+                const float nx = std::clamp(ex, x0, x1) - ex, nz = std::clamp(ez, z0, z1) - ez;
+                const float fx = std::max(std::fabs(x0 - ex), std::fabs(x1 - ex));
+                const float fz = std::max(std::fabs(z0 - ez), std::fabs(z1 - ez));
+                const float nearH = std::sqrt(nx * nx + nz * nz);
+                const float dNear = std::sqrt(nearH * nearH + lift * lift);
+                const float dFar = std::sqrt(fx * fx + fz * fz + lift * lift);
+                if (dFar < start || dNear > kCoverFarRange) return false;
+                float lo = 0.0f, hi = 0.0f, tall = 0.0f;
+                const bool grows = node.fieldRange(x0 - reach, z0 - reach, x1 + reach, z1 + reach, lo, hi, tall) ||
+                                   (node.hasHerbs() &&
+                                    node.herbRangeAt(x0 - reach, z0 - reach, x1 + reach, z1 + reach, lo, hi));
+                if (!grows) return false;
+                // The eye's elevation over the tile's lowest ground, tipped
+                // by a slope as steep as twice its rise across the tile and
+                // a quarter more (the ground between its coarse blocks).
+                const float rise = std::max(view.eye.y - lo, 0.0f);
+                const float elev = std::atan2(rise, std::max(nearH, 1e-3f));
+                const float tilt = std::atan(2.0f * (hi - lo) / std::max(x1 - x0, 1e-3f) + 0.25f);
+                const float sinMax = std::sin(std::min(elev + tilt, 0.5f * kPi));
+                const float lamLo = lambda(dNear, sinMax), lamHi = lambda(dFar, kCoverFarMinSin);
+                if (lamHi < static_cast<float>(k) || (!last && lamLo >= static_cast<float>(k + 1))) return false;
+                return bromath::fintersects(view.frustum, bromath::AABB3{{x0 - reach, lo, z0 - reach},
+                                                                         {x1 + reach, hi + tallest, z1 + reach}});
+            };
+            TileRuns levelRuns;
+            if (!tileRuns(box, cell, keep, levelRuns)) continue;
+
+            u.cells[3] = cell;
+            u.herbShape[0] = static_cast<float>(k);
+            VkDescriptorSet set = writeSet(frame, device_, *defaults_, u, img);
+            if (set == VK_NULL_HANDLE) return;
+
+            MeshDraw draw;
+            draw.kind = MeshKind::Grass;
+            draw.nodeId = node.id();
+            draw.vertices = quad->vertices.buffer;
+            draw.indices = quad->indices.buffer;
+            draw.indexCount = 6;   // the first card's quad
+            draw.customSet = set;
+            std::memcpy(draw.push.baseColor, node.color(), sizeof(draw.push.baseColor));
+            draw.push.baseColor[3] = 1.0f;
+            draw.push.pbrParams[1] = 0.85f;
+            draw.push.pbrParams[3] = static_cast<float>(flags | mesh_flags::kCoverFar | msaa);
+            draw.push.extra[1] = node.subsurface();
+            draw.push.extra[3] = 1.0f + 256.0f;   // no atlas
+            draw.twoSided = true;
+            draw.castsShadow = false;
+            static constexpr const char* kLevelLabels[kCoverLevels] = {
+                "cover:far0", "cover:far1", "cover:far2", "cover:far3", "cover:far4",
+                "cover:far5", "cover:far6", "cover:far7", "cover:far8", "cover:far9"};
+            draw.timerLabel = kLevelLabels[k];
+            planned.push_back({draw, std::move(levelRuns), 1u, CoverPlan::Ring::Kind::Far});
         }
     };
 
@@ -538,7 +654,7 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
         // The camera's draw: an instance a blade the plan lists, the ring
         // mesh's first blade its vertices.
         draw.indexCount = std::min(blade->indexCount, perBlade);
-        planned.push_back({draw, runs, static_cast<uint32_t>(ring.blades), false});
+        planned.push_back({draw, runs, static_cast<uint32_t>(ring.blades), CoverPlan::Ring::Kind::Grass});
     }
 
     // The herbs: a draw in each of their rings, an instance a plant the plan
@@ -547,6 +663,7 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
     // no shadow (yet): they lie in the grass's and the trees'.
     for (int r = 0; r < GrassNode::kHerbRings; ++r) node.setDrawnHerbs(r, 0);
     if (!node.hasHerbs()) {
+        planCoverFar();
         emitPlanned();
         return;
     }
@@ -614,8 +731,9 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
         uint32_t drawn = 0;
         for (const auto& run : runs) drawn += static_cast<uint32_t>(run[2]) * static_cast<uint32_t>(run[3]);
         node.setDrawnHerbs(r, drawn);
-        planned.push_back({draw, runs, 1u, true});
+        planned.push_back({draw, runs, 1u, CoverPlan::Ring::Kind::Herbs});
     }
+    planCoverFar();
     emitPlanned();
 }
 

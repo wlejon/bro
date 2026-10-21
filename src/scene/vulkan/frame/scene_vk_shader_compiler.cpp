@@ -15,6 +15,7 @@
 #include "shadow_pages_layout.h.src.h"
 #include "scene_shadow_cutout.glsl.src.h"
 #include "scene_vegetation.glsl.src.h"
+#include "scene_cover_mask.glsl.src.h"
 #include "scene_procedural.glsl.src.h"
 #include "scene_bark.glsl.src.h"
 #include "scene_grass.glsl.src.h"
@@ -107,6 +108,7 @@ const char* embeddedInclude(const std::string& name) {
         {"shadow/shadow_pages_layout.h", kVkShadowPagesLayoutSrc},
         {"shadow/scene_shadow_cutout.glsl", kVkSceneShadowCutoutSrc},
         {"common/scene_vegetation.glsl", kVkSceneVegetationSrc},
+        {"common/scene_cover_mask.glsl", kVkSceneCoverMaskSrc},
         {"common/scene_procedural.glsl", kVkSceneProceduralSrc},
         {"draw/scene_bark.glsl", kVkSceneBarkSrc},
         {"ground/scene_grass.glsl", kVkSceneGrassSrc},

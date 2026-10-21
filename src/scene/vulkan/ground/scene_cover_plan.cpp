@@ -19,7 +19,7 @@ namespace {
 
 /// cover_plan.comp's push constants.
 struct CoverPush {
-    uint32_t firstRun, runCount, perCell, candidates, count, first, herbs, start;
+    uint32_t firstRun, runCount, perCell, candidates, count, first, kind, start;
 };
 /// cover_plan.comp's CoverRun.
 struct CoverRun {
@@ -153,7 +153,7 @@ bool CoverPlan::add(SceneFrame& frame, uint32_t nodeId, std::span<const Ring> ri
         job.perCell = r.perCell;
         job.count = static_cast<uint32_t>(i) * kCommandWords + 1;
         job.first = first;
-        job.herbs = r.herbs ? 1u : 0u;
+        job.kind = static_cast<uint32_t>(r.kind);
         uint32_t cells = 0;
         for (const auto& rr : *r.runs) {
             CoverRun& c = dst[run++];
@@ -196,7 +196,7 @@ void CoverPlan::record(SceneFrame& frame) {
             bound = j.listSet;
         }
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout_, 4, 1, &j.set, 0, nullptr);
-        CoverPush p{j.firstRun, j.runCount, j.perCell, j.candidates, j.count, j.first, j.herbs, 0};
+        CoverPush p{j.firstRun, j.runCount, j.perCell, j.candidates, j.count, j.first, j.kind, 0};
         // (A ring past a dispatch's most workgroups goes in several.)
         for (p.start = 0; p.start < j.candidates; p.start += kMaxGroups * kGroup) {
             vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(p), &p);

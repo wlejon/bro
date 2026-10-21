@@ -79,6 +79,7 @@ constexpr uint32_t kHasTangents = 4096;
 constexpr uint32_t kMsaa = 32768;           // a draw into a 4x MSAA target: a cut card's cover splits samples
 constexpr uint32_t kGround = 131072;        // turf: a static mesh shaded as its grass node's ground (set 4)
 constexpr uint32_t kHerb = 2097152;         // a grass node's herb plants (a Grass draw): mesh_herb.vert, SCENE_HERB
+constexpr uint32_t kCoverFar = 4194304;     // the cover's far tier (a Grass draw): mesh_cover_far.vert, cover_far.frag
 /// The vertex colour mode (0 none, 1 replaces the albedo, 2 tints it) in bits 10-11.
 constexpr uint32_t vertexColor(int mode) { return static_cast<uint32_t>(mode & 3) << 10; }
 }
@@ -338,6 +339,9 @@ private:
     VkShaderModule vsHerb_ = VK_NULL_HANDLE;           // a grass node's herbs: mesh_herb.vert
     VkShaderModule fsHerb_ = VK_NULL_HANDLE;           // and mesh.frag's SCENE_HERB
     VkShaderModule fsHerbIndirect_ = VK_NULL_HANDLE;
+    VkShaderModule vsCoverFar_ = VK_NULL_HANDLE;       // the cover's far tier: mesh_cover_far.vert
+    VkShaderModule fsCoverFar_ = VK_NULL_HANDLE;       // and cover_far.frag
+    VkShaderModule fsCoverFarIndirect_ = VK_NULL_HANDLE;
     VkShaderModule fsPlants_ = VK_NULL_HANDLE;         // plants: plants.frag (plants.vert is vs_[Plants])
     VkShaderModule fsPlantsIndirect_ = VK_NULL_HANDLE;
     VkShaderModule fsGrass_ = VK_NULL_HANDLE;          // grass blades: mesh.frag's SCENE_GRASS build
