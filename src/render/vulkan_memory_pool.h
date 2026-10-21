@@ -58,6 +58,8 @@ struct VulkanAllocatorStats {
 class VulkanMemoryPool {
 public:
     static constexpr VkDeviceSize kDefaultBlockSize = 16 * 1024 * 1024ULL;
+    /// The alignment of a sub-allocated buffer of this size or more (allocate()).
+    static constexpr VkDeviceSize kBufferPage = 64 * 1024ULL;
     static constexpr VkDeviceSize kDedicatedThreshold = 8 * 1024 * 1024ULL;
 
     VulkanMemoryPool() = default;

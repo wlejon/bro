@@ -61,6 +61,11 @@ bool VulkanMemoryPool::allocate(VkDevice device, VkDeviceSize size, VkDeviceSize
                                 VkDeviceSize& outOffset, void*& outMappedData) {
     if (size == 0) return false;
     if (alignment < 1) alignment = 1;
+    // A buffer of a page or more starts on a page (kBufferPage): GPUs map
+    // memory in 64 KB pages, and a big buffer's draws run at a cost that
+    // depends on where in a page it began, so its speed would hang on what
+    // was allocated before it.
+    if (!isImage && size >= kBufferPage) alignment = std::max(alignment, kBufferPage);
 
     std::lock_guard<std::mutex> lock(mutex_);
 
