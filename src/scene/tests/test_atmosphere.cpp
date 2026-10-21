@@ -3,7 +3,8 @@
 //
 // A scene renders with the atmosphere on, its eye at 2 m, 2 km, 30 km and
 // 400 km, its sun at noon (68 degrees up), 10 degrees and -4 degrees
-// (twilight). Each render's tables are read back and looked up on the CPU
+// (twilight); and in a clear day's haze (turbidity 10) at 2 m and 2 km under
+// suns at 68, 35 and 10 degrees. Each render's tables are read back and looked up on the CPU
 // as the shaders look them up (scene/world/atmosphere.h's parametrisations,
 // bilinear like the samplers), then compared with the reference:
 //
@@ -42,6 +43,13 @@
 //    percent; near the ground in twilight the light is all multiple
 //    scattering and shows the whole departure. Equal-step view rays (48
 //    steps for the sky, 8 a froxel slice) add under a percent.
+//    In a clear day's haze (turbidity 10) more of the light is scattered
+//    more than once, by the Mie haze's forward lobe, which the table's
+//    isotropic series fits worse: its multiple-scattering table parts from
+//    the reference's by up to 25% (at 2 km under a 10 degree sun), and the
+//    day's tolerance there is 16% at any sample and 9% on average. Its
+//    transmittance is 1.5%: the hazier air leaves 6e-4 of the light along
+//    the rays nearest the horizon, at the edge of half float's precision.
 //  - aerial transmittance 2%: the same media, 8 steps a slice.
 //  - the sky's light 15%: an l <= 2 SH of the whole sphere (the ground's
 //    lower half included) rings onto an upward surface's cosine lobe, on
@@ -62,6 +70,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <initializer_list>
 #include <vector>
 
 using namespace bro;
@@ -121,34 +130,32 @@ V3 normalize(const V3& a) { return mul(a, 1.0 / std::sqrt(dot(a, a))); }
 
 }  // namespace
 
-int main() {
-    std::printf("=== bro_atmosphere_test: the atmosphere's tables against a CPU reference ===\n");
+// The tolerances of an air (the file's header says why).
+struct Tolerance {
+    double dayWorst, dayMean;   // in-scattered light by day (twilight's are 30% / 15% in every air)
+    double transmittance;
+};
 
-    render::VulkanContextConfig cfg;
-    cfg.headless = true;
-    cfg.enableValidation = false;
-    cfg.enableDynamicRendering = true;
-    render::VulkanContext context(cfg);
-    if (!context.init()) {
-        std::fprintf(stderr, "Failed to initialize headless Vulkan context!\n");
-        return 1;
-    }
-    scene::SceneRenderer::setDefaultVulkanContext(&context);
-
+// Every check, for Earth's air with its Mie haze times `turbidity` (the
+// AtmosphereConfig option), the eye at `altitudes` and the sun at
+// `sunElevations` (degrees).
+void checkAir(double turbidity, std::initializer_list<double> altitudes, std::initializer_list<double> sunElevations,
+              const Tolerance& tol) {
     const scene::AtmosphereParams defaults;
     scene::atmref::Params rp;
     rp.Rb = defaults.planetRadius;
     rp.Rt = defaults.planetRadius + defaults.thickness;
+    rp.mieS = defaults.mieScattering * turbidity;
+    rp.mieA = defaults.mieAbsorption * turbidity;
     const double Rb = rp.Rb, Rt = rp.Rt;
 
+    std::printf("air of turbidity %.0f\n", turbidity);
     const auto t0 = std::chrono::steady_clock::now();
     scene::atmref::Reference ref(rp);
     ref.buildMultiple();
     std::printf("reference: %d scattering orders, %.1f s\n", ref.orders(),
                 std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
 
-    const double altitudes[] = {2.0, 2000.0, 30000.0, 400000.0};
-    const double sunElevations[] = {68.0, 10.0, -4.0};
     bool checkedTransmittance = false;
 
     for (const double sunDeg : sunElevations) {
@@ -175,6 +182,8 @@ int main() {
             a.sunDirExplicit = true;
             a.sunColor[0] = a.sunColor[1] = a.sunColor[2] = 1.0f;
             a.sunColorExplicit = true;
+            a.mieScattering = static_cast<float>(rp.mieS);
+            a.mieAbsorption = static_cast<float>(rp.mieA);
             graph.setAtmosphere(a);
             graph.render();
             graph.render();   // the view-independent tables are the world service's, granted on the first
@@ -207,7 +216,7 @@ int main() {
                             st.add(std::abs(s[c] - want.c[c]) / std::max(want.c[c], 1e-3), s[c], want.c[c], h, z);
                     }
                 }
-                check("transmittance", st, 0.01, 0.01);
+                check("transmittance", st, tol.transmittance, 0.01);
 
                 // The multiple-scattering table: informative (the tables it
                 // feeds are what is checked), so its departures are seen.
@@ -264,7 +273,7 @@ int main() {
                 Stat st;
                 for (const Sample& s : samples)
                     st.add(std::abs(s.got - s.want) / std::max(s.want, 1e-3 * peak), s.got, s.want, s.z, s.az);
-                check("sky radiance (sky-view)", st, twilight ? 0.30 : 0.12, twilight ? 0.15 : 0.08);
+                check("sky radiance (sky-view)", st, twilight ? 0.30 : tol.dayWorst, twilight ? 0.15 : tol.dayMean);
             }
 
             // --- The sky as drawn ------------------------------------------------
@@ -373,7 +382,7 @@ int main() {
                                p.x + 1000.0 * static_cast<double>(&vw - views), p.y);
                     }
                 }
-                check("the sky as drawn (sun, zenith, away)", st, twilight ? 0.30 : 0.12, twilight ? 0.15 : 0.08);
+                check("the sky as drawn (sun, zenith, away)", st, twilight ? 0.30 : tol.dayWorst, twilight ? 0.15 : tol.dayMean);
             }
 
             // --- Aerial perspective from the froxels ---------------------------
@@ -415,7 +424,7 @@ int main() {
                     }
                 for (const Sample& s : ls)
                     sl.add(std::abs(s.got - s.want) / std::max(s.want, 1e-3 * peak + 1e-12), s.got, s.want, s.column, s.slice);
-                check("aerial perspective in-scatter", sl, twilight ? 0.30 : 0.12, twilight ? 0.15 : 0.08);
+                check("aerial perspective in-scatter", sl, twilight ? 0.30 : tol.dayWorst, twilight ? 0.15 : tol.dayMean);
                 check("aerial perspective transmittance", stt, 0.02, 0.01);
             }
 
@@ -441,6 +450,27 @@ int main() {
         }
         check("sky light on the ground (SH)", skyIrr, 0.15, 0.15);
     }
+}
+
+int main() {
+    std::printf("=== bro_atmosphere_test: the atmosphere's tables against a CPU reference ===\n");
+
+    render::VulkanContextConfig cfg;
+    cfg.headless = true;
+    cfg.enableValidation = false;
+    cfg.enableDynamicRendering = true;
+    render::VulkanContext context(cfg);
+    if (!context.init()) {
+        std::fprintf(stderr, "Failed to initialize headless Vulkan context!\n");
+        return 1;
+    }
+    scene::SceneRenderer::setDefaultVulkanContext(&context);
+
+    checkAir(1.0, {2.0, 2000.0, 30000.0, 400000.0}, {68.0, 10.0, -4.0}, {0.12, 0.08, 0.01});
+    // A clear day's haze (turbidity 10, about 65 km of visibility: the
+    // workshop kit's air), near the ground, where its Mie lobe about the sun
+    // and the haze toward the horizon are most of the sky.
+    checkAir(10.0, {2.0, 2000.0}, {68.0, 35.0, 10.0}, {0.16, 0.09, 0.015});
 
     scene::SceneRenderer::setDefaultVulkanContext(nullptr);
     if (const uint32_t errors = render::vulkanValidationErrorCount()) {
