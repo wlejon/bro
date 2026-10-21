@@ -1,0 +1,120 @@
+#version 450
+// Exposure (scene/exposure.h; scene/vulkan/post/scene_exposure.h), in one
+// dispatch. Auto: each workgroup adds a 16 x 16 tile of the HDR frame's
+// log2 luminance to a 128-bin histogram, kMinLog2..kMaxLog2 (one pixel of
+// every 4 x 4 block, so a 2560-wide frame meters 640 x 341 of them). Pixels
+// nothing drew (alpha 0) and those darker than the range (black, or space
+// past the air) are left out, so a frame half open space meters on what is
+// lit in it. The last workgroup to finish meters the histogram (the
+// log-average luminance L of the pixels between the lowPercent and
+// highPercent shares, and the EV100 whose scale puts L at middle grey:
+// log2(L / (1.2 * 0.18))), moves the applied EV toward it exponentially at
+// the up or down speed for the frame's time step, writes the scale the
+// tonemap multiplies by, and clears the bins for the next frame. Fixed: one
+// workgroup writes the CPU's scale (an exact 1 at the default EV).
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+const float MIDDLE_GREY = 0.18;   // the key the log-average lands on (Reinhard's)
+
+layout(set = 0, binding = 0) uniform sampler2D texHdr;
+layout(set = 0, binding = 1) buffer Histogram {
+    uint bins[128];
+    uint done;        // workgroups finished this frame
+} histogram;
+layout(set = 0, binding = 2) buffer State {
+    float ev;         // the applied EV100 (before compensation)
+    float metered;    // this frame's metered EV100 (clamped)
+    float scale;      // what the tonemap multiplies the frame by
+    uint adapting;    // 1 once the auto mode has a value to adapt from
+} state;
+
+layout(push_constant) uniform ExposurePush {
+    ivec2 size;        // the HDR frame's
+    float minLog2;
+    float maxLog2;
+    float mode;        // 0 fixed, 1 auto
+    float fixedEv;     // fixed: the EV100
+    float fixedScale;  // fixed: its scale, exact
+    float compensation;
+    float dt;          // seconds since the last metered frame
+    float speedUp;
+    float speedDown;
+    float minEv;
+    float maxEv;
+    float lowPercent;
+    float highPercent;
+} push;
+
+shared uint tile[128];
+shared bool last;
+
+void main() {
+    uint i = gl_LocalInvocationIndex;
+    if (push.mode < 0.5) {
+        if (i == 0u) {
+            state.ev = push.fixedEv;
+            state.metered = push.fixedEv;
+            state.scale = push.fixedScale;
+            state.adapting = 0u;
+        }
+        return;
+    }
+
+    if (i < 128u) tile[i] = 0u;
+    barrier();
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy) * 4 + 1;
+    if (all(lessThan(p, push.size))) {
+        vec4 c = texelFetch(texHdr, p, 0);
+        float lum = dot(c.rgb, vec3(0.2126, 0.7152, 0.0722));
+        float x = lum > 0.0 ? (log2(lum) - push.minLog2) / (push.maxLog2 - push.minLog2) : -1.0;
+        if (c.a > 0.0 && x >= 0.0) atomicAdd(tile[uint(min(x * 128.0, 127.0))], 1u);
+    }
+    barrier();
+    if (i < 128u && tile[i] > 0u) atomicAdd(histogram.bins[i], tile[i]);
+    // This group's bins land before it counts itself done.
+    memoryBarrierBuffer();
+    barrier();
+    if (i == 0u) {
+        uint groups = gl_NumWorkGroups.x * gl_NumWorkGroups.y;
+        last = atomicAdd(histogram.done, 1u) == groups - 1u;
+    }
+    barrier();
+    if (!last) return;
+
+    // The last group: every other group's bins are in. Take them, clearing
+    // the histogram for the next frame.
+    memoryBarrierBuffer();
+    if (i < 128u) tile[i] = atomicExchange(histogram.bins[i], 0u);
+    barrier();
+    if (i != 0u) return;
+    histogram.done = 0u;
+    uint total = 0u;
+    for (int b = 0; b < 128; ++b) total += tile[b];
+    float ev = state.ev;
+    float metered = state.metered;
+    if (total > 0u) {
+        // The mean of log2 luminance over the [low, high] share of pixels.
+        float lo = push.lowPercent * float(total), hi = push.highPercent * float(total);
+        float below = 0.0, sum = 0.0, weight = 0.0;
+        float binWidth = (push.maxLog2 - push.minLog2) / 128.0;
+        for (int b = 0; b < 128; ++b) {
+            float n = float(tile[b]);
+            float take = max(0.0, min(below + n, hi) - max(below, lo));
+            sum += take * (push.minLog2 + (float(b) + 0.5) * binWidth);
+            weight += take;
+            below += n;
+        }
+        if (weight > 0.0) metered = clamp(sum / weight - log2(1.2 * MIDDLE_GREY), push.minEv, push.maxEv);
+        if (state.adapting == 0u) {
+            ev = metered;
+        } else {
+            float speed = metered > ev ? push.speedUp : push.speedDown;
+            ev += (metered - ev) * (1.0 - exp(-max(push.dt, 0.0) * max(speed, 0.0)));
+        }
+    }
+    state.ev = ev;
+    state.metered = metered;
+    state.scale = 1.0 / (1.2 * exp2(ev - push.compensation));
+    if (total > 0u) state.adapting = 1u;
+}

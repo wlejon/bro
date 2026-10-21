@@ -3,12 +3,18 @@
 // the camera's frustum, 32 slices deep along each, slice k holding the air
 // from the eye to distance depth * ((k + 1) / 32)^2 (scene/world/atmosphere.h):
 // its in-scattered radiance for a sun of 1 (binding 3) and its
-// transmittance (binding 4). One invocation a column, marching it once
-// through every slice, the part of each slice inside the shell in equal
-// steps. Made every frame on the frame's compute stream (scene_atmosphere.cpp);
-// the lit shaders read it in sceneAir (scene_lighting.glsl).
+// transmittance (binding 4). One invocation a froxel: each marches its own
+// slice's part of the column inside the shell in equal steps, and the
+// column's 32 are summed front to back by a scan in shared memory (the air
+// to slice k is the air to slice k - 1, then slice k's seen through it).
+// One invocation a column marching every slice in turn left all but 1024
+// threads of the GPU idle. Made every frame in the graphics stream
+// (scene_atmosphere.cpp); the lit shaders read it in sceneAir
+// (scene_lighting.glsl).
 
-layout(local_size_x = 8, local_size_y = 8) in;
+// x: the slice; y: two columns side by side. Workgroup (cx, cy) holds
+// columns (cx, 2 cy) and (cx, 2 cy + 1).
+layout(local_size_x = 32, local_size_y = 2) in;
 
 #define ATM_READS_TABLES
 #include "lighting/atmosphere_compute.glsl"
@@ -18,32 +24,47 @@ layout(set = 0, binding = 4, rgba16f) uniform writeonly image3D outTransmittance
 
 const int SUBSTEPS = 8;
 
+shared vec3 sL[2][32];
+shared vec3 sT[2][32];
+
 void main() {
-    ivec2 col = ivec2(gl_GlobalInvocationID.xy);
-    if (any(greaterThanEqual(col, ivec2(ATM_FROXEL_XY)))) return;
+    int k = int(gl_LocalInvocationID.x);
+    int c = int(gl_LocalInvocationID.y);
+    ivec2 col = ivec2(gl_WorkGroupID.x, gl_WorkGroupID.y * 2u + gl_LocalInvocationID.y);
     vec2 ndc = (vec2(col) + 0.5) / ATM_FROXEL_XY * 2.0 - 1.0;
     vec4 h = block.froxelInvViewProj * vec4(ndc, 0.5, 1.0);
     vec3 rd = normalize(h.xyz / h.w);
     vec3 ro = ATM.origin.xyz;
-    vec3 sun = ATM.sunDir.xyz;
     float tIn = atmSphereNear(ro, rd, ATM_RT);
     float tOut = atmSphereFar(ro, rd, ATM_RT);
     float tGround = atmGroundHit(ro, rd);   // no air inside the planet
     if (tGround >= 0.0) tOut = min(tOut, tGround);
-    bool air = tIn >= 0.0 && tOut > tIn;
     float depth = ATM.froxel.w;
 
+    // This slice alone: [d(k - 1), d(k)] inside the air.
+    float s0 = float(k) / ATM_FROXEL_SLICES, s1 = float(k + 1) / ATM_FROXEL_SLICES;
+    float a = max(depth * s0 * s0, tIn), b = min(depth * s1 * s1, tOut);
     vec3 L = vec3(0.0), T = vec3(1.0);
-    float prev = 0.0;
-    for (int k = 0; k < int(ATM_FROXEL_SLICES); ++k) {
-        float s = float(k + 1) / ATM_FROXEL_SLICES;
-        float d = depth * s * s;
-        if (air) {
-            float a = max(prev, tIn), b = min(d, tOut);
-            if (b > a) L += atmMarch(ro, rd, sun, a, b, SUBSTEPS, T);
+    if (tIn >= 0.0 && b > a) L = atmMarch(ro, rd, ATM.sunDir.xyz, a, b, SUBSTEPS, T);
+
+    // Inclusive scan, front to back: (L, T) after (Lp, Tp) is
+    // (Lp + Tp L, Tp T).
+    sL[c][k] = L;
+    sT[c][k] = T;
+    barrier();
+    for (int off = 1; off < int(ATM_FROXEL_SLICES); off <<= 1) {
+        vec3 Lp = vec3(0.0), Tp = vec3(1.0);
+        if (k >= off) {
+            Lp = sL[c][k - off];
+            Tp = sT[c][k - off];
         }
-        prev = d;
-        imageStore(outInscatter, ivec3(col, k), vec4(L * ATM_TABLE_SCALE, 1.0));
-        imageStore(outTransmittance, ivec3(col, k), vec4(T, 1.0));
+        barrier();
+        L = Lp + Tp * L;
+        T = Tp * T;
+        sL[c][k] = L;
+        sT[c][k] = T;
+        barrier();
     }
+    imageStore(outInscatter, ivec3(col, k), vec4(L * ATM_TABLE_SCALE, 1.0));
+    imageStore(outTransmittance, ivec3(col, k), vec4(T, 1.0));
 }

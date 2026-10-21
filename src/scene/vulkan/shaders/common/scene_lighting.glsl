@@ -141,29 +141,31 @@ void sceneSkyLightSh(vec3 pos, out vec3 c[6], out mat3 frame) {
     c[5] = vec3(l3.a, l4.rg) * E;
 }
 
+// The irradiance over pi the coefficients `c` (in the sun's `frame`) give a
+// surface facing `n`.
+vec3 sceneShIrradiance(vec3 c[6], mat3 frame, vec3 n) {
+    float b[6];
+    atmShBasis6(n * frame, b);   // into the sun's frame
+    vec3 e = ATM_PI * c[0] * b[0] + (2.0 * ATM_PI / 3.0) * (c[1] * b[1] + c[2] * b[2]) +
+             (ATM_PI / 4.0) * (c[3] * b[3] + c[4] * b[4] + c[5] * b[5]);
+    return max(e, vec3(0.0)) / ATM_PI;
+}
+
+// The radiance along `dir` the coefficients hold (smooth: the ambient's
+// specular on a surface no probe covers).
+vec3 sceneShRadiance(vec3 c[6], mat3 frame, vec3 dir) {
+    float b[6];
+    atmShBasis6(dir * frame, b);
+    return max(c[0] * b[0] + c[1] * b[1] + c[2] * b[2] + c[3] * b[3] + c[4] * b[4] + c[5] * b[5], vec3(0.0));
+}
+
 // The sky's irradiance over pi on a surface at `pos` facing `n` (the
 // atmosphere's ambient: the sky above, the lit ground below, through the air).
 vec3 sceneSkyIrradiance(vec3 pos, vec3 n) {
     vec3 c[6];
     mat3 frame;
     sceneSkyLightSh(pos, c, frame);
-    vec3 d = n * frame;   // into the sun's frame
-    float b[6];
-    atmShBasis6(d, b);
-    vec3 e = ATM_PI * c[0] * b[0] + (2.0 * ATM_PI / 3.0) * (c[1] * b[1] + c[2] * b[2]) +
-             (ATM_PI / 4.0) * (c[3] * b[3] + c[4] * b[4] + c[5] * b[5]);
-    return max(e, vec3(0.0)) / ATM_PI;
-}
-
-// The sky's radiance along `dir` from `pos`, as the SH hold it (smooth: the
-// ambient's specular on a surface no probe covers).
-vec3 sceneSkyRadianceSh(vec3 pos, vec3 dir) {
-    vec3 c[6];
-    mat3 frame;
-    sceneSkyLightSh(pos, c, frame);
-    float b[6];
-    atmShBasis6(dir * frame, b);
-    return max(c[0] * b[0] + c[1] * b[1] + c[2] * b[2] + c[3] * b[3] + c[4] * b[4] + c[5] * b[5], vec3(0.0));
+    return sceneShIrradiance(c, frame, n);
 }
 
 // What the scene's HDR target holds at most (RGBA16F's largest finite value,
@@ -686,8 +688,11 @@ vec3 sceneAmbient(SceneSurface s) {
         // where no probe covers the surface.
         vec3 kD = (1.0 - F) * (1.0 - s.metallic);
         vec3 nI = s.sward.w > 0.0 ? normalize(mix(s.normal, s.sward.xyz, s.sward.w)) : s.normal;
-        vec3 irradiance = sceneSkyIrradiance(s.position, nI);
-        vec3 specular = sceneSkyRadianceSh(s.position, R) * (F * brdf.x + brdf.y);
+        vec3 c[6];
+        mat3 frame;
+        sceneSkyLightSh(s.position, c, frame);   // once, for both
+        vec3 irradiance = sceneShIrradiance(c, frame, nI);
+        vec3 specular = sceneShRadiance(c, frame, R) * (F * brdf.x + brdf.y);
         return kD * irradiance * s.baseColor + mix(specular, probeSpec, probeW);
     }
     if (lighting.iblParams.x > 0.5) {

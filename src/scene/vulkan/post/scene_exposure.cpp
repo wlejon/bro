@@ -16,7 +16,8 @@ namespace bro::scene::vk {
 
 namespace {
 
-constexpr VkDeviceSize kHistogramBytes = exposure::kBins * sizeof(uint32_t);
+// The bins and the count of workgroups done (exposure.comp).
+constexpr VkDeviceSize kHistogramBytes = (exposure::kBins + 1) * sizeof(uint32_t);
 
 VkPipelineLayout computeLayout(VkDevice dev, VkDescriptorSetLayout set, uint32_t pushBytes) {
     VkPushConstantRange push{VK_SHADER_STAGE_COMPUTE_BIT, 0, pushBytes};
@@ -50,12 +51,10 @@ bool SceneExposure::setup(SceneGpu& gpu) {
     b.addBinding(2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
     setLayout_ = b.build(dev);
     if (!setLayout_) return false;
-    histogramLayout_ = computeLayout(dev, setLayout_, sizeof(HistogramPush));
-    adaptLayout_ = computeLayout(dev, setLayout_, sizeof(AdaptPush));
-    histogramPipeline_ =
-        createComputePipeline(dev, BuiltinSceneShader::ExposureHistogramComp, histogramLayout_, "exposure histogram");
-    adaptPipeline_ = createComputePipeline(dev, BuiltinSceneShader::ExposureAdaptComp, adaptLayout_, "exposure adapt");
-    if (!histogramPipeline_ || !adaptPipeline_) return false;
+    layout_ = computeLayout(dev, setLayout_, sizeof(Push));
+    if (!layout_) return false;
+    pipeline_ = createComputePipeline(dev, BuiltinSceneShader::ExposureComp, layout_, "exposure");
+    if (!pipeline_) return false;
 
     constexpr VkBufferUsageFlags kStorage =
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
@@ -77,14 +76,10 @@ void SceneExposure::cleanup(SceneGpu& gpu) {
     for (Readback& r : readbacks_) gpu.allocator.destroyBuffer(r.buffer);
     gpu.allocator.destroyBuffer(histogram_);
     gpu.allocator.destroyBuffer(state_);
-    for (VkPipeline* p : {&histogramPipeline_, &adaptPipeline_}) {
-        if (*p) gpu.device.defer([dev, pipeline = *p] { vkDestroyPipeline(dev, pipeline, nullptr); });
-        *p = VK_NULL_HANDLE;
-    }
-    for (VkPipelineLayout* l : {&histogramLayout_, &adaptLayout_}) {
-        if (*l) vkDestroyPipelineLayout(dev, *l, nullptr);
-        *l = VK_NULL_HANDLE;
-    }
+    if (pipeline_) gpu.device.defer([dev, pipeline = pipeline_] { vkDestroyPipeline(dev, pipeline, nullptr); });
+    pipeline_ = VK_NULL_HANDLE;
+    if (layout_) vkDestroyPipelineLayout(dev, layout_, nullptr);
+    layout_ = VK_NULL_HANDLE;
     if (setLayout_) vkDestroyDescriptorSetLayout(dev, setLayout_, nullptr);
     setLayout_ = VK_NULL_HANDLE;
     if (sampler_) gpu.device.defer([dev, s = sampler_] { vkDestroySampler(dev, s, nullptr); });
@@ -129,7 +124,7 @@ void SceneExposure::record(SceneFrame& frame, const SceneVkImage& hdr) {
         cleared_ = true;
     }
     // The last frame's tonemap read the state and its copy-out read it too;
-    // its adapt step cleared the bins: all before this frame's writes.
+    // its last workgroup cleared the bins: all before this frame's writes.
     render::cmdMemoryBarrier(cmd,
                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
                                  VK_PIPELINE_STAGE_TRANSFER_BIT,
@@ -143,21 +138,11 @@ void SceneExposure::record(SceneFrame& frame, const SceneVkImage& hdr) {
     writer.writeBuffer(2, state_.buffer, kStateBytes, 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
     writer.updateSet(dev, set);
 
-    if (metering) {
-        HistogramPush hp{static_cast<int32_t>(hdr.width), static_cast<int32_t>(hdr.height), exposure::kMinLog2,
-                         exposure::kMaxLog2};
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, histogramPipeline_);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, histogramLayout_, 0, 1, &set, 0, nullptr);
-        vkCmdPushConstants(cmd, histogramLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(hp), &hp);
-        // Each invocation reads one pixel of every 2 x 2 block.
-        const uint32_t gx = (hdr.width + 31) / 32, gy = (hdr.height + 31) / 32;
-        vkCmdDispatch(cmd, gx, gy, 1);
-        render::cmdMemoryBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
-                                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                                 VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
-    }
-
-    AdaptPush ap{};
+    Push ap{};
+    ap.width = static_cast<int32_t>(hdr.width);
+    ap.height = static_cast<int32_t>(hdr.height);
+    ap.minLog2 = exposure::kMinLog2;
+    ap.maxLog2 = exposure::kMaxLog2;
     ap.mode = metering ? 1.0f : 0.0f;
     ap.fixedEv = e.ev100;
     ap.fixedScale = exposure::scaleForEv(static_cast<double>(e.ev100) - e.compensation);
@@ -169,12 +154,15 @@ void SceneExposure::record(SceneFrame& frame, const SceneVkImage& hdr) {
     ap.maxEv = e.maxEv;
     ap.lowPercent = e.lowPercent;
     ap.highPercent = e.highPercent;
-    ap.minLog2 = exposure::kMinLog2;
-    ap.maxLog2 = exposure::kMaxLog2;
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, adaptPipeline_);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, adaptLayout_, 0, 1, &set, 0, nullptr);
-    vkCmdPushConstants(cmd, adaptLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ap), &ap);
-    vkCmdDispatch(cmd, 1, 1, 1);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout_, 0, 1, &set, 0, nullptr);
+    vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ap), &ap);
+    // Auto: an invocation a pixel of every 4 x 4 block, 16 x 16 a workgroup.
+    // Fixed: the one workgroup that writes the state.
+    if (metering)
+        vkCmdDispatch(cmd, (hdr.width + 63) / 64, (hdr.height + 63) / 64, 1);
+    else
+        vkCmdDispatch(cmd, 1, 1, 1);
     render::cmdMemoryBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
                              VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
                              VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT);

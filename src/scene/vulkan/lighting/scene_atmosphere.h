@@ -26,8 +26,10 @@
 //  - the aerial perspective (32 x 32 x 32 froxels over the main camera's
 //    frustum, slices squared in depth out to the camera's far plane or the
 //    air's horizon): the in-scatter and transmittance between the eye and
-//    every lit surface (scene_lighting.glsl, sceneAir), on the frame's
-//    compute stream (the async compute queue where the device has one).
+//    every lit surface (scene_lighting.glsl, sceneAir), in the graphics
+//    stream beside the sky view. It is a small dispatch: on the async
+//    compute queue it queued behind the plants' plans and the frame's join
+//    waited for it, while the graphics idled ahead of the join anyway.
 // Every table holds light for a sun of illuminance 1; the block carries the
 // sun's (AtmosphereGpu::sunIlluminance), so the sun's colour and strength
 // cost nothing.
@@ -85,8 +87,8 @@ public:
     /// The lighting set's atmosphere bindings (9-13).
     void writeBindings(SceneVkDescriptorWriter& writer) const;
 
-    /// This frame's view tables: the sky view into the graphics stream, the
-    /// froxels into the compute stream (PassAtmosphere).
+    /// This frame's view tables, the sky view and the froxels, into the
+    /// graphics stream (PassAtmosphere).
     void recordView(SceneFrame& frame);
     /// The world service wrote the tables on the async compute queue this
     /// frame: their readers wait for the frame's compute.

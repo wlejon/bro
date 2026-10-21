@@ -1,9 +1,8 @@
 #pragma once
 
 // The atmosphere's view tables (scene_atmosphere.h): this frame's sky view
-// (when the eye's height or the sun moved enough), into the graphics
-// stream, and aerial-perspective froxels, into the frame's compute stream,
-// after the world service (which remakes the view-independent tables they
+// (when the eye's height or the sun moved enough) and aerial-perspective
+// froxels, both into the graphics stream, after the world service (which remakes the view-independent tables they
 // read) and before anything lit or the sky reads them.
 
 #include "scene/vulkan/frame/scene_pass.h"

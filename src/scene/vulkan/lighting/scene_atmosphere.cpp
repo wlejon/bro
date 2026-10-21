@@ -358,7 +358,11 @@ void SceneAtmosphere::dispatch(SceneFrame& frame, VkCommandBuffer cmd, Job job, 
         case kAerial:
             storage(3, slot.inscatter);
             storage(4, slot.transmittance);
-            gx = gy = kFroxelXY / 8;
+            // atmosphere_aerial.comp: a workgroup a pair of columns, an
+            // invocation a slice.
+            static_assert(kFroxelSlices == 32 && kFroxelXY % 2 == 0);
+            gx = kFroxelXY;
+            gy = kFroxelXY / 2;
             break;
         case kJobs:
             return;
@@ -412,23 +416,16 @@ uint32_t SceneAtmosphere::record(SceneFrame& frame, int, std::span<const WorldJo
 void SceneAtmosphere::recordView(SceneFrame& frame) {
     if (!on_) return;
     const Slot& slot = slots_[slot_];
-    // The sky view in the graphics stream (see the header), fenced from the
-    // sky's reads of earlier frames and for this frame's.
-    if (remakeSkyView_) {
-        barrier(frame.cmd, false, true);
-        dispatch(frame, frame.cmd, kSkyView, slot, slot.r, slot.muS);
-        barrier(frame.cmd, false, false);
-    }
-    // The froxels in the compute stream. On their own queue they need no
-    // barrier: the world service closes its jobs with one (the tables they
-    // read are visible), nothing else there touches this slot's images, and
-    // the graphics reads them after the frame's join. A barrier would hold
-    // this small dispatch behind the plants' plans and them behind it.
-    VkCommandBuffer cmd = frame.computeStream();
-    const bool apart = frame.computeApart();
-    if (!apart) barrier(cmd, false, true);
+    // The sky view and the froxels in the graphics stream (see the header),
+    // fenced from the reads of earlier frames and for this frame's. Both run
+    // ahead of the frame's join, where the graphics would otherwise idle
+    // waiting for the plants' plans; on a frame whose tables the world
+    // service remade on the compute queue this pass is the join.
+    VkCommandBuffer cmd = frame.cmd;
+    barrier(cmd, false, true);
+    if (remakeSkyView_) dispatch(frame, cmd, kSkyView, slot, slot.r, slot.muS);
     dispatch(frame, cmd, kAerial, slot, 0.0f, 0.0f);
-    if (!apart) barrier(cmd, false, false);
+    barrier(cmd, false, false);
 }
 
 bool SceneAtmosphere::read(SceneGpu& gpu, AtmosphereTables& out) {

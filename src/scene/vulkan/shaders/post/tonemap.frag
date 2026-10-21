@@ -11,7 +11,7 @@ layout(location = 0) out vec4 outColor;
 layout(set = 0, binding = 0) uniform sampler2D texHdr;
 layout(set = 0, binding = 1) uniform sampler2D texBloom;
 layout(set = 0, binding = 2) uniform sampler3D texLut;
-// The exposure (exposure_adapt.comp, this frame's, on the GPU): the scale the
+// The exposure (exposure.comp, this frame's, on the GPU): the scale the
 // frame is multiplied by, fixed or metered (scene/exposure.h).
 layout(set = 0, binding = 3) readonly buffer Exposure {
     float ev;
