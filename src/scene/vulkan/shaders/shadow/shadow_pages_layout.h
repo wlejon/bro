@@ -38,12 +38,10 @@
 #define SP_MAX_MAPS             32                      // the lighting block's maps: the sun's levels, local faces
 #define SP_MAX_VIEWS            32                      // a frame's drawn rects (the plants' plan's views)
 
-// A pixel marks its page at the level its footprint wants, at the next one
-// where it lies in the hand-over between the two (the last SP_BLEND_BAND of
-// a level, in log2), and at SP_GUARD_LEVELS coarser: the guard, a page that
-// covers the eye's moves for longer, and the top of what it needs.
+// A pixel marks its page at the level its footprint wants and at
+// SP_GUARD_LEVELS coarser: the guard, a page that covers the eye's moves for
+// longer, and the top of what it needs.
 #define SP_GUARD_LEVELS         3
-#define SP_BLEND_BAND           0.25
 
 #define SP_RESIDENT             0x80000000u
 #define SP_PHYSICAL_MASK        0xFFFFu

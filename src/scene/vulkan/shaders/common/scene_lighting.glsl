@@ -372,8 +372,10 @@ bool sunLocate(int first, int level, SunProbe sp, out ShadowHit hit, out float r
 // The walk reads only table words, so whichever level serves, the page is
 // filtered once. What moves over a page this frame is in its overlay, which
 // a sun's level finer than the sway level reads from the sway level's.
-// A sun's level hands over to the next across the last SP_BLEND_BAND of it
-// (in log2 of the footprint), so no line shows where the texels double; its
+// A sun's level is filtered as wide in metres as the footprint asks: across
+// a level its filter widens by the footprint's share of the way to the next
+// (up to twice its texel, the next level's own), so the shadow's softness is
+// continuous where the texels double, and a pixel filters one page. Its
 // shadow fades out over the last tenth of its reach. `spread` widens the
 // filter (1: a 4-texel tent at pcf 3; 0: one hardware-filtered tap).
 float lightShadow(int i, vec3 pos, float camDist, float lightDist, vec3 N, float NdotL, float spread) {
@@ -398,14 +400,7 @@ float lightShadow(int i, vec3 pos, float camDist, float lightDist, vec3 N, float
                 if (sunLocate(first, level, sp, hit, ref) && (hit.page & SP_RESIDENT) != 0u) break;
             if (level < 0) return 1.0;
         }
-        float s = shadowPageAt(hit, ref, spread);
-        float t = (fract(lf) - (1.0 - SP_BLEND_BAND)) / SP_BLEND_BAND;
-        if (level == want && level + 1 < count && lf >= 0.0 && t > 0.0) {
-            ShadowHit next;
-            float nextRef;
-            if (sunLocate(first, level + 1, sp, next, nextRef) && (next.page & SP_RESIDENT) != 0u)
-                s = mix(s, shadowPageAt(next, nextRef, spread), smoothstep(0.0, 1.0, t));
-        }
+        float s = shadowPageAt(hit, ref, spread * exp2(clamp(lf - float(level), 0.0, 1.0)));
         int sway = min(int(lighting.shadowView.w), count - 1);
         if (s > 0.0 && sway >= 0) {
             if (level < sway && !sunLocate(first, sway, sp, hit, ref)) hit.overlay = 0u;

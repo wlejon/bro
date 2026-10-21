@@ -3,11 +3,11 @@
 // invocation reads the depth at the centre of its block of pixels, takes it
 // back to a camera-relative position, and for each shadowed light sets the
 // request bit of every page the lit shaders' lookup of that point wants
-// (common/scene_lighting.glsl's shadowPages): the sun's clipmap level its
-// footprint picks (or the first coarser one whose window holds it), the next
-// in the hand-over band, the guard SP_GUARD_LEVELS coarser; a local light's
-// mip and its one-page top. A point near its page's edge marks the
-// neighbour the filter and the normal offset may reach.
+// (common/scene_lighting.glsl's lightShadow): the sun's clipmap level its
+// footprint picks (or the first coarser one whose window holds it) and the
+// guard SP_GUARD_LEVELS coarser; a local light's mip and its one-page top. A
+// point near its page's edge marks the neighbour the filter and the normal
+// offset may reach.
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
@@ -69,12 +69,11 @@ void main() {
         if (L.w > 0.0 && dist > L.w) continue;
         if (kind == 0) {
             // The sun: the level a texel a pixel, else the first coarser
-            // whose window holds it; the next in the hand-over; the guard.
+            // whose window holds it; the guard.
             float lf = log2(max(footprint / u.view.z, 1e-9));
             int level = clamp(int(floor(lf)), 0, count - 1);
             while (level < count && !markClipmap(first + level, pos)) ++level;
             if (level >= count) continue;
-            if (level + 1 < count && lf >= 0.0 && fract(lf) > 1.0 - SP_BLEND_BAND) markClipmap(first + level + 1, pos);
             markClipmap(first + min(level + SP_GUARD_LEVELS, count - 1), pos);
             continue;
         }
