@@ -119,6 +119,9 @@
  * before; spots and points have their own maps on the same page pool. A
  * page is drawn when a view first needs it and kept until its light moves
  * or a caster over it changes, so a still scene draws no shadow casters.
+ * A sun that turns is followed in steps of about 0.1 degree: the next
+ * clipmap is drawn behind the shown one over the following frames and
+ * shown when it is complete, every shadow moving by the step at once.
  * What moves every frame (skinned or moving nodes, swaying plants and
  * grass) is drawn each frame over the cached depth. There is nothing to
  * size: resolution follows the screen. A custom vertex chunk that moves

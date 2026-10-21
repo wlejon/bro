@@ -533,6 +533,82 @@ planet's relief (step 9), not haze.
 - **Every caster** draws into pages through its provider's draw entry, as
   for the camera; the shadow tiles of today go.
 
+### As built: cached shadow pages
+
+`world/shadow_pages.*` is the CPU half (tested by `bro_shadow_pages_test`),
+`vulkan/shadow/` the GPU half.
+
+- **The sun** is a clipmap of 16 levels fixed in light space. The finest
+  level has a texel of 1/1024 m and each level doubles it. Each level is a
+  64 × 64 window of 128-texel pages that moves in whole pages, so a pan
+  changes only which pages are needed and no edge swims.
+- **Spots and points** have their own maps on the same pool: a four-mip
+  chain per spot and six per point.
+- **The pool** is 60 × 60 physical pages of 128 texels plus a 4-texel
+  border, reused least recently used. Each frame's views (rects of pages)
+  are drawn into a 4096² scratch target and copied into the pool.
+- **Requests.** `shadow_mark.comp` marks the page each 2 × 2 block of the
+  depth buffer needs, at the level its footprint wants. The marks are read
+  back a frame or two late.
+- **Lookup.** A lit pixel walks the page table from the level it wants to
+  the finest resident one. It filters inside that page's border, the filter
+  widening across a level with the footprint (up to twice the texel, the
+  next level's own), so no band blends two levels.
+- **Drawing pages.** A needed page that isn't drawn, or is stale, is a job
+  for the world service (§6). Its error is what shows meanwhile: 2^k px for
+  a drawn ancestor k levels up, 1 px when stale. The top of a needed chain
+  is required, and the base pages covering the view are drawn at once.
+  There are two kinds of job: pages the plants draw into (a sun page past
+  the sway level) and pages only what stands still draws into. In biomes
+  the first costs about 0.012 ms a page and the second 0.007, mostly its
+  copy. A kind's GPU timer span runs in segments, its draw and its copy,
+  so its price is what it costs.
+- **What moves** is drawn each frame into overlays of the needed pages it
+  touches, sampled in the scratch target. Plants and grass sway in the sway
+  level's overlays (8 mm texels), which the finer levels read; past it their
+  sway is under a texel and they sit in the cached depth.
+- **The sun turning.** A turn past 0.1° (or casters outgrowing the depth
+  range) begins the next clipmap in the sun as it is now, while the shown
+  one is still sampled. Its pages are jobs under every shown page (0.5 px).
+  It's shown once requests have named it and every page it needs is drawn,
+  or after 90 frames. A turn during a build waits for it.
+
+Measured on biomes, 2560 × 1364 on the 4090, interleaved against the atlas
+it replaced:
+
+| | Atlas | Pages |
+|---|---|---|
+| glade | 2.10 | 2.29 |
+| edge | 2.25 | 2.33 |
+| meadow | 2.30 | 2.39 |
+| canopy | 0.99 | 0.82 |
+| above | 0.78 | 0.60 |
+| flyover | 0.86 | 0.65 |
+
+- **Look:** at a texel a pixel the canopy's dappled leaf shadows are sharp
+  where the atlas gave blobs.
+- **Motion:**
+  - Walking (1.4 m/s) costs 2.36 ms and draws about 10 pages a frame.
+  - Flying (40 m/s) costs 0.65.
+  - A sun turning 0.02° a frame (about 25 times a day cycle's speed) costs
+    2.52 against the atlas' 1.98, with 19 of 96 frames over 2.78 ms.
+
+Open:
+
+- **Eye-level lookup cost.** At eye level the page lookup costs 0.1–0.2 ms
+  more than the atlas did. It's the texel density mid-field, not the finest
+  levels: a coarser texel saves it but loses the dapple.
+- **Unpriced plan wait.** The plants' GPU plan covers the camera and every
+  shadow view in one dispatch chain. Its wait at the join (up to about
+  0.2 ms more on frames that draw many page views) isn't in any kind's
+  price.
+- **The show is a step.** Every shadow moves at once by the 0.1° turn: the
+  ground's frame-to-frame change spikes to about 3 (of 255) a point on a
+  show frame, against 0.03 between shows. At a day cycle's speed that's a
+  small jump every half second or so.
+- **The copy** runs about 1.8 µs a page as image-to-image regions.
+- **Flyover streaks:** faint streaks in tree shadows, along the light.
+
 ## 9. The ground and its cover
 
 The ground and what covers it (turf, grass, herbs, litter, snow) are one
@@ -634,7 +710,8 @@ the motion oracle for anything temporal. Each step removes what it replaces.
 | 2 | Done: the layout (§12), moves only | frames byte-identical, suites green | moves |
 | 3 | Done: the world service (§6), the surface layers' fills its first producer | biomes' stills byte-identical, GPU ms unchanged; a cut glade→flyover settles in 4 frames (24 fills a frame took 24), flyover→glade in 12 (took 38), no frame over 2.78 ms | +1.4k |
 | 4 | Done: atmosphere tables and exposure (§7) | one sky from ground to orbit: the LUT path within 7% of a reference march by day (14% in a clear day's haze), 0.13 ms where the per-pixel march took 0.61; metered exposure in EV, a sunlit field at middle grey; biomes on it under a clear day's air, 0.10–0.24 ms over its HDR panorama, its sky bands gone | +3.1k |
-| 5 | Cached shadow pages (§8), then horizons and canopy density (§7) | plant and terrain shadows off the per-frame cost | ~6k |
+| 5a | Done: cached shadow pages (§8) | plant shadows off the per-frame cost: away from eye level 0.17–0.21 ms less than the atlas, the canopy's dappled shadows at a texel a pixel; at eye level 0.08–0.19 ms more (the lookup), and a turning sun's pages built behind the shown ones | +2.5k |
+| 5b | Horizons and canopy density (§7) | terrain and far shadows past the pages | ~3k |
 | 6 | The ground and its cover as one surface (§9) | the eye-level frame's 1.3–1.7 ms of cover cut by most of its hidden and far work | ~2k |
 | 7 | The probe grid (§7) | forests, valleys and slopes lit as places; the stand-in falloffs gone | ~5k |
 | 8 | Placement per cell (§10) | a world of any size placed around the eye at a flat cost | ~3k |
