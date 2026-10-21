@@ -81,10 +81,8 @@ bool SceneProbeGrid::setup(SceneGpu& gpu) {
     if (vkCreateSampler(dev, &si, nullptr, &linear_) != VK_SUCCESS) return false;
     si.magFilter = si.minFilter = VK_FILTER_NEAREST;
     if (vkCreateSampler(dev, &si, nullptr, &nearest_) != VK_SUCCESS) return false;
-    // The probes' columns wrap across; their layers do not.
-    si.magFilter = si.minFilter = VK_FILTER_LINEAR;
-    si.addressModeU = si.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    if (vkCreateSampler(dev, &si, nullptr, &repeat_) != VK_SUCCESS) return false;
+    // The probes' columns wrap across (their layers are kept inside a slab).
+    repeat_ = gpu.defaults.repeatSampler;
 
     // scene_probe_grid_compute.glsl's set.
     constexpr VkDescriptorType kTypes[] = {
@@ -162,7 +160,7 @@ void SceneProbeGrid::cleanup(SceneGpu& gpu) {
     if (setLayout_) vkDestroyDescriptorSetLayout(dev, setLayout_, nullptr);
     layout_ = VK_NULL_HANDLE;
     setLayout_ = VK_NULL_HANDLE;
-    for (VkSampler* s : {&linear_, &nearest_, &repeat_}) {
+    for (VkSampler* s : {&linear_, &nearest_}) {
         if (*s) gpu.device.defer([dev, sampler = *s] { vkDestroySampler(dev, sampler, nullptr); });
         *s = VK_NULL_HANDLE;
     }
@@ -202,7 +200,7 @@ void SceneProbeGrid::gatherCanopy(SceneFrame& frame) {
     }
 }
 
-void SceneProbeGrid::offer(SceneFrame& frame, WorldService& service) {
+void SceneProbeGrid::beginFrame(SceneFrame& frame) {
     on_ = frame.renderer.probeGridEnabled();
     if (!on_) return;
     rendered_ = true;
@@ -252,18 +250,48 @@ void SceneProbeGrid::offer(SceneFrame& frame, WorldService& service) {
         g.wrap[c][0] = wrap(grid_.cornerX(c));
         g.wrap[c][1] = wrap(grid_.cornerZ(c));
     }
+}
+
+void SceneProbeGrid::fill(ProbeGridGpu& out, const bromath::Vec3& eye) const {
+    out = ProbeGridGpu{};
+    if (!on_) return;
+    out = block_;
+    // The frame's block is relative to its eye; another view's to its own.
+    const float dx = block_.eye[0] - eye.x, dz = block_.eye[2] - eye.z;
+    for (int c = 0; c < PG_MAX_CASCADES; ++c) {
+        out.cascade[c][0] += dx;
+        out.cascade[c][1] += dz;
+    }
+    out.eye[0] = eye.x;
+    out.eye[1] = eye.y;
+    out.eye[2] = eye.z;
+}
+
+void SceneProbeGrid::writeBindings(SceneVkDescriptorWriter& writer) const {
+    for (uint32_t ch = 0; ch < 3; ++ch)
+        writer.writeImage(18 + ch, sh_[ch].view, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL,
+                          VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
+    writer.writeImage(21, height_.view, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
+}
+
+void SceneProbeGrid::offer(SceneFrame& frame, WorldService& service) {
+    if (!on_) return;
+    const SceneLightingUniforms& light = frame.lighting;
+    const ProbeGridConfig& config = grid_.config();
     // What the traces light by: the sun, the sky (the atmosphere's, else the
-    // environment's, else the flat ambient), the ground's albedo.
+    // environment's, else the flat ambient), the ground's albedo (the
+    // atmosphere's ground, else the renderer's ground bounce).
     Block block{};
     block.grid = block_;
     block.capture[0] = kCaptureRange;
+    const bool atmosphere = light.atm.sunDir[3] > 0.5f;
     for (int k = 0; k < 3; ++k) {
         block.sunLight[k] = light.sunColor[k] * light.sunColor[3];
         block.sky[k] = light.ambientColor[k];
-        block.ground[k] = frame.renderer.groundBounce()[k];
+        block.ground[k] = atmosphere ? light.atm.ground[k] : frame.renderer.groundBounce()[k];
     }
     block.sunLight[3] = light.sunDirection[3];
-    block.sky[3] = light.atm.sunDir[3] > 0.5f ? 2.0f : (light.iblParams[0] > 0.5f ? 1.0f : 0.0f);
+    block.sky[3] = atmosphere ? 2.0f : (light.iblParams[0] > 0.5f ? 1.0f : 0.0f);
     block.environment[0] = light.iblParams[1];
     block.environment[1] = light.iblParams[2];
     block.environment[2] = light.iblParams[3];

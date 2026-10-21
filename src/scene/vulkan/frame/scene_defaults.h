@@ -43,6 +43,7 @@ public:
     VkSampler sampler = VK_NULL_HANDLE;      // linear, clamp to edge
     VkSampler cubeSampler = VK_NULL_HANDLE;  // linear mips, clamp to edge
     VkSampler nearestSampler = VK_NULL_HANDLE;   // nearest, clamp to edge (integer images)
+    VkSampler repeatSampler = VK_NULL_HANDLE;    // linear, repeating (wrapped clipmaps)
 
     /// Material set of all fallbacks (written once, never changes).
     VkDescriptorSet defaultMaterialSet = VK_NULL_HANDLE;

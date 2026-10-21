@@ -606,6 +606,10 @@ void bro_scene_SceneGraph_setFXAA(void* self, bool enabled);
 //   registered at __bro_native.scene.SceneGraph_setGroundBounce
 void bro_scene_SceneGraph_setGroundBounce(void* self, double r, double g, double b);
 
+// bro.scene.SceneGraph.prototype.setProbeGrid
+//   registered at __bro_native.scene.SceneGraph_setProbeGrid
+void bro_scene_SceneGraph_setProbeGrid(void* self, bool enabled);
+
 // bro.scene.SceneGraph.prototype.setDither
 //   registered at __bro_native.scene.SceneGraph_setDither
 void bro_scene_SceneGraph_setDither(void* self, bool enabled);

@@ -154,6 +154,10 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
     frame.tilt = renderer.tiltShiftEnabled();
     frame.fxaa = renderer.fxaaEnabled();
     buildDrawLists(frame);
+    // The probe grid places itself once the draw lists hold its canopy; the
+    // frame's lighting (filled before) takes its block.
+    probes_.beginFrame(frame);
+    probes_.fill(frame.lighting.probeGrid, frame.view.eye);
     timer_.mark(cmd, "setup");
     meshes_.recordPlans(frame);
 

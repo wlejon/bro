@@ -368,6 +368,10 @@
         const c = color && typeof color.length === "number" && color.length >= 3 ? color : [0, 0, 0];
         __bro_native.scene.SceneGraph_setGroundBounce(this, +c[0] || 0, +c[1] || 0, +c[2] || 0);
     });
+    fn(SceneGraph.prototype, "setProbeGrid", function setProbeGrid(enabled) {
+        if (enabled === undefined) throw new TypeError("bro.scene.SceneGraph.prototype.setProbeGrid: enabled is required");
+        __bro_native.scene.SceneGraph_setProbeGrid(this, !!enabled);
+    });
     fn(SceneGraph.prototype, "setDither", function setDither(enabled) {
         if (enabled === undefined) throw new TypeError("bro.scene.SceneGraph.prototype.setDither: enabled is required");
         __bro_native.scene.SceneGraph_setDither(this, !!enabled);

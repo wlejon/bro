@@ -28,10 +28,10 @@ struct ShadeMapBinding;
 namespace bro::scene::vk {
 
 /// The lights, ambient and shadow maps of `renderer`'s current frame
-/// (SceneRenderer::frameLights / shadowPlan), with the environment's IBL and
-/// the atmosphere (gpu.environment, gpu.atmosphere, which began the frame),
-/// for a view whose eye is `eye`: every position is relative to it
-/// (camera-relative rendering, scene_view.h).
+/// (SceneRenderer::frameLights / shadowPlan), with the environment's IBL, the
+/// atmosphere and the probe grid (gpu.environment, gpu.atmosphere,
+/// gpu.probes, as they began the frame), for a view whose eye is `eye`:
+/// every position is relative to it (camera-relative rendering, scene_view.h).
 SceneLightingUniforms sceneLighting(const SceneRenderer& renderer, const SceneGpu& gpu, const bromath::Vec3& eye);
 
 /// Shadow map `map` of `plan`, for positions relative to `eye`.

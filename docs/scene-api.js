@@ -804,11 +804,31 @@ class SceneGraph {
    * ground is rarely the scene's (a sky-only one has none), and under a high
    * sun this bounce is most of the light in the shade on anything upright:
    * a trunk under its crown, a wall, a leaf's underside. Null or `[0, 0, 0]`
-   * (the default): none. Needs an environment (setEnvironment).
+   * (the default): none. Needs an environment (setEnvironment). With the
+   * probe grid on (setProbeGrid) and no atmosphere, it is the albedo of the
+   * ground the probes trace.
    *
    * @param {number[]|null} color
    */
   setGroundBounce(color) {}
+
+  /**
+   * The probe grid: irradiance probes about the eye, in cascades of columns
+   * at fixed heights above the ground, which light every lit surface's
+   * ambient instead of the open sky. Their rays are traced through a world
+   * made for them (the ground's height seen from above, the plants' crowns
+   * as a medium of leaves, the sun's light through it), so a forest's floor
+   * and a crown's inside take the sky that reaches them and the light the
+   * ground and the leaves send back; the specular is dimmed as the probes
+   * see less of the sky. The sky they see is the scene's (the atmosphere,
+   * the environment or the flat ambient); the ground's albedo is the
+   * atmosphere's `groundAlbedo`, else setGroundBounce's. Traced by the world
+   * service as the frame's budget
+   * allows (setFrameTarget). Off by default.
+   *
+   * @param {boolean} enabled
+   */
+  setProbeGrid(enabled) {}
 
   /**
    * Dither the tonemapped image as it is written at 8 bits a channel. On by

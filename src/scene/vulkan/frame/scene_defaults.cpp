@@ -18,15 +18,16 @@ bool makePixel(SceneVkAllocator& allocator, const uint8_t (&rgba)[4], SceneVkIma
     return allocator.createTexture2D(rgba, desc, out);
 }
 
-VkSampler makeSampler(VkDevice dev, float maxLod, VkFilter filter = VK_FILTER_LINEAR) {
+VkSampler makeSampler(VkDevice dev, float maxLod, VkFilter filter = VK_FILTER_LINEAR,
+                      VkSamplerAddressMode address = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE) {
     VkSamplerCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
     info.magFilter = filter;
     info.minFilter = filter;
     info.mipmapMode = filter == VK_FILTER_LINEAR ? VK_SAMPLER_MIPMAP_MODE_LINEAR : VK_SAMPLER_MIPMAP_MODE_NEAREST;
-    info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    info.addressModeU = address;
+    info.addressModeV = address;
+    info.addressModeW = address;
     info.maxAnisotropy = 1.0f;
     info.maxLod = maxLod;
     VkSampler s = VK_NULL_HANDLE;
@@ -43,13 +44,15 @@ bool SceneDefaults::setup(SceneVkDevice& device, SceneVkAllocator& allocator) {
     sampler = makeSampler(dev, 0.0f);
     cubeSampler = makeSampler(dev, 16.0f);
     nearestSampler = makeSampler(dev, 0.0f, VK_FILTER_NEAREST);
-    if (!sampler || !cubeSampler || !nearestSampler) {
+    repeatSampler = makeSampler(dev, 0.0f, VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_REPEAT);
+    if (!sampler || !cubeSampler || !nearestSampler || !repeatSampler) {
         LOG_ERROR("SceneDefaults: Failed creating the default samplers");
         return false;
     }
 
     cameraLayout = SceneVkDescriptorLayoutBuilder::createCameraLayout(dev);
-    lightingLayout = SceneVkDescriptorLayoutBuilder::createLightingLayout(dev, device.shadowCompareSampler(), cubeSampler);
+    lightingLayout = SceneVkDescriptorLayoutBuilder::createLightingLayout(dev, device.shadowCompareSampler(), cubeSampler,
+                                                                          repeatSampler);
     materialLayout = SceneVkDescriptorLayoutBuilder::createMaterialLayout(dev);
 
     SceneVkDescriptorLayoutBuilder bone;
@@ -128,7 +131,7 @@ void SceneDefaults::cleanup(SceneVkDevice& device, SceneVkAllocator& allocator) 
     allocator.destroyImage(cube);
     allocator.destroyImage(zeroArray);
     allocator.destroyImage(zeroUintArray);
-    for (VkSampler* s : {&sampler, &cubeSampler, &nearestSampler}) {
+    for (VkSampler* s : {&sampler, &cubeSampler, &nearestSampler, &repeatSampler}) {
         if (*s != VK_NULL_HANDLE) vkDestroySampler(dev, *s, nullptr);
         *s = VK_NULL_HANDLE;
     }

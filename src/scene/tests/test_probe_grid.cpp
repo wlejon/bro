@@ -33,6 +33,7 @@ ProbeGrid grid(int columns = 8) {
     c.spacing = 2.0f;
     c.ratio = 4.0f;
     c.sliceRows = 2;
+    c.refreshPixelsPerSecond = 1.0f;
     ProbeGrid g;
     g.configure(c);
     return g;
@@ -155,18 +156,24 @@ void testRefresh() {
     makeAll(g);
     traceFresh(g);
     g.advance(2.0f);
+    // The slices start spread over their period (a second in cascade 0, two
+    // in cascade 1): two seconds on, cascade 0's are 2, 1.75, 1.5 and 1.25 s
+    // old, all due; cascade 1's 2, 1.5, 1 and 0.5, the first due.
     float e0 = -1.0f, e1 = -1.0f;
-    int slices0 = 0;
+    int slices0 = 0, slices1 = 0;
     for (const auto& j : g.traceJobs()) {
         if (j.box.fresh) continue;
         if (j.box.cascade == 0) {
-            e0 = j.error;
+            if (j.box.z0 == 0) e0 = j.error;
             ++slices0;
             check(j.box.x0 == 0 && j.box.x1 == 8 && j.box.z1 - j.box.z0 == 2 && !j.required, "a slice is whole rows, not required");
         }
-        if (j.box.cascade == 1) e1 = j.error;
+        if (j.box.cascade == 1) {
+            e1 = j.error;
+            ++slices1;
+        }
     }
-    check(slices0 == 4, "a cascade's rows in slices");
+    check(slices0 == 4 && slices1 == 1, "a cascade's rows in slices, due one by one over the period");
     check(std::abs(e0 - 2.0f) < 1e-5f && std::abs(e1 - 1.0f) < 1e-5f, "a slice's error: its age, halved a cascade");
     const auto& jobs = g.traceJobs();
     for (int i = 0; i < static_cast<int>(jobs.size()); ++i)
@@ -177,7 +184,15 @@ void testRefresh() {
         if (j.box.z0 == 2) traced = j.error;
         if (j.box.z0 == 4) other = j.error;
     }
-    check(traced == 0.0f && other > 1.9f, "a traced slice's age starts again, the others' do not");
+    check(traced < 0.0f && other > 1.4f, "a traced slice waits its period again, the others do not");
+    g.advance(0.5f);
+    bool early = false;
+    for (const auto& j : g.traceJobs()) early = early || (j.box.cascade == 0 && j.box.z0 == 2);
+    check(!early, "half a period on, it still waits");
+    g.advance(0.5f);
+    bool due = false;
+    for (const auto& j : g.traceJobs()) due = due || (j.box.cascade == 0 && j.box.z0 == 2);
+    check(due, "a period on, it is offered again");
 }
 
 }  // namespace

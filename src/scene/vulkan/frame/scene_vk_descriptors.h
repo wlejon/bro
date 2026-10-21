@@ -1,5 +1,6 @@
 #pragma once
 
+#include "scene/vulkan/shaders/lighting/probe_grid_layout.h"
 #include "scene/vulkan/shaders/shadow/shadow_pages_layout.h"
 
 #include <vulkan/vulkan.h>
@@ -86,6 +87,18 @@ struct alignas(16) AtmosphereGpu {
 };
 static_assert(sizeof(AtmosphereGpu) == 10 * 16 + 64);
 
+/// The probe grid's block (std140) — ProbeGridGpu in
+/// shaders/lighting/scene_probe_grid.glsl; filled by SceneProbeGrid::fill
+/// (scene/vulkan/lighting/scene_probe_grid.h). Positions relative to the eye.
+struct alignas(16) ProbeGridGpu {
+    alignas(16) float params[4];                     // x on, y cascades, z the layers' top (m), w the lowest layer (m)
+    alignas(16) float eye[4];                        // xyz the eye in the world, w the layers' power
+    alignas(16) float sun[4];                        // xyz toward the sun
+    alignas(16) float cascade[PG_MAX_CASCADES][4];   // xy its world's corner (x, z), z spacing, w 1/spacing
+    alignas(16) float wrap[PG_MAX_CASCADES][4];      // xy where column 0 is stored
+};
+static_assert(sizeof(ProbeGridGpu) == 176);
+
 /// The lighting block (set 1), std140 — shaders/common/scene_lighting.glsl.
 struct alignas(16) SceneLightingUniforms {
     alignas(16) float sunDirection[4];  // dominant directional light, w = 1 when present
@@ -106,6 +119,7 @@ struct alignas(16) SceneLightingUniforms {
     alignas(16) float iblParams[4];     // x = enabled, y = intensity, z = rotation (rad), w = prefilter max LOD
     alignas(16) float groundBounce[4];  // rgb = the ground's bounce, irradiance over pi and intensity (0: none)
     AtmosphereGpu atm;                  // the atmosphere (sunDir[3] = 1 when on)
+    ProbeGridGpu probeGrid;             // the probe grid (params[0] = 1 when on)
 };
 static_assert(sizeof(SceneLightUniform) == 80 && sizeof(SceneShadowMapUniform) == 112);
 
@@ -129,9 +143,10 @@ public:
     /// shadowCompareSampler), reflection probe cubemap, tile shade map, then
     /// the environment's irradiance and prefiltered cubes, the BRDF LUT and
     /// the sky cube, the shared sampler (8), the atmosphere's tables (9-13)
-    /// and the shadow pages' page table (14).
+    /// and the shadow pages' page table (14), and the probe grid's (17 its
+    /// sampler, repeating across; 18-20 its SH, 21 the ground's height).
     static VkDescriptorSetLayout createLightingLayout(VkDevice device, VkSampler shadowCompareSampler,
-                                                      VkSampler linearSampler);
+                                                      VkSampler linearSampler, VkSampler repeatSampler);
 
 private:
     std::vector<VkDescriptorSetLayoutBinding> bindings_;

@@ -59,8 +59,10 @@ VkDescriptorSetLayout SceneVkDescriptorLayoutBuilder::createMaterialLayout(VkDev
 
 VkDescriptorSetLayout SceneVkDescriptorLayoutBuilder::createLightingLayout(VkDevice device,
                                                                          VkSampler shadowCompareSampler,
-                                                                         VkSampler linearSampler) {
-    assert(shadowCompareSampler != VK_NULL_HANDLE && linearSampler != VK_NULL_HANDLE);
+                                                                         VkSampler linearSampler,
+                                                                         VkSampler repeatSampler) {
+    assert(shadowCompareSampler != VK_NULL_HANDLE && linearSampler != VK_NULL_HANDLE &&
+           repeatSampler != VK_NULL_HANDLE);
     SceneVkDescriptorLayoutBuilder builder;
     builder.addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
     // The shadow pages' pool (1) and the frame's overlays in the scratch
@@ -78,6 +80,11 @@ VkDescriptorSetLayout SceneVkDescriptorLayoutBuilder::createLightingLayout(VkDev
     builder.addBinding(14, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
     builder.addBinding(15, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
     builder.addBinding(16, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, shadowCompareSampler);
+    // The probe grid (SceneProbeGrid::writeBindings): its SH through a
+    // sampler that repeats across (the columns wrap), and the ground's height.
+    builder.addBinding(17, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, repeatSampler);
+    for (uint32_t binding = 18; binding <= 21; ++binding)
+        builder.addBinding(binding, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
     return builder.build(device);
 }
 

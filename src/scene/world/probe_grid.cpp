@@ -13,7 +13,15 @@ void ProbeGrid::configure(const ProbeGridConfig& config) {
     config_.sliceRows = std::clamp(config_.sliceRows, 1, config_.columns);
     cascades_.assign(static_cast<size_t>(config_.cascades), Cascade{});
     const int slices = (config_.columns + config_.sliceRows - 1) / config_.sliceRows;
-    for (Cascade& c : cascades_) c.sliceAge.assign(static_cast<size_t>(slices), 0.0f);
+    // The slices start spread over their period, so they come due one by one
+    // (and stay so), not a cascade's at once.
+    for (size_t i = 0; i < cascades_.size(); ++i) {
+        const float period = config_.refreshSeconds * static_cast<float>(1 << i);
+        Cascade& c = cascades_[i];
+        c.sliceAge.resize(static_cast<size_t>(slices));
+        for (int s = 0; s < slices; ++s)
+            c.sliceAge[static_cast<size_t>(s)] = -period * static_cast<float>(s) / static_cast<float>(slices);
+    }
     jobs_.clear();
 }
 
@@ -131,7 +139,9 @@ const std::vector<ProbeGrid::TraceJob>& ProbeGrid::traceJobs() {
         if (!traceable(i)) continue;
         for (const ProbeBox& b : c.fresh) jobs_.push_back(TraceJob{b, 0.0f, true});
         const float weight = config_.refreshPixelsPerSecond / static_cast<float>(1 << i);
+        const float period = config_.refreshSeconds * static_cast<float>(1 << i);
         for (size_t s = 0; s < c.sliceAge.size(); ++s) {
+            if (c.sliceAge[s] < period) continue;
             const int z0 = static_cast<int>(s) * config_.sliceRows;
             ProbeBox box{i, 0, z0, n, std::min(z0 + config_.sliceRows, n), false};
             jobs_.push_back(TraceJob{box, c.sliceAge[s] * weight, false});

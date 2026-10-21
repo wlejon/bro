@@ -45,16 +45,6 @@ namespace bro::scene::vk {
 struct SceneFrame;
 struct SceneGpu;
 
-/// scene_probe_grid.glsl's ProbeGridGpu (std140).
-struct ProbeGridGpu {
-    float params[4];                       // x on, y cascades, z the layers' top (m), w the lowest layer (m)
-    float eye[4];                          // xyz the eye in the world, w the layers' power
-    float sun[4];                          // xyz toward the sun
-    float cascade[PG_MAX_CASCADES][4];     // xy its world's corner relative to the eye (x, z), z spacing, w 1/spacing
-    float wrap[PG_MAX_CASCADES][4];        // xy where column 0 is stored
-};
-static_assert(sizeof(ProbeGridGpu) == 176);
-
 /// The probe grid's world read back to the CPU (SceneProbeGrid::read):
 /// bro_probe_grid_gpu_test checks it against the scene it was made from.
 struct ProbeGridTables {
@@ -73,9 +63,18 @@ public:
     bool setup(SceneGpu& gpu);
     void cleanup(SceneGpu& gpu);
 
-    /// On this frame (the renderer's setting, the images had).
+    /// The frame begins, its draw lists built (before its lighting sets are
+    /// written): the canopy gathered, the sun, the cascades placed about the
+    /// eye and the block made.
+    void beginFrame(SceneFrame& frame);
+    /// On this frame (the renderer's setting).
     bool active() const { return on_; }
-    const ProbeGridGpu& block() const { return block_; }
+    /// The block for a view whose eye is `eye` (the frame's, or a
+    /// reflection probe's): the frame's with its positions relative to it.
+    /// Off: zero.
+    void fill(ProbeGridGpu& out, const bromath::Vec3& eye) const;
+    /// The lighting set's probe grid bindings (18-20 the SH, 21 the ground's height).
+    void writeBindings(SceneVkDescriptorWriter& writer) const;
 
     /// The last render's world, copied out (waits for the GPU).
     bool read(SceneGpu& gpu, ProbeGridTables& out);
@@ -120,7 +119,8 @@ private:
     static void computeBarrier(VkCommandBuffer cmd);
 
     SceneVkDevice* device_ = nullptr;
-    VkSampler linear_ = VK_NULL_HANDLE, nearest_ = VK_NULL_HANDLE, repeat_ = VK_NULL_HANDLE;
+    VkSampler linear_ = VK_NULL_HANDLE, nearest_ = VK_NULL_HANDLE;
+    VkSampler repeat_ = VK_NULL_HANDLE;   // SceneDefaults'
     VkDescriptorSetLayout setLayout_ = VK_NULL_HANDLE;
     VkPipelineLayout layout_ = VK_NULL_HANDLE;
     VkPipeline pipelines_[kStages] = {};
@@ -133,7 +133,7 @@ private:
     bool on_ = false;
     bool rendered_ = false;
     bool shCleared_ = false;
-    double clock_ = -1.0;   // the scene's clock at the last offer (s)
+    double clock_ = -1.0;   // the scene's clock at the last frame (s)
     uint32_t seed_ = 0;
     ProbeGridGpu block_{};
     VkDescriptorBufferInfo blockInfo_{};

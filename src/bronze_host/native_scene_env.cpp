@@ -200,6 +200,11 @@ void bro_scene_SceneGraph_setGroundBounce(void* self, double r, double g, double
     if (gr) gr->setGroundBounce(static_cast<float>(r), static_cast<float>(g), static_cast<float>(b));
 }
 
+void bro_scene_SceneGraph_setProbeGrid(void* self, bool enabled) {
+    auto* g = graphOf(self);
+    if (g) g->renderer().setProbeGrid(enabled);
+}
+
 void bro_scene_SceneGraph_setDither(void* self, bool enabled) {
     auto* g = graphOf(self);
     if (g) g->setDither(enabled);

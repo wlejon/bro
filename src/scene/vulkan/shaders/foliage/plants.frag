@@ -101,13 +101,7 @@ void main() {
     }
 
     // The sky about the form, less of it deep in the crown.
-    vec3 irr = lighting.ambientColor.rgb;
-    if (sceneAtmosphereOn()) {
-        irr = sceneSkyIrradiance(pos, N);
-    } else if (lighting.iblParams.x > 0.5) {
-        irr = texture(texIrradiance, rotateY(N, lighting.iblParams.z)).rgb * lighting.iblParams.y;
-        irr += lighting.groundBounce.rgb * (0.5 - 0.5 * N.y);
-    }
+    vec3 irr = sceneAmbientIrradiance(pos, N);
     float ao = mix(1.0, 0.3, depth) * (0.7 + 0.3 * clamp(0.5 + 0.5 * nForm.y, 0.0, 1.0));
     vec3 indirect = irr * albedo * ao;
 

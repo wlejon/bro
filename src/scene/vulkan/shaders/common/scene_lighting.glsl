@@ -29,6 +29,7 @@ struct SceneLight {
 // lights' maps, each a set of cached pages in the one pool.
 #include "common/scene_shadow_pages.glsl"
 #include "common/scene_atmosphere_params.glsl"
+#include "lighting/scene_probe_grid.glsl"
 
 layout(set = 1, binding = 0) uniform LightingUBO {
     vec4 sunDirection;  // the dominant directional light (decals), w = 1 when present
@@ -48,6 +49,7 @@ layout(set = 1, binding = 0) uniform LightingUBO {
     vec4 iblParams;     // x = enabled, y = intensity, z = rotation, w = prefilter max LOD
     vec4 groundBounce;  // rgb = the ground's bounce, as irradiance over pi and intensity (0: none)
     AtmosphereGpu atm;  // the atmosphere (scene/vulkan/lighting/scene_atmosphere.h), atm.sunDir.w = on
+    ProbeGridGpu probeGrid;   // the probe grid (scene/vulkan/lighting/scene_probe_grid.h), params.x = on
 } lighting;
 
 // The pool of shadow pages and the frame's overlays (the scratch target the
@@ -103,6 +105,18 @@ layout(set = 1, binding = 13) uniform texture3D texAtmSkyLightImage;
 #define ATM_SKYLIGHT_TEX texAtmSkyLight
 #include "common/scene_atmosphere.glsl"
 
+// The probe grid (scene/vulkan/lighting/scene_probe_grid.h): its probes' SH,
+// a colour channel each, through binding 17's sampler (which repeats across:
+// the columns wrap), and the ground's height under its cascades.
+layout(set = 1, binding = 17) uniform sampler probeGridSampler;
+layout(set = 1, binding = 18) uniform texture3D probeShRImage;
+layout(set = 1, binding = 19) uniform texture3D probeShGImage;
+layout(set = 1, binding = 20) uniform texture3D probeShBImage;
+layout(set = 1, binding = 21) uniform texture2D probeHeightImage;
+#define PG lighting.probeGrid
+#define PG_HEIGHT_LOAD(texel) texelFetch(sampler2D(probeHeightImage, lightingSampler), texel, 0).r
+#include "lighting/scene_probe_grid.glsl"
+
 // Whether the pipeline was built for a frame with the atmosphere on (the
 // mesh drawer's kAtmosphere raster bit): without it the atmosphere's code is
 // not in the shader at all, so a scene that does not use it pays nothing.
@@ -137,6 +151,66 @@ const float SCENE_HDR_MAX = 64000.0;
 vec3 rotateY(vec3 d, float a) {
     float c = cos(a), s = sin(a);
     return vec3(c * d.x + s * d.z, d.y, -s * d.x + c * d.z);
+}
+
+// The open sky's irradiance over pi on a surface at `pos` facing `n`, as if
+// nothing stood about it: the atmosphere's sky light, else the environment's
+// irradiance with the ground's bounce below, else the flat ambient.
+vec3 sceneOpenSkyIrradiance(vec3 pos, vec3 n) {
+    if (sceneAtmosphereOn()) return sceneSkyIrradiance(pos, n);
+    if (lighting.iblParams.x > 0.5) {
+        vec3 e = texture(texIrradiance, rotateY(n, lighting.iblParams.z)).rgb;
+        // The ground's bounce (SceneRenderer::setGroundBounce): the light a
+        // level ground sends back, sun and sky on it (worked out once a frame,
+        // SceneEnvironment::fillLighting), seen by the surface's lower
+        // hemisphere ((1 - n.y) / 2 of it is ground).
+        return (e + lighting.groundBounce.rgb * (0.5 - 0.5 * n.y)) * lighting.iblParams.y;
+    }
+    return lighting.ambientColor.rgb;
+}
+
+// The probe grid's SH at camera-relative `pos` (a texel a colour channel):
+// the finest cascade holding it, blended into the next coarser over the
+// outer columns of its square; false where the grid is off or ends.
+bool sceneProbeSh(vec3 pos, out vec4 r, out vec4 g, out vec4 b) {
+    r = vec4(0.0);
+    g = vec4(0.0);
+    b = vec4(0.0);
+    if (PG.params.x < 0.5) return false;
+    int c = pgCascadeAt(pos.xz, 0);
+    if (c < 0) return false;
+    float left = 1.0;
+    for (int n = 0; n < 2 && c < pgCascades(); ++n, ++c) {
+        vec2 col = (pos.xz - PG.cascade[c].xy) * PG.cascade[c].w;
+        float edge = min(min(col.x, col.y), min(float(PG_COLUMNS) - col.x, float(PG_COLUMNS) - col.y));
+        float w = c + 1 < pgCascades() ? left * clamp((edge - 1.0) / 3.0, 0.0, 1.0) : left;
+        if (n == 1) w = left;
+        if (w <= 0.0) continue;
+        vec3 uvw = pgProbeUvw(c, pos.xz, pos.y - pgBase(pgGround(c, pos.xz)));
+        r += w * textureLod(sampler3D(probeShRImage, probeGridSampler), uvw, 0.0);
+        g += w * textureLod(sampler3D(probeShGImage, probeGridSampler), uvw, 0.0);
+        b += w * textureLod(sampler3D(probeShBImage, probeGridSampler), uvw, 0.0);
+        left -= w;
+        if (left <= 0.0) break;
+    }
+    return true;
+}
+
+// How much of the open sky's light a direction keeps among what stands about
+// (a specular's occlusion): the probes' irradiance facing it over the open
+// sky's, by luminance, at most 1.
+float sceneSkySeen(vec3 probed, vec3 open) {
+    const vec3 lum = vec3(0.2126, 0.7152, 0.0722);
+    return clamp(dot(probed, lum) / max(dot(open, lum), 1e-6), 0.0, 1.0);
+}
+
+// The ambient irradiance over pi on a surface at `pos` facing `n`: the
+// probe grid's where it reaches (the sky through the canopy and past the
+// ground, the light the ground and the leaves send back), else the open sky's.
+vec3 sceneAmbientIrradiance(vec3 pos, vec3 n) {
+    vec4 r, g, b;
+    if (sceneProbeSh(pos, r, g, b)) return pgShIrradiance(r, g, b, n);
+    return sceneOpenSkyIrradiance(pos, n);
 }
 
 float distributionGGX(float NdotH, float roughness) {
@@ -709,8 +783,10 @@ vec3 probeRadiance(vec3 pos, vec3 R, float rough, out float w) {
 // which takes precedence over an environment; with an environment the
 // irradiance on the diffuse part and the prefiltered radiance times the BRDF
 // LUT on the specular, both turned by the environment's rotation; without
-// one the flat ambient on the diffuse part. A bound reflection probe replaces
-// the global specular by its weight at the surface (probes are specular-only).
+// one the flat ambient on the diffuse part. Where the probe grid reaches, the
+// diffuse part is its irradiance, and the specular is dimmed as the probes
+// see less than the open sky along R. A bound reflection probe replaces the
+// global specular by its weight at the surface (probes are specular-only).
 vec3 sceneAmbient(SceneSurface s) {
     // Leaves are lit through their crown's bulk normal, which turns edge-on
     // at the crown's outline; their own faces lie every way, so the sky they
@@ -728,41 +804,45 @@ vec3 sceneAmbient(SceneSurface s) {
         vec3 raw = probeRadiance(s.position, R, s.roughness, probeW);
         probeSpec = raw * (F * brdf.x + brdf.y) * lighting.probeParams.x;
     }
+    vec3 kD = (1.0 - F) * (1.0 - s.metallic);
+    // A sward's blades see the sky only over the blades around them: the low
+    // sky and the ground beyond are hidden, so its sky light is what comes in
+    // at its top, the sky about the way its blades stand, however its faces
+    // turn (a far meadow lit by the horizon's glow behind the eye shone a
+    // half brighter than the grass at one's feet).
+    vec3 nI = s.sward.w > 0.0 ? normalize(mix(s.normal, s.sward.xyz, s.sward.w)) : s.normal;
+    vec4 pr, pg, pb;
+    bool probed = sceneProbeSh(s.position, pr, pg, pb);
     if (sceneAtmosphereOn()) {
         // The atmosphere's sky: its light on the surface from every way it
         // faces (the sky above, the lit ground below, through the air at
         // the surface's height and sun), and its smooth radiance along R
-        // where no probe covers the surface.
-        vec3 kD = (1.0 - F) * (1.0 - s.metallic);
-        vec3 nI = s.sward.w > 0.0 ? normalize(mix(s.normal, s.sward.xyz, s.sward.w)) : s.normal;
+        // where no reflection probe covers the surface.
         vec3 c[6];
         mat3 frame;
         atmSkyLightSh(s.position, c, frame);   // once, for both
         vec3 irradiance = atmShIrradiance(c, frame, nI);
         vec3 specular = atmShRadiance(c, frame, R) * (F * brdf.x + brdf.y);
+        if (probed) {
+            irradiance = pgShIrradiance(pr, pg, pb, nI);
+            specular *= sceneSkySeen(pgShIrradiance(pr, pg, pb, R), atmShIrradiance(c, frame, R));
+        }
         return kD * irradiance * s.baseColor + mix(specular, probeSpec, probeW);
     }
     if (lighting.iblParams.x > 0.5) {
         float rotation = lighting.iblParams.z;
         float intensity = lighting.iblParams.y;
-        vec3 kD = (1.0 - F) * (1.0 - s.metallic);
-        // A sward's blades see the sky only over the blades around them:
-        // the low sky and the ground beyond are hidden, so its sky light is
-        // what comes in at its top, the sky about the way its blades stand,
-        // however its faces turn (a far meadow lit by the horizon's glow
-        // behind the eye shone a half brighter than the grass at one's feet).
-        vec3 nI = s.sward.w > 0.0 ? normalize(mix(s.normal, s.sward.xyz, s.sward.w)) : s.normal;
-        vec3 irradiance = texture(texIrradiance, rotateY(nI, rotation)).rgb;
-        // The ground's bounce (SceneRenderer::setGroundBounce): the light a
-        // level ground sends back, sun and sky on it (worked out once a frame,
-        // SceneEnvironment::fillLighting), seen by the surface's lower
-        // hemisphere ((1 - n.y) / 2 of it is ground).
-        irradiance += lighting.groundBounce.rgb * (0.5 - 0.5 * nI.y);
+        vec3 irradiance = sceneOpenSkyIrradiance(s.position, nI);
         vec3 prefiltered = textureLod(texPrefilter, rotateY(R, rotation), s.roughness * lighting.iblParams.w).rgb;
-        vec3 specular = prefiltered * (F * brdf.x + brdf.y);
-        return kD * irradiance * s.baseColor * intensity + mix(specular * intensity, probeSpec, probeW);
+        vec3 specular = prefiltered * (F * brdf.x + brdf.y) * intensity;
+        if (probed) {
+            irradiance = pgShIrradiance(pr, pg, pb, nI);
+            specular *= sceneSkySeen(pgShIrradiance(pr, pg, pb, R), sceneOpenSkyIrradiance(s.position, R));
+        }
+        return kD * irradiance * s.baseColor + mix(specular, probeSpec, probeW);
     }
-    return lighting.ambientColor.rgb * s.baseColor * (1.0 - s.metallic) + probeSpec * probeW;
+    vec3 irradiance = probed ? pgShIrradiance(pr, pg, pb, nI) : lighting.ambientColor.rgb;
+    return irradiance * s.baseColor * (1.0 - s.metallic) + probeSpec * probeW;
 }
 
 // Fog in [0,1] for a fragment `camDist` from the eye at world height `worldY`:

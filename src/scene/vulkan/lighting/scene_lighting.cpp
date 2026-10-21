@@ -10,6 +10,7 @@
 #include "scene/vulkan/frame/scene_defaults.h"
 #include "scene/vulkan/lighting/scene_atmosphere.h"
 #include "scene/vulkan/lighting/scene_environment.h"
+#include "scene/vulkan/lighting/scene_probe_grid.h"
 #include "scene/vulkan/frame/scene_frame.h"
 #include "scene/vulkan/frame/scene_gpu_resources.h"
 #include "scene/vulkan/frame/scene_targets.h"
@@ -132,6 +133,7 @@ SceneLightingUniforms sceneLighting(const SceneRenderer& renderer, const SceneGp
         shadowMapUniform(plan, plan.maps[m], eye, light.shadowMaps[m]);
     gpu.environment.fillLighting(light, renderer);
     gpu.atmosphere.fill(light.atm, eye);
+    gpu.probes.fill(light.probeGrid, eye);
     return light;
 }
 
@@ -162,6 +164,7 @@ VkDescriptorSet writeLightingSet(SceneGpu& gpu, const SceneLightingUniforms& uni
                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
     gpu.environment.writeBindings(writer, d);
     gpu.atmosphere.writeBindings(writer);
+    gpu.probes.writeBindings(writer);
     const VkDescriptorBufferInfo table = gpu.shadows.table();
     writer.writeBuffer(14, table.buffer, table.range, table.offset, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
     writer.updateSet(gpu.device.device(), set);

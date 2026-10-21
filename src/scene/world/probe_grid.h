@@ -30,9 +30,9 @@
 // probes' rays traced and blended into what they held. The columns a move
 // brought in are required, traced afresh (no history to blend), in boxes of
 // at most a slice's rows (so every job costs about a slice's, and the world
-// service's cost of a job means one thing); the rest are
-// refreshed a slice of rows at a time, oldest first, their error growing with
-// their age so the world service spends what the frame leaves on them.
+// service's cost of a job means one thing); the rest are refreshed a slice
+// of rows at a time, each offered once its refresh period has passed, its
+// error growing with its age so the oldest go first.
 
 #include <cstdint>
 #include <vector>
@@ -45,11 +45,19 @@ struct ProbeGridConfig {
     int layers = 8;            // probes a column
     float spacing = 2.0f;      // cascade 0's column spacing (m)
     float ratio = 4.0f;        // each cascade's spacing over the last's
-    int sliceRows = 4;         // a refresh's rows of columns
+    int sliceRows = 2;         // a refresh's rows of columns
     // A refresh's error: this many pixels a second of its age in the finest
     // cascade, halved each coarser one (its probes light what is further
-    // off, smaller on screen).
-    float refreshPixelsPerSecond = 1.0f;
+    // off, smaller on screen). A slice just due is a quarter pixel wrong,
+    // under what a shadow page still building is (half a pixel): light that
+    // has probably not changed waits for what visibly has, until it has
+    // waited a few periods.
+    float refreshPixelsPerSecond = 0.25f;
+    // A slice of the finest cascade is offered again this long after its
+    // refresh, doubling each coarser cascade: the probes follow a turning
+    // sun or a growing canopy over a few periods, and the frame's slack is
+    // not all spent on retracing light that has not changed.
+    float refreshSeconds = 1.0f;
 };
 
 /// A box of a cascade's columns, every layer: [x0, x1) x [z0, z1) in its
