@@ -35,23 +35,25 @@ pixels stops being separate: it is folded into the surface of the cell it
 stands on (§5). The cost of a frame then follows the pixels on screen, not
 the size of the world.
 
-Where the frame goes today (../broworkshop/demos/biomes, 32.5k plants with
-grass, turf and herbs, GPU ms; capture.js `cost`):
+Where the frame went when this plan began, and where it goes now
+(../broworkshop/demos/biomes, 32.5k plants with grass, turf and herbs, GPU
+ms; capture.js `cost`; now is after steps 1–6 of the build order, on the
+atmosphere):
 
-| | glade | meadow | flyover |
+| | glade then / now | meadow then / now | flyover then / now |
 |---|---|---|---|
-| grass and herb rings | 1.34 | 1.71 | 0 |
-| ground (mesh and turf) | 0.18 | 0.26 | 0.25 |
-| plants (leaves and their shadows) | 0.60 | 0.53 | 0.55 |
-| frame | 2.29 | 2.60 | 0.90 |
+| grass and herb rings | 1.34 / 1.10 | 1.71 / 1.43 | 0 / 0 |
+| ground (mesh and turf) | 0.18 / 0.14 | 0.26 / 0.18 | 0.25 / 0.26 |
+| plants (leaves and their shadows) | 0.60 / 0.43 | 0.53 / 0.18 | 0.55 / 0.17 |
+| frame | 2.29 / 1.89 | 2.60 / 2.04 | 0.90 / 0.67 |
 
-- **The ground's cover** is two thirds of an eye-level frame: the ground is
-  shaded whole and the blades drawn over it, and the far rings draw blades
-  the turf could stand in for. Fixed by the ground and its cover as one
-  surface (§9).
+- **The ground's cover** was two thirds of an eye-level frame: the ground
+  shaded whole and the blades drawn over it, and every vertex of a ring
+  testing its blade. The cover's plan and its order (§9) took its hidden
+  work; what is left is the far blades' lighting and overdraw.
 - **Shadows redrawn every frame** for content that does not move: the plants'
-  casters are a third of a millisecond on every shot. Fixed by cached shadow
-  pages (§8).
+  casters were a third of a millisecond on every shot. Cached shadow pages
+  (§8) keep only the sway near the eye.
 - **At a million plants** (8.4 km) the plants alone take 3 ms, most of it
   plants too far to be more than a few pixels. Fixed by the far field (§2).
 
