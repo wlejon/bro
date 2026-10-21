@@ -196,6 +196,15 @@ bool sceneProbeSh(vec3 pos, out vec4 r, out vec4 g, out vec4 b) {
     return true;
 }
 
+// The spacing (m) of the probes lighting camera-relative `pos` (its finest
+// cascade's): what is much larger than it, they resolve. 0 where the grid is
+// off or ends.
+float sceneProbeSpacing(vec3 pos) {
+    if (PG.params.x < 0.5) return 0.0;
+    int c = pgCascadeAt(pos.xz, 0);
+    return c < 0 ? 0.0 : PG.cascade[c].z;
+}
+
 // How much of the open sky's light a direction keeps among what stands about
 // (a specular's occlusion): the probes' irradiance facing it over the open
 // sky's, by luminance, at most 1.

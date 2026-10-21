@@ -100,9 +100,14 @@ void main() {
         direct += sunRad * vis * spec * 0.05;
     }
 
-    // The sky about the form, less of it deep in the crown.
+    // The sky about the form, less of it deep in the crown. The probes hold
+    // the crown's own shade where it spans their spacing (its medium in their
+    // world, a probe inside it); the leaves' crowding finer than that is
+    // left, and all of it where the crown is smaller than the spacing.
     vec3 irr = sceneAmbientIrradiance(pos, N);
-    float ao = mix(1.0, 0.3, depth) * (0.7 + 0.3 * clamp(0.5 + 0.5 * nForm.y, 0.0, 1.0));
+    float spacing = sceneProbeSpacing(pos);
+    float resolved = spacing > 0.0 ? clamp(inCrown.w / spacing - 0.5, 0.0, 1.0) : 0.0;
+    float ao = mix(1.0, mix(0.3, 0.75, resolved), depth) * (0.7 + 0.3 * clamp(0.5 + 0.5 * nForm.y, 0.0, 1.0));
     vec3 indirect = irr * albedo * ao;
 
     vec3 color = direct + through + indirect;
