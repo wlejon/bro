@@ -1,0 +1,326 @@
+// bro_atmosphere_test: the atmosphere's tables (docs/scene-world-architecture.md
+// §7) against a CPU reference (tests/atmosphere_reference.h).
+//
+// A scene renders with the atmosphere on, its eye at 2 m, 2 km, 30 km and
+// 400 km, its sun at noon (68 degrees up), 10 degrees and -4 degrees
+// (twilight). Each render's tables are read back and looked up on the CPU
+// as the shaders look them up (scene/world/atmosphere.h's parametrisations,
+// bilinear like the samplers), then compared with the reference:
+//
+//  - transmittance: the table along rays to the top, against a 4000-step
+//    march;
+//  - sky radiance: the sky-view table at the eye, over zenith angles across
+//    its whole domain (the shell's edge to the nadir) and azimuths 0, 90 and
+//    180 degrees from the sun;
+//  - aerial perspective: the froxel volume's in-scattered light and
+//    transmittance at columns across the frustum and slices near to far;
+//  - the sky's light: the SH table's irradiance on an upward surface at the
+//    ground, against the reference sky integrated over the hemisphere.
+//
+// The tolerances, and why (the errors are relative, of luminance, with a
+// floor of 0.1% of the case's brightest sample so black space is not divided
+// by zero):
+//  - transmittance 1%: the table is a 256-step march of the same media at
+//    half float (3 significant digits), and rays within a degree of the
+//    horizon, where it changes fastest, are left out.
+//  - in-scattered light (sky radiance and aerial perspective): 12% at any
+//    sample and 8% on average by day, 30% and 15% in twilight. What is
+//    left is the multiple scattering's form: Hillaire's table is one
+//    isotropic geometric series (the second order's light over 1 - f_ms,
+//    the ground returning its albedo of it), where the reference iterates
+//    every order with the true geometry. The test prints both tables side
+//    by side: they part by up to 13% by day (the table high under a high
+//    sun, low under a low one), and by up to 20% at the -4 degree sun.
+//    Single scattering is most of a day sky, so its error there is a few
+//    percent; near the ground in twilight the light is all multiple
+//    scattering and shows the whole departure. Equal-step view rays (48
+//    steps for the sky, 8 a froxel slice) add under a percent.
+//  - aerial transmittance 2%: the same media, 8 steps a slice.
+//  - the sky's light 15%: an l <= 2 SH of the whole sphere (the ground's
+//    lower half included) rings onto an upward surface's cosine lobe, on
+//    top of the multiple scattering above.
+//
+// assert() is not the check here; a failed comparison prints and fails the run.
+
+#include "atmosphere_reference.h"
+
+#include "scene/scene_graph.h"
+#include "scene/scene_renderer.h"
+#include "scene/vulkan/lighting/scene_atmosphere.h"
+#include "scene/world/atmosphere.h"
+#include "render/vulkan_context.h"
+#include "render/vulkan_debug.h"
+
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <cstdio>
+#include <vector>
+
+using namespace bro;
+namespace atm = bro::scene::atmosphere;
+using bro::scene::atmref::RGB;
+using bro::scene::atmref::V3;
+
+namespace {
+
+constexpr double kPi = 3.14159265358979323846;
+int failures = 0;
+
+double luminance(const double c[3]) { return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; }
+
+// A table sampled as a linear, clamp-to-edge sampler does, at (u, v) in [0, 1].
+void sample2D(const std::vector<float>& t, int w, int h, int layer, double u, double v, double out[4]) {
+    const double fx = std::clamp(u * w - 0.5, 0.0, w - 1.0), fy = std::clamp(v * h - 0.5, 0.0, h - 1.0);
+    const int x0 = std::min(static_cast<int>(fx), w - 2), y0 = std::min(static_cast<int>(fy), h - 2);
+    const double ax = fx - x0, ay = fy - y0;
+    const size_t base = static_cast<size_t>(layer) * w * h;
+    for (int c = 0; c < 4; ++c) {
+        const auto at = [&](int x, int y) { return static_cast<double>(t[(base + static_cast<size_t>(y) * w + x) * 4 + c]); };
+        out[c] = (at(x0, y0) * (1 - ax) + at(x0 + 1, y0) * ax) * (1 - ay) + (at(x0, y0 + 1) * (1 - ax) + at(x0 + 1, y0 + 1) * ax) * ay;
+    }
+}
+
+struct Stat {
+    double worst = 0.0, sum = 0.0;
+    int n = 0;
+    char where[96] = "";   // the worst sample
+    void add(double e, double got = 0.0, double want = 0.0, double a = 0.0, double b = 0.0) {
+        if (e > worst) std::snprintf(where, sizeof(where), "at (%.3g, %.3g): %.4g vs %.4g", a, b, got, want);
+        worst = std::max(worst, e);
+        sum += e;
+        ++n;
+    }
+    double mean() const { return n ? sum / n : 0.0; }
+};
+
+void check(const char* what, const Stat& s, double worstTol, double meanTol) {
+    const bool ok = s.worst <= worstTol && s.mean() <= meanTol;
+    std::printf("    %-34s worst %6.2f%%  mean %6.2f%%  (tolerance %.0f%% / %.0f%%) %s  worst %s\n", what,
+                s.worst * 100.0, s.mean() * 100.0, worstTol * 100.0, meanTol * 100.0, ok ? "ok" : "FAILED", s.where);
+    if (!ok) ++failures;
+}
+
+V3 v3(const float* f) { return {f[0], f[1], f[2]}; }
+V3 add(const V3& a, const V3& b) { return {a.x + b.x, a.y + b.y, a.z + b.z}; }
+V3 mul(const V3& a, double s) { return {a.x * s, a.y * s, a.z * s}; }
+double dot(const V3& a, const V3& b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+V3 normalize(const V3& a) { return mul(a, 1.0 / std::sqrt(dot(a, a))); }
+
+}  // namespace
+
+int main() {
+    std::printf("=== bro_atmosphere_test: the atmosphere's tables against a CPU reference ===\n");
+
+    render::VulkanContextConfig cfg;
+    cfg.headless = true;
+    cfg.enableValidation = false;
+    cfg.enableDynamicRendering = true;
+    render::VulkanContext context(cfg);
+    if (!context.init()) {
+        std::fprintf(stderr, "Failed to initialize headless Vulkan context!\n");
+        return 1;
+    }
+    scene::SceneRenderer::setDefaultVulkanContext(&context);
+
+    const scene::AtmosphereParams defaults;
+    scene::atmref::Params rp;
+    rp.Rb = defaults.planetRadius;
+    rp.Rt = defaults.planetRadius + defaults.thickness;
+    const double Rb = rp.Rb, Rt = rp.Rt;
+
+    const auto t0 = std::chrono::steady_clock::now();
+    scene::atmref::Reference ref(rp);
+    ref.buildMultiple();
+    std::printf("reference: %d scattering orders, %.1f s\n", ref.orders(),
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
+
+    const double altitudes[] = {2.0, 2000.0, 30000.0, 400000.0};
+    const double sunElevations[] = {68.0, 10.0, -4.0};
+    bool checkedTransmittance = false;
+
+    for (const double sunDeg : sunElevations) {
+        Stat skyIrr;
+        for (const double alt : altitudes) {
+            std::printf("  eye %.0f m, sun %.0f deg\n", alt, sunDeg);
+            const bool twilight = sunDeg < 0.0;
+            scene::SceneGraph graph;
+            graph.setCanvasSize(256, 144);
+            // Look out toward the sun's azimuth (-z), down to the horizon.
+            const double r = Rb + alt;
+            const double dip = std::acos(std::min(Rb / r, 1.0));
+            const double far = std::max(2000.0, 2.0 * std::sqrt(r * r - Rb * Rb));
+            const bromath::Vec3 eye{0.0f, static_cast<float>(alt), 0.0f};
+            const bromath::Vec3 target{0.0f, static_cast<float>(alt - std::sin(dip) * 1000.0),
+                                       static_cast<float>(-std::cos(dip) * 1000.0)};
+            graph.setCamera(static_cast<float>(60.0 * kPi / 180.0), 256.0f / 144.0f, 0.5f, static_cast<float>(far), eye, target);
+            scene::AtmosphereParams a;
+            a.enabled = true;
+            const double se = sunDeg * kPi / 180.0;
+            a.sunDir[0] = 0.0f;
+            a.sunDir[1] = static_cast<float>(std::sin(se));
+            a.sunDir[2] = static_cast<float>(-std::cos(se));
+            a.sunDirExplicit = true;
+            a.sunColor[0] = a.sunColor[1] = a.sunColor[2] = 1.0f;
+            a.sunColorExplicit = true;
+            graph.setAtmosphere(a);
+            graph.render();
+            graph.render();   // the view-independent tables are the world service's, granted on the first
+            scene::vk::AtmosphereTables tables;
+            if (!graph.renderer().readAtmosphereTables(tables)) {
+                std::printf("    FAILED: no tables read back\n");
+                ++failures;
+                continue;
+            }
+            for (std::vector<float>* t : {&tables.multiScatter, &tables.skyView, &tables.inscatter, &tables.skyLight})
+                for (float& f : *t) f = static_cast<float>(f / atm::kTableScale);
+            const scene::vk::AtmosphereGpu& b = tables.block;
+            const V3 sun = v3(b.sunDir);
+
+            // --- Transmittance (the table is the same for every case) ---------
+            if (!checkedTransmittance) {
+                checkedTransmittance = true;
+                Stat st;
+                for (const double h : {0.0, 500.0, 2000.0, 10000.0, 30000.0, 80000.0}) {
+                    const double rr = Rb + h + 1.0;
+                    const double muH = -std::sqrt(std::max(1.0 - (Rb / rr) * (Rb / rr), 0.0));
+                    for (const double z : {0.0, 30.0, 60.0, 80.0, 86.0, 88.5}) {
+                        const double mu = std::cos(z * kPi / 180.0);
+                        if (mu < muH + 0.0175) continue;
+                        double u, v, s[4];
+                        atm::transmittanceUv(Rb, Rt, rr, mu, u, v);
+                        sample2D(tables.transmittance, atm::kTransmittanceW, atm::kTransmittanceH, 0, u, v, s);
+                        const RGB want = ref.transmittanceToTop(rr, mu);
+                        for (int c = 0; c < 3; ++c)
+                            st.add(std::abs(s[c] - want.c[c]) / std::max(want.c[c], 1e-3), s[c], want.c[c], h, z);
+                    }
+                }
+                check("transmittance", st, 0.01, 0.01);
+
+                // The multiple-scattering table: informative (the tables it
+                // feeds are what is checked), so its departures are seen.
+                for (const double h : {2.0, 2000.0, 30000.0}) {
+                    std::printf("    multiple scattering at %.0f m:", h);
+                    for (const double muS : {0.9, 0.17, 0.0, -0.07, -0.2}) {
+                        double u, v, s[4];
+                        atm::multiScatterUv(Rb, Rt, Rb + h, muS, u, v);
+                        sample2D(tables.multiScatter, atm::kMultiScatterSun, atm::kMultiScatterAlt, 0, u, v, s);
+                        const RGB want = ref.meanMultiple(Rb + h, muS);
+                        std::printf("  mu_s %.2f: %.3g / %.3g", muS, luminance(s), luminance(want.c));
+                    }
+                    std::printf("\n");
+                }
+            }
+
+            // --- Sky radiance from the sky-view table ---------------------------
+            {
+                const double rv = b.skyView[0], muS = b.skyView[1];
+                double zTop, zH;
+                atm::skyViewHorizon(Rb, Rt, rv, zTop, zH);
+                const V3 ro{0.0, 0.0, rv};
+                const V3 sunL{std::sqrt(std::max(1.0 - muS * muS, 0.0)), 0.0, muS};
+                struct Sample {
+                    double got, want, z, az;   // degrees
+                };
+                std::vector<Sample> samples;
+                for (const double f : {0.02, 0.25, 0.5, 0.75, 0.92, 0.985, 1.03, 1.3, 1.8}) {
+                    const double z = f <= 1.0 ? zTop + f * (zH - zTop) : zH + (f - 1.0) * (kPi - zH);
+                    for (const double azDeg : {0.0, 90.0, 180.0}) {
+                        const double az = azDeg * kPi / 180.0;
+                        double u, v, s[4];
+                        atm::skyViewUv(Rb, Rt, rv, std::cos(z), std::cos(az), u, v);
+                        sample2D(tables.skyView, atm::kSkyViewW, atm::kSkyViewH, 0, u, v, s);
+                        const V3 rd{std::sin(z) * std::cos(az), std::sin(z) * std::sin(az), std::cos(z)};
+                        double ta, tb;
+                        bool ground;
+                        RGB want;
+                        if (ref.segment(ro, rd, ta, tb, ground)) want = ref.radiance(ro, rd, sunL, ta, tb, 4000, nullptr);
+                        samples.push_back({luminance(s), luminance(want.c), z * 180.0 / kPi, azDeg});
+                    }
+                }
+                double peak = 0.0;
+                for (const Sample& s : samples) peak = std::max(peak, s.want);
+                Stat st;
+                for (const Sample& s : samples)
+                    st.add(std::abs(s.got - s.want) / std::max(s.want, 1e-3 * peak), s.got, s.want, s.z, s.az);
+                check("sky radiance (sky-view)", st, twilight ? 0.30 : 0.12, twilight ? 0.15 : 0.08);
+            }
+
+            // --- Aerial perspective from the froxels ---------------------------
+            {
+                const V3 ro = v3(b.origin);
+                const double depth = b.froxel[3];
+                const float* m = tables.froxelInvViewProj;   // column-major
+                Stat sl, stt;
+                double peak = 0.0;
+                struct Sample {
+                    double got, want, column, slice;
+                };
+                std::vector<Sample> ls;
+                for (const int cx : {2, 16, 29})
+                    for (const int cy : {2, 16, 29}) {
+                        const double nx = (cx + 0.5) / atm::kFroxelXY * 2.0 - 1.0;
+                        const double ny = (cy + 0.5) / atm::kFroxelXY * 2.0 - 1.0;
+                        double hv[4];
+                        for (int row = 0; row < 4; ++row)
+                            hv[row] = m[0 * 4 + row] * nx + m[1 * 4 + row] * ny + m[2 * 4 + row] * 0.5 + m[3 * 4 + row];
+                        const V3 rd = normalize({hv[0] / hv[3], hv[1] / hv[3], hv[2] / hv[3]});
+                        double ta, tb;
+                        bool ground;
+                        const bool air = ref.segment(ro, rd, ta, tb, ground);
+                        for (const int k : {0, 3, 10, 20, 31}) {
+                            const double d = atm::froxelSliceDistance(depth, k);
+                            const size_t i = ((static_cast<size_t>(k) * atm::kFroxelXY + cy) * atm::kFroxelXY + cx) * 4;
+                            const double got[3] = {tables.inscatter[i], tables.inscatter[i + 1], tables.inscatter[i + 2]};
+                            const double gotT[3] = {tables.airTransmittance[i], tables.airTransmittance[i + 1],
+                                                    tables.airTransmittance[i + 2]};
+                            RGB want, T;
+                            T.c[0] = T.c[1] = T.c[2] = 1.0;
+                            if (air && std::min(d, tb) > ta) want = ref.radiance(ro, rd, sun, ta, std::min(d, tb), 2000, &T);
+                            ls.push_back({luminance(got), luminance(want.c), cy * 32.0 + cx, double(k)});
+                            peak = std::max(peak, luminance(want.c));
+                            for (int c = 0; c < 3; ++c)
+                                stt.add(std::abs(gotT[c] - T.c[c]) / std::max(T.c[c], 1e-2), gotT[c], T.c[c], cy * 32.0 + cx, k);
+                        }
+                    }
+                for (const Sample& s : ls)
+                    sl.add(std::abs(s.got - s.want) / std::max(s.want, 1e-3 * peak + 1e-12), s.got, s.want, s.column, s.slice);
+                check("aerial perspective in-scatter", sl, twilight ? 0.30 : 0.12, twilight ? 0.15 : 0.08);
+                check("aerial perspective transmittance", stt, 0.02, 0.01);
+            }
+
+            // --- The sky's light on an upward surface at the ground -------------
+            if (alt == 2.0) {
+                double u, v;
+                atm::skyLightUv(defaults.thickness, 1.0, b.skyView[1], u, v);
+                double layer[5][4];
+                for (int l = 0; l < 5; ++l)
+                    sample2D(tables.skyLight, atm::kSkyLightSun, atm::kSkyLightAlt, l, u, v, layer[l]);
+                const double* f = &layer[0][0];   // 20 floats, the first 18 the coefficients
+                double got[3];
+                for (int c = 0; c < 3; ++c) {
+                    double sh[6];
+                    for (int j = 0; j < 6; ++j) sh[j] = f[3 * j + c];
+                    got[c] = atm::shIrradianceOverPi(sh, 0.0, 0.0, 1.0);
+                }
+                const RGB want = ref.groundSkyIrradianceOverPi(b.skyView[1]);
+                skyIrr.add(std::abs(luminance(got) - luminance(want.c)) / std::max(luminance(want.c), 1e-9));
+                std::printf("    sky irradiance / pi (luminance): table %.5g, reference %.5g\n", luminance(got),
+                            luminance(want.c));
+            }
+        }
+        check("sky light on the ground (SH)", skyIrr, 0.15, 0.15);
+    }
+
+    scene::SceneRenderer::setDefaultVulkanContext(nullptr);
+    if (const uint32_t errors = render::vulkanValidationErrorCount()) {
+        std::fprintf(stderr, "FAILED: %u Vulkan validation error(s)\n", errors);
+        return 1;
+    }
+    if (failures) {
+        std::printf("=== bro_atmosphere_test: %d check(s) FAILED ===\n", failures);
+        return 1;
+    }
+    std::printf("=== bro_atmosphere_test: all checks passed ===\n");
+    return 0;
+}

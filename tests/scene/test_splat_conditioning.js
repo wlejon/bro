@@ -24,7 +24,7 @@ if (!scene) {
         fov: 60, near: 0.1, far: 100,
         position: [0, 0, 5], target: [0, 0, 0], up: [0, 1, 0],
     });
-    scene.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+    scene.setToneMap({ mode: 'linear', gamma: 1.0 });
 
     // One white splat at the origin, strongly elongated along local x
     // (25:1), rotated about z by a tiny angle so the screen covariance is

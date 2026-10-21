@@ -179,7 +179,8 @@ bool registerNatives_scene(std::string* error) {
         fn("__bro_native.scene.SceneGraph_setCamera", BRO_NATIVE_FN(bro_scene_SceneGraph_setCamera), "void", {"__bro_native.scene.SceneGraph", "bool", "f64", "bool", "f64", "bool", "f64", "f64[]", "f64[]", "f64[]", "bool", "f64", "f64[]", "bool", "str", "bool", "f64"}, error) &&
         fn("__bro_native.scene.SceneGraph_createCamera", BRO_NATIVE_FN(bro_scene_SceneGraph_createCamera), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "bool", "f64", "bool", "f64", "bool", "f64", "f64[]", "f64[]", "f64[]", "bool", "f64", "f64[]", "bool", "str", "bool", "f64"}, error) &&
         fn("__bro_native.scene.SceneGraph_setActiveCamera", BRO_NATIVE_FN(bro_scene_SceneGraph_setActiveCamera), "void", {"__bro_native.scene.SceneGraph", "__bro_native.scene.SceneNode"}, error) &&
-        fn("__bro_native.scene.SceneGraph_setToneMap", BRO_NATIVE_FN(bro_scene_SceneGraph_setToneMap), "void", {"__bro_native.scene.SceneGraph", "bool", "str", "bool", "f64", "bool", "f64"}, error) &&
+        fn("__bro_native.scene.SceneGraph_setToneMap", BRO_NATIVE_FN(bro_scene_SceneGraph_setToneMap), "void", {"__bro_native.scene.SceneGraph", "bool", "str", "bool", "f64"}, error) &&
+        fn("__bro_native.scene.SceneGraph_setExposure", BRO_NATIVE_FN(bro_scene_SceneGraph_setExposure), "void", {"__bro_native.scene.SceneGraph", "f64[]"}, error) &&
         fn("__bro_native.scene.SceneGraph_setAmbient", BRO_NATIVE_FN(bro_scene_SceneGraph_setAmbient), "void", {"__bro_native.scene.SceneGraph", "f64[]", "bool", "f64"}, error) &&
         fn("__bro_native.scene.SceneGraph_setWind", BRO_NATIVE_FN(bro_scene_SceneGraph_setWind), "void", {"__bro_native.scene.SceneGraph", "f64[]", "bool", "f64", "bool", "f64"}, error) &&
         fn("__bro_native.scene.SceneGraph_setWindField", BRO_NATIVE_FN(bro_scene_SceneGraph_setWindField), "void", {"__bro_native.scene.SceneGraph", "f64[]"}, error) &&
@@ -188,7 +189,7 @@ bool registerNatives_scene(std::string* error) {
         fn("__bro_native.scene.SceneGraph_setShadowQuality", BRO_NATIVE_FN(bro_scene_SceneGraph_setShadowQuality), "void", {"__bro_native.scene.SceneGraph", "bool", "i32", "bool", "i32"}, error) &&
         fn("__bro_native.scene.SceneGraph_setShadowCache", BRO_NATIVE_FN(bro_scene_SceneGraph_setShadowCache), "void", {"__bro_native.scene.SceneGraph", "bool", "bool", "bool", "i32"}, error) &&
         fn("__bro_native.scene.SceneGraph_setFog", BRO_NATIVE_FN(bro_scene_SceneGraph_setFog), "void", {"__bro_native.scene.SceneGraph", "bool", "str", "f64[]", "bool", "f64", "bool", "f64", "bool", "f64", "bool", "f64", "bool", "f64"}, error) &&
-        fn("__bro_native.scene.SceneGraph_setAtmosphere", BRO_NATIVE_FN(bro_scene_SceneGraph_setAtmosphere), "void", {"__bro_native.scene.SceneGraph", "f64[]", "f64[]", "bool", "f64", "f64[]", "bool", "f64"}, error) &&
+        fn("__bro_native.scene.SceneGraph_setAtmosphere", BRO_NATIVE_FN(bro_scene_SceneGraph_setAtmosphere), "void", {"__bro_native.scene.SceneGraph", "f64[]"}, error) &&
         fn("__bro_native.scene.SceneGraph_setStarfield", BRO_NATIVE_FN(bro_scene_SceneGraph_setStarfield), "void", {"__bro_native.scene.SceneGraph", "bool", "i32", "bool", "f64", "bool", "f64", "f64[]"}, error) &&
         fn("__bro_native.scene.SceneGraph_setTiltShift", BRO_NATIVE_FN(bro_scene_SceneGraph_setTiltShift), "void", {"__bro_native.scene.SceneGraph", "bool", "f64", "bool", "f64", "bool", "f64"}, error) &&
         fn("__bro_native.scene.SceneGraph_setBloom", BRO_NATIVE_FN(bro_scene_SceneGraph_setBloom), "void", {"__bro_native.scene.SceneGraph", "bool", "f64", "bool", "f64", "bool", "f64", "bool", "i32"}, error) &&

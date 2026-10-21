@@ -73,6 +73,7 @@ void main() {
         SceneLight light = lighting.lights[sun];
         L = -light.direction.xyz;
         sunRad = light.color.rgb * light.color.a;
+        if (sun == int(lighting.atm.ground.w)) sunRad *= sceneSunTransmittance(pos);
         vec3 radii = vec3(inCrown.w, inShade.x, inCrown.w);
         vec3 o = (pos - inCrown.xyz) / radii, l = L / radii;
         float a = dot(l, l), b = dot(o, l), c = dot(o, o) - 1.0;
@@ -101,7 +102,9 @@ void main() {
 
     // The sky about the form, less of it deep in the crown.
     vec3 irr = lighting.ambientColor.rgb;
-    if (lighting.iblParams.x > 0.5) {
+    if (sceneAtmosphereOn()) {
+        irr = sceneSkyIrradiance(pos, N);
+    } else if (lighting.iblParams.x > 0.5) {
         irr = texture(texIrradiance, rotateY(N, lighting.iblParams.z)).rgb * lighting.iblParams.y;
         irr += lighting.groundBounce.rgb * (0.5 - 0.5 * N.y);
     }
@@ -112,8 +115,8 @@ void main() {
     SceneAir air = sceneAir(pos, camDist);
     color = color * air.transmittance + air.inscatter;
     indirect *= air.transmittance;
-    outColor = vec4(color, mix(1.0, 0.0, air.fade));
+    outColor = vec4(min(color, vec3(SCENE_HDR_MAX)), mix(1.0, 0.0, air.fade));
 #ifdef SCENE_INDIRECT_OUTPUT
-    outIndirect = vec4(indirect, 0.0);
+    outIndirect = vec4(min(indirect, vec3(SCENE_HDR_MAX)), 0.0);
 #endif
 }

@@ -38,6 +38,8 @@ public:
     void resize(SceneGpu& gpu, uint32_t width, uint32_t height);
     void run(SceneFrame& frame);
     void releaseNodes(SceneGpu& gpu, std::span<const uint32_t> ids);
+    /// The frame just run was submitted as `ticket` (ScenePass::submitted).
+    void submitted(SceneGpu& gpu, uint64_t ticket);
     void cleanup(SceneGpu& gpu);
 
     /// Move `image` (every mip and layer) into `layout`, recording the barrier

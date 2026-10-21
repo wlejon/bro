@@ -67,6 +67,7 @@ embed_vk_shader(shadow/shadow_instanced.vert    kVkShadowInstancedVertSrc)
 embed_vk_shader(common/scene_camera.glsl        kVkSceneCameraSrc)
 embed_vk_shader(common/scene_lighting.glsl      kVkSceneLightingSrc)
 embed_vk_shader(common/scene_atmosphere.glsl    kVkSceneAtmosphereSrc)
+embed_vk_shader(common/scene_atmosphere_params.glsl kVkSceneAtmosphereParamsSrc)
 embed_vk_shader(common/scene_mesh_push.glsl     kVkSceneMeshPushSrc)
 embed_vk_shader(common/scene_shadow_push.glsl   kVkSceneShadowPushSrc)
 embed_vk_shader(shadow/scene_shadow_cutout.glsl kVkSceneShadowCutoutSrc)
@@ -160,12 +161,15 @@ add_library(bro_scene STATIC
     vulkan/foliage/scene_plants_gpu_plan.cpp
     vulkan/lighting/scene_lighting.cpp
     vulkan/lighting/scene_environment.cpp
+    vulkan/lighting/scene_atmosphere.cpp
+    vulkan/lighting/pass_atmosphere.cpp
     vulkan/lighting/pass_environment.cpp
     vulkan/lighting/pass_reflection_probe.cpp
     vulkan/shadow/pass_shadow.cpp
     vulkan/post/pass_ssao.cpp
     vulkan/post/pass_ssr.cpp
     vulkan/post/pass_dof.cpp
+    vulkan/post/scene_exposure.cpp
     vulkan/post/pass_postfx.cpp
     ${VK_GENERATED_HEADERS}
 )
@@ -206,6 +210,13 @@ if(BRO_BUILD_TESTS)
     add_executable(bro_world_service_test tests/test_world_service.cpp)
     target_link_libraries(bro_world_service_test PRIVATE bro_scene bro_render bro_platform bro_util)
     target_include_directories(bro_world_service_test PRIVATE ${bro_SOURCE_DIR}/src)
+
+    # The atmosphere's tables against a CPU reference march (single
+    # scattering brute force, multiple scattering by iterated orders).
+    add_executable(bro_atmosphere_test tests/test_atmosphere.cpp tests/atmosphere_reference.cpp)
+    target_link_libraries(bro_atmosphere_test PRIVATE bro_scene bro_engine bro_dom bro_engine
+                          bro_render bro_platform bro_util skia Vulkan::Vulkan)
+    target_include_directories(bro_atmosphere_test PRIVATE ${bro_SOURCE_DIR}/src ${VK_GEN_DIR})
 endif()
 
 

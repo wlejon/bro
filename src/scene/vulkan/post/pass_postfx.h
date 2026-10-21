@@ -4,7 +4,8 @@
 //
 //   PassPostFx     HDR to LDR: bloom (bright pass at half resolution and a
 //                  separable Gaussian whose reach is the bloom strength),
-//                  then tonemapping (exposure, operator, gamma) with the 3D
+//                  the exposure (fixed or metered: scene_exposure.h), then
+//                  tonemapping (exposure, operator, gamma) with the 3D
 //                  colour-grading LUT folded in. Reads dofHdr when depth of
 //                  field ran, else hdr.
 //   (PassOverlay   the unlit meshes and gizmos, drawn over the tonemapped
@@ -18,6 +19,7 @@
 // targets.ldr, the frame's output.
 
 #include "scene/vulkan/frame/scene_pass.h"
+#include "scene/vulkan/post/scene_exposure.h"
 
 #include <vulkan/vulkan.h>
 
@@ -36,12 +38,12 @@ public:
     void resize(SceneGpu& gpu, uint32_t width, uint32_t height) override;
     void declare(const SceneFrame& frame, PassIO& io) const override;
     void record(SceneFrame& frame) override;
+    void submitted(SceneGpu& gpu, uint64_t ticket) override;
     void cleanup(SceneGpu& gpu) override;
 
 private:
-    /// tonemap.frag's push block.
+    /// tonemap.frag's push block (the exposure is SceneExposure's state buffer).
     struct TonemapPush {
-        float exposure;
         float gamma;
         float bloomIntensity;
         int32_t tonemapMode;   // SceneRenderer::ToneMap
@@ -72,6 +74,7 @@ private:
     SceneVkImage lut_;            // the grading LUT, or a 1³ stand-in
     int lutSize_ = 0;
     uint64_t lutGeneration_ = 0;
+    SceneExposure exposure_;
 };
 
 class PassTiltShift final : public ScenePass {

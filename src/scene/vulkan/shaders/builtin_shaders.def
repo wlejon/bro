@@ -102,3 +102,15 @@ BRO_SCENE_SHADER(MeshGroundIndirectFrag,   "mesh_ground_indirect.frag",   "draw/
 // A tile of the turf's surface layer, the ground drawn straight down into it
 // (scene_ground_layers.glsl; scene_mesh_drawer_ground.cpp).
 BRO_SCENE_SHADER(GroundLayerFillFrag,      "ground_layer_fill.frag",      "ground/ground_layer_fill.frag",      "frag", "")
+// The atmosphere's tables (scene_atmosphere.cpp): the world-service jobs
+// (transmittance, multiple scattering, the sky's light) and the per-frame
+// view tables (sky view, aerial-perspective froxels).
+BRO_SCENE_SHADER(AtmosphereTransmittanceComp, "atmosphere_transmittance.comp", "lighting/atmosphere_transmittance.comp", "comp", "")
+BRO_SCENE_SHADER(AtmosphereMultiScatterComp, "atmosphere_multiscatter.comp", "lighting/atmosphere_multiscatter.comp", "comp", "")
+BRO_SCENE_SHADER(AtmosphereSkyLightComp,   "atmosphere_skylight.comp",    "lighting/atmosphere_skylight.comp",  "comp", "")
+BRO_SCENE_SHADER(AtmosphereSkyViewComp,    "atmosphere_skyview.comp",     "lighting/atmosphere_skyview.comp",   "comp", "")
+BRO_SCENE_SHADER(AtmosphereAerialComp,     "atmosphere_aerial.comp",      "lighting/atmosphere_aerial.comp",    "comp", "")
+// Exposure (scene_exposure.cpp): the frame's luminance histogram, then the
+// metered and adapted EV.
+BRO_SCENE_SHADER(ExposureHistogramComp,    "exposure_histogram.comp",     "post/exposure_histogram.comp",       "comp", "")
+BRO_SCENE_SHADER(ExposureAdaptComp,        "exposure_adapt.comp",         "post/exposure_adapt.comp",           "comp", "")

@@ -457,7 +457,6 @@ void bro_scene_SceneGraph_destroyNode(void* self, void* node) {
 }
 
 void bro_scene_SceneGraph_setToneMap(void* self, bool opts_mode_given, const char* opts_mode,
-                                    bool opts_exposure_given, double opts_exposure,
                                     bool opts_whitePoint_given, double opts_whitePoint) {
     auto* g = graphOf(self);
     if (!g) return;
@@ -468,9 +467,31 @@ void bro_scene_SceneGraph_setToneMap(void* self, bool opts_mode_given, const cha
         else if (m == "reinhard") mode = scene::SceneRenderer::ToneMap::Reinhard;
         else                      mode = scene::SceneRenderer::ToneMap::ACES;
     }
-    float exp = opts_exposure_given ? static_cast<float>(opts_exposure) : 1.0f;
     float gamma = opts_whitePoint_given ? static_cast<float>(opts_whitePoint) : 2.2f;
-    g->setToneMap(mode, exp, gamma);
+    g->setToneMap(mode, gamma);
+}
+
+void bro_scene_SceneGraph_setExposure(void* self, const double* params, uint32_t params_len) {
+    auto* g = graphOf(self);
+    if (!g) return;
+    // Every call replaces the whole exposure; a field left out (NaN) is its default.
+    scene::ExposureSettings e;
+    auto at = [&](uint32_t i, float& field, float lo, float hi) {
+        if (params && i < params_len && std::isfinite(params[i])) field = std::clamp(static_cast<float>(params[i]), lo, hi);
+    };
+    if (params && params_len > 0 && std::isfinite(params[0]))
+        e.mode = params[0] > 0.5 ? scene::ExposureSettings::Mode::Auto : scene::ExposureSettings::Mode::Fixed;
+    at(1, e.ev100, -30.0f, 40.0f);
+    at(2, e.compensation, -20.0f, 20.0f);
+    at(3, e.speedUp, 0.0f, 1000.0f);
+    at(4, e.speedDown, 0.0f, 1000.0f);
+    at(5, e.minEv, -30.0f, 40.0f);
+    at(6, e.maxEv, -30.0f, 40.0f);
+    at(7, e.lowPercent, 0.0f, 1.0f);
+    at(8, e.highPercent, 0.0f, 1.0f);
+    if (e.maxEv < e.minEv) std::swap(e.minEv, e.maxEv);
+    if (e.highPercent < e.lowPercent) std::swap(e.lowPercent, e.highPercent);
+    g->setExposure(e);
 }
 
 void bro_scene_SceneGraph_setAmbient(void* self, const double* opts_color, uint32_t opts_color_len,
@@ -617,43 +638,51 @@ void bro_scene_SceneGraph_setFog(void* self, bool opts_mode_given, const char* o
     g->setFogExp(density, hFalloff, start);
 }
 
-void bro_scene_SceneGraph_setAtmosphere(void* self, const double* opts_rayleigh, uint32_t opts_rayleigh_len,
-                                       const double* opts_mie, uint32_t opts_mie_len,
-                                       bool opts_turbidity_given, double opts_turbidity,
-                                       const double* opts_sunPosition, uint32_t opts_sunPosition_len,
-                                       bool opts_sunIntensity_given, double opts_sunIntensity) {
+void bro_scene_SceneGraph_setAtmosphere(void* self, const double* params, uint32_t params_len) {
     auto* g = graphOf(self);
     if (!g) return;
+    // Every call replaces the whole atmosphere; a field left out (NaN) keeps
+    // Earth's default (scene/world/atmosphere.h). The layout is
+    // js/scene_graph.js's setAtmosphere.
     scene::AtmosphereParams a;
-    a.enabled = true;
-    // A coefficient a script gives is taken when it is a finite, non-negative
-    // number; anything else keeps the physical default.
-    const auto coeff = [](double v, float& out) {
-        if (std::isfinite(v) && v >= 0.0) out = static_cast<float>(v);
+    auto given = [&](uint32_t i) { return params && i < params_len && std::isfinite(params[i]); };
+    auto at = [&](uint32_t i, float& field, float lo, float hi) {
+        if (given(i)) field = std::clamp(static_cast<float>(params[i]), lo, hi);
     };
-    if (opts_rayleigh && opts_rayleigh_len >= 3) {
-        for (int i = 0; i < 3; ++i) coeff(opts_rayleigh[i], a.betaR[i]);
+    auto rgb = [&](uint32_t i, float* field, float lo, float hi) {
+        if (given(i) && given(i + 1) && given(i + 2))
+            for (uint32_t k = 0; k < 3; ++k) field[k] = std::clamp(static_cast<float>(params[i + k]), lo, hi);
+    };
+    a.enabled = !given(0) || params[0] > 0.5;
+    rgb(1, a.rayleigh, 0.0f, 1e-2f);
+    at(4, a.scaleHeightR, 1.0f, 1e6f);
+    at(5, a.mieScattering, 0.0f, 1e-2f);
+    at(6, a.mieG, -0.999f, 0.999f);
+    at(7, a.mieAbsorption, 0.0f, 1e-2f);
+    at(8, a.scaleHeightM, 1.0f, 1e6f);
+    // Turbidity: haze as a multiple of the clear-air Mie coefficients.
+    if (given(9) && params[9] > 0.0) {
+        a.mieScattering *= static_cast<float>(params[9]);
+        a.mieAbsorption *= static_cast<float>(params[9]);
     }
-    if (opts_mie && opts_mie_len >= 1) coeff(opts_mie[0], a.betaM);
-    if (opts_mie && opts_mie_len >= 2 && std::isfinite(opts_mie[1])) {
-        a.mieG = std::clamp(static_cast<float>(opts_mie[1]), -0.999f, 0.999f);
+    rgb(10, a.ozone, 0.0f, 1e-2f);
+    at(13, a.ozoneCenter, 0.0f, 1e7f);
+    at(14, a.ozoneWidth, 1.0f, 1e7f);
+    rgb(15, a.groundAlbedo, 0.0f, 1.0f);
+    at(18, a.planetRadius, 1.0f, 1e10f);
+    at(19, a.thickness, 1.0f, 1e9f);
+    at(20, a.seaLevel, -1e9f, 1e9f);
+    if (given(21)) a.spherical = params[21] > 0.5;
+    rgb(22, a.center, -1e12f, 1e12f);
+    if (given(25) && given(26) && given(27)) {
+        rgb(25, a.sunDir, -1.0f, 1.0f);
+        a.sunDirExplicit = true;
     }
-    // Turbidity: haze as a multiple of the clear-air Mie coefficient.
-    if (opts_turbidity_given && std::isfinite(opts_turbidity) && opts_turbidity > 0.0) {
-        a.betaM *= static_cast<float>(opts_turbidity);
-    }
-    if (opts_sunPosition && opts_sunPosition_len >= 3) {
-        a.sunDir[0] = static_cast<float>(opts_sunPosition[0]);
-        a.sunDir[1] = static_cast<float>(opts_sunPosition[1]);
-        a.sunDir[2] = static_cast<float>(opts_sunPosition[2]);
-    }
-    // An explicit intensity pins the sun's radiance; without the flag the
-    // renderer tracks the brightest directional light and the value given
-    // here was silently replaced.
-    if (opts_sunIntensity_given && std::isfinite(opts_sunIntensity)) {
-        a.sunColor[0] = a.sunColor[1] = a.sunColor[2] = static_cast<float>(opts_sunIntensity) * 20.0f;
+    if (given(28) && given(29) && given(30)) {
+        rgb(28, a.sunColor, 0.0f, 1e12f);
         a.sunColorExplicit = true;
     }
+    at(31, a.sunAngularRadius, 1e-4f, 0.5f);
     g->setAtmosphere(a);
 }
 

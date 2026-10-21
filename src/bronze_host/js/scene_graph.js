@@ -224,7 +224,16 @@
     fn(SceneGraph.prototype, "setToneMap", function setToneMap(opts) {
         const d_opts = opts === undefined ? {} : opts;
         const wp = d_opts.whitePoint !== undefined ? d_opts.whitePoint : d_opts.gamma;
-        __bro_native.scene.SceneGraph_setToneMap(this, d_opts.mode !== undefined, d_opts.mode === undefined ? '' : d_opts.mode, d_opts.exposure !== undefined, d_opts.exposure === undefined ? 0 : d_opts.exposure, wp !== undefined, wp === undefined ? 0 : wp);
+        __bro_native.scene.SceneGraph_setToneMap(this, d_opts.mode !== undefined, d_opts.mode === undefined ? '' : d_opts.mode, wp !== undefined, wp === undefined ? 0 : wp);
+    });
+    fn(SceneGraph.prototype, "setExposure", function setExposure(opts) {
+        // Every call replaces the whole exposure; a field left out is its
+        // default (NaN tells the native to).
+        const o = opts == null ? {} : opts;
+        const num = (v) => (v === undefined || v === null) ? NaN : +v;
+        const mode = o.mode === undefined ? NaN : (o.mode === 'auto' ? 1 : 0);
+        __bro_native.scene.SceneGraph_setExposure(this, toF64([mode, num(o.ev), num(o.compensation), num(o.speedUp),
+            num(o.speedDown), num(o.minEv), num(o.maxEv), num(o.lowPercent), num(o.highPercent)]));
     });
     fn(SceneGraph.prototype, "setAmbient", function setAmbient(opts, g, b) {
         let col = [0.03, 0.03, 0.03];
@@ -285,8 +294,42 @@
         __bro_native.scene.SceneGraph_setFog(this, d_opts.mode !== undefined, d_opts.mode === undefined ? '' : d_opts.mode, d_opts.color === undefined ? EMPTY_F64 : toF64(d_opts.color), d_opts.density !== undefined, d_opts.density === undefined ? 0 : d_opts.density, f_start !== undefined, f_start === undefined ? 0 : f_start, d_opts.end !== undefined, d_opts.end === undefined ? 0 : d_opts.end, d_opts.heightFalloff !== undefined, d_opts.heightFalloff === undefined ? 0 : d_opts.heightFalloff, d_opts.height !== undefined, d_opts.height === undefined ? 0 : d_opts.height);
     });
     fn(SceneGraph.prototype, "setAtmosphere", function setAtmosphere(opts) {
-        const d_opts = opts === undefined ? {} : opts;
-        __bro_native.scene.SceneGraph_setAtmosphere(this, d_opts.rayleigh === undefined ? EMPTY_F64 : toF64(d_opts.rayleigh), d_opts.mie === undefined ? EMPTY_F64 : toF64(d_opts.mie), d_opts.turbidity !== undefined, d_opts.turbidity === undefined ? 0 : d_opts.turbidity, d_opts.sunPosition === undefined ? EMPTY_F64 : toF64(d_opts.sunPosition), d_opts.sunIntensity !== undefined, d_opts.sunIntensity === undefined ? 0 : d_opts.sunIntensity);
+        // Every call replaces the whole atmosphere; null or {enabled: false}
+        // turns it off. A field left out (NaN) keeps Earth's default.
+        const o = opts === undefined ? {} : (opts === null ? { enabled: false } : opts);
+        const num = (v) => (v === undefined || v === null) ? NaN : +v;
+        const v = new Array(32).fill(NaN);
+        const put3 = (i, a) => { if (a != null && a.length >= 3) { v[i] = +a[0]; v[i + 1] = +a[1]; v[i + 2] = +a[2]; } };
+        if (o.enabled !== undefined) v[0] = o.enabled ? 1 : 0;
+        put3(1, o.rayleigh);
+        v[4] = num(o.rayleighScaleHeight);
+        if (o.mie != null) {
+            if (typeof o.mie === 'number') v[5] = o.mie;
+            else { v[5] = num(o.mie[0]); v[6] = num(o.mie[1]); }
+        }
+        if (o.mieG !== undefined) v[6] = num(o.mieG);
+        v[7] = num(o.mieAbsorption);
+        v[8] = num(o.mieScaleHeight);
+        v[9] = num(o.turbidity);
+        put3(10, o.ozone);
+        v[13] = num(o.ozoneAltitude);
+        v[14] = num(o.ozoneWidth);
+        put3(15, o.groundAlbedo);
+        v[18] = num(o.planetRadius);
+        v[19] = num(o.thickness);
+        v[20] = num(o.seaLevel);
+        if (o.spherical !== undefined) v[21] = o.spherical ? 1 : 0;
+        put3(22, o.center);
+        put3(25, o.sunDirection !== undefined ? o.sunDirection : o.sunPosition);
+        // The sun's illuminance at the top of the air: sunColor times
+        // sunIntensity (lux in physical units), either one alone pinning it.
+        if (o.sunIntensity !== undefined || o.sunColor !== undefined) {
+            const c = o.sunColor != null && o.sunColor.length >= 3 ? o.sunColor : [1, 1, 1];
+            const k = o.sunIntensity === undefined ? 1 : +o.sunIntensity;
+            put3(28, [c[0] * k, c[1] * k, c[2] * k]);
+        }
+        v[31] = num(o.sunAngularRadius);
+        __bro_native.scene.SceneGraph_setAtmosphere(this, toF64(v));
     });
     fn(SceneGraph.prototype, "setStarfield", function setStarfield(opts) {
         const d_opts = opts === undefined ? {} : opts;

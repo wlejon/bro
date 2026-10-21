@@ -108,6 +108,10 @@ target/up/mode: the 6DOF / FPS path that avoids target+up precision loss.
  * @property {number} [worldQueued]     jobs left for a later frame
  * @property {number} [worldWorstError] the largest error left queued, in pixels on screen (what is shown
  *   in its place: a missing tile's coarser parent's texels); 0 when nothing waits
+ * @property {number} [exposureEv]      the exposure applied (EV100, `setExposure`), read back from the GPU a
+ *   few frames late
+ * @property {number} [meteredEv]       auto exposure: the EV100 that frame's histogram metered (fixed: the setting)
+ * @property {number} [exposureScale]   the multiplier the HDR frame got before the tone curve
  */
 
 // ── Classes & Interfaces ─────────────────────────────────────────────────────
@@ -642,9 +646,23 @@ class SceneGraph {
   setActiveCamera(camera) {}
 
   /**
+   * The tone curve (lighting-api.js, ToneMapConfig).
    * @param {ToneMapConfig} [opts]
    */
   setToneMap(opts) {}
+
+  /**
+   * Exposure in EV: fixed (the default, a scale of 1) or metered from the
+   * frame on the GPU with eye adaptation (lighting-api.js, ExposureConfig,
+   * which also lists physical light values).
+   *
+   * @example
+   *   scene.setExposure({ compensation: 0.5 });           // half a stop brighter, fixed
+   *   scene.setExposure({ mode: 'auto' });                // metered, adapting
+   *   scene.setExposure({ mode: 'fixed', ev: 15 });       // a sunny-16 still
+   * @param {ExposureConfig} [opts]
+   */
+  setExposure(opts) {}
 
   /**
    * @param {AmbientConfig} [opts]
@@ -717,6 +735,14 @@ class SceneGraph {
   setFog(opts) {}
 
   /**
+   * The atmosphere: the sky, the haze, the sun's and the sky's light, one
+   * model from the ground to orbit (lighting-api.js, AtmosphereConfig).
+   *
+   * @example
+   *   sun.intensity = 128000;                          // lux above the air
+   *   scene.setAtmosphere({ groundAlbedo: [0.1, 0.13, 0.05] });
+   *   scene.setExposure({ mode: 'auto' });
+   *   scene.setAtmosphere(null);                       // off
    * @param {AtmosphereConfig} [opts]
    */
   setAtmosphere(opts) {}

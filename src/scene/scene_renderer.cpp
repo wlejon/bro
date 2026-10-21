@@ -2,8 +2,6 @@
 #include "scene/nodes/gaussian_splat_node.h"
 #include "scene/nodes/instanced_mesh_node.h"
 #include "scene/nodes/particles3d_node.h"
-
-#include "scene/world/atmosphere_irradiance.h"
 #include "scene/nodes/decal_node.h"
 #include "scene/depth_policy.h"
 #include "scene/scene_graph.h"
@@ -196,8 +194,8 @@ void SceneRenderer::render3D() {
 
     collectLights(frameLights_);
     if (frameLights_.empty()) frameLights_.push_back(&implicitSun_);
-    updateSunIrradiance(frameLights_);
-    updateSkyAmbient(graph_.cameraEye().y);
+    exposureDt_ = pendingExposureDt_;
+    pendingExposureDt_ = 0.0f;
     shadowAtlasLimit_ = static_cast<int>(vkBridge_->maxShadowAtlas());
     prepareShadows(frameLights_);
     planShadowTiles();
@@ -350,35 +348,8 @@ void SceneRenderer::clearEnvironment() {
     envGeneration_ = nextResourceGeneration();
 }
 
-void SceneRenderer::updateSunIrradiance(const std::vector<LightNode*>& lights) {
-    const LightNode* best = nullptr;
-    float bestPower = -1.0f;
-    for (const LightNode* l : lights) {
-        if (!l || l->kind() != LightNode::Kind::Directional) continue;
-        const Vec3& c = l->color();
-        const float power = (c.x + c.y + c.z) * (1.0f / 3.0f) * l->intensity();
-        if (power > bestPower) {
-            bestPower = power;
-            best = l;
-        }
-    }
-    if (!best) return;
-    const Vec3& c = best->color();
-    sunIrradiance_[0] = c.x * best->intensity();
-    sunIrradiance_[1] = c.y * best->intensity();
-    sunIrradiance_[2] = c.z * best->intensity();
-}
-
-void SceneRenderer::updateSkyAmbient(float camY) {
-    if (!atmosphere_.enabled) return;
-    if (std::abs(camY - skyAmbientCamY_) < 25.0f) return;
-    skyAmbientCamY_ = camY;
-    AtmosphereParams a = atmosphere_;
-    const float* sun = effectiveSunColor();
-    a.sunColor[0] = sun[0];
-    a.sunColor[1] = sun[1];
-    a.sunColor[2] = sun[2];
-    computeSkyAmbient(a, camY, skyAmbient_);
+bool SceneRenderer::readAtmosphereTables(vk::AtmosphereTables& out) {
+    return vkBridge_ && vkBridge_->readAtmosphereTables(out);
 }
 
 }  // namespace bro::scene

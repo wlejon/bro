@@ -62,7 +62,7 @@ if (!probe.scene) {
     {
         const s = freshScene(128);
         const scn = s.scene;
-        scn.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+        scn.setToneMap({ mode: 'linear', gamma: 1.0 });
         scn.createLight({ type: 'directional', direction: [0, 0, -1],
                           color: [1, 1, 1], intensity: 2 });
 
@@ -145,7 +145,7 @@ if (!probe.scene) {
     {
         const s = freshScene(128);
         const scn = s.scene;
-        scn.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+        scn.setToneMap({ mode: 'linear', gamma: 1.0 });
         scn.createLight({ type: 'directional', direction: [0, 0, -1],
                           color: [1, 1, 1], intensity: 2 });
 

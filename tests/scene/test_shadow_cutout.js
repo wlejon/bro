@@ -75,7 +75,7 @@ function setup() {
     const scn = s.scene;
     // From the side, so the ground under the card is in view past it.
     scn.setCamera({ fov: 50, near: 0.1, far: 80, position: [0, 9, 9], target: [0, 0, 0] });
-    scn.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+    scn.setToneMap({ mode: 'linear', gamma: 1.0 });
     scn.setAmbient([0.02, 0.02, 0.02]);
     scn.createMesh({ mesh: 'plane', halfW: 12, halfD: 12, color: [0.8, 0.8, 0.8], roughness: 1, castsShadow: false });
     const sun = scn.createLight({ type: 'directional', direction: [0, -1, 0], intensity: 3 });

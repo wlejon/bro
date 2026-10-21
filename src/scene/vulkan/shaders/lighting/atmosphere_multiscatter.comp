@@ -1,0 +1,83 @@
+#version 450
+// The multiple-scattering table (Hillaire 2020 §5.5), (mu_s, r): the light
+// scattered twice and more at a point, as an isotropic source per unit of
+// scattering, for a sun of 1. One workgroup a texel: each of its 64
+// invocations marches one direction of an 8 x 8 grid on the sphere,
+// gathering what the second scattering event sees (the air's single
+// scattering, isotropic, and the ground's reflection of the sun) and how
+// much of a uniform source the surroundings send back (f_ms); the series
+// of higher orders is then the geometric sum, L2 / (1 - f_ms).
+// A world-service job (scene_atmosphere.cpp), after the transmittance.
+
+layout(local_size_x = 64) in;
+
+#include "lighting/atmosphere_compute.glsl"
+
+layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D outMultiScatter;
+
+const int STEPS = 20;
+const float ISO = 1.0 / (4.0 * ATM_PI);
+
+shared vec3 sharedL[64];
+shared vec3 sharedF[64];
+
+void main() {
+    ivec2 px = ivec2(gl_WorkGroupID.xy);
+    uint i = gl_LocalInvocationIndex;
+    vec2 uv = (vec2(px) + 0.5) / ATM_MULTISCATTER_SIZE;
+    float muS = atmSunFromUnit(atmTexelToUnit(uv.x, ATM_MULTISCATTER_SIZE.x));
+    float r = ATM_RB + atmTexelToUnit(uv.y, ATM_MULTISCATTER_SIZE.y) * (ATM_RT - ATM_RB);
+    // A point a hair inside the shell, the sun in the xz plane.
+    r = clamp(r, ATM_RB + 1.0, ATM_RT - 1.0);
+    vec3 ro = vec3(0.0, 0.0, r);
+    vec3 sun = vec3(sqrt(max(1.0 - muS * muS, 0.0)), 0.0, muS);
+
+    float a = (float(i % 8u) + 0.5) / 8.0, b = (float(i / 8u) + 0.5) / 8.0;
+    float theta = 2.0 * ATM_PI * a, phi = acos(1.0 - 2.0 * b);
+    vec3 rd = vec3(cos(theta) * sin(phi), sin(theta) * sin(phi), cos(phi));
+
+    float t1 = atmSphereFar(ro, rd, ATM_RT);
+    float g = atmGroundHit(ro, rd);
+    bool ground = g >= 0.0 && g < t1;
+    if (ground) t1 = g;
+    float dt = t1 / float(STEPS);
+    vec3 T = vec3(1.0), L = vec3(0.0), F = vec3(0.0);
+    for (int s = 0; s < STEPS; ++s) {
+        vec3 p = ro + rd * (dt * (float(s) + 0.5));
+        float pr = length(p);
+        AtmMedium m = atmMedium(pr);
+        vec3 scatter = m.scatterR + vec3(m.scatterM);
+        vec3 stepT = exp(-m.extinction * dt);
+        vec3 w = mix(vec3(dt), (1.0 - stepT) / max(m.extinction, vec3(1e-20)), greaterThan(m.extinction, vec3(1e-12)));
+        vec3 sunT = atmSunTransmittance(pr,dot(p, sun) / pr);
+        L += T * scatter * ISO * sunT * w;
+        F += T * scatter * w;
+        T *= stepT;
+    }
+    if (ground) {
+        vec3 p = ro + rd * t1;
+        vec3 n = normalize(p);
+        float mu = dot(n, sun);
+        vec3 sunT = atmSunTransmittance(ATM_RB, mu);
+        L += T * sunT * max(mu, 0.0) * ATM.ground.rgb / ATM_PI;
+        // The ground returns its share of the light too: under a uniform
+        // radiance of 1 it is lit by pi and sends back its albedo.
+        F += T * ATM.ground.rgb;
+    }
+    sharedL[i] = L;
+    sharedF[i] = F;
+    barrier();
+    for (uint stride = 32u; stride > 0u; stride >>= 1u) {
+        if (i < stride) {
+            sharedL[i] += sharedL[i + stride];
+            sharedF[i] += sharedF[i + stride];
+        }
+        barrier();
+    }
+    if (i == 0u) {
+        // The mean over the sphere: (4 pi / 64) times the isotropic phase.
+        vec3 L2 = sharedL[0] / 64.0;
+        vec3 fms = sharedF[0] / 64.0 * (4.0 * ATM_PI) * ISO;
+        imageStore(outMultiScatter, px, vec4(L2 / max(1.0 - fms, vec3(1e-3)) * ATM_TABLE_SCALE, 1.0));
+    }
+}

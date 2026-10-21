@@ -264,6 +264,80 @@ bool SceneVkAllocator::createTexture2D(const void* pixelData, const TextureDesc&
     return true;
 }
 
+bool SceneVkAllocator::createStorageImage(uint32_t width, uint32_t height, uint32_t depth, VkFormat format,
+                                          SceneVkImage& outImage, bool shared) {
+    if (width == 0 || height == 0 || depth == 0) return false;
+    VkDevice dev = device_.device();
+    render::VulkanContext& ctx = device_.context();
+    const bool volume = depth > 1;
+
+    VkImageCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    info.imageType = volume ? VK_IMAGE_TYPE_3D : VK_IMAGE_TYPE_2D;
+    info.extent = {width, height, depth};
+    info.mipLevels = 1;
+    info.arrayLayers = 1;
+    info.format = format;
+    info.tiling = VK_IMAGE_TILING_OPTIMAL;
+    info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    info.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                 VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    info.samples = VK_SAMPLE_COUNT_1_BIT;
+    info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    const uint32_t families[2] = {static_cast<uint32_t>(ctx.queueFamilies().graphicsFamily),
+                                  static_cast<uint32_t>(ctx.queueFamilies().computeFamily)};
+    if (shared && ctx.asyncComputeQueue() && families[0] != families[1]) {
+        info.sharingMode = VK_SHARING_MODE_CONCURRENT;
+        info.queueFamilyIndexCount = 2;
+        info.pQueueFamilyIndices = families;
+    }
+    if (vkCreateImage(dev, &info, nullptr, &outImage.image) != VK_SUCCESS) {
+        LOG_ERROR("SceneVkAllocator: Failed to create a %ux%ux%u storage image", width, height, depth);
+        outImage = SceneVkImage{};
+        return false;
+    }
+    VkMemoryRequirements req;
+    vkGetImageMemoryRequirements(dev, outImage.image, &req);
+    const uint32_t memType = ctx.findMemoryType(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    void* mapped = nullptr;
+    if (memType == render::VulkanContext::kNoMemoryType ||
+        !ctx.memoryPool().allocate(dev, req.size, req.alignment, memType, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                   /*isImage=*/true, outImage.allocId, outImage.memory, outImage.offset, mapped) ||
+        vkBindImageMemory(dev, outImage.image, outImage.memory, outImage.offset) != VK_SUCCESS) {
+        LOG_ERROR("SceneVkAllocator: Failed to allocate a %ux%ux%u storage image", width, height, depth);
+        vkDestroyImage(dev, outImage.image, nullptr);
+        if (outImage.allocId != 0) ctx.memoryPool().free(dev, outImage.allocId);
+        outImage = SceneVkImage{};
+        return false;
+    }
+    VkImageViewCreateInfo view{};
+    view.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    view.image = outImage.image;
+    view.viewType = volume ? VK_IMAGE_VIEW_TYPE_3D : VK_IMAGE_VIEW_TYPE_2D;
+    view.format = format;
+    view.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    outImage.format = format;
+    outImage.width = width;
+    outImage.height = height;
+    outImage.depth = depth;
+    outImage.mipLevels = 1;
+    outImage.arrayLayers = 1;
+    outImage.sampler = VK_NULL_HANDLE;
+    if (vkCreateImageView(dev, &view, nullptr, &outImage.view) != VK_SUCCESS) {
+        LOG_ERROR("SceneVkAllocator: Failed to create a storage image's view");
+        outImage.view = VK_NULL_HANDLE;
+        destroyImage(outImage);
+        return false;
+    }
+    VkCommandBuffer cmd = device_.uploadCommands();
+    const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    render::cmdTransitionImage(cmd, outImage.image, range, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+    VkClearColorValue zero{};
+    vkCmdClearColorImage(cmd, outImage.image, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &range);
+    outImage.currentLayout = VK_IMAGE_LAYOUT_GENERAL;
+    return true;
+}
+
 bool SceneVkAllocator::createTexture3D(const void* voxelData, uint32_t size, VkFormat format, SceneVkImage& outImage) {
     if (size == 0) return false;
     VkDevice dev = device_.device();

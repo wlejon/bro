@@ -74,7 +74,7 @@ if (!probe.scene) {
         const scn = s.scene;
         scn.setCamera({ fov: 60, near: 0.1, far: 100,
                         position: [0, 0, 10], target: [0, 0, 0] });
-        scn.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+        scn.setToneMap({ mode: 'linear', gamma: 1.0 });
 
         scn.createMesh({ mesh: 'box', color: 'red' });            // inside
         scn.createMesh({ mesh: 'box', color: 'red', x: -100 });   // far left
@@ -125,7 +125,7 @@ if (!probe.scene) {
         const scn = s.scene;
         scn.setCamera({ fov: 60, near: 0.1, far: 100,
                         position: [0, 0, 10], target: [0, 0, 0] });
-        scn.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+        scn.setToneMap({ mode: 'linear', gamma: 1.0 });
 
         // Instanced: instance rows are row-major 3x4 (rotation | translation).
         const inst = (tx, ty, tz) => [1, 0, 0, tx, 0, 1, 0, ty, 0, 0, 1, tz, 0, 0, 0, 1];
@@ -202,7 +202,7 @@ if (!probe.scene) {
         const scn = s.scene;
         scn.setCamera({ fov: 45, near: 0.1, far: 50,
                         position: [0, 2, 6], target: [0, 0, 0] });
-        scn.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+        scn.setToneMap({ mode: 'linear', gamma: 1.0 });
 
         scn.createMesh({ mesh: 'plane', halfW: 4, halfD: 4, color: 'white',
                          castsShadow: false, y: 0 });
@@ -260,7 +260,7 @@ if (!probe.scene) {
         // outside this view.
         scn.setCamera({ fov: 50, near: 0.1, far: 100,
                         position: [20, 0, 5], target: [20, 0, 0] });
-        scn.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+        scn.setToneMap({ mode: 'linear', gamma: 1.0 });
         scn.createLight({ type: 'directional', direction: [0, 0, -1],
                           color: [1, 1, 1], intensity: 2 });
 

@@ -112,4 +112,12 @@ private:
     VkFormat stencilAttachmentFormat_ = VK_FORMAT_UNDEFINED;
 };
 
+enum class BuiltinSceneShader;
+
+/// A compute pipeline of the built-in shader `shader` over `layout`, through
+/// the device's persisted pipeline cache, its statistics (when on) logged
+/// under `name`. Null on failure.
+VkPipeline createComputePipeline(VkDevice device, BuiltinSceneShader shader, VkPipelineLayout layout,
+                                 const char* name);
+
 } // namespace bro::scene::vk

@@ -433,6 +433,67 @@ early and built for every altitude and time of day.
 The plants' crown-depth falloff and the turf's tuned darkening stand in for
 the probes today; they go when the probes land.
 
+### As built: the atmosphere and exposure
+
+The first two bullets. `world/atmosphere.h` holds the parameters (Earth's
+air by default: Rayleigh, Mie, ozone, the planet's radius and albedo, flat
+or spherical) and the tables' parametrisations, which
+`shaders/common/scene_atmosphere.glsl` mirrors; `vulkan/lighting/
+scene_atmosphere` makes the tables, and every table holds light for a sun
+of 1 (the sun's illuminance is a uniform), scaled by 1024 in its fp16 so a
+twilight sky does not underflow.
+
+- **View-independent tables, world-service compute jobs** (required, so the
+  frame the air changes is the frame they are remade): transmittance
+  (256 × 64, Bruneton's (μ, r)); multiple scattering (64 × 32 over
+  (μs, r), μs mapped by its square root so the twilight degrees get half
+  the table, Hillaire's L2 / (1 − f_ms) with the ground's bounce in f_ms);
+  the sky's light (64 × 32 × 5: the radiance arriving from every
+  direction at an altitude and sun angle as l ≤ 2 spherical harmonics in
+  the sun's frame, the lit ground below included).
+- **View tables, per frame slot:** the sky view (256 × 128, azimuth from the
+  sun by zenith angle, the horizon at the middle; from above the air it
+  covers the shell and the planet's disc), remade when the eye's height or
+  the sun moved enough, in the graphics stream: it is small and seldom
+  remade, and the sky then draws before the frame waits for its compute,
+  beside the plants' plans; and the aerial perspective (32 × 32 × 32
+  froxels over the camera's frustum, slices squared in depth out to the far
+  plane or the air's horizon, eight steps a slice, a slice ending at the
+  ground), on the async compute queue.
+- **The sky** reads the sky view (its lookup dithered by a texel), the sun's
+  disc from the transmittance with its limb darkened, the planet's surface
+  where the view meets it, and nothing where a view from above misses the
+  air. Every lit shader takes its haze from the froxels (`sceneAir`), the
+  sun at a surface dimmed by the transmittance, and its ambient from the
+  sky's light (`sceneSkyIrradiance`): one per-pixel march, the old
+  isotropic multiple-scattering fill and the one sky colour a frame are
+  gone.
+- **Exposure** (`scene/exposure.h`, `vulkan/post/scene_exposure`): EV100 with
+  a compensation, scale = 1 / (1.2 · 2^(EV − compensation)). Fixed (the
+  default, EV −log2 1.2: a scale of exactly 1) or auto: a 128-bin log2
+  histogram of the HDR frame on the GPU, the mean of its 10–90% share
+  (pixels darker than its range, such as space, left out), adapted
+  exponentially at separate up and down speeds, read by the tone pass on
+  the GPU so no frame waits on it. The old exposure multiplier is the fixed
+  mode's compensation.
+
+Measured. Against a CPU reference (`src/scene/tests/atmosphere_reference`:
+brute-force single scattering and multiple scattering iterated order by
+order to 0.1%) at 2 m, 2 km, 30 km and 400 km and suns at 68°, 10° and −4°,
+`bro_atmosphere_test`: transmittance within 0.7%; day sky radiance worst
+7.3%, mean 4.8%; twilight worst 25%, mean 10% (the sun's last degrees,
+where the sky's light falls by orders of magnitude); aerial in-scatter
+worst 7.5% by day, 18% at twilight; the air's transmittance 0.6%; the sky's
+light on the ground 1.4–5.8%. The sky and haze cost, interleaved at
+2560 × 1364 on a 4090: 0.61 ms for the per-pixel march, 0.21 ms for the
+tables (sky 0.11, compute 0.05). biomes on the atmosphere, its sun at
+128,000 lux and exposure metered: 0.23–0.33 ms more a frame than on its
+HDR panorama with no haze (0.1 of it the sky and compute, the rest the haze
+and sky light in every lit shader and the frame's compute join); the
+sky's gradient bands are gone (the longest run of one colour down a sky
+column 5–6 rows, was 9–13). A cut canopy → flyover → canopy adapts with no
+overshoot or oscillation and holds still (±0.001 EV) once the view does.
+
 ## 8. Shadows
 
 - **Cached shadow pages** (as Unreal's virtual shadow maps): the sun's
@@ -504,7 +565,7 @@ src/scene/
   nodes/            the node types: their CPU halves
   world/            cells, surface layers' paging, the world service's
                     policy, the shade map, the shadow plan, the wind field,
-                    the atmosphere's parameters and irradiance; later the
+                    the atmosphere's parameters; later the
                     planet's roots and fields, placement rules
   vulkan/
     frame/          device, allocator, descriptors, pipelines, the shader
@@ -516,10 +577,11 @@ src/scene/
                     service's executor and its pass
     ground/         the ground and its cover: turf, grass, herbs
     foliage/        the plants node's plan, poses and draws; the far field
-    lighting/       scene lighting, environment and sky, reflection probes;
-                    later exposure, probes, volumetrics, clustered lights
+    lighting/       scene lighting, environment and sky, the atmosphere's
+                    tables, reflection probes; later probes, volumetrics,
+                    clustered lights
     shadow/         the shadow pass; later shadow pages
-    post/           post-fx, SSAO, SSR, DOF
+    post/           post-fx, exposure, SSAO, SSR, DOF
     terrain/        (planned) planet terrain tiles, the clipmap drawn from
                     them, horizons
     sky/            (planned) clouds, weather, stars, the moon
@@ -544,7 +606,7 @@ the motion oracle for anything temporal. Each step removes what it replaces.
 | 1 | Done: the old forest path retired (ForestNode, its drawers, planner, impostors, HiZ; the plants' CPU planner) | one foliage path, the plants node planned on the GPU; biomes' stills identical, GPU ms 7–11% lower | −17k |
 | 2 | Done: the layout (§12), moves only | frames byte-identical, suites green | moves |
 | 3 | Done: the world service (§6), the surface layers' fills its first producer | biomes' stills byte-identical, GPU ms unchanged; a cut glade→flyover settles in 4 frames (24 fills a frame took 24), flyover→glade in 12 (took 38), no frame over 2.78 ms | +1.4k |
-| 4 | Atmosphere tables and exposure (§7) | one sky from ground to orbit, cheaper than today's per-pixel march | ~2k |
+| 4 | Done: atmosphere tables and exposure (§7) | one sky from ground to orbit: the LUT path within 7% of a reference march by day, 0.21 ms where the per-pixel march took 0.61; metered exposure in EV; biomes on it, its sky bands gone | +3.1k |
 | 5 | Cached shadow pages (§8), then horizons and canopy density (§7) | plant and terrain shadows off the per-frame cost | ~6k |
 | 6 | The ground and its cover as one surface (§9) | the eye-level frame's 1.3–1.7 ms of cover cut by most of its hidden and far work | ~2k |
 | 7 | The probe grid (§7) | forests, valleys and slopes lit as places; the stand-in falloffs gone | ~5k |

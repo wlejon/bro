@@ -92,7 +92,7 @@ if (!probe.scene) {
         const scn = s.scene;
         const FOV = 40, EYE = [0, 1, 8];
         scn.setCamera({ fov: FOV, near: 0.1, far: 100, position: EYE, target: [0, 1, 0] });
-        scn.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+        scn.setToneMap({ mode: 'linear', gamma: 1.0 });
         scn.createLight({ type: 'directional', direction: [0, 0, -1],
                           color: [1, 1, 1], intensity: 1.5 });
         function project(x, y, z) {
@@ -211,7 +211,7 @@ if (!probe.scene) {
         const scn = s.scene;
         scn.setCamera({ fov: 60, near: 0.1, far: 100,
                         position: [0, 0, 4], target: [0, 0, 0] });
-        scn.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+        scn.setToneMap({ mode: 'linear', gamma: 1.0 });
 
         // instancesFromTransforms: px py pz qx qy qz qw scale variant
         const xf = (tx, ty) => [tx, ty, 0, 0, 0, 0, 1, 1, 0];

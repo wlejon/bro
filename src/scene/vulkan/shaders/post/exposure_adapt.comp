@@ -1,0 +1,79 @@
+#version 450
+// Exposure (scene/exposure.h; scene/vulkan/post/scene_exposure.h): one
+// workgroup reads the frame's histogram, meters it (the mean log2 luminance
+// of the pixels between the lowPercent and highPercent shares, EV100 =
+// log2(L * 100 / 12.5)), moves the applied EV toward it exponentially at the
+// up or down speed for the frame's time step, and writes the scale the
+// tonemap multiplies by. In the fixed mode the scale is the CPU's (an exact
+// 1 at the default EV). The histogram is cleared for the next frame.
+
+layout(local_size_x = 128) in;
+
+layout(set = 0, binding = 1) buffer Histogram { uint bins[128]; } histogram;
+layout(set = 0, binding = 2) buffer State {
+    float ev;         // the applied EV100 (before compensation)
+    float metered;    // this frame's metered EV100 (clamped)
+    float scale;      // what the tonemap multiplies the frame by
+    uint adapting;    // 1 once the auto mode has a value to adapt from
+} state;
+
+layout(push_constant) uniform AdaptPush {
+    float mode;        // 0 fixed, 1 auto
+    float fixedEv;     // fixed: the EV100
+    float fixedScale;  // fixed: its scale, exact
+    float compensation;
+    float dt;          // seconds since the last metered frame
+    float speedUp;
+    float speedDown;
+    float minEv;
+    float maxEv;
+    float lowPercent;
+    float highPercent;
+    float minLog2;
+    float maxLog2;
+} push;
+
+shared uint counts[128];
+
+void main() {
+    uint i = gl_LocalInvocationIndex;
+    counts[i] = histogram.bins[i];
+    histogram.bins[i] = 0u;
+    barrier();
+    if (i != 0u) return;
+    if (push.mode < 0.5) {
+        state.ev = push.fixedEv;
+        state.metered = push.fixedEv;
+        state.scale = push.fixedScale;
+        state.adapting = 0u;
+        return;
+    }
+    uint total = 0u;
+    for (int b = 0; b < 128; ++b) total += counts[b];
+    float ev = state.ev;
+    float metered = state.metered;
+    if (total > 0u) {
+        // The mean of log2 luminance over the [low, high] share of pixels.
+        float lo = push.lowPercent * float(total), hi = push.highPercent * float(total);
+        float below = 0.0, sum = 0.0, weight = 0.0;
+        float binWidth = (push.maxLog2 - push.minLog2) / 128.0;
+        for (int b = 0; b < 128; ++b) {
+            float n = float(counts[b]);
+            float take = max(0.0, min(below + n, hi) - max(below, lo));
+            sum += take * (push.minLog2 + (float(b) + 0.5) * binWidth);
+            weight += take;
+            below += n;
+        }
+        if (weight > 0.0) metered = clamp(sum / weight + log2(100.0 / 12.5), push.minEv, push.maxEv);
+        if (state.adapting == 0u) {
+            ev = metered;
+        } else {
+            float speed = metered > ev ? push.speedUp : push.speedDown;
+            ev += (metered - ev) * (1.0 - exp(-max(push.dt, 0.0) * max(speed, 0.0)));
+        }
+    }
+    state.ev = ev;
+    state.metered = metered;
+    state.scale = 1.0 / (1.2 * exp2(ev - push.compensation));
+    if (total > 0u) state.adapting = 1u;
+}

@@ -43,7 +43,7 @@ function makeScene(size) {
                        position: [0, 0, 4], target: [0, 0, 0] });
         // Linear tonemap, gamma 1 -> the emissive value the hook writes is
         // the pixel value, so a probe reads back the sampled texel directly.
-        sc.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+        sc.setToneMap({ mode: 'linear', gamma: 1.0 });
     }
     return { canvas: cv, scene: sc };
 }
@@ -228,7 +228,7 @@ if (!boot.scene) {
         const scn = s.scene;
         const FOV = 40, EYE = [0, 1, 8];
         scn.setCamera({ fov: FOV, near: 0.1, far: 100, position: EYE, target: [0, 1, 0] });
-        scn.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+        scn.setToneMap({ mode: 'linear', gamma: 1.0 });
         function project(x, y, z) {
             const d = EYE[2] - z;
             const k = 128 / (d * Math.tan((FOV / 2) * Math.PI / 180));

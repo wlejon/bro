@@ -60,7 +60,7 @@ if (!probe.scene) {
         const scn = s.scene;
         scn.setCamera({ fov: 50, near: 0.1, far: 60,
                         position: [0, 6, 12], target: [0, 0, 0] });
-        scn.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+        scn.setToneMap({ mode: 'linear', gamma: 1.0 });
 
         assert(scn.shadowCache === true, 'shadow cache defaults on');
 
@@ -166,7 +166,7 @@ if (!probe.scene) {
         const scn = s.scene;
         scn.setCamera({ fov: 55, near: 0.1, far: 60,
                         position: [0, 8, 14], target: [0, 0, 0] });
-        scn.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+        scn.setToneMap({ mode: 'linear', gamma: 1.0 });
 
         scn.createMesh({ mesh: 'plane', halfW: 12, halfD: 8, color: 'white',
                          castsShadow: false, y: 0 });
@@ -242,7 +242,7 @@ if (!probe.scene) {
         const scn = s.scene;
         scn.setCamera({ fov: 55, near: 0.1, far: 60,
                         position: [0, 6, 12], target: [0, 0, 0] });
-        scn.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+        scn.setToneMap({ mode: 'linear', gamma: 1.0 });
 
         scn.createMesh({ mesh: 'plane', halfW: 12, halfD: 8, color: 'white',
                          castsShadow: false, y: 0 });
@@ -300,7 +300,7 @@ if (!probe.scene) {
         const cam = (x) => scn.setCamera({ fov: 50, near: 0.1, far: 80,
                                            position: [x, 6, 14], target: [x, 0, 0] });
         cam(0);
-        scn.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+        scn.setToneMap({ mode: 'linear', gamma: 1.0 });
         scn.createMesh({ mesh: 'plane', halfW: 40, halfD: 40, color: 'white',
                          castsShadow: false, y: 0 });
         for (let i = -4; i <= 4; ++i)

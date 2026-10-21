@@ -1,0 +1,39 @@
+#version 450
+// The frame's luminance, metered (scene/vulkan/post/scene_exposure.h): a
+// histogram of log2 luminance over every other pixel of every other row of
+// the HDR frame, kMinLog2..kMaxLog2 in 128 bins (scene/exposure.h). Pixels
+// nothing drew (alpha 0) and those darker than the range (black, or space
+// past the air) are left out, so a frame half open space meters on what is
+// lit in it. Each workgroup
+// gathers its tile in shared memory and adds it to the frame's bins.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0) uniform sampler2D texHdr;
+layout(set = 0, binding = 1) buffer Histogram { uint bins[128]; } histogram;
+
+layout(push_constant) uniform HistogramPush {
+    ivec2 size;      // the HDR frame's
+    float minLog2;
+    float maxLog2;
+} push;
+
+shared uint tile[128];
+
+void main() {
+    uint i = gl_LocalInvocationIndex;
+    if (i < 128u) tile[i] = 0u;
+    barrier();
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy) * 2;
+    if (all(lessThan(p, push.size))) {
+        vec4 c = texelFetch(texHdr, p, 0);
+        float lum = dot(c.rgb, vec3(0.2126, 0.7152, 0.0722));
+        float x = lum > 0.0 ? (log2(lum) - push.minLog2) / (push.maxLog2 - push.minLog2) : -1.0;
+        if (c.a > 0.0 && x >= 0.0) {
+            uint bin = uint(min(x * 128.0, 127.0));
+            atomicAdd(tile[bin], 1u);
+        }
+    }
+    barrier();
+    if (i < 128u && tile[i] > 0u) atomicAdd(histogram.bins[i], tile[i]);
+}

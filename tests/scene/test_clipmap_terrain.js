@@ -66,7 +66,7 @@ function makeLayer(w, h, originX, originZ, mpc, fn) {
 if (!scene) {
     missingGpuContext('scene');
 } else {
-    scene.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+    scene.setToneMap({ mode: 'linear', gamma: 1.0 });
 
     // =====================================================================
     // (1) elevationAt matches the analytic field it was fed.

@@ -111,6 +111,15 @@ public:
                      VkImageCreateFlags createFlags = 0,
                      VkImageViewType viewType = VK_IMAGE_VIEW_TYPE_MAX_ENUM);
 
+    /// A storage image a compute shader writes and every stage samples: 2D
+    /// when `depth` is 1, else 3D; one mip, no sampler. It is cleared to zero
+    /// and left in GENERAL by the upload stream, where it stays (written and
+    /// sampled in GENERAL), so nothing transitions it again. `shared`: the
+    /// async compute queue writes it while the graphics queue reads it
+    /// (concurrent sharing across the two families where they differ).
+    bool createStorageImage(uint32_t width, uint32_t height, uint32_t depth, VkFormat format,
+                            SceneVkImage& outImage, bool shared);
+
     bool createTexture2D(const void* pixelData, const TextureDesc& desc, SceneVkImage& outImage);
     bool createTexture3D(const void* voxelData, uint32_t size, VkFormat format, SceneVkImage& outImage);
 

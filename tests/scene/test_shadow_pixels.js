@@ -53,7 +53,7 @@ function setup(size) {
     const s = freshScene(size);
     const scn = s.scene;
     scn.setCamera({ fov: 50, near: 0.1, far: 80, position: [0, 9, 9], target: [0, 0, 0] });
-    scn.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+    scn.setToneMap({ mode: 'linear', gamma: 1.0 });
     scn.setAmbient([0.02, 0.02, 0.02]);
     const floor = scn.createMesh({ mesh: 'plane', halfW: 12, halfD: 12, color: [0.8, 0.8, 0.8],
                                    roughness: 1, castsShadow: false });
@@ -151,7 +151,7 @@ if (!probe.scene) {
         const s = freshScene(192);
         const scn = s.scene;
         scn.setCamera({ fov: 50, near: 0.1, far: 120, position: [0, 14, 10], target: [0, 0, -16] });
-        scn.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+        scn.setToneMap({ mode: 'linear', gamma: 1.0 });
         scn.setAmbient([0.02, 0.02, 0.02]);
         scn.createMesh({ mesh: 'plane', halfW: 60, halfD: 60, color: [0.8, 0.8, 0.8], roughness: 1,
                          castsShadow: false });

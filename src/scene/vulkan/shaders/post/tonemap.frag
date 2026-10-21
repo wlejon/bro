@@ -11,9 +11,16 @@ layout(location = 0) out vec4 outColor;
 layout(set = 0, binding = 0) uniform sampler2D texHdr;
 layout(set = 0, binding = 1) uniform sampler2D texBloom;
 layout(set = 0, binding = 2) uniform sampler3D texLut;
+// The exposure (exposure_adapt.comp, this frame's, on the GPU): the scale the
+// frame is multiplied by, fixed or metered (scene/exposure.h).
+layout(set = 0, binding = 3) readonly buffer Exposure {
+    float ev;
+    float metered;
+    float scale;
+    uint adapting;
+} exposure;
 
 layout(push_constant) uniform TonemapPush {
-    float exposure;
     float gamma;            // applied when > 0 and not 1
     float bloomIntensity;   // 0 = bloom off
     int tonemapMode;        // 0 = linear, 1 = Reinhard, 2 = ACES
@@ -51,7 +58,7 @@ void main() {
     vec4 src = texture(texHdr, inUV);
     vec3 c = src.rgb;
     if (push.bloomIntensity > 0.0) c += texture(texBloom, inUV).rgb * push.bloomIntensity;
-    c *= push.exposure;
+    c *= exposure.scale;
     if (push.tonemapMode == 2)      c = aces(c);
     else if (push.tonemapMode == 1) c = c / (c + vec3(1.0));
     else                            c = clamp(c, 0.0, 1.0);

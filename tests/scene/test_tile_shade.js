@@ -13,7 +13,7 @@ const scene = canvas.getContext('scene');
 if (!scene) {
     missingGpuContext('scene');
 } else {
-    scene.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+    scene.setToneMap({ mode: 'linear', gamma: 1.0 });
     scene.setAmbient({ intensity: 0.5 });
     scene.createLight({ type: 'directional', intensity: 1.0, direction: [0.2, -1, 0.3] });
 

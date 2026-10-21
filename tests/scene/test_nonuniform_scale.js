@@ -16,7 +16,7 @@ if (!scene) {
     missingGpuContext('scene');
 } else {
     // Linear tonemap so pixel comparisons are monotonic in shading.
-    scene.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+    scene.setToneMap({ mode: 'linear', gamma: 1.0 });
     scene.setAmbient(0, 0, 0);
 
     const px = (x, y) => {

@@ -6,6 +6,7 @@
 #include "scene/vulkan/draw/pass_billboard.h"
 #include "scene/vulkan/draw/pass_decal.h"
 #include "scene/vulkan/post/pass_dof.h"
+#include "scene/vulkan/lighting/pass_atmosphere.h"
 #include "scene/vulkan/lighting/pass_environment.h"
 #include "scene/vulkan/draw/pass_gaussian_splat.h"
 #include "scene/vulkan/draw/pass_mesh.h"
@@ -30,20 +31,24 @@ SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
     : device_(context),
       allocator_(device_),
       resources_(allocator_),
-      gpu_{device_, allocator_, defaults_, targets_, resources_, meshes_, environment_, world_},
+      gpu_{device_, allocator_, defaults_, targets_, resources_, meshes_, environment_, world_, atmosphere_},
       timer_(context) {
     // The frame, in order. A pass draws into the HDR scope or brings its own
     // targets; the graph does every shared transition (scene_frame_graph.h).
     if (context.asyncComputeQueue()) {
-        // The plants' plans run on the async compute queue: what needs no
-        // plan goes first, beside it (the other casters, the frame's
-        // uniforms, the sky), and the graphics waits for the plan at its
-        // first reader (the planned casters, else the opaque meshes). The
-        // probe stays after the planned casters: its faces are lit through
-        // the shadow atlas, the plants' shadows included.
+        // The plants' plans and the atmosphere's froxels run on the async
+        // compute queue: what needs neither goes first, beside them (the
+        // other casters, the frame's uniforms, the atmosphere's sky view and
+        // the sky, which opens the frame's first scope), and the graphics
+        // waits for the compute at its first reader (the planned casters,
+        // else the opaque meshes; the sky itself on a frame the world
+        // service remade the atmosphere's tables there). The probe stays
+        // after the planned casters: its faces are lit through the shadow
+        // atlas, the plants' shadows included.
         graph_.add(std::make_unique<PassShadow>(PassShadow::Part::Unplanned));
         graph_.add(std::make_unique<PassFrameUniforms>());
         graph_.add(std::make_unique<PassWorldService>());
+        graph_.add(std::make_unique<PassAtmosphere>());
         graph_.add(std::make_unique<PassEnvironment>());
         graph_.add(std::make_unique<PassShadow>(PassShadow::Part::Planned));
         graph_.add(std::make_unique<PassReflectionProbe>());
@@ -51,6 +56,7 @@ SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
         graph_.add(std::make_unique<PassShadow>());
         graph_.add(std::make_unique<PassFrameUniforms>());
         graph_.add(std::make_unique<PassWorldService>());
+        graph_.add(std::make_unique<PassAtmosphere>());
         graph_.add(std::make_unique<PassReflectionProbe>());
         graph_.add(std::make_unique<PassEnvironment>());
     }
@@ -78,6 +84,7 @@ SceneVkBridge::~SceneVkBridge() {
     device_.waitIdle();
     allocator_.destroyBuffer(readbackBuffer_);
     graph_.cleanup(gpu_);
+    atmosphere_.cleanup(gpu_);
     meshes_.cleanup(gpu_);
     environment_.cleanup(device_, allocator_);
     resources_.cleanup();
@@ -92,7 +99,7 @@ bool SceneVkBridge::init() {
         return false;
     }
     if (!defaults_.setup(device_, allocator_) || !targets_.setup(device_, allocator_) || !meshes_.setup(gpu_) ||
-        !environment_.setup(device_, allocator_, defaults_) || !graph_.setup(gpu_)) {
+        !environment_.setup(device_, allocator_, defaults_) || !atmosphere_.setup(gpu_) || !graph_.setup(gpu_)) {
         LOG_ERROR("SceneVkBridge: Failed setting up the scene renderer");
         return false;
     }
@@ -127,7 +134,8 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
         renderer.invalidateShadowCache();
     }
     environment_.update(gpu_, cmd, renderer);
-    frame.lighting = sceneLighting(renderer, environment_, frame.view.eye);
+    atmosphere_.beginFrame(frame);
+    frame.lighting = sceneLighting(renderer, gpu_, frame.view.eye);
     writeCameraSet(frame);
     frame.ssao = renderer.ssaoEnabled() && targets_.ensureIndirect(allocator_);
     frame.ssr = renderer.ssrEnabled() && renderer.ssrIntensity() > 0.0f;
@@ -157,6 +165,7 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
     if (computeApart) timer_.endCompute(frame.computeCmd);
     if (device_.submitFrame(cmd)) {
         timer_.submitted(device_.lastFrameTicket());
+        graph_.submitted(gpu_, device_.lastFrameTicket());
         // The plans' read-backs count as done with the frame's graphics (which
         // waited for them), not as soon as the compute is: read a frame late
         // as on the graphics queue, not now and then the frame itself.

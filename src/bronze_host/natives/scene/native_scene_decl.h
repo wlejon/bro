@@ -524,8 +524,13 @@ void bro_scene_SceneGraph_setActiveCamera(void* self, void* camera);
 
 // bro.scene.SceneGraph.prototype.setToneMap
 //   registered at __bro_native.scene.SceneGraph_setToneMap
-//   opts_mode_given, opts_exposure_given, opts_whitePoint_given: false when the value was not passed (no declared default)
-void bro_scene_SceneGraph_setToneMap(void* self, bool opts_mode_given, const char* opts_mode, bool opts_exposure_given, double opts_exposure, bool opts_whitePoint_given, double opts_whitePoint);
+//   opts_mode_given, opts_whitePoint_given: false when the value was not passed (no declared default)
+void bro_scene_SceneGraph_setToneMap(void* self, bool opts_mode_given, const char* opts_mode, bool opts_whitePoint_given, double opts_whitePoint);
+
+// bro.scene.SceneGraph.prototype.setExposure
+//   registered at __bro_native.scene.SceneGraph_setExposure
+//   params: [mode (0 fixed, 1 auto), ev, compensation, speedUp, speedDown, minEv, maxEv, lowPercent, highPercent], NaN = default
+void bro_scene_SceneGraph_setExposure(void* self, const double* params, uint32_t params_len);
 
 // bro.scene.SceneGraph.prototype.setAmbient
 //   registered at __bro_native.scene.SceneGraph_setAmbient
@@ -569,8 +574,8 @@ void bro_scene_SceneGraph_setFog(void* self, bool opts_mode_given, const char* o
 
 // bro.scene.SceneGraph.prototype.setAtmosphere
 //   registered at __bro_native.scene.SceneGraph_setAtmosphere
-//   opts_turbidity_given, opts_sunIntensity_given: false when the value was not passed (no declared default)
-void bro_scene_SceneGraph_setAtmosphere(void* self, const double* opts_rayleigh, uint32_t opts_rayleigh_len, const double* opts_mie, uint32_t opts_mie_len, bool opts_turbidity_given, double opts_turbidity, const double* opts_sunPosition, uint32_t opts_sunPosition_len, bool opts_sunIntensity_given, double opts_sunIntensity);
+//   params: 32 f64, NaN = Earth's default (the layout in js/scene_graph.js's setAtmosphere)
+void bro_scene_SceneGraph_setAtmosphere(void* self, const double* params, uint32_t params_len);
 
 // bro.scene.SceneGraph.prototype.setStarfield
 //   registered at __bro_native.scene.SceneGraph_setStarfield

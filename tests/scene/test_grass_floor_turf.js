@@ -38,7 +38,7 @@ const scn = cv.getContext('scene');
 if (!scn) {
     missingGpuContext('scene');
 } else {
-    scn.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+    scn.setToneMap({ mode: 'linear', gamma: 1.0 });
     scn.createLight({ type: 'directional', direction: [0.3, -1, 0.2], color: [1, 1, 1], intensity: 8 });
     const floor = scn.createMesh({ mesh: 'plane', halfW: 30, halfD: 30, color: [0.45, 0.45, 0.45] });
     scn.setCamera({ fov: 55, near: 0.05, far: 200, position: [0, 1.6, 5], target: [0, 0, -1] });

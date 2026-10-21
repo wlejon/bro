@@ -394,6 +394,7 @@ void SceneGraph::tickAnimations(float dtSec) {
     }
 
     advanceWindTime(dtSec);
+    renderer_.advanceExposureTime(dtSec);
     updatePlantMovers();
 
     // Derive the view from the active camera node AFTER animations/tweens,

@@ -48,7 +48,7 @@ const scene = canvas.getContext('scene');
 if (!scene) {
     missingGpuContext('scene');
 } else {
-    scene.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+    scene.setToneMap({ mode: 'linear', gamma: 1.0 });
     scene.setDither(false);   // single pixels are read exactly
     scene.setCamera({
         fov: 60, near: 0.1, far: 100,

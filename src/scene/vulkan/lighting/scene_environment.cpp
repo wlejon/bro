@@ -341,36 +341,6 @@ void SceneEnvironment::fillLighting(SceneLightingUniforms& out, const SceneRende
             out.groundBounce[k] = gb[k] * onGround / intensity;
         }
     }
-
-    const AtmosphereParams& a = renderer.atmosphere();
-    if (!a.enabled) return;
-    float len = std::sqrt(a.sunDir[0] * a.sunDir[0] + a.sunDir[1] * a.sunDir[1] + a.sunDir[2] * a.sunDir[2]);
-    if (!(len > 0.0f)) len = 1.0f;
-    const float* sun = renderer.effectiveSunColor();
-    out.atmSunDir[0] = a.sunDir[0] / len;
-    out.atmSunDir[1] = a.sunDir[1] / len;
-    out.atmSunDir[2] = a.sunDir[2] / len;
-    out.atmSunDir[3] = 1.0f;
-    out.atmSunColor[0] = sun[0];
-    out.atmSunColor[1] = sun[1];
-    out.atmSunColor[2] = sun[2];
-    out.atmSunColor[3] = a.planetRadius;
-    out.atmBetaR[0] = a.betaR[0];
-    out.atmBetaR[1] = a.betaR[1];
-    out.atmBetaR[2] = a.betaR[2];
-    out.atmBetaR[3] = a.thickness;
-    out.atmParams[0] = a.betaM;
-    out.atmParams[1] = a.mieG;
-    out.atmParams[2] = a.scaleHeightR;
-    out.atmParams[3] = a.scaleHeightM;
-    out.atmParams2[0] = a.seaLevel;
-    out.atmParams2[1] = a.spherical ? 1.0f : 0.0f;
-    out.atmParams2[2] = a.multiScatter;
-    out.atmParams2[3] = a.sunAngularRadius;
-    out.atmCenter[0] = a.center[0];
-    out.atmCenter[1] = a.center[1];
-    out.atmCenter[2] = a.center[2];
-    out.atmCenter[3] = a.sunDiskIntensity;
 }
 
 void SceneEnvironment::writeBindings(SceneVkDescriptorWriter& writer, const SceneDefaults& d) const {

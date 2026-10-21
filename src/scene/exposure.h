@@ -1,0 +1,60 @@
+#pragma once
+
+// Exposure in EV (docs/lighting-api.js, ExposureConfig): the scale the HDR
+// frame is multiplied by before the tone curve, as an EV100 (the camera's
+// exposure value at ISO 100), so scene units only need to be self-consistent.
+//
+//   scale = 1 / (1.2 * 2^(EV100 - compensation))      (Lagarde & de Rousiers 2014)
+//
+// Fixed: EV100 is the setting. The default is -log2(1.2), a scale of exactly
+// 1, so a scene authored in display units passes to the tone curve as it is.
+// Auto: EV100 is metered from the frame's luminance on the GPU (a histogram
+// of log2 luminance, the mean of the part between lowPercent and highPercent
+// of the pixels: EV100 = log2(L * 100 / 12.5)) and the applied EV follows it
+// exponentially, at speedUp per second toward a brighter scene and speedDown
+// toward a darker one: no overshoot, no oscillation, and the frame never
+// waits for it (scene/vulkan/post/scene_exposure.h).
+
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+
+namespace bro::scene {
+
+struct ExposureSettings {
+    enum class Mode : uint8_t { Fixed, Auto };
+    static constexpr double kUnitScaleEv = -0.26303440583379378;   // -log2(1.2): a scale of 1
+
+    Mode mode = Mode::Fixed;
+    float ev100 = static_cast<float>(kUnitScaleEv);   // Fixed: the exposure
+    float compensation = 0.0f;   // EV added to the exposure (+1: twice as bright)
+    float speedUp = 3.0f;        // 1/s toward a brighter scene (the metered EV rising)
+    float speedDown = 1.0f;      // 1/s toward a darker one
+    float minEv = -6.0f;         // the metered EV's clamp
+    float maxEv = 20.0f;
+    // The meter reads most of the frame, so an open sky over a sunlit field
+    // weighs as much as the field and the field lands near middle grey.
+    float lowPercent = 0.1f;     // the share of darkest pixels the meter ignores
+    float highPercent = 0.9f;    // the share below which it reads (the brightest 10% ignored)
+};
+
+namespace exposure {
+
+/// log2 luminance the histogram covers, and its bins.
+constexpr float kMinLog2 = -12.0f;
+constexpr float kMaxLog2 = 22.0f;
+constexpr int kBins = 128;
+
+/// The scale an EV100 gives (computed in double, so the default is exactly 1).
+inline float scaleForEv(double ev100) { return static_cast<float>(1.0 / (1.2 * std::exp2(ev100))); }
+/// The EV100 a mean luminance meters to (K = 12.5, S = 100).
+inline double evForLuminance(double luminance) { return std::log2(std::max(luminance, 1e-9) * 100.0 / 12.5); }
+/// One frame of adaptation: `current` toward `target` over `dt` seconds.
+inline double adapt(double current, double target, double dt, double speedUp, double speedDown) {
+    const double speed = target > current ? speedUp : speedDown;
+    return current + (target - current) * (1.0 - std::exp(-std::max(dt, 0.0) * std::max(speed, 0.0)));
+}
+
+}  // namespace exposure
+
+}  // namespace bro::scene

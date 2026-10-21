@@ -4,6 +4,7 @@
 #include "scene/nodes/reflection_probe_node.h"
 #include "scene/scene_graph.h"
 #include "scene/vulkan/frame/scene_defaults.h"
+#include "scene/vulkan/lighting/scene_atmosphere.h"
 #include "scene/vulkan/lighting/scene_environment.h"
 #include "scene/vulkan/frame/scene_frame.h"
 #include "scene/vulkan/lighting/scene_lighting.h"
@@ -113,6 +114,8 @@ PassReflectionProbe::Probe* PassReflectionProbe::ensure(SceneGpu& gpu, const Ref
 void PassReflectionProbe::declare(const SceneFrame& frame, PassIO& io) const {
     // The faces bind the frame's lighting set, whose shadow binding must be readable.
     io.sample(frame.gpu.targets.shadowAtlas);
+    // Its faces draw the atmosphere's sky and air from this frame's tables.
+    if (frame.gpu.atmosphere.active()) io.readsCompute();
 }
 
 void PassReflectionProbe::record(SceneFrame& frame) {
@@ -180,7 +183,7 @@ void PassReflectionProbe::renderFace(SceneFrame& frame, const ReflectionProbeNod
     camWriter.updateSet(gpu.device.device(), cameraSet);
     // The face draws relative to the probe: its own lighting, and every draw
     // (prepared relative to the frame's eye) re-based onto it.
-    const SceneLightingUniforms lighting = sceneLighting(frame.renderer, gpu.environment, eye);
+    const SceneLightingUniforms lighting = sceneLighting(frame.renderer, gpu, eye);
     const VkDescriptorSet lightingSet = writeLightingSet(gpu, lighting, VK_NULL_HANDLE, nullptr);
     const bromath::Vec3 rebase = frame.view.eye - eye;
     std::map<const uint8_t*, VkDescriptorSet> shadedSets;

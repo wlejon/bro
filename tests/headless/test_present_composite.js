@@ -29,7 +29,7 @@ if (!scn) missingGpuContext('scene');
 else runWithScene();
 
 function runWithScene() {
-scn.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+scn.setToneMap({ mode: 'linear', gamma: 1.0 });
 scn.createLight({ type: 'directional', direction: [0, 0, -1], color: [1, 1, 1], intensity: 2 });
 scn.createMesh({ mesh: 'box', color: 'red', x: 0, y: 0, z: 0 });
 scn.setCamera({ fov: 60, near: 0.1, far: 100, position: [0, 0, 5], target: [0, 0, 0] });

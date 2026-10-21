@@ -35,7 +35,7 @@ const scn = canvas.getContext('scene');
 if (!scn) {
     missingGpuContext('scene');
 } else {
-    scn.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+    scn.setToneMap({ mode: 'linear', gamma: 1.0 });
     scn.createLight({ type: 'directional', direction: [1, -1, 0], color: [1, 1, 1], intensity: 3, castShadow: true });
     const floor = scn.createMesh({ mesh: 'plane', halfW: 60, halfD: 60, color: [0.6, 0.6, 0.6] });
     floor.receivesShadow = true;

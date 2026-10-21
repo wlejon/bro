@@ -84,8 +84,15 @@ bool PassPostFx::setup(SceneGpu& gpu) {
     VkDevice dev = gpu.device.device();
     sampler_ = linearClamp(dev);
     singleSetLayout_ = fullscreen::samplerSetLayout(dev, 1);
-    tonemapSetLayout_ = fullscreen::samplerSetLayout(dev, 3);   // HDR, bloom, LUT
-    if (!sampler_ || !singleSetLayout_ || !tonemapSetLayout_) return false;
+    {
+        // HDR, bloom, LUT, and the exposure's state.
+        SceneVkDescriptorLayoutBuilder b;
+        for (uint32_t i = 0; i < 3; ++i)
+            b.addBinding(i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
+        b.addBinding(3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
+        tonemapSetLayout_ = b.build(dev);
+    }
+    if (!sampler_ || !singleSetLayout_ || !tonemapSetLayout_ || !exposure_.setup(gpu)) return false;
     brightLayout_ = fullscreen::layout(dev, singleSetLayout_, sizeof(float));
     blurLayout_ = fullscreen::layout(dev, singleSetLayout_, 4 * sizeof(float));
     tonemapLayout_ = fullscreen::layout(dev, tonemapSetLayout_, sizeof(TonemapPush));
@@ -120,6 +127,7 @@ void PassPostFx::resize(SceneGpu& gpu, uint32_t width, uint32_t height) {
 void PassPostFx::cleanup(SceneGpu& gpu) {
     for (SceneVkImage& img : bloom_) gpu.allocator.destroyImage(img);
     gpu.allocator.destroyImage(lut_);
+    exposure_.cleanup(gpu);
     destroyPipelines(gpu.device, {&brightPipeline_, &blurPipeline_, &tonemapPipeline_});
     destroySampler(gpu.device, sampler_);
     destroyLayouts(gpu.device.device(), {&brightLayout_, &blurLayout_, &tonemapLayout_},
@@ -179,9 +187,9 @@ void PassPostFx::record(SceneFrame& frame) {
     const bool bloomOn = r.bloomEnabled() && r.bloomIntensity() > 0.0f && bloom_[1].isValid();
     if (bloomOn) bloom(frame, hdr);
     const bool lut = ensureLut(frame.gpu, r) && r.colorLUTAmount() > 0.0f;
+    exposure_.record(frame, hdr);
 
     TonemapPush push{};
-    push.exposure = r.exposure();
     push.gamma = r.gamma();
     push.bloomIntensity = bloomOn ? r.bloomIntensity() : 0.0f;
     push.tonemapMode = static_cast<int32_t>(r.toneMap());
@@ -197,11 +205,14 @@ void PassPostFx::record(SceneFrame& frame) {
     writer.writeImage(0, hdr.view, sampler_);
     writer.writeImage(1, bloomOn ? bloom_[0].view : hdr.view, sampler_);
     writer.writeImage(2, lut_.view, lut_.sampler ? lut_.sampler : sampler_);
+    writer.writeBuffer(3, exposure_.state(), SceneExposure::kStateBytes, 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
     writer.updateSet(device_->device(), set);
     // The graph moved `out` to COLOR_ATTACHMENT_OPTIMAL (declare).
     fullscreen::draw(*device_, frame.cmd, out, tonemapPipeline_, tonemapLayout_, set, &push, sizeof(push));
     frame.ldrResult = &out;
 }
+
+void PassPostFx::submitted(SceneGpu&, uint64_t ticket) { exposure_.submitted(ticket); }
 
 // --- Tilt-shift ---------------------------------------------------------------
 

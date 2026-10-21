@@ -70,7 +70,7 @@ function topDown(size) {
     const s = freshScene(size);
     const scn = s.scene;
     scn.setCamera({ fov: 40, near: 0.1, far: 20, position: [0, 4, 0.001], target: [0, 0, 0] });
-    scn.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+    scn.setToneMap({ mode: 'linear', gamma: 1.0 });
     scn.setAmbient([0, 0, 0]);
     return { s, scn };
 }
@@ -161,7 +161,7 @@ if (!probe.scene) {
         const scn = s.scene;
         // Under the quad, looking up at its back.
         scn.setCamera({ fov: 40, near: 0.1, far: 20, position: [0, -4, 0.001], target: [0, 0, 0] });
-        scn.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+        scn.setToneMap({ mode: 'linear', gamma: 1.0 });
         scn.setAmbient([0, 0, 0]);
         scn.createLight({ type: 'directional', direction: [0, 1, 0], intensity: 3 });   // from below
         const shot = (opts) => {
@@ -181,7 +181,7 @@ if (!probe.scene) {
         const t = freshScene(96);
         const scn2 = t.scene;
         scn2.setCamera({ fov: 40, near: 0.1, far: 20, position: [0, -4, 0.001], target: [0, 0, 0] });
-        scn2.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+        scn2.setToneMap({ mode: 'linear', gamma: 1.0 });
         scn2.setAmbient([0, 0, 0]);
         scn2.createLight({ type: 'directional', direction: [0, -1, 0], intensity: 3 });  // from above
         const shot2 = (opts) => {
@@ -264,7 +264,7 @@ if (!probe.scene) {
         const s = freshScene(96);
         const scn = s.scene;
         scn.setCamera({ fov: 40, near: 0.1, far: 30, position: [0, 1, 6], target: [0, 1, 0] });
-        scn.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+        scn.setToneMap({ mode: 'linear', gamma: 1.0 });
         scn.createLight({ type: 'directional', direction: [0, -0.5, -1], intensity: 3 });
         // A tall thin blade whose top bends (vertex colour R is the bend).
         const blade = {

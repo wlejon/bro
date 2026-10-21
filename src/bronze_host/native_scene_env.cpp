@@ -313,6 +313,9 @@ const char* bro_scene_SceneGraph_cullStatsJson(void* self) {
     j["worldJobs"] = s.worldJobs;
     j["worldQueued"] = s.worldQueued;
     j["worldWorstError"] = s.worldWorstError;
+    j["exposureEv"] = s.exposureEv;
+    j["meteredEv"] = s.meteredEv;
+    j["exposureScale"] = s.exposureScale;
     tl_cullJson = j.dump();
     return tl_cullJson.c_str();
 }

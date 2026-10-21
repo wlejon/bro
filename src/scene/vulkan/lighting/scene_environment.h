@@ -14,9 +14,10 @@
 // captures with the same GGX pass (prefilter()).
 //
 // Sky. drawSky() draws, into whatever target is open (the HDR scope, a probe
-// face), the atmosphere when it is enabled, else the radiance cube when an
-// environment is loaded, then the starfield added on top — the GL renderer's
-// order. Perspective cameras only: an orthographic view has no direction.
+// face), the atmosphere when it is enabled (from its sky-view table,
+// scene_atmosphere.h), else the radiance cube when an environment is loaded,
+// then the starfield added on top. Perspective cameras only: an
+// orthographic view has no direction.
 
 #include "scene/vulkan/frame/scene_vk_allocator.h"
 #include "scene/vulkan/frame/scene_vk_descriptors.h"
@@ -46,7 +47,8 @@ public:
     /// Bake the BRDF LUT if it has not been yet (outside any rendering).
     bool ensureBrdfLut(SceneGpu& gpu, VkCommandBuffer cmd);
 
-    /// The lighting block's image-based lighting and atmosphere fields.
+    /// The lighting block's image-based lighting fields (the atmosphere's
+    /// are SceneAtmosphere::fill's).
     void fillLighting(SceneLightingUniforms& out, const SceneRenderer& renderer) const;
 
     /// The lighting set's environment bindings (4 irradiance, 5 prefilter,

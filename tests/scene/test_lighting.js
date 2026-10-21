@@ -230,7 +230,7 @@ if (!vis.scene) {
     scn.createLight({ type: 'point', position: [0, 0, 2.2], color: [1, 1, 1], intensity: 12, range: 20 });
 
     // --- setAmbient: flat additive term ----------------------------------------
-    scn.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+    scn.setToneMap({ mode: 'linear', gamma: 1.0 });
     scn.setAmbient([0, 0, 0]);
     const ambDark = scn.captureFrame();
     scn.setAmbient([1, 1, 1]);
@@ -241,21 +241,48 @@ if (!vis.scene) {
         avgBrightness(ambBright) + ' vs ' + avgBrightness(ambDark));
     scn.setAmbient([0.03, 0.03, 0.035]); // restore doc default
 
-    // --- setToneMap: exposure is a pre-tonemap multiplier -----------------------
-    scn.setToneMap({ mode: 'linear', exposure: 0.1, gamma: 1.0 });
+    // --- setExposure: fixed EV, compensation in stops ----------------------------
+    scn.setExposure({ compensation: -3 });
     const lowExposure = scn.captureFrame();
-    scn.setToneMap({ mode: 'linear', exposure: 3.0, gamma: 1.0 });
+    scn.setExposure({ compensation: 1.5 });
     const highExposure = scn.captureFrame();
     assert(avgBrightness(highExposure) > avgBrightness(lowExposure),
-        'higher exposure brightens the frame: ' +
+        'more exposure compensation brightens the frame: ' +
         avgBrightness(highExposure) + ' vs ' + avgBrightness(lowExposure));
+    // The same exposure spelled as an EV: the default fixed EV is -log2(1.2)
+    // (a scale of 1), so ev 1.5 - log2(1.2) less 3 stops is compensation -3.
+    scn.setExposure({ ev: 3 - Math.log2(1.2) });
+    const sameAsLow = scn.captureFrame();
+    assert(Math.abs(avgBrightness(sameAsLow) - avgBrightness(lowExposure)) < 0.5,
+        'ev and compensation are one exposure: ' + avgBrightness(sameAsLow) + ' vs ' + avgBrightness(lowExposure));
+
+    // --- setExposure: auto meters the frame on the GPU --------------------------
+    // The first metered frame takes the metered EV outright; the stats read
+    // back a few frames late, never stalling a frame.
+    scn.setExposure({ mode: 'auto' });
+    for (let i = 0; i < 6; i++) scn.captureFrame();
+    const dim = scn.cullStats();
+    scn.setAmbient([1, 1, 1]);
+    for (let i = 0; i < 6; i++) { advanceTime(50); scn.captureFrame(); }   // the eye adapts over time
+    const bright = scn.cullStats();
+    assert(Number.isFinite(dim.meteredEv) && Number.isFinite(dim.exposureEv),
+        'cullStats reports the metered and applied EV: ' + dim.meteredEv + ', ' + dim.exposureEv);
+    assert(bright.meteredEv > dim.meteredEv + 0.5,
+        'a brighter frame meters a higher EV: ' + bright.meteredEv + ' vs ' + dim.meteredEv);
+    assert(Math.abs(dim.exposureEv - dim.meteredEv) < 0.05,
+        'the first metered EV is applied as is: ' + dim.exposureEv + ' vs ' + dim.meteredEv);
+    assert(bright.exposureEv > dim.exposureEv + 0.1 && bright.exposureEv <= bright.meteredEv + 0.01,
+        'then the exposure adapts toward the new metering, without overshoot: ' +
+        dim.exposureEv + ' -> ' + bright.exposureEv + ' (metered ' + bright.meteredEv + ')');
+    scn.setAmbient([0.03, 0.03, 0.035]);
+    scn.setExposure({});   // back to the fixed default
 
     // --- setToneMap: mode changes the HDR->LDR curve ----------------------------
-    scn.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+    scn.setToneMap({ mode: 'linear', gamma: 1.0 });
     const linearImg = scn.captureFrame();
-    scn.setToneMap({ mode: 'reinhard', exposure: 1.0, gamma: 1.0 });
+    scn.setToneMap({ mode: 'reinhard', gamma: 1.0 });
     const reinhardImg = scn.captureFrame();
-    scn.setToneMap({ mode: 'aces', exposure: 1.0, gamma: 1.0 });
+    scn.setToneMap({ mode: 'aces', gamma: 1.0 });
     const acesImg = scn.captureFrame();
 
     const linearMax = maxChannel(linearImg);
@@ -270,7 +297,7 @@ if (!vis.scene) {
         'aces tonemap rolls off below linear clip: ' + acesMax + ' vs ' + linearMax);
     assert(Math.abs(reinhardMax - acesMax) > 2 || Math.abs(reinhardMax - linearMax) > 2,
         'reinhard and aces produce visibly different highlight rolloff');
-    scn.setToneMap({ mode: 'aces', exposure: 1.0, gamma: 2.2 }); // restore doc default
+    scn.setToneMap({ mode: 'aces', gamma: 2.2 }); // restore doc default
 
     // --- setEnvironment: null clears to the flat-ambient fallback ---------------
     // No .hdr test asset ships in this repo (see docs/lighting-api.js — the
@@ -288,7 +315,7 @@ if (!vis.scene) {
     scn.setEnvironment({ rotation: Math.PI / 2 });
 
     // --- setBloom: bright-pass + blur adds energy around the highlight ----------
-    scn.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+    scn.setToneMap({ mode: 'linear', gamma: 1.0 });
     scn.setBloom({ enabled: false });
     const bloomOff = scn.captureFrame();
     scn.setBloom({ enabled: true, threshold: 0.3, intensity: 3.0, strength: 3.0 });

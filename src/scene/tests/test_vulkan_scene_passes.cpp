@@ -174,6 +174,9 @@ int main() {
 
         std::vector<uint8_t> px = renderAndRead(graph);
         assert(at(px, kSize / 2, kSize / 2).a == 255);
+        scene::ExposureSettings metered;   // the histogram and adaptation run too
+        metered.mode = scene::ExposureSettings::Mode::Auto;
+        graph.setExposure(metered);
         px = renderAndRead(graph);   // second frame: inline readback path, loaded scopes
         assert(at(px, kSize / 2, kSize / 2).a == 255);
 
@@ -206,7 +209,7 @@ int main() {
             scene::SceneGraph graph;
             graph.setCanvasSize(kSize, kSize);
             graph.setCamera(1.0f, 1.0f, 0.1f, 100.0f, {0.0f, 0.0f, 4.0f}, {0.0f, 0.0f, 0.0f});
-            graph.setToneMap(scene::SceneRenderer::ToneMap::Linear, 1.0f, 1.0f);
+            graph.setToneMap(scene::SceneRenderer::ToneMap::Linear, 1.0f);
             scene::Particles3DNode* p = graph.createParticles3D("p");
             graph.root()->addChild(p);
             p->setTexturePath(texture);

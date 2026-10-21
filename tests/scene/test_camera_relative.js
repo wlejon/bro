@@ -38,7 +38,7 @@ if (!s.scene) {
     missingGpuContext('scene');
 } else {
     const scn = s.scene;
-    scn.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+    scn.setToneMap({ mode: 'linear', gamma: 1.0 });
     scn.setAmbient({ color: [0.1, 0.1, 0.1] });
 
     const ground = scn.createMesh({ mesh: 'plane', halfW: 6, halfD: 6, color: [0.7, 0.7, 0.7, 1],

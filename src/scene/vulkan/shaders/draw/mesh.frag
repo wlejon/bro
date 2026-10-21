@@ -352,8 +352,8 @@ void main() {
         indirect *= shade;
     }
 
-    outColor = vec4(color, alpha);
+    outColor = vec4(min(color, vec3(SCENE_HDR_MAX)), alpha);
 #ifdef SCENE_INDIRECT_OUTPUT
-    outIndirect = vec4(indirect, 0.0);
+    outIndirect = vec4(min(indirect, vec3(SCENE_HDR_MAX)), 0.0);
 #endif
 }

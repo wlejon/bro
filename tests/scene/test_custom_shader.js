@@ -34,7 +34,7 @@ function freshScene(size) {
     if (sc) {
         sc.setCamera({ fov: 60, near: 0.1, far: 100,
                        position: [0, 0, 4], target: [0, 0, 0] });
-        sc.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+        sc.setToneMap({ mode: 'linear', gamma: 1.0 });
     }
     return { canvas: cv, scene: sc };
 }

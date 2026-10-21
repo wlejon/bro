@@ -8,6 +8,7 @@
 
 #include "render/layer_image.h"
 #include "scene/vulkan/frame/scene_defaults.h"
+#include "scene/vulkan/lighting/scene_atmosphere.h"
 #include "scene/vulkan/lighting/scene_environment.h"
 #include "scene/vulkan/frame/scene_frame.h"
 #include "scene/vulkan/frame/scene_frame_graph.h"
@@ -58,6 +59,9 @@ public:
     /// Drop everything held for these destroyed nodes (deferred).
     void releaseNodes(std::span<const uint32_t> ids);
 
+    /// The atmosphere's tables of the last render (SceneAtmosphere::read).
+    bool readAtmosphereTables(AtmosphereTables& out) { return ready_ && atmosphere_.read(gpu_, out); }
+
     /// The last render's tonemapped result as top-down RGBA. Waits for that
     /// render (its own ticket, never the device); the copy is recorded into
     /// the render itself once a caller has asked in the previous frame, so a
@@ -84,6 +88,7 @@ private:
     SceneMeshDrawer meshes_;
     SceneEnvironment environment_;
     SceneWorldService world_;
+    SceneAtmosphere atmosphere_;
     SceneGpu gpu_;
     SceneFrameGraph graph_;
     SceneGpuTimer timer_;

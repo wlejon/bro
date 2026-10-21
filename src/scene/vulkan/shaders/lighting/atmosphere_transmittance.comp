@@ -1,0 +1,27 @@
+#version 450
+// The transmittance table (Bruneton's (mu, r) parametrisation, scene/world/atmosphere.h):
+// the air's transmittance from radius r along mu to the top of the shell.
+// A world-service job (scene_atmosphere.cpp), remade when the air changes.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+#include "lighting/atmosphere_compute.glsl"
+
+layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D outTransmittance;
+
+const int STEPS = 256;
+
+void main() {
+    ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(px, ivec2(ATM_TRANSMITTANCE_SIZE)))) return;
+    vec2 uv = (vec2(px) + 0.5) / ATM_TRANSMITTANCE_SIZE;
+    float r, mu;
+    atmTransmittanceRMu(uv, r, mu);
+    vec3 ro = vec3(0.0, 0.0, r);
+    vec3 rd = vec3(sqrt(max(1.0 - mu * mu, 0.0)), 0.0, mu);
+    float t1 = max(atmSphereFar(ro, rd, ATM_RT), 0.0);
+    float dt = t1 / float(STEPS);
+    vec3 depth = vec3(0.0);
+    for (int i = 0; i < STEPS; ++i) depth += atmMedium(length(ro + rd * (dt * (float(i) + 0.5)))).extinction;
+    imageStore(outTransmittance, px, vec4(exp(-depth * dt), 1.0));
+}

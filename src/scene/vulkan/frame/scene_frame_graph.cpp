@@ -80,6 +80,10 @@ void SceneFrameGraph::releaseNodes(SceneGpu& gpu, std::span<const uint32_t> ids)
     for (auto& pass : passes_) pass->releaseNodes(gpu, ids);
 }
 
+void SceneFrameGraph::submitted(SceneGpu& gpu, uint64_t ticket) {
+    for (auto& pass : passes_) pass->submitted(gpu, ticket);
+}
+
 void SceneFrameGraph::cleanup(SceneGpu& gpu) {
     for (auto it = passes_.rbegin(); it != passes_.rend(); ++it) (*it)->cleanup(gpu);
     passes_.clear();

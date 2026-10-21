@@ -57,7 +57,7 @@ async function run() {
         return;
     }
     requestAnimationFrame(drawGL);
-    scene.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+    scene.setToneMap({ mode: 'linear', gamma: 1.0 });
     scene.createLight({ type: 'directional', direction: [0, 0, -1], color: [1, 1, 1], intensity: 2 });
     scene.createMesh({ mesh: 'box', color: 'red', x: 0, y: 0, z: 0 });
     scene.setCamera({ fov: 60, near: 0.1, far: 100, position: [0, 0, 3], target: [0, 0, 0] });

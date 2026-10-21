@@ -18,7 +18,7 @@ function freshScene(size) {
     flush();
     const sc = cv.getContext('scene');
     if (sc) {
-        sc.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+        sc.setToneMap({ mode: 'linear', gamma: 1.0 });
         sc.setCamera({ fov: 60, near: 0.1, far: 100, position: [0.8, 0, 3.5], target: [0.8, 0, 0] });
         sc.createLight({ type: 'directional', intensity: 0 });
         sc.setAmbient({ color: [0, 0, 0] });

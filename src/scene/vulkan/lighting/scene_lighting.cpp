@@ -8,6 +8,7 @@
 #include "scene/scene_graph.h"
 #include "scene/scene_renderer.h"
 #include "scene/vulkan/frame/scene_defaults.h"
+#include "scene/vulkan/lighting/scene_atmosphere.h"
 #include "scene/vulkan/lighting/scene_environment.h"
 #include "scene/vulkan/frame/scene_frame.h"
 #include "scene/vulkan/frame/scene_gpu_resources.h"
@@ -47,8 +48,7 @@ void setLight(SceneLightUniform& out, const LightNode& l, const bromath::Vec3& e
 
 }  // namespace
 
-SceneLightingUniforms sceneLighting(const SceneRenderer& renderer, const SceneEnvironment& environment,
-                                    const bromath::Vec3& eye) {
+SceneLightingUniforms sceneLighting(const SceneRenderer& renderer, const SceneGpu& gpu, const bromath::Vec3& eye) {
     SceneLightingUniforms light{};
     const ShadowPlan& plan = renderer.shadowPlan();
     const std::vector<LightNode*>& lights = renderer.frameLights();
@@ -83,7 +83,7 @@ SceneLightingUniforms sceneLighting(const SceneRenderer& renderer, const SceneEn
         light.sunColor[3] = sun->intensity();
     }
 
-    const float* amb = renderer.effectiveAmbient();
+    const float* amb = renderer.ambient();
     light.ambientColor[0] = amb[0];
     light.ambientColor[1] = amb[1];
     light.ambientColor[2] = amb[2];
@@ -118,7 +118,8 @@ SceneLightingUniforms sceneLighting(const SceneRenderer& renderer, const SceneEn
         out.depth[1] = tile.zFar;
         out.depth[2] = tile.ortho ? 1.0f : 0.0f;
     }
-    environment.fillLighting(light, renderer);
+    gpu.environment.fillLighting(light, renderer);
+    gpu.atmosphere.fill(light.atm, eye);
     return light;
 }
 
@@ -144,6 +145,7 @@ VkDescriptorSet writeLightingSet(SceneGpu& gpu, const SceneLightingUniforms& uni
     writer.writeImage(3, shadeMap ? shadeMap->view : d.white.view, VK_NULL_HANDLE,
                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
     gpu.environment.writeBindings(writer, d);
+    gpu.atmosphere.writeBindings(writer);
     writer.updateSet(gpu.device.device(), set);
     return set;
 }

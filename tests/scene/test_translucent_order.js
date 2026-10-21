@@ -18,7 +18,7 @@ if (!scene) {
     missingGpuContext('scene');
 } else {
     // Linear tonemap so channel dominance survives to the LDR readback.
-    scene.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+    scene.setToneMap({ mode: 'linear', gamma: 1.0 });
 
     const centerPixel = () => {
         const img = scene.captureFrame();

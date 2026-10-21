@@ -160,7 +160,7 @@ if (!scene) {
         return { positions, scales, rotations, opacities, sh, shDegree: 0 };
     };
 
-    scene.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+    scene.setToneMap({ mode: 'linear', gamma: 1.0 });
 
     // Golden: a world-space cloud at (2,0,0) with an identity node transform
     // (the pre-fix common case, e.g. PLY-loaded clouds).

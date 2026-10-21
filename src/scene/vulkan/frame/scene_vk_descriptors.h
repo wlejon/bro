@@ -53,6 +53,25 @@ struct alignas(16) SceneShadowTileUniform {
     alignas(16) float depth[4];         // near, far, ortho
 };
 
+/// The atmosphere's block (std140) — AtmosphereGpu in
+/// shaders/common/scene_atmosphere_params.glsl; filled by SceneAtmosphere::fill
+/// (scene/vulkan/lighting/scene_atmosphere.h). Lengths in metres, positions
+/// about the planet's centre.
+struct alignas(16) AtmosphereGpu {
+    alignas(16) float sunDir[4];          // xyz = towards the sun, w = 1 when the atmosphere is on
+    alignas(16) float sunIlluminance[4];  // rgb = at the top of the air, w = the sun's angular radius
+    alignas(16) float rayleigh[4];        // rgb = scattering per metre at the ground, w = scale height
+    alignas(16) float mie[4];             // x = scattering, y = absorption, z = g, w = scale height
+    alignas(16) float ozone[4];           // rgb = absorption at the peak, w = the peak's altitude
+    alignas(16) float shell[4];           // x = planet radius, y = top radius, z = ozone half width, w = spherical
+    alignas(16) float origin[4];          // xyz = the eye about the planet's centre
+    alignas(16) float ground[4];          // rgb = ground albedo, w = lights[] index of the sun (-1: none)
+    alignas(16) float skyView[4];         // x = r, y = mu_s the sky-view table was made at, z = jitter
+    alignas(16) float froxel[4];          // xyz = this eye minus the froxel eye, w = the volume's depth
+    alignas(16) float froxelViewProj[16]; // relative to the froxel eye -> its clip space
+};
+static_assert(sizeof(AtmosphereGpu) == 10 * 16 + 64);
+
 /// The lighting block (set 1), std140 — shaders/common/scene_lighting.glsl.
 struct alignas(16) SceneLightingUniforms {
     alignas(16) float sunDirection[4];  // dominant directional light, w = 1 when present
@@ -70,14 +89,8 @@ struct alignas(16) SceneLightingUniforms {
     alignas(16) float shadeOrigin[4];   // xyz = origin, w = hasShadeMap (1 or 0)
     alignas(16) float shadeParams[4];   // x = cellSize, y = hex, z = width, w = height
     alignas(16) float iblParams[4];     // x = enabled, y = intensity, z = rotation (rad), w = prefilter max LOD
-    // The atmosphere (shaders/common/scene_atmosphere.glsl); atmSunDir.w = enabled.
-    alignas(16) float atmSunDir[4];     // xyz = unit vector towards the sun
-    alignas(16) float atmSunColor[4];   // rgb = solar irradiance, a = planet radius
-    alignas(16) float atmBetaR[4];      // rgb = Rayleigh scattering per metre, a = thickness
-    alignas(16) float atmParams[4];     // x = Mie scattering, y = Mie g, z = Rayleigh / w = Mie scale height
-    alignas(16) float atmParams2[4];    // x = sea level, y = spherical, z = multi-scatter, w = sun angular radius
-    alignas(16) float atmCenter[4];     // xyz = planet centre, w = sun disk intensity
     alignas(16) float groundBounce[4];  // rgb = the ground's bounce, irradiance over pi and intensity (0: none)
+    AtmosphereGpu atm;                  // the atmosphere (sunDir[3] = 1 when on)
 };
 static_assert(sizeof(SceneLightUniform) == 80 && sizeof(SceneShadowTileUniform) == 112);
 
@@ -99,7 +112,8 @@ public:
     /// Set 1 of every lit pipeline: lighting UBO, shadow atlas (with
     /// `shadowCompareSampler` immutable — SceneVkDevice::shadowCompareSampler),
     /// reflection probe cubemap, tile shade map, then the environment's
-    /// irradiance and prefiltered cubes, the BRDF LUT and the sky cube.
+    /// irradiance and prefiltered cubes, the BRDF LUT and the sky cube, the
+    /// shared sampler (8), and the atmosphere's tables (9-13).
     static VkDescriptorSetLayout createLightingLayout(VkDevice device, VkSampler shadowCompareSampler,
                                                       VkSampler linearSampler);
 

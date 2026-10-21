@@ -70,7 +70,7 @@ function dropScene(s) {
 
 // Standard rig: gray floor, straight-down sun, camera on the +Z side above.
 function setupFloorScene(scn) {
-    scn.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+    scn.setToneMap({ mode: 'linear', gamma: 1.0 });
     scn.createLight({ type: 'directional', direction: [0, -1, 0],
                       color: [1, 1, 1], intensity: 3 });
     scn.createMesh({ mesh: 'plane', halfW: 5, halfD: 5, color: [0.5, 0.5, 0.5] });
@@ -313,7 +313,7 @@ if (!probe.scene) {
     {
         const s = freshScene(S);
         const scn = s.scene;
-        scn.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+        scn.setToneMap({ mode: 'linear', gamma: 1.0 });
         scn.createLight({ type: 'directional', direction: [0, -1, 0],
                           color: [1, 1, 1], intensity: 3 });
         scn.createMesh({ mesh: 'plane', halfW: 5, halfD: 5, color: [0.5, 0.5, 0.5] });
@@ -381,7 +381,7 @@ if (!probe.scene) {
     {
         const s = freshScene(S);
         const scn = s.scene;
-        scn.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+        scn.setToneMap({ mode: 'linear', gamma: 1.0 });
         scn.setAmbient({ color: [0.5, 0.5, 0.5] });
         scn.setCamera({ fov: 60, near: 0.1, far: 100, position: [0, 2, 4], target: [0, 0.5, 0] });
         scn.createMesh({ mesh: 'plane', halfW: 5, halfD: 5, color: [0.5, 0.5, 0.5] });

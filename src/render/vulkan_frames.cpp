@@ -253,7 +253,7 @@ VkDescriptorPool VulkanFrames::createDescriptorPool() {
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kDescriptorSetsPerPool * 2},
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, kDescriptorSetsPerPool},
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kDescriptorSetsPerPool},
-        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, kDescriptorSetsPerPool},
+        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, kDescriptorSetsPerPool * 8},
         {VK_DESCRIPTOR_TYPE_SAMPLER, kDescriptorSetsPerPool},
         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, kDescriptorSetsPerPool / 2},
     };

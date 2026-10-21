@@ -1,0 +1,114 @@
+#version 450
+// The sky's light on a surface (docs/scene-world-architecture.md §7): for
+// each sun angle (mu_s) and altitude, the radiance arriving from every
+// direction, as l <= 2 spherical harmonics in the sun's frame (z up, x the
+// sun's horizontal direction; the six coefficients even across that plane,
+// scene/world/atmosphere.h), for a sun of 1. The upper hemisphere is the
+// sky; the lower is the planet's surface (its albedo lit by the sun and by
+// the sky over it) seen through the air. The lit shaders turn it into
+// irradiance with direction (scene_lighting.glsl, sceneSkyLight).
+// One workgroup a texel; a world-service job (scene_atmosphere.cpp), after
+// the transmittance and multiple-scattering tables.
+
+layout(local_size_x = 64) in;
+
+#define ATM_READS_TABLES
+#include "lighting/atmosphere_compute.glsl"
+
+layout(set = 0, binding = 3, rgba16f) uniform writeonly image3D outSkyLight;
+
+const int STEPS = 24;
+const uint GROUND_DIRS = 2u;   // a thread's share of the ground's hemisphere
+const uint SKY_DIRS = 4u;      // a thread's share of the sphere
+
+shared vec3 sharedE[64];
+shared vec3 sharedC[6][64];
+
+// The radiance along rd from ro through the air only (sun 1 towards `sun`).
+vec3 atmAirRadiance(vec3 ro, vec3 rd, vec3 sun, out vec3 T, out bool ground, out float tEnd) {
+    T = vec3(1.0);
+    float t0, t1;
+    tEnd = 0.0;
+    if (!atmSegment(ro, rd, t0, t1, ground)) return vec3(0.0);
+    tEnd = t1;
+    return atmMarch(ro, rd, sun, t0, t1, STEPS, T);
+}
+
+void main() {
+    ivec2 px = ivec2(gl_WorkGroupID.xy);
+    uint i = gl_LocalInvocationIndex;
+    vec2 uv = (vec2(px) + 0.5) / ATM_SKYLIGHT_SIZE;
+    float muS = atmSunFromUnit(atmTexelToUnit(uv.x, ATM_SKYLIGHT_SIZE.x));
+    float hx = atmTexelToUnit(uv.y, ATM_SKYLIGHT_SIZE.y);
+    float r = ATM_RB + hx * hx * (ATM_RT - ATM_RB);
+    r = clamp(r, ATM_RB + 1.0, ATM_RT - 1.0);
+    vec3 sun = vec3(sqrt(max(1.0 - muS * muS, 0.0)), 0.0, muS);
+
+    // The sky's irradiance on the ground below, at this sun: cosine-weighted
+    // directions over the upper hemisphere, so E = pi * their mean radiance.
+    vec3 g0 = vec3(0.0, 0.0, ATM_RB + 1.0);
+    vec3 sumE = vec3(0.0);
+    for (uint k = 0u; k < GROUND_DIRS; ++k) {
+        uint n = i * GROUND_DIRS + k;
+        float a = (float(n % 16u) + 0.5) / 16.0, b = (float(n / 16u) + 0.5) / 8.0;
+        float phi = 2.0 * ATM_PI * a, z = sqrt(1.0 - b);
+        float s = sqrt(max(1.0 - z * z, 0.0));
+        vec3 rd = vec3(s * cos(phi), s * sin(phi), max(z, 1e-3));
+        vec3 T;
+        bool ground;
+        float tEnd;
+        sumE += atmAirRadiance(g0, normalize(rd), sun, T, ground, tEnd);
+    }
+    sharedE[i] = sumE;
+    barrier();
+    for (uint stride = 32u; stride > 0u; stride >>= 1u) {
+        if (i < stride) sharedE[i] += sharedE[i + stride];
+        barrier();
+    }
+    vec3 groundSky = ATM_PI * sharedE[0] / float(64u * GROUND_DIRS);
+    barrier();
+
+    // The sphere about the point, projected onto the six basis functions.
+    vec3 ro = vec3(0.0, 0.0, r);
+    vec3 c[6] = vec3[6](vec3(0.0), vec3(0.0), vec3(0.0), vec3(0.0), vec3(0.0), vec3(0.0));
+    const float N = float(64u * SKY_DIRS);
+    for (uint k = 0u; k < SKY_DIRS; ++k) {
+        // A Fibonacci sphere.
+        float n = float(i * SKY_DIRS + k) + 0.5;
+        float z = 1.0 - 2.0 * n / N;
+        float phi = 2.39996323 * n;
+        float s = sqrt(max(1.0 - z * z, 0.0));
+        vec3 rd = vec3(s * cos(phi), s * sin(phi), z);
+        vec3 T;
+        bool ground;
+        float tEnd;
+        vec3 L = atmAirRadiance(ro, rd, sun, T, ground, tEnd);
+        if (ground) {
+            vec3 n3 = normalize(ro + rd * tEnd);
+            float mu = dot(n3, sun);
+            vec3 direct = atmSunTransmittance(ATM_RB, mu) * max(mu, 0.0);
+            L += T * ATM.ground.rgb / ATM_PI * (direct + groundSky);
+        }
+        float bas[6];
+        atmShBasis6(rd, bas);
+        for (int j = 0; j < 6; ++j) c[j] += L * bas[j];
+    }
+    for (int j = 0; j < 6; ++j) sharedC[j][i] = c[j];
+    barrier();
+    for (uint stride = 32u; stride > 0u; stride >>= 1u) {
+        if (i < stride)
+            for (int j = 0; j < 6; ++j) sharedC[j][i] += sharedC[j][i + stride];
+        barrier();
+    }
+    if (i == 0u) {
+        const float w = 4.0 * ATM_PI / N * ATM_TABLE_SCALE;
+        vec3 k0 = sharedC[0][0] * w, k1 = sharedC[1][0] * w, k2 = sharedC[2][0] * w;
+        vec3 k3 = sharedC[3][0] * w, k4 = sharedC[4][0] * w, k5 = sharedC[5][0] * w;
+        // 18 floats, coefficient-major, four a layer.
+        imageStore(outSkyLight, ivec3(px, 0), vec4(k0, k1.x));
+        imageStore(outSkyLight, ivec3(px, 1), vec4(k1.yz, k2.xy));
+        imageStore(outSkyLight, ivec3(px, 2), vec4(k2.z, k3));
+        imageStore(outSkyLight, ivec3(px, 3), vec4(k4, k5.x));
+        imageStore(outSkyLight, ivec3(px, 4), vec4(k5.yz, 0.0, 0.0));
+    }
+}

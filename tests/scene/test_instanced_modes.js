@@ -14,7 +14,7 @@ function freshScene(size) {
     document.body.appendChild(cv);
     flush();
     const sc = cv.getContext('scene');
-    if (sc) sc.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+    if (sc) sc.setToneMap({ mode: 'linear', gamma: 1.0 });
     return { canvas: cv, scene: sc };
 }
 

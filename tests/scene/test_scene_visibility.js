@@ -12,7 +12,7 @@ function freshScene(size) {
     document.body.appendChild(cv);
     flush();
     const sc = cv.getContext('scene');
-    if (sc) sc.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+    if (sc) sc.setToneMap({ mode: 'linear', gamma: 1.0 });
     return { canvas: cv, scene: sc };
 }
 
@@ -94,7 +94,7 @@ if (!probe.scene) {
     {
         const s = freshScene(S);
         const sc = s.scene;
-        sc.setToneMap({ mode: 'aces', exposure: 1.0 });
+        sc.setToneMap({ mode: 'aces' });
         sc.setAtmosphere({ sunPosition: [0, 0.6, 0.8] });
         sc.setCamera({ fov: 60, near: 0.1, far: 1000, position: [0, 2, 0], target: [0, 4, -5] });
         sc.createMesh({ mesh: 'box', z: 20 });   // behind the camera

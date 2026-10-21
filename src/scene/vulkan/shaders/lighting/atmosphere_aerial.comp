@@ -1,0 +1,49 @@
+#version 450
+// The aerial-perspective volume (Hillaire 2020 §5.4): 32 x 32 columns over
+// the camera's frustum, 32 slices deep along each, slice k holding the air
+// from the eye to distance depth * ((k + 1) / 32)^2 (scene/world/atmosphere.h):
+// its in-scattered radiance for a sun of 1 (binding 3) and its
+// transmittance (binding 4). One invocation a column, marching it once
+// through every slice, the part of each slice inside the shell in equal
+// steps. Made every frame on the frame's compute stream (scene_atmosphere.cpp);
+// the lit shaders read it in sceneAir (scene_lighting.glsl).
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+#define ATM_READS_TABLES
+#include "lighting/atmosphere_compute.glsl"
+
+layout(set = 0, binding = 3, rgba16f) uniform writeonly image3D outInscatter;
+layout(set = 0, binding = 4, rgba16f) uniform writeonly image3D outTransmittance;
+
+const int SUBSTEPS = 8;
+
+void main() {
+    ivec2 col = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(col, ivec2(ATM_FROXEL_XY)))) return;
+    vec2 ndc = (vec2(col) + 0.5) / ATM_FROXEL_XY * 2.0 - 1.0;
+    vec4 h = block.froxelInvViewProj * vec4(ndc, 0.5, 1.0);
+    vec3 rd = normalize(h.xyz / h.w);
+    vec3 ro = ATM.origin.xyz;
+    vec3 sun = ATM.sunDir.xyz;
+    float tIn = atmSphereNear(ro, rd, ATM_RT);
+    float tOut = atmSphereFar(ro, rd, ATM_RT);
+    float tGround = atmGroundHit(ro, rd);   // no air inside the planet
+    if (tGround >= 0.0) tOut = min(tOut, tGround);
+    bool air = tIn >= 0.0 && tOut > tIn;
+    float depth = ATM.froxel.w;
+
+    vec3 L = vec3(0.0), T = vec3(1.0);
+    float prev = 0.0;
+    for (int k = 0; k < int(ATM_FROXEL_SLICES); ++k) {
+        float s = float(k + 1) / ATM_FROXEL_SLICES;
+        float d = depth * s * s;
+        if (air) {
+            float a = max(prev, tIn), b = min(d, tOut);
+            if (b > a) L += atmMarch(ro, rd, sun, a, b, SUBSTEPS, T);
+        }
+        prev = d;
+        imageStore(outInscatter, ivec3(col, k), vec4(L * ATM_TABLE_SCALE, 1.0));
+        imageStore(outTransmittance, ivec3(col, k), vec4(T, 1.0));
+    }
+}

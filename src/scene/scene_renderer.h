@@ -7,6 +7,7 @@
 // reads its settings from here every frame.
 
 #include "render/layer_image.h"
+#include "scene/exposure.h"
 #include "scene/world/atmosphere.h"
 #include "scene/nodes/light_node.h"
 #include "scene/world/shadow_plan.h"
@@ -29,7 +30,7 @@ namespace bro::render { class VulkanContext; }
 
 namespace bro::scene {
 
-namespace vk { class SceneVkBridge; }
+namespace vk { class SceneVkBridge; struct AtmosphereTables; }
 
 class SceneGraph;
 class SceneNode;
@@ -71,6 +72,10 @@ struct CullStats {
     float worldBudgetMs = 0.0f, worldSpentMs = 0.0f;
     int worldJobs = 0, worldQueued = 0;
     float worldWorstError = 0.0f;
+    // The exposure (scene/exposure.h): the applied EV100 (before the
+    // compensation), the metered one and the scale the tonemap multiplied
+    // by, as of the newest frame the GPU finished (a frame or two behind).
+    float exposureEv = 0.0f, meteredEv = 0.0f, exposureScale = 1.0f;
 };
 
 class SceneRenderer {
@@ -144,16 +149,26 @@ public:
 
     enum class ToneMap : uint8_t { Linear, Reinhard, ACES };
 
-    void setToneMap(ToneMap mode, float exposure, float gamma) {
-        toneMap_ = mode; exposure_ = exposure; gamma_ = gamma;
+    void setToneMap(ToneMap mode, float gamma) {
+        toneMap_ = mode; gamma_ = gamma;
     }
     ToneMap toneMap() const { return toneMap_; }
-    float exposure() const { return exposure_; }
     float gamma() const { return gamma_; }
 
+    /// The exposure (scene/exposure.h): a fixed EV, or metered from each
+    /// frame's luminance with eye adaptation.
+    void setExposure(const ExposureSettings& e) { exposure_ = e; }
+    const ExposureSettings& exposureSettings() const { return exposure_; }
+    /// Scene time passed (the scene's tick): the eye adapts over it.
+    void advanceExposureTime(float dt) { pendingExposureDt_ += std::max(dt, 0.0f); }
+    /// The scene time this render adapts over: what passed since the last render.
+    float exposureDt() const { return exposureDt_; }
+
+    /// The flat ambient (without the atmosphere and an environment).
     void setAmbient(float r, float g, float b) {
         ambientColor_[0] = r; ambientColor_[1] = g; ambientColor_[2] = b;
     }
+    const float* ambient() const { return ambientColor_; }
 
     /// The light the ground throws back up: the albedo of a level ground lit
     /// by the sun and the sky, which lights every surface's lower hemisphere
@@ -165,21 +180,6 @@ public:
         groundBounce_[0] = std::max(r, 0.0f); groundBounce_[1] = std::max(g, 0.0f); groundBounce_[2] = std::max(b, 0.0f);
     }
     const float* groundBounce() const { return groundBounce_; }
-
-    /// The solar irradiance the atmosphere integrates with: the explicit
-    /// atmosphere sun colour, else the brightest directional light.
-    const float* effectiveSunColor() const {
-        return atmosphere_.sunColorExplicit ? atmosphere_.sunColor
-                                            : sunIrradiance_;
-    }
-
-    /// The ambient the lit shaders get. With the atmosphere on this is the
-    /// sky's own irradiance at the camera's altitude (refreshed per frame by
-    /// updateSkyAmbient), so a surface is lit by the sky it is under; with it
-    /// off it is whatever setAmbient was given.
-    const float* effectiveAmbient() const {
-        return atmosphere_.enabled ? skyAmbient_ : ambientColor_;
-    }
 
     void setTiltShift(bool enabled, float focusCenter, float focusWidth,
                       float feather, float strength, float saturation,
@@ -428,11 +428,15 @@ public:
     /// empty after the first call per load.
     std::vector<uint16_t> takeEnvironmentPixels() { return std::move(envPixels_); }
 
-    void setAtmosphere(const AtmosphereParams& a) {
-        atmosphere_ = a;
-        skyAmbientCamY_ = 1e30f;   // sun moved: force a re-integration
-    }
+    /// The atmosphere (scene/world/atmosphere.h): with it on, the sky, the
+    /// air in front of every surface and the sky's light on them are its
+    /// (scene/vulkan/lighting/scene_atmosphere.h).
+    void setAtmosphere(const AtmosphereParams& a) { atmosphere_ = a; }
     const AtmosphereParams& atmosphere() const { return atmosphere_; }
+    /// Tables of the atmosphere, read back from the GPU (waits for the last
+    /// render): bro_atmosphere_test's check of them against a reference.
+    /// False when nothing has been rendered with the atmosphere on.
+    bool readAtmosphereTables(vk::AtmosphereTables& out);
 
     void  setEnvironmentIntensity(float i) { envIntensity_ = (i < 0.0f) ? 0.0f : i; }
     float environmentIntensity() const { return envIntensity_; }
@@ -519,11 +523,6 @@ private:
     void computeShadowBounds(bromath::AABB3& casters,
                              bromath::AABB3& receivers) const;
 
-    // Sky irradiance, recomputed from atmosphere_ and the camera altitude.
-    // Cached against the inputs it depends on so a static camera under a
-    // static sun costs nothing.
-    void updateSunIrradiance(const std::vector<LightNode*>& lights);
-    void updateSkyAmbient(float camY);
 
     /// The graph this renderer draws. Outlives the renderer (the graph owns
     /// it by value); nodes/camera/canvas state are read through it.
@@ -547,7 +546,9 @@ private:
 
     // Tonemap + exposure
     ToneMap toneMap_ = ToneMap::ACES;
-    float exposure_ = 1.0f;
+    ExposureSettings exposure_;
+    float pendingExposureDt_ = 0.0f;   // scene time since the last render
+    float exposureDt_ = 0.0f;          // this render's
     float gamma_ = 2.2f;
     float ambientColor_[3] = {0.03f, 0.03f, 0.03f};
     float groundBounce_[3] = {0.0f, 0.0f, 0.0f};
@@ -688,12 +689,6 @@ private:
     float  envRotation_ = 0.0f;
     AtmosphereParams atmosphere_;
     StarfieldParams starfield_;
-
-    // Solar irradiance taken from the scene's brightest directional light,
-    // so the atmosphere scatters the same sun the surface is lit by.
-    float sunIrradiance_[3] = {3.0f, 2.94f, 2.85f};
-    float skyAmbient_[3] = {0.03f, 0.03f, 0.03f};
-    float skyAmbientCamY_ = 1e30f;
 };
 
 } // namespace bro::scene

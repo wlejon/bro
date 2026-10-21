@@ -46,10 +46,59 @@
  */
 
 /**
+ * The tone curve the exposed HDR frame goes through (scene.setToneMap).
+ * Exposure is scene.setExposure's, not the curve's.
  * @typedef {Object} ToneMapConfig
- * @property {string} [mode]
- * @property {number} [exposure]
- * @property {number} [whitePoint]
+ * @property {string} [mode]  "aces" (default), "reinhard" or "linear".
+ * @property {number} [gamma]  Display gamma (default 2.2; `whitePoint` is an alias).
+ */
+
+/**
+ * Exposure, in EV (scene.setExposure). Every call replaces the whole
+ * exposure; a field left out is its default. The HDR frame is multiplied by
+ *
+ *     1 / (1.2 * 2^(EV - compensation))
+ *
+ * before the tone curve: EV is a camera's EV100, so scene units only need to
+ * agree with each other. Two modes, one mechanism:
+ *  - "fixed" (default): EV is the setting. Its default, -log2(1.2) (about
+ *    -0.263), is a scale of exactly 1, for scenes lit in display units;
+ *    compensation brightens (+1 is twice as bright) or darkens. Tests and
+ *    stills want this: the frame does not depend on the frames before it.
+ *  - "auto": EV is metered from the frame on the GPU (a 128-bin histogram of
+ *    log2 luminance; the mean of the pixels between the lowPercent and
+ *    highPercent shares, EV = log2(L * 100 / 12.5)) and the applied EV
+ *    follows it exponentially, at speedUp per second toward a brighter scene
+ *    and speedDown toward a darker one: no overshoot, no oscillation. The
+ *    tone pass reads the result on the GPU, so no frame waits on the meter;
+ *    the first frame in auto takes the metered EV outright, and time is the
+ *    scene's (headless advanceTime included). scene.cullStats() reports
+ *    meteredEv, exposureEv and exposureScale a few frames late.
+ *
+ * Physical light values, for a scene lit in real units with auto exposure
+ * (lux for directional lights, which are illuminance; candela-scale numbers
+ * for point and spot lights, whose intensity is luminous intensity):
+ *  - the sun above the air: 128,000 lux (the solar constant at ~94 lm/W);
+ *    with the atmosphere on, give the sun light that and the air dims and
+ *    reddens it (about 100,000 lux at the ground at noon, a few thousand at
+ *    sunset). Without the atmosphere use the ground value directly.
+ *  - an overcast day: 1,000 to 10,000 lux; an office: 300 to 500 lux; a
+ *    living room: 50 to 150 lux; the full moon: 0.1 to 0.3 lux; a starlit
+ *    night: 0.001 lux.
+ *  - a 60 W incandescent bulb (800 lm): about 65 cd; a candle: 1 cd.
+ *  - metered EVs to expect: a sunlit scene 14 to 16, an overcast one 12 to
+ *    13, an interior 5 to 7, moonlight about -2. The meter is clamped to
+ *    [minEv, maxEv].
+ * @typedef {Object} ExposureConfig
+ * @property {string} [mode]  "fixed" (default) or "auto".
+ * @property {number} [ev]  Fixed: the exposure, EV100 (default -log2(1.2): a scale of 1).
+ * @property {number} [compensation]  Stops added on top, both modes (default 0; +1 doubles the brightness).
+ * @property {number} [speedUp]  Auto: adaptation rate per second toward a brighter scene (default 3).
+ * @property {number} [speedDown]  Auto: adaptation rate per second toward a darker scene (default 1).
+ * @property {number} [minEv]  Auto: the metered EV's lower clamp (default -6).
+ * @property {number} [maxEv]  Auto: its upper clamp (default 20).
+ * @property {number} [lowPercent]  Auto: the share of darkest pixels the meter ignores, 0..1 (default 0.1).
+ * @property {number} [highPercent]  Auto: the share above which the brightest are ignored, 0..1 (default 0.9).
  */
 
 /**
@@ -90,13 +139,45 @@
  */
 
 /**
- * Physical sky scattering. Omitted fields keep the Earth defaults.
+ * The atmosphere (scene.setAtmosphere): one model of the air from the ground
+ * to orbit (Hillaire 2020), a shell of Rayleigh and Mie scattering and an
+ * ozone layer over a spherical planet. Every call replaces the whole
+ * atmosphere; omitted fields keep Earth's values; null or {enabled: false}
+ * turns it off. While it is on it is the sky (the sun's disc and limb
+ * included), the haze between the eye and every surface (aerial
+ * perspective, from a camera-aligned 32^3 volume), the sun's light at every
+ * surface (the sun light dimmed and reddened by the air it crosses, and
+ * nothing once the sun is below a point's horizon), and the sky's light on
+ * surfaces (directional: l <= 2 spherical harmonics of the sky and the lit
+ * ground below, by sun angle and altitude), which replaces the flat ambient.
+ * The eye can be anywhere: on the ground, in the air, above the shell.
+ *
+ * The sun is the brightest directional light: its direction and its colour
+ * times intensity (the illuminance above the air, lux in physical units:
+ * 128,000 for Earth's sun, ExposureConfig) are tracked unless pinned here.
+ * Pair it with auto exposure (scene.setExposure({ mode: 'auto' })).
  * @typedef {Object} AtmosphereConfig
- * @property {Array<number>} [rayleigh]  Rayleigh scattering per metre, [r, g, b] (default [5.802e-6, 13.558e-6, 33.1e-6]).
- * @property {Array<number>} [mie]  [coefficient per metre (default 3.996e-6), anisotropy g in (-1, 1) (default 0.76)].
- * @property {number} [turbidity]  Haze: multiplies the Mie coefficient (default 1).
- * @property {Array<number>} [sunPosition]  Direction towards the sun, [x, y, z].
- * @property {number} [sunIntensity]  Pins the sun's radiance (20 * sunIntensity). Without it the sky follows the brightest directional light.
+ * @property {boolean} [enabled]  false turns it off (default true).
+ * @property {Array<number>} [rayleigh]  Rayleigh scattering per metre at the surface, [r, g, b] (default [5.802e-6, 13.558e-6, 33.1e-6]).
+ * @property {number} [rayleighScaleHeight]  Metres (default 8000).
+ * @property {number|Array<number>} [mie]  Mie scattering per metre (default 3.996e-6), or [that, g].
+ * @property {number} [mieG]  Mie anisotropy in (-1, 1) (default 0.8).
+ * @property {number} [mieAbsorption]  Per metre (default 0.444e-6).
+ * @property {number} [mieScaleHeight]  Metres (default 1200).
+ * @property {number} [turbidity]  Haze: multiplies the Mie coefficients (default 1).
+ * @property {Array<number>} [ozone]  Ozone absorption per metre at its peak, [r, g, b] (default [0.650e-6, 1.881e-6, 0.085e-6]).
+ * @property {number} [ozoneAltitude]  The ozone peak's altitude, metres (default 25000).
+ * @property {number} [ozoneWidth]  Its half-width, metres (default 15000).
+ * @property {Array<number>} [groundAlbedo]  The planet's surface, Lambertian [r, g, b] (default [0.3, 0.3, 0.3]): it lights the air and the lower half of every surface's sky light.
+ * @property {number} [planetRadius]  Metres (default 6360000).
+ * @property {number} [thickness]  The air's depth above the surface, metres (default 100000).
+ * @property {number} [seaLevel]  Flat mode: the world y that sits on the planet's surface (default 0).
+ * @property {boolean} [spherical]  false (default): the world is flat with +y up and the planet is placed under the eye; true: the scene holds a globe at `center` and the air wraps it.
+ * @property {Array<number>} [center]  Spherical mode: the planet's centre, world units (metres).
+ * @property {Array<number>} [sunDirection]  Pins the direction towards the sun, [x, y, z] (`sunPosition` is an alias).
+ * @property {Array<number>} [sunColor]  With sunIntensity, pins the sun's illuminance above the air (sunColor * sunIntensity).
+ * @property {number} [sunIntensity]
+ * @property {number} [sunAngularRadius]  Radians (default 0.004675, the real sun's).
  */
 
 /**

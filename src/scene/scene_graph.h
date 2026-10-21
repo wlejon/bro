@@ -380,14 +380,14 @@ public:
     /// Reinhard is a cheaper fallback; Linear is raw clamp to 0-1.
     using ToneMap = SceneRenderer::ToneMap;
 
-    /// Configure tonemap + exposure. Exposure is a pre-tonemap multiplier
-    /// (1.0 = neutral, 2.0 = +1 stop). `gamma` is the post-tonemap output
-    /// gamma; pass 1.0 to leave linear output (default 2.2 for sRGB).
-    void setToneMap(ToneMap mode, float exposure = 1.0f, float gamma = 2.2f) {
-        renderer_.setToneMap(mode, exposure, gamma);
-    }
+    /// Configure the tone curve. `gamma` is the post-tonemap output gamma;
+    /// pass 1.0 to leave linear output (default 2.2 for sRGB). The exposure
+    /// before it is setExposure's.
+    void setToneMap(ToneMap mode, float gamma = 2.2f) { renderer_.setToneMap(mode, gamma); }
     ToneMap toneMap() const { return renderer_.toneMap(); }
-    float exposure() const { return renderer_.exposure(); }
+    /// The exposure in EV (scene/exposure.h): fixed, or metered with eye adaptation.
+    void setExposure(const ExposureSettings& e) { renderer_.setExposure(e); }
+    const ExposureSettings& exposure() const { return renderer_.exposureSettings(); }
 
     /// Ambient fill added to every fragment after per-light contributions.
     /// Used as the flat fallback when IBL is disabled (IBL replaces it with

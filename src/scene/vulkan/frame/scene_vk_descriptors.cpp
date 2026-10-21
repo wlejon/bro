@@ -70,6 +70,11 @@ VkDescriptorSetLayout SceneVkDescriptorLayoutBuilder::createLightingLayout(VkDev
     for (uint32_t binding = 2; binding <= 7; ++binding)
         builder.addBinding(binding, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
     builder.addBinding(8, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, linearSampler);
+    // The atmosphere's tables (SceneAtmosphere::writeBindings), through the
+    // same sampler: transmittance, sky view, the aerial perspective's
+    // in-scatter and transmittance, the sky's light.
+    for (uint32_t binding = 9; binding <= 13; ++binding)
+        builder.addBinding(binding, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
     return builder.build(device);
 }
 

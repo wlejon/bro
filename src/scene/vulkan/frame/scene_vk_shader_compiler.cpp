@@ -6,6 +6,7 @@
 #include "scene_camera.glsl.src.h"
 #include "scene_lighting.glsl.src.h"
 #include "scene_atmosphere.glsl.src.h"
+#include "scene_atmosphere_params.glsl.src.h"
 #include "scene_mesh_push.glsl.src.h"
 #include "scene_shadow_push.glsl.src.h"
 #include "scene_shadow_cutout.glsl.src.h"
@@ -93,6 +94,7 @@ const char* embeddedInclude(const std::string& name) {
         {"common/scene_camera.glsl", kVkSceneCameraSrc},
         {"common/scene_lighting.glsl", kVkSceneLightingSrc},
         {"common/scene_atmosphere.glsl", kVkSceneAtmosphereSrc},
+        {"common/scene_atmosphere_params.glsl", kVkSceneAtmosphereParamsSrc},
         {"common/scene_mesh_push.glsl", kVkSceneMeshPushSrc},
         {"common/scene_shadow_push.glsl", kVkSceneShadowPushSrc},
         {"shadow/scene_shadow_cutout.glsl", kVkSceneShadowCutoutSrc},

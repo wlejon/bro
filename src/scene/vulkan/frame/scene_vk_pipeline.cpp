@@ -1,5 +1,6 @@
 #include "scene/vulkan/frame/scene_vk_pipeline.h"
 #include "render/vulkan_pipeline_cache.h"
+#include "scene/vulkan/frame/scene_vk_shader_compiler.h"
 #include "util/log.h"
 
 #include <cassert>
@@ -286,6 +287,34 @@ VkPipeline SceneVkPipelineBuilder::build(VkDevice device, VkPipelineLayout layou
     }
     render::logPipelineStats(device, pipeline);
 
+    return pipeline;
+}
+
+VkPipeline createComputePipeline(VkDevice device, BuiltinSceneShader shader, VkPipelineLayout layout,
+                                 const char* name) {
+    VkShaderModule module = SceneVkShaderCompiler::createBuiltinModule(device, shader);
+    if (!module || !layout) {
+        SceneVkShaderModule::destroy(device, module);
+        return VK_NULL_HANDLE;
+    }
+    VkComputePipelineCreateInfo ci{};
+    ci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    ci.stage.module = module;
+    ci.stage.pName = "main";
+    ci.layout = layout;
+    ci.flags = render::pipelineStatsFlags();
+    VkPipeline pipeline = VK_NULL_HANDLE;
+    if (vkCreateComputePipelines(device, render::VulkanPipelineCache::forDevice(device), 1, &ci, nullptr,
+                                 &pipeline) != VK_SUCCESS) {
+        LOG_ERROR("createComputePipeline: Failed creating %s", name);
+        pipeline = VK_NULL_HANDLE;
+    } else {
+        render::setPipelineStatsLabel(name);
+        render::logPipelineStats(device, pipeline);
+    }
+    SceneVkShaderModule::destroy(device, module);
     return pipeline;
 }
 

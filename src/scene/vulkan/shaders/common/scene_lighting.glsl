@@ -39,6 +39,8 @@ struct ShadowTile {
     vec4 depth;
 };
 
+#include "common/scene_atmosphere_params.glsl"
+
 layout(set = 1, binding = 0) uniform LightingUBO {
     vec4 sunDirection;  // the dominant directional light (decals), w = 1 when present
     vec4 sunColor;      // rgb, a = intensity
@@ -54,13 +56,8 @@ layout(set = 1, binding = 0) uniform LightingUBO {
     vec4 shadeOrigin;   // xyz = origin, w = has shade map
     vec4 shadeParams;   // x = cell size, y = hex, z = width, w = height
     vec4 iblParams;     // x = enabled, y = intensity, z = rotation, w = prefilter max LOD
-    vec4 atmSunDir;     // xyz = towards the sun, w = atmosphere enabled
-    vec4 atmSunColor;   // rgb = solar irradiance, a = planet radius
-    vec4 atmBetaR;      // rgb = Rayleigh scattering, a = thickness
-    vec4 atmParams;     // x = Mie scattering, y = Mie g, z/w = Rayleigh/Mie scale height
-    vec4 atmParams2;    // x = sea level, y = spherical, z = multi-scatter, w = sun angular radius
-    vec4 atmCenter;     // xyz = planet centre, w = sun disk intensity
     vec4 groundBounce;  // rgb = the ground's bounce, as irradiance over pi and intensity (0: none)
+    AtmosphereGpu atm;  // the atmosphere (scene/vulkan/lighting/scene_atmosphere.h), atm.sunDir.w = on
 } lighting;
 
 layout(set = 1, binding = 1) uniform sampler2DShadow shadowAtlas;
@@ -84,8 +81,89 @@ layout(set = 1, binding = 7) uniform textureCube texEnvironmentImage;
 #define texPrefilter samplerCube(texPrefilterImage, lightingSampler)
 #define texBrdfLut sampler2D(texBrdfLutImage, lightingSampler)
 #define texEnvironment samplerCube(texEnvironmentImage, lightingSampler)
+// The atmosphere's tables (scene/vulkan/lighting/scene_atmosphere.h), each for
+// a sun of 1: the transmittance (mu, r), the sky view at the eye, the aerial
+// perspective's in-scatter and transmittance over the camera's frustum, and
+// the sky's light as SH by (mu_s, altitude), five layers of four.
+layout(set = 1, binding = 9) uniform texture2D texAtmTransmittanceImage;
+layout(set = 1, binding = 10) uniform texture2D texAtmSkyViewImage;
+layout(set = 1, binding = 11) uniform texture3D texAtmInscatterImage;
+layout(set = 1, binding = 12) uniform texture3D texAtmAirTransmittanceImage;
+layout(set = 1, binding = 13) uniform texture3D texAtmSkyLightImage;
+#define texAtmTransmittance sampler2D(texAtmTransmittanceImage, lightingSampler)
+#define texAtmSkyView sampler2D(texAtmSkyViewImage, lightingSampler)
+#define texAtmInscatter sampler3D(texAtmInscatterImage, lightingSampler)
+#define texAtmAirTransmittance sampler3D(texAtmAirTransmittanceImage, lightingSampler)
+#define texAtmSkyLight sampler3D(texAtmSkyLightImage, lightingSampler)
 
+#define ATM lighting.atm
+#define ATM_TRANSMITTANCE_TEX texAtmTransmittance
 #include "common/scene_atmosphere.glsl"
+
+bool sceneAtmosphereOn() { return lighting.atm.sunDir.w > 0.5; }
+
+// The sun's light at camera-relative `pos`, for a sun of 1 at the top of
+// the air: what the air and the planet's shadow leave of it.
+vec3 sceneSunTransmittance(vec3 pos) {
+    vec3 p = atmOrigin(pos);
+    float r = length(p);
+    return atmSunTransmittance(r,dot(p, lighting.atm.sunDir.xyz) / r);
+}
+
+// The sky's light at camera-relative `pos` (scene/world/atmosphere.h): the
+// six SH coefficients a channel in the sun's frame there, times the sun.
+void sceneSkyLightSh(vec3 pos, out vec3 c[6], out mat3 frame) {
+    vec3 p = atmOrigin(pos);
+    float r = length(p);
+    vec3 up = p / r;
+    vec3 xAxis, yAxis;
+    float muS;
+    atmSunFrame(up, xAxis, yAxis, muS);
+    frame = mat3(xAxis, yAxis, up);   // columns: local x, y, z in air space
+    vec2 uv = atmSkyLightUv(r, muS);
+    vec4 l0 = textureLod(texAtmSkyLight, vec3(uv, 0.1), 0.0);
+    vec4 l1 = textureLod(texAtmSkyLight, vec3(uv, 0.3), 0.0);
+    vec4 l2 = textureLod(texAtmSkyLight, vec3(uv, 0.5), 0.0);
+    vec4 l3 = textureLod(texAtmSkyLight, vec3(uv, 0.7), 0.0);
+    vec4 l4 = textureLod(texAtmSkyLight, vec3(uv, 0.9), 0.0);
+    vec3 E = lighting.atm.sunIlluminance.rgb / ATM_TABLE_SCALE;
+    c[0] = l0.rgb * E;
+    c[1] = vec3(l0.a, l1.rg) * E;
+    c[2] = vec3(l1.ba, l2.r) * E;
+    c[3] = l2.gba * E;
+    c[4] = l3.rgb * E;
+    c[5] = vec3(l3.a, l4.rg) * E;
+}
+
+// The sky's irradiance over pi on a surface at `pos` facing `n` (the
+// atmosphere's ambient: the sky above, the lit ground below, through the air).
+vec3 sceneSkyIrradiance(vec3 pos, vec3 n) {
+    vec3 c[6];
+    mat3 frame;
+    sceneSkyLightSh(pos, c, frame);
+    vec3 d = n * frame;   // into the sun's frame
+    float b[6];
+    atmShBasis6(d, b);
+    vec3 e = ATM_PI * c[0] * b[0] + (2.0 * ATM_PI / 3.0) * (c[1] * b[1] + c[2] * b[2]) +
+             (ATM_PI / 4.0) * (c[3] * b[3] + c[4] * b[4] + c[5] * b[5]);
+    return max(e, vec3(0.0)) / ATM_PI;
+}
+
+// The sky's radiance along `dir` from `pos`, as the SH hold it (smooth: the
+// ambient's specular on a surface no probe covers).
+vec3 sceneSkyRadianceSh(vec3 pos, vec3 dir) {
+    vec3 c[6];
+    mat3 frame;
+    sceneSkyLightSh(pos, c, frame);
+    float b[6];
+    atmShBasis6(dir * frame, b);
+    return max(c[0] * b[0] + c[1] * b[1] + c[2] * b[2] + c[3] * b[3] + c[4] * b[4] + c[5] * b[5], vec3(0.0));
+}
+
+// What the scene's HDR target holds at most (RGBA16F's largest finite value,
+// rounded down): a lit surface's output is clamped to it, so a highlight of
+// a sun in lux saturates rather than turning the pixel infinite.
+const float SCENE_HDR_MAX = 64000.0;
 
 // `d` turned about +Y by `a` radians: the environment's rotation.
 vec3 rotateY(vec3 d, float a) {
@@ -469,6 +547,9 @@ vec3 sceneDirectLight(SceneSurface s) {
         }
 
         vec3 radiance = light.color.rgb * light.color.a * atten;
+        // The atmosphere's sun is that light above the air: what reaches the
+        // surface is what the air and the planet's shadow leave of it.
+        if (i == int(lighting.atm.ground.w)) radiance *= sceneSunTransmittance(s.position);
         // Wrap light through thin two-sided surfaces (leaves): lights the back
         // relative to L whether or not the front faces the light.
         if (s.twoSided && s.subsurface > 0.0 && s.translucency <= 0.0) {
@@ -568,7 +649,9 @@ vec3 probeRadiance(vec3 pos, vec3 R, float rough, out float w) {
     return textureLod(texReflectionProbe, dir, rough * lighting.probeParams.z).rgb;
 }
 
-// Ambient (indirect) light on `s`, Karis' split sum: with an environment the
+// Ambient (indirect) light on `s`, Karis' split sum: with the atmosphere its
+// sky light (SH irradiance on the diffuse part, SH radiance on the specular),
+// which takes precedence over an environment; with an environment the
 // irradiance on the diffuse part and the prefiltered radiance times the BRDF
 // LUT on the specular, both turned by the environment's rotation; without
 // one the flat ambient on the diffuse part. A bound reflection probe replaces
@@ -589,6 +672,17 @@ vec3 sceneAmbient(SceneSurface s) {
     if (lighting.probePos.w > 0.5) {
         vec3 raw = probeRadiance(s.position, R, s.roughness, probeW);
         probeSpec = raw * (F * brdf.x + brdf.y) * lighting.probeParams.x;
+    }
+    if (sceneAtmosphereOn()) {
+        // The atmosphere's sky: its light on the surface from every way it
+        // faces (the sky above, the lit ground below, through the air at
+        // the surface's height and sun), and its smooth radiance along R
+        // where no probe covers the surface.
+        vec3 kD = (1.0 - F) * (1.0 - s.metallic);
+        vec3 nI = s.sward.w > 0.0 ? normalize(mix(s.normal, s.sward.xyz, s.sward.w)) : s.normal;
+        vec3 irradiance = sceneSkyIrradiance(s.position, nI);
+        vec3 specular = sceneSkyRadianceSh(s.position, R) * (F * brdf.x + brdf.y);
+        return kD * irradiance * s.baseColor + mix(specular, probeSpec, probeW);
     }
     if (lighting.iblParams.x > 0.5) {
         float rotation = lighting.iblParams.z;
@@ -646,25 +740,72 @@ struct SceneAir {
     float fade;
 };
 
-// Aerial-perspective march: steps grow with the ray (one per 3 km) up to the
-// sky pass's count, so a far ridge resolves like the sky just above it.
-const int ATM_AERIAL_MIN_STEPS = 4;
-const int ATM_AERIAL_MAX_STEPS = 24;
-const int ATM_AERIAL_SUN_STEPS = 4;
-const float ATM_AERIAL_STEP_LENGTH = 3000.0;
+// The air between this view's eye and camera-relative `pos`, from the
+// atmosphere's tables. Inside the main camera's frustum: its aerial-
+// perspective volume (froxels over the frustum, slices squared in depth,
+// a point nearer than the first slice taking the share of it its distance
+// is), the lookup dithered by a fraction of a slice so no slice's edge bands.
+// Outside it (a reflection probe's faces): the transmittance from the
+// transmittance table (the ratio of the two points' to the top) and the
+// in-scatter as the sky-view table's radiance along the ray, by the share of
+// the ray's air that lies before the point.
+void sceneAtmosphereAir(vec3 pos, out vec3 transmittance, out vec3 inscatter) {
+    vec3 E = lighting.atm.sunIlluminance.rgb / ATM_TABLE_SCALE;   // both tables read here are scaled
+    vec3 p = pos + lighting.atm.froxel.xyz;   // relative to the froxel camera
+    vec4 clip = lighting.atm.froxelViewProj * vec4(p, 1.0);
+    vec2 ndc = clip.w > 0.0 ? clip.xy / clip.w : vec2(2.0);
+    if (all(lessThanEqual(abs(ndc), vec2(1.02)))) {
+        float d = length(p);
+        float nearWeight;
+        float w = atmFroxelW(lighting.atm.froxel.w, d, nearWeight);
+        w += (atmNoise(gl_FragCoord.xy) - 0.5) * lighting.atm.skyView.z / ATM_FROXEL_SLICES;
+        vec3 uvw = vec3(ndc * 0.5 + 0.5, clamp(w, 0.5 / ATM_FROXEL_SLICES, 1.0 - 0.5 / ATM_FROXEL_SLICES));
+        vec3 L = textureLod(texAtmInscatter, uvw, 0.0).rgb;
+        vec3 T = textureLod(texAtmAirTransmittance, uvw, 0.0).rgb;
+        inscatter = L * nearWeight * E;
+        transmittance = mix(vec3(1.0), T, nearWeight);
+        return;
+    }
+    float d = length(pos);
+    vec3 ro = atmOrigin(vec3(0.0));
+    vec3 rd = pos / max(d, 1e-4);
+    vec3 pp = ro + pos;
+    float r0 = length(ro), r1 = length(pp);
+    float mu0 = dot(ro, rd) / r0, mu1 = dot(pp, rd) / r1;
+    bool ground = atmGroundHit(ro, rd) >= 0.0;
+    vec3 tFull, tRay;
+    if (ground) {
+        // Toward the ground: the reversed ray, from the point back up past
+        // the eye (a = T(point..eye) * b).
+        vec3 a = atmTransmittanceToTop(r1, -mu1);
+        vec3 b = atmTransmittanceToTop(r0, -mu0);
+        tRay = clamp(a / max(b, vec3(1e-6)), 0.0, 1.0);
+        tFull = vec3(0.0);
+    } else {
+        vec3 a = atmTransmittanceToTop(r0, mu0);
+        vec3 b = atmTransmittanceToTop(r1, mu1);
+        tRay = clamp(a / max(b, vec3(1e-6)), 0.0, 1.0);
+        tFull = a;
+    }
+    vec3 up = ro / r0, xAxis, yAxis;
+    float muS;
+    atmSunFrame(up, xAxis, yAxis, muS);
+    vec2 h = vec2(dot(rd, xAxis), dot(rd, yAxis));
+    float hl = length(h);
+    float cosAz = hl > 1e-5 ? h.x / hl : 1.0;
+    vec3 sky = textureLod(texAtmSkyView, atmSkyViewUv(lighting.atm.skyView.x, dot(rd, up), cosAz), 0.0).rgb;
+    vec3 share = (1.0 - tRay) / max(1.0 - tFull, vec3(1e-4));
+    transmittance = tRay;
+    inscatter = sky * clamp(share, 0.0, 1.0) * E;
+}
 
 SceneAir sceneAir(vec3 pos, float camDist) {
     SceneAir air;
     air.transmittance = vec3(1.0);
     air.inscatter = vec3(0.0);
     air.fade = 0.0;
-    if (lighting.atmSunDir.w > 0.5) {
-        float dist = length(pos);
-        if (dist <= 0.0) return air;
-        int steps = int(clamp(dist / ATM_AERIAL_STEP_LENGTH, float(ATM_AERIAL_MIN_STEPS),
-                              float(ATM_AERIAL_MAX_STEPS)));
-        air.inscatter = atmScatter(atmOrigin(camera.eyeWorld.xyz), pos / dist, dist, steps, ATM_AERIAL_SUN_STEPS,
-                                   air.transmittance);
+    if (sceneAtmosphereOn()) {
+        sceneAtmosphereAir(pos, air.transmittance, air.inscatter);
         return air;
     }
     float fog = fogFactorFor(camDist, pos.y + camera.eyeWorld.y);

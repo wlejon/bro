@@ -78,6 +78,11 @@ void main() {
     vec3 ambient = lighting.ambientColor.rgb;
     vec3 sunDir = lighting.sunDirection.xyz;
     vec3 sunCol = lighting.sunColor.rgb * lighting.sunColor.a;
+    if (sceneAtmosphereOn()) {
+        // The atmosphere's sky and its sun through the air.
+        ambient = sceneSkyIrradiance(worldPos, nrm);
+        sunCol *= sceneSunTransmittance(worldPos);
+    }
     vec3 lit = ambient + sunCol * (max(dot(nrm, -sunDir), 0.0) / PI);
     vec3 rgb = albedo.rgb * push.modulate.rgb * lit * a;
 

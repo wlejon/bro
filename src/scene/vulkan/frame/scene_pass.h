@@ -102,6 +102,10 @@ public:
     /// Nodes were destroyed: drop what the pass holds for them (deferred
     /// through the frame core, never waited for).
     virtual void releaseNodes(SceneGpu& /*gpu*/, std::span<const uint32_t> /*ids*/) {}
+    /// The frame the pass last recorded into was submitted as `ticket` (on
+    /// the graphics queue): what it copied out for the CPU is readable once
+    /// that ticket completes.
+    virtual void submitted(SceneGpu& /*gpu*/, uint64_t /*ticket*/) {}
     virtual void cleanup(SceneGpu& gpu) = 0;
 };
 

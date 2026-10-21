@@ -15,7 +15,7 @@ function freshScene(size) {
     flush();
     const sc = cv.getContext('scene');
     if (sc) {
-        sc.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+        sc.setToneMap({ mode: 'linear', gamma: 1.0 });
         sc.setCamera({ fov: 60, near: 0.1, far: 100, position: [0, 0, 5], target: [0, 0, 0] });
         sc.createLight({ type: 'directional', intensity: 0 });
         sc.setAmbient({ color: [0, 0, 0] });
@@ -123,12 +123,13 @@ if (!probe.scene) {
     }
 
     // =====================================================================
-    // Unlit overlay: authored colour exact under ACES at exposure 3.
+    // Unlit overlay: authored colour exact under ACES at +1.6 EV.
     // =====================================================================
     {
         const s = freshScene(SIZE);
         const sc = s.scene;
-        sc.setToneMap({ mode: 'aces', exposure: 3.0 });
+        sc.setToneMap({ mode: 'aces' });
+        sc.setExposure({ compensation: 1.6 });
         sc.createMesh({ mesh: Mesh.box(1, 1, 0.1), color: '#4080c0', unlit: true });
         const img = sc.captureFrame();
         const c = [0, 1, 2].map((ch) => boxMean(img, ch, 60, 60, 68, 68));
