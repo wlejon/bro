@@ -18,6 +18,7 @@
 #include "scene/vulkan/frame/scene_targets.h"
 #include "scene/vulkan/frame/scene_vk_allocator.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
+#include "scene/vulkan/shadow/scene_caster_drawer.h"
 #include "scene/vulkan/shadow/scene_shadow_pages.h"
 #include "scene/vulkan/world/scene_world_service.h"
 
@@ -94,6 +95,7 @@ private:
     SceneWorldService world_;
     SceneAtmosphere atmosphere_;
     SceneShadowPages shadows_;
+    SceneCasterDrawer casters_;
     SceneGpu gpu_;
     SceneFrameGraph graph_;
     SceneGpuTimer timer_;

@@ -172,6 +172,7 @@ add_library(bro_scene STATIC
     vulkan/lighting/pass_environment.cpp
     vulkan/lighting/pass_reflection_probe.cpp
     vulkan/shadow/pass_shadow.cpp
+    vulkan/shadow/scene_caster_drawer.cpp
     vulkan/shadow/pass_shadow_copy.cpp
     vulkan/shadow/pass_shadow_mark.cpp
     vulkan/shadow/scene_shadow_pages.cpp

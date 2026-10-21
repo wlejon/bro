@@ -33,7 +33,7 @@ SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
     : device_(context),
       allocator_(device_),
       resources_(allocator_),
-      gpu_{device_, allocator_, defaults_, targets_, resources_, meshes_, environment_, world_, atmosphere_, shadows_},
+      gpu_{device_, allocator_, defaults_, targets_, resources_, meshes_, environment_, world_, atmosphere_, shadows_, casters_},
       timer_(context) {
     // The frame, in order. A pass draws into the HDR scope or brings its own
     // targets; the graph does every shared transition (scene_frame_graph.h).
@@ -93,6 +93,7 @@ SceneVkBridge::~SceneVkBridge() {
     device_.waitIdle();
     allocator_.destroyBuffer(readbackBuffer_);
     graph_.cleanup(gpu_);
+    casters_.cleanup(gpu_);
     shadows_.cleanup(gpu_);
     atmosphere_.cleanup(gpu_);
     meshes_.cleanup(gpu_);
@@ -110,7 +111,7 @@ bool SceneVkBridge::init() {
     }
     if (!defaults_.setup(device_, allocator_) || !targets_.setup(device_, allocator_) || !meshes_.setup(gpu_) ||
         !environment_.setup(device_, allocator_, defaults_) || !atmosphere_.setup(gpu_) || !shadows_.setup(gpu_) ||
-        !graph_.setup(gpu_)) {
+        !casters_.setup(gpu_) || !graph_.setup(gpu_)) {
         LOG_ERROR("SceneVkBridge: Failed setting up the scene renderer");
         return false;
     }
