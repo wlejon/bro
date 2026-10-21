@@ -356,6 +356,10 @@ void SceneEnvironment::writeBindings(SceneVkDescriptorWriter& writer, const Scen
     image(7, cube(radiance_));
 }
 
+VkImageView SceneEnvironment::prefilteredView(const SceneDefaults& d) const {
+    return prefiltered_.isValid() ? prefiltered_.view : d.cube.view;
+}
+
 // --- Sky --------------------------------------------------------------------
 
 bool SceneEnvironment::skyVisible(const SceneRenderer& renderer, bool perspective) const {

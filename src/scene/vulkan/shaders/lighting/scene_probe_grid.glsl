@@ -86,4 +86,22 @@ float pgLayerAt(float h) {
     float t = clamp((h - PG.params.w) / (pgTop() - PG.params.w), 0.0, 1.0);
     return pow(t, 1.0 / PG.eye.w) * float(PG_LAYERS - 1);
 }
+
+// The probes' SH images at camera-relative (x, z) and `h` above the ground,
+// in cascade c, for a sampler that repeats across (the columns wrap): the
+// columns clamped to the square's (a filter never reads a column wrapped
+// in from its far side), the layers to the cascade's slab.
+vec3 pgProbeUvw(int c, vec2 xz, float h) {
+    vec2 g = clamp((xz - PG.cascade[c].xy) * PG.cascade[c].w - 0.5, vec2(0.0), vec2(float(PG_COLUMNS - 1)));
+    float k = float(c * PG_LAYERS) + pgLayerAt(h) + 0.5;
+    return vec3((PG.wrap[c].xy + g + 0.5) / float(PG_COLUMNS), k / float(PG_LAYERS * PG_MAX_CASCADES));
+}
+
+// The irradiance over pi on a surface facing `n` from a probe's SH (one
+// texel a channel), and the mean radiance about it.
+vec3 pgShIrradiance(vec4 r, vec4 g, vec4 b, vec3 n) {
+    vec4 basis = vec4(PG_SH_Y00, (2.0 / 3.0) * PG_SH_Y1 * n);
+    return max(vec3(dot(r, basis), dot(g, basis), dot(b, basis)), vec3(0.0));
+}
+vec3 pgShMean(vec4 r, vec4 g, vec4 b) { return max(vec3(r.x, g.x, b.x) * PG_SH_Y00, vec3(0.0)); }
 #endif

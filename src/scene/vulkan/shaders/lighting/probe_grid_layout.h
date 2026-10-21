@@ -17,6 +17,14 @@
 // The splat sums a cascade's canopy in fixed point (PG_FIXED a unit), four
 // words a voxel: the extinction, and the extinction times the albedo's red,
 // green and blue.
+//
+// The probes: l <= 1 SH of the radiance at each, a 3D image a colour
+// channel (RGBA16F, PG_COLUMNS x PG_COLUMNS x PG_LAYERS * PG_MAX_CASCADES:
+// column (i, j) of cascade c stored at its column mod PG_COLUMNS, layer k at
+// depth c * PG_LAYERS + k), each texel (c0, cx, cy, cz): the radiance along
+// d is c0 Y00 + PG_SH_Y1 (cx, cy, cz) . d. A probe fresh to its square is
+// traced with PG_RAYS_FRESH rays and stored as traced; a refresh with
+// PG_RAYS, blended into what it held by PG_REFRESH_BLEND.
 
 #ifndef BRO_SCENE_PROBE_GRID_LAYOUT_H
 #define BRO_SCENE_PROBE_GRID_LAYOUT_H
@@ -39,5 +47,12 @@
 #define PG_SAMPLES_PER_VOXEL 32.0
 #define PG_MIN_SAMPLES       64
 #define PG_MAX_SAMPLES       16384
+
+#define PG_PROBES          (PG_COLUMNS * PG_COLUMNS * PG_LAYERS * PG_MAX_CASCADES)
+#define PG_SH_Y00          0.282095
+#define PG_SH_Y1           0.488603
+#define PG_RAYS_FRESH      256
+#define PG_RAYS            128
+#define PG_REFRESH_BLEND   0.5
 
 #endif

@@ -54,6 +54,9 @@ public:
     /// The lighting set's environment bindings (4 irradiance, 5 prefilter,
     /// 6 BRDF LUT, 7 radiance cube), fallbacks where not baked.
     void writeBindings(SceneVkDescriptorWriter& writer, const SceneDefaults& defaults) const;
+    /// The prefiltered radiance (SHADER_READ_ONLY_OPTIMAL), the fallback cube
+    /// where none is baked.
+    VkImageView prefilteredView(const SceneDefaults& defaults) const;
 
     /// Whether drawSky() draws anything for `renderer` through a camera.
     bool skyVisible(const SceneRenderer& renderer, bool perspective) const;

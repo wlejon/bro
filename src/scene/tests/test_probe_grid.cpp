@@ -89,9 +89,12 @@ void testPlace() {
     makeAll(g);
     bool overlap = false;
     check(freshColumns(g, 0, overlap).size() == 64 && !overlap, "a new square is fresh, every column once");
-    int required = 0;
-    for (const auto& j : g.traceJobs()) required += j.required ? 1 : 0;
-    check(required == 3, "a fresh box is required (one a cascade)");
+    int required = 0, deepest = 0;
+    for (const auto& j : g.traceJobs()) {
+        required += j.required ? 1 : 0;
+        if (j.box.fresh) deepest = std::max(deepest, j.box.z1 - j.box.z0);
+    }
+    check(required == 12 && deepest == 2, "fresh boxes are required, a slice's rows each (four a cascade)");
     traceFresh(g);
     check(freshColumns(g, 0, overlap).empty(), "traced, the fresh boxes go");
 }

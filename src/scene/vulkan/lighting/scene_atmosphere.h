@@ -86,6 +86,10 @@ public:
     void fill(AtmosphereGpu& out, const bromath::Vec3& eye) const;
     /// The lighting set's atmosphere bindings (9-13).
     void writeBindings(SceneVkDescriptorWriter& writer) const;
+    /// The view-independent tables a compute stage reads (in GENERAL): the
+    /// transmittance and the sky's light.
+    VkImageView transmittanceView() const { return transmittance_.view; }
+    VkImageView skyLightView() const { return skyLight_.view; }
 
     /// This frame's view tables, the sky view and the froxels, into the
     /// graphics stream (PassAtmosphere).

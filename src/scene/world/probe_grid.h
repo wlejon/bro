@@ -28,7 +28,9 @@
 //
 // Traces. A trace job is a box of a cascade's columns, every layer, its
 // probes' rays traced and blended into what they held. The columns a move
-// brought in are required, traced afresh (no history to blend); the rest are
+// brought in are required, traced afresh (no history to blend), in boxes of
+// at most a slice's rows (so every job costs about a slice's, and the world
+// service's cost of a job means one thing); the rest are
 // refreshed a slice of rows at a time, oldest first, their error growing with
 // their age so the world service spends what the frame leaves on them.
 
@@ -109,6 +111,8 @@ public:
         bool required = false;
     };
     const std::vector<TraceJob>& traceJobs();
+    /// The last traceJobs(), as it was.
+    const std::vector<TraceJob>& offeredTraceJobs() const { return jobs_; }
     /// Job `index` of the last traceJobs() was traced.
     void traced(int index);
 
@@ -125,6 +129,8 @@ private:
         std::vector<float> sliceAge;     // seconds since each slice's refresh
     };
     void queueMove(Cascade& c, int index, int64_t dx, int64_t dz);
+    /// `box` queued fresh, cut into boxes of at most a slice's rows.
+    void queueFresh(Cascade& c, const ProbeBox& box) const;
 
     ProbeGridConfig config_;
     std::vector<Cascade> cascades_;

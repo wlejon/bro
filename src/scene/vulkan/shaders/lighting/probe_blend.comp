@@ -1,0 +1,20 @@
+#version 450
+// The probe grid's traces into its probes (scene_probe_grid.cpp), a probe an
+// invocation: a fresh one's as traced, a refreshed one's blended into what
+// it held (PG_REFRESH_BLEND of the new), so the rays' noise settles over a
+// few refreshes and a change in the light comes in over them.
+
+layout(local_size_x = 64) in;
+
+#include "lighting/scene_probe_grid_compute.glsl"
+
+void main() {
+    uint index = gl_GlobalInvocationID.x;
+    if (index >= push.job.y) return;
+    PgProbe probe = pgProbe(pgProbes.list[index]);
+    ivec3 texel = pgProbeTexel(probe);
+    float a = probe.fresh ? 1.0 : PG_REFRESH_BLEND;
+    imageStore(pgShRImage, texel, mix(imageLoad(pgShRImage, texel), pgTraces.sh[index * 3u + 0u], a));
+    imageStore(pgShGImage, texel, mix(imageLoad(pgShGImage, texel), pgTraces.sh[index * 3u + 1u], a));
+    imageStore(pgShBImage, texel, mix(imageLoad(pgShBImage, texel), pgTraces.sh[index * 3u + 2u], a));
+}

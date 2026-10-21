@@ -33,6 +33,15 @@ double ProbeGrid::spacing(int c) const {
     return static_cast<double>(config_.spacing) * std::pow(static_cast<double>(config_.ratio), c);
 }
 
+void ProbeGrid::queueFresh(Cascade& c, const ProbeBox& box) const {
+    for (int z0 = box.z0; z0 < box.z1; z0 += config_.sliceRows) {
+        ProbeBox b = box;
+        b.z0 = z0;
+        b.z1 = std::min(z0 + config_.sliceRows, box.z1);
+        c.fresh.push_back(b);
+    }
+}
+
 void ProbeGrid::queueMove(Cascade& c, int index, int64_t dx, int64_t dz) {
     const int n = config_.columns;
     // The boxes still queued move with the square; what leaves it goes.
@@ -49,7 +58,8 @@ void ProbeGrid::queueMove(Cascade& c, int index, int64_t dx, int64_t dz) {
     }
     c.fresh = std::move(kept);
     if (std::abs(dx) >= n || std::abs(dz) >= n) {
-        c.fresh.assign(1, ProbeBox{index, 0, 0, n, n, true});
+        c.fresh.clear();
+        queueFresh(c, ProbeBox{index, 0, 0, n, n, true});
         return;
     }
     // The strips the move brought in: the columns along x, then the rows
@@ -57,12 +67,12 @@ void ProbeGrid::queueMove(Cascade& c, int index, int64_t dx, int64_t dz) {
     const int ax = static_cast<int>(std::abs(dx)), az = static_cast<int>(std::abs(dz));
     if (ax > 0) {
         const int x0 = dx > 0 ? n - ax : 0;
-        c.fresh.push_back(ProbeBox{index, x0, 0, x0 + ax, n, true});
+        queueFresh(c, ProbeBox{index, x0, 0, x0 + ax, n, true});
     }
     if (az > 0) {
         const int z0 = dz > 0 ? n - az : 0;
         const int x0 = dx > 0 ? 0 : ax, x1 = dx > 0 ? n - ax : n;
-        if (x0 < x1) c.fresh.push_back(ProbeBox{index, x0, z0, x1, z0 + az, true});
+        if (x0 < x1) queueFresh(c, ProbeBox{index, x0, z0, x1, z0 + az, true});
     }
 }
 
@@ -78,7 +88,8 @@ void ProbeGrid::place(double eyeX, double eyeZ) {
             c.placed = true;
             c.cornerX = x;
             c.cornerZ = z;
-            c.fresh.assign(1, ProbeBox{i, 0, 0, n, n, true});
+            c.fresh.clear();
+            queueFresh(c, ProbeBox{i, 0, 0, n, n, true});
             continue;
         }
         if (x == c.cornerX && z == c.cornerZ) continue;

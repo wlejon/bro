@@ -26,6 +26,19 @@
 //    the shade is about 16% more (exp(-tau) is convex: a medium blurred a
 //    voxel wide shades more than a sharp one); under a quarter more is
 //    checked.
+//
+// Then the probes, each world rendered frames a tenth of a second apart
+// (fresh probes traced, then refreshed) and read back:
+//  - a black crown over black ground under a flat sky of 1: the probes of
+//    four columns through it and past it, every layer, against the sky
+//    marched through the medium the GPU made (5 cm steps, 4096 directions,
+//    projected to the same SH): the irradiance on surfaces facing up, down
+//    and across within 0.03 (0.01 on average), the crown's total shade within
+//    5%; and a probe in the open, the sky's 1 above within 2%, 0 below;
+//  - sunlit ground of albedo 0.3 under a sky of 0.5: probes of two cascades
+//    hold the sky above within 2% and the ground's light below (its albedo
+//    of the sun's and of the sky's, which reaches the ground through the
+//    probes over it) within 3%.
 
 #include "render/vulkan_context.h"
 #include "render/vulkan_debug.h"
@@ -376,6 +389,191 @@ void checkSun(const ProbeGridTables& t) {
     check(std::abs(shadeGot / shadeCrowns - 1.0) < 0.25, "the voxels' blur adds under a quarter to the shade");
 }
 
+// --- The probes ------------------------------------------------------------
+
+/// A world for the traces: level ground at y = 0 under a flat sky, with a
+/// black crown over the middle (it only shades), or a sun and a ground that
+/// sends light back.
+struct TraceScene {
+    bool crown = false;
+    bool sun = false;
+    float ambient = 1.0f;   // the sky's radiance
+    float albedo = 0.0f;    // the ground's
+};
+constexpr double kTraceSun[3] = {-0.3, -1.0, -0.5};
+constexpr double kTraceSunE = 3.0;
+
+void buildTraceScene(scene::SceneGraph& graph, const TraceScene& s) {
+    graph.setCanvasSize(256, 144);
+    graph.setCamera(1.0f, 256.0f / 144.0f, 0.1f, 2000.0f, {0.0f, 1.7f, 0.0f}, {0.0f, 1.7f, -10.0f});
+    // Out to the coarsest cascade's edge (a high probe's low rays reach it).
+    constexpr int kGrid = 206;
+    std::vector<float> heights(static_cast<size_t>(kGrid) * kGrid, 0.0f);
+    scene::MeshNode* ground = graph.createMesh("ground");
+    ground->setMesh(bromesh::heightmapGrid(heights.data(), kGrid, kGrid, 20.0f));
+    graph.root()->addChild(ground);
+    if (s.crown) {
+        scene::PlantsNode* plants = graph.createPlants("plants");
+        float species[scene::PlantsNode::kSpeciesFloats] = {
+            static_cast<float>(kHeight), static_cast<float>(kBase), static_cast<float>(kRadius), 0.0f,
+            12.0f, 0.4f, 0.2f, 0.5f,
+            2000.0f, 0.2f, 0.5f, 0.2f,
+            0.0f, 0.0f, 0.0f, 0.1f,
+            0.0f, 0.0f, 0.0f, 0.3f,
+            0.3f, 0.2f, 0.1f, static_cast<float>(kDensity),
+            0.5f, 0.8f, 0.2f, 0.0f};
+        plants->setSpecies(species, 1);
+        const float r[scene::PlantsNode::kPlantFloats] = {0.0f, 0.0f, 0.0f, 0.3f, 1.5f, 0.0f, 1.0f, 0.0f};
+        plants->setPlants(r, 1);
+        graph.root()->addChild(plants);
+    }
+    if (s.sun) {
+        scene::LightNode* sun = graph.createLight("sun");
+        sun->setKind(scene::LightNode::Kind::Directional);
+        sun->setDirection({static_cast<float>(kTraceSun[0]), static_cast<float>(kTraceSun[1]),
+                           static_cast<float>(kTraceSun[2])});
+        sun->setIntensity(static_cast<float>(kTraceSunE));
+        graph.root()->addChild(sun);
+    }
+    graph.renderer().setAmbient(s.ambient, s.ambient, s.ambient);
+    graph.renderer().setGroundBounce(s.albedo, s.albedo, s.albedo);
+    graph.renderer().setProbeGrid(true);
+}
+
+/// A probe's SH, a channel: (c0, cx, cy, cz).
+struct Sh {
+    double c[3][4];
+};
+
+Sh probeSh(const ProbeGridTables& t, int c, int i, int j, int k) {
+    const int x = (static_cast<int>(t.block.wrap[c][0]) + i) % PG_COLUMNS;
+    const int y = (static_cast<int>(t.block.wrap[c][1]) + j) % PG_COLUMNS;
+    const size_t texel = (static_cast<size_t>(c * PG_LAYERS + k) * PG_COLUMNS + y) * PG_COLUMNS + x;
+    Sh s{};
+    for (int ch = 0; ch < 3; ++ch)
+        for (int a = 0; a < 4; ++a) s.c[ch][a] = t.sh[ch][texel * 4 + a];
+    return s;
+}
+
+/// The irradiance over pi the SH gives a surface facing `n` (red).
+double shIrradiance(const double c[4], const double n[3]) {
+    return c[0] * PG_SH_Y00 + (2.0 / 3.0) * PG_SH_Y1 * (c[1] * n[0] + c[2] * n[1] + c[3] * n[2]);
+}
+
+double layerHeight(const ProbeGridTables& t, int k) {
+    const double top = t.block.params[2], bottom = t.block.params[3];
+    return bottom + (top - bottom) * std::pow(k / static_cast<double>(PG_LAYERS - 1), t.block.eye[3]);
+}
+
+/// The SH (red) a probe at `p` should hold in the crown's world: the sky
+/// through the medium the GPU made (cascade 0's, filtered as the sampler
+/// filters it, marched in 5 cm steps) above, the black ground below.
+void crownReference(const ProbeGridTables& t, const std::vector<double>& medium, const double p[3], double out[4]) {
+    const double top = t.block.params[2];
+    const Cascade k = cascadeOf(t, 0);
+    constexpr int kDirs = 4096;
+    constexpr double kStep = 0.05;
+    // The crown's voxels (and their filter) lie inside this box.
+    const double lo[3] = {-8.0, 0.0, -8.0}, hi[3] = {8.0, top, 8.0};
+    for (int a = 0; a < 4; ++a) out[a] = 0.0;
+    for (int n = 0; n < kDirs; ++n) {
+        const double y = 1.0 - (2.0 * n + 1.0) / kDirs;
+        if (y <= 0.0) continue;   // the ground: black
+        const double r = std::sqrt(1.0 - y * y), phi = n * 2.39996323;
+        const double d[3] = {std::cos(phi) * r, y, std::sin(phi) * r};
+        double t0 = 0.0, t1 = 1e9;
+        for (int a = 0; a < 3; ++a) {
+            if (std::abs(d[a]) < 1e-9) {
+                if (p[a] < lo[a] || p[a] > hi[a]) t1 = -1.0;
+                continue;
+            }
+            const double u = (lo[a] - p[a]) / d[a], v = (hi[a] - p[a]) / d[a];
+            t0 = std::max(t0, std::min(u, v));
+            t1 = std::min(t1, std::max(u, v));
+        }
+        double tau = 0.0;
+        for (double s = t0 + 0.5 * kStep; s < t1; s += kStep) {
+            const double q[3] = {p[0] + d[0] * s, p[1] + d[1] * s, p[2] + d[2] * s};
+            tau += sampleMedium(medium, k, top, q[0], q[1], q[2]) * kStep;
+        }
+        const double L = std::exp(-tau);
+        out[0] += L * PG_SH_Y00;
+        out[1] += L * PG_SH_Y1 * d[0];
+        out[2] += L * PG_SH_Y1 * d[1];
+        out[3] += L * PG_SH_Y1 * d[2];
+    }
+    for (int a = 0; a < 4; ++a) out[a] *= 4.0 * 3.14159265358979 / kDirs;
+}
+
+constexpr double kUp[3] = {0.0, 1.0, 0.0}, kDown[3] = {0.0, -1.0, 0.0};
+constexpr double kSide[3] = {1.0, 0.0, 0.0};
+
+/// Renders `frames` frames a tenth of a second apart (the refreshes age by
+/// the scene's clock), then reads the grid back.
+bool settle(scene::SceneGraph& graph, int frames, ProbeGridTables& t) {
+    for (int f = 0; f < frames; ++f) {
+        graph.tickAnimations(0.1f);
+        graph.render();
+    }
+    return graph.renderer().readProbeGrid(t);
+}
+
+void checkCrownProbes(const ProbeGridTables& t) {
+    // The medium's extinction, cascade 0's voxels.
+    std::vector<double> medium(static_cast<size_t>(PG_VOXELS) * PG_VOXELS * PG_LAYERS_Y);
+    for (size_t v = 0; v < medium.size(); ++v) medium[v] = t.medium[v * 4];
+    const Cascade k = cascadeOf(t, 0);
+    double worst = 0.0, sum = 0.0, shadeGot = 0.0, shadeWant = 0.0;
+    int probes = 0;
+    // Columns through the crown's middle, its edge and past it, every layer.
+    for (int i : {16, 18, 20, 24}) {
+        for (int layer = 0; layer < PG_LAYERS; ++layer) {
+            const double p[3] = {k.x0 + (i + 0.5) * k.s, layerHeight(t, layer), k.z0 + (16 + 0.5) * k.s};
+            double want[4];
+            crownReference(t, medium, p, want);
+            const Sh got = probeSh(t, 0, i, 16, layer);
+            for (const double* n : {kUp, kDown, kSide}) {
+                const double e = std::abs(shIrradiance(got.c[0], n) - shIrradiance(want, n));
+                worst = std::max(worst, e);
+                sum += e;
+            }
+            shadeGot += 1.0 - shIrradiance(got.c[0], kUp);
+            shadeWant += 1.0 - shIrradiance(want, kUp);
+            ++probes;
+        }
+    }
+    const double mean = sum / (3.0 * probes);
+    std::printf("  probes under the crown: %d, irradiance error mean %.4f, worst %.4f (of 1); the crown's shade "
+                "%.3f vs %.3f\n",
+                probes, mean, worst, shadeGot, shadeWant);
+    check(mean < 0.01 && worst < 0.03, "a probe's irradiance up, down and across within 0.03 of the march");
+    check(shadeWant > 1.0 && std::abs(shadeGot / shadeWant - 1.0) < 0.05, "the crown's shade within 5%");
+    // The open sky over black ground: the light from above is the sky's.
+    const Sh open = probeSh(t, 0, 4, 28, 3);
+    std::printf("  an open probe: up %.4f, down %.4f\n", shIrradiance(open.c[0], kUp), shIrradiance(open.c[0], kDown));
+    check(std::abs(shIrradiance(open.c[0], kUp) - 1.0) < 0.02 && std::abs(shIrradiance(open.c[0], kDown)) < 0.02,
+          "in the open, the sky's irradiance above within 2%, the black ground's below");
+}
+
+void checkBounceProbes(const ProbeGridTables& t, const TraceScene& s) {
+    // The ground: lit by the sun and by the sky (its probes' irradiance above,
+    // the sky's), sending its albedo of that back.
+    const double len = std::sqrt(kTraceSun[0] * kTraceSun[0] + kTraceSun[1] * kTraceSun[1] + kTraceSun[2] * kTraceSun[2]);
+    const double down = s.albedo * (kTraceSunE * (-kTraceSun[1] / len) / 3.14159265358979 + s.ambient);
+    double worstUp = 0.0, worstDown = 0.0;
+    for (int c = 0; c < 2; ++c)
+        for (int layer = 0; layer < PG_LAYERS; ++layer)
+            for (int i : {8, 24}) {
+                const Sh got = probeSh(t, c, i, i, layer);
+                worstUp = std::max(worstUp, std::abs(shIrradiance(got.c[0], kUp) / s.ambient - 1.0));
+                worstDown = std::max(worstDown, std::abs(shIrradiance(got.c[0], kDown) / down - 1.0));
+            }
+    std::printf("  sunlit ground: worst up %.2f%%, down %.2f%% (down wants %.4f)\n", 100.0 * worstUp,
+                100.0 * worstDown, down);
+    check(worstUp < 0.02, "the sky's irradiance above within 2%");
+    check(worstDown < 0.03, "the ground's light below (the sun's and the sky's, its albedo of them) within 3%");
+}
+
 }  // namespace
 
 int main() {
@@ -422,6 +620,41 @@ int main() {
             checkHeight(moved);
             checkCanopy(moved, 1);
             checkSun(moved);
+        }
+    }
+    {
+        // The probes in a black crown's shade under a flat sky.
+        scene::SceneGraph graph;
+        TraceScene s;
+        s.crown = true;
+        buildTraceScene(graph, s);
+        ProbeGridTables t;
+        if (!settle(graph, 30, t)) {
+            std::printf("FAILED: no probe grid read back (the crown)\n");
+            ++failures;
+        } else {
+            std::printf("the probes, a crown over black ground (top %.2f m)\n", t.block.params[2]);
+            checkCrownProbes(t);
+        }
+    }
+    {
+        // The probes over sunlit ground that sends light back.
+        scene::SceneGraph graph;
+        TraceScene s;
+        s.sun = true;
+        s.ambient = 0.5f;
+        s.albedo = 0.3f;
+        buildTraceScene(graph, s);
+        // (The ground's light comes in over refreshes, a half each: the
+        // service grants them as the frame's budget allows, so the world
+        // gets long enough for any budget to settle it.)
+        ProbeGridTables t;
+        if (!settle(graph, 80, t)) {
+            std::printf("FAILED: no probe grid read back (the sunlit ground)\n");
+            ++failures;
+        } else {
+            std::printf("the probes, sunlit ground\n");
+            checkBounceProbes(t, s);
         }
     }
     scene::SceneRenderer::setDefaultVulkanContext(nullptr);

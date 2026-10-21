@@ -14,6 +14,9 @@
 #include "scene/vulkan/frame/scene_vk_device.h"
 #include "scene/vulkan/frame/scene_vk_pipeline.h"
 #include "scene/vulkan/frame/scene_vk_shader_compiler.h"
+#include "scene/vulkan/frame/scene_defaults.h"
+#include "scene/vulkan/lighting/scene_atmosphere.h"
+#include "scene/vulkan/lighting/scene_environment.h"
 #include "scene/vulkan/shadow/scene_caster_drawer.h"
 #include "util/log.h"
 
@@ -25,9 +28,18 @@ namespace bro::scene::vk {
 
 namespace {
 
-constexpr BuiltinSceneShader kShaders[] = {BuiltinSceneShader::ProbeHeightComp, BuiltinSceneShader::ProbeSplatComp,
-                                           BuiltinSceneShader::ProbeResolveComp, BuiltinSceneShader::ProbeSunComp};
-constexpr const char* kNames[] = {"probe height", "probe splat", "probe resolve", "probe sun"};
+constexpr BuiltinSceneShader kShaders[] = {BuiltinSceneShader::ProbeHeightComp,  BuiltinSceneShader::ProbeSplatComp,
+                                           BuiltinSceneShader::ProbeResolveComp, BuiltinSceneShader::ProbeSunComp,
+                                           BuiltinSceneShader::ProbeTraceComp,   BuiltinSceneShader::ProbeBlendComp};
+constexpr const char* kNames[] = {"probe height", "probe splat", "probe resolve",
+                                  "probe sun",    "probe trace", "probe blend"};
+
+// A listed probe's packing (scene_probe_grid_compute.glsl's pgProbe).
+static_assert(PG_MAX_CASCADES <= 4 && PG_COLUMNS <= 32 && PG_LAYERS <= 8);
+uint32_t packProbe(int cascade, bool fresh, int x, int z, int layer) {
+    return static_cast<uint32_t>(cascade) | (fresh ? 4u : 0u) | (static_cast<uint32_t>(x) << 3) |
+           (static_cast<uint32_t>(z) << 8) | (static_cast<uint32_t>(layer) << 13);
+}
 
 // The sun turns the canopy's light when it moves by more than this (a
 // quarter of a degree, as cosine): a voxel's shade does not move a texel.
@@ -69,16 +81,25 @@ bool SceneProbeGrid::setup(SceneGpu& gpu) {
     if (vkCreateSampler(dev, &si, nullptr, &linear_) != VK_SUCCESS) return false;
     si.magFilter = si.minFilter = VK_FILTER_NEAREST;
     if (vkCreateSampler(dev, &si, nullptr, &nearest_) != VK_SUCCESS) return false;
+    // The probes' columns wrap across; their layers do not.
+    si.magFilter = si.minFilter = VK_FILTER_LINEAR;
+    si.addressModeU = si.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    if (vkCreateSampler(dev, &si, nullptr, &repeat_) != VK_SUCCESS) return false;
 
+    // scene_probe_grid_compute.glsl's set.
+    constexpr VkDescriptorType kTypes[] = {
+        VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+        VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+        VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+        VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER};
     SceneVkDescriptorLayoutBuilder b;
-    b.addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
-    b.addBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT);
-    b.addBinding(2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
-    b.addBinding(3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
-    b.addBinding(4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT);
-    b.addBinding(5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
-    b.addBinding(6, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT);
-    b.addBinding(7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
+    for (uint32_t i = 0; i < std::size(kTypes); ++i) b.addBinding(i, kTypes[i], 1, VK_SHADER_STAGE_COMPUTE_BIT);
     setLayout_ = b.build(dev);
     if (!setLayout_) return false;
     VkPushConstantRange push{VK_SHADER_STAGE_COMPUTE_BIT, 0, 16};
@@ -107,21 +128,32 @@ bool SceneProbeGrid::setup(SceneGpu& gpu) {
                               false) ||
         !a.createBuffer(kSumBytesPerCascade * PG_MAX_CASCADES,
                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, sums_)) {
+                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, sums_) ||
+        !a.createBuffer(VkDeviceSize{PG_PROBES} * 3u * 16u, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, traces_)) {
         LOG_ERROR("SceneProbeGrid: failed creating the probe grid's images");
         return false;
     }
+    for (SceneVkImage& sh : sh_)
+        if (!a.createStorageImage(PG_COLUMNS, PG_COLUMNS, PG_LAYERS * PG_MAX_CASCADES, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                  sh, false)) {
+            LOG_ERROR("SceneProbeGrid: failed creating the probes' images");
+            return false;
+        }
     // A cascade's world is its volumes: the CPU half's error is what it
-    // costs, so the guess is a whole cascade's.
+    // costs, so the guess is a whole cascade's. A trace is a box of columns.
     kind_ = gpu.world.addKind(this, {"probe grid world", WorldSchedule::Raster, 0.2f});
-    return kind_ >= 0;
+    traceKind_ = gpu.world.addKind(this, {"probe traces", WorldSchedule::Raster, 0.05f});
+    return kind_ >= 0 && traceKind_ >= 0;
 }
 
 void SceneProbeGrid::cleanup(SceneGpu& gpu) {
     VkDevice dev = gpu.device.device();
     SceneVkAllocator& a = gpu.allocator;
-    for (SceneVkImage* img : {&captureDepth_, &height_, &medium_, &sun_}) a.destroyImage(*img);
+    for (SceneVkImage* img : {&captureDepth_, &height_, &medium_, &sun_, &sh_[0], &sh_[1], &sh_[2]})
+        a.destroyImage(*img);
     a.destroyBuffer(sums_);
+    a.destroyBuffer(traces_);
     for (VkPipeline& p : pipelines_) {
         if (p) gpu.device.defer([dev, pipeline = p] { vkDestroyPipeline(dev, pipeline, nullptr); });
         p = VK_NULL_HANDLE;
@@ -130,7 +162,7 @@ void SceneProbeGrid::cleanup(SceneGpu& gpu) {
     if (setLayout_) vkDestroyDescriptorSetLayout(dev, setLayout_, nullptr);
     layout_ = VK_NULL_HANDLE;
     setLayout_ = VK_NULL_HANDLE;
-    for (VkSampler* s : {&linear_, &nearest_}) {
+    for (VkSampler* s : {&linear_, &nearest_, &repeat_}) {
         if (*s) gpu.device.defer([dev, sampler = *s] { vkDestroySampler(dev, sampler, nullptr); });
         *s = VK_NULL_HANDLE;
     }
@@ -190,6 +222,10 @@ void SceneProbeGrid::offer(SceneFrame& frame, WorldService& service) {
 
     const bromath::Vec3 eye = frame.view.eye;
     grid_.place(eye.x, eye.z);
+    // The refreshes age by the scene's clock.
+    const double now = frame.renderer.windTimeExact();
+    if (clock_ >= 0.0) grid_.advance(static_cast<float>(std::clamp(now - clock_, 0.0, 0.25)));
+    clock_ = now;
 
     const ProbeGridConfig& config = grid_.config();
     ProbeGridGpu& g = block_;
@@ -216,23 +252,51 @@ void SceneProbeGrid::offer(SceneFrame& frame, WorldService& service) {
         g.wrap[c][0] = wrap(grid_.cornerX(c));
         g.wrap[c][1] = wrap(grid_.cornerZ(c));
     }
+    // What the traces light by: the sun, the sky (the atmosphere's, else the
+    // environment's, else the flat ambient), the ground's albedo.
     Block block{};
     block.grid = block_;
     block.capture[0] = kCaptureRange;
+    for (int k = 0; k < 3; ++k) {
+        block.sunLight[k] = light.sunColor[k] * light.sunColor[3];
+        block.sky[k] = light.ambientColor[k];
+        block.ground[k] = frame.renderer.groundBounce()[k];
+    }
+    block.sunLight[3] = light.sunDirection[3];
+    block.sky[3] = light.atm.sunDir[3] > 0.5f ? 2.0f : (light.iblParams[0] > 0.5f ? 1.0f : 0.0f);
+    block.environment[0] = light.iblParams[1];
+    block.environment[1] = light.iblParams[2];
+    block.environment[2] = light.iblParams[3];
+    block.ground[3] = static_cast<float>(seed_++ & 0xffffu);
+    block.atm = light.atm;
     blockInfo_ = frame.gpu.device.frameUniform(&block, sizeof(block));
 
     // The cascades whose worlds are to be made: one job, required.
     uint32_t stale = 0;
     for (int c = 0; c < config.cascades && c < PG_MAX_CASCADES; ++c)
         if (!grid_.volumesCurrent(c)) ++stale;
-    if (stale == 0) return;
-    WorldJob job;
-    job.key = 0;
-    job.kind = kind_;
-    job.error = 1.0f;
-    job.size = static_cast<double>(stale);
-    job.required = true;
-    service.offer(job);
+    if (stale > 0) {
+        WorldJob job;
+        job.key = 0;
+        job.kind = kind_;
+        job.error = 1.0f;
+        job.size = static_cast<double>(stale);
+        job.required = true;
+        service.offer(job);
+    }
+
+    // The probes' traces, of the cascades whose worlds are made: a job a box.
+    const std::vector<ProbeGrid::TraceJob>& traces = grid_.traceJobs();
+    for (size_t i = 0; i < traces.size(); ++i) {
+        const ProbeGrid::TraceJob& t = traces[i];
+        WorldJob job;
+        job.key = i;
+        job.kind = traceKind_;
+        job.error = t.error;
+        job.size = static_cast<double>(t.box.columnCount()) * grid_.spacing(t.box.cascade);
+        job.required = t.required;
+        service.offer(job);
+    }
 }
 
 void SceneProbeGrid::computeBarrier(VkCommandBuffer cmd) {
@@ -300,8 +364,7 @@ void SceneProbeGrid::capture(SceneFrame& frame, VkCommandBuffer cmd, uint32_t ma
     SceneFrameGraph::transition(cmd, captureDepth_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 }
 
-void SceneProbeGrid::dispatch(SceneFrame& frame, VkCommandBuffer cmd, Stage stage, uint32_t mask, VkBuffer plants,
-                              VkDeviceSize plantsBytes, uint32_t groups) {
+void SceneProbeGrid::dispatch(SceneFrame& frame, VkCommandBuffer cmd, Stage stage, const Inputs& in) {
     SceneVkDevice& device = frame.gpu.device;
     VkDescriptorSet set = device.frameSet(setLayout_);
     if (set == VK_NULL_HANDLE) return;
@@ -316,24 +379,92 @@ void SceneProbeGrid::dispatch(SceneFrame& frame, VkCommandBuffer cmd, Stage stag
     storage(4, medium_);
     w.writeImage(5, medium_.view, linear_, VK_IMAGE_LAYOUT_GENERAL);
     storage(6, sun_);
-    if (plants) w.writeBuffer(7, plants, plantsBytes, 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+    if (in.plants) w.writeBuffer(7, in.plants, in.plantsBytes, 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+    w.writeImage(8, sun_.view, linear_, VK_IMAGE_LAYOUT_GENERAL);
+    for (uint32_t ch = 0; ch < 3; ++ch) {
+        storage(9 + ch, sh_[ch]);
+        w.writeImage(12 + ch, sh_[ch].view, repeat_, VK_IMAGE_LAYOUT_GENERAL);
+    }
+    if (in.probes) {
+        w.writeBuffer(15, probeList_.buffer, probeList_.range, probeList_.offset, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+        w.writeBuffer(16, traces_.buffer, traces_.size, 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+        w.writeImage(17, frame.gpu.atmosphere.transmittanceView(), linear_, VK_IMAGE_LAYOUT_GENERAL);
+        w.writeImage(18, frame.gpu.atmosphere.skyLightView(), linear_, VK_IMAGE_LAYOUT_GENERAL);
+        w.writeImage(19, frame.gpu.environment.prefilteredView(frame.gpu.defaults), linear_,
+                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    }
     w.updateSet(device.device(), set);
 
-    const uint32_t job[4] = {mask, 0, 0, 0};
+    const uint32_t job[4] = {in.mask, in.probes, 0, 0};
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelines_[stage]);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout_, 0, 1, &set, 0, nullptr);
     vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(job), job);
     switch (stage) {
     case kHeight: vkCmdDispatch(cmd, PG_HEIGHT / 8, PG_HEIGHT * PG_MAX_CASCADES / 8, 1); break;
-    case kSplat: vkCmdDispatch(cmd, groups, 1, 1); break;
+    case kSplat: vkCmdDispatch(cmd, in.groups, 1, 1); break;
     case kResolve:
     case kSun: vkCmdDispatch(cmd, PG_VOXELS / 8, PG_VOXELS / 8, PG_LAYERS_Y * PG_MAX_CASCADES); break;
+    case kTrace: vkCmdDispatch(cmd, in.probes, 1, 1); break;
+    case kBlend: vkCmdDispatch(cmd, (in.probes + 63) / 64, 1, 1); break;
     case kStages: break;
     }
 }
 
-uint32_t SceneProbeGrid::record(SceneFrame& frame, int, std::span<const WorldJob> granted, WorldStream& stream) {
+uint32_t SceneProbeGrid::record(SceneFrame& frame, int kind, std::span<const WorldJob> granted, WorldStream& stream) {
     if (!on_ || granted.empty()) return 0;
+    return kind == kind_ ? recordWorld(frame, stream) : recordTraces(frame, granted, stream);
+}
+
+uint32_t SceneProbeGrid::recordTraces(SceneFrame& frame, std::span<const WorldJob> granted, WorldStream& stream) {
+    // The atmosphere's tables remade on the compute queue this frame are not
+    // the graphics stream's to read until it joins: the traces wait a frame.
+    if (frame.gpu.atmosphere.tablesOnCompute()) return 0;
+    const std::vector<ProbeGrid::TraceJob>& jobs = grid_.offeredTraceJobs();
+    std::vector<uint32_t> list;
+    for (const WorldJob& job : granted) {
+        if (job.key >= jobs.size()) continue;
+        const ProbeBox& b = jobs[job.key].box;
+        for (int z = b.z0; z < b.z1; ++z)
+            for (int x = b.x0; x < b.x1; ++x)
+                for (int k = 0; k < PG_LAYERS; ++k) list.push_back(packProbe(b.cascade, b.fresh, x, z, k));
+    }
+    if (list.empty()) return 0;
+    const VkDeviceSize bytes = list.size() * sizeof(uint32_t);
+    const render::UploadSlice slice = frame.gpu.device.frameUpload(bytes);
+    if (!slice) return 0;
+    std::memcpy(slice.mapped, list.data(), bytes);
+    probeList_ = {slice.buffer, slice.offset, bytes};
+    VkCommandBuffer cmd = stream.cmd();
+
+    // What the frames before read of the probes is done with before they are
+    // written; the first time, they start dark.
+    render::cmdMemoryBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT);
+    if (!shCleared_) {
+        const VkClearColorValue zero{};
+        const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        for (const SceneVkImage& sh : sh_) vkCmdClearColorImage(cmd, sh.image, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &range);
+        computeBarrier(cmd);
+        shCleared_ = true;
+    }
+    Inputs in;
+    in.probes = static_cast<uint32_t>(list.size());
+    dispatch(frame, cmd, kTrace, in);
+    computeBarrier(cmd);
+    dispatch(frame, cmd, kBlend, in);
+    // For the frame's readers (the lit shaders, the next traces).
+    render::cmdMemoryBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT);
+    probeList_ = {};
+    for (const WorldJob& job : granted) grid_.traced(static_cast<int>(job.key));
+    return static_cast<uint32_t>(granted.size());
+}
+
+uint32_t SceneProbeGrid::recordWorld(SceneFrame& frame, WorldStream& stream) {
     uint32_t mask = 0;
     const int cascades = std::min(grid_.config().cascades, PG_MAX_CASCADES);
     for (int c = 0; c < cascades; ++c)
@@ -350,13 +481,21 @@ uint32_t SceneProbeGrid::record(SceneFrame& frame, int, std::span<const WorldJob
     // The cascades' sums cleared for the splat.
     for (int c = 0; c < cascades; ++c)
         if (mask & (1u << c)) vkCmdFillBuffer(cmd, sums_.buffer, kSumBytesPerCascade * c, kSumBytesPerCascade, 0);
-    dispatch(frame, cmd, kHeight, mask, VK_NULL_HANDLE, 0, 0);
+    Inputs in;
+    in.mask = mask;
+    dispatch(frame, cmd, kHeight, in);
     computeBarrier(cmd);
-    for (const Canopy& node : canopy_) dispatch(frame, cmd, kSplat, mask, node.records, node.bytes, node.plants);
+    for (const Canopy& node : canopy_) {
+        Inputs splat = in;
+        splat.plants = node.records;
+        splat.plantsBytes = node.bytes;
+        splat.groups = node.plants;
+        dispatch(frame, cmd, kSplat, splat);
+    }
     computeBarrier(cmd);
-    dispatch(frame, cmd, kResolve, mask, VK_NULL_HANDLE, 0, 0);
+    dispatch(frame, cmd, kResolve, in);
     computeBarrier(cmd);
-    dispatch(frame, cmd, kSun, mask, VK_NULL_HANDLE, 0, 0);
+    dispatch(frame, cmd, kSun, in);
     // For the frame's readers (the probes' traces, the lit shaders).
     render::cmdMemoryBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
@@ -376,7 +515,8 @@ bool SceneProbeGrid::read(SceneGpu& gpu, ProbeGridTables& out) {
         uint32_t texelBytes;
         SceneVkBuffer buffer;
     };
-    Copy copies[] = {{&height_, 4, {}}, {&medium_, 8, {}}, {&sun_, 2, {}}};
+    Copy copies[] = {{&height_, 4, {}}, {&medium_, 8, {}}, {&sun_, 2, {}},
+                     {&sh_[0], 8, {}},  {&sh_[1], 8, {}},  {&sh_[2], 8, {}}};
     VkCommandBuffer cmd = device.frames().beginCommands();
     bool ok = true;
     for (Copy& c : copies) {
@@ -407,6 +547,12 @@ bool SceneProbeGrid::read(SceneGpu& gpu, ProbeGridTables& out) {
         const auto* s = static_cast<const uint16_t*>(copies[2].buffer.mappedData);
         out.sun.resize(voxels);
         for (size_t i = 0; i < voxels; ++i) out.sun[i] = halfToFloat(s[i]);
+        const size_t texels = size_t{sh_[0].width} * sh_[0].height * sh_[0].depth * 4;
+        for (int ch = 0; ch < 3; ++ch) {
+            const auto* q = static_cast<const uint16_t*>(copies[3 + ch].buffer.mappedData);
+            out.sh[ch].resize(texels);
+            for (size_t i = 0; i < texels; ++i) out.sh[ch][i] = halfToFloat(q[i]);
+        }
     }
     for (Copy& c : copies) gpu.allocator.destroyBuffer(c.buffer);
     out.block = block_;
