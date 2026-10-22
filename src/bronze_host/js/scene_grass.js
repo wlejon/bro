@@ -21,52 +21,16 @@
     const fn = (obj, name, value) =>
         Object.defineProperty(obj, name, { value, writable: true, enumerable: true, configurable: true });
 
-    // The params, in GrassNode::paramsFromArray's order. Colours take three slots.
-    const PARAMS = [
-        ['height', 1], ['width', 1], ['density', 1], ['range', 1], ['minNormalY', 1],
-        ['lush', 3], ['dryColor', 3], ['bulk', 1], ['clump', 1], ['rootShade', 1],
-        ['sheen', 1], ['variety', 1], ['wind', 1], ['tufts', 1], ['flowering', 1], ['dead', 1],
-    ];
-    const PARAM_COUNT = 20;
-
-    function parseColor(c) {
-        if (typeof c === 'string' && c[0] === '#') {
-            if (c.length === 7) return [parseInt(c.slice(1, 3), 16) / 255, parseInt(c.slice(3, 5), 16) / 255, parseInt(c.slice(5, 7), 16) / 255];
-            if (c.length === 4) return [parseInt(c[1] + c[1], 16) / 255, parseInt(c[2] + c[2], 16) / 255, parseInt(c[3] + c[3], 16) / 255];
-        }
-        if (c && typeof c.length === 'number' && c.length >= 3) return [+c[0], +c[1], +c[2]];
-        return null;
-    }
+    // The params, in GrassNode::paramsFromArray's order. What the blades are
+    // (their shape, colour, where they stand) is the world's sward module.
+    const PARAMS = ['width', 'density', 'range'];
+    const PARAM_COUNT = 3;
 
     // opts -> the flat list, NaN where opts says nothing.
     function paramArray(opts) {
         const a = new Float64Array(PARAM_COUNT).fill(NaN);
-        let i = 0;
-        for (const [name, n] of PARAMS) {
-            let v = opts[name];
-            if (name === 'minNormalY' && v === undefined && opts.maxSlope !== undefined)
-                v = Math.cos(opts.maxSlope * Math.PI / 180);
-            if (v !== undefined && v !== null) {
-                if (n === 3) {
-                    const c = parseColor(v);
-                    if (c) { a[i] = c[0]; a[i + 1] = c[1]; a[i + 2] = c[2]; }
-                } else if (typeof v === 'number') {
-                    a[i] = v;
-                }
-            }
-            i += n;
-        }
+        PARAMS.forEach((name, i) => { if (typeof opts[name] === 'number') a[i] = opts[name]; });
         return a;
-    }
-
-    function paramObject(arr) {
-        const o = {};
-        let i = 0;
-        for (const [name, n] of PARAMS) {
-            o[name] = n === 3 ? [arr[i], arr[i + 1], arr[i + 2]] : arr[i];
-            i += n;
-        }
-        return o;
     }
 
     const isGrass = (node) => node instanceof SceneNode && __bro_native.scene.SceneNode_grassParams(node).length === PARAM_COUNT;
@@ -219,6 +183,18 @@
             typeof herbs.range === 'number' ? herbs.range : 0, typeof herbs.far === 'number' ? herbs.far : 0);
     }
 
+    // The blades: a world's sward module (GLSL, docs/vegetation-api.js
+    // "Sward"), the data its swardData(i) reads, the blades' mean height,
+    // the tallest one and how far one reaches from its root.
+    function setSward(node, sward) {
+        const data = sward.data instanceof Float32Array ? sward.data
+            : new Float32Array(Array.isArray(sward.data) ? sward.data : 0);
+        const height = typeof sward.height === 'number' ? sward.height : 0.4;
+        __bro_native.scene.SceneNode_setGrassSward(node, typeof sward.source === 'string' ? sward.source : '', data,
+            height, typeof sward.tallest === 'number' ? sward.tallest : height,
+            typeof sward.reach === 'number' ? sward.reach : 0);
+    }
+
     // The meshes shaded as the grass's ground (turf: true is the ground
     // node itself).
     function applyTurf(node, opts) {
@@ -236,6 +212,7 @@
         delete o.density;
         if (typeof opts.bladeDensity === 'number') o.density = opts.bladeDensity;
         __bro_native.scene.SceneNode_setGrassParams(node, paramArray(o));
+        if (opts.sward) setSward(node, opts.sward);
         const keys = ['name', 'color', 'roughness', 'castsShadow', 'receivesShadow', 'visible'];
         for (const k of keys) if (opts[k] !== undefined) node[k] = opts[k];
     }
@@ -274,13 +251,15 @@
         if (isGrass(this) && herbs) setHerbs(this, herbs);
         return this;
     });
+    // Swap the sward module (and its data) without rebaking the field.
+    fn(P, 'setSward', function setSwardMember(sward) {
+        if (isGrass(this) && sward) setSward(this, sward);
+        return this;
+    });
     fn(P, 'grassParams', function grassParams() {
         const a = __bro_native.scene.SceneNode_grassParams(this);
         if (a.length !== PARAM_COUNT) return undefined;
-        const o = paramObject(a);
-        o.bladeDensity = o.density;
-        delete o.density;
-        return o;
+        return { width: a[0], bladeDensity: a[1], range: a[2] };
     });
     fn(P, 'addMover', function addMover(target, mopts) {
         if (!isGrass(this) || !(target instanceof SceneNode)) return this;

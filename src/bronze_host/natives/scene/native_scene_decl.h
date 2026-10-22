@@ -712,7 +712,7 @@ void* bro_scene_SceneGraph_createGrass(void* self);
 void bro_scene_SceneNode_setGrassField(void* self, const float* data, uint32_t data_len, int32_t cols, int32_t rows,
                                        double x0, double z0, double cell);
 
-// grass params, GrassNode::paramsFromArray's order (a NaN keeps a value)
+// grass params: width, density, range (GrassNode::paramsFromArray; a NaN keeps a value)
 //   registered at __bro_native.scene.SceneNode_setGrassParams
 void bro_scene_SceneNode_setGrassParams(void* self, const double* params, uint32_t params_len);
 
@@ -782,6 +782,13 @@ void bro_scene_SceneNode_setGrassFloor(void* self, const float* data, uint32_t d
 //   registered at __bro_native.scene.SceneNode_setGrassHerbs
 void bro_scene_SceneNode_setGrassHerbs(void* self, const char* source, const float* data, uint32_t data_len,
                                        double height, double range, double far);
+
+// grass sward: a sward module's GLSL ("" clears it), the data its swardData(i)
+// reads (at most 256 floats), its blades' mean height, the tallest blade and
+// how far a blade reaches from its root (m)
+//   registered at __bro_native.scene.SceneNode_setGrassSward
+void bro_scene_SceneNode_setGrassSward(void* self, const char* source, const float* data, uint32_t data_len,
+                                       double height, double tallest, double reach);
 
 // mesh.turf: shade a mesh node as grass node `grass`'s ground (on 0: as itself)
 //   registered at __bro_native.scene.SceneNode_setTurfGrass

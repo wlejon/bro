@@ -131,13 +131,10 @@ bool SceneMeshDrawer::setup(SceneGpu& gpu) {
     fsCoverFar_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshCoverFarFrag);
     fsCoverFarIndirect_ =
         SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshCoverFarIndirectFrag);
-    fsGrass_ =SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshGrassFrag);
-    fsGrassIndirect_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshGrassIndirectFrag);
     covers_.push_back(std::make_unique<CoverShaders>());
     bool vsAll = true;
     for (int k = 0; k < kMeshKindCount; ++k) vsAll = vsAll && (vs_[k] || k == static_cast<int>(MeshKind::Grass));
-    if (!fsPlants_ || !fsPlantsIndirect_ || !fsCoverFar_ || !fsCoverFarIndirect_ || !fsGrass_ || !fsGrassIndirect_ ||
-        !vsAll || !fs_ || !fsIndirect_ || !fsVeg_ || !fsVegIndirect_ || !fsBark_ || !fsBarkIndirect_ ||
+    if (!fsPlants_ || !fsPlantsIndirect_ || !fsCoverFar_ || !fsCoverFarIndirect_ || !vsAll || !fs_ || !fsIndirect_ || !fsVeg_ || !fsVegIndirect_ || !fsBark_ || !fsBarkIndirect_ ||
         !covers_[0]->createBuiltin(device_)) {
         LOG_ERROR("SceneMeshDrawer: Failed creating the mesh shader modules");
         return false;
@@ -191,12 +188,10 @@ void SceneMeshDrawer::cleanup(SceneGpu& gpu) {
     SceneVkShaderModule::destroy(device_, fsBarkIndirect_);
     SceneVkShaderModule::destroy(device_, fsCoverFar_);
     SceneVkShaderModule::destroy(device_, fsCoverFarIndirect_);
-    SceneVkShaderModule::destroy(device_, fsGrass_);
-    SceneVkShaderModule::destroy(device_, fsGrassIndirect_);
     SceneVkShaderModule::destroy(device_, fsPlants_);
     SceneVkShaderModule::destroy(device_, fsPlantsIndirect_);
     fsPlants_ = fsPlantsIndirect_ = VK_NULL_HANDLE;
-    fsGrass_ = fsGrassIndirect_ = fsCoverFar_ = fsCoverFarIndirect_ = VK_NULL_HANDLE;
+    fsCoverFar_ = fsCoverFarIndirect_ = VK_NULL_HANDLE;
     fs_ = fsIndirect_ = fsVeg_ = fsVegIndirect_ = fsBark_ = fsBarkIndirect_ = VK_NULL_HANDLE;
     if (layout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(device_, layout_, nullptr);
     layout_ = VK_NULL_HANDLE;
@@ -319,7 +314,7 @@ VkPipeline SceneMeshDrawer::builtinPipeline(const MeshDraw& draw, const TargetFo
         if (ground && target.colorCount == 4) fs = cover[CoverShaders::GroundFill];
         if (draw.kind == MeshKind::Grass) {
             vs = cover[CoverShaders::GrassVert];
-            fs = indirect ? fsGrassIndirect_ : fsGrass_;
+            fs = cover[indirect ? CoverShaders::GrassIndirectFrag : CoverShaders::GrassFrag];
         }
         if (draw.kind == MeshKind::Plants) fs = indirect ? fsPlantsIndirect_ : fsPlants_;
         return buildPipeline(vs, fs, draw.kind, rasterBits, target);

@@ -100,9 +100,24 @@ struct CoverFar {
     float d;       // its ring distance
     float lam;     // its thinning's level
     float size;    // the share of its size it keeps (coverKeptAt)
-    float clump;   // the grass's clump noise there
+    vec4 own;      // a tuft's: the sward module's (SwardCell.own, as swardDensity left it)
     int kind;
 };
+
+// A tuft's element as the sward module takes a cell (herb cell `c`, at its
+// root: a tuft stands where its blades would, not gathered).
+SwardCell coverFarSward(CoverFar e, ivec2 c) {
+    SwardCell s;
+    s.cell = c;
+    s.h = e.h;
+    s.root = e.root;
+    s.f = e.f;
+    s.ground = e.gn;
+    s.d = e.d;
+    s.kept = 1.0;
+    s.own = e.own;
+    return s;
+}
 
 // The hand-over from the rings: a herb is the far herb ring's (by the same
 // dither as herbPlantLive's) inside its band; a tuft the far fans' as their
@@ -125,7 +140,7 @@ bool coverFarLive(ivec2 C, int level, int known, out CoverFar e) {
     e.gn = vec3(0.0, 1.0, 0.0);
     e.lam = 0.0;
     e.size = 1.0;
-    e.clump = 0.5;
+    e.own = vec4(0.0);
     e.kind = -1;
     e.root = (vec2(c) + e.h.xy) * grass.herbInfo.y;
     vec3 eye = camera.eyeWorld.xyz;
@@ -162,13 +177,12 @@ bool coverFarLive(ivec2 C, int level, int known, out CoverFar e) {
         e.kind = v >= 0 && v < HERB_VARIETIES ? v + 1 : 0;
     }
     if (e.kind == 0) {
-        // The sward's tufts, as thick as its blades grow there.
-        float kk = grass.dry.w;
-        e.clump = clamp((0.5 * sceneWindNoise(e.root * kk) + 0.25 * sceneWindNoise(e.root * kk * 2.03 + 17.3)) * 0.667 + 0.5,
-                        0.0, 1.0);
-        float minY = grass.blade.z;
-        float dens = (0.55 + 0.7 * e.clump) * e.f.g * smoothstep(minY - 0.05, minY + 0.05, e.gn.y);
-        if (e.f.a <= 0.0 || grassHash(c, 9203) > dens) {
+        // The sward's tufts, as thick as its blades stand there (the
+        // module's swardDensity).
+        SwardCell s = coverFarSward(e, c);
+        float dens = e.f.a > 0.0 ? swardDensity(s) : 0.0;
+        e.own = s.own;
+        if (grassHash(c, 9203) > dens) {
             e.kind = -1;
             return false;
         }

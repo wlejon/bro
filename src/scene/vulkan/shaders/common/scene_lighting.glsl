@@ -654,7 +654,7 @@ vec3 sceneSwardLight(vec3 up, vec3 V, vec3 L) {
     float sumW = sums.x, sumD = sums.y, sumT = sums.z, sumS = sums.w;
     // The lit share of the blades seen: over 1 along a low line, the tops
     // it sees lighter than the blades' mean shade the far blade and the
-    // turf carry (scene_grass.glsl's grassMeanShade).
+    // turf carry (the world's sward module's).
     float lit = lu > 0.0 ? max(SWARD_LIT_TOP - vu, 0.0) : 0.0;
     // The sheen: normalised Blinn, Schlick's Fresnel from a cuticle's 0.04.
     float vh = max(dot(V, H), 0.0);

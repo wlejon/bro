@@ -3,8 +3,9 @@
 // the view can see, stamps the movers and binds the node's field and
 // influence map; the cover's plan (scene_cover_plan.h) lists the blades and
 // plants in those cells the ring draws, and the shaders
-// (shaders/ground/scene_grass.glsl, scene_herb.glsl) place, bend and colour
-// each one, an instance a blade or a plant.
+// (shaders/ground/scene_grass.glsl, scene_herb.glsl) with the world's sward
+// and herb modules place, bend and colour each one, an instance a blade or a
+// plant.
 
 #include "scene/vulkan/draw/scene_mesh_drawer.h"
 
@@ -35,10 +36,6 @@ struct GrassUBO {
     float ring[4];
     float field[4];
     float fieldSize[4];
-    float blade[4];
-    float lush[4];
-    float dry[4];
-    float look[4];
     float push[4];
     float pushRate[4];
     float shape[4];
@@ -48,9 +45,10 @@ struct GrassUBO {
     float herbShape[4];
     float layer[4];    // the turf's surface layer (scene_ground_layers.glsl): tile side, texels, border, levels (0: none)
     float layer2[4];   // its texel's most pixels, page shift, page entries a side, level-0 texel
-    float herbData[GrassNode::kHerbDataVec4s * 4];   // the herb module's
+    float swardData[GrassNode::kSwardDataVec4s * 4];   // the sward module's
+    float herbData[GrassNode::kHerbDataVec4s * 4];     // the herb module's
 };
-static_assert(sizeof(GrassUBO) == (17 + GrassNode::kHerbDataVec4s) * 16);
+static_assert(sizeof(GrassUBO) == (13 + GrassNode::kSwardDataVec4s + GrassNode::kHerbDataVec4s) * 16);
 
 constexpr float kPi = 3.14159265358979f;
 constexpr float kWidthGrowth = 0.03f;            // a far blade is wider, so a ring keeps its cover
@@ -180,7 +178,7 @@ GrassNode::Ring ringInView(const GrassNode& node, const SceneView& view, int r) 
     GrassNode::Ring ring = node.ring(r);
     if (r != GrassNode::kRings - 1 || !view.perspective || view.height == 0) return ring;
     const float pxAtMetre = std::fabs(view.proj.at(1, 1)) * static_cast<float>(view.height) * 0.5f;
-    const float edge = std::max(node.params().height * pxAtMetre / kFanEdgePixels, ring.inner + ring.bandIn + 1.5f);
+    const float edge = std::max(node.swardHeight() * pxAtMetre / kFanEdgePixels, ring.inner + ring.bandIn + 1.5f);
     if (edge >= ring.outer) return ring;
     ring.thinFrom *= edge / ring.outer;
     ring.outer = edge;
@@ -221,14 +219,13 @@ bool grassImages(SceneGpuResources& res, GrassNode& node, GrassImages& out) {
     return out.field && out.push;
 }
 
-/// The UBO's fields every draw of the node shares (the field, the colours,
-/// the look, the influence map).
-// `herbs`: the node's herb module is drawn (it compiled).
-void fillShared(const GrassNode& node, bool herbs, GrassUBO& u) {
+/// The UBO's fields every draw of the node shares (the field, the modules'
+/// data, the influence map). `sward`, `herbs`: the node's modules are drawn
+/// (they compiled).
+void fillShared(const GrassNode& node, bool sward, bool herbs, GrassUBO& u) {
     const GrassNode::Params& p = node.params();
-    u.cells[0] = p.tufts;
-    u.cells[1] = p.flowering;
-    u.cells[2] = p.dead;
+    u.cells[0] = node.swardHeight();
+    u.cells[2] = kWidthGrowth;
     u.field[0] = node.fieldX0();
     u.field[1] = node.fieldZ0();
     u.field[2] = node.fieldCell();
@@ -237,14 +234,10 @@ void fillShared(const GrassNode& node, bool herbs, GrassUBO& u) {
     u.fieldSize[1] = static_cast<float>(node.fieldRows());
     u.fieldSize[2] = 1.0f / static_cast<float>(node.fieldCols());
     u.fieldSize[3] = 1.0f / static_cast<float>(node.fieldRows());
-    std::copy(std::begin(p.lush), std::end(p.lush), u.lush);
-    u.lush[3] = p.bulk;
-    std::copy(std::begin(p.dry), std::end(p.dry), u.dry);
-    u.dry[3] = p.clumpFreq;
-    u.look[0] = p.rootShade;
-    u.look[1] = p.sheen;
-    u.look[2] = p.variety;
-    u.look[3] = kWidthGrowth;
+    if (sward) {
+        const std::vector<float>& data = node.swardData();
+        std::copy(data.begin(), data.end(), u.swardData);
+    }
     u.push[0] = node.pushX0();
     u.push[1] = node.pushZ0();
     u.push[2] = GrassNode::kPushCell;
@@ -323,15 +316,13 @@ VkDescriptorSet SceneMeshDrawer::groundSet(SceneFrame& frame, GrassNode& node) {
     GrassImages img;
     if (!grassImages(frame.gpu.resources, node, img)) return VK_NULL_HANDLE;
     GrassUBO u{};
-    fillShared(node, coverShaders(node).index != 0, u);
+    const bool compiled = coverShaders(node).index != 0;
+    fillShared(node, compiled && node.hasSward(), compiled && node.hasHerbs(), u);
     // The ring the turf continues: the far ring as this view draws it.
     const GrassNode::Ring outer = ringInView(node, frame.view, GrassNode::kRings - 1);
     u.ring[0] = 0.0f;
     u.ring[1] = outer.outer;
     u.ring[3] = outer.bandOut;
-    u.blade[0] = node.params().height;
-    u.blade[2] = node.params().minNormalY;
-    u.blade[3] = node.params().wind;   // the sward's lay in the wind (grassSwardLay), as the blades'
     u.lod[3] = eyeLift(node, frame.view);
     // The turf's surface layer, once its tiles are configured (its first
     // frame works everything out where it draws).
@@ -356,7 +347,7 @@ VkDescriptorSet SceneMeshDrawer::groundSet(SceneFrame& frame, GrassNode& node) {
 
 uint64_t SceneMeshDrawer::groundGeneration(GrassNode& node) {
     // FNV-1a over everything every tile's fill reads: the field and floor,
-    // the herbs and the parameters the patterns take.
+    // the modules and their data.
     uint64_t h = 1469598103934665603ull;
     const auto mix = [&h](const void* p, size_t n) {
         const auto* b = static_cast<const uint8_t*>(p);
@@ -367,37 +358,39 @@ uint64_t SceneMeshDrawer::groundGeneration(GrassNode& node) {
         const uint64_t g = t ? t->generation : 0;
         mix(&g, sizeof(g));
     }
-    const uint64_t module = node.hasHerbs() ? node.herbSourceHash() : 0;
-    mix(&module, sizeof(module));
-    const std::vector<float>& herbs = node.herbData();
-    if (module && !herbs.empty()) mix(herbs.data(), herbs.size() * sizeof(float));
-    const GrassNode::Params& p = node.params();
-    const float params[] = {p.clumpFreq, p.height, p.flowering, p.dead, node.fieldX0(), node.fieldZ0(),
-                            node.fieldCell()};
-    mix(params, sizeof(params));
+    const uint64_t sward = node.swardSourceHash();
+    mix(&sward, sizeof(sward));
+    if (sward && !node.swardData().empty()) mix(node.swardData().data(), node.swardData().size() * sizeof(float));
+    const uint64_t herbs = node.hasHerbs() ? node.herbSourceHash() : 0;
+    mix(&herbs, sizeof(herbs));
+    if (herbs && !node.herbData().empty()) mix(node.herbData().data(), node.herbData().size() * sizeof(float));
+    const float place[] = {node.swardHeight(), node.fieldX0(), node.fieldZ0(), node.fieldCell()};
+    mix(place, sizeof(place));
     return h;
 }
 
 const CoverShaders& SceneMeshDrawer::coverShaders(const GrassNode& node) {
-    if (!node.hasHerbs()) return *covers_[0];
-    auto it = coverByModule_.find(node.herbSourceHash());
+    const uint64_t sward = node.swardSourceHash(), herbs = node.hasHerbs() ? node.herbSourceHash() : 0;
+    if (!sward && !herbs) return *covers_[0];
+    const uint64_t key = sward * 1099511628211ull ^ herbs;
+    auto it = coverByModule_.find(key);
     if (it == coverByModule_.end()) {
-        // Compiled here, at the first frame that draws it (its shaders in
+        // Compiled here, at the first frame that draws them (its shaders in
         // parallel, each from the SPIR-V cache when it has been compiled
-        // before). A module that does not compile is logged once and drawn
-        // as none.
+        // before). Modules that do not compile are logged once and drawn as
+        // none.
         auto set = std::make_unique<CoverShaders>();
         std::string err;
         uint32_t index = 0;
-        if (set->create(device_, node.herbSource(), err)) {
+        if (set->create(device_, node.swardSource(), herbs ? node.herbSource() : std::string(), err)) {
             index = static_cast<uint32_t>(covers_.size());
             set->index = index;
             covers_.push_back(std::move(set));
         } else {
-            LOG_ERROR("Grass node %u: its herb module did not compile, so it draws no herbs:\n%s", node.id(),
+            LOG_ERROR("Grass node %u: its modules did not compile, so it draws no blades or herbs:\n%s", node.id(),
                       err.c_str());
         }
-        it = coverByModule_.emplace(node.herbSourceHash(), index).first;
+        it = coverByModule_.emplace(key, index).first;
     }
     return *covers_[it->second];
 }
@@ -407,6 +400,7 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
     const SceneView& view = frame.view;
     node.stamp(frame.graph, frame.renderer.windTime(), view.eye.x, view.eye.z);
     for (int i = 0; i < GrassNode::kRings; ++i) node.setDrawnInstances(i, 0);
+    for (int i = 0; i < GrassNode::kHerbRings; ++i) node.setDrawnHerbs(i, 0);
     if (!node.hasField() || node.effectiveUnlit()) return;
 
     SceneGpuResources& res = frame.gpu.resources;
@@ -421,13 +415,15 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
         if (!ringMeshes[r]) return;
     }
 
-    const GrassNode::Params& p = node.params();
-    // Its shaders: the built-in ones, or its world's herb module's (no herbs
-    // when that did not compile).
+    // Its shaders: its world's modules' (no blades and no herbs when they did
+    // not compile).
     const CoverShaders& cover = coverShaders(node);
-    const bool herbs = cover.index != 0;
+    const bool sward = cover.index != 0 && node.hasSward();
+    const bool herbs = cover.index != 0 && node.hasHerbs();
+    if (!sward && !herbs) return;
     GrassUBO u{};
-    fillShared(node, herbs, u);
+    fillShared(node, sward, herbs, u);
+    const float H = node.swardHeight();
 
     uint32_t flags = 0;
     if (frame.ssr) flags |= mesh_flags::kReflectance;
@@ -494,15 +490,12 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
             const GrassNode::HerbRing hr = node.herbRing(GrassNode::kHerbRings - 1);
             start = std::min(start, hr.outer - hr.bandOut);
         }
-        const float tallest = std::max(node.params().height * 4.8f, herbs ? node.herbHeight() * 1.4f : 0.0f);
+        const float tallest = std::max(sward ? node.swardTallest() : 0.0f, herbs ? node.herbHeight() * 1.4f : 0.0f);
         const float ex = view.eye.x, ez = view.eye.z;
         u.ring[0] = kCoverFarRange;
         u.ring[1] = fan.outer;
         u.ring[2] = kCoverFarBand;
         u.ring[3] = fan.bandOut;
-        u.blade[0] = node.params().height;
-        u.blade[2] = node.params().minNormalY;
-        u.blade[3] = node.params().wind;
         u.lod[3] = lift;
         u.herbShape[2] = 3.0f;   // the far tier
         for (int k = 0; k < kCoverLevels; ++k) {
@@ -525,7 +518,7 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
                 const float dFar = std::sqrt(fx * fx + fz * fz + lift * lift);
                 if (dFar < start || dNear > kCoverFarRange) return false;
                 float lo = 0.0f, hi = 0.0f, tall = 0.0f;
-                const bool grows = node.fieldRange(x0 - reach, z0 - reach, x1 + reach, z1 + reach, lo, hi, tall) ||
+                const bool grows = (sward && node.fieldRange(x0 - reach, z0 - reach, x1 + reach, z1 + reach, lo, hi, tall)) ||
                                    (herbs &&
                                     node.herbRangeAt(x0 - reach, z0 - reach, x1 + reach, z1 + reach, lo, hi));
                 if (!grows) return false;
@@ -572,25 +565,24 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
         }
     };
 
-    for (int r = 0; r < GrassNode::kRings; ++r) {
+    // The blades: a draw in each of their rings, an instance a blade the plan
+    // lists, the world's sward module building it (mesh_grass.vert).
+    for (int r = 0; sward && r < GrassNode::kRings; ++r) {
         const GrassNode::Ring ring = ringInView(node, view, r);
         // Blades lean and stand up to ~2x the mean height: pad the box by
         // that, a cell and a margin.
         float box[4];
-        visibleBox(view, ring.outer, ring.cell * 2.0f + p.height * 3.0f + 1.0f, box);
+        visibleBox(view, ring.outer, ring.cell * 2.0f + H * 3.0f + 1.0f, box);
 
         // The box in tiles of kTile x kTile cells, each kept only when it can
         // hold a drawn blade: it reaches the ring (its dithered bands
         // included), something grows on it, and its box (ground to the
-        // tallest blade, padded by a blade's lean and its spread) is in the
-        // view. The plan tests every blade of every cell kept.
-        // A flowering culm stands at most about 4.8 x the mean height times
-        // the field's multiplier (clump 1.4, tuft 1.15, tall patch 1.7, culm
-        // 1.75), a leaf 3.6; a cell's roots gather to its tussock up to
-        // kGrassTussockReach off (scene_grass.glsl's grassTussock).
-        constexpr float kGrassTussockReach = 0.35f;
-        const float reach = ring.cell + ring.spread + p.height * 1.5f + kGrassTussockReach;
-        const float top = p.height * 4.8f;
+        // tallest blade at the field's height multiplier there, padded by a
+        // blade's lean, its spread and how far the module moves a cell's
+        // root) is in the view. The plan tests every blade of every cell
+        // kept.
+        const float reach = ring.cell + ring.spread + H * 1.5f + node.swardReach();
+        const float top = node.swardTallest();
         const float ex = view.eye.x, ez = view.eye.z;
         const float rIn = std::max(ring.inner - ring.bandIn - reach, 0.0f), rOut = ring.outer + reach;
         const auto keep = [&](float x0, float z0, float x1, float z1) {
@@ -607,10 +599,7 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
         u.ring[1] = ring.outer;
         u.ring[2] = ring.bandIn;
         u.ring[3] = ring.bandOut;
-        u.blade[0] = p.height;
-        u.blade[1] = ring.width;
-        u.blade[2] = p.minNormalY;
-        u.blade[3] = p.wind;
+        u.cells[1] = ring.width;
         u.shape[0] = static_cast<float>(ring.blades);
         u.shape[1] = static_cast<float>(GrassNode::bladeVertices(ring.segments));
         u.shape[2] = ring.spread;
@@ -631,6 +620,7 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
         draw.indices = blade->indices.buffer;
         draw.indexCount = blade->indexCount;
         draw.customSet = set;
+        draw.cover = cover.index;
         std::memcpy(draw.push.baseColor, node.color(), sizeof(draw.push.baseColor));
         draw.push.baseColor[3] = 1.0f;
         draw.push.pbrParams[0] = node.metallic();
@@ -688,7 +678,6 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
     // lists from the herbs' cells in view, mesh_herb.vert building it from
     // its card strips, mesh.frag's SCENE_HERB build cutting them. They cast
     // no shadow (yet): they lie in the grass's and the trees'.
-    for (int r = 0; r < GrassNode::kHerbRings; ++r) node.setDrawnHerbs(r, 0);
     if (!herbs) {
         planCoverFar();
         emitPlanned();
@@ -730,8 +719,6 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
         // Which ring (2: the far one, thinned past the whole plants' range).
         u.herbShape[2] = static_cast<float>(r);
         u.herbShape[3] = node.herbRange();
-        u.blade[2] = p.minNormalY;
-        u.blade[3] = p.wind;
         u.lod[3] = lift;
         VkDescriptorSet set = writeSet(frame, device_, *defaults_, u, img);
         if (set == VK_NULL_HANDLE) break;

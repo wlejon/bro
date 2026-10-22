@@ -74,7 +74,7 @@ void main() {
             HerbPlant p;
             live = herbPlantLive(c, p);
         } else {
-            GrassSeed s;
+            SwardCell s;
             live = grassBladeLive(c, j, s);
         }
         entry = coverPack(c, j);
@@ -89,5 +89,7 @@ void main() {
     if (live) coverList.entries[plan.first + sBase + slot] = entry;
 }
 
-// The world's herb module (scene_herb_layer.glsl), after all it may use.
+// The world's modules (scene_sward_layer.glsl, scene_herb_layer.glsl), after
+// all they may use.
+#include "ground/sward_module.glsl"
 #include "ground/herb_module.glsl"

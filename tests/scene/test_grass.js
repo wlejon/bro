@@ -1,5 +1,6 @@
 // scene.createGrass: procedural blades over a baked field (scene/nodes/grass_node.h,
-// vulkan/shaders/ground/scene_grass.glsl). Verifies:
+// vulkan/shaders/ground/scene_grass.glsl), as a sward module (SWARD below)
+// builds them. Verifies:
 //   - the node, its params round trip and the field bake (sampleHeights of a
 //     ground mesh, grassHeightAt, a density function)
 //   - blades are drawn: ring instances in grassStats, a grassy floor greener
@@ -31,6 +32,58 @@ function freshScene(size) {
     return { canvas: cv, scene: cv.getContext('scene') };
 }
 
+// A sward module (shaders/ground/scene_sward_layer.glsl): a blade a
+// candidate as the field's density says, a strip bent by the wind and the
+// movers' push, green where the field is lush and straw where it is dry.
+const SWARD = {
+    height: 0.35,
+    data: new Float32Array([0.12, 0.4, 0.05, 0, 0.55, 0.42, 0.2, 0]),
+    source: `
+vec3 swColor(float dry) { return mix(swardData(0).rgb, swardData(1).rgb, clamp(dry, 0.0, 1.0)); }
+void swardRoot(inout SwardCell s) {}
+float swardDensity(inout SwardCell s) { return s.f.y; }
+SwardFarLook swardFarLook(SwardCell s, vec4 h) { return SwardFarLook(grassSwardHeight(), 0.02, swColor(s.f.z)); }
+vec3 swardBake(vec2 xz, float fp) { return vec3(0.5 + 0.5 * groundFbm(xz, 2.0, fp, 2), 0.5, 0.5); }
+SwardTurf swardTurf(SwardTurfIn t) {
+    vec3 tops = swColor(t.dry) * (0.6 + 0.8 * t.baked.x);
+    return SwardTurf(tops, tops * 0.5, clamp(t.density, 0.0, 1.0));
+}
+vec4 swardLay(vec2 xz, vec3 gn) { return vec4(gn, 0.0); }
+#ifdef SWARD_BUILD
+bool swardBuild(SwardCell s, int j, SwardRing r, vec3 v, inout SwardVertex o) {
+    vec2 xz = s.root + (vec2(grassHash(s.cell, j * 4), grassHash(s.cell, j * 4 + 2)) - 0.5) * r.spread;
+    float len = grassSwardHeight() * s.f.w * (0.7 + 0.6 * grassHash(s.cell, j * 4 + 1));
+    float trample;
+    vec2 lie;
+    vec2 bend = grassInfluence(xz, trample, lie) +
+                camera.windField.xy * (0.02 * camera.windField.z + 0.5 * sceneWindGustAt(xz));
+    vec3 eye = camera.eyeWorld.xyz;
+    float y0 = s.f.x;
+    vec3 base = vec3(xz.x - eye.x, y0 - eye.y, xz.y - eye.z);
+    vec3 side = normalize(cross(vec3(0.0, 1.0, 0.0), base) + vec3(1e-4, 0.0, 0.0));
+    float w = max(r.width, length(base) * r.pixel * 0.65) * (1.0 - v.y);
+    o.pos = base + side * (sign(v.x) * 0.5 * w) + vec3(bend.x * v.y * v.y, v.y, bend.y * v.y * v.y) * len;
+    o.side = side;
+    o.normal = normalize(cross(side, vec3(0.0, 1.0, 0.0)));
+    o.up = s.ground;
+    o.color = swColor(s.f.z) * mix(0.5, 1.0, v.y);
+    o.ao = mix(0.5, 1.0, v.y);
+    o.bulk = 0.0;
+    o.far = 0.0;
+    o.uv = vec2(sign(v.x) * 0.5, v.y);
+    o.info = vec4(0.0);
+    o.carries = false;
+    return true;
+}
+#endif
+#ifdef SWARD_SHADE
+SwardShade swardShade(SwardFragment f) {
+    return SwardShade(1.0, 0.0, 1e4, f.color, normalize(f.normal), f.roughness, -1.0, vec4(0.0, 1.0, 0.0, 0.0));
+}
+#endif
+`,
+};
+
 const S = 192;
 const s = freshScene(S);
 if (!s.scene) {
@@ -52,13 +105,12 @@ if (!s.scene) {
     assert(Number.isNaN(hs[0]) && Math.abs(hs[25] - 0.5) < 1e-4,
         `sampleHeights: NaN off the mesh, its top inside (${hs[0]}, ${hs[25]})`);
 
-    const grass = scn.createGrass({ ground: floor, cell: 0.5, height: 0.35, dry: (x) => x > 0 ? 1 : 0 });
+    const grass = scn.createGrass({ ground: floor, cell: 0.5, sward: SWARD, dry: (x) => x > 0 ? 1 : 0 });
     assert(grass && typeof grass.grassParams === 'function', 'createGrass returns a node');
     const p = grass.grassParams();
-    assert(Math.abs(p.height - 0.35) < 1e-5, `height param round trips (${p.height})`);
-    assert(p.lush.length === 3 && p.dryColor.length === 3, 'colours read back as [r, g, b]');
-    grass.setGrass({ lush: [0.1, 0.2, 0.03], wind: 1.2 });
-    assert(Math.abs(grass.grassParams().wind - 1.2) < 1e-5 && Math.abs(grass.grassParams().height - 0.35) < 1e-5,
+    assert(p.width > 0 && p.bladeDensity > 0 && p.range > 0, `params read back (${JSON.stringify(p)})`);
+    grass.setGrass({ width: 0.005 });
+    assert(Math.abs(grass.grassParams().width - 0.005) < 1e-5 && grass.grassParams().range === p.range,
         'setGrass changes what it names and keeps the rest');
     assert(Math.abs(grass.grassHeightAt(3.2, -4.1) - 0.5) < 1e-4, 'grassHeightAt reads the baked ground');
     assert(floor.grassParams() === undefined, 'grass members answer undefined on a plain mesh');

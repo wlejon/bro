@@ -1,11 +1,9 @@
 #version 450
 // Grass blades (scene_grass.glsl): an instance a blade of the ring's list in
 // the cover's plan (scene_cover_plan.glsl), the ring mesh's first blade its
-// vertices, bent into place by the wind and the movers. Drawn with mesh.frag's
-// SCENE_GRASS build: a leaf folded along its midrib near the eye, its normal
-// leaning toward the ground's further off, the sun glowing through it from
-// behind, the root in shade, a culm's head cut per pixel.
-// shadow_grass.vert is the caster.
+// vertices, built by the world's sward module (scene_sward_layer.glsl's
+// swardBuild). Drawn with mesh.frag's SCENE_GRASS build, which the module's
+// swardShade cuts and shades. shadow_grass.vert is the caster.
 
 layout(location = 0) in vec3 inPos;
 layout(location = 1) in vec3 inNormal;
@@ -22,15 +20,16 @@ layout(location = 5) out vec3 outBitangent;
 layout(location = 6) out vec4 outInstColor;
 layout(location = 7) out vec4 outVegShade;
 
+#define SWARD_BUILD 1
 #include "common/scene_camera.glsl"
 #include "common/scene_mesh_push.glsl"
 #include "ground/scene_grass.glsl"
 #include "ground/scene_cover_plan.glsl"
 
 void main() {
-    GrassBlade b;
+    SwardVertex b;
     uvec2 e = coverList.entries[gl_InstanceIndex];
-    if (!grassBlade(coverCell(e), coverSlot(e), inPos, inNormal, b)) {
+    if (!grassBlade(coverCell(e), coverSlot(e), inPos, b)) {
         gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
         outVegShade = vec4(0.0, 0.0, 0.0, 1.0);
         return;
@@ -40,15 +39,18 @@ void main() {
     outNormal = b.normal;
     outTangent = b.side;
     outBitangent = cross(b.normal, b.side);
-    // Across (in the blade's width) and along it; and what it is (a leaf, a
-    // culm and its head, a dead leaf), for mesh.frag's SCENE_GRASS build.
+    // Where on its card, and the module's own (its SwardFragment's uv, info).
     outUV = b.uv;
     outColor = b.info;
-    outInstColor = vec4(b.color, 0.0);
+    // Its colour, and the herb bloom it carries (0 none).
+    outInstColor = vec4(b.color, b.speck);
     // A blade: its ao, marked (w <= -2) so the fragment stage takes it for a
-    // translucent blade with no paler underside; and the ground's normal.
-    outVegShade = vec4(b.ground * b.bulk, -(2.0 + b.ao + 2.0 * floor(b.far * 15.0 + 0.5)));
+    // translucent blade with no paler underside, and how far its
+    // translucency has faded; and the way the sward stands, by its bulk.
+    outVegShade = vec4(b.up * b.bulk, -(2.0 + b.ao + 2.0 * floor(b.far * 15.0 + 0.5)));
 }
 
-// The world's herb module (scene_herb_layer.glsl), after all it may use.
+// The world's modules (scene_sward_layer.glsl, scene_herb_layer.glsl), after
+// all they may use.
+#include "ground/sward_module.glsl"
 #include "ground/herb_module.glsl"

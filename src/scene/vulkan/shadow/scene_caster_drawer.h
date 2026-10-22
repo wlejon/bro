@@ -20,8 +20,10 @@
 #include <bromath/mat.h>
 #include <vulkan/vulkan.h>
 
+#include <array>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace bro::scene::vk {
 
@@ -56,15 +58,19 @@ private:
     static_assert(sizeof(Push) == 128);
 
     VkPipeline builtinPipeline(MeshKind kind, bool twoSided);
+    VkPipeline grassPipeline(const SceneGpu& gpu, uint32_t cover, bool twoSided);
     VkPipeline cutoutPipeline(MeshKind kind, bool twoSided);
     VkPipeline customPipeline(const CustomShaderState& cs, MeshKind kind, bool twoSided, bool cutout);
     VkPipeline buildPipeline(VkShaderModule vs, MeshKind kind, bool custom, bool twoSided, bool cutout);
 
     SceneVkDevice* device_ = nullptr;
     VkPipelineLayout layout_ = VK_NULL_HANDLE;
-    VkShaderModule vs_[kMeshKindCount] = {};
+    VkShaderModule vs_[kMeshKindCount] = {};       // none for Grass: its cover set's GrassShadowVert
     VkShaderModule fs_ = VK_NULL_HANDLE;
     VkPipeline builtin_[kMeshKindCount][2] = {};   // [kind][two-sided]
+    // Grass casters by their cover set (MeshDraw::cover, the world's sward
+    // module): [set][two-sided].
+    std::vector<std::array<VkPipeline, 2>> grass_;
     // Cutout casters (a textured static or instanced mesh with an alpha
     // cutoff): their base colour's alpha cut, scene_shadow_cutout.glsl.
     VkShaderModule vsCutout_[2] = {};              // [instanced]

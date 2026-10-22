@@ -19,8 +19,10 @@ bool CoverShaders::createBuiltin(VkDevice device) {
     return true;
 }
 
-bool CoverShaders::create(VkDevice device, const std::string& module, std::string& err) {
-    const std::vector<std::pair<std::string, std::string>> overrides = {{"ground/herb_module.glsl", module}};
+bool CoverShaders::create(VkDevice device, const std::string& sward, const std::string& herbs, std::string& err) {
+    std::vector<std::pair<std::string, std::string>> overrides;
+    if (!sward.empty()) overrides.emplace_back("ground/sward_module.glsl", sward);
+    if (!herbs.empty()) overrides.emplace_back("ground/herb_module.glsl", herbs);
     std::vector<uint32_t> spirv[kStages];
     std::string errs[kStages];
     {

@@ -23,7 +23,8 @@ layout(location = 5) in vec3 inBitangent;
 layout(location = 6) in vec4 inInstColor;  // rgb tint, a atlas cell / 256 (white off instancing)
 #ifdef SCENE_VEGETATION
 // xyz the crown's bulk normal times its weight, w the ambient occlusion,
-// negative on a leaf (vegetationSway), -(2 + ao) on a grass blade.
+// negative on a leaf (vegetationSway); on a grass blade xyz its sward's up
+// times its bulk, w -(2 + ao + 2 * its translucency's fade in 15ths).
 layout(location = 7) in vec4 inVegShade;
 #endif
 #ifdef SCENE_HERB
@@ -33,6 +34,11 @@ layout(location = 8) flat in vec4 inHerbInfo;
 layout(location = 9) in vec4 inHerbSize;
 layout(location = 10) in vec2 inHerbStand;
 #define HERB_SHADE 1
+#endif
+#ifdef SCENE_GRASS
+// A grass blade (mesh_grass.vert): inColor the world's sward module's own
+// (its SwardVertex info), inInstColor.a the herb bloom it carries.
+#define SWARD_SHADE 1
 #endif
 
 layout(location = 0) out vec4 outColor;
@@ -73,7 +79,7 @@ layout(location = 2) out vec4 outIndirect;
 #include "ground/scene_ground.glsl"
 #endif
 #ifdef SCENE_GRASS
-#include "ground/scene_grass_surface.glsl"
+#include "ground/scene_grass.glsl"
 #endif
 
 layout(set = 2, binding = 0) uniform sampler2D texAlbedo;
@@ -132,6 +138,30 @@ void main() {
     subpixel = max(1.0 - smoothstep(2.0, 4.0, herbPx),
                    subpixelDecided(herb.cover) * (1.0 - smoothstep(8.0, 16.0, herbPx)));
 #endif
+#ifdef SCENE_GRASS
+    // A blade as the world's sward module cuts and shades it
+    // (scene_sward_layer.glsl's swardShade), with a far herb's bloom it
+    // carries over it (grassSpeck); a part cover kept as that share of the
+    // samples, each blade its own dither. Its pixels where a cut part is a
+    // pixel or so across, and the part-covered ones of one up to a few
+    // pixels: the dither's all-or-nothing pixels, which the sub-pixel
+    // resolve blends.
+    SwardShade sward = swardShade(SwardFragment(worldPos, frontFacing ? inNormal : -inNormal, inTangent, inUV, inColor,
+                                                push.baseColor.rgb * inInstColor.rgb, inVegShade.xyz,
+                                                floor((-inVegShade.w - 2.0) * 0.5) / 15.0, push.pbrParams.y));
+    if (inInstColor.a > 0.5) {
+        float speck = grassSpeck(inUV);
+        sward.albedo = mix(sward.albedo, push.baseColor.rgb * grassUnpackColor(inInstColor.a), speck);
+        sward.cover = max(sward.cover, speck);
+    }
+    if (sward.cover < 1.0) {
+        int mask = coverSampleMask(sward.cover, (flags & MESH_MSAA) != 0u, uint(sward.seed * 131072.0));
+        if (mask == 0) discard;
+        gl_SampleMask[0] = mask;
+    }
+    subpixel = max(1.0 - smoothstep(1.5, 3.0, sward.px),
+                   subpixelDecided(sward.cover) * (1.0 - smoothstep(3.0, 8.0, sward.px)));
+#endif
     float camDist = length(worldPos);
     if (MESH_CUTS && push.extra.x > 0.0 && camDist < push.extra.x) discard;
 
@@ -157,10 +187,7 @@ void main() {
     baseColor *= inInstColor.rgb;
     if (MESH_CUTS && push.pbrParams.z > 0.0 && alpha < push.pbrParams.z) discard;
 #ifdef SCENE_GRASS
-    // A grass blade (scene_grass_surface.glsl's grassSurface): a far fan cut
-    // into its leaves, a culm into its stem and head.
-    GrassSurface grass = grassSurface(worldPos, baseColor, (flags & MESH_MSAA) != 0u);
-    subpixel = grass.subpixel;
+    baseColor = sward.albedo;
 #endif
 #ifdef SCENE_HERB
     baseColor = herb.albedo;
@@ -236,9 +263,6 @@ void main() {
                 bulkKeep = 1.0 - 0.5 * near;
             }
         }
-#ifdef SCENE_GRASS
-        grassLeafNormal(grass, N, vegShadeN, bulkWeight, worldPos, camDist);
-#endif
         if (bulkWeight > 1e-4)
             N = normalize(N * (1.0 - bulkWeight * bulkKeep) + vegShadeN * bulkKeep);
     }
@@ -246,6 +270,9 @@ void main() {
 #ifdef SCENE_HERB
     N = herb.normal;
     vegAO *= herb.ao;
+#endif
+#ifdef SCENE_GRASS
+    N = sward.normal;
 #endif
 
     float metallic = push.pbrParams.x;
@@ -260,7 +287,7 @@ void main() {
     roughness = herb.roughness;
 #endif
 #ifdef SCENE_GRASS
-    roughness = grassRoughness(grass, roughness, camDist);
+    roughness = sward.roughness;
 #endif
 #ifdef SCENE_BARK
     // A tube's wood (scene_bark.glsl): inColor where on the stem, inUV its
@@ -303,7 +330,12 @@ void main() {
     s.sward = herb.sward;
 #endif
 #ifdef SCENE_GRASS
-    grassSurfaceLight(s, grass, geomN, worldPos, vegFade, camDist);
+    // A blade is thin: the light comes through it by its own face, not by
+    // the bulk it is lit through further off (which faces a high sun and
+    // would never let it glow).
+    s.thinNormal = dot(geomN, -worldPos) >= 0.0 ? geomN : -geomN;
+    s.translucency = sward.translucency >= 0.0 ? sward.translucency : min(s.translucency * -sward.translucency, 1.0);
+    s.sward = sward.sward;
 #endif
 #ifdef SCENE_GROUND
     // Where the turf stands for far blades, it is lit as they are, the
@@ -354,7 +386,9 @@ void main() {
 #endif
 }
 
-#if defined(SCENE_HERB) || defined(SCENE_GROUND)
-// The world's herb module (scene_herb_layer.glsl), after all it may use.
+#if defined(SCENE_HERB) || defined(SCENE_GROUND) || defined(SCENE_GRASS)
+// The world's modules (scene_sward_layer.glsl, scene_herb_layer.glsl), after
+// all they may use.
+#include "ground/sward_module.glsl"
 #include "ground/herb_module.glsl"
 #endif

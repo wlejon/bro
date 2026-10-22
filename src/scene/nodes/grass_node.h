@@ -1,16 +1,17 @@
 #pragma once
 
-// Grass: a meadow of procedural blades over a ground the node is given,
-// bending in the scene's wind field and parted by movers. The GPU half is
-// vulkan/shaders/ground/scene_grass.glsl.
+// Grass: the cover over a ground the node is given, a meadow of procedural
+// blades bending in the scene's wind field and parted by movers. The GPU
+// half is vulkan/shaders/ground/scene_grass.glsl.
 //
-// No blade carries data. The node holds:
+// What the blades are is the world's: a sward MODULE, GLSL compiled into the
+// cover's shaders at run time (setSward, scene_sward_layer.glsl). No blade
+// carries data. The node holds:
 //   - the FIELD: a grid over the ground, four floats a texel (height,
 //     density 0..1, dryness 0 lush .. 1 sun-dried, height multiplier),
 //     set whole from a script (bro.scene's createGrass bakes it from a mesh,
 //     a terrain, a clipmap or callbacks);
-//   - the PARAMS: blade height and width, colours, range, slope limit and
-//     the look's weights;
+//   - the PARAMS: the near blade width, the rings' density and range;
 //   - the INFLUENCE MAP: a window of cells around the camera into which
 //     movers (tracked nodes) and one-off pushes stamp a bend and a trample,
 //     each cell keeping the time it was stamped so the shader decays it
@@ -52,26 +53,11 @@ public:
     GrassNode* asGrass() override { return this; }
 
     struct Params {
-        float height = 0.4f;        // mean blade height (m)
         float width = 0.004f;       // blade width near the camera (m); the outer rings' are multiples of it
         float density = 1.0f;       // blades per area, x the default (cells shrink by sqrt)
         float range = 150.0f;       // the far edge of the outermost ring (m)
-        float minNormalY = 0.62f;   // no grass where the ground is steeper than this
-        float lush[3] = {0.12f, 0.17f, 0.03f};
-        float dry[3] = {0.42f, 0.31f, 0.09f};
-        float bulk = 0.72f;         // how much of a blade's shading follows the ground's normal
-        float clumpFreq = 0.21f;    // clump noise frequency (1/m)
-        float rootShade = 0.45f;    // the root's colour, x the blade's
-        float sheen = 0.35f;        // a gust's lift of the bent blades
-        float variety = 1.0f;       // large-scale height variation, 0 .. 1
-        float wind = 1.0f;          // wind response, x
-        // How the grass grows (scene_grass.glsl), each varying from place to
-        // place about the value by shared noise and the field's dryness:
-        float tufts = 0.35f;        // 0 a sward of many small tufts .. 1 bunch grass in tussocks with bare ground between
-        float flowering = 0.08f;    // the share of tufts sending up a flowering culm (a seed head), more where lush and tall
-        float dead = 0.08f;         // the share of a tuft's leaves that are dead (straw at its foot), more where dry
     };
-    static constexpr int kParamCount = 20;
+    static constexpr int kParamCount = 3;
     void setParams(const Params& p);
     const Params& params() const { return params_; }
     /// The params as the flat list the bindings pass (setParams' order).
@@ -104,6 +90,30 @@ public:
     /// Null clears it. A floor of another size than the field is ignored.
     void setFloor(const float* floor, int cols, int rows, int channels = 1);
     bool hasFloor() const { return !floor_.empty(); }
+
+    // --- Sward ---
+    // The blades: a MODULE of the world's, GLSL compiled into the cover's
+    // shaders at run time (shaders/ground/scene_sward_layer.glsl says what
+    // it defines; vulkan/ground/scene_cover_shaders.h compiles it). It says
+    // where a cell's blades rise and how thickly they stand, builds and
+    // shades each blade at the width the rings ask for, and how the far
+    // tier's tufts and the turf show the sward.
+    static constexpr int kSwardDataVec4s = 64;   // scene_sward_layer.glsl's GRASS_SWARD_DATA
+    /// The module's GLSL and its data (at most kSwardDataVec4s vec4s; read
+    /// as swardData(i)); `height` its blades' mean height (m: where the far
+    /// blades end, kFanEdgePixels, and their screen test), `tallest` the
+    /// tallest a blade stands at a height multiplier of 1 and `reach` how far
+    /// it moves a cell's root (m: the rings' culling boxes). An empty source:
+    /// no blades.
+    void setSward(std::string source, const float* data, size_t floats, float height, float tallest, float reach);
+    const std::string& swardSource() const { return swardSource_; }
+    /// A hash of swardSource() (0: none), which keys its compiled shaders.
+    uint64_t swardSourceHash() const { return swardSourceHash_; }
+    const std::vector<float>& swardData() const { return swardData_; }
+    bool hasSward() const { return !swardSource_.empty(); }
+    float swardHeight() const { return swardHeight_; }
+    float swardTallest() const { return swardTallest_; }
+    float swardReach() const { return swardReach_; }
 
     // --- Herbs ---
     // The low plants among the grass (ferns, wildflowers, forbs, ground
@@ -263,6 +273,12 @@ private:
     std::vector<float> floor_;     // 2 a texel: canopy, herb density
     std::vector<float> fieldGpu_;  // the field as uploaded, the grass giving the herbs room (empty: field_ as is)
     bool herbFloor_ = false;       // the floor was given a herb density
+    std::string swardSource_;
+    uint64_t swardSourceHash_ = 0;
+    std::vector<float> swardData_;
+    float swardHeight_ = 0.4f;
+    float swardTallest_ = 1.9f;
+    float swardReach_ = 0.0f;
     std::string herbSource_;
     uint64_t herbSourceHash_ = 0;
     std::vector<float> herbData_;

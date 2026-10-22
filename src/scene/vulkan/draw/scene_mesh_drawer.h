@@ -256,6 +256,10 @@ public:
 
     VkPipelineLayout layout() const { return layout_; }
 
+    /// A grass draw's cover set (MeshDraw::cover): the shadow casters draw
+    /// the blades with its GrassShadowVert.
+    const CoverShaders& coverSet(uint32_t index) const { return *covers_[index]; }
+
     /// Bind a draw's vertex streams (none for a tube) and issue it: shared
     /// with the shadow casters, whose pipelines read the same streams. A
     /// chunked draw given `cull` draws its chunks inside cull's frustum,
@@ -344,16 +348,15 @@ private:
     VkShaderModule fsCoverFarIndirect_ = VK_NULL_HANDLE;
     VkShaderModule fsPlants_ = VK_NULL_HANDLE;         // plants: plants.frag (plants.vert is vs_[Plants])
     VkShaderModule fsPlantsIndirect_ = VK_NULL_HANDLE;
-    VkShaderModule fsGrass_ = VK_NULL_HANDLE;          // grass blades: mesh.frag's SCENE_GRASS build
-    VkShaderModule fsGrassIndirect_ = VK_NULL_HANDLE;
     VkShaderModule fsBark_ = VK_NULL_HANDLE;           // Tube: mesh.frag's SCENE_BARK build
     VkShaderModule fsBarkIndirect_ = VK_NULL_HANDLE;
     /// The shaders a grass node's cover is planned and drawn with (the
-    /// blades' vertex stage, the herbs, the far tier's vertex stage, the
-    /// turf and its fill): [0] the built-in set, then one a world's herb
-    /// module, compiled at the first node that has it.
+    /// blades, their shadows, the herbs, the far tier's vertex stage, the
+    /// turf and its fill): [0] the built-in set, then one per pair of a
+    /// world's sward and herb modules, compiled at the first node that
+    /// has it.
     std::vector<std::unique_ptr<CoverShaders>> covers_;
-    std::unordered_map<uint64_t, uint32_t> coverByModule_;   // GrassNode::herbSourceHash -> index (0: failed)
+    std::unordered_map<uint64_t, uint32_t> coverByModule_;   // the modules' source hashes -> index (0: failed)
     const CoverShaders& coverShaders(const GrassNode& node);
     std::unordered_map<uint32_t, std::unique_ptr<GroundLayers>> groundLayers_;   // by grass node id
     int turfKind_ = -1;   // the turf's fills, a world service job kind

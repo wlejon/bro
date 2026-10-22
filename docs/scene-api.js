@@ -555,12 +555,12 @@ class SceneGraph {
   createDecal(opts) {}
 
   /**
-   * A meadow of procedural blades over a ground (a mesh node, a terrain, a
-   * clipmap or a height function), with density, dryness and height from
-   * numbers or functions of (x, z, y); swaying in the wind field, parted by
-   * movers. See GrassNodeOptions and the grass members in
-   * docs/vegetation-api.js.
-   * @example scene.createGrass({ ground, dry: (x, z) => patches(x, z) });
+   * A sward of blades over a ground (a mesh node, a terrain, a clipmap or a
+   * height function), the blades a world's sward module, with density,
+   * dryness and height from numbers or functions of (x, z, y); swaying in
+   * the wind field, parted by movers. See GrassNodeOptions and the grass
+   * members in docs/vegetation-api.js.
+   * @example scene.createGrass({ ground, sward: swardModule(), dry: (x, z) => patches(x, z) });
    * @param {GrassNodeOptions} [opts]
    * @returns {SceneNode}
    */

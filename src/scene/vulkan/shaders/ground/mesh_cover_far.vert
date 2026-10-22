@@ -42,14 +42,12 @@ void main() {
     vec3 body, bloom = vec3(0.0);
     float bloomShare = 0.0;
     if (e.kind == 0) {
-        // A tuft of the sward: as tall as its blades stand there, its colour
-        // theirs from lush to sun-dried, as shaded as the sward on average.
-        ht = grass.blade.x * max(e.f.a, 0.2) * mix(1.0, 1.6, e.clump) * mix(0.8, 1.2, h2.y);
-        wd = cell * 1.3;
-        float lush = 1.0 - clamp(e.f.b, 0.0, 1.0);
-        vec3 green = grass.lush.rgb * mix(vec3(0.9, 0.97, 1.05), vec3(1.1, 1.03, 0.85), h2.z);
-        body = mix(grass.dry.rgb, green, clamp(lush * 1.3 - 0.15 + e.clump * 0.2, 0.0, 1.0)) *
-               grassMeanShade() * mix(0.88, 1.12, h2.x);
+        // A tuft of the sward: the module's (scene_sward_layer.glsl's
+        // swardFarLook).
+        SwardFarLook look = swardFarLook(coverFarSward(e, coverRep(coverCell(entry), int(grass.herbShape.x + 0.5))), h2);
+        ht = look.height;
+        wd = look.width;
+        body = look.body;
     } else {
         // A herb: the module's (scene_herb_layer.glsl's herbFarLook).
         HerbFarLook look = herbFarLook(e.kind - 1, h2);
@@ -91,5 +89,7 @@ void main() {
     outGround = vec4(e.gn, h2.x);
 }
 
-// The world's herb module (scene_herb_layer.glsl), after all it may use.
+// The world's modules (scene_sward_layer.glsl, scene_herb_layer.glsl), after
+// all they may use.
+#include "ground/sward_module.glsl"
 #include "ground/herb_module.glsl"

@@ -2,9 +2,9 @@
 //
 // What grows in a scene: the plants node (`scene.createPlants`: trees and
 // shrubs built on the GPU from a species table), the grass node
-// (`scene.createGrass`: a meadow of procedural blades, its herbs (a world's
-// herb module) and its turf; bro.flora's herb species, which broworkshop's
-// lib/herbs module grows), and the vegetation
+// (`scene.createGrass`: its blades (a world's sward module), its herbs (a
+// world's herb module) and its turf; bro.flora's herb species, which
+// broworkshop's lib/herbs module grows), and the vegetation
 // records that make any mesh sway in the scene's wind field
 // (`setVegetation`, flora-api.js "Vegetation records").
 //
@@ -83,33 +83,81 @@
  */
 
 /**
- * Grass: a meadow of procedural blades over a ground, from
- * `scene.createGrass(opts)`. No blade carries data: four rings of cells
- * around the camera, each cell an instance of several blades. Near (to 7 m at
- * the default range) a cell holds 14 fine blades (4 mm), about 1400 a square
- * metre, growing from crowns in bunches that fan out and, where `tufts` is
- * high, gather into tussocks. Each blade tapers to a fine point, arches and
- * droops by its length and age (young leaves upright, old ones bowed, a few
- * lodged flat), folds along its midrib and twists a little; some are dead
- * brown leaves low at the base (`dead`) and some are flowering culms, a bare
- * stem carrying a panicle or a spike of spikelets well above the leaves
- * (`flowering`); far off, seen across, the heads give a meadow in flower a
- * pinkish-buff haze. Sunlit blades seen against the light glow through.
- * Further out, fewer and wider
- * blades over bigger cells (the far rings' leaves fans of four strands cut
- * per pixel, lit as the sward's mean face, laid over as far as the near
- * blades bend in the wind and its gusts, so a far meadow shows the wind's
- * sheen and its travelling waves), so blade count x width (the cover) stays about
- * level while the work falls. Within a ring the far half keeps fewer blades,
- * widened to match the next ring, and rings cross-fade through a dithered
- * band. Only tiles of cells the view can see, inside the ring and where
- * something grows are issued. Each blade is placed, culled, bent and coloured
- * in the vertex shader from its cell. They sway in the scene's wind field
- * (`setWind`: the steady lean, each blade's flutter and the travelling gust
- * bands, which lift the sheen of the blades they bend), are lit mostly as the
- * ground they cover, and are parted and flattened by movers (`addMover`,
- * `push`). The node is left out of raycasts and bounds; its transform is
- * ignored.
+ * The grass node's sward (createGrass `sward`, `node.setSward`): its blades
+ * (a meadow's leaves and culms, moss, kelp, crystal spines, whatever a world
+ * grows), built where they stand, nothing stored per blade. What they are
+ * is the world's SWARD MODULE, GLSL compiled at run time into the node's
+ * cover shaders (docs/scene-world-architecture.md §13, "worlds as code");
+ * the engine owns where and how they are drawn. A node with no sward module
+ * grows no blades (its herbs and turf still draw).
+ *
+ * The engine: four rings of cells around the camera, each cell an instance
+ * of several candidate blades (14 near, to 7 m at the default range); further
+ * out fewer candidates over bigger cells, the module asked for wider blades
+ * so the cover holds while the work falls. Within a ring the far half keeps
+ * fewer, widened to match the next ring, and rings cross-fade through a
+ * dithered band. Only tiles of cells the view can see, inside the ring and
+ * where something grows, are issued. Past the rings the far tier's tufts
+ * and then the turf take the module's far look. Each fragment's cover is
+ * kept as that share of the pixel's samples and marked for the sub-pixel
+ * resolve; the lighting is the scene's (a blade's own face near, the
+ * sward's mean facet as far as the module says).
+ *
+ * The module defines, against what the engine declares
+ * (src/scene/vulkan/shaders/ground/scene_sward_layer.glsl: SwardCell,
+ * SwardRing, SwardVertex, SwardFragment, SwardShade, SwardFarLook,
+ * SwardTurfIn, SwardTurf, swardData(i)):
+ *   - `void swardRoot(inout SwardCell s)`: where a cell's blades rise (it may
+ *     gather them toward a tussock), and its own share of the cell (s.own);
+ *   - `float swardDensity(inout SwardCell s)`: the chance a candidate (a
+ *     cell's blade, a far tuft) stands there: clumps, slope, the field's
+ *     density;
+ *   - `SwardFarLook swardFarLook(SwardCell s, vec4 h)`: a far tuft's height,
+ *     width and colour;
+ *   - `vec3 swardBake(vec2 xz, float fp)`: the turf's surface layer's three
+ *     channels of the sward's patterns, band-limited to a footprint;
+ *   - `SwardTurf swardTurf(SwardTurfIn t)`: the sward as one surface where
+ *     the turf stands in for it (its tops, its roots, its cover);
+ *   - `vec4 swardLay(vec2 xz, vec3 gn)`: the way its blades stand there, and
+ *     a gust's lift of its sheen;
+ *   - under `SWARD_BUILD` (the vertex stages, the shadow casters' too):
+ *     `bool swardBuild(SwardCell s, int j, SwardRing r, vec3 v, inout
+ *     SwardVertex o)`, a vertex of the cell's blade j at the ring's width
+ *     (false leaves the blade out);
+ *   - under `SWARD_SHADE` (mesh.frag): `SwardShade swardShade(SwardFragment
+ *     f)`, what a fragment of a blade is.
+ * It may use anything of scene_camera.glsl and scene_grass.glsl (the field,
+ * the movers' push `grassInfluence`, grassHash, the wind, the band-limited
+ * ground noise). It compiles and caches as a herb module does; one that
+ * does not compile is logged and the node draws neither blades nor herbs.
+ *
+ * broworkshop's lib/sward is such a module: a meadow of fine leaves from
+ * crowns in bunches (tussocks with `tufts`), arching, drooping, folded and
+ * twisting, dead leaves at the base and flowering culms above them, fans
+ * of strands far off, swaying in the wind's lean, flutter and gusts.
+ * @example
+ *   import { swardModule } from "/lib/sward/index.js";
+ *   scene.createGrass({ ground, turf: true, sward: swardModule({ height: 0.5, tufts: 0.6 }) });
+ * @typedef {Object} GrassSwardOptions
+ * @property {string} source - the module's GLSL ('' grows no blades).
+ * @property {Float32Array|Array<number>} [data] - what its swardData(i)
+ *   reads, vec4 i at floats 4i..4i+3 (at most 256 floats).
+ * @property {number} [height=0.4] - the blades' mean height (m): the rings'
+ *   bounds and the turf's depth are sized by it (grassSwardHeight()).
+ * @property {number} [tallest=height] - the tallest blade (m): how high a
+ *   cell's bounds reach.
+ * @property {number} [reach=0] - how far a blade's tip may stand from its
+ *   cell's spot (m), past the ring's spread and its lean.
+ */
+
+/**
+ * Grass: a sward of blades over a ground, its herbs and its turf, from
+ * `scene.createGrass(opts)`. What the blades are is its sward module
+ * (GrassSwardOptions), what the herbs are its herb module
+ * (GrassHerbOptions); the node owns the field they grow over, the rings,
+ * the far tier and the turf, the wind (`setWind`) and the movers that part
+ * and flatten them (`addMover`, `push`). The node is left out of raycasts
+ * and bounds; its transform is ignored.
  *
  * What the node draws over is a FIELD baked once from these options: a grid
  * over `area` every `cell` metres of (ground height, density, dryness, height
@@ -130,6 +178,7 @@
  *   const ground = scene.createMesh({ data: Mesh.heightmapGrid(h, N, N, cell) });
  *   const grass = scene.createGrass({
  *     ground,                                  // the blades stand on it
+ *     sward: swardModule(),                    // broworkshop's lib/sward
  *     dry: (x, z) => patches(x, z),            // 0 lush .. 1 straw
  *     density: (x, z) => nearTrunk(x, z) ? 0.3 : 1,
  *     tall: (x, z) => 1.2 - 0.4 * patches(x, z),
@@ -147,8 +196,11 @@
  * @property {number} [cell=0.5] - field texel spacing (m): the detail of
  *   the ground's shape and of the masks.
  * @property {number|Function} [density=1] - where grass grows, 0..1.
- * @property {number|Function} [dry=0] - 0 lush .. 1 sun-dried.
- * @property {number|Function} [tall=1] - height multiplier.
+ * @property {number|Function} [dry=0] - 0 lush .. 1 sun-dried (what the
+ *   sward module makes of it).
+ * @property {number|Function} [tall=1] - height multiplier (likewise).
+ * @property {GrassSwardOptions} [sward] - the blades (see
+ *   GrassSwardOptions). Default: none.
  * @property {number|Function} [floor] - the woodland floor, 0 open .. 1
  *   under a closed canopy (the crowns' shade over a point, an app's
  *   function of its plants), on the same grid. A turf ground (`turf`) lays
@@ -160,34 +212,12 @@
  *   (see GrassHerbOptions).
  * @property {boolean|SceneNode|Array<SceneNode>} [turf] - mesh nodes to shade
  *   as this grass's ground (`true`: the `ground` node), see `shadeGround`.
- * @property {number} [height=0.4] - mean blade height (m); clumps run
- *   from about half to one and a half times it, and lush tall patches higher.
- * @property {number} [width=0.004] - the near blades' width (m); the outer
- *   rings' are 4, 19 and 25 times it, and every blade widens with distance
- *   (never under about two thirds of a pixel).
- * @property {number} [bladeDensity=1] - blades per area, x the default
- *   (a 14-blade tuft per 10 cm square near the camera, before the clumps
- *   thin them).
+ * @property {number} [width=0.004] - the width the near ring asks of a
+ *   blade (m); the outer rings' are 4, 19 and 25 times it, and it grows with
+ *   distance.
+ * @property {number} [bladeDensity=1] - candidate blades per area, x the
+ *   default (14 a 10 cm cell near the camera, before the module's density).
  * @property {number} [range=150] - the far edge of the outermost ring (m).
- * @property {number} [minNormalY=0.62] - no grass on ground steeper than
- *   this (the ground normal's y); or `maxSlope` in degrees.
- * @property {Array<number>|string} [lush] - lush blade colour, linear
- *   `[r, g, b]` or `'#rrggbb'` (default `[0.12, 0.17, 0.03]`).
- * @property {Array<number>|string} [dryColor] - sun-dried colour (default
- *   `[0.42, 0.31, 0.09]`).
- * @property {number} [bulk=0.72] - how much of a blade's shading follows
- *   the ground's normal (1 = lit exactly as the ground).
- * @property {number} [clump=0.21] - clump noise frequency (1/m).
- * @property {number} [rootShade=0.45] - the root's colour, x the blade's.
- * @property {number} [sheen=0.35] - how much a gust lightens the blades it bends.
- * @property {number} [variety=1] - large-scale height variation, 0..1.
- * @property {number} [wind=1] - response to the wind, x.
- * @property {number} [tufts=0.35] - 0 an even sward .. 1 bunch grass: how
- *   far blades gather into tussocks with bare ground between.
- * @property {number} [flowering=0.08] - 0..1, how many flowering culms
- *   (about 150 a square metre at 1, more where the grass is lush and tall).
- * @property {number} [dead=0.08] - 0..1, the share of dead brown leaves at
- *   the base (more where it is dry).
  * @property {Array<number>|string} [color] - the node colour, multiplied in (default white).
  * @property {number} [roughness=0.7]
  * @property {boolean} [castsShadow=false] - the near ring's blades cast, a
@@ -533,9 +563,10 @@ class SceneNode {
   // ── Grass (scene.createGrass) ──
 
   /**
-   * Grass: change the look (any of GrassNodeOptions' blade and colour
-   * keys; what it leaves out keeps its value). The field is not re-baked.
-   * @example grass.setGrass({ height: 0.6, dryColor: '#b89a52', wind: 1.4 });
+   * Grass: change the rings (`width`, `bladeDensity`, `range`), the sward
+   * module (`sward`) or the material (`color`, `roughness`, shadows); what
+   * it leaves out keeps its value. The field is not re-baked.
+   * @example grass.setGrass({ range: 220, bladeDensity: 0.8 });
    * @param {GrassNodeOptions} opts
    * @returns {SceneNode}
    */
@@ -560,11 +591,21 @@ class SceneNode {
   setHerbs(herbs) {}
 
   /**
+   * Grass: replace the sward module and its data (its blades, their far
+   * look and the turf's look of them) without re-baking the field.
+   * `source: ''` grows no blades.
+   * @example grass.setSward(swardModule({ tufts: 0.8, dead: 0.3 }));
+   * @param {GrassSwardOptions} sward
+   * @returns {SceneNode}
+   */
+  setSward(sward) {}
+
+  /**
    * Grass: shade mesh node `mesh` as this grass's ground (turf), or with
    * `on` false as itself again. Turf is shaded from the grass's field where
-   * it reaches: the sward the blades stand for (their mean colour, the
-   * dryness, the clumps; near the eye the dark roots and soil between the
-   * blades, rising to the blade tops with distance), bare soil where nothing
+   * it reaches: the sward the blades stand for (as its module's swardTurf
+   * says: near the eye the roots and soil between the blades, rising to
+   * the blade tops with distance), bare soil where nothing
    * grows, and under a closed `floor` the leaf litter, twigs, damp soil and
    * moss. Past the field it takes the same data from the mesh's vertex
    * colour: r the grass density, g the dryness, b the floor. Every pattern
@@ -580,8 +621,7 @@ class SceneNode {
   shadeGround(mesh, on) {}
 
   /**
-   * Grass: the look as set: `{height, width, bladeDensity, range, minNormalY,
-   * lush, dryColor, bulk, clump, rootShade, sheen, variety, wind}`.
+   * Grass: the rings as set: `{width, bladeDensity, range}`.
    * Undefined on any other node.
    * @returns {Object|undefined}
    */

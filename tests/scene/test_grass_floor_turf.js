@@ -6,7 +6,8 @@
 //     still issues herb cells and draws green leaves; a herb density of 0
 //     grows nothing; a module that does not compile draws no herbs
 //   - `turf` / shadeGround shade a ground mesh as the grass's ground: the
-//     sward where the grass grows (green, textured), the litter where the
+//     sward where the grass grows (green, textured; SWARD below, a sward
+//     module of turf alone), the litter where the
 //     floor is closed (brown, textured), and shadeGround(mesh, false) gives
 //     the mesh its own colour back
 
@@ -70,6 +71,31 @@ HerbShade herbShade(HerbFragment f) {
 `,
 };
 
+// A sward module (shaders/ground/scene_sward_layer.glsl) for the turf: green
+// where the field grows grass, its tops mottled; it builds no blades.
+const SWARD = {
+    data: new Float32Array([0.12, 0.4, 0.05, 0]),
+    source: `
+void swardRoot(inout SwardCell s) {}
+float swardDensity(inout SwardCell s) { return s.f.y; }
+SwardFarLook swardFarLook(SwardCell s, vec4 h) { return SwardFarLook(0.0, 0.0, swardData(0).rgb); }
+vec3 swardBake(vec2 xz, float fp) { return vec3(0.5 + 0.5 * groundFbm(xz, 2.0, fp, 2), 0.5, 0.5); }
+SwardTurf swardTurf(SwardTurfIn t) {
+    vec3 tops = swardData(0).rgb * (0.6 + 0.8 * t.baked.x);
+    return SwardTurf(tops, tops * 0.5, clamp(t.density, 0.0, 1.0));
+}
+vec4 swardLay(vec2 xz, vec3 gn) { return vec4(gn, 0.0); }
+#ifdef SWARD_BUILD
+bool swardBuild(SwardCell s, int j, SwardRing r, vec3 v, inout SwardVertex o) { return false; }
+#endif
+#ifdef SWARD_SHADE
+SwardShade swardShade(SwardFragment f) {
+    return SwardShade(0.0, 0.0, 1e4, f.color, normalize(f.normal), f.roughness, 0.0, vec4(0.0));
+}
+#endif
+`,
+};
+
 const S = 192;
 const cv = document.createElement('canvas');
 cv.setAttribute('width', String(S));
@@ -120,6 +146,7 @@ if (!scn) {
     // ---- Turf ----
     // Grass to the left, a closed canopy's floor to the right, shaded on the
     // ground; the camera high enough that the ground shows.
+    grass.setSward(SWARD);
     grass.setGround({ ground: floor, cell: 0.5, density: (x) => (x < 0 ? 1 : 0), floor: (x) => (x < 0 ? 0 : 1), turf: true });
     scn.setCamera({ fov: 55, near: 0.05, far: 300, position: [0, 30, 20], target: [0, 0, -10] });
     const turf = scn.captureFrame();

@@ -58,5 +58,7 @@ void main() {
     outHerbStand = h.c;
 }
 
-// The world's herb module (scene_herb_layer.glsl), after all it may use.
+// The world's modules (scene_sward_layer.glsl, scene_herb_layer.glsl), after
+// all they may use.
+#include "ground/sward_module.glsl"
 #include "ground/herb_module.glsl"

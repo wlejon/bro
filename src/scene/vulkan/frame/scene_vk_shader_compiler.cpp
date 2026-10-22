@@ -20,7 +20,9 @@
 #include "scene_procedural.glsl.src.h"
 #include "scene_bark.glsl.src.h"
 #include "scene_grass.glsl.src.h"
-#include "scene_grass_surface.glsl.src.h"
+#include "scene_ground_noise.glsl.src.h"
+#include "scene_sward_layer.glsl.src.h"
+#include "sward_module.glsl.src.h"
 #include "scene_ground.glsl.src.h"
 #include "scene_ground_layers.glsl.src.h"
 #include "scene_cover_plan.glsl.src.h"
@@ -33,6 +35,7 @@
 #include "mesh_grass.vert.src.h"
 #include "mesh_herb.vert.src.h"
 #include "mesh_cover_far.vert.src.h"
+#include "shadow_grass.vert.src.h"
 #include "ground_layer_fill.frag.src.h"
 #include "util/user_dirs.h"
 
@@ -129,7 +132,9 @@ const char* embeddedInclude(const std::string& name) {
         {"common/scene_procedural.glsl", kVkSceneProceduralSrc},
         {"draw/scene_bark.glsl", kVkSceneBarkSrc},
         {"ground/scene_grass.glsl", kVkSceneGrassSrc},
-        {"ground/scene_grass_surface.glsl", kVkSceneGrassSurfaceSrc},
+        {"ground/scene_ground_noise.glsl", kVkSceneGroundNoiseSrc},
+        {"ground/scene_sward_layer.glsl", kVkSceneSwardLayerSrc},
+        {"ground/sward_module.glsl", kVkSwardModuleSrc},
         {"ground/scene_ground.glsl", kVkSceneGroundSrc},
         {"ground/scene_ground_layers.glsl", kVkSceneGroundLayersSrc},
         {"ground/scene_cover_plan.glsl", kVkSceneCoverPlanSrc},
@@ -143,6 +148,7 @@ const char* embeddedInclude(const std::string& name) {
         {"ground/mesh_grass.vert", kVkMeshGrassVertSrc},
         {"ground/mesh_herb.vert", kVkMeshHerbVertSrc},
         {"ground/mesh_cover_far.vert", kVkMeshCoverFarVertSrc},
+        {"ground/shadow_grass.vert", kVkShadowGrassVertSrc},
         {"ground/ground_layer_fill.frag", kVkGroundLayerFillFragSrc},
     };
     for (const auto& inc : kIncludes) {

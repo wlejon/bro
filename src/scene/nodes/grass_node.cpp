@@ -117,6 +117,24 @@ constexpr HerbRingSpec kHerbRingSpec[GrassNode::kHerbRings] = {
     {0.0f, 3, 1},   // the far plants: a few pixels each, one quad a card
 };
 
+// A world module's source as its key: FNV-1a, never 0 for a source.
+uint64_t sourceHash(const std::string& source) {
+    if (source.empty()) return 0;
+    uint64_t h = 1469598103934665603ull;
+    for (unsigned char c : source) h = (h ^ c) * 1099511628211ull;
+    return h ? h : 1;
+}
+
+// A module's data: at most `vec4s` vec4s, non-finite values 0; none
+// without a module.
+std::vector<float> moduleData(const std::string& source, const float* data, size_t floats, int vec4s) {
+    if (source.empty() || !data) return {};
+    std::vector<float> out(data, data + std::min(floats, static_cast<size_t>(vec4s) * 4));
+    for (float& v : out)
+        if (!std::isfinite(v)) v = 0.0f;
+    return out;
+}
+
 }  // namespace
 
 GrassNode::GrassNode(const std::string& name) : MeshNode(name) {
@@ -137,28 +155,16 @@ GrassNode::GrassNode(const std::string& name) : MeshNode(name) {
 GrassNode::~GrassNode() = default;
 
 void GrassNode::setParams(const Params& p) {
-    params_ = p;
-    params_.height = std::max(p.height, 0.01f);
     params_.width = std::max(p.width, 0.0f);
     params_.density = std::clamp(p.density, 0.05f, 4.0f);
     params_.range = std::clamp(p.range, 5.0f, 2000.0f);
-    params_.minNormalY = std::clamp(p.minNormalY, 0.0f, 1.0f);
-    params_.bulk = std::clamp(p.bulk, 0.0f, 1.0f);
-    params_.variety = std::clamp(p.variety, 0.0f, 1.0f);
-    params_.wind = std::max(p.wind, 0.0f);
-    params_.tufts = std::clamp(p.tufts, 0.0f, 1.0f);
-    params_.flowering = std::clamp(p.flowering, 0.0f, 1.0f);
-    params_.dead = std::clamp(p.dead, 0.0f, 1.0f);
     bumpChangeGeneration();
 }
 
 void GrassNode::paramsToArray(float (&o)[kParamCount]) const {
-    const Params& p = params_;
-    const float v[kParamCount] = {p.height,  p.width,  p.density,   p.range,     p.minNormalY, p.lush[0],
-                                  p.lush[1], p.lush[2], p.dry[0],   p.dry[1],    p.dry[2],     p.bulk,
-                                  p.clumpFreq, p.rootShade, p.sheen, p.variety, p.wind,
-                                  p.tufts, p.flowering, p.dead};
-    std::copy(std::begin(v), std::end(v), o);
+    o[0] = params_.width;
+    o[1] = params_.density;
+    o[2] = params_.range;
 }
 
 void GrassNode::paramsFromArray(const double* v, size_t n) {
@@ -167,24 +173,7 @@ void GrassNode::paramsFromArray(const double* v, size_t n) {
     for (size_t i = 0; i < n && i < static_cast<size_t>(kParamCount); ++i) {
         if (!std::isnan(v[i])) a[i] = static_cast<float>(v[i]);
     }
-    Params p;
-    p.height = a[0];
-    p.width = a[1];
-    p.density = a[2];
-    p.range = a[3];
-    p.minNormalY = a[4];
-    std::copy(a + 5, a + 8, p.lush);
-    std::copy(a + 8, a + 11, p.dry);
-    p.bulk = a[11];
-    p.clumpFreq = a[12];
-    p.rootShade = a[13];
-    p.sheen = a[14];
-    p.variety = a[15];
-    p.wind = a[16];
-    p.tufts = a[17];
-    p.flowering = a[18];
-    p.dead = a[19];
-    setParams(p);
+    setParams({a[0], a[1], a[2]});
 }
 
 GrassNode::Ring GrassNode::ring(int i) const {
@@ -227,20 +216,22 @@ GrassNode::HerbRing GrassNode::herbRing(int i) const {
     return r;
 }
 
+void GrassNode::setSward(std::string source, const float* data, size_t floats, float height, float tallest,
+                         float reach) {
+    swardSource_ = std::move(source);
+    swardSourceHash_ = sourceHash(swardSource_);
+    swardData_ = moduleData(swardSource_, data, floats, kSwardDataVec4s);
+    swardHeight_ = std::isfinite(height) ? std::clamp(height, 0.01f, 20.0f) : 0.4f;
+    swardTallest_ = std::isfinite(tallest) ? std::clamp(tallest, swardHeight_, 100.0f) : swardHeight_;
+    swardReach_ = std::isfinite(reach) ? std::clamp(reach, 0.0f, 10.0f) : 0.0f;
+    bumpChangeGeneration();
+}
+
 void GrassNode::setHerbs(std::string source, const float* data, size_t floats, float height, float range,
                          float far) {
     herbSource_ = std::move(source);
-    herbSourceHash_ = 0;
-    if (!herbSource_.empty()) {
-        // FNV-1a, never 0 for a source.
-        uint64_t h = 1469598103934665603ull;
-        for (unsigned char c : herbSource_) h = (h ^ c) * 1099511628211ull;
-        herbSourceHash_ = h ? h : 1;
-    }
-    herbData_.assign(data && !herbSource_.empty() ? data : nullptr,
-                     data && !herbSource_.empty() ? data + std::min(floats, size_t(kHerbDataVec4s) * 4) : nullptr);
-    for (float& v : herbData_)
-        if (!std::isfinite(v)) v = 0.0f;
+    herbSourceHash_ = sourceHash(herbSource_);
+    herbData_ = moduleData(herbSource_, data, floats, kHerbDataVec4s);
     herbHeight_ = std::isfinite(height) ? std::clamp(height, 0.0f, 20.0f) : 0.0f;
     // (The grass gives the herbs room only while there are some.)
     if (!herbSource_.empty() != !fieldGpu_.empty()) uploadField();
