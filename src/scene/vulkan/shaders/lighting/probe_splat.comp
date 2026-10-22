@@ -56,7 +56,7 @@ void main() {
     float rx = cr.radii.x, ry = cr.radii.y;
     // (A cone's foot is a tenth wider than its radius.)
     float reach = rx * 1.1;
-    vec3 albedo = 0.5 * (s.light + s.dark);
+    vec3 albedo = s.albedo;
     float top = pgTop();
     float voxY = top / float(PG_LAYERS_Y);
     vec3 turn = vec3(plantRand(p.seed, 101u), plantRand(p.seed, 102u), plantRand(p.seed, 103u));

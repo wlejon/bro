@@ -1,7 +1,8 @@
 // SceneMeshDrawer's plants path: a PlantsNode becomes two draws a view, its
 // leaves and its wood, each an instance a chunk of one plant's elements
-// (shaders/foliage/scene_plants.glsl builds them), for the camera and for each
-// shadow view (a rect of shadow pages the frame draws) its casters go to.
+// (shaders/foliage/scene_plants.glsl builds them with the node's world
+// module, its PlantShaders), for the camera and for each shadow view (a
+// rect of shadow pages the frame draws) its casters go to.
 //
 // Which plants each view draws and with how many elements is planned on the
 // GPU (scene_plants_gpu_plan.cpp, plants_plan.comp) over the cells in view:
@@ -25,6 +26,8 @@
 #include "scene/vulkan/frame/scene_targets.h"
 #include "scene/vulkan/ground/scene_cover_plan.h"
 
+#include "util/log.h"
+
 #include <cstring>
 
 namespace bro::scene::vk {
@@ -38,7 +41,7 @@ constexpr uint32_t kLimbsPerChunk = PP_LIMBS_PER_CHUNK;
 
 // The leaves draw indexed, so the vertex stage runs once a point of an
 // element's polygon (PLANT_LEAF_POINTS), not once a triangle's corner:
-// scene_plants.glsl's plantLeafCorner's 4 triangles, a chunk's elements on.
+// scene_plants.glsl's polygon of 4 triangles, a chunk's elements on.
 constexpr uint32_t kLeafPoints = 6;
 constexpr uint32_t kLeafIndexSlot = 1;   // its slot among the node's GPU meshes
 const bromesh::MeshData& leafIndices() {
@@ -61,11 +64,36 @@ void SceneMeshDrawer::plansSubmitted(uint64_t ticket, render::VulkanQueue& queue
     plantPlanner_->submitted(ticket, queue);
 }
 
+const PlantShaders* SceneMeshDrawer::plantShaders(const PlantsNode& node) {
+    const uint64_t key = node.moduleSourceHash();
+    if (!key) return nullptr;
+    auto it = plantByModule_.find(key);
+    if (it == plantByModule_.end()) {
+        // Compiled here, at the first frame that draws it (its shaders in
+        // parallel, each from the SPIR-V cache when it has been compiled
+        // before). A module that does not compile is logged once and draws
+        // nothing.
+        auto set = std::make_unique<PlantShaders>();
+        std::string err;
+        int index = -1;
+        if (set->create(device_, node.moduleSource(), err)) {
+            index = static_cast<int>(plantSets_.size());
+            set->index = static_cast<uint32_t>(index);
+            plantSets_.push_back(std::move(set));
+        } else {
+            LOG_ERROR("Plants node %u: its module did not compile, so it draws no plants:\n%s", node.id(), err.c_str());
+        }
+        it = plantByModule_.emplace(key, index).first;
+    }
+    return it->second < 0 ? nullptr : plantSets_[static_cast<size_t>(it->second)].get();
+}
+
 void SceneMeshDrawer::preparePlants(SceneFrame& frame, PlantsNode& node, std::vector<MeshDraw>& out) {
     out.clear();
     // The cells placed about the camera's eye.
     node.follow(frame.view.eye.x, frame.view.eye.z);
-    if (node.plantCount() == 0 || node.speciesCount() == 0 || node.effectiveUnlit()) {
+    const PlantShaders* shaders = plantShaders(node);
+    if (!shaders || node.plantCount() == 0 || node.speciesCount() == 0 || node.effectiveUnlit()) {
         node.setStats({});
         return;
     }
@@ -86,7 +114,7 @@ void SceneMeshDrawer::preparePlants(SceneFrame& frame, PlantsNode& node, std::ve
 
     // Planned on the GPU: each view's draws indirect, their counts the plan's.
     std::shared_ptr<plants::GpuPlanner::Node> state = plantPlanner_->node(node);
-    if (!plantPlanner_->add(frame, *state, node, *store, tiles)) return;
+    if (!plantPlanner_->add(frame, *state, node, *store, tiles, *shaders)) return;
     node.setStatsSource(state);
 
     uint32_t flags = 0;
@@ -94,6 +122,7 @@ void SceneMeshDrawer::preparePlants(SceneFrame& frame, PlantsNode& node, std::ve
     MeshDraw draw;
     draw.kind = MeshKind::Plants;
     draw.nodeId = node.id();
+    draw.moduleSet = shaders->index;
     std::memset(draw.push.model, 0, sizeof(draw.push.model));
     draw.push.model[0] = draw.push.model[5] = draw.push.model[10] = draw.push.model[15] = 1.0f;
     draw.push.baseColor[0] = draw.push.baseColor[1] = draw.push.baseColor[2] = draw.push.baseColor[3] = 1.0f;

@@ -74,13 +74,14 @@ uint plantAtPlace(uint p, out uvec2 mask) {
 bool seenBy(uvec2 mask, uint v) { return v < 32u ? (mask.x & (1u << v)) != 0u : (mask.y & (1u << (v - 32u))) != 0u; }
 
 // What the plan needs of a plant: its sphere (PlantsNode's), and of its
-// species the full count, its leaf's length and crown's radius at its
-// scale, its lobes.
+// species (the engine's share of its record, scene_plant_records.glsl's
+// PlantSpecies) the full count, its element's length and crown's radius at
+// its scale, its limbs.
 struct PlantInfo {
     vec3 centre;
     float radius;
     float full, leaf, crown;
-    uint lobes;
+    uint limbs;
 };
 
 PlantInfo plantInfo(uint i) {
@@ -89,17 +90,17 @@ PlantInfo plantInfo(uint i) {
     int species = int(b.y);
     if (species < 0 || species >= int(st.header[0].y)) species = 0;
     uint r = uint(st.header[0].w) + uint(species) * 8u;
-    vec4 s0 = st.records[r], s1 = st.records[r + 1u], s2 = st.records[r + 2u];
+    vec4 s0 = st.records[r], s1 = st.records[r + 1u];
     float scale = b.x;
     PlantInfo o;
     precise float height = s0.x * scale;
     o.centre = vec3(a.x, a.y + 0.5 * height, a.z);
     precise float reach = sqrt(0.25 * s0.x * s0.x + s0.z * s0.z) + 0.15 * s0.z;
     o.radius = reach * scale + 0.3;
-    o.full = max(s2.x, 1.0);
-    o.leaf = s1.z * scale;
+    o.full = max(s0.w, 1.0);
+    o.leaf = s1.x * scale;
     o.crown = s0.z * scale;
-    o.lobes = uint(clamp(int(s1.x), 1, PP_MAX_LOBES));
+    o.limbs = uint(clamp(int(s1.y), 0, PP_MAX_LIMBS));
     return o;
 }
 
@@ -146,7 +147,7 @@ Pick pick(PlantInfo pl, uint v) {
         precise float least = clamp(3.14159 * crown * crown, 1.0, minElements);
         k.elements = elementCount(pl, across, pf(PP_P_PIXELS), least);
         k.slot = cameraSlot(min(uint(PP_BANDS) - 1u, uint(log2(1.0 + d) * 4.0)));
-        k.limbs = d < 0.4 * woodRange ? pl.lobes + 1u : 1u;
+        k.limbs = d < 0.4 * woodRange ? pl.limbs + 1u : 1u;
     } else {
         uint t = v - 1u;
         uint at = PP_P_TILE + t * PP_TILE_WORDS;
@@ -165,7 +166,7 @@ Pick pick(PlantInfo pl, uint v) {
         }
         precise float least = clamp(3.14159 * crown * crown, 2.0, minElements);
         k.elements = elementCount(pl, 1.0 / texel, pf(PP_P_SHADOW_TEXELS), least);
-        k.limbs = d < 0.15 * woodRange ? pl.lobes + 1u : 1u;
+        k.limbs = d < 0.15 * woodRange ? pl.limbs + 1u : 1u;
     }
     k.on = true;
     k.leafChunks = (uint(ceil(k.elements)) + uint(PP_LEAVES_PER_CHUNK) - 1u) / uint(PP_LEAVES_PER_CHUNK);

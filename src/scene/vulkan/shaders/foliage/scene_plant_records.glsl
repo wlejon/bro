@@ -7,9 +7,9 @@
 //   header[1]  the first plant record, 0, 0, 0
 //   header[2]  0, 0, 0, 0
 //   header[3]  0, 0, 0, 0
-//   records[]  species (PLANT_SPECIES_VEC4 each), plants in cell order (2
-//              each: x, y, z, yaw; scale, species, seed (an integer under
-//              2^24), tint)
+//   records[]  species (PLANT_SPECIES_VEC4 each: the engine's two, then the
+//              module's PLANT_DATA_VEC4), plants in cell order (2 each: x, y,
+//              z, yaw; scale, species, seed (an integer under 2^24), tint)
 
 #ifndef PLANT_RECORDS_SET
 #define PLANT_RECORDS_SET 3
@@ -22,6 +22,8 @@ layout(std430, set = PLANT_RECORDS_SET, binding = PLANT_RECORDS_BINDING) readonl
 } plants;
 
 #define PLANT_SPECIES_VEC4 8
+#define PLANT_ENGINE_VEC4 3 // the engine's share of a species (PlantSpecies)
+#define PLANT_DATA_VEC4 5   // the module's (PlantsNode::kSpeciesDataFloats / 4)
 
 uint plantHash(uint x) {
     x ^= x >> 16;
@@ -34,43 +36,39 @@ uint plantHash(uint x) {
 float plantRand(uint x) { return float(plantHash(x) >> 8) * (1.0 / 16777216.0); }
 float plantRand(uint a, uint b) { return plantRand(a * 0x9e3779b9u + plantHash(b)); }
 
+// What the engine knows of a species: its size (the plants' bounds, a far
+// caster's disc), its detail (the plan's element and limb counts) and its
+// crown as the light sees it (an envelope of a medium: the light through
+// it, plants.frag; the canopy in the probe grid, probe_splat.comp). The
+// rest is its module's (plantData).
 struct PlantSpecies {
+    int index;
     float height;      // m, at scale 1
     float base;        // where the crown starts, a fraction of the height
     float radius;      // the crown's radius (m)
-    float shape;       // 0 a round crown .. 1 a cone
-    float lobes;       // clumps in the crown
-    float lobeSize;    // a lobe's radius, a fraction of the crown's
-    float leafLen;     // a leaf's length (m) at full detail
-    float leafWidth;   // its width over its length
     float full;        // elements at full detail
-    float trunk;       // the trunk's radius at the foot (m)
-    float spread;      // how far the lobes sit out from the trunk, 0..1
-    float droop;       // how far leaves hang, 0..1
-    vec3 light;        // the foliage's sunlit colour (linear)
-    float hueVar;      // plant to plant and lobe to lobe colour variety
-    vec3 dark;         // its colour deep in the crown
-    float glow;        // how much the sun shows through it from behind
-    vec3 bark;         // the trunk's colour
-    float density;     // how dense the crown is to the sun's light (1/m)
-    vec3 glowColor;    // the colour of the light through it
-    float needle;      // 0 broad leaves .. 1 needle sprays (narrow, dark, stiff)
+    float leafLen;     // an element's length (m) at full detail
+    int limbs;         // tubes besides the trunk (drawn near; far off the trunk alone)
+    float shape;       // the envelope: 0 a round crown .. 1 a cone
+    float density;     // how dense the crown is to light (1/m)
+    vec3 albedo;       // its foliage's mean colour (linear)
 };
 
 PlantSpecies plantSpecies(int i) {
     int r = int(plants.header[0].w) + i * PLANT_SPECIES_VEC4;
     vec4 a = plants.records[r], b = plants.records[r + 1], c = plants.records[r + 2];
-    vec4 d = plants.records[r + 3], e = plants.records[r + 4], f = plants.records[r + 5];
-    vec4 g = plants.records[r + 6];
     PlantSpecies s;
-    s.height = a.x; s.base = a.y; s.radius = a.z; s.shape = a.w;
-    s.lobes = b.x; s.lobeSize = b.y; s.leafLen = b.z; s.leafWidth = b.w;
-    s.full = c.x; s.trunk = c.y; s.spread = c.z; s.droop = c.w;
-    s.light = d.xyz; s.hueVar = d.w;
-    s.dark = e.xyz; s.glow = e.w;
-    s.bark = f.xyz; s.density = f.w;
-    s.glowColor = g.xyz; s.needle = g.w;
+    s.index = i;
+    s.height = a.x; s.base = a.y; s.radius = a.z; s.full = a.w;
+    s.leafLen = b.x; s.limbs = int(b.y); s.shape = b.z; s.density = b.w;
+    s.albedo = c.xyz;
     return s;
+}
+
+// The module's vec4 `i` (0..PLANT_DATA_VEC4-1) of species `species`.
+vec4 plantData(int species, int i) {
+    return plants.records[int(plants.header[0].w) + species * PLANT_SPECIES_VEC4 + PLANT_ENGINE_VEC4 +
+                          clamp(i, 0, PLANT_DATA_VEC4 - 1)];
 }
 
 struct Plant {
@@ -98,7 +96,9 @@ Plant plantAt(int i) {
 }
 
 // The crown's envelope in the plant's frame (y up, metres): an ellipsoid
-// about `center` with `radii`, narrowed toward its top by `shape` (a cone at 1).
+// about `center` with `radii`, narrowed toward its top by `shape` (a cone
+// at 1). The light and the probes take it as the crown; a module builds its
+// crown within it.
 struct PlantCrown {
     vec3 center;
     vec3 radii;

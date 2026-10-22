@@ -1068,10 +1068,12 @@ When something new crosses every world (light under water, say), the
 engine changes. The line is where a shared rule lives, not "no engine
 code".
 
-Today's worlds are the data kind. In demos/biomes, the trees are a table
-of shape numbers (`createPlants({ species })`). The herbs are named
-presets (`'daisy'`, `'poppy'`). The grass is a few JS callbacks for its
-density, dryness and height, evaluated on the CPU. The ground is a CPU
+Before this section, the worlds were the data kind. In demos/biomes, the
+trees were a table of shape numbers (`createPlants({ species })`), the
+herbs named presets (`'daisy'`, `'poppy'`), the grass a few JS callbacks
+for its density, dryness and height evaluated on the CPU (the trees, the
+herbs and the blades are modules now, below; the grass's field is still
+those callbacks). The ground is still a CPU
 mesh coloured vertex by vertex. Only the fields are already code: the
 placement rules are FastNoise node trees.
 
@@ -1140,7 +1142,7 @@ A refactor, not a layer on top. Each existing node becomes the first
 implementation of its interface, and its data form goes:
 - **Grass**: done, the sward kind. The contract is `ground/scene_sward_layer.glsl` (swardRoot, swardDensity, swardBuild under SWARD_BUILD, swardShade under SWARD_SHADE, swardFarLook, swardBake, swardTurf, swardLay; the structs they pass; swardData(i) over the node's 64 vec4s). The engine's half, `ground/scene_grass.glsl`, keeps the rings, the thinning, the field and screen tests, the far herbs' blooms a far blade carries, and the turf's composition; mesh.frag keeps the dither, the sub-pixel mark and the light. The built-in shaders compile with `ground/sward_module.glsl`, a module of no blades. A grass node's module (`sward.source`, `sward.data`, `sward.height`, `sward.tallest`, `sward.reach`) is spliced in with its herb module, the pair one cover set of twelve stages (the blades' fragment and shadow stages joining the nine), the shadow casters drawing the blades with their set's. The node keeps only the rings' width, density and range. The meadow (leaves, dead leaves, culms, tussocks, the far fans and the turf's look of them) is broworkshop's `lib/sward` module. Biomes with it: the same look, the same cost (meadow 2.72 ms against 2.74). The ring table becoming the engine's rings asked for by pixel size is still to do.
 - **Herbs**: done, the first module. The engine's half is `ground/scene_herb_layer.glsl` (the contract: herbStand, herbBuild, herbShade, herbFarMean, herbFarLocal, herbFarLook, the structs they pass, herbData) and `ground/scene_herb.glsl` (the cells, rings and hand-overs); the built-in shaders compile with `ground/herb_module.glsl`, a module of no herbs. A grass node's module (`herbs.source`, `herbs.data`) is spliced in for that file into the nine cover shaders that call it (`ground/scene_cover_shaders.h`: the plan, the blades' and herbs' vertex stages, the herbs' and the turf's fragment stages, the far tier's vertex stage, the turf layer's fill), compiled on as many threads, once a process, through the SPIR-V cache (docs/code-cache.md); one that does not compile is logged and draws no herbs. broflora's species (daisy, poppy, bracken, wood sorrel, ...) are broworkshop's `lib/herbs` module. Biomes with it: the same plants, the same look, the same cost (meadow 2.74 ms against 2.75).
-- **Plants** (the plants node's species table and its GPU plan): the tree kind, whose `build` is the current crown and branch generator. The species table becomes that module's own constants.
+- **Plants**: done, the tree kind. The contract is `foliage/scene_plant_layer.glsl` (plantElement under PLANT_BUILD, plantLeafPoint, plantLimb, plantSway, plantSurface under PLANT_SHADE; PlantElementIn, PlantElement, PlantLimb, PlantFragment, PlantSurface; plantData(s, i) over a species' 20 floats). The engine keeps a species' size, detail and crown as the light sees it (height, base, radius, full elements, element length, limbs, shape, density, mean albedo: the plan, the bounds, the crown's medium in plants.frag, the far casters' discs and the probe grid read these), and the placement, the GPU plan, the poses, the element polygon and tube, and the light. The module is spliced into the plants' five stages (`foliage/scene_plant_shaders.h`: the pose pass, the vertex stage, both fragment stages, the shadow casters' vertex stage); the cover's and the plants' sets are one generic `frame/scene_module_shaders.h`. A node with no module draws nothing; there is no built-in tree. The lobed crowns, limbs, needle tiers, a leaf's face and the sway are broworkshop's `lib/trees` (`treeModule`, `treeSpecies`). Biomes with it: the same forest (the near trees within a level of step 2's), the same cost (meadow 2.71 ms against 2.72, plants:leaves unchanged).
 - **The far tier and the turf**: engine. They call each kind's `far` and the surface's far colour.
 - **Biomes' ground**: a land kernel (its FastNoise height, compiled to the GPU, decision 2) and a surface function. It is no longer a CPU mesh.
 

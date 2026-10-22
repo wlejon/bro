@@ -25,6 +25,7 @@
 #include "scene/vulkan/frame/scene_vk_allocator.h"
 #include "scene/vulkan/draw/scene_vk_custom_shader.h"
 #include "scene/vulkan/ground/scene_cover_shaders.h"
+#include "scene/vulkan/foliage/scene_plant_shaders.h"
 #include "scene/vulkan/frame/scene_vk_pipeline.h"
 #include "scene/vulkan/frame/scene_vk_target_format.h"
 
@@ -154,9 +155,10 @@ struct MeshDraw {
     VkDescriptorSet vertexSet = VK_NULL_HANDLE;  // set 3: Skinned bones, Scatter/Tube segments
     VkDescriptorSet materialSet = VK_NULL_HANDLE;// null: the default material
     VkDescriptorSet customSet = VK_NULL_HANDLE;  // set 4 when `custom`; Grass: its ring and textures
-    /// Grass and turf: their grass node's shaders (CoverShaders::index, 0
-    /// the built-in set).
-    uint32_t cover = 0;
+    /// The shaders of its node's world modules: grass and turf their grass
+    /// node's (CoverShaders::index, 0 the built-in set), plants their
+    /// plants node's (PlantShaders::index).
+    uint32_t moduleSet = 0;
 
     MeshPushConstants push{};
     bool translucent = false;
@@ -256,9 +258,10 @@ public:
 
     VkPipelineLayout layout() const { return layout_; }
 
-    /// A grass draw's cover set (MeshDraw::cover): the shadow casters draw
-    /// the blades with its GrassShadowVert.
+    /// A grass draw's cover set and a plants draw's (MeshDraw::moduleSet):
+    /// the shadow casters draw them with its shadow stage.
     const CoverShaders& coverSet(uint32_t index) const { return *covers_[index]; }
+    const PlantShaders& plantSet(uint32_t index) const { return *plantSets_[index]; }
 
     /// Bind a draw's vertex streams (none for a tube) and issue it: shared
     /// with the shadow casters, whose pipelines read the same streams. A
@@ -346,8 +349,6 @@ private:
     VkShaderModule fsVegIndirect_ = VK_NULL_HANDLE;
     VkShaderModule fsCoverFar_ = VK_NULL_HANDLE;       // the cover's far tier: cover_far.frag
     VkShaderModule fsCoverFarIndirect_ = VK_NULL_HANDLE;
-    VkShaderModule fsPlants_ = VK_NULL_HANDLE;         // plants: plants.frag (plants.vert is vs_[Plants])
-    VkShaderModule fsPlantsIndirect_ = VK_NULL_HANDLE;
     VkShaderModule fsBark_ = VK_NULL_HANDLE;           // Tube: mesh.frag's SCENE_BARK build
     VkShaderModule fsBarkIndirect_ = VK_NULL_HANDLE;
     /// The shaders a grass node's cover is planned and drawn with (the
@@ -358,6 +359,13 @@ private:
     std::vector<std::unique_ptr<CoverShaders>> covers_;
     std::unordered_map<uint64_t, uint32_t> coverByModule_;   // the modules' source hashes -> index (0: failed)
     const CoverShaders& coverShaders(const GrassNode& node);
+    /// The shaders a plants node is drawn with: one a world's plant module,
+    /// compiled at the first node that has it.
+    std::vector<std::unique_ptr<PlantShaders>> plantSets_;
+    std::unordered_map<uint64_t, int> plantByModule_;   // the module's source hash -> index (-1: failed)
+    /// A plants node's set; null for a node with no module or one that did
+    /// not compile.
+    const PlantShaders* plantShaders(const PlantsNode& node);
     std::unordered_map<uint32_t, std::unique_ptr<GroundLayers>> groundLayers_;   // by grass node id
     int turfKind_ = -1;   // the turf's fills, a world service job kind
     /// This frame's turf draws by grass node (offer's, for record).

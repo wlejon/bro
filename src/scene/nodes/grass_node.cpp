@@ -1,5 +1,6 @@
 #include "scene/nodes/grass_node.h"
 
+#include "scene/nodes/world_module.h"
 #include "scene/scene_graph.h"
 
 #include <algorithm>
@@ -117,14 +118,6 @@ constexpr HerbRingSpec kHerbRingSpec[GrassNode::kHerbRings] = {
     {0.0f, 3, 1},   // the far plants: a few pixels each, one quad a card
 };
 
-// A world module's source as its key: FNV-1a, never 0 for a source.
-uint64_t sourceHash(const std::string& source) {
-    if (source.empty()) return 0;
-    uint64_t h = 1469598103934665603ull;
-    for (unsigned char c : source) h = (h ^ c) * 1099511628211ull;
-    return h ? h : 1;
-}
-
 // A module's data: at most `vec4s` vec4s, non-finite values 0; none
 // without a module.
 std::vector<float> moduleData(const std::string& source, const float* data, size_t floats, int vec4s) {
@@ -219,7 +212,7 @@ GrassNode::HerbRing GrassNode::herbRing(int i) const {
 void GrassNode::setSward(std::string source, const float* data, size_t floats, float height, float tallest,
                          float reach) {
     swardSource_ = std::move(source);
-    swardSourceHash_ = sourceHash(swardSource_);
+    swardSourceHash_ = moduleSourceHash(swardSource_);
     swardData_ = moduleData(swardSource_, data, floats, kSwardDataVec4s);
     swardHeight_ = std::isfinite(height) ? std::clamp(height, 0.01f, 20.0f) : 0.4f;
     swardTallest_ = std::isfinite(tallest) ? std::clamp(tallest, swardHeight_, 100.0f) : swardHeight_;
@@ -230,7 +223,7 @@ void GrassNode::setSward(std::string source, const float* data, size_t floats, f
 void GrassNode::setHerbs(std::string source, const float* data, size_t floats, float height, float range,
                          float far) {
     herbSource_ = std::move(source);
-    herbSourceHash_ = sourceHash(herbSource_);
+    herbSourceHash_ = moduleSourceHash(herbSource_);
     herbData_ = moduleData(herbSource_, data, floats, kHerbDataVec4s);
     herbHeight_ = std::isfinite(height) ? std::clamp(height, 0.0f, 20.0f) : 0.0f;
     // (The grass gives the herbs room only while there are some.)

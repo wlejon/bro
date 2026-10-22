@@ -743,6 +743,10 @@ void bro_scene_SceneNode_grassStats(void* self, bronze_native_buffer* out);
 //   registered at __bro_native.scene.SceneGraph_createPlants
 void* bro_scene_SceneGraph_createPlants(void* self);
 
+// plants module: the world's plant module's GLSL ("" none: nothing drawn)
+//   registered at __bro_native.scene.SceneNode_setPlantModule
+void bro_scene_SceneNode_setPlantModule(void* self, const char* source);
+
 // plants species: PlantsNode::kSpeciesFloats floats a species
 //   registered at __bro_native.scene.SceneNode_setPlantSpecies
 void bro_scene_SceneNode_setPlantSpecies(void* self, const float* data, uint32_t data_len);

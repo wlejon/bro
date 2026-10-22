@@ -2,16 +2,21 @@
 
 // Plants: trees and shrubs built on the GPU where they stand, from a table
 // of SPECIES and the plants of each world cell (where each stands, its
-// species, scale, turn, seed and tint). Nothing per leaf is stored: the
-// vertex shader (vulkan/shaders/foliage/scene_plants.glsl) builds every
-// leaf, limb and trunk from its plant's record and its species'.
+// species, scale, turn, seed and tint). Nothing per element is stored: the
+// GPU builds every element, limb and trunk from its plant's record and its
+// species'.
 //
-// A plant is a crown of lobes over a trunk with a limb to each; its foliage
-// is opaque leaf-shaped elements, as many as its size on screen asks for:
-// up close thousands of leaves, far off a few dozen broad daubs, every count
-// a prefix of one sequence that covers the whole crown, so the change with
-// distance is continuous (vulkan/foliage/scene_plants_gpu_plan.cpp picks the
-// counts each frame, on the GPU).
+// What a plant is is the world's: a MODULE, GLSL compiled into the plants'
+// shaders at run time (setModule, vulkan/shaders/foliage/scene_plant_layer.glsl;
+// docs/scene-world-architecture.md §13), which reads its share of each
+// species' record. A node with no module draws nothing. The engine's share
+// is the plant's size, its detail and its crown as the light sees it.
+//
+// A plant's foliage is opaque elements, as many as its size on screen asks
+// for: up close thousands, far off a few dozen broad daubs, every count a
+// prefix of the module's one sequence, so the change with distance is
+// continuous (vulkan/foliage/scene_plants_gpu_plan.cpp picks the counts each
+// frame, on the GPU).
 //
 // Where the plants are (docs/scene-world-architecture.md §10): placed by
 // RULES (world/plant_placement.h), the leaves about the eye made from the
@@ -50,12 +55,13 @@ public:
 
     PlantsNode* asPlants() override { return this; }
 
-    /// A species' record, scene_plants.glsl's PlantSpecies in its order:
-    /// height, crown base, crown radius, shape; lobes, lobe size, leaf
-    /// length, leaf width; full elements, trunk radius, spread, droop;
-    /// light rgb, hue variety; dark rgb, glow; bark rgb, density; glow
-    /// colour rgb, needle; 4 unused.
+    /// A species' record: the engine's share (scene_plant_records.glsl's
+    /// PlantSpecies) height, crown base, crown radius, full elements;
+    /// element length, limbs, crown shape, density; mean foliage rgb, 0;
+    /// then the module's kSpeciesDataFloats (its plantData).
     static constexpr int kSpeciesFloats = 32;
+    static constexpr int kSpeciesEngineFloats = 12;
+    static constexpr int kSpeciesDataFloats = kSpeciesFloats - kSpeciesEngineFloats;
     static constexpr int kMaxSpecies = 64;
     /// A plant: x, y, z (its foot), yaw (radians); scale, species, seed, tint.
     static constexpr int kPlantFloats = 8;
@@ -66,6 +72,11 @@ public:
     /// kMaxSpecies, so the pool always starts at the same place.
     static constexpr int kHeaderFloats = 16;
     static constexpr int kPrefixFloats = kHeaderFloats + kMaxSpecies * kSpeciesFloats;
+
+    /// The world's plant module ("" none: the node draws nothing).
+    void setModule(std::string source);
+    const std::string& moduleSource() const { return moduleSource_; }
+    uint64_t moduleSourceHash() const { return moduleSourceHash_; }
 
     /// `count` species' records end to end (past kMaxSpecies dropped).
     void setSpecies(const float* data, int count);
@@ -173,6 +184,8 @@ private:
     void writeHeader();
     void changedAll();
 
+    std::string moduleSource_;
+    uint64_t moduleSourceHash_ = 0;
     CellGrid grid_;
     CellStore store_{kPrefixFloats, kPlantFloats};
     Leaves leaves_{Before{&grid_}};

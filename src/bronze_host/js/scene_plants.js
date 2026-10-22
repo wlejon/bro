@@ -19,17 +19,15 @@
         Object.defineProperty(obj, name, { value, writable: true, enumerable: true, configurable: true });
 
     const SPECIES_FLOATS = 32;
+    const SPECIES_ENGINE_FLOATS = 12;
     const PLANT_FLOATS = 8;
-    // A species' fields in scene_plants.glsl's PlantSpecies order, with the
-    // defaults (a broadleaf about 12 m tall). Colours take three slots.
+    // A species' engine fields in scene_plant_records.glsl's PlantSpecies
+    // order, with the defaults (a plant about 12 m tall). Colours take three
+    // slots. What the plant looks like is its `data` (the module's plantData).
     const SPECIES = [
-        ['height', 1, 12], ['base', 1, 0.3], ['radius', 1, 4], ['shape', 1, 0],
-        ['lobes', 1, 18], ['lobeSize', 1, 0.42], ['leafLength', 1, 0.22], ['leafWidth', 1, 0.5],
-        ['elements', 1, 6000], ['trunk', 1, 0.25], ['spread', 1, 0.8], ['droop', 1, 0.2],
-        ['light', 3, [0.32, 0.45, 0.10]], ['hueVariety', 1, 0.25],
-        ['dark', 3, [0.05, 0.10, 0.04]], ['glow', 1, 0.8],
-        ['bark', 3, [0.16, 0.12, 0.09]], ['density', 1, 0.6],
-        ['glowColor', 3, [1.0, 0.95, 0.4]], ['needle', 1, 0],
+        ['height', 1, 12], ['base', 1, 0.3], ['radius', 1, 4], ['elements', 1, 6000],
+        ['leafLength', 1, 0.22], ['limbs', 1, 18], ['shape', 1, 0], ['density', 1, 0.6],
+        ['albedo', 3, [0.18, 0.27, 0.07]], [null, 1, 0],
     ];
     const PARAMS = ['pixels', 'minElements', 'woodRange', 'range', 'shadowTexels', 'shadowRange'];
 
@@ -55,10 +53,14 @@
                     const c = parseColor(s[key]) || def;
                     out[at] = c[0]; out[at + 1] = c[1]; out[at + 2] = c[2];
                 } else {
-                    out[at] = typeof s[key] === 'number' ? s[key] : def;
+                    out[at] = key && typeof s[key] === 'number' ? s[key] : def;
                 }
                 at += n;
             }
+            const data = s.data || [];
+            const room = SPECIES_FLOATS - SPECIES_ENGINE_FLOATS;
+            if (data.length > room) throw new RangeError('plants: a species\' data is at most ' + room + ' numbers');
+            for (let k = 0; k < data.length; ++k) out[i * SPECIES_FLOATS + SPECIES_ENGINE_FLOATS + k] = +data[k] || 0;
         }
         return out;
     }
@@ -118,6 +120,10 @@
     const isPlants = (n) => n instanceof SceneNode && __bro_native.scene.SceneNode_plantStats(n).length > 0;
 
     function apply(node, o) {
+        if (o.module !== undefined) {
+            const source = typeof o.module === 'string' ? o.module : (o.module && o.module.source) || '';
+            __bro_native.scene.SceneNode_setPlantModule(node, source);
+        }
         if (o.species) __bro_native.scene.SceneNode_setPlantSpecies(node, speciesRecords(o.species));
         if (o.plants) __bro_native.scene.SceneNode_setPlants(node, plantRecords(o.plants));
         if (o.rules !== undefined) {

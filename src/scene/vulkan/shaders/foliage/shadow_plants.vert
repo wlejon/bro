@@ -1,7 +1,8 @@
 #version 450
 // Plants' shadow casters (scene_plants.glsl): their own chunks (fewer,
-// bigger leaves than the camera's) into a shadow view, a leaf's corners read
-// from its pose as plants.vert's are. push.params.x: 0 the leaves, 1 the
+// bigger elements than the camera's) into a shadow view, an element's
+// points read from its pose as plants.vert's are, a far crown a disc about
+// its envelope swayed as its module says. push.params.x: 0 the leaves, 1 the
 // wood (the colour draw's push.extra.z).
 
 #include "common/scene_camera.glsl"
@@ -33,8 +34,7 @@ void main() {
                 Plant p = plantAt(pi);
                 PlantSpecies s = plantSpecies(p.species);
                 PlantCrown cr = plantCrown(s, p.scale);
-                vec3 centre = plantToWorld(p, cr.center) + plantSway(p, cr.center.y, s.height * p.scale, 0.0) -
-                              camera.eyeWorld.xyz;
+                vec3 centre = plantToWorld(p, cr.center) + plantSway(p, s, cr.center.y, 0.0) - camera.eyeWorld.xyz;
                 // The light's own axes: its view-projection's first two rows.
                 vec3 right = normalize(vec3(push.lightViewProj[0][0], push.lightViewProj[1][0], push.lightViewProj[2][0]));
                 vec3 up = normalize(vec3(push.lightViewProj[0][1], push.lightViewProj[1][1], push.lightViewProj[2][1]));
@@ -57,3 +57,5 @@ void main() {
     }
     gl_Position = push.lightViewProj * vec4(pos, 1.0);
 }
+
+#include "foliage/plant_module.glsl"

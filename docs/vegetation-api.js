@@ -246,34 +246,69 @@
  */
 
 /**
- * Plants: trees and shrubs from `scene.createPlants(opts)`, every one built
- * where it stands on the GPU from its species and its seed (nothing is
- * stored per leaf). A plant is a crown of LOBES (clumps of foliage, on a
- * golden-angle spiral over an ellipsoid or, by `shape`, a cone) round a
- * trunk with a limb to each, and its foliage is ELEMENTS: opaque leaf
- * polygons, so the depth test rejects what is hidden before it shades.
+ * Plants: trees and shrubs (or coral, crystal spires, giant fungi: whatever
+ * a world stands up) from `scene.createPlants(opts)`, every one built where
+ * it stands on the GPU from its record, its species and its seed (nothing
+ * is stored per element). What a plant is is the world's PLANT MODULE
+ * (`module`), GLSL compiled at run time into the plants' shaders
+ * (docs/scene-world-architecture.md §13, "worlds as code"); the engine owns
+ * where plants stand, how many elements each is drawn with, and the light.
+ * A node with no module draws nothing.
  *
- * One representation at every distance: a plant drawn with N elements draws
- * the first N of one fixed sequence, which goes round its lobes, so any N
- * covers the whole crown; as N falls each element grows (by sqrt(full / N),
- * at most a lobe across) and turns toward the eye, so a near tree is
- * thousands of leaves and a far one a few dozen daubs of its colours. N is
- * the species' `elements` while a leaf is at least `pixels` across on
- * screen, then falls with the square of the distance (each element stays
+ * Its foliage is ELEMENTS, opaque polygons (the depth test rejects what is
+ * hidden before it shades), its wood TUBES. One representation at every
+ * distance: a plant drawn with N elements draws the first N of its module's
+ * one sequence, so any N should cover the whole crown, each element growing
+ * as N falls (the engine hands the module sqrt(full / N)); a near tree is
+ * thousands of leaves and a far one a few dozen daubs. N is the species'
+ * `elements` while an element (`leafLength` long) is at least `pixels`
+ * across on screen, then falls with the square of the distance (each stays
  * about `pixels` across), never under `minElements` (nor, for a crown only
  * a few elements across on screen, under what covers it: a speck at the
  * horizon is one); its fraction grows the last element in, so nothing pops.
- * A daub standing for many leaves takes their mean colour and depth, so a
- * far crown shows its form's light and shade rather than a speckle. Limbs are drawn to 0.4 x `woodRange`,
- * the trunk to `woodRange`.
+ * The trunk and `limbs` limbs are drawn to 0.4 x `woodRange`, the trunk
+ * alone to `woodRange`.
  *
- * A leaf is lit as its lobe's round more than its own face (more so as it
- * stands for more leaves): the sun reaches it through the crown's density
- * (`density`), the shadow map is read where that path leaves the crown, the
- * sun shows through the leaves at the rim from behind (`glow`,
- * `glowColor`), and the sky reaches a crown's core less. A near leaf shows
- * its midrib and is darker toward its stalk. Plants sway in the scene's wind
- * field (`setWind`): the trunk bends, each lobe lags, near leaves flutter.
+ * The light is the engine's: the crown is an envelope (an ellipsoid over
+ * the plant from `base` of its `height` up, `radius` across, by `shape` a
+ * cone) of a medium of `density`, so the sun reaches an element through
+ * the crown in front of it, the shadow map is read where that path leaves
+ * the crown, the sky reaches a crown's core less, and the probe grid takes
+ * the crown as that medium of the species' mean colour (`albedo`). What a
+ * fragment is (its colour, the normal it is lit by, the light the sun
+ * shows through it from behind) is the module's.
+ *
+ * The module defines, against what the engine declares
+ * (src/scene/vulkan/shaders/foliage/scene_plant_layer.glsl: PlantElementIn,
+ * PlantElement, PlantLimb, PlantFragment, PlantSurface; and of
+ * scene_plant_records.glsl Plant, PlantSpecies, PlantCrown, plantData(s, i)):
+ *   - under `PLANT_BUILD` (a compute pass, once a frame an element):
+ *     `bool plantElement(Plant p, PlantSpecies s, PlantCrown c,
+ *     PlantElementIn k, inout PlantElement e)`, element k.k of a plant drawn
+ *     k.n strong (k.caster for a shadow view's): its polygon, normals,
+ *     colour, crown centre, how far (a leaf .. a daub) and how deep in the
+ *     crown it is (false leaves it out);
+ *   - `vec2 plantLeafPoint(int species, int c)`: the element polygon's
+ *     point c (base, two pairs up its sides, tip) as (across, along);
+ *   - `bool plantLimb(Plant p, PlantSpecies s, PlantCrown c, int limb, out
+ *     PlantLimb l)`: tube `limb` (0 the trunk, then 1..`limbs`): its ends,
+ *     radii, sway lag and colour;
+ *   - `vec3 plantSway(Plant p, PlantSpecies s, float up, float lag)`: the
+ *     wind's push on a point of a plant (a far crown's shadow disc too);
+ *   - under `PLANT_SHADE` (plants.frag): `PlantSurface
+ *     plantSurface(PlantFragment f)`, what a fragment of an element or a
+ *     tube is.
+ * It may use anything of scene_camera.glsl (the wind, sceneWind) and
+ * scene_plant_records.glsl (plantRand, plantToWorld, plantCrownWidth, ...),
+ * and plantSphere under PLANT_BUILD. Its data is its 20 floats of each
+ * species' record (`data`, read as plantData(species, 0..4)). It compiles
+ * and caches as a sward module does (SPIR-V under the user cache dir); one
+ * that does not compile is logged and the node draws nothing.
+ *
+ * broworkshop's lib/trees is such a module: a crown of lobes on a
+ * golden-angle spiral round a trunk with a limb to each, leaves near and
+ * broad daubs far, needle sprays in tiers, a leaf's midrib and the sun
+ * through it, the trunk bending in the wind and each lobe lagging.
  *
  * Casting (`castsShadow`): each shadow view drawn this frame (the shadow
  * pages being drawn, lighting-api.js) gets its own casters, the plants in
@@ -309,43 +344,37 @@
  * indirect commands. So a frame's CPU cost does not grow with the plants (a
  * million cost what seventy thousand do), and the camera's plants go in
  * distance bands, nearest first. Each leaf is built once a frame by a
- * compute pass (plants_pose.comp) and its corners read by the colour and
- * shadow passes. The node is left out of raycasts and bounds; its
- * transform is ignored (plants stand in the world).
+ * compute pass (plants_pose.comp, the module's plantElement) and its
+ * points read by the colour and shadow passes. The node is left out of
+ * raycasts and bounds; its transform is ignored (plants stand in the world).
  *
  * @example
+ *   import { treeModule, treeSpecies } from "/lib/trees/index.js";
  *   const plants = scene.createPlants({
+ *     module: treeModule(),
  *     species: [
- *       { height: 15, radius: 5, lobes: 16, lobeSize: 0.52, leafLength: 0.34, elements: 8000,
- *         light: '#5d8c2a', dark: '#0c1c0a', density: 0.9 },
- *       { height: 18, radius: 4.4, shape: 0.95, lobes: 34, needle: 1, droop: 0.5,
- *         light: [0.10, 0.20, 0.08], dark: [0.015, 0.04, 0.025] },
+ *       treeSpecies({ height: 15, radius: 5, lobes: 16, lobeSize: 0.52, leafLength: 0.34, elements: 8000,
+ *                     light: [0.19, 0.32, 0.07], dark: [0.02, 0.05, 0.025], density: 0.9 }),
+ *       treeSpecies({ height: 18, radius: 4.4, shape: 0.95, lobes: 34, needle: 1, droop: 0.5,
+ *                     light: [0.10, 0.20, 0.08], dark: [0.015, 0.04, 0.025] }),
  *     ],
  *     plants: trees.map((t, i) => ({ x: t.x, y: t.y, z: t.z, yaw: t.yaw, scale: t.s, species: t.kind, seed: i })),
  *     castsShadow: true, receivesShadow: true,
  *   });
  *
  * @typedef {Object} PlantSpecies
+ * The engine's fields (its share of the record: the plant's size, detail
+ * and crown as the light sees it), then the module's `data`.
  * @property {number} [height=12] - m, at scale 1.
  * @property {number} [base=0.3] - where the crown starts, a fraction of the height.
  * @property {number} [radius=4] - the crown's radius (m).
- * @property {number} [shape=0] - 0 a round crown .. 1 a cone.
- * @property {number} [lobes=18] - clumps in the crown (at most 48).
- * @property {number} [lobeSize=0.42] - a lobe's radius, a fraction of the crown's.
- * @property {number} [leafLength=0.22] - a leaf's length (m) at full detail.
- * @property {number} [leafWidth=0.5] - its width over its length.
- * @property {number} [elements=6000] - leaves at full detail.
- * @property {number} [trunk=0.25] - the trunk's radius at its foot (m).
- * @property {number} [spread=0.8] - how far the lobes sit out from the trunk, 0..1.
- * @property {number} [droop=0.2] - how far the leaves (a needle tree's tiers) hang, 0..1.
- * @property {Array<number>|string} [light] - sunlit foliage colour (linear, or '#rrggbb' sRGB).
- * @property {number} [hueVariety=0.25] - plant to plant and lobe to lobe colour variety.
- * @property {Array<number>|string} [dark] - its colour deep in the crown.
- * @property {number} [glow=0.8] - how much the sun shows through from behind.
- * @property {Array<number>|string} [bark] - the trunk's colour.
+ * @property {number} [elements=6000] - elements at full detail.
+ * @property {number} [leafLength=0.22] - an element's length (m) at full detail.
+ * @property {number} [limbs=18] - tubes besides the trunk (at most 48).
+ * @property {number} [shape=0] - the crown's envelope: 0 round .. 1 a cone.
  * @property {number} [density=0.6] - the crown's density to the sun's light (1/m).
- * @property {Array<number>|string} [glowColor] - the colour of the light through it.
- * @property {number} [needle=0] - 0 broad leaves .. 1 needle sprays: flat drooping tiers, narrow stiff elements.
+ * @property {Array<number>|string} [albedo] - the foliage's mean colour (linear, or '#rrggbb' sRGB): the probes' canopy.
+ * @property {Array<number>|Float32Array} [data] - the module's: at most 20 numbers, plantData(species, 0..4).
  *
  * @typedef {Object} PlantRecord
  * @property {number} x
@@ -393,6 +422,7 @@
  * @property {number} [seed] - the fields' seed where a field names none.
  *
  * @typedef {Object} PlantsNodeOptions
+ * @property {string|{source: string}} [module] - the plant module's GLSL (see above); '' none, nothing drawn.
  * @property {Array<PlantSpecies>|Float32Array} [species] - at most 64.
  * @property {Array<PlantRecord>|Float32Array} [plants] - hand-placed.
  * @property {PlantRules|null} [rules] - plants placed about the eye; null removes them.
@@ -684,7 +714,7 @@ class SceneNode {
 
   /**
    * Plants: replace the plants (an array of records) or set any of
-   * PlantsNodeOptions (`species`, `plants`, the detail params).
+   * PlantsNodeOptions (`module`, `species`, `plants`, the detail params).
    * @example plants.setPlants({ pixels: 20, shadowTexels: 16 });
    * @param {Array<PlantRecord>|PlantsNodeOptions} opts
    */

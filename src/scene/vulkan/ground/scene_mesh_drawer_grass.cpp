@@ -453,7 +453,7 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
         if (!coverPlan_->add(frame, node.id(), cover, rings, draws)) return;
         for (size_t i = 0; i < planned.size(); ++i) {
             MeshDraw d = planned[i].draw;
-            d.cover = cover.index;
+            d.moduleSet = cover.index;
             d.indirect = draws[i].commands;
             d.indirectOffset = draws[i].offset;
             d.vertexSet = draws[i].listSet;
@@ -620,7 +620,7 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
         draw.indices = blade->indices.buffer;
         draw.indexCount = blade->indexCount;
         draw.customSet = set;
-        draw.cover = cover.index;
+        draw.moduleSet = cover.index;
         std::memcpy(draw.push.baseColor, node.color(), sizeof(draw.push.baseColor));
         draw.push.baseColor[3] = 1.0f;
         draw.push.pbrParams[0] = node.metallic();

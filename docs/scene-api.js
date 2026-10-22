@@ -567,12 +567,12 @@ class SceneGraph {
   createGrass(opts) {}
 
   /**
-   * Plants: trees and shrubs built on the GPU from a species table and a
-   * record a plant (where it stands, its turn, size, species and seed),
-   * nothing stored a leaf; each drawn with as many leaves as its size on
-   * screen asks for. See PlantsNodeOptions and the plants members in
-   * docs/vegetation-api.js.
-   * @example scene.createPlants({ species: [{ height: 14 }], plants: [{ x: 0, z: 0 }] });
+   * Plants: trees and shrubs built on the GPU by the world's plant module
+   * (GLSL) from a species table and a record a plant (where it stands, its
+   * turn, size, species and seed), nothing stored an element; each drawn
+   * with as many elements as its size on screen asks for. See
+   * PlantsNodeOptions and the plants members in docs/vegetation-api.js.
+   * @example scene.createPlants({ module: treeModule(), species: [treeSpecies({ height: 14 })], plants: [{ x: 0, z: 0 }] });
    * @param {PlantsNodeOptions} [opts]
    * @returns {SceneNode}
    */

@@ -1,17 +1,17 @@
 #version 450
 // Plants (scene_plants.glsl): an instance a chunk of one plant's elements
-// (its leaves, or its trunk and limbs). A leaf's corners are read from its
-// pose (plants_pose.comp built it this frame); a tube's vertices are built
-// here from its plant and species. No vertex streams. push.extra.x: 0 the
-// leaves, 1 the wood.
+// (its leaves, or its trunk and limbs). An element's points are read from
+// its pose (plants_pose.comp built it this frame); a tube's vertices are
+// built here from its plant and its module's limb. No vertex streams.
+// push.extra.x: 0 the leaves, 1 the wood.
 
 layout(location = 0) out vec3 outWorldPos;
 layout(location = 1) out vec3 outLeafNormal;
 layout(location = 2) out vec3 outCrownNormal;
 layout(location = 3) out vec3 outAlbedo;
-layout(location = 4) out vec3 outGlowColor;
+layout(location = 4) flat out int outSpecies;
 layout(location = 5) out vec4 outCrown;
-layout(location = 6) out vec4 outShade;
+layout(location = 6) out vec2 outShade;
 layout(location = 7) out vec2 outInfo;   // x far, y wood
 layout(location = 8) out vec2 outLeafUV;
 
@@ -43,9 +43,11 @@ void main() {
     outLeafNormal = o.leafNormal;
     outCrownNormal = o.crownNormal;
     outAlbedo = o.albedo;
-    outGlowColor = o.glowColor;
+    outSpecies = o.species;
     outCrown = o.crown;
     outShade = o.shade;
     outInfo = vec2(o.far, wood ? 1.0 : 0.0);
     outLeafUV = o.leafUV;
 }
+
+#include "foliage/plant_module.glsl"

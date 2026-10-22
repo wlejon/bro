@@ -29,7 +29,7 @@
 #define PP_LIMBS_PER_CHUNK      8     // a wood chunk's tubes
 #define PP_LEAF_INDICES         12    // indices an element (the drawer's leafIndices)
 #define PP_TUBE_VERTS           36    // vertices a tube (PLANT_TUBE_VERTS)
-#define PP_MAX_LOBES            48
+#define PP_MAX_LIMBS            48    // a species' tubes besides its trunk (PLANT_MAX_LIMBS)
 
 // --- PARAMS ---
 #define PP_P_TILES              0     // uint: the shadow views drawn (0: the node casts none)

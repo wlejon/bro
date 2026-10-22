@@ -160,10 +160,9 @@ bool GpuPlanner::setup(SceneGpu& gpu) {
     pi.pSetLayouts = poseSets.data();
     pi.pushConstantRangeCount = 0;
     pi.pPushConstantRanges = nullptr;
-    poseModule_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::PlantsPoseComp);
-    if (!poseModule_ || vkCreatePipelineLayout(device_, &pi, nullptr, &poseLayout_) != VK_SUCCESS ||
-        !(posePipeline_ = computePipeline(gpu.device, poseModule_, poseLayout_, "plants pose indirect"))) {
-        LOG_ERROR("plants planner: failed creating its pose stage");
+    // (Its pipelines one a module set's, made at a node's first plan.)
+    if (vkCreatePipelineLayout(device_, &pi, nullptr, &poseLayout_) != VK_SUCCESS) {
+        LOG_ERROR("plants planner: failed creating its pose stage's layout");
         return false;
     }
     if (!cellsPass_.setup(gpu)) {
@@ -194,13 +193,12 @@ void GpuPlanner::cleanup(SceneGpu& gpu) {
         pipelines_[s] = VK_NULL_HANDLE;
         modules_[s] = VK_NULL_HANDLE;
     }
-    if (posePipeline_) vkDestroyPipeline(device_, posePipeline_, nullptr);
-    SceneVkShaderModule::destroy(device_, poseModule_);
+    for (VkPipeline p : posePipelines_)
+        if (p) vkDestroyPipeline(device_, p, nullptr);
+    posePipelines_.clear();
     if (poseLayout_) vkDestroyPipelineLayout(device_, poseLayout_, nullptr);
     if (layout_) vkDestroyPipelineLayout(device_, layout_, nullptr);
     if (setLayout_) vkDestroyDescriptorSetLayout(device_, setLayout_, nullptr);
-    posePipeline_ = VK_NULL_HANDLE;
-    poseModule_ = VK_NULL_HANDLE;
     poseLayout_ = layout_ = VK_NULL_HANDLE;
     setLayout_ = VK_NULL_HANDLE;
 }
@@ -228,8 +226,14 @@ bool GpuPlanner::ensure(SceneFrame& frame, SceneVkBuffer& buf, VkDeviceSize size
 // --- A node's frame ---
 
 bool GpuPlanner::add(SceneFrame& frame, Node& n, const PlantsNode& node, const SceneVkBuffer& store,
-                     const std::vector<int>& tiles) {
+                     const std::vector<int>& tiles, const PlantShaders& shaders) {
     if (tiles.size() > PP_MAX_TILES || node.cells().empty()) return false;
+    // Its poses, by its module's pose stage.
+    if (shaders.index >= posePipelines_.size()) posePipelines_.resize(shaders.index + 1, VK_NULL_HANDLE);
+    VkPipeline& pose = posePipelines_[shaders.index];
+    if (!pose) pose = computePipeline(frame.gpu.device, shaders[PlantShaders::Pose], poseLayout_, "plants pose indirect");
+    if (!pose) return false;
+    n.pose_ = pose;
     // Nodes gone (or long unplanned) give their buffers back.
     if ((use_ & 1023) == 0)
         for (auto it = nodes_.begin(); it != nodes_.end();) {
@@ -410,9 +414,9 @@ void GpuPlanner::record(SceneFrame& frame) {
     barrier(cmd);
     mark("plants:plan");
     // The leaf poses, a workgroup a leaf chunk the plan made.
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, posePipeline_);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, poseLayout_, 0, 1, &frame.cameraSet, 0, nullptr);
     for (Node* n : queued_) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, n->pose_);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, poseLayout_, 0, 1, &frame.cameraSet, 0, nullptr);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, poseLayout_, 3, 1, &n->drawSet, 0, nullptr);
         vkCmdDispatchIndirect(cmd, n->args.buffer, VkDeviceSize{PP_A_POSE} * 4);
     }

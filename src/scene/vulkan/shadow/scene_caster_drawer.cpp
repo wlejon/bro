@@ -86,14 +86,12 @@ bool SceneCasterDrawer::setup(SceneGpu& gpu) {
         SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowVegVert);
     vs_[static_cast<int>(MeshKind::InstancedVegetation)] =
         SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowInstancedVegVert);
-    vs_[static_cast<int>(MeshKind::Plants)] =
-        SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowPlantsVert);
     fs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowFrag);
     vsCutout_[0] = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowCutoutVert);
     vsCutout_[1] = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowInstancedCutoutVert);
     fsCutout_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowCutoutFrag);
     for (int k = 0; k < kMeshKindCount; ++k) {
-        if (!vs_[k] && k != static_cast<int>(MeshKind::Grass)) return false;
+        if (!vs_[k] && k != static_cast<int>(MeshKind::Grass) && k != static_cast<int>(MeshKind::Plants)) return false;
     }
     return fs_ != VK_NULL_HANDLE && vsCutout_[0] != VK_NULL_HANDLE && vsCutout_[1] != VK_NULL_HANDLE && fsCutout_ != VK_NULL_HANDLE;
 }
@@ -104,6 +102,7 @@ void SceneCasterDrawer::cleanup(SceneGpu& gpu) {
     for (auto& perKind : builtin_) pipelines.insert(pipelines.end(), std::begin(perKind), std::end(perKind));
     for (auto& perKind : cutout_) pipelines.insert(pipelines.end(), std::begin(perKind), std::end(perKind));
     for (auto& perSet : grass_) pipelines.insert(pipelines.end(), std::begin(perSet), std::end(perSet));
+    for (auto& perSet : plants_) pipelines.insert(pipelines.end(), std::begin(perSet), std::end(perSet));
     for (auto& [key, p] : custom_) pipelines.push_back(p);
     gpu.device.defer([dev, pipelines] {
         for (VkPipeline p : pipelines) {
@@ -112,6 +111,7 @@ void SceneCasterDrawer::cleanup(SceneGpu& gpu) {
     });
     custom_.clear();
     grass_.clear();
+    plants_.clear();
     for (auto& perKind : builtin_) perKind[0] = perKind[1] = VK_NULL_HANDLE;
     for (auto& perKind : cutout_) perKind[0] = perKind[1] = VK_NULL_HANDLE;
     for (VkShaderModule& m : vsCutout_) {
@@ -169,6 +169,14 @@ VkPipeline SceneCasterDrawer::grassPipeline(const SceneGpu& gpu, uint32_t cover,
     return p;
 }
 
+VkPipeline SceneCasterDrawer::plantsPipeline(const SceneGpu& gpu, uint32_t set, bool twoSided) {
+    if (set >= plants_.size()) plants_.resize(set + 1, {VK_NULL_HANDLE, VK_NULL_HANDLE});
+    VkPipeline& p = plants_[set][twoSided ? 1 : 0];
+    if (p == VK_NULL_HANDLE)
+        p = buildPipeline(gpu.meshes.plantSet(set)[PlantShaders::ShadowVert], MeshKind::Plants, false, twoSided, false);
+    return p;
+}
+
 VkPipeline SceneCasterDrawer::cutoutPipeline(MeshKind kind, bool twoSided) {
     const int instanced = kind == MeshKind::Instanced ? 1 : 0;
     VkPipeline& p = cutout_[instanced][twoSided ? 1 : 0];
@@ -219,7 +227,8 @@ void SceneCasterDrawer::draw(SceneFrame& frame, VkCommandBuffer cmd, const broma
     // (A custom chunk that does not build casts the undisplaced silhouette,
     // cut all the same.)
     if (!pipeline && cutout) pipeline = cutoutPipeline(draw.kind, twoSided);
-    if (!pipeline && draw.kind == MeshKind::Grass) pipeline = grassPipeline(frame.gpu, draw.cover, twoSided);
+    if (!pipeline && draw.kind == MeshKind::Grass) pipeline = grassPipeline(frame.gpu, draw.moduleSet, twoSided);
+    if (!pipeline && draw.kind == MeshKind::Plants) pipeline = plantsPipeline(frame.gpu, draw.moduleSet, twoSided);
     if (!pipeline) pipeline = builtinPipeline(draw.kind, twoSided);
     if (!pipeline) return;
 

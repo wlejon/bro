@@ -59,18 +59,21 @@ private:
 
     VkPipeline builtinPipeline(MeshKind kind, bool twoSided);
     VkPipeline grassPipeline(const SceneGpu& gpu, uint32_t cover, bool twoSided);
+    VkPipeline plantsPipeline(const SceneGpu& gpu, uint32_t set, bool twoSided);
     VkPipeline cutoutPipeline(MeshKind kind, bool twoSided);
     VkPipeline customPipeline(const CustomShaderState& cs, MeshKind kind, bool twoSided, bool cutout);
     VkPipeline buildPipeline(VkShaderModule vs, MeshKind kind, bool custom, bool twoSided, bool cutout);
 
     SceneVkDevice* device_ = nullptr;
     VkPipelineLayout layout_ = VK_NULL_HANDLE;
-    VkShaderModule vs_[kMeshKindCount] = {};       // none for Grass: its cover set's GrassShadowVert
+    // None for Grass and Plants: their module set's shadow stage.
+    VkShaderModule vs_[kMeshKindCount] = {};
     VkShaderModule fs_ = VK_NULL_HANDLE;
     VkPipeline builtin_[kMeshKindCount][2] = {};   // [kind][two-sided]
-    // Grass casters by their cover set (MeshDraw::cover, the world's sward
-    // module): [set][two-sided].
+    // Grass and plants casters by their module set (MeshDraw::moduleSet,
+    // their world's modules): [set][two-sided].
     std::vector<std::array<VkPipeline, 2>> grass_;
+    std::vector<std::array<VkPipeline, 2>> plants_;
     // Cutout casters (a textured static or instanced mesh with an alpha
     // cutoff): their base colour's alpha cut, scene_shadow_cutout.glsl.
     VkShaderModule vsCutout_[2] = {};              // [instanced]

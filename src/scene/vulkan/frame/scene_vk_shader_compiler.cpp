@@ -37,6 +37,14 @@
 #include "mesh_cover_far.vert.src.h"
 #include "shadow_grass.vert.src.h"
 #include "ground_layer_fill.frag.src.h"
+#include "scene_plants.glsl.src.h"
+#include "scene_plant_records.glsl.src.h"
+#include "scene_plant_layer.glsl.src.h"
+#include "plant_module.glsl.src.h"
+#include "plants.vert.src.h"
+#include "plants.frag.src.h"
+#include "shadow_plants.vert.src.h"
+#include "plants_pose.comp.src.h"
 #include "util/user_dirs.h"
 
 #include <array>
@@ -142,6 +150,10 @@ const char* embeddedInclude(const std::string& name) {
         {"ground/scene_herb.glsl", kVkSceneHerbSrc},
         {"ground/scene_herb_layer.glsl", kVkSceneHerbLayerSrc},
         {"ground/herb_module.glsl", kVkHerbModuleSrc},
+        {"foliage/scene_plants.glsl", kVkScenePlantsSrc},
+        {"foliage/scene_plant_records.glsl", kVkScenePlantRecordsSrc},
+        {"foliage/scene_plant_layer.glsl", kVkScenePlantLayerSrc},
+        {"foliage/plant_module.glsl", kVkPlantModuleSrc},
         // The built-in shaders compileBuiltinWith builds.
         {"draw/mesh.frag", kVkMeshFragSrc},
         {"ground/cover_plan.comp", kVkCoverPlanCompSrc},
@@ -150,6 +162,10 @@ const char* embeddedInclude(const std::string& name) {
         {"ground/mesh_cover_far.vert", kVkMeshCoverFarVertSrc},
         {"ground/shadow_grass.vert", kVkShadowGrassVertSrc},
         {"ground/ground_layer_fill.frag", kVkGroundLayerFillFragSrc},
+        {"foliage/plants.vert", kVkPlantsVertSrc},
+        {"foliage/plants.frag", kVkPlantsFragSrc},
+        {"foliage/shadow_plants.vert", kVkShadowPlantsVertSrc},
+        {"foliage/plants_pose.comp", kVkPlantsPoseCompSrc},
     };
     for (const auto& inc : kIncludes) {
         if (name == inc.name) return inc.source;

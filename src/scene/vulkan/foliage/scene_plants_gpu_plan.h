@@ -12,8 +12,9 @@
 // plan, the cell pass (scene_world_cells_pass.h) culls the cells against
 // the camera and every shadow view drawn, and the plan walks the plants of
 // the cells in view alone: count each view's chunks a slot, lay the slots
-// out, place each plant's chunks; then the leaf poses (plants_pose.comp),
-// dispatched over the leaf chunks the plan made.
+// out, place each plant's chunks; then the element poses (plants_pose.comp
+// with the node's world module, its PlantShaders' pose stage), dispatched
+// over the leaf chunks the plan made.
 //
 // It records into the frame's compute stream; what the draws read (chunks,
 // commands, poses) is kept a copy a frame slot, what only the plan touches
@@ -25,6 +26,7 @@
 
 #include "render/vulkan_frames.h"
 #include "scene/nodes/plants_node.h"
+#include "scene/vulkan/foliage/scene_plant_shaders.h"
 #include "scene/vulkan/frame/scene_vk_allocator.h"
 #include "scene/vulkan/world/scene_world_cells_pass.h"
 #include "scene/vulkan/shaders/foliage/scene_plants_plan_layout.h"
@@ -80,6 +82,7 @@ public:
         WorldCellsPass::Target cellTarget_;
         SceneVkBuffer work_, readback_;
         VkDescriptorSet planSet_ = VK_NULL_HANDLE;
+        VkPipeline pose_ = VK_NULL_HANDLE;   // this frame's pose stage (its module's)
         uint32_t askedRecords_ = 0, askedLeaves_ = 0;
         // The read-back ring: a slot a frame, stamped with its submission.
         static constexpr int kRing = 4;
@@ -108,8 +111,9 @@ public:
     /// draws), by index in the frame's plan (ShadowPlan::views). False:
     /// it draws nothing this frame (its cells, buffers or sets could not be
     /// had).
+    /// Its poses are built by `shaders`' pose stage (its world's module).
     bool add(SceneFrame& frame, Node& state, const PlantsNode& node, const SceneVkBuffer& store,
-             const std::vector<int>& tiles);
+             const std::vector<int>& tiles, const PlantShaders& shaders);
     /// Record the queued plans and their poses into the frame's compute stream.
     void record(SceneFrame& frame);
     /// The plans just recorded went to the GPU as `ticket` on `queue`.
@@ -127,8 +131,7 @@ private:
     VkShaderModule modules_[kStages] = {};
     VkPipeline pipelines_[kStages] = {};
     VkPipelineLayout poseLayout_ = VK_NULL_HANDLE;
-    VkShaderModule poseModule_ = VK_NULL_HANDLE;
-    VkPipeline posePipeline_ = VK_NULL_HANDLE;
+    std::vector<VkPipeline> posePipelines_;   // by PlantShaders::index
     WorldCellsPass cellsPass_;
     VkPhysicalDeviceLimits limits_{};
 

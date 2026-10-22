@@ -117,11 +117,7 @@ bool SceneMeshDrawer::setup(SceneGpu& gpu) {
         SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshVegVert);
     vs_[static_cast<int>(MeshKind::InstancedVegetation)] =
         SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshInstancedVegVert);
-    // (The blades' vertex stage is their node's CoverShaders'.)
-    vs_[static_cast<int>(MeshKind::Plants)] =
-        SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::PlantsVert);
-    fsPlants_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::PlantsFrag);
-    fsPlantsIndirect_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::PlantsIndirectFrag);
+    // (The blades' and the plants' stages are their node's module set's.)
     fs_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshFrag);
     fsIndirect_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshIndirectFrag);
     fsVeg_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshVegFrag);
@@ -133,8 +129,9 @@ bool SceneMeshDrawer::setup(SceneGpu& gpu) {
         SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshCoverFarIndirectFrag);
     covers_.push_back(std::make_unique<CoverShaders>());
     bool vsAll = true;
-    for (int k = 0; k < kMeshKindCount; ++k) vsAll = vsAll && (vs_[k] || k == static_cast<int>(MeshKind::Grass));
-    if (!fsPlants_ || !fsPlantsIndirect_ || !fsCoverFar_ || !fsCoverFarIndirect_ || !vsAll || !fs_ || !fsIndirect_ || !fsVeg_ || !fsVegIndirect_ || !fsBark_ || !fsBarkIndirect_ ||
+    for (int k = 0; k < kMeshKindCount; ++k)
+        vsAll = vsAll && (vs_[k] || k == static_cast<int>(MeshKind::Grass) || k == static_cast<int>(MeshKind::Plants));
+    if (!fsCoverFar_ || !fsCoverFarIndirect_ || !vsAll || !fs_ || !fsIndirect_ || !fsVeg_ || !fsVegIndirect_ || !fsBark_ || !fsBarkIndirect_ ||
         !covers_[0]->createBuiltin(device_)) {
         LOG_ERROR("SceneMeshDrawer: Failed creating the mesh shader modules");
         return false;
@@ -171,6 +168,12 @@ void SceneMeshDrawer::cleanup(SceneGpu& gpu) {
     }
     covers_.clear();
     coverByModule_.clear();
+    for (auto& p : plantSets_) {
+        p->pipelines.destroy(gpu.device);
+        p->destroy(device_);
+    }
+    plantSets_.clear();
+    plantByModule_.clear();
     for (auto& [key, prog] : custom_) {
         prog->pipelines.destroy(gpu.device);
         for (VkShaderModule m : {prog->vs, prog->fs, prog->fsIndirect}) SceneVkShaderModule::destroy(device_, m);
@@ -188,9 +191,6 @@ void SceneMeshDrawer::cleanup(SceneGpu& gpu) {
     SceneVkShaderModule::destroy(device_, fsBarkIndirect_);
     SceneVkShaderModule::destroy(device_, fsCoverFar_);
     SceneVkShaderModule::destroy(device_, fsCoverFarIndirect_);
-    SceneVkShaderModule::destroy(device_, fsPlants_);
-    SceneVkShaderModule::destroy(device_, fsPlantsIndirect_);
-    fsPlants_ = fsPlantsIndirect_ = VK_NULL_HANDLE;
     fsCoverFar_ = fsCoverFarIndirect_ = VK_NULL_HANDLE;
     fs_ = fsIndirect_ = fsVeg_ = fsVegIndirect_ = fsBark_ = fsBarkIndirect_ = VK_NULL_HANDLE;
     if (layout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(device_, layout_, nullptr);
@@ -286,7 +286,16 @@ VkPipeline SceneMeshDrawer::builtinPipeline(const MeshDraw& draw, const TargetFo
     // The grass and turf take their node's shaders, and the set keeps their
     // pipelines.
     const bool covered = draw.kind == MeshKind::Grass || ground;
-    CoverShaders& cover = *covers_[covered && draw.cover < covers_.size() ? draw.cover : 0];
+    CoverShaders& cover = *covers_[covered && draw.moduleSet < covers_.size() ? draw.moduleSet : 0];
+    // The plants take their node's, likewise (prepared only with one).
+    if (draw.kind == MeshKind::Plants) {
+        PlantShaders& set = *plantSets_[draw.moduleSet];
+        return set.pipelines.get(rasterBits, target, [&] {
+            const bool indirect = SceneTargets::carriesIndirect(target);
+            return buildPipeline(set[PlantShaders::Vert], set[indirect ? PlantShaders::IndirectFrag : PlantShaders::Frag],
+                                 draw.kind, rasterBits, target);
+        });
+    }
     const uint32_t block = static_cast<uint32_t>(kMeshKindCount) * raster::kCount;
     const uint32_t variant = static_cast<uint32_t>(draw.kind) * raster::kCount + rasterBits +
                              (ground ? 1u * block : 0u) + (herb ? 2u * block : 0u) + (coverFar ? 3u * block : 0u);
@@ -316,7 +325,6 @@ VkPipeline SceneMeshDrawer::builtinPipeline(const MeshDraw& draw, const TargetFo
             vs = cover[CoverShaders::GrassVert];
             fs = cover[indirect ? CoverShaders::GrassIndirectFrag : CoverShaders::GrassFrag];
         }
-        if (draw.kind == MeshKind::Plants) fs = indirect ? fsPlantsIndirect_ : fsPlants_;
         return buildPipeline(vs, fs, draw.kind, rasterBits, target);
     });
 }
@@ -612,7 +620,7 @@ bool SceneMeshDrawer::prepare(SceneFrame& frame, MeshNode& node, MeshDraw& out) 
         MeshNode* gm = g && g->type() == SceneNode::Type::Mesh ? static_cast<MeshNode*>(g) : nullptr;
         if (GrassNode* grass = gm ? gm->asGrass() : nullptr) {
             out.customSet = groundSet(frame, *grass);
-            out.cover = coverShaders(*grass).index;
+            out.moduleSet = coverShaders(*grass).index;
             if (out.customSet) flags |= mesh_flags::kGround;
         }
     }

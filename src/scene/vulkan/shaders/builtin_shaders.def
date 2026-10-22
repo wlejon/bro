@@ -80,8 +80,10 @@ BRO_SCENE_SHADER(CoverPlanComp,            "cover_plan.comp",             "groun
 BRO_SCENE_SHADER(WorldCellsTopComp,        "world_cells_top.comp",        "world/world_cells_cull.comp",        "comp", "CELLS_TOP")
 BRO_SCENE_SHADER(WorldCellsLeafComp,       "world_cells_leaf.comp",       "world/world_cells_cull.comp",        "comp", "CELLS_LEAF")
 BRO_SCENE_SHADER(WorldCellsGatherComp,     "world_cells_gather.comp",     "world/world_cells_cull.comp",        "comp", "CELLS_GATHER")
-// Plants (scene_plants.glsl): every leaf, limb and trunk built from its
-// plant's and species' records; opaque, lit as its lobe's form.
+// Plants (scene_plants.glsl): every element, limb and trunk built from its
+// plant's and species' records by the world's plant module; opaque. Built
+// in with foliage/plant_module.glsl (no plants); a node draws with its own
+// module's set (foliage/scene_plant_shaders.h).
 BRO_SCENE_SHADER(PlantsVert,               "plants.vert",                 "foliage/plants.vert",                "vert", "")
 BRO_SCENE_SHADER(PlantsFrag,               "plants.frag",                 "foliage/plants.frag",                "frag", "")
 BRO_SCENE_SHADER(PlantsIndirectFrag,       "plants_indirect.frag",        "foliage/plants.frag",                "frag", "SCENE_INDIRECT_OUTPUT")

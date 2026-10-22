@@ -58,9 +58,10 @@ bool SceneDefaults::setup(SceneVkDevice& device, SceneVkAllocator& allocator) {
     SceneVkDescriptorLayoutBuilder bone;
     bone.addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT);
     // A procedural draw's segment records, or the plants' records; the
-    // plants' leaf pose pass (plants_pose.comp) reads them too.
+    // plants' leaf pose pass (plants_pose.comp) reads them too, and their
+    // fragments (a species' crown and its module's data).
     constexpr VkShaderStageFlags kVsCs = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
-    bone.addBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kVsCs);
+    bone.addBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kVsCs | VK_SHADER_STAGE_FRAGMENT_BIT);
     // The plants' chunks this frame, written by their plan.
     bone.addBinding(2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kVsCs);
     // The plants' leaf poses this frame, written by the pose pass.

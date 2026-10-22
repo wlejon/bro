@@ -97,6 +97,14 @@ embed_vk_shader(ground/mesh_herb.vert          kVkMeshHerbVertSrc)
 embed_vk_shader(ground/mesh_cover_far.vert     kVkMeshCoverFarVertSrc)
 embed_vk_shader(ground/shadow_grass.vert       kVkShadowGrassVertSrc)
 embed_vk_shader(ground/ground_layer_fill.frag  kVkGroundLayerFillFragSrc)
+embed_vk_shader(foliage/scene_plants.glsl      kVkScenePlantsSrc)
+embed_vk_shader(foliage/scene_plant_records.glsl kVkScenePlantRecordsSrc)
+embed_vk_shader(foliage/scene_plant_layer.glsl kVkScenePlantLayerSrc)
+embed_vk_shader(foliage/plant_module.glsl      kVkPlantModuleSrc)
+embed_vk_shader(foliage/plants.vert            kVkPlantsVertSrc)
+embed_vk_shader(foliage/plants.frag            kVkPlantsFragSrc)
+embed_vk_shader(foliage/shadow_plants.vert     kVkShadowPlantsVertSrc)
+embed_vk_shader(foliage/plants_pose.comp       kVkPlantsPoseCompSrc)
 embed_vk_shader(terrain/clipmap_common.glsl       kClipmapCommonSrc)
 embed_vk_shader(terrain/clipmap_detail.glsl       kClipmapDetailSrc)
 embed_vk_shader(terrain/clipmap_material.glsl     kClipmapMaterialSrc)
@@ -158,6 +166,7 @@ add_library(bro_scene STATIC
     vulkan/frame/scene_vk_pipeline.cpp
     vulkan/frame/scene_vk_descriptors.cpp
     vulkan/frame/scene_vk_shader_compiler.cpp
+    vulkan/frame/scene_module_shaders.cpp
     vulkan/frame/scene_view.cpp
     vulkan/frame/scene_defaults.cpp
     vulkan/frame/scene_targets.cpp
@@ -180,7 +189,6 @@ add_library(bro_scene STATIC
     vulkan/draw/pass_billboard.cpp
     vulkan/draw/pass_gaussian_splat.cpp
     vulkan/ground/scene_cover_plan.cpp
-    vulkan/ground/scene_cover_shaders.cpp
     vulkan/ground/scene_mesh_drawer_grass.cpp
     vulkan/ground/scene_mesh_drawer_ground.cpp
     vulkan/foliage/scene_mesh_drawer_plants.cpp

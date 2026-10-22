@@ -137,14 +137,11 @@ void buildScene(scene::SceneGraph& graph, float eyeX, float eyeZ) {
     graph.root()->addChild(box);
 
     scene::PlantsNode* plants = graph.createPlants("plants");
+    // (The engine's share of the record; the probes read nothing of a module's.)
     float species[scene::PlantsNode::kSpeciesFloats] = {
-        static_cast<float>(kHeight), static_cast<float>(kBase), static_cast<float>(kRadius), 0.0f,
-        12.0f, 0.4f, 0.2f, 0.5f,
-        2000.0f, 0.2f, 0.5f, 0.2f,
-        kLight[0], kLight[1], kLight[2], 0.1f,
-        kDark[0], kDark[1], kDark[2], 0.3f,
-        0.3f, 0.2f, 0.1f, static_cast<float>(kDensity),
-        0.5f, 0.8f, 0.2f, 0.0f};
+        static_cast<float>(kHeight), static_cast<float>(kBase), static_cast<float>(kRadius), 2000.0f,
+        0.2f, 12.0f, 0.0f, static_cast<float>(kDensity),
+        0.5f * (kLight[0] + kDark[0]), 0.5f * (kLight[1] + kDark[1]), 0.5f * (kLight[2] + kDark[2]), 0.0f};
     plants->setSpecies(species, 1);
     std::vector<float> records;
     int seed = 1;
@@ -481,13 +478,8 @@ void buildTraceScene(scene::SceneGraph& graph, const TraceScene& s) {
     if (s.crown) {
         scene::PlantsNode* plants = graph.createPlants("plants");
         float species[scene::PlantsNode::kSpeciesFloats] = {
-            static_cast<float>(kHeight), static_cast<float>(kBase), static_cast<float>(kRadius), 0.0f,
-            12.0f, 0.4f, 0.2f, 0.5f,
-            2000.0f, 0.2f, 0.5f, 0.2f,
-            0.0f, 0.0f, 0.0f, 0.1f,
-            0.0f, 0.0f, 0.0f, 0.3f,
-            0.3f, 0.2f, 0.1f, static_cast<float>(kDensity),
-            0.5f, 0.8f, 0.2f, 0.0f};
+            static_cast<float>(kHeight), static_cast<float>(kBase), static_cast<float>(kRadius), 2000.0f,
+            0.2f, 12.0f, 0.0f, static_cast<float>(kDensity)};
         plants->setSpecies(species, 1);
         const float r[scene::PlantsNode::kPlantFloats] = {0.0f, 0.0f, 0.0f, 0.3f, 1.5f, 0.0f, 1.0f, 0.0f};
         plants->setPlants(r, 1);

@@ -35,6 +35,10 @@ void* bro_scene_SceneGraph_createPlants(void* self) {
     return wrapNode(node, g);
 }
 
+void bro_scene_SceneNode_setPlantModule(void* self, const char* source) {
+    if (auto* pl = plantsOf(self)) pl->setModule(source ? std::string(source) : std::string());
+}
+
 void bro_scene_SceneNode_setPlantSpecies(void* self, const float* data, uint32_t data_len) {
     if (auto* pl = plantsOf(self))
         pl->setSpecies(data, static_cast<int>(data_len / scene::PlantsNode::kSpeciesFloats));

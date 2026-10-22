@@ -1,28 +1,20 @@
 #pragma once
-// The shaders a grass node's cover is planned and drawn with: the built-in
-// ones, compiled at build time with the modules of no blades and no herbs
-// (shaders/ground/sward_module.glsl, herb_module.glsl), or the same shaders
-// with a world's sward and herb modules in those files' places, compiled at
-// run time (shaders/ground/scene_sward_layer.glsl and scene_herb_layer.glsl
+// The shaders a grass node's cover is planned and drawn with (a
+// ModuleShaders set): the built-in ones, compiled with the modules of no
+// blades and no herbs (shaders/ground/sward_module.glsl, herb_module.glsl),
+// or the same shaders with a world's sward and herb modules in those files'
+// places (shaders/ground/scene_sward_layer.glsl and scene_herb_layer.glsl
 // say what a module defines). Every shader that calls a module is in the
 // set: the plan, the blades and their casters, the herb plants, the far
 // tier, the turf and its surface layer's fill.
-//
-// A world's set compiles its shaders in parallel, each through the scene's
-// SPIR-V cache (docs/code-cache.md), so a second run of a world compiles
-// nothing.
 
-#include "scene/vulkan/frame/scene_vk_shader_compiler.h"
-#include "scene/vulkan/frame/scene_vk_target_format.h"
+#include "scene/vulkan/frame/scene_module_shaders.h"
 
-#include <vulkan/vulkan.h>
-
-#include <cstdint>
 #include <string>
 
 namespace bro::scene::vk {
 
-class CoverShaders {
+class CoverShaders : public ModuleShaders {
 public:
     enum Stage : int {
         Plan,                 // cover_plan.comp
@@ -50,22 +42,18 @@ public:
     };
 
     /// The built-in set.
-    bool createBuiltin(VkDevice device);
+    bool createBuiltin(VkDevice device) { return ModuleShaders::createBuiltin(device, kBuiltin); }
     /// The set with `sward` as sward_module.glsl and `herbs` as
     /// herb_module.glsl (an empty one keeps the built-in file). False, with
     /// the compiler's diagnostics in `err`, when it does not compile.
-    bool create(VkDevice device, const std::string& sward, const std::string& herbs, std::string& err);
-    void destroy(VkDevice device);
+    bool create(VkDevice device, const std::string& sward, const std::string& herbs, std::string& err) {
+        Overrides overrides;
+        if (!sward.empty()) overrides.emplace_back("ground/sward_module.glsl", sward);
+        if (!herbs.empty()) overrides.emplace_back("ground/herb_module.glsl", herbs);
+        return ModuleShaders::create(device, kBuiltin, overrides, err);
+    }
 
-    VkShaderModule operator[](Stage s) const { return modules_[s]; }
-    /// Which set it is among the drawer's (0 the built-in one).
-    uint32_t index = 0;
-    /// The drawer's pipelines of these shaders (the cover plan keeps its
-    /// own, by index).
-    PipelineVariants pipelines;
-
-private:
-    VkShaderModule modules_[kStages] = {};
+    VkShaderModule operator[](Stage s) const { return module(s); }
 };
 
 }  // namespace bro::scene::vk

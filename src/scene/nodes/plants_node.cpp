@@ -1,5 +1,6 @@
 #include "scene/nodes/plants_node.h"
 
+#include "scene/nodes/world_module.h"
 #include "scene/texture_source.h"
 #include "scene/world/plant_placement.h"
 #include "scene/world/world_workers.h"
@@ -54,6 +55,11 @@ void PlantsNode::setSpecies(const float* data, int count) {
         if (run != store_.runs().end()) leaf.bounds = boundsOf(run->second.first, run->second.count);
     }
     changedAll();
+}
+
+void PlantsNode::setModule(std::string source) {
+    moduleSource_ = std::move(source);
+    moduleSourceHash_ = scene::moduleSourceHash(moduleSource_);
 }
 
 void PlantsNode::setPlants(const float* data, int count) {
