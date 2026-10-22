@@ -7,6 +7,9 @@
 #include "platform/drm_input.h"
 #include "render/vulkan_context.h"
 #include "render/vulkan_presenter.h"
+#if BRO_WITH_3D
+#include "scene/scene_renderer.h"
+#endif
 #if BRO_WITH_DMABUF
 #include "render/kms_direct_presenter.h"
 #endif
@@ -57,6 +60,9 @@ void Engine::initDrm(const EngineConfig& config) {
     if (!vulkanContext_->init()) {
         throw std::runtime_error("DRM VulkanContext initialization failed");
     }
+#if BRO_WITH_3D
+    scene::SceneRenderer::setDefaultVulkanContext(vulkanContext_.get());
+#endif
 
     vulkanPresenter_ = std::make_unique<render::VulkanPresenter>(*vulkanContext_);
     if (!vulkanPresenter_->init()) {
