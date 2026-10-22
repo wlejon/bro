@@ -47,6 +47,7 @@
 #include "scene/world/place.h"
 #include "scene/world/surface_layers.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -119,6 +120,24 @@ public:
     float canopyTop() const { return canopyTop_; }
     float canopyRange() const { return canopyRange_; }
     float canopyCastRange() const { return canopyCastRange_; }
+
+    /// Its sea: water filling the land up to `level` (m over the datum)
+    /// wherever its ground lies lower, decided a fragment at a time, so a
+    /// coast is as sharp as the pixels are whatever its tiles' texels.
+    /// Light crossing it loses `absorb` (1/m, each channel) a metre, the
+    /// seabed showing through shallow water, and deep water is `scatter`
+    /// (the albedo the light it sends back gives it); its surface is as
+    /// rough as `roughness`. The ground's heights (landHeight, placement)
+    /// stay the seabed's.
+    struct Sea {
+        bool on = false;
+        float level = 0.0f;
+        float absorb[3] = {0.45f, 0.09f, 0.05f};
+        float scatter[3] = {0.004f, 0.016f, 0.03f};
+        float roughness = 0.08f;
+    };
+    void setSea(const Sea& sea) { sea_ = sea; }
+    const Sea& sea() const { return sea_; }
 
     /// The land's half-size (m): on a flat body it covers [-extent, extent]
     /// in x and z. (A round body's land is the whole body.)
@@ -198,7 +217,7 @@ public:
     bromath::AABB3 bounds() const;
     /// Its lowest and highest ground.
     float lowest() const { return chartBounds_.min.y; }
-    float highest() const { return chartBounds_.max.y; }
+    float highest() const { return sea_.on ? std::max(chartBounds_.max.y, sea_.level) : chartBounds_.max.y; }
     /// The land's height range over world rect [x0, x1] x [z0, z1], from its
     /// items (conservative); false off the land.
     bool heightRange(float x0, float z0, float x1, float z1, float& lo, float& hi) const;
@@ -247,6 +266,7 @@ private:
     std::shared_ptr<const LandBase> base_;
     float extent_ = 4096.0f;
     Rings rings_;
+    Sea sea_;
     int ringLevels_ = 0, builtResolution_ = 0;   // the mesh's
     std::vector<Block> blocks_;
     std::vector<SurfaceItem> items_;

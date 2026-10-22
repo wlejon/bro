@@ -254,6 +254,16 @@ void SceneMeshDrawer::landWords(const SceneFrame& frame, const LandNode& node, c
     words[LD_CANOPY + 0] = canopy ? node.canopyRange() : 1e30f;
     words[LD_CANOPY + 1] = canopy ? node.canopyCastRange() : 1e30f;
     words[LD_CANOPY + 2] = canopy ? 1.0f : 0.0f;
+    const LandNode::Sea& sea = node.sea();
+    if (sea.on) {
+        words[LD_SEA + 0] = 1.0f;
+        words[LD_SEA + 1] = sea.level;
+        words[LD_SEA + 2] = sea.roughness;
+        for (int k = 0; k < 3; ++k) {
+            words[LD_SEA + 4 + k] = sea.absorb[k];
+            words[LD_SEA + 8 + k] = sea.scatter[k];
+        }
+    }
 }
 
 bool SceneMeshDrawer::grassGround(SceneFrame& frame, const GrassNode& grass, GrassGround& out) {

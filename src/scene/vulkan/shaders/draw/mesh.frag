@@ -298,15 +298,38 @@ void main() {
     // the level whose texel is the fragment's footprint: the vertex's are a
     // ring cell's, several pixels across. inUV is the map point
     // (mesh_land.vert), small about the eye where a body point is not.
+    //
+    // Under its sea (the vertices stand on the water there) the fragment is
+    // water as far as its own ground lies lower, its edge a pixel's soft
+    // step of the ground's height: so a coast is as sharp as the pixels
+    // whatever the tiles' texels. The water is flat, the seabed through it
+    // dimmed along the light's way down and back (refracted into the water,
+    // n 1.33) over the colour deep water sends back.
+    float landWet = 0.0;
     {
         vec2 dm = max(abs(dFdx(inUV)), abs(dFdy(inUV)));
         float lambda = max(log2(max(dm.x, dm.y) / (0.5 * landCell0())), 0.0);
         float lh;
         vec3 ln;
         vec4 ls;
-        if (landSampleNormal(inUV, lambda, lh, ln, ls)) {
+        bool landIn = landSampleNormal(inUV, lambda, lh, ln, ls);
+        float lhStep = fwidth(lh);   // (in uniform control flow)
+        if (landIn) {
             baseColor = push.baseColor.rgb * ls.rgb;
             N = ln;
+            if (landHasSea()) {
+                float depth = landSeaLevel() - lh;
+                landWet = clamp(depth / max(lhStep, 1e-3) + 0.5, 0.0, 1.0);
+                if (landWet > 0.0) {
+                    vec3 up = landUp(inUV);
+                    float mu = clamp(dot(up, normalize(-worldPos)), 0.0, 1.0);
+                    float muW = sqrt(1.0 - (1.0 - mu * mu) / 1.769);
+                    vec3 through = exp(-landSeaAbsorb() * max(depth, 0.0) * (1.0 + 1.0 / muW));
+                    vec3 water = mix(landSeaScatter(), baseColor, through);
+                    baseColor = mix(baseColor, water, landWet);
+                    N = normalize(mix(N, up, landWet));
+                }
+            }
         }
     }
 #endif
@@ -363,6 +386,9 @@ void main() {
 #endif
 #ifdef SCENE_GRASS
     roughness = sward.roughness;
+#endif
+#ifdef SCENE_LAND
+    roughness = mix(roughness, landSeaRoughness(), landWet);
 #endif
 #ifdef SCENE_BARK
     // A tube's wood (scene_bark.glsl): inColor where on the stem, inUV its

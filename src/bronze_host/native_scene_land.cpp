@@ -79,6 +79,18 @@ void bro_scene_SceneNode_setLandParams(void* self, const double* params, uint32_
     if (given(2)) r.resolution = static_cast<int>(params[2]);
     if (given(3)) r.levels = static_cast<int>(params[3]);
     if (given(1) || given(2) || given(3)) land->setRings(r);
+    // The sea (scene_land.js): on, level, absorb rgb, scatter rgb, roughness.
+    if (given(4)) {
+        scene::LandNode::Sea s = land->sea();
+        s.on = params[4] > 0.0;
+        if (given(5)) s.level = static_cast<float>(params[5]);
+        for (int k = 0; k < 3; ++k) {
+            if (given(6 + k)) s.absorb[k] = static_cast<float>(params[6 + k]);
+            if (given(9 + k)) s.scatter[k] = static_cast<float>(params[9 + k]);
+        }
+        if (given(12)) s.roughness = static_cast<float>(params[12]);
+        land->setSea(s);
+    }
 }
 
 void bro_scene_SceneNode_landParams(void* self, bronze_native_buffer* out) {

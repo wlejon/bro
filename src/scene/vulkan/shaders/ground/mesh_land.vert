@@ -98,6 +98,9 @@ void main() {
     vec3 N;
     landSampleNormal(xz, lambda, h, N, surface);
 #endif
+    // Over a seabed the vertex is the water's (mesh.frag decides water or
+    // ground a fragment at a time).
+    h = landTop(h);
     h += landRise(xz, lambda, h);
 
     // The morph over the ring's outer cells (of the land as it rises).
@@ -116,7 +119,7 @@ void main() {
                 o = vec2((i & 1) == 0 ? -cl : cl, i < 2 ? -cl : cl);
             }
             vec2 q = landClamp(xz + o);
-            float hq = landHeightAt(q);
+            float hq = landTop(landHeightAt(q));
             hc += hq + landRise(q, landLevel(q), hq);
         }
         h = mix(h, hc / float(n), a);

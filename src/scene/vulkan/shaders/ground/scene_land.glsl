@@ -34,6 +34,16 @@ bool landRound() { return LAND_W(LD_BODY / 4).x > 0.0; }
 // under a pixel from the eye's height.
 float landFirstRing() { return LAND_W(LD_BODY / 4).y; }
 
+// Its sea (LandNode::Sea): whether it has one, its level, its surface's
+// roughness, the light it absorbs a metre and deep water's albedo.
+bool landHasSea() { return LAND_W(LD_SEA / 4).x > 0.5; }
+float landSeaLevel() { return LAND_W(LD_SEA / 4).y; }
+float landSeaRoughness() { return LAND_W(LD_SEA / 4).z; }
+vec3 landSeaAbsorb() { return LAND_W(LD_SEA / 4 + 1).xyz; }
+vec3 landSeaScatter() { return LAND_W(LD_SEA / 4 + 2).xyz; }
+// What is drawn at ground height `h`: the water's surface over a seabed.
+float landTop(float h) { return landHasSea() ? max(h, landSeaLevel()) : h; }
+
 // --- the map ---
 
 vec2 landClamp(vec2 m) {

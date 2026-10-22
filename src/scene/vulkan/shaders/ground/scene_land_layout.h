@@ -57,7 +57,10 @@
                                   // place frame (xyz), then the anchor's chart on it (x, z) in level-0 tiles,
                                   // whole (xy) and fraction (zw)
 #define LD_FACE_WORDS       16
-#define LD_WORDS            124
+#define LD_SEA              124   // its sea (LandNode::Sea): x 1 when it has one, y its level (m over the
+                                  // datum), z its roughness, w unused; LD_SEA + 4 xyz its absorption (1/m),
+                                  // LD_SEA + 8 xyz the colour deep water scatters back
+#define LD_WORDS            136
 
 // --- the fills ---
 #define LF_GROUP            8     // a workgroup is LF_GROUP x LF_GROUP texels of one tile

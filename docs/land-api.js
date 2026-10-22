@@ -167,10 +167,32 @@
  * @property {number} [levels=10] - rings: they reach cellSize *
  *   resolution / 2 * 2^(levels - 1) metres. On a round body at least as many
  *   as reach the antipode (up to 20).
+ * @property {LandSea|null} [sea] - water filling the land up to a level
+ *   wherever its ground lies lower; null none (the default).
  * @property {string} [name]
  * @property {boolean} [receivesShadow=true]
  * @property {boolean} [castsShadow=true]
  * @property {boolean} [visible=true]
+ */
+
+/**
+ * @typedef {Object} LandSea
+ * A land's sea. Its vertices stand on the water where the ground is under
+ * it; each fragment decides water or ground from its own ground height (read
+ * from the tiles at the fragment's footprint), so a coast is as sharp as the
+ * pixels whatever the tiles' texels. The water is shaded flat (the body's up)
+ * as a dielectric: the seabed through it, dimmed by `absorb` along the light's
+ * way down and back (refracted), over `scatter`, the colour deep water sends
+ * back. landHeight and the plants' ground stay the seabed's. Omitted members
+ * keep what they were (at first the defaults).
+ * @property {number} [level=0] - the water's surface, m over the datum.
+ * @property {number[]} [absorb=[0.45, 0.09, 0.05]] - what each metre of water
+ *   takes from the light, red, green and blue (1/m).
+ * @property {number[]} [scatter=[0.004, 0.016, 0.03]] - deep water's albedo.
+ * @property {number} [roughness=0.08] - the surface's roughness.
+ * @example
+ *   land.setLand({ sea: { level: 0, absorb: [0.6, 0.12, 0.08] } });
+ *   land.setLand({ sea: null });   // dry
  */
 
 /**

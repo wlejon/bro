@@ -103,6 +103,14 @@ LandSurface landSurface(LandPoint q) {
             parts.set(node, p);
         }
         const params = PARAMS.map((k) => (typeof o[k] === 'number' ? o[k] : NaN));
+        // The sea after them: on, level, absorb rgb, scatter rgb, roughness
+        // (NaN: as it was).
+        if (o.sea !== undefined) {
+            const s = o.sea || {};
+            const rgb = (v) => (v && v.length >= 3 ? [+v[0], +v[1], +v[2]] : [NaN, NaN, NaN]);
+            const num = (v) => (typeof v === 'number' ? v : NaN);
+            params.push(o.sea ? 1 : 0, num(s.level), ...rgb(s.absorb), ...rgb(s.scatter), num(s.roughness));
+        }
         if (params.some((v) => !Number.isNaN(v)))
             __bro_native.scene.SceneNode_setLandParams(node, new Float64Array(params));
         for (const k of ['name', 'castsShadow', 'receivesShadow', 'visible']) if (o[k] !== undefined) node[k] = o[k];

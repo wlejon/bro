@@ -165,7 +165,7 @@ double LandNode::mapReach() const {
 }
 
 bromath::AABB3 LandNode::bounds() const {
-    if (!round()) return chartBounds_;
+    if (!round()) return {chartBounds_.min, {chartBounds_.max.x, highest(), chartBounds_.max.z}};
     // The body about its centre, (0, -R, 0) in the place frame (place.h: the
     // place origin is on its datum, its y up there); the place may tilt, the
     // ball does not care.
@@ -446,7 +446,7 @@ bromath::AABB3 LandNode::blockBounds(const Block& b, const bromath::Vec3& eye, i
     const double x0 = at(cx, b.i0), x1 = at(cx, b.i1), z0 = at(cz, b.j0), z1 = at(cz, b.j1);
     if (!round())
         return {{static_cast<float>(x0), chartBounds_.min.y, static_cast<float>(z0)},
-                {static_cast<float>(x1), chartBounds_.max.y, static_cast<float>(z1)}};
+                {static_cast<float>(x1), highest(), static_cast<float>(z1)}};
 
     // On a body: the map rect's corners and middle at both heights, widened
     // by the ground's bulge past a chord across it (body_surface_map.cpp's).
