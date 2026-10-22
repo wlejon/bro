@@ -8,6 +8,7 @@
 #include "scene/vulkan/frame/scene_defaults.h"
 #include "scene/vulkan/frame/scene_frame.h"
 #include "scene/vulkan/frame/scene_gpu_resources.h"
+#include "scene/vulkan/frame/scene_targets.h"
 #include "scene/vulkan/foliage/scene_plants_gpu_plan.h"
 #include "scene/vulkan/ground/scene_cover_plan.h"
 #include "scene/vulkan/draw/scene_vk_custom_shader.h"
@@ -278,8 +279,9 @@ VkPipeline SceneMeshDrawer::buildPipeline(VkShaderModule vs, VkShaderModule fs, 
             b.enableDepthTest(false);
         }
     } else {
-        // Every attachment is written: the indirect-light one, when the
-        // target has it, by the indirect variant of the fragment stage.
+        // Every attachment is written: the sub-pixel mark by every build of
+        // the fragment stage, the indirect-light one, when the target has
+        // it, by the indirect variant.
         b.disableBlending(target.colorCount).enableDepthTest(true);
     }
     return b.build(device_, layout_);
@@ -302,27 +304,25 @@ VkPipeline SceneMeshDrawer::builtinPipeline(const MeshDraw& draw, const TargetFo
                              (herb ? 2u * static_cast<uint32_t>(kMeshKindCount) * raster::kCount : 0u) +
                              (coverFar ? 3u * static_cast<uint32_t>(kMeshKindCount) * raster::kCount : 0u);
     return builtin_.get(variant, target, [&] {
+        const bool indirect = SceneTargets::carriesIndirect(target);
         if (render::pipelineStatsEnabled()) {
             render::setPipelineStatsLabel(std::string("mesh kind ") + std::to_string(static_cast<int>(draw.kind)) +
                                           (ground ? " ground" : "") + (herb ? " herb" : "") +
-                                          (coverFar ? " cover far" : "") +
-                                          (target.colorCount > 1 ? " indirect" : "") + " raster " +
-                                          std::to_string(rasterBits));
+                                          (coverFar ? " cover far" : "") + (indirect ? " indirect" : "") +
+                                          " raster " + std::to_string(rasterBits));
         }
-        if (herb)
-            return buildPipeline(vsHerb_, target.colorCount > 1 ? fsHerbIndirect_ : fsHerb_, draw.kind, rasterBits,
-                                 target);
+        if (herb) return buildPipeline(vsHerb_, indirect ? fsHerbIndirect_ : fsHerb_, draw.kind, rasterBits, target);
         if (coverFar)
-            return buildPipeline(vsCoverFar_, target.colorCount > 1 ? fsCoverFarIndirect_ : fsCoverFar_, draw.kind,
-                                 rasterBits, target);
+            return buildPipeline(vsCoverFar_, indirect ? fsCoverFarIndirect_ : fsCoverFar_, draw.kind, rasterBits,
+                                 target);
         const bool veg = vegetationShading(draw.kind);
-        VkShaderModule fs = target.colorCount > 1 ? (veg ? fsVegIndirect_ : fsIndirect_) : (veg ? fsVeg_ : fs_);
-        if (draw.kind == MeshKind::Tube) fs = target.colorCount > 1 ? fsBarkIndirect_ : fsBark_;
-        if (ground) fs = target.colorCount > 1 ? fsGroundIndirect_ : fsGround_;
+        VkShaderModule fs = indirect ? (veg ? fsVegIndirect_ : fsIndirect_) : (veg ? fsVeg_ : fs_);
+        if (draw.kind == MeshKind::Tube) fs = indirect ? fsBarkIndirect_ : fsBark_;
+        if (ground) fs = indirect ? fsGroundIndirect_ : fsGround_;
         // (A surface layer tile's fill draws the turf into its four layers.)
         if (ground && target.colorCount == 4) fs = fsGroundFill_;
-        if (draw.kind == MeshKind::Grass) fs = target.colorCount > 1 ? fsGrassIndirect_ : fsGrass_;
-        if (draw.kind == MeshKind::Plants) fs = target.colorCount > 1 ? fsPlantsIndirect_ : fsPlants_;
+        if (draw.kind == MeshKind::Grass) fs = indirect ? fsGrassIndirect_ : fsGrass_;
+        if (draw.kind == MeshKind::Plants) fs = indirect ? fsPlantsIndirect_ : fsPlants_;
         return buildPipeline(vs_[static_cast<int>(draw.kind)], fs, draw.kind, rasterBits, target);
     });
 }
@@ -353,7 +353,7 @@ VkPipeline SceneMeshDrawer::customPipeline(CustomProgram& prog, const MeshDraw& 
     const uint32_t rasterBits = rasterVariant(draw);
     return prog.pipelines.get(rasterBits, target, [&]() -> VkPipeline {
         VkShaderModule fs = prog.fs;
-        if (target.colorCount > 1) {
+        if (SceneTargets::carriesIndirect(target)) {
             if (prog.indirectFailed) return VK_NULL_HANDLE;
             if (prog.fsIndirect == VK_NULL_HANDLE) {
                 VkShaderModule vs = VK_NULL_HANDLE;

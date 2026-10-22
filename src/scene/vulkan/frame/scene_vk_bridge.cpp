@@ -19,6 +19,7 @@
 #include "scene/vulkan/frame/pass_snapshot.h"
 #include "scene/vulkan/post/pass_ssao.h"
 #include "scene/vulkan/post/pass_ssr.h"
+#include "scene/vulkan/post/pass_subpixel.h"
 #include "scene/vulkan/world/pass_world_service.h"
 #include "scene/vulkan/draw/scene_draw_list.h"
 #include "scene/vulkan/frame/scene_frame.h"
@@ -73,6 +74,9 @@ SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
     graph_.add(std::make_unique<PassDepthSnapshot>());
     auto& ssao = static_cast<PassSSAO&>(graph_.add(std::make_unique<PassSSAO>()));
     graph_.add(std::make_unique<PassAoApply>(ssao));
+    // Detail finer than a pixel blended with its neighbours.
+    graph_.add(std::make_unique<PassSubpixelSnapshot>());
+    graph_.add(std::make_unique<PassSubpixel>());
     // Decals land on the opaque result and so in the reflections; SSR runs
     // before anything blended, which draws over both.
     graph_.add(std::make_unique<PassDecal>());
@@ -154,6 +158,10 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
     frame.tilt = renderer.tiltShiftEnabled();
     frame.fxaa = renderer.fxaaEnabled();
     buildDrawLists(frame);
+    // The sub-pixel resolve, on a frame with opaque draws that mark detail
+    // finer than a pixel: what grows on the ground (a grass node's).
+    frame.subpixel = std::any_of(frame.lists.opaque.begin(), frame.lists.opaque.end(),
+                                 [&](uint32_t i) { return frame.lists.meshes[i].kind == MeshKind::Grass; });
     // The probe grid places itself once the draw lists hold its canopy; the
     // frame's lighting (filled before) takes its block.
     probes_.beginFrame(frame);

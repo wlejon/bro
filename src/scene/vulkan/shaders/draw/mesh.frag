@@ -38,10 +38,23 @@ layout(location = 10) in vec2 inHerbStand;
 #endif
 
 layout(location = 0) out vec4 outColor;
+// The opaque scope's sub-pixel mark (common/scene_subpixel_mark.glsl): what
+// grows a surface of its own, with the share of it that is a cut card's
+// dither on detail too fine to show; anything else the ground it stands on.
+// Outside the opaque scope the write goes nowhere.
+layout(location = 1) out float outMark;
+#include "common/scene_subpixel_mark.glsl"
+float meshMark(float subpixel) {
+#ifdef SCENE_VEGETATION
+    return subpixelMark(subpixel);
+#else
+    return 0.0;
+#endif
+}
 #ifdef SCENE_INDIRECT_OUTPUT
 // The indirect (ambient + probe) light in outColor, for the SSAO pass to
 // darken after the opaque pass (scene/vulkan/post/pass_ssao.h).
-layout(location = 1) out vec4 outIndirect;
+layout(location = 2) out vec4 outIndirect;
 #endif
 
 #ifdef SCENE_VEGETATION
@@ -100,9 +113,13 @@ void main() {
 #ifdef SCENE_VEGETATION
     gl_SampleMask[0] = -1;
 #endif
+    float subpixel = 0.0;
 #ifdef SCENE_HERB
     // A herb's card cut to its leaf, stem or bloom (scene_herb_surface.glsl),
     // its cover kept as that share of the samples, each card its own dither.
+    // A card (a leaf, a bloom) a few pixels long has parts a pixel or less
+    // (by its length: a stem is a thin card, but a line, not a speck).
+    float herbPx = 1.0 / max(min(fwidth(inUV.x), fwidth(inUV.y)), 1e-5);
     HerbSurface herb = herbSurface(inHerbInfo, inUV, inHerbSize, inColor.x, inColor.zw,
                                    dot(inNormal, -worldPos) < 0.0);
     if (herb.cover < 1.0 / 255.0) discard;
@@ -111,6 +128,11 @@ void main() {
         if (mask == 0) discard;
         gl_SampleMask[0] = mask;
     }
+    // The pixels of such a card, and the part-covered ones (its edges, its
+    // fine cuts) of one up to a dozen pixels across: the dither's
+    // all-or-nothing pixels, which the sub-pixel resolve blends.
+    subpixel = max(1.0 - smoothstep(2.0, 4.0, herbPx),
+                   subpixelDecided(herb.cover) * (1.0 - smoothstep(8.0, 16.0, herbPx)));
 #endif
     float camDist = length(worldPos);
     if (MESH_CUTS && push.extra.x > 0.0 && camDist < push.extra.x) discard;
@@ -140,6 +162,7 @@ void main() {
     // A grass blade (scene_grass_surface.glsl's grassSurface): a far fan cut
     // into its leaves, a culm into its stem and head.
     GrassSurface grass = grassSurface(worldPos, baseColor, (flags & MESH_MSAA) != 0u);
+    subpixel = grass.subpixel;
 #endif
 #ifdef SCENE_HERB
     // A herb's colours are its species' (and the plant's own tone), its
@@ -179,6 +202,7 @@ void main() {
         if ((flags & MESH_SHADE_MAP) != 0u && lighting.shadeOrigin.w > 0.5) color *= cellShade(worldPos, geomN);
         // Unlit surfaces reflect nothing in the SSR mask phase.
         outColor = vec4(color, (flags & MESH_REFLECTANCE) != 0u ? 0.0 : mix(alpha, 0.0, air.fade));
+        outMark = meshMark(subpixel);
 #ifdef SCENE_INDIRECT_OUTPUT
         outIndirect = vec4(0.0);
 #endif
@@ -329,6 +353,7 @@ void main() {
     }
 
     outColor = vec4(min(color, vec3(SCENE_HDR_MAX)), alpha);
+    outMark = meshMark(subpixel);
 #ifdef SCENE_INDIRECT_OUTPUT
     outIndirect = vec4(min(indirect, vec3(SCENE_HDR_MAX)), 0.0);
 #endif

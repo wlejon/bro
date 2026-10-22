@@ -7,7 +7,10 @@
 //                      SSAO, SSR, decals, soft particles and depth of field;
 //                      copied only on a frame where one of them reads it.
 //   PassColorSnapshot  the lit, ambient-occluded opaque colour ->
-//                      SceneTargets::ssrSnapshot, which SSR reflects.
+//                      SceneTargets::colorSnapshot, which SSR reflects.
+//   PassSubpixelSnapshot  the opaque colour -> SceneTargets::colorSnapshot,
+//                      which the sub-pixel resolve blends from
+//                      (post/pass_subpixel.h).
 
 #include "scene/vulkan/frame/scene_pass.h"
 
@@ -26,6 +29,16 @@ public:
 class PassColorSnapshot final : public ScenePass {
 public:
     const char* name() const override { return "color-snapshot"; }
+    bool setup(SceneGpu&) override { return true; }
+    bool active(const SceneFrame& frame) const override;
+    void declare(const SceneFrame& frame, PassIO& io) const override;
+    void record(SceneFrame& frame) override;
+    void cleanup(SceneGpu&) override {}
+};
+
+class PassSubpixelSnapshot final : public ScenePass {
+public:
+    const char* name() const override { return "subpixel-snapshot"; }
     bool setup(SceneGpu&) override { return true; }
     bool active(const SceneFrame& frame) const override;
     void declare(const SceneFrame& frame, PassIO& io) const override;

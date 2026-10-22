@@ -5,9 +5,11 @@
 
 layout(location = 0) in vec3 inWorldDir;
 layout(location = 0) out vec4 outColor;
-// The opaque scope's indirect-light attachment, when SSAO adds one: the sky
-// has no indirect light for AO to take away. Without it the write goes nowhere.
-layout(location = 1) out vec4 outIndirect;
+// The opaque scope's sub-pixel mark (none: the sky is no cut card) and its
+// indirect-light attachment, when SSAO adds one: the sky has no indirect
+// light for AO to take away. Without it the write goes nowhere.
+layout(location = 1) out float outMark;
+layout(location = 2) out vec4 outIndirect;
 
 #include "common/scene_camera.glsl"
 #include "common/scene_lighting.glsl"

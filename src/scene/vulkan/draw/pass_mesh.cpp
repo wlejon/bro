@@ -20,7 +20,7 @@
 namespace bro::scene::vk {
 
 void PassOpaque::declare(const SceneFrame& frame, PassIO& io) const {
-    io.hdr({.indirect = frame.ssao});
+    io.hdr({.mark = true, .indirect = frame.ssao});
     // (Its draws light through the shadow pages' pool and overlays.)
     io.sample(frame.gpu.shadows.pool);
     io.sample(frame.gpu.shadows.scratch);

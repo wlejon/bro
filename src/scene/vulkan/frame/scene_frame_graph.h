@@ -7,8 +7,8 @@
 //
 // The HDR scope renders into SceneTargets' HDR colour and depth (their MSAA
 // twins when multisampled, resolved into the single-sample images at the end
-// of a scope) and, when a pass asks for it, the indirect-light
-// attachment. The first scope of a frame clears colour to transparent black
+// of a scope) and, when a pass asks for them, the sub-pixel mark and the
+// indirect-light attachment. The first scope of a frame clears colour to transparent black
 // and depth to the far plane; later scopes load what the earlier ones left.
 // Closing a scope makes everything it wrote — resolves included — visible to
 // whatever comes next.
@@ -53,8 +53,10 @@ private:
 
     std::vector<std::unique_ptr<ScenePass>> passes_;
     bool scopeOpen_ = false;
+    bool scopeMark_ = false;
     bool scopeIndirect_ = false;
     bool firstScope_ = true;
+    bool markCleared_ = false;
     bool indirectCleared_ = false;
 };
 

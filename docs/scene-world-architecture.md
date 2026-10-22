@@ -892,6 +892,40 @@ fans thin, the turf between their clumps shows flat and about twice as
 bright as they are; and the biomes' other covers (pebbles, litter, snow)
 as kinds of element.
 
+### As built: the sub-pixel resolve
+
+A cut card keeps a part-covered pixel all or nothing by its dither
+(`coverSampleMask`), so detail finer than a pixel (a far fan's leaves, a
+herb's leaf or bloom a pixel or two across) averages to the right cover
+in a still but flips frame to frame as it moves. MSAA settles it (4×:
+60–100 m 8.3 → 5.2) at a full millisecond. Instead
+(`post/pass_subpixel.h`):
+
+- **The opaque scope marks it.** A second attachment (`SceneTargets::mark`,
+  R8; the indirect light moved to the third) holds what each pixel is
+  (`common/scene_subpixel_mark.glsl`): the ground the cards stand on, or a
+  surface of its own with the share of it that was the dither's decision
+  on detail too fine to show. That share is the card's own: a whole card
+  under 2–4 pixels (a herb's by its length, so a stem is a line, not a
+  speck; a far fan's by its leaves' width), or a part-covered pixel (an
+  edge, a fine cut) of one up to a dozen across; the far tier's elements by
+  their edges. A solid leaf, blade, bloom or trunk is 0 and stays crisp.
+- **A 3×3 tent blends it.** After AO and before decals, SSR and the
+  translucents, a marked pixel takes the tent of its neighbours as far as
+  its share, a ground pixel as far as its most marked neighbour (what the
+  dither left showing). Neighbours count only at about its own depth (within
+  25–40%: the ground a few metres behind a far fan does, a crest over the
+  next hill, a trunk before the meadow beyond, or the sky does not). It
+  reads a copy of the colour (`PassSubpixelSnapshot` into `colorSnapshot`,
+  which SSR's snapshot also uses) and the depth snapshot.
+
+Walking on as above, 60–100 m 8.3 → 6.8, 100–160 m 2.3 → 2.0, 160–300 m
+2.2 → 2.2; the near meadow's grain unchanged (a resolve on everything a
+card marks, whole cards up to 16 pixels, went to 4.9 but blurred the
+flowers within 30 m and the flyover's ground). The rest of the 60–100 m
+change is real detail of a few pixels (the herbs' clumps) crawling. Cost
+0.07–0.09 ms (copy 0.03, blend 0.04): meadow 2.67 → 2.75 ms.
+
 ## 10. Placement
 
 A planet cannot store its plants (an Earth's is of the order of 10^12). A

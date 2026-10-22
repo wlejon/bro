@@ -21,8 +21,12 @@ layout(location = 7) in vec2 inInfo;
 layout(location = 8) in vec2 inLeafUV;   // across, along the leaf
 
 layout(location = 0) out vec4 outColor;
+// (mesh.frag's: the opaque scope's sub-pixel mark; a plant is a surface
+// of its own.)
+layout(location = 1) out float outMark;
+#include "common/scene_subpixel_mark.glsl"
 #ifdef SCENE_INDIRECT_OUTPUT
-layout(location = 1) out vec4 outIndirect;
+layout(location = 2) out vec4 outIndirect;
 #endif
 
 #include "common/scene_camera.glsl"
@@ -118,6 +122,7 @@ void main() {
     color = color * air.transmittance + air.inscatter;
     indirect *= air.transmittance;
     outColor = vec4(min(color, vec3(SCENE_HDR_MAX)), mix(1.0, 0.0, air.fade));
+    outMark = subpixelMark(0.0);
 #ifdef SCENE_INDIRECT_OUTPUT
     outIndirect = vec4(min(indirect, vec3(SCENE_HDR_MAX)), 0.0);
 #endif

@@ -21,7 +21,7 @@ void copyWhole(VkCommandBuffer cmd, const SceneVkImage& src, const SceneVkImage&
 }  // namespace
 
 bool PassDepthSnapshot::active(const SceneFrame& frame) const {
-    if (frame.ssao || frame.ssr || frame.dof) return true;
+    if (frame.ssao || frame.ssr || frame.dof || frame.subpixel) return true;
     for (const SceneNode* node : frame.lists.nodes) {
         if (node->type() == SceneNode::Type::Decal) return true;
         if (node->type() == SceneNode::Type::Particles3D) {
@@ -47,11 +47,24 @@ bool PassColorSnapshot::active(const SceneFrame& frame) const {
 
 void PassColorSnapshot::declare(const SceneFrame& frame, PassIO& io) const {
     io.transferSrc(frame.gpu.targets.hdr);
-    io.transferDst(frame.gpu.targets.ssrSnapshot);
+    io.transferDst(frame.gpu.targets.colorSnapshot);
 }
 
 void PassColorSnapshot::record(SceneFrame& frame) {
-    copyWhole(frame.cmd, frame.gpu.targets.hdr, frame.gpu.targets.ssrSnapshot, VK_IMAGE_ASPECT_COLOR_BIT);
+    copyWhole(frame.cmd, frame.gpu.targets.hdr, frame.gpu.targets.colorSnapshot, VK_IMAGE_ASPECT_COLOR_BIT);
+}
+
+bool PassSubpixelSnapshot::active(const SceneFrame& frame) const {
+    return frame.subpixel;
+}
+
+void PassSubpixelSnapshot::declare(const SceneFrame& frame, PassIO& io) const {
+    io.transferSrc(frame.gpu.targets.hdr);
+    io.transferDst(frame.gpu.targets.colorSnapshot);
+}
+
+void PassSubpixelSnapshot::record(SceneFrame& frame) {
+    copyWhole(frame.cmd, frame.gpu.targets.hdr, frame.gpu.targets.colorSnapshot, VK_IMAGE_ASPECT_COLOR_BIT);
 }
 
 }  // namespace bro::scene::vk

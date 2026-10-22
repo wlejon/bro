@@ -50,6 +50,7 @@ vec3 starLayer(vec3 d, float grid, float thresh, float size) {
 }
 
 void main() {
+    outMark = 0.0;
     outIndirect = vec4(0.0);
     vec3 d = rotateY(normalize(inWorldDir), sky.params.z);
     float thresh = clamp(0.05 * sky.params.y, 0.0, 0.9);

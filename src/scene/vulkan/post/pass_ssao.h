@@ -2,7 +2,7 @@
 
 // Screen-space ambient occlusion, applied to indirect light only.
 //
-// While SSAO is on, the opaque scope carries a second colour attachment that
+// While SSAO is on, the opaque scope carries a colour attachment that
 // mesh.frag (and the terrain) fill with each surface's indirect light —
 // ambient plus probe reflection, after shade-map and fog. Then:
 //

@@ -459,9 +459,14 @@ int main() {
     assert(targets.msaa() == (samples != VK_SAMPLE_COUNT_1_BIT));
     assert(!targets.ensure(allocator, 32, 16, samples));   // unchanged: nothing recreated
     assert(targets.ensureIndirect(allocator) && targets.indirect.isValid());
-    const TargetFormat hdr = targets.hdrTarget(true);
-    assert(hdr.colorCount == 2 && hdr.samples == samples && hdr.depth == SceneTargets::kDepthFormat);
-    assert(targets.hdrTarget(false).key() != hdr.key());
+    const TargetFormat hdr = targets.hdrTarget(true, true);
+    assert(hdr.colorCount == 3 && hdr.samples == samples && hdr.depth == SceneTargets::kDepthFormat);
+    assert(SceneTargets::carriesMark(hdr) && SceneTargets::carriesIndirect(hdr));
+    const TargetFormat marked = targets.hdrTarget(true, false);
+    assert(marked.colorCount == 2 && SceneTargets::carriesMark(marked) && !SceneTargets::carriesIndirect(marked));
+    assert(!SceneTargets::carriesMark(targets.hdrTarget(false, false)));
+    assert(targets.hdrTarget(false, false).key() != marked.key() && marked.key() != hdr.key());
+    assert(targets.mark.isValid() && targets.mark.format == SceneTargets::kMarkFormat);
     targets.cleanup(allocator);
     std::cout << "PASSED" << std::endl;
 

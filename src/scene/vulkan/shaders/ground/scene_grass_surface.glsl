@@ -184,6 +184,7 @@ struct GrassSurface {
     bool dead;      // a dead leaf
     float trans;    // a culm's translucency (grassCulmSurface); -1: the blade's own
     vec3 up;        // the way the sward's blades stand
+    float subpixel; // how far it is detail too fine to show (mesh.frag's outMark)
 };
 
 // A grass blade (scene_grass.glsl's GrassBlade): inColor what it is (its
@@ -199,6 +200,9 @@ GrassSurface grassSurface(vec3 worldPos, inout vec3 baseColor, bool msaa) {
     g.dead = grassKind > 1.5 && grassKind < 2.5;
     g.trans = -1.0;
     g.up = vec3(0.0, 1.0, 0.0);
+    g.subpixel = 0.0;
+    // The card's width in pixels (taken before any discard).
+    float acrossPx = 1.0 / max(fwidth(inUV.x), 1e-5);
     if (grassKind > 2.5) {
         // A far fan of leaves, cut into them.
         float tone;
@@ -214,6 +218,11 @@ GrassSurface grassSurface(vec3 worldPos, inout vec3 baseColor, bool msaa) {
         int mask = coverSampleMask(cover, msaa, uint(fract(inColor.x) * 131072.0));
         if (mask == 0) discard;
         gl_SampleMask[0] = mask;
+        // As far as the dither kept the pixel, where its leaves are a pixel
+        // or so wide (wider, near, it is only their edges).
+        float leafPx = fract(inColor.y) * acrossPx;
+        g.subpixel = max(1.0 - smoothstep(1.5, 3.0, leafPx),
+                         subpixelDecided(cover) * (1.0 - smoothstep(3.0, 6.0, leafPx)));
     }
     if (g.culm) {
         vec3 culmColor;
@@ -223,6 +232,10 @@ GrassSurface grassSurface(vec3 worldPos, inout vec3 baseColor, bool msaa) {
         if (mask == 0) discard;
         gl_SampleMask[0] = mask;
         baseColor = culmColor;
+        // As far as the dither kept the pixel, where the head is a pixel or
+        // so across.
+        g.subpixel = max(1.0 - smoothstep(1.5, 3.0, acrossPx),
+                         subpixelDecided(cover) * (1.0 - smoothstep(3.0, 8.0, acrossPx)));
     }
     return g;
 }

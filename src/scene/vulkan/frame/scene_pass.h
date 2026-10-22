@@ -35,11 +35,14 @@ enum class ImageAccess : uint8_t {
 };
 
 /// The HDR raster scope: the frame's colour + depth target (MSAA when the
-/// renderer asks for it, resolved at the end of a scope), plus the indirect-light
-/// attachment while SSAO needs it. The frame's first scope clears colour and
-/// depth; every later one loads them.
+/// renderer asks for it, resolved at the end of a scope); the opaque surfaces'
+/// scope also carries the sub-pixel mark and, while SSAO needs it, the
+/// indirect light (SceneTargets' slots). The frame's first scope clears colour
+/// and depth, the first that carries the mark or the indirect light clears
+/// it; every later one loads them.
 struct HdrScope {
-    bool indirect = false;   // carries the indirect-light attachment
+    bool mark = false;       // the opaque surfaces' scope: carries the sub-pixel mark
+    bool indirect = false;   // and the indirect-light attachment (only with the mark)
 };
 
 class PassIO {

@@ -77,6 +77,7 @@ embed_vk_shader(shadow/shadow_pages_layout.h    kVkShadowPagesLayoutSrc)
 embed_vk_shader(shadow/scene_shadow_cutout.glsl kVkSceneShadowCutoutSrc)
 embed_vk_shader(common/scene_vegetation.glsl    kVkSceneVegetationSrc)
 embed_vk_shader(common/scene_cover_mask.glsl    kVkSceneCoverMaskSrc)
+embed_vk_shader(common/scene_subpixel_mark.glsl kVkSceneSubpixelMarkSrc)
 embed_vk_shader(common/scene_procedural.glsl    kVkSceneProceduralSrc)
 embed_vk_shader(draw/scene_bark.glsl            kVkSceneBarkSrc)
 embed_vk_shader(ground/scene_grass.glsl         kVkSceneGrassSrc)
@@ -186,6 +187,7 @@ add_library(bro_scene STATIC
     vulkan/shadow/scene_shadow_pages.cpp
     vulkan/post/pass_ssao.cpp
     vulkan/post/pass_ssr.cpp
+    vulkan/post/pass_subpixel.cpp
     vulkan/post/pass_dof.cpp
     vulkan/post/scene_exposure.cpp
     vulkan/post/pass_postfx.cpp

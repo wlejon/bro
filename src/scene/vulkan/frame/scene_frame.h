@@ -98,6 +98,7 @@ struct SceneFrame {
     // Effects that change the pass structure, decided once per frame.
     bool ssao = false;   // opaque scope carries the indirect attachment; AO applies
     bool ssr = false;    // opaque draws write the reflectance mask; SSR consumes it
+    bool subpixel = false;   // opaque draws mark detail too fine to show; PassSubpixel blends it
     bool dof = false;
     bool tilt = false;   // tilt-shift after the overlay
     bool fxaa = false;   // FXAA last

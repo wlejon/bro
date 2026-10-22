@@ -12,8 +12,11 @@ layout(location = 3) flat in vec4 inBloom;
 layout(location = 4) flat in vec4 inGround;
 
 layout(location = 0) out vec4 outColor;
+// (mesh.frag's: the opaque scope's sub-pixel mark.)
+layout(location = 1) out float outMark;
+#include "common/scene_subpixel_mark.glsl"
 #ifdef SCENE_INDIRECT_OUTPUT
-layout(location = 1) out vec4 outIndirect;
+layout(location = 2) out vec4 outIndirect;
 #endif
 
 #include "common/scene_camera.glsl"
@@ -133,6 +136,10 @@ void main() {
     alpha = mix(alpha, 0.0, air.fade);
 
     outColor = vec4(min(color, vec3(SCENE_HDR_MAX)), alpha);
+    // Each element stands for a few pixels (its tips, lobes and blooms fade
+    // to their means as they near one): its part-covered edge pixels are
+    // the dither's all-or-nothing ones, for the sub-pixel resolve to blend.
+    outMark = subpixelMark(subpixelDecided(cover));
 #ifdef SCENE_INDIRECT_OUTPUT
     outIndirect = vec4(min(indirect, vec3(SCENE_HDR_MAX)), 0.0);
 #endif
