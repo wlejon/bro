@@ -7,6 +7,7 @@
 
 #include "scene/nodes/land_node.h"
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <string>
@@ -39,6 +40,32 @@ const char* bro_scene_SceneNode_setLandModule(void* self, const char* source, co
     if (auto* land = landOf(self))
         land->setModule(source ? std::string(source) : std::string(), data, data_len,
                         heightTree ? std::string(heightTree) : std::string(), seed, tl_error);
+    return tl_error.c_str();
+}
+
+const char* bro_scene_SceneNode_setLandProcess(void* self, const char* source, const char* passes,
+                                               const double* params, uint32_t params_len, const float* data,
+                                               uint32_t data_len) {
+    static thread_local std::string tl_error;
+    tl_error.clear();
+    auto* land = landOf(self);
+    if (!land) return tl_error.c_str();
+    scene::LandProcess p;
+    p.source = source ? std::string(source) : std::string();
+    if (params_len > 0) p.resolution = static_cast<int>(params[0]);
+    if (params_len > 1) p.channels = static_cast<int>(params[1]);
+    // The passes' functions, comma-separated, their iterations after the
+    // resolution and channels.
+    std::string names = passes ? std::string(passes) : std::string();
+    uint32_t k = 2;
+    for (size_t at = 0; !names.empty() && at <= names.size();) {
+        const size_t comma = std::min(names.find(',', at), names.size());
+        p.passes.push_back({names.substr(at, comma - at), k < params_len ? static_cast<int>(params[k]) : 1});
+        ++k;
+        at = comma + 1;
+    }
+    if (data && data_len) p.data.assign(data, data + data_len);
+    land->setProcess(std::move(p), tl_error);
     return tl_error.c_str();
 }
 
@@ -80,6 +107,7 @@ void bro_scene_SceneNode_landStats(void* self, bronze_native_buffer* out) {
     const scene::LandNode::Stats& s = land->stats();
     transferBuffer(std::vector<double>{static_cast<double>(s.needed), static_cast<double>(s.resident),
                                        static_cast<double>(s.missing), static_cast<double>(s.filled),
-                                       static_cast<double>(s.levels), s.shortfall, s.compiled ? 1.0 : 0.0},
+                                       static_cast<double>(s.levels), s.shortfall, s.compiled ? 1.0 : 0.0,
+                                       land->ready() ? 1.0 : 0.0},
                    out);
 }

@@ -113,6 +113,13 @@ embed_vk_shader(ground/land_module.glsl        kVkLandModuleSrc)
 embed_vk_shader(ground/land_canopy.glsl        kVkLandCanopySrc)
 embed_vk_shader(ground/land_body.glsl          kVkLandBodySrc)
 embed_vk_shader(ground/land_fill.comp          kVkLandFillCompSrc)
+embed_vk_shader(ground/land_grid.glsl          kVkLandGridSrc)
+embed_vk_shader(ground/land_grid_config.glsl   kVkLandGridConfigSrc)
+embed_vk_shader(ground/land_process_layout.h   kVkLandProcessLayoutSrc)
+embed_vk_shader(ground/land_process_layer.glsl kVkLandProcessLayerSrc)
+embed_vk_shader(ground/land_process_module.glsl kVkLandProcessModuleSrc)
+embed_vk_shader(ground/land_process_dispatch.glsl kVkLandProcessDispatchSrc)
+embed_vk_shader(ground/land_process.comp       kVkLandProcessCompSrc)
 
 ## ── Library ──────────────────────────────────────────────────────────────────
 find_package(Vulkan REQUIRED)
@@ -165,6 +172,7 @@ add_library(bro_scene STATIC
     world/land_sun.cpp
     world/place.cpp
     world/body_surface_map.cpp
+    world/land_grid.cpp
     vulkan/frame/scene_vk_device.cpp
     vulkan/frame/scene_vk_allocator.cpp
     vulkan/frame/scene_vk_pipeline.cpp
@@ -197,6 +205,7 @@ add_library(bro_scene STATIC
     vulkan/ground/scene_mesh_drawer_grass.cpp
     vulkan/ground/scene_mesh_drawer_ground.cpp
     vulkan/ground/scene_mesh_drawer_land.cpp
+    vulkan/ground/scene_land_process.cpp
     vulkan/ground/scene_mesh_drawer_land_sun.cpp
     vulkan/foliage/scene_mesh_drawer_plants.cpp
     vulkan/foliage/scene_plants_gpu_plan.cpp
@@ -291,6 +300,12 @@ if(BRO_BUILD_TESTS)
     add_executable(bro_place_test tests/test_place.cpp world/place.cpp)
     target_link_libraries(bro_place_test PRIVATE bromath)
     target_include_directories(bro_place_test PRIVATE ${bro_SOURCE_DIR}/src)
+
+    # The land's processes' grid (roots, halos, sampling across a cube's
+    # edges), CPU only: its source and the place's.
+    add_executable(bro_land_grid_test tests/test_land_grid.cpp world/land_grid.cpp world/place.cpp)
+    target_link_libraries(bro_land_grid_test PRIVATE bromath)
+    target_include_directories(bro_land_grid_test PRIVATE ${bro_SOURCE_DIR}/src)
 
     # FastNoise2 trees as GLSL (brokit's noise_glsl) against FastNoise2.
     add_executable(bro_noise_glsl_test tests/test_noise_glsl.cpp)

@@ -9,6 +9,7 @@
 
 #include "scene/nodes/grass_node.h"
 #include "scene/nodes/land_node.h"
+#include "scene/nodes/world_module.h"
 #include "scene/scene_graph.h"
 #include "scene/vulkan/frame/scene_defaults.h"
 #include "scene/vulkan/frame/scene_frame.h"
@@ -52,6 +53,7 @@ bool SceneMeshDrawer::setupLand(SceneGpu& gpu) {
     fill.addBinding(3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
     fill.addBinding(4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT);
     fill.addBinding(5, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT);
+    fill.addBinding(6, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT);
     landFillSetLayout_ = fill.build(device_);
     const VkPushConstantRange push{VK_SHADER_STAGE_COMPUTE_BIT, 0, LF_P_WORDS * 4};
     VkPipelineLayoutCreateInfo info{};
@@ -71,7 +73,7 @@ bool SceneMeshDrawer::setupLand(SceneGpu& gpu) {
         LOG_ERROR("SceneMeshDrawer: the world service has no room for the land's fills");
         return false;
     }
-    return setupLandHorizon(gpu) && setupLandSun(gpu);
+    return landProcesses_.setup(gpu) && setupLandHorizon(gpu) && setupLandSun(gpu);
 }
 
 bool SceneMeshDrawer::setupLandHorizon(SceneGpu& gpu) {
@@ -125,6 +127,7 @@ void SceneMeshDrawer::cleanupLandHorizon(SceneGpu& gpu) {
 void SceneMeshDrawer::cleanupLand(SceneGpu& gpu) {
     cleanupLandHorizon(gpu);
     cleanupLandSun(gpu);
+    landProcesses_.cleanup(gpu);
     for (auto& [id, lt] : lands_) lt->atlas.destroy(gpu.device, gpu.allocator);
     lands_.clear();
     for (VkPipeline p : landFillPipelines_)
@@ -141,8 +144,9 @@ void SceneMeshDrawer::cleanupLand(SceneGpu& gpu) {
 
 const LandShaders* SceneMeshDrawer::landShaders(const LandNode& node) {
     if (!node.moduleSourceHash()) return nullptr;
-    const uint64_t key =
-        node.moduleSourceHash() ^ (node.canopySourceHash() * 0x9e3779b97f4a7c15ull) ^ (node.round() ? 1ull : 0ull);
+    const std::string grid = node.gridConfig();
+    const uint64_t key = node.moduleSourceHash() ^ (node.canopySourceHash() * 0x9e3779b97f4a7c15ull) ^
+                         (scene::moduleSourceHash(grid) * 0xc2b2ae3d27d4eb4full) ^ (node.round() ? 1ull : 0ull);
     auto it = landByModule_.find(key);
     if (it == landByModule_.end()) {
         // Compiled at the first frame that draws it (through the SPIR-V
@@ -150,7 +154,7 @@ const LandShaders* SceneMeshDrawer::landShaders(const LandNode& node) {
         auto set = std::make_unique<LandShaders>();
         std::string err;
         int index = -1;
-        if (set->create(device_, node.moduleSource(), node.canopySource(), node.round(), err)) {
+        if (set->create(device_, node.moduleSource(), node.canopySource(), grid, node.round(), err)) {
             index = static_cast<int>(landSets_.size());
             set->index = static_cast<uint32_t>(index);
             landSets_.push_back(std::move(set));
@@ -346,6 +350,7 @@ void SceneMeshDrawer::offerLand(SceneFrame& frame, WorldService& service) {
     for (auto it = lands_.begin(); it != lands_.end();) {
         if (!frame.graph.findById(it->first)) {
             it->second->atlas.destroy(frame.gpu.device, frame.gpu.allocator);
+            landProcesses_.forget(frame.gpu, it->first);
             it = lands_.erase(it);
         } else {
             ++it;
@@ -361,6 +366,11 @@ void SceneMeshDrawer::offerLand(SceneFrame& frame, WorldService& service) {
         SceneNode* n = frame.graph.findById(id);
         LandNode* land = n && n->type() == SceneNode::Type::Mesh ? static_cast<MeshNode*>(n)->asLand() : nullptr;
         if (!land) continue;
+
+        // Its processes first (their read-back may move its generation):
+        // no tiles until they have run and their heights are in.
+        lt.grid = landProcesses_.update(frame, *land, frame.cmd);
+        if (!lt.grid || !land->ready()) continue;
 
         // A new module, extent or rings: every tile again, over its items.
         if (lt.generation != land->generation()) {
@@ -542,6 +552,7 @@ uint32_t SceneMeshDrawer::recordLand(SceneFrame& frame, std::span<const WorldJob
                                   VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
                 writer.writeImage(5, lt.atlas.layerView(3), VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL,
                                   VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
+                writer.writeImage(6, lt.grid, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
                 writer.updateSet(device_, set);
 
                 lt.atlas.beginFills(cmd, fills);

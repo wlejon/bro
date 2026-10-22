@@ -477,6 +477,59 @@ void testRound() {
 
 }  // namespace
 
+// A land's processes' height under the rules' ground (rules.base): each
+// plant's foot is the ground plus the base where it stands, on the plane and
+// on a round body.
+void testBase() {
+    const auto linear = [](LandGrid g, auto f) {
+        LandBase b{std::move(g), {}};
+        b.values.assign(b.grid.texels(), 0.0f);
+        const int s = b.grid.side();
+        for (int r = 0; r < b.grid.roots(); ++r)
+            for (int j = 0; j < s; ++j)
+                for (int i = 0; i < s; ++i)
+                    b.values[(static_cast<size_t>(r) * s + j) * s + i] = static_cast<float>(
+                        f(r, -b.grid.half() + (i - 0.5) * b.grid.cell(), -b.grid.half() + (j - 0.5) * b.grid.cell()));
+        return std::make_shared<const LandBase>(std::move(b));
+    };
+    const CellGrid grid;
+    PlacementRules flat = oneLayer(4.0f, nullptr, 0.1f);
+    LandGrid g;
+    g.configure(Body{}, 1024.0, 64);
+    flat.base = linear(g, [](int, double x, double z) { return 0.5 * x - 0.25 * z + 20.0; });
+    const std::vector<float> a = placeCell(flat, grid, CellKey{3, -2, 0, 0});
+    float worst = 0.0f;
+    for (size_t i = 0; i < a.size(); i += PlantsNode::kPlantFloats) {
+        const float want = 3.0f - 0.1f + 0.5f * a[i] - 0.25f * a[i + 2] + 20.0f;
+        worst = std::max(worst, std::abs(a[i + 1] - want));
+    }
+    check(!a.empty() && worst < 1e-2f, "flat: a plant stands on the ground plus the base (worst " + std::to_string(worst) + ")");
+
+    const double R = 6371000.0;
+    Body body;
+    body.radius = R;
+    PlacementRules round = oneLayer(16.0f, nullptr);
+    LandGrid rg;
+    rg.configure(body, 0.0, 32);
+    round.base = linear(rg, [&](int r, double x, double z) {
+        double d[3];
+        dirOf(body, {r, x, z}, d);
+        return 200.0 * d[0];
+    });
+    const CellKey key{40, -12, 0, 0};
+    const std::vector<float> b = placeCell(round, grid, key, &body);
+    double origin[3];
+    placementOrigin(body, grid, key, origin);
+    double worstR = 0.0;
+    for (size_t i = 0; i < b.size(); i += PlantsNode::kPlantFloats) {
+        double p[3] = {origin[0] + b[i], origin[1] + b[i + 1], origin[2] + b[i + 2]};
+        const double r = std::sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]);
+        for (double& v : p) v /= r;
+        worstR = std::max(worstR, std::abs(r - R - 3.0 - round.base->atDir(p)));
+    }
+    check(!b.empty() && worstR < 0.05, "round: a plant stands on the ground plus the base (worst " + std::to_string(worstR) + ")");
+}
+
 int main() {
     testFields();
     testCell();
@@ -485,6 +538,7 @@ int main() {
     testStore();
     testNode();
     testRound();
+    testBase();
     std::printf("plant placement: %d checks, %d failed\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

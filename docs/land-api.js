@@ -17,7 +17,12 @@
  *     how far from the eye, never of which ring it belongs to.
  *   - THE CPU'S HEIGHTS. `landHeight`, `sampleHeights`, raycasts, a grass
  *     node's bounds and placement read the same tree, run by FastNoise2
- *     itself: exact, with nothing read back from the GPU.
+ *     itself: exact, with nothing read back from the GPU per query.
+ *   - PROCESSES. Shape a point at a time cannot make (drainage that
+ *     connects, ridges between basins, erosion) comes from the world's
+ *     `processes`: GLSL kernels the engine runs over a grid of the land when
+ *     it is made (below). Their first channel's x is added to the tree's
+ *     height, on the GPU and, read back once, on the CPU.
  *   - WHAT GROWS. A grass node stands on a land (`createGrass({ ground:
  *     land })`) and reads the land's tiles on the GPU: its heights and the
  *     surface's `cover` and `herbs`, so the grass reaches as far as the
@@ -63,9 +68,11 @@
  *     };
  *
  * Start from `landSurfaceOf(albedo)`: bare ground, nothing growing (cover
- * (0, 0, 1, 0), herbs 0). It may call `landHeight(vec2 p)` and
- * `landNoise(vec2 p, int seed)` (the height tree; on a round body
- * `landHeight(vec3 at)` and `landNoise(vec3 at, int seed)`), `landData(int i)` (the
+ * (0, 0, 1, 0), herbs 0). It may call `landHeight(vec2 p)` (the land's
+ * height: the tree plus the processes'), `landTree(vec2 p)` (the tree alone,
+ * at the seed), `landNoise(vec2 p, int seed)` and `landGrid(int c, vec2 p)`
+ * (the processes' channel c, zero with none; on a round body each takes the
+ * vec3 datum point `q.at` instead), `landData(int i)` (the
  * node's `data`, vec4 i of at most 64), its own functions and any other
  * tree's GLSL it carries (`someNode.glsl({ name: 'cover' })`). It runs
  * once a texel of a tile as the tile is made, not every frame, so it may
@@ -74,6 +81,30 @@
  *
  * Where a grass node's turf covers the land (`grass.shadeGround(land)`), the
  * turf shades it; the surface is what shows elsewhere.
+ *
+ * PROCESSES (land_process_layer.glsl is the contract; docs/scene-world-
+ * architecture.md §11, "Processes"). GLSL that defines
+ *
+ *     void procInit(inout vec4 v[PROC_CHANNELS])    // a cell's first values (v starts at 0)
+ *     void <pass>(inout vec4 v[PROC_CHANNELS])      // each pass's kernel: v starts as the cell's last
+ *
+ * run over the land's GRID: `resolution` cells a side over the land (on a
+ * round body each of the six cube faces), `channels` vec4s a cell (1 to 4).
+ * procInit runs once, then each of `passes` its `iterations` times, every
+ * cell at once, reading its last values and its neighbours' with
+ * `procRead(c, ivec2 offset)` (offsets within one; across a cube face's
+ * edge the neighbouring face's cells). A kernel also has `procPoint()` (the
+ * cell's centre: (x, 0, z) flat, the datum point on a round body),
+ * `procPointAt(offset)`, `procUp()`, `procChart()`, `procRoot()`,
+ * `procCellSize()`, `procIteration()`, `procData(i)` (the processes' `data`)
+ * and `landTree(p)`. Channel 0's x is the height added to the tree; every
+ * channel is the surface module's through `landGrid(c, p)` (moisture, flow,
+ * rock: whatever the world computes). They run on the GPU when the land is
+ * made (a new height, seed, extent, body or processes runs them again),
+ * 128 iterations a frame, then channel 0 is read back once: until then the
+ * land draws nothing, its heights are NaN and `landStats().ready` is false.
+ * Processes that do not compile are logged and the land stays unready.
+ * Between cell centres both sides read the grid bilinearly, the same way.
  *
  * @example
  *   const N = (type, props = {}) => { const n = FastNoise.create(type); for (const k in props) n.set(k, props[k]); return n; };
@@ -94,6 +125,20 @@
  *   });
  *   land.landHeight(10, 20);                       // FastNoise2 on `hills`
  *   const grass = scene.createGrass({ ground: land, turf: true, sward, herbs });
+ *
+ * @example
+ *   // A broad basin carved under the hills, smoothed over 40 iterations.
+ *   land.setLand({ processes: { resolution: 128, data: [400], passes: [{ fn: 'relax', iterations: 40 }], source: `
+ *     void procInit(inout vec4 v[PROC_CHANNELS]) {
+ *       vec3 p = procPoint();
+ *       v[0].x = -procData(0).x * exp(-dot(p.xz, p.xz) / (1500.0 * 1500.0));
+ *     }
+ *     void relax(inout vec4 v[PROC_CHANNELS]) {
+ *       vec4 s = vec4(0.0);
+ *       for (int j = -1; j <= 1; ++j) for (int i = -1; i <= 1; ++i) s += procRead(0, ivec2(i, j));
+ *       v[0] = s / 9.0;
+ *     }` } });
+ *   // ...frames later, land.landStats().ready: landHeight is hills plus the basin.
  */
 
 /**
@@ -108,6 +153,8 @@
  *   `landSurface` (see above); default bare earth.
  * @property {ArrayLike<number>} [data] - what `landData(i)` reads: at most
  *   256 floats (64 vec4s).
+ * @property {LandProcesses|null} [processes] - kernels run over the land's
+ *   grid when it is made (see above); null none.
  * @property {number} [extent=4096] - the land's half-size (m); a round
  *   body's land is the whole body.
  * @property {number} [cellSize=0.5] - the finest ring's cell (m).
@@ -123,6 +170,19 @@
  */
 
 /**
+ * @typedef {Object} LandProcesses
+ * @property {string} source - GLSL defining `procInit` and each pass's
+ *   function (land_process_layer.glsl).
+ * @property {Array<{fn: string, iterations?: number}>} [passes] - run in
+ *   order after procInit, each `iterations` times (default 1).
+ * @property {number} [resolution=256] - cells a side of the grid (of the
+ *   land's extent; on a round body of each cube face), at most 2048.
+ * @property {number} [channels=1] - vec4s a cell, 1 to 4.
+ * @property {ArrayLike<number>} [data] - what `procData(i)` reads: at most
+ *   256 floats.
+ */
+
+/**
  * @typedef {Object} LandStats
  * @property {number} needed - tiles the view needs.
  * @property {number} resident - tiles held.
@@ -132,6 +192,8 @@
  * @property {number} shortfall - how many times too coarse the worst tile
  *   the atlas had no room to refine is (1: none).
  * @property {boolean} compiled - its module compiled (it draws).
+ * @property {boolean} ready - it has no processes, or theirs have run and
+ *   been read back (it draws and its heights answer).
  */
 
 class SceneGraph {
@@ -155,7 +217,8 @@ class SceneNode {
   setLand(opts) {}
 
   /**
-   * The land's height at world (x, z), metres; NaN off the land. On a round
+   * The land's height at world (x, z), metres; NaN off the land and until
+   * it is ready (its processes read back). On a round
    * body (x, z) and the answer are the place frame's: the y of the ground
    * under (x, z), the body's curve included.
    * @param {number} x

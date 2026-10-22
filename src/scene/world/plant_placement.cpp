@@ -230,6 +230,15 @@ std::vector<float> placeCell(const PlacementRules& rules, const CellGrid& grid, 
         sampleOr(layer.scale, 1.0f, scale);
         sampleOr(layer.tint, 0.0f, tint);
         sampleOr(rules.ground, 0.0f, ground);
+        if (rules.base)
+            for (size_t c = 0; c < kept; ++c) {
+                if (!round) {
+                    ground[c] += rules.base->at(xs[c], zs[c]);
+                    continue;
+                }
+                const double d[3] = {us[c * 3], us[c * 3 + 1], us[c * 3 + 2]};
+                ground[c] += rules.base->atDir(d);
+            }
         for (size_t c = 0; c < kept; ++c) {
             const uint32_t* h = hashes.data() + c * kDraws;
             const float size = scale[c] * (1.0f + layer.scaleVariety * (2.0f * unit(h[4]) - 1.0f));

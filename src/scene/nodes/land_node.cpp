@@ -3,6 +3,7 @@
 #include "scene/nodes/world_module.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <limits>
 
@@ -74,6 +75,56 @@ bool LandNode::setModule(std::string source, const float* data, size_t floats, c
     return true;
 }
 
+bool LandNode::setProcess(LandProcess process, std::string& err) {
+    const auto identifier = [](const std::string& s) {
+        if (s.empty() || !(std::isalpha(static_cast<unsigned char>(s[0])) || s[0] == '_')) return false;
+        return std::all_of(s.begin(), s.end(), [](char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_'; });
+    };
+    for (const LandProcess::Pass& p : process.passes)
+        if (!identifier(p.fn)) {
+            err = "a pass's function '" + p.fn + "' is not a GLSL name";
+            return false;
+        }
+    process.channels = std::clamp(process.channels, 1, LandProcess::kMaxChannels);
+    process.resolution = std::clamp(process.resolution, 1, LandProcess::kMaxResolution);
+    process.data.resize(std::min(process.data.size(), LandProcess::kMaxData * 4));
+    process_ = std::move(process);
+    configureGrid();
+    ++generation_;
+    rebuildItems();
+    return true;
+}
+
+void LandNode::configureGrid() {
+    // Run again over the land as it is now; until then not ready.
+    if (process_.active()) grid_.configure(round() ? place_->body() : Body{}, extent_, process_.resolution);
+    ++gridSerial_;
+    base_.reset();
+}
+
+std::string LandNode::gridConfig() const { return process_.active() ? grid_.glslConfig(process_.channels) : std::string(); }
+
+std::string LandNode::processDispatch() const {
+    std::string s = "void procRun(int pass, inout vec4 v[PROC_CHANNELS]) {\n    switch (pass) {\n";
+    for (size_t i = 0; i < process_.passes.size(); ++i)
+        s += "    case " + std::to_string(i) + ": " + process_.passes[i].fn + "(v); break;\n";
+    s += "    default: break;\n    }\n}\n";
+    return s;
+}
+
+void LandNode::setGridBase(uint64_t serial, std::vector<float> base) {
+    if (serial != gridSerial_ || base.size() != grid_.texels()) return;
+    base_ = std::make_shared<const LandBase>(LandBase{grid_, std::move(base)});
+    baseSerial_ = serial;
+    // Its heights (and so its tiles' boxes) are the tree's and the base's.
+    ++generation_;
+    rebuildItems();
+}
+
+float LandNode::baseAt(int root, double x, double z) const {
+    return base_ ? base_->at(root, x, z) : 0.0f;
+}
+
 void LandNode::setCanopy(std::string source, float top, float range, float castRange) {
     const uint64_t hash = source.empty() ? 0 : scene::moduleSourceHash(source);
     top = source.empty() ? 0.0f : std::max(top, 0.0f);
@@ -91,6 +142,7 @@ void LandNode::setCanopy(std::string source, float top, float range, float castR
 void LandNode::setExtent(float extent) {
     if (!(extent > 0.0f)) return;
     extent_ = extent;
+    configureGrid();
     ++generation_;
     rebuildItems();
 }
@@ -102,6 +154,7 @@ void LandNode::setPlace(const Place* place) {
     const double radius = round() ? place_->body().radius : 0.0;
     if (radius == radius_) return;
     radius_ = radius;
+    configureGrid();
     ++generation_;
     buildRings();
     rebuildItems();
@@ -122,9 +175,9 @@ bromath::AABB3 LandNode::bounds() const {
 }
 
 float LandNode::heightOver(const double dir[3]) const {
-    if (!height_) return 0.0f;
     const double R = place_->body().radius;
-    return height_->at(R * dir[0], R * dir[1], R * dir[2]);
+    const float base = base_ ? base_->atDir(dir) : 0.0f;
+    return base + (height_ ? height_->at(R * dir[0], R * dir[1], R * dir[2]) : 0.0f);
 }
 
 void LandNode::setRings(const Rings& rings) {
@@ -150,7 +203,8 @@ int LandNode::wantedRings() const {
 }
 
 float LandNode::heightAt(float x, float z) const {
-    if (!round()) return height_ ? height_->at(x, z) : 0.0f;
+    if (!ready()) return std::numeric_limits<float>::quiet_NaN();
+    if (!round()) return (height_ ? height_->at(x, z) : 0.0f) + baseAt(0, x, z);
     // The ground's height is the body direction's, which is the ground's
     // own: guess the datum, take the height there, and again from where
     // that puts the ground (the direction barely turns with the height).
@@ -168,6 +222,10 @@ float LandNode::heightAt(float x, float z) const {
 
 void LandNode::sampleHeights(float x0, float z0, float cell, int cols, int rows, float* out) const {
     const size_t n = static_cast<size_t>(cols) * static_cast<size_t>(rows);
+    if (!ready()) {
+        std::fill(out, out + n, std::numeric_limits<float>::quiet_NaN());
+        return;
+    }
     std::vector<float> xs(n), zs(n);
     for (int j = 0; j < rows; ++j)
         for (int i = 0; i < cols; ++i) {
@@ -196,6 +254,8 @@ void LandNode::sampleHeights(float x0, float z0, float cell, int cols, int rows,
                 height_->sample(bx.data(), by.data(), bz.data(), static_cast<int>(n), o, out);
             else
                 std::fill(out, out + n, 0.0f);
+            if (base_)
+                for (size_t k = 0; k < n; ++k) out[k] += base_->atDir(&dirs[k * 3]);
             for (size_t k = 0; k < n; ++k) y[k] = groundY(R, out[k], xs[k], zs[k]);
         }
         for (size_t k = 0; k < n; ++k) out[k] = static_cast<float>(y[k]);
@@ -206,8 +266,10 @@ void LandNode::sampleHeights(float x0, float z0, float cell, int cols, int rows,
     } else {
         std::fill(out, out + n, 0.0f);
     }
-    for (size_t k = 0; k < n; ++k)
+    for (size_t k = 0; k < n; ++k) {
+        out[k] += baseAt(0, xs[k], zs[k]);
         if (std::fabs(xs[k]) > extent_ || std::fabs(zs[k]) > extent_) out[k] = std::numeric_limits<float>::quiet_NaN();
+    }
 }
 
 bool LandNode::raycast(const bromath::Vec3& origin, const bromath::Vec3& dir, float maxDist, float& dist,
@@ -451,15 +513,15 @@ void LandNode::rebuildItems() {
     const int cols = cells * (per - 1) + 1;
     const float step = side / static_cast<float>(per - 1);
     std::vector<float> h(static_cast<size_t>(cols) * cols, 0.0f);
-    if (height_) {
-        std::vector<float> xs(h.size()), zs(h.size());
-        for (int j = 0; j < cols; ++j)
-            for (int i = 0; i < cols; ++i) {
-                xs[static_cast<size_t>(j) * cols + i] = -e + static_cast<float>(i) * step;
-                zs[static_cast<size_t>(j) * cols + i] = -e + static_cast<float>(j) * step;
-            }
-        height_->sample(xs.data(), zs.data(), static_cast<int>(h.size()), h.data());
-    }
+    std::vector<float> xs(h.size()), zs(h.size());
+    for (int j = 0; j < cols; ++j)
+        for (int i = 0; i < cols; ++i) {
+            xs[static_cast<size_t>(j) * cols + i] = -e + static_cast<float>(i) * step;
+            zs[static_cast<size_t>(j) * cols + i] = -e + static_cast<float>(j) * step;
+        }
+    if (height_) height_->sample(xs.data(), zs.data(), static_cast<int>(h.size()), h.data());
+    if (base_)
+        for (size_t k = 0; k < h.size(); ++k) h[k] += baseAt(0, xs[k], zs[k]);
     chartBounds_ = bromath::aempty3();
     items_.reserve(static_cast<size_t>(cells) * cells);
     for (int cz = 0; cz < cells; ++cz)
@@ -500,6 +562,7 @@ void LandNode::rebuildFaceItems() {
     items_.reserve(static_cast<size_t>(cells) * cells * 6);
     for (int f = 0; f < 6; ++f) {
         // The face's samples on its datum, relative to the face's centre.
+        if (!height_) std::fill(h.begin(), h.end(), 0.0f);
         if (height_) {
             const CubeFace& F = cubeFace(f);
             const double o[3] = {R * F.n[0], R * F.n[1], R * F.n[2]};
@@ -514,6 +577,9 @@ void LandNode::rebuildFaceItems() {
                 }
             height_->sample(xs.data(), ys.data(), zs.data(), static_cast<int>(n), o, h.data());
         }
+        if (base_)
+            for (int j = 0; j < cols; ++j)
+                for (int i = 0; i < cols; ++i) h[static_cast<size_t>(j) * cols + i] += baseAt(f, -e + i * step, -e + j * step);
         for (int cz = 0; cz < cells; ++cz)
             for (int cx = 0; cx < cells; ++cx) {
                 float lo = std::numeric_limits<float>::max(), hi = -lo;

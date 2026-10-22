@@ -106,6 +106,11 @@ void SceneMeshDrawer::fillLandSun(LandSunGpu& out, const bromath::Vec3& eye) con
     }
     out.params[0] = any && landSunImage_.isValid() ? 1.0f : 0.0f;
     out.params[1] = eye.y;
+    if (landSunRadius_ > 0.0) {
+        out.body[0] = eye.x;
+        out.body[1] = eye.z;
+        out.body[2] = static_cast<float>(0.5 / landSunRadius_);
+    }
 }
 
 VkImageView SceneMeshDrawer::landSunView() const {
@@ -124,6 +129,7 @@ void SceneMeshDrawer::offerLandSun(SceneFrame& frame, WorldService& service) {
         landSun_.forget();
         return;
     }
+    landSunRadius_ = land->round() ? land->place()->body().radius : 0.0;
     // What a level reads of the land: its module and rings, and its canopy
     // (where, and how far from the eye it rises).
     uint64_t generation = land->generation();

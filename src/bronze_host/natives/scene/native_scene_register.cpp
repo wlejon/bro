@@ -228,6 +228,7 @@ bool registerNatives_scene(std::string* error) {
         fn("__bro_native.scene.SceneGraph_detachAIWorld", BRO_NATIVE_FN(bro_scene_SceneGraph_detachAIWorld), "void", {"__bro_native.scene.SceneGraph"}, error) &&
         fn("__bro_native.scene.SceneGraph_createLand", BRO_NATIVE_FN(bro_scene_SceneGraph_createLand), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph"}, error) &&
         fn("__bro_native.scene.SceneNode_setLandModule", BRO_NATIVE_FN(bro_scene_SceneNode_setLandModule), "str", {"__bro_native.scene.SceneNode", "str", "f32[]", "str", "i32"}, error) &&
+        fn("__bro_native.scene.SceneNode_setLandProcess", BRO_NATIVE_FN(bro_scene_SceneNode_setLandProcess), "str", {"__bro_native.scene.SceneNode", "str", "str", "f64[]", "f32[]"}, error) &&
         fn("__bro_native.scene.SceneNode_setLandParams", BRO_NATIVE_FN(bro_scene_SceneNode_setLandParams), "void", {"__bro_native.scene.SceneNode", "f64[]"}, error) &&
         fn("__bro_native.scene.SceneNode_landParams", BRO_NATIVE_FN(bro_scene_SceneNode_landParams), "f64[]", {"__bro_native.scene.SceneNode"}, error) &&
         fn("__bro_native.scene.SceneNode_landHeight", BRO_NATIVE_FN(bro_scene_SceneNode_landHeight), "f64", {"__bro_native.scene.SceneNode", "f64", "f64"}, error) &&

@@ -762,6 +762,15 @@ void* bro_scene_SceneGraph_createLand(void* self);
 const char* bro_scene_SceneNode_setLandModule(void* self, const char* source, const float* data, uint32_t data_len,
                                               const char* heightTree, int32_t seed);
 
+// land processes (scene/world/land_grid.h): their GLSL ("" none), the
+// passes' functions comma-separated, [resolution, channels, then each
+// pass's iterations], and the data procData(i) reads (at most 256 floats).
+// Returns "" or what was wrong.
+//   registered at __bro_native.scene.SceneNode_setLandProcess
+const char* bro_scene_SceneNode_setLandProcess(void* self, const char* source, const char* passes,
+                                               const double* params, uint32_t params_len, const float* data,
+                                               uint32_t data_len);
+
 // land params: extent, cellSize, resolution, levels (a NaN keeps a value)
 //   registered at __bro_native.scene.SceneNode_setLandParams
 void bro_scene_SceneNode_setLandParams(void* self, const double* params, uint32_t params_len);
@@ -777,7 +786,8 @@ void bro_scene_SceneNode_landParams(void* self, bronze_native_buffer* out);
 double bro_scene_SceneNode_landHeight(void* self, double x, double z);
 
 // land stats: [tiles needed, resident, missing, filled this frame, levels,
-// shortfall, module compiled]; empty for a node that is not a land
+// shortfall, module compiled, ready (its processes in)]; empty for a node
+// that is not a land
 //   registered at __bro_native.scene.SceneNode_landStats
 //   result: f64[] in *out; out->release == NULL, the runtime copies
 void bro_scene_SceneNode_landStats(void* self, bronze_native_buffer* out);

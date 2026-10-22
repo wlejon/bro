@@ -17,7 +17,9 @@
 
 #include "scene/vulkan/draw/scene_mesh_drawer.h"
 
+#include "scene/nodes/land_node.h"
 #include "scene/nodes/plants_node.h"
+#include "scene/scene_graph.h"
 #include "scene/scene_renderer.h"
 #include "scene/vulkan/shadow/scene_shadow_pages.h"
 #include "scene/vulkan/frame/scene_frame.h"
@@ -63,6 +65,7 @@ void SceneMeshDrawer::recordPlans(SceneFrame& frame) {
 void SceneMeshDrawer::plansSubmitted(uint64_t ticket, render::VulkanQueue& queue) {
     plantPlanner_->submitted(ticket, queue);
     horizon_.submitted(ticket);
+    landProcesses_.submitted(ticket);
 }
 
 const PlantShaders* SceneMeshDrawer::plantShaders(const PlantsNode& node) {
@@ -91,7 +94,14 @@ const PlantShaders* SceneMeshDrawer::plantShaders(const PlantsNode& node) {
 
 void SceneMeshDrawer::preparePlants(SceneFrame& frame, PlantsNode& node, std::vector<MeshDraw>& out) {
     out.clear();
-    // The cells placed about the camera's eye.
+    // On the land they stand on as its processes have it (and nothing
+    // placed until they have run), then the cells placed about the
+    // camera's eye.
+    if (node.land()) {
+        SceneNode* n = frame.graph.findById(node.land());
+        const LandNode* land = n && n->type() == SceneNode::Type::Mesh ? static_cast<MeshNode*>(n)->asLand() : nullptr;
+        if (land) node.setGround(land->groundBase(), !land->ready());
+    }
     node.follow(frame.world.eye);   // (placement is keyed on the body)
     const PlantShaders* shaders = plantShaders(node);
     if (!shaders || node.plantCount() == 0 || node.speciesCount() == 0 || node.effectiveUnlit()) {

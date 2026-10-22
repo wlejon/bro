@@ -438,6 +438,8 @@
  * @property {number} [shadowTexels=12] - as `pixels`, in a shadow page's texels, for its casters.
  * @property {number} [shadowRange=1500] - past this (m), or `range`, no plant casts.
  * @property {SceneNode|null} [land] - the land they stand on, which is their canopy past `range` (above); null none.
+ *   A land with processes (docs/land-api.js) adds its grid's height to the rules' ground, and until the land is ready
+ *   no plant is placed (plantPlacement().pending stays above 0).
  * @property {boolean} [castsShadow=false]
  * @property {boolean} [receivesShadow=false]
  */

@@ -29,6 +29,7 @@
 // anchored; PlantsNode turns them into the place frame.
 
 #include "scene/world/fields.h"
+#include "scene/world/land_grid.h"
 #include "scene/world/place.h"
 #include "scene/world/world_cells.h"
 
@@ -64,6 +65,7 @@ struct PlacementLayer {
 
 struct PlacementRules {
     FieldRef ground;        // the ground's height (none: 0)
+    std::shared_ptr<const LandBase> base;   // and what a land's processes add to it (none: 0)
     std::vector<PlacementLayer> layers;
     float range = 1000.0f;  // the leaves within this of the eye (on the ground) are placed
     float hysteresis = 128.0f;   // and kept until this farther

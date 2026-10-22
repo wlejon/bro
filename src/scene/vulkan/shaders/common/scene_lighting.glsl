@@ -36,6 +36,7 @@ struct SceneLight {
 // to the eye, and the copy shown.
 struct LandSunGpu {
     vec4 params;               // x 1 when any level is shown, y the eye's world height
+    vec4 body;                 // a round body's: xy the eye's world x and z, z 1 / (2 R); 0 flat
     vec4 level[LS_LEVELS];     // xy its corner (x, z), z its texel (m), w the layer shown (-1: none)
 };
 
@@ -238,11 +239,14 @@ SceneProbe sceneProbe(vec3 pos) {
 // height that widens with how far off that stands (the sun's disc,
 // widened as the probe grid's is), and its own ground clears the level's
 // heights by a share of a texel (a level's heights are bilinear between
-// its texels; the ground between them is not).
+// its texels; the ground between them is not). The levels' heights are
+// over the datum: on a round body a point's world y falls below its height
+// by its distance from the place origin squared over 2R.
 const float LS_BLEND = 24.0;
 float landSunLevels(vec3 pos) {
     if (lighting.landSun.params.x < 0.5) return 1.0;
-    float y = pos.y + lighting.landSun.params.y;
+    vec2 at = lighting.landSun.body.xy + pos.xz;
+    float y = pos.y + lighting.landSun.params.y + dot(at, at) * lighting.landSun.body.z;
     float sun = 0.0, left = 1.0;
     for (int l = 0; l < LS_LEVELS; ++l) {
         vec4 lv = lighting.landSun.level[l];

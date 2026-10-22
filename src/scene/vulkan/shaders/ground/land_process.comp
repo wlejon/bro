@@ -1,0 +1,72 @@
+#version 450
+// The land's processes (vulkan/ground/scene_land_process.h): a world's
+// kernels (ground/land_process_layer.glsl says what they are) run over the
+// cells of the land's grid (scene/world/land_grid.h), one mode a dispatch:
+// procInit, then each pass's kernel its iterations, read from one grid and
+// written to the other, each followed by the halo's copies.
+
+#include "ground/land_process_layout.h"
+#include "ground/land_grid_config.glsl"
+#ifndef LAND_GRID
+// The built-in runner, of no land: a grid of one cell.
+#define LAND_GRID 1
+#define LAND_GRID_CELLS 1
+#define LAND_GRID_ROOTS 1
+#define LAND_GRID_CHANNELS 1
+const float LAND_GRID_HALF = 1.0;
+const float LAND_GRID_RADIUS = 0.0;
+#endif
+
+layout(local_size_x = LP_GROUP, local_size_y = LP_GROUP) in;
+
+layout(set = 0, binding = 0, rgba32f) uniform readonly image2DArray procIn;
+layout(set = 0, binding = 1, rgba32f) uniform image2DArray procOut;
+layout(std430, set = 0, binding = 2) readonly buffer ProcHalo { uvec4 copies[]; } procHalo;
+layout(std430, set = 0, binding = 3) readonly buffer ProcData { vec4 words[]; } procDataBuffer;
+layout(push_constant) uniform ProcPush { uint words[LP_P_WORDS]; } pc;
+
+vec4 landGridLoad(ivec3 t) { return imageLoad(procIn, t); }
+
+#include "ground/land_grid.glsl"
+
+// The cell this invocation runs (its texel, from 1) and its root.
+ivec2 procCell_;
+int procRoot_;
+
+#include "ground/land_process_layer.glsl"
+#include "ground/land_process_module.glsl"
+#include "ground/land_process_dispatch.glsl"
+
+ivec3 procTexelOf(uint t, int channel) {
+    const uint side = uint(LAND_GRID_CELLS + 2);
+    uint root = t / (side * side), rest = t % (side * side);
+    return ivec3(int(rest % side), int(rest / side), int(root) * LAND_GRID_CHANNELS + channel);
+}
+
+void main() {
+    uint mode = pc.words[LP_P_MODE];
+    if (mode == LP_MODE_HALO) {
+        uint k = gl_GlobalInvocationID.y * (gl_NumWorkGroups.x * LP_GROUP) + gl_GlobalInvocationID.x;
+        if (k >= pc.words[LP_P_HALO]) return;
+        uvec4 c = procHalo.copies[k];
+        for (int ch = 0; ch < LAND_GRID_CHANNELS; ++ch) {
+            vec4 a = imageLoad(procOut, procTexelOf(c.y, ch)), b = imageLoad(procOut, procTexelOf(c.z, ch));
+            vec4 d = imageLoad(procOut, procTexelOf(c.w, ch));
+            imageStore(procOut, procTexelOf(c.x, ch), (a + b + d) / 3.0);
+        }
+        return;
+    }
+    ivec2 cell = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(cell, ivec2(LAND_GRID_CELLS)))) return;
+    procCell_ = cell + 1;
+    procRoot_ = int(gl_WorkGroupID.z);
+    vec4 v[PROC_CHANNELS];
+    for (int ch = 0; ch < PROC_CHANNELS; ++ch)
+        v[ch] = mode == LP_MODE_INIT ? vec4(0.0) : procHere(ch);
+    if (mode == LP_MODE_INIT)
+        procInit(v);
+    else
+        procRun(int(pc.words[LP_P_PASS]), v);
+    for (int ch = 0; ch < PROC_CHANNELS; ++ch)
+        imageStore(procOut, ivec3(procCell_, procRoot_ * LAND_GRID_CHANNELS + ch), v[ch]);
+}

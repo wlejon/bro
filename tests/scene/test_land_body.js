@@ -138,5 +138,21 @@ if (!scn) {
     const want = S / 2 + Math.tan(dip) / Math.tan(25 * Math.PI / 180) * S / 2;
     assert(row >= 0 && Math.abs(row - want) < 2.5, `the horizon dips with the body (row ${row}, want ${want.toFixed(1)})`);
 
+    // --- the land's sun away from the anchor -------------------------------------
+    // Its heights are over the datum, a point's world y below its own by the
+    // curve's drop (5 m at 8 km): walked out 24 km (a re-anchor on the way),
+    // level ground in a high sun is lit all the way.
+    standAt([0.31, 0.83, -0.46]);
+    let dark = '';
+    for (let km = 0; km <= 24; km += 4) {
+        const x = km * 1000 * 0.6, z = km * 1000 * 0.8;
+        const y = land.landHeight(x, z) + 10;
+        look([x, y, z], [x, y - 10, z], [0, 0, -1], 1e4, 0.1);
+        frames(6);
+        const lit = patchAvg(scn.captureFrame(), 32, 32, 96, 96, 0);
+        if (lit < 100) dark += ` ${km} km: ${lit.toFixed(1)}`;
+    }
+    assert(dark === '', `level ground is lit however far from the anchor (dark at${dark})`);
+
     console.log('test_land_body: OK');
 }

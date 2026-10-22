@@ -106,9 +106,10 @@ static_assert(sizeof(ProbeGridGpu) == 176);
 /// (scene/world/land_sun.h). Positions relative to the eye.
 struct alignas(16) LandSunGpu {
     alignas(16) float params[4];                 // x 1 when any level is shown, y the eye's world height
+    alignas(16) float body[4];                   // a round body's: xy the eye's world x and z, z 1 / (2 R); 0 flat
     alignas(16) float level[LS_LEVELS][4];       // xy its corner (x, z), z its texel (m), w the layer shown (-1: none)
 };
-static_assert(sizeof(LandSunGpu) == 16 * (1 + LS_LEVELS));
+static_assert(sizeof(LandSunGpu) == 16 * (2 + LS_LEVELS));
 
 /// The lighting block (set 1), std140 — shaders/common/scene_lighting.glsl.
 struct alignas(16) SceneLightingUniforms {

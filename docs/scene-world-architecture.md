@@ -1332,7 +1332,7 @@ are data, so a biome is a table, not code.
   default measures squared distance (the default its metadata now names,
   pinned at upstream's fix).
 
-## 11. The planet (design; decisions taken, 9a to 9c built)
+## 11. The planet (design; decisions taken, 9a to 9d's global grid built)
 
 A body of Earth's radius (6371 km) seen from a person in its grass to
 geostationary orbit as one place: the land's rings, its tiles, the plants
@@ -1597,6 +1597,53 @@ field is evaluated at is **split**: an integer part and a float fraction.
   kilometre texels comes with the plants' canopy on the body); the module
   gets no latitude or longitude (a spin axis is the world's: `at` is enough
   to compute them).
+
+### As built: processes, the global grid (9d)
+
+- **The world writes** a `processes` option on `createLand`
+  (`docs/land-api.js`): GLSL `source` holding `procInit` and its pass
+  functions, `passes` [{fn, iterations}], a `resolution` (cells a root's
+  side, up to 2048), 1 to 4 vec4 `channels` and up to 64 vec4s of `data`.
+  The kernel's API is `land_process_layer.glsl`'s: `procRead(c, offset)`,
+  `procHere`, `procPoint`/`procPointAt`/`procUp`, `procChart`, `procRoot`,
+  `procCellSize`, `procIteration`, `procData`.
+- **The grid** (`world/land_grid.h`): a flat body one root over the land's
+  extent, a round body the six cube faces of the chart, each root N² cells
+  with a one-cell halo. The halo is a table of copies made on the CPU: an
+  edge cell takes the nearest cell of the face its centre lies on, a corner
+  the mean of its face's corner and the two edge halos beside it (no step
+  at a cube's corner). Bilinear sampling between cell centres, the same
+  arithmetic in C++ (`LandGrid::sample`/`sampleDir`) and GLSL
+  (`ground/land_grid.glsl`).
+- **The run** (`vulkan/ground/scene_land_process.cpp`): rgba32f 2D-array
+  images (layer root·C + channel) ping-ponged, `land_process.comp` in
+  three modes (init, a pass, the halo), up to 128 passes a frame; then
+  channel 0 is copied to a host buffer and, once its ticket is done, handed
+  to the land as a shared, immutable `LandBase`. The pipeline is cached by
+  the hash of the source, its dispatch switch and the grid.
+- **One height, two readers:** the land's module is `landHeight(p) =
+  landTree(p) + landGrid(0, p).x`, and the CPU's heights add `LandBase`'s
+  sample to FastNoise2's tree. Until the base arrives the land is not
+  ready: its heights are NaN, it offers no tiles and draws nothing, and the
+  plants standing on it (`createPlants`' `land`) place nothing; placement's
+  rules add the base to their ground. Every channel is the module's to read
+  (`landGrid(c, p)`), so a process can colour the surface too.
+- **Not yet:** regional grids under the eye streamed by the world service,
+  with the global grid's flow at their edges; a process run again while
+  the world plays (128 passes a frame is a hitch, fine at creation only).
+- **The oracle:** `bro_land_grid_test` (halo sources and corners, the field
+  through bilinear sampling within 2 m anywhere, no step across a face's
+  edge or corner), `bro_plant_placement_test`'s base checks (flat and round),
+  `tests/scene/test_land_process.js` (not ready then ready, procInit exact
+  at cell centres and bilinear between, the GPU standing on the CPU's
+  heights, a pass's iterations, plants held until ready, a second channel
+  colouring the surface, a kernel that does not compile never ready, and on
+  an Earth-radius body the field across a face's edge). An Earth-radius
+  global grid of six 512² faces with a 3×3 pass is ready, wall clock and
+  the pipeline's compile included, in 315 ms at 64 iterations and 344 ms at
+  2048: the target's "under a second". The test also found the land's sun
+  comparing datum heights to place heights on a round body (the ground dark
+  8 km from the anchor); it now takes the drop.
 
 ### Processes
 

@@ -21,7 +21,9 @@
 //   - the CPU's heights (heightAt, sampleHeights), for placement, physics
 //     and the eye: the same FastNoise2 node tree the module's height was
 //     emitted from (brokit's noise_glsl), run by FastNoise2 itself, so they
-//     are exact and need no read-back.
+//     are exact, plus its PROCESSES' height (world/land_grid.h): kernels
+//     run over a grid of the land once when it is made, read back once and
+//     sampled as the GPU samples it.
 //
 // On a flat body the land is square, `extent` metres from the origin each
 // way; past it nothing is drawn. On a round body (world/place.h) it is the
@@ -39,6 +41,7 @@
 #include "scene/nodes/mesh_node.h"
 #include "scene/world/body_surface_map.h"
 #include "scene/world/fields.h"
+#include "scene/world/land_grid.h"
 #include "scene/world/place.h"
 #include "scene/world/surface_layers.h"
 
@@ -76,6 +79,30 @@ public:
     const std::vector<float>& moduleData() const { return data_; }
     bool hasModule() const { return sourceHash_ != 0; }
     static constexpr size_t kMaxData = 64;   // vec4s
+
+    /// The land's processes (world/land_grid.h; none: `process.source`
+    /// empty): kernels run over its grid when it is made, whose first
+    /// channel's x the land's height adds to its tree. False with `err`
+    /// when a pass names no function. A land with processes is not ready
+    /// (it draws nothing and its heights are NaN) until they have run and
+    /// been read back (vulkan/ground/scene_land_process.h).
+    bool setProcess(LandProcess process, std::string& err);
+    const LandProcess& process() const { return process_; }
+    const LandGrid& grid() const { return grid_; }
+    /// Moved whenever the grid must be run again (its processes, extent or body).
+    uint64_t gridSerial() const { return gridSerial_; }
+    /// The grid's layout for the shaders ("" with no processes), and the
+    /// switch over its passes (land_process_dispatch.glsl's place).
+    std::string gridConfig() const;
+    std::string processDispatch() const;
+    /// The processes' first channel's x, every texel of the grid (texels()
+    /// floats), read back for grid serial `serial`.
+    void setGridBase(uint64_t serial, std::vector<float> base);
+    /// It has no processes, or theirs is in.
+    bool ready() const { return !process_.active() || baseSerial_ == gridSerial_; }
+    /// What its processes add to its tree (null with none, or until ready):
+    /// what the plants standing on it add to their ground.
+    std::shared_ptr<const LandBase> groundBase() const { return base_; }
 
     /// The canopy of the plants standing on the land (world/plant_canopy.h's
     /// module, "" none), the tallest they stand (m) and how far from the eye
@@ -144,8 +171,9 @@ public:
     static bool blockDrawn(const Block& b, int first) { return b.ring == 0 || b.ring > first; }
 
     /// The ground's height at land's-frame (x, z), metres: FastNoise2 on the
-    /// module's tree (0 with none); on a round body the y of the ground
-    /// under (x, z) in the place frame (its curve included).
+    /// module's tree (0 with none) plus its processes'; on a round body the
+    /// y of the ground under (x, z) in the place frame (its curve
+    /// included). NaN until the land is ready().
     float heightAt(float x, float z) const;
     /// Heights on a grid: (x0 + i * cell, z0 + j * cell), row by row; NaN
     /// off the land.
@@ -194,6 +222,9 @@ private:
     void rebuildFaceItems();
     /// A round body's ground height (over the datum) at body direction `dir`.
     float heightOver(const double dir[3]) const;
+    /// The processes' height at chart point (x, z) of `root` (0 with none).
+    float baseAt(int root, double x, double z) const;
+    void configureGrid();
 
     const Place* place_ = nullptr;
     double radius_ = 0.0;   // the body's the items were made for (0 the plane)
@@ -206,6 +237,10 @@ private:
     float canopyTop_ = 0.0f;
     float canopyRange_ = 0.0f, canopyCastRange_ = 0.0f;
     FieldRef height_;
+    LandProcess process_;
+    LandGrid grid_;
+    uint64_t gridSerial_ = 1, baseSerial_ = 0;
+    std::shared_ptr<const LandBase> base_;
     float extent_ = 4096.0f;
     Rings rings_;
     int ringLevels_ = 0, builtResolution_ = 0;   // the mesh's

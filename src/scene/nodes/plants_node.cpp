@@ -95,14 +95,30 @@ void PlantsNode::setRules(std::shared_ptr<const PlacementRules> rules) {
         it = next;
     }
     rulesRef_ = rules;
-    if (rules)
-        placement_ = std::make_unique<PlantPlacement>(std::move(rules), grid_, WorldWorkers::shared(),
-                                                      radius_ > 0.0 ? &place_->body() : nullptr);
+    if (!rules || hold_) return;
+    // Standing on a land with processes: their height under the rules' ground.
+    if (base_) {
+        auto withBase = std::make_shared<PlacementRules>(*rules);
+        withBase->base = base_;
+        rules = std::move(withBase);
+    }
+    placement_ = std::make_unique<PlantPlacement>(std::move(rules), grid_, WorldWorkers::shared(),
+                                                  radius_ > 0.0 ? &place_->body() : nullptr);
 }
 
-const PlacementRules* PlantsNode::rules() const { return placement_ ? &placement_->rules() : nullptr; }
+void PlantsNode::setGround(std::shared_ptr<const LandBase> base, bool hold) {
+    if (base == base_ && hold == hold_) return;
+    base_ = std::move(base);
+    hold_ = hold;
+    setRules(rulesRef_);
+}
 
-size_t PlantsNode::placementPending() const { return placement_ ? placement_->pending() : 0; }
+const PlacementRules* PlantsNode::rules() const { return rulesRef_.get(); }
+
+size_t PlantsNode::placementPending() const {
+    if (placement_) return placement_->pending();
+    return rulesRef_ && hold_ ? 1 : 0;
+}
 
 void PlantsNode::setPlace(const Place* place) {
     place_ = place;

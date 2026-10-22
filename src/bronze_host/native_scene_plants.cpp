@@ -88,8 +88,14 @@ const char* bro_scene_SceneNode_setPlantLand(void* self, void* landSelf, bool on
     if (!pl || !land) return tl_error.c_str();
     if (!on) {
         land->setCanopy({}, 0.0f, 0.0f, 0.0f);
+        if (pl->land() == land->id()) {
+            pl->setLand(0);
+            pl->setGround(nullptr, false);
+        }
         return tl_error.c_str();
     }
+    // It stands on the land's heights (its processes' with the rules' ground).
+    pl->setLand(land->id());
     std::string module;
     float top = 0.0f;
     if (const scene::PlacementRules* rules = pl->rules()) {

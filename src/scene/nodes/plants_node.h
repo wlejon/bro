@@ -35,6 +35,7 @@
 
 #include "scene/nodes/mesh_node.h"
 #include "scene/world/cell_store.h"
+#include "scene/world/land_grid.h"
 #include "scene/world/place.h"
 #include "scene/world/world_cells.h"
 
@@ -103,6 +104,13 @@ public:
     /// chart (world/plant_placement.h) and the plants stand in the place
     /// frame; a new body places them again.
     void setPlace(const Place* place);
+    /// The land it stands on (its node id, 0 none: createPlants' `land`).
+    void setLand(uint32_t id) { landId_ = id; }
+    uint32_t land() const { return landId_; }
+    /// What its land's processes add to the rules' ground (null: nothing),
+    /// and whether to `hold` (its land is not ready: nothing is placed until
+    /// it is). A change places the plants again.
+    void setGround(std::shared_ptr<const LandBase> base, bool hold);
     /// The place frame moved (a re-anchor, SceneGraph::applyPlaceMove): on
     /// a round body every plant takes the move, so it stands where it stood
     /// on the body.
@@ -234,6 +242,9 @@ private:
     float tallest_ = 0.0f;
     std::unique_ptr<PlantPlacement> placement_;
     std::shared_ptr<const PlacementRules> rulesRef_;
+    uint32_t landId_ = 0;
+    std::shared_ptr<const LandBase> base_;
+    bool hold_ = false;
     const Place* place_ = nullptr;
     double radius_ = 0.0;   // the body's the plants were placed on (0 the plane)
     Params params_;

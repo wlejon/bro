@@ -28,6 +28,7 @@
 #include "scene/vulkan/draw/scene_vk_custom_shader.h"
 #include "scene/vulkan/ground/scene_cover_shaders.h"
 #include "scene/vulkan/foliage/scene_plant_shaders.h"
+#include "scene/vulkan/ground/scene_land_process.h"
 #include "scene/vulkan/ground/scene_land_shaders.h"
 #include "scene/vulkan/shaders/ground/scene_land_layout.h"
 #include "scene/vulkan/frame/scene_vk_pipeline.h"
@@ -432,8 +433,11 @@ private:
         bool cleared = false;      // its page table cleared (once made or reconfigured)
         bool failed = false;       // its atlas could not be made
         const LandShaders* shaders = nullptr;   // this frame's
+        VkImageView grid = VK_NULL_HANDLE;      // its processes' grid as its fills read it, this frame's
         std::vector<MeshChunk> chunks;          // its ring blocks where this frame's eye puts them
     };
+    /// The lands' processes (scene_land_process.h), run in offerLand.
+    SceneLandProcesses landProcesses_;
     LandTiles* landTiles(SceneFrame& frame, LandNode& node);
     /// Its LandDraw words (scene_land_layout.h, LD_WORDS of them) for this
     /// frame: the rings and tiles about the frame's eye.
@@ -483,6 +487,7 @@ private:
     LandSun landSun_;
     SceneVkImage landSunImage_;
     SceneVkImage landSunNone_;
+    double landSunRadius_ = 0.0;   // its land's body's (0 flat): its heights are over the datum
     int landSunKind_ = -1;
     bool landSunTiles_ = false;   // tiles filled since the land's sun was last offered
     VkShaderModule landSunModule_ = VK_NULL_HANDLE;

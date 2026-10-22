@@ -22,6 +22,13 @@ layout(std430, set = 0, binding = 2) readonly buffer LandFills { vec4 fills[]; }
 layout(std430, set = 0, binding = 3) readonly buffer LandData { vec4 words[]; } landDataBuffer;
 layout(push_constant) uniform LandFillPush { uint words[LF_P_WORDS]; } pc;
 
+// The land's processes' grid (scene_land_process.h), its layout the land's
+// (ground/land_grid_config.glsl); with no processes, never read.
+#include "ground/land_grid_config.glsl"
+layout(set = 0, binding = 6, rgba32f) uniform readonly image2DArray landGridImage;
+vec4 landGridLoad(ivec3 t) { return imageLoad(landGridImage, t); }
+#include "ground/land_grid.glsl"
+
 #include "ground/scene_land_layer.glsl"
 
 vec4 landData(int i) { return landDataBuffer.words[clamp(i, 0, 63)]; }

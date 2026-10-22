@@ -10,7 +10,8 @@
 //            slot: the ground's, the canopy's top over it), 1 the surface
 //            (rgba16f: albedo, herbs), 2 the fills (LF_TILE_WORDS a tile),
 //            3 the module's data (vec4s), 4 the cover (rgba16f), 5 the
-//            canopy (rgba16f: its leaves' albedo, its cover); push
+//            canopy (rgba16f: its leaves' albedo, its cover), 6 the
+//            processes' grid (rgba32f, read; scene_land_process.h); push
 //            constants LF_P_*
 //
 //   a grass node standing on the land (scene_grass.glsl) reads its tiles

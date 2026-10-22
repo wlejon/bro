@@ -53,6 +53,13 @@
 #include "land_canopy.glsl.src.h"
 #include "land_body.glsl.src.h"
 #include "land_fill.comp.src.h"
+#include "land_grid.glsl.src.h"
+#include "land_grid_config.glsl.src.h"
+#include "land_process_layout.h.src.h"
+#include "land_process_layer.glsl.src.h"
+#include "land_process_module.glsl.src.h"
+#include "land_process_dispatch.glsl.src.h"
+#include "land_process.comp.src.h"
 #include "util/user_dirs.h"
 
 #include <array>
@@ -169,6 +176,12 @@ const char* embeddedInclude(const std::string& name) {
         {"ground/land_module.glsl", kVkLandModuleSrc},
         {"ground/land_canopy.glsl", kVkLandCanopySrc},
         {"ground/land_body.glsl", kVkLandBodySrc},
+        {"ground/land_grid.glsl", kVkLandGridSrc},
+        {"ground/land_grid_config.glsl", kVkLandGridConfigSrc},
+        {"ground/land_process_layout.h", kVkLandProcessLayoutSrc},
+        {"ground/land_process_layer.glsl", kVkLandProcessLayerSrc},
+        {"ground/land_process_module.glsl", kVkLandProcessModuleSrc},
+        {"ground/land_process_dispatch.glsl", kVkLandProcessDispatchSrc},
         // The built-in shaders compileBuiltinWith builds.
         {"draw/mesh.frag", kVkMeshFragSrc},
         {"ground/cover_plan.comp", kVkCoverPlanCompSrc},
@@ -182,6 +195,7 @@ const char* embeddedInclude(const std::string& name) {
         {"foliage/shadow_plants.vert", kVkShadowPlantsVertSrc},
         {"foliage/plants_pose.comp", kVkPlantsPoseCompSrc},
         {"ground/land_fill.comp", kVkLandFillCompSrc},
+        {"ground/land_process.comp", kVkLandProcessCompSrc},
     };
     for (const auto& inc : kIncludes) {
         if (name == inc.name) return inc.source;

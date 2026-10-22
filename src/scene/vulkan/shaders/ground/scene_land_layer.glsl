@@ -17,7 +17,8 @@
 //       it, how thickly its herbs grow). Start from landSurfaceOf(albedo):
 //       bare ground with nothing growing.
 //
-// and may read landData(i), the node's data (vec4 i of at most 64). Both
+// and may read landData(i), the node's data (vec4 i of at most 64), and
+// landGrid(c, p), its processes' grid (below). Both
 // run where the engine makes the land's tiles (land_fill.comp): once a
 // texel of a tile as the view needs it, not every frame; the engine works
 // out the normal from the heights. A module has every other freedom: its
@@ -41,6 +42,27 @@ struct LandPoint {
 vec2 landOx, landOy, landOz;
 #define FN_ORIGIN3 FnO3(landOx, landOy, landOz)
 #endif
+
+// The land's processes' grid (ground/land_process_layer.glsl): channel c
+// (a vec4) at world (x, z) = p on a flat body, at the datum's point p
+// (relative to the fill's origin, as landHeight's) on a round one; zero
+// with no processes. Channel 0's x is the height they add to the land's
+// tree: a module's landHeight is its tree plus landGrid(0, p).x, as the
+// CPU's heights are (scene/world/land_grid.h).
+vec4 landGrid(int c, vec2 p) {
+#if defined(LAND_GRID) && !defined(LAND_GRID_ROUND)
+    return landGridAt(c, 0, p);
+#else
+    return vec4(0.0);
+#endif
+}
+vec4 landGrid(int c, vec3 p) {
+#if defined(LAND_GRID_ROUND) && defined(LAND_ROUND)
+    return landGridAtDir(c, normalize(vec3(landOx.x, landOy.x, landOz.x) + p));
+#else
+    return vec4(0.0);
+#endif
+}
 
 struct LandSurface {
     vec3 albedo;     // linear
