@@ -63,12 +63,15 @@ ivec2 coverRep(ivec2 C, int level) {
 // is kept at lambda `lam` (floor(lam) == k): all of rank k + 1, of rank k a
 // share falling across the level so that 4^-lam of the cells are kept. As
 // the share falls to an element's own draw it shrinks away rather than
-// going all at once: the size it keeps (0: not kept).
+// going all at once: the size it keeps (0: not kept). It shrinks over a
+// stretch of the share no wider than lies above its draw, so at the
+// level's start (the share 1) every one is whole, as the level below left
+// it.
 float coverKeptAt(ivec2 c, ivec2 cellK, int k, float lam) {
     if (coverChild(cellK >> 1, k + 1) == cellK) return 1.0;
     float t = (exp2(2.0 * (1.0 - (lam - float(k)))) - 1.0) / 3.0;
     float h = grassHash(c, 9100);
-    return h < t ? clamp((t - h) / (0.35 * t + 1e-4), 0.0, 1.0) : 0.0;
+    return h < t ? clamp((t - h) / (0.35 * (1.0 - h) + 1e-4), 0.0, 1.0) : 0.0;
 }
 
 // Whether herb cell `c` is kept at lambda `lam` (the far herb ring's test):

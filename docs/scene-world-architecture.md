@@ -873,14 +873,24 @@ pixel. So the cover goes on past them as a tier of its own
   slot its element's kind). It hands over from the far fans and the far
   herb ring by the complements of their dithers, and to the turf alone
   over 2.4–3 km.
+- **Its detail no finer than a pixel or two.** An element is about 5
+  pixels, so a tuft's tips, a herb's lobes' own shades and its bloom dots
+  are a pixel or less: drawn as they are, they crawl as it moves over the
+  pixels. Each fades to its mean as it nears that size (the tips to their
+  mean height, the lobes to their mean shade, the blooms to their share
+  of the pixel, lit in proportion).
 
-Biomes (4090, 2560×1364): meadow 2.50 → 2.59 ms, edge 2.41 → 2.49,
-above 0.85 → 1.11, flyover 1.03 → 1.19; the meadow's grain at 90–130 m
-3.5 → 13.8. Walking on at 3 m/s, the ground 60–300 m out changes 3.7 a
-point a frame against 2.8 without the tier (the texture it adds, moving).
-Still to come: the turf under the tier read as the sward's depth rather
-than adding the herbs' mean, and the biomes' other covers (pebbles,
-litter, snow) as kinds of element.
+Biomes (4090, 2560×1364): meadow 2.50 → 2.61 ms, edge 2.41 → 2.48,
+above 0.85 → 1.17, flyover 1.03 → 1.26; the meadow's grain at 90–130 m
+3.5 → 11.3. Walking on at 3 m/s (`capture.js -- motion advance base=meadow
+far=1`, 60 frames at 30 fps), the ground's change a point a frame by
+distance ahead, without the tier / with it: 60–100 m 7.3 / 8.3, 100–160 m
+1.0 / 2.3, 160–300 m 2.2 / 2.2 (its detail drawn whole it was 9.7 and 3.1
+nearer in); with nothing moving it is 0.002. Much of the 60–100 m change
+is the far fans' own (6.3 without them). Still to come: where the far
+fans thin, the turf between their clumps shows flat and about twice as
+bright as they are; and the biomes' other covers (pebbles, litter, snow)
+as kinds of element.
 
 ## 10. Placement
 
